@@ -306,6 +306,11 @@ class TaskRunner:
         error: str | None = None
         last_hint: str | None = None      # pi 事件里的 stopReason/errorMessage（非零退出时报这个才有用）
 
+        # live write-back: flush the shadow's new lines into the real session every few seconds,
+        # otherwise pi-web only shows the previous turn while a task is running
+        live_flush_seconds = 0.0 if os.environ.get("PI_BRIDGE_LIVE_SESSION", "1") == "0" else 4.0
+        last_flush = time.time()
+
         try:
             creation = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             self.proc = subprocess.Popen(
@@ -361,6 +366,10 @@ class TaskRunner:
                     continue
 
                 etype = event.get("type")
+
+                if shadow and live_flush_seconds and time.time() - last_flush >= live_flush_seconds:
+                    flush_shadow_session(shadow, session)
+                    last_flush = time.time()
 
                 # pi 不一定会往 stderr 写：失败原因常在 message_end / agent_end 的
                 # stopReason + errorMessage 上（JSON 流）。不记下来的话，群里只能看到“pi 退出码 1”。
@@ -672,42 +681,67 @@ def prepare_shadow_session(cwd: str, session_id: str, task_id: str) -> dict | No
         log(f"影子会话准备失败（{exc}）—— 这回直接在原目录里跑")
         return None
 
-    return {"dir": shadow_dir, "slug": slug, "canonical": canonical, "baseline": baseline}
+    return {"dir": shadow_dir, "slug": slug, "canonical": canonical,
+            "baseline": baseline, "flushed": baseline}
+
+
+def flush_shadow_session(shadow: dict, session_id: str) -> int:
+    """Append the **new lines** from the shadow session back to the original one (repeatable).
+
+    The live write-back is built on this: while a task runs, the canonical session file is stale,
+    so opening it in pi-web only shows the previous turn. Flushing every few seconds keeps it
+    current (append-only, so it never overwrites what pi-web did meanwhile).
+    Returns how many lines were appended.
+    """
+    if not shadow:
+        return 0
+
+    shadow_file = _find_session_file(shadow["dir"], shadow["slug"], session_id)
+    if not shadow_file:
+        return 0
+
+    try:
+        with io.open(shadow_file, "rb") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return 0
+
+    if shadow["canonical"] is None:
+        # brand-new session: materialize it in the real root as soon as it appears
+        try:
+            dest_dir = os.path.join(SESSION_ROOT, shadow["slug"])
+            os.makedirs(dest_dir, exist_ok=True)
+            shadow["canonical"] = os.path.join(dest_dir, os.path.basename(shadow_file))
+            io.open(shadow["canonical"], "ab").close()
+            log(f"会话落盘（新会话）：{os.path.basename(shadow['canonical'])}")
+        except OSError as exc:                                 # noqa: BLE001
+            log(f"!! 新会话落盘失败（{exc}）")
+            return 0
+
+    written = int(shadow.get("flushed") or 0)
+    if len(lines) <= written:
+        return 0
+
+    try:
+        with io.open(shadow["canonical"], "ab") as fh:
+            fh.write(b"".join(lines[written:]))
+    except OSError as exc:                                     # noqa: BLE001
+        log(f"!! 会话回写失败（{exc}）—— 内容还在影子目录 {shadow['dir']}，没丢")
+        return 0
+
+    shadow["flushed"] = len(lines)
+    return len(lines) - written
 
 
 def merge_shadow_session(shadow: dict, session_id: str) -> None:
-    """Append the **new lines** from the shadow session back to the original one.
-
-    JSONL is append-only, so this is a safe merge — it never overwrites what pi-web did meanwhile.
-    """
-    shadow_file = _find_session_file(shadow["dir"], shadow["slug"], session_id)
-    if not shadow_file:
+    """Final flush + drop the shadow directory."""
+    if not shadow:
         return
 
-    canonical = shadow["canonical"]
-    try:
-        if not canonical:
-            dest_dir = os.path.join(SESSION_ROOT, shadow["slug"])
-            os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, os.path.basename(shadow_file))
-            shutil.copy2(shadow_file, dest)
-            log(f"会话落盘：{os.path.basename(dest)}（新会话）")
-            shutil.rmtree(shadow["dir"], ignore_errors=True)
-            return
-
-        with io.open(shadow_file, "rb") as fh:
-            lines = fh.readlines()
-        new_lines = lines[shadow["baseline"]:]
-        if not new_lines:
-            shutil.rmtree(shadow["dir"], ignore_errors=True)
-            return
-
-        with io.open(canonical, "ab") as fh:
-            fh.writelines(new_lines)
-        log(f"会话回写：+{len(new_lines)} 行 → {os.path.basename(canonical)}")
-        shutil.rmtree(shadow["dir"], ignore_errors=True)
-    except OSError as exc:                                     # noqa: BLE001
-        log(f"!! 会话回写失败（{exc}）—— 本次内容留在影子目录 {shadow['dir']}，没丢")
+    added = flush_shadow_session(shadow, session_id)
+    if added and shadow.get("canonical"):
+        log(f"会话回写：+{added} 行 → {os.path.basename(shadow['canonical'])}")
+    shutil.rmtree(shadow["dir"], ignore_errors=True)
 
 
 def resolve_pi_command(pi_cmd: str) -> tuple[list[str], str]:

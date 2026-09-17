@@ -113,8 +113,9 @@ public static partial class Program
         Check("★ 用重新签发的地址把同一张图取了回来（image_url 里能看到那张图）",
             expiredImages.Any(u => DataUrlBytes(u).SequenceEqual(MockImageHost.Bytes(2))),
             expiredImages.Count == 0 ? "(没有图片段)" : $"{expiredImages.Count} 张图，字节长度：{string.Join(",", expiredImages.Select(u => DataUrlBytes(u).Length))}");
-        Check("★ 日志里写明了“过期 → 重新签发取回”",
-            bot.OutputLines.Any(l => l.Contains("重新签发") && l.Contains("取回成功")),
+        Check("★ 日志里写明了“过期 → 重签取回”，且**不**报“下载失败”（正常路径不该像出事）",
+            bot.OutputLines.Any(l => l.Contains("已过期") && l.Contains("重签") && l.Contains("取回")) &&
+            !bot.OutputLines.Any(l => l.Contains("图片地址下载失败")),
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("图片")).TakeLast(3)));
         Check("下载次数：过期的那次走了一次 400 + 一次成功（没有反复重试）",
             images.Served - servedBeforeExpired <= 2, $"新增 {images.Served - servedBeforeExpired} 次");

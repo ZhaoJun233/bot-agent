@@ -1708,8 +1708,14 @@ internal sealed class ImageDownloader
             {
                 // 失败时让协议端换一份**当前有效**的地址再试一次（绝大多数情况是 rkey 过期 → 400）。
                 // 只重试一次、失败后记 10 分钟退避：不会变成“对着一张取不到的图每轮重试”。
-                Services.FileLog.Write("Vision", $"图片地址下载失败（HTTP {outcome.Status}）→ 请协议端重新签发（消息 {mid}）：{Truncate(url, 100)}");
-                result = await FetchRefreshedAsync(url, mid, ct);
+                // ★ 这里**不**打“下载失败”：地址过期→重签是设计好的正常路径，不是事故。
+                //   以前每张图都先刷一行红色“下载失败（HTTP 400）”，面板上看着像一直在出错
+                //   （号主 2026-09-18 报的）；现在只在“重签也拿不到”时才报失败。
+                result = await FetchRefreshedAsync(url, mid, outcome.Status, ct);
+                if (result is null)
+                {
+                    Services.FileLog.Write("Vision", $"图片取不到：原地址 HTTP {outcome.Status}，协议端重签后仍然失败（消息 {mid}）");
+                }
             }
             else if (result is null && outcome.Status > 0)
             {
@@ -1744,7 +1750,7 @@ internal sealed class ImageDownloader
     private readonly record struct FetchOutcome((byte[] Data, string Mime, string Ext)? Image, bool CanRetryWithFreshUrl, int Status);
 
     /// <summary>用协议端重新签发的地址下同一张图。对不上同一张（fileid 不同）时退而用第一个地址。</summary>
-    private async Task<(byte[] Data, string Mime, string Ext)?> FetchRefreshedAsync(string staleUrl, long messageId, CancellationToken ct)
+    private async Task<(byte[] Data, string Mime, string Ext)?> FetchRefreshedAsync(string staleUrl, long messageId, int status, CancellationToken ct)
     {
         IReadOnlyList<string> fresh;
         try
@@ -1773,7 +1779,8 @@ internal sealed class ImageDownloader
         if (bytes.Image is not null)
         {
             RefreshedCount++;
-            Services.FileLog.Write("Vision", $"图片地址已过期 → 用协议端重新签发的地址取回成功（消息 {messageId}）");
+            // 信息性一行（不是错误）：QQ 的图片地址本来就短命，重签取回是正常路径
+            Services.FileLog.Write("Vision", $"图片地址已过期（HTTP {status}）→ 已用协议端重签的地址取回（消息 {messageId}）");
         }
 
         return bytes.Image;
