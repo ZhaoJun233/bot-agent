@@ -1,0 +1,844 @@
+using System.Collections.Concurrent;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace QQChatAgent.Services.Agent;
+
+/// <summary>
+/// 本机 Agent 桥：让 QQ 群里一条 <c>//开头的消息</c> 真正跑到**号主本机**的 pi 上。
+///
+/// 为什么是这个拓扑（画出来就是设计说明书）：
+/// <code>
+///   群里的 //消息
+///        │  (QQ)
+///        ▼
+///   机器人（服务器容器，没有号主的代码/工具/pi 登录态）
+///        │  WebSocket：机器人**监听**，本机主动连进来（本机在 NAT 后面，只能它出站）
+///        ▼
+///   本机 pi-bridge.py
+///        │  subprocess
+///        ▼
+///   pi -p --mode json …（在读号主自己的目录里干活）
+/// </code>
+///
+/// 安全边界（这个功能能在别人电脑上执行命令，所以每一步都要说得清）：
+///   • 只有 `//` 开头、且发送者 QQ 在 <see cref="AppSettings.AgentAllowedUsers"/> 里、且会话在白名单 → 才会生成任务；
+///   • 桥连接必须带对令牌（<see cref="AppSettings.AgentToken"/>）；**没设令牌 = 拒绝所有连接**；
+///   • 任务是一次性的（`pi -p`），不提供通用的“执行任意命令”接口 —— 命令只能由 pi 自己按提示词决定；
+///   • 超时杀进程、单会话排队上限、结果长度截断（免得一条命令把群刷满）。
+/// </summary>
+public sealed class AgentBridgeServer
+{
+    private readonly AppSettings _settings;
+    private readonly Action<string> _log;
+
+    // ---- 桥连接（支持多台设备，靠 hello 里的 host 当名字）----
+    private sealed class BridgeConnection
+    {
+        public required WebSocket Socket { get; init; }
+        public string Name { get; set; } = "device";
+        public string? Cwd { get; set; }
+        public string? PiVersion { get; set; }
+
+        /// <summary>这台设备（pi）能用的模型：provider/model。面板里直接选。</summary>
+        public string[] Models { get; set; } = Array.Empty<string>();
+
+        public DateTimeOffset Since { get; init; } = DateTimeOffset.Now;
+    }
+
+    private readonly ConcurrentDictionary<string, BridgeConnection> _bridges = new();
+
+    /// <summary>当前在线的外部设备名（面板 / //status 用）。</summary>
+    public IReadOnlyList<string> BridgeNames => _bridges.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+
+    // ---- 任务队列（单工人：本机 pi 串行跑，避免同一台机器上几个 agent 抢同一个工作区）----
+    private readonly ConcurrentQueue<AgentTask> _queue = new();
+    private readonly object _stateLock = new();
+    private AgentTask? _current;
+    private bool _workerRunning;
+    private int _sequence;
+
+    /// <summary>桥侧回传的“任务进度”文本（工具调用、还在跑）。BotAgent 拿它决定要不要在群里说一声。</summary>
+    public event Action<AgentTask>? Progress;
+
+    /// <summary>任务结束（成功/失败/超时都走这里）。</summary>
+    public event Action<AgentTask>? Finished;
+
+    public AgentBridgeServer(AppSettings settings, Action<string> log)
+    {
+        _settings = settings;
+        _log = log;
+    }
+
+    /// <summary>桥是否在线（任意一台）。</summary>
+    public bool Connected => !_bridges.IsEmpty;
+
+    /// <summary>指定设备是否在线（传空 = 任意一台在线）。</summary>
+    public bool IsDeviceOnline(string? name)
+        => string.IsNullOrWhiteSpace(name) ? Connected : _bridges.ContainsKey(name.Trim());
+
+    /// <summary>任意一台在线设备的（名字、目录、pi 版本）；都没有就返回 null。</summary>
+    public (string Name, string? Cwd, string? Pi)? AnyBridge
+    {
+        get
+        {
+            foreach (var (name, conn) in _bridges)
+            {
+                return (name, conn.Cwd, conn.PiVersion);
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>指定设备的详情（//status 面板/群里显示：pi 版本 + 目录）。</summary>
+    public (string Name, string? Cwd, string? Pi)? DeviceInfo(string name)
+        => _bridges.TryGetValue(name, out var conn) ? (conn.Name, conn.Cwd, conn.PiVersion) : null;
+
+    /// <summary>指定设备上报的模型列表（没指定就取第一台在线的）。</summary>
+    public string[] DeviceModels(string? name = null)
+    {
+        var conn = PickBridge(name);
+        return conn?.Models ?? Array.Empty<string>();
+    }
+
+    /// <summary>让设备现场重新问一遍 pi 的模型列表（面板“刷新模型”用）。</summary>
+    public Task<bool> RequestModelsAsync(string? name = null)
+        => SendAsync(new JsonObject { ["type"] = "models" }, name);
+
+    /// <summary>要下发任务时选哪台设备：指定名字就用它，否则第一台在线的。</summary>
+    private BridgeConnection? PickBridge(string? preferName)
+    {
+        if (!string.IsNullOrWhiteSpace(preferName))
+        {
+            return _bridges.TryGetValue(preferName.Trim(), out var named) ? named : null;
+        }
+
+        foreach (var conn in _bridges.Values)
+        {
+            return conn;
+        }
+
+        return null;
+    }
+
+    /// <summary>已下发、还没收到 done/error 的任务（id → 任务）。丢过结果就是靠它修的。</summary>
+    private readonly ConcurrentDictionary<string, AgentTask> _outstanding = new();
+
+    /// <summary>在跑的任务快照（面板/状态接口用）。</summary>
+    public AgentTask? Current { get { lock (_stateLock) { return _current; } } }
+
+    public int QueuedCount => _queue.Count;
+
+    /// <summary>
+    /// 排一个任务。返回 false 表示没接（会话队列满了）。
+    /// </summary>
+    public bool TryEnqueue(AgentTask task)
+    {
+        if (!Connected)
+        {
+            task.Fail("本机的 agent 桥没连上");
+            Finished?.Invoke(task);
+            return true;   // “没桥”不是队列满，交给上层去回一句人话
+        }
+
+        var sameChatQueued = _queue.Count(t => t.SourceKey == task.SourceKey);
+        var maxQueued = Math.Clamp(_settings.AgentMaxQueued, 1, 20);
+        if (sameChatQueued >= maxQueued)
+        {
+            return false;
+        }
+
+        _queue.Enqueue(task);
+        StartWorker();
+        return true;
+    }
+
+    /// <summary>取消某个会话正在跑/排队的任务，返回取消掉几个。</summary>
+    public int Cancel(string sourceKey)
+    {
+        var cancelled = 0;
+
+        lock (_stateLock)
+        {
+            if (_current is { } cur && cur.SourceKey == sourceKey)
+            {
+                cur.CancelRequested = true;
+                cancelled++;
+                // 通知桥把 pi 杀掉（不杀就等于关不掉：任务还占着本机 CPU）
+                _ = SendAsync(new JsonObject { ["type"] = "cancel", ["id"] = cur.Id }, cur.DeviceName);
+
+                // 立即收尾，而不是等桥回一句“已取消”：
+                // ① 号主发 //stop 就是要“马上停”，不能还挂着；
+                // ② 挂着的话，新的任务会被“串行下发”那个门挡在外面（实测踩过）。
+                cur.Fail("已取消");
+                _outstanding.TryRemove(cur.Id, out _);
+                _current = null;
+                Finished?.Invoke(cur);
+            }
+        }
+
+        // 排队中的直接摘掉（ConcurrentQueue 不能按条件删 → 重建一份）
+        var keep = new List<AgentTask>();
+        while (_queue.TryDequeue(out var task))
+        {
+            if (task.SourceKey == sourceKey && !task.CancelRequested)
+            {
+                task.CancelRequested = true;
+                task.Fail("已取消");
+                Finished?.Invoke(task);
+                cancelled++;
+            }
+            else
+            {
+                keep.Add(task);
+            }
+        }
+
+        foreach (var task in keep)
+        {
+            _queue.Enqueue(task);
+        }
+
+        // 停完之后把工人叫醒（门前可能正堵着排队的新任务）
+        if (cancelled > 0 && !_queue.IsEmpty && Connected)
+        {
+            StartWorker();
+        }
+
+        return cancelled;
+    }
+
+    /// <summary>面板里点“测试”用的：排一个任务并等结果（不经过 QQ）。</summary>
+    public async Task<AgentTask> RunDirectAsync(string prompt, TimeSpan timeout, CancellationToken ct)
+    {
+        var task = NewTask("panel:test", prompt, "qqchat-panel");
+        var done = new TaskCompletionSource<AgentTask>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFinished(AgentTask t)
+        {
+            if (ReferenceEquals(t, task))
+            {
+                done.TrySetResult(t);
+            }
+        }
+
+        Finished += OnFinished;
+        try
+        {
+            if (!TryEnqueue(task))
+            {
+                task.Fail("队列满了");
+                return task;
+            }
+
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(timeout);
+            using var reg = linked.Token.Register(() => done.TrySetResult(task));
+            return await done.Task;
+        }
+        finally
+        {
+            Finished -= OnFinished;
+        }
+    }
+
+    /// <summary>建一个任务（统一填默认值，免得各处漏字段）。
+    /// preferDevice = 指定外部设备名（空 = 第一台在线的）；有**设备专属配置**就覆盖全局默认。</summary>
+    public AgentTask NewTask(string sourceKey, string prompt, string session, string? preferDevice = null)
+    {
+        var device = _settings.DeviceConfigFor(preferDevice);
+        return new()
+        {
+            Id = $"a{Interlocked.Increment(ref _sequence)}-{DateTimeOffset.Now.ToUnixTimeMilliseconds()}",
+            SourceKey = sourceKey,
+            Prompt = prompt,
+            Session = session,
+            TargetDevice = preferDevice,
+            WorkDir = string.IsNullOrWhiteSpace(device?.WorkDir) ? _settings.AgentWorkDir : device!.WorkDir,
+            Model = string.IsNullOrWhiteSpace(device?.Model) ? _settings.AgentModel : device!.Model,
+            Tools = string.IsNullOrWhiteSpace(device?.Tools) ? _settings.AgentTools : device!.Tools,
+            TimeoutSeconds = Math.Clamp(device is { TimeoutSeconds: > 0 } ? device.TimeoutSeconds : _settings.AgentTimeoutSeconds, 30, 7200)
+        };
+    }
+
+    /// <summary>踢掉某台设备的连接（面板里的“断开”）；返回是不是真踢了。</summary>
+    public async Task<bool> DisconnectAsync(string? deviceName)
+    {
+        var conn = PickBridge(deviceName);
+        if (conn is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await conn.Socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "panel-disconnect", CancellationToken.None);
+        }
+        catch
+        {
+            // 已经断了
+        }
+
+        _log($"面板里断开了外部设备：{conn.Name}");
+        return true;
+    }
+
+    // ══════════ 桥连接生命周期（由 WebUiServer 在 WS 上调用）══════════
+
+    /// <summary>处理一条桥连接（阻塞到断开）。多台设备可以同时在线（名字取自 hello 里的 host）。</summary>
+    public async Task HandleAsync(WebSocket socket, CancellationToken ct)
+    {
+        var conn = new BridgeConnection { Socket = socket };
+        var key = $"pending-{Guid.NewGuid():N}";
+        _bridges[key] = conn;
+
+        _log($"agent 桥已连接（等它的 hello 报名字）：{_bridges.Count} 台在线");
+
+        try
+        {
+            var buffer = new byte[16 * 1024];
+            var pending = new MemoryStream();
+            while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    break;
+                }
+
+                pending.Write(buffer, 0, result.Count);
+                if (!result.EndOfMessage)
+                {
+                    continue;
+                }
+
+                var json = Encoding.UTF8.GetString(pending.ToArray());
+                pending.SetLength(0);
+                HandleBridgeMessage(conn, json, key);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常退出
+        }
+        catch (Exception ex)
+        {
+            _log($"agent 桥连接出错: {ex.GetType().Name} {ex.Message}");
+        }
+        finally
+        {
+            _bridges.TryRemove(key, out _);
+            // 按名字也要收：如果同名的新连接已经顶上来，就不能把新的也删了
+            if (_bridges.TryGetValue(conn.Name, out var current) && ReferenceEquals(current, conn))
+            {
+                _bridges.TryRemove(conn.Name, out _);
+            }
+
+            _log($"agent 桥已断开（剩 {_bridges.Count} 台在线）");
+
+            // 这台设备上在跑的任务必然失败（本机那边进程跟着桥一起没了）；排队的留着，等设备重连再跑
+            lock (_stateLock)
+            {
+                if (_current is { } cur && !cur.Done && cur.DeviceName == key)
+                {
+                    cur.Fail("外部 agent 设备断开了");
+                    Finished?.Invoke(cur);
+                    _current = null;
+                }
+            }
+        }
+    }
+
+    private void HandleBridgeMessage(BridgeConnection conn, string json, string key)
+    {
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(json);
+        }
+        catch (JsonException)
+        {
+            _log("agent 桥发来的不是 JSON，已忽略");
+            return;
+        }
+
+        var type = node?["type"]?.GetValue<string>();
+        var id = node?["id"]?.GetValue<string>();
+
+        switch (type)
+        {
+            case "hello":
+            {
+                var name = node?["host"]?.GetValue<string>()?.Trim();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    // 用设备的 host 名当键（同名重连时顶掉旧的，不会留幽灵连接）
+                    conn.Name = name!;
+                }
+
+                conn.Cwd = node?["cwd"]?.GetValue<string>();
+                conn.PiVersion = node?["pi"]?.GetValue<string>();
+                if (node?["models"] is JsonArray models)
+                {
+                    conn.Models = models.Select(m => m?.GetValue<string>() ?? string.Empty)
+                        .Where(m => m.Length > 0)
+                        .ToArray();
+                }
+
+                var oldKey = key;
+                key = conn.Name;
+                if (!string.Equals(oldKey, key, StringComparison.Ordinal))
+                {
+                    if (_bridges.TryGetValue(key, out var previous) && !ReferenceEquals(previous, conn))
+                    {
+                        _bridges.TryRemove(key, out _);
+                        _log($"同名设备重连（{key}）→ 旧的连接已放弃");
+                    }
+
+                    _bridges[key] = conn;
+                    _bridges.TryRemove(oldKey, out _);
+                }
+
+                _log($"agent 桥握手：{conn.Name}，目录 {conn.Cwd ?? "?"}，pi {conn.PiVersion ?? "?"}，" +
+                     $"模型 {conn.Models.Length} 个（在线 {_bridges.Count} 台）");
+                return;
+            }
+
+            case "models":
+            {
+                if (node?["models"] is JsonArray list)
+                {
+                    conn.Models = list.Select(m => m?.GetValue<string>() ?? string.Empty)
+                        .Where(m => m.Length > 0)
+                        .ToArray();
+                    _log($"设备 {conn.Name} 上报模型 {conn.Models.Length} 个");
+                }
+
+                return;
+            }
+
+            case "started":
+                _log($"agent 任务开始执行：#{id}");
+                return;
+
+            case "progress":
+            {
+                if (FindTask(id) is not { } task)
+                {
+                    return;
+                }
+
+                task.LastNote = node?["note"]?.GetValue<string>();
+                Progress?.Invoke(task);
+                return;
+            }
+
+            case "chunk":
+            {
+                if (FindTask(id) is not { } task)
+                {
+                    return;
+                }
+
+                var text = node?["text"]?.GetValue<string>();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    // 只留最近的尾巴（pi 的流式输出可能很长，全存没意义）：用于“过程里最后一句”兜底
+                    task.StreamTail = Tail(task.StreamTail + text, 4000);
+                }
+
+                return;
+            }
+
+            case "done":
+            {
+                if (FindTask(id) is null)
+                {
+                    return;
+                }
+
+                SettleTask(id, node?["text"]?.GetValue<string>(), node?["exitCode"]?.GetValue<int>() ?? 0,
+                    node?["durationMs"]?.GetValue<long>() ?? 0, node?["toolCalls"]?.GetValue<int>() ?? 0);
+                return;
+            }
+
+            case "error":
+                SettleTask(id, null, node?["exitCode"]?.GetValue<int>() ?? -1, 0, 0,
+                    node?["message"]?.GetValue<string>() ?? "本机 agent 报错");
+                return;
+
+            case "pong":
+                return;
+
+            default:
+                _log($"agent 桥发来未知消息类型 {type}（已忽略）");
+                return;
+        }
+    }
+
+    private AgentTask? FindTask(string? id)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return null;
+        }
+
+        // 先查“已下发但还没收尾”的表：
+        //   线上踩过 —— 以前只查 _current + 队列，而 _current 会被下一个任务顶掉，
+        //   于是先发的那个任务的 done/error 到了也找不到它的属主，结果就**静默丢掉**
+        //   （群里表现为“跑完了但一直没声”= 卡住）。
+        if (_outstanding.TryGetValue(id, out var tracked))
+        {
+            return tracked;
+        }
+
+        lock (_stateLock)
+        {
+            if (_current is { } cur && cur.Id == id)
+            {
+                return cur;
+            }
+        }
+
+        return _queue.FirstOrDefault(t => t.Id == id);
+    }
+
+    private void SettleTask(string? id, string? text, int exitCode, long durationMs, int toolCalls, string? error = null)
+    {
+        AgentTask? task;
+        lock (_stateLock)
+        {
+            task = _current is { } cur && cur.Id == id ? cur : _queue.FirstOrDefault(t => t.Id == id);
+        }
+
+        if (task is null || task.Done)
+        {
+            return;
+        }
+
+        var body = (text ?? string.Empty).Trim();
+        if (body.Length == 0)
+        {
+            body = (task.StreamTail ?? string.Empty).Trim();
+        }
+
+        task.DurationMs = durationMs > 0 ? durationMs : (long)(DateTimeOffset.Now - task.StartedAt).TotalMilliseconds;
+        task.ToolCalls = toolCalls;
+
+        if (error is not null || exitCode != 0)
+        {
+            var detail = error is { Length: > 0 } ? error : $"pi 退出码 {exitCode}";
+            if (body.Length > 0)
+            {
+                detail += "：" + body;
+            }
+
+            task.Fail(detail);
+        }
+        else if (body.Length == 0)
+        {
+            task.Fail("本机 agent 没有输出（可能被工具白名单/权限挡了）");
+        }
+        else
+        {
+            task.Succeeded(body);
+        }
+
+        lock (_stateLock)
+        {
+            if (ReferenceEquals(_current, task))
+            {
+                _current = null;
+            }
+        }
+
+        Finished?.Invoke(task);
+        _outstanding.TryRemove(task.Id, out _);
+    }
+
+    // ══════════ 工人（把队列里的任务一条条喂给桥）══════════
+
+    private void StartWorker()
+    {
+        lock (_stateLock)
+        {
+            if (_workerRunning)
+            {
+                return;
+            }
+
+            _workerRunning = true;
+        }
+
+        _ = Task.Run(RunWorkerAsync);
+    }
+
+    private async Task RunWorkerAsync()
+    {
+        try
+        {
+            while (true)
+            {
+                if (!Connected)
+                {
+                    return;   // 桥不在：任务留在队列里等重连
+                }
+
+                // 外部设备上的 pi 是**串行**跑的：上一个还没收尾就不能下发下一个，
+                // 否则桥会回“本机还有任务在跑（串行执行）”，号主看到的就是“发了两条，一条报错”。
+                lock (_stateLock)
+                {
+                    if (_current is { } running && !running.Done)
+                    {
+                        // 安全网：万一结果帧真丢了（网断、桥崩且没发断连），不能让后来的任务永远等下去
+                        var age = DateTimeOffset.Now - running.StartedAt;
+                        if (age.TotalSeconds > running.TimeoutSeconds + 60)
+                        {
+                            running.Fail($"超时未返回（已等 {age.TotalSeconds:F0}s）");
+                            Finished?.Invoke(running);
+                            _outstanding.TryRemove(running.Id, out _);
+                            _current = null;
+                        }
+                        else
+                        {
+                            // 等它收尾（150ms 一轮，开销可忽略）
+                            _ = WaitForCurrentAsync();
+                            return;
+                        }
+                    }
+                }
+
+                if (!_queue.TryDequeue(out var task))
+                {
+                    return;
+                }
+
+                if (task.CancelRequested)
+                {
+                    task.Fail("已取消");
+                    Finished?.Invoke(task);
+                    continue;
+                }
+
+                lock (_stateLock)
+                {
+                    _current = task;
+                }
+
+                // 任务派给哪台设备：任务指定的（AgentTarget 写了设备名）优先，否则第一台在线的
+                var target = PickBridge(task.TargetDevice);
+                if (target is null)
+                {
+                    lock (_stateLock)
+                    {
+                        _current = null;
+                    }
+
+                    task.Fail(string.IsNullOrWhiteSpace(task.TargetDevice)
+                        ? "没有在线的外部 agent 设备"
+                        : $"指定的外部设备「{task.TargetDevice}」不在线");
+                    Finished?.Invoke(task);
+                    continue;
+                }
+
+                task.DeviceName = target.Name;
+                task.StartedAt = DateTimeOffset.Now;
+
+                // 设备专属配置在这里最后盖一道（防止调用方没传设备名/竞态）：
+                // 面板里给某台设备单独配的 模型/目录/工具/超时 以此为准。
+                if (_settings.DeviceConfigFor(target.Name) is { } deviceCfg)
+                {
+                    if (!string.IsNullOrWhiteSpace(deviceCfg.WorkDir)) task.WorkDir = deviceCfg.WorkDir;
+                    if (!string.IsNullOrWhiteSpace(deviceCfg.Model)) task.Model = deviceCfg.Model;
+                    if (!string.IsNullOrWhiteSpace(deviceCfg.Tools)) task.Tools = deviceCfg.Tools;
+                    if (deviceCfg.TimeoutSeconds > 0)
+                    {
+                        task.TimeoutSeconds = Math.Clamp(deviceCfg.TimeoutSeconds, 30, 7200);
+                    }
+                }
+
+                _outstanding[task.Id] = task;
+                _log($"agent 任务下发：{task.SourceKey} #{task.Id} → {target.Name}（{Shorten(task.Prompt, 60)}）" +
+                     (task.WorkDir is { Length: > 0 } ? $"，目录 {task.WorkDir}" : string.Empty));
+
+                var sent = await SendAsync(new JsonObject
+                {
+                    ["type"] = "task",
+                    ["id"] = task.Id,
+                    ["prompt"] = task.Prompt,
+                    ["session"] = task.Session,
+                    ["cwd"] = task.WorkDir ?? string.Empty,
+                    ["model"] = task.Model ?? string.Empty,
+                    ["tools"] = task.Tools ?? string.Empty,
+                    ["timeoutSec"] = task.TimeoutSeconds
+                }, target.Name);
+
+                if (!sent)
+                {
+                    lock (_stateLock)
+                    {
+                        _current = null;
+                    }
+
+                    task.Fail("任务下发失败（桥刚断开）");
+                    Finished?.Invoke(task);
+                }
+            }
+        }
+        finally
+        {
+            lock (_stateLock)
+            {
+                _workerRunning = false;
+            }
+
+            // 队列里还有活儿 + 桥还在 → 继续（比如刚下发完一个又来了新的）
+            if (!_queue.IsEmpty && Connected)
+            {
+                StartWorker();
+            }
+        }
+    }
+
+    /// <summary>等在跑的任务收尾；收尾后自己回到工人循环（不用轮询打断）。</summary>
+    private async Task WaitForCurrentAsync()
+    {
+        try
+        {
+            await Task.Delay(150);
+            if (!_queue.IsEmpty && Connected)
+            {
+                StartWorker();
+            }
+        }
+        catch
+        {
+            // 忽略：下一轮消息/事件还会再唤醒
+        }
+    }
+
+    private Task<bool> SendAsync(JsonObject payload, string? deviceName = null)
+    {
+        var conn = PickBridge(deviceName);
+        var socket = conn?.Socket;
+        if (socket is not { State: WebSocketState.Open })
+        {
+            return Task.FromResult(false);
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(payload.ToJsonString());
+        return SendAsync(socket, bytes);
+    }
+
+    private static async Task<bool> SendAsync(WebSocket socket, byte[] bytes)
+    {
+        try
+        {
+            await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, endOfMessage: true,
+                CancellationToken.None);
+            return true;
+        }
+        catch
+        {
+            return false;   // 发送失败 → 上层按“桥断了”处理
+        }
+    }
+
+    /// <summary>给状态接口/面板用的一句话摘要。</summary>
+    public string Describe()
+    {
+        if (!_settings.EnableAgentBridge)
+        {
+            return "未启用（面板里打开「本机 Agent」）";
+        }
+
+        if (!Connected)
+        {
+            return "未连接（外部 agent 设备没连上）";
+        }
+
+        var devices = _bridges.ToArray()
+            .Select(kv => $"{kv.Key}（pi {kv.Value.PiVersion ?? "?"}，目录 {kv.Value.Cwd ?? "?"}）")
+            .ToList();
+
+        var current = Current;
+        var running = current is null
+            ? "空闲"
+            : $"在跑 #{current.Id}→{(string.IsNullOrWhiteSpace(current.DeviceName) ? "服务器" : current.DeviceName)}（{Shorten(current.Prompt, 24)}）";
+
+        return $"在线设备 {_bridges.Count} 台：{string.Join("、", devices)} + {running}" +
+               (QueuedCount > 0 ? $"，排队 {QueuedCount}" : string.Empty);
+    }
+
+    private static string Tail(string text, int max)
+        => text.Length <= max ? text : text[^max..];
+
+    private static string Shorten(string text, int max)
+        => text.Length <= max ? text : text[..max] + "…";
+}
+
+/// <summary>一个 agent 任务的全生命周期（桥侧执行、结果回群）。</summary>
+public sealed class AgentTask
+{
+    public required string Id { get; init; }
+
+    /// <summary>哪个会话提的（群聊 group:123 / 私聊 private:456）。</summary>
+    public required string SourceKey { get; init; }
+
+    public required string Prompt { get; init; }
+
+    /// <summary>这个任务派给哪台设备（空 = 第一台在线的）；服务器内置 agent 不走这里。</summary>
+    public string? TargetDevice { get; init; }
+
+    /// <summary>实际执行它的外部设备名（服务器内置 agent 时为空）。</summary>
+    public string? DeviceName { get; set; }
+
+    /// <summary>要不要把 pi 的会话名传下去：同一个群用同一个 → agent 记得上一轮（<c>--session-id</c>）。
+    /// 服务器内置 agent 不用它（它自己拿任务提示词从零开始）。</summary>
+    public required string Session { get; init; }
+
+    public string? WorkDir { get; set; }
+
+    public string? Model { get; set; }
+
+    public string? Tools { get; set; }
+
+    public int TimeoutSeconds { get; set; }
+
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.Now;
+
+    public long DurationMs { get; set; }
+
+    public bool Done { get; private set; }
+
+    public bool Ok { get; private set; }
+
+    public string? Text { get; private set; }
+
+    public string? Error { get; private set; }
+
+    /// <summary>桥侧最近一次“我在干什么”（例如 🔧 bash）——群里报进度用。</summary>
+    public string? LastNote { get; set; }
+
+    public string? StreamTail { get; set; }
+
+    public int ToolCalls { get; set; }
+
+    public bool CancelRequested { get; set; }
+
+    public void Succeeded(string text)
+    {
+        Done = true;
+        Ok = true;
+        Text = text;
+    }
+
+    public void Fail(string error)
+    {
+        Done = true;
+        Ok = false;
+        Error = error;
+    }
+}

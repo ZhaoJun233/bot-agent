@@ -329,10 +329,12 @@
           <label class="switch-row">
             <input type="checkbox" id="setIgnoreBrackets" />
             <span class="switch"></span>
-            <span>忽略群友消息里的括号旁白<span class="hint">如「（笑）」「（bushi）」；也包含前后带的动作旁白：
-              「行（端在桌上）」→ 只留下「行」，「（放在地上）来吧」→ 只留下「来吧」。
-              整条都是旁白才整条忽略；句子中间的括号（「（2026）年的计划」）不碰；
-              群友发表情/图片的记录（[表情:斜眼笑]、[图片]）不会当成旁白；带图 / 带 @ 机器人 / 私聊永不动</span></span>
+            <span>把群友的括号旁白标注成〔旁白：…〕<span class="hint">如「（笑）」「（bushi）」；也包含前后带的动作旁白：
+              「行（端在桌上）」→「行〔旁白：端在桌上〕」，「（放在地上）来吧」→「〔旁白：放在地上〕来吧」。
+              不丢内容：旁白照样进聊天记录与模型上下文，但模型知道那是动作/表情说明、不是他说的话；
+              整条都是旁白时不单独触发一次回复（旁白不是对谁说的话）；
+              句子中间的括号（「（2026）年的计划」）不碰；群友发表情/图片的记录（[表情:斜眼笑]、[图片]）不当旁白；
+              带图 / 带 @ 机器人 / 私聊永不动</span></span>
           </label>
         </div>
 
@@ -549,6 +551,160 @@
             而模型服务商那边的检索不用额外密钥、不爬页面、结果还带来源。自建 SearxNG / MediaWiki 之类的接口可以把地址填到上面。</p>
         </div>
 
+        <!-- 本机 Agent（// 命令） -->
+        <div class="card">
+            <div class="card-head">
+                <h3>本机 Agent（<code>//</code> 命令）</h3>
+                <p>群里发一条 <code>//</code> 开头的消息，机器人把这句话交给<b>你自己电脑上的 pi</b> 去干（能看文件、能改代码、能跑命令），
+                    干完把结果发回群里。本机跑 <code>start-pi-bridge.cmd</code>，它主动连到机器人 —— 不用给公网开新端口。</p>
+            </div>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setEnableAgentBridge" />
+                <span class="switch"></span>
+                <span>启用本机 Agent<span class="hint">关掉时 <code>//</code> 开头的消息跟普通消息一样走人设聊天</span></span>
+            </label>
+
+            <div class="field">
+                <label>哪些 QQ 号能用<span class="hint">逗号分隔。空 = 谁都不能用（这个功能能在你电脑上执行命令，默认不给）</span></label>
+                <input type="text" id="setAgentAllowedUsers" placeholder="例如 20002,20003" />
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>命令前缀</label>
+                    <input type="text" id="setAgentPrefix" maxlength="8" placeholder="//" />
+                </div>
+                <div class="field">
+                    <label>超时（秒）</label>
+                    <input type="number" id="setAgentTimeoutSeconds" min="30" max="7200" step="30" />
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>回群单条上限（字）</label>
+                    <input type="number" id="setAgentReplyMaxChars" min="200" max="3000" step="50" />
+                </div>
+                <div class="field">
+                    <label>进度提示间隔（秒，0=不提示）</label>
+                    <input type="number" id="setAgentProgressSeconds" min="0" max="3600" step="30" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label>本机工作目录<span class="hint">pi 在哪个目录里干活（留空 = 桥自己的默认目录）</span></label>
+                <input type="text" id="setAgentWorkDir" placeholder="E:/bot" />
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>外部设备 agent<span class="hint">号主电脑上的 pi（本机跑 start-pi-bridge.cmd）</span></label>
+                    <label class="switch-row" style="padding:6px 0">
+                        <input type="checkbox" id="setEnableHostAgent" />
+                        <span class="switch"></span>
+                        <span>启用</span>
+                    </label>
+                </div>
+                <div class="field">
+                    <label>服务器内置 agent<span class="hint">跑在容器里的工具循环：bash / 读 / 写 / 抓网页</span></label>
+                    <label class="switch-row" style="padding:6px 0">
+                        <input type="checkbox" id="setEnableServerAgent" />
+                        <span class="switch"></span>
+                        <span>启用</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>优先用哪边<span class="hint">两个开关都开时生效；不想用哪边直接关掉那个开关</span></label>
+                    <select id="setAgentTargetMode">
+                        <option value="auto">auto —— 外部在线就用外部，否则服务器</option>
+                        <option value="host">只用外部设备</option>
+                        <option value="server">只用服务器内置</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>指定设备<span class="hint">多台外部设备时选一台（选了就只走它）；设备名可自己设</span></label>
+                    <select id="setAgentDevice">
+                        <option value="">（不指定，跟着上面）</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>服务器 agent 的模型接口<span class="hint">OpenAI 兼容地址（留空 = 用聊天那个）；agent 的请求多，可以单独指个小模型/便宜网关</span></label>
+                    <input type="text" id="setAgentServerBaseUrl" placeholder="http://127.0.0.1:8000/v1（留空=跟聊天一样）" />
+                </div>
+                <div class="field">
+                    <label>服务器 agent 的模型<span class="hint">填完接口可点右边按钮拉列表选</span></label>
+                    <div class="sticker-actions" style="margin:0">
+                        <input type="text" id="setAgentServerModel" placeholder="留空 = 跟聊天同一个模型" style="flex:1" />
+                        <button class="ghost-btn" id="agentServerModelsGo">拉列表</button>
+                    </div>
+                </div>
+            </div>
+            <select id="agentServerModelPick" style="display:none;margin-top:6px"></select>
+
+            <div class="field">
+                <label>外部设备用的模型<span class="hint">从设备的 pi 模型列表里选（机器人在线时拉取）</span></label>
+                <div class="sticker-actions" style="margin:0">
+                    <select id="setAgentModel" style="flex:1"><option value="">（用 pi 自己的默认）</option></select>
+                    <button class="ghost-btn" id="agentHostModelsGo">刷新列表</button>
+                </div>
+            </div>
+
+            <!-- 外部设备：一键连接 + 每台设备自己的配置（泛用：名字任意、可多台） -->
+            <div class="field">
+                <label>外部设备<span class="hint">接上来就能用；每台可以单独配模型/目录/工具（不配就走上面的默认）</span></label>
+                <div class="sticker-actions" style="margin:0">
+                    <button class="ghost-btn" id="agentConnectGo">一键连接本机…</button>
+                    <button class="ghost-btn" id="agentDeviceAdd">+ 添加设备</button>
+                    <button class="ghost-btn" id="agentDeviceRefresh">刷新状态</button>
+                </div>
+            </div>
+            <div id="agentDeviceTable" class="path-hint" style="max-height:260px;overflow:auto"></div>
+            <pre id="agentConnectOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto;display:none"></pre>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>服务器 agent 工具<span class="hint">逗号分隔：bash,read,write,fetch；空 = 全开</span></label>
+                    <input type="text" id="setAgentServerTools" placeholder="bash,read,fetch" />
+                </div>
+                <div class="field">
+                    <label>服务器 agent 最多几步<span class="hint">每步一次模型调用</span></label>
+                    <input type="number" id="setAgentServerMaxSteps" min="1" max="30" step="1" />
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>服务器 agent 工作目录<span class="hint">容器内路径，/data 里能看到日志与数据库</span></label>
+                    <input type="text" id="setAgentServerWorkDir" placeholder="/data" />
+                </div>
+                <div class="field">
+                    <label>单条命令超时（秒）</label>
+                    <input type="number" id="setAgentServerCommandTimeoutSeconds" min="5" max="300" step="5" />
+                </div>
+            </div>
+
+            <div class="sticker-actions">
+                <select id="agentTestTarget" style="max-width:130px">
+                    <option value="host">外部设备</option>
+                    <option value="server">服务器 agent</option>
+                </select>
+                <input type="text" id="agentTestPrompt" maxlength="300" placeholder="试一条：数一下 E:/bot 里有几个 .py 文件" style="flex:1" />
+                <button class="ghost-btn" id="agentTestGo">送到本机跑一下</button>
+                <button class="ghost-btn" id="agentStatusGo">看连接状态</button>
+            </div>
+            <pre id="agentOut" class="path-hint" style="white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+
+            <p class="path-hint">令牌（<code>AGENT_TOKEN</code>）只在容器环境变量里 —— 没配令牌就不接受任何桥连接；
+                本机那边要把同样的值填进 <code>start-pi-bridge.cmd</code>。</p>
+        </div>
+
         <!-- 链接与分享 -->
         <div class="card">
           <div class="card-head">
@@ -625,8 +781,12 @@
         <!-- 运行日志 -->
         <div class="card log-card">
           <div class="card-head">
-            <h3>运行日志<span class="hint">最近 200 条 Agent 决策记录</span></h3>
-            <p>能看到它每次为什么发言、为什么沉默、耗时多久。</p>
+            <h3>运行日志<span class="hint">最近 300 行（刷新页面不会清空；含 Agent / OneBot / 语音 / 搜索等各组件的行）</span></h3>
+            <p>能看到它每次为什么发言、为什么沉默、耗时多久；长日志用右边两个按钮一键到顶 / 到底。</p>
+          </div>
+          <div class="logbar">
+            <button class="ghost-btn small" id="logTopBtn" type="button">↑ 顶部</button>
+            <button class="ghost-btn small" id="logBottomBtn" type="button">↓ 底部</button>
           </div>
           <div class="logbox" id="logBox"></div>
         </div>

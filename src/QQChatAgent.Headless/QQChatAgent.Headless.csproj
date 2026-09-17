@@ -22,6 +22,8 @@
   <!-- Web 面板静态资源嵌入程序集（单文件发布，无需挂载 wwwroot） -->
   <ItemGroup>
     <EmbeddedResource Include="wwwroot/**" LogicalName="web/%(Filename)%(Extension)" />
+    <!-- 本机 agent 桥脚本：面板里「下载 pi-bridge.py」直接吐这个（源码只有 tools/ 一份） -->
+    <EmbeddedResource Include="../../tools/pi-bridge.py" LogicalName="tools/pi-bridge.py" />
   </ItemGroup>
 
   <!--

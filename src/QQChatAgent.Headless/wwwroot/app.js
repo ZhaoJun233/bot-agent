@@ -83,6 +83,11 @@
   }
 
   /// EventSource 不能自定义请求头 → 令牌只能走查询参数
+  /// 面板自身的基地址（下载链接用；带面板令牌时也会拼上）
+  function apiBase() {
+    return location.origin;
+  }
+
   function withToken(path) {
     const t = panelToken();
     if (!t) return path;
@@ -959,6 +964,15 @@
     showSection(m ? (m[1] === "all" ? -1 : parseInt(m[1], 10)) : 0);
   }
 
+    function fillSelect(sel, models, current, placeholder) {
+    const list = Array.from(new Set([...(models || []), current].filter(Boolean)));
+    sel.innerHTML = `<option value="">${placeholder}</option>` +
+      list.map((m) => `<option value="${m}">${m}</option>`).join("");
+    sel.value = list.includes(current) ? current : "";
+  }
+
+  /* 拉服务器 agent 接口的模型列表（GET <AgentServerBaseUrl>/models） */
+
   async function loadSettings() {
     state.settingsLoaded = false; // 重新加载期间先封住保存
     const data = await api("/api/settings");
@@ -1042,6 +1056,37 @@
     $("setEnableLinkPreview").checked = r.enableLinkPreview !== false;
     $("setEnableWebSearch").checked = r.enableWebSearch === true;    $("setWebSearchUseModelSearch").checked = r.webSearchUseModelSearch !== false;
     $("setWebSearchSources").value = r.webSearchSources || "";
+
+    // ─────────── 本机 Agent（// 命令）───────────
+    $("setEnableAgentBridge").checked = r.enableAgentBridge === true;
+    $("setAgentAllowedUsers").value = r.agentAllowedUsers || "";
+    $("setAgentPrefix").value = r.agentPrefix || "//";
+    $("setAgentTimeoutSeconds").value = r.agentTimeoutSeconds;
+    $("setAgentReplyMaxChars").value = r.agentReplyMaxChars;
+    $("setAgentProgressSeconds").value = r.agentProgressSeconds;
+    $("setAgentWorkDir").value = r.agentWorkDir || "";
+    $("setEnableHostAgent").checked = r.enableHostAgent !== false;
+    $("setEnableServerAgent").checked = r.enableServerAgent !== false;
+
+    // “优先用哪边”与“指定设备”共用 AgentTarget：名字在三种模式之外 → 就是指定设备
+    const target = (r.agentTarget || "auto").trim();
+    const modes = ["auto", "host", "server"];
+    if (modes.includes(target)) {
+      $("setAgentTargetMode").value = target;
+      $("setAgentDevice").value = "";
+    } else {
+      $("setAgentTargetMode").value = "auto";
+      ensureDeviceOption(target);
+      $("setAgentDevice").value = target;
+    }
+    $("setAgentServerTools").value = r.agentServerTools || "";
+    $("setAgentServerMaxSteps").value = r.agentServerMaxSteps;
+    $("setAgentServerWorkDir").value = r.agentServerWorkDir || "/data";
+    $("setAgentServerCommandTimeoutSeconds").value = r.agentServerCommandTimeoutSeconds;
+    $("setAgentServerBaseUrl").value = r.agentServerBaseUrl || "";
+    $("setAgentServerModel").value = r.serverModel || "";
+    fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
+    $("setAgentModel").value = r.agentModel || "";
     $("setWebSearchMaxResults").value = r.webSearchMaxResults;
     $("setWebSearchCooldown").value = r.webSearchCooldownSeconds;
     $("setWebSearchTimeoutSeconds").value = r.webSearchTimeoutSeconds;
@@ -1132,6 +1177,23 @@
       musicKeepAudio: $("setMusicKeepAudio").checked,
       enableLinkPreview: $("setEnableLinkPreview").checked,
       enableWebSearch: $("setEnableWebSearch").checked,
+      enableAgentBridge: $("setEnableAgentBridge").checked,
+      agentAllowedUsers: $("setAgentAllowedUsers").value.trim(),
+      agentPrefix: $("setAgentPrefix").value.trim() || "//",
+      agentTimeoutSeconds: Number($("setAgentTimeoutSeconds").value),
+      agentReplyMaxChars: Number($("setAgentReplyMaxChars").value),
+      agentProgressSeconds: Number($("setAgentProgressSeconds").value),
+      agentWorkDir: $("setAgentWorkDir").value.trim(),
+      agentTarget: $("setAgentDevice").value.trim() || $("setAgentTargetMode").value,
+      enableHostAgent: $("setEnableHostAgent").checked,
+      enableServerAgent: $("setEnableServerAgent").checked,
+      agentServerTools: $("setAgentServerTools").value.trim(),
+      agentServerMaxSteps: Number($("setAgentServerMaxSteps").value),
+      agentServerWorkDir: $("setAgentServerWorkDir").value.trim() || "/data",
+      agentServerCommandTimeoutSeconds: Number($("setAgentServerCommandTimeoutSeconds").value),
+      agentServerModel: $("setAgentServerModel").value.trim(),
+      agentServerBaseUrl: $("setAgentServerBaseUrl").value.trim(),
+      agentModel: $("setAgentModel").value,
       webSearchUseModelSearch: $("setWebSearchUseModelSearch").checked,
       webSearchSources: $("setWebSearchSources").value.trim(),
       webSearchMaxResults: Number($("setWebSearchMaxResults").value),
@@ -1175,16 +1237,66 @@
   }
 
   /* ─────────── 日志 ─────────── */
-  function pushLog(text) {
-    state.logs.push({ t: Date.now(), text });
-    if (state.logs.length > 200) state.logs.splice(0, state.logs.length - 200);
+  /// 日志很长时不可能一直拖滚动条：顶部 / 底部两个按钮一键跳（号主要求）。
+  /// 注意：跳到最底后如果又来了新日志，renderLogs() 会自己跟上（它在底部附近才自动滚）。
+  function bindLogScrollButtons() {
+    const top = $("logTopBtn");
+    const bottom = $("logBottomBtn");
+    if (top) {
+      top.addEventListener("click", () => {
+        const box = $("logBox");
+        if (box) box.scrollTop = 0;   // 顶部：最老的那几行
+      });
+    }
+
+    if (bottom) {
+      bottom.addEventListener("click", () => {
+        const box = $("logBox");
+        if (box) box.scrollTop = box.scrollHeight;   // 底部：最新的那几行
+      });
+    }
+  }
+  /// 面板日志 = 服务端日志的尾部（`/api/logs`）+ 之后的实时流（SSE）。
+  /// 以前只存浏览器内存：**一刷新页面就全没了**（号主反馈），现在首屏先把历史拉回来。
+  async function loadLogs() {
+    try {
+      const data = await api("/api/logs?limit=300");
+      const seen = new Set();
+      const merged = [];
+      for (const l of (data && data.lines) || []) {
+        const item = { t: l.time || Date.now(), text: l.text || "" };
+        seen.add(item.t + "|" + item.text);
+        merged.push(item);
+      }
+      // 首屏拉取期间 SSE 可能已经推来几行：保留它们（去重后接在后面，再按时间排一次）
+      for (const l of state.logs) {
+        const key = l.t + "|" + l.text;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(l);
+      }
+      merged.sort((a, b) => a.t - b.t);
+      state.logs = merged.slice(-600);
+      renderLogs(true);
+    } catch {
+      // 拉不到就只显实时流（不影响其它功能）
+    }
+  }
+
+  function pushLog(text, time) {
+    const t = time || Date.now();
+    // 去重：历史回填与实时流可能在交界处重复一行（同一毫秒 + 同一文本）
+    const last = state.logs[state.logs.length - 1];
+    if (last && last.t === t && last.text === text) return;
+    state.logs.push({ t, text });
+    if (state.logs.length > 600) state.logs.splice(0, state.logs.length - 600);
     renderLogs();
   }
 
-  function renderLogs() {
+  function renderLogs(forceBottom) {
     const box = $("logBox");
     if (!box) return;
-    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    const nearBottom = forceBottom || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
     box.innerHTML = state.logs.map((l) => {
       const d = new Date(l.t);
       const p = (n) => String(n).padStart(2, "0");
@@ -1249,7 +1361,10 @@
       if (key === state.activeKey) renderThinking();
     });
 
-    es.addEventListener("log", (e) => pushLog(JSON.parse(e.data).text));
+    es.addEventListener("log", (e) => {
+      const l = JSON.parse(e.data);
+      pushLog(l.text, l.time);
+    });
 
     es.onerror = () => {
       $("connText").textContent = "面板连接中断，重连中…";
@@ -1275,7 +1390,12 @@
     $("pageSettings").hidden = page !== "settings";
 
     if (page === "settings") {
-      loadSettings().catch((e) => toast("加载设置失败：" + e.message));
+      loadSettings().catch((e) => {
+      // 不能只是 toast：设置回填一半失败时，症状是“保存按钮点了没反应”，
+      // 事后光看界面根本看不出原因（调试时踩过）—— 控制台一定要有原始异常。
+      console.error("loadSettings failed", e);
+      toast("加载设置失败：" + e.message);
+    });
       // 页面刚显示出来时元素才有尺寸，分节导航的高亮要等这一刻才能算准
       if (refreshSettingsNav) setTimeout(refreshSettingsNav, 0);
     }
@@ -1289,6 +1409,8 @@
   }
 
   function bindUi() {
+    bindLogScrollButtons();
+
     // 导航（桌面：左侧 rail；手机：底部标签栏 —— 共用同一套 data-page）
     for (const btn of document.querySelectorAll(".navitem, .mtab")) {
       btn.addEventListener("click", () => showPage(btn.dataset.page));
@@ -1555,6 +1677,256 @@
        一个入口两种用法：填搜索词就是搜，填 http(s) 网址就是读那页正文。
        为什么让面板直接跑：搜索能不能用跟服务器 IP、网关支不支持 google_search 强相关，
        当场跑一次比在群里碰运气强。 */
+    /* ─────────── 本机 Agent（// 命令）───────────
+       为什么把“送到本机跑一下”放面板里：桥通不通、pi 能不能跑、令牌对不对 ——
+       这三件事只有真跑一次才知道；在群里试要等半天、还可能被群友看到。 */
+
+    /* 下拉填充小工具：把模型列表填进去，并保留当前值（旧值也留一项，免得保存时被改掉） */
+    $("agentServerModelsGo").addEventListener("click", async () => {
+      const out = $("agentOut");
+      out.textContent = "正在拉模型列表…";
+      try {
+        await saveSettings();   // 先存接口地址，否则拉的是旧地址
+        const r = await api("/api/agent/models?target=server");
+        const models = r.models || [];
+        if (models.length === 0) {
+          out.textContent = `拉不到列表（${r.url || "?"}）：${r.error || "接口没回 data[].id"}`;
+          return;
+        }
+
+        const pick = $("agentServerModelPick");
+        fillSelect(pick, models, "", "（选一个自动填到左边）");
+        pick.style.display = "";
+        pick.onchange = () => { if (pick.value) $("setAgentServerModel").value = pick.value; };
+        out.textContent = `拉到 ${models.length} 个模型（${r.url}）：${models.slice(0, 12).join("、")}${models.length > 12 ? " …" : ""}`;
+      } catch (e) {
+        out.textContent = "拉取失败：" + e.message;
+      }
+    });
+
+    /* 刷新外部设备（pi）的模型列表 */
+    $("agentHostModelsGo").addEventListener("click", async () => {
+      const out = $("agentOut");
+      out.textContent = "正在问外部设备有哪些模型…";
+      try {
+        const r = await api("/api/agent/models?target=host");
+        const models = r.models || [];
+        fillSelect($("setAgentModel"), models, $("setAgentModel").value, "（用 pi 自己的默认）");
+        out.textContent = models.length > 0
+          ? `设备上的模型（${models.length} 个）：${models.join("、")}`
+          : (r.note || "设备没上报模型列表");
+      } catch (e) {
+        out.textContent = "拉取失败：" + e.message;
+      }
+    });
+
+    /* ─────────── 外部设备：一键连接 + 每设备配置 ─────────── */
+
+    /// 设备表内存里的那份配置（保存时序列化成 AgentDevices JSON）
+    let agentDevices = [];
+
+    function renderAgentDevices() {
+      const box = $("agentDeviceTable");
+      if (agentDevices.length === 0) {
+        box.innerHTML = '<div style="padding:6px 0">还没有外部设备。点「一键连接本机…」按提示接入。</div>';
+        return;
+      }
+
+      box.innerHTML = agentDevices.map((d, i) => {
+        const online = d.online ? "🟢 在线" : "⚪ 离线";
+        const models = (d.models || []).map((m) =>
+          `<option value="${m}"${m === d.model ? " selected" : ""}>${m}</option>`).join("");
+        return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <b>${d.name}</b>
+            <span class="hint">${online}${d.pi ? ` · pi ${d.pi}` : ""}${d.cwd ? ` · ${d.cwd}` : ""}</span>
+            <label class="switch-row" style="padding:0"><input type="checkbox" data-dev-enable="${i}"${d.enable ? " checked" : ""} /><span class="switch"></span><span class="hint">启用</span></label>
+            <button class="ghost-btn" data-dev-toggle="${i}">${d.online ? "断开" : "重连"}</button>
+            <button class="ghost-btn" data-dev-del="${i}">删除</button>
+          </div>
+          <div class="grid-2" style="margin-top:6px">
+            <div class="field"><label class="hint">模型</label>
+              <select data-dev-model="${i}">
+                <option value="">（用 pi 默认）</option>${models}
+                ${d.model && !(d.models || []).includes(d.model) ? `<option value="${d.model}" selected>${d.model}</option>` : ""}
+              </select>
+            </div>
+            <div class="field"><label class="hint">工作目录</label>
+              <input type="text" data-dev-workdir="${i}" value="${d.workdir || ""}" placeholder="例如 E:/bot（留空=设备默认）" />
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field"><label class="hint">工具白名单（空=全开）</label>
+              <input type="text" data-dev-tools="${i}" value="${d.tools || ""}" placeholder="bash,read,fetch" />
+            </div>
+            <div class="field"><label class="hint">超时（秒，0=用全局）</label>
+              <input type="number" data-dev-timeout="${i}" value="${d.timeoutSec || 0}" min="0" max="7200" step="30" />
+            </div>
+          </div>
+        </div>`;
+      }).join("");
+
+      box.querySelectorAll("[data-dev-model]").forEach((el) => el.addEventListener("change", () => {
+        agentDevices[Number(el.dataset.devModel)].model = el.value;
+        markSettingsDirty();
+      }));
+      box.querySelectorAll("[data-dev-workdir]").forEach((el) => el.addEventListener("input", () => {
+        agentDevices[Number(el.dataset.devWorkdir)].workdir = el.value.trim();
+        markSettingsDirty();
+      }));
+      box.querySelectorAll("[data-dev-tools]").forEach((el) => el.addEventListener("input", () => {
+        agentDevices[Number(el.dataset.devTools)].tools = el.value.trim();
+        markSettingsDirty();
+      }));
+      box.querySelectorAll("[data-dev-timeout]").forEach((el) => el.addEventListener("input", () => {
+        agentDevices[Number(el.dataset.devTimeout)].timeoutSec = Number(el.value) || 0;
+        markSettingsDirty();
+      }));
+      box.querySelectorAll("[data-dev-enable]").forEach((el) => el.addEventListener("change", () => {
+        agentDevices[Number(el.dataset.devEnable)].enable = el.checked;
+        markSettingsDirty();
+      }));
+      box.querySelectorAll("[data-dev-del]").forEach((el) => el.addEventListener("click", () => {
+        agentDevices.splice(Number(el.dataset.devDel), 1);
+        renderAgentDevices();
+        markSettingsDirty();
+      }));
+      box.querySelectorAll("[data-dev-toggle]").forEach((el) => el.addEventListener("click", async () => {
+        const d = agentDevices[Number(el.dataset.devToggle)];
+        if (d.online) {
+          await api("/api/agent/disconnect", { method: "POST", body: JSON.stringify({ device: d.name }) });
+          toast(`已断开 ${d.name}（本机那边会自动重连）`);
+        } else {
+          toast("请在本机双击 connect-pi-bridge.cmd（面板里可下载）");
+        }
+        await refreshAgentDevicesFull();
+      }));
+    }
+
+    async function refreshAgentDevicesFull() {
+      const out = $("agentOut");
+      try {
+        const r = await api("/api/agent/status");
+        agentDevices = (r.deviceList || []).map((d) => ({ ...d }));
+        renderAgentDevices();
+        refreshAgentDevices(r.devices || []);
+        return r;
+      } catch (e) {
+        out.textContent = "刷新设备失败：" + e.message;
+        return null;
+      }
+    }
+
+    $("agentDeviceAdd").addEventListener("click", () => {
+      const name = prompt("设备名（本机桥握手时上报的 host 名，例如 ZHAOSPC；现在也可以随便写，接上来就会匹配）：");
+      if (!name) return;
+      agentDevices.push({ name: name.trim(), online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] });
+      renderAgentDevices();
+      markSettingsDirty();
+    });
+
+    $("agentDeviceRefresh").addEventListener("click", async () => {
+      await refreshAgentDevicesFull();
+      toast("设备状态已刷新");
+    });
+
+    /* 一键连接：生成带地址+令牌的脚本，下载后在本机双击即可 */
+    $("agentConnectGo").addEventListener("click", async () => {
+      const out = $("agentConnectOut");
+      out.style.display = "";
+      try {
+        await saveSettings();   // 保证服务端用最新的设备配置
+      } catch (e) {
+        out.textContent = "保存设置失败：" + e.message;
+        return;
+      }
+
+      const isWin = !/Mac|Linux|Android|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
+      const os = isWin ? "win" : "sh";
+      const url = withToken(`${apiBase()}/api/agent/setup?os=${os}`);
+      out.textContent = [
+        "① 点下面按钮下载启动脚本（里面已经带好地址和令牌，不用手改）",
+        "② 把 pi-bridge.py 也放到本机同一目录（下面给链接）",
+        `③ 双击运行（Windows：connect-pi-bridge.cmd；Linux/Mac：sh connect-pi-bridge.sh）`,
+        "④ 回来后点「刷新状态」，看到 🟢 在线就是成了",
+        ""
+      ].join("\n");
+      out.insertAdjacentHTML("beforeend",
+        `<div class="sticker-actions">\n` +
+        `  <a class="ghost-btn" href="${url}" download>下载 ${isWin ? "connect-pi-bridge.cmd" : "connect-pi-bridge.sh"}</a>\n` +
+        `  <a class="ghost-btn" href="${withToken(`${apiBase()}/agent-bridge-script`)}" download="pi-bridge.py">下载 pi-bridge.py</a>\n` +
+        `  <button class="ghost-btn js-agent-connect-check">我已运行，检测连接</button>\n` +
+        `</div>`);
+
+      // 注意：这个按钮是动态插进来的，用 class 而不是 id —— 面板探针会去 index.html 里核对
+      // “app.js 引用的 id 是否都存在”，动态节点的 id 会被判为不存在（踩过）。
+      out.querySelector(".js-agent-connect-check").addEventListener("click", async () => {
+        const r = await refreshAgentDevicesFull();
+        const list = (r && r.devices) || [];
+        out.textContent += list.length > 0
+          ? `\n✓ 已连上：${list.join("、")}（模型 ${(r.deviceModels || []).length} 个）`
+          : "\n…还没收到连接。确认脚本窗口还开着、令牌没改错。";
+      });
+    });
+
+    $("agentStatusGo").addEventListener("click", async () => {
+      const out = $("agentOut");
+      out.textContent = "查询中…";
+      try {
+        const r = await api("/api/agent/status");
+        refreshAgentDevices(r.devices || []);
+        fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
+        out.textContent = [
+          `开关：总体${r.enabled ? "开" : "关"}｜外部设备 ${r.hostAgent === false ? "关" : "开"}｜服务器 ${r.serverAgent ? "开" : "关"}`,
+          `前缀：${r.prefix}`,
+          `可用 QQ：${r.allowedUsers || "（空 —— 谁都不能用）"}`,
+          `令牌：${r.tokenConfigured ? "已配置" : "没有配置（外部设备连不上）"}`,
+          `优先：${r.target}（auto = 外部在线优先）`,
+          `在线设备：${r.connected ? (r.devices || []).join("、") : "不在线"}`,
+          `当前：${r.summary}`
+        ].join("\n");
+      } catch (e) {
+        out.textContent = "查询失败：" + e.message;
+      }
+    });
+
+    /* 设备下拉：在线设备自动出现；旧值（比如已下线的设备）保留一项，免得保存时被改掉 */
+    function refreshAgentDevices(devices) {
+      const sel = $("setAgentDevice");
+      const keep = sel.value;
+      const list = Array.from(new Set([...(devices || []), keep].filter(Boolean)));
+      sel.innerHTML = '<option value="">（不指定，跟着上面）</option>' +
+        list.map((d) => `<option value="${d}">${d}</option>`).join("");
+      sel.value = list.includes(keep) ? keep : "";
+    }
+
+    function ensureDeviceOption(name) {
+      if (!name) return;
+      const sel = $("setAgentDevice");
+      if (!Array.from(sel.options).some((o) => o.value === name)) {
+        sel.insertAdjacentHTML("beforeend", `<option value="${name}">${name}</option>`);
+      }
+    }
+
+    $("agentTestGo").addEventListener("click", async () => {
+      const out = $("agentOut");
+      const prompt = $("agentTestPrompt").value.trim();
+      if (!prompt) { toast("先写一句要它干的活"); return; }
+      const target = $("agentTestTarget").value;
+      out.textContent = `已送到${target === "server" ? "服务器 agent" : "外部设备"}，正在跑…（长任务可能要几分钟，别关页面）`;
+      try {
+        await saveSettings();   // 先用当前设置，不然测的是旧配置
+        const r = await api("/api/agent/test", {
+          method: "POST",
+          body: JSON.stringify({ prompt, timeoutSec: 300, target })
+        });
+        const secs = r.durationMs ? (r.durationMs / 1000).toFixed(1) : "?";
+        out.textContent = `${r.ok ? "✅ 成功" : "❌ 失败"}（${r.target || target}，${secs}s${r.toolCalls ? `，${r.toolCalls} 次工具` : ""}）：\n${r.text || "（没有输出）"}`;
+      } catch (e) {
+        out.textContent = "失败：" + e.message;
+      }
+    });
+
     $("searchTestGo").addEventListener("click", async () => {
       const out = $("searchTestOut");
       const value = $("searchTestQuery").value.trim();
@@ -1687,6 +2059,8 @@
     }
 
     connectEvents();
+    // 先去拉一次日志历史（刷新页面后能立刻看到之前的行，而不是空白等到下一条）
+    loadLogs();
 
     // 面板一登录就把扫码卡片对齐一次（账号没在线时立刻去要一张二维码）
     renderLoginCard();

@@ -91,6 +91,22 @@ public static partial class Program
         Check("★ 走的是模型自带搜索，没有去爬配置里的搜索源",
             search.SearxHits == 0, $"searx 命中 {search.SearxHits} 次");
 
+        // ---- 1b) 时间与“什么时候该搜”（号主反馈：被问时间经常答错 —— 模型没钟、只能猜）----
+        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        var weekday = "星期" + "日一二三四五六"[(int)DateTime.Now.DayOfWeek];
+        Check("★ 提示词里注入了当前时间（日期 + 星期）—— 模型没钟，不问它就只能猜",
+            afterSearch is not null && afterSearch.Contains("[现在的时间]") &&
+            afterSearch.Contains(today) && afterSearch.Contains(weekday),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[现在的时间]"));
+        Check("★ 写明了“现在几点/今天几号”直接按注入时间答、不用搜",
+            afterSearch is not null && afterSearch.Contains("不要靠自己印象猜") &&
+            afterSearch.Contains("不用搜"),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[联网搜索]"));
+        Check("★ 搜索的“自主判断”写清了必须搜 / 不用搜两类（时效性一律搜）",
+            afterSearch is not null && afterSearch.Contains("什么时候必须搜") &&
+            afterSearch.Contains("什么时候不用搜") && afterSearch.Contains("带上时间信息"),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[联网搜索]"));
+
         var sends = await WaitForSendsAsync(protocol, 1, TimeSpan.FromSeconds(40));
         await WaitUntilAsync(() => sends.Any(a => MessageText(a).Contains("小仓唯")) ||
                                    GroupSendsSince(protocol, 0).Any(a => MessageText(a).Contains("小仓唯")),
@@ -269,6 +285,31 @@ public static partial class Program
         Check("★ 关掉后模型的话照发（只是不联网）",
             GroupSendsSince(protocol, mark2).Any(a => MessageText(a).Contains("凭记忆")),
             string.Join(" | ", GroupSendsSince(protocol, mark2).Select(MessageText)));
+
+        // ---- 6b) 关掉搜索不影响“现在的时间”：时间注入是无条件的（它跟联不联网是两回事）----
+        var offIdx = -1;
+        for (var i = openAi.Requests.Count - 1; i >= 0; i--)
+        {
+            if (UserTexts(openAi.Requests[i]).Any(u => u.Contains("查一下")))
+            {
+                offIdx = i;
+                break;
+            }
+        }
+
+        var afterOff = offIdx >= 0 ? openAi.DescribeRequest(offIdx) : null;
+        Check("★ 关掉联网后仍然有 [现在的时间]（时间不是靠搜来的）",
+            afterOff is not null && afterOff.Contains("[现在的时间]") && !afterOff.Contains("[联网搜索]"),
+            afterOff is null ? "(没等到请求)" : SectionOf(afterOff, "[现在的时间]"));
+
+        // ---- 6c) 面板日志页的历史：/api/logs 能拿到之前的行（以前一刷新页面就空白）----
+        var (logStatus, logBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/logs?limit=200");
+        Check("★ GET /api/logs 返回历史日志（刷新面板不再空白）",
+            logStatus == 200 && logBody.Contains("\"lines\"") && logBody.Contains("[Search]"),
+            logBody.Length > 240 ? logBody[^240..] : logBody);
+        Check("★ 历史日志带组件标签（[Agent]/[Search]…，与实时流同一份文本）",
+            logBody.Contains("[Agent]"),
+            logBody.Length > 200 ? logBody[..200] : logBody);
 
         // ---- 7) SSRF 闸门（另起一个 allowPrivate=0 的进程：默认部署就是这状态）----
         const int ssrfPort = 18105;

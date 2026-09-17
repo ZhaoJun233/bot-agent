@@ -765,6 +765,13 @@ input[type="range"] {
 .settings-actions { display: flex; align-items: center; gap: 12px; }
 .path-hint { font-size: 11px; color: var(--text-tertiary); word-break: break-all; }
 
+.logbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 0 -4px;   /* 紧贴在日志框上方，少占一行高度 */
+}
+
 .logbox {
   height: 190px;
   overflow-y: auto;

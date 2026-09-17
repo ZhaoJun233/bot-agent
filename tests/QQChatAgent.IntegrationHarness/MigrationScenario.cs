@@ -192,6 +192,13 @@ public static partial class Program
         Check("★ 迁移过来的历史上下文也在",
             prompt is not null && prompt.Contains("这是迁移前的一条老消息"));
 
+        // 等这一轮回复真的发出来再停：StopAsync 是**硬杀进程**（不是 docker stop 那种 SIGTERM），
+        // 而落库有 150ms 防抖 —— 以前这里只等“模型收到请求”就停，抢在防抖之前就会少一条机器人回复
+        // （全量跑时偶发，S27 见过两次）。
+        var replySent = await protocol.WaitForActionAsync("send_group_msg", TimeSpan.FromSeconds(30));
+        Check("迁移后照常回复", replySent is not null, "没等到 send_group_msg");
+        await Task.Delay(600);   // 等防抖窗口过去，回复真的落库
+
         await bot.StopAsync();
 
         // ---- 幂等：再启动一次，不会重复导入、也不会覆盖面板改过的值 ----

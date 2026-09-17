@@ -91,6 +91,31 @@ services:
       QQCHAT_NAPCAT_WEBUI_URL: ${NAPCAT_WEBUI_URL:-http://napcat:6099}
       QQCHAT_NAPCAT_WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:-}
 
+      # ---- 本机 Agent（// 命令：内外两个后端，公用一份 QQ 白名单）----
+      # ① 服务器内置 agent：跑在容器里的工具循环（bash / 读 / 写 / 抓网页）
+      # ② 外部设备 agent：号主电脑上的 pi，本机跑 pi-bridge.py 主动连进来
+      #    桥的地址就是面板端口 /agent-bridge（本机用 ssh -L 转过去，不用给公网开端口）
+      # ⚠ AGENT_TOKEN 必须有值 —— 这条连接能在号主电脑上执行命令，不配令牌就一律拒绝连接。
+      QQCHAT_AGENT: ${AGENT_ENABLED:-0}
+      QQCHAT_AGENT_USERS: ${AGENT_USERS:-}
+      QQCHAT_AGENT_TOKEN: ${AGENT_TOKEN:-}
+      QQCHAT_AGENT_PREFIX: ${AGENT_PREFIX:-//}
+      QQCHAT_AGENT_WORKDIR: ${AGENT_WORKDIR:-}
+      QQCHAT_AGENT_TIMEOUT: ${AGENT_TIMEOUT:-900}
+      QQCHAT_AGENT_TARGET: ${AGENT_TARGET:-auto}
+      QQCHAT_AGENT_HOST: ${AGENT_HOST:-1}
+      QQCHAT_AGENT_SERVER: ${AGENT_SERVER:-1}
+      QQCHAT_AGENT_SERVER_TOOLS: ${AGENT_SERVER_TOOLS:-}
+      # 服务器 agent 自己的模型接口（留空 = 跟聊天用同一个）
+      QQCHAT_AGENT_SERVER_URL: ${AGENT_SERVER_URL:-}
+      QQCHAT_AGENT_SERVER_MODEL: ${AGENT_SERVER_MODEL:-}
+      QQCHAT_AGENT_SERVER_KEY: ${AGENT_SERVER_KEY:-}
+      # 外部设备（pi）用的模型：留空 = pi 自己的默认；面板里可从它的模型列表选
+      QQCHAT_AGENT_MODEL: ${AGENT_MODEL:-}
+      QQCHAT_AGENT_SERVER_WORKDIR: ${AGENT_SERVER_WORKDIR:-/data}
+      QQCHAT_AGENT_SERVER_STEPS: ${AGENT_SERVER_STEPS:-8}
+      QQCHAT_AGENT_SERVER_CMD_TIMEOUT: ${AGENT_SERVER_CMD_TIMEOUT:-60}
+
       # ---- 表情包（全库共用一份；行为类配置以 settings.json 为准，这里只当种子）----
       QQCHAT_STICKERS: ${STICKERS:-1}
       QQCHAT_STICKER_MAX: ${STICKER_MAX:-120}

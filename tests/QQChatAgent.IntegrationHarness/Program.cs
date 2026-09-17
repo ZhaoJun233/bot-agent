@@ -101,6 +101,10 @@ public static partial class Program
         await Scenario("s28", RunMemberRoleScenarioAsync);
         await Scenario("s29", RunBracketMessageScenarioAsync);
         await Scenario("s30", RunCompanionScenarioAsync);
+        await Scenario("s31", RunImageFetchScenarioAsync);
+        await Scenario("s32", RunBurstScenarioAsync);
+        await Scenario("s33", RunAgentBridgeScenarioAsync);
+        await Scenario("s34", RunServerAgentScenarioAsync);
         }
         catch (Exception ex)
         {
@@ -213,6 +217,43 @@ public static partial class Program
         Console.WriteLine();
         Console.WriteLine("───── 实际发给模型的完整请求（最后一次） ─────");
         Console.WriteLine(openAi.DescribeRequest(openAi.Requests.Count - 1));
+
+        // ---- 上游 503（“No capacity / auth_unavailable”）→ 退让 2 秒重试一次，不把这一轮丢掉 ----
+        // 线上实测：网关的账号池会连回三次 503，以前每条都直接“模型请求失败”（群里那句话说没就没了）。
+        var sendsBeforeRetry = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        openAi.FailChatTimes = 1;
+        openAi.EnqueueReply("""{"suitability": 90, "reply": "重试之后照常回你。"}""");
+        await protocol.SendGroupMessageAsync(99999, 20002, "老王", "@机器人 再来一句", 7005, mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(
+            () => protocol.ActionsReceived
+                .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Any(a => MessageText(a).Contains("重试之后照常回你")),
+            TimeSpan.FromSeconds(60));
+        Check("★ 上游 503 时机器人退让重试（不再直接丢掉这条回复）",
+            openAi.FailedChats >= 1 && bot.OutputLines.Any(l => l.Contains("503") && l.Contains("重试")),
+            $"FailedChats={openAi.FailedChats}；" + string.Join(" | ", bot.OutputLines.Where(l => l.Contains("重试")).TakeLast(2)));
+        Check("★ 重试成功后的回复真的发出来了",
+            protocol.ActionsReceived
+                .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Skip(sendsBeforeRetry)
+                .Any(a => MessageText(a).Contains("重试之后照常回你")),
+            string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeRetry).Select(MessageText)));
+
+        // ---- 上游回 200 但 choices 为空（实测：慢的 `-high` 模型“思考”吃光预算时就是这样）----
+        // 以前这会让 `choices[0]` 抛 IndexOutOfRangeException → 被记成“模型请求失败”，一条消息静默消失。
+        // 现在按“这轮不说话”处理，并把原始响应记一笔。
+        var sendsBeforeEmpty = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        openAi.EmptyChoicesTimes = 1;
+        await protocol.SendGroupMessageAsync(99999, 20002, "老王", "@机器人 空结果那条", 7006, mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(() => bot.OutputLines.Any(l => l.Contains("模型返回了空结果")), TimeSpan.FromSeconds(60));
+        await Task.Delay(500);
+        Check("★ 上游回空 choices 时按沉默处理（不再报 IndexOutOfRange，也不再丢消息）",
+            bot.OutputLines.Any(l => l.Contains("模型返回了空结果")) &&
+            !bot.OutputLines.Any(l => l.Contains("IndexOutOfRangeException")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("空结果") || l.Contains("IndexOutOfRange")).TakeLast(2)));
+        Check("★ 空结果不会凭空发出消息",
+            protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") == sendsBeforeEmpty,
+            string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeEmpty).Select(MessageText)));
 
         await bot.StopAsync();
     }
@@ -498,6 +539,13 @@ public static partial class Program
 
             var status = await HttpGetAsync($"http://127.0.0.1:{healthPort}/status");
             Check("重启后 /status 显示已恢复会话", status.Body.Contains("\"conversations\":1") || status.Body.Contains("\"conversations\": 1"), Truncate(status.Body, 400));
+
+            // 面板日志：重启前的行也在（FileLog.PreloadRecent 从日志文件尾部回填）——
+            // 否则重启一次日志页就是空的，排查问题得回服务器 grep。
+            var (logStatus, logBody) = await HttpGetAsync($"http://127.0.0.1:{healthPort}/api/logs?limit=200");
+            Check("★ 重启后仍能读到重启前的日志（不是只剩本次启动）",
+                logStatus == 200 && logBody.Contains("机器人帮我看个问题") && logBody.Contains("已恢复"),
+                logBody.Length > 300 ? logBody[^300..] : logBody);
         }
         finally
         {
@@ -589,6 +637,7 @@ public static partial class Program
         openAi.EnqueueReply("""{"suitability": 5, "reply": "低分不该发出去"}""");   // 低于阈值 10
         openAi.EnqueueReply("""{"suitability": 90, "reply": "高分应该发出去"}""");  // 高于阈值
         openAi.EnqueueReply("""就是不想用 JSON 格式的纯文本回复""");                    // 非 JSON → 不得拦
+        openAi.EnqueueReply("""{"suitability": 5, "reply": "点名也得答"}""");      // 低分但 @ 了机器人 → 被点名必答
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         using var bot = StartBot(new Dictionary<string, string>
@@ -613,15 +662,18 @@ public static partial class Program
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
 
-        async Task SendAsync(string text, long mid)
+        async Task SendAsync(string text, long mid, bool mention = true)
         {
-            await protocol.SendGroupMessageAsync(99999, 20002, "老王", text, mid, mentionBot: true, ct: cts.Token);
+            await protocol.SendGroupMessageAsync(99999, 20002, "老王", text, mid, mentionBot: mention, ct: cts.Token);
             await Task.Delay(1200);
         }
 
-        await SendAsync("第一句", 8001);   // 模型自评 5  → 必须沉默
+        // 低分沉默只适用于“没在跟你说话”的闲聊（群里自说自话）：
+        // 被 @ 的时候不能沉默 —— 2026-09-16 号主反馈“直接跟我说话它也不理”，就是这一条。
+        await SendAsync("第一句", 8001, mention: false);   // 模型自评 5  → 没点名，必须沉默
         await SendAsync("第二句", 8002);   // 模型自评 90 → 必须发言
         await SendAsync("第三句", 8003);   // 非 JSON 文本 → 必须发言
+        await SendAsync("第四句", 8004);   // 模型自评 5 但 @ 了机器人 → 必须发言（被点名必答）
         await Task.Delay(2000);
 
         var sends = protocol.ActionsReceived
@@ -629,10 +681,14 @@ public static partial class Program
             .Select(MessageText)
             .ToList();
 
-        Check("自评 5 < 阈值 10 → 被拦下，不发", !sends.Contains("低分不该发出去"), string.Join(" | ", sends));
+        Check("自评 5 < 阈值 10 且没点名 → 被拦下，不发", !sends.Contains("低分不该发出去"), string.Join(" | ", sends));
         Check("自评 90 ≥ 阈值 10 → 正常发出", sends.Contains("高分应该发出去"), string.Join(" | ", sends));
         Check("模型没按 JSON 输出时不误杀（当普通回复）", sends.Contains("就是不想用 JSON 格式的纯文本回复"), string.Join(" | ", sends));
-        Check("共只发出 2 条", sends.Count == 2, $"实际 {sends.Count} 条：{string.Join(" | ", sends)}");
+        Check("★ 被 @ 时自评 5 也照答（被点名不以自评为准）", sends.Contains("点名也得答"), string.Join(" | ", sends));
+        Check("★ 被点名破例的理由写进了日志",
+            bot.OutputLines.Any(l => l.Contains("直接跟机器人说话") && l.Contains("照样接")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("直接跟机器人说话")).TakeLast(2)));
+        Check("共只发出 3 条", sends.Count == 3, $"实际 {sends.Count} 条：{string.Join(" | ", sends)}");
 
         await bot.StopAsync();
     }
@@ -812,9 +868,12 @@ public static partial class Program
             Check("★ 注入里出现了“画像”字段", sys.Contains("画像："), Truncate(sys, 700));
 
             var headerChars = sys.Length;
-            // 预算从 2500 提到 3200：2026-09-14 加了“先读懂气氛再说话”那段发言决策细则
-            //（情绪识别 + 该不该开口的清单 + suitability 语义），约 400 字，是有用的内容而非注水。
-            Check("画像确实压缩了体积（系统提示 < 3200 字）", headerChars < 3200, $"实际 {headerChars} 字");
+            // 预算一路长上来：2500 → 3200（发言决策细则）→ 3400（replyTo 语义 + 底线）
+            // → 3500（〔旁白：…〕）→ 4000（现在的时间 + 搜索自主判断），实测 3749 字。
+            // ⚠ 这是**提醒线**，不是目标：再加内容时先想想能不能删旧话 ——
+            // 提示词越长越慢越贵（§23.3 C 的“生成 8~15s”里就有它一份）。
+            Check("系统提示没失控（< 4000 字，提醒线；真正要钉的是下面的“已折叠不重复”）",
+                headerChars < 4000, $"实际 {headerChars} 字");
 
             var foldedCount = sys.Split("老王的历史发言").Length - 1;
             Check("已折叠的原文不再重复注入（最多只剩未折叠的尾部）", foldedCount <= 4,
@@ -898,7 +957,8 @@ public static partial class Program
 
         for (var i = 0; i < 14; i++)
         {
-            await protocol.SendGroupMessageAsync(groupId, 30003, "小明", $"第{i}个测试输入", 9100 + i, mentionBot: true, ct: cts.Token);
+            // i=4 是“浮点评分 3.5 → 低于阈值该沉默”那条：**不能带 @**，否则按“被点名必答”会被发出去
+            await protocol.SendGroupMessageAsync(groupId, 30003, "小明", $"第{i}个测试输入", 9100 + i, mentionBot: i != 4, ct: cts.Token);
             await Task.Delay(700);
         }
 

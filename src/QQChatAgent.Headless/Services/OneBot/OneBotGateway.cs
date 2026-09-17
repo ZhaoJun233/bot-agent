@@ -98,7 +98,7 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
     /// <summary>收到撤回（post_type=notice 下的 group_recall / friend_recall）。</summary>
     public event Action<QqRecallEvent>? MessageRecalled;
 
-    public async Task<bool> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null)
+    public async Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null)
     {
         var action = isGroup ? "send_group_msg" : "send_private_msg";
         var key = isGroup ? "group_id" : "user_id";
@@ -107,7 +107,23 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
             ? $"[{{\"type\":\"reply\",\"data\":{{\"id\":{rid}}}}},{{\"type\":\"text\",\"data\":{{\"text\":{Json(text)}}}}}]"
             : Json(text);
         var result = await SendActionAsync(action, $"{{\"{key}\":{targetId},\"message\":{messageJson}}}", ct);
-        return result is not null && GetRetcode(result) == 0;
+        var ok = result is not null && GetRetcode(result) == 0;
+        // 协议端会在 data.message_id 里回新消息的 id（数字或字符串两种写法都见过）：
+        // 记下它，别人引用回复机器人那句话时才能对上号（见 handoff-4 §27）。
+        return new SendResult(ok, ok ? ReadMessageId(result) : 0);
+    }
+
+    /// <summary>从动作响应里取 data.message_id（数字/字符串都收）。</summary>
+    private static long ReadMessageId(JsonNode? result)
+    {
+        var node = result?["data"]?["message_id"];
+        return node switch
+        {
+            null => 0,
+            JsonValue value when value.TryGetValue<long>(out var asLong) => asLong,
+            JsonValue value when long.TryParse(value.ToString(), out var parsed) => parsed,
+            _ => 0
+        };
     }
 
     /// <summary>
@@ -217,6 +233,40 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
     }
 
     private string? _pokeUnsupported;
+
+    /// <summary>
+    /// 按消息 id 拿回这条消息里所有图片的**当前**地址（OneBot 的 get_msg）。
+    /// 用途：QQ 图片地址带时效 rkey，过期后 CDN 一律 400；而协议端能重新签发一份
+    /// （实测：同一条消息重新签发后就能下到）。拿不到就返回空列表。
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RefreshImageUrlsAsync(long messageId, CancellationToken ct = default)
+    {
+        var urls = new List<string>();
+        var result = await SendActionAsync("get_msg", $"{{\"message_id\":{messageId}}}", ct);
+        var segments = result?["data"]?["message"] as JsonArray;
+        if (segments is null)
+        {
+            return urls;
+        }
+
+        foreach (var seg in segments)
+        {
+            if (seg?["type"]?.GetValue<string>() != "image")
+            {
+                continue;
+            }
+
+            var url = seg["data"]?["url"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(url) &&
+                (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                 url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+            {
+                urls.Add(url);
+            }
+        }
+
+        return urls;
+    }
 
     /// <summary>
     /// 拉取登录账号在 QQ 里的“收藏表情”图片地址（NapCat 扩展动作 fetch_custom_face）。
@@ -800,6 +850,7 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
         var forwards = await FetchForwardRecordsAsync(root["message"] as JsonArray, CancellationToken.None);
 
         var (text, mentioned, imageUrls, musicShares) = ParseMessage(root["message"] as JsonArray, raw, selfId, forwards);
+        var (replyToId, replyPreview) = ParseReply(root["message"] as JsonArray, raw);
 
         var senderName = sender is null
             ? (isGroup ? $"成员 {userId}" : userId.ToString())
@@ -807,9 +858,23 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
                 ? (string.IsNullOrWhiteSpace(sender.Card) ? sender.Nickname ?? userId.ToString() : sender.Card)
                 : sender.Nickname ?? userId.ToString();
 
-        if (string.IsNullOrWhiteSpace(text) && !mentioned && musicShares.Count == 0)
+        // 日志里记一笔“这条是引用回复”—— 真出问题时（引到哪、有没有认出）不用猜。
+        // 放在早退之前：**只点“回复”不写正文**的消息也得留痕（号主就是这么测的：正文是一个空格）
+        var hasReply = replyToId is not null || !string.IsNullOrWhiteSpace(replyPreview);
+        if (hasReply)
         {
-            return; // 只有表情/图片等无文本且未提及本机时不创建会话
+            Log(replyToId is long quotedId
+                ? $"引用回复：消息 {messageId} → 引用了 {quotedId}" +
+                  (replyPreview is null ? "（段里没带摘要，从上下文找）" : $"（段里带了摘要：{Truncate(replyPreview, 30)}）")
+                : $"引用回复：消息 {messageId} → reply 段里没有可用的 id（原始片段：{Truncate(raw ?? string.Empty, 80)}）");
+        }
+
+        // 只有表情/图片等无文本且未提及本机、**也没有引用目标**时才不建会话。
+        // （以前只看“正文是否为空”，于是“引用某条 + 正文为空”的消息被静默丢掉：
+        //   机器人既没记下这条、也没标出它引用了什么 —— 号主反馈“识别不了引用回复”的一个真原因）
+        if (string.IsNullOrWhiteSpace(text) && !mentioned && musicShares.Count == 0 && !hasReply)
+        {
+            return;
         }
 
         MessageReceived?.Invoke(new QqChatMessage(
@@ -824,8 +889,60 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
             imageUrls.Count > 0 ? imageUrls : null,
             musicShares.Count > 0 ? musicShares : null,
             sender?.Role,
-            sender?.Title));
+            sender?.Title,
+            replyToId,
+            replyPreview));
     }
+
+    private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "…";
+
+    /// <summary>
+    /// 取“引用回复”的目标：QQ 的回复会带一个 reply 段（数组形式）或 [CQ:reply,id=…]（CQ 码形式）。
+    /// 以前两种都被当成“不认识的段”丢掉 —— 模型只看到一句“我也是”，不知道在回哪条（handoff-4 §27）。
+    /// 字段兼容：id / message_id 两种写法都收；有的实现还会直接带 text/summary 摘要，带了就用。
+    /// </summary>
+    private static (long? Id, string? Preview) ParseReply(JsonArray? segments, string? rawMessage)
+    {
+        if (segments is not null)
+        {
+            foreach (var seg in segments)
+            {
+                if (seg?["type"]?.GetValue<string>() != "reply")
+                {
+                    continue;
+                }
+
+                var data = seg["data"];
+                var id = ParseId(data?["id"]?.GetValue<string>() ?? data?["message_id"]?.GetValue<string>());
+                var preview = data?["text"]?.GetValue<string>() ?? data?["summary"]?.GetValue<string>();
+                return (id, string.IsNullOrWhiteSpace(preview) ? null : preview.Trim());
+            }
+        }
+
+        if (rawMessage is null)
+        {
+            return (null, null);
+        }
+
+        var marker = rawMessage.IndexOf("[CQ:reply,", StringComparison.Ordinal);
+        if (marker < 0)
+        {
+            return (null, null);
+        }
+
+        var end = rawMessage.IndexOf(']', marker);
+        if (end < 0)
+        {
+            return (null, null);
+        }
+
+        var args = rawMessage[(marker + 10)..end];
+        return (ParseId(GetArg(args, "id")), null);
+    }
+
+    /// <summary>消息 id 解析：字符串/数字都收；拿不到就 null。</summary>
+    private static long? ParseId(string? raw)
+        => long.TryParse((raw ?? string.Empty).Trim(), out var id) && id > 0 ? id : null;
 
     /// <summary>
     /// 取合并转发的内容：把消息里所有 forward 段逐个发 get_forward_msg。
@@ -990,6 +1107,8 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
                         break;
 
                     case "reply":
+                        // 引用回复：这里不拼正文（“在回哪条”由 BotAgent 查上下文后标成 [回复 X「…」]）——
+                        // 目标 id 由 ParseReply 单独取（那里同时兼顾数组段与 CQ 码两种形式）。
                         break;
                     default:
                         break;

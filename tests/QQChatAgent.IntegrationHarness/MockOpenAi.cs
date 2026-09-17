@@ -305,6 +305,38 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
+        // 模拟上游网关的“No capacity / auth_unavailable”（实测多账号池网关会连回 503）：
+        // 机器人应该退让 2 秒重试一次，而不是直接把这一轮回复丢掉。
+        // 注意：要在“取脚本回复”**之前**回 503 —— 否则失败那次会把脚本里的回复吃掉，
+        // 重试时拿到的是默认回复（这个坑第一次写测试时就踩了）。
+        if (FailChatTimes > 0)
+        {
+            FailChatTimes--;
+            Interlocked.Increment(ref _failedChats);
+            var capacityBody = Encoding.UTF8.GetBytes(
+                "{\"error\":{\"message\":\"auth_unavailable: no auth available; last upstream error: {\\\"code\\\": 503, \\\"message\\\": \\\"No capacity\\\"}\"}}");
+            context.Response.StatusCode = 503;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = capacityBody.Length;
+            await context.Response.OutputStream.WriteAsync(capacityBody);
+            context.Response.Close();
+            return;
+        }
+
+        // 200 但空 choices（上游“思考”吃光预算时的真实形状）：机器人应该当“这轮不说话”，
+        // 不能抛 IndexOutOfRangeException（以前那会把一条消息静默吃掉）。
+        if (EmptyChoicesTimes > 0)
+        {
+            EmptyChoicesTimes--;
+            var emptyBody = Encoding.UTF8.GetBytes("{\"choices\":[],\"usage\":{\"total_tokens\":1200}}");
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = emptyBody.Length;
+            await context.Response.OutputStream.WriteAsync(emptyBody);
+            context.Response.Close();
+            return;
+        }
+
         string content;
         lock (_gate)
         {
@@ -320,6 +352,17 @@ public sealed class MockOpenAi : IDisposable
 
         await WriteCompletionAsync(context, payload, content);
     }
+
+    /// <summary>接下来 N 次聊天请求直接回 503（模拟上游“No capacity”）。</summary>
+    public int FailChatTimes { get; set; }
+
+    /// <summary>接下来 N 次聊天请求回 200 但**没有 choices**（实测：慢的 `-high` 模型“思考”把预算吃光时会这样）。</summary>
+    public int EmptyChoicesTimes { get; set; }
+
+    /// <summary>被 503 回绝过的聊天请求数（测试观测）。</summary>
+    public int FailedChats => Volatile.Read(ref _failedChats);
+
+    private int _failedChats;
 
     /// <summary>收到的画像摘要请求数。</summary>
     public int PortraitRequests

@@ -2,6 +2,11 @@ using QQChatAgent.Services.OneBot;
 
 namespace QQChatAgent.Services.Qq;
 
+/// <summary>发一条消息的结果。</summary>
+/// <param name="Ok">到底发出去没有。</param>
+/// <param name="MessageId">协议端给的消息 id；拿不到时为 0（有的协议端不回 id，不是错误）。</param>
+public readonly record struct SendResult(bool Ok, long MessageId = 0);
+
 /// <summary>
 /// QQ 消息源统一抽象：上层（会话/Agent）只依赖此接口收发消息，
 /// 不关心背后是内置账号登录（Lagrange.Core）还是外部 OneBot 协议端。
@@ -34,8 +39,13 @@ public interface IQqChatSource
     Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, CancellationToken ct = default)
         => Task.FromResult(false);
 
-    /// <summary>向群聊/私聊发送纯文本。成功返回 true。replyToMessageId 用于触发 QQ 的"回复"引用。</summary>
-    Task<bool> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null);
+    /// <summary>
+    /// 向群聊/私聊发送纯文本。replyToMessageId 用于触发 QQ 的“回复”引用。
+    /// 返回 <see cref="SendResult.Ok" />（发出去没有）+ <see cref="SendResult.MessageId" />：
+    /// 拿得到消息 id 时上层会把它记到会话里 —— 这样**别人回复机器人那句话**时，
+    /// 我们能认出“他在回你”，并把原话给模型看（以前 reply 段是被丢掉的）。
+    /// </summary>
+    Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null);
 
     /// <summary>
     /// 发一条语音（OneBot 的 record 段）。
@@ -73,4 +83,14 @@ public interface IQqChatSource
     /// </summary>
     Task<List<string>> FetchCustomFacesAsync(int count = 48, CancellationToken ct = default)
         => Task.FromResult(new List<string>());
+
+    /// <summary>
+    /// 按消息 id 拿回这条消息里所有图片的**当前**地址。
+    ///
+    /// 为什么要它：QQ 的图片地址是带时效 rkey 的临时链（<c>multimedia.nt.qq.com.cn/download?...&amp;rkey=…</c>），
+    /// 过期后 CDN 一律回 <b>400</b>；而协议端手里的消息记录能重新签发一份（实测：同一条消息重新签发后 200）。
+    /// 上层在图片下载失败时调它兑底 —— 默认实现返回空，不支持的协议端就退化成“这张图这轮看不到”。
+    /// </summary>
+    Task<IReadOnlyList<string>> RefreshImageUrlsAsync(long messageId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }

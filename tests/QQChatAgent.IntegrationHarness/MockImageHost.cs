@@ -29,6 +29,23 @@ public sealed class MockImageHost : IDisposable
     /// <summary>已经响应过的图片请求数。</summary>
     public int Served => Volatile.Read(ref _served);
 
+    /// <summary>被 400 回绝的请求数（模拟 QQ 图片地址的 rkey 过期）。</summary>
+    public int Rejected => Volatile.Read(ref _rejected);
+
+    private int _rejected;
+
+    /// <summary>
+    /// 打开后：没带 <c>rkey=…</c> 的请求一律回 400（模拟 QQ 多媒体 CDN：图片地址带时效 rkey，过期即 400）。
+    /// 默认关 —— 表情包场景还在用不带 rkey 的地址。
+    /// </summary>
+    public bool RequireFreshRkey { get; set; }
+
+    /// <summary>“过期”的图片地址：带一个已被作废的 rkey（RequireFreshRkey 打开时会被 400）。</summary>
+    public string StaleUrl(int n) => $"http://127.0.0.1:{_port}/img?n={n}&rkey=expired-{n}";
+
+    /// <summary>“协议端重新签发”的图片地址：同一张图，rkey 是有效的。</summary>
+    public string FreshUrl(int n) => $"http://127.0.0.1:{_port}/img?n={n}&rkey=fresh-{n}";
+
     public void Start()
     {
         _listener.Start();
@@ -89,6 +106,19 @@ public sealed class MockImageHost : IDisposable
         if (!string.IsNullOrWhiteSpace(raw) && int.TryParse(raw, out var parsed) && parsed > 0)
         {
             n = parsed;
+        }
+
+        // 模拟“rkey 过期”：QQ 那侧对过期地址回 400，机器人应该去找协议端重新签发
+        if (RequireFreshRkey && !(context.Request.QueryString["rkey"] ?? "").StartsWith("fresh-", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _rejected);
+            var fail = Encoding.UTF8.GetBytes("{\"error\":\"rkey expired\"}");
+            context.Response.StatusCode = 400;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = fail.Length;
+            await context.Response.OutputStream.WriteAsync(fail);
+            context.Response.Close();
+            return;
         }
 
         var bytes = Bytes(n);

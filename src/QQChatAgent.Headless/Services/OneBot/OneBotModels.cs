@@ -58,6 +58,9 @@ public sealed class GroupInfo
 
 /// <summary>统一后的 QQ 入站消息（与传输层无关）。</summary>
 /// <param name="MentionedSelf">群消息中是否 @ 了机器人自己。</param>
+/// <param name="ReplyToMessageId">这条消息是**引用回复**时，被引用那条的消息 id（QQ 的“回复”功能）。
+/// 以前 reply 段被直接丢掉，模型只看到一句“我也是”，不知道在回什么 —— 见 handoff-4 §27。</param>
+/// <param name="ReplyToPreviewText">有的协议端会在 reply 段里直接带上被引用消息的摘要文本（有就用，省一次查）。</param>
 public sealed record QqChatMessage(
     long MessageId,
     bool IsGroup,
@@ -70,7 +73,9 @@ public sealed record QqChatMessage(
     IReadOnlyList<string>? ImageUrls = null,
     IReadOnlyList<QQChatAgent.Services.Music.MusicShare>? MusicShares = null,
     string? SenderRole = null,
-    string? SenderTitle = null);
+    string? SenderTitle = null,
+    long? ReplyToMessageId = null,
+    string? ReplyToPreviewText = null);
 
 /// <summary>
 /// 戳一戳事件（OneBot v11：post_type=notice）。

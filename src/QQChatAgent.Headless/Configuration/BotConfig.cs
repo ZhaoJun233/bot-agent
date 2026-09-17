@@ -56,6 +56,7 @@ public static class BotConfig
         s.OneBotAddress = Str("QQCHAT_ONEBOT_URL", "QQCHAT_ONEBOT_ADDRESS") ?? s.OneBotAddress;
         s.HealthPort = Int("QQCHAT_HEALTH_PORT") ?? s.HealthPort;
         s.PanelToken = Str("QQCHAT_PANEL_TOKEN") ?? s.PanelToken;
+        s.AgentToken = Secret("QQCHAT_AGENT_TOKEN") ?? s.AgentToken;
         s.NapCatWebUiUrl = Str("QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
         s.NapCatWebUiToken = Secret("QQCHAT_NAPCAT_WEBUI_TOKEN") ?? s.NapCatWebUiToken;
         s.VerboseLog = Bool("QQCHAT_VERBOSE") ?? s.VerboseLog;
@@ -129,7 +130,26 @@ public static class BotConfig
     [nameof(AppSettings.MusicMaxAnalysisSeconds)] = new[] { "QQCHAT_MUSIC_ANALYSIS_SECONDS" },
     [nameof(AppSettings.MusicLibraryMax)] = new[] { "QQCHAT_MUSIC_LIBRARY_MAX" },
     [nameof(AppSettings.MusicNoteTtlDays)] = new[] { "QQCHAT_MUSIC_NOTE_TTL_DAYS" },
-    [nameof(AppSettings.MusicKeepAudio)] = new[] { "QQCHAT_MUSIC_KEEP_AUDIO" }
+    [nameof(AppSettings.MusicKeepAudio)] = new[] { "QQCHAT_MUSIC_KEEP_AUDIO" },
+    [nameof(AppSettings.EnableAgentBridge)] = new[] { "QQCHAT_AGENT" },
+    [nameof(AppSettings.AgentPrefix)] = new[] { "QQCHAT_AGENT_PREFIX" },
+    [nameof(AppSettings.AgentAllowedUsers)] = new[] { "QQCHAT_AGENT_USERS" },
+    [nameof(AppSettings.AgentWorkDir)] = new[] { "QQCHAT_AGENT_WORKDIR" },
+    [nameof(AppSettings.AgentModel)] = new[] { "QQCHAT_AGENT_MODEL" },
+    [nameof(AppSettings.AgentTools)] = new[] { "QQCHAT_AGENT_TOOLS" },
+    [nameof(AppSettings.AgentTimeoutSeconds)] = new[] { "QQCHAT_AGENT_TIMEOUT" },
+    [nameof(AppSettings.AgentReplyMaxChars)] = new[] { "QQCHAT_AGENT_REPLY_CHARS" },
+    [nameof(AppSettings.AgentProgressSeconds)] = new[] { "QQCHAT_AGENT_PROGRESS" },
+    [nameof(AppSettings.AgentTarget)] = new[] { "QQCHAT_AGENT_TARGET" },
+    [nameof(AppSettings.EnableServerAgent)] = new[] { "QQCHAT_AGENT_SERVER" },
+    [nameof(AppSettings.EnableHostAgent)] = new[] { "QQCHAT_AGENT_HOST" },
+    [nameof(AppSettings.AgentServerTools)] = new[] { "QQCHAT_AGENT_SERVER_TOOLS" },
+    [nameof(AppSettings.AgentServerModel)] = new[] { "QQCHAT_AGENT_SERVER_MODEL" },
+    [nameof(AppSettings.AgentServerBaseUrl)] = new[] { "QQCHAT_AGENT_SERVER_URL" },
+    [nameof(AppSettings.AgentDevices)] = new[] { "QQCHAT_AGENT_DEVICES" },
+    [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
+    [nameof(AppSettings.AgentServerMaxSteps)] = new[] { "QQCHAT_AGENT_SERVER_STEPS" },
+    [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" }
         };
 
         if (!seedOnly)
@@ -202,6 +222,25 @@ public static class BotConfig
         s.NeteaseBaseUrl = Str("QQCHAT_NETEASE_BASE_URL") ?? s.NeteaseBaseUrl;
         s.EnableLinkPreview = Bool("QQCHAT_LINK_PREVIEW") ?? s.EnableLinkPreview;
         s.EnableWebSearch = Bool("QQCHAT_WEB_SEARCH") ?? s.EnableWebSearch;
+        s.EnableAgentBridge = Bool("QQCHAT_AGENT") ?? s.EnableAgentBridge;
+        s.AgentPrefix = Str("QQCHAT_AGENT_PREFIX") ?? s.AgentPrefix;
+        s.AgentAllowedUsers = Str("QQCHAT_AGENT_USERS") ?? s.AgentAllowedUsers;
+        s.AgentWorkDir = Str("QQCHAT_AGENT_WORKDIR") ?? s.AgentWorkDir;
+        s.AgentModel = Str("QQCHAT_AGENT_MODEL") ?? s.AgentModel;
+        s.AgentTools = Str("QQCHAT_AGENT_TOOLS") ?? s.AgentTools;
+        s.AgentTimeoutSeconds = Int("QQCHAT_AGENT_TIMEOUT") ?? s.AgentTimeoutSeconds;
+        s.AgentReplyMaxChars = Int("QQCHAT_AGENT_REPLY_CHARS") ?? s.AgentReplyMaxChars;
+        s.AgentProgressSeconds = Int("QQCHAT_AGENT_PROGRESS") ?? s.AgentProgressSeconds;
+        s.AgentTarget = Str("QQCHAT_AGENT_TARGET") ?? s.AgentTarget;
+        s.EnableServerAgent = Bool("QQCHAT_AGENT_SERVER") ?? s.EnableServerAgent;
+        s.EnableHostAgent = Bool("QQCHAT_AGENT_HOST") ?? s.EnableHostAgent;
+        s.AgentServerTools = Str("QQCHAT_AGENT_SERVER_TOOLS") ?? s.AgentServerTools;
+        s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;
+        s.AgentServerBaseUrl = Str("QQCHAT_AGENT_SERVER_URL") ?? s.AgentServerBaseUrl;
+        s.AgentServerApiKey = Secret("QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
+        s.AgentServerWorkDir = Str("QQCHAT_AGENT_SERVER_WORKDIR") ?? s.AgentServerWorkDir;
+        s.AgentServerMaxSteps = Int("QQCHAT_AGENT_SERVER_STEPS") ?? s.AgentServerMaxSteps;
+        s.AgentServerCommandTimeoutSeconds = Int("QQCHAT_AGENT_SERVER_CMD_TIMEOUT") ?? s.AgentServerCommandTimeoutSeconds;
         s.WebSearchUseModelSearch = Bool("QQCHAT_SEARCH_USE_MODEL") ?? s.WebSearchUseModelSearch;
         s.WebSearchSources = Str("QQCHAT_SEARCH_SOURCES") ?? s.WebSearchSources;
         s.WebSearchMaxResults = Int("QQCHAT_SEARCH_MAX_RESULTS") ?? s.WebSearchMaxResults;

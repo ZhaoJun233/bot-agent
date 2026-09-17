@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace QQChatAgent.Services;
@@ -103,11 +104,14 @@ public sealed class AppSettings
     public int ProactiveQuietSeconds { get; set; } = 120;
 
     /// <summary>
-    /// 忽略“只有括号”的群消息（如“（笑）”“（bushi）”“( 跑 )”）。
-    /// 为什么要这个开关：群里这类旁白很多，它们不针对任何人、也没什么信息，
-    /// 却会占上下文并可能把机器人拉出来接话（“（笑）”接什么？）。
-    /// 判定口径：去掉所有括号段、空白与标点后不剩内容才算 —— “今天天气不错（大概）”不会误伤。
-    /// 只影响群聊；带图、带 @ 机器人、私聊的消息永远不忽略（宁可多回也不装死）。
+    /// 把群友消息里的“括号旁白”标注成 <c>〔旁白：…〕</c>（如“（笑）”“（bushi）”“行（端在桌上）”）。
+    /// 为什么要这个开关：群里这类旁白很多，它们不针对任何人，却会占上下文并可能把机器人拉出来接话
+    /// （“（笑）”接什么？）。但**号主的口径是不要单纯忽略，也要接收、只要特别注明** ——
+    /// 所以打开后旁白不会被丢掉，而是带标注进聊天记录与模型上下文（模型知道那是动作/表情说明，
+    /// 不是他说的话），纯旁白不单独触发一次回复。
+    /// 判定口径：只处理开头/结尾的括号段，剥完只剩空白与标点才算“整条旁白”；
+    /// 句子中间的括号（“（2026）年的计划”）不碰。
+    /// 只影响群聊；带图、带 @ 机器人、私聊的消息永远不动（宁可多回也不装死）。
     /// </summary>
     public bool IgnoreBracketMessages { get; set; }
 
@@ -313,6 +317,187 @@ public sealed class AppSettings
     /// 环境变量专属（QQCHAT_PANEL_TOKEN），不写入 settings.json。</summary>
     [JsonIgnore]
     public string PanelToken { get; set; } = string.Empty;
+
+    // ══════════ 本机 Agent 桥（// 命令，详见 handoff-4 §31）══════════
+    //
+    // 为什么是“桥”而不是让机器人自己跑：机器人跑在服务器容器里，而 agent 需要的是**号主本机的能力**
+    //（他的代码目录、工具链、pi 的登录态）。所以本机跑一个小进程，主动连到机器人，
+    // 收到任务就把它交给本机的 pi CLI，把输出回传 —— 服务器上不装、不跑任何东西。
+
+    /// <summary>总开关。关着的时候 // 开头的消息跟普通消息一样走人设路线（不会进 agent）。</summary>
+    public bool EnableAgentBridge { get; set; }
+
+    /// <summary>命令前缀（默认 <c>//</c>）：消息**开头**是这个才当 agent 命令。</summary>
+    public string AgentPrefix { get; set; } = "//";
+
+    /// <summary>允许使用 agent 的 QQ 号（逗号/空格/换行分隔）。
+    /// **空 = 谁都不能用** —— 这是默认值：这个功能能在号主电脑上执行命令，宁可先不给任何人。</summary>
+    public string AgentAllowedUsers { get; set; } = string.Empty;
+
+    /// <summary>本机 pi 的工作目录（桥侧执行目录）。留空 = 桥自己的默认目录。</summary>
+    public string AgentWorkDir { get; set; } = string.Empty;
+
+    /// <summary>传给 pi 的模型（留空 = 本机 pi 默认模型）。这是**没在 AgentDevices 里单独配**时的默认值。</summary>
+    public string AgentModel { get; set; } = string.Empty;
+
+    /// <summary>
+    /// **每台外部设备的独立配置**（JSON 数组字符串；面板里能增删改）：
+    /// <code>[{"name":"ZHAOSPC","enable":true,"model":"vendor/model","workdir":"E:/bot","tools":"","timeoutSec":900}]</code>
+    /// 为什么用 JSON 字符串而不是强类型列表：设置是跟面板直接对齐的文本，
+    /// 而且容器是 trimmed 发布（反射序列化会抛 resolver 错）—— 字符串零风险。
+    /// 泛用性：设备是任意多台、名字任意，面板里加一行就是一台新设备。
+    /// </summary>
+    public string AgentDevices { get; set; } = string.Empty;
+
+    /// <summary>一面设备的配置（面板里可改；没配的字段就走全局默认）。</summary>
+    public sealed record DeviceConfig(
+        string Name,
+        bool Enable = true,
+        string? Model = null,
+        string? WorkDir = null,
+        string? Tools = null,
+        int TimeoutSeconds = 0);
+
+    /// <summary>
+    /// 解析 AgentDevices（JSON 数组字符串）。用 JsonDocument 而不是反序列化成类型：
+    /// 容器是 trimmed 发布，反射反序列化会抛 TypeInfoResolver 异常（实测踩过）。
+    /// </summary>
+    public static List<DeviceConfig> ParseDeviceConfigs(string? json)
+    {
+        var list = new List<DeviceConfig>();
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return list;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return list;
+            }
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var name = item.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+                    ? (n.GetString() ?? string.Empty).Trim()
+                    : string.Empty;
+                if (name.Length == 0)
+                {
+                    continue;
+                }
+
+                list.Add(new DeviceConfig(
+                    name,
+                    !item.TryGetProperty("enable", out var e) || e.ValueKind != JsonValueKind.False,
+                    Str(item, "model"),
+                    Str(item, "workdir"),
+                    Str(item, "tools"),
+                    Num(item, "timeoutSec")));
+            }
+        }
+        catch (JsonException)
+        {
+            // 配置写坏了就当没配（不能用一条坏 JSON 让整个 agent 功能不可用）
+            return list;
+        }
+
+        return list;
+
+        static string? Str(JsonElement obj, string key)
+            => obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()?.Trim()
+                : null;
+
+        static int Num(JsonElement obj, string key)
+            => obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : 0;
+    }
+
+    /// <summary>取某台设备的配置（没有就返回 null = 走全局默认）。</summary>
+    public DeviceConfig? DeviceConfigFor(string? deviceName)
+    {
+        if (string.IsNullOrWhiteSpace(deviceName))
+        {
+            return null;
+        }
+
+        return ParseDeviceConfigs(AgentDevices)
+            .FirstOrDefault(d => string.Equals(d.Name, deviceName.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>看设备是否被面板里手动关掉（关了就不派任务，并如实告诉用户）。</summary>
+    public bool IsDeviceEnabled(string? deviceName)
+        => DeviceConfigFor(deviceName)?.Enable ?? true;
+
+
+    /// <summary>工具白名单（逗号分隔，对应 pi 的 <c>--tools</c>）。留空 = 本机 pi 默认（全部工具）。</summary>
+    public string AgentTools { get; set; } = string.Empty;
+
+    /// <summary>单个任务最长跑多久（秒），超时就让桥把 pi 杀掉。</summary>
+    public int AgentTimeoutSeconds { get; set; } = 900;
+
+    /// <summary>回群时单条消息最多多少字（超了就分成几条发）。</summary>
+    public int AgentReplyMaxChars { get; set; } = 800;
+
+    /// <summary>任务跑太久时多久报一次“还在跑”（秒；0 = 不报）。</summary>
+    public int AgentProgressSeconds { get; set; } = 90;
+
+    /// <summary>同一个会话最多排几个任务（超出直接拒，不让它变无限队列）。</summary>
+    public int AgentMaxQueued { get; set; } = 3;
+
+    /// <summary>桥的共享密钥（环境变量专属 QQCHAT_AGENT_TOKEN）。
+    /// 这个端口能让人在号主电脑上执行命令 —— 没设令牌就不接受任何桥连接（不是“默认放行”）。</summary>
+    [JsonIgnore]
+    public string AgentToken { get; set; } = string.Empty;
+
+    // ── 两个后端 + 路由（号主 2026-09-17：内外 agent 公用一份白名单）──
+
+    /// <summary>服务器**内置** agent（跑在容器里的工具循环：bash / 读 / 写 / 抓网页）。</summary>
+    public bool EnableServerAgent { get; set; } = true;
+
+    /// <summary>**外部设备** agent（号主电脑上的 pi，通过桥接接入）。
+    /// 与服务器 agent 互不影响：不想用哪边就把哪边的开关关掉（不关也能用 //@server / //@host 单次指定）。</summary>
+    public bool EnableHostAgent { get; set; } = true;
+
+    /// <summary>任务走哪边（这是个**优先/指定**，两个开关都开时生效）：
+    ///   <c>auto</c>（默认）= 外部设备在线就用外部，否则用服务器内置；
+    ///   <c>server</c> = 只用服务器内置；
+    ///   <c>host</c> = 只用外部设备（离线就如实报错）；
+    ///   也可写**设备名**（如 <c>ZHAOSPC</c>）——多台设备时指定用哪台。
+    /// 群里还能单条覆盖：<c>//@server 看下日志</c> / <c>//@host 数一下文件</c> / <c>//@ZHAOSPC …</c>。</summary>
+    public string AgentTarget { get; set; } = "auto";
+
+    /// <summary>服务器内置 agent 用的模型（空 = 跟聊天用同一个）。</summary>
+    public string AgentServerModel { get; set; } = string.Empty;
+
+    /// <summary>服务器内置 agent 专用的 OpenAI 兼容地址（空 = 用聊天那个 QQCHAT_BASE_URL）。
+    /// 为什么单独给一个：agent 的请求又长又频繁，往往想单独指一个小模型/便宜网关（号主 2026-09-17 要求）。</summary>
+    public string AgentServerBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>服务器内置 agent 专用的密钥（空 = 用聊天那个）。环境变量专属，不落盘。</summary>
+    [JsonIgnore]
+    public string AgentServerApiKey { get; set; } = string.Empty;
+
+    /// <summary>服务器内置 agent 开哪些工具（bash,read,write,fetch；空 = 全开）。</summary>
+    public string AgentServerTools { get; set; } = string.Empty;
+
+    /// <summary>服务器内置 agent 的工作目录（容器内路径）。</summary>
+    public string AgentServerWorkDir { get; set; } = "/data";
+
+    /// <summary>服务器内置 agent 最多跑几步工具循环（每步一次模型调用）。</summary>
+    public int AgentServerMaxSteps { get; set; } = 8;
+
+    /// <summary>服务器内置 agent 单条命令的超时（秒）。</summary>
+    public int AgentServerCommandTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>服务器内置 agent 单次补全的 max_tokens。</summary>
+    public int AgentServerMaxTokens { get; set; } = 1200;
 
     /// <summary>健康检查 HTTP 端口（0=关闭）。用于容器 HEALTHCHECK。</summary>
     public int HealthPort { get; set; } = 8080;

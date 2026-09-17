@@ -18,6 +18,16 @@ namespace QQChatAgent.IntegrationHarness;
 /// 第二次生成（触发消息是 B）时，上下文里最新一条别人发的消息是 D：
 ///   ✓ 引用应该是 D（模型真正在回的那条）或干脆不带引用
 ///   ✗ 绝不能是 B（排队时那个旧触发）
+///
+/// 2026-09-15 追加（handoff-4 §23：号主截图“别学我说话！”引用挂错人）：
+///   replyTo 的语义（你在跟谁说话 / 不是素材）写进提示词；
+///   代码侧再兜一道 —— 本轮触发若是“复读/模仿”，模型的指认不在触发那条上就不引用
+///   （宁可不引，也不把引用挂到被复读的原文上）。
+///
+/// 2026-09-15 追加（handoff-4 §27：号主“识别不了引用回复消息”）：
+///   **收**方向的 reply 段不再丢掉 —— 标记成 `[回复 X「…」]` 进上下文；
+///   引用目标依次从会话上下文、机器人自己发过的消息、段内摘要里找；
+///   正文为空（只点“回复”）也算内容，不再整条丢弃。
 /// </summary>
 public static partial class Program
 {
@@ -164,6 +174,230 @@ public static partial class Program
             QuotedMessageId(afterBogus) != bogusId,
             $"引用 id = {QuotedMessageId(afterBogus)?.ToString() ?? "无"}");
 
+        // ══════════ 2026-09-15：引用指向“被吐槽的素材”而不是“自己在跟谁说话” ══════════
+        // 号主给的真实现场（handoff-4 §23）：“别学我说话！还有你，消停点别祸害大家了！”
+        // 引用挂在了胡桃那条（被吐槽的内容）上，而真正在说话的对象是把它那句复读过去的 c。
+        // 这是模型自己指认的 replyTo 语义错位 —— §22 的启发式修不了，只能在两处下手：
+        //   ① 提示词把 replyTo 的语义写死（“你在跟谁说话”，不是“素材/出处”）；
+        //   ② 代码侧兜底：本轮触发是“复读/模仿”时，模型的指认只要不在触发那条上就不引用。
+        var quotePrompt = openAi.Requests.Select(SystemText).LastOrDefault(t => t.Contains("[回复谁]"));
+        Check("★ 提示词写死了 replyTo 的语义（跟谁说话 / 不是素材 / 复读场景）",
+            quotePrompt is not null &&
+            quotePrompt.Contains("你这句话是在跟谁说话") && quotePrompt.Contains("复读") &&
+            quotePrompt.Contains("一条消息只对一个人说话"),
+            SectionOf(quotePrompt ?? "(没有一次请求带 [回复谁] 段)", "[回复谁]"));
+        Check("★ 提示词里有『底线』约束（不骂人、不替别人赶人走）",
+            quotePrompt is not null && quotePrompt.Contains("底线") && quotePrompt.Contains("不替别人赶人走"),
+            SectionOf(quotePrompt ?? "", "[先读懂气氛再说话]"));
+
+        // 拿机器人自己刚说过的一句当“被复读的原文”（群里就是这么玩的）
+        var echoText = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Select(MessageText)
+            .Last(t => !string.IsNullOrWhiteSpace(t));
+
+        // ① 有人复读了机器人那句话；模型却把引用指到了**更早的别人那条**上（msgC）→ 宁可不引
+        const long msgG = 7307;
+        const long msgH = 7308;
+        const long msgI = 7309;
+        const long msgJ = 7310;
+        openAi.EnqueueReply($$"""{"suitability": 99, "reply": "别学我说话！", "replyTo": {{msgC}}}""");
+        openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");          // 后面那条跟话 → 沉默
+        var beforeEcho = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        await protocol.SendGroupMessageAsync(groupId, 30007, "小李", echoText, msgG, ct: cts.Token);
+        await Task.Delay(300);
+        await protocol.SendGroupMessageAsync(groupId, 30008, "老王", "行了行了", msgH, ct: cts.Token);
+        await WaitUntilAsync(
+            () => protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") > beforeEcho,
+            TimeSpan.FromSeconds(40));
+        await Task.Delay(1000);
+
+        var afterEcho = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Where(a => MessageText(a).Contains("别学我说话"))
+            .LastOrDefault();
+        Check("★ 复读场景：模型把引用指到别处时不引用（不挂到被复读的原文/别人头上）",
+            QuotedMessageId(afterEcho) is null,
+            $"引用 id = {QuotedMessageId(afterEcho)?.ToString() ?? "无"}（模型指认的是 #{msgC}）");
+        Check("★ 复读场景：日志写明了丢弃原因（运维能复盘）",
+            bot.OutputLines.Any(l => l.Contains("复读/模仿") && l.Contains("不引用")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("不引用")).TakeLast(3)));
+
+        // ② 同样是复读场景，但模型指认的就是**复读那条** → 引用照旧采信（引到复读的人）
+        openAi.EnqueueReply($$"""{"suitability": 99, "reply": "学人说话挺没意思的。", "replyTo": {{msgI}}}""");
+        openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");          // 后面那条跟话 → 沉默
+        var beforeEcho2 = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        await protocol.SendGroupMessageAsync(groupId, 30009, "小张", echoText, msgI, ct: cts.Token);
+        await Task.Delay(300);
+        // 后面这条让复读那条不再是“最新一条”—— 引用才有存在意义（目标后面得有人说话）
+        await protocol.SendGroupMessageAsync(groupId, 30010, "老王", "接着说", msgJ, ct: cts.Token);
+        await WaitUntilAsync(
+            () => protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") > beforeEcho2,
+            TimeSpan.FromSeconds(40));
+        await Task.Delay(1000);
+
+        var afterEcho2 = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Where(a => MessageText(a).Contains("学人说话挺没意思"))
+            .LastOrDefault();
+        Check("★ 复读场景：模型指认复读那条时照旧引用（引到复读的人）",
+            QuotedMessageId(afterEcho2) == msgI,
+            $"引用 id = {QuotedMessageId(afterEcho2)?.ToString() ?? "无"}，期望 {msgI}");
+
+        // ③ “一字不差”的两个故意例外：内容标记（[图片]/[表情:…]）与太短的文本不算复读。
+        // 两个人各发一张图，正文都是我们自己写的 “[图片]” —— 若把它当复读，很容易误伤真引用（群里斗图很常见）。
+        const long msgK = 7311;
+        const long msgL = 7312;
+        openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");        // 老王那张图 → 沉默（别占掉下一条脚本）
+        openAi.EnqueueReply($$"""{"suitability": 99, "reply": "又在斗图？", "replyTo": {{msgK}}}""");
+        await protocol.SendGroupMessageAsync(groupId, 30011, "老王", "[图片]", msgK, ct: cts.Token);
+        await Task.Delay(300);
+        await protocol.SendGroupMessageAsync(groupId, 30012, "小李", "[图片]", msgL, ct: cts.Token);
+        await WaitUntilAsync(
+            () => protocol.ActionsReceived
+                .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Any(a => MessageText(a).Contains("又在斗图")),
+            TimeSpan.FromSeconds(40));
+        await Task.Delay(800);
+
+        var afterMarker = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Where(a => MessageText(a).Contains("又在斗图"))
+            .LastOrDefault();
+        Check("★ 内容标记（[图片]）不算复读：引用不会被误伤",
+            QuotedMessageId(afterMarker) == msgK,
+            $"引用 id = {QuotedMessageId(afterMarker)?.ToString() ?? "无"}，期望 {msgK}");
+
+        // ══════════ 收方向的引用回复：以前 reply 段被直接丢掉（号主反馈“识别不了引用回复消息”） ══════════
+        // 现象：群友点“回复”引用某条时，机器人只看到新那句（“我也是”），不知道在回哪条，
+        // 也认不出“他在回机器人自己上一句” —— 模型只能瞎猜。
+        // 现在：reply 段会解析成目标 id，再由 BotAgent 从上下文（或“自己发过的消息”）查出原文，
+        // 标成 `[回复 老王「…」]` / `[回复 你「…」]` 一起进模型上下文。
+        var silence = """{"suitability": 0, "reply": ""}""";
+        const long msgM = 7313;   // 老王：被引用的那条
+        const long msgN = 7314;   // 小李：引用 msgM
+        const long msgO = 7315;   // 老王：引用机器人自己上一句
+        const long msgP = 7316;   // 小明：CQ 码形式的引用
+        const long msgQ = 7317;   // 引用一个已经取不到的 id
+
+        openAi.ClearRequests();
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupMessageAsync(groupId, 30013, "老王", "我昨天说的那个 bug", msgM, ct: cts.Token);
+        await Task.Delay(400);
+
+        // ① 引用别人的话 → 上下文里要能看到「被引用的是谁、说了什么」
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupMessageAsync(groupId, 30014, "小李", "我也是这么想的", msgN, replyTo: msgM, ct: cts.Token);
+        var replied = await WaitForRequestAsync(openAi, r => r.Contains("我也是这么想的"), TimeSpan.FromSeconds(40));
+        Check("★ 引用回复被认出来了：上下文里标出被引用的人与原话",
+            replied is not null && replied.Contains("[回复 老王「我昨天说的那个 bug」]"),
+            replied is null ? "(没等到请求)" : Snippet(replied, "[回复 老王"));
+        Check("★ 落库的也是带标注的文本（面板与上下文一致）",
+            await WaitUntilAsync(() => DbProbe.Count(dataDir,
+                "SELECT COUNT(1) FROM messages WHERE text LIKE '%[回复 老王%'") >= 1, TimeSpan.FromSeconds(5)),
+            DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE source_key = 'group:66681' ORDER BY seq DESC LIMIT 3"));
+
+        // ② 引用机器人自己那句 → 用“你”（模型才分得清别人是在跟它说话）
+        var botMsgId = protocol.SentMessageIds.Last();
+        var botText = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Select(MessageText)
+            .Last(t => !string.IsNullOrWhiteSpace(t));
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupMessageAsync(groupId, 30015, "老王", "那我再确认一下", msgO, replyTo: botMsgId, ct: cts.Token);
+        var replyToBot = await WaitForRequestAsync(openAi, r => r.Contains("那我再确认一下"), TimeSpan.FromSeconds(40));
+        Check("★ 引用机器人自己那句时标成「你」",
+            replyToBot is not null && replyToBot.Contains($"[回复 你「{botText}」]"),
+            replyToBot is null ? "(没等到请求)" : Snippet(replyToBot, "[回复 你"));
+
+        // ③ CQ 码形式（有的协议端 raw_message 里就是 [CQ:reply,id=…]）也不能漏
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupRawCqAsync(groupId, 30016, "小明",
+            $"[CQ:reply,id={msgM}]这条我同意", msgP, cts.Token);
+        var cqReply = await WaitForRequestAsync(openAi, r => r.Contains("这条我同意"), TimeSpan.FromSeconds(40));
+        Check("★ CQ 码形式（[CQ:reply,id=…]）同样能认出引用",
+            cqReply is not null && cqReply.Contains("[回复 老王「我昨天说的那个 bug」]"),
+            cqReply is null ? "(没等到请求)" : Snippet(cqReply, "[回复 老王"));
+
+        // ④ 引用的那条已经不在我这边（更早/重启前）→ 不编内容，但明确说清“那是引用回复”
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupMessageAsync(groupId, 30017, "小明", "上面那条呢", msgQ, replyTo: 999999999, ct: cts.Token);
+        var missReply = await WaitForRequestAsync(openAi, r => r.Contains("上面那条呢"), TimeSpan.FromSeconds(40));
+        Check("★ 引用目标取不到时不编内容（只标“更早的消息”）",
+            missReply is not null && missReply.Contains("更早的消息"),
+            missReply is null ? "(没等到请求)" : Snippet(missReply, "[回复"));
+
+        // ⑤ 只点“回复”不写正文（正文是一个空格）—— 线上验收就是这么测的（handoff-4 §27.5）：
+        //    以前“正文为空”会被当成无内容的消息**在网关层直接丢掉**，连日志都没有，
+        //    于是机器人既没记住这条、也没标出它引用了什么（号主：还是没有看到识别）。
+        const long msgR0 = 7318;   // 老王：被引用的那条（用一个唯一暗号，方便断言不撞旧请求）
+        const long msgR = 7319;    // 小李：只点回复、不写正文
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupMessageAsync(groupId, 30018, "老王", "引用空正文的暗号ABC", msgR0, ct: cts.Token);
+        await Task.Delay(400);
+
+        openAi.EnqueueReply(silence);
+        await protocol.SendGroupMessageAsync(groupId, 30019, "小李", " ", msgR, replyTo: msgR0, ct: cts.Token);
+        var emptyBody = await WaitForRequestAsync(openAi, r => r.Contains("[回复 老王「引用空正文的暗号ABC」]"), TimeSpan.FromSeconds(40));
+        Check("★ 只点“回复”不写正文时照样认出引用（不再整条丢掉）",
+            emptyBody is not null,
+            emptyBody is null ? "(没等到请求)" : Snippet(emptyBody, "[回复 老王"));
+        Check("★ 空正文的引用回复也落库（正文就是那句标注）",
+            await WaitUntilAsync(() => DbProbe.Count(dataDir,
+                "SELECT COUNT(1) FROM messages WHERE text = $t", ("$t", "[回复 老王「引用空正文的暗号ABC」]")) >= 1,
+                TimeSpan.FromSeconds(5)),
+            DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE source_key = 'group:66681' ORDER BY seq DESC LIMIT 3"));
+        Check("★ 网关日志里能看到这条引用（排障不用猜）",
+            bot.OutputLines.Any(l => l.Contains("引用回复：消息 7319")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("引用回复")).TakeLast(3)));
+
+        // ══════════ 2026-09-16：人家在跟你说话，引用却挂到别人头上 ══════════
+        // 真实现场（群里）：
+        //   群友A：「跟你说话了吗」（**引用机器人那句**在质问它）
+        //   机器人：「哼，等某某发力你都等到猴年马月了……」—— 引用挂的是**群友B**那条
+        // 正文在答群友B 不算错，但在群里看到的是“有人正跟你说话，你却去回另一个人”。
+        // 口径：**点名优先** —— 有人 @ 你 / 引用你的话时，先说给他的那句，引用也挂他（
+        // 别人那条下一轮再说）。触发就是最后一条时按“紧接上一句不引用”的老规矩不挂引用。
+        const long msgPing = 7401;   // 点名那条（@ 机器人）
+        const long msgOther = 7402;  // 之后别人插的一句（模型更想接的那条）
+        openAi.EnqueueReply($$"""{"suitability": 80, "reply": "我在，什么事", "replyTo": {{msgOther}}}""");
+        openAi.EnqueueReply(silence);   // 后面那条插话如果也触发一轮，别把脚本吃空
+        await protocol.SendGroupMessageAsync(groupId, 30016, "老王", "@10001 机器人你在吗", msgPing, mentionBot: true, ct: cts.Token);
+        await Task.Delay(300);
+        await protocol.SendGroupMessageAsync(groupId, 30017, "小李", "顺便说一句我换电脑了", msgOther, ct: cts.Token);
+        await WaitUntilAsync(
+            () => protocol.ActionsReceived.Any(a =>
+                a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).Contains("我在，什么事")),
+            TimeSpan.FromSeconds(40));
+        await Task.Delay(800);
+
+        var afterPing = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Where(a => MessageText(a).Contains("我在，什么事"))
+            .LastOrDefault();
+        Check("★ 点名优先：人家在跟你说话时，引用挂给点名那条（不挂别人）",
+            QuotedMessageId(afterPing) == msgPing,
+            $"引用 id = {QuotedMessageId(afterPing)?.ToString() ?? "无"}，期望 {msgPing}");
+        Check("★ 改引的理由写进了日志（复盘能看出为什么改）",
+            bot.OutputLines.Any(l => l.Contains("在跟机器人说话") && l.Contains("点名优先")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("点名优先")).TakeLast(2)));
+        Check("★ 回复日志带上了触发那条（正文/引用摆一起才看得出错位）",
+            bot.OutputLines.Any(l => l.Contains("已回复") && l.Contains("触发→")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("触发→")).TakeLast(2)));
+
         await bot.StopAsync();
+    }
+
+    /// <summary>取系统提示里某一段（从 header 到下个空行），断言失败时能直接看到那一段。</summary>
+    private static string SectionOf(string system, string header)
+    {
+        var start = system.IndexOf(header, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return $"(没有 {header} 段)";
+        }
+
+        var end = system.IndexOf("\n\n", start + 1, StringComparison.Ordinal);
+        return end < 0 ? system[start..] : system[start..end];
     }
 }

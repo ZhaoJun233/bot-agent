@@ -16,7 +16,22 @@ public sealed class OpenAiClient
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
 
-    private static readonly ImageDownloader _imageDownloader = new();
+    // 每个客户端一个下载器实例（里面有缓存）：它要拿到“重新签发图片地址”的回调，不能做成静态的
+    private readonly ImageDownloader _imageDownloader = new();
+
+    /// <summary>
+    /// 图片地址过期（QQ 的 rkey 时效）时，让协议端重新签发地址的回调（由 BotAgent 接到 IQqChatSource 上）。
+    /// 不接也能跑，只是过期图这轮看不到。
+    /// </summary>
+    public Func<long, CancellationToken, Task<IReadOnlyList<string>>>? RefreshImageUrls
+    {
+        get => _imageDownloader.RefreshUrls;
+        set => _imageDownloader.RefreshUrls = value;
+    }
+
+    /// <summary>图片缓存命中数 / “过期后重新签发取回”次数（测试与排障用）。</summary>
+    public int ImageCacheHits => _imageDownloader.CacheHits;
+    public int ImageRefreshedCount => _imageDownloader.RefreshedCount;
 
     private AppSettings _settings;
 
@@ -71,7 +86,8 @@ public sealed class OpenAiClient
         // 线上就出现过“正文在接一个哏，引用却挂在另一个人那句上”。模型自己知道回哪句，让它说出来。只标最近 16 条。
         // 撤回的消息不在此列：引用一条群里已经看不到的消息，群友看到的就是莫名其妙。
         var quotableIds = new HashSet<long>(
-            window.Where(m => m.Role == MessageRole.Peer && !m.Recalled && m.QqMessageId is > 0)
+            window.Where(m => m.Role == MessageRole.Peer && !m.Recalled && m.QqMessageId is > 0 &&
+                              !MessageMarkers.IsAside(m.Text))   // 整条旁白（“（笑）”）不是一句话，不给编号
                   .TakeLast(16)
                   .Select(m => m.QqMessageId!.Value));
 
@@ -81,6 +97,17 @@ public sealed class OpenAiClient
             systemContent += $"\n你是登录账号 QQ：{BotIdentity} 的机器人（群聊中别人 @QQ{BotIdentity} 或喊你昵称就是在叫你）。";
         }
 
+        // 当前时间：模型没有时钟 —— 不告诉它，被问“现在几点”就只能靠训练语料猜（线上实测：经常答错）。
+        // 顺便把“时效性信息必须搜”与它写在一起：搜索的“自主判断”需要一个明确依据，
+        // 而“哪些属于今年/现在”全靠这个基准时间才能分清。
+        var now = DateTimeOffset.Now;
+        systemContent +=
+            "\n\n[现在的时间]\n现在是 " + now.ToString("yyyy-MM-dd HH:mm") +
+            "（星期" + WeekdayCn(now.DayOfWeek) + "，UTC" + now.ToString("zzz") + "）。\n" +
+            "• 有人问“现在几点 / 今天几号 / 今天周几 / 还有几天” → **直接按它答**，不要靠自己印象猜（你并没有钟）；\n" +
+            "• “今天 / 昨天 / 明天 / 这周 / 刚刚 / 上次”这类相对时间，全以它为基准算；\n" +
+            "• 需要具体日期但拿不准时，宁可说“我记得是 X 号”这种带保留的话，也不要编一个硬结论。";
+
         if (!string.IsNullOrWhiteSpace(BotPersona))
         {
             systemContent += "\n\n[机器人人设档案]\n" + BotPersona.Trim();
@@ -88,14 +115,26 @@ public sealed class OpenAiClient
 
         systemContent += BuildSuitabilityInstruction();
 
-        // 引用谁：最近几条别人的消息都带了 (#id)，让模型自己指认
+        // 引用谁：最近几条别人的消息都带了 (#id)，让模型自己指认。
+        // replyTo 的语义必须写死 —— 模型很容易把“让我不爽的那条（素材）”当成“我在回哪条（对象）”：
+        // 线上实测（handoff-4 §23）群友 c 复读了机器人那句话，机器人说的是“别学我说话！”，
+        // 引用却挂在上一条别人的消息上 —— 群里看到的就是“回复错人”，§22 的启发式修不了这一类。
         if (quotableIds.Count > 0)
         {
             systemContent +=
-                "\n\n[回复谁]\n上下文里形如 `{某某}{内容--时间} (#123456)` 的是最近几条**别人发的**消息，" +
-                "# 后面是消息编号。如果你这句话（或表情包）是在回其中某一条，在 JSON 里加 replyTo 字段填那个编号，" +
-                "例如：{\"suitability\": 80, \"reply\": \"…\", \"replyTo\": 123456}；" +
-                "如果是在回最新的那一句、或者不确定，就不要填 replyTo（不要自己编编号）。";
+                "\n\n[回复谁]\n上下文里形如 `{某某}{内容--时间} (#123456)` 的是最近几条**别人发的**消息，# 后面是消息编号。\n" +
+                "replyTo 只有一个含义：**你这句话是在跟谁说话 / 你在回应、反驳、回答哪一条**（QQ 会把它显示成“回复 某某”），" +
+                "填那个人那条的编号：{\"suitability\": 80, \"reply\": \"…\", \"replyTo\": 123456}。\n" +
+                "它不是“你提到的素材 / 你吐槽的内容 / 这件事的出处”。最容易填错的就是这两种：\n" +
+                "  • 有人**复读、模仿**别人的话（包括学你说话）：你要跟的那个是**复读的人** → 填**他发的那条**，别填被复读的原文；\n" +
+                "  • 某条消息让你不爽、但你想说的是另一个人 → 填**你要说给的那个人**那条，别填让你不爽的那条。\n" +
+                "一条消息只对一个人说话：想同时回应两个人时，先只说最主要的那个；别把对两个人的话塞进一句里，那样引用必然对不上。\n" +
+                "**点名优先**：如果最近几条里有人**@你、或者引用了你发的那句话**（“在跟你说话”），这一轮就说给他的那句，" +
+                "replyTo 填**他发的那条**；哪怕你更想吐槽别人那条，也先接完跟你说话的人（别人那条下一轮再说，" +
+                "别让正跟你说话的人看着你去回另一个人）。\n" +
+                "如果这句话是对全群说的、就是接最新那一句、或者你拿不准对象是谁 → **不要填 replyTo" +
+                "（没有引用只是少一层上下文，挂错人却是当众回错人），也不要自己编编号。" +
+                "**";
         }
 
         // 消息里的标记：表情包和戳一戳在上下文里都是带方括号/全角括号的“事件写法”，
@@ -104,7 +143,12 @@ public sealed class OpenAiClient
             "\n\n[上下文里的标记]\n" +
             "`[表情:微笑]`/`[动画表情:…]` 是对方发的 QQ 原生小表情（名字即它的含义），`[图片]`/`[语音]` 同理，" +
             "`[已撤回] xxx` 表示这句 xxx 发出后**被撤回了**：内容你看得到（你当时在场），但群里其他人已经看不到它了，" +
-            "`（戳一戳）某某 戳了你一下` 表示某某在 QQ 里戳了你——那是动作不是文字。";
+            "`（戳一戳）某某 戳了你一下` 表示某某在 QQ 里戳了你——那是动作不是文字。" +
+            "`〔旁白：…〕` 是群友的**括号旁白**（动作 / 表情说明，例：`〔旁白：把猫抱过来〕`）：" +
+            "你能看到它、也能拿它理解现场（“端到桌上”“抱着猫”这类动作本来就是语境），" +
+            "但它**不是他说的话** —— 别当成一句话去接、别在回复里把括号里的字念出来。" +
+            "`[回复 某某「…」]` 表示这句话是**引用回复**（「…」是被引用那条的原话；引你时写 `[回复 你「…」]`）：" +
+            "按它理解“他在接谁的话”，别把引文当成新说的话、也别原样复述一遍。";
 
         // 当前心情：给模型一个“我现在什么状态”的锚，让它的话风/要不要理人有个连贯的落点
         if (!string.IsNullOrWhiteSpace(moodText))
@@ -143,7 +187,13 @@ public sealed class OpenAiClient
                 "{\"suitability\": 85, \"reply\": \"我去查一下\", \"search\": \"碧蓝档案 砂狼白子 声优\"}。\n" +
                 "机器人会真的去搜，把结果（带来源）交给你，下一轮你就能拿着事实回答 —— 而不是靠印象编。\n" +
                 "也可以让它读某个具体网页：在 JSON 里加 read 字段填 URL（图符群友发过的链接）。\n" +
-                "规矩：① 不确定才搜，能自己想起来的别搜；② 同一件事不要连着搜两次；③ 不要每句话都搜（搜一次要花几秒）；" +
+                "**什么时候必须搜**（你的训练知识有截止时间，下面这些“现在还在变”的事一律不能凭记忆答）：\n" +
+                "  新闻时事、天气、价格/汇率/股票、赛程与比分、活动/开服/发售/上线时间、软件与游戏版本更新、" +
+                "新番与作品情报、某个人物的最新近况 —— 以及任何带“现在/最新/最近/今天/今年”的问题。\n" +
+                "**什么时候不用搜**：数学、成语、语法、历史与地理常识、代码写法、能自己算出来或能从上下文看出来的东西；\n" +
+                "“现在几点 / 今天几号 / 今天周几”也不用搜 —— [现在的时间] 里已经告诉你了。\n" +
+                "规矩：① 检索词写具体，**带上时间信息**（例：“碧蓝档案 2026年9月 活动”比“碧蓝档案 活动”准得多）；" +
+                "② 同一件事不要连着搜两次；③ 不要每句话都搜（搜一次要花几秒）；" +
                 "④ 搜不到/读不到就如实说“没查到”，**绝对不要**用记忆里的旧信息假装是刚查到的；" +
                 "⑤ search/read 是后台动作：填了它你这一轮该接的话照接（reply 正常写）。";
         }
@@ -296,8 +346,9 @@ public sealed class OpenAiClient
                 var contentParts = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = content } };
                 foreach (var url in msg.ImageUrls.Take(3)) // 每条消息最多带 3 张图
                 {
-                    // 异步下载（绝不同步阻塞 UI 线程），失败跳过该图
-                    var dataUrl = await _imageDownloader.DownloadAsDataUrl(url, ct);
+                    // 异步下载（绝不同步阻塞 UI 线程），失败跳过该图；
+                    // 带上消息 id：地址过期（rkey 时效）时能找协议端重新签发。
+                    var dataUrl = await _imageDownloader.DownloadAsDataUrl(url, ct, msg.QqMessageId);
                     if (dataUrl is not null)
                     {
                         contentParts.Add(new JsonObject
@@ -353,26 +404,83 @@ public sealed class OpenAiClient
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
 
-        using var response = await Http.SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
+        // 一次 5xx/429 重试。
+        // 为什么要：上游网关（多账号池网关之类）经常回 503 auth_unavailable / No capacity ——
+        // 实测 17:28 连挨三次，每条都直接“模型请求失败”丢掉一次回复；晚 2 秒再问一次往往就能拿到。
+        // 只重试一次、且只对 5xx/429：不把已经慢的链路拖成双倍慢（4xx 是请求本身的问题，重试没意义）。
+        HttpResponseMessage? response = null;
+        string? failureDetail = null;
+        for (var attempt = 0; ; attempt++)
         {
+            response = await Http.SendAsync(request, ct);
+            if (response.IsSuccessStatusCode)
+            {
+                break;
+            }
+
             var detail = await response.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException($"Chat Completions 返回 {(int)response.StatusCode}：{Truncate(detail, 200)}");
+            var status = (int)response.StatusCode;
+            failureDetail = $"Chat Completions 返回 {status}：{Truncate(detail, 200)}";
+            if (attempt >= 1 || (status < 500 && status != 429))
+            {
+                response.Dispose();
+                response = null;
+                break;
+            }
+
+            Services.FileLog.Write("Agent", $"模型返回 {status}（{Truncate(detail, 80)}）→ 2 秒后重试一次");
+            response.Dispose();
+            response = null;
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+            // 请求体是一次性的，重试要重建一份
+            request = new HttpRequestMessage(HttpMethod.Post, BuildUrl())
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
         }
+
+        if (response is null)
+        {
+            throw new HttpRequestException(failureDetail ?? "Chat Completions 请求失败");
+        }
+
+        using var _ = response;
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        var contentNode = doc.RootElement
-            .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content");
-        var rawReply = contentNode.GetString();
-        if (rawReply is null && contentNode.ValueKind == JsonValueKind.Array)
+
+        // 上游偶尔会回 200 但**没有 choices**（实测：那个慢的 `-high` 模型“思考”把预算吃光时会这样，
+        // 17:55-18:01 连报 21 次）。以前这里直接 `choices[0]` → IndexOutOfRangeException，
+        // 被上层记成“模型请求失败”：一条消息就这么没了，日志里也看不出为什么。
+        // 现在当“这轮不说话”，并把原始响应记一笔（下次再变形状时一眼能看出来）。
+        if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+            !doc.RootElement.TryGetProperty("choices", out var choices) ||
+            choices.ValueKind != JsonValueKind.Array ||
+            choices.GetArrayLength() == 0)
         {
-            rawReply = string.Concat(contentNode.EnumerateArray().Select(s => s.GetProperty("text").GetString()));
+            Services.FileLog.Write("Agent", $"模型返回了空结果（没有 choices）→ 本轮按沉默处理：{Truncate(json, 200)}");
+            return new CompletionResult(null, null, null);
         }
 
-        return ParseModelOutput(rawReply);
+        if (choices[0].TryGetProperty("message", out var message) &&
+            message.TryGetProperty("content", out var contentNode))
+        {
+            var rawReply = contentNode.ValueKind switch
+            {
+                JsonValueKind.String => contentNode.GetString(),
+                JsonValueKind.Array => string.Concat(contentNode.EnumerateArray()
+                    .Select(s => s.TryGetProperty("text", out var t) ? t.GetString() : null)),
+                _ => null
+            };
+
+            return ParseModelOutput(rawReply);
+        }
+
+        // 有 choices 但里面没有 message.content：同样按沉默处理，不招异常
+        Services.FileLog.Write("Agent", $"模型返回里没有 message.content → 本轮按沉默处理：{Truncate(json, 200)}");
+        return new CompletionResult(null, null, null);
     }
 
     /// <summary>
@@ -707,6 +815,18 @@ public sealed class OpenAiClient
         return false;
     }
 
+    /// <summary>星期几（中文，给提示词用 —— 模型自己对“今天周几”只能猜）。</summary>
+    private static string WeekdayCn(DayOfWeek day) => day switch
+    {
+        DayOfWeek.Monday => "一",
+        DayOfWeek.Tuesday => "二",
+        DayOfWeek.Wednesday => "三",
+        DayOfWeek.Thursday => "四",
+        DayOfWeek.Friday => "五",
+        DayOfWeek.Saturday => "六",
+        _ => "日"
+    };
+
     /// <summary>这段文本里有没有我们的约定字段（说明它想输出的是结构化回复）。</summary>
     private static bool LooksLikeSchemaJson(string text)
         => text.Contains("\"suitability\"", StringComparison.OrdinalIgnoreCase)
@@ -781,13 +901,113 @@ public sealed class OpenAiClient
     }
 
     /// <summary>给表情包库用：下载图片原始字节（内部走同一套 SSRF 防护与大小限制）。</summary>
-    public Task<(byte[] Data, string Mime, string Ext)?> DownloadImageAsync(string url, CancellationToken ct = default)
-        => _imageDownloader.DownloadBytesAsync(url, ct);
+    public Task<(byte[] Data, string Mime, string Ext)?> DownloadImageAsync(string url, CancellationToken ct = default, long? messageId = null)
+        => _imageDownloader.DownloadBytesAsync(url, ct, messageId);
 
     /// <summary>
     /// 表情包自巡检：让模型看一遍库（表格形式），自己决定删哪些。
     /// 返回要删的 id 与理由；解析不了就返回空（宁可什么都不删）。
     /// </summary>
+    /// <summary>
+    /// 通用一次性补全：调用方自己给 system + 多轮 messages，直接拿原始文本。
+    /// 为什么不走 <see cref="CompleteAsync"/>：那套是“群里该怎么回”的人设 JSON 约定，
+    /// 而 agent（服务器内置 / 工具循环）要的是自由格式 + 自己控制历史。
+    /// 429/5xx 退让 2 秒重试一次（跟主流程同口径：上游“No capacity”是常态）。
+    /// </summary>
+    public async Task<string?> CompleteChatAsync(
+        string model,
+        string systemPrompt,
+        IReadOnlyList<(string Role, string Text)> messages,
+        int maxTokens,
+        double temperature,
+        CancellationToken ct = default,
+        string? baseUrlOverride = null,
+        string? apiKeyOverride = null)
+    {
+        var apiKey = string.IsNullOrWhiteSpace(apiKeyOverride) ? _settings.ApiKey?.Trim() : apiKeyOverride!.Trim();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return null;
+        }
+
+        var url = string.IsNullOrWhiteSpace(baseUrlOverride) ? BuildUrl() : BuildUrl(baseUrlOverride!);
+        var payload = new JsonObject
+        {
+            ["model"] = string.IsNullOrWhiteSpace(model) ? _settings.Model : model,
+            ["max_tokens"] = Math.Clamp(maxTokens, 64, 32000),
+            ["temperature"] = temperature
+        };
+
+        var array = new JsonArray { new JsonObject { ["role"] = "system", ["content"] = systemPrompt } };
+        foreach (var (role, text) in messages)
+        {
+            array.Add(new JsonObject { ["role"] = role, ["content"] = text });
+        }
+
+        payload["messages"] = array;
+
+        for (var attempt = 0; ; attempt++)
+        {
+            HttpResponseMessage response;
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+                };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                FileLog.Warn("Agent", $"补全请求失败：{ex.Message}");
+                return null;
+            }
+
+            using (response)
+            {
+                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    if (!doc.RootElement.TryGetProperty("choices", out var choices) ||
+                        choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+                    {
+                        FileLog.Warn("Agent", $"补全返回空结果：{Truncate(body, 160)}");
+                        return null;
+                    }
+
+                    var node = choices[0].TryGetProperty("message", out var msg) &&
+                               msg.TryGetProperty("content", out var content)
+                        ? content
+                        : default;
+                    return node.ValueKind switch
+                    {
+                        JsonValueKind.String => node.GetString(),
+                        JsonValueKind.Array => string.Concat(node.EnumerateArray()
+                            .Select(s => s.TryGetProperty("text", out var t) ? t.GetString() : null)),
+                        _ => null
+                    };
+                }
+
+                var status = (int)response.StatusCode;
+                if (attempt >= 1 || (status < 500 && status != 429))
+                {
+                    FileLog.Warn("Agent", $"补全请求失败 {status}：{Truncate(body, 120)}");
+                    return null;
+                }
+
+                FileLog.Warn("Agent", $"补全返回 {status} → 2 秒后重试一次");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+        }
+    }
+
     public async Task<(List<string> Delete, string? Reason)> CurateStickersAsync(string libraryTable, int maxDelete, CancellationToken ct = default)
     {
         var empty = (new List<string>(), (string?)null);
@@ -1068,7 +1288,11 @@ public sealed class OpenAiClient
                "   • 大家在**开玩笑 / 起哄** → 可以接梗、可以带表情包，但别把玩笑开在别人痛处上；\n" +
                "   • 只是**别人之间的闲聊**、与你无关 → 沉默（不出声也是一种陪伴）；\n" +
                "   • 直接 @ 你、问你事 → 必答，而且先回答、别绕；\n" +
+               "   • 消息里带 `〔旁白：…〕` 的：那是动作/表情说明、不是他说的话 —— 可以当现场信息，别当一句话去接；\n" +
                "   • 你刚说完、没新人接话 → 别再自说自话。\n" +
+               "   • **底线（任何气氛下都不许越过）**：不骂人、不人身攻击、不替别人赶人走" +
+               "（“消停点”“别祸害大家”“滚”这种话一句都不说）、不因为一条内容就否定整个人、更不连坐整个群；" +
+               "觉得内容糟就说内容（“这都什么啊”），不要冲着人说。\n" +
                "suitability 就是这个“该不该开口”的分数（0-100：0-10 完全不该插嘴；10-40 可以但不必要；40-70 自然接话；70+ 就是非说不可）。\n" +
                "宁愿少说、说准，也别为了存在感硬接一句废话。\n" +
                desire + "\n" +
@@ -1274,9 +1498,12 @@ public sealed class OpenAiClient
         }
     }
 
-    private string BuildUrl()
+    private string BuildUrl() => BuildUrl(_settings.ModelBaseUrl);
+
+    /// <summary>拼 /chat/completions 地址（允许指定地址 —— 服务器 agent 可以走自己的接口）。</summary>
+    private static string BuildUrl(string baseUrl)
     {
-        var url = _settings.ModelBaseUrl.Trim().TrimEnd('/');
+        var url = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
         return url.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
             ? url
             : url + "/chat/completions";
@@ -1414,6 +1641,36 @@ internal sealed class ImageDownloader
 
     private const int MaxImageBytes = 6 * 1024 * 1024;
 
+    // ── 缓存 ──
+    // 为什么要缓存：QQ 的图片地址是**带时效 rkey 的临时链**，过期后 CDN 一律回 400。
+    // 而图片会一直留在会话上下文里（几百条），每生成一次就会重新去下一遍 ——
+    // 实测线上：同一张图在 5 分钟内被反复重试、全部 400，日志刷屏且模型看不到图。
+    // 缓存按 **URL 作键**（同一张图事件里的 URL 不变），容量/字节双上限，满了挑最旧的逐出。
+    private const int MaxCacheEntries = 48;
+    private const long MaxCacheBytes = 32L * 1024 * 1024;
+
+    private readonly object _cacheGate = new();
+    private readonly Dictionary<string, (byte[] Data, string Mime, string Ext)> _cache = new();
+    private readonly Queue<string> _cacheOrder = new();
+    private long _cacheBytes;
+
+    /// <summary>已失败过的 URL（→ 下次重试不早于这个时间）：避免每轮生成都对着一张过期图重试+刷日志。</summary>
+    private readonly Dictionary<string, DateTimeOffset> _failedUntil = new();
+
+    private static readonly TimeSpan FailureBackoff = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// 图片地址过期（400）时去找协议端**重新签发**地址的回调：入参是消息 id，返回该消息里所有图片的当前地址。
+    /// 由 BotAgent 接上 `IQqChatSource.RefreshImageUrlsAsync`；没接上就只能认赔（这张图这轮看不到）。
+    /// </summary>
+    public Func<long, CancellationToken, Task<IReadOnlyList<string>>>? RefreshUrls { get; set; }
+
+    /// <summary>缓存命中数（测试用）。</summary>
+    public int CacheHits { get; private set; }
+
+    /// <summary>“地址过期 → 重新签发”成功的次数（测试用）。</summary>
+    public int RefreshedCount { get; private set; }
+
     /// <summary>
     /// 是否允许从内网/回环地址下载（QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS=1）。
     /// 默认关闭：图片 URL 来自 QQ 事件，属不可信输入，SSRF 防护必须默认生效。
@@ -1424,23 +1681,135 @@ internal sealed class ImageDownloader
         Environment.GetEnvironmentVariable("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
 
     /// <summary>
-    /// 下载图片字节（失败返回 null）。供表情包库保存原图使用。
+    /// 下载图片字节（失败返回 null）。供多模态识图与表情包库共用。
+    /// 流程：缓存 → 直接下 → 400（rkey 过期）时让协议端重新签发地址再下一次。
     /// </summary>
-    public async Task<(byte[] Data, string Mime, string Ext)?> DownloadBytesAsync(string url, CancellationToken ct)
+    /// <param name="messageId">这条图片来自哪条消息（可选）：地址过期时用它能找协议端重新签发。</param>
+    public async Task<(byte[] Data, string Mime, string Ext)?> DownloadBytesAsync(string url, CancellationToken ct, long? messageId = null)
+    {
+        try
+        {
+            if (TryGetCached(url) is { } cached)
+            {
+                return cached;
+            }
+
+            lock (_cacheGate)
+            {
+                if (_failedUntil.TryGetValue(url, out var until) && DateTimeOffset.Now < until)
+                {
+                    return null;   // 刚失败过，别对着一张取不到的图每轮重试
+                }
+            }
+
+            var outcome = await FetchAsync(url, ct);
+            var result = outcome.Image;
+            if (result is null && outcome.CanRetryWithFreshUrl && messageId is long mid && RefreshUrls is not null)
+            {
+                // 失败时让协议端换一份**当前有效**的地址再试一次（绝大多数情况是 rkey 过期 → 400）。
+                // 只重试一次、失败后记 10 分钟退避：不会变成“对着一张取不到的图每轮重试”。
+                Services.FileLog.Write("Vision", $"图片地址下载失败（HTTP {outcome.Status}）→ 请协议端重新签发（消息 {mid}）：{Truncate(url, 100)}");
+                result = await FetchRefreshedAsync(url, mid, ct);
+            }
+            else if (result is null && outcome.Status > 0)
+            {
+                Services.FileLog.Write("Vision", $"图片下载失败（HTTP {outcome.Status}）: {Truncate(url, 120)}");
+            }
+
+            if (result is not { } ok)
+            {
+                lock (_cacheGate)
+                {
+                    _failedUntil[url] = DateTimeOffset.Now + FailureBackoff;
+                }
+
+                return null;
+            }
+
+            Remember(url, ok);
+            return ok;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Services.FileLog.Write("Vision", $"图片下载异常（{ex.GetType().Name}: {ex.Message}）: {Truncate(url, 120)}");
+            return null;
+        }
+    }
+
+    /// <summary>一次抓取的结果：拿到了图，或者“失败了但值得换个新地址再试”。</summary>
+    private readonly record struct FetchOutcome((byte[] Data, string Mime, string Ext)? Image, bool CanRetryWithFreshUrl, int Status);
+
+    /// <summary>用协议端重新签发的地址下同一张图。对不上同一张（fileid 不同）时退而用第一个地址。</summary>
+    private async Task<(byte[] Data, string Mime, string Ext)?> FetchRefreshedAsync(string staleUrl, long messageId, CancellationToken ct)
+    {
+        IReadOnlyList<string> fresh;
+        try
+        {
+            fresh = await RefreshUrls!(messageId, ct);
+        }
+        catch (Exception ex)
+        {
+            Services.FileLog.Write("Vision", $"重新签发图片地址失败（消息 {messageId}）: {ex.GetType().Name} {ex.Message}");
+            return null;
+        }
+
+        if (fresh.Count == 0)
+        {
+            Services.FileLog.Write("Vision", $"图片地址已过期，协议端也拿不到新地址（消息 {messageId}）");
+            return null;
+        }
+
+        var wanted = Param(staleUrl, "fileid");
+        var pick = wanted is not null
+            ? fresh.FirstOrDefault(u => string.Equals(Param(u, "fileid"), wanted, StringComparison.Ordinal))
+            : null;
+        pick ??= fresh[0];
+
+        var bytes = await FetchAsync(pick, ct);
+        if (bytes.Image is not null)
+        {
+            RefreshedCount++;
+            Services.FileLog.Write("Vision", $"图片地址已过期 → 用协议端重新签发的地址取回成功（消息 {messageId}）");
+        }
+
+        return bytes.Image;
+    }
+
+    /// <summary>取 URL 里的某个查询参数（用来认“同一张图”：fileid 不变，rkey 变）。</summary>
+    private static string? Param(string url, string name)
+    {
+        var marker = name + "=";
+        var at = url.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        var start = at + marker.Length;
+        var end = url.IndexOf('&', start);
+        return end < 0 ? url[start..] : url[start..end];
+    }
+
+    private async Task<FetchOutcome> FetchAsync(string url, CancellationToken ct)
     {
         try
         {
             if (!IsSafeImageUrl(url, out var uri))
             {
                 Services.FileLog.Write("Vision", $"图片地址被拒（SSRF 防护）: {Truncate(url, 120)}");
-                return null;
+                return new FetchOutcome(null, false, 0);
             }
 
             using var response = await Client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!response.IsSuccessStatusCode)
             {
-                Services.FileLog.Write("Vision", $"图片下载失败 {(int)response.StatusCode}: {Truncate(url, 120)}");
-                return null;
+                // 4xx/5xx ⇒ 值得拿协议端重新签发的地址再试一次（最常见的是 rkey 过期回 400）。
+                // 日志由调用方写（它才知道有没有“重新签发”这条路）。
+                return new FetchOutcome(null, true, (int)response.StatusCode);
             }
 
             // 有 Content-Length 时先拦，避免把超大响应当进内存
@@ -1448,14 +1817,14 @@ internal sealed class ImageDownloader
                 (declared <= 0 || declared > MaxImageBytes))
             {
                 Services.FileLog.Write("Vision", $"图片声明大小异常 {declared}: {Truncate(url, 120)}");
-                return null;
+                return new FetchOutcome(null, false, 0);
             }
 
             var bytes = await ReadCappedAsync(response.Content, MaxImageBytes, ct);
             if (bytes is null || bytes.Length == 0)
             {
                 Services.FileLog.Write("Vision", $"图片超限或为空: {Truncate(url, 120)}");
-                return null;
+                return new FetchOutcome(null, false, 0);
             }
 
             var mime = DetectMime(bytes);
@@ -1466,7 +1835,7 @@ internal sealed class ImageDownloader
                 "image/webp" => "webp",
                 _ => "png"
             };
-            return (bytes, mime, ext);
+            return new FetchOutcome((bytes, mime, ext), false, 200);
         }
         catch (OperationCanceledException)
         {
@@ -1475,7 +1844,7 @@ internal sealed class ImageDownloader
         catch (Exception ex)
         {
             Services.FileLog.Write("Vision", $"图片下载异常: {ex.Message} | {Truncate(url, 120)}");
-            return null;
+            return new FetchOutcome(null, false, 0);
         }
     }
 
@@ -1483,10 +1852,52 @@ internal sealed class ImageDownloader
     /// 下载图片并转为 data:image/...;base64,xxx；失败返回 null。
     /// 图片 URL 来自 QQ 事件，属**不可信输入** → 先做 SSRF 防护再下载。
     /// </summary>
-    public async Task<string?> DownloadAsDataUrl(string url, CancellationToken ct)
+    public async Task<string?> DownloadAsDataUrl(string url, CancellationToken ct, long? messageId = null)
     {
-        var downloaded = await DownloadBytesAsync(url, ct);
+        var downloaded = await DownloadBytesAsync(url, ct, messageId);
         return downloaded is { } d ? $"data:{d.Mime};base64,{Convert.ToBase64String(d.Data)}" : null;
+    }
+
+    // ── 缓存读写 ──
+
+    private (byte[] Data, string Mime, string Ext)? TryGetCached(string url)
+    {
+        lock (_cacheGate)
+        {
+            if (!_cache.TryGetValue(url, out var hit))
+            {
+                return null;
+            }
+
+            CacheHits++;
+            return hit;
+        }
+    }
+
+    private void Remember(string url, (byte[] Data, string Mime, string Ext) value)
+    {
+        lock (_cacheGate)
+        {
+            if (_cache.ContainsKey(url))
+            {
+                return;
+            }
+
+            _cache[url] = value;
+            _cacheOrder.Enqueue(url);
+            _cacheBytes += value.Data.Length;
+
+            while ((_cache.Count > MaxCacheEntries || _cacheBytes > MaxCacheBytes) && _cacheOrder.Count > 0)
+            {
+                var oldest = _cacheOrder.Dequeue();
+                if (_cache.Remove(oldest, out var dropped))
+                {
+                    _cacheBytes -= dropped.Data.Length;
+                }
+            }
+
+            _failedUntil.Remove(url);
+        }
     }
 
     /// <summary>

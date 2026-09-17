@@ -55,6 +55,10 @@ public static class Program
         FileLog.Verbose = settings.VerboseLog;
         FileLog.WriteToFile = Environment.GetEnvironmentVariable("QQCHAT_LOG_FILE") != "0";
 
+        // 面板日志页的首屏历史：从日志文件尾部回填一段（刷新页面 / 重启进程之后也不是空的）。
+        // 回填要放在往文件里写第一行之前，否则会把“本次启动”的那几行再攒一遍（虽只是重复，没必要）。
+        FileLog.PreloadRecent();
+
         PrintBanner(settings, !string.IsNullOrWhiteSpace(settings.NapCatWebUiToken) && !string.IsNullOrWhiteSpace(settings.NapCatWebUiUrl));
 
         var errors = BotConfig.Validate(settings);
@@ -86,7 +90,11 @@ public static class Program
 
         var store = new ConversationStore();
         var profiles = new MemberProfileStore();
-        var agent = new BotAgent(settings, gateway, brain, store, profiles);
+
+        // 本机 Agent 桥（// 命令）：机器人**监听**一个 WS 端点，号主本机那个 pi-bridge 主动连进来。
+        // 为什么不让机器人直接连本机：号主的电脑在 NAT 后面（没公网入口，也不应该开一个）。
+        var agentBridge = new AgentBridgeServer(settings, msg => FileLog.Write("Agent", msg));
+        var agent = new BotAgent(settings, gateway, brain, store, profiles, agentBridge);
 
         // 面板内的扫码登录：把 NapCat 的登录二维码搬进机器人面板
         // （用户打开面板看不到二维码，是远程部署卡住最久的原因）
@@ -96,7 +104,7 @@ public static class Program
         agent.Start();
         gateway.Start();
 
-        using var web = new WebUiServer(settings.HealthPort, settings, gateway, agent, loginQr);
+        using var web = new WebUiServer(settings.HealthPort, settings, gateway, agent, loginQr, agentBridge);
         if (settings.HealthPort > 0)
         {
             web.Start();

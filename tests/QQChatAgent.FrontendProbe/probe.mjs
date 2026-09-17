@@ -395,6 +395,12 @@ const fetchStub = async (url, opts) => {
     payload = { runtime: RUNTIME, env: ENV, settingsFile: "/data/data/settings.json" };
   } else if (target.includes("/api/qqlogin")) {
     payload = qrPayload;
+  } else if (target.includes("/api/logs")) {
+    // 面板首屏会拉日志历史（刷新页面后不再空白）
+    payload = { lines: [
+      { time: 1700000000000, text: "[Agent] 历史日志-A" },
+      { time: 1700000001000, text: "[Agent] 历史日志-B" }
+    ] };
   }
   return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
 };
@@ -437,9 +443,42 @@ for (const fn of domReady) {
 await new Promise((r) => setTimeout(r, 400));
 check("boot() 无异常", bootError === null, bootError);
 check("注册了保存按钮的点击处理", saveClicks.length === 1, `实际 ${saveClicks.length} 个`);
+
+// 日志面板的历史回填（以前日志只活在浏览器内存里：一刷新页面就空白 —— 号主反馈）
+check("app.js 会去拉 /api/logs（首屏历史）", js.includes('/api/logs'));
+check("boot 真的请求了 /api/logs", calls.some((c) => c.method === "GET" && c.url.includes("/api/logs")),
+  calls.map((c) => c.url).join(" | "));
+check("★ 历史日志被渲染进日志面板（刷新后不再空白）",
+  (document.getElementById("logBox")?.innerHTML || "").includes("历史日志-A"),
+  (document.getElementById("logBox")?.innerHTML || "(空)").slice(0, 120));
+
+// 日志很长时要能一键到顶 / 到底（号主要求的两个按钮）
+check("app.js 绑定了日志“顶部 / 底部”两个按钮", js.includes('"logTopBtn"') && js.includes('"logBottomBtn"'));
+{
+  const box = document.getElementById("logBox");
+  box.scrollTop = 40;
+  fire("logTopBtn", "click");
+  check("★ 点“顶部”滚到最上面", box.scrollTop === 0, `scrollTop=${box.scrollTop}`);
+  fire("logBottomBtn", "click");
+  check("★ 点“底部”滚到最下面", box.scrollTop === box.scrollHeight,
+    `scrollTop=${box.scrollTop} scrollHeight=${box.scrollHeight}`);
+}
 check("★ boot() 会把手机端视图初始化成列表（body.m-chat-open）",
   classCalls.some((c) => c[0] === "toggle" && c[1] === "m-chat-open"),
   JSON.stringify(classCalls.slice(0, 6)));
+
+// ─────────── 本机 Agent 卡片（// 命令，handoff-4 §31）───────────
+check("面板有本机 Agent 卡片（开关 / 可用 QQ / 前缀 / 测试按钮）",
+  ["setEnableAgentBridge", "setAgentAllowedUsers", "setAgentPrefix", "setAgentWorkDir",
+   "agentTestGo", "agentStatusGo", "agentTestPrompt", "agentOut"]
+    .every((id) => html.includes(`id="${id}"`)),
+  ["setEnableAgentBridge", "setAgentAllowedUsers", "agentTestGo"]
+    .filter((id) => !html.includes(`id="${id}"`)).join(", ") || "都在");
+check("app.js 把 agent 设置读进表单（渲染）/ 写回保存体",
+  js.includes("setEnableAgentBridge") && js.includes("enableAgentBridge:") &&
+  js.includes("agentAllowedUsers:") && js.includes("agentPrefix:"));
+check("app.js 绑定了“送到本机跑一下 / 看连接状态”两个按钮",
+  js.includes('$("agentTestGo").addEventListener') && js.includes('$("agentStatusGo").addEventListener'));
 
 /* ─────────── 3b) 动态：扫码登录卡片 ─────────── */
 

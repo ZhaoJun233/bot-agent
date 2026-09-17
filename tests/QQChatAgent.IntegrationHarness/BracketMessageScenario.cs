@@ -3,12 +3,14 @@ using System.Text;
 namespace QQChatAgent.IntegrationHarness;
 
 /// <summary>
-/// S29 忽略群友消息里的括号旁白（开关）。
+/// S29 群友消息里的括号旁白：**标注而不是忽略**（开关）。
 ///
-/// 号主两次反馈后的真实口径（我拉了群里 700+ 条带括号的消息看过）：
-///   • 整条都是旁白（「（笑）」「（bushi）」）→ 整条忽略（不入库、不请求模型）；
-///   • 前后带旁白（「行（端在桌上）」「（放在地上）来吧」）→ **只剥掉旁白**，正文照常用；
-///   • 机器人自己的内容标记（[表情:斜眼笑]/[图片]）不是旁白，不能剥（把它们剥了等于抹掉群友发表情的记录）；
+/// 号主的原始口径（2026-09-14）：整条都是旁白（「（笑）」「（bushi）」）不要；前后带的旁白（「行（端在桌上）」）只留正文。
+/// 同一天追加（§25）：**不要单纯忽略，也要接收，但要特别注明** —— 所以现在：
+///   • 旁白标成 〔旁白：…〕 进聊天记录与模型上下文（内容一字不丢）；
+///   • 整条都是旁白时**不单独触发一次回复**（“（笑）”不是对谁说的话），但下一条真消息会带上它；
+///   • 整条旁白也不给引用编号（不会被当成“一句话”去引用）；
+///   • 机器人自己的内容标记（[表情:斜眼笑]/[图片]）不是旁白，不能标注（标了等于抹掉群友发表情的记录）；
 ///   • 句子中间的括号（「（2026）年的计划」）不碰；
 ///   • 私聊 / 带图 / @ 了机器人三种情况完全不动。
 /// </summary>
@@ -16,7 +18,7 @@ public static partial class Program
 {
     private static async Task RunBracketMessageScenarioAsync()
     {
-        Section("S29 忽略纯括号消息（开关 + 不误伤 + 三种例外）");
+        Section("S29 括号旁白：标注成 〔旁白：…〕 而不是忽略（开关 + 不误伤 + 三种例外）");
 
         const int openAiPort = 17836;
         const int botWsPort = 13045;
@@ -57,7 +59,7 @@ public static partial class Program
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
 
-        // ---- 1) 整条旁白：各种写法都不该进库、也不该请求模型 ----
+        // ---- 1) 整条旁白：**标注后进库**，但自己不触发模型（旁白不是对谁说的话）----
         openAi.ClearRequests();
         await protocol.SendGroupMessageAsync(groupId, 30021, "小美", "（笑）", 9911, ct: cts.Token);
         await protocol.SendGroupMessageAsync(groupId, 30021, "小美", "（笑）（跑）", 9912, ct: cts.Token);
@@ -66,74 +68,98 @@ public static partial class Program
         await protocol.SendGroupMessageAsync(groupId, 30021, "小美", "（真的）？", 9915, ct: cts.Token);
         await Task.Delay(4000);
 
-        var stored = DbProbe.Count(dataDir,
-            "SELECT COUNT(1) FROM messages WHERE text LIKE '%笑%' OR text LIKE '%bushi%' OR text LIKE '%摸鱼%'");
-        Check("★ 整条都是旁白 → 不入库（旁白不污染聊天记录）", stored == 0, $"库里查到 {stored} 条");
-        Check("★ 整条都是旁白 → 不请求模型（不扯机器人接话）", openAi.Requests.Count == 0,
-            $"本轮请求 {openAi.Requests.Count} 次");
+        var annotated = await WaitUntilAsync(
+            () => DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%〔旁白：%笑%〕%'") >= 2,
+            TimeSpan.FromSeconds(5));
+        Check("★ 整条旁白不再被丢掉：标注成 〔旁白：…〕 落库", annotated,
+            DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE source_key = 'group:66711'"));
+        Check("★ 标注保留了旁白内容本身（笑 / bushi / 摸鱼 / 真的）",
+            DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%〔旁白：bushi〕%'") >= 1 &&
+            DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%〔旁白：摸鱼〕%'") >= 1,
+            DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE source_key = 'group:66711'"));
+        Check("★ 整条旁白不单独触发一次模型请求（“（笑）”不该把机器人拽出来接话）",
+            openAi.Requests.Count == 0, $"本轮请求 {openAi.Requests.Count} 次");
 
-        // ---- 2) 前后带的旁白：正文留着、旁白剥掉（号主说的“不是整条都是括号”）----
+        // ---- 2) “接收”的含义：旁白真的进了下一轮的上下文，而且带标注、不带引用编号 ----
+        openAi.ClearRequests();
+        openAi.EnqueueReply("""{"suitability": 88, "reply": "来啦。"}""");
+        await protocol.SendGroupMessageAsync(groupId, 30021, "小美", "大家好啊", 9916, ct: cts.Token);
+        var withAside = await WaitForRequestAsync(openAi, r => r.Contains("大家好啊"), TimeSpan.FromSeconds(30));
+        Check("★ 旁白照样进模型上下文（不是被忽略，只是被标注）",
+            withAside is not null && withAside.Contains("〔旁白：笑〕"),
+            withAside is null ? "(没进上下文)" : Snippet(withAside, "〔旁白："));
+        Check("★ 整条旁白不给 (#编号)：模型不会把“（笑）”当成一句话去引用",
+            withAside is not null && !withAside.Contains("(#9911)") && !withAside.Contains("(#9912)"),
+            withAside is null ? "(没进上下文)" : Snippet(withAside, "[回复谁]"));
+
+        // ---- 3) 前后带的旁白：正文留着、旁白标注在旁（号主说的“不是整条都是括号”）----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "好嘞。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30022, "老王", "行（端在桌上）", 9916, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, 30022, "老王", "行（端在桌上）", 9917, ct: cts.Token);
         var tail = await WaitForRequestAsync(openAi, r => r.Contains("行"), TimeSpan.FromSeconds(30));
-        Check("★ 尾部旁白被剥掉、正文留着（「行（端在桌上）」→「行」）",
-            tail is not null && !tail.Contains("端在桌上"),
+        Check("★ 尾部旁白改成标注（「行（端在桌上）」→「行〔旁白：端在桌上〕」）",
+            tail is not null && tail.Contains("行〔旁白：端在桌上〕"),
             tail is null ? "(没进上下文)" : Snippet(tail, "行"));
-
-        var storedTail = DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text = $t", ("$t", "行"));
-        Check("★ 落库的也是洗净后的文本（旁白不进聊天记录，也不进档案）", storedTail >= 1, $"库里「行」{storedTail} 条");
+        Check("★ 落库的也是标注后的文本",
+            await WaitUntilAsync(() => DbProbe.Count(dataDir,
+                "SELECT COUNT(1) FROM messages WHERE text = $t", ("$t", "行〔旁白：端在桌上〕")) >= 1,
+                TimeSpan.FromSeconds(5)),
+            DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE text LIKE '行%'"));
 
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "来了来了。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30022, "老王", "（放在地上）来吧，猫猫，", 9917, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, 30022, "老王", "（放在地上）来吧，猫猫，", 9918, ct: cts.Token);
         var lead = await WaitForRequestAsync(openAi, r => r.Contains("来吧，猫猫"), TimeSpan.FromSeconds(30));
-        Check("★ 开头旁白被剥掉、正文留着（「（放在地上）来吧」→「来吧」）",
-            lead is not null && !lead.Contains("放在地上"),
+        Check("★ 开头旁白改成标注（「（放在地上）来吧」→「〔旁白：放在地上〕来吧」）",
+            lead is not null && lead.Contains("〔旁白：放在地上〕来吧，猫猫，"),
             lead is null ? "(没进上下文)" : Snippet(lead, "来吧"));
 
-        // ---- 3) 机器人自己的内容标记不能被当旁白剥掉 ----
+        // ---- 4) 机器人自己的内容标记不能被当旁白标注 ----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "哈哈。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30023, "小红", "[表情:斜眼笑]", 9918, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, 30023, "小红", "[表情:斜眼笑]", 9919, ct: cts.Token);
         var face = await WaitForRequestAsync(openAi, r => r.Contains("表情:斜眼笑"), TimeSpan.FromSeconds(30));
-        Check("★ 群友发的 QQ 表情不是旁白（[表情:斜眼笑] 不剥也不忽略）", face is not null,
-            face is null ? "(表情被当旁白吃了)" : "表情还在");
+        Check("★ 群友发的 QQ 表情不是旁白（[表情:斜眼笑] 原样保留）",
+            face is not null && !face.Contains("〔旁白：表情"), face is null ? "(表情被当旁白吃了)" : "表情还在");
 
-        // ---- 4) 句子中间的括号不碰 ----
+        // ---- 5) 句子中间的括号不碰 ----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "那得看计划。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30024, "小明", "（2026）年的计划还做吗", 9919, ct: cts.Token);
-        var middle = await WaitForRequestAsync(openAi, r => r.Contains("2026") && r.Contains("年的计划"), TimeSpan.FromSeconds(30));
-        Check("★ 句子中间的括号是正文（不当旁白剥掉）", middle is not null,
-            middle is null ? "(中间括号被剥了)" : "括号保留");
+        await protocol.SendGroupMessageAsync(groupId, 30024, "小明", "（2026）年的计划还做吗", 9920, ct: cts.Token);
+        var middle = await WaitForRequestAsync(openAi, r => r.Contains("（2026）年的计划"), TimeSpan.FromSeconds(30));
+        Check("★ 句子中间的括号是正文（不标注成旁白）", middle is not null,
+            middle is null ? "(中间括号被动了)" : "括号保留");
 
-        // ---- 5) 例外一：@ 了机器人 → 完全不动 ----
+        // ---- 6) 例外一：@ 了机器人 → 完全不动 ----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "在的，你说。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30025, "小红", "（真的吗）", 9920, mentionBot: true, ct: cts.Token);
-        var mentioned = await WaitForRequestAsync(openAi, r => r.Contains("真的吗"), TimeSpan.FromSeconds(30));
-        Check("★ @ 了机器人的括号消息完全不动（直接叫它就得理）", mentioned is not null,
-            mentioned is null ? "(被忽略了)" : "已进上下文");
+        await protocol.SendGroupMessageAsync(groupId, 30025, "小红", "（真的吗）", 9921, mentionBot: true, ct: cts.Token);
+        var mentioned = await WaitForRequestAsync(openAi, r => r.Contains("（真的吗）"), TimeSpan.FromSeconds(30));
+        Check("★ @ 了机器人的括号消息完全不动（直接叫它就得理）",
+            mentioned is not null && !mentioned.Contains("〔旁白：真的吗〕"),
+            mentioned is null ? "(被忽略了)" : "已原样进上下文");
 
-        // ---- 6) 例外二：私聊 ----
+        // ---- 7) 例外二：私聊 ----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "笑什么呀。"}""");
-        await protocol.SendPrivateMessageAsync(friendId, "小美", "（笑）", 9921, ct: cts.Token);
+        await protocol.SendPrivateMessageAsync(friendId, "小美", "（笑）", 9922, ct: cts.Token);
         var privateOne = await WaitForRequestAsync(openAi, r => r.Contains("（笑）"), TimeSpan.FromSeconds(30));
-        Check("★ 私聊里同样的括号消息不动（一对一必须理）", privateOne is not null,
-            privateOne is null ? "(被忽略了)" : "已进上下文");
+        Check("★ 私聊里同样的括号消息不动（一对一必须理）",
+            privateOne is not null && !privateOne.Contains("〔旁白：笑〕"),
+            privateOne is null ? "(被忽略了)" : "已原样进上下文");
 
-        // ---- 7) 例外三：带图 ----
+        // ---- 8) 例外三：带图 ----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "这图有点意思。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30026, "小美", "（图）", 9922,
+        await protocol.SendGroupMessageAsync(groupId, 30026, "小美", "（图）", 9923,
             imageUrl: "http://127.0.0.1:9/none.png", ct: cts.Token);
         await Task.Delay(3000);
-        var imageStored = DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%（图）%'");
-        Check("★ 带图的括号消息不动（会落库）", imageStored >= 1, $"库里 {imageStored} 条");
+        Check("★ 带图的括号消息不动（落库的是原文 + 内容标记，不是旁白标注）",
+            DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '（图）%'") >= 1 &&
+            DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%〔旁白：图〕%'") == 0,
+            DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE text LIKE '%图%'"));
 
-        // ---- 8) 关掉开关 → 旁白不再被剥 ----
+        // ---- 9) 关掉开关 → 旁白原样保留（不标注）----
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         using (var offResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
                    new StringContent("""{"ignoreBracketMessages":false}""", Encoding.UTF8, "application/json"), cts.Token))
@@ -144,10 +170,11 @@ public static partial class Program
         await Task.Delay(400);
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "笑就笑吧。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30027, "小明", "（笑死）", 9923, ct: cts.Token);
-        var afterOff = await WaitForRequestAsync(openAi, r => r.Contains("笑死"), TimeSpan.FromSeconds(30));
-        Check("★ 关掉开关后旁白原样进上下文（开关真的生效）", afterOff is not null,
-            afterOff is null ? "(关掉后仍被忽略)" : "已进上下文");
+        await protocol.SendGroupMessageAsync(groupId, 30027, "小明", "（笑死）", 9924, ct: cts.Token);
+        var afterOff = await WaitForRequestAsync(openAi, r => r.Contains("（笑死）"), TimeSpan.FromSeconds(30));
+        Check("★ 关掉开关后旁白原样进上下文（开关真的生效，不再改文本）",
+            afterOff is not null && !afterOff.Contains("〔旁白：笑死〕"),
+            afterOff is null ? "(关掉后仍被标注)" : "已原样进上下文");
 
         bot.Dispose();
     }

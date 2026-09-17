@@ -237,7 +237,8 @@ public sealed class MockProtocol : IDisposable
                 "get_group_member_info" => BuildMemberInfo(root["params"] as JsonObject),
                 "get_group_msg_history" => BuildHistory(),
                 "get_forward_msg" => BuildForwardRecord(root["params"]?["id"]?.GetValue<string>()),
-                "send_group_msg" or "send_private_msg" => new JsonObject { ["message_id"] = 555 },
+                "send_group_msg" or "send_private_msg" => new JsonObject { ["message_id"] = NextSentMessageId() },                // get_msg：按 id 取一条消息（“引用回复”的原文查询走这里；目前实现只用上下文，预留）
+                "get_msg" => BuildQuotedMessage(root["params"] as JsonObject),
                 _ => new JsonObject()
             };
 
@@ -335,6 +336,7 @@ public sealed class MockProtocol : IDisposable
     }
 
     /// <summary>构造并发送一条 OneBot 消息事件。</summary>
+    /// <param name="replyTo">非空时带上一个 reply 段（QQ 的“引用回复”）。</param>
     public async Task SendGroupMessageAsync(
         long groupId,
         long userId,
@@ -343,9 +345,20 @@ public sealed class MockProtocol : IDisposable
         long messageId,
         bool mentionBot = false,
         string? imageUrl = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        long? replyTo = null)
     {
         var segments = new JsonArray();
+        // QQ 把引用回复段放在最前（NapCat 给的 data.id 是**字符串**，这里照真实形状来）
+        if (replyTo is long quoted)
+        {
+            segments.Add(new JsonObject
+            {
+                ["type"] = "reply",
+                ["data"] = new JsonObject { ["id"] = quoted.ToString() }
+            });
+        }
+
         if (mentionBot)
         {
             segments.Add(new JsonObject
@@ -397,6 +410,43 @@ public sealed class MockProtocol : IDisposable
         await SendRawAsync(evt.ToJsonString(), ct);
     }
 
+    /// <summary>
+    /// 发一条以 **CQ 码字符串**形式给消息体的消息（OneBot 允许 message 是字符串）。
+    /// 用来钉住“raw_message / CQ 码那条分支” —— 有的协议端就是这么报上来的，
+    /// 以前 [CQ:reply,…] 在这里也被丢掉了。
+    /// </summary>
+    public async Task SendGroupRawCqAsync(
+        long groupId,
+        long userId,
+        string senderName,
+        string rawCq,
+        long messageId,
+        CancellationToken ct = default)
+    {
+        var evt = new JsonObject
+        {
+            ["post_type"] = "message",
+            ["message_type"] = "group",
+            ["sub_type"] = "normal",
+            ["message_id"] = messageId,
+            ["group_id"] = groupId,
+            ["user_id"] = userId,
+            ["self_id"] = SelfId,
+            ["raw_message"] = rawCq,
+            ["time"] = DateTimeOffset.Now.ToUnixTimeSeconds(),
+            ["message"] = rawCq,
+            ["sender"] = new JsonObject
+            {
+                ["user_id"] = userId,
+                ["nickname"] = senderName,
+                ["card"] = senderName,
+                ["role"] = RoleOf(groupId, userId)
+            }
+        };
+
+        await SendRawAsync(evt.ToJsonString(), ct);
+    }
+
     /// <summary>测试用的群成员身份表：(群, 人) → (角色, 头衔)。</summary>
     public Dictionary<(long GroupId, long UserId), (string Role, string Title)> Roles { get; } = new();
 
@@ -411,6 +461,74 @@ public sealed class MockProtocol : IDisposable
 
     private string RoleOf(long groupId, long userId)
         => Roles.TryGetValue((groupId, userId), out var r) ? r.Role : "member";
+
+    /// <summary>发出去的消息 id：每条递增（真协议端也是每条一个 id；以前固定 555，无法区分自己发过哪几句）。</summary>
+    private long _nextSentMessageId = 900000;
+
+    /// <summary>机器人每条“发出去”的消息 id（协议端回的）—— 测试用它当“机器人自己那句”的引用目标。</summary>
+    public List<long> SentMessageIds { get; } = new();
+
+    private long NextSentMessageId()
+    {
+        var id = Interlocked.Increment(ref _nextSentMessageId);
+        lock (_gate)
+        {
+            SentMessageIds.Add(id);
+        }
+
+        return id;
+    }
+
+    /// <summary>
+    /// 回 get_msg：按 id 取一条消息。
+    /// 目前机器人只从会话上下文里找引用原文（省一次往返），这里是给以后“原文不在上下文里”的兑底预留的，
+    /// 也给测试留了一个“协议端到底会被问什么”的观测点。
+    /// </summary>
+    private JsonObject BuildQuotedMessage(JsonObject? prms)
+    {
+        Interlocked.Increment(ref _getMsgHits);
+        var id = prms?["message_id"]?.GetValue<long>() ?? 0;
+
+        // 测试可以指定“这条消息用图片作答”——用于验证“图片地址过期 → 重新签发”的兑底。
+        if (QuotedImageUrls.Count > 0)
+        {
+            return new JsonObject
+            {
+                ["message_id"] = id,
+                ["user_id"] = 30001,
+                ["time"] = DateTimeOffset.Now.ToUnixTimeSeconds(),
+                ["message"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "image",
+                        ["data"] = new JsonObject { ["url"] = QuotedImageUrls[0] }
+                    }
+                },
+                ["sender"] = new JsonObject { ["user_id"] = 30001, ["nickname"] = "老王", ["card"] = "老王" }
+            };
+        }
+
+        return new JsonObject
+        {
+            ["message_id"] = id,
+            ["user_id"] = 30001,
+            ["time"] = DateTimeOffset.Now.ToUnixTimeSeconds(),
+            ["message"] = new JsonArray
+            {
+                new JsonObject { ["type"] = "text", ["data"] = new JsonObject { ["text"] = $"被引用的消息 {id}" } }
+            },
+            ["sender"] = new JsonObject { ["user_id"] = 30001, ["nickname"] = "老王", ["card"] = "老王" }
+        };
+    }
+
+    /// <summary>get_msg 返回的图片地址（设置后：get_msg 当图片消息作答 —— 图片重签兑底用）。</summary>
+    public List<string> QuotedImageUrls { get; } = new();
+
+    /// <summary>get_msg 被问了几次。</summary>
+    public int GetMsgHits => Volatile.Read(ref _getMsgHits);
+
+    private int _getMsgHits;
 
     /// <summary>回 get_group_member_info（OneBot v11 形状；群头衔只有这里有）。</summary>
     private JsonObject BuildMemberInfo(JsonObject? prms)

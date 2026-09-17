@@ -224,7 +224,8 @@ public sealed class BotAgent : IDisposable
         IQqChatSource source,
         OpenAiClient brain,
         ConversationStore store,
-        MemberProfileStore profiles)
+        MemberProfileStore profiles,
+        AgentBridgeServer? agentBridge = null)
     {
         _settings = settings;
         _source = source;
@@ -233,10 +234,34 @@ public sealed class BotAgent : IDisposable
         _profiles = profiles;
         _memberRoles = new MemberRoleStore(EmitLog);
 
+        // 本机 Agent 桥（可选）：订阅它的进度/结果事件，把话说到对应群里
+        _agentBridge = agentBridge;
+        if (_agentBridge is not null)
+        {
+            _agentBridge.Progress += OnAgentProgress;
+            _agentBridge.Finished += OnAgentFinished;
+        }
+
+        // 服务器内置 agent（同一个白名单、同一套回群逻辑）。总是建好，开关只管用不用（见字段注释）
+        _serverAgent = new ServerAgentRunner(settings, brain, msg => FileLog.Write("ServerAgent", msg));
+        _serverAgent.Progress += OnAgentProgress;
+
+        RebuildAgentUsers();
+
+        // 图片地址过期（QQ 的 rkey 有时效）时的重签通道：下载器 → 协议端 get_msg
+        _brain.RefreshImageUrls = (messageId, ct) => _source.RefreshImageUrlsAsync(messageId, ct);
+
         (_whitelist, _whitelistAll) = ParseWhitelist(settings.MessageWhitelist);
         _replyGate = new SemaphoreSlim(Math.Clamp(settings.MaxConcurrentReplies, 1, 16));
         _replyGatePermits = Math.Clamp(settings.MaxConcurrentReplies, 1, 16);
     }
+
+    /// <summary>本机 Agent 桥（没启用时为 null）。</summary>
+    private readonly AgentBridgeServer? _agentBridge;
+
+    /// <summary>服务器内置 agent（容器里的工具循环）。**总是建好**，用不用由 _settings.EnableServerAgent 在调用时决定
+    /// （以前只在启动时建一次，面板里把开关打开也不生效 —— 号主 2026-09-17 撞到的就是它）。</summary>
+    private readonly ServerAgentRunner _serverAgent;
 
     /// <summary>待回复队列元素：触发消息 id（null = 没有触发）+ 这是不是“自己主动开口”。</summary>
     private readonly record struct PendingReply(long? TriggerMessageId, bool Proactive);
@@ -322,12 +347,17 @@ public sealed class BotAgent : IDisposable
         (_whitelist, _whitelistAll) = ParseWhitelist(_settings.MessageWhitelist);
         PruneNonWhitelisted();
 
+        // Agent 用户白名单（改设置后立即生效；空 = 谁都不能用）
+        RebuildAgentUsers();
+
         // 同步到模型客户端
         _brain.BotIdentity = string.IsNullOrWhiteSpace(_settings.NormalizedUin) ? null : _settings.NormalizedUin;
         _brain.BotPersona = _settings.BotPersona;
         _brain.AiDesire = _settings.AiDesire;
         _brain.SuitabilityThreshold = _settings.SuitabilityThreshold;
         _brain.MaxContextMessages = _settings.MaxContextMessages;
+        // 图片地址过期（QQ 的 rkey 有时效）时让协议端重新签发（见 ImageDownloader / IQqChatSource）
+        _brain.RefreshImageUrls = (messageId, ct) => _source.RefreshImageUrlsAsync(messageId, ct);
 
         // 全局并发数变更时重建闸门
         var permits = Math.Clamp(_settings.MaxConcurrentReplies, 1, 16);
@@ -439,7 +469,7 @@ public sealed class BotAgent : IDisposable
     /// 把群友发的图收进表情包库（同一张内容只存一份），并排队让模型生成说明/关键词。
     /// 完全不阻塞接收线程（下载、写盘、模型调用都在这里）。
     /// </summary>
-    private async Task CollectStickersAsync(List<string> urls, string fromUid, long fromGroup)
+    private async Task CollectStickersAsync(List<string> urls, string fromUid, long fromGroup, long messageId = 0)
     {
         try
         {
@@ -451,7 +481,7 @@ public sealed class BotAgent : IDisposable
                     break;
                 }
 
-                var downloaded = await _brain.DownloadImageAsync(url, CancellationToken.None);
+                var downloaded = await _brain.DownloadImageAsync(url, CancellationToken.None, messageId > 0 ? messageId : null);
                 if (downloaded is not { } image)
                 {
                     continue;
@@ -708,16 +738,16 @@ public sealed class BotAgent : IDisposable
             return false;
         }
 
-        var ok = await _source.SendTextAsync(isGroup, targetId, text);
-        if (ok)
+        var sent = await _source.SendTextAsync(isGroup, targetId, text);
+        if (sent.Ok)
         {
-            conversation.Append(new ChatMessage { Role = MessageRole.Self, Text = text });
+            conversation.Append(new ChatMessage { Role = MessageRole.Self, Text = text, QqMessageId = sent.MessageId > 0 ? sent.MessageId : null });
             Touch(conversation);
             MessageAdded?.Invoke(conversation.SourceKey, conversation.Messages[^1]);
             Save();
         }
 
-        return ok;
+        return sent.Ok;
     }
 
     /// <summary>删除会话（连同磁盘记录）。</summary>
@@ -1042,19 +1072,24 @@ public sealed class BotAgent : IDisposable
     // ---------- 入站消息 ----------
 
     /// <summary>
-    /// 把群友消息**开头 / 结尾**的括号旁白剥掉，返回（是否整条忽略、洗净后的文本）。
+    /// 把群友消息**开头 / 结尾**的括号旁白转成标注（`〔旁白：笑〕`），
+    /// 返回（是否整条都是旁白、标注后的文本）。
     ///
     /// 口径来自群里真实消息（号主反馈后我拉了 700 多条带括号的群消息看过）：
-    ///   • “（雨哗啦啦）”            整条都是旁白 → 忽略；
-    ///   • “行（端在桌上）”          尾巴上的旁白 → 留“行”；
-    ///   • “（放在地上）来吧，猫猫，”  开头的旁白   → 留“来吧，猫猫，”；
+    ///   • “（雨哗啦啦）”            整条都是旁白 → `〔旁白：雨哗啦啦〕`（只接收，不触发回复）；
+    ///   • “行（端在桌上）”          尾巴上的旁白 → `行〔旁白：端在桌上〕`；
+    ///   • “（放在地上）来吧，猫猫，”  开头的旁白   → `〔旁白：放在地上〕来吧，猫猫，`；
     ///   • 中间位置的括号**不碰**（“（2026）年的计划”里的括号是正文，群样本里也没这种旁白）。
     ///
+    /// 号主 2026-09-14 追加的口径（§25）：**不要单纯忽略，也要接收，但要特别注明** ——
+    /// 旁白不再被丢掉，而是标成 `〔旁白：…〕` 一起进聊天记录与模型上下文：模型能拿它理解现场
+    /// （“端到桌上”“抱着猫”这类动作本来就是语境），但一眼就知道那不是“他说的话”。
+    ///
     /// 三个例外——机器人自己的内容标记（[图片] / [表情:斜眼笑] / [动画表情:…] / [语音]…）
-    /// 是“对方发了啥”的记录，不是旁白：一律保留（把它们一起剥掉就等于把群友发表情的记录抹了，踩过）。
+    /// 是“对方发了啥”的记录，不是旁白：一律保留（把它们一起标注就等于把群友发表情/图片的记录抹了，踩过）。
     /// 私聊 / 带图 / @ 机器人的消息完全不动（宁可多回也不装死）。
     /// </summary>
-    private static (bool Ignore, string Text) StripBracketAsides(QqChatMessage msg)
+    private static (bool AsideOnly, string Text) AnnotateBracketAsides(QqChatMessage msg)
     {
         var text = msg.Text?.Trim() ?? string.Empty;
         if (!msg.IsGroup || msg.MentionedSelf || msg.ImageUrls is { Count: > 0 } || text.Length == 0)
@@ -1062,36 +1097,38 @@ public sealed class BotAgent : IDisposable
             return (false, text);
         }
 
-        // 反复剥首尾（“（端到你面前）（气味飘在你的鼻腔内）”要剥两次），中间那段留着。
-        var current = text;
-        while (true)
+        // 开头的旁白（可能连着几段）→ 依次标在正文前面
+        var leading = new StringBuilder();
+        var rest = text;
+        while (TryTakeLeadingBracket(rest, out var afterLead, out var inner))
         {
-            var before = current;
-            current = current.Trim();
-
-            if (TryTakeLeadingBracket(current, out var afterLead))
-            {
-                current = afterLead;
-            }
-
-            if (TryTakeTrailingBracket(current, out var afterTail))
-            {
-                current = afterTail;
-            }
-
-            if (current.Trim() == before.Trim())
-            {
-                break;
-            }
+            leading.Append(MessageMarkers.AsAside(inner));
+            rest = afterLead;
         }
 
-        current = current.Trim();
-        if (current.Length == 0 || IsOnlyDecoration(current))
+        // 结尾的旁白（可能连着几段）→ 先倒着收，再按原顺序接到正文后面
+        var trailing = new List<string>();
+        while (TryTakeTrailingBracket(rest, out var afterTail, out var inner))
         {
-            return (true, string.Empty);   // 剥完只剩标点/表情（如“（真的）？”→“？”）也算整条旁白
+            trailing.Add(MessageMarkers.AsAside(inner));
+            rest = afterTail;
         }
 
-        return (false, current);
+        if (leading.Length == 0 && trailing.Count == 0)
+        {
+            return (false, text);   // 本来就没有旁白（如单一个“？”）→ 当普通消息
+        }
+
+        rest = rest.Trim();
+        if (rest.Length == 0 || IsOnlyDecoration(rest))
+        {
+            // 剥完只剩标点/表情（如“（真的）？”）→ 整条就是旁白，标好的旁白就是全文
+            trailing.Reverse();
+            return (true, leading + string.Concat(trailing));
+        }
+
+        trailing.Reverse();
+        return (false, leading + rest + string.Concat(trailing));
     }
 
     /// <summary>只剩标点、符号、emoji 与空白（不构成内容）。</summary>
@@ -1118,10 +1155,11 @@ public sealed class BotAgent : IDisposable
     private static readonly char[] BracketOpen = ['（', '(', '［', '[', '【', '｛', '{', '〈', '《'];
     private static readonly char[] BracketClose = ['）', ')', '］', ']', '】', '｝', '}', '〉', '》'];
 
-    /// <summary>开头就是一段括号（且不是我们的内容标记）→ 剥掉它。</summary>
-    private static bool TryTakeLeadingBracket(string text, out string rest)
+    /// <summary>开头就是一段括号（且不是我们的内容标记）→ 取走它，并把括号里的内容给出去。</summary>
+    private static bool TryTakeLeadingBracket(string text, out string rest, out string inner)
     {
         rest = text;
+        inner = string.Empty;
         if (text.Length < 2 || Array.IndexOf(BracketOpen, text[0]) < 0)
         {
             return false;
@@ -1133,20 +1171,22 @@ public sealed class BotAgent : IDisposable
             return false;   // 括号没闭合，当普通文本
         }
 
-        var inner = text[1..close];
-        if (IsContentMarker(inner) || LooksNumeric(inner))
+        var content = text[1..close];
+        if (IsContentMarker(content) || LooksNumeric(content))
         {
             return false;
         }
 
+        inner = content;
         rest = text[(close + 1)..];
         return true;
     }
 
-    /// <summary>结尾是一段括号（且不是我们的内容标记）→ 剥掉它。</summary>
-    private static bool TryTakeTrailingBracket(string text, out string rest)
+    /// <summary>结尾是一段括号（且不是我们的内容标记）→ 取走它，并把括号里的内容给出去。</summary>
+    private static bool TryTakeTrailingBracket(string text, out string rest, out string inner)
     {
         rest = text;
+        inner = string.Empty;
         if (text.Length < 2 || Array.IndexOf(BracketClose, text[^1]) < 0)
         {
             return false;
@@ -1173,12 +1213,13 @@ public sealed class BotAgent : IDisposable
             return false;
         }
 
-        var inner = text[(openIndex + 1)..^1];
-        if (IsContentMarker(inner) || LooksNumeric(inner))
+        var content = text[(openIndex + 1)..^1];
+        if (IsContentMarker(content) || LooksNumeric(content))
         {
             return false;
         }
 
+        inner = content;
         rest = text[..openIndex];
         return true;
     }
@@ -1221,6 +1262,80 @@ public sealed class BotAgent : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// 认出“这条消息引用回复的是哪一条”，返回（那个人叫什么、原话、上下文里到底找到没有）。
+    /// 查找顺序（先免费的后花钱的）：
+    ///   ① 会话上下文里按 id 找 —— 绝大多数引用都是刚发过的消息，这里命中；
+    ///   ② 机器人自己发出去的消息（它们只能从发送响应里拿到 id，见 RememberOwnMessage）；
+    ///   ③ 协议端在 reply 段里自带的摘要文本（有就用）。
+    /// 都找不到时不编内容，只标一句“更早的一条”。
+    /// </summary>
+    private (string Name, string Text, bool Hit) ResolveQuotedMessage(BotConversation conversation, QqChatMessage msg)
+    {
+        if (msg.ReplyToMessageId is long quotedId)
+        {
+            var messages = conversation.Messages;
+            for (var i = messages.Count - 1; i >= 0; i--)
+            {
+                if (messages[i].QqMessageId != quotedId)
+                {
+                    continue;
+                }
+
+                var quoted = messages[i];
+                // 自己说的那一条：对模型来说“你”才是有意义的称呼
+                var name = quoted.Role == MessageRole.Self
+                    ? "你"
+                    : (string.IsNullOrWhiteSpace(quoted.SenderName) ? "某人" : quoted.SenderName!);
+                return (name, quoted.Text ?? string.Empty, true);
+            }
+
+            if (_ownMessages.TryGetValue(quotedId, out var mine))
+            {
+                return ("你", mine.Text, true);
+            }
+        }
+
+        if (msg.ReplyToPreviewText is { Length: > 0 } preview)
+        {
+            return ("某人", preview, true);
+        }
+
+        return (string.Empty, string.Empty, false);
+    }
+
+    /// <summary>
+    /// 把“引用回复”拼成给模型看的标注：`[回复 老王「你昨天说的那个 bug」]`。
+    /// 为什么要把原话也带上：群聊里一句“我也是”全靠引用的那条才能懂 —— 上下文里虽然也有那条，
+    /// 但位置可能隔着好几十条，模型不一定会自己去对（而且对不上就会编）。
+    /// 引的是机器人自己那句就用“你”（模型才分得清是跟它说话）。
+    /// </summary>
+    private static string BuildReplyAnnotation(string name, string quotedText)
+    {
+        if (string.IsNullOrEmpty(name) && string.IsNullOrWhiteSpace(quotedText))
+        {
+            return "[回复一条更早的消息（我这边已经看不到原文了）]";
+        }
+
+        var text = (quotedText ?? string.Empty).Replace('\n', ' ').Trim();
+        // 引用的那条自己可能也是回复（“[回复 你「…」] xxx”）：嵌套引号只会变成噪音，剥一层
+        if (text.StartsWith("[回复", StringComparison.Ordinal))
+        {
+            var close = text.IndexOf(']');
+            if (close > 0)
+            {
+                text = text[(close + 1)..].Trim();
+            }
+        }
+
+        if (text.Length == 0)
+        {
+            return $"[回复 {name}（引用的内容我这边取不到）]";
+        }
+
+        return $"[回复 {name}「{Shorten(text, 40)}」]";
+    }
+
     private void OnMessageReceived(QqChatMessage msg)
     {
         try
@@ -1249,25 +1364,57 @@ public sealed class BotAgent : IDisposable
             return;
         }
 
-        // 括号旁白：剥掉开头/结尾的括号段（“行（端在桌上）” → “行”）；剥完什么都不剩 → 整条忽略。
+        // 括号旁白：**标注**（`〔旁白：…〕`）而不是忽略 —— 号主口径（2026-09-14）：
+        // “不要单纯忽略，也要接收，但需要特别注明”。
+        // 纯旁白（“（笑）”“（放在地上）来吧”里的括号段）会进聊天记录与上下文，但**不单独触发回复**
+        // （旁白不是对谁说的话，不然“（笑）”就会把机器人拽出来接话 —— §20 的原始问题）；
+        // 正文 + 旁白混着的照常触发（正文才是那句话）。
+        var asideOnly = false;
         if (_settings.IgnoreBracketMessages)
         {
-            var (ignoreBracket, cleanedText) = StripBracketAsides(msg);
+            var (isAsideOnly, annotated) = AnnotateBracketAsides(msg);
+            asideOnly = isAsideOnly;
 
-            if (ignoreBracket)
+            if (annotated.Length > 0 && annotated != msg.Text)
             {
-                // 同一个人一分钟最多记一条：不然旁白刷屏时日志也跟着刷
-                LogThrottled("bracket:" + msg.UserId, $"忽略（纯括号旁白）: {msg.SenderName}({msg.UserId}): {Shorten(msg.Text, 30)}");
-                return;
+                msg = msg with { Text = annotated };   // 落库与上下文都用标注后的文本
             }
 
-            if (cleanedText.Length > 0 && cleanedText != msg.Text)
+            if (asideOnly)
             {
-                msg = msg with { Text = cleanedText };   // 旁白不进上下文、也不进档案
+                // 同一个人一分钟最多记一条：不然旁白刷屏时日志也跟着刷
+                LogThrottled("bracket:" + msg.UserId,
+                    $"旁白（只接收、不触发回复）: {msg.SenderName}({msg.UserId}): {Shorten(msg.Text, 30)}");
             }
         }
 
         var conversation = GetOrCreateConversation(msg);
+
+        // 本机 Agent 命令（// 开头）：**不进人设路线** —— 它不是一个“插个嘴”，是一个真任务；
+        // 也不该被适合度阈值/群冷却/复读守卫那些限流卡住（它们都是为“聊天”设计的）。handoff-4 §31
+        if (!asideOnly && TryParseAgentCommand(msg.Text, out var agentPayload))
+        {
+            _ = RunAgentCommandSafeAsync(conversation, msg, agentPayload);
+            return;
+        }
+
+        // 引用回复：把“在回哪条”标进正文。
+        // 以前 reply 段被直接丢掉 → 模型只看到一句“我也是，哈哈”，不知道在回什么，
+        // 也认不出“他在回机器人自己上一句”（号主反馈：识别不了引用回复消息 —— handoff-4 §27）。
+        if (msg.ReplyToMessageId is not null || msg.ReplyToPreviewText is { Length: > 0 })
+        {
+            var (quotedName, quotedText, hit) = ResolveQuotedMessage(conversation, msg);
+            var annot = BuildReplyAnnotation(quotedName, quotedText);
+            if (annot.Length > 0 && !msg.Text.StartsWith(annot, StringComparison.Ordinal))
+            {
+                // 正文可能是一个空格（只点“回复”不写字）：先 Trim，不然会拼出个尾巴空格
+                var body = msg.Text.Trim();
+                msg = msg with { Text = body.Length > 0 ? annot + " " + body : annot };
+            }
+
+            EmitLog($"引用回复：{msg.SenderName} 引用了" +
+                    (hit ? $" {quotedName} 的「{Shorten(quotedText, 24)}」" : " 一条我这边已看不到的消息（只标了“更早的一条”）"));
+        }
 
         var appended = new ChatMessage
         {
@@ -1277,10 +1424,13 @@ public sealed class BotAgent : IDisposable
             Text = msg.Text,
             Timestamp = msg.Time,
             QqMessageId = msg.MessageId,
-            ImageUrls = msg.ImageUrls
+            ImageUrls = msg.ImageUrls,
+            // 被点名 = @ 了机器人自己，或引用了机器人发的那条（引了自己的话也是“在跟你说话”）
+            DirectToBot = msg.MentionedSelf ||
+                          (msg.ReplyToMessageId is long quotedId && _ownMessages.ContainsKey(quotedId))
         };
         conversation.Append(appended);
-        conversation.HasPendingReply = true;
+        conversation.HasPendingReply = !asideOnly;   // 纯旁白不欠一次回复（也不该被静默兜底抳回来）
         Touch(conversation);
         MessageAdded?.Invoke(conversation.SourceKey, appended);
         Save();
@@ -1317,7 +1467,8 @@ public sealed class BotAgent : IDisposable
             var urls = msg.ImageUrls.ToList();
             var uid = msg.UserId.ToString();
             var group = msg.GroupId;
-            _ = Task.Run(() => CollectStickersAsync(urls, uid, group));
+            var mid = msg.MessageId;
+            _ = Task.Run(() => CollectStickersAsync(urls, uid, group, mid));
         }
 
         // 听音乐：识别到分享就后台去查歌词 + 下一份低码率音频分析波形。
@@ -1366,10 +1517,545 @@ public sealed class BotAgent : IDisposable
             EnsureGroupContext(conversation, msg.GroupId);
         }
 
-        if (_settings.AiModeEnabled && AllowReply(conversation) && musicShares is not { Count: > 0 })
+        if (!asideOnly && musicShares is not { Count: > 0 })
         {
-            EnqueueReply(conversation, msg.MessageId > 0 ? msg.MessageId : null);
+            // 被限流挡下也不丢：RequestReply 会记一笔，这一轮说完补一次评估（见该方法注释）
+            RequestReply(conversation, msg.MessageId > 0 ? msg.MessageId : null, directInWindow: appended.DirectToBot);
         }
+    }
+
+    // ══════════ 本机 Agent（// 命令，handoff-4 §31）══════════
+
+    /// <summary>允许用 agent 的 QQ 号集合（改设置后会重建）。</summary>
+    private HashSet<long> _agentUsers = new();
+
+    /// <summary>节流“你没权限用”的回复：每会话每分钟最多一条（不然人人试一下就是刷屏）。</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _agentDeniedAt = new();
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _agentProgressAt = new();
+
+    /// <summary>重建 agent 用户白名单（跟随设置热更新）。</summary>
+    private void RebuildAgentUsers()
+    {
+        var set = new HashSet<long>();
+        foreach (var piece in (_settings.AgentAllowedUsers ?? string.Empty)
+                     .Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (long.TryParse(piece.Trim(), out var qq))
+            {
+                set.Add(qq);
+            }
+        }
+
+        // 没配就没收（新白名单空 = 谁都不能用）。
+        // 不强行把号主自己加进去 —— 这种“能在电脑上执行命令”的开关必须写清楚才生效。
+        //   * = 白名单会话里**所有人都能用**（号主显式写 * 才生效，不是默认）
+        _agentUsers = set;
+        _agentAllowAll = (_settings.AgentAllowedUsers ?? string.Empty)
+            .Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Any(p => p.Trim() == "*");
+    }
+
+    /// <summary>“白名单会话里所有人都能用”（AgentAllowedUsers 里写了 <c>*</c>）。</summary>
+    private bool _agentAllowAll;
+
+    /// <summary>
+    /// 这条消息是不是 agent 命令（<c>//</c> 开头）。是则拆出真正的提示词。
+    /// 宽容之处：允许前面先 @ 机器人（群里习惯“@bot //xxx”），但**前缀必须真的在开头**。
+    /// </summary>
+    private bool TryParseAgentCommand(string rawText, out string payload)
+    {
+        payload = string.Empty;
+        if (!_settings.EnableAgentBridge)
+        {
+            return false;
+        }
+
+        var prefix = string.IsNullOrWhiteSpace(_settings.AgentPrefix) ? "//" : _settings.AgentPrefix.Trim();
+        var text = (rawText ?? string.Empty).TrimStart();
+
+        // 剥掉开头的 @某人（含 @全体成员）：只剥 @QQ 号这种形状，不碰正文里的 @
+        while (text.StartsWith('@'))
+        {
+            var space = text.IndexOf(' ');
+            if (space <= 0 || space > 20)
+            {
+                break;
+            }
+
+            var handle = text[1..space];
+            if (!handle.All(char.IsDigit) && handle != "全体成员")
+            {
+                break;
+            }
+
+            text = text[(space + 1)..].TrimStart();
+        }
+
+        if (!text.StartsWith(prefix, StringComparison.Ordinal) || text.Length <= prefix.Length)
+        {
+            // 光写一个前缀（“//”后面没东西）当用法提示处理，不当普通聊天
+            if (text.Equals(prefix, StringComparison.Ordinal))
+            {
+                payload = string.Empty;
+                return true;
+            }
+
+            return false;
+        }
+
+        payload = text[prefix.Length..].Trim();
+        return true;
+    }
+
+    /// <summary>agent 命令的主入口：权限 → 子命令（stop/status）→ 排任务。</summary>
+    /// <remarks>
+    /// 包一层 try/catch：调用处是 fire-and-forget（`_ = …`），不接住的话异常会被静默吞掉 ——
+    /// 群里表现为“发了 //status 什么都没回”，而日志里一行痕迹都没有（2026-09-17 实测踩过）。
+    /// </remarks>
+    private async Task RunAgentCommandSafeAsync(BotConversation conversation, QqChatMessage msg, string payload)
+    {
+        try
+        {
+            await HandleAgentCommandAsync(conversation, msg, payload);
+        }
+        catch (Exception ex)
+        {
+            EmitLog($"agent 命令处理异常: {ex.GetType().Name} {ex.Message}");
+        }
+    }
+
+    private async Task HandleAgentCommandAsync(BotConversation conversation, QqChatMessage msg, string payload)
+    {
+        // 本机 Agent 桥 / 服务器 agent 共用的入口
+        if (_agentBridge is null && _serverAgent is null)
+        {
+            return;
+        }
+
+        var bridge = _agentBridge;
+
+        var who = msg.UserId.ToString();
+        var allowed = _agentAllowAll || (_agentUsers.Count > 0 && _agentUsers.Contains(msg.UserId));        if (!allowed)
+        {
+            // 权限不够：日志必记，回话节流（每会话 60 秒一条）
+            EmitLog($"agent 命令被拒（{who} 不在 AgentAllowedUsers 里）: {Shorten(payload, 40)}");
+            if (ShouldReplyDenied(conversation.SourceKey))
+            {
+                await SendPlainAsync(conversation, "这个功能只给白名单用户用～");
+            }
+
+            return;
+        }
+
+        EmitLog($"agent 命令（{who}）: {Shorten(payload, 120)}");
+
+        // 子命令：//stop 取消、//status 看状态、//（空）看用法
+        var head = payload.Split(' ', 2)[0].ToLowerInvariant();
+        if (head is "stop" or "cancel" or "停止" or "取消" or "中断")
+        {
+            var cancelled = bridge?.Cancel(conversation.SourceKey) ?? 0;
+
+            // 服务器内置 agent 也可能在跑：一起停（否则“//stop”对这个后端就是假的）
+            if (_serverAgentCurrent.TryGetValue(conversation.SourceKey, out var running))
+            {
+                running.Task.CancelRequested = true;
+                try
+                {
+                    running.Cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // 刚跑完
+                }
+
+                cancelled++;
+            }
+
+            await SendPlainAsync(conversation,
+                cancelled > 0 ? $"已让它停掉（{cancelled} 个任务）。" : "现在没有在跑的任务。");
+            return;
+        }
+
+        if (head is "status" or "状态")
+        {
+            var devices = bridge is null || !bridge.Connected
+                ? "（无）"
+                : string.Join("、", bridge.BridgeNames);
+            var deviceDetail = bridge is null || !bridge.Connected
+                ? string.Empty
+                : string.Join("；", bridge.BridgeNames.Select(n =>
+                {
+                    var info = bridge.DeviceInfo(n);
+                    return $"{n}（pi {info?.Pi ?? "?"}，目录 {info?.Cwd ?? "?"}）";
+                }));
+            var route = (_settings.AgentTarget ?? "auto").Trim();
+            var hostOn = _settings.EnableHostAgent;
+            var serverOn = _settings.EnableServerAgent;
+            var online = bridge is not null && bridge.Connected;
+            var willUse = !hostOn
+                ? (serverOn ? "服务器 agent" : "（两个开关都关了）")
+                : !serverOn
+                    ? (online ? $"外部设备（{devices}）" : "（外部不在线，且服务器开关是关的）")
+                    : route.Equals("server", StringComparison.OrdinalIgnoreCase)
+                        ? "服务器 agent"
+                        : route.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                                ? (online ? $"外部设备（{devices}）" : "服务器 agent（外部不在线）")
+                                : route;
+
+            await SendPlainAsync(conversation,
+                $"外部设备 agent：{(hostOn ? "开" : "关")}（在线：{(online ? deviceDetail : "无")}）\n" +
+                $"服务器内置 agent：{(serverOn ? "开" : "关")}（工具 {(_settings.AgentServerTools.Length == 0 ? "全部" : _settings.AgentServerTools)}）\n" +
+                $"优先：{route}\n当前会走：{willUse}\n单条指定：//@server … 或 //@host … 或 //@设备名 …");
+            return;
+        }
+
+        if (payload.Length == 0)
+        {
+            await SendPlainAsync(conversation,
+                "用法：//<要让本机 agent 做的事>（例：//看下 E:/bot 里最新的日志报错）\n" +
+                "//stop 停掉、//status 看本机连接状态");
+            return;
+        }
+
+        // 同一个群用同一个 pi 会话 → agent 记得上一轮聊过什么
+        var session = $"qqchat-{conversation.SourceKey.Replace(":", "-")}";
+
+        // ── 这一条走哪边？（号主 2026-09-17：两个开关各自管一边，还能单条指定）──
+        //   ① 命令里带 @ 目标：`//@server …` / `//@host …` / `//@ZHAOSPC …`（优先级最高）
+        //   ② 否则看 settings.AgentTarget：auto = 外部在线就用外部，否则服务器；server / host / 设备名 = 指定
+        //   ③ 选中的那边被开关关了 / 不在线 → 若还有另一边可用就用另一边，否则如实报错
+        var (want, payload0) = StripTargetPrefix(payload);
+        payload = payload0;
+
+        var named = want.Length > 0 &&
+                    !new[] { "auto", "server", "服务器", "host", "外部" }
+                        .Contains(want, StringComparer.OrdinalIgnoreCase)
+            ? want
+            : null;
+
+        // 没在命令里指定就跟设置走
+        if (want.Length == 0)
+        {
+            want = (_settings.AgentTarget ?? "auto").Trim();
+            named = want.Length > 0 &&
+                    !new[] { "auto", "server", "服务器", "host", "外部" }
+                        .Contains(want, StringComparer.OrdinalIgnoreCase)
+                ? want
+                : null;
+        }
+
+        var hostSwitch = _settings.EnableHostAgent;
+        var serverSwitch = _settings.EnableServerAgent;
+        var hostOnline = bridge is not null && bridge.IsDeviceOnline(named);
+
+        // 面板里把某台设备关掉了 → 就当它不可用（并告诉号主是开关关的，不是没连上）
+        var onlineDeviceName = named ?? bridge?.AnyBridge?.Name;
+        var deviceDisabled = onlineDeviceName is not null && !_settings.IsDeviceEnabled(onlineDeviceName);
+
+        var hostOnly = named is not null ||
+                       want.Equals("host", StringComparison.OrdinalIgnoreCase) ||
+                       want.Equals("外部", StringComparison.OrdinalIgnoreCase);
+        var serverOnly = want.Equals("server", StringComparison.OrdinalIgnoreCase) ||
+                         want.Equals("服务器", StringComparison.OrdinalIgnoreCase);
+
+        // 能走外部吗？
+        var canHost = hostSwitch && !deviceDisabled && bridge is not null && hostOnline;
+        // 能走服务器吗？
+        var canServer = serverSwitch && _serverAgent is not null;
+
+        var useHost = canHost && (hostOnly || (!serverOnly && (named is not null || want.Equals("auto", StringComparison.OrdinalIgnoreCase) || want.Length == 0)));
+        var useServer = !useHost && canServer;
+
+        // 两边都不可用、或指定的那边不在 → 说人话（不要静默改道）
+        if (!useHost && !useServer)
+        {
+            var parts = new List<string>();
+            if (!hostSwitch)
+            {
+                parts.Add("外部设备 agent：开关是关的");
+            }
+            else if (deviceDisabled)
+            {
+                parts.Add($"外部设备「{onlineDeviceName}」在面板里被关掉了");
+            }
+            else if (!hostOnline)
+            {
+                parts.Add(named is null
+                    ? "外部设备：不在线"
+                    : $"外部设备「{named}」不在线（在线：{(bridge!.BridgeNames.Count == 0 ? "没有" : string.Join("、", bridge.BridgeNames))}）");
+            }
+
+            if (!serverSwitch)
+            {
+                parts.Add("服务器 agent：开关是关的");
+            }
+
+            await SendPlainAsync(conversation, "这条没法跑：" + string.Join("；", parts) +
+                (parts.Count == 0 ? "没有可用的 agent" : string.Empty) + "。面板里打上开关、或指定另一边试试（//@server / //@host）。");
+            return;
+        }
+
+        if (useHost)
+        {
+            var task = bridge!.NewTask(conversation.SourceKey, payload, session, named);
+            if (!bridge.TryEnqueue(task))
+            {
+                await SendPlainAsync(conversation, $"这个会话已经排了 {bridge.QueuedCount} 个任务，等跑完再发吧。");
+                return;
+            }
+
+            await SendPlainAsync(conversation,
+                bridge.Current is null
+                    ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "号主设备")}上跑一下：{Shorten(payload, 40)}"
+                    : "收到，排在后面 —— 做完我告诉你。");
+            return;
+        }
+
+        // 服务器内置 agent（与外部设备**互不影响**：它不占外部队列，两边可以同时跑）
+        if (_serverAgentBusy.TryAdd(conversation.SourceKey, true))
+        {
+            var task = new AgentTask
+            {
+                Id = $"s{DateTimeOffset.Now.ToUnixTimeMilliseconds()}",
+                SourceKey = conversation.SourceKey,
+                Prompt = payload,
+                Session = session
+            };
+
+            // 自备一个 CTS：//stop 要能把正在跑的那条 bash 也杀掉（不能只标个标记）
+            var cts = new CancellationTokenSource();
+            _serverAgentCurrent[conversation.SourceKey] = (task, cts);
+
+            await SendPlainAsync(conversation, $"收到，我在服务器上跑一下：{Shorten(payload, 40)}");
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _serverAgent.RunAsync(task, cts.Token);
+                }
+                finally
+                {
+                    _serverAgentBusy.TryRemove(conversation.SourceKey, out _);
+                    if (_serverAgentCurrent.TryRemove(conversation.SourceKey, out var done) &&
+                        ReferenceEquals(done.Task, task))
+                    {
+                        done.Cts.Dispose();
+                    }
+
+                    OnAgentFinished(task);
+                }
+            });
+            return;
+        }
+
+        // 同一个会话的服务器任务串行（不同会话不受影响）
+        await SendPlainAsync(conversation, "这个会话上一条 //指令还在跑，等它完事再发。");
+    }
+
+    /// <summary>
+    /// 抽出命令开头的 <c>@目标</c>（`@server` / `@host` / `@服务器` / `@外部` / `@<设备名>`）。
+    /// 为什么要这个：面板里改的是“对以后所有命令生效”的优先项，但号主常常只是**这一条**想指定另一台设备 ⋯（“有时候需要修改不同的外部设备接入”）。
+    /// </summary>
+    private static (string Target, string Payload) StripTargetPrefix(string payload)
+    {
+        var text = payload.TrimStart();
+        if (!text.StartsWith('@'))
+        {
+            return (string.Empty, payload);
+        }
+
+        var space = text.IndexOf(' ');
+        if (space <= 1)
+        {
+            return (string.Empty, payload);   // 只有 @ 没内容 → 当普通提示词
+        }
+
+        var head = text[1..space].Trim();
+        if (head.Length == 0 || head.Length > 32)
+        {
+            return (string.Empty, payload);
+        }
+
+        return (head, text[(space + 1)..].TrimStart());
+    }
+
+    /// <summary>面板“试一条”用的：直接在容器里跑一次服务器内置 agent（不经过 QQ、不经过外部设备）。</summary>
+    public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds)
+    {
+        var task = new AgentTask
+        {
+            Id = $"p{DateTimeOffset.Now.ToUnixTimeMilliseconds()}",
+            SourceKey = "panel:test",
+            Prompt = prompt,
+            Session = "qqchat-panel"
+        };
+
+        if (_serverAgent is null)
+        {
+            task.Fail("服务器内置 agent 没开（面板里打上）");
+            return task;
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 900)));
+        await _serverAgent.RunAsync(task, cts.Token);
+        return task;
+    }
+
+    /// <summary>服务器内置 agent 正在跑的会话（单会话串行）。</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _serverAgentBusy = new();
+
+    /// <summary>正在跑的服务器 agent 任务（//stop 要能把它连命令一起杀掉）。</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (AgentTask Task, CancellationTokenSource Cts)> _serverAgentCurrent = new();
+
+    private bool ShouldReplyDenied(string sourceKey)
+    {
+        var now = DateTimeOffset.Now;
+        if (_agentDeniedAt.TryGetValue(sourceKey, out var last) && now - last < TimeSpan.FromSeconds(60))
+        {
+            return false;
+        }
+
+        _agentDeniedAt[sourceKey] = now;
+        return true;
+    }
+
+    /// <summary>发一条纯文本（agent 回话专用：不走人设、不分句、不受群冷却限制）。</summary>
+    private async Task SendPlainAsync(BotConversation conversation, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var (isGroup, targetId) = conversation.Target;
+        var index = 0;
+        foreach (var segment in SplitForChat(text, Math.Clamp(_settings.AgentReplyMaxChars, 200, 3000)))
+        {
+            index++;
+            var result = await _source.SendTextAsync(isGroup, targetId, segment);
+            EmitLog($"agent 回话 → {(isGroup ? "群" : "私聊")}{targetId}（第 {index} 段，{segment.Length} 字，{(result.Ok ? "已发出" : "发送失败")}）: {Shorten(segment.Replace('\n', ' '), 60)}");
+            RememberOwnMessage(result, segment);
+
+            // 记进上下文：下一轮人设路线能看到“本机 agent 刚做了什么”，不会把它当外人说的话
+            var appended = new ChatMessage
+            {
+                Role = MessageRole.Self,
+                Text = segment,
+                Timestamp = DateTimeOffset.Now,
+                QqMessageId = result.MessageId > 0 ? result.MessageId : null
+            };
+            conversation.Append(appended);
+            MessageAdded?.Invoke(conversation.SourceKey, appended);
+        }
+
+        Touch(conversation);
+        Save();
+    }
+
+    /// <summary>把长文本切成能发出去的消息（QQ 单条太长会被吞；按行/句尽量切得好看）。</summary>
+    private static IEnumerable<string> SplitForChat(string text, int maxChars)
+    {
+        text = text.Replace("\r\n", "\n").Trim();
+        if (text.Length <= maxChars)
+        {
+            yield return text;
+            yield break;
+        }
+
+        var rest = text;
+        var index = 0;
+        while (rest.Length > 0 && index < 8)     // 最多 8 条，剩下用省略号收尾
+        {
+            index++;
+            if (rest.Length <= maxChars)
+            {
+                yield return rest;
+                yield break;
+            }
+
+            var cut = rest.LastIndexOf('\n', maxChars - 1);
+            if (cut < maxChars / 3)
+            {
+                cut = rest.LastIndexOf('。', maxChars - 1);
+            }
+
+            if (cut < maxChars / 3)
+            {
+                cut = maxChars - 1;
+            }
+
+            yield return rest[..(cut + 1)].TrimEnd();
+            rest = rest[(cut + 1)..].TrimStart();
+        }
+
+        if (rest.Length > 0)
+        {
+            yield return $"（输出太长，后面省略了 {rest.Length} 字）";
+        }
+    }
+
+    /// <summary>agent 任务的进度/结果回群。供 AgentBridgeServer 的事件调。</summary>
+    private async void OnAgentProgress(AgentTask task)
+    {
+        try
+        {
+            var every = Math.Clamp(_settings.AgentProgressSeconds, 0, 3600);
+            if (every <= 0 || !ConversationsByKey(task.SourceKey, out var conversation))
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.Now;
+            if (_agentProgressAt.TryGetValue(task.SourceKey, out var last) && now - last < TimeSpan.FromSeconds(every))
+            {
+                return;
+            }
+
+            _agentProgressAt[task.SourceKey] = now;
+            var elapsed = now - task.StartedAt;
+            var note = string.IsNullOrWhiteSpace(task.LastNote) ? string.Empty : $"（{task.LastNote}）";
+            var place = string.IsNullOrWhiteSpace(task.DeviceName) ? "服务器" : task.DeviceName!;
+            await SendPlainAsync(conversation, $"⏳ 还在{place}上跑…已 {elapsed.TotalSeconds:F0} 秒{note}");
+        }
+        catch (Exception ex)
+        {
+            EmitLog("agent 进度回话失败: " + ex.Message);
+        }
+    }
+
+    private async void OnAgentFinished(AgentTask task)
+    {
+        try
+        {
+            if (!ConversationsByKey(task.SourceKey, out var conversation))
+            {
+                return;
+            }
+
+            var seconds = task.DurationMs > 0 ? task.DurationMs / 1000.0 : (DateTimeOffset.Now - task.StartedAt).TotalSeconds;
+            if (task.Ok)
+            {
+                EmitLog($"agent 完成（{seconds:F0}s，{task.ToolCalls} 次工具调用）: {Shorten(task.Text ?? string.Empty, 80)}");
+                await SendPlainAsync(conversation, task.Text ?? string.Empty);
+            }
+            else
+            {
+                EmitLog($"agent 失败（{seconds:F0}s）: {task.Error}");
+                await SendPlainAsync(conversation, $"❌ 本机那边报错（{seconds:F0}s）：{Shorten(task.Error ?? "未知错误", 300)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            EmitLog("agent 结果回话失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>按 sourceKey 找会话（agent 结果回来时只能用 key）。</summary>
+    private bool ConversationsByKey(string sourceKey, out BotConversation conversation)
+    {
+        conversation = Conversations.FirstOrDefault(c => c.SourceKey == sourceKey)!;
+        return conversation is not null;
     }
 
     /// <summary>
@@ -1403,10 +2089,7 @@ public sealed class BotAgent : IDisposable
                 }
 
                 // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
-                if (_settings.AiModeEnabled && AllowReply(conversation))
-                {
-                    EnqueueReply(conversation, null);
-                }
+                RequestReply(conversation, null);
             }
             catch (Exception ex)
             {
@@ -1432,10 +2115,7 @@ public sealed class BotAgent : IDisposable
                 _searchNotes.AddOrUpdate(key, note, (_, old) => old + "\n\n" + note);
                 EmitLog(text is null ? $"[Search] 读页面失败：{error}" : $"[Search] 已读到页面正文（{text.Length} 字）");
 
-                if (_settings.AiModeEnabled && AllowReply(conversation))
-                {
-                    EnqueueReply(conversation, null);
-                }
+                RequestReply(conversation, null);
             }
             catch (Exception ex)
             {
@@ -1536,9 +2216,9 @@ public sealed class BotAgent : IDisposable
             }
         }
 
-        if (heard && _settings.AiModeEnabled && AllowReply(conversation))
+        if (heard)
         {
-            EnqueueReply(conversation, null); // 没有触发消息 → 不引用（沿用 replyTo 那套规则）
+            RequestReply(conversation, null); // 没有触发消息 → 不引用（沿用 replyTo 那套规则）
         }
     }
 
@@ -1629,11 +2309,8 @@ public sealed class BotAgent : IDisposable
         // 心情的客观来源：被戳的次数（越频繁越烦，也会随时间自己消）
         _mood.RecordPoke(now);
 
-        if (_settings.AiModeEnabled && AllowReply(conversation))
-        {
-            // 戳一戳没有消息 id，引用目标交给模型自己用 replyTo 指认
-            EnqueueReply(conversation, null);
-        }
+        // 戳一戳没有消息 id，引用目标交给模型自己用 replyTo 指认
+        RequestReply(conversation, null);
     }
 
     /// <summary>最近一次“戳了机器人”的人（用来校验模型想戳回去的号码是否真的存在）。</summary>
@@ -1784,10 +2461,7 @@ public sealed class BotAgent : IDisposable
             _recallNotes[key] = $"（刚有人撤回了一条消息：{sender}。上下文里那条已标成 [已撤回]。）";
             Touch(conversation);
 
-            if (_settings.AiModeEnabled && AllowReply(conversation))
-            {
-                EnqueueReply(conversation, null);
-            }
+            RequestReply(conversation, null);
         }
         catch (Exception ex)
         {
@@ -2158,6 +2832,59 @@ public sealed class BotAgent : IDisposable
         return true;
     }
 
+    /// <summary>限流期间被挡下的触发：等这一轮生成结束再补一次评估（见 RunReplyAsync 的 finally）。</summary>
+    /// <param name="TriggerId">要拿来当触发的那条消息 id（0 = 事件没有消息 id，例如戳一戳）。</param>
+    /// <param name="Direct">这一窗口里有没有“直接跟机器人说话”的（@ 你 / 引用你的话）——那种必须被回答。</param>
+    private readonly record struct DeferredTrigger(long TriggerId, bool Direct);
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DeferredTrigger> _deferredTriggers = new();
+
+    /// <summary>
+    /// “要不要现在回” + “不能回就记下来”——**统一入口**。
+    /// 以前各处写的是 <c>if (AllowReply(...)) EnqueueReply(...)</c>：被冷却拦下的触发就永久丢了，
+    /// 群里连珠炮时表现为“怎么都不理我”（号主 2026-09-16 反馈）。
+    /// 现在被拦下会记一笔，本轮生成结束后补一次评估；@ 你 / 引用你的话那种“直接跟你说话”的，
+    /// 在补评估时会带上 Direct 标记（阈值不再把它压成沉默）。
+    /// </summary>
+    private void RequestReply(
+        BotConversation conversation,
+        long? triggerMessageId,
+        bool proactive = false,
+        bool catchUp = false,
+        bool directInWindow = false)
+    {
+        if (!_settings.AiModeEnabled)
+        {
+            return;
+        }
+
+        if (catchUp || AllowReply(conversation))
+        {
+            if (catchUp)
+            {
+                // 补评估是“这一轮的尾巴”，也要刷新冷却时间，否则下一句又立刻放行、连珠炮变刷屏
+                _replyCooldown[conversation.SourceKey] = DateTimeOffset.Now;
+            }
+
+            EnqueueReply(conversation, triggerMessageId, proactive);
+            return;
+        }
+
+        // 被挡下：记一笔待补（窗口里出现过“直接跟你说话”的，优先拿它当补评估的触发）
+        var key = conversation.SourceKey;
+        _deferredTriggers.AddOrUpdate(
+            key,
+            _ => new DeferredTrigger(triggerMessageId ?? 0, directInWindow),
+            (_, old) =>
+            {
+                var direct = old.Direct || directInWindow;
+                // 有直接跟你说话的 → 用那条当触发（那是最该回答的一条）；否则用最新的
+                var id = directInWindow || old.TriggerId == 0 ? (triggerMessageId ?? old.TriggerId) : old.TriggerId;
+                return new DeferredTrigger(id, direct);
+            });
+        EmitLog($"等这一轮说完再评估（被限流挡下的新消息已记下）: {conversation.Name}");
+    }
+
     /// <summary>把一条待回复请求排入该会话的 FIFO 链，并唤醒调度器。</summary>
     private void EnqueueReply(BotConversation conversation, long? triggerMessageId, bool proactive = false)
     {
@@ -2376,6 +3103,19 @@ public sealed class BotAgent : IDisposable
 
             _inFlight.TryRemove(sourceKey, out _);
             LastActiveRequestTime = DateTime.Now;
+
+            // 限流期间被挡下的消息**不能就这么算了**（号主反馈“连续多人对话不回应”的根因）：
+            // 以前 AllowReply 一返回 false，那条触发就彻底没人评估了 —— 群里连着说话时，
+            // 只要第一轮生成完是沉默（或慢），后面那几条就要等到 60 秒静默兜底才有下一次机会。
+            // 现在：这一轮说完，若中间又有消息被挡下，就**补一次评估**（每轮生成只补一次，不会打转）。
+            if (_deferredTriggers.TryRemove(sourceKey, out var deferred))
+            {
+                var why = deferred.TriggerId > 0 ? $"最近一条 #{deferred.TriggerId}" : "（无消息 id 的事件）";
+                EmitLog($"补一次评估（上一轮生成期间又有新消息，{why}）: {conversation.Name}");
+                RequestReply(conversation, deferred.TriggerId > 0 ? deferred.TriggerId : null,
+                    catchUp: true, directInWindow: deferred.Direct);
+            }
+
             _ = DrainReplyQueueAsync(); // 唤醒调度器处理该会话的后续项
         }
     }
@@ -2654,6 +3394,11 @@ public sealed class BotAgent : IDisposable
         //   • 生气/吐槽：照常，但也不发表情包（容易像在嘲笑）
         var vibe = result.Vibe ?? "中性";
         var baseThreshold = Math.Clamp(_settings.SuitabilityThreshold, 0, 100);
+
+        // 这一轮是不是“人家在跟你说话”：触发那条 @ 了你，或引用了你发的那句话。
+        // 两个用途：① 自评再低也接（被点名不应该沉默）；② 引用优先挂给点名的人。
+        var directAddress = triggerMessageId is long directTriggerId &&
+                            conversation.Messages.FirstOrDefault(m => m.QqMessageId == directTriggerId)?.DirectToBot == true;
         var threshold = VibeAdjustedThreshold(vibe, baseThreshold, out var vibeReason);
         var soberMood = vibe is "低落" or "求助" or "吵架" or "生气" or "吐槽";
 
@@ -2668,14 +3413,24 @@ public sealed class BotAgent : IDisposable
 
         if (result.Suitability is int score && score < threshold)
         {
-            if (searchText is null)
+            // 被点名（@ 你 / 引用你的话）就该答，门槛不适用于这种轮次：
+            // 号主反馈“直接跟我说话它也不理”—— 自评低说明模型“不想插嘴”，但人家就是在问它，
+            // 沉默在群里看着就是坏了（而且连珠炮场景下会连着好几条都不理）。
+            // ⚠ 但“有人在对线”那一档是刻意设的规矩（不站队/不评理/不添柴）：哪怕 @ 你评理也不接。
+            if (directAddress && vibe != "吵架")
+            {
+                EmitLog($"自评 {score} < 阈值 {threshold}，但这条是直接跟机器人说话（@ 你/引用了你的话）→ 照样接");
+            }
+            else if (searchText is null)
             {
                 EmitLog($"适合度不足 → 沉默（评分 {score} < 阈值 {threshold}" +
                         (vibe != "中性" ? $"，气氛 {vibe}" : string.Empty) + $"，{elapsed:F0}ms）: {conversation.Name}");
                 return;
             }
-
-            EmitLog($"适合度不足（{score} < {threshold}）但本轮带着刚查到的资料 → 照样说");
+            else
+            {
+                EmitLog($"适合度不足（{score} < {threshold}）但本轮带着刚查到的资料 → 照样说");
+            }
         }
 
         // 表情包：模型可以只发图不说话，也可以“文字 + 图”。
@@ -2716,10 +3471,7 @@ public sealed class BotAgent : IDisposable
                         }
 
                         _musicNotes.AddOrUpdate(key, note!, (_, old) => old + "\n\n" + note);
-                        if (_settings.AiModeEnabled && AllowReply(conversation))
-                        {
-                            EnqueueReply(conversation, null);
-                        }
+                        RequestReply(conversation, null);
                     }
                     catch (Exception ex)
                     {
@@ -2763,7 +3515,7 @@ public sealed class BotAgent : IDisposable
                     {
                         var link = $"https://music.163.com/song?id={songId}";
                         var sentLink = await _source.SendTextAsync(shareIsGroup, shareTargetId, link, CancellationToken.None);
-                        EmitLog(sentLink ? $"[Music] 已用链接分享：{link}" : $"[Music] 链接也发送失败：{link}");
+                        EmitLog(sentLink.Ok ? $"[Music] 已用链接分享：{link}" : $"[Music] 链接也发送失败：{link}");
                     }
 
                     // 卡片发出去了，接着真去听一遍：下一轮发言时它就“听过这首歌”
@@ -2850,6 +3602,14 @@ public sealed class BotAgent : IDisposable
         var triggerIndex = IndexOfMessage(messages, triggerMessageId);
         var triggerIsCurrent = triggerIndex >= 0 && triggerIndex > lastSelfIndex;
 
+        // 「本轮触发是在复读 / 模仿」时（有人原样重复了别人的话，包括学机器人说话），
+        // 说话对象是**复读的那条**，不是被复读的原文。线上实测（handoff-4 §23）：群友 c 复读了
+        // 机器人那句，机器人回“别学我说话！”，模型却把引用指到了上一条别人的消息上 ——
+        // 它把“素材”当成了“对象”（§22 修的是启发式，治不了这一类）。
+        // 提示词里已经把 replyTo 的语义写死，这里再兜一道：这种轮次里模型的指认只要不在触发那条上就不引用。
+        // 口径跟 §22 一致：宁可不引，也不挂错人。
+        var triggerWasEcho = triggerIndex >= 0 && IsEchoOfEarlierMessage(messages, triggerIndex);
+
         long? replyTo = null;
         if (result.ReplyToMessageId is long chosen &&
             // 已撤回的不算：引用一条群里已经看不到的消息，群友看到的就是莫名其妙
@@ -2859,7 +3619,22 @@ public sealed class BotAgent : IDisposable
             context.Any(m => m.QqMessageId == chosen && !m.Recalled && m.Role == MessageRole.Peer) &&
             IndexOfMessage(messages, chosen) >= 0)
         {
-            replyTo = chosen;
+            // 人家在跟你说话（@ 你 / 引用了你的话），模型却把引用指给了别人：
+            // 群里看到的就是“你正跟它说话，它去回另一个人”（号主 2026-09-16 反馈“回复引用错误”）。
+            // 口径：**点名优先** —— 先把该回的人回了，想聊别人那条下一轮再说。
+            if (directAddress && triggerMessageId is long directTrigger && chosen != directTrigger)
+            {
+                EmitLog($"模型想引 #{chosen}，但这一轮是 #{directTrigger} 在跟机器人说话 → 改引触发那条（点名优先）");
+                replyTo = directTrigger;
+            }
+            else if (triggerWasEcho && chosen != triggerMessageId)
+            {
+                EmitLog($"不引用（本轮触发是复读/模仿，模型却指认了 #{chosen}）—— 宁可不引，也不把引用挂到被复读的原文上");
+            }
+            else
+            {
+                replyTo = chosen;
+            }
         }
         else if (triggerMessageId is long trig)
         {
@@ -3040,6 +3815,28 @@ public sealed class BotAgent : IDisposable
             }
         }
 
+        // 引用目标写进日志（handoff-4 §23.3 B：“真验证需要把每次带引用的回复 + 上下文存下来人工看几十条”）。
+        // 只写“带引用”的话，事后根本看不出引到了谁头上 —— 复盘只能靠猜。
+        // 2026-09-16 加：连**触发那条**也写上 —— “正文回答 A、引用挂到 B”这类错位，
+        // 只有把两边摆在一起才看得出来（号主反馈“引用错误”时就是靠这个定位的）。
+        var quoteNote = string.Empty;
+        if (triggerMessageId is long loggedTriggerId)
+        {
+            var trig = context.FirstOrDefault(m => m.QqMessageId == loggedTriggerId);
+            if (trig is not null)
+            {
+                quoteNote += "，触发→" + (trig.SenderName ?? "?") + "「" + Shorten(trig.Text ?? string.Empty, 14) + "」";
+            }
+        }
+
+        if (replyTo is long loggedQuoteId)
+        {
+            var quoted = context.FirstOrDefault(m => m.QqMessageId == loggedQuoteId);
+            quoteNote = quoted is null
+                ? "，带引用"
+                : "，带引用→" + (quoted.SenderName ?? "?") + "「" + Shorten(quoted.Text ?? string.Empty, 18) + "」";
+        }
+
         EmitLog(
             $"{(sent ? "已回复" : "回复失败")} {conversation.Name}（{elapsed:F0}ms 生成" +
             $"{(result.Suitability is int sc ? $"，自评 {sc}" : string.Empty)}" +
@@ -3047,7 +3844,7 @@ public sealed class BotAgent : IDisposable
             (voiceSent ? $"，语音 {voiceText.Length} 字" : string.Empty) +
             (sticker is not null ? $"，表情包 #{sticker.Id}（{StickerStore.Describe(sticker)}）" : string.Empty) +
             (pokeSent ? $"，戳了 {pokeTarget}" : string.Empty) +
-            $"{(replyTo is not null ? "，带引用" : string.Empty)}）" +
+            $"{quoteNote}）" +
             (reply.Length > 0 ? $": {reply}" : string.Empty));
     }
 
@@ -3193,6 +3990,62 @@ public sealed class BotAgent : IDisposable
     }
 
     /// <summary>
+    /// 这条消息是不是“复读 / 模仿”：正文与上下文里**更早的一条**消息一字不差。
+    /// 群里很常见的玩法（复读机、学机器人说话），但它是“引用挂错人”的高发场景 ——
+    /// 这时候说话对象是复读的那个人，模型却容易把被复读的原文当成引用目标
+    /// （线上实测：群友复读了机器人的话、机器人回“别学我说话！”，引用却挂到了别人那条上）。
+    /// 只认“有实际内容的文本”：太短（“？”“6”）容易只是撞车，内容标记（[图片]/[表情:…]）是系统写的，都不算。
+    /// </summary>
+    private static bool IsEchoOfEarlierMessage(IReadOnlyList<ChatMessage> messages, int index)
+    {
+        if (index <= 0 || index >= messages.Count || messages[index].Recalled)
+        {
+            return false;
+        }
+
+        var text = messages[index].Text?.Trim() ?? string.Empty;
+        if (!IsEchoCandidate(text))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < index; i++)
+        {
+            if (messages[i].Recalled)
+            {
+                continue;   // 撤回的内容群里已经看不到了，谈不上“复读”
+            }
+
+            if (string.Equals(messages[i].Text?.Trim(), text, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>能不能拿来做“复读”比对：一两个字的短句、以及内容标记（[图片]/[表情:…]）都不算。</summary>
+    private static bool IsEchoCandidate(string text)
+    {
+        if (text.Length < 2)
+        {
+            return false;
+        }
+
+        if (text[0] is '[' or '【')
+        {
+            var close = text.IndexOfAny([']', '】']);
+            if (close > 0 && IsContentMarker(text[1..close]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// 本次要发的这句话，是不是和会话里自己上一条发言完全相同？
     /// （用于断掉“模型把自己上一条读进上下文 → 原样再发”的死循环）
     /// </summary>
@@ -3220,27 +4073,32 @@ public sealed class BotAgent : IDisposable
     {
         if (!_settings.SplitReplies)
         {
-            return await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo);
+            var one = await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo);
+            RememberOwnMessage(one, reply);
+            return one.Ok;
         }
 
         var segments = SplitSentences(reply);
         if (segments.Count <= 1)
         {
-            return await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo);
+            var one = await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo);
+            RememberOwnMessage(one, reply);
+            return one.Ok;
         }
 
         var allOk = true;
         for (var i = 0; i < segments.Count; i++)
         {
-            var ok = await _source.SendTextAsync(
+            var sent = await _source.SendTextAsync(
                 isGroup,
                 targetId,
                 segments[i],
                 replyToMessageId: i == 0 ? replyTo : null);
-            allOk &= ok;
+            RememberOwnMessage(sent, segments[i]);
 
-            if (!ok)
+            if (!sent.Ok)
             {
+                allOk = false;
                 EmitLog($"第 {i + 1}/{segments.Count} 段发送失败，停止后续分段");
                 break;
             }
@@ -3255,6 +4113,33 @@ public sealed class BotAgent : IDisposable
 
         return allOk;
     }
+
+    /// <summary>
+    /// 记住“这句话是我（机器人）哪条消息发出去的”。为什么要记：
+    /// 别人**引用回复机器人那句话**时，reply 段里只有被引用消息的 id —— 而机器人自己发的
+    /// 消息在会话里没有 id（发送时协议端才给）。不记的话，模型只会看到“他在回一条我看不到的消息”，
+    /// 而实际上他回的就是你上一句。只留最近 200 条（引旧消息的情况极少）。
+    /// </summary>
+    private void RememberOwnMessage(SendResult sent, string text)
+    {
+        if (!sent.Ok || sent.MessageId <= 0 || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _ownMessages[sent.MessageId] = (text, DateTimeOffset.Now);
+        if (_ownMessages.Count > 200)
+        {
+            // 简单剪枝：把最老的一半丢掉（不做 LRU，没必要）
+            foreach (var stale in _ownMessages.OrderBy(kv => kv.Value.At).Take(_ownMessages.Count / 2).ToList())
+            {
+                _ownMessages.TryRemove(stale.Key, out _);
+            }
+        }
+    }
+
+    /// <summary>机器人自己发出去的消息（id → 原话），用于认出“别人引用回复了我说的哪句”。</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (string Text, DateTimeOffset At)> _ownMessages = new();
 
     /// <summary>
     /// 按句末标点分句；过短的句子合并到相邻段，最多切 4 段（避免连发刷屏）。

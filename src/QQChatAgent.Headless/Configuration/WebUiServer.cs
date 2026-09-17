@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.WebSockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using QQChatAgent.Models;
 using QQChatAgent.Services;
+using QQChatAgent.Services.Agent;
 using QQChatAgent.Services.NapCat;
 using QQChatAgent.Services.OneBot;
 
@@ -21,6 +23,7 @@ namespace QQChatAgent.Configuration;
 ///             GET  /readyz                就绪（已连协议端）
 ///             GET  /status                状态 JSON（兼容原接口）
 ///   API       GET  /api/state             面板首屏快照
+///             GET  /api/logs              最近的运行日志（面板刷新后也能看到历史，不再“一刷新就空”）
 ///             GET  /api/conversations/{key}/messages
 ///             POST /api/conversations/{key}/send|read|delete
 ///             GET  /api/profiles/{uid}
@@ -56,17 +59,22 @@ public sealed class WebUiServer : IDisposable
     private int _convBroadcastPending;
     private long _convBroadcastVersion;
 
-    public WebUiServer(int port, AppSettings settings, OneBotGateway gateway, BotAgent agent, LoginQrService loginQr)
+    public WebUiServer(int port, AppSettings settings, OneBotGateway gateway, BotAgent agent, LoginQrService loginQr,
+        AgentBridgeServer? agentBridge = null)
     {
         _port = port;
         _settings = settings;
         _gateway = gateway;
         _agent = agent;
         _loginQr = loginQr;
+        _agentBridge = agentBridge;
         _bind = Environment.GetEnvironmentVariable("QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
             ? custom
             : "+";
     }
+
+    /// <summary>本机 Agent 桥（没启用时为 null）。</summary>
+    private readonly AgentBridgeServer? _agentBridge;
 
     /// <summary>实际监听的前缀（启动失败为 null）。</summary>
     public string? ListeningOn { get; private set; }
@@ -78,7 +86,11 @@ public sealed class WebUiServer : IDisposable
         _agent.ConversationsChanged += OnConversationsChanged;
         _agent.StateChanged += OnStateChanged;
         _agent.ThinkingChanged += OnThinkingChanged;
-        _agent.LogLine += OnLogLine;
+        // 注意：**不再**订阅 _agent.LogLine —— 那一份日志已经由 FileLog.LineWritten 推了
+        // （EmitLog → FileLog.Write）。两边都订就会让面板里每条 Agent 日志重两遍。
+        // 面板日志页的数据源是 FileLog：它包含所有组件（Agent/OneBot/Voice/Store…）的行，
+        // 而且整个进程只有这一个漏斗 —— 实时推流与历史回填用同一份文本，不会两套格式。
+        FileLog.LineWritten += OnFileLogLine;
 
         var candidates = _bind == "+" && !OperatingSystem.IsWindows()
             ? new[] { "+" }
@@ -350,6 +362,22 @@ public sealed class WebUiServer : IDisposable
             return;
         }
 
+        // 面板日志页首屏：把最近的运行日志（内存环形缓冲，含启动时从日志文件回填的历史）还给浏览器。
+        // 以前日志只活在浏览器内存里 —— 一刷新页面就“被清空”，只有之后的新行（号主反馈）。
+        if (path.Equals("/api/logs", StringComparison.OrdinalIgnoreCase))
+        {
+            var raw = context.Request.QueryString["limit"];
+            var limit = int.TryParse(raw, out var parsed) ? Math.Clamp(parsed, 1, FileLog.RecentCapacity) : 300;
+            var lines = new JsonArray();
+            foreach (var (time, text) in FileLog.RecentLines(limit))
+            {
+                lines.Add(new JsonObject { ["time"] = time, ["text"] = text });
+            }
+
+            await WriteJsonAsync(context, 200, new JsonObject { ["lines"] = lines });
+            return;
+        }
+
         if (path.Equals("/api/settings", StringComparison.OrdinalIgnoreCase))
         {
             if (method == "POST")
@@ -361,6 +389,57 @@ public sealed class WebUiServer : IDisposable
                 await WriteJsonAsync(context, 200, BuildSettingsPayload());
             }
 
+            return;
+        }
+
+        // ─────────── 本机 Agent 桥（handoff-4 §31）───────────
+        // 桥是本机那个进程主动连过来的（本机在 NAT 后面，只能它出站）；这里把 WS 接住。
+        // 注意：**这个端口能让人在号主电脑上执行命令** —— 所以：没配令牌就直接拒绝。
+        if (path.Equals("/agent-bridge", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAgentBridgeAsync(context);
+            return;
+        }
+
+        if (path.Equals("/api/agent/status", StringComparison.OrdinalIgnoreCase))
+        {
+            await WriteJsonAsync(context, 200, BuildAgentStatusPayload());
+            return;
+        }
+
+        if (path.Equals("/api/agent/test", StringComparison.OrdinalIgnoreCase) && method == "POST")
+        {
+            await HandleAgentTestAsync(context);
+            return;
+        }
+
+        if (path.Equals("/api/agent/models", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAgentModelsAsync(context, method);
+            return;
+        }
+
+        // 一键连接：吐一份**带地址与令牌**的启动脚本（本机下一行命令就能接上来）
+        if (path.Equals("/api/agent/setup", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAgentSetupAsync(context);
+            return;
+        }
+
+        // 桥脚本本体（内嵌在 DLL 里，从仓库 tools/pi-bridge.py 编译进去）—— 面板里直接下载
+        if (path.Equals("/agent-bridge-script", StringComparison.OrdinalIgnoreCase))
+        {
+            await WriteEmbeddedAgentScriptAsync(context);
+            return;
+        }
+
+        // 断开某台设备（面板里踢掉；本机那边会自动重连，所以也是“重连”按钮）
+        if (path.Equals("/api/agent/disconnect", StringComparison.OrdinalIgnoreCase) && method == "POST")
+        {
+            var body = await ReadJsonAsync(context);
+            var device = body?["device"]?.GetValue<string>();
+            var ok = _agentBridge is not null && await _agentBridge.DisconnectAsync(device);
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = ok });
             return;
         }
 
@@ -508,6 +587,412 @@ public sealed class WebUiServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// 本机 Agent 桥的 WS 接入点。
+    /// 为什么要求令牌：这个连接建立后，对方能让 pi 在号主电脑上干活 —— 不配令牌一律拒，
+    /// 不是“回环部署就放行”那种方便口径（handoff-4 §31）。
+    /// </summary>
+    private async Task HandleAgentBridgeAsync(HttpListenerContext context)
+    {
+        var bridge = _agentBridge;
+        if (bridge is null)
+        {
+            await WriteJsonAsync(context, 404, new JsonObject { ["error"] = "agent bridge disabled" });
+            return;
+        }
+
+        var token = _settings.AgentToken?.Trim() ?? string.Empty;
+        if (token.Length == 0)
+        {
+            FileLog.Write("Agent", "agent 桥连接被拒：没有配置 QQCHAT_AGENT_TOKEN（不配令牌不接受任何桥连接）");
+            await WriteJsonAsync(context, 403, new JsonObject { ["error"] = "agent token not configured" });
+            return;
+        }
+
+        var given = context.Request.QueryString["token"] ?? context.Request.Headers["X-Agent-Token"];
+        if (!string.Equals(given?.Trim(), token, StringComparison.Ordinal))
+        {
+            FileLog.Write("Agent", $"agent 桥连接被拒：令牌不对（来自 {context.Request.RemoteEndPoint}）");
+            await WriteJsonAsync(context, 401, new JsonObject { ["error"] = "bad token" });
+            return;
+        }
+
+        if (!context.Request.IsWebSocketRequest)
+        {
+            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "websocket required" });
+            return;
+        }
+
+        HttpListenerWebSocketContext ws;
+        try
+        {
+            ws = await context.AcceptWebSocketAsync(null);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write("Agent", "agent 桥握手失败: " + ex.Message);
+            return;
+        }
+
+        // 注意：进到 WS 之后**不能再写 HTTP 响应**（AcceptWebSocketAsync 已经把连接拿走了）
+        await bridge.HandleAsync(ws.WebSocket, _cts.Token);
+    }
+
+    /// <summary>
+    /// 模型列表：
+    ///   • target=server（或 refresh 为空）→ 问服务器 agent 自己的接口（GET <AgentServerBaseUrl>/models）；
+    ///   • device=&lt;设备名&gt; → 让那台外部设备现场重问一遍 pi（`pi --list-models`），然后回列表。
+    /// 面板里的下拉就靠它 —— 号主不用手敲模型名。
+    /// </summary>
+    private async Task HandleAgentModelsAsync(HttpListenerContext context, string method)
+    {
+        var query = context.Request.QueryString;
+        var target = (query["target"] ?? "server").Trim();
+        var bridge = _agentBridge;
+
+        // 外部设备：先让它刷新，再取（刷新是异步的，给它一两秒）
+        if (target.Equals("host", StringComparison.OrdinalIgnoreCase) ||
+            target.Equals("device", StringComparison.OrdinalIgnoreCase) ||
+            (target.Length > 0 && !target.Equals("server", StringComparison.OrdinalIgnoreCase) &&
+             !target.Equals("服务器", StringComparison.OrdinalIgnoreCase)))
+        {
+            var device = target is "host" or "device" ? null : target;
+            if (bridge is null || !bridge.Connected)
+            {
+                await WriteJsonAsync(context, 409, new JsonObject { ["error"] = "外部设备不在线" });
+                return;
+            }
+
+            await bridge.RequestModelsAsync(device);
+            for (var i = 0; i < 12; i++)
+            {
+                await Task.Delay(500);
+                var models = bridge.DeviceModels(device);
+                if (models.Length > 0)
+                {
+                    await WriteJsonAsync(context, 200, new JsonObject
+                    {
+                        ["target"] = "host",
+                        ["device"] = device,
+                        ["models"] = new JsonArray(models.Select(m => (JsonNode)JsonValue.Create(m)!).ToArray())
+                    });
+                    return;
+                }
+            }
+
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["target"] = "host",
+                ["device"] = device,
+                ["models"] = new JsonArray(),
+                ["note"] = "设备没说有哪些模型（桥的版本太旧？重启一下 start-pi-bridge.cmd）"
+            });
+            return;
+        }
+
+        // 服务器 agent 的接口里拉 /models
+        var baseUrl = string.IsNullOrWhiteSpace(_settings.AgentServerBaseUrl)
+            ? _settings.ModelBaseUrl
+            : _settings.AgentServerBaseUrl;
+        var key = string.IsNullOrWhiteSpace(_settings.AgentServerApiKey) ? _settings.ApiKey : _settings.AgentServerApiKey;
+        var url = baseUrl.Trim().TrimEnd('/');
+        if (!url.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            url += "/models";
+        }
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key.Trim());
+            }
+
+            var body = await http.GetStringAsync(url);
+            var list = new JsonArray();
+
+            // 用 JsonDocument 而不是 JsonNode.Parse：容器是 trimmed/AOT 发布的，
+            // JsonNode.Parse 会抛 “JsonSerializerOptions instance must specify a TypeInfoResolver…”（实测）。
+            using (var doc = JsonDocument.Parse(body))
+            {
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("data", out var data) &&
+                    data.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in data.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("id", out var idNode) &&
+                            idNode.ValueKind == JsonValueKind.String &&
+                            idNode.GetString() is { Length: > 0 } id)
+                        {
+                            // 必须 JsonValue.Create：容器是 trimmed 发布，
+                            // list.Add(string) 会造出 JsonValueCustomized<string>，序列化时抛
+                            // “JsonSerializerOptions instance must specify a TypeInfoResolver…”（实测）。
+                            list.Add(JsonValue.Create(id));
+                        }
+                    }
+                }
+            }
+
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["target"] = "server",
+                ["url"] = url,
+                ["models"] = list
+            });
+        }
+        catch (Exception ex)
+        {
+            // 把完整异常写日志（只回 message 的时候，这类序列化/裁剪问题的栈跟本就看不到）
+            FileLog.Warn("Web", $"拉模型列表失败（{url}）：{ex}");
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["target"] = "server",
+                ["url"] = url,
+                ["models"] = new JsonArray(),
+                ["error"] = ex.Message
+            });
+        }
+    }
+
+    /// <summary>把内嵌的 pi-bridge.py 原样吐给下载方（用户本机跑的那个桥）。</summary>
+    private static async Task WriteEmbeddedAgentScriptAsync(HttpListenerContext context)
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var name = assembly.GetManifestResourceNames()
+            .FirstOrDefault(n => n.EndsWith("pi-bridge.py", StringComparison.OrdinalIgnoreCase));
+        if (name is null)
+        {
+            await WriteJsonAsync(context, 404, new JsonObject { ["error"] = "bridge script not embedded" });
+            return;
+        }
+
+        await using var stream = assembly.GetManifestResourceStream(name)!;
+        context.Response.StatusCode = 200;
+        context.Response.ContentType = "text/x-python; charset=utf-8";
+        context.Response.AddHeader("Content-Disposition", "attachment; filename=\"pi-bridge.py\"");
+        await stream.CopyToAsync(context.Response.OutputStream);
+        context.Response.Close();
+    }
+
+    /// <summary>
+    /// 面板的「外部设备」表：在线的 + 只在配置里出现过的（离线）都得列出来 ——
+    /// 号主要能给一台**还没接上来**的设备先写好名字/模型/目录，接上来就直接用。
+    /// </summary>
+    private JsonArray BuildDeviceListPayload()
+    {
+        var bridge = _agentBridge;
+        var list = new JsonArray();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var cfg in AppSettings.ParseDeviceConfigs(_settings.AgentDevices))
+        {
+            var info = bridge?.DeviceInfo(cfg.Name);
+            seen.Add(cfg.Name);
+            list.Add(new JsonObject
+            {
+                ["name"] = cfg.Name,
+                ["online"] = bridge?.IsDeviceOnline(cfg.Name) ?? false,
+                ["enable"] = cfg.Enable,
+                ["model"] = cfg.Model ?? string.Empty,
+                ["workdir"] = cfg.WorkDir ?? string.Empty,
+                ["tools"] = cfg.Tools ?? string.Empty,
+                ["timeoutSec"] = cfg.TimeoutSeconds,
+                ["pi"] = info?.Pi,
+                ["cwd"] = info?.Cwd,
+                ["models"] = new JsonArray((bridge?.DeviceModels(cfg.Name) ?? Array.Empty<string>())
+                    .Select(m => (JsonNode)JsonValue.Create(m)!).ToArray())
+            });
+        }
+
+        foreach (var name in bridge?.BridgeNames ?? (IReadOnlyList<string>)Array.Empty<string>())
+        {
+            if (!seen.Add(name))
+            {
+                continue;
+            }
+
+            var info = bridge!.DeviceInfo(name);
+            list.Add(new JsonObject
+            {
+                ["name"] = name,
+                ["online"] = true,
+                ["enable"] = true,
+                ["model"] = string.Empty,
+                ["workdir"] = info?.Cwd ?? string.Empty,
+                ["tools"] = string.Empty,
+                ["timeoutSec"] = 0,
+                ["pi"] = info?.Pi,
+                ["cwd"] = info?.Cwd,
+                ["models"] = new JsonArray(bridge.DeviceModels(name).Select(m => (JsonNode)JsonValue.Create(m)!).ToArray())
+            });
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// 一键连接：给出「本机怎么接上来」的现成脚本（内嵌当前地址与令牌）。
+    /// 为什么要内嵌令牌：把号主的步骤从“改脚本里的令牌 + 改地址”压成“下载 → 双击”一件事。
+    /// </summary>
+    private async Task HandleAgentSetupAsync(HttpListenerContext context)
+    {
+        var os = (context.Request.QueryString["os"] ?? "win").Trim().ToLowerInvariant();
+        var token = _settings.AgentToken?.Trim() ?? string.Empty;
+        var host = context.Request.QueryString["host"];
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            host = context.Request.Headers["Host"] ?? "127.0.0.1:8080";
+        }
+
+        var workdir = string.IsNullOrWhiteSpace(_settings.AgentWorkDir) ? "%USERPROFILE%" : _settings.AgentWorkDir;
+        var wsUrl = $"ws://{host}/agent-bridge";
+
+        string script;
+        string filename;
+        if (os is "sh" or "linux" or "mac")
+        {
+            filename = "connect-pi-bridge.sh";
+            script =
+                "#!/bin/sh\n" +
+                "# 一键连接：让这台机器接入 QQ 机器人的 Agent（由机器人的面板生成）\n" +
+                "# 需要把 pi-bridge.py 放在同目录（面板里可下载）\n" +
+                "set -e\n" +
+                $"export PI_BRIDGE_URL='{wsUrl}'\n" +
+                $"export PI_BRIDGE_TOKEN='{token}'\n" +
+                $"export PI_BRIDGE_WORKDIR='{workdir}'\n" +
+                "export PI_BRIDGE_PI=${PI_BRIDGE_PI:-pi}\n" +
+                "exec python3 pi-bridge.py\n";
+        }
+        else
+        {
+            filename = "connect-pi-bridge.cmd";
+            script =
+                "@echo off\r\n" +
+                "rem 一键连接：让这台机器接入 QQ 机器人的 Agent（由机器人的面板生成）\r\n" +
+                "rem 需要把 pi-bridge.py 放在同目录（面板里可下载）\r\n" +
+                $"set PI_BRIDGE_URL={wsUrl}\r\n" +
+                $"set PI_BRIDGE_TOKEN={token}\r\n" +
+                $"set PI_BRIDGE_WORKDIR={workdir}\r\n" +
+                "python pi-bridge.py\r\n" +
+                "pause\r\n";
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(script);
+        context.Response.StatusCode = 200;
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        context.Response.AddHeader("Content-Disposition", $"attachment; filename=\"{filename}\"");
+        await context.Response.OutputStream.WriteAsync(bytes);
+        context.Response.Close();
+    }
+
+    /// <summary>本机 agent 的状态（面板卡片 / 群里的 //status）。</summary>
+    private JsonObject BuildAgentStatusPayload()
+    {
+        var bridge = _agentBridge;
+        var current = bridge?.Current;
+        return new JsonObject
+        {
+            ["enabled"] = _settings.EnableAgentBridge,
+            ["prefix"] = _settings.AgentPrefix,
+            ["allowedUsers"] = _settings.AgentAllowedUsers,
+            ["tokenConfigured"] = !string.IsNullOrWhiteSpace(_settings.AgentToken),
+            ["connected"] = bridge?.Connected ?? false,
+            ["host"] = bridge?.AnyBridge?.Name,
+            ["cwd"] = bridge?.AnyBridge?.Cwd,
+            ["pi"] = bridge?.AnyBridge?.Pi,
+            ["devices"] = new JsonArray(bridge?.BridgeNames.Select(n => (JsonNode)JsonValue.Create(n)!).ToArray() ?? Array.Empty<JsonNode>()),
+            ["serverAgent"] = _settings.EnableServerAgent,
+            ["hostAgent"] = _settings.EnableHostAgent,
+            ["target"] = _settings.AgentTarget,
+            ["agentModel"] = _settings.AgentModel,
+            ["serverBaseUrl"] = _settings.AgentServerBaseUrl,
+            ["serverModel"] = _settings.AgentServerModel,
+            ["serverKeyConfigured"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKey),
+            ["deviceModels"] = new JsonArray((bridge?.DeviceModels() ?? Array.Empty<string>())
+                .Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
+            ["deviceList"] = BuildDeviceListPayload(),
+            ["queued"] = bridge?.QueuedCount ?? 0,
+            ["summary"] = bridge?.Describe() ?? "未启用",
+            ["current"] = current is null
+                ? null
+                : new JsonObject
+                {
+                    ["id"] = current.Id,
+                    ["prompt"] = current.Prompt,
+                    ["elapsedMs"] = (long)(DateTimeOffset.Now - current.StartedAt).TotalMilliseconds,
+                    ["note"] = current.LastNote
+                }
+        };
+    }
+
+    /// <summary>面板里的“试一条”：不经过 QQ，直接把一句提示词送到本机 pi，看能不能跑通。</summary>
+    private async Task HandleAgentTestAsync(HttpListenerContext context)
+    {
+        var bridge = _agentBridge;
+        if (bridge is null || !_settings.EnableAgentBridge)
+        {
+            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "本机 Agent 没启用（面板里打开开关）" });
+            return;
+        }
+
+        var body = await ReadJsonAsync(context);
+        var prompt = body?["prompt"]?.GetValue<string>()?.Trim();
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "prompt 不能为空" });
+            return;
+        }
+
+        var timeout = Math.Clamp(body?["timeoutSec"]?.GetValue<int>() ?? 180, 10, 900);
+        var target = (body?["target"]?.GetValue<string>() ?? "host").Trim();
+
+        // 面板里能分别试两边：服务器内置 agent 直接在容器里跑工具循环（不用经过外部设备）
+        if (target.Equals("server", StringComparison.OrdinalIgnoreCase) ||
+            target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_settings.EnableServerAgent)
+            {
+                await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "服务器内置 agent 没开" });
+                return;
+            }
+
+            var serverTask = await _agent.RunServerAgentDirectAsync(prompt, timeout);
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["ok"] = serverTask.Ok,
+                ["id"] = serverTask.Id,
+                ["text"] = serverTask.Ok ? serverTask.Text : serverTask.Error,
+                ["durationMs"] = serverTask.DurationMs,
+                ["toolCalls"] = serverTask.ToolCalls,
+                ["target"] = "server"
+            });
+            return;
+        }
+
+        if (!bridge.Connected)
+        {
+            await WriteJsonAsync(context, 409, new JsonObject
+            {
+                ["error"] = "外部 agent 设备没连上",
+                ["hint"] = "在本机跑 start-pi-bridge.cmd（那个窗口要开着），或者把 target 改成 server 试服务器内置 agent"
+            });
+            return;
+        }
+
+        var task = await bridge.RunDirectAsync(prompt, TimeSpan.FromSeconds(timeout), CancellationToken.None);
+        await WriteJsonAsync(context, 200, new JsonObject
+        {
+            ["ok"] = task.Ok,
+            ["id"] = task.Id,
+            ["text"] = task.Ok ? task.Text : task.Error,
+            ["durationMs"] = task.DurationMs,
+            ["toolCalls"] = task.ToolCalls,
+            ["target"] = "host"
+        });
+    }
+
     private async Task HandleSettingsSaveAsync(HttpListenerContext context)
     {
         var body = await ReadJsonAsync(context);
@@ -583,6 +1068,44 @@ public sealed class WebUiServer : IDisposable
         if (body["musicUnderstandModel"] is JsonNode mum) s.MusicUnderstandModel = mum.GetValue<string>().Trim();
         if (body["musicSendAudioToModel"] is JsonNode msa) s.MusicSendAudioToModel = msa.GetValue<bool>();
         if (body["musicKeepAudio"] is JsonNode mka) s.MusicKeepAudio = mka.GetValue<bool>();
+
+        // ---- 本机 Agent（// 命令）----
+        if (body["enableAgentBridge"] is JsonNode eab) s.EnableAgentBridge = eab.GetValue<bool>();
+        if (body["agentPrefix"] is JsonNode apx) s.AgentPrefix = (apx.GetValue<string>() ?? "//").Trim();
+        if (body["agentAllowedUsers"] is JsonNode aau) s.AgentAllowedUsers = aau.GetValue<string>() ?? string.Empty;
+        if (body["agentWorkDir"] is JsonNode awd) s.AgentWorkDir = (awd.GetValue<string>() ?? string.Empty).Trim();
+        if (body["agentModel"] is JsonNode amd) s.AgentModel = (amd.GetValue<string>() ?? string.Empty).Trim();
+        if (body["agentTools"] is JsonNode atl) s.AgentTools = (atl.GetValue<string>() ?? string.Empty).Trim();
+        if (body["agentTimeoutSeconds"] is JsonNode ats) s.AgentTimeoutSeconds = Math.Clamp(ats.GetValue<int>(), 30, 7200);
+        if (body["agentReplyMaxChars"] is JsonNode arc) s.AgentReplyMaxChars = Math.Clamp(arc.GetValue<int>(), 200, 3000);
+        if (body["agentProgressSeconds"] is JsonNode aps) s.AgentProgressSeconds = Math.Clamp(aps.GetValue<int>(), 0, 3600);
+        if (body["agentMaxQueued"] is JsonNode amq) s.AgentMaxQueued = Math.Clamp(amq.GetValue<int>(), 1, 20);
+
+        // ---- agent 路由与服务器内置 agent ----
+        if (body["agentTarget"] is JsonNode atg) s.AgentTarget = (atg.GetValue<string>() ?? "auto").Trim();
+        if (body["enableServerAgent"] is JsonNode esa) s.EnableServerAgent = esa.GetValue<bool>();
+        if (body["enableHostAgent"] is JsonNode eha) s.EnableHostAgent = eha.GetValue<bool>();
+        if (body["agentServerTools"] is JsonNode ast) s.AgentServerTools = (ast.GetValue<string>() ?? string.Empty).Trim();
+        if (body["agentServerModel"] is JsonNode asm) s.AgentServerModel = (asm.GetValue<string>() ?? string.Empty).Trim();
+        if (body["agentDevices"] is JsonNode ad) s.AgentDevices = ad.GetValue<string>() ?? string.Empty;
+        if (body["agentModel"] is JsonNode am2) s.AgentModel = (am2.GetValue<string>() ?? string.Empty).Trim();
+        if (body["agentServerBaseUrl"] is JsonNode asbu)
+        {
+            var v = (asbu.GetValue<string>() ?? string.Empty).Trim();
+            // 允许空（= 用聊天那个）；填了就必须是 http(s) 完整地址，不然一次手滑就调不通
+            if (v.Length > 0 && (!Uri.TryCreate(v, UriKind.Absolute, out var parsed) ||
+                                 (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)))
+            {
+                FileLog.Warn("Web", $"服务器 agent 的接口地址无效，已忽略：{v}");
+            }
+            else
+            {
+                s.AgentServerBaseUrl = v;
+            }
+        }
+        if (body["agentServerWorkDir"] is JsonNode asw) s.AgentServerWorkDir = (asw.GetValue<string>() ?? "/data").Trim();
+        if (body["agentServerMaxSteps"] is JsonNode ass) s.AgentServerMaxSteps = Math.Clamp(ass.GetValue<int>(), 1, 30);
+        if (body["agentServerCommandTimeoutSeconds"] is JsonNode asct) s.AgentServerCommandTimeoutSeconds = Math.Clamp(asct.GetValue<int>(), 5, 300);
         if (body["enableStickers"] is JsonNode es) s.EnableStickers = es.GetValue<bool>();
             if (body["stickerLibraryMax"] is JsonNode slm) s.StickerLibraryMax = Math.Clamp(slm.GetValue<int>(), 0, 2000);
             if (body["stickerCandidates"] is JsonNode sc) s.StickerCandidates = Math.Clamp(sc.GetValue<int>(), 0, 20);
@@ -793,11 +1316,12 @@ public sealed class WebUiServer : IDisposable
         });
     }
 
-    private void OnLogLine(string message)
+    /// <summary>实时日志：与 /api/logs 回填的历史是同一份文本（含 [标签]）。</summary>
+    private void OnFileLogLine(long time, string text)
         => Broadcast("log", new JsonObject
         {
-            ["time"] = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
-            ["text"] = message
+            ["time"] = time,
+            ["text"] = text
         });
 
     // ══════════════ 数据组装 ══════════════
@@ -969,6 +1493,28 @@ public sealed class WebUiServer : IDisposable
         ["musicSendAudioToModel"] = s.MusicSendAudioToModel,
         ["musicAudioToModelMaxKb"] = s.MusicAudioToModelMaxKb,
         ["musicKeepAudio"] = s.MusicKeepAudio,
+        ["enableAgentBridge"] = s.EnableAgentBridge,
+        ["agentPrefix"] = s.AgentPrefix,
+        ["agentAllowedUsers"] = s.AgentAllowedUsers,
+        ["agentWorkDir"] = s.AgentWorkDir,
+        ["agentModel"] = s.AgentModel,
+        ["agentTools"] = s.AgentTools,
+        ["agentTimeoutSeconds"] = s.AgentTimeoutSeconds,
+        ["agentReplyMaxChars"] = s.AgentReplyMaxChars,
+        ["agentProgressSeconds"] = s.AgentProgressSeconds,
+        ["agentMaxQueued"] = s.AgentMaxQueued,
+        ["agentTarget"] = s.AgentTarget,
+        ["enableServerAgent"] = s.EnableServerAgent,
+        ["enableHostAgent"] = s.EnableHostAgent,
+        ["hostAgent"] = s.EnableHostAgent,
+        ["agentServerTools"] = s.AgentServerTools,
+        ["agentServerModel"] = s.AgentServerModel,
+        ["agentModel"] = s.AgentModel,
+        ["agentServerBaseUrl"] = s.AgentServerBaseUrl,
+        ["agentDevices"] = s.AgentDevices,
+        ["agentServerWorkDir"] = s.AgentServerWorkDir,
+        ["agentServerMaxSteps"] = s.AgentServerMaxSteps,
+        ["agentServerCommandTimeoutSeconds"] = s.AgentServerCommandTimeoutSeconds,
         ["neteaseCookieSet"] = !string.IsNullOrWhiteSpace(s.NeteaseCookie),
         ["enableStickers"] = s.EnableStickers,
                 ["stickerLibraryMax"] = s.StickerLibraryMax,
@@ -1575,7 +2121,7 @@ public sealed class WebUiServer : IDisposable
         _agent.ConversationsChanged -= OnConversationsChanged;
         _agent.StateChanged -= OnStateChanged;
         _agent.ThinkingChanged -= OnThinkingChanged;
-        _agent.LogLine -= OnLogLine;
+        FileLog.LineWritten -= OnFileLogLine;
 
         _cts.Cancel();
         lock (_clientsGate)
