@@ -645,17 +645,34 @@ public sealed class AgentBridgeServer
 
                 task.DeviceName = target.Name;
                 task.StartedAt = DateTimeOffset.Now;
-
                 // 设备专属配置在这里最后盖一道（防止调用方没传设备名/竞态）：
                 // 面板里给某台设备单独配的 模型/目录/工具/超时 以此为准。
                 if (_settings.DeviceConfigFor(target.Name) is { } deviceCfg)
                 {
                     if (!string.IsNullOrWhiteSpace(deviceCfg.WorkDir)) task.WorkDir = deviceCfg.WorkDir;
-                    if (!string.IsNullOrWhiteSpace(deviceCfg.Model)) task.Model = deviceCfg.Model;
                     if (!string.IsNullOrWhiteSpace(deviceCfg.Tools)) task.Tools = deviceCfg.Tools;
                     if (deviceCfg.TimeoutSeconds > 0)
                     {
                         task.TimeoutSeconds = Math.Clamp(deviceCfg.TimeoutSeconds, 30, 7200);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(deviceCfg.Model))
+                    {
+                        // 模型名要先跟**这台设备自己上报的列表**对一下：
+                        // pi 只认 provider/model（如 localhost/gpt-oss-120b-medium），
+                        // 把聊天网关的模型名（比如 gpt-oss-120b-medium）填进来，pi 会直接
+                        // “Model xxx not found” 报错 —— 群里看到的就是“外部 Agent 报错”（2026-09-17 实际踩过）。
+                        var known = target.Models;
+                        if (known.Length > 0 && !known.Contains(deviceCfg.Model, StringComparer.OrdinalIgnoreCase))
+                        {
+                            task.ModelFallbackFrom = deviceCfg.Model;
+                            task.Model = null;   // 用 pi 自己的默认，并告知（不能让一个填错的名字把活卡死）
+                            _log($"设备 {target.Name} 配置的模型「{deviceCfg.Model}」不在它上报的列表里 → 这次用 pi 默认模型");
+                        }
+                        else
+                        {
+                            task.Model = deviceCfg.Model;
+                        }
                     }
                 }
 
@@ -806,6 +823,9 @@ public sealed class AgentTask
     public string? Tools { get; set; }
 
     public int TimeoutSeconds { get; set; }
+
+    /// <summary>配置里那个模型名在这台设备上不存在时，记下原值（本轮的降级要告知号主）。</summary>
+    public string? ModelFallbackFrom { get; set; }
 
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.Now;
 

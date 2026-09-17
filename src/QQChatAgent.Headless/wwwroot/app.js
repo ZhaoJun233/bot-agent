@@ -1737,7 +1737,14 @@
         const hint = d.online
           ? ""
           : `<div class="hint" style="margin-top:4px">还没接上来：点「一键连接本机…」把「${d.name}」这个名字填进去，脚本会在本机报同一个名字；名字不一致会在表里多出一行，把这一行删掉即可。</div>`;
-        const models = (d.models || []).map((m) =>
+
+        // 配的模型设备上没有 → 直接标出来（这种错只能靠“填了就能看出不对”来防）
+        const models = d.models || [];
+        const badModel = d.model && models.length > 0 && !models.includes(d.model);
+        const badHint = badModel
+          ? `<div class="hint" style="margin-top:4px;color:#c62828">⚠️ 「${d.model}」这台设备上没有 —— pi 只认 <code>provider/model</code>（比如 <code>localhost/xxx</code>），不是聊天网关那个模型名；请从下面下拉里重选，或者留空用 pi 默认。</div>`
+          : "";
+        const modelOptions = models.map((m) =>
           `<option value="${m}"${m === d.model ? " selected" : ""}>${m}</option>`).join("");
         return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1748,10 +1755,11 @@
             <button class="ghost-btn" data-dev-del="${i}">删除</button>
           </div>
           ${hint}
+          ${badHint}
           <div class="grid-2" style="margin-top:6px">
             <div class="field"><label class="hint">模型</label>
               <select data-dev-model="${i}">
-                <option value="">（用 pi 默认）</option>${models}
+                <option value="">（用 pi 默认）</option>${modelOptions}
                 ${d.model && !(d.models || []).includes(d.model) ? `<option value="${d.model}" selected>${d.model}</option>` : ""}
               </select>
             </div>
@@ -1767,6 +1775,7 @@
               <input type="number" data-dev-timeout="${i}" value="${d.timeoutSec || 0}" min="0" max="7200" step="30" />
             </div>
           </div>
+          ${badHint}
         </div>`;
       }).join("");
 

@@ -388,6 +388,27 @@ public static partial class Program
                 status2["deviceList"]?.ToJsonString() ?? "(没有 deviceList)");
         }
 
+        // ---- ⑮ 设备配了它没有的模型 → 不能把活卡死：降级用 pi 默认 + 群里说一声 ----
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            // 先把上一个任务的“启用关掉”状态恢复，并故意配一个设备没有的模型（复刻线上那次报错）
+            var cfg = "[{\"name\":\"DESKTOP-TEST\",\"enable\":true,\"model\":\"gpt-oss-120b-medium\"}]";
+            var payload = new JsonObject { ["agentDevices"] = cfg };
+            await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings",
+                new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json"));
+        }
+
+        await Task.Delay(400);
+        var beforeBadModel = bridge.Tasks.Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//模型配错了也要能跑", 15050, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => bridge.Tasks.Count > beforeBadModel, TimeSpan.FromSeconds(30));
+        Check("★ 设备配的模型它自己没有时：不把任务卡死，改用 pi 默认（不再直接报 Model not found）",
+            string.IsNullOrEmpty(bridge.Tasks[^1]["model"]?.GetValue<string>()),
+            bridge.Tasks[^1].ToJsonString());
+        Check("★ 这种降级会在群里说一句（号主能看出是面板里配错了）",
+            Sent().Any(t => t.Contains("面板里给这台设备配的模型")),
+            string.Join(" | ", Sent().TakeLast(3)));
+
         await bot.StopAsync();
     }
 

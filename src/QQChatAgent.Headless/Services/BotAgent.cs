@@ -1809,6 +1809,17 @@ public sealed class BotAgent : IDisposable
                 bridge.Current is null
                     ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "号主设备")}上跑一下：{Shorten(payload, 40)}"
                     : "收到，排在后面 —— 做完我告诉你。");
+
+            // 面板里给这台设备配的模型它自己没有 → 提前说一声（不然群里只会看到结果，不知道降级了）
+            var liveModel = _settings.DeviceConfigFor(named ?? bridge.AnyBridge?.Name)?.Model;
+            if (!string.IsNullOrWhiteSpace(liveModel) && bridge.DeviceModels(named).Length > 0 &&
+                !bridge.DeviceModels(named).Contains(liveModel, StringComparer.OrdinalIgnoreCase))
+            {
+                await SendPlainAsync(conversation,
+                    $"⚠️ 面板里给这台设备配的模型「{liveModel}」它没有（pi 只认 provider/model 这种写法）—— " +
+                    "这次先用它的默认模型跑，能选的话在面板设备表里重选一个。");
+            }
+
             return;
         }
 
