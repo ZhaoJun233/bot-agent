@@ -47,6 +47,15 @@ DEFAULT_PI = "pi"
 DEFAULT_TOKEN = os.environ.get("PI_BRIDGE_TOKEN", "")
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pi-bridge.log")
 
+# ─────────── 影子会话（2026-09-18：号主点开 pi-web 看会话，把正在跑的任务弄断流）───────────
+# 问题：pi 的会话是一个 JSONL 文件，pi-web（或别的 pi 进程）一打开那个会话就会碰同一份文件；
+# 任务跑到一半被外部改动/抢锁，表现就是上游流被掐断（“Upstream response stream was interrupted”）。
+# 做法：任务在自己的影子目录里跑（先把原会话复制过去），跑完再把**新增行**追加回原会话 ——
+# JSONL 天然追加式，所以是安全合并，不会覆盖 pi-web 那边同时带来的改动。
+SESSION_ROOT = os.environ.get("PI_BRIDGE_SESSION_ROOT") or os.path.join(
+    os.path.expanduser("~"), ".pi", "agent", "sessions")
+SHADOW_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pi-bridge-shadow")
+
 log_lock = threading.Lock()
 
 
@@ -269,6 +278,10 @@ class TaskRunner:
         timeout = int(task.get("timeoutSec") or 900)
 
         args = list(self.pi_argv) + ["-p", "--mode", "json"]
+        # session isolation: run in a shadow directory so pi-web can open the real session meanwhile
+        shadow = prepare_shadow_session(cwd, session, task_id) if session else None
+        if shadow:
+            args += ["--session-dir", shadow["dir"]]
         if instructions:
             # rules go into the **system prompt**, not into the task text:
             # glued together, the model tends to treat the rules as the task itself
@@ -395,6 +408,10 @@ class TaskRunner:
 
         if error and err_tail:
             error = error + "｜pi stderr: " + " / ".join(err_tail[-6:])
+
+        # merge the new session lines back (even on failure: that turn belongs to the session)
+        if shadow:
+            merge_shadow_session(shadow, session)
 
         duration_ms = int((time.time() - started) * 1000)
         text = "".join(text_parts).strip()
@@ -588,6 +605,109 @@ def _split_ws_url(url: str) -> tuple[str, int, str]:
     port = int(m.group(2) or 80)
     path = m.group(3) or "/"
     return host, port, path
+
+
+def _session_slug(cwd: str) -> str:
+    """pi groups sessions by working directory: the cwd with `:` / path separators turned
+    into `-`, wrapped in `--` (e.g. `<DRIVE>:\\work` → `--<DRIVE>--work--`)."""
+    try:
+        cwd = os.path.abspath(cwd)
+    except Exception:                                          # noqa: BLE001
+        pass
+    return "--" + cwd.rstrip("\\/").replace(":", "-").replace("\\", "-").replace("/", "-") + "--"
+
+
+def _find_session_file(root: str, slug: str, session_id: str) -> str | None:
+    """Find the session file for this id (the id is part of the file name).
+
+    Two layouts count: the default root keeps `<root>/<slug>/` per working directory,
+    while a custom `--session-dir` stores sessions **flat** in that directory (observed).
+    """
+    directories = [root, os.path.join(root, slug)]
+    hits: list[str] = []
+    for directory in directories:
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        hits += [os.path.join(directory, n) for n in names if n.endswith(".jsonl") and session_id in n]
+    if not hits:
+        return None
+    hits.sort(key=os.path.getmtime, reverse=True)
+    return hits[0]
+
+
+def _line_count(path: str) -> int:
+    try:
+        with io.open(path, "rb") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def prepare_shadow_session(cwd: str, session_id: str, task_id: str) -> dict | None:
+    """Copy the session into this task's shadow directory; returns {dir, slug, canonical, baseline}.
+
+    Returns None when it cannot be done (no session root / no permission) — the task then runs
+    in the normal directory, just without isolation.
+    """
+    if not session_id or not os.path.isdir(SESSION_ROOT):
+        return None
+
+    slug = _session_slug(cwd)
+    canonical = _find_session_file(SESSION_ROOT, slug, session_id)
+    shadow_dir = os.path.join(SHADOW_ROOT, str(task_id))
+    try:
+        # flat copy (what --session-dir looks up) + one under the slug dir (default layout)
+        os.makedirs(shadow_dir, exist_ok=True)
+        baseline = 0
+        if canonical:
+            name = os.path.basename(canonical)
+            shutil.copy2(canonical, os.path.join(shadow_dir, name))
+            slug_dir = os.path.join(shadow_dir, slug)
+            os.makedirs(slug_dir, exist_ok=True)
+            shutil.copy2(canonical, os.path.join(slug_dir, name))
+            baseline = _line_count(canonical)
+    except OSError as exc:                                     # noqa: BLE001
+        log(f"影子会话准备失败（{exc}）—— 这回直接在原目录里跑")
+        return None
+
+    return {"dir": shadow_dir, "slug": slug, "canonical": canonical, "baseline": baseline}
+
+
+def merge_shadow_session(shadow: dict, session_id: str) -> None:
+    """Append the **new lines** from the shadow session back to the original one.
+
+    JSONL is append-only, so this is a safe merge — it never overwrites what pi-web did meanwhile.
+    """
+    shadow_file = _find_session_file(shadow["dir"], shadow["slug"], session_id)
+    if not shadow_file:
+        return
+
+    canonical = shadow["canonical"]
+    try:
+        if not canonical:
+            dest_dir = os.path.join(SESSION_ROOT, shadow["slug"])
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, os.path.basename(shadow_file))
+            shutil.copy2(shadow_file, dest)
+            log(f"会话落盘：{os.path.basename(dest)}（新会话）")
+            shutil.rmtree(shadow["dir"], ignore_errors=True)
+            return
+
+        with io.open(shadow_file, "rb") as fh:
+            lines = fh.readlines()
+        new_lines = lines[shadow["baseline"]:]
+        if not new_lines:
+            shutil.rmtree(shadow["dir"], ignore_errors=True)
+            return
+
+        with io.open(canonical, "ab") as fh:
+            fh.writelines(new_lines)
+        log(f"会话回写：+{len(new_lines)} 行 → {os.path.basename(canonical)}")
+        shutil.rmtree(shadow["dir"], ignore_errors=True)
+    except OSError as exc:                                     # noqa: BLE001
+        log(f"!! 会话回写失败（{exc}）—— 本次内容留在影子目录 {shadow['dir']}，没丢")
 
 
 def resolve_pi_command(pi_cmd: str) -> tuple[list[str], str]:
