@@ -343,6 +343,20 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
+        // 模拟“上游只对带图的请求回零候选”（上游网关 后端实测：某些图会让整个请求直接回
+        // 200 + 零候选，同一 payload 重发多少次都空）—— 机器人应去掉图片再试一次，把这一轮救回来。
+        if (EmptyChoicesWhenImages && payload.ToJsonString().Contains("\"image_url\"", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _emptyWithImages);
+            var emptyImgBody = Encoding.UTF8.GetBytes("{\"choices\":[],\"usage\":{\"total_tokens\":1200}}");
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = emptyImgBody.Length;
+            await context.Response.OutputStream.WriteAsync(emptyImgBody);
+            context.Response.Close();
+            return;
+        }
+
         // 200 但空 choices（上游“思考”吃光预算时的真实形状）：机器人应该当“这轮不说话”，
         // 不能抛 IndexOutOfRangeException（以前那会把一条消息静默吃掉）。
         if (EmptyChoicesTimes > 0)
@@ -378,6 +392,14 @@ public sealed class MockOpenAi : IDisposable
 
     /// <summary>接下来 N 次聊天请求回 200 但**没有 choices**（实测：慢的 `-high` 模型“思考”把预算吃光时会这样）。</summary>
     public int EmptyChoicesTimes { get; set; }
+
+    /// <summary>只要请求里带图就回 200 + 零候选（实测：上游对某些图会直接无候选）。</summary>
+    public bool EmptyChoicesWhenImages { get; set; }
+
+    /// <summary>带图而被回零候选的请求数（测试观测）。</summary>
+    public int EmptyWithImages => Volatile.Read(ref _emptyWithImages);
+
+    private int _emptyWithImages;
 
     /// <summary>被 503 回绝过的聊天请求数（测试观测）。</summary>
     public int FailedChats => Volatile.Read(ref _failedChats);

@@ -324,6 +324,8 @@ public sealed class OpenAiClient
 
         // 这一轮真送出去的图片张数：上游吞回复时把它写进日志（带图那一轮的风控嫌疑最大）
         var attachedImages = 0;
+        // 送去过的图片所属消息 id（两个用途：诊断日志里说清是哪条；疑似触发过滤时拉黑不再送）
+        var attachedImageIds = new List<long>();
 
         foreach (var msg in window) // 上下文窗口
         {
@@ -344,7 +346,8 @@ public sealed class OpenAiClient
             var role = msg.Role == MessageRole.Self ? "assistant" : "user";
 
             // 多模态：消息带图片时，把图片（下载转 base64）一并发给模型识图
-            if (msg.ImageUrls is { Count: > 0 } && msg.Role == MessageRole.Peer)
+            if (msg.ImageUrls is { Count: > 0 } && msg.Role == MessageRole.Peer &&
+                !(msg.QqMessageId is long suspectId && IsSuspectImage(suspectId)))
             {
                 var contentParts = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = content } };
                 foreach (var url in msg.ImageUrls.Take(3)) // 每条消息最多带 3 张图
@@ -355,6 +358,10 @@ public sealed class OpenAiClient
                     if (dataUrl is not null)
                     {
                         attachedImages++;
+                        if (msg.QqMessageId is long iid && !attachedImageIds.Contains(iid))
+                        {
+                            attachedImageIds.Add(iid);
+                        }
 
                         contentParts.Add(new JsonObject
                         {
@@ -486,6 +493,38 @@ public sealed class OpenAiClient
             json = await retryResponse.Content.ReadAsStringAsync(ct);
         }
 
+        // ③ 带图的两轮都空 → 去掉图片再试一次。
+        //    为什么值得试：上游（上游网关 后端）对某些内容会直接回**零候选**（HTTP 200、
+        //    用量里只有 prompt tokens），表现就是“这个群这几轮怎么问都是空的”。
+        //    实测那种情况下同一个 payload 重发多少次都空（22:42-22:46 同一尺寸两发两空），
+        //    而同时段别的会话正常 —— 是内容触发，不是网络抖动。
+        //    去掉图往往就能说话：这一轮先据文字回（总比一句话不说强），
+        //    同时把嫌疑图片的消息 id 记下来 —— 后续上下文不再重复送它们（自愈）。
+        var textOnlyRetry = false;
+        if (!HasChoices(json) && attachedImages > 0)
+        {
+            var stripped = StripImages(payload);
+            using var plainRequest = new HttpRequestMessage(HttpMethod.Post, BuildUrl())
+            {
+                Content = new StringContent(stripped.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            plainRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
+            using var plainResponse = await Http.SendAsync(plainRequest, ct);
+            if (plainResponse.IsSuccessStatusCode)
+            {
+                var plainJson = await plainResponse.Content.ReadAsStringAsync(ct);
+                if (HasChoices(plainJson))
+                {
+                    json = plainJson;
+                    textOnlyRetry = true;
+                    RememberSuspectImages(attachedImageIds);
+                    Services.FileLog.Write("Agent",
+                        $"两轮空后去掉图片再试 → 拿到了回复：疑似图片触发上游过滤（消息 {string.Join(",", attachedImageIds)}），本轮只据文字回；" +
+                        $"这些图后续会从上下文里跳过");
+                }
+            }
+        }
+
         using var doc = JsonDocument.Parse(json);
 
         if (!HasChoices(json))
@@ -493,6 +532,11 @@ public sealed class OpenAiClient
             Services.FileLog.Write("Agent",
                 $"上游连续两次都没给 choices（带图 {attachedImages} 张）→ 本轮按沉默处理：{Truncate(json, 200)}");
             return new CompletionResult(null, null, null, UpstreamEmpty: true);
+        }
+
+        if (textOnlyRetry)
+        {
+            Services.FileLog.Write("Agent", "本轮回复是去掉图片后拿到的（那张图已被拉黑）");
         }
 
         var choices = doc.RootElement.GetProperty("choices");
@@ -535,6 +579,74 @@ public sealed class OpenAiClient
             return false;
         }
     }
+
+    /// <summary>
+    /// 把请求体里所有 image_url 部分抽掉（其他一字不改）—— 上游因图片回零候选时的兜底重试。
+    /// 用 JSON 层复制，不重下图片（图已经在内存里，只是不再送给模型）。
+    /// </summary>
+    private static JsonObject StripImages(JsonObject payload)
+    {
+        var clone = (JsonObject)JsonNode.Parse(payload.ToJsonString())!;
+        if (clone["messages"] is not JsonArray messages)
+        {
+            return clone;
+        }
+
+        foreach (var message in messages)
+        {
+            if (message?["content"] is not JsonArray parts)
+            {
+                continue;
+            }
+
+            for (var i = parts.Count - 1; i >= 0; i--)
+            {
+                if (parts[i] is JsonObject part && part["type"]?.GetValue<string>() == "image_url")
+                {
+                    parts.RemoveAt(i);
+                }
+            }
+        }
+
+        return clone;
+    }
+
+    /// <summary>
+    /// 记下“疑似害得上游吞回复”的图片消息：后续上下文里不再重复送它们的图。
+    /// 有上限（200 条，超了掐最早的），只是个避雷名单，不做持久化 —— 重启就忘了，
+    /// 免得一次误判永久屏蔽某张图。
+    /// </summary>
+    private void RememberSuspectImages(List<long> messageIds)
+    {
+        lock (_imageFilterSuspects)
+        {
+            foreach (var id in messageIds)
+            {
+                if (_imageFilterSuspects.Add(id))
+                {
+                    _imageFilterSuspectOrder.Add(id);
+                }
+            }
+
+            while (_imageFilterSuspectOrder.Count > 200)
+            {
+                _imageFilterSuspects.Remove(_imageFilterSuspectOrder[0]);
+                _imageFilterSuspectOrder.RemoveAt(0);
+            }
+        }
+    }
+
+    /// <summary>这张图是不是被拉黑了（拉黑了就不送，省得整个窗口又被上游掸掉）。</summary>
+    private bool IsSuspectImage(long messageId)
+    {
+        lock (_imageFilterSuspects)
+        {
+            return _imageFilterSuspects.Contains(messageId);
+        }
+    }
+
+    private readonly HashSet<long> _imageFilterSuspects = new();
+    private readonly List<long> _imageFilterSuspectOrder = new();
 
     /// <summary>
     /// 解析模型输出。约定：JSON {"suitability":0-100,"reply":"..."}。

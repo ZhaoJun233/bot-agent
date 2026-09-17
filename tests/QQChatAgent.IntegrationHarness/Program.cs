@@ -126,7 +126,12 @@ public static partial class Program
 
         const int openAiPort = 17801;
         const int botWsPort = 13011;
+        const int imagePort = 18121;
         var dataDir = NewDataDir("s1");
+
+        // 真能取到的图片源（带图请求要真附上图，才能测“上游只对带图请求吞回复”那条）
+        using var images = new MockImageHost(imagePort);
+        images.Start();
 
         using var openAi = new MockOpenAi(openAiPort) { ResponseDelayMs = 900 };
         openAi.Start();
@@ -150,7 +155,8 @@ public static partial class Program
             ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SEGMENT_DELAY_MS"] = "10",
-            ["QQCHAT_HEALTH_PORT"] = "18011"
+            ["QQCHAT_HEALTH_PORT"] = "18011",
+            ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1"
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
@@ -289,6 +295,56 @@ public static partial class Program
         Check("★ 空结果不会凭空发出消息",
             protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") == sendsBeforeDoubleEmpty,
             string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeDoubleEmpty).Select(MessageText)));
+
+        // ---- 上游只对“带图”的请求回零候选（实测：上游网关 后端对某些图直接回 200 + 零候选，
+        //      同一 payload 重发多少次都空：22:42~22:46 同一尺寸两发两空，同时段别的会话正常）----
+        // 期望：两轮空后去掉图片再试一次 → 拿到回复（本轮据文字回），
+        //      并把嫌疑图片的消息 id 拉黑，后续上下文不再送它的图。
+        var sendsBeforeImg = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        var linesBeforeImg = bot.OutputLines.Count;
+        var reqsBeforeImg = openAi.Requests.Count;
+        openAi.EmptyChoicesWhenImages = true;
+        openAi.EnqueueReply("""{"suitability": 90, "reply": "图我不看，字我看了"}""");
+        await protocol.SendGroupMessageAsync(99999, 20004, "老王", "@机器人 这张图你看看", 7008, mentionBot: true,
+            imageUrl: images.FreshUrl(1), ct: cts.Token);
+        await WaitUntilAsync(() => protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Skip(sendsBeforeImg)
+            .Any(a => MessageText(a).Contains("图我不看")), TimeSpan.FromSeconds(90));
+        await Task.Delay(500);
+        var imgLines = bot.OutputLines.Skip(linesBeforeImg).ToList();
+        Check("★ 上游只对带图请求吞回复时：去掉图片再试，把这一轮救回来（不再整段变哑巴）",
+            protocol.ActionsReceived.Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Skip(sendsBeforeImg).Any(a => MessageText(a).Contains("图我不看")),
+            string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeImg).Select(MessageText)));
+        Check("★ 日志里说清“疑似图片触发上游过滤”，并列出是哪条消息的图",
+            imgLines.Any(l => l.Contains("去掉图片再试") && l.Contains("疑似图片触发上游过滤")),
+            string.Join(" | ", imgLines.Where(l => l.Contains("图片")).TakeLast(3)));
+        Check("★ 带图的请求确实被上游拒过（不是凭空得出结论）",
+            openAi.EmptyWithImages >= 2,
+            $"EmptyWithImages={openAi.EmptyWithImages}，这一轮共发出 {openAi.Requests.Count - reqsBeforeImg} 个请求");
+        // 这一轮应该正好是：①带图（被吞）②带图重试（又被吞）③去掉图片（拿到回复）
+        // 注意：后面还会有别的聊天请求（如表情包描述那条自用 2 条消息的短请求），所以只看前三个
+        var imgTurnReqs = openAi.Requests.Skip(reqsBeforeImg).Take(3).Select(r => r.ToJsonString()).ToList();
+        Check("★ 顺序正确：先带图两次（都被上游吞）→ 再去掉图片一次（拿到回复）",
+            imgTurnReqs.Count == 3 &&
+            imgTurnReqs[0].Contains("\"image_url\"", StringComparison.Ordinal) &&
+            imgTurnReqs[1].Contains("\"image_url\"", StringComparison.Ordinal) &&
+            !imgTurnReqs[2].Contains("\"image_url\"", StringComparison.Ordinal),
+            string.Join(" | ", openAi.Requests.Skip(reqsBeforeImg).Select(r =>
+                "图" + System.Text.RegularExpressions.Regex.Matches(r.ToJsonString(), "\\\"image_url\\\"").Count +
+                "/msg" + System.Text.RegularExpressions.Regex.Matches(r.ToJsonString(), "\\\"role\\\"").Count)));
+
+        // 再发一条“同一条带图消息”的后续 → 上下文里再也不会重新把那张图送上去
+        var reqsBeforeImg2 = openAi.Requests.Count;
+        openAi.EmptyChoicesWhenImages = false;
+        openAi.EnqueueReply("""{"suitability": 70, "reply": "接着说"}""");
+        await protocol.SendGroupMessageAsync(99999, 20005, "老王", "@机器人 继续", 7009, mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(() => openAi.Requests.Count > reqsBeforeImg2, TimeSpan.FromSeconds(60));
+        await Task.Delay(500);
+        Check("★ 被拉黑的图不会反复重送（后续请求里那张图不再出现）",
+            !openAi.Requests.Skip(reqsBeforeImg2).Any(r => r.ToJsonString().Contains("image_url")),
+            $"后续请求 {openAi.Requests.Count - reqsBeforeImg2} 个，带 image_url 的 {openAi.Requests.Skip(reqsBeforeImg2).Count(r => r.ToJsonString().Contains("image_url"))} 个");
 
         await bot.StopAsync();
     }
