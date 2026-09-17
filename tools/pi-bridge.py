@@ -491,6 +491,9 @@ def main() -> int:
                 elif mtype == "models":
                     # 面板里点“刷新模型”时用：现场问一遍 pi 有哪些模型
                     ws.send_json({"type": "models", "models": _list_models(args.pi)})
+                elif mtype == "sessions":
+                    # 面板/命令里“从 pi 导入”：把本机 pi 的会话列出来
+                    ws.send_json({"type": "sessions", "list": _list_sessions()})
                 elif mtype == "forget":
                     # deleted session: also remove pi's own session file on this machine
                     removed = _forget_session(msg.get("session") or "")
@@ -529,6 +532,65 @@ def _pi_version(pi_cmd: str) -> str:
         return (out.stdout or out.stderr).strip().splitlines()[0][:40] if (out.stdout or out.stderr) else "?"
     except Exception:                                           # noqa: BLE001
         return "?"
+
+
+def _list_sessions(limit: int = 40) -> list[dict]:
+    """列出本机 pi 里的会话（面板里“从 pi 导入”用）。
+
+    pi 把每个会话存成一个 JSONL：~/.pi/agent/sessions/<工作目录>/<会话>.jsonl，
+    第一行是 {"type":"session","id":...,"cwd":...}，后面是消息事件。
+    这里只取“够认出来”的信息：名字/文件/时间/大小/工作目录/首句。
+    """
+    import glob
+    import json as _json
+
+    home = os.path.expanduser("~")
+    pattern = os.path.join(home, ".pi", "agent", "sessions", "*", "*.jsonl")
+    rows: list[dict] = []
+    for path in glob.glob(pattern):
+        try:
+            st = os.stat(path)
+            title = ""
+            cwd = ""
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh):
+                    if i > 200:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = _json.loads(line)
+                    except Exception:                                # noqa: BLE001
+                        continue
+                    if ev.get("type") == "session" and not cwd:
+                        cwd = ev.get("cwd") or ""
+                    msg = ev.get("message") or {}
+                    if ev.get("type") == "message_end" and msg.get("role") == "user" and not title:
+                        content = msg.get("content")
+                        if isinstance(content, list):
+                            title = "".join(
+                                p.get("text", "") for p in content
+                                if isinstance(p, dict) and p.get("type") == "text")
+                        elif isinstance(content, str):
+                            title = content
+                        title = (title or "").strip().replace("\n", " ")[:60]
+                    if title and cwd:
+                        break
+            rows.append({
+                "id": os.path.splitext(os.path.basename(path))[0],
+                "file": os.path.basename(path),
+                "dir": os.path.basename(os.path.dirname(path)),
+                "title": title,
+                "cwd": cwd,
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+            })
+        except OSError:
+            continue
+
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    return rows[:limit]
 
 
 def _forget_session(pi_session_id: str) -> int:

@@ -28,6 +28,9 @@ internal sealed class MockAgentBridge : IDisposable
     /// <summary>收到的取消请求里的任务 id。</summary>
     public List<string> Cancels { get; } = new();
 
+    /// <summary>被问过几次 pi 会话列表（面板/`//pi` 用）。</summary>
+    public int PiSessionsAsked { get; private set; }
+
     /// <summary>收到的“删会话”请求（forget）里的 pi 会话 id。</summary>
     public List<string> Forgotten { get; } = new();
 
@@ -111,6 +114,17 @@ internal sealed class MockAgentBridge : IDisposable
                         break;
                     case "cancel":
                         Cancels.Add(node?["id"]?.GetValue<string>() ?? string.Empty);
+                        break;
+                    case "sessions":
+                        PiSessionsAsked++;
+                        Send(new JsonObject
+                        {
+                            ["type"] = "sessions",
+                            ["list"] = new JsonArray(
+                                new JsonObject { ["id"] = "pi-sess-aaa", ["file"] = "pi-sess-aaa.jsonl", ["title"] = "外部会话甲的标题", ["cwd"] = "E:/bot", ["size"] = 123, ["mtime"] = 1789600000 },
+                                new JsonObject { ["id"] = "pi-sess-bbb", ["file"] = "pi-sess-bbb.jsonl", ["title"] = "外部会话乙的标题", ["cwd"] = "E:/bot", ["size"] = 456, ["mtime"] = 1789500000 },
+                                new JsonObject { ["id"] = "pi-sess-ccc", ["file"] = "pi-sess-ccc.jsonl", ["title"] = "", ["cwd"] = "E:/work", ["size"] = 789, ["mtime"] = 1789400000 })
+                        });
                         break;
                     case "forget":
                         Forgotten.Add(node?["session"]?.GetValue<string>() ?? string.Empty);

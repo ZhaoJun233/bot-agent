@@ -45,6 +45,9 @@ public sealed class AgentBridgeServer
         /// <summary>这台设备（pi）能用的模型：provider/model。面板里直接选。</summary>
         public string[] Models { get; set; } = Array.Empty<string>();
 
+        /// <summary>设备上已有的 pi 会话（名/文件/时间/首句），面板里可接用/删除。</summary>
+        public List<JsonObject> PiSessions { get; set; } = new();
+
         public DateTimeOffset Since { get; init; } = DateTimeOffset.Now;
     }
 
@@ -96,6 +99,10 @@ public sealed class AgentBridgeServer
     /// <summary>指定设备的详情（//status 面板/群里显示：pi 版本 + 目录）。</summary>
     public (string Name, string? Cwd, string? Pi)? DeviceInfo(string name)
         => _bridges.TryGetValue(name, out var conn) ? (conn.Name, conn.Cwd, conn.PiVersion) : null;
+
+    /// <summary>指定设备上报的 pi 会话列表（没指定就取第一台在线的）。</summary>
+    public List<JsonObject> DevicePiSessions(string? name = null)
+        => PickBridge(name)?.PiSessions ?? new List<JsonObject>();
 
     /// <summary>指定设备上报的模型列表（没指定就取第一台在线的）。</summary>
     public string[] DeviceModels(string? name = null)
@@ -263,7 +270,11 @@ public sealed class AgentBridgeServer
         };
     }
 
-    /// <summary>让外部设备把它那边的会话文件删掉（删除/清空会话时用；删不掉也不影响主流程）。</summary>
+    /// <summary>让外部设备列出它上面的 pi 会话（~/.pi/agent/sessions/*/*.jsonl）。</summary>
+    public Task<bool> RequestPiSessionsAsync(string deviceName = null!)
+        => SendAsync(new JsonObject { ["type"] = "sessions" }, deviceName);
+
+    /// <summary>让外部设备把它那边的会话文件删掉（删除/清空会话时用；删不掉也不影响主流程）。</summary></summary>
     public Task<bool> ForgetSessionAsync(string piSessionId)
         => string.IsNullOrWhiteSpace(piSessionId)
             ? Task.FromResult(false)
@@ -420,6 +431,17 @@ public sealed class AgentBridgeServer
                         .Where(m => m.Length > 0)
                         .ToArray();
                     _log($"设备 {conn.Name} 上报模型 {conn.Models.Length} 个");
+                }
+
+                return;
+            }
+
+            case "sessions":
+            {
+                if (node?["list"] is JsonArray sessions)
+                {
+                    conn.PiSessions = sessions.OfType<JsonObject>().ToList();
+                    _log($"设备 {conn.Name} 上报 pi 会话 {conn.PiSessions.Count} 个");
                 }
 
                 return;
@@ -832,6 +854,9 @@ public sealed class AgentTask
 
     /// <summary>配置里那个模型名在这台设备上不存在时，记下原值（本轮的降级要告知号主）。</summary>
     public string? ModelFallbackFrom { get; set; }
+
+    /// <summary>这一轮对应的“小会话”记录 id（跑完回写结果）。</summary>
+    public string? RunId { get; set; }
 
     /// <summary>属于哪个 agent 会话（切换/新建会话就认它）。</summary>
     public AgentSessionStore.AgentSession? SessionRef { get; set; }

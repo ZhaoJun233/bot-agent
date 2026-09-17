@@ -1940,19 +1940,37 @@
         box.innerHTML = list.map((x) => {
           const where = x.backend === "server" ? "服务器内置" : `外部 ${x.device || "设备"}`;
           const when = x.updatedAt ? new Date(x.updatedAt).toLocaleString() : "";
-          return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <b>${x.current ? "← " : ""}${x.name}</b>
-            <span class="hint">[${where}] ${x.turns} 轮 · ${when}${x.historyChars ? ` · 上下文 ${x.historyChars} 字` : ""}${x.autoNamed ? " · 自动标题" : ""}</span>
-            <button class="ghost-btn" data-sess-use="${x.id}"${x.current ? " disabled" : ""}>切到这个</button>
-            <button class="ghost-btn" data-sess-rename="${x.id}">改名</button>
-            <button class="ghost-btn" data-sess-reset="${x.id}">清空</button>
-            <button class="ghost-btn" data-sess-del="${x.id}">删除</button>
+          const runs = x.runs || [];
+          const runsHtml = runs.length === 0
+            ? '<div class="hint">还没跑过任务。</div>'
+            : runs.map((r) => {
+                const st = r.ok === null || r.ok === undefined ? "⏳ 在跑" : (r.ok ? "✅" : "❌");
+                const t = r.at ? new Date(r.at).toLocaleString() : "";
+                const extra = r.ok === null || r.ok === undefined ? "" : ` · ${(r.durationMs / 1000).toFixed(1)}s${r.toolCalls ? ` · ${r.toolCalls} 次工具` : ""}`;
+                return `<div class="hint" style="margin:3px 0">${st} ${t}${extra}｜${r.prompt || ""}${r.result ? ` → ${r.result}` : ""}</div>`;
+              }).join("");
+          return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <b>${x.current ? "← " : ""}${x.name}</b>
+              <span class="hint">[${where}] ${x.turns} 轮 · ${when}${x.historyChars ? ` · 上下文 ${x.historyChars} 字` : ""}${x.autoNamed ? " · 自动标题" : ""}${x.piOwned === false ? " · pi 导入" : ""} · 跑过 ${runs.length} 次</span>
+              <button class="ghost-btn" data-sess-use="${x.id}"${x.current ? " disabled" : ""}>切到这个</button>
+              <button class="ghost-btn" data-sess-rename="${x.id}">改名</button>
+              <button class="ghost-btn" data-sess-reset="${x.id}">清空</button>
+              <button class="ghost-btn" data-sess-del="${x.id}">删除</button>
+              <button class="ghost-btn" data-sess-runs="${x.id}">执行记录</button>
+            </div>
+            <div class="hint" style="margin-top:4px">${x.piSession ? `pi 会话：${x.piSession}` : ""}</div>
+            <div data-sess-runs-box="${x.id}" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:6px">${runsHtml}</div>
           </div>`;
         }).join("");
 
         box.querySelectorAll("[data-sess-use]").forEach((el) => el.addEventListener("click", async () => {
           await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key: sel.value, action: "use", id: el.dataset.sessUse }) });
           await refreshAgentSessions();
+        }));
+        box.querySelectorAll("[data-sess-runs]").forEach((el) => el.addEventListener("click", () => {
+          const box2 = box.querySelector(`[data-sess-runs-box="${el.dataset.sessRuns}"]`);
+          if (box2) box2.style.display = box2.style.display === "none" ? "" : "none";
         }));
         box.querySelectorAll("[data-sess-rename]").forEach((el) => el.addEventListener("click", async () => {
           const old = agentSessionsCache.find((x) => x.id === el.dataset.sessRename) || {};
@@ -1985,6 +2003,41 @@
     });
 
     $("agentSessionChat").addEventListener("change", refreshAgentSessions);
+
+    /* 从 pi 导入：把设备上已有的 pi 会话接过来当会话（号主：外部 Agent 则获取 pi 里面的会话） */
+    $("agentSessionImport").addEventListener("click", async () => {
+      const key = $("agentSessionChat").value;
+      if (!key || key === "__all__") { toast("先在左边选一个具体的聊天，再导入"); return; }
+      const out = $("agentSessionTable");
+      out.innerHTML = '<div class="hint">正在问设备上有哪些 pi 会话…</div>';
+      try {
+        const r = await api("/api/agent/pi-sessions");
+        const list = r.sessions || [];
+        if (!r.connected) { out.innerHTML = '<div class="hint">外部设备不在线，列不出 pi 会话。</div>'; return; }
+        if (list.length === 0) { out.innerHTML = '<div class="hint">设备上没找到 pi 会话（~/.pi/agent/sessions/… 为空？）。</div>'; return; }
+
+        out.innerHTML = `<div class="hint" style="padding:4px 0">设备上的 pi 会话（${list.length} 个，最新的在前）——点「接用」把它变成这个聊天的一个会话：</div>` +
+          list.slice(0, 20).map((it) => {
+            const when = it.mtime ? new Date(it.mtime * 1000).toLocaleString() : "";
+            return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <b>${(it.title || "(无标题)").slice(0, 40)}</b>
+              <span class="hint">${when} · ${it.cwd || ""} · ${it.id.slice(0, 12)}…</span>
+              <button class="ghost-btn" data-pi-import="${it.id}">接用</button>
+            </div>`;
+          }).join("");
+
+        out.querySelectorAll("[data-pi-import]").forEach((el) => el.addEventListener("click", async () => {
+          const resp = await api("/api/agent/sessions", {
+            method: "POST",
+            body: JSON.stringify({ key, action: "import", piSession: el.dataset.piImport })
+          });
+          toast(resp.message || "已接用");
+          await refreshAgentSessions();
+        }));
+      } catch (e) {
+        out.innerHTML = '<div class="hint">拉取失败：' + e.message + '</div>';
+      }
+    });
 
     $("agentSessionNew").addEventListener("click", async () => {
       const key = $("agentSessionChat").value;

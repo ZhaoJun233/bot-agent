@@ -1749,6 +1749,103 @@ public sealed class BotAgent : IDisposable
             return;
         }
 
+        if (head is "runs" or "流水" or "记录")
+        {
+            var cur = _agentSessions.EnsureCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            var runs = _agentSessions.Runs(conversation.SourceKey, cur.Id);
+            if (runs.Count == 0)
+            {
+                await SendPlainAsync(conversation, $"会话「{cur.Name}」还没有执行记录。");
+                return;
+            }
+
+            var lines = new List<string> { $"会话「{cur.Name}」的执行记录（最近 {runs.Count} 次）：" };
+            for (var i = 0; i < Math.Min(8, runs.Count); i++)
+            {
+                var r = runs[i];
+                var when = r.At.ToString("MM-dd HH:mm");
+                var state = r.Ok is null ? "⏳ 在跑" : r.Ok.Value ? "✅" : "❌";
+                var extra = r.Ok is null ? string.Empty : $"{r.DurationMs / 1000.0:F0}s{(r.ToolCalls > 0 ? $"/{r.ToolCalls}工具" : string.Empty)}";
+                lines.Add($"{i + 1}. {when} {state}{extra} {Shorten(r.Prompt, 24)}" +
+                          (r.Result.Length > 0 ? $" → {Shorten(r.Result, 26)}" : string.Empty));
+            }
+
+            lines.Add("（//sessions 看会话、//pi 看设备上 pi 里的会话）");
+            await SendPlainAsync(conversation, string.Join("\n", lines));
+            return;
+        }
+
+        if (head is "pi" or "Pi" or "PI")
+        {
+            if (bridge is null || !bridge.Connected)
+            {
+                await SendPlainAsync(conversation, "外部设备不在线，列不出它上面的 pi 会话。");
+                return;
+            }
+
+            var got = await bridge.RequestPiSessionsAsync(named ?? string.Empty);
+            await Task.Delay(1200);
+            var list = _agentSessions.LastPiSessions(named);
+            if (!got || list.Count == 0)
+            {
+                await SendPlainAsync(conversation, "设备没上报 pi 会话（桥版本旧？重启一下桥）。");
+                return;
+            }
+
+            var lines = new List<string> { $"设备上的 pi 会话（{list.Count} 个，最近的在前）：" };
+            for (var i = 0; i < Math.Min(10, list.Count); i++)
+            {
+                var it = list[i];
+                var title = it["title"]?.GetValue<string>();
+                var when = DateTimeOffset.FromUnixTimeSeconds(it["mtime"]?.GetValue<long>() ?? 0).ToLocalTime().ToString("MM-dd HH:mm");
+                lines.Add($"{i + 1}. {when} {(string.IsNullOrWhiteSpace(title) ? "(无标题)" : Shorten(title, 30))}");
+            }
+
+            lines.Add("想把某个接过来当自己的会话：//import 序号（或 //import <会话id>）");
+            await SendPlainAsync(conversation, string.Join("\n", lines));
+            return;
+        }
+
+        if (head is "import" or "导入")
+        {
+            if (rest.Length == 0)
+            {
+                await SendPlainAsync(conversation, "用法：//import <序号|会话id>（先 //pi 看设备上有什么）");
+                return;
+            }
+
+            var list = _agentSessions.LastPiSessions(named);
+            string? piId = null;
+            string? piTitle = null;
+            if (int.TryParse(rest, out var idx) && idx >= 1 && idx <= list.Count)
+            {
+                piId = list[idx - 1]["id"]?.GetValue<string>();
+                piTitle = list[idx - 1]["title"]?.GetValue<string>();
+            }
+            else if (list.FirstOrDefault(x => x["id"]?.GetValue<string>() == rest.Trim()) is { } hit)
+            {
+                piId = rest.Trim();
+                piTitle = hit["title"]?.GetValue<string>();
+            }
+            else
+            {
+                piId = rest.Trim();   // 也允许直接给 id（不在列表里也认）
+            }
+
+            if (string.IsNullOrWhiteSpace(piId))
+            {
+                await SendPlainAsync(conversation, "没认出你说的是哪个会话（先 //pi 列一遍，或直接给会话 id）。");
+                return;
+            }
+
+            var created = _agentSessions.Create(conversation.SourceKey, "host",
+                string.IsNullOrWhiteSpace(piTitle) ? null : AgentSessionStore.AutoTitle(piTitle), named, piId, piOwned: false);
+            await SendPlainAsync(conversation,
+                $"已把 pi 会话「{created.Name}」接过来当当前会话（id {piId}）——下一句 //指令 就接着它的上下文跑。\n" +
+                "注意：这是设备上已有的会话，//del 只会从列表里去掉、不会删它的文件。");
+            return;
+        }
+
         if (head is "rename" or "改名")
         {
             if (rest.Length == 0)
@@ -1810,14 +1907,15 @@ public sealed class BotAgent : IDisposable
             }
 
             var target = ResolveSessionRef(conversation.SourceKey, rest);
-            if (target is null || !_agentSessions.Delete(conversation.SourceKey, target, out var deleted))
+            var deleted = target is null ? null : _agentSessions.Delete(conversation.SourceKey, target);
+            if (deleted is null)
             {
                 await SendPlainAsync(conversation, $"没找到会话「{rest}」。先 //sessions 看看有哪些。");
                 return;
             }
 
-            // 外部后端：让设备把 pi 那边的会话文件也删掉（不然历史还挂在它那儿）
-            if (deleted!.Backend != "server" && deleted.PiSessionId.Length > 0 && bridge is not null)
+            // 外部后端且这个 pi 会话是我们建的：让设备把它也删掉（导入进来的不动，那不是我们的）
+            if (deleted.Backend != "server" && deleted.PiOwned && deleted.PiSessionId.Length > 0 && bridge is not null)
             {
                 await bridge.ForgetSessionAsync(deleted.PiSessionId);
             }
@@ -1830,10 +1928,11 @@ public sealed class BotAgent : IDisposable
         {
             var current = _agentSessions.EnsureCurrent(conversation.SourceKey,
                 WillUseBackend(want, bridge, named));
-            _agentSessions.Reset(conversation.SourceKey, current.Id);
-            if (current.Backend != "server" && current.PiSessionId.Length > 0 && bridge is not null)
+            var reset = _agentSessions.Reset(conversation.SourceKey, current.Id);
+            if (reset is not null && reset.Backend != "server" && reset.PiOwned &&
+                current.PiSessionId.Length > 0 && bridge is not null)
             {
-                await bridge.ForgetSessionAsync(current.PiSessionId);
+                await bridge.ForgetSessionAsync(current.PiSessionId);   // 旧的那份 pi 记录清掉
             }
 
             await SendPlainAsync(conversation,
@@ -1909,6 +2008,7 @@ public sealed class BotAgent : IDisposable
             var hostSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "host");
             var task = bridge!.NewTask(conversation.SourceKey, payload, hostSession.PiSessionId, named);
             task.SessionRef = hostSession;
+            task.RunId = _agentSessions.StartRun(conversation.SourceKey, hostSession.Id, payload, named);   // 记一条“小会话”
             _agentSessions.TitleFromPrompt(conversation.SourceKey, hostSession.Id, payload);   // 第一句当标题
             if (!bridge.TryEnqueue(task))
             {
@@ -1940,6 +2040,7 @@ public sealed class BotAgent : IDisposable
             var serverSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "server");
             var seededHistory = _agentSessions.History(conversation.SourceKey, serverSession.Id);
             _agentSessions.TitleFromPrompt(conversation.SourceKey, serverSession.Id, payload);   // 第一句当标题
+            var serverRunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, payload, null);
             EmitLog($"[会话] 内置 agent 本轮带 {seededHistory.Count} 条历史（会话「{serverSession.Name}」）");
             var task = new AgentTask
             {
@@ -1950,6 +2051,7 @@ public sealed class BotAgent : IDisposable
                 SessionRef = serverSession,
                 History = seededHistory
             };
+            task.RunId = serverRunId;
 
             // 自备一个 CTS：//stop 要能把正在跑的那条 bash 也杀掉（不能只标个标记）
             var cts = new CancellationTokenSource();
@@ -2077,7 +2179,20 @@ public sealed class BotAgent : IDisposable
             ["updatedAt"] = s.UpdatedAt.ToString("O"),
             ["current"] = _agentSessions.IsCurrent(sourceKey, s),
             ["autoNamed"] = s.AutoNamed,
-            ["historyChars"] = s.History.Sum(h => h.Text.Length)
+            ["piOwned"] = s.PiOwned,
+            ["historyChars"] = s.History.Sum(h => h.Text.Length),
+            ["runs"] = new JsonArray(s.Runs.Select(r => (JsonNode)new JsonObject
+            {
+                ["id"] = r.Id,
+                ["at"] = r.At.ToString("O"),
+                ["prompt"] = r.Prompt,
+                ["ok"] = r.Ok,
+                ["durationMs"] = r.DurationMs,
+                ["toolCalls"] = r.ToolCalls,
+                ["result"] = r.Result,
+                ["device"] = r.Device,
+                ["piSession"] = r.PiSession
+            }).ToArray())
         };
 
     /// <summary>面板/其它入口：新建 agent 会话。</summary>
@@ -2091,12 +2206,13 @@ public sealed class BotAgent : IDisposable
     /// <summary>面板/其它入口：删除会话（外部会话同时让设备删 pi 那份）。</summary>
     public bool DeleteAgentSession(string sourceKey, string idOrName)
     {
-        if (!_agentSessions.Delete(sourceKey, idOrName, out var deleted) || deleted is null)
+        var deleted = _agentSessions.Delete(sourceKey, idOrName);
+        if (deleted is null)
         {
             return false;
         }
 
-        if (deleted.Backend != "server" && deleted.PiSessionId.Length > 0 && _agentBridge is not null)
+        if (deleted.Backend != "server" && deleted.PiOwned && deleted.PiSessionId.Length > 0 && _agentBridge is not null)
         {
             _ = _agentBridge.ForgetSessionAsync(deleted.PiSessionId);
         }
@@ -2105,6 +2221,23 @@ public sealed class BotAgent : IDisposable
     }
 
     /// <summary>面板/其它入口：清空会话历史。</summary>
+    /// <summary>面板/其它入口：把设备上 pi 里的会话接过来用（新建一个指向它的会话）。</summary>
+    public AgentSessionStore.AgentSession? ImportPiSession(string sourceKey, string piSessionId, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(piSessionId))
+        {
+            return null;
+        }
+
+        // 从设备上报的 pi 会话里找标题（有就用它当名字）
+        var hit = _agentSessions.LastPiSessions()
+            .FirstOrDefault(x => x["id"]?.GetValue<string>() == piSessionId.Trim());
+        var title = name is { Length: > 0 } ? name : hit?["title"]?.GetValue<string>();
+        return _agentSessions.Create(sourceKey, "host",
+            string.IsNullOrWhiteSpace(title) ? null : AgentSessionStore.AutoTitle(title),
+            null, piSessionId.Trim(), piOwned: false);
+    }
+
     /// <summary>面板/其它入口：给会话改名（改过就不再被自动标题覆盖）。</summary>
     public bool RenameAgentSession(string sourceKey, string idOrName, string title)
         => _agentSessions.Rename(sourceKey, idOrName, title);
@@ -2112,12 +2245,13 @@ public sealed class BotAgent : IDisposable
     public bool ResetAgentSession(string sourceKey, string idOrName)
     {
         var session = _agentSessions.Find(sourceKey, idOrName);
-        if (session is null || !_agentSessions.Reset(sourceKey, session.Id))
+        var reset = session is null ? null : _agentSessions.Reset(sourceKey, session.Id);
+        if (session is null || reset is null)
         {
             return false;
         }
 
-        if (session.Backend != "server" && session.PiSessionId.Length > 0 && _agentBridge is not null)
+        if (session.Backend != "server" && session.PiOwned && session.PiSessionId.Length > 0 && _agentBridge is not null)
         {
             _ = _agentBridge.ForgetSessionAsync(session.PiSessionId);
         }
@@ -2368,6 +2502,13 @@ public sealed class BotAgent : IDisposable
                 _agentSessions.AppendTurn(task.SourceKey, session.Id, task.Conversation);
                 var saved = _agentSessions.History(task.SourceKey, session.Id);
                 EmitLog($"[会话] 「{session.Name}」记下本轮对话（共 {saved.Count} 条 / {saved.Sum(x => x.Text.Length)} 字）——下一句接着聊");
+            }
+
+            // 不论哪个后端，都把这次执行的结果写进“小会话”记录
+            if (task.SessionRef is { } runSession && task.RunId is { Length: > 0 } runId)
+            {
+                _agentSessions.FinishRun(task.SourceKey, runSession.Id, runId, task.Ok, task.DurationMs,
+                    task.ToolCalls, task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             }
 
             if (!ConversationsByKey(task.SourceKey, out var conversation))

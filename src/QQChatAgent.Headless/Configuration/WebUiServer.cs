@@ -450,6 +450,33 @@ public sealed class WebUiServer : IDisposable
             return;
         }
 
+        // 设备上 pi 里的会话（面板“从 pi 导入”用）
+        if (path.Equals("/api/agent/pi-sessions", StringComparison.OrdinalIgnoreCase))
+        {
+            var device = context.Request.QueryString["device"];
+            if (_agentBridge is not null && _agentBridge.Connected)
+            {
+                await _agentBridge.RequestPiSessionsAsync(device ?? string.Empty);
+                for (var i = 0; i < 10; i++)
+                {
+                    await Task.Delay(500);
+                    if (_agentBridge.DevicePiSessions(device).Count > 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            var list = _agentBridge is null ? new List<JsonObject>() : _agentBridge.DevicePiSessions(device);
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["device"] = device,
+                ["connected"] = _agentBridge?.Connected ?? false,
+                ["sessions"] = new JsonArray(list.Select(x => (JsonNode)x.DeepClone()).ToArray())
+            });
+            return;
+        }
+
         if (path.Equals("/api/ai-mode", StringComparison.OrdinalIgnoreCase) && method == "POST")
         {
             var body = await ReadJsonAsync(context);
@@ -969,6 +996,16 @@ public sealed class WebUiServer : IDisposable
                 ok = _agent.RenameAgentSession(chatKey, sessionId ?? string.Empty, body?["title"]?.GetValue<string>() ?? string.Empty);
                 message = ok ? "已改名" : "改名失败（名字空或会话不存在）";
                 break;
+
+            case "import":
+            {
+                // 把设备上 pi 里的一个会话接过来用（新建一个指向它的会话）
+                var piId = body?["piSession"]?.GetValue<string>() ?? string.Empty;
+                var created = _agent.ImportPiSession(chatKey, piId, sessionName);
+                ok = created is not null;
+                message = ok ? $"已接用 pi 会话「{created!.Name}」" : "没认出那个 pi 会话";
+                break;
+            }
 
             default:
                 await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "action 只支持 new/use/delete/reset" });
