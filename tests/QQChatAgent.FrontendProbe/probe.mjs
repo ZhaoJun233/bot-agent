@@ -480,6 +480,21 @@ check("app.js 把 agent 设置读进表单（渲染）/ 写回保存体",
 check("app.js 绑定了“送到本机跑一下 / 看连接状态”两个按钮",
   js.includes('$("agentTestGo").addEventListener') && js.includes('$("agentStatusGo").addEventListener'));
 
+// ─────────── Agent 会话（自动标题 / 总览 / 新建切换删除）───────────
+check("面板有 Agent 会话区（聊天下拉 / 新建 / 刷新 / 列表）",
+  ["agentSessionChat", "agentSessionNew", "agentSessionRefresh", "agentSessionTable"]
+    .every((id) => html.includes(`id="${id}"`)),
+  ["agentSessionChat", "agentSessionNew"]
+    .filter((id) => !html.includes(`id="${id}"`)).join(", ") || "都在");
+check("★ app.js 实现了会话列表/切换/改名/删除（与群里同一套 API）",
+  js.includes("async function refreshAgentSessions") &&
+  js.includes('/api/agent/sessions') &&
+  js.includes('action: "rename"') && js.includes('action: "delete"') && js.includes('action: "use"'));
+check("★ 会话总览（全部聊天 + 总数）在面板里可见",
+  js.includes('全部聊天（共') && js.includes("会话总数："));
+check("面板引用了 /api/agent/sessions 且 /api/agent/setup 走带令牌的地址",
+  js.includes("withToken(`${apiBase()}/api/agent/setup") || js.includes("/api/agent/setup"));
+
 /* ─────────── 3b) 动态：扫码登录卡片 ─────────── */
 
 console.log("\n▶ 动态：QQ 未登录时必须能直接在面板里扫码");

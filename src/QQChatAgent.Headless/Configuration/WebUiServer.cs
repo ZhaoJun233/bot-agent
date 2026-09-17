@@ -912,10 +912,8 @@ public sealed class WebUiServer : IDisposable
         {
             if (string.IsNullOrWhiteSpace(key))
             {
-                await WriteJsonAsync(context, 200, new JsonObject
-                {
-                    ["chats"] = _agent.BuildAllAgentSessionsPayload()
-                });
+                var all = _agent.BuildAllAgentSessionsPayload();
+                await WriteJsonAsync(context, 200, all);
                 return;
             }
 
@@ -965,6 +963,11 @@ public sealed class WebUiServer : IDisposable
             case "reset":
                 ok = _agent.ResetAgentSession(chatKey, sessionId ?? string.Empty);
                 message = ok ? "已清空历史" : "没找到这个会话";
+                break;
+
+            case "rename":
+                ok = _agent.RenameAgentSession(chatKey, sessionId ?? string.Empty, body?["title"]?.GetValue<string>() ?? string.Empty);
+                message = ok ? "已改名" : "改名失败（名字空或会话不存在）";
                 break;
 
             default:

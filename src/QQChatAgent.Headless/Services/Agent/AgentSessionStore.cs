@@ -47,6 +47,9 @@ public sealed class AgentSessionStore
     {
         public required string Id { get; init; }
         public string Name { get; set; } = "默认";
+
+    /// <summary>名字是自动总结出来的（还能被任务第一句覆盖；手动改过就不动）。</summary>
+    public bool AutoNamed { get; set; } = true;
         public string Backend { get; set; } = "host";     // host / server
         public string? Device { get; set; }              // 外部后端：具体是哪台设备（可空 = 当前在线的）
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
@@ -300,6 +303,90 @@ public sealed class AgentSessionStore
         return chat;
     }
 
+    /// <summary>
+    /// 用任务的第一句话自动给会话起个标题（号主 2026-09-17：“没有简单对会话进行标题总结”）。
+    /// 为什么不用模型总结：起个能认出来的名字不值得多一次模型调用 + 多几秒延迟；
+    /// 把客套话剔掉、截到 16 个字，已经能在 //sessions 里一眼认出是哪个话题。
+    /// </summary>
+    public static string AutoTitle(string prompt)
+    {
+        var text = (prompt ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim();
+        if (text.Length == 0)
+        {
+            return "新会话";
+        }
+
+        // 长前缀先剔（不然“帮我看看”会被“帮我”吃一半）
+        var prefixes = new[] { "帮我看看", "帮我看下", "帮我看一下", "看一下", "看看", "看下", "查一下", "查下", "帮我", "帮忙", "麻烦", "给我", "请", "去", "来" };
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var prefix in prefixes)
+            {
+                if (text.StartsWith(prefix, StringComparison.Ordinal) && text.Length > prefix.Length + 1)
+                {
+                    text = text[prefix.Length..].TrimStart();
+                    changed = true;
+                }
+            }
+        }
+
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        return text.Length <= 16 ? text : text[..16] + "…";
+    }
+
+    /// <summary>第一次真的在这个会话里干活时，用那句提示词当标题（只覆盖自动名）。</summary>
+    public void TitleFromPrompt(string sourceKey, string sessionId, string prompt)
+    {
+        lock (_gate)
+        {
+            if (!_chats.TryGetValue(sourceKey, out var chat) ||
+                chat.Sessions.FirstOrDefault(s => s.Id == sessionId) is not { } session ||
+                !session.AutoNamed)
+            {
+                return;
+            }
+
+            session.Name = AutoTitle(prompt);
+            session.UpdatedAt = DateTimeOffset.Now;
+            Save();
+        }
+    }
+
+    /// <summary>手动改名（改过就不会再被自动标题覆盖）。</summary>
+    public bool Rename(string sourceKey, string idOrName, string newName)
+    {
+        lock (_gate)
+        {
+            var session = Find(sourceKey, idOrName);
+            var name = (newName ?? string.Empty).Trim();
+            if (session is null || name.Length == 0)
+            {
+                return false;
+            }
+
+            session.Name = name.Length > 24 ? name[..24] : name;
+            session.AutoNamed = false;
+            session.UpdatedAt = DateTimeOffset.Now;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>所有聊天的会话总览（面板与 //sessions all 用）。</summary>
+    public List<(string SourceKey, List<AgentSession> Sessions)> AllChats()
+    {
+        lock (_gate)
+        {
+            return _chats
+                .Where(kv => kv.Value.Sessions.Count > 0)
+                .Select(kv => (kv.Key, kv.Value.Sessions.OrderByDescending(s => s.UpdatedAt).ToList()))
+                .OrderByDescending(x => x.Item2.FirstOrDefault()?.UpdatedAt ?? DateTimeOffset.MinValue)
+                .ToList();
+        }
+    }
+
     private AgentSession CreateLocked(string sourceKey, ChatSessions chat, string backend, string? name, string? device)
     {
         // 清理：超出上限时删掉最久没动过的（当前会话不能删）
@@ -326,6 +413,7 @@ public sealed class AgentSessionStore
             PiSessionId = NewPiSessionId(sourceKey, id)
         };
 
+        session.AutoNamed = name is not { Length: > 0 };   // 手动起的名字不覆盖
         chat.Sessions.Add(session);
         return session;
     }
@@ -391,6 +479,7 @@ public sealed class AgentSessionStore
                             Backend = Str(item, "backend") ?? "host",
                             Device = Str(item, "device"),
                             Name = Str(item, "name") ?? "会话",
+                            AutoNamed = !item.TryGetProperty("autoNamed", out var an) || an.ValueKind != JsonValueKind.False,
                             PiSessionId = Str(item, "piSession") ?? string.Empty,
                             Turns = item.TryGetProperty("turns", out var t) && t.TryGetInt32(out var tv) ? tv : 0
                         };
@@ -456,6 +545,7 @@ public sealed class AgentSessionStore
                     {
                         ["id"] = session.Id,
                         ["name"] = session.Name,
+                        ["autoNamed"] = session.AutoNamed,
                         ["backend"] = session.Backend,
                         ["device"] = session.Device,
                         ["piSession"] = session.PiSessionId,

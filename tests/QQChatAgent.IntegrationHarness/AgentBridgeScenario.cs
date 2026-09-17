@@ -483,6 +483,75 @@ public static partial class Program
                 string.Join(",", bridge.Forgotten));
         }
 
+        // ---- ⑰ 自动标题 / //help / //sessions all（号主：没有标题总结、不知道有多少个会话、忘了命令）----
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//help", 15070, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("看这份说明")), TimeSpan.FromSeconds(30));
+        var help = string.Join("\n", Sent().TakeLast(3));
+        Check("★ //help 把命令列全了（含会话相关与 stop/status）",
+            help.Contains("看这份说明") && help.Contains("//sessions") && help.Contains("//new") &&
+            help.Contains("//rename") && help.Contains("//del") && help.Contains("//stop") && help.Contains("//status"),
+            help.Length > 400 ? help[..400] + "…" : help);
+
+        // 自动标题：//new 不带名字 → 第一句话成为标题
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//new", 15071, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("已开新会话")), TimeSpan.FromSeconds(30));
+        var tasksBeforeTitle = bridge.Tasks.Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//帮我看看今天的报错日志", 15072, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => bridge.Tasks.Count > tasksBeforeTitle, TimeSpan.FromSeconds(30));
+        bridge.Send(new JsonObject
+        {
+            ["type"] = "done",
+            ["id"] = bridge.Tasks[^1]["id"]!.GetValue<string>(),
+            ["text"] = "标题那单的结论",
+            ["exitCode"] = 0,
+            ["durationMs"] = 200,
+            ["toolCalls"] = 0
+        });
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("标题那单的结论")), TimeSpan.FromSeconds(30));
+
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            var listJson = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}");
+            var sessions = JsonNode.Parse(listJson)!["sessions"]!.AsArray();
+            var current = sessions.FirstOrDefault(s => s!["current"]?.GetValue<bool>() == true);
+            Check("★ 会话标题自动总结（“帮我看看今天的报错日志” → “今天的报错日志”，且标成自动标题）",
+                current is not null && current["name"]?.GetValue<string>() == "今天的报错日志" &&
+                current["autoNamed"]?.GetValue<bool>() == true,
+                $"当前会话标题=「{current?["name"]}」autoNamed={current?["autoNamed"]}");
+
+            // 手动改名后不再被自动覆盖
+            var renameBody = new JsonObject
+            {
+                ["key"] = $"group:{groupId}",
+                ["action"] = "rename",
+                ["id"] = current?["id"]?.GetValue<string>(),
+                ["title"] = "我自己起的名字"
+            };
+            await http.PostAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions",
+                new StringContent(renameBody.ToJsonString(), Encoding.UTF8, "application/json"));
+            await Task.Delay(200);
+            var afterRename = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"));
+            Check("★ 面板里能给会话改名（改过就不算自动标题）",
+                afterRename?["sessions"] is JsonArray renamed &&
+                renamed.Any(s => s!["name"]?.GetValue<string>() == "我自己起的名字" &&
+                                 s!["autoNamed"]?.GetValue<bool>() == false),
+                afterRename?.ToJsonString() ?? "(空)");
+
+            // 总览：有多少个会话 + 标题
+            var all = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions"));
+            Check("★ 会话总览给出总数与标题（面板/接口可直接查）",
+                all!["total"]?.GetValue<int>() >= 2 && all!["chatCount"]?.GetValue<int>() >= 1 &&
+                all!["chats"]?[$"group:{groupId}"]?["sessions"] is JsonArray ls &&
+                ls.Any(s => s!["name"]?.GetValue<string>() == "我自己起的名字"),
+                $"total={all?["total"]} chatCount={all?["chatCount"]}");
+        }
+
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//sessions all", 15073, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("全部 agent 会话")), TimeSpan.FromSeconds(30));
+        Check("★ //sessions all 报总数与每个聊天的标题",
+            Sent().Any(t => t.Contains("全部 agent 会话") && t.Contains("共") && t.Contains("轮")),
+            string.Join(" | ", Sent().TakeLast(2)));
+
         await bot.StopAsync();
     }
 

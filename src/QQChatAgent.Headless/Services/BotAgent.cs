@@ -1727,12 +1727,46 @@ public sealed class BotAgent : IDisposable
             return;
         }
 
+        if (head is "help" or "?" or "帮助" or "命令")
+        {
+            await SendPlainAsync(conversation, HelpText(conversation.SourceKey));
+            return;
+        }
+
         // ───── 会话管理（号主 2026-09-17：调用内置/外部 agent 时能自由切换/新建/删除会话）─────
         var rest = payload.Length > head.Length ? payload[(head.Length)..].Trim() : string.Empty;
 
         if (head is "sessions" or "会话" or "session")
         {
+            // //sessions all = 所有聊天的总数与标题（“现在有多少个会话及其标题”）
+            if (rest.Equals("all", StringComparison.OrdinalIgnoreCase) || rest is "全部" or "所有")
+            {
+                await SendPlainAsync(conversation, DescribeAllSessions(bridge));
+                return;
+            }
+
             await SendPlainAsync(conversation, DescribeSessions(conversation.SourceKey, bridge));
+            return;
+        }
+
+        if (head is "rename" or "改名")
+        {
+            if (rest.Length == 0)
+            {
+                await SendPlainAsync(conversation, "用法：//rename <新名字>（给当前会话改名；先 //sessions 看有哪些）");
+                return;
+            }
+
+            var cur = _agentSessions.EnsureCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            if (_agentSessions.Rename(conversation.SourceKey, cur.Id, rest))
+            {
+                await SendPlainAsync(conversation, $"会话已改名为「{_agentSessions.Find(conversation.SourceKey, cur.Id)?.Name}」。");
+            }
+            else
+            {
+                await SendPlainAsync(conversation, "改名没成功（名字空？）。");
+            }
+
             return;
         }
 
@@ -1809,9 +1843,7 @@ public sealed class BotAgent : IDisposable
 
         if (payload.Length == 0)
         {
-            await SendPlainAsync(conversation,
-                "用法：//<要让本机 agent 做的事>（例：//看下 E:/bot 里最新的日志报错）\n" +
-                "//stop 停掉、//status 看本机连接状态");
+            await SendPlainAsync(conversation, HelpText(conversation.SourceKey));
             return;
         }
 
@@ -1877,6 +1909,7 @@ public sealed class BotAgent : IDisposable
             var hostSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "host");
             var task = bridge!.NewTask(conversation.SourceKey, payload, hostSession.PiSessionId, named);
             task.SessionRef = hostSession;
+            _agentSessions.TitleFromPrompt(conversation.SourceKey, hostSession.Id, payload);   // 第一句当标题
             if (!bridge.TryEnqueue(task))
             {
                 await SendPlainAsync(conversation, $"这个会话已经排了 {bridge.QueuedCount} 个任务，等跑完再发吧。");
@@ -1906,6 +1939,7 @@ public sealed class BotAgent : IDisposable
         {
             var serverSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "server");
             var seededHistory = _agentSessions.History(conversation.SourceKey, serverSession.Id);
+            _agentSessions.TitleFromPrompt(conversation.SourceKey, serverSession.Id, payload);   // 第一句当标题
             EmitLog($"[会话] 内置 agent 本轮带 {seededHistory.Count} 条历史（会话「{serverSession.Name}」）");
             var task = new AgentTask
             {
@@ -2003,47 +2037,48 @@ public sealed class BotAgent : IDisposable
 
     /// <summary>面板用的：某个聊天的 agent 会话表（含当前标记与外层信息）。</summary>
     public JsonArray BuildAgentSessionsPayload(string sourceKey)
-    {
-        var list = new JsonArray();
-        foreach (var s in _agentSessions.List(sourceKey))
-        {
-            list.Add(new JsonObject
-            {
-                ["id"] = s.Id,
-                ["name"] = s.Name,
-                ["backend"] = s.Backend,
-                ["device"] = s.Device,
-                ["turns"] = s.Turns,
-                ["piSession"] = s.PiSessionId,
-                ["createdAt"] = s.CreatedAt.ToString("O"),
-                ["updatedAt"] = s.UpdatedAt.ToString("O"),
-                ["current"] = _agentSessions.IsCurrent(sourceKey, s),
-                ["historyChars"] = s.History.Sum(h => h.Text.Length)
-            });
-        }
-
-        return list;
-    }
+        => new(_agentSessions.List(sourceKey).Select(s => (JsonNode)BuildSessionNode(sourceKey, s)).ToArray());
 
     /// <summary>面板总览：所有有 agent 会话的聊天（群/好友）。</summary>
     public JsonObject BuildAllAgentSessionsPayload()
     {
         var chats = new JsonObject();
-        foreach (var conversation in Conversations)
+        var total = 0;
+        foreach (var (key, sessions) in _agentSessions.AllChats())
         {
-            var list = BuildAgentSessionsPayload(conversation.SourceKey);
-            if (list.Count > 0)
+            var name = Conversations.FirstOrDefault(c => c.SourceKey == key)?.Name ?? key;
+            total += sessions.Count;
+            chats[key] = new JsonObject
             {
-                chats[conversation.SourceKey] = new JsonObject
-                {
-                    ["name"] = conversation.Name,
-                    ["sessions"] = list
-                };
-            }
+                ["name"] = name,
+                ["sessions"] = new JsonArray(sessions.Select(s => (JsonNode)BuildSessionNode(key, s)).ToArray())
+            };
         }
 
-        return chats;
+        return new JsonObject
+        {
+            ["total"] = total,
+            ["chatCount"] = chats.Count,
+            ["chats"] = chats
+        };
     }
+
+    /// <summary>单个会话的面板节点（BuildAgentSessionsPayload 与总览共用）。</summary>
+    private JsonObject BuildSessionNode(string sourceKey, AgentSessionStore.AgentSession s)
+        => new()
+        {
+            ["id"] = s.Id,
+            ["name"] = s.Name,
+            ["backend"] = s.Backend,
+            ["device"] = s.Device,
+            ["turns"] = s.Turns,
+            ["piSession"] = s.PiSessionId,
+            ["createdAt"] = s.CreatedAt.ToString("O"),
+            ["updatedAt"] = s.UpdatedAt.ToString("O"),
+            ["current"] = _agentSessions.IsCurrent(sourceKey, s),
+            ["autoNamed"] = s.AutoNamed,
+            ["historyChars"] = s.History.Sum(h => h.Text.Length)
+        };
 
     /// <summary>面板/其它入口：新建 agent 会话。</summary>
     public AgentSessionStore.AgentSession CreateAgentSession(string sourceKey, string backend, string? name)
@@ -2070,6 +2105,10 @@ public sealed class BotAgent : IDisposable
     }
 
     /// <summary>面板/其它入口：清空会话历史。</summary>
+    /// <summary>面板/其它入口：给会话改名（改过就不再被自动标题覆盖）。</summary>
+    public bool RenameAgentSession(string sourceKey, string idOrName, string title)
+        => _agentSessions.Rename(sourceKey, idOrName, title);
+
     public bool ResetAgentSession(string sourceKey, string idOrName)
     {
         var session = _agentSessions.Find(sourceKey, idOrName);
@@ -2119,6 +2158,58 @@ public sealed class BotAgent : IDisposable
         return reference.Trim();
     }
 
+    /// <summary>//help：把所有命令列出来（号主：“忘记一些命令可以添加一个 help 命令”）。</summary>
+    private string HelpText(string sourceKey)
+    {
+        var list = _agentSessions.List(sourceKey);
+        var current = list.FirstOrDefault(s => _agentSessions.IsCurrent(sourceKey, s));
+        return
+            "本机/服务器 Agent 命令：\n" +
+            "//<要做的事>         把这句话交给 agent 去干（例：//看下 E:/bot 里最新的报错）\n" +
+            "//@server <事>       这一条强制走服务器内置 agent\n" +
+            "//@host <事>        这一条强制走外部设备（//@设备名 指定哪一台）\n" +
+            "//sessions         列出这个聊天的会话（几个、叫什么、多少轮、哪个是当前）\n" +
+            "//sessions all     列出**所有聊天**的会话总数与标题\n" +
+            "//new [名字]       开一个新会话并切过去（不带名字就用第一句话自动起标题）\n" +
+            "//use 序号|名字     切到某个会话\n" +
+            "//rename 名字      给当前会话改名字\n" +
+            "//reset            清空当前会话（历史与外部那边的记录一起清）\n" +
+            "//del 序号|名字     删掉某个会话\n" +
+            "//stop             停掉正在跑的任务\n" +
+            "//status           看两个后端的开关/在线情况/当前会走哪边\n" +
+            "//help             看这份说明\n" +
+            $"（当前会话：{(current is null ? "还没有，发一句 //指令 会自动建" : $"「{current.Name}」 {current.Turns} 轮")}）";
+    }
+
+    /// <summary>//sessions all：所有聊天的会话总数与标题。</summary>
+    private string DescribeAllSessions(AgentBridgeServer? bridge)
+    {
+        var chats = _agentSessions.AllChats();
+        var total = chats.Sum(c => c.Sessions.Count);
+        if (total == 0)
+        {
+            return "现在一个 agent 会话都没有（发一句 //指令 就有了）。";
+        }
+
+        var lines = new List<string> { $"全部 agent 会话：{chats.Count} 个聊天 / 共 {total} 个会话" };
+        foreach (var (key, sessions) in chats.Take(10))
+        {
+            var name = Conversations.FirstOrDefault(c => c.SourceKey == key)?.Name ?? key;
+            var titles = sessions.Take(6).Select(s =>
+                $"{(s.Backend == "server" ? "服务器" : (s.Device ?? "外部"))}·{s.Name}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
+            var more = sessions.Count > 6 ? $" 等 {sessions.Count} 个" : string.Empty;
+            lines.Add($"{name}（{sessions.Count} 个）：{string.Join("、", titles)}{more}");
+        }
+
+        if (chats.Count > 10)
+        {
+            lines.Add($"（还有 {chats.Count - 10} 个聊天的没列出来）");
+        }
+
+        lines.Add("看某个聊天的完整列表：在那个聊天里发 //sessions。");
+        return string.Join("\n", lines);
+    }
+
     /// <summary>//sessions 的展示文本。</summary>
     private string DescribeSessions(string sourceKey, AgentBridgeServer? bridge)
     {
@@ -2143,7 +2234,7 @@ public sealed class BotAgent : IDisposable
             lines.Add($"{i + 1}. {s.Name} [{where}] {s.Turns} 轮 · {when}{mark}");
         }
 
-        lines.Add("用法：//new [名字] 新建并切换、//use 序号|名字 切换、//del 序号|名字 删除、//reset 清空当前。");
+        lines.Add("用法：//new [名字] 新建并切换、//use 序号|名字 切换、//rename 改名、//del 序号|名字 删除、//reset 清空当前；//help 看全部命令。");
         return string.Join("\n", lines);
     }
 
