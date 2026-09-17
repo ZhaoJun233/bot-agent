@@ -312,6 +312,33 @@ public sealed class AppSettings
 
     // ---------- 运维 ----------
 
+    /// <summary>
+    /// 列出会话时**脱敏**（群名/昵称/QQ 号）：群里 //sessions //sessions all //runs //pi 的回复、
+    /// 面板的会话列表与总览都会遮。默认开（截图/给别人看时不漏隐私）；要原样看就在面板里关掉。
+    /// </summary>
+    public bool AgentMaskSensitive { get; set; } = true;
+
+    /// <summary>
+    /// Agent 附加提示词（面板可改，默认 = <see cref="DefaultAgentPrompt" /> 那条隐私红线）：
+    /// **每个 <c>//</c> 任务都会带上它** —— 外部设备（pi）是拼在任务前面，服务器内置 agent 是拼进
+    /// 系统提示词。所以“别去读群聊内容 / 成员隐私”不是靠自觉，而是每一轮都随任务下发；
+    /// 留空 = 不带任何附加提示词。
+    /// </summary>
+    public string AgentPrompt { get; set; } = DefaultAgentPrompt;
+
+    /// <summary>
+    /// 默认的附加提示词：开发/排查时的隐私红线。面板上的「恢复默认」按钮也读它 ——
+    /// 要改默认值就改这里（别再在面板文案里抄一份，免得两处漂移）。
+    /// </summary>
+    public const string DefaultAgentPrompt =
+        "【隐私红线（优先级最高）】\n" +
+        "1. 不要读取、不要复述聊天内容与成员信息：别直接打开 conversations.json、agent-sessions.json、" +
+        "member_profiles/、logs/qqchat.log 里的**对话正文**，也不要把它们粘进回复、提交、测试或文档。\n" +
+        "2. 排查报错只看日志里的 ERROR / Exception 堆栈：先把中文（发言、昵称）换成占位符再看，" +
+        "message / raw_message 这类文本字段一律不看。\n" +
+        "3. 判断数据形状就看字段名、条数、长度、哈希，不看内容。\n" +
+        "4. 已经看到的敏感内容不外传：不回群、不写进仓库、不发第三方接口。";
+
     /// <summary>面板访问令牌（可空）。设置后访问面板与 /api/* 需携带令牌；
     /// /healthz 与 /readyz 不受影响（留给容器健康检查）。
     /// 环境变量专属（QQCHAT_PANEL_TOKEN），不写入 settings.json。</summary>
@@ -498,6 +525,46 @@ public sealed class AppSettings
 
     /// <summary>服务器内置 agent 单次补全的 max_tokens。</summary>
     public int AgentServerMaxTokens { get; set; } = 1200;
+
+    // ══════════ 服务器健康日报（定时私聊推送）══════════
+    //
+    // 为什么要它：机器人跑在服务器上，出问题时（账号掉线、协议端断开、磁盘写满、上游接口不通）
+    // 号主往往几天后才发现。每天在固定时刻主动私聊一条状态，等于**机器人自己来报平安**。
+    //
+    // 为什么不用「外部设备 agent」来推（号主要求）：那台机器可能根本没开 ——
+    // 这条链路只用机器人自己 + 协议端：定时器 → 自己采集状态 → OneBot 私聊消息，不依赖任何外部程序。
+
+    /// <summary>总开关（默认关：没配好收件人之前不乱发）。</summary>
+    public bool HealthReportEnabled { get; set; }
+
+    /// <summary>
+    /// 每天几点推（<c>HH:mm</c>，24 小时制）。**按北京时间（UTC+8）算**，与容器 TZ 无关 ——
+    /// 号主在国内，容器时区怎么设都不该让推送时间漂掉。
+    /// </summary>
+    public string HealthReportTime { get; set; } = "18:00";
+
+    /// <summary>推给谁：QQ 号，逗号/空格/换行分隔（只走私聊，填群号也不会发到群里）。空 = 不发。</summary>
+    public string HealthReportTargets { get; set; } = string.Empty;
+
+    /// <summary>解析 <see cref="HealthReportTime" />（容忍 <c>18:00</c>/<c>18：00</c>/<c>1800</c>）。解析不出来按 18:00。</summary>
+    public static (int Hour, int Minute) ParseHealthReportClock(string? text)
+    {
+        var raw = (text ?? string.Empty).Trim().Replace('：', ':');
+        if (raw.Length is 4 && int.TryParse(raw, out var packed))
+        {
+            raw = $"{packed / 100:00}:{packed % 100:00}";
+        }
+
+        var parts = raw.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2 &&
+            int.TryParse(parts[0], out var hour) && int.TryParse(parts[1], out var minute) &&
+            hour is >= 0 and <= 23 && minute is >= 0 and <= 59)
+        {
+            return (hour, minute);
+        }
+
+        return (18, 0);
+    }
 
     /// <summary>健康检查 HTTP 端口（0=关闭）。用于容器 HEALTHCHECK。</summary>
     public int HealthPort { get; set; } = 8080;

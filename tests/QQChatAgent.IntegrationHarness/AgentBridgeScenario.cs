@@ -130,8 +130,11 @@ public static partial class Program
         await WaitUntilAsync(() => bridge.Tasks.Count > 0, TimeSpan.FromSeconds(30));
 
         var task = bridge.Tasks.Last();
-        Check("★ 任务细节带对了：提示词 / 会话名 / 工作目录 / 超时",
-            task["prompt"]?.GetValue<string>() == "看下现在有几张表情包" &&
+        Check("★ 任务细节带对了：提示词（含附加提示词）/ 会话名 / 工作目录 / 超时",
+            // 附加提示词（默认 = 隐私红线）拼在任务**前面**，
+            // 用户那句话必须在末尾原样保留 —— 只改一头都会挂在这里
+            (task["prompt"]?.GetValue<string>() ?? "").EndsWith("看下现在有几张表情包", StringComparison.Ordinal) &&
+            (task["prompt"]?.GetValue<string>() ?? "").Contains("—— 本次任务 ——", StringComparison.Ordinal) &&
             (task["session"]?.GetValue<string>() ?? "").StartsWith($"qqchat-group-{groupId}-", StringComparison.Ordinal) &&
             task["cwd"]?.GetValue<string>() == "E:/bot" &&
             task["timeoutSec"]?.GetValue<int>() == 120,

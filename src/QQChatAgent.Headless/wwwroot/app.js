@@ -24,6 +24,7 @@
     search: "",
     logs: [],
     settingsLoaded: false,    // 设置表单是否已从服务端回填过
+    agentPromptDefault: "",  // 服务端那份默认「Agent 附加提示词」（面板「恢复默认」按钮用，不在前端抄一份）
     chatOpen: false,          // 手机端：是否已点进某个会话（列表 ↔ 聊天 的主从切换）
     login: {                  // 扫码登录卡片
       qr: null,               // /api/qqlogin 的响应
@@ -1059,6 +1060,10 @@
 
     // ─────────── 本机 Agent（// 命令）───────────
     $("setEnableAgentBridge").checked = r.enableAgentBridge === true;
+    // 脱敏：服务端默认 true，这里只有明确 false 才关（旧配置里没这个字段时保持开）
+    $("setAgentMask").checked = r.enableAgentMask !== false;
+    $("setAgentPrompt").value = r.agentPrompt || "";
+    state.agentPromptDefault = r.agentPromptDefault || "";
     $("setAgentAllowedUsers").value = r.agentAllowedUsers || "";
     $("setAgentPrefix").value = r.agentPrefix || "//";
     $("setAgentTimeoutSeconds").value = r.agentTimeoutSeconds;
@@ -1087,6 +1092,13 @@
     $("setAgentServerModel").value = r.serverModel || "";
     fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
     $("setAgentModel").value = r.agentModel || "";
+
+    // ─────────── 服务器健康日报（定时私聊推送）───────────
+    $("setHealthReportEnabled").checked = r.healthReportEnabled === true;
+    $("setHealthReportTime").value = r.healthReportTime || "18:00";
+    $("setHealthReportTargets").value = r.healthReportTargets || "";
+    refreshHealthReport();
+
     $("setWebSearchMaxResults").value = r.webSearchMaxResults;
     $("setWebSearchCooldown").value = r.webSearchCooldownSeconds;
     $("setWebSearchTimeoutSeconds").value = r.webSearchTimeoutSeconds;
@@ -1178,6 +1190,11 @@
       enableLinkPreview: $("setEnableLinkPreview").checked,
       enableWebSearch: $("setEnableWebSearch").checked,
       enableAgentBridge: $("setEnableAgentBridge").checked,
+      enableAgentMask: $("setAgentMask").checked,
+      agentPrompt: $("setAgentPrompt").value,
+      healthReportEnabled: $("setHealthReportEnabled").checked,
+      healthReportTime: $("setHealthReportTime").value.trim() || "18:00",
+      healthReportTargets: $("setHealthReportTargets").value.trim(),
       agentAllowedUsers: $("setAgentAllowedUsers").value.trim(),
       agentPrefix: $("setAgentPrefix").value.trim() || "//",
       agentTimeoutSeconds: Number($("setAgentTimeoutSeconds").value),
@@ -1256,6 +1273,68 @@
       });
     }
   }
+  /* ─────────── 服务器健康日报（定时私聊推送）─────────── */
+  /* “预览”只生成不发（不碰 QQ）；“现在发一条”真发（当场验收用）。
+     这两个函数必须是**顶层**的：loadSettings() 里要调 refreshHealthReport()，
+     陷在别的函数体里就会抛 ReferenceError，而 loadSettings 的 catch 会把它吞成
+     “保存按钮点了没反应”（面板上最难查的一类坑，handoff §31.9 记过一次）。 */
+  async function runHealthReport(mode) {
+    const out = $("healthReportOut");
+    out.textContent = mode === "send" ? "正在生成并发送…" : "正在生成…";
+    try {
+      if (mode === "send") {
+        await saveSettings();   // 先用当前设置（改了时刻/收件人不必先手动保存一次）
+      }
+
+      const r = await api("/api/health-report", {
+        method: "POST",
+        body: JSON.stringify({ mode })
+      });
+      out.textContent = (r && r.text) || "（空）";
+      if (mode === "send") {
+        toast(r && r.ok ? "已私聊发出" : "发送失败：" + ((r && r.error) || "未知"));
+      }
+
+      refreshHealthReport();
+    } catch (err) {
+      out.textContent = "失败：" + ((err.data && err.data.error) || err.message);
+    }
+  }
+
+  /* 下次推送 / 上次结果。服务端返回的 nextRunAt 带 +08:00 偏移，
+     这里直接按浏览器本地时区渲染 —— 号主在国内，看到的就是北京时间。 */
+  function healthReportMomentText(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    const now = new Date();
+    const day = (x) => `${x.getFullYear()}-${x.getMonth() + 1}-${x.getDate()}`;
+    const tomorrow = new Date(now.getTime() + 86400000);
+    const prefix = day(d) === day(now) ? "今天 " : day(d) === day(tomorrow) ? "明天 " : `${d.getMonth() + 1}-${d.getDate()} `;
+    return prefix + `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+
+  async function refreshHealthReport() {
+    const hint = $("healthReportHint");
+    if (!hint) return;
+    try {
+      const r = await api("/api/health-report");
+      const bits = [];
+      if (r.enabled) {
+        bits.push(r.nextRunAt ? `下次推送：${healthReportMomentText(r.nextRunAt)}（北京时间）` : "已启用，但还没填收件人 → 不会发");
+      } else {
+        bits.push("未启用");
+      }
+
+      if (r.lastSentAt) bits.push(`上次发出：${healthReportMomentText(r.lastSentAt)}`);
+      if (r.lastError) bits.push(`上次失败：${r.lastError}`);
+      hint.textContent = bits.join("｜");
+    } catch (err) {
+      console.error("读取健康日报状态失败", err);   // 静默失败最难查
+      hint.textContent = "状态读取失败：" + err.message;
+    }
+  }
+
   /// 面板日志 = 服务端日志的尾部（`/api/logs`）+ 之后的实时流（SSE）。
   /// 以前只存浏览器内存：**一刷新页面就全没了**（号主反馈），现在首屏先把历史拉回来。
   async function loadLogs() {
@@ -1974,7 +2053,9 @@
         }));
         box.querySelectorAll("[data-sess-rename]").forEach((el) => el.addEventListener("click", async () => {
           const old = agentSessionsCache.find((x) => x.id === el.dataset.sessRename) || {};
-          const title = prompt("新的会话标题：", old.name || "");
+          // 改名输入框要填**真名**（nameRaw）：显示用的 name 在脱敏开启时是“群友A”这种占位符，
+          // 拿它去改名会把占位符写回去
+          const title = prompt("新的会话标题：", old.nameRaw || old.name || "");
           if (!title) return;
           await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key: sel.value, action: "rename", id: el.dataset.sessRename, title }) });
           await refreshAgentSessions();
@@ -2037,6 +2118,14 @@
       } catch (e) {
         out.innerHTML = '<div class="hint">拉取失败：' + e.message + '</div>';
       }
+    });
+
+    // ─────────── 本机 Agent（// 命令）───────────
+    // 「恢复默认」：默认那份在服务端（AppSettings.DefaultAgentPrompt），前端不抄一份，免得两处漂移
+    $("agentPromptReset").addEventListener("click", () => {
+      if (!state.agentPromptDefault) { toast("还没从服务端拿到默认提示词"); return; }
+      $("setAgentPrompt").value = state.agentPromptDefault;
+      toast("已填入默认提示词 —— 别忘了点保存");
     });
 
     $("agentSessionNew").addEventListener("click", async () => {
@@ -2111,6 +2200,12 @@
         out.textContent = "失败：" + e.message;
       }
     });
+
+    // ─────────── 服务器健康日报（定时私聊推送）───────────
+    // 函数体在顶层（紧跟着 bindLogScrollButtons 后面）—— 放这里的话 loadSettings() 调不到它：
+    // 那会抛 ReferenceError，而 loadSettings 的 .catch 会把它吞成“保存按钮点了没反应”（踩过，handoff §31.9）
+    $("healthReportPreviewGo").addEventListener("click", () => runHealthReport("preview"));
+    $("healthReportSendGo").addEventListener("click", () => runHealthReport("send"));
 
     $("searchTestGo").addEventListener("click", async () => {
       const out = $("searchTestOut");

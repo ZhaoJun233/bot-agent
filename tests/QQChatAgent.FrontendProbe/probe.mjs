@@ -360,7 +360,10 @@ const RUNTIME = {
   maxMessagesPerConversation: 500, maxConcurrentReplies: 2, enableProfileSummary: true,
   profileSummaryThreshold: 20, profileSummaryMaxChars: 160, profileSummaryIntervalSeconds: 120,
   enableStickers: true, stickerLibraryMax: 120, stickerCandidates: 6, stickerCurateIntervalSeconds: 3600,
-  stickerCooldownSeconds: 120, enablePoke: true, pokeCooldownSeconds: 45, mood: "", moodTtlSeconds: 7200
+  stickerCooldownSeconds: 120, enablePoke: true, pokeCooldownSeconds: 45, mood: "", moodTtlSeconds: 7200,
+  healthReportEnabled: true, healthReportTime: "18:00", healthReportTargets: "10001",
+  // 脱敏开关 + Agent 附加提示词（面板可改；默认那份是隐私红线）
+  enableAgentMask: true, agentPrompt: "【隐私红线】不要读取群聊正文"
 };
 const ENV = {
   modelBaseUrl: "http://x/v1", modelBaseUrlSource: "env",
@@ -395,6 +398,14 @@ const fetchStub = async (url, opts) => {
     payload = { runtime: RUNTIME, env: ENV, settingsFile: "/data/data/settings.json" };
   } else if (target.includes("/api/qqlogin")) {
     payload = qrPayload;
+  } else if (target.includes("/api/health-report")) {
+    // 健康日报：GET 拿状态、POST 拿正文（预览/真发都走同一个接口）
+    payload = method === "POST"
+      ? { ok: true, mode: "preview", text: "🩺 服务器健康日报 · 测试" }
+      : {
+          enabled: true, time: "18:00", targets: "10001", targetList: [10001],
+          nextRunAt: "2026-09-19T18:00:00+08:00", lastSentAt: null, lastError: null, sentCount: 0
+        };
   } else if (target.includes("/api/logs")) {
     // 面板首屏会拉日志历史（刷新页面后不再空白）
     payload = { lines: [
@@ -495,6 +506,37 @@ check("★ 会话总览（全部聊天 + 总数）在面板里可见",
 check("面板引用了 /api/agent/sessions 且 /api/agent/setup 走带令牌的地址",
   js.includes("withToken(`${apiBase()}/api/agent/setup") || js.includes("/api/agent/setup"));
 
+// ─────────── 列出会话时脱敏 + Agent 附加提示词（默认：不读取敏感信息）───────────
+check("面板有「列出会话时脱敏」开关（群名/昵称/QQ 号只留前 3 后 2）",
+  html.includes('id="setAgentMask"') && js.includes('$("setAgentMask").checked') &&
+  js.includes("enableAgentMask:"),
+  !js.includes("enableAgentMask:") ? "saveSettings 没把开关发出去（勾了不生效）" : "");
+check("脱敏开关默认开：旧配置（没这个字段）回填后仍是勾上的",
+  js.includes("r.enableAgentMask !== false"));
+check("面板有「Agent 附加提示词」输入框 + 恢复默认按钮",
+  html.includes('id="setAgentPrompt"') && html.includes('id="agentPromptReset"') &&
+  js.includes('$("setAgentPrompt").value') && js.includes("agentPrompt:"),
+  "默认那份（不读取敏感信息）要写进每个 // 任务，所以面板必须能改");
+check("★ 默认提示词由服务端下发（前端不抄一份，免得两处漂移）",
+  js.includes("agentPromptDefault") && !js.includes("【隐私红线（优先级最高）】"));
+check("★ 改名输入框填真名（nameRaw）：脱敏开启时拿占位符去改名会把「群友A」写回去",
+  js.includes("old.nameRaw || old.name"));
+
+// ─────────── 服务器健康日报（定时私聊推送）───────────
+check("面板有健康日报卡片（开关 / 时刻 / 收件人 / 预览 / 立即发 / 状态提示）",
+  ["setHealthReportEnabled", "setHealthReportTime", "setHealthReportTargets",
+   "healthReportPreviewGo", "healthReportSendGo", "healthReportHint", "healthReportOut"]
+    .every((id) => html.includes(`id="${id}"`)),
+  ["setHealthReportEnabled", "setHealthReportTime", "setHealthReportTargets",
+   "healthReportPreviewGo", "healthReportSendGo"].filter((id) => !html.includes(`id="${id}"`)).join(", ") || "都在");
+check("★ 推送时刻用 type=time（面板上直接选点，不用手敲冒号）",
+  html.includes('type="time" id="setHealthReportTime"'));
+check("★ app.js 在**顶层**实现了 runHealthReport / refreshHealthReport",
+  /^\s{2}async function refreshHealthReport\(\)/m.test(js) && /^\s{2}async function runHealthReport\(/m.test(js),
+  "定义必须是 2 空格缩进的顶层函数 —— 藏在别的函数体里 loadSettings() 会 ReferenceError");
+check("健康日报调的是面板自己的接口（浏览器不直连 QQ）",
+  js.includes('api("/api/health-report"') && js.includes("JSON.stringify({ mode })"));
+
 /* ─────────── 3b) 动态：扫码登录卡片 ─────────── */
 
 console.log("\n▶ 动态：QQ 未登录时必须能直接在面板里扫码");
@@ -575,6 +617,26 @@ if (saveCall) {
   check("payload 携带了真实白名单", payload.messageWhitelist === RUNTIME.messageWhitelist, String(payload.messageWhitelist));
   check("payload 携带了真实 maxTokens", payload.maxTokens === RUNTIME.maxTokens, String(payload.maxTokens));
 }
+
+/* ─────────── 4) 服务器健康日报（定时私聊推送） ─────────── */
+
+console.log("\n▶ 动态：服务器健康日报（预览 / 立即发 / 状态提示）");
+
+check("★ loadSettings 之后 /api/health-report 被请求了（状态提示不是写死的）",
+  calls.some((c) => c.method === "GET" && c.url.includes("/api/health-report")),
+  calls.map((c) => c.url).join(" | "));
+check("★ 下次推送时刻被渲染进提示（今天/明天 + 北京时间）",
+  /下次推送：.*（北京时间）/.test(document.getElementById("healthReportHint")?.textContent || ""),
+  document.getElementById("healthReportHint")?.textContent);
+
+const healthBefore = calls.length;
+fire("healthReportPreviewGo", "click");
+await new Promise((r) => setTimeout(r, 250));
+const previewCall = calls.slice(healthBefore).find((c) => c.method === "POST" && c.url.includes("/api/health-report"));
+check("★ 点「预览」真的 POST 了 /api/health-report（mode=preview）", !!previewCall, previewCall?.body);
+check("★ 预览正文被写进卡片（发出去之前能先看一眼）",
+  (document.getElementById("healthReportOut")?.textContent || "").includes("服务器健康日报"),
+  (document.getElementById("healthReportOut")?.textContent || "(空)").slice(0, 80));
 
 /* ─────────── 4) 未保存修改的提示与拦截 ─────────── */
 

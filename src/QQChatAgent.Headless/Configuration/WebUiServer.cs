@@ -11,6 +11,7 @@ using QQChatAgent.Services;
 using QQChatAgent.Services.Agent;
 using QQChatAgent.Services.NapCat;
 using QQChatAgent.Services.OneBot;
+using QQChatAgent.Services.Ops;
 
 namespace QQChatAgent.Configuration;
 
@@ -60,7 +61,7 @@ public sealed class WebUiServer : IDisposable
     private long _convBroadcastVersion;
 
     public WebUiServer(int port, AppSettings settings, OneBotGateway gateway, BotAgent agent, LoginQrService loginQr,
-        AgentBridgeServer? agentBridge = null)
+        AgentBridgeServer? agentBridge = null, HealthReportService? healthReports = null)
     {
         _port = port;
         _settings = settings;
@@ -68,6 +69,7 @@ public sealed class WebUiServer : IDisposable
         _agent = agent;
         _loginQr = loginQr;
         _agentBridge = agentBridge;
+        _healthReports = healthReports;
         _bind = Environment.GetEnvironmentVariable("QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
             ? custom
             : "+";
@@ -75,6 +77,9 @@ public sealed class WebUiServer : IDisposable
 
     /// <summary>本机 Agent 桥（没启用时为 null）。</summary>
     private readonly AgentBridgeServer? _agentBridge;
+
+    /// <summary>服务器健康日报（号主 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
+    private readonly HealthReportService? _healthReports;
 
     /// <summary>实际监听的前缀（启动失败为 null）。</summary>
     public string? ListeningOn { get; private set; }
@@ -392,6 +397,23 @@ public sealed class WebUiServer : IDisposable
             return;
         }
 
+        // ─────────── 服务器健康日报（定时私聊推送）───────────
+        // GET  /api/health-report        开关/时刻/收件人/下次推送/上次结果（面板卡片用）
+        // POST /api/health-report        发一条或只看会发什么（{mode:"send"|"preview"}）
+        if (path.Equals("/api/health-report", StringComparison.OrdinalIgnoreCase))
+        {
+            if (method == "POST")
+            {
+                await HandleHealthReportAsync(context);
+            }
+            else
+            {
+                await WriteJsonAsync(context, 200, BuildHealthReportPayload());
+            }
+
+            return;
+        }
+
         // ─────────── 本机 Agent 桥（handoff-4 §31）───────────
         // 桥是本机那个进程主动连过来的（本机在 NAT 后面，只能它出站）；这里把 WS 接住。
         // 注意：**这个端口能让人在号主电脑上执行命令** —— 所以：没配令牌就直接拒绝。
@@ -472,7 +494,7 @@ public sealed class WebUiServer : IDisposable
             {
                 ["device"] = device,
                 ["connected"] = _agentBridge?.Connected ?? false,
-                ["sessions"] = new JsonArray(list.Select(x => (JsonNode)x.DeepClone()).ToArray())
+                ["sessions"] = new JsonArray(list.Select(x => (JsonNode)MaskPiSession(x)).ToArray())
             });
             return;
         }
@@ -973,7 +995,7 @@ public sealed class WebUiServer : IDisposable
             {
                 var created = _agent.CreateAgentSession(chatKey, backend, sessionName);
                 ok = true;
-                message = $"已新建会话「{created.Name}」";
+                message = $"已新建会话「{ShownName(created.Name)}」";
                 break;
             }
 
@@ -1003,7 +1025,7 @@ public sealed class WebUiServer : IDisposable
                 var piId = body?["piSession"]?.GetValue<string>() ?? string.Empty;
                 var created = _agent.ImportPiSession(chatKey, piId, sessionName);
                 ok = created is not null;
-                message = ok ? $"已接用 pi 会话「{created!.Name}」" : "没认出那个 pi 会话";
+                message = ok ? $"已接用 pi 会话「{ShownName(created!.Name)}」" : "没认出那个 pi 会话";
                 break;
             }
 
@@ -1018,6 +1040,25 @@ public sealed class WebUiServer : IDisposable
             ["message"] = message,
             ["sessions"] = _agent.BuildAgentSessionsPayload(chatKey)
         });
+    }
+
+    /// <summary>
+    /// 面板回显的会话名/设备上 pi 会话的标题：脱敏开关打开时遮一下（与群里 //sessions 同一套规则 —— 面板也要能直接截图）。
+    /// 注意：面板列表的 **显示** 用脱敏值，但改名输入框要用 nameRaw，否则一改名就把“群友A”这种占位符写回去。
+    /// </summary>
+    private string ShownName(string name)
+        => _settings.AgentMaskSensitive ? AgentMask.Text(name) : name;
+
+    /// <summary>设备上报的 pi 会话条目：只遮 title（id/cwd 是机器字段，面板还要拿来接用）。</summary>
+    private JsonObject MaskPiSession(JsonObject raw)
+    {
+        var node = (JsonObject)raw.DeepClone();
+        if (_settings.AgentMaskSensitive && node["title"] is JsonNode t && t.GetValueKind() == JsonValueKind.String)
+        {
+            node["title"] = ShownName(t.GetValue<string>());
+        }
+
+        return node;
     }
 
     /// <summary>本机 agent 的状态（面板卡片 / 群里的 //status）。</summary>
@@ -1221,6 +1262,16 @@ public sealed class WebUiServer : IDisposable
         if (body["agentServerTools"] is JsonNode ast) s.AgentServerTools = (ast.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentServerModel"] is JsonNode asm) s.AgentServerModel = (asm.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentDevices"] is JsonNode ad) s.AgentDevices = ad.GetValue<string>() ?? string.Empty;
+        if (body["enableAgentMask"] is JsonNode eam) s.AgentMaskSensitive = eam.GetValue<bool>();
+        if (body["agentPrompt"] is JsonNode ap)
+        {
+            // 附加提示词：空 = 明确不带（与“没这个字段”不同）；长度设上限，免得一屏文本被贴进每一轮请求
+            s.AgentPrompt = (ap.ToString() ?? string.Empty).Trim();
+            if (s.AgentPrompt.Length > 8000)
+            {
+                s.AgentPrompt = s.AgentPrompt[..8000];
+            }
+        }
         if (body["agentModel"] is JsonNode am2) s.AgentModel = (am2.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentServerBaseUrl"] is JsonNode asbu)
         {
@@ -1239,6 +1290,30 @@ public sealed class WebUiServer : IDisposable
         if (body["agentServerWorkDir"] is JsonNode asw) s.AgentServerWorkDir = (asw.GetValue<string>() ?? "/data").Trim();
         if (body["agentServerMaxSteps"] is JsonNode ass) s.AgentServerMaxSteps = Math.Clamp(ass.GetValue<int>(), 1, 30);
         if (body["agentServerCommandTimeoutSeconds"] is JsonNode asct) s.AgentServerCommandTimeoutSeconds = Math.Clamp(asct.GetValue<int>(), 5, 300);
+            // ---- 服务器健康日报（定时私聊推送）----
+            if (body["healthReportEnabled"] is JsonNode hre) s.HealthReportEnabled = hre.GetValue<bool>();
+            if (body["healthReportTime"] is JsonNode hrt)
+            {
+                // 只接受能解析成 HH:mm 的值（"18：00"/"1800" 也认）；解析不出来就保持原值，
+                // 免得一次手滑把推送时间静默改成 18:00（用户以为改了 07:30）
+                var typed = (hrt.ToString() ?? string.Empty).Trim();
+                if (typed.Length > 0)
+                {
+                    var (hour, minute) = AppSettings.ParseHealthReportClock(typed);
+                    var normalized = $"{hour:00}:{minute:00}";
+                    var looksValid = typed.Replace('：', ':').Contains(':') || typed.Length == 4;
+                    if (looksValid)
+                    {
+                        s.HealthReportTime = normalized;
+                    }
+                    else
+                    {
+                        FileLog.Warn("Web", $"健康日报时刻格式不对，已忽略：{typed}");
+                    }
+                }
+            }
+            if (body["healthReportTargets"] is JsonNode hrtg) s.HealthReportTargets = (hrtg.ToString() ?? string.Empty).Trim();
+
         if (body["enableStickers"] is JsonNode es) s.EnableStickers = es.GetValue<bool>();
             if (body["stickerLibraryMax"] is JsonNode slm) s.StickerLibraryMax = Math.Clamp(slm.GetValue<int>(), 0, 2000);
             if (body["stickerCandidates"] is JsonNode sc) s.StickerCandidates = Math.Clamp(sc.GetValue<int>(), 0, 20);
@@ -1301,6 +1376,9 @@ public sealed class WebUiServer : IDisposable
 
         // 模型配置改完要让客户端也看到（同一个 AppSettings 实例，这里只是显式同步一次）
         _agent.SyncModelSettings();
+
+        // 定时类功能：开关/时刻/收件人变了一定要重排定时器，否则“改了不生效”（要重启才变）
+        _healthReports?.Reapply();
 
         await WriteJsonAsync(context, 200, BuildSettingsPayload());
     }
@@ -1645,6 +1723,10 @@ public sealed class WebUiServer : IDisposable
         ["agentModel"] = s.AgentModel,
         ["agentServerBaseUrl"] = s.AgentServerBaseUrl,
         ["agentDevices"] = s.AgentDevices,
+        ["enableAgentMask"] = s.AgentMaskSensitive,
+        ["agentPrompt"] = s.AgentPrompt,
+        // 面板「恢复默认」按钮用：默认那份写在 AppSettings.DefaultAgentPrompt（只有一处真源）
+        ["agentPromptDefault"] = AppSettings.DefaultAgentPrompt,
         ["agentServerWorkDir"] = s.AgentServerWorkDir,
         ["agentServerMaxSteps"] = s.AgentServerMaxSteps,
         ["agentServerCommandTimeoutSeconds"] = s.AgentServerCommandTimeoutSeconds,
@@ -1657,6 +1739,10 @@ public sealed class WebUiServer : IDisposable
         ["enablePoke"] = s.EnablePoke,
         ["pokeCooldownSeconds"] = s.PokeCooldownSeconds,
         ["moodTtlSeconds"] = s.MoodTtlSeconds,
+        // ---- 服务器健康日报（定时私聊推送）----
+        ["healthReportEnabled"] = s.HealthReportEnabled,
+        ["healthReportTime"] = s.HealthReportTime,
+        ["healthReportTargets"] = s.HealthReportTargets,
         // 当前心情（可手改；空 = 由代码按被戳次数自动描述）
         ["mood"] = _agent.MoodText,
         ["moodSummary"] = _agent.MoodSummary
@@ -2138,6 +2224,75 @@ public sealed class WebUiServer : IDisposable
 
         context.Response.Headers["Cache-Control"] = "no-store";
         await WriteBytesAsync(context, 200, "audio/wav", data);
+    }
+
+    // ══════════════ 服务器健康日报（定时私聊推送） ══════════════
+
+    /// <summary>
+    /// GET /api/health-report：面板卡片要的一切（开关/时刻/收件人/下一次推送/上次结果）。
+    /// 这里**不做探针**（不碰模型接口、不碰 TTS）—— 打开面板就慢 6 秒不可接受；
+    /// 「预览这次会发什么」是用户主动点按钮才走 <see cref="HandleHealthReportAsync" />。
+    /// </summary>
+    private JsonObject BuildHealthReportPayload()
+    {
+        var (hour, minute) = AppSettings.ParseHealthReportClock(_settings.HealthReportTime);
+        var next = _healthReports?.NextRunAt;
+        return new JsonObject
+        {
+            ["enabled"] = _settings.HealthReportEnabled,
+            ["time"] = $"{hour:00}:{minute:00}",
+            ["targets"] = _settings.HealthReportTargets ?? string.Empty,
+            ["targetList"] = new JsonArray(HealthReportService.ParseTargets(_settings.HealthReportTargets)
+                .Select(id => (JsonNode)JsonValue.Create(id)).ToArray()),
+            ["nextRunAt"] = next?.ToString("O"),
+            ["lastSentAt"] = _healthReports?.LastSentAt?.ToString("O"),
+            ["lastError"] = _healthReports?.LastError,
+            ["sentCount"] = _healthReports?.SentCount ?? 0,
+            ["serverTime"] = HealthReportService.NowBeijing().ToString("O")
+        };
+    }
+
+    /// <summary>
+    /// POST /api/health-report：<c>{"mode":"preview"}</c> 只生成（不碰 QQ）、
+    /// <c>{"mode":"send"}</c>（默认）现在真发一条到私聊。
+    /// 面板两个按钮走这里；两个都要能被当成“当场验收”，所以返回正文与失败原因。
+    /// </summary>
+    private async Task HandleHealthReportAsync(HttpListenerContext context)
+    {
+        if (_healthReports is null)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["ok"] = false, ["error"] = "健康日报服务未初始化" });
+            return;
+        }
+
+        JsonNode? body = null;
+        try
+        {
+            body = await ReadJsonAsync(context);
+        }
+        catch (Exception)
+        {
+            // 没带请求体 = 默认“发一条”
+        }
+
+        var mode = (body?["mode"]?.ToString() ?? "send").Trim().ToLowerInvariant();
+        if (mode == "preview")
+        {
+            var preview = await _healthReports.PreviewAsync();
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = true, ["mode"] = "preview", ["text"] = preview });
+            return;
+        }
+
+        var (ok, text, error) = await _healthReports.SendNowAsync("面板手动");
+        await WriteJsonAsync(context, ok ? 200 : 502, new JsonObject
+        {
+            ["ok"] = ok,
+            ["mode"] = "send",
+            ["text"] = text,
+            ["error"] = error,
+            ["targets"] = new JsonArray(HealthReportService.ParseTargets(_settings.HealthReportTargets)
+                .Select(id => (JsonNode)JsonValue.Create(id)).ToArray())
+        });
     }
 
     /// <summary>/api/voice/health：把 TTS 服务自己的 /health 透传给面板（活着吗、有哪些音色）。</summary>

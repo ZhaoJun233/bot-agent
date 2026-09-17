@@ -271,13 +271,16 @@ class TaskRunner:
             args += ["--tools", tools]
         args += ["--", prompt]
 
-        log(f"任务 #{task_id} 开始：{prompt[:60]!r}（目录 {cwd}）")
+        # 日志里**不写** prompt 内容（那是群聊正文）：只留长度 + 指纹，能对号入座又不泄隐私
+        prompt_fingerprint = hashlib.sha1(prompt.encode("utf-8", "replace")).hexdigest()[:8]
+        log(f"任务 #{task_id} 开始（目录 {cwd}，prompt {len(prompt)} 字 / sha1 {prompt_fingerprint}）")
         started = time.time()
         text_parts: list[str] = []
         tool_calls = 0
         tail = ""
         exit_code = 0
         error: str | None = None
+        last_hint: str | None = None      # pi 事件里的 stopReason/errorMessage（非零退出时报这个才有用）
 
         try:
             creation = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -334,6 +337,13 @@ class TaskRunner:
                     continue
 
                 etype = event.get("type")
+
+                # pi 不一定会往 stderr 写：失败原因常在 message_end / agent_end 的
+                # stopReason + errorMessage 上（JSON 流）。不记下来的话，群里只能看到“pi 退出码 1”。
+                hint = _stop_hint(event)
+                if hint:
+                    last_hint = hint
+
                 if etype == "message_update":
                     inner = event.get("assistantMessageEvent") or {}
                     if inner.get("type") == "text_delta" and inner.get("delta"):
@@ -357,7 +367,11 @@ class TaskRunner:
                 exit_code = self.proc.wait(timeout=30)
                 stderr = (self.proc.stderr.read() or "").strip() if self.proc.stderr else ""
                 if exit_code != 0:
-                    error = stderr[-600:] if stderr else f"pi 退出码 {exit_code}"
+                    # 非零退出：stderr → 事件里的 stopReason/errorMessage → 最后才是“退出码 N”
+                    error = "｜".join(part for part in (
+                        stderr[-600:] if stderr else "",
+                        last_hint or "",
+                        f"pi 退出码 {exit_code}") if part)
         except FileNotFoundError:
             error = f"找不到 pi：{self.pi_cmd}（改 --pi 或 PI_BRIDGE_PI）"
         except Exception as exc:                                # noqa: BLE001
@@ -374,6 +388,11 @@ class TaskRunner:
         duration_ms = int((time.time() - started) * 1000)
         text = "".join(text_parts).strip()
 
+        # 退出码是 0、但事件里明说“这轮是错误停的”（例如被中断/上游报错）→ 也算失败，
+        # 否则群里收到的是空气（以前就这样静默过）
+        if error is None and not text and last_hint:
+            error = last_hint
+
         if was_cancelled:
             self.send_json({"type": "error", "id": task_id, "message": "任务已取消"})
         elif error:
@@ -382,6 +401,32 @@ class TaskRunner:
             self.send_json({"type": "done", "id": task_id, "text": text or tail.strip(),
                             "exitCode": 0, "durationMs": duration_ms, "toolCalls": tool_calls})
         log(f"任务 #{task_id} 结束：{error or f'{len(text)} 字'}（{duration_ms / 1000:.1f}s，{tool_calls} 次工具）")
+
+
+def _stop_hint(event: dict) -> str | None:
+    """从 pi 的 JSON 事件里抠出“为什么停了”（只在真的带错误信息时才返回）。
+
+    pi --mode json 的失败不容易从退出码看出来：错误挂在消息的
+    stopReason / errorMessage 上（message_end 的 message、agent_end 的 messages）。
+    """
+    candidates: list[dict] = []
+    msg = event.get("message")
+    if isinstance(msg, dict):
+        candidates.append(msg)
+    msgs = event.get("messages")
+    if isinstance(msgs, list):
+        candidates.extend(m for m in msgs if isinstance(m, dict))
+
+    for m in candidates:
+        detail = m.get("errorMessage") or m.get("error") or ""
+        if isinstance(detail, dict):
+            detail = detail.get("message") or json.dumps(detail, ensure_ascii=False)
+        if not detail:
+            continue
+        reason = m.get("stopReason") or m.get("stop_reason") or "error"
+        return f"{reason}: {str(detail)[:400]}"
+
+    return None
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:

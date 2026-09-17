@@ -565,6 +565,26 @@
                 <span>启用本机 Agent<span class="hint">关掉时 <code>//</code> 开头的消息跟普通消息一样走人设聊天</span></span>
             </label>
 
+            <!-- 列出会话时脱敏：群名/昵称/QQ 号遮成 940***75（截图、给别人看时不漏隐私）
+                 影响范围：群里 //sessions //sessions all //runs //pi 的回复 + 面板的会话列表/总览。
+                 存储与 API 的 key 保持原样（不然命令认不出来、面板点不动）。 -->
+            <label class="switch-row">
+                <input type="checkbox" id="setAgentMask" />
+                <span class="switch"></span>
+                <span>列出会话时脱敏<span class="hint">群名 / 昵称 / QQ 号只留前 3 后 2（<code>940***75</code>）；默认开，要看真名再关掉</span></span>
+            </label>
+
+            <!-- Agent 附加提示词：每个 // 任务都带上它（外部设备拼在任务前面、服务器内置拼进系统提示词）。
+                 默认那份是隐私红线（不读取群聊内容/成员信息），写在 AppSettings.DefaultAgentPrompt 里。 -->
+            <div class="field">
+                <label>Agent 附加提示词<span class="hint">每个 <code>//</code> 任务都会带上它 —— 外部设备拼在任务前面，服务器内置拼进系统提示词；留空 = 不带</span></label>
+                <textarea id="setAgentPrompt" rows="7" spellcheck="false" placeholder="默认：不要读取群聊内容 / 成员信息，排查只 grep ERROR 与 Exception 堆栈…"></textarea>
+                <div class="sticker-actions" style="margin-top:6px">
+                    <button class="ghost-btn" id="agentPromptReset" type="button">恢复默认（不读取敏感信息）</button>
+                    <span class="path-hint">改完点下面的保存才生效</span>
+                </div>
+            </div>
+
             <div class="field">
                 <label>哪些 QQ 号能用<span class="hint">逗号分隔。空 = 谁都不能用（这个功能能在你电脑上执行命令，默认不给）</span></label>
                 <input type="text" id="setAgentAllowedUsers" placeholder="例如 20002,20003" />
@@ -741,6 +761,45 @@
 
             <p class="path-hint">令牌（<code>AGENT_TOKEN</code>）只在容器环境变量里 —— 没配令牌就不接受任何桥连接；
                 本机那边要把同样的值填进 <code>start-pi-bridge.cmd</code>。</p>
+        </div>
+
+        <!-- 服务器健康日报（定时私聊推送） -->
+        <div class="card">
+          <div class="card-head">
+            <h3>服务器健康日报</h3>
+            <p>每天在指定时刻（<b>北京时间</b>）给你私聊发一条机器人 / 服务器状态：QQ 在线与协议端连接、
+              模型接口通不通、内存/负载/磁盘、日志大小与近一小时告警。
+              <b>整条链路只用机器人自己</b>（自己的定时器 → 自己采集 → OneBot 私聊），不经过本机 agent ——
+              你那台电脑关着也照样收得到。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setHealthReportEnabled" />
+            <span class="switch"></span>
+            <span>启用健康日报<span class="hint">关掉就完全不定时发（下面的按钮仍可当场试一条）</span></span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>推送时刻<span class="hint">24 小时制；按北京时间算，与容器时区无关</span></label>
+              <input type="time" id="setHealthReportTime" />
+            </div>
+            <div class="field">
+              <label>推给谁（QQ 号）<span class="hint">逗号分隔；只走私聊，填群号也不会发到群里</span></label>
+              <input type="text" id="setHealthReportTargets" placeholder="例如 10001,20002" />
+            </div>
+          </div>
+
+          <div class="sticker-actions">
+            <button class="ghost-btn" id="healthReportPreviewGo">预览这次会发什么</button>
+            <button class="ghost-btn" id="healthReportSendGo">现在发一条（私聊）</button>
+            <span class="path-hint" id="healthReportHint"></span>
+          </div>
+          <pre id="healthReportOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
+
+          <p class="path-hint">为什么不用「本机 Agent」来推：那台电脑可能根本没开机。日报只依赖机器人容器与协议端，
+            所以它就是“机器人报平安”的那条链路。到点时如果协议端不在线，这一天的那条会发不出去（日志里有记录，
+            面板上也能看到「上次失败」）。</p>
         </div>
 
         <!-- 链接与分享 -->

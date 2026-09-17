@@ -183,6 +183,9 @@ public sealed class ServerAgentRunner
             "• 别编：命令没输出就说没输出；不确定就说不确定。\n" +
             "• 不要试图联网装东西（容器里没包管理器权限），也不要改机器人自己的代码/数据 —— 只读为主，" +
             "除非用户明确要求写文件。" +
+            // 面板里那份「Agent 附加提示词」（默认 = 隐私红线）：服务器这条路拼进系统提示词，
+            // 外部设备那条路是拼在任务前面（BotAgent.WithAgentPrompt）——两边都带得上。
+            (string.IsNullOrWhiteSpace(_settings.AgentPrompt) ? string.Empty : "\n\n" + _settings.AgentPrompt.Trim()) +
             (_settings.AgentServerBaseUrl is { Length: > 0 } ? $"\n（你的模型接口：{_settings.AgentServerBaseUrl}，模型 {(_settings.AgentServerModel.Length > 0 ? _settings.AgentServerModel : _settings.Model)}）" : string.Empty);
     }
 

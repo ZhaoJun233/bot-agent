@@ -147,9 +147,16 @@ public static class BotConfig
     [nameof(AppSettings.AgentServerModel)] = new[] { "QQCHAT_AGENT_SERVER_MODEL" },
     [nameof(AppSettings.AgentServerBaseUrl)] = new[] { "QQCHAT_AGENT_SERVER_URL" },
     [nameof(AppSettings.AgentDevices)] = new[] { "QQCHAT_AGENT_DEVICES" },
+    [nameof(AppSettings.AgentMaskSensitive)] = new[] { "QQCHAT_AGENT_MASK" },
+    [nameof(AppSettings.AgentPrompt)] = new[] { "QQCHAT_AGENT_PROMPT" },
     [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
     [nameof(AppSettings.AgentServerMaxSteps)] = new[] { "QQCHAT_AGENT_SERVER_STEPS" },
-    [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" }
+    [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" },
+
+    // ---- 服务器健康日报（定时私聊推送）----
+    [nameof(AppSettings.HealthReportEnabled)] = new[] { "QQCHAT_HEALTH_REPORT" },
+    [nameof(AppSettings.HealthReportTime)] = new[] { "QQCHAT_HEALTH_REPORT_TIME" },
+    [nameof(AppSettings.HealthReportTargets)] = new[] { "QQCHAT_HEALTH_REPORT_TO" }
         };
 
         if (!seedOnly)
@@ -238,9 +245,19 @@ public static class BotConfig
         s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;
         s.AgentServerBaseUrl = Str("QQCHAT_AGENT_SERVER_URL") ?? s.AgentServerBaseUrl;
         s.AgentServerApiKey = Secret("QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
+        s.AgentMaskSensitive = Bool("QQCHAT_AGENT_MASK") ?? s.AgentMaskSensitive;
+        // 附加提示词：环境变量只当种子（空字符串也算“明确不带”吗？不算 —— 空 = 保持默认，
+        // 要去掉就在面板里清空后保存，否则每次重启都被环境变量重新种回来）
+        if (Str("QQCHAT_AGENT_PROMPT") is { Length: > 0 } agentPrompt)
+        {
+            s.AgentPrompt = agentPrompt;
+        }
         s.AgentServerWorkDir = Str("QQCHAT_AGENT_SERVER_WORKDIR") ?? s.AgentServerWorkDir;
         s.AgentServerMaxSteps = Int("QQCHAT_AGENT_SERVER_STEPS") ?? s.AgentServerMaxSteps;
         s.AgentServerCommandTimeoutSeconds = Int("QQCHAT_AGENT_SERVER_CMD_TIMEOUT") ?? s.AgentServerCommandTimeoutSeconds;
+        s.HealthReportEnabled = Bool("QQCHAT_HEALTH_REPORT") ?? s.HealthReportEnabled;
+        s.HealthReportTime = Str("QQCHAT_HEALTH_REPORT_TIME") ?? s.HealthReportTime;
+        s.HealthReportTargets = Str("QQCHAT_HEALTH_REPORT_TO") ?? s.HealthReportTargets;
         s.WebSearchUseModelSearch = Bool("QQCHAT_SEARCH_USE_MODEL") ?? s.WebSearchUseModelSearch;
         s.WebSearchSources = Str("QQCHAT_SEARCH_SOURCES") ?? s.WebSearchSources;
         s.WebSearchMaxResults = Int("QQCHAT_SEARCH_MAX_RESULTS") ?? s.WebSearchMaxResults;
@@ -346,6 +363,12 @@ public static class BotConfig
         s.HealthPort = s.HealthPort is >= 0 and <= 65535 ? s.HealthPort : 8080;
         s.NapCatWebUiUrl = s.NapCatWebUiUrl.Trim().TrimEnd('/');
         s.NapCatWebUiToken = s.NapCatWebUiToken.Trim();
+
+        // 健康日报：时刻归一化成 HH:mm（手输 "18：00" / "1800" 也认，解析不出来就回 18:00）。
+        // 收件人只去首尾空白（分隔符交给解析器容忍，面板里要能原样看到自己填的那串）。
+        var (reportHour, reportMinute) = AppSettings.ParseHealthReportClock(s.HealthReportTime);
+        s.HealthReportTime = $"{reportHour:00}:{reportMinute:00}";
+        s.HealthReportTargets = s.HealthReportTargets.Trim();
 
         // 兼容：桌面版固定 ForwardWebSocket，但配置文件可能是遗留值
         if (string.IsNullOrWhiteSpace(s.OneBotProtocol))

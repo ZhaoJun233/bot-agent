@@ -114,6 +114,9 @@ public sealed class BotAgent : IDisposable
     /// </summary>
     public bool? AccountOnline => Volatile.Read(ref _accountOnline) is var v && v >= 0 ? v == 1 : null;
 
+    /// <summary>最近一次模型生成的耗时（毫秒；0 = 还没生成过）。面板与健康日报用。</summary>
+    public long LastGenerationMilliseconds => Volatile.Read(ref _lastGenerationMs);
+
     /// <summary>当前排队的待回复请求数（可观测）。</summary>
     public int QueuedReplies => _pendingReplies.Values.Sum(q => q.Count);
 
@@ -208,6 +211,9 @@ public sealed class BotAgent : IDisposable
     private Timer? _healthTimer;
     private int _healthRunning;
     private int _accountOnline = -1;
+
+    // 最近一次生成的耗时（毫秒）：健康日报要报“模型现在还快不快”。0 = 还没生成过。
+    private long _lastGenerationMs;
 
     // 定时器当前依据的配置值：用于判断“是否真的需要重建”（避免每次保存都重置计时）
     private int _timerIdleSeconds = -1;
@@ -1755,19 +1761,19 @@ public sealed class BotAgent : IDisposable
             var runs = _agentSessions.Runs(conversation.SourceKey, cur.Id);
             if (runs.Count == 0)
             {
-                await SendPlainAsync(conversation, $"会话「{cur.Name}」还没有执行记录。");
+                await SendPlainAsync(conversation, $"会话「{MaybeMask(cur.Name, conversation.SourceKey)}」还没有执行记录。");
                 return;
             }
 
-            var lines = new List<string> { $"会话「{cur.Name}」的执行记录（最近 {runs.Count} 次）：" };
+            var lines = new List<string> { $"会话「{MaybeMask(cur.Name, conversation.SourceKey)}」的执行记录（最近 {runs.Count} 次）：" };
             for (var i = 0; i < Math.Min(8, runs.Count); i++)
             {
                 var r = runs[i];
                 var when = r.At.ToString("MM-dd HH:mm");
                 var state = r.Ok is null ? "⏳ 在跑" : r.Ok.Value ? "✅" : "❌";
                 var extra = r.Ok is null ? string.Empty : $"{r.DurationMs / 1000.0:F0}s{(r.ToolCalls > 0 ? $"/{r.ToolCalls}工具" : string.Empty)}";
-                lines.Add($"{i + 1}. {when} {state}{extra} {Shorten(r.Prompt, 24)}" +
-                          (r.Result.Length > 0 ? $" → {Shorten(r.Result, 26)}" : string.Empty));
+                lines.Add($"{i + 1}. {when} {state}{extra} {MaybeMask(Shorten(r.Prompt, 24), conversation.SourceKey)}" +
+                          (r.Result.Length > 0 ? $" → {MaybeMask(Shorten(r.Result, 26), conversation.SourceKey)}" : string.Empty));
             }
 
             lines.Add("（//sessions 看会话、//pi 看设备上 pi 里的会话）");
@@ -1798,7 +1804,8 @@ public sealed class BotAgent : IDisposable
                 var it = list[i];
                 var title = it["title"]?.GetValue<string>();
                 var when = DateTimeOffset.FromUnixTimeSeconds(it["mtime"]?.GetValue<long>() ?? 0).ToLocalTime().ToString("MM-dd HH:mm");
-                lines.Add($"{i + 1}. {when} {(string.IsNullOrWhiteSpace(title) ? "(无标题)" : Shorten(title, 30))}");
+                var shown = string.IsNullOrWhiteSpace(title) ? "(无标题)" : MaybeMask(Shorten(title, 30), conversation.SourceKey);
+                lines.Add($"{i + 1}. {when} {shown}");
             }
 
             lines.Add("想把某个接过来当自己的会话：//import 序号（或 //import <会话id>）");
@@ -1841,7 +1848,7 @@ public sealed class BotAgent : IDisposable
             var created = _agentSessions.Create(conversation.SourceKey, "host",
                 string.IsNullOrWhiteSpace(piTitle) ? null : AgentSessionStore.AutoTitle(piTitle), named, piId, piOwned: false);
             await SendPlainAsync(conversation,
-                $"已把 pi 会话「{created.Name}」接过来当当前会话（id {piId}）——下一句 //指令 就接着它的上下文跑。\n" +
+                $"已把 pi 会话「{MaybeMask(created.Name, conversation.SourceKey)}」接过来当当前会话（id {MaybeMask(piId, conversation.SourceKey)}）——下一句 //指令 就接着它的上下文跑。\n" +
                 "注意：这是设备上已有的会话，//del 只会从列表里去掉、不会删它的文件。");
             return;
         }
@@ -1857,7 +1864,7 @@ public sealed class BotAgent : IDisposable
             var cur = _agentSessions.EnsureCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
             if (_agentSessions.Rename(conversation.SourceKey, cur.Id, rest))
             {
-                await SendPlainAsync(conversation, $"会话已改名为「{_agentSessions.Find(conversation.SourceKey, cur.Id)?.Name}」。");
+                await SendPlainAsync(conversation, $"会话已改名为「{MaybeMask(_agentSessions.Find(conversation.SourceKey, cur.Id)?.Name ?? string.Empty, conversation.SourceKey)}」。");
             }
             else
             {
@@ -1872,7 +1879,7 @@ public sealed class BotAgent : IDisposable
             var backend = WillUseBackend(want, bridge, named);
             var created = _agentSessions.Create(conversation.SourceKey, backend, rest.Length > 0 ? rest : null, named);
             await SendPlainAsync(conversation,
-                $"已开新会话「{created.Name}」（{(backend == "server" ? "服务器内置" : $"外部 {created.Device ?? bridge?.AnyBridge?.Name ?? "设备"}")}）。" +
+                $"已开新会话「{MaybeMask(created.Name, conversation.SourceKey)}」（{(backend == "server" ? "服务器内置" : $"外部 {created.Device ?? bridge?.AnyBridge?.Name ?? "设备"}")}）。" +
                 "下一句 //指令 就从空上下文开始；想切回去用 //use 名字。");
             return;
         }
@@ -1893,7 +1900,7 @@ public sealed class BotAgent : IDisposable
             }
 
             await SendPlainAsync(conversation,
-                $"好，切到会话「{used!.Name}」（{(used.Backend == "server" ? "服务器内置" : "外部设备")}，已有 {used.Turns} 轮）。" +
+                $"好，切到会话「{MaybeMask(used!.Name, conversation.SourceKey)}」（{(used.Backend == "server" ? "服务器内置" : "外部设备")}，已有 {used.Turns} 轮）。" +
                 "下一句 //指令 就接在它后面。");
             return;
         }
@@ -1920,7 +1927,7 @@ public sealed class BotAgent : IDisposable
                 await bridge.ForgetSessionAsync(deleted.PiSessionId);
             }
 
-            await SendPlainAsync(conversation, $"已删除会话「{deleted.Name}」。当前会话已自动换成新的。");
+            await SendPlainAsync(conversation, $"已删除会话「{MaybeMask(deleted.Name, conversation.SourceKey)}」。当前会话已自动换成新的。");
             return;
         }
 
@@ -1936,7 +1943,7 @@ public sealed class BotAgent : IDisposable
             }
 
             await SendPlainAsync(conversation,
-                $"会话「{current.Name}」已清空（历史与外部那边的记录都清了）——下一句从零开始。");
+                $"会话「{MaybeMask(current.Name, conversation.SourceKey)}」已清空（历史与外部那边的记录都清了）——下一句从零开始。");
             return;
         }
 
@@ -2006,7 +2013,7 @@ public sealed class BotAgent : IDisposable
         if (useHost)
         {
             var hostSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "host");
-            var task = bridge!.NewTask(conversation.SourceKey, payload, hostSession.PiSessionId, named);
+            var task = bridge!.NewTask(conversation.SourceKey, WithAgentPrompt(payload), hostSession.PiSessionId, named);
             task.SessionRef = hostSession;
             task.RunId = _agentSessions.StartRun(conversation.SourceKey, hostSession.Id, payload, named);   // 记一条“小会话”
             _agentSessions.TitleFromPrompt(conversation.SourceKey, hostSession.Id, payload);   // 第一句当标题
@@ -2018,7 +2025,7 @@ public sealed class BotAgent : IDisposable
 
             await SendPlainAsync(conversation,
                 bridge.Current is null
-                    ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "号主设备")}上跑一下（会话「{hostSession.Name}」）：{Shorten(payload, 40)}"
+                    ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "号主设备")}上跑一下（会话「{MaybeMask(hostSession.Name, conversation.SourceKey)}」）：{Shorten(payload, 40)}"
                     : "收到，排在后面 —— 做完我告诉你。");
 
             // 面板里给这台设备配的模型它自己没有 → 提前说一声（不然群里只会看到结果，不知道降级了）
@@ -2057,7 +2064,7 @@ public sealed class BotAgent : IDisposable
             var cts = new CancellationTokenSource();
             _serverAgentCurrent[conversation.SourceKey] = (task, cts);
 
-            await SendPlainAsync(conversation, $"收到，我在服务器上跑一下（会话「{serverSession.Name}」）：{Shorten(payload, 40)}");
+            await SendPlainAsync(conversation, $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{Shorten(payload, 40)}");
             _ = Task.Run(async () =>
             {
                 try
@@ -2148,11 +2155,13 @@ public sealed class BotAgent : IDisposable
         var total = 0;
         foreach (var (key, sessions) in _agentSessions.AllChats())
         {
-            var name = Conversations.FirstOrDefault(c => c.SourceKey == key)?.Name ?? key;
+            var conv = Conversations.FirstOrDefault(c => c.SourceKey == key);
+            var shown = conv is not null ? ChatLabel(conv) : (_settings.AgentMaskSensitive ? AgentMask.ChatLabel(key) : key);
             total += sessions.Count;
             chats[key] = new JsonObject
             {
-                ["name"] = name,
+                ["name"] = shown,
+                ["nameRaw"] = conv?.Name ?? key,
                 ["sessions"] = new JsonArray(sessions.Select(s => (JsonNode)BuildSessionNode(key, s)).ToArray())
             };
         }
@@ -2170,7 +2179,8 @@ public sealed class BotAgent : IDisposable
         => new()
         {
             ["id"] = s.Id,
-            ["name"] = s.Name,
+            ["name"] = MaybeMask(s.Name, sourceKey),
+            ["nameRaw"] = s.Name,
             ["backend"] = s.Backend,
             ["device"] = s.Device,
             ["turns"] = s.Turns,
@@ -2292,6 +2302,39 @@ public sealed class BotAgent : IDisposable
         return reference.Trim();
     }
 
+    /// <summary>这个聊天里出现过的昵称（脱敏时把它们换成 群友A/B…）。</summary>
+    private List<string> KnownNames(string sourceKey)
+    {
+        var names = new List<string>();
+        var conversation = Conversations.FirstOrDefault(c => c.SourceKey == sourceKey);
+        if (conversation is not null)
+        {
+            names.AddRange(conversation.Messages
+                .Where(m => m.SenderName is { Length: >= 2 })
+                .Select(m => m.SenderName!));
+        }
+
+        return names.Distinct().ToList();
+    }
+
+    /// <summary>按开关决定要不要遮盖文本（开关关掉就原样返回）。</summary>
+    private string MaybeMask(string text, string? sourceKey = null)
+        => _settings.AgentMaskSensitive
+            ? AgentMask.Text(text, sourceKey is null ? null : KnownNames(sourceKey))
+            : text;
+
+    /// <summary>按开关决定聊天的显示名：开=「群聊 940***75」，关=真名。</summary>
+    private string ChatLabel(BotConversation conversation)
+        => _settings.AgentMaskSensitive
+            ? AgentMask.ChatLabel(conversation.SourceKey)
+            : conversation.Name;
+
+    /// <summary>把「Agent 附加提示词」拼在任务前面（面板里那份，默认 = 隐私红线；空 = 不拼）。</summary>
+    private string WithAgentPrompt(string payload)
+        => string.IsNullOrWhiteSpace(_settings.AgentPrompt)
+            ? payload
+            : $"{_settings.AgentPrompt.Trim()}\n\n—— 本次任务 ——\n{payload}";
+
     /// <summary>//help：把所有命令列出来（号主：“忘记一些命令可以添加一个 help 命令”）。</summary>
     private string HelpText(string sourceKey)
     {
@@ -2312,7 +2355,7 @@ public sealed class BotAgent : IDisposable
             "//stop             停掉正在跑的任务\n" +
             "//status           看两个后端的开关/在线情况/当前会走哪边\n" +
             "//help             看这份说明\n" +
-            $"（当前会话：{(current is null ? "还没有，发一句 //指令 会自动建" : $"「{current.Name}」 {current.Turns} 轮")}）";
+            $"（当前会话：{(current is null ? "还没有，发一句 //指令 会自动建" : $"「{MaybeMask(current.Name, sourceKey)}」 {current.Turns} 轮")}）";
     }
 
     /// <summary>//sessions all：所有聊天的会话总数与标题。</summary>
@@ -2328,9 +2371,10 @@ public sealed class BotAgent : IDisposable
         var lines = new List<string> { $"全部 agent 会话：{chats.Count} 个聊天 / 共 {total} 个会话" };
         foreach (var (key, sessions) in chats.Take(10))
         {
-            var name = Conversations.FirstOrDefault(c => c.SourceKey == key)?.Name ?? key;
+            var conv = Conversations.FirstOrDefault(c => c.SourceKey == key);
+            var name = conv is not null ? ChatLabel(conv) : (_settings.AgentMaskSensitive ? AgentMask.ChatLabel(key) : key);
             var titles = sessions.Take(6).Select(s =>
-                $"{(s.Backend == "server" ? "服务器" : (s.Device ?? "外部"))}·{s.Name}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
+                $"{(s.Backend == "server" ? "服务器" : (s.Device ?? "外部"))}·{MaybeMask(s.Name, key)}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
             var more = sessions.Count > 6 ? $" 等 {sessions.Count} 个" : string.Empty;
             lines.Add($"{name}（{sessions.Count} 个）：{string.Join("、", titles)}{more}");
         }
@@ -2365,7 +2409,7 @@ public sealed class BotAgent : IDisposable
                 : ago.TotalDays < 1 ? $"{(int)ago.TotalHours} 小时前"
                 : $"{(int)ago.TotalDays} 天前";
             var mark = _agentSessions.IsCurrent(sourceKey, s) ? " ←" : string.Empty;
-            lines.Add($"{i + 1}. {s.Name} [{where}] {s.Turns} 轮 · {when}{mark}");
+            lines.Add($"{i + 1}. {MaybeMask(s.Name, sourceKey)} [{where}] {s.Turns} 轮 · {when}{mark}");
         }
 
         lines.Add("用法：//new [名字] 新建并切换、//use 序号|名字 切换、//rename 改名、//del 序号|名字 删除、//reset 清空当前；//help 看全部命令。");
@@ -3861,6 +3905,7 @@ public sealed class BotAgent : IDisposable
         }
 
         var elapsed = (DateTime.Now - started).TotalMilliseconds;
+        Volatile.Write(ref _lastGenerationMs, (long)elapsed);
         SetThinking(conversation, false);
 
         // 发言适合度门槛：以前只写在提示词里、代码不执行；现在真正生效。

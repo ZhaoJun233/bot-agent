@@ -270,7 +270,7 @@ h1, h2, h3, p { margin: 0; }
 
 .search-wrap { padding: 0 12px 10px; }
 
-input[type="search"], input[type="text"], input[type="number"], textarea, select {
+input[type="search"], input[type="text"], input[type="number"], input[type="time"], textarea, select {
   width: 100%;
   background: var(--control-fill);
   border: 1px solid var(--control-border);

@@ -5,6 +5,7 @@ using QQChatAgent.Services.Agent;
 using QQChatAgent.Services.Data;
 using QQChatAgent.Services.NapCat;
 using QQChatAgent.Services.OneBot;
+using QQChatAgent.Services.Ops;
 
 namespace QQChatAgent.Headless;
 
@@ -100,11 +101,16 @@ public static class Program
         // （用户打开面板看不到二维码，是远程部署卡住最久的原因）
         using var loginQr = new LoginQrService(settings.NapCatWebUiUrl, settings.NapCatWebUiToken);
 
+        // 服务器健康日报（每天定时私聊一条状态）：整条链路只用机器人自己 + 协议端，
+        // **不经过外部设备 agent**（那台电脑可能根本没开）—— 号主 2026-09-18 明确要求。
+        var healthReports = new HealthReportService(settings, agent, gateway);
+
         // 先恢复磁盘会话并订阅事件，再连接协议端，避免启动期消息竞态
         agent.Start();
         gateway.Start();
+        healthReports.Start();
 
-        using var web = new WebUiServer(settings.HealthPort, settings, gateway, agent, loginQr, agentBridge);
+        using var web = new WebUiServer(settings.HealthPort, settings, gateway, agent, loginQr, agentBridge, healthReports);
         if (settings.HealthPort > 0)
         {
             web.Start();
@@ -156,6 +162,7 @@ public static class Program
         }
 
         FileLog.Write("Host", "收到停止信号，正在退出…");
+        healthReports.Dispose();
         agent.Dispose();
         gateway.Stop();
         FileLog.Write("Host", "已停止。");

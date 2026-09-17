@@ -21,6 +21,7 @@ public sealed class MockOpenAi : IDisposable
     private int _portraitRequests;
     private int _stickerDescribeRequests;
     private int _stickerCurateRequests;
+    private int _modelListHits;
 
     public MockOpenAi(int port, string bind = "127.0.0.1")
     {
@@ -58,6 +59,9 @@ public sealed class MockOpenAi : IDisposable
             _requests.Clear();
         }
     }
+
+    /// <summary>收到的 /v1/models 请求数（健康日报探“模型网关通不通”就靠它）。</summary>
+    public int ModelListHits => Volatile.Read(ref _modelListHits);
 
     /// <summary>收到的联网搜索（原生 generateContent）请求数。</summary>
     public int GroundingRequests
@@ -208,6 +212,22 @@ public sealed class MockOpenAi : IDisposable
         if (path.Contains(":generateContent", StringComparison.OrdinalIgnoreCase))
         {
             await HandleGroundingAsync(context, body);
+            return;
+        }
+
+        // GET /v1/models：健康日报会探一下“模型网关到底通不通”。
+        // 真实的网关（OpenAI / 自建中转）都有这个端点，所以 mock 也要有 —— 否则探针永远报“不通”，
+        // 场景里就分不出“真不通”与“mock 没实现”。
+        if (path.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            Interlocked.Increment(ref _modelListHits);
+            var listBody = Encoding.UTF8.GetBytes(
+                "{\"object\":\"list\",\"data\":[{\"id\":\"mock-model\",\"object\":\"model\"}]}");
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = listBody.Length;
+            await context.Response.OutputStream.WriteAsync(listBody);
+            context.Response.Close();
             return;
         }
 

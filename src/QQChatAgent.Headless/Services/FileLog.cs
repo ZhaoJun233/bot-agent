@@ -27,6 +27,9 @@ public static class FileLog
 
     private static string LogPath => Path.Combine(AppPaths.LogsDir, "qqchat.log");
 
+    /// <summary>当前日志文件路径（健康日报要报它的大小；文件可能不存在）。</summary>
+    public static string LogFilePath => LogPath;
+
     /// <summary>是否同时写文件（托管侧可关闭）。</summary>
     public static bool WriteToFile { get; set; } = true;
 
