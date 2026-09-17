@@ -263,6 +263,12 @@ public sealed class AgentBridgeServer
         };
     }
 
+    /// <summary>让外部设备把它那边的会话文件删掉（删除/清空会话时用；删不掉也不影响主流程）。</summary>
+    public Task<bool> ForgetSessionAsync(string piSessionId)
+        => string.IsNullOrWhiteSpace(piSessionId)
+            ? Task.FromResult(false)
+            : SendAsync(new JsonObject { ["type"] = "forget", ["session"] = piSessionId.Trim() });
+
     /// <summary>踢掉某台设备的连接（面板里的“断开”）；返回是不是真踢了。</summary>
     public async Task<bool> DisconnectAsync(string? deviceName)
     {
@@ -826,6 +832,15 @@ public sealed class AgentTask
 
     /// <summary>配置里那个模型名在这台设备上不存在时，记下原值（本轮的降级要告知号主）。</summary>
     public string? ModelFallbackFrom { get; set; }
+
+    /// <summary>属于哪个 agent 会话（切换/新建会话就认它）。</summary>
+    public AgentSessionStore.AgentSession? SessionRef { get; set; }
+
+    /// <summary>服务器内置后端：这一轮之前的历史（同一会话的上几轮）。</summary>
+    public List<(string Role, string Text)>? History { get; set; }
+
+    /// <summary>服务器内置后端：跑完后的完整对话（上层存回会话）。</summary>
+    public List<(string Role, string Text)>? Conversation { get; set; }
 
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.Now;
 

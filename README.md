@@ -101,7 +101,7 @@ dotnet tests/QQChatAgent.IntegrationHarness/bin/Release/net8.0/QQChatAgent.Integ
 ```
 
 覆盖 31 个场景（白名单/静默/分句/记忆/档案/设置热更新/掉线/扫码登录/表情包/引用（发与收两个方向）/括号旁白/小表情与戳一戳/模型配置热改/听音乐/链接与转发/语音/撤回/联网搜索与时间/面板日志/图片下载/连珠炮补评估（rkey 过期与缓存）/数据迁移），
-另有面板静态与运行时探针（`tests/QQChatAgent.FrontendProbe`）。全量 **453** 条断言；单个场景可以用 `QQCHAT_IT_ONLY=s32` 只跑它。
+另有面板静态与运行时探针（`tests/QQChatAgent.FrontendProbe`）。全量 **467** 条断言；单个场景可以用 `QQCHAT_IT_ONLY=s32` 只跑它。
 
 > 注意：测试工程没有引用机器人工程，**改完机器人代码要单独 build 它**，否则跑的还是旧 DLL。
 

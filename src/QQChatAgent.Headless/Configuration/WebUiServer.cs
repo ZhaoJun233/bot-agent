@@ -443,6 +443,13 @@ public sealed class WebUiServer : IDisposable
             return;
         }
 
+        // Agent 会话：列出 / 新建 / 切换 / 删除 / 清空（面板与群里同一套）
+        if (path.Equals("/api/agent/sessions", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAgentSessionsAsync(context, method);
+            return;
+        }
+
         if (path.Equals("/api/ai-mode", StringComparison.OrdinalIgnoreCase) && method == "POST")
         {
             var body = await ReadJsonAsync(context);
@@ -888,6 +895,89 @@ public sealed class WebUiServer : IDisposable
         context.Response.AddHeader("Content-Disposition", $"attachment; filename=\"{filename}\"");
         await context.Response.OutputStream.WriteAsync(bytes);
         context.Response.Close();
+    }
+
+    /// <summary>
+    /// Agent 会话管理（面板）：
+    ///   GET  /api/agent/sessions?key=group:123   → 列该会话的 agent 会话（带当前标记）
+    ///   GET  /api/agent/sessions                 → 不带 key：列出**所有**聊天的会话（面板总览用）
+    ///   POST {key, action: new|use|delete|reset, id?, name?}
+    /// 与群里的 //sessions / //new / //use / //del / //reset 是同一套存储，两边看到的一样。
+    /// </summary>
+    private async Task HandleAgentSessionsAsync(HttpListenerContext context, string method)
+    {
+        var key = context.Request.QueryString["key"];
+
+        if (method != "POST")
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                await WriteJsonAsync(context, 200, new JsonObject
+                {
+                    ["chats"] = _agent.BuildAllAgentSessionsPayload()
+                });
+                return;
+            }
+
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["key"] = key,
+                ["sessions"] = _agent.BuildAgentSessionsPayload(key!)
+            });
+            return;
+        }
+
+        var body = await ReadJsonAsync(context);
+        var action = (body?["action"]?.GetValue<string>() ?? string.Empty).Trim().ToLowerInvariant();
+        var chatKey = (body?["key"]?.GetValue<string>() ?? string.Empty).Trim();
+        var sessionId = body?["id"]?.GetValue<string>();
+        var sessionName = body?["name"]?.GetValue<string>();
+        var backend = (body?["backend"]?.GetValue<string>() ?? "host").Trim();
+
+        if (chatKey.Length == 0)
+        {
+            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "缺少 key（聊天会话）" });
+            return;
+        }
+
+        var ok = false;
+        var message = string.Empty;
+        switch (action)
+        {
+            case "new":
+            {
+                var created = _agent.CreateAgentSession(chatKey, backend, sessionName);
+                ok = true;
+                message = $"已新建会话「{created.Name}」";
+                break;
+            }
+
+            case "use":
+                ok = _agent.UseAgentSession(chatKey, sessionId ?? string.Empty);
+                message = ok ? "已切换" : "没找到这个会话";
+                break;
+
+            case "delete":
+                ok = _agent.DeleteAgentSession(chatKey, sessionId ?? string.Empty);
+                message = ok ? "已删除（当前会话已补新的）" : "没找到这个会话";
+                break;
+
+            case "reset":
+                ok = _agent.ResetAgentSession(chatKey, sessionId ?? string.Empty);
+                message = ok ? "已清空历史" : "没找到这个会话";
+                break;
+
+            default:
+                await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "action 只支持 new/use/delete/reset" });
+                return;
+        }
+
+        await WriteJsonAsync(context, 200, new JsonObject
+        {
+            ["ok"] = ok,
+            ["message"] = message,
+            ["sessions"] = _agent.BuildAgentSessionsPayload(chatKey)
+        });
     }
 
     /// <summary>本机 agent 的状态（面板卡片 / 群里的 //status）。</summary>

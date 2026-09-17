@@ -491,6 +491,10 @@ def main() -> int:
                 elif mtype == "models":
                     # 面板里点“刷新模型”时用：现场问一遍 pi 有哪些模型
                     ws.send_json({"type": "models", "models": _list_models(args.pi)})
+                elif mtype == "forget":
+                    # deleted session: also remove pi's own session file on this machine
+                    removed = _forget_session(msg.get("session") or "")
+                    ws.send_json({"type": "forgot", "session": msg.get("session"), "removed": removed})
                 elif mtype == "ping":
                     ws.send_json({"type": "pong"})
         except KeyboardInterrupt:
@@ -525,6 +529,33 @@ def _pi_version(pi_cmd: str) -> str:
         return (out.stdout or out.stderr).strip().splitlines()[0][:40] if (out.stdout or out.stderr) else "?"
     except Exception:                                           # noqa: BLE001
         return "?"
+
+
+def _forget_session(pi_session_id: str) -> int:
+    """删掉 pi 那边的会话文件（`~/.pi/agent/sessions/<工作目录>/<会话>.jsonl`）。
+
+    为什么由桥来做：会话文件在**本机**，机器人看不到。删不掉也不报错（只是历史还在），
+    但会写进日志，号主自己能看出发生了什么。
+    """
+    if not pi_session_id:
+        return 0
+
+    import glob
+
+    home = os.path.expanduser("~")
+    pattern = os.path.join(home, ".pi", "agent", "sessions", "*", f"*{pi_session_id}*.jsonl")
+    removed = 0
+    for path in glob.glob(pattern):
+        try:
+            os.remove(path)
+            removed += 1
+            log(f"已删除 pi 会话文件：{path}")
+        except OSError as exc:
+            log(f"删不掉 {path}：{exc}")
+
+    if removed == 0:
+        log(f"没找到 pi 会话文件（{pi_session_id}）—— 可能还没落盘/存到别的目录")
+    return removed
 
 
 def _list_models(pi_cmd: str) -> list[str]:

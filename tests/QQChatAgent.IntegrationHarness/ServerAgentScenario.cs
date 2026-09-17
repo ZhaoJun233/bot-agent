@@ -44,7 +44,13 @@ public static partial class Program
         // 后面几步也会用到服务器 agent（关掉外部开关那轮、//stop 那个长任务）
         agentAi.EnqueueReply("""{"final":"关掉外部开关后的结论"}""");
         agentAi.EnqueueReply("""{"thought":"慢慢想","tool":"bash","command":"sleep 30"}""");
-        agentAi.EnqueueReply("""{"final":"停下来了"}""");
+        // 注意：//stop 取消那一轮**不会**再消费下一条回复（直接在循环里结束）——这里别多排，
+        // 否则后面的阶段会拿到错位的回复（踩过一次）
+        // 会话测试（服务器后端）：第一句 / 第二句 / 新会话一句 / 外加一条备用
+        agentAi.EnqueueReply("""{"final":"第一句的结论"}""");
+        agentAi.EnqueueReply("""{"final":"第二句的结论"}""");
+        agentAi.EnqueueReply("""{"final":"新会话的结论"}""");
+        agentAi.EnqueueReply("""{"final":"备用结论"}""");
 
         // 服务器 agent 的两步：先调 bash，再给结论
         // 聊天那条路（人设协议）在本场景用不到 —— 所有消息都是 // 命令
@@ -229,6 +235,68 @@ public static partial class Program
             status.Contains("当前会走：") && status.Contains("单条指定："),
             $"最后几条发出去的是：{string.Join(" ⏐ ", Sent().TakeLast(5))}");
 
+        // ---- ⑦ 会话（服务器后端）：同一会话接着聊、//new 开新的就断上下文 ----
+        // 号主要求“调用内置/外部 agent 时能自由切换会话”——内置这一侧的会话就是我们自己存的历史
+        // 前面的步骤把服务器开关关过，这里先打开（不然 //@server 只会回“开关是关的”）
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            var body = new StringContent("{\"enableServerAgent\":true,\"agentTarget\":\"server\"}", Encoding.UTF8, "application/json");
+            await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
+        }
+
+        await Task.Delay(400);
+
+        // 等“这一轮跑完”的可靠信号是日志里的 agent 完成（不是脚本回复的内容 —— 队列可能被前面阶段吃掉）
+        var doneBefore = bot.OutputLines.Count(l => l.Contains("agent 完成"));
+        async Task SendServerAndWaitAsync(string text, long mid)
+        {
+            var before = bot.OutputLines.Count(l => l.Contains("agent 完成"));
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", text, mid, mentionBot: false, ct: cts.Token);
+            await WaitUntilAsync(() => bot.OutputLines.Count(l => l.Contains("agent 完成")) > before, TimeSpan.FromSeconds(90));
+            await Task.Delay(300);   // 让 _serverAgentBusy 清掉，不然下一句会被“还在跑”挡住
+        }
+
+        await SendServerAndWaitAsync("//@server 会话测试第一句", 16020);
+
+        var beforeSecond = agentAi.Requests.Count;
+        await SendServerAndWaitAsync("//@server 会话测试第二句", 16021);
+
+        var secondTurnRequest = agentAi.Requests.Skip(beforeSecond)
+            .LastOrDefault(r => AllTexts(r).Any(t => t.Contains("会话测试第二句")));
+        Check("★ 同一会话里接着聊：上一轮的对话会带进这一轮（内置 agent 也记得）",
+            secondTurnRequest is not null && AllTexts(secondTurnRequest).Any(t => t.Contains("会话测试第一句")),
+            secondTurnRequest is null
+                ? $"没找到含「会话测试第二句」的请求（自定义接口共 {agentAi.Requests.Count} 次）"
+                : $"这一轮带了 {AllTexts(secondTurnRequest).Count} 条文本：[{string.Join(" ⏐ ", AllTexts(secondTurnRequest).Select(t => t.Length > 22 ? t[..22] : t))}]");
+
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//@server new 断上下文", 16022, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("已开新会话")), TimeSpan.FromSeconds(30));
+        await Task.Delay(300);
+
+        var requestsBeforeFresh = agentAi.Requests.Count;
+        await SendServerAndWaitAsync("//@server 新会话第一句", 16023);
+        var freshRequest = agentAi.Requests.Skip(requestsBeforeFresh).FirstOrDefault();
+        Check("★ //new 之后是空上下文（不再带着旧会话的历史）",
+            freshRequest is not null &&
+            !AllTexts(freshRequest).Any(t => t.Contains("会话测试第一句")),
+            $"新会话那次请求：{string.Join(" ⏐ ", AllTexts(freshRequest ?? new JsonObject()).Select(t => t.Length > 30 ? t[..30] + "…" : t))}");
+
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//sessions", 16024, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("agent 会话")), TimeSpan.FromSeconds(30));
+        Check("★ //sessions 里能看到内置会话及其轮数",
+            Sent().Any(t => t.Contains("agent 会话") && t.Contains("服务器内置")),
+            string.Join(" | ", Sent().TakeLast(2)));
+
         await bot.StopAsync();
     }
+
+    /// <summary>请求里**所有** role 的文本（含 assistant 上一轮）——验“会话历史带过来了”要用它（UserTexts 只看 user）。</summary>
+    private static List<string> AllTexts(JsonObject request)
+        => request["messages"]?.AsArray()
+               .Select(m => m?["content"] is JsonArray parts
+                   ? string.Concat(parts.Where(p => p?["type"]?.GetValue<string>() == "text")
+                                        .Select(p => p?["text"]?.GetValue<string>()))
+                   : m?["content"]?.GetValue<string>() ?? string.Empty)
+               .Where(t => t.Length > 0)
+               .ToList() ?? new List<string>();
 }

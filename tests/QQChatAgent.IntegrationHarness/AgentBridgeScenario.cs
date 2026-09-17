@@ -132,7 +132,7 @@ public static partial class Program
         var task = bridge.Tasks.Last();
         Check("★ 任务细节带对了：提示词 / 会话名 / 工作目录 / 超时",
             task["prompt"]?.GetValue<string>() == "看下现在有几张表情包" &&
-            task["session"]?.GetValue<string>() == $"qqchat-group-{groupId}" &&
+            (task["session"]?.GetValue<string>() ?? "").StartsWith($"qqchat-group-{groupId}-", StringComparison.Ordinal) &&
             task["cwd"]?.GetValue<string>() == "E:/bot" &&
             task["timeoutSec"]?.GetValue<int>() == 120,
             task.ToJsonString());
@@ -408,6 +408,80 @@ public static partial class Program
         Check("★ 这种降级会在群里说一句（号主能看出是面板里配错了）",
             Sent().Any(t => t.Contains("面板里给这台设备配的模型")),
             string.Join(" | ", Sent().TakeLast(3)));
+
+        // 收尾：不收尾它会占着“在跑”的名额，后面的任务会被串行门挡住（这里踩过）
+        bridge.Send(new JsonObject
+        {
+            ["type"] = "done",
+            ["id"] = bridge.Tasks[^1]["id"]!.GetValue<string>(),
+            ["text"] = "降级那单的结论",
+            ["exitCode"] = 0,
+            ["durationMs"] = 200,
+            ["toolCalls"] = 0
+        });
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("降级那单的结论")), TimeSpan.FromSeconds(30));
+
+        // ---- ⑯ Agent 会话：//new 开新的（空上下文）、//use 切回去、//sessions 列表、面板 API 同步
+        //（号主 2026-09-17：调用内部/外部 agent 时能自由切换/新建/删除会话，面板与群里都要能操作）----
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//sessions", 15060, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("agent 会话")), TimeSpan.FromSeconds(30));
+        Check("★ //sessions 列出会话（含当前标记与用法）",
+            Sent().Any(t => t.Contains("agent 会话") && t.Contains("←") && t.Contains("//new")),
+            string.Join(" | ", Sent().TakeLast(2)));
+
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//new 测试新会话", 15061, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("已开新会话")), TimeSpan.FromSeconds(30));
+        Check("★ //new 建了新会话（并告诉名字与后端）",
+            Sent().Any(t => t.Contains("已开新会话「测试新会话」")),
+            string.Join(" | ", Sent().TakeLast(2)));
+
+        // 在新会话里跑一条：外部设备那边拿到的 session id 应该是**新的**
+        var beforeNewSessionTask = bridge.Tasks.Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//新会话里的第一句", 15062, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => bridge.Tasks.Count > beforeNewSessionTask, TimeSpan.FromSeconds(30));
+        var newSessionId = bridge.Tasks[^1]["session"]?.GetValue<string>() ?? string.Empty;
+        bridge.Send(new JsonObject
+        {
+            ["type"] = "done",
+            ["id"] = bridge.Tasks[^1]["id"]!.GetValue<string>(),
+            ["text"] = "新会话的结论",
+            ["exitCode"] = 0,
+            ["durationMs"] = 200,
+            ["toolCalls"] = 0
+        });
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("新会话的结论")), TimeSpan.FromSeconds(30));
+
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            var listJson = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}");
+            var sessions = JsonNode.Parse(listJson)!["sessions"]!.AsArray();
+            Check("★ 面板能看到群里建的会话（与群同一套存储）",
+                sessions.Any(s => s!["name"]?.GetValue<string>() == "测试新会话" && s!["current"]?.GetValue<bool>() == true),
+                listJson);
+            var currentSess = sessions.FirstOrDefault(s => s!["current"]?.GetValue<bool>() == true);
+            var distinctPi = sessions.Select(s => s!["piSession"]?.GetValue<string>() ?? string.Empty)
+                .Where(x => x.Length > 0).Distinct().Count();
+            Check("★ 新会话真的换了一份上下文（当前会话的 pi session id = 刚下发的那个，两会话 id 不同）",
+                currentSess is not null &&
+                (currentSess["piSession"]?.GetValue<string>() ?? string.Empty) == newSessionId &&
+                distinctPi >= 2,
+                $"下发={newSessionId}；全部：[{string.Join(" , ", sessions.Select(s => $"{s!["name"]}@{s!["piSession"]}{(s!["current"]?.GetValue<bool>() == true ? "(当前)" : "")}"))}]");
+
+            // //use 切回默认会话
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//use 默认", 15063, mentionBot: false, ct: cts.Token);
+            await WaitUntilAsync(() => Sent().Any(t => t.Contains("切到会话")), TimeSpan.FromSeconds(30));
+            Check("★ //use 能切回旧会话",
+                Sent().Any(t => t.Contains("切到会话「默认」")), string.Join(" | ", Sent().TakeLast(2)));
+
+            // //del 删掉刚建的
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//del 测试新会话", 15064, mentionBot: false, ct: cts.Token);
+            await WaitUntilAsync(() => Sent().Any(t => t.Contains("已删除会话")), TimeSpan.FromSeconds(30));
+            Check("★ //del 删除会话（并告知当前已自动换新）",
+                Sent().Any(t => t.Contains("已删除会话「测试新会话」")), string.Join(" | ", Sent().TakeLast(2)));
+            Check("★ 删除外部会话时会通知设备删掉 pi 那边的记录",
+                await WaitUntilAsync(() => bridge.Forgotten.Count > 0, TimeSpan.FromSeconds(10)),
+                string.Join(",", bridge.Forgotten));
+        }
 
         await bot.StopAsync();
     }

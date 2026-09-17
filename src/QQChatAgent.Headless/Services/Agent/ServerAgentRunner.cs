@@ -43,7 +43,15 @@ public sealed class ServerAgentRunner
         var allowed = ParseTools(_settings.AgentServerTools);
 
         var system = BuildSystemPrompt(workDir, allowed);
-        var messages = new List<(string Role, string Text)> { ("user", task.Prompt) };
+
+        // 会话上下文：同一会话里的前几轮会带过来（//new 开新的就是空历史）
+        var messages = new List<(string Role, string Text)>();
+        if (task.History is { Count: > 0 })
+        {
+            messages.AddRange(task.History);
+        }
+
+        messages.Add(("user", task.Prompt));
         var started = DateTimeOffset.Now;
 
         try
@@ -125,6 +133,9 @@ public sealed class ServerAgentRunner
         }
         finally
         {
+            // 把本轮的对话（含工具步骤）交给上层存进会话：下一轮同一会话能接上
+            task.Conversation = messages;
+
             // 面板/群里都要显示“跑了多久”，服务器这条路不能被落下
             if (task.DurationMs == 0)
             {

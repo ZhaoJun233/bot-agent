@@ -28,6 +28,9 @@ internal sealed class MockAgentBridge : IDisposable
     /// <summary>收到的取消请求里的任务 id。</summary>
     public List<string> Cancels { get; } = new();
 
+    /// <summary>收到的“删会话”请求（forget）里的 pi 会话 id。</summary>
+    public List<string> Forgotten { get; } = new();
+
     /// <summary>是否连接成功（令牌不对时会失败）。</summary>
     public bool Connected { get; private set; }
 
@@ -108,6 +111,10 @@ internal sealed class MockAgentBridge : IDisposable
                         break;
                     case "cancel":
                         Cancels.Add(node?["id"]?.GetValue<string>() ?? string.Empty);
+                        break;
+                    case "forget":
+                        Forgotten.Add(node?["session"]?.GetValue<string>() ?? string.Empty);
+                        Send(new JsonObject { ["type"] = "forgot", ["session"] = node?["session"]?.GetValue<string>(), ["removed"] = 1 });
                         break;
                 }
             }

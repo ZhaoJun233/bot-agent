@@ -692,6 +692,17 @@
             </details>
 
             <div id="agentDeviceTable" class="path-hint" style="max-height:260px;overflow:auto"></div>
+
+            <!-- Agent 会话：新建/切换/删除/清空（与群里的 //sessions //new //use //del //reset 同一套） -->
+            <div class="field">
+                <label>Agent 会话<span class="hint">群里发 // 就是在这个会话里接着聊；这里能新建/切换/删除/清空</span></label>
+                <div class="sticker-actions" style="margin:0">
+                    <select id="agentSessionChat" style="flex:1"><option value="">（选一个聊天）</option></select>
+                    <button class="ghost-btn" id="agentSessionNew">新建</button>
+                    <button class="ghost-btn" id="agentSessionRefresh">刷新</button>
+                </div>
+            </div>
+            <div id="agentSessionTable" class="path-hint" style="max-height:220px;overflow:auto"></div>
             <pre id="agentConnectOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto;display:none"></pre>
 
             <div class="grid-2">

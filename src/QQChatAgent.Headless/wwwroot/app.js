@@ -1904,6 +1904,7 @@
         const r = await api("/api/agent/status");
         refreshAgentDevices(r.devices || []);
         fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
+        refreshAgentSessions();
         out.textContent = [
           `开关：总体${r.enabled ? "开" : "关"}｜外部设备 ${r.hostAgent === false ? "关" : "开"}｜服务器 ${r.serverAgent ? "开" : "关"}`,
           `前缀：${r.prefix}`,
