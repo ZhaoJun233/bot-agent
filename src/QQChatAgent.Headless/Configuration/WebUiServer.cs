@@ -847,6 +847,7 @@ public sealed class WebUiServer : IDisposable
         }
 
         var workdir = string.IsNullOrWhiteSpace(_settings.AgentWorkDir) ? "%USERPROFILE%" : _settings.AgentWorkDir;
+        var deviceName = (context.Request.QueryString["name"] ?? string.Empty).Trim();
         var wsUrl = $"ws://{host}/agent-bridge";
 
         string script;
@@ -861,6 +862,7 @@ public sealed class WebUiServer : IDisposable
                 "set -e\n" +
                 $"export PI_BRIDGE_URL='{wsUrl}'\n" +
                 $"export PI_BRIDGE_TOKEN='{token}'\n" +
+                (deviceName.Length > 0 ? $"export PI_BRIDGE_NAME='{deviceName}'\n" : string.Empty) +
                 $"export PI_BRIDGE_WORKDIR='{workdir}'\n" +
                 "export PI_BRIDGE_PI=${PI_BRIDGE_PI:-pi}\n" +
                 "exec python3 pi-bridge.py\n";
@@ -874,6 +876,7 @@ public sealed class WebUiServer : IDisposable
                 "rem 需要把 pi-bridge.py 放在同目录（面板里可下载）\r\n" +
                 $"set PI_BRIDGE_URL={wsUrl}\r\n" +
                 $"set PI_BRIDGE_TOKEN={token}\r\n" +
+                (deviceName.Length > 0 ? $"set PI_BRIDGE_NAME={deviceName}\r\n" : string.Empty) +
                 $"set PI_BRIDGE_WORKDIR={workdir}\r\n" +
                 "python pi-bridge.py\r\n" +
                 "pause\r\n";

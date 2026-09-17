@@ -362,6 +362,11 @@ public static partial class Program
                 win.Contains("ws://bot.example.com/agent-bridge") && win.Contains(token) && win.Contains("pi-bridge.py"),
                 win.Split('\n')[0]);
 
+            var named = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/setup?os=win&host=bot.example.com&name=SOME-PC");
+            Check("★ 一键连接脚本能把设备名写进去（面板填的名字 = 本机报上来的名字）",
+                named.Contains("PI_BRIDGE_NAME=SOME-PC") && named.Contains(token),
+                string.Join(" | ", named.Split('\n').Where(l => l.Contains("PI_BRIDGE_NAME"))));
+
             var sh = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/setup?os=sh&host=bot.example.com");
             Check("★ 一键连接脚本（Linux/Mac）：同一套内容",
                 sh.Contains("#!/bin/sh") && sh.Contains("ws://bot.example.com/agent-bridge") && sh.Contains(token),
@@ -371,6 +376,9 @@ public static partial class Program
             Check("★ 面板能下载桥脚本本体（pi-bridge.py，内嵌在 DLL 里）",
                 bridgeScript.Contains("PI_BRIDGE_URL") && bridgeScript.Contains("def main()"),
                 $"长度 {bridgeScript.Length}");
+            Check("★ 桥脚本支持 --name / PI_BRIDGE_NAME（面板里按名字认设备）",
+                bridgeScript.Contains("--name") && bridgeScript.Contains("PI_BRIDGE_NAME"),
+                string.Join(" | ", bridgeScript.Split('\n').Where(l => l.Contains("PI_BRIDGE_NAME")).Take(2)).Trim());
 
             var status2 = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/status"))!;
             var devices = devices2(status2);

@@ -665,6 +665,32 @@
                     <button class="ghost-btn" id="agentDeviceRefresh">刷新状态</button>
                 </div>
             </div>
+
+            <details class="path-hint" style="margin:6px 0">
+                <summary style="cursor:pointer"><b>「设备名」到底是什么？怎么把一台机器接上来（点开看）</b></summary>
+                <div style="padding:6px 0 0 2px;line-height:1.7">
+                    <b>设备名</b>就是本机桥握手时报上来的名字：默认取本机主机名（Windows 的 <code>COMPUTERNAME</code>，比如 <code>ZHAOSPC</code>），
+                    也可以用 <code>--name</code> / <code>PI_BRIDGE_NAME</code> 自己指定。<br>
+                    这里是“按名字认设备”的：<b>面板里填的名字要和本机跑的那个名字一致</b> —— 不一致时它会在表里多出一行（名字为实际报上来的那个），把旧那行删掉即可。
+
+                    <div style="margin-top:8px"><b>把一台机器接上来（三步）：</b></div>
+                    <ol style="margin:4px 0 0 18px">
+                        <li>本机装好 <code>pi</code>（本机 agent 的干活工具），并确认 <code>pi --version</code> 能跑；Python 3 也要有。</li>
+                        <li>点上面「一键连接本机…」→ 填一个名字（比如 <code>ZHAOSPC</code>）→ 下载两个文件（<code>connect-pi-bridge.cmd</code> 与 <code>pi-bridge.py</code>）放到同一个目录。</li>
+                        <li>双击 <code>connect-pi-bridge.cmd</code>（Windows）或 <code>sh connect-pi-bridge.sh</code>（Linux/Mac）——窗口别关。
+                            回到这里点「我已运行，检测连接」，看到 🟢 在线就成了。</li>
+                    </ol>
+
+                    <div style="margin-top:8px"><b>不想用一键脚本（手动）：</b>
+                        在本机跑 <code>python pi-bridge.py --name 你的设备名 --url ws://机器人地址/agent-bridge --token &lt;AGENT_TOKEN&gt; --workdir 你的目录</code>。
+                        令牌在容器环境变量 <code>QQCHAT_AGENT_TOKEN</code> 里（也可用面板“一键连接”生成的脚本里看到）。</div>
+
+                    <div style="margin-top:8px"><b>连着的时候能做什么 / 断了怎么办：</b>
+                        在线时下面会列出它的模型（可选一个默认用它）；点「断开」会真的断开，但本机那个窗口还开着的话，它 <b>3 秒后会自己重连</b>；
+                        要让某台设备彻底不干活，就把它的「启用」关掉（关掉后群里的 <code>//</code> 会如实说“设备在面板里被关掉了”）。</div>
+                </div>
+            </details>
+
             <div id="agentDeviceTable" class="path-hint" style="max-height:260px;overflow:auto"></div>
             <pre id="agentConnectOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto;display:none"></pre>
 

@@ -15,7 +15,8 @@
 用法（把本文件和 pi-bridge.py 放同一个目录）：
     python pi-bridge.py                  # 用默认配置（见下方 DEFAULTS / 环境变量）
     python pi-bridge.py --workdir E:/bot # 指定 pi 的工作目录
-环境变量：PI_BRIDGE_URL / PI_BRIDGE_SSH / PI_BRIDGE_KEY / PI_BRIDGE_TOKEN / PI_BRIDGE_WORKDIR
+    python pi-bridge.py --name ZHAOSPC --url ws://机器人/agent-bridge --token <令牌>   # 自己指定设备名
+环境变量：PI_BRIDGE_URL / PI_BRIDGE_SSH / PI_BRIDGE_KEY / PI_BRIDGE_TOKEN / PI_BRIDGE_WORKDIR / PI_BRIDGE_NAME
 ──────────────────────────────────────────────────────────────────────
 """
 
@@ -410,6 +411,8 @@ def main() -> int:
     ap.add_argument("--url", default=os.environ.get("PI_BRIDGE_URL", ""),
                     help="直连 ws://（给了就不起 ssh 转发）")
     ap.add_argument("--token", default=DEFAULT_TOKEN, help="与机器人 QQCHAT_AGENT_TOKEN 一致")
+    ap.add_argument("--name", default=os.environ.get("PI_BRIDGE_NAME", ""),
+                    help="设备名（面板里按这个名字认设备；空 = 用本机主机名）")
     ap.add_argument("--workdir", default=os.environ.get("PI_BRIDGE_WORKDIR", DEFAULT_WORKDIR))
     ap.add_argument("--pi", default=os.environ.get("PI_BRIDGE_PI", DEFAULT_PI))
     args = ap.parse_args()
@@ -449,7 +452,8 @@ def main() -> int:
         runner.send_json = ws.send_json
         ws.send_json({
             "type": "hello",
-            "host": os.environ.get("COMPUTERNAME") or socket.gethostname(),
+            # 设备名：面板里“按名字认设备”就靠它。默认取本机主机名，可以用 --name/PI_BRIDGE_NAME 改。
+            "host": args.name or os.environ.get("COMPUTERNAME") or socket.gethostname(),
             "cwd": args.workdir,
             "pi": _pi_version(args.pi),
             # 模型列表：面板里直接选（不用手敲模型名，也不用手改桥的启动参数）

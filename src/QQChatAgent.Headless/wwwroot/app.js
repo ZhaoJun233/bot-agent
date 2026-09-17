@@ -1734,6 +1734,9 @@
 
       box.innerHTML = agentDevices.map((d, i) => {
         const online = d.online ? "🟢 在线" : "⚪ 离线";
+        const hint = d.online
+          ? ""
+          : `<div class="hint" style="margin-top:4px">还没接上来：点「一键连接本机…」把「${d.name}」这个名字填进去，脚本会在本机报同一个名字；名字不一致会在表里多出一行，把这一行删掉即可。</div>`;
         const models = (d.models || []).map((m) =>
           `<option value="${m}"${m === d.model ? " selected" : ""}>${m}</option>`).join("");
         return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
@@ -1744,6 +1747,7 @@
             <button class="ghost-btn" data-dev-toggle="${i}">${d.online ? "断开" : "重连"}</button>
             <button class="ghost-btn" data-dev-del="${i}">删除</button>
           </div>
+          ${hint}
           <div class="grid-2" style="margin-top:6px">
             <div class="field"><label class="hint">模型</label>
               <select data-dev-model="${i}">
@@ -1797,7 +1801,7 @@
           await api("/api/agent/disconnect", { method: "POST", body: JSON.stringify({ device: d.name }) });
           toast(`已断开 ${d.name}（本机那边会自动重连）`);
         } else {
-          toast("请在本机双击 connect-pi-bridge.cmd（面板里可下载）");
+          toast(`离线设备要接上来：点「一键连接本机…」，把名字填成 ${d.name}，在本机跑一次那个脚本`);
         }
         await refreshAgentDevicesFull();
       }));
@@ -1830,10 +1834,16 @@
       toast("设备状态已刷新");
     });
 
-    /* 一键连接：生成带地址+令牌的脚本，下载后在本机双击即可 */
+    /* 一键连接：先问一个设备名（名字要跟本机报上来的一致），再生成带名/带地址/带令牌的脚本 */
     $("agentConnectGo").addEventListener("click", async () => {
       const out = $("agentConnectOut");
       out.style.display = "";
+
+      const suggest = (agentDevices[0] && agentDevices[0].name) || "";
+      const name = (prompt(
+        "给这台机器起个设备名（面板里按这个名字认设备；本机桥默认报的是主机名，比如 Windows 的 COMPUTERNAME）。\n" +
+        "留空 = 用本机主机名。", suggest) || "").trim();
+
       try {
         await saveSettings();   // 保证服务端用最新的设备配置
       } catch (e) {
@@ -1841,14 +1851,23 @@
         return;
       }
 
+      // 面板里还没这行设备就先加上（这样接上来就能直接看到并配模型）
+      if (name && !agentDevices.some((d) => (d.name || "").toLowerCase() === name.toLowerCase())) {
+        agentDevices.push({ name, online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] });
+        renderAgentDevices();
+        await saveSettings();
+      }
+
       const isWin = !/Mac|Linux|Android|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
       const os = isWin ? "win" : "sh";
-      const url = withToken(`${apiBase()}/api/agent/setup?os=${os}`);
+      const url = withToken(`${apiBase()}/api/agent/setup?os=${os}&name=${encodeURIComponent(name)}`);
       out.textContent = [
-        "① 点下面按钮下载启动脚本（里面已经带好地址和令牌，不用手改）",
+        name ? `设备名：${name}（脚本里已经带上，本机跑完报上来的就是这个名字）` : `设备名：用本机主机名（脚本里没指定）`,
+        "",
+        "① 点下面按钮下载启动脚本（里面已经带好地址、令牌、设备名，不用手改）",
         "② 把 pi-bridge.py 也放到本机同一目录（下面给链接）",
-        `③ 双击运行（Windows：connect-pi-bridge.cmd；Linux/Mac：sh connect-pi-bridge.sh）`,
-        "④ 回来后点「刷新状态」，看到 🟢 在线就是成了",
+        isWin ? "③ 双击运行 connect-pi-bridge.cmd（窗口别关）" : "③ 运行 sh connect-pi-bridge.sh（窗口别关）",
+        "④ 回来后点「我已运行，检测连接」，看到 🟢 在线就是成了",
         ""
       ].join("\n");
       out.insertAdjacentHTML("beforeend",
