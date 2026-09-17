@@ -521,6 +521,9 @@ check("★ 默认提示词由服务端下发（前端不抄一份，免得两处
   js.includes("agentPromptDefault") && !js.includes("【隐私红线（优先级最高）】"));
 check("★ 改名输入框填真名（nameRaw）：脱敏开启时拿占位符去改名会把「群友A」写回去",
   js.includes("old.nameRaw || old.name"));
+check("★ 会话/聊天都带序号（面板的顺序 = 群里 //sessions 的顺序，//use 序号能对上）",
+  js.includes("${i + 1}) ") && js.includes("#${i + 1}") && js.includes("${i + 1}. ${c.name || k}"),
+  "没序号的话，面板上看到第几个、群里 //use 第几个就对不上");
 
 // ─────────── 服务器健康日报（定时私聊推送）───────────
 check("面板有健康日报卡片（开关 / 时刻 / 收件人 / 预览 / 立即发 / 状态提示）",

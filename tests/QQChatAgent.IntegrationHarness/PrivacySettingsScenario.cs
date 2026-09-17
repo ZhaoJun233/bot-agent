@@ -130,6 +130,9 @@ public static partial class Program
         Check("★ 群里 //sessions all：群名与标题都脱敏（长数字只留前 3 后 2）",
             maskedReply.Contains("群聊 123***89") && maskedReply.Contains("会话 123***89") && !maskedReply.Contains("123456789"),
             Snippet(maskedReply, "群聊 "));
+        Check("★ //sessions all 带序号：聊天 1. / 会话 1)（对着 //use 序号不用数）",
+            maskedReply.Contains("1. ") && maskedReply.Contains("1) "),
+            Snippet(maskedReply, "1."));
 
         // ── ④ 面板关掉开关 → 立刻能看到真名（开关真的在生效，不是摆设）──
         var (offCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableAgentMask":false}""");

@@ -261,6 +261,7 @@ public sealed class AgentBridgeServer
             Id = $"a{Interlocked.Increment(ref _sequence)}-{DateTimeOffset.Now.ToUnixTimeMilliseconds()}",
             SourceKey = sourceKey,
             Prompt = prompt,
+            Instructions = string.IsNullOrWhiteSpace(_settings.AgentPrompt) ? null : _settings.AgentPrompt.Trim(),
             Session = session,
             TargetDevice = preferDevice,
             WorkDir = string.IsNullOrWhiteSpace(device?.WorkDir) ? _settings.AgentWorkDir : device!.WorkDir,
@@ -713,6 +714,8 @@ public sealed class AgentBridgeServer
                     ["type"] = "task",
                     ["id"] = task.Id,
                     ["prompt"] = task.Prompt,
+                    // 附加提示词单独一栏（桥那边走 --append-system-prompt），不要拼进 prompt
+                    ["instructions"] = task.Instructions ?? string.Empty,
                     ["session"] = task.Session,
                     ["cwd"] = task.WorkDir ?? string.Empty,
                     ["model"] = task.Model ?? string.Empty,
@@ -833,6 +836,14 @@ public sealed class AgentTask
     public required string SourceKey { get; init; }
 
     public required string Prompt { get; init; }
+
+    /// <summary>
+    /// 附加提示词（面板里的「Agent 附加提示词」，默认 = 隐私红线）：桥会把它当 pi 的
+    /// **system prompt**（<c>--append-system-prompt</c>）传下去，**不拼进任务正文**。
+    /// 为什么不拼：拼在一起时模型容易把规则当成任务（回复“收到，我按红线执行”却不干活）；
+    /// 服务器内置 agent 那份也是拼进它自己的 system prompt。
+    /// </summary>
+    public string? Instructions { get; init; }
 
     /// <summary>这个任务派给哪台设备（空 = 第一台在线的）；服务器内置 agent 不走这里。</summary>
     public string? TargetDevice { get; init; }

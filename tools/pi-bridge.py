@@ -25,9 +25,11 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -237,9 +239,12 @@ TOOL_HINTS = {
 
 
 class TaskRunner:
-    def __init__(self, send_json, pi_cmd: str, workdir: str):
+    def __init__(self, send_json, pi_argv: list[str], workdir: str, pi_display: str | None = None):
         self.send_json = send_json
-        self.pi_cmd = pi_cmd
+        # run the real entry (node + cli.js) instead of the .cmd shim:
+        # the shim goes through cmd.exe, which treats a newline as a command separator
+        self.pi_argv = pi_argv
+        self.pi_cmd = pi_display or " ".join(pi_argv)   # log/error text only
         self.workdir = workdir
         self.proc: subprocess.Popen | None = None
         self.cancelled = False
@@ -260,9 +265,14 @@ class TaskRunner:
         model = (task.get("model") or "").strip()
         tools = (task.get("tools") or "").strip()
         session = (task.get("session") or "").strip()
+        instructions = (task.get("instructions") or "").strip()   # panel "agent instructions"
         timeout = int(task.get("timeoutSec") or 900)
 
-        args = [self.pi_cmd, "-p", "--mode", "json"]
+        args = list(self.pi_argv) + ["-p", "--mode", "json"]
+        if instructions:
+            # rules go into the **system prompt**, not into the task text:
+            # glued together, the model tends to treat the rules as the task itself
+            args += ["--append-system-prompt", instructions]
         if session:
             args += ["--session-id", session]
         if model:
@@ -273,7 +283,8 @@ class TaskRunner:
 
         # 日志里**不写** prompt 内容（那是群聊正文）：只留长度 + 指纹，能对号入座又不泄隐私
         prompt_fingerprint = hashlib.sha1(prompt.encode("utf-8", "replace")).hexdigest()[:8]
-        log(f"任务 #{task_id} 开始（目录 {cwd}，prompt {len(prompt)} 字 / sha1 {prompt_fingerprint}）")
+        log(f"任务 #{task_id} 开始（目录 {cwd}，prompt {len(prompt)} 字 / sha1 {prompt_fingerprint}"
+            + (f"，附加提示词 {len(instructions)} 字" if instructions else "") + "）")
         started = time.time()
         text_parts: list[str] = []
         tool_calls = 0
@@ -474,8 +485,16 @@ def main() -> int:
     if not os.path.exists(args.pi):
         log(f"!! 找不到 pi：{args.pi}（用 --pi 指到 pi.cmd）")
 
+    # prefer node + cli.js over the .cmd shim (a shim routes args through cmd.exe,
+    # which truncates multi-line prompts at the first newline)
+    pi_argv, pi_how = resolve_pi_command(args.pi)
+    if pi_how.startswith("shim"):
+        log(f"!! 只能用外壳启动 pi（{pi_how}）—— 任务里带换行时可能被 cmd.exe 截断")
+    else:
+        log(f"pi 启动方式：{pi_how}")
+
     tunnel = SshTunnel(args.ssh, args.key, args.local_port, args.remote, enabled=not args.url)
-    runner = TaskRunner(send_json=lambda obj: None, pi_cmd=args.pi, workdir=args.workdir)
+    runner = TaskRunner(send_json=lambda obj: None, pi_argv=pi_argv, workdir=args.workdir, pi_display=args.pi)
 
     backoff = 3
     while True:
@@ -500,9 +519,9 @@ def main() -> int:
             # 设备名：面板里“按名字认设备”就靠它。默认取本机主机名，可以用 --name/PI_BRIDGE_NAME 改。
             "host": args.name or os.environ.get("COMPUTERNAME") or socket.gethostname(),
             "cwd": args.workdir,
-            "pi": _pi_version(args.pi),
+            "pi": _pi_version(pi_argv),
             # 模型列表：面板里直接选（不用手敲模型名，也不用手改桥的启动参数）
-            "models": _list_models(args.pi),
+            "models": _list_models(pi_argv),
             "version": 1,
         })
         log("已连上机器人（等 // 命令）")
@@ -571,9 +590,50 @@ def _split_ws_url(url: str) -> tuple[str, int, str]:
     return host, port, path
 
 
-def _pi_version(pi_cmd: str) -> str:
+def resolve_pi_command(pi_cmd: str) -> tuple[list[str], str]:
+    """Resolve a `pi.cmd` / `pi.ps1` shim into `[node, cli.js]` — bypassing cmd.exe.
+
+    Why it matters: when Python starts `pi.cmd` through CreateProcess, the arguments end up
+    parsed by **cmd.exe**, which treats a **newline as a command separator**: only the first
+    line of a multi-line prompt reaches pi, and the remaining lines are executed as commands.
+    Observed in production: the model only saw the first line, so it asked "what is the task?"
+    while the actual task (and everything after a blank line) never arrived.
+
+    Returns (argv prefix, human-readable description); falls back to the shim when it cannot
+    find the entry script (and the caller logs a warning about truncation).
+    """
+    path = (pi_cmd or "").strip()
+    if not path:
+        return ["pi"], "direct"
+
+    if not path.lower().endswith((".cmd", ".bat", ".ps1")):
+        return [path], "direct"
+
     try:
-        out = subprocess.run([pi_cmd, "--version"], capture_output=True, text=True, timeout=30)
+        raw = io.open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return [path], "shim (unreadable)"
+
+    # npm shims contain a line like:  "%_prog%"  "%dp0%\node_modules\...\dist\bundle\cli.js" %*
+    m = re.search(r'"([^"]*node_modules[^"]*\.js)"', raw) or re.search(r'"([^"]*\.js)"', raw)
+    if not m:
+        return [path], "shim (no js entry)"
+
+    js = m.group(1).replace("%dp0%", os.path.dirname(os.path.abspath(path)) + os.sep)
+    js = os.path.normpath(os.path.expandvars(js))
+    if not os.path.exists(js):
+        return [path], "shim (js entry missing)"
+
+    node = os.path.join(os.path.dirname(os.path.abspath(path)), "node.exe")
+    if not os.path.exists(node):
+        node = shutil.which("node") or "node"
+
+    return [node, js], f"node {os.path.basename(js)}"
+
+
+def _pi_version(argv: list[str]) -> str:
+    try:
+        out = subprocess.run([*argv, "--version"], capture_output=True, text=True, timeout=30)
         return (out.stdout or out.stderr).strip().splitlines()[0][:40] if (out.stdout or out.stderr) else "?"
     except Exception:                                           # noqa: BLE001
         return "?"
@@ -673,13 +733,13 @@ def _forget_session(pi_session_id: str) -> int:
     return removed
 
 
-def _list_models(pi_cmd: str) -> list[str]:
-    """问一遍 pi 有哪些模型（`pi --list-models` 是张表：provider / model / …）。
+def _list_models(argv: list[str]) -> list[str]:
+    """Ask pi which models it has (`pi --list-models` prints a table).
 
-    返回形如 "provider/model" 的列表 —— pi 的 --model 就吃这种写法。
+    Returns entries like "provider/model" — that is what `--model` accepts.
     """
     try:
-        out = subprocess.run([pi_cmd, "--list-models"], capture_output=True, text=True, timeout=60)
+        out = subprocess.run([*argv, "--list-models"], capture_output=True, text=True, timeout=60)
         text = out.stdout or ""
     except Exception:                                           # noqa: BLE001
         return []

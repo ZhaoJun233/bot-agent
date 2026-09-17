@@ -1991,9 +1991,10 @@
         // 聊天下拉：第一项是“全部聊天”总览（号主要“查现在有多少个会话及其标题”）
         const keep = sel.value || "__all__";
         sel.innerHTML = `<option value="__all__">全部聊天（共 ${all.total || 0} 个会话）</option>` +
-          chats.map((k) => {
+          chats.map((k, i) => {
             const c = all.chats[k];
-            return `<option value="${k}">${c.name || k}（${(c.sessions || []).length}）</option>`;
+            // 聊天也带序号：与群里 //sessions all 的顺序一致（同一个 AllChats 顺序）
+            return `<option value="${k}">${i + 1}. ${c.name || k}（${(c.sessions || []).length}）</option>`;
           }).join("");
         sel.value = (keep === "__all__" || chats.includes(keep)) ? keep : "__all__";
 
@@ -2001,8 +2002,9 @@
         if (key === "__all__") {
           const lines = chats.map((k) => {
             const c = all.chats[k];
-            const titles = (c.sessions || []).map((x) =>
-              `${x.current ? "← " : ""}${x.name}（${x.backend === "server" ? "服务器" : (x.device || "外部")}·${x.turns}轮）`);
+            // 每个会话前面带序号：和群里 //sessions 的顺序一样，面板看第几号、群里 //use 第几号能对上
+            const titles = (c.sessions || []).map((x, i) =>
+              `${i + 1}) ${x.current ? "← " : ""}${x.name}（${x.backend === "server" ? "服务器" : (x.device || "外部")}·${x.turns}轮）`);
             return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0">
               <b>${c.name || k}</b> <span class="hint">${(c.sessions || []).length} 个</span>
               <div class="hint" style="margin-top:4px">${titles.join("　")}</div>
@@ -2016,7 +2018,7 @@
 
         const list = (all.chats[key] || {}).sessions || [];
         agentSessionsCache = list;
-        box.innerHTML = list.map((x) => {
+        box.innerHTML = list.map((x, i) => {
           const where = x.backend === "server" ? "服务器内置" : `外部 ${x.device || "设备"}`;
           const when = x.updatedAt ? new Date(x.updatedAt).toLocaleString() : "";
           const runs = x.runs || [];
@@ -2030,7 +2032,7 @@
               }).join("");
           return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0">
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <b>${x.current ? "← " : ""}${x.name}</b>
+              <b>#${i + 1} ${x.current ? "← " : ""}${x.name}</b>
               <span class="hint">[${where}] ${x.turns} 轮 · ${when}${x.historyChars ? ` · 上下文 ${x.historyChars} 字` : ""}${x.autoNamed ? " · 自动标题" : ""}${x.piOwned === false ? " · pi 导入" : ""} · 跑过 ${runs.length} 次</span>
               <button class="ghost-btn" data-sess-use="${x.id}"${x.current ? " disabled" : ""}>切到这个</button>
               <button class="ghost-btn" data-sess-rename="${x.id}">改名</button>

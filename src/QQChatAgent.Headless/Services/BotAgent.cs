@@ -2013,7 +2013,7 @@ public sealed class BotAgent : IDisposable
         if (useHost)
         {
             var hostSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "host");
-            var task = bridge!.NewTask(conversation.SourceKey, WithAgentPrompt(payload), hostSession.PiSessionId, named);
+            var task = bridge!.NewTask(conversation.SourceKey, payload, hostSession.PiSessionId, named);
             task.SessionRef = hostSession;
             task.RunId = _agentSessions.StartRun(conversation.SourceKey, hostSession.Id, payload, named);   // 记一条“小会话”
             _agentSessions.TitleFromPrompt(conversation.SourceKey, hostSession.Id, payload);   // 第一句当标题
@@ -2329,12 +2329,6 @@ public sealed class BotAgent : IDisposable
             ? AgentMask.ChatLabel(conversation.SourceKey)
             : conversation.Name;
 
-    /// <summary>把「Agent 附加提示词」拼在任务前面（面板里那份，默认 = 隐私红线；空 = 不拼）。</summary>
-    private string WithAgentPrompt(string payload)
-        => string.IsNullOrWhiteSpace(_settings.AgentPrompt)
-            ? payload
-            : $"{_settings.AgentPrompt.Trim()}\n\n—— 本次任务 ——\n{payload}";
-
     /// <summary>//help：把所有命令列出来（号主：“忘记一些命令可以添加一个 help 命令”）。</summary>
     private string HelpText(string sourceKey)
     {
@@ -2369,14 +2363,16 @@ public sealed class BotAgent : IDisposable
         }
 
         var lines = new List<string> { $"全部 agent 会话：{chats.Count} 个聊天 / 共 {total} 个会话" };
+        var chatIndex = 0;
         foreach (var (key, sessions) in chats.Take(10))
         {
+            chatIndex++;
             var conv = Conversations.FirstOrDefault(c => c.SourceKey == key);
             var name = conv is not null ? ChatLabel(conv) : (_settings.AgentMaskSensitive ? AgentMask.ChatLabel(key) : key);
-            var titles = sessions.Take(6).Select(s =>
-                $"{(s.Backend == "server" ? "服务器" : (s.Device ?? "外部"))}·{MaybeMask(s.Name, key)}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
+            var titles = sessions.Take(6).Select((s, i) =>
+                $"{i + 1}) {(s.Backend == "server" ? "服务器" : (s.Device ?? "外部"))}·{MaybeMask(s.Name, key)}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
             var more = sessions.Count > 6 ? $" 等 {sessions.Count} 个" : string.Empty;
-            lines.Add($"{name}（{sessions.Count} 个）：{string.Join("、", titles)}{more}");
+            lines.Add($"{chatIndex}. {name}（{sessions.Count} 个）：{string.Join("、", titles)}{more}");
         }
 
         if (chats.Count > 10)

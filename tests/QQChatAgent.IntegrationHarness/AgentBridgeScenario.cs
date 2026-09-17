@@ -130,15 +130,19 @@ public static partial class Program
         await WaitUntilAsync(() => bridge.Tasks.Count > 0, TimeSpan.FromSeconds(30));
 
         var task = bridge.Tasks.Last();
-        Check("★ 任务细节带对了：提示词（含附加提示词）/ 会话名 / 工作目录 / 超时",
-            // 附加提示词（默认 = 隐私红线）拼在任务**前面**，
-            // 用户那句话必须在末尾原样保留 —— 只改一头都会挂在这里
-            (task["prompt"]?.GetValue<string>() ?? "").EndsWith("看下现在有几张表情包", StringComparison.Ordinal) &&
-            (task["prompt"]?.GetValue<string>() ?? "").Contains("—— 本次任务 ——", StringComparison.Ordinal) &&
+        Check("★ 任务细节带对了：提示词 / 会话名 / 工作目录 / 超时",
+            // 任务正文 = 用户那句话本身：附加提示词是**单独一栏**（桥走 --append-system-prompt）——
+            // 拼进 prompt 时模型会把规则当成任务（回“收到”却不干活，实测踩过）
+            task["prompt"]?.GetValue<string>() == "看下现在有几张表情包" &&
             (task["session"]?.GetValue<string>() ?? "").StartsWith($"qqchat-group-{groupId}-", StringComparison.Ordinal) &&
             task["cwd"]?.GetValue<string>() == "E:/bot" &&
             task["timeoutSec"]?.GetValue<int>() == 120,
             task.ToJsonString());
+
+        Check("★ 附加提示词单独一栏下发（默认 = 隐私红线；桥会当 system prompt 追加）",
+            (task["instructions"]?.GetValue<string>() ?? "").Contains("隐私红线", StringComparison.Ordinal) &&
+            (task["instructions"]?.GetValue<string>() ?? "").Contains("不要读取", StringComparison.Ordinal),
+            task["instructions"]?.ToJsonString() ?? "(没有 instructions 字段)");
 
         Check("★ 收到任务先回一句“去<设备>上跑一下”",
             Sent().Any(t => t.Contains("去DESKTOP-TEST上跑一下")), string.Join(" | ", Sent()));
