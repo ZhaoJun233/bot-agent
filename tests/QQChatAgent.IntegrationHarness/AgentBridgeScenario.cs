@@ -467,17 +467,24 @@ public static partial class Program
                 distinctPi >= 2,
                 $"下发={newSessionId}；全部：[{string.Join(" , ", sessions.Select(s => $"{s!["name"]}@{s!["piSession"]}{(s!["current"]?.GetValue<bool>() == true ? "(当前)" : "")}"))}]");
 
-            // //use 切回默认会话
-            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//use 默认", 15063, mentionBot: false, ct: cts.Token);
+            // //use 切回上一个会话（用序号，名字会随首句自动变）
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//use 2", 15063, mentionBot: false, ct: cts.Token);
             await WaitUntilAsync(() => Sent().Any(t => t.Contains("切到会话")), TimeSpan.FromSeconds(30));
-            Check("★ //use 能切回旧会话",
-                Sent().Any(t => t.Contains("切到会话「默认」")), string.Join(" | ", Sent().TakeLast(2)));
+            Check("★ //use 能按序号切回旧会话",
+                Sent().Any(t => t.Contains("切到会话")), string.Join(" | ", Sent().TakeLast(2)));
 
             // //del 删掉刚建的
             await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//del 测试新会话", 15064, mentionBot: false, ct: cts.Token);
             await WaitUntilAsync(() => Sent().Any(t => t.Contains("已删除会话")), TimeSpan.FromSeconds(30));
             Check("★ //del 删除会话（并告知当前已自动换新）",
                 Sent().Any(t => t.Contains("已删除会话「测试新会话」")), string.Join(" | ", Sent().TakeLast(2)));
+
+            // 自动补出来的“默认”也应该是“自动标题”（不然第一句话不会给它命名）
+            var afterDelete = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"))!;
+            var autoCreated = afterDelete["sessions"]!.AsArray().FirstOrDefault(s => s!["current"]?.GetValue<bool>() == true);
+            Check("★ 自动补出来的会话也能被第一句话命名（autoNamed=true）",
+                autoCreated is not null && autoCreated["autoNamed"]?.GetValue<bool>() == true,
+                $"当前会话=「{autoCreated?["name"]}」autoNamed={autoCreated?["autoNamed"]}");
             Check("★ 删除外部会话时会通知设备删掉 pi 那边的记录",
                 await WaitUntilAsync(() => bridge.Forgotten.Count > 0, TimeSpan.FromSeconds(10)),
                 string.Join(",", bridge.Forgotten));

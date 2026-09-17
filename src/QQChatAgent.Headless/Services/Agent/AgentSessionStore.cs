@@ -101,6 +101,7 @@ public sealed class AgentSessionStore
             }
 
             var created = CreateLocked(sourceKey, chat, backend, backend == "server" ? "默认（服务器）" : "默认", null);
+            created.AutoNamed = true;   // 占位名字：第一句话应该能把它变成真标题
             chat.Current[backend] = created.Id;
             Save();
             return created;
@@ -190,6 +191,7 @@ public sealed class AgentSessionStore
                 chat.Current.Remove(found.Backend);
                 var fresh = CreateLocked(sourceKey, chat, found.Backend,
                     found.Backend == "server" ? "默认（服务器）" : "默认", found.Device);
+                fresh.AutoNamed = true;   // 同上：自动补的占位会话得能被第一句话命名
                 chat.Current[found.Backend] = fresh.Id;
             }
 
@@ -415,8 +417,7 @@ public sealed class AgentSessionStore
 
         session.AutoNamed = name is not { Length: > 0 };   // 手动起的名字不覆盖
         chat.Sessions.Add(session);
-        return session;
-    }
+        return session;    }
 
     private void Load()
     {
