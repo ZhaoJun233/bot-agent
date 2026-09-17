@@ -552,6 +552,7 @@ def _list_sessions(limit: int = 40) -> list[dict]:
             st = os.stat(path)
             title = ""
             cwd = ""
+            session_id = ""
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 for i, line in enumerate(fh):
                     if i > 200:
@@ -563,22 +564,29 @@ def _list_sessions(limit: int = 40) -> list[dict]:
                         ev = _json.loads(line)
                     except Exception:                                # noqa: BLE001
                         continue
-                    if ev.get("type") == "session" and not cwd:
+                    etype = ev.get("type")
+                    if etype == "session":
+                        # 文件头里的 id 才是 pi 认的会话 id（--session-id 用它）
+                        session_id = str(ev.get("id") or "")
                         cwd = ev.get("cwd") or ""
+                        continue
+                    # 会话文件里的消息形状：{"type":"message",...,"message":{"role":"user","content":[...]}}
+                    # （headless 的 stdout 事件是 message_start/message_end —— 两种都认）
+                    if etype not in ("message", "message_start", "message_end"):
+                        continue
                     msg = ev.get("message") or {}
-                    if ev.get("type") == "message_end" and msg.get("role") == "user" and not title:
-                        content = msg.get("content")
-                        if isinstance(content, list):
-                            title = "".join(
-                                p.get("text", "") for p in content
-                                if isinstance(p, dict) and p.get("type") == "text")
-                        elif isinstance(content, str):
-                            title = content
-                        title = (title or "").strip().replace("\n", " ")[:60]
-                    if title and cwd:
-                        break
+                    if msg.get("role") != "user" or title:
+                        continue
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        title = "".join(
+                            p.get("text", "") for p in content
+                            if isinstance(p, dict) and p.get("type") == "text")
+                    elif isinstance(content, str):
+                        title = content
+                    title = (title or "").strip().replace("\n", " ")[:60]
             rows.append({
-                "id": os.path.splitext(os.path.basename(path))[0],
+                "id": session_id or os.path.splitext(os.path.basename(path))[0],
                 "file": os.path.basename(path),
                 "dir": os.path.basename(os.path.dirname(path)),
                 "title": title,
