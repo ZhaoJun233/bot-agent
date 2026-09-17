@@ -322,6 +322,9 @@ public sealed class OpenAiClient
             messages[^1] = new JsonObject { ["role"] = "system", ["content"] = systemContent };
         }
 
+        // 这一轮真送出去的图片张数：上游吞回复时把它写进日志（带图那一轮的风控嫌疑最大）
+        var attachedImages = 0;
+
         foreach (var msg in window) // 上下文窗口
         {
             if (msg.Role == MessageRole.System)
@@ -351,6 +354,8 @@ public sealed class OpenAiClient
                     var dataUrl = await _imageDownloader.DownloadAsDataUrl(url, ct, msg.QqMessageId);
                     if (dataUrl is not null)
                     {
+                        attachedImages++;
+
                         contentParts.Add(new JsonObject
                         {
                             ["type"] = "image_url",
@@ -449,20 +454,48 @@ public sealed class OpenAiClient
         using var _ = response;
 
         var json = await response.Content.ReadAsStringAsync(ct);
+
+        // 上游偶尔会回 200 但**没有 choices**。实测三种情形：
+        //   a) 慢的 `-high` 模型“思考”把预算吃光（17:55-18:01 连报 21 次）
+        //   b) 网关抖动（回 200 但内容空）
+        //   c) 带图那一轮被上游风控吞掉（22:09 这条：usage 里 prompt 12744 / completion 0，前面刚取回 4 张图）
+        // 以前直接 `choices[0]` → IndexOutOfRangeException，被记成“模型请求失败”：一条消息就这么没了。
+        // 之后改成“按沉默处理”，但**一条都不重试**：明明多半是上游吞了，却白丢一轮回复。
+        // 现在分两步：① 先重试一次（这类吞回复多半是间歇性的，第二次常常正常）；
+        //              ② 两次都空才算不说话 —— 且上层日志会写成“上游空响应”，
+        //                 与“模型自己决定不说话”分得清。
+        for (var emptyTry = 0; emptyTry < 1 && !HasChoices(json); emptyTry++)
+        {
+            Services.FileLog.Write("Agent", $"上游返回空 choices（{Truncate(json, 140)}）→ 2 秒后重试一次");
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+            // 请求体是一次性的，重试要重建一份（与上面 5xx 重试同理）
+            using var retryRequest = new HttpRequestMessage(HttpMethod.Post, BuildUrl())
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            retryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
+            using var retryResponse = await Http.SendAsync(retryRequest, ct);
+            if (!retryResponse.IsSuccessStatusCode)
+            {
+                // 重试本身也塌了：保留上一次的响应文本（下面按空响应处理），别再把它覆盖成错误页
+                Services.FileLog.Write("Agent", $"空 choices 后的重试返回 {(int)retryResponse.StatusCode} → 这轮按空响应处理");
+                break;
+            }
+
+            json = await retryResponse.Content.ReadAsStringAsync(ct);
+        }
+
         using var doc = JsonDocument.Parse(json);
 
-        // 上游偶尔会回 200 但**没有 choices**（实测：那个慢的 `-high` 模型“思考”把预算吃光时会这样，
-        // 17:55-18:01 连报 21 次）。以前这里直接 `choices[0]` → IndexOutOfRangeException，
-        // 被上层记成“模型请求失败”：一条消息就这么没了，日志里也看不出为什么。
-        // 现在当“这轮不说话”，并把原始响应记一笔（下次再变形状时一眼能看出来）。
-        if (doc.RootElement.ValueKind != JsonValueKind.Object ||
-            !doc.RootElement.TryGetProperty("choices", out var choices) ||
-            choices.ValueKind != JsonValueKind.Array ||
-            choices.GetArrayLength() == 0)
+        if (!HasChoices(json))
         {
-            Services.FileLog.Write("Agent", $"模型返回了空结果（没有 choices）→ 本轮按沉默处理：{Truncate(json, 200)}");
-            return new CompletionResult(null, null, null);
+            Services.FileLog.Write("Agent",
+                $"上游连续两次都没给 choices（带图 {attachedImages} 张）→ 本轮按沉默处理：{Truncate(json, 200)}");
+            return new CompletionResult(null, null, null, UpstreamEmpty: true);
         }
+
+        var choices = doc.RootElement.GetProperty("choices");
 
         if (choices[0].TryGetProperty("message", out var message) &&
             message.TryGetProperty("content", out var contentNode))
@@ -480,7 +513,27 @@ public sealed class OpenAiClient
 
         // 有 choices 但里面没有 message.content：同样按沉默处理，不招异常
         Services.FileLog.Write("Agent", $"模型返回里没有 message.content → 本轮按沉默处理：{Truncate(json, 200)}");
-        return new CompletionResult(null, null, null);
+        return new CompletionResult(null, null, null, UpstreamEmpty: true);
+    }
+
+    /// <summary>
+    /// 响应里到底有没有 choices。空数组 / 根本没这个字段 = 上游把回复吞了，
+    /// **不是**“模型自己决定不说话”—— 两件事在日志里必须分得清，否则主人看不出是网关出事了。
+    /// </summary>
+    private static bool HasChoices(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("choices", out var choices) &&
+                   choices.ValueKind == JsonValueKind.Array &&
+                   choices.GetArrayLength() > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -1627,7 +1680,9 @@ public readonly record struct StickerChoice(string Id, string Description);
 /// <param name="Read">模型想读的网页地址（机器人抓正文，下一轮把正文给它）；null = 不读。</param>
 /// <param name="Vibe">它读到的**群里的情绪氛围**（开心/吐槽/低落/求助/生气/吵架/中性…）；null = 没说。</param>
 /// <param name="VibeNote">给上一行补一句人话（例：“在吐槽加班，情绪烦燥”），会交给下一轮的自己；null = 没写。</param>
-public readonly record struct CompletionResult(int? Suitability, string? Reply, string? RawText, string? StickerId = null, long? ReplyToMessageId = null, long? PokeTargetId = null, string? Mood = null, string? Listen = null, string? ShareSong = null, string? Speak = null, string? Search = null, string? Read = null, string? Vibe = null, string? VibeNote = null);
+public readonly record struct CompletionResult(int? Suitability, string? Reply, string? RawText, string? StickerId = null, long? ReplyToMessageId = null, long? PokeTargetId = null, string? Mood = null, string? Listen = null, string? ShareSong = null, string? Speak = null, string? Search = null, string? Read = null, string? Vibe = null, string? VibeNote = null,
+    /// <summary>上游回 200 但没给 choices（网关吞回复/风控）—— 与“模型自己决定沉默”不是一回事。</summary>
+    bool UpstreamEmpty = false);
 
 /// <summary>图片下载器：把图片 URL 下载并转成 base64 data URL（供多模态模型识图），
 /// 也给表情包库提供原始字节。</summary>

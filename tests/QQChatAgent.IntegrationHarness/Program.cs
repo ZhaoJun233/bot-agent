@@ -241,21 +241,54 @@ public static partial class Program
                 .Any(a => MessageText(a).Contains("重试之后照常回你")),
             string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeRetry).Select(MessageText)));
 
-        // ---- 上游回 200 但 choices 为空（实测：慢的 `-high` 模型“思考”吃光预算时就是这样）----
-        // 以前这会让 `choices[0]` 抛 IndexOutOfRangeException → 被记成“模型请求失败”，一条消息静默消失。
-        // 现在按“这轮不说话”处理，并把原始响应记一笔。
+        // ---- 上游回 200 但 choices 为空（实测三种：慢的 `-high` 模型“思考”吃光预算、网关抖动、
+        //      以及带图那一轮疑似被上游风控吞掉——22:09 那条 usage 是 prompt 12744 / completion 0）----
+        // 以前会让 `choices[0]` 抛 IndexOutOfRangeException → 被记成“模型请求失败”，一条消息静默消失。
+        // 后来改成“按沉默处理”，但一条都不重试：明明是上游吞了，却白丢一轮回复。
+        // 现在：① 先重试一次（吞回复多半是间歇性的）；② 两次都空才算不说话，且日志里写“上游空响应”。
         var sendsBeforeEmpty = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        var reqsBeforeEmpty = openAi.Requests.Count;
         openAi.EmptyChoicesTimes = 1;
+        openAi.EnqueueReply("""{"suitability": 88, "reply": "空一次也能捞回来"}""");
         await protocol.SendGroupMessageAsync(99999, 20002, "老王", "@机器人 空结果那条", 7006, mentionBot: true, ct: cts.Token);
-        await WaitUntilAsync(() => bot.OutputLines.Any(l => l.Contains("模型返回了空结果")), TimeSpan.FromSeconds(60));
+        await WaitUntilAsync(() => openAi.Requests.Count > reqsBeforeEmpty + 1, TimeSpan.FromSeconds(60));
+        // 重试发出的那轮请求还要走完“解析 → 发送”才看得到消息，这里等它真的发出去（不然就是抢跑）
+        await WaitUntilAsync(() => protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Skip(sendsBeforeEmpty)
+            .Any(a => MessageText(a).Contains("空一次也能捞回来")), TimeSpan.FromSeconds(30));
         await Task.Delay(500);
-        Check("★ 上游回空 choices 时按沉默处理（不再报 IndexOutOfRange，也不再丢消息）",
-            bot.OutputLines.Any(l => l.Contains("模型返回了空结果")) &&
-            !bot.OutputLines.Any(l => l.Contains("IndexOutOfRangeException")),
-            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("空结果") || l.Contains("IndexOutOfRange")).TakeLast(2)));
-        Check("★ 空结果不会凭空发出消息",
-            protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") == sendsBeforeEmpty,
+        Check("★ 上游回空 choices 时先重试一次（不白丢这一轮）",
+            openAi.Requests.Count > reqsBeforeEmpty + 1 &&
+            bot.OutputLines.Any(l => l.Contains("空 choices") && l.Contains("重试")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("空 choices")).TakeLast(2)));
+        Check("★ 重试拿到的那句话真发出去了（不再是“凭空沉默”）",
+            protocol.ActionsReceived
+                .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Skip(sendsBeforeEmpty)
+                .Any(a => MessageText(a).Contains("空一次也能捞回来")),
             string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeEmpty).Select(MessageText)));
+        Check("★ 没有 IndexOutOfRangeException（旧写法抛的就是它）",
+            !bot.OutputLines.Any(l => l.Contains("IndexOutOfRangeException")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("IndexOutOfRange")).TakeLast(2)));
+
+        // 连续两次都空 → 这轮不说话，但日志必须说清是“上游空响应”（而不是“模型选择沉默”，
+        // 否则主人无法判断是网关出事了还是模型真不想说话）
+        var sendsBeforeDoubleEmpty = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        var linesBeforeDoubleEmpty = bot.OutputLines.Count;
+        openAi.EmptyChoicesTimes = 2;
+        await protocol.SendGroupMessageAsync(99999, 20003, "老王", "@机器人 连续空", 7007, mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(() => bot.OutputLines.Skip(linesBeforeDoubleEmpty).Any(l => l.Contains("上游空响应") || l.Contains("连续两次都没给 choices")),
+            TimeSpan.FromSeconds(60));
+        await Task.Delay(500);
+        var newLines = bot.OutputLines.Skip(linesBeforeDoubleEmpty).ToList();
+        Check("★ 连续两次空 → 这轮不说话，且日志写明“上游空响应”（不再冒充“模型选择沉默”）",
+            newLines.Any(l => l.Contains("上游空响应") || l.Contains("连续两次都没给 choices")) &&
+            !newLines.Any(l => l.Contains("模型选择沉默")),
+            string.Join(" | ", newLines.Where(l => l.Contains("空") || l.Contains("沉默")).TakeLast(3)));
+        Check("★ 空结果不会凭空发出消息",
+            protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") == sendsBeforeDoubleEmpty,
+            string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeDoubleEmpty).Select(MessageText)));
 
         await bot.StopAsync();
     }

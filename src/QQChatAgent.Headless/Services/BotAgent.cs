@@ -4096,8 +4096,14 @@ public sealed class BotAgent : IDisposable
 
         if (reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0)
         {
-            var why = result.Suitability is int s2 ? $"自评 {s2}" : "空回复";
-            EmitLog($"模型选择沉默（{why}，{elapsed:F0}ms）: {conversation.Name}");
+            // “上游把回复吞了”（200 但没 choices，已重试一次）与“模型自己决定不说话”不是一回事：
+            // 以前两种都写成“模型选择沉默”，主人根本看不出是网关出事了（22:09 那条就是这样）。
+            var why = result.UpstreamEmpty
+                ? "上游空响应"
+                : result.Suitability is int s2 ? $"自评 {s2}" : "空回复";
+            EmitLog(result.UpstreamEmpty
+                ? $"本轮没拿到模型输出（上游连续两次空响应，{elapsed:F0}ms，已重试）: {conversation.Name}"
+                : $"模型选择沉默（{why}，{elapsed:F0}ms）: {conversation.Name}");
             KeepSearchNotes(conversation, searchText, why);
             return;
         }
