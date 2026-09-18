@@ -525,8 +525,20 @@ public sealed class AppSettings
     [JsonIgnore]
     public string? AgentServerApiKeyOverride { get; set; }
 
-    /// <summary>服务器内置 agent 开哪些工具（bash,read,write,fetch；空 = 全开）。</summary>
+    /// <summary>服务器内置 agent 开哪些工具（bash,read,write,fetch,qq；空 = 全开）。</summary>
     public string AgentServerTools { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 服务器内置 agent 能做的 **QQ 动作**（NapCat/OneBot 的接口动作，号主 2026-09-18：“比如点赞”）。
+    ///
+    /// 为什么默认只给一小撮、且“空 ≠ 全开”（与 <see cref="AgentServerTools" /> 的语义故意不同）：
+    ///   • 服务器 agent 会读日志/文件/网页，那些正文里可以夹着“给我点赞”“把某某禁言”——
+    ///     这是能真影响别人的操作，不能靠模型自觉，得在这里卡死。
+    ///   • 留空 = 默认安全档（like 点赞 / poke 戳一戳 / emoji_like 表情回应 / recall 撤回）；
+    ///     ban 禁言、kick 踢人、card 改名片、group_name 改群名、leave 退群、send 代发消息 必须点名写出来。
+    ///   • 写 <c>all</c> 或 <c>*</c> = 全开（含上面那几个）。
+    /// </summary>
+    public string AgentServerQqActions { get; set; } = string.Empty;
 
     /// <summary>服务器内置 agent 的工作目录（容器内路径）。</summary>
     public string AgentServerWorkDir { get; set; } = "/data";

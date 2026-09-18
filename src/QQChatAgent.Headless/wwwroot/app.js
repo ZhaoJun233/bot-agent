@@ -1167,6 +1167,12 @@
       $("setAgentDevice").value = target;
     }
     $("setAgentServerTools").value = r.agentServerTools || "";
+    $("setAgentServerQqActions").value = r.agentServerQqActions || "";
+    // 把“实际会开哪几个”回显出来：留空 ≠ 什么都没有（是默认安全档），写错的名字会被服务端忽略，
+    // 所以面板得把真正生效的那份摆出来，不然号主会以为自己写生效了。
+    $("agentServerQqActionsOut").textContent = r.agentServerQqActionsEffective
+      ? "现在生效：" + r.agentServerQqActionsEffective
+      : "";
     $("setAgentServerMaxSteps").value = r.agentServerMaxSteps;
     $("setAgentServerWorkDir").value = r.agentServerWorkDir || "/data";
     $("setAgentServerCommandTimeoutSeconds").value = r.agentServerCommandTimeoutSeconds;
@@ -1305,6 +1311,7 @@
       enableHostAgent: $("setEnableHostAgent").checked,
       enableServerAgent: $("setEnableServerAgent").checked,
       agentServerTools: $("setAgentServerTools").value.trim(),
+      agentServerQqActions: $("setAgentServerQqActions").value.trim(),
       agentServerMaxSteps: Number($("setAgentServerMaxSteps").value),
       agentServerWorkDir: $("setAgentServerWorkDir").value.trim() || "/data",
       agentServerCommandTimeoutSeconds: Number($("setAgentServerCommandTimeoutSeconds").value),

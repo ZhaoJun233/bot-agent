@@ -234,6 +234,61 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
 
     private string? _pokeUnsupported;
 
+    // ══════════ QQ 行为动作（服务器内置 agent 用；号主 2026-09-18：“比如点赞”）══════════
+    //
+    // 与上面那些“机器人自己要发的消息”不同，这一组是**别人让机器人做的小动作**。
+    // 共性：都是 OneBot/NapCat 的动作，失败原因（retcode）对使用者有用，所以统一记一条日志；
+    // 返回 bool 就够了 —— 给模型看的那句话由 QqActionHost 拼（它知道上下文）。
+
+    /// <summary>给某人点赞（OneBot <c>send_like</c>）。times：一次点几个（QQ 自己卡上限，这里 1-20）。</summary>
+    public Task<bool> SendLikeAsync(long userId, int times, CancellationToken ct = default)
+        => RunActionAsync("send_like", $"{{\"user_id\":{userId},\"times\":{Math.Clamp(times, 1, 20)}}}", ct);
+
+    /// <summary>给某条消息贴表情回应（NapCat 扩展 <c>set_msg_emoji_like</c>）。emojiId 是字符串，默认 👍 = 128077。</summary>
+    public Task<bool> SetMessageEmojiLikeAsync(long messageId, string emojiId, CancellationToken ct = default)
+        => RunActionAsync("set_msg_emoji_like",
+            $"{{\"message_id\":{messageId},\"emoji_id\":{Json(string.IsNullOrWhiteSpace(emojiId) ? "128077" : emojiId)},\"set\":true}}", ct);
+
+    /// <summary>撤回一条消息（OneBot <c>delete_msg</c>）。只有自己发的、或有管理权限时别人的才撤得掉。</summary>
+    public Task<bool> DeleteMessageAsync(long messageId, CancellationToken ct = default)
+        => RunActionAsync("delete_msg", $"{{\"message_id\":{messageId}}}", ct);
+
+    /// <summary>禁言/解除禁言（OneBot <c>set_group_ban</c>）。seconds=0 即解除。</summary>
+    public Task<bool> SetGroupBanAsync(long groupId, long userId, int seconds, CancellationToken ct = default)
+        => RunActionAsync("set_group_ban", $"{{\"group_id\":{groupId},\"user_id\":{userId},\"duration\":{Math.Max(0, seconds)}}}", ct);
+
+    /// <summary>把某人踢出群（OneBot <c>set_group_kick</c>）。</summary>
+    public Task<bool> SetGroupKickAsync(long groupId, long userId, bool rejectAdd, CancellationToken ct = default)
+        => RunActionAsync("set_group_kick",
+            $"{{\"group_id\":{groupId},\"user_id\":{userId},\"reject_add_request\":{(rejectAdd ? "true" : "false")}}}", ct);
+
+    /// <summary>改群名片（OneBot <c>set_group_card</c>）。card 空串 = 清掉。</summary>
+    public Task<bool> SetGroupCardAsync(long groupId, long userId, string card, CancellationToken ct = default)
+        => RunActionAsync("set_group_card", $"{{\"group_id\":{groupId},\"user_id\":{userId},\"card\":{Json(card ?? string.Empty)}}}", ct);
+
+    /// <summary>改群名（OneBot <c>set_group_name</c>）。</summary>
+    public Task<bool> SetGroupNameAsync(long groupId, string groupName, CancellationToken ct = default)
+        => RunActionAsync("set_group_name", $"{{\"group_id\":{groupId},\"group_name\":{Json(groupName ?? string.Empty)}}}", ct);
+
+    /// <summary>退群/解散（OneBot <c>set_group_leave</c>）。dismiss 只有群主能成。</summary>
+    public Task<bool> SetGroupLeaveAsync(long groupId, bool dismiss, CancellationToken ct = default)
+        => RunActionAsync("set_group_leave", $"{{\"group_id\":{groupId},\"is_dismiss\":{(dismiss ? "true" : "false")}}}", ct);
+
+    /// <summary>发一个动作并等结果；失败时把 retcode/wording 记进日志（排查用，不回群）。</summary>
+    private async Task<bool> RunActionAsync(string action, string paramsJson, CancellationToken ct)
+    {
+        var result = await SendActionAsync(action, paramsJson, ct);
+        var ok = result is not null && GetRetcode(result) == 0;
+        if (!ok)
+        {
+            var code = result is null ? "null" : GetRetcode(result).ToString();
+            var why = result?["wording"]?.GetValue<string>() ?? result?["message"]?.GetValue<string>() ?? result?["msg"]?.GetValue<string>() ?? string.Empty;
+            Log($"动作 {action} 失败（retcode={code}{(why.Length > 0 ? $" {Shorten(why, 60)}" : string.Empty)}）");
+        }
+
+        return ok;
+    }
+
     /// <summary>
     /// 按消息 id 拿回这条消息里所有图片的**当前**地址（OneBot 的 get_msg）。
     /// 用途：QQ 图片地址带时效 rkey，过期后 CDN 一律 400；而协议端能重新签发一份
@@ -1313,6 +1368,10 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
     }
 
     private static string Json(string s) => JsonSerializer.Serialize(s);
+
+    /// <summary>日志里截短（动作失败原因可能很长）。</summary>
+    private static string Shorten(string text, int max)
+        => text.Length <= max ? text : text[..max] + "…";
 
     private static void Log(string message) =>
         FileLog.Write("OneBot", message);

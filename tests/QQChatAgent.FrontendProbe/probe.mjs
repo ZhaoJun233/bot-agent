@@ -403,7 +403,10 @@ const RUNTIME = {
   enableAgentMask: true, agentPrompt: "【隐私红线】不要读取群聊正文",
   // 服务器 agent 的接口/模型/密钥状态（密钥只给掩码与来源，永不下发明文）
   agentServerBaseUrl: "https://api.example.com/v1", serverModel: "agent-small",
-  agentServerKeySet: true, agentServerKeyMasked: "sk-a****", agentServerKeySource: "panel"
+  agentServerKeySet: true, agentServerKeyMasked: "sk-a****", agentServerKeySource: "panel",
+  // 服务器 agent 的 QQ 动作（空 = 安全档；这里故意配了一个危险档的 ban 看回显）
+  agentServerTools: "bash,read,qq", agentServerQqActions: "like,poke,ban",
+  agentServerQqActionsEffective: "安全档 like/poke，已点名打开 ban"
 };
 const ENV = {
   modelBaseUrl: "http://x/v1", modelBaseUrlSource: "env",
@@ -799,6 +802,32 @@ check("来源提示写明“来自面板”（与聊天那把 key 同样措辞�
   check("清除标记归位：下一轮保存不再重复发空串",
     !!post2 && JSON.parse(post2.body).agentServerKey === undefined,
     post2 ? post2.body.slice(0, 160) : "没发出 POST");
+}
+
+/* ─────────── 4) 服务器 agent 的 QQ 动作（点赞/戳一戳…） ─────────── */
+
+console.log("\n▶ 动态：服务器 agent 的 QQ 动作（能真去 QQ 里做，但默认只给安全档）");
+
+const qqActionsInput = document.getElementById("setAgentServerQqActions");
+check("★ 服务器 agent 卡片有「QQ 动作」输入框（以前它只能看日志/跑命令，碰不了 QQ）",
+  !!qqActionsInput, qqActionsInput ? "有" : "输入框不存在");
+check("★ 提示里写清楚了默认档与危险动作要点名（点赞 / ban 禁言）",
+  html.includes("ban 禁言") && html.includes("点赞"),
+  (html.match(/服务器 agent 的 QQ 动作[\s\S]{0,200}/) || ["(没找到)"])[0].slice(0, 120));
+check("★ 已配置的动作回填到输入框",
+  String(qqActionsInput && qqActionsInput.value) === "like,poke,ban",
+  qqActionsInput ? JSON.stringify(qqActionsInput.value) : "无元素");
+check("★ 把“实际会开哪几个”回显出来（留空≠没有，写错的名字服务端会忽略）",
+  String(document.getElementById("agentServerQqActionsOut")?.textContent || "").includes("已点名打开 ban"),
+  String(document.getElementById("agentServerQqActionsOut")?.textContent || "(空)"));
+{
+  const b = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body).agentServerQqActions : undefined;
+  check("★ 保存时把 QQ 动作一起发给服务端（原样，规范化交给服务端做）", sent === "like,poke,ban",
+    `发出=${JSON.stringify(sent)}`);
 }
 
 /* ─────────── 4) 未保存修改的提示与拦截 ─────────── */

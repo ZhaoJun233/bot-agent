@@ -28,6 +28,9 @@ public sealed class BotAgent : IDisposable
 {
     private readonly AppSettings _settings;
     private readonly IQqChatSource _source;
+
+    /// <summary>协议端（QQ 动作要用它）—— 只有 OneBot 这条路有。</summary>
+    private readonly OneBotGateway? _gateway;
     private readonly OpenAiClient _brain;
     private readonly ConversationStore _store;
     private readonly MemberProfileStore _profiles;
@@ -237,6 +240,7 @@ public sealed class BotAgent : IDisposable
     {
         _settings = settings;
         _source = source;
+        _gateway = source as OneBotGateway;   // QQ 动作（点赞/戳一戳/禁言…）只能走 OneBot 协议端
         _brain = brain;
         _store = store;
         _profiles = profiles;
@@ -1729,6 +1733,7 @@ public sealed class BotAgent : IDisposable
             await SendPlainAsync(conversation,
                 $"外部设备 agent：{(hostOn ? "开" : "关")}（在线：{(online ? deviceDetail : "无")}）\n" +
                 $"服务器内置 agent：{(serverOn ? "开" : "关")}（工具 {(_settings.AgentServerTools.Length == 0 ? "全部" : _settings.AgentServerTools)}）\n" +
+                $"  QQ 动作：{QqActionCatalog.Summarize(QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions))}\n" +
                 $"优先：{route}\n当前会走：{willUse}\n单条指定：//@server … 或 //@host … 或 //@设备名 …");
             return;
         }
@@ -2080,7 +2085,9 @@ public sealed class BotAgent : IDisposable
                 Prompt = payload,
                 Session = serverSession.PiSessionId,
                 SessionRef = serverSession,
-                History = seededHistory
+                History = seededHistory,
+                // 现场：不做这一步，模型知道“点赞”却不知道给谁点、在哪条消息上点
+                QqHost = BuildQqHost(conversation, msg)
             };
             task.RunId = serverRunId;
 
@@ -2149,7 +2156,9 @@ public sealed class BotAgent : IDisposable
             Id = $"p{DateTimeOffset.Now.ToUnixTimeMilliseconds()}",
             SourceKey = "panel:test",
             Prompt = prompt,
-            Session = "qqchat-panel"
+            Session = "qqchat-panel",
+            // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
+            QqHost = _gateway is null ? null : new SessionQqActionHost(_gateway, true, 0, 0, 0, _selfId)
         };
 
         if (_serverAgent is null)
@@ -2160,6 +2169,18 @@ public sealed class BotAgent : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 900)));
         await _serverAgent.RunAsync(task, cts.Token);
         return task;
+    }
+
+    /// <summary>给服务器 agent 的 QQ 动作造一个“现场”（哪个会话、谁提的、哪条消息）。</summary>
+    private IQqActionHost? BuildQqHost(BotConversation conversation, QqChatMessage msg)
+    {
+        if (_gateway is null)
+        {
+            return null;
+        }
+
+        var (isGroup, targetId) = conversation.Target;
+        return new SessionQqActionHost(_gateway, isGroup, targetId, msg.UserId, msg.MessageId, _selfId);
     }
 
     /// <summary>服务器内置 agent 正在跑的会话（单会话串行）。</summary>
@@ -2550,7 +2571,7 @@ public sealed class BotAgent : IDisposable
 
             _agentProgressAt[task.SourceKey] = now;
             var elapsed = now - task.StartedAt;
-            var note = string.IsNullOrWhiteSpace(task.LastNote) ? string.Empty : $"（{task.LastNote}）";
+            var note = string.IsNullOrWhiteSpace(task.LastNote) ? string.Empty : $"（{MaybeMask(task.LastNote, task.SourceKey)}）";
             var place = string.IsNullOrWhiteSpace(task.DeviceName) ? "服务器" : task.DeviceName!;
             await SendPlainAsync(conversation, $"⏳ 还在{place}上跑…已 {elapsed.TotalSeconds:F0} 秒{note}");
         }
@@ -2589,7 +2610,10 @@ public sealed class BotAgent : IDisposable
             if (task.Ok)
             {
                 EmitLog($"agent 完成（{seconds:F0}s，{task.ToolCalls} 次工具调用）: {Shorten(task.Text ?? string.Empty, 80)}");
-                await SendPlainAsync(conversation, task.Text ?? string.Empty);
+
+                // agent 会翻日志/数据，结论里很可能带 QQ 号或群友昵称 —— 回群前过一遍脱敏开关
+                //（面板里的“列出会话时脱敏”默认是开的；关掉就原样发，号主自己的选择）。
+                await SendPlainAsync(conversation, MaybeMask(task.Text ?? string.Empty, task.SourceKey));
             }
             else
             {

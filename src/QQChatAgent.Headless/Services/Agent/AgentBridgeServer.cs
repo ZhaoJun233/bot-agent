@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using QQChatAgent.Services.Agent;
 using System.Text.Json.Nodes;
 
 namespace QQChatAgent.Services.Agent;
@@ -929,6 +930,12 @@ public sealed class AgentTask
 
     /// <summary>服务器内置后端：跑完后的完整对话（上层存回会话）。</summary>
     public List<(string Role, string Text)>? Conversation { get; set; }
+
+    /// <summary>
+    /// 服务器内置后端的 **QQ 动作现场**（当前会话、发指令的人、本条消息 id）——
+    /// 由 BotAgent 按任务塞进来；外部设备那条路不用（它在自己电脑上跑，碰不到协议端），面板“试一条”也没有。
+    /// </summary>
+    public IQqActionHost? QqHost { get; set; }
 
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.Now;
 

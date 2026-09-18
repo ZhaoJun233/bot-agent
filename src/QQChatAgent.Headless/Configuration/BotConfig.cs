@@ -144,6 +144,7 @@ public static class BotConfig
     [nameof(AppSettings.EnableServerAgent)] = new[] { "QQCHAT_AGENT_SERVER" },
     [nameof(AppSettings.EnableHostAgent)] = new[] { "QQCHAT_AGENT_HOST" },
     [nameof(AppSettings.AgentServerTools)] = new[] { "QQCHAT_AGENT_SERVER_TOOLS" },
+    [nameof(AppSettings.AgentServerQqActions)] = new[] { "QQCHAT_AGENT_SERVER_QQ_ACTIONS" },
     [nameof(AppSettings.AgentServerModel)] = new[] { "QQCHAT_AGENT_SERVER_MODEL" },
     [nameof(AppSettings.AgentServerBaseUrl)] = new[] { "QQCHAT_AGENT_SERVER_URL" },
     [nameof(AppSettings.AgentDevices)] = new[] { "QQCHAT_AGENT_DEVICES" },
@@ -242,6 +243,7 @@ public static class BotConfig
         s.EnableServerAgent = Bool("QQCHAT_AGENT_SERVER") ?? s.EnableServerAgent;
         s.EnableHostAgent = Bool("QQCHAT_AGENT_HOST") ?? s.EnableHostAgent;
         s.AgentServerTools = Str("QQCHAT_AGENT_SERVER_TOOLS") ?? s.AgentServerTools;
+        s.AgentServerQqActions = Str("QQCHAT_AGENT_SERVER_QQ_ACTIONS") ?? s.AgentServerQqActions;
         s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;
         s.AgentServerBaseUrl = Str("QQCHAT_AGENT_SERVER_URL") ?? s.AgentServerBaseUrl;
         s.AgentServerApiKey = Secret("QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;

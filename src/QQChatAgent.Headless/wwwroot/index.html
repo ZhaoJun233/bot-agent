@@ -743,6 +743,12 @@
                 </div>
             </div>
 
+            <div class="field">
+                <label>服务器 agent 的 QQ 动作<span class="hint">它能真的去 QQ 里做的小动作（点赞/戳一戳/禁言…）。留空 = 只开安全的一组：like 点赞、poke 戳一戳、emoji_like 表情回应、recall 撤回；要放开危险的一只就点名写：ban 禁言、kick 踢人、card 改名片、group_name 改群名、leave 退群、send 代发消息（all = 全开）</span></label>
+                <input type="text" id="setAgentServerQqActions" placeholder="留空=点赞/戳一戳/表情回应/撤回（写 ban 才给禁言）" />
+                <div class="path-hint" id="agentServerQqActionsOut"></div>
+            </div>
+
             <div class="grid-2">
                 <div class="field">
                     <label>服务器 agent 工作目录<span class="hint">容器内路径，/data 里能看到日志与数据库</span></label>

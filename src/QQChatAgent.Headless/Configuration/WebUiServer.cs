@@ -1275,6 +1275,31 @@ public sealed class WebUiServer : IDisposable
         if (body["enableServerAgent"] is JsonNode esa) s.EnableServerAgent = esa.GetValue<bool>();
         if (body["enableHostAgent"] is JsonNode eha) s.EnableHostAgent = eha.GetValue<bool>();
         if (body["agentServerTools"] is JsonNode ast) s.AgentServerTools = (ast.GetValue<string>() ?? string.Empty).Trim();
+
+        // QQ 动作：只认已存在的动作名（别名也翻成规范名），写错的直接忽略 ——
+        // 下次读回设置时面板上看到的就是“真正生效的那几个”，不会拿一个拼错的名字骗自己。
+        if (body["agentServerQqActions"] is JsonNode asqa)
+        {
+            var raw = (asqa.GetValue<string>() ?? string.Empty).Trim();
+            if (raw.Length == 0 || raw is "all" or "*" or "全部" or "所有")
+            {
+                s.AgentServerQqActions = raw;
+            }
+            else
+            {
+                var names = new List<string>();
+                foreach (var piece in raw.Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var canonical = QqActionCatalog.Canonical(piece.Trim());
+                    if (canonical is not null && !names.Contains(canonical))
+                    {
+                        names.Add(canonical);
+                    }
+                }
+
+                s.AgentServerQqActions = string.Join(",", names);
+            }
+        }
         if (body["agentServerModel"] is JsonNode asm) s.AgentServerModel = (asm.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentDevices"] is JsonNode ad) s.AgentDevices = ad.GetValue<string>() ?? string.Empty;
         if (body["enableAgentMask"] is JsonNode eam) s.AgentMaskSensitive = eam.GetValue<bool>();
@@ -1757,6 +1782,8 @@ public sealed class WebUiServer : IDisposable
         ["enableHostAgent"] = s.EnableHostAgent,
         ["hostAgent"] = s.EnableHostAgent,
         ["agentServerTools"] = s.AgentServerTools,
+        ["agentServerQqActions"] = s.AgentServerQqActions,
+        ["agentServerQqActionsEffective"] = QqActionCatalog.Summarize(QqActionCatalog.ParseAllowed(s.AgentServerQqActions)),
         ["agentServerModel"] = s.AgentServerModel,
         ["agentModel"] = s.AgentModel,
         ["agentServerBaseUrl"] = s.AgentServerBaseUrl,
