@@ -257,12 +257,16 @@ public static partial class Program
             status.Contains("当前会走：") && status.Contains("单条指定："),
             $"最后几条发出去的是：{string.Join(" ⏐ ", Sent().TakeLast(5))}");
 
-        // ---- ⑦ 会话（服务器后端）：同一会话接着聊、//new 开新的就断上下文 ----
-        // 号主要求“调用内置/外部 agent 时能自由切换会话”——内置这一侧的会话就是我们自己存的历史
+        // ---- ⑦ 会话（服务器后端）：开关打开时同一会话接着聊、//new 开新的就断上下文 ----
+        // 号主要求“调用内置/外部 agent 时能自由切换会话”——内置这一侧的会话就是我们自己存的历史。
+        // 注意：从 2026-09-18 晚起，服务器 agent **默认每条指令单独对待**（不带上文）——
+        // 号主反馈“每次发送新指令都会把旧指令的内容发送回来”，所以想接着聊要显式开开关（这里就是）。
         // 前面的步骤把服务器开关关过，这里先打开（不然 //@server 只会回“开关是关的”）
         using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
         {
-            var body = new StringContent("{\"enableServerAgent\":true,\"agentTarget\":\"server\"}", Encoding.UTF8, "application/json");
+            var body = new StringContent(
+                "{\"enableServerAgent\":true,\"agentTarget\":\"server\",\"agentServerKeepContext\":true}",
+                Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
         }
 
@@ -285,7 +289,7 @@ public static partial class Program
 
         var secondTurnRequest = agentAi.Requests.Skip(beforeSecond)
             .LastOrDefault(r => AllTexts(r).Any(t => t.Contains("会话测试第二句")));
-        Check("★ 同一会话里接着聊：上一轮的对话会带进这一轮（内置 agent 也记得）",
+        Check("★ 打开「记住上下文」后，同一会话里接着聊：上一轮的对话会带进这一轮（内置 agent 也记得）",
             secondTurnRequest is not null && AllTexts(secondTurnRequest).Any(t => t.Contains("会话测试第一句")),
             secondTurnRequest is null
                 ? $"没找到含「会话测试第二句」的请求（自定义接口共 {agentAi.Requests.Count} 次）"

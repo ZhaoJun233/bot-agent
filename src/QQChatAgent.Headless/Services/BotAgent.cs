@@ -80,8 +80,14 @@ public sealed class BotAgent : IDisposable
     /// <summary>已生成说明的张数（含历史累计）。</summary>
     public long StickerDescribeDone => Interlocked.Read(ref _stickerDescribeDone);
 
-    private HashSet<long> _whitelist = new();
-    private bool _whitelistAll;
+    private HashSet<long> _whitelistGroups = new();
+    private bool _whitelistAllGroups;
+    private HashSet<long> _whitelistPrivates = new();
+    private bool _whitelistAllPrivates;
+
+    /// <summary>哪一边在用旧的共用名单（面板上要如实显示，不然号主会以为新框填了没生效）。</summary>
+    private bool _whitelistGroupsFromLegacy;
+    private bool _whitelistPrivatesFromLegacy;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _historyRequested = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _replyCooldown = new();
 
@@ -268,7 +274,7 @@ public sealed class BotAgent : IDisposable
         // 图片地址过期（QQ 的 rkey 有时效）时的重签通道：下载器 → 协议端 get_msg
         _brain.RefreshImageUrls = (messageId, ct) => _source.RefreshImageUrlsAsync(messageId, ct);
 
-        (_whitelist, _whitelistAll) = ParseWhitelist(settings.MessageWhitelist);
+        RebuildWhitelist();
         _replyGate = new SemaphoreSlim(Math.Clamp(settings.MaxConcurrentReplies, 1, 16));
         _replyGatePermits = Math.Clamp(settings.MaxConcurrentReplies, 1, 16);
     }
@@ -361,7 +367,7 @@ public sealed class BotAgent : IDisposable
         ApplyMoodTtl();
 
         // 白名单重新解析并清理已有会话
-        (_whitelist, _whitelistAll) = ParseWhitelist(_settings.MessageWhitelist);
+        RebuildWhitelist();
         PruneNonWhitelisted();
 
         // Agent 用户白名单（改设置后立即生效；空 = 谁都不能用）
@@ -857,19 +863,26 @@ public sealed class BotAgent : IDisposable
         _healthTimer = new Timer(_ => _ = CheckAccountOnlineAsync(), null, TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(30));
 
         // 白名单严格模式提示：空名单 = 全部忽略，容器里很容易踩
-        if (!_whitelistAll && _whitelist.Count == 0)
+        if (WhitelistSummary(_whitelistAllGroups, _whitelistGroups) is "(空，忽略全部)" &&
+            WhitelistSummary(_whitelistAllPrivates, _whitelistPrivates) is "(空，忽略全部)")
         {
             FileLog.Warn("Agent",
-                "消息白名单为空 → 严格模式下将忽略所有消息。若要接收全部群/私聊，请设 " +
-                "QQCHAT_WHITELIST='*'（或填具体群号/QQ号）。");
+                "群聊与私聊白名单都是空的 → 严格模式下将忽略所有消息。若要接收，请设 " +
+                "QQCHAT_WHITELIST_GROUPS / QQCHAT_WHITELIST_PRIVATES（或旧的 QQCHAT_WHITELIST），" +
+                "填具体群号/QQ 号，或写 '*'。");
         }
 
         FileLog.Write("Agent",
             $"已启动。AI={( _settings.AiModeEnabled ? "开" : "关")}, " +
-            $"白名单={(_whitelistAll ? "* (全部)" : _whitelist.Count == 0 ? "(空，忽略全部)" : string.Join(",", _whitelist))}, " +
+            $"群聊白名单={WhitelistSummary(_whitelistAllGroups, _whitelistGroups)}{(_whitelistGroupsFromLegacy ? "（用旧的共用名单）" : "")}, " +
+            $"私聊白名单={WhitelistSummary(_whitelistAllPrivates, _whitelistPrivates)}{(_whitelistPrivatesFromLegacy ? "（用旧的共用名单）" : "")}, " +
             $"模型={_settings.Model}, 人设={(string.IsNullOrWhiteSpace(_settings.BotPersona) ? "无" : "已配置")}, " +
             $"表情包={(_settings.EnableStickers ? $"开（{_stickers.Count}/{_settings.StickerLibraryMax} 张，已描述 {_stickers.DescribedCount}）" : "关")}");
     }
+
+    /// <summary>白名单显示文案（日志与面板共用口径）。</summary>
+    private static string WhitelistSummary(bool all, HashSet<long> ids)
+        => all ? "* (全部)" : ids.Count == 0 ? "(空，忽略全部)" : string.Join(",", ids);
 
     public void Dispose()
     {
@@ -1716,25 +1729,31 @@ public sealed class BotAgent : IDisposable
                     var info = bridge.DeviceInfo(n);
                     return $"{n}（pi {info?.Pi ?? "?"}，目录 {info?.Cwd ?? "?"}）";
                 }));
-            var route = (_settings.AgentTarget ?? "auto").Trim();
+            var preferred = (_settings.AgentTarget ?? "auto").Trim();
             var hostOn = _settings.EnableHostAgent;
             var serverOn = _settings.EnableServerAgent;
             var online = bridge is not null && bridge.Connected;
-            var willUse = !hostOn
-                ? (serverOn ? "服务器 agent" : "（两个开关都关了）")
-                : !serverOn
-                    ? (online ? $"外部设备（{devices}）" : "（外部不在线，且服务器开关是关的）")
-                    : route.Equals("server", StringComparison.OrdinalIgnoreCase)
-                        ? "服务器 agent"
-                        : route.Equals("auto", StringComparison.OrdinalIgnoreCase)
-                                ? (online ? $"外部设备（{devices}）" : "服务器 agent（外部不在线）")
-                                : route;
+
+            // “当前会走”用**和真实分发同一个函数**算（named 也传进去）：
+            // 以前这里自己再推一遍，结果 `//@某台不在线的设备 …` 显示“走外部设备”、实际跑在服务器上。
+            var decision = ResolveRoute(want, bridge, named);
+            var willUse = decision.Backend switch
+            {
+                "server" => "服务器 agent",
+                "host" => $"外部设备（{named ?? devices}）",
+                _ => "（两个开关都关了，或指定的那边不可用）"
+            };
+
+            if (named is not null && decision.Backend != "host")
+            {
+                willUse += $"（你写的「{named}」没在用：{(decision.DeviceDisabled ? "面板里关掉了" : "不在线")}）";
+            }
 
             await SendPlainAsync(conversation,
                 $"外部设备 agent：{(hostOn ? "开" : "关")}（在线：{(online ? deviceDetail : "无")}）\n" +
                 $"服务器内置 agent：{(serverOn ? "开" : "关")}（工具 {(_settings.AgentServerTools.Length == 0 ? "全部" : _settings.AgentServerTools)}）\n" +
                 $"  QQ 动作：{QqActionCatalog.Summarize(QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions))}\n" +
-                $"优先：{route}\n当前会走：{willUse}\n单条指定：//@server … 或 //@host … 或 //@设备名 …");
+                $"优先：{preferred}\n当前会走：{willUse}\n单条指定：//@server … 或 //@host … 或 //@设备名 …");
             return;
         }
 
@@ -1762,7 +1781,7 @@ public sealed class BotAgent : IDisposable
 
         if (head is "runs" or "流水" or "记录")
         {
-            var cur = _agentSessions.FindCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            var cur = _agentSessions.FindCurrent(conversation.SourceKey, ResolveRoute(want, bridge, named).Backend);
             if (cur is null)
             {
                 await SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
@@ -1874,7 +1893,7 @@ public sealed class BotAgent : IDisposable
 
             // 关键：这里**不新建**会话，也不按“下一句会走哪个后端”去找 ——
             // 否则号主看到的是 A 会话，改的却是 B（甚至凭空建一个空的）；也正好是“rename 改错会话”那个 bug。
-            var cur = _agentSessions.FindCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            var cur = _agentSessions.FindCurrent(conversation.SourceKey, ResolveRoute(want, bridge, named).Backend);
             if (cur is null)
             {
                 await SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
@@ -1900,7 +1919,7 @@ public sealed class BotAgent : IDisposable
 
         if (head is "new" or "新会话")
         {
-            var backend = WillUseBackend(want, bridge, named);
+            var backend = ResolveRoute(want, bridge, named).Backend;
             var created = _agentSessions.Create(conversation.SourceKey, backend, rest.Length > 0 ? rest : null, named);
             await SendPlainAsync(conversation,
                 $"已开新会话「{MaybeMask(created.Name, conversation.SourceKey)}」（{(backend == "server" ? "服务器内置" : $"外部 {created.Device ?? bridge?.AnyBridge?.Name ?? "设备"}")}）。" +
@@ -1957,22 +1976,59 @@ public sealed class BotAgent : IDisposable
 
         if (head is "reset" or "clear" or "清空")
         {
-            var current = _agentSessions.FindCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
-            if (current is null)
+            // 两个后端各有一份当前会话，而 `//reset` 的语义是“这个聊天的 agent 记忆清空” ——
+            // 所以**两边都清**。以前按“下一句会走哪边”只清一边，路由一变就清错：
+            // 号主 `//@某台不在线的设备 …` 实际跑在服务器上，reset 却去清了那台空的外部会话，
+            // 被污染的历史一直留着（2026-09-18 实测：reset 两次都没用）。
+            var cleared = new List<string>();
+            foreach (var backendName in new[] { "server", "host" })
+            {
+                var current = _agentSessions.FindCurrent(conversation.SourceKey, backendName);
+                if (current is null)
+                {
+                    continue;
+                }
+
+                var had = current.History.Count;
+                var hadRuns = current.Runs.Count;
+                var oldTitle = current.Name;
+                var reset = _agentSessions.Reset(conversation.SourceKey, current.Id);
+                if (reset is not null && reset.Backend != "server" && reset.PiOwned &&
+                    current.PiSessionId.Length > 0 && bridge is not null)
+                {
+                    await bridge.ForgetSessionAsync(current.PiSessionId);   // 旧的那份 pi 记录清掉
+                }
+
+                // 标题也换回中性的自动名：号主说“reset 并没有删除此会话的全部内容”——
+                // 历史清了、记录清了，但标题还挂着“服务器资源与容器运行状态”这种旧话题，看着就像没清。
+                if (oldTitle.Length > 0)
+                {
+                    RenameSessionQuietly(conversation.SourceKey, current.Id);
+                }
+
+                var label = backendName == "server" ? "服务器" : "外部";
+                var parts = new List<string>();
+                if (had > 0)
+                {
+                    parts.Add($"{had} 条历史");
+                }
+
+                if (hadRuns > 0)
+                {
+                    parts.Add($"{hadRuns} 条执行记录");
+                }
+
+                cleared.Add($"{label}「{MaybeMask(oldTitle, conversation.SourceKey)}」{(parts.Count > 0 ? "清了 " + string.Join("、", parts) : "本来就空")}");
+            }
+
+            if (cleared.Count == 0)
             {
                 await SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
                 return;
             }
 
-            var reset = _agentSessions.Reset(conversation.SourceKey, current.Id);
-            if (reset is not null && reset.Backend != "server" && reset.PiOwned &&
-                current.PiSessionId.Length > 0 && bridge is not null)
-            {
-                await bridge.ForgetSessionAsync(current.PiSessionId);   // 旧的那份 pi 记录清掉
-            }
-
             await SendPlainAsync(conversation,
-                $"会话「{MaybeMask(current.Name, conversation.SourceKey)}」已清空（历史与外部那边的记录都清了）——下一句从零开始。");
+                $"已清空（{string.Join("、", cleared)}）—— 下一句从零开始，不会再带着上一轮的话题。");
             return;
         }
 
@@ -1988,27 +2044,14 @@ public sealed class BotAgent : IDisposable
         //   ③ 选中的那边被开关关了 / 不在线 → 若还有另一边可用就用另一边，否则如实报错
 
 
-        var hostSwitch = _settings.EnableHostAgent;
-        var serverSwitch = _settings.EnableServerAgent;
-        var hostOnline = bridge is not null && bridge.IsDeviceOnline(named);
-
-        // 面板里把某台设备关掉了 → 就当它不可用（并告诉号主是开关关的，不是没连上）
-        var onlineDeviceName = named ?? bridge?.AnyBridge?.Name;
-        var deviceDisabled = onlineDeviceName is not null && !_settings.IsDeviceEnabled(onlineDeviceName);
-
-        var hostOnly = named is not null ||
-                       want.Equals("host", StringComparison.OrdinalIgnoreCase) ||
-                       want.Equals("外部", StringComparison.OrdinalIgnoreCase);
-        var serverOnly = want.Equals("server", StringComparison.OrdinalIgnoreCase) ||
-                         want.Equals("服务器", StringComparison.OrdinalIgnoreCase);
-
-        // 能走外部吗？
-        var canHost = hostSwitch && !deviceDisabled && bridge is not null && hostOnline;
-        // 能走服务器吗？
-        var canServer = serverSwitch && _serverAgent is not null;
-
-        var useHost = canHost && (hostOnly || (!serverOnly && (named is not null || want.Equals("auto", StringComparison.OrdinalIgnoreCase) || want.Length == 0)));
-        var useServer = !useHost && canServer;
+        var route = ResolveRoute(want, bridge, named);
+        var hostSwitch = route.HostSwitch;
+        var serverSwitch = route.ServerSwitch;
+        var hostOnline = route.HostOnline;
+        var deviceDisabled = route.DeviceDisabled;
+        var onlineDeviceName = route.DeviceName;
+        var useHost = route.UseHost;
+        var useServer = route.UseServer;
 
         // 两边都不可用、或指定的那边不在 → 说人话（不要静默改道）
         if (!useHost && !useServer)
@@ -2074,18 +2117,25 @@ public sealed class BotAgent : IDisposable
         // 服务器内置 agent（与外部设备**互不影响**：它不占外部队列，两边可以同时跑）
         if (_serverAgentBusy.TryAdd(conversation.SourceKey, true))
         {
+            // “接着上一句说”只有两种入口：面板开关，或本条指令写 //接着 …（默认**不**带上下文）
+            var (wantsContinue, promptText) = StripContinuePrefix(payload);
+            var useHistory = wantsContinue || _settings.AgentServerKeepContext;
+
             var serverSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "server");
-            var seededHistory = _agentSessions.History(conversation.SourceKey, serverSession.Id);
-            var serverRunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, payload, null);
-            EmitLog($"[会话] 内置 agent 本轮带 {seededHistory.Count} 条历史（会话「{serverSession.Name}」）");
+            var seededHistory = useHistory ? _agentSessions.History(conversation.SourceKey, serverSession.Id) : new List<(string, string)>();
+            var serverRunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, promptText, null);
+            EmitLog(useHistory
+                ? $"[会话] 内置 agent 本轮带 {seededHistory.Count} 条历史（会话「{serverSession.Name}」，{(wantsContinue ? "//接着" : "面板开关开着")}）"
+                : $"[会话] 内置 agent 本轮**不带**上文（每条指令单独对待）：{Shorten(promptText, 40)}");
             var task = new AgentTask
             {
                 Id = $"s{DateTimeOffset.Now.ToUnixTimeMilliseconds()}",
                 SourceKey = conversation.SourceKey,
-                Prompt = payload,
+                Prompt = promptText,
                 Session = serverSession.PiSessionId,
                 SessionRef = serverSession,
                 History = seededHistory,
+                UseHistory = useHistory,
                 // 现场：不做这一步，模型知道“点赞”却不知道给谁点、在哪条消息上点
                 QqHost = BuildQqHost(conversation, msg)
             };
@@ -2171,7 +2221,46 @@ public sealed class BotAgent : IDisposable
         return task;
     }
 
-    /// <summary>给服务器 agent 的 QQ 动作造一个“现场”（哪个会话、谁提的、哪条消息）。</summary>
+    /// <summary>
+    /// 剥掉“接着上一句说”的前缀（<c>//接着 …</c> / <c>//继续 …</c> / <c>//+ …</c>）。
+    /// 只有写了前缀（或面板开了开关）才把上文喂给模型 —— 号主 2026-09-18：
+    /// “每次发送新指令都会把旧指令的内容发送回来，要把每条指令输出单独对待”。
+    /// </summary>
+    private static (bool Continue, string Prompt) StripContinuePrefix(string payload)
+    {
+        var text = (payload ?? string.Empty).TrimStart();
+        foreach (var prefix in new[] { "接着", "继续", "继承" })
+        {
+            if (!text.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var rest = text[prefix.Length..].TrimStart(' ', '：', ':', '，', ',', '。', '、');
+            // 光写“接着”（后面没说干什么）= 让模型看着上文自己接一句
+            return (true, rest.Length == 0 ? "接着上文继续（上一件事接着做或接着说）" : rest);
+        }
+
+        return (false, payload);
+    }
+
+    /// <summary>把会话改回中性的自动名（<c>//reset</c> 用；不动手动改过名的会话）。</summary>
+    private void RenameSessionQuietly(string sourceKey, string sessionId)
+    {
+        try
+        {
+            var list = _agentSessions.List(sourceKey);
+            var index = list.FindIndex(s => s.Id == sessionId);
+            var name = index >= 0 ? $"新会话 {index + 1}" : "新会话";
+            _agentSessions.SetAutoTitle(sourceKey, sessionId, name);
+        }
+        catch (Exception ex)
+        {
+            EmitLog($"会话改名失败（无所谓，不影响清空）: {ex.GetType().Name} {ex.Message}");
+        }
+    }
+
+    /// <summary>丢给服务器 agent 的 QQ 动作现场</summary>
     private IQqActionHost? BuildQqHost(BotConversation conversation, QqChatMessage msg)
     {
         if (_gateway is null)
@@ -2315,24 +2404,52 @@ public sealed class BotAgent : IDisposable
     }
 
     /// <summary>这条命令会走哪个后端（供会话管理用：//new 就在这个后端里开）。</summary>
-    private static string WillUseBackend(string want, AgentBridgeServer? bridge, string? named)
+    private string WillUseBackend(string want, AgentBridgeServer? bridge, string? named)
+        => ResolveRoute(want, bridge, named).Backend;
+
+    /// <summary>
+    /// 这一条命令**实际**会走哪边 —— 分发、`//status`、`//reset` 共用这一个判断。
+    ///
+    /// 为什么必须同源：以前 `//status`/`//reset` 只看到“写了 @设备名”就当成外部设备，
+    /// 而实际分发会因为那台设备不在线、开关关了等原因改走服务器 ——
+    /// 于是 `//@某台不在线的设备 看下日志` 跑在服务器上，号主 `//reset` 却去清了**那台空的外部会话**，
+    /// 被污染的历史一直没清掉（2026-09-18 实测：reset 两次都没用）。
+    /// </summary>
+    private sealed record AgentRoute(
+        string Backend,          // host / server / none
+        bool UseHost,
+        bool UseServer,
+        bool HostSwitch,
+        bool ServerSwitch,
+        bool HostOnline,
+        bool DeviceDisabled,
+        string? DeviceName);
+
+    private AgentRoute ResolveRoute(string want, AgentBridgeServer? bridge, string? named)
     {
-        var trimmed = (want ?? "auto").Trim();
-        if (trimmed.Equals("server", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("服务器", StringComparison.OrdinalIgnoreCase))
-        {
-            return "server";
-        }
+        var hostSwitch = _settings.EnableHostAgent;
+        var serverSwitch = _settings.EnableServerAgent;
+        var hostOnline = bridge is not null && bridge.IsDeviceOnline(named);
 
-        if (named is not null ||
-            trimmed.Equals("host", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("外部", StringComparison.OrdinalIgnoreCase))
-        {
-            return "host";
-        }
+        // 面板里把某台设备关掉了 → 就当它不可用（并告诉号主是开关关的，不是没连上）
+        var deviceName = named ?? bridge?.AnyBridge?.Name;
+        var deviceDisabled = deviceName is not null && !_settings.IsDeviceEnabled(deviceName);
 
-        // auto：外部在线就走外部，否则服务器
-        return bridge is not null && bridge.Connected ? "host" : "server";
+        var hostOnly = named is not null ||
+                       want.Equals("host", StringComparison.OrdinalIgnoreCase) ||
+                       want.Equals("外部", StringComparison.OrdinalIgnoreCase);
+        var serverOnly = want.Equals("server", StringComparison.OrdinalIgnoreCase) ||
+                         want.Equals("服务器", StringComparison.OrdinalIgnoreCase);
+
+        var canHost = hostSwitch && !deviceDisabled && bridge is not null && hostOnline;
+        var canServer = serverSwitch && _serverAgent is not null;
+
+        var useHost = canHost && (hostOnly || (!serverOnly &&
+            (named is not null || want.Equals("auto", StringComparison.OrdinalIgnoreCase) || want.Length == 0)));
+        var useServer = !useHost && canServer;
+
+        return new AgentRoute(useHost ? "host" : useServer ? "server" : "none",
+            useHost, useServer, hostSwitch, serverSwitch, hostOnline, deviceDisabled, deviceName);
     }
 
     /// <summary>把“名字”或“序号”解析成会话 id（//sessions 里给的序号可用）。</summary>
@@ -2439,7 +2556,7 @@ public sealed class BotAgent : IDisposable
                    "用法：//new [名字] 新建、//use <名字|序号> 切换、//del <名字|序号> 删除、//reset 清空当前。";
         }
 
-        var primary = _agentSessions.FindCurrent(sourceKey, WillUseBackend(_settings.AgentTarget, bridge, null));
+        var primary = _agentSessions.FindCurrent(sourceKey, ResolveRoute(_settings.AgentTarget, bridge, null).Backend);
         var lines = new List<string> { $"agent 会话（共 {list.Count} 个，← 是下一句指令会用的；改它们用 //use 序号）：" };
         for (var i = 0; i < list.Count; i++)
         {
@@ -3380,6 +3497,22 @@ public sealed class BotAgent : IDisposable
 
     // ---------- 白名单 ----------
 
+    /// <summary>重建两张白名单（群聊 / 私聊各自一份）。
+    /// 新字段留空就回落到旧的共用名单（<see cref="AppSettings.MessageWhitelist" />）——
+    /// 老部署只配了 QQCHAT_WHITELIST，不改配置也能继续用。</summary>
+    private void RebuildWhitelist()
+    {
+        var legacy = _settings.MessageWhitelist;
+
+        _whitelistGroupsFromLegacy = string.IsNullOrWhiteSpace(_settings.WhitelistGroups);
+        _whitelistPrivatesFromLegacy = string.IsNullOrWhiteSpace(_settings.WhitelistPrivates);
+
+        (_whitelistGroups, _whitelistAllGroups) = ParseWhitelist(
+            _whitelistGroupsFromLegacy ? legacy : _settings.WhitelistGroups);
+        (_whitelistPrivates, _whitelistAllPrivates) = ParseWhitelist(
+            _whitelistPrivatesFromLegacy ? legacy : _settings.WhitelistPrivates);
+    }
+
     /// <summary>解析白名单。返回 (ID集合, 是否通配全部)。支持换行/中英文逗号/分号/空格/Tab 分隔，以及 * 通配。</summary>
     private static (HashSet<long> Ids, bool All) ParseWhitelist(string? whitelist)
     {
@@ -3414,18 +3547,26 @@ public sealed class BotAgent : IDisposable
     private bool IsWhitelisted(QqChatMessage msg)
         => IsSourceAllowed(msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
 
-    /// <summary>群/私聊是否在白名单里（戳一戳事件没有 QqChatMessage，只能单拎一个判据）。</summary>
-    private bool IsSourceAllowed(bool isGroup, long id) => _whitelistAll || _whitelist.Contains(id);
+    /// <summary>群/私聊是否在白名单里（戳一戳事件没有 QqChatMessage，只能单拎一个判据）。
+    ///
+    /// 两边**各用各的名单**（号主 2026-09-18：“私聊白名单和群聊白名单两个框分开”）：
+    /// 以前只比数字，所以把一个 QQ 号填进去，连“同号的群”也一起放行了。
+    /// </summary>
+    private bool IsSourceAllowed(bool isGroup, long id)
+        => isGroup
+            ? _whitelistAllGroups || _whitelistGroups.Contains(id)
+            : _whitelistAllPrivates || _whitelistPrivates.Contains(id);
 
     private bool IsWhitelistedKey(string sourceKey)
     {
-        if (_whitelistAll)
+        var idx = sourceKey.IndexOf(':');
+        if (idx <= 0 || !long.TryParse(sourceKey[(idx + 1)..], out var id))
         {
-            return true;
+            return false;
         }
 
-        var idx = sourceKey.IndexOf(':');
-        return idx > 0 && long.TryParse(sourceKey[(idx + 1)..], out var id) && _whitelist.Contains(id);
+        var isGroup = sourceKey.StartsWith("group", StringComparison.OrdinalIgnoreCase);
+        return IsSourceAllowed(isGroup, id);
     }
 
     // ---------- 回复流程 ----------

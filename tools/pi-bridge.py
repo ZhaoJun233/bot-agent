@@ -41,6 +41,7 @@ import time
 DEFAULT_SSH = ""
 DEFAULT_KEY = ""
 DEFAULT_LOCAL_PORT = 18080          # 本地转发端口（连到服务器 127.0.0.1:8080）
+DEFAULT_SFTP_PORT = 2222            # 本机转发到服务器 sshd 的端口（sftp/scp 用；0 = 不开）
 DEFAULT_REMOTE = "127.0.0.1:8080"   # 服务器上的面板/桥端口
 DEFAULT_WORKDIR = os.getcwd()         # pi 在哪个目录里干活
 DEFAULT_PI = "pi"
@@ -194,11 +195,16 @@ class WsClient:
 #  ssh 本地转发（自己管，断了重连）
 # ══════════════════════════════════════════════════════════════
 class SshTunnel:
-    def __init__(self, ssh_target: str, key: str, local_port: int, remote: str, enabled: bool = True):
+    def __init__(self, ssh_target: str, key: str, local_port: int, remote: str, enabled: bool = True,
+                 extra_forwards: list[tuple[int, str]] | None = None):
         self.ssh_target = ssh_target
         self.key = key
         self.local_port = local_port
         self.remote = remote
+        # 额外转发（号主 2026-09-18：“外部服务器连接加上 sftp 操作”）：
+        # 例：(2222, "127.0.0.1:22") —— 本机 2222 → 服务器 sshd，于是 pi 在自己那台电脑上
+        # 跑 `sftp -P 2222 …` 就能读写服务器文件（不用开公网端口，也不依赖本机能直连 22）。
+        self.extra_forwards = extra_forwards or []
         self.enabled = enabled
         self.proc: subprocess.Popen | None = None
 
@@ -214,11 +220,16 @@ class SshTunnel:
         ]
         if self.key:
             args += ["-i", self.key]
-        args += ["-L", f"{self.local_port}:{self.remote}", self.ssh_target]
+        args += ["-L", f"{self.local_port}:{self.remote}"]
+        for local, target in self.extra_forwards:
+            args += ["-L", f"{local}:{target}"]
+        args.append(self.ssh_target)
         creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     creationflags=creation)
         log(f"ssh 转发已启动：127.0.0.1:{self.local_port} → {self.ssh_target}:{self.remote}")
+        for local, target in self.extra_forwards:
+            log(f"ssh 转发已启动：127.0.0.1:{local} → {self.ssh_target}:{target}（sftp/scp 走这条）")
 
     @property
     def alive(self) -> bool:
@@ -253,13 +264,19 @@ TOOL_HINTS = {
 
 
 class TaskRunner:
-    def __init__(self, send_json, pi_argv: list[str], workdir: str, pi_display: str | None = None):
+    def __init__(self, send_json, pi_argv: list[str], workdir: str, pi_display: str | None = None,
+                 server_env: dict[str, str] | None = None):
         self.send_json = send_json
         # run the real entry (node + cli.js) instead of the .cmd shim:
         # the shim goes through cmd.exe, which treats a newline as a command separator
         self.pi_argv = pi_argv
         self.pi_cmd = pi_display or " ".join(pi_argv)   # log/error text only
         self.workdir = workdir
+        # 给 pi 进程注入的“服务器坐标”（号主 2026-09-18：外部连接也要能操作服务器文件）：
+        # pi 的 bash 工具会继承它们，于是 agent 可以直接：
+        #   sftp -P "$PI_SERVER_SFTP_PORT" -i "$PI_SERVER_KEY" "$PI_SERVER_SSH"
+        # 里面**不含密钥**，只有路径与端口；隧道由桥自己维护。
+        self.server_env = server_env or {}
         self.proc: subprocess.Popen | None = None
         self.cancelled = False
         self.lock = threading.Lock()
@@ -293,6 +310,16 @@ class TaskRunner:
         session = (task.get("session") or "").strip()
         instructions = (task.get("instructions") or "").strip()   # panel "agent instructions"
         timeout = int(task.get("timeoutSec") or 900)
+
+        # 服务器坐标：告诉 agent “你可以直接读写服务器上的文件”——
+        # 不写这段，它只会看到一堆 PI_SERVER_* 环境变量却不知道那是什么（2026-09-18 号主要的能力）。
+        if self.server_env:
+            note = ("\n\n【服务器文件】要读写机器人所在服务器上的文件，可以用 sftp/scp（桥已经开好了隧道）：\n"
+                    f"  sftp -P {self.server_env.get('PI_SERVER_SFTP_PORT')} -i \"{self.server_env.get('PI_SERVER_KEY')}\" "
+                    f"{self.server_env.get('PI_SERVER_SSH')}\n"
+                    "  也可以直接用环境变量里的 $PI_SERVER_SFTP_PORT / $PI_SERVER_KEY / $PI_SERVER_SSH。\n"
+                    "  批量操作用 tools/server-files.py（ls/cat/get/put/rm/mkdir），别用交互式 sftp 手敲。")
+            instructions = (instructions + note) if instructions else note.lstrip("\n")
 
         args = list(self.pi_argv) + ["-p", "--mode", "json"]
         # session isolation: run in a shadow directory so pi-web can open the real session meanwhile
@@ -333,6 +360,7 @@ class TaskRunner:
             self.proc = subprocess.Popen(
                 args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env={**os.environ, **self.server_env},   # 服务器坐标（sftp/scp 用；不含密钥）
                 # stdin 必须断开：pi 的非交互模式偶尔会问一句（项目本地文件的信任/确认），
                 # 接到控制台就会**永远等下去** —— 机器人那边看到的就是“卡住”（实测踩过）
                 stdin=subprocess.DEVNULL,
@@ -514,6 +542,8 @@ def main() -> int:
                     help="设备名（面板里按这个名字认设备；空 = 用本机主机名）")
     ap.add_argument("--workdir", default=os.environ.get("PI_BRIDGE_WORKDIR", DEFAULT_WORKDIR))
     ap.add_argument("--pi", default=os.environ.get("PI_BRIDGE_PI", DEFAULT_PI))
+    ap.add_argument("--sftp-port", type=int, default=int(os.environ.get("PI_BRIDGE_SFTP_PORT", DEFAULT_SFTP_PORT)),
+                    help="本机转发到服务器 sshd 的端口（sftp/scp 用）；0 = 不开")
     args = ap.parse_args()
 
     if not args.token:
@@ -536,8 +566,19 @@ def main() -> int:
     else:
         log(f"pi 启动方式：{pi_how}")
 
-    tunnel = SshTunnel(args.ssh, args.key, args.local_port, args.remote, enabled=not args.url)
-    runner = TaskRunner(send_json=lambda obj: None, pi_argv=pi_argv, workdir=args.workdir, pi_display=args.pi)
+    tunnel = SshTunnel(args.ssh, args.key, args.local_port, args.remote, enabled=not args.url,
+                       extra_forwards=[(args.sftp_port, "127.0.0.1:22")] if args.sftp_port > 0 else [])
+
+    server_env = {}
+    if args.sftp_port > 0:
+        server_env = {
+            "PI_SERVER_SSH": args.ssh,
+            "PI_SERVER_KEY": args.key,
+            "PI_SERVER_SFTP_PORT": str(args.sftp_port),
+        }
+
+    runner = TaskRunner(send_json=lambda obj: None, pi_argv=pi_argv, workdir=args.workdir, pi_display=args.pi,
+                        server_env=server_env)
 
     # Local CLI discovery can take time; finish it before opening the handshake.
     hello = {

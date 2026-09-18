@@ -109,6 +109,8 @@ public static partial class Program
         await Scenario("s36", RunPrivacySettingsScenarioAsync);
         await Scenario("s37", RunAgentServerKeyScenarioAsync);
         await Scenario("s38", RunServerAgentQqActionScenarioAsync);
+        await Scenario("s39", RunServerAgentContextScenarioAsync);
+        await Scenario("s40", RunServerAgentDockerScenarioAsync);
         }
         catch (Exception ex)
         {
@@ -438,6 +440,69 @@ public static partial class Program
         Check("白名单内的会话已落库", persisted, "5 秒内没等到会话写库");
 
         await bot.StopAsync();
+
+        // ── 群聊 / 私聊两份名单各管各的（号主 2026-09-18：“私聊白名单和群聊白名单两个框分开”）──
+        // 以前只比数字：把一个 QQ 号填进名单，连“同号的群”也一起放行了。
+        const long groupOnly = 99991;     // 只写在群聊名单里的群号
+        const long friendOnly = 70011;    // 只写在私聊名单里的 QQ 号
+        var dataDir2 = NewDataDir("s3b");
+
+        using var bot2 = StartBot(new Dictionary<string, string>
+        {
+            ["QQCHAT_DATA_DIR"] = dataDir2,
+            ["QQCHAT_API_KEY"] = "sk-mock",
+            ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
+            ["QQCHAT_MODEL"] = "mock-model",
+            ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket",
+            ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
+            ["QQCHAT_UIN"] = "10001",
+            ["QQCHAT_WHITELIST_GROUPS"] = groupOnly.ToString(),
+            ["QQCHAT_WHITELIST_PRIVATES"] = friendOnly.ToString(),
+            // 故意不填旧的共用名单：验证新字段自己就够（不再需要回落）
+            ["QQCHAT_GROUP_COOLDOWN"] = "0",
+            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
+            ["QQCHAT_HEALTH_PORT"] = "0"
+        });
+
+        await WaitForPortAsync(botWsPort, cts.Token, bot2);
+
+        using var protocol2 = new MockProtocol { SelfId = 10001 };
+        await protocol2.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
+        await protocol2.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
+
+        openAi.ClearRequests();
+
+        // ① 群聊名单里的群 → 放行
+        await protocol2.SendGroupMessageAsync(groupOnly, 20002, "老王", "@机器人 你好", 7201, mentionBot: true, ct: cts.Token);
+        var groupAnswered = await WaitUntilAsync(() => openAi.Requests.Count > 0, TimeSpan.FromSeconds(20));
+        Check("★ 群聊名单里的群正常回复", groupAnswered, $"模型请求 {openAi.Requests.Count} 次");
+
+        // ② **同号的私聊** → 必须被忽略（旧行为会放行，这就是分开的意义）
+        var reqBeforeSameId = openAi.Requests.Count;
+        await protocol2.SendPrivateMessageAsync(groupOnly, "老王", "你好", 7202, cts.Token);
+        await Task.Delay(2500);
+        Check("★★ 群号填在群聊名单里，不会把「同号的私聊」一起放行",
+            openAi.Requests.Count == reqBeforeSameId,
+            $"又多出 {openAi.Requests.Count - reqBeforeSameId} 次模型请求");
+        Check("★★ 也不会把同号的私聊会话落库",
+            !DbProbe.Dump(dataDir2, "SELECT source_key FROM conversations").Contains($"private:{groupOnly}"),
+            Truncate(DbProbe.Dump(dataDir2, "SELECT source_key FROM conversations"), 160));
+
+        // ③ 私聊名单里的好友 → 放行
+        var reqBeforeFriend = openAi.Requests.Count;
+        await protocol2.SendPrivateMessageAsync(friendOnly, "小李", "你好", 7203, cts.Token);
+        var friendAnswered = await WaitUntilAsync(() => openAi.Requests.Count > reqBeforeFriend, TimeSpan.FromSeconds(20));
+        Check("★ 私聊名单里的好友正常回复", friendAnswered, $"模型请求 {openAi.Requests.Count - reqBeforeFriend} 次");
+
+        // ④ **同号的群** → 必须被忽略
+        var reqBeforeSameGroup = openAi.Requests.Count;
+        await protocol2.SendGroupMessageAsync(friendOnly, 20003, "小李", "@机器人 你好", 7204, mentionBot: true, ct: cts.Token);
+        await Task.Delay(2500);
+        Check("★★ QQ 号填在私聊名单里，不会把「同号的群」一起放行",
+            openAi.Requests.Count == reqBeforeSameGroup,
+            $"又多出 {openAi.Requests.Count - reqBeforeSameGroup} 次模型请求");
+
+        await bot2.StopAsync();
     }
 
     // ═══════════════════ S4：模型选择沉默 ═══════════════════

@@ -1083,6 +1083,15 @@
     $("setPersona").value = r.botPersona || "";
     $("setMaxTokens").value = r.maxTokens;
     $("setWhitelist").value = r.messageWhitelist || "";
+    $("setWhitelistGroups").value = r.whitelistGroups || "";
+    $("setWhitelistPrivates").value = r.whitelistPrivates || "";
+    // 留空的那一边回落到旧的共用名单 —— 在提示里说清楚（不然号主以为新框填了没生效）
+    const legacyBits = [];
+    if (r.whitelistGroupsFromLegacy) legacyBits.push("群聊");
+    if (r.whitelistPrivatesFromLegacy) legacyBits.push("私聊");
+    $("whitelistLegacyHint").textContent = legacyBits.length > 0
+      ? `群聊+私聊共用一份（以前只有一个框）。现在：${legacyBits.join("、")}在用这份旧名单（上面对应的新框填上就以新框为准）`
+      : "群聊+私聊共用一份（以前只有一个框）。上面两个新框都填了，这份已经不起作用";
     $("setDesire").value = r.aiDesire;
     $("desireVal").textContent = r.aiDesire;
     $("setThreshold").value = r.suitabilityThreshold;
@@ -1168,6 +1177,10 @@
     }
     $("setAgentServerTools").value = r.agentServerTools || "";
     $("setAgentServerQqActions").value = r.agentServerQqActions || "";
+    // 记住上下文（默认关：每条指令单独对待）
+    $("setAgentServerKeepContext").checked = !!r.agentServerKeepContext;
+    // 透过 docker 操作服务器（高权限，默认关）
+    $("setAgentServerDocker").checked = !!r.agentServerDocker;
     // 把“实际会开哪几个”回显出来：留空 ≠ 什么都没有（是默认安全档），写错的名字会被服务端忽略，
     // 所以面板得把真正生效的那份摆出来，不然号主会以为自己写生效了。
     $("agentServerQqActionsOut").textContent = r.agentServerQqActionsEffective
@@ -1249,6 +1262,8 @@
       model: $("setModel").value.trim(),
       botPersona: $("setPersona").value,
       messageWhitelist: $("setWhitelist").value,
+      whitelistGroups: $("setWhitelistGroups").value,
+      whitelistPrivates: $("setWhitelistPrivates").value,
       aiDesire: Number($("setDesire").value),
       suitabilityThreshold: Number($("setThreshold").value),
       aiModeEnabled: $("setAiMode").checked,
@@ -1312,6 +1327,8 @@
       enableServerAgent: $("setEnableServerAgent").checked,
       agentServerTools: $("setAgentServerTools").value.trim(),
       agentServerQqActions: $("setAgentServerQqActions").value.trim(),
+      agentServerKeepContext: $("setAgentServerKeepContext").checked,
+      agentServerDocker: $("setAgentServerDocker").checked,
       agentServerMaxSteps: Number($("setAgentServerMaxSteps").value),
       agentServerWorkDir: $("setAgentServerWorkDir").value.trim() || "/data",
       agentServerCommandTimeoutSeconds: Number($("setAgentServerCommandTimeoutSeconds").value),
@@ -2143,12 +2160,16 @@
         "② 把 pi-bridge.py 也放到本机同一目录（下面给链接）",
         isWin ? "③ 双击运行 connect-pi-bridge.cmd（窗口别关）" : "③ 运行 sh connect-pi-bridge.sh（窗口别关）",
         "④ 回来后点「我已运行，检测连接」，看到 🟢 在线就是成了",
+        "",
+        "服务器文件：桥会额外把本机一个端口转发到服务器的 sshd（默认 2222），",
+        "agent 就能用 sftp/scp 直接读写服务器文件；批量操作可用 server-files.py（上面也能下载）。",
         ""
       ].join("\n");
       out.insertAdjacentHTML("beforeend",
         `<div class="sticker-actions">\n` +
         `  <a class="ghost-btn" href="${url}" download>下载 ${isWin ? "connect-pi-bridge.cmd" : "connect-pi-bridge.sh"}</a>\n` +
         `  <a class="ghost-btn" href="${withToken(`${apiBase()}/agent-bridge-script`)}" download="pi-bridge.py">下载 pi-bridge.py</a>\n` +
+        `  <a class="ghost-btn" href="${withToken(`${apiBase()}/agent-sftp-script`)}" download="server-files.py">下载 server-files.py</a>\n` +
         `  <button class="ghost-btn js-agent-connect-check">我已运行，检测连接</button>\n` +
         `</div>`);
 

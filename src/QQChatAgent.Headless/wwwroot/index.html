@@ -226,8 +226,18 @@
           </div>
 
           <div class="field">
-            <label>消息白名单<span class="hint">严格模式：只有名单内的群 / 私聊会进入消息列表并触发 AI，名单外全部忽略。<code>*</code> = 全部接收（危险）</span></label>
-            <textarea id="setWhitelist" rows="4" placeholder="例如：&#10;10001&#10;20002&#10;（留空 = 全部忽略）"></textarea>
+            <label>群聊白名单<span class="hint">严格模式：只有名单内的**群**会进入消息列表并触发 AI，名单外全部忽略。<code>*</code> = 所有群（危险）</span></label>
+            <textarea id="setWhitelistGroups" rows="3" placeholder="例如：&#10;10001&#10;20002（留空 = 回落到下面的旧共用名单；旧名单也空 = 忽略全部）"></textarea>
+          </div>
+
+          <div class="field">
+            <label>私聊白名单<span class="hint">只有名单内的**好友**私聊会触发 AI。与群聊名单各管各的：QQ 号填在群里不会放行同号的群，反之亦然。<code>*</code> = 所有私聊（危险）</span></label>
+            <textarea id="setWhitelistPrivates" rows="3" placeholder="例如：&#10;30001（留空 = 回落到下面的旧共用名单；旧名单也空 = 忽略全部）"></textarea>
+          </div>
+
+          <div class="field">
+            <label>旧的共用名单（兼容）<span class="hint" id="whitelistLegacyHint">群聊+私聊共用一份（以前只有一个框）。上面两个新框里留空的那一边就回落到它</span></label>
+            <textarea id="setWhitelist" rows="2" placeholder="（旧字段；不填也没关系）"></textarea>
           </div>
         </div>
 
@@ -748,6 +758,18 @@
                 <input type="text" id="setAgentServerQqActions" placeholder="留空=点赞/戳一戳/表情回应/撤回（写 ban 才给禁言）" />
                 <div class="path-hint" id="agentServerQqActionsOut"></div>
             </div>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setAgentServerKeepContext" />
+                <span class="switch"></span>
+                <span>服务器 agent 记住上下文<span class="hint">默认**关**：每条 // 指令单独对待（不把上几轮的指令/结论喂给模型，避免回复里混进旧指令的内容）。想“接着上一句聊”就打开它，或单条写 //接着 …</span></span>
+            </label>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setAgentServerDocker" />
+                <span class="switch"></span>
+                <span>允许 agent 透过 docker 操作服务器<span class="hint">**高权限**（docker.sock ≈ root）：打开后它能 <code>docker ps/logs/exec</code>、能 <code>docker run -v /:/host …</code> 读整个服务器文件系统，也能直接读写部署目录 <code>/host/qqchat</code>（宿主机的 /opt/qqchat）。默认关；挂载是常挂的，这个开关决定它**会不会去用**。</span></span>
+            </label>
 
             <div class="grid-2">
                 <div class="field">

@@ -406,7 +406,14 @@ const RUNTIME = {
   agentServerKeySet: true, agentServerKeyMasked: "sk-a****", agentServerKeySource: "panel",
   // 服务器 agent 的 QQ 动作（空 = 安全档；这里故意配了一个危险档的 ban 看回显）
   agentServerTools: "bash,read,qq", agentServerQqActions: "like,poke,ban",
-  agentServerQqActionsEffective: "安全档 like/poke，已点名打开 ban"
+  agentServerQqActionsEffective: "安全档 like/poke，已点名打开 ban",
+  // 记住上下文：默认关（每条指令单独对待）—— fixture 里故意开一个，验证回填
+  agentServerKeepContext: true,
+  // 透过 docker 操作服务器（高权限，默认关）
+  agentServerDocker: false,
+  // 白名单拆成两份（群聊/私聊），旧字段还留着做兼容：这里故意只填群聊那份，看回落提示
+  messageWhitelist: "10001", whitelistGroups: "10001,20002", whitelistPrivates: "",
+  whitelistGroupsFromLegacy: false, whitelistPrivatesFromLegacy: true
 };
 const ENV = {
   modelBaseUrl: "http://x/v1", modelBaseUrlSource: "env",
@@ -828,6 +835,74 @@ check("★ 把“实际会开哪几个”回显出来（留空≠没有，写错
   const sent = post ? JSON.parse(post.body).agentServerQqActions : undefined;
   check("★ 保存时把 QQ 动作一起发给服务端（原样，规范化交给服务端做）", sent === "like,poke,ban",
     `发出=${JSON.stringify(sent)}`);
+}
+
+/* ─────────── 4) 服务器 agent 的上下文开关（每条指令单独对待） ─────────── */
+
+console.log("\n▶ 动态：服务器 agent 记住上下文（默认关）");
+
+const keepCtx = document.getElementById("setAgentServerKeepContext");
+check("★ 面板有一个「记住上下文」开关（默认关：每条 // 指令单独对待）",
+  html.includes('type="checkbox" id="setAgentServerKeepContext"') && !!keepCtx,
+  keepCtx ? "开了" : "没这个元素");
+check("★ 提示里写明白了默认关、以及 //接着 可以单条接上文",
+  html.includes("每条 // 指令单独对待") && html.includes("//接着"),
+  (html.match(/记住上下文[\s\S]{0,160}/) || ["(没找到)"])[0].slice(0, 110));
+check("★ 已配置的值回填到开关上",
+  !!keepCtx && keepCtx.checked === true, keepCtx ? String(keepCtx.checked) : "无元素");
+{
+  const b = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body).agentServerKeepContext : undefined;
+  check("★ 保存时把开关一起发出去（true/false，不是字符串）", sent === true, `发出=${JSON.stringify(sent)}`);
+}
+
+/* ─────────── 4) 白名单：群聊 / 私聊两个框 ─────────── */
+
+console.log("\n▶ 动态：白名单拆成「群聊」与「私聊」两个框");
+
+const wlGroups = document.getElementById("setWhitelistGroups");
+const wlPrivates = document.getElementById("setWhitelistPrivates");
+check("★ 面板有两个独立的白名单框（群聊 / 私聊）+ 旧的共用名单框",
+  !!wlGroups && !!wlPrivates && !!document.getElementById("setWhitelist"),
+  `groups=${!!wlGroups} privates=${!!wlPrivates} legacy=${!!document.getElementById("setWhitelist")}`);
+check("★ 提示里写明“各管各的”（QQ 号填在群里不会放行同号的群）",
+  html.includes("与群聊名单各管各的"), "(没找到说明文字)");
+check("★ 两框各自回填",
+  String(wlGroups?.value) === "10001,20002" && String(wlPrivates?.value) === "",
+  `groups=${JSON.stringify(wlGroups?.value)} privates=${JSON.stringify(wlPrivates?.value)}`);
+check("★ 哪边在用旧的共用名单，面板就如实说哪边",
+  String(document.getElementById("whitelistLegacyHint")?.textContent || "").includes("私聊"),
+  String(document.getElementById("whitelistLegacyHint")?.textContent || "(空)"));
+{
+  const b = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body) : {};
+  check("★ 保存时两个白名单都发出去（不是只发旧的）",
+    sent.whitelistGroups === "10001,20002" && sent.whitelistPrivates === "",
+    `groups=${JSON.stringify(sent.whitelistGroups)} privates=${JSON.stringify(sent.whitelistPrivates)}`);
+}
+
+const dockerSwitch = document.getElementById("setAgentServerDocker");
+check("★ 面板有一个「允许 agent 透过 docker 操作服务器」开关（高权限，默认关）",
+  html.includes('type="checkbox" id="setAgentServerDocker"') && !!dockerSwitch,
+  dockerSwitch ? "有" : "没这个元素");
+check("★ 提示里写清了权限边界（docker.sock ≈ root、部署目录 /host/qqchat）",
+  html.includes("docker.sock") && html.includes("/host/qqchat"),
+  (html.match(/docker 操作服务器[\s\S]{0,200}/) || ["(没找到)"])[0].slice(0, 140));
+check("★ 服务端返回 false 时开关是关的（高风险默认不能自己开）",
+  !!dockerSwitch && dockerSwitch.checked === false, dockerSwitch ? String(dockerSwitch.checked) : "无元素");
+{
+  const b = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body).agentServerDocker : undefined;
+  check("★ 保存时把 docker 开关一起发出去", sent === false, `发出=${JSON.stringify(sent)}`);
 }
 
 /* ─────────── 4) 未保存修改的提示与拦截 ─────────── */

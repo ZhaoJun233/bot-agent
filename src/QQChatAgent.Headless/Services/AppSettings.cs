@@ -64,8 +64,16 @@ public sealed class AppSettings
     /// <summary>发言适合度阈值（0-100）：模型评分低于此值则沉默，默认 10。</summary>
     public int SuitabilityThreshold { get; set; } = 10;
 
-    /// <summary>消息白名单（每行/逗号分隔一个 QQ 号或群号；留空=全部忽略，严格模式）。</summary>
+    /// <summary>消息白名单（**旧字段**：群聊与私聊共用一份名单；留空 = 全部忽略，严格模式）。
+    /// 2026-09-18 起拆成两份（<see cref="WhitelistGroups" /> / <see cref="WhitelistPrivates" />）——
+    /// 旧值仍然生效：哪一边的新字段留空，那一边就回落到这份共用名单（老配置不用动）。</summary>
     public string MessageWhitelist { get; set; } = string.Empty;
+
+    /// <summary>**群聊**白名单（每行/逗号分隔群号；<c>*</c> = 所有群）。留空 = 回落到旧的共用名单。</summary>
+    public string WhitelistGroups { get; set; } = string.Empty;
+
+    /// <summary>**私聊**白名单（每行/逗号分隔 QQ 号；<c>*</c> = 所有人）。留空 = 回落到旧的共用名单。</summary>
+    public string WhitelistPrivates { get; set; } = string.Empty;
 
     /// <summary>模型人设档案（可选，定义机器人角色的性格/说话风格）。</summary>
     public string BotPersona { get; set; } = string.Empty;
@@ -543,6 +551,15 @@ public sealed class AppSettings
     /// <summary>服务器内置 agent 的工作目录（容器内路径）。</summary>
     public string AgentServerWorkDir { get; set; } = "/data";
 
+    /// <summary>
+    /// 服务器内置 agent 要不要记住上一句（默认**不**记）—— 每条 <c>//</c> 指令单独对待。
+    ///
+    /// 为什么要这个开关：号主 2026-09-18 实测，会话里堆着上几轮的指令原文时，模型会把旧指令也一并答一遍：
+    /// “1. 点赞动作：…失败 2. 服务器状态：…” —— 新指令的回复里混进旧内容。
+    /// 默认关 = 每个指令只对自己的事负责；打开后同一会话能接着聊（单条也可以用 <c>//接着 …</c>）。
+    /// </summary>
+    public bool AgentServerKeepContext { get; set; }
+
     /// <summary>服务器内置 agent 最多跑几步工具循环（每步一次模型调用）。</summary>
     public int AgentServerMaxSteps { get; set; } = 8;
 
@@ -551,6 +568,16 @@ public sealed class AppSettings
 
     /// <summary>服务器内置 agent 单次补全的 max_tokens。</summary>
     public int AgentServerMaxTokens { get; set; } = 1200;
+
+    /// <summary>
+    /// 允许服务器 agent **透过 docker 操作服务器**（号主 2026-09-18 要的能力）：
+    /// 打开后它能 `docker ps / logs / exec / run -v /:/host …`，也能直接读写 /host/qqchat（部署目录）。
+    ///
+    /// 这是**高权限**开关（docker.sock ≈ root）：关着的时候它的工具表里没有 docker、提示词也不提这两条路径。
+    /// 但 socket 与 /host/qqchat 是**常挂载**的（compose 的挂载不能运行时改）——
+    /// 所以这个开关是“告诉 agent 能不能用 + 号主确认过风险”，不是硬隔离。默认关。
+    /// </summary>
+    public bool AgentServerDocker { get; set; }
 
     // ══════════ 服务器健康日报（定时私聊推送）══════════
     //

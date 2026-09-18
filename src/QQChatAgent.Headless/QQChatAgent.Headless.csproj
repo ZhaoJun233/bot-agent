@@ -24,6 +24,8 @@
     <EmbeddedResource Include="wwwroot/**" LogicalName="web/%(Filename)%(Extension)" />
     <!-- 本机 agent 桥脚本：面板里「下载 pi-bridge.py」直接吐这个（源码只有 tools/ 一份） -->
     <EmbeddedResource Include="../../tools/pi-bridge.py" LogicalName="tools/pi-bridge.py" />
+    <!-- 服务器文件操作脚本（sftp 包装）：面板里也可下载，给外部 pi agent 用 -->
+    <EmbeddedResource Include="../../tools/server-files.py" LogicalName="tools/server-files.py" />
   </ItemGroup>
 
   <!--

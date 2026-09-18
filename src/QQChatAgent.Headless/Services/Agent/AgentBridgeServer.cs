@@ -928,9 +928,17 @@ public sealed class AgentTask
     /// <summary>服务器内置后端：这一轮之前的历史（同一会话的上几轮）。</summary>
     public List<(string Role, string Text)>? History { get; set; }
 
+    /// <summary>
+    /// 服务器内置后端：这一轮**要不要**把历史喂给模型。
+    ///
+    /// 默认 false（每条 // 指令单独对待）—— 号主 2026-09-18 实测：会话里堆着上几轮的指令原文时，
+    /// 模型会把“查服务器状态”这种旧指令也答一遍，新指令的回复里混进旧内容。
+    /// 想要“接着上一句聊”就把面板那个开关打开，或单条写 <c>//接着 …</c>。
+    /// </summary>
+    public bool UseHistory { get; set; }
+
     /// <summary>服务器内置后端：跑完后的完整对话（上层存回会话）。</summary>
     public List<(string Role, string Text)>? Conversation { get; set; }
-
     /// <summary>
     /// 服务器内置后端的 **QQ 动作现场**（当前会话、发指令的人、本条消息 id）——
     /// 由 BotAgent 按任务塞进来；外部设备那条路不用（它在自己电脑上跑，碰不到协议端），面板“试一条”也没有。

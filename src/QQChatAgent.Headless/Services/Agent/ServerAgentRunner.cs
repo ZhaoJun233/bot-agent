@@ -44,21 +44,34 @@ public sealed class ServerAgentRunner
         var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
         var maxSteps = Math.Clamp(_settings.AgentServerMaxSteps, 1, 30);
         var allowed = ParseTools(_settings.AgentServerTools);
+
+        // docker 是高权限能力（docker.sock ≈ root）：只在面板那个开关打开时才能用。
+        // 两把锁：就算号主在“工具”里写了 docker，开关没开也不给用。
+        if (!_settings.AgentServerDocker)
+        {
+            allowed.Remove("docker");
+        }
         var qqAllowed = QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions);
         var qqHost = task.QqHost;
         var qqUsed = 0;
 
         var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost);
 
-        // 会话上下文：同一会话里的前几轮会带过来（//new 开新的就是空历史）
+        // 会话上下文：**默认不带**（每条 // 指令单独对待）——
+        // 号主 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
+        // 模型会把旧指令也答一遍，新指令的回复里混进旧内容（“1. 点赞动作… 2. 服务器状态…”。）。
+        // 想要“接着上一句聊”：面板里的开关，或单条写 //接着 …（两者都会把 task.UseHistory 置上）。
+        // 带历史时也先洗一遍：【工具步骤不进历史】—— 上一轮若是“查服务器状态”，那几个 bash 步骤（命令 + 输出）
+        // 会把模型带进“这是个运维会话”的模式里（同样实测过）。
         var messages = new List<(string Role, string Text)>();
-        if (task.History is { Count: > 0 })
+        if (task.UseHistory && task.History is { Count: > 0 })
         {
-            messages.AddRange(task.History);
+            messages.AddRange(SeedHistory(task.History));
         }
 
         messages.Add(("user", task.Prompt));
         var started = DateTimeOffset.Now;
+        var nudged = 0;
 
         try
         {
@@ -83,7 +96,19 @@ public sealed class ServerAgentRunner
                 var call = ParseStep(raw);
                 if (call is null)
                 {
-                    // 模型没说清楚（不是 JSON）：把这段当结论，别再空转
+                    // 不是 JSON：先给一次机会，让它把话说进协议里（模型偶尔会拿散文答话，
+                    // 而散文一旦被当成结论，工具就一次都不会调 —— 号主会看到一份“凭空编的答案”）。
+                    if (nudged == 0 && allowed.Count > 0)
+                    {
+                        nudged++;
+                        messages.Add(("assistant", raw.Trim()));
+                        messages.Add(("user",
+                            "你上面那句不是 JSON。请只输出一行 JSON：要干活就写带 tool 的那一行（真的去调工具），要回话就写带 final 的那一行。不要用散文回答。"));
+                        continue;
+                    }
+
+                    // 还是不说人话：把这段当结论，别再空转
+                    messages.Add(("assistant", raw.Trim()));
                     task.Succeeded(raw.Trim());
                     return;
                 }
@@ -92,12 +117,16 @@ public sealed class ServerAgentRunner
                 if (step0.Final is { Length: > 0 })
                 {
                     task.ToolCalls = step - 1;
+                    // 结论也要进对话：否则下一轮上下文里只剩下“用户问了什么 + 一堆工具输出”，
+                    // 模型看不到自己上轮得出了什么（会话记忆缺一半，标题综结也拿不到结论）。
+                    messages.Add(("assistant", step0.Final.Trim()));
                     task.Succeeded(step0.Final.Trim());
                     return;
                 }
 
                 if (step0.Tool is null)
                 {
+                    messages.Add(("assistant", raw.Trim()));
                     task.Succeeded(raw.Trim());
                     return;
                 }
@@ -159,6 +188,70 @@ public sealed class ServerAgentRunner
         }
     }
 
+    /// <summary>
+    /// 洗一下历史再喂给模型：**丢掉工具步骤**，只留“用户要什么 + 结论是什么”。
+    ///
+    /// 为什么：工具步骤长这样 —— <c>{"tool":"bash","command":"uptime…"}</c> 与 <c>工具输出（bash）：…</c>。
+    /// 它们对“这个会话在聊什么”几乎没贡献，却把模型带进“我正在跑命令”的模式：
+    /// 号主实测过一次 —— 上一轮查服务器状态留下的 8 条工具步骤，让模型对新的“给某某点赞”
+    /// 一个工具都不调、直接续写了一份状态汇报。
+    /// </summary>
+    private static List<(string Role, string Text)> SeedHistory(List<(string Role, string Text)> history)
+    {
+        var kept = new List<(string Role, string Text)>();
+        foreach (var (role, text) in history)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            // 工具输出那一条（runner 自己拼的）
+            if (role == "user" && text.StartsWith("工具输出（", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // 工具调用那一条（模型吐的 JSON 里带 tool）
+            if (role == "assistant" && LooksLikeToolStep(text))
+            {
+                continue;
+            }
+
+            kept.Add((role, text));
+        }
+
+        // 再老的对话留着只会吃 token、还容易误导（会话内存本来就只当“最近聊过什么”用）
+        const int maxEntries = 12;
+        return kept.Count <= maxEntries ? kept : kept[^maxEntries..];
+    }
+
+    /// <summary>这段助手回复是不是“调工具”的那一行（而不是结论）。</summary>
+    private static bool LooksLikeToolStep(string text)
+    {
+        var trimmed = text.TrimStart();
+        if (!trimmed.StartsWith('{'))
+        {
+            return false;
+        }
+
+        try
+        {
+            var start = trimmed.IndexOf('{');
+            var end = trimmed.LastIndexOf('}');
+            if (start < 0 || end <= start)
+            {
+                return false;
+            }
+
+            return JsonNode.Parse(trimmed[start..(end + 1)]) is JsonObject obj && obj["tool"] is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost)
     {
         var list = new List<string>();
@@ -182,6 +275,16 @@ public sealed class ServerAgentRunner
             list.Add("fetch：抓一个 http(s) 地址的正文（url 字段，最多 4000 字）。");
         }
 
+        // docker：号主在面板里开的“透过 docker 操作服务器”能力（高权限，默认关）
+        if (allowed.Contains("docker"))
+        {
+            list.Add(
+                "docker：跑一条 docker 命令（command 字段，**不带**开头的 docker）。用来透过 docker 看/改服务器：\n" +
+                "     docker ps -a / docker logs --tail 50 <容器> / docker exec <容器> <命令>\n" +
+                "     要看整个服务器文件系统：docker run --rm -v /:/host alpine ls /host/opt（alpine 很小，第一次会拉一下）\n" +
+                "     部署目录也直接挂进来了：/host/qqchat（宿主机的 /opt/qqchat，可读写）");
+        }
+
         var qqOn = allowed.Contains("qq") && qqHost is not null;
         if (qqOn)
         {
@@ -201,6 +304,11 @@ public sealed class ServerAgentRunner
             "  {\"thought\":\"我现在想干什么\",\"tool\":\"bash\",\"command\":\"ls -la /data\"}\n" +
             "  {\"final\":\"给群友看的结论\"}\n" +
             "规则：\n" +
+            "• 每一条指令都当**新任务**看：先看用户这次让你干什么；需要动 QQ 就用 qq 工具、需要查东西就用 bash。" +
+            "别因为上文刚聊过别的（例如刚查过服务器状态）就顺着上文编一份结论 —— 用户让做什事就做什么事。\n" +
+            "• **只讲这一次指令的结果**：不要把上几轮的指令或结论再罗列一遍（就算上文里有一堆旧指令，那也是已经做完的事，不归这一轮回话）。\n" +
+            "• 用户让你做的动作（点赞、戳一戳、禁言…）**必须真的用 qq 工具做**，不许只在 final 里写“已点赞”。\n" +
+            "• 每轮回复都必须只有那一行 JSON（要工具就写 tool，要说话就写 final），不要拿散文回答。\n" +
             "• 一次只做一件事；看到输出不够就再来一步，够了就给 final。\n" +
             "• 命令要短、要有界（别跑 `tail -f`、别跑长时间的循环）；不确定的目录先 `ls`。\n" +
             "• final 里写**人话结论**（群里的人只看这一条），带上关键证据（数字、路径、报错原文片段）。\n" +
@@ -221,7 +329,7 @@ public sealed class ServerAgentRunner
 
     private static HashSet<string> ParseTools(string raw)
     {
-        var all = new[] { "bash", "read", "write", "fetch", "qq" };
+        var all = new[] { "bash", "read", "write", "fetch", "qq", "docker" };
         if (string.IsNullOrWhiteSpace(raw))
         {
             return new HashSet<string>(all);
@@ -378,6 +486,18 @@ public sealed class ServerAgentRunner
                 return await qqHost.ExecuteAsync(spec, call.Raw, ct);
             }
 
+            case "docker":
+            {
+                if (string.IsNullOrWhiteSpace(command))
+                {
+                    return "缺少 command 字段（写 docker 后面那段，例如 ps -a）";
+                }
+
+                // 高权限动作：日志留一条（出了事能对号入座）
+                _log($"[ServerAgent] docker {Shorten(command!, 120)}");
+                return await RunShellAsync("docker " + command!, workDir, ct);
+            }
+
             default:
                 return $"不认识工具 {tool}（可用：{string.Join(", ", allowed)}）";
         }
@@ -469,6 +589,7 @@ public sealed class ServerAgentRunner
         "write" => $"📝 写文件 {Shorten(arg ?? string.Empty, 40)}",
         "fetch" => $"🌐 抓网页 {Shorten(arg ?? string.Empty, 40)}",
         "qq" => $"💬 QQ 动作 {Shorten((raw["action"]?.ToJsonString() ?? "?").Trim('"'), 20)}",
+        "docker" => $"🐳 docker {Shorten((command ?? string.Empty).Replace('\n', ' '), 40)}",
         _ => $"🔧 {name}"
     };
 

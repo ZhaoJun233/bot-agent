@@ -17,6 +17,21 @@
 #   docker build -f Dockerfile.app -t qqchat-agent:latest .
 FROM mcr.microsoft.com/dotnet/runtime:8.0
 
+# ── docker CLI（可选能力：让容器里的 agent “透过 docker”看/改服务器）──
+# 为什么要它：要用 /var/run/docker.sock 就得有个客户端，而 mcr 的运行时镜像里什么都没有。
+# 只要 CLI（docker/docker 单个二进制），不带 dockerd/containerd —— 体积小很多。
+# 这一段特意放在 COPY app.tar.gz **之前**：应用层重建时不会重复下载（部署机带宽/磁盘都紧）。
+ARG DOCKER_CLI_VERSION=27.5.1
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl ca-certificates; \
+    curl -fsSL -o /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz"; \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    apt-get purge -y curl; apt-get autoremove -y; \
+    rm -rf /tmp/docker.tgz /tmp/docker /var/lib/apt/lists/*; \
+    docker --version
+
 WORKDIR /app
 COPY app.tar.gz /tmp/app.tar.gz
 RUN tar -xzf /tmp/app.tar.gz -C /app && rm /tmp/app.tar.gz

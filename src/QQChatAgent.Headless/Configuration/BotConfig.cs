@@ -73,6 +73,8 @@ public static class BotConfig
         {
             [nameof(AppSettings.BotPersona)] = new[] { "QQCHAT_PERSONA" },
             [nameof(AppSettings.MessageWhitelist)] = new[] { "QQCHAT_WHITELIST" },
+    [nameof(AppSettings.WhitelistGroups)] = new[] { "QQCHAT_WHITELIST_GROUPS" },
+    [nameof(AppSettings.WhitelistPrivates)] = new[] { "QQCHAT_WHITELIST_PRIVATES" },
             [nameof(AppSettings.AiDesire)] = new[] { "QQCHAT_AI_DESIRE" },
             [nameof(AppSettings.SuitabilityThreshold)] = new[] { "QQCHAT_SUITABILITY_THRESHOLD" },
             [nameof(AppSettings.AiModeEnabled)] = new[] { "QQCHAT_AI_MODE" },
@@ -151,6 +153,8 @@ public static class BotConfig
     [nameof(AppSettings.AgentMaskSensitive)] = new[] { "QQCHAT_AGENT_MASK" },
     [nameof(AppSettings.AgentPrompt)] = new[] { "QQCHAT_AGENT_PROMPT" },
     [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
+    [nameof(AppSettings.AgentServerKeepContext)] = new[] { "QQCHAT_AGENT_SERVER_CONTEXT" },
+    [nameof(AppSettings.AgentServerDocker)] = new[] { "QQCHAT_AGENT_SERVER_DOCKER" },
     [nameof(AppSettings.AgentServerMaxSteps)] = new[] { "QQCHAT_AGENT_SERVER_STEPS" },
     [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" },
 
@@ -190,6 +194,8 @@ public static class BotConfig
         // 首次部署：环境变量当种子
         s.BotPersona = Secret("QQCHAT_PERSONA") ?? s.BotPersona;
         s.MessageWhitelist = Str("QQCHAT_WHITELIST") ?? s.MessageWhitelist;
+        s.WhitelistGroups = Str("QQCHAT_WHITELIST_GROUPS") ?? s.WhitelistGroups;
+        s.WhitelistPrivates = Str("QQCHAT_WHITELIST_PRIVATES") ?? s.WhitelistPrivates;
         s.AiDesire = Int("QQCHAT_AI_DESIRE") ?? s.AiDesire;
         s.SuitabilityThreshold = Int("QQCHAT_SUITABILITY_THRESHOLD") ?? s.SuitabilityThreshold;
         s.AiModeEnabled = Bool("QQCHAT_AI_MODE") ?? s.AiModeEnabled;
@@ -255,6 +261,8 @@ public static class BotConfig
             s.AgentPrompt = agentPrompt;
         }
         s.AgentServerWorkDir = Str("QQCHAT_AGENT_SERVER_WORKDIR") ?? s.AgentServerWorkDir;
+        s.AgentServerKeepContext = Bool("QQCHAT_AGENT_SERVER_CONTEXT") ?? s.AgentServerKeepContext;
+        s.AgentServerDocker = Bool("QQCHAT_AGENT_SERVER_DOCKER") ?? s.AgentServerDocker;
         s.AgentServerMaxSteps = Int("QQCHAT_AGENT_SERVER_STEPS") ?? s.AgentServerMaxSteps;
         s.AgentServerCommandTimeoutSeconds = Int("QQCHAT_AGENT_SERVER_CMD_TIMEOUT") ?? s.AgentServerCommandTimeoutSeconds;
         s.HealthReportEnabled = Bool("QQCHAT_HEALTH_REPORT") ?? s.HealthReportEnabled;

@@ -66,6 +66,15 @@ services:
         max-file: "3"
     depends_on:
       - napcat
+    # ── “透过 docker 操作服务器”的挂载（号主 2026-09-18 要的能力）──
+    # ④ docker.sock：agent 能用 `docker ps / logs / exec / run -v /:/host …` 看和改服务器
+    # ⑤ /opt/qqchat → /host/qqchat：直接就能读写部署目录（不用 pull 镜像、不用 socket）
+    # ⚠️ 这两个挂载是**常挂**的（compose 的挂载不能在运行时改）；
+    #    面板上的「允许 agent 用 docker 操作服务器」开关决定 agent **会不会去用**它们
+    #    —— 关着的时候它的工具表里没有 docker，提示词也不提这两条路径。
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/qqchat:/host/qqchat
     environment:
       # ---- 模型（OpenAI 兼容：DeepSeek / OpenAI / 通义 / 本地 Ollama 等）----
       QQCHAT_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}
