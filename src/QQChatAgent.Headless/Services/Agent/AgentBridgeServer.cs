@@ -38,7 +38,18 @@ public sealed class AgentBridgeServer
     private sealed class BridgeConnection
     {
         public required WebSocket Socket { get; init; }
+        public required CancellationTokenSource Lifetime { get; init; }
+        public required CancellationToken Token { get; init; }
+        public string Id { get; } = Guid.NewGuid().ToString("N");
+        public SemaphoreSlim SendGate { get; } = new(1, 1);
+        public bool Registered { get; set; }
         public string Name { get; set; } = "device";
+
+        public void Stop()
+        {
+            try { Lifetime.Cancel(); } catch (ObjectDisposedException) { }
+            try { Socket.Abort(); } catch (ObjectDisposedException) { }
+        }
         public string? Cwd { get; set; }
         public string? PiVersion { get; set; }
 
@@ -51,7 +62,7 @@ public sealed class AgentBridgeServer
         public DateTimeOffset Since { get; init; } = DateTimeOffset.Now;
     }
 
-    private readonly ConcurrentDictionary<string, BridgeConnection> _bridges = new();
+    private readonly ConcurrentDictionary<string, BridgeConnection> _bridges = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>当前在线的外部设备名（面板 / //status 用）。</summary>
     public IReadOnlyList<string> BridgeNames => _bridges.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
@@ -73,38 +84,24 @@ public sealed class AgentBridgeServer
     {
         _settings = settings;
         _log = log;
-        _heartbeat = new Timer(_ => PingAll(), null,
-            TimeSpan.FromSeconds(HeartbeatSeconds), TimeSpan.FromSeconds(HeartbeatSeconds));
     }
 
-    // ---- 服务端心跳：每 30 秒给每台在线桥发一个 ping ----
-    // 为什么要（2026-09-18 实际踩到：“一键连接没连上本机”）：
-    //   机器人容器一重启，桥那条 socket 就废了；但本机那条 ssh 转发还挂着，桥侧的 recv 既不报错、
-    //   也等不到数据（黑洞连接），于是桥以为自己还在线、一直不回连，面板就一直显示离线。
-    //   服务端主动 ping 之后：桥那边只要 ~90 秒收不到任何东西就强制重连（见 pi-bridge.py 主循环）。
     private const int HeartbeatSeconds = 30;
-    private readonly Timer? _heartbeat;
+    private const int SendTimeoutSeconds = 10;
 
-    /// <summary>给每台在线桥发一个 ping（桥回 pong；桥据此判断“我是不是还活着”）。</summary>
-    private void PingAll()
+    // One awaited heartbeat loop per connection: no overlapping timer callbacks or orphan timers.
+    private async Task HeartbeatAsync(BridgeConnection conn)
     {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(HeartbeatSeconds));
         try
         {
-            foreach (var conn in _bridges.Values)
+            while (await timer.WaitForNextTickAsync(conn.Token))
             {
-                if (conn.Socket.State != WebSocketState.Open)
-                {
-                    continue;
-                }
-
-                var bytes = Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "ping" }.ToJsonString());
-                _ = SendAsync(conn.Socket, bytes);
+                if (conn.Registered && !await SendAsync(conn, new JsonObject { ["type"] = "ping" }))
+                    return;
             }
         }
-        catch (Exception ex)
-        {
-            _log($"桥心跳出错: {ex.GetType().Name} {ex.Message}");
-        }
+        catch (OperationCanceledException) when (conn.Token.IsCancellationRequested) { }
     }
 
     /// <summary>桥是否在线（任意一台）。</summary>
@@ -296,7 +293,7 @@ public sealed class AgentBridgeServer
             Instructions = string.IsNullOrWhiteSpace(_settings.AgentPrompt) ? null : _settings.AgentPrompt.Trim(),
             Session = session,
             TargetDevice = preferDevice,
-            WorkDir = string.IsNullOrWhiteSpace(device?.WorkDir) ? _settings.AgentWorkDir : device!.WorkDir,
+            WorkDir = _settings.ResolveAgentWorkDir(preferDevice),
             Model = string.IsNullOrWhiteSpace(device?.Model) ? _settings.AgentModel : device!.Model,
             Tools = string.IsNullOrWhiteSpace(device?.Tools) ? _settings.AgentTools : device!.Tools,
             TimeoutSeconds = Math.Clamp(device is { TimeoutSeconds: > 0 } ? device.TimeoutSeconds : _settings.AgentTimeoutSeconds, 30, 7200)
@@ -322,13 +319,24 @@ public sealed class AgentBridgeServer
             return false;
         }
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(conn.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(SendTimeoutSeconds));
+        var entered = false;
         try
         {
-            await conn.Socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "panel-disconnect", CancellationToken.None);
+            await conn.SendGate.WaitAsync(timeout.Token);
+            entered = true;
+            // HandleAsync owns ReceiveAsync; CloseAsync would start a competing receiver.
+            await conn.Socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "panel-disconnect", timeout.Token);
         }
-        catch
+        catch (Exception ex) when (ex is OperationCanceledException or WebSocketException or ObjectDisposedException)
         {
-            // 已经断了
+            // A dead connection still needs cancellation and task cleanup.
+        }
+        finally
+        {
+            if (entered) conn.SendGate.Release();
+            conn.Stop();
         }
 
         _log($"面板里断开了外部设备：{conn.Name}");
@@ -340,19 +348,20 @@ public sealed class AgentBridgeServer
     /// <summary>处理一条桥连接（阻塞到断开）。多台设备可以同时在线（名字取自 hello 里的 host）。</summary>
     public async Task HandleAsync(WebSocket socket, CancellationToken ct)
     {
-        var conn = new BridgeConnection { Socket = socket };
-        var key = $"pending-{Guid.NewGuid():N}";
-        _bridges[key] = conn;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        lifetime.CancelAfter(TimeSpan.FromSeconds(30)); // Waiting for hello is bounded too.
+        var conn = new BridgeConnection { Socket = socket, Lifetime = lifetime, Token = lifetime.Token };
+        var heartbeat = HeartbeatAsync(conn);
 
-        _log($"agent 桥已连接（等它的 hello 报名字）：{_bridges.Count} 台在线");
+        _log("agent 桥已连接，等待 hello");
 
         try
         {
             var buffer = new byte[16 * 1024];
-            var pending = new MemoryStream();
-            while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            using var pending = new MemoryStream();
+            while (socket.State == WebSocketState.Open && !conn.Token.IsCancellationRequested)
             {
-                var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), conn.Token);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
                     break;
@@ -366,7 +375,7 @@ public sealed class AgentBridgeServer
 
                 var json = Encoding.UTF8.GetString(pending.ToArray());
                 pending.SetLength(0);
-                HandleBridgeMessage(conn, json, key);
+                HandleBridgeMessage(conn, json);
             }
         }
         catch (OperationCanceledException)
@@ -379,29 +388,39 @@ public sealed class AgentBridgeServer
         }
         finally
         {
-            _bridges.TryRemove(key, out _);
-            // 按名字也要收：如果同名的新连接已经顶上来，就不能把新的也删了
-            if (_bridges.TryGetValue(conn.Name, out var current) && ReferenceEquals(current, conn))
-            {
-                _bridges.TryRemove(conn.Name, out _);
-            }
-
-            _log($"agent 桥已断开（剩 {_bridges.Count} 台在线）");
-
-            // 这台设备上在跑的任务必然失败（本机那边进程跟着桥一起没了）；排队的留着，等设备重连再跑
+            conn.Stop();
             lock (_stateLock)
             {
-                if (_current is { } cur && !cur.Done && cur.DeviceName == key)
-                {
-                    cur.Fail("外部 agent 设备断开了");
-                    Finished?.Invoke(cur);
-                    _current = null;
-                }
+                // Removing by both key and instance cannot evict a same-name replacement.
+                ((ICollection<KeyValuePair<string, BridgeConnection>>)_bridges)
+                    .Remove(new(conn.Name, conn));
             }
+            FailConnectionTasks(conn);
+            await heartbeat;
+            socket.Dispose();
+            _log($"agent 桥已断开（剩 {_bridges.Count} 台在线）");
+            if (!_queue.IsEmpty && Connected) StartWorker();
         }
     }
 
-    private void HandleBridgeMessage(BridgeConnection conn, string json, string key)
+    private void FailConnectionTasks(BridgeConnection conn)
+    {
+        var failed = new List<AgentTask>();
+        lock (_stateLock)
+        {
+            foreach (var task in _outstanding.Values.Where(t => t.ConnectionId == conn.Id))
+            {
+                if (task.Done) continue;
+                task.Fail("外部 agent 设备断开了");
+                _outstanding.TryRemove(task.Id, out _);
+                if (ReferenceEquals(_current, task)) _current = null;
+                failed.Add(task);
+            }
+        }
+        foreach (var task in failed) Finished?.Invoke(task);
+    }
+
+    private void HandleBridgeMessage(BridgeConnection conn, string json)
     {
         JsonNode? node;
         try
@@ -416,17 +435,26 @@ public sealed class AgentBridgeServer
 
         var type = node?["type"]?.GetValue<string>();
         var id = node?["id"]?.GetValue<string>();
+        if (conn.Token.IsCancellationRequested) return;
+        if (type != "hello" && (!conn.Registered ||
+            !_bridges.TryGetValue(conn.Name, out var active) || !ReferenceEquals(active, conn))) return;
+        if (type is "started" or "progress" or "chunk" or "done" or "error")
+        {
+            if (FindTask(id) is not { } owned || owned.ConnectionId != conn.Id) return;
+        }
 
         switch (type)
         {
             case "hello":
             {
+                if (conn.Registered) return;
                 var name = node?["host"]?.GetValue<string>()?.Trim();
-                if (!string.IsNullOrWhiteSpace(name))
+                if (string.IsNullOrWhiteSpace(name))
                 {
-                    // 用设备的 host 名当键（同名重连时顶掉旧的，不会留幽灵连接）
-                    conn.Name = name!;
+                    conn.Stop();
+                    return;
                 }
+                conn.Name = name;
 
                 conn.Cwd = node?["cwd"]?.GetValue<string>();
                 conn.PiVersion = node?["pi"]?.GetValue<string>();
@@ -437,19 +465,21 @@ public sealed class AgentBridgeServer
                         .ToArray();
                 }
 
-                var oldKey = key;
-                key = conn.Name;
-                if (!string.Equals(oldKey, key, StringComparison.Ordinal))
+                BridgeConnection? previous;
+                lock (_stateLock)
                 {
-                    if (_bridges.TryGetValue(key, out var previous) && !ReferenceEquals(previous, conn))
-                    {
-                        _bridges.TryRemove(key, out _);
-                        _log($"同名设备重连（{key}）→ 旧的连接已放弃");
-                    }
-
-                    _bridges[key] = conn;
-                    _bridges.TryRemove(oldKey, out _);
+                    if (conn.Token.IsCancellationRequested) return;
+                    _bridges.TryGetValue(conn.Name, out previous);
+                    conn.Registered = true;
+                    conn.Lifetime.CancelAfter(Timeout.InfiniteTimeSpan);
+                    _bridges[conn.Name] = conn;
                 }
+                if (previous is not null && !ReferenceEquals(previous, conn))
+                {
+                    previous.Stop();
+                    FailConnectionTasks(previous);
+                }
+                StartWorker();
 
                 _log($"agent 桥握手：{conn.Name}，目录 {conn.Cwd ?? "?"}，pi {conn.PiVersion ?? "?"}，" +
                      $"模型 {conn.Models.Length} 个（在线 {_bridges.Count} 台）");
@@ -571,52 +601,23 @@ public sealed class AgentBridgeServer
         AgentTask? task;
         lock (_stateLock)
         {
-            task = _current is { } cur && cur.Id == id ? cur : _queue.FirstOrDefault(t => t.Id == id);
-        }
-
-        if (task is null || task.Done)
-        {
-            return;
-        }
-
-        var body = (text ?? string.Empty).Trim();
-        if (body.Length == 0)
-        {
-            body = (task.StreamTail ?? string.Empty).Trim();
-        }
-
-        task.DurationMs = durationMs > 0 ? durationMs : (long)(DateTimeOffset.Now - task.StartedAt).TotalMilliseconds;
-        task.ToolCalls = toolCalls;
-
-        if (error is not null || exitCode != 0)
-        {
-            var detail = error is { Length: > 0 } ? error : $"pi 退出码 {exitCode}";
-            if (body.Length > 0)
+            if (id is null || !_outstanding.TryGetValue(id, out task) || task.Done) return;
+            var body = (text ?? string.Empty).Trim();
+            if (body.Length == 0) body = (task.StreamTail ?? string.Empty).Trim();
+            task.DurationMs = durationMs > 0 ? durationMs : (long)(DateTimeOffset.Now - task.StartedAt).TotalMilliseconds;
+            task.ToolCalls = toolCalls;
+            if (error is not null || exitCode != 0)
             {
-                detail += "：" + body;
+                var detail = error is { Length: > 0 } ? error : $"pi 退出码 {exitCode}";
+                task.Fail(body.Length > 0 ? detail + "：" + body : detail);
             }
-
-            task.Fail(detail);
+            else if (body.Length == 0) task.Fail("本机 agent 没有输出（可能被工具白名单/权限挡了）");
+            else task.Succeeded(body);
+            _outstanding.TryRemove(task.Id, out _);
+            if (ReferenceEquals(_current, task)) _current = null;
         }
-        else if (body.Length == 0)
-        {
-            task.Fail("本机 agent 没有输出（可能被工具白名单/权限挡了）");
-        }
-        else
-        {
-            task.Succeeded(body);
-        }
-
-        lock (_stateLock)
-        {
-            if (ReferenceEquals(_current, task))
-            {
-                _current = null;
-            }
-        }
-
         Finished?.Invoke(task);
-        _outstanding.TryRemove(task.Id, out _);
+        if (!_queue.IsEmpty && Connected) StartWorker();
     }
 
     // ══════════ 工人（把队列里的任务一条条喂给桥）══════════
@@ -683,12 +684,7 @@ public sealed class AgentBridgeServer
                     continue;
                 }
 
-                lock (_stateLock)
-                {
-                    _current = task;
-                }
-
-                // 任务派给哪台设备：任务指定的（AgentTarget 写了设备名）优先，否则第一台在线的
+                // Select a concrete connection; never re-resolve by name while sending.
                 var target = PickBridge(task.TargetDevice);
                 if (target is null)
                 {
@@ -705,6 +701,8 @@ public sealed class AgentBridgeServer
                 }
 
                 task.DeviceName = target.Name;
+                task.ConnectionId = target.Id;
+                task.WorkDir = _settings.ResolveAgentWorkDir(target.Name, target.Cwd);
                 task.StartedAt = DateTimeOffset.Now;
                 // 设备专属配置在这里最后盖一道（防止调用方没传设备名/竞态）：
                 // 面板里给某台设备单独配的 模型/目录/工具/超时 以此为准。
@@ -737,11 +735,33 @@ public sealed class AgentBridgeServer
                     }
                 }
 
-                _outstanding[task.Id] = task;
+                var staleTarget = false;
+                lock (_stateLock)
+                {
+                    if (target.Token.IsCancellationRequested ||
+                        !_bridges.TryGetValue(target.Name, out var live) || !ReferenceEquals(live, target))
+                    {
+                        staleTarget = true;
+                    }
+                    else
+                    {
+                        _current = task;
+                        _outstanding[task.Id] = task;
+                    }
+                }
+
+                if (staleTarget)
+                {
+                    // 就在这一瞬间桥断了：任务回队列（不能丢），但**不能**立刻再挑一次 ——
+                    // 那条连接要等 HandleAsync 的 finally 才从 _bridges 里摘掉，空转会烧 CPU。
+                    _queue.Enqueue(task);
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), CancellationToken.None);
+                    continue;
+                }
                 _log($"agent 任务下发：{task.SourceKey} #{task.Id} → {target.Name}（{Shorten(task.Prompt, 60)}）" +
                      (task.WorkDir is { Length: > 0 } ? $"，目录 {task.WorkDir}" : string.Empty));
 
-                var sent = await SendAsync(new JsonObject
+                var sent = await SendAsync(target, new JsonObject
                 {
                     ["type"] = "task",
                     ["id"] = task.Id,
@@ -753,17 +773,11 @@ public sealed class AgentBridgeServer
                     ["model"] = task.Model ?? string.Empty,
                     ["tools"] = task.Tools ?? string.Empty,
                     ["timeoutSec"] = task.TimeoutSeconds
-                }, target.Name);
+                });
 
                 if (!sent)
                 {
-                    lock (_stateLock)
-                    {
-                        _current = null;
-                    }
-
-                    task.Fail("任务下发失败（桥刚断开）");
-                    Finished?.Invoke(task);
+                    FailConnectionTasks(target);
                 }
             }
         }
@@ -775,7 +789,7 @@ public sealed class AgentBridgeServer
             }
 
             // 队列里还有活儿 + 桥还在 → 继续（比如刚下发完一个又来了新的）
-            if (!_queue.IsEmpty && Connected)
+            if (!_queue.IsEmpty && Connected && Current is null)
             {
                 StartWorker();
             }
@@ -802,27 +816,31 @@ public sealed class AgentBridgeServer
     private Task<bool> SendAsync(JsonObject payload, string? deviceName = null)
     {
         var conn = PickBridge(deviceName);
-        var socket = conn?.Socket;
-        if (socket is not { State: WebSocketState.Open })
-        {
-            return Task.FromResult(false);
-        }
-
-        var bytes = Encoding.UTF8.GetBytes(payload.ToJsonString());
-        return SendAsync(socket, bytes);
+        return conn is null ? Task.FromResult(false) : SendAsync(conn, payload);
     }
 
-    private static async Task<bool> SendAsync(WebSocket socket, byte[] bytes)
+    private static async Task<bool> SendAsync(BridgeConnection conn, JsonObject payload)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(conn.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(SendTimeoutSeconds));
+        var entered = false;
         try
         {
-            await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, endOfMessage: true,
-                CancellationToken.None);
+            await conn.SendGate.WaitAsync(timeout.Token);
+            entered = true;
+            if (conn.Socket.State != WebSocketState.Open || conn.Token.IsCancellationRequested) return false;
+            var bytes = Encoding.UTF8.GetBytes(payload.ToJsonString());
+            await conn.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, timeout.Token);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is OperationCanceledException or WebSocketException or IOException or ObjectDisposedException)
         {
-            return false;   // 发送失败 → 上层按“桥断了”处理
+            conn.Stop(); // Cancel ReceiveAsync too; its finally owns removal and task cleanup.
+            return false;
+        }
+        finally
+        {
+            if (entered) conn.SendGate.Release();
         }
     }
 
@@ -840,7 +858,7 @@ public sealed class AgentBridgeServer
         }
 
         var devices = _bridges.ToArray()
-            .Select(kv => $"{kv.Key}（pi {kv.Value.PiVersion ?? "?"}，目录 {kv.Value.Cwd ?? "?"}）")
+            .Select(kv => $"{kv.Key}（pi {kv.Value.PiVersion ?? "?"}，目录 {_settings.ResolveAgentWorkDir(kv.Key, kv.Value.Cwd) ?? "?"}）")
             .ToList();
 
         var current = Current;
@@ -881,6 +899,8 @@ public sealed class AgentTask
     public string? TargetDevice { get; init; }
 
     /// <summary>实际执行它的外部设备名（服务器内置 agent 时为空）。</summary>
+    internal string? ConnectionId { get; set; }
+
     public string? DeviceName { get; set; }
 
     /// <summary>要不要把 pi 的会话名传下去：同一个群用同一个 → agent 记得上一轮（<c>--session-id</c>）。

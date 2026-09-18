@@ -170,6 +170,68 @@ public sealed class MockOpenAi : IDisposable
     }
 
     /// <summary>排入一条脚本文本（模型 message.content 原文），先进先出。</summary>
+    /// <summary>
+    /// 按提示词匹配的固定回复（同一个标记可排多条，按顺序一条条用；命中就不消耗脚本队列）。
+    /// 为什么需要：靠脚本队列的**位置**对齐某一轮太脆 —— 会话标题综结、重试、额外轮次等
+    /// 别的请求一旦插进来吃掉一条，后面每一轮都错位（S34 的 //stop 就是这么被坑的：
+    /// 本该“慢慢想”的长任务拿到了下一条 final，任务秒完，//stop 自然没东西可停）。
+    /// 非 ASCII 的片段会同时比原始形式和 \uXXXX 转义形式（机器人发出去的是转义版）。
+    /// </summary>
+    private readonly Dictionary<string, Queue<string>> _ruleReplies = new(StringComparer.Ordinal);
+
+    public void AddRule(string promptMarker, params string[] replies)
+    {
+        lock (_gate)
+        {
+            _ruleReplies[promptMarker] = new Queue<string>(replies);
+        }
+    }
+
+    private static string EscapeNonAscii(string s)
+        => string.Concat(s.Select(c => c < 128 ? c.ToString() : "\\u" + ((int)c).ToString("x4")));
+
+    /// <summary>命中提示词规则就取一条；没命中返回 null（调用方回落到脚本队列）。</summary>
+    private string? TakeRuleReply(string body)
+    {
+        lock (_gate)
+        {
+            // 长标记优先（更具体），再按字典序 —— 与字典内部顺序无关，结果稳定可预期
+            foreach (var kv in _ruleReplies
+                         .Where(kv => kv.Value.Count > 0)
+                         .OrderByDescending(kv => kv.Key.Length)
+                         .ThenBy(kv => kv.Key, StringComparer.Ordinal))
+            {
+                if (body.Contains(kv.Key, StringComparison.Ordinal) ||
+                    body.Contains(EscapeNonAscii(kv.Key), StringComparison.OrdinalIgnoreCase))
+                {
+                    return kv.Value.Dequeue();
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>取一条脚本回复（没排就回默认）。</summary>
+    private string TakeScriptedReply()
+    {
+        lock (_gate)
+        {
+            return _scriptedReplies.Count > 0
+                ? _scriptedReplies.Dequeue()
+                : """{"suitability": 90, "reply": "默认回复"}""";
+        }
+    }
+
+    /// <summary>清空脚本回复队列（每场景开始时用）。</summary>
+    public void ClearScriptedReplies()
+    {
+        lock (_gate)
+        {
+            _scriptedReplies.Clear();
+        }
+    }
+
     public void EnqueueReply(string content)
     {
         lock (_gate)
@@ -382,13 +444,7 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
-        string content;
-        lock (_gate)
-        {
-            content = _scriptedReplies.Count > 0
-                ? _scriptedReplies.Dequeue()
-                : """{"suitability": 90, "reply": "默认回复"}""";
-        }
+        string content = TakeRuleReply(body) ?? TakeScriptedReply();
 
         if (ResponseDelayMs > 0)
         {

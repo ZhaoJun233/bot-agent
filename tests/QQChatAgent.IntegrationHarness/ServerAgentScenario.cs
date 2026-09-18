@@ -39,21 +39,20 @@ public static partial class Program
         // 服务器 agent 专用的假网关：验证“自定义 url + 模型”真的生效（请求打到这边、带自定义模型名）
         using var agentAi = new MockOpenAi(agentAiPort);
         agentAi.Start();
-        agentAi.EnqueueReply("""{"thought":"先看看容器里能不能跑命令","tool":"bash","command":"echo hello-server-agent"}""");
-        agentAi.EnqueueReply("""{"thought":"拿到输出了","final":"服务器上跑完了：hello-server-agent"}""");
-        // 后面几步也会用到服务器 agent（关掉外部开关那轮、//stop 那个长任务）
-        agentAi.EnqueueReply("""{"final":"关掉外部开关后的结论"}""");
-        agentAi.EnqueueReply("""{"thought":"慢慢想","tool":"bash","command":"sleep 30"}""");
-        // 注意：//stop 取消那一轮**不会**再消费下一条回复（直接在循环里结束）——这里别多排，
-        // 否则后面的阶段会拿到错位的回复（踩过一次）
-        // 会话测试（服务器后端）：第一句 / 第二句 / 新会话一句 / 外加一条备用
-        agentAi.EnqueueReply("""{"final":"第一句的结论"}""");
-        agentAi.EnqueueReply("""{"final":"第二句的结论"}""");
-        agentAi.EnqueueReply("""{"final":"新会话的结论"}""");
-        agentAi.EnqueueReply("""{"final":"备用结论"}""");
 
-        // 服务器 agent 的两步：先调 bash，再给结论
-        // 聊天那条路（人设协议）在本场景用不到 —— 所有消息都是 // 命令
+        // 服务器 agent 那条路的脚本回复全部按**提示词**匹配（AddRule），不靠队列位置 ——
+        // 队列位置会被别的调用（会话标题综结、重试、额外轮次）挤偏，一偏就报假红。
+        // 同一个标记可排多条：按顺序一条条用（下面 ③ 那轮是先调 bash、再给结论）。
+        agentAi.AddRule("服务器上来一句",
+            """{"thought":"先看看容器里能不能跑命令","tool":"bash","command":"echo hello-server-agent"}""",
+            """{"thought":"拿到输出了","final":"服务器上跑完了：hello-server-agent"}""");
+        agentAi.AddRule("关掉外部开关后这条", """{"final":"关掉外部开关后的结论"}""");
+        // //stop 那一轮要的是“真在跑、而且跑得久”的一步（sleep 30），不然没东西可停
+        agentAi.AddRule("跑个很久的活", """{"thought":"慢慢想","tool":"bash","command":"sleep 30"}""");
+        // 会话测试（服务器后端）：第一句 / 第二句 / 新会话一句
+        agentAi.AddRule("会话测试第一句", """{"final":"第一句的结论"}""");
+        agentAi.AddRule("会话测试第二句", """{"final":"第二句的结论"}""");
+        agentAi.AddRule("新会话第一句", """{"final":"新会话的结论"}""");
 
 
         using var bot = StartBot(new Dictionary<string, string>
@@ -224,13 +223,24 @@ public static partial class Program
         Section("-- S34 后半：//stop / //status --");
 
         // ---- ⑤ //stop 能停服务器 agent（不然它就只能等步数用完）----
+        // 这一段必须自己把“服务器 agent”打开：上一段（④）刚把它关掉、还把设备卸下线了，
+        // 否则“跑个很久的活”会被如实拒绝，//stop 也就没东西可停
+        // （以前是靠“④那轮任务还在跑”这个巧合蒙对的 —— 时机一变就报假红）。
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            var body = new StringContent("{\"agentTarget\":\"server\",\"enableHostAgent\":true,\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
+            await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
+        }
+
+        // 只看“这一段之后”发出去的：Sent() 是累积的，用旧消息匹到会把失败伪装成通过
+        var beforeStop = Sent().Count;
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//跑个很久的活", 16006, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => Sent().Any(t => t.Contains("在服务器上跑一下")), TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => Sent().Skip(beforeStop).Any(t => t.Contains("在服务器上跑一下")), TimeSpan.FromSeconds(40));
         await Task.Delay(1500);
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//stop", 16007, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => Sent().Any(t => t.Contains("已让它停掉")), TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => Sent().Skip(beforeStop).Any(t => t.Contains("已让它停掉")), TimeSpan.FromSeconds(40));
         Check("★ //stop 能停服务器 agent 的任务（不是只对外部设备管用）",
-            Sent().Any(t => t.Contains("已让它停掉")), string.Join(" | ", Sent().TakeLast(3)));
+            Sent().Skip(beforeStop).Any(t => t.Contains("已让它停掉")), string.Join(" | ", Sent().TakeLast(3)));
 
         // ---- ⑧ //status 一眼看到两边状态 ----
         using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })

@@ -458,6 +458,14 @@ public sealed class AppSettings
             .FirstOrDefault(d => string.Equals(d.Name, deviceName.Trim(), StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>外部任务和状态使用同一目录优先级：设备配置、全局默认、桥启动目录。</summary>
+    public string? ResolveAgentWorkDir(string? deviceName, string? bridgeDirectory = null)
+    {
+        var configured = DeviceConfigFor(deviceName)?.WorkDir;
+        if (!string.IsNullOrWhiteSpace(configured)) return configured.Trim();
+        return !string.IsNullOrWhiteSpace(AgentWorkDir) ? AgentWorkDir.Trim() : bridgeDirectory;
+    }
+
     /// <summary>看设备是否被面板里手动关掉（关了就不派任务，并如实告诉用户）。</summary>
     public bool IsDeviceEnabled(string? deviceName)
         => DeviceConfigFor(deviceName)?.Enable ?? true;

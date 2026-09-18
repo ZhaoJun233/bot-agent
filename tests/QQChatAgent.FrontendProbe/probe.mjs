@@ -412,6 +412,13 @@ const ENV = {
 };
 
 const calls = [];
+
+// 设备表：这是**服务端那份**。面板保存时整个表会被替换 —— 所以“没拉到就回写”= 一次点保存就删光设备配置。
+let serverDevices = [];
+let agentStatusFails = false;      // 模拟“设备表拉不到”
+let settingsDelayMs = 0;           // 模拟保存请求在飞（用来看保存期间的新编辑会不会被回填盖掉）
+let agentStatusHits = 0;
+const deviceNames = () => serverDevices.map((d) => d.name);
 const statusPayload = {
   status: {
     onebot: { connected: true, protocol: "ForwardWebSocket" },
@@ -431,7 +438,25 @@ const fetchStub = async (url, opts) => {
   const method = (opts && opts.method) || "GET";
   calls.push({ url: target, method, body: opts && opts.body });
   let payload = statusPayload;
-  if (target.includes("/api/settings")) {
+  if (target.includes("/api/agent/status")) {
+    agentStatusHits++;
+    if (agentStatusFails) throw new Error("synthetic agent status failure");
+    payload = {
+      enabled: true, hostAgent: true, serverAgent: false, prefix: "//", target: "auto",
+      connected: serverDevices.some((d) => d.online),
+      devices: deviceNames(), deviceList: serverDevices.map((d) => ({ ...d })),
+      deviceModels: ["provider/model-a"], globalWorkdir: "C:/synthetic/global",
+      summary: "synthetic", tokenConfigured: true, allowedUsers: "10001"
+    };
+  } else if (target.includes("/api/settings")) {
+    if (method === "POST" && settingsDelayMs) await new Promise((r) => setTimeout(r, settingsDelayMs));
+    if (method === "POST" && opts && opts.body) {
+      const sent = JSON.parse(opts.body);
+      if (typeof sent.agentDevices === "string") {
+        // 服务端与 AppSettings 一致：整表替换（只存配置字段，online/models 是算出来的）
+        serverDevices = JSON.parse(sent.agentDevices).map((d) => ({ ...d, online: false, models: [] }));
+      }
+    }
     payload = { runtime: RUNTIME, env: ENV, settingsFile: "/data/data/settings.json" };
   } else if (target.includes("/api/qqlogin")) {
     payload = qrPayload;
@@ -476,9 +501,26 @@ sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 
 let loadError = null;
+
+// 给沙箱跑的那份加一个探针出口：真跑一遍时要能从外面看/改设备表草稿。
+// 注意用的是 jsRun 而不是 js —— 静态检查仍然扫原文，不能因为测试而改动被测文件。
+const probeMarker = 'document.addEventListener("DOMContentLoaded", boot);';
+const jsRun = js.replace(probeMarker, `globalThis.probe = {
+  loadSettings, saveSettings, markSettingsDirty,
+  deviceDraft: () => agentDevices.map((d) => ({ ...d })),
+  deviceLoaded: () => agentDevicesLoaded,
+  editDevice: (i, patch) => { if (agentDevices[i]) Object.assign(agentDevices[i], patch); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
+  setDraft: (rows) => { agentDevices = rows.map((d) => ({ ...d })); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
+  forgetDevices: () => { agentDevicesLoaded = false; if (typeof agentDevicesSaved !== "undefined") agentDevicesSaved = []; },
+  isDirty: () => settingsDirty
+};
+${probeMarker}`);
+check("★ 探针出口注入成功（注不进去的话下面设备表的动态检查全是假的）",
+  jsRun !== js && jsRun.includes("globalThis.probe"));
+
 try {
   vm.createContext(sandbox);
-  vm.runInContext(js, sandbox, { filename: "app.js" });
+  vm.runInContext(jsRun, sandbox, { filename: "app.js" });
 } catch (e) {
   loadError = `${e.name}: ${e.message}`;
 }
@@ -717,6 +759,123 @@ await new Promise((r) => setTimeout(r, 300));
 check("回到设置页后提示被清掉", dirtyHint.hidden === true);
 fire("pageSettings", "change", { target: { id: "setTheme" } });
 check("改主题不会被当成未保存的修改", dirtyHint.hidden === true);
+
+/* ─────────── 5) 外部设备表：加载 / 保存 / 放弃 / 转义 / 竞态 ─────────── */
+
+console.log("\n▶ 动态：外部设备表（加载 / 保存 / 放弃 / 转义 / 竞态）");
+
+// 静态：这一组修复的关键点（缺一个就会退回“改了半天没保存/新设备自己消失”）
+const loadBodyFull = js.slice(js.indexOf("async function loadSettings"), js.indexOf("async function saveSettings"));
+check("★ 进设置页时就拉设备表（只靠手动点刷新 = 首次进来是空表）",
+  /await loadAgentDevices\(\)/.test(loadBodyFull),
+  "loadSettings 里没有调 loadAgentDevices()");
+check("★ 设备名/目录进 innerHTML 前要转义",
+  /function escapeHtml\(/.test(js) && (js.match(/escapeHtml\(/g) || []).length >= 8,
+  `escapeHtml 出现 ${(js.match(/escapeHtml\(/g) || []).length} 次`);
+check("★ ensureDeviceOption 必须是顶层函数（定义在 bindUi() 内部时“指定设备 + 重进设置页”直接 ReferenceError）",
+  /^ {2}function ensureDeviceOption\(name\) \{/m.test(js));
+check("★ 保存期间的新编辑不被回填盖掉（改动序号门卡）",
+  /settingsEditSeq/.test(saveBody) && /const seqAtSend = settingsEditSeq;/.test(saveBody),
+  "saveSettings 里没有 settingsEditSeq 门卡");
+
+const probe = sandbox.probe;
+const tableHtml = () => String(document.getElementById("agentDeviceTable")?.innerHTML || "");
+const selectHtml = () => String(document.getElementById("setAgentDevice")?.innerHTML || "");
+const enterSettings = async () => {
+  fire("nav-settings", "click");
+  await new Promise((r) => setTimeout(r, 300));
+};
+const lastSettingsBody = () => {
+  const c = [...calls].reverse().find((x) => x.method === "POST" && x.url.includes("/api/settings"));
+  return c ? JSON.parse(c.body) : null;
+};
+
+// ① 指定设备（agentTarget = 设备名）：loadSettings 会走 ensureDeviceOption —— 曾经这里是 ReferenceError
+RUNTIME.agentTarget = "DEV-A";
+serverDevices = [{ name: "DEV-A", online: true, enable: true, model: "provider/model-a",
+  workdir: "C:/synthetic/device-a", tools: "", timeoutSec: 0, models: ["provider/model-a"] }];
+await enterSettings();
+check("★ 指定设备时重新进设置页能跑完（不再 ReferenceError）",
+  probe.deviceLoaded() === true && probe.deviceDraft().length === 1, JSON.stringify(probe.deviceDraft()));
+check("★ 进设置页就把设备表填好了（不用先手动点「刷新设备」）",
+  probe.deviceDraft()[0]?.name === "DEV-A" && tableHtml().includes("C:/synthetic/device-a"),
+  tableHtml().slice(0, 160));
+check("★ 指定设备的下拉里保留了那一项", document.getElementById("setAgentDevice").value === "DEV-A",
+  String(document.getElementById("setAgentDevice").value));
+
+// ② 新增设备 ——> 保存：新行必须进请求，且保存后不能被刷新覆盖
+// （只取第一个处理函数：本探针为了验扫码卡片又跑了一遍 boot()，事件处理会被注册两次 ——
+//  这是探针自己的事，app.js 里 agentDeviceAdd 只绑一次）
+sandbox.prompt = () => "DEV-NEW";
+const rowsBeforeAdd = probe.deviceDraft().length;
+(handlers.get("agentDeviceAdd:click") || [])[0]();
+check("点「添加设备」后草稿里多一行",
+  probe.deviceDraft().length === rowsBeforeAdd + 1, JSON.stringify(probe.deviceDraft().map((d) => d.name)));
+await saveClicks[0]({});
+await new Promise((r) => setTimeout(r, 200));
+const sentDevices = JSON.parse(lastSettingsBody()?.agentDevices || "[]");
+check("★ 新增的设备真的进了保存请求（以前被 agentDevicesLoaded 拦下）",
+  sentDevices.some((d) => d.name === "DEV-NEW"), JSON.stringify(lastSettingsBody()?.agentDevices));
+check("★ 保存后服务端设备表里也有它（不再被保存后的刷新覆盖）",
+  serverDevices.some((d) => d.name === "DEV-NEW"), JSON.stringify(serverDevices.map((d) => d.name)));
+check("保存后草稿与服务端一致", probe.deviceDraft().length === serverDevices.length,
+  `${probe.deviceDraft().length} vs ${serverDevices.length}`);
+
+// ③ 放弃草稿：离开未保存的页面再回来，草稿必须回到服务端的值（否则下次保存会把放弃的改动一起提交）
+probe.editDevice(0, { workdir: "C:/synthetic/unsaved" });
+confirmAnswer = true;
+fire("nav-chat", "click");
+await enterSettings();
+check("★ 放弃后重新进设置页，设备草稿回到服务端的值",
+  probe.deviceDraft()[0]?.workdir === "C:/synthetic/device-a", JSON.stringify(probe.deviceDraft()[0]));
+await saveClicks[0]({});
+await new Promise((r) => setTimeout(r, 200));
+check("★ 放弃后的那次保存没有提交已放弃的设备目录",
+  !String(lastSettingsBody()?.agentDevices).includes("unsaved"), String(lastSettingsBody()?.agentDevices));
+
+// ④ 转义：设备名/目录/工具白名单全部来自配置与桥上报
+serverDevices = [{ name: '<b id="review-marker">literal</b>', online: false, enable: true, model: "p/m",
+  workdir: 'C:/x" onfocus="alert(1)', tools: "bash,read", timeoutSec: 0, models: ["p/m"], pi: "<img src=x>" }];
+await enterSettings();
+const escaped = tableHtml();
+check("★ 设备名转义后才进 innerHTML",
+  !escaped.includes('<b id="review-marker">') && escaped.includes("&lt;b id=&quot;review-marker&quot;&gt;"),
+  escaped.slice(0, 200));
+check("★ 目录里的引号不能跑出 value 属性",
+  !escaped.includes('onfocus="alert(1)"') && escaped.includes("C:/x&quot;"), escaped.slice(0, 200));
+check("★ 桥上报的 pi 版本号也要转义", !escaped.includes("<img src=x>"), escaped.slice(0, 200));
+check("★ 指定设备下拉同样转义", !selectHtml().includes('<b id="review-marker">'), selectHtml().slice(0, 160));
+
+// ⑤ 保存请求在飞时用户又改了东西：刷新结果不能盖掉新编辑，也不能谎报“已保存”
+settingsDelayMs = 250;
+const inFlight = saveClicks[0]({});
+await new Promise((r) => setTimeout(r, 60));
+probe.editDevice(0, { tools: "late-edit" });
+await inFlight;
+await new Promise((r) => setTimeout(r, 200));
+settingsDelayMs = 0;
+check("★ 保存期间的新编辑不会被刷新结果盖掉",
+  probe.deviceDraft()[0]?.tools === "late-edit", JSON.stringify(probe.deviceDraft()[0]));
+check("★ 保存期间有新编辑时，未保存提示要留着（不能谎报已存下）", probe.isDirty() === true);
+check("保存提示里说明了还有新修改",
+  String(document.getElementById("saveBarText")?.textContent || "").includes("新的修改"),
+  String(document.getElementById("saveBarText")?.textContent || "(空)"));
+
+// ⑥ 设备表拉不到 + 用户改了设备行：既不能发半份表（服务端整表替换 = 删光其它设备），也不能无声丢掉
+agentStatusFails = true;
+probe.forgetDevices();
+const devicesBefore = JSON.stringify(serverDevices);
+probe.setDraft([{ name: "DEV-PARTIAL", online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] }]);
+await saveClicks[0]({});
+await new Promise((r) => setTimeout(r, 200));
+agentStatusFails = false;
+check("★ 设备表没拉到时不发半份设备表（发了就等于把其它设备配置删光）",
+  lastSettingsBody()?.agentDevices === undefined, String(lastSettingsBody()?.agentDevices));
+check("★ 但保存提示要说清“设备改动没保存”（不能无声丢掉）",
+  String(document.getElementById("saveBarText")?.textContent || "").includes("设备相关改动"),
+  String(document.getElementById("saveBarText")?.textContent || "(空)"));
+check("服务端的设备配置没被清空", JSON.stringify(serverDevices) === devicesBefore);
+check("设备表请求真的失败过（否则上面三条形同虚设 —— 拉不到才该跳过）", agentStatusHits > 0, `hits=${agentStatusHits}`);
 
 /* ─────────── 汇总 ─────────── */
 

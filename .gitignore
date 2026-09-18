@@ -25,3 +25,7 @@ napcat/
 
 # 参考源码（vendor/NapCatQQ 等）不纳入仓库
 vendor/
+
+# Python（工具脚本的字节码缓存，不进版本库）
+__pycache__/
+*.pyc

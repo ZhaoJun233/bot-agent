@@ -245,12 +245,24 @@
   //   · loaded 这个标记是为了防“设备表没拉到 + 点保存 = 把设备配置写成空”。
   let agentDevices = [];
   let agentDevicesLoaded = false;
+  // 上一份与服务端对齐的设备表：重新进设置页 / 放弃修改时用它还原草稿。
+  // 只有 loaded 标记是不够的 —— 草稿留在内存里的话，下次保存会把“已经放弃的改动”一起提交（实测踩过）。
+  let agentDevicesSaved = [];
+  // 用户在面板里加/删/改过设备行（还没有权威设备表时，保存必须明确告知“设备改动没保存”）
+  let agentDevicesEdited = false;
+  // 本次保存是否因为“没拉到设备表”而跳过了设备改动（只在保存提示里说一句）
+  let deviceTableSkipped = false;
+  // 任何一次表单改动都 +1。保存请求发出去之后用户又改了东西时，这次刷新结果已经过时，
+  // 用它回填会把新编辑盖掉（实测踩过）。
+  let settingsEditSeq = 0;
 
   // 保存设置后要顺手刷新的东西（由 bindUi() 注册进来；没注册就跳过）。
   // 用钩子而不是直接调用的原因：refreshAgentDevicesFull 定义在 bindUi() **内部**，而 saveSettings() 在外层 ——
   // 直接 `await refreshAgentDevicesFull()` 就是 ReferenceError，被 catch 成一句“保存失败”
   // （其实服务器那边已经存上了，报错完全指错方向；实测踩过）。
   let afterSettingsSaved = null;
+  // bindUi() 注册：把设备草稿画出来（顶层的 loadAgentDevices() 看不见绑在 DOM 上的那套渲染代码）
+  let renderAgentDeviceList = null;
   // 全局默认工作目录（面板里那个「工作目录」）：设备行用它标注“这个目录是哪来的”。
   let agentGlobalWorkdir = "";
 
@@ -814,6 +826,8 @@
   let pendingApiKeyClear = false;
 
   function markSettingsDirty() {
+    // 改动序号先加：保存请求在飞的时候用户又改了东西，这次结果就不能再回填表单
+    settingsEditSeq++;
     if (settingsDirty) return;
     settingsDirty = true;
     const h = $("dirtyHint");
@@ -983,8 +997,59 @@
     function fillSelect(sel, models, current, placeholder) {
     const list = Array.from(new Set([...(models || []), current].filter(Boolean)));
     sel.innerHTML = `<option value="">${placeholder}</option>` +
-      list.map((m) => `<option value="${m}">${m}</option>`).join("");
+      list.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
     sel.value = list.includes(current) ? current : "";
+  }
+
+  /// 往 innerHTML 字符串里拼任何**来自配置/接口/桥上报**的值之前，一律过这一道。
+  /// 为什么：设备名、工作目录、工具白名单都是用户/桥给的文本，一个引号或 < > 就能把那一行结构撑坏；
+  /// 拼进 value="..."/placeholder="..." 这类属性时更直接（配置里出现恶意值即存储型 XSS）。
+  function escapeHtml(value) {
+    return String(value === null || value === undefined ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  /* ─────────── 外部设备表：拉取 / 草稿回滚 / 指定设备下拉 ─────────── */
+
+  /// 拉服务端的设备表：作为编辑草稿 + “已保存快照”。
+  /// 进设置页、点「刷新设备」、保存之后都走它 —— 以前只有点刷新才拉，
+  /// 结果首次进设置页时表是空的：加了一台设备保存时被 loaded 判断拦下，保存后的刷新又把那行覆盖掉。
+  async function loadAgentDevices() {
+    const r = await api("/api/agent/status");
+    agentDevices = (r.deviceList || []).map((d) => ({ ...d }));
+    agentDevicesSaved = agentDevices.map((d) => ({ ...d }));
+    agentGlobalWorkdir = r.globalWorkdir || "";
+    agentDevicesLoaded = true;
+    agentDevicesEdited = false;
+    if (renderAgentDeviceList) renderAgentDeviceList(r);
+    return r;
+  }
+
+  /// 放弃草稿 = 回到上次与服务端对齐的那份。
+  function resetAgentDeviceDraft() {
+    agentDevices = agentDevicesSaved.map((d) => ({ ...d }));
+    agentDevicesEdited = false;
+    if (renderAgentDeviceList) renderAgentDeviceList();
+  }
+
+  /// 指定设备下拉里补一项。
+  /// 这里必须用 DOM API（value/textContent）而不是拼 innerHTML：设备名是外部输入。
+  /// 另外它得是**顶层函数** —— loadSettings() 在外层，以前它定义在 bindUi() 内部，
+  /// “指定设备 + 重新进设置页”直接 ReferenceError（loadSettings 的 catch 会把它吞成“设置页打不开”）。
+  function ensureDeviceOption(name) {
+    if (!name) return;
+    const sel = $("setAgentDevice");
+    if (!sel) return;
+    const opts = sel.options ? Array.from(sel.options) : [];
+    if (opts.some((o) => o.value === name)) return;
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
   }
 
   /* 拉服务器 agent 接口的模型列表（GET <AgentServerBaseUrl>/models） */
@@ -1139,6 +1204,15 @@
         : `无法连接 ${e.oneBotAddress}。请确认 NapCat 容器正在运行且已开启对应的 OneBot 服务。`;
     $("napcatLoginBtn").hidden = d.level === "on";
 
+    // 设备表也是设置的一部分：跟普通字段一样回填（拉不到就保留上一份，绝不清空）。
+    // 以前只有点「刷新设备」才拉 —— 首次进来表是空的，加了一台设备保存时被 loaded 判断拦下。
+    try {
+      await loadAgentDevices();
+    } catch (err) {
+      console.warn("加载设备表失败：", err);
+      resetAgentDeviceDraft(); // 回到上一份已保存快照，不保留已经放弃的改动
+    }
+
     // 放在最后：全部回填成功才认为可保存
     state.settingsLoaded = true;
     clearSettingsDirty(); // 刚和服务端对齐，没未保存的修改
@@ -1253,6 +1327,12 @@
         tools: d.tools || "",
         timeoutSec: Number(d.timeoutSec) || 0
       })));
+    } else if (agentDevicesEdited) {
+      // 设备表没拉到、但用户在面板里加/删/改过：
+      //   ① 只发这一份 → 服务端是**整表替换**，别的设备配置会被一起删掉；
+      //   ② 直接丢掉 → 就是以前那个“新加的设备保存后又自己消失”的毛病。
+      // 所以什么都不发，但保存提示里要说清“设备改动这次没保存”（不能无声无息）。
+      deviceTableSkipped = true;
     }
 
     // 密钥单独处理：输入框留空 = 不改（否则每次保存都会把已存的密钥抹掉）；
@@ -1263,24 +1343,35 @@
 
     const btn = $("saveBtn");
     btn.disabled = true;
+    const deviceTableSkippedHere = deviceTableSkipped;
+    deviceTableSkipped = false;
+    // 快照一下改动序号：请求在飞时用户又改了东西的话，这次返回的刷新结果已经过时
+    const seqAtSend = settingsEditSeq;
     try {
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
       state.aiMode = data.runtime.aiModeEnabled;
       renderAiMode();
       // 设备表按服务器实际状态重画：改完目录/模型后，那行“目录 …”提示与输入框都跟着新值走。
       // 单独兜住：刷新失败不影响“保存成功”这个事实（否则会把刷新的锅扣在保存上）。
-      try {
-        if (afterSettingsSaved) await afterSettingsSaved();
-      } catch (e) {
-        console.warn("保存后刷新设备表失败：", e);
+      // 但请求期间用户又改了东西时**不能**刷：那等于用旧结果盖掉他刚敲的字。
+      const lateEdits = settingsEditSeq !== seqAtSend;
+      if (!lateEdits) {
+        try {
+          if (afterSettingsSaved) await afterSettingsSaved();
+        } catch (e) {
+          console.warn("保存后刷新设备表失败：", e);
+        }
       }
       const bar = $("saveBar");
       bar.hidden = false;
-      $("saveBarText").textContent = "设置已保存并立即生效（会写入 settings.json，重启不回滚）";
+      $("saveBarText").textContent = "设置已保存并立即生效（会写入 settings.json，重启不回滚）" +
+        (deviceTableSkippedHere ? "；设备表这次没加载成功，设备相关改动**没有**保存 —— 点「刷新设备」后再保存一次" : "") +
+        (lateEdits ? "；保存期间你又有新的修改，那些还没保存" : "");
       // 密钥保存/清除后清空输入框（不回显），并把“待清除”标记归位
       $("setApiKey").value = "";
       pendingApiKeyClear = false;
-      clearSettingsDirty();
+      // 保存期间还有新编辑 → 未保存标记要留着（清掉就等于告诉他“已经存下了”）
+      if (!lateEdits) clearSettingsDirty();
       clearTimeout(bar._t);
       bar._t = setTimeout(() => { bar.hidden = true; }, 4000);
     } catch (err) {
@@ -1849,18 +1940,19 @@
 
       box.innerHTML = agentDevices.map((d, i) => {
         const online = d.online ? "🟢 在线" : "⚪ 离线";
+        const name = escapeHtml(d.name);
         const hint = d.online
           ? ""
-          : `<div class="hint" style="margin-top:4px">还没接上来：点「一键连接本机…」把「${d.name}」这个名字填进去，脚本会在本机报同一个名字；名字不一致会在表里多出一行，把这一行删掉即可。</div>`;
+          : `<div class="hint" style="margin-top:4px">还没接上来：点「一键连接本机…」把「${name}」这个名字填进去，脚本会在本机报同一个名字；名字不一致会在表里多出一行，把这一行删掉即可。</div>`;
 
         // 配的模型设备上没有 → 直接标出来（这种错只能靠“填了就能看出不对”来防）
         const models = d.models || [];
         const badModel = d.model && models.length > 0 && !models.includes(d.model);
         const badHint = badModel
-          ? `<div class="hint" style="margin-top:4px;color:#c62828">⚠️ 「${d.model}」这台设备上没有 —— pi 只认 <code>provider/model</code>（比如 <code>localhost/xxx</code>），不是聊天网关那个模型名；请从下面下拉里重选，或者留空用 pi 默认。</div>`
+          ? `<div class="hint" style="margin-top:4px;color:#c62828">⚠️ 「${escapeHtml(d.model)}」这台设备上没有 —— pi 只认 <code>provider/model</code>（比如 <code>localhost/xxx</code>），不是聊天网关那个模型名；请从下面下拉里重选，或者留空用 pi 默认。</div>`
           : "";
         const modelOptions = models.map((m) =>
-          `<option value="${m}"${m === d.model ? " selected" : ""}>${m}</option>`).join("");
+          `<option value="${escapeHtml(m)}"${m === d.model ? " selected" : ""}>${escapeHtml(m)}</option>`).join("");
         // 这一行显示的是**生效的**工作目录，并标出它从哪来：
         //   设备专属（面板里给这台设备填的）→ 全局默认（面板里那个「工作目录」）→ 桥自报（仅兵底）
         // 以前只写个目录名，看上去像“设备专属”，其实可能是全局值，改全局时让人以为没生效。
@@ -1868,12 +1960,13 @@
         const gDir = agentGlobalWorkdir || "";
         const effDir = devDir || gDir || d.cwd || "";
         const dirFrom = devDir ? "设备专属" : (gDir ? "全局默认" : "桥自报");
-        const dirExtra = devDir && gDir && devDir !== gDir ? ` · 全局默认是 ${gDir}` : "";
-        const dirHint = effDir ? ` · 目录 ${effDir}（${dirFrom}）${dirExtra}` : "";
+        const dirExtra = devDir && gDir && devDir !== gDir ? ` · 全局默认是 ${escapeHtml(gDir)}` : "";
+        const dirHint = effDir ? ` · 目录 ${escapeHtml(effDir)}（${dirFrom}）${dirExtra}` : "";
+        // 下面这些值（设备名/模型/目录/工具白名单）全部来自配置与桥上报，一律转义后再拼
         return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <b>${d.name}</b>
-            <span class="hint">${online}${d.pi ? ` · pi ${d.pi}` : ""}${dirHint}</span>
+            <b>${name}</b>
+            <span class="hint">${online}${d.pi ? ` · pi ${escapeHtml(d.pi)}` : ""}${dirHint}</span>
             <label class="switch-row" style="padding:0"><input type="checkbox" data-dev-enable="${i}"${d.enable ? " checked" : ""} /><span class="switch"></span><span class="hint">启用</span></label>
             <button class="ghost-btn" data-dev-toggle="${i}">${d.online ? "断开" : "重连"}</button>
             <button class="ghost-btn" data-dev-del="${i}">删除</button>
@@ -1884,16 +1977,16 @@
             <div class="field"><label class="hint">模型</label>
               <select data-dev-model="${i}">
                 <option value="">（用 pi 默认）</option>${modelOptions}
-                ${d.model && !(d.models || []).includes(d.model) ? `<option value="${d.model}" selected>${d.model}</option>` : ""}
+                ${d.model && !(d.models || []).includes(d.model) ? `<option value="${escapeHtml(d.model)}" selected>${escapeHtml(d.model)}</option>` : ""}
               </select>
             </div>
             <div class="field"><label class="hint">工作目录</label>
-              <input type="text" data-dev-workdir="${i}" value="${d.workdir || ""}" placeholder="留空 = 用全局默认${agentGlobalWorkdir ? `（${agentGlobalWorkdir}）` : "目录"}" />
+              <input type="text" data-dev-workdir="${i}" value="${escapeHtml(d.workdir || "")}" placeholder="留空 = 用全局默认${agentGlobalWorkdir ? `（${escapeHtml(agentGlobalWorkdir)}）` : "目录"}" />
             </div>
           </div>
           <div class="grid-2">
             <div class="field"><label class="hint">工具白名单（空=全开）</label>
-              <input type="text" data-dev-tools="${i}" value="${d.tools || ""}" placeholder="bash,read,fetch" />
+              <input type="text" data-dev-tools="${i}" value="${escapeHtml(d.tools || "")}" placeholder="bash,read,fetch" />
             </div>
             <div class="field"><label class="hint">超时（秒，0=用全局）</label>
               <input type="number" data-dev-timeout="${i}" value="${d.timeoutSec || 0}" min="0" max="7200" step="30" />
@@ -1905,26 +1998,32 @@
 
       box.querySelectorAll("[data-dev-model]").forEach((el) => el.addEventListener("change", () => {
         agentDevices[Number(el.dataset.devModel)].model = el.value;
+        agentDevicesEdited = true;
         markSettingsDirty();
       }));
       box.querySelectorAll("[data-dev-workdir]").forEach((el) => el.addEventListener("input", () => {
         agentDevices[Number(el.dataset.devWorkdir)].workdir = el.value.trim();
+        agentDevicesEdited = true;
         markSettingsDirty();
       }));
       box.querySelectorAll("[data-dev-tools]").forEach((el) => el.addEventListener("input", () => {
         agentDevices[Number(el.dataset.devTools)].tools = el.value.trim();
+        agentDevicesEdited = true;
         markSettingsDirty();
       }));
       box.querySelectorAll("[data-dev-timeout]").forEach((el) => el.addEventListener("input", () => {
         agentDevices[Number(el.dataset.devTimeout)].timeoutSec = Number(el.value) || 0;
+        agentDevicesEdited = true;
         markSettingsDirty();
       }));
       box.querySelectorAll("[data-dev-enable]").forEach((el) => el.addEventListener("change", () => {
         agentDevices[Number(el.dataset.devEnable)].enable = el.checked;
+        agentDevicesEdited = true;
         markSettingsDirty();
       }));
       box.querySelectorAll("[data-dev-del]").forEach((el) => el.addEventListener("click", () => {
         agentDevices.splice(Number(el.dataset.devDel), 1);
+        agentDevicesEdited = true;
         renderAgentDevices();
         markSettingsDirty();
       }));
@@ -1943,12 +2042,8 @@
     async function refreshAgentDevicesFull() {
       const out = $("agentOut");
       try {
-        const r = await api("/api/agent/status");
-        agentDevices = (r.deviceList || []).map((d) => ({ ...d }));
-        agentDevicesLoaded = true;
-        agentGlobalWorkdir = r.globalWorkdir || "";
-        renderAgentDevices();
-        refreshAgentDevices(r.devices || []);
+        const r = await loadAgentDevices();      // 顶层：草稿 + 已保存快照 + 重画
+        fillSelect($("setAgentModel"), r.deviceModels || [], $("setAgentModel").value, "（用 pi 自己的默认）");
         return r;
       } catch (e) {
         out.textContent = "刷新设备失败：" + e.message;
@@ -1958,11 +2053,17 @@
 
     // 注册给 saveSettings()：保存成功后刷新设备表（跨作用域只能这样搭桥，不能直接调用）
     afterSettingsSaved = refreshAgentDevicesFull;
+    // 顶层 loadAgentDevices() / resetAgentDeviceDraft() 拿不到 bindUi() 里的渲染函数，注册给它
+    renderAgentDeviceList = (r) => {
+      renderAgentDevices();
+      if (r) refreshAgentDevices(r.devices || []);
+    };
 
     $("agentDeviceAdd").addEventListener("click", () => {
       const name = prompt("设备名（本机桥握手时上报的 host 名，例如 ZHAOSPC；现在也可以随便写，接上来就会匹配）：");
       if (!name) return;
       agentDevices.push({ name: name.trim(), online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] });
+      agentDevicesEdited = true;
       renderAgentDevices();
       markSettingsDirty();
     });
@@ -1992,6 +2093,7 @@
       // 面板里还没这行设备就先加上（这样接上来就能直接看到并配模型）
       if (name && !agentDevices.some((d) => (d.name || "").toLowerCase() === name.toLowerCase())) {
         agentDevices.push({ name, online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] });
+        agentDevicesEdited = true;
         renderAgentDevices();
         await saveSettings();
       }
@@ -2222,16 +2324,8 @@
       const keep = sel.value;
       const list = Array.from(new Set([...(devices || []), keep].filter(Boolean)));
       sel.innerHTML = '<option value="">（不指定，跟着上面）</option>' +
-        list.map((d) => `<option value="${d}">${d}</option>`).join("");
+        list.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("");
       sel.value = list.includes(keep) ? keep : "";
-    }
-
-    function ensureDeviceOption(name) {
-      if (!name) return;
-      const sel = $("setAgentDevice");
-      if (!Array.from(sel.options).some((o) => o.value === name)) {
-        sel.insertAdjacentHTML("beforeend", `<option value="${name}">${name}</option>`);
-      }
     }
 
     $("agentTestGo").addEventListener("click", async () => {

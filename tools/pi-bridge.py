@@ -76,11 +76,10 @@ def log(msg: str) -> None:
 class WsClient:
     def __init__(self, host: str, port: int, path: str, timeout: float = 30.0):
         self.sock = socket.create_connection((host, port), timeout=timeout)
-        self.sock.settimeout(None)
+        self.timeout = timeout
         self._buf = b""
-        # 发送必须上锁：任务线程发 chunk/done 的同时，主线程每 30 秒发一次 pong ——
-        # 两边同时 sendall 会把帧交缠在一起，机器人的 WS 解析器看到的就是垃圾（实测丢结果就是这个）
         self._send_lock = threading.Lock()
+        deadline = time.monotonic() + timeout
         key = base64.b64encode(os.urandom(16)).decode()
         req = (
             f"GET {path} HTTP/1.1\r\n"
@@ -90,21 +89,29 @@ class WsClient:
             f"Sec-WebSocket-Key: {key}\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n"
         )
-        self.sock.sendall(req.encode())
-
-        # 读握手响应（到空行为止）
-        head = b""
-        while b"\r\n\r\n" not in head:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ConnectionError("握手时连接被关闭")
-            head += chunk
-
-        header, _, rest = head.partition(b"\r\n\r\n")
-        status = header.split(b"\r\n", 1)[0].decode(errors="replace")
-        if "101" not in status:
-            raise ConnectionError(f"握手失败：{status} {header[-200:]!r}")
-        self._buf = rest
+        try:
+            self.sock.sendall(req.encode())
+            head = b""
+            while b"\r\n\r\n" not in head:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("WebSocket handshake timed out")
+                self.sock.settimeout(remaining)
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    raise ConnectionError("WebSocket handshake closed")
+                head += chunk
+                if len(head) > 65536:
+                    raise ConnectionError("WebSocket handshake headers too large")
+            header, _, rest = head.partition(b"\r\n\r\n")
+            status = header.split(b"\r\n", 1)[0].split()
+            if len(status) < 2 or status[1] != b"101":
+                raise ConnectionError("WebSocket upgrade rejected")
+            self._buf = rest
+            self.sock.settimeout(timeout)
+        except BaseException:
+            self.sock.close()
+            raise
 
     # ---- 收 ----
     def _read_exact(self, n: int) -> bytes:
@@ -150,7 +157,7 @@ class WsClient:
                     return opcode, payload
         finally:
             if timeout is not None:
-                self.sock.settimeout(None)
+                self.sock.settimeout(self.timeout)
 
     # ---- 发 ----
     def _send_frame(self, opcode: int, data: bytes) -> None:
@@ -175,14 +182,12 @@ class WsClient:
         self.send_text(json.dumps(obj, ensure_ascii=False))
 
     def close(self) -> None:
+        # Teardown must not wait on a send lock held by a stalled task thread.
         try:
-            self._send_frame(0x8, b"")
+            self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
-        try:
-            self.sock.close()
-        except OSError:
-            pass
+        self.sock.close()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -266,6 +271,18 @@ class TaskRunner:
         if proc and proc.poll() is None:
             _kill_tree(proc)
             log("任务被取消 → 已杀掉 pi")
+
+    def abort(self) -> None:
+        """连接断了：杀掉还在跑的 pi，但**不**把“取消”记到下一次连接上。
+
+        为什么不能用 cancel()：cancelled 是粘住的（run() 不重置它）——
+        在断连时调 cancel() 会让重连后新接的任务一上来就被当成“已取消”。
+        """
+        with self.lock:
+            proc = self.proc
+        if proc and proc.poll() is None:
+            _kill_tree(proc)
+            log("连接断开 → 已杀掉还在跑的 pi")
 
     def run(self, task: dict) -> None:
         task_id = task["id"]
@@ -522,6 +539,18 @@ def main() -> int:
     tunnel = SshTunnel(args.ssh, args.key, args.local_port, args.remote, enabled=not args.url)
     runner = TaskRunner(send_json=lambda obj: None, pi_argv=pi_argv, workdir=args.workdir, pi_display=args.pi)
 
+    # Local CLI discovery can take time; finish it before opening the handshake.
+    hello = {
+        "type": "hello",
+        # 设备名：面板里“按名字认设备”就靠它。默认取本机主机名，可以用 --name/PI_BRIDGE_NAME 改。
+        "host": args.name or os.environ.get("COMPUTERNAME") or socket.gethostname(),
+        "cwd": args.workdir,
+        "pi": _pi_version(pi_argv),
+        # 模型列表：面板里直接选（不用手敲模型名，也不用手改桥的启动参数）
+        "models": _list_models(pi_argv),
+        "version": 1,
+    }
+
     backoff = 3
     failed_connects = 0
     while True:
@@ -544,23 +573,13 @@ def main() -> int:
             backoff = min(backoff * 2, 30)
             continue
 
-        failed_connects = 0
-        backoff = 3
-        runner.send_json = ws.send_json
-        ws.send_json({
-            "type": "hello",
-            # 设备名：面板里“按名字认设备”就靠它。默认取本机主机名，可以用 --name/PI_BRIDGE_NAME 改。
-            "host": args.name or os.environ.get("COMPUTERNAME") or socket.gethostname(),
-            "cwd": args.workdir,
-            "pi": _pi_version(pi_argv),
-            # 模型列表：面板里直接选（不用手敲模型名，也不用手改桥的启动参数）
-            "models": _list_models(pi_argv),
-            "version": 1,
-        })
-        log("已连上机器人（等 // 命令）")
-        last_rx = time.time()                                   # 最近一次“真的收到东西”的时刻
-
         try:
+            failed_connects = 0
+            backoff = 3
+            runner.send_json = ws.send_json
+            ws.send_json(hello)
+            log("已连上机器人（等 // 命令）")
+            last_rx = time.monotonic()                                   # 最近一次“真的收到东西”的时刻
             while True:
                 try:
                     opcode, payload = ws.recv(timeout=30)
@@ -569,10 +588,10 @@ def main() -> int:
                     #   ① 只是闲着（正常）—— 回个 pong 当心跳继续；
                     #   ② 连接已经成了黑洞（机器人容器重启过、ssh 隧道还挂着但那头 socket 没了）——
                     #      recv 永远不会报错，桥就一直以为自己在线（面板却显示离线）。
-                    # 怎么分辨：服务端每 30 秒 ping 一次（AgentBridgeServer.PingAll），所以
+                    # 怎么分辨：服务端每 30 秒 ping 一次（AgentBridgeServer.HeartbeatAsync），所以
                     # ~90 秒静默基本就是死了 → 强制重连。
-                    if time.time() - last_rx > 90:
-                        log(f"{time.time() - last_rx:.0f} 秒没收到任何消息（连接大概已经断了）→ 强制重连")
+                    if time.monotonic() - last_rx > 90:
+                        log(f"{time.monotonic() - last_rx:.0f} 秒没收到任何消息（连接大概已经断了）→ 强制重连")
                         break
                     try:
                         ws.send_json({"type": "pong"})          # 心跳：顺便探测连接还活着
@@ -583,7 +602,7 @@ def main() -> int:
                 except ConnectionError:
                     break
 
-                last_rx = time.time()
+                last_rx = time.monotonic()
 
                 if opcode != 0x1:
                     continue
@@ -603,7 +622,7 @@ def main() -> int:
                     runner.cancel()
                 elif mtype == "models":
                     # 面板里点“刷新模型”时用：现场问一遍 pi 有哪些模型
-                    ws.send_json({"type": "models", "models": _list_models(args.pi)})
+                    ws.send_json({"type": "models", "models": _list_models(pi_argv)})
                 elif mtype == "sessions":
                     # 面板/命令里“从 pi 导入”：把本机 pi 的会话列出来
                     ws.send_json({"type": "sessions", "list": _list_sessions()})
@@ -620,6 +639,10 @@ def main() -> int:
         except Exception as exc:                                # noqa: BLE001
             log(f"连接出错：{type(exc).__name__} {exc}")
         finally:
+            # socket 已经没了：让还在跑的任务线程安静收尾（send_json 是个裸调用，
+            # 不换掉的话它会往死 socket 上写 → 在线程里抛 OSError）
+            runner.send_json = lambda obj: None
+            runner.abort()
             try:
                 ws.close()
             except Exception:                                   # noqa: BLE001
