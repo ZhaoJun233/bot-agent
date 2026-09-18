@@ -318,7 +318,8 @@ class TaskRunner:
                     f"  sftp -P {self.server_env.get('PI_SERVER_SFTP_PORT')} -i \"{self.server_env.get('PI_SERVER_KEY')}\" "
                     f"{self.server_env.get('PI_SERVER_SSH')}\n"
                     "  也可以直接用环境变量里的 $PI_SERVER_SFTP_PORT / $PI_SERVER_KEY / $PI_SERVER_SSH。\n"
-                    "  批量操作用 tools/server-files.py（ls/cat/get/put/rm/mkdir），别用交互式 sftp 手敲。")
+                    "  批量操作用 server-files.py（与 pi-bridge.py 放一起，或在面板「一键连接本机」里下载）；"
+                    "它的坐标直接取上面三个环境变量，所以直接 `python server-files.py ls /opt/qqchat` 就行。")
             instructions = (instructions + note) if instructions else note.lstrip("\n")
 
         args = list(self.pi_argv) + ["-p", "--mode", "json"]

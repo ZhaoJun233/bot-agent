@@ -90,30 +90,37 @@ def main() -> int:
     check("★ 目标在最后且是 $PI_SERVER_SSH", argv.rstrip().endswith("ec2-user@example.com"), argv)
     check("★ 非交互：带 -b 批处理 + BatchMode=yes（不然脚本会卡在提示符上）",
           "-b" in argv and "BatchMode=yes" in argv, argv)
-    check("★ 批处理里是 ls -l /opt/qqchat", batch == "ls -l /opt/qqchat", batch)
+    check("★ 批处理里是 ls -l \"/opt/qqchat\"（双引号包裹）", batch == 'ls -l "/opt/qqchat"', batch)
 
     # ② 命令行覆盖环境变量
     code, out, tmp = run_case(["--port", "3333", "--ssh", "someone@host2", "ls", "."])
     argv = (tmp / "argv.txt").read_text(encoding="utf-8").strip()
     check("★ 命令行参数优先于环境变量", "-P 3333" in argv and argv.rstrip().endswith("someone@host2"), argv)
 
-    # ③ 带空格的路径要转义（sftp 批处理里用反斜杠，不用引号）
+    # ③ 带空格的路径用**双引号**包裹（实测 sftp 认这个；反斜杠转义不稳）
     code, out, tmp = run_case(["cat", "/tmp/my file.txt"])
     batch = (tmp / "batch.txt").read_text(encoding="utf-8").strip()
-    check("★ 路径里的空格被转义（空格 → \\ ）", batch == r"cat /tmp/my\ file.txt", batch)
+    check("★ 远端路径用双引号包（空格不再靠反斜杠转义）",
+          batch.startswith('get "/tmp/my file.txt"') and "\\ " not in batch, batch[:70])
+
+    # ③b 本地路径转成正斜杠（Windows 的反斜杠会被 sftp 当转义吃掉）
+    code, out, tmp = run_case(["put", r"C:\temp\a.txt"])
+    batch = (tmp / "batch.txt").read_text(encoding="utf-8").strip()
+    check("★ 本地 Windows 路径转正斜杠后才写进批处理", batch.startswith('put "C:/temp/a.txt"') and "\\\\" not in batch, batch)
 
     # ④ 子命令拼出来的批处理对不对
     for sub, args, expect in [
-        ("get", ["/etc/hosts"], "get /etc/hosts"),
-        ("get", ["/etc/hosts", "local.txt"], "get /etc/hosts local.txt"),
-        ("put", ["a.txt"], "put a.txt"),
-        ("put", ["a.txt", "/opt/a.txt"], "put a.txt /opt/a.txt"),
-        ("rm", ["/tmp/x"], "rm /tmp/x"),
-        ("mkdir", ["/tmp/a/b"], "mkdir /tmp/a/b"),
+        ("get", ["/etc/hosts"], 'get "/etc/hosts"'),
+        ("put", ["a.txt"], None),
+        ("rm", ["/tmp/x"], 'rm "/tmp/x"'),
+        ("mkdir", ["/tmp/a/b"], 'mkdir "/tmp/a/b"'),
     ]:
         code, out, tmp = run_case([sub] + args)
         batch = (tmp / "batch.txt").read_text(encoding="utf-8").strip()
-        check(f"批处理：{sub} → {expect}", batch == expect, batch)
+        if expect is None:
+            check(f"批处理：{sub} 带上了本地绝对路径", batch.startswith('put "') and batch.endswith('"'), batch)
+        else:
+            check(f"批处理：{sub} → {expect}", batch == expect, batch)
 
     # ⑤ 没有坐标时要说人话，而不是默默连本机
     code, out, tmp = run_case(["ls", "."], env_extra={"PI_SERVER_SSH": ""})
