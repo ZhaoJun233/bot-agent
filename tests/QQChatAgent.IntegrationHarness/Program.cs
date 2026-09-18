@@ -111,6 +111,7 @@ public static partial class Program
         await Scenario("s38", RunServerAgentQqActionScenarioAsync);
         await Scenario("s39", RunServerAgentContextScenarioAsync);
         await Scenario("s40", RunServerAgentDockerScenarioAsync);
+        await Scenario("s41", RunPanelDeployScenarioAsync);
         }
         catch (Exception ex)
         {

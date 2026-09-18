@@ -409,6 +409,8 @@ const RUNTIME = {
   agentServerQqActionsEffective: "安全档 like/poke，已点名打开 ban",
   // 记住上下文：默认关（每条指令单独对待）—— fixture 里故意开一个，验证回填
   agentServerKeepContext: true,
+  // 面板一键部署（高权限，默认关）+ 记住的产物地址
+  panelDeployEnabled: true, panelDeployUrl: "https://example.com/app.tar.gz",
   // 透过 docker 操作服务器（高权限，默认关）
   agentServerDocker: false,
   // 白名单拆成两份（群聊/私聊），旧字段还留着做兼容：这里故意只填群聊那份，看回落提示
@@ -903,6 +905,37 @@ check("★ 服务端返回 false 时开关是关的（高风险默认不能自�
   const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
   const sent = post ? JSON.parse(post.body).agentServerDocker : undefined;
   check("★ 保存时把 docker 开关一起发出去", sent === false, `发出=${JSON.stringify(sent)}`);
+}
+
+/* ─────────── 4) 面板一键部署（上传/拉取产物 + 回滚） ─────────── */
+
+console.log("\n▶ 动态：面板一键部署（上传 / 地址 / 回滚）");
+
+check("★ 面板有一键部署卡片（上传产物 + 地址部署 + 回滚）",
+  !!document.getElementById("deployCard") && !!document.getElementById("deployUploadGo") &&
+  !!document.getElementById("deployUrlGo") && !!document.getElementById("deployRollbackGo"),
+  ["deployCard", "deployUploadGo", "deployUrlGo", "deployRollbackGo"]
+    .map((id) => `${id}=${!!document.getElementById(id)}`).join(" "));
+check("★ 提示里写清了它会替换容器、以及回滚点",
+  html.includes("qqchat-agent:prev") && html.includes("替换机器人容器"),
+  (html.match(/一键部署[\s\S]{0,160}/) || ["(没找到)"])[0].slice(0, 120));
+check("★ 高权限开关在设置里（默认关）",
+  html.includes('type="checkbox" id="setPanelDeployEnabled"') &&
+  !!document.getElementById("setPanelDeployEnabled") &&
+  document.getElementById("setPanelDeployEnabled").checked === true,
+  String(document.getElementById("setPanelDeployEnabled")?.checked));
+check("★ 已记住的产物地址回填到输入框",
+  String(document.getElementById("deployUrl")?.value) === "https://example.com/app.tar.gz",
+  String(document.getElementById("deployUrl")?.value));
+{
+  const b = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body) : {};
+  check("★ 保存时开关与地址一起发出",
+    sent.panelDeployEnabled === true && sent.panelDeployUrl === "https://example.com/app.tar.gz",
+    `enabled=${JSON.stringify(sent.panelDeployEnabled)} url=${JSON.stringify(sent.panelDeployUrl)}`);
 }
 
 /* ─────────── 4) 未保存修改的提示与拦截 ─────────── */

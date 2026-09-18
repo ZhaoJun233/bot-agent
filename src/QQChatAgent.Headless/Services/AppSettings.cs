@@ -570,6 +570,17 @@ public sealed class AppSettings
     public int AgentServerMaxTokens { get; set; } = 1200;
 
     /// <summary>
+    /// **面板一键部署**（号主 2026-09-18 要的；默认关）。
+    /// 打开后：面板能上传/拉取 `app.tar.gz`，并驱动宿主 docker 重建镜像 + 替换自己（容器自我更新）。
+    /// 为什么默认关 + 单独一个开关：它等于把“重装机器人”的按钮放到网页上；
+    /// 虽然面板本来就有口令门，但这种事应该是个显式决定。
+    /// </summary>
+    public bool PanelDeployEnabled { get; set; }
+
+    /// <summary>上次用过的产物地址（URL 方式部署会记住：以后一个按钮就能拉）。空 = 没配。</summary>
+    public string PanelDeployUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// 允许服务器 agent **透过 docker 操作服务器**（号主 2026-09-18 要的能力）：
     /// 打开后它能 `docker ps / logs / exec / run -v /:/host …`，也能直接读写 /host/qqchat（部署目录）。
     ///

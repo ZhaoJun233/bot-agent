@@ -155,6 +155,8 @@ public static class BotConfig
     [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
     [nameof(AppSettings.AgentServerKeepContext)] = new[] { "QQCHAT_AGENT_SERVER_CONTEXT" },
     [nameof(AppSettings.AgentServerDocker)] = new[] { "QQCHAT_AGENT_SERVER_DOCKER" },
+    [nameof(AppSettings.PanelDeployEnabled)] = new[] { "QQCHAT_PANEL_DEPLOY" },
+    [nameof(AppSettings.PanelDeployUrl)] = new[] { "QQCHAT_PANEL_DEPLOY_URL" },
     [nameof(AppSettings.AgentServerMaxSteps)] = new[] { "QQCHAT_AGENT_SERVER_STEPS" },
     [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" },
 
@@ -263,6 +265,8 @@ public static class BotConfig
         s.AgentServerWorkDir = Str("QQCHAT_AGENT_SERVER_WORKDIR") ?? s.AgentServerWorkDir;
         s.AgentServerKeepContext = Bool("QQCHAT_AGENT_SERVER_CONTEXT") ?? s.AgentServerKeepContext;
         s.AgentServerDocker = Bool("QQCHAT_AGENT_SERVER_DOCKER") ?? s.AgentServerDocker;
+        s.PanelDeployEnabled = Bool("QQCHAT_PANEL_DEPLOY") ?? s.PanelDeployEnabled;
+        s.PanelDeployUrl = Str("QQCHAT_PANEL_DEPLOY_URL") ?? s.PanelDeployUrl;
         s.AgentServerMaxSteps = Int("QQCHAT_AGENT_SERVER_STEPS") ?? s.AgentServerMaxSteps;
         s.AgentServerCommandTimeoutSeconds = Int("QQCHAT_AGENT_SERVER_CMD_TIMEOUT") ?? s.AgentServerCommandTimeoutSeconds;
         s.HealthReportEnabled = Bool("QQCHAT_HEALTH_REPORT") ?? s.HealthReportEnabled;

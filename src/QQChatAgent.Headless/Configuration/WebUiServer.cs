@@ -35,7 +35,7 @@ namespace QQChatAgent.Configuration;
 ///   QQ 登录   GET  /api/qqlogin           当前登录二维码信息（URL / 剩余新鲜度 / 错误）
 ///             GET  /api/qqlogin/qrcode.svg 二维码图片（&lt;img&gt; 不能带自定义头，所以支持 ?token=）
 /// </summary>
-public sealed class WebUiServer : IDisposable
+public sealed partial class WebUiServer : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -383,6 +383,18 @@ public sealed class WebUiServer : IDisposable
             return;
         }
 
+        // ─────────── 面板一键部署（上传/拉取 app.tar.gz → 重建镜像 → 替换自己）───────────
+        // GET  /api/deploy                状态（开关/当前镜像/上一条日志）
+        // POST /api/deploy/upload         上传产物并部署
+        // POST /api/deploy/url            从地址拉取产物并部署（地址会记住）
+        // POST /api/deploy/rollback       回滚到上一个镜像
+        if (path.StartsWith("/api/deploy", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandlePanelDeployAsync(context, path, method);
+            return;
+        }
+
+        // ─────────── 文件管理（已按号主要求撤下：SFTP 由外部 agent 主导）───────────
         if (path.Equals("/api/settings", StringComparison.OrdinalIgnoreCase))
         {
             if (method == "POST")
@@ -1384,6 +1396,8 @@ public sealed class WebUiServer : IDisposable
         if (body["agentServerWorkDir"] is JsonNode asw) s.AgentServerWorkDir = (asw.GetValue<string>() ?? "/data").Trim();
         if (body["agentServerKeepContext"] is JsonNode askc) s.AgentServerKeepContext = askc.GetValue<bool>();
         if (body["agentServerDocker"] is JsonNode asdk) s.AgentServerDocker = asdk.GetValue<bool>();
+        if (body["panelDeployEnabled"] is JsonNode pde) s.PanelDeployEnabled = pde.GetValue<bool>();
+        if (body["panelDeployUrl"] is JsonNode pdu) s.PanelDeployUrl = (pdu.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentServerMaxSteps"] is JsonNode ass) s.AgentServerMaxSteps = Math.Clamp(ass.GetValue<int>(), 1, 30);
         if (body["agentServerCommandTimeoutSeconds"] is JsonNode asct) s.AgentServerCommandTimeoutSeconds = Math.Clamp(asct.GetValue<int>(), 5, 300);
             // ---- 服务器健康日报（定时私聊推送）----
@@ -1839,6 +1853,8 @@ public sealed class WebUiServer : IDisposable
         ["agentServerWorkDir"] = s.AgentServerWorkDir,
         ["agentServerKeepContext"] = s.AgentServerKeepContext,
         ["agentServerDocker"] = s.AgentServerDocker,
+        ["panelDeployEnabled"] = s.PanelDeployEnabled,
+        ["panelDeployUrl"] = s.PanelDeployUrl,
         ["agentServerMaxSteps"] = s.AgentServerMaxSteps,
         ["agentServerCommandTimeoutSeconds"] = s.AgentServerCommandTimeoutSeconds,
         ["neteaseCookieSet"] = !string.IsNullOrWhiteSpace(s.NeteaseCookie),

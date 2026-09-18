@@ -241,6 +241,31 @@
           </div>
         </div>
 
+        <!-- 面板一键部署（号主 2026-09-18：“面板有没有提供一键部署”） -->
+        <div class="card" id="deployCard">
+          <div class="card-head">
+            <h3>一键部署</h3>
+            <p>把新的 <code>app.tar.gz</code>（发布产物）交给服务器重建镜像并替换机器人容器；
+               部署前会自动把当前镜像存成 <code>qqchat-agent:prev</code>，出问题可以一键回滚。
+               上传/拉取都要先打开上面那个「面板一键部署」开关（默认关）。</p>
+          </div>
+
+          <pre id="deployStatus" class="path-hint" style="white-space:pre-wrap;max-height:120px;overflow:auto">读取中…</pre>
+
+          <div class="sticker-actions">
+            <input type="file" id="deployUpload" accept=".gz,.tar.gz" />
+            <button class="ghost-btn" id="deployUploadGo">上传并部署</button>
+          </div>
+
+          <div class="sticker-actions">
+            <input type="text" id="deployUrl" placeholder="产物地址（https://…/app.tar.gz；记住后以后一键拉）" style="flex:1" />
+            <button class="ghost-btn" id="deployUrlGo">从地址部署</button>
+            <button class="ghost-btn" id="deployRollbackGo">回滚上一个镜像</button>
+          </div>
+
+          <pre id="deployLog" class="path-hint" style="white-space:pre-wrap;max-height:200px;overflow:auto;display:none"></pre>
+        </div>
+
         <!-- 回复节奏 -->
         <div class="card">
           <div class="card-head">
@@ -769,6 +794,12 @@
                 <input type="checkbox" id="setAgentServerDocker" />
                 <span class="switch"></span>
                 <span>允许 agent 透过 docker 操作服务器<span class="hint">**高权限**（docker.sock ≈ root）：打开后它能 <code>docker ps/logs/exec</code>、能 <code>docker run -v /:/host …</code> 读整个服务器文件系统，也能直接读写部署目录 <code>/host/qqchat</code>（宿主机的 /opt/qqchat）。默认关；挂载是常挂的，这个开关决定它**会不会去用**。</span></span>
+            </label>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setPanelDeployEnabled" />
+                <span class="switch"></span>
+                <span>面板一键部署<span class="hint">**高权限**（等于把“重装机器人”的按钮放到网页上）：打开后面板能上传/拉取 app.tar.gz，并驱动宿主 docker 重建镜像 + 替换自己。默认关。部署前会自动留回滚点。</span></span>
             </label>
 
             <div class="grid-2">

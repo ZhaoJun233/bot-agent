@@ -1181,6 +1181,9 @@
     $("setAgentServerKeepContext").checked = !!r.agentServerKeepContext;
     // 透过 docker 操作服务器（高权限，默认关）
     $("setAgentServerDocker").checked = !!r.agentServerDocker;
+    // 面板一键部署（高权限，默认关）+ 记住的产物地址
+    $("setPanelDeployEnabled").checked = !!r.panelDeployEnabled;
+    $("deployUrl").value = r.panelDeployUrl || "";
     // 把“实际会开哪几个”回显出来：留空 ≠ 什么都没有（是默认安全档），写错的名字会被服务端忽略，
     // 所以面板得把真正生效的那份摆出来，不然号主会以为自己写生效了。
     $("agentServerQqActionsOut").textContent = r.agentServerQqActionsEffective
@@ -1329,6 +1332,8 @@
       agentServerQqActions: $("setAgentServerQqActions").value.trim(),
       agentServerKeepContext: $("setAgentServerKeepContext").checked,
       agentServerDocker: $("setAgentServerDocker").checked,
+      panelDeployEnabled: $("setPanelDeployEnabled").checked,
+      panelDeployUrl: $("deployUrl").value.trim(),
       agentServerMaxSteps: Number($("setAgentServerMaxSteps").value),
       agentServerWorkDir: $("setAgentServerWorkDir").value.trim() || "/data",
       agentServerCommandTimeoutSeconds: Number($("setAgentServerCommandTimeoutSeconds").value),
@@ -2516,6 +2521,103 @@
     }
 
     $("neteaseLogin").addEventListener("click", startNeteaseLogin);
+    wireDeployCard();
+  }
+
+  /* ─────────── 面板一键部署（上传/拉取产物 → 重建镜像 → 替换自己）───────────
+     部署会把我们这个容器换掉 —— 页面会断一下，所以起完先轮询 /healthz，
+     回来后再拉一次状态与日志（否则界面会永远停在“正在重建…”）。 */
+  async function loadDeployStatus() {
+    const box = $("deployStatus");
+    if (!box) return null;
+    try {
+      const d = await api("/api/deploy");
+      const lines = [
+        `开关：${d.enabled ? "已开启" : "关着（上传/拉取都会被拒）"}`,
+        d.tarBytes ? `当前产物：${fmtSize(d.tarBytes)}　更新于 ${String(d.tarUpdated || "").replace("T", " ").slice(0, 19)}` : "当前产物：（还没有）",
+        `当前镜像：${d.image || "（读不到：" + (d.docker || "") + "）"}`,
+        `上一个镜像（回滚点）：${d.previousImage || "（还没有）"}`,
+        `容器启动于：${d.containerStarted || "?"}`,
+        d.lastExit ? `上次部署退出码：${d.lastExit}` : ""
+      ].filter(Boolean);
+      box.textContent = lines.join("\n");
+      $("deployLog").style.display = d.logTail ? "" : "none";
+      $("deployLog").textContent = d.logTail || "";
+      return d;
+    } catch (e) {
+      box.textContent = "读不到部署状态：" + e.message;
+      return null;
+    }
+  }
+
+  async function waitPanelBack(maxSeconds) {
+    // 容器被替换时页面会断开：每 3 秒探一次 /healthz，回来就算成
+    const deadline = Date.now() + (maxSeconds || 180) * 1000;
+    const log = $("deployLog");
+    log.style.display = "";
+    let ticks = 0;
+    while (Date.now() < deadline) {
+      ticks++;
+      log.textContent = `正在重建镜像并替换容器…（已等 ${ticks * 3} 秒，页面会自动回来）`;
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const res = await fetch(withToken(`${apiBase()}/healthz`), { cache: "no-store" });
+        if (res.ok) {
+          await new Promise((r) => setTimeout(r, 2000));
+          await loadDeployStatus();
+          toast("面板已回来，部署日志如下");
+          return true;
+        }
+      } catch (e) { /* 容器还没起来，继续等 */ }
+    }
+    log.textContent = "等了 3 分钟还没回来：去服务器看一眼 docker ps -a 与 /opt/qqchat/deploy.last.log";
+    return false;
+  }
+
+  async function deployUpload() {
+    const input = $("deployUpload");
+    const file = input.files && input.files[0];
+    if (!file) { toast("先选一个 app.tar.gz"); return; }
+    if (!confirm(`上传 ${file.name}（${fmtSize(file.size)}）并用它重建机器人？\n\n部署期间机器人会短暂重启（NapCat 不会被重建）。`)) return;
+    if (!confirm("再确认一次：部署会替换正在运行的机器人容器，继续？")) return;
+    try {
+      const res = await fetch(withToken(`${apiBase()}/api/deploy/upload?filename=${encodeURIComponent(file.name)}`), {
+        method: "POST", headers: authHeaders({ "Content-Type": "application/gzip" }), body: file
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text.slice(0, 300));
+      input.value = "";
+      await waitPanelBack(240);
+    } catch (e) { toast("部署失败：" + e.message); }
+  }
+
+  async function deployByUrl() {
+    const url = ($("deployUrl").value || "").trim();
+    if (!url) { toast("先填产物地址（http/https）"); return; }
+    if (!confirm(`让服务器去拉 ${url} 并用它重建机器人？\n\n部署期间机器人会短暂重启。`)) return;
+    try {
+      const r = await api("/api/deploy/url", { method: "POST", body: JSON.stringify({ url }) });
+      if (!r.started) throw new Error(JSON.stringify(r));
+      await waitPanelBack(240);
+    } catch (e) { toast("部署失败：" + e.message); }
+  }
+
+  async function deployRollback() {
+    if (!confirm("回滚到上一个镜像（qqchat-agent:prev）并重启机器人？")) return;
+    try {
+      const r = await api("/api/deploy/rollback", { method: "POST", body: "{}" });
+      if (!r.started) throw new Error(JSON.stringify(r));
+      await waitPanelBack(240);
+    } catch (e) { toast("回滚失败：" + e.message); }
+  }
+
+  function wireDeployCard() {
+    const go = $("deployUploadGo");
+    if (!go) return;
+    go.addEventListener("click", deployUpload);
+    $("deployUrlGo").addEventListener("click", deployByUrl);
+    $("deployRollbackGo").addEventListener("click", deployRollback);
+    loadDeployStatus();
   }
 
   async function boot() {
