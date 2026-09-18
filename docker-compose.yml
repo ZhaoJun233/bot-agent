@@ -21,6 +21,14 @@ services:
     image: mlikiowa/napcat-docker:latest
     container_name: qqchat-napcat
     restart: unless-stopped
+    # 日志上限：不用它的话 json-file 日志会把小硬盘吃满（实测 8.8G 盘跑到 90%）。
+    # ⚠ 给已部署的 napcat 补这一段必须**重建容器**才生效 —— 那有可能要重新扫码登录，
+    #   所以拿到老部署上时：新装的照配，已经跑着的别动（或者自己承担重扫风险）。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       # 容器内 Linux QQ 的运行用户，需与挂载目录属主一致
       - NAPCAT_UID=${NAPCAT_UID:-1000}
@@ -49,6 +57,13 @@ services:
     image: qqchat-agent:latest
     container_name: qqchat-bot
     restart: unless-stopped
+    # 日志上限：日志只在 /data/logs 里自己轮转，但 docker 也会再收一份 stdout，
+    # 小硬盘上不设上限迟早吃满（部署机实测磁盘 90%）。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - napcat
     environment:

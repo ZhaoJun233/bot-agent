@@ -61,7 +61,10 @@ VOLUME ["/data"]
 # 8080=健康检查；3001=反向 WS 模式下机器人监听协议端连入
 EXPOSE 8080 3001
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD ["dotnet", "/app/QQChatAgent.Headless.dll", "--health"]
+# 健康探测：bash 的 /dev/tcp 直连面板端口（零额外进程内存）。
+# 原来是 `dotnet QQChatAgent.Headless.dll --health`：每 30 秒冷启动一遍 .NET 运行时，
+# 在 1 核小机器上是白白浪费（改用产物式镜像 Dockerfile.app 的部署机尤其明显）。
+HEALTHCHECK --interval=60s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${QQCHAT_HEALTH_PORT:-8080} && printf 'GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' >&3 && head -n 1 <&3 | grep -q '200'"]
 
 ENTRYPOINT ["dotnet", "/app/QQChatAgent.Headless.dll"]

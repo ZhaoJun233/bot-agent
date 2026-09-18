@@ -27,8 +27,10 @@ ENV DOTNET_EnableDiagnostics=0 \
     DOTNET_TieredPGO=1 \
     TZ=Asia/Shanghai
 
-# 镜像里没有 curl，用机器人自带的健康探测（探 127.0.0.1:$QQCHAT_HEALTH_PORT/healthz）
-HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-    CMD ["dotnet", "QQChatAgent.Headless.dll", "--health"]
+# 镜像里没有 curl，用 bash 的 /dev/tcp 直连面板端口探活：
+#   以前是 `dotnet QQChatAgent.Headless.dll --health` —— 每 30 秒把一个完整的 .NET 运行时冷启动一遍
+#   （~40MB RSS 尖峰）。部署机只有 1 核，健康探测不该比业务还贵；/dev/tcp 零额外内存。
+HEALTHCHECK --interval=60s --timeout=5s --start-period=25s --retries=3 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${QQCHAT_HEALTH_PORT:-8080} && printf 'GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' >&3 && head -n 1 <&3 | grep -q '200'"]
 
 ENTRYPOINT ["dotnet", "QQChatAgent.Headless.dll"]
