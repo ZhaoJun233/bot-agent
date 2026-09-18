@@ -35,7 +35,7 @@ public sealed class AppSettings
     /// <summary>面板里改过的模型名；空 = 用环境变量 QQCHAT_MODEL。</summary>
     public string? ModelOverride { get; set; }
 
-    /// <summary>面板里填的 API Key（**不落 settings.json**，单独存 data/secrets.json，文件权限 600）。</summary>
+    /// <summary>面板里填的 API Key（**不落 settings.json**，单独存 secrets 表，库文件权限 600）。</summary>
     [JsonIgnore]
     public string? ApiKeyOverride { get; set; }
 
@@ -515,9 +515,15 @@ public sealed class AppSettings
     /// 为什么单独给一个：agent 的请求又长又频繁，往往想单独指一个小模型/便宜网关（号主 2026-09-17 要求）。</summary>
     public string AgentServerBaseUrl { get; set; } = string.Empty;
 
-    /// <summary>服务器内置 agent 专用的密钥（空 = 用聊天那个）。环境变量专属，不落盘。</summary>
+    /// <summary>服务器内置 agent 专用的密钥（空 = 用聊天那个）。不落盘：只从 QQCHAT_AGENT_SERVER_KEY
+    /// 或面板（存 secrets 表）来。</summary>
     [JsonIgnore]
     public string AgentServerApiKey { get; set; } = string.Empty;
+
+    /// <summary>面板里填过的服务器 agent 密钥（**值本身**存在 secrets 表，这里只记“面板设过”这件事，
+    /// 用来算来源、并在清空后回退环境变量）。[JsonIgnore]：绝不进 settings.json。</summary>
+    [JsonIgnore]
+    public string? AgentServerApiKeyOverride { get; set; }
 
     /// <summary>服务器内置 agent 开哪些工具（bash,read,write,fetch；空 = 全开）。</summary>
     public string AgentServerTools { get; set; } = string.Empty;

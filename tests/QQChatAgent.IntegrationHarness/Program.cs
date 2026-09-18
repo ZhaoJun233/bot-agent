@@ -107,6 +107,7 @@ public static partial class Program
         await Scenario("s34", RunServerAgentScenarioAsync);
         await Scenario("s35", RunHealthReportScenarioAsync);
         await Scenario("s36", RunPrivacySettingsScenarioAsync);
+        await Scenario("s37", RunAgentServerKeyScenarioAsync);
         }
         catch (Exception ex)
         {

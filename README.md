@@ -87,7 +87,7 @@ NapCat 容器 ── OneBot v11 正向 WS ──┐
 
 | 文档 | 内容 |
 | --- | --- |
-| [src/QQChatAgent.Headless/README.md](src/QQChatAgent.Headless/README.md) | **部署与运维**：环境变量清单、数据目录、面板使用、故障排查、与上游桌面版的差异 |
+| [src/QQChatAgent.Headless/README.md](src/QQChatAgent.Headless/README.md) | **部署与运维**：环境变量清单、数据目录、面板使用、故障排查、与上游桌面版（WinUI，已停止维护）的差异 |
 | [.env.example](.env.example) | 全部可配置项与说明（含 Docker secrets 用法） |
 
 ## 🧪 测试

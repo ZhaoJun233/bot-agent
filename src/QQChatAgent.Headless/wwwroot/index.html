@@ -668,6 +668,12 @@
             </div>
             <select id="agentServerModelPick" style="display:none;margin-top:6px"></select>
 
+        <div class="field">
+          <label>服务器 agent 的密钥<span class="hint" id="agentServerKeySrc"></span></label>
+          <input type="password" id="setAgentServerKey" placeholder="填新密钥；留空 = 不改（清除请点右侧按钮）" autocomplete="new-password" />
+          <button class="ghost-btn inline" id="clearAgentServerKey" type="button">清除密钥</button>
+        </div>
+
             <div class="field">
                 <label>外部设备用的模型<span class="hint">从设备的 pi 模型列表里选（机器人在线时拉取）</span></label>
                 <div class="sticker-actions" style="margin:0">

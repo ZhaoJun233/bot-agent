@@ -13,6 +13,7 @@ public sealed class MockOpenAi : IDisposable
 {
     private readonly HttpListener _listener = new();
     private readonly List<JsonObject> _requests = new();
+    private string? _lastAuthorization;
     private readonly object _gate = new();
     private readonly Queue<string> _scriptedReplies = new();
     private readonly Queue<string> _curationReplies = new();
@@ -47,6 +48,18 @@ public sealed class MockOpenAi : IDisposable
             lock (_gate)
             {
                 return _requests.ToArray();
+            }
+        }
+    }
+
+    /// <summary>最近一次带 Authorization 的请求发的那个头（服务器 agent 用哪把密钥，就靠它钉住）。</summary>
+    public string? LastAuthorization
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastAuthorization;
             }
         }
     }
@@ -305,9 +318,14 @@ public sealed class MockOpenAi : IDisposable
 
         if (payload is not null)
         {
+            var authorization = context.Request.Headers["Authorization"];
             lock (_gate)
             {
                 _requests.Add(payload);
+                if (!string.IsNullOrWhiteSpace(authorization))
+                {
+                    _lastAuthorization = authorization;
+                }
             }
         }
 

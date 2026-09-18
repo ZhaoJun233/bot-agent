@@ -1096,6 +1096,9 @@ public sealed class WebUiServer : IDisposable
             ["serverBaseUrl"] = _settings.AgentServerBaseUrl,
             ["serverModel"] = _settings.AgentServerModel,
             ["serverKeyConfigured"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKey),
+        ["serverKeySource"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKeyOverride)
+            ? "panel"
+            : (string.IsNullOrWhiteSpace(_settings.AgentServerApiKey) ? "none" : "env"),
             ["deviceModels"] = new JsonArray((bridge?.DeviceModels() ?? Array.Empty<string>())
                 .Select(m => (JsonNode)JsonValue.Create(m)!).ToArray()),
             ["deviceList"] = BuildDeviceListPayload(),
@@ -1298,6 +1301,29 @@ public sealed class WebUiServer : IDisposable
             {
                 s.AgentServerBaseUrl = v;
             }
+        }
+        // 服务器 agent 自己的密钥：与聊天那把同规矩 —— 存 secrets 表、不回显明文、留空 = 不改
+        // （要清就去点“清除密钥”，那边有二次确认）
+        if (body["agentServerKey"] is JsonValue agentKeyValue && agentKeyValue.TryGetValue<string>(out var rawAgentKey))
+        {
+            var newAgentKey = (rawAgentKey ?? string.Empty).Trim();
+            if (newAgentKey.Length == 0)
+            {
+                SecretsStore.SaveAgentServerKey(null);
+                s.AgentServerApiKeyOverride = null;
+                s.AgentServerApiKey = (Environment.GetEnvironmentVariable("QQCHAT_AGENT_SERVER_KEY") ?? string.Empty).Trim();
+            }
+            else
+            {
+                SecretsStore.SaveAgentServerKey(newAgentKey);
+                s.AgentServerApiKeyOverride = newAgentKey;
+                s.AgentServerApiKey = newAgentKey;
+            }
+
+            // 密钥只记“变了”，绝不回显明文（日志会被贴出来排障）
+            FileLog.Write("Web", newAgentKey.Length == 0
+                ? "面板清空了服务器 agent 的密钥（回退环境变量）"
+                : "面板更新了服务器 agent 的密钥（已掩码保存）");
         }
         if (body["agentServerWorkDir"] is JsonNode asw) s.AgentServerWorkDir = (asw.GetValue<string>() ?? "/data").Trim();
         if (body["agentServerMaxSteps"] is JsonNode ass) s.AgentServerMaxSteps = Math.Clamp(ass.GetValue<int>(), 1, 30);
@@ -1734,6 +1760,12 @@ public sealed class WebUiServer : IDisposable
         ["agentServerModel"] = s.AgentServerModel,
         ["agentModel"] = s.AgentModel,
         ["agentServerBaseUrl"] = s.AgentServerBaseUrl,
+        // 服务器 agent 的密钥：只给“设没设 / 掩码 / 来源”，不回显明文（与聊天那把 key 同样的规矩）
+        ["agentServerKeySet"] = !string.IsNullOrWhiteSpace(s.AgentServerApiKey),
+        ["agentServerKeyMasked"] = Mask(s.AgentServerApiKey),
+        ["agentServerKeySource"] = !string.IsNullOrWhiteSpace(s.AgentServerApiKeyOverride)
+            ? "panel"
+            : (string.IsNullOrWhiteSpace(s.AgentServerApiKey) ? "none" : "env"),
         ["agentDevices"] = s.AgentDevices,
         ["enableAgentMask"] = s.AgentMaskSensitive,
         ["agentPrompt"] = s.AgentPrompt,

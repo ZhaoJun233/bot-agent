@@ -30,6 +30,12 @@ public static class SecretsStore
     /// <summary>写入（空值 = 删掉该条）。返回是否成功。</summary>
     public static bool SaveApiKey(string? apiKey) => Save("apiKey", apiKey);
 
+    /// <summary>读取面板里填过的服务器 agent 专用密钥；没有/读失败返回 null（调用方回退环境变量）。</summary>
+    public static string? LoadAgentServerKey() => Load("agentServerKey");
+
+    /// <summary>保存服务器 agent 专用密钥（空值 = 清掉，回退环境变量）。</summary>
+    public static bool SaveAgentServerKey(string? apiKey) => Save("agentServerKey", apiKey);
+
     /// <summary>网易云登录态（扫码成功后由面板那条链路存下来）；没有就回退环境变量。</summary>
     public static string? LoadNeteaseCookie() => Load("neteaseCookie");
 

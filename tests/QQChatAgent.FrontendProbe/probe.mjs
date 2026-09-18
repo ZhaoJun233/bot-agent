@@ -400,7 +400,10 @@ const RUNTIME = {
   stickerCooldownSeconds: 120, enablePoke: true, pokeCooldownSeconds: 45, mood: "", moodTtlSeconds: 7200,
   healthReportEnabled: true, healthReportTime: "18:00", healthReportTargets: "10001",
   // 脱敏开关 + Agent 附加提示词（面板可改；默认那份是隐私红线）
-  enableAgentMask: true, agentPrompt: "【隐私红线】不要读取群聊正文"
+  enableAgentMask: true, agentPrompt: "【隐私红线】不要读取群聊正文",
+  // 服务器 agent 的接口/模型/密钥状态（密钥只给掩码与来源，永不下发明文）
+  agentServerBaseUrl: "https://api.example.com/v1", serverModel: "agent-small",
+  agentServerKeySet: true, agentServerKeyMasked: "sk-a****", agentServerKeySource: "panel"
 };
 const ENV = {
   modelBaseUrl: "http://x/v1", modelBaseUrlSource: "env",
@@ -731,6 +734,72 @@ check("★ 点「预览」真的 POST 了 /api/health-report（mode=preview）",
 check("★ 预览正文被写进卡片（发出去之前能先看一眼）",
   (document.getElementById("healthReportOut")?.textContent || "").includes("服务器健康日报"),
   (document.getElementById("healthReportOut")?.textContent || "(空)").slice(0, 80));
+
+/* ─────────── 4) 服务器 agent 自己的密钥（面板可填，但不回显） ─────────── */
+
+console.log("\n▶ 动态：服务器 agent 的密钥（填 / 不改 / 清除，且永不下发明文）");
+
+const agentKeyInput = document.getElementById("setAgentServerKey");
+check("★ 服务器 agent 卡片有密钥输入框（password）——以前只能在 .env 里改 QQCHAT_AGENT_SERVER_KEY",
+  html.includes('type="password" id="setAgentServerKey"') && !!agentKeyInput && !!document.getElementById("clearAgentServerKey"),
+  agentKeyInput ? "输入框在，但 type/id 不是 password 直写" : "输入框不存在");
+check("★ 已配密钥时输入框不回显明文，只把掩码写进 placeholder",
+  String(agentKeyInput.value) === "" && String(agentKeyInput.placeholder).includes("sk-a****"),
+  `value=${JSON.stringify(agentKeyInput.value)} placeholder=${JSON.stringify(agentKeyInput.placeholder)}`);
+check("来源提示写明“来自面板”（与聊天那把 key 同样措辞）",
+  String(document.getElementById("agentServerKeySrc").textContent).includes("来自面板"),
+  document.getElementById("agentServerKeySrc").textContent);
+
+// 什么都不填直接保存 → 不能把已存的密钥抹掉（payload 里连字段都不能有）
+{
+  const b = calls.length;
+  fire("setAgentServerKey", "input", { target: { id: "setAgentServerKey" } });
+  try { await saveClicks[0]({}); } catch (e) { /* 上面已覆盖 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const has = post && JSON.parse(post.body).agentServerKey !== undefined;
+  check("★ 密钥框留空时保存**不带** agentServerKey（否则每保存一次就把已存的密钥抹掉）",
+    !!post && !has, post ? post.body.slice(0, 160) : "没发出 POST");
+}
+
+// 填了密钥 → 保存必须原值发出
+{
+  agentKeyInput.value = "sk-agent-test-123";
+  const b = calls.length;
+  fire("setAgentServerKey", "input", { target: { id: "setAgentServerKey" } });
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body).agentServerKey : undefined;
+  check("★ 填了密钥后保存发的是原值（服务端存 secrets 表）", sent === "sk-agent-test-123",
+    `发出=${JSON.stringify(sent)}`);
+  check("保存成功后输入框自己清空（不回显）", String(agentKeyInput.value) === "",
+    JSON.stringify(agentKeyInput.value));
+}
+
+// 点“清除密钥”→ 必须显式发空串（留空本身 = 不改，两者不能混）
+{
+  fire("clearAgentServerKey", "click");
+  check("★ 点「清除密钥」后提示“待清除”（跟聊天那把一样要二次确认）",
+    String(document.getElementById("agentServerKeySrc").textContent).includes("待清除"),
+    document.getElementById("agentServerKeySrc").textContent);
+  const b = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const sent = post ? JSON.parse(post.body).agentServerKey : undefined;
+  check("★ 清除时显式发空串（服务端删掉该密钥、回退环境变量 / 聊天那把）", sent === "",
+    `发出=${JSON.stringify(sent)}`);
+
+  // 清除后同一轮里再保存一次，不能再重复发空串（标记要归位）
+  const b2 = calls.length;
+  try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
+  await new Promise((r) => setTimeout(r, 250));
+  const post2 = calls.slice(b2).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  check("清除标记归位：下一轮保存不再重复发空串",
+    !!post2 && JSON.parse(post2.body).agentServerKey === undefined,
+    post2 ? post2.body.slice(0, 160) : "没发出 POST");
+}
 
 /* ─────────── 4) 未保存修改的提示与拦截 ─────────── */
 

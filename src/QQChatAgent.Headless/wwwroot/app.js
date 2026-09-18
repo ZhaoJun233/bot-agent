@@ -824,6 +824,8 @@
 
   // 用户点了“清除密钥”：下次保存时把密钥清掉（输入框留空默认是“不改”，两者必须区分）
   let pendingApiKeyClear = false;
+  /// 服务器 agent 那把 key 的“待清除”标记：留空 = 不改，清除必须显式点按钮
+  let pendingAgentServerKeyClear = false;
 
   function markSettingsDirty() {
     // 改动序号先加：保存请求在飞的时候用户又改了东西，这次结果就不能再回填表单
@@ -1070,7 +1072,7 @@
     $("baseUrlSrc").textContent = e.modelBaseUrlSource === "panel" ? "来自面板（保存后立即生效）" : "来自环境变量";
     $("modelSrc").textContent = e.modelSource === "panel" ? "来自面板（保存后立即生效）" : "来自环境变量";
     $("apiKeySrc").textContent = e.apiKeySource === "panel"
-      ? "来自面板（存 data/secrets.json，权限 600）"
+      ? "来自面板（存服务端密钥库，不回显）"
       : e.apiKeySource === "env" ? "来自环境变量" : "未配置";
     $("setProtocol").value = e.oneBotProtocol || "";
     $("setAddress").value = e.oneBotAddress || "";
@@ -1170,6 +1172,15 @@
     $("setAgentServerCommandTimeoutSeconds").value = r.agentServerCommandTimeoutSeconds;
     $("setAgentServerBaseUrl").value = r.agentServerBaseUrl || "";
     $("setAgentServerModel").value = r.serverModel || "";
+    // 服务器 agent 的密钥同理：只显示掩码与来源，永远不回显明文
+    $("setAgentServerKey").value = "";
+    $("setAgentServerKey").placeholder = r.agentServerKeySet
+      ? r.agentServerKeyMasked + "（已设置，留空即不修改）"
+      : "还没配（留空 = 用聊天那把）；单独填一个就只给 agent 用";
+    $("agentServerKeySrc").textContent = r.agentServerKeySource === "panel"
+      ? "来自面板（存服务端密钥库，不回显）"
+      : r.agentServerKeySource === "env" ? "来自环境变量" : "未配置（会用聊天那把密钥）";
+    pendingAgentServerKeyClear = false;
     fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
     $("setAgentModel").value = r.agentModel || "";
 
@@ -1341,6 +1352,11 @@
     if (typedKey) payload.apiKey = typedKey;
     else if (pendingApiKeyClear) payload.apiKey = "";
 
+    // 服务器 agent 的密钥：同样的规矩（留空 = 不改；清除要显式点按钮，二次确认在那边）
+    const typedAgentKey = $("setAgentServerKey").value.trim();
+    if (typedAgentKey) payload.agentServerKey = typedAgentKey;
+    else if (pendingAgentServerKeyClear) payload.agentServerKey = "";
+
     const btn = $("saveBtn");
     btn.disabled = true;
     const deviceTableSkippedHere = deviceTableSkipped;
@@ -1370,6 +1386,8 @@
       // 密钥保存/清除后清空输入框（不回显），并把“待清除”标记归位
       $("setApiKey").value = "";
       pendingApiKeyClear = false;
+      $("setAgentServerKey").value = "";
+      pendingAgentServerKeyClear = false;
       // 保存期间还有新编辑 → 未保存标记要留着（清掉就等于告诉他“已经存下了”）
       if (!lateEdits) clearSettingsDirty();
       clearTimeout(bar._t);
@@ -1704,6 +1722,16 @@
       $("apiKeySrc").textContent = "待清除（点保存后生效）";
       markSettingsDirty();
       toast("点“保存设置”后生效（会回退到环境变量里的密钥）");
+    });
+
+    // 清除服务器 agent 的密钥：同样要二次确认（清掉就回退到聊天那把 key）
+    $("clearAgentServerKey").addEventListener("click", () => {
+      if (!state.settingsLoaded) { toast("设置还没加载成功，请刷新页面后重试"); return; }
+      pendingAgentServerKeyClear = true;
+      $("setAgentServerKey").value = "";
+      $("agentServerKeySrc").textContent = "待清除（点保存后生效）";
+      markSettingsDirty();
+      toast("点“保存设置”后生效（会回退到环境变量 / 聊天那把密钥）");
     });
 
     // 任何改动都标记为“未保存”（主题除外：它只存 localStorage，不进保存请求）

@@ -290,6 +290,7 @@ public static class BotConfig
     {
         SecretsStore.Init(AppPaths.RuntimeRoot);
         s.ApiKeyOverride ??= SecretsStore.LoadApiKey();
+        s.AgentServerApiKeyOverride ??= SecretsStore.LoadAgentServerKey();
 
         // 网易云登录态：面板扫码存下来的优先于环境变量（以前只活在自建 API 容器内存里，容器一重建就没了）
         if (SecretsStore.LoadNeteaseCookie() is { Length: > 0 } storedCookie)
@@ -329,6 +330,17 @@ public static class BotConfig
             }
 
             s.ApiKey = s.ApiKeyOverride!.Trim();
+        }
+
+        // 服务器 agent 的密钥同理：面板填过就以面板为准（以前只能改 .env 重启，2026-09-18 补上面板入口）
+        if (!string.IsNullOrWhiteSpace(s.AgentServerApiKeyOverride))
+        {
+            if (!string.IsNullOrWhiteSpace(Secret("QQCHAT_AGENT_SERVER_KEY")))
+            {
+                PanelOverriddenEnvVars.Add("QQCHAT_AGENT_SERVER_KEY → 面板里填的密钥");
+            }
+
+            s.AgentServerApiKey = s.AgentServerApiKeyOverride!.Trim();
         }
     }
 
