@@ -246,6 +246,12 @@
   let agentDevices = [];
   let agentDevicesLoaded = false;
 
+  // 保存设置后要顺手刷新的东西（由 bindUi() 注册进来；没注册就跳过）。
+  // 为什么用钩子：refreshAgentDevicesFull 定义在 bindUi() **内部**，而 saveSettings() 在外层 ——
+  // 直接 `await refreshAgentDevicesFull()` 就是 ReferenceError，被 catch 成“保存失败”
+  // （实际上服务器那边已经存上了，报错完全指错方向；实测踩过）。
+  let afterSettingsSaved = null;
+
   function convSignatureOf(items) {
     return items.map((c) =>
       `${c.key}|${c.name}|${c.preview}|${c.unread}|${c.thinking ? 1 : 0}|${c.lastTime}`
@@ -1259,9 +1265,13 @@
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
       state.aiMode = data.runtime.aiModeEnabled;
       renderAiMode();
-      // 设备表按服务器实际状态重画：改完目录/模型后，那行“目录 …”提示与输入框都跟着新值走
-      // （以前保存完不刷新，看着就像“改了没用”）。
-      await refreshAgentDevicesFull();
+      // 设备表按服务器实际状态重画：改完目录/模型后，那行“目录 …”提示与输入框都跟着新值走。
+      // 单独兜住：刷新失败不影响“保存成功”这个事实（否则会把刷新的锅扣在保存上）。
+      try {
+        if (afterSettingsSaved) await afterSettingsSaved();
+      } catch (e) {
+        console.warn("保存后刷新设备表失败：", e);
+      }
       const bar = $("saveBar");
       bar.hidden = false;
       $("saveBarText").textContent = "设置已保存并立即生效（会写入 settings.json，重启不回滚）";
@@ -1939,6 +1949,9 @@
         return null;
       }
     }
+
+    // 注册给 saveSettings()：保存成功后刷新设备表（跨作用域只能这样搭桥，不能直接调用）
+    afterSettingsSaved = refreshAgentDevicesFull;
 
     $("agentDeviceAdd").addEventListener("click", () => {
       const name = prompt("设备名（本机桥握手时上报的 host 名，例如 ZHAOSPC；现在也可以随便写，接上来就会匹配）：");

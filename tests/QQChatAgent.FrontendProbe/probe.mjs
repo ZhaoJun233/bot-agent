@@ -264,6 +264,13 @@ check(
   topLevelDeviceLet,
   "agentDevices / agentDevicesLoaded 必须是顶层 let（缩进两格），不能在 bindUi() 内部"
 );
+// 同一类坑：saveSettings() 在外层，bindUi() 内部的函数它看不见。
+// 直接调 refreshAgentDevicesFull() 会 ReferenceError → 被 catch 成“保存失败”（其实已保存）。
+check(
+  "★ saveSettings 不直接调用 bindUi() 内部的函数（要走走 afterSettingsSaved 钩子）",
+  !/refreshAgentDevicesFull\s*\(/.test(saveBody) && /afterSettingsSaved/.test(saveBody),
+  "saveSettings 里直接引用了 refreshAgentDevicesFull（定义在 bindUi 内部）—— 请改成 afterSettingsSaved 钩子"
+);
 const notFilled = saveFields.filter((f) => !filledIds.has(f.id));
 check(
   `待保存的 ${saveFields.length} 个字段全部在 loadSettings 中回填`,
@@ -613,14 +620,24 @@ check(
   wrongFill.length === 0,
   wrongFill.map((f) => `${f.key}: 表单=${JSON.stringify(readField(f))} 服务器=${JSON.stringify(RUNTIME[f.key])}`).join("; ")
 );
-
 // 保存
 const before = calls.length;
+// 先把成功提示清空：否则它可能是上游某一步留下的旧值，这条检查就形同虚设
+const barEl = document.getElementById("saveBarText");
+if (barEl) barEl.textContent = "";
 try { await saveClicks[0]({}); } catch (e) { console.log("    （保存点击抛错：" + (e && e.message) + "）"); }
 await new Promise((r) => setTimeout(r, 300));
 
 const saveCall = calls.slice(before).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
 check("点击保存确实发出了 POST /api/settings", !!saveCall);
+
+// 保存流程不能自己抛错：曾经 refreshAgentDevicesFull 跨作用域调用 → ReferenceError，
+// 被 catch 成“保存失败”（服务器其实存上了），靠 saveBarText 这句话也能看出来。
+check(
+  "★ 点保存后提示的是“已保存”（不是“保存失败”）",
+  String(document.getElementById("saveBarText")?.textContent || "").includes("已保存"),
+  String(document.getElementById("saveBarText")?.textContent || "(保存提示为空 = 保存过程抛错了)")
+);
 
 if (saveCall) {
   const payload = JSON.parse(saveCall.body);
