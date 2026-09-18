@@ -73,6 +73,38 @@ public sealed class AgentBridgeServer
     {
         _settings = settings;
         _log = log;
+        _heartbeat = new Timer(_ => PingAll(), null,
+            TimeSpan.FromSeconds(HeartbeatSeconds), TimeSpan.FromSeconds(HeartbeatSeconds));
+    }
+
+    // ---- 服务端心跳：每 30 秒给每台在线桥发一个 ping ----
+    // 为什么要（2026-09-18 实际踩到：“一键连接没连上本机”）：
+    //   机器人容器一重启，桥那条 socket 就废了；但本机那条 ssh 转发还挂着，桥侧的 recv 既不报错、
+    //   也等不到数据（黑洞连接），于是桥以为自己还在线、一直不回连，面板就一直显示离线。
+    //   服务端主动 ping 之后：桥那边只要 ~90 秒收不到任何东西就强制重连（见 pi-bridge.py 主循环）。
+    private const int HeartbeatSeconds = 30;
+    private readonly Timer? _heartbeat;
+
+    /// <summary>给每台在线桥发一个 ping（桥回 pong；桥据此判断“我是不是还活着”）。</summary>
+    private void PingAll()
+    {
+        try
+        {
+            foreach (var conn in _bridges.Values)
+            {
+                if (conn.Socket.State != WebSocketState.Open)
+                {
+                    continue;
+                }
+
+                var bytes = Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "ping" }.ToJsonString());
+                _ = SendAsync(conn.Socket, bytes);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log($"桥心跳出错: {ex.GetType().Name} {ex.Message}");
+        }
     }
 
     /// <summary>桥是否在线（任意一台）。</summary>

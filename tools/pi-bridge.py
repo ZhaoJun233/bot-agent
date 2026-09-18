@@ -523,6 +523,7 @@ def main() -> int:
     runner = TaskRunner(send_json=lambda obj: None, pi_argv=pi_argv, workdir=args.workdir, pi_display=args.pi)
 
     backoff = 3
+    failed_connects = 0
     while True:
         tunnel.ensure()
         url = args.url or f"ws://127.0.0.1:{args.local_port}/agent-bridge"
@@ -533,11 +534,17 @@ def main() -> int:
         try:
             ws = WsClient(host, port, path)
         except Exception as exc:                                # noqa: BLE001
+            failed_connects += 1
+            # 一连几次都连不上：多半是那条 ssh 转发也僵了（进程还在、却转不出去）—— 重开它
+            if failed_connects >= 4 and tunnel.enabled:
+                log(f"连续 {failed_connects} 次连不上 → 重开 ssh 转发")
+                tunnel.stop()
             log(f"连接失败（{exc}）→ {backoff}s 后重试")
             time.sleep(backoff)
             backoff = min(backoff * 2, 30)
             continue
 
+        failed_connects = 0
         backoff = 3
         runner.send_json = ws.send_json
         ws.send_json({
@@ -551,16 +558,32 @@ def main() -> int:
             "version": 1,
         })
         log("已连上机器人（等 // 命令）")
+        last_rx = time.time()                                   # 最近一次“真的收到东西”的时刻
 
         try:
             while True:
                 try:
                     opcode, payload = ws.recv(timeout=30)
                 except (TimeoutError, socket.timeout):
-                    ws.send_json({"type": "pong"})              # 心跳：顺便探测连接还活着
+                    # 30 秒没消息分两种：
+                    #   ① 只是闲着（正常）—— 回个 pong 当心跳继续；
+                    #   ② 连接已经成了黑洞（机器人容器重启过、ssh 隧道还挂着但那头 socket 没了）——
+                    #      recv 永远不会报错，桥就一直以为自己在线（面板却显示离线）。
+                    # 怎么分辨：服务端每 30 秒 ping 一次（AgentBridgeServer.PingAll），所以
+                    # ~90 秒静默基本就是死了 → 强制重连。
+                    if time.time() - last_rx > 90:
+                        log(f"{time.time() - last_rx:.0f} 秒没收到任何消息（连接大概已经断了）→ 强制重连")
+                        break
+                    try:
+                        ws.send_json({"type": "pong"})          # 心跳：顺便探测连接还活着
+                    except Exception:                           # noqa: BLE001
+                        log("心跳发不出去 → 强制重连")
+                        break
                     continue
                 except ConnectionError:
                     break
+
+                last_rx = time.time()
 
                 if opcode != 0x1:
                     continue
