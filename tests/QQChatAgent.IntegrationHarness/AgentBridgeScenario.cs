@@ -333,6 +333,19 @@ public static partial class Program
             perDevice["timeoutSec"]?.GetValue<int>() == 120,
             perDevice.ToJsonString());
 
+        // 状态里的工作目录也得跟着面板走：任务早就跟了，但面板上那行曾直接回显 hello 里的 cwd，
+        // 于是“在面板改了目录，状态里还是旧值”（号主报过）。cwd = 生效值；hostCwd = 桥自报的启动目录。
+        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        {
+            var st = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/status"))!;
+            var dev = (st["deviceList"] as JsonArray)?.FirstOrDefault(d => d?["name"]?.GetValue<string>() == "DESKTOP-TEST");
+            Check("★ 状态里的工作目录跟着面板走（配的是 E:/work，而不是桥自报的 E:/bot）",
+                st["cwd"]?.GetValue<string>() == "E:/work" &&
+                st["hostCwd"]?.GetValue<string>() == "E:/bot" &&
+                dev?["workdir"]?.GetValue<string>() == "E:/work",
+                st.ToJsonString());
+        }
+
         // 设备被面板关掉时：不派任务，并如实告诉群
         using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
         {

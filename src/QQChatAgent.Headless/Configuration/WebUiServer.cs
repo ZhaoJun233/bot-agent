@@ -1061,6 +1061,24 @@ public sealed class WebUiServer : IDisposable
         return node;
     }
 
+    /// <summary>
+    /// 真正生效的工作目录：面板给这台设备配的 → 全局默认 → 桥自报的启动目录。
+    /// 任务侧（AgentBridgeServer.BuildTask / 设备覆盖）用的是同一套优先级，这里保持一致。
+    /// </summary>
+    private string? EffectiveWorkDir()
+    {
+        var name = _agentBridge?.AnyBridge?.Name;
+        var device = string.IsNullOrWhiteSpace(name) ? null : _settings.DeviceConfigFor(name);
+        if (!string.IsNullOrWhiteSpace(device?.WorkDir))
+        {
+            return device!.WorkDir;
+        }
+
+        return string.IsNullOrWhiteSpace(_settings.AgentWorkDir)
+            ? _agentBridge?.AnyBridge?.Cwd
+            : _settings.AgentWorkDir;
+    }
+
     /// <summary>本机 agent 的状态（面板卡片 / 群里的 //status）。</summary>
     private JsonObject BuildAgentStatusPayload()
     {
@@ -1074,7 +1092,11 @@ public sealed class WebUiServer : IDisposable
             ["tokenConfigured"] = !string.IsNullOrWhiteSpace(_settings.AgentToken),
             ["connected"] = bridge?.Connected ?? false,
             ["host"] = bridge?.AnyBridge?.Name,
-            ["cwd"] = bridge?.AnyBridge?.Cwd,
+            // 工作目录要显示**真正生效**的那个（号主在面板里改了它，这里就得跟着变）：
+            // 面板给这台设备配的目录 → 全局默认目录 → 桥自报的启动目录。
+            // 任务本来就是按这个优先级跑的（BuildTask / per-device 覆盖），只有显示曾用过 hello 里的 cwd。
+            ["cwd"] = EffectiveWorkDir(),
+            ["hostCwd"] = bridge?.AnyBridge?.Cwd,
             ["pi"] = bridge?.AnyBridge?.Pi,
             ["devices"] = new JsonArray(bridge?.BridgeNames.Select(n => (JsonNode)JsonValue.Create(n)!).ToArray() ?? Array.Empty<JsonNode>()),
             ["serverAgent"] = _settings.EnableServerAgent,

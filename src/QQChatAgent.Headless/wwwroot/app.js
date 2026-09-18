@@ -239,6 +239,13 @@
   const convNodes = new Map();
   let convSignature = "";
 
+  // 外部设备表（面板里「外部设备」那张表）的**内存副本**：
+  //   · 设备表自己不在 DOM-id 那套表单字段里，所以保存时得单独把它拼进 payload（saveSettings 用）；
+  //   · 声明在外层作用域，因为填表的是 bindUi()、而读表的是 saveSettings() —— 各自在其他地方都看不见对方。
+  //   · loaded 这个标记是为了防“设备表没拉到 + 点保存 = 把设备配置写成空”。
+  let agentDevices = [];
+  let agentDevicesLoaded = false;
+
   function convSignatureOf(items) {
     return items.map((c) =>
       `${c.key}|${c.name}|${c.preview}|${c.unread}|${c.thinking ? 1 : 0}|${c.lastTime}`
@@ -1225,6 +1232,21 @@
       linkPreviewMax: Number($("setLinkPreviewMax").value)
     };
 
+    // 外部设备表：以前这个字段**根本没进保存请求** —— 面板里改了某台设备的模型/目录/工具/超时/启用，
+    // 点保存也白改（服务器那边还是旧值；号主报过“状态显示的工作目录被固定了”）。
+    // 只回写配置字段（online/cwd/pi/models 是服务器算出来的，不要捎回去）。
+    // 且**只有真的拉过一份设备表才回写**：否则一次「加载失败 + 保存」就会把设备配置清空。
+    if (agentDevicesLoaded) {
+      payload.agentDevices = JSON.stringify(agentDevices.map((d) => ({
+        name: d.name,
+        enable: !!d.enable,
+        model: d.model || "",
+        workdir: d.workdir || "",
+        tools: d.tools || "",
+        timeoutSec: Number(d.timeoutSec) || 0
+      })));
+    }
+
     // 密钥单独处理：输入框留空 = 不改（否则每次保存都会把已存的密钥抹掉）；
     // 想清除要点“清除密钥”按钮（那里有二次确认）。
     const typedKey = $("setApiKey").value.trim();
@@ -1237,6 +1259,9 @@
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
       state.aiMode = data.runtime.aiModeEnabled;
       renderAiMode();
+      // 设备表按服务器实际状态重画：改完目录/模型后，那行“目录 …”提示与输入框都跟着新值走
+      // （以前保存完不刷新，看着就像“改了没用”）。
+      await refreshAgentDevicesFull();
       const bar = $("saveBar");
       bar.hidden = false;
       $("saveBarText").textContent = "设置已保存并立即生效（会写入 settings.json，重启不回滚）";
@@ -1801,8 +1826,7 @@
 
     /* ─────────── 外部设备：一键连接 + 每设备配置 ─────────── */
 
-    /// 设备表内存里的那份配置（保存时序列化成 AgentDevices JSON）
-    let agentDevices = [];
+    // 设备表内存副本（声明在外层作用域：saveSettings 保存时要读它）
 
     function renderAgentDevices() {
       const box = $("agentDeviceTable");
@@ -1825,10 +1849,16 @@
           : "";
         const modelOptions = models.map((m) =>
           `<option value="${m}"${m === d.model ? " selected" : ""}>${m}</option>`).join("");
+        // 这一行显示的是**生效的**工作目录：面板里给这台设备配的优先（没配才看桥自报的启动目录），
+        // 两个不一样时都写出来 —— 否则在面板改了目录，这里还挂着旧值，看着像没保存。
+        const dirShown = d.workdir || d.cwd || "";
+        const dirHint = d.workdir && d.cwd && d.workdir !== d.cwd
+          ? ` · 目录 ${d.workdir}（桥自报 ${d.cwd}）`
+          : dirShown ? ` · 目录 ${dirShown}` : "";
         return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <b>${d.name}</b>
-            <span class="hint">${online}${d.pi ? ` · pi ${d.pi}` : ""}${d.cwd ? ` · ${d.cwd}` : ""}</span>
+            <span class="hint">${online}${d.pi ? ` · pi ${d.pi}` : ""}${dirHint}</span>
             <label class="switch-row" style="padding:0"><input type="checkbox" data-dev-enable="${i}"${d.enable ? " checked" : ""} /><span class="switch"></span><span class="hint">启用</span></label>
             <button class="ghost-btn" data-dev-toggle="${i}">${d.online ? "断开" : "重连"}</button>
             <button class="ghost-btn" data-dev-del="${i}">删除</button>
@@ -1900,6 +1930,7 @@
       try {
         const r = await api("/api/agent/status");
         agentDevices = (r.deviceList || []).map((d) => ({ ...d }));
+        agentDevicesLoaded = true;
         renderAgentDevices();
         refreshAgentDevices(r.devices || []);
         return r;

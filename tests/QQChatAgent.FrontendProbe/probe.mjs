@@ -243,6 +243,27 @@ const loadBody = js.slice(js.indexOf("async function loadSettings"), js.indexOf(
 const filledIds = new Set([...loadBody.matchAll(/\$\("([A-Za-z0-9_]+)"\)\.(?:value|checked)\s*=/g)].map((m) => m[1]));
 
 check("能从 saveSettings 解析出待保存字段", saveFields.length > 0, `解析到 ${saveFields.length} 个`);
+
+// 设备表（模型/目录/工具/超时/启用）不在 DOM-id 那套字段里，单独盯一眼：
+// 曾经这条漏写 → 在面板里改设备配置点保存完全没用（服务器还是旧值，号主报过）。
+check(
+  "★ 保存请求带上设备表 agentDevices（没带 = 面板改设备配置白改）",
+  /payload\.agentDevices\s*=\s*JSON\.stringify\(\s*agentDevices/.test(saveBody),
+  "saveSettings 的 payload 里没有 agentDevices"
+);
+check(
+  "★ 设备表未拉取成功时不许回写（防止一次保存把设备配置清空）",
+  /if \(agentDevicesLoaded\)/.test(saveBody),
+  "回写 agentDevices 前必须先判断 agentDevicesLoaded"
+);
+// 设备表状态必须声明在**外层作用域**：填表在 bindUi() 里、读表在 saveSettings() 里，
+// 写在 bindUi 内部时 saveSettings 会直接 ReferenceError（实测踩过：保存按钮静默失效）。
+const topLevelDeviceLet = /^ {2}let agentDevices = \[\];$/m.test(js) && /^ {2}let agentDevicesLoaded = false;$/m.test(js);
+check(
+  "★ 设备表状态声明在外层作用域（写在 bindUi() 里 = 保存直接 ReferenceError）",
+  topLevelDeviceLet,
+  "agentDevices / agentDevicesLoaded 必须是顶层 let（缩进两格），不能在 bindUi() 内部"
+);
 const notFilled = saveFields.filter((f) => !filledIds.has(f.id));
 check(
   `待保存的 ${saveFields.length} 个字段全部在 loadSettings 中回填`,
@@ -595,7 +616,7 @@ check(
 
 // 保存
 const before = calls.length;
-try { await saveClicks[0]({}); } catch (e) { /* 由下面的断言体现 */ }
+try { await saveClicks[0]({}); } catch (e) { console.log("    （保存点击抛错：" + (e && e.message) + "）"); }
 await new Promise((r) => setTimeout(r, 300));
 
 const saveCall = calls.slice(before).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
@@ -603,8 +624,10 @@ check("点击保存确实发出了 POST /api/settings", !!saveCall);
 
 if (saveCall) {
   const payload = JSON.parse(saveCall.body);
-  check("payload 字段数与表单一致", Object.keys(payload).length === saveFields.length,
-    `${Object.keys(payload).length} vs ${saveFields.length}`);
+  // 设备表 agentDevices 是**额外**字段（不在 DOM-id 那套里），不算进“表单字段数”。
+  const declaredKeys = Object.keys(payload).filter((k) => k !== "agentDevices");
+  check("payload 字段数与表单一致（设备表算额外字段）", declaredKeys.length === saveFields.length,
+    `${declaredKeys.length} vs ${saveFields.length}`);
 
   // 核心不变式：**什么都不改直接保存，payload 必须与服务端当前值完全一致**。
   // 一旦有字段没被回填，它就会以 0/空/false 发回来 → 服务端把它压到最小值
