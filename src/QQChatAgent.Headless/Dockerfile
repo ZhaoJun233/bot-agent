@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # ══════════════════════════════════════════════════════════════
-#  QQ Chat Agent（Headless）—— 多阶段构建
+#  QQ Chat Agent（Headless）—— 多阶段构建（容器里现场编译源码）
 #  构建上下文必须是仓库根目录：
 #     docker build -f src/QQChatAgent.Headless/Dockerfile -t qqchat-agent .
+#
+#  ⚠ 内存小的机器（比如 1GB 的 VPS）**别用这个**：SDK + Roslyn 编译会把内存挤进 swap
+#    （实测：956MB 的部署机被撑到 swap 97%，而且构建完也不还）。那种机器用仓库根目录的
+#    `Dockerfile.app` —— 开发机先 `dotnet publish`，服务器只解压产物。
+#    取舍写在两个 Dockerfile 的头部注释里，照着用就行。
 # ══════════════════════════════════════════════════════════════
 
 # ---------- 构建阶段 ----------

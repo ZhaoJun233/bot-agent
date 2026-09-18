@@ -37,7 +37,7 @@ public sealed class MockOpenAi : IDisposable
     public int Port => _port;
 
     /// <summary>人为拖慢响应，用于可靠地测「触发消息与回复之间被插话」的引用行为。</summary>
-    public int ResponseDelayMs { get; init; }
+    public int ResponseDelayMs { get; set; }
 
     /// <summary>收到的请求体（已解析）。</summary>
     public IReadOnlyList<JsonObject> Requests

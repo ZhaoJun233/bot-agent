@@ -14,7 +14,29 @@ namespace QQChatAgent.Services.Agent;
 /// </summary>
 public sealed class OpenAiClient
 {
+    /// <summary>辅助调用（画像摘要 / 表情包审核 / 听歌 / 综结标题…）用的客户端：这些不该拖，60 秒拿不到就放弃。</summary>
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
+
+    /// <summary>
+    /// 聊天那次请求单独一个客户端，超时放宽（默认 120 秒，可用 <c>QQCHAT_MODEL_TIMEOUT_SECONDS</c> 覆盖）。
+    /// 为什么：上游是“思考型”模型 + 多账号网关，实测一次 12~40 秒起步，长上下文/带图更久；
+    /// 60 秒太紧 —— 群里出现过 <c>TaskCanceledException: 60 秒超时</c> 把一整轮回复丢掉（号主 11:32 截的图）。
+    /// 但也不能无限等（群里干等几分钟也是一种坏体验），所以配一次“重试 + 30 秒封顶”：
+    /// 第一次拿到就是拿到，真卡住了第二次 30 秒内给个结果（成功就用它，不成就丢掉这一轮）。
+    /// 辅助调用继续用 60 秒那个，免得网关抽风时把画像/审核也拖几分钟。
+    /// </summary>
+    private static readonly HttpClient ChatHttp = new() { Timeout = ModelTimeout() };
+
+    /// <summary>超时重试用的小预算（秒）：第一次已经等过一大截了，第二次不该再等满。</summary>
+    private const int TimeoutRetrySeconds = 30;
+
+    /// <summary>聊天超时（秒）：默认 120，环境变量可覆盖（测试用它把超时调短）。</summary>
+    private static TimeSpan ModelTimeout()
+    {
+        var raw = Environment.GetEnvironmentVariable("QQCHAT_MODEL_TIMEOUT_SECONDS");
+        var seconds = double.TryParse(raw, out var parsed) && parsed > 0 ? parsed : 120;
+        return TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 1800));
+    }
 
     // 每个客户端一个下载器实例（里面有缓存）：它要拿到“重新签发图片地址”的回调，不能做成静态的
     private readonly ImageDownloader _imageDownloader = new();
@@ -416,15 +438,51 @@ public sealed class OpenAiClient
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
 
-        // 一次 5xx/429 重试。
+        // 5xx/429 与**超时**各重试一次。
         // 为什么要：上游网关（多账号池网关之类）经常回 503 auth_unavailable / No capacity ——
         // 实测 17:28 连挨三次，每条都直接“模型请求失败”丢掉一次回复；晚 2 秒再问一次往往就能拿到。
-        // 只重试一次、且只对 5xx/429：不把已经慢的链路拖成双倍慢（4xx 是请求本身的问题，重试没意义）。
+        // 超时同理：号主 11:30 那次就是 60 秒到点被取消（当时超时写死 60 秒），其实再问一次经常能拿到。
+        // 只重试一次、且只对 5xx/429/超时：4xx 是请求本身的问题，重试没意义。
         HttpResponseMessage? response = null;
         string? failureDetail = null;
         for (var attempt = 0; ; attempt++)
         {
-            response = await Http.SendAsync(request, ct);
+            // 第二次尝试只给 30 秒（第一次已经等了一大截，卡住就早点放手）
+            using var retryBudget = attempt > 0
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            if (retryBudget is not null)
+            {
+                retryBudget.CancelAfter(TimeSpan.FromSeconds(TimeoutRetrySeconds));
+            }
+
+            var sendToken = retryBudget?.Token ?? ct;
+            try
+            {
+                response = await ChatHttp.SendAsync(request, sendToken);
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // 不是调用方取消的 = 超时（HttpClient 自己的，或者上面那个 30 秒预算）
+                response?.Dispose();
+                response = null;
+                var limit = attempt > 0 ? TimeoutRetrySeconds : (int)ChatHttp.Timeout.TotalSeconds;
+                failureDetail = $"模型请求超时（{limit} 秒没回应）";
+                if (attempt >= 1)
+                {
+                    break;
+                }
+
+                Services.FileLog.Write("Agent", $"模型请求超时（{limit} 秒）→ 2 秒后重试一次（这次最多等 {TimeoutRetrySeconds} 秒）");
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                request = new HttpRequestMessage(HttpMethod.Post, BuildUrl())
+                {
+                    Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+                };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
+                continue;
+            }
+
             if (response.IsSuccessStatusCode)
             {
                 break;

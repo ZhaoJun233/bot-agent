@@ -156,7 +156,10 @@ public static partial class Program
             ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SEGMENT_DELAY_MS"] = "10",
             ["QQCHAT_HEALTH_PORT"] = "18011",
-            ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1"
+            ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1",
+            // 号主 11:32 撞上的那个坑：聊天请求被 60 秒 HttpClient 超时砍掉、整轮丢掉。
+            // 这里把超时调成 4 秒（测试不必真等几分钟）：慢上游应该“退让重试一次”而不是直接丢。
+            ["QQCHAT_MODEL_TIMEOUT_SECONDS"] = "4"
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
@@ -345,6 +348,34 @@ public static partial class Program
         Check("★ 被拉黑的图不会反复重送（后续请求里那张图不再出现）",
             !openAi.Requests.Skip(reqsBeforeImg2).Any(r => r.ToJsonString().Contains("image_url")),
             $"后续请求 {openAi.Requests.Count - reqsBeforeImg2} 个，带 image_url 的 {openAi.Requests.Skip(reqsBeforeImg2).Count(r => r.ToJsonString().Contains("image_url"))} 个");
+
+        // ---- 慢上游超时（号主 11:32 截图：TaskCanceledException 60 秒超时 → 一整轮没了）----
+        // 现在：聊天超时改成 120 秒（可调）+ 超时也“退让重试一次（第二次 30 秒封顶）”。
+        // 测试里把超时调成 4 秒、让假上游慢 9 秒，验证“第一次超时 → 重试拿到回复”。
+        var sendsBeforeSlow = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
+        var reqsBeforeSlow = openAi.Requests.Count;
+        openAi.ResponseDelayMs = 9000;
+        // 排队两条：被超时干掉的那次会把第一条吃掉（MockOpenAi 是先取回复再延迟的）
+        openAi.EnqueueReply("""{"suitability": 90, "reply": "超时那次的无效回复"}""");
+        openAi.EnqueueReply("""{"suitability": 90, "reply": "慢也答上了"}""");
+        await protocol.SendGroupMessageAsync(99999, 20006, "老王", "@机器人 慢慢想", 7010, mentionBot: true, ct: cts.Token);
+        // 第一次请求一落到假上游就把延迟调回 0：模拟“第一次卡住、重试那下很快”（真上游换账号后常见）
+        await WaitUntilAsync(() => openAi.Requests.Count > reqsBeforeSlow, TimeSpan.FromSeconds(30));
+        openAi.ResponseDelayMs = 0;
+        await WaitUntilAsync(() => protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Skip(sendsBeforeSlow)
+            .Any(a => MessageText(a).Contains("慢也答上了")), TimeSpan.FromSeconds(120));
+        await Task.Delay(300);
+        Check("★ 上游超时时退让重试一次（不把这一轮直接丢掉）",
+            bot.OutputLines.Any(l => l.Contains("模型请求超时") && l.Contains("重试")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("超时")).TakeLast(2)));
+        Check("★ 重试拿到的回复真的发出去了",
+            protocol.ActionsReceived.Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Skip(sendsBeforeSlow).Any(a => MessageText(a).Contains("慢也答上了")) &&
+            openAi.Requests.Count > reqsBeforeSlow + 1,
+            $"这一轮发了 {openAi.Requests.Count - reqsBeforeSlow} 个请求；" +
+            string.Join(" | ", protocol.ActionsReceived.Skip(sendsBeforeSlow).Select(MessageText)));
 
         await bot.StopAsync();
     }
