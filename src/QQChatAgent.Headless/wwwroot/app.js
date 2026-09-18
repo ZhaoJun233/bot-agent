@@ -2133,7 +2133,7 @@
     $("agentSessionNew").addEventListener("click", async () => {
       const key = $("agentSessionChat").value;
       if (!key || key === "__all__") { toast("先在左边选一个具体的聊天（群/好友），再新建会话"); return; }
-      const name = prompt("新会话名字（可空 —— 空的话会用第一句话自动起标题）：", "") || "";
+      const name = prompt("新会话名字（可空 —— 空的话，跑完一轮会按内容自动总结标题）：", "") || "";
       const backend = ($("setAgentTargetMode").value === "server" || !$("setEnableHostAgent").checked) ? "server" : "host";
       try {
         const r = await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key, action: "new", name, backend }) });

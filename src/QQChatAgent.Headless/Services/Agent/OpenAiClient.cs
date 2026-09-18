@@ -1468,6 +1468,106 @@ public sealed class OpenAiClient
     }
 
     /// <summary>
+    /// 给一个 agent 会话综结标题（每轮跑完调一次；失败就返回 null —— 起名不能影响任务本身）。
+    /// 为什么要模型综结：用“第一句指令”当标题时，一个会话跑了十几轮之后标题还是那句开场白；
+    /// 号主要的是“根据上下文综结出这个会话在干什么”。提示词里带 `[会话标题]` 标记，
+    /// 测试的假上游靠它识别这类请求（不会把脚本回复吃掉）。
+    /// </summary>
+    public async Task<string?> SummarizeSessionTitleAsync(string digest, string? previousTitle, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(digest) || string.IsNullOrWhiteSpace(_settings.ApiKey))
+        {
+            return null;
+        }
+
+        try
+        {
+            var sb = new StringBuilder();
+            sb.Append("[会话标题] 你在给一段「主人（通过 QQ 使唤）× 编程 agent」的会话起标题。\n");
+            sb.Append("标题要从这段会话的**整体内容**综结出来：它在干什么活、干成了什么 —— 主人看一眼就知道“哦是这个会话”。\n");
+            sb.Append("要求：中文（除非全篇是英文术语）；8~16 个字；名词性短语；不要句号、不要引号、不要“会话/任务”这类废话前缀；\n");
+            sb.Append("多轮时综结主线，别只照抄最新那一句命令。\n");
+            sb.Append("只输出一行 JSON：{\"title\":\"...\"}。\n");
+            if (!string.IsNullOrWhiteSpace(previousTitle))
+            {
+                sb.Append("\n[现有标题]（内容没大变就沿用，别为改而改）\n").Append(previousTitle.Trim()).Append('\n');
+            }
+
+            var payload = new JsonObject
+            {
+                ["model"] = _settings.Model,
+                ["messages"] = new JsonArray
+                {
+                    new JsonObject { ["role"] = "system", ["content"] = sb.ToString() },
+                    new JsonObject { ["role"] = "user", ["content"] = "[会话脉]\n" + digest.Trim() }
+                },
+                ["max_tokens"] = 96,
+                ["temperature"] = 0.2
+            };
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, BuildUrl())
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
+
+            using var response = await Http.SendAsync(request, ct);
+            var json = await response.Content.ReadAsStringAsync(ct);
+            if (!response.IsSuccessStatusCode || !HasChoices(json))
+            {
+                Services.FileLog.Warn("Agent", $"[会话标题] 没拿到标题（HTTP {(int)response.StatusCode}），本次不改名");
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(json);
+            var contentNode = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content");
+            var raw = contentNode.ValueKind == JsonValueKind.Array
+                ? string.Concat(contentNode.EnumerateArray().Select(s => s.TryGetProperty("text", out var t) ? t.GetString() : null))
+                : contentNode.GetString();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return null;
+            }
+
+            var text = StripCodeFence(raw.Trim());
+            var start = text.IndexOf('{');
+            var end = text.LastIndexOf('}');
+            if (start >= 0 && end > start)
+            {
+                // 看着像 JSON 就只认 title 字段：万一模型没按格式回（或者假上游给了别的 JSON），
+                // 宁可不起名，也不要把一整条 JSON 当标题挂上去（实测就发生过，标题变成 {…}）。
+                using var parsed = JsonDocument.Parse(text[start..(end + 1)]);
+                if (parsed.RootElement.TryGetProperty("title", out var titleNode) && titleNode.ValueKind == JsonValueKind.String)
+                {
+                    text = titleNode.GetString() ?? string.Empty;
+                }
+                else
+                {
+                    Services.FileLog.Warn("Agent", $"[会话标题] 模型没给 title 字段，本次不改名：{Truncate(raw, 80)}");
+                    return null;
+                }
+            }
+
+            var title = text.Replace('\n', ' ').Replace('\r', ' ').Trim().Trim('"', '“', '”', '\'');
+            if (title.Length > 24)
+            {
+                title = title[..24];
+            }
+
+            return string.IsNullOrWhiteSpace(title) ? null : title;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Services.FileLog.Warn("Agent", $"[会话标题] 综结失败（不影响任务）：{ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 把一堆历史发言压缩成一段人物画像（长期记忆）。
     /// 与聊天请求共用同一个模型与端点，但走独立的并发闸门。
     /// </summary>

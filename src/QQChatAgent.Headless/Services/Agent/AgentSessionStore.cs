@@ -54,7 +54,7 @@ public sealed class AgentSessionStore
         public required string Id { get; init; }
         public string Name { get; set; } = "会话1";
 
-        /// <summary>名字是自动总结的（第一句话会给它起标题；手动改过就不动）。</summary>
+        /// <summary>名字是自动综结的（agent 每跑完一轮按上下文重新综结；手动改过就不动）。</summary>
         public bool AutoNamed { get; set; } = true;
 
         /// <summary>host = 外部设备上的 pi；server = 服务器内置工具循环。</summary>
@@ -135,7 +135,7 @@ public sealed class AgentSessionStore
             }
 
             var created = CreateLocked(sourceKey, chat, backend, backend == "server" ? "默认（服务器）" : "默认", null);
-            created.AutoNamed = true;   // 占位名字：第一句话应该能把它变成真标题
+            created.AutoNamed = true;   // 占位名字：跑完第一轮后会由模型综结出一个真标题（SummarizeSessionTitleAsync）
             chat.Current[backend] = created.Id;
             Save();
             return created;
@@ -397,25 +397,75 @@ public sealed class AgentSessionStore
         }
     }
 
-    /// <summary>第一次真的在某个会话里干活时，用那句提示词当标题（只覆盖自动名）。</summary>
-    public void TitleFromPrompt(string sourceKey, string sessionId, string prompt)
+    /// <summary>
+    /// 用**模型综结的标题**改名（只覆盖自动名）。
+    /// 与旧版 <see cref="TitleFromPrompt"/> 的区别：不再“哪句指令就说哪句”，
+    /// 而是每轮跑完把整段会话的内容综结成一个能认出“这个会话在干什么”的标题。
+    /// 手动改过名（AutoNamed=false）的会话不动。
+    /// </summary>
+    public bool SetAutoTitle(string sourceKey, string sessionId, string title)
     {
+        var clean = (title ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim().Trim('"', '“', '”', '\'');
+        if (clean.Length is 0 or > 24)
+        {
+            clean = clean.Length > 24 ? clean[..24] : string.Empty;
+        }
+
+        if (clean.Length == 0)
+        {
+            return false;
+        }
+
         lock (_gate)
         {
             if (FindSession(sourceKey, sessionId) is not { } session || !session.AutoNamed)
             {
-                return;
+                return false;
             }
 
-            session.Name = AutoTitle(prompt);
+            if (session.Name == clean)
+            {
+                return false;   // 没变就不写盘
+            }
+
+            session.Name = clean;
             session.UpdatedAt = DateTimeOffset.Now;
             Save();
+            return true;
         }
     }
 
     /// <summary>
-    /// 用任务的第一句话当标题：剔掉“帮我/看看/麻烦…”这类客套话，截到 16 字。
-    /// 为什么不用模型总结：起个能认出来的名字不值得多一次模型调用 + 多几秒延迟。
+    /// 给“起标题”准备一段会话脉：最近几轮干了什么（用户怎么说、agent 回了什么）。
+    /// 只取内容不取日志流水，长度也有上限 —— 起个名不值得把整段会话都幸上去。
+    /// </summary>
+    public string SessionDigest(string sourceKey, string sessionId, int maxRuns = 3)
+    {
+        lock (_gate)
+        {
+            if (FindSession(sourceKey, sessionId) is not { } session)
+            {
+                return string.Empty;
+            }
+
+            var runs = session.Runs.Where(r => !string.IsNullOrWhiteSpace(r.Prompt)).ToList();
+            var picked = runs.Count > maxRuns ? runs.Skip(runs.Count - maxRuns).ToList() : runs;
+            var sb = new System.Text.StringBuilder();
+            for (var i = 0; i < picked.Count; i++)
+            {
+                var r = picked[i];
+                sb.Append("第 ").Append(i + 1).Append(" 轮·用户：").Append(Shorten(r.Prompt, 200)).Append('\n');
+                var answer = r.Ok == null ? "（还在跑）" : Shorten(r.Result ?? string.Empty, 200);
+                sb.Append("第 ").Append(i + 1).Append(" 轮·结果：").Append(answer).Append('\n');
+            }
+
+            return sb.ToString().Trim();
+        }
+    }
+
+    /// <summary>
+    /// 用任务的第一句话当占位标题（面板新建、//import 这类场景）。
+    /// 真正的标题由 agent 跑完后的模型综结来定（见 SetAutoTitle）。
     /// </summary>
     public static string AutoTitle(string prompt)
     {

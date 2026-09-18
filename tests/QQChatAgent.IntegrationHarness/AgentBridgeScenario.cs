@@ -506,12 +506,27 @@ public static partial class Program
             help.Contains("//rename") && help.Contains("//del") && help.Contains("//stop") && help.Contains("//status"),
             help.Length > 400 ? help[..400] + "…" : help);
 
-        // 自动标题：//new 不带名字 → 第一句话成为标题
+        // 会话标题（号主 2026-09-18 的新要求）：
+        //   • 发指令**不**改名（旧版会把标题改成那条命令的前几个字，一个会话干多了就认不出来了）；
+        //   • 跑完一轮之后按**上下文内容**综结标题（这里让假上游给一个固定标题，验证真的走了这条路）。
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//new", 15071, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("已开新会话")), TimeSpan.FromSeconds(30));
         var tasksBeforeTitle = bridge.Tasks.Count;
+        var titleReqsBefore = openAi.TitleRequests;
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//帮我看看今天的报错日志", 15072, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => bridge.Tasks.Count > tasksBeforeTitle, TimeSpan.FromSeconds(30));
+
+        using (var httpMid = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            var mid = JsonNode.Parse(await httpMid.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"));
+            var midCurrent = mid?["sessions"]?.AsArray().FirstOrDefault(s => s!["current"]?.GetValue<bool>() == true);
+            Check("★ 发指令**不**会重命名会话（标题不会变成那条命令）",
+                midCurrent?["name"]?.GetValue<string>() != "帮我看看今天的报错日志" &&
+                midCurrent?["name"]?.GetValue<string>() != "今天的报错日志" &&
+                openAi.TitleRequests == titleReqsBefore,
+                $"当前会话标题=「{midCurrent?["name"]}」（综结请求数 {openAi.TitleRequests}）");
+        }
+
         bridge.Send(new JsonObject
         {
             ["type"] = "done",
@@ -522,16 +537,24 @@ public static partial class Program
             ["toolCalls"] = 0
         });
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("标题那单的结论")), TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => openAi.TitleRequests > titleReqsBefore, TimeSpan.FromSeconds(30));
+        await Task.Delay(400);
 
         using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
         {
             var listJson = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}");
             var sessions = JsonNode.Parse(listJson)!["sessions"]!.AsArray();
             var current = sessions.FirstOrDefault(s => s!["current"]?.GetValue<bool>() == true);
-            Check("★ 会话标题自动总结（“帮我看看今天的报错日志” → “今天的报错日志”，且标成自动标题）",
-                current is not null && current["name"]?.GetValue<string>() == "今天的报错日志" &&
-                current["autoNamed"]?.GetValue<bool>() == true,
-                $"当前会话标题=「{current?["name"]}」autoNamed={current?["autoNamed"]}");
+            Check("★ 跑完之后用**模型综结**的标题（不再是照搬第一句指令）",
+                current is not null && current["name"]?.GetValue<string>() == "综结出来的会话标题" &&
+                current["autoNamed"]?.GetValue<bool>() == true &&
+                openAi.TitleRequests > titleReqsBefore,
+                $"当前会话标题=「{current?["name"]}」autoNamed={current?["autoNamed"]} 综结请求数={openAi.TitleRequests}");
+            Check("★ 综结请求里带的是会话上下文（讲的是什么活、干成了什么）",
+                Enumerable.Range(0, openAi.Requests.Count)
+                    .Any(i => openAi.DescribeRequest(i).Contains("[会话标题]") && openAi.DescribeRequest(i).Contains("[会话脉]")) &&
+                bot.OutputLines.Any(l => l.Contains("按上下文综结标题")),
+                string.Join(" | ", bot.OutputLines.Where(l => l.Contains("综结标题")).TakeLast(2)));
 
             // 手动改名后不再被自动覆盖
             var renameBody = new JsonObject
@@ -550,6 +573,28 @@ public static partial class Program
                 renamed.Any(s => s!["name"]?.GetValue<string>() == "我自己起的名字" &&
                                  s!["autoNamed"]?.GetValue<bool>() == false),
                 afterRename?.ToJsonString() ?? "(空)");
+
+            // 手动改过名的会话，跑完一轮综结也不能给它改名（人的意图优先）
+            var tasksBeforeManual = bridge.Tasks.Count;
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//再跑一单试试", 15074, mentionBot: false, ct: cts.Token);
+            await WaitUntilAsync(() => bridge.Tasks.Count > tasksBeforeManual, TimeSpan.FromSeconds(30));
+            bridge.Send(new JsonObject
+            {
+                ["type"] = "done",
+                ["id"] = bridge.Tasks[^1]["id"]!.GetValue<string>(),
+                ["text"] = "又一单的结论",
+                ["exitCode"] = 0,
+                ["durationMs"] = 150,
+                ["toolCalls"] = 0
+            });
+            await WaitUntilAsync(() => Sent().Any(t => t.Contains("又一单的结论")), TimeSpan.FromSeconds(30));
+            await Task.Delay(600);
+            var afterManualRun = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"));
+            Check("★ 手动改过名的会话不会被综结标题覆盖（人的命名优先）",
+                afterManualRun?["sessions"] is JsonArray manualList &&
+                manualList.Any(s => s!["name"]?.GetValue<string>() == "我自己起的名字"),
+                string.Join(" | ", (afterManualRun?["sessions"] as JsonArray ?? new JsonArray())
+                    .Select(s => $"{s!["name"]}(auto={s!["autoNamed"]})")));
 
             // 总览：有多少个会话 + 标题
             var all = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions"));

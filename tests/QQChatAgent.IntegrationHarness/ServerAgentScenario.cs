@@ -106,8 +106,20 @@ public static partial class Program
         Check("★ 服务器 agent 的结论发回了群里",
             Sent().Any(t => t.Contains("服务器上跑完了")), string.Join(" | ", Sent()));
         Check("★ 服务器 agent 走的是**自定义接口**（请求落在另一个网关上）",
-            agentAi.Requests.Count >= 1 && openAi.Requests.Count == 0,
-            $"自定义接口 {agentAi.Requests.Count} 次请求，聊天接口 {openAi.Requests.Count} 次");
+            agentAi.Requests.Count >= 1 &&
+            // 聊天网关上最多只允许“综结标题”那一个请求（那是聊 models 的事，不是 agent 的活）
+            Enumerable.Range(0, openAi.Requests.Count).All(i => openAi.DescribeRequest(i).Contains("[会话标题]")),
+            $"自定义接口 {agentAi.Requests.Count} 次请求，聊天接口 {openAi.Requests.Count} 次（应为 0 或只有综结标题）");
+        await WaitUntilAsync(() => openAi.TitleRequests > 0, TimeSpan.FromSeconds(30));
+        await Task.Delay(300);
+        using (var titleHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            var sj = JsonNode.Parse(await titleHttp.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"));
+            var titleSessions = sj?["sessions"] as JsonArray ?? new JsonArray();
+            Check("★ 服务器后端也会按上下文综结会话标题（与外部设备那条路共用一个综结逻辑）",
+                titleSessions.Any(s => s!["name"]?.GetValue<string>() == "综结出来的会话标题"),
+                string.Join(" | ", titleSessions.Select(s => $"{s!["name"]}(auto={s!["autoNamed"]})")));
+        }
         Check("★ 自定义接口那轮带的就是自定义模型名",
             agentAi.Requests.Count > 0 && agentAi.Requests[0].ToJsonString().Contains("custom-agent-model"),
             agentAi.Requests.Count == 0 ? "(没请求)" : Snippet(agentAi.Requests[0].ToJsonString(), "custom-agent-model"));

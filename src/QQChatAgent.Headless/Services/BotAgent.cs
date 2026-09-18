@@ -2016,7 +2016,8 @@ public sealed class BotAgent : IDisposable
             var task = bridge!.NewTask(conversation.SourceKey, payload, hostSession.PiSessionId, named);
             task.SessionRef = hostSession;
             task.RunId = _agentSessions.StartRun(conversation.SourceKey, hostSession.Id, payload, named);   // 记一条“小会话”
-            _agentSessions.TitleFromPrompt(conversation.SourceKey, hostSession.Id, payload);   // 第一句当标题
+            // 注意：这里**不再**拿指令当标题。标题改成“跑完后按上下文综结”，
+            // 否则每发一条新命令就把会话改名成那条命令的前几个字，会话号就认不出来了。
             if (!bridge.TryEnqueue(task))
             {
                 await SendPlainAsync(conversation, $"这个会话已经排了 {bridge.QueuedCount} 个任务，等跑完再发吧。");
@@ -2046,7 +2047,6 @@ public sealed class BotAgent : IDisposable
         {
             var serverSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "server");
             var seededHistory = _agentSessions.History(conversation.SourceKey, serverSession.Id);
-            _agentSessions.TitleFromPrompt(conversation.SourceKey, serverSession.Id, payload);   // 第一句当标题
             var serverRunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, payload, null);
             EmitLog($"[会话] 内置 agent 本轮带 {seededHistory.Count} 条历史（会话「{serverSession.Name}」）");
             var task = new AgentTask
@@ -2567,10 +2567,56 @@ public sealed class BotAgent : IDisposable
                 EmitLog($"agent 失败（{seconds:F0}s）: {task.Error}");
                 await SendPlainAsync(conversation, $"❌ 本机那边报错（{seconds:F0}s）：{Shorten(task.Error ?? "未知错误", 300)}");
             }
+
+            // 跑完再综结标题：拿最近的轮次（含刚刚这轮）给模型，综结出一个能认出“这个会话在干什么”的标题。
+            // 放在回话之后（主人先看到结果），失败也不影响任何东西；手动改过名的会话不动。
+            await SummarizeSessionTitleAsync(task);
         }
         catch (Exception ex)
         {
             EmitLog("agent 结果回话失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 一轮跑完后按上下文综结会话标题（只改自动名的会话）。
+    /// 号主要求：“不要每发一条指令就重新命名，执行完按上下文内容综结标题，而不是简单复用”。
+    /// </summary>
+    private async Task SummarizeSessionTitleAsync(AgentTask task)
+    {
+        try
+        {
+            if (task.SessionRef is not { } session || _brain is null)
+            {
+                return;
+            }
+
+            // 手动改过名的会话不动（//rename 的意图优先）
+            if (_agentSessions.Find(task.SourceKey, session.Id) is not { AutoNamed: true } current)
+            {
+                return;
+            }
+
+            var digest = _agentSessions.SessionDigest(task.SourceKey, session.Id);
+            if (string.IsNullOrWhiteSpace(digest))
+            {
+                return;
+            }
+
+            var title = await _brain.SummarizeSessionTitleAsync(digest, current.Name, CancellationToken.None);
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return;
+            }
+
+            if (_agentSessions.SetAutoTitle(task.SourceKey, session.Id, title))
+            {
+                EmitLog($"[会话] 按上下文综结标题：「{current.Name}」→「{title}」");
+            }
+        }
+        catch (Exception ex)
+        {
+            EmitLog("[会话] 综结标题失败（不影响任务）: " + ex.Message);
         }
     }
 

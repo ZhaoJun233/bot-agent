@@ -325,6 +325,17 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
+        // 会话标题综结请求（系统提示里带 [会话标题] 标记）：返回模型综结出来的标题，
+        // **不消耗脚本回复**（与表情包列表、审核那两类请求同理）。
+        // 注意：这里得用“不转义非 ASCII”的序列化 —— `JsonNode.ToJsonString()` 会把中文写成 \uXXXX，
+        // 拿中文去 Contains 就永远匹配不上（与 DescribeRequest 里那个坑同一个）。
+        if (JsonSerializer.Serialize(payload, RelaxedJson).Contains("[会话标题]", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _titleRequests);
+            await WriteCompletionAsync(context, payload, TitleReply);
+            return;
+        }
+
         // 模拟上游网关的“No capacity / auth_unavailable”（实测多账号池网关会连回 503）：
         // 机器人应该退让 2 秒重试一次，而不是直接把这一轮回复丢掉。
         // 注意：要在“取脚本回复”**之前**回 503 —— 否则失败那次会把脚本里的回复吃掉，
@@ -393,8 +404,22 @@ public sealed class MockOpenAi : IDisposable
     /// <summary>接下来 N 次聊天请求回 200 但**没有 choices**（实测：慢的 `-high` 模型“思考”把预算吃光时会这样）。</summary>
     public int EmptyChoicesTimes { get; set; }
 
+    /// <summary>序列化时不要转义非 ASCII（断言要能直接拿中文去 Contains）。</summary>
+    private static readonly JsonSerializerOptions RelaxedJson = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     /// <summary>只要请求里带图就回 200 + 零候选（实测：上游对某些图会直接无候选）。</summary>
     public bool EmptyChoicesWhenImages { get; set; }
+
+    /// <summary>“按上下文综结会话标题”那类请求的回复。</summary>
+    public string TitleReply { get; set; } = """{"title": "综结出来的会话标题"}""";
+
+    /// <summary>收到过几次“综结标题”请求（测试观测）。</summary>
+    public int TitleRequests => Volatile.Read(ref _titleRequests);
+
+    private int _titleRequests;
 
     /// <summary>带图而被回零候选的请求数（测试观测）。</summary>
     public int EmptyWithImages => Volatile.Read(ref _emptyWithImages);
