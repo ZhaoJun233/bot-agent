@@ -611,6 +611,37 @@ public static partial class Program
             Sent().Any(t => t.Contains("全部 agent 会话") && t.Contains("共") && t.Contains("轮")),
             string.Join(" | ", Sent().TakeLast(2)));
 
+        // ---- ⑱ //rename 不能“改错会话”（号主实测：设备不在线时它会另建一个空的服务器会话并给它改名）----
+        // 踩雷姿势：路由改成 server（will-use = server），但这个聊天只有外部设备（host）的会话。
+        using (var http2 = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            await http2.PostAsync($"http://127.0.0.1:{healthPort}/api/settings",
+                new StringContent(new JsonObject { ["agentTarget"] = "server" }.ToJsonString(), Encoding.UTF8, "application/json"));
+            await Task.Delay(300);
+
+            var before = JsonNode.Parse(await http2.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"))!;
+            var countBefore = before["sessions"]!.AsArray().Count;
+            var sentBefore = Sent().Count;
+
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//rename 改名不能改错会话", 15075, mentionBot: false, ct: cts.Token);
+            await WaitUntilAsync(() => Sent().Skip(sentBefore).Any(t => t.Contains("改名不能改错会话")), TimeSpan.FromSeconds(30));
+            await Task.Delay(400);
+
+            var after = JsonNode.Parse(await http2.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"))!;
+            var arr = after["sessions"]!.AsArray();
+            Check("★ //rename 不会跑到另一个后端去改（更不会凭空建一个空会话）",
+                arr.Count == countBefore &&
+                arr.Any(s => s!["name"]?.GetValue<string>() == "改名不能改错会话" && s!["autoNamed"]?.GetValue<bool>() == false),
+                $"会话数 {countBefore} → {arr.Count}；" + string.Join(" | ", arr.Select(s => $"{s!["name"]}(auto={s!["autoNamed"]},backend={s!["backend"]})")));
+            Check("★ 回复里写清改的是哪一路（后端 + 轮次），不让人猜",
+                Sent().Skip(sentBefore).Any(t => t.Contains("已把") && t.Contains("改名为「改名不能改错会话」")),
+                string.Join(" | ", Sent().Skip(sentBefore).TakeLast(2)));
+
+            await http2.PostAsync($"http://127.0.0.1:{healthPort}/api/settings",
+                new StringContent(new JsonObject { ["agentTarget"] = "auto" }.ToJsonString(), Encoding.UTF8, "application/json"));
+            await Task.Delay(200);
+        }
+
         await bot.StopAsync();
     }
 

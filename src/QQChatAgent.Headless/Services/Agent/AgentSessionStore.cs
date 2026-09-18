@@ -142,6 +142,31 @@ public sealed class AgentSessionStore
         }
     }
 
+    /// <summary>
+    /// 找“用户现在正在看的那个会话”（//rename //runs //reset 这类不带目标位的命令用）。
+    /// 优先“下一句指令会走”那个后端的当前会话；那边没有就退到最近用过的那个。
+    /// **绝不新建** —— 否则一句 //rename 会在另一个后端凭空造出一个空会话并给它改名（
+    /// 实测踩过：号主改的是“外部设备那个跑过 4 轮的会话”，结果建了个空的服务器会话）。
+    /// </summary>
+    public AgentSession? FindCurrent(string sourceKey, string preferBackend)
+    {
+        lock (_gate)
+        {
+            if (!_chats.TryGetValue(sourceKey, out var chat) || chat.Sessions.Count == 0)
+            {
+                return null;
+            }
+
+            if (chat.Current.TryGetValue(preferBackend, out var id) &&
+                chat.Sessions.FirstOrDefault(s => s.Id == id) is { } preferred)
+            {
+                return preferred;
+            }
+
+            return chat.Sessions.OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
+        }
+    }
+
     /// <summary>按 id / 名字 / 序号找一个会话。</summary>
     public AgentSession? Find(string sourceKey, string idNameOrIndex)
     {

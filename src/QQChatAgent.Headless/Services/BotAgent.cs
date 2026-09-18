@@ -1757,7 +1757,13 @@ public sealed class BotAgent : IDisposable
 
         if (head is "runs" or "流水" or "记录")
         {
-            var cur = _agentSessions.EnsureCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            var cur = _agentSessions.FindCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            if (cur is null)
+            {
+                await SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
+                return;
+            }
+
             var runs = _agentSessions.Runs(conversation.SourceKey, cur.Id);
             if (runs.Count == 0)
             {
@@ -1857,14 +1863,27 @@ public sealed class BotAgent : IDisposable
         {
             if (rest.Length == 0)
             {
-                await SendPlainAsync(conversation, "用法：//rename <新名字>（给当前会话改名；先 //sessions 看有哪些）");
+                await SendPlainAsync(conversation, "用法：//rename <新名字>（给`//sessions`里标「←」那个会话改名）");
                 return;
             }
 
-            var cur = _agentSessions.EnsureCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            // 关键：这里**不新建**会话，也不按“下一句会走哪个后端”去找 ——
+            // 否则号主看到的是 A 会话，改的却是 B（甚至凭空建一个空的）；也正好是“rename 改错会话”那个 bug。
+            var cur = _agentSessions.FindCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            if (cur is null)
+            {
+                await SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
+                return;
+            }
+
             if (_agentSessions.Rename(conversation.SourceKey, cur.Id, rest))
             {
-                await SendPlainAsync(conversation, $"会话已改名为「{MaybeMask(_agentSessions.Find(conversation.SourceKey, cur.Id)?.Name ?? string.Empty, conversation.SourceKey)}」。");
+                var where = cur.Backend == "server" ? "服务器内置" : $"外部 {cur.Device ?? bridge?.AnyBridge?.Name ?? "设备"}";
+                // 回话里名字**原样回显**（主人自己打的字，再遮一道只会让人以为改错了）；
+                // 但要写清楚改的是哪一个会话：哪条后端、多少轮。
+                await SendPlainAsync(conversation,
+                    $"已把 [{where}] 里那个会话（{cur.Turns} 轮）改名为「{rest}」。\n" +
+                    "（它现在是手动命名，按上下文自动综结不会再动它；//sessions 里那行会带「←」）");
             }
             else
             {
@@ -1933,8 +1952,13 @@ public sealed class BotAgent : IDisposable
 
         if (head is "reset" or "clear" or "清空")
         {
-            var current = _agentSessions.EnsureCurrent(conversation.SourceKey,
-                WillUseBackend(want, bridge, named));
+            var current = _agentSessions.FindCurrent(conversation.SourceKey, WillUseBackend(want, bridge, named));
+            if (current is null)
+            {
+                await SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
+                return;
+            }
+
             var reset = _agentSessions.Reset(conversation.SourceKey, current.Id);
             if (reset is not null && reset.Backend != "server" && reset.PiOwned &&
                 current.PiSessionId.Length > 0 && bridge is not null)
@@ -2394,7 +2418,8 @@ public sealed class BotAgent : IDisposable
                    "用法：//new [名字] 新建、//use <名字|序号> 切换、//del <名字|序号> 删除、//reset 清空当前。";
         }
 
-        var lines = new List<string> { $"agent 会话（共 {list.Count} 个，← 是当前）：" };
+        var primary = _agentSessions.FindCurrent(sourceKey, WillUseBackend(_settings.AgentTarget, bridge, null));
+        var lines = new List<string> { $"agent 会话（共 {list.Count} 个，← 是下一句指令会用的；改它们用 //use 序号）：" };
         for (var i = 0; i < list.Count; i++)
         {
             var s = list[i];
@@ -2404,11 +2429,15 @@ public sealed class BotAgent : IDisposable
                 : ago.TotalHours < 1 ? $"{(int)ago.TotalMinutes} 分钟前"
                 : ago.TotalDays < 1 ? $"{(int)ago.TotalHours} 小时前"
                 : $"{(int)ago.TotalDays} 天前";
-            var mark = _agentSessions.IsCurrent(sourceKey, s) ? " ←" : string.Empty;
+            // “当前”要标得让人一眼分清：只有主那个（下一句真会用的）带 ←，
+            // 另一个后端的当前会话写成「另一路的当前」—— 不然 //rename/`//reset` 改到哪个全靠猜。
+            var mark = primary is not null && s.Id == primary.Id
+                ? " ←"
+                : _agentSessions.IsCurrent(sourceKey, s) ? "（另一路的当前）" : string.Empty;
             lines.Add($"{i + 1}. {MaybeMask(s.Name, sourceKey)} [{where}] {s.Turns} 轮 · {when}{mark}");
         }
 
-        lines.Add("用法：//new [名字] 新建并切换、//use 序号|名字 切换、//rename 改名、//del 序号|名字 删除、//reset 清空当前；//help 看全部命令。");
+        lines.Add("用法：//new [名字] 新建并切换、//use 序号|名字 切换、//rename 名字 改名（改标 ← 那个）、//del 序号|名字 删除、//reset 清空标 ← 那个；//help 看全部命令。");
         return string.Join("\n", lines);
     }
 
