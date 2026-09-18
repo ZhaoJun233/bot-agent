@@ -21,9 +21,9 @@ public static partial class Program
     {
         Section("S33 本机 Agent（// 命令）：前缀 / 用户白名单 / 令牌 / 结果回群");
 
-        const int openAiPort = 17842;
-        const int botWsPort = 13064;
-        const int healthPort = 18103;
+        var openAiPort = FreePort(17842);
+        var botWsPort = FreePort(13064);
+        var healthPort = FreePort(18103);
         const long groupId = 66730;
         const string token = "tok-s33-secret";
 

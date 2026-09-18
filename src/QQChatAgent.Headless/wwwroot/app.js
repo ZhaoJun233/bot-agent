@@ -247,10 +247,12 @@
   let agentDevicesLoaded = false;
 
   // 保存设置后要顺手刷新的东西（由 bindUi() 注册进来；没注册就跳过）。
-  // 为什么用钩子：refreshAgentDevicesFull 定义在 bindUi() **内部**，而 saveSettings() 在外层 ——
-  // 直接 `await refreshAgentDevicesFull()` 就是 ReferenceError，被 catch 成“保存失败”
-  // （实际上服务器那边已经存上了，报错完全指错方向；实测踩过）。
+  // 用钩子而不是直接调用的原因：refreshAgentDevicesFull 定义在 bindUi() **内部**，而 saveSettings() 在外层 ——
+  // 直接 `await refreshAgentDevicesFull()` 就是 ReferenceError，被 catch 成一句“保存失败”
+  // （其实服务器那边已经存上了，报错完全指错方向；实测踩过）。
   let afterSettingsSaved = null;
+  // 全局默认工作目录（面板里那个「工作目录」）：设备行用它标注“这个目录是哪来的”。
+  let agentGlobalWorkdir = "";
 
   function convSignatureOf(items) {
     return items.map((c) =>
@@ -1859,12 +1861,15 @@
           : "";
         const modelOptions = models.map((m) =>
           `<option value="${m}"${m === d.model ? " selected" : ""}>${m}</option>`).join("");
-        // 这一行显示的是**生效的**工作目录：面板里给这台设备配的优先（没配才看桥自报的启动目录），
-        // 两个不一样时都写出来 —— 否则在面板改了目录，这里还挂着旧值，看着像没保存。
-        const dirShown = d.workdir || d.cwd || "";
-        const dirHint = d.workdir && d.cwd && d.workdir !== d.cwd
-          ? ` · 目录 ${d.workdir}（桥自报 ${d.cwd}）`
-          : dirShown ? ` · 目录 ${dirShown}` : "";
+        // 这一行显示的是**生效的**工作目录，并标出它从哪来：
+        //   设备专属（面板里给这台设备填的）→ 全局默认（面板里那个「工作目录」）→ 桥自报（仅兵底）
+        // 以前只写个目录名，看上去像“设备专属”，其实可能是全局值，改全局时让人以为没生效。
+        const devDir = d.workdir || "";
+        const gDir = agentGlobalWorkdir || "";
+        const effDir = devDir || gDir || d.cwd || "";
+        const dirFrom = devDir ? "设备专属" : (gDir ? "全局默认" : "桥自报");
+        const dirExtra = devDir && gDir && devDir !== gDir ? ` · 全局默认是 ${gDir}` : "";
+        const dirHint = effDir ? ` · 目录 ${effDir}（${dirFrom}）${dirExtra}` : "";
         return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <b>${d.name}</b>
@@ -1883,7 +1888,7 @@
               </select>
             </div>
             <div class="field"><label class="hint">工作目录</label>
-              <input type="text" data-dev-workdir="${i}" value="${d.workdir || ""}" placeholder="例如 E:/bot（留空=设备默认）" />
+              <input type="text" data-dev-workdir="${i}" value="${d.workdir || ""}" placeholder="留空 = 用全局默认${agentGlobalWorkdir ? `（${agentGlobalWorkdir}）` : "目录"}" />
             </div>
           </div>
           <div class="grid-2">
@@ -1941,6 +1946,7 @@
         const r = await api("/api/agent/status");
         agentDevices = (r.deviceList || []).map((d) => ({ ...d }));
         agentDevicesLoaded = true;
+        agentGlobalWorkdir = r.globalWorkdir || "";
         renderAgentDevices();
         refreshAgentDevices(r.devices || []);
         return r;

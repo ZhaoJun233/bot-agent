@@ -242,7 +242,16 @@ const saveFields = [...saveBody.matchAll(/(\w+):\s*(Number\()?\$\("([A-Za-z0-9_]
 const loadBody = js.slice(js.indexOf("async function loadSettings"), js.indexOf("async function saveSettings"));
 const filledIds = new Set([...loadBody.matchAll(/\$\("([A-Za-z0-9_]+)"\)\.(?:value|checked)\s*=/g)].map((m) => m[1]));
 
-check("能从 saveSettings 解析出待保存字段", saveFields.length > 0, `解析到 ${saveFields.length} 个`);
+check(
+  "★ 设备行标出目录来源（设备专属 / 全局默认 / 桥自报）",
+  /"设备专属"/.test(js) && /"全局默认"/.test(js) && /"桥自报"/.test(js),
+  "设备行必须写清这个工作目录是哪来的：只写个目录名时，改全局目录会让人以为没生效"
+);
+check(
+  "能从 saveSettings 解析出待保存字段",
+  saveFields.length > 0,
+  `解析到 ${saveFields.length} 个`
+);
 
 // 设备表（模型/目录/工具/超时/启用）不在 DOM-id 那套字段里，单独盯一眼：
 // 曾经这条漏写 → 在面板里改设备配置点保存完全没用（服务器还是旧值，号主报过）。

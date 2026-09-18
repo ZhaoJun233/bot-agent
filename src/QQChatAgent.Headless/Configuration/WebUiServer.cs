@@ -876,11 +876,13 @@ public sealed class WebUiServer : IDisposable
                 ["online"] = true,
                 ["enable"] = true,
                 ["model"] = string.Empty,
-                ["workdir"] = info?.Cwd ?? string.Empty,
+                // 没在面板里配过的设备：workdir 必须留空（=没配），**不能**拿桥自报的 cwd 充数 ——
+                // 否则面板上看着像“设备专属目录 = E:/bot”，而实际生效的是全局目录，改全局怎么都不动。
+                ["workdir"] = string.Empty,
                 ["tools"] = string.Empty,
                 ["timeoutSec"] = 0,
                 ["pi"] = info?.Pi,
-                ["cwd"] = info?.Cwd,
+                ["cwd"] = info?.Cwd,   // 桥自己启动时的工作目录：只作参考
                 ["models"] = new JsonArray(bridge.DeviceModels(name).Select(m => (JsonNode)JsonValue.Create(m)!).ToArray())
             });
         }
@@ -1097,6 +1099,8 @@ public sealed class WebUiServer : IDisposable
             // 任务本来就是按这个优先级跑的（BuildTask / per-device 覆盖），只有显示曾用过 hello 里的 cwd。
             ["cwd"] = EffectiveWorkDir(),
             ["hostCwd"] = bridge?.AnyBridge?.Cwd,
+            // 面板要拿来标注“这个目录是哪来的”：设备专属 / 全局默认 / 桥自报
+            ["globalWorkdir"] = _settings.AgentWorkDir ?? string.Empty,
             ["pi"] = bridge?.AnyBridge?.Pi,
             ["devices"] = new JsonArray(bridge?.BridgeNames.Select(n => (JsonNode)JsonValue.Create(n)!).ToArray() ?? Array.Empty<JsonNode>()),
             ["serverAgent"] = _settings.EnableServerAgent,

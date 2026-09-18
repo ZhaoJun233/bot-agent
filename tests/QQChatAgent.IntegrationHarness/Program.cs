@@ -1909,6 +1909,41 @@ public static partial class Program
         return new BotProcess(psi);
     }
 
+    /// <summary>
+    /// 拿一个真的空闲端口：优先用 preferred，被占了就换系统给的。
+    /// 为什么需要（2026-09-18 实测踩到 S33 直接起不来）：端口写死时，会被**别的程序的一条普通出站连接**占掉
+    /// （机器人的 OneBot 服务要 bind 0.0.0.0:{port}，而那条连接占着 198.18.0.x:{port}），于是 bind 报
+    /// “每个套接字地址只允许使用一次”，harness 就一直等不到端口。
+    /// </summary>
+    private static int FreePort(int preferred)
+    {
+        if (CanBind(preferred))
+        {
+            return preferred;
+        }
+
+        using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, 0);
+        probe.Start();
+        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        return port;
+    }
+
+    private static bool CanBind(int port)
+    {
+        try
+        {
+            using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, port);
+            probe.Start();
+            probe.Stop();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static async Task WaitForPortAsync(int port, CancellationToken ct, BotProcess? bot = null)
     {
         for (var i = 0; i < 200; i++)
