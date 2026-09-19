@@ -38,8 +38,8 @@ public static class QqActionCatalog
     public static readonly QqActionSpec[] All =
     {
         new("like", "safe", "给某个**人**点赞（QQ 名片赞）。user_id 必填，times 1-20（默认 1；同一个人一天点不了几个）。"
-            + "注意：名片赞只有**好友**（或对方允许陌生人点赞）才点得成，非好友/对方关了权限会被 QQ 回绝；"
-            + "被回绝时不要重试，改用 poke（戳一戳）或 emoji_like（贴表情）—— 这两个不看好友关系",
+            + "注意：QQ 侧会对“从未互动过的人”和关掉了“允许陌生人赞我”的人回绝（非好友不一定不行）；"
+            + "被回绝时机器人会自动补看一次资料卡再试，仍失败就别硬试，改用 poke（戳一戳）或 emoji_like（贴表情）—— 这两个不看好友关系",
             new[] { "点赞", "名片赞", "赞一下", "zan" }, "send_like"),
         new("poke", "safe", "戳一戳某人。user_id 必填（群里也能戳别人；不看好友关系，非好友的群友一样能戳）",
             new[] { "戳一戳", "拍一拍", "戳", "拍拍" }, "group_poke", "friend_poke"),
@@ -233,8 +233,9 @@ public sealed class SessionQqActionHost : IQqActionHost
                 var ok = await _gateway.SendLikeAsync(user.Value, times, ct);
                 return ok
                     ? $"✅ 给 {user} 点了 {times} 个赞"
-                    : $"❌ 点赞没成功（QQ 侧回绝：名片赞只有好友或对方允许陌生人点赞时才点得成，也可能今天给这个人点满了）。"
-                      + "这次换个方式：poke（戳一戳）或 emoji_like（贴表情）不要求好友关系。";
+                    : $"❌ 点赞没成功（QQ 侧回绝：名片赞对“从未互动过的人”、以及关掉了“允许陌生人赞我”的人都会拦）。"
+                      + "这次换个方式：poke（戳一戳）或 emoji_like（贴表情）不要求好友关系；"
+                      + "如果确实要点赞，可以让对方在手机 QQ 里打开“允许陌生人赞我”，或者先用手机手动赞他一次（之后就能点了）。";
             }
 
             case "poke":

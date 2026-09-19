@@ -45,6 +45,12 @@ public sealed class MockProtocol : IDisposable
     /// </summary>
     public HashSet<string> FailActions { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// 只让指定动作失败**一次**（下一次调用就正常）—— 用来验证“失败后重试/降级后真的能成”。
+    /// 例：S38 让 send_like 第一次被拒、第二次成，把「先看资料卡再点」那条梯子跑完。
+    /// </summary>
+    public HashSet<string> FailActionsOnce { get; } = new(StringComparer.Ordinal);
+
     /// <summary>构建 get_forward_msg 的响应（未登记的 id 返回空 nodes）。</summary>
     private JsonObject BuildForwardRecord(string? id)
     {
@@ -245,7 +251,7 @@ public sealed class MockProtocol : IDisposable
             var fail = false;
             lock (_gate)
             {
-                fail = FailActions.Contains(action);
+                fail = FailActions.Contains(action) || FailActionsOnce.Remove(action);
             }
 
             await SendRawAsync(new JsonObject

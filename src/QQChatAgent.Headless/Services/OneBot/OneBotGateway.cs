@@ -240,9 +240,25 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
     // 共性：都是 OneBot/NapCat 的动作，失败原因（retcode）对使用者有用，所以统一记一条日志；
     // 返回 bool 就够了 —— 给模型看的那句话由 QqActionHost 拼（它知道上下文）。
 
-    /// <summary>给某人点赞（OneBot <c>send_like</c>）。times：一次点几个（QQ 自己卡上限，这里 1-20）。</summary>
-    public Task<bool> SendLikeAsync(long userId, int times, CancellationToken ct = default)
-        => RunActionAsync("send_like", $"{{\"user_id\":{userId},\"times\":{Math.Clamp(times, 1, 20)}}}", ct);
+    /// <summary>
+    /// 给某人点赞（OneBot <c>send_like</c>）。times：一次点几个（QQ 自己卡上限，这里 1-20）。
+    ///
+    /// 为什么失败后还要「先看一眼对方资料卡再补一次」：QQ 侧对**从未互动过的账号**会把赞拦下来
+    /// （社区实测：同样是非好友，之前看过/赞过这个人就能成，从没见过就回「由于对方权限设置，点赞失败」
+    /// 或干脆静默不生效 —— NapCat issue #617 / #1676）。手机 QQ 点赞时会先打开对方资料卡，
+    /// 而 <c>send_like</c> 是直接打点赞接口、没有这一步，所以这里被回绝时自己补上（只补一次，不循环重试）。
+    /// </summary>
+    public async Task<bool> SendLikeAsync(long userId, int times, CancellationToken ct = default)
+    {
+        var payload = $"{{\"user_id\":{userId},\"times\":{Math.Clamp(times, 1, 20)}}}";
+        if (await RunActionAsync("send_like", payload, ct))
+        {
+            return true;
+        }
+
+        await RunActionAsync("get_stranger_info", $"{{\"user_id\":{userId}}}", ct);
+        return await RunActionAsync("send_like", payload, ct);
+    }
 
     /// <summary>给某条消息贴表情回应（NapCat 扩展 <c>set_msg_emoji_like</c>）。emojiId 是字符串，默认 👍 = 128077。</summary>
     public Task<bool> SetMessageEmojiLikeAsync(long messageId, string emojiId, CancellationToken ct = default)

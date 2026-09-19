@@ -71,6 +71,11 @@ public static partial class Program
         agentAi.AddRule("给那个陌生人点个赞",
             $$"""{"tool":"qq","action":"like","user_id":{{targetId}},"times":1}""");
 
+        // ⑧ “先看资料卡再点”的梯子：第一次被拒、第二次成 → 工具应报成功（不是每次都白掉）
+        agentAi.AddRule("给那个老熟人点个赞",
+            $$"""{"tool":"qq","action":"like","user_id":{{targetId}},"times":1}""",
+            """{"final":"赞上了。"}""");
+
         using var bot = StartBot(new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = dataDir,
@@ -233,9 +238,25 @@ public static partial class Program
         Check("★ 给模型的失败提示里写清了原因并且给了替代方案（poke / emoji_like）",
             Enumerable.Range(0, agentAi.Requests.Count).Any(i => agentAi.DescribeRequest(i).Contains("这次换个方式")),
             $"agent 接口收到 {agentAi.Requests.Count} 次请求");
-        Check("★ like 的工具说明本身就讲明“只有好友/对方允许陌生人点赞”才点得成（模型第一轮就知道不该硬试）",
-            Enumerable.Range(0, agentAi.Requests.Count).Any(i => agentAi.DescribeRequest(i).Contains("只有**好友**")),
+        Check("★ like 的工具说明本身就把“被回绝→自动补看资料卡→仍失败就换 poke”写给了模型",
+            Enumerable.Range(0, agentAi.Requests.Count).Any(i => agentAi.DescribeRequest(i).Contains("会自动补看一次资料卡再试")),
             $"agent 接口收到 {agentAi.Requests.Count} 次请求");
+        var strangerLookups = ActionCount("get_stranger_info");
+        Check("★ 被回绝后会自动补一次“看对方资料卡”（手机 QQ 点赞流程里有这一步，send_like 没有）",
+            strangerLookups > 0, $"get_stranger_info 共 {strangerLookups} 次");
         protocol.FailActions.Remove("send_like");
+
+        // ── ⑧ 梯子真的能救人：只失败一次 → 第二次（看完资料卡）应该就报成功 ──
+        protocol.FailActionsOnce.Add("send_like");
+        var before8 = ActionCount("send_like");
+        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//给那个老熟人点个赞", 17008, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("赞上了")), TimeSpan.FromSeconds(60));
+        await Task.Delay(400);
+
+        var likeAttempts8 = ActionCount("send_like") - before8;
+        var sawSuccess = Enumerable.Range(0, agentAi.Requests.Count).Any(i => agentAi.DescribeRequest(i).Contains("✅ 给"));
+        Check("★★ 第一次被拒、补看资料卡后重试成功：工具报的是“点了 1 个赞”，不是失败",
+            likeAttempts8 == 2 && sawSuccess,
+            $"send_like {likeAttempts8} 次（应为 2）· 工具报成功={sawSuccess}");
     }
 }
