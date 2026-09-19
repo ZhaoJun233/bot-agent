@@ -243,7 +243,7 @@ public sealed class MockProtocol : IDisposable
                 "get_group_member_info" => BuildMemberInfo(root["params"] as JsonObject),
                 "get_group_msg_history" => BuildHistory(),
                 "get_forward_msg" => BuildForwardRecord(root["params"]?["id"]?.GetValue<string>()),
-                "send_group_msg" or "send_private_msg" => new JsonObject { ["message_id"] = NextSentMessageId() },                // get_msg：按 id 取一条消息（“引用回复”的原文查询走这里；目前实现只用上下文，预留）
+                "send_group_msg" or "send_private_msg" => BuildSentReply(root["params"] as JsonObject),
                 "get_msg" => BuildQuotedMessage(root["params"] as JsonObject),
                 _ => new JsonObject()
             };
@@ -352,16 +352,25 @@ public sealed class MockProtocol : IDisposable
         bool mentionBot = false,
         string? imageUrl = null,
         CancellationToken ct = default,
-        long? replyTo = null)
+        long? replyTo = null,
+        long? replyQuotedQq = null)
     {
+        RememberInbound(messageId, text, userId, senderName);
         var segments = new JsonArray();
         // QQ 把引用回复段放在最前（NapCat 给的 data.id 是**字符串**，这里照真实形状来）
         if (replyTo is long quoted)
         {
+            var replyData = new JsonObject { ["id"] = quoted.ToString() };
+            // 有的协议端在 reply 段里直接给被引用者的 QQ（有了就不必猜“他是不是在回我”）
+            if (replyQuotedQq is long qq)
+            {
+                replyData["qq"] = qq.ToString();
+            }
+
             segments.Add(new JsonObject
             {
                 ["type"] = "reply",
-                ["data"] = new JsonObject { ["id"] = quoted.ToString() }
+                ["data"] = replyData
             });
         }
 
@@ -474,6 +483,25 @@ public sealed class MockProtocol : IDisposable
     /// <summary>机器人每条“发出去”的消息 id（协议端回的）—— 测试用它当“机器人自己那句”的引用目标。</summary>
     public List<long> SentMessageIds { get; } = new();
 
+    /// <summary>收到的消息（id → 原话/发送者）：get_msg 按它作答，跟真协议端一样。</summary>
+    private readonly Dictionary<long, (string Text, long UserId, string SenderName)> _inbound = new();
+
+    /// <summary>发出去的消息正文（id → 文本）：get_msg 查到自己发过的那条时要能回原文。</summary>
+    private readonly Dictionary<long, string> _sentTexts = new();
+
+    private void RememberInbound(long messageId, string text, long userId, string senderName)
+    {
+        if (messageId <= 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _inbound[messageId] = (text, userId, senderName);
+        }
+    }
+
     private long NextSentMessageId()
     {
         var id = Interlocked.Increment(ref _nextSentMessageId);
@@ -485,8 +513,29 @@ public sealed class MockProtocol : IDisposable
         return id;
     }
 
+    /// <summary>机器人发出一条消息：给个新 id，并把正文记下来（get_msg 查自己那条时要能回原文）。</summary>
+    private JsonObject BuildSentReply(JsonObject? prms)
+    {
+        var id = NextSentMessageId();
+        var message = prms?["message"];
+        var text = message switch
+        {
+            JsonValue value => value.ToString(),
+            JsonArray segs => string.Concat(segs
+                .Where(s => s?["type"]?.GetValue<string>() == "text")
+                .Select(s => s?["data"]?["text"]?.GetValue<string>())),
+            _ => string.Empty
+        };
+        lock (_gate)
+        {
+            _sentTexts[id] = text;
+        }
+
+        return new JsonObject { ["message_id"] = id };
+    }
+
     /// <summary>
-    /// 回 get_msg：按 id 取一条消息。
+    /// 回 get_msg：按 id 取一条消息（“引用回复”的原文兜底走这里）。
     /// 目前机器人只从会话上下文里找引用原文（省一次往返），这里是给以后“原文不在上下文里”的兑底预留的，
     /// 也给测试留了一个“协议端到底会被问什么”的观测点。
     /// </summary>
@@ -494,7 +543,6 @@ public sealed class MockProtocol : IDisposable
     {
         Interlocked.Increment(ref _getMsgHits);
         var id = prms?["message_id"]?.GetValue<long>() ?? 0;
-
         // 测试可以指定“这条消息用图片作答”——用于验证“图片地址过期 → 重新签发”的兑底。
         if (QuotedImageUrls.Count > 0)
         {
@@ -515,16 +563,38 @@ public sealed class MockProtocol : IDisposable
             };
         }
 
+        // 真协议端确实认识自己收过/发过的消息；不认识的 id（已过期/不存在）一律回空，
+        // 这样“引用的那条根本取不到”才和线上的行为一致（机器人只能标“更早的一条”）。
+        string? text = null;
+        long userId = 30001;
+        var senderName = "老王";
+        lock (_gate)
+        {
+            if (_inbound.TryGetValue(id, out var inbound))
+            {
+                (text, userId, senderName) = (inbound.Text, inbound.UserId, inbound.SenderName);
+            }
+            else if (_sentTexts.TryGetValue(id, out var sent))
+            {
+                (text, userId, senderName) = (sent, SelfId, "机器人");
+            }
+        }
+
+        if (text is null)
+        {
+            return new JsonObject();          // 没有 data → 机器人侧当“取不到”
+        }
+
         return new JsonObject
         {
             ["message_id"] = id,
-            ["user_id"] = 30001,
+            ["user_id"] = userId,
             ["time"] = DateTimeOffset.Now.ToUnixTimeSeconds(),
             ["message"] = new JsonArray
             {
-                new JsonObject { ["type"] = "text", ["data"] = new JsonObject { ["text"] = $"被引用的消息 {id}" } }
+                new JsonObject { ["type"] = "text", ["data"] = new JsonObject { ["text"] = text } }
             },
-            ["sender"] = new JsonObject { ["user_id"] = 30001, ["nickname"] = "老王", ["card"] = "老王" }
+            ["sender"] = new JsonObject { ["user_id"] = userId, ["nickname"] = senderName, ["card"] = senderName }
         };
     }
 

@@ -123,6 +123,26 @@ public sealed class BotConversation
         }
     }
 
+    /// <summary>
+    /// 就地改写某条消息的正文（引用原文的兜底补写用）。
+    /// 只用 ReferenceEquals 认人（ChatMessage 是引用类型，不会因为内容相同而认错）；
+    /// 那条已经被裁出窗口就返回 false。
+    /// </summary>
+    public bool RewriteText(ChatMessage message, string newText)
+    {
+        lock (_gate)
+        {
+            var index = _messages.FindIndex(m => ReferenceEquals(m, message));
+            if (index < 0)
+            {
+                return false;
+            }
+
+            message.Text = newText;
+            return true;
+        }
+    }
+
     /// <summary>追加一条消息到末尾（自动分配自增序号，供前端增量拉取）。</summary>
     public void Append(ChatMessage message)
     {

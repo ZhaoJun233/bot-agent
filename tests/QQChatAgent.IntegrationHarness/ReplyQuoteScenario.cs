@@ -385,7 +385,121 @@ public static partial class Program
             bot.OutputLines.Any(l => l.Contains("已回复") && l.Contains("触发→")),
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("触发→")).TakeLast(2)));
 
+        // ══════════ 2026-09-19：引用机器人发的消息被吞（号主反馈）══════════
+        // 现场：群里“引用机器人上一句 + 说一句话” → 机器人不吭声。
+        // 根因：判断“他是在回我”只看了内存表（上限 200、**重启就清空**），
+        //       而每次部署都会重启容器 —— 部署之前发的那些全认不出来；群里不 @ 就不触发，于是整条被静默丢掉。
+        // 现场二：引用的原文本地也查不到（重启后既不在内存表、也没留在上下文窗口）→ 模型只看到“更早的一条”。
+        // 现在：① 自己发过的消息 id 落盘（data/own-messages.json）；② 引自己的判定也看会话历史；
+        //       ③ 协议端在 reply 段里带了被引用者 QQ 时直接采信；④ 本地全查不到时后台 get_msg 把原文补写回去。
+        var lastBotMsgId = protocol.SentMessageIds.Last();
+        var lastBotText = protocol.ActionsReceived
+            .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+            .Select(MessageText)
+            .Last(t => !string.IsNullOrWhiteSpace(t));
+
+        Check("★ 自己发过的消息会落盘（以前只在内存里，一重启就失忆）",
+            System.IO.Directory.GetFiles(dataDir, "own-messages.json", System.IO.SearchOption.AllDirectories)
+                .FirstOrDefault(p => System.IO.File.ReadAllText(p).Contains(lastBotMsgId.ToString())) is not null,
+            string.Join(" | ", System.IO.Directory.GetFiles(dataDir, "own-messages.json", System.IO.SearchOption.AllDirectories)));
+
         await bot.StopAsync();
+        bot.Dispose();
+        await Task.Delay(600);
+
+        using var bot2 = StartBot(new Dictionary<string, string>
+        {
+            ["QQCHAT_DATA_DIR"] = dataDir,
+            ["QQCHAT_API_KEY"] = "sk-mock",
+            ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
+            ["QQCHAT_MODEL"] = "mock-model",
+            ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket",
+            ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
+            ["QQCHAT_UIN"] = "10001",
+            ["QQCHAT_WHITELIST"] = groupId.ToString(),
+            ["QQCHAT_GROUP_COOLDOWN"] = "0",
+        });
+        await WaitForPortAsync(botWsPort, cts.Token, bot2);
+        using var protocol2 = new MockProtocol { SelfId = 10001 };
+        await protocol2.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
+        await protocol2.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
+
+        // 重启后引用部署前那句（不带 @、正文也没有关键词）→ 必须仍当成“在跟机器人说”。
+        // 用“自评很低也必须接”来验证：directAddress 的唯一作用就是“被点名不应该沉默” ——
+        // 被吞时正是自评低 → 沉默（messages 表里没有 direct_to_bot 列，只能从行为上验）。
+        const long msgRestart = 7411;
+        openAi.EnqueueReply("""{"suitability": 5, "reply": "重启前那句我接着说"}""");
+        await protocol2.SendGroupMessageAsync(groupId, 30020, "老王", "重启前那句我还想问下", msgRestart,
+            replyTo: lastBotMsgId, ct: cts.Token);
+        Check("★★ 重启后引用机器人发过的消息：仍算“直接对它说”（自评低也照样接）",
+            await WaitUntilAsync(() => bot2.OutputLines.Any(l => l.Contains("但这条是直接跟机器人说话")),
+                TimeSpan.FromSeconds(40)),
+            string.Join(" | ", bot2.OutputLines.Where(l => l.Contains("直接跟机器人说话")).TakeLast(2)));
+        Check("★ 重启时确实把落盘的“我发过哪些消息”读回来了（不是靠会话历史撞上的）",
+            await WaitUntilAsync(() => bot2.OutputLines.Any(l => l.Contains("自己发过的消息") && !l.Contains("记起了 0 条")),
+                TimeSpan.FromSeconds(10)),
+            string.Join(" | ", bot2.OutputLines.Where(l => l.Contains("自己发过的消息")).TakeLast(2)));
+        Check("★★ 重启后引用原文也对上了（落库的就是带「你」的标注，不是“看不到原文”）",
+            await WaitUntilAsync(() => DbProbe.Count(dataDir,
+                "SELECT COUNT(1) FROM messages WHERE text LIKE '%[回复 你「%重启前那句我还想问下%'") >= 1,
+                TimeSpan.FromSeconds(15)),
+            DbProbe.Dump(dataDir, "SELECT text FROM messages ORDER BY seq DESC LIMIT 3"));
+
+        await bot2.StopAsync();
+        bot2.Dispose();
+        await Task.Delay(400);
+
+        // ③ 协议端在 reply 段里直接给了被引用者的 QQ —— 这一个信号就够认“他在回我”（id 是编的，本地查不到）
+        var freshDir = NewDataDir("s19b");
+        using var bot3 = StartBot(new Dictionary<string, string>
+        {
+            ["QQCHAT_DATA_DIR"] = freshDir,
+            ["QQCHAT_API_KEY"] = "sk-mock",
+            ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
+            ["QQCHAT_MODEL"] = "mock-model",
+            ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket",
+            ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
+            ["QQCHAT_UIN"] = "10001",
+            ["QQCHAT_WHITELIST"] = groupId.ToString(),
+            ["QQCHAT_GROUP_COOLDOWN"] = "0",
+        });
+        await WaitForPortAsync(botWsPort, cts.Token, bot3);
+        using var protocol3 = new MockProtocol { SelfId = 10001 };
+        await protocol3.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
+        await protocol3.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
+
+        const long msgProtoQq = 7412;
+        openAi.EnqueueReply("""{"suitability": 5, "reply": "只有段里给了 qq 也接上了"}""");
+        await protocol3.SendGroupMessageAsync(groupId, 30021, "老王", "段里只有qq没正文", msgProtoQq,
+            replyTo: 777777777, replyQuotedQq: protocol3.SelfId, ct: cts.Token);
+        Check("★★ reply 段给了被引用者 QQ 时，哪怕 id/正文都查不到也算“在跟机器人说”",
+            await WaitUntilAsync(() => protocol3.ActionsReceived.Any(a =>
+                a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).Contains("只有段里给了 qq 也接上了")),
+                TimeSpan.FromSeconds(40)),
+            string.Join(" | ", protocol3.ActionsReceived
+                .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
+                .Select(MessageText).TakeLast(3)));
+
+        // ④ 本地啥都不知道、协议端认识这条（它是机器人收过的）—— 后台 get_msg 把原文补写回来。
+        //   关键：原话必须发到**另一个会话**（不在白名单的那个群）—— 这样协议端记得它，
+        //   但本会话的上下文里没有，本地才会查不到、才会去 get_msg。（发在同一个群就只能算“上下文里找到了”）
+        var beforeGetMsg = protocol3.GetMsgHits;
+        const long otherGroupId = 66682;
+        const long msgOld = 7421;
+        const long msgQuoteOld = 7422;
+        openAi.EnqueueReply(silence);
+        await protocol3.SendGroupMessageAsync(otherGroupId, 30022, "老王", "这是很早以前的一句原话", msgOld, ct: cts.Token);
+        await Task.Delay(400);
+        await protocol3.SendGroupMessageAsync(groupId, 30023, "小李", "刚才那句再说一遍", msgQuoteOld,
+            replyTo: msgOld, ct: cts.Token);
+        Check("★★ 引用的原文本地查不到时，会去协议端 get_msg 兜底（并补写进那条消息）",
+            await WaitUntilAsync(() => protocol3.GetMsgHits > beforeGetMsg && DbProbe.Count(freshDir,
+                "SELECT COUNT(1) FROM messages WHERE text LIKE '%[回复 某人「这是很早以前的一句原话」]%'") >= 1,
+                TimeSpan.FromSeconds(40)),
+            $"get_msg 被问了 {protocol3.GetMsgHits - beforeGetMsg} 次；" +
+            DbProbe.Dump(freshDir, "SELECT text FROM messages ORDER BY seq DESC LIMIT 3"));
+
+        await bot3.StopAsync();
     }
 
     /// <summary>取系统提示里某一段（从 header 到下个空行），断言失败时能直接看到那一段。</summary>

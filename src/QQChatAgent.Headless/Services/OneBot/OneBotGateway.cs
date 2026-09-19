@@ -921,7 +921,7 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
         var forwards = await FetchForwardRecordsAsync(root["message"] as JsonArray, CancellationToken.None);
 
         var (text, mentioned, imageUrls, musicShares) = ParseMessage(root["message"] as JsonArray, raw, selfId, forwards);
-        var (replyToId, replyPreview) = ParseReply(root["message"] as JsonArray, raw);
+        var (replyToId, replyPreview, replySenderId) = ParseReply(root["message"] as JsonArray, raw);
 
         var senderName = sender is null
             ? (isGroup ? $"成员 {userId}" : userId.ToString())
@@ -962,7 +962,8 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
             sender?.Role,
             sender?.Title,
             replyToId,
-            replyPreview));
+            replyPreview,
+            replySenderId));
     }
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "…";
@@ -970,9 +971,11 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
     /// <summary>
     /// 取“引用回复”的目标：QQ 的回复会带一个 reply 段（数组形式）或 [CQ:reply,id=…]（CQ 码形式）。
     /// 以前两种都被当成“不认识的段”丢掉 —— 模型只看到一句“我也是”，不知道在回哪条（handoff-4 §27）。
-    /// 字段兼容：id / message_id 两种写法都收；有的实现还会直接带 text/summary 摘要，带了就用。
+    /// 字段兼容：id / message_id 两种写法都收；有的实现还会直接带 text/summary 摘要，带了就用；
+    /// 被引用者的 QQ 号（qq / user_id / sender_id 三种写法）也一并收下 —— 2026-09-19 修“引用机器人的消息被吞”：
+    /// 光看本地“我发过哪些”表（内存、上限 200、重启清空）会在部署重启后认不出“他是在回我”。
     /// </summary>
-    private static (long? Id, string? Preview) ParseReply(JsonArray? segments, string? rawMessage)
+    private static (long? Id, string? Preview, long? SenderId) ParseReply(JsonArray? segments, string? rawMessage)
     {
         if (segments is not null)
         {
@@ -980,35 +983,100 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
             {
                 if (seg?["type"]?.GetValue<string>() != "reply")
                 {
+
                     continue;
                 }
 
                 var data = seg["data"];
                 var id = ParseId(data?["id"]?.GetValue<string>() ?? data?["message_id"]?.GetValue<string>());
                 var preview = data?["text"]?.GetValue<string>() ?? data?["summary"]?.GetValue<string>();
-                return (id, string.IsNullOrWhiteSpace(preview) ? null : preview.Trim());
+                var quotedSender = ParseId(data?["qq"]?.GetValue<string>()
+                                           ?? data?["user_id"]?.GetValue<string>()
+                                           ?? data?["sender_id"]?.GetValue<string>());
+                return (id, string.IsNullOrWhiteSpace(preview) ? null : preview.Trim(), quotedSender);
             }
         }
 
         if (rawMessage is null)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         var marker = rawMessage.IndexOf("[CQ:reply,", StringComparison.Ordinal);
         if (marker < 0)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         var end = rawMessage.IndexOf(']', marker);
         if (end < 0)
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         var args = rawMessage[(marker + 10)..end];
-        return (ParseId(GetArg(args, "id")), null);
+        return (ParseId(GetArg(args, "id")), null, ParseId(GetArg(args, "qq")));
+    }
+
+    /// <summary>
+    /// 按消息 id 取回（纯文本、发送者 QQ）：引用原文本地找不到时的兜底。
+    /// 调用方不能在接收循环里等它（会死锁）—— 机器人是拿它**事后补写**到那条消息上的。
+    /// </summary>
+    public async Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default)
+    {
+        var result = await SendActionAsync("get_msg", $"{{\"message_id\":{messageId}}}", ct);
+        var data = result?["data"];
+        if (data is null)
+        {
+            return (null, 0);
+        }
+
+        // 发送者：NapCat 给 data.sender.user_id，有的实现直接给 data.user_id。
+        // 注意这些字段在真实报文里是**数字**（不是字符串）——直接 GetValue<string>() 会抛
+        // “An element of type 'Number' cannot be converted to a 'System.String'”，
+        // 整个兜底静默失败（2026-09-19 测试拓出来的真 bug）。
+        var senderId = ParseId(NodeAsText(data["sender"]?["user_id"]) ?? NodeAsText(data["user_id"])) ?? 0;
+
+        // 正文：优先拼 text 段（数组形式），拿不到再用 raw_message / message 字符串形式
+        var text = new System.Text.StringBuilder();
+        if (data["message"] is JsonArray segments)
+        {
+            foreach (var seg in segments)
+            {
+                if (seg?["type"]?.GetValue<string>() == "text")
+                {
+                    text.Append(NodeAsText(seg["data"]?["text"]));
+                }
+            }
+        }
+
+        if (text.Length == 0)
+        {
+            text.Append(NodeAsText(data["raw_message"]) ?? (data["message"] is JsonArray ? null : NodeAsText(data["message"])));
+        }
+
+        var body = text.ToString().Replace("[CQ:", string.Empty).Trim();
+        return (body.Length == 0 ? null : body, senderId);
+    }
+
+    /// <summary>把 JsonNode 当文本读（数字/字符串都收）—— 协议端字段类型不稳定，直接 GetValue&lt;string&gt;() 会抛。</summary>
+    private static string? NodeAsText(JsonNode? node)
+    {
+        switch (node)
+        {
+            case null:
+                return null;
+            case JsonValue value when value.TryGetValue<string>(out var s):
+                return s;
+            case JsonValue value when value.TryGetValue<long>(out var l):
+                return l.ToString();
+            case JsonValue value when value.TryGetValue<double>(out var d):
+                return ((long)d).ToString();
+            case JsonValue value when value.TryGetValue<bool>(out var b):
+                return b ? "true" : "false";
+            default:
+                return node.ToJsonString();
+        }
     }
 
     /// <summary>消息 id 解析：字符串/数字都收；拿不到就 null。</summary>

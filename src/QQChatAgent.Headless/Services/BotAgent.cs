@@ -1293,15 +1293,26 @@ public sealed class BotAgent : IDisposable
     }
 
     /// <summary>
-    /// 认出“这条消息引用回复的是哪一条”，返回（那个人叫什么、原话、上下文里到底找到没有）。
+    /// 认出“这条消息引用回复的是哪一条”，返回（那个人叫什么、原话、上下文里到底找到没有、是不是机器人自己说的）。
     /// 查找顺序（先免费的后花钱的）：
     ///   ① 会话上下文里按 id 找 —— 绝大多数引用都是刚发过的消息，这里命中；
-    ///   ② 机器人自己发出去的消息（它们只能从发送响应里拿到 id，见 RememberOwnMessage）；
-    ///   ③ 协议端在 reply 段里自带的摘要文本（有就用）。
-    /// 都找不到时不编内容，只标一句“更早的一条”。
+    ///   ② 机器人自己发出去的消息表（从发送响应里拿到 id，见 RememberOwnMessage；现在会落盘，重启不清）；
+    ///   ③ 协议端在 reply 段里自带的摘要文本（有就用；段里还带了被引用者的 QQ 时，谁说的也当场就知道）。
+    /// 都找不到时不编内容，只标一句“更早的一条”（随后由 EnrichQuotedFromProtocolAsync 事后补齐原文）。
+    ///
+    /// <para>2026-09-19 修“引用机器人发的消息被吞”：IsSelf 以前只看内存表，部署重启（每次部署都会重启）
+    /// 后表是空的 —— 群里“引用机器人上一句再说话”就不算直接对它说，于是整条被静默丢掉。</para>
     /// </summary>
-    private (string Name, string Text, bool Hit) ResolveQuotedMessage(BotConversation conversation, QqChatMessage msg)
+    private (string Name, string Text, bool Hit, bool IsSelf) ResolveQuotedMessage(BotConversation conversation, QqChatMessage msg)
     {
+        // 落盘的那份要在**查询之前**就绪：它是懒加载的，而重启后第一件事往往就是“有人引用了上一句”，
+        // 那时候机器人还没发过任何消息（只在发送时加载的话，这里就会永远查不到 —— 2026-09-19 差点踩到）。
+        EnsureOwnMessagesLoaded();
+        var botUin = _settings.NormalizedUin;
+        var quotedFromProtocol = msg.ReplyToSenderId is long quotedSender
+                                 && !string.IsNullOrWhiteSpace(botUin)
+                                 && quotedSender.ToString() == botUin;
+
         if (msg.ReplyToMessageId is long quotedId)
         {
             var messages = conversation.Messages;
@@ -1313,25 +1324,26 @@ public sealed class BotAgent : IDisposable
                 }
 
                 var quoted = messages[i];
+                var self = quoted.Role == MessageRole.Self;
                 // 自己说的那一条：对模型来说“你”才是有意义的称呼
-                var name = quoted.Role == MessageRole.Self
+                var name = self
                     ? "你"
                     : (string.IsNullOrWhiteSpace(quoted.SenderName) ? "某人" : quoted.SenderName!);
-                return (name, quoted.Text ?? string.Empty, true);
+                return (name, quoted.Text ?? string.Empty, true, self);
             }
 
             if (_ownMessages.TryGetValue(quotedId, out var mine))
             {
-                return ("你", mine.Text, true);
+                return ("你", mine.Text, true, true);
             }
         }
 
         if (msg.ReplyToPreviewText is { Length: > 0 } preview)
         {
-            return ("某人", preview, true);
+            return quotedFromProtocol ? ("你", preview, true, true) : ("某人", preview, true, false);
         }
 
-        return (string.Empty, string.Empty, false);
+        return (quotedFromProtocol ? "你" : string.Empty, string.Empty, false, quotedFromProtocol);
     }
 
     /// <summary>
@@ -1431,9 +1443,14 @@ public sealed class BotAgent : IDisposable
         // 引用回复：把“在回哪条”标进正文。
         // 以前 reply 段被直接丢掉 → 模型只看到一句“我也是，哈哈”，不知道在回什么，
         // 也认不出“他在回机器人自己上一句”（号主反馈：识别不了引用回复消息 —— handoff-4 §27）。
+        // 2026-09-19：引自己那句的判定不再只看内存表（重启就清空）—— 见 ResolveQuotedMessage 的 IsSelf。
+        var quotedIsSelf = false;
+        var quotedResolved = true;
         if (msg.ReplyToMessageId is not null || msg.ReplyToPreviewText is { Length: > 0 })
         {
-            var (quotedName, quotedText, hit) = ResolveQuotedMessage(conversation, msg);
+            var (quotedName, quotedText, hit, isSelf) = ResolveQuotedMessage(conversation, msg);
+            quotedIsSelf = isSelf;
+            quotedResolved = hit;
             var annot = BuildReplyAnnotation(quotedName, quotedText);
             if (annot.Length > 0 && !msg.Text.StartsWith(annot, StringComparison.Ordinal))
             {
@@ -1443,7 +1460,7 @@ public sealed class BotAgent : IDisposable
             }
 
             EmitLog($"引用回复：{msg.SenderName} 引用了" +
-                    (hit ? $" {quotedName} 的「{Shorten(quotedText, 24)}」" : " 一条我这边已看不到的消息（只标了“更早的一条”）"));
+                    (hit ? $" {quotedName} 的「{Shorten(quotedText, 24)}」" : " 一条我这边已看不到的消息（先标“更早的一条”，同时去协议端补原文）"));
         }
 
         var appended = new ChatMessage
@@ -1456,14 +1473,21 @@ public sealed class BotAgent : IDisposable
             QqMessageId = msg.MessageId,
             ImageUrls = msg.ImageUrls,
             // 被点名 = @ 了机器人自己，或引用了机器人发的那条（引了自己的话也是“在跟你说话”）
-            DirectToBot = msg.MentionedSelf ||
-                          (msg.ReplyToMessageId is long quotedId && _ownMessages.ContainsKey(quotedId))
+            DirectToBot = msg.MentionedSelf || quotedIsSelf
         };
         conversation.Append(appended);
         conversation.HasPendingReply = !asideOnly;   // 纯旁白不欠一次回复（也不该被静默兜底抳回来）
         Touch(conversation);
         MessageAdded?.Invoke(conversation.SourceKey, appended);
         Save();
+
+        // 引用的原文本地一条都对不上（重启前的旧消息 / 早被清出上下文）→ 后台去协议端按 id 查一次，
+        // 查到就把真实原文补写进这条消息。为什么是“事后补”而不是发之前查：网关是在接收循环里
+        // 同步调我们的（GetAwaiter().GetResult()），在这里等协议端回包会死锁到超时。
+        if (!quotedResolved && msg.ReplyToMessageId is long unresolvedId)
+        {
+            EnrichQuotedFromProtocolAsync(conversation, appended, unresolvedId);
+        }
         // 人物档案（帮助模型认识群友/好友）
         var botUin = _settings.NormalizedUin;
         var isSelfSender = !string.IsNullOrWhiteSpace(botUin) && msg.UserId.ToString() == botUin;
@@ -4897,6 +4921,7 @@ public sealed class BotAgent : IDisposable
             return;
         }
 
+        EnsureOwnMessagesLoaded();
         _ownMessages[sent.MessageId] = (text, DateTimeOffset.Now);
         if (_ownMessages.Count > 200)
         {
@@ -4906,10 +4931,138 @@ public sealed class BotAgent : IDisposable
                 _ownMessages.TryRemove(stale.Key, out _);
             }
         }
+
+        SaveOwnMessages();
     }
 
-    /// <summary>机器人自己发出去的消息（id → 原话），用于认出“别人引用回复了我说的哪句”。</summary>
+    /// <summary>机器人自己发出去的消息（id → 原话 + 时间），用于认出“别人引用回复了我说的哪句”。
+    /// 落盘在 data/own-messages.json：以前只有内存表（上限 200、重启清空），
+    /// 而每次部署都会重启 —— 于是“引用机器人上一句”在部署后全部认不出来（号主 2026-09-19 反馈被吞）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (string Text, DateTimeOffset At)> _ownMessages = new();
+    private readonly object _ownMessagesFileLock = new();
+    private int _ownMessagesLoaded;
+
+    private static string OwnMessagesPath => Path.Combine(AppPaths.DataDir, "own-messages.json");
+
+    /// <summary>首次用到时把落盘的“我发过哪些消息”读回来（懒加载，读失败就当空表）。</summary>
+    private void EnsureOwnMessagesLoaded()
+    {
+        if (Interlocked.Exchange(ref _ownMessagesLoaded, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            var path = OwnMessagesPath;
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                var id = item.TryGetProperty("id", out var idNode) ? idNode.GetInt64() : 0;
+                var text = item.TryGetProperty("text", out var textNode) ? textNode.GetString() : null;
+                var at = item.TryGetProperty("at", out var atNode) && atNode.TryGetDateTimeOffset(out var parsed)
+                    ? parsed
+                    : DateTimeOffset.Now;
+                if (id > 0 && !string.IsNullOrWhiteSpace(text))
+                {
+                    _ownMessages[id] = (text!, at);
+                }
+            }
+
+            EmitLog($"记起了 {_ownMessages.Count} 条自己发过的消息（引用回复识别用）");
+        }
+        catch (Exception ex)
+        {
+            EmitLog("读取 own-messages.json 失败（当空表继续）：" + ex.Message);
+        }
+    }
+
+    /// <summary>把“我发过哪些消息”落盘（只留最近 200 条，够认出引用回复）。</summary>
+    private void SaveOwnMessages()
+    {
+        try
+        {
+            lock (_ownMessagesFileLock)
+            {
+                Directory.CreateDirectory(AppPaths.DataDir);
+                var items = _ownMessages
+                    .OrderByDescending(kv => kv.Value.At)
+                    .Take(200)
+                    .Select(kv => new { id = kv.Key, text = kv.Value.Text, at = kv.Value.At })
+                    .ToArray();
+                File.WriteAllText(OwnMessagesPath, System.Text.Json.JsonSerializer.Serialize(items));
+            }
+        }
+        catch (Exception ex)
+        {
+            EmitLog("写入 own-messages.json 失败（不影响聊天）：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 引用原文的兜底：本地查不到时去协议端问一次（OneBot get_msg），查到就把真实原文补写进那条消息。
+    /// fire-and-forget：不阻塞收消息（那是在接收循环上跑的），也不影响这一轮已经开始的生成。
+    /// </summary>
+    private void EnrichQuotedFromProtocolAsync(BotConversation conversation, ChatMessage appended, long quotedId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var (text, senderId) = await _source.GetMessageInfoAsync(quotedId).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    EmitLog($"引用原文兜底：协议端取不到 #{quotedId} 的原文（保持“更早的消息”）");
+                    return;
+                }
+
+                var botUin = _settings.NormalizedUin;
+                var isSelf = !string.IsNullOrWhiteSpace(botUin) && senderId > 0 && senderId.ToString() == botUin;
+                bool rewritten;
+                lock (_quoteEnrichLock)
+                {
+                    // 期间可能已经被补过（或被裁剪），只认“还是那句更早的消息”的情况。
+                    // 注意文字要与 BuildReplyAnnotation 的兜底原文完全一致：以前写成“更早的一条”，
+                    // 顺序反了永远不匹配 —— 补写静默失效（2026-09-19 踩过）。
+                    if (appended.Text is null || !appended.Text.Contains("已经看不到原文"))
+                    {
+                        return;
+                    }
+
+                    var body = appended.Text;
+                    var close = body.IndexOf(']');
+                    if (close >= 0 && body.StartsWith("[回复", StringComparison.Ordinal))
+                    {
+                        body = body[(close + 1)..].Trim();
+                    }
+
+                    var annot = BuildReplyAnnotation(isSelf ? "你" : "某人", text);
+                    rewritten = conversation.RewriteText(appended, body.Length > 0 ? annot + " " + body : annot);
+                }
+
+                if (!rewritten)
+                {
+                    EmitLog($"引用原文兜底：取到了 #{quotedId} 的原文，但那条已经被裁出窗口（跳过）");
+                    return;                      // 那条已经被裁出窗口了，没什么可补的
+                }
+
+                MessageAdded?.Invoke(conversation.SourceKey, appended);
+                Save();
+                EmitLog($"引用原文兜底：从协议端取到 #{quotedId} 的原文（{(isSelf ? "我发的" : "别人发的")}「{Shorten(text, 24)}」）");
+            }
+            catch (Exception ex)
+            {
+                EmitLog("引用原文兜底失败（不影响聊天）：" + ex.Message);
+            }
+        });
+    }
+
+    private readonly object _quoteEnrichLock = new();
 
     /// <summary>
     /// 按句末标点分句；过短的句子合并到相邻段，最多切 4 段（避免连发刷屏）。

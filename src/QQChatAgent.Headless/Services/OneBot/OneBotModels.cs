@@ -75,7 +75,9 @@ public sealed record QqChatMessage(
     string? SenderRole = null,
     string? SenderTitle = null,
     long? ReplyToMessageId = null,
-    string? ReplyToPreviewText = null);
+    string? ReplyToPreviewText = null,
+    /// <summary>被引用那条消息的发送者 QQ（协议端在 reply 段里给了才有；有了就不必猜“他是在回我吗”）。</summary>
+    long? ReplyToSenderId = null);
 
 /// <summary>
 /// 戳一戳事件（OneBot v11：post_type=notice）。

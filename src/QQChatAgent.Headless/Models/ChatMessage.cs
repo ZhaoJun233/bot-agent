@@ -5,7 +5,11 @@ public sealed class ChatMessage
 {
     public required MessageRole Role { get; init; }
 
-    public required string Text { get; init; }
+    /// <summary>
+    /// 正文。可写：引用原文的兜底补写要把“更早的一条”改成真实原文（OneBot get_msg 查回来之后），
+    /// 而消息是就地存在会话列表里的，只能改它自己；其它字段保持 init-only。
+    /// </summary>
+    public required string Text { get; set; }
 
     /// <summary>会话内自增序号（持久化不保留，仅在进程内用于前端增量同步）。</summary>
     public long Seq { get; internal set; }

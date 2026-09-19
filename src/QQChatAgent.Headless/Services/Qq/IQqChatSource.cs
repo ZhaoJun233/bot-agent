@@ -48,6 +48,13 @@ public interface IQqChatSource
     Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null);
 
     /// <summary>
+    /// 按消息 id 取回（纯文本、发送者 QQ）—— 引用原文**本地找不到**时的兜底（OneBot <c>get_msg</c>）。
+    /// 典型场景：重启后别人引用了上一条进程发的消息（本地表空了），或那条早被清出上下文。
+    /// 调用方不要在“接收循环里同步跑”的路径上等它（会死锁）：机器人是查完再补写到那条消息上的。
+    /// </summary>
+    Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default);
+
+    /// <summary>
     /// 发一条语音（OneBot 的 record 段）。
     /// audioUrl 指向一个**协议端自己能访问**的音频地址（如 TTS 旁路容器的 /speak?text=…）：
     /// 机器人不下载音频，把 URL 交给协议端去下载、转 silk、上传 —— 这样这边就不用碰 silk 编码。
