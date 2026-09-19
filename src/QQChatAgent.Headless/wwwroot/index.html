@@ -167,6 +167,20 @@
             <label>模型名称<span class="hint" id="modelSrc"></span></label>
             <input type="text" id="setModel" placeholder="网关支持的模型名" />
           </div>
+          <div class="field">
+            <label class="switch-row">
+              <input type="checkbox" id="setFastReply" />
+              <span class="switch"></span>
+              <span>快速回复（少思考）</span>
+            </label>
+            <span class="hint">聊天回复改用轻量模型，快 2~3 倍；硬推理会弱一些。标题综结 / 画像 / 表情包描述仍用主模型。</span>
+          </div>
+
+          <div class="field">
+            <label>快速档模型<span class="hint">开着上面开关时，聊天用它回</span></label>
+            <input type="text" id="setFastModel" placeholder="轻量模型名（跟着中转走，留空则开关不生效）" />
+          </div>
+
 
           <div class="field">
             <label>单次回复字数上限<span class="hint">MaxTokens</span></label>

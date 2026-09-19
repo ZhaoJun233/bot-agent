@@ -426,7 +426,8 @@ public sealed class OpenAiClient
 
         var payload = new JsonObject
         {
-            ["model"] = _settings.Model,
+            // 聊天回复：快速档开就换轻量模型（ReplyModel 里包了判断；其余后台活儿仍用主模型）
+            ["model"] = _settings.ReplyModel,
             ["messages"] = messages,
             ["max_tokens"] = _settings.MaxTokens > 0 ? _settings.MaxTokens : 2048, // 仅防御非法值（旧数据可能为负数），不设上限
             ["temperature"] = 0.7

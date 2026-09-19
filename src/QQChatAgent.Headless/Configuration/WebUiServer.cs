@@ -1455,6 +1455,19 @@ public sealed partial class WebUiServer : IDisposable
                     : "gpt-4o-mini";
         }
 
+        // 思考档位（快速回复）：开 = 聊天回复换轻量模型（快 2~3 倍；后台活儿不受影响）
+        if (body["fastReply"] is JsonNode fr)
+        {
+            s.FastReply = fr.GetValue<bool>();
+        }
+
+        if (body["fastModel"] is JsonValue fm && fm.TryGetValue<string>(out var fastName))
+        {
+            // 留空就留空：快速档没填模型时不生效（仍旧用主模型），别自作主张塞一个具体模型名
+            // —— 具体名字跟着中转走，写死只会让人以为“开关没生效”。
+            s.FastModel = (fastName ?? string.Empty).Trim();
+        }
+
         // 密钥：存 data/secrets.json（权限 600），**不写 settings.json**；留空 = 删掉、回退环境变量
         if (body["apiKey"] is JsonValue keyValue && keyValue.TryGetValue<string>(out var rawKey))
         {
@@ -1770,6 +1783,9 @@ public sealed partial class WebUiServer : IDisposable
         ["whitelistGroupsFromLegacy"] = string.IsNullOrWhiteSpace(s.WhitelistGroups) && s.MessageWhitelist.Length > 0,
         ["whitelistPrivatesFromLegacy"] = string.IsNullOrWhiteSpace(s.WhitelistPrivates) && s.MessageWhitelist.Length > 0,
                 ["aiDesire"] = s.AiDesire,
+                ["fastReply"] = s.FastReply,
+                ["fastModel"] = s.FastModel,
+                ["replyModel"] = s.ReplyModel,
                 ["suitabilityThreshold"] = s.SuitabilityThreshold,
                 ["aiModeEnabled"] = s.AiModeEnabled,
                 ["maxTokens"] = s.MaxTokens,
@@ -1881,6 +1897,9 @@ public sealed partial class WebUiServer : IDisposable
                 ["modelBaseUrlSource"] = string.IsNullOrWhiteSpace(s.ModelBaseUrlOverride) ? "env" : "panel",
                 ["model"] = s.Model,
                 ["modelSource"] = string.IsNullOrWhiteSpace(s.ModelOverride) ? "env" : "panel",
+                ["fastReply"] = s.FastReply,
+                ["fastModel"] = s.FastModel,
+                ["replyModel"] = s.ReplyModel,
                 ["maxTokens"] = s.MaxTokens,
                 ["apiKeyMasked"] = Mask(s.ApiKey),
                 ["apiKeySet"] = !string.IsNullOrWhiteSpace(s.ApiKey),

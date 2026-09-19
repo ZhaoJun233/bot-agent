@@ -50,6 +50,10 @@ public static class BotConfig
         s.ApiKey = Secret("QQCHAT_API_KEY", "OPENAI_API_KEY") ?? s.ApiKey;
         s.ModelBaseUrl = Str("QQCHAT_BASE_URL", "OPENAI_BASE_URL") ?? s.ModelBaseUrl;
         s.Model = Str("QQCHAT_MODEL", "OPENAI_MODEL") ?? s.Model;
+        // 思考档位：快速回复（聊天用轻量模型）。这两个是“可由面板改”的，所以只在面板没改过时才播种 ——
+        // 严格说它们属于“运行时可改”那类，放在这里是为了跟模型名挨着（真值以 settings 为准）。
+        s.FastModel = Str("QQCHAT_FAST_MODEL") ?? s.FastModel;
+        s.FastReply = Bool("QQCHAT_FAST_REPLY") ?? s.FastReply;
         s.OneBotToken = Secret("QQCHAT_ONEBOT_TOKEN") ?? s.OneBotToken;
         s.QuickLoginUin = Str("QQCHAT_UIN", "QQCHAT_QUICK_LOGIN_UIN") ?? s.QuickLoginUin;
         s.OneBotProtocol = Str("QQCHAT_ONEBOT_PROTOCOL") ?? s.OneBotProtocol;

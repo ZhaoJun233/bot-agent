@@ -1068,6 +1068,8 @@
       ? e.apiKeyMasked + "（已设置，留空即不修改）"
       : "还没配密钥，在这里填一个";
     $("setModel").value = e.model || "";
+    $("setFastReply").checked = !!e.fastReply;
+    $("setFastModel").value = e.fastModel || "";
     // 这三个值当前是从哪儿来的：面板改过就归面板，否则是容器环境变量
     $("baseUrlSrc").textContent = e.modelBaseUrlSource === "panel" ? "来自面板（保存后立即生效）" : "来自环境变量";
     $("modelSrc").textContent = e.modelSource === "panel" ? "来自面板（保存后立即生效）" : "来自环境变量";
@@ -1263,6 +1265,8 @@
       // 模型接口（面板可改；留空 = 回退环境变量）
       modelBaseUrl: $("setBaseUrl").value.trim(),
       model: $("setModel").value.trim(),
+      fastReply: $("setFastReply").checked,
+      fastModel: $("setFastModel").value.trim(),
       botPersona: $("setPersona").value,
       messageWhitelist: $("setWhitelist").value,
       whitelistGroups: $("setWhitelistGroups").value,

@@ -35,6 +35,31 @@ public sealed class AppSettings
     /// <summary>面板里改过的模型名；空 = 用环境变量 QQCHAT_MODEL。</summary>
     public string? ModelOverride { get; set; }
 
+    /// <summary>
+    /// 快速回复档（面板开关）：开 = 聊天回复改用 <see cref="FastModel"/>（轻量模型）。
+    /// </summary>
+    /// <remarks>
+    /// 2026-09-19 实测（同一条中转链路，1.5k 字提示词）：
+    /// 主模型（高档 / <c>-high</c>）首字 ~6.6s、难题 8.7~11.5s；轻量档（<c>-lite</c>）3.7~4.5s。
+    /// 而“关思考”的参数（<c>reasoning_effort</c> / <c>thinking.type=disabled</c> / <c>thinking_budget=0</c>）
+    /// 在这条链路上**实测全部无效**（首字一样 ~6.6s）—— 要快只能换档，所以开关做成了换模型。
+    /// 代价：轻量档在硬推理上会弱一些（同题实测有错），群聊闲聊无碍。
+    /// 只影响**聊天回复**这一路；标题综结/画像/表情包描述这些后台活儿仍用主模型。
+    /// </remarks>
+    public bool FastReply { get; set; }
+
+    /// <summary>
+    /// 快速档用哪个模型（面板可改）。
+    /// 故意**不内置默认值**：具体模型名跟着中转走（各家叫法不同，换中转就变），
+    /// 写死一个只会让人误以为“开了开关却没生效”。留空 = 快速档不生效（仍旧用主模型）。
+    /// </summary>
+    public string FastModel { get; set; } = string.Empty;
+
+    /// <summary>聊天回复实际发给模型的名字：快速档开且填了模型 → 用它，否则主模型。</summary>
+    [JsonIgnore]
+    public string ReplyModel =>
+        FastReply && !string.IsNullOrWhiteSpace(FastModel) ? FastModel.Trim() : Model;
+
     /// <summary>面板里填的 API Key（**不落 settings.json**，单独存 secrets 表，库文件权限 600）。</summary>
     [JsonIgnore]
     public string? ApiKeyOverride { get; set; }

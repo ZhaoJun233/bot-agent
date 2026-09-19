@@ -50,6 +50,7 @@ public static partial class Program
             ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_HEALTH_PORT"] = healthPort.ToString(),
+            ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1",   // ⑩ 要下载本机图片服务器上的图（线上图片 URL 都是公网域名，默认仍拦私网）
             // ---- 本机 Agent ----
             ["QQCHAT_AGENT"] = "1",
             ["QQCHAT_AGENT_USERS"] = "20002",           // 老王能用；小李(20003) 不能
@@ -653,6 +654,39 @@ public static partial class Program
             await http2.PostAsync($"http://127.0.0.1:{healthPort}/api/settings",
                 new StringContent(new JsonObject { ["agentTarget"] = "auto" }.ToJsonString(), Encoding.UTF8, "application/json"));
             await Task.Delay(200);
+        }
+
+        // ---- ⑩ // 任务带图片：agent 侧要拿得到图 ----
+        //   号主 2026-09-19 报“给 Agent 发图片识别不了”：任务正文以前只剩一个「[图片]」占位，
+        //   图片 URL 根本没跟过去。现在正文要带直链 + 服务器留档路径，且留档字节要对得上。
+        {
+            using var imgHost = new MockImageHost(FreePort(17886));
+            imgHost.Start();
+
+            var imgTasksBefore = bridge.Tasks.Count;
+            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//看看这张图", 15090,
+                mentionBot: false, imageUrl: imgHost.Url(1), ct: cts.Token);
+            Check("★ 带图片的 // 任务确实下发了",
+                await WaitUntilAsync(() => bridge.Tasks.Count > imgTasksBefore, TimeSpan.FromSeconds(30)),
+                $"任务数 {imgTasksBefore} → {bridge.Tasks.Count}");
+
+            var imgPrompt = bridge.Tasks.Last()["prompt"]?.GetValue<string>() ?? string.Empty;
+            Check("★★ 任务正文里带了图片直链（以前只剩「[图片]」占位，agent 看不到图）",
+                imgPrompt.Contains(imgHost.Url(1)) && imgPrompt.Contains("带了 1 张图片"),
+                imgPrompt.Length > 260 ? imgPrompt[..260] + "…" : imgPrompt);
+            Check("★ 原正文没被顶掉",
+                imgPrompt.StartsWith("看看这张图"), imgPrompt.Split('\n')[0]);
+
+            var imgSavedDir = Path.Combine(dataDir, "data", "agent-images");
+            var imgSaved = Directory.Exists(imgSavedDir)
+                ? Directory.EnumerateFiles(imgSavedDir).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                : null;
+            Check("★★ 顺手在服务器上留了一份（外部设备取不动直链时还有这条路）",
+                imgSaved is not null && imgPrompt.Contains("/data/agent-images/" + Path.GetFileName(imgSaved)),
+                imgSaved is null ? "(没有留档)" : Path.GetFileName(imgSaved));
+            Check("★ 留档的就是那张图（字节对得上）",
+                imgSaved is not null && File.ReadAllBytes(imgSaved).SequenceEqual(MockImageHost.Bytes(1)),
+                imgSaved is null ? "(没有留档)" : $"长度 {new FileInfo(imgSaved).Length}");
         }
 
         await bot.StopAsync();

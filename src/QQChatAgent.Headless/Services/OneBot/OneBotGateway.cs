@@ -1055,7 +1055,10 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
             text.Append(NodeAsText(data["raw_message"]) ?? (data["message"] is JsonArray ? null : NodeAsText(data["message"])));
         }
 
-        var body = text.ToString().Replace("[CQ:", string.Empty).Trim();
+        // 有些实现只给 CQ 码字符串（raw_message）：直接当正文会剩下
+        // “image,file=0CC3F826…” 这种尾巴（2026-09-19 线上日志里看见过），
+        // 用现成的 StripCqCode 转成 [图片]/@某人 这种可读写法。
+        var body = StripCqCode(text.ToString(), _selfId, out _).Trim();
         return (body.Length == 0 ? null : body, senderId);
     }
 

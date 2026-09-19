@@ -876,7 +876,11 @@ public sealed class BotAgent : IDisposable
             $"已启动。AI={( _settings.AiModeEnabled ? "开" : "关")}, " +
             $"群聊白名单={WhitelistSummary(_whitelistAllGroups, _whitelistGroups)}{(_whitelistGroupsFromLegacy ? "（用旧的共用名单）" : "")}, " +
             $"私聊白名单={WhitelistSummary(_whitelistAllPrivates, _whitelistPrivates)}{(_whitelistPrivatesFromLegacy ? "（用旧的共用名单）" : "")}, " +
-            $"模型={_settings.Model}, 人设={(string.IsNullOrWhiteSpace(_settings.BotPersona) ? "无" : "已配置")}, " +
+            $"模型={_settings.ReplyModel}" +
+            (_settings.FastReply && _settings.ReplyModel != _settings.Model
+                ? $"（快速档；主模型 {_settings.Model}）"
+                : string.Empty) +
+            $", 人设={(string.IsNullOrWhiteSpace(_settings.BotPersona) ? "无" : "已配置")}, " +
             $"表情包={(_settings.EnableStickers ? $"开（{_stickers.Count}/{_settings.StickerLibraryMax} 张，已描述 {_stickers.DescribedCount}）" : "关")}");
     }
 
@@ -1662,6 +1666,93 @@ public sealed class BotAgent : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// 把这条消息带的图片整理成 agent 任务能用的“附件说明”，追加在任务正文后面（纯文本）。
+    /// </summary>
+    /// <remarks>
+    /// 为什么要有这玩意儿：`//` 任务此前只把**文本**交给 agent —— 消息里的图片段在解析时
+    /// 已经变成「[图片]」三个字，URL 根本没跟过去，于是外部设备（本机 pi）与服务器 agent
+    /// 都不知道有图（2026-09-19 号主报“给 Agent 发图片识别不了”，日志里就是 `agent 命令: [图片]`）。
+    /// <para>
+    /// 两种取法都给上，谁顺手用谁：
+    /// ① QQ 直链（带时效 rkey，尽快取）；② 顺手下载一份留档到 <c>data/agent-images/</c>，
+    /// 在这台服务器上跑的 agent 可以直接读文件（容器里是 <c>/data/…</c>）。
+    /// 不改桥的协议 —— 只是正文里多几行。
+    /// </para>
+    /// </remarks>
+    private async Task<string> BuildAgentImageNoteAsync(QqChatMessage msg)
+    {
+        if (msg.ImageUrls is not { Count: > 0 } urls)
+        {
+            return string.Empty;
+        }
+
+        var dir = Path.Combine(AppPaths.DataDir, "agent-images");
+        var lines = new List<string>();
+        var count = 0;
+        foreach (var url in urls.Take(3))       // 与聊天识图一致：每条最多 3 张
+        {
+            count++;
+            string? saved = null;
+            try
+            {
+                // 给它 10 秒：下载慢不该把“收到，去跑”这句回话拖太久（失败也不影响任务）。
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var downloaded = await _brain.DownloadImageAsync(url, timeout.Token, msg.MessageId);
+                if (downloaded is not null)
+                {
+                    Directory.CreateDirectory(dir);
+                    var ext = string.IsNullOrWhiteSpace(downloaded.Value.Ext) ? ".jpg" : downloaded.Value.Ext;
+                    var name = $"{DateTime.Now:yyyyMMdd-HHmmss}-{msg.MessageId}-{count}{ext}";
+                    await File.WriteAllBytesAsync(Path.Combine(dir, name), downloaded.Value.Data);
+                    saved = name;
+                }
+            }
+            catch (Exception ex)
+            {
+                EmitLog($"agent 图片留档失败（不影响任务）：{ex.GetType().Name} {ex.Message}");
+            }
+
+            lines.Add($"  图{count}: {url}");
+            if (saved is not null)
+            {
+                lines.Add($"        服务器留档: /data/agent-images/{saved}（宿主 /opt/qqchat/data/agent-images/{saved}）");
+            }
+        }
+
+        PruneAgentImages(dir);
+
+        EmitLog($"agent 任务带了 {count} 张图（已把直链/留档写进任务正文）");
+        return "\n\n（这条消息带了 " + count + " 张图片：agent 侧看不到图本体，需要就自己取 ——\n" +
+               string.Join("\n", lines) +
+               "\n  直链带时效签名、会过期，要看得尽快；取回存成本地文件后当图片打开（本机 pi 可用 read 读图）；" +
+               "服务器上的 agent 直接读留档路径。）";
+    }
+
+    /// <summary>清掉 agent 图片留档里超过 3 天的老文件（best-effort，出错不外传）。</summary>
+    private static void PruneAgentImages(string dir)
+    {
+        try
+        {
+            if (!Directory.Exists(dir))
+            {
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > TimeSpan.FromDays(3))
+                {
+                    File.Delete(file);
+                }
+            }
+        }
+        catch
+        {
+            // 清理失败无所谓，下次再说
+        }
+    }
+
     /// <summary>agent 命令的主入口：权限 → 子命令（stop/status）→ 排任务。</summary>
     /// <remarks>
     /// 包一层 try/catch：调用处是 fire-and-forget（`_ = …`），不接住的话异常会被静默吞掉 ——
@@ -2061,6 +2152,11 @@ public sealed class BotAgent : IDisposable
             await SendPlainAsync(conversation, HelpText(conversation.SourceKey));
             return;
         }
+
+        // 图片：agent 任务以前只传正文，图片在那条消息里只剩一个「[图片]」占位 —— 两个后端
+        // 都看不到图（号主 2026-09-19 报“给 agent 发图片识别不了”）。把直链与“服务器留档”
+        // 一起写进任务正文，不动桥的报文格式（两边都吃纯文本）。
+        payload += await BuildAgentImageNoteAsync(msg);
 
         // ── 这一条走哪边？（号主 2026-09-17：两个开关各自管一边，还能单条指定）──
         //   ① 命令里带 @ 目标：`//@server …` / `//@host …` / `//@ZHAOSPC …`（优先级最高）

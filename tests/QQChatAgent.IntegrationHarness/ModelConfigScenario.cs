@@ -139,6 +139,53 @@ public static partial class Program
             Check("★ 重启后依然用面板里的值（环境变量不再回滚它）", stillB,
                 $"重启后 B 收到 {openAiB.Requests.Count} 次；启动日志：{Truncate(bootLines, 240)}");
 
+            // ---- 6.5) 思考档位（快速回复）：开关真的会把聊天请求换成轻量模型 ----
+            //   2026-09-19 加：实测同一条链路上“关思考”的参数（reasoning_effort / thinking.type=disabled /
+            //   thinking_budget=0）全部无效（首字依旧 ~6.6s），真正能提速的是换轻量档（快 2~3 倍），
+            //   所以开关做成“聊天回复换模型”；这里钉住：开着用快速模型、关掉回主模型。
+            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+            {
+                using var fastContent = new StringContent(
+                    new JsonObject { ["fastReply"] = true, ["fastModel"] = "model-fast-x" }.ToJsonString(),
+                    Encoding.UTF8, "application/json");
+                using var fastRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", fastContent, cts.Token);
+                Check("快速档开关能存进面板", fastRes.IsSuccessStatusCode, fastRes.StatusCode.ToString());
+            }
+
+            await Task.Delay(500);
+            var (_, settingsFast) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+            Check("★ 面板回读里有快速档与“这轮实际用哪个模型”",
+                settingsFast.Contains("\"fastReply\":true") && settingsFast.Contains("\"replyModel\":\"model-fast-x\""),
+                Truncate(settingsFast, 200));
+
+            openAiB.EnqueueReply("""{"suitability": 90, "reply": "快速档回一句"}""");
+            openAiB.ClearRequests();
+            await protocol2.SendGroupMessageAsync(groupId, 20001, "小明", "快速档回一句", 51004, mentionBot: true, ct: cts.Token);
+            // 只认“确实带了这条探针正文”的那个请求：背景活儿（标题/画像）也用同一个网关，
+            // 拿 Requests.Last 会撞上它们；直接比较 JSON 字符串也不行（中文会被转义成 \uXXXX）。
+            await WaitUntilAsync(() => openAiB.Requests.Any(r => UserTexts(r).Any(t => t.Contains("快速档回一句"))), TimeSpan.FromSeconds(60));
+            var fastHit = openAiB.Requests.LastOrDefault(r => UserTexts(r).Any(t => t.Contains("快速档回一句")));
+            var fastModelInReq = fastHit?["model"]?.GetValue<string>();
+            Check("★★ 快速档开着时聊天请求用的是快速模型（而不是主模型）",
+                fastModelInReq == "model-fast-x", $"请求里的 model = {fastModelInReq ?? "(无)"}");
+
+            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+            {
+                using var offContent = new StringContent("{\"fastReply\":false}", Encoding.UTF8, "application/json");
+                using var offRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", offContent, cts.Token);
+                Check("关掉快速档返回 200", offRes.IsSuccessStatusCode, offRes.StatusCode.ToString());
+            }
+
+            await Task.Delay(500);
+            openAiB.EnqueueReply("""{"suitability": 90, "reply": "关掉之后再回一句"}""");
+            openAiB.ClearRequests();
+            await protocol2.SendGroupMessageAsync(groupId, 20001, "小明", "关掉之后再回一句", 51005, mentionBot: true, ct: cts.Token);
+            await WaitUntilAsync(() => openAiB.Requests.Any(r => UserTexts(r).Any(t => t.Contains("关掉之后再回一句"))), TimeSpan.FromSeconds(60));
+            var backHit = openAiB.Requests.LastOrDefault(r => UserTexts(r).Any(t => t.Contains("关掉之后再回一句")));
+            var backModelInReq = backHit?["model"]?.GetValue<string>();
+            Check("★★ 关掉快速档后回到主模型（开关不是单程票）",
+                backModelInReq == "model-from-panel", $"请求里的 model = {backModelInReq ?? "(无)"}");
+
             // ---- 7) 清空密钥 → 回退环境变量 ----
             using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
             {
