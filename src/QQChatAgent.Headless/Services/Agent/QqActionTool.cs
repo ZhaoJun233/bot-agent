@@ -37,9 +37,11 @@ public static class QqActionCatalog
     /// <summary>全部动作（顺序即面板提示里的顺序）。</summary>
     public static readonly QqActionSpec[] All =
     {
-        new("like", "safe", "给某个**人**点赞（QQ 名片赞）。user_id 必填，times 1-20（默认 1；同一个人一天点不了几个）",
+        new("like", "safe", "给某个**人**点赞（QQ 名片赞）。user_id 必填，times 1-20（默认 1；同一个人一天点不了几个）。"
+            + "注意：名片赞只有**好友**（或对方允许陌生人点赞）才点得成，非好友/对方关了权限会被 QQ 回绝；"
+            + "被回绝时不要重试，改用 poke（戳一戳）或 emoji_like（贴表情）—— 这两个不看好友关系",
             new[] { "点赞", "名片赞", "赞一下", "zan" }, "send_like"),
-        new("poke", "safe", "戳一戳某人。user_id 必填（群里也能戳别人）",
+        new("poke", "safe", "戳一戳某人。user_id 必填（群里也能戳别人；不看好友关系，非好友的群友一样能戳）",
             new[] { "戳一戳", "拍一拍", "戳", "拍拍" }, "group_poke", "friend_poke"),
         new("emoji_like", "safe", "给某**条消息**贴个表情回应。message_id 必填（可写 this）；emoji_id 默认 128077（👍）",
             new[] { "表情回应", "给消息点赞", "贴表情", "回应一下" }, "set_msg_emoji_like"),
@@ -229,7 +231,10 @@ public sealed class SessionQqActionHost : IQqActionHost
 
                 var times = (int)Math.Clamp(ResolveNumber(Text(args, "times") ?? Text(args, "count"), 1), 1, 20);
                 var ok = await _gateway.SendLikeAsync(user.Value, times, ct);
-                return ok ? $"✅ 给 {user} 点了 {times} 个赞" : $"❌ 点赞没成功（今天的赞可能点完了、或对方不是好友）";
+                return ok
+                    ? $"✅ 给 {user} 点了 {times} 个赞"
+                    : $"❌ 点赞没成功（QQ 侧回绝：名片赞只有好友或对方允许陌生人点赞时才点得成，也可能今天给这个人点满了）。"
+                      + "这次换个方式：poke（戳一戳）或 emoji_like（贴表情）不要求好友关系。";
             }
 
             case "poke":

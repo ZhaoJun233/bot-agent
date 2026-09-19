@@ -66,6 +66,11 @@ public static partial class Program
         agentAi.AddRule("报一下你给谁点了赞",
             $$"""{"final":"给 {{targetId}} 点过赞了。"}""");
 
+        // ⑦ 非好友点赞：QQ 会回“对方权限设置/点不了” → 工具要把“改用戳一戳”这条路告诉模型
+        //     （现实里很常见：群里陌生人开了“仅好友可赞”，send_like 必失败）
+        agentAi.AddRule("给那个陌生人点个赞",
+            $$"""{"tool":"qq","action":"like","user_id":{{targetId}},"times":1}""");
+
         using var bot = StartBot(new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = dataDir,
@@ -215,5 +220,22 @@ public static partial class Program
         Check("★ 全程没有出现过“不认识的动作”这类内部错误回群",
             Sent().All(t => !t.Contains("不认识的动作") && !t.Contains("工具执行出错")),
             string.Join(" | ", Sent().TakeLast(3)));
+
+        // ── ⑦ 非好友点赞被 QQ 回绝：不硬试，改推“戳一戳”（现实里最常见的一种失败）──
+        protocol.FailActions.Add("send_like");   // 让协议端对 send_like 回 retcode≠0（跟真机的“对方权限设置”同一条路）
+        var before7 = ActionCount("send_like");
+        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//给那个陌生人点个赞", 17007, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => ActionCount("send_like") > before7, TimeSpan.FromSeconds(60));
+        await Task.Delay(600);
+
+        Check("★ 协议端回绝时工具仍然真的尝试了（不是静默跳过、也不是假报成功）",
+            ActionCount("send_like") > before7, $"send_like 共 {ActionCount("send_like")} 次");
+        Check("★ 给模型的失败提示里写清了原因并且给了替代方案（poke / emoji_like）",
+            Enumerable.Range(0, agentAi.Requests.Count).Any(i => agentAi.DescribeRequest(i).Contains("这次换个方式")),
+            $"agent 接口收到 {agentAi.Requests.Count} 次请求");
+        Check("★ like 的工具说明本身就讲明“只有好友/对方允许陌生人点赞”才点得成（模型第一轮就知道不该硬试）",
+            Enumerable.Range(0, agentAi.Requests.Count).Any(i => agentAi.DescribeRequest(i).Contains("只有**好友**")),
+            $"agent 接口收到 {agentAi.Requests.Count} 次请求");
+        protocol.FailActions.Remove("send_like");
     }
 }
