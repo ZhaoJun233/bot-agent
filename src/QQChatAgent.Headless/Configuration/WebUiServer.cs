@@ -592,6 +592,12 @@ public sealed partial class WebUiServer : IDisposable
             return;
         }
 
+        if (path.Equals("/api/voice/clone/delete", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleVoiceCloneDeleteAsync(context, method);
+            return;
+        }
+
         if (path.Equals("/api/voice/clone", StringComparison.OrdinalIgnoreCase))
         {
             await HandleVoiceCloneAsync(context, method);
@@ -2815,7 +2821,30 @@ public sealed partial class WebUiServer : IDisposable
         });
     }
 
-    /// <summary>面板传来的 base64 → 字节（容忍 <c>data:audio/…;base64,</c> 前缀）。</summary>
+    /// <summary>POST /api/voice/clone/delete：删掉一个自己复刻的音色（请求体 {"voiceId":"…"}）。</summary>
+    private async Task HandleVoiceCloneDeleteAsync(HttpListenerContext context, string method)
+    {
+        if (method != "POST")
+        {
+            await WriteJsonAsync(context, 405, new JsonObject { ["error"] = "用法：POST /api/voice/clone/delete" });
+            return;
+        }
+
+        var voice = _agent.Voice;
+        if (voice is null)
+        {
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = "这个实例没有语音服务" });
+            return;
+        }
+
+        var body = await ReadJsonAsync(context);
+        var voiceId = (body?["voiceId"]?.GetValue<string>() ?? string.Empty).Trim();
+        var (ok, error) = await voice.DeleteClonedVoiceAsync(voiceId, CancellationToken.None);
+        FileLog.Write("Voice", ok ? $"面板删掉了复刻音色：{voiceId}" : "面板删除复刻音色失败：" + error);
+        await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = ok, ["voiceId"] = voiceId, ["error"] = error });
+    }
+
+    /// <summary>面板传来的 base64 → 字节（容忍 <c>data:audio/…;base64,</c> 前缀）。</summary></summary>
     private static (byte[]? Data, string? Error) DecodeAudio(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))

@@ -634,6 +634,59 @@ public sealed class VoiceService
         return null;
     }
 
+    /// <summary>
+    /// 删掉一个自己复刻的音色（<c>POST /v1/delete_voice</c>，voice_type=voice_cloning）。
+    /// 为什么要做进面板：克隆音色有额度、且“同时只能有一个同名 ID”——旧的不删影响后面的尝试；
+    /// 而且官方删是**只能删克隆音色**，系统音色删不了（删了也不影响预置音色）。
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> DeleteClonedVoiceAsync(string voiceId, CancellationToken ct)
+    {
+        var baseUrl = CloneBaseUrl();
+        var key = CloneKey();
+        if (baseUrl is null)
+        {
+            return (false, "当前服务商不支持音色复刻（也就没有“删除克隆音色”这套接口）");
+        }
+
+        if (key is null)
+        {
+            return (false, "还没配云端 TTS 密钥");
+        }
+
+        var wanted = (voiceId ?? string.Empty).Trim();
+        if (wanted.Length == 0)
+        {
+            return (false, "没指定要删哪个音色");
+        }
+
+        try
+        {
+            var body = new JsonObject { ["voice_type"] = "voice_cloning", ["voice_id"] = wanted };
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/delete_voice")
+            {
+                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + key);
+
+            using var resp = await _http.SendAsync(req, ct);
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            var json = JsonNode.Parse(text);
+            var status = NodeInt(json?["base_resp"]?["status_code"]);
+            if (!resp.IsSuccessStatusCode || status != 0)
+            {
+                var msg = NodeText(json?["base_resp"]?["status_msg"]);
+                return (false, $"删除失败（HTTP {(int)resp.StatusCode}，status {status}）：{(msg.Length > 0 ? msg : Shorten(text))}");
+            }
+
+            _log($"[Voice] 已删掉复刻音色：{wanted}");
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, "删除失败：" + ex.Message);
+        }
+    }
+
     private static string Shorten(string text)
     {
         var one = (text ?? string.Empty).Replace('\n', ' ').Trim();

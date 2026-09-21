@@ -2741,15 +2741,68 @@ function renderConversations(force) {
   async function loadClonedVoices() {
     const box = $("cloneList");
     if (!box) return;
+    box.textContent = "";
     try {
       const d = await api("/api/voice/clones");
       if (d.error) {
         box.textContent = "复刻音色：" + d.error;
         return;
       }
-      box.textContent = d.voices && d.voices.length
-        ? "已复刻的" + d.voices.length + "个音色（点一下填进上面的「音色」格）：" + d.voices.join("、")
-        : "还没有复刻过音色。";
+
+      const list = d.voices || [];
+      if (!list.length) {
+        box.textContent = "还没有复刻过音色。";
+        return;
+      }
+
+      // 一行一个：[用它] [删除]，而不是一大串纯文本（要能删才叫管理）
+      const head = document.createElement("div");
+      head.textContent = "已复刻的 " + list.length + " 个音色：";
+      box.appendChild(head);
+      for (const id of list) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:4px";
+
+        const name = document.createElement("code");
+        name.textContent = id;
+        row.appendChild(name);
+
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "btn-secondary";
+        use.textContent = "用它";
+        use.title = "填进上面的「音色」格（还要点保存才生效）";
+        use.addEventListener("click", () => { $("setVoiceName").value = id; $("cloneHint").textContent = "已填入音色：" + id + " —— 记得点保存。"; });
+        row.appendChild(use);
+
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn-secondary";
+        del.textContent = "删除";
+        del.title = "从云端删掉这个克隆音色（只能删克隆的，系统音色删不掉）";
+        del.addEventListener("click", async () => {
+          if (!confirm("删掉音色 " + id + "？\n\n云端会真的删除它；正在用它的会话之后会发不出语音（换成别的音色即可）。")) return;
+          del.disabled = true;
+          del.textContent = "删除中…";
+          try {
+            const r = await api("/api/voice/clone/delete", { method: "POST", body: JSON.stringify({ voiceId: id }) });
+            if (r.ok) {
+              $("cloneHint").textContent = "已删除音色：" + id;
+              loadClonedVoices();
+            } else {
+              $("cloneHint").textContent = "删除失败：" + (r.error || "未知原因");
+              del.disabled = false;
+              del.textContent = "删除";
+            }
+          } catch (e) {
+            $("cloneHint").textContent = "删除失败：" + e.message;
+            del.disabled = false;
+            del.textContent = "删除";
+          }
+        });
+        row.appendChild(del);
+        box.appendChild(row);
+      }
     } catch (e) {
       box.textContent = "读不到复刻列表：" + e.message;
     }
@@ -2856,10 +2909,11 @@ function renderConversations(force) {
       }
     });
 
-    // 列出来的复刻音色点一下就填进「音色」格
+    // 列出来的复刻音色点一下就填进「音色」格（现在那行也带了按钮，保留这段做兼容）
     $("cloneList").addEventListener("click", (e) => {
+      if (e.target && e.target.tagName === "BUTTON") return; // 别抢按钮的活
       const t = (e.target && e.target.textContent || "").trim();
-      if (/^[A-Za-z0-9_-]{3,64}$/.test(t)) $("setVoiceName").value = t;
+      if (/^[a-z][a-z0-9_-]{7,63}$/.test(t)) $("setVoiceName").value = t;
     });
   }
 
