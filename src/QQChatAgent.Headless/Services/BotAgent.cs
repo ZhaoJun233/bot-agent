@@ -3737,7 +3737,11 @@ public sealed class BotAgent : IDisposable
     /// </summary>
     private bool IsWhitelisted(QqChatMessage msg)
         => IsWhitelistedKey(Channels.Key(
-            Channels.ChannelOf(msg.Channel),
+            // ⚠ 这里要传的是**通道名**（msg.Channel），不能包一层 Channels.ChannelOf ——
+            // ChannelOf 是“从 key 前缀反推通道”的（它看 official: 前缀），
+            // 传 "official" 进去会判成私域 → 又去查私域名单 → 官方永远被忽略（2026-09-21 实际卡了很久）。
+            // Channels.Key 自己会归一化通道名，直接传 msg.Channel 就是对的。
+            msg.Channel,
             msg.IsGroup,
             msg.IsGroup ? msg.GroupId : msg.UserId));
 
