@@ -572,8 +572,29 @@
           </div>
           <div id="voiceTestAudio"></div>
 
-          <p class="path-hint" id="voiceHint">换音色就是换一个云端音色 ID（音色即声音）；想复现某个特定人的音色需先拿到授权（多数厂商支持克隆音色）。
+          <p class="path-hint" id="voiceHint">换音色就是换一个云端音色 ID（音色即声音）；想复现某个特定人的音色用下面的「音色复刻」。
             试听用的是<b>已保存</b>的「TTS 服务地址」——改了地址先点保存再试听。</p>
+
+          <!-- 音色复刻（MiniMax Voice Clone）：上传一段样本 → 生成自定义 voice_id → 填进「音色」格 -->
+          <div class="field">
+            <label>音色复刻（上传样本生成自己的音色）
+              <span class="hint">样本要求：mp3/m4a/wav，10 秒 ~ 5 分钟（30 秒~1 分钟即可），≤ 20MB；
+                官方约束：克隆音色 <b>7 天没用会被删掉</b></span>
+            </label>
+            <input type="file" id="cloneSample" accept="audio/*" />
+            <div class="grid-2">
+              <div class="field">
+                <label>自定义音色 ID<span class="hint">小写字母/数字/下划线/连字符，3~64 位，例如 <code>zhao_voice_01</code></span></label>
+                <input type="text" id="cloneVoiceId" maxlength="64" placeholder="zhao_voice_01" />
+              </div>
+              <div class="field">
+                <label>操作</label>
+                <button type="button" id="cloneGo" class="btn-secondary">开始复刻</button>
+              </div>
+            </div>
+            <p class="path-hint" id="cloneHint">复刻成功后会直接填进上面的「音色」格，保存即可用（复刻本身不扣语音合成额度，只收一次音色费）。</p>
+            <p class="path-hint" id="cloneList"></p>
+          </div>
         </div>
 
         <!-- 官方商用通道（QQ 开放平台） -->

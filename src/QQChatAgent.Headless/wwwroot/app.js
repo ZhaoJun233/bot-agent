@@ -2640,6 +2640,8 @@ function renderConversations(force) {
 
     $("neteaseLogin").addEventListener("click", startNeteaseLogin);
     wireDeployCard();
+    wireCloneCard();
+    loadClonedVoices();
   }
 
   /* ─────────── 面板一键部署（上传/拉取产物 → 重建镜像 → 替换自己）───────────
@@ -2727,6 +2729,70 @@ function renderConversations(force) {
       if (!r.started) throw new Error(JSON.stringify(r));
       await waitPanelBack(240);
     } catch (e) { toast("回滚失败：" + e.message); }
+  }
+
+  /* ─────────── 音色复刻（面板读文件 → base64 → 服务端上传云端）─────────── */
+  async function loadClonedVoices() {
+    const box = $("cloneList");
+    if (!box) return;
+    try {
+      const d = await api("/api/voice/clones");
+      if (d.error) {
+        box.textContent = "复刻音色：" + d.error;
+        return;
+      }
+      box.textContent = d.voices && d.voices.length
+        ? "已复刻的" + d.voices.length + "个音色（点一下填进上面的「音色」格）：" + d.voices.join("、")
+        : "还没有复刻过音色。";
+    } catch (e) {
+      box.textContent = "读不到复刻列表：" + e.message;
+    }
+  }
+
+  function wireCloneCard() {
+    const btn = $("cloneGo");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      const hint = $("cloneHint");
+      const file = $("cloneSample").files && $("cloneSample").files[0];
+      const voiceId = $("cloneVoiceId").value.trim();
+      if (!file) { hint.textContent = "先选一段音频（10 秒 ~ 5 分钟，mp3/m4a/wav）。"; return; }
+      if (!voiceId) { hint.textContent = "给这个音色起个 ID（小写字母/数字/下划线/连字符）。"; return; }
+      if (file.size > 20 * 1024 * 1024) { hint.textContent = "文件 " + fmtSize(file.size) + " 超过官方 20MB 上限。"; return; }
+
+      btn.disabled = true;
+      hint.textContent = "正在读取样本…";
+      try {
+        const buf = await file.arrayBuffer();
+        let bin = "";
+        const bytes = new Uint8Array(buf);
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        hint.textContent = "正在上传并复刻（一般 10~60 秒，取决于样本大小）…";
+        const d = await api("/api/voice/clone", {
+          method: "POST",
+          body: JSON.stringify({ audioBase64: btoa(bin), fileName: file.name, voiceId: voiceId }),
+        });
+        if (d.ok) {
+          $("setVoiceName").value = d.voiceId;
+          hint.textContent = "复刻成功：" + d.voiceId + " —— 已填进上面的「音色」格，记得点保存。";
+          loadClonedVoices();
+        } else {
+          hint.textContent = "复刻失败：" + (d.error || "未知原因");
+        }
+      } catch (e) {
+        hint.textContent = "复刻失败：" + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // 列出来的复刻音色点一下就填进「音色」格
+    $("cloneList").addEventListener("click", (e) => {
+      const t = (e.target && e.target.textContent || "").trim();
+      if (/^[A-Za-z0-9_-]{3,64}$/.test(t)) $("setVoiceName").value = t;
+    });
   }
 
   function wireDeployCard() {

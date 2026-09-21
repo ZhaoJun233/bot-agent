@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace QQChatAgent.Services.Voice;
@@ -129,6 +130,174 @@ public sealed class VoiceService
     }
 
     /// <summary>问一下 TTS 服务自己：活着吗、有哪些音色（面板用来校验地址与音色名）。</summary>
+    // ---------- 音色复刻（MiniMax Voice Clone） ----------
+    //
+    // 为什么做进面板：复刻的产物就是一个 voice_id 字符串，填到「音色」那格就能用 ——
+    // 但复刻本身要先上传一段音频（10 秒 ~ 5 分钟）再调克隆接口，开 SSH 跑 curl 太别扭。
+    // 两步都是一次性管理动作，所以直接在这边调云端，不走 tts 容器。
+    // 官方约束：克隆音色 **7 天没用就会被系统删掉**；同一个 voice_id 重复克隆报 2039。
+
+    /// <summary>复刻用的云端根地址；服务商是 openai 兼容网关时没有这套接口 → null。</summary>
+    private string? CloneBaseUrl()
+    {
+        if (string.Equals(_settings().TtsProvider?.Trim(), "openai", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var fromPanel = _settings().TtsApiBase?.Trim();
+        return string.IsNullOrWhiteSpace(fromPanel) ? "https://api.minimaxi.com" : fromPanel.TrimEnd('/');
+    }
+
+    private string? CloneKey()
+    {
+        var key = SecretsStore.LoadTtsKey();
+        return string.IsNullOrWhiteSpace(key) ? null : key.Trim();
+    }
+
+    /// <summary>列出已经复刻过的音色（<c>/v1/get_voice</c> 的 voice_cloning 那一类）。</summary>
+    public async Task<(List<string> Voices, string? Error)> ListClonedVoicesAsync(CancellationToken ct)
+    {
+        var list = new List<string>();
+        var baseUrl = CloneBaseUrl();
+        var key = CloneKey();
+        if (baseUrl is null)
+        {
+            return (list, "当前服务商不支持音色复刻（只有 MiniMax 这套接口有）");
+        }
+
+        if (key is null)
+        {
+            return (list, "还没配云端 TTS 密钥 —— 先在「云端 TTS 密钥」那格填一个，复刻用同一个 key");
+        }
+
+        try
+        {
+            var body = new JsonObject { ["voice_type"] = "voice_cloning" };
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/get_voice")
+            {
+                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + key);
+
+            using var resp = await _http.SendAsync(req, ct);
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (list, $"云端返回 HTTP {(int)resp.StatusCode}：{Shorten(text)}");
+            }
+
+            var json = JsonNode.Parse(text);
+            var status = json?["base_resp"]?["status_code"]?.GetValue<int>() ?? 0;
+            if (status != 0)
+            {
+                return (list, $"云端报错 {status}：{json?["base_resp"]?["status_msg"]?.GetValue<string>()}");
+            }
+
+            foreach (var node in json?["voice_cloning"]?.AsArray() ?? new JsonArray())
+            {
+                var id = node?["voice_id"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    list.Add(id!);
+                }
+            }
+
+            return (list, null);
+        }
+        catch (Exception ex)
+        {
+            return (list, "列复刻音色失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 复刻一个音色：先上传音频拿 file_id，再用自定义 voice_id 建克隆。
+    /// 音频要求（官方）：mp3/m4a/wav，10 秒 ~ 5 分钟，≤ 20MB。
+    /// </summary>
+    public async Task<(bool Ok, string? Error)> CloneVoiceAsync(byte[] audio, string fileName, string voiceId, CancellationToken ct)
+    {
+        var baseUrl = CloneBaseUrl();
+        var key = CloneKey();
+        if (baseUrl is null)
+        {
+            return (false, "当前服务商不支持音色复刻（只有 MiniMax 这套接口有）");
+        }
+
+        if (key is null)
+        {
+            return (false, "还没配云端 TTS 密钥 —— 复刻用同一个 key，先在「云端 TTS 密钥」那格填一个");
+        }
+
+        var wanted = (voiceId ?? string.Empty).Trim();
+        if (wanted.Length < 3 || wanted.Length > 64 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(wanted, "^[A-Za-z0-9_-]+$"))
+        {
+            return (false, "自定义音色 ID 只能用小写字母/数字/下划线/连字符（3~64 位），例如 zhao_voice_01");
+        }
+
+        if (audio.Length == 0)
+        {
+            return (false, "没有拿到音频内容");
+        }
+
+        if (audio.Length > 20 * 1024 * 1024)
+        {
+            return (false, $"音频 {audio.Length / 1024 / 1024}MB 超过官方上限 20MB（一般 30 秒 ~ 1 分钟就够）");
+        }
+
+        try
+        {
+            // ① 上传样本
+            using var upload = new MultipartFormDataContent();
+            var filePart = new ByteArrayContent(audio);
+            filePart.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+            upload.Add(filePart, "file", string.IsNullOrWhiteSpace(fileName) ? "sample.mp3" : fileName);
+            upload.Add(new StringContent("voice_clone"), "purpose");
+
+            using var uploadReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/files/upload") { Content = upload };
+            uploadReq.Headers.TryAddWithoutValidation("Authorization", "Bearer " + key);
+            using var uploadResp = await _http.SendAsync(uploadReq, ct);
+            var uploadText = await uploadResp.Content.ReadAsStringAsync(ct);
+            var uploadJson = JsonNode.Parse(uploadText);
+            var fileId = uploadJson?["file"]?["file_id"]?.GetValue<string>();
+            if (!uploadResp.IsSuccessStatusCode || string.IsNullOrWhiteSpace(fileId))
+            {
+                return (false, $"上传样本失败（HTTP {(int)uploadResp.StatusCode}）：{Shorten(uploadText)}");
+            }
+
+            // ② 建克隆
+            var cloneBody = new JsonObject { ["file_id"] = fileId, ["voice_id"] = wanted };
+            using var cloneReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/voice_clone")
+            {
+                Content = new StringContent(cloneBody.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            cloneReq.Headers.TryAddWithoutValidation("Authorization", "Bearer " + key);
+            using var cloneResp = await _http.SendAsync(cloneReq, ct);
+            var cloneText = await cloneResp.Content.ReadAsStringAsync(ct);
+            var cloneJson = JsonNode.Parse(cloneText);
+            var status = cloneJson?["base_resp"]?["status_code"]?.GetValue<int>() ?? 0;
+            if (!cloneResp.IsSuccessStatusCode || status != 0)
+            {
+                var msg = cloneJson?["base_resp"]?["status_msg"]?.GetValue<string>();
+                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）：{msg ?? Shorten(cloneText)}");
+            }
+
+            _log($"[Voice] 音色复刻成功：{wanted}（样本 {audio.Length / 1024}KB）");
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, "复刻失败：" + ex.Message);
+        }
+    }
+
+    private static string Shorten(string text)
+    {
+        var one = (text ?? string.Empty).Replace('\n', ' ').Trim();
+        return one.Length <= 200 ? one : one[..200] + "…";
+    }
+
     public async Task<(bool Ok, JsonNode? Payload, string? Error)> HealthAsync(CancellationToken ct)
     {
         var baseUrl = BaseUrl;

@@ -584,6 +584,20 @@ public sealed partial class WebUiServer : IDisposable
             return;
         }
 
+        // /api/voice/clones：列出已经复刻过的音色；/api/voice/clone：上传样本 + 建克隆
+        // （复刻的产物就是个 voice_id，拿到后填进「音色」那格就能用）
+        if (path.Equals("/api/voice/clones", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleVoiceClonesAsync(context);
+            return;
+        }
+
+        if (path.Equals("/api/voice/clone", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleVoiceCloneAsync(context, method);
+            return;
+        }
+
         // /api/search/test：一键验证“联网搜索”（模型自带搜索 or 搜索源），把结果原样贴出来
         if (path.Equals("/api/search/test", StringComparison.OrdinalIgnoreCase))
         {
@@ -2685,6 +2699,83 @@ public sealed partial class WebUiServer : IDisposable
             ["targets"] = new JsonArray(HealthReportService.ParseTargets(_settings.HealthReportTargets)
                 .Select(id => (JsonNode)JsonValue.Create(id)).ToArray())
         });
+    }
+
+    /// <summary>/api/voice/clones：列出云端已复刻的音色（面板点一下就填进「音色」格）。</summary>
+    private async Task HandleVoiceClonesAsync(HttpListenerContext context)
+    {
+        var voice = _agent.Voice;
+        if (voice is null)
+        {
+            await WriteJsonAsync(context, 200, new JsonObject { ["voices"] = new JsonArray(), ["error"] = "这个实例没有语音服务" });
+            return;
+        }
+
+        var (voices, error) = await voice.ListClonedVoicesAsync(CancellationToken.None);
+        var arr = new JsonArray();
+        foreach (var v in voices)
+        {
+            arr.Add(v);
+        }
+
+        await WriteJsonAsync(context, 200, new JsonObject { ["voices"] = arr, ["error"] = error });
+    }
+
+    /// <summary>
+    /// POST /api/voice/clone：音色复刻（上传样本 → 建克隆）。
+    /// 面板把选中的音频读成 base64 一起发上来：HttpListener 里解 multipart 纯属自找麻烦，
+    /// 而这是一次性管理动作、几十秒的样本也就几百 KB~几 MB。
+    /// 请求体：<c>{"audioBase64":"…","fileName":"a.mp3","voiceId":"zhao_voice_01"}</c>。
+    /// </summary>
+    private async Task HandleVoiceCloneAsync(HttpListenerContext context, string method)
+    {
+        if (method != "POST")
+        {
+            await WriteJsonAsync(context, 405, new JsonObject { ["error"] = "用法：POST /api/voice/clone" });
+            return;
+        }
+
+        var voice = _agent.Voice;
+        if (voice is null)
+        {
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = "这个实例没有语音服务" });
+            return;
+        }
+
+        var body = await ReadJsonAsync(context);
+        var raw = body?["audioBase64"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = "没有选音频文件" });
+            return;
+        }
+
+        byte[] audio;
+        try
+        {
+            // 面板可能传成 data:audio/mpeg;base64,… 的形式，逗号后面才是真内容
+            var comma = raw.IndexOf(',');
+            audio = Convert.FromBase64String(comma >= 0 ? raw[(comma + 1)..] : raw);
+        }
+        catch (Exception)
+        {
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = "音频不是合法的 base64（面板读取失败？）" });
+            return;
+        }
+
+        var fileName = body?["fileName"]?.GetValue<string>() ?? "sample.mp3";
+        var voiceId = body?["voiceId"]?.GetValue<string>() ?? string.Empty;
+        var (ok, error) = await voice.CloneVoiceAsync(audio, fileName, voiceId, CancellationToken.None);
+        if (ok)
+        {
+            FileLog.Write("Voice", $"面板复刻音色成功：{voiceId}（样本 {audio.Length / 1024}KB）");
+        }
+        else
+        {
+            FileLog.Write("Voice", "面板复刻音色失败：" + error);
+        }
+
+        await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = ok, ["voiceId"] = voiceId, ["error"] = error });
     }
 
     /// <summary>/api/voice/health：把 TTS 服务自己的 /health 透传给面板（活着吗、有哪些音色）。</summary>
