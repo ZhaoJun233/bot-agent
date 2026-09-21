@@ -756,10 +756,28 @@ function renderConversations(force) {
     state.activeKey = key;
     // 手机端：切到聊天视图（桌面端没影响，见 syncMobileView 的注释）
     state.chatOpen = true;
-    syncMobileView();
-    renderConversations();
-    renderHeader();
-    renderThinking();
+
+    // ① **先把消息区切过去**（用已有缓存；没有就是空列表，等下面网络回来再补）。
+    //    为什么必须排在最前面：以前画消息排在 syncMobileView/renderConversations/renderHeader
+    //    这些装饰性调用之后 ✗，它们中任何一个抛异常，renderMessages() 就再也执行不到 ✗ ——
+    //    表现就是“点会话，右侧永远是上一个会话的内容”✗（号主 2026-09-21 报的），
+    //    而且同步段的异常会变成 unhandled rejection，连提示都没有 ✗。
+    renderMessages();
+    console.log("[panel] 切到会话", key, "已缓存消息 =", (state.messages.get(key) || []).length);
+
+    // ② 装饰性调用各自兜错：谁坏了都不许挡住“切换”这件事本身
+    for (const [what, fn] of [
+      ["syncMobileView", syncMobileView],
+      ["renderConversations", () => renderConversations()],
+      ["renderHeader", renderHeader],
+      ["renderThinking", renderThinking]
+    ]) {
+      try {
+        fn();
+      } catch (e) {
+        console.error("[panel] " + what + " 失败（不影响切换）", e);
+      }
+    }
 
     try {
       const data = await api(`/api/conversations/${encodeURIComponent(key)}/messages?limit=300`);
