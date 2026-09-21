@@ -494,6 +494,13 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
                 RaiseGroupMessage(d);
                 return;
 
+            case "GROUP_MESSAGE_CREATE":
+                // 全量模式：群主给机器人开了“获取群内全部消息”之后，群里**每一条**都会推过来
+                // （不只是 @ 它的那些）。所以必须自己判断“这句是不是冲它说的”，
+                // 否则会把别人的聊天全当成点名，见 RaiseGroupMessage 的 fullMode 分支。
+                RaiseGroupMessage(d, fullMode: true);
+                return;
+
             case "C2C_MESSAGE_CREATE":
                 RaiseC2CMessage(d);
                 return;
@@ -509,7 +516,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         }
     }
 
-    private void RaiseGroupMessage(JsonObject d)
+    private void RaiseGroupMessage(JsonObject d, bool fullMode = false)
     {
         var rawId = Text(d["id"]);
         var groupOpenId = Text(d["group_openid"]);
@@ -528,7 +535,18 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         RememberInbound(groupOpenId, rawId);
         // 入站探针：走到这里说明平台推的、解析的、判重的都过了。
         // 之后若还是没有回复，问题就在上层（白名单/总开关/限流/模型），日志会有对应行。
-        Log($"官方入站：群 {_ids.AliasFor(groupOpenId)}，用户 {_ids.AliasFor(string.IsNullOrEmpty(memberOpenId) ? groupOpenId : memberOpenId)}");
+        Log($"官方入站：群 {_ids.AliasFor(groupOpenId)}，用户 {_ids.AliasFor(string.IsNullOrEmpty(memberOpenId) ? groupOpenId : memberOpenId)}"
+            + (fullMode ? $"（全量模式，@我={(!fullMode || MentionsSelf(d))}）" : string.Empty));
+
+        // 是不是“冲它说的”：
+        //   @ 事件 → 平台只会推 @ 它的，必然是 true；
+        //   全量模式 → 得自己看 mentions[].is_you（别人聊天也会来，绝不能一律 true）。
+        var mentioned = !fullMode || MentionsSelf(d);
+        var content = Text(d["content"]) ?? string.Empty;
+        if (fullMode && mentioned)
+        {
+            content = StripLeadingMention(content);
+        }
 
         MessageReceived?.Invoke(new QqChatMessage(
             MessageId: _ids.AliasFor(rawId),
@@ -536,11 +554,63 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
             UserId: userAlias,
             GroupId: groupAlias,
             SenderName: DisplayName(memberOpenId),
-            Text: Text(d["content"]) ?? string.Empty,
+            Text: content,
             Time: ParseTime(d["timestamp"]),
-            MentionedSelf: true, // 群事件只推「@机器人」的消息，所以一定是冲它说的
+            MentionedSelf: mentioned,
             ImageUrls: Attachments(d),
             Channel: Channels.Official));
+    }
+
+    /// <summary>
+    /// 事件里有没有“提到机器人自己”（<c>mentions[].is_you == true</c>）。
+    /// 全量群消息靠它区分“点名找我”和“别人自己聊天”—— 两者的后续处理完全不一样。
+    /// </summary>
+    private static bool MentionsSelf(JsonObject d)
+    {
+        if (d["mentions"] is not JsonArray arr)
+        {
+            return false;
+        }
+
+        foreach (var item in arr)
+        {
+            if (item is JsonObject o && o["is_you"]?.GetValue<bool>() == true)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 剥掉正文开头的“@机器人”。全量模式下平台不会替我们剥（@ 事件才会），
+    /// 所以这里自己来：既处理 <c>&lt;@!id&gt;</c> 这种标记，也处理纯文本的 <c>@名字 </c>。
+    /// </summary>
+    private static string StripLeadingMention(string text)
+    {
+        var t = (text ?? string.Empty).TrimStart();
+        while (t.StartsWith("<@", StringComparison.Ordinal))
+        {
+            var end = t.IndexOf('>');
+            if (end < 0)
+            {
+                break;
+            }
+
+            t = t[(end + 1)..].TrimStart();
+        }
+
+        if (t.StartsWith('@'))
+        {
+            var space = t.IndexOf(' ');
+            if (space > 0 && space <= 40)
+            {
+                t = t[(space + 1)..].TrimStart();
+            }
+        }
+
+        return t;
     }
 
     /// <summary>
