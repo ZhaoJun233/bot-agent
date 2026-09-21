@@ -99,14 +99,22 @@ public sealed class MemberProfileStore
                       AND s.scope = CASE WHEN m.group_id > 0 THEN 'group:' || m.group_id ELSE 'private' END
                 WHERE m.seq > COALESCE(s.through_seq, -9223372036854775808)
                 GROUP BY m.uid, m.group_id
-                HAVING COUNT(1) >= $min
+                HAVING COUNT(1) >= CASE
+                -- 官方通道的别名号（8 开头 16 位）门槛放低：那条通道**只有 @ 机器人**才会推消息，
+                -- 一个人攒满普通门槛要等到天荒地老（线上实测：别名号最多 10 条发言，
+                -- 于是 member_summaries 里一个别名号都没有 ✗，机器人永远“不认识”官方通道来的人）。
+                WHEN m.uid LIKE '8%' AND LENGTH(m.uid) >= 15 THEN $minOfficial
+                ELSE $min
+                END
                 ORDER BY fresh_count DESC
                 LIMIT $max
                 """, r => (
                     Uid: AppDatabase.Str(r, "uid") ?? string.Empty,
                     Name: AppDatabase.Str(r, "name") ?? string.Empty,
                     GroupId: AppDatabase.Long(r, "group_id")),
-                ("$min", minNewMessages), ("$max", Math.Max(1, maxCandidates)));
+                ("$min", minNewMessages),
+            ("$minOfficial", Math.Max(3, minNewMessages / 5)),
+            ("$max", Math.Max(1, maxCandidates)));
 
             foreach (var c in candidates)
             {

@@ -138,11 +138,12 @@ public sealed class OpenAiClient
         // 而“哪些属于今年/现在”全靠这个基准时间才能分清。
         var now = DateTimeOffset.Now;
         systemContent +=
-            "\n\n[现在的时间]\n现在是 " + now.ToString("yyyy-MM-dd HH:mm") +
+            "\n\n[现在的时间]\n现在是 " + now.ToString("yyyy-MM-dd HH:mm") + "（" + PeriodCn(now) + "）" +
             "（星期" + WeekdayCn(now.DayOfWeek) + "，UTC" + now.ToString("zzz") + "）。\n" +
             "• 有人问“现在几点 / 今天几号 / 今天周几 / 还有几天” → **直接按它答**，不要靠自己印象猜（你并没有钟）；\n" +
             "• “今天 / 昨天 / 明天 / 这周 / 刚刚 / 上次”这类相对时间，全以它为基准算；\n" +
-            "• 需要具体日期但拿不准时，宁可说“我记得是 X 号”这种带保留的话，也不要编一个硬结论。";
+            "• 需要具体日期但拿不准时，宁可说“我记得是 X 号”这种带保留的话，也不要编一个硬结论；\n" +
+"• 说到“时段”时按上面那个词来（凌晨/早上/上午/中午/下午/傍晚/晚上/深夜）——别把下午说成早上、把晚上说成上午（这是纯看错 24 小时制的低级错）。";
 
         if (!string.IsNullOrWhiteSpace(BotPersona))
         {
@@ -1113,6 +1114,24 @@ public sealed class OpenAiClient
     }
 
     /// <summary>星期几（中文，给提示词用 —— 模型自己对“今天周几”只能猜）。</summary>
+    /// <summary>
+    /// 把时刻说成中文时段（凌晨/早上/上午/中午/下午/傍晚/晚上/深夜）。
+    /// 为什么不能只给 24 小时制：“18:11”这种串模型偶尔会读成早上/上午 ✗，
+    /// 而中文里“下午/晚上”这类词是**语境**的自然组成部分（怎么打招呼、什么气氛都靠它）。
+    /// </summary>
+    private static string PeriodCn(DateTimeOffset now)
+        => now.Hour switch
+        {
+            >= 0 and < 5 => "凌晨",
+            >= 5 and < 8 => "早上",
+            >= 8 and < 11 => "上午",
+            >= 11 and < 13 => "中午",
+            >= 13 and < 17 => "下午",
+            >= 17 and < 19 => "傍晚",
+            >= 19 and < 23 => "晚上",
+            _ => "深夜",
+        };
+
     private static string WeekdayCn(DayOfWeek day) => day switch
     {
         DayOfWeek.Monday => "一",
