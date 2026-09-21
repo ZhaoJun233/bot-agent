@@ -764,14 +764,21 @@ function renderConversations(force) {
     try {
       const data = await api(`/api/conversations/${encodeURIComponent(key)}/messages?limit=300`);
       state.messages.set(key, data.messages || []);
+
+      // 用户在等待期间又点了别的会话 → 这次响应只入缓存，不许再动界面 ✗
+      // （否则 A 的响应后到，会把已经切到 B 的画面拉回去，看着就是“切不到对应的”）
+      if (state.activeKey !== key) return;
+
       renderMessages();
       scrollToBottom();
       await api(`/api/conversations/${encodeURIComponent(key)}/read`, { method: "POST" });
+      if (state.activeKey !== key) return;
       const c = state.byKey.get(key);
       if (c) c.unread = 0;
       renderConversations();
     } catch (e) {
-      toast("加载消息失败：" + e.message);
+      console.error("selectConversation failed", key, e);
+      toast(`加载消息失败（${key}）：` + (e.data?.error || e.message));
     }
   }
 
@@ -1658,13 +1665,24 @@ function renderConversations(force) {
   function applyState(data) {
     state.status = data.status;
     state.aiMode = data.aiMode;
-    state.conversations = data.conversations || [];
-    state.byKey = new Map(state.conversations.map((c) => [c.key, c]));
 
-    if (state.activeKey && !state.byKey.has(state.activeKey)) {
+    // 会话列表：**只在这次推送真的带了列表时才替换**（2026-09-21 修）。
+    // 以前写成 `data.conversations || []` ✗ —— 一次没带该字段的推送就把列表清空，
+    // 紧接着下面那段会把选中的会话丢掉，再配合“没选中就自动选第一个” →
+    // 用户看到的就是“我点了第二个，它自己跳回第一个 / 切不到对应的”✗。
+    if (Array.isArray(data.conversations)) {
+      state.conversations = data.conversations;
+      state.byKey = new Map(state.conversations.map((c) => [c.key, c]));
+    }
+
+    // 选中的会话暂时不在列表里（推送晚一拍、会话刚被删/被过滤）：
+    // 空列表不动它（等下一拍），真没了也只是清掉**那一条**的消息缓存。
+    if (state.activeKey && state.conversations.length > 0 && !state.byKey.has(state.activeKey)) {
+      console.warn("active conversation vanished:", state.activeKey);
+      state.messages.delete(state.activeKey);
       state.activeKey = null;
-      state.messages.clear();
       renderMessages();
+      renderHeader();
     }
 
     renderConversations();
