@@ -4557,6 +4557,7 @@ public sealed class BotAgent : IDisposable
             .Split(new[] { '|', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(p => p.Trim())
             .Where(p => p.Length > 0)
+            .Distinct(StringComparer.Ordinal)   // 模型有时把同一句写两遍（A | A）→ 只发一条
             .Take(3)
             .ToList();
         if (voiceParts.Count == 0 && voiceText.Length > 0)
@@ -4792,7 +4793,19 @@ public sealed class BotAgent : IDisposable
                 }
                 else if (textReply is not null && said.Length > 0)
                 {
-                    EmitLog($"[Voice] 语音与文字内容不同 → 两者都发（语音 {Shorten(said, 20)}）");
+                    // 默认**不再发文字**（号主 2026-09-21 第二次报重复 ✗）：
+                    // 光比字符串挡不住“换个说法”✗（speak「你可算回我了」/ reply「你终于回来了！」），
+                    // 所以口径改成：语音已经把这轮话说出口 → 文字就不再重复 ✓，
+                    // **只有**文字里带了语音说不出来的东西（链接/@/一长串数字/命令）才补发 ✓。
+                    if (NeedsTextBesidesVoice(textReply))
+                    {
+                        EmitLog("[Voice] 文字里有语音说不出来的内容（链接/号码/@）→ 补发文字");
+                    }
+                    else
+                    {
+                        EmitLog($"[Voice] 语音已经说过这轮的话 → 文字不再重复发（被吞掉 {textReply.Length} 字）");
+                        textReply = null;
+                    }
                 }
             }
             else
@@ -5357,6 +5370,39 @@ public sealed class BotAgent : IDisposable
     /// 现在：半角点看前后文（前后是数字/字母就不算句末）、连续标点一次收走、
     /// 收尾符号跟着本段走；非常长的句子才退一步在逗号处断（不会憋出一条千字消息）。
     /// </summary>
+    /// <summary>
+    /// 这行文字里有没有“语音说不出来、必须用眼睛看”的东西：链接、@某人、一长串数字、命令/代码。
+    /// 只有这种时候，语音之外才值得再补一条文字（号主 2026-09-21 的“语音和文字重复发”）。
+    /// </summary>
+    private static bool NeedsTextBesidesVoice(string text)
+    {
+        if (text.Contains("http://", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("https://", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("www.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (text.Contains("[[", StringComparison.Ordinal))   // 表情/表情包占位符，念不出来
+        {
+            return true;
+        }
+
+        var digits = 0;
+        var latin = 0;
+        foreach (var ch in text)
+        {
+            digits = char.IsAsciiDigit(ch) ? digits + 1 : 0;
+            latin = char.IsAsciiLetter(ch) ? latin + 1 : 0;
+            if (digits >= 5 || latin >= 8)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// “语音说的”和“文字写的”是不是同一句（去空白去标点后相等，或短句被长句包含）。
     /// 为什么需要：模型给的 speak 与 reply 常常只差标点/语气词 ✗（「好呀，那我们八点见」vs「好呀八点见！」），
