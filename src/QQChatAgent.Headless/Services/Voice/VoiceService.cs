@@ -44,6 +44,15 @@ public sealed class VoiceService
     /// <summary>语速倍数（设置里是百分比，100 = 原速）。</summary>
     public double Speed => Math.Clamp(_settings().VoiceSpeed, 50, 200) / 100.0;
 
+    /// <summary>音调（-12~+12，0 = 不传）。</summary>
+    public int Pitch => Math.Clamp(_settings().VoicePitch, -12, 12);
+
+    /// <summary>音量（10~1000 = 0.1~10 倍，0 = 不传）。</summary>
+    public int Vol => Math.Clamp(_settings().VoiceVol, 0, 1000);
+
+    /// <summary>情绪（空 = 不传）。</summary>
+    public string Emotion => (_settings().VoiceEmotion ?? string.Empty).Trim();
+
     /// <summary>
     /// 拼出发给协议端的 <c>/speak</c> 绝对地址。text 为空、服务地址不合法时返回 null
     /// （上层据此降级成发文字，而不是把一条空语音发出去）。
@@ -67,9 +76,29 @@ public sealed class VoiceService
         var speed = speedPercent / 100.0;
 
         // 只对参数做转义：文本里可能有 & # 空格和中文，不转义会把查询串撕碎
-        return $"{baseUrl}/speak?text={Uri.EscapeDataString(trimmed)}" +
-               $"&voice={Uri.EscapeDataString(voice)}" +
-               $"&speed={speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}";
+        var url = $"{baseUrl}/speak?text={Uri.EscapeDataString(trimmed)}" +
+                  $"&voice={Uri.EscapeDataString(voice)}" +
+                  $"&speed={speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}";
+
+        // 情绪 / 音调 / 音量：**只在显式配了**才带上 —— 不配就与改造前完全一致（云端默认）。
+        // 后端认不认是后端的事（OpenAI 兼容那几个只有 speed），编好 URL 交给它就行。
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        if (Emotion.Length > 0)
+        {
+            url += "&emotion=" + Uri.EscapeDataString(Emotion);
+        }
+
+        if (Pitch != 0)
+        {
+            url += "&pitch=" + Pitch.ToString(ci);
+        }
+
+        if (Vol > 0)
+        {
+            url += "&vol=" + (Vol / 100.0).ToString("0.##", ci);
+        }
+
+        return url;
     }
 
     /// <summary>

@@ -1261,6 +1261,9 @@ function renderConversations(force) {
     $("setEnableVoice").checked = r.enableVoice === true;
     $("setVoiceName").value = r.voiceName || "";
     $("setVoiceSpeed").value = r.voiceSpeed;
+    $("setVoiceEmotion").value = r.voiceEmotion || "";
+    $("setVoicePitch").value = r.voicePitch;
+    $("setVoiceVol").value = r.voiceVol;
     $("setVoiceMaxChars").value = r.voiceMaxChars;
     $("setVoiceEagerness").value = r.voiceEagerness == null ? 50 : r.voiceEagerness;
     $("voiceEagernessVal").textContent = $("setVoiceEagerness").value;
@@ -1418,6 +1421,9 @@ function renderConversations(force) {
       enableVoice: $("setEnableVoice").checked,
       voiceName: $("setVoiceName").value.trim(),
       voiceSpeed: Number($("setVoiceSpeed").value),
+    voiceEmotion: $("setVoiceEmotion").value.trim(),
+    voicePitch: Number($("setVoicePitch").value),
+    voiceVol: Number($("setVoiceVol").value),
       voiceMaxChars: Number($("setVoiceMaxChars").value),
       voiceEagerness: Number($("setVoiceEagerness").value),
       ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
@@ -2038,7 +2044,10 @@ function renderConversations(force) {
           body: JSON.stringify({
             text,
             voice: $("setVoiceName").value.trim(),
-            speed: Number($("setVoiceSpeed").value)
+            speed: Number($("setVoiceSpeed").value),
+      emotion: $("setVoiceEmotion").value.trim(),
+      pitch: Number($("setVoicePitch").value),
+      vol: Number($("setVoiceVol").value) / 100
           })
         });
         if (!res.ok) {

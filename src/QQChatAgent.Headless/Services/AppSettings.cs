@@ -248,6 +248,16 @@ public sealed class AppSettings
     /// <summary>语速（百分比，100 = 原速）。</summary>
     public int VoiceSpeed { get; set; } = 100;
 
+    /// <summary>音调（-12~+12；0 = 不传，用云端默认）。</summary>
+    public int VoicePitch { get; set; }
+
+    /// <summary>音量（10~1000 = 0.1~10.0 倍；0 = 不传，用云端默认）。</summary>
+    public int VoiceVol { get; set; }
+
+    /// <summary>情绪（happy/sad/angry/surprised/fearful/disgusted/neutral；空 = 不传）。
+    /// 只有部分云端音色认这个参数，认不了的会被云端忽略（不会报错）。</summary>
+    public string VoiceEmotion { get; set; } = "";
+
     /// <summary>单条语音的字数上限：超过就不发语音（长了又慢又费流量，不如打字）。</summary>
     public int VoiceMaxChars { get; set; } = 80;
 

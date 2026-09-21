@@ -1438,6 +1438,9 @@ public sealed partial class WebUiServer : IDisposable
             if (body["enableVoice"] is JsonNode ev) s.EnableVoice = ev.GetValue<bool>();
         if (body["voiceName"] is JsonNode vn) s.VoiceName = vn.GetValue<string>().Trim();
         if (body["voiceSpeed"] is JsonNode vs) s.VoiceSpeed = Math.Clamp(vs.GetValue<int>(), 50, 200);
+            if (body["voicePitch"] is JsonNode vp) s.VoicePitch = Math.Clamp(vp.GetValue<int>(), -12, 12);
+            if (body["voiceVol"] is JsonNode vv) s.VoiceVol = Math.Clamp(vv.GetValue<int>(), 0, 1000);
+            if (body["voiceEmotion"] is JsonNode ve) s.VoiceEmotion = (ve.GetValue<string>() ?? string.Empty).Trim();
         if (body["voiceMaxChars"] is JsonNode vmc) s.VoiceMaxChars = Math.Clamp(vmc.GetValue<int>(), 10, 300);
         if (body["voiceEagerness"] is JsonNode vge) s.VoiceEagerness = Math.Clamp(vge.GetValue<int>(), 0, 100);
         if (body["ttsServiceUrl"] is JsonNode tts) s.TtsServiceUrl = tts.GetValue<string>().Trim();
@@ -2114,6 +2117,9 @@ public sealed partial class WebUiServer : IDisposable
                 ["enableVoice"] = s.EnableVoice,
         ["voiceName"] = s.VoiceName,
         ["voiceSpeed"] = s.VoiceSpeed,
+            ["voicePitch"] = s.VoicePitch,
+            ["voiceVol"] = s.VoiceVol,
+            ["voiceEmotion"] = s.VoiceEmotion,
         ["voiceMaxChars"] = s.VoiceMaxChars,
         ["voiceEagerness"] = s.VoiceEagerness,
         ["ttsServiceUrl"] = s.TtsServiceUrl,

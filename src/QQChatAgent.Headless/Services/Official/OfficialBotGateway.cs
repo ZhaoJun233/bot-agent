@@ -472,6 +472,11 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
             return;
         }
 
+        // 探针（2026-09-21）：官方通道“不回复、日志里也啥都没有”时，先要能分开两种情况：
+        //   ① 平台根本没推 → 这行不出现；
+        //   ② 推来了但被丢掉/解析炸了 → 这行出现，后面却没有“入站”行。
+        Log($"官方事件：{type}");
+
         switch (type)
         {
             case "READY":
@@ -508,8 +513,11 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     {
         var rawId = Text(d["id"]);
         var groupOpenId = Text(d["group_openid"]);
-        if (string.IsNullOrEmpty(rawId) || string.IsNullOrEmpty(groupOpenId) || IsDuplicate(rawId))
+        // 判重只问一次（IsDuplicate 会“记下来”，问两次会把正常消息误判成重复）
+        var duplicate = rawId is not null && IsDuplicate(rawId);
+        if (string.IsNullOrEmpty(rawId) || string.IsNullOrEmpty(groupOpenId) || duplicate)
         {
+            Log($"官方群消息丢弃：id {(rawId is null ? "缺失" : "有")}、group_openid {(groupOpenId is null ? "缺失" : "有")}、重复 {duplicate}");
             return;
         }
 
@@ -518,6 +526,9 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         var userAlias = _ids.AliasFor(string.IsNullOrEmpty(memberOpenId) ? groupOpenId : memberOpenId);
 
         RememberInbound(groupOpenId, rawId);
+        // 入站探针：走到这里说明平台推的、解析的、判重的都过了。
+        // 之后若还是没有回复，问题就在上层（白名单/总开关/限流/模型），日志会有对应行。
+        Log($"官方入站：群 {_ids.AliasFor(groupOpenId)}，用户 {_ids.AliasFor(string.IsNullOrEmpty(memberOpenId) ? groupOpenId : memberOpenId)}");
 
         MessageReceived?.Invoke(new QqChatMessage(
             MessageId: _ids.AliasFor(rawId),
@@ -573,6 +584,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         }
 
         RememberInbound(userOpenId, rawId);
+        Log($"官方入站：私聊 {_ids.AliasFor(string.IsNullOrEmpty(userOpenId) ? "?" : userOpenId)}");
 
         MessageReceived?.Invoke(new QqChatMessage(
             MessageId: _ids.AliasFor(rawId),

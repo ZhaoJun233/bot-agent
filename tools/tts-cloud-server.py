@@ -67,6 +67,11 @@ OPENAI_VOICE = os.environ.get("OPENAI_TTS_VOICE", "alloy").strip()
 # silk 编码器（官方通道发语音要 silk；NapCat 那条路不需要，它自己转）
 SILK_CMD = os.environ.get("SILK_ENCODER", "silk_v3_encoder")
 
+# 情绪/音调/音量：由 /speak 的查询参数每次请求填一次（云端 voice_setting 用）。
+# 单进程 HTTP 服务、合成已经过缓存，并发写同一份值的影响可忽略 —— 缓存键里带了这三项，
+# 所以也不会出现“A 的参数被 B 复用”的串音。
+VOICE_OPTS = {"emotion": "", "pitch": 0, "vol": 1.0}
+
 _SEM = threading.Semaphore(MAX_CONCURRENCY)
 _lock = threading.Lock()
 
@@ -253,8 +258,9 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
         "voice_setting": {
             "voice_id": voice,
             "speed": round(max(0.5, min(2.0, speed)), 2),
-            "vol": 1.0,
-            "pitch": 0,
+            "vol": round(float(VOICE_OPTS.get("vol", 1.0)), 2),
+            "pitch": int(VOICE_OPTS.get("pitch", 0)),
+            **({"emotion": VOICE_OPTS["emotion"]} if VOICE_OPTS.get("emotion") else {}),
         },
         "audio_setting": {
             "format": want,
@@ -431,8 +437,23 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             speed = 1.0
         speed = max(0.5, min(2.0, speed))
+        # 情绪/音调/音量（面板可配；**不传 = 用云端默认**，与老行为一致）
+        emotion = (qs.get("emotion", [""])[0] or "").strip()
+        try:
+            pitch = int(float(qs.get("pitch", ["0"])[0] or 0))
+        except ValueError:
+            pitch = 0
+        try:
+            vol = float(qs.get("vol", ["1.0"])[0] or 1.0)
+        except ValueError:
+            vol = 1.0
+        pitch = max(-12, min(12, pitch))
+        vol = max(0.1, min(10.0, vol))
+        VOICE_OPTS.update({"emotion": emotion, "pitch": pitch, "vol": vol})
 
-        key = hashlib.sha256(f"{PROVIDER}|{MINIMAX_MODEL if PROVIDER != 'openai' else OPENAI_MODEL}|{voice}|{speed}|{fmt}|{text}".encode("utf-8")).hexdigest()[:40]
+        key = hashlib.sha256(
+            f"{PROVIDER}|{MINIMAX_MODEL if PROVIDER != 'openai' else OPENAI_MODEL}|{voice}|{speed}|{fmt}|{text}"
+            f"|emo={VOICE_OPTS.get('emotion', '')}|pi={VOICE_OPTS.get('pitch', 0)}|vo={VOICE_OPTS.get('vol', 1.0)}".encode("utf-8")).hexdigest()[:40]
 
         hit = cache_get(key, fmt)
         if hit is not None:

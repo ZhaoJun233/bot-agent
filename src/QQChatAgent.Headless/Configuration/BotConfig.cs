@@ -127,6 +127,9 @@ public static class BotConfig
     [nameof(AppSettings.WebSearchReadMaxChars)] = new[] { "QQCHAT_SEARCH_READ_CHARS" },
     [nameof(AppSettings.EnableVoice)] = new[] { "QQCHAT_ENABLE_VOICE" },    [nameof(AppSettings.VoiceName)] = new[] { "QQCHAT_VOICE" },
     [nameof(AppSettings.VoiceSpeed)] = new[] { "QQCHAT_VOICE_SPEED" },
+        [nameof(AppSettings.VoicePitch)] = new[] { "QQCHAT_VOICE_PITCH" },
+        [nameof(AppSettings.VoiceVol)] = new[] { "QQCHAT_VOICE_VOL" },
+        [nameof(AppSettings.VoiceEmotion)] = new[] { "QQCHAT_VOICE_EMOTION" },
     [nameof(AppSettings.VoiceMaxChars)] = new[] { "QQCHAT_VOICE_MAX_CHARS" },
     [nameof(AppSettings.TtsServiceUrl)] = new[] { "QQCHAT_TTS_URL" },
     [nameof(AppSettings.OfficialEnabled)] = new[] { "QQCHAT_OFFICIAL" },
@@ -293,6 +296,13 @@ public static class BotConfig
         s.EnableVoice = Bool("QQCHAT_ENABLE_VOICE") ?? s.EnableVoice;
         s.VoiceName = Str("QQCHAT_VOICE") ?? s.VoiceName;
         s.VoiceSpeed = Int("QQCHAT_VOICE_SPEED") ?? s.VoiceSpeed;
+            s.VoicePitch = Int("QQCHAT_VOICE_PITCH") ?? s.VoicePitch;
+            s.VoiceVol = Int("QQCHAT_VOICE_VOL") ?? s.VoiceVol;
+            var voiceEmotionEnv = Environment.GetEnvironmentVariable("QQCHAT_VOICE_EMOTION");
+            if (!string.IsNullOrWhiteSpace(voiceEmotionEnv))
+            {
+                s.VoiceEmotion = voiceEmotionEnv.Trim();
+            }
         s.VoiceMaxChars = Int("QQCHAT_VOICE_MAX_CHARS") ?? s.VoiceMaxChars;
         s.TtsServiceUrl = Str("QQCHAT_TTS_URL") ?? s.TtsServiceUrl;
     s.OfficialEnabled = Bool("QQCHAT_OFFICIAL") ?? s.OfficialEnabled;
