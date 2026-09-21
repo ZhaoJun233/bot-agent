@@ -230,10 +230,14 @@ public sealed class VoiceService
         }
 
         var wanted = (voiceId ?? string.Empty).Trim();
-        if (wanted.Length < 3 || wanted.Length > 64 ||
-            !System.Text.RegularExpressions.Regex.IsMatch(wanted, "^[A-Za-z0-9_-]+$"))
+        // 口径按云端实际要求收紧（实测教训 2026-09-21：ID 写成 “ATR” —— 3 位且大写 —— 云端只回一句
+        // 笼统的 2013 invalid params，让人以为是“样本不合格”白查半天）。
+        // 所以在本地就拦：**≥8 位、全小写字母/数字/下划线/连字符、以字母开头**。
+        if (wanted.Length < 8 || wanted.Length > 64 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(wanted, "^[a-z][a-z0-9_-]{7,63}$"))
         {
-            return (false, "自定义音色 ID 只能用小写字母/数字/下划线/连字符（3~64 位），例如 zhao_voice_01");
+            return (false, "音色 ID 要 **8~64 位、全小写、以字母开头**（只能用小写字母/数字/下划线/连字符），" +
+                           "例如 zhao_voice_01 —— 云端对不合规的 ID 只回一句笼统的 2013，很容易误判成“样本不合格”");
         }
 
         if (audio.Length == 0)

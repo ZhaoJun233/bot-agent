@@ -2786,7 +2786,10 @@ function renderConversations(force) {
       const files = $("cloneSample").files;
       const voiceId = $("cloneVoiceId").value.trim();
       if (!files || files.length === 0) { hint.textContent = "先选一段音频（10 秒 ~ 5 分钟，mp3/m4a/wav）。"; return; }
-      if (!voiceId) { hint.textContent = "给这个音色起个 ID（小写字母/数字/下划线/连字符）。"; return; }
+      if (!/^[a-z][a-z0-9_-]{7,63}$/.test(voiceId)) {
+        hint.textContent = "音色 ID 要 8~64 位、全小写、以字母开头（例如 zhao_voice_01）—— 不合规的 ID 云端只回一句笼统的 2013，很难查。";
+        return;
+      }
 
       btn.disabled = true;
       try {

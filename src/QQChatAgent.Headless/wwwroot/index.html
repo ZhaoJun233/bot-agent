@@ -591,7 +591,7 @@
               能拼的格式：全是 <code>wav</code>（无损拼）或全是 <code>mp3</code>（按帧拼，需同采样率/声道）；<code>m4a</code> 请先在本地转成 mp3。</p>
             <div class="grid-2">
               <div class="field">
-                <label>自定义音色 ID<span class="hint">小写字母/数字/下划线/连字符，3~64 位，例如 <code>zhao_voice_01</code></span></label>
+                <label>自定义音色 ID<span class="hint">**8~64 位、全小写、以字母开头**（小写字母/数字/下划线/连字符），例如 <code>zhao_voice_01</code>；太短或有大写会被云端拒（只回一句笼统的 2013）</span></label>
                 <input type="text" id="cloneVoiceId" maxlength="64" placeholder="zhao_voice_01" />
               </div>
               <div class="field">
