@@ -274,13 +274,30 @@ public sealed class VoiceService
             var uploadText = await uploadResp.Content.ReadAsStringAsync(ct);
             var uploadJson = JsonNode.Parse(uploadText);
             var fileId = NodeText(uploadJson?["file"]?["file_id"]);
+            // 只记形状（不回显 raw_url 这种带签名的东西）：file_id 拿到没、上游有没有报 base_resp 错
+            var uploadBase = NodeInt(uploadJson?["base_resp"]?["status_code"]);
+            _log($"[Voice] 样本已上传：file_id={(fileId.Length > 0 ? "有" : "无")}（{fileId.Length} 位）" +
+                 $"，upload base_resp={uploadBase}" +
+                 ((fileId.Length > 0 && !fileId.All(char.IsDigit)) ? "，注意 file_id 不是纯数字" : string.Empty));
             if (!uploadResp.IsSuccessStatusCode || string.IsNullOrWhiteSpace(fileId))
             {
                 return (false, $"上传样本失败（HTTP {(int)uploadResp.StatusCode}）：{Shorten(uploadText)}");
             }
 
             // ② 建克隆
-            var cloneBody = new JsonObject { ["file_id"] = fileId, ["voice_id"] = wanted };
+            // ⚠ 官方 schema 里 <c>file_id</c> 是 **integer(int64)**，不是字符串 ——
+            // 当字符串发会被判 2013 invalid params（实测 2026-09-21：样本、ID 全合规也照样失败）。
+            // 这里按“能解析成数字就发数字”处理（宽容：万一哪天变成字符串也照发）。
+            var cloneBody = new JsonObject { ["voice_id"] = wanted };
+            if (long.TryParse(fileId, out var fileIdNum))
+            {
+                cloneBody["file_id"] = fileIdNum;
+            }
+            else
+            {
+                cloneBody["file_id"] = fileId;
+            }
+
             using var cloneReq = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/voice_clone")
             {
                 Content = new StringContent(cloneBody.ToJsonString(), Encoding.UTF8, "application/json")
