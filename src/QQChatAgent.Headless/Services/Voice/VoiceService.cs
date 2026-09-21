@@ -188,18 +188,18 @@ public sealed class VoiceService
             }
 
             var json = JsonNode.Parse(text);
-            var status = json?["base_resp"]?["status_code"]?.GetValue<int>() ?? 0;
+            var status = NodeInt(json?["base_resp"]?["status_code"]);
             if (status != 0)
             {
-                return (list, $"云端报错 {status}：{json?["base_resp"]?["status_msg"]?.GetValue<string>()}");
+                return (list, $"云端报错 {status}：{NodeText(json?["base_resp"]?["status_msg"])}");
             }
 
             foreach (var node in json?["voice_cloning"]?.AsArray() ?? new JsonArray())
             {
-                var id = node?["voice_id"]?.GetValue<string>();
+                var id = NodeText(node?["voice_id"]);
                 if (!string.IsNullOrWhiteSpace(id))
                 {
-                    list.Add(id!);
+                    list.Add(id);
                 }
             }
 
@@ -260,7 +260,7 @@ public sealed class VoiceService
             using var uploadResp = await _http.SendAsync(uploadReq, ct);
             var uploadText = await uploadResp.Content.ReadAsStringAsync(ct);
             var uploadJson = JsonNode.Parse(uploadText);
-            var fileId = uploadJson?["file"]?["file_id"]?.GetValue<string>();
+            var fileId = NodeText(uploadJson?["file"]?["file_id"]);
             if (!uploadResp.IsSuccessStatusCode || string.IsNullOrWhiteSpace(fileId))
             {
                 return (false, $"上传样本失败（HTTP {(int)uploadResp.StatusCode}）：{Shorten(uploadText)}");
@@ -276,11 +276,11 @@ public sealed class VoiceService
             using var cloneResp = await _http.SendAsync(cloneReq, ct);
             var cloneText = await cloneResp.Content.ReadAsStringAsync(ct);
             var cloneJson = JsonNode.Parse(cloneText);
-            var status = cloneJson?["base_resp"]?["status_code"]?.GetValue<int>() ?? 0;
+            var status = NodeInt(cloneJson?["base_resp"]?["status_code"]);
             if (!cloneResp.IsSuccessStatusCode || status != 0)
             {
-                var msg = cloneJson?["base_resp"]?["status_msg"]?.GetValue<string>();
-                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）：{msg ?? Shorten(cloneText)}");
+                var msg = NodeText(cloneJson?["base_resp"]?["status_msg"]);
+                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）：{(msg.Length > 0 ? msg : Shorten(cloneText))}");
             }
 
             _log($"[Voice] 音色复刻成功：{wanted}（样本 {audio.Length / 1024}KB）");
@@ -290,6 +290,57 @@ public sealed class VoiceService
         {
             return (false, "复刻失败：" + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 宽容地取一段文本：官方响应里同一个字段时而是字符串时而是数字
+    /// （例如上传返回的 <c>file_id</c> 实测是**数字**）。硬用 <c>GetValue&lt;string&gt;()</c> 会直接抛
+    /// “An element of type 'Number' cannot be converted to a 'System.String'”——这个仓库已经踩过一次，别再踩。
+    /// </summary>
+    private static string NodeText(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            if (node is JsonValue value)
+            {
+                if (value.TryGetValue<string>(out var text))
+                {
+                    return text ?? string.Empty;
+                }
+
+                if (value.TryGetValue<long>(out var number))
+                {
+                    return number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                if (value.TryGetValue<double>(out var dbl))
+                {
+                    return dbl.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                if (value.TryGetValue<bool>(out var flag))
+                {
+                    return flag ? "true" : "false";
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // 取不出来就当没有
+        }
+
+        return string.Empty;
+    }
+
+    private static int NodeInt(JsonNode? node, int fallback = 0)
+    {
+        var text = NodeText(node);
+        return int.TryParse(text, out var parsed) ? parsed : fallback;
     }
 
     private static string Shorten(string text)
