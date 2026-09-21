@@ -85,6 +85,14 @@ public sealed class BotAgent : IDisposable
     private HashSet<long> _whitelistPrivates = new();
     private bool _whitelistAllPrivates;
 
+    // 官方商用通道自己的一份名单（里的是别名号，见 Channels.AliasBase）。
+    // 两份名单**不共用**：QQ 那份写的是真实群号，官方那份写的是别名，混在一起只会出现
+    // “官方通道永远被拦”这种看不懂的结果。官方两份都留空 = 全部接受（官方平台自身有准入）。
+    private HashSet<long> _officialWhitelistGroups = new();
+    private bool _officialWhitelistAllGroups = true;
+    private HashSet<long> _officialWhitelistPrivates = new();
+    private bool _officialWhitelistAllPrivates = true;
+
     /// <summary>哪一边在用旧的共用名单（面板上要如实显示，不然号主会以为新框填了没生效）。</summary>
     private bool _whitelistGroupsFromLegacy;
     private bool _whitelistPrivatesFromLegacy;
@@ -834,6 +842,12 @@ public sealed class BotAgent : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// 上行通道台账（私域 / 官方各自启用没启用、连上没有）。
+    /// 面板分块与 <c>//status</c> 从这里问；单通道部署时返回 null，调用方就当“只有私域”。
+    /// </summary>
+    public IChannelRegistry? ChannelRegistry => _source as IChannelRegistry;
 
     private int _savePending;
     private long _saveVersion;
@@ -3453,7 +3467,11 @@ public sealed class BotAgent : IDisposable
 
     private BotConversation GetOrCreateConversation(QqChatMessage msg)
     {
-        var key = msg.IsGroup ? $"group:{msg.GroupId}" : $"private:{msg.UserId}";
+        // 通道前缀在 Channels.Key 里加（官方 = official:group:123；私域保持老格式 group:123）。
+        // 前缀就是隔离：官方那边的 openid 与私域的真实 QQ 号哪怕数字碰上了，也是两个会话。
+        var channel = Channels.IsOfficial(msg.Channel) ? Channels.Official : Channels.Private;
+        var key = Channels.Key(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        _source.RegisterTarget(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
 
         lock (_conversationsGate)
         {
@@ -3463,7 +3481,9 @@ public sealed class BotAgent : IDisposable
                 return existing;
             }
 
-            var name = msg.IsGroup ? $"群聊 {msg.GroupId}" : (msg.SenderName ?? msg.UserId.ToString());
+            var name = msg.IsGroup
+                ? $"{Channels.Tag(channel)}群聊 {msg.GroupId}"
+                : (msg.SenderName ?? msg.UserId.ToString());
             var conversation = new BotConversation
             {
                 SourceKey = key,
@@ -3516,7 +3536,15 @@ public sealed class BotAgent : IDisposable
                         continue;
                     }
 
-                    _conversations.Add(BotConversation.FromRecord(record, _settings.MaxMessagesPerConversation, ArchiveEvicted));
+                    var restoredConv = BotConversation.FromRecord(record, _settings.MaxMessagesPerConversation, ArchiveEvicted);
+                    _conversations.Add(restoredConv);
+
+                    // 告诉聚合器这条会话属于哪条通道：重启后面板代发、主动消息都得靠它选对通道
+                    var (restoredIsGroup, restoredId) = restoredConv.Target;
+                    if (restoredId > 0)
+                    {
+                        _source.RegisterTarget(restoredConv.Channel, restoredIsGroup, restoredId);
+                    }
                 }
 
                 _historyRequested.TryAdd(record.SourceKey!, 0);
@@ -3631,6 +3659,17 @@ public sealed class BotAgent : IDisposable
             _whitelistGroupsFromLegacy ? legacy : _settings.WhitelistGroups);
         (_whitelistPrivates, _whitelistAllPrivates) = ParseWhitelist(
             _whitelistPrivatesFromLegacy ? legacy : _settings.WhitelistPrivates);
+
+        // 官方通道：单独的名单；两份都留空 = 全部接受（官方平台自身有准入与额度）——
+        // 不能沿用 ParseWhitelist 的“空 = 全拦”，否则没配名单时官方通道会直接死掉。
+        var officialGroups = _settings.OfficialWhitelistGroups;
+        var officialPrivates = _settings.OfficialWhitelistPrivates;
+        (_officialWhitelistGroups, _officialWhitelistAllGroups) = string.IsNullOrWhiteSpace(officialGroups)
+            ? (new HashSet<long>(), true)
+            : ParseWhitelist(officialGroups);
+        (_officialWhitelistPrivates, _officialWhitelistAllPrivates) = string.IsNullOrWhiteSpace(officialPrivates)
+            ? (new HashSet<long>(), true)
+            : ParseWhitelist(officialPrivates);
     }
 
     /// <summary>解析白名单。返回 (ID集合, 是否通配全部)。支持换行/中英文逗号/分号/空格/Tab 分隔，以及 * 通配。</summary>
@@ -3677,16 +3716,27 @@ public sealed class BotAgent : IDisposable
             ? _whitelistAllGroups || _whitelistGroups.Contains(id)
             : _whitelistAllPrivates || _whitelistPrivates.Contains(id);
 
+    /// <summary>
+    /// 会话 key 能不能收（白名单）。
+    /// 通道分开算：官方通道用的是 **另一份名单**（<see cref="AppSettings.OfficialWhitelistGroups"/>
+    /// <see cref="AppSettings.OfficialWhitelistPrivates"/>，存别名号）——
+    /// 两份名单**默认不共用**：QQ 那份名单里写的是真实群号，官方通道的号是别名，
+    /// 混用只会出现“官方通道永远被拦”这种看不懂的结果。
+    /// 官方那边如果两份名单都留空，就是**全部接受**（官方平台自身有准入与额度限制）。
+    /// </summary>
     private bool IsWhitelistedKey(string sourceKey)
     {
-        var idx = sourceKey.IndexOf(':');
-        if (idx <= 0 || !long.TryParse(sourceKey[(idx + 1)..], out var id))
+        var (isGroup, id) = Channels.Parse(sourceKey);
+        if (id <= 0)
         {
             return false;
         }
 
-        var isGroup = sourceKey.StartsWith("group", StringComparison.OrdinalIgnoreCase);
-        return IsSourceAllowed(isGroup, id);
+        return Channels.IsOfficial(Channels.ChannelOf(sourceKey))
+            ? isGroup
+                ? _officialWhitelistAllGroups || _officialWhitelistGroups.Contains(id)
+                : _officialWhitelistAllPrivates || _officialWhitelistPrivates.Contains(id)
+            : IsSourceAllowed(isGroup, id);
     }
 
     // ---------- 回复流程 ----------

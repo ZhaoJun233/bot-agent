@@ -54,13 +54,20 @@ public static class AgentMask
     }
 
     /// <summary>聊天的显示名：不露真名，用 key 里的 id 遮盖后当名字。</summary>
+    /// <remarks>
+    /// 通道前缀要先吃掉：官方通道的 key 是 <c>official:group:8000…</c>（三段），
+    /// 直接按第一个冒号切会把通道名当 id 显出来，标签也会错标成好友。
+    /// </remarks>
     public static string ChatLabel(string sourceKey, string? realName = null)
     {
-        var key = sourceKey ?? string.Empty;
-        var isGroup = key.StartsWith("group:", StringComparison.OrdinalIgnoreCase);
-        var id = key.Contains(':') ? key[(key.IndexOf(':') + 1)..] : key;
+        var key = Services.Qq.Channels.Strip(sourceKey);
+        var (isGroup, parsedId) = Services.Qq.Channels.Parse(sourceKey);
+        var id = parsedId > 0
+            ? parsedId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : (key.Contains(':') ? key[(key.IndexOf(':') + 1)..] : key);
         var prefix = isGroup ? "群聊" : "好友";
-        return $"{prefix} {Shorten(id)}";
+        var tag = Services.Qq.Channels.IsOfficial(Services.Qq.Channels.ChannelOf(sourceKey)) ? "官方" : string.Empty;
+        return $"{tag}{prefix} {Shorten(id)}";
     }
 
     /// <summary>只留前 3 后 2：123456789 → 123***89（太短的整段星星）。</summary>

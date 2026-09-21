@@ -161,6 +161,17 @@ services:
       QQCHAT_VOICE_SPEED: ${VOICE_SPEED:-100}
       QQCHAT_VOICE_MAX_CHARS: ${VOICE_MAX_CHARS:-80}
       QQCHAT_TTS_URL: ${TTS_URL:-http://tts:5000}
+      # ---- 官方商用通道（QQ 开放平台；与私域 NapCat 并存、互不串台）----
+      # 开之前先在开放平台把服务器的**出口 IP** 加进白名单，否则连不上（正式环境）。
+      # appid 写在这里没事，secret 是密钥（下面这行只从环境变量读，不落盘）。
+      QQCHAT_OFFICIAL: ${OFFICIAL_ENABLED:-0}
+      QQCHAT_OFFICIAL_APP_ID: ${OFFICIAL_APP_ID:-}
+      QQCHAT_OFFICIAL_APP_SECRET: ${OFFICIAL_APP_SECRET:-}
+      QQCHAT_OFFICIAL_SANDBOX: ${OFFICIAL_SANDBOX:-0}
+      # 官方通道自己的白名单（写**别名号**，面板会话列表里能看到）；留空 = 全部接受。
+      # ⚠ 别把真实群号写这儿 —— 那是私域那份名单的事。
+      QQCHAT_OFFICIAL_WHITELIST_GROUPS: ${OFFICIAL_WHITELIST_GROUPS:-}
+      QQCHAT_OFFICIAL_WHITELIST_PRIVATES: ${OFFICIAL_WHITELIST_PRIVATES:-}
       # ---- 联网搜索 ----
       # 同样是行为配置：只在首次部署当种子；之后请用面板「联网搜索」卡片调。
       QQCHAT_WEB_SEARCH: ${WEB_SEARCH:-1}
@@ -170,6 +181,12 @@ services:
       QQCHAT_SEARCH_TIMEOUT: ${SEARCH_TIMEOUT:-20}
       QQCHAT_SEARCH_READ_CHARS: ${SEARCH_READ_CHARS:-1800}
       QQCHAT_VERBOSE: ${VERBOSE:-1}
+      # ---- 内存（1 核 1G 的机器上得看着点）----
+      # .NET 默认让 GC 堆随负载长，实测常驻 ~300MB；这两行是**软上限**（让 GC 更积极，
+      # 不是 cgroup 硬杀），目标是把机器人压在 ~200MB 以内：聊天这种负载用不到更多。
+      # 如果以后 CPU 因 GC 变高（或日志里 GC 频繁），把 HeapHardLimit 提到 0x10000000（256MB）。
+      DOTNET_GCHeapHardLimit: ${GC_HEAP_LIMIT:-0xC000000}
+      DOTNET_ServerGC: ${DOTNET_SERVER_GC:-0}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./data:/data                                # 设置 / 会话 / 人物档案 / 日志
@@ -185,41 +202,58 @@ services:
     networks:
       - qqchat
 
-  # ─────────── 语音合成（Piper 旁路服务） ───────────
-  # 为什么单独开一个容器，而不是把 Piper 塞进机器人镜像：
-  #   • Piper 是 python + onnxruntime（镜像约 490MB），塞进去机器人镜像直接翻几倍；
-  #   • 语音是“偶尔用”的能力 —— 它挂了也只能影响语音（机器人会降级成发文字），不能拖垮对话。
-  # 镜像怎么来（一次性）：python:3.11-slim + pip install piper-tts → 见 tools/tts.Dockerfile
-  #    docker build -t piper-tts:latest -f tools/tts.Dockerfile tools/
-  # 音色模型（*.onnx）放 ./tts/（首次用 tools/tts-server.py 里的说明下载，约 63MB）。
-  # pinyin 类音色（zh_CN-xiao_ya-medium）还要 ./tts/g2pW/（多音字消歧数据，约 150MB）：
-  #   见 tools/tts.Dockerfile 顶部的下载命令 —— 目录名必须是 g2pW，
-  #   而且容器工作目录得是 /data（就是下面这行 working_dir，别删）。
-  # 机器人**不**搬运音频：它只把 http://tts:5000/speak?text=… 这个 URL 交给 NapCat，
-  # 由协议端自己下载并转 silk —— 所以 tts 必须和 napcat 在同一个网络里。
+  # ─────────── 语音合成（云端 TTS 旁路服务） ───────────
+  # 为什么单独开一个容器：语音是“偶尔用”的能力 —— 它挂了只该影响语音（机器人会降级成发文字），
+  # 不能拖垮对话；而且它的密钥（云厂商 API Key）与机器人的模型 Key 是分开的两套。
+  #
+  # 2026-09-21 改造：**不再跑本地模型**。原来这里跑 Piper（ONNX，镜像 490MB、常驻 200MB+ 内存、
+  # 每句话几百毫秒~几秒 CPU 推理），在 1 核 1G 的机器上性价比太低；现在只有一层
+  # “转发到云端 TTS”的轻量代理（~60MB 镜像、~20MB 内存、零推理），音色也更自然。
+  # 镜像来自仓库里的 tools/tts-cloud.Dockerfile（python:3.11-alpine，无第三方依赖）。
+  # 契约没变：GET /speak?text=…&voice=…&speed=… 返音频（面板试听要 wav，所以默认就是 wav）；
+  #           机器人**不**搬运音频 —— 它把 http://tts:5000/speak?… 这个 URL 交给协议端，
+  #           由 NapCat 自己下载并转 silk（所以 tts 必须和 napcat 在同一个网络里）。
+  # 必须配 MINIMAX_API_KEY（或改用另一个后端）。没配也不会崩：容器照常起，
+  # 面板「试听一句」会把“缺 key”这个真正原因直接告诉你。
   tts:
-    image: piper-tts:latest
+    build:
+      context: .
+      dockerfile: tools/tts-cloud.Dockerfile
+    image: qqchat-tts:latest
     container_name: qqchat-tts
     restart: unless-stopped
-    # 底镜像的 ENTRYPOINT 是 `python -m piper`（Piper 自己的 CLI），
-    # 这里把它换成 python，再跑我们的 HTTP 旁路脚本 —— 少了 entrypoint 这行就会一直
-    # 以 piper CLI 启动并报 “the following arguments are required: -m/--model” 而重启循环。
-    entrypoint: ["python"]
-    command: ["/app/tts-server.py"]
-    # 工作目录必须是 /data：piper 找中文多音字表用的是“当前目录/g2pW”
-    # （PiperVoice.download_dir 默认 Path.cwd()），不设的话它会去 /g2pW 找个空。
-    working_dir: /data
+    # 日志上限：与其它服务一致，小硬盘上不设上限迟早吃满
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
-      - VOICE_DIR=/data
-      - DEFAULT_VOICE=${TTS_VOICE:-zh_CN-huayan-medium}
       - PORT=5000
       - TZ=${TZ:-Asia/Shanghai}
-      # pinyin 类音色要的 BERT 分词器缓存（约 1MB，落在 /data/hf，重建容器不用重下）
-      - HF_HOME=/data/hf
+      # 后端：minimax（默认）| openai（任何 OpenAI 兼容的 /v1/audio/speech）
+      - TTS_PROVIDER=${TTS_PROVIDER:-minimax}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      # 国内站 api.minimaxi.com / 国际站 api.minimax.io —— key 与站点要配对，配错报 1004/2049
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimaxi.com}
+      - MINIMAX_MODEL=${MINIMAX_MODEL:-speech-2.8-hd}
+      - MINIMAX_GROUP_ID=${MINIMAX_GROUP_ID:-}
+      # OpenAI 兼容后端（只有 TTS_PROVIDER=openai 时才用）
+      - OPENAI_TTS_API_KEY=${OPENAI_TTS_API_KEY:-}
+      - OPENAI_TTS_BASE_URL=${OPENAI_TTS_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_TTS_MODEL=${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      - OPENAI_TTS_VOICE=${OPENAI_TTS_VOICE:-alloy}
+      # 默认音色跟着云端走（老配置里的 Piper 名 zh_CN-* 云端不认，代理会回落到这个）
+      - DEFAULT_VOICE=${TTS_VOICE:-male-qn-qingse}
+      - DEFAULT_FORMAT=${TTS_FORMAT:-wav}
+      - MAX_CHARS=${VOICE_MAX_CHARS:-300}
+      - CACHE_DIR=/cache
+      - CACHE_MAX_MB=${TTS_CACHE_MB:-80}
+      # 官方商用通道发语音要腾讯 SILK；把编码器塞进镜像要用构建参数（见该 Dockerfile 顶部）
+      - SILK_ENCODER=${SILK_ENCODER:-silk_v3_encoder}
     volumes:
-      - ./tts:/data                                  # 音色模型 + 旁路脚本
-      - ./tts/tts-server.py:/app/tts-server.py:ro     # 旁路服务脚本（由 deploy-qqchat.py 同步）
-    # 只给宿主机的自测入口（机器人走内部网络，不需要这个）
+      - ./tts-cache:/cache                        # 合成结果缓存（同一句话不重复花钱）
+    # 只给宿主机的自测入口（机器人/协议端走内部网络，不需要这个）
     ports:
       - "127.0.0.1:5010:5000"
     networks:

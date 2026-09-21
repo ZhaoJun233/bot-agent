@@ -1279,6 +1279,15 @@ public sealed partial class WebUiServer : IDisposable
         if (body["voiceSpeed"] is JsonNode vs) s.VoiceSpeed = Math.Clamp(vs.GetValue<int>(), 50, 200);
         if (body["voiceMaxChars"] is JsonNode vmc) s.VoiceMaxChars = Math.Clamp(vmc.GetValue<int>(), 10, 300);
         if (body["ttsServiceUrl"] is JsonNode tts) s.TtsServiceUrl = tts.GetValue<string>().Trim();
+
+        // ---- 官方商用通道（QQ 开放平台）----
+        // 只收行为/标识类字段：secret 是密钥，按项目约定**只从环境变量读**（与 ApiKey 一致），
+        // 面板不回显也不接收，免得它落进 settings.json 又被备份/贴日志。
+        if (body["officialEnabled"] is JsonNode ofe) s.OfficialEnabled = ofe.GetValue<bool>();
+        if (body["officialAppId"] is JsonNode oai) s.OfficialAppId = oai.GetValue<string>().Trim();
+        if (body["officialSandbox"] is JsonNode osb) s.OfficialSandbox = osb.GetValue<bool>();
+        if (body["officialWhitelistGroups"] is JsonNode owg) s.OfficialWhitelistGroups = owg.GetValue<string>().Trim();
+        if (body["officialWhitelistPrivates"] is JsonNode owp) s.OfficialWhitelistPrivates = owp.GetValue<string>().Trim();
         if (body["enableWebSearch"] is JsonNode ws) s.EnableWebSearch = ws.GetValue<bool>();
         if (body["webSearchUseModelSearch"] is JsonNode wsm) s.WebSearchUseModelSearch = wsm.GetValue<bool>();
         if (body["webSearchSources"] is JsonNode wss) s.WebSearchSources = wss.GetValue<string>().Trim();
@@ -1720,6 +1729,8 @@ public sealed partial class WebUiServer : IDisposable
             {
                 ["key"] = c.SourceKey,
                 ["kind"] = isGroup ? "Group" : "Private",
+                ["channel"] = c.Channel,
+                ["channelTag"] = Services.Qq.Channels.Tag(c.Channel),
                 ["name"] = c.Name,
                 ["id"] = id,
                 ["avatarUrl"] = BuildAvatarUrl(isGroup, id),
@@ -1733,6 +1744,32 @@ public sealed partial class WebUiServer : IDisposable
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// 两条通道的状态（面板顶部那两个板块用）：启用没启用、连上没有。
+    /// 数据来自通道台账（<see cref="Services.Qq.ChannelRouter"/>）；单通道部署时官方那条会是
+    /// <c>enabled=false</c>——面板就把它显示成“未启用”，而不是“离线”（那是两回事：
+    /// 一个是没配，一个是配了但断了）。
+    /// </summary>
+    private JsonArray BuildChannelStatus()
+    {
+        var registry = _agent.ChannelRegistry;
+        var arr = new JsonArray();
+        foreach (var channel in new[] { Services.Qq.Channels.Private, Services.Qq.Channels.Official })
+        {
+            var src = registry?.Get(channel);
+            arr.Add(new JsonObject
+            {
+                ["channel"] = channel,
+                ["name"] = Services.Qq.Channels.Display(channel),
+                ["tag"] = Services.Qq.Channels.Tag(channel),
+                ["enabled"] = src is not null || !Services.Qq.Channels.IsOfficial(channel),
+                ["connected"] = src?.IsConnected ?? false
+            });
+        }
+
+        return arr;
     }
 
     private static JsonObject ToMessageDto(ChatMessage m) => new()
@@ -1813,6 +1850,15 @@ public sealed partial class WebUiServer : IDisposable
         ["voiceSpeed"] = s.VoiceSpeed,
         ["voiceMaxChars"] = s.VoiceMaxChars,
         ["ttsServiceUrl"] = s.TtsServiceUrl,
+
+        // 官方商用通道（QQ 开放平台）：与私域并存，两边会话/上下文/白名单互不串台。
+        // secret 不在这里回（密钥只从环境变量读，面板不回显）。
+        ["officialEnabled"] = s.OfficialEnabled,
+        ["officialAppId"] = s.OfficialAppId,
+        ["officialSandbox"] = s.OfficialSandbox,
+        ["officialWhitelistGroups"] = s.OfficialWhitelistGroups,
+        ["officialWhitelistPrivates"] = s.OfficialWhitelistPrivates,
+        ["channels"] = BuildChannelStatus(),
          ["enableWebSearch"] = s.EnableWebSearch,
          ["webSearchUseModelSearch"] = s.WebSearchUseModelSearch,
          ["webSearchSources"] = s.WebSearchSources,

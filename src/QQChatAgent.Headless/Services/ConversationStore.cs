@@ -296,6 +296,14 @@ public sealed class ConversationRecord
     /// <summary>QQ 映射键："private:{QQ号}" 或 "group:{群号}"。null = 本地会话。</summary>
     public string? SourceKey { get; set; }
 
+    /// <summary>
+    /// 会话属于哪条通道（<c>private</c> = 私域 NapCat；<c>official</c> = QQ 开放平台）。
+    /// 这个字段是**冗余记录**：真正管隔离的是 <see cref="SourceKey"/> 的 <c>official:</c> 前缀，
+    /// 读回来时一律以它为准（老库没有这个字段，那就是私域）。
+    /// 留字段是为了“看库就能分区”，以及日后要按通道做统计/导出时不必再解析 key。
+    /// </summary>
+    public string? Channel { get; set; }
+
     public string Kind { get; set; } = "LocalTest";
 
     public string Name { get; set; } = string.Empty;

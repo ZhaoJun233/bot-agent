@@ -77,7 +77,14 @@ public sealed record QqChatMessage(
     long? ReplyToMessageId = null,
     string? ReplyToPreviewText = null,
     /// <summary>被引用那条消息的发送者 QQ（协议端在 reply 段里给了才有；有了就不必猜“他是在回我吗”）。</summary>
-    long? ReplyToSenderId = null);
+    long? ReplyToSenderId = null,
+
+    /// <summary>
+    /// 来自哪条通道（见 <see cref="QQChatAgent.Services.Qq.Channels"/>）。
+    /// 默认私域 —— 官方通道的网关在上报前会把它改成 <c>official</c>，
+    /// 上层据此拼会话 key（<see cref="QQChatAgent.Services.Qq.Channels.Key"/>），两套场景的上下文才不会串。
+    /// </summary>
+    string Channel = QQChatAgent.Services.Qq.Channels.Private);
 
 /// <summary>
 /// 戳一戳事件（OneBot v11：post_type=notice）。
@@ -91,7 +98,10 @@ public sealed record QqPokeEvent(
     long UserId,
     long TargetId,
     bool IsSelfPoked,
-    DateTimeOffset Time);
+    DateTimeOffset Time,
+
+    /// <summary>来自哪条通道（见 <see cref="QQChatAgent.Services.Qq.Channels"/>）。</summary>
+    string Channel = QQChatAgent.Services.Qq.Channels.Private);
 
 /// <summary>
 /// 撤回事件（OneBot v11：<c>post_type=notice</c> + <c>notice_type=group_recall</c> / <c>friend_recall</c>）。
@@ -105,7 +115,10 @@ public sealed record QqRecallEvent(
     long UserId,
     long OperatorId,
     long MessageId,
-    DateTimeOffset Time);
+    DateTimeOffset Time,
+
+    /// <summary>来自哪条通道（见 <see cref="QQChatAgent.Services.Qq.Channels"/>）。</summary>
+    string Channel = QQChatAgent.Services.Qq.Channels.Private);
 
 public static class OneBotJson
 {

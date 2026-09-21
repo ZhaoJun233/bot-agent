@@ -230,8 +230,55 @@ public sealed class AppSettings
     /// <summary>单条语音的字数上限：超过就不发语音（长了又慢又费流量，不如打字）。</summary>
     public int VoiceMaxChars { get; set; } = 80;
 
-    /// <summary>TTS 服务地址（Piper 旁路容器，提供 /speak?text=… 返回 wav）。</summary>
+    /// <summary>TTS 服务地址（云端 TTS 旁路容器，提供 /speak?text=… 返回音频）。</summary>
+    /// <remarks>
+    /// 2026-09-21 起这个地址后面接的是**云端 TTS 代理**（<c>tools/tts-cloud-server.py</c>，
+    /// 转发到 MiniMax / OpenAI 兼容接口），不再是本地 Piper。容器名与服务名都没变，
+    /// 所以老部署只要把 <c>tts</c> 服务换成新镜像就完事了；契约仍是
+    /// <c>GET /speak?text=&amp;voice=&amp;speed=</c> 返 wav（面板试听按 RIFF 校验）。
+    /// 注意：**语音名要跟着厂商走**（Piper 的 <c>zh_CN-huayan-medium</c> 云端不认，
+    /// 代理会回落成它自己的默认音色；想指定就去面板里选一个云端音色）。
+    /// </remarks>
     public string TtsServiceUrl { get; set; } = "http://tts:5000";
+
+    // ---------- 官方商用通道（QQ 开放平台） ----------
+
+    /// <summary>
+    /// 开官方商用通道（QQ 开放平台的机器人，与私域 NapCat 那条并存）。
+    /// 默认**关**：它需要开放平台申请的 appid/secret，没配的话开了也连不上。
+    /// </summary>
+    public bool OfficialEnabled { get; set; }
+
+    /// <summary>开放平台的机器人 appid（环境变量 QQCHAT_OFFICIAL_APP_ID）。</summary>
+    public string OfficialAppId { get; set; } = string.Empty;
+
+    /// <summary>开放平台的机器人 secret。**密钥**：只从环境变量读，不落盘。</summary>
+    [JsonIgnore]
+    public string OfficialAppSecret { get; set; } = string.Empty;
+
+    /// <summary>用沙箱环境连（沙箱只能收/发沙箱群与沙箱单聊，调试用；正式上线关掉）。</summary>
+    public bool OfficialSandbox { get; set; }
+
+    /// <summary>
+    /// 官方通道的群白名单（里的是**别名号**，见 <c>Channels.AliasBase</c>；
+    /// 面板会话列表里会显示出来）。留空 = 全部接受 ——
+    /// 官方平台本身有准入（只有加了机器人的群才能收到消息）与每日额度，没必要再卡一道。
+    /// ⚠ 与私域那份白名单**不共用**：那份里写的是真实群号，混在一起会变成“官方通道永远被拦”。
+    /// </summary>
+    public string OfficialWhitelistGroups { get; set; } = string.Empty;
+
+    /// <summary>官方通道的私聊（单聊）白名单；留空 = 全部接受。</summary>
+    public string OfficialWhitelistPrivates { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 官方 REST 接口根地址。留空 = 按沙箱开关自动选（正式 <c>https://api.bot.qq.com</c> /
+    /// 沙箱 <c>https://sandbox.api.sgroup.qq.com</c>）。
+    /// 留这个口子是为了**能测**：集成测试要把它指到本地的假官方网关上去。
+    /// </summary>
+    public string OfficialApiBase { get; set; } = string.Empty;
+
+    /// <summary>取 access_token 的地址，留空 = <c>https://bots.qq.com/app/getAppAccessToken</c>（同样是为了可测）。</summary>
+    public string OfficialTokenUrl { get; set; } = string.Empty;
 
     // ---------- 链接与分享卡片 ----------
 

@@ -64,6 +64,15 @@
         <input type="search" id="search" placeholder="搜索会话" autocomplete="off" />
       </div>
 
+      <!-- 两条通道分块：私域（自建 NapCat）与官方商用（QQ 开放平台）。
+           两侧的会话 key 带各自的通道前缀，这里只是按前缀筛出对应板块，互不混淆。 -->
+      <div class="chan-tabs" id="chanTabs" role="tablist">
+        <button type="button" class="chan-tab active" data-chan="all" role="tab">全部</button>
+        <button type="button" class="chan-tab" data-chan="private" role="tab">私域</button>
+        <button type="button" class="chan-tab" data-chan="official" role="tab" id="chanTabOfficial">官方商用</button>
+      </div>
+      <div class="chan-status" id="chanStatus"></div>
+
       <div class="conv-list" id="convList"></div>
       <div class="conv-empty" id="convEmpty">
         <p>暂无会话</p>
@@ -506,7 +515,8 @@
           <div class="card-head">
             <h3>语音消息</h3>
             <p>机器人可以用<b>语音</b>说话（模型在 JSON 里填 <code>speak</code> 字段时）。
-              合成走 Piper（CPU 就能实时出音）旁路服务，默认<b>关闭</b> —— 语音比文字“重”，想让它偶尔开口再开。</p>
+              合成走<b>云端 TTS</b> 旁路服务（不再跑本地模型，省内存），协议端会把它转成 QQ 原生语音条。
+              默认<b>关闭</b> —— 语音比文字“重”，想让它偶尔开口再开。</p>
           </div>
 
           <label class="switch-row">
@@ -517,7 +527,7 @@
 
           <div class="grid-2">
             <div class="field">
-              <label>音色<span class="hint">Piper 模型名；点开输入框会列出 TTS 服务上已装的音色</span></label>
+              <label>音色<span class="hint">云端音色名；点开输入框会列出 TTS 服务上能用的音色（老的 zh_CN-* 会自动回落）</span></label>
               <input type="text" id="setVoiceName" list="voiceNameOptions" maxlength="60" placeholder="TTS 服务上已安装的音色名" />
               <datalist id="voiceNameOptions"></datalist>
             </div>
@@ -530,7 +540,7 @@
               <input type="number" id="setVoiceMaxChars" min="10" max="300" step="10" />
             </div>
             <div class="field">
-              <label>TTS 服务地址<span class="hint">Piper 旁路容器，提供 /speak?text=… 返回 wav</span></label>
+              <label>TTS 服务地址<span class="hint">云端 TTS 旁路容器，提供 /speak?text=… 返回音频</span></label>
               <input type="text" id="setTtsServiceUrl" maxlength="120" placeholder="http://tts:5000" />
             </div>
           </div>
@@ -543,8 +553,45 @@
           </div>
           <div id="voiceTestAudio"></div>
 
-          <p class="path-hint" id="voiceHint">换音色就是换一个 onnx 模型（音色即模型）；想复现某个特定人的音色需先拿到授权并单独训练。
+          <p class="path-hint" id="voiceHint">换音色就是换一个云端音色 ID（音色即声音）；想复现某个特定人的音色需先拿到授权（多数厂商支持克隆音色）。
             试听用的是<b>已保存</b>的「TTS 服务地址」——改了地址先点保存再试听。</p>
+        </div>
+
+        <!-- 官方商用通道（QQ 开放平台） -->
+        <div class="card" id="officialCard">
+          <div class="card-head">
+            <h3>官方商用通道（QQ 开放平台）</h3>
+            <p>与上面那条<b>私域</b>通道（自建 NapCat）<b>并存</b>：官方这条走开放平台的机器人，用户是 openid。
+              两边的会话、上下文、人设、白名单<b>完全隔离</b>（会话 key 带 <code>official:</code> 前缀），互不串台。
+              开启前先在开放平台把服务器的<b>出口 IP</b> 加进白名单；密钥（Secret）不在这里填 —— 它只从环境变量读。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setOfficialEnabled" />
+            <span class="switch"></span>
+            <span>启用官方商用通道<span class="hint" id="officialStateHint">保存后重启容器生效</span></span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>AppID<span class="hint">开放平台机器人页上的 AppID（写在这里不敏感，Secret 请用环境变量）</span></label>
+              <input type="text" id="setOfficialAppId" maxlength="40" placeholder="102xxxxxx" />
+            </div>
+            <div class="field">
+              <label>环境<span class="hint">沙箱只能收/发沙箱群与沙箱单聊（调试用）</span></label>
+              <label class="switch-row"><input type="checkbox" id="setOfficialSandbox" /><span class="switch"></span><span>用沙箱环境</span></label>
+            </div>
+            <div class="field">
+              <label>群白名单<span class="hint">写官方通道的<b>别名号</b>（会话列表里能看到）；留空 = 全部接受。千万别写真实群号</span></label>
+              <input type="text" id="setOfficialWhitelistGroups" maxlength="400" placeholder="留空 = 全部接受" />
+            </div>
+            <div class="field">
+              <label>单聊白名单<span class="hint">同样是别名号；留空 = 全部接受</span></label>
+              <input type="text" id="setOfficialWhitelistPrivates" maxlength="400" placeholder="留空 = 全部接受" />
+            </div>
+          </div>
+
+          <p class="path-hint" id="officialHint">设了 <code>QQCHAT_OFFICIAL_APP_SECRET</code> 才会真的连上去；没配就是“开关开着但连不上”，启动日志里会直说。</p>
         </div>
 
         <!-- 联网搜索 -->

@@ -316,6 +316,24 @@
     const [g1, g2] = GRADIENTS[hashIndex(c.key)];
     el.classList.toggle("active", c.key === state.activeKey);
 
+    // 通道徽标：官方那条在名字前挂个小标，一眼看出这条会话属于哪个板块
+    const nameEl = el.querySelector(".conv-name");
+    if (c.channelTag && nameEl.dataset.tag !== c.channelTag) {
+      const tag = document.createElement("span");
+      tag.className = "chan-badge chan-" + (c.channel || "private");
+      tag.textContent = c.channelTag;
+      nameEl.textContent = "";
+      nameEl.appendChild(tag);
+      nameEl.appendChild(document.createTextNode(c.name || ""));
+      nameEl.dataset.tag = c.channelTag;
+    } else if (c.channelTag) {
+      // 徽标已经在，只换名字文本（SSE 高频推送时别每次都重建节点）
+      const text = nameEl.lastChild;
+      if (text && text.nodeValue !== c.name) text.nodeValue = c.name || "";
+    } else if (nameEl.textContent !== (c.name || "")) {
+      nameEl.textContent = c.name || "";
+    }
+
     const av = el.querySelector(".avatar");
     av.style.background = `linear-gradient(135deg,${g1},${g2})`;
     el.querySelector(".av-text").textContent = c.avatarText;
@@ -359,10 +377,31 @@
     }
   }
 
-  function renderConversations(force) {
+  // 两条通道的状态一行字（私域 在线 · 官方 未启用）：面板顶部那两个板块靠它说清“为什么官方是空的”
+function renderChannelStatus(channels) {
+  state.channels = channels || [];
+  const box = $("chanStatus");
+  const parts = state.channels.map((c) => {
+    const st = !c.enabled ? "未启用" : (c.connected ? "在线" : "离线");
+    return `${c.name} ${st}`;
+  });
+  box.textContent = parts.join(" · ");
+  const official = state.channels.find((c) => c.channel === "official");
+  const tab = $("chanTabOfficial");
+  tab.title = !official || !official.enabled
+    ? "官方商用通道未启用（面板设置里开一下，并配好 appid/secret）"
+    : (official.connected ? "官方商用通道在线" : "官方商用通道已启用，但还没连上");
+  // 没启用时把 Tab 淡一点，但仍旧可点（点进去是空列表 + 一行说明，比直接藏起来好理解）
+  tab.classList.toggle("chan-off", !official || !official.enabled);
+}
+
+function renderConversations(force) {
     const q = state.search.trim().toLowerCase();
-    const items = state.conversations.filter((c) =>
-      !q || c.name.toLowerCase().includes(q) || (c.preview || "").toLowerCase().includes(q));
+    // 先按通道分块（私域 / 官方商用）再搜关键词 —— 两套场景的会话不混在一起
+    const items = state.conversations.filter((c) => {
+      if (state.channelFilter !== "all" && (c.channel || "private") !== state.channelFilter) return false;
+      return !q || c.name.toLowerCase().includes(q) || (c.preview || "").toLowerCase().includes(q);
+    });
 
     $("convEmpty").hidden = state.conversations.length > 0;
 
@@ -1222,6 +1261,13 @@
     $("setVoiceSpeed").value = r.voiceSpeed;
     $("setVoiceMaxChars").value = r.voiceMaxChars;
     $("setTtsServiceUrl").value = r.ttsServiceUrl || "";
+    // 官方商用通道（与私域并存）；secret 不回填（它只从环境变量读，面板不接也不存）
+    $("setOfficialEnabled").checked = r.officialEnabled === true;
+    $("setOfficialAppId").value = r.officialAppId || "";
+    $("setOfficialSandbox").checked = r.officialSandbox === true;
+    $("setOfficialWhitelistGroups").value = r.officialWhitelistGroups || "";
+    $("setOfficialWhitelistPrivates").value = r.officialWhitelistPrivates || "";
+    renderChannelStatus(r.channels);
     $("setLinkPreviewTimeout").value = r.linkPreviewTimeoutSeconds;
     $("setLinkPreviewMax").value = r.linkPreviewMax;
 
@@ -1354,6 +1400,12 @@
       voiceSpeed: Number($("setVoiceSpeed").value),
       voiceMaxChars: Number($("setVoiceMaxChars").value),
       ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
+      // 官方商用通道（QQ 开放平台）
+      officialEnabled: $("setOfficialEnabled").checked,
+      officialAppId: $("setOfficialAppId").value.trim(),
+      officialSandbox: $("setOfficialSandbox").checked,
+      officialWhitelistGroups: $("setOfficialWhitelistGroups").value.trim(),
+      officialWhitelistPrivates: $("setOfficialWhitelistPrivates").value.trim(),
       linkPreviewTimeoutSeconds: Number($("setLinkPreviewTimeout").value),
       linkPreviewMax: Number($("setLinkPreviewMax").value)
     };
@@ -1708,6 +1760,18 @@
         state.search = value;
         renderConversations();
       });
+    });
+
+    // 通道分块切换（全部 / 私域 / 官方商用）：只改筛选条件，不重拉数据 ——
+    // 会话数据里本来就带 channel，切板块就是换个过滤。
+    $("chanTabs").addEventListener("click", (e) => {
+      const btn = e.target.closest(".chan-tab");
+      if (!btn) return;
+      state.channelFilter = btn.dataset.chan || "all";
+      for (const b of $("chanTabs").querySelectorAll(".chan-tab")) {
+        b.classList.toggle("active", b === btn);
+      }
+      renderConversations(true);
     });
 
     $("aiToggle").addEventListener("click", async () => {

@@ -270,6 +270,45 @@ h1, h2, h3, p { margin: 0; }
 
 .search-wrap { padding: 0 12px 10px; }
 
+/* 通道分块（私域 / 官方商用）：两套场景的会话列表靠这两个 Tab 分开看 */
+.chan-tabs {
+  display: flex; gap: 4px;
+  padding: 0 12px 8px;
+}
+.chan-tab {
+  flex: 0 0 auto;
+  font: inherit; font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--control-border);
+  background: var(--control-fill);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.chan-tab:hover { color: var(--text-primary); }
+.chan-tab.active {
+  background: var(--accent, #4a7dff);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.chan-tab.chan-off { opacity: 0.55; }
+.chan-status {
+  padding: 0 12px 8px;
+  font-size: 11px; color: var(--text-secondary);
+}
+/* 会话名前的通道徒标（官方那条才显示） */
+.chan-badge {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px; font-weight: 600;
+  vertical-align: 1px;
+}
+.chan-badge.chan-official { background: rgba(74, 125, 255, 0.18); color: #4a7dff; }
+.chan-badge.chan-private { background: rgba(120, 120, 120, 0.18); color: var(--text-secondary); }
+
 input[type="search"], input[type="text"], input[type="number"], input[type="time"], textarea, select {
   width: 100%;
   background: var(--control-fill);

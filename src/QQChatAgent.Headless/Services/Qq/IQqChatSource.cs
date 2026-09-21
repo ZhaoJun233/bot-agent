@@ -29,7 +29,23 @@ public interface IQqChatSource
     /// <summary>连接状态变化（true=在线）。</summary>
     event Action<bool>? ConnectionChanged;
 
+    /// <summary>
+    /// 这条路属于哪个通道：<see cref="Channels.Private"/>（私域 NapCat）或
+    /// <see cref="Channels.Official"/>（官方商用平台）。
+    /// 默认是私域 —— 新加的协议端实现要显式写清楚，写错就等于把两个场景串到一起。
+    /// </summary>
+    string Channel => Channels.Private;
+
     bool IsConnected { get; }
+
+    /// <summary>
+    /// 登记「这个会话属于哪条通道」——多通道聚合（<see cref="ChannelRouter"/>）时用，
+    /// 单通道实现忽略即可（默认空实现）。上层从库里恢复会话后调一次，
+    /// 这样面板代发这类“没有入站消息可参考”的场景也能把消息发到正确的通道上。
+    /// </summary>
+    void RegisterTarget(string channel, bool isGroup, long id)
+    {
+    }
 
     /// <summary>
     /// 发一张音乐分享卡片（OneBot 的 music 段）。

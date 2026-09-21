@@ -19,6 +19,12 @@ public enum GatewayState
 /// </summary>
 public sealed class OneBotGateway : IQqChatSource, IDisposable
 {
+    /// <summary>
+    /// 这条路是私域通道（自建协议端 NapCat / OneBot）。
+    /// 官方商用那条是 <c>OfficialBotGateway</c>，两者由 <see cref="ChannelRouter"/> 聚合后交给上层。
+    /// </summary>
+    public string Channel => Channels.Private;
+
     private readonly object _gate = new();
     private readonly Dictionary<string, TaskCompletionSource<JsonNode?>> _pending = new();
     private IOneBotTransport? _transport;

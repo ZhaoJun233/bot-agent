@@ -5,7 +5,9 @@ using QQChatAgent.Services.Agent;
 using QQChatAgent.Services.Data;
 using QQChatAgent.Services.NapCat;
 using QQChatAgent.Services.OneBot;
+using QQChatAgent.Services.Official;
 using QQChatAgent.Services.Ops;
+using QQChatAgent.Services.Qq;
 
 namespace QQChatAgent.Headless;
 
@@ -80,6 +82,25 @@ public static class Program
             SelfIdHint = settings.UinOrZero
         };
 
+        // 上行通道聚合：默认只有私域（自建 NapCat）。配了官方平台 appid/secret 并打开开关时，
+        // 官方商用那条也接进来 —— 两条路交给**同一个** BotAgent，隔离靠会话 key 的通道前缀
+        // （见 Channels.Key），而不是靠两套 Agent（那样白名单/上下文/面板都得写两遍，迟早不一致）。
+        IQqChatSource source = gateway;
+        OfficialBotGateway? official = null;
+        if (settings.OfficialEnabled
+            && !string.IsNullOrWhiteSpace(settings.OfficialAppId)
+            && !string.IsNullOrWhiteSpace(settings.OfficialAppSecret))
+        {
+            official = new OfficialBotGateway(settings, msg => FileLog.Write("Official", msg));
+            source = new ChannelRouter(new IQqChatSource[] { gateway, official }, msg => FileLog.Write("Channel", msg));
+            FileLog.Write("Channel", $"官方商用通道已启用（appid={settings.OfficialAppId}，" +
+                                   $"{(settings.OfficialSandbox ? "沙箱" : "正式")}环境，与私域通道隔离）");
+        }
+        else if (settings.OfficialEnabled)
+        {
+            FileLog.Write("Channel", "官方商用通道开关是开的，但 appid/secret 没配齐 → 这次只跑私域通道");
+        }
+
         var brain = new OpenAiClient(settings)
         {
             BotIdentity = string.IsNullOrWhiteSpace(settings.NormalizedUin) ? null : settings.NormalizedUin,
@@ -95,7 +116,7 @@ public static class Program
         // 本机 Agent 桥（// 命令）：机器人**监听**一个 WS 端点，号主本机那个 pi-bridge 主动连进来。
         // 为什么不让机器人直接连本机：号主的电脑在 NAT 后面（没公网入口，也不应该开一个）。
         var agentBridge = new AgentBridgeServer(settings, msg => FileLog.Write("Agent", msg));
-        var agent = new BotAgent(settings, gateway, brain, store, profiles, agentBridge);
+        var agent = new BotAgent(settings, source, brain, store, profiles, agentBridge);
 
         // 面板内的扫码登录：把 NapCat 的登录二维码搬进机器人面板
         // （用户打开面板看不到二维码，是远程部署卡住最久的原因）
@@ -106,6 +127,8 @@ public static class Program
         var healthReports = new HealthReportService(settings, agent, gateway);
 
         // 先恢复磁盘会话并订阅事件，再连接协议端，避免启动期消息竞态
+        // 先把官方那条也起上（它就是一条 WS 长连接 + 定时刷 token），再连私域
+        official?.Start();
         agent.Start();
         gateway.Start();
         healthReports.Start();
@@ -165,6 +188,8 @@ public static class Program
         healthReports.Dispose();
         agent.Dispose();
         gateway.Stop();
+        official?.Stop();
+        (source as IDisposable)?.Dispose();
         FileLog.Write("Host", "已停止。");
         return 0;
     }

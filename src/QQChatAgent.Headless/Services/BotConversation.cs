@@ -16,6 +16,13 @@ public sealed class BotConversation
     /// <summary>QQ 映射键："private:{QQ号}" 或 "group:{群号}"。headless 版必为真实 QQ 会话。</summary>
     public required string SourceKey { get; init; }
 
+    /// <summary>
+    /// 这条会话属于哪条通道（<see cref="QQChatAgent.Services.Qq.Channels.Private"/> / <c>Official</c>）。
+    /// 由 SourceKey 的前缀推出 —— 前缀才是隔离的根（老库不带前缀 = 私域，原样可用）。
+    /// 快照（<c>ConversationRecord.Channel</c>）里也会写一份，便于外部看库/迁移时不必猜。
+    /// </summary>
+    public string Channel => QQChatAgent.Services.Qq.Channels.ChannelOf(SourceKey);
+
     public ConversationKind Kind { get; init; }
 
     /// <summary>会话名（群名/好友昵称）。</summary>
@@ -284,6 +291,7 @@ public sealed class BotConversation
             {
                 Id = Id,
                 SourceKey = SourceKey,
+                Channel = Channel,
                 Kind = Kind.ToString(),
                 Name = Name,
                 AvatarText = FirstChar(Name),
@@ -313,7 +321,7 @@ public sealed class BotConversation
     {
         var kind = Enum.TryParse<ConversationKind>(record.Kind, true, out var k)
             ? k
-            : (record.SourceKey?.StartsWith("group:", StringComparison.Ordinal) == true
+            : (QQChatAgent.Services.Qq.Channels.Parse(record.SourceKey).IsGroup
                 ? ConversationKind.GroupChat
                 : ConversationKind.PrivateChat);
 
@@ -391,17 +399,8 @@ public sealed class BotConversation
         NotifyEvicted(evicted);
     }
 
-    /// <summary>解析 SourceKey → (是否群聊, QQ号/群号)。</summary>
-    public (bool IsGroup, long Id) Target
-    {
-        get
-        {
-            var parts = SourceKey.Split(':');
-            return parts.Length == 2 && long.TryParse(parts[1], out var id)
-                ? (parts[0] == "group", id)
-                : (false, 0);
-        }
-    }
+    /// <summary>解析 SourceKey → (是否群聊, QQ号/群号)（通道前缀在 <see cref="QQChatAgent.Services.Qq.Channels"/> 里吃掉）。</summary>
+    public (bool IsGroup, long Id) Target => QQChatAgent.Services.Qq.Channels.Parse(SourceKey);
 
     private static string FirstChar(string name)
     {
