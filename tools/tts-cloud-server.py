@@ -121,6 +121,31 @@ def conf_values() -> dict:
         return _conf_cache["values"]
 
 
+def conf(name: str) -> str:
+    """面板写来的单项配置（空字符串不算，回落容器环境变量）。"""
+    return (conf_values().get(name) or "").strip()
+
+
+def provider() -> str:
+    return (conf("TTS_PROVIDER") or PROVIDER).strip().lower()
+
+
+def minimax_base() -> str:
+    return (conf("MINIMAX_API_BASE") or MINIMAX_BASE).rstrip("/")
+
+
+def minimax_model() -> str:
+    return conf("MINIMAX_MODEL") or MINIMAX_MODEL
+
+
+def openai_base() -> str:
+    return (conf("OPENAI_TTS_BASE_URL") or OPENAI_BASE).rstrip("/")
+
+
+def openai_model() -> str:
+    return conf("OPENAI_TTS_MODEL") or OPENAI_TTS_MODEL
+
+
 def api_key() -> str:
     """密钥优先用面板写的那份（空值不算），否则回落环境变量。"""
     from_conf = (conf_values().get("MINIMAX_API_KEY") or "").strip()
@@ -221,7 +246,7 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
     # silk 要的是 16k 单声道 PCM，直接让云端吐 pcm，省掉一次重采样
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
     payload = {
-        "model": MINIMAX_MODEL,
+        "model": minimax_model(),
         "text": text,
         "stream": False,
         "output_format": "hex",
@@ -238,7 +263,7 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
             "channel": 1,
         },
     }
-    url = f"{MINIMAX_BASE}/v1/t2a_v2"
+    url = f"{minimax_base()}/v1/t2a_v2"
     if MINIMAX_GROUP_ID:
         url += "?GroupId=" + urllib.parse.quote(MINIMAX_GROUP_ID)
 
@@ -265,13 +290,13 @@ def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
         raise RuntimeError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 OPENAI_TTS_API_KEY）")
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
     payload = {
-        "model": OPENAI_MODEL,
+        "model": openai_model(),
         "input": text,
         "voice": voice or OPENAI_VOICE,
         "response_format": want,
         "speed": round(max(0.25, min(4.0, speed)), 2),
     }
-    return http_bytes(f"{OPENAI_BASE}/audio/speech", payload, {
+    return http_bytes(f"{openai_base()}/audio/speech", payload, {
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json",
         "Accept": "application/octet-stream",
@@ -279,7 +304,7 @@ def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
 
 
 def synth_raw(text: str, voice: str, speed: float, fmt: str) -> bytes:
-    if PROVIDER == "openai":
+    if provider() == "openai":
         return openai_audio(text, voice, speed, fmt)
     return minimax_audio(text, voice, speed, fmt)
 
@@ -335,10 +360,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         if path in ("/health", "/voices"):
             return self._json(200, {
-                "voices": MINIMAX_VOICES if PROVIDER != "openai" else [OPENAI_VOICE],
+                "voices": MINIMAX_VOICES if provider() != "openai" else [OPENAI_VOICE],
                 "default": DEFAULT_VOICE,
-                "provider": PROVIDER,
-                "model": MINIMAX_MODEL if PROVIDER != "openai" else OPENAI_MODEL,
+                "provider": provider(),
+                "model": minimax_model() if provider() != "openai" else openai_model(),
+                "apiBase": minimax_base() if provider() != "openai" else openai_base(),
+                "fromPanel": bool(conf_values()),
                 "format": DEFAULT_FORMAT,
                 "cache": CACHE_ENABLED,
                 "key": mask(api_key()),
@@ -415,13 +442,13 @@ def normalize_voice(voice: str):
 
 def main() -> None:
     os.makedirs(CACHE_DIR, exist_ok=True)
-    log(f"启动：provider={PROVIDER} model={MINIMAX_MODEL if PROVIDER != 'openai' else OPENAI_MODEL} "
+    log(f"启动：provider={provider()} model={(minimax_model() if provider() != 'openai' else openai_model())} "
         f"voice={DEFAULT_VOICE} key={mask(api_key())} "
         f"format={DEFAULT_FORMAT} 端口={PORT} 缓存={CACHE_DIR}({CACHE_MAX_MB}MB) "
         f"silk编码器={'有' if shutil.which(SILK_CMD) else '无'}")
     if PROVIDER == "openai" and not OPENAI_KEY:
         log("警告：TTS_PROVIDER=openai 但 OPENAI_TTS_API_KEY 没配，/speak 会失败")
-    if PROVIDER != "openai" and not api_key():
+    if provider() != "openai" and not api_key():
         log("警告：还没配 TTS 密钥，/speak 会失败（面板「语音消息」里填，或给容器 MINIMAX_API_KEY）")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

@@ -241,6 +241,19 @@ public sealed class AppSettings
     /// </remarks>
     public string TtsServiceUrl { get; set; } = "http://tts:5000";
 
+    /// <summary>语音合成走哪个云端服务商：<c>minimax</c>（默认）| <c>openai</c>（任何兼容 /v1/audio/speech 的）。</summary>
+    public string TtsProvider { get; set; } = "minimax";
+
+    /// <summary>
+    /// 云端接口地址（面板可改）。留空 = 用 tts 容器环境变量里的默认值。
+    /// 留这个口子是因为同一家厂商有国内站/国际站两个域名（key 与站点要配对），
+    /// 不对时值得当场改，而不是去重建容器。
+    /// </summary>
+    public string TtsApiBase { get; set; } = string.Empty;
+
+    /// <summary>云端模型名（面板可改；留空 = 用容器默认，如 MiniMax 的 speech-2.8-hd）。</summary>
+    public string TtsModel { get; set; } = string.Empty;
+
     // ---------- 官方商用通道（QQ 开放平台） ----------
 
     /// <summary>

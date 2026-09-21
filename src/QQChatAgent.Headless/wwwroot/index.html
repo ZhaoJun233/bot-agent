@@ -547,6 +547,21 @@
               <label>云端 TTS 密钥<span class="hint">存密钥库、界面只回显掩码；会同时写给 tts 容器 —— 改完立即生效，不用重启任何容器</span></label>
               <input type="password" id="setTtsApiKey" maxlength="200" placeholder="还没配密钥，在这里填一个（留空 = 不改）" autocomplete="off" />
             </div>
+            <div class="field">
+              <label>云端服务商<span class="hint">minimax = 海螺；openai = 任何兼容 /v1/audio/speech 的网关</span></label>
+              <select id="setTtsProvider">
+                <option value="minimax">MiniMax（海螺）</option>
+                <option value="openai">OpenAI 兼容（/v1/audio/speech）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>云端接口地址<span class="hint">留空 = 用 tts 容器的默认；国内站 api.minimaxi.com / 国际站 api.minimax.io（key 与站点要配对，不对就报 1004/2049）</span></label>
+              <input type="text" id="setTtsApiBase" maxlength="120" placeholder="留空 = 容器默认（MiniMax：https://api.minimaxi.com）" />
+            </div>
+            <div class="field">
+              <label>云端模型<span class="hint">留空 = 容器默认（MiniMax：speech-2.8-hd；turbo 更便宜更快）</span></label>
+              <input type="text" id="setTtsModel" maxlength="80" placeholder="留空 = speech-2.8-hd" />
+            </div>
           </div>
 
           <div class="sticker-actions">

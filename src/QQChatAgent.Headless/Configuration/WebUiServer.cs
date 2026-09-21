@@ -1306,7 +1306,7 @@ public sealed partial class WebUiServer : IDisposable
     /// 每次请求读一次（带 mtime 缓存）——于是**改完面板不用重启任何容器**。
     /// 本地开发（没有 /host/qqchat）就落在数据目录，拿不到就只记日志（不报错）。
     /// </summary>
-    private static void WriteTtsConfToHost()
+    private void WriteTtsConfToHost()
     {
         try
         {
@@ -1314,6 +1314,14 @@ public sealed partial class WebUiServer : IDisposable
             var body =
                 "# 由机器人面板写入（不要手改：改了会被面板覆盖）\n" +
                 $"MINIMAX_API_KEY={key}\n" +
+                $"OPENAI_TTS_API_KEY={key}\n" +
+                $"TTS_PROVIDER={_settings.TtsProvider}\n" +
+                // 面板只给一个“云端接口地址”框：按选中的服务商写对应的那个变量，避免两个都写导致歧义。
+                // 空值不算覆盖：代理侧是 `面板值 or 容器环境变量`，所以留空就回到容器默认。
+                (Services.Qq.Channels.IsOfficial(string.Empty) ? string.Empty : string.Empty) +
+                (string.Equals(_settings.TtsProvider, "openai", StringComparison.OrdinalIgnoreCase)
+                    ? $"OPENAI_TTS_BASE_URL={_settings.TtsApiBase}\nOPENAI_TTS_MODEL={_settings.TtsModel}\n"
+                    : $"MINIMAX_API_BASE={_settings.TtsApiBase}\nMINIMAX_MODEL={_settings.TtsModel}\n") +
                 $"# 写入时间：{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}\n";
 
             foreach (var dir in new[] { "/host/qqchat/tts-conf", Path.Combine(AppPaths.RuntimeRoot, "tts-conf") })
@@ -1413,6 +1421,27 @@ public sealed partial class WebUiServer : IDisposable
         if (body["voiceMaxChars"] is JsonNode vmc) s.VoiceMaxChars = Math.Clamp(vmc.GetValue<int>(), 10, 300);
         if (body["ttsServiceUrl"] is JsonNode tts) s.TtsServiceUrl = tts.GetValue<string>().Trim();
 
+        // 云端服务商/地址/模型：都不是密钥，跟着行为配置进 settings.json；
+        // 但同样要**写给 tts 容器**（那边才是真正调用云端的一方）。
+        var ttsConfDirty = false;
+        if (body["ttsProvider"] is JsonNode ttp)
+        {
+            s.TtsProvider = ttp.GetValue<string>().Trim();
+            ttsConfDirty = true;
+        }
+
+        if (body["ttsApiBase"] is JsonNode tab)
+        {
+            s.TtsApiBase = tab.GetValue<string>().Trim();
+            ttsConfDirty = true;
+        }
+
+        if (body["ttsModel"] is JsonNode tmd)
+        {
+            s.TtsModel = tmd.GetValue<string>().Trim();
+            ttsConfDirty = true;
+        }
+
         // 云端 TTS 的厂商密钥（面板可改；存密钥库，只回显掩码）——
         // 与模型 key 不同的是：它还得多写一份给 tts 容器（另一个进程读不到我们的库），
         // 见 WriteTtsConfToHost（写 /host/qqchat/tts-conf/tts.env，容器挂载后按请求读）。
@@ -1431,6 +1460,12 @@ public sealed partial class WebUiServer : IDisposable
             }
 
             WriteTtsConfToHost();
+        }
+
+        if (ttsConfDirty)
+        {
+            WriteTtsConfToHost();
+            FileLog.Write("Web", $"面板更新了云端 TTS 配置（服务商={s.TtsProvider}，地址={(s.TtsApiBase.Length == 0 ? "(容器默认)" : s.TtsApiBase)}，模型={(s.TtsModel.Length == 0 ? "(容器默认)" : s.TtsModel)}）");
         }
 
         // ---- 官方商用通道（QQ 开放平台）----
@@ -2010,6 +2045,9 @@ public sealed partial class WebUiServer : IDisposable
         ["voiceSpeed"] = s.VoiceSpeed,
         ["voiceMaxChars"] = s.VoiceMaxChars,
         ["ttsServiceUrl"] = s.TtsServiceUrl,
+        ["ttsProvider"] = s.TtsProvider,
+        ["ttsApiBase"] = s.TtsApiBase,
+        ["ttsModel"] = s.TtsModel,
         ["ttsKeyConfigured"] = !string.IsNullOrWhiteSpace(SecretsStore.LoadTtsKey()),
         ["ttsKeyMasked"] = MaskSecret(SecretsStore.LoadTtsKey()),
 

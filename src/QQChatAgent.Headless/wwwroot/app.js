@@ -1268,6 +1268,9 @@ function renderConversations(force) {
     $("setTtsApiKey").placeholder = r.ttsKeyConfigured
       ? `${r.ttsKeyMasked}（已设置，留空即不修改）`
       : "还没配密钥，在这里填一个（云端 TTS 必需）";
+    $("setTtsProvider").value = (r.ttsProvider || "minimax").toLowerCase() === "openai" ? "openai" : "minimax";
+    $("setTtsApiBase").value = r.ttsApiBase || "";
+    $("setTtsModel").value = r.ttsModel || "";
     // 官方商用通道（与私域并存）；secret 不回填（它只从环境变量读，面板不接也不存）
     $("setOfficialEnabled").checked = r.officialEnabled === true;
     $("setOfficialAppId").value = r.officialAppId || "";
@@ -1409,6 +1412,9 @@ function renderConversations(force) {
       ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
       // TTS 密钥（留空 = 不改；服务端只存掩码，不回显）
       ttsApiKey: $("setTtsApiKey").value.trim(),
+      ttsProvider: $("setTtsProvider").value,
+      ttsApiBase: $("setTtsApiBase").value.trim(),
+      ttsModel: $("setTtsModel").value.trim(),
       // 官方商用通道（QQ 开放平台）
       officialEnabled: $("setOfficialEnabled").checked,
       officialAppId: $("setOfficialAppId").value.trim(),
