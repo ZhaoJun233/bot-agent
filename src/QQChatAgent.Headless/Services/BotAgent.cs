@@ -4550,6 +4550,21 @@ public sealed class BotAgent : IDisposable
         // 这里先把文本取出来：它得参与“沉默判定”与消息落库，否则“只发语音不说话”会被当成空回复。
         var voiceText = (result.Speak ?? string.Empty).Trim();
 
+        // 断句归模型（号主 2026-09-21）：它可以在 speak 里用 `|` 或换行把话切成几段，每段 = 一条语音条（最多 3 条）。
+        // 为什么不让程序切：中文的停顿是语气的一部分（“你是不是傻，我可没这么说” vs “你是不是傻 | 我可没这么说”
+        // 听着是两句话 ✗），这种事模型比正则懂。代码只留技术性限制（条数/字数）。
+        var voiceParts = voiceText
+            .Split(new[] { '|', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Trim())
+            .Where(p => p.Length > 0)
+            .Take(3)
+            .ToList();
+        if (voiceParts.Count == 0 && voiceText.Length > 0)
+        {
+            voiceParts.Add(voiceText);
+        }
+
+
         // 模型可以顺手写一句“我现在的心情”——存下来，下一轮提示词里带上（空/太长会被忽略）
         if (_mood.SetText(result.Mood, DateTimeOffset.Now))
         {
@@ -4667,8 +4682,9 @@ public sealed class BotAgent : IDisposable
         // 为什么得克制：合成要几秒 CPU、音频占流量、群里语音连发就是刷屏。
         // 提示词让它“偶尔用”，代码侧再加一道同会话 45 秒的闸门。
         string? voiceUrl = null;
+        var voiceUrls = new List<string>();
         string? voiceSkipWhy = null;
-        if (voiceText.Length > 0)
+        if (voiceParts.Count > 0)
         {
             // 2026-09-21（号主要求“什么时候发语音让模型自己定”）：这里以前还有一道
             // “气氛沉（有人低落/在吵架）就一律不发语音”的硬拦，已删——那本来就是判断类的事，
@@ -4679,9 +4695,9 @@ public sealed class BotAgent : IDisposable
             {
                 voiceSkipWhy = "语音消息开关是关的";
             }
-            else if (voiceText.Length > maxChars)
+            else if (voiceParts.FirstOrDefault(p => p.Length > maxChars) is { } longPart)
             {
-                voiceSkipWhy = $"{voiceText.Length} 字超过上限 {maxChars}";
+                voiceSkipWhy = $"{longPart.Length} 字超过上限 {maxChars}";
             }
             else if (!AllowVoice(conversation, out var voiceReason))
             {
@@ -4690,36 +4706,65 @@ public sealed class BotAgent : IDisposable
             // 语速/情绪/音调**由模型按语境自己定**（号主 2026-09-21）：它给了就用它的，
             // 没给就退回面板里那三个默认值；面板值仍受同样范围限制。
             else if ((voiceUrl = _voice.BuildSpeakUrl(
-                         voiceText,
+                         voiceParts[0],
                          emotionOverride: result.VoiceEmotion,
                          speedOverride: result.VoiceSpeed is double modelSpeed ? (int)Math.Round(modelSpeed * 100) : null,
                          pitchOverride: result.VoicePitch)) is null)
             {
                 voiceSkipWhy = "TTS 服务地址没配置（应形如 http://tts:5000）";
             }
+
+            // 第 2、3 段：同一套语气参数（模型只给一份），只是各自合成一次
+            if (voiceUrl is not null)
+            {
+                voiceUrls.Add(voiceUrl);
+                for (var i = 1; i < voiceParts.Count; i++)
+                {
+                    var extra = _voice.BuildSpeakUrl(
+                        voiceParts[i],
+                        emotionOverride: result.VoiceEmotion,
+                        speedOverride: result.VoiceSpeed is double s2 ? (int)Math.Round(s2 * 100) : null,
+                        pitchOverride: result.VoicePitch);
+                    if (extra is null)
+                    {
+                        break;
+                    }
+
+                    voiceUrls.Add(extra);
+                }
+            }
         }
 
         var voiceSent = false;
-        if (voiceUrl is not null)
+        var voiceFailed = new List<string>();
+        if (voiceUrls.Count > 0)
         {
-            voiceSent = await _source.SendVoiceAsync(isGroup, targetId, voiceUrl);
-            if (voiceSent)
+            // 模型把话切成了几段 → 每段一条语音条（≤3 条）。
+            // 哪段没发出去，就把那段当文字补上（内容不能丢）。
+            for (var i = 0; i < voiceUrls.Count; i++)
             {
+                var part = i < voiceParts.Count ? voiceParts[i] : voiceText;
+                var ok = await _source.SendVoiceAsync(isGroup, targetId, voiceUrls[i]);
+                if (!ok)
+                {
+                    if (part.Length > 0) voiceFailed.Add(part);
+                    EmitLog(voiceUrls.Count > 1
+                        ? $"[Voice] 第 {i + 1}/{voiceUrls.Count} 段没发出去 → 这段改发文字"
+                        : "[Voice] 语音没发出去 → 改发文字（具体原因见上一行的 retcode/响应体）");
+                    continue;
+                }
+
+                voiceSent = true;
                 _lastVoice[conversation.SourceKey] = DateTimeOffset.Now;
                 // 把模型给的语气参数也记下来 —— 不然“它到底有没有按语境调情绪”没法验证
                 var tone = new List<string>();
                 if (!string.IsNullOrWhiteSpace(result.VoiceEmotion)) tone.Add("情绪 " + result.VoiceEmotion);
                 if (result.VoiceSpeed is double ms) tone.Add($"语速 {ms:0.##}");
                 if (result.VoicePitch is int mp) tone.Add($"音调 {mp:+#;-#;0}");
-                EmitLog($"[Voice] 已发语音（{voiceText.Length} 字，音色 {_voice!.VoiceName}"
+                EmitLog($"[Voice] 已发语音{(voiceUrls.Count > 1 ? $"（第 {i + 1}/{voiceUrls.Count} 段）" : string.Empty)}"
+                        + $"（{part.Length} 字，音色 {_voice!.VoiceName}"
                         + (tone.Count > 0 ? "，模型定的 " + string.Join('/', tone) : "，模型未指定语气（用面板默认）")
-                        + $"）：{Shorten(voiceText, 40)}");
-            }
-            else
-            {
-                // 失败就退化成文字：内容一定要落到群里（最差也得让群友看到它想说什么）。
-                // 具体原因已由 SendVoiceAsync 把 retcode + 响应体打进日志。
-                EmitLog("[Voice] record 段没发出去 → 改发文字");
+                        + $"）：{Shorten(part, 40)}");
             }
         }
         else if (voiceSkipWhy is not null)
@@ -4732,18 +4777,37 @@ public sealed class BotAgent : IDisposable
         //   • 语音发成功了、但 reply 另写了内容 → 那是模型自己想补的话，照发；
         //   • 语音没发出去 → 至少把要说的话当文字发出去。
         var textReply = reply.Length > 0 ? reply : null;
-        if (voiceText.Length > 0)
+        if (voiceParts.Count > 0)
         {
             if (voiceSent)
             {
-                if (string.Equals(textReply, voiceText, StringComparison.Ordinal))
+                // 去重（2026-09-21 修）：以前只在**一字不差**时才吞掉文字 ✗ —— speak「好呀，那我们八点见」
+                // 配 reply「好呀八点见！」就会语音+文字把同一句发两遍 ✗。现在按“去标点后是否同一句 /
+                // 是否互相包含”判断。
+                var said = string.Join(" ", voiceParts.Where(p => !voiceFailed.Contains(p)));
+                if (textReply is not null && SameSaid(textReply, said))
                 {
+                    EmitLog($"[Voice] 语音与文字是同一句（{Shorten(textReply, 24)}）→ 不再重复发文字");
                     textReply = null;
+                }
+                else if (textReply is not null && said.Length > 0)
+                {
+                    EmitLog($"[Voice] 语音与文字内容不同 → 两者都发（语音 {Shorten(said, 20)}）");
                 }
             }
             else
             {
-                textReply ??= voiceText;
+                textReply ??= string.Join(" ", voiceParts);
+            }
+
+            // 个别段没发出去的：那几段当文字补上
+            if (voiceFailed.Count > 0)
+            {
+                var fallback = string.Join(" ", voiceFailed.Where(p => p.Length > 0));
+                if (fallback.Length > 0)
+                {
+                    textReply = textReply is null ? fallback : textReply + "\n" + fallback;
+                }
             }
         }
 
@@ -5293,6 +5357,50 @@ public sealed class BotAgent : IDisposable
     /// 现在：半角点看前后文（前后是数字/字母就不算句末）、连续标点一次收走、
     /// 收尾符号跟着本段走；非常长的句子才退一步在逗号处断（不会憋出一条千字消息）。
     /// </summary>
+    /// <summary>
+    /// “语音说的”和“文字写的”是不是同一句（去空白去标点后相等，或短句被长句包含）。
+    /// 为什么需要：模型给的 speak 与 reply 常常只差标点/语气词 ✗（「好呀，那我们八点见」vs「好呀八点见！」），
+    /// 严格相等会漏判 → 同一条内容语音+文字各发一遍（号主 2026-09-21 报的）。
+    /// </summary>
+    private static bool SameSaid(string a, string b)
+    {
+        static string Norm(string s)
+        {
+            var sb = new StringBuilder(s.Length);
+            foreach (var ch in s)
+            {
+                if (char.IsWhiteSpace(ch))
+                {
+                    continue;
+                }
+
+                if ("，。！？；：、,.!?;:…—~～\"'“”‘’（）()《》<>【】[]-".IndexOf(ch) >= 0)
+                {
+                    continue;
+                }
+
+                sb.Append(ch);
+            }
+
+            return sb.ToString();
+        }
+
+        var na = Norm(a);
+        var nb = Norm(b);
+        if (na.Length == 0 || nb.Length == 0)
+        {
+            return false;
+        }
+
+        if (string.Equals(na, nb, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var (shortOne, longOne) = na.Length <= nb.Length ? (na, nb) : (nb, na);
+        return shortOne.Length >= 6 && longOne.Contains(shortOne, StringComparison.Ordinal);
+    }
+
     private static List<string> SplitSentences(string text)
     {
         const int MinSegmentLength = 6;
