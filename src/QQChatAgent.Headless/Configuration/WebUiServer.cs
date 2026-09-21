@@ -61,7 +61,7 @@ public sealed partial class WebUiServer : IDisposable
     private long _convBroadcastVersion;
 
     public WebUiServer(int port, AppSettings settings, OneBotGateway gateway, BotAgent agent, LoginQrService loginQr,
-        AgentBridgeServer? agentBridge = null, HealthReportService? healthReports = null)
+        AgentBridgeServer? agentBridge = null, HealthReportService? healthReports = null, Action? onRestart = null)
     {
         _port = port;
         _settings = settings;
@@ -70,6 +70,7 @@ public sealed partial class WebUiServer : IDisposable
         _loginQr = loginQr;
         _agentBridge = agentBridge;
         _healthReports = healthReports;
+        _onRestart = onRestart;
         _bind = Environment.GetEnvironmentVariable("QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
             ? custom
             : "+";
@@ -80,6 +81,14 @@ public sealed partial class WebUiServer : IDisposable
 
     /// <summary>服务器健康日报（号主 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
     private readonly HealthReportService? _healthReports;
+
+    /// <summary>
+    /// 面板「一键重启」：改完需要重启才生效的设置（官方通道 appid/secret、容器级的挂载与端口…）
+    /// 不用再开 SSH。实现是**退出进程**——容器带着 <c>restart: unless-stopped</c>，Docker 会把它拉起来；
+    /// 这比从面板直接摸 docker.sock 重启容器安全得多（那种做法等于把 root 交给面板）。
+    /// 为 null 时（例如集成测试里）只记一条日志，不真的退。
+    /// </summary>
+    private readonly Action? _onRestart;
 
     /// <summary>实际监听的前缀（启动失败为 null）。</summary>
     public string? ListeningOn { get; private set; }
@@ -391,6 +400,13 @@ public sealed partial class WebUiServer : IDisposable
         if (path.StartsWith("/api/deploy", StringComparison.OrdinalIgnoreCase))
         {
             await HandlePanelDeployAsync(context, path, method);
+            return;
+        }
+
+        // ─────────── 一键重启（改完需要重启才生效的设置，不用开 SSH）───────────
+        if (path.Equals("/api/restart", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleRestartAsync(context, method);
             return;
         }
 
@@ -1223,6 +1239,61 @@ public sealed partial class WebUiServer : IDisposable
         });
     }
 
+    /// <summary>
+    /// POST /api/restart：一键重启（把配置里“重启才生效”的部分落地）。
+    /// 先回 200 再退进程，否则浏览器只会看到一个断掉的请求；容器带着 restart 策略会自己回来，
+    /// 面板那边按跟“一键部署”同一个办法——轮询 <c>/healthz</c> 等它回来。
+    /// </summary>
+    private async Task HandleRestartAsync(HttpListenerContext context, string method)
+    {
+        if (method != "POST")
+        {
+            await WriteJsonAsync(context, 405, new JsonObject { ["error"] = "用法：POST /api/restart" });
+            return;
+        }
+
+        if (_onRestart is null)
+        {
+            // 集成测试里不会传这个回调：如实说“这里不会真重启”，而不是让测试意外把进程弄死
+            FileLog.Write("Web", "面板请求重启，但当前进程没接重启回调（测试环境）→ 忽略");
+            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = true, ["restarting"] = false, ["note"] = "当前进程不支持重启" });
+            return;
+        }
+
+        FileLog.Write("Web", "面板点了「一键重启」→ 进程即将退出，容器会按 restart 策略拉起来");
+
+        // 关键顺序：**先把退出排上**，再去写响应。
+        // 反过来的话，写响应一旦失败（实测：客户端 POST 没带 Content-Length 时 HttpListener 会回 411）
+        // 异常会往上抛，重启回调就永远不会执行 —— 用户看到“点了没反应”，而日志里却写着“即将退出”。
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(800);
+            try
+            {
+                _onRestart();
+            }
+            catch (Exception ex)
+            {
+                FileLog.Write("Web", "重启回调抛异常：" + ex.Message);
+            }
+        });
+
+        try
+        {
+            await WriteJsonAsync(context, 200, new JsonObject
+            {
+                ["ok"] = true,
+                ["restarting"] = true,
+                ["note"] = "进程马上退出，容器会在几秒内自己起来（页面会自动等它）",
+            });
+        }
+        catch (Exception ex)
+        {
+            // 响应没写出去无所谓：重启已经在路上了
+            FileLog.Write("Web", "重启响应没写出去（不影响重启）：" + ex.Message);
+        }
+    }
+
     private async Task HandleSettingsSaveAsync(HttpListenerContext context)
     {
         var body = await ReadJsonAsync(context);
@@ -1759,13 +1830,20 @@ public sealed partial class WebUiServer : IDisposable
         foreach (var channel in new[] { Services.Qq.Channels.Private, Services.Qq.Channels.Official })
         {
             var src = registry?.Get(channel);
+
+            // 没启用多通道时没有台账（registry 为 null）——这时候**私域就是网关自己**，
+            // 不能因为“没登记”就报成离线（踩过：面板显示“私域 离线”，实际 QQ 连着好好的）。
+            var connected = channel == Services.Qq.Channels.Private
+                ? (src?.IsConnected ?? _gateway.IsConnected)
+                : (src?.IsConnected ?? false);
+
             arr.Add(new JsonObject
             {
                 ["channel"] = channel,
                 ["name"] = Services.Qq.Channels.Display(channel),
                 ["tag"] = Services.Qq.Channels.Tag(channel),
                 ["enabled"] = src is not null || !Services.Qq.Channels.IsOfficial(channel),
-                ["connected"] = src?.IsConnected ?? false
+                ["connected"] = connected
             });
         }
 

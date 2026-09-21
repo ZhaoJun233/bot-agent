@@ -569,7 +569,7 @@
           <label class="switch-row">
             <input type="checkbox" id="setOfficialEnabled" />
             <span class="switch"></span>
-            <span>启用官方商用通道<span class="hint" id="officialStateHint">保存后重启容器生效</span></span>
+            <span>启用官方商用通道<span class="hint" id="officialStateHint">保存后点下面的按钮重启生效</span></span>
           </label>
 
           <div class="grid-2">
@@ -592,6 +592,13 @@
           </div>
 
           <p class="path-hint" id="officialHint">设了 <code>QQCHAT_OFFICIAL_APP_SECRET</code> 才会真的连上去；没配就是“开关开着但连不上”，启动日志里会直说。</p>
+
+          <!-- 一键重启：改完「重启才生效」的东西（官方通道凭据、容器级挂载…）不用再开 SSH。
+               做法是让进程退出、由容器重启策略把它拉起来；页面会自己等它回来。 -->
+          <div class="field">
+            <button type="button" id="restartBtn" class="btn-secondary">⟳ 一键重启机器人</button>
+            <span class="path-hint" id="restartHint">改了 AppID / 环境 / 白名单后点一下：几秒内自己回来（页面会等它）。容器挂了也不怕——重启策略会拉起它。</span>
+          </div>
         </div>
 
         <!-- 联网搜索 -->

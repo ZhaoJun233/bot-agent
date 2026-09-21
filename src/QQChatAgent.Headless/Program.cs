@@ -133,7 +133,19 @@ public static class Program
         gateway.Start();
         healthReports.Start();
 
-        using var web = new WebUiServer(settings.HealthPort, settings, gateway, agent, loginQr, agentBridge, healthReports);
+        using var web = new WebUiServer(settings.HealthPort, settings, gateway, agent, loginQr, agentBridge, healthReports,
+            onRestart: () =>
+            {
+                // 一键重启 = 退出进程。为什么不自接 docker.sock 重启容器：那等于把 root 交给面板；
+                // 容器本身就是 `restart: unless-stopped`，退出去 Docker 会毫秒级把它拉起来。
+                FileLog.Write("Host", "一键重启：即将退出，让 Docker 把容器重新拉起来…");
+                foreach (var svc in new IDisposable?[] { official })
+                {
+                    try { svc?.Dispose(); } catch (Exception) { /* 退出路径，收尾失败不阻塞 */ }
+                }
+
+                Environment.Exit(0);
+            });
         if (settings.HealthPort > 0)
         {
             web.Start();

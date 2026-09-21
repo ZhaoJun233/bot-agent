@@ -377,16 +377,18 @@
     }
   }
 
-  // 两条通道的状态一行字（私域 在线 · 官方 未启用）：面板顶部那两个板块靠它说清“为什么官方是空的”
+  // 两条通道的状态一行字。**只在官方通道启用时才显示**：
+// 没启用时这行只会重复“私域在线”（顶栏已经有连接状态了），反而显得吵。
 function renderChannelStatus(channels) {
   state.channels = channels || [];
   const box = $("chanStatus");
+  const official = state.channels.find((c) => c.channel === "official");
   const parts = state.channels.map((c) => {
     const st = !c.enabled ? "未启用" : (c.connected ? "在线" : "离线");
     return `${c.name} ${st}`;
   });
   box.textContent = parts.join(" · ");
-  const official = state.channels.find((c) => c.channel === "official");
+  box.hidden = !official || !official.enabled;
   const tab = $("chanTabOfficial");
   tab.title = !official || !official.enabled
     ? "官方商用通道未启用（面板设置里开一下，并配好 appid/secret）"
@@ -1772,6 +1774,41 @@ function renderConversations(force) {
         b.classList.toggle("active", b === btn);
       }
       renderConversations(true);
+    });
+
+    // 一键重启：把“重启才生效”的设置落地（官方通道凭据、容器级改动…），不用开 SSH。
+    // 进程会退出、容器自己回来 —— 所以点完先轮询 /healthz，回来了再刷一遍状态。
+    $("restartBtn").addEventListener("click", async () => {
+      const hint = $("restartHint");
+      if (!confirm("重启机器人？\n\n约 5~15 秒不可用（群里的消息会等它回来后一起处理），重启后设置才生效。")) return;
+      $("restartBtn").disabled = true;
+      hint.textContent = "正在重启…";
+      try {
+        await api("/api/restart", { method: "POST" });
+      } catch (e) {
+        // 请求可能在进程退出的瞬间断掉，这不算失败：下面靠 /healthz 判定
+      }
+      const t0 = Date.now();
+      const tick = setInterval(() => {
+        hint.textContent = `正在重启…（已等 ${Math.round((Date.now() - t0) / 1000)} 秒）`;
+      }, 1000);
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        try {
+          const r = await fetch(`/healthz?_=${Date.now()}`, { cache: "no-store" });
+          if (r.ok) {
+            clearInterval(tick);
+            hint.textContent = `已回来（约 ${Math.round((Date.now() - t0) / 1000)} 秒）。`;
+            $("restartBtn").disabled = false;
+            // 服务端重启后设置/连接状态都变了，重拉一次（否则界面还停在旧状态）
+            try { await loadSettings(); } catch (e) { /* 忽略 */ }
+            return;
+          }
+        } catch (e) { /* 还没起来，接着等 */ }
+      }
+      clearInterval(tick);
+      hint.textContent = "等了 60 秒还没回来 —— 去服务器看 docker logs qqchat-bot（容器自带重启策略，通常会自己拉起）。";
+      $("restartBtn").disabled = false;
     });
 
     $("aiToggle").addEventListener("click", async () => {
