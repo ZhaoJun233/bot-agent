@@ -1817,10 +1817,23 @@ public sealed class BotAgent : IDisposable
         var bridge = _agentBridge;
 
         var who = msg.UserId.ToString();
-        var allowed = _agentAllowAll || (_agentUsers.Count > 0 && _agentUsers.Contains(msg.UserId));        if (!allowed)
+        // 官方通道的“能用 agent 的人”额外认一种写法：把它加进**官方白名单·私聊**
+        // （2026-09-21 号主报的“官方白名单里的人用不了 // 指令”：那边发送者是别名号 8e15 起，
+        //  而 AgentAllowedUsers 里填的是私域真号 ✗ → 永远匹配不上 ✗ 直接被拒）。
+        // 为什么只认“私聊白名单”而不认群：群白名单是“这个群可以用命令”的意思太宽了 ——
+        // 执行命令的权限必须落到**具体某个人**身上（官方白名单显式列出才算，空 = 全部接受不算 ✗）。
+        var officialExplicit = Channels.IsOfficial(msg.Channel)
+            && _officialWhitelistPrivates.Count > 0
+            && _officialWhitelistPrivates.Contains(msg.UserId);
+        var allowed = _agentAllowAll
+            || (_agentUsers.Count > 0 && _agentUsers.Contains(msg.UserId))
+            || officialExplicit;
+        if (!allowed)
         {
             // 权限不够：日志必记，回话节流（每会话 60 秒一条）
-            EmitLog($"agent 命令被拒（{who} 不在 AgentAllowedUsers 里）: {Shorten(payload, 40)}");
+            EmitLog(Channels.IsOfficial(msg.Channel)
+                ? $"agent 命令被拒（{who} 不在 AgentAllowedUsers 里；官方通道要么把这个**别名号**填进 AgentAllowedUsers，要么把它加进「官方白名单·私聊」）: {Shorten(payload, 40)}"
+                : $"agent 命令被拒（{who} 不在 AgentAllowedUsers 里）: {Shorten(payload, 40)}");
             if (ShouldReplyDenied(conversation.SourceKey))
             {
                 await SendPlainAsync(conversation, "这个功能只给白名单用户用～");
@@ -5447,17 +5460,22 @@ public sealed class BotAgent : IDisposable
         _pendingConversations.TryRemove(sourceKey, out _);
     }
 
-    /// <summary>白名单变更后清掉不再允许的会话（与桌面版 ApplyWhitelistFilter 语义一致）。</summary>
+    /// <summary>
+    /// 白名单变更后收尾。
+    ///
+    /// ⚠ 2026-09-21 修语义：白名单只管“要不要回”，**不管“存不存”**。
+    /// 以前这里会把不在白名单里的会话从内存里删掉 ✗；随后 <c>Save()</c> 重写 conversations 表时
+    /// 那些行就没了 ✗（messages 表的行还在 ✗）—— 后果就是**面板里那个会话直接消失
+    /// 或打开是空的**（号主报的“群聊会话不显示”就是这个 ✗）。
+    /// 现在只把“不在白名单”的会话列出来，用于清在途的待回复项；
+    /// 会话本体与历史**一律保留**（不在白名单的入站在 HandleInbound 那一道就被拦了，不会污染上下文）。
+    /// </summary>
     private void PruneNonWhitelisted()
     {
         List<BotConversation> removed;
         lock (_conversationsGate)
         {
             removed = _conversations.Where(c => !IsWhitelistedKey(c.SourceKey)).ToList();
-            foreach (var c in removed)
-            {
-                _conversations.Remove(c);
-            }
         }
 
         foreach (var c in removed)
