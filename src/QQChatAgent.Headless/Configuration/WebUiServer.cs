@@ -2725,9 +2725,11 @@ public sealed partial class WebUiServer : IDisposable
 
     /// <summary>
     /// POST /api/voice/clone：音色复刻（上传样本 → 建克隆）。
-    /// 面板把选中的音频读成 base64 一起发上来：HttpListener 里解 multipart 纯属自找麻烦，
-    /// 而这是一次性管理动作、几十秒的样本也就几百 KB~几 MB。
-    /// 请求体：<c>{"audioBase64":"…","fileName":"a.mp3","voiceId":"zhao_voice_01"}</c>。
+    /// 面板把选中的音频读成 base64 一起发上来：HttpListener 里解 multipart 纯属自找麻烦。
+    /// 两种请求体都收：
+    ///   • 单段：<c>{"audioBase64":"…","fileName":"a.mp3","voiceId":"zhao_voice_01"}</c>
+    ///   • 多段（自动拼接）：<c>{"samples":[{"audioBase64":"…","fileName":"1.mp3"},…],"voiceId":"…"}</c>
+    /// 多段是为了“手上只有 5 秒切片”的情况 —— 官方主样本要求 ≥ 10 秒，服务端把几段拼成一段再传。
     /// </summary>
     private async Task HandleVoiceCloneAsync(HttpListenerContext context, string method)
     {
@@ -2745,39 +2747,93 @@ public sealed partial class WebUiServer : IDisposable
         }
 
         var body = await ReadJsonAsync(context);
-        var raw = body?["audioBase64"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(raw))
+        var decoded = new List<(byte[] Data, string Name)>();
+
+        // 多段：面板多选时走这条路
+        if (body?["samples"] is JsonArray arr && arr.Count > 0)
         {
-            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = "没有选音频文件" });
-            return;
+            foreach (var node in arr)
+            {
+                var (bytes, err) = DecodeAudio(node?["audioBase64"]?.GetValue<string>());
+                if (err is not null)
+                {
+                    await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = err });
+                    return;
+                }
+
+                decoded.Add((bytes!, node?["fileName"]?.GetValue<string>() ?? "sample.mp3"));
+            }
+        }
+        else
+        {
+            var (bytes, err) = DecodeAudio(body?["audioBase64"]?.GetValue<string>());
+            if (err is not null)
+            {
+                await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = err });
+                return;
+            }
+
+            decoded.Add((bytes!, body?["fileName"]?.GetValue<string>() ?? "sample.mp3"));
         }
 
-        byte[] audio;
-        try
-        {
-            // 面板可能传成 data:audio/mpeg;base64,… 的形式，逗号后面才是真内容
-            var comma = raw.IndexOf(',');
-            audio = Convert.FromBase64String(comma >= 0 ? raw[(comma + 1)..] : raw);
-        }
-        catch (Exception)
-        {
-            await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = "音频不是合法的 base64（面板读取失败？）" });
-            return;
-        }
-
-        var fileName = body?["fileName"]?.GetValue<string>() ?? "sample.mp3";
+        var fileName = decoded.Count == 1 ? decoded[0].Name : $"merged-{decoded.Count}.mp3";
         var voiceId = body?["voiceId"]?.GetValue<string>() ?? string.Empty;
-        var (ok, error) = await voice.CloneVoiceAsync(audio, fileName, voiceId, CancellationToken.None);
+
+        // 多段先拼（面板上那些 5 秒切片就是走这里）
+        string note = string.Empty;
+        var finalBytes = decoded[0].Data;
+        if (decoded.Count > 1)
+        {
+            var (merged, concatError, concatNote) = 
+                QQChatAgent.Services.Voice.VoiceService.ConcatSamples(decoded);
+            if (concatError is not null || merged is null)
+            {
+                FileLog.Write("Voice", "面板拼接样本失败：" + concatError);
+                await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = false, ["error"] = concatError });
+                return;
+            }
+
+            finalBytes = merged;
+            note = concatNote;
+            FileLog.Write("Voice", $"面板把 {decoded.Count} 段样本拼成一段：{concatNote}（{finalBytes.Length / 1024}KB）");
+        }
+
+        var (ok, error) = await voice.CloneVoiceAsync(finalBytes, fileName, voiceId, CancellationToken.None);
         if (ok)
         {
-            FileLog.Write("Voice", $"面板复刻音色成功：{voiceId}（样本 {audio.Length / 1024}KB）");
+            FileLog.Write("Voice", $"面板复刻音色成功：{voiceId}（样本 {finalBytes.Length / 1024}KB{(note.Length > 0 ? "，" + note : string.Empty)}）");
         }
         else
         {
             FileLog.Write("Voice", "面板复刻音色失败：" + error);
         }
 
-        await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = ok, ["voiceId"] = voiceId, ["error"] = error });
+        await WriteJsonAsync(context, 200, new JsonObject
+        {
+            ["ok"] = ok,
+            ["voiceId"] = voiceId,
+            ["note"] = note,
+            ["error"] = error,
+        });
+    }
+
+    /// <summary>面板传来的 base64 → 字节（容忍 <c>data:audio/…;base64,</c> 前缀）。</summary>
+    private static (byte[]? Data, string? Error) DecodeAudio(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return (null, "没有选音频文件");
+        }
+
+        try
+        {
+            var comma = raw.IndexOf(',');
+            return (Convert.FromBase64String(comma >= 0 ? raw[(comma + 1)..] : raw), null);
+        }
+        catch (Exception)
+        {
+            return (null, "音频不是合法的 base64（面板读取失败？）");
+        }
     }
 
     /// <summary>/api/voice/health：把 TTS 服务自己的 /health 透传给面板（活着吗、有哪些音色）。</summary>

@@ -587,7 +587,8 @@
                 官方约束：克隆音色 <b>7 天没用会被删掉</b></span>
             </label>
             <input type="file" id="cloneSample" accept="audio/*" multiple />
-            <p class="path-hint" id="clonePick">可以多选：云端一次只收一份主样本，会自动挑<b>时长最长、且不超 5 分钟</b>的那段（其他文件不会被上传）。要合成多段素材请先在本地拼成一段再传。</p>
+            <p class="path-hint" id="clonePick">可以多选：云端主样本要求 <b>10 秒 ~ 5 分钟</b>，几个 5 秒切片直接一起选就行 —— 服务端会<b>自动拼成一段</b>再传（段间插 300ms 静音，识别更准），总长不够会提示你。
+              能拼的格式：全是 <code>wav</code>（无损拼）或全是 <code>mp3</code>（按帧拼，需同采样率/声道）；<code>m4a</code> 请先在本地转成 mp3。</p>
             <div class="grid-2">
               <div class="field">
                 <label>自定义音色 ID<span class="hint">小写字母/数字/下划线/连字符，3~64 位，例如 <code>zhao_voice_01</code></span></label>

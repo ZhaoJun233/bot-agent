@@ -2768,25 +2768,14 @@ function renderConversations(force) {
     });
   }
 
-  /* 多选时挑哪一段：优先“时长在 10 秒~5 分钟里最长的那段”；
-     全都不在区间就退而取最大文件的（并把原因说清）。云端一次只收一份主样本，所以必须选一个。 */
+  /* 多选时的处理：**全都发给服务端去拼**（面板只负责把时长算出来提示用户）。
+     为什么要服务端拼：官方主样本要求 ≥ 10 秒，而号主手上常常是几段 5 秒切片 ——
+     让人先去装 ffmpeg 不如服务端接（wav 无损拼 / mp3 按帧拼，见 VoiceService.ConcatSamples）。 */
   async function pickCloneSample(files) {
     const list = Array.from(files);
-    if (list.length === 1) return { file: list[0], why: "" };
-
-    const measured = [];
-    for (const f of list) measured.push({ file: f, seconds: await audioDuration(f) });
-    const inRange = measured.filter((m) => m.seconds >= 10 && m.seconds <= 300);
-    if (inRange.length) {
-      inRange.sort((a, b) => b.seconds - a.seconds);
-      return { file: inRange[0].file, why: `共 ${list.length} 个文件，用了时长最长的 ${Math.round(inRange[0].seconds)} 秒那段（云端一次只收一份主样本）` };
-    }
-
-    const sorted = measured.slice().sort((a, b) => b.file.size - a.file.size);
-    return {
-      file: sorted[0].file,
-      why: `共 ${list.length} 个文件，但都没有落在 10 秒~5 分钟里；先用了最大的那个（${fmtSize(sorted[0].file.size)}）——建议先在本地剪成 30~60 秒再传`,
-    };
+    let total = 0;
+    for (const f of list) total += await audioDuration(f);
+    return { files: list, totalSeconds: total };
   }
 
   function wireCloneCard() {
@@ -2801,39 +2790,59 @@ function renderConversations(force) {
 
       btn.disabled = true;
       try {
-        hint.textContent = "正在挑选样本…";
+        hint.textContent = "正在读样本…";
         const picked = await pickCloneSample(files);
-        const file = picked.file;
-        // 时长也量一下：云端 2013 最常见的根因就是“样本太短（< 10 秒）”，
-        // 不把时长说出来，用户只能对着一句 invalid params 猜。
-        const seconds = (files.length === 1) ? await audioDuration(file) : 0;
-        if (file.size > 20 * 1024 * 1024) {
-          hint.textContent = `文件 ${fmtSize(file.size)} 超过官方 20MB 上限 —— 先剪短一点。`;
+        const list = picked.files;
+        const minutes = picked.totalSeconds / 60;
+        if (picked.totalSeconds > 0 && (picked.totalSeconds < 10 || picked.totalSeconds > 300)) {
+          hint.textContent = `这些样本合起来约 ${Math.round(picked.totalSeconds)} 秒，官方要求 10 秒 ~ 5 分钟`
+            + (list.length > 1 ? "（拼接后的总长）" : "") + " —— 请增删几段再试。";
           return;
         }
 
-        hint.textContent = "正在读取样本…" + (picked.why ? `（${picked.why}）` : "");
-        const buf = await file.arrayBuffer();
-        let bin = "";
-        const bytes = new Uint8Array(buf);
-        for (let i = 0; i < bytes.length; i += 0x8000) {
-          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        const heavy = list.find((f) => f.size > 20 * 1024 * 1024);
+        if (heavy) {
+          hint.textContent = `${heavy.name} 有 ${fmtSize(heavy.size)}，超过官方 20MB 上限 —— 先剪短一点。`;
+          return;
         }
-        hint.textContent = "正在上传并复刻（一般 10~60 秒，取决于样本大小）…样本 " + file.name
-          + (seconds ? "（约 " + Math.round(seconds) + " 秒）" : "") + "，音色 ID " + voiceId;
-        const d = await api("/api/voice/clone", {
-          method: "POST",
-          body: JSON.stringify({ audioBase64: btoa(bin), fileName: file.name, voiceId: voiceId }),
-        });
+
+        hint.textContent = list.length > 1
+          ? `正在读取 ${list.length} 段样本（合计约 ${Math.round(picked.totalSeconds)} 秒）…服务端会拼成一段再传`
+          : "正在读取样本…";
+
+        async function toBase64(file) {
+          const buf = await file.arrayBuffer();
+          let bin = "";
+          const bytes = new Uint8Array(buf);
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+          }
+          return btoa(bin);
+        }
+
+        let payload;
+        if (list.length > 1) {
+          const samples = [];
+          for (const f of list) samples.push({ audioBase64: await toBase64(f), fileName: f.name });
+          payload = { samples: samples, voiceId: voiceId };
+          hint.textContent = `正在上传并拼接 ${list.length} 段，然后复刻（一般 10~60 秒）…`;
+        } else {
+          payload = { audioBase64: await toBase64(list[0]), fileName: list[0].name, voiceId: voiceId };
+          hint.textContent = "正在上传并复刻（一般 10~60 秒，取决于样本大小）…样本 " + list[0].name
+            + (picked.totalSeconds ? "（约 " + Math.round(picked.totalSeconds) + " 秒）" : "") + "，音色 ID " + voiceId;
+        }
+
+        const d = await api("/api/voice/clone", { method: "POST", body: JSON.stringify(payload) });
         if (d.ok) {
           $("setVoiceName").value = d.voiceId;
-          hint.textContent = "复刻成功：" + d.voiceId + "（样本 " + file.name
-            + (seconds ? "，约 " + Math.round(seconds) + " 秒" : "") + "）—— 已填进上面的「音色」格，记得点保存。"
-            + (picked.why ? " " + picked.why : "");
+          hint.textContent = "复刻成功：" + d.voiceId
+            + (list.length > 1 ? "（" + list.length + " 段拼接，约 " + Math.round(picked.totalSeconds) + " 秒）" : "（样本 " + list[0].name + "）")
+            + (d.note ? " " + d.note : "")
+            + " —— 已填进上面的「音色」格，记得点保存。";
           loadClonedVoices();
         } else {
           hint.textContent = "复刻失败：" + (d.error || "未知原因")
-            + (seconds && seconds < 10 ? "\n→ 你这段样本只有约 " + Math.round(seconds) + " 秒，官方要求 ≥ 10 秒（30~60 秒最佳）。" : "");
+            + (picked.totalSeconds && picked.totalSeconds < 10 ? "\n→ 合计只有约 " + Math.round(picked.totalSeconds) + " 秒，官方要求 ≥ 10 秒。" : "");
         }
       } catch (e) {
         hint.textContent = "复刻失败：" + e.message;
