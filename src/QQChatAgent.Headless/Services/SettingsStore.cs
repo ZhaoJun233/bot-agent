@@ -54,7 +54,13 @@ public static class SettingsStore
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
             {
                 WriteIndented = true,
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+
+                // ⚠ 必须显式给 resolver：本项目 publish 时开了裁剪/AOT 相关选项，
+                // 不给这个的话第一次序列化就会抛
+                // “JsonSerializerOptions instance must specify a TypeInfoResolver setting before being marked as read-only.”
+                // 后果很阴：面板每次保存设置都失败（用户只看到“保存了”）。
+                TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
             });
 
             AppDatabase.Write(conn => AppDatabase.Exec(conn,

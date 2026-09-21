@@ -198,7 +198,9 @@ public sealed class OfficialIdMap
             };
 
             var tmp = _path + ".tmp";
-            File.WriteAllText(tmp, doc.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+            // 不传 options：JsonNode.ToJsonString() 用内置默认（自己 new 一个没带 TypeInfoResolver 的
+            // JsonSerializerOptions 会在首次使用时抛 read-only/resolver 错误 —— SettingsStore 那边就踩过）。
+            File.WriteAllText(tmp, doc.ToJsonString());
             File.Move(tmp, _path, overwrite: true);
             _dirty = false;
             _lastSave = DateTimeOffset.Now;
