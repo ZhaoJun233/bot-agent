@@ -248,6 +248,15 @@ public sealed class VoiceService
 
         try
         {
+            // 诊断：把样本的**格式魔数与大小**记下来（不记内容）。
+            // 为什么要它：云端只回一句 “2013 invalid params”，无法区分“太短 / 不是人声 / 根本不是 mp3”；
+            // 线上最常见的是“手机录音/微信语音导出”其实是 m4a/amr/silk，改个后缀就当 mp3 传了 ——
+            // 这种一看魔数就穿（真 mp3 开头是 ID3 或 0xFFF*；wav 是 RIFF；m4a 是 ....ftyp；silk 是 #!SILK）。
+            var magic = audio.Length >= 12
+                ? System.Text.Encoding.ASCII.GetString(audio, 0, 12).Replace("\0", ".")
+                : "(太短)";
+            _log($"[Voice] 开始复刻：voice_id={wanted}，样本 {audio.Length / 1024}KB，开头字节={magic}");
+
             // ① 上传样本
             using var upload = new MultipartFormDataContent();
             var filePart = new ByteArrayContent(audio);
