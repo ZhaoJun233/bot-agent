@@ -40,7 +40,12 @@ public sealed partial class WebUiServer : IDisposable
     private static readonly JsonSerializerOptions Json = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        // ⚠ 容器是 **trimmed 发布**：反射被裁掉之后，没显式指定 resolver 的 options 会在**第一次用**时
+        // 抛 “JsonSerializerOptions instance must specify a TypeInfoResolver setting before being marked
+        //  as read-only”，而且只在 Web 请求里炸（日志里就是那句“请求处理异常”，线上断续复现很久 ✗）。
+        // 2026-09-21 补上 —— 与 SettingsStore 那处是同一个坑。
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver()
     };
 
     private readonly int _port;
