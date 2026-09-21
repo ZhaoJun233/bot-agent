@@ -51,6 +51,16 @@ public static class SecretsStore
 
     public static bool SaveTtsKey(string? key) => Save("ttsKey", key);
 
+    /// <summary>
+    /// 官方商用通道（QQ 开放平台）的 AppSecret。
+    /// 以前它只能走环境变量（<c>QQCHAT_OFFICIAL_APP_SECRET</c>）—— 改一次得重建容器，太别扭；
+    /// 现在与其它密钥一样存库里、面板可填可改（只回显掩码）。
+    /// 环境变量仍优先（部署在容器的环境里写了就用环境里的），其次是这里。
+    /// </summary>
+    public static string? LoadOfficialSecret() => Load("officialAppSecret");
+
+    public static bool SaveOfficialSecret(string? secret) => Save("officialAppSecret", secret);
+
     /// <summary>读一条密钥（没有/读失败返回 null）。</summary>
     public static string? Load(string name)
     {

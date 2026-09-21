@@ -621,8 +621,12 @@
 
           <div class="grid-2">
             <div class="field">
-              <label>AppID<span class="hint">开放平台机器人页上的 AppID（写在这里不敏感，Secret 请用环境变量）</span></label>
+              <label>AppID<span class="hint">开放平台机器人页上的 AppID（写在这里不敏感）</span></label>
               <input type="text" id="setOfficialAppId" maxlength="40" placeholder="102xxxxxx" />
+            </div>
+            <div class="field">
+              <label>AppSecret<span class="hint">存密钥库、只回显掩码（与 TTS 密钥同规矩）；<b>留空 = 不改</b>。环境变量优先，改了要重启才生效（下面有一键重启）</span></label>
+              <input type="password" id="setOfficialAppSecret" maxlength="200" placeholder="还没配，在这里填一个（留空 = 不改）" autocomplete="off" />
             </div>
             <div class="field">
               <label>环境<span class="hint">沙箱只能收/发沙箱群与沙箱单聊（调试用）</span></label>

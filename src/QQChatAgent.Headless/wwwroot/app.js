@@ -1276,6 +1276,11 @@ function renderConversations(force) {
     // 官方商用通道（与私域并存）；secret 不回填（它只从环境变量读，面板不接也不存）
     $("setOfficialEnabled").checked = r.officialEnabled === true;
     $("setOfficialAppId").value = r.officialAppId || "";
+    // AppSecret：只回显掩码，留空 = 不改（与 TTS 密钥同规矩）
+    $("setOfficialAppSecret").value = "";
+    $("setOfficialAppSecret").placeholder = r.officialSecretConfigured
+      ? `${r.officialSecretMasked}（已设置${r.officialSecretSource === "env" ? "，来自环境变量" : ""}，留空即不修改）`
+      : "还没配 AppSecret，在这里填一个";
     $("setOfficialSandbox").checked = r.officialSandbox === true;
     $("setOfficialWhitelistGroups").value = r.officialWhitelistGroups || "";
     $("setOfficialWhitelistPrivates").value = r.officialWhitelistPrivates || "";
@@ -1423,6 +1428,8 @@ function renderConversations(force) {
       // 官方商用通道（QQ 开放平台）
       officialEnabled: $("setOfficialEnabled").checked,
       officialAppId: $("setOfficialAppId").value.trim(),
+      // 空 = 不改（服务端按这个口径处理，别把它当清空）
+      officialAppSecret: $("setOfficialAppSecret").value.trim(),
       officialSandbox: $("setOfficialSandbox").checked,
       officialWhitelistGroups: $("setOfficialWhitelistGroups").value.trim(),
       officialWhitelistPrivates: $("setOfficialWhitelistPrivates").value.trim(),

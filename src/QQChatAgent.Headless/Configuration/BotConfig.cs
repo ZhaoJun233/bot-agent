@@ -323,6 +323,13 @@ public static class BotConfig
     private static void ApplyPanelOverrides(AppSettings s)
     {
         SecretsStore.Init(AppPaths.RuntimeRoot);
+
+    // 密钥库里存着的官方通道 AppSecret（面板填的）—— 环境变量优先，其次是这里。
+    // 必须在 SecretsStore.Init 之后读（前面那堆 env 种子跑得比 Init 早）。
+    if (string.IsNullOrWhiteSpace(s.OfficialAppSecret) && SecretsStore.LoadOfficialSecret() is { Length: > 0 } storedSecret)
+    {
+        s.OfficialAppSecret = storedSecret;
+    }
         s.ApiKeyOverride ??= SecretsStore.LoadApiKey();
         s.AgentServerApiKeyOverride ??= SecretsStore.LoadAgentServerKey();
 

@@ -1493,6 +1493,23 @@ public sealed partial class WebUiServer : IDisposable
         if (body["officialEnabled"] is JsonNode ofe) s.OfficialEnabled = ofe.GetValue<bool>();
         if (body["officialAppId"] is JsonNode oai) s.OfficialAppId = oai.GetValue<string>().Trim();
         if (body["officialSandbox"] is JsonNode osb) s.OfficialSandbox = osb.GetValue<bool>();
+
+        // AppSecret：与 TTS key 同一套口径 —— **空 = 不改**（面板每次保存都会把这个字段发上来，
+        // 把空当“清空”就会“改个白名单把 secret 抹了”）；要清空得显式传 clearOfficialAppSecret。
+        if (body["clearOfficialAppSecret"] is JsonValue clearOs && clearOs.TryGetValue<bool>(out var clearOk) && clearOk)
+        {
+            SecretsStore.SaveOfficialSecret(null);
+            s.OfficialAppSecret = (Environment.GetEnvironmentVariable("QQCHAT_OFFICIAL_APP_SECRET") ?? string.Empty).Trim();
+            FileLog.Write("Web", "面板清空了官方通道 AppSecret（回退环境变量）");
+        }
+        else if (body["officialAppSecret"] is JsonValue osv && osv.TryGetValue<string>(out var rawSecret)
+                 && !string.IsNullOrWhiteSpace(rawSecret))
+        {
+            var newSecret = rawSecret.Trim();
+            SecretsStore.SaveOfficialSecret(newSecret);
+            s.OfficialAppSecret = newSecret;
+            FileLog.Write("Web", "面板更新了官方通道 AppSecret（已掩码保存；重启后生效）");
+        }
         if (body["officialWhitelistGroups"] is JsonNode owg) s.OfficialWhitelistGroups = owg.GetValue<string>().Trim();
         if (body["officialWhitelistPrivates"] is JsonNode owp) s.OfficialWhitelistPrivates = owp.GetValue<string>().Trim();
         if (body["enableWebSearch"] is JsonNode ws) s.EnableWebSearch = ws.GetValue<bool>();
@@ -2075,6 +2092,11 @@ public sealed partial class WebUiServer : IDisposable
         // secret 不在这里回（密钥只从环境变量读，面板不回显）。
         ["officialEnabled"] = s.OfficialEnabled,
         ["officialAppId"] = s.OfficialAppId,
+        ["officialSecretConfigured"] = !string.IsNullOrWhiteSpace(s.OfficialAppSecret),
+        ["officialSecretMasked"] = MaskSecret(s.OfficialAppSecret),
+        ["officialSecretSource"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("QQCHAT_OFFICIAL_APP_SECRET"))
+            ? "env"
+            : (string.IsNullOrWhiteSpace(SecretsStore.LoadOfficialSecret()) ? "none" : "panel"),
         ["officialSandbox"] = s.OfficialSandbox,
         ["officialWhitelistGroups"] = s.OfficialWhitelistGroups,
         ["officialWhitelistPrivates"] = s.OfficialWhitelistPrivates,
