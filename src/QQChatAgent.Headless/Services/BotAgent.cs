@@ -3715,8 +3715,21 @@ public sealed class BotAgent : IDisposable
         return (ids, all);
     }
 
+    /// <summary>
+    /// 收消息那道闸：它必须**按通道**选名单。
+    ///
+    /// 2026-09-21 真实事故：这里原来写的是 <c>IsSourceAllowed(msg.IsGroup, …)</c> —— 也就是
+    /// **只看私域那份白名单** ✗。后果是官方通道的消息无论官方名单怎么填都会被拦：
+    /// 私域名单里当然没有别名号（8e15 起）→ “官方通道永远不回” ✗，
+    /// 而且日志只写一句“忽略（不在白名单）: 群 8000…”，完全看不出是名单用错了 ✗。
+    /// 现在统一走 <see cref="IsWhitelistedKey"/>（那里按 key 前缀分派到正确的名单）——
+    /// 单一口径，以后不会再分叉。
+    /// </summary>
     private bool IsWhitelisted(QqChatMessage msg)
-        => IsSourceAllowed(msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        => IsWhitelistedKey(Channels.Key(
+            Channels.ChannelOf(msg.Channel),
+            msg.IsGroup,
+            msg.IsGroup ? msg.GroupId : msg.UserId));
 
     /// <summary>群/私聊是否在白名单里（戳一戳事件没有 QqChatMessage，只能单拎一个判据）。
     ///
