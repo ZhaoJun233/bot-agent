@@ -384,7 +384,7 @@ public sealed class StickerStore
     /// 否则可能把聊天截图/广告当表情包发出去（线上踩过）。
     /// 关键词重合度为主，掺一点随机避免每次都发同一张。
     /// </summary>
-    public List<StickerRecord> PickCandidates(string query, int count, int excludeUsedWithinSeconds = 600)
+    public List<StickerRecord> PickCandidates(string query, int count, int excludeUsedWithinSeconds = -1)
     {
         if (count <= 0)
         {
@@ -395,12 +395,18 @@ public sealed class StickerStore
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var random = Random.Shared;
 
+        // 排除窗口自适应：库里图多就多排除一会儿，图少就短一点 ——
+        // 否则 29 张的库配上 10 分钟窗口，常常“全被排除”被迫吃兜底（兜底以前又按相关度转回熟脸 ✗）。
+        var excludeWindow = excludeUsedWithinSeconds < 0
+            ? (int)Math.Clamp(_items.Count * 60, 300, 3600)
+            : excludeUsedWithinSeconds;
+
         lock (_gate)
         {
             var usable = _items.Where(i => i.IsSticker == true).ToList();
             var scored = usable
-                .Select(item => (Item: item, Score: RelevanceScore(item, tokens) + random.NextDouble() * 0.35))
-                .Where(x => x.Item.LastUsedAt == 0 || now - x.Item.LastUsedAt > excludeUsedWithinSeconds)
+                .Select(item => (Item: item, Score: RelevanceScore(item, tokens) + random.NextDouble() * 1.2))
+                .Where(x => x.Item.LastUsedAt == 0 || now - x.Item.LastUsedAt > excludeWindow)
                 .OrderByDescending(x => x.Score)
                 .Select(x => x.Item)
                 .ToList();
@@ -410,8 +416,11 @@ public sealed class StickerStore
             {
                 var extra = usable
                     .Where(i => !scored.Contains(i))
-                    .Select(item => (Item: item, Score: RelevanceScore(item, tokens) + random.NextDouble() * 0.35))
-                    .OrderByDescending(x => x.Score)
+                    // 兜底**不能**再按相关度来一遍 —— 那正是“老发同一张”的来源 ✗。
+                    // 改按「最久没用」优先（相同时间再掺随机），让冷门图先上场。
+                    .Select(item => (Item: item, Last: item.LastUsedAt, Rnd: random.NextDouble()))
+                    .OrderBy(x => x.Last)
+                    .ThenBy(x => x.Rnd)
                     .Select(x => x.Item);
                 scored.AddRange(extra);
             }
@@ -420,15 +429,27 @@ public sealed class StickerStore
         }
     }
 
-    /// <summary>关键词重合度：命中标签权重最高，其次说明文字。</summary>
+    /// <summary>
+    /// 关键词重合度：命中标签权重最高，其次说明文字。
+    ///
+    /// ⚠ 2026-09-21 修“老是同一张”：这里以前是 <c>item.Uses * 0.05</c> —— **用得多得分高**，
+    /// 直接形成正反馈（线上 60 次只发了 9 个 id，29 张里 17 张 30 天没碰过 ✗）。
+    /// 现在反过来：用得多**减分**、久没用**加分** —— 冷门图才有机会轮到。
+    /// </summary>
     private static double RelevanceScore(StickerRecord item, List<string> tokens)
     {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var last = item.LastUsedAt > 0 ? item.LastUsedAt : item.AddedAt;
+        var idleDays = Math.Max(0, (now - last) / 86400.0);
+        var freshness = Math.Min(idleDays, 30) * 0.05;   // 越久没用越吃香（上限 +1.5）
+        var wear = -Math.Min(item.Uses, 40) * 0.06;      // 用得越多越扣分（下限 -2.4）
+
         if (tokens.Count == 0)
         {
-            return item.Uses * 0.05;
+            return freshness + wear;
         }
 
-        double score = item.Uses * 0.05;
+        double score = freshness + wear;
         foreach (var token in tokens)
         {
             if (item.Tags.Any(t => t.Contains(token, StringComparison.OrdinalIgnoreCase)))

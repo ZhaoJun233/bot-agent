@@ -548,15 +548,15 @@
               <datalist id="voiceNameOptions"></datalist>
             </div>
             <div class="field">
-              <label>语速（%）<span class="hint">100 = 原速</span></label>
+              <label>默认语速（%）<span class="hint">100 = 原速；**模型会按语境自己调**（它没说时用这个）</span></label>
               <input type="number" id="setVoiceSpeed" min="50" max="200" step="5" />
             </div>
               <div class="field">
-                <label>情绪<span class="hint">happy / sad / angry / surprised / fearful / disgusted / neutral；留空 = 云端默认。只有部分音色认这个参数</span></label>
+                <label>默认情绪<span class="hint">happy / sad / angry / surprised / fearful / disgusted / neutral；留空 = 不传。**模型会按语境自己挑情绪**，这里只是它没表态时的兜底</span></label>
                 <input type="text" id="setVoiceEmotion" maxlength="20" placeholder="留空 = 不传" />
               </div>
               <div class="field">
-                <label>音调<span class="hint">-12 ~ +12；0 = 不传（以云端默认为准）</span></label>
+                <label>默认音调<span class="hint">-12 ~ +12；0 = 不传。模型也能按语境自己调（撒娇偏高、冷淡偏低）</span></label>
                 <input type="number" id="setVoicePitch" min="-12" max="12" step="1" />
               </div>
               <div class="field">

@@ -332,7 +332,12 @@ public sealed class OpenAiClient
                 $"硬约束（撞了会被代码拦掉、白填一个字段）：同一个人/群 **{interval} 秒内最多一条语音**，" +
                 "所以在同一会话里别连着两条都带 speak；也别每句都带——群里语音是“稀罕事”，滥了就烦人。\n" +
                 "speak 里写的就是要说出口的那句话：口语化、短、别放链接/代码/括号里的舞台说明（如“(笑)”）；" +
-                "填了 speak 就不要再在 reply 里重复同一句话（语音已经说过了）。" +
+                "填了 speak 就不要再在 reply 里重复同一句话（语音已经说过了）。\n" +
+                "想让这句话听起来更有情绪，可以在同一条 JSON 里再带三个可选字段：" +
+                "voiceEmotion（happy/sad/angry/surprised/fearful/disgusted/neutral）、" +
+                "voiceSpeed（0.5~2.0，1.0 = 原速）、voicePitch（-12~12，正数更尖更亮）。" +
+                "**按你这句话的语境自己定**：撒娇/开心 → happy + 稍快稍高；冷淡/敷衍 → neutral + 稍慢；" +
+                "不满/凶 → angry；平静叙述 → 三个都省。省了就按默认来，别每句都堆参数，也别硬套不搭的情绪。" +
                 "字数超了或太频繁时这次就按普通文字回，不要在上下文里提到“语音发不出去”。";
         }
 
@@ -956,6 +961,44 @@ public sealed class OpenAiClient
                 }
             }
 
+            // 语音的语气参数（可选）：**由模型按这句话的语境自己定**。
+            // 省略 → null → 上层用面板里配的默认值（面板不再是唯一来源）。
+            // 为什么只认这几个值：云端只认这几个情绪名，乱填/超范围的直接忽略，别让它把合成搞挂。
+            string? voiceEmotion = null;
+            if (root.TryGetProperty("voiceEmotion", out var vEmo) || root.TryGetProperty("voice_emotion", out vEmo))
+            {
+                if (vEmo.ValueKind == JsonValueKind.String)
+                {
+                    var e = vEmo.GetString()?.Trim().ToLowerInvariant();
+                    if (e is "happy" or "sad" or "angry" or "surprised" or "fearful" or "disgusted" or "neutral")
+                    {
+                        voiceEmotion = e;
+                    }
+                }
+            }
+
+            double? voiceSpeed = null;
+            if ((root.TryGetProperty("voiceSpeed", out var vSpd) || root.TryGetProperty("voice_speed", out vSpd))
+                && vSpd.ValueKind == JsonValueKind.Number)
+            {
+                var v = vSpd.GetDouble();
+                if (v is >= 0.5 and <= 2.0)
+                {
+                    voiceSpeed = Math.Round(v, 2);
+                }
+            }
+
+            int? voicePitch = null;
+            if ((root.TryGetProperty("voicePitch", out var vPit) || root.TryGetProperty("voice_pitch", out vPit))
+                && vPit.ValueKind == JsonValueKind.Number)
+            {
+                var v = (int)Math.Round(vPit.GetDouble());
+                if (v is >= -12 and <= 12)
+                {
+                    voicePitch = v;
+                }
+            }
+
             // 模型想“上网查一下”（search）/“读一下某个页面”（read）。
             // 真正去查是上层的事（要发 HTTP、有冷却），这里只取词：
             //   • search 太短（<2）/太长（>120）都不要 —— 太长基本是它在写句子，不是搜索词；
@@ -989,7 +1032,7 @@ public sealed class OpenAiClient
                 mood = md.GetString()?.Trim();
             }
 
-            return new CompletionResult(suitability, string.IsNullOrWhiteSpace(reply) ? null : reply, rawReply, stickerId, replyToId, pokeTargetId, mood, listen, shareSong, speak, search, read, vibe, vibeNote);
+            return new CompletionResult(suitability, string.IsNullOrWhiteSpace(reply) ? null : reply, rawReply, stickerId, replyToId, pokeTargetId, mood, listen, shareSong, speak, search, read, vibe, vibeNote, voiceEmotion, voiceSpeed, voicePitch);
         }
         catch (JsonException)
         {
@@ -1982,6 +2025,16 @@ public readonly record struct StickerChoice(string Id, string Description);
 /// <param name="Vibe">它读到的**群里的情绪氛围**（开心/吐槽/低落/求助/生气/吵架/中性…）；null = 没说。</param>
 /// <param name="VibeNote">给上一行补一句人话（例：“在吐槽加班，情绪烦燥”），会交给下一轮的自己；null = 没写。</param>
 public readonly record struct CompletionResult(int? Suitability, string? Reply, string? RawText, string? StickerId = null, long? ReplyToMessageId = null, long? PokeTargetId = null, string? Mood = null, string? Listen = null, string? ShareSong = null, string? Speak = null, string? Search = null, string? Read = null, string? Vibe = null, string? VibeNote = null,
+    /// <summary>
+    /// 模型给这句语音定的**情绪**（happy/sad/angry/surprised/fearful/disgusted/neutral）；
+    /// null = 它没表态 → 用面板里配的默认情绪。
+    /// </summary>
+    string? VoiceEmotion = null,
+    /// <summary>模型给这句语音定的**语速**（1.0 = 原速，0.5~2.0）；null = 用面板默认。</summary>
+    double? VoiceSpeed = null,
+    /// <summary>模型给这句语音定的**音调**（-12~+12）；null = 用面板默认。</summary>
+    int? VoicePitch = null,
+    
     /// <summary>上游回 200 但没给 choices（网关吞回复/风控）—— 与“模型自己决定沉默”不是一回事。</summary>
     bool UpstreamEmpty = false);
 

@@ -4684,7 +4684,13 @@ public sealed class BotAgent : IDisposable
             {
                 voiceSkipWhy = voiceReason;
             }
-            else if ((voiceUrl = _voice.BuildSpeakUrl(voiceText)) is null)
+            // 语速/情绪/音调**由模型按语境自己定**（号主 2026-09-21）：它给了就用它的，
+            // 没给就退回面板里那三个默认值；面板值仍受同样范围限制。
+            else if ((voiceUrl = _voice.BuildSpeakUrl(
+                         voiceText,
+                         emotionOverride: result.VoiceEmotion,
+                         speedOverride: result.VoiceSpeed is double modelSpeed ? (int)Math.Round(modelSpeed * 100) : null,
+                         pitchOverride: result.VoicePitch)) is null)
             {
                 voiceSkipWhy = "TTS 服务地址没配置（应形如 http://tts:5000）";
             }
@@ -4697,7 +4703,14 @@ public sealed class BotAgent : IDisposable
             if (voiceSent)
             {
                 _lastVoice[conversation.SourceKey] = DateTimeOffset.Now;
-                EmitLog($"[Voice] 已发语音（{voiceText.Length} 字，音色 {_voice!.VoiceName}）：{Shorten(voiceText, 40)}");
+                // 把模型给的语气参数也记下来 —— 不然“它到底有没有按语境调情绪”没法验证
+                var tone = new List<string>();
+                if (!string.IsNullOrWhiteSpace(result.VoiceEmotion)) tone.Add("情绪 " + result.VoiceEmotion);
+                if (result.VoiceSpeed is double ms) tone.Add($"语速 {ms:0.##}");
+                if (result.VoicePitch is int mp) tone.Add($"音调 {mp:+#;-#;0}");
+                EmitLog($"[Voice] 已发语音（{voiceText.Length} 字，音色 {_voice!.VoiceName}"
+                        + (tone.Count > 0 ? "，模型定的 " + string.Join('/', tone) : "，模型未指定语气（用面板默认）")
+                        + $"）：{Shorten(voiceText, 40)}");
             }
             else
             {

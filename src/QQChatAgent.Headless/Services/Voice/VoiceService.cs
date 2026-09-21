@@ -57,7 +57,10 @@ public sealed class VoiceService
     /// 拼出发给协议端的 <c>/speak</c> 绝对地址。text 为空、服务地址不合法时返回 null
     /// （上层据此降级成发文字，而不是把一条空语音发出去）。
     /// </summary>
-    public string? BuildSpeakUrl(string text, string? voiceOverride = null, int? speedOverride = null)
+    /// <param name="emotionOverride">模型按语境给的情绪（null = 用面板默认）。</param>
+    /// <param name="pitchOverride">模型按语境给的音调（null = 用面板默认）。</param>
+    /// <param name="volOverride">音量（目前只有面板会给；模型不给）。</param>
+    public string? BuildSpeakUrl(string text, string? voiceOverride = null, int? speedOverride = null, string? emotionOverride = null, int? pitchOverride = null, int? volOverride = null)
     {
         var trimmed = text?.Trim();
         if (string.IsNullOrEmpty(trimmed))
@@ -83,19 +86,24 @@ public sealed class VoiceService
         // 情绪 / 音调 / 音量：**只在显式配了**才带上 —— 不配就与改造前完全一致（云端默认）。
         // 后端认不认是后端的事（OpenAI 兼容那几个只有 speed），编好 URL 交给它就行。
         var ci = System.Globalization.CultureInfo.InvariantCulture;
-        if (Emotion.Length > 0)
+        // 模型按语境给的值优先；它没说（null）才用面板默认 —— 面板从此是“默认值”而不是唯一来源。
+        var emotion = string.IsNullOrWhiteSpace(emotionOverride) ? Emotion : emotionOverride!.Trim();
+        var pitch = Math.Clamp(pitchOverride ?? Pitch, -12, 12);
+        var vol = Math.Clamp(volOverride ?? Vol, 0, 1000);
+
+        if (emotion.Length > 0)
         {
-            url += "&emotion=" + Uri.EscapeDataString(Emotion);
+            url += "&emotion=" + Uri.EscapeDataString(emotion);
         }
 
-        if (Pitch != 0)
+        if (pitch != 0)
         {
-            url += "&pitch=" + Pitch.ToString(ci);
+            url += "&pitch=" + pitch.ToString(ci);
         }
 
-        if (Vol > 0)
+        if (vol > 0)
         {
-            url += "&vol=" + (Vol / 100.0).ToString("0.##", ci);
+            url += "&vol=" + (vol / 100.0).ToString("0.##", ci);
         }
 
         return url;
