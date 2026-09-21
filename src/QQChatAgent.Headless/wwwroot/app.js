@@ -1284,6 +1284,9 @@ function renderConversations(force) {
     $("setOfficialSandbox").checked = r.officialSandbox === true;
     $("setOfficialWhitelistGroups").value = r.officialWhitelistGroups || "";
     $("setOfficialWhitelistPrivates").value = r.officialWhitelistPrivates || "";
+    $("setOfficialChatEnabled").checked = r.officialChatEnabled !== false;
+    $("setPrivateChatEnabled").checked = r.privateChatEnabled !== false;
+    renderOfficialConversations(r.officialConversations);
     renderChannelStatus(r.channels);
     $("setLinkPreviewTimeout").value = r.linkPreviewTimeoutSeconds;
     $("setLinkPreviewMax").value = r.linkPreviewMax;
@@ -1433,6 +1436,8 @@ function renderConversations(force) {
       officialSandbox: $("setOfficialSandbox").checked,
       officialWhitelistGroups: $("setOfficialWhitelistGroups").value.trim(),
       officialWhitelistPrivates: $("setOfficialWhitelistPrivates").value.trim(),
+      officialChatEnabled: $("setOfficialChatEnabled").checked,
+      privateChatEnabled: $("setPrivateChatEnabled").checked,
       linkPreviewTimeoutSeconds: Number($("setLinkPreviewTimeout").value),
       linkPreviewMax: Number($("setLinkPreviewMax").value)
     };
@@ -2838,6 +2843,41 @@ function renderConversations(force) {
     let total = 0;
     for (const f of list) total += await audioDuration(f);
     return { files: list, totalSeconds: total };
+  }
+
+  // 官方通道见过的会话 → 点一下填进官方白名单（别名号，绝不是真实群号）
+  function renderOfficialConversations(list) {
+    const box = $("officialConversationList");
+    if (!box) return;
+    box.textContent = "";
+    if (!list || !list.length) {
+      box.textContent = "官方通道还没收到过消息（收到后这里会列出别名号，点一下就能填进白名单）。";
+      return;
+    }
+
+    const head = document.createElement("div");
+    head.textContent = "官方通道见过的会话（别名号）：";
+    box.appendChild(head);
+    for (const item of list) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:4px";
+      const label = document.createElement("code");
+      label.textContent = (item.isGroup ? "群 " : "单聊 ") + item.id;
+      row.appendChild(label);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn-secondary";
+      btn.textContent = "加入白名单";
+      btn.addEventListener("click", () => {
+        const target = item.isGroup ? $("setOfficialWhitelistGroups") : $("setOfficialWhitelistPrivates");
+        const cur = target.value.split(/[\s,;，；]+/).filter(Boolean);
+        if (!cur.includes(item.id)) cur.push(item.id);
+        target.value = cur.join("\n");
+        $("officialHint").textContent = "已加入白名单：" + item.id + " —— 记得点保存（保存后立即生效，不用重启）。";
+      });
+      row.appendChild(btn);
+      box.appendChild(row);
+    }
   }
 
   function wireCloneCard() {

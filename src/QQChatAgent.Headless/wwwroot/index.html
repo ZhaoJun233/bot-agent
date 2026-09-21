@@ -619,6 +619,22 @@
             <span>启用官方商用通道<span class="hint" id="officialStateHint">保存后点下面的按钮重启生效</span></span>
           </label>
 
+          <!-- 对话总开关：两条通道各管各的。与顶部那个全局「AI 开关」不同 ——
+               那个一关两条都不回（连人在叫它也不回）；这里能只把一条静音。 -->
+          <label class="switch-row">
+            <input type="checkbox" id="setOfficialChatEnabled" />
+            <span class="switch"></span>
+            <span>官方通道对话开关<span class="hint">关 = 官方那边收消息但**不回**（日志写“总开关是关的”）；私域不受影响</span></span>
+          </label>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setPrivateChatEnabled" />
+            <span class="switch"></span>
+            <span>私域通道对话开关<span class="hint">关 = 自建协议端那条收消息但**不回**（调试时用；全局静默请用顶部「AI 开关」）</span></span>
+          </label>
+
+          <p class="path-hint" id="officialConversationList">官方通道见过的会话会列在这里，点一下就能填进下面的白名单。</p>
+
           <div class="grid-2">
             <div class="field">
               <label>AppID<span class="hint">开放平台机器人页上的 AppID（写在这里不敏感）</span></label>

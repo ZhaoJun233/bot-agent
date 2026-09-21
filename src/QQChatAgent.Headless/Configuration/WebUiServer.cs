@@ -1493,6 +1493,8 @@ public sealed partial class WebUiServer : IDisposable
         if (body["officialEnabled"] is JsonNode ofe) s.OfficialEnabled = ofe.GetValue<bool>();
         if (body["officialAppId"] is JsonNode oai) s.OfficialAppId = oai.GetValue<string>().Trim();
         if (body["officialSandbox"] is JsonNode osb) s.OfficialSandbox = osb.GetValue<bool>();
+        if (body["privateChatEnabled"] is JsonNode pce) s.PrivateChatEnabled = pce.GetValue<bool>();
+        if (body["officialChatEnabled"] is JsonNode oce) s.OfficialChatEnabled = oce.GetValue<bool>();
 
         // AppSecret：与 TTS key 同一套口径 —— **空 = 不改**（面板每次保存都会把这个字段发上来，
         // 把空当“清空”就会“改个白名单把 secret 抹了”）；要清空得显式传 clearOfficialAppSecret。
@@ -1976,6 +1978,39 @@ public sealed partial class WebUiServer : IDisposable
     /// <c>enabled=false</c>——面板就把它显示成“未启用”，而不是“离线”（那是两回事：
     /// 一个是没配，一个是配了但断了）。
     /// </summary>
+    /// <summary>
+    /// 官方通道见过的会话（别名号 + 名字），给面板做“一键填白名单”用。
+    /// 为什么要它：官方白名单存的是**别名号**（8e15 起），填真实群号 = 静默全拦（踩过）；
+    /// 与其让人猜格式，不如把见过的会话列出来点一下。
+    /// </summary>
+    private JsonArray BuildOfficialConversations()
+    {
+        var arr = new JsonArray();
+        foreach (var c in _agent.Conversations)
+        {
+            if (!Services.Qq.Channels.IsOfficial(c.Channel))
+            {
+                continue;
+            }
+
+            var (isGroup, id) = c.Target;
+            if (id <= 0)
+            {
+                continue;
+            }
+
+            arr.Add(new JsonObject
+            {
+                ["key"] = c.SourceKey,
+                ["id"] = id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["isGroup"] = isGroup,
+                ["name"] = c.Name,
+            });
+        }
+
+        return arr;
+    }
+
     private JsonArray BuildChannelStatus()
     {
         var registry = _agent.ChannelRegistry;
@@ -2101,6 +2136,12 @@ public sealed partial class WebUiServer : IDisposable
         ["officialWhitelistGroups"] = s.OfficialWhitelistGroups,
         ["officialWhitelistPrivates"] = s.OfficialWhitelistPrivates,
         ["channels"] = BuildChannelStatus(),
+        // 对话总开关（分通道静音）：与顶部那个全局 AI 开关不同，这里能只关一条通道。
+        ["privateChatEnabled"] = s.PrivateChatEnabled,
+        ["officialChatEnabled"] = s.OfficialChatEnabled,
+        // 官方通道**见过的会话**（别名号 + 名字）——面板上点一下就能填进官方白名单，
+        // 不必再让人去猜“别名号长什么样”（填真实号 = 官方通道静默全拦，今天刚踩过）。
+        ["officialConversations"] = BuildOfficialConversations(),
          ["enableWebSearch"] = s.EnableWebSearch,
          ["webSearchUseModelSearch"] = s.WebSearchUseModelSearch,
          ["webSearchSources"] = s.WebSearchSources,

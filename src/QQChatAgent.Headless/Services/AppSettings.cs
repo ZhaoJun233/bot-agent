@@ -213,6 +213,18 @@ public sealed class AppSettings
     /// <summary>同时向模型发起的最大请求数（按会话串行、跨会话并发）。</summary>
     public int MaxConcurrentReplies { get; set; } = 2;
 
+    // ---------- 对话总开关（两个通道各自可单独静音） ----------
+
+    /// <summary>
+    /// 私域通道（自建 NapCat/OneBot）收不收消息、要不要回。
+    /// 与面板顶部那个「AI 开/关」不是一回事：那个是**全局**（连人都回不了），
+    /// 这个是**按通道**（比如官方那条被限制/在调试时，只把官方静音，私域照旧）。
+    /// </summary>
+    public bool PrivateChatEnabled { get; set; } = true;
+
+    /// <summary>官方商用通道（QQ 开放平台）收不收消息、要不要回。默认开。</summary>
+    public bool OfficialChatEnabled { get; set; } = true;
+
     // ---------- 语音消息（TTS）----------
 
     /// <summary>

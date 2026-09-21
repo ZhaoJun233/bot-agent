@@ -144,10 +144,14 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         }
 
         var passive = TakePassiveRef(openId);
+        // ⚠ 官方平台会拒绝**未报备的链接**（回 304003 URL_NOT_ALLOWED）——而模型很爱在回复里塞链接，
+        // 结果是整条消息发不出去 ✗。这里把 http(s) 链接换成占位文本，至少把话说出去；
+        // 链接本身在私域那条路照旧正常（那边没这个限制）。
+        var safeText = StripLinks(text);
         var sent = await PostMessageAsync(isGroup, openId, body =>
         {
             body["msg_type"] = 0;
-            body["content"] = text;
+            body["content"] = safeText;
         }, passive, ct).ConfigureAwait(false);
 
         if (!sent.Ok && passive is not null)
@@ -157,11 +161,29 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
             sent = await PostMessageAsync(isGroup, openId, body =>
             {
                 body["msg_type"] = 0;
-                body["content"] = text;
+                body["content"] = safeText;
             }, null, ct).ConfigureAwait(false);
         }
 
         return sent;
+    }
+
+    /// <summary>
+    /// 剥掉正文里的链接（官方平台的 304003：url 未报备）。
+    /// 只在官方这条路上用：私域那条件没有这个限制，剥了反而把信息丢了。
+    /// </summary>
+    private static string StripLinks(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains("http", StringComparison.OrdinalIgnoreCase))
+        {
+            return text;
+        }
+
+        return System.Text.RegularExpressions.Regex.Replace(
+            text,
+            @"https?://\S+",
+            "（链接已省略：官方通道只能发已报备的域名）",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     /// <summary>
@@ -485,7 +507,39 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
             Text: Text(d["content"]) ?? string.Empty,
             Time: ParseTime(d["timestamp"]),
             MentionedSelf: true, // 群事件只推「@机器人」的消息，所以一定是冲它说的
+            ImageUrls: Attachments(d),
             Channel: Channels.Official));
+    }
+
+    /// <summary>
+    /// 取事件里的图片附件地址（<c>d.attachments[]</c>，<c>content_type</c> 以 image/ 开头的那些）。
+    /// 为什么要它：官方平台发图片时正文是空的/只有一句“发了一张图片”，真正的东西在 attachments 里；
+    /// 不解析的话机器人就是“看不见图”（私域那条早就支持了，这里要对齐）。
+    /// </summary>
+    private static IReadOnlyList<string>? Attachments(JsonObject d)
+    {
+        if (d["attachments"] is not JsonArray arr || arr.Count == 0)
+        {
+            return null;
+        }
+
+        var urls = new List<string>();
+        foreach (var node in arr)
+        {
+            if (node is not JsonObject item)
+            {
+                continue;
+            }
+
+            var type = Text(item["content_type"]) ?? string.Empty;
+            var url = Text(item["url"]);
+            if (url is not null && type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                urls.Add(url);
+            }
+        }
+
+        return urls.Count > 0 ? urls : null;
     }
 
     private void RaiseC2CMessage(JsonObject d)
@@ -507,6 +561,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
             SenderName: DisplayName(userOpenId),
             Text: Text(d["content"]) ?? string.Empty,
             Time: ParseTime(d["timestamp"]),
+            ImageUrls: Attachments(d),
             MentionedSelf: true, // 单聊本来就是一对一
             Channel: Channels.Official));
     }

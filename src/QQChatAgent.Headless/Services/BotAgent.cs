@@ -1410,6 +1410,18 @@ public sealed class BotAgent : IDisposable
 
     private void HandleInbound(QqChatMessage msg)
     {
+        // 对话总开关（按通道）：官方那条在调试/被平台限制时，可以只把它静音，私域照旧。
+        // 面板顶部那个「AI 开关」是**全局**的（两条一起断，且连“人在叫它”也不回）——两者不是一回事。
+        var channelEnabled = Channels.IsOfficial(msg.Channel)
+            ? _settings.OfficialChatEnabled
+            : _settings.PrivateChatEnabled;
+        if (!channelEnabled)
+        {
+            var label = Channels.Tag(msg.Channel) + (msg.IsGroup ? " 群 " + msg.GroupId : " 私聊 " + msg.UserId);
+            LogThrottled("chanoff:" + Channels.ChannelOf(msg.Channel), $"忽略（{Channels.Display(msg.Channel)}通道的总开关是关的）: {label}");
+            return;
+        }
+
         if (!IsWhitelisted(msg))
         {
             // 忙群里这类日志会把日志文件和面板刷爆 → 同一来源每分钟最多一条
