@@ -319,7 +319,7 @@ public sealed class OpenAiClient
                 <= 40 => "现在偏克制：只在情绪确实比文字重的时候才用",
                 <= 60 => "现在是默认档：该用就用、不该用就用文字，看你自己的感觉",
                 <= 80 => "现在偏积极：合话头就多用一点，别浪费“声音”这个手段",
-                _ => "现在调得很高：能说就说，但别连着两条都带 speak（守住下面的硬约束）"
+                _ => "现在调得很高：能说就说，但别连着两条都带 speak"
             };
             systemContent +=
                 "\n\n[用语音说话]\n" +
@@ -333,12 +333,13 @@ public sealed class OpenAiClient
                 "你决定时值得看的是：这句话的价值在不在“声音”上（道谢/撒娇/学人说话/唱歌/开心委屈），" +
                 "在不在这段关系的熟络度上（刚说上话的人别突然发语音，熟人才“自然”），" +
                 "以及当下气氛（有人难受、在吵架、在说正事时，声音往往添乱——但这也是你判断，不是硬规则）。\n" +
-                $"硬约束（撞了会被代码拦掉、白填一个字段）：同一个人/群 **{interval} 秒内最多一条语音**，" +
-                "所以在同一会话里别连着两条都带 speak；也别每句都带——群里语音是“稀罕事”，滥了就烦人。\n" +
+                $"节奏你自己把握：{interval} 秒以上一条比较自然（着急/来情绪时短一点也行）。" +
+                "代码只在**几秒内连发**时才兜一下 ✗（那是防炸的，不是判断该不该发）；" +
+                "但同一会话别连着两条都带 speak、也别每句都带——群里语音是“稀罕事”，滥了就烦人。\n" +
                 "speak 里写的就是要说出口的那句话：口语化、短、别放链接/代码/括号里的舞台说明（如“(笑)”）；" +
-                "用了 speak 就**别再写 reply** ✗（不是“一字不差”才算重复——换个说法也是重复：「你可算回我了」和「你终于回来了！」是一句话）。" +
-                "想补充就把补充内容也放进 speak（一句话说不完就用 | 分段）；只有当你要发**链接、号码、@某人、命令**这种声音里说不出来的东西时，" +
-                "才在 reply 里写那一小段。\n" +
+                "**语音说了话，reply 里就别再说一遍**（默认它不会被发出去 ✗；「你可算回我了」和「你终于回来了！」算同一句）。" +
+                "真想再给对方一段**看的**文字（链接、号码、@某人、一段说明），就在同一条 JSON 里加 \"both\": true，" +
+                "那样 reply 会照发；其余情况宁可把话都说进 speak（说不完就用 | 分段）。\n" +
                 "想让这句话听起来更有情绪，可以在同一条 JSON 里再带三个可选字段：" +
                 "voiceEmotion（happy/sad/angry/surprised/fearful/disgusted/neutral）、" +
                 "voiceSpeed（0.5~2.0，1.0 = 原速）、voicePitch（-12~12，正数更尖更亮）。" +
@@ -948,6 +949,15 @@ public sealed class OpenAiClient
                 }
             }
 
+            // 模型声明“语音之外还想让眼睛看到这段文字”（both: true）——2026-09-21 加：
+            // 以前是代码猜“文字里有没有语音说不出来的东西”✗（5 位数字算、8 个字母算…纯玄学 ✗），
+            // 现在由模型自己表明意图。默认：语音把这轮话说完了 → 文字不再重复发。
+            var both = false;
+            if (root.TryGetProperty("both", out var bo) || root.TryGetProperty("也发文字", out bo))
+            {
+                both = bo.ValueKind == JsonValueKind.True;
+            }
+
             // 模型想“用语音说这句”（speak）：值可以是字符串（要说的话），也可以是 true（= 用语音说 reply）。            // 真正能不能发由上层决定（开关/字数上限/频率门/服务可达），这里只负责取值与基本清洗。
             string? speak = null;
             if (root.TryGetProperty("speak", out var sp) || root.TryGetProperty("用语音说", out sp))
@@ -1038,7 +1048,7 @@ public sealed class OpenAiClient
                 mood = md.GetString()?.Trim();
             }
 
-            return new CompletionResult(suitability, string.IsNullOrWhiteSpace(reply) ? null : reply, rawReply, stickerId, replyToId, pokeTargetId, mood, listen, shareSong, speak, search, read, vibe, vibeNote, voiceEmotion, voiceSpeed, voicePitch);
+            return new CompletionResult(suitability, string.IsNullOrWhiteSpace(reply) ? null : reply, rawReply, stickerId, replyToId, pokeTargetId, mood, listen, shareSong, speak, both, search, read, vibe, vibeNote, voiceEmotion, voiceSpeed, voicePitch);
         }
         catch (JsonException)
         {
@@ -2048,7 +2058,7 @@ public readonly record struct StickerChoice(string Id, string Description);
 /// <param name="Read">模型想读的网页地址（机器人抓正文，下一轮把正文给它）；null = 不读。</param>
 /// <param name="Vibe">它读到的**群里的情绪氛围**（开心/吐槽/低落/求助/生气/吵架/中性…）；null = 没说。</param>
 /// <param name="VibeNote">给上一行补一句人话（例：“在吐槽加班，情绪烦燥”），会交给下一轮的自己；null = 没写。</param>
-public readonly record struct CompletionResult(int? Suitability, string? Reply, string? RawText, string? StickerId = null, long? ReplyToMessageId = null, long? PokeTargetId = null, string? Mood = null, string? Listen = null, string? ShareSong = null, string? Speak = null, string? Search = null, string? Read = null, string? Vibe = null, string? VibeNote = null,
+public readonly record struct CompletionResult(int? Suitability, string? Reply, string? RawText, string? StickerId = null, long? ReplyToMessageId = null, long? PokeTargetId = null, string? Mood = null, string? Listen = null, string? ShareSong = null, string? Speak = null, bool Both = false, string? Search = null, string? Read = null, string? Vibe = null, string? VibeNote = null,
     /// <summary>
     /// 模型给这句语音定的**情绪**（happy/sad/angry/surprised/fearful/disgusted/neutral）；
     /// null = 它没表态 → 用面板里配的默认情绪。

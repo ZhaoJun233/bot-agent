@@ -4793,17 +4793,22 @@ public sealed class BotAgent : IDisposable
                 }
                 else if (textReply is not null && said.Length > 0)
                 {
-                    // 默认**不再发文字**（号主 2026-09-21 第二次报重复 ✗）：
-                    // 光比字符串挡不住“换个说法”✗（speak「你可算回我了」/ reply「你终于回来了！」），
-                    // 所以口径改成：语音已经把这轮话说出口 → 文字就不再重复 ✓，
-                    // **只有**文字里带了语音说不出来的东西（链接/@/一长串数字/命令）才补发 ✓。
-                    if (NeedsTextBesidesVoice(textReply))
+                    // 口径（2026-09-21 第三次定）：**看不看这段文字由模型说了算** ——
+                    // 它在 JSON 里加了 both:true 就照发 ✓；没加就默认“语音已经把这轮话说完了” → 不重复 ✗。
+                    // 之前用“含不含 5 位数字/8 个字母”猜 ✗ ——那种规则既解释不清也会误伤（“明天 8 点见”就被吞 ✗）。
+                    // 唯一保留的自动补发：**链接**（念出来完全没用，这是物理原因，不是猜）。
+                    if (result.Both)
                     {
-                        EmitLog("[Voice] 文字里有语音说不出来的内容（链接/号码/@）→ 补发文字");
+                        EmitLog("[Voice] 模型要求语音+文字都发（both）→ 文字照发");
+                    }
+                    else if (CarriesLink(textReply))
+                    {
+                        EmitLog("[Voice] 文字里有链接（语音念不出来）→ 补发文字");
                     }
                     else
                     {
-                        EmitLog($"[Voice] 语音已经说过这轮的话 → 文字不再重复发（被吞掉 {textReply.Length} 字）");
+                        EmitLog($"[Voice] 语音说了这轮的话{(SameSaid(textReply, said) ? "（就是同一句）" : string.Empty)}"
+                                + $" → 文字不再重复发（被吞掉 {textReply.Length} 字；想同时发文字需 both:true）");
                         textReply = null;
                     }
                 }
@@ -4960,20 +4965,27 @@ public sealed class BotAgent : IDisposable
         return true;
     }
 
-    /// <summary>同一个会话两次发语音的最小间隔（秒）。见 <see cref="AllowVoice" />。</summary>
+    /// <summary>
+    /// 代码侧唯一的语音硬护栏（秒）——**只是防炸**，不是“该不该发语音”的判断。
+    /// 2026-09-21 号主说“判别逻辑不自然”✗：以前这里按「语音积极性」算 15~180 秒的硬门，
+    /// 模型兴致上来想用语音，却被代码按回去 ✗，而且它自己看不见这个拦截（只被告知“有硬约束”）。
+    /// 现在：**节奏归模型**（提示词把积极性、上次语音的事实都给它），代码只挡同一会话几秒内连发两条。
+    /// </summary>
+    private const int VoiceBreakerSeconds = 8;
+
+    /// <summary>面板上「语音积极性」对应给模型的**建议节奏**（秒）——只进提示词，不再拦人。</summary>
     /// <summary>
     /// 同一个会话两次发语音的最小间隔（秒）：**跟着面板的「语音积极性」缩放**。
     /// 为什么要跟着动：写死 45 秒时，“积极性拉到 100”其实一点也积极不起来（该发还是被拦）。
     /// 口径与提示词共用（<see cref="OpenAiClient.VoiceIntervalSeconds"/>）—— 模型看到的数字与真正拦住它的数字是同一个。
     /// </summary>
-    private int VoiceMinIntervalSeconds => OpenAiClient.VoiceIntervalSeconds(_settings.VoiceEagerness);
+    private int VoiceSuggestIntervalSeconds => OpenAiClient.VoiceIntervalSeconds(_settings.VoiceEagerness);
 
     /// <summary>
     /// 语音频率门。为什么要它：
-    ///   • 语音在群里是“稀罕事”，连发就是刷屏（和表情包同一个道理）；
-    ///   • Piper 是 CPU 串行推理，一条要几秒，群里一热就是排队。
-    /// 提示词里已经反复要求模型克制，这里再加一道代码闸门 —— 模型不听话时也能兜住。
-    /// 想让它更松/更紧：改这个常量（故意不做成设置项，免得面板上多一个没人调的旋钮）。
+    ///   • 语音在群里是“稀罕事”，几秒内连发就是刷屏（和表情包同一个道理）；
+    ///   • 合成+转码是串行的，连发会排队卡住后面的消息。
+    /// 只挡“几秒内连发”这种物理性的问题；频率是否得体由模型自己判断（提示词给它积极性与建议节奏）。
     /// </summary>
     private bool AllowVoice(BotConversation conversation, out string reason)
     {
@@ -4984,9 +4996,9 @@ public sealed class BotAgent : IDisposable
         }
 
         var since = DateTimeOffset.Now - last;
-        if (since < TimeSpan.FromSeconds(VoiceMinIntervalSeconds))
+        if (since < TimeSpan.FromSeconds(VoiceBreakerSeconds))
         {
-            reason = $"{since.TotalSeconds:F0}s 前刚发过语音（同一会话下限 {VoiceMinIntervalSeconds}s）";
+            reason = $"{since.TotalSeconds:F0} 秒前刚发过语音（同一会话 {VoiceBreakerSeconds} 秒内不连发）";
             return false;
         }
 
@@ -5371,37 +5383,13 @@ public sealed class BotAgent : IDisposable
     /// 收尾符号跟着本段走；非常长的句子才退一步在逗号处断（不会憋出一条千字消息）。
     /// </summary>
     /// <summary>
-    /// 这行文字里有没有“语音说不出来、必须用眼睛看”的东西：链接、@某人、一长串数字、命令/代码。
-    /// 只有这种时候，语音之外才值得再补一条文字（号主 2026-09-21 的“语音和文字重复发”）。
+    /// 文字里有没有**链接**。这是唯一保留的“自动补发文字”理由：念出来完全没用 ✗。
+    /// 别的（号码/@/命令）不再猜 —— 交给模型用 both:true 自己声明（2026-09-21）。
     /// </summary>
-    private static bool NeedsTextBesidesVoice(string text)
-    {
-        if (text.Contains("http://", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("https://", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("www.", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (text.Contains("[[", StringComparison.Ordinal))   // 表情/表情包占位符，念不出来
-        {
-            return true;
-        }
-
-        var digits = 0;
-        var latin = 0;
-        foreach (var ch in text)
-        {
-            digits = char.IsAsciiDigit(ch) ? digits + 1 : 0;
-            latin = char.IsAsciiLetter(ch) ? latin + 1 : 0;
-            if (digits >= 5 || latin >= 8)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool CarriesLink(string text)
+        => text.Contains("http://", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("https://", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("www.", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// “语音说的”和“文字写的”是不是同一句（去空白去标点后相等，或短句被长句包含）。
