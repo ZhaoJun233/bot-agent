@@ -505,9 +505,24 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
                 RaiseC2CMessage(d);
                 return;
 
+            case "GROUP_ADD_ROBOT":
+                // 被拉进群：记一句人话（之后这个群的消息才会推过来）
+                Log($"✅ 机器人被加进官方群 {_ids.AliasFor(Text(d["group_openid"]) ?? string.Empty)}"
+                    + (string.IsNullOrWhiteSpace(Text(d["op_member_openid"])) ? string.Empty : "（群主/管理员操作）"));
+                return;
+
+            case "GROUP_DEL_ROBOT":
+                // ⚠ 被移出群：**平台从此不再推送这个群的任何事件**（@ 它也不会推、日志里一行都不会有）。
+                // 2026-09-21 线上卡了很久的“艾特了日志根本不显示”，根因就是这条事件：
+                // 18:06 机器人被移出群，之后所有 READY 之外再无任何群消息 ✗。所以这句要显眼。
+                Log($"⚠ 机器人被移出官方群 {_ids.AliasFor(Text(d["group_openid"]) ?? string.Empty)} —— "
+                    + "此后该群的任何消息都不会推过来（@ 也不推、日志里不会有行）。要恢复：把机器人重新加进群，"
+                    + "并在群设置里重新允许它获取群内消息。");
+                return;
+
             default:
-                // 其它事件（加群/退群/主动消息被拒…）先只记一条，不影响对话
-                if (type.Contains("REJECT", StringComparison.Ordinal) || type.Contains("DEL_ROBOT", StringComparison.Ordinal))
+                // 其它事件（主动消息被拒/审核…）先只记一条，不影响对话
+                if (type.Contains("REJECT", StringComparison.Ordinal))
                 {
                     Log($"官方事件 {type}：{Snippet(raw?.ToJsonString() ?? string.Empty, 160)}");
                 }

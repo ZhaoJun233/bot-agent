@@ -892,6 +892,9 @@ public sealed class BotAgent : IDisposable
             $"私聊白名单={WhitelistSummary(_whitelistAllPrivates, _whitelistPrivates)}{(_whitelistPrivatesFromLegacy ? "（用旧的共用名单）" : "")}, " +
             // 官方那条的名单状态也得印：否则“官方通道被拦”时完全看不出到底是名单空了、还是填了不对的号
             $"官方白名单=群{WhitelistSummary(_officialWhitelistAllGroups, _officialWhitelistGroups)}/私聊{WhitelistSummary(_officialWhitelistAllPrivates, _officialWhitelistPrivates)}, " +
+            // 总开关状态也印：2026-09-21 线上出现过“某条通道的总开关被关掉 → 一条都不回 →
+            // 日志里只有一行很容易被淹没的“忽略（…通道的总开关是关的）”，查了半天 ✗。
+            $"对话总开关=私域{(_settings.PrivateChatEnabled ? "开" : "关")}/官方{(_settings.OfficialChatEnabled ? "开" : "关")}, " +
             $"模型={_settings.ReplyModel}" +
             (_settings.FastReply && _settings.ReplyModel != _settings.Model
                 ? $"（快速档；主模型 {_settings.Model}）"
