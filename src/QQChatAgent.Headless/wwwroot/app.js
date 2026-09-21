@@ -2749,20 +2749,63 @@ function renderConversations(force) {
     }
   }
 
+  /* 读一段音频的时长（秒）；读不到返回 0（浏览器解不了就只好靠大小猜）。 */
+  function audioDuration(file) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const el = document.createElement("audio");
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; URL.revokeObjectURL(url); resolve(v || 0); } };
+      el.preload = "metadata";
+      el.onloadedmetadata = () => finish(el.duration && isFinite(el.duration) ? el.duration : 0);
+      el.onerror = () => finish(0);
+      setTimeout(() => finish(0), 4000); // 个别格式解不出来，别卡住整个流程
+      el.src = url;
+    });
+  }
+
+  /* 多选时挑哪一段：优先“时长在 10 秒~5 分钟里最长的那段”；
+     全都不在区间就退而取最大文件的（并把原因说清）。云端一次只收一份主样本，所以必须选一个。 */
+  async function pickCloneSample(files) {
+    const list = Array.from(files);
+    if (list.length === 1) return { file: list[0], why: "" };
+
+    const measured = [];
+    for (const f of list) measured.push({ file: f, seconds: await audioDuration(f) });
+    const inRange = measured.filter((m) => m.seconds >= 10 && m.seconds <= 300);
+    if (inRange.length) {
+      inRange.sort((a, b) => b.seconds - a.seconds);
+      return { file: inRange[0].file, why: `共 ${list.length} 个文件，用了时长最长的 ${Math.round(inRange[0].seconds)} 秒那段（云端一次只收一份主样本）` };
+    }
+
+    const sorted = measured.slice().sort((a, b) => b.file.size - a.file.size);
+    return {
+      file: sorted[0].file,
+      why: `共 ${list.length} 个文件，但都没有落在 10 秒~5 分钟里；先用了最大的那个（${fmtSize(sorted[0].file.size)}）——建议先在本地剪成 30~60 秒再传`,
+    };
+  }
+
   function wireCloneCard() {
     const btn = $("cloneGo");
     if (!btn) return;
     btn.addEventListener("click", async () => {
       const hint = $("cloneHint");
-      const file = $("cloneSample").files && $("cloneSample").files[0];
+      const files = $("cloneSample").files;
       const voiceId = $("cloneVoiceId").value.trim();
-      if (!file) { hint.textContent = "先选一段音频（10 秒 ~ 5 分钟，mp3/m4a/wav）。"; return; }
+      if (!files || files.length === 0) { hint.textContent = "先选一段音频（10 秒 ~ 5 分钟，mp3/m4a/wav）。"; return; }
       if (!voiceId) { hint.textContent = "给这个音色起个 ID（小写字母/数字/下划线/连字符）。"; return; }
-      if (file.size > 20 * 1024 * 1024) { hint.textContent = "文件 " + fmtSize(file.size) + " 超过官方 20MB 上限。"; return; }
 
       btn.disabled = true;
-      hint.textContent = "正在读取样本…";
       try {
+        hint.textContent = "正在挑选样本…";
+        const picked = await pickCloneSample(files);
+        const file = picked.file;
+        if (file.size > 20 * 1024 * 1024) {
+          hint.textContent = `文件 ${fmtSize(file.size)} 超过官方 20MB 上限 —— 先剪短一点。`;
+          return;
+        }
+
+        hint.textContent = "正在读取样本…" + (picked.why ? `（${picked.why}）` : "");
         const buf = await file.arrayBuffer();
         let bin = "";
         const bytes = new Uint8Array(buf);
@@ -2776,7 +2819,8 @@ function renderConversations(force) {
         });
         if (d.ok) {
           $("setVoiceName").value = d.voiceId;
-          hint.textContent = "复刻成功：" + d.voiceId + " —— 已填进上面的「音色」格，记得点保存。";
+          hint.textContent = "复刻成功：" + d.voiceId + "（样本 " + file.name + "）—— 已填进上面的「音色」格，记得点保存。"
+            + (picked.why ? " " + picked.why : "");
           loadClonedVoices();
         } else {
           hint.textContent = "复刻失败：" + (d.error || "未知原因");

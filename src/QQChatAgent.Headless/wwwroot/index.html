@@ -581,7 +581,8 @@
               <span class="hint">样本要求：mp3/m4a/wav，10 秒 ~ 5 分钟（30 秒~1 分钟即可），≤ 20MB；
                 官方约束：克隆音色 <b>7 天没用会被删掉</b></span>
             </label>
-            <input type="file" id="cloneSample" accept="audio/*" />
+            <input type="file" id="cloneSample" accept="audio/*" multiple />
+            <p class="path-hint" id="clonePick">可以多选：云端一次只收一份主样本，会自动挑<b>时长最长、且不超 5 分钟</b>的那段（其他文件不会被上传）。要合成多段素材请先在本地拼成一段再传。</p>
             <div class="grid-2">
               <div class="field">
                 <label>自定义音色 ID<span class="hint">小写字母/数字/下划线/连字符，3~64 位，例如 <code>zhao_voice_01</code></span></label>
