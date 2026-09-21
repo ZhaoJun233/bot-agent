@@ -890,6 +890,8 @@ public sealed class BotAgent : IDisposable
             $"已启动。AI={( _settings.AiModeEnabled ? "开" : "关")}, " +
             $"群聊白名单={WhitelistSummary(_whitelistAllGroups, _whitelistGroups)}{(_whitelistGroupsFromLegacy ? "（用旧的共用名单）" : "")}, " +
             $"私聊白名单={WhitelistSummary(_whitelistAllPrivates, _whitelistPrivates)}{(_whitelistPrivatesFromLegacy ? "（用旧的共用名单）" : "")}, " +
+            // 官方那条的名单状态也得印：否则“官方通道被拦”时完全看不出到底是名单空了、还是填了不对的号
+            $"官方白名单=群{WhitelistSummary(_officialWhitelistAllGroups, _officialWhitelistGroups)}/私聊{WhitelistSummary(_officialWhitelistAllPrivates, _officialWhitelistPrivates)}, " +
             $"模型={_settings.ReplyModel}" +
             (_settings.FastReply && _settings.ReplyModel != _settings.Model
                 ? $"（快速档；主模型 {_settings.Model}）"
@@ -1426,7 +1428,15 @@ public sealed class BotAgent : IDisposable
         {
             // 忙群里这类日志会把日志文件和面板刷爆 → 同一来源每分钟最多一条
             var label = msg.IsGroup ? "群 " + msg.GroupId : "私聊 " + msg.UserId;
-            LogThrottled("ignore:" + label, $"忽略（不在白名单）: {label}");
+            // 把“用哪份名单、那份的状态”一并印出来：
+            // 实际踩过——“官方通道永远不回”但日志只有一句“不在白名单”，看不出是名单选错了还是填了真实号。
+            var tag = Channels.Tag(msg.Channel);
+            var listState = Channels.IsOfficial(msg.Channel)
+                ? (msg.IsGroup
+                    ? $"官方群名单{WhitelistSummary(_officialWhitelistAllGroups, _officialWhitelistGroups)}"
+                    : $"官方私聊名单{WhitelistSummary(_officialWhitelistAllPrivates, _officialWhitelistPrivates)}")
+                : (msg.IsGroup ? "私域群名单" : "私域私聊名单");
+            LogThrottled("ignore:" + label, $"忽略（不在白名单）: [{tag}] {label}（{listState}）");
             return;
         }
 
