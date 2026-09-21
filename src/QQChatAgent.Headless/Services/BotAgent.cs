@@ -4615,14 +4615,14 @@ public sealed class BotAgent : IDisposable
         string? voiceSkipWhy = null;
         if (voiceText.Length > 0)
         {
+            // 2026-09-21（号主要求“什么时候发语音让模型自己定”）：这里以前还有一道
+            // “气氛沉（有人低落/在吵架）就一律不发语音”的硬拦，已删——那本来就是判断类的事，
+            // 现在只把气氛（vibeHint）递给模型看，由它自己权衡。
+            // 代码侧只留“技术性”限制：开关、字数上限（云端/协议端真有上限）、同会话频率下限（防刷屏）。
             var maxChars = Math.Clamp(_settings.VoiceMaxChars, 10, 300);
             if (!_settings.EnableVoice || _voice is null)
             {
                 voiceSkipWhy = "语音消息开关是关的";
-            }
-            else if (IsSoberVibe(conversation.SourceKey))
-            {
-                voiceSkipWhy = "气氛比较沉（有人低落/在吵架），这句用文字说就够了";
             }
             else if (voiceText.Length > maxChars)
             {
