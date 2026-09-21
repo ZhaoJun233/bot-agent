@@ -280,12 +280,19 @@ public sealed class VoiceService
             if (!cloneResp.IsSuccessStatusCode || status != 0)
             {
                 var msg = NodeText(cloneJson?["base_resp"]?["status_msg"]);
-                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）：{(msg.Length > 0 ? msg : Shorten(cloneText))}");
+                var why = status switch
+                {
+                    2013 => "（2013 = 参数/样本不合格：需 mp3/m4a/wav、**10 秒 ~ 5 分钟**、≤ 20MB、单人干净人声；voice_id 只能用字母/数字/下划线/连字符）",
+                    2039 => "（2039 = 这个 voice_id 已经克隆过了，换个 ID 或先删旧的）",
+                    1004 or 2049 => "（key 与站点不配对：国内站 api.minimaxi.com / 国际站 api.minimax.io，面板「云端接口地址」要跟 key 对应）",
+                    2042 => "（账号没有音色复刻权限/额度）",
+                    _ => string.Empty
+                };
+                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）：{(msg.Length > 0 ? msg : Shorten(cloneText))}{(why.Length > 0 ? " " + why : string.Empty)}");
             }
 
             _log($"[Voice] 音色复刻成功：{wanted}（样本 {audio.Length / 1024}KB）");
-            return (true, null);
-        }
+            return (true, null);        }
         catch (Exception ex)
         {
             return (false, "复刻失败：" + ex.Message);

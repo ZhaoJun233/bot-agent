@@ -2800,6 +2800,9 @@ function renderConversations(force) {
         hint.textContent = "正在挑选样本…";
         const picked = await pickCloneSample(files);
         const file = picked.file;
+        // 时长也量一下：云端 2013 最常见的根因就是“样本太短（< 10 秒）”，
+        // 不把时长说出来，用户只能对着一句 invalid params 猜。
+        const seconds = (files.length === 1) ? await audioDuration(file) : 0;
         if (file.size > 20 * 1024 * 1024) {
           hint.textContent = `文件 ${fmtSize(file.size)} 超过官方 20MB 上限 —— 先剪短一点。`;
           return;
@@ -2812,18 +2815,21 @@ function renderConversations(force) {
         for (let i = 0; i < bytes.length; i += 0x8000) {
           bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
         }
-        hint.textContent = "正在上传并复刻（一般 10~60 秒，取决于样本大小）…";
+        hint.textContent = "正在上传并复刻（一般 10~60 秒，取决于样本大小）…样本 " + file.name
+          + (seconds ? "（约 " + Math.round(seconds) + " 秒）" : "") + "，音色 ID " + voiceId;
         const d = await api("/api/voice/clone", {
           method: "POST",
           body: JSON.stringify({ audioBase64: btoa(bin), fileName: file.name, voiceId: voiceId }),
         });
         if (d.ok) {
           $("setVoiceName").value = d.voiceId;
-          hint.textContent = "复刻成功：" + d.voiceId + "（样本 " + file.name + "）—— 已填进上面的「音色」格，记得点保存。"
+          hint.textContent = "复刻成功：" + d.voiceId + "（样本 " + file.name
+            + (seconds ? "，约 " + Math.round(seconds) + " 秒" : "") + "）—— 已填进上面的「音色」格，记得点保存。"
             + (picked.why ? " " + picked.why : "");
           loadClonedVoices();
         } else {
-          hint.textContent = "复刻失败：" + (d.error || "未知原因");
+          hint.textContent = "复刻失败：" + (d.error || "未知原因")
+            + (seconds && seconds < 10 ? "\n→ 你这段样本只有约 " + Math.round(seconds) + " 秒，官方要求 ≥ 10 秒（30~60 秒最佳）。" : "");
         }
       } catch (e) {
         hint.textContent = "复刻失败：" + e.message;
