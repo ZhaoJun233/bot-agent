@@ -540,6 +540,11 @@
               <input type="number" id="setVoiceMaxChars" min="10" max="300" step="10" />
             </div>
             <div class="field">
+              <label>语音回复积极性<span class="hint">越高越爱用语音；它同时决定同会话的最小间隔（0 → 3 分钟、50 → 45 秒、100 → 15 秒），
+                并把这个数直接告诉模型 —— “什么时候用语音”由它自己拿捏</span><b class="val" id="voiceEagernessVal">50</b></label>
+              <input type="range" id="setVoiceEagerness" min="0" max="100" step="5" />
+            </div>
+            <div class="field">
               <label>TTS 服务地址<span class="hint">云端 TTS 旁路容器，提供 /speak?text=… 返回音频</span></label>
               <input type="text" id="setTtsServiceUrl" maxlength="120" placeholder="http://tts:5000" />
             </div>

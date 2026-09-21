@@ -1262,6 +1262,8 @@ function renderConversations(force) {
     $("setVoiceName").value = r.voiceName || "";
     $("setVoiceSpeed").value = r.voiceSpeed;
     $("setVoiceMaxChars").value = r.voiceMaxChars;
+    $("setVoiceEagerness").value = r.voiceEagerness == null ? 50 : r.voiceEagerness;
+    $("voiceEagernessVal").textContent = $("setVoiceEagerness").value;
     $("setTtsServiceUrl").value = r.ttsServiceUrl || "";
     // TTS 密钥：与模型密钥同规矩 —— 只回显掩码，留空 = 不改
     $("setTtsApiKey").value = "";
@@ -1409,6 +1411,7 @@ function renderConversations(force) {
       voiceName: $("setVoiceName").value.trim(),
       voiceSpeed: Number($("setVoiceSpeed").value),
       voiceMaxChars: Number($("setVoiceMaxChars").value),
+      voiceEagerness: Number($("setVoiceEagerness").value),
       ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
       // TTS 密钥（留空 = 不改；服务端只存掩码，不回显）
       ttsApiKey: $("setTtsApiKey").value.trim(),
@@ -1858,6 +1861,7 @@ function renderConversations(force) {
     });
 
     $("setDesire").addEventListener("input", (e) => { $("desireVal").textContent = e.target.value; });
+    $("setVoiceEagerness").addEventListener("input", (e) => { $("voiceEagernessVal").textContent = e.target.value; });
     $("setThreshold").addEventListener("input", (e) => { $("threshVal").textContent = e.target.value; });
     $("saveBtn").addEventListener("click", saveSettings);
 

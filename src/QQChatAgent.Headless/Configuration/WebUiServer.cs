@@ -1433,6 +1433,7 @@ public sealed partial class WebUiServer : IDisposable
         if (body["voiceName"] is JsonNode vn) s.VoiceName = vn.GetValue<string>().Trim();
         if (body["voiceSpeed"] is JsonNode vs) s.VoiceSpeed = Math.Clamp(vs.GetValue<int>(), 50, 200);
         if (body["voiceMaxChars"] is JsonNode vmc) s.VoiceMaxChars = Math.Clamp(vmc.GetValue<int>(), 10, 300);
+        if (body["voiceEagerness"] is JsonNode vge) s.VoiceEagerness = Math.Clamp(vge.GetValue<int>(), 0, 100);
         if (body["ttsServiceUrl"] is JsonNode tts) s.TtsServiceUrl = tts.GetValue<string>().Trim();
 
         // 云端服务商/地址/模型：都不是密钥，跟着行为配置进 settings.json；
@@ -2058,6 +2059,7 @@ public sealed partial class WebUiServer : IDisposable
         ["voiceName"] = s.VoiceName,
         ["voiceSpeed"] = s.VoiceSpeed,
         ["voiceMaxChars"] = s.VoiceMaxChars,
+        ["voiceEagerness"] = s.VoiceEagerness,
         ["ttsServiceUrl"] = s.TtsServiceUrl,
         ["ttsProvider"] = s.TtsProvider,
         ["ttsApiBase"] = s.TtsApiBase,

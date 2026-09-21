@@ -82,6 +82,20 @@ public sealed class OpenAiClient
     /// 返回结构化结果：调用方据此判断“沉默”还是“发言”（含模型自评的适合度）。
     /// 网络/接口异常向上抛，由调用方记日志。
     /// </summary>
+    /// <summary>
+    /// 同会话两条语音的最小间隔（秒）——**跟着面板的「语音积极性」缩放**。
+    /// 为什么要跟着动：写死 45 秒时，“积极性拉到 100”其实一点也积极不起来（该发还是被拦）。
+    /// 提示词里告诉模型的数字与这里拦住它的数字**是同一个函数**算出来的，不会出现“面板说 100、实际卡 45 秒”的错位。
+    /// </summary>
+    internal static int VoiceIntervalSeconds(int eagerness) => Math.Clamp(eagerness, 0, 100) switch
+    {
+        <= 20 => 180,
+        <= 40 => 90,
+        <= 60 => 45,
+        <= 80 => 25,
+        _ => 15
+    };
+
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
         IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false)
     {
@@ -296,15 +310,26 @@ public sealed class OpenAiClient
         if (enableVoice)
         {
             var maxChars = Math.Clamp(_settings.VoiceMaxChars, 10, 300);
+            var eagerness = Math.Clamp(_settings.VoiceEagerness, 0, 100);
+            var interval = VoiceIntervalSeconds(eagerness);
+            var posture = eagerness switch
+            {
+                <= 20 => "现在调得很低：**除非有人明确让你说话/唱一个**，否则就用文字",
+                <= 40 => "现在偏克制：只在情绪确实比文字重的时候才用",
+                <= 60 => "现在是默认档：该用就用、不该用就用文字，看你自己的感觉",
+                <= 80 => "现在偏积极：合话头就多用一点，别浪费“声音”这个手段",
+                _ => "现在调得很高：能说就说，但别连着两条都带 speak（守住下面的硬约束）"
+            };
             systemContent +=
                 "\n\n[用语音说话]\n" +
                 "用不用语音、哪一句用语音，**都由你自己定**（没人检查你该不该用）。想用就在 JSON 里加 speak 字段，" +
                 "写上要说出口的那句话（≤ " + maxChars + " 字）：" +
                 "{\"suitability\": 85, \"reply\": \"…\", \"speak\": \"这句话我想用声音说\"}。机器人会把它合成语音发出去。\n" +
+                $"面板里的「语音积极性」现在是 {eagerness}/100：{posture}。\n" +
                 "你决定时值得看的是：这句话的价值在不在“声音”上（道谢/撒娇/学人说话/唱歌/开心委屈），" +
                 "在不在这段关系的熟络度上（刚说上话的人别突然发语音，熟人才“自然”），" +
                 "以及当下气氛（有人难受、在吵架、在说正事时，声音往往添乱——但这也是你判断，不是硬规则）。\n" +
-                "硬约束（撞了会被代码拦掉、白填一个字段）：同一个人/群 **45 秒内最多一条语音**，" +
+                $"硬约束（撞了会被代码拦掉、白填一个字段）：同一个人/群 **{interval} 秒内最多一条语音**，" +
                 "所以在同一会话里别连着两条都带 speak；也别每句都带——群里语音是“稀罕事”，滥了就烦人。\n" +
                 "speak 里写的就是要说出口的那句话：口语化、短、别放链接/代码/括号里的舞台说明（如“(笑)”）；" +
                 "填了 speak 就不要再在 reply 里重复同一句话（语音已经说过了）。" +

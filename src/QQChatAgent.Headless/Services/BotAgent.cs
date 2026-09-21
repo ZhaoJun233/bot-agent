@@ -4816,7 +4816,12 @@ public sealed class BotAgent : IDisposable
     }
 
     /// <summary>同一个会话两次发语音的最小间隔（秒）。见 <see cref="AllowVoice" />。</summary>
-    private const int VoiceMinIntervalSeconds = 45;
+    /// <summary>
+    /// 同一个会话两次发语音的最小间隔（秒）：**跟着面板的「语音积极性」缩放**。
+    /// 为什么要跟着动：写死 45 秒时，“积极性拉到 100”其实一点也积极不起来（该发还是被拦）。
+    /// 口径与提示词共用（<see cref="OpenAiClient.VoiceIntervalSeconds"/>）—— 模型看到的数字与真正拦住它的数字是同一个。
+    /// </summary>
+    private int VoiceMinIntervalSeconds => OpenAiClient.VoiceIntervalSeconds(_settings.VoiceEagerness);
 
     /// <summary>
     /// 语音频率门。为什么要它：

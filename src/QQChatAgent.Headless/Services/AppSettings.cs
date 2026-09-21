@@ -221,6 +221,15 @@ public sealed class AppSettings
     /// </summary>
     public bool EnableVoice { get; set; }
 
+    /// <summary>
+    /// 语音回复积极性 0~100（面板滑杆）。
+    /// 它的意思不是“必须发多少条语音”，而是**把分寸交给面板**：
+    ///   • 提示词会把这个数告诉模型（如“当前积极性 70/100 → 偏积极”），让它自己校准用得多不多；
+    ///   • 同会话的最小间隔也跟着缩放（0 → 2 分钟、50 → 45 秒、100 → 15 秒），
+    ///     所以“很积极”真能多说两句，而不是被一道写死的 45 秒门卡住。
+    /// </summary>
+    public int VoiceEagerness { get; set; } = 50;
+
     /// <summary>音色（Piper 模型名）。可选：zh_CN-huayan-medium / zh_CN-huayan-x_low / zh_CN-xiao_ya-medium / zh_CN-chaowen-medium。</summary>
     public string VoiceName { get; set; } = "zh_CN-huayan-medium";
 
