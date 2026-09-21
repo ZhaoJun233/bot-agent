@@ -310,21 +310,57 @@ def synth_raw(text: str, voice: str, speed: float, fmt: str) -> bytes:
 
 
 def to_silk(pcm: bytes) -> bytes:
-    """PCM(16k/mono/s16le) → 腾讯 SILK v3。没装编码器就明确报错（别静默发坏音频）。"""
+    """PCM(16k/mono/s16le) → 腾讯 SILK v3。
+
+    官方通道发语音**只认**腾讯 SILK v3（mp3/wav 直传报 850019/40034002 ✗），所以这里必须真出 silk：
+
+    ① 原生 ``silk_v3_encoder``（有就用，最快）
+    ② 纯 Python 的 ``pilk``（pypi，不用编译 —— 官方通道靠它）
+
+    两个都没有就**明确报错**，绝不静默发坏音频。
+    """
     exe = shutil.which(SILK_CMD)
-    if not exe:
+    if exe:
+        with open("/tmp/_tts.pcm", "wb") as fh:
+            fh.write(pcm)
+        out = "/tmp/_tts.silk"
+        proc = subprocess.run([exe, "/tmp/_tts.pcm", out, "-tencent", "-rate", "16000"],
+                              capture_output=True, timeout=60)
+        if proc.returncode != 0 or not os.path.exists(out):
+            raise RuntimeError("silk 编码失败: " + proc.stderr.decode("utf-8", "replace")[:200])
+        with open(out, "rb") as fh:
+            return fh.read()
+
+    try:
+        import pilk  # type: ignore  # 纯 Python SILK v3 编码器（带 C 扩展：装的时候要编译器）
+    except ImportError as exc:
         raise RuntimeError(
             "这台机器上没有 silk 编码器（官方通道发语音才需要它；NapCat 那条路用 mp3/wav 即可）。"
-            f"想启用：装一个 silk_v3_encoder 放进 PATH，或用 SILK_ENCODER 指定路径（缺 {SILK_CMD}）")
-    with open("/tmp/_tts.pcm", "wb") as fh:
+            f"想启用：pip install pilk，或用 SILK_ENCODER 指定 silk_v3_encoder（缺 {SILK_CMD}）") from exc
+
+    src, dst = "/tmp/_tts.pcm", "/tmp/_tts.silk"
+    with open(src, "wb") as fh:
         fh.write(pcm)
-    out = "/tmp/_tts.silk"
-    proc = subprocess.run([exe, "/tmp/_tts.pcm", out, "-tencent", "-rate", "16000"],
-                          capture_output=True, timeout=60)
-    if proc.returncode != 0 or not os.path.exists(out):
-        raise RuntimeError("silk 编码失败: " + proc.stderr.decode("utf-8", "replace")[:200])
-    with open(out, "rb") as fh:
-        return fh.read()
+    if os.path.exists(dst):
+        os.remove(dst)
+    # pilk 的 encode 是 C 扩展（没有 Python 签名可探 ✗），只能直接试：
+    #   官方要 16k/单声道 → pcm_rate=16000；tencent=True 才写 #!SILK_V3 头（默认写的是普通 SILK）
+    def _pilk_call():
+        try:
+            pilk.encode(src, dst, pcm_rate=16000, tencent=True)
+        except TypeError:
+            pilk.encode(src, dst)          # 这版不接关键字参数就只能裸调（需要时再想办法）
+
+    try:
+        _pilk_call()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"pilk 编码 silk 失败（{type(exc).__name__}: {exc}）") from exc
+    if not os.path.exists(dst):
+        raise RuntimeError("pilk 没有产出 silk 文件")
+    with open(dst, "rb") as fh:
+        data = fh.read()
+    log(f"silk 编码完成（pilk，{len(pcm)} → {len(data)} 字节）")
+    return data
 
 
 # ─────────────────────────── HTTP 层 ───────────────────────────

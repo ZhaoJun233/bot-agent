@@ -20,6 +20,17 @@ FROM python:3.11-alpine
 #     docker build --build-arg SILK_ENCODER_URL=<直链> -t qqchat-tts:latest -f tools/tts-cloud.Dockerfile tools/
 # 不塞也能跑：/speak?...&format=silk 会明确回 501 并说明原因（不会静默发坏音频）。
 ARG SILK_ENCODER_URL=""
+# silk 编码器：官方通道发语音要腾讯 SILK v3。
+# ① 纯 Python 的 pilk（不用编译，默认靠它；没网/装不上也不阻断构建 —— 运行时 to_silk 会明说缺编码器）
+# ② 可选：SILK_ENCODER_URL 指向自备的 silk_v3_encoder 二进制（有就优先用，比 pilk 快）
+# silk 编码器：官方通道发语音要腾讯 SILK v3。
+# ① 纯 Python 的 pilk（默认靠它；但它要编译自带的 SILK C 源码 → 临时装 build-base，编完就卸）
+#    装不上也不阻断构建 —— 运行时 to_silk 会明说缺编码器（绝不给 QQ 发坏音频）
+# ② 可选：SILK_ENCODER_URL 指向自备的 silk_v3_encoder 二进制（有就优先用，比 pilk 快）
+RUN apk add --no-cache build-base \
+ && (pip install --no-cache-dir pilk && python -c "import pilk" \
+     || echo "pilk 装不上；官方通道语音需另备 silk_v3_encoder") \
+ && apk del build-base
 RUN if [ -n "$SILK_ENCODER_URL" ]; then \
         wget -qO /usr/local/bin/silk_v3_encoder "$SILK_ENCODER_URL" \
         && chmod +x /usr/local/bin/silk_v3_encoder \

@@ -4479,7 +4479,7 @@ public sealed class BotAgent : IDisposable
                         return;
                     }
 
-                    var ok = await _source.SendMusicAsync(shareIsGroup, shareTargetId, "163", songId, CancellationToken.None);
+                    var ok = await _source.SendMusicAsync(shareIsGroup, shareTargetId, "163", songId, title: songToShare, ct: CancellationToken.None);
                     EmitLog(ok ? $"[Music] 已分享卡片「{songToShare}」(# {songId})" : $"[Music] 卡片发送失败，改用链接分享: {songToShare}");
 
                     // 协议端不接卡片（NapCat 各版本对 music 段的接受程度不一样）时退化成发链接：

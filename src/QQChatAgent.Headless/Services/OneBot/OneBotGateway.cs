@@ -136,8 +136,9 @@ public sealed class OneBotGateway : IQqChatSource, IDisposable
     /// 发一张音乐分享卡片（OneBot music 段）。type=163 → 网易云；QQ 客户端会渲染成可播放卡片。
     /// 这是机器人“主动分享一首歌”的出路 —— 不是每次都只能发一段文字。
     /// </summary>
-    public async Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, CancellationToken ct = default)
+    public async Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
     {
+        // title 只在官方通道（发不了卡片）用得上，这里不接卡片以外的东西。
         if (string.IsNullOrWhiteSpace(songId))
         {
             return false;

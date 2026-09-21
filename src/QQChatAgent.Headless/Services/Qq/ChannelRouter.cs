@@ -170,8 +170,8 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
 
     // ---------- 出站：按目标号路由 ----------
 
-    public Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, CancellationToken ct = default)
-        => Resolve(isGroup, targetId).SendMusicAsync(isGroup, targetId, platform, songId, ct);
+    public Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
+        => Resolve(isGroup, targetId).SendMusicAsync(isGroup, targetId, platform, songId, title, ct);
 
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null)
         => Resolve(isGroup, targetId).SendTextAsync(isGroup, targetId, text, ct, replyToMessageId);

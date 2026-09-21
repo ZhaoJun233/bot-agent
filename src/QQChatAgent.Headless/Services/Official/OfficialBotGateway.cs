@@ -187,6 +187,27 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     }
 
     /// <summary>
+    /// <summary>
+    /// 「听音乐/点歌」在官方通道的降级实现。
+    ///
+    /// 官方平台**没有** OneBot 那种 music 卡片（可点开播放的）✗，而且链接必须**报备**（没报备报 304003 ✗，
+    /// 我们发送前还会主动剥链接）——所以这里既不能发卡片、也不能发链接。
+    /// 能做且真正有用的是：发一条**带歌名的文字**（让人能去网易云搜到它），
+    /// 而不是丢一个裸 id 或者什么都没发。返回 true 表示“已用降级形式发出”，
+    /// 上层就不会再去发那个（在官方通道会被剥掉的）链接了。
+    /// </summary>
+    public async Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
+    {
+        var site = platform is "163" or "netease" or "" ? "网易云音乐" : platform;
+        var name = string.IsNullOrWhiteSpace(title) ? $"（id {songId}）" : $"《{title}》";
+        var text = $"🎵 {site}：{name}\n（官方通道发不了可点开的音乐卡片，去 {site} 搜一下就能听～）";
+        var sent = await SendTextAsync(isGroup, targetId, text, ct).ConfigureAwait(false);
+        Log(sent.Ok
+            ? $"官方通道音乐已降级为文字：{name}（官方无卡片、链接需报备）"
+            : $"官方通道音乐降级文字也发送失败（messageId={sent.MessageId}）");
+        return sent.Ok;
+    }
+
     /// 发语音：官方平台没有 TTS，语音就是「富媒体 + <c>msg_type=7</c>」。
     /// 音频从 TTS 代理那里**按 silk 取**（官方要求腾讯 SILK v3；mp3 直传会报格式不支持），
     /// 再 base64 内联上传（自建 TTS 在内网，平台拉不到我们的 URL，所以走 file_data）。

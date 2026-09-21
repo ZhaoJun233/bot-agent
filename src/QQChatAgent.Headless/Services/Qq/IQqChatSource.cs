@@ -50,9 +50,11 @@ public interface IQqChatSource
     /// <summary>
     /// 发一张音乐分享卡片（OneBot 的 music 段）。
     /// platform=163 就是网易云：QQ 客户端会渲染成可点开播放的音乐卡片。
+    /// title = 歌名（官方那条通道没有音乐卡片、链接又必须报备，_title_ 就是它降级后的全部价值：
+    /// 发一条带歌名的文字，让人搜得到）；OneBot 那条路用不到它，忽略即可。
     /// 默认实现返回 false —— 不是每个协议端都支持，上层要能优雅降级。
     /// </summary>
-    Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, CancellationToken ct = default)
+    Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
         => Task.FromResult(false);
 
     /// <summary>
