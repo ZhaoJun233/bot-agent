@@ -1263,6 +1263,11 @@ function renderConversations(force) {
     $("setVoiceSpeed").value = r.voiceSpeed;
     $("setVoiceMaxChars").value = r.voiceMaxChars;
     $("setTtsServiceUrl").value = r.ttsServiceUrl || "";
+    // TTS 密钥：与模型密钥同规矩 —— 只回显掩码，留空 = 不改
+    $("setTtsApiKey").value = "";
+    $("setTtsApiKey").placeholder = r.ttsKeyConfigured
+      ? `${r.ttsKeyMasked}（已设置，留空即不修改）`
+      : "还没配密钥，在这里填一个（云端 TTS 必需）";
     // 官方商用通道（与私域并存）；secret 不回填（它只从环境变量读，面板不接也不存）
     $("setOfficialEnabled").checked = r.officialEnabled === true;
     $("setOfficialAppId").value = r.officialAppId || "";
@@ -1402,6 +1407,8 @@ function renderConversations(force) {
       voiceSpeed: Number($("setVoiceSpeed").value),
       voiceMaxChars: Number($("setVoiceMaxChars").value),
       ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
+      // TTS 密钥（留空 = 不改；服务端只存掩码，不回显）
+      ttsApiKey: $("setTtsApiKey").value.trim(),
       // 官方商用通道（QQ 开放平台）
       officialEnabled: $("setOfficialEnabled").checked,
       officialAppId: $("setOfficialAppId").value.trim(),

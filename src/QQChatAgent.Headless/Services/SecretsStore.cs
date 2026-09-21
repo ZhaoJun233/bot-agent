@@ -38,9 +38,18 @@ public static class SecretsStore
 
     /// <summary>网易云登录态（扫码成功后由面板那条链路存下来）；没有就回退环境变量。</summary>
     public static string? LoadNeteaseCookie() => Load("neteaseCookie");
-
     /// <summary>保存网易云登录态（空值 = 清掉，下次回退环境变量）。</summary>
     public static bool SaveNeteaseCookie(string? cookie) => Save("neteaseCookie", cookie);
+
+    /// <summary>
+    /// 云端 TTS（语音合成）的厂商密钥。
+    /// 与其它密钥同规矩：只存密钥库、面板只回显掩码、不写 settings.json。
+    /// 但多一步：机器人拿到后还要**写给 tts 容器**（它是另一个进程，读不到我们的库）——
+    /// 落盘成文件让容器挂载读取，见 <c>WriteTtsConf</c>。
+    /// </summary>
+    public static string? LoadTtsKey() => Load("ttsKey");
+
+    public static bool SaveTtsKey(string? key) => Save("ttsKey", key);
 
     /// <summary>读一条密钥（没有/读失败返回 null）。</summary>
     public static string? Load(string name)

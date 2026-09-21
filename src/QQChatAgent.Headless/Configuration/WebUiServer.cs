@@ -71,6 +71,10 @@ public sealed partial class WebUiServer : IDisposable
         _agentBridge = agentBridge;
         _healthReports = healthReports;
         _onRestart = onRestart;
+
+        // 启动时把密钥库里那份 TTS 密钥重新写给 tts 容器（容器可能刚被重建、
+        // 或者上次写文件前我们就重启了）——否则面板里存着 key，语音却发不出去。
+        WriteTtsConfToHost();
         _bind = Environment.GetEnvironmentVariable("QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
             ? custom
             : "+";
@@ -1294,6 +1298,64 @@ public sealed partial class WebUiServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// 把云端 TTS 的密钥写给 tts 容器（它是**另一个进程**，读不到我们的 SQLite 密钥库）。
+    ///
+    /// 路径：机器人的 <c>/host/qqchat</c> 就是宿主机部署目录（compose 里常挂），
+    /// 所以写 <c>/host/qqchat/tts-conf/tts.env</c>；tts 容器把同一目录挂在 <c>/conf</c>，
+    /// 每次请求读一次（带 mtime 缓存）——于是**改完面板不用重启任何容器**。
+    /// 本地开发（没有 /host/qqchat）就落在数据目录，拿不到就只记日志（不报错）。
+    /// </summary>
+    private static void WriteTtsConfToHost()
+    {
+        try
+        {
+            var key = SecretsStore.LoadTtsKey() ?? string.Empty;
+            var body =
+                "# 由机器人面板写入（不要手改：改了会被面板覆盖）\n" +
+                $"MINIMAX_API_KEY={key}\n" +
+                $"# 写入时间：{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}\n";
+
+            foreach (var dir in new[] { "/host/qqchat/tts-conf", Path.Combine(AppPaths.RuntimeRoot, "tts-conf") })
+            {
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    var path = Path.Combine(dir, "tts.env");
+                    File.WriteAllText(path, body);
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); // 600：里面是密钥
+                    }
+
+                    return;
+                }
+                catch (Exception)
+                {
+                    // 这个目录写不了就试下一个（宿主机目录可能没挂/只读）
+                }
+            }
+
+            FileLog.Write("Web", "TTS 密钥已存库，但没写成配置文件（宿主机目录不可写）——语音可能仍用环境变量里的 key");
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write("Web", "写 TTS 配置失败（不影响机器人本身）：" + ex.Message);
+        }
+    }
+
+    /// <summary>密钥掩码（只回显前 3 后 2，与其它密钥一致）。</summary>
+    private static string MaskSecret(string? value)
+    {
+        var text = (value ?? string.Empty).Trim();
+        if (text.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return text.Length <= 8 ? "***" : text[..3] + "***" + text[^2..];
+    }
+
     private async Task HandleSettingsSaveAsync(HttpListenerContext context)
     {
         var body = await ReadJsonAsync(context);
@@ -1350,6 +1412,26 @@ public sealed partial class WebUiServer : IDisposable
         if (body["voiceSpeed"] is JsonNode vs) s.VoiceSpeed = Math.Clamp(vs.GetValue<int>(), 50, 200);
         if (body["voiceMaxChars"] is JsonNode vmc) s.VoiceMaxChars = Math.Clamp(vmc.GetValue<int>(), 10, 300);
         if (body["ttsServiceUrl"] is JsonNode tts) s.TtsServiceUrl = tts.GetValue<string>().Trim();
+
+        // 云端 TTS 的厂商密钥（面板可改；存密钥库，只回显掩码）——
+        // 与模型 key 不同的是：它还得多写一份给 tts 容器（另一个进程读不到我们的库），
+        // 见 WriteTtsConfToHost（写 /host/qqchat/tts-conf/tts.env，容器挂载后按请求读）。
+        if (body["ttsApiKey"] is JsonValue ttsKeyValue && ttsKeyValue.TryGetValue<string>(out var rawTtsKey))
+        {
+            var newTtsKey = (rawTtsKey ?? string.Empty).Trim();
+            if (newTtsKey.Length == 0)
+            {
+                SecretsStore.SaveTtsKey(null);
+                FileLog.Write("Web", "面板清空了 TTS 密钥（语音会发不出去，直到重新填）");
+            }
+            else
+            {
+                SecretsStore.SaveTtsKey(newTtsKey);
+                FileLog.Write("Web", "面板更新了 TTS 密钥（已掩码保存，并写给 tts 容器）");
+            }
+
+            WriteTtsConfToHost();
+        }
 
         // ---- 官方商用通道（QQ 开放平台）----
         // 只收行为/标识类字段：secret 是密钥，按项目约定**只从环境变量读**（与 ApiKey 一致），
@@ -1928,6 +2010,8 @@ public sealed partial class WebUiServer : IDisposable
         ["voiceSpeed"] = s.VoiceSpeed,
         ["voiceMaxChars"] = s.VoiceMaxChars,
         ["ttsServiceUrl"] = s.TtsServiceUrl,
+        ["ttsKeyConfigured"] = !string.IsNullOrWhiteSpace(SecretsStore.LoadTtsKey()),
+        ["ttsKeyMasked"] = MaskSecret(SecretsStore.LoadTtsKey()),
 
         // 官方商用通道（QQ 开放平台）：与私域并存，两边会话/上下文/白名单互不串台。
         // secret 不在这里回（密钥只从环境变量读，面板不回显）。

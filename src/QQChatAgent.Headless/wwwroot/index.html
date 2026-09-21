@@ -543,6 +543,10 @@
               <label>TTS 服务地址<span class="hint">云端 TTS 旁路容器，提供 /speak?text=… 返回音频</span></label>
               <input type="text" id="setTtsServiceUrl" maxlength="120" placeholder="http://tts:5000" />
             </div>
+            <div class="field">
+              <label>云端 TTS 密钥<span class="hint">存密钥库、界面只回显掩码；会同时写给 tts 容器 —— 改完立即生效，不用重启任何容器</span></label>
+              <input type="password" id="setTtsApiKey" maxlength="200" placeholder="还没配密钥，在这里填一个（留空 = 不改）" autocomplete="off" />
+            </div>
           </div>
 
           <div class="sticker-actions">

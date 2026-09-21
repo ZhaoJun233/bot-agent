@@ -87,6 +87,46 @@ def log(msg: str) -> None:
     print(f"[tts] {msg}", flush=True)
 
 
+# ── 面板写过来的密钥（机器人存自己的库，同时落一份文件给我们读）──
+# 为什么不用环境变量：改面板就得重建容器；读文件 + mtime 缓存 = 改完立即生效。
+CONF_PATH = os.environ.get("TTS_CONF", "/conf/tts.env")
+_conf_cache = {"mtime": 0.0, "values": {}}
+
+
+def conf_values() -> dict:
+    """读 tts.env（不存在就空），mtime 变了才重读。"""
+    try:
+        st = os.stat(CONF_PATH)
+        if st.st_mtime == _conf_cache["mtime"]:
+            return _conf_cache["values"]
+        values = {}
+        with open(CONF_PATH, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                values[k.strip()] = v.strip()
+        _conf_cache["mtime"] = st.st_mtime
+        _conf_cache["values"] = values
+        if values:
+            log(f"读到了面板写来的 TTS 配置（{len(values)} 项，{CONF_PATH}）")
+        return values
+    except FileNotFoundError:
+        _conf_cache["mtime"] = 0.0
+        _conf_cache["values"] = {}
+        return {}
+    except Exception as exc:
+        log(f"读 {CONF_PATH} 失败（忽略，继续用环境变量）：{exc}")
+        return _conf_cache["values"]
+
+
+def api_key() -> str:
+    """密钥优先用面板写的那份（空值不算），否则回落环境变量。"""
+    from_conf = (conf_values().get("MINIMAX_API_KEY") or "").strip()
+    return from_conf or MINIMAX_KEY
+
+
 def mask(secret: str) -> str:
     return "(未配置)" if not secret else secret[:3] + "***" + secret[-2:] if len(secret) > 8 else "***"
 
@@ -174,8 +214,9 @@ def http_bytes(url: str, payload: dict, headers: dict, timeout: float) -> bytes:
 
 def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
     """MiniMax T2A v2：返回的音频在 data.audio 里，是 **hex**（不是 base64）。"""
-    if not MINIMAX_KEY:
-        raise RuntimeError("MINIMAX_API_KEY 没配（云端 TTS 需要一个 key）")
+    key = api_key()
+    if not key:
+        raise RuntimeError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 MINIMAX_API_KEY）")
 
     # silk 要的是 16k 单声道 PCM，直接让云端吐 pcm，省掉一次重采样
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
@@ -202,7 +243,7 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
         url += "?GroupId=" + urllib.parse.quote(MINIMAX_GROUP_ID)
 
     data = http_json(url, payload, {
-        "Authorization": "Bearer " + MINIMAX_KEY,
+        "Authorization": "Bearer " + key,
         "Content-Type": "application/json",
     }, TIMEOUT)
 
@@ -219,8 +260,9 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
 
 def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
     """OpenAI 兼容 /v1/audio/speech：直接返回二进制音频。"""
-    if not OPENAI_KEY:
-        raise RuntimeError("OPENAI_TTS_API_KEY 没配")
+    key = api_key()
+    if not key:
+        raise RuntimeError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 OPENAI_TTS_API_KEY）")
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
     payload = {
         "model": OPENAI_MODEL,
@@ -230,7 +272,7 @@ def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
         "speed": round(max(0.25, min(4.0, speed)), 2),
     }
     return http_bytes(f"{OPENAI_BASE}/audio/speech", payload, {
-        "Authorization": "Bearer " + OPENAI_KEY,
+        "Authorization": "Bearer " + key,
         "Content-Type": "application/json",
         "Accept": "application/octet-stream",
     }, TIMEOUT)
@@ -299,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                 "model": MINIMAX_MODEL if PROVIDER != "openai" else OPENAI_MODEL,
                 "format": DEFAULT_FORMAT,
                 "cache": CACHE_ENABLED,
-                "key": mask(MINIMAX_KEY if PROVIDER != "openai" else OPENAI_KEY),
+                "key": mask(api_key()),
                 "silk": bool(shutil.which(SILK_CMD)),
             })
         if path != "/speak":
@@ -374,13 +416,13 @@ def normalize_voice(voice: str):
 def main() -> None:
     os.makedirs(CACHE_DIR, exist_ok=True)
     log(f"启动：provider={PROVIDER} model={MINIMAX_MODEL if PROVIDER != 'openai' else OPENAI_MODEL} "
-        f"voice={DEFAULT_VOICE} key={mask(MINIMAX_KEY if PROVIDER != 'openai' else OPENAI_KEY)} "
+        f"voice={DEFAULT_VOICE} key={mask(api_key())} "
         f"format={DEFAULT_FORMAT} 端口={PORT} 缓存={CACHE_DIR}({CACHE_MAX_MB}MB) "
         f"silk编码器={'有' if shutil.which(SILK_CMD) else '无'}")
     if PROVIDER == "openai" and not OPENAI_KEY:
         log("警告：TTS_PROVIDER=openai 但 OPENAI_TTS_API_KEY 没配，/speak 会失败")
-    if PROVIDER != "openai" and not MINIMAX_KEY:
-        log("警告：MINIMAX_API_KEY 没配，/speak 会失败（面板「试听一句」会直接告诉你原因）")
+    if PROVIDER != "openai" and not api_key():
+        log("警告：还没配 TTS 密钥，/speak 会失败（面板「语音消息」里填，或给容器 MINIMAX_API_KEY）")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
