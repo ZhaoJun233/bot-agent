@@ -1413,11 +1413,10 @@ function renderConversations(force) {
       voiceMaxChars: Number($("setVoiceMaxChars").value),
       voiceEagerness: Number($("setVoiceEagerness").value),
       ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
-      // 留空 = **不改**：不能把空字符串发上去 —— 服务端把“空”当成“清空密钥”，
-      // 结果是“改个白名单就把 TTS key 抹了”（2026-09-21 真实踩到：语音突然发不出，retcode 1200）。
-      // 要清空请用面板里的「清空 TTS 密钥」按钮（它发 {clearTtsApiKey:true}）。
-      // TTS 密钥：**只在填了内容时才发**（留空 = 保持原样，见上）
-      ...($("setTtsApiKey").value.trim() ? { ttsApiKey: $("setTtsApiKey").value.trim() } : {}),
+      // 留空 = **不改**（服务端把空字符串当“保持原样”）。
+      // 早期版本把空当“清空”，真实踩到：改个白名单就把 TTS key 抹了 → 语音全部失败（retcode 1200）。
+      // TTS 密钥：字段照发（与表单一一对应），但**空 = 不改**（服务端按这个口径处理）
+      ttsApiKey: $("setTtsApiKey").value.trim(),
       ttsProvider: $("setTtsProvider").value,
       ttsApiBase: $("setTtsApiBase").value.trim(),
       ttsModel: $("setTtsModel").value.trim(),

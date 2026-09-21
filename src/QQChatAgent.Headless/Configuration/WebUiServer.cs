@@ -1458,23 +1458,21 @@ public sealed partial class WebUiServer : IDisposable
         }
 
         // 云端 TTS 的厂商密钥（面板可改；存密钥库，只回显掩码）——
-        // 与模型 key 不同的是：它还得多写一份给 tts 容器（另一个进程读不到我们的库），
-        // 见 WriteTtsConfToHost（写 /host/qqchat/tts-conf/tts.env，容器挂载后按请求读）。
-        if (body["ttsApiKey"] is JsonValue ttsKeyValue && ttsKeyValue.TryGetValue<string>(out var rawTtsKey))
+        // ⚠ **空 = 不改**：面板每次保存都会把这个字段（可能是空的）一起发上来，
+        // 早期版本把空当“清空”，结果“改个白名单就把 key 抹了”→ 语音全失败（retcode 1200）。
+        // 要清空得显式说 clearTtsApiKey=true。
+        if (body["clearTtsApiKey"] is JsonValue clearNode && clearNode.TryGetValue<bool>(out var clear) && clear)
         {
-            var newTtsKey = (rawTtsKey ?? string.Empty).Trim();
-            if (newTtsKey.Length == 0)
-            {
-                SecretsStore.SaveTtsKey(null);
-                FileLog.Write("Web", "面板清空了 TTS 密钥（语音会发不出去，直到重新填）");
-            }
-            else
-            {
-                SecretsStore.SaveTtsKey(newTtsKey);
-                FileLog.Write("Web", "面板更新了 TTS 密钥（已掩码保存，并写给 tts 容器）");
-            }
-
+            SecretsStore.SaveTtsKey(null);
             WriteTtsConfToHost();
+            FileLog.Write("Web", "面板显式清空了 TTS 密钥（语音会发不出去，直到重新填）");
+        }
+        else if (body["ttsApiKey"] is JsonValue ttsKeyValue && ttsKeyValue.TryGetValue<string>(out var rawTtsKey)
+                 && !string.IsNullOrWhiteSpace(rawTtsKey))
+        {
+            SecretsStore.SaveTtsKey(rawTtsKey.Trim());
+            WriteTtsConfToHost();
+            FileLog.Write("Web", "面板更新了 TTS 密钥（已掩码保存，并写给 tts 容器）");
         }
 
         if (ttsConfDirty)
