@@ -598,7 +598,7 @@ public sealed class HealthReportService : IDisposable
 
     // ══════════════ 小工具 ══════════════
 
-    /// <summary>收件人：QQ 号，逗号/空格/顿号/分号/换行分隔（顺手容忍 “QQ:123” 这类写法）。</summary>
+    /// <summary>收件人：私域真 QQ 号，或**官方通道的别名号**，逗号/空格/顿号/分号/换行分隔（顺手容忍 “QQ:123” 这类写法）。</summary>
     public static List<long> ParseTargets(string? raw)
     {
         var list = new List<long>();
@@ -613,7 +613,10 @@ public sealed class HealthReportService : IDisposable
         foreach (var piece in pieces)
         {
             var digits = new string(piece.Where(char.IsDigit).ToArray());
-            if (digits.Length is >= 5 and <= 12 &&
+            // 5~16 位：私域真号 10~11 位；**官方通道的别名号是 8 开头 16 位**（Channels.AliasBase 起步）。
+                // 以前这里卡在 `<= 12` ✗ —— 别名号会被**静默丢掉**：面板上填了也保存了，却永远收不到日报。
+                // （2026-09-21 号主问“健康日报对官方 bot 适配了吗”，查出来就是这一行。）
+                if (digits.Length is >= 5 and <= 16 &&
                 long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var id) &&
                 id > 0 && !list.Contains(id))
             {

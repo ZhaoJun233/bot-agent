@@ -663,7 +663,7 @@
               <input type="password" id="setOfficialAppSecret" maxlength="200" placeholder="还没配，在这里填一个（留空 = 不改）" autocomplete="off" />
             </div>
             <div class="field">
-              <label>环境<span class="hint">沙箱只能收/发沙箱群与沙箱单聊（调试用）</span></label>
+              <label>环境<span class="hint">沙箱只能收/发<b>沙箱群与沙箱单聊</b>（调试用）—— <b>正式群里 @ 它不会有任何反应</b>：平台不推送，日志里也不会出现任何行。要在正式群用，把这里取消勾选后重启</span></label>
               <label class="switch-row"><input type="checkbox" id="setOfficialSandbox" /><span class="switch"></span><span>用沙箱环境</span></label>
             </div>
             <div class="field">
@@ -985,10 +985,13 @@
         <div class="card">
           <div class="card-head">
             <h3>服务器健康日报</h3>
-            <p>每天在指定时刻（<b>北京时间</b>）给你私聊发一条机器人 / 服务器状态：QQ 在线与协议端连接、
+            <p>每天在指定时刻（<b>北京时间</b>）发一条机器人 / 服务器状态：QQ 在线与协议端连接、
               模型接口通不通、内存/负载/磁盘、日志大小与近一小时告警。
-              <b>整条链路只用机器人自己</b>（自己的定时器 → 自己采集 → OneBot 私聊），不经过本机 agent ——
+              <b>整条链路只用机器人自己</b>（自己的定时器 → 自己采集 → 按收件人所在通道发出去），不经过本机 agent ——
               你那台电脑关着也照样收得到。</p>
+        <p class="path-hint">收件人可以是<b>私域真号</b>，也可以是<b>官方通道的别名号</b>（两条通道都适配了）；
+          走官方那边属于平台的「主动消息」，算平台额度（上限很宽松，但别拿去刷屏）。
+          <b>哪个通道的「对话总开关」关着，就不往哪条通道发</b> —— 日报不会绕过总开关。</p>
           </div>
 
           <label class="switch-row">
@@ -1003,8 +1006,9 @@
               <input type="time" id="setHealthReportTime" />
             </div>
             <div class="field">
-              <label>推给谁（QQ 号）<span class="hint">逗号分隔；只走私聊，填群号也不会发到群里</span></label>
-              <input type="text" id="setHealthReportTargets" placeholder="例如 10001,20002" />
+              <label>推给谁<span class="hint">逗号分隔；只走私聊，填群号也不会发到群里。<b>官方通道的收件人填别名号</b>
+            （8 开头的 16 位号，在上面的官方卡片「官方通道见过的会话」里能复制）</span></label>
+              <input type="text" id="setHealthReportTargets" placeholder="例如 10001,8000002309845034" />
             </div>
           </div>
 
