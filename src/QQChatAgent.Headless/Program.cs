@@ -95,6 +95,14 @@ public static class Program
             source = new ChannelRouter(new IQqChatSource[] { gateway, official }, msg => FileLog.Write("Channel", msg));
             FileLog.Write("Channel", $"官方商用通道已启用（appid={settings.OfficialAppId}，" +
                                    $"{(settings.OfficialSandbox ? "沙箱" : "正式")}环境，与私域通道隔离）");
+            if (settings.OfficialSandbox)
+            {
+                // 沙箱环境**只**推「沙箱群 / 沙箱单聊」的事件 —— 正式群里 @ 它一条都不会到，
+                // 而且日志里什么都不会出现（2026-09-21 号主卡在这里：“艾特了日志根本不显示”）。
+                // 所以这句话要说到最响：它解释的正是“看起来啥都没发生”。
+                FileLog.Write("Channel", "⚠ 官方通道跑在**沙箱环境**：只能收到开放平台「沙箱配置」里那些沙箱群/沙箱单聊的事件；"
+                                        + "正式群里 @ 机器人不会被推送，日志里也不会有任何行。要在正式群用，取消面板「用沙箱环境」并重启。");
+            }
         }
         else if (settings.OfficialEnabled)
         {
