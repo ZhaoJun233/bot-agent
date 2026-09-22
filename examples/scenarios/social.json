@@ -1,0 +1,18 @@
+{
+  "_comment": "多人交流（social）：允许有限度的参与与额外动作，并打开**人工审批**（默认只覆盖固定假工具）。合成演示配置，**不含任何密钥**。",
+  "_howToApply": "改完在面板点保存，等价于 POST /api/settings。approvalApprovers 留空 = 只认群里的群主/管理员。",
+  "scenarioPreset": "social",
+  "enableApprovals": true,
+  "approvalApprovers": "",
+  "suitabilityThreshold": 35,
+  "groupCooldownSeconds": 15,
+  "privateCooldownSeconds": 10,
+  "idleFallbackSeconds": 30,
+  "splitReplies": true,
+  "maxContextMessages": 200,
+  "enableWebSearch": true,
+  "enableMusic": true,
+  "enableVoice": false,
+  "enableStickers": true,
+  "enablePoke": true
+}

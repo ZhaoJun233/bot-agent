@@ -85,7 +85,16 @@ public static class BotConfig
             [nameof(AppSettings.MaxTokens)] = new[] { "QQCHAT_MAX_TOKENS" },
             [nameof(AppSettings.PrivateCooldownSeconds)] = new[] { "QQCHAT_PRIVATE_COOLDOWN" },
             [nameof(AppSettings.GroupCooldownSeconds)] = new[] { "QQCHAT_GROUP_COOLDOWN" },
-            [nameof(AppSettings.IdleFallbackSeconds)] = new[] { "QQCHAT_IDLE_FALLBACK" },
+    [nameof(AppSettings.IdleFallbackSeconds)] = new[] { "QQCHAT_IDLE_FALLBACK" },
+    // 参与状态机的上限（P1）。默认值 = 状态机自己的默认值；面板值压过 env，两处都会被服务端钳制。
+    [nameof(AppSettings.ParticipationMaxConsecutiveReplies)] = new[] { "QQCHAT_PARTICIPATION_MAX_REPLIES" },
+    [nameof(AppSettings.ParticipationCooldownSeconds)] = new[] { "QQCHAT_PARTICIPATION_COOLDOWN" },
+    [nameof(AppSettings.ParticipationProbingMaxReplies)] = new[] { "QQCHAT_PARTICIPATION_PROBING" },
+    [nameof(AppSettings.ParticipationMaxActiveLifetimeSeconds)] = new[] { "QQCHAT_PARTICIPATION_ACTIVE_LIFE" },
+    [nameof(AppSettings.ParticipationMaxExitingLifetimeSeconds)] = new[] { "QQCHAT_PARTICIPATION_EXITING_LIFE" },
+    // 参与闸门 / 允许提问（P1、P2）：都**默认关**，打开才会改变行为
+    [nameof(AppSettings.EnableParticipationGating)] = new[] { "QQCHAT_PARTICIPATION_GATING" },
+    [nameof(AppSettings.EnableQuestions)] = new[] { "QQCHAT_QUESTIONS" },
             [nameof(AppSettings.SplitReplies)] = new[] { "QQCHAT_SPLIT_REPLIES" },
       [nameof(AppSettings.EnableProactive)] = new[] { "QQCHAT_PROACTIVE" },
       [nameof(AppSettings.ProactiveCooldownSeconds)] = new[] { "QQCHAT_PROACTIVE_COOLDOWN" },
@@ -219,7 +228,14 @@ public static class BotConfig
         s.MaxTokens = Int("QQCHAT_MAX_TOKENS") ?? s.MaxTokens;
         s.PrivateCooldownSeconds = Int("QQCHAT_PRIVATE_COOLDOWN") ?? s.PrivateCooldownSeconds;
         s.GroupCooldownSeconds = Int("QQCHAT_GROUP_COOLDOWN") ?? s.GroupCooldownSeconds;
-        s.IdleFallbackSeconds = Int("QQCHAT_IDLE_FALLBACK") ?? s.IdleFallbackSeconds;
+    s.IdleFallbackSeconds = Int("QQCHAT_IDLE_FALLBACK") ?? s.IdleFallbackSeconds;
+    s.ParticipationMaxConsecutiveReplies = Int("QQCHAT_PARTICIPATION_MAX_REPLIES") ?? s.ParticipationMaxConsecutiveReplies;
+    s.ParticipationCooldownSeconds = Int("QQCHAT_PARTICIPATION_COOLDOWN") ?? s.ParticipationCooldownSeconds;
+    s.ParticipationProbingMaxReplies = Int("QQCHAT_PARTICIPATION_PROBING") ?? s.ParticipationProbingMaxReplies;
+    s.ParticipationMaxActiveLifetimeSeconds = Int("QQCHAT_PARTICIPATION_ACTIVE_LIFE") ?? s.ParticipationMaxActiveLifetimeSeconds;
+    s.ParticipationMaxExitingLifetimeSeconds = Int("QQCHAT_PARTICIPATION_EXITING_LIFE") ?? s.ParticipationMaxExitingLifetimeSeconds;
+    s.EnableParticipationGating = Bool("QQCHAT_PARTICIPATION_GATING") ?? s.EnableParticipationGating;
+    s.EnableQuestions = Bool("QQCHAT_QUESTIONS") ?? s.EnableQuestions;
         s.SplitReplies = Bool("QQCHAT_SPLIT_REPLIES") ?? s.SplitReplies;
         s.EnableProactive = Bool("QQCHAT_PROACTIVE") ?? s.EnableProactive;
         s.ProactiveCooldownSeconds = Int("QQCHAT_PROACTIVE_COOLDOWN") ?? s.ProactiveCooldownSeconds;
@@ -406,6 +422,13 @@ public static class BotConfig
         s.QuickLoginUin = s.QuickLoginUin.Trim();
         s.AiDesire = Math.Clamp(s.AiDesire, 0, 100);
         s.SuitabilityThreshold = Math.Clamp(s.SuitabilityThreshold, 0, 100);
+        // 参与状态机的上限（P1）：env / 老配置里的值同样要钳 —— 这是服务端那道硬边界，
+        // 面板与 env 都只是“愿望”。（状态机内部还会再过一次 Clamped()，两层都不省。）
+        s.ParticipationMaxConsecutiveReplies = Math.Clamp(s.ParticipationMaxConsecutiveReplies, 1, 10);
+        s.ParticipationCooldownSeconds = Math.Clamp(s.ParticipationCooldownSeconds, 0, 600);
+        s.ParticipationProbingMaxReplies = Math.Clamp(s.ParticipationProbingMaxReplies, 1, 3);
+        s.ParticipationMaxActiveLifetimeSeconds = Math.Clamp(s.ParticipationMaxActiveLifetimeSeconds, 30, 3600);
+        s.ParticipationMaxExitingLifetimeSeconds = Math.Clamp(s.ParticipationMaxExitingLifetimeSeconds, 10, 3600);
         s.MaxTokens = s.MaxTokens > 0 ? s.MaxTokens : 2048;
         s.MaxContextMessages = Math.Clamp(s.MaxContextMessages, 10, 1000);
         s.ProfileLookupCount = Math.Clamp(s.ProfileLookupCount, 0, 50);

@@ -1,0 +1,20 @@
+{
+  "_comment": "按需参与（on-demand）：只在明确被 @ 或被回复时说话，工具面收到最小。合成演示配置，**不含任何密钥**。",
+  "_howToApply": "改完在面板点保存，等价于 POST /api/settings（面板值压过 env）。密钥/模型地址不在这里 —— 演示一律用假模型。enableParticipationGating 打开后，没点名的普通消息会被服务端闸门拦下（不叫模型）。",
+  "scenarioPreset": "on-demand",
+  "enableParticipationGating": true,
+  "participationMaxConsecutiveReplies": 3,
+  "participationCooldownSeconds": 60,
+  "enableApprovals": false,
+  "suitabilityThreshold": 75,
+  "groupCooldownSeconds": 60,
+  "privateCooldownSeconds": 30,
+  "idleFallbackSeconds": 0,
+  "splitReplies": true,
+  "maxContextMessages": 120,
+  "enableWebSearch": false,
+  "enableMusic": false,
+  "enableVoice": false,
+  "enableStickers": false,
+  "enablePoke": false
+}

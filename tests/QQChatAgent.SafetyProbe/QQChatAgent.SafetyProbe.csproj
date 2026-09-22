@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    工程增强（V3）的确定性机制探针：P2 决策/静默 + P4 QQ 纯文本呈现（§8.4 / §10.3）。
+    与 P1 的 ParticipationProbe 同样的口径：ProjectReference 主工程、纯断言、
+    不启动机器人、不连网、不写数据目录、不发任何消息。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>QQChatAgent.SafetyProbe</AssemblyName>
+    <RootNamespace>QQChatAgent.SafetyProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QQChatAgent.Headless\QQChatAgent.Headless.csproj" />
+  </ItemGroup>
+
+</Project>

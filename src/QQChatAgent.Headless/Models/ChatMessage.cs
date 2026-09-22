@@ -29,7 +29,11 @@ public sealed class ChatMessage
     /// 为什么单独记：被点名却沉默看着像坏了（阈值是给“要不要插嘴”用的，不该压掉直接问你的话）；
     /// 引用也要优先挂给点名的那个人 —— 否则群里看到的是“机器人在回别人”（号主 2026-09-16 反馈）。
     /// </summary>
-    public bool DirectToBot { get; init; }
+    /// <summary>
+    /// 这条是不是“在跟机器人说话”（@ 了它 / 引用了它的话）。默认 init；
+    /// 但**引用补查**可能在消息落库之后才从协议端确认“引的是机器人自己”，那时需要回填（V3 §8.3）。
+    /// </summary>
+    public bool DirectToBot { get; set; }
 
     /// <summary>QQ 原始消息 ID（用于历史去重）。</summary>
     public long? QqMessageId { get; init; }

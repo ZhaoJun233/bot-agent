@@ -374,6 +374,12 @@ public sealed class BotAgent : IDisposable
         mutate(_settings);
         ApplyMoodTtl();
 
+        // 能力策略快照：改完设置立刻按新开关重建（正在处理的那一轮仍用旧快照，V3 §5.3）
+        RebuildCapabilities();
+
+        // 参与状态机的上下限同样跟随设置（状态保留、只换上限）
+        RebuildParticipation();
+
         // 白名单重新解析并清理已有会话
         RebuildWhitelist();
         PruneNonWhitelisted();
@@ -798,6 +804,7 @@ public sealed class BotAgent : IDisposable
 
         _replyCooldown.TryRemove(sourceKey, out _);
         _historyRequested.TryRemove(sourceKey, out _);
+        ForgetConversationState(sourceKey);   // 参与台账 / 本轮工具计数：会话没了就别留着
         DropPending(sourceKey); // 清待回复队列：否则在途回复还会发到 QQ，本地记录却已成孤儿
         // 库里的会话与消息要**显式删**：平时的保存只 upsert，不删任何东西
         _store.DeleteConversation(sourceKey);
@@ -1424,6 +1431,10 @@ public sealed class BotAgent : IDisposable
         {
             var label = Channels.Tag(msg.Channel) + (msg.IsGroup ? " 群 " + msg.GroupId : " 私聊 " + msg.UserId);
             LogThrottled("chanoff:" + Channels.ChannelOf(msg.Channel), $"忽略（{Channels.Display(msg.Channel)}通道的总开关是关的）: {label}");
+            // P1（只观测）：这是“收到了但被服务端拦下” → 对状态机是 Silent 事件（**不改判定**）
+            ObserveParticipation(
+                Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId),
+                Services.Participation.ParticipationEvent.Silent);
             return;
         }
 
@@ -1440,11 +1451,23 @@ public sealed class BotAgent : IDisposable
                     : $"官方私聊名单{WhitelistSummary(_officialWhitelistAllPrivates, _officialWhitelistPrivates)}")
                 : (msg.IsGroup ? "私域群名单" : "私域私聊名单");
             LogThrottled("ignore:" + label, $"忽略（不在白名单）: [{tag}] {label}（{listState}）");
+            // P1（只观测）：不在白名单 = 不参与这个话题 → Silent（同样不改判定）
+            ObserveParticipation(
+                Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId),
+                Services.Participation.ParticipationEvent.Silent);
             return;
         }
 
         // 机器人自己发的消息不入库（协议端可能回显）
         if (_selfId != 0 && msg.UserId == _selfId)
+        {
+            return;
+        }
+
+        // P3 审批（V3 §9.4，**默认关**）：群主/管理员（或面板点名的人）在**原会话**里回复
+        // 「同意 编号」/「拒绝 编号」才算数 —— 身份、会话、有效期、一次性、策略版本全在服务端核。
+        // 注意：解析不出“动词 + 编号”这种形状的消息**不拦截**，照旧走普通聊天链路。
+        if (_settings.EnableApprovals && TryHandleApprovalCommand(msg))
         {
             return;
         }
@@ -1519,17 +1542,49 @@ public sealed class BotAgent : IDisposable
             DirectToBot = msg.MentionedSelf || quotedIsSelf
         };
         conversation.Append(appended);
-        conversation.HasPendingReply = !asideOnly;   // 纯旁白不欠一次回复（也不该被静默兜底抳回来）
+
+        // P1 观测锚点 + 闸门（V3 §7.3）：把「这条消息是什么性质」喂给状态机，
+        // 并（仅在面板打开闸门时）用它的结论决定**这一轮要不要参与**。
+        // 纯旁白不喂 —— 旁白不是对谁说的话（与 HasPendingReply 同一口径），也就没判过。
+        // 默认关时 gate.Proceed 恒为 true、原因码恒为 gating_off → 与改造前逐字一致（V3 §5.3）。
+        var gate = Services.Participation.ParticipationGate.Decide(
+            _settings.EnableParticipationGating,
+            asideOnly
+                ? null
+                : ObserveParticipation(
+                    conversation.SourceKey,
+                    Services.Participation.ParticipationEvents.ClassifyInbound(msg.IsGroup, appended.DirectToBot)));
+
+        // 被闸门拦下就**不欠这次回复** —— 否则空闲兜底过一会儿又会补一次，等于没拦。
+        conversation.HasPendingReply = !asideOnly && gate.Proceed;
         Touch(conversation);
         MessageAdded?.Invoke(conversation.SourceKey, appended);
         Save();
 
+        // 提问路径：有人应了一声就把那条待答问题标记为已答（一次性）。
+        // **放在闸门之前**：「有人答了」是一个**事实**，与「机器人要不要回话」是两件事 ——
+        // 闸门只该决定后者；否则一条已经有人答过的问题会一直挂在台账上（等它自然过期）。
+        // 旁白除外：旁白不是“回答”，不能拿来消费提问。
+        if (_settings.EnableQuestions && !asideOnly)
+        {
+            TryMarkQuestionAnswered(conversation, msg);
+        }
+
         // 引用的原文本地一条都对不上（重启前的旧消息 / 早被清出上下文）→ 后台去协议端按 id 查一次，
         // 查到就把真实原文补写进这条消息。为什么是“事后补”而不是发之前查：网关是在接收循环里
         // 同步调我们的（GetAwaiter().GetResult()），在这里等协议端回包会死锁到超时。
+        //
+        // ⚠ 排队必须放在闸门 return **之前**：否则“只引用了机器人旧消息、又没 @”的轮次会被闸门
+        // 按无关消息拦掉，补查永远没机会证明它其实是在跟机器人说话（V3 §7.3 / §8.3）。
         if (!quotedResolved && msg.ReplyToMessageId is long unresolvedId)
         {
-            EnrichQuotedFromProtocolAsync(conversation, appended, unresolvedId);
+            EnrichQuotedFromProtocolAsync(conversation, appended, unresolvedId, msg.IsGroup, retriggerIfSelf: !gate.Proceed);
+        }
+
+        if (!gate.Proceed)
+        {
+            EmitLog($"[参与] 闸门拦下这一轮（{gate.ReasonCode}，state={gate.State}）: {conversation.Name}");
+            return;
         }
         // 人物档案（帮助模型认识群友/好友）
         var botUin = _settings.NormalizedUin;
@@ -1616,6 +1671,13 @@ public sealed class BotAgent : IDisposable
 
         if (!asideOnly && musicShares is not { Count: > 0 })
         {
+            // 新的“人”发言 = 一次新的运行窗口：单次运行的工具体预算从 0 起算（V3 §9.2）。
+            // 机器人自己发的消息不算（否则它每说一句就把自己这一轮的预算洗白了）。
+            if (!isSelfSender)
+            {
+                _toolBudget.Reset(conversation.SourceKey);
+            }
+
             // 被限流挡下也不丢：RequestReply 会记一笔，这一轮说完补一次评估（见该方法注释）
             RequestReply(conversation, msg.MessageId > 0 ? msg.MessageId : null, directInWindow: appended.DirectToBot);
         }
@@ -2997,6 +3059,8 @@ public sealed class BotAgent : IDisposable
                 if (!result.HasContent)
                 {
                     EmitLog($"[Search] 没搜到「{query}」：{result.Error}");
+                    // P1 观测：模型点名的工具没拿到东西 → 记一次失败（只降级不升级）
+                    ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                 }
 
                 // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
@@ -3005,6 +3069,7 @@ public sealed class BotAgent : IDisposable
             catch (Exception ex)
             {
                 EmitLog($"[Search] 搜「{query}」失败: {ex.Message}");
+                ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
             }
         });
     }
@@ -3025,12 +3090,18 @@ public sealed class BotAgent : IDisposable
 
                 _searchNotes.AddOrUpdate(key, note, (_, old) => old + "\n\n" + note);
                 EmitLog(text is null ? $"[Search] 读页面失败：{error}" : $"[Search] 已读到页面正文（{text.Length} 字）");
+                if (text is null)
+                {
+                    // P1 观测：读页面失败（工具失败 → 只降级）
+                    ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
+                }
 
                 RequestReply(conversation, null);
             }
             catch (Exception ex)
             {
                 EmitLog($"[Search] 读页面失败: {ex.Message}");
+                ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
             }
         });
     }
@@ -3248,8 +3319,442 @@ public sealed class BotAgent : IDisposable
     /// <summary>每个会话最近一次发语音的时间（频率门：语音是“稀罕事”，不能每句都发）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _lastVoice = new();
 
+    /// <summary>
+    /// P1 会话参与状态台账（见 Services/Participation）。
+    /// 状态机被喂事件、把状态变化写进日志；**要不要回复**默认仍由原有逻辑
+    /// （白名单 / 总开关 / 自评阈值 / @ 破例）决定 —— gating 默认关，V3 §5.3 兼容红线。
+    /// 打开 <c>EnableParticipationGating</c> 之后，入站那条锚点的结论会真的被用来拦
+    /// （见 <see cref="Services.Participation.ParticipationGate" />，只收不放）。
+    /// </summary>
+    private readonly Services.Participation.ParticipationRegistry _participation =
+        new(new Services.Participation.ParticipationPolicy());
+
+    /// <summary>
+    /// 从设置里取参与状态机的上限（V3 §7.3：**上下限必须由服务端校验**）。
+    /// 设置里的值只是“愿望”，真正的硬上限在 <c>ParticipationPolicy.Clamped()</c> 里 ——
+    /// 面板里填 999 也只会被钳到上限（连续回复 10 / 冷却 600s / 试探 3 / 活性命 3600s）。
+    /// </summary>
+    private Services.Participation.ParticipationPolicy BuildParticipationPolicy()
+        => new Services.Participation.ParticipationPolicy(
+            MaxConsecutiveReplies: _settings.ParticipationMaxConsecutiveReplies,
+            CooldownSeconds: _settings.ParticipationCooldownSeconds,
+            ProbingMaxReplies: _settings.ParticipationProbingMaxReplies,
+            MaxActiveLifetimeSeconds: _settings.ParticipationMaxActiveLifetimeSeconds,
+            MaxExitingLifetimeSeconds: _settings.ParticipationMaxExitingLifetimeSeconds).Clamped();
+
+    /// <summary>设置变了 → 把新的上限发给台账（状态保留、只换上限；只影响后续处理）。</summary>
+    private void RebuildParticipation()
+    {
+        var policy = BuildParticipationPolicy();
+        _participation.UpdatePolicy(policy);
+
+        // 只在**策略版本**（由调用方给）与能力快照无关时打一行，便于排查“改了参数到底生效没”
+        EmitLog($"[参与] 策略已更新：连续 ≤{policy.MaxConsecutiveReplies} / 冷却 {policy.CooldownSeconds}s"
+                + $" / 试探 ≤{policy.ProbingMaxReplies} / 活性命 {policy.MaxActiveLifetimeSeconds}s"
+                + $"（台账 {_participation.Count} 个会话，本轮不改判定）");
+    }
+
+    /// <summary>
+    /// P3 普通群聊的能力闸门（V3 §9.1 / §9.3）：服务端登记表 + 策略快照。
+    /// 惰性构建；改设置后由 <see cref="RebuildCapabilities" /> 刷新（热更新只影响后续处理）。
+    /// </summary>
+    private Services.Permissions.ChatCapabilitySet? _capabilities;
+
+    /// <summary>当前策略快照（惰性建一次；之后只在设置变更时由 <see cref="RebuildCapabilities" /> 换）。</summary>
+    private Services.Permissions.ChatCapabilitySet Capabilities
+    {
+        get
+        {
+            if (_capabilities is null)
+            {
+                RebuildCapabilities();
+            }
+
+            return _capabilities!;
+        }
+    }
+
+    /// <summary>
+    /// 策略版本：**只在能力/策略真的变了**时才 +1（V3 §9.4：审批绑定原策略版本）。
+    /// 用途：面板保存一次无关紧要的设置，不该把在途的审批单弄失效；
+    /// 而真的改了场景/开关（能力变了）时，旧策略下批出来的单子必须作废。
+    /// </summary>
+    private int _capabilityVersion = 1;
+
+    private string _capabilityFingerprint = string.Empty;
+
+    private Services.Permissions.ChatCapabilitySet BuildCapabilities()
+        => Services.Permissions.ChatCapabilitySet.FromSwitches(
+            enableWebSearch: _settings.EnableWebSearch,
+            enableMusic: _settings.EnableMusic,
+            enableVoice: _settings.EnableVoice,
+            enableStickers: _settings.EnableStickers,
+            enablePoke: _settings.EnablePoke,
+            scenario: _settings.ScenarioPreset,
+            policyVersion: _capabilityVersion,
+            approvalsEnabled: _settings.EnableApprovals,
+            questionsEnabled: _settings.EnableQuestions);
+
+    /// <summary>
+    /// 设置变了 → 重建策略快照（在 <see cref="ApplyRuntimeSettings" /> 里调用）。
+    /// 先按当前版本算一次，指纹变了才升版本再算一次 —— 版本只在**能力真的变了**时前进。
+    /// </summary>
+    private void RebuildCapabilities()
+    {
+        var candidate = BuildCapabilities();
+        if (_capabilityFingerprint.Length > 0 && candidate.PolicyFingerprint != _capabilityFingerprint)
+        {
+            _capabilityVersion++;
+            candidate = BuildCapabilities();
+            EmitLog($"[能力] 策略已变更 → 版本 v{_capabilityVersion}（{candidate.Describe()}）");
+        }
+
+        _capabilityFingerprint = candidate.PolicyFingerprint;
+        _capabilities = candidate;
+    }
+
+    /// <summary>
+    /// 审批台账（V3 §9.4）。**只在 <c>EnableApprovals</c> 打开时才会被用到**；
+    /// 纯内存、不落库（重启即清空 —— 待批单子自动作废，符合“短有效期”的意图）。
+    /// </summary>
+    private readonly Services.Permissions.ApprovalStore _approvals = new();
+
+    /// <summary>审批人名单（面板里点名的人；留空 = 只认群里的 owner/admin）。</summary>
+    private HashSet<string> ApprovalApprovers()
+        // 归一化交给 ApprovalStore（裸 QQ 号 → user:<号>，与审批时传入的身份同一格式）
+        => Services.Permissions.ApprovalStore.NormalizeApprovers(_settings.ApprovalApprovers);
+
+    /// <summary>
+    /// 判定一次聊天能力（V3 §9.2）：**默认关闭**、不在白名单就连协议端都不会被调用。
+    /// 拒绝只写结构化原因码，不影响这一轮的其余部分。
+    /// </summary>
+    /// <param name="pinned">
+    /// 本轮开始时固定的策略快照（V3 §5.3）。传 null 表示调用点不在某次处理里（例如面板自测），用当前策略。
+    /// </param>
+    private bool AllowCapability(
+        BotConversation conversation,
+        string toolId,
+        string? untrustedHint,
+        out string reason,
+        Services.Permissions.ChatCapabilitySet? pinned = null)
+    {
+        var caps = pinned ?? Capabilities;
+        var key = conversation.SourceKey;
+
+        // 单次运行预算（V3 §9.2）：同一轮里每放行一次就记一笔，序号交给闸门判断；
+        // 记账在**收到新的用户消息**时归零（见 HandleInbound），多轮工具补轮因此共享同一个预算。
+        var decision = caps.Check(
+            toolId, key, callIndex: _toolBudget.Peek(key), untrustedHint: untrustedHint);
+        if (decision.Allow)
+        {
+            _toolBudget.Commit(key);
+        }
+
+        reason = decision.ReasonCode;
+        if (!decision.Allow)
+        {
+            EmitLog($"[能力] 拒绝 {toolId}（{decision.ReasonCode}）: {conversation.Name}");
+        }
+
+        return decision.Allow;
+    }
+
+    /// <summary>每个会话在**本轮**已经用掉的工具调用数（收到新用户消息时归零）。</summary>
+    private readonly Services.Permissions.ToolCallBudget _toolBudget = new();
+
+    /// <summary>
+    /// 处理一条「同意 / 拒绝 编号」。返回 true = 这条消息被审批流程吃掉了（不再进模型）。
+    ///
+    /// 判决顺序全在 <see cref="Services.Permissions.ApprovalFlow.Handle" /> 里（纯逻辑、可测）：
+    /// 未知编号 → 不动作；别的会话里批 → 不动作；过期 → 不动作；普通成员 → 不动作；
+    /// 已经决定过 → 不动作；批准后**一次性消费**票据，重复消费拿不到票据。
+    /// 这里只负责：把审批者身份（id + 消息事件里的角色）交给它、必要时过一次闸门、然后把回执发出去。
+    /// </summary>
+    private bool TryHandleApprovalCommand(QqChatMessage msg)
+    {
+        var command = Services.Permissions.ApprovalFlow.TryParseCommand(msg.Text);
+        if (command is null)
+        {
+            return false;
+        }
+
+        var conversationKey = Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        var parsed = command.Value;
+
+        var result = Services.Permissions.ApprovalFlow.Handle(
+            _approvals,
+            parsed,
+            requesterId: "user:" + msg.UserId,
+            requesterRole: msg.SenderRole,
+            conversationKey: conversationKey,
+            now: DateTimeOffset.Now,
+            currentPolicyVersion: Capabilities.Policy.PolicyVersion);
+
+        if (!result.Handled)
+        {
+            // 台账不可用之类的内部原因：不吞消息（让它走普通链路，免得表现为“机器人不理人”）
+            EmitLog($"[审批] 未处理（{result.ReasonCode}）：{Channels.Describe(conversationKey)}");
+            return false;
+        }
+
+        var who = MaybeMask("user:" + msg.UserId, conversationKey);
+        EmitLog($"[审批] {parsed.Kind} {parsed.RequestId} by {who} → {result.ReasonCode}"
+                + (result.ReasonCode == "not_an_approver" ? "（不是名单内的人，也不是群主/管理员）" : string.Empty)
+                + $"：{Channels.Describe(conversationKey)}");
+
+        if (result.ShouldExecute && result.Ticket is { } ticket)
+        {
+            // 执行前**再过一次闸门**（拿着票据）：闸门才是“能不能执行”的唯一判据。
+            // 高风险类别在闸门里任何审批都放不开 —— 这一层不依赖审批流程写得对不对。
+            var gate = Capabilities.Check(
+                Services.Permissions.ApprovalFlow.FixedToolId,
+                conversationKey,
+                ticket: ticket);
+            EmitLog($"[审批] 执行前闸门：{gate.Describe()}（{Services.Permissions.ApprovalFlow.FixedToolId}）");
+            if (!gate.Allow)
+            {
+                EmitLog($"[审批] 闸门拒绝执行（{gate.ReasonCode}）→ 不执行：{Channels.Describe(conversationKey)}");
+                return true;
+            }
+
+            RunFixedDemoTool(msg, conversationKey, parsed.RequestId, result.Reply);
+            return true;
+        }
+
+        if (result.Reply is { Length: > 0 } reply)
+        {
+            _ = SendApprovalReplyAsync(msg, reply);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 「执行」固定假工具 <see cref="Services.Permissions.ApprovalFlow.FixedToolId" />。
+    /// **它真的什么都不做**：只记一行日志 + 回一句说明 —— 审批这条链路**没有**接文件 / shell /
+    /// 进程 / 远程桥能力（V3 §9.4 明文禁止拿它宣称真实系统具备这些能力）。
+    /// </summary>
+    private void RunFixedDemoTool(QqChatMessage msg, string conversationKey, string requestId, string? reply)
+    {
+        EmitLog($"[审批] 执行固定假工具 {Services.Permissions.ApprovalFlow.FixedToolId}"
+                + $"（编号 {requestId}，**无真实副作用**）：{Channels.Describe(conversationKey)}");
+
+        if (reply is { Length: > 0 })
+        {
+            _ = SendApprovalReplyAsync(msg, reply);
+        }
+    }
+
+    /// <summary>
+    /// 模型想问问题时的服务端处理（V3 §8.1 的 <c>action=ask</c>，**默认关**）：
+    /// 过一次能力闸门 → 开一张**待答**单（一次性编号 + 短有效期 + 会话绑定）→ 把服务端包好的提问发出去。
+    /// 返回 true = 本轮到此为止（问题已经问出去了）。
+    ///
+    /// ⚠ 提问**不授予任何权限**：台账里那张单子只是“这个会话还有一个没人答的问题”，
+    /// 回答也只是一条普通消息 —— 既不触发动作，也不改变任何策略。
+    /// </summary>
+    private async Task<bool> TryOpenQuestionForAsk(
+        BotConversation conversation, CompletionResult result, long? triggerMessageId,
+        Services.Permissions.ChatCapabilitySet caps)
+    {
+        var reason = string.Empty;
+        var policyVersion = caps.Policy.PolicyVersion;
+
+        // 走同一条闸门（“往当前会话发额外消息”这类动作都由它统一判定）
+        if (!AllowCapability(
+                conversation, Services.Permissions.ApprovalFlow.QuestionToolId, null, out reason, pinned: caps))
+        {
+            EmitLog($"[提问] 闸门拒绝（{reason}）→ 不提问：{conversation.Name}");
+            return false;
+        }
+
+        var created = Services.Permissions.ApprovalFlow.CreateForModelQuestion(
+            _approvals,
+            questionText: result.QuestionText,
+            conversationKey: conversation.SourceKey,
+            requesterFingerprint: QuestionRequesterFingerprint(conversation, triggerMessageId),
+            now: DateTimeOffset.Now,
+            newRequestId: () => Services.Permissions.ApprovalFlow.NewRequestId(
+                upper => System.Security.Cryptography.RandomNumberGenerator.GetInt32(upper)),
+            policyVersion: policyVersion);
+
+        if (!created.Created)
+        {
+            // 空问题 / 同一会话已经挂着待答的问题 → 什么都不做（照旧安全静默）
+            EmitLog($"[提问] 没有开单（{created.ReasonCode}）：{conversation.Name}");
+            return false;
+        }
+
+        EmitLog($"[提问] 新建待答问题 {created.Request?.RequestId}"
+                + $"（v{policyVersion}，{Services.Permissions.ApprovalFlow.TtlSeconds}s 有效）：{conversation.Name}");
+
+        if (created.Announcement is { Length: > 0 } announcement)
+        {
+            await SendPlainAsync(conversation, announcement);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 有人应了一声就把这条待答问题标记为「已答」（一次性；跨会话/过期/已答都不认）。
+    /// 只在 <c>EnableQuestions</c> 打开时才跑，且**失败不做任何动作**。
+    /// </summary>
+    private void TryMarkQuestionAnswered(BotConversation conversation, QqChatMessage msg)
+    {
+        var pending = _approvals.FindPending(
+            conversation.SourceKey, Services.Permissions.ApprovalFlow.QuestionToolId, DateTimeOffset.Now);
+        if (pending is null)
+        {
+            return;
+        }
+
+        // 记下“谁答的”（身份摘要，日志里按脱敏开关显示）：V3 §8.1 要求待答问题**有身份**。
+        // 产品口径仍是“谁答都算答完”（群聊里不 @ 也应一声是常态），但台账与运行记录里要能看出是谁。
+        var answeredBy = "user:" + msg.UserId;
+        var outcome = _approvals.MarkAnswered(
+            pending.RequestId, conversation.SourceKey, DateTimeOffset.Now, answeredBy);
+        EmitLog(outcome.Ok
+            ? $"[提问] {pending.RequestId} 已被回答（一次性消费完，by {MaybeMask(answeredBy, conversation.SourceKey)}）：{conversation.Name}"
+            : $"[提问] {pending.RequestId} 没有标记为已答（{outcome.ReasonCode}）：{conversation.Name}");
+    }
+
+    /// <summary>
+    /// 提问单上的“请求者指纹”：优先记**是谁**（user:&lt;uid&gt;），再附上触发消息 id 便于回溯；
+    /// 老实现只记 msg:&lt;id&gt; —— 那是“哪条消息”，不是“哪个人”（V3 §8.1 要求有身份）。
+    /// 只进内存台账与结构化日志，不外发。
+    /// </summary>
+    private static string QuestionRequesterFingerprint(BotConversation conversation, long? triggerMessageId)
+    {
+        var uid = triggerMessageId is long qid
+            ? conversation.Messages.FirstOrDefault(m => m.QqMessageId == qid)?.SenderId
+            : null;
+        var who = uid is long id ? "user:" + id : "user:unknown";
+        return triggerMessageId is { } mid ? $"{who}#msg:{mid}" : who;
+    }
+    /// <summary>把审批回执发回原会话（走既有发送链路；失败只记日志，不影响别的会话）。</summary>
+    private async Task SendApprovalReplyAsync(QqChatMessage msg, string text)
+    {
+        try
+        {
+            var isGroup = msg.IsGroup;
+            var targetId = isGroup ? msg.GroupId : msg.UserId;
+            var ok = await SendWithCadenceAsync(isGroup, targetId, text, msg.MessageId);
+            if (!ok)
+            {
+                EmitLog("[审批] 回执没发出去（协议端拒绝或超时）");
+            }
+        }
+        catch (Exception ex)
+        {
+            EmitLog("[审批] 回执发送异常: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 模型说“我想调工具”时的服务端处理（V3 §9.4 的触发点，**默认关**）：
+    /// **不执行任何东西**，只可能开一张待批单并把请求公告发到群里。
+    /// 返回 true = 本轮到此为止（已经公告过了）。
+    /// </summary>
+    private async Task<bool> TryOpenApprovalForTool(
+        BotConversation conversation, CompletionResult result, long? triggerMessageId,
+        Services.Permissions.ChatCapabilitySet caps)
+    {
+        var (isGroup, _) = conversation.Target;
+        var policyVersion = caps.Policy.PolicyVersion;
+        var created = Services.Permissions.ApprovalFlow.CreateForModelTool(
+            _approvals,
+            requestedToolId: result.ToolId,
+            conversationKey: conversation.SourceKey,
+            requesterFingerprint: triggerMessageId is { } id ? "msg:" + id : "msg:unknown",
+            configuredApprovers: ApprovalApprovers(),
+            allowGroupAdmins: true,
+            isGroup: isGroup,
+            now: DateTimeOffset.Now,
+            newRequestId: () => Services.Permissions.ApprovalFlow.NewRequestId(
+                upper => System.Security.Cryptography.RandomNumberGenerator.GetInt32(upper)),
+            policyVersion: policyVersion);
+
+        if (!created.Created)
+        {
+            // 模型点了服务端没登记的工具、或同一件事已经挂着待批单 → 什么都不做（照旧安全静默）
+            EmitLog($"[审批] 没有开单（{created.ReasonCode}"
+                    + (result.ToolId is { Length: > 0 } asked ? $"，模型想调 {asked}" : string.Empty)
+                    + $"）：{conversation.Name}");
+            return false;
+        }
+
+        EmitLog($"[审批] 新建待批单 {created.Request?.RequestId}（{Services.Permissions.ApprovalFlow.FixedToolId}"
+                + $"，v{policyVersion}，"
+                + $"{Services.Permissions.ApprovalFlow.TtlSeconds}s 有效）：{conversation.Name}");
+
+        if (created.Announcement is { Length: > 0 } announcement)
+        {
+            await SendPlainAsync(conversation, announcement);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 喂给参与状态机一个事件并返回它的决策。
+    /// 调用方是否**使用**这个结论取决于闸门开关：入站锚点会用它拦（闸门打开时），
+    /// 其余锚点（工具失败 / 模型超时 / 回复终态）只是喂事件、顺便把结论交给闸门判定（默认关 = 放行）。
+    /// 只写结构化信息（状态 / 原因码 / 会话 key），不写任何正文；异常绝不影响回复。
+    /// </summary>
+    private Services.Participation.ParticipationDecision ObserveParticipation(
+        string sourceKey, Services.Participation.ParticipationEvent evt)
+    {
+        try
+        {
+            var machine = _participation.For(sourceKey);
+            var before = machine.State;
+            var decision = machine.OnEvent(evt, DateTimeOffset.Now);
+            if (before != decision.State)
+            {
+                EmitLog($"[参与] {sourceKey} {before} → {decision.State}（{decision.ReasonCode}，"
+                        + $"台账 {_participation.Count} 个会话）");
+            }
+
+            return decision;
+        }
+        catch (Exception ex)
+        {
+            // 观测是旁路，坏了也不能影响回复
+            EmitLog("参与状态记录失败（不影响回复）: " + ex.Message);
+            return new Services.Participation.ParticipationDecision(
+                false, Services.Participation.ParticipationState.Observing, "observe_error");
+        }
+    }
+
     /// <summary>联网搜索专用 HttpClient：检索要等上游模型回话（含思考），超时给宽松点。</summary>
     private readonly HttpClient _netHttp = new() { Timeout = TimeSpan.FromSeconds(60) };
+
+    /// <summary>
+    /// 参与状态的只读快照（面板「参与状态」用）：每个会话现在处在什么状态、最近一次为什么转移。
+    /// **只给结构化字段**，且会话 key 按脱敏开关处理（显示层脱敏、存储与 key 保持原样）。
+    /// 这里也顺带把当前生效的上限回给面板，“我改了参数到底生效没”一眼可见。
+    /// </summary>
+    public (string Policy, IReadOnlyList<(string Key, string State, string Reason, string Counters, string Age)> Rows)
+        ParticipationSnapshot()
+    {
+        var policy = _participation.Policy;
+        var policyText = $"连续 ≤{policy.MaxConsecutiveReplies} / 冷却 {policy.CooldownSeconds}s"
+                         + $" / 试探 ≤{policy.ProbingMaxReplies} / 活性命 {policy.MaxActiveLifetimeSeconds}s"
+                         + $" / 退场 {policy.MaxExitingLifetimeSeconds}s / v{policy.PolicyVersion}";
+
+        var now = DateTimeOffset.Now;
+        var rows = _participation.Snapshot()
+            .Select(s => (
+                Key: MaybeMask(s.SourceKey),
+                State: s.State.ToString(),
+                Reason: s.ReasonCode,
+                Counters: $"连续 {s.ConsecutiveReplies} / 试探 {s.ProbingReplies} / 失败 {s.Failures}",
+                Age: $"{Math.Max(0, (now - s.LastTransitionAt).TotalSeconds):F0}s前"))
+            .ToList();
+
+        return (policyText, rows);
+    }
 
     /// <summary>联网搜索：模型自带搜索（Gemini grounding）+ 可插拔搜索源兑底。Start() 里组装。</summary>
     private WebSearchService? _search;
@@ -4116,6 +4621,18 @@ public sealed class BotAgent : IDisposable
             return;
         }
 
+        // 审批台账周期清理（V3 §9.4：台账要有界）。跟着静默兜底的节奏走，顺手加个 10 分钟节流 ——
+        // 它只删已结束（过期/拒绝/取消/已答）的单子，不会动还在等待决定的那张。
+        if (DateTimeOffset.Now - _lastApprovalPrune > TimeSpan.FromMinutes(10))
+        {
+            _lastApprovalPrune = DateTimeOffset.Now;
+            var pruned = _approvals.Prune(DateTimeOffset.Now);
+            if (pruned > 0)
+            {
+                EmitLog($"[审批] 台账清理：移除 {pruned} 张已结束的单子");
+            }
+        }
+
         if (DateTime.Now - LastActiveRequestTime < TimeSpan.FromSeconds(_settings.IdleFallbackSeconds))
         {
             return;
@@ -4135,6 +4652,8 @@ public sealed class BotAgent : IDisposable
 
         TryProactiveSpeak();
     }
+
+    private DateTimeOffset _lastApprovalPrune = DateTimeOffset.MinValue;
 
     /// <summary>主动开口前，群里需要安静多久（秒）。太短会显得坐不住。</summary>
     private const int ProactiveQuietDefaultSeconds = 120;
@@ -4224,7 +4743,13 @@ public sealed class BotAgent : IDisposable
 
     private async Task GenerateReplyAsync(BotConversation conversation, long? triggerMessageId, bool proactive = false)
     {
-        var context = conversation.TakeLast(_settings.MaxContextMessages);
+        // 配置快照（V3 §5.3）：这一轮从开始到结束一律读它 —— 面板热更新只影响后续处理，
+        // 不会让“请求已经在路上”的这一轮中途换开关（能力闸门另有 caps 快照）。
+        // 频率门（语音/表情/戳的冷却）仍读实时值：那是限速，不是授权。
+        var snapshot = _settings.Snapshot();
+        var caps = Capabilities;
+
+        var context = conversation.TakeLast(snapshot.MaxContextMessages);
         if (context.Count == 0)
         {
             return;
@@ -4243,7 +4768,7 @@ public sealed class BotAgent : IDisposable
             .Where(m => m.Role == MessageRole.Peer && m.SenderId.HasValue)
             .Select(m => m.SenderId!.Value)
             .Distinct()
-            .Take(Math.Max(0, _settings.ProfileLookupCount))
+            .Take(Math.Max(0, snapshot.ProfileLookupCount))
             .ToList();
 
         foreach (var uid in recentSenders)
@@ -4251,7 +4776,7 @@ public sealed class BotAgent : IDisposable
             var summary = _profiles.GetProfileSummary(
                 uid.ToString(),
                 isGroupScope ? scopeGroupId : 0,
-                _settings.ProfileSummaryLines,
+                snapshot.ProfileSummaryLines,
                 contextOldestSeq,
                 contextOldestUnix);
 
@@ -4260,7 +4785,7 @@ public sealed class BotAgent : IDisposable
                 continue; // 本会话没有更早的历史 → 不占提示词预算
             }
 
-            if (profileChars + summary.Length > _settings.MaxProfileChars)
+            if (profileChars + summary.Length > snapshot.MaxProfileChars)
             {
                 break; // 超出预算：后面的（发言更早的）丢弃
             }
@@ -4276,12 +4801,12 @@ public sealed class BotAgent : IDisposable
         // 先挑后发 —— 库可能有上千张，全塞进提示词既贵又不准。
         // 气氛“沉”（有人低落/在吵架）时不给候选：给了它就容易挑一张发出去，与气氛不搭。
         var stickerChoices = new List<StickerChoice>();
-        if (_settings.EnableStickers && _settings.StickerLibraryMax > 0 && _settings.StickerCandidates > 0 &&
+        if (snapshot.EnableStickers && snapshot.StickerLibraryMax > 0 && snapshot.StickerCandidates > 0 &&
             !IsSoberVibe(conversation.SourceKey))
         {
             var query = string.Join(" ", context.TakeLast(8).Select(m => m.Text));
             stickerChoices = _stickers
-                .PickCandidates(query, _settings.StickerCandidates)
+                .PickCandidates(query, snapshot.StickerCandidates)
                 .Select(s => new StickerChoice(s.Id, StickerStore.Describe(s)))
                 .ToList();
         }
@@ -4308,7 +4833,7 @@ public sealed class BotAgent : IDisposable
                 (stickerChoices.Count > 0 ? $"，表情包候选 {stickerChoices.Count} 张" : string.Empty) + "）");
 
         // 最近被戳过（10 分钟内）才给模型“可以戳回去”的指令，平时不浪费 token
-        var pokeContext = _settings.EnablePoke &&
+        var pokeContext = snapshot.EnablePoke &&
             (_lastPoke.TryGetValue(conversation.SourceKey, out var lastPoke) &&
              DateTimeOffset.Now - lastPoke.At < TimeSpan.FromMinutes(10));
 
@@ -4345,13 +4870,15 @@ public sealed class BotAgent : IDisposable
                 musicText: musicText,
                 linkText: linkText,
                 recallText: recallText,
-                enableWebSearch: _settings.EnableWebSearch,
+                enableWebSearch: snapshot.EnableWebSearch,
                 searchText: searchText,
                 groupRolesText: groupRoles,
                 vibeHint: vibeHint,
                 proactive: proactive,
-                enableListen: _settings.EnableMusic,
-                enableVoice: _settings.EnableVoice);
+                enableListen: snapshot.EnableMusic,
+                enableVoice: snapshot.EnableVoice,
+                enableAsk: snapshot.EnableQuestions,
+                enableToolRequest: snapshot.EnableApprovals);
         }
         catch (Exception ex)
         {
@@ -4361,6 +4888,9 @@ public sealed class BotAgent : IDisposable
                     (ex.StackTrace is { Length: > 0 } stack
                         ? "　@ " + stack.Split('\n').FirstOrDefault(l => l.Contains("QQChatAgent"))?.Trim()
                         : string.Empty));
+            // P1 观测：模型这一路出事了（超时/连不上/上游 5xx）→ ModelTimeout（**只降级不升级**）。
+            // 注意与“模型选择沉默”分开：那是它主动不说话，这是它没能说上话。
+            ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ModelTimeout);
             KeepSearchNotes(conversation, searchText, "模型请求失败");
             return;
         }
@@ -4382,7 +4912,7 @@ public sealed class BotAgent : IDisposable
         //   • 低落/求助/孤独：更愿意轻声接一句（门槛降 10），但禁掉表情包/语音/戳（人家难过时发图很尬）
         //   • 生气/吐槽：照常，但也不发表情包（容易像在嘲笑）
         var vibe = result.Vibe ?? "中性";
-        var baseThreshold = Math.Clamp(_settings.SuitabilityThreshold, 0, 100);
+        var baseThreshold = Math.Clamp(snapshot.SuitabilityThreshold, 0, 100);
 
         // 这一轮是不是“人家在跟你说话”：触发那条 @ 了你，或引用了你发的那句话。
         // 两个用途：① 自评再低也接（被点名不应该沉默）；② 引用优先挂给点名的人。
@@ -4412,9 +4942,13 @@ public sealed class BotAgent : IDisposable
             }
             else if (searchText is null)
             {
-                EmitLog($"适合度不足 → 沉默（评分 {score} < 阈值 {threshold}" +
-                        (vibe != "中性" ? $"，气氛 {vibe}" : string.Empty) + $"，{elapsed:F0}ms）: {conversation.Name}");
-                return;
+                  EmitLog($"适合度不足 → 沉默（评分 {score} < 阈值 {threshold}" +
+                          (vibe != "中性" ? $"，气氛 {vibe}" : string.Empty) + $"，{elapsed:F0}ms）: {conversation.Name}");
+                  // P1 观测：这一轮**也是它选择不说**（只是理由是自评太低）→ 同样喂 Silent。
+                  // 为什么不能只在那条“空回复”分支喂：现实里绝大多数沉默都是走这一支（自评 < 阈值），
+                  // 漏掉它，状态机就永远看不到“连续静默”，V3 §7.3 的「静默 → 退场」也就形同虚设。
+                  ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.Silent);
+                  return;
             }
             else
             {
@@ -4428,22 +4962,32 @@ public sealed class BotAgent : IDisposable
         // 联网搜索（search / read）：后台去查，拿到结果后再给它一次开口的机会。
         // 这两个是“两轮动作”—— 模型这轮照常接话（reply 可以写“我去查查”），下一轮拿着事实说。
         // search 优先于 read：模型一般只会填一个。
-        if (_settings.EnableWebSearch && _search is not null && result.Search is { Length: > 0 } wantedQuery)
+        if (snapshot.EnableWebSearch && _search is not null && result.Search is { Length: > 0 } wantedQuery)
         {
-            QueueWebSearchAsync(conversation, wantedQuery);
+            // P3：联网是“真出网”，必须过服务端能力闸门（模型输出不构成授权）；策略用本轮快照
+            if (AllowCapability(conversation, "web.search", wantedQuery, out _, pinned: caps))
+            {
+                QueueWebSearchAsync(conversation, wantedQuery);
+            }
         }
-        else if (_settings.EnableWebSearch && _search is not null && result.Read is { Length: > 0 } pageUrl)
+        else if (snapshot.EnableWebSearch && _search is not null && result.Read is { Length: > 0 } pageUrl)
         {
-            QueuePageReadAsync(conversation, pageUrl);
+            if (AllowCapability(conversation, "web.read", pageUrl, out _, pinned: caps))
+            {
+                QueuePageReadAsync(conversation, pageUrl);
+            }
         }
 
         // 模型想听一首歌（listen 字段）：后台去搜、去听，听完再给它一次开口的机会。
         // 这是群里说“去听一下 XXX”的唯一入口 —— 不靠正则猜句子，交给模型自己决定。
-        if (_settings.EnableMusic && result.Listen is { Length: > 0 } wantedSong && _music is not null)
+        // P3（V3 §9.2）：听歌是“真出网”（去外部音乐服务搜歌 + 拉音频），必须过能力闸门 ——
+        // 不能因为它是“老入口”就绕过场景白名单与预算。
+        if (snapshot.EnableMusic && result.Listen is { Length: > 0 } wantedSong && _music is not null
+            && AllowCapability(conversation, "music.listen", wantedSong, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
             var nowListen = DateTimeOffset.Now;
-            var cooldown = TimeSpan.FromSeconds(Math.Max(0, _settings.MusicListenCooldownSeconds));
+            var cooldown = TimeSpan.FromSeconds(Math.Max(0, snapshot.MusicListenCooldownSeconds));
             if (!_lastListen.TryGetValue(key, out var lastAt) || nowListen - lastAt >= cooldown)
             {
                 _lastListen[key] = nowListen;
@@ -4456,6 +5000,8 @@ public sealed class BotAgent : IDisposable
                         if (string.IsNullOrWhiteSpace(note))
                         {
                             EmitLog($"[Music] 没搜到/没听到「{wantedSong}」");
+                            // P1 观测：模型点名的“听歌”没做成 → 工具失败
+                            ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                             return;
                         }
 
@@ -4465,6 +5011,7 @@ public sealed class BotAgent : IDisposable
                     catch (Exception ex)
                     {
                         EmitLog($"[Music] 听「{wantedSong}」失败: {ex.Message}");
+                        ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                     }
                 });
             }
@@ -4475,7 +5022,9 @@ public sealed class BotAgent : IDisposable
         }
 
         // 模型想把某首歌分享给群里 → 搜到就发一张网易云卡片，顺手“听”一遍（下一轮它就能聊这首歌）。
-        if (_settings.EnableMusic && result.ShareSong is { Length: > 0 } songToShare && _music is not null)
+        // P3（V3 §9.2）：分享歌曲 = 往当前会话发额外消息，必须过同一条闸门（未配场景时行为不变）。
+        if (snapshot.EnableMusic && result.ShareSong is { Length: > 0 } songToShare && _music is not null
+            && AllowCapability(conversation, "music.share", songToShare, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
             var (shareIsGroup, shareTargetId) = conversation.Target;
@@ -4492,6 +5041,7 @@ public sealed class BotAgent : IDisposable
                     if (string.IsNullOrWhiteSpace(songId))
                     {
                         EmitLog($"[Music] 想分享「{songToShare}」但没搜到，不发卡片");
+                        ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                         return;
                     }
 
@@ -4517,11 +5067,13 @@ public sealed class BotAgent : IDisposable
                 catch (Exception ex)
                 {
                     EmitLog($"[Music] 分享「{songToShare}」失败: {ex.Message}");
+                    ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                 }
             });
         }
 
-        if (_settings.EnableStickers && result.StickerId is { } sid && !IsSoberVibe(conversation.SourceKey))
+        if (snapshot.EnableStickers && result.StickerId is { } sid && !IsSoberVibe(conversation.SourceKey)
+            && AllowCapability(conversation, "sticker.send", null, out _, pinned: caps))
         {
             sticker = _stickers.Find(sid);
             if (sticker is null)
@@ -4575,6 +5127,29 @@ public sealed class BotAgent : IDisposable
         // 模型可以“只戳不说话”：这样也算有动作，不算沉默
         var pokeTarget = result.PokeTargetId;
 
+        // P3 审批触发点（V3 §9.4，**默认关**）：模型说“我想调工具”时，服务端**绝不上手执行**，
+        // 只可能开一张待批单并公告到群里（模型输出不构成授权）。开不出单 → 照旧安全静默。
+        if (snapshot.EnableApprovals
+            && result.Action == Services.Decision.ReplyAction.Tool
+            && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0
+            && await TryOpenApprovalForTool(conversation, result, triggerMessageId, caps))
+        {
+            KeepSearchNotes(conversation, searchText, "等待审批");
+            return;
+        }
+
+        // P2 提问路径（V3 §8.1 的 action=ask，**默认关**）：模型想问就问，但**提问不是权限** ——
+        // 服务端只是把问题包一层自己的文案（一次性编号 + 有效期）发到当前会话；
+        // 谁答一声都算答完，回答也只是一条普通消息，不触发任何动作。
+        if (snapshot.EnableQuestions
+            && result.Action == Services.Decision.ReplyAction.Ask
+            && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0
+            && await TryOpenQuestionForAsk(conversation, result, triggerMessageId, caps))
+        {
+            KeepSearchNotes(conversation, searchText, "等待回答");
+            return;
+        }
+
         if (reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0)
         {
             // “上游把回复吞了”（200 但没 choices，已重试一次）与“模型自己决定不说话”不是一回事：
@@ -4585,6 +5160,16 @@ public sealed class BotAgent : IDisposable
             EmitLog(result.UpstreamEmpty
                 ? $"本轮没拿到模型输出（上游连续两次空响应，{elapsed:F0}ms，已重试）: {conversation.Name}"
                 : $"模型选择沉默（{why}，{elapsed:F0}ms）: {conversation.Name}");
+            // P2（结构化运行记录，V3 §12.2）：静默也要能一眼看出是哪一类 ——
+            // 「模型自己决定不说」和「控制字段非法/空回复被降级」在排查时是两回事。
+            // 只写结构化字段（不写正文、不写提示词）。
+            EmitLog($"[决策] outcome=suppressed action={result.Action} reason={result.ReasonCode ?? "unknown"}"
+                    + (result.Malformed ? " malformed=true（按安全默认降级）" : string.Empty)
+                    + $": {conversation.Name}");
+            // P1 观测：这一轮它**自己决定不说**（或被安全降级成不说）→ Silent。
+            // V3 §7.3 那一列写着「连续静默 → active/exiting 退场」，所以这条不喂进去，状态机就永远
+            // 看不到“它刚选择了沉默”这个事实 —— 之前的 Silent 只在“服务端拦下”（总开关关/不在白名单）。
+            ObserveParticipation(conversation.SourceKey, Services.Participation.ParticipationEvent.Silent);
             KeepSearchNotes(conversation, searchText, why);
             return;
         }
@@ -4611,68 +5196,50 @@ public sealed class BotAgent : IDisposable
         var messages = conversation.Messages;
         var lastSelfIndex = LastSelfMessageIndex(messages);
         var triggerIndex = IndexOfMessage(messages, triggerMessageId);
-        var triggerIsCurrent = triggerIndex >= 0 && triggerIndex > lastSelfIndex;
 
         // 「本轮触发是在复读 / 模仿」时（有人原样重复了别人的话，包括学机器人说话），
         // 说话对象是**复读的那条**，不是被复读的原文。线上实测（handoff-4 §23）：群友 c 复读了
         // 机器人那句，机器人回“别学我说话！”，模型却把引用指到了上一条别人的消息上 ——
         // 它把“素材”当成了“对象”（§22 修的是启发式，治不了这一类）。
         // 提示词里已经把 replyTo 的语义写死，这里再兜一道：这种轮次里模型的指认只要不在触发那条上就不引用。
-        // 口径跟 §22 一致：宁可不引，也不挂错人。
         var triggerWasEcho = triggerIndex >= 0 && IsEchoOfEarlierMessage(messages, triggerIndex);
 
-        long? replyTo = null;
-        if (result.ReplyToMessageId is long chosen &&
-            // 已撤回的不算：引用一条群里已经看不到的消息，群友看到的就是莫名其妙
-            // （实测踩过：模型从历史里拿了一个已被撤回的 id 填 replyTo，BotAgent 这边只校验
-            //  “它在不在上下文里”—— 结果是给一条已撤回的消息挂了引用）
-            // 还得是**别人发的**：自己引自己没意义（模型偶尔会把上下文里自己那条的 id 报回来）
-            context.Any(m => m.QqMessageId == chosen && !m.Recalled && m.Role == MessageRole.Peer) &&
-            IndexOfMessage(messages, chosen) >= 0)
+        // 引用目标的判定抽在 Services/Decision/ReplyTarget.cs（纯函数，能被确定性测；口径见那里的注释）。
+        // 这里只负责把**事实**凑出来：模型指认了谁、那条能不能用、触发是谁、点名了没、是不是复读轮。
+        // 抽出来的原因：这条规则线上修过三次，而“群里看到它回错人”这类问题必须能脱离端到端场景被反复验证。
+        var replyTargetFacts = new Services.Decision.ReplyTargetFacts(
+            Chosen: result.ReplyToMessageId,
+            // 采信条件：在本次上下文里、未撤回、且是**别人发的**（自己引自己没意义）
+            ChosenUsable: result.ReplyToMessageId is long chosenProbe &&
+                context.Any(m => m.QqMessageId == chosenProbe && !m.Recalled && m.Role == MessageRole.Peer),
+            ChosenIndex: IndexOfMessage(messages, result.ReplyToMessageId),
+            MessageCount: messages.Count,
+            TriggerMessageId: triggerMessageId,
+            TriggerIndex: triggerIndex,
+            // 触发那条被撤回了就不能再引用（与 ChosenUsable 的 !Recalled 同口径，V3 §8.3）
+            TriggerUsable: triggerIndex >= 0 && !messages[triggerIndex].Recalled,
+            LastSelfIndex: lastSelfIndex,
+            DirectAddress: directAddress,
+            TriggerWasEcho: triggerWasEcho);
+
+        var replyTargetDecision = Services.Decision.ReplyTargetRules.Resolve(replyTargetFacts);
+        var replyTo = replyTargetDecision.Target;
+
+        // 只把“改了主意”的那几种情况说给人听（与改造前的日志口径一致）
+        switch (replyTargetDecision.ReasonCode)
         {
-            // 人家在跟你说话（@ 你 / 引用了你的话），模型却把引用指给了别人：
-            // 群里看到的就是“你正跟它说话，它去回另一个人”（号主 2026-09-16 反馈“回复引用错误”）。
-            // 口径：**点名优先** —— 先把该回的人回了，想聊别人那条下一轮再说。
-            if (directAddress && triggerMessageId is long directTrigger && chosen != directTrigger)
-            {
-                EmitLog($"模型想引 #{chosen}，但这一轮是 #{directTrigger} 在跟机器人说话 → 改引触发那条（点名优先）");
-                replyTo = directTrigger;
-            }
-            else if (triggerWasEcho && chosen != triggerMessageId)
-            {
-                EmitLog($"不引用（本轮触发是复读/模仿，模型却指认了 #{chosen}）—— 宁可不引，也不把引用挂到被复读的原文上");
-            }
-            else
-            {
-                replyTo = chosen;
-            }
-        }
-        else if (triggerMessageId is long trig)
-        {
-            // 只有“触发消息还是最新诉求”时才拿它当引用目标。
-            // 触发已经过去了（后面有人插话）→ **不引用**：正文是在回答触发者，引用却会挂到
-            // 插话的另一个人头上，QQ 里显示“回复某某”，群友看到就是“回复错人”（号主反馈的 bug）。
-            // 不引用只是少一层上下文，挂错人却是实打实地抢了另一个人的话。
-            if (triggerIsCurrent)
-            {
-                replyTo = trig;
-            }
-            else
-            {
+            case "direct_address_priority":
+                EmitLog($"模型想引 #{result.ReplyToMessageId}，但这一轮是 #{triggerMessageId} 在跟机器人说话 → 改引触发那条（点名优先）");
+                break;
+            case "echo_ignored":
+                EmitLog($"不引用（本轮触发是复读/模仿，模型却指认了 #{result.ReplyToMessageId}）—— 宁可不引，也不把引用挂到被复读的原文上");
+                break;
+            case "trigger_stale":
                 EmitLog("不引用（触发消息已经过去了、后面有人插话）—— 宁可不引，也不把正文挂到别人头上");
-            }
-        }
-
-        // 没有触发消息就**不引用**（戳一戳、主动发言都是这种）。
-        // 线上实测（18:40）：被小明戳了之后回“手欠啊你”，引用却挂到了 55 分钟前另一条消息上 ——
-        // 因为戳一戳不是消息、没有可引用的目标，启发式只能抽“上下文里最后一条别人的消息”。
-        // QQ 客户端会把引用显示成“回复某某”，群友看到的就是“回复错人”。
-
-        if (replyTo is long quoteTarget)
-        {
-            var targetIndex = IndexOfMessage(messages, quoteTarget);
-            // 目标已被滚动窗口裁掉 → 不引用；目标后面还有人说话 → 需要引用指明回的是哪条
-            replyTo = targetIndex >= 0 && targetIndex < messages.Count - 1 ? quoteTarget : null;
+                break;
+            case "trigger_recalled":
+                EmitLog("不引用（触发那条已经被撤回了，群里看不到它）");
+                break;
         }
 
         var (isGroup, targetId) = conversation.Target;
@@ -4691,10 +5258,14 @@ public sealed class BotAgent : IDisposable
             // “气氛沉（有人低落/在吵架）就一律不发语音”的硬拦，已删——那本来就是判断类的事，
             // 现在只把气氛（vibeHint）递给模型看，由它自己权衡。
             // 代码侧只留“技术性”限制：开关、字数上限（云端/协议端真有上限）、同会话频率下限（防刷屏）。
-            var maxChars = Math.Clamp(_settings.VoiceMaxChars, 10, 300);
-            if (!_settings.EnableVoice || _voice is null)
+            var maxChars = Math.Clamp(snapshot.VoiceMaxChars, 10, 300);
+            if (!snapshot.EnableVoice || _voice is null)
             {
                 voiceSkipWhy = "语音消息开关是关的";
+            }
+            else if (!AllowCapability(conversation, "voice.speak", null, out var voiceCapWhy, pinned: caps))
+            {
+                voiceSkipWhy = $"能力闸门拒绝（{voiceCapWhy}）";
             }
             else if (voiceParts.FirstOrDefault(p => p.Length > maxChars) is { } longPart)
             {
@@ -4891,6 +5462,10 @@ public sealed class BotAgent : IDisposable
             {
                 EmitLog($"这次不戳 {pokeUserId}（{pokeWhy}）");
             }
+            else if (!AllowCapability(conversation, "poke.send", null, out var pokeCapWhy, pinned: caps))
+            {
+                EmitLog($"这次不戳 {pokeUserId}（能力闸门拒绝：{pokeCapWhy}）");
+            }
             else
             {
                 pokeSent = await _source.SendPokeAsync(isGroup, targetId, pokeUserId);
@@ -4926,6 +5501,18 @@ public sealed class BotAgent : IDisposable
                 ? "，带引用"
                 : "，带引用→" + (quoted.SenderName ?? "?") + "「" + Shorten(quoted.Text ?? string.Empty, 18) + "」";
         }
+
+        // P1（只观测）：把这轮的终态喂给参与状态机 —— 发出去了=Replied，没发出去=Silent。
+        // 注意：**返回值故意不用**，本轮不改变任何发送/拦截行为。
+        ObserveParticipation(
+            conversation.SourceKey,
+            sent
+                ? Services.Participation.ParticipationEvent.Replied
+                : Services.Participation.ParticipationEvent.Silent);
+
+        // P2（结构化运行记录）：同一条终态也用统一字段写一行，便于核对「决策 → 实际发送」是否一致。
+        EmitLog($"[决策] outcome={(sent ? "replied" : "failed")} action={result.Action}"
+                + $" reason={result.ReasonCode ?? "unknown"}: {conversation.Name}");
 
         EmitLog(
             $"{(sent ? "已回复" : "回复失败")} {conversation.Name}（{elapsed:F0}ms 生成" +
@@ -5173,6 +5760,18 @@ public sealed class BotAgent : IDisposable
     /// </summary>
     private async Task<bool> SendWithCadenceAsync(bool isGroup, long targetId, string reply, long? replyTo)
     {
+        // P4（V3 §10）：发送前把 Markdown 降级成 QQ 纯文本。
+        // 放在**分句/长度限制之前** —— 否则清洗会把已经切好的段再改一次，长度预算就对不上了。
+        // 只改呈现、不改决策：这里不动 reply 的语义，也不影响“发不发”（那在 P2 已经定了）。
+        var rawReply = reply;
+        reply = Services.Rendering.QqPlainText.Sanitize(reply);
+        if (reply.Length == 0)
+        {
+            // 整条回复清洗后什么都不剩（例如模型只写了一条分隔线）：不发空消息。
+            EmitLog($"清洗后没有可发内容（原文 {rawReply.Length} 字，全是 Markdown 装饰）→ 这一条不发");
+            return false;
+        }
+
         if (!_settings.SplitReplies)
         {
             var one = await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo);
@@ -5316,7 +5915,12 @@ public sealed class BotAgent : IDisposable
     /// 引用原文的兜底：本地查不到时去协议端问一次（OneBot get_msg），查到就把真实原文补写进那条消息。
     /// fire-and-forget：不阻塞收消息（那是在接收循环上跑的），也不影响这一轮已经开始的生成。
     /// </summary>
-    private void EnrichQuotedFromProtocolAsync(BotConversation conversation, ChatMessage appended, long quotedId)
+    /// <param name="retriggerIfSelf">
+    /// 这条消息是被参与闸门拦下的（当时判成“无关消息”）：如果补查证明它引用的正是**机器人自己**说过的话，
+    /// 那就不是在聊闲天 —— 标记为直接对话并按闸门重判一次，必要时补一条回复请求（只补一次）。
+    /// </param>
+    private void EnrichQuotedFromProtocolAsync(
+        BotConversation conversation, ChatMessage appended, long quotedId, bool isGroup, bool retriggerIfSelf = false)
     {
         _ = Task.Run(async () =>
         {
@@ -5362,6 +5966,28 @@ public sealed class BotAgent : IDisposable
                 MessageAdded?.Invoke(conversation.SourceKey, appended);
                 Save();
                 EmitLog($"引用原文兜底：从协议端取到 #{quotedId} 的原文（{(isSelf ? "我发的" : "别人发的")}「{Shorten(text, 24)}」）");
+
+                if (!isSelf || !retriggerIfSelf)
+                {
+                    return;
+                }
+
+                // 原来这一轮已经被闸门按“无关消息”拦掉了；现在证据表明它在跟机器人说话 → 重判一次。
+                // 仍受全局回复冷却与参与策略约束（闸门只收不放，不会因为引用了旧消息就绕开限流）。
+                appended.DirectToBot = true;
+                var recheck = Services.Participation.ParticipationGate.Decide(
+                    _settings.EnableParticipationGating,
+                    ObserveParticipation(
+                        conversation.SourceKey,
+                        Services.Participation.ParticipationEvents.ClassifyInbound(isGroup, directToBot: true)));
+                if (!recheck.Proceed)
+                {
+                    EmitLog($"[参与] 引用补查确认是在跟机器人说话，但闸门仍拦下（{recheck.ReasonCode}）: {conversation.Name}");
+                    return;
+                }
+
+                EmitLog($"[参与] 引用补查确认是在跟机器人说话 → 补一次参与评估（{recheck.ReasonCode}）: {conversation.Name}");
+                RequestReply(conversation, appended.QqMessageId, directInWindow: true);
             }
             catch (Exception ex)
             {
@@ -5640,6 +6266,7 @@ public sealed class BotAgent : IDisposable
         {
             _replyCooldown.TryRemove(c.SourceKey, out _);
             _historyRequested.TryRemove(c.SourceKey, out _);
+            ForgetConversationState(c.SourceKey);
             DropPending(c.SourceKey);
         }
 
@@ -5647,5 +6274,21 @@ public sealed class BotAgent : IDisposable
         {
             Save();
         }
+    }
+
+    /// <summary>
+    /// 会话被删除 / 移出白名单时，把它在各台账里的痕迹一起清掉（V3 §7.2 / §9.4：内存台账要有界）。
+    /// 审批台账按“已结束的单子”周期清理（<see cref="ApprovalStore.Prune" />），不在这里逐会话删 ——
+    /// 审批单可能跨越一次白名单变更，删早了会让正在等待批准的那条悄悄失效。
+    /// </summary>
+    private void ForgetConversationState(string sourceKey)
+    {
+        if (string.IsNullOrWhiteSpace(sourceKey))
+        {
+            return;
+        }
+
+        _participation.Forget(sourceKey);
+        _toolBudget.Forget(sourceKey);
     }
 }

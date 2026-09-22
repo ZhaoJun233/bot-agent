@@ -212,9 +212,32 @@ check("模型三项改成面板可改（不再是 readonly 输入框）",
   html.includes('id="setApiKey"') && /<input[^>]*type="password"[^>]*id="setApiKey"|<input[^>]*id="setApiKey"[^>]*type="password"/.test(html) &&
   html.includes('id="clearApiKey"'));
 
-check("设置页有戳一戳卡片（启用 / 冷却 / 当前心情 / 心情保留）",
-  html.includes('id="setEnablePoke"') && html.includes('id="setPokeCooldown"') &&
-  html.includes('id="setMood"') && html.includes('id="setMoodTtl"'));
+  check("设置页有戳一戳卡片（启用 / 冷却 / 当前心情 / 心情保留）",
+    html.includes('id="setEnablePoke"') && html.includes('id="setPokeCooldown"') &&
+    html.includes('id="setMood"') && html.includes('id="setMoodTtl"'));
+  check("设置页有能力与审批卡片（场景预设 / 审批开关 / 审批人 / 生效回显）",
+    html.includes('id="setScenarioPreset"') && html.includes('id="setEnableApprovals"') &&
+    html.includes('id="setApprovalApprovers"') && html.includes('id="scenarioCapHint"') &&
+    html.includes('id="approvalHint"'));
+  check("场景预设下拉必须在界面上真的可选（V3 §12.1：不能只有服务端字段）",
+    /<select[^>]*id="setScenarioPreset"/.test(html) &&
+    html.includes('value="on-demand"') && html.includes('value="research"') && html.includes('value="social"'));
+  check("设置页有参与状态机卡片（5 个上限 + 生效回显 + 只读状态框 + 刷新按钮）",
+    html.includes('id="setPartMaxReplies"') && html.includes('id="setPartCooldown"') &&
+    html.includes('id="setPartProbing"') && html.includes('id="setPartActiveLife"') &&
+    html.includes('id="setPartExitingLife"') && html.includes('id="participationHint"') &&
+    html.includes('id="participationBox"') && html.includes('id="partRefreshBtn"'));
+  check("★ 两个会真正改变行为的开关都在面板上（参与闸门 / 允许提问），且都写明默认关",
+    html.includes('id="setPartGating"') && html.includes('id="setEnableQuestions"') &&
+    /默认关/.test(html) && html.includes('id="questionHint"'));
+  check("★ 参与状态只读：前端没有往 /api/participation 发 POST（它只能看，不能改状态）",
+    /api\("\/api\/participation"\)/.test(js) && !/\/api\/participation"[^)]*method:\s*"POST"/s.test(js));
+  check("★ 参与状态用安全文本节点渲染（会话名里可能有别人写的字，绝不进 innerHTML）",
+    (function () {
+      // 只看**函数体里有没有给 innerHTML 赋值** —— 注释里提到 innerHTML 不算（上一版这条就被自己的注释误报过）
+      const fn = (js.match(/async function refreshParticipation\(\)[\s\S]*?\n {2}\}/) || [""])[0];
+      return fn.includes('createElement("div")') && fn.includes("appendChild") && !/innerHTML\s*=/.test(fn);
+    })());
 check("有表情包库弹层 + 手动入口（巡检 / 导入）",
   html.includes('id="stickerModal"') && html.includes('id="stickerGrid"') &&
   html.includes('id="stickerCurateNow"') && html.includes('id="stickerImportAlbum"'));
@@ -397,7 +420,22 @@ const RUNTIME = {
   maxMessagesPerConversation: 500, maxConcurrentReplies: 2, enableProfileSummary: true,
   profileSummaryThreshold: 20, profileSummaryMaxChars: 160, profileSummaryIntervalSeconds: 120,
   enableStickers: true, stickerLibraryMax: 120, stickerCandidates: 6, stickerCurateIntervalSeconds: 3600,
-  stickerCooldownSeconds: 120, enablePoke: true, pokeCooldownSeconds: 45, mood: "", moodTtlSeconds: 7200,
+    stickerCooldownSeconds: 120, enablePoke: true, pokeCooldownSeconds: 45, mood: "", moodTtlSeconds: 7200,
+    // 场景预设 + 人工审批（面板控件必须能回填，也必须真的发出去）
+    scenarioPreset: "social", scenarioCapabilities: "scene=social caps=[chat.reply] budget=3 v1",
+    enableApprovals: true, approvalApprovers: "10001",
+    approvalCapabilities: "caps=[demo.echo] budget=2147483647 v1 needApproval=[demo.echo]",
+    approvalTool: "demo.echo", approvalTtlSeconds: 120,
+    // P1：参与状态机的上限（面板回显的是**被钳过**的那组数）
+    participationMaxConsecutiveReplies: 4, participationCooldownSeconds: 25,
+    participationProbingMaxReplies: 2, participationMaxActiveLifetimeSeconds: 600,
+    participationMaxExitingLifetimeSeconds: 120,
+    participationPolicy: "连续 ≤4 / 冷却 25s / 试探 ≤2 / 活性命 600s / 退场 120s",
+    participationGating: "off（只观测：不改“发不发”的判定）",
+    enableParticipationGating: false,
+    enableQuestions: true,
+    questionTool: "ask.question",
+    questionCapabilities: "允许提问（带一次性编号与有效期；不授予任何权限）",
   healthReportEnabled: true, healthReportTime: "18:00", healthReportTargets: "10001",
   // 脱敏开关 + Agent 附加提示词（面板可改；默认那份是隐私红线）
   enableAgentMask: true, agentPrompt: "【隐私红线】不要读取群聊正文",
@@ -483,7 +521,17 @@ const fetchStub = async (url, opts) => {
           enabled: true, time: "18:00", targets: "10001", targetList: [10001],
           nextRunAt: "2026-09-19T18:00:00+08:00", lastSentAt: null, lastError: null, sentCount: 0
         };
-  } else if (target.includes("/api/logs")) {
+    } else if (target.includes("/api/participation")) {
+      // P1：参与状态只读接口（会话名已由服务端按脱敏开关处理）
+      payload = {
+        policy: "连续 ≤3 / 冷却 20s / 试探 ≤1 / 活性命 900s / 退场 180s",
+        gating: "off（只观测）",
+        tracked: 2,
+        sessions: [
+          { key: "群聊 100***01", state: "Active", reason: "replied", counters: "连续 1 / 试探 1 / 失败 0", lastTransition: "3s前" },
+          { key: "群聊 200***02", state: "Observing", reason: "not_addressed", counters: "连续 0 / 试探 0 / 失败 0", lastTransition: "41s前" }
+        ]
+      };    } else if (target.includes("/api/logs")) {
     // 面板首屏会拉日志历史（刷新页面后不再空白）
     payload = { lines: [
       { time: 1700000000000, text: "[Agent] 历史日志-A" },
@@ -521,7 +569,8 @@ let loadError = null;
 // 注意用的是 jsRun 而不是 js —— 静态检查仍然扫原文，不能因为测试而改动被测文件。
 const probeMarker = 'document.addEventListener("DOMContentLoaded", boot);';
 const jsRun = js.replace(probeMarker, `globalThis.probe = {
-  loadSettings, saveSettings, markSettingsDirty,
+    loadSettings, saveSettings, markSettingsDirty,
+    refreshParticipation,
   deviceDraft: () => agentDevices.map((d) => ({ ...d })),
   deviceLoaded: () => agentDevicesLoaded,
   editDevice: (i, patch) => { if (agentDevices[i]) Object.assign(agentDevices[i], patch); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
@@ -1084,6 +1133,82 @@ check("服务端的设备配置没被清空", JSON.stringify(serverDevices) === 
 check("设备表请求真的失败过（否则上面三条形同虚设 —— 拉不到才该跳过）", agentStatusHits > 0, `hits=${agentStatusHits}`);
 
 /* ─────────── 汇总 ─────────── */
+
+// ⑦ 工程：场景预设与人工审批必须“回填 + 发得出去”（只做服务端字段 = 面板改了没用）
+  await probe.loadSettings();
+  check("★ 场景预设从服务端回填到下拉框", document.getElementById("setScenarioPreset").value === "social",
+    String(document.getElementById("setScenarioPreset").value));
+  check("★ 审批开关与审批人从服务端回填", document.getElementById("setEnableApprovals").checked === true &&
+    document.getElementById("setApprovalApprovers").value === "10001",
+    `checked=${document.getElementById("setEnableApprovals").checked} approvers=${document.getElementById("setApprovalApprovers").value}`);
+  check("★ 面板把“当前生效的能力/审批范围”显示出来（不是只存不发）",
+    String(document.getElementById("scenarioCapHint").textContent || "").includes("scene=social") &&
+    String(document.getElementById("approvalHint").textContent || "").includes("demo.echo"),
+    `scenario=[${document.getElementById("scenarioCapHint").textContent}] approval=[${document.getElementById("approvalHint").textContent}]`);
+
+  document.getElementById("setScenarioPreset").value = "research";
+  document.getElementById("setEnableApprovals").checked = false;
+  document.getElementById("setApprovalApprovers").value = "10002, 10003";
+  await saveClicks[0]({});
+  await new Promise((r) => setTimeout(r, 200));
+  // ⑧ P1：参与状态机的上限必须“回填 + 发得出去”，只读状态面板必须能画出来
+  // 注意：桩 DOM 的 value 是普通属性，赋进去的是**数字**（不是字符串）→ 一律 String() 后再比
+  const partVals = Object.fromEntries(["setPartMaxReplies", "setPartCooldown", "setPartProbing",
+    "setPartActiveLife", "setPartExitingLife"].map((id) => [id, String(document.getElementById(id).value)]));
+  check("★ 参与上限从服务端回填到输入框",
+    partVals.setPartMaxReplies === "4" && partVals.setPartCooldown === "25" &&
+    partVals.setPartProbing === "2" && partVals.setPartActiveLife === "600" &&
+    partVals.setPartExitingLife === "120",
+    JSON.stringify(partVals));
+  check("★ 面板写清楚“生效的那组数”与“只观测”",
+    String(document.getElementById("participationHint").textContent || "").includes("连续 ≤4") &&
+    String(document.getElementById("participationHint").textContent || "").includes("只观测"),
+    String(document.getElementById("participationHint").textContent || "(空)"));
+
+  check("★ 参与闸门默认关（回填 false）+ 提问开关按服务端回填",
+    document.getElementById("setPartGating").checked === false &&
+    document.getElementById("setEnableQuestions").checked === true &&
+    String(document.getElementById("questionHint").textContent || "").includes("不授予任何权限"),
+    `gating=${document.getElementById("setPartGating").checked} questions=${document.getElementById("setEnableQuestions").checked}`);
+
+  document.getElementById("setPartGating").checked = true;
+  await saveClicks[0]({});
+  await new Promise((r) => setTimeout(r, 200));
+  const sentSwitches = lastSettingsBody() || {};
+  check("★ 保存请求带上这两个开关",
+    sentSwitches.enableParticipationGating === true && sentSwitches.enableQuestions === true,
+    JSON.stringify(sentSwitches));
+
+  document.getElementById("setPartMaxReplies").value = "6";
+  document.getElementById("setPartCooldown").value = "45";
+  await saveClicks[0]({});
+  await new Promise((r) => setTimeout(r, 200));
+  const sentParticipation = lastSettingsBody() || {};
+  check("★ 保存请求带上 5 个参与上限字段",
+    sentParticipation.participationMaxConsecutiveReplies === 6 &&
+    sentParticipation.participationCooldownSeconds === 45 &&
+    sentParticipation.participationProbingMaxReplies === 2 &&
+    sentParticipation.participationMaxActiveLifetimeSeconds === 600 &&
+    sentParticipation.participationMaxExitingLifetimeSeconds === 120,
+    JSON.stringify(sentParticipation));
+
+  // 只读状态：画出来的是“形状”（状态/原因/计数），且必须走安全文本节点。
+  // 桩 DOM 的 appendChild 只是 push 进 children（不会拼进父节点的 textContent）→ 读 children。
+  await probe.refreshParticipation();
+  const partBox = document.getElementById("participationBox");
+  const partText = partBox.children.map((c) => String(c.textContent || "")).join("\n");
+  check("★ 参与状态面板画出了会话状态（状态 + 原因 + 计数）",
+    partText.includes("Active") && partText.includes("replied") && partText.includes("群聊 100***01") &&
+    partText.includes("连续 1"),
+    partText.slice(0, 200));
+  check("★ 参与状态面板也显示了状态机手里那份上限（证明参数真的到了它那儿）",
+    partText.includes("连续 ≤3"), partText.slice(0, 120));
+  check("★ 参与状态用的是文本节点，不是 innerHTML（会话名里可能有别人写的字）",
+    partBox.children.every((c) => c.tagName === "DIV" && String(c.innerHTML || "") === ""),
+    "子节点数=" + partBox.children.length);  const sentApproval = lastSettingsBody() || {};
+  check("★ 保存请求带上 scenarioPreset / enableApprovals / approvalApprovers",
+    sentApproval.scenarioPreset === "research" && sentApproval.enableApprovals === false &&
+    sentApproval.approvalApprovers === "10002, 10003", JSON.stringify(sentApproval));
 
 console.log("");
 if (failures.length === 0) {

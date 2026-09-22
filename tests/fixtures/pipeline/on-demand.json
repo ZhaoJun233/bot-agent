@@ -1,0 +1,220 @@
+{
+  "category": "on-demand",
+  "title": "按需参与：应答与静默的边界（V3 §11.2 第一类）",
+  "notes": [
+    "全部为合成输入；假模型输出写死在夹具里，运行时不连网、不写数据目录、不发任何消息。",
+    "driver=parser 的样例会走**真实解析链路**（OpenAiClient.ParseModelOutput，反射进入），不是只测纯函数。",
+    "expect.reason 只在与实现口径稳定对应时才写；不确定的样例只钉 send / malformed 这类关键结论。"
+  ],
+  "cases": [
+    {
+      "id": "od-01",
+      "title": "结构化静默：模型明确 action=silent → 一个字都不发",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"suitability\": 12, \"action\": \"silent\", \"reasonCode\": \"not_addressed\"}",
+      "expect": { "send": false, "reason": "not_addressed", "replyNull": true }
+    },
+    {
+      "id": "od-02",
+      "title": "旧协议兼容：正文恰好是 [SILENT] → 静默，且标记绝不外发",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "[SILENT]",
+      "expect": { "send": false, "reason": "silent_marker", "replyNull": true }
+    },
+    {
+      "id": "od-03",
+      "title": "正文里**夹带** [SILENT] 不算控制位（那是内容，照发）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "他在群里发 [SILENT] 是什么意思？",
+      "expect": { "send": true, "reason": "legacy_text" }
+    },
+    {
+      "id": "od-04",
+      "title": "空回复（只有空白）→ 不发，并标记 malformed",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"suitability\": 40, \"action\": \"reply\", \"reply\": \"   \"}",
+      "expect": { "send": false, "reason": "empty_reply", "malformed": true, "replyNull": true }
+    },
+    {
+      "id": "od-05",
+      "title": "上游回了 200 但没给内容（网关吞回复）→ 不发，标 malformed（与“模型不想说”分开记）",
+      "mechanism": "decision",
+      "driver": "rules",
+      "direct": { "action": null, "reply": null, "upstreamEmpty": true },
+      "expect": { "send": false, "reason": "upstream_empty", "malformed": true, "replyNull": true }
+    },
+    {
+      "id": "od-06",
+      "title": "非法动作（模型自己编了个动作名）→ 降级为静默，绝不按普通文本放行",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"rm -rf\", \"reply\": \"好嘞\"}",
+      "expect": { "send": false, "reason": "unknown_action", "malformed": true, "replyNull": true }
+    },
+    {
+      "id": "od-07",
+      "title": "动作字段不是字符串（数字）→ 同样降级为静默",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": 7, \"reply\": \"好嘞\"}",
+      "expect": { "send": false, "reason": "unknown_action", "malformed": true, "replyNull": true }
+    },
+    {
+      "id": "od-08",
+      "title": "超长控制字段（100 字动作名）→ 不可信，降级为静默",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"reply\": \"好嘞\"}",
+      "expect": { "send": false, "reason": "action_too_long", "malformed": true, "replyNull": true }
+    },
+    {
+      "id": "od-09",
+      "title": "正常回复：action=reply + 正文 → 照发",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"suitability\": 90, \"action\": \"reply\", \"reply\": \"在的，什么事？\"}",
+      "expect": { "send": true, "reason": "replied" }
+    },
+    {
+      "id": "od-10",
+      "title": "action=reply 但正文只有标记 → 仍然静默（标记绝不进发送队列）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"reply\", \"reply\": \"[SILENT]\"}",
+      "expect": { "send": false, "reason": "silent_marker", "replyNull": true }
+    },
+    {
+      "id": "od-11",
+      "title": "模型想“提问”（action=ask）→ 该能力本轮未接，安全静默（如实记 ask_not_enabled）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"ask\", \"reply\": \"要我去查一下吗？\"}",
+      "expect": { "send": false, "reason": "ask_not_enabled", "replyNull": true }
+    },
+    {
+      "id": "od-12",
+      "title": "模型想调工具（action=tool）→ 静默并记下它点名了哪个工具（名字只是记录，不构成授权）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"tool\", \"toolRequest\": \"demo.echo\"}",
+      "expect": { "send": false, "reason": "tool_not_enabled", "replyNull": true, "toolId": "demo.echo" }
+    },
+    {
+      "id": "od-13",
+      "title": "被截断/坏掉的 JSON → 一律沉默，绝不把半截 JSON 发进群",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"suitability\": 50, \"reply\": \"这句话还没写完",
+      "expect": { "send": false, "malformed": true, "replyNull": true }
+    },
+    {
+      "id": "od-14",
+      "title": "Markdown 装饰降级为纯文本（粗体标记去掉、正文留下）",
+      "mechanism": "plaintext",
+      "input": "**重点**：明早九点开会",
+      "expect": { "mustContain": ["重点", "明早九点开会"], "mustNotContain": ["**"] }
+    },
+    {
+      "id": "od-15",
+      "title": "清洗不误伤 URL / 下划线标识符 / 版本号（这三样以前被正则吃过）",
+      "mechanism": "plaintext",
+      "input": "见 https://example.com/a_b?x=1_2 里的 snake_case_name（v1.2.3 起）",
+      "expect": {
+        "mustContain": ["https://example.com/a_b?x=1_2", "snake_case_name", "v1.2.3"],
+        "mustNotContain": ["**"]
+      }
+    },
+    {
+      "id": "od-16",
+      "title": "★ 显式 silent 时，模型顺手写的 speak 不许带出去（说了不说就得真不说）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"silent\", \"reply\": \"\", \"speak\": \"合成文本\", \"sticker\": 1}",
+      "expect": { "send": false, "reason": "model_silent", "replyNull": true, "noSideEffects": true }
+    },
+    {
+      "id": "od-17",
+      "title": "★ 未知动作时，模型写的 shareSong / search 一律作废（不许绕过静默去动手）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"do-it\", \"reply\": \"\", \"shareSong\": \"合成歌名\", \"search\": \"合成问题\"}",
+      "expect": { "send": false, "reason": "unknown_action", "malformed": true, "noSideEffects": true }
+    },
+    {
+      "id": "od-18",
+      "title": "★ action=tool 时不许夹带出网动作（工具只能走审批，不许顺手 search / read）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"tool\", \"toolRequest\": \"demo.echo\", \"search\": \"合成问题\", \"read\": \"https://example.com/x\"}",
+      "expect": { "send": false, "reason": "tool_not_enabled", "toolId": "demo.echo", "noSideEffects": true }
+    },
+    {
+      "id": "od-19",
+      "title": "★ 提问关着时 action=ask 也只静默，且不许带 poke / shareSong",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"ask\", \"reply\": \"要我把结论整理一下吗？\", \"poke\": 10001, \"shareSong\": \"合成歌名\"}",
+      "expect": { "send": false, "reason": "ask_not_enabled", "replyNull": true, "noSideEffects": true }
+    },
+    {
+      "id": "od-20",
+      "title": "★ 兼容红线：旧协议的空 reply + speak（只发语音）必须原样保留",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"suitability\": 80, \"reply\": \"\", \"speak\": \"只发语音这一句\"}",
+      "expect": { "send": false, "reason": "empty_reply", "malformed": true, "keepsSpeak": true }
+    },
+    {
+      "id": "od-21",
+      "title": "★ 兼容红线：action=reply + speak 照旧（正常回复里的语音不被当成副作用）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"action\": \"reply\", \"reply\": \"说句话\", \"speak\": \"说句话\"}",
+      "expect": { "send": true, "reason": "replied", "keepsSpeak": true }
+    },
+    {
+      "id": "od-22",
+      "title": "★ 旧协议里的 [SILENT] 标记同样不许带出 speak（标记就是“闭嘴”）",
+      "mechanism": "decision",
+      "driver": "parser",
+      "modelOutput": "{\"suitability\": 80, \"reply\": \"[SILENT]\", \"speak\": \"合成文本\"}",
+      "expect": { "send": false, "reason": "silent_marker", "noSideEffects": true }
+    },
+    {
+      "id": "od-23",
+      "title": "★ 清洗不吞正文：幂运算 2**3 与语气波浪号 开心~~~ 原样保留",
+      "mechanism": "plaintext",
+      "input": "2**3 = 8，开心~~~",
+      "expect": { "mustContain": ["2**3", "开心~~~"] }
+    },
+    {
+      "id": "od-24",
+      "title": "★ 正文里自带哨兵字符 → 剥掉，不许越界崩溃、也不许伪造受保护片段",
+      "mechanism": "plaintext",
+      "input": "前\uE0000\uE001后",
+      "expect": { "mustContain": ["前", "后"], "mustNotContain": ["\uE000", "\uE001"] }
+    },
+    {
+      "id": "od-25",
+      "title": "★ 触发那条已被撤回 → 不引用（群里已经看不到它）",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": null,
+        "chosenUsable": false,
+        "chosenIndex": -1,
+        "messageCount": 5,
+        "triggerMessageId": 555,
+        "triggerIndex": 2,
+        "triggerUsable": false,
+        "lastSelfIndex": -1,
+        "directAddress": false,
+        "triggerWasEcho": false
+      },
+      "expect": { "target": null, "reason": "trigger_recalled" }
+    }
+  ]
+}

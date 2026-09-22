@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using QQChatAgent.Models;
+using QQChatAgent.Services.Decision;
 
 namespace QQChatAgent.Services.Agent;
 
@@ -97,7 +98,8 @@ public sealed class OpenAiClient
     };
 
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
-        IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false)
+        IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false,
+        bool enableAsk = false, bool enableToolRequest = false)
     {
         if (string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
@@ -151,6 +153,13 @@ public sealed class OpenAiClient
         }
 
         systemContent += BuildSuitabilityInstruction();
+
+        // 结构化动作契约（V3 §8.1）：**只在对应开关打开时追加**。
+        // 两个开关都关着 → 这段是空串，提示词与改造前逐字一致（§5.3 兼容红线）。
+        if (enableAsk || enableToolRequest)
+        {
+            systemContent += BuildActionContract(enableAsk, enableToolRequest);
+        }
 
         // 引用谁：最近几条别人的消息都带了 (#id)，让模型自己指认。
         // replyTo 的语义必须写死 —— 模型很容易把“让我不爽的那条（素材）”当成“我在回哪条（对象）”：
@@ -632,7 +641,7 @@ public sealed class OpenAiClient
         {
             Services.FileLog.Write("Agent",
                 $"上游连续两次都没给 choices（带图 {attachedImages} 张）→ 本轮按沉默处理：{Truncate(json, 200)}");
-            return new CompletionResult(null, null, null, UpstreamEmpty: true);
+            return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true);
         }
 
         if (textOnlyRetry)
@@ -653,12 +662,13 @@ public sealed class OpenAiClient
                 _ => null
             };
 
-            return ParseModelOutput(rawReply);
+        // 判定用的开关取**调用方传进来的快照**，不再读实时设置 —— 否则配置热更新会改到在途请求（V3 §5.3）
+        return ParseModelOutput(rawReply, questionsEnabled: enableAsk);
         }
 
         // 有 choices 但里面没有 message.content：同样按沉默处理，不招异常
         Services.FileLog.Write("Agent", $"模型返回里没有 message.content → 本轮按沉默处理：{Truncate(json, 200)}");
-        return new CompletionResult(null, null, null, UpstreamEmpty: true);
+        return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true);
     }
 
     /// <summary>
@@ -764,7 +774,12 @@ public sealed class OpenAiClient
     /// </summary>
     private const string SingleCharReplyWhitelist = "嗯哦啊哈呃哎咦喂喔唔草6?？!！~～";
 
-    private static CompletionResult ParseModelOutput(string? rawReply)
+    /// <param name="questionsEnabled">
+    /// 面板上的「允许提问」开关（默认关）。关着时 <c>action=ask</c> 仍是安全静默
+    /// （<c>ask_not_enabled</c>）；打开后才把问题文本带出来交给服务端走提问流程。
+    /// 这个开关**不授予任何权限** —— 提问只是“往当前会话说一句带编号的话”。
+    /// </param>
+    private static CompletionResult ParseModelOutput(string? rawReply, bool questionsEnabled)
     {
         if (string.IsNullOrWhiteSpace(rawReply))
         {
@@ -785,9 +800,10 @@ public sealed class OpenAiClient
         // 只是格式没弄对 —— 宁可沉默，也绝不把 JSON 代码吐进群里。
         if (!text.StartsWith('{') && LooksLikeSchemaJson(text))
         {
+            // 只记结构化字段（长度），不记正文 —— V3 §8.2「不保存完整模型输出」
             Services.FileLog.Warn("Agent",
-                $"模型输出看似 JSON 但格式不对，按沉默处理（避免把代码发进群）：{Truncate(rawReply, 120)}");
-            return new CompletionResult(null, null, rawReply);
+                $"模型输出看似 JSON 但格式不对，按沉默处理（避免把代码发进群）；长度 {VisibleLength(text)}，只记形状不记正文");
+            return new CompletionResult(null, null, rawReply, ReasonCode: "schema_mismatch", Malformed: true);
         }
 
         // 只有“以 { 开头”才当作 JSON 尝试。
@@ -802,11 +818,20 @@ public sealed class OpenAiClient
             if (VisibleLength(text) < MinPlainTextReplyLength)
             {
                 Services.FileLog.Warn("Agent",
-                    $"模型输出疑似被截断（非 JSON，只有 {VisibleLength(text)} 个可见字符），按沉默处理：{Truncate(text, 60)}");
-                return new CompletionResult(null, null, rawReply);
+                    $"模型输出疑似被截断（非 JSON，只有 {VisibleLength(text)} 个可见字符），按沉默处理（只记形状不记正文）");
+                return new CompletionResult(null, null, rawReply, ReasonCode: "truncated_output", Malformed: true);
             }
 
-            return new CompletionResult(null, text, rawReply);
+            // 纯文本兜底也要过判定：显式静默标记 [SILENT] 必须在这里被拦下，
+            // 绝不能进 QQ 发送队列（V3 §8.2）。其余纯文本照发（legacy_text）。
+            var plainVerdict = ReplyDecisionRules.Decide(action: null, reply: text);
+            return new CompletionResult(
+                null,
+                plainVerdict.Content,
+                rawReply,
+                Action: plainVerdict.Action,
+                ReasonCode: plainVerdict.ReasonCode,
+                Malformed: plainVerdict.Malformed);
         }
 
         var start = text.IndexOf('{');
@@ -817,7 +842,7 @@ public sealed class OpenAiClient
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                return new CompletionResult(null, null, rawReply);
+                return new CompletionResult(null, null, rawReply, ReasonCode: "json_not_object", Malformed: true);
             }
 
             int? suitability = null;
@@ -861,7 +886,7 @@ public sealed class OpenAiClient
             {
                 Services.FileLog.Warn("Agent",
                     $"模型只回了 1 个字“{reply}”，不属于正常应答，按沉默处理。原文：{Truncate(rawReply, 80)}");
-                return new CompletionResult(suitability, null, rawReply);
+                return new CompletionResult(suitability, null, rawReply, ReasonCode: "single_char_noise", Malformed: true);
             }
 
             // 1 个字的正常应答：照发。
@@ -1048,13 +1073,110 @@ public sealed class OpenAiClient
                 mood = md.GetString()?.Trim();
             }
 
-            return new CompletionResult(suitability, string.IsNullOrWhiteSpace(reply) ? null : reply, rawReply, stickerId, replyToId, pokeTargetId, mood, listen, shareSong, speak, both, search, read, vibe, vibeNote, voiceEmotion, voiceSpeed, voicePitch);
+            // ── 结构化动作（V3 §8.1 / §8.2）：action = reply|silent|ask|tool ──
+            // 解析与判定都不在这里做业务决定，只把“候选动作 + 正文”交给纯规则类，
+            // 由它给出「发不发 / 发什么 / 为什么」—— 这样判定逻辑能被确定性单测覆盖。
+            string? declaredAction = null;
+            if (root.TryGetProperty("action", out var act) || root.TryGetProperty("动作", out act))
+            {
+                declaredAction = act.ValueKind == JsonValueKind.String ? act.GetString() : "(non-string)";
+            }
+
+            string? declaredReason = null;
+            if (root.TryGetProperty("reasonCode", out var rc) ||
+                root.TryGetProperty("reason_code", out rc) ||
+                root.TryGetProperty("reason", out rc))
+            {
+                declaredReason = rc.ValueKind == JsonValueKind.String ? rc.GetString() : null;
+            }
+
+            // 模型想调的工具（V3 §8.1 的 toolRequest）：字符串，或 {"tool": "…"} / {"id": "…"} / {"name": "…"}。
+            // 这里只是把候选名字抠出来交给判定规则清洗；**它不构成授权** ——
+            // 服务端只认自己固定的那个工具（见 ApprovalFlow），别的名字连审批单都开不出来。
+            string? declaredTool = null;
+            if (root.TryGetProperty("toolRequest", out var tr) ||
+                root.TryGetProperty("tool_request", out tr) ||
+                root.TryGetProperty("tool", out tr))
+            {
+                if (tr.ValueKind == JsonValueKind.String)
+                {
+                    declaredTool = tr.GetString();
+                }
+                else if (tr.ValueKind == JsonValueKind.Object)
+                {
+                    if (tr.TryGetProperty("tool", out var t1) && t1.ValueKind == JsonValueKind.String)
+                    {
+                        declaredTool = t1.GetString();
+                    }
+                    else if (tr.TryGetProperty("id", out var t2) && t2.ValueKind == JsonValueKind.String)
+                    {
+                        declaredTool = t2.GetString();
+                    }
+                    else if (tr.TryGetProperty("name", out var t3) && t3.ValueKind == JsonValueKind.String)
+                    {
+                        declaredTool = t3.GetString();
+                    }
+                }
+            }
+
+            var verdict = ReplyDecisionRules.Decide(
+                declaredAction, reply, declaredReason,
+                toolRequest: declaredTool,
+                askEnabled: questionsEnabled);
+
+            if (verdict.Send && ReplyDecisionRules.ContainsSilentMarker(verdict.Content))
+            {
+                // 正文里夹带标记 ≠ 控制位：照常发送，但留一条现场（说明模型把标记当内容用了）
+                Services.FileLog.Warn("Agent", "模型正文里夹带了静默标记（按普通正文发送，不当控制位）");
+            }
+
+            if (verdict.Malformed)
+            {
+                // 只记结构化字段（原因码 + 长度）：正文可能转述群聊内容，不能进日志/面板
+                Services.FileLog.Warn("Agent",
+                    $"模型输出未通过判定（{verdict.ReasonCode}）→ 按沉默处理；长度 {VisibleLength(rawReply)}，只记形状不记正文");
+            }
+
+            // 副作用字段（正文之外的动作：发音 / 分享 / 出网 / 发图 / 戳）只在**这一轮真的按 reply 处理**
+            // 时才带出去（V3 §8.1：silent = 不发送任何 QQ 消息、不留隐藏副作用）。
+            //   • 旧协议（压根没有 action 字段）：保持改造前行为 —— 空 reply + speak 仍是“只发语音”；
+            //   • action=reply：同上（模型可以用 speak / sticker 表达“这句用声音说 / 用图说”）；
+            //   • 显式写了非 reply 的动作（silent / ask / tool / 未知 / 超长 / 非字符串）：一律作废，
+            //     免得“说了不说”却还发语音、分享歌曲或悄悄出网。
+            var keepSideEffects = string.IsNullOrWhiteSpace(declaredAction)
+                ? verdict.ReasonCode != "silent_marker"
+                : verdict.Action == ReplyAction.Reply;
+
+            return new CompletionResult(
+                suitability,
+                verdict.Send ? verdict.Content : null,
+                rawReply,
+                keepSideEffects ? stickerId : null,
+                keepSideEffects ? replyToId : null,
+                keepSideEffects ? pokeTargetId : null,
+                mood,
+                keepSideEffects ? listen : null,
+                keepSideEffects ? shareSong : null,
+                keepSideEffects ? speak : null,
+                keepSideEffects && both,
+                keepSideEffects ? search : null,
+                keepSideEffects ? read : null,
+                vibe,
+                vibeNote,
+                voiceEmotion,
+                voiceSpeed,
+                voicePitch,
+                Action: verdict.Action,
+                ReasonCode: verdict.ReasonCode,
+                Malformed: verdict.Malformed,
+                ToolId: verdict.ToolId,
+                QuestionText: verdict.QuestionText);
         }
         catch (JsonException)
         {
             // 长得像 JSON 却解析不了：判为格式错误 → 沉默。
             // （以前这里会落到“按普通文本处理”，把整段 JSON 发进群里。）
-            return new CompletionResult(null, null, rawReply);
+            return new CompletionResult(null, null, rawReply, ReasonCode: "invalid_json", Malformed: true);
         }
     }
 
@@ -1595,6 +1717,35 @@ public sealed class OpenAiClient
         }
     }
 
+    /// <summary>
+    /// 结构化动作契约（V3 §8.1 的 action / toolRequest）。**只在对应开关打开时才拼进提示词**：
+    /// 两个开关都关着时调用方根本不会调它，所以旧部署的提示词逐字不变（§5.3 兼容红线）。
+    /// 这里只描述协议，不承诺任何权限 —— 能不能执行仍然由服务端闸门决定。
+    /// </summary>
+    private static string BuildActionContract(bool askEnabled, bool toolEnabled)
+    {
+        var sb = new StringBuilder();
+        sb.Append("\n\n[可选的结构化动作]\n");
+        sb.Append("你可以在同一条 JSON 里再写一个 action 字段，用来说明这一轮到底要做什么；**不写它就等于正常回复**。\n");
+        sb.Append("• \"reply\"：正常说话（默认）。\n");
+        sb.Append("• \"silent\"：这一轮什么动作都不做 —— reply 留空，并且**不要**再写 speak / sticker / poke / listen / " +
+                  "shareSong / search / read，服务端会把它们全部忽略。\n");
+        if (askEnabled)
+        {
+            sb.Append("• \"ask\"：你想先问一句再往下做 —— 把要问的话写在 reply 里；服务端会包上编号和有效期替你发出去，" +
+                      "回答只是一条普通消息，**不会**给你任何权限。\n");
+        }
+
+        if (toolEnabled)
+        {
+            sb.Append("• \"tool\"：你想用工具 —— 把工具名写进 toolRequest。服务端只认它自己登记过的工具，" +
+                      "没登记的名字不会执行；有的工具还需要群里的人批准，批准前不会有任何动作。\n");
+        }
+
+        sb.Append("控制字段只写短标识符；拿不准就别写 action，按老格式回。");
+        return sb.ToString();
+    }
+
     /// <summary>按对话欲望生成“发言适合度”评分指令。</summary>
     private string BuildSuitabilityInstruction()
     {
@@ -2070,7 +2221,31 @@ public readonly record struct CompletionResult(int? Suitability, string? Reply, 
     int? VoicePitch = null,
     
     /// <summary>上游回 200 但没给 choices（网关吞回复/风控）—— 与“模型自己决定沉默”不是一回事。</summary>
-    bool UpstreamEmpty = false);
+    bool UpstreamEmpty = false,
+
+    /// <summary>
+    /// 模型这一轮建议的动作（V3 §8.1 的 <c>action</c>，已由服务端归一化）。
+    /// 缺省 = 旧协议没有这个字段，按“正常回复”处理。
+    /// </summary>
+    ReplyAction Action = ReplyAction.Reply,
+
+    /// <summary>结构化原因码（短串、**不含正文**）：这轮为什么发 / 为什么不发。</summary>
+    string? ReasonCode = null,
+
+    /// <summary>
+    /// 模型想调的工具名（已清洗成短标识符）。**仅用于记录与审批展示**：
+    /// 服务端只认自己固定的那个假工具，模型写别的名字照样不执行（V3 §9.1）。
+    /// </summary>
+    string? ToolId = null,
+
+    /// <summary>
+    /// 模型想问的问题（仅当 <c>action=ask</c> 且面板「允许提问」打开时才有值）。
+    /// **不是正文**：<see cref="Reply"/> 仍为 null；服务端会包上编号与有效期再发。
+    /// </summary>
+    string? QuestionText = null,
+
+    /// <summary>模型输出不合法（非法动作 / 空回复 / 上游空响应）—— 与“它自己选择不说”区分开。</summary>
+    bool Malformed = false);
 
 /// <summary>图片下载器：把图片 URL 下载并转成 base64 data URL（供多模态模型识图），
 /// 也给表情包库提供原始字节。</summary>

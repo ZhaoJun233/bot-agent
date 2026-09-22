@@ -466,6 +466,33 @@ public sealed partial class WebUiServer : IDisposable
             return;
         }
 
+        // ─────────── 参与状态（工程 V3 · P1，**只读**）───────────
+        // GET /api/participation：每个会话现在处在什么状态、最近一次为什么转移、当前生效的上限。
+        // 为什么只读：状态机目前**只观测不拦截**，面板不该也不能改它 —— 改的是上面的参数。
+        // 会话 key 走脱敏开关（显示层脱敏、内部 key 不变）；只返回结构化字段，不含任何正文。
+        if (path.Equals("/api/participation", StringComparison.OrdinalIgnoreCase))
+        {
+            var (policy, rows) = _agent.ParticipationSnapshot();
+            var payload = new JsonObject
+            {
+                ["policy"] = policy,
+                ["gating"] = "off（只观测：状态机不改“发不发”的判定）",
+                ["tracked"] = rows.Count,
+                ["sessions"] = new JsonArray(rows
+                    .Select(r => (JsonNode)new JsonObject
+                    {
+                        ["key"] = r.Key,
+                        ["state"] = r.State,
+                        ["reason"] = r.Reason,
+                        ["counters"] = r.Counters,
+                        ["lastTransition"] = r.Age,
+                    }).ToArray()),
+            };
+
+            await WriteJsonAsync(context, 200, payload);
+            return;
+        }
+
         if (path.Equals("/api/agent/test", StringComparison.OrdinalIgnoreCase) && method == "POST")
         {
             await HandleAgentTestAsync(context);
@@ -1377,7 +1404,23 @@ public sealed partial class WebUiServer : IDisposable
         }
     }
 
-    /// <summary>密钥掩码（只回显前 3 后 2，与其它密钥一致）。</summary>
+        /// <summary>
+    /// 面板回显用的参与上限摘要（P1）。**走 Clamped()**：面板上看到的永远是“真正生效的那组数”，
+    /// 不是你在输入框里填的 —— 填 999 时这里会显示被钳到的 10，免得“我改了怎么没变化”这类误会。
+    /// </summary>
+    private static string DescribeParticipationPolicy(AppSettings s)
+    {
+        var p = new Services.Participation.ParticipationPolicy(
+            s.ParticipationMaxConsecutiveReplies,
+            s.ParticipationCooldownSeconds,
+            s.ParticipationProbingMaxReplies,
+            s.ParticipationMaxActiveLifetimeSeconds,
+            s.ParticipationMaxExitingLifetimeSeconds).Clamped();
+
+        return $"连续 ≤{p.MaxConsecutiveReplies} / 冷却 {p.CooldownSeconds}s / 试探 ≤{p.ProbingMaxReplies}"
+               + $" / 活性命 {p.MaxActiveLifetimeSeconds}s / 退场 {p.MaxExitingLifetimeSeconds}s";
+    }
+/// <summary>密钥掩码（只回显前 3 后 2，与其它密钥一致）。</summary>
     private static string MaskSecret(string? value)
     {
         var text = (value ?? string.Empty).Trim();
@@ -1588,6 +1631,51 @@ public sealed partial class WebUiServer : IDisposable
         }
         if (body["agentServerModel"] is JsonNode asm) s.AgentServerModel = (asm.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentDevices"] is JsonNode ad) s.AgentDevices = ad.GetValue<string>() ?? string.Empty;
+        if (body["scenarioPreset"] is JsonNode preset)
+        {
+            // 只认预设名单里的名字；写别的（或留空）都不放开能力（见 AppSettings.ScenarioPreset）
+            s.ScenarioPreset = (preset.GetValue<string>() ?? string.Empty).Trim();
+        }
+
+        if (body["enableApprovals"] is JsonNode apv) s.EnableApprovals = apv.GetValue<bool>();
+        if (body["approvalApprovers"] is JsonNode aap)
+        {
+            // 审批人名单：只是一串 QQ 号，限长防呆（真正的身份核验在审批流程里，见 ApprovalStore）
+            var list = (aap.GetValue<string>() ?? string.Empty).Trim();
+            s.ApprovalApprovers = list.Length > 300 ? list[..300] : list;
+        }
+
+        // 参与状态机的上下限（P1）。这里先做一次**面板级**钳制，真正的硬上限在
+        // ParticipationPolicy.Clamped()（两处都要过 —— 面板值不可信，代码里那层才是安全边界）。
+        if (body["participationMaxConsecutiveReplies"] is JsonNode pmcr)
+        {
+            s.ParticipationMaxConsecutiveReplies = Math.Clamp(pmcr.GetValue<int>(), 1, 10);
+        }
+
+        if (body["participationCooldownSeconds"] is JsonNode pcs)
+        {
+            s.ParticipationCooldownSeconds = Math.Clamp(pcs.GetValue<int>(), 0, 600);
+        }
+
+        if (body["participationProbingMaxReplies"] is JsonNode ppmr)
+        {
+            s.ParticipationProbingMaxReplies = Math.Clamp(ppmr.GetValue<int>(), 1, 3);
+        }
+
+        if (body["participationMaxActiveLifetimeSeconds"] is JsonNode pmal)
+        {
+            s.ParticipationMaxActiveLifetimeSeconds = Math.Clamp(pmal.GetValue<int>(), 30, 3600);
+        }
+
+        if (body["participationMaxExitingLifetimeSeconds"] is JsonNode pmel)
+        {
+            s.ParticipationMaxExitingLifetimeSeconds = Math.Clamp(pmel.GetValue<int>(), 10, 3600);
+        }
+
+        // 两个会真正改变行为的开关（都默认关）：参与闸门、允许提问
+        if (body["enableParticipationGating"] is JsonNode epg) s.EnableParticipationGating = epg.GetValue<bool>();
+        if (body["enableQuestions"] is JsonNode eq) s.EnableQuestions = eq.GetValue<bool>();
+
         if (body["enableAgentMask"] is JsonNode eam) s.AgentMaskSensitive = eam.GetValue<bool>();
         if (body["agentPrompt"] is JsonNode ap)
         {
@@ -2202,6 +2290,40 @@ public sealed partial class WebUiServer : IDisposable
             ? "panel"
             : (string.IsNullOrWhiteSpace(s.AgentServerApiKey) ? "none" : "env"),
         ["agentDevices"] = s.AgentDevices,
+        ["scenarioPreset"] = s.ScenarioPreset,
+        ["scenarioPresets"] = new JsonArray(Services.Permissions.ScenarioPresets.All
+            .Select(name => (JsonNode)name!).ToArray()),
+        ["scenarioCapabilities"] = s.ScenarioPreset.Length == 0
+            ? "(跟随现有开关)"
+            : Services.Permissions.ChatCapabilitySet.FromSwitches(
+                s.EnableWebSearch, s.EnableMusic, s.EnableVoice, s.EnableStickers, s.EnablePoke,
+                s.ScenarioPreset).Describe(),
+        ["enableApprovals"] = s.EnableApprovals,
+        ["approvalApprovers"] = s.ApprovalApprovers,
+        // 面板要能说清“开了审批会发生什么”：只覆盖这一个固定假工具，且它没有任何真实副作用
+        ["approvalTool"] = Services.Permissions.ApprovalFlow.FixedToolId,
+        ["approvalTtlSeconds"] = Services.Permissions.ApprovalFlow.TtlSeconds,
+        ["approvalCapabilities"] = s.EnableApprovals
+            ? Services.Permissions.ChatCapabilitySet.FromSwitches(
+                s.EnableWebSearch, s.EnableMusic, s.EnableVoice, s.EnableStickers, s.EnablePoke,
+                s.ScenarioPreset, approvalsEnabled: true).Describe()
+            : "(审批关闭：模型写的 action=tool 一律安全静默)",
+        // 参与状态机（P1）：参数可改，但**只影响观测日志**（gating 未打开）
+        ["participationMaxConsecutiveReplies"] = s.ParticipationMaxConsecutiveReplies,
+        ["participationCooldownSeconds"] = s.ParticipationCooldownSeconds,
+        ["participationProbingMaxReplies"] = s.ParticipationProbingMaxReplies,
+        ["participationMaxActiveLifetimeSeconds"] = s.ParticipationMaxActiveLifetimeSeconds,
+        ["participationMaxExitingLifetimeSeconds"] = s.ParticipationMaxExitingLifetimeSeconds,
+        ["participationPolicy"] = DescribeParticipationPolicy(s),
+        ["enableParticipationGating"] = s.EnableParticipationGating,
+        ["participationGating"] = s.EnableParticipationGating
+            ? "on（闸门开启：状态机说这一轮不参与就不叫模型 —— 只收不放）"
+            : "off（只观测：不改“发不发”的判定）",
+        ["enableQuestions"] = s.EnableQuestions,
+        ["questionTool"] = Services.Permissions.ApprovalFlow.QuestionToolId,
+        ["questionCapabilities"] = s.EnableQuestions
+            ? "允许提问（带一次性编号与有效期；不授予任何权限）"
+            : "(提问关闭：模型写的 action=ask 一律安全静默)",
         ["enableAgentMask"] = s.AgentMaskSensitive,
         ["agentPrompt"] = s.AgentPrompt,
         // 面板「恢复默认」按钮用：默认那份写在 AppSettings.DefaultAgentPrompt（只有一处真源）

@@ -1081,6 +1081,89 @@
           <p class="path-hint" id="moodHint"></p>
         </div>
 
+        <!-- 能力与审批（V3：默认全关，行为与改造前一致） -->
+        <div class="card">
+          <div class="card-head">
+            <h3>能力与审批<span class="hint">增强能力：默认关闭，不改现有行为</span></h3>
+            <p><b>场景预设</b>留空 = 能力白名单完全由上面的开关决定（与以前一样）；填了预设只会<b>收紧</b>，
+              不会把已经关掉的能力打开，名字不认识则按最低权限处理。<br />
+              <b>人工审批</b>打开后，模型说“想调工具”不会被执行，而是发一张<b>待确认</b>到群里：
+              群主/管理员（或下面点名的人）回复「同意 编号」才执行 —— 而且只执行一个<b>固定假工具</b>
+              （它没有任何真实副作用，不代表具备 shell / 文件 / 进程控制能力）。</p>
+          </div>
+
+          <div class="field">
+            <label>场景预设<span class="hint">留空 = 跟随开关；on-demand 只回明确提及、research 允许受限联网、social 允许额外动作</span></label>
+            <select id="setScenarioPreset">
+              <option value="">（跟随现有开关）</option>
+              <option value="on-demand">on-demand（按需参与）</option>
+              <option value="research">research（资料讨论）</option>
+              <option value="social">social（多人交流）</option>
+            </select>
+          </div>
+          <p class="path-hint" id="scenarioCapHint"></p>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableApprovals" />
+            <span class="switch"></span>
+            <span>启用人工审批（模型想调工具时要人确认；只覆盖固定假工具）</span>
+          </label>
+
+          <div class="field">
+            <label>审批人（可选）<span class="hint">逗号分隔的 QQ 号；留空 = 只认群里的群主 / 管理员</span></label>
+            <input type="text" id="setApprovalApprovers" maxlength="300" placeholder="例如：10001, 10002" />
+          </div>
+          <p class="path-hint" id="approvalHint"></p>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableQuestions" />
+            <span class="switch"></span>
+            <span>允许提问（模型可以带编号问一句；提问不授予任何权限，默认关）</span>
+          </label>
+          <p class="path-hint" id="questionHint"></p>
+
+          <div class="card-head">
+            <h3>参与状态机<span class="hint">只观测，不改“发不发”的判定</span></h3>
+            <p>机器人按会话记一份参与状态（观望 / 试探 / 活跃 / 退场），下面这组是**服务端硬上限**：
+              填大了会被钳到上限（连续 ≤10、冷却 ≤600 秒、试探 ≤3、活性命 ≤3600 秒）。<br />
+              <b>现在它只写观测日志</b>（日志里搜 <code>[参与]</code>），改这些数字<b>不会改变群聊行为</b> ——
+              这是刻意的：等真实使用观测对得上，再谈用它来拦。</p>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>连续回复上限<span class="hint">一次活跃里最多连说几句（1–10）</span></label>
+              <input type="number" id="setPartMaxReplies" min="1" max="10" step="1" />
+            </div>
+            <div class="field">
+              <label>回复后冷却（秒）<span class="hint">0–600；冷却中通常不再主动接话</span></label>
+              <input type="number" id="setPartCooldown" min="0" max="600" step="5" />
+            </div>
+            <div class="field">
+              <label>试探上限<span class="hint">试探阶段最多回几次（1–3）</span></label>
+              <input type="number" id="setPartProbing" min="1" max="3" step="1" />
+            </div>
+            <div class="field">
+              <label>活跃状态寿命（秒）<span class="hint">30–3600；到点自然退场</span></label>
+              <input type="number" id="setPartActiveLife" min="30" max="3600" step="30" />
+            </div>
+            <div class="field">
+              <label>退场状态寿命（秒）<span class="hint">10–3600</span></label>
+              <input type="number" id="setPartExitingLife" min="10" max="3600" step="10" />
+            </div>
+          </div>
+          <p class="path-hint" id="participationHint"></p>
+          <label class="switch-row">
+            <input type="checkbox" id="setPartGating" />
+            <span class="switch"></span>
+            <span>启用参与闸门（状态机说不参与就不叫模型 —— <b>默认关</b>，打开会明显少说话）</span>
+          </label>
+          <div class="logbar">
+            <button class="ghost-btn small" id="partRefreshBtn" type="button">刷新参与状态</button>
+          </div>
+          <div class="logbox" id="participationBox" style="max-height:180px"></div>
+        </div>
+
         <!-- 外观 -->
         <div class="card">
           <div class="card-head">

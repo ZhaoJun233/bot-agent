@@ -89,6 +89,81 @@ public sealed class AppSettings
     /// <summary>发言适合度阈值（0-100）：模型评分低于此值则沉默，默认 10。</summary>
     public int SuitabilityThreshold { get; set; } = 10;
 
+    /// <summary>
+    /// 场景预设（V3 §9.3）：<c>on-demand</c> / <c>research</c> / <c>social</c>；**留空 = 跟随现有开关**。
+    /// </summary>
+    /// <remarks>
+    /// 为什么默认留空：这是设计规范要求的“同一引擎通过配置适应不同场景”，但也是**新行为**。
+    /// 留空时能力白名单完全由既有开关（联网/音乐/语音/表情包/戳一戳）拼出来 —— 与改造前逐字一致；
+    /// 填了场景名才启用预设，而且预设只能**收紧**（与开关取交集），不会把面板关掉的能力打开。
+    /// 名字不认识 → 最低权限（Fail-Closed），不是“默认全开”。
+    /// </remarks>
+    public string ScenarioPreset { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 人在回路的审批（V3 §9.4）：**默认关**。
+    /// </summary>
+    /// <remarks>
+    /// 开着的时候，模型说“我想调工具”不再直接静默，而是由服务端开一张**待批单**并公告到群里；
+    /// 只有群主/管理员（或 <see cref="ApprovalApprovers" /> 里点名的人）回复「同意 编号」才会执行，
+    /// 且**只执行一个固定假工具**（<c>demo.echo</c>：记一行日志 + 回一句演示说明，没有真实副作用）。
+    ///
+    /// 关着（默认）时行为与改造前**逐字一致**：模型写的 `action=tool` 仍是安全静默（`tool_not_enabled`）。
+    /// 这一轮**没有**把 shell / 文件 / 进程 / 远程桥接进这条新路径 —— 审批只覆盖那个假工具。
+    /// </remarks>
+    public bool EnableApprovals { get; set; }
+
+    /// <summary>
+    /// 审批人名单（逗号/空格分隔的 QQ 号；留空 = 只认群里的 owner/admin）。
+    /// 只有在 <see cref="EnableApprovals" /> 打开时才有意义。
+    /// </summary>
+    public string ApprovalApprovers { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 参与状态机（V3 §7）的服务端上限。**默认值 = 状态机自己的默认值**，所以不填时行为与以前一致。
+    /// </summary>
+    /// <remarks>
+    /// 每一条都会被 <see cref="Services.Participation.ParticipationPolicy.Clamped" /> 再钳一次 ——
+    /// 面板里填多大都不会超过服务端硬上限（连续回复 ≤10、冷却 ≤600s、试探 ≤3 次、活性命 ≤3600s）。
+    ///
+    /// ⚠ 这一组参数**只喂观测日志**（gating 尚未打开）：状态机目前不改“发不发”的判定，
+    /// 调它不会改变群聊行为 —— 那是刻意的，见 docs/engineering/progress.md 的 P1 条目。
+    /// </remarks>
+    public int ParticipationMaxConsecutiveReplies { get; set; } = 3;
+
+    /// <summary>参与状态机：一次回复后的冷却秒数（服务端钳制 0..600；默认 20）。</summary>
+    public int ParticipationCooldownSeconds { get; set; } = 20;
+
+    /// <summary>参与状态机：试探阶段最多回几次（服务端钳制 1..3；默认 1）。</summary>
+    public int ParticipationProbingMaxReplies { get; set; } = 1;
+
+    /// <summary>参与状态机：活跃状态最长活多久（秒，服务端钳制 30..3600；默认 900）。</summary>
+    public int ParticipationMaxActiveLifetimeSeconds { get; set; } = 900;
+
+    /// <summary>参与状态机：退场状态挂多久（秒，服务端钳制 10..3600；默认 180）。</summary>
+    public int ParticipationMaxExitingLifetimeSeconds { get; set; } = 180;
+
+    /// <summary>
+    /// 参与闸门（V3 §7.3 / §7.4）：**默认关**。
+    /// </summary>
+    /// <remarks>
+    /// 关着 = 与改造前逐字一致：状态机只写观测日志，不影响“发不发”。
+    /// 打开之后，状态机说“这一轮不参与”（观望/退场/未确认/冷却中）就**不叫模型**，
+    /// 于是机器人会明显少说话 —— 这是**唯一**会真正改变群聊行为的新开关，所以刻意做成显式开关，
+    /// 而且只收不放（它说参与时也只是回到原来的判定链：自评阈值/白名单/冷却照旧）。
+    /// </remarks>
+    public bool EnableParticipationGating { get; set; }
+
+    /// <summary>
+    /// 允许提问（V3 §8.1 的 <c>action=ask</c>）：**默认关**。
+    /// </summary>
+    /// <remarks>
+    /// 关着 = 模型写 <c>action=ask</c> 时安全静默（<c>ask_not_enabled</c>）。
+    /// 打开后：模型想问就问，但**提问不是权限** —— 服务端只是把问题包一层自己的文案
+    /// （带一次性编号与有效期）发到当前会话，回答也只是一条普通消息，不触发任何动作。
+    /// </remarks>
+    public bool EnableQuestions { get; set; }
+
     /// <summary>消息白名单（**旧字段**：群聊与私聊共用一份名单；留空 = 全部忽略，严格模式）。
     /// 2026-09-18 起拆成两份（<see cref="WhitelistGroups" /> / <see cref="WhitelistPrivates" />）——
     /// 旧值仍然生效：哪一边的新字段留空，那一边就回落到这份共用名单（老配置不用动）。</summary>
@@ -775,4 +850,13 @@ public sealed class AppSettings
     /// <summary>NapCat WebUI 令牌（napcat/config/webui.json 的 token 字段）。环境变量专属，不写入 settings.json。</summary>
     [JsonIgnore]
     public string NapCatWebUiToken { get; set; } = string.Empty;
+
+    // ---------- 快照 ----------
+
+    /// <summary>
+    /// 取一份**只读用途**的配置快照（浅拷贝）。一次处理开始时固定它，处理过程中一律读快照 ——
+    /// 面板热更新只影响后续处理，不会改到在途请求（V3 §5.3）。
+    /// 只读用途：不要对副本调用保存 / 写回。
+    /// </summary>
+    public AppSettings Snapshot() => (AppSettings)MemberwiseClone();
 }

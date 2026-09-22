@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    工程增强（V3）的**隔离评测**工程（§11.2 / §11.3 / §11.4）。
+
+    定位：把 tests/fixtures/pipeline/*.json 里的合成样例，喂给**真实的生产组件**
+    （解析器 / 决策规则 / 能力闸门 / 审批闭环 / 参与状态机 / 引用目标规则 / QQ 纯文本），
+    统计 V3 §11.3 那套指标，并自动产出 JSON + CSV + Markdown 汇总。
+
+    口径（与探针一致，且必须一直保持）：
+      · 不启动机器人、不连网、不连 QQ、不用真实密钥、不写数据目录、不发任何消息；
+      · 全部注入固定输入与固定时间（状态机/审批的时间都由夹具给）；
+      · 这是一支**确定性管线回归**，不是模型智能评分 —— 假模型的分数不能冒充真实模型效果。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>QQChatAgent.PipelineEval</AssemblyName>
+    <RootNamespace>QQChatAgent.PipelineEval</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QQChatAgent.Headless\QQChatAgent.Headless.csproj" />
+  </ItemGroup>
+
+</Project>

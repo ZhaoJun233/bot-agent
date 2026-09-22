@@ -1194,6 +1194,27 @@ function renderConversations(force) {
     $("setMood").value = r.mood || "";
     $("setMoodTtl").value = r.moodTtlSeconds;
     $("moodHint").textContent = r.moodSummary ? "现在：" + r.moodSummary : "";
+    // 场景预设与审批（服务端字段；留空 = 跟随开关，行为与改造前一致）
+    $("setScenarioPreset").value = r.scenarioPreset || "";
+    $("scenarioCapHint").textContent = r.scenarioCapabilities ? "当前生效：" + r.scenarioCapabilities : "";
+    $("setEnableApprovals").checked = r.enableApprovals === true;
+    $("setApprovalApprovers").value = r.approvalApprovers || "";
+    $("approvalHint").textContent = r.approvalCapabilities
+      ? "审批：" + r.approvalCapabilities + (r.approvalTool ? "（工具 " + r.approvalTool + "，" + r.approvalTtlSeconds + " 秒有效）" : "")
+      : "";
+    // P1：参与状态机的上限（只观测；面板上看到的是**被钳过**的那组数）
+    $("setPartMaxReplies").value = r.participationMaxConsecutiveReplies;
+    $("setPartCooldown").value = r.participationCooldownSeconds;
+    $("setPartProbing").value = r.participationProbingMaxReplies;
+    $("setPartActiveLife").value = r.participationMaxActiveLifetimeSeconds;
+    $("setPartExitingLife").value = r.participationMaxExitingLifetimeSeconds;
+    $("participationHint").textContent = r.participationPolicy
+      ? "生效：" + r.participationPolicy + "；" + (r.participationGating || "")
+      : "";
+    $("setPartGating").checked = r.enableParticipationGating === true;
+    $("setEnableQuestions").checked = r.enableQuestions === true;
+    $("questionHint").textContent = r.questionCapabilities ? "提问：" + r.questionCapabilities : "";
+    refreshParticipation();
     $("setEnableMusic").checked = r.enableMusic !== false;
     $("setMusicSources").value = r.musicSources || "";
     $("setMusicBitrate").value = r.musicBitrate;
@@ -1397,6 +1418,19 @@ function renderConversations(force) {
       pokeCooldownSeconds: Number($("setPokeCooldown").value),
       moodTtlSeconds: Number($("setMoodTtl").value),
       mood: $("setMood").value.trim(),
+      // 场景预设（空 = 跟随开关）与人工审批（默认关）
+      scenarioPreset: $("setScenarioPreset").value,
+      enableApprovals: $("setEnableApprovals").checked,
+      approvalApprovers: $("setApprovalApprovers").value.trim(),
+      // P1：参与状态机的上限（服务端会再钳一次）
+      participationMaxConsecutiveReplies: Number($("setPartMaxReplies").value),
+      participationCooldownSeconds: Number($("setPartCooldown").value),
+      participationProbingMaxReplies: Number($("setPartProbing").value),
+      participationMaxActiveLifetimeSeconds: Number($("setPartActiveLife").value),
+      participationMaxExitingLifetimeSeconds: Number($("setPartExitingLife").value),
+      // 两个会真正改变行为的开关（都默认关）
+      enableParticipationGating: $("setPartGating").checked,
+      enableQuestions: $("setEnableQuestions").checked,
       enableMusic: $("setEnableMusic").checked,
       musicSources: $("setMusicSources").value.trim(),
       musicBitrate: Number($("setMusicBitrate").value),
@@ -1565,6 +1599,38 @@ function renderConversations(force) {
         const box = $("logBox");
         if (box) box.scrollTop = box.scrollHeight;   // 底部：最新的那几行
       });
+    }
+  }
+  /* ─────────── 参与状态（P1，只读）─────────── */
+  /* 为什么放这里：和上面的健康日报同一个理由 —— loadSettings() 可能要调它，
+     定义必须是**顶层**的，藏在别的函数体里会 ReferenceError（然后被吞成“没反应”）。 */
+  async function refreshParticipation() {
+    const box = $("participationBox");
+    box.textContent = "正在读取…";
+    try {
+      const r = await api("/api/participation");
+      const rows = (r && r.sessions) || [];
+      if (rows.length === 0) {
+        box.textContent = "还没观测到会话（收到群消息后才有）。";
+        return;
+      }
+
+      // 只用安全文本节点拼：会话 key 里可能有别人写的字（群名/昵称），绝不进 innerHTML
+      box.textContent = "";
+      const head = document.createElement("div");
+      // 这里显示的是**状态机手里那份**上限（证明面板改的参数真的到了它那儿）；
+      // 上面那行 hint 显示的是设置里那份 —— 两处同源，但来源不同，故意都留着便于对账。
+      head.textContent = (r && r.policy ? "状态机生效上限：" + r.policy + "；" : "")
+        + "共 " + rows.length + " 个会话（会话名已按脱敏开关处理）";
+      box.appendChild(head);
+      for (const row of rows) {
+        const line = document.createElement("div");
+        line.textContent = "· " + row.key + "　" + row.state + "（" + row.reason + "）　"
+          + row.counters + "　" + row.lastTransition;
+        box.appendChild(line);
+      }
+    } catch (err) {
+      box.textContent = "读取失败：" + ((err.data && err.data.error) || err.message);
     }
   }
   /* ─────────── 服务器健康日报（定时私聊推送）─────────── */
@@ -2593,7 +2659,10 @@ function renderConversations(force) {
     // 函数体在顶层（紧跟着 bindLogScrollButtons 后面）—— 放这里的话 loadSettings() 调不到它：
     // 那会抛 ReferenceError，而 loadSettings 的 .catch 会把它吞成“保存按钮点了没反应”（踩过，handoff §31.9）
     $("healthReportPreviewGo").addEventListener("click", () => runHealthReport("preview"));
-    $("healthReportSendGo").addEventListener("click", () => runHealthReport("send"));
+      $("healthReportSendGo").addEventListener("click", () => runHealthReport("send"));
+
+      // 参与状态刷新（函数体同样在顶层 —— 上面那条注释说的就是这类坑）
+      $("partRefreshBtn").addEventListener("click", () => refreshParticipation());
 
     $("searchTestGo").addEventListener("click", async () => {
       const out = $("searchTestOut");

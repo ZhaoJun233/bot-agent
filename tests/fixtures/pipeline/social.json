@@ -1,0 +1,339 @@
+{
+  "category": "social",
+  "title": "多人交流：交叉发言、引用目标与状态转移（V3 §11.2 第三类）",
+  "notes": [
+    "状态机样例注入固定时间（atSeconds），不用真实时钟；断言“每一步的 allow/state”都正确才算这条样例通过。",
+    "fault=true 的样例属于**注入故障**，单独计入“异常恢复”指标。",
+    "引用目标样例把事实喂给 ReplyTargetRules（真实规则），验证“宁可不引，也不挂错人”。"
+  ],
+  "cases": [
+    {
+      "id": "so-01",
+      "title": "被 @ 之后回复成功：观望 → 试探 → 活跃",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing", "reason": "mentioned_probe" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active", "reason": "replied" }
+      ],
+      "expect": { "finalState": "Active" }
+    },
+    {
+      "id": "so-02",
+      "title": "没点名的普通消息：保持观望、不发言",
+      "mechanism": "participation",
+      "script": [
+        { "event": "IrrelevantMessage", "atSeconds": 0, "allow": false, "state": "Observing", "reason": "not_addressed" }
+      ],
+      "expect": { "finalState": "Observing" }
+    },
+    {
+      "id": "so-03",
+      "title": "试探没得到确认（下一条还是别人的话）→ 退场，不再硬插话",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "IrrelevantMessage", "atSeconds": 1, "allow": false, "state": "Exiting", "reason": "probing_no_confirm" }
+      ],
+      "expect": { "finalState": "Exiting" }
+    },
+    {
+      "id": "so-04",
+      "title": "冷却期内别人接着说话 → 不发言（保持活跃，等冷却过去）",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
+        { "event": "IrrelevantMessage", "atSeconds": 2, "allow": false, "state": "Active", "reason": "cooldown" }
+      ],
+      "expect": { "finalState": "Active" }
+    },
+    {
+      "id": "so-05",
+      "title": "冷却过去后，活跃状态下可以自然接一句",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
+        { "event": "IrrelevantMessage", "atSeconds": 25, "allow": true, "state": "Active", "reason": "active_relate" }
+      ],
+      "expect": { "finalState": "Active" }
+    },
+    {
+      "id": "so-06",
+      "title": "连说够了（到连续回复上限）之后又被 @，且还在休息窗口里 → 直接拒绝（不许无限连发）",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
+        { "event": "Replied", "atSeconds": 2, "allow": true, "state": "Active" },
+        { "event": "Replied", "atSeconds": 3, "allow": true, "state": "Active" },
+        { "event": "Mentioned", "atSeconds": 4, "allow": false, "state": "Active", "reason": "reply_cap_cooldown" }
+      ],
+      "expect": { "finalState": "Active" }
+    },
+    {
+      "id": "so-07",
+      "title": "决定静默 → 退场（下次明确触发再回来）",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Silent", "atSeconds": 1, "allow": false, "state": "Exiting", "reason": "silent" }
+      ],
+      "expect": { "finalState": "Exiting" }
+    },
+    {
+      "id": "so-08",
+      "title": "【注入故障】工具失败 → 只降级不升级（退场），不发言",
+      "mechanism": "participation",
+      "fault": true,
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
+        { "event": "ToolFailure", "atSeconds": 2, "allow": false, "state": "Exiting", "reason": "tool_failure" }
+      ],
+      "expect": { "finalState": "Exiting" }
+    },
+    {
+      "id": "so-09",
+      "title": "【注入故障】连续两次失败 → 回观望（安全默认），仍然不发言",
+      "mechanism": "participation",
+      "fault": true,
+      "script": [
+        { "event": "ToolFailure", "atSeconds": 0, "allow": false, "state": "Exiting", "reason": "tool_failure" },
+        { "event": "ToolFailure", "atSeconds": 1, "allow": false, "state": "Observing", "reason": "tool_failure" }
+      ],
+      "expect": { "finalState": "Observing" }
+    },
+    {
+      "id": "so-10",
+      "title": "【注入故障】模型超时 → 同样只降级（退场）",
+      "mechanism": "participation",
+      "fault": true,
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
+        { "event": "ModelTimeout", "atSeconds": 2, "allow": false, "state": "Exiting", "reason": "model_timeout" }
+      ],
+      "expect": { "finalState": "Exiting" }
+    },
+    {
+      "id": "so-11",
+      "title": "活跃状态活得太久（超过寿命上限）→ 自然回落退场，不再发言",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
+        { "event": "IrrelevantMessage", "atSeconds": 1000, "allow": false, "state": "Exiting" }
+      ],
+      "expect": { "finalState": "Exiting" }
+    },
+    {
+      "id": "so-12",
+      "title": "话题切换 → 退场",
+      "mechanism": "participation",
+      "script": [
+        { "event": "TopicShift", "atSeconds": 0, "allow": false, "state": "Exiting", "reason": "topic_shift" }
+      ],
+      "expect": { "finalState": "Exiting" }
+    },
+    {
+      "id": "so-13",
+      "title": "会话隔离：一个群聊到活跃，另一个群的状态不受影响（仍是观望）",
+      "mechanism": "participation",
+      "script": [
+        { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
+        { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" }
+      ],
+      "expect": { "finalState": "Active", "isolationKey": "group:20002", "isolationState": "Observing" }
+    },
+    {
+      "id": "so-14",
+      "title": "想发到**别的会话**的额外动作 → 拒绝（只能发当前会话）",
+      "mechanism": "gate",
+      "gate": {
+        "tool": "voice.speak", "scenario": "", "conversation": "group:10001",
+        "switches": { "webSearch": true, "music": true, "voice": true, "stickers": true, "poke": true },
+        "callIndex": 0, "targetConversation": "group:20002"
+      },
+      "expect": { "allow": false, "reason": "cross_conversation" }
+    },
+    {
+      "id": "so-15",
+      "title": "引用目标：模型指认的那条可用且在窗口里 → 就引它",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": 9601, "chosenUsable": true, "chosenIndex": 3, "messageCount": 8,
+        "triggerMessageId": 9605, "triggerIndex": 6, "lastSelfIndex": 2,
+        "directAddress": false, "triggerWasEcho": false
+      },
+      "expect": { "target": 9601, "reason": "model_chosen" }
+    },
+    {
+      "id": "so-16",
+      "title": "引用目标：模型编了一个不在窗口里的编号 → 不引它，退而引用触发那条",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": 9999, "chosenUsable": true, "chosenIndex": -1, "messageCount": 8,
+        "triggerMessageId": 9605, "triggerIndex": 6, "lastSelfIndex": 2,
+        "directAddress": false, "triggerWasEcho": false
+      },
+      "expect": { "target": 9605, "reason": "trigger_current" }
+    },
+    {
+      "id": "so-17",
+      "title": "引用目标：人家正在跟机器人说话，模型却指了别人 → 改引触发那条（点名优先）",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": 9601, "chosenUsable": true, "chosenIndex": 3, "messageCount": 8,
+        "triggerMessageId": 9607, "triggerIndex": 6, "lastSelfIndex": 2,
+        "directAddress": true, "triggerWasEcho": false
+      },
+      "expect": { "target": 9607, "reason": "direct_address_priority" }
+    },
+    {
+      "id": "so-18",
+      "title": "引用目标：本轮是复读/模仿，模型却指认了被复读的原文 → 宁可不引",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": 9601, "chosenUsable": true, "chosenIndex": 3, "messageCount": 8,
+        "triggerMessageId": 9605, "triggerIndex": 6, "lastSelfIndex": 2,
+        "directAddress": false, "triggerWasEcho": true
+      },
+      "expect": { "target": null, "reason": "echo_ignored" }
+    },
+    {
+      "id": "so-19",
+      "title": "引用目标：触发消息已经过去了（后面有人插话）→ 不引用，也不挂到别人头上",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": null, "chosenUsable": false, "chosenIndex": -1, "messageCount": 8,
+        "triggerMessageId": 9605, "triggerIndex": 1, "lastSelfIndex": 6,
+        "directAddress": false, "triggerWasEcho": false
+      },
+      "expect": { "target": null, "reason": "trigger_stale" }
+    },
+    {
+      "id": "so-20",
+      "title": "引用目标：要引的那条就是最新一条 → 引用是多余的，不引",
+      "mechanism": "replyTarget",
+      "facts": {
+        "chosen": 9609, "chosenUsable": true, "chosenIndex": 7, "messageCount": 8,
+        "triggerMessageId": null, "triggerIndex": -1, "lastSelfIndex": 6,
+        "directAddress": false, "triggerWasEcho": false
+      },
+      "expect": { "target": null, "reason": "target_is_latest" }
+    },
+    {
+      "id": "so-21",
+      "title": "审批：普通群成员发「同意」→ 不执行（身份在服务端核）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9", "actor": "user:30003", "role": "member", "conversation": "group:10001", "atSeconds": 5, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": false, "reason": "not_an_approver" }
+    },
+    {
+      "id": "so-22",
+      "title": "审批：群主发「同意」→ 执行固定假工具（拿到一次性票据）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9", "actor": "user:10001", "role": "owner", "conversation": "group:10001", "atSeconds": 5, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": true, "reason": "approved" }
+    },
+    {
+      "id": "so-23",
+      "title": "审批：别的会话里发「同意」→ 不执行（绑定原会话）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9", "actor": "user:10001", "role": "owner", "conversation": "group:20002", "atSeconds": 5, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": false, "reason": "cross_conversation" }
+    },
+    {
+      "id": "so-24",
+      "title": "审批：过了有效期才批 → 不执行（expired）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9", "actor": "user:10001", "role": "owner", "conversation": "group:10001", "atSeconds": 121, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": false, "reason": "expired" }
+    },
+    {
+      "id": "so-25",
+      "title": "审批：期间改过配置（策略版本变了）→ 不执行（stale_policy）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9", "actor": "user:10001", "role": "owner", "conversation": "group:10001", "atSeconds": 5, "currentPolicyVersion": 2 }
+      },
+      "expect": { "created": true, "execute": false, "reason": "stale_policy" }
+    },
+    {
+      "id": "so-26",
+      "title": "审批：模型点名服务端没登记的工具 → 连单都不开（tool_not_fixed）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "shell.exec", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": null
+      },
+      "expect": { "created": false, "execute": false, "reason": "tool_not_fixed" }
+    },
+    {
+      "id": "so-27",
+      "title": "审批：批准后重放同一条 → 不执行（一次性消费）",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9", "actor": "user:10001", "role": "owner", "conversation": "group:10001", "atSeconds": 5, "currentPolicyVersion": 1 },
+        "replay": { "command": "同意 K7M2Q9", "actor": "user:10001", "role": "owner", "conversation": "group:10001", "atSeconds": 6, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": true, "replayExecute": false, "reason": "approved", "replayReason": "already_decided" }
+    },
+    {
+      "id": "so-28",
+      "title": "审批：群里说「拒绝」→ 不执行，并回一句“已被拒绝”",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "拒绝 K7M2Q9", "actor": "user:10001", "role": "admin", "conversation": "group:10001", "atSeconds": 5, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": false, "reason": "rejected" }
+    },
+    {
+      "id": "so-29",
+      "title": "审批：动词后面多带一句话 → 不算命令（不解析），消息照旧走普通链路",
+      "mechanism": "approval",
+      "approval": {
+        "create": { "tool": "demo.echo", "conversation": "group:10001", "requestId": "K7M2Q9", "approvers": [], "allowGroupAdmins": true, "isGroup": true, "policyVersion": 1 },
+        "act": { "command": "同意 K7M2Q9 顺便把日志删了", "actor": "user:10001", "role": "owner", "conversation": "group:10001", "atSeconds": 5, "currentPolicyVersion": 1 }
+      },
+      "expect": { "created": true, "execute": false, "notACommand": true }
+    },
+    {
+      "id": "so-30",
+      "title": "提问默认关：ask.question 不在白名单（走不到开单那一步）",
+      "mechanism": "gate",
+      "gate": {
+        "tool": "ask.question", "scenario": "", "conversation": "group:10001",
+        "switches": { "webSearch": true, "music": true, "voice": true, "stickers": true, "poke": true },
+        "questionsEnabled": false, "callIndex": 0
+      },
+      "expect": { "allow": false, "reason": "not_allowlisted" }
+    },
+    {
+      "id": "so-31",
+      "title": "提问打开：只允许问**当前会话**（问到别的会话 → 拒绝）",
+      "mechanism": "gate",
+      "gate": {
+        "tool": "ask.question", "scenario": "", "conversation": "group:10001",
+        "switches": { "webSearch": true, "music": true, "voice": true, "stickers": true, "poke": true },
+        "questionsEnabled": true, "callIndex": 0, "targetConversation": "group:20002"
+      },
+      "expect": { "allow": false, "reason": "cross_conversation" }
+    }  ]
+}

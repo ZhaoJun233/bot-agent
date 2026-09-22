@@ -1,0 +1,17 @@
+{
+  "_comment": "资料讨论（research）：允许受限的搜索与网页读取（单轮预算 2 次），没有额外动作。合成演示配置，**不含任何密钥**。",
+  "_howToApply": "改完在面板点保存，等价于 POST /api/settings。演示里网页内容与搜索结果都是**固定替身**，不会真的出网。",
+  "scenarioPreset": "research",
+  "enableApprovals": false,
+  "suitabilityThreshold": 30,
+  "groupCooldownSeconds": 20,
+  "privateCooldownSeconds": 10,
+  "idleFallbackSeconds": 0,
+  "splitReplies": true,
+  "maxContextMessages": 200,
+  "enableWebSearch": true,
+  "enableMusic": false,
+  "enableVoice": false,
+  "enableStickers": false,
+  "enablePoke": false
+}
