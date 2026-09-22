@@ -60,16 +60,16 @@
     },
     {
       "id": "so-06",
-      "title": "连说够了（到连续回复上限）之后又被 @，且还在休息窗口里 → 直接拒绝（不许无限连发）",
+      "title": "连说够了（到连续回复上限）之后又被 @ → 允许这一句，但降回试探（不延续 active 特权）",
       "mechanism": "participation",
       "script": [
         { "event": "Mentioned", "atSeconds": 0, "allow": true, "state": "Probing" },
         { "event": "Replied", "atSeconds": 1, "allow": true, "state": "Active" },
         { "event": "Replied", "atSeconds": 2, "allow": true, "state": "Active" },
         { "event": "Replied", "atSeconds": 3, "allow": true, "state": "Active" },
-        { "event": "Mentioned", "atSeconds": 4, "allow": false, "state": "Active", "reason": "reply_cap_cooldown" }
+        { "event": "Mentioned", "atSeconds": 4, "allow": true, "state": "Probing", "reason": "mention_reply_cap" }
       ],
-      "expect": { "finalState": "Active" }
+      "expect": { "finalState": "Probing" }
     },
     {
       "id": "so-07",

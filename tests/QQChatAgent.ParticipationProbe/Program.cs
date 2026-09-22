@@ -67,22 +67,18 @@ public static class Program
         m3.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(3));
         Check("已到连续回复上限（2）", m3.ConsecutiveReplies == 2, m3.ConsecutiveReplies.ToString());
         d = m3.OnEvent(ParticipationEvent.Mentioned, t0.AddSeconds(4), "c");
-        Check("到上限且休息窗口已过 → 允许一句并重开一轮计数（mention_reply_cap_reset）",
-            d.Allow && m3.State == ParticipationState.Probing && d.ReasonCode == "mention_reply_cap_reset"
-            && m3.ConsecutiveReplies == 0, d.Describe());
+        Check("★ 到上限后仍被 @ → 允许这一句，但降级为试探（“直接跟我说话必须回”是产品红线）",
+            d.Allow && m3.State == ParticipationState.Probing && d.ReasonCode == "mention_reply_cap",
+            d.Describe());
 
-        // 到上限、且还在休息窗口里 → 直接拒绝。老实现这一支恒 allow:true，上限只写日志、拦不住任何一句。
-        var m3b = new ParticipationStateMachine(new ParticipationPolicy(MaxConsecutiveReplies: 2, CooldownSeconds: 60));
+        // 上限真正管的是“没人叫它的时候”：Active 状态下话题无关的消息，到上限就退场、不再插话。
+        var m3b = new ParticipationStateMachine(new ParticipationPolicy(MaxConsecutiveReplies: 2, CooldownSeconds: 0));
         m3b.OnEvent(ParticipationEvent.Mentioned, t0, "a2");
         m3b.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(1));
-        m3b.OnEvent(ParticipationEvent.Mentioned, t0.AddSeconds(2), "b2");
-        m3b.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(3));
-        d = m3b.OnEvent(ParticipationEvent.Mentioned, t0.AddSeconds(4), "c2");
-        Check("★ 到上限且在休息窗口内 → 拒绝（reply_cap_cooldown），不再“被 @ 就无限连发”",
-            !d.Allow && d.ReasonCode == "reply_cap_cooldown", d.Describe());
-        d = m3b.OnEvent(ParticipationEvent.Mentioned, t0.AddSeconds(90), "d2");
-        Check("休息窗口过后 → 重新开一轮（mention_reply_cap_reset，允许）",
-            d.Allow && d.ReasonCode == "mention_reply_cap_reset", d.Describe());
+        m3b.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(2));
+        d = m3b.OnEvent(ParticipationEvent.IrrelevantMessage, t0.AddSeconds(3));
+        Check("★ 到上限后的无关消息 → 拒绝并退场（上限用在“没被叫”的那条路上）",
+            !d.Allow && d.State == ParticipationState.Exiting && d.ReasonCode == "active_reply_cap", d.Describe());
 
         // ── 6) 失败只会降级，绝不升级 ──
         var m4 = new ParticipationStateMachine(new ParticipationPolicy());
@@ -216,9 +212,9 @@ public static class Program
         machine.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(70));
         machine.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(71));
         var capped = machine.OnEvent(ParticipationEvent.Mentioned, t0.AddSeconds(200), "p3");
-        Check("到新上限（7）后点名先降为试探并重开计数（mention_reply_cap_reset）",
+        Check("到新上限（7）后点名降为试探（mention_reply_cap），但仍然放行",
             capped.Allow && capped.State == ParticipationState.Probing
-            && capped.ReasonCode == "mention_reply_cap_reset", capped.Describe());
+            && capped.ReasonCode == "mention_reply_cap", capped.Describe());
 
         // ③ 面板填多大都会被钳（这里的 999 相当于“面板里手填的上限”）
         machine.UpdatePolicy(new ParticipationPolicy(

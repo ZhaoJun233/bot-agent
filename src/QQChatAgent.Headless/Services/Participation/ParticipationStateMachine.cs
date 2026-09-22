@@ -205,16 +205,14 @@ public sealed class ParticipationStateMachine
         {
             if (ConsecutiveReplies >= _policy.MaxConsecutiveReplies)
             {
-                // 连续回复已经到上限：**不再放行**（V3 §7.3「最大连续回复数由服务端校验」）。
-                // 老实现这里 allow:true，于是上限只写进日志、拦不住任何一句 —— “被 @ 就无限连发”。
-                // 冷却窗口内一律拒绝；窗口过后自动开新一轮计数，避免“被顶到上限就永久不回话”。
-                if (now < CooldownUntil)
-                {
-                    return Deny("reply_cap_cooldown", ParticipationState.Active);
-                }
-
-                ConsecutiveReplies = 0;
-                return Transition("mention_reply_cap_reset", ParticipationState.Probing, now, allow: true, probing: true);
+                // 已经说够了：**仍然放行这一句**，但降级为试探（不延续 active 的特权）。
+                //
+                // 为什么上限不拦显式触发：号主的硬要求是“直接跟我说话必须回”——
+                // 被 @ 了却不理，在群里看着就是坏了（这条踩过，见 handoff §27）。
+                // 上限真正管的是**没人叫它的时候**：`OnIrrelevant` 在 Active 状态下到上限就退场、
+                // 冷却中也一律拒绝（那才是“话题尾部硬跟”的来源）。
+                // 显式触发之间的频率由全局回复冷却（GroupCooldownSeconds / PrivateCooldownSeconds）限速。
+                return Transition("mention_reply_cap", ParticipationState.Probing, now, allow: true, probing: true);
             }
 
             if (now < CooldownUntil)
