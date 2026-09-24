@@ -467,6 +467,7 @@ public sealed partial class WebUiServer
             ["hostCwd"] = selected?.Cwd,
             // 面板要拿来标注“这个目录是哪来的”：设备专属 / 全局默认 / 桥自报
             ["globalWorkdir"] = _settings.AgentWorkDir ?? string.Empty,
+            ["serverWorkdir"] = _settings.AgentServerWorkDir,
             ["pi"] = selected?.Pi,
             ["devices"] = new JsonArray(bridge?.BridgeNames.Select(n => (JsonNode)JsonValue.Create(n)!).ToArray() ?? Array.Empty<JsonNode>()),
             ["serverAgent"] = _settings.EnableServerAgent,

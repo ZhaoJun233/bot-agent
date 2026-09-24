@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -74,6 +75,11 @@ public sealed partial class WebUiServer : IDisposable
     private AppSettings _settings => _box.Current;
 
     private readonly SettingsBox _box;
+    private readonly PanelPasswordStore _panelPassword;
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _panelSessions = new();
+    private readonly object _loginGate = new();
+    private int _loginFailures;
+    private DateTimeOffset _loginBlockedUntil;
     private readonly OneBotGateway _gateway;
 
     /// <summary>上行通道（多通道部署时是聚合器）：面板只拿它当通道台账用（见 <see cref="BuildChannelStatus" />）。</summary>
@@ -151,6 +157,9 @@ public sealed partial class WebUiServer : IDisposable
     {
         _port = port;
         _box = box;
+        _panelPassword = new PanelPasswordStore(Path.Combine(AppPaths.DataDir, "panel-password"));
+        if (_panelPassword.Created)
+            FileLog.Write("Web", "首次部署面板默认密码：adminBot。登录后必须立即修改密码。");
         _gateway = gateway;
         _source = source;
         _agent = agent;
@@ -303,29 +312,31 @@ public sealed partial class WebUiServer : IDisposable
             var path = context.Request.Url?.AbsolutePath ?? "/";
             var method = context.Request.HttpMethod;
 
-            // 鉴权：/healthz 与 /readyz 放行（容器 HEALTHCHECK 靠它们）
-            if (!path.Equals("/healthz", StringComparison.OrdinalIgnoreCase) &&
-                !path.Equals("/readyz", StringComparison.OrdinalIgnoreCase))
+            var publicPath = path.Equals("/healthz", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/readyz", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/auth/status", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
+                (method == "GET" && (path == "/" || path == "/app.css" || path == "/app.js" ||
+                    path == "/trace.css" || path == "/trace.js" || path == "/dash.js" || path == "/favicon.ico"));
+            if (!publicPath && !(path.Equals("/api/auth/change-password", StringComparison.OrdinalIgnoreCase) && HasPendingSession(context)))
             {
                 if (!IsAuthorized(context))
                 {
                     await WriteJsonAsync(context, 401, new JsonObject
                     {
                         ["error"] = "unauthorized",
-                        ["hint"] = "本面板已设置 QQCHAT_PANEL_TOKEN，请在地址后加 ?token=你的令牌 打开"
+                        ["mustChangePassword"] = HasPendingSession(context)
                     });
                     context.Response.Close();
                     return;
                 }
+            }
 
-                // 防 CSRF：浏览器跨站发起的 POST 会带 Origin/Referer，非浏览器客户端（curl）不带。
-                if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase) && !IsSameOrigin(context))
-                {
-                    FileLog.Write("Web", $"已拒绝跨站 POST：{path}（Origin={context.Request.Headers["Origin"]}）");
-                    await WriteJsonAsync(context, 403, new JsonObject { ["error"] = "cross-origin request rejected" });
-                    context.Response.Close();
-                    return;
-                }
+            if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase) && !IsSameOrigin(context))
+            {
+                await WriteJsonAsync(context, 403, new JsonObject { ["error"] = "cross-origin request rejected" });
+                context.Response.Close();
+                return;
             }
 
             // SSE 是长连接，单独处理（不能走 finally 里的 Close）
@@ -366,28 +377,27 @@ public sealed partial class WebUiServer : IDisposable
         }
     }
 
-    /// <summary>
-    /// 令牌校验。未配置 QQCHAT_PANEL_TOKEN 时直接放行（回环部署的常见情况）。
-    /// 配置后：面板与 /api/* 必须带 X-Panel-Token 头或 ?token= 参数。
-    /// </summary>
     private bool IsAuthorized(HttpListenerContext context)
     {
+        if (IsLegacyAuthorized(context)) return true;
+        var session = context.Request.Cookies["panel_session"]?.Value;
+        return session is not null && _panelSessions.TryGetValue(session, out var expires) &&
+            expires > DateTimeOffset.UtcNow && !_panelPassword.MustChange;
+    }
+
+    private bool IsLegacyAuthorized(HttpListenerContext context)
+    {
         var expected = _settings.PanelToken?.Trim();
-        if (string.IsNullOrEmpty(expected))
-        {
-            return true;
-        }
-
         var provided = context.Request.Headers["X-Panel-Token"] ?? context.Request.QueryString["token"];
-        if (string.IsNullOrEmpty(provided))
-        {
-            return false;
-        }
+        return !string.IsNullOrEmpty(expected) && !string.IsNullOrEmpty(provided) &&
+            CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected));
+    }
 
-        // 定时安全比较：长度不等直接返回 false，不会抛异常
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(provided),
-            Encoding.UTF8.GetBytes(expected));
+    private bool HasPendingSession(HttpListenerContext context)
+    {
+        var session = context.Request.Cookies["panel_session"]?.Value;
+        return session is not null && _panelSessions.TryGetValue(session, out var expires) &&
+            expires > DateTimeOffset.UtcNow && _panelPassword.MustChange;
     }
 
     /// <summary>

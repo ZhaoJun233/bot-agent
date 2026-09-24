@@ -22,6 +22,7 @@
     status: null,
     aiMode: true,
     search: "",
+    channelFilter: "all",
     logs: [],
     settingsLoaded: false,    // 设置表单是否已从服务端回填过
     agentPromptDefault: "",  // 服务端那份默认「Agent 附加提示词」（面板「恢复默认」按钮用，不在前端抄一份）
@@ -42,6 +43,12 @@
       busy: false,
       lastResult: null,
       lastRunAt: 0,
+      models: { server: [], host: [] },
+      modelNotes: { server: "", host: "" },
+      modelLoading: { server: false, host: false },
+      draftModels: { server: "", host: "" },
+      configDirty: false,
+      configSaving: false,
       backendFilter: "all",
       sessionStateFilter: "all"
     }
@@ -134,12 +141,88 @@
     return Object.assign({}, extra || {}, t ? { "X-Panel-Token": t } : {});
   }
 
-  /// 401 时向用户要一次令牌（避免直接报错让人摸不着头脑）
-  function askForToken() {
-    const t = prompt("面板需要访问令牌（服务端设置了 QQCHAT_PANEL_TOKEN）：");
-    if (!t) return;
-    storeSet(TOKEN_KEY, t.trim());
-    location.reload();
+  function showPanelAuth(mustChange) {
+    document.body.classList.add("auth-locked");
+    $("panelLoginForm").hidden = !!mustChange;
+    $("panelForceForm").hidden = !mustChange;
+    $("panelLegacyForm").hidden = true;
+    $("authTitle").textContent = mustChange ? "先设置新密码" : "欢迎回来";
+    $("authStep").textContent = mustChange ? "02 / 完成安全设置" : "01 / 身份验证";
+    $("authDescription").textContent = mustChange
+      ? "初始密码只能用于首次验证。设置新密码后才可进入工作台。"
+      : "输入面板密码以继续。首次部署的初始密码可在启动日志中查看。";
+    $("panelAuthSwitch").hidden = !!mustChange || !state.legacyTokenConfigured;
+    $("panelAuth").hidden = false;
+  }
+
+  function wirePanelAuth() {
+    const error = $("panelAuthError");
+    const submit = async (form, path, values) => {
+      error.hidden = true;
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const res = await fetch(path, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(values)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "请求失败，请稍后重试");
+        if (data.mustChangePassword) {
+          $("panelForceCurrent").value = $("panelLoginPassword").value;
+          $("panelLoginPassword").value = "";
+          showPanelAuth(true);
+          $("panelForceNew").focus();
+        } else {
+          location.reload();
+        }
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+      } finally { button.disabled = false; }
+    };
+    $("panelLoginForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      submit(event.currentTarget, "/api/auth/login", { password: $("panelLoginPassword").value });
+    });
+    $("panelForceForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if ($("panelForceNew").value !== $("panelForceConfirm").value) {
+        error.textContent = "两次输入的新密码不一致"; error.hidden = false; return;
+      }
+      submit(event.currentTarget, "/api/auth/change-password", {
+        currentPassword: $("panelForceCurrent").value, newPassword: $("panelForceNew").value
+      });
+    });
+    $("panelLegacyForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      storeSet(TOKEN_KEY, $("panelLegacyToken").value.trim());
+      const response = await fetch(withToken("/api/auth/status"), { headers: authHeaders() });
+      const data = await response.json();
+      if (data.authenticated) location.reload();
+      else { storeSet(TOKEN_KEY, ""); error.textContent = "访问令牌不正确"; error.hidden = false; }
+    });
+    $("panelAuthSwitch").addEventListener("click", () => {
+      const form = $("panelLegacyForm");
+      form.hidden = !form.hidden;
+      $("panelLoginForm").hidden = !form.hidden;
+      $("panelAuthSwitch").textContent = form.hidden ? "使用旧版访问令牌" : "返回密码登录";
+    });
+    $("panelPasswordForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const notice = $("panelPasswordNotice");
+      if ($("panelPasswordNew").value !== $("panelPasswordConfirm").value) {
+        notice.textContent = "两次输入的新密码不一致"; return;
+      }
+      try {
+        await api("/api/auth/change-password", { method: "POST", body: JSON.stringify({
+          currentPassword: $("panelPasswordCurrent").value,
+          newPassword: $("panelPasswordNew").value
+        }) });
+        $("panelPasswordForm").reset();
+        notice.textContent = "密码已更新，其他设备需重新登录";
+      } catch (err) { notice.textContent = err.data?.error || err.message; }
+    });
   }
 
   async function api(path, options) {
@@ -148,10 +231,10 @@
       ...opts,
       headers: authHeaders(Object.assign({ "Content-Type": "application/json" }, opts.headers))
     });
-    if (res.status === 401) { askForToken(); throw new Error("需要访问令牌"); }
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { /* 非 JSON */ }
+    if (res.status === 401) { showPanelAuth(data?.mustChangePassword); throw new Error("需要登录面板"); }
     if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status, data });
     return data;
   }
@@ -312,6 +395,14 @@
     ).join("~") + `#${state.activeKey}#${state.search}`;
   }
 
+  function conversationChannel(conversation) {
+    const raw = String(conversation?.channel || conversation?.channelTag || "").trim().toLowerCase();
+    if (raw === "official" || raw === "officialchannel" || raw === "官方") return "official";
+    if (raw === "private" || raw === "privatechannel" || raw === "私域") return "private";
+    const key = String(conversation?.key || conversation?.sourceKey || "").toLowerCase();
+    return key.startsWith("official:") ? "official" : "private";
+  }
+
   function createConvNode(c) {
     const el = document.createElement("div");
     el.className = "conv";
@@ -360,7 +451,7 @@
     const nameEl = el.querySelector(".conv-name");
     if (c.channelTag && nameEl.dataset.tag !== c.channelTag) {
       const tag = document.createElement("span");
-      tag.className = "chan-badge chan-" + (c.channel || "private");
+      tag.className = "chan-badge chan-" + conversationChannel(c);
       tag.textContent = c.channelTag;
       nameEl.textContent = "";
       nameEl.appendChild(tag);
@@ -372,6 +463,7 @@
       if (text && text.nodeValue !== c.name) text.nodeValue = c.name || "";
     } else if (nameEl.textContent !== (c.name || "")) {
       nameEl.textContent = c.name || "";
+      delete nameEl.dataset.tag;
     }
 
     const av = el.querySelector(".avatar");
@@ -396,7 +488,6 @@
       av.appendChild(fresh);
     }
 
-    el.querySelector(".conv-name").textContent = c.name;
     el.querySelector(".conv-time").textContent = timeText(c.lastTime);
     el.querySelector(".conv-preview").textContent = c.preview || "（暂无消息）";
 
@@ -441,14 +532,16 @@ function renderConversations(force) {
     const q = state.search.trim().toLowerCase();
     // 先按通道分块（私域 / 官方）再搜关键词 —— 两套场景的会话不混在一起
     const items = state.conversations.filter((c) => {
-      if (state.channelFilter !== "all" && (c.channel || "private") !== state.channelFilter) return false;
+      if (state.channelFilter !== "all" && conversationChannel(c) !== state.channelFilter) return false;
       return !q || c.name.toLowerCase().includes(q) || (c.preview || "").toLowerCase().includes(q);
     });
 
-    $("convEmpty").hidden = state.conversations.length > 0;
+    $("convEmpty").hidden = items.length > 0;
+    const emptyText = $("convEmpty").querySelector("p");
+    if (emptyText) emptyText.textContent = state.conversations.length > 0 ? "当前通道暂无会话" : "暂无会话";
 
     // 内容未变就什么都不做（SSE 会高频重复触发）
-    const sig = convSignatureOf(items);
+    const sig = state.channelFilter + "|" + convSignatureOf(items);
     if (!force && sig === convSignature) return;
     convSignature = sig;
 
@@ -1928,6 +2021,145 @@ function renderConversations(force) {
     return status.enabled === true && status.connected === true;
   }
 
+  function agentModelKey(target) {
+    return target === "server" ? "server" : "host";
+  }
+
+  function agentStatusModel(target) {
+    const status = state.agent.status || {};
+    return target === "server" ? (status.serverModel || "") : (status.agentModel || "");
+  }
+
+  function ensureAgentTargetOption(target) {
+    if (!target) return;
+    const select = $("agentDefaultTarget");
+    if (!select || Array.from(select.options).some((option) => option.value === target)) return;
+    const option = document.createElement("option");
+    option.value = target;
+    option.textContent = target;
+    select.appendChild(option);
+  }
+
+  function renderAgentModelOptions(target) {
+    const select = $("agentModelSelect");
+    if (!select) return;
+    const key = agentModelKey(target);
+    const current = state.agent.draftModels[key] || agentStatusModel(target);
+    const models = Array.from(new Set([
+      ...state.agent.models[key],
+      current
+    ].map((model) => String(model || "").trim()).filter(Boolean)));
+    select.replaceChildren();
+
+    if (models.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = state.agent.modelLoading[key]
+        ? "正在拉取模型…"
+        : "供应商未返回模型";
+      select.appendChild(option);
+      select.value = "";
+      return;
+    }
+
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      select.appendChild(option);
+    }
+    select.value = current;
+  }
+
+  function renderAgentConfig() {
+    const status = state.agent.status || {};
+    const approvals = state.agent.approvals || {};
+    const defaultTarget = String(status.target || "auto").trim() || "auto";
+    const defaultSelect = $("agentDefaultTarget");
+    const modelTarget = $("agentWorkbenchTarget").value || "server";
+    const modelKey = agentModelKey(modelTarget);
+
+    ensureAgentTargetOption(defaultTarget);
+    if (!state.agent.configDirty) {
+      defaultSelect.value = defaultTarget;
+      $("agentExternalWorkdir").value = status.globalWorkdir || "";
+      $("agentServerWorkdir").value = status.serverWorkdir || "";
+      $("agentApprovalsToggle").checked = approvals.enabled === true;
+      state.agent.draftModels.server = status.serverModel || "";
+      state.agent.draftModels.host = status.agentModel || "";
+    }
+
+    renderAgentModelOptions(modelTarget);
+    const modelSource = $("agentModelSource");
+    const modelNote = state.agent.modelNotes[modelKey];
+    modelSource.textContent = state.agent.modelLoading[modelKey]
+      ? "正在刷新…"
+      : modelNote || `${state.agent.models[modelKey].length} 个可选模型`;
+
+    const save = $("agentConfigSave");
+    save.disabled = state.agent.configSaving || !state.agent.configDirty;
+    save.textContent = state.agent.configSaving ? "保存中…" : "保存配置";
+    const note = $("agentConfigNote");
+    note.textContent = state.agent.configSaving
+      ? "正在写入服务端配置…"
+      : state.agent.configDirty
+        ? "有未保存修改；保存后对新任务生效。"
+        : "配置已与服务端同步。运行中的任务不受影响。";
+  }
+
+  async function loadAgentModels(target) {
+    const key = agentModelKey(target);
+    state.agent.modelLoading[key] = true;
+    state.agent.modelNotes[key] = "";
+    renderAgentConfig();
+    try {
+      const payload = await api(`/api/agent/models?target=${encodeURIComponent(key)}`);
+      state.agent.models[key] = Array.isArray(payload?.models)
+        ? payload.models.map((model) => String(model || "").trim()).filter(Boolean)
+        : [];
+      state.agent.modelNotes[key] = payload?.note || payload?.error || "";
+    } catch (error) {
+      state.agent.models[key] = [];
+      state.agent.modelNotes[key] = error?.data?.error || error?.message || "模型列表暂不可用";
+    } finally {
+      state.agent.modelLoading[key] = false;
+      renderAgentConfig();
+    }
+  }
+
+  function markAgentConfigDirty() {
+    state.agent.configDirty = true;
+    renderAgentConfig();
+  }
+
+  async function saveAgentWorkbenchConfig() {
+    if (state.agent.configSaving) return;
+    const modelTarget = $("agentWorkbenchTarget").value || "server";
+    state.agent.draftModels[agentModelKey(modelTarget)] = $("agentModelSelect").value.trim();
+    const payload = {
+      agentTarget: $("agentDefaultTarget").value || "auto",
+      agentModel: state.agent.draftModels.host || "",
+      agentServerModel: state.agent.draftModels.server || "",
+      agentWorkDir: $("agentExternalWorkdir").value.trim(),
+      agentServerWorkDir: $("agentServerWorkdir").value.trim(),
+      enableApprovals: $("agentApprovalsToggle").checked
+    };
+
+    state.agent.configSaving = true;
+    renderAgentConfig();
+    try {
+      await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+      state.agent.configDirty = false;
+      toast("Agent 运行配置已保存");
+      await loadAgentWorkbench();
+    } catch (error) {
+      toast("Agent 配置保存失败：" + (error?.data?.error || error?.message || "未知错误"));
+    } finally {
+      state.agent.configSaving = false;
+      renderAgentWorkbench();
+    }
+  }
+
   function renderAgentControls() {
     const target = $("agentWorkbenchTarget").value || "server";
     const prompt = $("agentWorkbenchPrompt").value.trim();
@@ -1935,6 +2167,7 @@ function renderConversations(force) {
     const send = $("agentWorkbenchSend");
     send.disabled = state.agent.busy || !prompt || !ready;
     send.textContent = state.agent.busy ? "执行中…" : "执行任务";
+    $("agentRunState").textContent = state.agent.busy ? "执行中" : ready ? "待命" : "未就绪";
 
     const hint = $("agentSafetyHint");
     if (!state.agent.status) {
@@ -2057,7 +2290,9 @@ function renderConversations(force) {
     const detailRows = [
       ["默认后端", target === "server" ? "服务器 Agent" : "外部设备"],
       ["当前模型", model || "未配置"],
-      ["工作目录", status?.cwd || "未配置"],
+      ["工作目录", target === "server"
+        ? status?.serverWorkdir || "未配置"
+        : status?.cwd || status?.globalWorkdir || "未配置"],
       ["面板审批", approvals.canDecide ? "已启用" : approvals.enabled ? "只读或未配令牌" : "未启用"]
     ];
     for (const [label, value] of detailRows) {
@@ -2100,6 +2335,7 @@ function renderConversations(force) {
     renderAgentSessions();
     renderAgentRuntime();
     renderAgentResult();
+    renderAgentConfig();
     renderAgentControls();
     $("agentPromptCount").textContent = `${$("agentWorkbenchPrompt").value.length} / 2000`;
   }
@@ -2133,6 +2369,8 @@ function renderConversations(force) {
     state.agent.loading = false;
     $("agentRefresh").disabled = false;
     renderAgentWorkbench();
+    const target = $("agentWorkbenchTarget").value || "server";
+    loadAgentModels(target);
   }
 
   async function runAgentWorkbenchTask() {
@@ -2235,7 +2473,22 @@ function renderConversations(force) {
     $("agentWorkbenchTarget").addEventListener("change", () => {
       renderAgentRuntime();
       renderAgentControls();
+      renderAgentConfig();
+      loadAgentModels($("agentWorkbenchTarget").value || "server");
     });
+    $("agentConfigSave").addEventListener("click", saveAgentWorkbenchConfig);
+    $("agentModelRefresh").addEventListener("click", () => {
+      loadAgentModels($("agentWorkbenchTarget").value || "server");
+    });
+    $("agentDefaultTarget").addEventListener("change", markAgentConfigDirty);
+    $("agentModelSelect").addEventListener("change", () => {
+      const target = $("agentWorkbenchTarget").value || "server";
+      state.agent.draftModels[agentModelKey(target)] = $("agentModelSelect").value.trim();
+      markAgentConfigDirty();
+    });
+    $("agentExternalWorkdir").addEventListener("input", markAgentConfigDirty);
+    $("agentServerWorkdir").addEventListener("input", markAgentConfigDirty);
+    $("agentApprovalsToggle").addEventListener("change", markAgentConfigDirty);
     $("agentBackendFilter").addEventListener("change", (e) => {
       state.agent.backendFilter = e.target.value;
       renderAgentSessions();
@@ -2288,9 +2541,10 @@ function renderConversations(force) {
     $("chanTabs").addEventListener("click", (e) => {
       const btn = e.target.closest(".chan-tab");
       if (!btn) return;
-      state.channelFilter = btn.dataset.chan || "all";
+      state.channelFilter = String(btn.getAttribute("data-chan") || "all").trim().toLowerCase();
       for (const b of $("chanTabs").querySelectorAll(".chan-tab")) {
         b.classList.toggle("active", b === btn);
+        b.setAttribute("aria-selected", b === btn ? "true" : "false");
       }
       renderConversations(true);
     });
@@ -2389,7 +2643,7 @@ function renderConversations(force) {
     });
 
     // 任何改动都标记为“未保存”（主题除外：它只存 localStorage，不进保存请求）
-    const dirtyOnEdit = (ev) => { if (!ev.target || ev.target.id !== "setTheme") markSettingsDirty(); };
+    const dirtyOnEdit = (ev) => { if (!ev.target || (ev.target.id !== "setTheme" && !ev.target.closest("#panelPasswordSettings"))) markSettingsDirty(); };
     $("pageSettings").addEventListener("input", dirtyOnEdit);
     $("pageSettings").addEventListener("change", dirtyOnEdit);
 
@@ -3469,6 +3723,20 @@ function renderConversations(force) {
   }
 
   async function boot() {
+    wirePanelAuth();
+    try {
+      const response = await fetch(withToken("/api/auth/status"), { headers: authHeaders() });
+      const auth = await response.json();
+      state.legacyTokenConfigured = !!auth.legacyTokenConfigured;
+      // 兼容旧版合成探针/反向代理：新接口一定会返回 authenticated；缺失时按旧面板继续启动。
+      if (auth.authenticated === false) { showPanelAuth(auth.mustChangePassword); return; }
+      document.body.classList.remove("auth-locked");
+    } catch {
+      showPanelAuth(false);
+      $("panelAuthError").textContent = "无法连接面板服务，请检查网络后刷新页面";
+      $("panelAuthError").hidden = false;
+      return;
+    }
     bindUi();
     bindAudioSources();
     initSettingsNav();

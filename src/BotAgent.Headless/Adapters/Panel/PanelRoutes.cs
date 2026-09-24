@@ -85,6 +85,10 @@ public sealed partial class WebUiServer
         new("*", PanelMatch.ExactFile, "/dash.js", (r) => WriteAssetAsync(r.Context, "dash.js", "application/javascript; charset=utf-8")),
         new("*", PanelMatch.ExactFile, "/favicon.ico", (r) => WriteBytesAsync(r.Context, 204, "image/x-icon", Array.Empty<byte>())),
 
+        new("GET", PanelMatch.Exact, "/api/auth/status", (r) => HandleAuthStatusAsync(r.Context)),
+        new("POST", PanelMatch.Exact, "/api/auth/login", (r) => HandleAuthLoginAsync(r.Context)),
+        new("POST", PanelMatch.Exact, "/api/auth/change-password", (r) => HandleAuthChangeAsync(r.Context)),
+
         // ─────────── 健康检查 ───────────
         new("GET", PanelMatch.Exact, "/healthz", (r) => WriteJsonAsync(r.Context, 200, new JsonObject { ["status"] = "ok" })),
         new("GET", PanelMatch.Exact, "/readyz", (r) =>
