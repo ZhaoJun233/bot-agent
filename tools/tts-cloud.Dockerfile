@@ -15,7 +15,7 @@
 #   本版 ~60MB 镜像、~20MB 内存、零 CPU 推理（都交给云端），音色也更自然。
 FROM python:3.11-alpine
 
-# 可选：官方商用通道发语音要**腾讯 SILK v3**，而 NapCat（私域）那边自己会转，不需要。
+# 可选：官方通道发语音要**腾讯 SILK v3**，而 NapCat（私域）那边自己会转，不需要。
 # 需要时用构建参数把 silk_v3_encoder 塞进来（例如 kn007/silk-v3-decoder 的静态产物）：
 #     docker build --build-arg SILK_ENCODER_URL=<直链> -t qqchat-tts:latest -f tools/tts-cloud.Dockerfile tools/
 # 不塞也能跑：/speak?...&format=silk 会明确回 501 并说明原因（不会静默发坏音频）。

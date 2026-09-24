@@ -6,10 +6,10 @@
 .gitignore
 .github
 *.md
-!src/QQChatAgent.Headless/README.md
+!src/BotAgent.Headless/README.md
 
 # 解决方案文件不参与镜像构建
-QQChatAgent.slnx
+BotAgent.slnx
 
 # 运行时数据（NapCat / 日志 / 会话 / 人物档案）
 runtime/

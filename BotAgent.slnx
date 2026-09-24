@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BotAgent.Headless/BotAgent.Headless.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj" />
+    <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
+  </Folder>
+</Solution>

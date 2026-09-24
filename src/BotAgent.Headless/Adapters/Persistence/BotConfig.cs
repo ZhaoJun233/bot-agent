@@ -1,0 +1,657 @@
+using System.Globalization;
+using BotAgent.Services;
+using BotAgent.Adapters.Persistence;
+
+namespace BotAgent.Adapters.Persistence;
+
+/// <summary>
+/// 十二要素配置：settings.json 提供默认值，环境变量覆盖。
+/// 支持 <c>XXX_FILE</c> 形式读取 Docker secrets（/run/secrets/*），避免密钥出现在环境变量里。
+///
+/// 优先级分三类（重要）：
+///   • 基础设施（协议端地址、Token、QQ 号…）：**环境变量永远优先** —— 它们属于部署环境职责。
+///   • 模型配置（Base URL / 模型名 / API Key）：**面板改过就以面板为准**（存在 ModelBaseUrlOverride /
+///     ModelOverride / data/secrets.json），因为用户会在这里换模型、换中转；环境变量只在面板没改过时当种子。
+///   • 行为类（人设、白名单、欲望、阈值、冷却、分句…）：**配置文件优先**。
+///     环境变量只在 settings.json 还不存在（首次部署）时当种子用；
+///     一旦面板保存过一次，行为配置就归 settings.json 所有，不会被环境变量静默回滚。
+/// </summary>
+public static class BotConfig
+{
+    /// <summary>被环境变量提供但被 settings.json 接管的行为项（启动时提示用户）。</summary>
+    public static List<string> IgnoredBehaviorEnvVars { get; } = new();
+
+    /// <summary>被面板设置覆盖掉的环境变量（启动时提示用户，否则“改了 .env 怎么不生效”很难排查）。</summary>
+    public static List<string> PanelOverriddenEnvVars { get; } = new();
+
+    /// <summary>加载配置：配置文件 → 环境变量 → 必要的合规修正。</summary>
+    public static AppSettings Load()
+    {
+        // “首次部署”的判据：**配置里还没有被存过**（以前是“settings.json 文件不存在”）。
+        // ⚠ 这里不能再看文件是否存在 —— 数据搬到 SQLite 之后，库文件是启动时刚建的、永远存在，
+        // 用它当判据会让“首次部署用环境变量当种子”永远不生效（踩过：白名单直接变空，机器人谁都不理）。
+        var settingsStore = new SettingsStore();
+        var hasStored = settingsStore.HasStoredSettings();
+        var settings = settingsStore.Load();
+        ApplyInfrastructureEnvironment(settings);
+        ApplyBehaviorEnvironment(settings, seedOnly: !hasStored);
+        ApplyPanelOverrides(settings); // 面板改过的模型配置：优先于环境变量
+        Normalize(settings);
+
+        if (hasStored)
+        {
+            settingsStore.Save(settings); // 把环境变量带来的基础设施值写回，保持库与实态一致
+        }
+
+        return settings;
+    }
+
+    /// <summary>基础设施与密钥：环境变量始终覆盖（改这些要重启容器）。</summary>
+    private static void ApplyInfrastructureEnvironment(AppSettings s)
+    {
+        s.ApiKey = Secret("QQCHAT_API_KEY", "OPENAI_API_KEY") ?? s.ApiKey;
+        s.ModelBaseUrl = Str("QQCHAT_BASE_URL", "OPENAI_BASE_URL") ?? s.ModelBaseUrl;
+        s.Model = Str("QQCHAT_MODEL", "OPENAI_MODEL") ?? s.Model;
+        // 思考档位：快速回复（聊天用轻量模型）。这两个是“可由面板改”的，所以只在面板没改过时才播种 ——
+        // 严格说它们属于“运行时可改”那类，放在这里是为了跟模型名挨着（真值以 settings 为准）。
+        s.FastModel = Str("QQCHAT_FAST_MODEL") ?? s.FastModel;
+        s.FastReply = Bool("QQCHAT_FAST_REPLY") ?? s.FastReply;
+        s.OneBotToken = Secret("QQCHAT_ONEBOT_TOKEN") ?? s.OneBotToken;
+        s.QuickLoginUin = Str("QQCHAT_UIN", "QQCHAT_QUICK_LOGIN_UIN") ?? s.QuickLoginUin;
+        s.OneBotProtocol = Str("QQCHAT_ONEBOT_PROTOCOL") ?? s.OneBotProtocol;
+        s.OneBotAddress = Str("QQCHAT_ONEBOT_URL", "QQCHAT_ONEBOT_ADDRESS") ?? s.OneBotAddress;
+        s.HealthPort = Int("QQCHAT_HEALTH_PORT") ?? s.HealthPort;
+        s.PanelToken = Str("QQCHAT_PANEL_TOKEN") ?? s.PanelToken;
+        s.AgentToken = Secret("QQCHAT_AGENT_TOKEN") ?? s.AgentToken;
+        s.NapCatWebUiUrl = Str("QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
+        s.NapCatWebUiToken = Secret("QQCHAT_NAPCAT_WEBUI_TOKEN") ?? s.NapCatWebUiToken;
+        s.VerboseLog = Bool("QQCHAT_VERBOSE") ?? s.VerboseLog;
+    }
+
+    /// <summary>
+    /// 行为类配置：仅当 settings.json 不存在（首次部署）时用环境变量做种子；
+    /// 已存在则完全不碰，由 Web 面板 / 配置文件说了算。
+    /// </summary>
+    /// <summary>
+    /// 行为类配置：仅当 settings.json 不存在（首次部署）时用环境变量做种子；
+    /// 已存在则完全不碰，由 Web 面板 / 配置文件说了算。
+    ///
+    /// 批次 6 把三块拆开（纯搬迁，判定条件与判断顺序一字未改）：
+    ///   ① 字段表 → <see cref="BehaviorEnvTable" />（播种与"改了不生效"提醒共用）；
+    ///   ② 文件已存在时的那圈比对 → <see cref="WarnIgnoredBehaviorEnvVars" />；
+    ///   ③ 首次部署的播种 → <see cref="SeedBehaviorFromEnvironment" />。
+    /// </summary>
+    private static void ApplyBehaviorEnvironment(AppSettings s, bool seedOnly)
+    {
+        // 需要种子的字段（名字 → 环境变量）
+        var behaviorVars = BehaviorEnvTable();
+
+        if (!seedOnly)
+        {
+            WarnIgnoredBehaviorEnvVars(s, behaviorVars);
+            return;
+        }
+
+        SeedBehaviorFromEnvironment(s);
+    }
+
+    /// <summary>
+    /// 需要种子的**行为字段**表（字段名 → 环境变量名）：首次部署按它播种；
+    /// 文件已存在时按它逐个比对，把"改了 .env 却不生效"的项报给面板（见 WarnIgnoredBehaviorEnvVars）。
+    /// </summary>
+    private static Dictionary<string, string[]> BehaviorEnvTable()
+    {
+        return new Dictionary<string, string[]>
+        {
+            [nameof(AppSettings.BotPersona)] = new[] { "QQCHAT_PERSONA" },
+            [nameof(AppSettings.MessageWhitelist)] = new[] { "QQCHAT_WHITELIST" },
+    [nameof(AppSettings.WhitelistGroups)] = new[] { "QQCHAT_WHITELIST_GROUPS" },
+    [nameof(AppSettings.WhitelistPrivates)] = new[] { "QQCHAT_WHITELIST_PRIVATES" },
+            [nameof(AppSettings.AiDesire)] = new[] { "QQCHAT_AI_DESIRE" },
+            [nameof(AppSettings.SuitabilityThreshold)] = new[] { "QQCHAT_SUITABILITY_THRESHOLD" },
+            [nameof(AppSettings.AiModeEnabled)] = new[] { "QQCHAT_AI_MODE" },
+            [nameof(AppSettings.MaxTokens)] = new[] { "QQCHAT_MAX_TOKENS" },
+            [nameof(AppSettings.PrivateCooldownSeconds)] = new[] { "QQCHAT_PRIVATE_COOLDOWN" },
+            [nameof(AppSettings.GroupCooldownSeconds)] = new[] { "QQCHAT_GROUP_COOLDOWN" },
+    [nameof(AppSettings.IdleFallbackSeconds)] = new[] { "QQCHAT_IDLE_FALLBACK" },
+    // 参与状态机的上限（P1）。默认值 = 状态机自己的默认值；面板值压过 env，两处都会被服务端钳制。
+    [nameof(AppSettings.ParticipationMaxConsecutiveReplies)] = new[] { "QQCHAT_PARTICIPATION_MAX_REPLIES" },
+    [nameof(AppSettings.ParticipationCooldownSeconds)] = new[] { "QQCHAT_PARTICIPATION_COOLDOWN" },
+    [nameof(AppSettings.ParticipationProbingMaxReplies)] = new[] { "QQCHAT_PARTICIPATION_PROBING" },
+    [nameof(AppSettings.ParticipationMaxActiveLifetimeSeconds)] = new[] { "QQCHAT_PARTICIPATION_ACTIVE_LIFE" },
+    [nameof(AppSettings.ParticipationMaxExitingLifetimeSeconds)] = new[] { "QQCHAT_PARTICIPATION_EXITING_LIFE" },
+    // 参与闸门 / 允许提问（P1、P2）：都**默认关**，打开才会改变行为
+    [nameof(AppSettings.EnableParticipationGating)] = new[] { "QQCHAT_PARTICIPATION_GATING" },
+    [nameof(AppSettings.EnableQuestions)] = new[] { "QQCHAT_QUESTIONS" },
+            [nameof(AppSettings.SplitReplies)] = new[] { "QQCHAT_SPLIT_REPLIES" },
+      [nameof(AppSettings.EnableProactive)] = new[] { "QQCHAT_PROACTIVE" },
+      [nameof(AppSettings.ProactiveCooldownSeconds)] = new[] { "QQCHAT_PROACTIVE_COOLDOWN" },
+      [nameof(AppSettings.ProactiveQuietSeconds)] = new[] { "QQCHAT_PROACTIVE_QUIET" },
+      [nameof(AppSettings.IgnoreBracketMessages)] = new[] { "QQCHAT_IGNORE_BRACKETS" },
+            [nameof(AppSettings.SegmentDelayMs)] = new[] { "QQCHAT_SEGMENT_DELAY_MS" },
+            [nameof(AppSettings.MaxContextMessages)] = new[] { "QQCHAT_MAX_CONTEXT" },
+            [nameof(AppSettings.ProfileLookupCount)] = new[] { "QQCHAT_PROFILE_LOOKUP" },
+            [nameof(AppSettings.ProfileSummaryLines)] = new[] { "QQCHAT_PROFILE_LINES" },
+            [nameof(AppSettings.MaxProfileChars)] = new[] { "QQCHAT_PROFILE_CHARS" },
+            [nameof(AppSettings.EnableProfileSummary)] = new[] { "QQCHAT_PROFILE_SUMMARY" },
+            [nameof(AppSettings.ProfileSummaryThreshold)] = new[] { "QQCHAT_PROFILE_SUMMARY_THRESHOLD" },
+            [nameof(AppSettings.ProfileSummaryMaxChars)] = new[] { "QQCHAT_PROFILE_SUMMARY_CHARS" },
+            [nameof(AppSettings.ProfileSummaryIntervalSeconds)] = new[] { "QQCHAT_PROFILE_SUMMARY_INTERVAL" },
+            [nameof(AppSettings.MaxMessagesPerConversation)] = new[] { "QQCHAT_MAX_MESSAGES" },
+            [nameof(AppSettings.MaxConcurrentReplies)] = new[] { "QQCHAT_CONCURRENCY" },
+            [nameof(AppSettings.EnableStickers)] = new[] { "QQCHAT_STICKERS" },
+            [nameof(AppSettings.StickerLibraryMax)] = new[] { "QQCHAT_STICKER_MAX" },
+            [nameof(AppSettings.StickerCandidates)] = new[] { "QQCHAT_STICKER_CANDIDATES" },
+            [nameof(AppSettings.StickerCurateIntervalSeconds)] = new[] { "QQCHAT_STICKER_CURATE_INTERVAL" },
+            [nameof(AppSettings.StickerCooldownSeconds)] = new[] { "QQCHAT_STICKER_COOLDOWN" },
+    [nameof(AppSettings.EnablePoke)] = new[] { "QQCHAT_ENABLE_POKE" },
+    [nameof(AppSettings.PokeCooldownSeconds)] = new[] { "QQCHAT_POKE_COOLDOWN" },
+    [nameof(AppSettings.MoodTtlSeconds)] = new[] { "QQCHAT_MOOD_TTL" },
+    [nameof(AppSettings.EnableMusic)] = new[] { "QQCHAT_ENABLE_MUSIC" },
+    [nameof(AppSettings.MusicListenCooldownSeconds)] = new[] { "QQCHAT_MUSIC_LISTEN_COOLDOWN" },
+    [nameof(AppSettings.MusicUnderstandModel)] = new[] { "QQCHAT_MUSIC_MODEL" },
+    [nameof(AppSettings.MusicSendAudioToModel)] = new[] { "QQCHAT_MUSIC_SEND_AUDIO" },
+    [nameof(AppSettings.MusicAudioToModelMaxKb)] = new[] { "QQCHAT_MUSIC_AUDIO_MAX_KB" },
+    [nameof(AppSettings.MusicSources)] = new[] { "QQCHAT_MUSIC_SOURCES" },
+    [nameof(AppSettings.NeteaseBaseUrl)] = new[] { "QQCHAT_NETEASE_BASE_URL" },
+    [nameof(AppSettings.EnableLinkPreview)] = new[] { "QQCHAT_LINK_PREVIEW" },
+    [nameof(AppSettings.EnableWebSearch)] = new[] { "QQCHAT_WEB_SEARCH" },
+    [nameof(AppSettings.WebSearchUseModelSearch)] = new[] { "QQCHAT_SEARCH_USE_MODEL" },
+    [nameof(AppSettings.WebSearchSources)] = new[] { "QQCHAT_SEARCH_SOURCES" },
+    [nameof(AppSettings.WebSearchMaxResults)] = new[] { "QQCHAT_SEARCH_MAX_RESULTS" },
+    [nameof(AppSettings.WebSearchCooldownSeconds)] = new[] { "QQCHAT_SEARCH_COOLDOWN" },
+    [nameof(AppSettings.WebSearchTimeoutSeconds)] = new[] { "QQCHAT_SEARCH_TIMEOUT" },
+    [nameof(AppSettings.WebSearchReadMaxChars)] = new[] { "QQCHAT_SEARCH_READ_CHARS" },
+    [nameof(AppSettings.EnableVoice)] = new[] { "QQCHAT_ENABLE_VOICE" },    [nameof(AppSettings.VoiceName)] = new[] { "QQCHAT_VOICE" },
+    [nameof(AppSettings.VoiceSpeed)] = new[] { "QQCHAT_VOICE_SPEED" },
+        [nameof(AppSettings.VoicePitch)] = new[] { "QQCHAT_VOICE_PITCH" },
+        [nameof(AppSettings.VoiceVol)] = new[] { "QQCHAT_VOICE_VOL" },
+        [nameof(AppSettings.VoiceEmotion)] = new[] { "QQCHAT_VOICE_EMOTION" },
+    [nameof(AppSettings.VoiceMaxChars)] = new[] { "QQCHAT_VOICE_MAX_CHARS" },
+    [nameof(AppSettings.TtsServiceUrl)] = new[] { "QQCHAT_TTS_URL" },
+    [nameof(AppSettings.OfficialEnabled)] = new[] { "QQCHAT_OFFICIAL" },
+    [nameof(AppSettings.OfficialAppId)] = new[] { "QQCHAT_OFFICIAL_APP_ID" },
+    [nameof(AppSettings.OfficialAppSecret)] = new[] { "QQCHAT_OFFICIAL_APP_SECRET" },
+    [nameof(AppSettings.OfficialSandbox)] = new[] { "QQCHAT_OFFICIAL_SANDBOX" },
+    [nameof(AppSettings.OfficialWhitelistGroups)] = new[] { "QQCHAT_OFFICIAL_WHITELIST_GROUPS" },
+    [nameof(AppSettings.OfficialWhitelistPrivates)] = new[] { "QQCHAT_OFFICIAL_WHITELIST_PRIVATES" },
+    [nameof(AppSettings.OfficialApiBase)] = new[] { "QQCHAT_OFFICIAL_API_BASE" },
+    [nameof(AppSettings.OfficialTokenUrl)] = new[] { "QQCHAT_OFFICIAL_TOKEN_URL" },
+    [nameof(AppSettings.LinkPreviewTimeoutSeconds)] = new[] { "QQCHAT_LINK_PREVIEW_TIMEOUT" },
+    [nameof(AppSettings.LinkPreviewMax)] = new[] { "QQCHAT_LINK_PREVIEW_MAX" },
+    [nameof(AppSettings.MusicBitrate)] = new[] { "QQCHAT_MUSIC_BITRATE" },
+    [nameof(AppSettings.MusicMaxDownloadMb)] = new[] { "QQCHAT_MUSIC_MAX_MB" },
+    [nameof(AppSettings.MusicMaxAnalysisSeconds)] = new[] { "QQCHAT_MUSIC_ANALYSIS_SECONDS" },
+    [nameof(AppSettings.MusicLibraryMax)] = new[] { "QQCHAT_MUSIC_LIBRARY_MAX" },
+    [nameof(AppSettings.MusicNoteTtlDays)] = new[] { "QQCHAT_MUSIC_NOTE_TTL_DAYS" },
+    [nameof(AppSettings.MusicKeepAudio)] = new[] { "QQCHAT_MUSIC_KEEP_AUDIO" },
+    [nameof(AppSettings.EnableAgentBridge)] = new[] { "QQCHAT_AGENT" },
+    [nameof(AppSettings.AgentPrefix)] = new[] { "QQCHAT_AGENT_PREFIX" },
+    [nameof(AppSettings.AgentAllowedUsers)] = new[] { "QQCHAT_AGENT_USERS" },
+    [nameof(AppSettings.AgentWorkDir)] = new[] { "QQCHAT_AGENT_WORKDIR" },
+    [nameof(AppSettings.AgentModel)] = new[] { "QQCHAT_AGENT_MODEL" },
+    [nameof(AppSettings.AgentTools)] = new[] { "QQCHAT_AGENT_TOOLS" },
+    [nameof(AppSettings.AgentTimeoutSeconds)] = new[] { "QQCHAT_AGENT_TIMEOUT" },
+    [nameof(AppSettings.AgentReplyMaxChars)] = new[] { "QQCHAT_AGENT_REPLY_CHARS" },
+    [nameof(AppSettings.AgentProgressSeconds)] = new[] { "QQCHAT_AGENT_PROGRESS" },
+    [nameof(AppSettings.AgentTarget)] = new[] { "QQCHAT_AGENT_TARGET" },
+    [nameof(AppSettings.EnableServerAgent)] = new[] { "QQCHAT_AGENT_SERVER" },
+    [nameof(AppSettings.EnableHostAgent)] = new[] { "QQCHAT_AGENT_HOST" },
+    [nameof(AppSettings.AgentServerTools)] = new[] { "QQCHAT_AGENT_SERVER_TOOLS" },
+    [nameof(AppSettings.AgentServerQqActions)] = new[] { "QQCHAT_AGENT_SERVER_QQ_ACTIONS" },
+    [nameof(AppSettings.AgentServerModel)] = new[] { "QQCHAT_AGENT_SERVER_MODEL" },
+    [nameof(AppSettings.AgentServerBaseUrl)] = new[] { "QQCHAT_AGENT_SERVER_URL" },
+    [nameof(AppSettings.AgentDevices)] = new[] { "QQCHAT_AGENT_DEVICES" },
+    [nameof(AppSettings.AgentMaskSensitive)] = new[] { "QQCHAT_AGENT_MASK" },
+    [nameof(AppSettings.AgentPrompt)] = new[] { "QQCHAT_AGENT_PROMPT" },
+    [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
+    [nameof(AppSettings.AgentServerKeepContext)] = new[] { "QQCHAT_AGENT_SERVER_CONTEXT" },
+    [nameof(AppSettings.AgentServerDocker)] = new[] { "QQCHAT_AGENT_SERVER_DOCKER" },
+    [nameof(AppSettings.PanelDeployEnabled)] = new[] { "QQCHAT_PANEL_DEPLOY" },
+    [nameof(AppSettings.PanelDeployUrl)] = new[] { "QQCHAT_PANEL_DEPLOY_URL" },
+    [nameof(AppSettings.AgentServerMaxSteps)] = new[] { "QQCHAT_AGENT_SERVER_STEPS" },
+    [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" },
+
+    // ---- 服务器健康日报（定时私聊推送）----
+    [nameof(AppSettings.HealthReportEnabled)] = new[] { "QQCHAT_HEALTH_REPORT" },
+    [nameof(AppSettings.HealthReportTime)] = new[] { "QQCHAT_HEALTH_REPORT_TIME" },
+    [nameof(AppSettings.HealthReportTargets)] = new[] { "QQCHAT_HEALTH_REPORT_TO" }
+        };
+    }
+
+    /// <summary>
+    /// 文件已存在：这些环境变量不再生效。
+    /// 只在“环境变量的值与文件里的值不一致”时提醒 —— 这正是“改了 .env 却不生效”的场景；
+    /// 两者一致就不必刷屏。
+    /// </summary>
+    private static void WarnIgnoredBehaviorEnvVars(AppSettings s, Dictionary<string, string[]> behaviorVars)
+    {
+            foreach (var (field, names) in behaviorVars)
+            {
+                var envValue = names
+                    .Select(Environment.GetEnvironmentVariable)
+                    .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+                if (envValue is null)
+                {
+                    continue;
+                }
+
+                var property = typeof(AppSettings).GetProperty(field);
+                var fileValue = property?.GetValue(s);
+                if (!ValuesMatch(property?.PropertyType, envValue, fileValue))
+                {
+                    IgnoredBehaviorEnvVars.Add(
+                        $"{names[0]}={Truncate(envValue)}  ≠ 配置文件的 {Truncate(fileValue?.ToString())}");
+                }
+            }
+    }
+
+    /// <summary>
+    /// 首次部署：把环境变量当种子写进这份配置（文件已存在时不走这里）。
+    /// ⚠ 这里的每一项都对应"容器里第一次起来时能不能不带面板就跑起来"，逐条搬自原方法。
+    /// </summary>
+    private static void SeedBehaviorFromEnvironment(AppSettings s)
+    {
+        s.BotPersona = Secret("QQCHAT_PERSONA") ?? s.BotPersona;
+        s.MessageWhitelist = Str("QQCHAT_WHITELIST") ?? s.MessageWhitelist;
+        s.WhitelistGroups = Str("QQCHAT_WHITELIST_GROUPS") ?? s.WhitelistGroups;
+        s.WhitelistPrivates = Str("QQCHAT_WHITELIST_PRIVATES") ?? s.WhitelistPrivates;
+        s.AiDesire = Int("QQCHAT_AI_DESIRE") ?? s.AiDesire;
+        s.SuitabilityThreshold = Int("QQCHAT_SUITABILITY_THRESHOLD") ?? s.SuitabilityThreshold;
+        s.AiModeEnabled = Bool("QQCHAT_AI_MODE") ?? s.AiModeEnabled;
+        s.MaxTokens = Int("QQCHAT_MAX_TOKENS") ?? s.MaxTokens;
+        s.PrivateCooldownSeconds = Int("QQCHAT_PRIVATE_COOLDOWN") ?? s.PrivateCooldownSeconds;
+        s.GroupCooldownSeconds = Int("QQCHAT_GROUP_COOLDOWN") ?? s.GroupCooldownSeconds;
+    s.IdleFallbackSeconds = Int("QQCHAT_IDLE_FALLBACK") ?? s.IdleFallbackSeconds;
+    s.ParticipationMaxConsecutiveReplies = Int("QQCHAT_PARTICIPATION_MAX_REPLIES") ?? s.ParticipationMaxConsecutiveReplies;
+    s.ParticipationCooldownSeconds = Int("QQCHAT_PARTICIPATION_COOLDOWN") ?? s.ParticipationCooldownSeconds;
+    s.ParticipationProbingMaxReplies = Int("QQCHAT_PARTICIPATION_PROBING") ?? s.ParticipationProbingMaxReplies;
+    s.ParticipationMaxActiveLifetimeSeconds = Int("QQCHAT_PARTICIPATION_ACTIVE_LIFE") ?? s.ParticipationMaxActiveLifetimeSeconds;
+    s.ParticipationMaxExitingLifetimeSeconds = Int("QQCHAT_PARTICIPATION_EXITING_LIFE") ?? s.ParticipationMaxExitingLifetimeSeconds;
+    s.EnableParticipationGating = Bool("QQCHAT_PARTICIPATION_GATING") ?? s.EnableParticipationGating;
+    s.EnableQuestions = Bool("QQCHAT_QUESTIONS") ?? s.EnableQuestions;
+        s.SplitReplies = Bool("QQCHAT_SPLIT_REPLIES") ?? s.SplitReplies;
+        s.EnableProactive = Bool("QQCHAT_PROACTIVE") ?? s.EnableProactive;
+        s.ProactiveCooldownSeconds = Int("QQCHAT_PROACTIVE_COOLDOWN") ?? s.ProactiveCooldownSeconds;
+        s.ProactiveQuietSeconds = Int("QQCHAT_PROACTIVE_QUIET") ?? s.ProactiveQuietSeconds;
+        s.IgnoreBracketMessages = Bool("QQCHAT_IGNORE_BRACKETS") ?? s.IgnoreBracketMessages;
+        s.SegmentDelayMs = Int("QQCHAT_SEGMENT_DELAY_MS") ?? s.SegmentDelayMs;
+        s.MaxContextMessages = Int("QQCHAT_MAX_CONTEXT") ?? s.MaxContextMessages;
+        s.ProfileLookupCount = Int("QQCHAT_PROFILE_LOOKUP") ?? s.ProfileLookupCount;
+        s.ProfileSummaryLines = Int("QQCHAT_PROFILE_LINES") ?? s.ProfileSummaryLines;
+        s.MaxProfileChars = Int("QQCHAT_PROFILE_CHARS") ?? s.MaxProfileChars;
+        s.EnableProfileSummary = Bool("QQCHAT_PROFILE_SUMMARY") ?? s.EnableProfileSummary;
+        s.ProfileSummaryThreshold = Int("QQCHAT_PROFILE_SUMMARY_THRESHOLD") ?? s.ProfileSummaryThreshold;
+        s.ProfileSummaryMaxChars = Int("QQCHAT_PROFILE_SUMMARY_CHARS") ?? s.ProfileSummaryMaxChars;
+        s.ProfileSummaryIntervalSeconds = Int("QQCHAT_PROFILE_SUMMARY_INTERVAL") ?? s.ProfileSummaryIntervalSeconds;
+        s.MaxMessagesPerConversation = Int("QQCHAT_MAX_MESSAGES") ?? s.MaxMessagesPerConversation;
+        s.MaxConcurrentReplies = Int("QQCHAT_CONCURRENCY") ?? s.MaxConcurrentReplies;
+        s.EnableStickers = Bool("QQCHAT_STICKERS") ?? s.EnableStickers;
+        s.StickerLibraryMax = Int("QQCHAT_STICKER_MAX") ?? s.StickerLibraryMax;
+        s.StickerCandidates = Int("QQCHAT_STICKER_CANDIDATES") ?? s.StickerCandidates;
+        s.StickerCurateIntervalSeconds = Int("QQCHAT_STICKER_CURATE_INTERVAL") ?? s.StickerCurateIntervalSeconds;
+        s.StickerCooldownSeconds = Int("QQCHAT_STICKER_COOLDOWN") ?? s.StickerCooldownSeconds;
+        s.EnablePoke = Bool("QQCHAT_ENABLE_POKE") ?? s.EnablePoke;
+        s.PokeCooldownSeconds = Int("QQCHAT_POKE_COOLDOWN") ?? s.PokeCooldownSeconds;
+        s.MoodTtlSeconds = Int("QQCHAT_MOOD_TTL") ?? s.MoodTtlSeconds;
+        s.EnableMusic = Bool("QQCHAT_ENABLE_MUSIC") ?? s.EnableMusic;
+        s.MusicListenCooldownSeconds = Int("QQCHAT_MUSIC_LISTEN_COOLDOWN") ?? s.MusicListenCooldownSeconds;
+        s.MusicUnderstandModel = Str("QQCHAT_MUSIC_MODEL") ?? s.MusicUnderstandModel;
+        s.MusicSendAudioToModel = Bool("QQCHAT_MUSIC_SEND_AUDIO") ?? s.MusicSendAudioToModel;
+        s.MusicAudioToModelMaxKb = Int("QQCHAT_MUSIC_AUDIO_MAX_KB") ?? s.MusicAudioToModelMaxKb;
+        s.MusicSources = Str("QQCHAT_MUSIC_SOURCES") ?? s.MusicSources;
+        s.NeteaseBaseUrl = Str("QQCHAT_NETEASE_BASE_URL") ?? s.NeteaseBaseUrl;
+        s.EnableLinkPreview = Bool("QQCHAT_LINK_PREVIEW") ?? s.EnableLinkPreview;
+        s.EnableWebSearch = Bool("QQCHAT_WEB_SEARCH") ?? s.EnableWebSearch;
+        s.EnableAgentBridge = Bool("QQCHAT_AGENT") ?? s.EnableAgentBridge;
+        s.AgentPrefix = Str("QQCHAT_AGENT_PREFIX") ?? s.AgentPrefix;
+        s.AgentAllowedUsers = Str("QQCHAT_AGENT_USERS") ?? s.AgentAllowedUsers;
+        s.AgentWorkDir = Str("QQCHAT_AGENT_WORKDIR") ?? s.AgentWorkDir;
+        s.AgentModel = Str("QQCHAT_AGENT_MODEL") ?? s.AgentModel;
+        s.AgentTools = Str("QQCHAT_AGENT_TOOLS") ?? s.AgentTools;
+        s.AgentTimeoutSeconds = Int("QQCHAT_AGENT_TIMEOUT") ?? s.AgentTimeoutSeconds;
+        s.AgentReplyMaxChars = Int("QQCHAT_AGENT_REPLY_CHARS") ?? s.AgentReplyMaxChars;
+        s.AgentProgressSeconds = Int("QQCHAT_AGENT_PROGRESS") ?? s.AgentProgressSeconds;
+        s.AgentTarget = Str("QQCHAT_AGENT_TARGET") ?? s.AgentTarget;
+        s.EnableServerAgent = Bool("QQCHAT_AGENT_SERVER") ?? s.EnableServerAgent;
+        s.EnableHostAgent = Bool("QQCHAT_AGENT_HOST") ?? s.EnableHostAgent;
+        s.AgentServerTools = Str("QQCHAT_AGENT_SERVER_TOOLS") ?? s.AgentServerTools;
+        s.AgentServerQqActions = Str("QQCHAT_AGENT_SERVER_QQ_ACTIONS") ?? s.AgentServerQqActions;
+        s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;
+        s.AgentServerBaseUrl = Str("QQCHAT_AGENT_SERVER_URL") ?? s.AgentServerBaseUrl;
+        s.AgentServerApiKey = Secret("QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
+        s.AgentMaskSensitive = Bool("QQCHAT_AGENT_MASK") ?? s.AgentMaskSensitive;
+        // 附加提示词：环境变量只当种子（空字符串也算“明确不带”吗？不算 —— 空 = 保持默认，
+        // 要去掉就在面板里清空后保存，否则每次重启都被环境变量重新种回来）
+        if (Str("QQCHAT_AGENT_PROMPT") is { Length: > 0 } agentPrompt)
+        {
+            s.AgentPrompt = agentPrompt;
+        }
+        s.AgentServerWorkDir = Str("QQCHAT_AGENT_SERVER_WORKDIR") ?? s.AgentServerWorkDir;
+        s.AgentServerKeepContext = Bool("QQCHAT_AGENT_SERVER_CONTEXT") ?? s.AgentServerKeepContext;
+        s.AgentServerDocker = Bool("QQCHAT_AGENT_SERVER_DOCKER") ?? s.AgentServerDocker;
+        s.PanelDeployEnabled = Bool("QQCHAT_PANEL_DEPLOY") ?? s.PanelDeployEnabled;
+        s.PanelDeployUrl = Str("QQCHAT_PANEL_DEPLOY_URL") ?? s.PanelDeployUrl;
+        s.AgentServerMaxSteps = Int("QQCHAT_AGENT_SERVER_STEPS") ?? s.AgentServerMaxSteps;
+        s.AgentServerCommandTimeoutSeconds = Int("QQCHAT_AGENT_SERVER_CMD_TIMEOUT") ?? s.AgentServerCommandTimeoutSeconds;
+        s.HealthReportEnabled = Bool("QQCHAT_HEALTH_REPORT") ?? s.HealthReportEnabled;
+        s.HealthReportTime = Str("QQCHAT_HEALTH_REPORT_TIME") ?? s.HealthReportTime;
+        s.HealthReportTargets = Str("QQCHAT_HEALTH_REPORT_TO") ?? s.HealthReportTargets;
+        s.WebSearchUseModelSearch = Bool("QQCHAT_SEARCH_USE_MODEL") ?? s.WebSearchUseModelSearch;
+        s.WebSearchSources = Str("QQCHAT_SEARCH_SOURCES") ?? s.WebSearchSources;
+        s.WebSearchMaxResults = Int("QQCHAT_SEARCH_MAX_RESULTS") ?? s.WebSearchMaxResults;
+        s.WebSearchCooldownSeconds = Int("QQCHAT_SEARCH_COOLDOWN") ?? s.WebSearchCooldownSeconds;
+        s.WebSearchTimeoutSeconds = Int("QQCHAT_SEARCH_TIMEOUT") ?? s.WebSearchTimeoutSeconds;
+        s.WebSearchReadMaxChars = Int("QQCHAT_SEARCH_READ_CHARS") ?? s.WebSearchReadMaxChars;
+        s.EnableVoice = Bool("QQCHAT_ENABLE_VOICE") ?? s.EnableVoice;
+        s.VoiceName = Str("QQCHAT_VOICE") ?? s.VoiceName;
+        s.VoiceSpeed = Int("QQCHAT_VOICE_SPEED") ?? s.VoiceSpeed;
+            s.VoicePitch = Int("QQCHAT_VOICE_PITCH") ?? s.VoicePitch;
+            s.VoiceVol = Int("QQCHAT_VOICE_VOL") ?? s.VoiceVol;
+            var voiceEmotionEnv = Environment.GetEnvironmentVariable("QQCHAT_VOICE_EMOTION");
+            if (!string.IsNullOrWhiteSpace(voiceEmotionEnv))
+            {
+                s.VoiceEmotion = voiceEmotionEnv.Trim();
+            }
+        s.VoiceMaxChars = Int("QQCHAT_VOICE_MAX_CHARS") ?? s.VoiceMaxChars;
+        s.TtsServiceUrl = Str("QQCHAT_TTS_URL") ?? s.TtsServiceUrl;
+    s.OfficialEnabled = Bool("QQCHAT_OFFICIAL") ?? s.OfficialEnabled;
+    s.OfficialAppId = Str("QQCHAT_OFFICIAL_APP_ID") ?? s.OfficialAppId;
+    s.OfficialAppSecret = Str("QQCHAT_OFFICIAL_APP_SECRET") ?? s.OfficialAppSecret;
+    s.OfficialSandbox = Bool("QQCHAT_OFFICIAL_SANDBOX") ?? s.OfficialSandbox;
+    s.OfficialWhitelistGroups = Str("QQCHAT_OFFICIAL_WHITELIST_GROUPS") ?? s.OfficialWhitelistGroups;
+    s.OfficialWhitelistPrivates = Str("QQCHAT_OFFICIAL_WHITELIST_PRIVATES") ?? s.OfficialWhitelistPrivates;
+    s.OfficialApiBase = Str("QQCHAT_OFFICIAL_API_BASE") ?? s.OfficialApiBase;
+    s.OfficialTokenUrl = Str("QQCHAT_OFFICIAL_TOKEN_URL") ?? s.OfficialTokenUrl;
+        s.LinkPreviewTimeoutSeconds = Int("QQCHAT_LINK_PREVIEW_TIMEOUT") ?? s.LinkPreviewTimeoutSeconds;
+        s.LinkPreviewMax = Int("QQCHAT_LINK_PREVIEW_MAX") ?? s.LinkPreviewMax;
+        s.MusicBitrate = Int("QQCHAT_MUSIC_BITRATE") ?? s.MusicBitrate;
+        s.MusicMaxDownloadMb = Int("QQCHAT_MUSIC_MAX_MB") ?? s.MusicMaxDownloadMb;
+        s.MusicMaxAnalysisSeconds = Int("QQCHAT_MUSIC_ANALYSIS_SECONDS") ?? s.MusicMaxAnalysisSeconds;
+        s.MusicLibraryMax = Int("QQCHAT_MUSIC_LIBRARY_MAX") ?? s.MusicLibraryMax;
+        s.MusicNoteTtlDays = Int("QQCHAT_MUSIC_NOTE_TTL_DAYS") ?? s.MusicNoteTtlDays;
+        s.MusicKeepAudio = Bool("QQCHAT_MUSIC_KEEP_AUDIO") ?? s.MusicKeepAudio;
+        s.NeteaseCookie = Str("QQCHAT_NETEASE_COOKIE") ?? s.NeteaseCookie;
+    }
+
+
+    /// <summary>
+    /// 面板里改过的模型配置（端点 / 模型名 / API Key）优先于环境变量。
+    /// 以前这三项只读环境变量：想换个中转、换模型、换密钥都得改 .env 重启容器；
+    /// 现在面板里改完立即生效并落盘（密钥单独存 data/secrets.json，权限 600，不进 settings.json）。
+    /// 环境变量退居“首次部署的种子”：面板没改过时照旧生效。
+    /// </summary>
+    private static void ApplyPanelOverrides(AppSettings s)
+    {
+        SecretsStore.Init(AppPaths.RuntimeRoot);
+
+    // 密钥库里存着的官方通道 AppSecret（面板填的）—— 环境变量优先，其次是这里。
+    // 必须在 SecretsStore.Init 之后读（前面那堆 env 种子跑得比 Init 早）。
+    if (string.IsNullOrWhiteSpace(s.OfficialAppSecret) && new SecretsStore().LoadOfficialSecret() is { Length: > 0 } storedSecret)
+    {
+        s.OfficialAppSecret = storedSecret;
+    }
+        s.ApiKeyOverride ??= new SecretsStore().LoadApiKey();
+        s.AgentServerApiKeyOverride ??= new SecretsStore().LoadAgentServerKey();
+
+        // 网易云登录态：面板扫码存下来的优先于环境变量（以前只活在自建 API 容器内存里，容器一重建就没了）
+        if (new SecretsStore().LoadNeteaseCookie() is { Length: > 0 } storedCookie)
+        {
+            s.NeteaseCookie = storedCookie;
+            if (!string.IsNullOrWhiteSpace(Str("QQCHAT_NETEASE_COOKIE")))
+            {
+                PanelOverriddenEnvVars.Add("QQCHAT_NETEASE_COOKIE → 面板里扫码保存的登录态");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.ModelBaseUrlOverride))
+        {
+            if (!string.IsNullOrWhiteSpace(Str("QQCHAT_BASE_URL", "OPENAI_BASE_URL")))
+            {
+                PanelOverriddenEnvVars.Add("QQCHAT_BASE_URL → 面板里的 Base URL");
+            }
+
+            s.ModelBaseUrl = s.ModelBaseUrlOverride!.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.ModelOverride))
+        {
+            if (!string.IsNullOrWhiteSpace(Str("QQCHAT_MODEL", "OPENAI_MODEL")))
+            {
+                PanelOverriddenEnvVars.Add("QQCHAT_MODEL → 面板里的模型名");
+            }
+
+            s.Model = s.ModelOverride!.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.ApiKeyOverride))
+        {
+            if (!string.IsNullOrWhiteSpace(Secret("QQCHAT_API_KEY", "OPENAI_API_KEY")))
+            {
+                PanelOverriddenEnvVars.Add("QQCHAT_API_KEY → 面板里填的密钥");
+            }
+
+            s.ApiKey = s.ApiKeyOverride!.Trim();
+        }
+
+        // 服务器 agent 的密钥同理：面板填过就以面板为准（以前只能改 .env 重启，2026-09-18 补上面板入口）
+        if (!string.IsNullOrWhiteSpace(s.AgentServerApiKeyOverride))
+        {
+            if (!string.IsNullOrWhiteSpace(Secret("QQCHAT_AGENT_SERVER_KEY")))
+            {
+                PanelOverriddenEnvVars.Add("QQCHAT_AGENT_SERVER_KEY → 面板里填的密钥");
+            }
+
+            s.AgentServerApiKey = s.AgentServerApiKeyOverride!.Trim();
+        }
+    }
+
+    /// <summary>修正非法/矛盾配置，避免容器里静默跑错。</summary>
+    private static void Normalize(AppSettings s)
+    {
+        s.ModelBaseUrl = s.ModelBaseUrl.Trim();
+        s.ApiKey = s.ApiKey.Trim();
+        s.Model = s.Model.Trim();
+        s.OneBotAddress = s.OneBotAddress.Trim();
+        s.OneBotToken = s.OneBotToken.Trim();
+        s.QuickLoginUin = s.QuickLoginUin.Trim();
+        s.AiDesire = Math.Clamp(s.AiDesire, 0, 100);
+        s.SuitabilityThreshold = Math.Clamp(s.SuitabilityThreshold, 0, 100);
+        // 参与状态机的上限（P1）：env / 老配置里的值同样要钳 —— 这是服务端那道硬边界，
+        // 面板与 env 都只是“愿望”。（状态机内部还会再过一次 Clamped()，两层都不省。）
+        s.ParticipationMaxConsecutiveReplies = Math.Clamp(s.ParticipationMaxConsecutiveReplies, 1, 10);
+        s.ParticipationCooldownSeconds = Math.Clamp(s.ParticipationCooldownSeconds, 0, 600);
+        s.ParticipationProbingMaxReplies = Math.Clamp(s.ParticipationProbingMaxReplies, 1, 3);
+        s.ParticipationMaxActiveLifetimeSeconds = Math.Clamp(s.ParticipationMaxActiveLifetimeSeconds, 30, 3600);
+        s.ParticipationMaxExitingLifetimeSeconds = Math.Clamp(s.ParticipationMaxExitingLifetimeSeconds, 10, 3600);
+        s.MaxTokens = s.MaxTokens > 0 ? s.MaxTokens : 2048;
+        s.MaxContextMessages = Math.Clamp(s.MaxContextMessages, 10, 1000);
+        s.ProfileLookupCount = Math.Clamp(s.ProfileLookupCount, 0, 50);
+        s.ProfileSummaryLines = Math.Clamp(s.ProfileSummaryLines, 0, 50);
+        s.MaxProfileChars = Math.Clamp(s.MaxProfileChars, 0, 20000);
+        s.ProfileSummaryThreshold = Math.Clamp(s.ProfileSummaryThreshold, 5, 500);
+        s.ProfileSummaryMaxChars = Math.Clamp(s.ProfileSummaryMaxChars, 40, 2000);
+        s.ProfileSummaryIntervalSeconds = Math.Clamp(s.ProfileSummaryIntervalSeconds, 0, 86400);
+        s.MaxMessagesPerConversation = Math.Clamp(s.MaxMessagesPerConversation, 20, 100000);
+        s.MaxConcurrentReplies = Math.Clamp(s.MaxConcurrentReplies, 1, 16);
+        s.StickerLibraryMax = Math.Clamp(s.StickerLibraryMax, 0, 2000);
+        s.StickerCandidates = Math.Clamp(s.StickerCandidates, 0, 20);
+        s.StickerCurateIntervalSeconds = Math.Clamp(s.StickerCurateIntervalSeconds, 0, 86400);
+        s.StickerCooldownSeconds = Math.Clamp(s.StickerCooldownSeconds, 0, 86400);
+        s.PokeCooldownSeconds = Math.Clamp(s.PokeCooldownSeconds, 0, 86400);
+        s.MoodTtlSeconds = Math.Clamp(s.MoodTtlSeconds, 0, 86400 * 7);
+        s.SegmentDelayMs = Math.Max(0, s.SegmentDelayMs);
+        s.HealthPort = s.HealthPort is >= 0 and <= 65535 ? s.HealthPort : 8080;
+        s.NapCatWebUiUrl = s.NapCatWebUiUrl.Trim().TrimEnd('/');
+        s.NapCatWebUiToken = s.NapCatWebUiToken.Trim();
+
+        // 健康日报：时刻归一化成 HH:mm（手输 "18：00" / "1800" 也认，解析不出来就回 18:00）。
+        // 收件人只去首尾空白（分隔符交给解析器容忍，面板里要能原样看到自己填的那串）。
+        var (reportHour, reportMinute) = AppSettings.ParseHealthReportClock(s.HealthReportTime);
+        s.HealthReportTime = $"{reportHour:00}:{reportMinute:00}";
+        s.HealthReportTargets = s.HealthReportTargets.Trim();
+
+        // 兼容：早期版本固定 ForwardWebSocket，配置文件里可能是遗留值
+        if (string.IsNullOrWhiteSpace(s.OneBotProtocol))
+        {
+            s.OneBotProtocol = "ForwardWebSocket";
+        }
+    }
+
+    /// <summary>启动前校验；返回致命问题列表（非空则拒绝启动）。</summary>
+    public static List<string> Validate(AppSettings s)
+    {
+        var errors = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(s.ApiKey))
+        {
+            errors.Add("未配置 API Key（设 QQCHAT_API_KEY 或在 settings.json 里填 ApiKey）");
+        }
+
+        if (string.IsNullOrWhiteSpace(s.Model))
+        {
+            errors.Add("未配置模型名（QQCHAT_MODEL）");
+        }
+
+        if (!Uri.TryCreate(s.ModelBaseUrl, UriKind.Absolute, out var modelUri) ||
+            (modelUri.Scheme != "http" && modelUri.Scheme != "https"))
+        {
+            errors.Add($"ModelBaseUrl 不是合法 URL: '{s.ModelBaseUrl}'");
+        }
+
+        if (s.OneBotProtocol is not ("ForwardWebSocket" or "ReverseWebSocket" or "Http"))
+        {
+            errors.Add($"OneBotProtocol 只能是 ForwardWebSocket / ReverseWebSocket / Http，当前 '{s.OneBotProtocol}'");
+        }
+
+        // 正向 WS：连出去，必须是 ws(s)；反向 WS：本地监听地址，http(s) 与 ws(s) 都常见；HTTP：http(s)
+        var allowedSchemes = s.OneBotProtocol switch
+        {
+            "ForwardWebSocket" => new[] { "ws", "wss" },
+            "ReverseWebSocket" => new[] { "http", "https", "ws", "wss" },
+            _ => new[] { "http", "https" }
+        };
+
+        if (!Uri.TryCreate(s.OneBotAddress, UriKind.Absolute, out var obUri) || !allowedSchemes.Contains(obUri.Scheme))
+        {
+            var hint = s.OneBotProtocol switch
+            {
+                "ForwardWebSocket" => "例：ws://napcat:3001",
+                "ReverseWebSocket" => "例：http://0.0.0.0:3001（本地监听，等协议端连入）",
+                _ => "例：http://napcat:3000"
+            };
+            errors.Add($"OneBotAddress 与协议不匹配（{s.OneBotProtocol} 需要 {string.Join('/', allowedSchemes)}://，{hint}）: '{s.OneBotAddress}'");
+        }
+
+        if (!string.IsNullOrWhiteSpace(s.QuickLoginUin) && !long.TryParse(s.QuickLoginUin, out _))
+        {
+            errors.Add($"QQ 号必须是纯数字: '{s.QuickLoginUin}'");
+        }
+
+        return errors;
+    }
+
+    /// <summary>比较环境变量文本与配置值：布尔型归一化 1/0/true/false，避免误报。</summary>
+    private static bool ValuesMatch(Type? type, string envValue, object? fileValue)
+    {
+        var env = envValue.Trim();
+
+        if (type == typeof(bool))
+        {
+            var parsed = env.ToLowerInvariant() switch
+            {
+                "1" or "true" or "yes" or "y" or "on" => true,
+                "0" or "false" or "no" or "n" or "off" => false,
+                _ => (bool?)null
+            };
+            return parsed is null || parsed == (bool?)fileValue;
+        }
+
+        return string.Equals(env, fileValue?.ToString()?.Trim(), StringComparison.Ordinal);
+    }
+
+    private static string Truncate(string? s, int max = 28)
+    {
+        s = (s ?? string.Empty).Replace("\n", " ").Trim();
+        return s.Length <= max ? s : s[..max] + "…";
+    }
+
+    // ---------- 读取辅助 ----------
+
+    private static string? Str(params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>读取密钥：优先 <c>{NAME}_FILE</c>（Docker secrets），其次 <c>{NAME}</c>。</summary>
+    private static string? Secret(params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var path = Environment.GetEnvironmentVariable(name + "_FILE");
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                var fromFile = SecretFiles.TryRead(path, out var readError);
+                if (readError is not null)
+                {
+                    Console.Error.WriteLine($"[Config] 读取 {path} 失败: {readError}");
+                }
+
+                if (!string.IsNullOrWhiteSpace(fromFile))
+                {
+                    return fromFile;
+                }
+            }
+        }
+
+        return Str(names);
+    }
+
+    private static int? Int(string name)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            return value;
+        }
+
+        Console.Error.WriteLine($"[Config] {name}='{raw}' 不是整数，已忽略");
+        return null;
+    }
+
+    private static bool? Bool(string name)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "1" or "true" or "yes" or "y" or "on" => true,
+            "0" or "false" or "no" or "n" or "off" => false,
+            _ => Warn(name, raw)
+        };
+
+        static bool? Warn(string n, string v)
+        {
+            Console.Error.WriteLine($"[Config] {n}='{v}' 不是布尔值，已忽略");
+            return null;
+        }
+    }
+}

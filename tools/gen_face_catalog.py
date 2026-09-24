@@ -8,14 +8,14 @@ QDes 就是 QQ 里的名字（/微笑、/捂脸…），同时覆盖经典表情
 
 用法：
     curl -sLO https://raw.githubusercontent.com/NapNeko/NapCatQQ/main/packages/napcat-core/external/face_config.json
-    python tools/gen_face_catalog.py face_config.json src/QQChatAgent.Headless/Services/OneBot/QqFaceCatalog.cs
+    python tools/gen_face_catalog.py face_config.json src/BotAgent.Headless/Services/OneBot/QqFaceCatalog.cs
 """
 import io
 import json
 import sys
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else 'face_config.json'
-OUT = sys.argv[2] if len(sys.argv) > 2 else 'src/QQChatAgent.Headless/Services/OneBot/QqFaceCatalog.cs'
+OUT = sys.argv[2] if len(sys.argv) > 2 else 'src/BotAgent.Headless/Services/OneBot/QqFaceCatalog.cs'
 
 data = json.load(io.open(SRC, encoding='utf-8'))
 pairs = {}
@@ -39,7 +39,7 @@ lines = [
     '// </auto-generated>',
     '#nullable enable',
     '',
-    'namespace QQChatAgent.Services.OneBot;',
+    'namespace BotAgent.Services.OneBot;',
     '',
     '/// <summary>QQ 原生小表情 id → 中文名（经典表情 0..244 与新版系统表情 260+ 都在内）。</summary>',
     'public static class QqFaceCatalog',

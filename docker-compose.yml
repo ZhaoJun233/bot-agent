@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════
-#  QQ Chat Agent（Headless）+ NapCat 全容器部署
+#  Bot Agent（Headless）+ NapCat 全容器部署
 #
 #  用法：
 #    cp .env.example .env      # 填写 API Key / 白名单 / QQ 号
@@ -53,7 +53,7 @@ services:
   qqchat:
     build:
       context: .
-      dockerfile: src/QQChatAgent.Headless/Dockerfile
+      dockerfile: src/BotAgent.Headless/Dockerfile
     image: qqchat-agent:latest
     container_name: qqchat-bot
     restart: unless-stopped
@@ -142,6 +142,20 @@ services:
       QQCHAT_AGENT_SERVER_STEPS: ${AGENT_SERVER_STEPS:-8}
       QQCHAT_AGENT_SERVER_CMD_TIMEOUT: ${AGENT_SERVER_CMD_TIMEOUT:-60}
 
+      # ---- 参与闸门（默认关；只收不放 —— 被 @ 仍然照常回）----
+      # 行为类配置：只在首次部署当种子，之后以面板「参与状态」卡片为准。
+      QQCHAT_PARTICIPATION_GATING: ${PARTICIPATION_GATING:-0}
+      QQCHAT_PARTICIPATION_MAX_REPLIES: ${PARTICIPATION_MAX_REPLIES:-3}
+      QQCHAT_PARTICIPATION_COOLDOWN: ${PARTICIPATION_COOLDOWN:-20}
+      QQCHAT_PARTICIPATION_PROBING: ${PARTICIPATION_PROBING:-1}
+      QQCHAT_PARTICIPATION_ACTIVE_LIFE: ${PARTICIPATION_ACTIVE_LIFE:-900}
+      QQCHAT_PARTICIPATION_EXITING_LIFE: ${PARTICIPATION_EXITING_LIFE:-180}
+
+      # ---- 健康日报（默认关；纯服务器侧，定时私聊一条状态）----
+      QQCHAT_HEALTH_REPORT: ${HEALTH_REPORT:-0}
+      QQCHAT_HEALTH_REPORT_TIME: ${HEALTH_REPORT_TIME:-18:00}
+      QQCHAT_HEALTH_REPORT_TO: ${HEALTH_REPORT_TO:-}
+
       # ---- 表情包（全库共用一份；行为类配置以 settings.json 为准，这里只当种子）----
       QQCHAT_STICKERS: ${STICKERS:-1}
       QQCHAT_STICKER_MAX: ${STICKER_MAX:-120}
@@ -161,7 +175,7 @@ services:
       QQCHAT_VOICE_SPEED: ${VOICE_SPEED:-100}
       QQCHAT_VOICE_MAX_CHARS: ${VOICE_MAX_CHARS:-80}
       QQCHAT_TTS_URL: ${TTS_URL:-http://tts:5000}
-      # ---- 官方商用通道（QQ 开放平台；与私域 NapCat 并存、互不串台）----
+      # ---- 官方通道（QQ 开放平台；与私域 NapCat 并存、互不串台）----
       # 开之前先在开放平台把服务器的**出口 IP** 加进白名单，否则连不上（正式环境）。
       # appid 写在这里没事，secret 是密钥（下面这行只从环境变量读，不落盘）。
       QQCHAT_OFFICIAL: ${OFFICIAL_ENABLED:-0}
@@ -194,7 +208,7 @@ services:
       # 健康检查 / 状态，仅本机可访问（容器内 HEALTHCHECK 不受影响）
       - "127.0.0.1:8080:8080"
     healthcheck:
-      test: ["CMD", "dotnet", "/app/QQChatAgent.Headless.dll", "--health"]
+      test: ["CMD", "dotnet", "/app/BotAgent.Headless.dll", "--health"]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -249,7 +263,7 @@ services:
       - MAX_CHARS=${VOICE_MAX_CHARS:-300}
       - CACHE_DIR=/cache
       - CACHE_MAX_MB=${TTS_CACHE_MB:-80}
-      # 官方商用通道发语音要腾讯 SILK；把编码器塞进镜像要用构建参数（见该 Dockerfile 顶部）
+      # 官方通道发语音要腾讯 SILK；把编码器塞进镜像要用构建参数（见该 Dockerfile 顶部）
       - SILK_ENCODER=${SILK_ENCODER:-silk_v3_encoder}
     volumes:
       - ./tts-cache:/cache                        # 合成结果缓存（同一句话不重复花钱）

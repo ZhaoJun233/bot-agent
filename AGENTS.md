@@ -44,11 +44,11 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 ## 3. 写新功能时顺手守住隐私
 
 - 任何**列出会话 / 成员 / 文件**的新输出，都要过脱敏开关：
-  群里那条路用 `BotAgent.MaybeMask` / `ChatLabel`，其它地方用 `AgentMask.Text / ChatLabel / Shorten`。
+  群里那条路用 `BotAgentHost.MaybeMask` / `ChatLabel`，其它地方用 `AgentMask.Text / ChatLabel / Shorten`。
 - **显示层脱敏，存储与 key 保持原样**：`group:123` 这种 key 被遮了，命令与面板按钮就全废了。
 - 面板"可编辑的真名"用 `nameRaw`（显示用 `name`）；改名输入框必须填真名，否则会把 `群友A` 写回去。
 - 文档 / 注释 / 测试 / 探针里不许出现真实 QQ 号、群号、昵称、域名、IP、密钥 —— 用 `10001`、`群友A`、`example.com`。
-- 验证隐私行为用合成数据（`tests/QQChatAgent.IntegrationHarness`、`MockOpenAi`），别拿线上会话试。
+- 验证隐私行为用合成数据（`tests/BotAgent.IntegrationHarness`、`MockOpenAi`），别拿线上会话试。
 
 ---
 
@@ -64,10 +64,15 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 ## 5. 常用命令
 
 ```sh
-dotnet build src/QQChatAgent.Headless/QQChatAgent.Headless.csproj -c Release
-node tests/QQChatAgent.FrontendProbe/probe.mjs                       # 面板冒烟（无浏览器）
-QQCHAT_IT_ONLY=s36 dotnet tests/QQChatAgent.IntegrationHarness/bin/Release/net8.0/QQChatAgent.IntegrationHarness.dll
+dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
+node tests/BotAgent.FrontendProbe/probe.mjs                       # 面板冒烟（无浏览器）
+QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+# 结构护栏（只读源码，不连库不起进程）：基线在 ArchitectureProbe/Baseline.cs
+dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
+dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll
 ```
 
+- 架构护栏是**棘轮**：`Baseline.cs` 里的阈值只允许**调低**，不允许调高（调高 = 放宽结构约束）。
+  变小了就用 `--print` 拿新数字改基线。方案与批次见 `docs/engineering/architecture-optimization.md`。
 - 部署到服务器 / 发布公开快照 / 历史记录（仓库外的内部资料）由仓库外的脚本负责，细节见工作区那份 `AGENTS.md`。
 - 公开快照会做脱敏校验（域名、IP、QQ 号、昵称、模型名、密钥），**先 commit 再发布**。

@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="system">
+<head>
+<meta charset="utf-8" />
+<!-- viewport-fit=cover：iPhone 刘海/小横条下也能用满屏，配合 CSS 的 env(safe-area-inset-*) -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#202020" media="(prefers-color-scheme: dark)" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Bot Agent" />
+<title>Bot Agent</title>
+<link rel="stylesheet" href="/app.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230067c0'/><svg x='7.5' y='7.5' width='17' height='17' viewBox='0 0 16 16'><path fill='%23ffffff' d='M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z'/></svg></svg>" />
+</head>
+<body>
+
+<!-- ══════════ 标题栏 ══════════ -->
+<header class="titlebar">
+  <div class="brand">
+    <div class="brand-badge">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+        <path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <div class="brand-title">Bot Agent</div>
+      <div class="brand-sub" id="brandSub">Web 面板 · v0.3</div>
+    </div>
+  </div>
+  <div class="titlebar-right">
+    <span class="conn" id="connPill"><i class="dot" id="connDot"></i><span id="connText">连接中…</span></span>
+  </div>
+</header>
+
+<div class="shell">
+
+  <!-- ══════════ 左侧导航（窄图标栏）══════════ -->
+  <nav class="navrail">
+    <button class="navitem active" data-page="chat" title="聊天">
+      <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z"/></svg>
+      <span>聊天</span>
+    </button>
+    <button class="navitem" data-page="settings" title="设置">
+      <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2m0 1.4a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8"/><path fill="currentColor" d="m13.3 9.3-.9.5a4.5 4.5 0 0 1 0 1.4l.9.5a.6.6 0 0 1 .2.8l-.8 1.4a.6.6 0 0 1-.8.2l-.9-.5c-.4.3-.8.6-1.2.7v1a.6.6 0 0 1-.6.6H7.5a.6.6 0 0 1-.6-.6v-1a4.5 4.5 0 0 1-1.2-.7l-.9.5a.6.6 0 0 1-.8-.2l-.8-1.4a.6.6 0 0 1 .2-.8l.9-.5a4.5 4.5 0 0 1 0-1.4l-.9-.5a.6.6 0 0 1-.2-.8l.8-1.4a.6.6 0 0 1 .8-.2l.9.5c.4-.3.8-.6 1.2-.7v-1a.6.6 0 0 1 .6-.6h1.6a.6.6 0 0 1 .6.6v1c.4.1.8.4 1.2.7l.9-.5a.6.6 0 0 1 .8.2l.8 1.4a.6.6 0 0 1-.2.8"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <!-- ══════════════════ 聊天页 ══════════════════ -->
+  <main class="page" id="pageChat">
+
+    <!-- 会话列表 -->
+    <section class="conv-pane">
+      <div class="conv-head">
+        <h1>会话</h1>
+        <button class="ai-toggle" id="aiToggle" title="AI 模式：开启后 Agent 自动调用模型回复消息列表里的会话">
+          <span class="ai-ico" id="aiIco"></span>
+          <span id="aiLabel">AI 开</span>
+        </button>
+      </div>
+
+      <div class="search-wrap">
+        <input type="search" id="search" placeholder="搜索会话" autocomplete="off" />
+      </div>
+
+      <!-- 两条通道分块：私域（自建 NapCat）与官方（QQ 开放平台）。
+           两侧的会话 key 带各自的通道前缀，这里只是按前缀筛出对应板块，互不混淆。 -->
+      <div class="chan-tabs" id="chanTabs" role="tablist">
+        <button type="button" class="chan-tab active" data-chan="all" role="tab">全部</button>
+        <button type="button" class="chan-tab" data-chan="private" role="tab">私域</button>
+        <button type="button" class="chan-tab" data-chan="official" role="tab" id="chanTabOfficial">官方</button>
+      </div>
+      <div class="chan-status" id="chanStatus"></div>
+
+      <div class="conv-list" id="convList"></div>
+      <div class="conv-empty" id="convEmpty">
+        <p>暂无会话</p>
+        <p class="sub">群内 @ 机器人、好友私聊消息会自动出现在这里</p>
+      </div>
+    </section>
+
+    <div class="vdivider"></div>
+
+    <!-- 聊天区 -->
+    <section class="chat-pane">
+      <div class="chat-head" id="chatHead">
+        <!-- 手机端：从聊天返回会话列表（桌面端隐藏） -->
+        <button class="chat-back" id="chatBack" title="返回会话列表" aria-label="返回会话列表">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M10.3 2.3a1 1 0 0 1 0 1.4L5.9 8l4.4 4.3a1 1 0 1 1-1.4 1.4l-5-5a1 1 0 0 1 0-1.4l5-5a1 1 0 0 1 1.4 0"/></svg>
+        </button>
+        <div class="avatar av-38" id="hdrAvatar"><span id="hdrAvatarText">?</span></div>
+        <div class="chat-head-main">
+          <div class="chat-head-line">
+            <h2 id="hdrName">未选择会话</h2>
+            <span class="kind-tag" id="hdrKindTag" hidden>群聊</span>
+          </div>
+          <div class="meta" id="hdrMeta">从左侧选择一个会话</div>
+        </div>
+        <div class="chat-head-status">
+          <i class="dot" id="hdrDot"></i>
+          <span id="hdrStatus">离线 · 未登录</span>
+        </div>
+      </div>
+
+      <!-- ══ 扫码登录卡片：QQ 未登录时自动出现，登录成功后自动消失 ══
+           二维码直接显示在面板里 —— 以前只能去 NapCat 自己的 WebUI（另一个域名 + 另一道认证）才看得到，
+           用户打开机器人面板看不到二维码就会卡在「没登录」上。 -->
+      <div class="login-card" id="loginCard" hidden>
+        <div class="login-qr">
+          <img id="loginQrImg" alt="QQ 登录二维码" hidden />
+          <div class="login-qr-state" id="loginQrState">正在获取二维码…</div>
+        </div>
+        <div class="login-body">
+          <h3 id="loginTitle">QQ 未登录 · 扫码即可上线</h3>
+          <p class="login-msg" id="loginMsg">用手机 QQ 扫左侧二维码登录机器人账号。二维码会自动换新，登录成功后本卡片自动消失。</p>
+          <div class="login-actions">
+            <button class="accent-btn" id="loginRefresh">换一张二维码</button>
+            <button class="ghost-btn" id="loginCollapse">收起</button>
+          </div>
+          <p class="login-url" id="loginUrlRow" hidden>扫不动？把这条链接粘到任意二维码生成器里再扫：<code id="loginUrl"></code></p>
+        </div>
+      </div>
+
+      <div class="msg-scroll" id="msgScroll">
+        <div class="msg-list" id="msgList"></div>
+        <div class="chat-empty" id="chatEmpty">
+          <p>暂无消息</p>
+          <p class="sub">群内 @ 机器人、好友私聊消息会自动出现在这里；<br />群会话打开时自动补历史消息</p>
+        </div>
+      </div>
+
+      <div class="thinking" id="thinking" hidden>
+        <i class="dot"></i><span id="thinkingText">AI 正在思考…</span>
+      </div>
+
+      <div class="composer">
+        <textarea id="input" rows="1" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"></textarea>
+        <button class="accent-btn" id="sendBtn">
+          <svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M1.7 14.3 15 8 1.7 1.7l.9 5.1 8.1 1.2-8.1 1.2z"/></svg>
+          <span>发送</span>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══════════════════ 设置页 ══════════════════ -->
+  <main class="page page-column" id="pageSettings" hidden>
+    <!-- 分节导航：卡片一多就得滑半天，这里一键跳过去（胶囊由 app.js 按卡片标题自动生成） -->
+    <nav class="section-nav" id="settingsNav" aria-label="设置分节导航"></nav>
+
+    <div class="settings-scroll">
+      <div class="settings-inner">
+        <h1 class="page-title">设置</h1>
+        <p class="page-desc">
+          密钥与通道地址由容器环境变量提供（下方只读）；<b>人设、白名单、节奏等归本页所有</b>，保存后立即生效且重启不回滚。
+        </p>
+
+        <!-- Agent 大脑 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Agent 大脑 · OpenAI 兼容接口</h3>
+            <p>这三项可以直接在这里改（保存后立即生效，不用重启容器）；留空 = 回退到容器环境变量。
+              <br />密钥单独存在 <code>data/qqchat.db</code> 的 <code>secrets</code> 表（库文件权限 600），不跟其余配置混在一起，界面上只显示掩码。</p>
+          </div>
+          <div class="field">
+            <label>Base URL<span class="hint" id="baseUrlSrc"></span></label>
+            <input type="text" id="setBaseUrl" placeholder="https://api.openai.com/v1" />
+          </div>
+          <div class="field">
+            <label>API Key<span class="hint" id="apiKeySrc"></span></label>
+            <input type="password" id="setApiKey" placeholder="填新密钥；留空 = 不改（清除请点右侧按钮）" autocomplete="new-password" />
+            <button class="ghost-btn inline" id="clearApiKey" type="button">清除密钥</button>
+          </div>
+          <div class="field">
+            <label>模型名称<span class="hint" id="modelSrc"></span></label>
+            <input type="text" id="setModel" placeholder="网关支持的模型名" />
+          </div>
+          <div class="field">
+            <label class="switch-row">
+              <input type="checkbox" id="setFastReply" />
+              <span class="switch"></span>
+              <span>快速回复（少思考）</span>
+            </label>
+            <span class="hint">聊天回复改用轻量模型，快 2~3 倍；硬推理会弱一些。标题综结 / 画像 / 表情包描述仍用主模型。</span>
+          </div>
+
+          <div class="field">
+            <label>快速档模型<span class="hint">开着上面开关时，聊天用它回</span></label>
+            <input type="text" id="setFastModel" placeholder="轻量模型名（跟着中转走，留空则开关不生效）" />
+          </div>
+
+
+          <div class="field">
+            <label>单次回复字数上限<span class="hint">MaxTokens</span></label>
+            <input type="number" id="setMaxTokens" min="64" max="32000" step="64" />
+          </div>
+
+          <div class="field">
+            <label>机器人人设档案<span class="hint">可选，定义角色的性格 / 说话风格，随每次请求注入</span></label>
+            <textarea id="setPersona" rows="4" placeholder="例如：你是群里的老群友，说话简短、口语化，偶尔吐槽……"></textarea>
+          </div>
+
+          <div class="field">
+            <label>AI 对话欲望<span class="hint">越高越主动参与群聊发言</span><b class="val" id="desireVal">50</b></label>
+            <input type="range" id="setDesire" min="0" max="100" step="5" />
+          </div>
+
+          <div class="field">
+            <label>发言适合度阈值<span class="hint">模型评分低于此值则保持沉默</span><b class="val" id="threshVal">10</b></label>
+            <input type="range" id="setThreshold" min="0" max="60" step="5" />
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setAiMode" />
+            <span class="switch"></span>
+            <span>AI 自动回复开关</span>
+          </label>
+        </div>
+
+        <!-- QQ 接入 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>QQ 接入 · OneBot v11</h3>
+            <p>连接信息由容器环境变量提供；白名单归本页所有，保存即生效。</p>
+          </div>
+
+          <div class="status-bar" id="napcatBar">
+            <div class="status-bar-title" id="napcatTitle">检测中…</div>
+            <div class="status-bar-msg" id="napcatMsg"></div>
+            <button class="ghost-btn inline" id="napcatLoginBtn" hidden>在面板里扫码登录</button>
+          </div>
+
+          <div class="field">
+            <label>协议</label>
+            <input type="text" id="setProtocol" readonly />
+          </div>
+          <div class="field">
+            <label>协议端地址</label>
+            <input type="text" id="setAddress" readonly />
+          </div>
+          <div class="field">
+            <label>AccessToken</label>
+            <input type="text" id="setToken" readonly />
+          </div>
+          <div class="field">
+            <label>机器人 QQ 号</label>
+            <input type="text" id="setUin" readonly />
+          </div>
+
+          <div class="field">
+            <label>群聊白名单<span class="hint">严格模式：只有名单内的**群**会进入消息列表并触发 AI，名单外全部忽略。<code>*</code> = 所有群（危险）</span></label>
+            <textarea id="setWhitelistGroups" rows="3" placeholder="例如：&#10;10001&#10;20002（留空 = 回落到下面的旧共用名单；旧名单也空 = 忽略全部）"></textarea>
+          </div>
+
+          <div class="field">
+            <label>私聊白名单<span class="hint">只有名单内的**好友**私聊会触发 AI。与群聊名单各管各的：QQ 号填在群里不会放行同号的群，反之亦然。<code>*</code> = 所有私聊（危险）</span></label>
+            <textarea id="setWhitelistPrivates" rows="3" placeholder="例如：&#10;30001（留空 = 回落到下面的旧共用名单；旧名单也空 = 忽略全部）"></textarea>
+          </div>
+
+          <div class="field">
+            <label>旧的共用名单（兼容）<span class="hint" id="whitelistLegacyHint">群聊+私聊共用一份（以前只有一个框）。上面两个新框里留空的那一边就回落到它</span></label>
+            <textarea id="setWhitelist" rows="2" placeholder="（旧字段；不填也没关系）"></textarea>
+          </div>
+        </div>
+
+        <!-- 面板一键部署（号主 2026-09-18：“面板有没有提供一键部署”） -->
+        <div class="card" id="deployCard">
+          <div class="card-head">
+            <h3>一键部署</h3>
+            <p>把新的 <code>app.tar.gz</code>（发布产物）交给服务器重建镜像并替换机器人容器；
+               部署前会自动把当前镜像存成 <code>qqchat-agent:prev</code>，出问题可以一键回滚。
+               上传/拉取都要先打开上面那个「面板一键部署」开关（默认关）。</p>
+          </div>
+
+          <pre id="deployStatus" class="path-hint" style="white-space:pre-wrap;max-height:120px;overflow:auto">读取中…</pre>
+
+          <div class="sticker-actions">
+            <input type="file" id="deployUpload" accept=".gz,.tar.gz" />
+            <button class="ghost-btn" id="deployUploadGo">上传并部署</button>
+          </div>
+
+          <div class="sticker-actions">
+            <input type="text" id="deployUrl" placeholder="产物地址（https://…/app.tar.gz；记住后以后一键拉）" style="flex:1" />
+            <button class="ghost-btn" id="deployUrlGo">从地址部署</button>
+            <button class="ghost-btn" id="deployRollbackGo">回滚上一个镜像</button>
+          </div>
+
+          <pre id="deployLog" class="path-hint" style="white-space:pre-wrap;max-height:200px;overflow:auto;display:none"></pre>
+        </div>
+
+        <!-- 回复节奏 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>回复节奏</h3>
+            <p>防止刷屏、控制发言手感。</p>
+          </div>
+
+          <!-- 对话总开关（按通道）。与顶部那个全局「AI 开关」分工：
+               全局一关两条都不回（连人在叫它也不回）；这里能只把一条静音。
+               放在这栏是因为它跟“回不回、多久回”是同一类东西。 -->
+          <label class="switch-row">
+            <input type="checkbox" id="setPrivateChatEnabled" />
+            <span class="switch"></span>
+            <span>私域通道对话开关<span class="hint">关 = 自建协议端（NapCat）那条<strong>收消息但不回</strong>；官方通道不受影响。全局静默请用顶栏的「AI 开关」</span></span>
+          </label>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setOfficialChatEnabled" />
+            <span class="switch"></span>
+            <span>官方通道对话开关<span class="hint">关 = 官方（QQ 开放平台）那条<strong>收消息但不回</strong>；调试/被平台限制时只静音这一条</span></span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>群聊冷却（秒）</label>
+              <input type="number" id="setGroupCooldown" min="0" max="600" step="1" />
+            </div>
+            <div class="field">
+              <label>私聊冷却（秒）</label>
+              <input type="number" id="setPrivateCooldown" min="0" max="600" step="1" />
+            </div>
+            <div class="field">
+              <label>静默兜底（秒）<span class="hint">0 = 关闭</span></label>
+              <input type="number" id="setIdleFallback" min="0" max="3600" step="10" />
+            </div>
+            <div class="field">
+              <label>分句间隔（毫秒）</label>
+              <input type="number" id="setSegmentDelay" min="0" max="10000" step="50" />
+            </div>
+            <div class="field">
+              <label>最大上下文（条）<span class="hint">喂给模型的消息数</span></label>
+              <input type="number" id="setMaxContext" min="10" max="1000" step="10" />
+            </div>
+            <div class="field">
+              <label>会话保留条数<span class="hint">超出部分归档到 archive/*.jsonl</span></label>
+              <input type="number" id="setMaxMessages" min="20" max="100000" step="50" />
+            </div>
+            <div class="field">
+              <label>模型并发上限<span class="hint">会话内串行、跨会话并发</span></label>
+              <input type="number" id="setConcurrency" min="1" max="16" step="1" />
+            </div>
+            <div class="field">
+              <label>档案人数上限</label>
+              <input type="number" id="setProfileLookup" min="0" max="50" step="1" />
+            </div>
+            <div class="field">
+              <label>每人档案条数<span class="hint">只取上下文之外更早的历史</span></label>
+              <input type="number" id="setProfileLines" min="0" max="50" step="1" />
+            </div>
+            <div class="field">
+              <label>档案总字数预算<span class="hint">超出就丢掉发言更早的人</span></label>
+              <input type="number" id="setProfileChars" min="0" max="20000" step="100" />
+            </div>
+          </div>
+
+          <div class="card-head" style="margin-top:6px">
+            <h3 style="font-size:15px">长期记忆 · 人物画像</h3>
+            <p>定期用模型把堆积的历史发言压缩成一段画像（代替“一堆原文”），token 降一个数量级。</p>
+          </div>
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableSummary" />
+            <span class="switch"></span>
+            <span>启用画像摘要</span>
+          </label>
+          <div class="grid-2">
+            <div class="field">
+              <label>触发阈值（条）<span class="hint">累计多少条新发言后重做</span></label>
+              <input type="number" id="setSummaryThreshold" min="5" max="500" step="5" />
+            </div>
+            <div class="field">
+              <label>画像字数上限</label>
+              <input type="number" id="setSummaryChars" min="40" max="2000" step="20" />
+            </div>
+            <div class="field">
+              <label>巡检间隔（秒）<span class="hint">0 = 关闭</span></label>
+              <input type="number" id="setSummaryInterval" min="0" max="86400" step="30" />
+            </div>
+          </div>
+          <label class="switch-row">
+            <input type="checkbox" id="setSplitReplies" />
+            <span class="switch"></span>
+            <span>长回复按句分句发送（更像真人打字）</span>
+          </label>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableProactive" />
+            <span class="switch"></span>
+            <span>允许主动开口（陪伴感）<span class="hint">没人 @ 它、也没人问它时，如果群里安静下来、而且有人情绪低落或刚聊得热闹，
+              它可能自己接一句。同一会话至少隔下面这个时间，而且上一条不能是它自己说的</span></span>
+          </label>
+
+          <div class="field">
+            <label>主动开口的最小间隔（秒）<span class="hint">默认 1800（半小时一句）；太短会显得坐不住</span></label>
+            <input type="number" id="setProactiveCooldown" min="60" max="86400" step="60" />
+          </div>
+
+          <div class="field">
+            <label>群里安静多久才算安静（秒）<span class="hint">默认 120；没安静下来就不主动插话</span></label>
+            <input type="number" id="setProactiveQuiet" min="1" max="3600" step="10" />
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setIgnoreBrackets" />
+            <span class="switch"></span>
+            <span>把群友的括号旁白标注成〔旁白：…〕<span class="hint">如「（笑）」「（bushi）」；也包含前后带的动作旁白：
+              「行（端在桌上）」→「行〔旁白：端在桌上〕」，「（放在地上）来吧」→「〔旁白：放在地上〕来吧」。
+              不丢内容：旁白照样进聊天记录与模型上下文，但模型知道那是动作/表情说明、不是他说的话；
+              整条都是旁白时不单独触发一次回复（旁白不是对谁说的话）；
+              句子中间的括号（「（2026）年的计划」）不碰；群友发表情/图片的记录（[表情:斜眼笑]、[图片]）不当旁白；
+              带图 / 带 @ 机器人 / 私聊永不动</span></span>
+          </label>
+        </div>
+
+        <!-- 表情包 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>表情包</h3>
+            <p>机器人会自动把群友发的图收进表情包库，按下文语境挑图发出来；也会自己巡检并决定删哪些。
+              <b>全库共用一份</b>（不分会话）。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableStickers" />
+            <span class="switch"></span>
+            <span>启用表情包（自动收集 + 按语境发送 + 自巡检）</span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>存储上限（张）<span class="hint">超出按“用得少 + 最久没用”淘汰</span></label>
+              <input type="number" id="setStickerMax" min="0" max="2000" step="10" />
+            </div>
+            <div class="field">
+              <label>每次候选张数<span class="hint">按语境挑给模型选，不是全库</span></label>
+              <input type="number" id="setStickerCandidates" min="0" max="20" step="1" />
+            </div>
+            <div class="field">
+              <label>自巡检间隔（秒）<span class="hint">机器人自己看一遍库决定删哪些，0 = 关</span></label>
+              <input type="number" id="setStickerCurate" min="0" max="86400" step="300" />
+            </div>
+            <div class="field">
+              <label>发送冷却（秒）<span class="hint">同一会话两次发表情包的最小间隔；同一张 10 分钟内不重复</span></label>
+              <input type="number" id="setStickerCooldown" min="0" max="86400" step="30" />
+            </div>
+          </div>
+
+          <div class="sticker-actions">
+            <button class="ghost-btn" id="openStickerLib">查看表情包库</button>
+            <button class="ghost-btn" id="stickerCurateNow">立即巡检</button>
+            <button class="ghost-btn" id="stickerImportAlbum">从 QQ 收藏表情导入</button>
+            <span class="path-hint" id="stickerHint"></span>
+          </div>
+        </div>
+
+        <!-- 听音乐 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>听音乐</h3>
+            <p>有人在群里分享歌（网易云歌曲卡片/链接）时，机器人会去查歌名与歌词、下一份<b>低码率</b>音频，
+              自己分析波形（响度/动态/速度/段落起伏），再拿着这些实测事实跟群友接话。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableMusic" />
+            <span class="switch"></span>
+            <span>启用听音乐（自动查歌词 + 波形分析）</span>
+          </label>
+
+          <div class="field">
+            <label>音源模板<span class="hint">分号分隔、按顺序尝试；占位符 {id} {br} {crc32}。公开音源随时会挂，挂了就在这换一条</span></label>
+            <textarea id="setMusicSources" rows="3" spellcheck="false"></textarea>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>下载码率（kbps）<span class="hint">低码率足够分析波形，也省流量</span></label>
+              <input type="number" id="setMusicBitrate" min="32" max="320" step="32" />
+            </div>
+            <div class="field">
+              <label>单文件上限（MB）<span class="hint">超过就跳过这条音源</span></label>
+              <input type="number" id="setMusicMaxMb" min="1" max="64" step="1" />
+            </div>
+            <div class="field">
+              <label>分析时长上限（秒）<span class="hint">超出的部分截断，控制 CPU</span></label>
+              <input type="number" id="setMusicAnalysisSeconds" min="20" max="600" step="10" />
+            </div>
+            <div class="field">
+              <label>台账上限（首）<span class="hint">“听过的歌”保留多少条</span></label>
+              <input type="number" id="setMusicLibraryMax" min="10" max="5000" step="10" />
+            </div>
+            <div class="field">
+              <label>分析结果保留（天）<span class="hint">过期会重新分析一次</span></label>
+              <input type="number" id="setMusicNoteTtlDays" min="1" max="365" step="1" />
+            </div>
+            <div class="field">
+              <label>“去听一下”冷却（秒）<span class="hint">群里让机器人听歌时，同一会话多久内只搜一次；0 = 不限</span></label>
+              <input type="number" id="setMusicListenCooldown" min="0" max="86400" step="30" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label>音频识别模型<span class="hint">专门用来“听”的模型，可以和主模型不同（留空 = 不听，只用波形实测）；并不是所有模型都收得到音频，换之前在「当场试听一首」里验一下</span></label>
+            <input type="text" id="setMusicUnderstandModel" maxlength="80" placeholder="填支持音频输入的模型名" />
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setMusicSendAudio" />
+            <span class="switch"></span>
+            <span>把音频片段交给它听<span class="hint">关掉就只用波形实测（响度/动态/BPM/段落）</span></span>
+          </label>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setMusicKeepAudio" />
+            <span class="switch"></span>
+            <span>保留下载的音频<span class="hint">默认分析完就删；打开后留在 data/music/audio</span></span>
+          </label>
+          <div class="sticker-actions">
+            <button class="ghost-btn" id="openAudioSources">音频源接入 / 网易云登录…</button>
+            <button class="ghost-btn" id="musicTestNow">试听一首（当场验证）</button>
+            <span class="path-hint" id="musicTestHint"></span>
+          </div>
+
+          <p class="path-hint">网易云扫码登录、音源模板、音频识别模型都在「音频源接入」里（VIP 歌要登录后才有播放地址）。</p>
+
+          <p class="path-hint" id="musicHint"></p>
+        </div>
+
+        <!-- 语音消息 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>语音消息</h3>
+            <p>机器人可以用<b>语音</b>说话（模型在 JSON 里填 <code>speak</code> 字段时）。
+              合成走<b>云端 TTS</b> 旁路服务（不再跑本地模型，省内存），协议端会把它转成 QQ 原生语音条。
+              默认<b>关闭</b> —— 语音比文字“重”，想让它偶尔开口再开。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableVoice" />
+            <span class="switch"></span>
+            <span>启用语音消息（模型可以要求“用语音说这句”）</span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>音色<span class="hint">云端音色名；点开输入框会列出 TTS 服务上能用的音色（老的 zh_CN-* 会自动回落）</span></label>
+              <input type="text" id="setVoiceName" list="voiceNameOptions" maxlength="60" placeholder="TTS 服务上已安装的音色名" />
+              <datalist id="voiceNameOptions"></datalist>
+            </div>
+            <div class="field">
+              <label>默认语速（%）<span class="hint">100 = 原速；**模型会按语境自己调**（它没说时用这个）</span></label>
+              <input type="number" id="setVoiceSpeed" min="50" max="200" step="5" />
+            </div>
+              <div class="field">
+                <label>默认情绪<span class="hint">happy / sad / angry / surprised / fearful / disgusted / neutral；留空 = 不传。**模型会按语境自己挑情绪**，这里只是它没表态时的兜底</span></label>
+                <input type="text" id="setVoiceEmotion" maxlength="20" placeholder="留空 = 不传" />
+              </div>
+              <div class="field">
+                <label>默认音调<span class="hint">-12 ~ +12；0 = 不传。模型也能按语境自己调（撒娇偏高、冷淡偏低）</span></label>
+                <input type="number" id="setVoicePitch" min="-12" max="12" step="1" />
+              </div>
+              <div class="field">
+                <label>音量<span class="hint">10 ~ 1000 = 0.1 ~ 10 倍；0 = 不传。默认 100（原音量）</span></label>
+                <input type="number" id="setVoiceVol" min="0" max="1000" step="10" />
+              </div>
+            <div class="field">
+              <label>单条语音字数上限<span class="hint">超过了就不发语音（又慢又费流量，不如打字）</span></label>
+              <input type="number" id="setVoiceMaxChars" min="10" max="300" step="10" />
+            </div>
+            <div class="field">
+              <label>语音回复积极性<span class="hint">越高越爱用语音；它同时决定同会话的最小间隔（0 → 3 分钟、50 → 45 秒、100 → 15 秒），
+                并把这个数直接告诉模型 —— “什么时候用语音”由它自己拿捏</span><b class="val" id="voiceEagernessVal">50</b></label>
+              <input type="range" id="setVoiceEagerness" min="0" max="100" step="5" />
+            </div>
+            <div class="field">
+              <label>TTS 服务地址<span class="hint">云端 TTS 旁路容器，提供 /speak?text=… 返回音频</span></label>
+              <input type="text" id="setTtsServiceUrl" maxlength="120" placeholder="http://tts:5000" />
+            </div>
+            <div class="field">
+              <label>云端 TTS 密钥<span class="hint">存密钥库、界面只回显掩码；会同时写给 tts 容器 —— 改完立即生效，不用重启任何容器</span></label>
+              <input type="password" id="setTtsApiKey" maxlength="200" placeholder="还没配密钥，在这里填一个（留空 = 不改）" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label>云端服务商<span class="hint">minimax = 海螺；openai = 任何兼容 /v1/audio/speech 的网关</span></label>
+              <select id="setTtsProvider">
+                <option value="minimax">MiniMax（海螺）</option>
+                <option value="openai">OpenAI 兼容（/v1/audio/speech）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>云端接口地址<span class="hint">留空 = 用 tts 容器的默认；国内站 api.minimaxi.com / 国际站 api.minimax.io（key 与站点要配对，不对就报 1004/2049）</span></label>
+              <input type="text" id="setTtsApiBase" maxlength="120" placeholder="留空 = 容器默认（MiniMax：https://api.minimaxi.com）" />
+            </div>
+            <div class="field">
+              <label>云端模型<span class="hint">留空 = 容器默认（MiniMax：speech-2.8-hd；turbo 更便宜更快）</span></label>
+              <input type="text" id="setTtsModel" maxlength="80" placeholder="留空 = speech-2.8-hd（贵档）｜省钱填 speech-2.8-turbo" />
+            </div>
+          </div>
+
+          <div class="sticker-actions">
+            <input type="text" id="voiceTestText" maxlength="80" placeholder="试听一句（默认：你好，我是机器人…）" style="flex:1" />
+            <button class="ghost-btn" id="voiceTestGo">试听一句</button>
+            <button class="ghost-btn" id="voiceHealthGo">检查 TTS 服务</button>
+            <span class="path-hint" id="voiceTestHint"></span>
+          </div>
+          <div id="voiceTestAudio"></div>
+
+          <p class="path-hint" id="voiceHint">换音色就是换一个云端音色 ID（音色即声音）；想复现某个特定人的音色用下面的「音色复刻」。
+            试听用的是<b>已保存</b>的「TTS 服务地址」——改了地址先点保存再试听。</p>
+
+          <!-- 音色复刻（MiniMax Voice Clone）：上传一段样本 → 生成自定义 voice_id → 填进「音色」格 -->
+          <div class="field">
+            <label>音色复刻（上传样本生成自己的音色）
+              <span class="hint">样本要求：mp3/m4a/wav，10 秒 ~ 5 分钟（30 秒~1 分钟即可），≤ 20MB；
+                官方约束：克隆音色 <b>7 天没用会被删掉</b></span>
+            </label>
+            <input type="file" id="cloneSample" accept="audio/*" multiple />
+            <p class="path-hint" id="clonePick">可以多选：云端主样本要求 <b>10 秒 ~ 5 分钟</b>，几个 5 秒切片直接一起选就行 —— 服务端会<b>自动拼成一段</b>再传（段间插 300ms 静音，识别更准），总长不够会提示你。
+              能拼的格式：全是 <code>wav</code>（无损拼）或全是 <code>mp3</code>（按帧拼，需同采样率/声道）；<code>m4a</code> 请先在本地转成 mp3。</p>
+            <div class="grid-2">
+              <div class="field">
+                <label>自定义音色 ID<span class="hint">**8~64 位、全小写、以字母开头**（小写字母/数字/下划线/连字符），例如 <code>zhao_voice_01</code>；太短或有大写会被云端拒（只回一句笼统的 2013）</span></label>
+                <input type="text" id="cloneVoiceId" maxlength="64" placeholder="zhao_voice_01" />
+              </div>
+              <div class="field">
+                <label>操作</label>
+                <button type="button" id="cloneGo" class="btn-secondary">开始复刻</button>
+              </div>
+            </div>
+            <p class="path-hint" id="cloneHint">复刻成功后会直接填进上面的「音色」格，保存即可用（复刻本身不扣语音合成额度，只收一次音色费）。</p>
+            <div class="path-hint" id="cloneList"></div>
+          </div>
+        </div>
+
+        <!-- 官方通道（QQ 开放平台） -->
+        <div class="card" id="officialCard">
+          <div class="card-head">
+            <h3>官方通道（QQ 开放平台）</h3>
+            <p>与上面那条<b>私域</b>通道（自建 NapCat）<b>并存</b>：官方这条走开放平台的机器人，用户是 openid。
+              两边的会话、上下文、人设、白名单<b>完全隔离</b>（会话 key 带 <code>official:</code> 前缀），互不串台。
+              开启前先在开放平台把服务器的<b>出口 IP</b> 加进白名单；密钥（Secret）不在这里填 —— 它只从环境变量读。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setOfficialEnabled" />
+            <span class="switch"></span>
+            <span>启用官方通道<span class="hint" id="officialStateHint">保存后点下面的按钮重启生效</span></span>
+          </label>
+
+          <!-- 对话总开关：两条通道各管各的。与顶部那个全局「AI 开关」不同 ——
+               那个一关两条都不回（连人在叫它也不回）；这里能只把一条静音。
+               （放在「回复节奏」这栏：它本来就是管“回不回、多久回”的） -->
+
+          <p class="path-hint" id="officialConversationList">官方通道见过的会话会列在这里，点一下就能填进下面的白名单。</p>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>AppID<span class="hint">开放平台机器人页上的 AppID（写在这里不敏感）</span></label>
+              <input type="text" id="setOfficialAppId" maxlength="40" placeholder="102xxxxxx" />
+            </div>
+            <div class="field">
+              <label>AppSecret<span class="hint">存密钥库、只回显掩码（与 TTS 密钥同规矩）；<b>留空 = 不改</b>。环境变量优先，改了要重启才生效（下面有一键重启）</span></label>
+              <input type="password" id="setOfficialAppSecret" maxlength="200" placeholder="还没配，在这里填一个（留空 = 不改）" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label>环境<span class="hint">沙箱只能收/发<b>沙箱群与沙箱单聊</b>（调试用）—— <b>正式群里 @ 它不会有任何反应</b>：平台不推送，日志里也不会出现任何行。要在正式群用，把这里取消勾选后重启</span></label>
+              <label class="switch-row"><input type="checkbox" id="setOfficialSandbox" /><span class="switch"></span><span>用沙箱环境</span></label>
+            </div>
+            <div class="field">
+              <label>群白名单<span class="hint">写官方通道的<b>别名号</b>（会话列表里能看到）；留空 = 全部接受。千万别写真实群号</span></label>
+              <input type="text" id="setOfficialWhitelistGroups" maxlength="400" placeholder="留空 = 全部接受" />
+            </div>
+            <div class="field">
+              <label>单聊白名单<span class="hint">同样是别名号；留空 = 全部接受</span></label>
+              <input type="text" id="setOfficialWhitelistPrivates" maxlength="400" placeholder="留空 = 全部接受" />
+            </div>
+          </div>
+
+          <p class="path-hint" id="officialHint">设了 <code>QQCHAT_OFFICIAL_APP_SECRET</code> 才会真的连上去；没配就是“开关开着但连不上”，启动日志里会直说。</p>
+
+          <!-- 一键重启：改完「重启才生效」的东西（官方通道凭据、容器级挂载…）不用再开 SSH。
+               做法是让进程退出、由容器重启策略把它拉起来；页面会自己等它回来。 -->
+          <div class="field">
+            <button type="button" id="restartBtn" class="btn-secondary">⟳ 一键重启机器人</button>
+            <span class="path-hint" id="restartHint">改了 AppID / 环境 / 白名单后点一下：几秒内自己回来（页面会等它）。容器挂了也不怕——重启策略会拉起它。</span>
+          </div>
+        </div>
+
+        <!-- 联网搜索 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>联网搜索</h3>
+            <p>模型可以要求<b>去网上查一下</b>（JSON 里填 <code>search</code> 字段）或<b>读一下某个网页</b>（<code>read</code> 字段），
+              查到的东西会作为<b>事实</b>交给它，下一轮再拿着事实回答 —— 而不是靠印象编。
+              默认走<b>模型自带搜索</b>（检索在模型服务商那边完成，结果自带来源）；它不可用时才回退到下面的搜索源。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableWebSearch" />
+            <span class="switch"></span>
+            <span>启用联网搜索（模型可以要求查资料）<span class="hint">同一会话说两次搜索的间隔见下面（可调）</span></span>
+          </label>
+
+          <div class="field">
+            <label>同一会话两次搜索的最小间隔（秒）<span class="hint">0 = 不限；网络慢/群多时调大一点，少排队</span></label>
+            <input type="number" id="setWebSearchCooldown" min="0" max="86400" step="5" />
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setWebSearchUseModelSearch" />
+            <span class="switch"></span>
+            <span>优先用模型自带搜索<span class="hint">关掉就只用下面的搜索源模板（不花模型 token）</span></span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>每次给模型看几条结果</label>
+              <input type="number" id="setWebSearchMaxResults" min="1" max="10" step="1" />
+            </div>
+            <div class="field">
+              <label>搜索 / 读页面超时（秒）</label>
+              <input type="number" id="setWebSearchTimeoutSeconds" min="5" max="60" step="5" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label>搜索源（兜底，每行一条：<code>name|url</code>，<code>{q}</code> 是查询词）
+              <span class="hint">searx* = SearxNG JSON；wiki* = MediaWiki JSON；其余当通用 HTML 抽链接</span></label>
+            <textarea id="setWebSearchSources" rows="3" spellcheck="false" placeholder="wiki|https://zh.wikipedia.org/w/api.php?action=query&amp;list=search&amp;srsearch={q}&amp;format=json"></textarea>
+          </div>
+
+          <div class="sticker-actions">
+            <input type="text" id="searchTestQuery" maxlength="120" placeholder="搜一下：碧蓝档案 砂狼白子 声优（填 URL 则是读页面）" style="flex:1" />
+            <button class="ghost-btn" id="searchTestGo">搜一下 / 读页面</button>
+          </div>
+          <pre id="searchTestOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
+
+          <p class="path-hint">为什么默认靠模型自带搜索：机房 / 云服务器 IP 常被搜索引擎当爬虫挡掉（回看板页或验证码），
+            而模型服务商那边的检索不用额外密钥、不爬页面、结果还带来源。自建 SearxNG / MediaWiki 之类的接口可以把地址填到上面。</p>
+        </div>
+
+        <!-- 本机 Agent（// 命令） -->
+        <div class="card">
+            <div class="card-head">
+                <h3>本机 Agent（<code>//</code> 命令）</h3>
+                <p>群里发一条 <code>//</code> 开头的消息，机器人把这句话交给<b>你自己电脑上的 pi</b> 去干（能看文件、能改代码、能跑命令），
+                    干完把结果发回群里。本机跑 <code>start-pi-bridge.cmd</code>，它主动连到机器人 —— 不用给公网开新端口。</p>
+            </div>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setEnableAgentBridge" />
+                <span class="switch"></span>
+                <span>启用本机 Agent<span class="hint">关掉时 <code>//</code> 开头的消息跟普通消息一样走人设聊天</span></span>
+            </label>
+
+            <!-- 列出会话时脱敏：群名/昵称/QQ 号遮成 940***75（截图、给别人看时不漏隐私）
+                 影响范围：群里 //sessions //sessions all //runs //pi 的回复 + 面板的会话列表/总览。
+                 存储与 API 的 key 保持原样（不然命令认不出来、面板点不动）。 -->
+            <label class="switch-row">
+                <input type="checkbox" id="setAgentMask" />
+                <span class="switch"></span>
+                <span>列出会话时脱敏<span class="hint">群名 / 昵称 / QQ 号只留前 3 后 2（<code>940***75</code>）；默认开，要看真名再关掉</span></span>
+            </label>
+
+            <!-- Agent 附加提示词：每个 // 任务都带上它（外部设备拼在任务前面、服务器内置拼进系统提示词）。
+                 默认那份是隐私红线（不读取群聊内容/成员信息），写在 AppSettings.DefaultAgentPrompt 里。 -->
+            <div class="field">
+                <label>Agent 附加提示词<span class="hint">每个 <code>//</code> 任务都会带上它 —— 外部设备拼在任务前面，服务器内置拼进系统提示词；留空 = 不带</span></label>
+                <textarea id="setAgentPrompt" rows="7" spellcheck="false" placeholder="默认：不要读取群聊内容 / 成员信息，排查只 grep ERROR 与 Exception 堆栈…"></textarea>
+                <div class="sticker-actions" style="margin-top:6px">
+                    <button class="ghost-btn" id="agentPromptReset" type="button">恢复默认（不读取敏感信息）</button>
+                    <span class="path-hint">改完点下面的保存才生效</span>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>哪些 QQ 号能用<span class="hint">逗号分隔。空 = 谁都不能用（这个功能能在你电脑上执行命令，默认不给）</span></label>
+                <input type="text" id="setAgentAllowedUsers" placeholder="例如 20002,20003" />
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>命令前缀</label>
+                    <input type="text" id="setAgentPrefix" maxlength="8" placeholder="//" />
+                </div>
+                <div class="field">
+                    <label>超时（秒）</label>
+                    <input type="number" id="setAgentTimeoutSeconds" min="30" max="7200" step="30" />
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>回群单条上限（字）</label>
+                    <input type="number" id="setAgentReplyMaxChars" min="200" max="3000" step="50" />
+                </div>
+                <div class="field">
+                    <label>进度提示间隔（秒，0=不提示）</label>
+                    <input type="number" id="setAgentProgressSeconds" min="0" max="3600" step="30" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label>本机工作目录<span class="hint">pi 在哪个目录里干活（留空 = 桥自己的默认目录）</span></label>
+                <input type="text" id="setAgentWorkDir" placeholder="E:/bot" />
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>外部设备 agent<span class="hint">号主电脑上的 pi（本机跑 start-pi-bridge.cmd）</span></label>
+                    <label class="switch-row" style="padding:6px 0">
+                        <input type="checkbox" id="setEnableHostAgent" />
+                        <span class="switch"></span>
+                        <span>启用</span>
+                    </label>
+                </div>
+                <div class="field">
+                    <label>服务器内置 agent<span class="hint">跑在容器里的工具循环：bash / 读 / 写 / 抓网页</span></label>
+                    <label class="switch-row" style="padding:6px 0">
+                        <input type="checkbox" id="setEnableServerAgent" />
+                        <span class="switch"></span>
+                        <span>启用</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>优先用哪边<span class="hint">两个开关都开时生效；不想用哪边直接关掉那个开关</span></label>
+                    <select id="setAgentTargetMode">
+                        <option value="auto">auto —— 外部在线就用外部，否则服务器</option>
+                        <option value="host">只用外部设备</option>
+                        <option value="server">只用服务器内置</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>指定设备<span class="hint">多台外部设备时选一台（选了就只走它）；设备名可自己设</span></label>
+                    <select id="setAgentDevice">
+                        <option value="">（不指定，跟着上面）</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>服务器 agent 的模型接口<span class="hint">OpenAI 兼容地址（留空 = 用聊天那个）；agent 的请求多，可以单独指个小模型/便宜网关</span></label>
+                    <input type="text" id="setAgentServerBaseUrl" placeholder="http://127.0.0.1:8000/v1（留空=跟聊天一样）" />
+                </div>
+                <div class="field">
+                    <label>服务器 agent 的模型<span class="hint">填完接口可点右边按钮拉列表选</span></label>
+                    <div class="sticker-actions" style="margin:0">
+                        <input type="text" id="setAgentServerModel" placeholder="留空 = 跟聊天同一个模型" style="flex:1" />
+                        <button class="ghost-btn" id="agentServerModelsGo">拉列表</button>
+                    </div>
+                </div>
+            </div>
+            <select id="agentServerModelPick" style="display:none;margin-top:6px"></select>
+
+        <div class="field">
+          <label>服务器 agent 的密钥<span class="hint" id="agentServerKeySrc"></span></label>
+          <input type="password" id="setAgentServerKey" placeholder="填新密钥；留空 = 不改（清除请点右侧按钮）" autocomplete="new-password" />
+          <button class="ghost-btn inline" id="clearAgentServerKey" type="button">清除密钥</button>
+        </div>
+
+            <div class="field">
+                <label>外部设备用的模型<span class="hint">从设备的 pi 模型列表里选（机器人在线时拉取）</span></label>
+                <div class="sticker-actions" style="margin:0">
+                    <select id="setAgentModel" style="flex:1"><option value="">（用 pi 自己的默认）</option></select>
+                    <button class="ghost-btn" id="agentHostModelsGo">刷新列表</button>
+                </div>
+            </div>
+
+            <!-- 外部设备：一键连接 + 每台设备自己的配置（泛用：名字任意、可多台） -->
+            <div class="field">
+                <label>外部设备<span class="hint">接上来就能用；每台可以单独配模型/目录/工具（不配就走上面的默认）</span></label>
+                <div class="sticker-actions" style="margin:0">
+                    <button class="ghost-btn" id="agentConnectGo">一键连接本机…</button>
+                    <button class="ghost-btn" id="agentDeviceAdd">+ 添加设备</button>
+                    <button class="ghost-btn" id="agentDeviceRefresh">刷新状态</button>
+                </div>
+            </div>
+
+            <details class="path-hint" style="margin:6px 0">
+                <summary style="cursor:pointer"><b>「设备名」到底是什么？怎么把一台机器接上来（点开看）</b></summary>
+                <div style="padding:6px 0 0 2px;line-height:1.7">
+                    <b>设备名</b>就是本机桥握手时报上来的名字：默认取本机主机名（Windows 的 <code>COMPUTERNAME</code>，比如 <code>ZHAOSPC</code>），
+                    也可以用 <code>--name</code> / <code>PI_BRIDGE_NAME</code> 自己指定。<br>
+                    这里是“按名字认设备”的：<b>面板里填的名字要和本机跑的那个名字一致</b> —— 不一致时它会在表里多出一行（名字为实际报上来的那个），把旧那行删掉即可。
+
+                    <div style="margin-top:8px"><b>把一台机器接上来（三步）：</b></div>
+                    <ol style="margin:4px 0 0 18px">
+                        <li>本机装好 <code>pi</code>（本机 agent 的干活工具），并确认 <code>pi --version</code> 能跑；Python 3 也要有。</li>
+                        <li>点上面「一键连接本机…」→ 填一个名字（比如 <code>ZHAOSPC</code>）→ 下载两个文件（<code>connect-pi-bridge.cmd</code> 与 <code>pi-bridge.py</code>）放到同一个目录。</li>
+                        <li>双击 <code>connect-pi-bridge.cmd</code>（Windows）或 <code>sh connect-pi-bridge.sh</code>（Linux/Mac）——窗口别关。
+                            回到这里点「我已运行，检测连接」，看到 🟢 在线就成了。</li>
+                    </ol>
+
+                    <div style="margin-top:8px"><b>不想用一键脚本（手动）：</b>
+                        在本机跑 <code>python pi-bridge.py --name 你的设备名 --url ws://机器人地址/agent-bridge --token &lt;AGENT_TOKEN&gt; --workdir 你的目录</code>。
+                        令牌在容器环境变量 <code>QQCHAT_AGENT_TOKEN</code> 里（也可用面板“一键连接”生成的脚本里看到）。</div>
+
+                    <div style="margin-top:8px"><b>连着的时候能做什么 / 断了怎么办：</b>
+                        在线时下面会列出它的模型（可选一个默认用它）；点「断开」会真的断开，但本机那个窗口还开着的话，它 <b>3 秒后会自己重连</b>；
+                        要让某台设备彻底不干活，就把它的「启用」关掉（关掉后群里的 <code>//</code> 会如实说“设备在面板里被关掉了”）。</div>
+                </div>
+            </details>
+
+            <div id="agentDeviceTable" class="path-hint" style="max-height:260px;overflow:auto"></div>
+
+            <!-- Agent 会话：新建/切换/删除/清空（与群里的 //sessions //new //use //del //reset 同一套） -->
+            <div class="field">
+                <label>Agent 会话<span class="hint">群里发 // 就是在这个会话里接着聊；这里能新建/切换/删除/清空</span></label>
+                <div class="sticker-actions" style="margin:0">
+                    <select id="agentSessionChat" style="flex:1"><option value="">（选一个聊天）</option></select>
+                    <button class="ghost-btn" id="agentSessionNew">新建</button>
+                    <button class="ghost-btn" id="agentSessionImport">从 pi 导入</button>
+                    <button class="ghost-btn" id="agentSessionRefresh">刷新</button>
+                </div>
+            </div>
+            <div id="agentSessionTable" class="path-hint" style="max-height:220px;overflow:auto"></div>
+            <pre id="agentConnectOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto;display:none"></pre>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>服务器 agent 工具<span class="hint">逗号分隔：bash,read,write,fetch；空 = 全开</span></label>
+                    <input type="text" id="setAgentServerTools" placeholder="bash,read,fetch" />
+                </div>
+                <div class="field">
+                    <label>服务器 agent 最多几步<span class="hint">每步一次模型调用</span></label>
+                    <input type="number" id="setAgentServerMaxSteps" min="1" max="30" step="1" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label>服务器 agent 的 QQ 动作<span class="hint">它能真的去 QQ 里做的小动作（点赞/戳一戳/禁言…）。留空 = 只开安全的一组：like 点赞、poke 戳一戳、emoji_like 表情回应、recall 撤回；要放开危险的一只就点名写：ban 禁言、kick 踢人、card 改名片、group_name 改群名、leave 退群、send 代发消息（all = 全开）</span></label>
+                <input type="text" id="setAgentServerQqActions" placeholder="留空=点赞/戳一戳/表情回应/撤回（写 ban 才给禁言）" />
+                <div class="path-hint" id="agentServerQqActionsOut"></div>
+            </div>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setAgentServerKeepContext" />
+                <span class="switch"></span>
+                <span>服务器 agent 记住上下文<span class="hint">默认**关**：每条 // 指令单独对待（不把上几轮的指令/结论喂给模型，避免回复里混进旧指令的内容）。想“接着上一句聊”就打开它，或单条写 //接着 …</span></span>
+            </label>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setAgentServerDocker" />
+                <span class="switch"></span>
+                <span>允许 agent 透过 docker 操作服务器<span class="hint">**高权限**（docker.sock ≈ root）：打开后它能 <code>docker ps/logs/exec</code>、能 <code>docker run -v /:/host …</code> 读整个服务器文件系统，也能直接读写部署目录 <code>/host/qqchat</code>（宿主机的 /opt/qqchat）。默认关；挂载是常挂的，这个开关决定它**会不会去用**。</span></span>
+            </label>
+
+            <label class="switch-row">
+                <input type="checkbox" id="setPanelDeployEnabled" />
+                <span class="switch"></span>
+                <span>面板一键部署<span class="hint">**高权限**（等于把“重装机器人”的按钮放到网页上）：打开后面板能上传/拉取 app.tar.gz，并驱动宿主 docker 重建镜像 + 替换自己。默认关。部署前会自动留回滚点。</span></span>
+            </label>
+
+            <div class="grid-2">
+                <div class="field">
+                    <label>服务器 agent 工作目录<span class="hint">容器内路径，/data 里能看到日志与数据库</span></label>
+                    <input type="text" id="setAgentServerWorkDir" placeholder="/data" />
+                </div>
+                <div class="field">
+                    <label>单条命令超时（秒）</label>
+                    <input type="number" id="setAgentServerCommandTimeoutSeconds" min="5" max="300" step="5" />
+                </div>
+            </div>
+
+            <div class="sticker-actions">
+                <select id="agentTestTarget" style="max-width:130px">
+                    <option value="host">外部设备</option>
+                    <option value="server">服务器 agent</option>
+                </select>
+                <input type="text" id="agentTestPrompt" maxlength="300" placeholder="试一条：数一下 E:/bot 里有几个 .py 文件" style="flex:1" />
+                <button class="ghost-btn" id="agentTestGo">送到本机跑一下</button>
+                <button class="ghost-btn" id="agentStatusGo">看连接状态</button>
+            </div>
+            <pre id="agentOut" class="path-hint" style="white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+
+            <p class="path-hint">令牌（<code>AGENT_TOKEN</code>）只在容器环境变量里 —— 没配令牌就不接受任何桥连接；
+                本机那边要把同样的值填进 <code>start-pi-bridge.cmd</code>。</p>
+        </div>
+
+        <!-- 服务器健康日报（定时私聊推送） -->
+        <div class="card">
+          <div class="card-head">
+            <h3>服务器健康日报</h3>
+            <p>每天在指定时刻（<b>北京时间</b>）发一条机器人 / 服务器状态：QQ 在线与协议端连接、
+              模型接口通不通、内存/负载/磁盘、日志大小与近一小时告警。
+              <b>整条链路只用机器人自己</b>（自己的定时器 → 自己采集 → 按收件人所在通道发出去），不经过本机 agent ——
+              你那台电脑关着也照样收得到。</p>
+        <p class="path-hint">收件人可以是<b>私域真号</b>，也可以是<b>官方通道的别名号</b>（两条通道都适配了）；
+          走官方那边属于平台的「主动消息」，算平台额度（上限很宽松，但别拿去刷屏）。
+          <b>哪个通道的「对话总开关」关着，就不往哪条通道发</b> —— 日报不会绕过总开关。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setHealthReportEnabled" />
+            <span class="switch"></span>
+            <span>启用健康日报<span class="hint">关掉就完全不定时发（下面的按钮仍可当场试一条）</span></span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>推送时刻<span class="hint">24 小时制；按北京时间算，与容器时区无关</span></label>
+              <input type="time" id="setHealthReportTime" />
+            </div>
+            <div class="field">
+              <label>推给谁<span class="hint">逗号分隔；只走私聊，填群号也不会发到群里。<b>官方通道的收件人填别名号</b>
+            （8 开头的 16 位号，在上面的官方卡片「官方通道见过的会话」里能复制）</span></label>
+              <input type="text" id="setHealthReportTargets" placeholder="例如 10001,8000002309845034" />
+            </div>
+          </div>
+
+          <div class="sticker-actions">
+            <button class="ghost-btn" id="healthReportPreviewGo">预览这次会发什么</button>
+            <button class="ghost-btn" id="healthReportSendGo">现在发一条（私聊）</button>
+            <span class="path-hint" id="healthReportHint"></span>
+          </div>
+          <pre id="healthReportOut" class="path-hint" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
+
+          <p class="path-hint">为什么不用「本机 Agent」来推：那台电脑可能根本没开机。日报只依赖机器人容器与协议端，
+            所以它就是“机器人报平安”的那条链路。到点时如果协议端不在线，这一天的那条会发不出去（日志里有记录，
+            面板上也能看到「上次失败」）。</p>
+        </div>
+
+        <!-- 链接与分享 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>链接与分享</h3>
+            <p>群友发链接或分享卡片时，机器人会真去打开看一眼，取回标题与摘要再聊 —— 而不是对着一串 URL 猜。
+              另外，<b>合并转发的聊天记录</b>会被拉取展开成正文（前 20 行），群里发的东西不再是空气。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableLinkPreview" />
+            <span class="switch"></span>
+            <span>启用链接预览（打开链接取标题/摘要）</span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>抓取超时（秒）<span class="hint">慢站点不能拖住机器人</span></label>
+              <input type="number" id="setLinkPreviewTimeout" min="2" max="30" step="1" />
+            </div>
+            <div class="field">
+              <label>每条消息最多预览<span class="hint">个链接</span></label>
+              <input type="number" id="setLinkPreviewMax" min="0" max="5" step="1" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 戳一戳 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>戳一戳</h3>
+            <p>别人戳机器人时，它按语境和人设回一句，也可以戳回去 / 戳别人；
+              <b>群里互相戳不会插话</b>（只记进上下文，免得刷屏）。</p>
+          </div>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnablePoke" />
+            <span class="switch"></span>
+            <span>启用戳一戳（被戳时回应，可戳回去）</span>
+          </label>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>冷却（秒）<span class="hint">同一个人连着戳只回一次；也是主动戳人的最小间隔</span></label>
+              <input type="number" id="setPokeCooldown" min="0" max="86400" step="15" />
+            </div>
+            <div class="field">
+              <label>当前心情<span class="hint">机器人自己写（回复里的 mood 字段），也可以手改；留空 = 按被戳次数自动描述</span></label>
+              <input type="text" id="setMood" maxlength="24" placeholder="例如：被戳烦了" />
+            </div>
+            <div class="field">
+              <label>心情保留（秒）<span class="hint">模型写的心情超过这么久没更新就自动回落为“按被戳次数描述”，0 = 不过期</span></label>
+              <input type="number" id="setMoodTtl" min="0" max="604800" step="600" />
+            </div>
+          </div>
+          <p class="path-hint" id="moodHint"></p>
+        </div>
+
+        <!-- 能力与审批（V3：默认全关，行为与改造前一致） -->
+        <div class="card">
+          <div class="card-head">
+            <h3>能力与审批<span class="hint">增强能力：默认关闭，不改现有行为</span></h3>
+            <p><b>场景预设</b>留空 = 能力白名单完全由上面的开关决定（与以前一样）；填了预设只会<b>收紧</b>，
+              不会把已经关掉的能力打开，名字不认识则按最低权限处理。<br />
+              <b>人工审批</b>打开后，模型说“想调工具”不会被执行，而是发一张<b>待确认</b>到群里：
+              群主/管理员（或下面点名的人）回复「同意 编号」才执行 —— 而且只执行一个<b>固定假工具</b>
+              （它没有任何真实副作用，不代表具备 shell / 文件 / 进程控制能力）。</p>
+          </div>
+
+          <div class="field">
+            <label>场景预设<span class="hint">留空 = 跟随开关；on-demand 只回明确提及、research 允许受限联网、social 允许额外动作</span></label>
+            <select id="setScenarioPreset">
+              <option value="">（跟随现有开关）</option>
+              <option value="on-demand">on-demand（按需参与）</option>
+              <option value="research">research（资料讨论）</option>
+              <option value="social">social（多人交流）</option>
+            </select>
+          </div>
+          <p class="path-hint" id="scenarioCapHint"></p>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableApprovals" />
+            <span class="switch"></span>
+            <span>启用人工审批（模型想调工具时要人确认；只覆盖固定假工具）</span>
+          </label>
+
+          <div class="field">
+            <label>审批人（可选）<span class="hint">逗号分隔的 QQ 号；留空 = 只认群里的群主 / 管理员</span></label>
+            <input type="text" id="setApprovalApprovers" maxlength="300" placeholder="例如：10001, 10002" />
+          </div>
+          <p class="path-hint" id="approvalHint"></p>
+
+          <label class="switch-row">
+            <input type="checkbox" id="setEnableQuestions" />
+            <span class="switch"></span>
+            <span>允许提问（模型可以带编号问一句；提问不授予任何权限，默认关）</span>
+          </label>
+          <p class="path-hint" id="questionHint"></p>
+
+          <div class="card-head">
+            <h3>参与状态机<span class="hint">只观测，不改“发不发”的判定</span></h3>
+            <p>机器人按会话记一份参与状态（观望 / 试探 / 活跃 / 退场），下面这组是**服务端硬上限**：
+              填大了会被钳到上限（连续 ≤10、冷却 ≤600 秒、试探 ≤3、活性命 ≤3600 秒）。<br />
+              <b>现在它只写观测日志</b>（日志里搜 <code>[参与]</code>），改这些数字<b>不会改变群聊行为</b> ——
+              这是刻意的：等真实使用观测对得上，再谈用它来拦。</p>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label>连续回复上限<span class="hint">一次活跃里最多连说几句（1–10）</span></label>
+              <input type="number" id="setPartMaxReplies" min="1" max="10" step="1" />
+            </div>
+            <div class="field">
+              <label>回复后冷却（秒）<span class="hint">0–600；冷却中通常不再主动接话</span></label>
+              <input type="number" id="setPartCooldown" min="0" max="600" step="5" />
+            </div>
+            <div class="field">
+              <label>试探上限<span class="hint">试探阶段最多回几次（1–3）</span></label>
+              <input type="number" id="setPartProbing" min="1" max="3" step="1" />
+            </div>
+            <div class="field">
+              <label>活跃状态寿命（秒）<span class="hint">30–3600；到点自然退场</span></label>
+              <input type="number" id="setPartActiveLife" min="30" max="3600" step="30" />
+            </div>
+            <div class="field">
+              <label>退场状态寿命（秒）<span class="hint">10–3600</span></label>
+              <input type="number" id="setPartExitingLife" min="10" max="3600" step="10" />
+            </div>
+          </div>
+          <p class="path-hint" id="participationHint"></p>
+          <label class="switch-row">
+            <input type="checkbox" id="setPartGating" />
+            <span class="switch"></span>
+            <span>启用参与闸门（状态机说不参与就不叫模型 —— <b>默认关</b>，打开会明显少说话）</span>
+          </label>
+          <div class="logbar">
+            <button class="ghost-btn small" id="partRefreshBtn" type="button">刷新参与状态</button>
+          </div>
+          <div class="logbox" id="participationBox" style="max-height:180px"></div>
+        </div>
+
+        <!-- 外观 -->
+        <div class="card">
+          <div class="card-head">
+            <h3>外观</h3>
+            <p>主题跟随系统，也可以手动指定。</p>
+          </div>
+          <div class="field">
+            <label>应用主题</label>
+            <select id="setTheme">
+              <option value="system">跟随系统</option>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 运行日志 -->
+        <div class="card log-card">
+          <div class="card-head">
+            <h3>运行日志<span class="hint">最近 300 行（刷新页面不会清空；含 Agent / OneBot / 语音 / 搜索等各组件的行）</span></h3>
+            <p>能看到它每次为什么发言、为什么沉默、耗时多久；长日志用右边两个按钮一键到顶 / 到底。</p>
+          </div>
+          <div class="logbar">
+            <button class="ghost-btn small" id="logTopBtn" type="button">↑ 顶部</button>
+            <button class="ghost-btn small" id="logBottomBtn" type="button">↓ 底部</button>
+          </div>
+          <div class="logbox" id="logBox"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 常驻操作栏：不随内容滚动，保证任何时候都看得到保存按钮 -->
+    <div class="settings-footer">
+      <div class="infobar" id="saveBar" hidden>
+        <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0m3.5 6.1-4.2 4.2a.7.7 0 0 1-1 0L4.5 8.5a.7.7 0 1 1 1-1l1.3 1.3L9.9 5a.7.7 0 1 1 1 1"/></svg>
+        <span id="saveBarText">设置已保存并立即生效</span>
+      </div>
+      <div class="settings-actions">
+        <button class="accent-btn big" id="saveBtn">保存设置</button>
+        <span class="dirty-hint" id="dirtyHint" hidden>● 有未保存的修改</span>
+        <span class="path-hint" id="settingsPath"></span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 会话右键菜单 -->
+<div class="ctxmenu" id="ctxMenu" hidden>
+  <button data-act="read">标为已读</button>
+  <button data-act="profile">查看成员档案</button>
+  <button data-act="archive">查看归档历史</button>
+  <button data-act="delete" class="danger">删除会话</button>
+</div>
+
+<!-- 成员档案 / 归档历史弹层 -->
+<div class="modal" id="profileModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="profileTitle">成员档案</h3>
+      <button id="profileClose">✕</button>
+    </div>
+    <pre class="profile-body" id="profileBody"></pre>
+  </div>
+</div>
+
+<div class="modal" id="stickerModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3 id="stickerTitle">表情包库</h3>
+      <button id="stickerClose">✕</button>
+    </div>
+    <div class="sticker-toolbar">
+      <span class="sticker-stat" id="stickerStat">加载中…</span>
+      <button class="ghost-btn small" id="stickerCurate">立即巡检</button>
+      <button class="ghost-btn small" id="stickerImport">导入收藏表情</button>
+    </div>
+    <div class="sticker-grid" id="stickerGrid"></div>
+  </div>
+</div>
+
+<div class="modal" id="audioModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>音频源接入</h3>
+      <button id="audioClose">✕</button>
+    </div>
+
+    <p class="path-hint">音源按顺序尝试，第一个能拿到音频的就用它。占位符：<code>{id}</code> 歌曲 id、<code>{br}</code> 码率、<code>{crc32}</code> 标准 CRC32（8 位大写十六进制）。
+      点下面的预设按钮可以一键填入常见的公开音源，改完记得保存设置。</p>
+
+    <div class="sticker-toolbar">
+      <button class="ghost-btn small" id="audioPresetMeting">＋ Meting 实例</button>
+      <button class="ghost-btn small" id="audioPresetGdstudio">＋ GDStudio</button>
+      <button class="ghost-btn small" id="audioPresetDirect">＋ 直链模板</button>
+      <button class="ghost-btn small" id="audioClear">清空</button>
+    </div>
+
+    <div class="field">
+      <label>音源模板（一行一条）</label>
+      <textarea id="audioSources" rows="6" spellcheck="false" placeholder="meting|https://api.qijieya.cn/meting/?type=url&id={id}&br={br}"></textarea>
+    </div>
+
+    <div class="grid-2">
+      <div class="field">
+        <label>网易云接口地址<span class="hint">默认官方；可指向自建代理</span></label>
+        <input type="text" id="audioNeteaseBase" placeholder="https://music.163.com" />
+      </div>
+      <div class="field">
+        <label>音频识别模型<span class="hint">专门用来“听”的模型</span></label>
+        <input type="text" id="audioModel" maxlength="80" placeholder="填支持音频输入的模型名" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>网易云登录<span class="hint">VIP 歌曲要登录后才有播放地址（免费歌不需要）；扫码成功后<b>登录态存在机器人库里</b>——重启 / 重建容器都不丢</span></label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="ghost-btn" id="neteaseLogin">扫码登录</button>
+        <span class="path-hint" id="neteaseLoginState">未登录</span>
+      </div>
+      <img id="neteaseQr" hidden alt="网易云登录二维码" style="width:180px;height:180px;margin-top:8px;border-radius:8px;background:#fff" />
+    </div>
+
+    <div class="field">
+      <label>当场试听一首<span class="hint">用当前输入的音源跑一遍：搜歌 → 歌词 → 低码率音频 → 波形分析 → 模型听感</span></label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="audioTestSong" placeholder="歌名 歌手（例如：起风了 买辣椒也用券）" style="flex:1" />
+        <button class="ghost-btn" id="audioTestGo">试听</button>
+      </div>
+      <pre id="audioTestOut" class="path-hint" style="white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- ══════════ 手机端底部导航（桌面端隐藏）══════════ -->
+<nav class="mtabbar" id="mTabbar">
+  <button class="mtab active" data-page="chat">
+    <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z"/></svg>
+    <span>会话</span>
+  </button>
+  <button class="mtab" data-page="settings">
+    <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2m0 1.4a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8"/><path fill="currentColor" d="m13.3 9.3-.9.5a4.5 4.5 0 0 1 0 1.4l.9.5a.6.6 0 0 1 .2.8l-.8 1.4a.6.6 0 0 1-.8.2l-.9-.5c-.4.3-.8.6-1.2.7v1a.6.6 0 0 1-.6.6H7.5a.6.6 0 0 1-.6-.6v-1a4.5 4.5 0 0 1-1.2-.7l-.9.5a.6.6 0 0 1-.8-.2l-.8-1.4a.6.6 0 0 1 .2-.8l.9-.5a4.5 4.5 0 0 1 0-1.4l-.9-.5a.6.6 0 0 1-.2-.8l.8-1.4a.6.6 0 0 1 .8-.2l.9.5c.4-.3.8-.6 1.2-.7v-1a.6.6 0 0 1 .6-.6h1.6a.6.6 0 0 1 .6.6v1c.4.1.8.4 1.2.7l.9-.5a.6.6 0 0 1 .8.2l.8 1.4a.6.6 0 0 1-.2.8"/></svg>
+    <span>设置</span>
+  </button>
+</nav>
+
+<script src="/app.js"></script>
+</body>
+</html>

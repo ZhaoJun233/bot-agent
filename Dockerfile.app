@@ -1,6 +1,6 @@
-# QQ Chat Agent（headless）—— **产物式**运行时镜像（不在服务器上编译）
+# Bot Agent（headless）—— **产物式**运行时镜像（不在服务器上编译）
 #
-# 与 `src/QQChatAgent.Headless/Dockerfile` 的区别：
+# 与 `src/BotAgent.Headless/Dockerfile` 的区别：
 #   • 那个是多阶段构建：容器里拉 `dotnet/sdk:8.0`（约 800MB）**现场编译**源码 —— 适合
 #     “clone 下来就能跑”的场景（别人自建、CI 里没预发布产物）。
 #   • 这个只装运行时，把**开发机上已经发布好的** `app.tar.gz` 解到 /app —— 适合小内存机器。
@@ -43,9 +43,9 @@ ENV DOTNET_EnableDiagnostics=0 \
     TZ=Asia/Shanghai
 
 # 镜像里没有 curl，用 bash 的 /dev/tcp 直连面板端口探活：
-#   以前是 `dotnet QQChatAgent.Headless.dll --health` —— 每 30 秒把一个完整的 .NET 运行时冷启动一遍
+#   以前是 `dotnet BotAgent.Headless.dll --health` —— 每 30 秒把一个完整的 .NET 运行时冷启动一遍
 #   （~40MB RSS 尖峰）。部署机只有 1 核，健康探测不该比业务还贵；/dev/tcp 零额外内存。
 HEALTHCHECK --interval=60s --timeout=5s --start-period=25s --retries=3 \
     CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${QQCHAT_HEALTH_PORT:-8080} && printf 'GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' >&3 && head -n 1 <&3 | grep -q '200'"]
 
-ENTRYPOINT ["dotnet", "QQChatAgent.Headless.dll"]
+ENTRYPOINT ["dotnet", "BotAgent.Headless.dll"]

@@ -1,0 +1,617 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace BotAgent.IntegrationHarness;
+
+/// <summary>
+/// 假 OpenAI 兼容服务：记录收到的请求，按脚本返回模型回复。
+/// 用来断言「喂给模型的上下文」是否正确（人设/人物档案/图片/上下文条数）。
+/// </summary>
+public sealed class MockOpenAi : IDisposable
+{
+    private readonly HttpListener _listener = new();
+    private readonly List<JsonObject> _requests = new();
+    private string? _lastAuthorization;
+    private readonly object _gate = new();
+    private readonly Queue<string> _scriptedReplies = new();
+    private readonly Queue<string> _curationReplies = new();
+    private readonly Queue<string> _stickerDescribeReplies = new();
+    private readonly int _port;
+    private int _portraitRequests;
+    private int _stickerDescribeRequests;
+    private int _stickerCurateRequests;
+    private int _modelListHits;
+
+    public MockOpenAi(int port, string bind = "127.0.0.1")
+    {
+        _port = port;
+        _listener.Prefixes.Add($"http://{bind}:{port}/");
+        BaseUrl = $"http://127.0.0.1:{_port}/v1";
+    }
+
+    /// <summary>喂给被测机器人的地址（外部容器测试时会改成 host.docker.internal）。</summary>
+    public string BaseUrl { get; set; }
+
+    /// <summary>让 mock 监听监听的端口（外部容器测试用）。</summary>
+    public int Port => _port;
+
+    /// <summary>人为拖慢响应，用于可靠地测「触发消息与回复之间被插话」的引用行为。</summary>
+    public int ResponseDelayMs { get; set; }
+
+    /// <summary>收到的请求体（已解析）。</summary>
+    public IReadOnlyList<JsonObject> Requests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _requests.ToArray();
+            }
+        }
+    }
+
+    /// <summary>最近一次带 Authorization 的请求发的那个头（服务器 agent 用哪把密钥，就靠它钉住）。</summary>
+    public string? LastAuthorization
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastAuthorization;
+            }
+        }
+    }
+
+    /// <summary>清空已记录的请求（重启验证时用：同一个 mock 要区分“重启前/后”）。</summary>
+    public void ClearRequests()
+    {
+        lock (_gate)
+        {
+            _requests.Clear();
+        }
+    }
+
+    /// <summary>收到的 /v1/models 请求数（健康日报探“模型网关通不通”就靠它）。</summary>
+    public int ModelListHits => Volatile.Read(ref _modelListHits);
+
+    /// <summary>收到的联网搜索（原生 generateContent）请求数。</summary>
+    public int GroundingRequests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _groundingRequests;
+            }
+        }
+    }
+
+    private int _groundingRequests;
+
+    /// <summary>原生端点的请求体（排障用：看它到底发了什么工具/提示词）。</summary>
+    public string LastGroundingBody { get; private set; } = string.Empty;
+
+    /// <summary>打开后原生端一律 500（用来验证“模型搜索不可用 → 回退到搜索源”）。</summary>
+    public bool GroundingFails { get; set; }
+
+    /// <summary>模型搜索返回的答案（带来源）。</summary>
+    public string GroundingAnswer { get; set; } = "《碧蓝档案》里的砂狼白子，日语配音是小仓唯。";
+
+    public string[] GroundingSourceTitles { get; set; } = ["碧蓝档案 - 维基百科", "砂狼白子 - 萌娘百科"];
+
+    /// <summary>模拟 Google 的真实 grounding 响应结构（含 webSearchQueries + groundingChunks）。</summary>
+    private async Task HandleGroundingAsync(HttpListenerContext context, string body)
+    {
+        lock (_gate)
+        {
+            _groundingRequests++;
+            // 存成**不转义中文**的形式：默认编码器会把中文写成 \uXXXX，
+            // 按中文写断言就会全部落空（这个坑在 MockOpenAi.DescribeRequest 上踩过一次）。
+            try
+            {
+                LastGroundingBody = JsonNode.Parse(body)?.ToJsonString(
+                    new JsonSerializerOptions
+                    {
+                        WriteIndented = true,
+                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                    }) ?? body;
+            }
+            catch (Exception)
+            {
+                LastGroundingBody = body;
+            }
+        }
+
+        if (GroundingFails)
+        {
+            var err = Encoding.UTF8.GetBytes("{\"error\": {\"code\": 500, \"message\": \"grounding unavailable (test)\"}}");
+            context.Response.StatusCode = 500;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = err.Length;
+            await context.Response.OutputStream.WriteAsync(err);
+            context.Response.Close();
+            return;
+        }
+
+        var chunks = new JsonArray();
+        foreach (var title in GroundingSourceTitles)
+        {
+            chunks.Add(new JsonObject
+            {
+                ["web"] = new JsonObject
+                {
+                    ["uri"] = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/TEST",
+                    ["title"] = title
+                }
+            });
+        }
+
+        var response = new JsonObject
+        {
+            ["candidates"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["content"] = new JsonObject
+                    {
+                        ["role"] = "model",
+                        ["parts"] = new JsonArray
+                        {
+                            new JsonObject { ["thoughtSignature"] = "test", ["text"] = GroundingAnswer }
+                        }
+                    },
+                    ["finishReason"] = "STOP",
+                    ["groundingMetadata"] = new JsonObject
+                    {
+                        ["webSearchQueries"] = new JsonArray { "测试检索词" },
+                        ["groundingChunks"] = chunks,
+                        ["groundingSupports"] = new JsonArray()
+                    }
+                }
+            },
+            ["usageMetadata"] = new JsonObject { ["totalTokenCount"] = 123 }
+        };
+
+        var bytes = Encoding.UTF8.GetBytes(response.ToJsonString());
+        context.Response.StatusCode = 200;
+        context.Response.ContentType = "application/json";
+        context.Response.ContentLength64 = bytes.Length;
+        await context.Response.OutputStream.WriteAsync(bytes);
+        context.Response.Close();
+    }
+
+    /// <summary>排入一条脚本文本（模型 message.content 原文），先进先出。</summary>
+    /// <summary>
+    /// 按提示词匹配的固定回复（同一个标记可排多条，按顺序一条条用；命中就不消耗脚本队列）。
+    /// 为什么需要：靠脚本队列的**位置**对齐某一轮太脆 —— 会话标题综结、重试、额外轮次等
+    /// 别的请求一旦插进来吃掉一条，后面每一轮都错位（S34 的 //stop 就是这么被坑的：
+    /// 本该“慢慢想”的长任务拿到了下一条 final，任务秒完，//stop 自然没东西可停）。
+    /// 非 ASCII 的片段会同时比原始形式和 \uXXXX 转义形式（机器人发出去的是转义版）。
+    /// </summary>
+    private readonly Dictionary<string, Queue<string>> _ruleReplies = new(StringComparer.Ordinal);
+
+    public void AddRule(string promptMarker, params string[] replies)
+    {
+        lock (_gate)
+        {
+            _ruleReplies[promptMarker] = new Queue<string>(replies);
+        }
+    }
+
+    private static string EscapeNonAscii(string s)
+        => string.Concat(s.Select(c => c < 128 ? c.ToString() : "\\u" + ((int)c).ToString("x4")));
+
+    /// <summary>命中提示词规则就取一条；没命中返回 null（调用方回落到脚本队列）。</summary>
+    private string? TakeRuleReply(string body)
+    {
+        lock (_gate)
+        {
+            // 长标记优先（更具体），再按字典序 —— 与字典内部顺序无关，结果稳定可预期
+            foreach (var kv in _ruleReplies
+                         .Where(kv => kv.Value.Count > 0)
+                         .OrderByDescending(kv => kv.Key.Length)
+                         .ThenBy(kv => kv.Key, StringComparer.Ordinal))
+            {
+                if (body.Contains(kv.Key, StringComparison.Ordinal) ||
+                    body.Contains(EscapeNonAscii(kv.Key), StringComparison.OrdinalIgnoreCase))
+                {
+                    return kv.Value.Dequeue();
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>取一条脚本回复（没排就回默认）。</summary>
+    private string TakeScriptedReply()
+    {
+        lock (_gate)
+        {
+            return _scriptedReplies.Count > 0
+                ? _scriptedReplies.Dequeue()
+                : """{"suitability": 90, "reply": "默认回复"}""";
+        }
+    }
+
+    /// <summary>清空脚本回复队列（每场景开始时用）。</summary>
+    public void ClearScriptedReplies()
+    {
+        lock (_gate)
+        {
+            _scriptedReplies.Clear();
+        }
+    }
+
+    public void EnqueueReply(string content)
+    {
+        lock (_gate)
+        {
+            _scriptedReplies.Enqueue(content);
+        }
+    }
+
+    public void Start()
+    {
+        _listener.Start();
+        _ = Task.Run(AcceptLoopAsync);
+    }
+
+    private async Task AcceptLoopAsync()
+    {
+        while (_listener.IsListening)
+        {
+            HttpListenerContext context;
+            try
+            {
+                context = await _listener.GetContextAsync();
+            }
+            catch
+            {
+                break;
+            }
+
+            _ = Task.Run(() => HandleAsync(context));
+        }
+    }
+
+    private async Task HandleAsync(HttpListenerContext context)
+    {
+        using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
+        var body = await reader.ReadToEndAsync();
+
+        // Gemini 原生端点（联网搜索就走这条）：/v1beta/models/<model>:generateContent
+        var path = context.Request.Url?.AbsolutePath ?? string.Empty;
+        if (path.Contains(":generateContent", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleGroundingAsync(context, body);
+            return;
+        }
+
+        // GET /v1/models：健康日报会探一下“模型网关到底通不通”。
+        // 真实的网关（OpenAI / 自建中转）都有这个端点，所以 mock 也要有 —— 否则探针永远报“不通”，
+        // 场景里就分不出“真不通”与“mock 没实现”。
+        if (path.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            Interlocked.Increment(ref _modelListHits);
+            var listBody = Encoding.UTF8.GetBytes(
+                "{\"object\":\"list\",\"data\":[{\"id\":\"mock-model\",\"object\":\"model\"}]}");
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = listBody.Length;
+            await context.Response.OutputStream.WriteAsync(listBody);
+            context.Response.Close();
+            return;
+        }
+
+        JsonObject? payload = null;
+        try
+        {
+            payload = JsonNode.Parse(body) as JsonObject;
+        }
+        catch
+        {
+            // 非 JSON：忽略
+        }
+
+        if (payload is not null)
+        {
+            var authorization = context.Request.Headers["Authorization"];
+            lock (_gate)
+            {
+                _requests.Add(payload);
+                if (!string.IsNullOrWhiteSpace(authorization))
+                {
+                    _lastAuthorization = authorization;
+                }
+            }
+        }
+
+        // 上游（Gemini 等）会给“以模型发言结尾”的请求直接返回 400：
+        //   Requests ending with a model turn are not supported.
+        // 机器人自己触发的后续发言（听完歌回来接话 / 被戳 / 静默兜底）恰好就是这种形状，
+        // 所以这里当**默认行为**把这件事变成红灯 —— 否则要等到线上 Gemini 报 400 才发现。
+        // （修法：OpenAiClient 在末尾补一条“系统口吻的 user 轮”。）
+        var lastRole = payload?["messages"]?.AsArray().LastOrDefault()?["role"]?.GetValue<string>();
+        if (lastRole is null or "assistant")
+        {
+            Console.WriteLine($"      [mock] 拒绝以模型发言结尾的请求（roles={string.Join(",", payload?["messages"]?.AsArray().Select(m => m?["role"]?.GetValue<string>()) ?? Array.Empty<string?>())}）");
+            var rejectBody = Encoding.UTF8.GetBytes(
+                "{\"error\": {\"code\": 400, \"message\": \"Requests ending with a model turn are not supported.\", \"status\": \"INVALID_ARGUMENT\"}}");
+            context.Response.StatusCode = 400;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = rejectBody.Length;
+            await context.Response.OutputStream.WriteAsync(rejectBody);
+            context.Response.Close();
+            return;
+        }
+
+        // 人物画像请求：提示词里会要求“压缩成一段人物画像”。
+        // 这类请求期望纯文本画像，不能拿聊天脚本（JSON）当回应。
+        var systemPrompt = payload?["messages"]?.AsArray()
+            .FirstOrDefault(m => m?["role"]?.GetValue<string>() == "system")?["content"]?.GetValue<string>() ?? "";
+
+        if (systemPrompt.Contains("人物画像"))
+        {
+            lock (_gate)
+            {
+                _portraitRequests++;
+            }
+
+            await WriteCompletionAsync(context, payload, "老王：后端开发，常在群里问编译与部署报错；说话直接、爱用“哈”，与小李常互揭老底。");
+            return;
+        }
+
+        // 表情包入库审核：机器人让它看图给“一句话说明 + 关键词 + 是不是表情包”
+        if (systemPrompt.Contains("入库审核") || systemPrompt.Contains("编目"))
+        {
+            lock (_gate)
+            {
+                _stickerDescribeRequests++;
+            }
+
+            string verdict;
+            lock (_gate)
+            {
+                // 默认：是表情包。测审核闸门时用 EnqueueStickerVerdict 排入 {"sticker": false, ...}
+                verdict = _stickerDescribeReplies.Count > 0
+                    ? _stickerDescribeReplies.Dequeue()
+                    : """{"sticker": true, "desc": "憋笑失败的猫", "tags": ["大笑", "憋笑", "沙雕"]}""";
+            }
+
+            await WriteCompletionAsync(context, payload, verdict);
+            return;
+        }
+
+        // 表情包巡检：机器人让它自己决定删哪些（脚本由测试用 ScriptedCuration 控制）
+        if (systemPrompt.Contains("整理表情包库"))
+        {
+            lock (_gate)
+            {
+                _stickerCurateRequests++;
+            }
+
+            string curation;
+            lock (_gate)
+            {
+                curation = _curationReplies.Count > 0
+                    ? _curationReplies.Dequeue()
+                    : """{"delete": [], "reason": "都还行"}""";
+            }
+
+            await WriteCompletionAsync(context, payload, curation);
+            return;
+        }
+
+        // 会话标题综结请求（系统提示里带 [会话标题] 标记）：返回模型综结出来的标题，
+        // **不消耗脚本回复**（与表情包列表、审核那两类请求同理）。
+        // 注意：这里得用“不转义非 ASCII”的序列化 —— `JsonNode.ToJsonString()` 会把中文写成 \uXXXX，
+        // 拿中文去 Contains 就永远匹配不上（与 DescribeRequest 里那个坑同一个）。
+        if (JsonSerializer.Serialize(payload, RelaxedJson).Contains("[会话标题]", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _titleRequests);
+            await WriteCompletionAsync(context, payload, TitleReply);
+            return;
+        }
+
+        // 模拟上游网关的“No capacity / auth_unavailable”（实测多账号池网关会连回 503）：
+        // 机器人应该退让 2 秒重试一次，而不是直接把这一轮回复丢掉。
+        // 注意：要在“取脚本回复”**之前**回 503 —— 否则失败那次会把脚本里的回复吃掉，
+        // 重试时拿到的是默认回复（这个坑第一次写测试时就踩了）。
+        if (FailChatTimes > 0)
+        {
+            FailChatTimes--;
+            Interlocked.Increment(ref _failedChats);
+            var capacityBody = Encoding.UTF8.GetBytes(
+                "{\"error\":{\"message\":\"auth_unavailable: no auth available; last upstream error: {\\\"code\\\": 503, \\\"message\\\": \\\"No capacity\\\"}\"}}");
+            context.Response.StatusCode = 503;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = capacityBody.Length;
+            await context.Response.OutputStream.WriteAsync(capacityBody);
+            context.Response.Close();
+            return;
+        }
+
+        // 模拟“上游只对带图的请求回零候选”（上游网关 后端实测：某些图会让整个请求直接回
+        // 200 + 零候选，同一 payload 重发多少次都空）—— 机器人应去掉图片再试一次，把这一轮救回来。
+        if (EmptyChoicesWhenImages && payload.ToJsonString().Contains("\"image_url\"", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _emptyWithImages);
+            var emptyImgBody = Encoding.UTF8.GetBytes("{\"choices\":[],\"usage\":{\"total_tokens\":1200}}");
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = emptyImgBody.Length;
+            await context.Response.OutputStream.WriteAsync(emptyImgBody);
+            context.Response.Close();
+            return;
+        }
+
+        // 200 但空 choices（上游“思考”吃光预算时的真实形状）：机器人应该当“这轮不说话”，
+        // 不能抛 IndexOutOfRangeException（以前那会把一条消息静默吃掉）。
+        if (EmptyChoicesTimes > 0)
+        {
+            EmptyChoicesTimes--;
+            var emptyBody = Encoding.UTF8.GetBytes("{\"choices\":[],\"usage\":{\"total_tokens\":1200}}");
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = emptyBody.Length;
+            await context.Response.OutputStream.WriteAsync(emptyBody);
+            context.Response.Close();
+            return;
+        }
+
+        string content = TakeRuleReply(body) ?? TakeScriptedReply();
+
+        if (ResponseDelayMs > 0)
+        {
+            await Task.Delay(ResponseDelayMs);
+        }
+
+        await WriteCompletionAsync(context, payload, content);
+    }
+
+    /// <summary>接下来 N 次聊天请求直接回 503（模拟上游“No capacity”）。</summary>
+    public int FailChatTimes { get; set; }
+
+    /// <summary>接下来 N 次聊天请求回 200 但**没有 choices**（实测：慢的 `-high` 模型“思考”把预算吃光时会这样）。</summary>
+    public int EmptyChoicesTimes { get; set; }
+
+    /// <summary>序列化时不要转义非 ASCII（断言要能直接拿中文去 Contains）。</summary>
+    private static readonly JsonSerializerOptions RelaxedJson = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    /// <summary>只要请求里带图就回 200 + 零候选（实测：上游对某些图会直接无候选）。</summary>
+    public bool EmptyChoicesWhenImages { get; set; }
+
+    /// <summary>“按上下文综结会话标题”那类请求的回复。</summary>
+    public string TitleReply { get; set; } = """{"title": "综结出来的会话标题"}""";
+
+    /// <summary>收到过几次“综结标题”请求（测试观测）。</summary>
+    public int TitleRequests => Volatile.Read(ref _titleRequests);
+
+    private int _titleRequests;
+
+    /// <summary>带图而被回零候选的请求数（测试观测）。</summary>
+    public int EmptyWithImages => Volatile.Read(ref _emptyWithImages);
+
+    private int _emptyWithImages;
+
+    /// <summary>被 503 回绝过的聊天请求数（测试观测）。</summary>
+    public int FailedChats => Volatile.Read(ref _failedChats);
+
+    private int _failedChats;
+
+    /// <summary>收到的画像摘要请求数。</summary>
+    public int PortraitRequests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _portraitRequests;
+            }
+        }
+    }
+
+    /// <summary>收到的表情包编目请求数（看图给说明/关键词）。</summary>
+    public int StickerDescribeRequests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _stickerDescribeRequests;
+            }
+        }
+    }
+
+    /// <summary>收到的表情包巡检请求数（机器人自己决定删哪些）。</summary>
+    public int StickerCurateRequests
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _stickerCurateRequests;
+            }
+        }
+    }
+
+    /// <summary>排入一条巡检脚本（模型返回的 JSON 原文），先进先出。</summary>
+    public void EnqueueCuration(string content)
+    {
+        lock (_gate)
+        {
+            _curationReplies.Enqueue(content);
+        }
+    }
+
+    /// <summary>
+    /// 排入一条表情包审核结果（默认是“是表情包 + 憋笑失败的猫”）。
+    /// 用来测审核闸门：返回 {"sticker": false, ...} 时机器人必须把它丢掉。
+    /// </summary>
+    public void EnqueueStickerVerdict(string content)
+    {
+        lock (_gate)
+        {
+            _stickerDescribeReplies.Enqueue(content);
+        }
+    }
+
+    private static async Task WriteCompletionAsync(HttpListenerContext context, JsonObject? payload, string content)
+    {
+        var response = new JsonObject
+        {
+            ["id"] = "chatcmpl-mock",
+            ["object"] = "chat.completion",
+            ["model"] = payload?["model"]?.GetValue<string>() ?? "mock",
+            ["choices"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["index"] = 0,
+                    ["message"] = new JsonObject { ["role"] = "assistant", ["content"] = content },
+                    ["finish_reason"] = "stop"
+                }
+            }
+        };
+
+        var bytes = Encoding.UTF8.GetBytes(response.ToJsonString());
+        context.Response.StatusCode = 200;
+        context.Response.ContentType = "application/json";
+        context.Response.ContentLength64 = bytes.Length;
+        await context.Response.OutputStream.WriteAsync(bytes);
+        context.Response.Close();
+    }
+
+    public string DescribeRequest(int index)
+    {
+        var req = Requests.ElementAtOrDefault(index);
+        // 不要转义非 ASCII：断言要能直接拿中文去 Contains（默认编码器会把“波形实测”写成 \u6CE2…，
+        // 一度让“提示词里有没有这句话”查不出来）
+        return req is null
+            ? "(无请求)"
+            : JsonSerializer.Serialize(req, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            });
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _listener.Stop();
+            _listener.Close();
+        }
+        catch
+        {
+            // 忽略
+        }
+    }
+}

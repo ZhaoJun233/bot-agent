@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    架构护栏（docs/engineering/architecture-optimization.md §3.4 / §8.2）。
+    只读源码文件与行数：不连库、不起进程、不读任何数据目录、不发任何消息、不引用主工程。
+    三类断言：
+      · 棘轮 Ratchet —— 只允许比基线更严，不允许放宽（基线在 Baseline.cs）；
+      · 目标布局 Layout —— Domain/Adapters 的硬规则（目录还不存在时按 0 违规通过）；
+      · 红线锚点 RedLine —— 脱敏、每会话串行、提示词注入点不许在重构里消失。
+    用法：dotnet run 该工程，-c Release。
+          带 print 参数（双横线开头）时只打印当前实测值，用于下调基线，不判定失败。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BotAgent.ArchitectureProbe</AssemblyName>
+    <RootNamespace>BotAgent.ArchitectureProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

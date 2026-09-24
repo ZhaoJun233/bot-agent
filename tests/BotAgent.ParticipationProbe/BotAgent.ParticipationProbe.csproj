@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    P1 用的确定性机制探针（V3 §11.2「确定性机制评测」）。
+
+    为什么单独一个工程：集成测试工程是**黑盒跑子进程**的黑盒体系，且**不引用**主工程
+    （BotAgent.IntegrationHarness.csproj 里只有 Microsoft.Data.Sqlite 包，没有 ProjectReference），
+    所以纯逻辑组件（参与状态机）在那边没法直接单测。这里用最省的方式补上：
+    直接 ProjectReference 主工程 + 纯断言，不启动机器人、不连网、不碰数据目录。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BotAgent.ParticipationProbe</AssemblyName>
+    <RootNamespace>BotAgent.ParticipationProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BotAgent.Headless\BotAgent.Headless.csproj" />
+  </ItemGroup>
+
+</Project>
