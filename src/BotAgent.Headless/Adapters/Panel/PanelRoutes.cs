@@ -78,6 +78,11 @@ public sealed partial class WebUiServer
         new("*", PanelMatch.ExactFile, "", (r) => WriteAssetAsync(r.Context, "index.html", "text/html; charset=utf-8")),
         new("*", PanelMatch.ExactFile, "/app.css", (r) => WriteAssetAsync(r.Context, "app.css", "text/css; charset=utf-8")),
         new("*", PanelMatch.ExactFile, "/app.js", (r) => WriteAssetAsync(r.Context, "app.js", "application/javascript; charset=utf-8")),
+        // 追踪页（批次 H）：只读页面的脚本与样式 —— 与 app.js/app.css 同一套路（嵌进程序集，不引 CDN）
+        new("*", PanelMatch.ExactFile, "/trace.js", (r) => WriteAssetAsync(r.Context, "trace.js", "application/javascript; charset=utf-8")),
+        new("*", PanelMatch.ExactFile, "/trace.css", (r) => WriteAssetAsync(r.Context, "trace.css", "text/css; charset=utf-8")),
+        // 仪表盘（批次 J）：与追踪页同一套路（同一份样式文件，脚本各一份）
+        new("*", PanelMatch.ExactFile, "/dash.js", (r) => WriteAssetAsync(r.Context, "dash.js", "application/javascript; charset=utf-8")),
         new("*", PanelMatch.ExactFile, "/favicon.ico", (r) => WriteBytesAsync(r.Context, 204, "image/x-icon", Array.Empty<byte>())),
 
         // ─────────── 健康检查 ───────────
@@ -136,6 +141,34 @@ public sealed partial class WebUiServer
         // 为什么只读：状态机目前**只观测不拦截**，面板不该也不能改它 —— 改的是上面的参数。
         // 会话 key 走脱敏开关（显示层脱敏、内部 key 不变）；只返回结构化字段，不含任何正文。
         new("GET", PanelMatch.Exact, "/api/participation", HandleParticipationAsync),
+
+        // ─────────── 工具目录（通用 Agent 平台 · 批次 A5，**只读**）───────────
+        // 一眼看清“系统有哪些工具、谁能用、谁在执行”：名字 / 类别 / 参数 / 是否要审批 / 执行者 / 例外标注。
+        // 纯只读：不改任何判定，也不写任何东西。
+        new("GET", PanelMatch.Exact, "/api/tools", (r) => WriteJsonAsync(r.Context, 200, BuildToolsPayload())),
+
+        // ─────────── 决策轨迹（通用 Agent 平台 · 批次 C，**只读**）───────────
+        // 一轮一条：六个节点（参与 / 上下文 / 模型 / 闸门 / 执行 / 发送），只有形状、没有正文。
+        new("GET", PanelMatch.Exact, "/api/traces", (r) =>
+        {
+            var limit = int.TryParse(r.Context.Request.QueryString["limit"], out var n) ? Math.Clamp(n, 1, 50) : 20;
+            return WriteJsonAsync(r.Context, 200, BuildTracesPayload(limit));
+        }),
+
+        // ─────────── 健康仪表盘（通用 Agent 平台 · 批次 J，**只读**）───────────
+        // 一屏摊开：运行/连接、会话与队列、模型延迟、宿主内存与负载、工具目录、会话权限、轨迹容量。
+        new("GET", PanelMatch.Exact, "/api/dashboard", (r) => WriteJsonAsync(r.Context, 200, BuildDashboardPayload())),
+
+        // ─────────── 人在回路审批（通用 Agent 平台 · 批次 I）───────────
+        // GET 只读（待批单的形状）；POST 是**高权限写路径**，前置 fail-closed：审批开关 + 面板令牌（见 WebUiServer.Approvals.cs）。
+        new("GET", PanelMatch.Exact, "/api/approvals", (r) => WriteJsonAsync(r.Context, 200, BuildApprovalsPayload())),
+        new("POST", PanelMatch.Exact, "/api/approvals/decide", (r) => HandleApprovalDecideAsync(r.Context)),
+
+        // ─────────── 本地通道（通用 Agent 平台 · 批次 F）───────────
+        // GET 只读（开没开 + 出箱形状）；POST 是**入口**（把一条本地消息注入成入站消息），
+        // 两道前置 fail-closed：名单非空 + 面板令牌已配（见 WebUiServer.Local.cs）。
+        new("GET", PanelMatch.Exact, "/api/local", (r) => WriteJsonAsync(r.Context, 200, BuildLocalChannelPayload())),
+        new("POST", PanelMatch.Exact, "/api/local/message", (r) => HandleLocalMessageAsync(r.Context)),
 
         // ─────────── AI 总开关 ───────────
         new("POST", PanelMatch.Exact, "/api/ai-mode", HandleAiModeAsync),

@@ -754,6 +754,35 @@ public sealed class AppSettings
     /// <summary>服务器内置 agent 最多跑几步工具循环（每步一次模型调用）。</summary>
     public int AgentServerMaxSteps { get; set; } = 8;
 
+    /// <summary>
+    /// **聊天**这一路的有限步进循环上限（general-agent-platform-plan.md 批次 E）。
+    ///
+    /// 默认 **1** = 与改造前**逐字一致**：一次模型调用 + 它自己声明的那一轮动作（不做"再问一次"）。
+    /// 只有在面板里显式调大（2~3）才会进入循环：模型 → 当场做掉它点名的只读工具（搜索/读页面）→ 喂回去再问。
+    ///
+    /// 为什么默认 1：一条群消息的循环会把成本与延迟线性推上去，而群聊对延迟敏感（§5.4）。
+    /// 上限 3 是刻意的：再多也没见过有意义的收敛（§5.4 的"出口必须明确"）。
+    /// </summary>
+    public int MaxAgentSteps { get; set; } = 1;
+
+    /// <summary>
+    /// **本地通道**（批次 F）的名单：写本地 id（逗号分隔）。**空 = 整个通道都不建**（默认关，fail-closed）。
+    ///
+    /// 它是"接入层可换"的活证据：本地通道走的是**同一张工具表 + 同一套治理**，
+    /// 只是入站来自面板那张令牌门后的 `POST /api/local/message`，而不是 NapCat / 开放平台。
+    /// 关着的时候：通道不构造、路由不认识它、白名单也不认它的 key —— 三层都关。
+    /// </summary>
+    public string LocalChannelIds { get; set; } = string.Empty;
+
+    /// <summary>
+    /// `//` 那一路要不要**过统一闸门**（批次 A 第 2 步的收尾）。**默认关 = 与今天逐字一致**：
+    /// 关着时 `//` 仍走它自己的字符串白名单（<c>ParseTools</c> + <c>QqActionCatalog.ParseAllowed</c>）。
+    /// 打开后每次工具调用前过多一次 <see cref="BotAgent.Domain.Permissions.ToolGate" />
+    /// （登记表 + 策略快照；高风险工具例外由服务端显式点名，见 ServerToolGate）。
+    /// 判定结果与老白名单一致 —— 这一项是“把同一条边界接到同一张表上”，不是加权限。
+    /// </summary>
+    public bool AgentServerUseGate { get; set; }
+
     /// <summary>服务器内置 agent 单条命令的超时（秒）。</summary>
     public int AgentServerCommandTimeoutSeconds { get; set; } = 60;
 

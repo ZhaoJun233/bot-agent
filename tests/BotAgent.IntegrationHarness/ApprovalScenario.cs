@@ -27,9 +27,14 @@ public static partial class Program
         var openAiPort = FreePort(17893);
         var botWsPort = FreePort(13097);
         var panelPort = FreePort(18117);
-        const long groupId = 66770;
+        // 群号刻意用 **6 位**：面板脱敏规则是“长数字（≥6 位）留前 3 后 2”，
+        // 这样“面板列的是脱敏 key、而审批仍然用真 key 生效”才真的被验到（批次 I）。
+        const long groupId = 667700;
         const long memberId = 20002;   // 普通群成员（默认 role=member）
         const long ownerId = 20003;    // 后面用 SetRole 登记成群主
+        // 批次 I（面板审批卡）：这条链是高权限写路径，前置 fail-closed 要求**面板令牌已配** ——
+        // 所以这个场景从一开始就带上令牌，面板请求都走 ?token=（与 S17 同一套路）。
+        const string panelToken = "it-s43-token";
 
         var panel = $"http://127.0.0.1:{panelPort}";
         var dataDir = NewDataDir("s43");
@@ -43,6 +48,10 @@ public static partial class Program
         openAi.EnqueueReply("""{"suitability": 99, "action": "tool", "toolRequest": "demo.echo"}""");
         // ③ 模型点名服务端没登记的工具 → 连单都不开
         openAi.EnqueueReply("""{"suitability": 99, "action": "tool", "toolRequest": "shell.exec"}""");
+        // ④ 批次 I：面板批准那一路（再开一张单，用面板批）
+        openAi.EnqueueReply("""{"suitability": 99, "action": "tool", "toolRequest": "demo.echo"}""");
+        // ⑤ 批次 I：面板拒绝那一路（再开一张单，用面板拒）
+        openAi.EnqueueReply("""{"suitability": 99, "action": "tool", "toolRequest": "demo.echo"}""");
 
         using var bot = StartBot(new Dictionary<string, string>
         {
@@ -61,7 +70,8 @@ public static partial class Program
             ["QQCHAT_ENABLE_POKE"] = "0",
             ["QQCHAT_ENABLE_VOICE"] = "0",
             ["QQCHAT_ENABLE_MUSIC"] = "0",
-            ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
+            ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
+            ["QQCHAT_PANEL_TOKEN"] = panelToken
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
@@ -91,10 +101,10 @@ public static partial class Program
             bot.OutputLines.LastOrDefault(l => l.Contains("[决策]")) ?? "(没有 [决策] 行)");
 
         // ── ② 面板打开审批 + 回显要能拿到 ──
-        var (onCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableApprovals":true}""");
+        var (onCode, _) = await PostJsonAsync($"{panel}/api/settings?token={panelToken}", """{"enableApprovals":true}""");
         Check("面板能打开人工审批", onCode == 200, $"HTTP {onCode}");
 
-        var (_, panelBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, panelBody) = await HttpGetAsync($"{panel}/api/settings?token={panelToken}");
         var runtime = (JsonNode.Parse(panelBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 面板回显：审批开着、覆盖的只有那个固定假工具",
             runtime["enableApprovals"]?.GetValue<bool>() == true &&
@@ -179,6 +189,86 @@ public static partial class Program
         Check("日志里说明了为什么没开单（tool_not_fixed）",
             bot.OutputLines.Any(l => l.Contains("[审批] 没有开单") && l.Contains("tool_not_fixed")),
             bot.OutputLines.LastOrDefault(l => l.Contains("没有开单")) ?? "(没有开单日志)");
+
+        // ── ⑧ 批次 I：面板上的审批卡（GET 形状 + 批准执行 + 一次性）──
+        // 再要一张单（模型的第 4 条回复是给这一腿的）
+        before = Sent().Count;
+        await protocol.SendGroupMessageAsync(groupId, memberId, "群友A", "再查一次负载", 21007,
+            mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(
+            () => Sent().Skip(before).Any(t => t.Contains("需要确认")), TimeSpan.FromSeconds(40));
+        var panelAnnouncement = Sent().Skip(before).FirstOrDefault(t => t.Contains("需要确认")) ?? string.Empty;
+        var panelId = Regex.Match(panelAnnouncement, @"编号\s*([A-Z0-9]{6})") is { Success: true } m2
+            ? m2.Groups[1].Value
+            : string.Empty;
+        Check("★ 面板那一路：先有一张真的待批单（群里能看到待确认）", panelId.Length == 6,
+            Snippet(panelAnnouncement, "需要确认"));
+        if (panelId.Length == 6)
+        {
+            var (listCode, listBody) = await HttpGetAsync($"{panel}/api/approvals?token={panelToken}");
+            var listRoot = JsonNode.Parse(listBody) as JsonObject ?? new JsonObject();
+            var pending = listRoot["pending"] as JsonArray ?? new JsonArray();
+            var entry = pending.FirstOrDefault(n => n?["id"]?.GetValue<string>() == panelId) as JsonObject;
+            Check("★★ 面板能读到这张待批单（编号 / 工具 / 摘要 / 脱敏后的会话 key / 剩余秒数）",
+                listCode == 200 && listRoot["canDecide"]?.GetValue<bool>() == true && entry is not null
+                && entry["tool"]?.GetValue<string>() == "demo.echo"
+                && (entry["summary"]?.GetValue<string>() ?? string.Empty).Contains("demo.echo")
+                && (entry["key"]?.GetValue<string>() ?? string.Empty).Contains("***")
+                && entry["expiresInSeconds"]?.GetValue<int>() > 0,
+                $"HTTP {listCode} {listBody[..Math.Min(200, listBody.Length)]}");
+
+            // 批准：与群里「同意 编号」走同一条判定 → 执行固定假工具 → 回执发回**原会话**
+            before = Sent().Count;
+            var approveBody = "{\"id\":\"" + panelId + "\",\"approve\":true}";
+            var (decideCode, decideBodyOut) =
+                await PostJsonAsync($"{panel}/api/approvals/decide?token={panelToken}", approveBody);
+            Check("★ 面板批准返回 200 与原因码", decideCode == 200, $"HTTP {decideCode} {decideBodyOut}");
+            await WaitUntilAsync(
+                () => Sent().Skip(before).Any(t => t.Contains("已确认")), TimeSpan.FromSeconds(40));
+            var panelExecuted = Sent().Skip(before).FirstOrDefault(t => t.Contains("已确认")) ?? string.Empty;
+            Check("★★ 面板批准 → 真的执行了（票据 → 闸门 → 固定假工具）且回执发回原会话",
+                panelExecuted.Contains("demo.echo") && panelExecuted.Contains("真实副作用"),
+                string.Join(" | ", Sent().Skip(before)));
+            Check("日志里能看出这是**面板**批的（审计分得清哪条路）",
+                bot.OutputLines.Any(l => l.Contains("[审批] 面板") && l.Contains("approved")),
+                bot.OutputLines.LastOrDefault(l => l.Contains("[审批] 面板")) ?? "(没有面板审批日志)");
+
+            // 一次性：同一个编号在面板上再批一次 → 不再执行
+            before = Sent().Count;
+            var (againCode, againBody) =
+                await PostJsonAsync($"{panel}/api/approvals/decide?token={panelToken}", approveBody);
+            await Task.Delay(1500);
+            Check("★★ 同一编号在面板上再批一次 → 不执行、如实回报（一次性没被放宽）",
+                Sent().Count == before
+                && (againBody.Contains("already_decided") || againBody.Contains("already_consumed")
+                    || againBody.Contains("unknown_request")),
+                $"HTTP {againCode} {againBody}");
+        }
+
+        // ── ⑨ 批次 I：面板拒绝那一路（不执行任何东西，只回一句）──
+        before = Sent().Count;
+        await protocol.SendGroupMessageAsync(groupId, memberId, "群友A", "还有一件事", 21008,
+            mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(
+            () => Sent().Skip(before).Any(t => t.Contains("需要确认")), TimeSpan.FromSeconds(40));
+        var rejectAnnouncement = Sent().Skip(before).FirstOrDefault(t => t.Contains("需要确认")) ?? string.Empty;
+        var rejectId = Regex.Match(rejectAnnouncement, @"编号\s*([A-Z0-9]{6})") is { Success: true } m3
+            ? m3.Groups[1].Value
+            : string.Empty;
+        Check("面板拒绝那一路：也先有一张待批单", rejectId.Length == 6, Snippet(rejectAnnouncement, "需要确认"));
+        if (rejectId.Length == 6)
+        {
+            before = Sent().Count;
+            var rejectBody = "{\"id\":\"" + rejectId + "\",\"approve\":false}";
+            var (rejCode, rejBodyOut) =
+                await PostJsonAsync($"{panel}/api/approvals/decide?token={panelToken}", rejectBody);
+            await WaitUntilAsync(
+                () => Sent().Skip(before).Any(t => t.Contains("已被拒绝")), TimeSpan.FromSeconds(30));
+            Check("★★ 面板拒绝 → 不执行任何东西，只回一句「已被拒绝」",
+                rejCode == 200 && Sent().Skip(before).Any(t => t.Contains("已被拒绝"))
+                && !Sent().Skip(before).Any(t => t.Contains("已确认")),
+                $"HTTP {rejCode} {rejBodyOut} | " + string.Join(" | ", Sent().Skip(before)));
+        }
 
         await bot.StopAsync();
     }

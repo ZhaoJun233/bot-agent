@@ -18,26 +18,12 @@ namespace BotAgent.Domain.Permissions;
 /// </summary>
 public sealed class ChatCapabilitySet
 {
-    /// <summary>聊天这一路允许登记的能力（高风险类别**不登记**，于是连“未知工具”都算不上）。</summary>
-    public static readonly ToolRegistry DefaultRegistry = new ToolRegistry()
-        .Register(new ToolDescriptor("chat.reply", ToolCategory.ConversationRead, "回复当前会话"))
-        .Register(new ToolDescriptor("web.search", ToolCategory.WebRead, "联网搜索"))
-        .Register(new ToolDescriptor("web.read", ToolCategory.WebRead, "读网页正文"))
-        .Register(new ToolDescriptor("music.listen", ToolCategory.WebRead, "去听一首歌（只读外部数据）"))
-        .Register(new ToolDescriptor("music.share", ToolCategory.SendMessage, "分享歌曲卡片"))
-        .Register(new ToolDescriptor("voice.speak", ToolCategory.SendMessage, "用语音说一句"))
-        .Register(new ToolDescriptor("sticker.send", ToolCategory.SendMessage, "发表情包"))
-        .Register(new ToolDescriptor("poke.send", ToolCategory.SendMessage, "戳一戳"))
-        .Register(new ToolDescriptor(
-            ApprovalFlow.FixedToolId,
-            ToolCategory.SendMessage,
-            ApprovalFlow.FixedToolSummary,
-            ReadOnly: false))
-        .Register(new ToolDescriptor(
-            ApprovalFlow.QuestionToolId,
-            ToolCategory.SendMessage,
-            "往当前会话问一个问题（带编号与有效期；不授予任何权限）",
-            ReadOnly: false));
+    /// <summary>
+    /// 聊天这一路允许登记的能力（高风险类别**不登记**，于是连“未知工具”都算不上）。
+    /// 2026-09-24（批次 A）：条目本体搬去 <see cref="Domain.Tools.ChatToolSpecs" />（升格成 ToolSpec），
+    /// 这里保留原名与顺序，于是既有调用点一行都不用改。
+    /// </summary>
+    public static readonly ToolRegistry DefaultRegistry = Domain.Tools.ChatToolSpecs.DefaultRegistry;
 
     public ToolRegistry Registry { get; }
 

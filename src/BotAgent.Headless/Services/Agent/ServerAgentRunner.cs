@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Agent;
 
@@ -18,7 +19,7 @@ namespace BotAgent.Services.Agent;
 ///   → 模型回 {"thought":"…","tool":"bash","command":"ls -la /data"}  → 真跑 → 输出喂回去 → 再问
 ///   → 直到 {"final":"……"} 或步数用完
 /// </summary>
-public sealed class ServerAgentRunner
+public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 {
     // 配置读取入口：指向**当前发布版**（热更新是换引用，见 SettingsBox）——不要改成缓存实例。
     private AppSettings _settings => _box.Current;
@@ -52,6 +53,58 @@ public sealed class ServerAgentRunner
     /// <summary>进度（工具调用）—— 与桥同一套事件，BotAgentHost 那边不用分叉。</summary>
     public event Action<AgentTask>? Progress;
 
+    // ── 批次 A 收尾：这一族**真的能执行**（IToolExecutor）──
+    // 登记表里它是 `server.agent`；执行体就是既有那个 switch（RunToolAsync），这里只把
+    // “一次 ToolCall” 翻译成它的入参。**判定不在这里**：白名单与闸门都在 RunAsync 那条路上，
+    // 这个入口按同一口径自己解析一次设置（谁调用它，谁负责先过闸门）。
+
+    /// <summary>执行者标识（与 <c>ServerToolSpecs.ExecutorAgent</c> 同一个常量）。</summary>
+    public string Id => BotAgent.Services.Tools.ServerToolSpecs.ExecutorAgent;
+
+    /// <summary>今天真正干这件事的组件（面板与审计展示用）。</summary>
+    public string Implementation => "Services/Agent/ServerAgentRunner.cs（本体就是那个 switch）";
+
+    /// <summary>false = 已经接进统一执行。</summary>
+    public bool LegacyPath => false;
+
+    /// <summary>
+    /// 统一执行入口：只接**服务器工具**（bash/read/write/fetch/docker）。
+    /// `qq` 不在这里 —— 它由会话宿主（<c>SessionQqActionHost</c>，见 QqActionTool.cs）执行，
+    /// 因为 QQ 动作要 <c>sender</c>/<c>me</c>/<c>this</c> 这类**会话现场**才能翻成真数字。
+    /// </summary>
+    public async Task<BotAgent.Domain.Tools.ToolOutcome> ExecuteAsync(
+        BotAgent.Domain.Tools.ToolCall call, CancellationToken ct = default)
+    {
+        var tool = call?.ToolId ?? string.Empty;
+        if (string.Equals(tool, "qq", StringComparison.Ordinal))
+        {
+            return BotAgent.Domain.Tools.ToolOutcome.Failure(
+                "wrong_executor", "QQ 动作由会话宿主执行（要会话现场才能解析 sender/me/this）。");
+        }
+
+        var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
+        var allowed = ParseTools(_settings.AgentServerTools);
+        if (!_settings.AgentServerDocker)
+        {
+            allowed.Remove("docker");
+        }
+
+        if (!allowed.Contains(tool))
+        {
+            return BotAgent.Domain.Tools.ToolOutcome.Failure(
+                "not_allowlisted", $"工具 {tool} 没开（当前只允许：{string.Join(", ", allowed.OrderBy(x => x))}）");
+        }
+
+        var step = new StepCall(tool, call!.Arguments?["path"]?.GetValue<string>()
+            ?? call.Arguments?["url"]?.GetValue<string>() ?? call.Arguments?["file"]?.GetValue<string>(),
+            call.Arguments?["command"]?.GetValue<string>(), null, call.Arguments ?? new JsonObject());
+
+        var output = await RunToolAsync(tool, step, workDir, allowed,
+            QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions), qqHost: null, ct);
+
+        return BotAgent.Domain.Tools.ToolOutcome.Success(output, $"服务器工具 {tool}");
+    }
+
     /// <summary>跑一个任务（把结果写回 task）。调用方负责在后台线程里跑它。</summary>
     public async Task RunAsync(AgentTask task, CancellationToken ct)
     {
@@ -66,6 +119,16 @@ public sealed class ServerAgentRunner
             allowed.Remove("docker");
         }
         var qqAllowed = QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions);
+
+        // 批次 A 第 2 步的收尾：**可选**过统一闸门（默认关 = 与今天逐字一致，见 AppSettings.AgentServerUseGate）。
+        // 开着的判定口径 = 本次允许的工具白名单；高风险那几只由服务端显式点名（ServerToolGate）。
+        // 白名单**就是** allowed 本身（不许在这里偷偷加东西：qq 能不能用由 allowed 决定，
+        // 与系统提示里 `qqOn = allowed.Contains("qq") && qqHost is not null` 同一口径 ——
+        // 之前这里无条件把 qq 塞进去，于是“白名单里没有 qq”时闸门反而放行、由执行层兜底拒掉，
+        // 闸门看起来像个摆设（S38 第 ⑩ 步就是这么暴露的）。
+        var gatePolicy = _settings.AgentServerUseGate
+            ? ServerToolGate.BuildPolicy(allowed)
+            : null;
         var qqHost = task.QqHost;
         var qqUsed = 0;
 
@@ -168,6 +231,16 @@ public sealed class ServerAgentRunner
                     if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
                     {
                         output = $"这次已经做了 {MaxQqActionsPerTask} 个 QQ 动作，不再做了（要接着做请再发一条指令）。";
+                    }
+                    // ⚠ 开关关着时 gatePolicy 是 null —— 那种情况**根本不该调 Check**：
+                    // ToolGate 对 null 策略是 fail-closed 拒绝（no_policy），拿它表示“不判”会把每一步都拒掉（踩过）。
+                    else if (gatePolicy is not null
+                             && ServerToolGate.Check(gatePolicy, task.SourceKey, name) is { Allow: false } gateDenied)
+                    {
+                        // 闸门拒绝 → **不执行**，把结构化错误喂回模型（fail-closed：不静默放行、不降级到更高权限）
+                        _log($"[ServerAgent] 闸门拒绝 {name}（{gateDenied.ReasonCode}）→ 不执行");
+                        output = $"这一步被闸门拒绝了（{gateDenied.ReasonCode}）：这次不执行。"
+                                 + "换个做法，或者直接给 final 说清楚你查到了什么。";
                     }
                     else
                     {
@@ -279,6 +352,10 @@ public sealed class ServerAgentRunner
     private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost)
     {
         var list = new List<string>();
+        // 批次 D：先给出**统一目录**生成的清单（名字 + 一句话 + 参数），下面每条再写容器里的实情。
+        list.Add("工具清单（服务端登记表，按面板开关裁剪）：" + string.Join("、", ServerToolSpecs.All
+            .Where(s => allowed.Contains(s.Id))
+            .Select(s => s.Id + "=" + s.Summary)));
         if (allowed.Contains("bash"))
         {
             list.Add("bash：在容器里跑一条 shell 命令（command 字段）。容器是 Debian 12，有 bash/sh/grep/sed/awk/tar/grep，**没有** python/curl/git/node/jq。");
@@ -362,19 +439,22 @@ public sealed class ServerAgentRunner
 
     private static HashSet<string> ParseTools(string raw)
     {
-        var all = new[] { "bash", "read", "write", "fetch", "qq", "docker" };
+        // 批次 D：工具名单来自**统一目录**（Services/Tools/ServerToolSpecs）——这里不再是第二个内联数组。
+        // “留空 = 全开”这条口径**照旧**（它是既有行为，见 QqActionCatalog 注释里那句“故意不一样”）。
+        var all = ServerToolSpecs.Names;
         if (string.IsNullOrWhiteSpace(raw))
         {
-            return new HashSet<string>(all);
+            return new HashSet<string>(all, StringComparer.Ordinal);
         }
 
-        var set = new HashSet<string>();
+        var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var piece in raw.Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var name = piece.Trim().ToLowerInvariant();
-            if (all.Contains(name))
+            var canonical = all.FirstOrDefault(t => t.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (canonical is not null)
             {
-                set.Add(name);
+                set.Add(canonical);
             }
         }
 

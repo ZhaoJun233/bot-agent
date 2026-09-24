@@ -1,6 +1,8 @@
 using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Ops;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.OneBot;
+using BotAgent.Services.Ops;
 
 namespace BotAgent.Services.Permissions;
 
@@ -23,6 +25,8 @@ public sealed class ApprovalUseCase
 {
     private readonly SettingsBox _box;
     private readonly ApprovalHooks _hooks;
+    private readonly SessionPolicyLedger _sessionPolicies;
+    private readonly TurnTraceStore _traces;
 
     private readonly ApprovalStore _approvals = new();
     private readonly ToolCallBudget _toolBudget = new();
@@ -33,10 +37,12 @@ public sealed class ApprovalUseCase
 
     private DateTimeOffset _lastPrune = DateTimeOffset.MinValue;
 
-    public ApprovalUseCase(SettingsBox box, ApprovalHooks hooks)
+    public ApprovalUseCase(SettingsBox box, ApprovalHooks hooks, SessionPolicyLedger sessionPolicies, TurnTraceStore traces)
     {
         _box = box;
         _hooks = hooks;
+        _sessionPolicies = sessionPolicies;
+        _traces = traces;
     }
 
     private AppSettings _settings => _box.Current;
@@ -59,6 +65,12 @@ public sealed class ApprovalUseCase
     public HashSet<string> Approvers()
         // 归一化交给 ApprovalStore（裸 QQ 号 → user:<号>，与审批时传入的身份同一格式）
         => ApprovalStore.NormalizeApprovers(_settings.ApprovalApprovers);
+
+    /// <summary>
+    /// 面板要看的待批单（批次 I）：只给形状 —— 摘要在建单时已由台账脱敏，
+    /// 会话 key 由面板那层再走一次显示层脱敏（<c>PanelDto.Mask</c>）。
+    /// </summary>
+    public IReadOnlyList<ApprovalRequest> PendingApprovals() => _approvals.Pending(Clock.Now);
 
     /// <summary>
     /// 设置变了 → 重建策略快照（在 <c>ApplyRuntimeSettings</c> 里调用）。
@@ -107,6 +119,13 @@ public sealed class ApprovalUseCase
         var caps = pinned ?? Capabilities;
         var key = conversation.SourceKey;
 
+        // 批次 B（会话级权限元数据）：把“这条会话是哪个策略建立的”显式记下来。
+        // **只记录**：判定口径一个字没改；只有在“策略指纹变了、这条会话的旧戳作废”时才留一行日志。
+        if (_sessionPolicies.Stamp(SessionPolicyStamp.For(key, caps, Clock.Now)))
+        {
+            _hooks.Log($"[能力] 会话策略已重建 {Channels.Describe(key)} → v{caps.Policy.PolicyVersion}（指纹变了，旧戳作废）");
+        }
+
         // 单次运行预算（V3 §9.2）：同一轮里每放行一次就记一笔，序号交给闸门判断；
         // 记账在**收到新的用户消息**时归零（见 HandleInbound），多轮工具补轮因此共享同一个预算。
         var decision = caps.Check(
@@ -117,6 +136,12 @@ public sealed class ApprovalUseCase
         }
 
         reason = decision.ReasonCode;
+        _traces.Node(
+            key,
+            TurnNodeKind.Gate,
+            decision.Allow ? "allowed" : "denied",
+            toolId: toolId,
+            reasonCode: decision.ReasonCode);
         if (!decision.Allow)
         {
             _hooks.Log($"[能力] 拒绝 {toolId}（{decision.ReasonCode}）: {conversation.Name}");
@@ -129,7 +154,11 @@ public sealed class ApprovalUseCase
     public void ResetBudget(string sourceKey) => _toolBudget.Reset(sourceKey);
 
     /// <summary>会话被删 / 移出白名单 → 把它的台账痕迹一起清掉（内存台账要有界）。</summary>
-    public void Forget(string sourceKey) => _toolBudget.Forget(sourceKey);
+    public void Forget(string sourceKey)
+    {
+        _toolBudget.Forget(sourceKey);
+        _sessionPolicies.Forget(sourceKey);
+    }
 
     /// <summary>
     /// 处理一条「同意 / 拒绝 编号」。返回 true = 这条消息被审批流程吃掉了（不再进模型）。
@@ -193,6 +222,90 @@ public sealed class ApprovalUseCase
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// 面板上的同意 / 拒绝（批次 I）。
+    ///
+    /// **校验一条都不放宽**：判定仍走 <see cref="ApprovalFlow.Handle" />（身份 / 有效期 / 一次性 / 策略版本），
+    /// 执行前仍过一次闸门，执行体仍是那个**没有真实副作用**的固定假工具。
+    ///
+    /// 与群里那条路的**唯一差别**（写在这里，别当成顺手放宽）：
+    ///   · **提交身份**：面板 = 号主的控制台，因此以 owner 身份提交 ——
+    ///     与“群主可以批”是**同一条规则**（见 ApprovalStore.IsAuthorizedApprover：按 id 点名 ∪ 按身份）。
+    ///     于是开单时给了 owner/admin 角色的（群聊里开的单）面板批得动；
+    ///     没给角色的（私聊里开的单，只有点名名单算数）面板同样批不动 —— **失败关闭，不放宽**。
+    ///   · **会话 key 的来源**：会话绑定校验要求“来自发起审批的那个会话”，
+    ///     而面板**不是会话**；这里用这张单子**自己的** key 提交，于是跨会话这件事根本不成立。
+    ///
+    /// 收尾与群里那条路一致：回执发回**原会话**（群里的人要看到“谁批了”），并记一个轨迹节点。
+    /// </summary>
+    /// <param name="requestId">审批单编号。</param>
+    /// <param name="approve">true = 同意（批准并执行固定假工具）；false = 拒绝。</param>
+    public (bool Ok, string ReasonCode) PanelDecide(string requestId, bool approve)
+    {
+        var now = Clock.Now;
+        var request = _approvals.Get(requestId, now);
+        if (request is null)
+        {
+            return (false, "unknown_request");
+        }
+
+        var conversationKey = request.ConversationKey;
+        var result = ApprovalFlow.Handle(
+            _approvals,
+            new ApprovalCommand(approve ? ApprovalCommandKind.Approve : ApprovalCommandKind.Reject, requestId),
+            requesterId: "panel:owner",
+            requesterRole: "owner",
+            conversationKey: conversationKey,
+            now: now,
+            currentPolicyVersion: Capabilities.Policy.PolicyVersion);
+
+        _hooks.Log($"[审批] 面板 {requestId} → {result.ReasonCode}（{Channels.Describe(conversationKey)}）");
+
+        if (result.ShouldExecute && result.Ticket is { } ticket)
+        {
+            // 执行前**再过一次闸门**（与群里那条路同一句）：闸门才是“能不能执行”的唯一判据。
+            var gate = Capabilities.Check(ApprovalFlow.FixedToolId, conversationKey, ticket: ticket);
+            _traces.Node(conversationKey, TurnNodeKind.Gate, gate.Allow ? "allowed" : "denied",
+                toolId: ApprovalFlow.FixedToolId, reasonCode: gate.ReasonCode);
+            if (!gate.Allow)
+            {
+                _hooks.Log($"[审批] 面板批准后闸门拒绝执行（{gate.ReasonCode}）→ 不执行：{Channels.Describe(conversationKey)}");
+                return (false, gate.ReasonCode);
+            }
+
+            RunFixedDemoToolFor(conversationKey, requestId, result.Reply);
+            return (true, result.ReasonCode);
+        }
+
+        if (result.Handled && result.Reply is { Length: > 0 } reply)
+        {
+            _ = SendToKeyAsync(conversationKey, reply);
+        }
+
+        return (result.Handled, result.ReasonCode);
+    }
+
+    /// <summary>面板那条路把回执发回原会话（没有入站消息可用，所以按 key 发）。</summary>
+    private Task SendToKeyAsync(string conversationKey, string text)
+        => _hooks.SendToKeyAsync is { } send ? send(conversationKey, text) : Task.CompletedTask;
+
+    /// <summary>
+    /// 「执行」固定假工具（面板那条路：没有入站消息，回执按会话 key 发）。
+    /// 它同样**什么都不做**：只记一行日志 + 回一句说明。
+    /// </summary>
+    private void RunFixedDemoToolFor(string conversationKey, string requestId, string? reply)
+    {
+        _hooks.Log($"[审批] 面板执行固定假工具 {ApprovalFlow.FixedToolId}"
+                   + $"（编号 {requestId}，**无真实副作用**）：{Channels.Describe(conversationKey)}");
+        _traces.Node(conversationKey, TurnNodeKind.ToolExec, "ok",
+            toolId: ApprovalFlow.FixedToolId, reasonCode: "panel_approved");
+
+        if (reply is { Length: > 0 })
+        {
+            _ = SendToKeyAsync(conversationKey, reply);
+        }
     }
 
     /// <summary>
@@ -369,8 +482,13 @@ public sealed class ApprovalUseCase
 /// <param name="Mask">显示层脱敏（面板/日志里不出现完整 QQ 号）。</param>
 /// <param name="SendPlainAsync">往当前会话发一条纯文本（服务端自己包好的公告/提问）。</param>
 /// <param name="SendApprovalReplyAsync">把审批回执发回原会话（走带节奏的发送链路）。</param>
+/// <param name="SendToKeyAsync">
+/// 按**会话 key** 发一条纯文本（批次 I 的面板审批用）：面板没有“入站消息”可回，
+/// 而回执仍然应该回到**发起审批的那个会话**里（群里的人要看到决定）。
+/// </param>
 public readonly record struct ApprovalHooks(
     Action<string> Log,
     Func<string, string?, string> Mask,
     Func<BotConversation, string, Task> SendPlainAsync,
-    Func<QqChatMessage, string, Task> SendApprovalReplyAsync);
+    Func<QqChatMessage, string, Task> SendApprovalReplyAsync,
+    Func<string, string, Task>? SendToKeyAsync = null);

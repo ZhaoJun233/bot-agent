@@ -1,6 +1,7 @@
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Qq;
+using BotAgent.Domain.Ops;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Stickers;
 using BotAgent.Services.Agent;
@@ -11,6 +12,7 @@ using BotAgent.Services.Net;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Ports;
+using BotAgent.Services.Ops;
 using BotAgent.Services.Participation;
 using BotAgent.Services.Permissions;
 using BotAgent.Services.Poke;
@@ -60,6 +62,12 @@ public sealed class ReplyPipeline
     private readonly LinkPreviewer? _links;
     private readonly IMoodRepository _mood;
     private readonly ReplyHooks _hooks;
+    /// <summary>决策轨迹（批次 C）：一轮一条，只有形状 —— 见 <see cref="TurnTraceStore" /> 的注释。</summary>
+    private readonly TurnTraceStore _traces;
+    /// <summary>有限步进循环（批次 E）：默认 1 步 = 与改造前逐字一致。</summary>
+    private readonly AgentTurnLoop _turnLoop;
+    /// <summary>当场做掉只读工具（批次 E）：判定与冷却与“留给下一轮”那条路完全一致。</summary>
+    private readonly InlineTurnTools _inlineTools;
 
     public ReplyPipeline(
         SettingsBox box,
@@ -83,7 +91,8 @@ public sealed class ReplyPipeline
         ResearchUseCase research,
         LinkPreviewer? links,
         IMoodRepository mood,
-        ReplyHooks hooks)
+        ReplyHooks hooks,
+        TurnTraceStore traces)
     {
         _box = box;
         _source = source;
@@ -107,6 +116,9 @@ public sealed class ReplyPipeline
         _links = links;
         _mood = mood;
         _hooks = hooks;
+        _traces = traces;
+        _turnLoop = new AgentTurnLoop(brain, traces);
+        _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log);
 
         _replyGate = new SemaphoreSlim(
             Math.Clamp(box.Current.MaxConcurrentReplies, 1, 16));
@@ -438,6 +450,7 @@ public sealed class ReplyPipeline
     {
         // 对话总开关（按通道）：官方那条在调试/被平台限制时，可以只把它静音，私域照旧。
         // 面板顶部那个「AI 开关」是**全局**的（两条一起断，且连“人在叫它”也不回）——两者不是一回事。
+        // 本地通道（批次 F）跟**私域**那个总开关（同属“自己的入口”；官方开关是专给开放平台的）。
         var channelEnabled = Channels.IsOfficial(msg.Channel)
             ? _settings.OfficialChatEnabled
             : _settings.PrivateChatEnabled;
@@ -462,7 +475,9 @@ public sealed class ReplyPipeline
             var gateNow = _whitelist.Describe();
             var listState = Channels.IsOfficial(msg.Channel)
                 ? (msg.IsGroup ? $"官方群名单{gateNow.OfficialGroups}" : $"官方私聊名单{gateNow.OfficialPrivates}")
-                : (msg.IsGroup ? "私域群名单" : "私域私聊名单");
+                : Channels.IsLocal(msg.Channel)
+                    ? $"本地名单{gateNow.Local}"
+                    : (msg.IsGroup ? "私域群名单" : "私域私聊名单");
             LogThrottled("ignore:" + label, $"忽略（不在白名单）: [{tag}] {label}（{listState}）");
             // P1（只观测）：不在白名单 = 不参与这个话题 → Silent（同样不改判定）
             _participation.Observe(
@@ -1083,6 +1098,8 @@ public sealed class ReplyPipeline
     /// <summary>执行一次回复（受全局并发闸门限制）。</summary>
     private async Task RunReplyAsync(BotConversation conversation, string sourceKey, long? triggerMessageId, bool proactive = false)
     {
+        _traces.Begin(sourceKey);
+
         // 捕获当前闸门实例：配置变更会整体替换 _replyGate，
         // Wait 与 Release 必须作用在**同一个对象**上。
         var gate = _replyGate;
@@ -1116,6 +1133,7 @@ public sealed class ReplyPipeline
 
             _inFlight.TryRemove(sourceKey, out _);
             LastActiveRequestTime = Clock.LocalDateTime;
+            _traces.Complete(sourceKey, "done");
 
             // 限流期间被挡下的消息**不能就这么算了**（号主反馈“连续多人对话不回应”的根因）：
             // 以前 AllowReply 一返回 false，那条触发就彻底没人评估了 —— 群里连着说话时，
@@ -1258,29 +1276,17 @@ public sealed class ReplyPipeline
         {
             return;
         }
+        _traces.Node(conversation.SourceKey, TurnNodeKind.Context, "ok", count: turn.Context.Count);
 
         CompletionResult result;
 
         try
         {
-            result = await _brain.CompleteAsync(
-                turn.Context,
-                turn.Profiles.Count > 0 ? string.Join("\n\n", turn.Profiles) : null,
-                stickers: turn.StickerChoices.Count > 0 ? turn.StickerChoices : null,
-                pokeContext: turn.PokeContext,
-                moodText: turn.MoodText,
-                musicText: turn.MusicText,
-                linkText: turn.LinkText,
-                recallText: turn.RecallText,
-                enableWebSearch: turn.Snapshot.EnableWebSearch,
-                searchText: turn.SearchText,
-                groupRolesText: turn.GroupRoles,
-                vibeHint: turn.VibeHint,
-                proactive: proactive,
-                enableListen: turn.Snapshot.EnableMusic,
-                enableVoice: turn.Snapshot.EnableVoice,
-                enableAsk: turn.Snapshot.EnableQuestions,
-                enableToolRequest: turn.Snapshot.EnableApprovals);
+            // 批次 E：模型步骤交给有限步进循环（默认 1 步 = 只调一次，与改造前逐字一致）。
+            var outcome = await _turnLoop.RunAsync(
+                conversation.SourceKey, turn, caps, proactive, snapshot.MaxAgentSteps,
+                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2));
+            result = outcome.Result;
         }
         catch (Exception ex)
         {
@@ -1306,9 +1312,6 @@ public sealed class ReplyPipeline
         // 例外：**这一轮带着刚查到的资料**时不受门槛限制 —— 模型自评“现在插嘴合适吗”时
         // 往往给低分（它只是回来汇报查到的东西，不是要插话），结果就是“查了半天啥也不说”。
         // 查都查了，就得让它说出来；真不想说（空回复）时下面会把资料留给下一轮。
-        // 发言适合度门槛：以前只写在提示词里、代码不执行；现在真正生效。
-        // 模型未按 JSON 输出（Suitability == null）时按普通文本回复处理，不拦截。
-        //
         // 情绪介入（这一步才是“人性化陪伴”的关键）：先看它读到的气氛，再决定门槛 ——
         //   • 吵架/对线：不插嘴（门槛抬到 60，即“非说不可”才说）
         //   • 低落/求助/孤独：更愿意轻声接一句（门槛降 10），但禁掉表情包/语音/戳（人家难过时发图很尬）
@@ -2014,10 +2017,13 @@ public sealed class ReplyPipeline
         _registry.Save();
 
         var sent = voiceSent;
-        if (textReply is not null && await _plain.SendWithCadenceAsync(isGroup, targetId, textReply, replyTo))
+        var sentText = textReply is not null && await _plain.SendWithCadenceAsync(isGroup, targetId, textReply, replyTo);
+        if (sentText)
         {
             sent = true;
         }
+        _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound,
+            textReply is null ? "silent" : sentText ? "sent" : "blocked", count: textReply?.Length);
 
         if (sticker is not null)
         {

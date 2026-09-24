@@ -415,6 +415,8 @@ const document = {
 const RUNTIME = {
   botPersona: "老群友", messageWhitelist: "123,456", aiDesire: 50, suitabilityThreshold: 10,
   aiModeEnabled: true, maxTokens: 4096, groupCooldownSeconds: 8, privateCooldownSeconds: 3,
+  // 批次 E：聊天侧有限步进循环（1 = 与改造前逐字一致）
+  maxAgentSteps: 1,
   idleFallbackSeconds: 60, splitReplies: true, segmentDelayMs: 700, maxContextMessages: 200,
   profileLookupCount: 8, profileSummaryLines: 8, maxProfileChars: 1200,
   maxMessagesPerConversation: 500, maxConcurrentReplies: 2, enableProfileSummary: true,
@@ -471,6 +473,14 @@ let serverDevices = [];
 let agentStatusFails = false;      // 模拟“设备表拉不到”
 let settingsDelayMs = 0;           // 模拟保存请求在飞（用来看保存期间的新编辑会不会被回填盖掉）
 let agentStatusHits = 0;
+// 批次 I：待批单列表（服务端合成一份；面板要画卡、也要能批准）
+let approvalsPayload = {
+  available: true, enabled: true, tokenConfigured: true, canDecide: true,
+  pending: [{
+    id: "ABC234", tool: "demo.echo", summary: "执行固定假工具 demo.echo（演示用，无真实副作用）",
+    key: "群聊 100***01", expiresInSeconds: 96, policyVersion: 3
+  }]
+};
 const deviceNames = () => serverDevices.map((d) => d.name);
 const statusPayload = {
   status: {
@@ -521,7 +531,12 @@ const fetchStub = async (url, opts) => {
           enabled: true, time: "18:00", targets: "10001", targetList: [10001],
           nextRunAt: "2026-09-19T18:00:00+08:00", lastSentAt: null, lastError: null, sentCount: 0
         };
-    } else if (target.includes("/api/participation")) {
+  } else if (target.includes("/api/approvals/decide")) {
+    // 批次 I 的写路径：探针只记下这次调用，返回一个“已批准”的合成结果
+    payload = { ok: true, decided: "approve", reason: "approved" };
+  } else if (target.includes("/api/approvals")) {
+    payload = approvalsPayload;
+  } else if (target.includes("/api/participation")) {
       // P1：参与状态只读接口（会话名已由服务端按脱敏开关处理）
       payload = {
         policy: "连续 ≤3 / 冷却 20s / 试探 ≤1 / 活性命 900s / 退场 180s",
@@ -1244,6 +1259,275 @@ check("部署实况标识仍在（提示里的容器/镜像名与服务器一致
   (html.includes("qqchat-bot") || js.includes("qqchat-bot")) &&
   (html.includes("qqchat-agent:prev") || js.includes("qqchat-agent:prev")), "");
 
+/// 递归收集一个桩元素的全部文本（追踪页与仪表盘两处只读页面共用）。
+function deepTextOf(node) {
+  let out = String(node.textContent || "");
+  for (const child of node.children || []) out += "\n" + deepTextOf(child);
+  return out;
+}
+
+/* ─────────── O) 追踪页（批 H）：新文件必须一起进护栏 ─────────── */
+
+console.log("\n▶ 追踪页（批 H）：trace.js / trace.css 也在探针里");
+
+const traceJs = fs.readFileSync(path.join(root, "trace.js"), "utf8");
+const traceCss = fs.readFileSync(path.join(root, "trace.css"), "utf8");
+const routes = fs.readFileSync(path.resolve(here, "../../src/BotAgent.Headless/Adapters/Panel/PanelRoutes.cs"), "utf8");
+
+check("index.html 引了 trace.js 与 trace.css（与 app.js/app.css 同一套路，不依赖 CDN）",
+  html.includes('src="/trace.js"') && html.includes('href="/trace.css"'));
+
+check("追踪页容器与两个导航入口都在（桌面 data-page=trace + 手机标签）",
+  html.includes('id="pageTrace"') && (html.match(/data-page="trace"/g) || []).length === 2);
+
+check("★ 静态资源路由加了 trace.js / trace.css（新增文件 = 加一行路由，别只加文件）",
+  routes.includes('"/trace.js"') && routes.includes('"/trace.css"'));
+
+check("★ trace.js 不用 innerHTML 拼字符串（服务端来的工具名/原因码一律文本节点）",
+  !/innerHTML\s*=/.test(traceJs) && traceJs.includes("createElement") && traceJs.includes("textContent"));
+
+check("trace.js 里没有旧桌面实现的血缘词", !["WinUI", "Fluent", "Mica"].some((w) => traceJs.includes(w)));
+
+// 批次 I 之后：这一页**不再**是纯只读 —— 它多了“审批决定”这一条写路径（高权限，前置 fail-closed）。
+// 断言改成“写路径有且只有审批这一条”，而不是不许有写入。
+check("★ 追踪页的写路径有且只有审批决定（/api/approvals/decide）",
+  (traceJs.match(/PanelApi\.post\(/g) || []).length === 1 &&
+  traceJs.includes("/api/approvals/decide") &&
+  !/fetch\([^)]*method:\s*"(?:PUT|DELETE|PATCH)"/.test(traceJs));
+
+check("app.js 里：切页时显隐 pageTrace 且进页拉一次（+ 手动刷新按钮）",
+  /pageTrace"\)\.hidden = page !== "trace"/.test(js) && js.includes("loadTraces()") &&
+  js.includes("traceRefresh"));
+
+// 动态：把 trace.js 跑进同一个沙箱，喂一份合成轨迹，看六张卡与颜色语义是否真的画出来。
+let traceRenderError = null;
+try {
+  vm.runInContext(traceJs, sandbox, { filename: "trace.js" });
+
+  const payload = {
+    available: true, count: 1, active: 0, capacity: 50,
+    traces: [{
+      runId: "t1", key: "群聊 100***01", channel: "私域", startedAt: Date.now(), outcome: "done", totalMs: 847,
+      nodes: [
+        { kind: "Context", status: "ok", ms: 12, tool: null, reason: null, count: 6 },
+        { kind: "Model", status: "ok", ms: 800, tool: null, reason: null, count: null },
+        { kind: "Gate", status: "denied", ms: 3, tool: "web.search", reason: "not_allowlisted", count: null },
+        { kind: "Outbound", status: "sent", ms: 5, tool: null, reason: null, count: 18 }
+      ]
+    }]
+  };
+
+  sandbox.TracePage.render(payload);
+
+  const timeline = document.getElementById("traceRuns");
+  const detail = document.getElementById("traceDetail");
+  const keys = document.getElementById("traceKeys");
+  const timelineText = deepTextOf(timeline);
+
+  check("★ 时间轴把六张卡都画出来（4 个节点 + 2 个未发生的组 = 6 张卡 + 1 行概况）",
+    timeline.children.length === 7, "子节点数=" + timeline.children.length);
+
+  check("★ 卡片按 ①–⑥ 的顺序（参与判断在最前，净化与发送在最后）",
+    timelineText.indexOf("① 参与判断") >= 0 &&
+    timelineText.indexOf("① 参与判断") < timelineText.indexOf("④ 工具闸门") &&
+    timelineText.indexOf("④ 工具闸门") < timelineText.indexOf("⑥ 净化与发送"));
+
+  check("★ 这一轮没走到的步骤如实写「未发生」（不假装六步都跑了）",
+    timelineText.includes("未发生") && timelineText.includes("这一轮没走到这一步。"));
+
+  check("★ 闸门那一步连着工具名与原因码（卡片要画的就是这俩）",
+    timelineText.includes("web.search") && timelineText.includes("not_allowlisted"));
+
+  check("★ 颜色语义：拒绝 = bad、放行/已发出 = ok、未发生 = mute",
+    timelineText.includes("拒绝") && timelineText.includes("已发出") &&
+    timeline.children.some((c) => String(c.className || "").includes("trace-card")));
+
+  check("★ 详情栏列出本轮事实（runId / 总耗时 / 节点数），且最近几轮可点",
+    deepTextOf(detail).includes("t1") && deepTextOf(detail).includes("847ms") &&
+    deepTextOf(detail).includes("最近 1 轮"));
+
+  check("★ 会话列按脱敏后的 key 分组（不是原始会话 key）", deepTextOf(keys).includes("群聊 100***01"));
+
+  check("★ 渲染只用文本节点：画出来的元素 innerHTML 全为空串",
+    [timeline, detail, keys].every((host) => (host.children || []).every((c) => String(c.innerHTML || "") === "")));
+
+  check("★ 轨迹不可用时给一句人话（不白屏、不抛异常）",
+    (() => { sandbox.TracePage.render({ available: false }); 
+      const empty = deepTextOf(document.getElementById("traceRuns"));
+      sandbox.TracePage.render(payload);
+      return empty.includes("还没有轨迹"); })());
+} catch (e) {
+  traceRenderError = e;
+}
+
+check("★ trace.js 能在最小 DOM 桩里真跑一遍", traceRenderError === null,
+  traceRenderError ? String(traceRenderError && traceRenderError.message) : "");
+
+/* ─────────── P) 仪表盘（批 J） ─────────── */
+
+console.log("\n▶ 仪表盘（批 J）：dash.js 也在探针里");
+
+const dashJs = fs.readFileSync(path.join(root, "dash.js"), "utf8");
+
+check("index.html 引了 dash.js，且有页面容器与两个导航入口",
+  html.includes('src="/dash.js"') && html.includes('id="pageDash"') &&
+  (html.match(/data-page="dash"/g) || []).length === 2);
+
+check("★ /dash.js 排在静态资源路由里（新增文件 = 加一行路由）", routes.includes('"/dash.js"'));
+
+check("★ dash.js 不用 innerHTML（服务端来的数字与文字一律文本节点）",
+  !/innerHTML\s*=/.test(dashJs) && dashJs.includes("createElement") && dashJs.includes("textContent"));
+
+check("★ 仪表盘是纯只读的（没有写路径）", !/POST/.test(dashJs));
+
+check("app.js 里：切页时显隐 pageDash 且进页拉一次（+ 手动刷新）",
+  /pageDash"\)\.hidden = page !== "dash"/.test(js) && js.includes("loadDashboard()") && js.includes("dashRefresh"));
+
+let dashError = null;
+try {
+  vm.runInContext(dashJs, sandbox, { filename: "dash.js" });
+
+  const dashData = {
+    uptimeSeconds: 3720, aiMode: true, onebot: true, accountOnline: true,
+    conversations: 7, inFlight: 1, queued: 2, latencyMs: 4200,
+    memory: { usedBytes: 268435456, limitBytes: 1073741824 },
+    load: 0.42,
+    tools: { total: 26, chat: 10, qq: 10, server: 6, highRisk: 11, needApproval: 0, executors: 4, healthy: true },
+    sessionPolicy: { available: true, sessions: 3, stale: 0, rebuilt: 1 },
+    traces: { available: true, recent: 12, active: 1, capacity: 50 }
+  };
+
+  sandbox.DashPage.render(dashData);
+
+  const grid = document.getElementById("dashGrid");
+  const dashText = deepTextOf(grid);
+
+  check("★ 一屏摊开 10 张数字卡（运行 / AI / 协议端 / 会话 / 延迟 / 内存 / 负载 / 工具 / 权限 / 轨迹）",
+    grid.children.length === 10, "卡片数=" + grid.children.length);
+
+  check("★ 内存按人话显示（工作集 + 容器上限 + 占用百分比）",
+    dashText.includes("256 MB") && dashText.includes("1.00 GB") && dashText.includes("25%"));
+
+  check("★ 延迟用最近一轮的实测值（毫秒）", dashText.includes("4200ms"));
+
+  check("★ 工具目录 / 会话权限 / 轨迹三块都来自各自的数据面（不是另算一份）",
+    dashText.includes("高风险") && dashText.includes("执行者 4") &&
+    dashText.includes("重建过 1") && dashText.includes("最多留 50"));
+
+  check("★ 渲染只用文本节点（画出来的元素 innerHTML 全为空串）",
+    (grid.children || []).every((c) => String(c.innerHTML || "") === ""));
+
+  check("★ 数据没到时不白屏（给一句人话）",
+    (() => { sandbox.DashPage.render(null); const t = deepTextOf(grid); sandbox.DashPage.render(dashData); return t.includes("刷新"); })());
+} catch (e) {
+  dashError = e;
+}
+
+check("★ dash.js 能在最小 DOM 桩里真跑一遍", dashError === null,
+  dashError ? String(dashError && dashError.message) : "");
+
+/* ─────────── Q) 面板审批卡（批 I） ─────────── */
+
+console.log("\n▶ 面板审批卡（批 I）：写路径 + 两条 fail-closed");
+
+/// 递归收集：某个元素里所有文本、以及所有文案等于某个标签的元素（按钮就靠它找）
+function collectNodes(node, out) {
+  out.push(node);
+  for (const child of node.children || []) collectNodes(child, out);
+  return out;
+}
+
+const nodesOf = (host) => collectNodes(host, []);
+const textsOf = (host) => nodesOf(host).map((n) => String(n.textContent || "")).filter((t) => t.length > 0);
+
+check("★ trace.js 走 window.PanelApi（复用 app.js 的令牌注入，不自己拼请求头）",
+  traceJs.includes("window.PanelApi.post") && traceJs.includes("window.PanelApi.get") &&
+  js.includes("window.PanelApi = {"));
+
+check("★ 写路径指向 /api/approvals/decide（唯一一条写路径）",
+  traceJs.includes("/api/approvals/decide") && traceJs.includes("/api/approvals"));
+
+{
+  // ① 审批开着 + 令牌已配：画出待批单与两个按钮
+  approvalsPayload = {
+    available: true, enabled: true, tokenConfigured: true, canDecide: true,
+    pending: [{
+      id: "ABC234", tool: "demo.echo", summary: "执行固定假工具 demo.echo（演示用，无真实副作用）",
+      key: "群聊 100***01", expiresInSeconds: 96, policyVersion: 3
+    }]
+  };
+  sandbox.TracePage.render({
+    available: true, count: 0, active: 0, capacity: 50, traces: []
+  }, approvalsPayload);
+
+  const detail = document.getElementById("traceDetail");
+  const texts = textsOf(detail);
+  const buttons = nodesOf(detail).filter((n) => String(n.textContent || "") === "批准" || String(n.textContent || "") === "拒绝");
+
+  check("★ 待批单画出来了（编号 / 工具 / 摘要 / 脱敏 key / 剩余秒数）",
+    texts.some((t) => t.includes("ABC234")) && texts.some((t) => t.includes("demo.echo")) &&
+    texts.some((t) => t.includes("群聊 100***01")) && texts.some((t) => t.includes("剩 96 秒")));
+
+  check("★ 批准 / 拒绝两个按钮都在", buttons.length === 2,
+    "按钮数=" + buttons.length + "；文本=" + texts.join("|").slice(0, 120));
+
+  // ② 未配面板令牌：明确写出原因，且**一个按钮都不给**（fail-closed）
+  approvalsPayload = { available: true, enabled: true, tokenConfigured: false, canDecide: false, pending: [] };
+  sandbox.TracePage.render({ available: true, count: 0, active: 0, capacity: 50, traces: [] }, approvalsPayload);
+  const lockedTexts = textsOf(document.getElementById("traceDetail"));
+  const lockedButtons = nodesOf(document.getElementById("traceDetail"))
+    .filter((n) => String(n.textContent || "") === "批准" || String(n.textContent || "") === "拒绝");
+  check("★ 未配面板令牌 → 写明原因且不给按钮（fail-closed）",
+    lockedTexts.some((t) => t.includes("未配置面板令牌")) && lockedButtons.length === 0,
+    "按钮数=" + lockedButtons.length);
+
+  // ③ 审批总开关关着（默认）：整块不出现
+  approvalsPayload = { available: true, enabled: false, tokenConfigured: true, canDecide: false, pending: [] };
+  sandbox.TracePage.render({ available: true, count: 0, active: 0, capacity: 50, traces: [] }, approvalsPayload);
+  const offTexts = textsOf(document.getElementById("traceDetail"));
+  check("★ 审批默认关 → 待审批卡整块不出现",
+    !nodesOf(document.getElementById("traceDetail"))
+      .some((n) => String(n.className || "").includes("trace-approvals")),
+    offTexts.join("|").slice(0, 120));
+
+  // ④ 写路径：decide() 真的 POST 出去（用的是面板那层桥）
+  approvalsPayload = {
+    available: true, enabled: true, tokenConfigured: true, canDecide: true,
+    pending: [{
+      id: "ABC234", tool: "demo.echo", summary: "x", key: "群聊 100***01", expiresInSeconds: 60, policyVersion: 3
+    }]
+  };
+  const before = calls.length;
+  sandbox.TracePage.decide("ABC234", true);
+  await new Promise((r) => setTimeout(r, 30));
+  const posted = calls.slice(before).find((c) => String(c.url).includes("/api/approvals/decide"));
+  check("★ 点批准 → POST /api/approvals/decide（带编号与 approve=true）",
+    !!posted && posted.method === "POST" && JSON.parse(posted.body).id === "ABC234" &&
+    JSON.parse(posted.body).approve === true,
+    posted ? `${posted.method} ${posted.url} ${posted.body}` : "没有发出请求");
+}
+
+/* ─────────── R) 聊天步进循环上限（批 E） ─────────── */
+
+console.log("\n▶ 聊天步进循环（批 E）：控件 / 回填 / 真的发出去");
+
+check("index.html 有步进循环控件（1~3，默认 1）",
+  html.includes('id="setMaxAgentSteps"') && /id="setMaxAgentSteps" min="1" max="3"/.test(html) &&
+  html.includes('id="agentStepsVal"'));
+
+check("★ app.js 回填它（loadSettings 与 saveSettings 字段集合必须一致）",
+  js.includes('$("setMaxAgentSteps").value = r.maxAgentSteps') &&
+  js.includes("maxAgentSteps: Number("));
+
+check("★ 保存请求带 maxAgentSteps（回填的是 1，发出去的也是 1）",
+  (() => {
+    const sent = calls.filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
+    return !!sent && JSON.parse(sent.body).maxAgentSteps === 1;
+  })(),
+  (() => {
+    const sent = calls.filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
+    return sent ? "最后一次保存：" + sent.body : "没有保存请求";
+  })());
 console.log("");
 if (failures.length === 0) {
   console.log(`通过 ${pass}，失败 0`);

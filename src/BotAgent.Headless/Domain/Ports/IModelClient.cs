@@ -51,8 +51,13 @@ public interface IModelClient
         string? groupRolesText = null,
         string? vibeHint = null,
         bool proactive = false,
-        bool enableAsk = false,
-        bool enableToolRequest = false);
+    bool enableAsk = false,
+    bool enableToolRequest = false,
+
+    // 批次 D（让模型看见工具）：服务端**按策略裁剪过的**工具清单（纯文本，由 ToolPromptText 生成）。
+    // 为什么从外面传进来而不是在客户端里现算：策略快照属于本轮（V3 §5.3），
+    // 客户端只该"说了什么"，不该自己决定"哪些工具能用"。
+    string? toolList = null);
 
     /// <summary>一次"问一句、要一段文字"的调用（服务器 agent 的工具循环用它）。</summary>
     Task<string?> CompleteChatAsync(

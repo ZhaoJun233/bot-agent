@@ -46,7 +46,13 @@ public static class PromptBuilder
         int VoiceEagerness,
         bool EnableWebSearch,
         bool EnableAsk,
-        bool EnableToolRequest);
+        bool EnableToolRequest,
+
+        /// <summary>
+        /// 批次 D：服务端按策略裁剪过的工具清单（由 <see cref="Tools.ToolPromptText" /> 生成）。
+        /// 空 = 这次一个工具都没开 → 整段不出现（与“开关全关时提示词逐字不变”的纪律一致）。
+        /// </summary>
+        string? ToolList);
 
     /// <summary>把这一轮的系统提示词拼出来（纯字符串拼接，不发任何请求）。</summary>
     public static string Build(PromptRequest request)
@@ -93,6 +99,12 @@ public static class PromptBuilder
         if (request.EnableAsk || request.EnableToolRequest)
         {
             systemContent += BuildActionContract(request.EnableAsk, request.EnableToolRequest);
+        }
+
+        // 批次 D：工具清单（只列这次开着的；参数说明已被渲染层截短）。
+        if (!string.IsNullOrWhiteSpace(request.ToolList))
+        {
+            systemContent += request.ToolList;
         }
 
 

@@ -143,6 +143,12 @@
     return data;
   }
 
+  /// 给同源页面脚本（trace.js / dash.js）用的一层小桥：它们不重复实现令牌注入与 401 处理。
+  window.PanelApi = {
+    get: (path) => api(path),
+    post: (path, body) => api(path, { method: "POST", body: JSON.stringify(body) })
+  };
+
   /* ─────────── 手机端主从切换 ───────────
      窄屏下会话列表与聊天区不再并排（一屏放不下）：
      默认只看列表，点进会话才切到聊天，头部有返回键，底部有标签栏。
@@ -1185,6 +1191,8 @@ function renderConversations(force) {
     $("desireVal").textContent = r.aiDesire;
     $("setThreshold").value = r.suitabilityThreshold;
     $("threshVal").textContent = r.suitabilityThreshold;
+    $("setMaxAgentSteps").value = r.maxAgentSteps;
+    $("agentStepsVal").textContent = r.maxAgentSteps;
     $("setAiMode").checked = r.aiModeEnabled;
     $("setGroupCooldown").value = r.groupCooldownSeconds;
     $("setPrivateCooldown").value = r.privateCooldownSeconds;
@@ -1409,6 +1417,7 @@ function renderConversations(force) {
       whitelistPrivates: $("setWhitelistPrivates").value,
       aiDesire: Number($("setDesire").value),
       suitabilityThreshold: Number($("setThreshold").value),
+      maxAgentSteps: Number($("setMaxAgentSteps").value),
       aiModeEnabled: $("setAiMode").checked,
       maxTokens: Number($("setMaxTokens").value),
       groupCooldownSeconds: Number($("setGroupCooldown").value),
@@ -1846,6 +1855,37 @@ function renderConversations(force) {
   /* ─────────── 启动 ─────────── */
 
   /// 切页。离开设置页且有未保存的修改时会先问一句 ——
+
+  /* ─────────── 仪表盘（批 J）：只读一屏；数字与徽标都在 dash.js 里画 ─────────── */
+
+  async function loadDashboard() {
+    if (!window.DashPage) return;
+    try {
+      const data = await api("/api/dashboard");
+      window.DashPage.render(data);
+      const summary = 更新于 ;
+      if (dashSummary) dashSummary.textContent = summary;
+    } catch (e) {
+      console.error("loadDashboard failed", e);
+      toast("加载仪表盘失败：" + e.message);
+    }
+  }
+
+  /* ─────────── 追踪页（批 H）：数据与渲染都在 trace.js，这里只把服务端那份拉过来 ─────────── */
+
+  /// 读一轮轨迹。**只读**：这一页对服务端零写入（不做设置保存、不发消息）。
+  async function loadTraces() {
+    if (!window.TracePage) return;
+    try {
+      // 轨迹 + 待批单一起拉（批次 I 的审批卡与时间轴同屏）
+      const [traces, approvals] = await Promise.all([api("/api/traces?limit=20"), api("/api/approvals")]);
+      window.TracePage.render(traces, approvals);
+    } catch (e) {
+      // 与其它加载失败一致：控制台留原始异常，界面上给一句人话
+      console.error("loadTraces failed", e);
+      toast("加载追踪数据失败：" + e.message);
+    }
+  }
   /// 否则用户会以为“改了自动复原”：其实是从未保存，回页时又被服务端值回填了。
   function showPage(page) {
     if (page !== "settings" && !$("pageSettings").hidden && settingsDirty &&
@@ -1858,6 +1898,8 @@ function renderConversations(force) {
     }
 
     $("pageChat").hidden = page !== "chat";
+    $("pageTrace").hidden = page !== "trace";
+    $("pageDash").hidden = page !== "dash";
     $("pageSettings").hidden = page !== "settings";
 
     if (page === "settings") {
@@ -1871,6 +1913,8 @@ function renderConversations(force) {
       if (refreshSettingsNav) setTimeout(refreshSettingsNav, 0);
     }
     if (page === "chat" && needsLogin()) pollLogin(false);
+    if (page === "trace") loadTraces();
+    if (page === "dash") loadDashboard();
     if (page === "settings") {
       // 去设置页就把聊天视图收起来：回来时看到的是列表，而不是停在某个会话上
       state.chatOpen = false;
@@ -1886,6 +1930,12 @@ function renderConversations(force) {
     for (const btn of document.querySelectorAll(".navitem, .mtab")) {
       btn.addEventListener("click", () => showPage(btn.dataset.page));
     }
+
+    // 追踪页的刷新（页面本身只读；SSE 也能推，但这里先给一个明确的手动入口）
+    $("traceRefresh").addEventListener("click", () => { loadTraces(); });
+
+    // 仪表盘的刷新（同样是只读页，与追踪页一样给一个明确的手动入口）
+    $("dashRefresh").addEventListener("click", () => { loadDashboard(); });
 
     // 手机端：从聊天返回会话列表
     $("chatBack").addEventListener("click", () => {

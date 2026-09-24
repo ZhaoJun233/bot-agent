@@ -129,7 +129,13 @@ public sealed partial class WebUiServer
         if (body["whitelistGroups"] is JsonNode wlg) s.WhitelistGroups = wlg.GetValue<string>() ?? string.Empty;
         if (body["whitelistPrivates"] is JsonNode wlp) s.WhitelistPrivates = wlp.GetValue<string>() ?? string.Empty;
             if (body["aiDesire"] is JsonNode desire) s.AiDesire = Math.Clamp(desire.GetValue<int>(), 0, 100);
-            if (body["suitabilityThreshold"] is JsonNode th) s.SuitabilityThreshold = Math.Clamp(th.GetValue<int>(), 0, 100);
+        if (body["suitabilityThreshold"] is JsonNode th) s.SuitabilityThreshold = Math.Clamp(th.GetValue<int>(), 0, 100);
+        // 批次 E：聊天侧有限步进循环的上限（1 = 与改造前逐字一致；钳到 1..3，与 AgentTurnLoop 同一口径）
+        if (body["maxAgentSteps"] is JsonNode steps) s.MaxAgentSteps = Math.Clamp(steps.GetValue<int>(), 1, 3);
+        // 批次 F：本地通道名单（空 = 整条通道都不建；改它要重启才生效 —— 通道是在装配点建的，热更新只改名单）
+        if (body["localChannelIds"] is JsonNode locals) s.LocalChannelIds = locals.GetValue<string>() ?? string.Empty;
+        // // 那路要不要过统一闸门（默认关 = 与今天逐字一致）
+        if (body["agentServerUseGate"] is JsonNode useGate) s.AgentServerUseGate = useGate.GetValue<bool>();
             if (body["aiModeEnabled"] is JsonNode ai) s.AiModeEnabled = ai.GetValue<bool>();
             if (body["maxTokens"] is JsonNode mt) s.MaxTokens = Math.Clamp(mt.GetValue<int>(), 64, 32000);
             if (body["groupCooldownSeconds"] is JsonNode gc) s.GroupCooldownSeconds = Math.Max(0, gc.GetValue<int>());
@@ -538,7 +544,10 @@ public sealed partial class WebUiServer
                 ["fastReply"] = s.FastReply,
                 ["fastModel"] = s.FastModel,
                 ["replyModel"] = s.ReplyModel,
-                ["suitabilityThreshold"] = s.SuitabilityThreshold,
+        ["suitabilityThreshold"] = s.SuitabilityThreshold,
+        ["maxAgentSteps"] = s.MaxAgentSteps,
+        ["localChannelIds"] = s.LocalChannelIds,
+        ["agentServerUseGate"] = s.AgentServerUseGate,
                 ["aiModeEnabled"] = s.AiModeEnabled,
                 ["maxTokens"] = s.MaxTokens,
                 ["groupCooldownSeconds"] = s.GroupCooldownSeconds,

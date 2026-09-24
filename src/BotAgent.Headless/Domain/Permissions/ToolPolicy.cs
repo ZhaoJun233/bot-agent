@@ -14,7 +14,23 @@ public sealed record ToolPolicy(
     IReadOnlySet<ToolCategory>? ApprovableCategories = null,
     int PolicyVersion = 1,
     IReadOnlySet<ToolCategory>? ApprovalRequiredCategories = null,
-    IReadOnlySet<string>? ApprovalRequiredTools = null)
+    IReadOnlySet<string>? ApprovalRequiredTools = null,
+
+    /// <summary>
+    /// **显式点名**的高风险工具（FileOrShell / RemoteAgent / SettingsWrite / OtherConversationRead 这几档）。
+    ///
+    /// 为什么要有它：`//` 那一路的 bash / read / write / docker 属于 FileOrShell，
+    /// 而这一类在 §9.1 里是“任何审批都不放开”。它们今天能跑，靠的是**另一条已存在的授权边界**
+    /// （面板开关 + 工作目录 + 命令超时 + docker 两把锁）—— 那是既成事实，不是漏洞。
+    /// 这个字段把那条边界**显式写成数据**（§5.2 第 2 步：“这一类被策略显式放行，仅限 // 路径”），
+    /// 于是“为什么它没被闸门拦住”有答案，而不是靠“没人发现”。
+    ///
+    /// 三条纪律：
+    ///   · **默认 null = 一个都不放开**（聊天那路永远拿不到文件/shell）；
+    ///   · **只按工具名点名**，不是按类别 —— 列了 bash 不会连带放开 docker；
+    ///   · **与审批无关**：它不改变 ApprovableCategories 的口径，票据仍然放不开高风险类别（I3 不变）。
+    /// </summary>
+    IReadOnlySet<string>? HighRiskExceptions = null)
 {
     /// <summary>最低权限策略：一个能力都不开（配置解析失败 / 策略缺失时用它，V3 §9.2）。</summary>
     public static ToolPolicy DenyAll(int policyVersion = 1)
@@ -66,7 +82,9 @@ public sealed record ToolPolicy(
             + " budget=" + MaxCallsPerRun
             + " appr[" + JoinCats(ApprovableCategories) + "]"
             + " needCat[" + JoinCats(ApprovalRequiredCategories) + "]"
-            + " needTool[" + Join(ApprovalRequiredTools) + "]";
+            + " needTool[" + Join(ApprovalRequiredTools) + "]"
+            // 例外必须进指纹：放开/收回某个高风险工具是**能力变化**，审批单该因此作废（与其它字段同一口径）
+            + " highRisk[" + Join(HighRiskExceptions) + "]";
     }
 }
 

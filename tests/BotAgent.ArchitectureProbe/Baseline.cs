@@ -20,7 +20,19 @@ internal static class Baseline
     /// `Domain/Conversation/`，而它本来就 import 了 `Domain.Conversation`，于是与 `Domain.Ports` 合并）。
     /// 这一格只许往下调；下次谁把它拆小，记得同步这里。
     /// </summary>
-    public const int MaxFileLines = 2314;
+    /// <summary>
+    /// 2026-09-24（通用 Agent 平台 · 批次 C 决策轨迹）：2314 → **2328**（+14）。
+    /// 明细：五个埋点调用（Begin / Context / Model / Outbound / Complete）、轨迹字段与构造参数、两条 using。
+    /// 这是**机制成本**，如实登记（同批次 2 的先例）——**批次 E（聊天侧有限步进循环）必须还回去**：
+    /// 那一批本来就要重构回复主链，届时把这些行收进循环骨架里。
+    /// </summary>
+    /// <summary>
+    /// 2026-09-24（批次 E 有限步进循环）：2328 → **2320** —— 上面登记的债**当场还了一部分**：
+    /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `Services/Reply/AgentTurnLoop.cs`，
+    /// “当场做掉只读工具”搬进 `Services/Reply/InlineTurnTools.cs`。
+    /// 这格仍然只许往下调：回复主链里动作分派那一段还能拆，谁接着拆记得同步这里。
+    /// </summary>
+    public const int MaxFileLines = 2320;
     public const string BotAgentHostPath = "Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。

@@ -49,8 +49,12 @@ public static class ToolGate
             return new ToolDecision(false, "not_allowlisted");
         }
 
-        // 高风险档：**任何**审批都不能放开（这条必须在审批判断之前）
-        if (ToolDescriptor.AlwaysDenied(descriptor.Category))
+        // 高风险档：**任何**审批都不能放开（这条必须在审批判断之前）。
+        // 唯一的出口是策略**显式点名**的那几个（ToolPolicy.HighRiskExceptions）——
+        // 那是“另一条已存在的授权边界”的显式化（只可能来自服务端配置：// 路径的面板开关 + 工作目录 + 超时），
+        // 不是审批放开的，也不是模型/网页能影响的。默认 null = 一个都不放开。
+        if (ToolDescriptor.AlwaysDenied(descriptor.Category)
+            && !(policy.HighRiskExceptions?.Contains(descriptor.Id) ?? false))
         {
             return new ToolDecision(false, "category_denied", descriptor.Category.ToString());
         }

@@ -29,6 +29,12 @@ public sealed class WhitelistGate
     private HashSet<long> _officialPrivates = new();
     private bool _officialAllPrivates = true;
 
+    /// <summary>
+    /// 本地通道（批次 F）：**空 = 一个人都不收**（fail-closed）。
+    /// 与官方那条“空 = 全收”故意不同 —— 官方平台自己有准入与额度，本地通道是自建入口，没名单就不该开。
+    /// </summary>
+    private HashSet<long> _local = new();
+
     /// <summary>哪一边在用旧的共用名单（面板上要如实显示，不然号主会以为新框填了没生效）。</summary>
     private bool _groupsFromLegacy;
     private bool _privatesFromLegacy;
@@ -70,6 +76,11 @@ public sealed class WhitelistGate
         (_officialPrivates, _officialAllPrivates) = string.IsNullOrWhiteSpace(officialPrivates)
             ? (new HashSet<long>(), true)
             : WhitelistPolicy.ParseWhitelist(officialPrivates);
+
+        // 本地通道：只有点名才算数（空 = 全拦）。配置里写的是**短 id**（1、2、1001…），
+        // 这里换算成内部目标号（+ LocalBase）—— 超出范围的直接丢掉（fail-closed，不让它撞进官方号段）。
+        var (localIds, _) = WhitelistPolicy.ParseWhitelist(_settings.LocalChannelIds);
+        _local = localIds.Select(Channels.LocalTarget).Where(id => id > 0).ToHashSet();
     }
 
     /// <summary>
@@ -103,7 +114,14 @@ public sealed class WhitelistGate
             return false;
         }
 
-        return Channels.IsOfficial(Channels.ChannelOf(sourceKey))
+        var channel = Channels.ChannelOf(sourceKey);
+        if (Channels.IsLocal(channel))
+        {
+            // 本地通道：只有点名的 id 收（空 = 全拦，fail-closed）
+            return _local.Contains(id);
+        }
+
+        return Channels.IsOfficial(channel)
             ? isGroup
                 ? _officialAllGroups || _officialGroups.Contains(id)
                 : _officialAllPrivates || _officialPrivates.Contains(id)
@@ -116,6 +134,7 @@ public sealed class WhitelistGate
         string Privates,
         string OfficialGroups,
         string OfficialPrivates,
+        string Local,
         bool GroupsFromLegacy,
         bool PrivatesFromLegacy,
         bool BothPrivateListsEmpty);
@@ -130,6 +149,8 @@ public sealed class WhitelistGate
             privates,
             WhitelistPolicy.WhitelistSummary(_officialAllGroups, _officialGroups),
             WhitelistPolicy.WhitelistSummary(_officialAllPrivates, _officialPrivates),
+            // 本地通道（批次 F）：没有“全收”这一档（空 = 全拦），汇总只报数量
+            _local.Count == 0 ? "无（全拦）" : _local.Count + " 个",
             _groupsFromLegacy,
             _privatesFromLegacy,
             groups is "(空，忽略全部)" && privates is "(空，忽略全部)");

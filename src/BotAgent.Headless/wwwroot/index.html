@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="Bot Agent" />
 <title>Bot Agent</title>
 <link rel="stylesheet" href="/app.css" />
+<link rel="stylesheet" href="/trace.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230067c0'/><svg x='7.5' y='7.5' width='17' height='17' viewBox='0 0 16 16'><path fill='%23ffffff' d='M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z'/></svg></svg>" />
 </head>
 <body>
@@ -40,6 +41,14 @@
     <button class="navitem active" data-page="chat" title="聊天">
       <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z"/></svg>
       <span>聊天</span>
+    </button>
+    <button class="navitem" data-page="trace" title="追踪">
+      <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 13.5h12v1.2H2zM3.6 12c-.5 0-.9-.4-.8-1l1.6-7.3c.1-.4.4-.7.8-.7h6.6c.4 0 .7.3.8.7L14.2 11c.1.6-.3 1-.8 1zm1.2-1.4h6.4l-.3-1.6H5.1zm.6-3h5.2l-.3-1.6H5.7zm.6-3h4l-.3-1.6h-3.4z"/></svg>
+      <span>追踪</span>
+    </button>
+    <button class="navitem" data-page="dash" title="仪表盘">
+      <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M2 8a6 6 0 1 0 12 0A6 6 0 0 0 2 8m1.4 0a4.6 4.6 0 0 1 3.9-4.5v9A4.6 4.6 0 0 1 3.4 8m5.3 4.5v-9a4.6 4.6 0 0 1 0 9"/></svg>
+      <span>仪表盘</span>
     </button>
     <button class="navitem" data-page="settings" title="设置">
       <svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2m0 1.4a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8"/><path fill="currentColor" d="m13.3 9.3-.9.5a4.5 4.5 0 0 1 0 1.4l.9.5a.6.6 0 0 1 .2.8l-.8 1.4a.6.6 0 0 1-.8.2l-.9-.5c-.4.3-.8.6-1.2.7v1a.6.6 0 0 1-.6.6H7.5a.6.6 0 0 1-.6-.6v-1a4.5 4.5 0 0 1-1.2-.7l-.9.5a.6.6 0 0 1-.8-.2l-.8-1.4a.6.6 0 0 1 .2-.8l.9-.5a4.5 4.5 0 0 1 0-1.4l-.9-.5a.6.6 0 0 1-.2-.8l.8-1.4a.6.6 0 0 1 .8-.2l.9.5c.4-.3.8-.6 1.2-.7v-1a.6.6 0 0 1 .6-.6h1.6a.6.6 0 0 1 .6.6v1c.4.1.8.4 1.2.7l.9-.5a.6.6 0 0 1 .8.2l.8 1.4a.6.6 0 0 1-.2.8"/></svg>
@@ -208,8 +217,13 @@
 
           <div class="field">
             <label>发言适合度阈值<span class="hint">模型评分低于此值则保持沉默</span><b class="val" id="threshVal">10</b></label>
-            <input type="range" id="setThreshold" min="0" max="60" step="5" />
-          </div>
+              <input type="range" id="setThreshold" min="0" max="60" step="5" />
+            </div>
+
+            <div class="field">
+              <label>聊天步进循环上限<span class="hint">1 = 只调一次模型（与改造前一致）；2~3 = 当场做完搜索/读页面再问一次</span><b class="val" id="agentStepsVal">1</b></label>
+              <input type="range" id="setMaxAgentSteps" min="1" max="3" step="1" />
+            </div>
 
           <label class="switch-row">
             <input type="checkbox" id="setAiMode" />
@@ -1300,10 +1314,43 @@
 <div class="toast" id="toast" hidden></div>
 
 <!-- ══════════ 手机端底部导航（桌面端隐藏）══════════ -->
+
+  <!-- ══════════════════ 仪表盘（批 J：一屏摊开，纯只读） ══════════════════ -->
+  <main class="page page-column" id="pageDash" hidden>
+    <div class="trace-bar">
+      <h1>健康仪表盘</h1>
+      <span class="path-hint" id="dashSummary">正在加载…</span>
+      <button class="btn" id="dashRefresh" type="button">刷新</button>
+    </div>
+    <div class="dash-grid" id="dashGrid"></div>
+  </main>
+
+  <!-- ══════════════════ 追踪页（批 H：一轮 = 六张卡，纯只读） ══════════════════ -->
+  <main class="page page-column" id="pageTrace" hidden>
+    <div class="trace-bar">
+      <h1>Agent 追踪</h1>
+      <span class="path-hint" id="traceSummary">正在加载…</span>
+      <button class="btn" id="traceRefresh" type="button">刷新</button>
+    </div>
+    <div class="trace-body">
+      <!-- 左：有轨迹的会话；中：选中那一轮的六张卡；右：本轮详情 + 最近若干轮 -->
+      <aside class="trace-col" id="traceKeys"></aside>
+      <section class="trace-col" id="traceRuns"></section>
+      <aside class="trace-col" id="traceDetail"></aside>
+    </div>
+  </main>
 <nav class="mtabbar" id="mTabbar">
   <button class="mtab active" data-page="chat">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z"/></svg>
     <span>会话</span>
+  </button>
+  <button class="mtab" data-page="trace">
+    <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 13.5h12v1.2H2zM3.6 12c-.5 0-.9-.4-.8-1l1.6-7.3c.1-.4.4-.7.8-.7h6.6c.4 0 .7.3.8.7L14.2 11c.1.6-.3 1-.8 1zm1.2-1.4h6.4l-.3-1.6H5.1zm.6-3h5.2l-.3-1.6H5.7zm.6-3h4l-.3-1.6h-3.4z"/></svg>
+    <span>追踪</span>
+  </button>
+  <button class="mtab" data-page="dash">
+    <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 8a6 6 0 1 0 12 0A6 6 0 0 0 2 8m1.4 0a4.6 4.6 0 0 1 3.9-4.5v9A4.6 4.6 0 0 1 3.4 8m5.3 4.5v-9a4.6 4.6 0 0 1 0 9"/></svg>
+    <span>仪表</span>
   </button>
   <button class="mtab" data-page="settings">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2m0 1.4a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8"/><path fill="currentColor" d="m13.3 9.3-.9.5a4.5 4.5 0 0 1 0 1.4l.9.5a.6.6 0 0 1 .2.8l-.8 1.4a.6.6 0 0 1-.8.2l-.9-.5c-.4.3-.8.6-1.2.7v1a.6.6 0 0 1-.6.6H7.5a.6.6 0 0 1-.6-.6v-1a4.5 4.5 0 0 1-1.2-.7l-.9.5a.6.6 0 0 1-.8-.2l-.8-1.4a.6.6 0 0 1 .2-.8l.9-.5a4.5 4.5 0 0 1 0-1.4l-.9-.5a.6.6 0 0 1-.2-.8l.8-1.4a.6.6 0 0 1 .8-.2l.9.5c.4-.3.8-.6 1.2-.7v-1a.6.6 0 0 1 .6-.6h1.6a.6.6 0 0 1 .6.6v1c.4.1.8.4 1.2.7l.9-.5a.6.6 0 0 1 .8.2l.8 1.4a.6.6 0 0 1-.2.8"/></svg>
@@ -1312,5 +1359,7 @@
 </nav>
 
 <script src="/app.js"></script>
+<script src="/trace.js"></script>
+<script src="/dash.js"></script>
 </body>
 </html>

@@ -78,6 +78,29 @@ public sealed partial class ApprovalStore
         return request;
     }
 
+    /// <summary>
+    /// 列出**所有还挂着**的待批单（面板的审批卡靠它；顺带把到期的推进成 Expired）。
+    /// 只读语义：不改任何单子的状态（除了“时间到了”这一条由时间本身决定的事实）。
+    /// 顺序按建立时间升序 —— 面板上先来的先显示（也方便先处理快过期的）。
+    /// </summary>
+    public IReadOnlyList<ApprovalRequest> Pending(DateTimeOffset now)
+    {
+        lock (_sync)
+        {
+            var list = new List<ApprovalRequest>();
+            foreach (var key in _byId.Keys.ToList())
+            {
+                var request = Expire(_byId[key], now);
+                if (request.Status == ApprovalStatus.Pending)
+                {
+                    list.Add(request);
+                }
+            }
+
+            return list.OrderBy(r => r.CreatedAt).ToArray();
+        }
+    }
+
     /// <summary>取一张审批单（顺带把到期状态推进为 Expired）。</summary>
     public ApprovalRequest? Get(string requestId, DateTimeOffset now)
     {

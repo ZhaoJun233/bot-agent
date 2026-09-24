@@ -258,5 +258,49 @@ public static partial class Program
         Check("★★ 第一次被拒、补看资料卡后重试成功：工具报的是“点了 1 个赞”，不是失败",
             likeAttempts8 == 2 && sawSuccess,
             $"send_like {likeAttempts8} 次（应为 2）· 工具报成功={sawSuccess}");
+
+        // ── ⑨ 批次 A 收尾：打开**统一闸门**后，`//` 的动作照旧能跑（判定与老白名单一致）──
+        var (gateCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerUseGate":true}""");
+        Check("面板能打开 `//` 的统一闸门开关", gateCode == 200, $"HTTP {gateCode}");
+
+        agentAi.AddRule("闸门开着也点个赞",
+            $$"""{"tool":"qq","action":"like","user_id":"sender","times":1}""",
+            """{"final":"闸门开着也点了。"}""");
+
+        var before9 = ActionCount("send_like");
+        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//闸门开着也点个赞", 17009,
+            mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("闸门开着也点了")), TimeSpan.FromSeconds(60));
+        await Task.Delay(400);
+
+        Check("★★ 闸门开着时 `//` 的动作照旧执行（判定与老白名单一致 → 零行为变化）",
+            ActionCount("send_like") - before9 == 1
+            && !bot.OutputLines.Any(l => l.Contains("闸门拒绝")),
+            $"send_like {ActionCount("send_like") - before9} 次（应为 1）");
+
+        // ── ⑩ 闸门**真的在判**：把 qq 从工具白名单里去掉 → 同一个动作必须被闸门拦下 ──
+        var (offCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerTools":"bash,read"}""");
+        Check("面板能把 qq 从工具白名单里去掉", offCode == 200, $"HTTP {offCode}");
+
+        agentAi.AddRule("闸门该拦下这一条",
+            $$"""{"tool":"qq","action":"like","user_id":"sender","times":1}""",
+            """{"final":"被拦了。"}""");
+
+        var before10 = ActionCount("send_like");
+        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//闸门该拦下这一条", 17010,
+            mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(
+            () => bot.OutputLines.Any(l => l.Contains("闸门拒绝")), TimeSpan.FromSeconds(60));
+        await Task.Delay(400);
+
+        // ServerAgentRunner 的日志只进**文件**（FileLog.Write("ServerAgent", …)），不在 stdout 里 ——
+        // 所以这里直接读那次运行的数据目录里的日志（与“被忽略/被拒绝”类断言的读法一致）。
+        var agentLogPath = Path.Combine(dataDir, "logs", "qqchat.log");
+        var agentLog = File.Exists(agentLogPath) ? File.ReadAllText(agentLogPath) : string.Empty;
+        var gateDeniedLogged = agentLog.Contains("闸门拒绝", StringComparison.Ordinal);
+        Check("★★ 闸门开着、白名单里没有 qq → 那一步**不执行**（闸门是真的在判，不是摆设）",
+            ActionCount("send_like") == before10 && gateDeniedLogged,
+            $"send_like 增加了 {ActionCount("send_like") - before10} 次（应为 0）· 日志里有闸门拒绝={gateDeniedLogged}");
+
     }
 }

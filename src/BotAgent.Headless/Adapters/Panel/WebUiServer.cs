@@ -17,6 +17,8 @@ using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Participation;
+using BotAgent.Services.Local;
+using BotAgent.Services.Permissions;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Reply;
 using BotAgent.Services.Settings;
@@ -140,6 +142,11 @@ public sealed partial class WebUiServer : IDisposable
         AgentCommandService agentCmds,
         AgentBridgeServer? agentBridge = null,
         HealthReportService? healthReports = null,
+        SessionPolicyLedger? sessionPolicies = null,
+        TurnTraceStore? traces = null,
+        IHostFacts? hostFacts = null,
+        ApprovalUseCase? approvals = null,
+        LocalChannelSource? localChannel = null,
         Action? onRestart = null)
     {
         _port = port;
@@ -169,6 +176,11 @@ public sealed partial class WebUiServer : IDisposable
         _agentCmds = agentCmds;
         _agentBridge = agentBridge;
         _healthReports = healthReports;
+        _sessionPolicies = sessionPolicies;
+        _traces = traces;
+        _hostFacts = hostFacts;
+        _approvals = approvals;
+        _localChannel = localChannel;
         _onRestart = onRestart;
 
         // 启动时把密钥库里那份 TTS 密钥重新写给 tts 容器（容器可能刚被重建、
@@ -190,6 +202,21 @@ public sealed partial class WebUiServer : IDisposable
 
     /// <summary>服务器健康日报（号主 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
     private readonly HealthReportService? _healthReports;
+
+    /// <summary>会话级权限元数据（批次 B）：只读观测用；测试环境里可以是 null（那时面板只报 available=false）。</summary>
+    private readonly SessionPolicyLedger? _sessionPolicies;
+
+    /// <summary>决策轨迹（批次 C）：只读观测用；测试环境里可以是 null（那时 /api/traces 报 available=false）。</summary>
+    private readonly TurnTraceStore? _traces;
+
+    /// <summary>宿主事实（批次 J 的仪表盘要内存上限与负载）：只读端口，测试环境里可以是 null。</summary>
+    private readonly IHostFacts? _hostFacts;
+
+    /// <summary>审批用例（批次 I 的面板审批卡）：测试环境里可以是 null（那时端点报 available=false）。</summary>
+    private readonly ApprovalUseCase? _approvals;
+
+    /// <summary>本地通道（批次 F）：没开时为 null（那时两个端点都报 available=false / 403）。</summary>
+    private readonly LocalChannelSource? _localChannel;
 
     /// <summary>
     /// 面板「一键重启」：改完需要重启才生效的设置（官方通道 appid/secret、容器级的挂载与端口…）

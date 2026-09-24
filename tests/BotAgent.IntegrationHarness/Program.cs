@@ -115,6 +115,9 @@ public static partial class Program
             await Scenario("s43", RunApprovalScenarioAsync);
             await Scenario("s44", RunParticipationAnchorScenarioAsync);
             await Scenario("s45", RunGateAndQuestionScenarioAsync);
+            await Scenario("s46", RunPanelToolsScenarioAsync);
+            await Scenario("s47", RunTurnLoopScenarioAsync);
+            await Scenario("s48", RunLocalChannelScenarioAsync);
         // s42（官方通道）**暂未接入回归**：2026-09-21 子代理写的这套端到端场景只跑到 7✓/9✗
         // 而且**会挂死**（假网关推事件的时序 + 等待没上超时）。已确认的结论：官方出站（token→/gateway/bot→
         // identify）与入站事件分发**都是通的**（机器人日志里能看到官方那条的“忽略（不在白名单）: 群 8000…”，
@@ -1072,7 +1075,14 @@ public static partial class Program
             // ⚠ 这是**提醒线**，不是目标：再加内容时先想想能不能删旧话 ——
             // 提示词越长越慢越贵（§23.3 C 的“生成 8~15s”里就有它一份）。
             Check("系统提示没失控（< 4000 字，提醒线；真正要钉的是下面的“已折叠不重复”）",
-                headerChars < 4000, $"实际 {headerChars} 字");
+             headerChars < 4000, $"实际 {headerChars} 字");
+
+             // 批次 D：工具清单真的进了系统提示（按策略裁剪；没开的能力不出现）。
+             Check("★ 提示词里带了工具清单 [可用工具]（批 D：让模型看见工具）",
+                 sys.Contains("[可用工具]", StringComparison.Ordinal)
+                 && sys.Contains("web.search", StringComparison.Ordinal)
+                 && !sys.Contains("voice.speak", StringComparison.Ordinal),
+                 $"清单段 {sys.Split("[可用工具]").Length - 1} 处");
 
             var foldedCount = sys.Split("老王的历史发言").Length - 1;
             Check("已折叠的原文不再重复注入（最多只剩未折叠的尾部）", foldedCount <= 4,

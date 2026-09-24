@@ -81,7 +81,7 @@ public sealed class ConversationRegistry
     /// </summary>
     public BotConversation GetOrCreate(QqChatMessage msg)
     {
-        var channel = Channels.IsOfficial(msg.Channel) ? Channels.Official : Channels.Private;
+        var channel = Channels.Declared(msg.Channel);
         var key = Channels.Key(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
         _source.RegisterTarget(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
 

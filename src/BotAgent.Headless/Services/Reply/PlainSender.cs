@@ -1,7 +1,9 @@
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Ops;
 using BotAgent.Domain.Rendering;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.OneBot;
+using BotAgent.Services.Ops;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Ports;
@@ -25,6 +27,7 @@ public sealed class PlainSender : IQqMessageSender
     private readonly PanelNotifier _ui;
     private readonly OwnMessageLedger _ownLedger;
     private readonly Action<string> _log;
+    private readonly TurnTraceStore _traces;
 
     public PlainSender(
         SettingsBox box,
@@ -32,7 +35,8 @@ public sealed class PlainSender : IQqMessageSender
         ConversationRegistry registry,
         PanelNotifier ui,
         OwnMessageLedger ownLedger,
-        Action<string> log)
+        Action<string> log,
+        TurnTraceStore traces)
     {
         _box = box;
         _source = source;
@@ -40,6 +44,7 @@ public sealed class PlainSender : IQqMessageSender
         _ui = ui;
         _ownLedger = ownLedger;
         _log = log;
+        _traces = traces;
     }
 
     private AppSettings _settings => _box.Current;
@@ -51,6 +56,15 @@ public sealed class PlainSender : IQqMessageSender
     public async Task<bool> SendWithCadenceAsync(bool isGroup, long targetId, string reply, long? replyTo)
     {
         // P4（V3 §10）：发送前把 Markdown 降级成 QQ 纯文本。
+        // 批次 C 的回复审计：凭据形状、或（聊天这一路）本机/服务器路径形状 → **整条不发**。
+        // 记的是原因码与字数，**不记正文** —— 审计本身不能变成新的隐私面。
+        var audit = ReplyAuditRules.Judge(reply, allowLocalPaths: false);
+        if (audit != ReplyAuditVerdict.Allow)
+        {
+            _log($"[审计] 这条回复不发（{ReplyAuditRules.Code(audit)}；{reply.Length} 字）");
+            return false;
+        }
+
         var rawReply = reply;
         reply = QqPlainText.Sanitize(reply);
         if (reply.Length == 0)
@@ -110,12 +124,23 @@ public sealed class PlainSender : IQqMessageSender
             return;
         }
 
+        // 批次 C 的回复审计：`//` 那一路**允许报路径**（答案本来就该带路径，且只有白名单用户看得到），
+        // 但**凭据形状一律挡**（这条没有例外档）。
+        var audit = ReplyAuditRules.Judge(text, allowLocalPaths: true);
+        if (audit != ReplyAuditVerdict.Allow)
+        {
+            _log($"[审计] agent 回话不发（{ReplyAuditRules.Code(audit)}；{text.Length} 字）");
+            _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, "blocked", reasonCode: ReplyAuditRules.Code(audit));
+            return;
+        }
+
         var (isGroup, targetId) = conversation.Target;
         var index = 0;
         foreach (var segment in SplitForChat(text, Math.Clamp(_settings.AgentReplyMaxChars, 200, 3000)))
         {
             index++;
             var result = await _source.SendTextAsync(isGroup, targetId, segment);
+            _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, result.Ok ? "sent" : "failed", count: segment.Length);
             _log($"agent 回话 → {(isGroup ? "群" : "私聊")}{targetId}（第 {index} 段，{segment.Length} 字，{(result.Ok ? "已发出" : "发送失败")}）: {TextRules.Shorten(segment.Replace('\n', ' '), 60)}");
             _ownLedger.Remember(result, segment);
 

@@ -13,6 +13,9 @@ using BotAgent.Domain.Profiles;
 using BotAgent.Services;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Qq;
+using BotAgent.Domain.Ops;
+using BotAgent.Domain.Tools;
 using BotAgent.Domain.Rendering;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Stickers;
@@ -22,6 +25,10 @@ using BotAgent.Services.Ports;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Participation;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Reply;
+using BotAgent.Services.Tools;
+using BotAgent.Services.Ops;
+using BotAgent.Services.Model;
 
 namespace BotAgent.SafetyProbe;
 
@@ -51,10 +58,883 @@ public static class Program
         ApprovalTests();
         ApprovalChainTests();
         GateAndQuestionTests();
+        ToolDirectoryTests();
+        SessionPolicyTests();
+        ReplyAuditTests();
+        TurnTraceTests();
+        ToolPromptTests();
+        PanelApprovalTests();
+        TurnLoopTests();
+        LocalChannelTests();
+        ServerToolGateTests();
+        ToolExecutorContractTests();
+        ToolArgsTests();
+        GateReachabilityTests();
 
         Console.WriteLine();
         Console.WriteLine($"通过 {_passed}，失败 {_failed}");
         return _failed == 0 ? 0 : 1;
+    }
+
+    // ─────────────────── 统一工具目录（通用 Agent 平台 · 批次 A） ───────────────────
+
+    private static void ToolDirectoryTests()
+    {
+        Section("批次 A · 统一工具目录（声明 / 执行者 / 档位 / 高风险例外）");
+
+        var dir = ToolDirectory.Builtin;
+
+        Check("目录自检全绿（缺执行者 / 孤儿执行者 / 缺例外说明 / 重名 四张表都空）", dir.IsHealthy,
+            $"缺执行者=[{string.Join(",", dir.MissingExecutors)}] 孤儿=[{string.Join(",", dir.UnusedExecutors)}]"
+            + $" 缺例外=[{string.Join(",", dir.MissingExceptions)}] 重名=[{string.Join(",", dir.DuplicateIds)}]");
+
+        Check($"目录分族条数 = 10 / 10 / 6（实测 {dir.Chat.Count} / {dir.Qq.Count} / {dir.Server.Count}）",
+            dir.Chat.Count == 10 && dir.Qq.Count == 10 && dir.Server.Count == 6, $"合计 {dir.Specs.Count} 条");
+
+        // 聊天那 10 条：目录与登记表必须是**同一批 id**（不许两处各写一遍而慢慢漂移）
+        var registryIds = ChatCapabilitySet.DefaultRegistry.Ids.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var chatIds = dir.Chat.Select(s => s.Id).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        Check("聊天族目录 = 聊天登记表（同一批 id）", registryIds.SequenceEqual(chatIds),
+            "登记表[" + string.Join(",", registryIds) + "] 目录[" + string.Join(",", chatIds) + "]");
+
+        // 闸门可达性：聊天那路的登记表里**不许**出现“任何审批都放不开”的高风险类别
+        var highRiskInChat = dir.Chat.Where(s => ToolDescriptor.AlwaysDenied(s.Category)).Select(s => s.Id).ToList();
+        Check("聊天登记表里没有高风险类别（文件/shell、远程桥、改设置、读别的会话）",
+            highRiskInChat.Count == 0, string.Join(",", highRiskInChat));
+
+        // QQ 动作：目录全体一一映射（id = "qq." + 动作名）
+        var catalogNames = QqActionCatalog.All.Select(a => a.Name).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var qqNames = dir.Qq.Select(s => s.Id.StartsWith("qq.", StringComparison.Ordinal) ? s.Id[3..] : s.Id)
+            .OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        Check("QQ 动作登记齐全（id = qq.<动作名>）", catalogNames.SequenceEqual(qqNames),
+            "目录[" + string.Join(",", catalogNames) + "] 登记[" + string.Join(",", qqNames) + "]");
+        Check("QQ 动作短说明齐全", QqToolSpecs.MissingSummaries.Count == 0,
+            "缺：" + string.Join(",", QqToolSpecs.MissingSummaries));
+
+        // 档位：安全档 = QqActionCatalog.DefaultSafe（留空就开这几个），其余是危险档（必须点名）
+        var safeSet = QqActionCatalog.DefaultSafe.ToHashSet(StringComparer.Ordinal);
+        var wrongTier = dir.Qq.Where(s =>
+        {
+            var want = safeSet.Contains(s.Id[3..]) ? ToolDefaultPolicy.SafeTierWhenEmpty : ToolDefaultPolicy.NamedOnly;
+            return s.Default != want;
+        }).Select(s => s.Id).ToList();
+        Check("QQ 档位映射与 DefaultSafe 一致（安全档 4 / 危险档 6）",
+            wrongTier.Count == 0 && dir.Qq.Count(s => s.Default == ToolDefaultPolicy.SafeTierWhenEmpty) == safeSet.Count,
+            "对不上：" + string.Join(",", wrongTier));
+        Check("危险档每条都写了例外说明（不靠“没人发现”）",
+            dir.Qq.Where(s => s.Default == ToolDefaultPolicy.NamedOnly).All(s => !string.IsNullOrWhiteSpace(s.Exception)));
+
+        // // 那 6 个工具：名字与条数；文件/shell 类必须落 FileOrShell 且带例外说明
+        Check($"// 的 6 个工具登记齐全（实测 {dir.Server.Count}）",
+            dir.Server.Count == 6 && ServerToolSpecs.Names.Count == 6 && ServerToolSpecs.Names.Distinct().Count() == 6,
+            string.Join(",", ServerToolSpecs.Names));
+        Check("// 的文件/shell 类都落 FileOrShell（含 read）且带例外说明",
+            dir.Server.Where(s => s.Id is "bash" or "read" or "write" or "docker")
+                .All(s => s.Category == ToolCategory.FileOrShell && !string.IsNullOrWhiteSpace(s.Exception)));
+        Check("// 的 read 标只读、bash/write/docker 标非只读",
+            dir.Server.Single(s => s.Id == "read").ReadOnly
+            && !dir.Server.Single(s => s.Id == "bash").ReadOnly
+            && !dir.Server.Single(s => s.Id == "write").ReadOnly
+            && !dir.Server.Single(s => s.Id == "docker").ReadOnly);
+
+        // 默认策略（§10.2 坑 4）：两条路的口径故意相反，必须显式写在数据里
+        Check("默认策略：聊天族 = 跟随开关、// 族 = 留空全开",
+            dir.Chat.All(s => s.Default == ToolDefaultPolicy.FollowSwitch)
+            && dir.Server.All(s => s.Default == ToolDefaultPolicy.AllOnWhenEmpty));
+
+        Check("执行者登记 = 4 家", dir.Executors.Count == 4,
+            string.Join("、", dir.Executors.All.Select(e => e.Id).OrderBy(x => x, StringComparer.Ordinal)));
+    }
+
+    // ─────────────────── 会话级权限元数据（通用 Agent 平台 · 批次 B） ───────────────────
+
+    private static void SessionPolicyTests()
+    {
+        Section("批次 B · 会话级权限元数据（戳 / 陈旧 / 重建 / 有界）");
+
+        var now = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.FromHours(9));
+        var legacy = ChatCapabilitySet.FromSwitches(
+            enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
+            enablePoke: true, scenario: null);
+        var withVoice = ChatCapabilitySet.FromSwitches(
+            enableWebSearch: true, enableMusic: true, enableVoice: true, enableStickers: true,
+            enablePoke: true, scenario: null);
+
+        Check("换一个能力开关 → 策略指纹跟着变（戳是靠它判陈旧的）",
+            legacy.PolicyFingerprint != withVoice.PolicyFingerprint);
+
+        var stamp = SessionPolicyStamp.For("group:10001", legacy, now);
+        Check("通道从 key 前缀推：私域 group:10001 → private", stamp.Channel == Channels.Private, stamp.Channel);
+        Check("官方 key → official",
+            SessionPolicyStamp.For("official:group:8000000000000001", legacy, now).Channel == Channels.Official);
+        Check("同策略 → 不陈旧", !stamp.IsStale(legacy.PolicyFingerprint));
+        Check("★ 换过能力 → 陈旧（该重建）", stamp.IsStale(withVoice.PolicyFingerprint));
+        Check("版本号不参与陈旧判定（指纹才是内容）：版本改了但指纹相同 → 不陈旧",
+            !(stamp with { PolicyVersion = 99 }).IsStale(legacy.PolicyFingerprint));
+
+        var ledger = new SessionPolicyLedger();
+        Check("第一次记不算重建（没有旧戳可作废）", !ledger.Stamp(stamp));
+        Check("记完能读到", ledger.TryGet("group:10001", out var got)
+            && got!.PolicyVersion == legacy.Policy.PolicyVersion, "count=" + ledger.Count);
+
+        ledger.Stamp(SessionPolicyStamp.For("group:10001", withVoice, now.AddMinutes(1)));
+        Check("★ 策略换过之后再记 → 记一次重建", ledger.RebuiltCount == 1, "rebuilt=" + ledger.RebuiltCount);
+        Check("★ 重建之后不再陈旧（已按新策略刷新）",
+            ledger.StaleCount(withVoice.PolicyFingerprint) == 0, "stale=" + ledger.StaleCount(withVoice.PolicyFingerprint));
+        Check("反过来拿旧指纹问 → 这条会话现在算旧策略的（它已建在新策略上）",
+            ledger.StaleCount(legacy.PolicyFingerprint) == 1);
+
+        ledger.Stamp(SessionPolicyStamp.For("group:10002", legacy, now.AddMinutes(2)));
+        Check("两条会话都在台账里", ledger.Count == 2, "count=" + ledger.Count);
+        Check("快照按 key 有序、含通道（面板只统计计数，不拿 key）",
+            ledger.Snapshot().Count == 2 && ledger.Snapshot().All(s => s.Channel.Length > 0));
+
+        ledger.Forget("group:10001");
+        Check("会话被删 → 戳一起清掉", ledger.Count == 1 && !ledger.TryGet("group:10001", out _), "count=" + ledger.Count);
+
+        for (var i = 0; i <= SessionPolicyLedger.MaxSessions + 25; i++)
+        {
+            ledger.Stamp(SessionPolicyStamp.For("group:" + (20000 + i), legacy, now.AddSeconds(i)));
+        }
+
+        Check("内存台账有界：最多 " + SessionPolicyLedger.MaxSessions + " 条（超出丢最旧）",
+            ledger.Count == SessionPolicyLedger.MaxSessions, "实测 " + ledger.Count);
+    }
+
+    // ─────────────────── 回复审计 + 决策轨迹（通用 Agent 平台 · 批次 C） ───────────────────
+
+    private static void ReplyAuditTests()
+    {
+        Section("批次 C · 回复审计（凭据 / 路径 → 整条不发）");
+
+        Check("普通文本 → 放行",
+            ReplyAuditRules.Judge("今天天气不错，出去走走？", allowLocalPaths: false) == ReplyAuditVerdict.Allow);
+        Check("空文本 → 放行（空判断在调用方）", ReplyAuditRules.Judge(null, false) == ReplyAuditVerdict.Allow);
+        Check("★ 密钥形状 → 整条不发",
+            ReplyAuditRules.Judge("这是我的 key：sk-abc123", false) == ReplyAuditVerdict.BlockCredential);
+        Check("★ 私钥头 → 整条不发",
+            ReplyAuditRules.Judge("-----BEGIN RSA PRIVATE KEY-----", false) == ReplyAuditVerdict.BlockCredential);
+        Check("★ JWT 头 → 整条不发",
+            ReplyAuditRules.Judge("token eyJhbGciOiJIUzI1NiJ9.x.y", false) == ReplyAuditVerdict.BlockCredential);
+        Check("★ 凭据在 `//` 那一路也不放行（没有例外档）",
+            ReplyAuditRules.Judge("ghp_abcdef", allowLocalPaths: true) == ReplyAuditVerdict.BlockCredential);
+
+        Check("★ 服务器路径 → 聊天那一路不发",
+            ReplyAuditRules.Judge("日志在 /opt/qqchat/data/logs/qqchat.log", false) == ReplyAuditVerdict.BlockLocalPath);
+        Check("★ 服务器路径 → `//` 那一路放行（运维结论本来就该带路径）",
+            ReplyAuditRules.Judge("日志在 /data/logs/qqchat.log", true) == ReplyAuditVerdict.Allow);
+        Check("★ Windows 盘符路径 → 不发",
+            ReplyAuditRules.Judge(@"看 C:\Users\someone\x.txt", false) == ReplyAuditVerdict.BlockLocalPath);
+        Check("通用 Linux 路径不误伤（/etc/nginx/nginx.conf 这类常识回答照发）",
+            ReplyAuditRules.Judge("配置一般在 /etc/nginx/nginx.conf", false) == ReplyAuditVerdict.Allow);
+        Check("原因码稳定（只有三个）",
+            ReplyAuditRules.Code(ReplyAuditVerdict.Allow) == "allowed"
+            && ReplyAuditRules.Code(ReplyAuditVerdict.BlockCredential) == "credential_shape"
+            && ReplyAuditRules.Code(ReplyAuditVerdict.BlockLocalPath) == "local_path_shape");
+    }
+
+    private static void TurnTraceTests()
+    {
+        Section("批次 C · 决策轨迹（节点顺序 / 只有形状 / 有界）");
+
+        var tick = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.FromHours(9));
+        var store = new TurnTraceStore(() => tick);
+
+        store.Begin("group:10001");
+        Check("进行中：一轮在跑（面板的“进行中”靠它）", store.ActiveCount == 1 && store.DoneCount == 0);
+
+        tick = tick.AddMilliseconds(12);
+        store.Node("group:10001", TurnNodeKind.Context, "ok", count: 6);
+        tick = tick.AddMilliseconds(800);
+        store.Node("group:10001", TurnNodeKind.Model, "ok");
+        tick = tick.AddMilliseconds(30);
+        store.Node("group:10001", TurnNodeKind.Gate, "denied", toolId: "web.search", reasonCode: "not_allowlisted");
+        tick = tick.AddMilliseconds(5);
+        var done = store.Complete("group:10001", "done");
+
+        Check("收尾拿到一条轨迹", done is not null && store.DoneCount == 1 && store.ActiveCount == 0);
+        Check("★ 节点按发生顺序、耗时按间隔算（调用点不必自己计时）",
+            done!.Nodes.Count == 3 && done.Nodes[0].DurationMs == 12
+            && done.Nodes[1].DurationMs == 800 && done.Nodes[2].DurationMs == 30,
+            string.Join(",", done.Nodes.Select(n => n.Kind + ":" + n.DurationMs)));
+        Check("总耗时 = 起止差", done.TotalMs == 847, done.TotalMs.ToString());
+        Check("★ 闸门节点带着工具名与原因码（卡片要画的就是这俩）",
+            done.Nodes[2].ToolId == "web.search" && done.Nodes[2].ReasonCode == "not_allowlisted");
+        Check("runId 是服务端给的短号（没有会话内容）", done.RunId.StartsWith("t", StringComparison.Ordinal), done.RunId);
+
+        store.Node("group:10001", TurnNodeKind.Outbound, "sent");
+        Check("收尾之后再记节点 = 忽略（不会长出一条没有轮次的节点）",
+            store.Recent(1)[0].Nodes.Count == 3);
+        Check("★★ 轨迹里**没有**承载正文/参数的字段（只有 id / 枚举 / 状态码 / 时长 / 计数）",
+            TraceHasNoContentFields());
+
+        for (var i = 0; i <= TurnTraceStore.Capacity + 5; i++)
+        {
+            store.Begin("group:" + (30000 + i));
+            store.Complete("group:" + (30000 + i), "done");
+        }
+
+        Check("内存有界：最多 " + TurnTraceStore.Capacity + " 条（超出丢最旧）",
+            store.DoneCount == TurnTraceStore.Capacity, "实测 " + store.DoneCount);
+        Check("Recent 新的在前",
+            store.Recent(2).Count == 2 && store.Recent(2)[0].RunId != store.Recent(2)[1].RunId);
+
+        store.Begin("group:99999");
+        store.Forget("group:99999");
+        Check("会话被删 → 进行中的那一轮一起清掉", store.ActiveCount == 0);
+    }
+
+    // ─────────────────── 工具清单进提示词（通用 Agent 平台 · 批次 D） ───────────────────
+
+    private static void ToolPromptTests()
+    {
+        Section("批次 D · 工具清单（按策略裁剪 / 需批准标记 / 空策略不注入）");
+
+        var quiet = ChatCapabilitySet.FromSwitches(
+            enableWebSearch: false, enableMusic: false, enableVoice: false, enableStickers: false,
+            enablePoke: false, scenario: null);
+        Check("一个工具都没开 → **整段不注入**（与“开关全关时提示词逐字不变”同一条纪律）",
+            ToolPromptText.Render(quiet).Length == 0, ToolPromptText.Render(quiet));
+
+        var normal = ChatCapabilitySet.FromSwitches(
+            enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
+            enablePoke: true, scenario: null);
+        var text = ToolPromptText.Render(normal);
+        Check("开着的能力都在清单里（web.search / sticker.send / poke.send）",
+            text.Contains("web.search", StringComparison.Ordinal)
+            && text.Contains("sticker.send", StringComparison.Ordinal)
+            && text.Contains("poke.send", StringComparison.Ordinal));
+        Check("★ 没开的能力**不出现**（voice.speak 关着）",
+            !text.Contains("voice.speak", StringComparison.Ordinal), text);
+        Check("★ 默认行为不进清单（chat.reply 不是可选能力）",
+            !text.Contains("chat.reply", StringComparison.Ordinal), text);
+        Check("标题就是锚点 [可用工具]", text.StartsWith("\n\n" + ToolPromptText.Header, StringComparison.Ordinal));
+
+        Check("★ 需批准的工具带标记（审批开着时 demo.echo 要批）",
+            ToolPromptText.Render(ChatCapabilitySet.FromSwitches(
+                enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
+                enablePoke: true, scenario: null, approvalsEnabled: true))
+                .Contains("〔需批准〕", StringComparison.Ordinal));
+        Check("默认（审批关）时清单里没有批准标记",
+            !text.Contains("〔需批准〕", StringComparison.Ordinal));
+
+        Check("参数说明压成一行且截短（清单不许比正文还长）",
+            text.Contains("\n", StringComparison.Ordinal)
+            && text.Split('\n').All(line => line.Length <= 60)
+            && text.Contains('…'),
+            "最长行 " + text.Split('\n').Max(line => line.Length) + " 字");
+
+        // 提示词侧：这一段真的被拼进去了（PromptBuilder），且空串时一个字都不多。
+        var withList = PromptBuilder.Build(new PromptBuilder.PromptRequest(
+            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, AiDesire: 0,
+            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
+            LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
+            SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
+            VoiceEagerness: 50, EnableWebSearch: false, EnableAsk: false, EnableToolRequest: false,
+            ToolList: text));
+        Check("★ PromptBuilder 把清单拼进系统提示（批次 D 的接线）",
+            withList.Contains(ToolPromptText.Header, StringComparison.Ordinal)
+            && withList.Contains("web.search", StringComparison.Ordinal), "长度 " + withList.Length);
+
+        var withoutList = PromptBuilder.Build(new PromptBuilder.PromptRequest(
+            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, AiDesire: 0,
+            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
+            LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
+            SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
+            VoiceEagerness: 50, EnableWebSearch: false, EnableAsk: false, EnableToolRequest: false,
+            ToolList: null));
+        Check("清单为空 → 提示词里一个字都不多（整段不出现）",
+            !withoutList.Contains(ToolPromptText.Header, StringComparison.Ordinal));
+    }
+
+    // ─────────────────── 面板审批（通用 Agent 平台 · 批次 I） ───────────────────
+
+    /// <summary>
+    /// 批次 I 的**领域**那半边：面板审批靠的两条语义 ——
+    ///   · 待批单能被列出来（面板的卡片靠它），且到期的那张会被推进成 Expired（不再列）；
+    ///   · 面板以 owner 身份提交时，**群里开的单**批得动，**私聊开的单**（没给 owner/admin 角色）批不动 ——
+    ///     失败关闭，不为 UI 放宽任何一条。
+    /// 端到端那半边（真的点按钮 → 执行 → 回执）在 IntegrationHarness 的 S43 里跑。
+    /// </summary>
+    private static void PanelApprovalTests()
+    {
+        Section("批次 I · 面板审批（待批单可见 / 身份不放宽 / 一次性 / 策略版本 / 过期）");
+
+        var now = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.FromHours(9));
+        var store = new ApprovalStore();
+        var groupKey = "group:667700";
+        var privateKey = "private:10002";
+
+        store.Create("AAAAAA", "demo.echo", "群里的单", groupKey, "msg:1",
+            approvers: new[] { "user:10001" }, now, ttlSeconds: 120,
+            approverRoles: new[] { "owner", "admin" }, policyVersion: 3);
+        store.Create("BBBBBB", "demo.echo", "私聊的单", privateKey, "msg:2",
+            approvers: Array.Empty<string>(), now, ttlSeconds: 120,
+            approverRoles: Array.Empty<string>(), policyVersion: 3);
+        store.Create("CCCCCC", "demo.echo", "会过期的单", groupKey, "msg:3",
+            approvers: Array.Empty<string>(), now, ttlSeconds: 30,
+            approverRoles: new[] { "owner" }, policyVersion: 3);
+
+        var pending = store.Pending(now);
+        Check("★ 待批单能列出来（面板的审批卡靠它）", pending.Count == 3,
+            string.Join(",", pending.Select(p => p.RequestId)));
+        Check("按建立时间升序（先来的先显示）",
+            pending.Select(p => p.RequestId).SequenceEqual(new[] { "AAAAAA", "BBBBBB", "CCCCCC" }));
+        Check("列出来的都是 Pending", pending.All(p => p.Status == ApprovalStatus.Pending));
+
+        var later = now.AddSeconds(31);
+        var afterExpiry = store.Pending(later);
+        Check("★ 到期的那张不再列出来（顺带被推进成 Expired）", afterExpiry.Count == 2,
+            string.Join(",", afterExpiry.Select(p => p.RequestId)));
+        Check("已完结的单不会重新出现（已拒绝的也不列）",
+            store.Decide("AAAAAA", "user:10001", groupKey, approve: false, later).Ok
+            && store.Pending(later).All(p => p.RequestId != "AAAAAA"));
+
+        // 身份：面板 = 号主的控制台 → 以 owner 身份提交（与“群主能批”同一条规则）
+        Check("★ 群里开的单：面板以 owner 身份批得动（同一条规则，不是新开的口子）",
+            ApprovalStore.IsAuthorizedApprover(
+                store.Create("DDDDDD", "demo.echo", "群", groupKey, "m", Array.Empty<string>(), now,
+                    ttlSeconds: 60, approverRoles: new[] { "owner", "admin" }, policyVersion: 1),
+                "panel:owner", "owner"));
+        Check("★★ 私聊开的单（没给 owner/admin 角色）：面板同样批不动（失败关闭，不放宽）",
+            !ApprovalStore.IsAuthorizedApprover(store.Get("BBBBBB", now), "panel:owner", "owner"));
+        Check("私聊那张只能由点名名单里的人批（身份核验照旧）",
+            ApprovalStore.IsAuthorizedApprover(
+                store.Create("EEEEEE", "demo.echo", "私聊", privateKey, "m", new[] { "user:10002" }, now,
+                    ttlSeconds: 60, policyVersion: 1),
+                "user:10002", null));
+
+        // 面板那条路真的走 ApprovalFlow.Handle（下面这些就是它的语义）
+        var fresh = new ApprovalStore();
+        fresh.Create("FFFFFF", "demo.echo", "群里的单", groupKey, "msg:9",
+            approvers: Array.Empty<string>(), now, ttlSeconds: 120,
+            approverRoles: new[] { "owner", "admin" }, policyVersion: 3);
+
+        var approved = ApprovalFlow.Handle(
+            fresh, new ApprovalCommand(ApprovalCommandKind.Approve, "FFFFFF"),
+            requesterId: "panel:owner", requesterRole: "owner",
+            conversationKey: groupKey, now: now, currentPolicyVersion: 3);
+        Check("★ 面板批准 → 拿到一次性票据（ShouldExecute），回执写明“已确认”",
+            approved.Handled && approved.ShouldExecute && approved.Ticket is not null
+            && (approved.Reply ?? string.Empty).Contains("已确认"),
+            approved.ReasonCode + " / " + approved.Reply);
+
+        var replay = ApprovalFlow.Handle(
+            fresh, new ApprovalCommand(ApprovalCommandKind.Approve, "FFFFFF"),
+            requesterId: "panel:owner", requesterRole: "owner",
+            conversationKey: groupKey, now: now, currentPolicyVersion: 3);
+        Check("★ 面板再批一次同一编号 → 不执行（一次性没被放宽）",
+            replay.Handled && !replay.ShouldExecute, replay.ReasonCode);
+
+        var stale = new ApprovalStore();
+        stale.Create("GGGGGG", "demo.echo", "旧策略的单", groupKey, "m",
+            approvers: Array.Empty<string>(), now, ttlSeconds: 120,
+            approverRoles: new[] { "owner" }, policyVersion: 3);
+        var staleResult = ApprovalFlow.Handle(
+            stale, new ApprovalCommand(ApprovalCommandKind.Approve, "GGGGGG"),
+            requesterId: "panel:owner", requesterRole: "owner",
+            conversationKey: groupKey, now: now, currentPolicyVersion: 4);
+        Check("★ 期间改过配置（策略版本变了）→ 面板批了也不执行（stale_policy）",
+            staleResult.Handled && !staleResult.ShouldExecute && staleResult.ReasonCode == "stale_policy",
+            staleResult.ReasonCode);
+
+        var expiredStore = new ApprovalStore();
+        expiredStore.Create("HHHHHH", "demo.echo", "已过期", groupKey, "m",
+            approvers: Array.Empty<string>(), now, ttlSeconds: 30,
+            approverRoles: new[] { "owner" }, policyVersion: 1);
+        var expiredResult = ApprovalFlow.Handle(
+            expiredStore, new ApprovalCommand(ApprovalCommandKind.Approve, "HHHHHH"),
+            requesterId: "panel:owner", requesterRole: "owner",
+            conversationKey: groupKey, now: now.AddSeconds(31), currentPolicyVersion: 1);
+        Check("★ 过期的单面板也批不动（expired）",
+            expiredResult.Handled && !expiredResult.ShouldExecute && expiredResult.ReasonCode == "expired",
+            expiredResult.ReasonCode);
+
+        var unknown = ApprovalFlow.Handle(
+            expiredStore, new ApprovalCommand(ApprovalCommandKind.Approve, "ZZZZZZ"),
+            requesterId: "panel:owner", requesterRole: "owner",
+            conversationKey: groupKey, now: now, currentPolicyVersion: 1);
+        Check("★ 不存在的编号：不执行、不装（unknown_request）",
+            unknown.Handled && !unknown.ShouldExecute && unknown.ReasonCode == "unknown_request",
+            unknown.ReasonCode);
+    }
+
+    // ─────────────────── 第三条通道（通用 Agent 平台 · 批次 F） ───────────────────
+
+    /// <summary>
+    /// 批次 F 的**纯规则**那半边：本地通道的号段与通道归一。
+    /// 为什么要有号段：路由器**按数字路由出站**（Resolve(isGroup, id)），
+    /// 两条通道拿到同一个 (isGroup, id) 就会串台 —— 官方那条早有别名号段，
+    /// 本地这条照同一个办法解决。端到端那半边（真进消息 → 白名单 → 模型 → 出箱）在 S48。
+    /// </summary>
+    private static void LocalChannelTests()
+    {
+        Section("批次 F · 第三条通道（号段 / 归一 / 白名单）");
+
+        Check("★ 本地号段与 QQ / 官方两个号段互不相撞",
+            Channels.LocalBase > 5_000_000_000L && Channels.LocalBase < Channels.AliasBase,
+            "LocalBase=" + Channels.LocalBase + " AliasBase=" + Channels.AliasBase);
+
+        Check("★ 短 id 换算到本地号段（配置里写 1、2、1001 这种）",
+            Channels.LocalTarget(1) == Channels.LocalBase + 1
+            && Channels.LocalTarget(1001) == Channels.LocalBase + 1001
+            && Channels.IsLocalId(Channels.LocalTarget(1001)),
+            Channels.LocalTarget(1001).ToString());
+
+        Check("★ 超范围的 id 特意不换算（返回 0 → 调用方拒掉）：别让它撞进官方号段",
+            Channels.LocalTarget(0) == 0
+            && Channels.LocalTarget(-5) == 0
+            && Channels.LocalTarget(Channels.LocalIdMax + 1) == 0,
+            "LocalTarget(LocalIdMax+1)=" + Channels.LocalTarget(Channels.LocalIdMax + 1));
+
+        Check("★ 三段号的归属判定互斥（QQ 号 ≠ 本地 ≠ 官方别名）",
+            !Channels.IsLocalId(123456) && !Channels.IsAliasId(123456)
+            && Channels.IsLocalId(Channels.LocalTarget(7)) && !Channels.IsAliasId(Channels.LocalTarget(7))
+            && Channels.IsAliasId(Channels.AliasBase + 1) && !Channels.IsLocalId(Channels.AliasBase + 1));
+
+        Check("★ 自报通道 → 内部通道归一（认不出来的归私域，与改造前一致）",
+            Channels.Declared(Channels.Local) == Channels.Local
+            && Channels.Declared(Channels.Official) == Channels.Official
+            && Channels.Declared(Channels.Private) == Channels.Private
+            && Channels.Declared("") == Channels.Private
+            && Channels.Declared(null) == Channels.Private
+            && Channels.Declared("胡写的通道") == Channels.Private);
+
+        Check("★ 本地会话 key 带前缀且能反推回通道（隔离就靠它）",
+            Channels.Key(Channels.Local, isGroup: true, 7) == "local:group:7"
+            && Channels.ChannelOf("local:group:7") == Channels.Local
+            && Channels.Parse("local:group:7") == (true, 7L)
+            && Channels.Strip("local:group:7") == "group:7");
+
+        Check("★ 本地通道的显示名与标签都是“本地”（日志里不会被当成私域）",
+            Channels.Tag(Channels.Local) == "本地"
+            && Channels.Display(Channels.Local) == "本地"
+            && Channels.Tag("") == "私域");
+
+        // 白名单：本地通道**空 = 全拦**（与官方那条“空 = 全收”故意不同）
+        var settings = new AppSettings { LocalChannelIds = "1, 2" };
+        var box = new Services.SettingsBox(settings);
+        var gate = new WhitelistGate(box);
+        Check("★ 名单里的本地 id 收（配置写短 id，内部换算后对上）",
+            gate.AllowsKey(Channels.Key(Channels.Local, true, Channels.LocalTarget(1)))
+            && gate.AllowsKey(Channels.Key(Channels.Local, false, Channels.LocalTarget(2))));
+        Check("★★ 名单外的本地 id 一律不收（失败关闭）",
+            !gate.AllowsKey(Channels.Key(Channels.Local, true, Channels.LocalTarget(3))));
+
+        var empty = new WhitelistGate(new Services.SettingsBox(new AppSettings()));
+        Check("★★ 本地名单留空 = **全拦**（不能像官方那样默认全收）",
+            !empty.AllowsKey(Channels.Key(Channels.Local, true, Channels.LocalTarget(1))));
+
+        Check("★ 超范围的配置项被丢掉（失败关闭，不会撞进官方号段）",
+            new WhitelistGate(new Services.SettingsBox(new AppSettings { LocalChannelIds = "1,9999999999999999" }))
+                .AllowsKey(Channels.Key(Channels.Local, true, Channels.LocalTarget(1)))
+            && !new WhitelistGate(new Services.SettingsBox(new AppSettings { LocalChannelIds = "9999999999999999" }))
+                .AllowsKey(Channels.Key(Channels.Local, true, Channels.AliasBase + 1)));
+    }
+
+    // ─────────────────── `//` 那路过闸门（批次 A 收尾） ───────────────────
+
+    /// <summary>
+    /// §9.3 第 2 格：**全部**路径执行前都过闸门。聊天那路早就过了（<see cref="ApprovalUseCase" />），
+    /// 这里钉 `//` 那一路 —— 它的工具（bash/read/write/fetch/qq/docker）今天靠**另一条授权边界**在跑
+    /// （面板开关 + 工作目录 + 超时 + docker 两把锁），`ServerToolGate` 把那条边界写成显式例外。
+    ///
+    /// 三条不变量（一条都不能少）：
+    ///   ① **默认一个都不放开**：不写例外的策略下，FileOrShell 照旧 `category_denied`（I3 不变）；
+    ///   ② **例外只按工具名点名**：列了 bash 不会连带放开 docker；
+    ///   ③ **审批仍然放不开高风险**：给了可审批类别 + 票据，照样 `approval_cannot_grant`。
+    /// </summary>
+    private static void ServerToolGateTests()
+    {
+        Section("批次 A 收尾 · `//` 过闸门（显式例外 / I3 不变）");
+
+        Check("★ `//` 的登记表齐全（6 个服务器工具 + 10 个 QQ 动作）",
+            ServerToolSpecs.Registry.Ids.Count == 16
+            && ServerToolSpecs.Names.All(n => ServerToolSpecs.Registry.TryGet(n, out _))
+            && QqToolSpecs.All.All(q => ServerToolSpecs.Registry.TryGet(q.Id, out _)),
+            $"登记 {ServerToolSpecs.Registry.Ids.Count} 条");
+
+        // 本次允许：bash + read（都是 FileOrShell）+ qq（SendMessage）+ fetch（WebRead）
+        var policy = ServerToolGate.BuildPolicy(new[] { "bash", "read", "qq", "fetch" });
+        Check("★ 例外**只**点名本次允许里的高风险工具（docker 没开 → 不在例外里）",
+            policy.HighRiskExceptions is { Count: 2 }
+            && policy.HighRiskExceptions.Contains("bash") && policy.HighRiskExceptions.Contains("read")
+            && !policy.HighRiskExceptions.Contains("docker"),
+            string.Join(",", policy.HighRiskExceptions ?? new HashSet<string>()));
+
+        Check("★ 开了闸门：点过名的 bash 放行、fetch/qq 放行（与老白名单一致）",
+            ServerToolGate.Check(policy, "group:10001", "bash").Allow
+            && ServerToolGate.Check(policy, "group:10001", "fetch").Allow
+            && ServerToolGate.Check(policy, "group:10001", "qq").Allow);
+
+        Check("★ 没开的工具被拒（not_allowlisted）—— 闸门不放过白名单外的东西",
+            ServerToolGate.Check(policy, "group:10001", "docker").ReasonCode == "not_allowlisted");
+
+        Check("★★ 默认（不写例外）时 FileOrShell **照旧一律拒绝**（I3：高风险不因任何机制放开）",
+            ServerToolGate.Check(
+                new ToolPolicy(new HashSet<string>(StringComparer.Ordinal) { "bash" },
+                    ApprovableCategories: new HashSet<ToolCategory>(),
+                    ApprovalRequiredCategories: new HashSet<ToolCategory>()),
+                "group:10001", "bash").ReasonCode == "category_denied");
+
+        Check("★★ 例外的粒度是工具名：只点名 bash 的策略拦得住 docker",
+            ServerToolGate.Check(ServerToolGate.BuildPolicy(new[] { "bash" }), "group:10001", "docker").ReasonCode
+                == "not_allowlisted");
+
+        // I3：票据也放不开高风险（例外是**策略**放行，不是审批放行）
+        var approved = new ToolPolicy(
+            new HashSet<string>(StringComparer.Ordinal) { "bash" },
+            ApprovableCategories: new HashSet<ToolCategory> { ToolCategory.FileOrShell },
+            ApprovalRequiredCategories: new HashSet<ToolCategory>(),
+            HighRiskExceptions: new HashSet<string>(StringComparer.Ordinal) { "bash" },
+            ApprovalRequiredTools: new HashSet<string>(StringComparer.Ordinal) { "bash" });
+        var withTicket = ToolGate.Evaluate(
+            ServerToolSpecs.Registry, approved,
+            new ToolRequest("bash", "group:10001"),
+            new ApprovalTicket("req-1", "bash", "group:10001", DateTimeOffset.UnixEpoch));
+        Check("★★ 就算给了票据，高风险类别仍然 `approval_cannot_grant`（I3 未被这次改动削弱）",
+            !withTicket.Allow && withTicket.ReasonCode == "approval_cannot_grant", withTicket.Describe());
+
+        Check("★ 例外进策略指纹（放开/收回高风险工具 = 能力变化 → 在途审批单该作废）",
+            ServerToolGate.BuildPolicy(new[] { "bash" }).Fingerprint()
+                != ServerToolGate.BuildPolicy(new[] { "bash", "read" }).Fingerprint());
+
+        Check("★ 会话 key 缺失时闸门拒绝（不会凭空执行）",
+            ServerToolGate.Check(policy, "", "bash").ReasonCode == "no_conversation");
+    }
+
+    // ─────────────────── 执行者契约（批次 A 收尾） ───────────────────
+
+    /// <summary>
+    /// §9.3 第 3 格：**工具身份统一**。这一批把执行者分成两层 ——
+    /// `IToolExecutorRegistration`（谁在执行）与 `IToolExecutor`（能不能真执行）。
+    /// 这里钉三件事：
+    ///   ① `//` 那两族是**真实现**（能拿到 ToolCall 直接干）；
+    ///   ② 聊天那两族是**登记占位**（LegacyPath=true，还没接进统一执行）—— 诚实标出来，不假装统一；
+    ///   ③ 执行者**不做判定**：白名单/闸门在调用方，执行入口按同一口径自己再判一次并如实回报原因码。
+    /// </summary>
+    private static void ToolExecutorContractTests()
+    {
+        Section("批次 A 收尾 · 执行者契约（真实现 / 登记占位 / 不做判定）");
+
+        var dir = ToolDirectory.Builtin;
+        Check("★ 目录自检仍然全绿（执行者四家、每条工具都有执行者）", dir.IsHealthy,
+            string.Join(",", dir.MissingExecutors.Concat(dir.UnusedExecutors)));
+
+        Check("★ 四家执行者里：两家是真实现（LegacyPath=false）、两家是登记占位",
+            dir.Executors.All.Count(e => !e.LegacyPath) == 2
+            && dir.Executors.All.Count(e => e.LegacyPath) == 2,
+            string.Join("、", dir.Executors.All.Select(e => e.Id + (e.LegacyPath ? "(占位)" : "(真)"))));
+
+        // ① 真实现：SessionQqActionHost（QQ 动作那一族）
+        var host = new SessionQqActionHost(new FakeQqActions(), isGroup: true, targetId: 10001,
+            senderId: 20002, messageId: 30003, selfId: 10001);
+        Check("★ SessionQqActionHost 就是 IToolExecutor（QQ 动作那族）",
+            host is IToolExecutor && ((IToolExecutor)host).Id == QqToolSpecs.ExecutorActions
+            && ((IToolExecutor)host).LegacyPath == false);
+
+        var unknown = host.ExecuteAsync(new ToolCall("qq.胡写的动作", new System.Text.Json.Nodes.JsonObject()))
+            .GetAwaiter().GetResult();
+        Check("★★ 认不出的动作名 → 如实失败（unknown_action，不猜不降级）",
+            !unknown.Ok && unknown.ReasonCode == "unknown_action", unknown.ReasonCode);
+
+        // ② 真实现：ServerAgentRunner（服务器工具那族）—— 它**不接** qq（那属于会话宿主）
+        var runner = new ServerAgentRunner(
+            new Services.SettingsBox(new AppSettings { AgentServerTools = "read" }),
+            new OpenAiClient(new Services.SettingsBox(new AppSettings { ApiKey = "sk-probe", Model = "m" }),
+                new FakeHttpFetcher(), new FakeHttpFetcher(), new FakeImageDownloader(), new FakeModelTransport()),
+            new FakeHttpFetcher(),
+            _ => { });
+        Check("★ ServerAgentRunner 就是 IToolExecutor（服务器工具那族）",
+            runner is IToolExecutor && ((IToolExecutor)runner).Id == ServerToolSpecs.ExecutorAgent
+            && ((IToolExecutor)runner).LegacyPath == false);
+
+        var qqToRunner = runner.ExecuteAsync(new ToolCall("qq", new System.Text.Json.Nodes.JsonObject()))
+            .GetAwaiter().GetResult();
+        Check("★★ 把 qq 交给服务器执行者 → 明确回报 wrong_executor（两族各管各的）",
+            !qqToRunner.Ok && qqToRunner.ReasonCode == "wrong_executor", qqToRunner.ReasonCode);
+
+        var notOpen = runner.ExecuteAsync(new ToolCall("bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "ls" }))
+            .GetAwaiter().GetResult();
+        Check("★★ 没在工具名单里的（bash 没开）→ not_allowlisted（执行者按同一口径自己再判一次）",
+            !notOpen.Ok && notOpen.ReasonCode == "not_allowlisted", notOpen.ReasonCode);
+
+        // ③ 登记占位：聊天那两族不是 IToolExecutor（老路径 still 在跑）
+        Check("★ 聊天那两族的登记**不是** IToolExecutor（LegacyPath 如实标着，不假装统一）",
+            dir.Executors.TryGet(ChatToolSpecs.ExecutorActions, out var chatReg) && chatReg.LegacyPath
+            && dir.Executors.TryGet(ChatToolSpecs.ExecutorApproval, out var approvalReg) && approvalReg.LegacyPath);
+    }
+
+    // ─────────────────── 参数契约校验（批次 A 收尾） ───────────────────
+
+    /// <summary>
+    /// §9.3 第 4 格：参数契约 + **执行前校验**（fail-closed）。§11 第 3 条的裁决是
+    /// “普通聊天先严格、`//` 路径先保持宽松” —— 所以这里只钉已接入校验的那两个只读工具，
+    /// 以及“没契约的工具照旧放行”（校验范围是逐步扩的，不是一刀切收紧）。
+    /// </summary>
+    private static void ToolArgsTests()
+    {
+        Section("批次 A 收尾 · 参数契约（不认识的字段 / 缺必填 / 长度 / 协议）");
+
+        Check("★ 有契约的工具认得出来（web.search / web.read）",
+            ToolArgs.HasContract("web.search") && ToolArgs.HasContract("web.read")
+            && !ToolArgs.HasContract("voice.speak"));
+
+        Check("★ 正常参数 → 放行",
+            ToolArgs.Validate("web.search", new JsonObject { ["query"] = "上海天气" }).Ok
+            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "https://example.com/a" }).Ok);
+
+        Check("★★ 缺必填 → missing_required（不拿空参数去执行）",
+            ToolArgs.Validate("web.search", new JsonObject()).ReasonCode == "missing_required"
+            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "  " }).ReasonCode == "missing_required");
+
+        Check("★★ 不认识的字段 → unknown_field（模型爱编字段名，宁可拒绝也不猜）",
+            ToolArgs.Validate("web.search", new JsonObject { ["keyword"] = "天气" }).ReasonCode == "unknown_field",
+            ToolArgs.Validate("web.search", new JsonObject { ["keyword"] = "天气" }).Detail ?? "");
+
+        Check("★ 长度越界 → bad_length（契约里的 2~120 与 8~2000）",
+            ToolArgs.Validate("web.search", new JsonObject { ["query"] = "短" }).ReasonCode == "bad_length"
+            // 注意：长度下限是 8（"http://a" 正好 8 个字符，是**边界内**）—— 用 7 个字符才越界
+            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "http://" }).ReasonCode == "bad_length");
+
+        Check("★★ 只收 http(s)：file:// 之类一律 bad_scheme",
+            ToolArgs.Validate("web.read", new JsonObject { ["url"] = "file:///etc/passwd" }).ReasonCode == "bad_scheme"
+            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "ftp://example.com/a" }).ReasonCode == "bad_scheme");
+
+        Check("★ 没契约的工具照旧放行（`//` 那族保持宽松，符合 §11 第 3 条）",
+            ToolArgs.Validate("bash", new JsonObject { ["command"] = "ls" }).Ok
+            && ToolArgs.Validate(null, null).Ok);
+
+        Check("★ 原因码稳定（探针与日志都按它们判）",
+            ToolArgs.Validate("web.search", new JsonObject()).ReasonCode == "missing_required"
+            && ToolArgs.Validate("web.search", new JsonObject { ["x"] = 1 }).ReasonCode == "unknown_field");
+    }
+
+    // ─────────────────── 闸门可达性（§9.2 那条护栏） ───────────────────
+
+    /// <summary>
+    /// §9.2 的“闸门可达性”：**每个会产生副作用的能力都必须能到达 `ToolGate`**。
+    /// 这条护栏的分母是**目录**（<see cref="ToolDirectory.Builtin" />），不是某一张表 ——
+    /// 所以它同时钉住两件事：
+    ///   ① 目录里每条 spec 都落在某张**登记表**里（否则闸门连“未知工具”都判不出，只会 no_registry/unknown_tool）；
+    ///   ② 高风险档（`AlwaysDenied`）的每条都**写了显式例外**（那是“另一条授权边界”的登记，不是豁免）。
+    /// </summary>
+    private static void GateReachabilityTests()
+    {
+        Section("§9.2 · 闸门可达性（目录 → 登记表 → 闸门）");
+
+        var specs = ToolDirectory.Builtin.Specs;
+        var chatRegistry = ChatToolSpecs.DefaultRegistry;
+        var serverRegistry = ServerToolSpecs.Registry;
+
+        var unreachable = specs
+            .Where(s => !chatRegistry.TryGet(s.Id, out _) && !serverRegistry.TryGet(s.Id, out _))
+            .Select(s => s.Id)
+            .ToList();
+        Check("★★ 目录里每条 spec 都能被某张登记表判到（没有“能执行却没登记”的能力）",
+            specs.Count == 26 && unreachable.Count == 0, string.Join("、", unreachable));
+
+        var sideEffectHighRisk = specs
+            .Where(s => !s.ReadOnly && ToolDescriptor.AlwaysDenied(s.Category))
+            .ToList();
+        Check("★ 高风险且会产生副作用的 spec 数量符合预期（// 那 4 个文件/shell + 10 个 QQ 动作中的高风险档）",
+            sideEffectHighRisk.Count > 0,
+            string.Join("、", sideEffectHighRisk.Select(s => s.Id)));
+        Check("★★ 它们**每一条**都写了显式例外说明（不靠“没人发现”）",
+            sideEffectHighRisk.All(s => !string.IsNullOrWhiteSpace(s.Exception)),
+            string.Join("、", sideEffectHighRisk.Where(s => string.IsNullOrWhiteSpace(s.Exception)).Select(s => s.Id)));
+
+        // 反向：聊天那路的登记表里**不许**出现任何 AlwaysDenied 档（高风险永远不随普通聊天开放）
+        var chatHighRisk = chatRegistry.Ids
+            .Select(id => chatRegistry.TryGet(id, out var d) ? d : null)
+            .Where(d => d is not null && ToolDescriptor.AlwaysDenied(d.Category))
+            .Select(d => d!.Id)
+            .ToList();
+        Check("★★ 聊天那路的登记表里没有高风险档（I3：普通聊天永远拿不到文件/shell）",
+            chatHighRisk.Count == 0, string.Join("、", chatHighRisk));
+    }
+
+    /// <summary>轨迹的记录类型里不许出现任何“承载正文/参数”的字段（§9.2 的“审计不写正文”）。</summary>
+    // ─────────────────── 有限步进循环（通用 Agent 平台 · 批次 E） ───────────────────
+
+    /// <summary>
+    /// 批次 E 的确定性半边：AgentTurnLoop 的四条不变量 ——
+    ///   · 默认步数 1 = 只调一次模型（与改造前逐字一致，连“当场做工具”的回调都不会被调用）；
+    ///   · 步数 > 1 且工具**真拿到东西**时才再问一次（并把结果喂回去）；
+    ///   · 工具没拿到东西 → 不空转（不为了凑步数多花一次模型调用）；
+    ///   · 步数上限被钳到 3（配得再大也不会失控）。
+    /// 端到端那半边（真起进程、真喂结果）在 IntegrationHarness 的 S47 里跑。
+    /// </summary>
+    private static void TurnLoopTests()
+    {
+        Section("批次 E · 有限步进循环（默认 1 步 / 只喂真结果 / 不空转 / 上限 3）");
+
+        Check("★ 默认值写在 AppSettings 里且是 1（与改造前逐字一致）",
+            new AppSettings().MaxAgentSteps == 1, new AppSettings().MaxAgentSteps.ToString());
+
+        var settings = new AppSettings { MaxAgentSteps = 2, EnableWebSearch = true };
+        var caps = ChatCapabilitySet.FromSwitches(
+            enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
+            enablePoke: true, scenario: null);
+
+        TurnInputs Turn(string? searchText = null) => new(
+            Started: new DateTime(2026, 9, 24, 12, 0, 0, DateTimeKind.Local),
+            Snapshot: settings, Caps: caps, Context: Array.Empty<ChatMessage>(),
+            Profiles: new List<string>(), ProfileChars: 0, StickerChoices: new List<StickerChoice>(), RoleCount: 0,
+            GroupRoles: null, VibeHint: null, PreviousVibe: "中性", PokeContext: false, MoodText: null,
+            MusicText: null, RecallText: null, SearchText: searchText, LinkText: null);
+
+        // ① 默认 1 步：只调一次，回调一次都不该被调用
+        var client = new ScriptedModelClient(
+            new CompletionResult(null, "第一次就说完了", null, Search: "上海天气"));
+        var inlineCalls = 0;
+        var traces = new TurnTraceStore();
+        var outcome = new AgentTurnLoop(client, traces)
+            .RunAsync("group:10001", Turn(), caps, proactive: false, maxSteps: 1,
+                runInlineTool: _ => { inlineCalls++; return Task.FromResult<string?>("不该被调用"); })
+            .GetAwaiter().GetResult();
+
+        Check("★ 1 步 = 只调一次模型（与改造前逐字一致）",
+            client.Calls == 1 && outcome.Steps == 1 && outcome.InlineTools == 0,
+            "调用 " + client.Calls + " 次 / 步数 " + outcome.Steps);
+        Check("★ 1 步时“当场做工具”的回调根本不触发（循环不参与）", inlineCalls == 0, "回调 " + inlineCalls + " 次");
+        Check("拿到的就是那一次的结果", outcome.Result.Reply == "第一次就说完了", outcome.Result.Reply ?? "(null)");
+
+        // ② 2 步 + 工具真的拿到东西：再问一次，并把它喂出去
+        client = new ScriptedModelClient(
+            new CompletionResult(null, null, null, Search: "上海天气"),
+            new CompletionResult(null, "查到了，今天晴", null));
+        traces = new TurnTraceStore();
+        traces.Begin("group:10001");
+        const string fed = "搜索结果：今天晴，26 度";
+        outcome = new AgentTurnLoop(client, traces)
+            .RunAsync("group:10001", Turn(), caps, proactive: false, maxSteps: 2,
+                runInlineTool: r => Task.FromResult<string?>(r.Search is null ? null : fed))
+            .GetAwaiter().GetResult();
+
+        Check("★ 2 步 + 真拿到结果 → 又问了一次（共两次模型调用）",
+            client.Calls == 2 && outcome.Steps == 2 && outcome.InlineTools == 1,
+            "调用 " + client.Calls + " 次 / 步数 " + outcome.Steps + " / 工具 " + outcome.InlineTools);
+        Check("★ 第二次调用把工具结果喂进去了（searchText 里看得到）",
+            client.SearchTexts.Count == 2 && client.SearchTexts[1] == fed,
+            string.Join(" | ", client.SearchTexts.Select(t => t ?? "(null)")));
+        Check("最终结果来自**第二次**（不是第一次那句“我要去搜”）",
+            outcome.Result.Reply == "查到了，今天晴", outcome.Result.Reply ?? "(null)");
+        var trace = traces.Complete("group:10001", "done");
+        Check("轨迹里记了两步模型 + 一次当场执行",
+            trace is not null && trace.Nodes.Count(n => n.Kind == TurnNodeKind.Model) == 2
+            && trace.Nodes.Count(n => n.Kind == TurnNodeKind.ToolExec) == 1,
+            trace is null ? "(没有轨迹)" : string.Join(",", trace.Nodes.Select(n => n.Kind + ":" + n.Count)));
+
+        // ③ 工具没拿到东西：不空转（不再多问一次）
+        client = new ScriptedModelClient(new CompletionResult(null, null, null, Search: "查不到的东西"));
+        outcome = new AgentTurnLoop(client)
+            .RunAsync("group:10001", Turn(), caps, proactive: false, maxSteps: 3,
+                runInlineTool: _ => Task.FromResult<string?>(null))
+            .GetAwaiter().GetResult();
+        Check("★ 工具没拿到东西 → 立刻收工（不为了凑步数多花一次模型调用）",
+            client.Calls == 1 && outcome.Steps == 1, "调用 " + client.Calls + " 次");
+
+        // ④ 上限被钳到 3
+        client = new ScriptedModelClient(
+            new CompletionResult(null, null, null, Search: "a"),
+            new CompletionResult(null, null, null, Search: "b"),
+            new CompletionResult(null, null, null, Search: "c"),
+            new CompletionResult(null, "第四条", null),
+            new CompletionResult(null, "第五条", null));
+        outcome = new AgentTurnLoop(client)
+            .RunAsync("group:10001", Turn(), caps, proactive: false, maxSteps: 99,
+                runInlineTool: _ => Task.FromResult<string?>("喂回去的东西"))
+            .GetAwaiter().GetResult();
+        Check("★ 上限固定 3：配 99 也只跑 3 次（不会失控）",
+            client.Calls == AgentTurnLoop.MaxSteps && outcome.Steps == AgentTurnLoop.MaxSteps,
+            "调用 " + client.Calls + " 次");
+
+        // ⑤ 上一轮留下的资料是基线，这一轮查到的接在后面（不是覆盖）
+        client = new ScriptedModelClient(
+            new CompletionResult(null, null, null, Search: "第三条"), new CompletionResult(null, "好", null));
+        outcome = new AgentTurnLoop(client)
+            .RunAsync("group:10001", Turn("上一轮留下的资料"), caps, false, 2,
+                runInlineTool: _ => Task.FromResult<string?>("这一轮查到的"))
+            .GetAwaiter().GetResult();
+        Check("★ 喂回内容 = 上一轮资料 + 这一轮查到的（不是覆盖）",
+            client.SearchTexts.Count == 2
+            && client.SearchTexts[0] == "上一轮留下的资料"
+            && client.SearchTexts[1] == "上一轮留下的资料" + "\n\n" + "这一轮查到的",
+            string.Join(" | ", client.SearchTexts.Select(t => (t ?? "(null)").Replace("\n", "\\n"))));
+    }
+
+    /// <summary>按脚本吐结果的假模型客户端（批次 E 的循环测试用）：记下每次的 searchText，供“喂回去了吗”断言。</summary>
+    private sealed class ScriptedModelClient : IModelClient
+    {
+        private readonly Queue<CompletionResult> _script;
+        private readonly List<string?> _searchTexts = new();
+
+        public ScriptedModelClient(params CompletionResult[] script) => _script = new Queue<CompletionResult>(script);
+
+        public int Calls { get; private set; }
+
+        public IReadOnlyList<string?> SearchTexts => _searchTexts;
+
+        public string? BotIdentity { get; set; }
+        public string? BotPersona { get; set; }
+        public int AiDesire { get; set; }
+        public int SuitabilityThreshold { get; set; }
+        public int MaxContextMessages { get; set; }
+        public TimeSpan ChatTimeout => TimeSpan.FromSeconds(1);
+
+        public Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null,
+            CancellationToken ct = default, IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false,
+            string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
+            bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
+            string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
+            bool enableToolRequest = false, string? toolList = null)
+        {
+            Calls++;
+            _searchTexts.Add(searchText);
+            return Task.FromResult(_script.Count > 0 ? _script.Dequeue() : new CompletionResult(null, null, null));
+        }
+
+        public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
+            int maxTokens, double temperature, CancellationToken ct = default, string? baseUrlOverride = null,
+            string? apiKeyOverride = null)
+            => Task.FromResult<string?>(null);
+
+        public Task<(byte[] Data, string Mime, string Ext)?> DownloadImageAsync(string url, CancellationToken ct = default, long? messageId = null)
+            => Task.FromResult<(byte[], string, string)?>(null);
+
+        public Task<(List<string> Delete, string? Reason)> CurateStickersAsync(string libraryTable, int maxDelete, CancellationToken ct = default)
+            => Task.FromResult((new List<string>(), (string?)null));
+
+        public Task<(string? Desc, List<string>? Tags, bool? IsSticker)> DescribeStickerAsync(byte[] image, string mime, CancellationToken ct = default)
+            => Task.FromResult(((string?)null, (List<string>?)null, (bool?)null));
+
+        public Task<string?> SummarizeSessionTitleAsync(string digest, string? previousTitle, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
+
+        public Task<string?> SummarizePersonaAsync(string name, string? existingSummary, IReadOnlyList<string> messages, int maxChars, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
+
+        public Task<string?> DescribeAudioAsync(byte[] audio, string format, string title, string? artist, CancellationToken ct)
+            => Task.FromResult<string?>(null);
+    }
+    private static bool TraceHasNoContentFields()
+    {
+        var banned = new[] { "text", "content", "body", "message", "arg", "raw", "payload" };
+        foreach (var type in new[] { typeof(TurnNode), typeof(TurnTrace) })
+        {
+            foreach (var property in type.GetProperties())
+            {
+                if (banned.Any(b => property.Name.ToLowerInvariant().Contains(b, StringComparison.Ordinal)))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     // ─────────────────────────── P2：决策与静默 ───────────────────────────
@@ -1211,7 +2091,7 @@ public static class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false)
+            bool enableToolRequest = false, string? toolList = null)
             => Task.FromResult(new CompletionResult(null, null, null));
 
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,

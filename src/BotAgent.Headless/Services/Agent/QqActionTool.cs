@@ -190,7 +190,7 @@ public interface IQqActionHost
 /// 绑定在一次 QQ 会话上的动作宿主：把动作里的 <c>sender</c>/<c>me</c>/<c>this</c> 这类写法翻成真数字，
 /// 再交给 OneBot 网关。没有会话上下文时（面板“试一条”）只有写死 QQ 号的动作能用。
 /// </summary>
-public sealed class SessionQqActionHost : IQqActionHost
+public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools.IToolExecutor
 {
     private readonly IQqActions _gateway;
     private readonly bool _isGroup;
@@ -217,6 +217,39 @@ public sealed class SessionQqActionHost : IQqActionHost
     }
 
     public string ContextLine { get; }
+
+    // ── 批次 A 收尾：这一族**真的能执行**（IToolExecutor），执行体就是下面那个 switch ──
+    // 登记表里它是 `qq.actions`（见 Services/Tools/ToolExecutors.cs）；判定不在这里（闸门在调用方）。
+
+    /// <summary>执行者标识（与 <c>QqToolSpecs.ExecutorActions</c> 同一个常量）。</summary>
+    public string Id => BotAgent.Services.Tools.QqToolSpecs.ExecutorActions;
+
+    /// <summary>今天真正干这件事的组件（面板与审计展示用）。</summary>
+    public string Implementation => "Services/Agent/QqActionTool.cs（SessionQqActionHost，本体就是那个 switch）";
+
+    /// <summary>false = 已经接进统一执行（调用方给 ToolCall，它直接干）。</summary>
+    public bool LegacyPath => false;
+
+    /// <summary>
+    /// 统一执行入口：<c>qq.like</c> 这种工具名 → 动作名 → 既有那个 <see cref="ExecuteAsync(QqActionSpec, JsonObject, CancellationToken)" />。
+    /// 认不出的动作名直接失败（不猜、不降级），与目录（<c>QqActionCatalog</c>）同一份真相。
+    /// </summary>
+    public async Task<BotAgent.Domain.Tools.ToolOutcome> ExecuteAsync(
+        BotAgent.Domain.Tools.ToolCall call, CancellationToken ct = default)
+    {
+        var raw = call?.ToolId ?? string.Empty;
+        var actionName = raw.StartsWith("qq.", StringComparison.Ordinal) ? raw[3..] : raw;
+        var canonical = QqActionCatalog.Canonical(actionName);
+        var spec = canonical is null ? null : QqActionCatalog.All.FirstOrDefault(a => a.Name == canonical);
+        if (spec is null)
+        {
+            return BotAgent.Domain.Tools.ToolOutcome.Failure(
+                "unknown_action", $"没有这个 QQ 动作：{actionName}（见目录里那几个）");
+        }
+
+        var text = await ExecuteAsync(spec, call!.Arguments ?? new JsonObject(), ct);
+        return BotAgent.Domain.Tools.ToolOutcome.Success(text, "qq 动作 " + spec.Name);
+    }
 
     public async Task<string> ExecuteAsync(QqActionSpec spec, JsonObject args, CancellationToken ct)
     {

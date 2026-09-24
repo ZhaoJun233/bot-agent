@@ -99,9 +99,14 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
 
     private void OnMessage(QqChatMessage msg)
     {
-        var channel = Channels.IsOfficial(msg.Channel) ? Channels.Official : Channels.Private;
+        // 通道以**上行自己报的**为准（三条上行各自知道自己是哪条）——
+        // 以前这里把“不是官方的”一律归成私域，于是第三条通道（本地）的消息会被贴上私域标签 →
+        // 白名单/会话 key/上下文全部走错一条路（真实踩过：S48 的第一轮就是这个症状）。
+        var channel = Channels.Declared(msg.Channel);
         Learn(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
-        MessageReceived?.Invoke(Channels.IsOfficial(msg.Channel) ? msg : msg with { Channel = channel });
+        MessageReceived?.Invoke(string.Equals(msg.Channel, channel, StringComparison.OrdinalIgnoreCase)
+            ? msg
+            : msg with { Channel = channel });
     }
 
     private void OnPoked(QqPokeEvent evt)
@@ -154,7 +159,11 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
             return learned;
         }
 
-        return Channels.IsAliasId(id) ? Channels.Official : Channels.Private;
+        return Channels.IsLocalId(id)
+            ? Channels.Local
+            : Channels.IsAliasId(id)
+                ? Channels.Official
+                : Channels.Private;
     }
 
     private IQqChatSource Resolve(bool isGroup, long id)
@@ -208,7 +217,7 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
     {
         if (id > 0)
         {
-            var ch = Channels.IsOfficial(channel) ? Channels.Official : Channels.Private;
+            var ch = Channels.Declared(channel);
             _learned[(isGroup, id)] = ch;
             _byKey[Channels.Key(ch, isGroup, id)] = ch;
         }

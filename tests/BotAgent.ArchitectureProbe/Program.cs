@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace BotAgent.ArchitectureProbe;
 
@@ -85,6 +86,12 @@ public static class Program
         SelfTests(index);
         RatchetChecks(index);
         LayoutChecks(index);
+        ToolDirectoryChecks(index);
+        AuditAndTraceChecks(index);
+        PanelApprovalChecks(index);
+        TurnLoopChecks(index);
+        LocalChannelChecks(index);
+        ServerGateChecks(index);
         RedLineChecks(index);
 
         Console.WriteLine();
@@ -360,7 +367,229 @@ public static class Program
             fatTypes.Count == 0, string.Join("、", fatTypes));
     }
 
+    // ─────────────────── 统一工具目录（通用 Agent 平台 · 批次 A） ───────────────────
+
+    private static void ToolDirectoryChecks(SourceIndex index)
+    {
+        Section("统一工具目录 · 声明在 Domain、执行者只在 Services/Tools（批次 A）");
+
+        var executorFiles = index.Files
+            .Where(f => f.NoComments.Contains("IToolExecutor", StringComparison.Ordinal))
+            .Select(f => f.RelativePath)
+            .ToList();
+        // 口径（2026-09-24 批次 A 收尾后）：接口与登记在 Services/Tools/**，
+        // **真实现**在各族的执行体文件里（Services/Agent/**）—— 两条都允许，但 **Domain/** 里一个词都不许有。
+        var stray = executorFiles
+            .Where(p => !p.StartsWith("Services/Tools/", StringComparison.Ordinal)
+                        && !p.StartsWith("Services/Agent/", StringComparison.Ordinal))
+            .ToList();
+        Check("IToolExecutor 相关代码只出现在 Services/Tools/** 或 Services/Agent/**（Domain 里不许出现）",
+            executorFiles.Count > 0 && stray.Count == 0,
+            executorFiles.Count == 0 ? "一处都没解析到（执行者登记是不是被删了？）" : string.Join("、", stray));
+
+        // “真实现”必须是**类型声明**上真接了这个接口（不是靠注释声称）
+        var realImplements = new List<string>();
+        foreach (var (file, type) in new[]
+                 {
+                     ("Services/Agent/ServerAgentRunner.cs", "ServerAgentRunner"),
+                     ("Services/Agent/QqActionTool.cs", "SessionQqActionHost"),
+                 })
+        {
+            var text = index.ByPath(file)?.NoComments ?? string.Empty;
+            if (Regex.IsMatch(text, @"class\s+" + type + @"\b[^\n]*IToolExecutor"))
+            {
+                realImplements.Add(type);
+            }
+        }
+
+        Check("★ 两家真实现（// 的两族）在类型声明上真接了 IToolExecutor",
+            realImplements.Count == 2, string.Join("、", realImplements));
+
+        Check("工具声明落在 Domain/Tools/ToolSpec.cs",
+            index.ByPath("Domain/Tools/ToolSpec.cs") is not null, "找不到（挪走了请同步这条与文档）");
+
+        // 红线锚点：这三样是“一份目录、两路复用”的支点，重构里不许消失。
+        Anchor(index, "ToolDirectory", "统一工具目录（一份目录：聊天 / QQ 动作 / 服务器工具）");
+        Anchor(index, "BuiltinToolExecutors", "执行者登记（每个 ToolSpec 都要有执行者）");
+        Anchor(index, "/api/tools", "面板的工具目录只读页（批次 A5）");
+
+        // // 那路的工具名单：批次 D 起**来自统一目录**（ParseTools 不再内联数组）——
+        // 少一个 = “能执行却没登记”，多一个 = “登记了却没人执行”，两种都在这一条上暴露。
+        var declared = NamesIn(index, "Services/Tools/ServerToolSpecs.cs", "new\\(\"([a-z]+)\",\\s*ToolCategory\\.");
+        var runner = index.ByPath("Services/Agent/ServerAgentRunner.cs");
+        var usesDirectory = runner is not null
+            && runner.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal)
+            && runner.NoComments.Contains("ServerToolSpecs.All", StringComparison.Ordinal);
+        Check($"// 的工具名单来自统一目录（目录 {declared.Count} 个；不再内联数组）",
+            declared.Count == 6 && declared.Distinct(StringComparer.Ordinal).Count() == 6 && usesDirectory,
+            runner is null ? "找不到 Services/Agent/ServerAgentRunner.cs" : $"读目录 = {usesDirectory}");
+
+        // 批次 D：给模型看的那份清单也由目录生成（名字 + 一句话 + 参数 + 是否要批准）。
+        Anchor(index, "ToolPromptText", "工具清单渲染（按策略裁剪后进提示词）");
+        Anchor(index, "[可用工具]", "提示词里的工具清单段（批次 D）");
+
+        // QQ 动作那条：目录（QqActionCatalog）是唯一真源 —— 投影必须由它推出来，不许手抄一份。
+        var qqProjection = index.ByPath("Services/Tools/QqToolSpecs.cs");
+        Check("QQ 动作目录由 QqActionCatalog 投影而来（不是手抄的第二个清单）",
+            qqProjection is not null && qqProjection.NoComments.Contains("QqActionCatalog.All", StringComparison.Ordinal),
+            qqProjection is null ? "找不到 Services/Tools/QqToolSpecs.cs" : "没看到 QqActionCatalog.All");
+    }
+
+    /// <summary>
+    /// 从源码文本里抠出一组名字（“目录 vs 执行器”的集合比对用）。
+    /// splitQuoted = true 时把捕获到的整段再按双引号里的短标识符拆开（等价于字符串数组）。
+    /// </summary>
+    private static List<string> NamesIn(SourceIndex index, string path, string pattern, bool splitQuoted = false)
+    {
+        var file = index.ByPath(path);
+        var found = new List<string>();
+        if (file is null)
+        {
+            return found;
+        }
+
+        foreach (Match match in Regex.Matches(file.NoComments, pattern))
+        {
+            var text = match.Groups[1].Value;
+            if (!splitQuoted)
+            {
+                found.Add(text);
+                continue;
+            }
+
+            foreach (Match quoted in Regex.Matches(text, "\\\"([a-z_]+)\\\""))
+            {
+                found.Add(quoted.Groups[1].Value);
+            }
+        }
+
+        return found;
+    }
+
     // ─────────────────────────── 红线锚点（重构不许弄坏的东西） ───────────────────────────
+
+    // ─────────────────── 面板审批（通用 Agent 平台 · 批次 I） ───────────────────
+
+    private static void PanelApprovalChecks(SourceIndex index)
+    {
+        Section("面板审批（批次 I）");
+
+        Anchor(index, "/api/approvals/decide", "面板审批写路径（高权限：前置 fail-closed）");
+        Anchor(index, "PanelDecide", "面板决策复用同一份校验（ApprovalFlow.Handle）");
+        Anchor(index, "panel_token_required", "未配面板令牌 → 面板审批不可用（fail-closed）");
+
+        // 前置校验必须长在**写路径自己**身上：只在 UI 拦 = 等于没拦（接口还能被直接打）。
+        var approvals = index.ByPath("Adapters/Panel/WebUiServer.Approvals.cs");
+        Check("写路径自己带两道前置（审批开关 + 面板令牌）",
+            approvals is not null
+            && approvals.NoComments.Contains("approvals_disabled", StringComparison.Ordinal)
+            && approvals.NoComments.Contains("panel_token_required", StringComparison.Ordinal),
+            approvals is null ? "找不到 Adapters/Panel/WebUiServer.Approvals.cs" : "两处都要在");
+    }
+
+    // ─────────── 有限步进循环（通用 Agent 平台 · 批次 E） ───────────
+
+    private static void TurnLoopChecks(SourceIndex index)
+    {
+        Section("有限步进循环（批次 E）");
+
+        Anchor(index, "AgentTurnLoop", "有限步进循环骨架（模型调用 + 上限 + 不空转）");
+        Anchor(index, "InlineTurnTools", "当场做掉只读工具");
+        Anchor(index, "MaxAgentSteps", "步数上限设置（默认 1 = 与改造前逐字一致）");
+        Anchor(index, "[循环] 当场搜索", "当场那条路的现场日志");
+
+        // 默认值必须写在 AppSettings 里（§9.2：不许散在代码里）；上限必须在循环里被钳住。
+        var settings = index.ByPath("Services/AppSettings.cs");
+        Check("★ MaxAgentSteps 的默认值写在 AppSettings 且是 1",
+            settings is not null
+            && Regex.IsMatch(settings.NoComments, @"MaxAgentSteps\s*\{\s*get;\s*set;\s*\}\s*=\s*1\s*;"),
+            "默认值写在 AppSettings（= 1）");
+
+        var loop = index.ByPath("Services/Reply/AgentTurnLoop.cs");
+        Check("★ 步数在循环里被钳到 1..3",
+            loop is not null
+            && loop.NoComments.Contains("Math.Clamp(maxSteps, MinSteps, MaxSteps)", StringComparison.Ordinal)
+            && loop.NoComments.Contains("public const int MaxSteps = 3;", StringComparison.Ordinal),
+            "钳位与上限常量都在 AgentTurnLoop 里");
+    }
+
+    // ─────────────────── `//` 那路过闸门（批次 A 收尾） ───────────────────
+
+    private static void ServerGateChecks(SourceIndex index)
+    {
+        Section("`//` 过闸门（批次 A 收尾）");
+
+        Anchor(index, "ServerToolGate", "`//` 那路的闸门接线（登记表 + 策略快照）");
+        Anchor(index, "HighRiskExceptions", "高风险例外**显式点名**（不靠“没人发现”）");
+        Anchor(index, "AgentServerUseGate", "开关（默认关 = 与今天逐字一致）");
+
+        // 例外只能按**工具名**点名：断言里不许出现“按类别放开”的写法（那就等于把 I3 拆了）。
+        var policy = index.ByPath("Domain/Permissions/ToolPolicy.cs");
+        Check("★ 例外字段是**工具名集合**（不是类别集合）—— I3 不被这类改动削弱",
+            policy is not null
+            && Regex.IsMatch(policy.NoComments, @"IReadOnlySet<string>\?\s+HighRiskExceptions"),
+            policy is null ? "找不到 ToolPolicy.cs" : "字段类型不对");
+
+        // 闸门必须**在类别禁令处**才认这条例外（审批分支不许认）
+        var gate = index.ByPath("Domain/Permissions/ToolGate.cs");
+        Check("★ 例外只在“类别禁令”那一处生效（审批分支照旧不认高风险）",
+            gate is not null
+            && gate.NoComments.Contains("policy.HighRiskExceptions?.Contains(descriptor.Id)", StringComparison.Ordinal)
+            && gate.NoComments.Contains("approval_cannot_grant", StringComparison.Ordinal),
+            gate is null ? "找不到 ToolGate.cs" : "例外接线位置不对");
+    }
+
+    // ─────────────────── 第三条通道（通用 Agent 平台 · 批次 F） ───────────────────
+
+    private static void LocalChannelChecks(SourceIndex index)
+    {
+        Section("第三条通道（批次 F）");
+
+        Anchor(index, "LocalChannelSource", "本地通道（IQqChatSource 的第三个实现）");
+        Anchor(index, "/api/local/message", "本地通道入口（名单非空 + 面板令牌）9，两道前置）");
+        Anchor(index, "local_channel_disabled", "名单空 → 整条通道不建（fail-closed）");
+        Anchor(index, "LocalBase", "本地号段（路由器按数字路由，三段互不相撞）");
+        Anchor(index, "Channels.Declared", "通道归一（上行自报 → 内部通道）—— 全仓只该有一处");
+
+        // “不是官方就是私域”这句话以前写在两处，第三条通道一上来就被贴成私域（S48 真实踩过）。
+        // 这条断言钉死：那两处必须走同一个归一函数。
+        var hardcoded = index.Files
+            .Where(f => f.NoComments.Contains("IsOfficial(", StringComparison.Ordinal)
+                        && f.NoComments.Contains("Channels.Private", StringComparison.Ordinal)
+                        && Regex.IsMatch(f.NoComments, @"IsOfficial\([^)]*\)\s*\?\s*[^:
+]*Official\s*:\s*[^;
+]*Private"))
+            .Select(f => f.RelativePath)
+            .ToList();
+        Check("★ 没有地方再自己写“不是官方就是私域”（归一只走 Channels.Declared）",
+            hardcoded.Count == 0, string.Join("、", hardcoded));
+    }
+
+    // ─────────────────── 回复审计与决策轨迹（通用 Agent 平台 · 批次 C） ───────────────────
+
+    private static void AuditAndTraceChecks(SourceIndex index)
+    {
+        Section("回复审计与决策轨迹（批次 C）");
+
+        Anchor(index, "ReplyAuditRules", "回复审计规则（凭据 / 本机路径 → 整条不发）");
+        Anchor(index, "TurnTraceStore", "决策轨迹台账（一轮一条，只有形状）");
+        Anchor(index, "/api/traces", "面板的轨迹只读端点（批次 H 的追踪页只读它）");
+
+        // 审计必须真的接在发送缝上：规则写好但没人调 = 假绿（这个仓库踩过）。
+        var sender = index.ByPath("Services/Reply/PlainSender.cs");
+        Check("回复审计接在发送层（PlainSender 里真的调了 ReplyAuditRules.Judge）",
+            sender is not null && sender.NoComments.Contains("ReplyAuditRules.Judge", StringComparison.Ordinal),
+            sender is null ? "找不到 Services/Reply/PlainSender.cs" : "没看到调用点");
+
+        // 轨迹记录**不许**出现承载正文的字段（§9.2 的“审计不写正文”；SafetyProbe 还有一条反射断言）。
+        var trace = index.ByPath("Domain/Ops/TurnTrace.cs");
+        var contentFields = trace is null
+            ? new List<string> { "找不到 Domain/Ops/TurnTrace.cs" }
+            : Regex.Matches(trace.NoComments, @"\bstring\??\s+\w*(Text|Content|Body|Message)\w*\b")
+                .Select(m => m.Value).ToList();
+        Check("轨迹的记录类型里没有承载正文的字段（只允许 id / 枚举 / 状态码 / 时长 / 计数）",
+            contentFields.Count == 0, string.Join("、", contentFields));
+    }
 
     private static void RedLineChecks(SourceIndex index)
     {

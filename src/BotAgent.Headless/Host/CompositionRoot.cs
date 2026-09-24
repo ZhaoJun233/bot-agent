@@ -13,6 +13,7 @@ using BotAgent.Services.Qq;
 using BotAgent.Services.Stickers;
 using BotAgent.Services.Voice;
 using BotAgent.Services.Links;
+using BotAgent.Services.Local;
 using BotAgent.Services.Music;
 using BotAgent.Services.Net;
 using BotAgent.Services.Reply;
@@ -87,7 +88,7 @@ internal static class CompositionRoot
         var settingsStore = new SettingsStore();
 
         // ① 上行通道层（协议端 + 可选的官方通道 + 聚合器）：见 BuildChannelLayer
-        var (gateway, source, official) = BuildChannelLayer(settings, settingsBox);
+        var (gateway, source, official, local) = BuildChannelLayer(settings, settingsBox);
 
         // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
         var (brain, store, profiles, stickers, agentBridge, voice, music, links, research) =
@@ -111,7 +112,9 @@ internal static class CompositionRoot
         var throttled = new ThrottledLog(ui.EmitLog);
 
         // 发送（分句/节奏/记账）：聊天、agent 回话、审批回执共用
-        var plain = new PlainSender(settingsBox, source, registry, ui, ownLedger, ui.EmitLog);
+        // 决策轨迹（批次 C）：一轮一条、只有形状；回复链 / 发送层 / 能力闸门三处往上记节点。
+        var traces = new TurnTraceStore();
+        var plain = new PlainSender(settingsBox, source, registry, ui, ownLedger, ui.EmitLog, traces);
 
         // 各域用例
         var vibes = new VibeTracker();
@@ -131,12 +134,23 @@ internal static class CompositionRoot
             LogThrottled: (key, message) => throttled.Write(key, message),
             Log: ui.EmitLog,
             RecordPokeMood: now => mood.RecordPoke(now)));
+        // 会话级权限元数据（批次 B）：内存台账，只记录不改判定 —— 面板的“工具/权限”那页读它。
+        var sessionPolicies = new SessionPolicyLedger();
         var approvals = new ApprovalUseCase(settingsBox, new ApprovalHooks(
             Log: ui.EmitLog,
             Mask: (text, key) => MaskingRules.Text(settingsBox.Current.AgentMaskSensitive, text,
                 key is null ? null : registry.KnownNames(key)),
             SendPlainAsync: plain.SendPlainAsync,
-            SendApprovalReplyAsync: plain.SendApprovalReplyAsync));
+            SendApprovalReplyAsync: plain.SendApprovalReplyAsync,
+            // 批次 I（面板审批）：面板没有入站消息可回，回执按**会话 key**发回原会话
+            // （群里的人要看到“谁批了”）；会话已删就什么也不做（失败关闭）。
+            SendToKeyAsync: (key, text) =>
+            {
+                var target = registry.Find(key);
+                return target is null ? Task.CompletedTask : plain.SendPlainAsync(target, text);
+            }),
+            sessionPolicies,
+            traces);
 
         // agent 命令（//）：会话台账 + 内置/外部两路后端
         var sessions = new AgentSessionStore(
@@ -158,7 +172,8 @@ internal static class CompositionRoot
             new ReplyHooks(
                 Log: ui.EmitLog,
                 SelfId: () => identity.SelfId,
-                IsDisposed: () => lifetime.IsDisposed));
+                IsDisposed: () => lifetime.IsDisposed),
+            traces);
         poke.RequestReply = conversation => reply.RequestReply(conversation, null);
 
         // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）
@@ -196,9 +211,11 @@ internal static class CompositionRoot
 
         // 服务器健康日报（每天定时私聊一条状态）：整条链路只用机器人自己 + 协议端，
         // **不经过外部设备 agent**（那台电脑可能根本没开）—— 号主 2026-09-18 明确要求。
+        // 宿主事实（cgroup 内存上限 / 负载）：健康日报与面板仪表盘共用同一份只读端口
+        var hostFacts = new HostMetrics();
         var healthReports = new HealthReportService(settingsBox, registry, reply, identity, scheduler, voice, gateway,
             new HttpFetcher(TimeSpan.FromSeconds(6), msg => FileLog.Write("Net", msg), "health"),
-            new HostMetrics());
+            hostFacts);
 
         // 面板：一键重启 = 退出进程。为什么不自接 docker.sock 重启容器：那等于把 root 交给面板；
         // 容器本身就是 `restart: unless-stopped`，退出去 Docker 会毫秒级把它拉起来。
@@ -209,6 +226,11 @@ internal static class CompositionRoot
         var web = new WebUiServer(settings.HealthPort, settingsBox, gateway, source, agent, loginQr, panelHttp, neteaseHttp,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
             reply, participation, agentCmds, agentBridge, healthReports,
+            sessionPolicies: sessionPolicies,
+            traces: traces,
+            hostFacts: hostFacts,
+            approvals: approvals,
+            localChannel: local,
             onRestart: () =>
             {
                 FileLog.Write("Host", "一键重启：即将退出，让 Docker 把容器重新拉起来…");
@@ -234,7 +256,7 @@ internal static class CompositionRoot
     /// 上行通道层：私域协议端 →（配齐了 appid/secret 且开关打开时）官方通道 → 聚合器。
     /// 两条路交给**同一个** Agent，隔离靠会话 key 的通道前缀（见 Channels.Key）。顺序与日志措辞逐字搬来。
     /// </summary>
-    private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official) BuildChannelLayer(
+    private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local) BuildChannelLayer(
         AppSettings settings, SettingsBox settingsBox)
     {
         var gateway = new OneBotGateway(settingsBox)
@@ -247,6 +269,7 @@ internal static class CompositionRoot
         // （见 Channels.Key），而不是靠两套 Agent（那样白名单/上下文/面板都得写两遍，迟早不一致）。
         IQqChatSource source = gateway;
         OfficialBotGateway? official = null;
+        LocalChannelSource? local = null;
         if (settings.OfficialEnabled
             && !string.IsNullOrWhiteSpace(settings.OfficialAppId)
             && !string.IsNullOrWhiteSpace(settings.OfficialAppSecret))
@@ -272,7 +295,26 @@ internal static class CompositionRoot
             FileLog.Write("Channel", "官方通道开关是开的，但 appid/secret 没配齐 → 这次只跑私域通道");
         }
 
-        return (gateway, source, official);
+        // 本地通道（批次 F）：**名单非空才建**（默认关）。
+        // 它走的是同一张工具表 + 同一套治理，只是入站来自面板那张令牌门后的 POST /api/local/message。
+        if (!string.IsNullOrWhiteSpace(settings.LocalChannelIds))
+        {
+            local = new LocalChannelSource(msg => FileLog.Write("Local", msg));
+            if (source is ChannelRouter router)
+            {
+                // 已经有两条上行：把本地这条也接进同一个路由器（隔离靠会话 key 前缀 local:）
+                source = new ChannelRouter(
+                    router.Sources.Concat(new IQqChatSource[] { local }), msg => FileLog.Write("Channel", msg));
+            }
+            else
+            {
+                source = new ChannelRouter(new IQqChatSource[] { gateway, local }, msg => FileLog.Write("Channel", msg));
+            }
+
+            FileLog.Write("Channel", "本地通道已启用（名单非空；入口：面板 POST /api/local/message，与另两条上行隔离）");
+        }
+
+        return (gateway, source, official, local);
     }
 
     /// <summary>

@@ -25,15 +25,24 @@ public enum ToolCategory
     /// <summary>改设置 / 人设 / 白名单：只走受保护的管理入口，不由普通聊天审批。</summary>
     SettingsWrite = 4,
 
-    /// <summary>文件写入 / shell / 进程控制：本轮不接入（保留旧 AgentBridge 的授权边界）。</summary>
+    /// <summary>
+    /// 文件读写 / shell / 进程控制：普通聊天**不接入**（保留 <c>//</c> 与旧 AgentBridge 的授权边界）。
+    /// 2026-09-24（批次 A）：统一目录里 <c>read</c> 也算这一档 —— 它读的是任意路径（含库文件与 .env），
+    /// 与“写文件”同属文件系统访问，宁可从严。
+    /// </summary>
     FileOrShell = 5,
 
     /// <summary>远程 Agent / 桥接控制：本轮不从新路径开放。</summary>
     RemoteAgent = 6,
 }
 
-/// <summary>一个能力的登记信息。**必须在服务端登记**才可能被执行（V3 §9.2 第一条）。</summary>
-public sealed record ToolDescriptor(
+/// <summary>
+/// 一个能力的登记信息。**必须在服务端登记**才可能被执行（V3 §9.2 第一条）。
+/// 2026-09-24（通用 Agent 平台 · 批次 A）：不再 sealed —— 统一目录用 <c>Domain/Tools/ToolSpec</c> 表达它
+/// （Id/Category/Summary/ReadOnly 是同一批字段），这样“一份目录”能被闸门（只读 Id/Category）与
+/// 面板/提示词（要参数与执行者）同时使用，不必再维护第二张表。
+/// </summary>
+public record ToolDescriptor(
     string Id,
     ToolCategory Category,
     string Summary,

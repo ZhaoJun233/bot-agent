@@ -119,7 +119,7 @@ public sealed class OpenAiClient : IModelClient
 
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
         IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false,
-        bool enableAsk = false, bool enableToolRequest = false)
+        bool enableAsk = false, bool enableToolRequest = false, string? toolList = null)
     {
         if (string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
@@ -174,7 +174,8 @@ public sealed class OpenAiClient : IModelClient
             VoiceEagerness: Math.Clamp(_settings.VoiceEagerness, 0, 100),
             EnableWebSearch: enableWebSearch,
             EnableAsk: enableAsk,
-            EnableToolRequest: enableToolRequest));
+            EnableToolRequest: enableToolRequest,
+            ToolList: toolList));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
         var built = await _transport.BuildAsync(window, systemContent, quotableIds, ct);
 

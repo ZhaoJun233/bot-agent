@@ -210,6 +210,9 @@ public static class BotConfig
     [nameof(AppSettings.PanelDeployEnabled)] = new[] { "QQCHAT_PANEL_DEPLOY" },
     [nameof(AppSettings.PanelDeployUrl)] = new[] { "QQCHAT_PANEL_DEPLOY_URL" },
     [nameof(AppSettings.AgentServerMaxSteps)] = new[] { "QQCHAT_AGENT_SERVER_STEPS" },
+    [nameof(AppSettings.MaxAgentSteps)] = new[] { "QQCHAT_MAX_AGENT_STEPS" },
+    [nameof(AppSettings.LocalChannelIds)] = new[] { "QQCHAT_LOCAL_CHANNEL_IDS" },
+    [nameof(AppSettings.AgentServerUseGate)] = new[] { "QQCHAT_AGENT_SERVER_GATE" },
     [nameof(AppSettings.AgentServerCommandTimeoutSeconds)] = new[] { "QQCHAT_AGENT_SERVER_CMD_TIMEOUT" },
 
     // ---- 服务器健康日报（定时私聊推送）----
@@ -333,6 +336,9 @@ public static class BotConfig
         s.PanelDeployEnabled = Bool("QQCHAT_PANEL_DEPLOY") ?? s.PanelDeployEnabled;
         s.PanelDeployUrl = Str("QQCHAT_PANEL_DEPLOY_URL") ?? s.PanelDeployUrl;
         s.AgentServerMaxSteps = Int("QQCHAT_AGENT_SERVER_STEPS") ?? s.AgentServerMaxSteps;
+        s.MaxAgentSteps = Int("QQCHAT_MAX_AGENT_STEPS") ?? s.MaxAgentSteps;
+        s.LocalChannelIds = Str("QQCHAT_LOCAL_CHANNEL_IDS") ?? s.LocalChannelIds;
+        s.AgentServerUseGate = Bool("QQCHAT_AGENT_SERVER_GATE") ?? s.AgentServerUseGate;
         s.AgentServerCommandTimeoutSeconds = Int("QQCHAT_AGENT_SERVER_CMD_TIMEOUT") ?? s.AgentServerCommandTimeoutSeconds;
         s.HealthReportEnabled = Bool("QQCHAT_HEALTH_REPORT") ?? s.HealthReportEnabled;
         s.HealthReportTime = Str("QQCHAT_HEALTH_REPORT_TIME") ?? s.HealthReportTime;

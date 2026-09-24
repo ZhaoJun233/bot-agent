@@ -1,0 +1,344 @@
+/*
+ * 追踪页（批次 H）的样式：只用现有设计语言（.card / 暗色主题变量 / 同一套圆角与边框），
+ * 不引任何 CSS 框架、不加构建步骤。三栏在窄屏折成一栏。
+ */
+
+.trace-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line, #e3e3e3);
+}
+
+.trace-bar h1 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.trace-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.trace-col {
+  overflow: auto;
+  padding: 12px;
+  border-right: 1px solid var(--line, #e3e3e3);
+  min-width: 0;
+}
+
+#traceKeys {
+  flex: 0 0 220px;
+}
+
+#traceRuns {
+  flex: 1 1 auto;
+}
+
+#traceDetail {
+  flex: 0 0 260px;
+  border-right: 0;
+}
+
+.trace-col-head {
+  font-size: 13px;
+  margin: 4px 0 8px;
+  opacity: 0.72;
+}
+
+.trace-key,
+.trace-run {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--line, #e3e3e3);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.trace-key.active,
+.trace-run.active {
+  border-color: var(--accent, #0067c0);
+  font-weight: 600;
+}
+
+.trace-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.trace-run-key {
+  font-weight: 600;
+}
+
+.trace-run-meta {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.trace-card {
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+.trace-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.trace-card-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.trace-card-hint {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.trace-badge {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.trace-node {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  margin: 2px 0;
+}
+
+.trace-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.trace-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.trace-facts dt {
+  opacity: 0.6;
+}
+
+.trace-facts dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.trace-empty,
+.trace-legend {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.trace-legend {
+  margin-top: 10px;
+}
+
+/* 待审批卡（批次 I）：高权限动作要看起来就“需要停一下”——黄边 + 两个按钮各占一半。 */
+.trace-approvals {
+  margin-bottom: 10px;
+  border-left: 3px solid #9a6700;
+}
+
+.trace-approval {
+  padding: 6px 0;
+  border-top: 1px dashed var(--line, #e3e3e3);
+}
+
+.trace-approval-head {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.trace-approval-summary {
+  font-size: 13px;
+}
+
+.trace-approval-meta {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.trace-approval-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.trace-btn {
+  flex: 1 1 auto;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.trace-btn.ok {
+  color: #1a7f37;
+}
+
+.trace-btn.bad {
+  color: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  .trace-btn.ok {
+    color: #4ade80;
+  }
+
+  .trace-btn.bad {
+    color: #f87171;
+  }
+}
+
+/* 颜色语义：只表达状态（绿=放行 / 灰=静默 / 黄=待审批 / 红=拒绝）。 */
+.trace-badge.ok,
+.trace-node.ok {
+  color: #1a7f37;
+}
+
+.trace-badge.mute,
+.trace-node.mute {
+  color: #6b7280;
+}
+
+.trace-badge.warn,
+.trace-node.warn {
+  color: #9a6700;
+}
+
+.trace-badge.bad,
+.trace-node.bad {
+  color: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  .trace-badge.ok,
+  .trace-node.ok {
+    color: #4ade80;
+  }
+
+  .trace-badge.mute,
+  .trace-node.mute {
+    color: #9ca3af;
+  }
+
+  .trace-badge.warn,
+  .trace-node.warn {
+    color: #fbbf24;
+  }
+
+  .trace-badge.bad,
+  .trace-node.bad {
+    color: #f87171;
+  }
+}
+
+/* 手机端：三栏折成一栏（与面板既有的 760px 断点一致）。 */
+
+/* ─────────── 仪表盘（批 J）：dash.js 也要进护栏 ─────────── */
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.dash-tile {
+  padding: 10px 12px;
+}
+
+.dash-label {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.dash-big {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 2px 0;
+}
+
+.dash-big.ok {
+  color: #1a7f37;
+}
+
+.dash-big.mute {
+  color: #6b7280;
+}
+
+.dash-big.warn {
+  color: #9a6700;
+}
+
+.dash-big.bad {
+  color: #b42318;
+}
+
+.dash-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+@media (prefers-color-scheme: dark) {
+  .dash-big.ok {
+    color: #4ade80;
+  }
+
+  .dash-big.mute {
+    color: #9ca3af;
+  }
+
+  .dash-big.warn {
+    color: #fbbf24;
+  }
+
+  .dash-big.bad {
+    color: #f87171;
+  }
+}
+@media (max-width: 760px) {
+  .trace-body {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  #traceKeys,
+  #traceRuns,
+  #traceDetail {
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line, #e3e3e3);
+  }
+}
