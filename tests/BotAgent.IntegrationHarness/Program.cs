@@ -1800,6 +1800,15 @@ public static partial class Program
         const int napcatPort = 18101;
         const string panelToken = "it-panel-token";
         const string initialQr = "https://txz.qq.com/p?k=INITIAL-KEY&f=1600001615";
+        const string legacyPassword = "synthetic-pass-123";
+        var dataDir = NewDataDir("s17");
+        var legacyPasswordFile = Path.Combine(dataDir, "data", "panel-password");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPasswordFile)!);
+        var passwordSalt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+        var passwordHash = System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(
+            legacyPassword, passwordSalt, 210_000, System.Security.Cryptography.HashAlgorithmName.SHA256, 32);
+        File.WriteAllText(legacyPasswordFile,
+            $"1:{Convert.ToBase64String(passwordSalt)}:{Convert.ToBase64String(passwordHash)}");
 
         using var openAi = new MockOpenAi(openAiPort);
         openAi.Start();
@@ -1810,7 +1819,7 @@ public static partial class Program
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using var bot = StartBot(new Dictionary<string, string>
         {
-            ["QQCHAT_DATA_DIR"] = NewDataDir("s17"),
+            ["QQCHAT_DATA_DIR"] = dataDir,
             ["QQCHAT_API_KEY"] = "sk-mock",
             ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
             ["QQCHAT_MODEL"] = "mock-model",
@@ -1818,6 +1827,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = "ws://127.0.0.1:13027", // 没人监听：本场景不关心消息通道
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_PANEL_TOKEN"] = panelToken,
+            ["QQCHAT_AGENT_TOKEN"] = "it-bridge-token",
             ["QQCHAT_NAPCAT_WEBUI_URL"] = napcat.BaseUrl,
             ["QQCHAT_NAPCAT_WEBUI_TOKEN"] = napcat.WebUiToken
         });
@@ -1825,6 +1835,17 @@ public static partial class Program
         await WaitForPortAsync(panelPort, cts.Token, bot);
 
         var panel = $"http://127.0.0.1:{panelPort}";
+
+        Check("旧面板密码文件迁入受保护的密钥库后删除", !File.Exists(legacyPasswordFile));
+        using (var auth = new HttpClient())
+        {
+            var oldLogin = await auth.PostAsync($"{panel}/api/auth/login",
+                new StringContent("{\"password\":\"adminBot\"}", Encoding.UTF8, "application/json"));
+            var migratedLogin = await auth.PostAsync($"{panel}/api/auth/login",
+                new StringContent("{\"password\":\"" + legacyPassword + "\"}", Encoding.UTF8, "application/json"));
+            Check("旧密码迁移后仍可登录且默认密码未重新启用",
+                oldLogin.StatusCode == System.Net.HttpStatusCode.Unauthorized && migratedLogin.IsSuccessStatusCode);
+        }
 
         // ---- 1) 取二维码 ----
         var (s1, b1) = await HttpGetAsync($"{panel}/api/qqlogin?token={panelToken}");
@@ -1851,6 +1872,9 @@ public static partial class Program
         // 面板令牌保护同样作用于二维码接口（否则谁知道 URL 谁就能拿到登录二维码）
         var (s401, _) = await HttpGetAsync($"{panel}/api/qqlogin");
         Check("★ 二维码接口同样受面板令牌保护", s401 == 401, $"HTTP {s401}");
+        var (bridgeStatus, bridgeBody) = await HttpGetAsync($"{panel}/agent-bridge?token=wrong");
+        Check("桥入口绕过面板口令门，但仍由桥自身拒绝错误令牌",
+            bridgeStatus == 401 && bridgeBody.Contains("bad token"), $"HTTP {bridgeStatus}");
 
         // ---- 2) 二维码图片 ----
         var (svgStatus, svg) = await HttpGetAsync($"{panel}/api/qqlogin/qrcode.svg?token={panelToken}");
@@ -1898,18 +1922,19 @@ public static partial class Program
             ["QQCHAT_MODEL"] = "mock-model",
             ["QQCHAT_ONEBOT_URL"] = "ws://127.0.0.1:13028",
             ["QQCHAT_HEALTH_PORT"] = panelPort2.ToString(),
+            ["QQCHAT_PANEL_TOKEN"] = panelToken,
             ["QQCHAT_NAPCAT_WEBUI_TOKEN"] = string.Empty // 部署时最容易忘的一项
         });
 
         await WaitForPortAsync(panelPort2, cts.Token, bot2);
         var panel2 = $"http://127.0.0.1:{panelPort2}";
 
-        var (s4, b4) = await HttpGetAsync($"{panel2}/api/qqlogin");
+        var (s4, b4) = await HttpGetAsync($"{panel2}/api/qqlogin?token={panelToken}");
         Check("未配 NapCat 令牌时告知怎么修（而不是 500 或空白）",
             s4 == 200 && b4.Contains("\"configured\":false") && b4.Contains("QQCHAT_NAPCAT_WEBUI_TOKEN"),
             Truncate(b4, 300));
 
-        var (s5, _) = await HttpGetAsync($"{panel2}/api/qqlogin/qrcode.svg");
+        var (s5, _) = await HttpGetAsync($"{panel2}/api/qqlogin/qrcode.svg?token={panelToken}");
         Check("拿不到二维码时图片接口给出 503（前端据此显示原因）", s5 == 503, $"HTTP {s5}");
 
         await bot2.StopAsync();

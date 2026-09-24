@@ -26,6 +26,14 @@ public static partial class Program
         var healthPort = FreePort(18103);
         const long groupId = 66730;
         const string token = "tok-s33-secret";
+        const string panelToken = "s33-panel-secret";
+
+        HttpClient PanelHttp(int timeoutSeconds)
+        {
+            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            client.DefaultRequestHeaders.Add("X-Panel-Token", panelToken);
+            return client;
+        }
 
         var dataDir = NewDataDir("s33");
 
@@ -50,6 +58,7 @@ public static partial class Program
             ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_HEALTH_PORT"] = healthPort.ToString(),
+            ["QQCHAT_PANEL_TOKEN"] = panelToken,
             ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1",   // ⑩ 要下载本机图片服务器上的图（线上图片 URL 都是公网域名，默认仍拦私网）
             // ---- 本机 Agent ----
             ["QQCHAT_AGENT"] = "1",
@@ -201,7 +210,7 @@ public static partial class Program
             string.Join(" | ", Sent().TakeLast(3)));
 
         // ---- ⑩ 改成“白名单会话里所有人都能用”（AgentAllowedUsers = *）→ 热生效 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var body = new StringContent("{\"agentAllowedUsers\":\"*\"}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -230,7 +239,7 @@ public static partial class Program
 
         // ---- ⑪ 面板接口 /api/agent/status ----
         JsonNode? status = null;
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        using (var http = PanelHttp(10))
         {
             status = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/status"));
         }
@@ -244,7 +253,7 @@ public static partial class Program
             status?.ToJsonString() ?? "(没拿到)");
 
         // ---- ⑪ 设备模型可选：面板里选中后，下发给 pi 的任务里带的就是那个模型 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var body = new StringContent("{\"agentModel\":\"vendor-b/model-2\"}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -313,7 +322,7 @@ public static partial class Program
             string.Join(" | ", Sent().Skip(sendsBefore)));
 
         // ---- ⑬ 每设备配置：一台设备可以单独配模型/目录（泛用性）----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var cfg = "[{\"name\":\"DESKTOP-TEST\",\"enable\":true,\"model\":\"vendor-a/model-1\"," +
                       "\"workdir\":\"E:/work\",\"tools\":\"read,fetch\",\"timeoutSec\":120}]";
@@ -336,7 +345,7 @@ public static partial class Program
 
         // 状态里的工作目录也得跟着面板走：任务早就跟了，但面板上那行曾直接回显 hello 里的 cwd，
         // 于是“在面板改了目录，状态里还是旧值”（号主报过）。cwd = 生效值；hostCwd = 桥自报的启动目录。
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        using (var http = PanelHttp(10))
         {
             var st = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/status"))!;
             var dev = (st["deviceList"] as JsonArray)?.FirstOrDefault(d => d?["name"]?.GetValue<string>() == "DESKTOP-TEST");
@@ -348,7 +357,7 @@ public static partial class Program
         }
 
         // 设备被面板关掉时：不派任务，并如实告诉群
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var cfg = "[{\"name\":\"DESKTOP-TEST\",\"enable\":false}]\n".Trim();
             var payload = new JsonObject { ["agentDevices"] = cfg };
@@ -376,7 +385,7 @@ public static partial class Program
             $"桥任务 {tasksBeforeDisabled} → {bridge.Tasks.Count}；" + string.Join(" | ", Sent().TakeLast(2)));
 
         // ---- ⑭ 一键连接：面板生成的脚本里带地址与令牌；桥脚本能下载 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var win = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/setup?os=win&host=bot.example.com");
             Check("★ 一键连接脚本（Windows）：带地址、带令牌、能直接跑",
@@ -410,7 +419,7 @@ public static partial class Program
         }
 
         // ---- ⑮ 设备配了它没有的模型 → 不能把活卡死：降级用 pi 默认 + 群里说一声 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             // 先把上一个任务的“启用关掉”状态恢复，并故意配一个设备没有的模型（复刻线上那次报错）
             var cfg = "[{\"name\":\"DESKTOP-TEST\",\"enable\":true,\"model\":\"gpt-oss-120b-medium\"}]";
@@ -472,7 +481,7 @@ public static partial class Program
         });
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("新会话的结论")), TimeSpan.FromSeconds(30));
 
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var listJson = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}");
             var sessions = JsonNode.Parse(listJson)!["sessions"]!.AsArray();
@@ -530,7 +539,7 @@ public static partial class Program
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//帮我看看今天的报错日志", 15072, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => bridge.Tasks.Count > tasksBeforeTitle, TimeSpan.FromSeconds(30));
 
-        using (var httpMid = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var httpMid = PanelHttp(15))
         {
             var mid = JsonNode.Parse(await httpMid.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"));
             var midCurrent = mid?["sessions"]?.AsArray().FirstOrDefault(s => s!["current"]?.GetValue<bool>() == true);
@@ -554,7 +563,7 @@ public static partial class Program
         await WaitUntilAsync(() => openAi.TitleRequests > titleReqsBefore, TimeSpan.FromSeconds(30));
         await Task.Delay(400);
 
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = PanelHttp(15))
         {
             var listJson = await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}");
             var sessions = JsonNode.Parse(listJson)!["sessions"]!.AsArray();
@@ -627,7 +636,7 @@ public static partial class Program
 
         // ---- ⑱ //rename 不能“改错会话”（号主实测：设备不在线时它会另建一个空的服务器会话并给它改名）----
         // 踩雷姿势：路由改成 server（will-use = server），但这个聊天只有外部设备（host）的会话。
-        using (var http2 = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http2 = PanelHttp(15))
         {
             await http2.PostAsync($"http://127.0.0.1:{healthPort}/api/settings",
                 new StringContent(new JsonObject { ["agentTarget"] = "server" }.ToJsonString(), Encoding.UTF8, "application/json"));

@@ -1,12 +1,12 @@
 using System.Security.Cryptography;
 
-namespace BotAgent.Adapters.Panel;
+namespace BotAgent.Adapters.Persistence;
 
 internal sealed class PanelPasswordStore
 {
     private const string DefaultPassword = "adminBot";
     private const int Iterations = 210_000;
-    private readonly string _path;
+    private readonly SecretsStore _secrets = new();
     private readonly object _gate = new();
     private byte[] _salt;
     private byte[] _hash;
@@ -16,10 +16,13 @@ internal sealed class PanelPasswordStore
 
     public PanelPasswordStore(string path)
     {
-        _path = path;
-        if (File.Exists(path))
+        var stored = _secrets.Load("panelPassword", throwOnError: true);
+        var legacy = SecretFiles.TryRead(path, out var readError);
+        if (readError is not null)
+            throw new IOException("Cannot read panel password file: " + readError);
+        if (stored is not null || legacy is not null)
         {
-            var parts = File.ReadAllText(path).Split(':');
+            var parts = (stored ?? legacy!).Split(':');
             if (parts.Length != 3 || (parts[0] != "0" && parts[0] != "1"))
                 throw new InvalidDataException("Invalid panel password file");
             MustChange = parts[0] == "0";
@@ -27,17 +30,17 @@ internal sealed class PanelPasswordStore
             _hash = Convert.FromBase64String(parts[2]);
             if (_salt.Length != 16 || _hash.Length != 32)
                 throw new InvalidDataException("Invalid panel password hash");
+            if (stored is null)
+                _secrets.Save("panelPassword", legacy, throwOnError: true);
+            if (legacy is not null)
+                File.Delete(path);
         }
         else
         {
             _salt = RandomNumberGenerator.GetBytes(16);
             _hash = Hash(DefaultPassword, _salt);
             MustChange = true;
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            using (var writer = new StreamWriter(stream))
-                writer.Write(Serialize());
-            RestrictPermissions(path);
+            _secrets.Save("panelPassword", Serialize(), throwOnError: true);
             Created = true;
         }
     }
@@ -56,17 +59,7 @@ internal sealed class PanelPasswordStore
             var salt = RandomNumberGenerator.GetBytes(16);
             var hash = Hash(password, salt);
             var content = $"1:{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
-            var temporary = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllText(temporary, content);
-                RestrictPermissions(temporary);
-                File.Move(temporary, _path, true);
-            }
-            finally
-            {
-                if (File.Exists(temporary)) File.Delete(temporary);
-            }
+            _secrets.Save("panelPassword", content, throwOnError: true);
             _salt = salt;
             _hash = hash;
             MustChange = false;
@@ -78,9 +71,4 @@ internal sealed class PanelPasswordStore
     private static byte[] Hash(string password, byte[] salt) =>
         Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
 
-    private static void RestrictPermissions(string path)
-    {
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-    }
 }

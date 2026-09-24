@@ -15,7 +15,15 @@ public static class SecretFiles
         error = null;
         try
         {
-            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+            return File.ReadAllText(path).Trim();
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
         }
         catch (Exception ex)
         {

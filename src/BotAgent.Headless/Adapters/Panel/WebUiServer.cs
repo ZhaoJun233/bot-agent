@@ -316,6 +316,7 @@ public sealed partial class WebUiServer : IDisposable
                 path.Equals("/readyz", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/status", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/agent-bridge", StringComparison.OrdinalIgnoreCase) ||
                 (method == "GET" && (path == "/" || path == "/app.css" || path == "/app.js" ||
                     path == "/trace.css" || path == "/trace.js" || path == "/dash.js" || path == "/favicon.ico"));
             if (!publicPath && !(path.Equals("/api/auth/change-password", StringComparison.OrdinalIgnoreCase) && HasPendingSession(context)))
@@ -382,7 +383,7 @@ public sealed partial class WebUiServer : IDisposable
         if (IsLegacyAuthorized(context)) return true;
         var session = context.Request.Cookies["panel_session"]?.Value;
         return session is not null && _panelSessions.TryGetValue(session, out var expires) &&
-            expires > DateTimeOffset.UtcNow && !_panelPassword.MustChange;
+            expires > Clock.Now && !_panelPassword.MustChange;
     }
 
     private bool IsLegacyAuthorized(HttpListenerContext context)
@@ -397,7 +398,7 @@ public sealed partial class WebUiServer : IDisposable
     {
         var session = context.Request.Cookies["panel_session"]?.Value;
         return session is not null && _panelSessions.TryGetValue(session, out var expires) &&
-            expires > DateTimeOffset.UtcNow && _panelPassword.MustChange;
+            expires > Clock.Now && _panelPassword.MustChange;
     }
 
     /// <summary>

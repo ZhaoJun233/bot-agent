@@ -391,14 +391,36 @@
 
   function convSignatureOf(items) {
     return items.map((c) =>
-      `${c.key}|${c.name}|${c.preview}|${c.unread}|${c.thinking ? 1 : 0}|${c.lastTime}`
+      `${c.key}|${c.channel || c.channelTag || ""}|${c.name}|${c.preview}|${c.unread}|${c.thinking ? 1 : 0}|${c.lastTime}`
     ).join("~") + `#${state.activeKey}#${state.search}`;
+  }
+
+  function normalizeChannelFilter(value) {
+    const filter = String(value || "all").trim().toLowerCase();
+    return filter === "private" || filter === "official" ? filter : "all";
+  }
+
+  function syncChannelTabs() {
+    const tabs = $("chanTabs");
+    if (!tabs) return;
+    for (const tab of tabs.querySelectorAll(".chan-tab")) {
+      const active = normalizeChannelFilter(tab.getAttribute("data-chan")) === state.channelFilter;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+    }
+  }
+
+  function setChannelFilter(value) {
+    state.channelFilter = normalizeChannelFilter(value);
+    syncChannelTabs();
+    renderConversations(true);
   }
 
   function conversationChannel(conversation) {
     const raw = String(conversation?.channel || conversation?.channelTag || "").trim().toLowerCase();
-    if (raw === "official" || raw === "officialchannel" || raw === "官方") return "official";
-    if (raw === "private" || raw === "privatechannel" || raw === "私域") return "private";
+    const compact = raw.replace(/[\s_-]+/g, "");
+    if (compact === "official" || compact === "officialchannel" || compact === "官方" || compact === "官方通道") return "official";
+    if (compact === "private" || compact === "privatechannel" || compact === "local" || compact === "私域" || compact === "私域通道" || compact === "本地") return "private";
     const key = String(conversation?.key || conversation?.sourceKey || "").toLowerCase();
     return key.startsWith("official:") ? "official" : "private";
   }
@@ -528,12 +550,15 @@ function renderChannelStatus(channels) {
   tab.classList.toggle("chan-off", !official || !official.enabled);
 }
 
-function renderConversations(force) {
+  function renderConversations(force) {
+    syncChannelTabs();
     const q = state.search.trim().toLowerCase();
     // 先按通道分块（私域 / 官方）再搜关键词 —— 两套场景的会话不混在一起
     const items = state.conversations.filter((c) => {
       if (state.channelFilter !== "all" && conversationChannel(c) !== state.channelFilter) return false;
-      return !q || c.name.toLowerCase().includes(q) || (c.preview || "").toLowerCase().includes(q);
+      const name = String(c?.name || "").toLowerCase();
+      const preview = String(c?.preview || "").toLowerCase();
+      return !q || name.includes(q) || preview.includes(q);
     });
 
     $("convEmpty").hidden = items.length > 0;
@@ -2541,12 +2566,7 @@ function renderConversations(force) {
     $("chanTabs").addEventListener("click", (e) => {
       const btn = e.target.closest(".chan-tab");
       if (!btn) return;
-      state.channelFilter = String(btn.getAttribute("data-chan") || "all").trim().toLowerCase();
-      for (const b of $("chanTabs").querySelectorAll(".chan-tab")) {
-        b.classList.toggle("active", b === btn);
-        b.setAttribute("aria-selected", b === btn ? "true" : "false");
-      }
-      renderConversations(true);
+      setChannelFilter(btn.getAttribute("data-chan"));
     });
 
     // 一键重启：把“重启才生效”的设置落地（官方通道凭据、容器级改动…），不用开 SSH。

@@ -32,7 +32,7 @@ public sealed partial class WebUiServer
         bool valid;
         lock (_loginGate)
         {
-            if (DateTimeOffset.UtcNow < _loginBlockedUntil)
+            if (Clock.Now < _loginBlockedUntil)
             {
                 valid = false;
             }
@@ -42,12 +42,12 @@ public sealed partial class WebUiServer
                 _loginFailures = valid ? 0 : _loginFailures + 1;
                 if (_loginFailures >= 5)
                 {
-                    _loginBlockedUntil = DateTimeOffset.UtcNow.AddSeconds(30);
+                    _loginBlockedUntil = Clock.Now.AddSeconds(30);
                     _loginFailures = 0;
                 }
             }
         }
-        if (DateTimeOffset.UtcNow < _loginBlockedUntil)
+        if (Clock.Now < _loginBlockedUntil)
         {
             await AuthErrorAsync(context, 429, "尝试过于频繁，请 30 秒后重试");
             return;
@@ -97,7 +97,7 @@ public sealed partial class WebUiServer
     private void SetPanelSession(HttpListenerContext context)
     {
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        _panelSessions[token] = DateTimeOffset.UtcNow.AddHours(12);
+        _panelSessions[token] = Clock.Now.AddHours(12);
         var secure = context.Request.IsSecureConnection ||
             string.Equals(context.Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase);
         context.Response.Headers.Add("Set-Cookie", $"panel_session={token}; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict{(secure ? "; Secure" : "")}");

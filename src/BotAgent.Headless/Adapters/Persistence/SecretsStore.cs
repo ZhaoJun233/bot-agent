@@ -63,22 +63,29 @@ public sealed class SecretsStore : ISecretsRepository
     public bool SaveOfficialSecret(string? secret) => Save("officialAppSecret", secret);
 
     /// <summary>读一条密钥（没有/读失败返回 null）。</summary>
-    public string? Load(string name)
+    public string? Load(string name) => Load(name, throwOnError: false);
+
+    public string? Load(string name, bool throwOnError)
     {
         try
         {
             var value = AppDatabase.Scalar<string>("SELECT value FROM secrets WHERE name = $n", ("$n", name));
+            if (throwOnError && value is not null && string.IsNullOrWhiteSpace(value))
+                throw new InvalidDataException("Invalid stored secret: " + name);
             return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
         catch (Exception ex)
         {
+            if (throwOnError) throw;
             FileLog.Warn("Secrets", $"密钥读取失败（回退环境变量）：{ex.Message}");
             return null;
         }
     }
 
     /// <summary>写一条密钥（空值 = 删掉该条）。返回是否成功。</summary>
-    public bool Save(string name, string? value)
+    public bool Save(string name, string? value) => Save(name, value, throwOnError: false);
+
+    public bool Save(string name, string? value, bool throwOnError)
     {
         try
         {
@@ -99,6 +106,7 @@ public sealed class SecretsStore : ISecretsRepository
         }
         catch (Exception ex)
         {
+            if (throwOnError) throw;
             FileLog.Warn("Secrets", $"密钥写入失败：{ex.Message}");
             return false;
         }
