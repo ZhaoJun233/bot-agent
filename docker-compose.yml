@@ -142,6 +142,15 @@ services:
       QQCHAT_AGENT_SERVER_STEPS: ${AGENT_SERVER_STEPS:-8}
       QQCHAT_AGENT_SERVER_CMD_TIMEOUT: ${AGENT_SERVER_CMD_TIMEOUT:-60}
 
+      # ---- Agent 运行（三个开关；默认 = 与以前逐字一致）----
+      # 行为类配置：只在首次部署当种子，之后以面板保存的值（SQLite）为准。
+      # 聊天侧有限步进循环的步数上限（1 = 与以前逐字一致；>1 才进循环，上限 3）
+      QQCHAT_MAX_AGENT_STEPS: ${MAX_AGENT_STEPS:-1}
+      # 1 = `//` 任务每一步也过统一闸门（判定与老白名单一致）；关着 = 零行为变化
+      QQCHAT_AGENT_SERVER_GATE: ${AGENT_SERVER_GATE:-0}
+      # 本地 HTTP 通道的名单（留空 = 整条通道不建；写短 id，服务端换算成 7e15 起号段）
+      QQCHAT_LOCAL_CHANNEL_IDS: ${LOCAL_CHANNEL_IDS:-}
+
       # ---- 参与闸门（默认关；只收不放 —— 被 @ 仍然照常回）----
       # 行为类配置：只在首次部署当种子，之后以面板「参与状态」卡片为准。
       QQCHAT_PARTICIPATION_GATING: ${PARTICIPATION_GATING:-0}

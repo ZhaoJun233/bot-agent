@@ -405,8 +405,9 @@ public static class Program
         Check("★ 两家真实现（// 的两族）在类型声明上真接了 IToolExecutor",
             realImplements.Count == 2, string.Join("、", realImplements));
 
+        var specFile = index.ByPath("Domain/Tools/ToolSpec.cs");
         Check("工具声明落在 Domain/Tools/ToolSpec.cs",
-            index.ByPath("Domain/Tools/ToolSpec.cs") is not null, "找不到（挪走了请同步这条与文档）");
+            specFile is not null, specFile is null ? "找不到（挪走了请同步这条与文档）" : "在 Domain/Tools/ToolSpec.cs");
 
         // 红线锚点：这三样是“一份目录、两路复用”的支点，重构里不许消失。
         Anchor(index, "ToolDirectory", "统一工具目录（一份目录：聊天 / QQ 动作 / 服务器工具）");
@@ -430,9 +431,12 @@ public static class Program
 
         // QQ 动作那条：目录（QqActionCatalog）是唯一真源 —— 投影必须由它推出来，不许手抄一份。
         var qqProjection = index.ByPath("Services/Tools/QqToolSpecs.cs");
+        var isProjected = qqProjection is not null
+            && qqProjection.NoComments.Contains("QqActionCatalog.All", StringComparison.Ordinal);
         Check("QQ 动作目录由 QqActionCatalog 投影而来（不是手抄的第二个清单）",
-            qqProjection is not null && qqProjection.NoComments.Contains("QqActionCatalog.All", StringComparison.Ordinal),
-            qqProjection is null ? "找不到 Services/Tools/QqToolSpecs.cs" : "没看到 QqActionCatalog.All");
+            isProjected,
+            qqProjection is null ? "找不到 Services/Tools/QqToolSpecs.cs"
+            : isProjected ? "投影自 QqActionCatalog.All" : "没看到 QqActionCatalog.All");
     }
 
     /// <summary>
@@ -525,18 +529,20 @@ public static class Program
 
         // 例外只能按**工具名**点名：断言里不许出现“按类别放开”的写法（那就等于把 I3 拆了）。
         var policy = index.ByPath("Domain/Permissions/ToolPolicy.cs");
+        var isNameSet = policy is not null
+            && Regex.IsMatch(policy.NoComments, @"IReadOnlySet<string>\?\s+HighRiskExceptions");
         Check("★ 例外字段是**工具名集合**（不是类别集合）—— I3 不被这类改动削弱",
-            policy is not null
-            && Regex.IsMatch(policy.NoComments, @"IReadOnlySet<string>\?\s+HighRiskExceptions"),
-            policy is null ? "找不到 ToolPolicy.cs" : "字段类型不对");
+            isNameSet,
+            policy is null ? "找不到 ToolPolicy.cs" : isNameSet ? "IReadOnlySet<string> HighRiskExceptions" : "字段类型不对");
 
         // 闸门必须**在类别禁令处**才认这条例外（审批分支不许认）
         var gate = index.ByPath("Domain/Permissions/ToolGate.cs");
-        Check("★ 例外只在“类别禁令”那一处生效（审批分支照旧不认高风险）",
-            gate is not null
+        var wiredAtCategoryBan = gate is not null
             && gate.NoComments.Contains("policy.HighRiskExceptions?.Contains(descriptor.Id)", StringComparison.Ordinal)
-            && gate.NoComments.Contains("approval_cannot_grant", StringComparison.Ordinal),
-            gate is null ? "找不到 ToolGate.cs" : "例外接线位置不对");
+            && gate.NoComments.Contains("approval_cannot_grant", StringComparison.Ordinal);
+        Check("★ 例外只在“类别禁令”那一处生效（审批分支照旧不认高风险）",
+            wiredAtCategoryBan,
+            gate is null ? "找不到 ToolGate.cs" : wiredAtCategoryBan ? "只在类别禁令处认例外" : "例外接线位置不对");
     }
 
     // ─────────────────── 第三条通道（通用 Agent 平台 · 批次 F） ───────────────────
@@ -577,9 +583,11 @@ public static class Program
 
         // 审计必须真的接在发送缝上：规则写好但没人调 = 假绿（这个仓库踩过）。
         var sender = index.ByPath("Services/Reply/PlainSender.cs");
+        var auditWired = sender is not null
+            && sender.NoComments.Contains("ReplyAuditRules.Judge", StringComparison.Ordinal);
         Check("回复审计接在发送层（PlainSender 里真的调了 ReplyAuditRules.Judge）",
-            sender is not null && sender.NoComments.Contains("ReplyAuditRules.Judge", StringComparison.Ordinal),
-            sender is null ? "找不到 Services/Reply/PlainSender.cs" : "没看到调用点");
+            auditWired,
+            sender is null ? "找不到 Services/Reply/PlainSender.cs" : auditWired ? "发送前后各一处调用" : "没看到调用点");
 
         // 轨迹记录**不许**出现承载正文的字段（§9.2 的“审计不写正文”；SafetyProbe 还有一条反射断言）。
         var trace = index.ByPath("Domain/Ops/TurnTrace.cs");
