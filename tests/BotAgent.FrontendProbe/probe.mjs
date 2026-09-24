@@ -26,6 +26,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../src/BotAgent.Headless/wwwroot");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const js = fs.readFileSync(path.join(root, "app.js"), "utf8");
+const traceJsRaw = fs.readFileSync(path.join(root, "trace.js"), "utf8");
+const dashJsRaw = fs.readFileSync(path.join(root, "dash.js"), "utf8");
 
 let pass = 0;
 const failures = [];
@@ -38,6 +40,27 @@ function check(desc, ok, detail) {
     failures.push(desc + (detail ? `　→ ${detail}` : ""));
     console.log("  ✗ " + desc + (detail ? `\n      → ${detail}` : ""));
   }
+}
+
+/// 去注释 / 去字符串的粗略视图：用来扫「代码里真的写了什么」。
+/// 为什么需要它：模板字符串一旦被吃掉（变成裸中文标识符），源码里仍然"看不出错"，
+/// 而 `node --check` 也放过（`更新于` 是合法标识符）—— 只有运行期才炸。
+function codeOnly(text) {
+  let out = "";
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i], d = text[i + 1];
+    if (c === "/" && d === "/") { while (i < n && text[i] !== "\n") i++; continue; }
+    if (c === "/" && d === "*") { i += 2; while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++; i += 2; continue; }
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c; i++;
+      while (i < n && text[i] !== q) { if (text[i] === "\\") i++; i++; }
+      i++; out += '""'; continue;
+    }
+    out += c; i++;
+  }
+  return out;
 }
 
 /* ─────────── 1) id 静态检查 ─────────── */
@@ -389,12 +412,12 @@ const document = {
     // app.js 用 ".navitem"（桌面左栏）或 ".navitem, .mtab"（含手机底部标签栏）
     if (sel !== ".navitem" && sel !== ".navitem, .mtab") return [];
     if (navItems.length === 0) {
-      for (const page of ["chat", "settings"]) {
+      for (const page of ["chat", "agent", "trace", "dash", "settings"]) {
         const b = makeEl("nav-" + page);
         b.dataset = { page };
         navItems.push(b);
       }
-      for (const page of ["chat", "settings"]) {
+      for (const page of ["chat", "agent", "trace", "dash", "settings"]) {
         const b = makeEl("mtab-" + page);
         b.dataset = { page };
         mtabItems.push(b);
@@ -473,6 +496,8 @@ let serverDevices = [];
 let agentStatusFails = false;      // 模拟“设备表拉不到”
 let settingsDelayMs = 0;           // 模拟保存请求在飞（用来看保存期间的新编辑会不会被回填盖掉）
 let agentStatusHits = 0;
+let agentWorkbenchReady = false;
+let agentRunDelayMs = 0;
 // 批次 I：待批单列表（服务端合成一份；面板要画卡、也要能批准）
 let approvalsPayload = {
   available: true, enabled: true, tokenConfigured: true, canDecide: true,
@@ -505,12 +530,28 @@ const fetchStub = async (url, opts) => {
     agentStatusHits++;
     if (agentStatusFails) throw new Error("synthetic agent status failure");
     payload = {
-      enabled: true, hostAgent: true, serverAgent: false, prefix: "//", target: "auto",
-      connected: serverDevices.some((d) => d.online),
+      enabled: agentWorkbenchReady, hostAgent: true, serverAgent: agentWorkbenchReady, prefix: "//", target: "auto",
+      connected: agentWorkbenchReady,
       devices: deviceNames(), deviceList: serverDevices.map((d) => ({ ...d })),
       deviceModels: ["provider/model-a"], globalWorkdir: "C:/synthetic/global",
-      summary: "synthetic", tokenConfigured: true, allowedUsers: "10001"
+      serverModel: "server/mock", agentModel: "host/mock",
+      summary: "synthetic", tokenConfigured: true, allowedUsers: "10001", queued: 0
     };
+  } else if (target.includes("/api/agent/sessions")) {
+    payload = {
+      total: 1, chatCount: 1,
+      chats: {
+        "synthetic-source": {
+          name: "合成来源A",
+          sessions: [{ id: "session-1", name: "默认会话", backend: "server", device: "server", turns: 2, updatedAt: "2026-09-24T12:00:00Z", current: true, runs: [{ id: "run-1" }] }]
+        }
+      }
+    };
+  } else if (target.includes("/api/tools")) {
+    payload = { count: 4, healthy: true, executors: [], tools: [] };
+  } else if (target.includes("/api/agent/test")) {
+    if (agentRunDelayMs) await new Promise((r) => setTimeout(r, agentRunDelayMs));
+    payload = { ok: true, id: "run-synthetic", text: "<synthetic-result>", durationMs: 42, toolCalls: 1, target: "server" };
   } else if (target.includes("/api/settings")) {
     if (method === "POST" && settingsDelayMs) await new Promise((r) => setTimeout(r, settingsDelayMs));
     if (method === "POST" && opts && opts.body) {
@@ -536,6 +577,18 @@ const fetchStub = async (url, opts) => {
     payload = { ok: true, decided: "approve", reason: "approved" };
   } else if (target.includes("/api/approvals")) {
     payload = approvalsPayload;
+  } else if (target.includes("/api/dashboard")) {
+    // 批次 J：仪表盘的只读数据面（数字与形状，没有任何会话内容）
+    payload = {
+      uptimeSeconds: 3720, aiMode: true, onebot: true, accountOnline: true,
+      conversations: 7, inFlight: 1, queued: 2, latencyMs: 4200,
+      memory: { usedBytes: 268435456, limitBytes: 1073741824 }, load: 0.42,
+      tools: { total: 26, chat: 10, qq: 10, server: 6, highRisk: 11, needApproval: 0, executors: 4, healthy: true },
+      sessionPolicy: { available: true, sessions: 3, stale: 0, rebuilt: 1 },
+      traces: { available: true, recent: 12, active: 1, capacity: 50 }
+    };
+  } else if (target.includes("/api/traces")) {
+    payload = { available: true, count: 1, active: 0, capacity: 50, traces: [] };
   } else if (target.includes("/api/participation")) {
       // P1：参与状态只读接口（会话名已由服务端按脱敏开关处理）
       payload = {
@@ -594,6 +647,19 @@ const jsRun = js.replace(probeMarker, `globalThis.probe = {
   isDirty: () => settingsDirty
 };
 ${probeMarker}`);
+// 这一类 bug 只有静态能扫出来、node --check 抓不住：`const summary = 更新于 ;`
+// 反引号与 ${} 被吃掉后，剩下的中文成了合法标识符 —— 加载不报错、一跑到那行就 ReferenceError。
+{
+  const bare = codeOnly(js).match(/[=(,:]\s*[\u4e00-\u9fff][\u4e00-\u9fff0-9A-Za-z]*\s*[;)]/g) || [];
+  check("★ app.js 里没有“裸中文标识符”（模板字符串被吃掉的形状）", bare.length === 0, bare.join(" "));
+}
+{
+  const bareTrace = codeOnly(traceJsRaw).match(/[=(,:]\s*[\u4e00-\u9fff][\u4e00-\u9fff0-9A-Za-z]*\s*[;)]/g) || [];
+  const bareDash = codeOnly(dashJsRaw).match(/[=(,:]\s*[\u4e00-\u9fff][\u4e00-\u9fff0-9A-Za-z]*\s*[;)]/g) || [];
+  check("★ trace.js / dash.js 里也没有裸中文标识符", bareTrace.length === 0 && bareDash.length === 0,
+    bareTrace.concat(bareDash).join(" "));
+}
+
 check("★ 探针出口注入成功（注不进去的话下面设备表的动态检查全是假的）",
   jsRun !== js && jsRun.includes("globalThis.probe"));
 
@@ -1375,6 +1441,19 @@ check("index.html 引了 dash.js，且有页面容器与两个导航入口",
 
 check("★ /dash.js 排在静态资源路由里（新增文件 = 加一行路由）", routes.includes('"/dash.js"'));
 
+// 结构：页面必须是 .shell 的子元素。
+// 历史 bug（2026-09-24，号主截图）：pageDash / pageTrace 被写在了 </div>(.shell) **外面** ——
+// .shell 撑满剩下的高度、里面一个可见页面都没有 → 顶上一整块空白，而页面内容掉到下面去。
+const shellOpen = html.indexOf('<div class="shell">');
+const shellClose = html.indexOf("<!-- 会话右键菜单 -->");   // 紧随 .shell 收尾的第一个标记
+const insideShell = (id) => {
+  const at = html.indexOf(`id="${id}"`);
+  return shellOpen >= 0 && shellClose > shellOpen && at > shellOpen && at < shellClose;
+};
+check("★ 四个页面都在 .shell 里（写在 shell 外面 = 顶上整块空白 + 内容掉到底下）",
+  ["pageChat", "pageSettings", "pageTrace", "pageDash"].every(insideShell),
+  ["pageChat", "pageSettings", "pageTrace", "pageDash"].filter((id) => !insideShell(id)).join(", "));
+
 check("★ dash.js 不用 innerHTML（服务端来的数字与文字一律文本节点）",
   !/innerHTML\s*=/.test(dashJs) && dashJs.includes("createElement") && dashJs.includes("textContent"));
 
@@ -1425,6 +1504,134 @@ try {
 
 check("★ dash.js 能在最小 DOM 桩里真跑一遍", dashError === null,
   dashError ? String(dashError && dashError.message) : "");
+
+/* ─────────── P1) Agent 工作台（批 K） ─────────── */
+
+console.log("\n▶ Agent 工作台（批 K）：结构 / 数据面 / fail-closed / 执行安全");
+
+const agentSessionBody = js.slice(js.indexOf("function renderAgentSessions"), js.indexOf("function renderAgentRuntime"));
+check("Agent 桌面导航、移动导航与页面容器齐全",
+  (html.match(/data-page="agent"/g) || []).length === 2 && html.includes('id="pageAgent"'));
+check("Agent 工作台有关键控件（筛选 / 提示词 / 后端 / 超时 / 执行 / 结果）",
+  ["agentSessionList", "agentBackendFilter", "agentSessionStateFilter", "agentWorkbenchPrompt",
+    "agentWorkbenchTarget", "agentWorkbenchTimeout", "agentWorkbenchSend", "agentResultCard",
+    "agentLivePill", "agentMetricGrid"].every((id) => html.includes(`id="${id}"`)));
+check("app.js 使用现有 Agent 数据面（不新增后端接口）",
+  ["/api/agent/status", "/api/agent/sessions", "/api/tools", "/api/approvals", "/api/agent/test"]
+    .every((endpoint) => js.includes(endpoint)) && js.includes("Promise.allSettled"));
+check("Agent 会话渲染不读取或拼接历史 prompt / result",
+  agentSessionBody.length > 0 && !/session\.(prompt|result)|\.prompt\b|\.result\b/.test(agentSessionBody));
+check("Agent 结果使用 textContent，不把服务端正文写入 innerHTML",
+  /agentResultText"\)\.textContent/.test(js) && !/agentResultText"\)\.innerHTML/.test(js));
+check("Agent 执行期间有 busy 状态与重复提交保护",
+  js.includes("if (state.agent.busy) return") && js.includes("state.agent.busy = true") &&
+  js.includes("state.agent.busy = false"));
+
+/* ─────────── P2) 动态：真的切一次页（“卡在正在加载”只有这条路抓得住） ─────────── */
+
+// 为什么必须走导航：静态检查看不出运行期 ReferenceError。
+// 历史 bug（2026-09-24）：loadDashboard 里一个被吃掉的模板字符串 → 抛 ReferenceError →
+// 页面永远停在“正在加载…”，而当时静态断言、`node --check` 全是绿的。
+{
+  const dashNav = navClicks.find((n) => n.page === "dash");
+  const traceNav = navClicks.find((n) => n.page === "trace");
+
+  let switchError = null;
+  const mark = calls.length;
+  try {
+    if (dashNav) dashNav.fn({});
+    if (traceNav) traceNav.fn({});
+  } catch (e) {
+    switchError = `${e.name}: ${e.message}`;
+  }
+  await new Promise((r) => setTimeout(r, 120));
+
+  check("★ 切到仪表盘 / 追踪页都不抛异常（有裸标识符这类运行期错误就会炸在这里）",
+    dashNav && traceNav && switchError === null,
+    !dashNav || !traceNav ? "导航入口没找到（自查 data-page）" : switchError);
+
+  check("★ 切到仪表盘时真的拉了 /api/dashboard",
+    calls.slice(mark).some((c) => String(c.url).includes("/api/dashboard")),
+    calls.slice(mark).map((c) => c.url).join(" | "));
+
+  const summaryText = document.getElementById("dashSummary")?.textContent || "";
+  check("★ 仪表盘摘要已经**离开**“正在加载…”（那一行真的跑到了）",
+    summaryText.length > 0 && !summaryText.includes("正在加载"),
+    summaryText || "(空)");
+
+  check("★ 切到追踪页时真的拉了 /api/traces",
+    calls.slice(mark).some((c) => String(c.url).includes("/api/traces")),
+    calls.slice(mark).map((c) => c.url).join(" | "));
+}
+
+/* ─────────── P3) Agent 动态：从未知状态到合成执行 ─────────── */
+
+{
+  const agentNav = navClicks.find((n) => n.page === "agent");
+  let agentSwitchError = null;
+  const beforeUnknown = calls.length;
+  agentStatusFails = true;
+  try {
+    if (agentNav) agentNav.fn({});
+  } catch (e) {
+    agentSwitchError = `${e.name}: ${e.message}`;
+  }
+  await new Promise((r) => setTimeout(r, 120));
+
+  check("★ 状态接口失败时进入 Agent 工作台不抛异常",
+    agentNav && agentSwitchError === null, agentSwitchError || "导航入口没找到");
+  check("★ 状态未知时执行按钮保持 disabled（fail-closed）",
+    document.getElementById("agentWorkbenchSend").disabled === true,
+    `disabled=${document.getElementById("agentWorkbenchSend").disabled}`);
+  check("★ Agent 页面失败场景仍尝试拉取四个数据面",
+    calls.slice(beforeUnknown).some((c) => c.url.includes("/api/agent/status")) &&
+    calls.slice(beforeUnknown).some((c) => c.url.includes("/api/agent/sessions")) &&
+    calls.slice(beforeUnknown).some((c) => c.url.includes("/api/tools")) &&
+    calls.slice(beforeUnknown).some((c) => c.url.includes("/api/approvals")),
+    calls.slice(beforeUnknown).map((c) => c.url).join(" | "));
+
+  agentStatusFails = false;
+  agentWorkbenchReady = true;
+  const beforeReady = calls.length;
+  if (agentNav) agentNav.fn({});
+  await new Promise((r) => setTimeout(r, 120));
+
+  const readyCalls = calls.slice(beforeReady).map((c) => c.url);
+  check("★ Agent 状态成功后可进入工作台并加载状态 / 会话 / 工具 / 审批",
+    ["/api/agent/status", "/api/agent/sessions", "/api/tools", "/api/approvals"]
+      .every((endpoint) => readyCalls.some((url) => url.includes(endpoint))),
+    readyCalls.join(" | "));
+  check("★ 合成会话列表完成结构化渲染（不泄露历史正文）",
+    document.getElementById("agentSessionCount").textContent === "1" &&
+    document.getElementById("agentSessionList").children.length === 1 &&
+    !document.getElementById("agentSessionList").innerHTML.includes("prompt"));
+
+  const prompt = "检查 <synthetic-result> & 仅返回状态，不执行外发";
+  document.getElementById("agentWorkbenchPrompt").value = prompt;
+  fire("agentWorkbenchPrompt", "input", { target: { id: "agentWorkbenchPrompt" } });
+  check("★ 输入合成任务后执行按钮可用",
+    document.getElementById("agentWorkbenchSend").disabled === false,
+    `disabled=${document.getElementById("agentWorkbenchSend").disabled}`);
+
+  agentRunDelayMs = 30;
+  const beforeRun = calls.length;
+  fire("agentWorkbenchSend", "click");
+  fire("agentWorkbenchSend", "click");
+  await new Promise((r) => setTimeout(r, 90));
+  const runCalls = calls.slice(beforeRun).filter((c) => c.url.includes("/api/agent/test"));
+  check("★ 双击执行只产生一次 /api/agent/test 请求",
+    runCalls.length === 1, `请求数=${runCalls.length}`);
+  const posted = runCalls[0];
+  let body = null;
+  try { body = posted ? JSON.parse(posted.body) : null; } catch {}
+  check("★ 执行请求体包含 prompt / timeoutSec / target",
+    body && body.prompt === prompt && Number.isFinite(body.timeoutSec) && body.target === "server",
+    posted ? posted.body : "没有发出请求");
+  check("★ 当前执行结果以文本节点显示，合成标签没有进入 innerHTML",
+    document.getElementById("agentResultText").textContent === "<synthetic-result>" &&
+    document.getElementById("agentResultText").innerHTML === "",
+    `text=${document.getElementById("agentResultText").textContent}`);
+}
 
 /* ─────────── Q) 面板审批卡（批 I） ─────────── */
 

@@ -11,6 +11,46 @@
   border-bottom: 1px solid var(--line, #e3e3e3);
 }
 
+.trace-body {
+  gap: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--bg-base) 32%, transparent);
+}
+
+.trace-col {
+  padding: 14px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+  box-shadow: 0 8px 22px rgba(21, 38, 64, 0.035);
+}
+
+.trace-key,
+.trace-run {
+  border-color: var(--divider);
+  background: color-mix(in srgb, var(--card-bg-secondary) 72%, transparent);
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.trace-key:hover,
+.trace-run:hover {
+  transform: translateX(2px);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--divider));
+}
+
+.trace-key.active,
+.trace-run.active {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--divider));
+}
+
+.trace-card {
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card-bg-secondary) 72%, transparent);
+  box-shadow: 0 5px 16px rgba(21, 38, 64, 0.035);
+}
+
 .trace-bar h1 {
   font-size: 16px;
   margin: 0;
@@ -269,25 +309,36 @@
 
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  /* 行高跟着可用高度长：不然 10 张卡只占顶上一条，下面留一大片空白
+     （号主 2026-09-24 反馈“只占半屏”）—— 与设置页一样：右边整块都是内容。 */
+  grid-auto-rows: minmax(118px, 1fr);
   gap: 10px;
   padding: 12px;
   overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .dash-tile {
-  padding: 10px 12px;
+  padding: 14px 16px;
+  /* 卡片会被撑到很高（右边整块都是内容），所以按“标题顶 / 数字中 / 说明底”摊开 ——
+     全都挤在中间的话，上下各留一大块空白，看着像没加载完。 */
+  justify-content: space-between;
+  align-items: flex-start;
 }
 
 .dash-label {
-  font-size: 12px;
-  opacity: 0.65;
+  font-size: 12.5px;
+  opacity: 0.7;
+  letter-spacing: 0.02em;
 }
 
 .dash-big {
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 600;
   margin: 2px 0;
+  line-height: 1.25;
 }
 
 .dash-big.ok {
@@ -329,6 +380,12 @@
   }
 }
 @media (max-width: 760px) {
+  /* 手机上一列十行，撑高只会让每张卡变得又高又空 —— 退回自然高度 */
+  .dash-grid {
+    grid-auto-rows: auto;
+    flex: 0 0 auto;
+  }
+
   .trace-body {
     flex-direction: column;
     overflow: auto;
@@ -341,4 +398,7 @@
     border-right: 0;
     border-bottom: 1px solid var(--line, #e3e3e3);
   }
+
+  .trace-body { gap: 8px; padding: 8px; }
+  .trace-col { padding: 11px; border-radius: 12px; }
 }

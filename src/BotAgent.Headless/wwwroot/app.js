@@ -31,7 +31,20 @@
       collapsed: false,       // 用户手动收起过
       greeted: false          // 上线提示只说一次
     },
-    stickers: null            // 表情包库（打开弹层时拉）
+    stickers: null,           // 表情包库（打开弹层时拉）
+    agent: {
+      status: null,
+      sessions: null,
+      tools: null,
+      approvals: null,
+      errors: [],
+      loading: false,
+      busy: false,
+      lastResult: null,
+      lastRunAt: 0,
+      backendFilter: "all",
+      sessionStateFilter: "all"
+    }
   };
 
   /* ─────────── 工具 ─────────── */
@@ -1863,8 +1876,9 @@ function renderConversations(force) {
     try {
       const data = await api("/api/dashboard");
       window.DashPage.render(data);
-      const summary = 更新于 ;
-      if (dashSummary) dashSummary.textContent = summary;
+      const summary = `更新于 ${new Date().toLocaleTimeString()}`;
+      const summaryBox = $("dashSummary");
+      if (summaryBox) summaryBox.textContent = summary;
     } catch (e) {
       console.error("loadDashboard failed", e);
       toast("加载仪表盘失败：" + e.message);
@@ -1886,6 +1900,273 @@ function renderConversations(force) {
       toast("加载追踪数据失败：" + e.message);
     }
   }
+
+  function agentNode(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = String(text);
+    return node;
+  }
+
+  function agentDuration(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return "—";
+    if (value < 1000) return `${Math.round(value)} ms`;
+    return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} s`;
+  }
+
+  function agentTime(value) {
+    if (!value) return "—";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "—" : timeText(date.getTime());
+  }
+
+  function agentTargetReady(target) {
+    const status = state.agent.status;
+    if (!status) return false;
+    if (target === "server") return status.enabled === true && status.serverAgent === true;
+    return status.enabled === true && status.connected === true;
+  }
+
+  function renderAgentControls() {
+    const target = $("agentWorkbenchTarget").value || "server";
+    const prompt = $("agentWorkbenchPrompt").value.trim();
+    const ready = agentTargetReady(target);
+    const send = $("agentWorkbenchSend");
+    send.disabled = state.agent.busy || !prompt || !ready;
+    send.textContent = state.agent.busy ? "执行中…" : "执行任务";
+
+    const hint = $("agentSafetyHint");
+    if (!state.agent.status) {
+      hint.textContent = "连接状态未知：为避免误执行，任务入口已锁定。请先刷新状态。";
+    } else if (state.agent.busy) {
+      hint.textContent = "任务执行中，请勿重复提交；结果只显示在当前面板。";
+    } else if (ready) {
+      hint.textContent = target === "server"
+        ? "服务器 Agent 已启用；任务不会自动回发 QQ。"
+        : "外部设备已连接；任务不会自动回发 QQ。";
+    } else if (target === "server") {
+      hint.textContent = state.agent.status.serverAgent === true
+        ? "服务器 Agent 已配置，但当前 Agent 总开关未启用。"
+        : "服务器 Agent 未启用，请到设置页检查运行后端。";
+    } else {
+      hint.textContent = state.agent.status.enabled !== true
+        ? "外部 Agent 总开关未启用，请到设置页检查连接。"
+        : "外部设备未连接，连接恢复后才能执行。";
+    }
+  }
+
+  function renderAgentSessions() {
+    const list = $("agentSessionList");
+    const payload = state.agent.sessions;
+    list.replaceChildren();
+    if (!payload || !payload.chats || typeof payload.chats !== "object") {
+      list.appendChild(agentNode("div", "agent-empty", "暂无可展示的 Agent 会话"));
+      $("agentSessionCount").textContent = "0";
+      return;
+    }
+
+    const rows = [];
+    for (const [sourceKey, chat] of Object.entries(payload.chats)) {
+      if (!chat || !Array.isArray(chat.sessions)) continue;
+      const sourceName = chat.name || chat.nameRaw || "未命名来源";
+      for (const session of chat.sessions) {
+        if (!session) continue;
+        const backend = session.backend === "server" ? "server" : "host";
+        const runs = Array.isArray(session.runs) ? session.runs.length : Number(session.runs || 0);
+        const current = session.current === true;
+        if (state.agent.backendFilter !== "all" && state.agent.backendFilter !== backend) continue;
+        if (state.agent.sessionStateFilter === "current" && !current) continue;
+        if (state.agent.sessionStateFilter === "active" && runs < 1) continue;
+        rows.push({ sourceKey, sourceName, session, backend, runs, current });
+      }
+    }
+
+    rows.sort((a, b) => String(b.session.updatedAt || "").localeCompare(String(a.session.updatedAt || "")));
+    $("agentSessionCount").textContent = String(rows.length);
+    if (rows.length === 0) {
+      list.appendChild(agentNode("div", "agent-empty", "没有符合筛选条件的会话"));
+      return;
+    }
+
+    for (const row of rows) {
+      const card = agentNode("article", "agent-session-card");
+      if (row.current) card.classList.add("is-current");
+      const head = agentNode("div", "agent-session-card-head");
+      head.appendChild(agentNode("strong", "agent-session-name", row.session.name || "未命名会话"));
+      head.appendChild(agentNode("span", `agent-session-pill ${row.current ? "is-current" : ""}`, row.current ? "当前" : row.backend === "server" ? "服务器" : "外部设备"));
+      card.appendChild(head);
+      card.appendChild(agentNode("div", "agent-session-source", row.sourceName));
+      const stats = agentNode("div", "agent-session-stats");
+      stats.appendChild(agentNode("span", "", `${row.backend === "server" ? "服务器" : "外部设备"} · ${row.session.device || "默认设备"}`));
+      stats.appendChild(agentNode("span", "", `${Number(row.session.turns || 0)} turns`));
+      stats.appendChild(agentNode("span", "", `${row.runs} 次运行`));
+      stats.appendChild(agentNode("span", "", `更新 ${agentTime(row.session.updatedAt)}`));
+      card.appendChild(stats);
+      list.appendChild(card);
+    }
+  }
+
+  function renderAgentRuntime() {
+    const status = state.agent.status;
+    const tools = state.agent.tools || {};
+    const approvals = state.agent.approvals || {};
+    const sessions = state.agent.sessions || {};
+    const live = $("agentLivePill");
+    live.classList.remove("is-online", "is-warning", "is-unknown");
+    const liveText = live.querySelector("span");
+    if (!status) {
+      live.classList.add("is-unknown");
+      liveText.textContent = "状态未知";
+    } else if (status.connected === true) {
+      live.classList.add("is-online");
+      liveText.textContent = "外部设备在线";
+    } else if (status.serverAgent === true && status.enabled === true) {
+      live.classList.add("is-online");
+      liveText.textContent = "服务器可用";
+    } else {
+      live.classList.add("is-warning");
+      liveText.textContent = "需要检查";
+    }
+
+    const context = $("agentContextStatus");
+    context.textContent = !status
+      ? "运行上下文未知，请刷新状态后再执行任务。"
+      : status.summary || (status.connected ? "外部 Agent 已连接" : "Agent 尚未就绪");
+
+    const metrics = $("agentMetricGrid");
+    metrics.replaceChildren();
+    const values = [
+      ["工具", `${Number(tools.count || 0)}`, tools.healthy === false ? "目录异常" : "目录健康"],
+      ["待审批", `${Array.isArray(approvals.pending) ? approvals.pending.length : 0}`, approvals.canDecide ? "可处理" : "只读"],
+      ["排队", `${Number(status?.queued || 0)}`, "当前任务"],
+      ["会话", `${Number(sessions.total || 0)}`, `${Number(sessions.chatCount || 0)} 个来源`]
+    ];
+    for (const [label, value, note] of values) {
+      const metric = agentNode("div", "agent-metric");
+      metric.appendChild(agentNode("span", "agent-metric-label", label));
+      metric.appendChild(agentNode("strong", "agent-metric-value", value));
+      metric.appendChild(agentNode("small", "agent-metric-note", note));
+      metrics.appendChild(metric);
+    }
+
+    const details = $("agentDetailList");
+    details.replaceChildren();
+    const target = $("agentWorkbenchTarget").value || "server";
+    const model = status ? (target === "server" ? status.serverModel : status.agentModel) : "";
+    const detailRows = [
+      ["默认后端", target === "server" ? "服务器 Agent" : "外部设备"],
+      ["当前模型", model || "未配置"],
+      ["工作目录", status?.cwd || "未配置"],
+      ["面板审批", approvals.canDecide ? "已启用" : approvals.enabled ? "只读或未配令牌" : "未启用"]
+    ];
+    for (const [label, value] of detailRows) {
+      const row = agentNode("div", "agent-detail-row");
+      row.appendChild(agentNode("span", "", label));
+      row.appendChild(agentNode("strong", "", value));
+      details.appendChild(row);
+    }
+
+    const approvalBox = $("agentApprovalBox");
+    approvalBox.replaceChildren();
+    const pending = Array.isArray(approvals.pending) ? approvals.pending.length : 0;
+    approvalBox.appendChild(agentNode("strong", "", pending ? `${pending} 条待审批` : "没有待审批任务"));
+    approvalBox.appendChild(agentNode("p", "", pending
+      ? "审批决定仍由追踪页通过服务端协议处理。"
+      : "需要审批时会在这里提示，并可跳转追踪页处理。"));
+    if (state.agent.errors.length > 0) {
+      approvalBox.appendChild(agentNode("p", "agent-sync-warning", `部分数据未同步：${state.agent.errors.join("、")}`));
+    }
+  }
+
+  function renderAgentResult() {
+    const card = $("agentResultCard");
+    const result = state.agent.lastResult;
+    card.hidden = !result;
+    if (!result) return;
+    const ok = result.ok === true;
+    $("agentResultTitle").textContent = ok ? "任务已完成" : "任务未完成";
+    $("agentResultMeta").textContent = [
+      ok ? "成功" : "失败",
+      result.target === "server" ? "服务器 Agent" : "外部设备",
+      agentDuration(result.durationMs),
+      `${Number(result.toolCalls || 0)} 次工具调用`,
+      result.id ? `运行 ${result.id}` : ""
+    ].filter(Boolean).join(" · ");
+    $("agentResultText").textContent = result.text || result.error || "没有返回文本。";
+  }
+
+  function renderAgentWorkbench() {
+    renderAgentSessions();
+    renderAgentRuntime();
+    renderAgentResult();
+    renderAgentControls();
+    $("agentPromptCount").textContent = `${$("agentWorkbenchPrompt").value.length} / 2000`;
+  }
+
+  async function loadAgentWorkbench() {
+    if (state.agent.loading) return;
+    state.agent.loading = true;
+    state.agent.errors = [];
+    $("agentRefresh").disabled = true;
+    $("agentLivePill").classList.add("is-unknown");
+    renderAgentControls();
+    const requests = [
+      ["状态", "/api/agent/status"],
+      ["会话", "/api/agent/sessions"],
+      ["工具", "/api/tools"],
+      ["审批", "/api/approvals"]
+    ];
+    const results = await Promise.allSettled(requests.map(([, path]) => api(path)));
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "fulfilled") {
+        if (i === 0) state.agent.status = result.value;
+        if (i === 1) state.agent.sessions = result.value;
+        if (i === 2) state.agent.tools = result.value;
+        if (i === 3) state.agent.approvals = result.value;
+      } else {
+        state.agent.errors.push(requests[i][0]);
+        console.error(`loadAgentWorkbench ${requests[i][1]} failed`, result.reason);
+      }
+    }
+    state.agent.loading = false;
+    $("agentRefresh").disabled = false;
+    renderAgentWorkbench();
+  }
+
+  async function runAgentWorkbenchTask() {
+    if (state.agent.busy) return;
+    const prompt = $("agentWorkbenchPrompt").value.trim();
+    const target = $("agentWorkbenchTarget").value || "server";
+    if (!prompt) { toast("先写一条任务提示词"); return; }
+    if (!agentTargetReady(target)) {
+      toast("当前执行后端不可用，请刷新状态后重试");
+      return;
+    }
+    state.agent.busy = true;
+    state.agent.lastRunAt = Date.now();
+    renderAgentWorkbench();
+    try {
+      const result = await api("/api/agent/test", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          timeoutSec: Number($("agentWorkbenchTimeout").value || 180),
+          target
+        })
+      });
+      state.agent.lastResult = result || { ok: false, target, text: "服务端没有返回结果" };
+      toast(result && result.ok ? "任务完成" : "任务返回失败");
+    } catch (error) {
+      const message = error?.data?.error || error?.message || "任务执行失败";
+      state.agent.lastResult = { ok: false, target, text: message };
+      toast("任务执行失败：" + message);
+    } finally {
+      state.agent.busy = false;
+      renderAgentWorkbench();
+    }
+  }
   /// 否则用户会以为“改了自动复原”：其实是从未保存，回页时又被服务端值回填了。
   function showPage(page) {
     if (page !== "settings" && !$("pageSettings").hidden && settingsDirty &&
@@ -1898,6 +2179,7 @@ function renderConversations(force) {
     }
 
     $("pageChat").hidden = page !== "chat";
+    $("pageAgent").hidden = page !== "agent";
     $("pageTrace").hidden = page !== "trace";
     $("pageDash").hidden = page !== "dash";
     $("pageSettings").hidden = page !== "settings";
@@ -1915,6 +2197,7 @@ function renderConversations(force) {
     if (page === "chat" && needsLogin()) pollLogin(false);
     if (page === "trace") loadTraces();
     if (page === "dash") loadDashboard();
+    if (page === "agent") loadAgentWorkbench();
     if (page === "settings") {
       // 去设置页就把聊天视图收起来：回来时看到的是列表，而不是停在某个会话上
       state.chatOpen = false;
@@ -1936,6 +2219,33 @@ function renderConversations(force) {
 
     // 仪表盘的刷新（同样是只读页，与追踪页一样给一个明确的手动入口）
     $("dashRefresh").addEventListener("click", () => { loadDashboard(); });
+
+    $("agentRefresh").addEventListener("click", () => { loadAgentWorkbench(); });
+    $("agentWorkbenchSend").addEventListener("click", runAgentWorkbenchTask);
+    $("agentWorkbenchPrompt").addEventListener("input", () => {
+      $("agentPromptCount").textContent = `${$("agentWorkbenchPrompt").value.length} / 2000`;
+      renderAgentControls();
+    });
+    $("agentWorkbenchPrompt").addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        runAgentWorkbenchTask();
+      }
+    });
+    $("agentWorkbenchTarget").addEventListener("change", () => {
+      renderAgentRuntime();
+      renderAgentControls();
+    });
+    $("agentBackendFilter").addEventListener("change", (e) => {
+      state.agent.backendFilter = e.target.value;
+      renderAgentSessions();
+    });
+    $("agentSessionStateFilter").addEventListener("change", (e) => {
+      state.agent.sessionStateFilter = e.target.value;
+      renderAgentSessions();
+    });
+    $("agentTraceBtn").addEventListener("click", () => { showPage("trace"); });
+    $("agentSettingsBtn").addEventListener("click", () => { showPage("settings"); });
 
     // 手机端：从聊天返回会话列表
     $("chatBack").addEventListener("click", () => {
