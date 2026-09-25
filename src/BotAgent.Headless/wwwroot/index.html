@@ -199,23 +199,37 @@
       <div>
         <div class="eyebrow">AGENT WORKSPACE</div>
         <h1>Agent 工作台</h1>
-        <p class="page-desc">在同一个工作区发起任务、切换模型、查看执行过程与审批状态。面板任务不会自动回发到 QQ。</p>
+        <p class="page-desc">把会话作为工作区主体：选择、追问、回看；面板任务不会自动回发到 QQ。</p>
       </div>
       <div class="agent-top-actions">
+        <button class="icon-btn agent-mobile-trigger" id="agentSessionsToggle" type="button" title="打开会话列表" aria-label="打开会话列表">☰</button>
         <span class="agent-live-pill" id="agentLivePill"><i class="status-dot"></i><span>状态未知</span></span>
         <button class="btn" id="agentRefresh" type="button">刷新状态</button>
+        <button class="icon-btn" id="agentInspectorToggle" type="button" title="打开运行详情" aria-label="打开运行详情">ⓘ</button>
       </div>
     </div>
     <div class="agent-grid">
-      <aside class="agent-sessions panel-surface">
+      <aside class="agent-sessions panel-surface" id="agentSessionsPane" aria-label="Agent 会话列表">
         <div class="agent-panel-head">
           <div>
             <div class="panel-kicker">SESSIONS</div>
             <h2>Agent 会话</h2>
           </div>
-          <span class="count-badge" id="agentSessionCount">0</span>
+          <div class="agent-session-head-actions">
+            <span class="count-badge" id="agentSessionCount">0</span>
+            <button class="icon-btn" id="agentNewSession" type="button" title="新建本页会话" aria-label="新建本页会话">＋</button>
+          </div>
+        </div>
+        <div class="agent-session-search-row">
+          <input id="agentSessionSearch" type="search" placeholder="搜索标题或来源…" aria-label="搜索 Agent 会话" />
         </div>
         <div class="agent-filter-row">
+          <select id="agentSourceFilter" aria-label="按来源筛选">
+            <option value="all">全部来源</option>
+            <option value="panel">面板</option>
+            <option value="private">私域</option>
+            <option value="official">官方</option>
+          </select>
           <select id="agentBackendFilter" aria-label="按后端筛选">
             <option value="all">全部后端</option>
             <option value="server">服务器</option>
@@ -230,7 +244,7 @@
         <div class="agent-session-list" id="agentSessionList">
           <div class="agent-empty">正在读取会话…</div>
         </div>
-        <p class="agent-privacy-note">列表只展示来源、后端和计数，不展开历史任务正文。</p>
+        <p class="agent-privacy-note">列表只展示标题、来源、更新时间和状态；历史正文只在中间工作区呈现。</p>
       </aside>
 
       <section class="agent-run panel-surface">
@@ -238,10 +252,14 @@
           <div>
             <div class="panel-kicker">CONVERSATION</div>
             <h2>对话工作区</h2>
-            <p class="agent-session-context" id="agentSessionContext">面板直连 · 新任务</p>
+            <p class="agent-session-context" id="agentSessionContext">面板草稿 · 新会话</p>
           </div>
-          <span class="agent-run-state" id="agentRunState">待命</span>
+          <div class="agent-run-head-actions">
+            <span class="agent-run-state" id="agentRunState">待命</span>
+            <button class="icon-btn agent-desktop-inspector-trigger" id="agentInspectorInline" type="button" title="查看运行详情" aria-label="查看运行详情">ⓘ</button>
+          </div>
         </div>
+        <div class="agent-capability-note" id="agentCapabilityNote">当前使用兼容的单次测试入口；本页会保留多轮展示，但正式会话续接与刷新恢复需以后端会话契约为准。</div>
         <div class="agent-message-stream" id="agentMessageStream" aria-live="polite">
           <div class="agent-conversation-empty" id="agentConversationEmpty">
             <div class="agent-empty-mark">↗</div>
@@ -259,12 +277,12 @@
         <div class="agent-compose-card">
           <div class="agent-compose-head">
             <label class="agent-field-label" for="agentWorkbenchPrompt">新消息</label>
-            <span class="agent-compose-route" id="agentComposeRoute">面板直连 · 服务端审批</span>
+            <span class="agent-compose-route" id="agentComposeRoute">面板测试入口 · 上下文未接通</span>
           </div>
-          <textarea id="agentWorkbenchPrompt" rows="3" maxlength="2000" placeholder="描述一个明确、可验证的任务…"></textarea>
+          <textarea id="agentWorkbenchPrompt" rows="3" maxlength="2000" placeholder="继续追问，或描述一个明确、可验证的任务…"></textarea>
           <div class="agent-compose-meta">
             <span id="agentPromptCount">0 / 2000</span>
-            <span>Ctrl / ⌘ + Enter 发送</span>
+            <span>Enter 发送 · Shift+Enter 换行</span>
           </div>
           <details class="agent-live-config">
             <summary><span>运行配置</span><small id="agentConfigNote">配置已与服务端同步</small></summary>
@@ -334,13 +352,13 @@
         </div>
       </section>
 
-      <aside class="agent-inspector panel-surface">
+      <aside class="agent-inspector panel-surface" id="agentInspectorPane" aria-label="运行上下文">
         <div class="agent-panel-head">
           <div>
             <div class="panel-kicker">RUNTIME</div>
             <h2>运行上下文</h2>
           </div>
-          <button class="icon-btn" id="agentSettingsBtn" type="button" title="打开设置">↗</button>
+          <button class="icon-btn" id="agentSettingsBtn" type="button" title="打开设置" aria-label="打开设置">↗</button><button class="icon-btn" id="agentInspectorClose" type="button" title="关闭运行详情" aria-label="关闭运行详情">×</button>
         </div>
         <div class="agent-context-status" id="agentContextStatus"></div>
         <div class="agent-metric-grid" id="agentMetricGrid"></div>
@@ -348,8 +366,8 @@
         <div class="agent-approval-box" id="agentApprovalBox"></div>
       </aside>
     </div>
+    <div class="agent-drawer-backdrop" id="agentDrawerBackdrop" hidden></div>
   </main>
-
   <!-- ══════════════════ 设置页 ══════════════════ -->
   <main class="page page-column" id="pageSettings" hidden>
     <!-- 分节导航：卡片一多就得滑半天，这里一键跳过去（胶囊由 app.js 按卡片标题自动生成） -->

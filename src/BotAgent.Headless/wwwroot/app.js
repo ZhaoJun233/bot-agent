@@ -42,6 +42,20 @@
       errors: [],
       loading: false,
       busy: false,
+      activeSessionKey: "panel:draft",
+      activeRequestId: null,
+      activeRuns: new Map(),
+      results: new Map(),
+      sessionSearch: "",
+      sourceFilter: "all",
+      backendFilter: "all",
+      sessionStateFilter: "all",
+      rows: [],
+      localSessions: [],
+      conversations: new Map(),
+      drafts: new Map(),
+      conversationRevision: new Map(),
+      renderedConversationKey: "",
       lastResult: null,
       lastPrompt: "",
       lastRunAt: 0,
@@ -51,8 +65,8 @@
       draftModels: { server: "", host: "" },
       configDirty: false,
       configSaving: false,
-      backendFilter: "all",
-      sessionStateFilter: "all"
+      sessionsOpen: false,
+      inspectorOpen: false
     }
   };
 
@@ -2263,30 +2277,45 @@ function renderChannelStatus(channels) {
     }
   }
 
+  function syncAgentDrawers() {
+    const page = $("pageAgent");
+    if (!page) return;
+    page.classList.toggle("agent-sessions-open", state.agent.sessionsOpen === true);
+    page.classList.toggle("agent-inspector-open", state.agent.inspectorOpen === true);
+    const backdrop = $("agentDrawerBackdrop");
+    if (backdrop) backdrop.hidden = !(state.agent.sessionsOpen || state.agent.inspectorOpen);
+    document.body.classList.toggle("agent-drawer-open", state.agent.sessionsOpen || state.agent.inspectorOpen);
+  }
   function renderAgentControls() {
     const target = $("agentWorkbenchTarget").value || "server";
     const prompt = $("agentWorkbenchPrompt").value.trim();
     const ready = agentTargetReady(target);
+    const sessionBusy = state.agent.busy || state.agent.activeRuns.has(state.agent.activeSessionKey);
+    const row = agentActiveRow();
+    const readOnly = !row || !row.session.localOnly;
     const send = $("agentWorkbenchSend");
-    send.disabled = state.agent.busy || !prompt || !ready;
-    send.textContent = state.agent.busy ? "执行中…" : "发送任务";
-    $("agentRunState").textContent = state.agent.busy ? "执行中" : ready ? "待命" : "未就绪";
+    send.disabled = readOnly || sessionBusy || !prompt || !ready;
+    send.textContent = readOnly ? "只读会话" : sessionBusy ? "执行中…" : "发送 ↑";
+    $("agentRunState").textContent = sessionBusy ? "执行中" : ready ? "待命" : "未就绪";
     const route = $("agentComposeRoute");
     if (route) {
-      route.textContent = target === "server"
-        ? "面板直连 · 服务器 Agent"
-        : "面板直连 · 外部设备 Agent";
+      route.textContent = sessionBusy
+        ? "本会话正在执行 · 可切换查看其它会话"
+        : target === "server"
+          ? "面板测试入口 · 服务器 Agent"
+          : "面板测试入口 · 外部设备 Agent";
     }
-
     const hint = $("agentSafetyHint");
-    if (!state.agent.status) {
+    if (readOnly) {
+      hint.textContent = "渠道会话只读：当前接口只有执行摘要，不能通过单次测试入口续聊。请先点＋新建本页会话。";
+    } else if (!state.agent.status) {
       hint.textContent = "连接状态未知：为避免误执行，任务入口已锁定。请先刷新状态。";
-    } else if (state.agent.busy) {
-      hint.textContent = "任务执行中，请勿重复提交；结果只显示在当前面板。";
+    } else if (sessionBusy) {
+      hint.textContent = "本会话执行中；切换会话不会丢失草稿或结果。";
     } else if (ready) {
       hint.textContent = target === "server"
-        ? "服务器 Agent 已启用；任务不会自动回发 QQ。"
-        : "外部设备已连接；任务不会自动回发 QQ。";
+        ? "服务器 Agent 已启用；面板测试不会自动回发 QQ。"
+        : "外部设备已连接；面板测试不会自动回发 QQ。";
     } else if (target === "server") {
       hint.textContent = state.agent.status.serverAgent === true
         ? "服务器 Agent 已配置，但当前 Agent 总开关未启用。"
@@ -2297,58 +2326,189 @@ function renderChannelStatus(channels) {
         : "外部设备未连接，连接恢复后才能执行。";
     }
   }
+  function agentSessionIdentity(sourceKey, session) {
+    return `${String(sourceKey || "panel")}::${String(session?.id || "draft")}`;
+  }
 
-  function renderAgentSessions() {
-    const list = $("agentSessionList");
-    const payload = state.agent.sessions;
-    list.replaceChildren();
-    if (!payload || !payload.chats || typeof payload.chats !== "object") {
-      list.appendChild(agentNode("div", "agent-empty", "暂无可展示的 Agent 会话"));
-      $("agentSessionCount").textContent = "0";
-      return;
-    }
+  function agentSourceKind(sourceKey, sourceName) {
+    const value = `${String(sourceKey || "")} ${String(sourceName || "")}`.toLowerCase();
+    if (value.includes("official") || value.includes("官方")) return "official";
+    if (value.includes("private") || value.includes("私聊") || value.includes("好友")) return "private";
+    if (value.includes("panel") || value.includes("面板")) return "panel";
+    return "private";
+  }
 
+  function flattenAgentSessions(payload) {
     const rows = [];
+    if (!payload || !payload.chats || typeof payload.chats !== "object") return rows;
     for (const [sourceKey, chat] of Object.entries(payload.chats)) {
       if (!chat || !Array.isArray(chat.sessions)) continue;
-      const sourceName = chat.name || chat.nameRaw || "未命名来源";
+      const sourceName = chat.name || "未命名来源";
       for (const session of chat.sessions) {
         if (!session) continue;
         const backend = session.backend === "server" ? "server" : "host";
         const runs = Array.isArray(session.runs) ? session.runs.length : Number(session.runs || 0);
-        const current = session.current === true;
-        if (state.agent.backendFilter !== "all" && state.agent.backendFilter !== backend) continue;
-        if (state.agent.sessionStateFilter === "current" && !current) continue;
-        if (state.agent.sessionStateFilter === "active" && runs < 1) continue;
-        rows.push({ sourceKey, sourceName, session, backend, runs, current });
+        rows.push({
+          sourceKey,
+          sourceName,
+          sourceKind: agentSourceKind(sourceKey, sourceName),
+          session,
+          backend,
+          runs,
+          current: session.current === true,
+          identity: agentSessionIdentity(sourceKey, session)
+        });
       }
     }
+    return rows;
+  }
+
+  function agentActiveRow() {
+    return state.agent.rows.find((row) => row.identity === state.agent.activeSessionKey) || null;
+  }
+
+  function agentConversation(key = state.agent.activeSessionKey) {
+    if (!state.agent.conversations.has(key)) state.agent.conversations.set(key, []);
+    return state.agent.conversations.get(key);
+  }
+
+  function bumpAgentConversation(key) {
+    state.agent.conversationRevision.set(key, (state.agent.conversationRevision.get(key) || 0) + 1);
+  }
+
+  function saveAgentDraft() {
+    const key = state.agent.activeSessionKey;
+    if (key) state.agent.drafts.set(key, $("agentWorkbenchPrompt").value);
+  }
+
+  function restoreAgentDraft() {
+    const draft = state.agent.drafts.get(state.agent.activeSessionKey) || "";
+    $("agentWorkbenchPrompt").value = draft;
+    $("agentPromptCount").textContent = `${draft.length} / 2000`;
+  }
+
+  function agentSessionTitle(row) {
+    return row?.session?.name || (row?.session?.localOnly ? "本页新会话" : "未命名会话");
+  }
+
+  function renderAgentSessionContext() {
+    const row = agentActiveRow();
+    const context = $("agentSessionContext");
+    if (!context) return;
+    if (!row) {
+      context.textContent = "面板草稿 · 新会话";
+      return;
+    }
+    const local = row.session?.localOnly === true;
+    const source = local ? "面板草稿" : row.sourceName;
+    const backend = row.backend === "server" ? "服务器 Agent" : "外部设备 Agent";
+    context.textContent = `${agentSessionTitle(row)} · ${source} · ${backend}`;
+  }
+
+  function selectAgentSession(identity) {
+    if (!identity || identity === state.agent.activeSessionKey) {
+      state.agent.sessionsOpen = false;
+      syncAgentDrawers();
+      return;
+    }
+    saveAgentDraft();
+    state.agent.activeSessionKey = identity;
+    state.agent.lastResult = state.agent.results.get(identity) || null;
+    state.agent.lastPrompt = "";
+    state.agent.lastRunAt = 0;
+    restoreAgentDraft();
+    state.agent.sessionsOpen = false;
+    syncAgentDrawers();
+    renderAgentWorkbench();
+  }
+
+  function createLocalAgentSession() {
+    saveAgentDraft();
+    const now = new Date().toISOString();
+    const session = {
+      id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name: "本页新会话",
+      backend: $("agentWorkbenchTarget").value || "server",
+      device: null,
+      turns: 0,
+      runs: [],
+      createdAt: now,
+      updatedAt: now,
+      current: false,
+      localOnly: true
+    };
+    const row = {
+      sourceKey: "panel:workspace",
+      sourceName: "面板草稿",
+      sourceKind: "panel",
+      session,
+      backend: session.backend,
+      runs: 0,
+      current: false,
+      identity: agentSessionIdentity("panel:workspace", session)
+    };
+    state.agent.localSessions.unshift(row);
+    state.agent.rows = [...state.agent.localSessions, ...flattenAgentSessions(state.agent.sessions)];
+    state.agent.activeSessionKey = row.identity;
+    state.agent.lastResult = null;
+    state.agent.lastPrompt = "";
+    state.agent.lastRunAt = 0;
+    restoreAgentDraft();
+    state.agent.sessionsOpen = false;
+    syncAgentDrawers();
+    renderAgentWorkbench();
+    $("agentWorkbenchPrompt").focus();
+  }
+
+  function renderAgentSessions() {
+    const list = $("agentSessionList");
+    list.replaceChildren();
+    const query = state.agent.sessionSearch.trim().toLowerCase();
+    const rows = state.agent.rows.filter((row) => {
+      if (state.agent.backendFilter !== "all" && state.agent.backendFilter !== row.backend) return false;
+      if (state.agent.sourceFilter !== "all" && state.agent.sourceFilter !== row.sourceKind) return false;
+      if (state.agent.sessionStateFilter === "current" && !row.current) return false;
+      if (state.agent.sessionStateFilter === "active" && row.runs < 1 && !state.agent.activeRuns?.has(row.identity)) return false;
+      if (!query) return true;
+      return `${agentSessionTitle(row)} ${row.sourceName}`.toLowerCase().includes(query);
+    });
 
     rows.sort((a, b) => String(b.session.updatedAt || "").localeCompare(String(a.session.updatedAt || "")));
     $("agentSessionCount").textContent = String(rows.length);
     if (rows.length === 0) {
-      list.appendChild(agentNode("div", "agent-empty", "没有符合筛选条件的会话"));
+      list.appendChild(agentNode("div", "agent-empty", state.agent.rows.length ? "没有符合筛选条件的会话" : "暂无可展示的 Agent 会话"));
       return;
     }
 
     for (const row of rows) {
       const card = agentNode("article", "agent-session-card");
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-pressed", row.identity === state.agent.activeSessionKey ? "true" : "false");
+      if (row.identity === state.agent.activeSessionKey) card.classList.add("is-selected");
       if (row.current) card.classList.add("is-current");
+      card.addEventListener("click", () => selectAgentSession(row.identity));
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectAgentSession(row.identity); }
+      });
+
       const head = agentNode("div", "agent-session-card-head");
-      head.appendChild(agentNode("strong", "agent-session-name", row.session.name || "未命名会话"));
-      head.appendChild(agentNode("span", `agent-session-pill ${row.current ? "is-current" : ""}`, row.current ? "当前" : row.backend === "server" ? "服务器" : "外部设备"));
+      head.appendChild(agentNode("strong", "agent-session-name", agentSessionTitle(row)));
+      const status = row.identity === state.agent.activeSessionKey
+        ? "查看中"
+        : row.current ? "当前" : row.session.localOnly ? "草稿" : row.backend === "server" ? "服务器" : "外部设备";
+      head.appendChild(agentNode("span", `agent-session-pill ${row.identity === state.agent.activeSessionKey ? "is-selected" : row.current ? "is-current" : ""}`, status));
       card.appendChild(head);
       card.appendChild(agentNode("div", "agent-session-source", row.sourceName));
       const stats = agentNode("div", "agent-session-stats");
       stats.appendChild(agentNode("span", "", `${row.backend === "server" ? "服务器" : "外部设备"} · ${row.session.device || "默认设备"}`));
-      stats.appendChild(agentNode("span", "", `${Number(row.session.turns || 0)} turns`));
+      stats.appendChild(agentNode("span", "", `${Number(row.session.turns || 0)} 轮`));
       stats.appendChild(agentNode("span", "", `${row.runs} 次运行`));
       stats.appendChild(agentNode("span", "", `更新 ${agentTime(row.session.updatedAt)}`));
       card.appendChild(stats);
       list.appendChild(card);
     }
   }
-
   function renderAgentRuntime() {
     const status = state.agent.status;
     const tools = state.agent.tools || {};
@@ -2445,28 +2605,27 @@ function renderChannelStatus(channels) {
     const stream = $("agentMessageStream");
     const empty = $("agentConversationEmpty");
     if (!stream || !empty) return;
-
-    for (const node of stream.querySelectorAll(":scope > .agent-message-bubble")) {
-      node.remove();
-    }
-
-    const prompt = state.agent.lastPrompt;
-    const result = state.agent.lastResult;
-    const hasConversation = Boolean(prompt || result || state.agent.busy);
+    const key = state.agent.activeSessionKey;
+    const messages = agentConversation(key);
+    for (const node of stream.querySelectorAll(":scope > .agent-message-bubble")) node.remove();
+    const sessionBusy = state.agent.activeRuns.has(key);
+    const hasConversation = messages.length > 0 || sessionBusy;
     empty.hidden = hasConversation;
     if (!hasConversation) return;
 
-    if (prompt) {
-      const user = agentNode("article", "agent-message-bubble agent-message-user");
+    for (const message of messages) {
+      const role = message.role === "user" ? "user" : "agent";
+      const bubble = agentNode("article", `agent-message-bubble agent-message-${role} ${message.ok === false ? "is-failure" : message.ok === true ? "is-success" : ""}`);
       const head = agentNode("div", "agent-message-head");
-      head.appendChild(agentNode("strong", "", "你"));
-      head.appendChild(agentNode("span", "", state.agent.lastRunAt ? agentTime(state.agent.lastRunAt) : "刚刚"));
-      user.appendChild(head);
-      user.appendChild(agentNode("p", "agent-message-text", prompt));
-      stream.insertBefore(user, empty);
+      head.appendChild(agentNode("strong", "", role === "user" ? "你" : "Agent"));
+      head.appendChild(agentNode("span", "", message.status || (role === "user" ? "已提交" : "已完成")));
+      bubble.appendChild(head);
+      if (message.meta) bubble.appendChild(agentNode("div", "agent-message-meta", message.meta));
+      bubble.appendChild(agentNode("p", "agent-message-text", message.text || ""));
+      stream.insertBefore(bubble, empty);
     }
 
-    if (state.agent.busy) {
+    if (sessionBusy) {
       const pending = agentNode("article", "agent-message-bubble agent-message-agent agent-message-pending");
       const head = agentNode("div", "agent-message-head");
       head.appendChild(agentNode("strong", "", "Agent"));
@@ -2474,38 +2633,24 @@ function renderChannelStatus(channels) {
       pending.appendChild(head);
       pending.appendChild(agentNode("p", "agent-message-text", "正在准备运行上下文并执行任务…"));
       stream.insertBefore(pending, empty);
-      return;
     }
-
-    if (result) {
-      const ok = result.ok === true;
-      const reply = agentNode("article", `agent-message-bubble agent-message-agent ${ok ? "is-success" : "is-failure"}`);
-      const head = agentNode("div", "agent-message-head");
-      head.appendChild(agentNode("strong", "", "Agent"));
-      head.appendChild(agentNode("span", "", ok ? "已完成" : "未完成"));
-      reply.appendChild(head);
-      const meta = [
-        result.target === "server" ? "服务器 Agent" : "外部设备 Agent",
-        agentDuration(result.durationMs),
-        `${Number(result.toolCalls || 0)} 次工具调用`,
-        result.id ? `运行 ${result.id}` : ""
-      ].filter(Boolean).join(" · ");
-      reply.appendChild(agentNode("div", "agent-message-meta", meta));
-      reply.appendChild(agentNode("p", "agent-message-text", result.text || result.error || "没有返回文本。"));
-      stream.insertBefore(reply, empty);
+    if (state.agent.renderedConversationKey !== key) {
+      state.agent.renderedConversationKey = key;
+      stream.scrollTop = stream.scrollHeight;
     }
   }
-
   function renderAgentWorkbench() {
     renderAgentSessions();
     renderAgentRuntime();
+    renderAgentSessionContext();
     renderAgentConversation();
     renderAgentResult();
     renderAgentConfig();
     renderAgentControls();
+    restoreAgentDraft();
+    syncAgentDrawers();
     $("agentPromptCount").textContent = `${$("agentWorkbenchPrompt").value.length} / 2000`;
   }
-
   async function loadAgentWorkbench() {
     if (state.agent.loading) return;
     state.agent.loading = true;
@@ -2533,6 +2678,11 @@ function renderChannelStatus(channels) {
       }
     }
     state.agent.loading = false;
+    state.agent.rows = [...state.agent.localSessions, ...flattenAgentSessions(state.agent.sessions)];
+    if (!state.agent.rows.some((row) => row.identity === state.agent.activeSessionKey)) {
+      const first = state.agent.rows.find((row) => row.backend === ($("agentWorkbenchTarget").value || "server"));
+      if (first) state.agent.activeSessionKey = first.identity;
+    }
     $("agentRefresh").disabled = false;
     renderAgentWorkbench();
     const target = $("agentWorkbenchTarget").value || "server";
@@ -2540,7 +2690,10 @@ function renderChannelStatus(channels) {
   }
 
   async function runAgentWorkbenchTask() {
+    const key = state.agent.activeSessionKey;
+    if (!agentActiveRow()?.session?.localOnly) { toast("请先点＋新建本页会话"); return; }
     if (state.agent.busy) return;
+    if (state.agent.activeRuns.has(key)) return;
     const prompt = $("agentWorkbenchPrompt").value.trim();
     const target = $("agentWorkbenchTarget").value || "server";
     if (!prompt) { toast("先写一条任务提示词"); return; }
@@ -2548,10 +2701,22 @@ function renderChannelStatus(channels) {
       toast("当前执行后端不可用，请刷新状态后重试");
       return;
     }
+
+    saveAgentDraft();
+    const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const startedAt = Date.now();
     state.agent.busy = true;
+    state.agent.activeRequestId = requestId;
+    state.agent.activeRuns.set(key, requestId);
     state.agent.lastPrompt = prompt;
-    state.agent.lastRunAt = Date.now();
+    state.agent.lastRunAt = startedAt;
+    state.agent.lastResult = null;
+    agentConversation(key).push({ role: "user", text: prompt, status: "提交中" });
+    bumpAgentConversation(key);
+    state.agent.drafts.set(key, "");
+    $("agentWorkbenchPrompt").value = "";
     renderAgentWorkbench();
+
     try {
       const result = await api("/api/agent/test", {
         method: "POST",
@@ -2561,14 +2726,40 @@ function renderChannelStatus(channels) {
           target
         })
       });
-      state.agent.lastResult = result || { ok: false, target, text: "服务端没有返回结果" };
-      toast(result && result.ok ? "任务完成" : "任务返回失败");
+      const normalized = result || { ok: false, target, text: "服务端没有返回结果" };
+      state.agent.results.set(key, normalized);
+      if (state.agent.activeSessionKey === key) state.agent.lastResult = normalized;
+      const messages = agentConversation(key);
+      const user = messages.findLast((message) => message.role === "user" && message.status === "提交中" && message.text === prompt);
+      if (user) user.status = "已提交";
+      messages.push({
+        role: "agent",
+        ok: normalized.ok === true,
+        text: normalized.text || normalized.error || "没有返回文本。",
+        status: normalized.ok === true ? "已完成" : "未完成",
+        meta: [
+          normalized.target === "server" ? "服务器 Agent" : "外部设备 Agent",
+          agentDuration(normalized.durationMs || Date.now() - startedAt),
+          `${Number(normalized.toolCalls || 0)} 次工具调用`,
+          normalized.id ? `运行 ${normalized.id}` : ""
+        ].filter(Boolean).join(" · ")
+      });
+      bumpAgentConversation(key);
+      toast(normalized.ok ? "任务完成" : "任务返回失败");
     } catch (error) {
       const message = error?.data?.error || error?.message || "任务执行失败";
-      state.agent.lastResult = { ok: false, target, text: message };
+      const messages = agentConversation(key);
+      const user = messages.findLast((item) => item.role === "user" && item.status === "提交中" && item.text === prompt);
+      if (user) user.status = "未发送";
+      messages.push({ role: "agent", ok: false, status: "未完成", text: message, meta: "请求失败 · 状态待确认" });
+      bumpAgentConversation(key);
+      state.agent.results.set(key, { ok: false, target, text: message });
+      if (state.agent.activeSessionKey === key) state.agent.lastResult = state.agent.results.get(key);
       toast("任务执行失败：" + message);
     } finally {
+      if (state.agent.activeRuns.get(key) === requestId) state.agent.activeRuns.delete(key);
       state.agent.busy = false;
+      if (state.agent.activeRequestId === requestId) state.agent.activeRequestId = null;
       renderAgentWorkbench();
     }
   }
@@ -2628,10 +2819,17 @@ function renderChannelStatus(channels) {
     $("agentRefresh").addEventListener("click", () => { loadAgentWorkbench(); });
     $("agentWorkbenchSend").addEventListener("click", runAgentWorkbenchTask);
     $("agentWorkbenchPrompt").addEventListener("input", () => {
+      saveAgentDraft();
       $("agentPromptCount").textContent = `${$("agentWorkbenchPrompt").value.length} / 2000`;
       renderAgentControls();
     });
     $("agentWorkbenchPrompt").addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        runAgentWorkbenchTask();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         runAgentWorkbenchTask();
@@ -2656,6 +2854,14 @@ function renderChannelStatus(channels) {
     $("agentExternalWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentServerWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentApprovalsToggle").addEventListener("change", markAgentConfigDirty);
+    $("agentSessionSearch").addEventListener("input", (e) => {
+      state.agent.sessionSearch = e.target.value || "";
+      renderAgentSessions();
+    });
+    $("agentSourceFilter").addEventListener("change", (e) => {
+      state.agent.sourceFilter = e.target.value;
+      renderAgentSessions();
+    });
     $("agentBackendFilter").addEventListener("change", (e) => {
       state.agent.backendFilter = e.target.value;
       renderAgentSessions();
@@ -2666,7 +2872,28 @@ function renderChannelStatus(channels) {
     });
     $("agentTraceBtn").addEventListener("click", () => { showPage("trace"); });
     $("agentSettingsBtn").addEventListener("click", () => { showPage("settings"); });
-
+    $("agentNewSession").addEventListener("click", createLocalAgentSession);
+    $("agentSessionsToggle").addEventListener("click", () => {
+      state.agent.sessionsOpen = !state.agent.sessionsOpen;
+      state.agent.inspectorOpen = false;
+      syncAgentDrawers();
+    });
+    for (const button of [$("agentInspectorToggle"), $("agentInspectorInline")]) {
+      button?.addEventListener("click", () => {
+        state.agent.inspectorOpen = !state.agent.inspectorOpen;
+        state.agent.sessionsOpen = false;
+        syncAgentDrawers();
+      });
+    }
+    $("agentInspectorClose").addEventListener("click", () => {
+      state.agent.inspectorOpen = false;
+      syncAgentDrawers();
+    });
+    $("agentDrawerBackdrop").addEventListener("click", () => {
+      state.agent.sessionsOpen = false;
+      state.agent.inspectorOpen = false;
+      syncAgentDrawers();
+    });
     // 设置页模型工作区：切换只改变当前编辑上下文，不复制或重写服务端配置。
     for (const button of $("modelProviderList").querySelectorAll("[data-model-context]")) {
       button.addEventListener("click", () => {

@@ -644,6 +644,8 @@ const jsRun = js.replace(probeMarker, `globalThis.probe = {
   editDevice: (i, patch) => { if (agentDevices[i]) Object.assign(agentDevices[i], patch); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
   setDraft: (rows) => { agentDevices = rows.map((d) => ({ ...d })); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
   forgetDevices: () => { agentDevicesLoaded = false; if (typeof agentDevicesSaved !== "undefined") agentDevicesSaved = []; },
+  agentSnapshot: () => ({ active: state.agent.activeSessionKey, rows: state.agent.rows.map((row) => ({ key: row.identity, source: row.sourceKind, backend: row.backend, local: !!row.session.localOnly })), messages: [...state.agent.conversations.entries()].map(([key, entries]) => ({ key, entries: entries.map((entry) => ({ ...entry })) })), drafts: [...state.agent.drafts.entries()], lastResult: state.agent.lastResult }),
+  selectAgentSession, createLocalAgentSession, renderAgentSessions,
   isDirty: () => settingsDirty
 };
 ${probeMarker}`);
@@ -1606,6 +1608,14 @@ check("Agent 执行期间有 busy 状态与重复提交保护",
     document.getElementById("agentSessionList").children.length === 1 &&
     !document.getElementById("agentSessionList").innerHTML.includes("prompt"));
 
+  check("★ 渠道会话只读，不能错把 /api/agent/test 发进 QQ 当前会话",
+    document.getElementById("agentWorkbenchSend").disabled === true &&
+    document.getElementById("agentWorkbenchSend").textContent === "只读会话");
+  fire("agentNewSession", "click");
+  const localKey = sandbox.probe.agentSnapshot().active;
+  check("★ 新建本页草稿不伪造后端会话身份",
+    sandbox.probe.agentSnapshot().rows.some((row) => row.key === localKey && row.local) &&
+    calls.slice(beforeReady).every((call) => call.method !== "POST" || !call.url.includes("/api/agent/sessions")));
   const prompt = "检查 <synthetic-result> & 仅返回状态，不执行外发";
   document.getElementById("agentWorkbenchPrompt").value = prompt;
   fire("agentWorkbenchPrompt", "input", { target: { id: "agentWorkbenchPrompt" } });
