@@ -1806,3 +1806,110 @@ input:focus, textarea:focus, select:focus { padding-bottom: 7px; border-bottom-w
   .agent-permission-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-compose-card textarea { min-height: 96px; }
 }
+
+/* Agent composer: conversation stays dominant; controls become a quiet Codex-like bottom rail. */
+.agent-grid { grid-template-columns: minmax(190px, 220px) minmax(0, 1fr); }
+.agent-command-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--divider);
+}
+.agent-command-bar .agent-live-config {
+  position: static;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.agent-command-bar .agent-live-config summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 5px;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  font-size: 10px;
+}
+.agent-command-bar .agent-live-config summary:hover,
+.agent-command-bar .agent-live-config[open] summary { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.agent-command-bar .agent-live-config summary small { max-width: 120px; overflow: hidden; color: var(--text-tertiary); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-command-bar .agent-config-panel {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  max-height: min(62vh, 560px);
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  background: var(--card-bg);
+  box-shadow: 0 18px 45px rgba(21, 38, 64, .16);
+}
+.agent-command-bar .agent-quick-controls {
+  display: flex;
+  flex: 1 1 360px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+.agent-command-bar .agent-run-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.agent-command-bar .agent-select-wrap { gap: 5px; min-width: 0; }
+.agent-command-bar .agent-select-wrap > span { display: flex; align-items: center; gap: 4px; font-size: 10px; }
+.agent-command-bar .agent-select-wrap > span small { max-width: 82px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-command-bar .agent-select-wrap select {
+  min-width: 0;
+  width: auto;
+  height: 29px;
+  padding: 0 8px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11px;
+}
+.agent-command-bar .agent-select-wrap select:hover,
+.agent-command-bar .agent-select-wrap select:focus { border-color: var(--divider); background: var(--subtle-hover); box-shadow: none; }
+.agent-command-bar .agent-model-quick { flex: 1 1 150px; }
+.agent-command-bar .agent-model-control { display: flex; align-items: center; min-width: 0; flex: 1 1 auto; }
+.agent-command-bar .agent-model-control select { flex: 1 1 auto; min-width: 80px; }
+.agent-command-bar #agentModelRefresh,
+.agent-command-bar .agent-send-btn { box-shadow: none; }
+.agent-command-bar #agentModelRefresh { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }
+.agent-command-bar #agentModelRefresh:hover { background: var(--subtle-hover); }
+.agent-command-bar .agent-send-btn { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 11px; }
+.agent-command-bar .agent-safety-hint { flex: 1 0 100%; margin: 0; padding-left: 4px; font-size: 9px; }
+.agent-compose-card textarea { min-height: 96px; max-height: 200px; }
+
+@media (min-width: 1200px) {
+  .agent-grid { grid-template-columns: minmax(200px, 220px) minmax(0, 1fr); }
+  .agent-message-stream { padding-inline: clamp(20px, 6vw, 84px); }
+}
+
+@media (max-width: 760px) {
+  .agent-command-bar { align-items: stretch; gap: 5px; }
+  .agent-command-bar .agent-live-config { flex: 0 0 auto; }
+  .agent-command-bar .agent-quick-controls { flex: 1 1 100%; order: 2; flex-wrap: wrap; }
+  .agent-command-bar .agent-run-controls { flex: 1 1 auto; order: 1; }
+  .agent-command-bar .agent-safety-hint { order: 3; }
+  .agent-command-bar .agent-quick-controls .agent-select-wrap { flex: 1 1 42%; }
+  .agent-command-bar .agent-model-quick { flex-basis: 100%; }
+  .agent-command-bar .agent-run-controls .agent-select-wrap select { height: 36px; }
+  .agent-command-bar .agent-send-btn { height: 36px; }
+  .agent-command-bar .agent-config-panel { right: -4px; left: -4px; max-height: 70vh; }
+  .agent-compose-card textarea { min-height: 88px; }
+}
