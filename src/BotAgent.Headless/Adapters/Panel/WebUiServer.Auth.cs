@@ -7,6 +7,20 @@ namespace BotAgent.Adapters.Panel;
 
 public sealed partial class WebUiServer
 {
+    private const int MaxPanelSessions = 256;
+    private const int ClientLoginFailureLimit = 5;
+    private const int GlobalLoginFailureLimit = 50;
+    private static readonly TimeSpan PanelSessionLifetime = TimeSpan.FromHours(12);
+    private static readonly TimeSpan LoginFailureWindow = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan LoginBlockDuration = TimeSpan.FromSeconds(30);
+
+    private sealed class LoginFailureState
+    {
+        public int Failures;
+        public DateTimeOffset WindowStarted;
+        public DateTimeOffset BlockedUntil;
+    }
+
     private Task HandleAuthStatusAsync(HttpListenerContext context)
     {
         context.Response.Headers["Cache-Control"] = "no-store";
@@ -29,25 +43,33 @@ public sealed partial class WebUiServer
             return;
         }
 
-        bool valid;
+        var clientKey = GetClientKey(context);
+        var valid = false;
+        var rateLimited = false;
         lock (_loginGate)
         {
-            if (Clock.Now < _loginBlockedUntil)
+            var now = Clock.Now;
+            ResetGlobalFailureWindow(now);
+            if (now < _globalLoginBlockedUntil || IsClientBlocked(clientKey, now))
             {
-                valid = false;
+                rateLimited = true;
             }
             else
             {
                 valid = _panelPassword.Verify(password);
-                _loginFailures = valid ? 0 : _loginFailures + 1;
-                if (_loginFailures >= 5)
+                if (valid)
                 {
-                    _loginBlockedUntil = Clock.Now.AddSeconds(30);
-                    _loginFailures = 0;
+                    _loginFailuresByClient.Remove(clientKey);
+                }
+                else
+                {
+                    RecordFailedLogin(clientKey, now);
+                    rateLimited = now < _globalLoginBlockedUntil || IsClientBlocked(clientKey, now);
                 }
             }
         }
-        if (Clock.Now < _loginBlockedUntil)
+
+        if (rateLimited)
         {
             await AuthErrorAsync(context, 429, "尝试过于频繁，请 30 秒后重试");
             return;
@@ -96,11 +118,130 @@ public sealed partial class WebUiServer
 
     private void SetPanelSession(HttpListenerContext context)
     {
-        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        _panelSessions[token] = Clock.Now.AddHours(12);
-        var secure = context.Request.IsSecureConnection ||
-            string.Equals(context.Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase);
-        context.Response.Headers.Add("Set-Cookie", $"panel_session={token}; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict{(secure ? "; Secure" : "")}");
+        lock (_loginGate)
+        {
+            var now = Clock.Now;
+            CleanupExpiredPanelSessions(now);
+            EvictPanelSessionsAtCapacity();
+
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            _panelSessions[token] = now.Add(PanelSessionLifetime);
+            var secure = context.Request.IsSecureConnection ||
+                string.Equals(context.Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase);
+            context.Response.Headers.Add("Set-Cookie", $"panel_session={token}; Path=/; Max-Age=43200; HttpOnly; SameSite=Strict{(secure ? "; Secure" : "")}");
+        }
+    }
+
+    private bool IsClientBlocked(string clientKey, DateTimeOffset now)
+    {
+        if (!_loginFailuresByClient.TryGetValue(clientKey, out var state)) return false;
+        if (state.BlockedUntil > now) return true;
+        if (state.WindowStarted == default || now < state.WindowStarted || now - state.WindowStarted >= LoginFailureWindow)
+        {
+            _loginFailuresByClient.Remove(clientKey);
+        }
+        return false;
+    }
+
+    private void RecordFailedLogin(string clientKey, DateTimeOffset now)
+    {
+        if (!_loginFailuresByClient.TryGetValue(clientKey, out var state) ||
+            state.WindowStarted == default || now < state.WindowStarted || now - state.WindowStarted >= LoginFailureWindow)
+        {
+            state = new LoginFailureState { WindowStarted = now };
+            _loginFailuresByClient[clientKey] = state;
+        }
+
+        state.Failures++;
+        if (state.Failures >= ClientLoginFailureLimit)
+        {
+            state.Failures = 0;
+            state.BlockedUntil = now.Add(LoginBlockDuration);
+        }
+
+        _globalLoginFailures++;
+        if (_globalLoginFailures >= GlobalLoginFailureLimit)
+        {
+            _globalLoginFailures = 0;
+            _globalLoginBlockedUntil = now.Add(LoginBlockDuration);
+        }
+    }
+
+    private void ResetGlobalFailureWindow(DateTimeOffset now)
+    {
+        CleanupStaleLoginFailureStates(now);
+        if (_globalLoginFailureWindowStarted == default || now < _globalLoginFailureWindowStarted ||
+            now - _globalLoginFailureWindowStarted >= LoginFailureWindow)
+        {
+            _globalLoginFailureWindowStarted = now;
+            _globalLoginFailures = 0;
+        }
+    }
+
+    private void CleanupStaleLoginFailureStates(DateTimeOffset now)
+    {
+        foreach (var pair in _loginFailuresByClient)
+        {
+            var state = pair.Value;
+            if (state.BlockedUntil <= now &&
+                (state.WindowStarted == default || now < state.WindowStarted || now - state.WindowStarted >= LoginFailureWindow))
+            {
+                _loginFailuresByClient.Remove(pair.Key);
+            }
+        }
+    }
+
+    private static string GetClientKey(HttpListenerContext context)
+    {
+        var remote = context.Request.RemoteEndPoint?.Address;
+        if (remote is not null && !IPAddress.IsLoopback(remote))
+            return "remote:" + remote;
+
+        foreach (var headerName in new[] { "X-Forwarded-For", "X-Real-IP" })
+        {
+            var forwarded = context.Request.Headers[headerName];
+            var first = forwarded?.Split(',', 2)[0].Trim();
+            if (!string.IsNullOrEmpty(first) && first.Length <= 128)
+                return "forwarded:" + first;
+        }
+
+        return remote is null ? "remote:unknown" : "remote:" + remote;
+    }
+
+    private void CleanupExpiredPanelSessions(DateTimeOffset now)
+    {
+        foreach (var pair in _panelSessions)
+        {
+            if (pair.Value <= now)
+                _panelSessions.TryRemove(pair.Key, out _);
+        }
+    }
+
+    private void EvictPanelSessionsAtCapacity()
+    {
+        while (_panelSessions.Count >= MaxPanelSessions)
+        {
+            string? oldestToken = null;
+            var oldestExpiry = DateTimeOffset.MaxValue;
+            foreach (var pair in _panelSessions)
+            {
+                if (pair.Value < oldestExpiry)
+                {
+                    oldestToken = pair.Key;
+                    oldestExpiry = pair.Value;
+                }
+            }
+
+            if (oldestToken is null || !_panelSessions.TryRemove(oldestToken, out _))
+                break;
+        }
+    }
+
+    private bool TryGetValidPanelSession(HttpListenerContext context, DateTimeOffset now)
+    {
+        CleanupExpiredPanelSessions(now);
+        var session = context.Request.Cookies["panel_session"]?.Value;
+        return session is not null && _panelSessions.TryGetValue(session, out var expires) && expires > now;
     }
 
     private static async Task<JsonNode?> ReadAuthBodyAsync(HttpListenerContext context)

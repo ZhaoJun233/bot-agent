@@ -1845,6 +1845,31 @@ public static partial class Program
                 new StringContent("{\"password\":\"" + legacyPassword + "\"}", Encoding.UTF8, "application/json"));
             Check("旧密码迁移后仍可登录且默认密码未重新启用",
                 oldLogin.StatusCode == System.Net.HttpStatusCode.Unauthorized && migratedLogin.IsSuccessStatusCode);
+
+            // 登录失败按客户端隔离：一个地址被封时，另一个地址仍可登录。
+            HttpResponseMessage? lastBad = null;
+            for (var i = 0; i < 5; i++)
+            {
+                using var badRequest = new HttpRequestMessage(HttpMethod.Post, $"{panel}/api/auth/login")
+                {
+                    Content = new StringContent("{\"password\":\"wrong-password\"}", Encoding.UTF8, "application/json")
+                };
+                badRequest.Headers.TryAddWithoutValidation("X-Forwarded-For", "192.168.0.10");
+                lastBad?.Dispose();
+                lastBad = await auth.SendAsync(badRequest);
+            }
+            using (lastBad)
+            {
+                using var otherClientRequest = new HttpRequestMessage(HttpMethod.Post, $"{panel}/api/auth/login")
+                {
+                    Content = new StringContent("{\"password\":\"synthetic-pass-123\"}", Encoding.UTF8, "application/json")
+                };
+                otherClientRequest.Headers.TryAddWithoutValidation("X-Forwarded-For", "192.168.0.11");
+                var otherClientLogin = await auth.SendAsync(otherClientRequest);
+                Check("登录失败按客户端隔离且仍保留单客户端 30 秒封禁",
+                    lastBad?.StatusCode == System.Net.HttpStatusCode.TooManyRequests &&
+                    otherClientLogin.IsSuccessStatusCode);
+            }
         }
 
         // ---- 1) 取二维码 ----
@@ -1929,6 +1954,14 @@ public static partial class Program
         await WaitForPortAsync(panelPort2, cts.Token, bot2);
         var panel2 = $"http://127.0.0.1:{panelPort2}";
 
+        using (var freshAuth = new HttpClient())
+        {
+            var freshLogin = await freshAuth.PostAsync($"{panel2}/api/auth/login",
+                new StringContent("{\"password\":\"synthetic-panel-password-123\"}", Encoding.UTF8, "application/json"));
+            Check("新部署初始面板口令来自环境变量且要求改密",
+                freshLogin.IsSuccessStatusCode && (await freshLogin.Content.ReadAsStringAsync()).Contains("mustChangePassword"));
+        }
+
         var (s4, b4) = await HttpGetAsync($"{panel2}/api/qqlogin?token={panelToken}");
         Check("未配 NapCat 令牌时告知怎么修（而不是 500 或空白）",
             s4 == 200 && b4.Contains("\"configured\":false") && b4.Contains("QQCHAT_NAPCAT_WEBUI_TOKEN"),
@@ -2012,6 +2045,10 @@ public static partial class Program
                 psi.Environment.Remove(key);
             }
         }
+
+        // 被测进程的首次面板初始化必须显式提供口令；测试默认值只用于不关心登录的场景。
+        if (!env.ContainsKey("QQCHAT_PANEL_PASSWORD"))
+            env["QQCHAT_PANEL_PASSWORD"] = "synthetic-panel-password-123";
 
         foreach (var (key, value) in env)
         {

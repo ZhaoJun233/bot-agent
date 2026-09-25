@@ -154,8 +154,7 @@
       </div>
 
       <!-- ══ 扫码登录卡片：QQ 未登录时自动出现，登录成功后自动消失 ══
-           二维码直接显示在面板里 —— 以前只能去 NapCat 自己的 WebUI（另一个域名 + 另一道认证）才看得到，
-           用户打开机器人面板看不到二维码就会卡在「没登录」上。 -->
+           二维码直接显示在面板里，登录状态与面板状态保持同步。 -->
       <div class="login-card" id="loginCard" hidden>
         <div class="login-qr">
           <img id="loginQrImg" alt="QQ 登录二维码" hidden />
@@ -198,9 +197,9 @@
   <main class="page page-column agent-page" id="pageAgent" hidden>
     <div class="agent-topbar">
       <div>
-        <div class="eyebrow">EXECUTION WORKBENCH</div>
+        <div class="eyebrow">AGENT WORKSPACE</div>
         <h1>Agent 工作台</h1>
-        <p class="page-desc">从这里发起面板任务，查看连接、能力与审批状态。结果不会自动回发到 QQ。</p>
+        <p class="page-desc">在同一个工作区发起任务、切换模型、查看执行过程与审批状态。面板任务不会自动回发到 QQ。</p>
       </div>
       <div class="agent-top-actions">
         <span class="agent-live-pill" id="agentLivePill"><i class="status-dot"></i><span>状态未知</span></span>
@@ -237,62 +236,83 @@
       <section class="agent-run panel-surface">
         <div class="agent-panel-head agent-run-head">
           <div>
-            <div class="panel-kicker">DIRECT RUN</div>
-            <h2>发起任务</h2>
+            <div class="panel-kicker">CONVERSATION</div>
+            <h2>对话工作区</h2>
+            <p class="agent-session-context" id="agentSessionContext">面板直连 · 新任务</p>
           </div>
           <span class="agent-run-state" id="agentRunState">待命</span>
         </div>
+        <div class="agent-message-stream" id="agentMessageStream" aria-live="polite">
+          <div class="agent-conversation-empty" id="agentConversationEmpty">
+            <div class="agent-empty-mark">↗</div>
+            <strong>从一条任务开始</strong>
+            <span>描述目标、约束和验收方式，Agent 会在这里返回执行结果。</span>
+          </div>
+          <!-- 保留现有结果字段作为无障碍/探针兼容节点，用户界面由上方消息流呈现。 -->
+          <div class="agent-result-card legacy-result-card" id="agentResultCard" hidden aria-hidden="true">
+            <h3 id="agentResultTitle">最近一次执行</h3>
+            <div id="agentResultMeta"></div>
+            <pre id="agentResultText"></pre>
+            <button class="btn small" id="agentTraceBtn" type="button" hidden>查看追踪</button>
+          </div>
+        </div>
         <div class="agent-compose-card">
-          <label class="agent-field-label" for="agentWorkbenchPrompt">任务提示词</label>
-          <textarea id="agentWorkbenchPrompt" rows="7" maxlength="2000" placeholder="描述一个明确、可验证的任务…"></textarea>
+          <div class="agent-compose-head">
+            <label class="agent-field-label" for="agentWorkbenchPrompt">新消息</label>
+            <span class="agent-compose-route" id="agentComposeRoute">面板直连 · 服务端审批</span>
+          </div>
+          <textarea id="agentWorkbenchPrompt" rows="3" maxlength="2000" placeholder="描述一个明确、可验证的任务…"></textarea>
           <div class="agent-compose-meta">
             <span id="agentPromptCount">0 / 2000</span>
-            <span>面板直连 · 服务端审批</span>
+            <span>Ctrl / ⌘ + Enter 发送</span>
           </div>
-          <div class="agent-config-panel">
-            <div class="agent-config-head">
-              <div>
-                <div class="panel-kicker">LIVE CONFIG</div>
-                <strong>运行配置</strong>
+          <details class="agent-live-config">
+            <summary><span>运行配置</span><small id="agentConfigNote">配置已与服务端同步</small></summary>
+            <div class="agent-config-panel">
+              <div class="agent-config-head">
+                <div>
+                  <div class="panel-kicker">LIVE CONFIG</div>
+                  <strong>本次任务使用的后端与目录</strong>
+                </div>
+                <button class="btn small" id="agentConfigSave" type="button">保存配置</button>
               </div>
-              <button class="btn small" id="agentConfigSave" type="button">保存配置</button>
-            </div>
-            <div class="agent-config-grid">
-              <label class="agent-config-field">
-                <span>默认后端</span>
-                <select id="agentDefaultTarget">
-                  <option value="auto">自动选择</option>
-                  <option value="server">服务器 Agent</option>
-                  <option value="host">外部 Agent</option>
-                </select>
-              </label>
-              <label class="agent-config-field agent-model-field">
-                <span>当前模型 <small id="agentModelSource">等待拉取</small></span>
-                <span class="agent-model-control">
-                  <select id="agentModelSelect" aria-label="选择当前 Agent 模型">
-                    <option value="">先选择执行后端</option>
+              <div class="agent-config-grid">
+                <label class="agent-config-field">
+                  <span>默认后端</span>
+                  <select id="agentDefaultTarget">
+                    <option value="auto">自动选择</option>
+                    <option value="server">服务器 Agent</option>
+                    <option value="host">外部 Agent</option>
                   </select>
-                  <button class="icon-btn" id="agentModelRefresh" type="button" title="从对应供应商刷新模型列表">↻</button>
-                </span>
-              </label>
-              <label class="agent-config-field agent-workdir-field">
-                <span>外部 Agent 工作目录</span>
-                <input id="agentExternalWorkdir" type="text" placeholder="例如：E:/shorttime" />
-              </label>
-              <label class="agent-config-field agent-workdir-field">
-                <span>服务器 Agent 工作目录</span>
-                <input id="agentServerWorkdir" type="text" placeholder="例如：/data/agent" />
-              </label>
+                </label>
+                <label class="agent-config-field agent-model-field">
+                  <span>当前模型 <small id="agentModelSource">等待拉取</small></span>
+                  <span class="agent-model-control">
+                    <select id="agentModelSelect" aria-label="选择当前 Agent 模型">
+                      <option value="">先选择执行后端</option>
+                    </select>
+                    <button class="icon-btn" id="agentModelRefresh" type="button" title="从对应供应商刷新模型列表">↻</button>
+                  </span>
+                </label>
+                <label class="agent-config-field agent-workdir-field">
+                  <span>外部 Agent 工作目录</span>
+                  <input id="agentExternalWorkdir" type="text" placeholder="例如：E:/shorttime" />
+                </label>
+                <label class="agent-config-field agent-workdir-field">
+                  <span>服务器 Agent 工作目录</span>
+                  <input id="agentServerWorkdir" type="text" placeholder="例如：/data/agent" />
+                </label>
+              </div>
+              <div class="agent-config-foot">
+                <label class="agent-toggle-row">
+                  <input type="checkbox" id="agentApprovalsToggle" />
+                  <span class="switch"></span>
+                  <span>启用面板审批</span>
+                </label>
+                <span class="agent-config-note">保存后对新任务生效，运行中的任务不受影响。</span>
+              </div>
             </div>
-            <div class="agent-config-foot">
-              <label class="agent-toggle-row">
-                <input type="checkbox" id="agentApprovalsToggle" />
-                <span class="switch"></span>
-                <span>启用面板审批</span>
-              </label>
-              <span class="agent-config-note" id="agentConfigNote">修改后保存，运行中的任务不受影响。</span>
-            </div>
-          </div>
+          </details>
           <div class="agent-run-controls">
             <label class="agent-select-wrap"><span>执行后端</span>
               <select id="agentWorkbenchTarget">
@@ -308,20 +328,9 @@
                 <option value="600">600 秒</option>
               </select>
             </label>
-            <button class="accent-btn agent-send-btn" id="agentWorkbenchSend" type="button">执行任务</button>
+            <button class="accent-btn agent-send-btn" id="agentWorkbenchSend" type="button">发送任务</button>
           </div>
           <div class="agent-safety-hint" id="agentSafetyHint">正在读取连接与权限状态…</div>
-        </div>
-        <div class="agent-result-card" id="agentResultCard" hidden>
-          <div class="agent-result-head">
-            <div>
-              <div class="panel-kicker">LATEST RESULT</div>
-              <h3 id="agentResultTitle">最近一次执行</h3>
-            </div>
-            <button class="btn small" id="agentTraceBtn" type="button">查看追踪</button>
-          </div>
-          <div class="agent-result-meta" id="agentResultMeta"></div>
-          <pre class="agent-result-text" id="agentResultText"></pre>
         </div>
       </section>
 
@@ -350,7 +359,7 @@
       <div class="settings-inner">
         <h1 class="page-title">设置</h1>
         <p class="page-desc">
-          密钥与通道地址由容器环境变量提供（下方只读）；<b>人设、白名单、节奏等归本页所有</b>，保存后立即生效且重启不回滚。
+          密钥与通道地址由容器环境变量提供（下方只读）；<b>人设、白名单、节奏等归本页管理</b>，保存后按对应设置生效。
         </p>
 
         <div class="card password-settings" id="panelPasswordSettings">
@@ -367,71 +376,174 @@
           </form>
         </div>
 
-        <!-- Agent 大脑 -->
-        <div class="card">
+        <!-- 模型工作区：沿用现有设置接口，按运行上下文切换，不引入新的供应商存储协议。 -->
+        <div class="card model-studio-card" id="modelSettingsCard">
           <div class="card-head">
-            <h3>Agent 大脑 · OpenAI 兼容接口</h3>
-            <p>这三项可以直接在这里改（保存后立即生效，不用重启容器）；留空 = 回退到容器环境变量。
-              <br />密钥单独存在 <code>data/qqchat.db</code> 的 <code>secrets</code> 表（库文件权限 600），不跟其余配置混在一起，界面上只显示掩码。</p>
-          </div>
-          <div class="field">
-            <label>Base URL<span class="hint" id="baseUrlSrc"></span></label>
-            <input type="text" id="setBaseUrl" placeholder="https://api.openai.com/v1" />
-          </div>
-          <div class="field">
-            <label>API Key<span class="hint" id="apiKeySrc"></span></label>
-            <input type="password" id="setApiKey" placeholder="填新密钥；留空 = 不改（清除请点右侧按钮）" autocomplete="new-password" />
-            <button class="ghost-btn inline" id="clearApiKey" type="button">清除密钥</button>
-          </div>
-          <div class="field">
-            <label>模型名称<span class="hint" id="modelSrc"></span></label>
-            <input type="text" id="setModel" placeholder="网关支持的模型名" />
-          </div>
-          <div class="field">
-            <label class="switch-row">
-              <input type="checkbox" id="setFastReply" />
-              <span class="switch"></span>
-              <span>快速回复（少思考）</span>
-            </label>
-            <span class="hint">聊天回复改用轻量模型，快 2~3 倍；硬推理会弱一些。标题综结 / 画像 / 表情包描述仍用主模型。</span>
+            <h3>模型</h3>
+            <p>按运行上下文管理模型。供应商名称由 Base URL 自动识别，密钥由服务端安全保存，界面只显示掩码。</p>
           </div>
 
-          <div class="field">
-            <label>快速档模型<span class="hint">开着上面开关时，聊天用它回</span></label>
-            <input type="text" id="setFastModel" placeholder="轻量模型名（跟着中转走，留空则开关不生效）" />
+          <div class="model-studio">
+            <aside class="model-catalog" aria-label="模型配置列表">
+              <div class="model-catalog-label">配置上下文</div>
+              <div class="model-provider-list" id="modelProviderList">
+                <button class="model-provider-item active" type="button" data-model-context="chat">
+                  <span class="model-provider-icon">◈</span>
+                  <span class="model-provider-copy"><b id="modelChatProviderLabel">聊天模型</b><small id="modelChatModelLabel">正在读取…</small></span>
+                  <span class="model-provider-mark">主</span>
+                </button>
+                <button class="model-provider-item" type="button" data-model-context="server">
+                  <span class="model-provider-icon">▣</span>
+                  <span class="model-provider-copy"><b id="modelServerProviderLabel">服务器 Agent</b><small id="modelServerModelLabel">跟随聊天配置</small></span>
+                  <span class="model-provider-mark">S</span>
+                </button>
+                <button class="model-provider-item" type="button" data-model-context="host">
+                  <span class="model-provider-icon">⌁</span>
+                  <span class="model-provider-copy"><b>外部设备 Agent</b><small id="modelHostModelLabel">设备默认模型</small></span>
+                  <span class="model-provider-mark">H</span>
+                </button>
+              </div>
+              <div class="model-catalog-foot">供应商由接口地址确定；当前配置仍通过统一的设置保存。</div>
+            </aside>
+
+            <section class="model-editor" aria-live="polite">
+              <div class="model-editor-head">
+                <div>
+                  <div class="panel-kicker">MODEL CONFIGURATION</div>
+                  <h4 id="modelEditorTitle">聊天模型</h4>
+                  <p id="modelEditorSubtitle">OpenAI 兼容接口 · 主模型</p>
+                </div>
+                <span class="model-editor-state" id="modelEditorState">已加载</span>
+              </div>
+
+              <div class="model-editor-pane" id="modelChatPane">
+                <div class="model-section-title">供应商</div>
+                <div class="model-provider-summary">
+                  <span class="model-provider-summary-icon">◎</span>
+                  <span><b id="modelChatProviderName">未配置接口</b><small id="modelChatProviderSource">等待读取</small></span>
+                </div>
+                <div class="grid-2 model-field-grid">
+                  <div class="field">
+                    <label>Base URL<span class="hint" id="baseUrlSrc"></span></label>
+                    <input type="text" id="setBaseUrl" placeholder="https://api.openai.com/v1" />
+                  </div>
+                  <div class="field">
+                    <label>API Key<span class="hint" id="apiKeySrc"></span></label>
+                    <input type="password" id="setApiKey" placeholder="填新密钥；留空 = 不改" autocomplete="new-password" />
+                    <button class="ghost-btn inline" id="clearApiKey" type="button">清除密钥</button>
+                  </div>
+                </div>
+
+                <div class="model-section-title model-section-title-spaced">模型</div>
+                <div class="grid-2 model-field-grid">
+                  <div class="field">
+                    <label>模型 ID<span class="hint" id="modelSrc"></span></label>
+                    <input type="text" id="setModel" placeholder="供应商支持的模型 ID" />
+                  </div>
+                  <div class="field model-readonly-field">
+                    <label>当前用途</label>
+                    <div class="model-readonly-value">聊天回复、标题、画像与多媒体理解</div>
+                  </div>
+                </div>
+
+                <div class="model-capability-row">
+                  <span class="model-section-title">能力</span>
+                  <span class="model-capability-tag">文本输入</span>
+                  <span class="model-capability-tag">工具调用</span>
+                  <span class="model-capability-note">能力由当前接口和模型实际响应决定</span>
+                </div>
+
+                <details class="model-advanced" open>
+                  <summary>高级设置</summary>
+                  <div class="model-advanced-body">
+                    <div class="field">
+                      <label class="switch-row">
+                        <input type="checkbox" id="setFastReply" />
+                        <span class="switch"></span>
+                        <span>启用快速回复</span>
+                      </label>
+                      <span class="hint">聊天回复改用轻量模型；标题、画像和多媒体理解仍使用主模型。</span>
+                    </div>
+                    <div class="grid-2 model-field-grid">
+                      <div class="field">
+                        <label>快速档模型<span class="hint">启用快速回复时使用</span></label>
+                        <input type="text" id="setFastModel" placeholder="轻量模型名，留空则不启用" />
+                      </div>
+                      <div class="field">
+                        <label>单次输出上限<span class="hint">MaxTokens</span></label>
+                        <input type="number" id="setMaxTokens" min="64" max="32000" step="64" />
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label>机器人人设档案<span class="hint">定义角色的性格与说话风格</span></label>
+                      <textarea id="setPersona" rows="4" placeholder="例如：说话简短、口语化，偶尔吐槽……"></textarea>
+                    </div>
+                    <div class="field">
+                      <label>AI 对话欲望<span class="hint">越高越主动参与群聊发言</span><b class="val" id="desireVal">50</b></label>
+                      <input type="range" id="setDesire" min="0" max="100" step="5" />
+                    </div>
+                    <div class="field">
+                      <label>发言适合度阈值<span class="hint">模型评分低于此值则保持沉默</span><b class="val" id="threshVal">10</b></label>
+                      <input type="range" id="setThreshold" min="0" max="60" step="5" />
+                    </div>
+                    <div class="field">
+                      <label>聊天步进循环上限<span class="hint">每次任务最多追加的模型调用轮数</span><b class="val" id="agentStepsVal">1</b></label>
+                      <input type="range" id="setMaxAgentSteps" min="1" max="3" step="1" />
+                    </div>
+                    <label class="switch-row">
+                      <input type="checkbox" id="setAiMode" />
+                      <span class="switch"></span>
+                      <span>AI 自动回复开关</span>
+                    </label>
+                  </div>
+                </details>
+              </div>
+
+              <div class="model-editor-pane" id="modelServerPane" hidden>
+                <div class="model-section-title">服务器 Agent 模型</div>
+                <p class="model-pane-note">服务器 Agent 默认跟随聊天模型，也可以使用独立的 OpenAI 兼容接口。</p>
+                <div class="grid-2 model-field-grid">
+                  <div class="field">
+                    <label>Base URL<span class="hint">留空 = 跟随聊天模型</span></label>
+                    <input type="text" id="setAgentServerBaseUrl" placeholder="留空 = 跟随聊天模型" />
+                  </div>
+                  <div class="field">
+                    <label>API Key<span class="hint" id="agentServerKeySrc"></span></label>
+                    <input type="password" id="setAgentServerKey" placeholder="填新密钥；留空 = 不改" autocomplete="new-password" />
+                    <button class="ghost-btn inline" id="clearAgentServerKey" type="button">清除密钥</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>模型 ID<span class="hint">从对应接口拉取可选模型</span></label>
+                  <div class="model-inline-control">
+                    <input type="text" id="setAgentServerModel" placeholder="留空 = 跟聊天模型" />
+                    <button class="ghost-btn" id="agentServerModelsGo" type="button">拉取模型</button>
+                  </div>
+                </div>
+                <select id="agentServerModelPick" class="model-picker" aria-label="服务器 Agent 模型列表" hidden></select>
+                <div class="model-provider-summary model-provider-summary-subtle">
+                  <span class="model-provider-summary-icon">▣</span>
+                  <span><b id="modelServerProviderName">跟随聊天接口</b><small id="modelServerProviderSource">模型列表来自当前有效接口</small></span>
+                </div>
+              </div>
+
+              <div class="model-editor-pane" id="modelHostPane" hidden>
+                <div class="model-section-title">外部设备 Agent 模型</div>
+                <p class="model-pane-note">模型由外部设备上的 pi 上报；工作目录和设备连接仍在 Agent 配置区管理。</p>
+                <div class="field">
+                  <label>默认模型<span class="hint">留空 = 使用设备自己的默认模型</span></label>
+                  <div class="model-inline-control">
+                    <select id="setAgentModel"><option value="">（使用设备默认）</option></select>
+                    <button class="ghost-btn" id="agentHostModelsGo" type="button">刷新列表</button>
+                  </div>
+                </div>
+                <div class="model-provider-summary model-provider-summary-subtle">
+                  <span class="model-provider-summary-icon">⌁</span>
+                  <span><b>外部设备</b><small id="modelHostProviderSource">需要设备在线才能拉取模型</small></span>
+                </div>
+              </div>
+            </section>
           </div>
-
-
-          <div class="field">
-            <label>单次回复字数上限<span class="hint">MaxTokens</span></label>
-            <input type="number" id="setMaxTokens" min="64" max="32000" step="64" />
-          </div>
-
-          <div class="field">
-            <label>机器人人设档案<span class="hint">可选，定义角色的性格 / 说话风格，随每次请求注入</span></label>
-            <textarea id="setPersona" rows="4" placeholder="例如：你是群里的老群友，说话简短、口语化，偶尔吐槽……"></textarea>
-          </div>
-
-          <div class="field">
-            <label>AI 对话欲望<span class="hint">越高越主动参与群聊发言</span><b class="val" id="desireVal">50</b></label>
-            <input type="range" id="setDesire" min="0" max="100" step="5" />
-          </div>
-
-          <div class="field">
-            <label>发言适合度阈值<span class="hint">模型评分低于此值则保持沉默</span><b class="val" id="threshVal">10</b></label>
-              <input type="range" id="setThreshold" min="0" max="60" step="5" />
-            </div>
-
-            <div class="field">
-              <label>聊天步进循环上限<span class="hint">1 = 只调一次模型（与改造前一致）；2~3 = 当场做完搜索/读页面再问一次</span><b class="val" id="agentStepsVal">1</b></label>
-              <input type="range" id="setMaxAgentSteps" min="1" max="3" step="1" />
-            </div>
-
-          <label class="switch-row">
-            <input type="checkbox" id="setAiMode" />
-            <span class="switch"></span>
-            <span>AI 自动回复开关</span>
-          </label>
         </div>
 
         <!-- QQ 接入 -->
@@ -466,17 +578,17 @@
 
           <div class="field">
             <label>群聊白名单<span class="hint">严格模式：只有名单内的**群**会进入消息列表并触发 AI，名单外全部忽略。<code>*</code> = 所有群（危险）</span></label>
-            <textarea id="setWhitelistGroups" rows="3" placeholder="例如：&#10;10001&#10;20002（留空 = 回落到下面的旧共用名单；旧名单也空 = 忽略全部）"></textarea>
+            <textarea id="setWhitelistGroups" rows="3" placeholder="例如：&#10;10001&#10;20002（留空 = 使用共用名单；共用名单也空 = 忽略全部）"></textarea>
           </div>
 
           <div class="field">
             <label>私聊白名单<span class="hint">只有名单内的**好友**私聊会触发 AI。与群聊名单各管各的：QQ 号填在群里不会放行同号的群，反之亦然。<code>*</code> = 所有私聊（危险）</span></label>
-            <textarea id="setWhitelistPrivates" rows="3" placeholder="例如：&#10;30001（留空 = 回落到下面的旧共用名单；旧名单也空 = 忽略全部）"></textarea>
+            <textarea id="setWhitelistPrivates" rows="3" placeholder="例如：&#10;30001（留空 = 使用共用名单；共用名单也空 = 忽略全部）"></textarea>
           </div>
 
           <div class="field">
-            <label>旧的共用名单（兼容）<span class="hint" id="whitelistLegacyHint">群聊+私聊共用一份（以前只有一个框）。上面两个新框里留空的那一边就回落到它</span></label>
-            <textarea id="setWhitelist" rows="2" placeholder="（旧字段；不填也没关系）"></textarea>
+            <label>共用名单（回退）<span class="hint" id="whitelistLegacyHint">群聊或私聊名单留空时，会使用这份共用名单</span></label>
+            <textarea id="setWhitelist" rows="2" placeholder="留空表示不设置共用名单"></textarea>
           </div>
         </div>
 
@@ -716,7 +828,7 @@
           </div>
 
           <div class="field">
-            <label>音频识别模型<span class="hint">专门用来“听”的模型，可以和主模型不同（留空 = 不听，只用波形实测）；并不是所有模型都收得到音频，换之前在「当场试听一首」里验一下</span></label>
+            <label>音频识别模型<span class="hint">专门用来“听”的模型，可以和主模型不同（留空 = 不听，只用波形实测）；更换后可在「当场试听一首」里验证</span></label>
             <input type="text" id="setMusicUnderstandModel" maxlength="80" placeholder="填支持音频输入的模型名" />
           </div>
 
@@ -1057,35 +1169,6 @@
                 </div>
             </div>
 
-            <div class="grid-2">
-                <div class="field">
-                    <label>服务器 agent 的模型接口<span class="hint">OpenAI 兼容地址（留空 = 用聊天那个）；agent 的请求多，可以单独指个小模型/便宜网关</span></label>
-                    <input type="text" id="setAgentServerBaseUrl" placeholder="http://127.0.0.1:8000/v1（留空=跟聊天一样）" />
-                </div>
-                <div class="field">
-                    <label>服务器 agent 的模型<span class="hint">填完接口可点右边按钮拉列表选</span></label>
-                    <div class="sticker-actions" style="margin:0">
-                        <input type="text" id="setAgentServerModel" placeholder="留空 = 跟聊天同一个模型" style="flex:1" />
-                        <button class="ghost-btn" id="agentServerModelsGo">拉列表</button>
-                    </div>
-                </div>
-            </div>
-            <select id="agentServerModelPick" style="display:none;margin-top:6px"></select>
-
-        <div class="field">
-          <label>服务器 agent 的密钥<span class="hint" id="agentServerKeySrc"></span></label>
-          <input type="password" id="setAgentServerKey" placeholder="填新密钥；留空 = 不改（清除请点右侧按钮）" autocomplete="new-password" />
-          <button class="ghost-btn inline" id="clearAgentServerKey" type="button">清除密钥</button>
-        </div>
-
-            <div class="field">
-                <label>外部设备用的模型<span class="hint">从设备的 pi 模型列表里选（机器人在线时拉取）</span></label>
-                <div class="sticker-actions" style="margin:0">
-                    <select id="setAgentModel" style="flex:1"><option value="">（用 pi 自己的默认）</option></select>
-                    <button class="ghost-btn" id="agentHostModelsGo">刷新列表</button>
-                </div>
-            </div>
-
             <!-- 外部设备：一键连接 + 每台设备自己的配置（泛用：名字任意、可多台） -->
             <div class="field">
                 <label>外部设备<span class="hint">接上来就能用；每台可以单独配模型/目录/工具（不配就走上面的默认）</span></label>
@@ -1297,11 +1380,11 @@
           <p class="path-hint" id="moodHint"></p>
         </div>
 
-        <!-- 能力与审批（V3：默认全关，行为与改造前一致） -->
+        <!-- 能力与审批 -->
         <div class="card">
           <div class="card-head">
-            <h3>能力与审批<span class="hint">增强能力：默认关闭，不改现有行为</span></h3>
-            <p><b>场景预设</b>留空 = 能力白名单完全由上面的开关决定（与以前一样）；填了预设只会<b>收紧</b>，
+            <h3>能力与审批<span class="hint">增强能力默认关闭，按需开启</span></h3>
+            <p><b>场景预设</b>留空 = 能力白名单完全由上面的开关决定；填了预设只会<b>收紧</b>，
               不会把已经关掉的能力打开，名字不认识则按最低权限处理。<br />
               <b>人工审批</b>打开后，模型说“想调工具”不会被执行，而是发一张<b>待确认</b>到群里：
               群主/管理员（或下面点名的人）回复「同意 编号」才执行 —— 而且只执行一个<b>固定假工具</b>
@@ -1420,7 +1503,6 @@
       <div class="settings-actions">
         <button class="accent-btn big" id="saveBtn">保存设置</button>
         <span class="dirty-hint" id="dirtyHint" hidden>● 有未保存的修改</span>
-        <span class="path-hint" id="settingsPath"></span>
       </div>
     </div>
   </main>

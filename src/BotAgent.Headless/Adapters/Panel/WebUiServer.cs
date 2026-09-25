@@ -78,8 +78,10 @@ public sealed partial class WebUiServer : IDisposable
     private readonly PanelPasswordStore _panelPassword;
     private readonly ConcurrentDictionary<string, DateTimeOffset> _panelSessions = new();
     private readonly object _loginGate = new();
-    private int _loginFailures;
-    private DateTimeOffset _loginBlockedUntil;
+    private readonly Dictionary<string, LoginFailureState> _loginFailuresByClient = new(StringComparer.Ordinal);
+    private int _globalLoginFailures;
+    private DateTimeOffset _globalLoginFailureWindowStarted;
+    private DateTimeOffset _globalLoginBlockedUntil;
     private readonly OneBotGateway _gateway;
 
     /// <summary>上行通道（多通道部署时是聚合器）：面板只拿它当通道台账用（见 <see cref="BuildChannelStatus" />）。</summary>
@@ -158,8 +160,6 @@ public sealed partial class WebUiServer : IDisposable
         _port = port;
         _box = box;
         _panelPassword = new PanelPasswordStore(Path.Combine(AppPaths.DataDir, "panel-password"));
-        if (_panelPassword.Created)
-            FileLog.Write("Web", "首次部署面板默认密码：adminBot。登录后必须立即修改密码。");
         _gateway = gateway;
         _source = source;
         _agent = agent;
@@ -380,10 +380,9 @@ public sealed partial class WebUiServer : IDisposable
 
     private bool IsAuthorized(HttpListenerContext context)
     {
+        var now = Clock.Now;
         if (IsLegacyAuthorized(context)) return true;
-        var session = context.Request.Cookies["panel_session"]?.Value;
-        return session is not null && _panelSessions.TryGetValue(session, out var expires) &&
-            expires > Clock.Now && !_panelPassword.MustChange;
+        return TryGetValidPanelSession(context, now) && !_panelPassword.MustChange;
     }
 
     private bool IsLegacyAuthorized(HttpListenerContext context)
@@ -396,9 +395,7 @@ public sealed partial class WebUiServer : IDisposable
 
     private bool HasPendingSession(HttpListenerContext context)
     {
-        var session = context.Request.Cookies["panel_session"]?.Value;
-        return session is not null && _panelSessions.TryGetValue(session, out var expires) &&
-            expires > Clock.Now && _panelPassword.MustChange;
+        return TryGetValidPanelSession(context, Clock.Now) && _panelPassword.MustChange;
     }
 
     /// <summary>

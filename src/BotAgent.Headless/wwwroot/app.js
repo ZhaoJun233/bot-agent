@@ -24,6 +24,7 @@
     search: "",
     channelFilter: "all",
     logs: [],
+    modelStudio: { context: "chat" },
     settingsLoaded: false,    // 设置表单是否已从服务端回填过
     agentPromptDefault: "",  // 服务端那份默认「Agent 附加提示词」（面板「恢复默认」按钮用，不在前端抄一份）
     chatOpen: false,          // 手机端：是否已点进某个会话（列表 ↔ 聊天 的主从切换）
@@ -42,6 +43,7 @@
       loading: false,
       busy: false,
       lastResult: null,
+      lastPrompt: "",
       lastRunAt: 0,
       models: { server: [], host: [] },
       modelNotes: { server: "", host: "" },
@@ -417,11 +419,17 @@
   }
 
   function conversationChannel(conversation) {
-    const raw = String(conversation?.channel || conversation?.channelTag || "").trim().toLowerCase();
-    const compact = raw.replace(/[\s_-]+/g, "");
-    if (compact === "official" || compact === "officialchannel" || compact === "官方" || compact === "官方通道") return "official";
-    if (compact === "private" || compact === "privatechannel" || compact === "local" || compact === "私域" || compact === "私域通道" || compact === "本地") return "private";
-    const key = String(conversation?.key || conversation?.sourceKey || "").toLowerCase();
+    // /api/state 与 /api/events 的会话 DTO 都由服务端写入 channel；优先使用该契约。
+    const raw = String(conversation?.channel || "").trim().toLowerCase();
+    if (raw === "official") return "official";
+    if (raw === "private" || raw === "local") return "private";
+
+    // 兼容旧缓存或反向代理，最后才使用显示标签与 key 前缀兜底。
+    const tag = String(conversation?.channelTag || "").trim().toLowerCase();
+    if (tag === "官方" || tag === "official") return "official";
+    if (tag === "私域" || tag === "本地" || tag === "private" || tag === "local") return "private";
+
+    const key = String(conversation?.key || conversation?.sourceKey || "").trim().toLowerCase();
     return key.startsWith("official:") ? "official" : "private";
   }
 
@@ -1278,6 +1286,75 @@ function renderChannelStatus(channels) {
     sel.appendChild(opt);
   }
 
+  function modelProviderName(value, fallback) {
+    const raw = String(value || "").trim();
+    if (!raw) return fallback;
+    try {
+      const url = new URL(raw);
+      return url.hostname || fallback;
+    } catch {
+      return raw.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0] || fallback;
+    }
+  }
+
+  function renderModelStudio() {
+    const list = $("modelProviderList");
+    if (!list) return;
+    const context = state.modelStudio.context || "chat";
+    for (const button of list.querySelectorAll("[data-model-context]")) {
+      button.classList.toggle("active", button.dataset.modelContext === context);
+    }
+
+    const panes = {
+      chat: $("modelChatPane"),
+      server: $("modelServerPane"),
+      host: $("modelHostPane")
+    };
+    for (const [key, pane] of Object.entries(panes)) {
+      if (pane) pane.hidden = key !== context;
+    }
+
+    const baseUrl = $("setBaseUrl")?.value || "";
+    const model = $("setModel")?.value || "";
+    const serverBaseUrl = $("setAgentServerBaseUrl")?.value || "";
+    const serverModel = $("setAgentServerModel")?.value || "";
+    const hostModel = $("setAgentModel")?.value || "";
+    const chatProvider = modelProviderName(baseUrl, "未配置接口");
+    const serverProvider = modelProviderName(serverBaseUrl, serverBaseUrl.trim() ? "接口地址无效" : chatProvider);
+
+    const values = {
+      modelChatProviderLabel: chatProvider,
+      modelChatModelLabel: model || "未配置模型",
+      modelServerProviderLabel: serverProvider,
+      modelServerModelLabel: serverModel || "跟随聊天模型",
+      modelHostModelLabel: hostModel || "设备默认模型",
+      modelChatProviderName: chatProvider,
+      modelChatProviderSource: baseUrl ? "由 Base URL 自动识别" : "使用容器环境变量中的接口",
+      modelServerProviderName: serverProvider,
+      modelServerProviderSource: serverBaseUrl ? "服务器 Agent 独立接口" : "回退到聊天模型接口",
+      modelHostProviderSource: hostModel ? "已选择外部设备模型" : "需要设备在线才能拉取模型"
+    };
+    for (const [id, value] of Object.entries(values)) {
+      const node = $(id);
+      if (node) node.textContent = value;
+    }
+
+    const title = $("modelEditorTitle");
+    const subtitle = $("modelEditorSubtitle");
+    if (title && subtitle) {
+      if (context === "server") {
+        title.textContent = "服务器 Agent";
+        subtitle.textContent = `${serverProvider} · 独立运行后端`;
+      } else if (context === "host") {
+        title.textContent = "外部设备 Agent";
+        subtitle.textContent = hostModel || "设备默认模型";
+      } else {
+        title.textContent = model || "聊天模型";
+        subtitle.textContent = `${chatProvider} · 主模型`;
+      }
+    }
+  }
+
   /* 拉服务器 agent 接口的模型列表（GET <AgentServerBaseUrl>/models） */
 
   async function loadSettings() {
@@ -1304,20 +1381,19 @@ function renderChannelStatus(channels) {
     $("setAddress").value = e.oneBotAddress || "";
     $("setToken").value = e.oneBotTokenMasked ? e.oneBotTokenMasked + "（来自环境变量）" : "未设置";
     $("setUin").value = e.uin || "自动识别";
-    $("settingsPath").textContent = `配置文件：${data.settingsFile}`;
 
     $("setPersona").value = r.botPersona || "";
     $("setMaxTokens").value = r.maxTokens;
     $("setWhitelist").value = r.messageWhitelist || "";
     $("setWhitelistGroups").value = r.whitelistGroups || "";
     $("setWhitelistPrivates").value = r.whitelistPrivates || "";
-    // 留空的那一边回落到旧的共用名单 —— 在提示里说清楚（不然号主以为新框填了没生效）
+    // 留空的那一边回落到共用名单，在提示里明确当前实际使用的来源。
     const legacyBits = [];
     if (r.whitelistGroupsFromLegacy) legacyBits.push("群聊");
     if (r.whitelistPrivatesFromLegacy) legacyBits.push("私聊");
     $("whitelistLegacyHint").textContent = legacyBits.length > 0
-      ? `群聊+私聊共用一份（以前只有一个框）。现在：${legacyBits.join("、")}在用这份旧名单（上面对应的新框填上就以新框为准）`
-      : "群聊+私聊共用一份（以前只有一个框）。上面两个新框都填了，这份已经不起作用";
+      ? `当前由${legacyBits.join("、")}使用这份共用名单；填写对应名单后将优先使用对应设置`
+      : "当前群聊和私聊均使用各自名单；这份共用名单作为回退";
     $("setDesire").value = r.aiDesire;
     $("desireVal").textContent = r.aiDesire;
     $("setThreshold").value = r.suitabilityThreshold;
@@ -1523,6 +1599,8 @@ function renderChannelStatus(channels) {
       resetAgentDeviceDraft(); // 回到上一份已保存快照，不保留已经放弃的改动
     }
 
+    renderModelStudio();
+
     // 放在最后：全部回填成功才认为可保存
     state.settingsLoaded = true;
     clearSettingsDirty(); // 刚和服务端对齐，没未保存的修改
@@ -1723,7 +1801,7 @@ function renderChannelStatus(channels) {
       }
       const bar = $("saveBar");
       bar.hidden = false;
-      $("saveBarText").textContent = "设置已保存并立即生效（会写入 settings.json，重启不回滚）" +
+      $("saveBarText").textContent = "设置已保存并按对应设置生效" +
         (deviceTableSkippedHere ? "；设备表这次没加载成功，设备相关改动**没有**保存 —— 点「刷新设备」后再保存一次" : "") +
         (lateEdits ? "；保存期间你又有新的修改，那些还没保存" : "");
       // 密钥保存/清除后清空输入框（不回显），并把“待清除”标记归位
@@ -2058,7 +2136,7 @@ function renderChannelStatus(channels) {
   function ensureAgentTargetOption(target) {
     if (!target) return;
     const select = $("agentDefaultTarget");
-    if (!select || Array.from(select.options).some((option) => option.value === target)) return;
+    if (!select || (select.options && Array.from(select.options).some((option) => option.value === target))) return;
     const option = document.createElement("option");
     option.value = target;
     option.textContent = target;
@@ -2191,8 +2269,14 @@ function renderChannelStatus(channels) {
     const ready = agentTargetReady(target);
     const send = $("agentWorkbenchSend");
     send.disabled = state.agent.busy || !prompt || !ready;
-    send.textContent = state.agent.busy ? "执行中…" : "执行任务";
+    send.textContent = state.agent.busy ? "执行中…" : "发送任务";
     $("agentRunState").textContent = state.agent.busy ? "执行中" : ready ? "待命" : "未就绪";
+    const route = $("agentComposeRoute");
+    if (route) {
+      route.textContent = target === "server"
+        ? "面板直连 · 服务器 Agent"
+        : "面板直连 · 外部设备 Agent";
+    }
 
     const hint = $("agentSafetyHint");
     if (!state.agent.status) {
@@ -2342,6 +2426,7 @@ function renderChannelStatus(channels) {
   function renderAgentResult() {
     const card = $("agentResultCard");
     const result = state.agent.lastResult;
+    if (!card) return;
     card.hidden = !result;
     if (!result) return;
     const ok = result.ok === true;
@@ -2356,9 +2441,65 @@ function renderChannelStatus(channels) {
     $("agentResultText").textContent = result.text || result.error || "没有返回文本。";
   }
 
+  function renderAgentConversation() {
+    const stream = $("agentMessageStream");
+    const empty = $("agentConversationEmpty");
+    if (!stream || !empty) return;
+
+    for (const node of stream.querySelectorAll(":scope > .agent-message-bubble")) {
+      node.remove();
+    }
+
+    const prompt = state.agent.lastPrompt;
+    const result = state.agent.lastResult;
+    const hasConversation = Boolean(prompt || result || state.agent.busy);
+    empty.hidden = hasConversation;
+    if (!hasConversation) return;
+
+    if (prompt) {
+      const user = agentNode("article", "agent-message-bubble agent-message-user");
+      const head = agentNode("div", "agent-message-head");
+      head.appendChild(agentNode("strong", "", "你"));
+      head.appendChild(agentNode("span", "", state.agent.lastRunAt ? agentTime(state.agent.lastRunAt) : "刚刚"));
+      user.appendChild(head);
+      user.appendChild(agentNode("p", "agent-message-text", prompt));
+      stream.insertBefore(user, empty);
+    }
+
+    if (state.agent.busy) {
+      const pending = agentNode("article", "agent-message-bubble agent-message-agent agent-message-pending");
+      const head = agentNode("div", "agent-message-head");
+      head.appendChild(agentNode("strong", "", "Agent"));
+      head.appendChild(agentNode("span", "", "执行中"));
+      pending.appendChild(head);
+      pending.appendChild(agentNode("p", "agent-message-text", "正在准备运行上下文并执行任务…"));
+      stream.insertBefore(pending, empty);
+      return;
+    }
+
+    if (result) {
+      const ok = result.ok === true;
+      const reply = agentNode("article", `agent-message-bubble agent-message-agent ${ok ? "is-success" : "is-failure"}`);
+      const head = agentNode("div", "agent-message-head");
+      head.appendChild(agentNode("strong", "", "Agent"));
+      head.appendChild(agentNode("span", "", ok ? "已完成" : "未完成"));
+      reply.appendChild(head);
+      const meta = [
+        result.target === "server" ? "服务器 Agent" : "外部设备 Agent",
+        agentDuration(result.durationMs),
+        `${Number(result.toolCalls || 0)} 次工具调用`,
+        result.id ? `运行 ${result.id}` : ""
+      ].filter(Boolean).join(" · ");
+      reply.appendChild(agentNode("div", "agent-message-meta", meta));
+      reply.appendChild(agentNode("p", "agent-message-text", result.text || result.error || "没有返回文本。"));
+      stream.insertBefore(reply, empty);
+    }
+  }
+
   function renderAgentWorkbench() {
     renderAgentSessions();
     renderAgentRuntime();
+    renderAgentConversation();
     renderAgentResult();
     renderAgentConfig();
     renderAgentControls();
@@ -2408,6 +2549,7 @@ function renderChannelStatus(channels) {
       return;
     }
     state.agent.busy = true;
+    state.agent.lastPrompt = prompt;
     state.agent.lastRunAt = Date.now();
     renderAgentWorkbench();
     try {
@@ -2525,6 +2667,23 @@ function renderChannelStatus(channels) {
     $("agentTraceBtn").addEventListener("click", () => { showPage("trace"); });
     $("agentSettingsBtn").addEventListener("click", () => { showPage("settings"); });
 
+    // 设置页模型工作区：切换只改变当前编辑上下文，不复制或重写服务端配置。
+    for (const button of $("modelProviderList").querySelectorAll("[data-model-context]")) {
+      button.addEventListener("click", () => {
+        state.modelStudio.context = button.dataset.modelContext || "chat";
+        renderModelStudio();
+      });
+    }
+    for (const id of [
+      "setBaseUrl", "setModel", "setAgentServerBaseUrl", "setAgentServerModel", "setAgentModel"
+    ]) {
+      const field = $(id);
+      if (field) {
+        field.addEventListener("input", renderModelStudio);
+        field.addEventListener("change", renderModelStudio);
+      }
+    }
+
     // 手机端：从聊天返回会话列表
     $("chatBack").addEventListener("click", () => {
       state.chatOpen = false;
@@ -2561,13 +2720,11 @@ function renderChannelStatus(channels) {
       });
     });
 
-    // 通道分块切换（全部 / 私域 / 官方）：只改筛选条件，不重拉数据 ——
-    // 会话数据里本来就带 channel，切板块就是换个过滤。
-    $("chanTabs").addEventListener("click", (e) => {
-      const btn = e.target.closest(".chan-tab");
-      if (!btn) return;
-      setChannelFilter(btn.getAttribute("data-chan"));
-    });
+    // 通道分块切换（全部 / 私域 / 官方）：只改筛选条件，不重拉数据。
+    // 每个 Tab 单独绑定，避免事件委托在代理 DOM 或按钮内部节点上丢失目标。
+    for (const btn of $("chanTabs").querySelectorAll(".chan-tab")) {
+      btn.addEventListener("click", () => setChannelFilter(btn.getAttribute("data-chan")));
+    }
 
     // 一键重启：把“重启才生效”的设置落地（官方通道凭据、容器级改动…），不用开 SSH。
     // 进程会退出、容器自己回来 —— 所以点完先轮询 /healthz，回来了再刷一遍状态。
@@ -2663,7 +2820,11 @@ function renderChannelStatus(channels) {
     });
 
     // 任何改动都标记为“未保存”（主题除外：它只存 localStorage，不进保存请求）
-    const dirtyOnEdit = (ev) => { if (!ev.target || (ev.target.id !== "setTheme" && !ev.target.closest("#panelPasswordSettings"))) markSettingsDirty(); };
+    const dirtyOnEdit = (ev) => {
+      const target = ev.target;
+      const insidePasswordCard = typeof target?.closest === "function" && target.closest("#panelPasswordSettings");
+      if (!target || (target.id !== "setTheme" && !insidePasswordCard)) markSettingsDirty();
+    };
     $("pageSettings").addEventListener("input", dirtyOnEdit);
     $("pageSettings").addEventListener("change", dirtyOnEdit);
 
@@ -3746,7 +3907,9 @@ function renderChannelStatus(channels) {
     wirePanelAuth();
     try {
       const response = await fetch(withToken("/api/auth/status"), { headers: authHeaders() });
-      const auth = await response.json();
+      // 统一走文本解析，兼容真实 Fetch 与面板探针的最小响应桩。
+      const authText = await response.text();
+      const auth = authText ? JSON.parse(authText) : {};
       state.legacyTokenConfigured = !!auth.legacyTokenConfigured;
       // 兼容旧版合成探针/反向代理：新接口一定会返回 authenticated；缺失时按旧面板继续启动。
       if (auth.authenticated === false) { showPanelAuth(auth.mustChangePassword); return; }

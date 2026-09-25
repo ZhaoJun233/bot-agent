@@ -109,6 +109,8 @@ services:
       # 注意：这类变量必须写在本文件的 environment 里才会进容器 ——
       # .env 只用于 compose 的 ${VAR} 变量替换，不会自动传给容器。
       QQCHAT_PANEL_TOKEN: ${PANEL_TOKEN:-}
+      # 首次启动初始化面板口令；初始化完成后可从 .env 移除，哈希保存在 secrets 表。
+      QQCHAT_PANEL_PASSWORD: ${PANEL_PASSWORD:-}
       # 面板内扫码登录：机器人向 NapCat WebUI 取登录二维码（用户可以不出面板就扫码）
       # 令牌值见 napcat/config/webui.json 的 token 字段；不配也不影响消息通道，
       # 只是面板里那个「扫码登录」卡片会提示未配置。

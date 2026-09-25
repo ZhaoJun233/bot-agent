@@ -4,7 +4,7 @@ namespace BotAgent.Adapters.Persistence;
 
 internal sealed class PanelPasswordStore
 {
-    private const string DefaultPassword = "adminBot";
+    private const string InitialPasswordEnvironmentVariable = "QQCHAT_PANEL_PASSWORD";
     private const int Iterations = 210_000;
     private readonly SecretsStore _secrets = new();
     private readonly object _gate = new();
@@ -37,11 +37,17 @@ internal sealed class PanelPasswordStore
         }
         else
         {
+            var initialPassword = Environment.GetEnvironmentVariable(InitialPasswordEnvironmentVariable);
+            if (string.IsNullOrWhiteSpace(initialPassword) || initialPassword.Length < 10 || initialPassword.Length > 200)
+            {
+                throw new InvalidOperationException(
+                    $"首次启动必须设置 {InitialPasswordEnvironmentVariable}（10-200 个字符）；初始化后可从环境变量移除。");
+            }
+
             _salt = RandomNumberGenerator.GetBytes(16);
-            _hash = Hash(DefaultPassword, _salt);
+            _hash = Hash(initialPassword, _salt);
             MustChange = true;
             _secrets.Save("panelPassword", Serialize(), throwOnError: true);
-            Created = true;
         }
     }
 
