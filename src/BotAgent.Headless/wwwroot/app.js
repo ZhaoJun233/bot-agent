@@ -2423,7 +2423,7 @@ function renderChannelStatus(channels) {
     };
 
     sessionsHandle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || isCompact()) return;
+      if (event.button !== 0) return;
       event.preventDefault();
       const rect = grid.getBoundingClientRect();
       const startWidth = layout.sessionsWidth;
@@ -2431,7 +2431,10 @@ function renderChannelStatus(channels) {
       document.body.classList.add("agent-layout-resizing");
       sessionsHandle.setPointerCapture?.(event.pointerId);
       const onMove = (move) => {
-        const maxWidth = Math.min(420, Math.max(190, rect.width - 320));
+        // 移动端会话列表是抽屉，桌面端才受中间工作区宽度约束。
+        const maxWidth = isCompact()
+          ? Math.min(420, Math.max(190, Math.floor(window.innerWidth * 0.88)))
+          : Math.min(420, Math.max(190, rect.width - 320));
         layout = applyAgentLayout({ ...layout, sessionsWidth: Math.min(maxWidth, Math.max(190, startWidth + move.clientX - event.clientX)) });
       };
       const onEnd = () => {
@@ -2446,7 +2449,7 @@ function renderChannelStatus(channels) {
     });
 
     composerHandle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || isCompact()) return;
+      if (event.button !== 0) return;
       event.preventDefault();
       const run = page.querySelector(".agent-run");
       const rect = run?.getBoundingClientRect();
@@ -2455,7 +2458,9 @@ function renderChannelStatus(channels) {
       document.body.classList.add("agent-layout-resizing");
       composerHandle.setPointerCapture?.(event.pointerId);
       const onMove = (move) => {
-        const maxHeight = Math.min(560, Math.max(190, (rect?.height || 760) - 150));
+        // 给顶部标题、消息区和底部导航留出空间，避免移动端拖大后整个页面失去滚动上下文。
+        const reserve = isCompact() ? 250 : 150;
+        const maxHeight = Math.min(560, Math.max(190, (rect?.height || 760) - reserve));
         layout = applyAgentLayout({ ...layout, composerHeight: Math.min(maxHeight, Math.max(190, startHeight + event.clientY - move.clientY)) });
       };
       const onEnd = () => {
@@ -2486,12 +2491,21 @@ function renderChannelStatus(channels) {
     composerHandle.addEventListener("keydown", (event) => adjustByKeyboard(composerHandle, event));
     sessionsHandle.addEventListener("dblclick", () => { layout = applyAgentLayout({ ...layout, sessionsWidth: AGENT_LAYOUT_DEFAULTS.sessionsWidth }, true); });
     composerHandle.addEventListener("dblclick", () => { layout = applyAgentLayout({ ...layout, composerHeight: AGENT_LAYOUT_DEFAULTS.composerHeight }, true); });
-    window.addEventListener?.("resize", () => applyAgentLayout(layout));
+    window.addEventListener?.("resize", () => {
+      applyAgentLayout(layout);
+      const hiddenDrawerHandle = isCompact() && !page.classList.contains("agent-sessions-open");
+      sessionsHandle.tabIndex = hiddenDrawerHandle ? -1 : 0;
+    });
   }
   function syncAgentDrawers() {
     const page = $("pageAgent");
     if (!page) return;
     page.classList.toggle("agent-sessions-open", state.agent.sessionsOpen === true);
+    const sessionsHandle = $("agentSessionsResizer");
+    if (sessionsHandle) {
+      const hiddenDrawerHandle = window.matchMedia("(max-width: 760px)").matches && state.agent.sessionsOpen !== true;
+      sessionsHandle.tabIndex = hiddenDrawerHandle ? -1 : 0;
+    }
     page.classList.toggle("agent-inspector-open", state.agent.inspectorOpen === true);
     const backdrop = $("agentDrawerBackdrop");
     if (backdrop) backdrop.hidden = !(state.agent.sessionsOpen || state.agent.inspectorOpen);
