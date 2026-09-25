@@ -295,51 +295,83 @@
                 <button class="btn small" id="agentConfigSave" type="button">保存配置</button>
               </div>
               <div class="agent-config-grid">
-                <label class="agent-config-field">
-                  <span>默认后端</span>
-                  <select id="agentDefaultTarget">
+                 <label class="agent-config-field">
+                   <span>默认后端</span>
+                   <select id="agentDefaultTarget">
                     <option value="auto">自动选择</option>
                     <option value="server">服务器 Agent</option>
-                    <option value="host">外部 Agent</option>
-                  </select>
-                </label>
-                <label class="agent-config-field agent-model-field">
-                  <span>当前模型 <small id="agentModelSource">等待拉取</small></span>
-                  <span class="agent-model-control">
-                    <select id="agentModelSelect" aria-label="选择当前 Agent 模型">
-                      <option value="">先选择执行后端</option>
-                    </select>
-                    <button class="icon-btn" id="agentModelRefresh" type="button" title="从对应供应商刷新模型列表">↻</button>
-                  </span>
+                     <option value="host">外部 Agent</option>
+                   </select>
+                 </label>
+                 <label class="agent-config-field agent-workdir-field">
+                   <span>外部 Agent 工作目录</span>
+                   <input id="agentExternalWorkdir" type="text" placeholder="例如：E:/shorttime" />
                 </label>
                 <label class="agent-config-field agent-workdir-field">
-                  <span>外部 Agent 工作目录</span>
-                  <input id="agentExternalWorkdir" type="text" placeholder="例如：E:/shorttime" />
-                </label>
-                <label class="agent-config-field agent-workdir-field">
-                  <span>服务器 Agent 工作目录</span>
-                  <input id="agentServerWorkdir" type="text" placeholder="例如：/data/agent" />
-                </label>
-              </div>
-              <div class="agent-config-foot">
-                <label class="agent-toggle-row">
-                  <input type="checkbox" id="agentApprovalsToggle" />
-                  <span class="switch"></span>
-                  <span>启用面板审批</span>
-                </label>
-                <span class="agent-config-note">保存后对新任务生效，运行中的任务不受影响。</span>
-              </div>
-            </div>
-          </details>
-          <div class="agent-run-controls">
-            <label class="agent-select-wrap"><span>执行后端</span>
-              <select id="agentWorkbenchTarget">
-                <option value="server">服务器 Agent</option>
-                <option value="host">外部设备</option>
-              </select>
-            </label>
-            <label class="agent-select-wrap"><span>超时</span>
-              <select id="agentWorkbenchTimeout">
+                   <span>服务器 Agent 工作目录</span>
+                   <input id="agentServerWorkdir" type="text" placeholder="例如：/data/agent" />
+                 </label>
+               </div>
+               <div class="agent-permission-panel">
+                 <div class="agent-permission-head">
+                   <div>
+                     <strong>执行权限</strong>
+                     <small>只影响服务器 Agent；外部设备权限仍以设备自身配置为准。</small>
+                   </div>
+                   <select id="agentPermissionPreset" aria-label="Agent 权限预设">
+                     <option value="safe">只读安全档</option>
+                     <option value="workspace">工作区档</option>
+                     <option value="full">全开档</option>
+                     <option value="custom">自定义</option>
+                   </select>
+                 </div>
+                 <div class="agent-permission-grid" id="agentPermissionGrid">
+                   <label><input type="checkbox" id="agentPermissionBash" /><span>执行命令</span></label>
+                   <label><input type="checkbox" id="agentPermissionRead" /><span>读取文件</span></label>
+                   <label><input type="checkbox" id="agentPermissionWrite" /><span>写入文件</span></label>
+                   <label><input type="checkbox" id="agentPermissionFetch" /><span>抓取网页</span></label>
+                   <label><input type="checkbox" id="agentPermissionQq" /><span>QQ 动作</span></label>
+                   <label class="is-danger"><input type="checkbox" id="agentPermissionDocker" /><span>Docker 高权限</span></label>
+                 </div>
+                 <small class="agent-permission-note">Docker 受服务端第二把锁保护；QQ 动作还要通过设置页的动作白名单。</small>
+               </div>
+               <div class="agent-config-foot">
+                 <label class="agent-toggle-row">
+                   <input type="checkbox" id="agentApprovalsToggle" />
+                   <span class="switch"></span>
+                   <span>启用面板审批</span>
+                 </label>
+                 <label class="agent-toggle-row">
+                   <input type="checkbox" id="agentContextToggle" />
+                   <span class="switch"></span>
+                   <span>记住上下文</span>
+                 </label>
+                 <span class="agent-config-note">保存后对新任务生效，运行中的任务不受影响。</span>
+               </div>
+             </div>
+           </details>
+           <div class="agent-quick-controls">
+             <label class="agent-select-wrap"><span>本次后端</span>
+               <select id="agentWorkbenchTarget">
+                 <option value="server">服务器 Agent</option>
+                 <option value="host">外部设备</option>
+               </select>
+             </label>
+             <label class="agent-select-wrap agent-model-quick"><span>模型 <small id="agentModelSource">等待拉取</small></span>
+               <span class="agent-model-control">
+                 <select id="agentModelSelect" aria-label="选择当前 Agent 模型">
+                   <option value="">先选择执行后端</option>
+                 </select>
+                 <button class="icon-btn" id="agentModelRefresh" type="button" title="从对应供应商刷新模型列表">↻</button>
+               </span>
+             </label>
+             <label class="agent-select-wrap agent-reasoning-quick"><span>推理强度</span>
+               <select id="agentReasoningSelect" aria-label="选择 Agent 推理强度档位"></select>
+             </label>
+           </div>
+           <div class="agent-run-controls">
+             <label class="agent-select-wrap"><span>超时</span>
+               <select id="agentWorkbenchTimeout">
                 <option value="60">60 秒</option>
                 <option value="180" selected>180 秒</option>
                 <option value="300">300 秒</option>
@@ -531,15 +563,25 @@
                     <button class="ghost-btn inline" id="clearAgentServerKey" type="button">清除密钥</button>
                   </div>
                 </div>
-                <div class="field">
-                  <label>模型 ID<span class="hint">从对应接口拉取可选模型</span></label>
-                  <div class="model-inline-control">
-                    <input type="text" id="setAgentServerModel" placeholder="留空 = 跟聊天模型" />
-                    <button class="ghost-btn" id="agentServerModelsGo" type="button">拉取模型</button>
+                 <div class="field">
+                   <label>模型 ID<span class="hint">从对应接口拉取可选模型</span></label>
+                   <div class="model-inline-control">
+                     <input type="text" id="setAgentServerModel" placeholder="留空 = 跟聊天模型" />
+                     <button class="ghost-btn" id="agentServerModelsGo" type="button">拉取模型</button>
+                   </div>
+                 </div>
+                 <select id="agentServerModelPick" class="model-picker" aria-label="服务器 Agent 模型列表" hidden></select>
+                  <div class="grid-2 model-field-grid agent-reasoning-settings">
+                    <div class="field">
+                      <label>默认推理强度<span class="hint">auto 不发送额外参数，兼容性最好</span></label>
+                      <select id="setAgentReasoningEffort"></select>
+                    </div>
+                    <div class="field">
+                      <label>可选推理档位<span class="hint">每行一个值；可添加供应商支持的自定义档位</span></label>
+                      <textarea id="setAgentReasoningLevels" rows="4" placeholder="auto&#10;none&#10;minimal&#10;low&#10;medium&#10;high&#10;xhigh"></textarea>
+                    </div>
                   </div>
-                </div>
-                <select id="agentServerModelPick" class="model-picker" aria-label="服务器 Agent 模型列表" hidden></select>
-                <div class="model-provider-summary model-provider-summary-subtle">
+                 <div class="model-provider-summary model-provider-summary-subtle">
                   <span class="model-provider-summary-icon">▣</span>
                   <span><b id="modelServerProviderName">跟随聊天接口</b><small id="modelServerProviderSource">模型列表来自当前有效接口</small></span>
                 </div>

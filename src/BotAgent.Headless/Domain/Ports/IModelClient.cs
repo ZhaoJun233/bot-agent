@@ -70,6 +70,21 @@ public interface IModelClient
         string? baseUrlOverride = null,
         string? apiKeyOverride = null);
 
+    /// <summary>
+    /// Agent 工具循环的可选推理强度。默认实现保持旧客户端兼容：不支持时等价于 auto。
+    /// </summary>
+    async Task<string?> CompleteChatWithReasoningAsync(
+        string model,
+        string systemPrompt,
+        IReadOnlyList<(string Role, string Text)> messages,
+        int maxTokens,
+        double temperature,
+        string? reasoningEffort,
+        CancellationToken ct = default,
+        string? baseUrlOverride = null,
+        string? apiKeyOverride = null)
+        => await CompleteChatAsync(model, systemPrompt, messages, maxTokens, temperature, ct, baseUrlOverride, apiKeyOverride);
+
     /// <summary>按 URL 取图片原始字节（多模态识图/表情包用）。</summary>
     Task<(byte[] Data, string Mime, string Ext)?> DownloadImageAsync(string url, CancellationToken ct = default, long? messageId = null);
 

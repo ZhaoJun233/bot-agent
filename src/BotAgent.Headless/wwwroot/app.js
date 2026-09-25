@@ -63,6 +63,7 @@
       modelNotes: { server: "", host: "" },
       modelLoading: { server: false, host: false },
       draftModels: { server: "", host: "" },
+      reasoningLevels: ["auto", "none", "minimal", "low", "medium", "high", "xhigh"],
       configDirty: false,
       configSaving: false,
       sessionsOpen: false,
@@ -1311,6 +1312,39 @@ function renderChannelStatus(channels) {
     }
   }
 
+  const AGENT_TOOL_IDS = ["bash", "read", "write", "fetch", "qq", "docker"];
+  const DEFAULT_REASONING_LEVELS = ["auto", "none", "minimal", "low", "medium", "high", "xhigh"];
+
+  function normalizeReasoningLevels(raw) {
+    const values = String(raw || "").split(/[\r\n,，;；]+/)
+      .map((value) => value.trim().toLowerCase()).filter(Boolean);
+    return Array.from(new Set(values.length ? values : DEFAULT_REASONING_LEVELS));
+  }
+
+  function reasoningLevelLabel(value) {
+    return ({ auto: "自动（兼容优先）", none: "关闭", minimal: "最小", low: "低", medium: "中", high: "高", xhigh: "极高" })[value] || value;
+  }
+
+  function renderReasoningSelect(select, levels, current) {
+    if (!select) return;
+    const values = normalizeReasoningLevels(levels);
+    const selected = values.includes(String(current || "auto").toLowerCase()) ? String(current || "auto").toLowerCase() : "auto";
+    select.replaceChildren();
+    for (const value of values) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = reasoningLevelLabel(value);
+      select.appendChild(option);
+    }
+    if (!values.includes("auto")) {
+      const option = document.createElement("option");
+      option.value = "auto";
+      option.textContent = reasoningLevelLabel("auto");
+      select.insertBefore(option, select.firstChild);
+    }
+    select.value = values.includes(selected) ? selected : "auto";
+  }
+
   function renderModelStudio() {
     const list = $("modelProviderList");
     if (!list) return;
@@ -1532,7 +1566,10 @@ function renderChannelStatus(channels) {
     $("setAgentServerWorkDir").value = r.agentServerWorkDir || "/data";
     $("setAgentServerCommandTimeoutSeconds").value = r.agentServerCommandTimeoutSeconds;
     $("setAgentServerBaseUrl").value = r.agentServerBaseUrl || "";
-    $("setAgentServerModel").value = r.serverModel || "";
+    $("setAgentServerModel").value = r.agentServerModel || "";
+    const settingsReasoningLevels = normalizeReasoningLevels(r.agentReasoningLevels);
+    $("setAgentReasoningLevels").value = settingsReasoningLevels.join("\n");
+    renderReasoningSelect($("setAgentReasoningEffort"), settingsReasoningLevels, r.agentReasoningEffort || "auto");
     // 服务器 agent 的密钥同理：只显示掩码与来源，永远不回显明文
     $("setAgentServerKey").value = "";
     $("setAgentServerKey").placeholder = r.agentServerKeySet
@@ -1723,6 +1760,8 @@ function renderChannelStatus(channels) {
       agentServerWorkDir: $("setAgentServerWorkDir").value.trim() || "/data",
       agentServerCommandTimeoutSeconds: Number($("setAgentServerCommandTimeoutSeconds").value),
       agentServerModel: $("setAgentServerModel").value.trim(),
+      agentReasoningEffort: $("setAgentReasoningEffort").value || "auto",
+      agentReasoningLevels: $("setAgentReasoningLevels").value.trim(),
       agentServerBaseUrl: $("setAgentServerBaseUrl").value.trim(),
       agentModel: $("setAgentModel").value,
       webSearchUseModelSearch: $("setWebSearchUseModelSearch").checked,
@@ -2188,6 +2227,50 @@ function renderChannelStatus(channels) {
     select.value = current;
   }
 
+  function renderAgentReasoningOptions(target) {
+    const status = state.agent.status || {};
+    const levels = normalizeReasoningLevels(status.reasoningLevels || state.agent.reasoningLevels.join("\n"));
+    state.agent.reasoningLevels = levels;
+    const select = $("agentReasoningSelect");
+    renderReasoningSelect(select, levels, state.agent.configDirty ? select?.value : status.reasoningEffort || "auto");
+    if (select) {
+      select.disabled = target !== "server";
+      select.title = target === "server" ? "供应商不支持时自动降级为 auto" : "外部设备的推理强度由设备自身决定";
+    }
+  }
+
+  function selectedAgentTools() {
+    return new Set(AGENT_TOOL_IDS.filter((id) => $("agentPermission" + id[0].toUpperCase() + id.slice(1))?.checked));
+  }
+
+  function setAgentToolChecks(tools) {
+    const set = tools instanceof Set ? tools : new Set(tools || []);
+    for (const id of AGENT_TOOL_IDS) {
+      const input = $("agentPermission" + id[0].toUpperCase() + id.slice(1));
+      if (input) input.checked = set.has(id);
+    }
+  }
+
+  function renderAgentPermissions() {
+    const status = state.agent.status || {};
+    if (!state.agent.configDirty) {
+      const raw = String(status.serverTools || "").trim();
+      setAgentToolChecks(raw ? raw.split(/[,，;；\s]+/).filter(Boolean) : AGENT_TOOL_IDS);
+      const context = $("agentContextToggle");
+      if (context) context.checked = status.serverKeepContext === true;
+      const docker = $("agentPermissionDocker");
+      if (docker) docker.checked = status.serverDocker === true;
+    }
+    const preset = $("agentPermissionPreset");
+    if (!preset) return;
+    const tools = selectedAgentTools();
+    const safe = new Set(["read", "fetch"]);
+    const workspace = new Set(["bash", "read", "write", "fetch"]);
+    const full = new Set(AGENT_TOOL_IDS);
+    const match = [safe, workspace, full].find((set) => set.size === tools.size && [...set].every((id) => tools.has(id)));
+    preset.value = match === safe ? "safe" : match === workspace ? "workspace" : match === full ? "full" : "custom";
+  }
+
   function renderAgentConfig() {
     const status = state.agent.status || {};
     const approvals = state.agent.approvals || {};
@@ -2207,6 +2290,8 @@ function renderChannelStatus(channels) {
     }
 
     renderAgentModelOptions(modelTarget);
+    renderAgentReasoningOptions(modelTarget);
+    renderAgentPermissions();
     const modelSource = $("agentModelSource");
     const modelNote = state.agent.modelNotes[modelKey];
     modelSource.textContent = state.agent.modelLoading[modelKey]
@@ -2253,13 +2338,20 @@ function renderChannelStatus(channels) {
     if (state.agent.configSaving) return;
     const modelTarget = $("agentWorkbenchTarget").value || "server";
     state.agent.draftModels[agentModelKey(modelTarget)] = $("agentModelSelect").value.trim();
+    const tools = selectedAgentTools();
     const payload = {
       agentTarget: $("agentDefaultTarget").value || "auto",
       agentModel: state.agent.draftModels.host || "",
       agentServerModel: state.agent.draftModels.server || "",
       agentWorkDir: $("agentExternalWorkdir").value.trim(),
       agentServerWorkDir: $("agentServerWorkdir").value.trim(),
-      enableApprovals: $("agentApprovalsToggle").checked
+      enableApprovals: $("agentApprovalsToggle").checked,
+      agentServerKeepContext: $("agentContextToggle").checked,
+      // 旧后端约定空字符串为全开；全取消必须用非空名单，避免意外提权。
+      agentServerTools: tools.size === AGENT_TOOL_IDS.length ? "" : [...tools].join(",") || "none",
+      agentServerDocker: $("agentPermissionDocker").checked,
+      agentReasoningEffort: $("agentReasoningSelect").value || "auto",
+      agentReasoningLevels: state.agent.reasoningLevels.join("\n")
     };
 
     state.agent.configSaving = true;
@@ -2562,6 +2654,9 @@ function renderChannelStatus(channels) {
       ["工作目录", target === "server"
         ? status?.serverWorkdir || "未配置"
         : status?.cwd || status?.globalWorkdir || "未配置"],
+      ["推理强度", target === "server" ? reasoningLevelLabel(status?.reasoningEffort || "auto") : "由外部设备决定"],
+      ["上下文", target === "server" ? (status?.serverKeepContext ? "已记住" : "单条任务") : "由外部设备决定"],
+      ["执行权限", target === "server" ? (status?.serverTools || "全工具（Docker 仍受独立开关）") : "由外部设备决定"],
       ["面板审批", approvals.canDecide ? "已启用" : approvals.enabled ? "只读或未配令牌" : "未启用"]
     ];
     for (const [label, value] of detailRows) {
@@ -2851,9 +2946,27 @@ function renderChannelStatus(channels) {
       state.agent.draftModels[agentModelKey(target)] = $("agentModelSelect").value.trim();
       markAgentConfigDirty();
     });
+    $("agentReasoningSelect").addEventListener("change", markAgentConfigDirty);
     $("agentExternalWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentServerWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentApprovalsToggle").addEventListener("change", markAgentConfigDirty);
+    $("agentContextToggle").addEventListener("change", markAgentConfigDirty);
+    $("agentPermissionPreset").addEventListener("change", (event) => {
+      const presets = {
+        safe: ["read", "fetch"],
+        workspace: ["bash", "read", "write", "fetch"],
+        full: AGENT_TOOL_IDS
+      };
+      if (event.target.value !== "custom") {
+        setAgentToolChecks(presets[event.target.value] || []);
+        $("agentPermissionDocker").checked = event.target.value === "full";
+      }
+      markAgentConfigDirty();
+    });
+    for (const id of AGENT_TOOL_IDS) {
+      const input = $("agentPermission" + id[0].toUpperCase() + id.slice(1));
+      input?.addEventListener("change", markAgentConfigDirty);
+    }
     $("agentSessionSearch").addEventListener("input", (e) => {
       state.agent.sessionSearch = e.target.value || "";
       renderAgentSessions();
@@ -2910,6 +3023,10 @@ function renderChannelStatus(channels) {
         field.addEventListener("change", renderModelStudio);
       }
     }
+    $("setAgentReasoningLevels")?.addEventListener("input", () => {
+      const levels = normalizeReasoningLevels($("setAgentReasoningLevels").value);
+      renderReasoningSelect($("setAgentReasoningEffort"), levels, $("setAgentReasoningEffort").value || "auto");
+    });
 
     // 手机端：从聊天返回会话列表
     $("chatBack").addEventListener("click", () => {

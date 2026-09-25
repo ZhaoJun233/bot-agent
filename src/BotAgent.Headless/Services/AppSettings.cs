@@ -710,6 +710,15 @@ public sealed class AppSettings
     /// <summary>服务器内置 agent 用的模型（空 = 跟聊天用同一个）。</summary>
     public string AgentServerModel { get; set; } = string.Empty;
 
+    /// <summary>服务器 Agent 的推理强度。auto = 不发送额外参数，让模型/供应商自行决定。</summary>
+    public string AgentReasoningEffort { get; set; } = "auto";
+
+    /// <summary>
+    /// 工作台可选的推理强度值，一行一个。默认值覆盖常见兼容档位；
+    /// 供应商不支持某个显式档位时，客户端会退回不带该参数的 auto 请求。
+    /// </summary>
+    public string AgentReasoningLevels { get; set; } = "auto\nnone\nminimal\nlow\nmedium\nhigh\nxhigh";
+
     /// <summary>服务器内置 agent 专用的 OpenAI 兼容地址（空 = 用聊天那个 QQCHAT_BASE_URL）。
     /// 为什么单独给一个：agent 的请求又长又频繁，往往想单独指一个小模型/便宜网关（号主 2026-09-17 要求）。</summary>
     public string AgentServerBaseUrl { get; set; } = string.Empty;

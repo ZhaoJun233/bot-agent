@@ -170,8 +170,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     return;
                 }
 
-                var raw = await _brain.CompleteChatAsync(
-                    _settings.AgentServerModel, system, messages, _settings.AgentServerMaxTokens, 0.3, ct,
+                var raw = await _brain.CompleteChatWithReasoningAsync(
+                    _settings.AgentServerModel, system, messages, _settings.AgentServerMaxTokens, 0.3,
+                    _settings.AgentReasoningEffort, ct,
                     baseUrlOverride: _settings.AgentServerBaseUrl, apiKeyOverride: _settings.AgentServerApiKey);
 
                 if (string.IsNullOrWhiteSpace(raw))

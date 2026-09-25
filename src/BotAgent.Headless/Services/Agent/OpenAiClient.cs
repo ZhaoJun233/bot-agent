@@ -240,7 +240,7 @@ public sealed class OpenAiClient : IModelClient
     /// 而 agent（服务器内置 / 工具循环）要的是自由格式 + 自己控制历史。
     /// 429/5xx 退让 2 秒重试一次（跟主流程同口径：上游“No capacity”是常态）。
     /// </summary>
-    public async Task<string?> CompleteChatAsync(
+    public Task<string?> CompleteChatAsync(
         string model,
         string systemPrompt,
         IReadOnlyList<(string Role, string Text)> messages,
@@ -249,6 +249,19 @@ public sealed class OpenAiClient : IModelClient
         CancellationToken ct = default,
         string? baseUrlOverride = null,
         string? apiKeyOverride = null)
+        => CompleteChatCoreAsync(model, systemPrompt, messages, maxTokens, temperature,
+            null, ct, baseUrlOverride, apiKeyOverride);
+
+    private async Task<string?> CompleteChatCoreAsync(
+        string model,
+        string systemPrompt,
+        IReadOnlyList<(string Role, string Text)> messages,
+        int maxTokens,
+        double temperature,
+        string? reasoningEffort,
+        CancellationToken ct,
+        string? baseUrlOverride,
+        string? apiKeyOverride)
     {
         var apiKey = string.IsNullOrWhiteSpace(apiKeyOverride) ? _settings.ApiKey?.Trim() : apiKeyOverride!.Trim();
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -271,6 +284,8 @@ public sealed class OpenAiClient : IModelClient
         }
 
         payload["messages"] = array;
+        var effort = (reasoningEffort ?? string.Empty).Trim().ToLowerInvariant();
+        if (effort is not ("" or "auto" or "default")) payload["reasoning_effort"] = effort;
 
         for (var attempt = 0; ; attempt++)
         {
@@ -321,6 +336,14 @@ public sealed class OpenAiClient : IModelClient
                 }
 
                 var status = (int)response.StatusCode;
+                if (status is 400 or 422 && payload.ContainsKey("reasoning_effort") && LooksLikeUnsupportedReasoning(body))
+                {
+                    // 仅移除推理参数；模型、鉴权、消息与原有瞬时错误重试语义保持不变。
+                    payload.Remove("reasoning_effort");
+                    FileLog.Warn("Agent", "模型拒绝 reasoning_effort，自动降级为 auto");
+                    attempt--;
+                    continue;
+                }
                 if (attempt >= 1 || (status < 500 && status != 429))
                 {
                     FileLog.Warn("Agent", $"补全请求失败 {status}：{Truncate(body, 120)}");
@@ -333,6 +356,22 @@ public sealed class OpenAiClient : IModelClient
             await Clock.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
         }
     }
+
+    public Task<string?> CompleteChatWithReasoningAsync(
+        string model,
+        string systemPrompt,
+        IReadOnlyList<(string Role, string Text)> messages,
+        int maxTokens,
+        double temperature,
+        string? reasoningEffort,
+        CancellationToken ct = default,
+        string? baseUrlOverride = null,
+        string? apiKeyOverride = null)
+        => CompleteChatCoreAsync(model, systemPrompt, messages, maxTokens, temperature,
+            reasoningEffort, ct, baseUrlOverride, apiKeyOverride);
+
+    private static bool LooksLikeUnsupportedReasoning(string body)
+        => body.Contains("reasoning_effort", StringComparison.OrdinalIgnoreCase);
 
     public async Task<(List<string> Delete, string? Reason)> CurateStickersAsync(string libraryTable, int maxDelete, CancellationToken ct = default)
     {

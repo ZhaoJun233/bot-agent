@@ -287,6 +287,8 @@ const saveFields = [...saveBody.matchAll(/(\w+):\s*(Number\()?\$\("([A-Za-z0-9_]
 // loadSettings 里被赋值（回填）的 id
 const loadBody = js.slice(js.indexOf("async function loadSettings"), js.indexOf("async function saveSettings"));
 const filledIds = new Set([...loadBody.matchAll(/\$\("([A-Za-z0-9_]+)"\)\.(?:value|checked)\s*=/g)].map((m) => m[1]));
+// 动态选项由渲染函数回填，不能要求再写一次 value 覆盖其 auto 回退。
+for (const match of loadBody.matchAll(/renderReasoningSelect\(\$\("([A-Za-z0-9_]+)"\)/g)) filledIds.add(match[1]);
 
 check(
   "★ 设备行标出目录来源（设备专属 / 全局默认 / 桥自报）",
@@ -535,6 +537,8 @@ const fetchStub = async (url, opts) => {
       devices: deviceNames(), deviceList: serverDevices.map((d) => ({ ...d })),
       deviceModels: ["provider/model-a"], globalWorkdir: "C:/synthetic/global",
       serverModel: "server/mock", agentModel: "host/mock",
+      reasoningEffort: "auto", reasoningLevels: "auto\nlow\nhigh",
+      serverKeepContext: false, serverTools: "read,fetch", serverDocker: false,
       summary: "synthetic", tokenConfigured: true, allowedUsers: "10001", queued: 0
     };
   } else if (target.includes("/api/agent/sessions")) {
@@ -646,6 +650,7 @@ const jsRun = js.replace(probeMarker, `globalThis.probe = {
   forgetDevices: () => { agentDevicesLoaded = false; if (typeof agentDevicesSaved !== "undefined") agentDevicesSaved = []; },
   agentSnapshot: () => ({ active: state.agent.activeSessionKey, rows: state.agent.rows.map((row) => ({ key: row.identity, source: row.sourceKind, backend: row.backend, local: !!row.session.localOnly })), messages: [...state.agent.conversations.entries()].map(([key, entries]) => ({ key, entries: entries.map((entry) => ({ ...entry })) })), drafts: [...state.agent.drafts.entries()], lastResult: state.agent.lastResult }),
   selectAgentSession, createLocalAgentSession, renderAgentSessions,
+  renderReasoningSelect, saveAgentWorkbenchConfig,
   isDirty: () => settingsDirty
 };
 ${probeMarker}`);
@@ -1517,7 +1522,17 @@ check("Agent 桌面导航、移动导航与页面容器齐全",
 check("Agent 工作台有关键控件（筛选 / 提示词 / 后端 / 超时 / 执行 / 结果）",
   ["agentSessionList", "agentBackendFilter", "agentSessionStateFilter", "agentWorkbenchPrompt",
     "agentWorkbenchTarget", "agentWorkbenchTimeout", "agentWorkbenchSend", "agentResultCard",
-    "agentLivePill", "agentMetricGrid"].every((id) => html.includes(`id="${id}"`)));
+     "agentLivePill", "agentMetricGrid"].every((id) => html.includes(`id="${id}"`)));
+check("Agent 底部控制区有模型刷新 / 推理强度 / 上下文 / 权限控件",
+  ["agentModelSelect", "agentModelRefresh", "agentReasoningSelect", "agentContextToggle",
+    "agentPermissionPreset", "agentPermissionDocker"].every((id) => html.includes(`id="${id}"`)));
+check("设置页可以添加推理档位，默认档位为 auto",
+  html.includes('id="setAgentReasoningEffort"') && html.includes('id="setAgentReasoningLevels"') &&
+    js.includes("agentReasoningLevels") && js.includes('"auto"'));
+check("推理强度与模型选择解耦，默认提供 auto 档位",
+  js.includes("agentReasoningSelect") && js.includes("agentReasoningLevels") &&
+    js.includes("agentReasoningEffort") && js.includes('"auto"') &&
+    !/低=provider\/model|高=provider\/model/.test(html));
 check("app.js 使用现有 Agent 数据面（不新增后端接口）",
   ["/api/agent/status", "/api/agent/sessions", "/api/tools", "/api/approvals", "/api/agent/test"]
     .every((endpoint) => js.includes(endpoint)) && js.includes("Promise.allSettled"));
@@ -1643,6 +1658,26 @@ check("Agent 执行期间有 busy 状态与重复提交保护",
     `text=${document.getElementById("agentResultText").textContent}`);
 }
 
+{
+  const select = document.getElementById("agentReasoningSelect");
+  sandbox.probe.renderReasoningSelect(select, "low\nhigh\ncustom-level", "removed-level");
+  check("★ 删除已选档位后回退 auto，自动档始终可选",
+    select.value === "auto" && select.children.some((option) => option.value === "auto"));
+  sandbox.probe.renderReasoningSelect(select, "auto\nhigh\ncustom-level", "custom-level");
+  check("★ 设置添加的自定义推理档位可单独选择", select.value === "custom-level");
+  for (const id of ["Bash", "Read", "Write", "Fetch", "Qq", "Docker"])
+    document.getElementById("agentPermission" + id).checked = false;
+  document.getElementById("agentModelSelect").value = "synthetic-selected-model";
+  const before = calls.length;
+  await sandbox.probe.saveAgentWorkbenchConfig();
+  const call = calls.slice(before).find((call) => call.method === "POST" && call.url.includes("/api/settings"));
+  const payload = call ? JSON.parse(call.body) : {};
+  check("★ 保存时模型与推理参数各自独立",
+    payload.agentServerModel === "synthetic-selected-model" && payload.agentReasoningEffort === "custom-level");
+  check("★ 权限全部取消不序列化成后端的空值全开",
+    payload.agentServerTools === "none" && payload.agentServerDocker === false);
+}
+
 /* ─────────── Q) 面板审批卡（批 I） ─────────── */
 
 console.log("\n▶ 面板审批卡（批 I）：写路径 + 两条 fail-closed");
@@ -1736,13 +1771,15 @@ check("★ app.js 回填它（loadSettings 与 saveSettings 字段集合必须�
   js.includes('$("setMaxAgentSteps").value = r.maxAgentSteps') &&
   js.includes("maxAgentSteps: Number("));
 
+const beforeStepSave = calls.length;
+await sandbox.probe.saveSettings();
 check("★ 保存请求带 maxAgentSteps（回填的是 1，发出去的也是 1）",
   (() => {
-    const sent = calls.filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
+    const sent = calls.slice(beforeStepSave).filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
     return !!sent && JSON.parse(sent.body).maxAgentSteps === 1;
   })(),
   (() => {
-    const sent = calls.filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
+    const sent = calls.slice(beforeStepSave).filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
     return sent ? "最后一次保存：" + sent.body : "没有保存请求";
   })());
 console.log("");

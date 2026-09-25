@@ -43,7 +43,7 @@ namespace BotAgent.SafetyProbe;
 ///
 /// 用法：dotnet run --project tests/BotAgent.SafetyProbe -c Release
 /// </summary>
-public static class Program
+public static partial class Program
 {
     private static int _passed;
     private static int _failed;
@@ -53,6 +53,7 @@ public static class Program
         DecisionTests();
         ParserWiringTests();
         PortSubstituteTests();
+        ReasoningEffortTests();
         PlainTextTests();
         ToolGateTests();
         ApprovalTests();
@@ -2176,8 +2177,10 @@ public static class Program
     /// <summary>假出网：任何请求都直接抛（证明"这一段完全没走网络"）。</summary>
     private sealed class FakeHttpFetcher : Adapters.Net.IHttpFetcher
     {
+        public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? OnSend { get; init; }
         public TimeSpan Timeout => TimeSpan.FromSeconds(1);
-        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct = default) => throw new InvalidOperationException("探针不该出网");
+        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct = default)
+            => OnSend?.Invoke(request, ct) ?? throw new InvalidOperationException("探针不该出网");
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken ct = default) => throw new InvalidOperationException("探针不该出网");
         public Task<HttpResponseMessage> GetAsync(string url, CancellationToken ct = default) => throw new InvalidOperationException("探针不该出网");
         public Task<HttpResponseMessage> GetAsync(Uri url, HttpCompletionOption completionOption, CancellationToken ct = default) => throw new InvalidOperationException("探针不该出网");

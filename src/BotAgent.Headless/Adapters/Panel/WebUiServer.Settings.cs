@@ -311,6 +311,7 @@ public sealed partial class WebUiServer
             }
         }
         if (body["agentServerModel"] is JsonNode asm) s.AgentServerModel = (asm.GetValue<string>() ?? string.Empty).Trim();
+        ApplyAgentReasoningSettings(body, s);
         if (body["agentDevices"] is JsonNode ad) s.AgentDevices = ad.GetValue<string>() ?? string.Empty;
         if (body["scenarioPreset"] is JsonNode preset)
         {
@@ -412,6 +413,20 @@ public sealed partial class WebUiServer
         if (body["panelDeployUrl"] is JsonNode pdu) s.PanelDeployUrl = (pdu.GetValue<string>() ?? string.Empty).Trim();
         if (body["agentServerMaxSteps"] is JsonNode ass) s.AgentServerMaxSteps = Math.Clamp(ass.GetValue<int>(), 1, 30);
         if (body["agentServerCommandTimeoutSeconds"] is JsonNode asct) s.AgentServerCommandTimeoutSeconds = Math.Clamp(asct.GetValue<int>(), 5, 300);
+    }
+
+    private static void ApplyAgentReasoningSettings(JsonNode body, AppSettings s)
+    {
+        if (body["agentReasoningEffort"] is JsonNode effort)
+        {
+            var value = (effort.GetValue<string>() ?? string.Empty).Trim().ToLowerInvariant();
+            s.AgentReasoningEffort = value is "" or "default" ? "auto" : value;
+        }
+        if (body["agentReasoningLevels"] is JsonNode levels)
+        {
+            var raw = levels.GetValue<string>() ?? string.Empty;
+            s.AgentReasoningLevels = raw.Length > 1000 ? raw[..1000] : raw;
+        }
     }
 
     /// <summary>报表与模型：健康日报 / 表情包与戳一戳 / 模型地址与密钥 / 心情。</summary>
@@ -644,6 +659,8 @@ public sealed partial class WebUiServer
         ["agentServerQqActionsEffective"] = QqActionCatalog.Summarize(QqActionCatalog.ParseAllowed(s.AgentServerQqActions)),
         ["agentServerModel"] = s.AgentServerModel,
         ["agentModel"] = s.AgentModel,
+        ["agentReasoningEffort"] = s.AgentReasoningEffort,
+        ["agentReasoningLevels"] = s.AgentReasoningLevels,
         ["agentServerBaseUrl"] = s.AgentServerBaseUrl,
         // 服务器 agent 的密钥：只给“设没设 / 掩码 / 来源”，不回显明文（与聊天那把 key 同样的规矩）
         ["agentServerKeySet"] = !string.IsNullOrWhiteSpace(s.AgentServerApiKey),

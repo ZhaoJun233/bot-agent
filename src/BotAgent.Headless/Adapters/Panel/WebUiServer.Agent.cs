@@ -476,6 +476,11 @@ public sealed partial class WebUiServer
             ["agentModel"] = _settings.AgentModel,
             ["serverBaseUrl"] = _settings.AgentServerBaseUrl,
             ["serverModel"] = _settings.AgentServerModel,
+            ["reasoningEffort"] = _settings.AgentReasoningEffort,
+            ["reasoningLevels"] = _settings.AgentReasoningLevels,
+            ["serverKeepContext"] = _settings.AgentServerKeepContext,
+            ["serverTools"] = _settings.AgentServerTools,
+            ["serverDocker"] = _settings.AgentServerDocker,
             ["serverKeyConfigured"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKey),
         ["serverKeySource"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKeyOverride)
             ? "panel"
