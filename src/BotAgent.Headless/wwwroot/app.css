@@ -1913,3 +1913,113 @@ input:focus, textarea:focus, select:focus { padding-bottom: 7px; border-bottom-w
   .agent-command-bar .agent-config-panel { right: -4px; left: -4px; max-height: 70vh; }
   .agent-compose-card textarea { min-height: 88px; }
 }
+/* Agent workspace layout controls: desktop panes can be resized and remember the user's proportions. */
+.agent-page {
+  --agent-sessions-width: 220px;
+  --agent-composer-height: 270px;
+}
+.agent-grid {
+  grid-template-columns: minmax(190px, var(--agent-sessions-width)) 10px minmax(0, 1fr);
+  gap: 0;
+}
+.agent-sessions { grid-column: 1; grid-row: 1; }
+.agent-run {
+  grid-column: 3;
+  grid-row: 1;
+  container-name: agent-run;
+  container-type: inline-size;
+}
+.agent-sessions-resizer {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+  min-width: 10px;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 3;
+}
+.agent-sessions-resizer::before {
+  content: "";
+  position: absolute;
+  inset: 8px 4px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.agent-sessions-resizer:hover::before,
+.agent-sessions-resizer:focus-visible::before,
+.agent-sessions-resizer.is-resizing::before {
+  background: color-mix(in srgb, var(--accent) 52%, var(--divider));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.agent-compose-card {
+  flex: 0 0 var(--agent-composer-height);
+  min-height: 190px;
+  max-height: min(70%, 560px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  container-name: agent-compose;
+  container-type: inline-size;
+}
+.agent-composer-resizer {
+  flex: 0 0 9px;
+  width: 100%;
+  margin: -2px 0 7px;
+  border-radius: 999px;
+  cursor: row-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 3;
+}
+.agent-composer-resizer::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: min(72px, 18%);
+  height: 3px;
+  border-radius: 999px;
+  background: var(--divider);
+  transform: translateX(-50%);
+  transition: background 140ms ease, box-shadow 140ms ease, width 140ms ease;
+}
+.agent-composer-resizer:hover::before,
+.agent-composer-resizer:focus-visible::before,
+.agent-composer-resizer.is-resizing::before {
+  width: min(96px, 24%);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.agent-compose-card > textarea { min-height: 96px; }
+.agent-layout-resizing,
+.agent-layout-resizing * { user-select: none !important; }
+.agent-layout-resizing { cursor: col-resize; }
+.agent-layout-resizing:has(.agent-composer-resizer.is-resizing) { cursor: row-resize; }
+
+@container agent-compose (max-width: 860px) {
+  .agent-command-bar .agent-quick-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    flex: 1 1 100%;
+  }
+  .agent-command-bar .agent-model-quick { grid-column: 1 / -1; }
+  .agent-command-bar .agent-run-controls { flex: 1 1 100%; flex-wrap: wrap; }
+}
+@container agent-compose (max-width: 600px) {
+  .agent-command-bar .agent-quick-controls { grid-template-columns: 1fr; }
+  .agent-command-bar .agent-model-quick { grid-column: auto; }
+  .agent-command-bar .agent-run-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agent-command-bar .agent-run-controls .agent-send-btn { grid-column: 1 / -1; width: 100%; }
+}
+
+@media (min-width: 761px) and (max-width: 1199px) {
+  .agent-inspector { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (max-width: 760px) {
+  .agent-grid { display: flex; gap: 14px; }
+  .agent-sessions-resizer,
+  .agent-composer-resizer { display: none; }
+  .agent-compose-card { flex: 0 0 auto; max-height: none; overflow: visible; }
+}

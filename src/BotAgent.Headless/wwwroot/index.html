@@ -246,6 +246,8 @@
         </div>
         <p class="agent-privacy-note">列表只展示标题、来源、更新时间和状态；历史正文只在中间工作区呈现。</p>
       </aside>
+       <div class="agent-resizer agent-sessions-resizer" id="agentSessionsResizer" role="separator" tabindex="0" aria-orientation="vertical" aria-label="调整会话列表宽度" aria-valuemin="190" aria-valuemax="420" aria-valuenow="220" title="拖动调整会话列表宽度"></div>
+
 
       <section class="agent-run panel-surface">
         <div class="agent-panel-head agent-run-head">
@@ -274,8 +276,9 @@
             <button class="btn small" id="agentTraceBtn" type="button" hidden>查看追踪</button>
           </div>
         </div>
-        <div class="agent-compose-card">
-          <div class="agent-compose-head">
+        <div class="agent-compose-card" id="agentComposeCard">
+           <div class="agent-resizer agent-composer-resizer" id="agentComposerResizer" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="调整消息输入区高度" aria-valuemin="190" aria-valuemax="560" aria-valuenow="260" title="拖动调整消息输入区高度"></div>
+           <div class="agent-compose-head">
             <label class="agent-field-label" for="agentWorkbenchPrompt">新消息</label>
             <span class="agent-compose-route" id="agentComposeRoute">面板测试入口 · 上下文未接通</span>
           </div>

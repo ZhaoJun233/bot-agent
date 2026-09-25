@@ -71,6 +71,8 @@
     }
   };
 
+  const AGENT_LAYOUT_STORAGE_KEY = "botagent.agent.layout.v1";
+  const AGENT_LAYOUT_DEFAULTS = { sessionsWidth: 220, composerHeight: 270 };
   /* ─────────── 工具 ─────────── */
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -2369,6 +2371,123 @@ function renderChannelStatus(channels) {
     }
   }
 
+  function readAgentLayout() {
+    const fallback = { ...AGENT_LAYOUT_DEFAULTS };
+    try {
+      const raw = localStorage.getItem(AGENT_LAYOUT_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (Number.isFinite(Number(parsed.sessionsWidth))) fallback.sessionsWidth = Number(parsed.sessionsWidth);
+      if (Number.isFinite(Number(parsed.composerHeight))) fallback.composerHeight = Number(parsed.composerHeight);
+    } catch { /* 隐私模式或损坏的旧值不应阻塞工作台 */ }
+    return fallback;
+  }
+
+  function clampAgentLayout(layout) {
+    return {
+      sessionsWidth: Math.round(Math.min(420, Math.max(190, Number(layout.sessionsWidth) || AGENT_LAYOUT_DEFAULTS.sessionsWidth))),
+      composerHeight: Math.round(Math.min(560, Math.max(190, Number(layout.composerHeight) || AGENT_LAYOUT_DEFAULTS.composerHeight)))
+    };
+  }
+
+  function applyAgentLayout(next, persist = false) {
+    const layout = clampAgentLayout(next);
+    const page = $("pageAgent");
+    if (!page || !page.style || typeof page.style.setProperty !== "function") return layout;
+    page.style.setProperty("--agent-sessions-width", `${layout.sessionsWidth}px`);
+    page.style.setProperty("--agent-composer-height", `${layout.composerHeight}px`);
+    const sessionsHandle = $("agentSessionsResizer");
+    const composerHandle = $("agentComposerResizer");
+    if (sessionsHandle) sessionsHandle.setAttribute("aria-valuenow", String(layout.sessionsWidth));
+    if (composerHandle) composerHandle.setAttribute("aria-valuenow", String(layout.composerHeight));
+    if (persist) {
+      try { localStorage.setItem(AGENT_LAYOUT_STORAGE_KEY, JSON.stringify(layout)); } catch { /* storage unavailable: keep this session's layout */ }
+    }
+    return layout;
+  }
+
+  function bindAgentLayoutResizers() {
+    const page = $("pageAgent");
+    const grid = page?.querySelector(".agent-grid");
+    const sessionsHandle = $("agentSessionsResizer");
+    const composerHandle = $("agentComposerResizer");
+    if (!page || !grid || !sessionsHandle || !composerHandle || !page.dataset || page.dataset.layoutBound === "true") return;
+    page.dataset.layoutBound = "true";
+    let layout = applyAgentLayout(readAgentLayout());
+
+    const isCompact = () => window.matchMedia("(max-width: 760px)").matches;
+    const finish = (handle, pointerId) => {
+      try { if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId); } catch { /* no-op */ }
+      document.body.classList.remove("agent-layout-resizing");
+      handle.classList.remove("is-resizing");
+      applyAgentLayout(layout, true);
+    };
+
+    sessionsHandle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || isCompact()) return;
+      event.preventDefault();
+      const rect = grid.getBoundingClientRect();
+      const startWidth = layout.sessionsWidth;
+      sessionsHandle.classList.add("is-resizing");
+      document.body.classList.add("agent-layout-resizing");
+      sessionsHandle.setPointerCapture?.(event.pointerId);
+      const onMove = (move) => {
+        const maxWidth = Math.min(420, Math.max(190, rect.width - 320));
+        layout = applyAgentLayout({ ...layout, sessionsWidth: Math.min(maxWidth, Math.max(190, startWidth + move.clientX - event.clientX)) });
+      };
+      const onEnd = () => {
+        sessionsHandle.removeEventListener("pointermove", onMove);
+        sessionsHandle.removeEventListener("pointerup", onEnd);
+        sessionsHandle.removeEventListener("pointercancel", onEnd);
+        finish(sessionsHandle, event.pointerId);
+      };
+      sessionsHandle.addEventListener("pointermove", onMove);
+      sessionsHandle.addEventListener("pointerup", onEnd, { once: true });
+      sessionsHandle.addEventListener("pointercancel", onEnd, { once: true });
+    });
+
+    composerHandle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || isCompact()) return;
+      event.preventDefault();
+      const run = page.querySelector(".agent-run");
+      const rect = run?.getBoundingClientRect();
+      const startHeight = layout.composerHeight;
+      composerHandle.classList.add("is-resizing");
+      document.body.classList.add("agent-layout-resizing");
+      composerHandle.setPointerCapture?.(event.pointerId);
+      const onMove = (move) => {
+        const maxHeight = Math.min(560, Math.max(190, (rect?.height || 760) - 150));
+        layout = applyAgentLayout({ ...layout, composerHeight: Math.min(maxHeight, Math.max(190, startHeight + event.clientY - move.clientY)) });
+      };
+      const onEnd = () => {
+        composerHandle.removeEventListener("pointermove", onMove);
+        composerHandle.removeEventListener("pointerup", onEnd);
+        composerHandle.removeEventListener("pointercancel", onEnd);
+        finish(composerHandle, event.pointerId);
+      };
+      composerHandle.addEventListener("pointermove", onMove);
+      composerHandle.addEventListener("pointerup", onEnd, { once: true });
+      composerHandle.addEventListener("pointercancel", onEnd, { once: true });
+    });
+
+    const adjustByKeyboard = (handle, key) => {
+      const step = key.shiftKey ? 24 : 8;
+      if (handle === sessionsHandle && ["ArrowLeft", "ArrowRight"].includes(key.key)) {
+        layout = applyAgentLayout({ ...layout, sessionsWidth: layout.sessionsWidth + (key.key === "ArrowRight" ? step : -step) }, true);
+        key.preventDefault();
+      } else if (handle === composerHandle && ["ArrowUp", "ArrowDown"].includes(key.key)) {
+        layout = applyAgentLayout({ ...layout, composerHeight: layout.composerHeight + (key.key === "ArrowUp" ? step : -step) }, true);
+        key.preventDefault();
+      } else if (key.key === "Home") {
+        layout = applyAgentLayout(AGENT_LAYOUT_DEFAULTS, true);
+        key.preventDefault();
+      }
+    };
+    sessionsHandle.addEventListener("keydown", (event) => adjustByKeyboard(sessionsHandle, event));
+    composerHandle.addEventListener("keydown", (event) => adjustByKeyboard(composerHandle, event));
+    sessionsHandle.addEventListener("dblclick", () => { layout = applyAgentLayout({ ...layout, sessionsWidth: AGENT_LAYOUT_DEFAULTS.sessionsWidth }, true); });
+    composerHandle.addEventListener("dblclick", () => { layout = applyAgentLayout({ ...layout, composerHeight: AGENT_LAYOUT_DEFAULTS.composerHeight }, true); });
+    window.addEventListener?.("resize", () => applyAgentLayout(layout));
+  }
   function syncAgentDrawers() {
     const page = $("pageAgent");
     if (!page) return;
@@ -2899,6 +3018,7 @@ function renderChannelStatus(channels) {
 
   function bindUi() {
     bindLogScrollButtons();
+    bindAgentLayoutResizers();
 
     // 导航（桌面：左侧 rail；手机：底部标签栏 —— 共用同一套 data-page）
     for (const btn of document.querySelectorAll(".navitem, .mtab")) {
