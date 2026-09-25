@@ -1,5 +1,7 @@
 # Bot Agent
 
+[English](README.en.md) | 简体中文
+
 **无界面、跨平台的 QQ 聊天机器人常驻服务**：通过 [NapCat](https://github.com/NapNeko/NapCatQQ) 挂接官方 QQ 客户端（OneBot v11），
 由 OpenAI 兼容模型（DeepSeek / OpenAI / 通义 / Ollama / 自建中转…）自动回复私聊与群聊，自带 Web 面板。
 

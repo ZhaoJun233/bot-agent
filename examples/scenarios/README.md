@@ -1,5 +1,7 @@
 # examples/scenarios —— 三套**无密钥**合成场景配置
 
+[English](README.en.md) | 简体中文
+
 这三份 JSON 是V3 §11.1 要求的三套场景配置，**不包含任何密钥、真实群号、真实域名或 IP**，
 可以直接对照着在面板里手填，或 `POST /api/settings`（面板值压过 env；改完必须保存才生效）。
 

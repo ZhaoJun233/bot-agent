@@ -1,5 +1,7 @@
 # Bot Agent Headless 容器版
 
+[English](README.en.md) | 简体中文
+
 **无界面、跨平台、可容器部署**的 QQ 聊天机器人常驻服务：接 OneBot v11 协议端（NapCat 等），
 用 OpenAI 兼容模型自动回复 QQ 私聊与群聊，自带 Web 面板。
 
