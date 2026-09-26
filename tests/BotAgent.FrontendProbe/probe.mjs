@@ -1530,6 +1530,12 @@ check("Agent 工作台有关键控件（筛选 / 提示词 / 后端 / 超时 / �
 check("Agent 底部控制区有模型刷新 / 推理强度 / 上下文 / 权限控件",
   ["agentModelSelect", "agentModelRefresh", "agentReasoningSelect", "agentContextToggle",
     "agentPermissionPreset", "agentPermissionDocker"].every((id) => html.includes(`id="${id}"`)));
+check("Agent 工作台有显示动作补充描述开关",
+  html.includes('id="agentActionDetailsToggle"') && js.includes("AGENT_ACTION_DETAILS_STORAGE_KEY") &&
+    js.includes("state.agent.showActionDetails && message.meta"));
+check("普通会话菜单提供改名与清空历史操作",
+  html.includes('data-act="rename"') && html.includes('data-act="clear"') &&
+    js.includes("/rename") && js.includes("/clear"));
 check("设置页可以添加推理档位，默认档位为 auto",
   html.includes('id="setAgentReasoningEffort"') && html.includes('id="setAgentReasoningLevels"') &&
     js.includes("agentReasoningLevels") && js.includes('"auto"'));

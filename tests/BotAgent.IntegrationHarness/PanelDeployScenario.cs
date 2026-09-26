@@ -51,7 +51,7 @@ public static partial class Program
 
         async Task<(int Code, string Body)> PostRawAsync(string url, byte[] body, string contentType = "application/gzip")
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            using var http = CreatePanelHttpClient(healthPort, 30);
             using var content = new ByteArrayContent(body);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
             using var resp = await http.PostAsync(url, content, cts.Token);
@@ -59,7 +59,7 @@ public static partial class Program
         }
 
         // ── ① 默认关：三个动作全拒 ──
-        var (getCode, getBody) = await HttpGetAsync($"{panel}/api/deploy");
+        var (getCode, getBody) = await PanelGetAsync($"{panel}/api/deploy");
         Check("GET /api/deploy 能读（面板卡片靠它；开关默认关）",
             getCode == 200 && getBody.Contains("\"enabled\":false"),
             $"HTTP {getCode} {getBody[..Math.Min(120, getBody.Length)]}");
@@ -68,18 +68,18 @@ public static partial class Program
         Check("★★ 关着时上传被拒（403，不落盘、不 build）",
             upCode == 403, $"HTTP {upCode} {upBody[..Math.Min(120, upBody.Length)]}");
 
-        var (urlOffCode, urlOffBody) = await PostJsonAsync($"{panel}/api/deploy/url", """{"url":"https://example.com/app.tar.gz"}""");
+        var (urlOffCode, urlOffBody) = await PanelPostJsonAsync($"{panel}/api/deploy/url", """{"url":"https://example.com/app.tar.gz"}""");
         Check("★★ 关着时“从地址部署”也被拒（403）",
             urlOffCode == 403, $"HTTP {urlOffCode} {urlOffBody[..Math.Min(120, urlOffBody.Length)]}");
 
-        var (rbOffCode, rbOffBody) = await PostJsonAsync($"{panel}/api/deploy/rollback", "{}");
+        var (rbOffCode, rbOffBody) = await PanelPostJsonAsync($"{panel}/api/deploy/rollback", "{}");
         Check("★★ 关着时回滚也被拒（403）",
             rbOffCode == 403, $"HTTP {rbOffCode} {rbOffBody[..Math.Min(120, rbOffBody.Length)]}");
 
         // ── ② 打开开关 ──
-        var (setCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"panelDeployEnabled":true}""");
+        var (setCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"panelDeployEnabled":true}""");
         Check("面板能打开「面板一键部署」开关", setCode == 200, $"HTTP {setCode}");
-        var (_, afterBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, afterBody) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(afterBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 开关回读是开的（保存真生效）",
             runtime["panelDeployEnabled"]?.GetValue<bool>() == true,
@@ -92,13 +92,13 @@ public static partial class Program
             $"HTTP {badCode} {badBody[..Math.Min(160, badBody.Length)]}");
 
         // ── ④ 地址校验：只收 http(s) ──
-        var (ftpCode, ftpBody) = await PostJsonAsync($"{panel}/api/deploy/url", """{"url":"ftp://example.com/app.tar.gz"}""");
+        var (ftpCode, ftpBody) = await PanelPostJsonAsync($"{panel}/api/deploy/url", """{"url":"ftp://example.com/app.tar.gz"}""");
         Check("★★ 非 http(s) 地址被拒（别让面板变成任意协议客户端）",
             ftpCode == 400 && ftpBody.Contains("http"),
             $"HTTP {ftpCode} {ftpBody[..Math.Min(160, ftpBody.Length)]}");
 
         // ── ⑤ 回滚点：测试环境没有 docker/prev，必须明确拒绝而不是瞎做 ──
-        var (rbCode, rbBody) = await PostJsonAsync($"{panel}/api/deploy/rollback", "{}");
+        var (rbCode, rbBody) = await PanelPostJsonAsync($"{panel}/api/deploy/rollback", "{}");
         Check("★★ 没有回滚点（qqchat-agent:prev）时明确拒绝",
             rbCode == 400 && rbBody.Contains("回滚"),
             $"HTTP {rbCode} {rbBody[..Math.Min(200, rbBody.Length)]}");

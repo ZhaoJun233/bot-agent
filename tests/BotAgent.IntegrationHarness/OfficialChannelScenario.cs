@@ -167,7 +167,7 @@ public static partial class Program
 
         if (officialKey is not null)
         {
-            var (convStatus, _) = await HttpGetAsync(
+            var (convStatus, _) = await PanelGetAsync(
                 $"http://127.0.0.1:{panelPort}/api/conversations/{Uri.EscapeDataString(officialKey)}");
             Check("★ 面板能按这个 key 取到官方会话（分块展示的数据面通了）",
                 convStatus == 200, $"HTTP {convStatus}（key={officialKey}）");

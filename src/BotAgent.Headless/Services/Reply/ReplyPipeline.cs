@@ -274,11 +274,11 @@ public sealed class ReplyPipeline
     /// </summary>
     private static string BuildReplyAnnotation(string name, string quotedText)
     {
+        name = MessageMarkers.EscapeExternalControlTags(name);
         if (string.IsNullOrEmpty(name) && string.IsNullOrWhiteSpace(quotedText))
         {
             return "[回复一条更早的消息（我这边已经看不到原文了）]";
         }
-
         var text = (quotedText ?? string.Empty).Replace('\n', ' ').Trim();
         // 引用的那条自己可能也是回复（“[回复 你「…」] xxx”）：嵌套引号只会变成噪音，剥一层
         if (text.StartsWith("[回复", StringComparison.Ordinal))
@@ -290,11 +290,11 @@ public sealed class ReplyPipeline
             }
         }
 
+        text = MessageMarkers.EscapeExternalControlTags(text);
         if (text.Length == 0)
         {
             return $"[回复 {name}（引用的内容我这边取不到）]";
         }
-
         return $"[回复 {name}「{TextRules.Shorten(text, 40)}」]";
     }
     public void HandleInbound(QqChatMessage msg)
@@ -846,7 +846,7 @@ public sealed class ReplyPipeline
                         Role = MessageRole.Peer,
                         SenderName = m.IsGroup ? m.SenderName : null,
                         SenderId = m.UserId,
-                        Text = m.Text,
+                        Text = MessageMarkers.EscapeExternalControlTags(m.Text),
                         Timestamp = m.Time,
                         QqMessageId = m.MessageId,
                         ImageUrls = m.ImageUrls

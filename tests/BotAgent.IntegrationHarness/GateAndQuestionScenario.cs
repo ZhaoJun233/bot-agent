@@ -94,11 +94,11 @@ public static partial class Program
             !GatedOut(), bot.OutputLines.LastOrDefault(l => l.Contains("[参与]")) ?? "(没有 [参与] 行)");
 
         // ── ② 打开闸门（顺便把冷却拉长，让状态机的结论稳定可判）──
-        var (onCode, _) = await PostJsonAsync($"{panel}/api/settings",
+        var (onCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
             """{"enableParticipationGating":true,"participationCooldownSeconds":600}""");
         Check("面板能打开参与闸门", onCode == 200, $"HTTP {onCode}");
 
-        var (_, settingsBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(settingsBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 面板回显：闸门是开着的（且写清“只收不放”）",
             runtime["enableParticipationGating"]?.GetValue<bool>() == true
@@ -146,7 +146,7 @@ public static partial class Program
         // ── ⑥ 打开提问：群里出现服务端包好的提问（带一次性编号）──
         // 顺便把连续回复上限抬高：这个场景为了稳定判冷却，把 participationCooldownSeconds 设成了 600，
         // 而下面还要再被 @ 几次 —— 不抬上限就会撞上「到上限且还在休息窗口 → 拒绝」这条硬约束。
-        var (qCode, _) = await PostJsonAsync(
+        var (qCode, _) = await PanelPostJsonAsync(
             $"{panel}/api/settings", """{"enableQuestions":true,"participationMaxConsecutiveReplies":10}""");
         Check("面板能打开“允许提问”", qCode == 200, $"HTTP {qCode}");
 

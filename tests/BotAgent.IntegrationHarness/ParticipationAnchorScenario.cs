@@ -86,7 +86,7 @@ public static partial class Program
             bot.OutputLines.LastOrDefault(l => l.Contains("model_timeout")) ?? "(没有 model_timeout 行)");
 
         // ── ② 面板改上限：日志里必须能看到新的那组数 ──
-        var (saveCode, _) = await PostJsonAsync($"{panel}/api/settings",
+        var (saveCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
             """{"participationMaxConsecutiveReplies":6,"participationCooldownSeconds":30}""");
         Check("面板保存参与上限成功", saveCode == 200, $"HTTP {saveCode}");
 
@@ -95,7 +95,7 @@ public static partial class Program
             Participated("策略已更新：连续 ≤6") && Participated("冷却 30s"),
             bot.OutputLines.LastOrDefault(l => l.Contains("策略已更新")) ?? "(没有策略更新行)");
 
-        var (_, settingsBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(settingsBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 面板回显的参与上限也是钳制后的值（填什么就显示什么是骗人的）",
             runtime["participationPolicy"]?.GetValue<string>() is { Length: > 0 } echo
@@ -125,7 +125,7 @@ public static partial class Program
         // （为什么不用日志证明 IrrelevantMessage：状态没变时状态机不打日志 —— 那不代表没喂事件。）
         async Task<string> SessionReasonAsync()
         {
-            var (_, body) = await HttpGetAsync($"{panel}/api/participation");
+            var (_, body) = await PanelGetAsync($"{panel}/api/participation");
             var arr = (JsonNode.Parse(body) as JsonObject)?["sessions"] as JsonArray;
             return arr is { Count: > 0 } ? arr[0]!["reason"]?.GetValue<string>() ?? string.Empty : string.Empty;
         }
@@ -165,7 +165,7 @@ public static partial class Program
 
         openAi.ResponseDelayMs = 0;
         // ── ⑤ 只读状态接口：能看到这个会话、而且只有结构化字段 ──
-        var (partCode, partBody) = await HttpGetAsync($"{panel}/api/participation");
+        var (partCode, partBody) = await PanelGetAsync($"{panel}/api/participation");
         var part = JsonNode.Parse(partBody) as JsonObject ?? new JsonObject();
         Check("GET /api/participation 可访问（面板「参与状态」那块的数据源）", partCode == 200, $"HTTP {partCode}");
         Check("★ 只读接口给出了会话状态（状态 / 原因 / 计数 —— 不含正文）",

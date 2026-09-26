@@ -194,7 +194,7 @@ public static partial class Program
         // 聊天请求里对方发言一律是 {昵称}{内容--时间} 的格式，用它当判据。
         var prompt = await WaitForRequestAsync(openAi,
             r => r.Contains("迁移之后我再说一句") && r.Contains("{老王}"), TimeSpan.FromSeconds(40));
-        var (profStatus, profBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/profiles/20002");
+        var (profStatus, profBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/profiles/20002");
         Check("★ 迁移过来的画像真的被注入提示词（不是只躺在库里）",
             prompt is not null && prompt.Contains("后端开发"),
             prompt is null

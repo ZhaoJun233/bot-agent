@@ -181,7 +181,7 @@ public static partial class Program
                   $"含工具噪音={isolated.Contains("noise-mark-777") || isolated.Contains("工具输出（")}");
 
         // ── ② 面板打开“记住上下文” → 能接着聊，但只带结论不带工具步骤 ──
-        var (code, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerKeepContext":true}""");
+        var (code, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"agentServerKeepContext":true}""");
         Check("面板能打开「服务器 agent 记住上下文」", code == 200, $"HTTP {code}");
 
         await Task.Delay(400);
@@ -199,7 +199,7 @@ public static partial class Program
             $"含工具噪音={carried.Contains("noise-mark-888") || carried.Contains("工具输出（")}");
 
         // 关回去（后面的步骤要验默认隔离）
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             await http.PostAsync($"{panel}/api/settings",
                 new StringContent("""{"agentServerKeepContext":false}""", Encoding.UTF8, "application/json"), cts.Token);
@@ -253,7 +253,7 @@ public static partial class Program
                 : string.Join(" / ", new[] { "AAA", "BBB", "DDD", "EEE", "FFF" }
                     .Select(tag => $"{tag}={afterReset.Contains($"MARK-{tag}")}")));
 
-        var (_, sessionsJson) = await HttpGetAsync($"{panel}/api/agent/sessions?key=group:{groupId}");
+        var (_, sessionsJson) = await PanelGetAsync($"{panel}/api/agent/sessions?key=group:{groupId}");
         var sessions = (JsonNode.Parse(sessionsJson) as JsonObject)?["sessions"] as JsonArray ?? new JsonArray();
         var names = sessions.Select(s => s?["nameRaw"]?.GetValue<string>() ?? string.Empty).ToList();
         Check("★★ //reset 连标题一起换掉（不再挂着旧话题）",

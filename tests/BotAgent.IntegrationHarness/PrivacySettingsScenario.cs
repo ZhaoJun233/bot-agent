@@ -86,7 +86,7 @@ public static partial class Program
             .ToList();
 
         // ── ① 面板默认：脱敏开 + 附加提示词就是那条隐私红线 ──
-        var (settingsCode, settingsBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (settingsCode, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         // 响应是 { runtime: {...面板设置...}, env: {...} } —— 开关与提示词都在 runtime 里
         var settings = (JsonNode.Parse(settingsBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("面板拿得到设置", settingsCode == 200 && settings.Count > 0, $"HTTP {settingsCode}");
@@ -104,12 +104,12 @@ public static partial class Program
             settings["agentPromptDefault"]?.GetValue<string>() == defaultPrompt);
 
         // ── ② 建一个「长 id 群」的会话：它必须以脱敏形状出现在列表里 ──
-        var (newCode, newBody) = await PostJsonAsync($"{panel}/api/agent/sessions",
+        var (newCode, newBody) = await PanelPostJsonAsync($"{panel}/api/agent/sessions",
             $$"""{"key":"{{fakeChatKey}}","action":"new","name":"{{fakeName}}","backend":"server"}""");
         Check("面板能建会话（用来验脱敏）", newCode == 200,
             $"HTTP {newCode} {Snippet(newBody, "ok")}");
 
-        var (listCode, listBody) = await HttpGetAsync($"{panel}/api/agent/sessions");
+        var (listCode, listBody) = await PanelGetAsync($"{panel}/api/agent/sessions");
         var all = JsonNode.Parse(listBody) as JsonObject ?? new JsonObject();
         var chat = (all["chats"] as JsonObject)?[fakeChatKey] as JsonObject;
         var panelSession = chat?["sessions"]?.AsArray().FirstOrDefault() as JsonObject;
@@ -135,7 +135,7 @@ public static partial class Program
             Snippet(maskedReply, "1."));
 
         // ── ④ 面板关掉开关 → 立刻能看到真名（开关真的在生效，不是摆设）──
-        var (offCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableAgentMask":false}""");
+        var (offCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"enableAgentMask":false}""");
         Check("面板关掉脱敏成功", offCode == 200, $"HTTP {offCode}");
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//sessions all", 19002, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("123456789")), TimeSpan.FromSeconds(30));
@@ -143,7 +143,7 @@ public static partial class Program
             Sent().LastOrDefault(t => t.Contains("会话 "))?.Contains("123456789") == true,
             Snippet(Sent().LastOrDefault(t => t.Contains("群聊 ")) ?? "(没有群聊那行)", "群聊 "));
 
-        var (onCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableAgentMask":true}""");
+        var (onCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"enableAgentMask":true}""");
         Check("再把脱敏打开成功", onCode == 200, $"HTTP {onCode}");
 
         // ── ⑤ 附加提示词随任务下发：服务器内置 agent 的系统提示词里能看到默认那份 ──
@@ -159,7 +159,7 @@ public static partial class Program
 
         // ── ⑥ 面板改成自定义值 → 下一轮就用新的 ──
         const string customPrompt = "自定义提示词：只准看 /tmp，不许读聊天记录";
-        var (customCode, _) = await PostJsonAsync($"{panel}/api/settings",
+        var (customCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
             $$"""{"agentPrompt":"{{customPrompt}}"}""");
         Check("面板保存自定义附加提示词成功", customCode == 200, $"HTTP {customCode}");
 
@@ -172,7 +172,7 @@ public static partial class Program
             Snippet(system2, customPrompt));
 
         // ── ⑦ 清空 → 明确“不带”，不是回落到默认 ──
-        var (clearCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentPrompt":""}""");
+        var (clearCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"agentPrompt":""}""");
         Check("面板清空附加提示词成功", clearCode == 200, $"HTTP {clearCode}");
 
         requestsBefore = agentAi.Requests.Count;
@@ -187,9 +187,11 @@ public static partial class Program
     }
 
     /// <summary>POST 一段 JSON（场景里只用来打面板的设置/会话接口）。</summary>
-    private static async Task<(int Code, string Body)> PostJsonAsync(string url, string json)
+    private static async Task<(int Code, string Body)> PostJsonAsync(string url, string json, string? panelToken = null)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        using var http = panelToken is null
+            ? new HttpClient { Timeout = TimeSpan.FromSeconds(15) }
+            : CreatePanelHttpClient(new Uri(url).Port, 15, panelToken);
         var res = await http.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"));
         return ((int)res.StatusCode, await res.Content.ReadAsStringAsync());
     }

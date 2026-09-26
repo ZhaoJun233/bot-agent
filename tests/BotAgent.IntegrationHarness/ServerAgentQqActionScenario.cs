@@ -127,7 +127,7 @@ public static partial class Program
             .LastOrDefault(a => a["action"]?.GetValue<string>() == action);
 
         // ── 0) 默认档：留空 = 安全档（面板上要能看到“真正会开哪几个”）──
-        var (_, settingsBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(settingsBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 面板默认显示安全档（留空 ≠ 全开：dangerous 的得点名）",
             runtime["agentServerQqActions"]?.GetValue<string>() == "" &&
@@ -175,11 +175,11 @@ public static partial class Program
             $"agent 接口收到 {agentAi.Requests.Count} 次请求");
 
         // ── ④ 面板点名打开 ban（顺手验证别名规范化 + 写错的忽略）──
-        var (setCode, _) = await PostJsonAsync($"{panel}/api/settings",
+        var (setCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
             """{"agentServerQqActions":"点赞, 戳一戳, 没这个动作, ban"}""");
         Check("面板能保存 QQ 动作", setCode == 200, $"HTTP {setCode}");
 
-        var (_, afterBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, afterBody) = await PanelGetAsync($"{panel}/api/settings");
         var after = (JsonNode.Parse(afterBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 保存时把别名规范成动作名、写错的名字直接丢掉（面板回读的就是真正生效的那份）",
             after["agentServerQqActions"]?.GetValue<string>() == "like,poke,ban",
@@ -260,7 +260,7 @@ public static partial class Program
             $"send_like {likeAttempts8} 次（应为 2）· 工具报成功={sawSuccess}");
 
         // ── ⑨ 批次 A 收尾：打开**统一闸门**后，`//` 的动作照旧能跑（判定与老白名单一致）──
-        var (gateCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerUseGate":true}""");
+        var (gateCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"agentServerUseGate":true}""");
         Check("面板能打开 `//` 的统一闸门开关", gateCode == 200, $"HTTP {gateCode}");
 
         agentAi.AddRule("闸门开着也点个赞",
@@ -279,7 +279,7 @@ public static partial class Program
             $"send_like {ActionCount("send_like") - before9} 次（应为 1）");
 
         // ── ⑩ 闸门**真的在判**：把 qq 从工具白名单里去掉 → 同一个动作必须被闸门拦下 ──
-        var (offCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerTools":"bash,read"}""");
+        var (offCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"agentServerTools":"bash,read"}""");
         Check("面板能把 qq 从工具白名单里去掉", offCode == 200, $"HTTP {offCode}");
 
         agentAi.AddRule("闸门该拦下这一条",

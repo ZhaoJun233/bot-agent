@@ -60,7 +60,7 @@ public static partial class Program
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
 
-        var (settingsStatus, settingsBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 语音配置从环境变量生效（开关/音色/语速/上限/TTS 地址）",
             settingsStatus == 200 && settingsBody.Contains("\"enableVoice\":true") &&
             settingsBody.Contains("\"voiceMaxChars\":30") && settingsBody.Contains("zh_CN-huayan-medium") &&
@@ -71,7 +71,7 @@ public static partial class Program
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        using var http = CreatePanelHttpClient(panelPort, 60);
 
         // ---- 1) 模型要求“这句用语音说” ----
         const string spoken = "这首歌我想用声音唱给你听";
@@ -186,7 +186,7 @@ public static partial class Program
             lastCall.Text == "面板试听这一句" && lastCall.Voice == "zh_CN-xiao_ya-medium" && lastCall.Speed == "0.9",
             lastCall.Text is null ? "(假 TTS 没收到请求)" : $"text={lastCall.Text} voice={lastCall.Voice} speed={lastCall.Speed}");
 
-        var (healthStatus, healthBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/voice/health");
+        var (healthStatus, healthBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/voice/health");
         Check("★ 面板能问出 TTS 服务状态与可用音色（排障入口）",
             healthStatus == 200 && healthBody.Contains("\"ok\":true") && healthBody.Contains("zh_CN-xiao_ya-medium"),
             healthBody.Length > 200 ? healthBody[^200..] : healthBody);

@@ -68,7 +68,7 @@ public static partial class Program
         await WaitForPortAsync(botWsPort, cts.Token, bot);
         await WaitForPortAsync(panelPort, cts.Token, bot);
 
-        var (settingsCode, settingsBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (settingsCode, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         Check("★ 面板里能看到步进循环上限（=2）",
             settingsCode == 200 && settingsBody.Contains("\"maxAgentSteps\":2"),
             settingsBody.Contains("maxAgentSteps") ? "已回显" : "(没有这个字段)");
@@ -116,7 +116,7 @@ public static partial class Program
             bot.OutputLines.LastOrDefault(l => l.Contains("[Search]")) ?? "(没有 [Search] 行)");
 
         // 面板轨迹：那一轮 = 2 个模型节点 + 1 个当场执行节点（批 C 的观测面）
-        var (traceCode, traceBody) = await HttpGetAsync($"{panel}/api/traces?limit=5");
+        var (traceCode, traceBody) = await PanelGetAsync($"{panel}/api/traces?limit=5");
         var traces = (JsonNode.Parse(traceBody) as JsonObject)?["traces"] as JsonArray ?? new JsonArray();
         var latest = traces.FirstOrDefault() as JsonObject;
         var nodes = latest?["nodes"] as JsonArray ?? new JsonArray();

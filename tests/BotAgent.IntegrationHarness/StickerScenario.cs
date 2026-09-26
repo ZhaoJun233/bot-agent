@@ -59,7 +59,7 @@ public static partial class Program
         await WaitForPortAsync(botWsPort, cts.Token, bot);
 
         // 先把生效的配置看清楚：这是全新数据目录，环境变量应当作为“种子”生效
-        var (settingsStatus, settingsBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 测试用的表情包配置已生效（上限 3 / 候选 6；环境变量只在首次部署当种子）",
             settingsStatus == 200 && settingsBody.Contains("\"stickerLibraryMax\":3") &&
             settingsBody.Contains("\"stickerCandidates\":6") && settingsBody.Contains("\"enableStickers\":true") &&
@@ -128,7 +128,7 @@ public static partial class Program
         await WaitUntilAsync(
             () =>
             {
-                var (status, body) = HttpGetAsync($"http://127.0.0.1:{panelPort}/api/stickers").GetAwaiter().GetResult();
+                var (status, body) = PanelGetAsync($"http://127.0.0.1:{panelPort}/api/stickers").GetAwaiter().GetResult();
                 return status == 200 && body.Contains("\"pendingDescribe\":0") && body.Contains("\"described\":" + CountStickers(dataDir));
             },
             TimeSpan.FromSeconds(40));
@@ -176,7 +176,7 @@ public static partial class Program
         Check("库里还有可被巡检删掉的图", victim is not null, Truncate(ReadIndex(dataDir), 300));
         openAi.EnqueueCuration($$"""{"delete": ["{{victim}}"], "reason": "说明模糊且从没用过"}""");
 
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        using (var http = CreatePanelHttpClient(panelPort, 10))
         {
             var res = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/stickers/curate", null, cts.Token);
             Check("手动触发巡检接口可用", res.IsSuccessStatusCode, $"HTTP {(int)res.StatusCode}");

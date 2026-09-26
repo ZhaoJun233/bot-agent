@@ -94,26 +94,27 @@ internal sealed class PanelDto
     };
 
     /// <summary>
-    /// 会话列表里的一项。注意 <c>key</c> 与 <c>name</c> 都是**原样**给的：
-    /// 面板要拿 key 去调接口（遮了按钮就废了），而列表显示的脱敏由前端按自己的开关做
-    /// （与"可编辑真名用 nameRaw"是同一条规矩：存储与 key 保持原样）。
+    /// 会话列表里的一项。<c>key</c> 与 <c>nameRaw</c> 必须原样保留，供接口操作和改名回填；
+    /// <c>name</c>、头像文字与预览属于显示层，统一走当前脱敏规则。
     /// </summary>
-    public static JsonObject Conversation(BotConversation c)
+    public JsonObject Conversation(BotConversation c)
     {
         var (isGroup, id) = c.Target;
+        var displayName = Mask(c.Name, c.SourceKey);
         return new JsonObject
         {
             ["key"] = c.SourceKey,
             ["kind"] = isGroup ? "Group" : "Private",
             ["channel"] = c.Channel,
             ["channelTag"] = Channels.Tag(c.Channel),
-            ["name"] = c.Name,
+            ["name"] = displayName,
+            ["nameRaw"] = c.Name,
             ["id"] = id,
             ["avatarUrl"] = AvatarUrl(isGroup, id),
-            ["avatarText"] = FirstChar(c.Name),
+            ["avatarText"] = FirstChar(displayName),
             ["unread"] = c.Unread,
             ["thinking"] = c.Thinking,
-            ["preview"] = c.Preview,
+            ["preview"] = Mask(c.Preview, c.SourceKey),
             ["messageCount"] = c.MessageCount,
             ["lastTime"] = c.LastTime.ToUnixTimeMilliseconds()
         };

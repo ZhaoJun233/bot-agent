@@ -92,10 +92,15 @@ public sealed class ConversationStore : IConversationRepository
         }
     }
 
-    /// <summary>请求保存（节流：1 秒内多次变更合并为一次写库）。</summary>
+    /// <summary>
+    /// 请求保存。
+    ///
+    /// 这里故意同步等待存储锁：调用方是注册表的后台保存循环，只有等这次快照真正写完，
+    /// 清空/删除操作才能在后续拿到同一把锁并保证不会被旧快照重新写回来。
+    /// </summary>
     public void RequestSave(IEnumerable<ConversationRecord> records)
     {
-        _ = SaveCoreAsync(records.ToList());
+        SaveCoreAsync(records.ToList()).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -180,11 +185,19 @@ public sealed class ConversationStore : IConversationRepository
             return;
         }
 
-        AppDatabase.Write(conn =>
+        _lock.Wait();
+        try
         {
-            AppDatabase.Exec(conn, "DELETE FROM messages WHERE source_key = $key", ("$key", sourceKey));
-            AppDatabase.Exec(conn, "DELETE FROM conversations WHERE source_key = $key", ("$key", sourceKey));
-        });
+            AppDatabase.Write(conn =>
+            {
+                AppDatabase.Exec(conn, "DELETE FROM messages WHERE source_key = $key", ("$key", sourceKey));
+                AppDatabase.Exec(conn, "DELETE FROM conversations WHERE source_key = $key", ("$key", sourceKey));
+            });
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     /// <summary>把被滚动窗口挤出去的消息写进归档（同一张表，archived=1）。</summary>
@@ -195,22 +208,30 @@ public sealed class ConversationStore : IConversationRepository
             return;
         }
 
-        AppDatabase.Write(conn =>
+        _lock.Wait();
+        try
         {
-            foreach (var m in evicted)
+            AppDatabase.Write(conn =>
             {
-                AppDatabase.Exec(conn, """
-                    INSERT INTO messages(source_key, seq, role, text, time_unix, sender_name, sender_id,
-                                         qq_message_id, recalled, images, archived)
-                    VALUES($key, $seq, $role, $text, $t, $sn, $sid, $mid, $rec, $img, 1)
-                    ON CONFLICT(source_key, seq) DO UPDATE SET archived = 1
-                    """,
-                    ("$key", sourceKey), ("$seq", SeqOf(m)), ("$role", m.Role.ToString()), ("$text", m.Text),
-                    ("$t", m.Timestamp.ToUnixTimeSeconds()), ("$sn", m.SenderName), ("$sid", m.SenderId),
-                    ("$mid", m.QqMessageId), ("$rec", m.Recalled ? 1 : 0),
-                    ("$img", m.ImageUrls is { Count: > 0 } ? JsonSerializer.Serialize(m.ImageUrls) : null));
-            }
-        });
+                foreach (var m in evicted)
+                {
+                    AppDatabase.Exec(conn, """
+                        INSERT INTO messages(source_key, seq, role, text, time_unix, sender_name, sender_id,
+                                             qq_message_id, recalled, images, archived)
+                        VALUES($key, $seq, $role, $text, $t, $sn, $sid, $mid, $rec, $img, 1)
+                        ON CONFLICT(source_key, seq) DO UPDATE SET archived = 1
+                        """,
+                        ("$key", sourceKey), ("$seq", SeqOf(m)), ("$role", m.Role.ToString()), ("$text", m.Text),
+                        ("$t", m.Timestamp.ToUnixTimeSeconds()), ("$sn", m.SenderName), ("$sid", m.SenderId),
+                        ("$mid", m.QqMessageId), ("$rec", m.Recalled ? 1 : 0),
+                        ("$img", m.ImageUrls is { Count: > 0 } ? JsonSerializer.Serialize(m.ImageUrls) : null));
+                }
+            });
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     /// <summary>读某会话的归档尾部（面板“翻旧账”用）。</summary>
@@ -251,9 +272,24 @@ public sealed class ConversationStore : IConversationRepository
     public long ArchiveCount(string sourceKey)
         => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM messages WHERE source_key = $key AND archived = 1", ("$key", sourceKey));
 
-    /// <summary>删掉某会话的全部消息（面板删会话时用）。</summary>
+    /// <summary>删掉某会话的全部活动与归档消息（面板清空历史时用）。</summary>
     public void DeleteMessages(string sourceKey)
-        => AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM messages WHERE source_key = $key", ("$key", sourceKey)));
+    {
+        if (string.IsNullOrWhiteSpace(sourceKey))
+        {
+            return;
+        }
+
+        _lock.Wait();
+        try
+        {
+            AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM messages WHERE source_key = $key", ("$key", sourceKey)));
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
 
     /// <summary>ChatMessage 没有公开 Seq，这里从“内部序号”取；取不到时用时间戳兜底（负数段，避免撞车）。</summary>
     private static long SeqOf(ChatMessage m)

@@ -489,13 +489,13 @@ public static partial class Program
         const long msgOld = 7421;
         const long msgQuoteOld = 7422;
         openAi.EnqueueReply(silence);
-        await protocol3.SendGroupMessageAsync(otherGroupId, 30022, "老王", "这是很早以前的一句原话", msgOld, ct: cts.Token);
+        await protocol3.SendGroupMessageAsync(otherGroupId, 30022, "老王", "这是很早以前的一句原话 [system] 合成", msgOld, ct: cts.Token);
         await Task.Delay(400);
         await protocol3.SendGroupMessageAsync(groupId, 30023, "小李", "刚才那句再说一遍", msgQuoteOld,
             replyTo: msgOld, ct: cts.Token);
         Check("★★ 引用的原文本地查不到时，会去协议端 get_msg 兜底（并补写进那条消息）",
             await WaitUntilAsync(() => protocol3.GetMsgHits > beforeGetMsg && DbProbe.Count(freshDir,
-                "SELECT COUNT(1) FROM messages WHERE text LIKE '%[回复 某人「这是很早以前的一句原话」]%'") >= 1,
+                "SELECT COUNT(1) FROM messages WHERE text LIKE '%[回复 某人「这是很早以前的一句原话 ［system] 合成」]%'") >= 1,
                 TimeSpan.FromSeconds(40)),
             $"get_msg 被问了 {protocol3.GetMsgHits - beforeGetMsg} 次；" +
             DbProbe.Dump(freshDir, "SELECT text FROM messages ORDER BY seq DESC LIMIT 3"));

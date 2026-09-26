@@ -137,7 +137,7 @@ public static partial class Program
             linkReq is not null && linkReq.Contains("127.0.0.1") && linkReq.Contains("刚发的链接"));
 
         // ---- 6) 关掉链接预览就不再抓（但消息照常处理）----
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var http = CreatePanelHttpClient(panelPort, 10);
         var saveRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
             new StringContent("""{"enableLinkPreview":false}""", System.Text.Encoding.UTF8, "application/json"), cts.Token);
         Check("★ 面板可以关掉链接预览", saveRes.IsSuccessStatusCode, $"HTTP {(int)saveRes.StatusCode}");

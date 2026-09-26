@@ -58,7 +58,7 @@ public static partial class Program
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
 
-        var (settingsStatus, settingsBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 联网搜索配置生效（开关 + 搜索源 + 结果数）",
             settingsStatus == 200 && settingsBody.Contains("\"enableWebSearch\":true") &&
             settingsBody.Contains("searx-mock"),
@@ -68,7 +68,7 @@ public static partial class Program
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
+        using var http = CreatePanelHttpClient(panelPort, 90);
 
         // ---- 1) 模型要查资料 → 走模型自带搜索（Gemini grounding）----
         openAi.ClearRequests();
@@ -303,7 +303,7 @@ public static partial class Program
             afterOff is null ? "(没等到请求)" : SectionOf(afterOff, "[现在的时间]"));
 
         // ---- 6c) 面板日志页的历史：/api/logs 能拿到之前的行（以前一刷新页面就空白）----
-        var (logStatus, logBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/logs?limit=200");
+        var (logStatus, logBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/logs?limit=200");
         Check("★ GET /api/logs 返回历史日志（刷新面板不再空白）",
             logStatus == 200 && logBody.Contains("\"lines\"") && logBody.Contains("[Search]"),
             logBody.Length > 240 ? logBody[^240..] : logBody);
@@ -332,10 +332,11 @@ public static partial class Program
         });
 
         await WaitForPortAsync(ssrfPort, cts.Token, ssrfBot);
+        using var ssrfPanelHttp = CreatePanelHttpClient(ssrfPort, 90);
         using (var ssrfBody = new StringContent(
                    new JsonObject { ["url"] = "http://napcat:3001/" }.ToJsonString(), Encoding.UTF8, "application/json"))
         {
-            using var ssrfResp = await http.PostAsync($"http://127.0.0.1:{ssrfPort}/api/search/test", ssrfBody, cts.Token);
+        using var ssrfResp = await ssrfPanelHttp.PostAsync($"http://127.0.0.1:{ssrfPort}/api/search/test", ssrfBody, cts.Token);
             var text = await ssrfResp.Content.ReadAsStringAsync(cts.Token);
             Check("★ SSRF 闸门：默认部署读不了内网地址（单标签主机名直接拒）",
                 text.Contains("单标签主机名"), text.Length > 200 ? text[^200..] : text);
@@ -344,7 +345,7 @@ public static partial class Program
         using (var localBody = new StringContent(
                    new JsonObject { ["url"] = search.PageUrl }.ToJsonString(), Encoding.UTF8, "application/json"))
         {
-            using var localResp = await http.PostAsync($"http://127.0.0.1:{ssrfPort}/api/search/test", localBody, cts.Token);
+            using var localResp = await ssrfPanelHttp.PostAsync($"http://127.0.0.1:{ssrfPort}/api/search/test", localBody, cts.Token);
             var text = await localResp.Content.ReadAsStringAsync(cts.Token);
             Check("★ SSRF 闸门：回环地址也读不了（防止让服务器替群友访问本机）",
                 text.Contains("回环") || text.Contains("私有"), text.Length > 200 ? text[^200..] : text);

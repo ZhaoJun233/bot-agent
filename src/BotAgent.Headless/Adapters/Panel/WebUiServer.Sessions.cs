@@ -75,6 +75,29 @@ public sealed partial class WebUiServer
                 await WriteJsonAsync(context, deleted ? 200 : 404, new JsonObject { ["ok"] = deleted });
                 return;
 
+            case ("rename", "POST"):
+            {
+                var body = await ReadJsonAsync(context);
+                var name = body?["name"]?.GetValue<string>() ?? string.Empty;
+                var renamed = _registry.Rename(key, name);
+                await WriteJsonAsync(context, renamed ? 200 : 400, new JsonObject
+                {
+                    ["ok"] = renamed,
+                    ["message"] = renamed ? "会话已改名" : "名称不能为空或会话不存在"
+                });
+                return;
+            }
+
+            case ("clear", "POST"):
+            {
+                var cleared = _registry.ClearMessages(key);
+                await WriteJsonAsync(context, cleared ? 200 : 404, new JsonObject
+                {
+                    ["ok"] = cleared,
+                    ["message"] = cleared ? "会话历史已清空" : "会话不存在"
+                });
+                return;
+            }
             default:
                 await WriteJsonAsync(context, 405, new JsonObject { ["error"] = "method not allowed" });
                 return;
@@ -86,7 +109,7 @@ public sealed partial class WebUiServer
         var list = new List<JsonObject>();
         foreach (var c in _registry.Snapshot())
         {
-            list.Add(PanelDto.Conversation(c));
+            list.Add(_dto.Conversation(c));
         }
 
         return list;

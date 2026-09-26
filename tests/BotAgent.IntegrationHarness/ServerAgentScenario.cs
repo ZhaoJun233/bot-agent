@@ -111,7 +111,7 @@ public static partial class Program
             $"自定义接口 {agentAi.Requests.Count} 次请求，聊天接口 {openAi.Requests.Count} 次（应为 0 或只有综结标题）");
         await WaitUntilAsync(() => openAi.TitleRequests > 0, TimeSpan.FromSeconds(30));
         await Task.Delay(300);
-        using (var titleHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var titleHttp = CreatePanelHttpClient(healthPort, 15))
         {
             var sj = JsonNode.Parse(await titleHttp.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/sessions?key=group:{groupId}"));
             var titleSessions = sj?["sessions"] as JsonArray ?? new JsonArray();
@@ -174,7 +174,7 @@ public static partial class Program
             $"桥任务 {bridgeTasksBefore} → {bridge.Tasks.Count}");
 
         // ---- ③b 面板里把“外部设备”开关关掉 → auto 也得走服务器（管理员踩过的那个：切了却没生效）----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":false}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -190,7 +190,7 @@ public static partial class Program
             $"桥任务 {hostOffTasksBefore} → {bridge.Tasks.Count}");
 
         // ---- ③c 设备开关打开时：//@设备名 能单条指定外部设备 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":true}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -204,7 +204,7 @@ public static partial class Program
             $"桥任务 {hostOffTasksBefore} → {bridge.Tasks.Count}；" + string.Join(" | ", Sent().TakeLast(2)));
 
         // ---- ④ 两边都不可用 → 如实报错（不静默）----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent("{\"agentTarget\":\"host\",\"enableHostAgent\":true,\"enableServerAgent\":false}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -226,7 +226,7 @@ public static partial class Program
         // 这一段必须自己把“服务器 agent”打开：上一段（④）刚把它关掉、还把设备卸下线了，
         // 否则“跑个很久的活”会被如实拒绝，//stop 也就没东西可停
         // （以前是靠“④那轮任务还在跑”这个巧合蒙对的 —— 时机一变就报假红）。
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent("{\"agentTarget\":\"server\",\"enableHostAgent\":true,\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -243,7 +243,7 @@ public static partial class Program
             Sent().Skip(beforeStop).Any(t => t.Contains("已让它停掉")), string.Join(" | ", Sent().TakeLast(3)));
 
         // ---- ⑧ //status 一眼看到两边状态 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":true,\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
@@ -262,7 +262,7 @@ public static partial class Program
         // 注意：从 2026-09-18 晚起，服务器 agent **默认每条指令单独对待**（不带上文）——
         // 管理员反馈“每次发送新指令都会把旧指令的内容发送回来”，所以想接着聊要显式开开关（这里就是）。
         // 前面的步骤把服务器开关关过，这里先打开（不然 //@server 只会回“开关是关的”）
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent(
                 "{\"enableServerAgent\":true,\"agentTarget\":\"server\",\"agentServerKeepContext\":true}",

@@ -37,7 +37,8 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_HEALTH_PORT"] = healthPort.ToString()
+            ["QQCHAT_HEALTH_PORT"] = healthPort.ToString(),
+            ["QQCHAT_PANEL_TOKEN"] = "" // Exercise password-session auth without enabling legacy approval tokens.
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -45,7 +46,38 @@ public static partial class Program
 
         var panel = $"http://127.0.0.1:{healthPort}";
 
-        var (code, body) = await HttpGetAsync($"{panel}/api/tools");
+        // Keep the no-token approval invariant, but authenticate ordinary panel operations with a cookie.
+        using var sessionHttp = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(15) };
+        using var login = await sessionHttp.PostAsync($"{panel}/api/auth/login",
+            new StringContent(new JsonObject { ["password"] = SyntheticPanelPassword }.ToJsonString(),
+                System.Text.Encoding.UTF8, "application/json"), cts.Token);
+        Check("未配令牌时仍需密码登录", login.IsSuccessStatusCode, $"HTTP {(int)login.StatusCode}");
+        var loginBody = JsonNode.Parse(await login.Content.ReadAsStringAsync(cts.Token));
+        Check("首次密码登录要求先改密", loginBody?["mustChangePassword"]?.GetValue<bool>() == true);
+        using var changed = await sessionHttp.PostAsync($"{panel}/api/auth/change-password",
+            new StringContent(new JsonObject
+            {
+                ["currentPassword"] = SyntheticPanelPassword,
+                ["newPassword"] = "synthetic-s46-changed-password"
+            }.ToJsonString(), System.Text.Encoding.UTF8, "application/json"), cts.Token);
+        Check("完成改密后获得正式面板会话", changed.IsSuccessStatusCode, $"HTTP {(int)changed.StatusCode}");
+        var (anonymousCode, _) = await HttpGetAsync($"{panel}/api/tools");
+        Check("未登录读取工具目录仍返回 401", anonymousCode == 401, $"HTTP {anonymousCode}");
+
+        async Task<(int Code, string Body)> SessionGetAsync(string url)
+        {
+            using var response = await sessionHttp.GetAsync(url, cts.Token);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(cts.Token));
+        }
+        async Task<(int Code, string Body)> SessionPostAsync(string url, string json)
+        {
+            using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            using var response = await sessionHttp.PostAsync(url, content, cts.Token);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(cts.Token));
+        }
+
+
+        var (code, body) = await SessionGetAsync($"{panel}/api/tools");
         var root = JsonNode.Parse(body) as JsonObject ?? new JsonObject();
         var tools = root["tools"] as JsonArray ?? new JsonArray();
         Check("GET /api/tools 可读（只读端点）", code == 200 && root["count"] is not null, $"HTTP {code} {body[..Math.Min(80, body.Length)]}");
@@ -94,10 +126,10 @@ public static partial class Program
             Find("voice.speak")?["allowlisted"]?.GetValue<bool>() == false,
             Find("voice.speak")?.ToJsonString() ?? "(没有 voice.speak)");
 
-        var (setCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableVoice":true}""");
+        var (setCode, _) = await SessionPostAsync($"{panel}/api/settings", """{"enableVoice":true}""");
         Check("面板能打开「语音」开关", setCode == 200, $"HTTP {setCode}");
 
-        var (_, afterBody) = await HttpGetAsync($"{panel}/api/tools");
+        var (_, afterBody) = await SessionGetAsync($"{panel}/api/tools");
         var after = JsonNode.Parse(afterBody) as JsonObject ?? new JsonObject();
         var afterTools = after["tools"] as JsonArray ?? new JsonArray();
         JsonObject? FindAfter(string id) => afterTools.FirstOrDefault(n => n?["id"]?.GetValue<string>() == id) as JsonObject;
@@ -105,19 +137,19 @@ public static partial class Program
             FindAfter("voice.speak")?["allowlisted"]?.GetValue<bool>() == true,
             FindAfter("voice.speak")?.ToJsonString() ?? "(没有 voice.speak)");
 
-        var (apprCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableApprovals":true}""");
+        var (apprCode, _) = await SessionPostAsync($"{panel}/api/settings", """{"enableApprovals":true}""");
         Check("面板能打开「人工审批」开关", apprCode == 200, $"HTTP {apprCode}");
 
-        var (_, apprBody) = await HttpGetAsync($"{panel}/api/tools");
+        var (_, apprBody) = await SessionGetAsync($"{panel}/api/tools");
         var apprTools = (JsonNode.Parse(apprBody) as JsonObject)?["tools"] as JsonArray ?? new JsonArray();
         // ── 批次 I（面板审批卡）：两条 fail-closed + 只读形状 ──
-        // ① 审批开着、但**没配面板令牌** → 一律不许批（未配令牌时面板对回环是全开的，这条高权限路径不能顺带放开）
-        var (noTokenCode, noTokenBody) = await PostJsonAsync($"{panel}/api/approvals/decide", """{"id":"ABC234","approve":true}""");
+        // ① 审批开着、但**没配面板令牌** → 一律不许批（密码会话已认证也不能放开这条高权限路径）
+        var (noTokenCode, noTokenBody) = await SessionPostAsync($"{panel}/api/approvals/decide", """{"id":"ABC234","approve":true}""");
         Check("★★ 未配面板令牌 → 面板审批被拒（403 panel_token_required，fail-closed）",
             noTokenCode == 403 && noTokenBody.Contains("panel_token_required"),
             $"HTTP {noTokenCode} {noTokenBody[..Math.Min(120, noTokenBody.Length)]}");
 
-        var (listCode, listBody) = await HttpGetAsync($"{panel}/api/approvals");
+        var (listCode, listBody) = await SessionGetAsync($"{panel}/api/approvals");
         var listRoot = JsonNode.Parse(listBody) as JsonObject ?? new JsonObject();
         Check("★ GET /api/approvals 可读（待批单的形状：编号/工具/摘要/脱敏 key/剩余秒数）",
             listCode == 200 && listRoot["enabled"]?.GetValue<bool>() == true
@@ -128,9 +160,9 @@ public static partial class Program
 
         // ② 审批关着 → 也不许批（按钮不出现；服务端同样拒）
         // 注意：这一段把审批**关回去了** —— 下面用到的 apprTools 是上一步（审批还开着时）抓的那份，不受影响。
-        var (offCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"enableApprovals":false}""");
+        var (offCode, _) = await SessionPostAsync($"{panel}/api/settings", """{"enableApprovals":false}""");
         Check("面板能关掉人工审批", offCode == 200, $"HTTP {offCode}");
-        var (offDecideCode, offDecideBody) = await PostJsonAsync($"{panel}/api/approvals/decide", """{"id":"ABC234","approve":true}""");
+        var (offDecideCode, offDecideBody) = await SessionPostAsync($"{panel}/api/approvals/decide", """{"id":"ABC234","approve":true}""");
         Check("★★ 审批关着 → 面板审批被拒（403 approvals_disabled）",
             offDecideCode == 403 && offDecideBody.Contains("approvals_disabled"),
             $"HTTP {offDecideCode} {offDecideBody[..Math.Min(120, offDecideBody.Length)]}");
@@ -150,18 +182,18 @@ public static partial class Program
                == sessionPolicy["sessions"]?.GetValue<int>(),
             sessionPolicy?.ToJsonString() ?? "(没有 sessionPolicy)");
 
-        var (postCode, _) = await PostJsonAsync($"{panel}/api/tools", "{}");
+        var (postCode, _) = await SessionPostAsync($"{panel}/api/tools", "{}");
         Check("★ 这个端点只读：POST 打不中（404），面板改不了任何东西",
             postCode == 404, $"HTTP {postCode}");
 
-        var (healthCode, _) = await HttpGetAsync($"{panel}/healthz");
+        var (healthCode, _) = await SessionGetAsync($"{panel}/healthz");
         // 批次 H（追踪页）：新增的静态文件必须真的发得出来（否则页面白屏，而探针是静态检查看不出来）
-        var (traceJsCode, traceJsBody) = await HttpGetAsync($"{panel}/trace.js");
+        var (traceJsCode, traceJsBody) = await SessionGetAsync($"{panel}/trace.js");
         Check("★ 面板发得出 /trace.js（追踪页脚本，嵌进程序集）",
             traceJsCode == 200 && traceJsBody.Contains("TracePage", StringComparison.Ordinal),
             $"HTTP {traceJsCode} {traceJsBody[..Math.Min(80, traceJsBody.Length)]}");
-        var (traceCssCode, traceCssBody) = await HttpGetAsync($"{panel}/trace.css");
-        var (dashCode, dashBody) = await HttpGetAsync($"{panel}/api/dashboard");
+        var (traceCssCode, traceCssBody) = await SessionGetAsync($"{panel}/trace.css");
+        var (dashCode, dashBody) = await SessionGetAsync($"{panel}/api/dashboard");
         var dashRoot = JsonNode.Parse(dashBody) as JsonObject ?? new JsonObject();
         Check("★ /api/dashboard 一屏给全（运行 / 延迟 / 内存 / 工具 / 权限 / 轨迹，全是只读汇总）",
             dashCode == 200 && dashRoot["uptimeSeconds"] is not null && dashRoot["latencyMs"] is not null
@@ -169,7 +201,7 @@ public static partial class Program
             && (dashRoot["memory"] as JsonObject)?["usedBytes"] is not null
             && (dashRoot["traces"] as JsonObject)?["capacity"]?.GetValue<int>() == 50,
             $"HTTP {dashCode} {dashBody[..Math.Min(160, dashBody.Length)]}");
-        var (dashJsCode, _) = await HttpGetAsync($"{panel}/dash.js");
+        var (dashJsCode, _) = await SessionGetAsync($"{panel}/dash.js");
         Check("面板发得出 /dash.js（仪表盘脚本）", dashJsCode == 200, $"HTTP {dashJsCode}");
 
         Check("面板发得出 /trace.css（追踪页样式）",
@@ -177,7 +209,7 @@ public static partial class Program
             $"HTTP {traceCssCode} {traceCssBody[..Math.Min(80, traceCssBody.Length)]}");
 
         // 批次 C：决策轨迹的只读数据面（形状检查；轨迹内容的语义由 SafetyProbe 的台账断言钉住）
-        var (tracesCode, tracesBody) = await HttpGetAsync($"{panel}/api/traces");
+        var (tracesCode, tracesBody) = await SessionGetAsync($"{panel}/api/traces");
         var tracesRoot = JsonNode.Parse(tracesBody) as JsonObject ?? new JsonObject();
         Check("★ /api/traces 可读（一轮一条轨迹，容量 50，可空）",
             tracesCode == 200 && tracesRoot["available"]?.GetValue<bool>() == true

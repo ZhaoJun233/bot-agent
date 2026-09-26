@@ -133,7 +133,7 @@ public sealed class BotAgentHost : IDisposable
         }
 
         var conversation = _registry.Find(sourceKey);
-        if (conversation is null)
+        if (conversation is null || !_registry.AllowsKey(sourceKey))
         {
             return false;
         }

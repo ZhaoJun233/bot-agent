@@ -52,7 +52,7 @@ public static partial class Program
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using var http = CreatePanelHttpClient(panelPort, 30);
 
         // ---- 1) 正常来一条消息（机器人回一句），这条之后会被撤回 ----
         const string secret = "这句话马上就会被撤回XYZ";
@@ -92,7 +92,7 @@ public static partial class Program
             recallSends.All(a => QuotedMessageId(a) is null));
 
         // 面板要能看出这条被撤回了（运维视角看得到原文，但要标明模型看不到）
-        var (convStatus, convBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/conversations/group%3A{groupId}");
+        var (convStatus, convBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/conversations/group%3A{groupId}");
         Check("★ 面板接口把这条标成 recalled（前端会划掉并注明）",
             convStatus == 200 && convBody.Contains("\"recalled\":true"), convBody.Length > 200 ? convBody[^200..] : convBody);
 
@@ -153,7 +153,7 @@ public static partial class Program
             !PrivateSendsSince(protocol, correctedMark).Any(),
             $"撤回后又发了 {PrivateSendsSince(protocol, correctedMark).Count} 条");
 
-        var (corrStatus, corrBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/conversations/private%3A{friendId2}");
+        var (corrStatus, corrBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/conversations/private%3A{friendId2}");
         Check("★ 手误更正的那条在面板里也是 recalled（标记与点评分开决策）",
             corrStatus == 200 && corrBody.Contains("\"recalled\":true"),
             corrBody.Length > 200 ? corrBody[^200..] : corrBody);

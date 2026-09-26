@@ -96,11 +96,11 @@ public static partial class Program
             $"Authorization={Redact(fallbackAuth)}");
 
         // ── ② 面板填密钥 → 只回形状，不回显明文 ──
-        var (setCode, setBody) = await PostJsonAsync($"{panel}/api/settings",
+        var (setCode, setBody) = await PanelPostJsonAsync($"{panel}/api/settings",
             $$"""{"agentServerKey":"{{agentKey}}"}""");
         Check("面板能保存服务器 agent 的密钥", setCode == 200, $"HTTP {setCode}");
 
-        var (getCode, getBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (getCode, getBody) = await PanelGetAsync($"{panel}/api/settings");
         var settings = (JsonNode.Parse(getBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("GET /api/settings 正常", getCode == 200 && settings.Count > 0, $"HTTP {getCode}");
         Check("★ 面板看到的是「已设置」+ 掩码（前 4 位 + ****），不是明文",
@@ -132,10 +132,10 @@ public static partial class Program
             settingsJson.Contains(agentKey) ? "settings 里出现了明文密钥" : "settings 里出现了 agentServerKey 字段");
 
         // ── ⑤ 清空 → 回退环境变量 / 聊天那把 ──
-        var (clearCode, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerKey":""}""");
+        var (clearCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"agentServerKey":""}""");
         Check("面板能清空服务器 agent 的密钥", clearCode == 200, $"HTTP {clearCode}");
 
-        var (afterCode, afterBody) = await HttpGetAsync($"{panel}/api/settings");
+        var (afterCode, afterBody) = await PanelGetAsync($"{panel}/api/settings");
         var after = (JsonNode.Parse(afterBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 清空后来源不再标 panel（未单独配 = 会用聊天那把）",
             afterCode == 200 &&

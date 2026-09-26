@@ -136,10 +136,10 @@ public static partial class Program
             Sent().Any(t => t.Contains("看完了")), string.Join(" | ", Sent().TakeLast(3)));
 
         // ── ② 面板打开开关 ──
-        var (code, _) = await PostJsonAsync($"{panel}/api/settings", """{"agentServerDocker":true}""");
+        var (code, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"agentServerDocker":true}""");
         Check("面板能打开「允许 agent 透过 docker 操作服务器」", code == 200, $"HTTP {code}");
 
-        var (_, body) = await HttpGetAsync($"{panel}/api/settings");
+        var (_, body) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(body) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("★ 面板回读里这个开关是开着的（保存真的生效，不是只写了个字段）",
             runtime["agentServerDocker"]?.GetValue<bool>() == true,

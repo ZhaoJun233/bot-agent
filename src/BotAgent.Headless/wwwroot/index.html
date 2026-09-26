@@ -350,6 +350,11 @@
                       <span class="switch"></span>
                       <span>记住上下文</span>
                     </label>
+                    <label class="agent-toggle-row">
+                      <input type="checkbox" id="agentActionDetailsToggle" />
+                      <span class="switch"></span>
+                      <span>显示动作补充描述</span>
+                    </label>
                     <span class="agent-config-note">保存后对新任务生效，运行中的任务不受影响。</span>
                   </div>
                 </div>
@@ -1600,6 +1605,8 @@
   <button data-act="read">标为已读</button>
   <button data-act="profile">查看成员档案</button>
   <button data-act="archive">查看归档历史</button>
+  <button data-act="rename">重命名会话</button>
+  <button data-act="clear">清空会话历史</button>
   <button data-act="delete" class="danger">删除会话</button>
 </div>
 

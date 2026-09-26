@@ -51,7 +51,7 @@ jobs:
           node tests/BotAgent.FrontendProbe/probe.mjs
       - name: Synthetic integration smoke test
         env:
-          QQCHAT_IT_ONLY: s1
+          QQCHAT_IT_ONLY: s1,s49
         run: |
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
           dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll

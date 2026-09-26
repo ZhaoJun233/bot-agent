@@ -205,7 +205,7 @@ public static partial class Program
             $"过期日志：{expiredLogged}；触发后的请求数 {promptsAfterExpiry.Count}；" +
             $"还带着旧心情吗：{moodSections.Any(s => s.Contains("测试心情xyz"))}；实际心情段：{string.Join(" ｜ ", moodSections)}");
 
-        var (_, moodBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (_, moodBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("过期后设置接口里的心情字段也被清空（面板不再显示一句不算数的心情）",
             moodBody.Contains("\"mood\":\"\""),
             Truncate(System.Text.RegularExpressions.Regex.Match(moodBody, "\"mood\":[^,]*").Value, 80));
@@ -254,7 +254,7 @@ public static partial class Program
         // ---- 5) 防编造：模型报个上下文里没有的号，不能真去戳人 ----
         // 先把主动戳人的冷却改成 0 —— 否则一条“戳人才 20 秒”的频率门会把这一步也拦下，
         // 断言就又变成假绿（把号码校验退回去也不会红）。
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        using (var http = CreatePanelHttpClient(panelPort, 10))
         {
             using var content = new StringContent("{\"pokeCooldownSeconds\":0}", Encoding.UTF8, "application/json");
             using var res = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", content, cts.Token);
@@ -278,7 +278,7 @@ public static partial class Program
                 .Select(a => a["params"]?.ToJsonString())));
 
         // ---- 6) 设置页能读写这两个开关 ----
-        var (settingsStatus, settingsBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         var pokeFields = string.Join(" ", System.Text.RegularExpressions.Regex
             .Matches(settingsBody, "\"enablePoke\":\\w+|\"pokeCooldownSeconds\":\\d+")
             .Select(m => m.Value));        Check("设置接口暴露 enablePoke / pokeCooldownSeconds（并能改）",

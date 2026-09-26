@@ -67,11 +67,13 @@
       configDirty: false,
       configSaving: false,
       sessionsOpen: false,
-      inspectorOpen: false
+      inspectorOpen: false,
+       showActionDetails: true
     }
   };
 
   const AGENT_LAYOUT_STORAGE_KEY = "botagent.agent.layout.v1";
+  const AGENT_ACTION_DETAILS_STORAGE_KEY = "botagent.agent.action-details.v1";
   const AGENT_LAYOUT_DEFAULTS = { sessionsWidth: 220, composerHeight: 270 };
   /* ─────────── 工具 ─────────── */
 
@@ -2870,7 +2872,7 @@ function renderChannelStatus(channels) {
       head.appendChild(agentNode("strong", "", role === "user" ? "你" : "Agent"));
       head.appendChild(agentNode("span", "", message.status || (role === "user" ? "已提交" : "已完成")));
       bubble.appendChild(head);
-      if (message.meta) bubble.appendChild(agentNode("div", "agent-message-meta", message.meta));
+      if (state.agent.showActionDetails && message.meta) bubble.appendChild(agentNode("div", "agent-message-meta", message.meta));
       bubble.appendChild(agentNode("p", "agent-message-text", message.text || ""));
       stream.insertBefore(bubble, empty);
     }
@@ -3123,6 +3125,14 @@ function renderChannelStatus(channels) {
     $("agentServerWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentApprovalsToggle").addEventListener("change", markAgentConfigDirty);
     $("agentContextToggle").addEventListener("change", markAgentConfigDirty);
+    const actionDetailsToggle = $("agentActionDetailsToggle");
+    state.agent.showActionDetails = storeGet(AGENT_ACTION_DETAILS_STORAGE_KEY) !== "0";
+    actionDetailsToggle.checked = state.agent.showActionDetails;
+    actionDetailsToggle.addEventListener("change", () => {
+      state.agent.showActionDetails = actionDetailsToggle.checked;
+      storeSet(AGENT_ACTION_DETAILS_STORAGE_KEY, actionDetailsToggle.checked ? "1" : "0");
+      renderAgentConversation();
+    });
     $("agentPermissionPreset").addEventListener("change", (event) => {
       const presets = {
         safe: ["read", "fetch"],
@@ -3358,6 +3368,26 @@ function renderChannelStatus(channels) {
 
       if (act === "read") {
         await fetch(withToken(`/api/conversations/${encodeURIComponent(key)}/read`), { method: "POST", headers: authHeaders() }).catch(() => {});
+      } else if (act === "rename") {
+        const c = state.byKey.get(key);
+        const title = prompt("新的会话名称：", c?.nameRaw || c?.name || "");
+        if (title === null || !title.trim()) return;
+        try {
+          await api(`/api/conversations/${encodeURIComponent(key)}/rename`, { method: "POST", body: JSON.stringify({ name: title.trim() }) });
+          toast("会话已改名");
+        } catch (e) {
+          toast("改名失败：" + (e.data?.error || e.message));
+        }
+      } else if (act === "clear") {
+        if (!confirm("清空这个会话的消息与归档历史？会话入口会保留。")) return;
+        try {
+          await api(`/api/conversations/${encodeURIComponent(key)}/clear`, { method: "POST" });
+          state.messages.set(key, []);
+          if (state.activeKey === key) renderMessages();
+          toast("会话历史已清空");
+        } catch (e) {
+          toast("清空失败：" + (e.data?.error || e.message));
+        }
       } else if (act === "delete") {
         if (!confirm("确定删除这个会话？会话记录会一并从磁盘移除。")) return;
         await fetch(withToken(`/api/conversations/${encodeURIComponent(key)}/delete`), { method: "POST", headers: authHeaders() }).catch(() => {});

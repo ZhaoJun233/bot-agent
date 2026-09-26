@@ -90,6 +90,17 @@ public sealed class BotConversation
         }
     }
 
+    /// <summary>清空当前会话的活动消息，保留会话本身与单调序号。</summary>
+    public void ClearMessages()
+    {
+        lock (_gate)
+        {
+            _messages.Clear();
+            Unread = 0;
+            LastTime = Clock.Now;
+        }
+    }
+
     /// <summary>标记已读（返回是否发生变化）。</summary>
     public bool MarkRead()
     {

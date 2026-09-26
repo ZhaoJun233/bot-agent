@@ -29,6 +29,6 @@ public interface IConversationRepository
     /// <summary>归档条数（面板展示与"要不要继续翻旧账"用）。</summary>
     long ArchiveCount(string sourceKey);
 
-    /// <summary>清空某会话的消息（<c>//reset</c> 用；归档不动）。</summary>
+    /// <summary>清空某会话的活动与归档消息，但保留会话入口。</summary>
     void DeleteMessages(string sourceKey);
 }

@@ -28,6 +28,7 @@ public sealed class ConversationRegistry
     private readonly List<BotConversation> _conversations = new();
     private int _savePending;
     private long _saveVersion;
+    private readonly object _saveIoGate = new();
 
     public ConversationRegistry(
         IConversationRepository store,
@@ -127,24 +128,82 @@ public sealed class ConversationRegistry
     public BotConversation? Delete(string sourceKey)
     {
         BotConversation? conversation;
-        lock (_gate)
+        lock (_saveIoGate)
         {
-            conversation = _conversations.FirstOrDefault(c => c.SourceKey == sourceKey);
-            if (conversation is null)
+            lock (_gate)
             {
-                return null;
+                conversation = _conversations.FirstOrDefault(c => c.SourceKey == sourceKey);
+                if (conversation is null)
+                {
+                    return null;
+                }
+
+                _conversations.Remove(conversation);
             }
 
-            _conversations.Remove(conversation);
+            _store.DeleteConversation(sourceKey);
+            SaveNow();
         }
 
-        _store.DeleteConversation(sourceKey);
-        Save();
         Changed?.Invoke();
         Deleted?.Invoke(conversation);
         return conversation;
     }
+    /// <summary>面板发送前的通道闸门查询；恢复历史不等于放宽发送权限。</summary>
+    public bool AllowsKey(string sourceKey) => _isWhitelistedKey(sourceKey);
 
+    /// <summary>给面板会话改名并持久化。</summary>
+    public bool Rename(string sourceKey, string name)
+    {
+        var value = (name ?? string.Empty).Trim();
+        if (value.Length == 0 || value.Length > 80)
+        {
+            return false;
+        }
+
+        lock (_saveIoGate)
+        {
+            lock (_gate)
+            {
+                var conversation = _conversations.FirstOrDefault(c => c.SourceKey == sourceKey);
+                if (conversation is null)
+                {
+                    return false;
+                }
+
+                conversation.Name = value;
+            }
+
+            SaveNow();
+        }
+
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>清空面板会话的活动消息与归档消息，但保留会话入口。</summary>
+    public bool ClearMessages(string sourceKey)
+    {
+        lock (_saveIoGate)
+        {
+            lock (_gate)
+            {
+                var conversation = _conversations.FirstOrDefault(c => c.SourceKey == sourceKey);
+                if (conversation is null)
+                {
+                    return false;
+                }
+
+                conversation.ClearMessages();
+            }
+
+            _store.DeleteMessages(sourceKey);
+            SaveNow();
+        }
+
+        Changed?.Invoke();
+        return true;
+    }
     /// <summary>标记会话已读（真的从“未读”变成“已读”时才通知）。</summary>
     public void MarkRead(string sourceKey)
     {
@@ -172,7 +231,7 @@ public sealed class ConversationRegistry
             var restored = 0;
             foreach (var record in records)
             {
-                if (string.IsNullOrWhiteSpace(record.SourceKey) || !_isWhitelistedKey(record.SourceKey))
+                if (string.IsNullOrWhiteSpace(record.SourceKey))
                 {
                     continue;
                 }
@@ -187,9 +246,10 @@ public sealed class ConversationRegistry
                     var restoredConv = BotConversation.FromRecord(record, _settings.MaxMessagesPerConversation, ArchiveEvicted);
                     _conversations.Add(restoredConv);
 
-                    // 告诉聚合器这条会话属于哪条通道：重启后面板代发、主动消息都得靠它选对通道
+                    // 历史会话即使当前不在白名单也要恢复，供面板查询与审计回看；
+                    // 只有仍在白名单的会话才登记为可发送目标。
                     var (restoredIsGroup, restoredId) = restoredConv.Target;
-                    if (restoredId > 0)
+                    if (restoredId > 0 && _isWhitelistedKey(record.SourceKey))
                     {
                         _source.RegisterTarget(restoredConv.Channel, restoredIsGroup, restoredId);
                     }
@@ -226,6 +286,27 @@ public sealed class ConversationRegistry
     }
 
     /// <summary>
+    /// 立即保存一份最新快照，供面板的改名、清空、删除等显式管理操作使用。
+    /// 手动操作不能在 HTTP 响应返回后还停留在 150ms 合并窗口里，否则进程紧接着重启时会丢改动。
+    /// </summary>
+    private void SaveNow()
+    {
+        Interlocked.Increment(ref _saveVersion);
+        WriteSnapshot();
+    }
+
+    private void WriteSnapshot()
+    {
+        List<ConversationRecord> records;
+        lock (_gate)
+        {
+            records = _conversations.Select(c => c.ToRecord()).ToList();
+        }
+
+        _store.RequestSave(records);
+    }
+
+    /// <summary>
     /// 持久化循环（后台线程）。
     /// 以前这个在**WS 接收线程上同步**执行，而且 ToRecord() 是对所有会话做深拷贝 ——
     /// 消息一多就会直接阻塞收消息。现在改成后台任务 + 合并窗口 + 版本号重检。
@@ -240,13 +321,10 @@ public sealed class ConversationRegistry
 
                 await Clock.Delay(150); // 合并窗口：短时间内的多次变更只写一次盘
 
-                List<ConversationRecord> records;
-                lock (_gate)
+                lock (_saveIoGate)
                 {
-                    records = _conversations.Select(c => c.ToRecord()).ToList();
+                    WriteSnapshot();
                 }
-
-                _store.RequestSave(records);
 
                 // 先放行，再检查期间是否有新变更 ——
                 // 顺序不能反，否则会在临界区漏掉最后一次保存。

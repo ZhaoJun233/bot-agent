@@ -51,7 +51,7 @@ public static partial class Program
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
 
-        var (_, settings) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (_, settings) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 面板能读到这个开关（默认关，这里是按环境变量开着的）",
             settings.Contains("\"ignoreBracketMessages\":true"), Snippet(settings, "ignoreBracketMessages"));
 
@@ -160,7 +160,7 @@ public static partial class Program
             DbProbe.Dump(dataDir, "SELECT text FROM messages WHERE text LIKE '%图%'"));
 
         // ---- 9) 关掉开关 → 旁白原样保留（不标注）----
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using var http = CreatePanelHttpClient(panelPort, 30);
         using (var offResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
                    new StringContent("""{"ignoreBracketMessages":false}""", Encoding.UTF8, "application/json"), cts.Token))
         {

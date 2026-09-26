@@ -60,7 +60,7 @@ public static partial class Program
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
 
-        var (status, body) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (status, body) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 音乐相关配置生效（开关默认开 / 音源模板 / 码率 / 分析上限）",
             status == 200 && body.Contains("\"enableMusic\":true") &&
             body.Contains("\"musicMaxAnalysisSeconds\":60") && body.Contains("audio/{id}.mp3"),
@@ -147,7 +147,7 @@ public static partial class Program
             fallback is not null && fallback.Contains("分享了一首歌"));
 
         // ---- 3) 关掉开关就完全不碰音乐（也不下载）----
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var http = CreatePanelHttpClient(panelPort, 10);
         var saveRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
             new StringContent("""{"enableMusic":false}""", Encoding.UTF8, "application/json"), cts.Token);
         Check("★ 面板可以关掉听音乐", saveRes.IsSuccessStatusCode, $"HTTP {(int)saveRes.StatusCode}");
@@ -317,7 +317,8 @@ public static partial class Program
         await WaitForPortAsync(18140, cts.Token, bot3);
         await Task.Delay(800);
         music.LastCookieReset();
-        using (var mt3 = await http.PostAsync("http://127.0.0.1:18140/api/music/test",
+        using var envPanelHttp = CreatePanelHttpClient(18140, 10);
+        using (var mt3 = await envPanelHttp.PostAsync("http://127.0.0.1:18140/api/music/test",
                    new StringContent("{\"song\":\"测试小夜曲 测试歌手\"}", Encoding.UTF8, "application/json"), cts.Token))
         {
             await mt3.Content.ReadAsStringAsync(cts.Token);

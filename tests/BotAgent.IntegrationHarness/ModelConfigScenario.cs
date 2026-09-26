@@ -52,8 +52,34 @@ public static partial class Program
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await WaitUntilAsync(() => bot.OutputLines.Any(l => l.Contains("已启动")), TimeSpan.FromSeconds(20));
 
+        var settingsUrl = $"http://127.0.0.1:{panelPort}/api/settings";
+        var (anonymousCode, _) = await HttpGetAsync(settingsUrl);
+        Check("未登录读取设置返回 401", anonymousCode == 401, $"HTTP {anonymousCode}");
+        var (wrongTokenCode, _) = await HttpGetAsync(settingsUrl, "synthetic-wrong-panel-token");
+        Check("错误面板令牌读取设置返回 401", wrongTokenCode == 401, $"HTTP {wrongTokenCode}");
+        var (anonymousWriteCode, _) = await PostJsonAsync(settingsUrl, "{\"model\":\"must-not-save\"}");
+        Check("未登录修改设置返回 401", anonymousWriteCode == 401, $"HTTP {anonymousWriteCode}");
+        var (wrongWriteCode, _) = await PostJsonAsync(settingsUrl, "{\"model\":\"must-not-save\"}", "synthetic-wrong-panel-token");
+        Check("错误面板令牌修改设置返回 401", wrongWriteCode == 401, $"HTTP {wrongWriteCode}");
+        using (var guardedHttp = CreatePanelHttpClient(panelPort, 5))
+        {
+            using var crossOrigin = new HttpRequestMessage(HttpMethod.Post, settingsUrl)
+            {
+                Content = new StringContent("{\"model\":\"must-not-save\"}", Encoding.UTF8, "application/json")
+            };
+            crossOrigin.Headers.Add("Origin", "https://example.com");
+            using var rejected = await guardedHttp.SendAsync(crossOrigin, cts.Token);
+            Check("合法令牌不能绕过跨源写入保护", rejected.StatusCode == System.Net.HttpStatusCode.Forbidden,
+                $"HTTP {(int)rejected.StatusCode}");
+            var modelRequests = openAiA.Requests.Count;
+            var blocked = false;
+            try { using var unexpected = await guardedHttp.GetAsync(openAiA.BaseUrl + "/models", cts.Token); }
+            catch (InvalidOperationException) { blocked = true; }
+            Check("面板夹具拒绝向其他端口发送认证令牌", blocked && openAiA.Requests.Count == modelRequests);
+        }
+
         // ---- 1) 起点：环境变量的值与来源都要如实报出来 ----
-        var (s0, body0) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (s0, body0) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("初始配置来自环境变量（面板能看见来源）",
             s0 == 200 && body0.Contains($"\"{openAiA.BaseUrl}\"") &&
             body0.Contains("\"modelBaseUrlSource\":\"env\"") && body0.Contains("\"apiKeySource\":\"env\""),
@@ -72,7 +98,7 @@ public static partial class Program
             ["model"] = "model-from-panel",
             ["apiKey"] = newKey
         };
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        using (var http = CreatePanelHttpClient(panelPort, 10))
         {
             using var content = new StringContent(patch.ToJsonString(), Encoding.UTF8, "application/json");
             using var res = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", content, cts.Token);
@@ -106,13 +132,13 @@ public static partial class Program
                 mode == (UnixFileMode.UserRead | UnixFileMode.UserWrite), mode.ToString());
         }
 
-        var (_, body1) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (_, body1) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("面板只回显掩码（不回显明文密钥）",
             !body1.Contains(newKey) && body1.Contains("\"apiKeySource\":\"panel\"") && body1.Contains("\"modelBaseUrlSource\":\"panel\""),
             Truncate(body1, 400));
 
         // ---- 5) 无效 URL 要被挡下，不能把配置写坏 ----
-        using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+        using (var http = CreatePanelHttpClient(panelPort, 10))
         {
             using var badContent = new StringContent("{\"modelBaseUrl\":\"不是个地址\"}", Encoding.UTF8, "application/json");
             using var badRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", badContent, cts.Token);
@@ -143,7 +169,7 @@ public static partial class Program
             //   2026-09-19 加：实测同一条链路上“关思考”的参数（reasoning_effort / thinking.type=disabled /
             //   thinking_budget=0）全部无效（首字依旧 ~6.6s），真正能提速的是换轻量档（快 2~3 倍），
             //   所以开关做成“聊天回复换模型”；这里钉住：开着用快速模型、关掉回主模型。
-            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+            using (var http = CreatePanelHttpClient(panelPort, 10))
             {
                 using var fastContent = new StringContent(
                     new JsonObject { ["fastReply"] = true, ["fastModel"] = "model-fast-x" }.ToJsonString(),
@@ -153,7 +179,7 @@ public static partial class Program
             }
 
             await Task.Delay(500);
-            var (_, settingsFast) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+            var (_, settingsFast) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
             Check("★ 面板回读里有快速档与“这轮实际用哪个模型”",
                 settingsFast.Contains("\"fastReply\":true") && settingsFast.Contains("\"replyModel\":\"model-fast-x\""),
                 Truncate(settingsFast, 200));
@@ -169,7 +195,7 @@ public static partial class Program
             Check("★★ 快速档开着时聊天请求用的是快速模型（而不是主模型）",
                 fastModelInReq == "model-fast-x", $"请求里的 model = {fastModelInReq ?? "(无)"}");
 
-            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+            using (var http = CreatePanelHttpClient(panelPort, 10))
             {
                 using var offContent = new StringContent("{\"fastReply\":false}", Encoding.UTF8, "application/json");
                 using var offRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", offContent, cts.Token);
@@ -187,7 +213,7 @@ public static partial class Program
                 backModelInReq == "model-from-panel", $"请求里的 model = {backModelInReq ?? "(无)"}");
 
             // ---- 7) 清空密钥 → 回退环境变量 ----
-            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+            using (var http = CreatePanelHttpClient(panelPort, 10))
             {
                 using var clearContent = new StringContent("{\"apiKey\":\"\"}", Encoding.UTF8, "application/json");
                 using var clearRes = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", clearContent, cts.Token);
@@ -196,7 +222,7 @@ public static partial class Program
 
             await Task.Delay(700);
             var secretsAfter = DbProbe.Text(dataDir, "SELECT value FROM secrets WHERE name = 'apiKey'") ?? string.Empty;
-            var (_, body2) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+            var (_, body2) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
             Check("★ 清空后密钥不再存在库里，且来源回到环境变量",
                 !secretsAfter.Contains(newKey) && body2.Contains("\"apiKeySource\":\"env\""),
                 Truncate(body2, 300));

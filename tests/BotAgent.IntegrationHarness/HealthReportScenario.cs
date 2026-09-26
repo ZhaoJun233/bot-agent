@@ -78,8 +78,8 @@ public static partial class Program
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("健康日报")).TakeLast(2)));
 
         // ── ② 面板拿到的是真状态，且按北京时间算 ──
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        var (statusCode, statusBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/health-report");
+        using var http = CreatePanelHttpClient(panelPort, 15);
+        var (statusCode, statusBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/health-report");
         var payload = JsonNode.Parse(statusBody) as JsonObject;
         Check("② 面板接口能读到配置（开关/时刻/收件人）",
             statusCode == 200 && payload?["enabled"]?.GetValue<bool>() == true &&
@@ -214,7 +214,7 @@ public static partial class Program
 
     private static async Task<string> ReadHealthReportAsync(int panelPort)
     {
-        var (_, body) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/health-report");
+        var (_, body) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/health-report");
         return body;
     }
 

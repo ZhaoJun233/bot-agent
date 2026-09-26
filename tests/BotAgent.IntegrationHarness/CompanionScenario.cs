@@ -58,7 +58,7 @@ public static partial class Program
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using var http = CreatePanelHttpClient(panelPort, 30);
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
         await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
@@ -153,7 +153,7 @@ public static partial class Program
 
         // ---- 6) 面板能开关主动、也能读到这两项 −---
         await PatchSettingsAsync("""{"enableProactive":false}""");
-        var (_, settings) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
+        var (_, settings) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 面板能关掉主动开口，且能读到安静/冷却两个参数",
             settings.Contains("\"enableProactive\":false") && settings.Contains("\"proactiveQuietSeconds\":1") &&
             settings.Contains("\"proactiveCooldownSeconds\":60"),
