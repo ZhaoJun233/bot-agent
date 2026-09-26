@@ -9,7 +9,7 @@ namespace BotAgent.Adapters.Persistence;
 /// <summary>
 /// **Agent 执行会话**：每个聊天（群/好友）下面直接挂一串执行会话。
 ///
-/// 号主 2026-09-17 定的口径（走过一次两层模型，被否了）：
+/// 管理员 2026-09-17 定的口径（走过一次两层模型，被否了）：
 ///   “干脆不给群聊单独会话，直接改为统一 Agent 执行会话” ——
 ///   所以这里**只有一层**：会话 = 执行会话（话题/档位/分组都不需要）。
 ///   每个会话自己带：名字（自动标题/可改名）、后端（外部设备 / 服务器内置）、
@@ -94,7 +94,7 @@ public sealed class AgentSessionStore : IAgentSessionStore
     /// 找“用户现在正在看的那个会话”（//rename //runs //reset 这类不带目标位的命令用）。
     /// 优先“下一句指令会走”那个后端的当前会话；那边没有就退到最近用过的那个。
     /// **绝不新建** —— 否则一句 //rename 会在另一个后端凭空造出一个空会话并给它改名（
-    /// 实测踩过：号主改的是“外部设备那个跑过 4 轮的会话”，结果建了个空的服务器会话）。
+    /// 实测踩过：管理员改的是“外部设备那个跑过 4 轮的会话”，结果建了个空的服务器会话）。
     /// </summary>
     public AgentSession? FindCurrent(string sourceKey, string preferBackend)
     {
@@ -664,7 +664,7 @@ public sealed class AgentSessionStore : IAgentSessionStore
             return null;
         }
 
-        // 老格式：数据在 execs[] 里（一个话题下的小会话）→ 摊平成多个会话（号主要的就是扁平的）
+        // 老格式：数据在 execs[] 里（一个话题下的小会话）→ 摊平成多个会话（管理员要的就是扁平的）
         if (item.TryGetProperty("execs", out var execs) && execs.ValueKind == JsonValueKind.Array)
         {
             var parentName = Str(item, "name") ?? "会话";

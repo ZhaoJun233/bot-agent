@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Ops;
 using BotAgent.Domain.Rendering;
@@ -28,6 +29,7 @@ public sealed class PlainSender : IQqMessageSender
     private readonly OwnMessageLedger _ownLedger;
     private readonly Action<string> _log;
     private readonly TurnTraceStore _traces;
+    private readonly IAuditChain? _audit;
 
     public PlainSender(
         SettingsBox box,
@@ -36,7 +38,8 @@ public sealed class PlainSender : IQqMessageSender
         PanelNotifier ui,
         OwnMessageLedger ownLedger,
         Action<string> log,
-        TurnTraceStore traces)
+        TurnTraceStore traces,
+        IAuditChain? audit = null)
     {
         _box = box;
         _source = source;
@@ -45,6 +48,7 @@ public sealed class PlainSender : IQqMessageSender
         _ownLedger = ownLedger;
         _log = log;
         _traces = traces;
+        _audit = audit;
     }
 
     private AppSettings _settings => _box.Current;
@@ -61,6 +65,7 @@ public sealed class PlainSender : IQqMessageSender
         var audit = ReplyAuditRules.Judge(reply, allowLocalPaths: false);
         if (audit != ReplyAuditVerdict.Allow)
         {
+            RecordDlpBlock(audit, "chat", reply.Length);
             _log($"[审计] 这条回复不发（{ReplyAuditRules.Code(audit)}；{reply.Length} 字）");
             return false;
         }
@@ -129,6 +134,7 @@ public sealed class PlainSender : IQqMessageSender
         var audit = ReplyAuditRules.Judge(text, allowLocalPaths: true);
         if (audit != ReplyAuditVerdict.Allow)
         {
+            RecordDlpBlock(audit, "agent", text.Length);
             _log($"[审计] agent 回话不发（{ReplyAuditRules.Code(audit)}；{text.Length} 字）");
             _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, "blocked", reasonCode: ReplyAuditRules.Code(audit));
             return;
@@ -160,6 +166,29 @@ public sealed class PlainSender : IQqMessageSender
         _registry.Save();
     }
 
+    private void RecordDlpBlock(ReplyAuditVerdict verdict, string route, int length)
+    {
+        if (_audit is null)
+        {
+            return;
+        }
+
+        var detail = JsonSerializer.Serialize(new
+        {
+            result = "blocked",
+            route,
+            reason = ReplyAuditRules.Code(verdict),
+            length = Math.Max(0, length)
+        });
+        try
+        {
+            _audit.Append(new AuditEvent("dlp_block", "reply-pipeline", "redacted", detail, "2.1"));
+        }
+        catch (Exception ex)
+        {
+            _log($"[审计] DLP 事件写入失败（{ex.GetType().Name}）");
+        }
+    }
     /// <summary>把审批回执发回原会话（走既有发送链路；失败只记日志，不影响别的会话）。</summary>
     public async Task SendApprovalReplyAsync(QqChatMessage msg, string text)
     {

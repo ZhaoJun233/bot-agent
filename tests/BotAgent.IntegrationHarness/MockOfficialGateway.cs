@@ -9,7 +9,7 @@ namespace BotAgent.IntegrationHarness;
 /// <summary>
 /// 假「QQ 官方机器人开放平台」（Bot API v2）：HTTP 接口 + 一个 WebSocket 网关。
 ///
-/// 为什么需要它：官方通道的凭据是号主自己在开放平台申请的，测试里不可能有；
+/// 为什么需要它：官方通道的凭据是管理员自己在开放平台申请的，测试里不可能有；
 /// 而这条链路上最危险的恰恰是协议细节（token 头是 <c>QQBot</c> 不是 <c>Bearer</c>、
 /// identify 的 intents、被动回复的 msg_id/msg_seq、语音要走富媒体 file_type=3 + msg_type=7）。
 /// 用假网关把这些细节**钉死**，真上线时只剩“凭据 + IP 白名单”两件事要人工确认。

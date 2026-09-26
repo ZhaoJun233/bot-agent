@@ -118,6 +118,8 @@ public sealed partial class WebUiServer
         // 定时类功能：开关/时刻/收件人变了一定要重排定时器，否则“改了不生效”（要重启才变）
         _healthReports?.Reapply();
 
+        AppendSettingsAudit(body);
+
         await WriteJsonAsync(context, 200, BuildSettingsPayload());
     }
 
@@ -552,7 +554,7 @@ public sealed partial class WebUiServer
                 ["messageWhitelist"] = s.MessageWhitelist,
         ["whitelistGroups"] = s.WhitelistGroups,
         ["whitelistPrivates"] = s.WhitelistPrivates,
-        // 留空的那一边会回落到旧的共用名单 —— 面板要如实告知，不然号主会以为新框填了没生效
+        // 留空的那一边会回落到旧的共用名单 —— 面板要如实告知，不然管理员会以为新框填了没生效
         ["whitelistGroupsFromLegacy"] = string.IsNullOrWhiteSpace(s.WhitelistGroups) && s.MessageWhitelist.Length > 0,
         ["whitelistPrivatesFromLegacy"] = string.IsNullOrWhiteSpace(s.WhitelistPrivates) && s.MessageWhitelist.Length > 0,
                 ["aiDesire"] = s.AiDesire,

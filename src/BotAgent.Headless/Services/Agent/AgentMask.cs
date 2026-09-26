@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace BotAgent.Services.Agent;
 
 /// <summary>
-/// 脱敏：把“群名 / 昵称 / QQ 号”这类能指认到人的东西遮掉（号主 2026-09-17 要的开关）。
+/// 脱敏：把“群名 / 昵称 / QQ 号”这类能指认到人的东西遮掉（管理员 2026-09-17 要的开关）。
 ///
 /// 用在哪：**列出会话**这类场景 —— 群里的 <c>//sessions</c> / <c>//sessions all</c> / <c>//runs</c> / <c>//pi</c>
 /// 回复、面板的会话列表与总览、面板里显示聊天名的地方。

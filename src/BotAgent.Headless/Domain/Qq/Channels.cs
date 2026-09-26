@@ -6,7 +6,7 @@ namespace BotAgent.Domain.Qq;
 /// 通道（渠道）常量，以及「会话 key ⇄ 通道」的换算。
 ///
 /// 为什么要有这个概念：机器人现在同时接两路上行 ——
-///   • <see cref="Private"/>：**私域**，自建协议端（NapCat / OneBot，号主自己的 QQ 号）；
+///   • <see cref="Private"/>：**私域**，自建协议端（NapCat / OneBot，管理员自己的 QQ 号）；
 ///   • <see cref="Official"/>：**官方**，QQ 开放平台（appid + 官方网关，用户是 openid）。
 /// 两边的 QQ 号/群号体系完全不同（一边是数字 QQ 号，一边是 openid 字符串），
 /// 上下文、人设、白名单、长期记忆必须**严格隔离** —— 否则官方那边一个 openid 撞上群号，

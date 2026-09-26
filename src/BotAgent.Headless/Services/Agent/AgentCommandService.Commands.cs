@@ -62,11 +62,11 @@ public sealed partial class AgentCommandService
         }
 
         // 图片：agent 任务以前只传正文，图片在那条消息里只剩一个「[图片]」占位 —— 两个后端
-        // 都看不到图（号主 2026-09-19 报“给 agent 发图片识别不了”）。把直链与“服务器留档”
+        // 都看不到图（管理员 2026-09-19 报“给 agent 发图片识别不了”）。把直链与“服务器留档”
         // 一起写进任务正文，不动桥的报文格式（两边都吃纯文本）。
         payload += await BuildAgentImageNoteAsync(msg);
 
-        // ── 这一条走哪边？（号主 2026-09-17：两个开关各自管一边，还能单条指定）──
+        // ── 这一条走哪边？（管理员 2026-09-17：两个开关各自管一边，还能单条指定）──
         //   ① 命令里带 @ 目标：`//@server …` / `//@host …` / `//@ZHAOSPC …`（优先级最高）
         //   ② 否则看 settings.AgentTarget：auto = 外部在线就用外部，否则服务器；server / host / 设备名 = 指定
         //   ③ 选中的那边被开关关了 / 不在线 → 若还有另一边可用就用另一边，否则如实报错
@@ -108,7 +108,7 @@ public sealed partial class AgentCommandService
     {
         var who = msg.UserId.ToString();
         // 官方通道的“能用 agent 的人”额外认一种写法：把它加进**官方白名单·私聊**
-        // （2026-09-21 号主报的“官方白名单里的人用不了 // 指令”：那边发送者是别名号 8e15 起，
+        // （2026-09-21 管理员报的“官方白名单里的人用不了 // 指令”：那边发送者是别名号 8e15 起，
         //  而 AgentAllowedUsers 里填的是私域真号 ✗ → 永远匹配不上 ✗ 直接被拒）。
         // 为什么只认“私聊白名单”而不认群：群白名单是“这个群可以用命令”的意思太宽了 ——
         // 执行命令的权限必须落到**具体某个人**身上（官方白名单显式列出才算，空 = 全部接受不算 ✗）。
@@ -373,7 +373,7 @@ public sealed partial class AgentCommandService
             }
 
             // 关键：这里**不新建**会话，也不按“下一句会走哪个后端”去找 ——
-            // 否则号主看到的是 A 会话，改的却是 B（甚至凭空建一个空的）；也正好是“rename 改错会话”那个 bug。
+            // 否则管理员看到的是 A 会话，改的却是 B（甚至凭空建一个空的）；也正好是“rename 改错会话”那个 bug。
             var cur = _agentSessions.FindCurrent(conversation.SourceKey, ResolveRoute(want, bridge, named).Backend);
             if (cur is null)
             {
@@ -467,7 +467,7 @@ public sealed partial class AgentCommandService
         {
             // 两个后端各有一份当前会话，而 `//reset` 的语义是“这个聊天的 agent 记忆清空” ——
             // 所以**两边都清**。以前按“下一句会走哪边”只清一边，路由一变就清错：
-            // 号主 `//@某台不在线的设备 …` 实际跑在服务器上，reset 却去清了那台空的外部会话，
+            // 管理员 `//@某台不在线的设备 …` 实际跑在服务器上，reset 却去清了那台空的外部会话，
             // 被污染的历史一直留着（2026-09-18 实测：reset 两次都没用）。
             var cleared = new List<string>();
             foreach (var backendName in new[] { "server", "host" })
@@ -488,7 +488,7 @@ public sealed partial class AgentCommandService
                     await bridge.ForgetSessionAsync(current.PiSessionId);   // 旧的那份 pi 记录清掉
                 }
 
-                // 标题也换回中性的自动名：号主说“reset 并没有删除此会话的全部内容”——
+                // 标题也换回中性的自动名：管理员说“reset 并没有删除此会话的全部内容”——
                 // 历史清了、记录清了，但标题还挂着“服务器资源与容器运行状态”这种旧话题，看着就像没清。
                 if (oldTitle.Length > 0)
                 {
@@ -573,7 +573,7 @@ public sealed partial class AgentCommandService
 
             await _hooks.SendPlainAsync(conversation,
                 bridge.Current is null
-                    ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "号主设备")}上跑一下（会话「{MaybeMask(hostSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}"
+                    ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "管理员设备")}上跑一下（会话「{MaybeMask(hostSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}"
                     : "收到，排在后面 —— 做完我告诉你。");
 
             // 面板里给这台设备配的模型它自己没有 → 提前说一声（不然群里只会看到结果，不知道降级了）

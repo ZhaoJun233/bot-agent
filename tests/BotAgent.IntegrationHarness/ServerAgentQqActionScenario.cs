@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace BotAgent.IntegrationHarness;
 
 /// <summary>
-/// S38 服务器内置 agent 的 **QQ 动作**（号主 2026-09-18：「给服务器内置 agent 一些 napcat qq 的 api 行为调用（比如点赞）」）。
+/// S38 服务器内置 agent 的 **QQ 动作**（管理员 2026-09-18：「给服务器内置 agent 一些 napcat qq 的 api 行为调用（比如点赞）」）。
 ///
 /// 这里钉的五件事：
 ///   ① 模型说「点赞」真的会在 QQ 里发出 `send_like`（且 user_id 能写 `sender` = 发指令的人）；
@@ -24,7 +24,7 @@ public static partial class Program
         const int botWsPort = 13071;
         const int healthPort = 18121;
         const long groupId = 66780;
-        const long ownerId = 20002;         // 白名单里的号主（发指令的人）
+        const long ownerId = 20002;         // 白名单里的管理员（发指令的人）
         const long targetId = 300030003;    // 被点赞/戳的人（9 位：顺便验证回群脱敏）
         const string token = "tok-s38-secret";
 
@@ -98,7 +98,7 @@ public static partial class Program
             ["QQCHAT_AGENT_TARGET"] = "server",
             ["QQCHAT_AGENT_SERVER_URL"] = agentAi.BaseUrl,
             ["QQCHAT_AGENT_SERVER_MODEL"] = "custom-agent-model",
-            // 号主开了 qq 工具（不写这个的话默认是 bash/read/write/fetch 全开，qq 也要显式在名单里）
+            // 管理员开了 qq 工具（不写这个的话默认是 bash/read/write/fetch 全开，qq 也要显式在名单里）
             ["QQCHAT_AGENT_SERVER_TOOLS"] = "bash,read,qq",
             ["QQCHAT_AGENT_PROGRESS"] = "0",
             ["QQCHAT_AGENT_MASK"] = "1"
@@ -147,7 +147,7 @@ public static partial class Program
             like?["params"]?["user_id"]?.GetValue<long>() == ownerId &&
             like?["params"]?["times"]?.GetValue<int>() == 3,
             like?.ToJsonString() ?? "(没收到动作)");
-        Check("★ 结论回到群里（号主知道做成了）",
+        Check("★ 结论回到群里（管理员知道做成了）",
             Sent().Any(t => t.Contains("已经给他点了 3 个赞")), string.Join(" | ", Sent().TakeLast(3)));
 
         // ── ② 中文别名：戳一戳 ──
@@ -184,7 +184,7 @@ public static partial class Program
         Check("★ 保存时把别名规范成动作名、写错的名字直接丢掉（面板回读的就是真正生效的那份）",
             after["agentServerQqActions"]?.GetValue<string>() == "like,poke,ban",
             after["agentServerQqActions"]?.ToJsonString() ?? "(空)");
-        Check("★ 生效摘要里点名了 ban（号主一眼能看到危险档开了什么）",
+        Check("★ 生效摘要里点名了 ban（管理员一眼能看到危险档开了什么）",
             (after["agentServerQqActionsEffective"]?.GetValue<string>() ?? "").Contains("已点名打开 ban"),
             after["agentServerQqActionsEffective"]?.ToJsonString() ?? "(空)");
 

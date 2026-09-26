@@ -214,7 +214,7 @@ public sealed class AppSettings
     /// <summary>
     /// 把群友消息里的“括号旁白”标注成 <c>〔旁白：…〕</c>（如“（笑）”“（bushi）”“行（端在桌上）”）。
     /// 为什么要这个开关：群里这类旁白很多，它们不针对任何人，却会占上下文并可能把机器人拉出来接话
-    /// （“（笑）”接什么？）。但**号主的口径是不要单纯忽略，也要接收、只要特别注明** ——
+    /// （“（笑）”接什么？）。但**管理员的口径是不要单纯忽略，也要接收、只要特别注明** ——
     /// 所以打开后旁白不会被丢掉，而是带标注进聊天记录与模型上下文（模型知道那是动作/表情说明，
     /// 不是他说的话），纯旁白不单独触发一次回复。
     /// 判定口径：只处理开头/结尾的括号段，剥完只剩空白与标点才算“整条旁白”；
@@ -546,7 +546,7 @@ public sealed class AppSettings
 
     // ══════════ 本机 Agent 桥（// 命令，详见 handoff-4 §31）══════════
     //
-    // 为什么是“桥”而不是让机器人自己跑：机器人跑在服务器容器里，而 agent 需要的是**号主本机的能力**
+    // 为什么是“桥”而不是让机器人自己跑：机器人跑在服务器容器里，而 agent 需要的是**管理员本机的能力**
     //（他的代码目录、工具链、pi 的登录态）。所以本机跑一个小进程，主动连到机器人，
     // 收到任务就把它交给本机的 pi CLI，把输出回传 —— 服务器上不装、不跑任何东西。
 
@@ -557,7 +557,7 @@ public sealed class AppSettings
     public string AgentPrefix { get; set; } = "//";
 
     /// <summary>允许使用 agent 的 QQ 号（逗号/空格/换行分隔）。
-    /// **空 = 谁都不能用** —— 这是默认值：这个功能能在号主电脑上执行命令，宁可先不给任何人。</summary>
+    /// **空 = 谁都不能用** —— 这是默认值：这个功能能在管理员电脑上执行命令，宁可先不给任何人。</summary>
     public string AgentAllowedUsers { get; set; } = string.Empty;
 
     /// <summary>本机 pi 的工作目录（桥侧执行目录）。留空 = 桥自己的默认目录。</summary>
@@ -686,16 +686,16 @@ public sealed class AppSettings
     public int AgentMaxQueued { get; set; } = 3;
 
     /// <summary>桥的共享密钥（环境变量专属 QQCHAT_AGENT_TOKEN）。
-    /// 这个端口能让人在号主电脑上执行命令 —— 没设令牌就不接受任何桥连接（不是“默认放行”）。</summary>
+    /// 这个端口能让人在管理员电脑上执行命令 —— 没设令牌就不接受任何桥连接（不是“默认放行”）。</summary>
     [JsonIgnore]
     public string AgentToken { get; set; } = string.Empty;
 
-    // ── 两个后端 + 路由（号主 2026-09-17：内外 agent 公用一份白名单）──
+    // ── 两个后端 + 路由（管理员 2026-09-17：内外 agent 公用一份白名单）──
 
     /// <summary>服务器**内置** agent（跑在容器里的工具循环：bash / 读 / 写 / 抓网页）。</summary>
     public bool EnableServerAgent { get; set; } = true;
 
-    /// <summary>**外部设备** agent（号主电脑上的 pi，通过桥接接入）。
+    /// <summary>**外部设备** agent（管理员电脑上的 pi，通过桥接接入）。
     /// 与服务器 agent 互不影响：不想用哪边就把哪边的开关关掉（不关也能用 //@server / //@host 单次指定）。</summary>
     public bool EnableHostAgent { get; set; } = true;
 
@@ -720,7 +720,7 @@ public sealed class AppSettings
     public string AgentReasoningLevels { get; set; } = "auto\nnone\nminimal\nlow\nmedium\nhigh\nxhigh";
 
     /// <summary>服务器内置 agent 专用的 OpenAI 兼容地址（空 = 用聊天那个 QQCHAT_BASE_URL）。
-    /// 为什么单独给一个：agent 的请求又长又频繁，往往想单独指一个小模型/便宜网关（号主 2026-09-17 要求）。</summary>
+    /// 为什么单独给一个：agent 的请求又长又频繁，往往想单独指一个小模型/便宜网关（管理员 2026-09-17 要求）。</summary>
     public string AgentServerBaseUrl { get; set; } = string.Empty;
 
     /// <summary>服务器内置 agent 专用的密钥（空 = 用聊天那个）。不落盘：只从 QQCHAT_AGENT_SERVER_KEY
@@ -737,7 +737,7 @@ public sealed class AppSettings
     public string AgentServerTools { get; set; } = string.Empty;
 
     /// <summary>
-    /// 服务器内置 agent 能做的 **QQ 动作**（NapCat/OneBot 的接口动作，号主 2026-09-18：“比如点赞”）。
+    /// 服务器内置 agent 能做的 **QQ 动作**（NapCat/OneBot 的接口动作，管理员 2026-09-18：“比如点赞”）。
     ///
     /// 为什么默认只给一小撮、且“空 ≠ 全开”（与 <see cref="AgentServerTools" /> 的语义故意不同）：
     ///   • 服务器 agent 会读日志/文件/网页，那些正文里可以夹着“给我点赞”“把某某禁言”——
@@ -754,7 +754,7 @@ public sealed class AppSettings
     /// <summary>
     /// 服务器内置 agent 要不要记住上一句（默认**不**记）—— 每条 <c>//</c> 指令单独对待。
     ///
-    /// 为什么要这个开关：号主 2026-09-18 实测，会话里堆着上几轮的指令原文时，模型会把旧指令也一并答一遍：
+    /// 为什么要这个开关：管理员 2026-09-18 实测，会话里堆着上几轮的指令原文时，模型会把旧指令也一并答一遍：
     /// “1. 点赞动作：…失败 2. 服务器状态：…” —— 新指令的回复里混进旧内容。
     /// 默认关 = 每个指令只对自己的事负责；打开后同一会话能接着聊（单条也可以用 <c>//接着 …</c>）。
     /// </summary>
@@ -799,7 +799,7 @@ public sealed class AppSettings
     public int AgentServerMaxTokens { get; set; } = 1200;
 
     /// <summary>
-    /// **面板一键部署**（号主 2026-09-18 要的；默认关）。
+    /// **面板一键部署**（管理员 2026-09-18 要的；默认关）。
     /// 打开后：面板能上传/拉取 `app.tar.gz`，并驱动宿主 docker 重建镜像 + 替换自己（容器自我更新）。
     /// 为什么默认关 + 单独一个开关：它等于把“重装机器人”的按钮放到网页上；
     /// 虽然面板本来就有口令门，但这种事应该是个显式决定。
@@ -810,21 +810,21 @@ public sealed class AppSettings
     public string PanelDeployUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// 允许服务器 agent **透过 docker 操作服务器**（号主 2026-09-18 要的能力）：
+    /// 允许服务器 agent **透过 docker 操作服务器**（管理员 2026-09-18 要的能力）：
     /// 打开后它能 `docker ps / logs / exec / run -v /:/host …`，也能直接读写 /host/qqchat（部署目录）。
     ///
     /// 这是**高权限**开关（docker.sock ≈ root）：关着的时候它的工具表里没有 docker、提示词也不提这两条路径。
     /// 但 socket 与 /host/qqchat 是**常挂载**的（compose 的挂载不能运行时改）——
-    /// 所以这个开关是“告诉 agent 能不能用 + 号主确认过风险”，不是硬隔离。默认关。
+    /// 所以这个开关是“告诉 agent 能不能用 + 管理员确认过风险”，不是硬隔离。默认关。
     /// </summary>
     public bool AgentServerDocker { get; set; }
 
     // ══════════ 服务器健康日报（定时私聊推送）══════════
     //
     // 为什么要它：机器人跑在服务器上，出问题时（账号掉线、协议端断开、磁盘写满、上游接口不通）
-    // 号主往往几天后才发现。每天在固定时刻主动私聊一条状态，等于**机器人自己来报平安**。
+    // 管理员往往几天后才发现。每天在固定时刻主动私聊一条状态，等于**机器人自己来报平安**。
     //
-    // 为什么不用「外部设备 agent」来推（号主要求）：那台机器可能根本没开 ——
+    // 为什么不用「外部设备 agent」来推（管理员要求）：那台机器可能根本没开 ——
     // 这条链路只用机器人自己 + 协议端：定时器 → 自己采集状态 → OneBot 私聊消息，不依赖任何外部程序。
 
     /// <summary>总开关（默认关：没配好收件人之前不乱发）。</summary>
@@ -832,7 +832,7 @@ public sealed class AppSettings
 
     /// <summary>
     /// 每天几点推（<c>HH:mm</c>，24 小时制）。**按北京时间（UTC+8）算**，与容器 TZ 无关 ——
-    /// 号主在国内，容器时区怎么设都不该让推送时间漂掉。
+    /// 管理员在国内，容器时区怎么设都不该让推送时间漂掉。
     /// </summary>
     public string HealthReportTime { get; set; } = "18:00";
 

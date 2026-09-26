@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and synthetic probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+      - name: Install Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Restore core and probe projects
+        run: |
+          dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
+          dotnet restore tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj
+          dotnet restore tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj
+          dotnet restore tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj
+          dotnet restore tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj
+      - name: Build core (Release)
+        run: dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
+      - name: Architecture and safety probes
+        run: |
+          dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release --no-restore
+      - name: Synthetic persistence and frontend probes
+        run: |
+          dotnet run --project tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj -c Release --no-restore
+          node tests/BotAgent.FrontendProbe/probe.mjs
+      - name: Synthetic integration smoke test
+        env:
+          QQCHAT_IT_ONLY: s1
+        run: |
+          dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
+          dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll

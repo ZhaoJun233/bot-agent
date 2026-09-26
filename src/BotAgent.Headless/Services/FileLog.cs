@@ -10,7 +10,7 @@ namespace BotAgent.Services;
 /// 除了“写出去”，这里还是**面板日志页唯一的数据源**：
 ///   • 每行都进一个内存环形缓冲（<see cref="RecentCapacity" /> 行），面板首屏用 /api/logs 拉它；
 ///   • 启动时用 <see cref="PreloadRecent" /> 从日志文件尾部回填一段 —— 这样**刷新页面 / 重启进程之后
-///     日志页也不是空的**（以前日志只活在浏览器内存里：一刷新就“被清空”，号主反馈过）。
+///     日志页也不是空的**（以前日志只活在浏览器内存里：一刷新就“被清空”，管理员反馈过）。
 ///   • 通过 <see cref="LineWritten" /> 把同一份文本推给面板（SSE 实时流）。
 /// </summary>
 public static class FileLog

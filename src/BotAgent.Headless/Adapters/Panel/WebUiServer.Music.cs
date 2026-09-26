@@ -53,7 +53,7 @@ public sealed partial class WebUiServer
 
                 // 扫码成功（803）时把登录态存下来：上游会在这条响应里给 cookie。
                 // 为什么必须存：cookie 本来只活在自建 API 容器的进程内存里 ——
-                // 容器一重建（升级镜像 / compose up 重创）就得重新扫码，号主反馈的“老是掉登录”就是这个。
+                // 容器一重建（升级镜像 / compose up 重创）就得重新扫码，管理员反馈的“老是掉登录”就是这个。
                 // 存进库（secrets 表，权限 600）之后，每轮请求直接带 cookie（见 NeteaseMusicClient），
                 // 与那个容器活着不活着无关；重启机器人也不会丢。
                 if (TryReadInt(check?["code"]) == 803 &&

@@ -15,11 +15,11 @@ namespace BotAgent.Services.Ops;
 /// 服务器健康日报：每天在指定时刻（**北京时间**）给指定 QQ 私聊发一条机器人与服务器状态。
 ///
 /// ──────────────────────────────────────────────────────────────────────
-/// 为什么长这样（两个都是号主明确要求）：
+/// 为什么长这样（两个都是管理员明确要求）：
 ///   1. **不经过外部设备 agent**：那台电脑可能根本没开。这条链路只用机器人自己 + 协议端：
 ///      自己的定时器 → 自己采集状态（内存/磁盘/日志/QQ 在线/模型接口/TTS）→ OneBot 私聊消息。
 ///      所以整条链路没有 subprocess、没有 ssh、没有桥，容器一活它就能跑。
-///   2. **按北京时间算，不看容器 TZ**：号主在国内，容器时区怎么设都不该让 18:00 漂成别的点。
+///   2. **按北京时间算，不看容器 TZ**：管理员在国内，容器时区怎么设都不该让 18:00 漂成别的点。
 ///      时刻一律用 <see cref="BeijingTimeZone" />（tzdata 缺失时退化成固定 UTC+8，见 <see cref="ResolveBeijingTimeZone" />）。
 ///
 /// 调度方式：不是“每 N 秒轮询一次到点没有”，而是**算出下一次的时刻、把定时器排到那一刻**
@@ -195,7 +195,7 @@ public sealed class HealthReportService : IDisposable
         {
             try
             {
-                // 对话总开关也管这个（号主 2026-09-21）：
+                // 对话总开关也管这个（管理员 2026-09-21）：
                 // “私域/官方两个通道的总开关关了”就该什么都不往外发 —— 日报也不例外，
                 // 否则会出现“通道关了、机器人在群里不吭声，却还在私聊里按时报服务器健康”这种别扭情况。
                 if (!ChatEnabledFor(uid))
@@ -607,7 +607,7 @@ public sealed class HealthReportService : IDisposable
             var digits = new string(piece.Where(char.IsDigit).ToArray());
             // 5~16 位：私域真号 10~11 位；**官方通道的别名号是 8 开头 16 位**（Channels.AliasBase 起步）。
                 // 以前这里卡在 `<= 12` ✗ —— 别名号会被**静默丢掉**：面板上填了也保存了，却永远收不到日报。
-                // （2026-09-21 号主问“健康日报对官方 bot 适配了吗”，查出来就是这一行。）
+                // （2026-09-21 管理员问“健康日报对官方 bot 适配了吗”，查出来就是这一行。）
                 if (digits.Length is >= 5 and <= 16 &&
                 long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var id) &&
                 id > 0 && !list.Contains(id))

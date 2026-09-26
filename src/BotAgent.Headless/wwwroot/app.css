@@ -646,7 +646,7 @@ textarea { resize: vertical; line-height: 1.5; }
  * 宽屏：设置页 = 左侧分节栏 + 右侧内容，**一次只显示一节**。
  *
  * 为什么不摆多列瀑布：之前把十几张卡片横着铺开，卡片高矮不一、形状各不相同，
- * 扫一眼就是“一块一块”的乱（号主原话：“这一块一块地排版你不觉得太乱了吗”）。
+ * 扫一眼就是“一块一块”的乱（管理员原话：“这一块一块地排版你不觉得太乱了吗”）。
  * 设置项本来就该一节一节看：左侧把所有小节列出来（一眼看全、点一下就切），
  * 右侧只渲染当前那一节 —— 单列、宽度收在 980px（宽屏上一行太长反而难读）。
  * 想看全部也行：侧栏最后一枚“全部显示”把它们按**单列**从头列到尾（方便通读 / Ctrl+F）。
@@ -1248,6 +1248,8 @@ input[type="range"] {
 .agent-session-title { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; font-weight: 650; }
 .agent-session-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-session-source { color: var(--text-secondary); font-size: 11px; font-weight: 450; }
+.agent-session-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 8px; opacity: .78; }
+.agent-session-actions .ghost-btn { min-height: 24px; padding: 2px 7px; font-size: 11px; }
 .agent-session-meta { display: flex; flex-wrap: wrap; gap: 5px 9px; margin-top: 6px; color: var(--text-tertiary); font-size: 11px; }
 .agent-session-meta b { color: var(--text-secondary); font-weight: 600; }
 .agent-privacy-note { flex: 0 0 auto; margin: 0; padding: 10px 16px 13px; border-top: 1px solid var(--divider); color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }

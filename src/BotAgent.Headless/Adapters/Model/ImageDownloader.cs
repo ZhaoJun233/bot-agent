@@ -84,7 +84,7 @@ internal sealed class ImageDownloader : IImageDownloader
                 // 只重试一次、失败后记 10 分钟退避：不会变成“对着一张取不到的图每轮重试”。
                 // ★ 这里**不**打“下载失败”：地址过期→重签是设计好的正常路径，不是事故。
                 //   以前每张图都先刷一行红色“下载失败（HTTP 400）”，面板上看着像一直在出错
-                //   （号主 2026-09-18 报的）；现在只在“重签也拿不到”时才报失败。
+                //   （管理员 2026-09-18 报的）；现在只在“重签也拿不到”时才报失败。
                 result = await FetchRefreshedAsync(url, mid, outcome.Status, ct);
                 if (result is null)
                 {

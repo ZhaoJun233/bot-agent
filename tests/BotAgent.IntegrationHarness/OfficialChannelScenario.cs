@@ -20,7 +20,7 @@ namespace BotAgent.IntegrationHarness;
 ///   ⑤ 白名单彼此独立：官方名单只认别名号，配错时官方那条被忽略，私域**不受影响**；
 ///   ⑥ 掉线自愈：socket 断了要重连（identify 或 resume），恢复后照常收发。
 ///
-/// 用假网关而不是真凭据：官方 appid/secret 是号主自己的，测试里不该有；
+/// 用假网关而不是真凭据：官方 appid/secret 是管理员自己的，测试里不该有；
 /// 而真正会写错的协议细节（QQBot 头、intents、msg_type=7、file_type、msg_id/msg_seq）都能在假网关上钉死。
 /// </summary>
 public static partial class Program

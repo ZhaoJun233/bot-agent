@@ -140,7 +140,7 @@ check(
     /\.settings-inner\s*\{[^}]*max-width:\s*980px/.test(css) &&
     /\.section-nav\s*\{[^}]*flex-direction:\s*column/.test(css) &&
     !/[\s{;]columns:\s*\d+px/.test(css),
-  "高矮不一的卡片横着铺开就是“一块一块”的乱（号主原话），改成一节一节看"
+  "高矮不一的卡片横着铺开就是“一块一块”的乱（管理员原话），改成一节一节看"
 );
 check(
   "★ 隐藏的那一节真的不占位（.card 的 display:flex 会盖掉 [hidden] 默认样式）",
@@ -302,7 +302,7 @@ check(
 );
 
 // 设备表（模型/目录/工具/超时/启用）不在 DOM-id 那套字段里，单独盯一眼：
-// 曾经这条漏写 → 在面板里改设备配置点保存完全没用（服务器还是旧值，号主报过）。
+// 曾经这条漏写 → 在面板里改设备配置点保存完全没用（服务器还是旧值，管理员报过）。
 check(
   "★ 保存请求带上设备表 agentDevices（没带 = 面板改设备配置白改）",
   /payload\.agentDevices\s*=\s*JSON\.stringify\(\s*agentDevices/.test(saveBody),
@@ -543,11 +543,15 @@ const fetchStub = async (url, opts) => {
     };
   } else if (target.includes("/api/agent/sessions")) {
     payload = {
-      total: 1, chatCount: 1,
+      total: 2, chatCount: 2,
       chats: {
         "synthetic-source": {
           name: "合成来源A",
           sessions: [{ id: "session-1", name: "默认会话", backend: "server", device: "server", turns: 2, updatedAt: "2026-09-24T12:00:00Z", current: true, runs: [{ id: "run-1" }] }]
+        },
+        "panel:workspace": {
+          name: "面板工作区",
+          sessions: [{ id: "panel-session-1", name: "工作台会话", backend: "server", device: "server", turns: 0, updatedAt: "2026-09-25T12:00:00Z", current: true, runs: [] }]
         }
       }
     };
@@ -686,7 +690,7 @@ await new Promise((r) => setTimeout(r, 400));
 check("boot() 无异常", bootError === null, bootError);
 check("注册了保存按钮的点击处理", saveClicks.length === 1, `实际 ${saveClicks.length} 个`);
 
-// 日志面板的历史回填（以前日志只活在浏览器内存里：一刷新页面就空白 —— 号主反馈）
+// 日志面板的历史回填（以前日志只活在浏览器内存里：一刷新页面就空白 —— 管理员反馈）
 check("app.js 会去拉 /api/logs（首屏历史）", js.includes('/api/logs'));
 check("boot 真的请求了 /api/logs", calls.some((c) => c.method === "GET" && c.url.includes("/api/logs")),
   calls.map((c) => c.url).join(" | "));
@@ -694,7 +698,7 @@ check("★ 历史日志被渲染进日志面板（刷新后不再空白）",
   (document.getElementById("logBox")?.innerHTML || "").includes("历史日志-A"),
   (document.getElementById("logBox")?.innerHTML || "(空)").slice(0, 120));
 
-// 日志很长时要能一键到顶 / 到底（号主要求的两个按钮）
+// 日志很长时要能一键到顶 / 到底（管理员要求的两个按钮）
 check("app.js 绑定了日志“顶部 / 底部”两个按钮", js.includes('"logTopBtn"') && js.includes('"logBottomBtn"'));
 {
   const box = document.getElementById("logBox");
@@ -1449,7 +1453,7 @@ check("index.html 引了 dash.js，且有页面容器与两个导航入口",
 check("★ /dash.js 排在静态资源路由里（新增文件 = 加一行路由）", routes.includes('"/dash.js"'));
 
 // 结构：页面必须是 .shell 的子元素。
-// 历史 bug（2026-09-24，号主截图）：pageDash / pageTrace 被写在了 </div>(.shell) **外面** ——
+// 历史 bug（2026-09-24，管理员截图）：pageDash / pageTrace 被写在了 </div>(.shell) **外面** ——
 // .shell 撑满剩下的高度、里面一个可见页面都没有 → 顶上一整块空白，而页面内容掉到下面去。
 const shellOpen = html.indexOf('<div class="shell">');
 const shellClose = html.indexOf("<!-- 会话右键菜单 -->");   // 紧随 .shell 收尾的第一个标记
@@ -1619,18 +1623,17 @@ check("Agent 执行期间有 busy 状态与重复提交保护",
       .every((endpoint) => readyCalls.some((url) => url.includes(endpoint))),
     readyCalls.join(" | "));
   check("★ 合成会话列表完成结构化渲染（不泄露历史正文）",
-    document.getElementById("agentSessionCount").textContent === "1" &&
-    document.getElementById("agentSessionList").children.length === 1 &&
+    document.getElementById("agentSessionCount").textContent === "2" &&
+    document.getElementById("agentSessionList").children.length === 2 &&
     !document.getElementById("agentSessionList").innerHTML.includes("prompt"));
 
-  check("★ 渠道会话只读，不能错把 /api/agent/test 发进 QQ 当前会话",
-    document.getElementById("agentWorkbenchSend").disabled === true &&
-    document.getElementById("agentWorkbenchSend").textContent === "只读会话");
+  check("★ 工作台会话可执行且不把任务发进 QQ 当前会话",
+    document.getElementById("agentWorkbenchSend").textContent !== "只读会话");
   fire("agentNewSession", "click");
   const localKey = sandbox.probe.agentSnapshot().active;
-  check("★ 新建本页草稿不伪造后端会话身份",
-    sandbox.probe.agentSnapshot().rows.some((row) => row.key === localKey && row.local) &&
-    calls.slice(beforeReady).every((call) => call.method !== "POST" || !call.url.includes("/api/agent/sessions")));
+  check("★ 新建工作台会话走持久化 API",
+    sandbox.probe.agentSnapshot().rows.some((row) => row.key === localKey && !row.local) &&
+    calls.slice(beforeReady).some((call) => call.method === "POST" && call.url.includes("/api/agent/sessions")));
   const prompt = "检查 <synthetic-result> & 仅返回状态，不执行外发";
   document.getElementById("agentWorkbenchPrompt").value = prompt;
   fire("agentWorkbenchPrompt", "input", { target: { id: "agentWorkbenchPrompt" } });
@@ -1650,7 +1653,7 @@ check("Agent 执行期间有 busy 状态与重复提交保护",
   let body = null;
   try { body = posted ? JSON.parse(posted.body) : null; } catch {}
   check("★ 执行请求体包含 prompt / timeoutSec / target",
-    body && body.prompt === prompt && Number.isFinite(body.timeoutSec) && body.target === "server",
+    body && body.key === "panel:workspace" && body.sessionId && body.prompt === prompt && Number.isFinite(body.timeoutSec) && body.target === "server",
     posted ? posted.body : "没有发出请求");
   check("★ 当前执行结果以文本节点显示，合成标签没有进入 innerHTML",
     document.getElementById("agentResultText").textContent === "<synthetic-result>" &&

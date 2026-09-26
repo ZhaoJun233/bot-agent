@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace BotAgent.IntegrationHarness;
 
 /// <summary>
-/// S34 服务器内置 agent + 路由（号主 2026-09-17 追加的诉求）：
+/// S34 服务器内置 agent + 路由（管理员 2026-09-17 追加的诉求）：
 ///   • bot 自己也要有 agent 能力（跑在容器里的工具循环：bash / 读 / 写 / 抓网页）；
 ///   • 内外 agent 公用**同一份**白名单（只认 QQ 号）；
 ///   • 能看外部设备在不在线；自动路由：外部在线走外部，不在线用服务器内置；
@@ -173,7 +173,7 @@ public static partial class Program
             bridge.Tasks.Count == bridgeTasksBefore,
             $"桥任务 {bridgeTasksBefore} → {bridge.Tasks.Count}");
 
-        // ---- ③b 面板里把“外部设备”开关关掉 → auto 也得走服务器（号主踩过的那个：切了却没生效）----
+        // ---- ③b 面板里把“外部设备”开关关掉 → auto 也得走服务器（管理员踩过的那个：切了却没生效）----
         using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
         {
             var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":false}", Encoding.UTF8, "application/json");
@@ -258,9 +258,9 @@ public static partial class Program
             $"最后几条发出去的是：{string.Join(" ⏐ ", Sent().TakeLast(5))}");
 
         // ---- ⑦ 会话（服务器后端）：开关打开时同一会话接着聊、//new 开新的就断上下文 ----
-        // 号主要求“调用内置/外部 agent 时能自由切换会话”——内置这一侧的会话就是我们自己存的历史。
+        // 管理员要求“调用内置/外部 agent 时能自由切换会话”——内置这一侧的会话就是我们自己存的历史。
         // 注意：从 2026-09-18 晚起，服务器 agent **默认每条指令单独对待**（不带上文）——
-        // 号主反馈“每次发送新指令都会把旧指令的内容发送回来”，所以想接着聊要显式开开关（这里就是）。
+        // 管理员反馈“每次发送新指令都会把旧指令的内容发送回来”，所以想接着聊要显式开开关（这里就是）。
         // 前面的步骤把服务器开关关过，这里先打开（不然 //@server 只会回“开关是关的”）
         using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
         {

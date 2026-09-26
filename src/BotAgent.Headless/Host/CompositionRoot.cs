@@ -113,8 +113,9 @@ internal static class CompositionRoot
 
         // 发送（分句/节奏/记账）：聊天、agent 回话、审批回执共用
         // 决策轨迹（批次 C）：一轮一条、只有形状；回复链 / 发送层 / 能力闸门三处往上记节点。
-        var traces = new TurnTraceStore();
-        var plain = new PlainSender(settingsBox, source, registry, ui, ownLedger, ui.EmitLog, traces);
+        var traces = new TurnTraceStore(archive: new TraceArchiveStore());
+        var audit = new AuditLogStore();
+        var plain = new PlainSender(settingsBox, source, registry, ui, ownLedger, ui.EmitLog, traces, audit);
 
         // 各域用例
         var vibes = new VibeTracker();
@@ -210,7 +211,7 @@ internal static class CompositionRoot
             new HttpFetcher(TimeSpan.FromSeconds(8), msg => FileLog.Write("Net", msg), "login-qr"));
 
         // 服务器健康日报（每天定时私聊一条状态）：整条链路只用机器人自己 + 协议端，
-        // **不经过外部设备 agent**（那台电脑可能根本没开）—— 号主 2026-09-18 明确要求。
+        // **不经过外部设备 agent**（那台电脑可能根本没开）—— 管理员 2026-09-18 明确要求。
         // 宿主事实（cgroup 内存上限 / 负载）：健康日报与面板仪表盘共用同一份只读端口
         var hostFacts = new HostMetrics();
         var healthReports = new HealthReportService(settingsBox, registry, reply, identity, scheduler, voice, gateway,
@@ -229,6 +230,7 @@ internal static class CompositionRoot
             sessionPolicies: sessionPolicies,
             traces: traces,
             hostFacts: hostFacts,
+             audit: audit,
             approvals: approvals,
             localChannel: local,
             onRestart: () =>
@@ -284,7 +286,7 @@ internal static class CompositionRoot
             if (settings.OfficialSandbox)
             {
                 // 沙箱环境**只**推「沙箱群 / 沙箱单聊」的事件 —— 正式群里 @ 它一条都不会到，
-                // 而且日志里什么都不会出现（2026-09-21 号主卡在这里："艾特了日志根本不显示"）。
+                // 而且日志里什么都不会出现（2026-09-21 管理员卡在这里："艾特了日志根本不显示"）。
                 // 所以这句话要说到最响：它解释的正是"看起来啥都没发生"。
                 FileLog.Write("Channel", "⚠ 官方通道跑在**沙箱环境**：只能收到开放平台「沙箱配置」里那些沙箱群/沙箱单聊的事件；"
                                         + "正式群里 @ 机器人不会被推送，日志里也不会有任何行。要在正式群用，取消面板「用沙箱环境」并重启。");
@@ -353,8 +355,8 @@ internal static class CompositionRoot
         // 都要在**任何一轮回复之前**读到它。载入属启动顺序，所以放在装配点（§6.1）。
         stickers.Load(AppPaths.RuntimeRoot);
 
-        // 本机 Agent 桥（// 命令）：机器人**监听**一个 WS 端点，号主本机那个 pi-bridge 主动连进来。
-        // 为什么不让机器人直接连本机：号主的电脑在 NAT 后面（没公网入口，也不应该开一个）。
+        // 本机 Agent 桥（// 命令）：机器人**监听**一个 WS 端点，管理员本机那个 pi-bridge 主动连进来。
+        // 为什么不让机器人直接连本机：管理员的电脑在 NAT 后面（没公网入口，也不应该开一个）。
         var agentBridge = new AgentBridgeServer(settingsBox, msg => FileLog.Write("Agent", msg));
         // 语音（TTS）：客户端、频率门、面板试听都在这个用例里（HttpClient 也只在这里造一个）
         var voiceHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "voice");

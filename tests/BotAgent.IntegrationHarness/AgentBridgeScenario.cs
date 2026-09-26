@@ -7,7 +7,7 @@ namespace BotAgent.IntegrationHarness;
 /// <summary>
 /// S33 本机 Agent 桥（// 命令，handoff-4 §31）。
 ///
-/// 这个功能能在号主电脑上执行命令，所以边界必须一条条钉死：
+/// 这个功能能在管理员电脑上执行命令，所以边界必须一条条钉死：
 ///   ① 只有 `//` 开头的消息才进 agent（其它消息照旧走人设路线，不能被顺手当成 agent 任务）；
 ///   ② 发送者不在 AgentAllowedUsers 里 → 拒绝，**不把任务发给本机**；
 ///   ③ 桥没连上 / 没配令牌 → 说人话，而不是静默；
@@ -90,7 +90,7 @@ public static partial class Program
         // ---- ① 令牌不对的桥连接：必须被拒 ----
         using var badBridge = new MockAgentBridge($"ws://127.0.0.1:{healthPort}/agent-bridge?token=wrong");
         var badConnected = await badBridge.TryConnectAsync(cts.Token);
-        Check("★ 令牌不对的桥连接被拒（这个端口能在号主电脑上执行命令）",
+        Check("★ 令牌不对的桥连接被拒（这个端口能在管理员电脑上执行命令）",
             !badConnected, badConnected ? "竟然连上了" : "已拒绝");
         Check("★ 令牌不对时日志留痕",
             await WaitUntilAsync(() => bot.OutputLines.Any(l => l.Contains("agent 桥连接被拒")), TimeSpan.FromSeconds(20)),
@@ -344,7 +344,7 @@ public static partial class Program
             perDevice.ToJsonString());
 
         // 状态里的工作目录也得跟着面板走：任务早就跟了，但面板上那行曾直接回显 hello 里的 cwd，
-        // 于是“在面板改了目录，状态里还是旧值”（号主报过）。cwd = 生效值；hostCwd = 桥自报的启动目录。
+        // 于是“在面板改了目录，状态里还是旧值”（管理员报过）。cwd = 生效值；hostCwd = 桥自报的启动目录。
         using (var http = PanelHttp(10))
         {
             var st = JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{healthPort}/api/agent/status"))!;
@@ -435,7 +435,7 @@ public static partial class Program
         Check("★ 设备配的模型它自己没有时：不把任务卡死，改用 pi 默认（不再直接报 Model not found）",
             string.IsNullOrEmpty(bridge.Tasks[^1]["model"]?.GetValue<string>()),
             bridge.Tasks[^1].ToJsonString());
-        Check("★ 这种降级会在群里说一句（号主能看出是面板里配错了）",
+        Check("★ 这种降级会在群里说一句（管理员能看出是面板里配错了）",
             Sent().Any(t => t.Contains("面板里给这台设备配的模型")),
             string.Join(" | ", Sent().TakeLast(3)));
 
@@ -452,7 +452,7 @@ public static partial class Program
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("降级那单的结论")), TimeSpan.FromSeconds(30));
 
         // ---- ⑯ Agent 会话：//new 开新的（空上下文）、//use 切回去、//sessions 列表、面板 API 同步
-        //（号主 2026-09-17：调用内部/外部 agent 时能自由切换/新建/删除会话，面板与群里都要能操作）----
+        //（管理员 2026-09-17：调用内部/外部 agent 时能自由切换/新建/删除会话，面板与群里都要能操作）----
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//sessions", 15060, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("agent 会话")), TimeSpan.FromSeconds(30));
         Check("★ //sessions 列出会话（含当前标记与用法）",
@@ -520,7 +520,7 @@ public static partial class Program
                 string.Join(",", bridge.Forgotten));
         }
 
-        // ---- ⑰ 自动标题 / //help / //sessions all（号主：没有标题总结、不知道有多少个会话、忘了命令）----
+        // ---- ⑰ 自动标题 / //help / //sessions all（管理员：没有标题总结、不知道有多少个会话、忘了命令）----
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//help", 15070, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("看这份说明")), TimeSpan.FromSeconds(30));
         var help = string.Join("\n", Sent().TakeLast(3));
@@ -529,7 +529,7 @@ public static partial class Program
             help.Contains("//rename") && help.Contains("//del") && help.Contains("//stop") && help.Contains("//status"),
             help.Length > 400 ? help[..400] + "…" : help);
 
-        // 会话标题（号主 2026-09-18 的新要求）：
+        // 会话标题（管理员 2026-09-18 的新要求）：
         //   • 发指令**不**改名（旧版会把标题改成那条命令的前几个字，一个会话干多了就认不出来了）；
         //   • 跑完一轮之后按**上下文内容**综结标题（这里让假上游给一个固定标题，验证真的走了这条路）。
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//new", 15071, mentionBot: false, ct: cts.Token);
@@ -634,7 +634,7 @@ public static partial class Program
             Sent().Any(t => t.Contains("全部 agent 会话") && t.Contains("共") && t.Contains("轮")),
             string.Join(" | ", Sent().TakeLast(2)));
 
-        // ---- ⑱ //rename 不能“改错会话”（号主实测：设备不在线时它会另建一个空的服务器会话并给它改名）----
+        // ---- ⑱ //rename 不能“改错会话”（管理员实测：设备不在线时它会另建一个空的服务器会话并给它改名）----
         // 踩雷姿势：路由改成 server（will-use = server），但这个聊天只有外部设备（host）的会话。
         using (var http2 = PanelHttp(15))
         {
@@ -666,7 +666,7 @@ public static partial class Program
         }
 
         // ---- ⑩ // 任务带图片：agent 侧要拿得到图 ----
-        //   号主 2026-09-19 报“给 Agent 发图片识别不了”：任务正文以前只剩一个「[图片]」占位，
+        //   管理员 2026-09-19 报“给 Agent 发图片识别不了”：任务正文以前只剩一个「[图片]」占位，
         //   图片 URL 根本没跟过去。现在正文要带直链 + 服务器留档路径，且留档字节要对得上。
         {
             using var imgHost = new MockImageHost(FreePort(17886));

@@ -4,13 +4,13 @@ using System.Text.Json.Nodes;
 namespace BotAgent.IntegrationHarness;
 
 /// <summary>
-/// S40 服务器 agent 的 **docker 权限**（号主 2026-09-18：“再加一个允许 agent 透过 docker
+/// S40 服务器 agent 的 **docker 权限**（管理员 2026-09-18：“再加一个允许 agent 透过 docker
 /// 进行服务器文件操作的权限（相关开关要体现在后台管理面板上）”）。
 ///
 /// 两条锁：
 ///   ① 面板开关 <c>agentServerDocker</c>（默认关，高权限）—— 关着时工具表里没有 docker，
 ///      提示词里也不提 <c>/host/qqchat</c> 与 <c>docker run -v /:/host</c> 这些用法；
-///   ② 就算号主在“工具”里手写了 docker，开关没开也不给用。
+///   ② 就算管理员在“工具”里手写了 docker，开关没开也不给用。
 ///
 /// 这里不依赖机器上真有 docker（CI/开发机不同）：断言的是**我们自己的行为** ——
 ///   • 关着时：模型看不到 docker 工具、调用被拒（请求体里能看到“没开”）、日志里没有 docker 行；
@@ -71,7 +71,7 @@ public static partial class Program
             ["QQCHAT_AGENT_TARGET"] = "server",
             ["QQCHAT_AGENT_SERVER_URL"] = agentAi.BaseUrl,
             ["QQCHAT_AGENT_SERVER_MODEL"] = "custom-agent-model",
-            // 号主手写了 docker —— 但开关没开，照样不给用（两把锁）
+            // 管理员手写了 docker —— 但开关没开，照样不给用（两把锁）
             ["QQCHAT_AGENT_SERVER_TOOLS"] = "bash,read,docker",
             ["QQCHAT_AGENT_PROGRESS"] = "0"
             // QQCHAT_AGENT_SERVER_DOCKER 故意不设 = 默认关
@@ -129,7 +129,7 @@ public static partial class Program
         Check("★ 关着时也不提 /host/qqchat 这条挂载路径（不诱导它去读服务器文件）",
             offRequest.Length > 0 && !offRequest.Contains("/host/qqchat"),
             offRequest.Length == 0 ? "(没找到那次请求)" : $"含 /host/qqchat={offRequest.Contains("/host/qqchat")}");
-        Check("★★ 就算号主在“工具”里手写了 docker，开关没开也调不动（模型收到“没开”）",
+        Check("★★ 就算管理员在“工具”里手写了 docker，开关没开也调不动（模型收到“没开”）",
             RequestWith("没开").Contains("没开") && DockerToolLines() == 0,
             $"docker 工具被执行的次数={DockerToolLines()}；请求里有没有“没开”={RequestWith("没开").Contains("没开")}");
         Check("★ 结论还是回了群（没有因为权限被拒就卡死）",

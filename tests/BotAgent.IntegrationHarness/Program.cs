@@ -174,7 +174,7 @@ public static partial class Program
             ["QQCHAT_SEGMENT_DELAY_MS"] = "10",
             ["QQCHAT_HEALTH_PORT"] = "18011",
             ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1",
-            // 号主 11:32 撞上的那个坑：聊天请求被 60 秒 HttpClient 超时砍掉、整轮丢掉。
+            // 管理员 11:32 撞上的那个坑：聊天请求被 60 秒 HttpClient 超时砍掉、整轮丢掉。
             // 这里把超时调成 4 秒（测试不必真等几分钟）：慢上游应该“退让重试一次”而不是直接丢。
             ["QQCHAT_MODEL_TIMEOUT_SECONDS"] = "4"
         });
@@ -366,7 +366,7 @@ public static partial class Program
             !openAi.Requests.Skip(reqsBeforeImg2).Any(r => r.ToJsonString().Contains("image_url")),
             $"后续请求 {openAi.Requests.Count - reqsBeforeImg2} 个，带 image_url 的 {openAi.Requests.Skip(reqsBeforeImg2).Count(r => r.ToJsonString().Contains("image_url"))} 个");
 
-        // ---- 慢上游超时（号主 11:32 截图：TaskCanceledException 60 秒超时 → 一整轮没了）----
+        // ---- 慢上游超时（管理员 11:32 截图：TaskCanceledException 60 秒超时 → 一整轮没了）----
         // 现在：聊天超时改成 120 秒（可调）+ 超时也“退让重试一次（第二次 30 秒封顶）”。
         // 测试里把超时调成 4 秒、让假上游慢 9 秒，验证“第一次超时 → 重试拿到回复”。
         var sendsBeforeSlow = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg");
@@ -454,7 +454,7 @@ public static partial class Program
 
         await bot.StopAsync();
 
-        // ── 群聊 / 私聊两份名单各管各的（号主 2026-09-18：“私聊白名单和群聊白名单两个框分开”）──
+        // ── 群聊 / 私聊两份名单各管各的（管理员 2026-09-18：“私聊白名单和群聊白名单两个框分开”）──
         // 以前只比数字：把一个 QQ 号填进名单，连“同号的群”也一起放行了。
         const long groupOnly = 99991;     // 只写在群聊名单里的群号
         const long friendOnly = 70011;    // 只写在私聊名单里的 QQ 号
@@ -614,7 +614,7 @@ public static partial class Program
         Check("分句后每段只包含一个句子", sends.All(s => s.Count(c => c is '。') <= 1), string.Join(" | ", sends));
 
         // ---- 标点边界：小数 / 版本号 / 域名 / 连续标点 / 收尾引号都不能被切断 ----
-        // 号主反馈“对标点或小数错误分段”：半角点以前无条件当句末。
+        // 管理员反馈“对标点或小数错误分段”：半角点以前无条件当句末。
         const string tricky = "圆周率是 3.14，速度调到 1.5 倍。仓库在 https://github.com/foo/bar 这里，版本 v1.2.3。太厉害了！！！真的「服了。」然后没了。";
         openAi.ClearRequests();
         openAi.EnqueueReply("{\"suitability\": 90, \"reply\": " + System.Text.Json.JsonSerializer.Serialize(tricky) + "}");
@@ -871,7 +871,7 @@ public static partial class Program
         }
 
         // 低分沉默只适用于“没在跟你说话”的闲聊（群里自说自话）：
-        // 被 @ 的时候不能沉默 —— 2026-09-16 号主反馈“直接跟我说话它也不理”，就是这一条。
+        // 被 @ 的时候不能沉默 —— 2026-09-16 管理员反馈“直接跟我说话它也不理”，就是这一条。
         await SendAsync("第一句", 8001, mention: false);   // 模型自评 5  → 没点名，必须沉默
         await SendAsync("第二句", 8002);   // 模型自评 90 → 必须发言
         await SendAsync("第三句", 8003);   // 非 JSON 文本 → 必须发言

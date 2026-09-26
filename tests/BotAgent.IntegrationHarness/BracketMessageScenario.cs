@@ -5,7 +5,7 @@ namespace BotAgent.IntegrationHarness;
 /// <summary>
 /// S29 群友消息里的括号旁白：**标注而不是忽略**（开关）。
 ///
-/// 号主的原始口径（2026-09-14）：整条都是旁白（「（笑）」「（bushi）」）不要；前后带的旁白（「行（端在桌上）」）只留正文。
+/// 管理员的原始口径（2026-09-14）：整条都是旁白（「（笑）」「（bushi）」）不要；前后带的旁白（「行（端在桌上）」）只留正文。
 /// 同一天追加（§25）：**不要单纯忽略，也要接收，但要特别注明** —— 所以现在：
 ///   • 旁白标成 〔旁白：…〕 进聊天记录与模型上下文（内容一字不丢）；
 ///   • 整条都是旁白时**不单独触发一次回复**（“（笑）”不是对谁说的话），但下一条真消息会带上它；
@@ -92,7 +92,7 @@ public static partial class Program
             withAside is not null && !withAside.Contains("(#9911)") && !withAside.Contains("(#9912)"),
             withAside is null ? "(没进上下文)" : Snippet(withAside, "[回复谁]"));
 
-        // ---- 3) 前后带的旁白：正文留着、旁白标注在旁（号主说的“不是整条都是括号”）----
+        // ---- 3) 前后带的旁白：正文留着、旁白标注在旁（管理员说的“不是整条都是括号”）----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 88, "reply": "好嘞。"}""");
         await protocol.SendGroupMessageAsync(groupId, 30022, "老王", "行（端在桌上）", 9917, ct: cts.Token);

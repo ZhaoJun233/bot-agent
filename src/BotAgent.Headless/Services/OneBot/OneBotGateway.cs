@@ -245,7 +245,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
 
     private string? _pokeUnsupported;
 
-    // ══════════ QQ 行为动作（服务器内置 agent 用；号主 2026-09-18：“比如点赞”）══════════
+    // ══════════ QQ 行为动作（服务器内置 agent 用；管理员 2026-09-18：“比如点赞”）══════════
     //
     // 与上面那些“机器人自己要发的消息”不同，这一组是**别人让机器人做的小动作**。
     // 共性：都是 OneBot/NapCat 的动作，失败原因（retcode）对使用者有用，所以统一记一条日志；
@@ -941,7 +941,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
                 : sender.Nickname ?? userId.ToString();
 
         // 日志里记一笔“这条是引用回复”—— 真出问题时（引到哪、有没有认出）不用猜。
-        // 放在早退之前：**只点“回复”不写正文**的消息也得留痕（号主就是这么测的：正文是一个空格）
+        // 放在早退之前：**只点“回复”不写正文**的消息也得留痕（管理员就是这么测的：正文是一个空格）
         var hasReply = replyToId is not null || !string.IsNullOrWhiteSpace(replyPreview);
         if (hasReply)
         {
@@ -953,7 +953,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
 
         // 只有表情/图片等无文本且未提及本机、**也没有引用目标**时才不建会话。
         // （以前只看“正文是否为空”，于是“引用某条 + 正文为空”的消息被静默丢掉：
-        //   机器人既没记下这条、也没标出它引用了什么 —— 号主反馈“识别不了引用回复”的一个真原因）
+        //   机器人既没记下这条、也没标出它引用了什么 —— 管理员反馈“识别不了引用回复”的一个真原因）
         if (string.IsNullOrWhiteSpace(text) && !mentioned && musicShares.Count == 0 && !hasReply)
         {
             return;
