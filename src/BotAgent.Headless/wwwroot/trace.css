@@ -311,7 +311,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   /* 行高跟着可用高度长：不然 10 张卡只占顶上一条，下面留一大片空白
-     （号主 2026-09-24 反馈“只占半屏”）—— 与设置页一样：右边整块都是内容。 */
+     （管理员 2026-09-24 反馈“只占半屏”）—— 与设置页一样：右边整块都是内容。 */
   grid-auto-rows: minmax(118px, 1fr);
   gap: 10px;
   padding: 12px;

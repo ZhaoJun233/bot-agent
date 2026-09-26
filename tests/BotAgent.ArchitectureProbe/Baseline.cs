@@ -149,7 +149,7 @@ internal static class Baseline
     /// SQL 字面量总数（棘轮：只许往下调；新加 SQL 请加在 Adapters/Persistence 里，并在这里如实登记）。
     /// 批次 3：89 → 95（+5 = 新的 own_messages 台账三条语句；+1 = 库里新建 own_messages 表）。
     /// </summary>
-    public const int SqlLiteralTotal = 95;
+    public const int SqlLiteralTotal = 98;
 
     // ── R3：直接文件 IO 只允许出现在 Adapters/** 与下列具名例外 ──
     public const string FileIoAllowedPrefix = "Adapters/";

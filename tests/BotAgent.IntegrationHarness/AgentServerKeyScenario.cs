@@ -5,7 +5,7 @@ namespace BotAgent.IntegrationHarness;
 /// <summary>
 /// S37 服务器 agent 自己的密钥（面板入口）。
 ///
-/// 背景（号主 2026-09-18 问「这里怎么没有 key 的填写 UI」）：服务器 agent 能单独指一个
+/// 背景（管理员 2026-09-18 问「这里怎么没有 key 的填写 UI」）：服务器 agent 能单独指一个
 /// OpenAI 兼容网关（AgentServerBaseUrl），但密钥当时只能改 .env 的 AGENT_SERVER_KEY ——
 /// 面板上只有地址和模型，换网关就卡在「key 填哪儿」。
 ///

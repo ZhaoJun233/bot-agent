@@ -213,7 +213,7 @@ public static partial class Program
             musicCard is null ? "(无)" : musicCard.Substring(Math.Max(0, musicCard.Length - 160)));
 
         // ---- 6) 网易云登录态：扫码成功后必须存在**机器人库里**，并且每个请求都带上 ----
-        // 号主反馈“网易云老是掉登录”：cookie 以前只活在自建 API 容器的进程内存里，
+        // 管理员反馈“网易云老是掉登录”：cookie 以前只活在自建 API 容器的进程内存里，
         // 容器一重建就得重扫；现在存在库里的 secrets 表（面板扫码那条链路写进去）。
         using (var qrResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/netease/qr",
                    new StringContent("{}", Encoding.UTF8, "application/json"), cts.Token))

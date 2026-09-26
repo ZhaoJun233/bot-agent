@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace BotAgent.IntegrationHarness;
 
 /// <summary>
-/// S36 「列出会话时脱敏」开关 + 「Agent 附加提示词」（号主 2026-09-18：
+/// S36 「列出会话时脱敏」开关 + 「Agent 附加提示词」（管理员 2026-09-18：
 /// 开发/排查时**不许读取群聊正文与成员隐私**，默认提示词就要把这条写死）。
 ///
 /// 这个场景钉住四件事：

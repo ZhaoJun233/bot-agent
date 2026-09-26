@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using BotAgent.Domain.Ops;
 
+
 namespace BotAgent.Services.Ops;
 
 /// <summary>
@@ -24,9 +25,15 @@ public sealed class TurnTraceStore
     private readonly Dictionary<string, Turn> _active = new(StringComparer.Ordinal);
     private readonly List<TurnTrace> _done = new();
     private readonly Func<DateTimeOffset> _now;
+    private readonly ITraceArchive? _archive;
     private long _seq;
+    private long _completedTotal;
 
-    public TurnTraceStore(Func<DateTimeOffset>? clock = null) => _now = clock ?? (() => Clock.Now);
+    public TurnTraceStore(Func<DateTimeOffset>? clock = null, ITraceArchive? archive = null)
+    {
+        _now = clock ?? (() => Clock.Now);
+        _archive = archive;
+    }
 
     /// <summary>新的一轮开始（同一会话重复调用 = 上一轮没收尾，按新的一轮覆盖）。</summary>
     public void Begin(string conversationKey)
@@ -78,12 +85,18 @@ public sealed class TurnTraceStore
                 (int)Math.Max(0, (_now() - turn.StartedAt).TotalMilliseconds),
                 turn.Nodes.ToArray());
 
+            _completedTotal++;
             _done.Add(trace);
             if (_done.Count > Capacity)
             {
                 _done.RemoveRange(0, _done.Count - Capacity);
             }
 
+            if (_archive is not null && (trace.TotalMs >= 5000 || !string.Equals(outcome, "done", StringComparison.OrdinalIgnoreCase)
+                || trace.Nodes.Any(n => n.Status is "failed" or "error" or "blocked")))
+            {
+                _archive.Append(trace);
+            }
             return trace;
         }
     }
@@ -97,6 +110,19 @@ public sealed class TurnTraceStore
         }
     }
 
+    public ITraceArchive? Archive => _archive;
+
+    /// <summary>进程启动以来完成的轮次数，用于低基数 metrics 计数器。</summary>
+    public long CompletedTotal
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _completedTotal;
+            }
+        }
+    }
     public int DoneCount
     {
         get

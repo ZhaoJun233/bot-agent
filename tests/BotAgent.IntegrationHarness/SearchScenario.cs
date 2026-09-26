@@ -91,7 +91,7 @@ public static partial class Program
         Check("★ 走的是模型自带搜索，没有去爬配置里的搜索源",
             search.SearxHits == 0, $"searx 命中 {search.SearxHits} 次");
 
-        // ---- 1b) 时间与“什么时候该搜”（号主反馈：被问时间经常答错 —— 模型没钟、只能猜）----
+        // ---- 1b) 时间与“什么时候该搜”（管理员反馈：被问时间经常答错 —— 模型没钟、只能猜）----
         var today = DateTime.Now.ToString("yyyy-MM-dd");
         var weekday = "星期" + "日一二三四五六"[(int)DateTime.Now.DayOfWeek];
         Check("★ 提示词里注入了当前时间（日期 + 星期）—— 模型没钟，不问它就只能猜",
@@ -173,7 +173,7 @@ public static partial class Program
             $"grounding {groundingBefore3} → {openAi.GroundingRequests}");
 
         // ---- 3c) 带着“刚查到的资料”那一轮不受发言适合度门槛限制 ----
-        // 线上症状（号主反馈“有时查完不输出”）：模型回来汇报那一轮自评偏低（它只是回来报答案，
+        // 线上症状（管理员反馈“有时查完不输出”）：模型回来汇报那一轮自评偏低（它只是回来报答案，
         // 不是在“插嘴”），被门槛静默掉 → 资料白白浪费，群里只看到“我去查一下”。
         using (var thResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
                    new StringContent("""{"suitabilityThreshold":50}""", Encoding.UTF8, "application/json"), cts.Token))

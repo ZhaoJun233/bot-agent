@@ -6,11 +6,11 @@ using BotAgent.Services.Tools;
 namespace BotAgent.Services.Agent;
 
 /// <summary>
-/// **服务器自己**的 agent：跑在机器人容器里，用模型 + 工具循环干活（号主 2026-09-17 要的“bot 自己也要有 agent 能力”）。
+/// **服务器自己**的 agent：跑在机器人容器里，用模型 + 工具循环干活（管理员 2026-09-17 要的“bot 自己也要有 agent 能力”）。
 ///
 /// 为什么不用“在容器里再装一个 pi”：
 ///   • 镜像要加 Node + npm + pi（几百 MB），而容器里真正缺的是**干活的脑子**，不是那个 CLI；
-///   • pi 的价值在号主本机的文件/工具链 —— 那是**本机桥**（AgentBridgeServer）的事；
+///   • pi 的价值在管理员本机的文件/工具链 —— 那是**本机桥**（AgentBridgeServer）的事；
 ///   • 容器里的 agent 要干的是“看日志、翻数据、查库存、跑健康检查”这类运维活：bash + 读写文件 + 抓 URL 就够。
 /// 所以这里是一个**原生 C# 的工具循环**：同一个模型、同一套白名单，只是执行地点在容器里。
 ///
@@ -33,7 +33,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
     /// <summary>
     /// 一个任务的总时长上限（秒）。为什么需要：以前只有“最多 N 步”✗，而每步的命令还能各跑 60 秒，
-    /// 一个跑偏的任务能磨十几分钟 —— 群里看着就是“卡住了”✗（2026-09-21 号主报的：
+    /// 一个跑偏的任务能磨十几分钟 —— 群里看着就是“卡住了”✗（2026-09-21 管理员报的：
     /// 让它点十个赞，它不调 qq 工具，改去 docker 里翻 NapCat ✗，13 步 30 秒还在找路）。
     /// 到点不是硬杀，而是让它先用已有的信息把结论说出来。
     /// </summary>
@@ -113,7 +113,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var allowed = ParseTools(_settings.AgentServerTools);
 
         // docker 是高权限能力（docker.sock ≈ root）：只在面板那个开关打开时才能用。
-        // 两把锁：就算号主在“工具”里写了 docker，开关没开也不给用。
+        // 两把锁：就算管理员在“工具”里写了 docker，开关没开也不给用。
         if (!_settings.AgentServerDocker)
         {
             allowed.Remove("docker");
@@ -135,7 +135,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost);
 
         // 会话上下文：**默认不带**（每条 // 指令单独对待）——
-        // 号主 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
+        // 管理员 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
         // 模型会把旧指令也答一遍，新指令的回复里混进旧内容（“1. 点赞动作… 2. 服务器状态…”。）。
         // 想要“接着上一句聊”：面板里的开关，或单条写 //接着 …（两者都会把 task.UseHistory 置上）。
         // 带历史时也先洗一遍：【工具步骤不进历史】—— 上一轮若是“查服务器状态”，那几个 bash 步骤（命令 + 输出）
@@ -185,7 +185,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 if (call is null)
                 {
                     // 不是 JSON：先给一次机会，让它把话说进协议里（模型偶尔会拿散文答话，
-                    // 而散文一旦被当成结论，工具就一次都不会调 —— 号主会看到一份“凭空编的答案”）。
+                    // 而散文一旦被当成结论，工具就一次都不会调 —— 管理员会看到一份“凭空编的答案”）。
                     if (nudged == 0 && allowed.Count > 0)
                     {
                         nudged++;
@@ -291,7 +291,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     ///
     /// 为什么：工具步骤长这样 —— <c>{"tool":"bash","command":"uptime…"}</c> 与 <c>工具输出（bash）：…</c>。
     /// 它们对“这个会话在聊什么”几乎没贡献，却把模型带进“我正在跑命令”的模式：
-    /// 号主实测过一次 —— 上一轮查服务器状态留下的 8 条工具步骤，让模型对新的“给某某点赞”
+    /// 管理员实测过一次 —— 上一轮查服务器状态留下的 8 条工具步骤，让模型对新的“给某某点赞”
     /// 一个工具都不调、直接续写了一份状态汇报。
     /// </summary>
     private static List<(string Role, string Text)> SeedHistory(List<(string Role, string Text)> history)
@@ -377,7 +377,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             list.Add("fetch：抓一个 http(s) 地址的正文（url 字段，最多 4000 字）。");
         }
 
-        // docker：号主在面板里开的“透过 docker 操作服务器”能力（高权限，默认关）
+        // docker：管理员在面板里开的“透过 docker 操作服务器”能力（高权限，默认关）
         if (allowed.Contains("docker"))
         {
             list.Add(
@@ -592,7 +592,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 if (!qqAllowed.Contains(spec.Name))
                 {
                     return $"动作 {spec.Name} 没开（本次允许：{string.Join(", ", qqAllowed)}）。" +
-                           "如果确实要做，让号主在面板「服务器 agent 的 QQ 动作」里把它写上。";
+                           "如果确实要做，让管理员在面板「服务器 agent 的 QQ 动作」里把它写上。";
                 }
 
                 var to = call.Raw["user_id"]?.ToJsonString() ?? call.Raw["target"]?.ToJsonString() ?? string.Empty;

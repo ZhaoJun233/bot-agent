@@ -20,7 +20,7 @@ public sealed partial class WebUiServer
 {
     /// <summary>
     /// 本机 Agent 桥的 WS 接入点。
-    /// 为什么要求令牌：这个连接建立后，对方能让 pi 在号主电脑上干活 —— 不配令牌一律拒，
+    /// 为什么要求令牌：这个连接建立后，对方能让 pi 在管理员电脑上干活 —— 不配令牌一律拒，
     /// 不是“回环部署就放行”那种方便口径（handoff-4 §31）。
     /// </summary>
     private async Task HandleAgentBridgeAsync(HttpListenerContext context)
@@ -73,7 +73,7 @@ public sealed partial class WebUiServer
     /// 模型列表：
     ///   • target=server（或 refresh 为空）→ 问服务器 agent 自己的接口（GET <AgentServerBaseUrl>/models）；
     ///   • device=&lt;设备名&gt; → 让那台外部设备现场重问一遍 pi（`pi --list-models`），然后回列表。
-    /// 面板里的下拉就靠它 —— 号主不用手敲模型名。
+    /// 面板里的下拉就靠它 —— 管理员不用手敲模型名。
     /// </summary>
     private async Task HandleAgentModelsAsync(HttpListenerContext context, string method)
     {
@@ -211,7 +211,7 @@ public sealed partial class WebUiServer
 
     /// <summary>
     /// 面板的「外部设备」表：在线的 + 只在配置里出现过的（离线）都得列出来 ——
-    /// 号主要能给一台**还没接上来**的设备先写好名字/模型/目录，接上来就直接用。
+    /// 管理员要能给一台**还没接上来**的设备先写好名字/模型/目录，接上来就直接用。
     /// </summary>
     private JsonArray BuildDeviceListPayload()
     {
@@ -269,7 +269,7 @@ public sealed partial class WebUiServer
 
     /// <summary>
     /// 一键连接：给出「本机怎么接上来」的现成脚本（内嵌当前地址与令牌）。
-    /// 为什么要内嵌令牌：把号主的步骤从“改脚本里的令牌 + 改地址”压成“下载 → 双击”一件事。
+    /// 为什么要内嵌令牌：把管理员的步骤从“改脚本里的令牌 + 改地址”压成“下载 → 双击”一件事。
     /// </summary>
     private async Task HandleAgentSetupAsync(HttpListenerContext context)
     {
@@ -307,7 +307,7 @@ public sealed partial class WebUiServer
             // ── Windows：**整个文件必须是 ASCII**（注释也用英文）──
             // 为什么：cmd.exe 按“系统 ANSI 代码页”读 .cmd 脚本（中文 Windows 就是 GBK），
             // 而这里给的是 UTF-8 —— 中文注释在那时候会变成乱码，并且能**吃掉紧跟其后的那一行**：
-            // 号主实测 `set PI_BRIDGE_TOKEN=…` 就被吃掉，脚本改成 “--token: expected one argument” 报错。
+            // 管理员实测 `set PI_BRIDGE_TOKEN=…` 就被吃掉，脚本改成 “--token: expected one argument” 报错。
             // 同理不要在 .cmd 里用 --token %VAR% 那种转一手的形式：参数直接走环境变量，少一个坑。
             filename = "connect-pi-bridge.cmd";
             script =
@@ -506,12 +506,6 @@ public sealed partial class WebUiServer
     private async Task HandleAgentTestAsync(HttpListenerContext context)
     {
         var bridge = _agentBridge;
-        if (bridge is null || !_settings.EnableAgentBridge)
-        {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "本机 Agent 没启用（面板里打开开关）" });
-            return;
-        }
-
         var body = await ReadJsonAsync(context);
         var prompt = body?["prompt"]?.GetValue<string>()?.Trim();
         if (string.IsNullOrWhiteSpace(prompt))
@@ -522,6 +516,8 @@ public sealed partial class WebUiServer
 
         var timeout = Math.Clamp(body?["timeoutSec"]?.GetValue<int>() ?? 180, 10, 900);
         var target = (body?["target"]?.GetValue<string>() ?? "host").Trim();
+        var sourceKey = (body?["key"]?.GetValue<string>() ?? "panel:workspace").Trim();
+        var sessionId = (body?["sessionId"]?.GetValue<string>() ?? string.Empty).Trim();
 
         // 面板里能分别试两边：服务器内置 agent 直接在容器里跑工具循环（不用经过外部设备）
         if (target.Equals("server", StringComparison.OrdinalIgnoreCase) ||
@@ -533,7 +529,9 @@ public sealed partial class WebUiServer
                 return;
             }
 
-            var serverTask = await _agentCmds.RunServerAgentDirectAsync(prompt, timeout);
+            var serverTask = sessionId.Length > 0
+                ? await _agentCmds.RunPanelAgentDirectAsync(sourceKey, sessionId, prompt, timeout, "server")
+                : await _agentCmds.RunServerAgentDirectAsync(prompt, timeout);
             await WriteJsonAsync(context, 200, new JsonObject
             {
                 ["ok"] = serverTask.Ok,
@@ -543,6 +541,12 @@ public sealed partial class WebUiServer
                 ["toolCalls"] = serverTask.ToolCalls,
                 ["target"] = "server"
             });
+            return;
+        }
+
+        if (bridge is null || !_settings.EnableAgentBridge)
+        {
+            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "本机 Agent 没启用（面板里打开开关）" });
             return;
         }
 
@@ -556,7 +560,9 @@ public sealed partial class WebUiServer
             return;
         }
 
-        var task = await bridge.RunDirectAsync(prompt, TimeSpan.FromSeconds(timeout), CancellationToken.None);
+        var task = sessionId.Length > 0
+            ? await _agentCmds.RunPanelAgentDirectAsync(sourceKey, sessionId, prompt, timeout, "host")
+            : await bridge.RunDirectAsync(prompt, TimeSpan.FromSeconds(timeout), CancellationToken.None);
         await WriteJsonAsync(context, 200, new JsonObject
         {
             ["ok"] = task.Ok,

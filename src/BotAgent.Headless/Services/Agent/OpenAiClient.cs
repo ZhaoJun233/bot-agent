@@ -25,7 +25,7 @@ public sealed class OpenAiClient : IModelClient
     /// <summary>
     /// 聊天那次请求单独一个客户端，超时放宽（默认 120 秒，可用 <c>QQCHAT_MODEL_TIMEOUT_SECONDS</c> 覆盖）。
     /// 为什么：上游是“思考型”模型 + 多账号网关，实测一次 12~40 秒起步，长上下文/带图更久；
-    /// 60 秒太紧 —— 群里出现过 <c>TaskCanceledException: 60 秒超时</c> 把一整轮回复丢掉（号主 11:32 截的图）。
+    /// 60 秒太紧 —— 群里出现过 <c>TaskCanceledException: 60 秒超时</c> 把一整轮回复丢掉（管理员 11:32 截的图）。
     /// 但也不能无限等（群里干等几分钟也是一种坏体验），所以配一次“重试 + 30 秒封顶”：
     /// 第一次拿到就是拿到，真卡住了第二次 30 秒内给个结果（成功就用它，不成就丢掉这一轮）。
     /// 辅助调用继续用 60 秒那个，免得网关抽风时把画像/审核也拖几分钟。
@@ -632,7 +632,7 @@ public sealed class OpenAiClient : IModelClient
     /// <summary>
     /// 给一个 agent 会话综结标题（每轮跑完调一次；失败就返回 null —— 起名不能影响任务本身）。
     /// 为什么要模型综结：用“第一句指令”当标题时，一个会话跑了十几轮之后标题还是那句开场白；
-    /// 号主要的是“根据上下文综结出这个会话在干什么”。提示词里带 `[会话标题]` 标记，
+    /// 管理员要的是“根据上下文综结出这个会话在干什么”。提示词里带 `[会话标题]` 标记，
     /// 测试的假上游靠它识别这类请求（不会把脚本回复吃掉）。
     /// </summary>
     public async Task<string?> SummarizeSessionTitleAsync(string digest, string? previousTitle, CancellationToken ct = default)
@@ -955,7 +955,7 @@ public sealed class OpenAiClient : IModelClient
 
     /// <summary>
     /// 把解析器“要说给日志听的话”按原来的措辞写出来（<see cref="ModelOutputParser" /> 是纯函数，不自己写日志）。
-    /// ⚠ 这几行是**对外契约**（号主按它们排障），搬家时逐字保留；只记形状与长度，不记正文（V3 §8.2）。
+    /// ⚠ 这几行是**对外契约**（管理员按它们排障），搬家时逐字保留；只记形状与长度，不记正文（V3 §8.2）。
     /// </summary>
     private static void LogParseNotices(IReadOnlyList<ParseNotice> notices)
     {

@@ -35,7 +35,7 @@ public sealed class WhitelistGate
     /// </summary>
     private HashSet<long> _local = new();
 
-    /// <summary>哪一边在用旧的共用名单（面板上要如实显示，不然号主会以为新框填了没生效）。</summary>
+    /// <summary>哪一边在用旧的共用名单（面板上要如实显示，不然管理员会以为新框填了没生效）。</summary>
     private bool _groupsFromLegacy;
     private bool _privatesFromLegacy;
 
@@ -95,7 +95,7 @@ public sealed class WhitelistGate
 
     /// <summary>
     /// 群/私聊是否在白名单里（戳一戳事件没有 QqChatMessage，只能单拎一个判据）。
-    /// 两边**各用各的名单**（号主 2026-09-18：“私聊白名单和群聊白名单两个框分开”）：以前只比数字，
+    /// 两边**各用各的名单**（管理员 2026-09-18：“私聊白名单和群聊白名单两个框分开”）：以前只比数字，
     /// 所以把一个 QQ 号填进去，连“同号的群”也一起放行了。
     /// </summary>
     public bool AllowsSource(bool isGroup, long id)

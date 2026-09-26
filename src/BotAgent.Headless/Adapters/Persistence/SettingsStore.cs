@@ -15,6 +15,7 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public sealed class SettingsStore : ISettingsRepository
 {
+    private const string ReadSettingsSql = "SELECT json FROM settings WHERE id = 1";
     public string FilePath => AppDatabase.FilePath;
 
     /// <summary>库文件在不在盘上（启动横幅如实显示用；配置的真源始终是库，不是文件）。</summary>
@@ -25,7 +26,7 @@ public sealed class SettingsStore : ISettingsRepository
     {
         try
         {
-            return AppDatabase.Scalar<long>("SELECT COUNT(1) FROM settings") > 0;
+            return AppDatabase.Scalar<string>(ReadSettingsSql) is not null;
         }
         catch (Exception)
         {
@@ -37,7 +38,7 @@ public sealed class SettingsStore : ISettingsRepository
     {
         try
         {
-            var json = AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id = 1");
+            var json = AppDatabase.Scalar<string>(ReadSettingsSql);
             if (string.IsNullOrWhiteSpace(json))
             {
                 return new AppSettings();

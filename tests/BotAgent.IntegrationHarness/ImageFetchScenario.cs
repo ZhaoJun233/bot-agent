@@ -6,7 +6,7 @@ namespace BotAgent.IntegrationHarness;
 /// <summary>
 /// S31 图片下载：rkey 过期（400）/ 缓存 / 让协议端重新签发。
 ///
-/// 线上现象（号主让排查的日志）：`[Vision] 图片下载失败 400: https://multimedia.nt.qq.com.cn/download?…`
+/// 线上现象（管理员让排查的日志）：`[Vision] 图片下载失败 400: https://multimedia.nt.qq.com.cn/download?…`
 /// 实测结论（去问 NapCat 的历史 API 得到）：
 ///   • QQ 的图片地址是**带时效 rkey 的临时链**，过期后 CDN 一律回 400；
 ///   • 同一张图在会话上下文里会留很久，而每个轮次生成都会重新下一遍 —— 过期后就是每轮一条 400，日志刷屏；

@@ -158,7 +158,7 @@ public static partial class TextRules
     /// <summary>
     /// “语音说的”和“文字写的”是不是同一句（去空白去标点后相等，或短句被长句包含）。
     /// 为什么需要：模型给的 speak 与 reply 常常只差标点/语气词 ✗（「好呀，那我们八点见」vs「好呀八点见！」），
-    /// 严格相等会漏判 → 同一条内容语音+文字各发一遍（号主 2026-09-21 报的）。
+    /// 严格相等会漏判 → 同一条内容语音+文字各发一遍（管理员 2026-09-21 报的）。
     /// </summary>
     public static bool SameSaid(string a, string b)
     {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把「QQ 群里的 // 命令」接到本机 pi 上的桥（跑在号主自己的电脑上）。
+"""把「QQ 群里的 // 命令」接到本机 pi 上的桥（跑在管理员自己的电脑上）。
 
 ──────────────────────────────────────────────────────────────────────
 为什么需要这个脚本（拓扑设计，别删这段）：
@@ -48,7 +48,7 @@ DEFAULT_PI = "pi"
 DEFAULT_TOKEN = os.environ.get("PI_BRIDGE_TOKEN", "")
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pi-bridge.log")
 
-# ─────────── 影子会话（2026-09-18：号主点开 pi-web 看会话，把正在跑的任务弄断流）───────────
+# ─────────── 影子会话（2026-09-18：管理员点开 pi-web 看会话，把正在跑的任务弄断流）───────────
 # 问题：pi 的会话是一个 JSONL 文件，pi-web（或别的 pi 进程）一打开那个会话就会碰同一份文件；
 # 任务跑到一半被外部改动/抢锁，表现就是上游流被掐断（“Upstream response stream was interrupted”）。
 # 做法：任务在自己的影子目录里跑（先把原会话复制过去），跑完再把**新增行**追加回原会话 ——
@@ -201,7 +201,7 @@ class SshTunnel:
         self.key = key
         self.local_port = local_port
         self.remote = remote
-        # 额外转发（号主 2026-09-18：“外部服务器连接加上 sftp 操作”）：
+        # 额外转发（管理员 2026-09-18：“外部服务器连接加上 sftp 操作”）：
         # 例：(2222, "127.0.0.1:22") —— 本机 2222 → 服务器 sshd，于是 pi 在自己那台电脑上
         # 跑 `sftp -P 2222 …` 就能读写服务器文件（不用开公网端口，也不依赖本机能直连 22）。
         self.extra_forwards = extra_forwards or []
@@ -272,7 +272,7 @@ class TaskRunner:
         self.pi_argv = pi_argv
         self.pi_cmd = pi_display or " ".join(pi_argv)   # log/error text only
         self.workdir = workdir
-        # 给 pi 进程注入的“服务器坐标”（号主 2026-09-18：外部连接也要能操作服务器文件）：
+        # 给 pi 进程注入的“服务器坐标”（管理员 2026-09-18：外部连接也要能操作服务器文件）：
         # pi 的 bash 工具会继承它们，于是 agent 可以直接：
         #   sftp -P "$PI_SERVER_SFTP_PORT" -i "$PI_SERVER_KEY" "$PI_SERVER_SSH"
         # 里面**不含密钥**，只有路径与端口；隧道由桥自己维护。
@@ -312,7 +312,7 @@ class TaskRunner:
         timeout = int(task.get("timeoutSec") or 900)
 
         # 服务器坐标：告诉 agent “你可以直接读写服务器上的文件”——
-        # 不写这段，它只会看到一堆 PI_SERVER_* 环境变量却不知道那是什么（2026-09-18 号主要的能力）。
+        # 不写这段，它只会看到一堆 PI_SERVER_* 环境变量却不知道那是什么（2026-09-18 管理员要的能力）。
         if self.server_env:
             note = ("\n\n【服务器文件】要读写机器人所在服务器上的文件，可以用 sftp/scp（桥已经开好了隧道）：\n"
                     f"  sftp -P {self.server_env.get('PI_SERVER_SFTP_PORT')} -i \"{self.server_env.get('PI_SERVER_KEY')}\" "
@@ -952,7 +952,7 @@ def _forget_session(pi_session_id: str) -> int:
     """删掉 pi 那边的会话文件（`~/.pi/agent/sessions/<工作目录>/<会话>.jsonl`）。
 
     为什么由桥来做：会话文件在**本机**，机器人看不到。删不掉也不报错（只是历史还在），
-    但会写进日志，号主自己能看出发生了什么。
+    但会写进日志，管理员自己能看出发生了什么。
     """
     if not pi_session_id:
         return 0

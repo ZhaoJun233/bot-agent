@@ -153,6 +153,7 @@ public sealed partial class WebUiServer : IDisposable
         SessionPolicyLedger? sessionPolicies = null,
         TurnTraceStore? traces = null,
         IHostFacts? hostFacts = null,
+         IAuditChain? audit = null,
         ApprovalUseCase? approvals = null,
         LocalChannelSource? localChannel = null,
         Action? onRestart = null)
@@ -187,6 +188,8 @@ public sealed partial class WebUiServer : IDisposable
         _healthReports = healthReports;
         _sessionPolicies = sessionPolicies;
         _traces = traces;
+        _traceArchive = traces?.Archive;
+        _auditChain = audit;
         _hostFacts = hostFacts;
         _approvals = approvals;
         _localChannel = localChannel;
@@ -209,7 +212,7 @@ public sealed partial class WebUiServer : IDisposable
     /// <summary>本机 Agent 桥（没启用时为 null）。</summary>
     private readonly AgentBridgeServer? _agentBridge;
 
-    /// <summary>服务器健康日报（号主 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
+    /// <summary>服务器健康日报（管理员 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
     private readonly HealthReportService? _healthReports;
 
     /// <summary>会话级权限元数据（批次 B）：只读观测用；测试环境里可以是 null（那时面板只报 available=false）。</summary>
@@ -217,6 +220,8 @@ public sealed partial class WebUiServer : IDisposable
 
     /// <summary>决策轨迹（批次 C）：只读观测用；测试环境里可以是 null（那时 /api/traces 报 available=false）。</summary>
     private readonly TurnTraceStore? _traces;
+    private readonly ITraceArchive? _traceArchive;
+    private readonly IAuditChain? _auditChain;
 
     /// <summary>宿主事实（批次 J 的仪表盘要内存上限与负载）：只读端口，测试环境里可以是 null。</summary>
     private readonly IHostFacts? _hostFacts;
@@ -314,6 +319,7 @@ public sealed partial class WebUiServer : IDisposable
 
             var publicPath = path.Equals("/healthz", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/readyz", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/metrics", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/status", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/agent-bridge", StringComparison.OrdinalIgnoreCase) ||
@@ -473,7 +479,7 @@ public sealed partial class WebUiServer : IDisposable
     }
 
     /// <summary>面板日志页首屏：最近的运行日志（内存环形缓冲，含启动时从日志文件回填的历史）。
-    /// 以前日志只活在浏览器内存里 —— 一刷新页面就"被清空"，只有之后的新行（号主反馈）。</summary>
+    /// 以前日志只活在浏览器内存里 —— 一刷新页面就"被清空"，只有之后的新行（管理员反馈）。</summary>
     private async Task HandleLogsAsync(PanelRequest r)
     {
         var raw = r.Context.Request.QueryString["limit"];

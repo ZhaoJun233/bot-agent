@@ -99,8 +99,8 @@ public sealed partial class AgentCommandService
         }
 
         // 没配就没收（新白名单空 = 谁都不能用）。
-        // 不强行把号主自己加进去 —— 这种“能在电脑上执行命令”的开关必须写清楚才生效。
-        //   * = 白名单会话里**所有人都能用**（号主显式写 * 才生效，不是默认）
+        // 不强行把管理员自己加进去 —— 这种“能在电脑上执行命令”的开关必须写清楚才生效。
+        //   * = 白名单会话里**所有人都能用**（管理员显式写 * 才生效，不是默认）
         _agentUsers = set;
         _agentAllowAll = (_settings.AgentAllowedUsers ?? string.Empty)
             .Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
@@ -165,7 +165,7 @@ public sealed partial class AgentCommandService
     /// <remarks>
     /// 为什么要有这玩意儿：`//` 任务此前只把**文本**交给 agent —— 消息里的图片段在解析时
     /// 已经变成「[图片]」三个字，URL 根本没跟过去，于是外部设备（本机 pi）与服务器 agent
-    /// 都不知道有图（2026-09-19 号主报“给 Agent 发图片识别不了”，日志里就是 `agent 命令: [图片]`）。
+    /// 都不知道有图（2026-09-19 管理员报“给 Agent 发图片识别不了”，日志里就是 `agent 命令: [图片]`）。
     /// <para>
     /// 两种取法都给上，谁顺手用谁：
     /// ① QQ 直链（带时效 rkey，尽快取）；② 顺手下载一份留档到 <c>data/agent-images/</c>，
@@ -240,7 +240,7 @@ public sealed partial class AgentCommandService
 
     /// <summary>
     /// 抽出命令开头的 <c>@目标</c>（`@server` / `@host` / `@服务器` / `@外部` / `@<设备名>`）。
-    /// 为什么要这个：面板里改的是“对以后所有命令生效”的优先项，但号主常常只是**这一条**想指定另一台设备 ⋯（“有时候需要修改不同的外部设备接入”）。
+    /// 为什么要这个：面板里改的是“对以后所有命令生效”的优先项，但管理员常常只是**这一条**想指定另一台设备 ⋯（“有时候需要修改不同的外部设备接入”）。
     /// </summary>
     private static (string Target, string Payload) StripTargetPrefix(string payload)
     {
@@ -288,9 +288,46 @@ public sealed partial class AgentCommandService
         return task;
     }
 
+    /// <summary>面板工作台用的持久化单次执行入口：把运行流水写回指定 Agent 会话。</summary>
+    public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt, int timeoutSeconds, string target)
+    {
+        var session = _agentSessions.Find(sourceKey, sessionId);
+        if (session is null)
+        {
+            throw new InvalidOperationException("Agent 会话不存在或已被删除");
+        }
+
+        var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, target.Equals("host", StringComparison.OrdinalIgnoreCase) ? session.Device : null);
+        try
+        {
+            AgentTask task;
+            if (target.Equals("server", StringComparison.OrdinalIgnoreCase) || target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
+            {
+                task = await RunServerAgentDirectAsync(prompt, timeoutSeconds);
+            }
+            else
+            {
+                if (_agentBridge is null || !_agentBridge.Connected)
+                {
+                    throw new InvalidOperationException("外部 agent 设备没连上");
+                }
+
+                task = await _agentBridge.RunDirectAsync(prompt, TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 900)), CancellationToken.None);
+            }
+
+            _agentSessions.FinishRun(sourceKey, session.Id, runId, task.Ok, task.DurationMs, task.ToolCalls,
+                task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
+            return task;
+        }
+        catch (Exception ex)
+        {
+            _agentSessions.FinishRun(sourceKey, session.Id, runId, false, 0, 0, ex.Message);
+            throw;
+        }
+    }
     /// <summary>
     /// 剥掉“接着上一句说”的前缀（<c>//接着 …</c> / <c>//继续 …</c> / <c>//+ …</c>）。
-    /// 只有写了前缀（或面板开了开关）才把上文喂给模型 —— 号主 2026-09-18：
+    /// 只有写了前缀（或面板开了开关）才把上文喂给模型 —— 管理员 2026-09-18：
     /// “每次发送新指令都会把旧指令的内容发送回来，要把每条指令输出单独对待”。
     /// </summary>
     private static (bool Continue, string Prompt) StripContinuePrefix(string payload)
@@ -354,7 +391,9 @@ public sealed partial class AgentCommandService
         foreach (var (key, sessions) in _agentSessions.AllChats())
         {
             var conv = _registry.Snapshot().FirstOrDefault(c => c.SourceKey == key);
-            var shown = conv is not null ? ChatLabel(conv) : (_settings.AgentMaskSensitive ? AgentMask.ChatLabel(key) : key);
+            var shown = key.Equals("panel:workspace", StringComparison.Ordinal)
+                ? "面板工作区"
+                : conv is not null ? ChatLabel(conv) : (_settings.AgentMaskSensitive ? AgentMask.ChatLabel(key) : key);
             total += sessions.Count;
             chats[key] = new JsonObject
             {
@@ -476,7 +515,7 @@ public sealed partial class AgentCommandService
     ///
     /// 为什么必须同源：以前 `//status`/`//reset` 只看到“写了 @设备名”就当成外部设备，
     /// 而实际分发会因为那台设备不在线、开关关了等原因改走服务器 ——
-    /// 于是 `//@某台不在线的设备 看下日志` 跑在服务器上，号主 `//reset` 却去清了**那台空的外部会话**，
+    /// 于是 `//@某台不在线的设备 看下日志` 跑在服务器上，管理员 `//reset` 却去清了**那台空的外部会话**，
     /// 被污染的历史一直没清掉（2026-09-18 实测：reset 两次都没用）。
     /// </summary>
     private sealed record AgentRoute(
@@ -495,7 +534,7 @@ public sealed partial class AgentCommandService
         var serverSwitch = _settings.EnableServerAgent;
         var hostOnline = bridge is not null && bridge.IsDeviceOnline(named);
 
-        // 面板里把某台设备关掉了 → 就当它不可用（并告诉号主是开关关的，不是没连上）
+        // 面板里把某台设备关掉了 → 就当它不可用（并告诉管理员是开关关的，不是没连上）
         var deviceName = named ?? bridge?.AnyBridge?.Name;
         var deviceDisabled = deviceName is not null && !_settings.IsDeviceEnabled(deviceName);
 
@@ -528,7 +567,7 @@ public sealed partial class AgentCommandService
         return reference.Trim();
     }
 
-    /// <summary>//help：把所有命令列出来（号主：“忘记一些命令可以添加一个 help 命令”）。</summary>
+    /// <summary>//help：把所有命令列出来（管理员：“忘记一些命令可以添加一个 help 命令”）。</summary>
     private string HelpText(string sourceKey)
     {
         var list = _agentSessions.List(sourceKey);
@@ -691,7 +730,7 @@ public sealed partial class AgentCommandService
                 _hooks.Log($"agent 完成（{seconds:F0}s，{task.ToolCalls} 次工具调用）: {TextRules.Shorten(task.Text ?? string.Empty, 80)}");
 
                 // agent 会翻日志/数据，结论里很可能带 QQ 号或群友昵称 —— 回群前过一遍脱敏开关
-                //（面板里的“列出会话时脱敏”默认是开的；关掉就原样发，号主自己的选择）。
+                //（面板里的“列出会话时脱敏”默认是开的；关掉就原样发，管理员自己的选择）。
                 await _hooks.SendPlainAsync(conversation, MaybeMask(task.Text ?? string.Empty, task.SourceKey));
             }
             else
@@ -712,7 +751,7 @@ public sealed partial class AgentCommandService
 
     /// <summary>
     /// 一轮跑完后按上下文综结会话标题（只改自动名的会话）。
-    /// 号主要求：“不要每发一条指令就重新命名，执行完按上下文内容综结标题，而不是简单复用”。
+    /// 管理员要求：“不要每发一条指令就重新命名，执行完按上下文内容综结标题，而不是简单复用”。
     /// </summary>
     private async Task SummarizeSessionTitleAsync(AgentTask task)
     {

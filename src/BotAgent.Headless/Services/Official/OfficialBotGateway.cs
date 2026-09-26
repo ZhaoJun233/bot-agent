@@ -14,7 +14,7 @@ namespace BotAgent.Services.Official;
 /// 官方通道网关（QQ 开放平台 / Bot API v2）——
 /// 与私域那条（OneBot + NapCat）**并存**，由 <see cref="ChannelRouter"/> 聚合后交给 BotAgentHost。
 ///
-/// 为什么要有这条路：私域那条是号主自己的 QQ 号（自建协议端），官方那条是开放平台上申请的机器人
+/// 为什么要有这条路：私域那条是管理员自己的 QQ 号（自建协议端），官方那条是开放平台上申请的机器人
 /// （appid + secret，用户是 openid）。两边的会话、上下文、人设互不相干 —— 一起放到面板里看，
 /// 但**绝不串台**（靠 <see cref="Channels"/> 的 key 前缀 + <see cref="OfficialIdMap"/> 的别名号）。
 ///

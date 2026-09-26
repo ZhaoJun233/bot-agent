@@ -9,20 +9,20 @@ using System.Text.Json.Nodes;
 namespace BotAgent.Services.Agent;
 
 /// <summary>
-/// 本机 Agent 桥：让 QQ 群里一条 <c>//开头的消息</c> 真正跑到**号主本机**的 pi 上。
+/// 本机 Agent 桥：让 QQ 群里一条 <c>//开头的消息</c> 真正跑到**管理员本机**的 pi 上。
 ///
 /// 为什么是这个拓扑（画出来就是设计说明书）：
 /// <code>
 ///   群里的 //消息
 ///        │  (QQ)
 ///        ▼
-///   机器人（服务器容器，没有号主的代码/工具/pi 登录态）
+///   机器人（服务器容器，没有管理员的代码/工具/pi 登录态）
 ///        │  WebSocket：机器人**监听**，本机主动连进来（本机在 NAT 后面，只能它出站）
 ///        ▼
 ///   本机 pi-bridge.py
 ///        │  subprocess
 ///        ▼
-///   pi -p --mode json …（在读号主自己的目录里干活）
+///   pi -p --mode json …（在读管理员自己的目录里干活）
 /// </code>
 ///
 /// 安全边界（这个功能能在别人电脑上执行命令，所以每一步都要说得清）：
@@ -212,7 +212,7 @@ public sealed class AgentBridgeServer
                 _ = SendAsync(new JsonObject { ["type"] = "cancel", ["id"] = cur.Id }, cur.DeviceName);
 
                 // 立即收尾，而不是等桥回一句“已取消”：
-                // ① 号主发 //stop 就是要“马上停”，不能还挂着；
+                // ① 管理员发 //stop 就是要“马上停”，不能还挂着；
                 // ② 挂着的话，新的任务会被“串行下发”那个门挡在外面（实测踩过）。
                 cur.Fail("已取消");
                 _outstanding.TryRemove(cur.Id, out _);
@@ -654,7 +654,7 @@ public sealed class AgentBridgeServer
                 }
 
                 // 外部设备上的 pi 是**串行**跑的：上一个还没收尾就不能下发下一个，
-                // 否则桥会回“本机还有任务在跑（串行执行）”，号主看到的就是“发了两条，一条报错”。
+                // 否则桥会回“本机还有任务在跑（串行执行）”，管理员看到的就是“发了两条，一条报错”。
                 lock (_stateLock)
                 {
                     if (_current is { } running && !running.Done)
@@ -920,7 +920,7 @@ public sealed class AgentTask
 
     public int TimeoutSeconds { get; set; }
 
-    /// <summary>配置里那个模型名在这台设备上不存在时，记下原值（本轮的降级要告知号主）。</summary>
+    /// <summary>配置里那个模型名在这台设备上不存在时，记下原值（本轮的降级要告知管理员）。</summary>
     public string? ModelFallbackFrom { get; set; }
 
     /// <summary>这一轮对应的“小会话”记录 id（跑完回写结果）。</summary>
@@ -935,7 +935,7 @@ public sealed class AgentTask
     /// <summary>
     /// 服务器内置后端：这一轮**要不要**把历史喂给模型。
     ///
-    /// 默认 false（每条 // 指令单独对待）—— 号主 2026-09-18 实测：会话里堆着上几轮的指令原文时，
+    /// 默认 false（每条 // 指令单独对待）—— 管理员 2026-09-18 实测：会话里堆着上几轮的指令原文时，
     /// 模型会把“查服务器状态”这种旧指令也答一遍，新指令的回复里混进旧内容。
     /// 想要“接着上一句聊”就把面板那个开关打开，或单条写 <c>//接着 …</c>。
     /// </summary>

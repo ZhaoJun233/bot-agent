@@ -188,7 +188,7 @@ internal sealed class ModelTransport : IModelTransport
         // 5xx/429 与**超时**各重试一次。
         // 为什么要：上游网关（多账号池网关之类）经常回 503 auth_unavailable / No capacity ——
         // 实测 17:28 连挨三次，每条都直接“模型请求失败”丢掉一次回复；晚 2 秒再问一次往往就能拿到。
-        // 超时同理：号主 11:30 那次就是 60 秒到点被取消（当时超时写死 60 秒），其实再问一次经常能拿到。
+        // 超时同理：管理员 11:30 那次就是 60 秒到点被取消（当时超时写死 60 秒），其实再问一次经常能拿到。
         // 只重试一次、且只对 5xx/429/超时：4xx 是请求本身的问题，重试没意义。
         HttpResponseMessage? response = null;
         string? failureDetail = null;

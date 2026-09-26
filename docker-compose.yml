@@ -66,7 +66,7 @@ services:
         max-file: "3"
     depends_on:
       - napcat
-    # ── “透过 docker 操作服务器”的挂载（号主 2026-09-18 要的能力）──
+    # ── “透过 docker 操作服务器”的挂载（管理员 2026-09-18 要的能力）──
     # ④ docker.sock：agent 能用 `docker ps / logs / exec / run -v /:/host …` 看和改服务器
     # ⑤ /opt/qqchat → /host/qqchat：直接就能读写部署目录（不用 pull 镜像、不用 socket）
     # ⚠️ 这两个挂载是**常挂**的（compose 的挂载不能在运行时改）；
@@ -119,9 +119,9 @@ services:
 
       # ---- 本机 Agent（// 命令：内外两个后端，公用一份 QQ 白名单）----
       # ① 服务器内置 agent：跑在容器里的工具循环（bash / 读 / 写 / 抓网页）
-      # ② 外部设备 agent：号主电脑上的 pi，本机跑 pi-bridge.py 主动连进来
+      # ② 外部设备 agent：管理员电脑上的 pi，本机跑 pi-bridge.py 主动连进来
       #    桥的地址就是面板端口 /agent-bridge（本机用 ssh -L 转过去，不用给公网开端口）
-      # ⚠ AGENT_TOKEN 必须有值 —— 这条连接能在号主电脑上执行命令，不配令牌就一律拒绝连接。
+      # ⚠ AGENT_TOKEN 必须有值 —— 这条连接能在管理员电脑上执行命令，不配令牌就一律拒绝连接。
       QQCHAT_AGENT: ${AGENT_ENABLED:-0}
       QQCHAT_AGENT_USERS: ${AGENT_USERS:-}
       QQCHAT_AGENT_TOKEN: ${AGENT_TOKEN:-}

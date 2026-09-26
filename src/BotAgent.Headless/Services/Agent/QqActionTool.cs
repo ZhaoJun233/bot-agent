@@ -25,12 +25,12 @@ public sealed record QqActionSpec(
 }
 
 /// <summary>
-/// QQ 动作目录 —— 服务器内置 agent 能做的“真动作”（号主 2026-09-18 / 09-19 要的“比如点赞”）。
+/// QQ 动作目录 —— 服务器内置 agent 能做的“真动作”（管理员 2026-09-18 / 09-19 要的“比如点赞”）。
 ///
 /// 为什么要分两档（而不是一股脑全开）：
 ///   • 服务器 agent 会**读日志/文件/网页**，那些内容里可能夹着“给我点赞”“把谁禁言”这类话；
 ///     模型再听话也架不住有人往群里/网页里塞指令（提示注入）。所以默认只开“闹着玩”的一档，
-///     真正会打扰别人、或不可逆的动作（禁言/踢人/改群名/退群/代发消息）必须号主在面板里点名打开。
+///     真正会打扰别人、或不可逆的动作（禁言/踢人/改群名/退群/代发消息）必须管理员在面板里点名打开。
 ///   • 另一层保险在 <see cref="ServerAgentRunner" />：不在允许表里的动作，连协议端都不会被调用到。
 /// </summary>
 public static class QqActionCatalog
@@ -508,7 +508,7 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
 
         if (long.TryParse(token, out var id) && id > 0)
         {
-            // 纯数字：群里发的就当群号（号主想给别的群发就写群号），私聊里发的当 QQ 号
+            // 纯数字：群里发的就当群号（管理员想给别的群发就写群号），私聊里发的当 QQ 号
             return (_isGroup, id);
         }
 

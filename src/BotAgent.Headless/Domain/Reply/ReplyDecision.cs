@@ -192,7 +192,7 @@ public static class ReplyDecisionRules
 
         if (upstreamEmpty)
         {
-            // 上游没给内容：不发，但标记 malformed（号主要能看出这是网关出事了，不是模型不想说）
+            // 上游没给内容：不发，但标记 malformed（管理员要能看出这是网关出事了，不是模型不想说）
             return new DecisionVerdict(ReplyAction.Silent, false, "upstream_empty", null, Malformed: true);
         }
 

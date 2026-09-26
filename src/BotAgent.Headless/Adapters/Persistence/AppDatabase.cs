@@ -7,7 +7,7 @@ namespace BotAgent.Adapters.Persistence;
 /// <summary>
 /// 全局唯一的 SQLite 数据库：<c>{RuntimeRoot}/data/qqchat.db</c>。
 ///
-/// 为什么从“一堆 JSON 文件”换成数据库（2026-09-13 号主要求）：
+/// 为什么从“一堆 JSON 文件”换成数据库（2026-09-13 管理员要求）：
 ///   • **一致性**：会话/消息/档案分散在 conversations.json + member_profiles/*.json + archive/*.jsonl 里，
 ///     一次崩溃可能只写了一半（会话写了、档案没写），跨文件没法用事务；
 ///   • **规模**：消息是追加型数据，JSON 每次全量重写（几千条就明显卡）；
@@ -401,6 +401,33 @@ public static class AppDatabase
               text       TEXT NOT NULL,
               at_unix    INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS trace_archive(
+              trace_id TEXT PRIMARY KEY,
+              tenant_id TEXT NOT NULL,
+              status_code TEXT NOT NULL,
+              reason_code TEXT,
+              total_ms INTEGER NOT NULL,
+              stage_timings_json TEXT NOT NULL,
+              prompt_tokens INTEGER NOT NULL DEFAULT 0,
+              completion_tokens INTEGER NOT NULL DEFAULT 0,
+              fallback_hops INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_trace_archive_time
+              ON trace_archive(created_at, status_code);
+            CREATE TABLE IF NOT EXISTS security_audit_log(
+              id             INTEGER PRIMARY KEY AUTOINCREMENT,
+              event_type     TEXT NOT NULL,
+              actor_id       TEXT NOT NULL,
+              tenant_id      TEXT NOT NULL,
+              action_detail  TEXT NOT NULL,
+              policy_version TEXT NOT NULL,
+              prev_hash      TEXT NOT NULL,
+              curr_hash      TEXT NOT NULL,
+              created_at     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_security_audit_log_time
+              ON security_audit_log(created_at, id);
             """);
     }
 
@@ -473,5 +500,7 @@ public static class AppDatabase
 
             Write(conn2 => Exec(conn2, "PRAGMA user_version = 4;"));
         }
+
+
     }
 }

@@ -101,6 +101,8 @@ public sealed partial class WebUiServer
             });
         }),
         new("GET", PanelMatch.Exact, "/status", (r) => WriteJsonAsync(r.Context, 200, BuildStatus())),
+new("GET", PanelMatch.Exact, "/metrics", (r) => WriteMetricsAsync(r.Context)),
+        new("GET", PanelMatch.Exact, "/api/audit/verify", (r) => HandleAuditVerifyAsync(r.Context)),
 
         // ─────────── QQ 登录二维码（面板内扫码） ───────────
         // 为什么放在这里而不是让前端直接连 NapCat WebUI：
@@ -128,7 +130,7 @@ public sealed partial class WebUiServer
 
         // ─────────── 本机 Agent 桥（handoff-4 §31） ───────────
         // 桥是本机那个进程主动连过来的（本机在 NAT 后面，只能它出站）；这里把 WS 接住。
-        // 注意：**这个端口能让人在号主电脑上执行命令** —— 所以：没配令牌就直接拒绝。
+        // 注意：**这个端口能让人在管理员电脑上执行命令** —— 所以：没配令牌就直接拒绝。
         new("*", PanelMatch.Exact, "/agent-bridge", (r) => HandleAgentBridgeAsync(r.Context)),
         new("GET", PanelMatch.Exact, "/api/agent/status", (r) => WriteJsonAsync(r.Context, 200, BuildAgentStatusPayload())),
         new("POST", PanelMatch.Exact, "/api/agent/test", (r) => HandleAgentTestAsync(r.Context)),

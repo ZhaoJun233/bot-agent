@@ -42,7 +42,7 @@
       errors: [],
       loading: false,
       busy: false,
-      activeSessionKey: "panel:draft",
+      activeSessionKey: "panel:workspace::draft",
       activeRequestId: null,
       activeRuns: new Map(),
       results: new Map(),
@@ -943,7 +943,7 @@ function renderChannelStatus(channels) {
     // ① **先把消息区切过去**（用已有缓存；没有就是空列表，等下面网络回来再补）。
     //    为什么必须排在最前面：以前画消息排在 syncMobileView/renderConversations/renderHeader
     //    这些装饰性调用之后 ✗，它们中任何一个抛异常，renderMessages() 就再也执行不到 ✗ ——
-    //    表现就是“点会话，右侧永远是上一个会话的内容”✗（号主 2026-09-21 报的），
+    //    表现就是“点会话，右侧永远是上一个会话的内容”✗（管理员 2026-09-21 报的），
     //    而且同步段的异常会变成 unhandled rejection，连提示都没有 ✗。
     renderMessages();
     console.log("[panel] 切到会话", key, "已缓存消息 =", (state.messages.get(key) || []).length);
@@ -1560,7 +1560,7 @@ function renderChannelStatus(channels) {
     $("setPanelDeployEnabled").checked = !!r.panelDeployEnabled;
     $("deployUrl").value = r.panelDeployUrl || "";
     // 把“实际会开哪几个”回显出来：留空 ≠ 什么都没有（是默认安全档），写错的名字会被服务端忽略，
-    // 所以面板得把真正生效的那份摆出来，不然号主会以为自己写生效了。
+    // 所以面板得把真正生效的那份摆出来，不然管理员会以为自己写生效了。
     $("agentServerQqActionsOut").textContent = r.agentServerQqActionsEffective
       ? "现在生效：" + r.agentServerQqActionsEffective
       : "";
@@ -1802,7 +1802,7 @@ function renderChannelStatus(channels) {
     };
 
     // 外部设备表：以前这个字段**根本没进保存请求** —— 面板里改了某台设备的模型/目录/工具/超时/启用，
-    // 点保存也白改（服务器那边还是旧值；号主报过“状态显示的工作目录被固定了”）。
+    // 点保存也白改（服务器那边还是旧值；管理员报过“状态显示的工作目录被固定了”）。
     // 只回写配置字段（online/cwd/pi/models 是服务器算出来的，不要捎回去）。
     // 且**只有真的拉过一份设备表才回写**：否则一次「加载失败 + 保存」就会把设备配置清空。
     if (agentDevicesLoaded) {
@@ -1876,7 +1876,7 @@ function renderChannelStatus(channels) {
   }
 
   /* ─────────── 日志 ─────────── */
-  /// 日志很长时不可能一直拖滚动条：顶部 / 底部两个按钮一键跳（号主要求）。
+  /// 日志很长时不可能一直拖滚动条：顶部 / 底部两个按钮一键跳（管理员要求）。
   /// 注意：跳到最底后如果又来了新日志，renderLogs() 会自己跟上（它在底部附近才自动滚）。
   function bindLogScrollButtons() {
     const top = $("logTopBtn");
@@ -1956,7 +1956,7 @@ function renderChannelStatus(channels) {
   }
 
   /* 下次推送 / 上次结果。服务端返回的 nextRunAt 带 +08:00 偏移，
-     这里直接按浏览器本地时区渲染 —— 号主在国内，看到的就是北京时间。 */
+     这里直接按浏览器本地时区渲染 —— 管理员在国内，看到的就是北京时间。 */
   function healthReportMomentText(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -1990,7 +1990,7 @@ function renderChannelStatus(channels) {
   }
 
   /// 面板日志 = 服务端日志的尾部（`/api/logs`）+ 之后的实时流（SSE）。
-  /// 以前只存浏览器内存：**一刷新页面就全没了**（号主反馈），现在首屏先把历史拉回来。
+  /// 以前只存浏览器内存：**一刷新页面就全没了**（管理员反馈），现在首屏先把历史拉回来。
   async function loadLogs() {
     try {
       const data = await api("/api/logs?limit=300");
@@ -2517,7 +2517,7 @@ function renderChannelStatus(channels) {
     const ready = agentTargetReady(target);
     const sessionBusy = state.agent.busy || state.agent.activeRuns.has(state.agent.activeSessionKey);
     const row = agentActiveRow();
-    const readOnly = !row || !row.session.localOnly;
+    const readOnly = !row;
     const send = $("agentWorkbenchSend");
     send.disabled = readOnly || sessionBusy || !prompt || !ready;
     send.textContent = readOnly ? "只读会话" : sessionBusy ? "执行中…" : "发送 ↑";
@@ -2532,7 +2532,7 @@ function renderChannelStatus(channels) {
     }
     const hint = $("agentSafetyHint");
     if (readOnly) {
-      hint.textContent = "渠道会话只读：当前接口只有执行摘要，不能通过单次测试入口续聊。请先点＋新建本页会话。";
+      hint.textContent = "当前会话不可用：请从左侧选择一个会话，或新建一个持久会话。";
     } else if (!state.agent.status) {
       hint.textContent = "连接状态未知：为避免误执行，任务入口已锁定。请先刷新状态。";
     } else if (sessionBusy) {
@@ -2593,7 +2593,23 @@ function renderChannelStatus(channels) {
   }
 
   function agentConversation(key = state.agent.activeSessionKey) {
-    if (!state.agent.conversations.has(key)) state.agent.conversations.set(key, []);
+    if (!state.agent.conversations.has(key)) {
+      const row = state.agent.rows.find((item) => item.identity === key);
+      const runs = Array.isArray(row?.session?.runs) ? row.session.runs : [];
+      const messages = [];
+      for (const run of runs) {
+        if (!run) continue;
+        if (run.prompt) messages.push({ role: "user", text: run.prompt, status: "已提交" });
+        if (run.result) messages.push({
+          role: "agent",
+          ok: run.ok !== false,
+          text: run.result,
+          status: run.ok === false ? "未完成" : "已完成",
+          meta: [row?.backend === "server" ? "服务器 Agent" : "外部设备 Agent", agentDuration(run.durationMs), `${Number(run.toolCalls || 0)} 次工具调用`].join(" · ")
+        });
+      }
+      state.agent.conversations.set(key, messages);
+    }
     return state.agent.conversations.get(key);
   }
 
@@ -2647,42 +2663,20 @@ function renderChannelStatus(channels) {
     renderAgentWorkbench();
   }
 
-  function createLocalAgentSession() {
-    saveAgentDraft();
-    const now = new Date().toISOString();
-    const session = {
-      id: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      name: "本页新会话",
-      backend: $("agentWorkbenchTarget").value || "server",
-      device: null,
-      turns: 0,
-      runs: [],
-      createdAt: now,
-      updatedAt: now,
-      current: false,
-      localOnly: true
-    };
-    const row = {
-      sourceKey: "panel:workspace",
-      sourceName: "面板草稿",
-      sourceKind: "panel",
-      session,
-      backend: session.backend,
-      runs: 0,
-      current: false,
-      identity: agentSessionIdentity("panel:workspace", session)
-    };
-    state.agent.localSessions.unshift(row);
-    state.agent.rows = [...state.agent.localSessions, ...flattenAgentSessions(state.agent.sessions)];
-    state.agent.activeSessionKey = row.identity;
-    state.agent.lastResult = null;
-    state.agent.lastPrompt = "";
-    state.agent.lastRunAt = 0;
-    restoreAgentDraft();
-    state.agent.sessionsOpen = false;
-    syncAgentDrawers();
-    renderAgentWorkbench();
-    $("agentWorkbenchPrompt").focus();
+  async function createLocalAgentSession() {
+    const backend = $("agentWorkbenchTarget").value || "server";
+    const name = prompt("新会话名字（可空）：", "") || "";
+    try {
+      const result = await api("/api/agent/sessions", {
+        method: "POST",
+        body: JSON.stringify({ key: "panel:workspace", action: "new", name, backend })
+      });
+      await loadAgentWorkbench();
+      $("agentWorkbenchPrompt").focus();
+      toast(result.message || "已新建持久会话");
+    } catch (error) {
+      toast("新建失败：" + error.message);
+    }
   }
 
   function renderAgentSessions() {
@@ -2731,6 +2725,34 @@ function renderChannelStatus(channels) {
       stats.appendChild(agentNode("span", "", `${row.runs} 次运行`));
       stats.appendChild(agentNode("span", "", `更新 ${agentTime(row.session.updatedAt)}`));
       card.appendChild(stats);
+      if (!row.session.localOnly) {
+        const actions = agentNode("div", "agent-session-actions");
+        const addAction = (label, handler) => {
+          const button = agentNode("button", "ghost-btn small", label);
+          button.type = "button";
+          button.addEventListener("click", (event) => { event.stopPropagation(); handler(); });
+          actions.appendChild(button);
+        };
+        addAction("改名", async () => {
+          const title = prompt("新的会话名称：", row.session.name || "");
+          if (title === null || !title.trim()) return;
+          await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key: row.sourceKey, action: "rename", id: row.session.id, title: title.trim() }) });
+          await loadAgentWorkbench();
+        });
+        addAction("清空", async () => {
+          if (!confirm("清空这个会话的历史和运行记录？")) return;
+          await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key: row.sourceKey, action: "reset", id: row.session.id }) });
+          state.agent.conversations.delete(row.identity);
+          await loadAgentWorkbench();
+        });
+        addAction("删除", async () => {
+          if (!confirm("删除这个持久会话？")) return;
+          await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key: row.sourceKey, action: "delete", id: row.session.id }) });
+          state.agent.conversations.delete(row.identity);
+          await loadAgentWorkbench();
+        });
+        card.appendChild(actions);
+      }
       list.appendChild(card);
     }
   }
@@ -2905,10 +2927,22 @@ function renderChannelStatus(channels) {
         console.error(`loadAgentWorkbench ${requests[i][1]} failed`, result.reason);
       }
     }
+    state.agent.rows = [...state.agent.localSessions, ...flattenAgentSessions(state.agent.sessions)];
+    if (!state.agent.rows.some((row) => row.sourceKey === "panel:workspace")) {
+      try {
+        const created = await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key: "panel:workspace", action: "new", name: "工作台会话", backend: $("agentWorkbenchTarget").value || "server" }) });
+        state.agent.sessions = await api("/api/agent/sessions");
+      } catch (error) {
+        state.agent.errors.push("持久会话初始化");
+        console.error("create panel agent session failed", error);
+      }
+    }
     state.agent.loading = false;
     state.agent.rows = [...state.agent.localSessions, ...flattenAgentSessions(state.agent.sessions)];
     if (!state.agent.rows.some((row) => row.identity === state.agent.activeSessionKey)) {
-      const first = state.agent.rows.find((row) => row.backend === ($("agentWorkbenchTarget").value || "server"));
+      const first = state.agent.rows.find((row) => row.sourceKey === "panel:workspace" && row.current) ||
+        state.agent.rows.find((row) => row.sourceKey === "panel:workspace") ||
+        state.agent.rows.find((row) => row.backend === ($("agentWorkbenchTarget").value || "server"));
       if (first) state.agent.activeSessionKey = first.identity;
     }
     $("agentRefresh").disabled = false;
@@ -2919,7 +2953,8 @@ function renderChannelStatus(channels) {
 
   async function runAgentWorkbenchTask() {
     const key = state.agent.activeSessionKey;
-    if (!agentActiveRow()?.session?.localOnly) { toast("请先点＋新建本页会话"); return; }
+    const activeRow = agentActiveRow();
+    if (!activeRow || activeRow.sourceKey !== "panel:workspace") { toast("请先选择一个工作台会话"); return; }
     if (state.agent.busy) return;
     if (state.agent.activeRuns.has(key)) return;
     const prompt = $("agentWorkbenchPrompt").value.trim();
@@ -2949,6 +2984,8 @@ function renderChannelStatus(channels) {
       const result = await api("/api/agent/test", {
         method: "POST",
         body: JSON.stringify({
+          key: activeRow.sourceKey,
+          sessionId: activeRow.session.id,
           prompt,
           timeoutSec: Number($("agentWorkbenchTimeout").value || 180),
           target
@@ -2974,6 +3011,7 @@ function renderChannelStatus(channels) {
       });
       bumpAgentConversation(key);
       toast(normalized.ok ? "任务完成" : "任务返回失败");
+      await loadAgentWorkbench();
     } catch (error) {
       const message = error?.data?.error || error?.message || "任务执行失败";
       const messages = agentConversation(key);
@@ -3742,7 +3780,7 @@ function renderChannelStatus(channels) {
         const all = await api("/api/agent/sessions");
         const chats = Object.keys(all.chats || {});
 
-        // 聊天下拉：第一项是“全部聊天”总览（号主要“查现在有多少个会话及其标题”）
+        // 聊天下拉：第一项是“全部聊天”总览（管理员要“查现在有多少个会话及其标题”）
         const keep = sel.value || "__all__";
         sel.innerHTML = `<option value="__all__">全部聊天（共 ${all.total || 0} 个会话）</option>` +
           chats.map((k, i) => {
@@ -3841,7 +3879,7 @@ function renderChannelStatus(channels) {
 
     $("agentSessionChat").addEventListener("change", refreshAgentSessions);
 
-    /* 从 pi 导入：把设备上已有的 pi 会话接过来当会话（号主：外部 Agent 则获取 pi 里面的会话） */
+    /* 从 pi 导入：把设备上已有的 pi 会话接过来当会话（管理员：外部 Agent 则获取 pi 里面的会话） */
     $("agentSessionImport").addEventListener("click", async () => {
       const key = $("agentSessionChat").value;
       if (!key || key === "__all__") { toast("先在左边选一个具体的聊天，再导入"); return; }
@@ -4244,7 +4282,7 @@ function renderChannelStatus(channels) {
   }
 
   /* 多选时的处理：**全都发给服务端去拼**（面板只负责把时长算出来提示用户）。
-     为什么要服务端拼：官方主样本要求 ≥ 10 秒，而号主手上常常是几段 5 秒切片 ——
+     为什么要服务端拼：官方主样本要求 ≥ 10 秒，而管理员手上常常是几段 5 秒切片 ——
      让人先去装 ffmpeg 不如服务端接（wav 无损拼 / mp3 按帧拼，见 VoiceService.ConcatSamples）。 */
   async function pickCloneSample(files) {
     const list = Array.from(files);
