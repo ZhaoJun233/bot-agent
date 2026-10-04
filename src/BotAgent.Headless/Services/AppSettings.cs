@@ -68,8 +68,8 @@ public sealed class AppSettings
     public int MaxTokens { get; set; } = 2048;
 
     /// <summary>
-    /// 主模型思考程度与预算预设：low(1024) / medium(4096) / high(16384) / custom。
-    /// 默认 medium。暂时不能完全关闭思考（当前测试中）。
+    /// 主模型思考深度：off / low / medium / high / xhigh，默认 medium。
+    /// 保留 ThinkingBudget 字段名和 custom 以兼容旧配置。
     /// </summary>
     public string ThinkingBudget { get; set; } = "medium";
 
@@ -101,13 +101,15 @@ public sealed class AppSettings
         var preset = (budget ?? defaultPreset).Trim().ToLowerInvariant();
         return preset switch
         {
-            "low" => ("low", 1024),
-            "medium" => ("medium", 4096),
-            "high" => ("high", 16384),
+            "off" or "none" => ("none", 0),
+            "low" => ("low", isFastModel ? 1024 : 0),
+            "medium" => ("medium", isFastModel ? 4096 : 0),
+            "high" => ("high", isFastModel ? 16384 : 0),
+            "xhigh" => ("xhigh", 0),
             "custom" => int.TryParse(custom, out var c) && c > 0
                 ? (custom, c)
                 : (!string.IsNullOrWhiteSpace(custom) ? (custom, defaultTokens) : (defaultPreset, defaultTokens)),
-            _ => (defaultPreset, defaultTokens)
+            _ => (defaultPreset, isFastModel ? defaultTokens : 0)
         };
     }
 
