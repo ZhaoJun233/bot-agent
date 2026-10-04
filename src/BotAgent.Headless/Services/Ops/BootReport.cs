@@ -28,10 +28,12 @@ public sealed class BootReport
     /// <summary>配置读取入口：指向**当前发布版**（见 <see cref="SettingsBox" />）。</summary>
     private AppSettings _settings => _box.Current;
 
-    /// <summary>名单空时先来一条警告，再写自述。措辞与搬过来之前**逐字一致**。</summary>
+    /// <summary>名单空时先警告，再打印统一策略下的有效对话状态。</summary>
     public void Write()
     {
         var gateState = _whitelist.Describe();
+        var privateSwitches = Platforms.PlatformSwitchSettings.Read(_settings, Domain.Platforms.PlatformId.QqPrivate, Domain.Platforms.AccountScope.Legacy);
+        var officialSwitches = Platforms.PlatformSwitchSettings.Read(_settings, Domain.Platforms.PlatformId.QqOfficial, Domain.Platforms.AccountScope.Legacy);
 
         // 白名单严格模式提示：空名单 = 全部忽略，容器里很容易踩
         if (gateState.BothPrivateListsEmpty)
@@ -50,7 +52,7 @@ public sealed class BootReport
             $"官方白名单=群{gateState.OfficialGroups}/私聊{gateState.OfficialPrivates}, " +
             // 总开关状态也印：2026-09-21 线上出现过“某条通道的总开关被关掉 → 一条都不回 →
             // 日志里只有一行很容易被淹没的“忽略（…通道的总开关是关的）”，查了半天 ✗。
-            $"对话总开关=私域{(_settings.PrivateChatEnabled ? "开" : "关")}/官方{(_settings.OfficialChatEnabled ? "开" : "关")}, " +
+            $"对话总开关=私域{(privateSwitches.Enabled && privateSwitches.ChatEnabled ? "开" : "关")}/官方{(officialSwitches.Enabled && officialSwitches.ChatEnabled ? "开" : "关")}, " +
             $"模型={_settings.ReplyModel}" +
             (_settings.FastReply && _settings.ReplyModel != _settings.Model
                 ? $"（快速档；主模型 {_settings.Model}）"

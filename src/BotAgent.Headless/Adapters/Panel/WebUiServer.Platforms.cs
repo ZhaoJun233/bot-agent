@@ -64,10 +64,14 @@ public sealed partial class WebUiServer
                 ["accountScope"] = s.AccountScope,
                 ["displayName"] = s.DisplayName,
                 ["tag"] = s.Tag,
-                ["enabled"] = s.Enabled,
+                ["enabled"] = policy.Enabled,
                 ["effectiveEnabled"] = policy.Enabled,
+                ["configuredChatEnabled"] = PlatformSwitchSettings.Read(_box.Current, s.PlatformId, s.AccountScope).ChatEnabled,
                 ["chatEnabled"] = policy.ChatEnabled,
                 ["connected"] = s.Connected,
+                ["restartRequired"] = policy.Enabled && !rawSnapshots.Any(live =>
+                    Domain.Platforms.PlatformId.Normalize(live.PlatformId) == Domain.Platforms.PlatformId.Normalize(s.PlatformId)
+                    && live.AccountScope == s.AccountScope),
                 ["lastErrorCode"] = s.LastErrorCode,
                 ["reasons"] = new JsonArray(policy.Reasons.Select(r => (JsonNode?)JsonValue.Create(r)).ToArray()),
                 ["capabilities"] = new JsonObject

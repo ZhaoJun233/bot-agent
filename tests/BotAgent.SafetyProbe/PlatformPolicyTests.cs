@@ -138,6 +138,148 @@ public static partial class Program
         var disabledOfficialPolicy = disabledOfficialResolver.ResolveForChannel("official");
         Check("★ 全局通道关闭时实例策略 Enabled=true 不会穿透越权（保持 disabled）",
             !disabledOfficialPolicy.Enabled && !disabledOfficialPolicy.ChatEnabled);
+
+        // Exercise the real resolver, without loading persisted or production data.
+        var unified = new AppSettings { OfficialEnabled = false, OfficialChatEnabled = false };
+        var officialPolicy = new PlatformPolicySettings
+        {
+            PlatformId = PlatformId.QqOfficial, AccountScope = AccountScope.Legacy,
+            Enabled = true, ChatEnabled = true, GroupWhitelist = "synthetic-group",
+        };
+        unified.PlatformPolicies.Add(officialPolicy);
+        PlatformSwitchSettings.Normalize(unified);
+        Check("switch migration preserves the old disabled intersection",
+            !officialPolicy.Enabled!.Value && !officialPolicy.ChatEnabled!.Value
+            && unified.PlatformSwitchSchemaVersion == 1);
+        officialPolicy.Enabled = true;
+        officialPolicy.ChatEnabled = true;
+        var unifiedBox = new SettingsBox(unified);
+        var unifiedResolver = new PlatformPolicyResolver(unifiedBox);
+        Check("canonical policy switches override stale legacy switches",
+            unifiedResolver.IsChatEnabled("official"));
+        PlatformSwitchSettings.Normalize(unified);
+        Check("migration is idempotent and mirrors the canonical switches",
+            unified.OfficialEnabled && unified.OfficialChatEnabled
+            && officialPolicy.GroupWhitelist == "synthetic-group");
+        unifiedBox.Apply(s => s.PlatformPolicies[0].ChatEnabled = false);
+        Check("chat mute takes effect immediately without disabling the platform",
+            unifiedResolver.ResolveForChannel("official").Enabled
+            && !unifiedResolver.IsChatEnabled("official"));
+        unifiedBox.Apply(s => { s.PlatformPolicies[0].Enabled = false; s.PlatformPolicies[0].ChatEnabled = true; });
+        Check("platform off preserves the chat switch preference",
+            !unifiedResolver.IsChatEnabled("official")
+            && PlatformSwitchSettings.Read(unifiedBox.Current, PlatformId.QqOfficial, AccountScope.Legacy).ChatEnabled);
+        unifiedBox.Apply(s => s.PlatformPolicies[0].Enabled = true);
+        Check("platform on restores the configured chat switch",
+            unifiedResolver.IsChatEnabled("official"));
+
+        var scoped = new AppSettings { OfficialEnabled = false, PlatformSwitchSchemaVersion = 1 };
+        scoped.PlatformPolicies.Add(new PlatformPolicySettings
+        {
+            PlatformId = PlatformId.QqOfficial, AccountScope = "synthetic-other", Enabled = true, ChatEnabled = true,
+        });
+        PlatformSwitchSettings.Normalize(scoped);
+        Check("another account cannot overwrite standard adapter enablement", !scoped.OfficialEnabled);
+        Check("standard account does not inherit another account's switches",
+            !new PlatformPolicyResolver(new SettingsBox(scoped)).IsChatEnabled("official"));
+        scoped.PlatformPolicies.Add(new PlatformPolicySettings
+        {
+            PlatformId = "synthetic.unknown", AccountScope = AccountScope.Default, Enabled = true, ChatEnabled = true,
+        });
+        Check("unknown platform stays fail closed with explicit enabled policy",
+            !new PlatformPolicyResolver(new SettingsBox(scoped)).IsChatEnabled("synthetic.unknown"));
+
+        var localSettings = new AppSettings { PlatformSwitchSchemaVersion = 1 };
+        localSettings.PlatformPolicies.Add(new PlatformPolicySettings
+        {
+            PlatformId = PlatformId.Local, AccountScope = AccountScope.Legacy, Enabled = true, ChatEnabled = true,
+        });
+        Check("local enablement is separate from whitelist readiness",
+            new PlatformPolicyResolver(new SettingsBox(localSettings)).ResolveForChannel("local").Enabled);
+        var noPolicies = new AppSettings { OfficialEnabled = true, OfficialChatEnabled = true };
+        PlatformSwitchSettings.Normalize(noPolicies);
+        Check("legacy-only configurations retain fallback without new action policies",
+            noPolicies.PlatformPolicies.Count == 0
+            && new PlatformPolicyResolver(new SettingsBox(noPolicies)).IsChatEnabled("official"));
+
+        var legacyRosters = new AppSettings
+        {
+            WhitelistGroups = "10001",
+            WhitelistPrivates = "10002",
+            OfficialWhitelistGroups = "synthetic-group",
+            OfficialWhitelistPrivates = "synthetic-user",
+            FeishuWhitelist = "synthetic-feishu",
+            LocalChannelIds = "101",
+        };
+        var projectedRosters = PlatformSwitchSettings.EditablePolicies(legacyRosters);
+        Check("synthesized standard rows inherit legacy whitelists to prevent roundtrip clearing",
+            projectedRosters.Single(p => p.PlatformId == PlatformId.QqPrivate).GroupWhitelist == "10001"
+            && projectedRosters.Single(p => p.PlatformId == PlatformId.QqPrivate).PrivateWhitelist == "10002"
+            && projectedRosters.Single(p => p.PlatformId == PlatformId.QqOfficial).GroupWhitelist == "synthetic-group"
+            && projectedRosters.Single(p => p.PlatformId == PlatformId.QqOfficial).PrivateWhitelist == "synthetic-user"
+            && projectedRosters.Single(p => p.PlatformId == PlatformId.Feishu).GroupWhitelist == "synthetic-feishu"
+            && projectedRosters.Single(p => p.PlatformId == PlatformId.Local).GroupWhitelist == "101");
+
+        var projected = PlatformSwitchSettings.EditablePolicies(noPolicies);
+        noPolicies.PlatformPolicies = projected;
+        Check("switch-only projection roundtrip preserves an absent action allowlist",
+            !new PlatformPolicyResolver(new SettingsBox(noPolicies)).ResolveForChannel("private").ActionAllowlistConfigured);
+        var explicitActions = new AppSettings { PlatformSwitchSchemaVersion = 1 };
+        explicitActions.PlatformPolicies.Add(new PlatformPolicySettings
+        {
+            PlatformId = PlatformId.QqPrivate, AccountScope = AccountScope.Legacy, AllowedActions = new(),
+        });
+        explicitActions.PlatformPolicies = PlatformSwitchSettings.EditablePolicies(explicitActions);
+        Check("explicit empty action allowlist remains configured and fail closed",
+            new PlatformPolicyResolver(new SettingsBox(explicitActions)).ResolveForChannel("private").ActionAllowlistConfigured);
+        projected.Single(p => p.PlatformId == PlatformId.QqPrivate).AllowedActions.Add("poke");
+        Check("nonempty explicit actions are always configured even with inherited switch metadata",
+            new PlatformPolicyResolver(new SettingsBox(noPolicies)).ResolveForChannel("private").ActionAllowlistConfigured);
+        var matrixPreserved = true;
+        foreach (var platform in new[] { PlatformId.QqPrivate, PlatformId.QqOfficial, PlatformId.Feishu, PlatformId.Local })
+        foreach (var legacyOn in new[] { false, true })
+        foreach (bool? overrideOn in new bool?[] { null, false, true })
+        foreach (bool? overrideChat in new bool?[] { null, false, true })
+        {
+            var matrix = new AppSettings
+            {
+                OfficialEnabled = legacyOn, OfficialChatEnabled = legacyOn, PrivateChatEnabled = legacyOn,
+                FeishuEnabled = legacyOn, LocalChannelIds = legacyOn ? "101" : "",
+            };
+            matrix.PlatformPolicies.Add(new PlatformPolicySettings
+            {
+                PlatformId = platform, AccountScope = platform == PlatformId.Feishu ? AccountScope.Default : AccountScope.Legacy,
+                Enabled = overrideOn, ChatEnabled = overrideChat,
+            });
+            var matrixResolver = new PlatformPolicyResolver(new SettingsBox(matrix));
+            var beforeMigration = matrixResolver.ResolveForChannel(platform);
+            PlatformSwitchSettings.Normalize(matrix);
+            var afterMigration = matrixResolver.ResolveForChannel(platform);
+            matrixPreserved &= beforeMigration.Enabled == afterMigration.Enabled
+                && beforeMigration.ChatEnabled == afterMigration.ChatEnabled;
+        }
+        Check("all 72 legacy/platform/nullable switch combinations preserve effective states", matrixPreserved);
+        var caseVariant = new AppSettings { PlatformSwitchSchemaVersion = 1, OfficialEnabled = true };
+        caseVariant.PlatformPolicies.Add(new PlatformPolicySettings
+        {
+            PlatformId = "QQ.OFFICIAL", AccountScope = "LEGACY", Enabled = false, ChatEnabled = true,
+        });
+        var editable = PlatformSwitchSettings.EditablePolicies(caseVariant);
+        Check("editable projection canonicalizes standard keys without duplicate account rows",
+            editable.Count == 4 && editable.Count(p => p.PlatformId == PlatformId.QqOfficial && p.AccountScope == AccountScope.Legacy) == 1
+            && editable.Single(p => p.PlatformId == PlatformId.QqOfficial).Enabled == false);
+        Check("editable projection never mutates original policies",
+            caseVariant.PlatformPolicies.Count == 1 && caseVariant.PlatformPolicies[0].AccountScope == "LEGACY");
+        var inherited = new AppSettings { PlatformSwitchSchemaVersion = 1, FeishuEnabled = false, LocalChannelIds = "" };
+        foreach (var platform in new[] { PlatformId.Feishu, PlatformId.Local })
+            inherited.PlatformPolicies.Add(new PlatformPolicySettings
+            {
+                PlatformId = platform, AccountScope = "synthetic-other", Enabled = true, ChatEnabled = null,
+            });
+        var inheritedRows = PlatformSwitchSettings.EditablePolicies(inherited).Where(p => p.AccountScope == "synthetic-other").ToArray();
+        Check("nonstandard accounts project resolved null fallback without unmuting",
+            inheritedRows.Length == 2 && inheritedRows.All(p => p.Enabled == true && p.ChatEnabled == false)
+            && inherited.PlatformPolicies.All(p => p.ChatEnabled is null));
     }
 
     private sealed class SyntheticPlatformRegistry(PlatformStatusSnapshot snapshot) : IPlatformRegistry

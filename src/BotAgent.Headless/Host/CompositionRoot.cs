@@ -398,7 +398,8 @@ internal static class CompositionRoot
         }
 
         // 本地通道（批次 F）：**名单非空才建**（默认关）。
-        if (!string.IsNullOrWhiteSpace(settings.LocalChannelIds))
+        if (Services.Platforms.PlatformSwitchSettings.Read(settings, PlatformId.Local, AccountScope.Legacy).Enabled
+            && !string.IsNullOrWhiteSpace(settings.LocalChannelIds))
         {
             local = new LocalChannelSource(msg => FileLog.Write("Local", msg));
             source = source is ChannelRouter r1
