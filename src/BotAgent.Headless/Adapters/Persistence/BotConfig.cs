@@ -540,6 +540,8 @@ public static class BotConfig
         s.HealthReportTime = $"{reportHour:00}:{reportMinute:00}";
         s.HealthReportTargets = s.HealthReportTargets.Trim();
 
+        Services.Platforms.PlatformSwitchSettings.Normalize(s);
+
         // 兼容：早期版本固定 ForwardWebSocket，配置文件里可能是遗留值
         if (string.IsNullOrWhiteSpace(s.OneBotProtocol))
         {

@@ -67,7 +67,11 @@ function codeOnly(text) {
 /* ─────────── 1) id 静态检查 ─────────── */
 
 console.log("▶ 静态：DOM id 引用完整性");
-const htmlIds = new Set([...html.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]));
+const htmlIdList = [...html.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]);
+const htmlIds = new Set(htmlIdList);
+check("DOM control ids are unique", htmlIdList.length === htmlIds.size);
+check("Platform switches exist only in the centralized policy section",
+  ["setOfficialEnabled", "setFeishuEnabled", "setOfficialChatEnabled", "setPrivateChatEnabled"].every((id) => !htmlIds.has(id)));
 const jsIds = new Set([...js.matchAll(/\$\("([A-Za-z0-9_-]+)"\)/g)].map((m) => m[1]));
 const missingIds = [...jsIds].filter((id) => !htmlIds.has(id));
 check(`app.js 引用的 ${jsIds.size} 个 id 全部存在`, missingIds.length === 0, missingIds.join(", "));
@@ -590,6 +594,9 @@ const calls = [];
 // 设备表：这是**服务端那份**。面板保存时整个表会被替换 —— 所以“没拉到就回写”= 一次点保存就删光设备配置。
 let serverDevices = [];
 let agentStatusFails = false;      // 模拟“设备表拉不到”
+let platformStatusFails = false;
+let platformStatusWait = null;
+let platformStatusOverride = null;
 let settingsDelayMs = 0;           // 模拟保存请求在飞（用来看保存期间的新编辑会不会被回填盖掉）
 let agentStatusHits = 0;
 let agentWorkbenchReady = false;
@@ -655,7 +662,9 @@ const fetchStub = async (url, opts) => {
     if (agentRunDelayMs) await new Promise((r) => setTimeout(r, agentRunDelayMs));
     payload = { ok: true, id: "run-synthetic", text: "<synthetic-result>", durationMs: 42, toolCalls: 1, target: "server" };
   } else if (target.includes("/api/platforms")) {
-    payload = { platforms: [
+    if (platformStatusWait) await platformStatusWait;
+    if (platformStatusFails) throw new Error("synthetic platform status failure");
+    payload = { platforms: platformStatusOverride || [
       { platformId: "feishu", accountScope: "default", displayName: "Synthetic Feishu", enabled: true, effectiveEnabled: true, chatEnabled: true, connected: true,
         capabilities: { supportsText: true, supportsVoice: false, supportsMusic: false, supportsStickers: false, supportsPoke: false } },
       { platformId: "qq.private", accountScope: "legacy", displayName: "Synthetic QQ", enabled: true, effectiveEnabled: true, chatEnabled: true, connected: true,
@@ -747,6 +756,7 @@ let loadError = null;
 const probeMarker = 'document.addEventListener("DOMContentLoaded", boot);';
 const jsRun = js.replace(probeMarker, `globalThis.probe = {
     loadSettings, saveSettings, markSettingsDirty,
+    loadPlatformPolicies, collectPlatformPolicies,
     refreshParticipation,
   deviceDraft: () => agentDevices.map((d) => ({ ...d })),
   deviceLoaded: () => agentDevicesLoaded,
@@ -1021,6 +1031,133 @@ if (saveCall) {
   check("payload 携带了真实人设", payload.botPersona === RUNTIME.botPersona, String(payload.botPersona));
   check("payload 携带了真实白名单", payload.messageWhitelist === RUNTIME.messageWhitelist, String(payload.messageWhitelist));
   check("payload 携带了真实 maxTokens", payload.maxTokens === RUNTIME.maxTokens, String(payload.maxTokens));
+}
+
+/* Centralized policies remain editable even if connection status is unavailable. */
+{
+  const b = calls.length;
+  platformStatusFails = true;
+  await sandbox.probe.loadSettings();
+  const policies = sandbox.probe.collectPlatformPolicies();
+  const feishu = policies.find((p) => p.PlatformId === "feishu");
+  check("Status failure preserves saved policies, whitelist and feature overrides",
+    policies.length === 4 && feishu?.Enabled === true && feishu.ChatEnabled === true
+      && feishu.GroupWhitelist === "synthetic-group" && feishu.FeatureOverrides.music === false);
+  await sandbox.probe.saveSettings();
+  const posted = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const payload = posted ? JSON.parse(posted.body) : {};
+  check("Status failure cannot save an empty policy list", payload.platformPolicies?.length === 4);
+  check("Missing standard policies retain action inheritance in POST",
+    payload.platformPolicies?.filter((p) => p.PlatformId !== "feishu").every((p) => p.InheritActionAllowlist === true));
+  check("Existing explicit policy with absent inheritance flag keeps empty action deny",
+    payload.platformPolicies?.find((p) => p.PlatformId === "feishu")?.InheritActionAllowlist === false
+      && payload.platformPolicies.find((p) => p.PlatformId === "feishu").AllowedActions.length === 0);
+  check("POST has no duplicate legacy platform switches",
+    !!posted && ["officialEnabled", "feishuEnabled", "officialChatEnabled", "privateChatEnabled"].every((key) => !(key in payload)));
+  await sandbox.probe.loadPlatformPolicies([], { officialEnabled: false, officialChatEnabled: false,
+    privateChatEnabled: false, feishuEnabled: false, localChannelIds: "" });
+  const fallback = sandbox.probe.collectPlatformPolicies();
+  check("Absent standard platforms default off instead of enabling on save",
+    fallback.length === 4 && fallback.filter((p) => p.PlatformId !== "qq.private").every((p) => p.Enabled === false));
+  check("Legacy chat flags retain off values in fallback",
+    fallback.filter((p) => p.PlatformId.startsWith("qq.")).every((p) => p.ChatEnabled === false));
+  check("Missing standard Feishu and local chat policies inherit disabled legacy flags",
+    fallback.filter((p) => ["feishu", "local"].includes(p.PlatformId)).every((p) => p.ChatEnabled === false));
+  await sandbox.probe.loadPlatformPolicies([
+    { PlatformId: "feishu", AccountScope: "synthetic-other", Enabled: true, ChatEnabled: null },
+    { PlatformId: "local", AccountScope: "synthetic-other", Enabled: true, ChatEnabled: null },
+    { PlatformId: "synthetic-platform", AccountScope: "synthetic-other", Enabled: true, ChatEnabled: null }
+  ], { feishuEnabled: false, localChannelIds: "" });
+  const nullableDraft = sandbox.probe.collectPlatformPolicies().filter((p) => p.AccountScope === "synthetic-other");
+  check("Nullable nonstandard chat preferences inherit disabled legacy flags and unknown defaults",
+    nullableDraft.length === 3 && nullableDraft.every((p) => p.Enabled === true && p.ChatEnabled === false));
+  const nullableBefore = calls.length;
+  await sandbox.probe.saveSettings();
+  const nullablePost = calls.slice(nullableBefore).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const nullableSaved = nullablePost ? JSON.parse(nullablePost.body).platformPolicies.filter((p) => p.AccountScope === "synthetic-other") : [];
+  check("Unrelated settings POST cannot unmute nullable nonstandard policies",
+    nullableSaved.length === 3 && nullableSaved.every((p) => p.Enabled === true && p.ChatEnabled === false));
+  await sandbox.probe.loadPlatformPolicies([{ PlatformId: "feishu", AccountScope: "default",
+    Enabled: false, ChatEnabled: true, AllowedActions: ["synthetic.action"] }], {});
+  const independent = sandbox.probe.collectPlatformPolicies().find((p) => p.PlatformId === "feishu");
+  check("Disabled platform retains its independent chat preference and allowed actions",
+    independent?.Enabled === false && independent.ChatEnabled === true && independent.AllowedActions[0] === "synthetic.action");
+  const independentBefore = calls.length;
+  await sandbox.probe.saveSettings();
+  const independentPost = calls.slice(independentBefore).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const independentPayload = independentPost ? JSON.parse(independentPost.body) : {};
+  const savedIndependent = independentPayload.platformPolicies?.find((p) => p.PlatformId === "feishu");
+  check("POST retains chat preference when its platform is disabled",
+    savedIndependent?.Enabled === false && savedIndependent.ChatEnabled === true
+      && savedIndependent.AllowedActions[0] === "synthetic.action");
+  check("Status-failure POST does not enable absent official or local platforms",
+    independentPayload.platformPolicies?.filter((p) => ["qq.official", "local"].includes(p.PlatformId))
+      .every((p) => p.Enabled === false) === true);
+  const priorRows = [...document.getElementById("platformPolicyRows").children];
+  let releaseStatus;
+  platformStatusWait = new Promise((resolve) => { releaseStatus = resolve; });
+  const pending = sandbox.probe.loadPlatformPolicies(RUNTIME.platformPolicies, RUNTIME);
+  check("Pending status request does not destroy existing switches",
+    priorRows.length === 4 && priorRows.every((row, i) => document.getElementById("platformPolicyRows").children[i] === row));
+  releaseStatus();
+  await pending;
+  platformStatusWait = null;
+  const independentRow = document.getElementById("platformPolicyRows").children.find((row) => row.dataset.platformId === "feishu");
+  const independentSwitches = independentRow.querySelectorAll("[data-policy]").filter((input) => input.type === "checkbox");
+  check("Each platform has exactly two independent switches",
+    document.getElementById("platformPolicyRows").children.every((row) => row.querySelectorAll("[data-policy]").filter((input) => input.type === "checkbox").length === 2));
+  independentSwitches.find((input) => input.dataset.policy === "enabled").checked = false;
+  const disabledDraft = sandbox.probe.collectPlatformPolicies().find((p) => p.PlatformId === "feishu");
+  check("Turning platform off keeps chat preference and chat control editable",
+    disabledDraft.Enabled === false && disabledDraft.ChatEnabled === true
+      && independentSwitches.find((input) => input.dataset.policy === "chatEnabled").disabled === false);
+  independentSwitches.find((input) => input.dataset.policy === "chatEnabled").checked = false;
+  independentSwitches.find((input) => input.dataset.policy === "enabled").checked = true;
+  const mutedDraft = sandbox.probe.collectPlatformPolicies().find((p) => p.PlatformId === "feishu");
+  check("Turning platform back on does not reset a muted chat preference",
+    mutedDraft.Enabled === true && mutedDraft.ChatEnabled === false);
+  platformStatusFails = false;
+  platformStatusOverride = [
+    { platformId: "qq.private", accountScope: "legacy", connected: true },
+    { platformId: "qq.official", accountScope: "legacy", connected: true },
+    { platformId: "feishu", accountScope: "different-account", connected: true },
+    { platformId: "feishu", accountScope: "default", connected: false, restartRequired: true },
+    { platformId: "local", accountScope: "legacy", connected: true }
+  ];
+  await sandbox.probe.loadPlatformPolicies([
+    { PlatformId: "qq.private", AccountScope: "legacy", Enabled: false, ChatEnabled: true },
+    { PlatformId: "qq.official", AccountScope: "legacy", Enabled: true, ChatEnabled: false },
+    { platformId: "feishu", accountScope: "default", enabled: true, chatEnabled: true },
+    { PlatformId: "local", AccountScope: "legacy", Enabled: true, ChatEnabled: true }
+  ], {});
+  const rowState = (id) => document.getElementById("platformPolicyRows").children
+    .find((row) => row.dataset.platformId === id && row.dataset.accountScope !== "different-account")?.children[0].children[1].textContent;
+  check("Disabled state is distinct from disconnected", rowState("qq.private").startsWith("已停用"));
+  check("Muted state is distinct from online", rowState("qq.official").startsWith("聊天已静音"));
+  check("Disconnected instance shows restart status and matches exact account",
+    rowState("feishu").startsWith("未连接") && rowState("feishu").includes("需重启生效"));
+  check("Enabled connected chatting platform shows online", rowState("local").startsWith("在线"));
+  platformStatusOverride = null;
+  await sandbox.probe.loadPlatformPolicies([
+    { PlatformId: "qq.private", AccountScope: "legacy", Enabled: true, ChatEnabled: true, InheritActionAllowlist: true, AllowedActions: [] },
+    { platformId: "qq.official", accountScope: "legacy", enabled: true, chatEnabled: true, inheritActionAllowlist: true, allowedActions: [] },
+    { PlatformId: "feishu", AccountScope: "default", Enabled: true, ChatEnabled: true, InheritActionAllowlist: false, AllowedActions: [] },
+    { PlatformId: "local", AccountScope: "legacy", Enabled: true, ChatEnabled: true, InheritActionAllowlist: false, AllowedActions: ["synthetic.action"] }
+  ], {});
+  const actionBefore = calls.length;
+  await sandbox.probe.saveSettings();
+  const actionPost = calls.slice(actionBefore).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const actionPolicies = actionPost ? JSON.parse(actionPost.body).platformPolicies : [];
+  check("GET action inheritance survives POST in Pascal and camel case",
+    actionPolicies.filter((p) => p.PlatformId.startsWith("qq.")).length === 2
+      && actionPolicies.filter((p) => p.PlatformId.startsWith("qq.")).every((p) => p.InheritActionAllowlist === true && p.AllowedActions.length === 0));
+  const explicitEmpty = actionPolicies.find((p) => p.PlatformId === "feishu");
+  const explicitActions = actionPolicies.find((p) => p.PlatformId === "local");
+  check("Explicit empty action deny and nonempty action list remain unchanged in POST",
+    explicitEmpty?.InheritActionAllowlist === false && explicitEmpty.AllowedActions.length === 0
+      && explicitActions?.InheritActionAllowlist === false && explicitActions.AllowedActions.length === 1
+      && explicitActions.AllowedActions[0] === "synthetic.action");
+  await sandbox.probe.loadSettings();
 }
 
 /* ─────────── 4) 服务器健康日报（定时私聊推送） ─────────── */

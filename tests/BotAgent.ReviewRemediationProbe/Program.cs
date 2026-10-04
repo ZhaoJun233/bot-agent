@@ -193,7 +193,7 @@ internal static class Program
     {
         var box = new SettingsBox(new AppSettings
         {
-            HealthReportTargets = "10001", PrivateChatEnabled = true, OfficialChatEnabled = true,
+            HealthReportTargets = "10001", PrivateChatEnabled = true, OfficialEnabled = true, OfficialChatEnabled = true,
             EnableVoice = false, ModelBaseUrl = ""
         });
         var source = new FakeSource();
@@ -221,6 +221,24 @@ internal static class Program
         box.Apply(s => s.HealthReportTargets = "");
         Check(!(await report.SendNowAsync("synthetic")).Ok && source.Calls == 3,
             "empty recipient list never calls the source");
+        box.Apply(s =>
+        {
+            s.PlatformSwitchSchemaVersion = 1;
+            s.HealthReportTargets = "10001";
+            s.PrivateChatEnabled = true;
+            s.PlatformPolicies.Add(new BotAgent.Domain.Platforms.PlatformPolicySettings
+            {
+                PlatformId = BotAgent.Domain.Platforms.PlatformId.QqPrivate,
+                AccountScope = BotAgent.Domain.Platforms.AccountScope.Legacy, Enabled = false, ChatEnabled = true,
+            });
+        });
+        var platformDisabled = await report.SendNowAsync("synthetic");
+        Check(!platformDisabled.Ok && source.Calls == 3 && platformDisabled.Error?.Contains("平台已停用") == true,
+            "canonical platform disable blocks report despite enabled legacy chat switch");
+        box.Apply(s => { s.PlatformPolicies[0].Enabled = true; s.PlatformPolicies[0].ChatEnabled = false; });
+        var chatMuted = await report.SendNowAsync("synthetic");
+        Check(!chatMuted.Ok && source.Calls == 3 && chatMuted.Error?.Contains("聊天已静音") == true,
+            "canonical chat mute blocks report and names the distinct switch");
     }
 
     private sealed class FakeClock : IClock

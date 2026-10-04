@@ -685,12 +685,6 @@
               开启前先在开放平台把服务器的<b>出口 IP</b> 加进白名单；密钥（Secret）不在这里填 —— 它只从环境变量读。</p>
           </div>
 
-          <label class="switch-row">
-            <input type="checkbox" id="setOfficialEnabled" />
-            <span class="switch"></span>
-            <span>启用官方通道<span class="hint" id="officialStateHint">保存后点下面的按钮重启生效</span></span>
-          </label>
-
           <p class="path-hint" id="officialConversationList">官方通道见过的会话会列在这里，点一下即可查看别名号。</p>
 
           <div class="grid-2">
@@ -733,12 +727,6 @@
               在飞书开放平台「事件与回调」配置请求网址为本服务地址，并订阅 <code>im.message.receive_v1</code> 消息接收事件。</p>
           </div>
 
-          <label class="switch-row">
-            <input type="checkbox" id="setFeishuEnabled" />
-            <span class="switch"></span>
-            <span>启用飞书通道<span class="hint" id="feishuStateHint">保存后点下方的「一键重启」生效</span></span>
-          </label>
-
           <p class="path-hint" id="feishuWebhookUrlHint">Webhook 入口地址：<code>/api/webhooks/feishu</code>（支持 URL verification challenge 自动应答、请求签名防伪与 1MB 防护）。</p>
 
           <div class="grid-2">
@@ -780,7 +768,7 @@
 
           <label class="switch-row">
             <span class="chan-badge chan-local" style="margin-right:8px">本地</span>
-            <span>本地通道状态：<span id="localStateHint" class="hint">未启用（在下方「平台实例策略」为本地通道配置允许的短 ID 并重启后生效）</span></span>
+            <span>本地通道状态：<span id="localStateHint" class="hint">读取通道状态中…</span></span>
           </label>
 
           <p class="path-hint">本地通道接口地址：<code>/api/local/message</code>（需携带面板认证令牌 <code>token=...</code> 或 <code>X-Panel-Token</code> 头）。</p>
@@ -941,21 +929,6 @@
             <input type="checkbox" id="setAiMode" />
             <span class="switch"></span>
             <span>AI 自动回复开关</span>
-          </label>
-
-          <!-- 对话总开关（按通道）。与顶部那个全局「AI 开关」分工：
-               全局一关两条都不回（连人在叫它也不回）；这里能只把一条静音。
-               放在这栏是因为它跟“回不回、多久回”是同一类东西。 -->
-          <label class="switch-row">
-            <input type="checkbox" id="setPrivateChatEnabled" />
-            <span class="switch"></span>
-            <span>私域通道对话开关<span class="hint">关 = 自建协议端（NapCat）那条<strong>收消息但不回</strong>；官方通道不受影响。全局静默请用顶栏的「AI 开关」</span></span>
-          </label>
-
-          <label class="switch-row">
-            <input type="checkbox" id="setOfficialChatEnabled" />
-            <span class="switch"></span>
-            <span>官方通道对话开关<span class="hint">关 = 官方（QQ 开放平台）那条<strong>收消息但不回</strong>；调试/被平台限制时只静音这一条</span></span>
           </label>
 
           <div class="grid-2">
