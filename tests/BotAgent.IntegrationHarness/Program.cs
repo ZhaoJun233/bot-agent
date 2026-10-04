@@ -121,6 +121,7 @@ public static partial class Program
             await Scenario("s49", RunConversationManagementScenarioAsync);
             await Scenario("s50", RunFeishuPlatformScenarioAsync);
             await Scenario("s51", RunQuotaPanelScenarioAsync);
+            await Scenario("s52", RunPlatformSwitchScenarioAsync);
         // s42（官方通道）**暂未接入回归**：2026-09-21 子代理写的这套端到端场景只跑到 7✓/9✗
         // 而且**会挂死**（假网关推事件的时序 + 等待没上超时）。已确认的结论：官方出站（token→/gateway/bot→
         // identify）与入站事件分发**都是通的**（机器人日志里能看到官方那条的“忽略（不在白名单）: 群 8000…”，

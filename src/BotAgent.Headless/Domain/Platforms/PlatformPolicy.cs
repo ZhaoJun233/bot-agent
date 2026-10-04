@@ -9,6 +9,7 @@ public sealed class PlatformPolicySettings
     public string AccountScope { get; set; } = BotAgent.Domain.Platforms.AccountScope.Default;
     public bool? Enabled { get; set; }
     public bool? ChatEnabled { get; set; }
+    public bool InheritActionAllowlist { get; set; }
     public string GroupWhitelist { get; set; } = string.Empty;
     public string PrivateWhitelist { get; set; } = string.Empty;
     public Dictionary<string, bool> FeatureOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -21,6 +22,7 @@ public sealed class PlatformPolicySettings
             AccountScope = AccountScope ?? BotAgent.Domain.Platforms.AccountScope.Default,
             Enabled = Enabled,
             ChatEnabled = ChatEnabled,
+            InheritActionAllowlist = InheritActionAllowlist,
             GroupWhitelist = GroupWhitelist ?? string.Empty,
             PrivateWhitelist = PrivateWhitelist ?? string.Empty,
             FeatureOverrides = new Dictionary<string, bool>(FeatureOverrides ?? new(), StringComparer.OrdinalIgnoreCase),

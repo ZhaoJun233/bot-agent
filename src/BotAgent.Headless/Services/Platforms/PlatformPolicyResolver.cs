@@ -46,9 +46,9 @@ public sealed class PlatformPolicyResolver
             string.Equals(PlatformId.Normalize(s.PlatformId), platform, StringComparison.OrdinalIgnoreCase)
             && string.Equals(s.AccountScope, account, StringComparison.OrdinalIgnoreCase));
         var overrideSettings = FindSettings(settings, platform, account);
-        var legacyEnabled = LegacyPlatformEnabled(settings, platform);
-        var enabled = (overrideSettings?.Enabled ?? true) && legacyEnabled;
-        var chatEnabled = enabled && (overrideSettings?.ChatEnabled ?? true) && LegacyChatEnabled(settings, platform);
+        var switches = PlatformSwitchSettings.Read(settings, platform, account);
+        var enabled = switches.Enabled;
+        var chatEnabled = enabled && switches.ChatEnabled;
         var capabilities = snapshot?.Capabilities ?? DefaultCapabilities(platform);
         var reasons = new List<string>();
 
@@ -75,7 +75,8 @@ public sealed class PlatformPolicyResolver
             FeatureOverrides: featureOverrides,
             Reasons: reasons)
         {
-            ActionAllowlistConfigured = overrideSettings is not null,
+            ActionAllowlistConfigured = overrideSettings is not null
+                && (!overrideSettings.InheritActionAllowlist || overrideSettings.AllowedActions.Count > 0),
         };
     }
 
@@ -94,26 +95,6 @@ public sealed class PlatformPolicyResolver
             && string.Equals(PlatformId.Normalize(p.PlatformId), platform, StringComparison.OrdinalIgnoreCase)
             && string.Equals(string.IsNullOrWhiteSpace(p.AccountScope) ? AccountScope.Default : p.AccountScope,
                 account, StringComparison.OrdinalIgnoreCase));
-
-    private static bool LegacyPlatformEnabled(AppSettings settings, string platform)
-        => platform switch
-        {
-            PlatformId.QqPrivate => true,
-            PlatformId.QqOfficial => settings.OfficialEnabled,
-            PlatformId.Local => !string.IsNullOrWhiteSpace(settings.LocalChannelIds),
-            PlatformId.Feishu => settings.FeishuEnabled,
-            _ => false,
-        };
-
-    private static bool LegacyChatEnabled(AppSettings settings, string platform)
-        => platform switch
-        {
-            PlatformId.QqOfficial => settings.OfficialChatEnabled,
-            PlatformId.Feishu => settings.FeishuEnabled,
-            PlatformId.Local => !string.IsNullOrWhiteSpace(settings.LocalChannelIds),
-            PlatformId.QqPrivate => settings.PrivateChatEnabled,
-            _ => false,
-        };
 
     private static PlatformCapabilities DefaultCapabilities(string platform)
         => platform switch

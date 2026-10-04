@@ -122,9 +122,12 @@ public sealed partial class WebUiServer
             _settingsHotReload.ApplyRuntimeSettings(s =>
             {
                 // 行为/阈值 · 通道与 agent · 多平台设置 · 报表与模型。
+                Services.Platforms.PlatformSwitchSettings.Normalize(s);
                 ApplyBehaviorSettings(body, s, afterPersist);
                 ApplyChannelAndAgentSettings(body, s);
+                ApplyLegacyPlatformSwitches(body, s);
                 ApplyMultiPlatformSettings(body, s, platformPolicies);
+                Services.Platforms.PlatformSwitchSettings.SynchronizeLegacy(s);
                 ApplyReportingAndModelSettings(body, s, newBaseUrl, afterPersist);
             }, auditEvent, _auditChain, _ =>
             {
@@ -224,6 +227,22 @@ public sealed partial class WebUiServer
 
     private static bool IsPolicyKeyChar(char value)
         => char.IsAsciiLetterOrDigit(value) || value is '.' or '_' or '-';
+
+    private static void ApplyLegacyPlatformSwitches(JsonNode body, AppSettings settings)
+    {
+        Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.QqOfficial,
+            Domain.Platforms.AccountScope.Legacy, body["officialEnabled"]?.GetValue<bool>(), body["officialChatEnabled"]?.GetValue<bool>());
+        Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.QqPrivate,
+            Domain.Platforms.AccountScope.Legacy, null, body["privateChatEnabled"]?.GetValue<bool>());
+        Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.Feishu,
+            Domain.Platforms.AccountScope.Default, body["feishuEnabled"]?.GetValue<bool>(), body["feishuEnabled"]?.GetValue<bool>());
+        if (body["localChannelIds"] is JsonNode localIds)
+        {
+            var enabled = !string.IsNullOrWhiteSpace(localIds.GetValue<string>());
+            Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.Local,
+                Domain.Platforms.AccountScope.Legacy, enabled, enabled);
+        }
+    }
 
     private void ApplyMultiPlatformSettings(
         JsonNode body,
@@ -975,7 +994,7 @@ public sealed partial class WebUiServer
     private void PopulatePlatformSettings(JsonObject runtime, AppSettings s)
     {
         runtime["feishuEnabled"] = s.FeishuEnabled;
-        runtime["platformPolicies"] = JsonSerializer.SerializeToNode(s.PlatformPolicies ?? new(), Json) ?? new JsonArray();
+        runtime["platformPolicies"] = JsonSerializer.SerializeToNode(Services.Platforms.PlatformSwitchSettings.EditablePolicies(s), Json) ?? new JsonArray();
         runtime["feishuAppId"] = s.FeishuAppId;
         runtime["feishuSecretConfigured"] = !string.IsNullOrWhiteSpace(s.FeishuAppSecret);
         runtime["feishuSecretMasked"] = MaskSecret(s.FeishuAppSecret);

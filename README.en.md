@@ -40,7 +40,7 @@ The project natively supports running directly from source code across standard 
 - **Lifelike Typing Cadence**: Splits long replies at punctuation boundaries and sends them in batches simulating realistic typing delays.
 
 ### Multi-Platform Support & Instance Policies
-- **Unified Platform Policy Governance**: Supports QQ Private channel, QQ Official Open Platform, Feishu Bot, and Local channel. The "Platform Instance Policy" card in settings manages enable toggles, chat toggles, independent group/private whitelists, and feature overrides under Fail-Closed intersection safety.
+- **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. The settings "Platform Instance Policy" section is the single entry point for each platform's enable and chat switches, group/private whitelists, and feature overrides. Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
 - **Daily Token Quota Ledger**: Manages UTC daily budgets isolated by platform and conversation tenant (`SourceKey`), supporting platform-based tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted.
 - **Zero-Dependency Local Playground Channel**: Features an in-process standalone testing channel. Inject test messages via the Web interactive playground (`/playground.html`) or `POST /api/local/message`, traversing the full model decision pipeline and six-stage governance timeline.
 

@@ -175,8 +175,12 @@ public sealed partial class WebUiServer
             (Domain.Platforms.PlatformId.Local, "本地通道", "本地", !string.IsNullOrWhiteSpace(sBox.LocalChannelIds), _localChannel is not null),
         };
 
+        var switchesResolver = _platformPolicies ?? new Services.Platforms.PlatformPolicyResolver(_box, _platformRegistry);
         foreach (var std in standardChannels)
         {
+            var scope = std.PlatformId == Domain.Platforms.PlatformId.Feishu
+                ? Domain.Platforms.AccountScope.Default : Domain.Platforms.AccountScope.Legacy;
+            var enabled = switchesResolver.Resolve(new Domain.Platforms.PlatformContext(std.PlatformId, scope)).Enabled;
             if (snapshotMap.TryGetValue(std.PlatformId, out var live))
             {
                 arr.Add(new JsonObject
@@ -184,7 +188,7 @@ public sealed partial class WebUiServer
                     ["channel"] = std.PlatformId,
                     ["name"] = live.DisplayName,
                     ["tag"] = live.Tag,
-                    ["enabled"] = live.Enabled,
+                    ["enabled"] = enabled,
                     ["connected"] = live.Connected,
                 });
                 snapshotMap.Remove(std.PlatformId);
@@ -196,7 +200,7 @@ public sealed partial class WebUiServer
                     ["channel"] = std.PlatformId,
                     ["name"] = std.DisplayName,
                     ["tag"] = std.Tag,
-                    ["enabled"] = std.Enabled,
+                    ["enabled"] = enabled,
                     ["connected"] = std.Connected,
                 });
             }

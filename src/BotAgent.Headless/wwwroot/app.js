@@ -598,14 +598,14 @@ function renderChannelStatus(channels) {
   const tabLocal = $("chanTabLocal");
   if (tabLocal) {
     tabLocal.title = !local || !local.enabled
-      ? "本地通道未启用（在「平台实例策略」配置本地白名单短 ID 开启）"
+      ? "本地通道未启用"
       : (local.connected ? "本地通道在线" : "本地通道已启用");
     tabLocal.classList.toggle("chan-off", !local || !local.enabled);
   }
   const localHint = $("localStateHint");
   if (localHint) {
     localHint.textContent = !local || !local.enabled
-      ? "未启用（在下方「平台实例策略」配置本地短 ID 如 1, 2 保存并重启生效）"
+      ? "未启用"
       : (local.connected ? "已启用（在线，已装配本地消息注入器）" : "已启用（待重启装配）");
   }
 }
@@ -1857,16 +1857,16 @@ function renderChannelStatus(channels) {
   async function loadPlatformPolicies(policies, runtime) {
     const host = $("platformPolicyRows");
     const empty = $("platformPolicyEmpty");
-    host.replaceChildren();
     let snapshots = [];
+    let statusUnavailable = false;
     try {
       const status = await api("/api/platforms");
       snapshots = Array.isArray(status.platforms) ? status.platforms : [];
     } catch (err) {
-      empty.textContent = "平台状态暂不可用，现有策略不会被清空。";
+      statusUnavailable = true;
       console.warn("加载平台策略状态失败：", err);
-      return;
     }
+    host.replaceChildren();
 
     const read = (obj, lower, upper) => obj?.[lower] ?? obj?.[upper];
     const policyByKey = new Map((Array.isArray(policies) ? policies : []).map((p) => [
@@ -1891,6 +1891,15 @@ function renderChannelStatus(channels) {
       const snapshot = snapshotByKey.get(key) || standardPlatformDefaults[key];
       const [platformId, accountScope] = key.split("|");
       const existing = p || {};
+      const legacyEnabled = platformId === "qq.private" ? true
+        : platformId === "qq.official" ? runtime?.officialEnabled === true
+          : platformId === "feishu" ? runtime?.feishuEnabled === true
+            : platformId === "local" ? !!runtime?.localChannelIds?.trim() : false;
+      const legacyChatEnabled = platformId === "qq.private" ? runtime?.privateChatEnabled !== false
+        : platformId === "qq.official" ? runtime?.officialChatEnabled !== false
+          : ["feishu", "local"].includes(platformId) ? legacyEnabled : false;
+      const enabled = read(existing, "enabled", "Enabled") ?? legacyEnabled;
+      const chatEnabled = read(existing, "chatEnabled", "ChatEnabled") ?? legacyChatEnabled;
       const featureOverrides = read(existing, "featureOverrides", "FeatureOverrides") || {};
       const allowedActions = read(existing, "allowedActions", "AllowedActions") || [];
       const row = document.createElement("section");
@@ -1898,6 +1907,7 @@ function renderChannelStatus(channels) {
       row.dataset.platformId = platformId;
       row.dataset.accountScope = accountScope;
       row.dataset.allowedActions = JSON.stringify(allowedActions);
+      row.dataset.inheritActionAllowlist = String(p == null || read(existing, "inheritActionAllowlist", "InheritActionAllowlist") === true);
 
       const title = document.createElement("div");
       title.className = "platform-policy-title";
@@ -1905,9 +1915,8 @@ function renderChannelStatus(channels) {
       name.textContent = `${snapshot?.displayName || platformId} · ${accountScope}`;
       const stateText = document.createElement("span");
       stateText.className = "platform-policy-state";
-      stateText.textContent = snapshot
-        ? `${snapshot.connected ? "已连接" : "未连接"} · ${snapshot.capabilities?.supportsText ? "支持文本" : "不支持文本"}`
-        : "未注册实例";
+      stateText.textContent = `${enabled !== true ? "已停用" : chatEnabled !== true ? "聊天已静音"
+        : statusUnavailable ? "状态暂不可用" : snapshotByKey.get(key)?.connected ? "在线" : "未连接"}${snapshot?.restartRequired ? " · 需重启生效" : ""} · ${snapshot?.capabilities?.supportsText ? "支持文本" : "不支持文本"}`;
       title.append(name, stateText);
       row.append(title);
 
@@ -1921,8 +1930,7 @@ function renderChannelStatus(channels) {
         const input = document.createElement("input");
         input.type = "checkbox";
         input.dataset.policy = keyName;
-        const configured = read(existing, keyName, keyName === "enabled" ? "Enabled" : "ChatEnabled");
-        input.checked = configured == null ? true : configured === true;
+        input.checked = (keyName === "enabled" ? enabled : chatEnabled) === true;
         label.append(input, document.createTextNode(labelText));
         switches.append(label);
       }
@@ -1990,8 +1998,9 @@ function renderChannelStatus(channels) {
       row.append(features);
       host.append(row);
     }
-    empty.hidden = policyByKey.size > 0;
-    empty.textContent = policyByKey.size > 0 ? "" : "尚无平台实例。新平台完成注册后会自动出现在这里。";
+    empty.hidden = policyByKey.size > 0 && !statusUnavailable;
+    empty.textContent = statusUnavailable ? "平台状态暂不可用，平台策略仍可编辑和保存。"
+      : policyByKey.size > 0 ? "" : "尚无平台实例。新平台完成注册后会自动出现在这里。";
   }
 
   function collectPlatformPolicies() {
@@ -2007,6 +2016,7 @@ function renderChannelStatus(channels) {
         GroupWhitelist: values.groupWhitelist,
         PrivateWhitelist: values.privateWhitelist,
         FeatureOverrides: featureOverrides,
+        InheritActionAllowlist: row.dataset.inheritActionAllowlist === "true",
         AllowedActions: JSON.parse(row.dataset.allowedActions || "[]")
       };
     });
@@ -2234,7 +2244,6 @@ function renderChannelStatus(channels) {
     $("setTtsApiBase").value = r.ttsApiBase || "";
     $("setTtsModel").value = r.ttsModel || "";
     // 飞书通道（企业协作平台）
-    $("setFeishuEnabled").checked = r.feishuEnabled === true;
     $("setFeishuAppId").value = r.feishuAppId || "";
     $("setFeishuAppSecret").value = "";
     $("setFeishuAppSecret").placeholder = r.feishuSecretConfigured
@@ -2249,7 +2258,6 @@ function renderChannelStatus(channels) {
     $("setFeishuApiBase").value = r.feishuApiBase || "";
 
     // 官方通道（与私域并存）；secret 不回填（它只从环境变量读，面板不接也不存）
-    $("setOfficialEnabled").checked = r.officialEnabled === true;
     $("setOfficialAppId").value = r.officialAppId || "";
     // AppSecret：只回显掩码，留空 = 不改（与 TTS 密钥同规矩）
     $("setOfficialAppSecret").value = "";
@@ -2259,8 +2267,6 @@ function renderChannelStatus(channels) {
     $("setOfficialSandbox").checked = r.officialSandbox === true;
     $("setOfficialWhitelistGroups").value = r.officialWhitelistGroups || "";
     $("setOfficialWhitelistPrivates").value = r.officialWhitelistPrivates || "";
-    $("setOfficialChatEnabled").checked = r.officialChatEnabled !== false;
-    $("setPrivateChatEnabled").checked = r.privateChatEnabled !== false;
     renderOfficialConversations(r.officialConversations);
     renderChannelStatus(r.channels);
     await loadPlatformPolicies(r.platformPolicies, r);
@@ -2439,7 +2445,6 @@ function renderChannelStatus(channels) {
       ttsApiBase: $("setTtsApiBase").value.trim(),
       ttsModel: $("setTtsModel").value.trim(),
       // 飞书通道（Feishu Bot）
-      feishuEnabled: $("setFeishuEnabled").checked,
       feishuAppId: $("setFeishuAppId").value.trim(),
       feishuAppSecret: $("setFeishuAppSecret").value.trim(),
       feishuVerificationToken: $("setFeishuVerificationToken").value.trim(),
@@ -2447,15 +2452,12 @@ function renderChannelStatus(channels) {
       feishuWhitelist: $("setFeishuWhitelist").value.trim(),
       feishuApiBase: $("setFeishuApiBase").value.trim(),
       // 官方通道（QQ 开放平台）
-      officialEnabled: $("setOfficialEnabled").checked,
       officialAppId: $("setOfficialAppId").value.trim(),
       // 空 = 不改（服务端按这个口径处理，别把它当清空）
       officialAppSecret: $("setOfficialAppSecret").value.trim(),
       officialSandbox: $("setOfficialSandbox").checked,
       officialWhitelistGroups: $("setOfficialWhitelistGroups").value.trim(),
       officialWhitelistPrivates: $("setOfficialWhitelistPrivates").value.trim(),
-      officialChatEnabled: $("setOfficialChatEnabled").checked,
-      privateChatEnabled: $("setPrivateChatEnabled").checked,
       platformPolicies: collectPlatformPolicies(),
       linkPreviewTimeoutSeconds: Number($("setLinkPreviewTimeout").value),
       linkPreviewMax: Number($("setLinkPreviewMax").value)

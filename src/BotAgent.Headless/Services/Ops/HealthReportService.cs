@@ -199,11 +199,12 @@ public sealed class HealthReportService : IDisposable
                 // 对话总开关也管这个（管理员 2026-09-21）：
                 // “私域/官方两个通道的总开关关了”就该什么都不往外发 —— 日报也不例外，
                 // 否则会出现“通道关了、机器人在群里不吭声，却还在私聊里按时报服务器健康”这种别扭情况。
-                if (!ChatEnabledFor(uid))
+                var blockReason = ChatBlockReasonFor(uid);
+                if (blockReason is not null)
                 {
                     var tag = Channels.IsAliasId(uid) ? "官方" : "私域";
-                    skipped.Add($"{uid}（{tag}通道总开关是关的）");
-                    FileLog.Write("Health", $"健康日报跳过 {uid}：{tag}通道的对话总开关是关的（{reason}）");
+                    skipped.Add($"{uid}（{tag}{blockReason}）");
+                    FileLog.Write("Health", $"健康日报跳过 {uid}：{tag}{blockReason}（{reason}）");
                     continue;
                 }
 
@@ -236,7 +237,7 @@ public sealed class HealthReportService : IDisposable
         if (skipped.Count > 0 && failures.Count == 0 && sentThisRun == 0)
         {
             // 全被总开关拦下：不算“失败”（不是故障），但要让面板/日志看出来发生了什么 ✗“没发”不能无声
-            var note = "所有收件人所在通道的对话总开关都关着，本次没发：" + string.Join("；", skipped);
+            var note = "所有收件人所在平台均已停用或聊天静音，本次没发：" + string.Join("；", skipped);
             LastError = note;
             FileLog.Warn("Health", $"健康日报未发送：{note}");
             return (false, text, note);
@@ -246,11 +247,16 @@ public sealed class HealthReportService : IDisposable
     }
 
     /// <summary>
-    /// 这个收件人所在的通道，对话总开关是不是开着。
+    /// 返回收件人所在平台的阻断原因；平台启用与聊天开关均须开启。
     /// 官方通道的收件人是**别名号**（<see cref="Channels.AliasBase" /> 起步）—— 两边开关各管各的。
     /// </summary>
-    private bool ChatEnabledFor(long target)
-        => Channels.IsAliasId(target) ? _settings.OfficialChatEnabled : _settings.PrivateChatEnabled;
+    private string? ChatBlockReasonFor(long target)
+    {
+        var platform = Channels.IsAliasId(target)
+            ? Domain.Platforms.PlatformId.QqOfficial : Domain.Platforms.PlatformId.QqPrivate;
+        var switches = Platforms.PlatformSwitchSettings.Read(_settings, platform, Domain.Platforms.AccountScope.Legacy);
+        return !switches.Enabled ? "平台已停用" : !switches.ChatEnabled ? "聊天已静音" : null;
+    }
 
     public void Dispose()
     {
