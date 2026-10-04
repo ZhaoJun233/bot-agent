@@ -66,6 +66,7 @@ public static class BotConfig
         s.NapCatWebUiUrl = Str("BOTAGENT_NAPCAT_WEBUI_URL", "QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
         s.NapCatWebUiToken = Secret("BOTAGENT_NAPCAT_WEBUI_TOKEN", "QQCHAT_NAPCAT_WEBUI_TOKEN") ?? s.NapCatWebUiToken;
         s.FeishuAppSecret = Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET") ?? s.FeishuAppSecret;
+        s.OfficialAppSecret = Secret("QQCHAT_OFFICIAL_APP_SECRET") ?? s.OfficialAppSecret;
         s.FeishuEncryptKey = Secret("BOTAGENT_FEISHU_ENCRYPT_KEY", "QQCHAT_FEISHU_ENCRYPT_KEY") ?? s.FeishuEncryptKey;
         s.VerboseLog = Bool("BOTAGENT_VERBOSE", "QQCHAT_VERBOSE") ?? s.VerboseLog;
     }
@@ -182,7 +183,6 @@ public static class BotConfig
     [nameof(AppSettings.TtsServiceUrl)] = new[] { "QQCHAT_TTS_URL" },
     [nameof(AppSettings.OfficialEnabled)] = new[] { "QQCHAT_OFFICIAL" },
     [nameof(AppSettings.OfficialAppId)] = new[] { "QQCHAT_OFFICIAL_APP_ID" },
-    [nameof(AppSettings.OfficialAppSecret)] = new[] { "QQCHAT_OFFICIAL_APP_SECRET" },
     [nameof(AppSettings.OfficialSandbox)] = new[] { "QQCHAT_OFFICIAL_SANDBOX" },
     [nameof(AppSettings.OfficialWhitelistGroups)] = new[] { "QQCHAT_OFFICIAL_WHITELIST_GROUPS" },
     [nameof(AppSettings.OfficialWhitelistPrivates)] = new[] { "QQCHAT_OFFICIAL_WHITELIST_PRIVATES" },
@@ -388,7 +388,6 @@ public static class BotConfig
         s.TtsServiceUrl = Str("QQCHAT_TTS_URL") ?? s.TtsServiceUrl;
     s.OfficialEnabled = Bool("QQCHAT_OFFICIAL") ?? s.OfficialEnabled;
     s.OfficialAppId = Str("QQCHAT_OFFICIAL_APP_ID") ?? s.OfficialAppId;
-    s.OfficialAppSecret = Str("QQCHAT_OFFICIAL_APP_SECRET") ?? s.OfficialAppSecret;
     s.OfficialSandbox = Bool("QQCHAT_OFFICIAL_SANDBOX") ?? s.OfficialSandbox;
     s.OfficialWhitelistGroups = Str("QQCHAT_OFFICIAL_WHITELIST_GROUPS") ?? s.OfficialWhitelistGroups;
     s.OfficialWhitelistPrivates = Str("QQCHAT_OFFICIAL_WHITELIST_PRIVATES") ?? s.OfficialWhitelistPrivates;
