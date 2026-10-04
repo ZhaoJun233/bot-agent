@@ -1,141 +1,250 @@
 # Bot Agent
 
-[简体中文](README.md) | English
+English | [简体中文](README.md)
 
-**A headless, pluggable multi-chat-platform Agent runtime that runs as a long-lived service**: it attaches to QQ private chats ([NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11), QQ Official Platform, Feishu (Lark) applications, and zero-dependency local test channels, using OpenAI-compatible models (DeepSeek / OpenAI / Qwen / Ollama / self-hosted gateway …) to reply automatically in private, group, and channel chats. A lightweight web management panel is built in.
+[![.NET](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20(Ubuntu%20%7C%20Debian%20%7C%20CentOS%20%7C%20Arch)%20%7C%20Docker-green.svg)](#quick-start)
+[![Protocol](https://img.shields.io/badge/Protocol-OneBot%20v11%20%7C%20QQ%20Official%20%7C%20Feishu-purple.svg)](#system-architecture)
+[![License](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
 
-> A note on Chinese literals: some inline examples below are Chinese-language strings — prompt templates, in-chat markers such as `[已撤回]` / `〔旁白：…〕`, and settings values — because that is what the bot actually emits. They are kept verbatim so they can be copied as-is.
+Bot Agent is a headless, high-performance, pluggable multi-chat-platform Agent daemon built for Linux environments. It supports QQ Private Chats ([NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11), QQ Official Open Platform, Feishu (Lark) applications, and a zero-dependency local playground channel. Interacting with OpenAI-compatible Large Language Models (including DeepSeek, Qwen, OpenAI, local Ollama, etc.), it delivers autonomous judgment and lifelike replies across group chats, direct messages (DMs), and channels, complete with a built-in lightweight Web management console.
 
+The project natively supports running directly from source code across standard Linux distributions (Ubuntu, Debian, CentOS, Arch, etc.) without requiring a container environment, while preserving standard Docker Compose containerized deployment support.
 
-![.NET](https://img.shields.io/badge/.NET-8.0-blue) ![Platform](https://img.shields.io/badge/Platform-Docker%20%7C%20Linux-green) ![License](https://img.shields.io/badge/License-MIT-orange)
+---
 
-```bash
-cp .env.example .env && vim .env    # fill in MODEL_API_KEY and WHITELIST
-docker compose up -d                # start napcat + the bot
-docker compose logs -f napcat       # first-time QR login (or scan it in the bot panel)
-```
+> [!CAUTION]
+> ### Account Safety and Risk Control Warning
+>
+> Due to strict risk control and anti-automation policies enforced by instant messaging platforms, and based on real ban experiences reported by project contributors, please take note of the following operating environment risks:
+>
+> 1. **Avoid Running on Mobile Devices or Volatile Networks**: Do NOT run the protocol client locally on Android phones, inside Termux terminals, or across cellular base station networks that switch frequently. High-frequency API invocations in such environments are easily flagged as abnormal clients by anti-abuse systems, leading to permanent bans or frequent account freezes.
+> 2. **Recommended Deployment Architecture**: Deploy the service in trusted remote data centers (cloud VPS / dedicated servers), on home mini-PCs with stable static/broadband IP addresses, or on dedicated devices running standard Linux (Ubuntu / Debian, etc.), keeping network egress clean and stable.
+> 3. **Isolate Production from Testing**: Never use your primary personal or work accounts as the bot endpoint. Use a dedicated auxiliary account during testing, or prioritize using the [QQ Official Open Platform Channel](#qq-official-open-platform-optional) for compliant and stable operations.
 
-Open `http://<host>:8080/` for the control panel: chat history, conversation management, settings, live logs.
+---
 
-## 📚 Documentation
+## Key Features
 
-| Document | Contents |
-| --- | --- |
-| [src/BotAgent.Headless/README.en.md](src/BotAgent.Headless/README.en.md) ([中文](src/BotAgent.Headless/README.md)) | **Deployment and operations**: the full environment-variable reference, data directory, panel usage, troubleshooting, design trade-offs and operating boundaries |
-| [.env.example](.env.example) | Every configurable option, with commentary (including Docker secrets usage; comments are in Chinese) |
+### Intelligent Judgment and Natural Interaction
+- **Autonomous Speaking Opportunity Decisions**: The model evaluates the necessity of speaking based on conversation context and configured suitability thresholds, remaining silent when below the threshold; combined with rate-limiting cooldown algorithms to prevent spamming and mechanical interruptions.
+- **Atmosphere Awareness & Fatigue Damping**: Dynamically analyzes message velocity and room sentiment; applies non-linear desire damping after consecutive bot turns and enforces cooldown periods, reducing interruptions in quiet groups while practicing restraint during heated arguments.
+- **User Profiles & Long-Term Memory**: Constructs short-term conversation stacks and long-term user personas based on sender identifiers (with evidence-backed traceability and manual overrides), persisted to an embedded SQLite database.
+- **Action Narration Semantic Filtering**: Supports filtering stage-direction narration (e.g., bracketed actions) from model outputs, verified by a secondary semantic check while strictly preserving math formulas, code snippets, links, and genuine explanations.
+- **Multimodal Visual Perception**: Automatically downloads group images and passes them to multimodal vision models; features internal image byte caching and automatic URL re-signing for expiring temporary URLs.
+- **Deep Adaptation to Native Interactions**:
+  - **Poke Responses**: Detects bidirectional poke events, equipped with cooldown gates and autonomous poke-back logic.
+  - **Sticker Coordination & Security Guard**: Automatically ingests and reviews stickers, extracts semantic tags, and retrieves candidates by context; features built-in `StickerSafetyGuard` for path traversal prevention and binary magic-byte spoofing verification.
+  - **Precise Context Quoting**: Automatically resolves quote targets from received replies, crediting the original message when the model replies.
+  - **Audio Analysis & Topic Continuation**: When music cards are shared, fetches lyrics and analyzes waveform acoustic features (tempo, dynamics, loudness, and section structure), ensuring responses are grounded in objective facts.
+- **Lifelike Typing Cadence**: Splits long replies at punctuation boundaries and sends them in batches simulating realistic typing delays.
 
-## ✨ Features
+### Multi-Platform Support & Instance Policies
+- **Unified Platform Policy Governance**: Supports QQ Private channel, QQ Official Open Platform, Feishu Bot, and Local channel. The "Platform Instance Policy" card in settings manages enable toggles, chat toggles, independent group/private whitelists, and feature overrides under Fail-Closed intersection safety.
+- **Daily Token Quota Ledger**: Manages UTC daily budgets isolated by platform and conversation tenant (`SourceKey`), supporting platform-based tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted.
+- **Zero-Dependency Local Playground Channel**: Features an in-process standalone testing channel. Inject test messages via the Web interactive playground (`/playground.html`) or `POST /api/local/message`, traversing the full model decision pipeline and six-stage governance timeline.
 
-**Conversation**
+---
 
-- **Automatic AI replies**: the model decides for itself whether to speak, from a "speaking suitability" score (below the threshold → stay silent). Two triggers are supported — "speak on request" and the silent fallback — with a per-conversation serial request queue and parallelism across conversations. The speaking decision has explicit **bottom lines** (no insults, no personal attacks, don't push people out on someone else's behalf, don't punish a whole group for one message).
-- **Member profiles**: every speaker gets a profile keyed by QQ number (recent messages plus a long-term persona), so forms of address, tone and running jokes land on the right person.
-- **Image understanding**: when someone posts an image it is downloaded, converted to base64 and handed to a multimodal model. QQ image URLs are **temporary links carrying an expiring rkey** (once expired they return 400), so the downloader **caches bytes keyed by URL** (each image is fetched once) and, when a URL has expired, asks the protocol side to **re-issue** it via `get_msg` and fetches the same image again — no more "retry every turn, flood the log, model never sees the image".
-- **QQ "reply" quoting**:
-  - **Outgoing**: the model itself points at which message it is answering (recent messages are numbered in the prompt). The semantics are pinned to "who are you talking to" — **not** "the material / source you mentioned". When someone repeats or imitates a line (including imitating the bot), the code falls back: if the model points somewhere else, no quote is attached, and with no triggering message there is no quote either — it never credits the wrong person. The log records the quote target (who, plus a snippet) for later review.
-  - **Incoming**: when a group member uses QQ's "reply" to quote a message it is recognised — the context gets tagged `[回复 老王「原话」]` (`[回复 你「…」]` when the bot's own line is quoted), so the model no longer has to guess what a bare "me too" is answering. If the quoted target cannot be resolved right now, it is only labelled "an earlier message" — **content is never invented**. A "reply" with an empty body still counts as a message instead of being silently dropped.
-- **Listening to music**: when someone shares a track (a NetEase card, a `music` segment or a bare link all work), the bot looks up the title and lyrics, downloads a **low-bitrate** audio file, decodes the waveform itself (loudness / dynamics / tempo / section changes) and then comments using those measured facts — instead of making things up from the title. The audio source is a configurable template string (public sources go down; swap the line). If the audio cannot be fetched it reads the lyrics only and says so honestly.
-- **Sentence-by-sentence pacing**: long replies are split on sentence-ending punctuation and sent in batches at typing speed, so they read like a person typing (it will not split `3.14`, `v1.2`, `github.com`, `！！！` or a closing quote).
-- **Group member roles**: it knows who the owner is, who the admins are and who has a custom group title (titles are backfilled from the protocol side and cached per person). These enter the prompt as facts — but not for flattery: the prompt explicitly says "don't suck up to rank, and don't use it to push people around".
-- **Noise guard**: when the upstream model returns a single character, or parrots its own previous line, the code blocks it outright instead of spamming the group.
-- **Optional parenthetical narration** (now called "tag as 〔narration: …〕"): one switch in the panel marks **parenthetical narration** such as 「（笑）」「（bushi）」「行（端在桌上）」. Not a character is lost — it still flows into the chat log and the model context, and the model understands it as a stage direction or expression rather than something the person said. When a whole message is narration it does not trigger a reply on its own (the next real message carries it along). Parentheses in the middle of a sentence, and records of someone posting an emoji (`[表情:斜眼笑]`), are untouched; messages with images, an @-mention of the bot, and private chats are never touched at all.
+## Quick Start
 
-**QQ-native interactions**
+### Method 1: Native Linux Execution (Recommended, No Docker Required)
 
-- **Native emoji recognition**: `[表情:微笑]`, `[表情:抠脸]` — the name table is generated from the protocol side's own `face_config.json` (`tools/gen_face_catalog.py`, covering classic and newer emoji), plus animated / super emoji, dice and rock-paper-scissors.
-- **Poke**: when poked it answers in context and in character, and can poke back; it does not butt in when other people poke each other (those only enter context); repeated poking from the same person is rate-limited; and poke targets are validated (numbers the model invents are not trusted).
-- **Current mood**: mood = "recent poke count (objective) + one line the model writes itself (subjective)". It enters the prompt and colours the tone. When pokes get too frequent the code blocks the poke-back outright, and a mood left stale past a configured age (2 hours by default) expires and falls back.
-- **Sticker library (one shared library)**: images posted by members are collected automatically (deduplicated by content hash) → the model generates "a one-line description + emotion / scene keywords" → at reply time candidates are retrieved by context and the model picks one. Ingestion is **moderated** (chat screenshots, ads and text-only images are rejected); sending has a **rate gate** (per-conversation interval, no repeat of the same image); overflow evicts by "least used + longest idle"; the bot periodically self-audits to decide what to delete; and stickers can be imported from the QQ favourites of the logged-in account.
-- **Voice messages (optional)**: the model can **occasionally** say a line out loud (the `speak` field in its JSON), which arrives in QQ as a **native voice clip** (with duration, tap to play). Synthesis runs in a separate **cloud TTS sidecar container** (`tools/tts-cloud-server.py`, forwarding to MiniMax or any OpenAI-compatible speech endpoint — no local model, ~20MB RAM). The bot **only hands the `/speak?text=…` URL to the protocol side**; NapCat downloads it, converts it to silk and uploads it — so we touch no audio encoding and push no audio through the WebSocket. Identical text is cached on disk (no paying twice), and a disabled switch, too many characters or a dead TTS all degrade to plain text (nothing is lost).
-- **Two inbound channels** (2026-09-21): alongside self-hosted NapCat (private deployment) you can attach the **QQ Open Platform** at the same time (`QQCHAT_OFFICIAL=1` plus appid / secret). The two worlds are **fully isolated** in conversations, context, persona and whitelist (conversation keys carry an `official:` prefix, and Open Platform openids map to alias numbers starting at 8e15). The panel shows them under three tabs — All / Private / Official — so they never bleed together.
-- **Recall awareness**: when a member recalls a message (`group_recall` / `friend_recall`), that entry in the context is marked **`[已撤回] original content`** — the content is kept but visibly withdrawn, it can no longer be chosen as a quote target (even if the model insists, the code refuses), and it is not treated as public information to keep discussing. The bot may also gently ask "what did you recall?" (90-second per-conversation cooldown) — but if the other person looks like they merely corrected a typo (recall followed immediately by a new message), it lets it go: no comment, no calling it out.
-- **It can see "now"**: the current time (date + weekday + timezone) is injected into the prompt **unconditionally** — the model has no clock of its own, so "what time is it / what's today's date" is answered straight from it. Things that need the network (news / weather / prices / fixtures / release dates / someone's latest status …) get searched, **stable general knowledge does not**, and search terms carry the time information too.
-- **Web search**: when the model fills in `search` (what to look up) or `read` (which page to read), the bot actually searches or reads, and hands the results to the next turn as **facts** — rather than improvising from memory. It prefers the **model's own search** (retrieval happens on the provider side and the results carry their sources) and falls back to pluggable search-source templates (SearxNG / MediaWiki / generic HTML). Two searches in the same conversation have a minimum interval (30 seconds by default, adjustable in the panel, `0` = unlimited), and retrieved material is **spoken in its own voice, continuing the thread** rather than read out as a report. If the search or read fails, it says so honestly.
-- **Participation gate / asking questions / human approval (three switches, all off by default)**: with the participation gate on, when the state machine says "not this round" (observing / exiting / cooling down) the model is not called and nothing is said — it is **receive-only** (an @-mention is still answered as usual), and the panel shows each conversation's state and reason live. With asking enabled, the model may ask a question carrying a **one-time code** (the code and its short expiry are issued server-side and expire unusable — asking grants no permissions). With human approval on, when the model "wants to call a tool" it first posts a **pending confirmation** in the group, and only executes it after the owner / an admin (or someone named in the panel) replies "同意 XXXX" — identity / conversation / expiry / one-time use / policy version are all checked server-side, and it **only executes a fixed server-side fake tool** (no shell / file / process control; the receipt says so explicitly). All three off = byte-for-byte the previous behaviour.
-- **Scenario presets**: `on-demand` (reply only to explicit mentions) / `research` (allow restricted web access) / `social` (allow extra actions: voice / stickers / poke) — expressed as configuration differences that **only tighten, never loosen** (they are intersected with the existing switches); an unrecognised name gets the lowest permissions. Left empty = the capability allowlist is decided entirely by the existing switches (exactly as before).
+#### 1. System Requirements & Environment Setup
+- **Operating System**: Standard Linux distribution (Ubuntu 20.04+, Debian 11+, CentOS 8+, Arch Linux, etc.)
+- **Runtime Dependencies**: .NET 8.0 SDK / Runtime, Git, curl, openssl
+- **OneBot Protocol Client**: [NapCat Linux Shell](https://github.com/NapNeko/NapCatQQ) (if using QQ Private Channel)
 
-**Operations**
-
-- **Web panel**: chat history and conversation management, settings, live logs (**refreshing the page does not clear them**: the first screen backfills the last 300 lines from `/api/logs`, after which SSE appends in real time; logs from before a restart are still visible after the process restarts; there are **↑ top / ↓ bottom** one-click jump buttons above the log box), plus mobile support. The settings page uses a **two-level categorized navigation architecture** (grouped into 5 top-level categories: **Channels** (ordered cleanly as `QQ Private (NapCat)`, `QQ Official`, `Feishu`, `Local Channel`, and overseen by `Platform Instance Policy`), **Models & Agent**, **Chat & Interaction**, **Voice & Search**, and **Other** for standalone items; an expanded 236px collapsible accordion tree on desktop with increased font size and line height avoiding premature truncation, and dual-row linked pills on mobile, showing one section at a time with a final "show all" option; refreshing or sharing a link automatically expands the matching category; card descriptions collapse to one line by default, with "expand" for the full text); **persona and speaking controls unified into "Reply Cadence"** (bot persona, AI desire, suitability threshold, max agent steps, adaptive sampling parameters, and AI auto-reply toggle are consolidated from Model advanced settings into Reply Cadence, alongside a new toggle to **filter action narrations** like `(晃了晃耳朵)` or `*sigh*` via generation guidance and a pre-send semantic model check. Only confirmed narration is removed or locally rewritten into natural speech; markers preserve formulas, ordinary parenthetical explanations, code, links, and existing dialogue verbatim. The auxiliary check has an 8-second total budget; timeout, unavailable, empty, or invalid results retain the original reply before the existing audit and Markdown rendering). **QR login inside the panel** (when the account is not logged in the QR code appears directly — no need to find NapCat's own entry point).
-- **Three new read-only panel blocks**: **tool catalogue** (`GET /api/tools`: one catalogue shared by three channels — chat 10 / QQ actions 10 / server 6 = **26 entries** — plus four self-checks; `healthy:true` means nothing is inconsistent);
-  **trace page** (`GET /api/traces`: one trace per turn with **six nodes** 〈participation decision / context assembly / model decision / tool gate / tool execution / sanitised send〉, exposing only **shape** 〈status code / reason code / duration / count / tool name〉 and **no message text**, keeping the last 50 turns in memory);
-  **health dashboard** (`GET /api/dashboard`: active conversations / in-flight and queued / average latency / memory and load / tool count / trace count — a screenful of numbers, inventing no new statistics). The only write path on the trace page is an **approval decision** (two fail-closed preconditions; the verdict reuses the very same validation as in-group approval, relaxed nowhere).
-- **Model endpoint editable in the panel**: Base URL / model name / API key take effect the moment they are saved in settings — no `.env` edit, no restart. The key is stored separately in the `secrets` table of `data/qqchat.db` (database file mode 600) instead of being mixed with the rest of the configuration, and the UI only echoes a mask.
-- **Observability**: `/healthz` `/readyz` `/status` plus a container `HEALTHCHECK`; a QQ disconnect is reported proactively (a live WebSocket alone cannot detect an invalidated session); occasional upstream 5xx (`No capacity` / `auth_unavailable`) triggers a **2-second backoff and one retry** instead of dropping that turn's reply.
-- **Data in SQLite**: conversations / messages / member profiles / personas / mood / songs heard / sticker index / secrets all live in a single `data/qqchat.db` (WAL).
-  Benefits: a crash can no longer write "the conversation but not the profile" (same database, same transaction); messages are append-only data rather than a full JSON rewrite on every change; and the panel's "earlier messages in this group / one person's persona in one group / dig through the archive" are each one SQL statement.
-  Old JSON data is **imported automatically** on first start and moved to `legacy-json/` for the record (not deleted).
-- **`//` tasks (server agent)**: dispatch work in a group or private chat with the `//` prefix (the prefix defaults to `//`; an empty user allowlist means nobody can use it; the token is configured in the panel). Results return to the conversation they came from. The server side has built-in tools (bash / file read-write / search / docker / QQ actions — **docker and dangerous actions are off by default**), and the server agent can have its own model endpoint and key. Context is **isolated per task** by default (`//接着` continues the previous one). **Every `//` step can also pass through the unified tool gate** (`QQCHAT_AGENT_SERVER_GATE`, off by default; once on, the verdict matches the old allowlist, high-risk exceptions can only be named by tool name, and the approval branch still does not accept high-risk ones).
-- **A bounded stepping loop on the chat side** (`QQCHAT_MAX_AGENT_STEPS`, default `1` = byte-for-byte the previous behaviour): raised, the model can "run read-only tools (web search / page read) **on the spot**, then ask once more", capped at 3 — if a tool yields nothing it does not spin. Voice / stickers / pokes / sharing do not run inside the loop (they disturb other people and still go through the unified verdict at the send stage), and the group only ever receives that final line.
-- **Local HTTP channel & interactive playground** (`QQCHAT_LOCAL_CHANNEL_IDS`): a zero-external-dependency in-process third channel (`IQqChatSource`). Easily managed in the Web panel under "Platform Instance Policy" (e.g. group `1` or private `101`), tested via `/playground.html` (Interactive Playground) or `POST /api/local/message`; runs through the full model decision pipeline and six-stage governance timeline, with replies recorded into an in-memory outbox. Once injected, the conversation immediately appears with a purple "Local" badge on the main panel for full inspection and management.
-- **Multi-platform support & unified platform instance policy**: external chat platforms plug into `IPlatformAdapter` / `IPlatformRegistry` and the unified `PlatformPolicyResolver` (QQ Private, QQ Official, Feishu Bot `POST /api/webhooks/feishu`, and Local Channel). Conversations are strictly isolated by channel prefixes (`feishu:` / `official:` / `local:`) and dedicated number ranges. The "Platform Instance Policy" table provides centralized management for enable toggles, chat toggles, independent group/private whitelists (supporting atomic synchronization and clearing), and capability overrides (voice, music, stickers, pokes), strictly adhering to Fail-Closed intersection safety.
-- **Daily token quota ledger & multi-platform panel**: manages UTC daily budgets isolated by platform (QQ Private, QQ Official, Feishu, Local Channel) and conversation tenant (`SourceKey`). The panel card permanently displays platform filter tabs with live conversation count badges, organizes tenant dropdown options by platform (`optgroup`), shows dedicated platform badges on the quota readouts, and allows configuring daily limits between `1` and `1,000,000,000` (adjusting limits preserves existing usage). When reaching the daily limit, the conversation enters energy-saving mode.
-- **Lifelike interactions & tiered memory evolution (inspired by MaiBot)**:
-  - **Atmosphere awareness & fatigue damping (`QQCHAT_ENABLE_ATMOSPHERE_DAMPING`)**: dynamically analyzes message velocity and room sentiment; applies non-linear desire damping after consecutive bot turns and enforces cooldown periods, keeping conversations natural while preventing group spam.
-  - **In-group jargon and slang management (Jargon)**: provides a WebUI review queue and manual entry; `JargonService` implements candidate extraction, capacity/cooldown guards, and prompt-snippet rendering, but inbound observation, discovery scheduling, and prompt-assembly runtime call sites are not wired yet.
-  - **Tiered episode memory & evidence-backed profiles (Episodes & Override)**: the episode model and repository exist, but runtime episode extraction, recall, and prompt injection are not wired yet; member profiles use a dual model where manual overrides take absolute precedence over AI-summarized traits.
-  - **Asset security guard for stickers (`StickerSafetyGuard`)**: enforces path traversal protection (`..` and absolute paths), verifies binary magic headers (PNG/JPEG/GIF/WebP), and blocks payload tampering or spoofed extensions.
-  - **Prompt template version repository**: implements version snapshots (`v1`, `v2`...), historical version activation, and built-in default retrieval; runtime prompt consumers and panel rollback flows are not wired yet, so this does not provide one-click live rollback.
-- **Daily health report**: once a day (18:00 by default) a private status line (memory / load / conversation count / queues / voice connectivity), **purely server-side**, depending on no external device.
-- **One-click deploy from the panel**: upload an artefact or paste a URL → the server rebuilds the image and replaces the container itself; a rollback point (`qqchat-agent:prev`) is taken automatically before deploying, and high-privilege switches are off by default.
-- **Masking on by default**: group names / nicknames / QQ numbers keep only the first 3 and last 2 characters in the panel and conversation lists (`QQCHAT_AGENT_MASK`, **on by default**); **storage and keys are untouched**, so commands and panel buttons all keep working.
-- **Layered configuration**: environment variables cover deployment (protocol address, token, mount points); the panel owns behaviour (persona, whitelist, cooldowns, thresholds …) and is its single owner (stored in `data/qqchat.db`).
-
-## 🏗️ Architecture
-
-```
-QQ client (QQNT, the official Linux build inside a container)
-   ▲ injected into
-NapCat container ── OneBot v11 forward WS ──┐
-                                            ▼
-                              this service (BotAgent.Headless)
-                              ├── OneBot gateway (messages / actions / events)
-                              ├── Agent (prompt assembly, model calls, speaking decisions)
-                              ├── member profiles / conversation persistence (one SQLite DB, qqchat.db)
-                              └── web panel + health checks (minimal HttpListener, no ASP.NET)
-                                            │
-                                            ▼
-                              OpenAI-compatible API (DeepSeek / Qwen / self-hosted gateway …)
-```
-
-| Module | Approach |
-| --- | --- |
-| QQ channel | [NapCat](https://github.com/NapNeko/NapCatQQ) → OneBot v11 (forward / reverse WebSocket, or HTTP) |
-| AI brain | OpenAI-compatible Chat Completions (including multimodal image understanding) |
-| Persistence | `/data/qqchat.db`: a single **SQLite** database (settings, conversations, messages + archive, member profiles and personas, mood, songs heard, sticker index, secrets); sticker images themselves stay in `stickers/` |
-| Speech synthesis | A separate container (a **cloud TTS proxy**: `tools/tts-cloud-server.py` + `tools/tts-cloud.Dockerfile`, ~60MB image / ~20MB RAM, **no local model**) — if it dies only voice is affected and the bot degrades to text |
-| Web search | Prefers the model provider's own web retrieval (`/v1beta/…:generateContent` with a search tool, results carrying sources); falls back to pluggable sources (SearxNG JSON / MediaWiki JSON / generic HTML) |
-| Health checks | A built-in minimal HTTP service: `/healthz` `/readyz` `/status` |
-
-## Fix compatibility and migration
-
-- **Feishu identity map**: runtime composition persists `data/feishu-ids-v2.json`, using a new alias range (`FeishuBase + 1e12` to `FeishuBase + 2e12`) separate from legacy 32-bit aliases. Back up this file with the data when Feishu is enabled. Legacy conversations are retained, but native identity bindings and history are not inherited automatically; replace old numeric whitelist entries with Feishu native IDs.
-- **OwnMessage ledger**: new entries are scoped by platform, account, conversation and native message ID in `own_messages_scoped`. Legacy bare-ID rows and imported/archived JSON are retained, but ambiguous scope fails closed: no inferred ownership and no scoped lookup hit. Old binaries cannot read new scoped entries; **lossless downgrade is not provided**. Keep a pre-upgrade backup.
-- **Tool hard-timeout boundary**: the deadline bounds the caller's await and requests cancellation; it does not forcibly stop the underlying operation. Work that ignores cancellation may continue and produce external side effects.
-
-## 🧪 Tests
-
-The repo ships a **genuinely end-to-end** integration suite (it starts a real bot process, a real-WebSocket fake protocol side and a real-HTTP fake model):
+Install base dependencies on Debian / Ubuntu:
 
 ```bash
-dotnet build src/BotAgent.Headless -c Release
+# Update package lists and install prerequisites
+sudo apt-get update
+sudo apt-get install -y dotnet-sdk-8.0 git curl openssl
+```
+
+#### 2. Obtain Source Code & Build
+
+```bash
+# Clone the main repository (main branch)
+git clone -b main https://github.com/ZhaoJun233/bot-agent.git
+cd bot-agent
+
+# Generate and edit configuration file
+cp .env.example .env
+vim .env
+```
+
+#### 3. Operations & Daemon Management
+
+The project includes cross-distribution compatible control scripts:
+
+- **Start in background**:
+  ```bash
+  ./start.sh
+  ```
+- **Start in foreground (debug console output)**:
+  ```bash
+  ./start.sh -f
+  ```
+- **Check status and health probes**:
+  ```bash
+  ./status.sh
+  ```
+- **Safely stop service**:
+  ```bash
+  ./stop.sh
+  ```
+- **View live log output**:
+  ```bash
+  tail -f runtime/logs/bot-agent.log
+  ```
+
+Once the service starts, open `http://127.0.0.1:8080/` in your browser to access the Web management panel.
+
+---
+
+### Method 2: Docker Compose Containerized Execution
+
+On hosts with Docker installed, you can use container orchestration:
+
+```bash
+cp .env.example .env
+vim .env
+
+# Build and start services
+docker compose up -d
+
+# View protocol client login QR code
+docker compose logs -f napcat
+```
+
+---
+
+## Configuration Reference
+
+Core configuration is stored in the `.env` file in the project root.
+
+### Core Parameters
+
+| Variable | Example | Description |
+| :--- | :--- | :--- |
+| `MODEL_API_KEY` | `sk-...` | API Key for the OpenAI-compatible endpoint (Required) |
+| `MODEL_BASE_URL` | `https://api.deepseek.com/v1` | Base URL for model invocations |
+| `MODEL_NAME` | `deepseek-chat` | Model identifier |
+| `MAX_TOKENS` | `2048` | Max output tokens per reply |
+| `PANEL_PASSWORD` | `your_password_here` | Web console access password (Optional; leave empty for password-free access; can be changed/cleared anytime in panel) |
+| `DISABLE_PANEL_AUTH` | `1` | Force disable web console authentication (Optional, default `0`) |
+| `HEALTH_PORT` | `8080` | Listening port for web console and health endpoints |
+| `WHITELIST` | `*` or `123456,789012` | QQ groups or users permitted to receive replies (comma-separated, `*` for all) |
+| `ONEBOT_PROTOCOL` | `ForwardWebSocket` | Protocol client communication mode (`ForwardWebSocket` / `ReverseWebSocket`) |
+| `ONEBOT_URL` | `ws://127.0.0.1:3001` | Protocol client WebSocket connection URL |
+| `ONEBOT_TOKEN` | `your_token` | Protocol client auth token (if configured) |
+| `BOT_UIN` | `10001` | Bot QQ number (auto-detected on connection if left empty) |
+| `QQCHAT_TLS_CERT` | `/etc/letsencrypt/live/.../fullchain.pem` | Custom TLS/HTTPS certificate chain path (Optional, supports Let's Encrypt) |
+| `QQCHAT_TLS_KEY` | `/etc/letsencrypt/live/.../privkey.pem` | Custom TLS/HTTPS certificate private key path (Optional) |
+
+### QQ Official Open Platform (Optional)
+
+To enable the official Bot API:
+
+```ini
+OFFICIAL_ENABLED=1
+OFFICIAL_APP_ID=your_app_id
+OFFICIAL_APP_SECRET=your_app_secret
+```
+
+> [!NOTE]
+> After process initialization, most runtime behaviors (such as bot persona, reply thresholds, cooldowns, sticker toggles, etc.) can be dynamically adjusted and persisted online via the Web console without restarting the service.
+
+---
+
+## Web Control Panel & Mobile Experience
+
+Access `http://<Server_IP>:8080/` to directly open the control panel:
+
+- **Password-Free Access & Security Governance**: The console can be used immediately without forcing password setup; users can set a protection password or clear an existing password anytime on the Settings page.
+- **Two-Level Categorized Navigation**: Settings are aggregated into 5 major categories (Channels, Models & Agent, Chat & Interaction, Voice & Search, Other), featuring collapsible accordion sections on desktop and linked dual-row pills on mobile.
+- **Mobile Adaptation & Liquid Glass Navigation**: Deeply optimized for smartphone screens and touch controls. The bottom navigation bar employs an Apple-inspired Liquid Glass floating capsule Dock with full support for iOS/Android Safe Areas. Dedicated avoidance save bars in settings and auto-hiding during keyboard input prevent touch obstructions.
+- **Full-Stack Performance Optimization**:
+  - **In-Memory Asset Cache**: Static web assets are cached in memory to eliminate filesystem and assembly reflection overhead.
+  - **Dynamic GZip Compression**: Dynamically applies GZip compression to text assets (HTML, JS, CSS, JSON, SVG), reducing payload size by ~70%.
+  - **Hardware Acceleration & Render Containment**: Utilizes CSS Containment, GPU layer promotion (`translateZ`), and native momentum scrolling for smooth 60fps lists.
+- **Session Monitoring & Context Stacks**: Visualizes group and private chat message flows, user profiles, and context stacks in dialogue bubbles in real time.
+- **Hot Parameter Tuning & Model Switching**: Adjust interaction eagerness, response thresholds, cooldown intervals, API endpoints, and model configurations on the fly with immediate effect.
+- **Observability & QR Login**: Real-time status inspection via `/healthz`, `/readyz`, and metrics; renders QR login codes directly when the protocol client is offline.
+- **Live SSE Log Streaming**: Server-Sent Events (SSE) provide continuous log streaming with instant historical backfilling on initial load.
+
+---
+
+## SSL/TLS Security & Certificate Management
+
+The service includes built-in X.509 certificate management for Linux platforms, supporting out-of-the-box self-signed certificates and standard Let's Encrypt certificate chains:
+
+- **Automatic Self-Signed Certificate Generation**: If no certificate is detected at startup, the service automatically generates a standard self-signed certificate valid for 3 years, outputting to `runtime/certs/`:
+  - `runtime/certs/botagent.crt`: X.509 Public Certificate (PEM)
+  - `runtime/certs/botagent.key`: RSA-2048 Private Key (PEM)
+  - `runtime/certs/botagent.pfx`: PKCS#12 Keystore
+  You can also run `./tools/gencert.sh [domain] [IP]` to manually generate certificates with custom SAN extensions.
+- **Let's Encrypt / Production Certificate Loading**: If certificates are issued via certbot or acme.sh, mount them by specifying paths in `.env`:
+  ```ini
+  QQCHAT_TLS_CERT=/etc/letsencrypt/live/example.com/fullchain.pem
+  QQCHAT_TLS_KEY=/etc/letsencrypt/live/example.com/privkey.pem
+  ```
+
+---
+
+## System Architecture
+
+```text
++-------------------------+            OneBot v11            +----------------------------------+
+| OneBot Client (NapCat)  | <---- [Forward WS / WS] ----> | BotAgent.Headless (C# / .NET 8)  |
++-------------------------+                                 |   +-- OneBot Gateway & Dispatch  |
+                                                            |   +-- Prompt Pipeline & Decision |
++-------------------------+          Official Open API      |   +-- Profiles & SQLite Storage  |
+| QQ Official Platform    | <----------------------------> |   +-- Feishu Webhook Gateway     |
++-------------------------+                                 |   +-- Local Playground Channel   |
+                                                            |   +-- Built-in Web Console       |
++-------------------------+          Platform Webhook       |   +-- Platform Policy & Quota    |
+| Feishu (Lark) Platform  | <----------------------------> |   +-- Circuit Breaker & Queues   |
++-------------------------+                                 +-----------------+----------------+
+                                                                              |
+                                                                              v OpenAI-Compatible API
+                                                            +----------------------------------+
+                                                            | LLM (DeepSeek / OpenAI / Qwen)   |
+                                                            +----------------------------------+
+```
+
+---
+
+## Compatibility and Data Migration
+
+- **Feishu Identity Mapping**: Runtime persistence maintains `data/feishu-ids-v2.json`, using a distinct ID range (`FeishuBase + 1e12` to `FeishuBase + 2e12`) separated from legacy 32-bit aliases. Back up this file alongside data when enabling Feishu. Legacy conversations are preserved but require reconfiguring native Feishu ID whitelists.
+- **OwnMessage Ledger Isolation**: Outgoing messages are partitioned by platform, account, conversation, and native message ID into `own_messages_scoped`. Legacy bare-numeric ID rows remain archived; older versions cannot read scoped entries backwards. Always create a full backup of `data/qqchat.db` prior to upgrading.
+- **Tool Call Hard Timeouts**: Hard timeouts enforce the maximum wait duration for the caller and send cancellation signals; they do not guarantee instantaneous termination of underlying external operations, which remain governed by host invocation policies.
+
+---
+
+## Testing and Quality Assurance
+
+The project includes an end-to-end integration test suite and high-frequency safety constraint probes:
+
+```bash
+# Run automated unit tests and architectural probes
+dotnet test
+
+# Run synthetic integration test suite
 dotnet build tests/BotAgent.IntegrationHarness -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
-```
 
-The harness dispatches S1, S3–S41 and S43–S51. S2 prompt assertions run inside S1; S42 (official channel) remains excluded from harness/CI regression, so official-channel end-to-end coverage is not claimed. Other scenarios cover: whitelist / silence / sentence splitting / memory / profiles / hot settings reload / disconnect and QR login / stickers / quoting in both directions / parenthetical narration / small emoji and pokes / hot model reconfiguration / music / links and forwards / voice / recall / web search and time / panel logs / image download (rkey expiry and caching) / burst re-evaluation / data migration / member roles / emotional companionship and proactive openers / server agent (`//` tasks · context hygiene · docker permissions · daily health report) / human approval (including approval and rejection from the panel) / participation state machine and questions / one-click panel deploy / panel tool catalogue and traces / bounded stepping loop / third local channel / panel conversation management / S50 Feishu Webhook & channel isolation / S51 Daily Token Quota panel.
-There is also a set of **sub-second probes** (synthetic scenarios, no production data or services): `ArchitectureProbe` (architecture ratchet), `SafetyProbe` (mechanisms and multi-platform safety boundaries),
-`ParticipationProbe`, `PipelineEval` (isolated evaluation), `ProductionSpecProbe` (production specs & fallbacks), and [FrontendProbe](<tests/BotAgent.FrontendProbe/probe.mjs>) (panel static + runtime). Counts come from the local command output:
-
-```bash
+# Run frontend static and runtime probes
 node tests/BotAgent.FrontendProbe/probe.mjs
 ```
 
-These are local synthetic verification entry points, not claims of a remote CI pass, production validation, publication or deployment.
-Individual scenarios or batches can be run alone with e.g. `QQCHAT_IT_ONLY=s50` or `QQCHAT_IT_ONLY=s36,s48,s50,s51`.
+The test suite covers S1–S51 real end-to-end scenarios (whitelists, silent decisions, sentence splitting, long-term memory & profiles, stickers & magic-byte validation, context quoting, hot model reconfiguration, speech synthesis, recall awareness, web search, QR login, Feishu channel isolation, multi-platform policies, daily token quota ledgers, etc.), as well as sub-second architectural ratchets (`ArchitectureProbe`), safety boundaries (`SafetyProbe`), and production specification probes (`ProductionSpecProbe`).
 
-> Note: the test project does not reference the bot project, so **after changing bot code you must build it separately**, otherwise the old DLL is what runs.
+---
 
-## 📄 License
+## License
 
-The source code of this program is MIT. NapCat itself is under its own licence (non-commercial) — please respect it when using it.
+This project is licensed under the [MIT License](LICENSE). Third-party protocol clients (such as NapCat) are governed by their respective code licenses and platform policies.

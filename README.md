@@ -1,5 +1,7 @@
 # Bot Agent
 
+简体中文 | [English](README.en.md)
+
 [![.NET](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(Ubuntu%20%7C%20Debian%20%7C%20CentOS%20%7C%20Arch)%20%7C%20Docker-green.svg)](#快速开始)
 [![Protocol](https://img.shields.io/badge/Protocol-OneBot%20v11%20%7C%20QQ%20Official%20%7C%20Feishu-purple.svg)](#系统架构)
@@ -64,8 +66,8 @@ sudo apt-get install -y dotnet-sdk-8.0 git curl openssl
 #### 2. 获取源码与编译构建
 
 ```bash
-# 克隆代码仓库
-git clone https://github.com/mgyanik/bot-agent.git
+# 克隆主仓库代码（main 分支）
+git clone -b main https://github.com/ZhaoJun233/bot-agent.git
 cd bot-agent
 
 # 生成并编辑配置文件
