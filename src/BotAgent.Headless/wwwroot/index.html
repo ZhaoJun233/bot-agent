@@ -528,17 +528,18 @@
                   <summary>高级设置</summary>
                   <div class="model-advanced-body">
                     <div class="field model-thinking-settings">
-                      <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <label for="setThinkingBudgetSlider">主模型思考程度与预算预设</label>
-                        <span class="val" id="thinkingBudgetVal">中 (Medium · 4,096 Tokens)</span>
-                      </div>
-                      <input type="range" id="setThinkingBudgetSlider" min="1" max="4" step="1" value="2" />
-                      <input type="hidden" id="setThinkingBudget" value="medium" />
+                      <label for="setThinkingBudget">思考深度</label>
+                      <select id="setThinkingBudget">
+                        <option value="off">Off</option>
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">xHigh</option>
+                      </select>
                       <div id="thinkingCustomBudgetWrap" class="field" style="margin-top: 8px;" hidden>
                         <label for="setThinkingCustomBudget">主模型自定义思考程度 / 预算（Tokens 或档位名称）</label>
                         <input type="text" id="setThinkingCustomBudget" placeholder="例如 8192 或特定档位名称" value="4096" />
                       </div>
-                      <span class="hint">调节主模型推理思考预算深度（预设：低 1K / 中 4K / 高 16K，或自定义）。</span>
                     </div>
 
                     <div class="field" style="margin-top: 14px;">

@@ -179,15 +179,14 @@ internal sealed class ModelTransport : IModelTransport
             }
         }
 
-        // 模型思考程度与预算预设（低 1K / 中 4K / 高 16K / 自定义）
-        // 区分主模型与快速档模型
+        // 主模型使用思考深度；快速档及旧自定义配置保留 Token 预算。
         var isFastModel = _settings.FastReply &&
                           !string.IsNullOrWhiteSpace(_settings.FastModel) &&
                           string.Equals(replyModel, _settings.FastModel.Trim(), StringComparison.Ordinal);
         var (thinkingEffort, thinkingTokens) = _settings.ResolveThinkingBudget(isFastModel);
         if (!string.IsNullOrWhiteSpace(thinkingEffort))
         {
-            if (thinkingEffort is "low" or "medium" or "high")
+            if (thinkingEffort is "none" or "low" or "medium" or "high" or "xhigh")
             {
                 payload["reasoning_effort"] = thinkingEffort;
             }
