@@ -30,6 +30,7 @@ public static class Program
         {
             AppDatabase.Initialize();
             SettingsExistenceTests();
+            OfficialSecretReloadTests();
             AuditChainTests();
             TraceArchiveTests();
             OnlineBackupTests(root);
@@ -72,6 +73,32 @@ public static class Program
         settings.Save(new AppSettings());
         Check(settings.HasStoredSettings(), "正常保存后仍能检测已有配置");
     }
+    private static void OfficialSecretReloadTests()
+    {
+        const string variable = "QQCHAT_OFFICIAL_APP_SECRET";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        var store = new SettingsStore();
+        var saved = store.Load();
+        try
+        {
+            store.Save(new AppSettings { OfficialEnabled = true, OfficialAppId = "10001" });
+            Environment.SetEnvironmentVariable(variable, "synthetic-official-secret");
+            var loaded = BotConfig.Load();
+            Check(loaded.OfficialAppSecret == "synthetic-official-secret",
+                "Official secret loads from environment after settings have been saved");
+            Check(string.IsNullOrEmpty(store.Load().OfficialAppSecret),
+                "Official secret is excluded from persisted settings");
+            Environment.SetEnvironmentVariable(variable, "synthetic-rotated-secret");
+            Check(BotConfig.Load().OfficialAppSecret == "synthetic-rotated-secret",
+                "Official secret rotation takes effect on subsequent loads");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, previous);
+            store.Save(saved);
+        }
+    }
+
     private static void AuditChainTests()
     {
         var audit = new AuditLogStore();
