@@ -376,13 +376,12 @@ public sealed class AppSettings
     /// </summary>
     public List<PlatformPolicySettings> PlatformPolicies { get; set; } = new();
 
-    // ---------- 对话总开关（两个通道各自可单独静音） ----------
+    /// <summary>0 = legacy switch intersection; 1 = account-scoped policy switches are authoritative.</summary>
+    public int PlatformSwitchSchemaVersion { get; set; }
 
-    /// <summary>
-    /// 私域通道（自建 NapCat/OneBot）收不收消息、要不要回。
-    /// 与面板顶部那个「AI 开/关」不是一回事：那个是**全局**（连人都回不了），
-    /// 这个是**按通道**（比如官方那条被限制/在调试时，只把官方静音，私域照旧）。
-    /// </summary>
+    // ---------- 对话开关兼容字段（默认账号策略的镜像；未覆盖时作为 fallback） ----------
+
+    /// <summary>私域聊天的兼容字段；显式平台策略开关优先。与全局 AI 开关独立。</summary>
     public bool PrivateChatEnabled { get; set; } = true;
 
     /// <summary>官方通道（QQ 开放平台）收不收消息、要不要回。默认开。</summary>

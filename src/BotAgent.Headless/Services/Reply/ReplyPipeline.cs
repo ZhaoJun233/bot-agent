@@ -474,8 +474,8 @@ public sealed partial class ReplyPipeline
         var channelEnabled = platformPolicy.Enabled && platformPolicy.ChatEnabled;
         if (!channelEnabled)
         {
-            var label = Channels.Tag(msg.Channel) + (msg.IsGroup ? " 群 " + msg.GroupId : " 私聊 " + msg.UserId);
-            LogThrottled("chanoff:" + Channels.ChannelOf(msg.Channel), $"忽略（{Channels.Display(msg.Channel)}通道的总开关是关的）: {label}");
+            var reason = platformPolicy.Enabled ? "聊天已静音；chat_disabled" : "平台已停用；platform_disabled";
+            LogThrottled("chanoff:" + Channels.ChannelOf(msg.Channel), $"忽略（{Channels.Display(msg.Channel)}{reason}）");
             // P1（只观测）：这是“收到了但被服务端拦下” → 对状态机是 Silent 事件（**不改判定**）
             _participation.Observe(
                 Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId),

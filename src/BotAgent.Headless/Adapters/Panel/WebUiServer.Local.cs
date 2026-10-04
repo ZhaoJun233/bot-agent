@@ -22,7 +22,8 @@ public sealed partial class WebUiServer
     private JsonObject BuildLocalChannelPayload()
     {
         var s = _box.Current;
-        var enabled = !string.IsNullOrWhiteSpace(s.LocalChannelIds) && _localChannel is not null;
+        var switches = Services.Platforms.PlatformSwitchSettings.Read(s, Domain.Platforms.PlatformId.Local, Domain.Platforms.AccountScope.Legacy);
+        var enabled = switches.Enabled && !string.IsNullOrWhiteSpace(s.LocalChannelIds) && _localChannel is not null;
         var outbox = new JsonArray();
 
         if (_localChannel is not null)
@@ -54,11 +55,12 @@ public sealed partial class WebUiServer
     {
         var s = _box.Current;
 
-        if (string.IsNullOrWhiteSpace(s.LocalChannelIds) || _localChannel is null)
+        if (!Services.Platforms.PlatformSwitchSettings.Read(s, Domain.Platforms.PlatformId.Local, Domain.Platforms.AccountScope.Legacy).Enabled
+            || string.IsNullOrWhiteSpace(s.LocalChannelIds) || _localChannel is null)
         {
             await WriteJsonAsync(context, 403, new JsonObject
             {
-                ["error"] = "本地通道没开（LocalChannelIds 为空 = 整条通道都不建）",
+                ["error"] = "本地通道已停用、名单为空或尚未加载（新启用时可能需要重启）",
                 ["reason"] = "local_channel_disabled",
             });
             return;
