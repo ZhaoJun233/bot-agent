@@ -68,24 +68,24 @@ public sealed class AppSettings
     public int MaxTokens { get; set; } = 2048;
 
     /// <summary>
-    /// 主模型思考程度与预算预设：low(1024) / medium(4096) / high(16384) / custom。
-    /// 默认 medium。暂时不能完全关闭思考（当前测试中）。
+    /// 主模型思考深度：off / low / medium / high / xhigh，默认 medium。
+    /// 保留 ThinkingBudget 字段名和 custom 以兼容旧配置。
     /// </summary>
     public string ThinkingBudget { get; set; } = "medium";
 
     /// <summary>
-    /// 主模型自定义思考程度/预算（当 ThinkingBudget 为 custom 时生效，可为 Token 数字如 "8192" 或自定义档位名）。
+    /// 主模型自定义思考深度/预算（当 ThinkingBudget 为 custom 时生效，可为 Token 数字如 "8192" 或自定义档位名如 "minimal"）。
     /// </summary>
     public string ThinkingCustomBudget { get; set; } = "4096";
 
     /// <summary>
-    /// 快速档模型思考程度与预算预设：low(1024) / medium(4096) / high(16384) / custom。
-    /// 默认 low。暂时不能完全关闭思考（当前测试中）。
+    /// 快速档模型思考深度预设：off / low / medium / high / xhigh / custom。
+    /// 默认 low。
     /// </summary>
     public string FastThinkingBudget { get; set; } = "low";
 
     /// <summary>
-    /// 快速档模型自定义思考程度/预算（当 FastThinkingBudget 为 custom 时生效，可为 Token 数字如 "1024" 或自定义档位名）。
+    /// 快速档模型自定义思考深度/预算（当 FastThinkingBudget 为 custom 时生效，可为 Token 数字如 "1024" 或自定义档位名如 "minimal"）。
     /// </summary>
     public string FastThinkingCustomBudget { get; set; } = "1024";
 
@@ -101,13 +101,15 @@ public sealed class AppSettings
         var preset = (budget ?? defaultPreset).Trim().ToLowerInvariant();
         return preset switch
         {
-            "low" => ("low", 1024),
-            "medium" => ("medium", 4096),
-            "high" => ("high", 16384),
+            "off" or "none" or "disabled" => ("none", 0),
+            "low" => ("low", isFastModel ? 1024 : 0),
+            "medium" => ("medium", isFastModel ? 4096 : 0),
+            "high" => ("high", isFastModel ? 16384 : 0),
+            "xhigh" or "max" => ("xhigh", 0),
             "custom" => int.TryParse(custom, out var c) && c > 0
                 ? (custom, c)
                 : (!string.IsNullOrWhiteSpace(custom) ? (custom, defaultTokens) : (defaultPreset, defaultTokens)),
-            _ => (defaultPreset, defaultTokens)
+            _ => (defaultPreset, isFastModel ? defaultTokens : 0)
         };
     }
 
@@ -978,7 +980,11 @@ public sealed class AppSettings
     }
 
     /// <summary>健康检查 HTTP 端口（0=关闭）。用于容器 HEALTHCHECK。</summary>
-    public int HealthPort { get; set; } = 8080;
+    /// <remarks>
+    /// 默认 18245 而不是 8080：8080 常被同机别的服务占用（撞上就是「面板起不来」）。
+    /// 这里是全项目默认值的唯一来源 —— start.sh / status.sh / 文档都跟它对齐，别再各处另写数字。
+    /// </remarks>
+    public int HealthPort { get; set; } = 18245;
 
     /// <summary>是否输出详细日志到 stdout。</summary>
     public bool VerboseLog { get; set; } = true;

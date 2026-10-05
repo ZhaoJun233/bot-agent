@@ -504,7 +504,10 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
             reasoningEffort, ct, baseUrlOverride, apiKeyOverride);
 
     private static bool LooksLikeUnsupportedReasoning(string body)
-        => body.Contains("reasoning_effort", StringComparison.OrdinalIgnoreCase);
+        => body.Contains("reason", StringComparison.OrdinalIgnoreCase) ||
+           body.Contains("effort", StringComparison.OrdinalIgnoreCase) ||
+           body.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
+           body.Contains("budget", StringComparison.OrdinalIgnoreCase);
 
     public async Task<(List<string> Delete, string? Reason)> CurateStickersAsync(string libraryTable, int maxDelete, CancellationToken ct = default)
     {

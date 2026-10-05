@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -67,10 +68,8 @@ OPENAI_VOICE = os.environ.get("OPENAI_TTS_VOICE", "alloy").strip()
 # silk 编码器（官方通道发语音要 silk；NapCat 那条路不需要，它自己转）
 SILK_CMD = os.environ.get("SILK_ENCODER", "silk_v3_encoder")
 
-# 情绪/音调/音量：由 /speak 的查询参数每次请求填一次（云端 voice_setting 用）。
-# 单进程 HTTP 服务、合成已经过缓存，并发写同一份值的影响可忽略 —— 缓存键里带了这三项，
-# 所以也不会出现“A 的参数被 B 复用”的串音。
-VOICE_OPTS = {"emotion": "", "pitch": 0, "vol": 1.0}
+# 情绪/音调/音量不再使用全局变量（Bug #2 修复：并发请求会互相覆盖全局字典）。
+# 现由 do_GET 解析后以局部 voice_opts dict 传入 minimax_audio，彻底隔离。
 
 _SEM = threading.Semaphore(MAX_CONCURRENCY)
 _lock = threading.Lock()
@@ -242,12 +241,18 @@ def http_bytes(url: str, payload: dict, headers: dict, timeout: float) -> bytes:
         return resp.read()
 
 
-def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
-    """MiniMax T2A v2：返回的音频在 data.audio 里，是 **hex**（不是 base64）。"""
+def minimax_audio(text: str, voice: str, speed: float, fmt: str,
+                  voice_opts: dict | None = None) -> bytes:
+    """MiniMax T2A v2：返回的音频在 data.audio 里，是 **hex**（不是 base64）。
+
+    voice_opts 由调用方（do_GET）以局部变量形式传入，不再读全局状态，
+    彻底消除多线程并发时的参数串音问题（Bug #2 修复）。
+    """
     key = api_key()
     if not key:
         raise RuntimeError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 MINIMAX_API_KEY）")
 
+    vo = voice_opts or {}
     # silk 要的是 16k 单声道 PCM，直接让云端吐 pcm，省掉一次重采样
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
     payload = {
@@ -258,9 +263,9 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
         "voice_setting": {
             "voice_id": voice,
             "speed": round(max(0.5, min(2.0, speed)), 2),
-            "vol": round(float(VOICE_OPTS.get("vol", 1.0)), 2),
-            "pitch": int(VOICE_OPTS.get("pitch", 0)),
-            **({"emotion": VOICE_OPTS["emotion"]} if VOICE_OPTS.get("emotion") else {}),
+            "vol": round(float(vo.get("vol", 1.0)), 2),
+            "pitch": int(vo.get("pitch", 0)),
+            **({"emotion": vo["emotion"]} if vo.get("emotion") else {}),
         },
         "audio_setting": {
             "format": want,
@@ -309,10 +314,12 @@ def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
     }, TIMEOUT)
 
 
-def synth_raw(text: str, voice: str, speed: float, fmt: str) -> bytes:
+def synth_raw(text: str, voice: str, speed: float, fmt: str,
+              voice_opts: dict | None = None) -> bytes:
     if provider() == "openai":
         return openai_audio(text, voice, speed, fmt)
-    return minimax_audio(text, voice, speed, fmt)
+    return minimax_audio(text, voice, speed, fmt, voice_opts)
+
 
 
 def to_silk(pcm: bytes) -> bytes:
@@ -324,49 +331,68 @@ def to_silk(pcm: bytes) -> bytes:
     ② 纯 Python 的 ``pilk``（pypi，不用编译 —— 官方通道靠它）
 
     两个都没有就**明确报错**，绝不静默发坏音频。
+
+    Bug #1 修复：原代码硬编码 /tmp/_tts.pcm、/tmp/_tts.silk，ThreadingHTTPServer
+    并发时多线程共享同一临时文件，造成数据踩踏。现改用 tempfile.mkstemp 生成
+    进程内唯一路径，finally 块负责清理，彻底消除竞态。
     """
     exe = shutil.which(SILK_CMD)
     if exe:
-        with open("/tmp/_tts.pcm", "wb") as fh:
-            fh.write(pcm)
-        out = "/tmp/_tts.silk"
-        proc = subprocess.run([exe, "/tmp/_tts.pcm", out, "-tencent", "-rate", "16000"],
-                              capture_output=True, timeout=60)
-        if proc.returncode != 0 or not os.path.exists(out):
-            raise RuntimeError("silk 编码失败: " + proc.stderr.decode("utf-8", "replace")[:200])
-        with open(out, "rb") as fh:
-            return fh.read()
+        fd_pcm, src = tempfile.mkstemp(suffix=".pcm", prefix="_tts_")
+        _, dst = tempfile.mkstemp(suffix=".silk", prefix="_tts_")
+        try:
+            with os.fdopen(fd_pcm, "wb") as fh:
+                fh.write(pcm)
+            proc = subprocess.run([exe, src, dst, "-tencent", "-rate", "16000"],
+                                  capture_output=True, timeout=60)
+            if proc.returncode != 0 or not os.path.exists(dst):
+                raise RuntimeError("silk 编码失败: " + proc.stderr.decode("utf-8", "replace")[:200])
+            with open(dst, "rb") as fh:
+                return fh.read()
+        finally:
+            for p in (src, dst):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     try:
         import pilk  # type: ignore  # 纯 Python SILK v3 编码器（带 C 扩展：装的时候要编译器）
     except ImportError as exc:
         raise RuntimeError(
             "这台机器上没有 silk 编码器（官方通道发语音才需要它；NapCat 那条路用 mp3/wav 即可）。"
-            f"想启用：pip install pilk，或用 SILK_ENCODER 指定 silk_v3_encoder（缺 {SILK_CMD}）") from exc
+            f"想启用：pip install pilk，或用 SILK_ENCODER 指定 silk_v3_encoder（缺 {SILK_CMD})") from exc
 
-    src, dst = "/tmp/_tts.pcm", "/tmp/_tts.silk"
-    with open(src, "wb") as fh:
-        fh.write(pcm)
-    if os.path.exists(dst):
-        os.remove(dst)
-    # pilk 的 encode 是 C 扩展（没有 Python 签名可探 ✗），只能直接试：
-    #   官方要 16k/单声道 → pcm_rate=16000；tencent=True 才写 #!SILK_V3 头（默认写的是普通 SILK）
-    def _pilk_call():
-        try:
-            pilk.encode(src, dst, pcm_rate=16000, tencent=True)
-        except TypeError:
-            pilk.encode(src, dst)          # 这版不接关键字参数就只能裸调（需要时再想办法）
-
+    fd_pcm, src = tempfile.mkstemp(suffix=".pcm", prefix="_tts_")
+    _, dst = tempfile.mkstemp(suffix=".silk", prefix="_tts_")
     try:
-        _pilk_call()
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"pilk 编码 silk 失败（{type(exc).__name__}: {exc}）") from exc
-    if not os.path.exists(dst):
-        raise RuntimeError("pilk 没有产出 silk 文件")
-    with open(dst, "rb") as fh:
-        data = fh.read()
-    log(f"silk 编码完成（pilk，{len(pcm)} → {len(data)} 字节）")
-    return data
+        with os.fdopen(fd_pcm, "wb") as fh:
+            fh.write(pcm)
+        # pilk 的 encode 是 C 扩展（没有 Python 签名可探 ✗），只能直接试：
+        #   官方要 16k/单声道 → pcm_rate=16000；tencent=True 才写 #!SILK_V3 头（默认写的是普通 SILK）
+        def _pilk_call() -> None:
+            try:
+                pilk.encode(src, dst, pcm_rate=16000, tencent=True)
+            except TypeError:
+                pilk.encode(src, dst)          # 这版不接关键字参数就只能裸调（需要时再想办法）
+
+        try:
+            _pilk_call()
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"pilk 编码 silk 失败（{type(exc).__name__}: {exc}）") from exc
+        if not os.path.exists(dst):
+            raise RuntimeError("pilk 没有产出 silk 文件")
+        with open(dst, "rb") as fh:
+            data = fh.read()
+        log(f"silk 编码完成（pilk，{len(pcm)} → {len(data)} 字节）")
+        return data
+    finally:
+        for p in (src, dst):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
 
 
 # ─────────────────────────── HTTP 层 ───────────────────────────
@@ -449,11 +475,12 @@ class Handler(BaseHTTPRequestHandler):
             vol = 1.0
         pitch = max(-12, min(12, pitch))
         vol = max(0.1, min(10.0, vol))
-        VOICE_OPTS.update({"emotion": emotion, "pitch": pitch, "vol": vol})
+        # Bug #2 修复：不再写全局 VOICE_OPTS，改用请求本地的局部字典，并发安全。
+        voice_opts = {"emotion": emotion, "pitch": pitch, "vol": vol}
 
         key = hashlib.sha256(
             f"{PROVIDER}|{MINIMAX_MODEL if PROVIDER != 'openai' else OPENAI_MODEL}|{voice}|{speed}|{fmt}|{text}"
-            f"|emo={VOICE_OPTS.get('emotion', '')}|pi={VOICE_OPTS.get('pitch', 0)}|vo={VOICE_OPTS.get('vol', 1.0)}".encode("utf-8")).hexdigest()[:40]
+            f"|emo={emotion}|pi={pitch}|vo={vol}".encode("utf-8")).hexdigest()[:40]
 
         hit = cache_get(key, fmt)
         if hit is not None:
@@ -463,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
         started = time.time()
         try:
             with _SEM:
-                raw = synth_raw(text, voice, speed, fmt)
+                raw = synth_raw(text, voice, speed, fmt, voice_opts)
                 if fmt == "silk":
                     raw = to_silk(raw)
         except urllib.error.HTTPError as exc:

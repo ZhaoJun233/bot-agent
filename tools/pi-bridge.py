@@ -8,8 +8,11 @@
 
       群里的 //消息 → 机器人（服务器）──ws──> 本脚本 ──subprocess──> pi -p …
 
-  连接怎么到机器人：机器人面板只监听宿主机 127.0.0.1:8080，所以本脚本自己起一条
-  ssh 本地转发（-L 18080:127.0.0.1:8080），再连 ws://127.0.0.1:18080/agent-bridge。
+  连接怎么到机器人：机器人面板只监听服务器宿主机的回环地址（端口以机器人 .env 里的
+  QQCHAT_HEALTH_PORT / HEALTH_PORT 为准，默认 18245），所以本脚本自己起一条
+  ssh 本地转发（-L 18080:127.0.0.1:<面板端口>），再连 ws://127.0.0.1:18080/agent-bridge。
+  面板端口**不写死**：--remote / PI_BRIDGE_REMOTE 优先，其次自动探测（读服务器上运行中
+  进程的真实环境变量，再退到 .env），探测不到才用兜底默认值。
   ssh 断了会自动重连，不需要公网开放任何端口。
 
 用法（把本文件和 pi-bridge.py 放同一个目录）：
@@ -41,9 +44,11 @@ import time
 # ─────────── 默认配置（都可以用命令行/环境变量覆盖）───────────
 DEFAULT_SSH = ""
 DEFAULT_KEY = ""
-DEFAULT_LOCAL_PORT = 18080          # 本地转发端口（连到服务器 127.0.0.1:8080）
+DEFAULT_LOCAL_PORT = 18080          # 本地转发端口（本机这个口 → 服务器上的面板端口）
 DEFAULT_SFTP_PORT = 2222            # 本机转发到服务器 sshd 的端口（sftp/scp 用；0 = 不开）
-DEFAULT_REMOTE = "127.0.0.1:8080"   # 服务器上的面板/桥端口
+DEFAULT_REMOTE_HOST = "127.0.0.1"   # 服务器上的面板/桥主机部分（一般不用改）
+DEFAULT_REMOTE_PORT = "18245"       # 仅当自动探测失败时的兜底端口；真值由 _discover_remote 现探
+DEFAULT_REMOTE = f"{DEFAULT_REMOTE_HOST}:{DEFAULT_REMOTE_PORT}"
 DEFAULT_WORKDIR = os.getcwd()         # pi 在哪个目录里干活
 DEFAULT_PI = "pi"
 DEFAULT_TOKEN = os.environ.get("PI_BRIDGE_TOKEN", "")
@@ -59,6 +64,9 @@ SESSION_ROOT = os.environ.get("PI_BRIDGE_SESSION_ROOT") or os.path.join(
 SHADOW_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pi-bridge-shadow")
 
 log_lock = threading.Lock()
+# Bug #3 修复用的 fallback 锁单例：_kill_tree 的 getattr fallback 必须指向同一个对象，
+# 而不是每次调用都 new 一个新 Lock（新 Lock 完全没有互斥效果）。
+_DEAD_LOCK = threading.Lock()
 
 
 def log(msg: str) -> None:
@@ -70,6 +78,55 @@ def log(msg: str) -> None:
                 fh.write(line + "\n")
         except OSError:
             pass
+
+
+# ══════════════════════════════════════════════════════════════
+#  面板端口自动发现（别写死：机器人的面板换端口时这里要跟着走）
+# ══════════════════════════════════════════════════════════════
+# 一次 ssh 调用里按「最准 → 兜底」顺序取，取第一个数字：
+#   ① 服务器上运行中进程的真实环境变量（面板此刻就在这个端口上）
+#   ② 常见部署目录里的 .env（服务没起、或读不到 /proc 时用它）
+_REMOTE_PORT_PROBE = (
+    "p=$(pgrep -f BotAgent.Headless 2>/dev/null | head -n1); "
+    "if [ -n \"$p\" ] && [ -r \"/proc/$p/environ\" ]; then "
+    "tr '\\0' '\\n' < \"/proc/$p/environ\" "
+    "| grep -E '^(BOTAGENT_HEALTH_PORT|QQCHAT_HEALTH_PORT|HEALTH_PORT)=' | tail -n1 | cut -d= -f2; "
+    "fi; "
+    "for f in \"$HOME/bot-agent/.env\" \"$HOME/qqchat/.env\" \"$HOME/.env\" /opt/qqchat/.env; do "
+    "[ -f \"$f\" ] || continue; "
+    "grep -E '^(BOTAGENT_HEALTH_PORT|QQCHAT_HEALTH_PORT|HEALTH_PORT)=' \"$f\" | tail -n1 | cut -d= -f2; "
+    "done"
+)
+
+
+def _discover_remote(ssh_target: str, key: str, timeout: float = 10.0) -> str:
+    """ssh 到服务器问一句「面板在哪个端口」，成功返回 host:port，拿不到返回 ""。
+
+    机器人那边端口是配置项（QQCHAT_HEALTH_PORT / HEALTH_PORT），人会改；写死在脚本里的
+    默认值迟早过期（面板迁 8080 → 18245 就是这么踩到的），所以只在探测失败时兜底。
+    """
+    if not ssh_target:
+        return ""
+    args = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+            "-o", f"ConnectTimeout={int(timeout)}"]
+    if key:
+        args += ["-i", key]
+    args += [ssh_target, _REMOTE_PORT_PROBE]
+    creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 5,
+                              creationflags=creation)
+    except (OSError, subprocess.SubprocessError) as exc:      # noqa: BLE001
+        log(f"面板端口自动探测失败（{exc}）→ 用兜底 {DEFAULT_REMOTE}")
+        return ""
+    for line in (proc.stdout or "").splitlines():
+        value = line.strip().strip('"').strip("'")
+        if value.isdigit() and 0 < int(value) <= 65535:
+            log(f"已从服务器探测到面板端口：{value}（不必再手改 --remote）")
+            return f"{DEFAULT_REMOTE_HOST}:{value}"
+    log(f"没能从服务器探测到面板端口 → 用兜底 {DEFAULT_REMOTE}；"
+        f"要指定就设 PI_BRIDGE_REMOTE=127.0.0.1:<端口>")
+    return ""
 
 
 # ══════════════════════════════════════════════════════════════
@@ -533,7 +590,11 @@ def _stop_hint(event: dict) -> str | None:
 
 def _kill_tree(proc: subprocess.Popen) -> None:
     """只杀 spawn 时证明属于本任务的组；TERM 后限时 KILL，不误杀桥自身。"""
-    with getattr(proc, "_pi_bridge_kill_lock", threading.Lock()):
+    # Bug #3 修复：原代码用 getattr fallback threading.Lock()，每次调用都会新建一个
+    # 全新 Lock 实例，互斥保护完全失效。现在只取已由 TaskRunner.run() 在 Popen 完成后
+    # 立即绑定好的那把锁；若因某种意外属性不存在则 fallback 到 _DEAD_LOCK（模块级单例），
+    # 保证永远是同一把锁在做互斥，而不是每次都 new 一个。
+    with getattr(proc, "_pi_bridge_kill_lock", _DEAD_LOCK):
         pgid = getattr(proc, "_pi_bridge_pgid", None)
         # 消耗所有权记录，避免 cancel/watchdog/finally 重复按旧 pid 杀组。
         proc._pi_bridge_pgid = None
@@ -591,7 +652,8 @@ def main() -> int:
     ap.add_argument("--ssh", default=os.environ.get("PI_BRIDGE_SSH", DEFAULT_SSH))
     ap.add_argument("--key", default=os.environ.get("PI_BRIDGE_KEY", DEFAULT_KEY))
     ap.add_argument("--local-port", type=int, default=int(os.environ.get("PI_BRIDGE_PORT", DEFAULT_LOCAL_PORT)))
-    ap.add_argument("--remote", default=os.environ.get("PI_BRIDGE_REMOTE", DEFAULT_REMOTE))
+    ap.add_argument("--remote", default=os.environ.get("PI_BRIDGE_REMOTE", ""),
+                    help="服务器上的面板端口 host:port（默认自动探测；探测不到用 127.0.0.1:18245）")
     ap.add_argument("--url", default=os.environ.get("PI_BRIDGE_URL", ""),
                     help="直连 ws://（给了就不起 ssh 转发）")
     ap.add_argument("--token", default=DEFAULT_TOKEN, help="与机器人 QQCHAT_AGENT_TOKEN 一致")
@@ -602,6 +664,12 @@ def main() -> int:
     ap.add_argument("--sftp-port", type=int, default=int(os.environ.get("PI_BRIDGE_SFTP_PORT", DEFAULT_SFTP_PORT)),
                     help="本机转发到服务器 sshd 的端口（sftp/scp 用）；0 = 不开")
     args = ap.parse_args()
+
+    # 面板端口不写死：没显式给（--remote / PI_BRIDGE_REMOTE）就现探一次服务器上的真实端口。
+    # 只有走 ssh 转发才需要它；用 --url 直连时省掉这次探测。
+    if not args.remote:
+        args.remote = (_discover_remote(args.ssh, args.key)
+                       if (args.ssh and not args.url) else "") or DEFAULT_REMOTE
 
     if not args.token:
         log("!! 没有令牌：设环境变量 PI_BRIDGE_TOKEN 或加 --token（与机器人 QQCHAT_AGENT_TOKEN 一致）")

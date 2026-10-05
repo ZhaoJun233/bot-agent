@@ -36,6 +36,16 @@
   --shadow-flyout: 0 8px 24px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.06);
   --radius-card: 10px;
   --radius-ctl: 6px;
+
+  /* ─────────── 手机端底部标签栏（Liquid Glass Dock）尺寸令牌 ───────────
+     页面底部的“让位留白”统一用 --tabbar-space：以后改高度只改 --tabbar-h，
+     各页的 padding-bottom 会跟着走，不会再出现“底栏长高了、内容被盖住”。
+     68px 是 iOS 26 底栏的量级：可视胶囊 68px，触控热区 56px（HIG 要求 ≥ 44pt）。 */
+  --tabbar-h: 68px;
+  --tabbar-gap: 10px;     /* 胶囊距屏幕（安全区）底边 */
+  --tabbar-pad: 6px;      /* 胶囊内边距 */
+  --tabbar-lead: 12px;    /* 内容与胶囊之间再留一层缓冲 */
+  --tabbar-space: calc(var(--tabbar-h) + var(--tabbar-gap) + var(--tabbar-lead) + env(safe-area-inset-bottom, 0px));
 }
 
 /* ─────────── 主题令牌：深色 ─────────── */
@@ -152,32 +162,8 @@ h1, h2, h3, p { margin: 0; }
 
 .titlebar-right { display: flex; align-items: center; gap: 12px; }
 
-.header-save-btn {
-  display: none;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 14px;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
-}
-.header-save-btn:active {
-  transform: scale(0.94);
-}
-.header-save-btn.dirty {
-  animation: pulse-save 1.8s ease-in-out infinite;
-}
-@keyframes pulse-save {
-  0%, 100% { box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
-  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent), 0 4px 12px color-mix(in srgb, var(--accent) 45%, transparent); }
-}
+/* .header-save-btn 已废弃，保留空规则避免旧引用报错 */
+.header-save-btn { display: none !important; }
 
 .conn {
   display: inline-flex; align-items: center; gap: 7px;
@@ -889,7 +875,7 @@ textarea { resize: vertical; line-height: 1.5; }
   .section-link-all { margin-top: 10px; color: var(--text-tertiary); }
 
   .settings-scroll { grid-column: 2; grid-row: 1; }
-  .settings-footer { grid-column: 1 / -1; grid-row: 2; }
+  /* .settings-footer 已废弃 */
 
   /* 一次一节 → 单列；卡片内部原有的两列小格子保持两列（这时它又宽回来了） */
   .settings-inner { display: block; max-width: 980px; margin: 0 auto; }
@@ -906,6 +892,10 @@ textarea { resize: vertical; line-height: 1.5; }
 }
 .settings-footer .infobar { margin: 0; }
 .dirty-hint { font-size: 12px; color: var(--accent); white-space: nowrap; }
+/* 卡片头部：标题与保存按钮同行 */
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--divider); }
+.card-head-text { flex: 1 1 auto; min-width: 0; }
+.card-save-btn { flex-shrink: 0; align-self: center; }
 .page-title { font-size: 28px; font-weight: 600; }
 .page-desc { color: var(--text-secondary); line-height: 1.6; }
 
@@ -919,9 +909,7 @@ textarea { resize: vertical; line-height: 1.5; }
 .card-head h3 { font-size: 17px; font-weight: 600; }
 .card-head p { font-size: 12px; color: var(--text-secondary); margin-top: 2px; line-height: 1.6; }
 
-/* 卡片头部与下面的控件之间拉一道细线：否则标题、说明、第一项控件视觉上糊成一块 */
-.card-head { padding-bottom: 10px; border-bottom: 1px solid var(--divider); }
-
+/* 开关行里的说明也另起一行（不然它跟标题连成一句长句："优先用模型自带搜索关掉就只用下面的…"） */
 /* 开关行里的说明也另起一行（不然它跟标题连成一句长句：“优先用模型自带搜索关掉就只用下面的…”） */
 .switch-row > span > .hint { display: block; margin-top: 1px; font-size: 11px; color: var(--text-tertiary); font-weight: 400; }
 
@@ -1291,96 +1279,222 @@ input[type="range"] {
 
   .shell { flex-direction: column; }
 
-  /* ══════════ Apple 液态毛玻璃悬浮导航栏 (Liquid Glass Dock) ══════════ */
+  /* ══════════════════════════════════════════════════════════════
+     Apple Liquid Glass · 悬浮底栏（Dock）—— 手机端（≤ 760px）
+     整块重做，按 Apple 那套玻璃的六个特征分层堆：
+       ① 玻璃本体：半透明底 + 高饱和模糊 + 轻微提亮（跟着下方内容变色）
+       ② 环形镜面高光：conic-gradient 沿圆角走一整圈、中间用遮罩挖空
+          （原来只有一条 1px 顶高光 —— 那是 iOS 7 的毛玻璃，不是 Liquid Glass）
+       ③ 内侧漫反射：顶部柔光 + 底部暗环，做出“这块玻璃有厚度”的错觉
+       ④ 浮起阴影：远/近两层错位投影
+       ⑤ 流动胶囊：5 个 Tab 共用一颗，切页时横滑过去（transform 长缓动）
+       ⑥ 滚动收起：向下滚整条滑出屏幕底部并隐藏（.is-hidden 由 app.js 挂）
+     [!] 真折射（backdrop-filter: url(#svgFilter)）在 Chromium WebView 与 Safari
+         上都不生效，做不了；能做的只有“模糊 + 环形高光 + 厚度 + 流动 + 边缘淡出”。
+     [!] 深浅色只认 [data-theme="dark"]（app.js 的 applyTheme 写进去的那个），
+         不再用 @media (prefers-color-scheme: dark)：手动切浅色 + 系统深色时，
+         原来那条规则会让底栏变成一块深玻璃盖在浅色页面上（真 BUG）。
+     ══════════════════════════════════════════════════════════════ */
   .navrail { display: none; }
+
   .mtabbar {
+    /* 玻璃配色（浅色）：深色那一整套在下面 [data-theme="dark"] 里换掉 */
+    --glass-body: rgba(255, 255, 255, 0.52);
+    --glass-sheen: rgba(255, 255, 255, 0.42);
+    --glass-glow: rgba(255, 255, 255, 0.55);
+    --glass-glow-2: rgba(255, 255, 255, 0.20);
+    --glass-line: rgba(255, 255, 255, 0.62);
+    --glass-ring-hi: rgba(255, 255, 255, 0.92);
+    --glass-ring-mid: rgba(255, 255, 255, 0.34);
+    --glass-ring-lo: rgba(255, 255, 255, 0.06);
+    --glass-inner-hi: rgba(255, 255, 255, 0.80);
+    --glass-inner-lo: rgba(0, 0, 0, 0.055);
+    --glass-drop-far: rgba(0, 0, 0, 0.16);
+    --glass-drop-near: rgba(0, 0, 0, 0.07);
+    --glass-pill-base: rgba(255, 255, 255, 0.55);
+    --glass-solid: rgba(246, 246, 248, 0.94);
+
     position: fixed;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    left: 16px;
-    right: 16px;
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--tabbar-gap) + env(safe-area-inset-bottom, 0px));
     margin: 0 auto;
-    max-width: 440px;
-    height: 60px;
+    max-width: 460px;
+    height: var(--tabbar-h);
     display: flex;
-    align-items: center;
-    justify-content: space-around;
-    padding: 6px 8px;
-    border-radius: 30px;
+    align-items: stretch;
+    justify-content: space-between;
+    padding: var(--tabbar-pad);
+    border-radius: calc(var(--tabbar-h) / 2);
     z-index: 999;
-    
-    /* Apple 液态玻璃质感：多重漫反射模糊 + 高饱和度 + 镜面边缘高光 */
-    background: rgba(255, 255, 255, 0.72);
-    backdrop-filter: blur(28px) saturate(190%) contrast(102%);
-    -webkit-backdrop-filter: blur(28px) saturate(190%) contrast(102%);
-    border: 1px solid rgba(255, 255, 255, 0.45);
-    box-shadow: 
-      0 12px 32px -4px rgba(0, 0, 0, 0.12),
-      0 4px 12px -2px rgba(0, 0, 0, 0.05),
-      inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.65),
-      inset 0 -1px 1px 0 rgba(0, 0, 0, 0.04);
-    
-    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.24s ease;
+    isolation: isolate;           /* 自成层叠上下文：高光与胶囊不会漏到别的层上 */
+
+    /* ① 玻璃本体：三层叠出“采样下方内容”的透光感 */
+    background:
+      linear-gradient(180deg, var(--glass-sheen) 0, rgba(255, 255, 255, 0) 46%),
+      radial-gradient(120% 160% at 14% 0%, var(--glass-glow-2) 0, rgba(255, 255, 255, 0) 62%),
+      var(--glass-body);
+    backdrop-filter: blur(26px) saturate(200%) brightness(1.05);
+    -webkit-backdrop-filter: blur(26px) saturate(200%) brightness(1.05);
+    border: 0.5px solid var(--glass-line);
+    box-shadow:
+      0 16px 34px -10px var(--glass-drop-far),
+      0 4px 12px -3px var(--glass-drop-near),
+      inset 0 0.5px 0 var(--glass-inner-hi),
+      inset 0 -0.5px 0 var(--glass-inner-lo);
+
+    transform: translateY(0);
+    opacity: 1;
+    transition:
+      transform 0.36s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.26s ease;
+    will-change: transform;
   }
 
-  @media (prefers-color-scheme: dark) {
-    .mtabbar {
-      background: rgba(28, 30, 36, 0.72);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      box-shadow: 
-        0 14px 36px -4px rgba(0, 0, 0, 0.45),
-        0 4px 14px -2px rgba(0, 0, 0, 0.25),
-        inset 0 1px 1px 0 rgba(255, 255, 255, 0.2),
-        inset 0 -1px 1px 0 rgba(0, 0, 0, 0.35);
-    }
+  /* ② 环形镜面高光：沿圆角走一整圈，遮罩把中间挖空、只留 1px 反光圈 */
+  .mtabbar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: conic-gradient(from 200deg,
+      var(--glass-ring-lo) 0deg,
+      var(--glass-ring-hi) 58deg,
+      var(--glass-ring-mid) 132deg,
+      var(--glass-ring-lo) 196deg,
+      var(--glass-ring-mid) 248deg,
+      var(--glass-ring-hi) 306deg,
+      var(--glass-ring-lo) 360deg);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  /* ③ 内侧漫反射：顶部柔光 + 底部暗环 = 玻璃的厚度 */
+  .mtabbar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(140% 92% at 50% -46%, var(--glass-glow) 0, rgba(255, 255, 255, 0) 62%),
+      linear-gradient(180deg, var(--glass-glow-2) 0, rgba(255, 255, 255, 0) 52%),
+      linear-gradient(0deg, var(--glass-inner-lo) 0, rgba(0, 0, 0, 0) 38%);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* ⑤ 流动胶囊：宽度正好是 1/5（.mtab 都是 flex:1 1 0），切页时横滑过去 */
+  .mtab-pill {
+    position: absolute;
+    top: var(--tabbar-pad);
+    bottom: var(--tabbar-pad);
+    left: var(--tabbar-pad);
+    width: calc((100% - var(--tabbar-pad) * 2) / 5);
+    border-radius: calc(var(--tabbar-h) / 2 - var(--tabbar-pad));
+    background: var(--glass-pill-base);                        /* 不支持 color-mix 时的回退 */
+    background: color-mix(in srgb, var(--accent) 16%, var(--glass-pill-base));
+    box-shadow:
+      inset 0 0.5px 0 rgba(255, 255, 255, 0.5),
+      0 2px 7px -2px rgba(0, 0, 0, 0.2);
+    transform: translateX(0);
+    transition: transform 0.42s cubic-bezier(0.34, 1.22, 0.5, 1);
+    pointer-events: none;
+    z-index: 2;
+  }
+  .mtabbar[data-active="1"] .mtab-pill { transform: translateX(100%); }
+  .mtabbar[data-active="2"] .mtab-pill { transform: translateX(200%); }
+  .mtabbar[data-active="3"] .mtab-pill { transform: translateX(300%); }
+  .mtabbar[data-active="4"] .mtab-pill { transform: translateX(400%); }
+
+  /* 深色玻璃：跟着全站主题令牌走（applyTheme 写 data-theme="dark"） */
+  [data-theme="dark"] .mtabbar {
+    --glass-body: rgba(32, 34, 40, 0.56);
+    --glass-sheen: rgba(255, 255, 255, 0.10);
+    --glass-glow: rgba(255, 255, 255, 0.14);
+    --glass-glow-2: rgba(255, 255, 255, 0.06);
+    --glass-line: rgba(255, 255, 255, 0.16);
+    --glass-ring-hi: rgba(255, 255, 255, 0.42);
+    --glass-ring-mid: rgba(255, 255, 255, 0.14);
+    --glass-ring-lo: rgba(255, 255, 255, 0.04);
+    --glass-inner-hi: rgba(255, 255, 255, 0.22);
+    --glass-inner-lo: rgba(0, 0, 0, 0.42);
+    --glass-drop-far: rgba(0, 0, 0, 0.52);
+    --glass-drop-near: rgba(0, 0, 0, 0.30);
+    --glass-pill-base: rgba(255, 255, 255, 0.11);
+    --glass-solid: rgba(28, 30, 36, 0.96);
+  }
+
+  /* 不支持 backdrop-filter 的 WebView：退回不透明玻璃色，别让底栏变糊 */
+  @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+    .mtabbar { background: var(--glass-solid); }
   }
 
   .mtab {
+    position: relative;
+    z-index: 4;                    /* 盖在胶囊与高光之上：图标文字始终清晰 */
     flex: 1 1 0;
-    height: 48px;
+    min-width: 0;
+    height: auto;                  /* 撑满 68 - 12 = 56px 的触控热区（HIG 要求 ≥ 44pt） */
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 3px;
-    padding: 4px 6px;
-    border-radius: 20px;
-    font-size: 10.5px;
+    padding: 0;
+    border-radius: calc(var(--tabbar-h) / 2 - var(--tabbar-pad));
+    font-size: 11.5px;
     font-weight: 500;
     letter-spacing: -0.1px;
+    line-height: 1;
     color: var(--text-secondary);
     background: transparent;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
-    transition: all 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: color 0.24s ease, transform 0.26s cubic-bezier(0.34, 1.3, 0.6, 1);
   }
 
   .mtab svg {
-    transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
+    position: relative;
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 
-  /* 激活状态：微光胶囊背景 + 图标弹性上浮 */
+  /* 激活态只管颜色与图标：底色的那颗胶囊交给 .mtab-pill（它会滑） */
   .mtab.active {
     color: var(--accent);
     font-weight: 600;
-    background: rgba(0, 113, 227, 0.12);
   }
-  @media (prefers-color-scheme: dark) {
-    .mtab.active {
-      background: rgba(10, 132, 255, 0.22);
-      box-shadow: inset 0 0.5px 1px rgba(255, 255, 255, 0.15);
-    }
-  }
-
   .mtab.active svg {
-    transform: translateY(-1px) scale(1.08);
+    transform: translateY(-0.5px) scale(1.06);
   }
 
   /* 点击/轻触反馈 (Haptic Bounce) */
   .mtab:active {
-    transform: scale(0.92);
-    opacity: 0.85;
+    transform: scale(0.94);
+    opacity: 0.9;
+  }
+
+  /* ⑥ 向下滚动：整条滑出屏幕底部并隐藏（.is-hidden 由 app.js 的 bindMobileTabbar 挂） */
+  .mtabbar.is-hidden {
+    transform: translateY(calc(100% + 32px));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* 系统开了“减弱动态效果”：不做位移与滑动，只留状态切换 */
+  @media (prefers-reduced-motion: reduce) {
+    .mtabbar,
+    .mtab-pill,
+    .mtab,
+    .mtab svg { transition: none !important; }
+    .mtab:active { transform: none; }
   }
 
   /* 当进入聊天界面时，隐藏底栏，给输入框让出完整高度与软键盘空间 */
@@ -1466,43 +1580,20 @@ input[type="range"] {
   .switch::after { width: 16px; height: 16px; top: 3px; left: 3px; }
   .switch-row input:checked + .switch::after { transform: translateX(20px); }
 
-  /* 标题栏常驻保存按钮（手机端处于设置页时展示） */
-  body[data-active-page="settings"] .header-save-btn {
-    display: inline-flex;
-  }
-
   /* 设置页 */
   .settings-inner { padding: 16px 14px 20px; gap: 12px; }
   .page-title { font-size: 22px; }
   .page-desc { font-size: 13px; }
   .card { padding: 14px; gap: 14px; }
   .card-head h3 { font-size: 16px; }
-  .settings-footer {
-    padding: 10px 16px calc(76px + env(safe-area-inset-bottom, 0px));
-    gap: 8px;
-    background: color-mix(in srgb, var(--card-bg) 88%, transparent);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    border-top: 1px solid var(--divider);
-    box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.05);
-    z-index: 10;
-  }
-  .settings-actions { display: flex; align-items: center; gap: 10px; width: 100%; }
-  .accent-btn.big { height: 42px; font-size: 14px; border-radius: 12px; flex: 1 1 auto; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent); }
-  .dirty-hint { font-size: 12px; white-space: nowrap; }
+  .card-save-btn { font-size: 12px; padding: 4px 10px; }
   .path-hint { flex-basis: 100%; }
   .logbox { height: 150px; font-size: 11px; }
 
-  /* 聚焦输入框唤起软键盘时：隐藏底部悬浮栏，收起保存栏底边距，防止键盘推高底栏遮挡内容 */
-  body:has(input:focus) .mtabbar,
-  body:has(textarea:focus) .mtabbar,
-  body:has(select:focus) .mtabbar {
+  /* 聚焦输入框唤起软键盘时：隐藏底部悬浮栏 */
+  body:has(input:not([type="checkbox"]):not([type="radio"]):focus) .mtabbar,
+  body:has(textarea:focus) .mtabbar {
     display: none !important;
-  }
-  body:has(input:focus) .settings-footer,
-  body:has(textarea:focus) .settings-footer,
-  body:has(select:focus) .settings-footer {
-    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
 
   /* 每日配额横向滑动标签与指标卡移动端适配 */
@@ -1573,7 +1664,7 @@ input[type="range"] {
   .grid-2 { grid-template-columns: 1fr; }
   .quota-readouts { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .settings-inner { padding: 18px 18px 24px; }
-  .settings-footer { padding: 12px 18px 14px; }
+  /* .settings-footer 已废弃 */
   .login-card { flex-direction: column; align-items: stretch; margin: 12px 14px 0; }
   .login-qr { width: 150px; height: 150px; align-self: center; }
 }
@@ -1649,7 +1740,7 @@ input[type="range"] {
 .agent-model-control .icon-btn { width: 30px; min-width: 30px; height: 34px; padding: 0; }
 .agent-config-foot { align-items: flex-start; margin-top: 12px; }
 .agent-toggle-row { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; color: var(--text-secondary); font-size: 11px; cursor: pointer; user-select: none; }
-.agent-toggle-row input { position: absolute; opacity: 0; pointer-events: none; }
+.agent-toggle-row input { display: none; }
 .agent-toggle-row .switch { flex: 0 0 auto; width: 32px; height: 18px; border-radius: 9px; }
 .agent-toggle-row .switch::after { width: 12px; height: 12px; }
 .agent-toggle-row input:checked + .switch::after { transform: translateX(14px); }
@@ -1805,7 +1896,7 @@ body:not(.auth-locked) .panel-auth { display: none; }
 .trace-bar { min-height: 66px; padding: 14px 22px; gap: 12px; background: color-mix(in srgb, var(--card-bg) 78%, transparent); }
 .trace-bar h1 { font-size: 18px; letter-spacing: -0.025em; }
 .trace-bar .path-hint { flex: 1 1 auto; min-width: 0; }
-#pageDash { background: transparent; }
+#pageDash, #pageTrace { background: transparent; overflow-y: auto; overflow-x: hidden; }
 #pageDash .dash-grid { align-content: start; grid-auto-rows: minmax(126px, auto); padding: 18px 22px 26px; gap: 12px; }
 #pageDash .dash-tile {
   min-height: 126px;
@@ -1828,7 +1919,6 @@ body:not(.auth-locked) .panel-auth { display: none; }
 #pageSettings .card-head p { max-width: 820px; }
 #pageSettings .field input, #pageSettings .field textarea, #pageSettings .field select { border-radius: 10px; }
 #pageSettings .status-bar, #pageSettings .infobar { border-radius: 12px; }
-#pageSettings .settings-footer { background: color-mix(in srgb, var(--card-bg) 92%, transparent); box-shadow: 0 -8px 22px rgba(21, 38, 64, 0.04); }
 input:focus, textarea:focus, select:focus { padding-bottom: 7px; border-bottom-width: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent); }
 
 @media (max-width: 1180px) {
@@ -2216,6 +2306,22 @@ input:focus, textarea:focus, select:focus { padding-bottom: 7px; border-bottom-w
 .agent-command-bar .agent-live-config summary:hover,
 .agent-command-bar .agent-live-config[open] summary { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .agent-command-bar .agent-live-config summary small { max-width: 120px; overflow: hidden; color: var(--text-tertiary); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 移动端专用调起按钮：桌面端完全不渲染 */
+.agent-live-config-mobile-btn { display: none; }
+
+/* 桌面端 head 内关闭按钮隐藏，保持原有纯 summary 折叠视觉 */
+.agent-config-head .agent-config-close { display: none; }
+
+/* 桌面端改由 JS 统一接管模态：禁用 summary 原生折叠并支持悬停反馈 */
+@media (min-width: 761px) {
+  .agent-command-bar .agent-live-config { cursor: pointer; }
+  .agent-command-bar .agent-live-config summary { pointer-events: none; }
+  .agent-command-bar .agent-live-config:hover summary {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+}
 .agent-command-bar .agent-config-panel {
   position: absolute;
   z-index: 8;
@@ -2478,7 +2584,29 @@ input:focus, textarea:focus, select:focus { padding-bottom: 7px; border-bottom-w
     scrollbar-width: thin;
     -webkit-overflow-scrolling: touch;
   }
-  .agent-command-bar .agent-live-config { flex: 0 0 auto; margin: 0; }
+  /* 移动端隐藏原本的 details，避免被单行横向滚动裁剪 */
+  .agent-command-bar .agent-live-config { display: none !important; }
+
+  /* 移动端显示独立触发按钮，显式接管 order: 0 */
+  .agent-command-bar .agent-live-config-mobile-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 0 7px;
+    border-radius: 7px;
+    font-size: 10px;
+    white-space: nowrap;
+    color: var(--text-tertiary);
+    background: transparent;
+    cursor: pointer;
+    flex: 0 0 auto;
+    order: 0;
+  }
+  .agent-command-bar .agent-live-config-mobile-btn:active {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--text-primary);
+  }
   .agent-command-bar .agent-live-config summary {
     min-height: 32px;
     padding: 0 7px;
@@ -2626,3 +2754,52 @@ input:focus, textarea:focus, select:focus { padding-bottom: 7px; border-bottom-w
 .platform-policy-whitelists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .platform-policy-whitelists input { width: 100%; }
 @media (max-width: 760px) { .platform-policy-whitelists { grid-template-columns: minmax(0, 1fr); } }
+
+/* ═══════════ 移动端 Agent 运行配置 Dialog 模态层 ═══════════ */
+.agent-config-dialog {
+  display: flex;
+  flex-direction: column;
+  border: none;
+  padding: 0;
+  background: transparent;
+  width: min(94vw, 540px);
+  max-height: 82vh;
+  margin: auto;
+  border-radius: 14px;
+  outline: none;
+  overflow: hidden;
+}
+
+.agent-config-dialog::backdrop {
+  background: rgba(18, 26, 42, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.agent-config-dialog .agent-config-panel {
+  position: static;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  background: var(--bg-base);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+}
+
+.agent-config-dialog .agent-config-head .agent-config-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+}
+.agent-config-dialog .agent-config-head .agent-config-close:hover {
+  background: var(--subtle-hover);
+}

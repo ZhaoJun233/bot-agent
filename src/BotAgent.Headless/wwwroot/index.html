@@ -292,13 +292,14 @@
             <div class="agent-command-bar" aria-label="任务工具栏">
               <details class="agent-live-config">
                <summary><span>运行配置</span><small id="agentConfigNote">配置已与服务端同步</small></summary>
-               <div class="agent-config-panel">
+               <div class="agent-config-panel" id="agentConfigPanel">
                  <div class="agent-config-head">
                    <div>
                      <div class="panel-kicker">LIVE CONFIG</div>
                      <strong>本次任务使用的后端与目录</strong>
                    </div>
                    <button class="btn small" id="agentConfigSave" type="button">保存配置</button>
+                   <button type="button" class="icon-btn agent-config-close" id="agentConfigClose" title="关闭运行配置" aria-label="关闭运行配置">×</button>
                  </div>
                  <div class="agent-config-grid">
                     <label class="agent-config-field">
@@ -361,6 +362,10 @@
                   </div>
                 </div>
               </details>
+              <button type="button" class="agent-live-config-mobile-btn" id="agentConfigMobileBtn">
+                <span>运行配置</span>
+                <small id="agentConfigMobileNote">配置已与服务端同步</small>
+              </button>
               <div class="agent-quick-controls">
                 <label class="agent-select-wrap"><span>本次后端</span>
                   <select id="agentWorkbenchTarget">
@@ -425,8 +430,10 @@
 
         <div class="card password-settings" id="panelPasswordSettings" data-category="other">
           <div class="card-head">
-            <h3>面板访问安全</h3>
-            <p>修改用于登录工作台的密码。修改后其他已登录设备需要重新验证。</p>
+            <div class="card-head-text">
+              <h3>面板访问安全</h3>
+              <p>修改用于登录工作台的密码。修改后其他已登录设备需要重新验证。</p>
+            </div>
           </div>
           <form id="panelPasswordForm" class="password-settings-form" autocomplete="off">
             <label>当前密码<input id="panelPasswordCurrent" type="password" autocomplete="current-password" placeholder="输入当前密码（首次设置可留空）" /></label>
@@ -439,8 +446,10 @@
         <!-- 插件中心：展示已装载的预设插件与扩展 -->
         <div class="card" id="pluginsCard" data-category="model">
           <div class="card-head">
-            <h3>插件与扩展</h3>
-            <p>基于微内核架构的可插拔模块中心。当前系统已分离并激活预设插件，开箱即用。</p>
+            <div class="card-head-text">
+              <h3>插件与扩展</h3>
+              <p>基于微内核架构的可插拔模块中心。当前系统已分离并激活预设插件，开箱即用。</p>
+            </div>
           </div>
           <div id="pluginListContainer" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px;">
             <div style="color:var(--text-secondary); font-size:13px;">正在加载插件清单…</div>
@@ -450,8 +459,11 @@
         <!-- 模型工作区：沿用现有设置接口，按运行上下文切换，不引入新的供应商存储协议。 -->
         <div class="card model-studio-card" id="modelSettingsCard" data-category="model">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>模型</h3>
             <p>按运行上下文管理模型。供应商名称由 Base URL 自动识别，密钥由服务端安全保存，界面只显示掩码。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <div class="model-studio">
@@ -528,17 +540,19 @@
                   <summary>高级设置</summary>
                   <div class="model-advanced-body">
                     <div class="field model-thinking-settings">
-                      <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <label for="setThinkingBudgetSlider">主模型思考程度与预算预设</label>
-                        <span class="val" id="thinkingBudgetVal">中 (Medium · 4,096 Tokens)</span>
-                      </div>
-                      <input type="range" id="setThinkingBudgetSlider" min="1" max="4" step="1" value="2" />
-                      <input type="hidden" id="setThinkingBudget" value="medium" />
+                      <label for="setThinkingBudget">思考深度</label>
+                      <select id="setThinkingBudget">
+                        <option value="off">Off</option>
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">xHigh</option>
+                      </select>
                       <div id="thinkingCustomBudgetWrap" class="field" style="margin-top: 8px;" hidden>
-                        <label for="setThinkingCustomBudget">主模型自定义思考程度 / 预算（Tokens 或档位名称）</label>
+                        <label for="setThinkingCustomBudget">主模型自定义思考深度 / 预算（Tokens 或档位名称）</label>
                         <input type="text" id="setThinkingCustomBudget" placeholder="例如 8192 或特定档位名称" value="4096" />
                       </div>
-                      <span class="hint">调节主模型推理思考预算深度（预设：低 1K / 中 4K / 高 16K，或自定义）。</span>
+                      <span class="hint">调节主模型推理思考深度（关闭 / 低 / 中 / 高 / 极高，或自定义）。</span>
                     </div>
 
                     <div class="field" style="margin-top: 14px;">
@@ -561,16 +575,16 @@
                     </div>
                     <div class="field model-thinking-settings" style="margin-top: 14px;">
                       <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <label for="setFastThinkingBudgetSlider">快速档思考程度与预算预设</label>
-                        <span class="val" id="fastThinkingBudgetVal">低 (Low · 1,024 Tokens)</span>
+                        <label for="setFastThinkingBudgetSlider">快速档思考深度预设</label>
+                        <span class="val" id="fastThinkingBudgetVal">低 (Low)</span>
                       </div>
-                      <input type="range" id="setFastThinkingBudgetSlider" min="1" max="4" step="1" value="1" />
+                      <input type="range" id="setFastThinkingBudgetSlider" min="1" max="6" step="1" value="2" />
                       <input type="hidden" id="setFastThinkingBudget" value="low" />
                       <div id="fastThinkingCustomBudgetWrap" class="field" style="margin-top: 8px;" hidden>
-                        <label for="setFastThinkingCustomBudget">快速档自定义思考程度 / 预算（Tokens 或档位名称）</label>
+                        <label for="setFastThinkingCustomBudget">快速档自定义思考深度 / 预算（Tokens 或档位名称）</label>
                         <input type="text" id="setFastThinkingCustomBudget" placeholder="例如 1024 或特定档位名称" value="1024" />
                       </div>
-                      <span class="hint">调节快速档轻量模型推理思考预算深度（预设：低 1K / 中 4K / 高 16K，或自定义）。<br><b>注：暂时不能完全关闭思考，当前在测试中。</b></span>
+                      <span class="hint">调节快速档轻量模型推理思考深度（关闭 / 低 / 中 / 高 / 极高，或自定义）。</span>
                     </div>
                   </div>
                 </details>
@@ -636,8 +650,11 @@
         <!-- QQ 私域通道 (NapCat) -->
         <div class="card" id="napcatCard" data-category="channel">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>QQ 私域通道 (NapCat)</h3>
             <p>连接信息由容器环境变量提供；白名单归本页所有，保存即生效。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <div class="status-bar" id="napcatBar">
@@ -678,10 +695,13 @@
         <!-- QQ 官方通道 (开放平台) -->
         <div class="card" id="officialCard" data-category="channel">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>QQ 官方通道 (开放平台)</h3>
             <p>与上面那条<b>私域</b>通道（自建 NapCat）<b>并存</b>：官方这条走开放平台的机器人，用户是 openid。
               两边的会话、上下文、人设、白名单<b>完全隔离</b>（会话 key 带 <code>official:</code> 前缀），互不串台。
               开启前先在开放平台把服务器的<b>出口 IP</b> 加进白名单；密钥（Secret）不在这里填 —— 它只从环境变量读。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <p class="path-hint" id="officialConversationList">官方通道见过的会话会列在这里，点一下即可查看别名号。</p>
@@ -720,10 +740,13 @@
         <!-- 飞书通道 -->
         <div class="card" id="feishuCard" data-category="channel">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>飞书通道</h3>
             <p>通过飞书开放平台机器人应用接入：事件订阅走 Webhook（<code>POST /api/webhooks/feishu</code>），回复通过飞书开放平台 REST API 投递。
               与 QQ 平台<b>通道严格隔离</b>（会话 key 带 <code>feishu:</code> 前缀）。
               在飞书开放平台「事件与回调」配置请求网址为本服务地址，并订阅 <code>im.message.receive_v1</code> 消息接收事件。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <p class="path-hint" id="feishuWebhookUrlHint">Webhook 入口地址：<code>/api/webhooks/feishu</code>（支持 URL verification challenge 自动应答、请求签名防伪与 1MB 防护）。</p>
@@ -760,9 +783,12 @@
         <!-- 本地通道 -->
         <div class="card" id="localCard" data-category="channel">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>本地通道</h3>
             <p>通过 HTTP 接口 <code>POST /api/local/message</code> 注入会话，与私域、官方和飞书通道<b>严格通道隔离</b>（会话 key 带 <code>local:</code> 前缀，专属 7e15 号段）。
               回复落在内存出箱中，不碰外部网络。白名单已统一收敛至下方的「平台实例策略」集中管理。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -780,8 +806,11 @@
         <!-- 平台实例策略 -->
         <div class="card" id="platformPoliciesCard" data-category="channel">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>平台实例策略</h3>
             <p>按平台与账号实例分别控制聊天入口、白名单和功能覆盖；连接凭据仍由各平台自己的安全配置管理。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
           <div id="platformPolicyRows" class="platform-policy-list"></div>
           <p class="path-hint" id="platformPolicyEmpty">正在读取已注册的平台实例。</p>
@@ -790,10 +819,13 @@
         <!-- 面板一键部署（管理员 2026-09-18：“面板有没有提供一键部署”） -->
         <div class="card" id="deployCard" data-category="other">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>一键部署</h3>
             <p>把新的 <code>app.tar.gz</code>（发布产物）交给服务器重建镜像并替换机器人容器；
                部署前会自动把当前镜像存成 <code>qqchat-agent:prev</code>，出问题可以一键回滚。
                上传/拉取都要先打开上面那个「面板一键部署」开关（默认关）。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <pre id="deployStatus" class="path-hint" style="white-space:pre-wrap;max-height:120px;overflow:auto">读取中…</pre>
@@ -815,8 +847,10 @@
         <!-- 每日 Token 配额 -->
         <div class="card" id="quotaCard" data-category="model">
           <div class="card-head">
-            <h3>每日 Token 配额</h3>
-            <p>按平台与会话来源隔离的 UTC 日预算；只控制每日总量，单次回复上限仍由模型设置里的 <code>maxTokens</code> 控制。</p>
+            <div class="card-head-text">
+              <h3>每日 Token 配额</h3>
+              <p>按平台与会话来源隔离的 UTC 日预算；只控制每日总量，单次回复上限仍由模型设置里的 <code>maxTokens</code> 控制。</p>
+            </div>
           </div>
 
           <!-- 平台划分切换栏与多平台显现 -->
@@ -859,8 +893,11 @@
         <!-- 回复节奏 -->
         <div class="card" id="replyRhythmCard" data-category="chat">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>回复节奏</h3>
             <p>控制人设风格、发言欲望、手感与节奏，防止刷屏。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <!-- 机器人人设档案 -->
@@ -974,8 +1011,10 @@
           </div>
 
           <div class="card-head" style="margin-top:6px">
-            <h3 style="font-size:15px">长期记忆 · 人物画像</h3>
-            <p>定期用模型把堆积的历史发言压缩成一段画像（代替“一堆原文”），token 降一个数量级。</p>
+            <div class="card-head-text">
+              <h3 style="font-size:15px">长期记忆 · 人物画像</h3>
+              <p>定期用模型把堆积的历史发言压缩成一段画像（代替“一堆原文”），token 降一个数量级。</p>
+            </div>
           </div>
           <label class="switch-row">
             <input type="checkbox" id="setEnableSummary" />
@@ -1034,8 +1073,11 @@
         <!-- 群聊黑话与流行梗 (Jargon) -->
         <div class="card" id="jargonCard" data-category="chat">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>群聊黑话与俚语 (Jargon)</h3>
             <p>自动学习群友流行黑话与缩写，支持审核放行或手动录入。已审核黑话将融入模型 Prompt，使回复更贴近圈子风格。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <div class="grid-2">
@@ -1076,9 +1118,12 @@
         <!-- 表情包 -->
         <div class="card" id="stickerSettingsCard" data-category="chat">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>表情包</h3>
             <p>机器人会自动把群友发的图收进表情包库，按下文语境挑图发出来；也会自己巡检并决定删哪些。
               <b>全库共用一份</b>（不分会话）。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1117,9 +1162,12 @@
         <!-- 听音乐 -->
         <div class="card" id="musicCard" data-category="multimedia">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>听音乐</h3>
             <p>有人在群里分享歌（网易云歌曲卡片/链接）时，机器人会去查歌名与歌词、下一份<b>低码率</b>音频，
               自己分析波形（响度/动态/速度/段落起伏），再拿着这些实测事实跟群友接话。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1190,10 +1238,13 @@
         <!-- 语音消息 -->
         <div class="card" id="voiceCard" data-category="multimedia">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>语音消息</h3>
             <p>机器人可以用<b>语音</b>说话（模型在 JSON 里填 <code>speak</code> 字段时）。
               合成走<b>云端 TTS</b> 旁路服务（不再跑本地模型，省内存），协议端会把它转成 QQ 原生语音条。
               默认<b>关闭</b> —— 语音比文字“重”，想让它偶尔开口再开。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1296,10 +1347,13 @@
         <!-- 联网搜索 -->
         <div class="card" id="webSearchCard" data-category="multimedia">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>联网搜索</h3>
             <p>模型可以要求<b>去网上查一下</b>（JSON 里填 <code>search</code> 字段）或<b>读一下某个网页</b>（<code>read</code> 字段），
               查到的东西会作为<b>事实</b>交给它，下一轮再拿着事实回答 —— 而不是靠印象编。
               默认走<b>模型自带搜索</b>（检索在模型服务商那边完成，结果自带来源）；它不可用时才回退到下面的搜索源。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1349,10 +1403,13 @@
         <!-- 本机 Agent（// 命令） -->
         <div class="card" id="hostAgentCard" data-category="model">
             <div class="card-head">
+            <div class="card-head-text">
                 <h3>本机 Agent（<code>//</code> 命令）</h3>
                 <p>群里发一条 <code>//</code> 开头的消息，机器人把这句话交给<b>你自己电脑上的 pi</b> 去干（能看文件、能改代码、能跑命令），
                     干完把结果发回群里。本机跑 <code>start-pi-bridge.cmd</code>，它主动连到机器人 —— 不用给公网开新端口。</p>
-            </div>
+                        </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
+          </div>
 
             <label class="switch-row">
                 <input type="checkbox" id="setEnableAgentBridge" />
@@ -1562,6 +1619,7 @@
         <!-- 服务器健康日报（定时私聊推送） -->
         <div class="card" id="healthReportCard" data-category="other">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>服务器健康日报</h3>
             <p>每天在指定时刻（<b>北京时间</b>）发一条机器人 / 服务器状态：QQ 在线与协议端连接、
               模型接口通不通、内存/负载/磁盘、日志大小与近一小时告警。
@@ -1570,6 +1628,8 @@
         <p class="path-hint">收件人可以是<b>私域真号</b>，也可以是<b>官方通道的别名号</b>（两条通道都适配了）；
           走官方那边属于平台的「主动消息」，算平台额度（上限很宽松，但别拿去刷屏）。
           <b>哪个通道的「对话总开关」关着，就不往哪条通道发</b> —— 日报不会绕过总开关。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1605,9 +1665,12 @@
         <!-- 链接与分享 -->
         <div class="card" id="linkPreviewCard" data-category="multimedia">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>链接与分享</h3>
             <p>群友发链接或分享卡片时，机器人会真去打开看一眼，取回标题与摘要再聊 —— 而不是对着一串 URL 猜。
               另外，<b>合并转发的聊天记录</b>会被拉取展开成正文（前 20 行），群里发的东西不再是空气。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1631,9 +1694,12 @@
         <!-- 戳一戳 -->
         <div class="card" id="pokeCard" data-category="chat">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>戳一戳</h3>
             <p>别人戳机器人时，它按语境和人设回一句，也可以戳回去 / 戳别人；
               <b>群里互相戳不会插话</b>（只记进上下文，免得刷屏）。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <label class="switch-row">
@@ -1662,12 +1728,15 @@
         <!-- 能力与审批 -->
         <div class="card" id="capabilitiesCard" data-category="model">
           <div class="card-head">
+            <div class="card-head-text">
             <h3>能力与审批<span class="hint">增强能力默认关闭，按需开启</span></h3>
             <p><b>场景预设</b>留空 = 能力白名单完全由上面的开关决定；填了预设只会<b>收紧</b>，
               不会把已经关掉的能力打开，名字不认识则按最低权限处理。<br />
               <b>人工审批</b>打开后，模型说“想调工具”不会被执行，而是发一张<b>待确认</b>到群里：
               群主/管理员（或下面点名的人）回复「同意 编号」才执行 —— 而且只执行一个<b>固定假工具</b>
               （它没有任何真实副作用，不代表具备 shell / 文件 / 进程控制能力）。</p>
+                      </div>
+            <button class="card-save-btn ghost-btn small" type="button">保存</button>
           </div>
 
           <div class="field">
@@ -1701,11 +1770,13 @@
           <p class="path-hint" id="questionHint"></p>
 
           <div class="card-head">
-            <h3>参与状态机<span class="hint">只观测，不改“发不发”的判定</span></h3>
-            <p>机器人按会话记一份参与状态（观望 / 试探 / 活跃 / 退场），下面这组是**服务端硬上限**：
-              填大了会被钳到上限（连续 ≤10、冷却 ≤600 秒、试探 ≤3、活性命 ≤3600 秒）。<br />
-              <b>现在它只写观测日志</b>（日志里搜 <code>[参与]</code>），改这些数字<b>不会改变群聊行为</b> ——
-              这是刻意的：等真实使用观测对得上，再谈用它来拦。</p>
+            <div class="card-head-text">
+              <h3>参与状态机<span class="hint">只观测，不改“发不发”的判定</span></h3>
+              <p>机器人按会话记一份参与状态（观望 / 试探 / 活跃 / 退场），下面这组是**服务端硬上限**：
+                填大了会被钳到上限（连续 ≤10、冷却 ≤600 秒、试探 ≤3、活性命 ≤3600 秒）。<br />
+                <b>现在它只写观测日志</b>（日志里搜 <code>[参与]</code>），改这些数字<b>不会改变群聊行为</b> ——
+                这是刻意的：等真实使用观测对得上，再谈用它来拦。</p>
+            </div>
           </div>
 
           <div class="grid-2">
@@ -1745,8 +1816,10 @@
         <!-- 外观 -->
         <div class="card" id="appearanceCard" data-category="other">
           <div class="card-head">
-            <h3>外观</h3>
-            <p>主题跟随系统，也可以手动指定。</p>
+            <div class="card-head-text">
+              <h3>外观</h3>
+              <p>主题跟随系统，也可以手动指定。</p>
+            </div>
           </div>
           <div class="field">
             <label>应用主题</label>
@@ -1761,8 +1834,10 @@
         <!-- 运行日志 -->
         <div class="card log-card" id="logCard" data-category="other">
           <div class="card-head">
-            <h3>运行日志<span class="hint">最近 300 行（刷新页面不会清空；含 Agent / OneBot / 语音 / 搜索等各组件的行）</span></h3>
-            <p>能看到它每次为什么发言、为什么沉默、耗时多久；长日志用右边两个按钮一键到顶 / 到底。</p>
+            <div class="card-head-text">
+              <h3>运行日志<span class="hint">最近 300 行（刷新页面不会清空；含 Agent / OneBot / 语音 / 搜索等各组件的行）</span></h3>
+              <p>能看到它每次为什么发言、为什么沉默、耗时多久；长日志用右边两个按钮一键到顶 / 到底。</p>
+            </div>
           </div>
           <div class="logbar">
             <button class="ghost-btn small" id="logTopBtn" type="button">↑ 顶部</button>
@@ -1773,15 +1848,14 @@
       </div>
     </div>
 
-    <!-- 常驻操作栏：不随内容滚动，保证任何时候都看得到保存按钮 -->
     <div class="settings-footer">
       <div class="infobar" id="saveBar" hidden>
         <svg viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0m3.5 6.1-4.2 4.2a.7.7 0 0 1-1 0L4.5 8.5a.7.7 0 1 1 1-1l1.3 1.3L9.9 5a.7.7 0 1 1 1 1"/></svg>
         <span id="saveBarText">设置已保存并立即生效</span>
       </div>
-      <div class="settings-actions">
-        <button class="accent-btn big" id="saveBtn">保存设置</button>
-        <span class="dirty-hint" id="dirtyHint" hidden>● 有未保存的修改</span>
+      <div style="display:flex; justify-content:flex-end; align-items:center; gap:16px;">
+        <span class="dirty-hint" id="dirtyHint" hidden>有未保存的修改</span>
+        <button class="btn" id="saveBtn" type="button">保存设置</button>
       </div>
     </div>
   </main>
@@ -1901,25 +1975,28 @@
 
 <div class="toast" id="toast" hidden></div>
 
+<dialog class="agent-config-dialog" id="agentConfigDialog" aria-label="运行配置"></dialog>
+
 <!-- ══════════ 手机端底部导航（桌面端隐藏）══════════ -->
-<nav class="mtabbar" id="mTabbar">
-  <button class="mtab active" data-page="chat">
+<nav class="mtabbar" id="mTabbar" role="tablist" aria-label="移动端导航">
+  <div class="mtab-pill" aria-hidden="true"></div>
+  <button class="mtab active" data-page="chat" role="tab" aria-selected="true">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 2.5A1.5 1.5 0 0 1 3.5 1h9A1.5 1.5 0 0 1 14 2.5v7A1.5 1.5 0 0 1 12.5 11H6.3L3 13.7V11h-.5A1.5 1.5 0 0 1 2 9.5z"/></svg>
     <span>会话</span>
   </button>
-  <button class="mtab" data-page="agent">
+  <button class="mtab" data-page="agent" role="tab" aria-selected="false">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M8 1.2a2 2 0 0 1 2 2v.3h1.5a2 2 0 0 1 2 2V7h.3a1.2 1.2 0 1 1 0 2h-.3v1.5a2 2 0 0 1-2 2H10v.3a2 2 0 1 1-4 0v-.3H4.5a2 2 0 0 1-2-2V9h-.3a1.2 1.2 0 1 1 0-2h.3V5.5a2 2 0 0 1 2-2H6v-.3a2 2 0 0 1 2-2m-2 5a1.2 1.2 0 1 0 0 2.4A1.2 1.2 0 0 0 6 6.2m4 0a1.2 1.2 0 1 0 0 2.4A1.2 1.2 0 0 0 10 6.2M5.3 10h5.4v-1.2H5.3z"/></svg>
     <span>Agent</span>
   </button>
-  <button class="mtab" data-page="trace">
+  <button class="mtab" data-page="trace" role="tab" aria-selected="false">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 13.5h12v1.2H2zM3.6 12c-.5 0-.9-.4-.8-1l1.6-7.3c.1-.4.4-.7.8-.7h6.6c.4 0 .7.3.8.7L14.2 11c.1.6-.3 1-.8 1zm1.2-1.4h6.4l-.3-1.6H5.1zm.6-3h5.2l-.3-1.6H5.7zm.6-3h4l-.3-1.6h-3.4z"/></svg>
     <span>追踪</span>
   </button>
-  <button class="mtab" data-page="dash">
+  <button class="mtab" data-page="dash" role="tab" aria-selected="false">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M2 8a6 6 0 1 0 12 0A6 6 0 0 0 2 8m1.4 0a4.6 4.6 0 0 1 3.9-4.5v9A4.6 4.6 0 0 1 3.4 8m5.3 4.5v-9a4.6 4.6 0 0 1 0 9"/></svg>
     <span>仪表</span>
   </button>
-  <button class="mtab" data-page="settings">
+  <button class="mtab" data-page="settings" role="tab" aria-selected="false">
     <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2m0 1.4a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8"/><path fill="currentColor" d="m13.3 9.3-.9.5a4.5 4.5 0 0 1 0 1.4l.9.5a.6.6 0 0 1 .2.8l-.8 1.4a.6.6 0 0 1-.8.2l-.9-.5c-.4.3-.8.6-1.2.7v1a.6.6 0 0 1-.6.6H7.5a.6.6 0 0 1-.6-.6v-1a4.5 4.5 0 0 1-1.2-.7l-.9.5a.6.6 0 0 1-.8-.2l-.8-1.4a.6.6 0 0 1 .2-.8l.9-.5a4.5 4.5 0 0 1 0-1.4l-.9-.5a.6.6 0 0 1-.2-.8l.8-1.4a.6.6 0 0 1 .8-.2l.9.5c.4-.3.8-.6 1.2-.7v-1a.6.6 0 0 1 .6-.6h1.6a.6.6 0 0 1 .6.6v1c.4.1.8.4 1.2.7l.9-.5a.6.6 0 0 1 .8.2l.8 1.4a.6.6 0 0 1-.2.8"/></svg>
     <span>设置</span>
   </button>

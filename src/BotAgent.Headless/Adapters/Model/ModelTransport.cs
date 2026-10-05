@@ -179,18 +179,22 @@ internal sealed class ModelTransport : IModelTransport
             }
         }
 
-        // 模型思考程度与预算预设（低 1K / 中 4K / 高 16K / 自定义）
-        // 区分主模型与快速档模型
+        // 主模型使用思考深度；快速档及旧自定义配置保留 Token 预算。
         var isFastModel = _settings.FastReply &&
                           !string.IsNullOrWhiteSpace(_settings.FastModel) &&
                           string.Equals(replyModel, _settings.FastModel.Trim(), StringComparison.Ordinal);
         var (thinkingEffort, thinkingTokens) = _settings.ResolveThinkingBudget(isFastModel);
         if (!string.IsNullOrWhiteSpace(thinkingEffort))
         {
-            if (thinkingEffort is "low" or "medium" or "high")
+            if (thinkingEffort is "none" or "low" or "medium" or "high" or "xhigh")
             {
                 payload["reasoning_effort"] = thinkingEffort;
             }
+            else if (thinkingTokens <= 0 && thinkingEffort is not ("off" or "disabled"))
+            {
+                payload["reasoning_effort"] = thinkingEffort;
+            }
+
             if (thinkingTokens > 0)
             {
                 payload["max_thinking_tokens"] = thinkingTokens;
@@ -298,8 +302,11 @@ internal sealed class ModelTransport : IModelTransport
 
             var detail = await response.Content.ReadAsStringAsync(ct);
             var status = (int)response.StatusCode;
-            if (status is 400 or 422 && (requestPayload.ContainsKey("reasoning_effort") || requestPayload.ContainsKey("max_thinking_tokens")) &&
-                (detail.Contains("reasoning_effort", StringComparison.OrdinalIgnoreCase) || detail.Contains("thinking", StringComparison.OrdinalIgnoreCase)))
+            var isReasoningError = detail.Contains("reason", StringComparison.OrdinalIgnoreCase) ||
+                                   detail.Contains("effort", StringComparison.OrdinalIgnoreCase) ||
+                                   detail.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
+                                   detail.Contains("budget", StringComparison.OrdinalIgnoreCase);
+            if (status is 400 or 422 && (requestPayload.ContainsKey("reasoning_effort") || requestPayload.ContainsKey("max_thinking_tokens")) && isReasoningError)
             {
                 requestPayload.Remove("reasoning_effort");
                 requestPayload.Remove("max_thinking_tokens");
