@@ -1,5 +1,6 @@
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Ports;
+using BotAgent.Domain.Qq;
 using BotAgent.Services;
 
 namespace BotAgent.Services.Platforms;
@@ -20,14 +21,14 @@ public sealed class PlatformPolicyResolver
 
     public EffectivePlatformPolicy ResolveForChannel(string? channel)
     {
-        var normalized = (channel ?? string.Empty).Trim().ToLowerInvariant();
-        var platform = normalized switch
+        var declared = Channels.Declared(channel);
+        var platform = declared switch
         {
-            "private" => PlatformId.QqPrivate,
-            "official" => PlatformId.QqOfficial,
-            "local" => PlatformId.Local,
-            "feishu" => PlatformId.Feishu,
-            _ => PlatformId.Normalize(normalized),
+            Channels.Private => PlatformId.QqPrivate,
+            Channels.Official => PlatformId.QqOfficial,
+            Channels.Local => PlatformId.Local,
+            Channels.Feishu => PlatformId.Feishu,
+            _ => string.IsNullOrWhiteSpace(channel) ? PlatformId.QqPrivate : PlatformId.Normalize(channel),
         };
         var account = platform is PlatformId.QqPrivate or PlatformId.QqOfficial or PlatformId.Local
             ? AccountScope.Legacy
