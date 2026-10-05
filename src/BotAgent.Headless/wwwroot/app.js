@@ -1148,7 +1148,7 @@ function renderChannelStatus(channels) {
     const host = $("pageSettings");
     if (!host || host.hidden) return;
 
-    const notes = document.querySelectorAll("#pageSettings .card-head > p, #pageSettings .card > p.path-hint");
+    const notes = document.querySelectorAll("#pageSettings .card-head p, #pageSettings .card > p.path-hint");
     for (const p of notes) {
       if (p.dataset.foldReady === "1") continue;
 
@@ -1527,22 +1527,32 @@ function renderChannelStatus(channels) {
   function reasoningLevelLabel(value) {
     return ({
       auto: "自动 (Auto · 兼容优先)",
-      none: "关闭 (测试中暂不可用)",
+      none: "关闭 (None)",
+      off: "关闭 (Off)",
       minimal: "极轻 (Minimal · 512 Tokens)",
-      low: "低 (Low · 1,024 Tokens)",
-      medium: "中 (Medium · 4,096 Tokens)",
-      high: "高 (High · 16,384 Tokens)",
-      xhigh: "极高 (X-High · 32,768 Tokens)"
+      low: "低 (Low)",
+      medium: "中 (Medium)",
+      high: "高 (High)",
+      xhigh: "极高 (X-High)"
     })[value] || value;
   }
 
   const THINKING_BUDGET_PRESETS = {
-    1: { id: "low", label: "低 (Low · 1,024 Tokens)" },
-    2: { id: "medium", label: "中 (Medium · 4,096 Tokens)" },
-    3: { id: "high", label: "高 (High · 16,384 Tokens)" },
-    4: { id: "custom", label: "自定义 (Custom)" }
+    1: { id: "off", label: "关闭 (Off)" },
+    2: { id: "low", label: "低 (Low)" },
+    3: { id: "medium", label: "中 (Medium)" },
+    4: { id: "high", label: "高 (High)" },
+    5: { id: "xhigh", label: "极高 (X-High)" },
+    6: { id: "custom", label: "自定义 (Custom)" }
   };
-  const THINKING_STEP_MAP = { low: 1, medium: 2, high: 3, custom: 4 };
+  const THINKING_STEP_MAP = {
+    off: 1, none: 1, disabled: 1, "0": 1,
+    low: 2,
+    medium: 3,
+    high: 4,
+    xhigh: 5, max: 5,
+    custom: 6
+  };
 
   function syncThinkingBudgetUi(budget, customVal, isFast = false) {
     const slider = $(isFast ? "setFastThinkingBudgetSlider" : "setThinkingBudgetSlider");
@@ -1553,13 +1563,13 @@ function renderChannelStatus(channels) {
     if (!slider || !hidden || !valBadge) return;
 
     const defaultKey = isFast ? "low" : "medium";
-    const defaultStep = isFast ? 1 : 2;
+    const defaultStep = isFast ? 2 : 3;
     const key = String(budget || defaultKey).toLowerCase();
-    const step = THINKING_STEP_MAP[key] || (key === "custom" || !isNaN(Number(key)) ? 4 : defaultStep);
+    const step = THINKING_STEP_MAP[key] || (key === "custom" || !isNaN(Number(key)) ? 6 : defaultStep);
     slider.value = step;
     hidden.value = key;
     valBadge.textContent = THINKING_BUDGET_PRESETS[step]?.label || THINKING_BUDGET_PRESETS[defaultStep].label;
-    if (customWrap) customWrap.hidden = step !== 4;
+    if (customWrap) customWrap.hidden = step !== 6;
     if (customInput && customVal) customInput.value = customVal;
   }
   function renderReasoningSelect(select, levels, current) {
@@ -2495,10 +2505,9 @@ function renderChannelStatus(channels) {
     if (typedAgentKey) payload.agentServerKey = typedAgentKey;
     else if (pendingAgentServerKeyClear) payload.agentServerKey = "";
 
-    const btn = $("saveBtn");
-    const hbtn = $("headerSaveBtn");
-    btn.disabled = true;
-    if (hbtn) hbtn.disabled = true;
+    // 用所有 .card-save-btn 做 loading 状态
+    const activeSaveBtns = [...document.querySelectorAll(".card-save-btn")];
+    activeSaveBtns.forEach(b => { b.disabled = true; b.textContent = "保存中…"; });
     const deviceTableSkippedHere = deviceTableSkipped;
     deviceTableSkipped = false;
     // 快照一下改动序号：请求在飞时用户又改了东西的话，这次返回的刷新结果已经过时
@@ -2507,8 +2516,8 @@ function renderChannelStatus(channels) {
       const data = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
       state.aiMode = data.runtime.aiModeEnabled;
       renderAiMode();
-      // 设备表按服务器实际状态重画：改完目录/模型后，那行“目录 …”提示与输入框都跟着新值走。
-      // 单独兜住：刷新失败不影响“保存成功”这个事实（否则会把刷新的锅扣在保存上）。
+      // 设备表按服务器实际状态重画：改完目录/模型后，那行"目录 …"提示与输入框都跟着新值走。
+      // 单独兜住：刷新失败不影响"保存成功"这个事实（否则会把刷新的锅扣在保存上）。
       // 但请求期间用户又改了东西时**不能**刷：那等于用旧结果盖掉他刚敲的字。
       const lateEdits = settingsEditSeq !== seqAtSend;
       if (!lateEdits) {
@@ -2523,20 +2532,19 @@ function renderChannelStatus(channels) {
       $("saveBarText").textContent = "设置已保存并按对应设置生效" +
         (deviceTableSkippedHere ? "；设备表这次没加载成功，设备相关改动**没有**保存 —— 点「刷新设备」后再保存一次" : "") +
         (lateEdits ? "；保存期间你又有新的修改，那些还没保存" : "");
-      // 密钥保存/清除后清空输入框（不回显），并把“待清除”标记归位
+      // 密钥保存/清除后清空输入框（不回显），并把"待清除"标记归位
       $("setApiKey").value = "";
       pendingApiKeyClear = false;
       $("setAgentServerKey").value = "";
       pendingAgentServerKeyClear = false;
-      // 保存期间还有新编辑 → 未保存标记要留着（清掉就等于告诉他“已经存下了”）
+      // 保存期间还有新编辑 → 未保存标记要留着（清掉就等于告诉他"已经存下了"）
       if (!lateEdits) clearSettingsDirty();
       clearTimeout(bar._t);
       bar._t = setTimeout(() => { bar.hidden = true; }, 4000);
     } catch (err) {
       toast("保存失败：" + err.message);
     } finally {
-      btn.disabled = false;
-      if (hbtn) hbtn.disabled = false;
+      activeSaveBtns.forEach(b => { b.disabled = false; b.textContent = "保存"; });
     }
   }
 
@@ -2575,15 +2583,15 @@ function renderChannelStatus(channels) {
         const catBadge = p.category === "Media" ? "多媒体" : p.category === "Channel" ? "通道" : "业务";
         const statusBadge = p.isEnabled ? '<span style="color:var(--success, #10b981); font-weight:600;">● 已激活</span>' : '<span style="color:var(--text-secondary);">○ 已停用</span>';
         return `
-          <div style="background:var(--subtle-hover, rgba(255,255,255,0.04)); border:1px solid var(--stroke, rgba(255,255,255,0.08)); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:6px;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-weight:600; font-size:14px; color:var(--text-primary);">${escapeHtml(p.name)}</span>
-              <span style="font-size:11px; padding:2px 6px; border-radius:4px; background:color-mix(in srgb, var(--accent) 15%, transparent); color:var(--accent);">${catBadge}</span>
+          <div style="background:var(--subtle-hover, rgba(255,255,255,0.04)); border:1px solid var(--stroke, rgba(255,255,255,0.08)); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; min-width:0;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <span style="font-weight:600; font-size:14px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(p.name)}</span>
+              <span style="flex-shrink:0; font-size:11px; padding:2px 6px; border-radius:4px; background:color-mix(in srgb, var(--accent) 15%, transparent); color:var(--accent);">${catBadge}</span>
             </div>
-            <div style="font-size:12px; color:var(--text-secondary); line-height:1.4; flex:1;">${escapeHtml(p.description)}</div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; font-size:11px;">
-              <span style="font-family:monospace; color:var(--text-tertiary);">${escapeHtml(p.id)} v${escapeHtml(p.version)}</span>
-              ${statusBadge}
+            <div style="font-size:12px; color:var(--text-secondary); line-height:1.4; flex:1; overflow-wrap:anywhere; word-break:break-word;">${escapeHtml(p.description)}</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; font-size:11px; gap:8px;">
+              <span style="font-family:monospace; color:var(--text-tertiary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(p.id)} v${escapeHtml(p.version)}</span>
+              <div style="flex-shrink:0;">${statusBadge}</div>
             </div>
           </div>
         `;
@@ -3212,6 +3220,87 @@ function renderChannelStatus(channels) {
     if (backdrop) backdrop.hidden = !(state.agent.sessionsOpen || state.agent.inspectorOpen);
     document.body.classList.toggle("agent-drawer-open", state.agent.sessionsOpen || state.agent.inspectorOpen);
   }
+
+  // ── 移动端 Agent 运行配置模态弹窗 ─────────────────────────────────
+  let agentConfigDialogBound = false;
+
+  function restoreAgentConfigPanel() {
+    const details = document.querySelector(".agent-live-config");
+    const panel = $("agentConfigPanel");
+    if (!details || !panel) return;
+    if (panel.parentNode === details) return;
+    details.appendChild(panel);
+  }
+
+  function openMobileConfigDialog() {
+    const dialog = $("agentConfigDialog");
+    const panel = $("agentConfigPanel");
+    if (!dialog || !panel) return;
+
+    if (state.agent.sessionsOpen || state.agent.inspectorOpen) {
+      state.agent.sessionsOpen = false;
+      state.agent.inspectorOpen = false;
+      syncAgentDrawers();
+    }
+
+    if (panel.parentNode !== dialog) {
+      dialog.appendChild(panel);
+    }
+
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+  }
+
+  function closeMobileConfigDialog() {
+    const dialog = $("agentConfigDialog");
+    if (dialog && dialog.open) {
+      dialog.close();
+    } else {
+      restoreAgentConfigPanel();
+    }
+  }
+
+  function bindAgentConfigDialog() {
+    if (agentConfigDialogBound) return;
+    const dialog = $("agentConfigDialog");
+    if (!dialog) return;
+    agentConfigDialogBound = true;
+
+    dialog.addEventListener("close", restoreAgentConfigPanel);
+
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeMobileConfigDialog();
+    });
+
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        closeMobileConfigDialog();
+      }
+    });
+
+    const details = document.querySelector(".agent-live-config");
+    const summary = details ? details.querySelector("summary") : null;
+    if (details) {
+      details.addEventListener("click", (event) => {
+        event.preventDefault();
+        openMobileConfigDialog();
+      });
+    }
+
+    const mobileBtn = $("agentConfigMobileBtn");
+    if (mobileBtn) {
+      mobileBtn.addEventListener("click", openMobileConfigDialog);
+    }
+
+    const closeBtn = $("agentConfigClose");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", closeMobileConfigDialog);
+    }
+
+    restoreAgentConfigPanel();
+  }
   function renderAgentControls() {
     const target = $("agentWorkbenchTarget").value || "server";
     const prompt = $("agentWorkbenchPrompt").value.trim();
@@ -3730,6 +3819,8 @@ function renderChannelStatus(channels) {
       renderAgentWorkbench();
     }
   }
+  let mobileTabbarLastY = 0;
+
   /// 否则用户会以为“改了自动复原”：其实是从未保存，回页时又被服务端值回填了。
   function showPage(page) {
     if (page !== "settings" && !$("pageSettings").hidden && settingsDirty &&
@@ -3738,42 +3829,91 @@ function renderChannelStatus(channels) {
     }
 
     document.body.dataset.activePage = page;
-    const hb = $("headerSaveBtn");
-    if (hb) hb.hidden = (page !== "settings");
 
-    for (const b of document.querySelectorAll(".navitem, .mtab")) {
-      if (b.dataset.page === page) b.classList.add("active"); else b.classList.remove("active");
+    // 更新底栏胶囊位置 & 强制显示底栏
+    const PAGE_IDX = { chat: 0, agent: 1, trace: 2, dash: 3, settings: 4 };
+    const bar = $("mTabbar");
+    if (bar && PAGE_IDX[page] !== undefined) {
+      bar.dataset.active = String(PAGE_IDX[page]);
+      bar.classList.remove("is-hidden");
+      mobileTabbarLastY = 0;
     }
 
-    $("pageChat").hidden = page !== "chat";
-    $("pageAgent").hidden = page !== "agent";
-    $("pageTrace").hidden = page !== "trace";
-    $("pageDash").hidden = page !== "dash";
+    for (const b of document.querySelectorAll(".navitem, .mtab")) {
+      const on = b.dataset.page === page;
+      if (on) b.classList.add("active"); else b.classList.remove("active");
+      if (b.setAttribute) b.setAttribute("aria-selected", on ? "true" : "false");
+    }
+
+    $("pageChat").hidden    = page !== "chat";
+    $("pageAgent").hidden   = page !== "agent";
+    $("pageTrace").hidden   = page !== "trace";
+    $("pageDash").hidden    = page !== "dash";
     $("pageSettings").hidden = page !== "settings";
 
     if (page === "settings") {
       loadSettings().catch((e) => {
-      // 不能只是 toast：设置回填一半失败时，症状是“保存按钮点了没反应”，
-      // 事后光看界面根本看不出原因（调试时踩过）—— 控制台一定要有原始异常。
-      console.error("loadSettings failed", e);
-      toast("加载设置失败：" + e.message);
-    });
-      // 页面刚显示出来时元素才有尺寸，分节导航的高亮要等这一刻才能算准
+        console.error("loadSettings failed", e);
+        toast("加载设置失败：" + e.message);
+      });
       if (refreshSettingsNav) setTimeout(refreshSettingsNav, 0);
     }
     if (page === "chat" && needsLogin()) pollLogin(false);
     if (page === "trace") loadTraces();
-    if (page === "dash") loadDashboard();
+    if (page === "dash")  loadDashboard();
     if (page === "agent") loadAgentWorkbench();
     if (page === "settings") {
-      // 去设置页就把聊天视图收起来：回来时看到的是列表，而不是停在某个会话上
       state.chatOpen = false;
       syncMobileView();
     }
     return true;
   }
 
+  // ── 手机端底栏滚动自动收起 ──────────────────────────────────────
+  function bindMobileTabbarScroll() {
+    let ticking = false;
+
+    document.addEventListener("scroll", function onScroll(ev) {
+      if (ticking) return;
+      ticking = true;
+      (typeof requestAnimationFrame === "function" ? requestAnimationFrame : function(f){ setTimeout(f,0); })(function() {
+        ticking = false;
+        const bar = $("mTabbar");
+        if (!bar) return;
+        // 聊天视图开时底栏已被 display:none，不用处理
+        if (document.body.classList.contains("m-chat-open")) { mobileTabbarLastY = 0; return; }
+
+        // 获取当前滚动位置：优先用事件 target 的 scrollTop（局部容器）
+        const t = ev.target;
+        let y = 0;
+        if (t && t !== document && t !== document.documentElement && typeof t.scrollTop === "number") {
+          y = t.scrollTop;
+        } else {
+          y = window.scrollY || document.documentElement.scrollTop || 0;
+        }
+
+        const diff = y - mobileTabbarLastY;
+        if (y <= 16) {
+          bar.classList.remove("is-hidden");
+        } else if (Math.abs(diff) >= 8) {
+          if (diff > 0) bar.classList.add("is-hidden");
+          else          bar.classList.remove("is-hidden");
+        }
+        mobileTabbarLastY = y;
+      });
+    }, { capture: true, passive: true });
+  }
+
   function bindUi() {
+    bindLogScrollButtons();
+    bindAgentLayoutResizers();
+    bindMobileTabbarScroll();
+    bindAgentConfigDialog();
+
+    // 导航（桌面：左侧 rail；手机：底部标签栏 —— 共用同一套 data-page）
+    for (const btn of document.querySelectorAll(".navitem, .mtab")) {
+      btn.addEventListener("click", () => showPage(btn.dataset.page));
+    }
     bindLogScrollButtons();
     bindAgentLayoutResizers();
 
@@ -4036,11 +4176,11 @@ function renderChannelStatus(channels) {
     if (thinkingSlider) {
       thinkingSlider.addEventListener("input", (e) => {
         const step = Number(e.target.value);
-        const p = THINKING_BUDGET_PRESETS[step] || THINKING_BUDGET_PRESETS[2];
+        const p = THINKING_BUDGET_PRESETS[step] || THINKING_BUDGET_PRESETS[3];
         $("setThinkingBudget").value = p.id;
         $("thinkingBudgetVal").textContent = p.label;
         const wrap = $("thinkingCustomBudgetWrap");
-        if (wrap) wrap.hidden = step !== 4;
+        if (wrap) wrap.hidden = step !== 6;
         markSettingsDirty();
       });
     }
@@ -4050,19 +4190,20 @@ function renderChannelStatus(channels) {
     if (fastThinkingSlider) {
       fastThinkingSlider.addEventListener("input", (e) => {
         const step = Number(e.target.value);
-        const p = THINKING_BUDGET_PRESETS[step] || THINKING_BUDGET_PRESETS[1];
+        const p = THINKING_BUDGET_PRESETS[step] || THINKING_BUDGET_PRESETS[2];
         $("setFastThinkingBudget").value = p.id;
         $("fastThinkingBudgetVal").textContent = p.label;
         const wrap = $("fastThinkingCustomBudgetWrap");
-        if (wrap) wrap.hidden = step !== 4;
+        if (wrap) wrap.hidden = step !== 6;
         markSettingsDirty();
       });
     }
     $("setFastThinkingCustomBudget")?.addEventListener("input", markSettingsDirty);
 
-    $("saveBtn").addEventListener("click", saveSettings);
+    $("saveBtn")?.addEventListener("click", saveSettings);
     const hb = $("headerSaveBtn");
     if (hb) hb.addEventListener("click", saveSettings);
+    document.querySelectorAll(".card-save-btn").forEach((b) => b.addEventListener("click", saveSettings));
     $("quotaTenant").addEventListener("change", (event) => {
       state.quota.tenant = event.target.value;
       loadQuotaPanel();

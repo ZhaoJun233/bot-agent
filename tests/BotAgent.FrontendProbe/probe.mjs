@@ -2151,6 +2151,55 @@ check("app.js 实现配额按平台分组与筛选逻辑",
   js.includes("quotaChanTabs") &&
   js.includes("optgroup"));
 
+/* ─────────── 移动端底栏与卡片头规范 ─────────── */
+
+console.log("\n▶ 移动端与排版结构静态检查");
+
+check("mTabbar 存在且包含流动胶囊 .mtab-pill 与 tablist 语义",
+  html.includes('id="mTabbar"') &&
+  html.includes('class="mtab-pill"') &&
+  html.includes('role="tablist"'));
+
+const mtabPages = [...html.matchAll(/class="mtab[^"]*"\s+data-page="([a-z]+)"/g)].map((m) => m[1]);
+check("mTabbar 包含完整的 5 个导航 tab (chat/agent/trace/dash/settings)",
+  JSON.stringify(mtabPages) === JSON.stringify(["chat", "agent", "trace", "dash", "settings"]));
+
+const showPageBody = (js.match(/function\s+showPage\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [""])[0];
+check("showPage 切页逻辑包含底栏胶囊更新与滚动位移复位 (mobileTabbarLastY = 0)",
+  showPageBody.includes('bar.dataset.active = String(PAGE_IDX[page]);') &&
+  showPageBody.includes('bar.classList.remove("is-hidden");') &&
+  showPageBody.includes('mobileTabbarLastY = 0;'));
+
+check("设置页所有含 <p> 描述的 .card-head 均用 .card-head-text 包裹",
+  [...html.matchAll(/<div class="card-head"[^>]*>([\s\S]*?)<\/div>/g)].every((m) => {
+    const headContent = m[1];
+    return !headContent.includes("<p>") || headContent.includes('class="card-head-text"');
+  }));
+
+check("app.js foldCardNotes 兼容选择 .card-head-text 内部的 p",
+  js.includes('querySelectorAll("#pageSettings .card-head p, #pageSettings .card > p.path-hint")'));
+
+/* ─────────── Agent 运行配置移动端弹窗规范 ─────────── */
+
+const dialogIdx = html.indexOf('id="agentConfigDialog"');
+const mtabbarIdx = html.indexOf('id="mTabbar"');
+check("index.html 包含运行配置顶层模态 #agentConfigDialog 且挂载在 mTabbar 之前",
+  dialogIdx > 0 && mtabbarIdx > 0 && dialogIdx < mtabbarIdx &&
+  html.includes('class="agent-config-dialog"'));
+
+check("index.html 包含移动端运行配置触发按钮 #agentConfigMobileBtn",
+  html.includes('id="agentConfigMobileBtn"') &&
+  html.includes('class="agent-live-config-mobile-btn"'));
+
+check("index.html 包含运行配置关闭按钮 #agentConfigClose 与面板唯一 ID",
+  html.includes('id="agentConfigClose"') &&
+  html.includes('id="agentConfigPanel"'));
+
+check("app.js 含 Agent 配置面板 dialog 搬移与归还逻辑",
+  js.includes("restoreAgentConfigPanel") &&
+  js.includes("dialog.appendChild(panel)") &&
+  js.includes('dialog.addEventListener("close", restoreAgentConfigPanel)'));
+
 console.log("");
 if (failures.length === 0) {
   console.log(`通过 ${pass}，失败 0`);
