@@ -190,6 +190,11 @@ internal sealed class ModelTransport : IModelTransport
             {
                 payload["reasoning_effort"] = thinkingEffort;
             }
+            else if (thinkingTokens <= 0 && thinkingEffort is not ("off" or "disabled"))
+            {
+                payload["reasoning_effort"] = thinkingEffort;
+            }
+
             if (thinkingTokens > 0)
             {
                 payload["max_thinking_tokens"] = thinkingTokens;
@@ -297,8 +302,11 @@ internal sealed class ModelTransport : IModelTransport
 
             var detail = await response.Content.ReadAsStringAsync(ct);
             var status = (int)response.StatusCode;
-            if (status is 400 or 422 && (requestPayload.ContainsKey("reasoning_effort") || requestPayload.ContainsKey("max_thinking_tokens")) &&
-                (detail.Contains("reasoning_effort", StringComparison.OrdinalIgnoreCase) || detail.Contains("thinking", StringComparison.OrdinalIgnoreCase)))
+            var isReasoningError = detail.Contains("reason", StringComparison.OrdinalIgnoreCase) ||
+                                   detail.Contains("effort", StringComparison.OrdinalIgnoreCase) ||
+                                   detail.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
+                                   detail.Contains("budget", StringComparison.OrdinalIgnoreCase);
+            if (status is 400 or 422 && (requestPayload.ContainsKey("reasoning_effort") || requestPayload.ContainsKey("max_thinking_tokens")) && isReasoningError)
             {
                 requestPayload.Remove("reasoning_effort");
                 requestPayload.Remove("max_thinking_tokens");

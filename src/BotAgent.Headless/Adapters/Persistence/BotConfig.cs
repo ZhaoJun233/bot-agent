@@ -60,7 +60,7 @@ public static class BotConfig
         s.QuickLoginUin = Str("BOTAGENT_QQ_UIN", "QQCHAT_UIN", "QQCHAT_QUICK_LOGIN_UIN") ?? s.QuickLoginUin;
         s.OneBotProtocol = Str("BOTAGENT_QQ_ONEBOT_PROTOCOL", "QQCHAT_ONEBOT_PROTOCOL") ?? s.OneBotProtocol;
         s.OneBotAddress = Str("BOTAGENT_QQ_ONEBOT_URL", "QQCHAT_ONEBOT_URL", "QQCHAT_ONEBOT_ADDRESS") ?? s.OneBotAddress;
-        s.HealthPort = Int("BOTAGENT_HEALTH_PORT") ?? Int("QQCHAT_HEALTH_PORT") ?? s.HealthPort;
+        s.HealthPort = Int("BOTAGENT_HEALTH_PORT") ?? Int("QQCHAT_HEALTH_PORT") ?? Int("HEALTH_PORT") ?? s.HealthPort;
         s.PanelToken = Str("BOTAGENT_PANEL_TOKEN", "QQCHAT_PANEL_TOKEN") ?? s.PanelToken;
         s.AgentToken = Secret("BOTAGENT_AGENT_TOKEN", "QQCHAT_AGENT_TOKEN") ?? s.AgentToken;
         s.NapCatWebUiUrl = Str("BOTAGENT_NAPCAT_WEBUI_URL", "QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
@@ -530,7 +530,8 @@ public static class BotConfig
         s.PokeCooldownSeconds = Math.Clamp(s.PokeCooldownSeconds, 0, 86400);
         s.MoodTtlSeconds = Math.Clamp(s.MoodTtlSeconds, 0, 86400 * 7);
         s.SegmentDelayMs = Math.Max(0, s.SegmentDelayMs);
-        s.HealthPort = s.HealthPort is >= 0 and <= 65535 ? s.HealthPort : 8080;
+        // 越界就回退到配置模型的默认值（单一来源），别再在这里另写一个数字
+        s.HealthPort = s.HealthPort is >= 0 and <= 65535 ? s.HealthPort : new AppSettings().HealthPort;
         s.NapCatWebUiUrl = s.NapCatWebUiUrl.Trim().TrimEnd('/');
         s.NapCatWebUiToken = s.NapCatWebUiToken.Trim();
 

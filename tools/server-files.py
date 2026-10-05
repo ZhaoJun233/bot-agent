@@ -109,10 +109,17 @@ def quote(remote: str) -> str:
 
     为什么不用反斜杠转义（`/tmp/sp\\ ace.txt`）：那套在 sftp 的批处理解析里不稳，
     而且会把 Windows 本地路径的 `\\` 也搞乱。路径里真的带双引号就直说 —— 这种名字不该从脚本里碰。
+
+    Bug #5 修复：原来抛出的 ValueError 缺乏操作指引；现在错误消息更清晰，
+    并由调用方（main / cat_remote）统一捕获并优雅地以非零退出码返回，
+    不会因未捕获异常而产生难看的 traceback。
     """
     text = (remote or "").strip()
     if '"' in text:
-        raise ValueError(f"路径里带双引号，脚本不敢碰：{text}")
+        raise ValueError(
+            f"路径含有双引号，无法用双引号包裹法安全传给 sftp：{text!r}\n"
+            "  建议：重命名该远程路径以移除双引号，或改用 `raw` 子命令手写 sftp 批处理。"
+        )
     return f'"{text}"'
 
 
@@ -182,11 +189,20 @@ def main(argv: list[str] | None = None) -> int:
 
 def cat_remote(ssh: str, key: str, port: int, sftp_cmd: list[str], remote: str, max_bytes: int) -> int:
     """打印远端文件：sftp 没有 cat 命令（实测 `cat x` → Invalid command），
-    所以先 get 到临时文件再读出来（顺带能卡大小 + 识别二进制）。"""
+    所以先 get 到临时文件再读出来（顺带能卡大小 + 识别二进制）。
+
+    Bug #5 修复：在 try/finally 内部捕获 quote() 可能抛出的 ValueError，
+    保证临时文件的 finally 清理块在路径含双引号时也一定能执行到。
+    """
     fd, tmp = tempfile.mkstemp(prefix="server-files-cat-")
     os.close(fd)
     try:
-        code = run_batch(ssh, key, port, sftp_cmd, f"get {quote(remote)} {quote_local(tmp)}", quiet=True)
+        try:
+            batch = f"get {quote(remote)} {quote_local(tmp)}"
+        except ValueError as ex:
+            print(f"[X] {ex}", file=sys.stderr)
+            return 2
+        code = run_batch(ssh, key, port, sftp_cmd, batch, quiet=True)
         if code != 0:
             return code
         size = os.path.getsize(tmp)
@@ -204,6 +220,7 @@ def cat_remote(ssh: str, key: str, port: int, sftp_cmd: list[str], remote: str, 
             os.unlink(tmp)
         except OSError:
             pass
+
 
 
 if __name__ == "__main__":
