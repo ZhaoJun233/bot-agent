@@ -418,7 +418,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
 
         payload["messages"] = array;
         var effort = (reasoningEffort ?? string.Empty).Trim().ToLowerInvariant();
-        if (effort is not ("" or "auto" or "default" or "off" or "none" or "disabled")) payload["reasoning_effort"] = effort;
+        if (effort is not ("" or "auto" or "default")) payload["reasoning_effort"] = effort;
 
         for (var attempt = 0; ; attempt++)
         {

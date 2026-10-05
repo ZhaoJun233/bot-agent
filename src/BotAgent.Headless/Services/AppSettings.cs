@@ -68,8 +68,8 @@ public sealed class AppSettings
     public int MaxTokens { get; set; } = 2048;
 
     /// <summary>
-    /// 主模型思考深度预设：off / low / medium / high / xhigh / custom。
-    /// 默认 medium。
+    /// 主模型思考深度：off / low / medium / high / xhigh，默认 medium。
+    /// 保留 ThinkingBudget 字段名和 custom 以兼容旧配置。
     /// </summary>
     public string ThinkingBudget { get; set; } = "medium";
 
@@ -97,18 +97,19 @@ public sealed class AppSettings
         var budget = isFastModel ? FastThinkingBudget : ThinkingBudget;
         var custom = isFastModel ? FastThinkingCustomBudget : ThinkingCustomBudget;
         var defaultPreset = isFastModel ? "low" : "medium";
+        var defaultTokens = isFastModel ? 1024 : 4096;
         var preset = (budget ?? defaultPreset).Trim().ToLowerInvariant();
         return preset switch
         {
-            "off" or "none" or "disabled" => ("off", 0),
-            "low" => ("low", 0),
-            "medium" => ("medium", 0),
-            "high" => ("high", 0),
+            "off" or "none" or "disabled" => ("none", 0),
+            "low" => ("low", isFastModel ? 1024 : 0),
+            "medium" => ("medium", isFastModel ? 4096 : 0),
+            "high" => ("high", isFastModel ? 16384 : 0),
             "xhigh" or "max" => ("xhigh", 0),
             "custom" => int.TryParse(custom, out var c) && c > 0
-                ? ("custom", c)
-                : (!string.IsNullOrWhiteSpace(custom) ? (custom.Trim(), 0) : (defaultPreset, 0)),
-            _ => (defaultPreset, 0)
+                ? (custom, c)
+                : (!string.IsNullOrWhiteSpace(custom) ? (custom, defaultTokens) : (defaultPreset, defaultTokens)),
+            _ => (defaultPreset, isFastModel ? defaultTokens : 0)
         };
     }
 

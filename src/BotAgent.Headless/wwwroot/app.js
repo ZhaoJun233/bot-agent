@@ -1555,7 +1555,22 @@ function renderChannelStatus(channels) {
   };
 
   function syncThinkingBudgetUi(budget, customVal, isFast = false) {
-    const slider = $(isFast ? "setFastThinkingBudgetSlider" : "setThinkingBudgetSlider");
+    if (!isFast) {
+      const select = $("setThinkingBudget");
+      const key = String(budget || "medium").trim().toLowerCase();
+      select.querySelector('option[value="custom"]')?.remove();
+      if (key === "custom") {
+        const option = document.createElement("option");
+        option.value = "custom";
+        option.textContent = "自定义（旧配置）";
+        select.appendChild(option);
+      }
+      select.value = key === "none" ? "off" : ["off", "low", "medium", "high", "xhigh", "custom"].includes(key) ? key : "medium";
+      $("thinkingCustomBudgetWrap").hidden = key !== "custom";
+      $("setThinkingCustomBudget").value = customVal || "4096";
+      return;
+    }
+    const slider = $("setFastThinkingBudgetSlider");
     const hidden = $(isFast ? "setFastThinkingBudget" : "setThinkingBudget");
     const valBadge = $(isFast ? "fastThinkingBudgetVal" : "thinkingBudgetVal");
     const customWrap = $(isFast ? "fastThinkingCustomBudgetWrap" : "thinkingCustomBudgetWrap");
@@ -3847,8 +3862,8 @@ function renderChannelStatus(channels) {
 
     $("pageChat").hidden    = page !== "chat";
     $("pageAgent").hidden   = page !== "agent";
-    $("pageTrace").hidden   = page !== "trace";
-    $("pageDash").hidden    = page !== "dash";
+    $("pageTrace").hidden = page !== "trace";
+    $("pageDash").hidden = page !== "dash";
     $("pageSettings").hidden = page !== "settings";
 
     if (page === "settings") {
@@ -4172,18 +4187,10 @@ function renderChannelStatus(channels) {
     $("setEmotionalTemp").addEventListener("input", (e) => { $("emotionalTempVal").textContent = e.target.value; });
     $("setEmotionalTopP").addEventListener("input", (e) => { $("emotionalTopPVal").textContent = e.target.value; });
 
-    const thinkingSlider = $("setThinkingBudgetSlider");
-    if (thinkingSlider) {
-      thinkingSlider.addEventListener("input", (e) => {
-        const step = Number(e.target.value);
-        const p = THINKING_BUDGET_PRESETS[step] || THINKING_BUDGET_PRESETS[3];
-        $("setThinkingBudget").value = p.id;
-        $("thinkingBudgetVal").textContent = p.label;
-        const wrap = $("thinkingCustomBudgetWrap");
-        if (wrap) wrap.hidden = step !== 6;
-        markSettingsDirty();
-      });
-    }
+    $("setThinkingBudget")?.addEventListener("change", (e) => {
+      syncThinkingBudgetUi(e.target.value, $("setThinkingCustomBudget").value);
+      markSettingsDirty();
+    });
     $("setThinkingCustomBudget")?.addEventListener("input", markSettingsDirty);
 
     const fastThinkingSlider = $("setFastThinkingBudgetSlider");
