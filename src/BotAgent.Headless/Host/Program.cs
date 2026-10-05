@@ -140,10 +140,14 @@ public static class Program
         return 0;
     }
 
-    /// <summary>健康探测：GET 127.0.0.1:{QQCHAT_HEALTH_PORT}/healthz。成功 0，失败 1。</summary>
+    /// <summary>
+    /// 健康探测：GET 127.0.0.1:{端口}/healthz。成功 0，失败 1。
+    /// 端口按 BotConfig.ApplyInfrastructureEnvironment 的同一优先级解析（BOTAGENT_HEALTH_PORT →
+    /// QQCHAT_HEALTH_PORT → HEALTH_PORT）；只认一个变量名的话，用别的名字配的端口会探错地方（容器 HEALTHCHECK 误报）。
+    /// </summary>
     private static async Task<int> ProbeHealthAsync()
     {
-        var port = int.TryParse(Environment.GetEnvironmentVariable("QQCHAT_HEALTH_PORT"), out var p) ? p : 8080;
+        var port = ResolveHealthPort();
         if (port <= 0)
         {
             return 0; // 健康检查已关闭视为健康
@@ -160,6 +164,22 @@ public static class Program
             Console.Error.WriteLine($"健康探测失败: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// 面板 / 健康检查端口：三个环境变量名都认（与 BotConfig 的优先级一致），都没设才回落到配置默认值。
+    /// </summary>
+    private static int ResolveHealthPort()
+    {
+        foreach (var name in new[] { "BOTAGENT_HEALTH_PORT", "QQCHAT_HEALTH_PORT", "HEALTH_PORT" })
+        {
+            if (int.TryParse(Environment.GetEnvironmentVariable(name), out var value) && value is >= 0 and <= 65535)
+            {
+                return value;
+            }
+        }
+
+        return new AppSettings().HealthPort;
     }
 
     private static IDisposable? TryRegisterSignal(PosixSignal signal, Action onSignal)
@@ -264,7 +284,7 @@ public static class Program
               QQCHAT_MAX_CONTEXT       最大上下文条数（默认 200）
               QQCHAT_PROFILE_LOOKUP    附带人物档案数上限（默认 8）
 
-              QQCHAT_HEALTH_PORT       健康检查端口，0=关闭（默认 8080）
+              QQCHAT_HEALTH_PORT       面板/健康检查端口，0=关闭（默认 18245；也认 BOTAGENT_HEALTH_PORT / HEALTH_PORT）
               QQCHAT_NAPCAT_WEBUI_URL  NapCat WebUI 地址（默认 http://napcat:6099）
               QQCHAT_NAPCAT_WEBUI_TOKEN  NapCat WebUI 令牌（napcat/config/webui.json 的 token）
                                        配了它，面板就能直接显示登录二维码（扫码登录）

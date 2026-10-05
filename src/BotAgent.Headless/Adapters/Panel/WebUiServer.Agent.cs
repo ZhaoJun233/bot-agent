@@ -286,7 +286,8 @@ public sealed partial class WebUiServer
         var host = context.Request.QueryString["host"];
         if (string.IsNullOrWhiteSpace(host))
         {
-            host = context.Request.Headers["Host"] ?? "127.0.0.1:8080";
+            // 兜底跟随面板真实监听端口（别写死：面板换端口时这里要跟着走）
+            host = context.Request.Headers["Host"] ?? $"127.0.0.1:{_settings.HealthPort}";
         }
 
         var workdir = string.IsNullOrWhiteSpace(_settings.AgentWorkDir) ? "%USERPROFILE%" : _settings.AgentWorkDir;
