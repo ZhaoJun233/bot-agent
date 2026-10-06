@@ -14,7 +14,7 @@ namespace BotAgent.Services;
 ///   • **基础设施**（模型地址、模型名、OneBot 地址、端口…）：环境变量始终覆盖。
 ///   • **行为**（人设、白名单、阈值、限流…）：settings.json 是唯一所有者；环境变量只在首次部署当种子。
 /// </summary>
-public sealed class AppSettings
+public sealed class AppSettings : BotAgent.Platforms.PlatformOptions
 {
     // ---------- Agent 大脑（OpenAI 兼容） ----------
 
@@ -143,21 +143,6 @@ public sealed class AppSettings
         DefaultTemperature,
         DefaultTopP);
 
-    // ---------- OneBot 通道 ----------
-
-    /// <summary>ForwardWebSocket（推荐）/ ReverseWebSocket / Http。</summary>
-    public string OneBotProtocol { get; set; } = "ForwardWebSocket";
-
-    /// <summary>正向：ws://napcat:3001；反向：http://0.0.0.0:3001；HTTP：http://napcat:3000。</summary>
-    public string OneBotAddress { get; set; } = "ws://127.0.0.1:3001";
-
-    /// <summary>OneBot 访问令牌。环境变量专属（QQCHAT_ONEBOT_TOKEN），不写入 settings.json。</summary>
-    [JsonIgnore]
-    public string OneBotToken { get; set; } = string.Empty;
-
-    /// <summary>机器人登录 QQ 号（用于自我识别与 @ 判断；沿用旧字段名，老配置才不失效）。</summary>
-    public string QuickLoginUin { get; set; } = string.Empty;
-
     // ---------- 行为 ----------
 
     /// <summary>AI 对话欲望（0-100：越高越主动参与群聊；默认 50）。</summary>
@@ -240,17 +225,6 @@ public sealed class AppSettings
     /// （带一次性编号与有效期）发到当前会话，回答也只是一条普通消息，不触发任何动作。
     /// </remarks>
     public bool EnableQuestions { get; set; }
-
-    /// <summary>消息白名单（**旧字段**：群聊与私聊共用一份名单；留空 = 全部忽略，严格模式）。
-    /// 2026-09-18 起拆成两份（<see cref="WhitelistGroups" /> / <see cref="WhitelistPrivates" />）——
-    /// 旧值仍然生效：哪一边的新字段留空，那一边就回落到这份共用名单（老配置不用动）。</summary>
-    public string MessageWhitelist { get; set; } = string.Empty;
-
-    /// <summary>**群聊**白名单（每行/逗号分隔群号；<c>*</c> = 所有群）。留空 = 回落到旧的共用名单。</summary>
-    public string WhitelistGroups { get; set; } = string.Empty;
-
-    /// <summary>**私聊**白名单（每行/逗号分隔 QQ 号；<c>*</c> = 所有人）。留空 = 回落到旧的共用名单。</summary>
-    public string WhitelistPrivates { get; set; } = string.Empty;
 
     /// <summary>模型人设档案（可选，定义机器人角色的性格/说话风格）。</summary>
     public string BotPersona { get; set; } = string.Empty;
@@ -371,24 +345,6 @@ public sealed class AppSettings
     /// <summary>同时向模型发起的最大请求数（按会话串行、跨会话并发）。</summary>
     public int MaxConcurrentReplies { get; set; } = 2;
 
-    // ---------- 平台策略覆盖（按 platformId + accountScope） ----------
-
-    /// <summary>
-    /// 平台策略的显式覆盖。旧字段仍是兼容 fallback；凭据永远不进入这里。
-    /// </summary>
-    public List<PlatformPolicySettings> PlatformPolicies { get; set; } = new();
-
-    /// <summary>0 = legacy switch intersection; 1 = account-scoped policy switches are authoritative.</summary>
-    public int PlatformSwitchSchemaVersion { get; set; }
-
-    // ---------- 对话开关兼容字段（默认账号策略的镜像；未覆盖时作为 fallback） ----------
-
-    /// <summary>私域聊天的兼容字段；显式平台策略开关优先。与全局 AI 开关独立。</summary>
-    public bool PrivateChatEnabled { get; set; } = true;
-
-    /// <summary>官方通道（QQ 开放平台）收不收消息、要不要回。默认开。</summary>
-    public bool OfficialChatEnabled { get; set; } = true;
-
     // ---------- 语音消息（TTS）----------
 
     /// <summary>
@@ -448,70 +404,6 @@ public sealed class AppSettings
 
     /// <summary>云端模型名（面板可改；留空 = 用容器默认，如 MiniMax 的 speech-2.8-hd）。</summary>
     public string TtsModel { get; set; } = string.Empty;
-
-    // ---------- 官方通道（QQ 开放平台） ----------
-
-    /// <summary>
-    /// 开官方通道（QQ 开放平台的机器人，与私域 NapCat 那条并存）。
-    /// 默认**关**：它需要开放平台申请的 appid/secret，没配的话开了也连不上。
-    /// </summary>
-    public bool OfficialEnabled { get; set; }
-
-    /// <summary>开放平台的机器人 appid（环境变量 QQCHAT_OFFICIAL_APP_ID）。</summary>
-    public string OfficialAppId { get; set; } = string.Empty;
-
-    /// <summary>开放平台的机器人 secret。**密钥**：只从环境变量读，不落盘。</summary>
-    [JsonIgnore]
-    public string OfficialAppSecret { get; set; } = string.Empty;
-
-    /// <summary>用沙箱环境连（沙箱只能收/发沙箱群与沙箱单聊，调试用；正式上线关掉）。</summary>
-    public bool OfficialSandbox { get; set; }
-
-    /// <summary>
-    /// 官方通道的群白名单（里的是**别名号**，见 <c>Channels.AliasBase</c>；
-    /// 面板会话列表里会显示出来）。留空 = 全部接受 ——
-    /// 官方平台本身有准入（只有加了机器人的群才能收到消息）与每日额度，没必要再卡一道。
-    /// ⚠ 与私域那份白名单**不共用**：那份里写的是真实群号，混在一起会变成“官方通道永远被拦”。
-    /// </summary>
-    public string OfficialWhitelistGroups { get; set; } = string.Empty;
-
-    /// <summary>官方通道的私聊（单聊）白名单；留空 = 全部接受。</summary>
-    public string OfficialWhitelistPrivates { get; set; } = string.Empty;
-
-    /// <summary>
-    /// 官方 REST 接口根地址。留空 = 按沙箱开关自动选（正式 <c>https://api.bot.qq.com</c> /
-    /// 沙箱 <c>https://sandbox.api.sgroup.qq.com</c>）。
-    /// 留这个口子是为了**能测**：集成测试要把它指到本地的假官方网关上去。
-    /// </summary>
-    public string OfficialApiBase { get; set; } = string.Empty;
-
-    /// <summary>取 access_token 的地址，留空 = <c>https://bots.qq.com/app/getAppAccessToken</c>（同样是为了可测）。</summary>
-    public string OfficialTokenUrl { get; set; } = string.Empty;
-
-    // ---------- 飞书通道（Feishu Bot API） ----------
-
-    /// <summary>启用飞书机器人通道（默认关）。</summary>
-    public bool FeishuEnabled { get; set; }
-
-    /// <summary>飞书应用 App ID（cli_xxx）。</summary>
-    public string FeishuAppId { get; set; } = string.Empty;
-
-    /// <summary>飞书应用 App Secret（只从环境变量或密钥库读，不落 settings.json）。</summary>
-    [JsonIgnore]
-    public string FeishuAppSecret { get; set; } = string.Empty;
-
-    /// <summary>飞书事件回调 Verification Token。</summary>
-    public string FeishuVerificationToken { get; set; } = string.Empty;
-
-    /// <summary>飞书事件签名 Encrypt Key（可选，只从环境变量或密钥库读）。</summary>
-    [JsonIgnore]
-    public string FeishuEncryptKey { get; set; } = string.Empty;
-
-    /// <summary>飞书通道白名单（写群 chat_id / 用户 open_id 或映射后的内部号，逗号分隔；空 = 拒绝）。</summary>
-    public string FeishuWhitelist { get; set; } = string.Empty;
-
-    /// <summary>飞书 REST 接口根地址（留空 = https://open.feishu.cn，留口子给本地合成测试）。</summary>
-    public string FeishuApiBase { get; set; } = string.Empty;
 
     // ---------- 链接与分享卡片 ----------
 
@@ -895,15 +787,6 @@ public sealed class AppSettings
     public int MaxAgentSteps { get; set; } = 1;
 
     /// <summary>
-    /// **本地通道**（批次 F）的名单：写本地 id（逗号分隔）。**空 = 整个通道都不建**（默认关，fail-closed）。
-    ///
-    /// 它是"接入层可换"的活证据：本地通道走的是**同一张工具表 + 同一套治理**，
-    /// 只是入站来自面板那张令牌门后的 `POST /api/local/message`，而不是 NapCat / 开放平台。
-    /// 关着的时候：通道不构造、路由不认识它、白名单也不认它的 key —— 三层都关。
-    /// </summary>
-    public string LocalChannelIds { get; set; } = string.Empty;
-
-    /// <summary>
     /// `//` 那一路要不要**过统一闸门**（批次 A 第 2 步的收尾）。**默认关 = 与今天逐字一致**：
     /// 关着时 `//` 仍走它自己的字符串白名单（<c>ParseTools</c> + <c>QqActionCatalog.ParseAllowed</c>）。
     /// 打开后每次工具调用前过多一次 <see cref="BotAgent.Domain.Permissions.ToolGate" />
@@ -992,16 +875,6 @@ public sealed class AppSettings
     /// <summary>旧版遗留字段（本版本不使用）。</summary>
     public string Theme { get; set; } = "Default";
 
-    // ---------- 派生（不参与序列化，避免污染 settings.json） ----------
-
-    /// <summary>规范化后的登录 QQ 号（空字符串按未配置处理）。</summary>
-    [JsonIgnore]
-    public string NormalizedUin => QuickLoginUin?.Trim() ?? string.Empty;
-
-    /// <summary>登录 QQ 号；解析失败返回 0。</summary>
-    [JsonIgnore]
-    public long UinOrZero => long.TryParse(NormalizedUin, out var u) ? u : 0;
-
     // ---------- NapCat WebUI（面板内扫码登录） ----------
     // 只用于把登录二维码搬进机器人面板；不影响 OneBot 消息通道。
 
@@ -1016,7 +889,7 @@ public sealed class AppSettings
     // ---------- 快照 ----------
 
     /// <summary>
-    /// 取一份配置快照（浅拷贝；这个类型只有标量字段，拷贝出来就是独立的一份）。两个用途：
+    /// 取一份配置快照（标量浅拷贝；嵌套的平台策略深拷贝，副本独立）。两个用途：
     ///   • **读**：一次处理开始时固定它，处理过程中一律读快照 —— 面板热更新只影响后续处理，
     ///     不会改到在途请求（V3 §5.3）。见 BotAgentHost.GenerateReplyAsync。
     ///   • **写**：<see cref="SettingsBox.Apply" /> 在副本上改完再整体发布（review-findings #4）。

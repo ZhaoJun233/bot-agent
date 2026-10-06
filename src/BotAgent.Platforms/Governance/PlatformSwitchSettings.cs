@@ -5,7 +5,7 @@ namespace BotAgent.Services.Platforms;
 /// <summary>Versioned compatibility bridge for platform and chat switches.</summary>
 public static class PlatformSwitchSettings
 {
-    public static (bool Enabled, bool ChatEnabled) Read(AppSettings settings, string platform, string account)
+    public static (bool Enabled, bool ChatEnabled) Read(PlatformOptions settings, string platform, string account)
     {
         platform = PlatformId.Normalize(platform);
         if (platform is not (PlatformId.QqPrivate or PlatformId.QqOfficial or PlatformId.Feishu or PlatformId.Local))
@@ -18,7 +18,7 @@ public static class PlatformSwitchSettings
             : (policy?.Enabled ?? legacy.Enabled, policy?.ChatEnabled ?? legacy.ChatEnabled);
     }
 
-    public static void Normalize(AppSettings settings)
+    public static void Normalize(PlatformOptions settings)
     {
         settings.PlatformPolicies ??= new();
         if (settings.PlatformSwitchSchemaVersion < 1)
@@ -35,7 +35,7 @@ public static class PlatformSwitchSettings
         SynchronizeLegacy(settings);
     }
 
-    public static void SynchronizeLegacy(AppSettings settings)
+    public static void SynchronizeLegacy(PlatformOptions settings)
     {
         var official = Find(settings, PlatformId.QqOfficial, AccountScope.Legacy);
         if (official?.Enabled is bool officialEnabled) settings.OfficialEnabled = officialEnabled;
@@ -46,7 +46,7 @@ public static class PlatformSwitchSettings
         if (feishu?.Enabled is bool feishuEnabled) settings.FeishuEnabled = feishuEnabled;
     }
 
-    public static void ApplyLegacy(AppSettings settings, string platform, string account, bool? enabled, bool? chatEnabled)
+    public static void ApplyLegacy(PlatformOptions settings, string platform, string account, bool? enabled, bool? chatEnabled)
     {
         var policy = Find(settings, platform, account);
         if (policy is null) return;
@@ -54,7 +54,7 @@ public static class PlatformSwitchSettings
         if (chatEnabled is bool c) policy.ChatEnabled = c;
     }
 
-    public static List<PlatformPolicySettings> EditablePolicies(AppSettings settings)
+    public static List<PlatformPolicySettings> EditablePolicies(PlatformOptions settings)
     {
         var policies = (settings.PlatformPolicies ?? new()).Where(p => p is not null).Select(p => p.Clone()).ToList();
         foreach (var policy in policies)
@@ -105,13 +105,13 @@ public static class PlatformSwitchSettings
         return policies;
     }
 
-    private static PlatformPolicySettings? Find(AppSettings settings, string platform, string account)
+    private static PlatformPolicySettings? Find(PlatformOptions settings, string platform, string account)
         => (settings.PlatformPolicies ?? new()).FirstOrDefault(p => p is not null
             && string.Equals(PlatformId.Normalize(p.PlatformId), platform, StringComparison.OrdinalIgnoreCase)
             && string.Equals(string.IsNullOrWhiteSpace(p.AccountScope) ? AccountScope.Default : p.AccountScope,
                 string.IsNullOrWhiteSpace(account) ? AccountScope.Default : account, StringComparison.OrdinalIgnoreCase));
 
-    private static (bool Enabled, bool ChatEnabled) Legacy(AppSettings settings, string platform)
+    private static (bool Enabled, bool ChatEnabled) Legacy(PlatformOptions settings, string platform)
         => platform switch
         {
             PlatformId.QqPrivate => (true, settings.PrivateChatEnabled),

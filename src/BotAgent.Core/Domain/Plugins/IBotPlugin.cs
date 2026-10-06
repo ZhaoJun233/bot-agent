@@ -34,9 +34,12 @@ public interface IBotPlugin
     /// <summary>是否为官方预设插件。</summary>
     bool IsPreset => true;
 
-    /// <summary>初始化插件资源。</summary>
-    Task InitializeAsync(CancellationToken ct);
+    /// <summary>初始化插件资源与生命周期绑定。</summary>
+    Task InitializeAsync(PluginContext context, CancellationToken ct) => InitializeAsync(ct);
 
-    /// <summary>停止与清理插件资源。</summary>
+    /// <summary>旧版初始化入口兼容。</summary>
+    Task InitializeAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>安全停止与释放资源。</summary>
     Task ShutdownAsync(CancellationToken ct);
 }

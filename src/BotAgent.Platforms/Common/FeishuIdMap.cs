@@ -18,7 +18,7 @@ public sealed class FeishuIdMap
     }
 
     // No implicit AppPaths access: existing pure probes retain an explicit ephemeral bridge.
-    internal FeishuIdMap()
+    public FeishuIdMap()
         => _ids = new OfficialIdMap(null, AliasBase, AliasLimit, durable: true, validateOriginal: IsIdentity);
 
     public long AliasFor(string appId, string kind, string nativeId)

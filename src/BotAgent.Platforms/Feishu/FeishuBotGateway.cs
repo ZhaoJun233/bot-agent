@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using BotAgent.Adapters.Net;
+using BotAgent.Platforms.Net;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Messaging;
@@ -28,8 +28,8 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     private static readonly TimeSpan SignatureMaxAge = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SeenTtl = TimeSpan.FromMinutes(10);
 
-    private readonly SettingsBox _box;
-    private readonly IHttpFetcher _http;
+    private readonly IPlatformSettingsBox _box;
+    private readonly BotAgent.Platforms.Net.IPlatformHttpFetcher _http;
     private readonly FeishuIdMap _ids;
     private readonly Action<string>? _log;
 
@@ -41,7 +41,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     private readonly SemaphoreSlim _tokenGate = new(1, 1);
     private bool _disposed;
 
-    public FeishuBotGateway(SettingsBox box, IHttpFetcher http, Action<string>? log = null, FeishuIdMap? ids = null)
+    public FeishuBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, Action<string>? log = null, FeishuIdMap? ids = null)
     {
         _box = box ?? throw new ArgumentNullException(nameof(box));
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -321,7 +321,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         return new SendResult(res.IsSuccess, numId);
     }
 
-    private (long Target, long Sender, long Message) MapInboundIds(AppSettings settings, bool isGroup, string target, string sender, string message)
+    private (long Target, long Sender, long Message) MapInboundIds(PlatformOptions settings, bool isGroup, string target, string sender, string message)
     {
         var appId = settings.FeishuAppId?.Trim() ?? string.Empty;
         return (_ids.AliasFor(appId, IdentityKind(isGroup), target),
@@ -467,7 +467,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
     public void RegisterTarget(string channel, bool isGroup, long id) { }
 
-    private bool IsAllowed(AppSettings settings, bool isGroup, string target)
+    private bool IsAllowed(PlatformOptions settings, bool isGroup, string target)
     {
         var policy = (settings.PlatformPolicies ?? new List<PlatformPolicySettings>())
             .FirstOrDefault(p => p is not null && string.Equals(PlatformId.Normalize(p.PlatformId), PlatformId.Feishu, StringComparison.OrdinalIgnoreCase));
@@ -663,7 +663,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
             return false;
         }
 
-        if (!AppDatabase.TryRegisterFeishuWebhook(key, now, SeenTtl))
+        if (!BotAgent.Platforms.Persistence.PlatformDedupStore.TryRegisterFeishuWebhook(key, now, SeenTtl))
         {
             return false;
         }

@@ -18,7 +18,7 @@ public sealed class ChatMessage
     public required string Text { get; set; }
 
     /// <summary>会话内自增序号（持久化不保留，仅在进程内用于前端增量同步）。</summary>
-    public long Seq { get; internal set; }
+    public long Seq { get; set; }
 
     public DateTimeOffset Timestamp { get; init; }
 

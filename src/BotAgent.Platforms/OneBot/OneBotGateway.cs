@@ -33,11 +33,11 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
     private IOneBotTransport? _transport;
     private CancellationTokenSource? _cts;
     // 配置读取入口：指向**当前发布版**（热更新是换引用，见 SettingsBox）——不要改成缓存实例。
-    private AppSettings _settings => _box.Current;
+    private PlatformOptions _settings => _box.Current;
 
-    private readonly SettingsBox _box;
+    private readonly IPlatformSettingsBox _box;
     private readonly ProtocolRiskBackoff? _riskBackoff;
-    private readonly Func<AppSettings, IOneBotTransport>? _transportFactory;
+    private readonly Func<PlatformOptions, IOneBotTransport>? _transportFactory;
     private long _selfId;
 
     /// <summary>
@@ -55,9 +55,9 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
     public bool IsConnected { get; private set; }
 
     public OneBotGateway(
-        SettingsBox box,
+        IPlatformSettingsBox box,
         ProtocolRiskBackoff? riskBackoff = null,
-        Func<AppSettings, IOneBotTransport>? transportFactory = null)
+        Func<PlatformOptions, IOneBotTransport>? transportFactory = null)
     {
         _box = box;
         _riskBackoff = riskBackoff;
@@ -68,7 +68,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
     /// 连接信息（协议 / 地址 / Token）相对给定那一份有没有变化，供上层决定是否重建连接。
     /// 只做比较、不再"更新内部引用"：读取一律走 <see cref="SettingsBox" /> 的当前发布版。
     /// </summary>
-    public bool UpdateAndMarkIfProtocolChanged(AppSettings next)
+    public bool UpdateAndMarkIfProtocolChanged(PlatformOptions next)
         => _settings.OneBotProtocol != next.OneBotProtocol
            || _settings.OneBotAddress != next.OneBotAddress
            || _settings.OneBotToken != next.OneBotToken;
@@ -1529,7 +1529,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
         _riskBackoff.ObserveFailure(Channels.Key(Channel, isGroup, targetId), action, retcode, wording);
     }
 
-    private static IOneBotTransport CreateTransport(AppSettings settings) => settings.OneBotProtocol switch
+    private static IOneBotTransport CreateTransport(PlatformOptions settings) => settings.OneBotProtocol switch
     {
         "ReverseWebSocket" => new ReverseWsTransport(settings.OneBotAddress, settings.OneBotToken),
         "Http" => new HttpTransport(settings.OneBotAddress, settings.OneBotToken),
