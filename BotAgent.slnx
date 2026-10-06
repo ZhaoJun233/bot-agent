@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/BotAgent.Core/BotAgent.Core.csproj" />
+    <Project Path="src/BotAgent.Platforms/BotAgent.Platforms.csproj" />
     <Project Path="src/BotAgent.Headless/BotAgent.Headless.csproj" />
   </Folder>
   <Folder Name="/tests/">

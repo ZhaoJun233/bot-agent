@@ -7,6 +7,7 @@ using BotAgent.Services.OneBot;
 using BotAgent.Services.Qq;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
+using BotAgent.Platforms.Net;
 
 namespace BotAgent.Services.Official;
 
@@ -51,12 +52,12 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     private const int MaxUploadBytes = 15 * 1024 * 1024;
 
     // 配置读取入口：指向**当前发布版**（热更新是换引用，见 SettingsBox）——不要改成缓存实例。
-    private AppSettings _settings => _box.Current;
+    private PlatformOptions _settings => _box.Current;
 
-    private readonly SettingsBox _box;
+    private readonly IPlatformSettingsBox _box;
     private readonly Action<string> _log;
     private readonly IOfficialIdMap _ids;
-    private readonly IHttpFetcher _http;
+    private readonly BotAgent.Platforms.Net.IPlatformHttpFetcher _http;
 
     /// <summary>发送串行化：官方对单聊/群聊有 QPS 限制，机器人这边本来就一句一句发。</summary>
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -84,7 +85,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     private Task? _loop;
     private bool _disposed;
 
-    public OfficialBotGateway(SettingsBox box, IHttpFetcher http, IOfficialIdMap ids, Action<string> log)
+    public OfficialBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, IOfficialIdMap ids, Action<string> log)
     {
         _box = box;
         _log = log;

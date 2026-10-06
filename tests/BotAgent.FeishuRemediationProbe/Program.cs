@@ -1,5 +1,7 @@
 using System.Net;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using BotAgent.Platforms;
 using BotAgent.Adapters.Net;
 using BotAgent.Adapters.Platforms.Feishu;
 using BotAgent.Adapters.Persistence;
@@ -34,6 +36,148 @@ string Webhook(string id) => new JsonObject
         ["message"] = new JsonObject { ["message_id"] = id, ["chat_id"] = "chat-synthetic", ["chat_type"] = "group", ["content"] = "{\"text\":\"synthetic\"}" }
     }
 }.ToJsonString();
+
+AppSettings PlatformSettings() => new()
+{
+    OneBotProtocol = "Http", OneBotAddress = "https://onebot.example.com", OneBotToken = "onebot-synthetic",
+    QuickLoginUin = " 10001 ", OfficialEnabled = true, OfficialChatEnabled = false,
+    OfficialAppId = "official-synthetic", OfficialAppSecret = "official-secret-synthetic", OfficialSandbox = true,
+    OfficialWhitelistGroups = "10002", OfficialWhitelistPrivates = "10003",
+    OfficialApiBase = "https://official.example.com", OfficialTokenUrl = "https://official.example.com/token",
+    FeishuEnabled = true, FeishuAppId = "feishu-synthetic", FeishuAppSecret = "feishu-secret-synthetic",
+    FeishuVerificationToken = "verify-synthetic", FeishuEncryptKey = "encrypt-synthetic",
+    FeishuWhitelist = "chat-synthetic", FeishuApiBase = "https://feishu.example.com",
+    LocalChannelIds = "local-synthetic", PrivateChatEnabled = false, PlatformSwitchSchemaVersion = 1,
+    WhitelistGroups = "10004", WhitelistPrivates = "10005", MessageWhitelist = "10006",
+    PlatformPolicies = [new PlatformPolicySettings
+    {
+        PlatformId = "feishu", AccountScope = "feishu-synthetic", Enabled = true, ChatEnabled = false,
+        GroupWhitelist = "chat-synthetic", PrivateWhitelist = "user-synthetic",
+        FeatureOverrides = new() { ["image"] = false }, AllowedActions = ["send"]
+    }]
+};
+void RequireSamePlatformView(AppSettings settings, PlatformOptions view)
+{
+    foreach (var property in typeof(PlatformOptions).GetProperties())
+        Require(Equals(property.GetValue(view), typeof(AppSettings).GetProperty(property.Name)!.GetValue(settings)),
+            $"base/derived property differs: {property.Name}");
+}
+
+await Test("platform accessor shares derived settings, policies and all white lists", () =>
+{
+    var settings = PlatformSettings();
+    var box = new SettingsBox(settings);
+    var accessor = (IPlatformSettingsAccessor)box;
+    Require(ReferenceEquals(settings, accessor.Current), "accessor replaced the published settings");
+    RequireSamePlatformView(settings, accessor.Current);
+    Require(ReferenceEquals(settings.PlatformPolicies, accessor.Current.PlatformPolicies), "policy list differs by view");
+    accessor.Current.FeishuWhitelist = "changed-synthetic";
+    accessor.Current.OfficialChatEnabled = true;
+    Require(settings.FeishuWhitelist == "changed-synthetic" && settings.OfficialChatEnabled, "base mutation invisible to derived view");
+    Require(settings.NormalizedUin == "10001" && settings.UinOrZero == 10001, "derived login values changed");
+    var defaults = new AppSettings();
+    Require(defaults.PrivateChatEnabled && defaults.OfficialChatEnabled && !defaults.OfficialEnabled && !defaults.FeishuEnabled
+        && defaults.OneBotProtocol == "ForwardWebSocket" && defaults.OneBotAddress == "ws://127.0.0.1:3001"
+        && defaults.PlatformPolicies.Count == 0 && defaults.PlatformSwitchSchemaVersion == 0, "platform defaults changed");
+    return Task.CompletedTask;
+});
+
+await Test("platform JSON preserves original secret exclusions and persisted fields for both views", () =>
+{
+    var settings = PlatformSettings();
+    var ignored = new[] { "OneBotToken", "OfficialAppSecret", "FeishuAppSecret", "FeishuEncryptKey", "NormalizedUin", "UinOrZero" };
+    foreach (var camelCase in new[] { false, true })
+    {
+        var options = new JsonSerializerOptions { PropertyNamingPolicy = camelCase ? JsonNamingPolicy.CamelCase : null };
+        var platformJson = JsonSerializer.Serialize<PlatformOptions>(settings, options);
+        var headlessJson = JsonSerializer.Serialize(settings, options);
+        var platform = JsonNode.Parse(platformJson)!.AsObject();
+        var headless = JsonNode.Parse(headlessJson)!.AsObject();
+        foreach (var name in ignored)
+        {
+            var key = options.PropertyNamingPolicy?.ConvertName(name) ?? name;
+            Require(!platform.ContainsKey(key) && !headless.ContainsKey(key), $"excluded property serialized: {name}");
+        }
+        foreach (var property in typeof(PlatformOptions).GetProperties().Where(p => !ignored.Contains(p.Name)))
+        {
+            var key = options.PropertyNamingPolicy?.ConvertName(property.Name) ?? property.Name;
+            Require(platform.ContainsKey(key) && headless.ContainsKey(key) && JsonNode.DeepEquals(platform[key], headless[key]),
+                $"persisted property missing or differs: {property.Name}");
+        }
+        var reloaded = JsonSerializer.Deserialize<AppSettings>(headlessJson, options)!;
+        RequireSamePlatformView(reloaded, reloaded);
+        Require(reloaded.FeishuVerificationToken == "verify-synthetic" && reloaded.PlatformPolicies.Single().GroupWhitelist == "chat-synthetic",
+            "verification token or nested policy did not round trip");
+        var injected = "{\"OneBotToken\":\"injected-synthetic\",\"OfficialAppSecret\":\"injected-synthetic\",\"FeishuAppSecret\":\"injected-synthetic\",\"FeishuEncryptKey\":\"injected-synthetic\"}";
+        foreach (var value in new PlatformOptions[] { JsonSerializer.Deserialize<AppSettings>(injected)!, JsonSerializer.Deserialize<PlatformOptions>(injected)! })
+            Require(value.OneBotToken == "" && value.OfficialAppSecret == "" && value.FeishuAppSecret == "" && value.FeishuEncryptKey == "",
+                "excluded secret accepted from persisted JSON");
+    }
+    var store = new SettingsStore();
+    store.Save(settings);
+    var stored = JsonNode.Parse(AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id = 1")!)!.AsObject();
+    Require(ignored.All(name => !stored.ContainsKey(name)), "settings store persisted excluded platform properties");
+    var loaded = store.Load();
+    RequireSamePlatformView(loaded, loaded);
+    Require(loaded.FeishuWhitelist == "chat-synthetic" && loaded.WhitelistGroups == "10004"
+        && loaded.PlatformPolicies.Single().AllowedActions.SequenceEqual(["send"]), "settings store lost whitelist/policy values");
+    return Task.CompletedTask;
+});
+
+await Test("platform snapshot, copy and hot reload isolate nested policies and publish one complete view", () =>
+{
+    var old = PlatformSettings();
+    var snapshot = old.Snapshot();
+    var copied = new PlatformOptions();
+    old.CopyPlatformPropertiesTo(copied);
+    RequireSamePlatformView(snapshot, snapshot);
+    foreach (var copy in new PlatformOptions[] { snapshot, copied })
+    {
+        Require(copy.FeishuAppSecret == old.FeishuAppSecret && copy.WhitelistPrivates == old.WhitelistPrivates, "copy lost scalar/secret values");
+        Require(!ReferenceEquals(copy.PlatformPolicies, old.PlatformPolicies)
+            && !ReferenceEquals(copy.PlatformPolicies[0], old.PlatformPolicies[0])
+            && !ReferenceEquals(copy.PlatformPolicies[0].FeatureOverrides, old.PlatformPolicies[0].FeatureOverrides)
+            && !ReferenceEquals(copy.PlatformPolicies[0].AllowedActions, old.PlatformPolicies[0].AllowedActions), "nested policy copy aliases old snapshot");
+        copy.PlatformPolicies[0].FeatureOverrides["image"] = true;
+        copy.PlatformPolicies[0].AllowedActions.Add("recall");
+    }
+    Require(!old.PlatformPolicies[0].FeatureOverrides["image"] && old.PlatformPolicies[0].AllowedActions.SequenceEqual(["send"]), "copy changed old policy");
+    var box = new SettingsBox(old);
+    var accessor = (IPlatformSettingsAccessor)box;
+    var persisted = false;
+    var published = false;
+    var next = box.ApplyPersisted(s =>
+    {
+        s.FeishuAppSecret = "reloaded-synthetic";
+        s.FeishuWhitelist = "new-chat-synthetic";
+        s.WhitelistGroups = "10007";
+        s.PlatformPolicies[0].GroupWhitelist = "new-chat-synthetic";
+        s.PlatformPolicies[0].FeatureOverrides["image"] = true;
+        s.PlatformPolicies[0].AllowedActions.Add("recall");
+    }, candidate =>
+    {
+        Require(ReferenceEquals(accessor.Current, old), "published before persist");
+        RequireSamePlatformView(candidate, candidate);
+        persisted = true;
+    }, candidate =>
+    {
+        Require(persisted && ReferenceEquals(accessor.Current, candidate), "published callback sees different settings");
+        published = true;
+    });
+    Require(persisted && published && ReferenceEquals(next, box.Current) && ReferenceEquals(next, accessor.Current), "publication split base and derived view");
+    RequireSamePlatformView(next, accessor.Current);
+    Require(accessor.Current.FeishuAppSecret == "reloaded-synthetic" && accessor.Current.FeishuWhitelist == "new-chat-synthetic"
+        && accessor.Current.WhitelistGroups == "10007" && accessor.Current.PlatformPolicies[0].GroupWhitelist == "new-chat-synthetic", "reload lost updated platform fields");
+    Require(old.FeishuAppSecret == "feishu-secret-synthetic" && old.FeishuWhitelist == "chat-synthetic"
+        && old.PlatformPolicies[0].GroupWhitelist == "chat-synthetic" && !old.PlatformPolicies[0].FeatureOverrides["image"]
+        && old.PlatformPolicies[0].AllowedActions.SequenceEqual(["send"]), "hot reload mutated in-flight snapshot");
+    var failed = false;
+    try { box.ApplyPersisted(s => s.PlatformPolicies[0].AllowedActions.Clear(), _ => throw new IOException("synthetic failure")); }
+    catch (IOException) { failed = true; }
+    Require(failed && ReferenceEquals(accessor.Current, next) && next.PlatformPolicies[0].AllowedActions.Count == 2,
+        "failed persistence published or changed current policy");
+    return Task.CompletedTask;
+});
 
 await Test("token changes after secret hot reload", async () =>
 {

@@ -219,6 +219,8 @@ OFFICIAL_APP_SECRET=your_app_secret
 
 ## 兼容性与数据迁移说明
 
+- **平台模块拆分（Wave 2 轨 B）**：OneBot、QQ 官方、飞书、本地通道与平台策略源码已迁入 `src/BotAgent.Platforms/`，由 Headless 在同一进程中引用；Platforms 的项目依赖仅有 Core。当前暂停于迁移与配置桥接完成、最终验收待补齐的检查点，接口实现现状、已有验证记录与续接顺序见 [Agent-03 执行手册 §8](docs/plans/agents/03-agent-platforms-extraction.md#8-暂停检查点与续接记录-2026-10-06)。
+
 - **飞书身份映射**：运行时装配持久化映射 `data/feishu-ids-v2.json`，使用与旧 32 位别名分离的新号段（`FeishuBase + 1e12` 至 `FeishuBase + 2e12`）；启用飞书通道时请随业务数据一同备份该文件。旧会话保留但需重新配置原生飞书 ID 白名单。
 - **OwnMessage 台账隔离**：消息按平台、账号、会话与原生消息 ID 隔离并存入 `own_messages_scoped`；历史裸数字 ID 行继续留档，升级后旧版本不可向下兼容读取 scoped 记录，建议升级前完整备份 `data/qqchat.db`。
 - **工具调用硬超时**：硬超时限制的是调用方等待的最大时限并发送取消信号，并不代表底层外部操作必然瞬间终止，外部不可取消的底层动作仍受宿主调用约束。

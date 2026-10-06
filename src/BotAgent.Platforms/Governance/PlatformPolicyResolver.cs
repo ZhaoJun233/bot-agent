@@ -10,10 +10,10 @@ namespace BotAgent.Services.Platforms;
 /// </summary>
 public sealed class PlatformPolicyResolver
 {
-    private readonly SettingsBox _box;
+    private readonly IPlatformSettingsBox _box;
     private readonly IPlatformRegistry? _registry;
 
-    public PlatformPolicyResolver(SettingsBox box, IPlatformRegistry? registry = null)
+    public PlatformPolicyResolver(IPlatformSettingsBox box, IPlatformRegistry? registry = null)
     {
         _box = box ?? throw new ArgumentNullException(nameof(box));
         _registry = registry;
@@ -90,7 +90,7 @@ public sealed class PlatformPolicyResolver
     public bool FeatureEnabled(string? channel, string feature, bool globalEnabled)
         => ResolveForChannel(channel).Feature(feature, globalEnabled).Enabled;
 
-    private static PlatformPolicySettings? FindSettings(AppSettings settings, string platform, string account)
+    private static PlatformPolicySettings? FindSettings(PlatformOptions settings, string platform, string account)
         => (settings.PlatformPolicies ?? new List<PlatformPolicySettings>()).FirstOrDefault(p =>
             p is not null
             && string.Equals(PlatformId.Normalize(p.PlatformId), platform, StringComparison.OrdinalIgnoreCase)

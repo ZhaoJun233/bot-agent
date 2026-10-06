@@ -16,7 +16,7 @@ namespace BotAgent.Services;
 ///   ② 写入统一走 <see cref="Apply" /> / <see cref="ApplyPersisted" />（禁止就地改共享配置）；
 ///   ③ 拿在手里的 <see cref="AppSettings" /> 是**某一版**，别跨轮长期持有它（要长期持有就持这个箱子）。
 /// </summary>
-public sealed class SettingsBox
+public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox
 {
     /// <summary>发布串行化：两个人同时保存时，后一个不能把前一个的修改盖掉（各自都从最新版 fork）。</summary>
     private readonly object _gate = new();
@@ -28,6 +28,8 @@ public sealed class SettingsBox
 
     /// <summary>当前生效的那一份（换引用是原子的；每次访问都取最新的）。</summary>
     public AppSettings Current => Volatile.Read(ref _current);
+
+    BotAgent.Platforms.PlatformOptions BotAgent.Platforms.IPlatformSettingsAccessor.Current => Current;
 
     /// <summary>
     /// 在副本上改 → 原子发布（仅运行时，不落盘）。持久化保存必须走 ApplyPersisted。
