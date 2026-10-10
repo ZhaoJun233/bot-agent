@@ -19,6 +19,7 @@ public static class Program
 {
     public static async Task<int> Main()
     {
+        BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
         var dataRoot = Path.Combine(Path.GetTempPath(), "botagent-chaos-fault-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", dataRoot);
         var passed = 0;

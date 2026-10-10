@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 
 namespace BotAgent.IntegrationHarness;
 
@@ -40,9 +41,11 @@ public static partial class Program
         using var feishuServer = new MockFeishuServer(feishuPort);
         feishuServer.Start();
 
-        using var bot = StartBot(new Dictionary<string, string>
+        var botEnv = new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = dataDir,
+            ["BOTAGENT_DATA_DIR"] = dataDir,
+            ["QQCHAT_LOG_FILE"] = "0",
             ["QQCHAT_API_KEY"] = "sk-mock",
             ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
             ["QQCHAT_MODEL"] = "mock-model",
@@ -63,7 +66,8 @@ public static partial class Program
             ["QQCHAT_FEISHU_VERIFICATION_TOKEN"] = verifyToken,
             ["QQCHAT_FEISHU_API_BASE"] = feishuServer.BaseUrl,
             ["QQCHAT_FEISHU_WHITELIST"] = targetChat,
-        });
+        };
+        using var bot = StartBot(botEnv);
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
         await WaitForPortAsync(panelPort, cts.Token, bot);
@@ -196,7 +200,85 @@ public static partial class Program
             && feishuServer.Messages.Count == beforeMsgCount,
             $"去重回执: {dupBody}, 消息计数: {feishuServer.Messages.Count}");
 
+        // Fault injection touches only this scenario's synthetic database.
+        void DedupSql(string sql)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(dataDir, "data", "qqchat.db"),
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+                DefaultTimeout = 5,
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+
+        var failedEventJson = eventJson.Replace("evt_harness_001", "evt_harness_storage_failure")
+            .Replace("om_in_001", "om_in_storage_failure");
+        openAi.ClearRequests();
+        var beforeRecoveryCount = feishuServer.Messages.Count;
+        DedupSql("""
+            CREATE TRIGGER r5_synthetic_host_dedup_failure BEFORE INSERT ON feishu_webhook_dedup
+            WHEN NEW.event_key = 'event:evt_harness_storage_failure'
+            BEGIN SELECT RAISE(ABORT, 'synthetic storage unavailable'); END;
+            """);
+        try
+        {
+            using var failedContent = new StringContent(failedEventJson, Encoding.UTF8, "application/json");
+            using var failedResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", failedContent, cts.Token);
+            var failedBody = await failedResponse.Content.ReadAsStringAsync(cts.Token);
+            Check("R5: real host storage failure is retryable and does not enter model/send chain",
+                (int)failedResponse.StatusCode == 503 && failedBody == "{\"error\":\"dedup_unavailable\"}"
+                && openAi.Requests.Count == 0 && feishuServer.Messages.Count == beforeRecoveryCount,
+                $"HTTP {(int)failedResponse.StatusCode}; modelRequests={openAi.Requests.Count}; sends={feishuServer.Messages.Count}");
+        }
+        finally
+        {
+            DedupSql("DROP TRIGGER r5_synthetic_host_dedup_failure;");
+        }
+        openAi.EnqueueReply("{\"suitability\":90,\"reply\":\"synthetic recovery\"}");
+        using (var recoveryContent = new StringContent(failedEventJson, Encoding.UTF8, "application/json"))
+        using (var recoveryResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", recoveryContent, cts.Token))
+        {
+            Check("R5: same event recovers after real storage repair through model and platform send",
+                recoveryResponse.IsSuccessStatusCode
+                && await feishuServer.WaitForMessageAsync(beforeRecoveryCount + 1, TimeSpan.FromSeconds(30))
+                && openAi.Requests.Count > 0 && feishuServer.Messages.Count == beforeRecoveryCount + 1);
+        }
+
         await bot.StopAsync();
+        using var restarted = StartBot(botEnv);
+        await WaitForPortAsync(botWsPort, cts.Token, restarted);
+        await WaitForPortAsync(panelPort, cts.Token, restarted);
+        using var restartedProtocol = new MockProtocol { SelfId = 10001 };
+        await restartedProtocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
+        await restartedProtocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
+        openAi.ClearRequests();
+        var afterRestartCount = feishuServer.Messages.Count;
+        using (var replayContent = new StringContent(failedEventJson, Encoding.UTF8, "application/json"))
+        using (var replayResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", replayContent, cts.Token))
+        {
+            var replayBody = await replayResponse.Content.ReadAsStringAsync(cts.Token);
+            await Task.Delay(300, cts.Token);
+            Check("R5: restarted host retains persistent dedup without model/send replay",
+                replayResponse.IsSuccessStatusCode && replayBody.Contains("duplicate")
+                && openAi.Requests.Count == 0 && feishuServer.Messages.Count == afterRestartCount);
+        }
+        var freshEventJson = eventJson.Replace("evt_harness_001", "evt_harness_restart_fresh")
+            .Replace("om_in_001", "om_in_restart_fresh");
+        openAi.EnqueueReply("{\"suitability\":90,\"reply\":\"synthetic restart\"}");
+        using (var freshContent = new StringContent(freshEventJson, Encoding.UTF8, "application/json"))
+        using (var freshResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", freshContent, cts.Token))
+        {
+            Check("R5: restarted host still accepts fresh events through the real reply chain",
+                freshResponse.IsSuccessStatusCode
+                && await feishuServer.WaitForMessageAsync(afterRestartCount + 1, TimeSpan.FromSeconds(30))
+                && openAi.Requests.Count > 0 && feishuServer.Messages.Count == afterRestartCount + 1);
+        }
+        await restarted.StopAsync();
     }
 
     private sealed class BlockingBodyGate

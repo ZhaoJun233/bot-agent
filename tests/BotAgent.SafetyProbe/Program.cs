@@ -57,6 +57,7 @@ public static partial class Program
 
     public static int Main()
     {
+        BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
         DecisionTests();
         ParserWiringTests();
         PortSubstituteTests();

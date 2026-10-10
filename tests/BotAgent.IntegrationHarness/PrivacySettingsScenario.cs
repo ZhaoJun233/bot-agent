@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
+using Microsoft.Data.Sqlite;
 
 namespace BotAgent.IntegrationHarness;
 
@@ -21,6 +23,7 @@ public static partial class Program
 {
     private static async Task RunPrivacySettingsScenarioAsync()
     {
+        await RunOfficialSecretBoundaryScenarioAsync();
         Section("S36 列出会话时脱敏 + Agent 附加提示词（默认：不读取敏感信息）");
 
         const int openAiPort = 17881;
@@ -48,6 +51,8 @@ public static partial class Program
         using var bot = StartBot(new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = dataDir,
+            ["BOTAGENT_DATA_DIR"] = dataDir,
+            ["QQCHAT_LOG_FILE"] = "0",
             ["QQCHAT_API_KEY"] = "sk-mock",
             ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
             ["QQCHAT_MODEL"] = "mock-model",
@@ -186,6 +191,187 @@ public static partial class Program
             Snippet(system3, "工作目录"));
 
         await bot.StopAsync();
+    }
+
+    private static async Task RunOfficialSecretBoundaryScenarioAsync()
+    {
+        Section("S36 R2 official secret: environment only, rejected writes, no value echoes");
+        const string storedSecret = "SYN-STORED-r2-secret-29";
+        const string fileSecret = "FIL-ONLY-r2-secret-84";
+        const string envSecret = "ENV-ONLY-r2-secret-73";
+        const string rotatedSecret = "ROT-ONLY-r2-secret-65";
+        const string submittedSecret = "REQ-ONLY-r2-secret-91";
+        var dataDir = NewDataDir("s36-official-secret");
+        var dataPath = Path.Combine(dataDir, "data");
+        Directory.CreateDirectory(dataPath);
+        var databasePath = Path.Combine(dataPath, "qqchat.db");
+        var secretFile = Path.Combine(dataDir, "official-secret-fixture.txt");
+        File.WriteAllText(secretFile, fileSecret);
+        File.WriteAllText(Path.Combine(dataPath, "settings.json"), """
+            {"AiDesire":17,"OfficialEnabled":true,"OfficialAppId":"10001",
+             "OfficialAppSecret":"JSN-IGNORED-r2-secret-48","IdleFallbackSeconds":0,
+             "EnableStickers":false,"EnablePoke":false,"EnableVoice":false,"EnableMusic":false}
+            """);
+        // This minimal legacy row is created only in the new synthetic root, never a real database.
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = databasePath, Pooling = false }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE secrets(name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_unix INTEGER NOT NULL); "
+                + "INSERT INTO secrets VALUES('officialAppSecret', $secret, 0)";
+            command.Parameters.AddWithValue("$secret", storedSecret);
+            command.ExecuteNonQuery();
+        }
+        static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+        (string Settings, string Secret, long Audits) StoredState()
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            connection.Open();
+            string Text(string sql)
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar()?.ToString() ?? "";
+            }
+            return (Hash(Text("SELECT json FROM settings WHERE id=1")),
+                Hash(Text("SELECT value FROM secrets WHERE name='officialAppSecret'")),
+                long.Parse(Text("SELECT COUNT(*) FROM security_audit_log")));
+        }
+        var panelPort = FreePort(18336);
+        var wsPort = FreePort(13336);
+        var panel = $"http://127.0.0.1:{panelPort}";
+        const string panelToken = "synthetic-r2-panel-token";
+        using var model = new MockOpenAi(FreePort(17936));
+        model.Start();
+        using var official = new MockOfficialGateway(FreePort(18436), FreePort(13436));
+        official.Start();
+        // Legacy saved behavior can override environment seeds: pin protocol endpoints in the fixture too.
+        var fixture = JsonNode.Parse(File.ReadAllText(Path.Combine(dataPath, "settings.json")))!;
+        fixture["OfficialApiBase"] = official.HttpBase;
+        fixture["OfficialTokenUrl"] = official.TokenUrl;
+        File.WriteAllText(Path.Combine(dataPath, "settings.json"), fixture.ToJsonString());
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        void NoSecretEcho(string label, string body)
+        {
+            var forbidden = new[] { storedSecret, fileSecret, envSecret, rotatedSecret, submittedSecret,
+                "JSN-IGNORED-r2-secret-48", "SYN***29", "FIL***84", "ENV***73", "ROT***65", "REQ***91" };
+            Check(label + ": no secret value, fragments or masked field", forbidden.All(s => !body.Contains(s, StringComparison.Ordinal))
+                && !body.Contains("officialSecretMasked", StringComparison.OrdinalIgnoreCase)
+                && !body.Contains("officialAppSecret", StringComparison.OrdinalIgnoreCase)
+                && (JsonNode.Parse(body)?["runtime"] as JsonObject)?.All(field =>
+                    !field.Key.Contains("official", StringComparison.OrdinalIgnoreCase)
+                    || !field.Key.Contains("secret", StringComparison.OrdinalIgnoreCase)
+                    || field.Key is "officialSecretConfigured" or "officialSecretSource") != false,
+                "safe response shape only");
+        }
+        try
+        {
+            var phases = new[]
+            {
+                (Name: "stored ignored", Secret: "", File: false),
+                (Name: "file ignored", Secret: "", File: true),
+                (Name: "blank env ignored", Secret: "   ", File: true),
+                (Name: "env restored", Secret: " " + envSecret + " ", File: true),
+                (Name: "env rotated", Secret: rotatedSecret, File: true),
+                (Name: "env removed", Secret: "", File: false)
+            };
+            foreach (var phase in phases)
+            {
+                var expectedSecret = phase.Secret.Trim();
+                var requestsBefore = official.HttpRequests.Count;
+                using var bot = StartBot(new Dictionary<string, string>
+                {
+                    ["QQCHAT_DATA_DIR"] = dataDir, ["BOTAGENT_DATA_DIR"] = dataDir,
+                    ["QQCHAT_API_KEY"] = "sk-mock", ["QQCHAT_BASE_URL"] = model.BaseUrl, ["QQCHAT_MODEL"] = "mock-model",
+                    ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket", ["QQCHAT_ONEBOT_URL"] = $"http://127.0.0.1:{wsPort}",
+                    ["QQCHAT_UIN"] = "10001", ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(), ["QQCHAT_HEALTH_BIND"] = "127.0.0.1",
+                    ["QQCHAT_PANEL_TOKEN"] = panelToken, ["QQCHAT_LOG_FILE"] = "0",
+                    ["QQCHAT_OFFICIAL_APP_SECRET"] = phase.Secret,
+                    ["QQCHAT_OFFICIAL_APP_SECRET_FILE"] = phase.File ? secretFile : "",
+                    ["QQCHAT_OFFICIAL_API_BASE"] = official.HttpBase, ["QQCHAT_OFFICIAL_TOKEN_URL"] = official.TokenUrl
+                });
+                await WaitForPortAsync(wsPort, cts.Token, bot);
+                await WaitForPortAsync(panelPort, cts.Token, bot);
+                var (code, body) = await PanelGetAsync(panel + "/api/settings", panelToken);
+                var runtime = JsonNode.Parse(body)?["runtime"];
+                Check(phase.Name + ": environment-only status", code == 200
+                    && runtime?["officialSecretConfigured"]?.GetValue<bool>() == (expectedSecret.Length > 0)
+                    && runtime?["officialSecretSource"]?.GetValue<string>() == (expectedSecret.Length > 0 ? "env" : "none"),
+                    "configured boolean and source enum only");
+                Check(phase.Name + ": only synthetic root", JsonNode.Parse(body)?["env"]?["dataDir"]?.GetValue<string>() == dataDir,
+                    "temp root equality only");
+                NoSecretEcho(phase.Name + " GET", body);
+                if (expectedSecret.Length > 0)
+                    await WaitUntilAsync(() => official.HttpRequests.Skip(requestsBefore)
+                        .Any(r => r["path"]?.GetValue<string>() == "/app/getAppAccessToken"), TimeSpan.FromSeconds(8));
+                else
+                    await Task.Delay(250, cts.Token);
+                var tokenRequests = official.HttpRequests.Skip(requestsBefore)
+                    .Where(r => r["path"]?.GetValue<string>() == "/app/getAppAccessToken").ToArray();
+                Check(phase.Name + ": real adapter uses only the direct environment secret",
+                    expectedSecret.Length == 0 ? tokenRequests.Length == 0 : tokenRequests.Length > 0
+                        && tokenRequests.All(r => r["body"]?["clientSecret"]?.GetValue<string>() == expectedSecret),
+                    "request count and secret equality only; no protocol payload output");
+                Check(phase.Name + ": legacy row retained", StoredState().Secret == Hash(storedSecret), "stored hash equality only");
+                if (phase.Name == "stored ignored")
+                {
+                    var (scriptCode, scriptBody) = await PanelGetAsync(panel + "/app.js", panelToken);
+                    Check("real host serves the credential-free script", scriptCode == 200
+                        && scriptBody.Contains("officialSecretStatus", StringComparison.Ordinal)
+                        && !scriptBody.Contains("setOfficialAppSecret", StringComparison.Ordinal)
+                        && !scriptBody.Contains("officialSecretMasked", StringComparison.Ordinal), "static asset shape only");
+                    var (pageCode, pageBody) = await PanelGetAsync(panel + "/", panelToken);
+                    Check("real host serves the status-only official secret control", pageCode == 200
+                        && pageBody.Contains("id=\"officialSecretStatus\"", StringComparison.Ordinal)
+                        && !pageBody.Contains("id=\"setOfficialAppSecret\"", StringComparison.Ordinal), "static control ids only");
+                    var attempts = new[]
+                    {
+                        "{\"officialAppSecret\":\"" + submittedSecret + "\",\"aiDesire\":37}",
+                        "{\"officialAppSecret\":\"\",\"aiDesire\":37}",
+                        "{\"officialAppSecret\":null,\"aiDesire\":37}",
+                        "{\"officialAppSecret\":{},\"aiDesire\":37}",
+                        "{\"clearOfficialAppSecret\":true,\"aiDesire\":37}",
+                        "{\"clearOfficialAppSecret\":false,\"aiDesire\":37}",
+                        "{\"clearOfficialAppSecret\":null,\"aiDesire\":37}",
+                        "{\"OfficialAppSecret\":\"" + submittedSecret + "\",\"aiDesire\":37}",
+                        "{\"CLEAROFFICIALAPPSECRET\":true,\"aiDesire\":37}"
+                    };
+                    for (var i = 0; i < attempts.Length; i++)
+                    {
+                        var before = StoredState();
+                        var (status, response) = await PanelPostJsonAsync(panel + "/api/settings", attempts[i], panelToken);
+                        Check($"forbidden request {i}: rejected before side effects", status == 400
+                            && JsonNode.Parse(response)?["error"]?.GetValue<string>() == "official_secret_environment_only", "HTTP status and safe error code only");
+                        NoSecretEcho($"forbidden request {i}", response);
+                        Check($"forbidden request {i}: no settings secret or audit write", StoredState() == before,
+                            "stored hashes and audit count equality only");
+                        var (_, readback) = await PanelGetAsync(panel + "/api/settings", panelToken);
+                        Check($"forbidden request {i}: no partial runtime publication",
+                            JsonNode.Parse(readback)?["runtime"]?["aiDesire"]?.GetValue<int>() == 17, "runtime value equality only");
+                    }
+                    var (saveCode, saveBody) = await PanelPostJsonAsync(panel + "/api/settings", "{\"aiDesire\":31}", panelToken);
+                    Check("ordinary settings still save", saveCode == 200 && JsonNode.Parse(saveBody)?["runtime"]?["aiDesire"]?.GetValue<int>() == 31);
+                    NoSecretEcho("ordinary POST", saveBody);
+                }
+                else
+                    Check(phase.Name + ": ordinary save survived restart", runtime?["aiDesire"]?.GetValue<int>() == 31);
+                if (expectedSecret.Length > 0)
+                {
+                    var (saveCode, saveBody) = await PanelPostJsonAsync(panel + "/api/settings", "{\"aiDesire\":31}", panelToken);
+                    Check(phase.Name + ": ordinary save preserves environment-only credential state", saveCode == 200
+                        && JsonNode.Parse(saveBody)?["runtime"]?["officialSecretConfigured"]?.GetValue<bool>() == true
+                        && JsonNode.Parse(saveBody)?["runtime"]?["officialSecretSource"]?.GetValue<string>() == "env");
+                    NoSecretEcho(phase.Name + " ordinary POST", saveBody);
+                }
+                await bot.StopAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail("s36 R2 synthetic secret boundary", "exceptionType=" + ex.GetType().Name + "; no payload or logs emitted");
+        }
     }
 
     /// <summary>POST 一段 JSON（场景里只用来打面板的设置/会话接口）。</summary>

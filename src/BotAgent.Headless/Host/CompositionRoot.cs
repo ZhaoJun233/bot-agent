@@ -66,6 +66,8 @@ internal static class CompositionRoot
     /// </summary>
     public static AppSettings BootstrapSettings()
     {
+        BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+        BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
         AppDatabase.Initialize();
         LegacyJsonImporter.ImportIfNeeded();
 
@@ -85,6 +87,8 @@ internal static class CompositionRoot
     /// </summary>
     public static AppGraph Build(AppSettings settings)
     {
+        BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+        BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
         // 配置的唯一发布点：所有组件都从它读"当前生效的那一份"。
         // 面板热更新换的是它背后的实例（不是就地改共享对象），这样在途的那一轮不会读到半新半旧的配置
         // （review-findings #4）。见 SettingsBox。
@@ -416,7 +420,8 @@ internal static class CompositionRoot
                 settingsBox,
                 new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "feishu"),
                 msg => FileLog.Write("Feishu", msg),
-                ids: new FeishuIdMap(Path.Combine(AppPaths.DataDir, "feishu-ids-v2.json")));
+                ids: new FeishuIdMap(Path.Combine(AppPaths.DataDir, "feishu-ids-v2.json")),
+                dedupStore: new FeishuWebhookDedupStore());
             source = source is ChannelRouter r2
                 ? new ChannelRouter(r2.Sources.Concat(new IQqChatSource[] { feishu }), msg => FileLog.Write("Channel", msg))
                 : new ChannelRouter(new IQqChatSource[] { gateway, feishu }, msg => FileLog.Write("Channel", msg));

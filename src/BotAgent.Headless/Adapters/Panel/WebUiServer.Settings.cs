@@ -96,6 +96,15 @@ public sealed partial class WebUiServer
             return;
         }
 
+        // Environment-only credential: reject presence (including null/empty/false) before any save side effect.
+        if (body is JsonObject submitted && submitted.Any(field =>
+            string.Equals(field.Key, "officialAppSecret", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(field.Key, "clearOfficialAppSecret", StringComparison.OrdinalIgnoreCase)))
+        {
+            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "official_secret_environment_only" });
+            return;
+        }
+
         List<Domain.Platforms.PlatformPolicySettings>? platformPolicies = null;
         if (body["platformPolicies"] is JsonNode platformPoliciesNode
             && !TryParsePlatformPolicies(platformPoliciesNode, out platformPolicies))
@@ -159,11 +168,6 @@ public sealed partial class WebUiServer
         {
             var raw = body["ttsKey"]?.GetValue<string>()?.Trim();
             AppendSecretRotateAudit("tts_key", string.IsNullOrEmpty(raw) ? "cleared" : "rotated");
-        }
-        if (body["officialAppSecret"] is not null)
-        {
-            var raw = body["officialAppSecret"]?.GetValue<string>()?.Trim();
-            AppendSecretRotateAudit("official_secret", string.IsNullOrEmpty(raw) ? "cleared" : "rotated");
         }
         if (body["agentServerKey"] is not null)
         {
@@ -439,22 +443,7 @@ public sealed partial class WebUiServer
         if (body["privateChatEnabled"] is JsonNode pce) s.PrivateChatEnabled = pce.GetValue<bool>();
         if (body["officialChatEnabled"] is JsonNode oce) s.OfficialChatEnabled = oce.GetValue<bool>();
 
-        // AppSecret：与 TTS key 同一套口径 —— **空 = 不改**（面板每次保存都会把这个字段发上来，
-        // 把空当“清空”就会“改个白名单把 secret 抹了”）；要清空得显式传 clearOfficialAppSecret。
-        if (body["clearOfficialAppSecret"] is JsonValue clearOs && clearOs.TryGetValue<bool>(out var clearOk) && clearOk)
-        {
-            _secrets.SaveOfficialSecret(null);
-            s.OfficialAppSecret = (Environment.GetEnvironmentVariable("QQCHAT_OFFICIAL_APP_SECRET") ?? string.Empty).Trim();
-            FileLog.Write("Web", "面板清空了官方通道 AppSecret（回退环境变量）");
-        }
-        else if (body["officialAppSecret"] is JsonValue osv && osv.TryGetValue<string>(out var rawSecret)
-                 && !string.IsNullOrWhiteSpace(rawSecret))
-        {
-            var newSecret = rawSecret.Trim();
-            _secrets.SaveOfficialSecret(newSecret);
-            s.OfficialAppSecret = newSecret;
-            FileLog.Write("Web", "面板更新了官方通道 AppSecret（已掩码保存；重启后生效）");
-        }
+        // OfficialAppSecret belongs only to deployment environment; no panel write or clear path.
         if (body["officialWhitelistGroups"] is JsonNode owg) s.OfficialWhitelistGroups = owg.GetValue<string>().Trim();
         if (body["officialWhitelistPrivates"] is JsonNode owp) s.OfficialWhitelistPrivates = owp.GetValue<string>().Trim();
         if (body["enableWebSearch"] is JsonNode ws) s.EnableWebSearch = ws.GetValue<bool>();
@@ -840,10 +829,7 @@ public sealed partial class WebUiServer
         ["officialEnabled"] = s.OfficialEnabled,
         ["officialAppId"] = s.OfficialAppId,
         ["officialSecretConfigured"] = !string.IsNullOrWhiteSpace(s.OfficialAppSecret),
-        ["officialSecretMasked"] = MaskSecret(s.OfficialAppSecret),
-        ["officialSecretSource"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("QQCHAT_OFFICIAL_APP_SECRET"))
-            ? "env"
-            : (string.IsNullOrWhiteSpace(_secrets.LoadOfficialSecret()) ? "none" : "panel"),
+        ["officialSecretSource"] = !string.IsNullOrWhiteSpace(s.OfficialAppSecret) ? "env" : "none",
         ["officialSandbox"] = s.OfficialSandbox,
         ["officialWhitelistGroups"] = s.OfficialWhitelistGroups,
         ["officialWhitelistPrivates"] = s.OfficialWhitelistPrivates,

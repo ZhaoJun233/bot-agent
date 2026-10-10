@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>BotAgent.Model</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="BotAgent.Model" />
+    <Using Include="BotAgent.Services" />
+    <Using Include="BotAgent.Adapters.Net" />
+    <Using Include="BotAgent.Services.Net" />
+    <Using Include="BotAgent.Services.Model" />
+    <Using Include="BotAgent.Services.Resilience" />
+  </ItemGroup>
+</Project>

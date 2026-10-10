@@ -23,14 +23,28 @@ internal static class Program
     private static int _passed;
     private static int _failed;
 
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
+        if (await ClockContractTests.TryRunChildAsync(args) is { } childExit) return childExit;
+        if (await DatabaseContractTests.TryRunChildAsync(args) is { } databaseChildExit) return databaseChildExit;
+        if (StorageMigrationTests.TryRunChild(args) is { } storageChildExit) return storageChildExit;
+        ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-review-remediation-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
         try
         {
             AppDatabase.Initialize();
+            await RunAsync("shared database", () => DatabaseContractTests.SharedAsync(Check));
+            await RunAsync("Storage episode adoption", () => StorageMigrationTests.EpisodeAsync(Check));
+            await RunAsync("Storage bound import root", () => StorageMigrationTests.BoundRootAsync(Check));
+            await RunAsync("Storage binding and typed import", () => StorageMigrationTests.BindingAndImportAsync(Check));
+            await RunAsync("nested database write", () => DatabaseContractTests.NestedWriteAsync(Check));
+            await RunAsync("future database schema", () => DatabaseContractTests.FutureSchemaAsync(Check));
+            await RunAsync("database backup path", () => DatabaseContractTests.BackupPathAsync(Check));
+            await RunAsync("database atomicity", () => DatabaseContractTests.AtomicityAsync(Check));
+            await RunAsync("database restore", () => DatabaseContractTests.RestoreAsync(Check));
+            await RunAsync("clock propagation", () => ClockContractTests.PropagationAsync(Check));
             await RunAsync("episode IDs", EpisodeIdsAsync);
             await RunAsync("prompt version concurrency", PromptVersionsAsync);
             await RunAsync("jargon phrase limits", JargonPhraseLimitsAsync);

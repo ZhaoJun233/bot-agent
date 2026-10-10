@@ -1,184 +1,58 @@
-# Agent 4 执行手册：回复流水线与插件物理门禁短路
+# Agent-04：Engine、内部插件与受控后台任务（Why / What / How）
 
-> **文档标识**：`docs/plans/agents/04-agent-engine-and-gating.md`\
-> **执行代号**：`Agent-04` (Engine-Gating)\
-> **所属波次**：**Wave 3（核心编排波次）**\
-> **所属方案**：BotAgent 模块化重构与功能插件化演进方案 (`modular-monolith-refactoring-plan.md`)\
-> **更新时间**：2026-10-06\
+> 修订：2026-10-07，第二版；Wave 3。
+> 状态、准入、写权及证据见[执行总纲](00-orchestration-and-dependency-graph.md)。
+> 先验收 Wave 1/2 并获得代码授权；不是“立即执行”任务。
 
----
+## 一、为什么（Why）
 
-## 1. 任务目标与范围 (Objective & Scope)
+先保留已有自然对话工具循环、回复治理和后台能力，再把业务编排从宿主迁出。Providers / Actions / Evaluators 用于明确职责，不是另造一套运行框架或承诺回复速度翻倍。
 
-Agent 4 承担系统对话业务核心与流水线装配重任，彻底解决插件微内核的**两大脱节**（生命周期未挂载、流水线未物理短路）：
-1. **创建 `BotAgent.Engine` 工程**：封装消息回复处理流水线 (`ReplyPipeline.cs`)、多轮 Agent 循环 (`AgentTurnLoop.cs`)、内置工具调度 (`InlineTurnTools.cs`) 等核心业务流水线；
-2. **实现插件物理门禁短路 (Pipeline Gating - 解决脱节 2)**：在 `ReplyPipeline` 注入 `IPluginRegistry`，对 7 大预设插件（`music`、`voice`、`stickers`、`poke`、`vibes`、`profiles`、`research`）建立物理短路守卫，当插件被禁用时，彻底拦截对应分支，零外部 IO，零计算开销；
-3. **挂接插件微内核生命周期 (Lifecycle Hooking - 解决脱节 1)**：打通 `PluginManager.StartAllAsync` 与 `StopAllAsync`，在系统启动与关闭时真正触发各插件的生命周期钩子；
-4. **保持既有对话决策与模型输出一致性**：完整保留系统既有的采样策略、情绪状态机与安全审核机制。
+## 二、做成什么样（What）
 
----
+### 2.1 模块与调用边界
 
-## 2. 前置依赖与输入条件 (Prerequisites)
+- 拟建 Engine 仅引用 Core，经端口调用存储、模型、平台及 MCP；具体实现由 Headless 注入。
+- 内置插件先放 Engine 内的 Plugins 模块；Music、Voice、Stickers、Poke、Profiles、Research、Vibes 是迁移盘点对象，不是未经核验的已完成数量。
+- 复用 IBotPlugin / IPluginRegistry、现有工具目录与门禁；新增上下文/执行/评估端口前先证明现有接口不足。
+- 现有 ToolDirectory 位于 Headless 的 Services/Tools；04 负责工具目录与执行注册的迁移清单，01 维护必要的 Core 工具端口和 ToolSpec，05 只向该端口提供 MCP 工具投影，00 合入组装接入。盘点覆盖所有可达工具及显式命令入口，不以七类预设名称代替完整迁移范围。
+- 普通聊天与任务执行保留已有路由；任务模型只看当前用户、平台、会话及实例被授权的工具。
+- 发送前仍过审计与投递检查。生成文本不等于发送成功，工具返回不等于业务动作成功。
+- 步数、总时间、单调用时间和审批等待分别设预算，冻结默认值与例外；不能把所有任务一律定义为 8 秒硬终止。
 
-- **前置任务**：**Wave 2 的 Agent 2 (Model-Storage) 与 Agent 3 (Platforms) 必须全部完成并通过 DoD 验收**。
-- **输入契约**：
-  - `BotAgent.Core.dll`（领域模型与 `IPluginRegistry` 契约）
-  - `BotAgent.Model.dll`（`OpenAiClient` 与模型传输）
-  - `BotAgent.Storage.dll`（数据库与仓储接口）
-  - `BotAgent.Platforms.dll`（通道抽象）
+### 2.2 插件与审批
 
----
+禁用插件后不开始对应工具调用、外部 IO 或新后台作业。对在途动作区分“未开始可阻止”“已发出待核对”“已完成”，不能把关闭开关当作撤销既有副作用。
 
-## 3. 文件读写权属清单 (File Ownership)
+审批绑定调用者、会话/实例、工具、目标、参数摘要、有效期及策略版本。参数变化、审批过期、拒绝或权限撤销后重新检查；一次审批不授予长期无限权限。先保留现有审批语义，再补缺口。
 
-### 3.1 独占写权限（创建 / 迁移 / 修改）
-- `src/BotAgent.Engine/`（新建工程）：
-  - `src/BotAgent.Engine/BotAgent.Engine.csproj`
-  - 迁移自 `Services/Reply/**`（`ReplyPipeline.cs`、`ReplyPipeline.*.cs`、`PlainSender.cs` 等）
-  - 迁移自 `Services/Agent/**`（`AgentTurnLoop.cs`、`InlineTurnTools.cs`、`AgentOrchestrator.cs` 等，注意排除已迁往 Model 的 `OpenAiClient.cs`）
-  - 迁移自 `Services/Poke/**`、`Services/Voice/**`、`Services/Music/**`、`Services/Stickers/**`
-  - 迁移自 `Services/Plugins/**`（`PluginManager.cs` 与 `Presets/**`）
-- `BotAgent.slnx`（挂载 `BotAgent.Engine`）
-- `src/BotAgent.Headless/BotAgent.Headless.csproj`（引用 Engine）
+### 2.3 后台 Evaluator
 
-### 3.2 只读 / 严禁触碰目录
-- `src/BotAgent.Core/**`（只读）
-- `src/BotAgent.Model/**`（只读）
-- `src/BotAgent.Storage/**`（只读）
-- `src/BotAgent.Platforms/**`（只读）
-- `src/BotAgent.Headless/wwwroot/**`（归属 Agent 5）
+采用有界队列和宿主可等待的 worker，不使用无人观察的 Fire & Forget：
 
----
+- 冻结队列容量、并发上限、满载策略及重试上限；可丢弃的作业与必须持久化的作业分别定义。
+- 输入使用一致的回合快照和必要最小数据，不把后台队列或错误日志变成新的群聊外泄入口。
+- 每项有作业标识、异常处理、取消与幂等规则；同一会话要求顺序时显式串行化。
+- 停机先停止接收，按预算排空/取消，记录安全结果；不能承诺协作取消一定终止不响应的外部服务。
+- 只有适合后置的工作移出回复链；权限、发送审计和必要上下文不能为了延迟目标跳过。
 
-## 4. 核心契约与设计规范 (Specifications)
+## 三、如何实施（How）
 
-### 4.1 `BotAgent.Engine.csproj` 定义
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <RootNamespace>BotAgent.Engine</RootNamespace>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
-    <ProjectReference Include="..\BotAgent.Model\BotAgent.Model.csproj" />
-    <ProjectReference Include="..\BotAgent.Storage\BotAgent.Storage.csproj" />
-    <ProjectReference Include="..\BotAgent.Platforms\BotAgent.Platforms.csproj" />
-  </ItemGroup>
-</Project>
-```
+1. 盘点 Services/Reply、Services/Agent、插件入口及后台工作，列出哪些路径已经异步、哪些必须保序。
+2. 与 01/05/06 冻结所需 Core 端口；先设计 MCP 工具执行端口，不要求 Engine 直接引用未来 Mcp 工程。
+3. 分批迁移回复、工具及插件路径，保持行为；每批由 00 合入宿主接入，避免孤立工程“完成”。
+4. 补齐插件门禁、审批绑定及有界队列；先用合成数据验证，再比较性能基线。
+5. 验收后提交旧路径清理清单、接口版本和兼容证据。
 
-### 4.2 插件物理短路门禁设计 (Pipeline Gating)
-在 `ReplyPipeline` 构造函数注入 `IPluginRegistry plugins`，并在各个媒体与特性处理节点加入严格门禁检查：
+写权：Engine 内认领路径；旧回复/工具文件先交接。解决方案、宿主引用、组装根、Core 契约及公共测试入口按总纲处理。
 
-```csharp
-// 1. 点歌处理门禁
-private IReadOnlyList<MusicShare>? HandleInboundMedia(BotConversation conversation, QqChatMessage msg)
-{
-    var musicEnabled = _plugins.IsEnabled("preset.feature.music")
-        && policy.Feature("music", _settings.EnableMusic).Enabled;
-    if (!musicEnabled)
-    {
-        // 插件已禁用：物理短路，不执行解析，不分配异步任务
-        return null;
-    }
-    // ... 原有点歌执行逻辑
-}
+## 四、验收与停止条件
 
-// 2. 表情包库选择门禁
-if (_plugins.IsEnabled("preset.feature.stickers")
-    && platformPolicy.Feature("stickers", snapshot.EnableStickers).Enabled
-    && snapshot.StickerLibraryMax > 0)
-{
-    // 允许选取表情候选
-}
+- [ ] S36 及适用安全/回复/工具测试通过，引用、脱敏、发送审计未退化。
+- [ ] 禁用能力不会进入对应工具或外部服务，包含自然语言与显式命令入口。
+- [ ] 审批拒绝、过期、参数变化和取消等负例覆盖。
+- [ ] 队列满载、异常、重试、重复作业和停机收口有确定性合成测试。
+- [ ] 记录真实发送/工具结果，不把未知结果标为完成。
+- [ ] 若报告延迟改善，提供同负载前后基线；未测则只交付结构与行为结论。
 
-// 3. 戳一戳上下文门禁
-var pokeContext = _plugins.IsEnabled("preset.feature.poke")
-    && platformPolicy.Feature("poke", snapshot.EnablePoke).Enabled
-    && _poke.RecentlyPoked(conversation.SourceKey, TimeSpan.FromMinutes(10), Clock.Now);
-
-// 4. 云端语音合成门禁
-if (!_plugins.IsEnabled("preset.feature.voice") || !snapshot.EnableVoice)
-{
-    // 跳过语音合成与发送
-}
-```
-
-### 4.3 生命周期与启动挂载 (Lifecycle Hooking)
-确保在系统编排层或引擎启动时，统一驱动生命周期：
-```csharp
-public async Task StartAsync(CancellationToken ct)
-{
-    var context = new PluginContext(_serviceProvider);
-    await _pluginManager.StartAllAsync(context, ct);
-}
-
-public async Task StopAsync(CancellationToken ct)
-{
-    await _pluginManager.StopAllAsync(ct);
-}
-```
-
----
-
-## 5. 详细执行步骤 (Step-by-Step Instructions)
-
-### 步骤 1：创建 `BotAgent.Engine` 工程
-1. 创建目录 `src/BotAgent.Engine` 并写入 `BotAgent.Engine.csproj`；
-2. 将工程挂入 `BotAgent.slnx`。
-
-### 步骤 2：迁移流水线与预设特性代码
-1. 将 `Services/Reply/` 迁移至 `src/BotAgent.Engine/Reply/`；
-2. 将 `Services/Agent/`（排除 OpenAiClient）迁移至 `src/BotAgent.Engine/Agent/`；
-3. 将 `Services/Music/`、`Services/Voice/`、`Services/Poke/`、`Services/Stickers/` 迁移至 `src/BotAgent.Engine/Features/`；
-4. 将 `Services/Plugins/` 迁移至 `src/BotAgent.Engine/Plugins/`。
-
-### 步骤 3：植入插件短路检查 (Pipeline Gating)
-在 `ReplyPipeline.cs` 中：
-- 注入 `IPluginRegistry _plugins`；
-- 在音乐、语音、表情包、戳一戳、人设档案与氛围渲染 6 处关键分支加入 `_plugins.IsEnabled(...)` 判断；
-- 当返回 `false` 时，执行无开销早退。
-
-### 步骤 4：宿主绑定与编译验证
-1. 在 `BotAgent.Headless.csproj` 中添加 `<ProjectReference Include="..\BotAgent.Engine\BotAgent.Engine.csproj" />`；
-2. 清理 Headless 中已被移出的源码目录。
-
----
-
-## 6. 自测命令与验收标准 (Verification & DoD)
-
-### 6.1 验证命令集
-```pwsh
-# 1. 验证 Engine 独立编译
-dotnet build src/BotAgent.Engine/BotAgent.Engine.csproj -c Release
-
-# 2. 验证宿主整体编译
-dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
-
-# 3. 运行对话与回复测试套件 (S36 场景)
-$env:QQCHAT_IT_ONLY='s36'
-dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release
-dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
-
-# 4. 运行安全审计与隐私探针 (594 项)
-dotnet build tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release
-dotnet tests/BotAgent.SafetyProbe/bin/Release/net8.0/BotAgent.SafetyProbe.dll
-```
-
-### 6.2 交付验收准则 (DoD)
-- [ ] `BotAgent.Engine` 独立编译 0 报错 0 警告；
-- [ ] 针对已禁用插件的场景，对应业务功能 100% 物理跳过，无无效 API 调用；
-- [ ] `SafetyProbe` 594 项全绿；
-- [ ] S36 集成测试全部通过；
-- [ ] 插件启动与停止生命周期钩子正常受控执行。
-
----
-
-## 7. 交付物与下游交接 (Handoff Deliverables)
-
-1. 产出物：`BotAgent.Engine.dll`
-2. 状态标记：**Wave 3 完成，正式解锁 Wave 4（Agent 5: Panel-UX）**
+波次准出使用总纲证据模板；不能以“新 Engine 能编译”或固定插件数量替代运行链路验收。

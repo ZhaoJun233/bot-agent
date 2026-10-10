@@ -7,5 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\BotAgent.Headless\BotAgent.Headless.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Model\BotAgent.Model.csproj" Aliases="ModelModule" />
+    <ProjectReference Include="..\..\src\BotAgent.Storage\BotAgent.Storage.csproj" Aliases="StorageModule" />
   </ItemGroup>
 </Project>

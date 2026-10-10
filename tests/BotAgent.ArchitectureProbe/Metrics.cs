@@ -6,7 +6,8 @@ using System.Text.RegularExpressions;
 namespace BotAgent.ArchitectureProbe;
 
 /// <summary>一个花括号块（方法 / 类型 / 控制流 / 其它），行号都是 1 起。</summary>
-internal sealed record CodeBlock(string Name, BlockKind Kind, int StartLine, int EndLine)
+internal sealed record CodeBlock(string Name, BlockKind Kind, int StartLine, int EndLine,
+    int HeadOffset = 0, int OpenOffset = 0, int CloseOffset = 0)
 {
     public int Lines => EndLine - StartLine + 1;
 }
@@ -196,7 +197,7 @@ internal static class Metrics
                 if (stack.Count > 0)
                 {
                     var (blockIndex, _) = stack.Pop();
-                    blocks[blockIndex] = blocks[blockIndex] with { EndLine = LineOf(lineStarts, i) };
+                    blocks[blockIndex] = blocks[blockIndex] with { EndLine = LineOf(lineStarts, i), CloseOffset = i };
                 }
 
                 headStart = i + 1;
@@ -211,7 +212,7 @@ internal static class Metrics
             var head = Normalize(code, headStart, i);
             var (kind, name) = ClassifyHead(head);
             var index = blocks.Count;
-            blocks.Add(new CodeBlock(name, kind, LineOf(lineStarts, i), LineOf(lineStarts, i)));
+            blocks.Add(new CodeBlock(name, kind, LineOf(lineStarts, i), LineOf(lineStarts, i), headStart, i, i));
             stack.Push((index, headStart));
             headStart = i + 1;
         }
@@ -254,7 +255,18 @@ internal static class Metrics
             var at = rest.IndexOf(keyword + " ", StringComparison.Ordinal);
             if (at >= 0)
             {
-                var name = rest[(at + keyword.Length + 1)..].Split(' ', ':', '(')[0];
+                var tail = rest[(at + keyword.Length + 1)..];
+                if (keyword != "namespace")
+                {
+                    var declaration = Regex.Match(tail, @"^(?:class\s+|struct\s+)?([A-Za-z_]\w*)(\s*<[^>]+>)?");
+                    if (declaration.Success)
+                    {
+                        var parameters = declaration.Groups[2].Value;
+                        var typeName = declaration.Groups[1].Value + (parameters.Length == 0 ? "" : "`" + (parameters.Count(c => c == ',') + 1));
+                        return (BlockKind.Type, typeName);
+                    }
+                }
+                var name = tail.Split(' ', ':', '(')[0];
                 return (BlockKind.Type, name);
             }
         }
@@ -416,27 +428,24 @@ internal static class Metrics
     public static bool IsPartialType(SourceFile f, string typeName)
     {
         var owner = FindType(f, typeName);
-        if (owner is null)
-        {
-            return false;
-        }
+        return owner is not null && IsPartialType(f, owner);
+    }
 
-        for (var i = Math.Min(owner.StartLine - 1, f.Lines.Length - 1); i >= 0; i--)
-        {
-            var line = f.Lines[i];
-            if (line.Trim().Length == 0)
-            {
-                return false;   // 空行 = 已经扫过声明区（表头与类型之间的那道空行）
-            }
+    public static bool IsPartialType(SourceFile f, CodeBlock owner)
+        => Regex.IsMatch(f.CodeOnly[owner.HeadOffset..owner.OpenOffset], @"\bpartial\b");
 
-            if (line.Contains("partial", StringComparison.Ordinal) &&
-                line.Contains(typeName, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
+    /// <summary>partial 身份含工程、命名空间、外围类型与泛型元数；不会跨程序集或命名空间合并。</summary>
+    public static string TypeKey(SourceFile f, CodeBlock owner)
+    {
+        var blocks = Blocks(f);
+        var namespaces = Regex.Matches(f.CodeOnly, @"\bnamespace\s+([\w.]+)\s*([;{])")
+            .Where(m => m.Index < owner.OpenOffset && (m.Groups[2].Value == ";"
+                || blocks.Any(b => b.OpenOffset == m.Index + m.Length - 1 && b.CloseOffset > owner.CloseOffset)))
+            .Select(m => m.Groups[1].Value);
+        var parents = blocks.Where(b => b.Kind == BlockKind.Type && b.OpenOffset < owner.OpenOffset
+                && b.CloseOffset > owner.CloseOffset && !Regex.IsMatch(f.CodeOnly[b.HeadOffset..b.OpenOffset], @"\bnamespace\b"))
+            .OrderBy(b => b.OpenOffset).Select(b => b.Name);
+        return f.ProjectName + ":" + string.Join(".", namespaces.Concat(parents).Append(owner.Name));
     }
 
     /// <summary>类型的直接字段数（按「类型体内花括号深度 = 1 的语句」数）。</summary>
@@ -452,62 +461,64 @@ internal static class Metrics
             return (0, 0);
         }
 
+        return TypeSurface(f, owner);
+    }
+
+    public static (int Fields, int Methods) TypeSurface(SourceFile f, CodeBlock owner)
+    {
         var depth = 0;
         var fields = 0;
         var methods = 0;
         var statement = new System.Text.StringBuilder();
-        for (var lineNo = owner.StartLine; lineNo <= owner.EndLine && lineNo <= f.CodeOnlyLines.Length; lineNo++)
+        for (var at = owner.OpenOffset; at <= owner.CloseOffset && at < f.CodeOnly.Length; at++)
         {
-            var line = f.CodeOnlyLines[lineNo - 1];
-            foreach (var c in line)
+            var c = f.CodeOnly[at];
+            if (c == '{')
             {
-                if (c == '{')
+                depth++;
+                if (depth == 2)
                 {
-                    depth++;
-                    if (depth == 2)
+                    if (IsMethodHead(statement.ToString()))
                     {
-                        if (IsMethodHead(statement.ToString()))
-                        {
-                            methods++;
-                        }
-
-                        statement.Clear();
+                        methods++;
                     }
 
-                    continue;
-                }
-
-                if (c == '}')
-                {
-                    depth--;
                     statement.Clear();
-                    continue;
                 }
 
-                if (c == ';')
-                {
-                    if (depth == 1)
-                    {
-                        var text = statement.ToString().Trim();
-                        if (IsExpressionBodiedMethod(text))
-                        {
-                            methods++;
-                        }
-                        else if (IsFieldStatement(text))
-                        {
-                            fields++;
-                        }
+                continue;
+            }
 
-                        statement.Clear();
-                    }
+            if (c == '}')
+            {
+                depth--;
+                statement.Clear();
+                continue;
+            }
 
-                    continue;
-                }
-
+            if (c == ';')
+            {
                 if (depth == 1)
                 {
-                    statement.Append(c);
+                    var text = statement.ToString().Trim();
+                    if (IsExpressionBodiedMethod(text))
+                    {
+                        methods++;
+                    }
+                    else if (IsFieldStatement(text))
+                    {
+                        fields++;
+                    }
+
+                    statement.Clear();
                 }
+
+                continue;
+            }
+
+            if (depth == 1)
+            {
+                statement.Append(c);
             }
         }
 

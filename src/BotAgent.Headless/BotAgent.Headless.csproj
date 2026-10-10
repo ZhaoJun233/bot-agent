@@ -54,6 +54,7 @@
   <ItemGroup>
     <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
     <ProjectReference Include="..\BotAgent.Platforms\BotAgent.Platforms.csproj" />
+    <ProjectReference Include="..\BotAgent.Storage\BotAgent.Storage.csproj" Aliases="StorageModule" />
   </ItemGroup>
 
   <ItemGroup>

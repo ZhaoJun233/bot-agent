@@ -70,6 +70,8 @@ console.log("▶ 静态：DOM id 引用完整性");
 const htmlIdList = [...html.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]);
 const htmlIds = new Set(htmlIdList);
 check("DOM control ids are unique", htmlIdList.length === htmlIds.size);
+check("官方 Secret 没有面板输入控件或掩码回填", !htmlIds.has("setOfficialAppSecret")
+  && !js.includes("setOfficialAppSecret") && !js.includes("officialSecretMasked"));
 check("Platform switches exist only in the centralized policy section",
   ["setOfficialEnabled", "setFeishuEnabled", "setOfficialChatEnabled", "setPrivateChatEnabled"].every((id) => !htmlIds.has(id)));
 const jsIds = new Set([...js.matchAll(/\$\("([A-Za-z0-9_-]+)"\)/g)].map((m) => m[1]));
@@ -1007,6 +1009,8 @@ check(
 
 if (saveCall) {
   const payload = JSON.parse(saveCall.body);
+  check("真实保存请求不提交官方 Secret 或清空指令",
+    !Object.keys(payload).some((key) => /^(officialAppSecret|clearOfficialAppSecret)$/i.test(key)));
   // 设备表与平台策略是各自有契约的附加字段，不在旧的 DOM-id 表单字段集合中。
   const declaredKeys = Object.keys(payload).filter((k) => k !== "agentDevices" && k !== "platformPolicies");
   check("payload 字段数与表单一致（设备表与平台策略单独校验）", declaredKeys.length === saveFields.length,
@@ -2221,6 +2225,24 @@ check("app.js 含 Agent 配置面板 dialog 搬移与归还逻辑",
   js.includes("restoreAgentConfigPanel") &&
   js.includes("dialog.appendChild(panel)") &&
   js.includes('dialog.addEventListener("close", restoreAgentConfigPanel)'));
+
+// Official Secret is status-only even if an older response contains a masked value.
+for (const configured of [true, false, null]) {
+  RUNTIME.officialSecretConfigured = configured;
+  RUNTIME.officialSecretSource = configured === true ? "env" : "none";
+  RUNTIME.officialSecretMasked = "SYN***73";
+  await sandbox.probe.loadSettings();
+  const status = document.getElementById("officialSecretStatus")?.textContent || "";
+  check(`官方 Secret 状态 ${String(configured)} 只显示安全文案`,
+    status.includes(configured === true ? "已配置" : "未配置")
+      && !status.includes("SYN***73") && !htmlIds.has("setOfficialAppSecret"));
+}
+delete RUNTIME.officialSecretConfigured;
+delete RUNTIME.officialSecretSource;
+delete RUNTIME.officialSecretMasked;
+check("全部设置保存请求均无官方 Secret 字段", calls.filter((call) => call.method === "POST"
+  && String(call.url).includes("/api/settings")).every((call) =>
+    !Object.keys(JSON.parse(call.body)).some((key) => /^(officialAppSecret|clearOfficialAppSecret)$/i.test(key))));
 
 console.log("");
 if (failures.length === 0) {

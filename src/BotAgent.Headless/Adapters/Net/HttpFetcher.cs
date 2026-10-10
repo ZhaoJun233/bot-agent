@@ -17,10 +17,26 @@ namespace BotAgent.Adapters.Net;
 /// **为什么不做成"URL 进 / 字节出"的窄口**：这里的调用方要用**请求头**（鉴权、Accept、Content-Type）、
 /// **多段上传**（语音克隆是 multipart）与**流式读**（音频/图片边下边判大小）。
 /// 窄口要么丢掉这些，要么自己重写一个 HttpClient —— 后者更糟。所以端口刻意**镜像 HttpClient 的
-/// 被用到的那一小撮 API**（继承自平台侧 <c>IPlatformHttpFetcher</c>），换掉实现时调用点一行都不用改。
+/// 被用到的那一小撮 API**（见下面 5 个方法），换掉实现时调用点一行都不用改。
 /// </summary>
 public interface IHttpFetcher : BotAgent.Platforms.Net.IPlatformHttpFetcher
 {
+    /// <summary>这个客户端的超时（面板/日志要能如实显示）。</summary>
+    TimeSpan Timeout { get; }
+
+    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct = default);
+
+    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken ct = default);
+
+    Task<HttpResponseMessage> GetAsync(string url, CancellationToken ct = default);
+
+    Task<HttpResponseMessage> GetAsync(Uri url, HttpCompletionOption completionOption, CancellationToken ct = default);
+
+    Task<HttpResponseMessage> GetAsync(Uri url, CancellationToken ct = default);
+
+    Task<HttpResponseMessage> GetAsync(string url, HttpCompletionOption completionOption, CancellationToken ct = default);
+
+    Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default);
 }
 
 /// <summary>

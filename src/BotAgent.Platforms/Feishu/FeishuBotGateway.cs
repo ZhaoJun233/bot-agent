@@ -32,6 +32,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     private readonly BotAgent.Platforms.Net.IPlatformHttpFetcher _http;
     private readonly FeishuIdMap _ids;
     private readonly Action<string>? _log;
+    private readonly IWebhookDedupStore? _dedupStore;
 
     private readonly ConcurrentDictionary<string, DateTimeOffset> _seen = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<FeishuOutboxItem> _outbox = new();
@@ -42,11 +43,15 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     private bool _disposed;
 
     public FeishuBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, Action<string>? log = null, FeishuIdMap? ids = null)
+        : this(box, http, log, ids, null) { }
+
+    public FeishuBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, Action<string>? log, FeishuIdMap? ids, IWebhookDedupStore? dedupStore)
     {
         _box = box ?? throw new ArgumentNullException(nameof(box));
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _ids = ids ?? new FeishuIdMap();
         _log = log;
+        _dedupStore = dedupStore;
 
         Context = new PlatformContext(PlatformId.Feishu, AccountScope.Default, "feishu-main");
         Capabilities = PlatformCapabilities.FeishuTextOnly;
@@ -264,8 +269,10 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
         // A persistence failure must remain retryable; consume dedup markers only after binding succeeds.
         ct.ThrowIfCancellationRequested();
-        if ((!string.IsNullOrWhiteSpace(settings.FeishuEncryptKey) && !TryMarkSeen($"nonce:{nonce}"))
-            || !TryMarkSeen(dedupKey))
+        var registration = TryRegisterWebhook(dedupKey, nonce, !string.IsNullOrWhiteSpace(settings.FeishuEncryptKey));
+        if (registration.Unavailable)
+            return (false, 503, "{\"error\":\"dedup_unavailable\"}");
+        if (!registration.Registered)
             return (true, 200, "{\"code\":0,\"msg\":\"duplicate\"}");
 
         var qqMsg = new QqChatMessage(
@@ -638,7 +645,23 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         return supplied.Length == expected.Length && CryptographicOperations.FixedTimeEquals(expected, supplied);
     }
 
-    private bool TryMarkSeen(string key)
+    private (bool Registered, bool Unavailable) TryRegisterWebhook(string eventKey, string? nonce, bool signed)
+    {
+        var keys = signed ? new[] { $"nonce:{nonce}", eventKey } : new[] { eventKey };
+        try
+        {
+            if (!TryMarkSeen(keys)) return (false, false);
+            if (LastErrorCode == "dedup_unavailable") LastErrorCode = null;
+            return (true, false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LastErrorCode = "dedup_unavailable";
+            return (false, true);
+        }
+    }
+
+    private bool TryMarkSeen(IReadOnlyList<string> keys)
     {
         var now = Clock.UtcNow;
 
@@ -658,17 +681,14 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
             }
         }
 
-        if (_seen.TryGetValue(key, out var existing) && now - existing <= SeenTtl)
-        {
-            return false;
-        }
+        foreach (var key in keys)
+            if (_seen.TryGetValue(key, out var existing) && now - existing <= SeenTtl)
+                return false;
 
-        if (!BotAgent.Platforms.Persistence.PlatformDedupStore.TryRegisterFeishuWebhook(key, now, SeenTtl))
-        {
-            return false;
-        }
+        var store = _dedupStore ?? throw new InvalidOperationException("Webhook dedup store is not configured.");
+        if (!store.TryRegister(keys, now, SeenTtl)) return false;
 
-        _seen.TryAdd(key, now);
+        foreach (var key in keys) _seen[key] = now;
         return true;
     }
 

@@ -345,6 +345,7 @@ public sealed class AppSettings : BotAgent.Platforms.PlatformOptions
     /// <summary>同时向模型发起的最大请求数（按会话串行、跨会话并发）。</summary>
     public int MaxConcurrentReplies { get; set; } = 2;
 
+
     // ---------- 语音消息（TTS）----------
 
     /// <summary>
@@ -404,6 +405,7 @@ public sealed class AppSettings : BotAgent.Platforms.PlatformOptions
 
     /// <summary>云端模型名（面板可改；留空 = 用容器默认，如 MiniMax 的 speech-2.8-hd）。</summary>
     public string TtsModel { get; set; } = string.Empty;
+
 
     // ---------- 链接与分享卡片 ----------
 
@@ -786,6 +788,7 @@ public sealed class AppSettings : BotAgent.Platforms.PlatformOptions
     /// </summary>
     public int MaxAgentSteps { get; set; } = 1;
 
+
     /// <summary>
     /// `//` 那一路要不要**过统一闸门**（批次 A 第 2 步的收尾）。**默认关 = 与今天逐字一致**：
     /// 关着时 `//` 仍走它自己的字符串白名单（<c>ParseTools</c> + <c>QqActionCatalog.ParseAllowed</c>）。
@@ -889,7 +892,7 @@ public sealed class AppSettings : BotAgent.Platforms.PlatformOptions
     // ---------- 快照 ----------
 
     /// <summary>
-    /// 取一份配置快照（标量浅拷贝；嵌套的平台策略深拷贝，副本独立）。两个用途：
+    /// 取一份配置快照（标量浅拷贝；平台策略及其嵌套集合独立复制）。两个用途：
     ///   • **读**：一次处理开始时固定它，处理过程中一律读快照 —— 面板热更新只影响后续处理，
     ///     不会改到在途请求（V3 §5.3）。见 BotAgentHost.GenerateReplyAsync。
     ///   • **写**：<see cref="SettingsBox.Apply" /> 在副本上改完再整体发布（review-findings #4）。

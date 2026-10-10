@@ -15,12 +15,20 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# 先只拷 csproj：本项目零 NuGet 依赖，这一层可长期命中缓存
+# 先拷宿主及实际项目引用的 csproj，缓存 NuGet 还原层
+COPY src/BotAgent.Core/BotAgent.Core.csproj src/BotAgent.Core/
+COPY src/BotAgent.Platforms/BotAgent.Platforms.csproj src/BotAgent.Platforms/
+COPY src/BotAgent.Storage/BotAgent.Storage.csproj src/BotAgent.Storage/
 COPY src/BotAgent.Headless/BotAgent.Headless.csproj src/BotAgent.Headless/
 RUN dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
 
-# 再拷源码
+# 再拷实际依赖的源码；保留 csproj 所要求的仓库相对目录
+COPY src/BotAgent.Core/ src/BotAgent.Core/
+COPY src/BotAgent.Platforms/ src/BotAgent.Platforms/
+COPY src/BotAgent.Storage/ src/BotAgent.Storage/
 COPY src/BotAgent.Headless/ src/BotAgent.Headless/
+# 宿主嵌入这两个脚本，不拷贝其它 tools、数据或环境配置
+COPY tools/pi-bridge.py tools/server-files.py tools/
 
 # UseAppHost=false：镜像里直接用 dotnet 启动，免得多带一个 apphost 可执行文件
 RUN dotnet publish src/BotAgent.Headless/BotAgent.Headless.csproj \

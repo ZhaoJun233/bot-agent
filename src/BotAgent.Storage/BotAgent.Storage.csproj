@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>BotAgent.Storage</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="BotAgent.Storage" />
+    <Using Include="BotAgent.Adapters.Persistence" />
+  </ItemGroup>
+</Project>

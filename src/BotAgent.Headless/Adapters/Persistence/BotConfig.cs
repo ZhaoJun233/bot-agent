@@ -7,6 +7,7 @@ namespace BotAgent.Adapters.Persistence;
 /// <summary>
 /// 十二要素配置：settings.json 提供默认值，环境变量覆盖。
 /// 支持 <c>XXX_FILE</c> 形式读取 Docker secrets（/run/secrets/*），避免密钥出现在环境变量里。
+/// QQ 官方 Secret 例外：仅使用 QQCHAT_OFFICIAL_APP_SECRET 的直接环境值，不读取文件或旧仓储。
 ///
 /// 优先级分三类（重要）：
 ///   • 基础设施（协议端地址、Token、QQ 号…）：**环境变量永远优先** —— 它们属于部署环境职责。
@@ -66,7 +67,7 @@ public static class BotConfig
         s.NapCatWebUiUrl = Str("BOTAGENT_NAPCAT_WEBUI_URL", "QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
         s.NapCatWebUiToken = Secret("BOTAGENT_NAPCAT_WEBUI_TOKEN", "QQCHAT_NAPCAT_WEBUI_TOKEN") ?? s.NapCatWebUiToken;
         s.FeishuAppSecret = Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET") ?? s.FeishuAppSecret;
-        s.OfficialAppSecret = Secret("QQCHAT_OFFICIAL_APP_SECRET") ?? s.OfficialAppSecret;
+        s.OfficialAppSecret = Str("QQCHAT_OFFICIAL_APP_SECRET") ?? string.Empty;
         s.FeishuEncryptKey = Secret("BOTAGENT_FEISHU_ENCRYPT_KEY", "QQCHAT_FEISHU_ENCRYPT_KEY") ?? s.FeishuEncryptKey;
         s.VerboseLog = Bool("BOTAGENT_VERBOSE", "QQCHAT_VERBOSE") ?? s.VerboseLog;
     }
@@ -420,12 +421,7 @@ public static class BotConfig
     {
         SecretsStore.Init(AppPaths.RuntimeRoot);
 
-    // 密钥库里存着的官方通道 AppSecret（面板填的）—— 环境变量优先，其次是这里。
-    // 必须在 SecretsStore.Init 之后读（前面那堆 env 种子跑得比 Init 早）。
-    if (string.IsNullOrWhiteSpace(s.OfficialAppSecret) && new SecretsStore().LoadOfficialSecret() is { Length: > 0 } storedSecret)
-    {
-        s.OfficialAppSecret = storedSecret;
-    }
+    // Historical official secret rows remain untouched; they are never a runtime configuration source.
     if (string.IsNullOrWhiteSpace(s.FeishuAppSecret) && new SecretsStore().LoadFeishuSecret() is { Length: > 0 } storedFeishuSecret)
     {
         s.FeishuAppSecret = storedFeishuSecret;

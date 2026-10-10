@@ -712,8 +712,8 @@
               <input type="text" id="setOfficialAppId" maxlength="40" placeholder="102xxxxxx" />
             </div>
             <div class="field">
-              <label>AppSecret<span class="hint">存密钥库、只回显掩码（与 TTS 密钥同规矩）；<b>留空 = 不改</b>。环境变量优先，改了要重启才生效（下面有一键重启）</span></label>
-              <input type="password" id="setOfficialAppSecret" maxlength="200" placeholder="还没配，在这里填一个（留空 = 不改）" autocomplete="off" />
+              <label>AppSecret<span class="hint">仅从部署环境变量 QQCHAT_OFFICIAL_APP_SECRET 读取；面板不接收、不回显。修改环境变量后重启生效，旧面板密钥记录不再使用。</span></label>
+              <p class="path-hint" id="officialSecretStatus" role="status">等待配置状态（不显示密钥）</p>
             </div>
             <div class="field">
               <label>环境<span class="hint">沙箱只能收/发<b>沙箱群与沙箱单聊</b>（调试用）—— <b>正式群里 @ 它不会有任何反应</b>：平台不推送，日志里也不会出现任何行。要在正式群用，把这里取消勾选后重启</span></label>
