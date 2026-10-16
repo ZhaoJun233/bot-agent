@@ -1,3 +1,5 @@
+extern alias StorageModule;
+
 using System.Net;
 using System.Net.WebSockets;
 using System.Reflection;
@@ -14,11 +16,469 @@ using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Settings;
 using BotAgent.Adapters.Persistence;
+using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
 
 namespace BotAgent.Adapters.Panel;
 
 public sealed partial class WebUiServer
 {
+    /// <summary>Only the 140 scalar inputs; composite device/policy plans are assembled separately.</summary>
+    private static ConfigurationPatch ParseLegacyScalarFields(JsonObject body)
+        => ParseLegacyFields(body, default, default);
+
+    private static ConfigurationPatch ParseLegacyFields(JsonObject body,
+        FieldEdit<ImmutableArray<DeviceConfiguration>> devices,
+        FieldEdit<ImmutableArray<PlatformPolicyEntry>> policies)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        return new(ParseLegacyBehaviorFields(body), ParseLegacyModelFields(body), ParseLegacyAgentFieldsWithDevices(body, devices),
+            ParseLegacyPlatformFieldsWithPolicies(body, policies), ParseLegacyVoiceFields(body), ParseLegacyMusicFields(body),
+            ParseLegacyReportingFields(body), null);
+    }
+
+    private static BehaviorChanges ParseLegacyBehaviorFields(JsonObject body)
+        => new()
+        {
+            AiDesire = LegacyField(body, "aiDesire", node => Math.Clamp(node.GetValue<int>(), 0, 100)),
+            AiModeEnabled = LegacyField(body, "aiModeEnabled", node => node.GetValue<bool>()),
+            ApprovalApprovers = LegacyField(body, "approvalApprovers", node => LegacyTruncate((node.GetValue<string>() ?? string.Empty).Trim(), 300)),
+            BotPersona = LegacyField(body, "botPersona", node => node.GetValue<string>() ?? string.Empty),
+            EnableApprovals = LegacyField(body, "enableApprovals", node => node.GetValue<bool>()),
+            EnableAtmosphereDamping = LegacyField(body, "enableAtmosphereDamping", node => node.GetValue<bool>()),
+            EnableLinkPreview = LegacyField(body, "enableLinkPreview", node => node.GetValue<bool>()),
+            EnableParticipationGating = LegacyField(body, "enableParticipationGating", node => node.GetValue<bool>()),
+            EnablePoke = LegacyField(body, "enablePoke", node => node.GetValue<bool>()),
+            EnableProactive = LegacyField(body, "enableProactive", node => node.GetValue<bool>()),
+            EnableProfileSummary = LegacyField(body, "enableProfileSummary", node => node.GetValue<bool>()),
+            EnableQuestions = LegacyField(body, "enableQuestions", node => node.GetValue<bool>()),
+            EnableStickers = LegacyField(body, "enableStickers", node => node.GetValue<bool>()),
+            EnableWebSearch = LegacyField(body, "enableWebSearch", node => node.GetValue<bool>()),
+            FilterActionNarration = LegacyField(body, "filterActionNarration", node => node.GetValue<bool>()),
+            GroupCooldownSeconds = LegacyField(body, "groupCooldownSeconds", node => Math.Max(0, node.GetValue<int>())),
+            IdleFallbackSeconds = LegacyField(body, "idleFallbackSeconds", node => Math.Max(0, node.GetValue<int>())),
+            IgnoreBracketMessages = LegacyField(body, "ignoreBracketMessages", node => node.GetValue<bool>()),
+            LinkPreviewMax = LegacyField(body, "linkPreviewMax", node => Math.Clamp(node.GetValue<int>(), 0, 5)),
+            LinkPreviewTimeoutSeconds = LegacyField(body, "linkPreviewTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 2, 30)),
+            MaxAgentSteps = LegacyField(body, "maxAgentSteps", node => Math.Clamp(node.GetValue<int>(), 1, 3)),
+            MaxConcurrentReplies = LegacyField(body, "maxConcurrentReplies", node => Math.Clamp(node.GetValue<int>(), 1, 16)),
+            MaxContextMessages = LegacyField(body, "maxContextMessages", node => Math.Clamp(node.GetValue<int>(), 10, 1000)),
+            MaxMessagesPerConversation = LegacyField(body, "maxMessagesPerConversation", node => Math.Clamp(node.GetValue<int>(), 20, 100000)),
+            MaxProfileChars = LegacyField(body, "maxProfileChars", node => Math.Clamp(node.GetValue<int>(), 0, 20000)),
+            MoodTtlSeconds = LegacyField(body, "moodTtlSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400 * 7)),
+            ParticipationCooldownSeconds = LegacyField(body, "participationCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 600)),
+            ParticipationMaxActiveLifetimeSeconds = LegacyField(body, "participationMaxActiveLifetimeSeconds", node => Math.Clamp(node.GetValue<int>(), 30, 3600)),
+            ParticipationMaxConsecutiveReplies = LegacyField(body, "participationMaxConsecutiveReplies", node => Math.Clamp(node.GetValue<int>(), 1, 10)),
+            ParticipationMaxExitingLifetimeSeconds = LegacyField(body, "participationMaxExitingLifetimeSeconds", node => Math.Clamp(node.GetValue<int>(), 10, 3600)),
+            ParticipationProbingMaxReplies = LegacyField(body, "participationProbingMaxReplies", node => Math.Clamp(node.GetValue<int>(), 1, 3)),
+            PokeCooldownSeconds = LegacyField(body, "pokeCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
+            PrivateCooldownSeconds = LegacyField(body, "privateCooldownSeconds", node => Math.Max(0, node.GetValue<int>())),
+            ProactiveCooldownSeconds = LegacyField(body, "proactiveCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 60, 86400)),
+            ProactiveQuietSeconds = LegacyField(body, "proactiveQuietSeconds", node => Math.Clamp(node.GetValue<int>(), 1, 3600)),
+            ProfileLookupCount = LegacyField(body, "profileLookupCount", node => Math.Clamp(node.GetValue<int>(), 0, 50)),
+            ProfileSummaryIntervalSeconds = LegacyField(body, "profileSummaryIntervalSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
+            ProfileSummaryLines = LegacyField(body, "profileSummaryLines", node => Math.Clamp(node.GetValue<int>(), 0, 50)),
+            ProfileSummaryMaxChars = LegacyField(body, "profileSummaryMaxChars", node => Math.Clamp(node.GetValue<int>(), 40, 2000)),
+            ProfileSummaryThreshold = LegacyField(body, "profileSummaryThreshold", node => Math.Clamp(node.GetValue<int>(), 5, 500)),
+            ScenarioPreset = LegacyField(body, "scenarioPreset", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            SegmentDelayMs = LegacyField(body, "segmentDelayMs", node => Math.Max(0, node.GetValue<int>())),
+            SplitReplies = LegacyField(body, "splitReplies", node => node.GetValue<bool>()),
+            StickerCandidates = LegacyField(body, "stickerCandidates", node => Math.Clamp(node.GetValue<int>(), 0, 20)),
+            StickerCooldownSeconds = LegacyField(body, "stickerCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
+            StickerCurateIntervalSeconds = LegacyField(body, "stickerCurateIntervalSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
+            StickerLibraryMax = LegacyField(body, "stickerLibraryMax", node => Math.Clamp(node.GetValue<int>(), 0, 2000)),
+            SuitabilityThreshold = LegacyField(body, "suitabilityThreshold", node => Math.Clamp(node.GetValue<int>(), 0, 100)),
+            WebSearchCooldownSeconds = LegacyField(body, "webSearchCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
+            WebSearchMaxResults = LegacyField(body, "webSearchMaxResults", node => Math.Clamp(node.GetValue<int>(), 1, 10)),
+            WebSearchSources = LegacyField(body, "webSearchSources", node => node.GetValue<string>().Trim()),
+            WebSearchTimeoutSeconds = LegacyField(body, "webSearchTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 5, 60)),
+            WebSearchUseModelSearch = LegacyField(body, "webSearchUseModelSearch", node => node.GetValue<bool>()),
+        };
+
+    private static ModelChanges ParseLegacyModelFields(JsonObject body)
+        => new()
+        {
+            AdaptiveSamplingEnabled = LegacyField(body, "adaptiveSamplingEnabled", node => node.GetValue<bool>()),
+            DefaultTemperature = LegacyField(body, "defaultTemperature", node => Math.Clamp(node.GetValue<double>(), 0.0, 2.0)),
+            DefaultTopP = LegacyField(body, "defaultTopP", node => Math.Clamp(node.GetValue<double>(), 0.0, 1.0)),
+            EmotionalTemperature = LegacyField(body, "emotionalTemperature", node => Math.Clamp(node.GetValue<double>(), 0.0, 2.0)),
+            EmotionalTopP = LegacyField(body, "emotionalTopP", node => Math.Clamp(node.GetValue<double>(), 0.0, 1.0)),
+            FastModel = ParseLegacyFastModel(body),
+            FastReply = LegacyField(body, "fastReply", node => node.GetValue<bool>()),
+            FastThinkingBudget = ParseLegacyThinkingText(body, "fastThinkingBudget", true),
+            FastThinkingCustomBudget = ParseLegacyThinkingText(body, "fastThinkingCustomBudget", false),
+            MaxTokens = LegacyField(body, "maxTokens", node => Math.Clamp(node.GetValue<int>(), 64, 32000)),
+            Model = ParseLegacyOverride(body, "model", false),
+            ModelBaseUrl = ParseLegacyOverride(body, "modelBaseUrl", true),
+            RationalTemperature = LegacyField(body, "rationalTemperature", node => Math.Clamp(node.GetValue<double>(), 0.0, 2.0)),
+            RationalTopP = LegacyField(body, "rationalTopP", node => Math.Clamp(node.GetValue<double>(), 0.0, 1.0)),
+            ThinkingBudget = ParseLegacyThinkingText(body, "thinkingBudget", true),
+            ThinkingCustomBudget = ParseLegacyThinkingText(body, "thinkingCustomBudget", false),
+        };
+
+    private static AgentChanges ParseLegacyAgentFields(JsonObject body)
+        => ParseLegacyAgentFieldsWithDevices(body, default);
+
+    private static AgentChanges ParseLegacyAgentFieldsWithDevices(JsonObject body,
+        FieldEdit<ImmutableArray<DeviceConfiguration>> devices)
+        => new()
+        {
+            AgentDevices = devices,
+            AgentAllowedUsers = LegacyField(body, "agentAllowedUsers", node => node.GetValue<string>() ?? string.Empty),
+            AgentMaxQueued = LegacyField(body, "agentMaxQueued", node => Math.Clamp(node.GetValue<int>(), 1, 20)),
+            AgentModel = LegacyField(body, "agentModel", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            AgentPrefix = LegacyField(body, "agentPrefix", node => (node.GetValue<string>() ?? "//").Trim()),
+            AgentProgressSeconds = LegacyField(body, "agentProgressSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 3600)),
+            AgentPrompt = LegacyField(body, "agentPrompt", node => LegacyTruncate((node.ToString() ?? string.Empty).Trim(), 8000)),
+            AgentReasoningEffort = LegacyField(body, "agentReasoningEffort", node => LegacyReasoningEffort(node.GetValue<string>())),
+            AgentReasoningLevels = LegacyField(body, "agentReasoningLevels", node => LegacyTruncate(node.GetValue<string>() ?? string.Empty, 1000)),
+            AgentReplyMaxChars = LegacyField(body, "agentReplyMaxChars", node => Math.Clamp(node.GetValue<int>(), 200, 3000)),
+            AgentServerBaseUrl = ParseLegacyAgentBaseUrl(body),
+            AgentServerCommandTimeoutSeconds = LegacyField(body, "agentServerCommandTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 5, 300)),
+            AgentServerDocker = LegacyField(body, "agentServerDocker", node => node.GetValue<bool>()),
+            AgentServerKeepContext = LegacyField(body, "agentServerKeepContext", node => node.GetValue<bool>()),
+            AgentServerMaxSteps = LegacyField(body, "agentServerMaxSteps", node => Math.Clamp(node.GetValue<int>(), 1, 30)),
+            AgentServerModel = LegacyField(body, "agentServerModel", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            AgentServerQqActions = ParseLegacyQqActions(body),
+            AgentServerTools = LegacyField(body, "agentServerTools", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            AgentServerUseGate = LegacyField(body, "agentServerUseGate", node => node.GetValue<bool>()),
+            AgentServerWorkDir = LegacyField(body, "agentServerWorkDir", node => (node.GetValue<string>() ?? "/data").Trim()),
+            AgentTarget = LegacyField(body, "agentTarget", node => (node.GetValue<string>() ?? "auto").Trim()),
+            AgentTimeoutSeconds = LegacyField(body, "agentTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 30, 7200)),
+            AgentTools = LegacyField(body, "agentTools", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            AgentWorkDir = LegacyField(body, "agentWorkDir", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            EnableAgentBridge = LegacyField(body, "enableAgentBridge", node => node.GetValue<bool>()),
+            EnableAgentMask = LegacyField(body, "enableAgentMask", node => node.GetValue<bool>()),
+            EnableHostAgent = LegacyField(body, "enableHostAgent", node => node.GetValue<bool>()),
+            EnableServerAgent = LegacyField(body, "enableServerAgent", node => node.GetValue<bool>()),
+            PanelDeployEnabled = LegacyField(body, "panelDeployEnabled", node => node.GetValue<bool>()),
+            PanelDeployUrl = LegacyField(body, "panelDeployUrl", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+        };
+
+    private static PlatformChanges ParseLegacyPlatformFields(JsonObject body)
+        => ParseLegacyPlatformFieldsWithPolicies(body, default);
+
+    private static PlatformChanges ParseLegacyPlatformFieldsWithPolicies(JsonObject body,
+        FieldEdit<ImmutableArray<PlatformPolicyEntry>> policies)
+        => new()
+        {
+            PlatformPolicies = policies,
+            FeishuApiBase = LegacyField(body, "feishuApiBase", node => node.GetValue<string>().Trim()),
+            FeishuAppId = LegacyField(body, "feishuAppId", node => node.GetValue<string>().Trim()),
+            FeishuEnabled = LegacyField(body, "feishuEnabled", node => node.GetValue<bool>()),
+            FeishuWhitelist = LegacyField(body, "feishuWhitelist", node => node.GetValue<string>().Trim()),
+            LocalChannelIds = LegacyField(body, "localChannelIds", node => node.GetValue<string>() ?? string.Empty),
+            MessageWhitelist = LegacyField(body, "messageWhitelist", node => node.GetValue<string>() ?? string.Empty),
+            OfficialAppId = LegacyField(body, "officialAppId", node => node.GetValue<string>().Trim()),
+            OfficialChatEnabled = LegacyField(body, "officialChatEnabled", node => node.GetValue<bool>()),
+            OfficialEnabled = LegacyField(body, "officialEnabled", node => node.GetValue<bool>()),
+            OfficialSandbox = LegacyField(body, "officialSandbox", node => node.GetValue<bool>()),
+            OfficialWhitelistGroups = LegacyField(body, "officialWhitelistGroups", node => node.GetValue<string>().Trim()),
+            OfficialWhitelistPrivates = LegacyField(body, "officialWhitelistPrivates", node => node.GetValue<string>().Trim()),
+            PrivateChatEnabled = LegacyField(body, "privateChatEnabled", node => node.GetValue<bool>()),
+            WhitelistGroups = LegacyField(body, "whitelistGroups", node => node.GetValue<string>() ?? string.Empty),
+            WhitelistPrivates = LegacyField(body, "whitelistPrivates", node => node.GetValue<string>() ?? string.Empty),
+        };
+
+    private static VoiceChanges ParseLegacyVoiceFields(JsonObject body)
+        => new()
+        {
+            EnableVoice = LegacyField(body, "enableVoice", node => node.GetValue<bool>()),
+            TtsApiBase = LegacyField(body, "ttsApiBase", node => node.GetValue<string>().Trim()),
+            TtsModel = LegacyField(body, "ttsModel", node => node.GetValue<string>().Trim()),
+            TtsProvider = LegacyField(body, "ttsProvider", node => node.GetValue<string>().Trim()),
+            TtsServiceUrl = LegacyField(body, "ttsServiceUrl", node => node.GetValue<string>().Trim()),
+            VoiceEagerness = LegacyField(body, "voiceEagerness", node => Math.Clamp(node.GetValue<int>(), 0, 100)),
+            VoiceEmotion = LegacyField(body, "voiceEmotion", node => (node.GetValue<string>() ?? string.Empty).Trim()),
+            VoiceMaxChars = LegacyField(body, "voiceMaxChars", node => Math.Clamp(node.GetValue<int>(), 10, 300)),
+            VoiceName = LegacyField(body, "voiceName", node => node.GetValue<string>().Trim()),
+            VoicePitch = LegacyField(body, "voicePitch", node => Math.Clamp(node.GetValue<int>(), -12, 12)),
+            VoiceSpeed = LegacyField(body, "voiceSpeed", node => Math.Clamp(node.GetValue<int>(), 50, 200)),
+            VoiceVol = LegacyField(body, "voiceVol", node => Math.Clamp(node.GetValue<int>(), 0, 1000)),
+        };
+
+    private static MusicChanges ParseLegacyMusicFields(JsonObject body)
+        => new()
+        {
+            EnableMusic = LegacyField(body, "enableMusic", node => node.GetValue<bool>()),
+            MusicBitrate = LegacyField(body, "musicBitrate", node => Math.Clamp(node.GetValue<int>(), 32, 320)),
+            MusicKeepAudio = LegacyField(body, "musicKeepAudio", node => node.GetValue<bool>()),
+            MusicLibraryMax = LegacyField(body, "musicLibraryMax", node => Math.Clamp(node.GetValue<int>(), 10, 5000)),
+            MusicListenCooldownSeconds = LegacyField(body, "musicListenCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
+            MusicMaxAnalysisSeconds = LegacyField(body, "musicMaxAnalysisSeconds", node => Math.Clamp(node.GetValue<int>(), 20, 600)),
+            MusicMaxDownloadMb = LegacyField(body, "musicMaxDownloadMb", node => Math.Clamp(node.GetValue<int>(), 1, 64)),
+            MusicNoteTtlDays = LegacyField(body, "musicNoteTtlDays", node => Math.Clamp(node.GetValue<int>(), 1, 365)),
+            MusicSendAudioToModel = LegacyField(body, "musicSendAudioToModel", node => node.GetValue<bool>()),
+            MusicSources = LegacyField(body, "musicSources", node => node.GetValue<string>()),
+            MusicUnderstandModel = LegacyField(body, "musicUnderstandModel", node => node.GetValue<string>().Trim()),
+            NeteaseBaseUrl = LegacyField(body, "neteaseBaseUrl", node => node.GetValue<string>().Trim()),
+        };
+
+    private static ReportingChanges ParseLegacyReportingFields(JsonObject body)
+        => new()
+        {
+            HealthReportEnabled = LegacyField(body, "healthReportEnabled", node => node.GetValue<bool>()),
+            HealthReportTargets = LegacyField(body, "healthReportTargets", node => (node.ToString() ?? string.Empty).Trim()),
+            HealthReportTime = ParseLegacyHealthClock(body),
+        };
+
+    private static FieldEdit<T> LegacyField<T>(JsonObject body, string key, Func<JsonNode, T> parse)
+        => body[key] is { } node ? FieldEdit<T>.Set(parse(node)) : FieldEdit<T>.Keep();
+
+    /// <summary>The legacy UI posts exactly six fields; schema identities are never client credentials.</summary>
+    private static FieldEdit<ImmutableArray<DeviceConfiguration>> ParseLegacyDeviceFields(JsonObject body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        return body["agentDevices"] is { } node
+            ? FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(SettingsStore.ParseLegacyDevices(node.GetValue<string>(), false))
+            : FieldEdit<ImmutableArray<DeviceConfiguration>>.Keep();
+    }
+
+    private static string LegacyTruncate(string value, int maximum)
+        => value.Length > maximum ? value[..maximum] : value;
+
+    private static string LegacyReasoningEffort(string? raw)
+    {
+        var value = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        return value is "" or "default" ? "auto" : value;
+    }
+
+    private static FieldEdit<string> ParseLegacyFastModel(JsonObject body)
+        => body["fastModel"] is JsonValue value && value.TryGetValue<string>(out var text)
+            ? FieldEdit<string>.Set((text ?? string.Empty).Trim()) : FieldEdit<string>.Keep();
+
+    private static FieldEdit<string> ParseLegacyThinkingText(JsonObject body, string key, bool lowercase)
+    {
+        if (body[key] is not { } node || node.GetValue<string>() is not { Length: > 0 } text)
+            return FieldEdit<string>.Keep();
+        var normalized = text.Trim();
+        return FieldEdit<string>.Set(lowercase ? normalized.ToLowerInvariant() : normalized);
+    }
+
+    private static FieldEdit<string> ParseLegacyOverride(JsonObject body, string key, bool isUrl)
+    {
+        if (body[key] is not { } node) return FieldEdit<string>.Keep();
+        var text = (node.GetValue<string>() ?? string.Empty).Trim();
+        if (text.Length == 0) return FieldEdit<string>.Clear();
+        if (isUrl && (!Uri.TryCreate(text, UriKind.Absolute, out var parsed)
+            || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)))
+            throw new ArgumentException("invalid_legacy_model_endpoint");
+        return FieldEdit<string>.Set(text);
+    }
+
+    private static FieldEdit<string> ParseLegacyAgentBaseUrl(JsonObject body)
+    {
+        if (body["agentServerBaseUrl"] is not { } node) return FieldEdit<string>.Keep();
+        var text = (node.GetValue<string>() ?? string.Empty).Trim();
+        if (text.Length != 0 && (!Uri.TryCreate(text, UriKind.Absolute, out var parsed)
+            || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)))
+            return FieldEdit<string>.Keep();
+        return FieldEdit<string>.Set(text);
+    }
+
+    private static FieldEdit<string> ParseLegacyHealthClock(JsonObject body)
+    {
+        if (body["healthReportTime"] is not { } node) return FieldEdit<string>.Keep();
+        var text = (node.ToString() ?? string.Empty).Trim();
+        if (text.Length == 0 || !(text.Replace('：', ':').Contains(':') || text.Length == 4))
+            return FieldEdit<string>.Keep();
+        var (hour, minute) = AppSettings.ParseHealthReportClock(text);
+        return FieldEdit<string>.Set($"{hour:00}:{minute:00}");
+    }
+
+    private static FieldEdit<string> ParseLegacyQqActions(JsonObject body)
+    {
+        if (body["agentServerQqActions"] is not { } node) return FieldEdit<string>.Keep();
+        var raw = (node.GetValue<string>() ?? string.Empty).Trim();
+        if (raw.Length == 0 || raw is "all" or "*" or "全部" or "所有") return FieldEdit<string>.Set(raw);
+        var names = new List<string>();
+        foreach (var piece in raw.Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' },
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            var canonical = QqActionCatalog.Canonical(piece.Trim());
+            if (canonical is not null && !names.Contains(canonical)) names.Add(canonical);
+        }
+        return FieldEdit<string>.Set(string.Join(",", names));
+    }
+    /// <summary>Owned write-only legacy input, never a response DTO or an application result.</summary>
+    private sealed class LegacySecretPlan : IDisposable
+    {
+        private readonly ImmutableArray<SensitiveInput> _owned;
+        public ConfigurationResultCode Code { get; }
+        public string? ErrorCode { get; }
+        public ImmutableArray<SecretEdit> Secrets { get; }
+        public FieldEdit<string> Mood { get; }
+        public bool TtsProjectionRequested { get; }
+        public ConfigurationPatch? Changes { get; private set; }
+
+        internal void AttachChanges(ConfigurationPatch changes)
+        {
+            ArgumentNullException.ThrowIfNull(changes);
+            if (Code != ConfigurationResultCode.Ok || Changes is not null)
+                throw new InvalidOperationException("legacy_plan_already_assigned");
+            Changes = changes;
+        }
+
+        internal LegacySecretPlan(ConfigurationResultCode code, string? errorCode,
+            ImmutableArray<SecretEdit> secrets, ImmutableArray<SensitiveInput> owned,
+            FieldEdit<string> mood = default, bool ttsProjectionRequested = false)
+        {
+            Code = code; ErrorCode = errorCode; Secrets = secrets; _owned = owned;
+            Mood = mood; TtsProjectionRequested = ttsProjectionRequested;
+        }
+        public void Dispose()
+        {
+            foreach (var input in _owned) input.Dispose();
+        }
+        public override string ToString() => "[redacted]";
+    }
+
+    /// <summary>Pure fixed-six-slot mapping; no storage, environment, logging or runtime mutation.</summary>
+    private static LegacySecretPlan ParseLegacySecrets(JsonObject body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        if (HasOfficialSecretInput(body))
+            return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "official_secret_environment_only");
+        string? tokenText = null;
+        if (body["feishuVerificationToken"] is { } tokenNode)
+        {
+            if (tokenNode is not JsonValue token || !token.TryGetValue<string>(out tokenText))
+                return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "invalid_legacy_secret");
+            if (string.IsNullOrWhiteSpace(tokenText))
+                return RejectedLegacySecrets(ConfigurationResultCode.LegacyNeedsReview, "verification_token_refresh_required");
+        }
+        var edits = ImmutableArray.CreateBuilder<SecretEdit>(6);
+        var owned = ImmutableArray.CreateBuilder<SensitiveInput>();
+        try
+        {
+            edits.Add(ParseLegacySecretSlot(body, "apiKey", null, WritableSecretSlot.ModelApiKey, true, owned));
+            edits.Add(ParseLegacySecretSlot(body, "agentServerKey", null, WritableSecretSlot.AgentServerKey, true, owned));
+            edits.Add(ParseLegacySecretSlot(body, "ttsApiKey", "clearTtsApiKey", WritableSecretSlot.TtsApiKey, false, owned));
+            edits.Add(ParseLegacySecretSlot(body, "feishuAppSecret", "clearFeishuAppSecret",
+                WritableSecretSlot.FeishuAppSecret, false, owned));
+            edits.Add(ParseLegacySecretSlot(body, "feishuEncryptKey", "clearFeishuEncryptKey",
+                WritableSecretSlot.FeishuEncryptKey, false, owned));
+            edits.Add(tokenText is null ? SecretEdit.Keep(WritableSecretSlot.FeishuVerificationToken)
+                : OwnedLegacySecret(WritableSecretSlot.FeishuVerificationToken, tokenText, owned));
+            var mood = FieldEdit<string>.Keep();
+            if (body["mood"] is JsonValue moodValue && moodValue.TryGetValue<string>(out var moodText))
+                mood = string.IsNullOrWhiteSpace(moodText) ? FieldEdit<string>.Clear() : FieldEdit<string>.Set(moodText);
+            var ttsRequested = edits.Any(edit => edit.Slot == WritableSecretSlot.TtsApiKey && edit.Kind != SecretEditKind.Keep)
+                || body["ttsProvider"] is not null || body["ttsApiBase"] is not null || body["ttsModel"] is not null;
+            return new(ConfigurationResultCode.Ok, null, edits.MoveToImmutable(), owned.ToImmutable(), mood, ttsRequested);
+        }
+        catch (ArgumentException)
+        {
+            foreach (var input in owned) input.Dispose();
+            return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "invalid_legacy_secret");
+        }
+        catch
+        {
+            foreach (var input in owned) input.Dispose();
+            throw;
+        }
+    }
+
+    private static bool HasOfficialSecretInput(JsonObject body)
+        => body.Any(field => string.Equals(field.Key, "officialAppSecret", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(field.Key, "clearOfficialAppSecret", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Pure complete intent. Composite validation finishes before the one secret owner is allocated.</summary>
+    private static LegacySecretPlan ParseLegacyConfiguration(JsonObject body, BotAgent.Platforms.PlatformOptions trustedOptions)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(trustedOptions);
+        if (HasOfficialSecretInput(body))
+            return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "official_secret_environment_only");
+        try
+        {
+            FieldEdit<ImmutableArray<DeviceConfiguration>> devices;
+            try { devices = ParseLegacyDeviceFields(body); }
+            catch (InvalidOperationException)
+            {
+                return RejectedLegacySecrets(ConfigurationResultCode.LegacyNeedsReview, "legacy_device_needs_review");
+            }
+            var policies = FieldEdit<ImmutableArray<PlatformPolicyEntry>>.Keep();
+            var scalarBody = body;
+            if (body["platformPolicies"] is { } policyNode)
+            {
+                if (!TryParsePlatformPolicies(policyNode, out var parsed))
+                    return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "invalid_platform_policies");
+                var legacy = new BotAgent.Platforms.PlatformOptions
+                {
+                    PlatformPolicies = parsed!, PlatformSwitchSchemaVersion = 1,
+                    DeclaredPlatformDrivers = trustedOptions.DeclaredPlatformDrivers,
+                    DeclaredPlatformActions = trustedOptions.DeclaredPlatformActions,
+                };
+                var imported = Services.Platforms.PlatformSwitchSettings.ImportLegacyPolicies(legacy,
+                    legacy.DeclaredPlatformDrivers, ImmutableArray<ActionId>.Empty);
+                if (imported.Code != ConfigurationResultCode.Ok)
+                    return RejectedLegacySecrets(imported.Code, "legacy_policy_needs_review");
+                policies = FieldEdit<ImmutableArray<PlatformPolicyEntry>>.Set(imported.Entries);
+                scalarBody = (JsonObject)body.DeepClone();
+                foreach (var policy in parsed!)
+                {
+                    var platform = Domain.Platforms.PlatformId.Normalize(policy.PlatformId);
+                    if (platform == Domain.Platforms.PlatformId.QqOfficial)
+                    {
+                        if (policy.Enabled is bool officialEnabled) scalarBody["officialEnabled"] = officialEnabled;
+                        if (policy.ChatEnabled is bool officialChat) scalarBody["officialChatEnabled"] = officialChat;
+                        if (policy.GroupWhitelist is not null) scalarBody["officialWhitelistGroups"] = policy.GroupWhitelist;
+                        if (policy.PrivateWhitelist is not null) scalarBody["officialWhitelistPrivates"] = policy.PrivateWhitelist;
+                    }
+                    else if (platform == Domain.Platforms.PlatformId.QqPrivate)
+                    {
+                        if (policy.ChatEnabled is bool privateChat) scalarBody["privateChatEnabled"] = privateChat;
+                        if (policy.GroupWhitelist is not null) scalarBody["whitelistGroups"] = policy.GroupWhitelist;
+                        if (policy.PrivateWhitelist is not null) scalarBody["whitelistPrivates"] = policy.PrivateWhitelist;
+                    }
+                    else if (platform == Domain.Platforms.PlatformId.Feishu && policy.Enabled is bool feishuEnabled)
+                        scalarBody["feishuEnabled"] = feishuEnabled;
+                    if (platform is Domain.Platforms.PlatformId.Feishu or Domain.Platforms.PlatformId.Local
+                        && (policy.GroupWhitelist is not null || policy.PrivateWhitelist is not null))
+                        scalarBody[platform == Domain.Platforms.PlatformId.Local ? "localChannelIds" : "feishuWhitelist"] =
+                            !string.IsNullOrWhiteSpace(policy.GroupWhitelist) ? policy.GroupWhitelist : policy.PrivateWhitelist ?? string.Empty;
+                }
+            }
+            var changes = ParseLegacyFields(scalarBody, devices, policies);
+            var plan = ParseLegacySecrets(body);
+            if (plan.Code == ConfigurationResultCode.Ok) plan.AttachChanges(changes);
+            return plan;
+        }
+        catch (Exception error) when (error is JsonException or ArgumentException or InvalidOperationException or FormatException or OverflowException)
+        {
+            return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "invalid_legacy_configuration");
+        }
+    }
+
+    private static LegacySecretPlan RejectedLegacySecrets(ConfigurationResultCode code, string errorCode)
+        => new(code, errorCode, ImmutableArray<SecretEdit>.Empty, ImmutableArray<SensitiveInput>.Empty);
+
+    private static SecretEdit ParseLegacySecretSlot(JsonObject body, string key, string? clearKey,
+        WritableSecretSlot slot, bool emptyDeletes, ImmutableArray<SensitiveInput>.Builder owned)
+    {
+        if (clearKey is not null && body[clearKey] is JsonValue flag && flag.TryGetValue<bool>(out var clear) && clear)
+            return SecretEdit.Delete(slot);
+        if (body[key] is not JsonValue value || !value.TryGetValue<string>(out var text)) return SecretEdit.Keep(slot);
+        if (string.IsNullOrWhiteSpace(text)) return emptyDeletes ? SecretEdit.Delete(slot) : SecretEdit.Keep(slot);
+        return OwnedLegacySecret(slot, text, owned);
+    }
+
+    private static SecretEdit OwnedLegacySecret(WritableSecretSlot slot, string value,
+        ImmutableArray<SensitiveInput>.Builder owned)
+    {
+        var codec = new UTF8Encoding(false, true);
+        if (codec.GetByteCount(value) > 16384 || value.Contains('\0')) throw new ArgumentException("invalid_legacy_secret");
+        var bytes = codec.GetBytes(value.Trim());
+        try
+        {
+            var input = SensitiveInput.FromUtf8(bytes);
+            owned.Add(input);
+            return SecretEdit.Replace(slot, input);
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
     /// <summary>
     /// 把云端 TTS 的密钥写给 tts 容器（它是**另一个进程**，读不到我们的 SQLite 密钥库）。
     ///
@@ -31,34 +491,41 @@ public sealed partial class WebUiServer
     {
         try
         {
-            var key = _secrets.LoadTtsKey() ?? string.Empty;
-            var body =
-                "# 由机器人面板写入（不要手改：改了会被面板覆盖）\n" +
-                $"MINIMAX_API_KEY={key}\n" +
-                $"OPENAI_TTS_API_KEY={key}\n" +
-                $"TTS_PROVIDER={_settings.TtsProvider}\n" +
-                // 面板只给一个“云端接口地址”框：按选中的服务商写对应的那个变量，避免两个都写导致歧义。
-                // 空值不算覆盖：代理侧是 `面板值 or 容器环境变量`，所以留空就回到容器默认。
-                (Domain.Qq.Channels.IsOfficial(string.Empty) ? string.Empty : string.Empty) +
-                (string.Equals(_settings.TtsProvider, "openai", StringComparison.OrdinalIgnoreCase)
-                    ? $"OPENAI_TTS_BASE_URL={_settings.TtsApiBase}\nOPENAI_TTS_MODEL={_settings.TtsModel}\n"
-                    : $"MINIMAX_API_BASE={_settings.TtsApiBase}\nMINIMAX_MODEL={_settings.TtsModel}\n") +
-                $"# 写入时间：{Clock.Now:yyyy-MM-dd HH:mm:ss}\n";
-
-            if (TtsConfFile.TryWrite(body))
-            {
-                return;
-            }
-
-            FileLog.Write("Web", "TTS 密钥已存库，但没写成配置文件（宿主机目录不可写）——语音可能仍用环境变量里的 key");
+            if (!TtsConfFile.TryWrite(BuildTtsConfiguration(_settings, _secrets.LoadTtsKey() ?? string.Empty)))
+                FileLog.Write("Web", "TTS projection unavailable");
         }
-        catch (Exception ex)
+        catch (Exception) { FileLog.Write("Web", "TTS projection unavailable"); }
+    }
+    internal static ApplyStepReport ProjectTtsConfiguration(ConfigurationVersion expected, AppSettings settings)
+    {
+        string key;
+        using (var connection = AppDatabase.Open())
+        using (var transaction = connection.BeginTransaction(deferred: true))
         {
-            FileLog.Write("Web", "写 TTS 配置失败（不影响机器人本身）：" + ex.Message);
+            if (StorageModule::BotAgent.Storage.ConfigurationStorageBridge.ReadConfigurationVersion(connection) != expected)
+                return new(ApplyStep.TtsFileProjection, ApplyState.Failed, "configuration_superseded");
+            key = StorageModule::BotAgent.Adapters.Persistence.SecretsStore.LoadInTransaction(connection, WritableSecretSlot.TtsApiKey) ?? string.Empty;
+            transaction.Commit();
         }
+        try
+        {
+            return TtsConfFile.TryWrite(BuildTtsConfiguration(settings, key))
+                ? new(ApplyStep.TtsFileProjection, ApplyState.Applied, null)
+                : new(ApplyStep.TtsFileProjection, ApplyState.Failed, "projection_unavailable");
+        }
+        catch (Exception) { return new(ApplyStep.TtsFileProjection, ApplyState.Unknown, "projection_unavailable"); }
+    }
+    private static string BuildTtsConfiguration(AppSettings settings, string key)
+    {
+        if (new[] { key, settings.TtsProvider, settings.TtsApiBase, settings.TtsModel }.Any(value => value.Contains('\r') || value.Contains('\n')))
+            throw new InvalidOperationException("tts_projection_invalid");
+        return "# Managed TTS configuration\n" + $"MINIMAX_API_KEY={key}\nOPENAI_TTS_API_KEY={key}\nTTS_PROVIDER={settings.TtsProvider}\n"
+            + (string.Equals(settings.TtsProvider, "openai", StringComparison.OrdinalIgnoreCase)
+                ? $"OPENAI_TTS_BASE_URL={settings.TtsApiBase}\nOPENAI_TTS_MODEL={settings.TtsModel}\n"
+                : $"MINIMAX_API_BASE={settings.TtsApiBase}\nMINIMAX_MODEL={settings.TtsModel}\n");
     }
 
-        /// <summary>
+    /// <summary>
     /// 面板回显用的参与上限摘要（P1）。**走 Clamped()**：面板上看到的永远是“真正生效的那组数”，
     /// 不是你在输入框里填的 —— 填 999 时这里会显示被钳到的 10，免得“我改了怎么没变化”这类误会。
     /// </summary>
@@ -84,100 +551,254 @@ public sealed partial class WebUiServer
             return string.Empty;
         }
 
-        return text.Length <= 8 ? "***" : text[..3] + "***" + text[^2..];
+        return "***";
     }
 
+    private static readonly SemaphoreSlim ConfigurationParseAdmission = new(4, 4);
+    private static readonly JsonSerializerOptions ConfigurationJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+    };
+    private static int ConfigurationHttpStatus(ConfigurationResultCode code) => code switch
+    {
+        ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges => 200,
+        ConfigurationResultCode.Forbidden => 403,
+        ConfigurationResultCode.ValidationFailed or ConfigurationResultCode.UnsupportedContractRevision => 400,
+        ConfigurationResultCode.CapacityExceeded => 429,
+        ConfigurationResultCode.StorageUnavailable or ConfigurationResultCode.CommitFailed or ConfigurationResultCode.UnknownCommit => 503,
+        ConfigurationResultCode.NotFound => 404,
+        _ => 409,
+    };
+    private Task ConfigurationError(HttpListenerContext context, int status, string error,
+        ConfigurationResultCode code = ConfigurationResultCode.ValidationFailed, bool refresh = false)
+        => WriteJsonAsync(context, status, new JsonObject { ["error"] = error, ["code"] = (int)code, ["refreshRequired"] = refresh });
     private async Task HandleSettingsSaveAsync(HttpListenerContext context)
     {
+        if (!IsAuthorized(context) || !IsSameOrigin(context))
+        { await ConfigurationError(context, 403, "forbidden", ConfigurationResultCode.Forbidden); return; }
+        var operations = context.Request.QueryString.GetValues("configuration");
+        var caller = new ConfigurationCaller("headless-panel", "panel-administrator", "bot",
+            ConfigurationAccess.ReadOverview | ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration | ConfigurationAccess.EditAllowedSecrets);
+        using var scope = _settingsHotReload.ConfigurationAuthorization.Enter(caller, () => IsAuthorized(context) && IsSameOrigin(context));
+        if (operations is not null)
+        {
+            if (operations.Length != 1 || operations[0] is not ("read" or "save" or "find"))
+            { await ConfigurationError(context, 400, "invalid_configuration_operation"); return; }
+            await HandleConfigurationRequestAsync(context, operations[0]); return;
+        }
         var body = await ReadJsonAsync(context);
-        if (body is null)
+        if (body is not JsonObject submitted)
+        { await ConfigurationError(context, 400, "invalid_json"); return; }
+        using var plan = ParseLegacyConfiguration(submitted, _settings);
+        if (plan.Code != ConfigurationResultCode.Ok)
         {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "invalid json" });
-            return;
+            var refresh = plan.Code == ConfigurationResultCode.LegacyNeedsReview;
+            await ConfigurationError(context, ConfigurationHttpStatus(plan.Code), refresh ? "refresh_required"
+                : plan.ErrorCode ?? "invalid_configuration", plan.Code, refresh); return;
         }
-
-        // Environment-only credential: reject presence (including null/empty/false) before any save side effect.
-        if (body is JsonObject submitted && submitted.Any(field =>
-            string.Equals(field.Key, "officialAppSecret", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(field.Key, "clearOfficialAppSecret", StringComparison.OrdinalIgnoreCase)))
+        ConfigurationOperationKey? key = null;
+        var supplied = context.Request.Headers.GetValues("X-BotAgent-Configuration-Key");
+        if (supplied is not null)
         {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "official_secret_environment_only" });
-            return;
+            try
+            {
+                if (supplied.Length != 1 || supplied[0].Contains(',')) throw new JsonException();
+                key = JsonSerializer.Deserialize<ConfigurationOperationKey>(JsonSerializer.Serialize(supplied[0]), ConfigurationJson);
+            }
+            catch (JsonException) { await ConfigurationError(context, 400, "invalid_configuration_key"); return; }
         }
-
-        List<Domain.Platforms.PlatformPolicySettings>? platformPolicies = null;
-        if (body["platformPolicies"] is JsonNode platformPoliciesNode
-            && !TryParsePlatformPolicies(platformPoliciesNode, out platformPolicies))
-        {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "invalid platformPolicies" });
-            return;
-        }
-
-        // 模型端点：先校验再应用 —— 无效 URL 直接 400，不然一次手滑就把配置写坏、连不上模型。
-        var newBaseUrl = body["modelBaseUrl"] is JsonNode mbu ? (mbu.GetValue<string>() ?? string.Empty).Trim() : null;
-        if (newBaseUrl is { Length: > 0 } &&
-            (!Uri.TryCreate(newBaseUrl, UriKind.Absolute, out var parsedBaseUrl) ||
-             (parsedBaseUrl.Scheme != Uri.UriSchemeHttp && parsedBaseUrl.Scheme != Uri.UriSchemeHttps)))
-        {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "Base URL 要形如 http://host:port/v1（http/https 开头的完整地址）" });
-            return;
-        }
-
-        // 只接受运行时可改的字段（协议端地址、QQ 号这些仍属于容器环境变量职责）
-        var auditEvent = BuildSettingsAuditEvent(body);
-        var afterPersist = new List<Action>();
+        var outcome = await _settingsHotReload.SaveLegacyConfigurationAsync(key, plan.Changes!, plan.Secrets, plan.Mood, plan.TtsProjectionRequested);
+        var result = outcome.ConfigurationResult;
+        JsonObject payload;
+        if (result.Code is ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges) payload = BuildSettingsPayload();
+        else payload = new JsonObject { ["error"] = "configuration_rejected", ["code"] = (int)result.Code,
+            ["refreshRequired"] = result.Code == ConfigurationResultCode.LegacyNeedsReview };
+        payload["configurationResult"] = JsonSerializer.SerializeToNode(result, ConfigurationJson);
+        payload["legacyActionResults"] = JsonSerializer.SerializeToNode(outcome.LegacyActionResults, ConfigurationJson);
+        await WriteJsonAsync(context, ConfigurationHttpStatus(result.Code), payload);
+    }
+    private async Task HandleConfigurationRequestAsync(HttpListenerContext context, string operation)
+    {
+        if (!await ConfigurationParseAdmission.WaitAsync(0))
+        { await ConfigurationError(context, 429, "configuration_parse_busy", ConfigurationResultCode.CapacityExceeded); return; }
+        byte[]? bytes = null;
+        var storageStarted = false;
         try
         {
-            _settingsHotReload.ApplyRuntimeSettings(s =>
+            const int maximum = 1048576;
+            if (context.Request.ContentLength64 > maximum)
+            { await ConfigurationError(context, 413, "configuration_body_too_large", ConfigurationResultCode.CapacityExceeded); return; }
+            using var buffer = new MemoryStream(); var chunk = new byte[8192];
+            try
             {
-                // 行为/阈值 · 通道与 agent · 多平台设置 · 报表与模型。
-                Services.Platforms.PlatformSwitchSettings.Normalize(s);
-                ApplyBehaviorSettings(body, s, afterPersist);
-                ApplyChannelAndAgentSettings(body, s);
-                ApplyLegacyPlatformSwitches(body, s);
-                ApplyMultiPlatformSettings(body, s, platformPolicies);
-                Services.Platforms.PlatformSwitchSettings.SynchronizeLegacy(s);
-                ApplyReportingAndModelSettings(body, s, newBaseUrl, afterPersist);
-            }, auditEvent, _auditChain, _ =>
+                int size;
+                while ((size = await context.Request.InputStream.ReadAsync(chunk)) != 0)
+                {
+                    if (buffer.Length + size > maximum)
+                    { await ConfigurationError(context, 413, "configuration_body_too_large", ConfigurationResultCode.CapacityExceeded); return; }
+                    buffer.Write(chunk, 0, size);
+                }
+                bytes = buffer.ToArray();
+            }
+            finally { CryptographicOperations.ZeroMemory(chunk); CryptographicOperations.ZeroMemory(buffer.GetBuffer()); }
+            var raw = new UTF8Encoding(false, true).GetString(bytes);
+            ValidateConfigurationUnicode(raw);
+            using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 16 });
+            ValidateConfigurationDuplicates(document.RootElement);
+            var root = document.RootElement;
+            if (operation == "read")
             {
-                foreach (var action in afterPersist) action();
-                // 开关/时刻/收件人变更后重排定时器，仍在 Settings writer 串行边界内。
-                _healthReports?.Reapply();
-                AuditSecretRotations(body);
-            });
+                ConfigurationMembers(root, "kind");
+                if (!root.GetProperty("kind").TryGetInt32(out var kind) || kind is < 0 or > 1) throw new JsonException();
+                storageStarted = true;
+                var read = await _settingsHotReload.ReadConfigurationAsync((ConfigurationReadKind)kind);
+                if (read.Generation.Value == Guid.Empty)
+                { await ConfigurationError(context, ConfigurationHttpStatus(read.Code), "configuration_unavailable", read.Code); return; }
+                await WriteJsonAsync(context, ConfigurationHttpStatus(read.Code), JsonSerializer.SerializeToNode(read, ConfigurationJson)!); return;
+            }
+            if (operation == "find")
+            {
+                ConfigurationMembers(root, "key");
+                var key = JsonSerializer.Deserialize<ConfigurationOperationKey>(root.GetProperty("key"), ConfigurationJson);
+                storageStarted = true;
+                var found = await _settingsHotReload.FindConfigurationAsync(key);
+                await WriteJsonAsync(context, ConfigurationHttpStatus(found.ConfigurationResult.Code),
+                    JsonSerializer.SerializeToNode(found, ConfigurationJson)!); return;
+            }
+            var (request, owner) = ParseConfigurationSave(root);
+            using (owner)
+            {
+                storageStarted = true;
+                var result = await _settingsHotReload.SaveConfigurationAsync(request);
+                await WriteJsonAsync(context, ConfigurationHttpStatus(result.Code), JsonSerializer.SerializeToNode(result, ConfigurationJson)!);
+            }
         }
-        catch (Exception ex)
-        {
-            // 提交后重建也可能失败：不把这个错误响应当成数据库一定回滚的承诺。
-            FileLog.Warn("Web", $"Settings update failed ({ex.GetType().Name})");
-            await WriteJsonAsync(context, 500, new JsonObject { ["error"] = "settings_save_failed" });
-            return;
-        }
-
-        await WriteJsonAsync(context, 200, BuildSettingsPayload());
+        catch (Exception error) when (!storageStarted && (error is JsonException or ArgumentException or InvalidOperationException or DecoderFallbackException or OverflowException))
+        { await ConfigurationError(context, 400, "invalid_configuration"); }
+        finally { if (bytes is not null) CryptographicOperations.ZeroMemory(bytes); ConfigurationParseAdmission.Release(); }
     }
-
-    private void AuditSecretRotations(JsonNode body)
+    private static (ConfigurationSaveRequest Request, LegacySecretPlan Owner) ParseConfigurationSave(JsonElement root)
     {
-        if (body["apiKey"] is not null)
+        ConfigurationMembers(root, "contractRevision", "expectedVersion", "key", "changes", "secrets");
+        var revision = root.GetProperty("contractRevision").GetString() ?? throw new JsonException();
+        var version = JsonSerializer.Deserialize<ConfigurationVersion>(root.GetProperty("expectedVersion"), ConfigurationJson);
+        var key = JsonSerializer.Deserialize<ConfigurationOperationKey>(root.GetProperty("key"), ConfigurationJson);
+        var patchNode = JsonNode.Parse(root.GetProperty("changes").GetRawText())?.AsObject() ?? throw new JsonException();
+        if (patchNode["registered"] is JsonObject registered)
+            foreach (var name in new[] { "plugins", "providers", "policies" })
+                if (!registered.ContainsKey(name)) registered[name] = new JsonArray();
+        using var normalized = JsonDocument.Parse(patchNode.ToJsonString());
+        ValidateConfigurationShape(normalized.RootElement, typeof(ConfigurationPatch));
+        var changes = JsonSerializer.Deserialize<ConfigurationPatch>(normalized.RootElement, ConfigurationJson) ?? throw new JsonException();
+        var secretsNode = root.GetProperty("secrets");
+        if (secretsNode.ValueKind != JsonValueKind.Array || secretsNode.GetArrayLength() > 6) throw new JsonException();
+        var owned = ImmutableArray.CreateBuilder<SensitiveInput>(); var edits = ImmutableArray.CreateBuilder<SecretEdit>();
+        var slots = new HashSet<WritableSecretSlot>();
+        try
         {
-            var raw = body["apiKey"]?.GetValue<string>()?.Trim();
-            AppendSecretRotateAudit("model_api_key", string.IsNullOrEmpty(raw) ? "cleared" : "rotated");
+            foreach (var edit in secretsNode.EnumerateArray())
+            {
+                if (edit.ValueKind != JsonValueKind.Object || !edit.TryGetProperty("kind", out var kindNode)
+                    || !kindNode.TryGetInt32(out var kind) || kind is < 0 or > 2) throw new JsonException();
+                ConfigurationMembers(edit, kind == 1 ? new[] { "slot", "kind", "value" } : new[] { "slot", "kind" });
+                if (!edit.GetProperty("slot").TryGetInt32(out var slotNumber) || slotNumber is < 0 or > 5) throw new JsonException();
+                var slot = (WritableSecretSlot)slotNumber;
+                if (!slots.Add(slot)) throw new JsonException();
+                edits.Add(kind switch { 0 => SecretEdit.Keep(slot), 2 => SecretEdit.Delete(slot),
+                    _ => OwnedLegacySecret(slot, edit.GetProperty("value").GetString() ?? throw new JsonException(), owned) });
+            }
+            var owner = new LegacySecretPlan(ConfigurationResultCode.Ok, null, edits.ToImmutable(), owned.ToImmutable());
+            return (new(revision, version, key, changes, owner.Secrets), owner);
         }
-        if (body["ttsKey"] is not null)
+        catch { foreach (var input in owned) input.Dispose(); throw; }
+    }
+    private static void ConfigurationMembers(JsonElement node, params string[] expected)
+    {
+        if (node.ValueKind != JsonValueKind.Object) throw new JsonException();
+        var names = node.EnumerateObject().Select(property => property.Name).ToArray();
+        if (names.Length != expected.Length || names.Any(name => !expected.Contains(name, StringComparer.Ordinal))) throw new JsonException();
+    }
+    private static void ValidateConfigurationDuplicates(JsonElement node)
+    {
+        if (node.ValueKind == JsonValueKind.Object)
         {
-            var raw = body["ttsKey"]?.GetValue<string>()?.Trim();
-            AppendSecretRotateAudit("tts_key", string.IsNullOrEmpty(raw) ? "cleared" : "rotated");
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in node.EnumerateObject())
+            { if (!seen.Add(property.Name)) throw new JsonException(); ValidateConfigurationDuplicates(property.Value); }
         }
-        if (body["agentServerKey"] is not null)
+        else if (node.ValueKind == JsonValueKind.Array)
+            foreach (var item in node.EnumerateArray()) ValidateConfigurationDuplicates(item);
+    }
+    private static void ValidateConfigurationShape(JsonElement node, Type declared)
+    {
+        var type = Nullable.GetUnderlyingType(declared) ?? declared;
+        if (node.ValueKind == JsonValueKind.Null) { if (Nullable.GetUnderlyingType(declared) is null) throw new JsonException(); return; }
+        if (type == typeof(string)) { if (node.ValueKind != JsonValueKind.String || Encoding.UTF8.GetByteCount(node.GetString()!) > 32768) throw new JsonException(); return; }
+        if (type == typeof(bool)) { if (node.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw new JsonException(); return; }
+        if (type == typeof(int) || type.IsEnum)
+        { if (!node.TryGetInt32(out var value) || type.IsEnum && !Enum.IsDefined(type, value)) throw new JsonException(); return; }
+        if (type == typeof(double)) { if (!node.TryGetDouble(out var value) || !double.IsFinite(value)) throw new JsonException(); return; }
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ImmutableArray<>))
+        { if (node.ValueKind != JsonValueKind.Array) throw new JsonException(); foreach (var item in node.EnumerateArray()) ValidateConfigurationShape(item, type.GetGenericArguments()[0]); return; }
+        if (type.GetCustomAttribute<System.Text.Json.Serialization.JsonConverterAttribute>() is not null)
         {
-            var raw = body["agentServerKey"]?.GetValue<string>()?.Trim();
-            AppendSecretRotateAudit("agent_server_key", string.IsNullOrEmpty(raw) ? "cleared" : "rotated");
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(FieldEdit<>))
+            {
+                if (!node.TryGetProperty("kind", out var k) || !k.TryGetInt32(out var kind) || kind is < 0 or > 2) throw new JsonException();
+                ConfigurationMembers(node, kind == 1 ? new[] { "kind", "value" } : new[] { "kind" });
+                if (kind == 1) ValidateConfigurationShape(node.GetProperty("value"), type.GetGenericArguments()[0]);
+            }
+            // The registered Core converter enforces the other closed scalar/rule encodings.
+            JsonSerializer.Deserialize(node, type, ConfigurationJson); return;
         }
-        if (body["feishuAppSecret"] is not null)
+        if (type == typeof(PolicyTarget))
         {
-            var raw = body["feishuAppSecret"]?.GetValue<string>()?.Trim();
-            AppendSecretRotateAudit("feishu_secret", string.IsNullOrEmpty(raw) ? "cleared" : "rotated");
+            var kind = node.GetProperty("kind").GetString();
+            if (kind == "accountDefault") { ConfigurationMembers(node, "kind", "platformId", "accountScope"); }
+            else if (kind == "instance") { ConfigurationMembers(node, "kind", "key"); ValidateConfigurationShape(node.GetProperty("key"), typeof(DriverKey)); }
+            else throw new JsonException();
+            JsonSerializer.Deserialize<PolicyTarget>(node, ConfigurationJson); return;
+        }
+        if (node.ValueKind != JsonValueKind.Object) throw new JsonException();
+        // Reflection is confined to these declared Core DTO types, never a body-provided type or a settings setter.
+        if (type.Namespace != typeof(ConfigurationPatch).Namespace) throw new JsonException();
+        var properties = type.GetProperties(BindingFlags.Instance | BindingFlags.Public).ToDictionary(
+            property => JsonNamingPolicy.CamelCase.ConvertName(property.Name), StringComparer.Ordinal);
+        foreach (var property in node.EnumerateObject())
+        {
+            if (!properties.TryGetValue(property.Name, out var member)) throw new JsonException();
+            if (property.Value.ValueKind == JsonValueKind.Null && (Nullable.GetUnderlyingType(member.PropertyType) is not null
+                || new NullabilityInfoContext().Create(member).ReadState == NullabilityState.Nullable)) continue;
+            ValidateConfigurationShape(property.Value, member.PropertyType);
+        }
+        var constructor = type.GetConstructors().OrderByDescending(value => value.GetParameters().Length).FirstOrDefault();
+        foreach (var parameter in constructor?.GetParameters() ?? Array.Empty<ParameterInfo>())
+        {
+            if (parameter.ParameterType.IsGenericType && parameter.ParameterType.GetGenericTypeDefinition() == typeof(FieldEdit<>)) continue;
+            if (Nullable.GetUnderlyingType(parameter.ParameterType) is not null || new NullabilityInfoContext().Create(parameter).ReadState == NullabilityState.Nullable) continue;
+            if (!node.TryGetProperty(JsonNamingPolicy.CamelCase.ConvertName(parameter.Name!), out _)) throw new JsonException();
+        }
+    }
+    private static void ValidateConfigurationUnicode(string json)
+    {
+        var quoted = false;
+        for (var i = 0; i < json.Length; i++)
+        {
+            if (json[i] == '"') { quoted = !quoted; continue; }
+            if (!quoted || json[i] != '\\') continue;
+            if (++i >= json.Length) throw new JsonException();
+            if (json[i] != 'u') continue;
+            if (i + 4 >= json.Length || !ushort.TryParse(json.AsSpan(i + 1, 4), System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var unit)) throw new JsonException();
+            i += 4;
+            if (char.IsLowSurrogate((char)unit)) throw new JsonException();
+            if (!char.IsHighSurrogate((char)unit)) continue;
+            if (i + 6 >= json.Length || json[i + 1] != '\\' || json[i + 2] != 'u'
+                || !ushort.TryParse(json.AsSpan(i + 3, 4), System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var low) || !char.IsLowSurrogate((char)low)) throw new JsonException();
+            i += 6;
         }
     }
 
@@ -231,532 +852,6 @@ public sealed partial class WebUiServer
 
     private static bool IsPolicyKeyChar(char value)
         => char.IsAsciiLetterOrDigit(value) || value is '.' or '_' or '-';
-
-    private static void ApplyLegacyPlatformSwitches(JsonNode body, AppSettings settings)
-    {
-        Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.QqOfficial,
-            Domain.Platforms.AccountScope.Legacy, body["officialEnabled"]?.GetValue<bool>(), body["officialChatEnabled"]?.GetValue<bool>());
-        Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.QqPrivate,
-            Domain.Platforms.AccountScope.Legacy, null, body["privateChatEnabled"]?.GetValue<bool>());
-        Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.Feishu,
-            Domain.Platforms.AccountScope.Default, body["feishuEnabled"]?.GetValue<bool>(), body["feishuEnabled"]?.GetValue<bool>());
-        if (body["localChannelIds"] is JsonNode localIds)
-        {
-            var enabled = !string.IsNullOrWhiteSpace(localIds.GetValue<string>());
-            Services.Platforms.PlatformSwitchSettings.ApplyLegacy(settings, Domain.Platforms.PlatformId.Local,
-                Domain.Platforms.AccountScope.Legacy, enabled, enabled);
-        }
-    }
-
-    private void ApplyMultiPlatformSettings(
-        JsonNode body,
-        AppSettings s,
-        List<Domain.Platforms.PlatformPolicySettings>? platformPolicies)
-    {
-        if (body["platformPolicies"] is not null && platformPolicies is not null)
-        {
-            s.PlatformPolicies = platformPolicies;
-            foreach (var p in platformPolicies)
-            {
-                var norm = Domain.Platforms.PlatformId.Normalize(p.PlatformId);
-                if (norm == Domain.Platforms.PlatformId.QqPrivate)
-                {
-                    if (p.GroupWhitelist is not null) s.WhitelistGroups = p.GroupWhitelist;
-                    if (p.PrivateWhitelist is not null) s.WhitelistPrivates = p.PrivateWhitelist;
-                }
-                else if (norm == Domain.Platforms.PlatformId.QqOfficial)
-                {
-                    if (p.GroupWhitelist is not null) s.OfficialWhitelistGroups = p.GroupWhitelist;
-                    if (p.PrivateWhitelist is not null) s.OfficialWhitelistPrivates = p.PrivateWhitelist;
-                }
-                else if (norm == Domain.Platforms.PlatformId.Feishu)
-                {
-                    if (p.GroupWhitelist is not null || p.PrivateWhitelist is not null)
-                    {
-                        s.FeishuWhitelist = !string.IsNullOrWhiteSpace(p.GroupWhitelist) ? p.GroupWhitelist : (p.PrivateWhitelist ?? string.Empty);
-                    }
-                }
-                else if (norm == Domain.Platforms.PlatformId.Local)
-                {
-                    if (p.GroupWhitelist is not null || p.PrivateWhitelist is not null)
-                    {
-                        s.LocalChannelIds = !string.IsNullOrWhiteSpace(p.GroupWhitelist) ? p.GroupWhitelist : (p.PrivateWhitelist ?? string.Empty);
-                    }
-                }
-            }
-        }
-
-        if (body["feishuEnabled"] is JsonNode fe) s.FeishuEnabled = fe.GetValue<bool>();
-        if (body["feishuAppId"] is JsonNode fai) s.FeishuAppId = fai.GetValue<string>().Trim();
-        if (body["feishuVerificationToken"] is JsonNode fvt) s.FeishuVerificationToken = fvt.GetValue<string>().Trim();
-        if (body["feishuWhitelist"] is JsonNode fwl) s.FeishuWhitelist = fwl.GetValue<string>().Trim();
-        if (body["feishuApiBase"] is JsonNode fab) s.FeishuApiBase = fab.GetValue<string>().Trim();
-
-        // 飞书 AppSecret：与官方通道 AppSecret / TTS Key 相同口径
-        if (body["clearFeishuAppSecret"] is JsonValue clearFas && clearFas.TryGetValue<bool>(out var clearFasOk) && clearFasOk)
-        {
-            _secrets.SaveFeishuSecret(null);
-            s.FeishuAppSecret = (Environment.GetEnvironmentVariable("BOTAGENT_FEISHU_APP_SECRET")
-                ?? Environment.GetEnvironmentVariable("QQCHAT_FEISHU_APP_SECRET") ?? string.Empty).Trim();
-            FileLog.Write("Web", "面板清空了飞书通道 AppSecret（回退环境变量）");
-        }
-        else if (body["feishuAppSecret"] is JsonValue fas && fas.TryGetValue<string>(out var rawFeishuSecret)
-                 && !string.IsNullOrWhiteSpace(rawFeishuSecret))
-        {
-            var newSecret = rawFeishuSecret.Trim();
-            _secrets.SaveFeishuSecret(newSecret);
-            s.FeishuAppSecret = newSecret;
-            FileLog.Write("Web", "面板更新了飞书通道 AppSecret（已掩码保存；重启后生效）");
-        }
-
-        // 飞书 EncryptKey
-        if (body["clearFeishuEncryptKey"] is JsonValue clearFek && clearFek.TryGetValue<bool>(out var clearFekOk) && clearFekOk)
-        {
-            _secrets.SaveFeishuEncryptKey(null);
-            s.FeishuEncryptKey = (Environment.GetEnvironmentVariable("BOTAGENT_FEISHU_ENCRYPT_KEY")
-                ?? Environment.GetEnvironmentVariable("QQCHAT_FEISHU_ENCRYPT_KEY") ?? string.Empty).Trim();
-            FileLog.Write("Web", "面板清空了飞书通道 EncryptKey（回退环境变量）");
-        }
-        else if (body["feishuEncryptKey"] is JsonValue fek && fek.TryGetValue<string>(out var rawFeishuKey)
-                 && !string.IsNullOrWhiteSpace(rawFeishuKey))
-        {
-            var newKey = rawFeishuKey.Trim();
-            _secrets.SaveFeishuEncryptKey(newKey);
-            s.FeishuEncryptKey = newKey;
-            FileLog.Write("Web", "面板更新了飞书通道 EncryptKey（已掩码保存；重启后生效）");
-        }
-    }
-
-    /// <summary>行为与阈值：人设 / 三份白名单 / 欲望与阈值 / 各种冷却 / 上下文窗口 / 画像 / 表情包。</summary>
-    private void ApplyBehaviorSettings(JsonNode body, AppSettings s, List<Action> afterPersist)
-    {
-            if (body["botPersona"] is JsonNode persona) s.BotPersona = persona.GetValue<string>() ?? string.Empty;
-            if (body["messageWhitelist"] is JsonNode wl) s.MessageWhitelist = wl.GetValue<string>() ?? string.Empty;
-        if (body["whitelistGroups"] is JsonNode wlg) s.WhitelistGroups = wlg.GetValue<string>() ?? string.Empty;
-        if (body["whitelistPrivates"] is JsonNode wlp) s.WhitelistPrivates = wlp.GetValue<string>() ?? string.Empty;
-            if (body["aiDesire"] is JsonNode desire) s.AiDesire = Math.Clamp(desire.GetValue<int>(), 0, 100);
-        if (body["suitabilityThreshold"] is JsonNode th) s.SuitabilityThreshold = Math.Clamp(th.GetValue<int>(), 0, 100);
-        if (body["adaptiveSamplingEnabled"] is JsonNode ase) s.AdaptiveSamplingEnabled = ase.GetValue<bool>();
-        if (body["rationalTemperature"] is JsonNode rt) s.RationalTemperature = Math.Clamp(rt.GetValue<double>(), 0.0, 2.0);
-        if (body["rationalTopP"] is JsonNode rtp) s.RationalTopP = Math.Clamp(rtp.GetValue<double>(), 0.0, 1.0);
-        if (body["emotionalTemperature"] is JsonNode et) s.EmotionalTemperature = Math.Clamp(et.GetValue<double>(), 0.0, 2.0);
-        if (body["emotionalTopP"] is JsonNode etp) s.EmotionalTopP = Math.Clamp(etp.GetValue<double>(), 0.0, 1.0);
-        if (body["defaultTemperature"] is JsonNode dt) s.DefaultTemperature = Math.Clamp(dt.GetValue<double>(), 0.0, 2.0);
-        if (body["defaultTopP"] is JsonNode dtp) s.DefaultTopP = Math.Clamp(dtp.GetValue<double>(), 0.0, 1.0);
-        // 批次 E：聊天侧有限步进循环的上限（1 = 与改造前逐字一致；钳到 1..3，与 AgentTurnLoop 同一口径）
-        if (body["maxAgentSteps"] is JsonNode steps) s.MaxAgentSteps = Math.Clamp(steps.GetValue<int>(), 1, 3);
-        // 批次 F：本地通道名单（空 = 整条通道都不建；改它要重启才生效 —— 通道是在装配点建的，热更新只改名单）
-        if (body["localChannelIds"] is JsonNode locals) s.LocalChannelIds = locals.GetValue<string>() ?? string.Empty;
-        // // 那路要不要过统一闸门（默认关 = 与今天逐字一致）
-        if (body["agentServerUseGate"] is JsonNode useGate) s.AgentServerUseGate = useGate.GetValue<bool>();
-            if (body["aiModeEnabled"] is JsonNode ai) s.AiModeEnabled = ai.GetValue<bool>();
-            if (body["maxTokens"] is JsonNode mt) s.MaxTokens = Math.Clamp(mt.GetValue<int>(), 64, 32000);
-            if (body["groupCooldownSeconds"] is JsonNode gc) s.GroupCooldownSeconds = Math.Max(0, gc.GetValue<int>());
-            if (body["privateCooldownSeconds"] is JsonNode pc) s.PrivateCooldownSeconds = Math.Max(0, pc.GetValue<int>());
-            if (body["idleFallbackSeconds"] is JsonNode fb) s.IdleFallbackSeconds = Math.Max(0, fb.GetValue<int>());
-            if (body["splitReplies"] is JsonNode sp) s.SplitReplies = sp.GetValue<bool>();
-            if (body["enableProactive"] is JsonNode pv) s.EnableProactive = pv.GetValue<bool>();
-            if (body["proactiveCooldownSeconds"] is JsonNode pcd) s.ProactiveCooldownSeconds = Math.Clamp(pcd.GetValue<int>(), 60, 86400);
-            if (body["proactiveQuietSeconds"] is JsonNode pq) s.ProactiveQuietSeconds = Math.Clamp(pq.GetValue<int>(), 1, 3600);
-            if (body["ignoreBracketMessages"] is JsonNode ibm) s.IgnoreBracketMessages = ibm.GetValue<bool>();
-            if (body["filterActionNarration"] is JsonNode fan) s.FilterActionNarration = fan.GetValue<bool>();
-            if (body["enableAtmosphereDamping"] is JsonNode ead) s.EnableAtmosphereDamping = ead.GetValue<bool>();
-            if (body["segmentDelayMs"] is JsonNode sd) s.SegmentDelayMs = Math.Max(0, sd.GetValue<int>());
-            if (body["maxContextMessages"] is JsonNode mc) s.MaxContextMessages = Math.Clamp(mc.GetValue<int>(), 10, 1000);
-            if (body["profileLookupCount"] is JsonNode pl) s.ProfileLookupCount = Math.Clamp(pl.GetValue<int>(), 0, 50);
-            if (body["profileSummaryLines"] is JsonNode psl) s.ProfileSummaryLines = Math.Clamp(psl.GetValue<int>(), 0, 50);
-            if (body["maxProfileChars"] is JsonNode mpc) s.MaxProfileChars = Math.Clamp(mpc.GetValue<int>(), 0, 20000);
-            if (body["maxMessagesPerConversation"] is JsonNode mm) s.MaxMessagesPerConversation = Math.Clamp(mm.GetValue<int>(), 20, 100000);
-            if (body["maxConcurrentReplies"] is JsonNode mcr) s.MaxConcurrentReplies = Math.Clamp(mcr.GetValue<int>(), 1, 16);
-            if (body["enableProfileSummary"] is JsonNode eps) s.EnableProfileSummary = eps.GetValue<bool>();
-            if (body["profileSummaryThreshold"] is JsonNode pst) s.ProfileSummaryThreshold = Math.Clamp(pst.GetValue<int>(), 5, 500);
-            if (body["profileSummaryMaxChars"] is JsonNode psm) s.ProfileSummaryMaxChars = Math.Clamp(psm.GetValue<int>(), 40, 2000);
-            if (body["profileSummaryIntervalSeconds"] is JsonNode psi) s.ProfileSummaryIntervalSeconds = Math.Clamp(psi.GetValue<int>(), 0, 86400);
-
-            // ---- 表情包 ----
-            if (body["enableVoice"] is JsonNode ev) s.EnableVoice = ev.GetValue<bool>();
-        if (body["voiceName"] is JsonNode vn) s.VoiceName = vn.GetValue<string>().Trim();
-        if (body["voiceSpeed"] is JsonNode vs) s.VoiceSpeed = Math.Clamp(vs.GetValue<int>(), 50, 200);
-            if (body["voicePitch"] is JsonNode vp) s.VoicePitch = Math.Clamp(vp.GetValue<int>(), -12, 12);
-            if (body["voiceVol"] is JsonNode vv) s.VoiceVol = Math.Clamp(vv.GetValue<int>(), 0, 1000);
-            if (body["voiceEmotion"] is JsonNode ve) s.VoiceEmotion = (ve.GetValue<string>() ?? string.Empty).Trim();
-        if (body["voiceMaxChars"] is JsonNode vmc) s.VoiceMaxChars = Math.Clamp(vmc.GetValue<int>(), 10, 300);
-        if (body["voiceEagerness"] is JsonNode vge) s.VoiceEagerness = Math.Clamp(vge.GetValue<int>(), 0, 100);
-        if (body["ttsServiceUrl"] is JsonNode tts) s.TtsServiceUrl = tts.GetValue<string>().Trim();
-
-        // 云端服务商/地址/模型：都不是密钥，跟着行为配置进 settings.json；
-        // 但同样要**写给 tts 容器**（那边才是真正调用云端的一方）。
-        var ttsConfDirty = false;
-        if (body["ttsProvider"] is JsonNode ttp)
-        {
-            s.TtsProvider = ttp.GetValue<string>().Trim();
-            ttsConfDirty = true;
-        }
-
-        if (body["ttsApiBase"] is JsonNode tab)
-        {
-            s.TtsApiBase = tab.GetValue<string>().Trim();
-            ttsConfDirty = true;
-        }
-
-        if (body["ttsModel"] is JsonNode tmd)
-        {
-            s.TtsModel = tmd.GetValue<string>().Trim();
-            ttsConfDirty = true;
-        }
-
-        // 云端 TTS 的厂商密钥（面板可改；存密钥库，只回显掩码）——
-        // ⚠ **空 = 不改**：面板每次保存都会把这个字段（可能是空的）一起发上来，
-        // 早期版本把空当“清空”，结果“改个白名单就把 key 抹了”→ 语音全失败（retcode 1200）。
-        // 要清空得显式说 clearTtsApiKey=true。
-        if (body["clearTtsApiKey"] is JsonValue clearNode && clearNode.TryGetValue<bool>(out var clear) && clear)
-        {
-            _secrets.SaveTtsKey(null);
-            afterPersist.Add(WriteTtsConfToHost);
-            FileLog.Write("Web", "面板显式清空了 TTS 密钥（语音会发不出去，直到重新填）");
-        }
-        else if (body["ttsApiKey"] is JsonValue ttsKeyValue && ttsKeyValue.TryGetValue<string>(out var rawTtsKey)
-                 && !string.IsNullOrWhiteSpace(rawTtsKey))
-        {
-            _secrets.SaveTtsKey(rawTtsKey.Trim());
-            afterPersist.Add(WriteTtsConfToHost);
-            FileLog.Write("Web", "面板更新了 TTS 密钥（已掩码保存，并写给 tts 容器）");
-        }
-
-        if (ttsConfDirty)
-        {
-            afterPersist.Add(WriteTtsConfToHost);
-            FileLog.Write("Web", $"面板更新了云端 TTS 配置（服务商={s.TtsProvider}，地址={(s.TtsApiBase.Length == 0 ? "(容器默认)" : s.TtsApiBase)}，模型={(s.TtsModel.Length == 0 ? "(容器默认)" : s.TtsModel)}）");
-        }
-
-    }
-
-    /// <summary>通道与 agent：官方开放平台 / 本机 `//` 命令 / 路由与服务器内置 agent / 参与与审批 / 服务器 agent 密钥。</summary>
-    private void ApplyChannelAndAgentSettings(JsonNode body, AppSettings s)
-    {
-        // ---- 官方通道（QQ 开放平台）----
-        // 只收行为/标识类字段：secret 是密钥，按项目约定**只从环境变量读**（与 ApiKey 一致），
-        // 面板不回显也不接收，免得它落进 settings.json 又被备份/贴日志。
-        if (body["officialEnabled"] is JsonNode ofe) s.OfficialEnabled = ofe.GetValue<bool>();
-        if (body["officialAppId"] is JsonNode oai) s.OfficialAppId = oai.GetValue<string>().Trim();
-        if (body["officialSandbox"] is JsonNode osb) s.OfficialSandbox = osb.GetValue<bool>();
-        if (body["privateChatEnabled"] is JsonNode pce) s.PrivateChatEnabled = pce.GetValue<bool>();
-        if (body["officialChatEnabled"] is JsonNode oce) s.OfficialChatEnabled = oce.GetValue<bool>();
-
-        // OfficialAppSecret belongs only to deployment environment; no panel write or clear path.
-        if (body["officialWhitelistGroups"] is JsonNode owg) s.OfficialWhitelistGroups = owg.GetValue<string>().Trim();
-        if (body["officialWhitelistPrivates"] is JsonNode owp) s.OfficialWhitelistPrivates = owp.GetValue<string>().Trim();
-        if (body["enableWebSearch"] is JsonNode ws) s.EnableWebSearch = ws.GetValue<bool>();
-        if (body["webSearchUseModelSearch"] is JsonNode wsm) s.WebSearchUseModelSearch = wsm.GetValue<bool>();
-        if (body["webSearchSources"] is JsonNode wss) s.WebSearchSources = wss.GetValue<string>().Trim();
-        if (body["webSearchMaxResults"] is JsonNode wsr) s.WebSearchMaxResults = Math.Clamp(wsr.GetValue<int>(), 1, 10);
-        if (body["webSearchCooldownSeconds"] is JsonNode wsc) s.WebSearchCooldownSeconds = Math.Clamp(wsc.GetValue<int>(), 0, 86400);
-        if (body["webSearchTimeoutSeconds"] is JsonNode wst) s.WebSearchTimeoutSeconds = Math.Clamp(wst.GetValue<int>(), 5, 60);
-        if (body["enableLinkPreview"] is JsonNode elp) s.EnableLinkPreview = elp.GetValue<bool>();
-        if (body["linkPreviewTimeoutSeconds"] is JsonNode lpt) s.LinkPreviewTimeoutSeconds = Math.Clamp(lpt.GetValue<int>(), 2, 30);
-        if (body["linkPreviewMax"] is JsonNode lpm) s.LinkPreviewMax = Math.Clamp(lpm.GetValue<int>(), 0, 5);
-        if (body["enableMusic"] is JsonNode em) s.EnableMusic = em.GetValue<bool>();
-        if (body["neteaseBaseUrl"] is JsonNode nbu) s.NeteaseBaseUrl = nbu.GetValue<string>().Trim();
-        if (body["musicSources"] is JsonNode ms) s.MusicSources = ms.GetValue<string>();
-        if (body["musicBitrate"] is JsonNode mb) s.MusicBitrate = Math.Clamp(mb.GetValue<int>(), 32, 320);
-        if (body["musicMaxDownloadMb"] is JsonNode mmd) s.MusicMaxDownloadMb = Math.Clamp(mmd.GetValue<int>(), 1, 64);
-        if (body["musicMaxAnalysisSeconds"] is JsonNode mma) s.MusicMaxAnalysisSeconds = Math.Clamp(mma.GetValue<int>(), 20, 600);
-        if (body["musicLibraryMax"] is JsonNode mml) s.MusicLibraryMax = Math.Clamp(mml.GetValue<int>(), 10, 5000);
-        if (body["musicNoteTtlDays"] is JsonNode mnt) s.MusicNoteTtlDays = Math.Clamp(mnt.GetValue<int>(), 1, 365);
-        if (body["musicListenCooldownSeconds"] is JsonNode mlc) s.MusicListenCooldownSeconds = Math.Clamp(mlc.GetValue<int>(), 0, 86400);
-        if (body["musicUnderstandModel"] is JsonNode mum) s.MusicUnderstandModel = mum.GetValue<string>().Trim();
-        if (body["musicSendAudioToModel"] is JsonNode msa) s.MusicSendAudioToModel = msa.GetValue<bool>();
-        if (body["musicKeepAudio"] is JsonNode mka) s.MusicKeepAudio = mka.GetValue<bool>();
-
-        // ---- 本机 Agent（// 命令）----
-        if (body["enableAgentBridge"] is JsonNode eab) s.EnableAgentBridge = eab.GetValue<bool>();
-        if (body["agentPrefix"] is JsonNode apx) s.AgentPrefix = (apx.GetValue<string>() ?? "//").Trim();
-        if (body["agentAllowedUsers"] is JsonNode aau) s.AgentAllowedUsers = aau.GetValue<string>() ?? string.Empty;
-        if (body["agentWorkDir"] is JsonNode awd) s.AgentWorkDir = (awd.GetValue<string>() ?? string.Empty).Trim();
-        if (body["agentModel"] is JsonNode amd) s.AgentModel = (amd.GetValue<string>() ?? string.Empty).Trim();
-        if (body["agentTools"] is JsonNode atl) s.AgentTools = (atl.GetValue<string>() ?? string.Empty).Trim();
-        if (body["agentTimeoutSeconds"] is JsonNode ats) s.AgentTimeoutSeconds = Math.Clamp(ats.GetValue<int>(), 30, 7200);
-        if (body["agentReplyMaxChars"] is JsonNode arc) s.AgentReplyMaxChars = Math.Clamp(arc.GetValue<int>(), 200, 3000);
-        if (body["agentProgressSeconds"] is JsonNode aps) s.AgentProgressSeconds = Math.Clamp(aps.GetValue<int>(), 0, 3600);
-        if (body["agentMaxQueued"] is JsonNode amq) s.AgentMaxQueued = Math.Clamp(amq.GetValue<int>(), 1, 20);
-
-        // ---- agent 路由与服务器内置 agent ----
-        if (body["agentTarget"] is JsonNode atg) s.AgentTarget = (atg.GetValue<string>() ?? "auto").Trim();
-        if (body["enableServerAgent"] is JsonNode esa) s.EnableServerAgent = esa.GetValue<bool>();
-        if (body["enableHostAgent"] is JsonNode eha) s.EnableHostAgent = eha.GetValue<bool>();
-        if (body["agentServerTools"] is JsonNode ast) s.AgentServerTools = (ast.GetValue<string>() ?? string.Empty).Trim();
-
-        // QQ 动作：只认已存在的动作名（别名也翻成规范名），写错的直接忽略 ——
-        // 下次读回设置时面板上看到的就是“真正生效的那几个”，不会拿一个拼错的名字骗自己。
-        if (body["agentServerQqActions"] is JsonNode asqa)
-        {
-            var raw = (asqa.GetValue<string>() ?? string.Empty).Trim();
-            if (raw.Length == 0 || raw is "all" or "*" or "全部" or "所有")
-            {
-                s.AgentServerQqActions = raw;
-            }
-            else
-            {
-                var names = new List<string>();
-                foreach (var piece in raw.Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    var canonical = QqActionCatalog.Canonical(piece.Trim());
-                    if (canonical is not null && !names.Contains(canonical))
-                    {
-                        names.Add(canonical);
-                    }
-                }
-
-                s.AgentServerQqActions = string.Join(",", names);
-            }
-        }
-        if (body["agentServerModel"] is JsonNode asm) s.AgentServerModel = (asm.GetValue<string>() ?? string.Empty).Trim();
-        ApplyAgentReasoningSettings(body, s);
-        if (body["agentDevices"] is JsonNode ad) s.AgentDevices = ad.GetValue<string>() ?? string.Empty;
-        if (body["scenarioPreset"] is JsonNode preset)
-        {
-            // 只认预设名单里的名字；写别的（或留空）都不放开能力（见 AppSettings.ScenarioPreset）
-            s.ScenarioPreset = (preset.GetValue<string>() ?? string.Empty).Trim();
-        }
-
-        if (body["enableApprovals"] is JsonNode apv) s.EnableApprovals = apv.GetValue<bool>();
-        if (body["approvalApprovers"] is JsonNode aap)
-        {
-            // 审批人名单：只是一串 QQ 号，限长防呆（真正的身份核验在审批流程里，见 ApprovalStore）
-            var list = (aap.GetValue<string>() ?? string.Empty).Trim();
-            s.ApprovalApprovers = list.Length > 300 ? list[..300] : list;
-        }
-
-        // 参与状态机的上下限（P1）。这里先做一次**面板级**钳制，真正的硬上限在
-        // ParticipationPolicy.Clamped()（两处都要过 —— 面板值不可信，代码里那层才是安全边界）。
-        if (body["participationMaxConsecutiveReplies"] is JsonNode pmcr)
-        {
-            s.ParticipationMaxConsecutiveReplies = Math.Clamp(pmcr.GetValue<int>(), 1, 10);
-        }
-
-        if (body["participationCooldownSeconds"] is JsonNode pcs)
-        {
-            s.ParticipationCooldownSeconds = Math.Clamp(pcs.GetValue<int>(), 0, 600);
-        }
-
-        if (body["participationProbingMaxReplies"] is JsonNode ppmr)
-        {
-            s.ParticipationProbingMaxReplies = Math.Clamp(ppmr.GetValue<int>(), 1, 3);
-        }
-
-        if (body["participationMaxActiveLifetimeSeconds"] is JsonNode pmal)
-        {
-            s.ParticipationMaxActiveLifetimeSeconds = Math.Clamp(pmal.GetValue<int>(), 30, 3600);
-        }
-
-        if (body["participationMaxExitingLifetimeSeconds"] is JsonNode pmel)
-        {
-            s.ParticipationMaxExitingLifetimeSeconds = Math.Clamp(pmel.GetValue<int>(), 10, 3600);
-        }
-
-        // 两个会真正改变行为的开关（都默认关）：参与闸门、允许提问
-        if (body["enableParticipationGating"] is JsonNode epg) s.EnableParticipationGating = epg.GetValue<bool>();
-        if (body["enableQuestions"] is JsonNode eq) s.EnableQuestions = eq.GetValue<bool>();
-
-        if (body["enableAgentMask"] is JsonNode eam) s.AgentMaskSensitive = eam.GetValue<bool>();
-        if (body["agentPrompt"] is JsonNode ap)
-        {
-            // 附加提示词：空 = 明确不带（与“没这个字段”不同）；长度设上限，免得一屏文本被贴进每一轮请求
-            s.AgentPrompt = (ap.ToString() ?? string.Empty).Trim();
-            if (s.AgentPrompt.Length > 8000)
-            {
-                s.AgentPrompt = s.AgentPrompt[..8000];
-            }
-        }
-        if (body["agentModel"] is JsonNode am2) s.AgentModel = (am2.GetValue<string>() ?? string.Empty).Trim();
-        if (body["agentServerBaseUrl"] is JsonNode asbu)
-        {
-            var v = (asbu.GetValue<string>() ?? string.Empty).Trim();
-            // 允许空（= 用聊天那个）；填了就必须是 http(s) 完整地址，不然一次手滑就调不通
-            if (v.Length > 0 && (!Uri.TryCreate(v, UriKind.Absolute, out var parsed) ||
-                                 (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)))
-            {
-                FileLog.Warn("Web", $"服务器 agent 的接口地址无效，已忽略：{v}");
-            }
-            else
-            {
-                s.AgentServerBaseUrl = v;
-            }
-        }
-        // 服务器 agent 自己的密钥：与聊天那把同规矩 —— 存 secrets 表、不回显明文、留空 = 不改
-        // （要清就去点“清除密钥”，那边有二次确认）
-        if (body["agentServerKey"] is JsonValue agentKeyValue && agentKeyValue.TryGetValue<string>(out var rawAgentKey))
-        {
-            var newAgentKey = (rawAgentKey ?? string.Empty).Trim();
-            if (newAgentKey.Length == 0)
-            {
-                _secrets.SaveAgentServerKey(null);
-                s.AgentServerApiKeyOverride = null;
-                s.AgentServerApiKey = (Environment.GetEnvironmentVariable("QQCHAT_AGENT_SERVER_KEY") ?? string.Empty).Trim();
-            }
-            else
-            {
-                _secrets.SaveAgentServerKey(newAgentKey);
-                s.AgentServerApiKeyOverride = newAgentKey;
-                s.AgentServerApiKey = newAgentKey;
-            }
-
-            // 密钥只记“变了”，绝不回显明文（日志会被贴出来排障）
-            FileLog.Write("Web", newAgentKey.Length == 0
-                ? "面板清空了服务器 agent 的密钥（回退环境变量）"
-                : "面板更新了服务器 agent 的密钥（已掩码保存）");
-        }
-        if (body["agentServerWorkDir"] is JsonNode asw) s.AgentServerWorkDir = (asw.GetValue<string>() ?? "/data").Trim();
-        if (body["agentServerKeepContext"] is JsonNode askc) s.AgentServerKeepContext = askc.GetValue<bool>();
-        if (body["agentServerDocker"] is JsonNode asdk) s.AgentServerDocker = asdk.GetValue<bool>();
-        if (body["panelDeployEnabled"] is JsonNode pde) s.PanelDeployEnabled = pde.GetValue<bool>();
-        if (body["panelDeployUrl"] is JsonNode pdu) s.PanelDeployUrl = (pdu.GetValue<string>() ?? string.Empty).Trim();
-        if (body["agentServerMaxSteps"] is JsonNode ass) s.AgentServerMaxSteps = Math.Clamp(ass.GetValue<int>(), 1, 30);
-        if (body["agentServerCommandTimeoutSeconds"] is JsonNode asct) s.AgentServerCommandTimeoutSeconds = Math.Clamp(asct.GetValue<int>(), 5, 300);
-    }
-
-    private static void ApplyAgentReasoningSettings(JsonNode body, AppSettings s)
-    {
-        if (body["agentReasoningEffort"] is JsonNode effort)
-        {
-            var value = (effort.GetValue<string>() ?? string.Empty).Trim().ToLowerInvariant();
-            s.AgentReasoningEffort = value is "" or "default" ? "auto" : value;
-        }
-        if (body["agentReasoningLevels"] is JsonNode levels)
-        {
-            var raw = levels.GetValue<string>() ?? string.Empty;
-            s.AgentReasoningLevels = raw.Length > 1000 ? raw[..1000] : raw;
-        }
-    }
-
-    /// <summary>报表与模型：健康日报 / 表情包与戳一戳 / 模型地址与密钥 / 心情。</summary>
-    private void ApplyReportingAndModelSettings(JsonNode body, AppSettings s, string? newBaseUrl, List<Action> afterPersist)
-    {
-            // ---- 服务器健康日报（定时私聊推送）----
-            if (body["healthReportEnabled"] is JsonNode hre) s.HealthReportEnabled = hre.GetValue<bool>();
-            if (body["healthReportTime"] is JsonNode hrt)
-            {
-                // 只接受能解析成 HH:mm 的值（"18：00"/"1800" 也认）；解析不出来就保持原值，
-                // 免得一次手滑把推送时间静默改成 18:00（用户以为改了 07:30）
-                var typed = (hrt.ToString() ?? string.Empty).Trim();
-                if (typed.Length > 0)
-                {
-                    var (hour, minute) = AppSettings.ParseHealthReportClock(typed);
-                    var normalized = $"{hour:00}:{minute:00}";
-                    var looksValid = typed.Replace('：', ':').Contains(':') || typed.Length == 4;
-                    if (looksValid)
-                    {
-                        s.HealthReportTime = normalized;
-                    }
-                    else
-                    {
-                        FileLog.Warn("Web", $"健康日报时刻格式不对，已忽略：{typed}");
-                    }
-                }
-            }
-            if (body["healthReportTargets"] is JsonNode hrtg) s.HealthReportTargets = (hrtg.ToString() ?? string.Empty).Trim();
-
-        if (body["enableStickers"] is JsonNode es) s.EnableStickers = es.GetValue<bool>();
-            if (body["stickerLibraryMax"] is JsonNode slm) s.StickerLibraryMax = Math.Clamp(slm.GetValue<int>(), 0, 2000);
-            if (body["stickerCandidates"] is JsonNode sc) s.StickerCandidates = Math.Clamp(sc.GetValue<int>(), 0, 20);
-            if (body["stickerCurateIntervalSeconds"] is JsonNode sci) s.StickerCurateIntervalSeconds = Math.Clamp(sci.GetValue<int>(), 0, 86400);
-            if (body["stickerCooldownSeconds"] is JsonNode scl) s.StickerCooldownSeconds = Math.Clamp(scl.GetValue<int>(), 0, 86400);
-        if (body["enablePoke"] is JsonNode ep) s.EnablePoke = ep.GetValue<bool>();
-        if (body["pokeCooldownSeconds"] is JsonNode pcl) s.PokeCooldownSeconds = Math.Clamp(pcl.GetValue<int>(), 0, 86400);
-        if (body["moodTtlSeconds"] is JsonNode mtt) s.MoodTtlSeconds = Math.Clamp(mtt.GetValue<int>(), 0, 86400 * 7);
-
-        // ---- 模型接口（面板可改；留空 = 回退到环境变量）----
-        if (newBaseUrl is not null)
-        {
-            s.ModelBaseUrlOverride = newBaseUrl.Length == 0 ? null : newBaseUrl;
-            s.ModelBaseUrl = newBaseUrl.Length > 0
-                ? newBaseUrl
-                : Environment.GetEnvironmentVariable("QQCHAT_BASE_URL") is { Length: > 0 } envUrl
-                    ? envUrl.Trim()
-                    : "https://api.openai.com/v1";
-        }
-
-        if (body["model"] is JsonNode modelNode)
-        {
-            var modelName = (modelNode.GetValue<string>() ?? string.Empty).Trim();
-            s.ModelOverride = modelName.Length == 0 ? null : modelName;
-            s.Model = modelName.Length > 0
-                ? modelName
-                : Environment.GetEnvironmentVariable("QQCHAT_MODEL") is { Length: > 0 } envModel
-                    ? envModel.Trim()
-                    : "gpt-4o-mini";
-        }
-
-        // 思考档位（快速回复）：开 = 聊天回复换轻量模型（快 2~3 倍；后台活儿不受影响）
-        if (body["fastReply"] is JsonNode fr)
-        {
-            s.FastReply = fr.GetValue<bool>();
-        }
-
-        if (body["fastModel"] is JsonValue fm && fm.TryGetValue<string>(out var fastName))
-        {
-            // 留空就留空：快速档没填模型时不生效（仍旧用主模型），别自作主张塞一个具体模型名
-            // —— 具体名字跟着中转走，写死只会让人以为“开关没生效”。
-            s.FastModel = (fastName ?? string.Empty).Trim();
-        }
-
-        if (body["thinkingBudget"] is JsonNode tb && tb.GetValue<string>() is { Length: > 0 } tbStr)
-        {
-            s.ThinkingBudget = tbStr.Trim().ToLowerInvariant();
-        }
-        if (body["thinkingCustomBudget"] is JsonNode tcb && tcb.GetValue<string>() is { Length: > 0 } tcbStr)
-        {
-            s.ThinkingCustomBudget = tcbStr.Trim();
-        }
-        if (body["fastThinkingBudget"] is JsonNode ftb && ftb.GetValue<string>() is { Length: > 0 } ftbStr)
-        {
-            s.FastThinkingBudget = ftbStr.Trim().ToLowerInvariant();
-        }
-        if (body["fastThinkingCustomBudget"] is JsonNode ftcb && ftcb.GetValue<string>() is { Length: > 0 } ftcbStr)
-        {
-            s.FastThinkingCustomBudget = ftcbStr.Trim();
-        }
-        // 密钥：存 data/secrets.json（权限 600），**不写 settings.json**；留空 = 删掉、回退环境变量
-        if (body["apiKey"] is JsonValue keyValue && keyValue.TryGetValue<string>(out var rawKey))
-        {
-            var newKey = (rawKey ?? string.Empty).Trim();
-            if (newKey.Length == 0)
-            {
-                _secrets.SaveApiKey(null);
-                s.ApiKeyOverride = null;
-                s.ApiKey = (Environment.GetEnvironmentVariable("QQCHAT_API_KEY") ??
-                            Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty).Trim();
-            }
-            else
-            {
-                _secrets.SaveApiKey(newKey);
-                s.ApiKeyOverride = newKey;
-                s.ApiKey = newKey;
-            }
-
-            // 密钥只记“变了”，绝不回显明文（日志会被贴出来排障）
-            FileLog.Write("Web", newKey.Length == 0 ? "面板清空了模型 API Key（回退环境变量）" : "面板更新了模型 API Key（已掩码保存）");
-        }
-
-        // 心情是机器人状态（不是行为配置），单独走它的存储：留空 = 交回自动描述。
-        // 日志口径与 BotAgentHost 时期逐字一致（走 PanelNotifier.EmitLog → [Agent] 标签）。
-        if (body["mood"] is JsonValue moodValue && moodValue.TryGetValue<string>(out var moodText))
-        {
-            afterPersist.Add(() =>
-            {
-                var moodNow = Clock.Now;
-                if (string.IsNullOrWhiteSpace(moodText))
-                {
-                    _mood.Reset(moodNow);
-                    _ui.EmitLog("心情已交回自动描述（按被戳次数）");
-                }
-                else if (_mood.SetText(moodText, moodNow))
-                {
-                    _ui.EmitLog($"心情被手动改成：{_mood.Describe(moodNow)}");
-                }
-            });
-        }
-    }
 
     private JsonObject BuildSettingsPayload()
     {
@@ -979,8 +1074,22 @@ public sealed partial class WebUiServer
 
     private void PopulatePlatformSettings(JsonObject runtime, AppSettings s)
     {
-        runtime["feishuEnabled"] = s.FeishuEnabled;
-        runtime["platformPolicies"] = JsonSerializer.SerializeToNode(Services.Platforms.PlatformSwitchSettings.EditablePolicies(s), Json) ?? new JsonArray();
+        var display = s;
+        if (s.RuntimePlatformPolicies.HasValue)
+        {
+            // JSON compatibility only: requested restart fields must not overwrite the live inheritance baseline.
+            display = _settingsRepo.Load();
+            display.DeclaredPlatformDrivers = s.DeclaredPlatformDrivers;
+            display.DeclaredPlatformActions = s.DeclaredPlatformActions;
+            if (!display.RuntimePlatformPolicies.HasValue) throw new InvalidOperationException("platform_policy_state_invalid");
+            runtime["localChannelIds"] = display.LocalChannelIds;
+        }
+        var official = Services.Platforms.PlatformSwitchSettings.Read(display, Domain.Platforms.PlatformId.QqOfficial, Domain.Platforms.AccountScope.Legacy);
+        runtime["officialEnabled"] = official.Enabled;
+        runtime["officialChatEnabled"] = official.ChatEnabled;
+        runtime["privateChatEnabled"] = Services.Platforms.PlatformSwitchSettings.Read(display, Domain.Platforms.PlatformId.QqPrivate, Domain.Platforms.AccountScope.Legacy).ChatEnabled;
+        runtime["feishuEnabled"] = Services.Platforms.PlatformSwitchSettings.Read(display, Domain.Platforms.PlatformId.Feishu, Domain.Platforms.AccountScope.Default).Enabled;
+        runtime["platformPolicies"] = JsonSerializer.SerializeToNode(Services.Platforms.PlatformSwitchSettings.EditablePolicies(display), Json) ?? new JsonArray();
         runtime["feishuAppId"] = s.FeishuAppId;
         runtime["feishuSecretConfigured"] = !string.IsNullOrWhiteSpace(s.FeishuAppSecret);
         runtime["feishuSecretMasked"] = MaskSecret(s.FeishuAppSecret);
@@ -988,7 +1097,11 @@ public sealed partial class WebUiServer
             || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("QQCHAT_FEISHU_APP_SECRET"))
             ? "env"
             : (string.IsNullOrWhiteSpace(_secrets.LoadFeishuSecret()) ? "none" : "panel");
-        runtime["feishuVerificationToken"] = s.FeishuVerificationToken;
+        using var secretConnection = AppDatabase.Open();
+        var storedVerificationToken = StorageModule::BotAgent.Adapters.Persistence.SecretsStore.LoadInTransaction(
+            secretConnection, WritableSecretSlot.FeishuVerificationToken);
+        runtime["feishuVerificationTokenConfigured"] = !string.IsNullOrWhiteSpace(storedVerificationToken);
+        runtime["feishuVerificationTokenSource"] = string.IsNullOrWhiteSpace(storedVerificationToken) ? "none" : "database";
         runtime["feishuEncryptKeyConfigured"] = !string.IsNullOrWhiteSpace(s.FeishuEncryptKey);
         runtime["feishuEncryptKeyMasked"] = MaskSecret(s.FeishuEncryptKey);
         runtime["feishuEncryptKeySource"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("BOTAGENT_FEISHU_ENCRYPT_KEY"))
@@ -1030,13 +1143,5 @@ public sealed partial class WebUiServer
     };
 
 
-    private static string Mask(string? secret)
-    {
-        if (string.IsNullOrEmpty(secret))
-        {
-            return string.Empty;
-        }
-
-        return secret.Length <= 4 ? "****" : secret[..4] + "****";
-    }
+    private static string Mask(string? secret) => string.IsNullOrEmpty(secret) ? string.Empty : "***";
 }

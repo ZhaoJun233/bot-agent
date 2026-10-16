@@ -14,11 +14,12 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class PromptTemplateStore : IPromptTemplateRepository
 {
+    private const string DeactivateKeySql = "UPDATE prompt_templates SET is_active = 0 WHERE key = $k";
+    private const string SnapshotProjectionSql = "SELECT id, key, version_id, content, label, is_active, created_unix FROM prompt_templates ";
     public Task<IReadOnlyList<PromptTemplateSnapshot>> ListVersionsAsync(string key)
     {
         var list = AppDatabase.Query(
-            "SELECT id, key, version_id, content, label, is_active, created_unix " +
-            "FROM prompt_templates WHERE key = $k ORDER BY id DESC",
+            SnapshotProjectionSql + "WHERE key = $k ORDER BY id DESC",
             Map,
             ("$k", key));
 
@@ -28,8 +29,7 @@ public class PromptTemplateStore : IPromptTemplateRepository
     public Task<PromptTemplateSnapshot?> GetVersionAsync(string key, string versionId)
     {
         var list = AppDatabase.Query(
-            "SELECT id, key, version_id, content, label, is_active, created_unix " +
-            "FROM prompt_templates WHERE key = $k AND version_id = $v LIMIT 1",
+            SnapshotProjectionSql + "WHERE key = $k AND version_id = $v LIMIT 1",
             Map,
             ("$k", key), ("$v", versionId));
 
@@ -39,8 +39,7 @@ public class PromptTemplateStore : IPromptTemplateRepository
     public Task<PromptTemplateSnapshot?> GetActiveVersionAsync(string key)
     {
         var list = AppDatabase.Query(
-            "SELECT id, key, version_id, content, label, is_active, created_unix " +
-            "FROM prompt_templates WHERE key = $k AND is_active = 1 LIMIT 1",
+            SnapshotProjectionSql + "WHERE key = $k AND is_active = 1 LIMIT 1",
             Map,
             ("$k", key));
 
@@ -61,7 +60,7 @@ public class PromptTemplateStore : IPromptTemplateRepository
             newVersion = $"v{Convert.ToInt64(countCommand.ExecuteScalar()) + 1}";
 
             // 将旧版本激活状态取消
-            AppDatabase.Exec(conn, "UPDATE prompt_templates SET is_active = 0 WHERE key = $k", ("$k", key));
+            AppDatabase.Exec(conn, DeactivateKeySql, ("$k", key));
 
             // 插入新版本并设为激活
             AppDatabase.Exec(conn,
@@ -86,7 +85,7 @@ public class PromptTemplateStore : IPromptTemplateRepository
 
         AppDatabase.Write(conn =>
         {
-            AppDatabase.Exec(conn, "UPDATE prompt_templates SET is_active = 0 WHERE key = $k", ("$k", key));
+            AppDatabase.Exec(conn, DeactivateKeySql, ("$k", key));
             AppDatabase.Exec(conn, "UPDATE prompt_templates SET is_active = 1 WHERE key = $k AND version_id = $v",
                 ("$k", key), ("$v", versionId));
         });

@@ -14,11 +14,11 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class JargonStore : IJargonRepository
 {
+    private const string EntryProjectionSql = "SELECT id, scope, phrase, meaning, status, hit_count, created_unix, updated_unix FROM jargons ";
     public Task<JargonEntry?> GetAsync(string scope, string phrase)
     {
         var list = AppDatabase.Query(
-            "SELECT id, scope, phrase, meaning, status, hit_count, created_unix, updated_unix " +
-            "FROM jargons WHERE scope = $s AND phrase = $p LIMIT 1",
+            EntryProjectionSql + "WHERE scope = $s AND phrase = $p LIMIT 1",
             Map,
             ("$s", scope), ("$p", phrase));
 
@@ -28,10 +28,8 @@ public class JargonStore : IJargonRepository
     public Task<IReadOnlyList<JargonEntry>> ListByScopeAsync(string scope, JargonStatus? status = null)
     {
         var sql = status.HasValue
-            ? "SELECT id, scope, phrase, meaning, status, hit_count, created_unix, updated_unix " +
-              "FROM jargons WHERE scope = $s AND status = $st ORDER BY updated_unix DESC"
-            : "SELECT id, scope, phrase, meaning, status, hit_count, created_unix, updated_unix " +
-              "FROM jargons WHERE scope = $s ORDER BY updated_unix DESC";
+            ? EntryProjectionSql + "WHERE scope = $s AND status = $st ORDER BY updated_unix DESC"
+            : EntryProjectionSql + "WHERE scope = $s ORDER BY updated_unix DESC";
 
         var list = status.HasValue
             ? AppDatabase.Query(sql, Map, ("$s", scope), ("$st", (int)status.Value))
@@ -43,8 +41,7 @@ public class JargonStore : IJargonRepository
     public Task<IReadOnlyList<JargonEntry>> ListConfirmedForPromptAsync(string scope, int limit = 20)
     {
         var list = AppDatabase.Query(
-            "SELECT id, scope, phrase, meaning, status, hit_count, created_unix, updated_unix " +
-            "FROM jargons WHERE (scope = $s OR scope = 'global') AND status IN (1, 3) " +
+            EntryProjectionSql + "WHERE (scope = $s OR scope = 'global') AND status IN (1, 3) " +
             "ORDER BY hit_count DESC, updated_unix DESC LIMIT $lim",
             Map,
             ("$s", scope), ("$lim", Math.Clamp(limit, 1, 50)));

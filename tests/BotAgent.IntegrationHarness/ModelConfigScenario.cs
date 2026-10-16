@@ -7,14 +7,14 @@ namespace BotAgent.IntegrationHarness;
 /// S21 模型接口可在面板里改（Base URL / API Key / 模型名）。
 ///
 /// 以前这三项只读容器环境变量：想换个中转、换个模型、换个密钥，都得改 .env 再重启容器。
-/// 现在面板是“最新意图”，环境变量退居种子。这条链路要盯住的是：改完**真的**走新地址，
-/// 重启**真的**不回滚，以及密钥**真的**不落进 settings.json（那份文件是给人看/贴出来排障的）。
+/// 面板是最新意图，环境变量退居种子。绑定变化必须如实报告重启，稳定 DB 引用的 URL/模型仍动态采用；
+/// 重启不回滚，密钥不落 settings.json；不能把已提交或凭据实时读取说成 metadata 已应用。
 /// </summary>
 public static partial class Program
 {
     private static async Task RunModelConfigScenarioAsync()
     {
-        Section("S21 模型接口面板可改（换中转 / 换模型 / 换密钥，不重启、不回滚）");
+        Section("S21 模型接口保存与采用（绑定变更需重启；稳定引用热更新，不回滚）");
 
         const int openAiPortA = 17825; // 环境变量指向的“旧”中转
         const int openAiPortB = 17826; // 面板改成的新中转
@@ -104,16 +104,23 @@ public static partial class Program
             using var content = new StringContent(patch.ToJsonString(), Encoding.UTF8, "application/json");
             using var res = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", content, cts.Token);
             Check("面板保存模型接口（200）", res.IsSuccessStatusCode, res.StatusCode.ToString());
+            var outcome = JsonNode.Parse(await res.Content.ReadAsStringAsync(cts.Token))?["configurationResult"];
+            Check("绑定变更保留提交事实且如实报告模型需重启",
+                outcome?["receipt"]?["commitState"]?.GetValue<int>() == 1
+                && (outcome?["receipt"]?["steps"] as JsonArray)?.OfType<JsonObject>()
+                    .Any(step => step["step"]?.GetValue<int>() == 2 && step["state"]?.GetValue<int>() == 3) == true,
+                "committed/restart flags only");
         }
 
-        // ---- 3) 立刻生效：下一条消息必须打到 B，且带上新模型名 ----
-        openAiB.EnqueueReply("""{"suitability": 90, "reply": "新中转回答"}""");
-        await protocol.SendGroupMessageAsync(groupId, 20001, "小明", "现在走新中转", 51002, mentionBot: true, ct: cts.Token);
-        var usedB = await WaitUntilAsync(() => openAiB.Requests.Count > 0, TimeSpan.FromSeconds(25));
-        var modelInRequest = openAiB.Requests.LastOrDefault()?["model"]?.GetValue<string>();
-        Check("★ 改完立刻生效：请求打到面板里填的新地址（不用重启容器）", usedB,
-            $"B 收到 {openAiB.Requests.Count} 次；A 共 {openAiA.Requests.Count} 次");
-        Check("★ 请求里带的是面板里填的模型名", modelInRequest == "model-from-panel", $"实际 model={modelInRequest}");
+        // ---- 3) env→DB 是绑定变化：持久提交不等于重建已捕获路由，不得把新凭据发给旧端点。 ----
+        var requestsBeforePendingBinding = openAiA.Requests.Count;
+        var unavailableBefore = bot.OutputLines.Count(line => line.Contains("provider_secret_unavailable", StringComparison.Ordinal));
+        await protocol.SendGroupMessageAsync(groupId, 20001, "群友A", "synthetic binding pending", 51002, mentionBot: true, ct: cts.Token);
+        var bindingDenied = await WaitUntilAsync(() => bot.OutputLines.Count(line => line.Contains("provider_secret_unavailable", StringComparison.Ordinal))
+            > unavailableBefore, TimeSpan.FromSeconds(10));
+        Check("绑定待重启时真实路由拒绝且不向旧新端点发送请求", bindingDenied
+            && openAiA.Requests.Count == requestsBeforePendingBinding && openAiB.Requests.Count == 0,
+            $"denied={bindingDenied}; oldDelta={openAiA.Requests.Count - requestsBeforePendingBinding}; newCount={openAiB.Requests.Count}");
 
         // ---- 4) 落库与“密钥不落 settings” ----
         await Task.Delay(700);
@@ -166,6 +173,35 @@ public static partial class Program
             var bootLines = string.Join(" ｜ ", bot2.OutputLines.Where(l => l.Contains("覆盖") || l.Contains("模型")).TakeLast(3));
             Check("★ 重启后依然用面板里的值（环境变量不再回滚它）", stillB,
                 $"重启后 B 收到 {openAiB.Requests.Count} 次；启动日志：{Truncate(bootLines, 240)}");
+
+            // Stable secret:apiKey after restart: retain the original hot URL/model guarantees under their valid binding premise.
+            using (var http = CreatePanelHttpClient(panelPort, 10))
+            {
+                using var content = new StringContent(new JsonObject { ["modelBaseUrl"] = openAiA.BaseUrl,
+                    ["model"] = "model-hot-stable-ref" }.ToJsonString(), Encoding.UTF8, "application/json");
+                using var response = await http.PostAsync(settingsUrl, content, cts.Token);
+                var outcome = JsonNode.Parse(await response.Content.ReadAsStringAsync(cts.Token))?["configurationResult"];
+                Check("稳定DB引用的模型热更新报告真实Applied", response.IsSuccessStatusCode
+                    && (outcome?["receipt"]?["steps"] as JsonArray)?.OfType<JsonObject>()
+                        .Any(step => step["step"]?.GetValue<int>() == 2 && step["state"]?.GetValue<int>() == 1) == true,
+                    "HTTP/model step flags only");
+            }
+            openAiA.ClearRequests(); openAiA.EnqueueReply("""{"suitability":90,"reply":"synthetic stable reply"}""");
+            await protocol2.SendGroupMessageAsync(groupId, 20001, "群友A", "synthetic stable model route", 51006, mentionBot: true, ct: cts.Token);
+            var usedNewEndpoint = await WaitUntilAsync(() => openAiA.Requests.Any(request => UserTexts(request)
+                .Any(text => text.Contains("synthetic stable model route"))), TimeSpan.FromSeconds(25));
+            var modelInRequest = openAiA.Requests.LastOrDefault(request => UserTexts(request)
+                .Any(text => text.Contains("synthetic stable model route")))?["model"]?.GetValue<string>();
+            Check("★ 改完立刻生效：请求打到面板里填的新地址（不用重启容器）", usedNewEndpoint,
+                $"stable-ref new endpoint requests={openAiA.Requests.Count}");
+            Check("★ 请求里带的是面板里填的模型名", modelInRequest == "model-hot-stable-ref", "model equality only");
+            using (var http = CreatePanelHttpClient(panelPort, 10))
+            {
+                using var content = new StringContent(new JsonObject { ["modelBaseUrl"] = openAiB.BaseUrl,
+                    ["model"] = "model-from-panel" }.ToJsonString(), Encoding.UTF8, "application/json");
+                using var response = await http.PostAsync(settingsUrl, content, cts.Token);
+                Check("稳定引用恢复B与原模型后继续原快速档保护", response.IsSuccessStatusCode, "HTTP status only");
+            }
 
             // ---- 6.5) 思考档位（快速回复）：开关换轻量模型，且主模型与快速档思考预算独立配置 ----
             using (var http = CreatePanelHttpClient(panelPort, 10))

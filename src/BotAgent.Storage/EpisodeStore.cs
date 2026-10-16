@@ -14,6 +14,7 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class EpisodeStore : IEpisodeRepository
 {
+    private const string EpisodeProjectionSql = "SELECT id, scope, title, summary, participants, tags, importance, occurred_unix, created_unix, updated_unix FROM episodes ";
     public Task<long> InsertAsync(EpisodeEntry episode)
     {
         var now = Clock.Now.ToUnixTimeSeconds();
@@ -58,8 +59,7 @@ public class EpisodeStore : IEpisodeRepository
     public Task<IReadOnlyList<EpisodeEntry>> ListRecentByScopeAsync(string scope, int limit = 10)
     {
         var list = AppDatabase.Query(
-            "SELECT id, scope, title, summary, participants, tags, importance, occurred_unix, created_unix, updated_unix " +
-            "FROM episodes WHERE scope = $s ORDER BY occurred_unix DESC LIMIT $lim",
+            EpisodeProjectionSql + "WHERE scope = $s ORDER BY occurred_unix DESC LIMIT $lim",
             Map,
             ("$s", scope),
             ("$lim", Math.Clamp(limit, 1, 100)));
@@ -71,8 +71,7 @@ public class EpisodeStore : IEpisodeRepository
     {
         var pattern = $"%{query.Trim()}%";
         var list = AppDatabase.Query(
-            "SELECT id, scope, title, summary, participants, tags, importance, occurred_unix, created_unix, updated_unix " +
-            "FROM episodes WHERE scope = $s AND (title LIKE $q OR summary LIKE $q OR tags LIKE $q) " +
+            EpisodeProjectionSql + "WHERE scope = $s AND (title LIKE $q OR summary LIKE $q OR tags LIKE $q) " +
             "ORDER BY importance DESC, occurred_unix DESC LIMIT $lim",
             Map,
             ("$s", scope),

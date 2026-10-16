@@ -29,6 +29,8 @@ public static class AppDatabase
     private static bool _ready;
     private static string _filePath = string.Empty;
     private static string _connectionString = string.Empty;
+    private const string ReadMetaSql = "SELECT value FROM meta WHERE key = $k";
+    private const string SaveMetaSql = "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
 
     /// <summary>库文件路径（未初始化时按 AppPaths 推导）。</summary>
     public static string FilePath
@@ -82,8 +84,10 @@ public static class AppDatabase
                 }.ToString();
                 using var conn = Open();
                 if (SchemaVersion() > 9) throw new InvalidOperationException("database_schema_newer");
+                ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
+                Write(EnsureConfigurationModule);
                 Volatile.Write(ref _ready, true);
             }
             catch
@@ -209,6 +213,63 @@ public static class AppDatabase
         if (WriteDepth.Value != 0) throw new InvalidOperationException("database_nested_write");
     }
 
+    /// <summary>Configuration uses an additive module revision, not a silent physical-schema upgrade.</summary>
+    private static void ValidateConfigurationModule(SqliteConnection conn)
+    {
+        using var exists = conn.CreateCommand();
+        exists.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'";
+        if (Convert.ToInt64(exists.ExecuteScalar()) == 0) return;
+        var value = GetMetaInTransaction(conn, "configuration_schema");
+        if (value is null) return;
+        if (!int.TryParse(value.ToString(), out var revision) || revision < 1)
+            throw new InvalidOperationException("configuration_schema_invalid");
+        if (revision > 1) throw new InvalidOperationException("configuration_schema_newer");
+    }
+
+    internal static void EnsureConfigurationModule(SqliteConnection conn)
+    {
+        ValidateConfigurationModule(conn);
+        Exec(conn, """
+            CREATE TABLE IF NOT EXISTS configuration_state(
+              id INTEGER PRIMARY KEY CHECK(id=1),
+              version INTEGER NOT NULL CHECK(version>=0),
+              floor INTEGER NOT NULL CHECK(floor>=0)
+            );
+            INSERT OR IGNORE INTO configuration_state(id,version,floor) VALUES(1,0,0);
+            CREATE TABLE IF NOT EXISTS configuration_generations(
+              generation TEXT PRIMARY KEY,
+              hmac_key BLOB NOT NULL CHECK(length(hmac_key)=32),
+              codec_revision TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS configuration_field_modes(
+              field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 142),
+              user_mode INTEGER NOT NULL CHECK(user_mode BETWEEN 0 AND 2)
+            );
+            CREATE TABLE IF NOT EXISTS configuration_operations(
+              authority TEXT NOT NULL, subject TEXT NOT NULL, resource TEXT NOT NULL,
+              operation_key TEXT NOT NULL, namespace TEXT NOT NULL,
+              generation TEXT NOT NULL REFERENCES configuration_generations(generation),
+              expires_unix INTEGER NOT NULL CHECK(expires_unix>=0),
+              fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
+              receipt TEXT NOT NULL CHECK(length(CAST(receipt AS BLOB))<=8192),
+              terminal INTEGER NOT NULL CHECK(terminal IN (0,1)),
+              PRIMARY KEY(authority,subject,resource,operation_key)
+            );
+            CREATE INDEX IF NOT EXISTS configuration_expiry ON configuration_operations(expires_unix,terminal);
+            CREATE TABLE IF NOT EXISTS configuration_devices(
+              device_key TEXT PRIMARY KEY, active_name TEXT NOT NULL, desired_name TEXT NOT NULL,
+              desired_enabled INTEGER NOT NULL CHECK(desired_enabled IN (0,1)),
+              deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),
+              rename_pending INTEGER NOT NULL CHECK(rename_pending IN (0,1))
+            );
+            CREATE TABLE IF NOT EXISTS configuration_revoked_names(
+              name TEXT COLLATE NOCASE PRIMARY KEY,
+              device_key TEXT NOT NULL REFERENCES configuration_devices(device_key)
+            );
+            INSERT OR IGNORE INTO meta(key,value) VALUES('configuration_schema','1');
+            """);
+    }
+
     /// <summary>写事务（异步）：给 async 调用链用（SQLite 本身是同步 IO，这里只是不阻塞调用方太久）。</summary>
     public static Task WriteAsync(Action<SqliteConnection> action) => Task.Run(() => Write(action));
 
@@ -258,12 +319,20 @@ public static class AppDatabase
 
     /// <summary>元数据读写（迁移标记、架构版本说明等都放这）。</summary>
     public static string? GetMeta(string key)
-        => Scalar<string>("SELECT value FROM meta WHERE key = $k", ("$k", key));
+        => Scalar<string>(ReadMetaSql, ("$k", key));
 
     public static void SetMeta(string key, string value)
-        => Write(conn => Exec(conn,
-            "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            ("$k", key), ("$v", value)));
+        => Write(conn => SetMetaInTransaction(conn, key, value));
+
+    internal static string? GetMetaInTransaction(SqliteConnection conn, string key)
+    {
+        using var command = conn.CreateCommand();
+        command.CommandText = ReadMetaSql;
+        command.Parameters.AddWithValue("$k", key);
+        return command.ExecuteScalar() as string;
+    }
+    internal static void SetMetaInTransaction(SqliteConnection conn, string key, string value)
+        => Exec(conn, SaveMetaSql, ("$k", key), ("$v", value));
 
     public static bool HasMeta(string key)
         => Scalar<long>("SELECT COUNT(1) FROM meta WHERE key = $k", ("$k", key)) > 0;
@@ -602,32 +671,46 @@ public static class AppDatabase
     /// v4 成员身份补 title_checked。每一步都自带"是不是已经有了"的内省，重复执行只是空转。
     /// ⚠ 这里动的是**迁移语义**：改任何一步都要单独一次带库快照的改动（别顺手优化）。
     /// </summary>
+    private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
+    {
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9)) throw new ArgumentException("invalid_legacy_schema");
+        Exec(connection, $"PRAGMA user_version = {version};");
+    }
+
+    private static bool HasLegacyColumn(SqliteConnection connection, string table, string column, bool primaryKeyOnly)
+    {
+        if (table is not ("conversations" or "member_messages" or "member_roles" or "stickers" or "member_summaries"))
+            throw new ArgumentException("invalid_legacy_table");
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(1) FROM pragma_table_info($table) WHERE name=$column AND ($pk=0 OR pk>0)";
+        command.Parameters.AddWithValue("$table", table); command.Parameters.AddWithValue("$column", column);
+        command.Parameters.AddWithValue("$pk", primaryKeyOnly ? 1 : 0);
+        return Convert.ToInt64(command.ExecuteScalar()) > 0;
+    }
+
     private static void ApplyMigrations(SqliteConnection conn, long version)
     {
         if (version < 1)
         {
-            Write(conn2 => Exec(conn2, "PRAGMA user_version = 1;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 1));
         }
 
         // v2：会话行补 next_seq（老库升级用；新库建表时已经有了）
         if (version < 2)
         {
-            var hasColumn = Scalar<long>(
-                "SELECT COUNT(1) FROM pragma_table_info('conversations') WHERE name = 'next_seq'") > 0;
+            var hasColumn = HasLegacyColumn(conn, "conversations", "next_seq", false);
             if (!hasColumn)
             {
                 Write(conn2 => Exec(conn2, "ALTER TABLE conversations ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 0;"));
             }
 
-            Write(conn2 => Exec(conn2, "PRAGMA user_version = 2;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 2));
         }
 
         // v3：member_messages 的主键补上 group_id（旧版 A/B 群序号重叠会互相覆盖）
         if (version < 3)
         {
-            var pkHasGroup = Scalar<long>("""
-                SELECT COUNT(1) FROM pragma_table_info('member_messages') WHERE name = 'group_id' AND pk > 0
-                """) > 0;
+            var pkHasGroup = HasLegacyColumn(conn, "member_messages", "group_id", true);
             if (!pkHasGroup)
             {
                 // 这张表是“发言原文缓存”（长期画像在 member_summaries 里，不受影响），
@@ -650,36 +733,34 @@ public static class AppDatabase
                 });
             }
 
-            Write(conn2 => Exec(conn2, "PRAGMA user_version = 3;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 3));
         }
 
         // v4：member_roles 补 title_checked（区分“只知道 role”与“头衔问过了”）。
         // 新库建表时就有这一列；这里只是兼容“跑过中间版本”的库。
         if (version < 4)
         {
-            var hasColumn = Scalar<long>(
-                "SELECT COUNT(1) FROM pragma_table_info('member_roles') WHERE name = 'title_checked'") > 0;
+            var hasColumn = HasLegacyColumn(conn, "member_roles", "title_checked", false);
             if (!hasColumn)
             {
                 Write(conn2 => Exec(conn2,
                     "ALTER TABLE member_roles ADD COLUMN title_checked INTEGER NOT NULL DEFAULT 0;"));
             }
 
-            Write(conn2 => Exec(conn2, "PRAGMA user_version = 4;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 4));
         }
 
         // v6：Provider 注册表与熔断状态持久化；新库建表已完成，旧库在这里补齐版本标记。
         if (version < 6)
         {
             Write(CreateModelProviderTable);
-            Write(conn2 => Exec(conn2, "PRAGMA user_version = 6;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 6));
         }
 
         // v7：多租户隔离与配额（stickers 补 scope_tenant_id、新增 tenant_quotas 表）
         if (version < 7)
         {
-            var hasScopeTenant = Scalar<long>(
-                "SELECT COUNT(1) FROM pragma_table_info('stickers') WHERE name = 'scope_tenant_id'") > 0;
+            var hasScopeTenant = HasLegacyColumn(conn, "stickers", "scope_tenant_id", false);
             if (!hasScopeTenant)
             {
                 Write(conn2 => Exec(conn2,
@@ -706,8 +787,7 @@ public static class AppDatabase
         // v9：画像双层模型（补齐 override_text 与 evidence_json）
         if (version < 9)
         {
-            var hasOverride = Scalar<long>(
-                "SELECT COUNT(1) FROM pragma_table_info('member_summaries') WHERE name = 'override_text'") > 0;
+            var hasOverride = HasLegacyColumn(conn, "member_summaries", "override_text", false);
             if (!hasOverride)
             {
                 Write(conn2 => Exec(conn2,
@@ -716,7 +796,7 @@ public static class AppDatabase
                     "ALTER TABLE member_summaries ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '';"));
             }
 
-            Write(conn2 => Exec(conn2, "PRAGMA user_version = 9;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 9));
         }
     }
 

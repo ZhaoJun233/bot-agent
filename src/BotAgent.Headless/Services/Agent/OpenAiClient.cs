@@ -281,7 +281,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         var result = await _providerFailover.RunAsync(async (candidate, token) =>
         {
             var route = _providerRouteResolver?.Invoke(candidate.Id);
-            if (route is null && !_providerRoutes.TryGetValue(candidate.Id, out route))
+            if (route is null && (_providerRouteResolver is not null || !_providerRoutes.TryGetValue(candidate.Id, out route)))
             {
                 return ProviderCallResult<SendOutcome>.Failure("provider_secret_unavailable", hardFailure: false);
             }
@@ -369,7 +369,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         var result = await _providerFailover.RunAsync(async (candidate, token) =>
         {
             var route = _providerRouteResolver?.Invoke(candidate.Id);
-            if (route is null && !_providerRoutes.TryGetValue(candidate.Id, out route))
+            if (route is null && (_providerRouteResolver is not null || !_providerRoutes.TryGetValue(candidate.Id, out route)))
             {
                 return ProviderCallResult<string>.Failure("provider_route_unavailable", hardFailure: false);
             }
@@ -593,7 +593,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         var result = await _providerFailover.RunAsync(async (candidate, token) =>
         {
             var route = _providerRouteResolver?.Invoke(candidate.Id);
-            if (route is null && !_providerRoutes.TryGetValue(candidate.Id, out route))
+            if (route is null && (_providerRouteResolver is not null || !_providerRoutes.TryGetValue(candidate.Id, out route)))
             {
                 return ProviderCallResult<string>.Failure("provider_route_unavailable", hardFailure: false);
             }

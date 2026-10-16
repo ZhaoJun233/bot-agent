@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
 using System.Globalization;
 using BotAgent.Services;
 using BotAgent.Adapters.Persistence;
@@ -38,13 +40,88 @@ public static class BotConfig
         ApplyBehaviorEnvironment(settings, seedOnly: !hasStored);
         ApplyPanelOverrides(settings); // 面板改过的模型配置：优先于环境变量
         Normalize(settings);
-
-        if (hasStored)
+        // Preserve the captured typed table; bootstrap environment observations are not user edits.
+        if (!hasStored)
         {
-            settingsStore.Save(settings); // 把环境变量带来的基础设施值写回，保持库与实态一致
+            var sources = settings.RuntimePlatformPolicyBaselineSources.ToBuilder();
+            var behavior = BehaviorEnvTable();
+            foreach (var id in sources.Keys.ToArray())
+            {
+                if (behavior.TryGetValue(id.ToString(), out var names)
+                    && names.Any(name => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))))
+                    sources[id] = BotAgent.Domain.Configuration.ConfigurationValueSource.Unclassified;
+            }
+            settings.RuntimePlatformPolicyBaselineSources = sources.ToImmutable();
         }
 
+        if (hasStored) SettingsStore.TryProjectInitializedVerificationToken(settings);
+        // Runtime infrastructure overlays never become user edits or bypass the configuration version.
+
+
         return settings;
+    }
+
+    internal static AppSettings CreateBehaviorSeed()
+    {
+        var seed = new AppSettings();
+        ApplyBehaviorEnvironment(seed, seedOnly: true);
+        return seed;
+    }
+    internal static FieldEffect ConfigurationEffect(ConfigurationFieldId field) => field switch
+    {
+        ConfigurationFieldId.FeishuAppId or ConfigurationFieldId.FeishuApiBase
+            or ConfigurationFieldId.OfficialAppId or ConfigurationFieldId.OfficialSandbox
+            or ConfigurationFieldId.FeishuEnabled or ConfigurationFieldId.OfficialEnabled
+            or ConfigurationFieldId.LocalChannelIds or ConfigurationFieldId.RegisteredPlugins
+            or ConfigurationFieldId.RegisteredProviders => FieldEffect.Restart,
+        ConfigurationFieldId.TtsApiBase or ConfigurationFieldId.TtsModel or ConfigurationFieldId.TtsProvider => FieldEffect.ExternalProjection,
+        _ => FieldEffect.Hot,
+    };
+    internal static void ProjectHotSaveSecrets(AppSettings next, AppSettings previous,
+        ImmutableArray<(WritableSecretSlot Slot, SecretEditKind Kind)> mutations,
+        Func<WritableSecretSlot, string?> fixedDatabaseSecret)
+    {
+        foreach (var mutation in mutations)
+        {
+            if (mutation.Kind == SecretEditKind.Keep) continue;
+            if (mutation.Slot == WritableSecretSlot.ModelApiKey)
+            {
+                next.ApiKeyOverride = mutation.Kind == SecretEditKind.Replace ? fixedDatabaseSecret(mutation.Slot)?.Trim() : null;
+                next.ApiKey = next.ApiKeyOverride ?? (Environment.GetEnvironmentVariable("QQCHAT_API_KEY")
+                    ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty).Trim();
+            }
+            else if (mutation.Slot == WritableSecretSlot.AgentServerKey)
+            {
+                next.AgentServerApiKeyOverride = mutation.Kind == SecretEditKind.Replace ? fixedDatabaseSecret(mutation.Slot)?.Trim() : null;
+                next.AgentServerApiKey = next.AgentServerApiKeyOverride
+                    ?? (Environment.GetEnvironmentVariable("QQCHAT_AGENT_SERVER_KEY") ?? string.Empty).Trim();
+            }
+        }
+        // Gateway credentials are startup-captured, not magically reconnected by exchanging a settings reference.
+        next.FeishuAppSecret = previous.FeishuAppSecret; next.FeishuEncryptKey = previous.FeishuEncryptKey;
+        next.FeishuVerificationToken = previous.FeishuVerificationToken;
+    }
+    internal static string? FixedConfigurationEnvironmentSecret(WritableSecretSlot slot) => slot switch
+    {
+        WritableSecretSlot.FeishuAppSecret => Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET"),
+        WritableSecretSlot.FeishuEncryptKey => Secret("BOTAGENT_FEISHU_ENCRYPT_KEY", "QQCHAT_FEISHU_ENCRYPT_KEY"),
+        _ => null,
+    };
+    internal static void ProjectModelOverrides(AppSettings next, AppSettings user, bool modelChanged, bool urlChanged)
+    {
+        var defaults = new AppSettings();
+        if (modelChanged)
+        {
+            next.ModelOverride = user.ModelOverride;
+            next.Model = !string.IsNullOrWhiteSpace(user.ModelOverride) ? user.ModelOverride.Trim()
+                : Str("BOTAGENT_MODEL", "QQCHAT_MODEL", "OPENAI_MODEL") ?? defaults.Model;
+        }
+        if (urlChanged)
+        {
+            next.ModelBaseUrlOverride = user.ModelBaseUrlOverride;
+            next.ModelBaseUrl = !string.IsNullOrWhiteSpace(user.ModelBaseUrlOverride) ? user.ModelBaseUrlOverride.Trim()
+                : Str("BOTAGENT_BASE_URL", "QQCHAT_BASE_URL", "OPENAI_BASE_URL") ?? defaults.ModelBaseUrl;
+        }
     }
 
     /// <summary>基础设施与密钥：环境变量始终覆盖（改这些要重启容器）。</summary>
@@ -260,8 +337,9 @@ public static class BotConfig
                 var fileValue = property?.GetValue(s);
                 if (!ValuesMatch(property?.PropertyType, envValue, fileValue))
                 {
-                    IgnoredBehaviorEnvVars.Add(
-                        $"{names[0]}={Truncate(envValue)}  ≠ 配置文件的 {Truncate(fileValue?.ToString())}");
+                    IgnoredBehaviorEnvVars.Add(field == nameof(AppSettings.FeishuVerificationToken)
+                        ? $"{names[0]}: configured environment seed ignored; user configuration retained"
+                        : $"{names[0]}={Truncate(envValue)}  ≠ 配置文件的 {Truncate(fileValue?.ToString())}");
                 }
             }
     }
@@ -420,6 +498,7 @@ public static class BotConfig
     private static void ApplyPanelOverrides(AppSettings s)
     {
         SecretsStore.Init(AppPaths.RuntimeRoot);
+        SettingsStore.TryProjectInitializedVerificationToken(s);
 
     // Historical official secret rows remain untouched; they are never a runtime configuration source.
     if (string.IsNullOrWhiteSpace(s.FeishuAppSecret) && new SecretsStore().LoadFeishuSecret() is { Length: > 0 } storedFeishuSecret)

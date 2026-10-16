@@ -2,7 +2,7 @@
 
 > 修订：2026-10-07，第二版。先读[总规划](../modular-monolith-refactoring-plan.md)。
 > 本文件是执行状态、共享写权限、基线验证和交付记录的唯一来源。
-> 执行登记更新：2026-10-10。授权、认领和证据见第四至第十七节；负责人已授权00持续推进到阶段一可开工。C2-A/B宿主/合成证据及10月9日架构159/0见第十四节；完整字段参考见十六节，精确0.2类型及三方案裁决见十七节/候选第10节。0.2已拒绝冻结，正式消费者仍未确认，阶段一/下游仍未解锁。
+> 执行登记更新：2026-10-12。**阶段一实施席位已派发，Wave1施工中、尚未验收。** 负责人业务裁决已落实，C3/C4-0.3.2六消费者同hash接受；唯一冻结、Agent01十文件写权和00旧Host共享合入队列见第二十一节。实际基线见20.6/20.8，旧公开快照见十九节；后续波次及Web继续锁定，历史测试不是当前工作区自动验收。
 
 ## 一、为什么（Why）
 
@@ -12,11 +12,11 @@
 
 ### 2.1 当前证据与状态
 
-当前核对日期：2026-10-10；对象：当前仓库工作区，不是干净发布提交。负责人允许将既有改动作为迁移输入；其原作者归属未核实，不计入本任务成果，不整理、不提交这些代码。第四至第十七节是各批次带时间的记录；第十四节为10月9日C2-B实际接入/合成证据，十五节为只读候选及20DLL/17正文绑定，十六节为完整字段差集，十七节为精确类型候选及实际缺陷裁决，没有新的项目运行，不能将局部接入或静态矩阵称为整体Wave1验收。
+当前核对日期：2026-10-11；对象：当前仓库工作区，不是干净发布提交。负责人允许将既有改动作为迁移输入；其原作者归属未核实，不计入本任务成果，不整理、不提交这些代码。第四至二十节为各批次带时间的历史记录；最新21节闭合准入并登记冻结，20.6/20.8绑定当前未变源码的真实合成基线，不将局部接入、静态矩阵或准入通过称为整体Wave1验收。
 
 | 波次 | 源码存在 | 宿主接入证据 | 验收状态 |
 | --- | --- | --- | --- |
-| Wave 1 | Core、Storage工程存在 | Headless→Core/别名Storage；21个旧Persistence入口为兼容类型/转发，实际逻辑采用Storage；六个Host独有适配器保留；类型校验仍由Host传入 | 未验收；C2局部接入/仓储合成通过，当前架构159/0，SQL137/IO62/Clock3且阈值不变；C3/C4及消费者整体冻结、整批保存/完整兼容恢复门禁未完 |
+| Wave 1 | Core、Storage工程存在；C3/C4类型及Core surface已实现，Storage统一保存仍施工中 | Headless→Core/别名Storage；21个旧Persistence入口为兼容类型/转发，实际逻辑采用Storage；六个Host独有适配器保留；类型校验仍由Host传入 | 已准入，01按21.2及22.3实施中；00分批共享接入，未验收。C3/C4已冻结，当前架构159/0且棘轮不变；整批保存/真实条件发布/完整兼容恢复仍为实现准出义务 |
 | Wave 2A | Platforms 工程存在 | Headless 直接引用 Platforms；行为接入仍需回归 | 未验收；下游冻结 |
 | Wave 2B | Model 工程存在 | Headless 未直接引用 Model；不能声称已采用新传输 | 未验收；下游冻结 |
 | Wave 3 | Engine 工程尚未建立 | 回复及工具路径仍在 Headless | 未解锁 |
@@ -1656,3 +1656,1489 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 - helper首次封闭路径判断将合法src/Services/NapCat误作运行目录，prepare1/未提交；按既有.gitignore根锚定纪律改为根napcat/runtime/data/vendor（bin/obj/node_modules/.git仍全路径拒绝），没有放宽类别RULES/黑名单。第二次临时index整批diff --check退出2，立即停在源快照commit之前、尚未推送。
 - 17:56:24仅诊断形状确认10处：候选/矩阵/总纲及两C#文件IQqActions.cs、LegacyJsonImporter.cs的EOF空行；两规划Markdown头部五行硬换行尾空格。它们是已存在输入，不归为本任务代码成果。00只授权本批临时index/public projection：EOF归一到一LF、Markdown既有硬换行转等价br；两C#仅文件末尾闭括号之后空行，源码/业务字符串/断言/阈值不改。未知新格式问题仍停止，不全局自动删空白。
 - 原工作区文件（除本总纲明确发布登记）及原index保持；快照格式差异和脱敏替换均计数登记，先重新取得diff --check0再commit/归档/审计/推送。源输入raw哈希与归档blob分别说明，公开快照不称逐字节原文件或已动态验收。
+
+
+
+
+
+
+
+
+
+## 二十、拒绝项收敛（2026-10-11）
+
+### 20.1 授权、写权及本批输入
+
+- 依据负责人持续推进至阶段一可开工的授权，00继续独占本总纲及`docs/plans/agents/00-c3-c4-contract-candidate.md`。本批修正01的条件发布/错误枚举/秘密归一，以及06的Fast兼容与Validate秘密输入缺口；其余异议保持待办，不扩展波次、不授予源码写权。
+- 14:17:00.2717946+08:00：HEAD仍为1f3181e；展开状态354项、暂存20项。候选输入SHA 87BAEBE4E070B38A8F006F6D4117E24C83B045F67B7D20FEB8E405C973ACBD2D；总纲输入SHA 8EE96784258EC649E20074C48F5E0C7FA17B87AEB3B77E79B9A1847F94EC5674。已保存本批候选原文、状态/index清单和五份相关源码SHA作前后核对，不覆盖既有变更。
+- 本轮list_agents仅root，旧角色handle不再存活；旧报告不作为新版本确认，未重复启动全波次。上一轮状态说明属于no progress，本批实际修订纠正该停滞。
+- 调用链重新核对：WebUiServer.Settings.cs:131 → Services/Settings/SettingsHotReload.cs:73～85 → SettingsBox.cs:46～64。当前persist正常返回后无条件Exchange；新语义不能靠persist内return拒绝。Storage/SecretsStore.cs:95～120的空白删除/Trim规则也不能直接当新Replace规则。
+- 辅助失败：误将SettingsHotReload放在Services根目录，pwsh1停止后按实际Services/Settings路径读取0；全总纲JSON快照输出截断导致解析失败，未写文件，改为候选原文+总纲hash成功；两次不匹配apply_patch校验拒绝，无文件写。均不是项目测试失败，没有继续错误链。
+
+### 20.2 0.3.1实际修订与窄复核
+
+- 本批实改候选：条件发布的明确谓词及同writer串行顺序；mg1新增ClockRegression/UnsupportedContractRevision及非强转映射；Replace严格UTF8且Trim后非空；Fast保留HotSave用户值、Startup环境别名优先的旧分阶段行为；Validate请求包含revision/version/patch/secrets且无持久化副作用。完整142输入及第3/4节typed分区逐字未变，没有缩小目标字段范围。
+- 已登记两个新只读评审执行者c3_031_storage_review、c3_031_host_review：仅01/06本批拒绝项，无任何源码写权/构建/测试。旧handle缺失已由list_agents证实，不是因观察超时而重复启动。
+- 14:20:39.7356484+08:00：pwsh静态检查0，FieldId表142连续，围栏闭合、相对链接存在、无尾空格；候选SHA D09594B4D86374C1CF4EBAE23CDA99C9265ECF27827DAD778C55C96335AAA3BB。前后五份相关源码SHA、354状态及20暂存条目完全相同。检查覆盖文档结构和本批源码输入稳定，不是编译/项目测试或全仓库内容无漂移证明。
+- 01执行者c3_031_storage_review截至14:20:19+08:00对该SHA四项窄复核接受：条件发布、mg1错误映射、Replace、含秘密Validate；这些范围无剩余文档阻断，但条件发布seam尚未实现。一次中文章节标题匹配错误pwsh1，修正后0；其它查询0。不能以01签字代06或其它消费者。
+- 覆盖与未覆盖：本批没有构建、项目测试、Host、数据库、真实环境值或日志读取；没有代码提交/推送/部署。既有工程变更保留，不记作本批新实现。0.3.1仍非整版冻结，输入codec、Device回执、独立管理授权、Policy/legacy/实例会话以及Token/设备兼容选择仍待解决，03/04/05尚需实际评审。
+- 回退：仅逆向本批候选差异、本总纲第20节及顶部状态行，先核后续依赖与当前hash；不得恢复整个工作区或原index。原候选字节与输入hash已留作本轮差异比对。没有数据/schema变更，未声称生产回退演练完成。下一步针对尚存拒绝项继续修订，不重复要求例行批准，也不以本次局部接受解锁阶段一。
+- 06执行者c3_031_host_review，14:20:00～14:20:35+08:00，候选前后SHA同D09594…；接受Fast分阶段兼容、含秘密Validate、条件发布Host边界，原“统一环境优先”和“仅Patch全批校验”异议可关闭。仅这些修订通过窄复核，不代03或关闭codec/管理授权/Token/Device待办。一次章节检索引起非终止Select-Object参数错误，改真实中文标题后完整读取成功；报告其余pwsh退出0，无构建/测试/写文件。
+- 00结论：本批五项文档矛盾已有实际修订，01/06相关项按同一hash接受；保留其它明确阻断，不宣告统一保存实现、当前基线验收或阶段一开工。下一批应直接解决剩余codec/授权/Device回执的精确契约并完成03/04/05消费核对，而不是重审已关闭的同一问题。
+
+### 20.3 0.3.2写权与消费评审
+
+- 持续授权及原00独占两文档写权延续；本批拟补strict closed input codec、DeviceKeyAssignment回执和提交前编码预算、独立管理授权seam；不改源码/共享工程/测试，不跳过旧兼容业务裁决。输入候选D09594B4D86374C1CF4EBAE23CDA99C9265ECF27827DAD778C55C96335AAA3BB，总纲FED303595E6AA2E6039D4C64B6C0B604A0A370BA9BD6ABF8268519CA4E661147；HEAD仍1f3181e，前版候选原文保留供仅本批逆向。
+- 前一goal turn判定progress：五项实际修订且01/06窄复核已接受。新启动三个只读实际消费者c3_model_consumer（03）、c3_engine_consumer（04）、c3_mcp_consumer（05）；只取真实源码事实和自身手册的契约消费意见，无施工写权、构建/测试/Host/数据/env值读取。0.3.2完成后发送精确hash再确认，不冒称修改中旧hash已确认新版。
+- 真实入口补核：WebUiServer.IsAuthorized在无面板密码时直接allow，不能继承为新管理授权；旧Settings的agentDevices仍是字符串全表，不存在可直接回传的新DeviceKey映射。新C4 grant/codec/receipt均是拟建契约而不是猜测已有API。
+
+### 20.4 0.3.2与review-1实际证据
+
+- 中断后list_agents仅root，确认前批03/04/05句柄已缺失，不是观察timeout；候选仍D09594…，没有未观察的候选写入。前批只读事实推进了后续修订选择。本批追加前版五项之外的closed codec、Device新key回执及precommit最坏编码预算、独立管理授权/Validate grant；并按03/04/05实际异议明确凭据阶段与禁止resolver缓存复活、插件关门、mood不可凭bool报Applied、MCP稳定RegisteredId。本批仍只写原认领的两个文档，无源码/测试/工程写权。
+- 20:56:21.0516234+08:00静态检查pwsh0：142字段连续、围栏/尾空白/相对链接通过，0.3.2候选SHA 3A9677097B8338165ABCFACCE0750388384D794EFDDC0F4E50702AEE48769DF0。仅文档结构检查，不是codec运行证据。
+- 新实际评审者：01 c3_032_storage_contract_review（截至20:58:52），06 c3_032_host_contract_review（现场窗口20:57:52～20:58:45），03 c3_032_model_contract_review（20:57:37～20:58:54）；均绑定3A967709…只读。01接受新增三组；03首次正式接受自己的Core消费范围、明确primary Priority/Enabled ReadOnly与nonprimary RestartRequired；06仅拒ObjectKey/Command合写device kind，其它本批指定范围接受。01一次错找Storage下SettingsStore/AuditLogStore退出1后按实际Headless适配器修正0，06/03正常查询0；不算产品失败，不代其他角色确认。
+- 负责人本次业务答复明确Token“旧空值整批拒绝并提示刷新”。00据此将旧Token空/纯空白在任何配置/秘密/mood/TTS副作用前整批LegacyNeedsReview；Missing/nullKeep，非空Replace，新strict显式Delete，GET configured/source与UI删除/刷新通路同批迁移。本裁决只解决Token业务选择，不自动批准设备删除、实例会话、新认证或资源预算。
+- 21:00:51.3950233+08:00生成review-1 SHA B6ACC22844BFB632217A1E1F3F90DC62006D943519CB69710015DF80EDBEB19E：只另拆ObjectKey五kind/Command四kind、澄清实际Headless与Model副本、落实Token裁决。01在21:01:16～21:01:27、06在21:01:15～21:01:24、03在21:01:25逐差异窄确认接受并重绑定该hash；不重新扩张已接受设计，不将消费者签字作为源码接入。
+- 20:59:33.1895161+08:00按本仓库已有封闭安全manifest的557行逐文件哈希/MISSING核对，对比10月10日已发布源输入仅候选与总纲两路径不同，HEAD仍1f3181e、暂存20项。此核对不读真实数据或env值，不替代测试基线；不覆盖manifest外未知文件。原工作区其它既有改动保留。
+- 04/05/02新正式只读复核者c3_032_engine_contract_review、c3_032_mcp_contract_review、c3_032_platform_contract_review已派发；固定review-1 hash，分别核自身消费范围。02只提交Policy/目录等最小补充建议，00最终合入；各角色没有源码写权，不启动Wave2～4。
+- 辅助失败：root误读不含Governance的PlatformPolicyResolver路径，pwsh1停止后按rg真实路径修正0；一次过窄QqAction glob无匹配rg1，后用实际动作字面量定位Services/Agent/QqActionTool.cs退出0。只读失败不通过造平行文件修复。
+- 中断前临时内存原文在新tool会话不再可用；本批不冒称已有逐字恢复快照。文档回退须按本批明确片段做逆向，核相应输入hash及后续写入，不覆盖整个文件/工作区；没有数据迁移、构建/项目测试/生产恢复演练。未提交或再次推送，旧47e6607远端不包含本批文档。阶段一仍待其它技术闭合、业务裁决和当前准入证据。
+- 为后续只回退明确本任务片段，00另认领仅`.git/agent00-contract-20261011-2104/**`保存本批自有文档安全快照与元数据（不含源码或运行数据，不公开推送）；创建前校验解析在本仓库.git且目标原不存在，保留旧发布派生目录，不清理他人文件。
+
+### 20.5 当前源码基线刷新（不启动Wave1实现）
+
+- 复用4.1已批准的合成基线验证授权与派生产物认领，本次00仅执行真实Headless Release构建、ArchitectureProbe Release构建及普通架构验收入口；写入仅各对应已忽略bin/obj。20:59安全manifest证明与已发布源码输入相同，但不将旧测试自动称当前通过，故主动刷新这两个前置证据。
+- 先核ArchitectureProbe.csproj无主工程引用、Program/SourceIndex为只读源码扫描，不起Host/数据库/真实数据/网络；不使用--print或--self-test替代普通架构验收。不改Baseline/阈值/断言，不跑集成测试、生产、容器或无筛选日志；每个原生命令独立检查退出码，失败即停后续并登记归属。安全输出仅构建状态、警告错误计数和架构计数。
+- 00继续复用同一既有合成基线授权，扩展本次刷新到SafetyProbe与solution构建，以及既有s21/s36/s52三个定向harness入口（不是全矩阵，S42仍未验收）。追加对应忽略bin/obj及本任务派生目录中新UUID合成根认领。安全探针清除继承配置变量，仅按名称操作，不读取/回显值；两套DATA_DIR显式同一新根、关闭文件日志。集成前再独立Headless Rebuild，父harness不带数据别名，按源码场景自设新根与本机mock，固定本仓库新DLL/单个ONLY，不使用外部模式。
+
+### 20.6 最新消费签署与实际基线结果
+
+- 唯一当前候选0.3.2-review-2 SHA B517D3F58E54D3DE31970C82F7D22C438A7E612EBA6F7396B1FA88198763C198。02提出的逐字段Instance→AccountDefault→canonical/newscope baseline、无损legacy/local旧union、canonical动作交global/hard/runtime、配置声明目录与loaded/NotLoaded区别已一次补齐，typed签名/142FieldId/01和06seams未删减。
+
+| 实际角色执行者 | 同一review-2 hash的签署时间（+08:00） | 结论 |
+| --- | --- | --- |
+| 01 c3_032_storage_contract_review | 21:10:59～21:11:29 | Core/Storage技术范围接受 |
+| 02 c3_032_platform_contract_review | 21:08:45～21:08:56 | 四组精确异议关闭，平台消费接受 |
+| 03 c3_032_model_contract_review | 21:11:16 | Model范围保持接受 |
+| 04 c3_032_engine_contract_review | 21:12:39～21:12:55 | Engine技术范围接受，设备/会话业务不代答 |
+| 05 c3_032_mcp_contract_review | 21:12:48 | MCP预留消费接受，不免Wave4实体验收 |
+| 06 c3_032_host_contract_review | 21:11:06～21:11:47 | HTTP消费/Policy/目录窄复核接受 |
+
+- 六角色为技术消费确认，均无源码写入/构建/项目测试/运行数据读取；01/04/06本轮各有一次旧路径误查后定位修正，错误退出1/2与成功退出0已报告，未形成源码缺失结论。02拒绝项不是00代签，当前设备删除与同账号实例会话仍等待负责人实际答案。
+
+| 00真实命令（仓库根pwsh） | 2026-10-11时间（+08:00） | 退出码/结果 |
+| --- | --- | --- |
+| dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --nologo | 21:05:12～21:05:18 | 0；增量0警告/0错误 |
+| dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --nologo | 21:05:32～21:05:34 | 0；0警告/0错误 |
+| dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll | 21:05:34～21:05:35 | 0；302源码文件/53182行，159通过/0失败 |
+| dotnet build tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release --nologo | 21:06:55～21:07:09 | 0；0警告/0错误 |
+| dotnet tests/BotAgent.SafetyProbe/bin/Release/net8.0/BotAgent.SafetyProbe.dll | 21:07:09～21:07:21 | 0；594/0 |
+| dotnet build BotAgent.slnx -c Release --nologo | 21:10:22～21:10:27 | 0；增量0警告/0错误 |
+| dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release -t:Rebuild --nologo | 21:10:27～21:10:36 | 0；8既有CS0108/0错误，不称全构建无警告 |
+| dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --nologo | 21:10:36～21:10:37 | 0；增量0警告/0错误 |
+| QQCHAT_IT_ONLY=s21；dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll | 21:10:37～21:10:46 | 0；37/0 |
+| 同harness，ONLY=s36 | 21:10:46～21:10:54 | 0；98/0 |
+| 同harness，ONLY=s52 | 21:10:54～21:11:01 | 0；119/0 |
+
+- 本次定向真实调用链：Headless独立Rebuild后，以QQCHAT_BOT_DLL绑定该仓库新DLL；s21真实HTTP模型设置保存/换mock端点/重启，s36真实官方Secret拒收及显示脱敏/raw key/nameRaw，s52真实平台开关/策略/本地入站/mock/outbox/重启。不是仅程序集编译，也不是未来C3统一保存已实现；新TX/版本/幂等/回执和条件发布仍为Wave1实现后的验收。
+- 父验证进程清除继承BOTAGENT/QQCHAT/OPENAI/MINIMAX/TTS/HARNESS配置及HEALTH_PORT，仅列名称、不读取或打印值。Safety两DATA_DIR同一新UUID合成根；harness父无数据别名，各单场景自行新根和本机mock，未用外部模式/真实协议端。输出仅计数/状态，没有读取真实数据/数据库正文/未筛选日志。
+- 日志声明更正：Safety调用曾设置QQCHAT_FILE_LOG/BOTAGENT_FILE_LOG，但它们不是真实关闭开关，不能宣称全探针文件日志已关闭；真实Host开关为QQCHAT_LOG_FILE且由CompositionRoot处理，Safety自身仅部分测试直接关闭FileLog.WriteToFile。该Safety根始终是新合成目录，未读取任何日志正文；本次安全结论依赖隔离而不是错误开关。harness StartBot清QQCHAT父变量，不能假设父日志开关会生效；各场景只产生其合成数据，仍不读取未经筛选日志。
+- 8个CS0108是HttpFetcher继承接口的既有成员隐藏；当前文件SHA 0D1FC3B8F07EC880D38599591A14F4B7A49DD27F30839E47A71003EEF0CD8984与封闭源清单一致，历史743/927/1408行已登记同类8警告。增量0警告不表示已消除。未改阈值/断言、不将警告当新绿证据。
+- DLL指纹：Headless 5E20031B7914D61D8FB2AFFFF05642F7893FBEE2694CC103ABE811E8879FB652；harness 40268FF4F2F13D0A6A1E4CBB396397EDCDC2E71C0F8F74269FF5DF0C04E8D5C8；Safety 62B5FACFB39161BEC887AFB0A81C9BCBBBD3632D025D26AF6708792930FE7B44；Architecture 664342F7E07AAEFA20EC38ABDCC57D48D476BA3A451CBF89E0AD6C55CB683B56。一次hash查询遗漏Architecture bin/Release路径退出1，修正后全部hash读取0；一次模型场景路径误用ModelSettingsScenario退出2，定位真实ModelConfigScenario后读取0，均未继续错误链。
+- 未覆盖：全探针/全harness矩阵、S42真实官方协议、s50本次重跑、未来统一保存/C4真实动作、MCP互通、资源负载和产物/数据库恢复；没有部署、生产或本批代码提交/推送。阶段一仍非已开工；当前新的基线结果不是Wave1准出。
+
+### 20.7 阶段一准入核对与下一交接
+
+| 开工条件 | 当前权威证据 | 当前结论 |
+| --- | --- | --- |
+| 持续推进/基线授权 | 当前聊天目标、4.1及本节验证认领 | 有效；不是自动生产/提交权限 |
+| 当前源码/引用/旧改动保留 | 557封闭路径核对、HEAD/index/status复查，变化仅00两文档 | 已核；未经本批认领的旧源码不归本批成果 |
+| 01与02～06技术消费确认 | 20.6六角色同B517D3…签署，包含06早期协作 | 技术范围已齐，不再把这些角色一概写成“从未评审” |
+| Token兼容选择 | 负责人实际答复，review-1技术窄核 | 已明确；同批实现和负例仍为Wave1义务 |
+| 设备删除/改名兼容 | 已询问负责人，尚无实际答复 | 未完成，不代答 |
+| 同账号多实例会话共享/隔离 | 已询问负责人，尚无实际答复 | 未完成，不靠DriverKey三元声称会话已隔离 |
+| 当前基础验证 | Headless/solution/Safety/Architecture及s21/s36/s52结果见20.6 | 定向当前基线通过；非全矩阵、新保存验收、资源或回退验收 |
+| 代码认领/接入方案 | 下表是精确拟交接，尚未发源码写权 | 准入前不能视为已授予01写权 |
+| 统一保存/迁移/回退合成用例 | 候选9.2及20.6未覆盖项 | 明确实现验收义务，不冒称开工前已实现通过 |
+
+- 第一阶段01拟认领（仍未准入）：Core `src/BotAgent.Core/Domain/Configuration/ConfigurationContracts.cs`、`Domain/Ports/IConfigurationChanges.cs`、`Domain/Management/ManagedCapability.cs`、`Domain/Ports/IManagedCapabilities.cs`；Storage `src/BotAgent.Storage/ConfigurationStore.cs`及现有`AppDatabase.cs`/`SecretsStore.cs`的同连接原语与schema/version/ledger变更；测试仅新`tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs`，公共Program入口由00合入。实际拆分/namespace先与唯一已冻结surface对齐，新增friend/internal文件须在写前补登记，不从此表推导任意文件写权。
+- 01不写/不删除旧Headless文件。旧`Adapters/Persistence/SettingsStore.cs`、`AuditLogStore.cs`、`BotConfig.cs`、`ModelProviderStore.cs`及共享`Services/SettingsBox.cs`、`Services/Settings/SettingsHotReload.cs`、`Services/AppSettings.cs`、`Adapters/Panel/WebUiServer.Settings.cs`/`WebUiServer.cs`、`wwwroot/app.js`、`Host/CompositionRoot.cs`均由00最终合入；先保留旧调用，按同TX与条件发布/Token UI同批方案逐补丁验收，再移交/删除，不能并发写。方案共享范围不等于本批新增源码写权。
+- 02/03只读确认不是Wave2写权；Wave1准出+无交叉认领后才并行。04/05只读确认也不是Engine/MCP准入。06仅早期协作，Host/解决方案/引用/共享设置/护栏/公共测试/CI/部署由00最终写。07仍锁定，Web必须所有前置门禁及负责人明确解锁。
+- 21:15:20.9565910+08:00两文档围栏/链接/尾空白、142FieldId连续及scoped git diff --check退出0；候选保持B517D3…。原生Git stdout字节口径index SHA B88D046BA5B191EFD3A4E8F98974FC1395B9BB2ABA5CC7D691F41ED5EA611A1B、status SHA 4F36ACD5746F7541F6A8CDA3A18D9EB816FCB819B449468A3E6F19D121C79033，分别与原发布输入完全相等（与LF-join旧口径不混比）。候选review-1安全原文快照在已认领.git派生目录，若回退只逆向本批明确片段并先查后续依赖，不做整仓恢复。
+- 00结论：本轮新增技术异议已收敛并取得真实六角色消费签署，且真实宿主定向基线已刷新；当前不再以未知的技术评审队列重复绕圈。剩余两项具体业务答复尚缺，完整契约未冻结，阶段一未开工，goal保持active；不把未来统一保存/资源/回退验收降格成此次定向基线。
+
+### 20.8 专项准入证据补齐
+
+- 前一goal turn为progress：六消费者同hash接受、当前基线与真实宿主三场景通过；本轮继续补齐已经批准的合成基线中的ReviewRemediationProbe、SettingsScopeProbe及S50，不重复契约设计。原00两文档独占和忽略bin/obj/独立合成根认领延续；不修改源码/阈值/断言，不增加其它波次写权。
+- 先核真实入口：Review Program按新UUID双DATA_DIR初始化，含共享DB/独立child/旧格式导入/写事务/恢复/clock用例；SettingsScope Program同样新UUID双DATA_DIR；S50实际为Program:122→RunFeishuPlatformScenarioAsync→FeishuPlatformScenario.cs，不是猜测的独立Dedup文件。一次不存在FeishuDedupScenario路径查询退出1，立即停止，按真实注册入口重查0；没有创建猜测文件。只执行这些新合成目录的代码，不读取真实数据或任何日志正文。
+- 所有测试前清继承配置变量，仅按名称处理，不回显值；Review/Settings自行设置合成根，IT再独立重建Headless及harness并固定本仓库新DLL。失败即停后续准出，已完成其它证据仍保留但不隐瞒失败。
+
+| 本批00真实命令 | 2026-10-11时间（+08:00） | 退出码/结果 |
+| --- | --- | --- |
+| dotnet build tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj -c Release --nologo | 21:19:45～21:19:49 | 0；0警告/0错误 |
+| dotnet tests/BotAgent.ReviewRemediationProbe/bin/Release/net8.0/BotAgent.ReviewRemediationProbe.dll | 21:19:49～21:19:51 | 0；主汇总192/0，独立child另列，不叠加冒充192范围 |
+| dotnet build tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --nologo | 21:19:51～21:19:54 | 0；0警告/0错误 |
+| dotnet tests/BotAgent.SettingsScopeProbe/bin/Release/net8.0/BotAgent.SettingsScopeProbe.dll | 21:19:54～21:19:55 | 0；failures=0，未臆造成功计数 |
+| dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release -t:Rebuild --nologo | 21:23:45～21:23:52 | 0；8既有CS0108/0错误 |
+| dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --nologo | 21:23:52～21:23:53 | 0；增量0警告/0错误 |
+| QQCHAT_IT_ONLY=s50；dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll | 21:23:53～21:23:58 | 0；14/0 |
+| dotnet --version | 21:25:07 | 0；SDK10.0.101，工程target net8.0，pwsh7.6.3/Windows |
+
+- Review覆盖实际共享数据库门面、跨门面写失败回滚、禁止嵌套写、future schema拒绝、bound-root旧导入、合成备份恢复及clock初始化/竞态等；独立child形状：storage-uninitialized4/0、typed-import5/0、future4/0、restore3/0、clock-uninitialized10/0、binding-race12/0，主统计192/0不包括把这些强行累加。SettingsScope现有失败前不publish/提交后失败不伪回滚/秘密runtime JSON/审计原语/旧own-message迁移通过。S50使用本仓库新Headless DLL走真实飞书入站→Core dedup端口→共享SQLite事务的故障/重试/重启链，协议和模型均本机合成mock，非真实平台。
+- 本次四个定向IT（s21/s36/s50/s52）证据已齐；无新增配置版本/全批秘密/幂等key/DeviceKey/C4动作实现，因此不把这些旧调用链测试当未来统一保存验收。S42及完整矩阵/资源/部署恢复仍未覆盖，不降低下游准出门禁。
+- DLL SHA：Review 891C4803182211C44869134FF58E08976DE0B23147D94EA298D41026B6E57652；SettingsScope 3F34500AA20BE52104540885C3B45997057FF26FE6C65A53EE1883B8ECCCF2FB；Headless与harness仍为20.6相同5E20031B…/40268FF4…。源码/候选未改，B517D3…仍唯一技术确认版本；本批只追加自有总纲及忽略式派生产物，无代码提交/推送/生产。
+- 00准入结论：既有C1/C2前置技术路径和兼容恢复新增当前合成证据，阶段一开工阻断没有扩大。设备删除/改名与会话共享两项仍无负责人实际答复，不因持续工作授权推导业务答案；完整freeze及源码认领未放行。下一步在实际答复到达后只处理其确切语义，不重开已签署技术范围。
+
+- 本批安全证据另封存于已认领`.git/agent00-contract-20261011-2104/candidate-review-2.md`及`baseline-readiness-20261011.json`：仅契约原文、提交/文件hash、命令/时间/退出码/计数、待决项，无运行正文或秘密；不纳入公开仓库。
+
+### 20.9 完成与阻断审计
+
+- 本轮重新核验候选B517D3…与封存证据一致，HEAD仍1f3181e；六角色技术确认及基线结果仍有效。list_agents只有root运行，仍列出的03/04/05执行者均completed，没有可等待的测试或评审句柄；不把聊天意图/文件标记当verified wait。
+- 前一goal turn为progress（Review/SettingsScope/S50真实通过并封存安全证据）。本轮核验未改变准入结论，应归no progress，而不是靠重复检测/写状态制造进展。剩余阻断在连续三个goal turn保持同一条件：20.7/20.8/本次审计均缺设备删除/改名与同账号实例会话两项业务实际答复；Token裁决已经收到，不重复询问。
+- 依完成审计，完整契约冻结尚不成立，源码写权未发，阶段一可开工没有被证明；不能改目标为“基线绿/技术评审完”并标complete。依阻断审计，所有不依赖该两项业务裁决的准入技术工作已完成，无可安全继续的受影响实现；新启Agent、重跑同一绿测试或重复扩写文档不能解决该条件。按goal规则申请blocked状态，最终状态以工具返回为准，不是负责人主动暂停，也不是任务完成。
+- 恢复条件只需实际业务答案：设备删除后禁止连接且按稳定Key改名，或保留旧默认启用语义；同账号实例共享会话，或每实例隔离。收到后只落实这两项所影响的精确契约/兼容与写权，不重开已确认技术项。不默认代答、不降低门禁、不推送/部署，不触碰其它旧工作区改动。
+## 二十一、业务裁决闭合与阶段一准入（2026-10-11）
+
+### 21.1 授权、输入与本轮认领
+
+- 负责人本轮实际答复：**禁止连接，共享会话**。对应20.9两个恢复条件：删除设备后拒绝连接；同平台同账号多实例共享会话上下文。Token旧空值整批拒绝刷新裁决延续。本答复不授予生产、提交、推送、部署或Web解锁。
+- 00在2026-10-11T21:37:52.0187180+08:00 延续两文档独占：00-c3-c4-contract-candidate.md输入B517D3F58E54D3DE31970C82F7D22C438A7E612EBA6F7396B1FA88198763C198；本总纲输入D5B94B313C7309AB92187504728B8366DD095F557B130939AA5EC3BC60583160；各原文封存于已认领.git/agent00-contract-20261011-2104/*-before-business-close.md。本轮只闭合两项确切语义并审计准入，不重开20.6已签技术范围、不启动下游、不改源码。
+- 当前安全manifest557行复核仍只此两文档不同，HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580。git status --short186行是目录折叠口径，原--untracked-files=all354行是展开口径，不把口径差当新增改动；准入封存再比较原生字节hash。既有源码和20暂存删除不计本任务成果，不整理或清理。
+- 两次只读路径误查（InboundMessage独立文件、Storage GlobalUsings.cs）及一次不存在Headless Properties目录rg均立即非零停止；按真实ConversationId.cs内含消息类型、Storage.csproj Using和实际文件定位修正，只读错误不作为接口缺失证据。本轮未构建/项目测试，20.6/20.8有效基线按源码指纹绑定沿用。
+### 21.2 精确阶段一认领与旧文件交接安排
+
+- 唯一实施席位为Agent-01，认领在21.3冻结/准入核对通过时生效；本次stage1_01/02/06_business_close等窄评审执行者仅只读，没有源码写权。尚未派发实施，不把reserved/可开工写成施工中。执行者绑定实施席位后，先逐文件复核此表输入、全部适用AGENTS和冻结hash；不需重问本轮例行批准，但任何真实漂移/碰撞先停相应文件并报00。
+
+| 写入所有者/交付 | 仓库根相对确切路径 | 本轮输入/限制 |
+| --- | --- | --- |
+| 01→00 | src/BotAgent.Core/Domain/Configuration/ConfigurationContracts.cs | NEW；完整142FieldId及C3类型，不删字段换绿 |
+| 01→00 | src/BotAgent.Core/Domain/Ports/IConfigurationChanges.cs | NEW；物理Ports但FQN保持BotAgent.Domain.Configuration.IConfigurationChanges |
+| 01→00 | src/BotAgent.Core/Domain/Management/ManagedCapability.cs | NEW；C4最小跨模块类型，非所有真实动作实现 |
+| 01→00 | src/BotAgent.Core/Domain/Ports/IManagedCapabilities.cs | NEW；BotAgent.Domain.Management的IManagedCapabilities及IManagedAuthorization |
+| 01→00 | src/BotAgent.Storage/ConfigurationStore.cs | NEW；同一AppDatabase协调器，C3实现，不嵌套旧Save |
+| 01→00 | src/BotAgent.Storage/AppDatabase.cs | SHA033C222A9FB5B5D282A04F798EC25E0F1C8043A6199B91629B14AC25AE2E22C6；增量schema/version/ledger/tombstone，保留旧改动 |
+| 01→00 | src/BotAgent.Storage/SecretsStore.cs | SHA074D4701B5EF8C045D47FFAD36560F32308900F7BEE144B25A9335AA9118CE15；同连接内部原语/错误传播，不扩大Secret范围 |
+| 01→00 | src/BotAgent.Storage/ConfigurationStorageBridge.cs | NEW；仅确需Host同连接过渡的internal窄桥，不开放任意secret/env/独立DB |
+| 01→00 | src/BotAgent.Storage/Properties/AssemblyInfo.cs | NEW；仅BotAgent.Headless、BotAgent.ReviewRemediationProbe精准friend，不能泛授权 |
+| 01→00 | tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs | NEW；仅新合成测试实现；Program公共入口由00合入 |
+
+- 9.3文件/FQN划分先取得01/06确认；真实Core/Storage csproj均net8.0/TreatWarningsAsErrors，Storage只引Core，Headless当前Core/Platforms/Storage引用，无Model直接引用。本表没有csproj写权；增工程/引用/新额外文件或不同friend使用者先报00登记，不从模块名扩张认领。
+- **旧Host文件不交给01写或删。** 00独占以下最终合入队列（各前缀均src/BotAgent.Headless）：Adapters/Persistence/SettingsStore.cs、AuditLogStore.cs、BotConfig.cs、ModelProviderStore.cs；Services/AppSettings.cs、SettingsBox.cs、Settings/SettingsHotReload.cs、Agent/AgentBridgeServer.cs、Agent/AgentCommandService.cs；Adapters/Panel/WebUiServer.Settings.cs、WebUiServer.cs；wwwroot/app.js；Host/CompositionRoot.cs。另tests/BotAgent.ReviewRemediationProbe/Program.cs公共入口仅00。14条真实文件本轮逐条存在检查通过；其它AgentCommandService partial若需要必须另记准确路径，不自动授权。
+- 00只在本阶段准入后按独立补丁批次核输入hash→登记具体改段→合入，不能把整队列当已修改。批1同TX/版本/回执/条件发布与新公共测试；批2完整legacy writer与Token GET/UI/旧空整批拒绝/显式Delete；批3Device同Key与撤销/hello/在线选择/worker/control及回退；每批真实宿主调用链和合成负例通过再交接。涉及后续Platforms/Model/Engine/MCP时先等对应波次准入并另登记；不让临时并行写共享文件。
+- Agent-02～07本轮**确切源码写入集合均为空**。02/03到Wave1准出后才逐文件登记Platforms/Model及旧Headless交接，无交叉才并行；04随后登记Engine与旧回复/工具/Plugin交接；05登记MCP真实SDK/适配与Core消费；06本轮仅早期契约协作，未来Panel/CLI独立路径另登记，Host/解决方案/引用/设置/护栏/公共入口/CI/部署仍00最终写；07锁定直到Wave1～5、必选ZBA、安全、资源、回退齐备且负责人明确解锁。未来未建立文件不预授无限目录写权。
+- 回退只逆向此批拥有的确切文档/源码片段并核后续依赖；保留已有未提交改动、暂存20删除、未跟踪文件和旧兼容通路。新数据库迁移/产物回退是实现准出义务：合成前镜像与相容整套版本，旧binary不识Device撤销须先关闭桥入口，不将本轮文档备份当生产回退演练。
+
+### 21.3 实际消费签署、唯一冻结与写权生效
+
+- 之前stage1_01/02/06_business_close在中断后live list仅root、三个句柄均missing，尚无可登记报告；据真实终止状态续派窄评审，没有把观测超时当终止重启。新执行者实际报告如下；全部无写入/build/test/运行数据读取，git no-index退出1为检查后的预期差异，不是构建/测试失败。
+- 本次01/06只提出同一两处最小澄清，00一次补齐：删除commit后publish/重建/撤销同步或读取失败均fail-closed，旧SettingsBox允许快照不能继续放行；共享Token+自报host不是物理身份，不将自报Key变grant，不夸称防改名/冒用另一授权名。01/02/06随后窄绑定最终hash，没有重新扩展设计。
+
+| 正式角色与实际执行者 | 2026-10-11最终签署时间（+08） | 对最终hash结论/命令退出码 |
+| --- | --- | --- |
+| 01 stage1_01_narrow_resume | 22:03～22:05:12 | 接受；存储/Key/会话/FQN/十文件范围，pwsh0、差异1 |
+| 02 stage1_02_narrow_resume | 22:05:28 | 接受；共享上下文而实例权限/路由独立，pwsh0 |
+| 03 stage1_03_unchanged_binding | 22:06:29～22:06:44 | 接受；Model/凭据/Fast/签名表面未变，读取/哈希0、差异1 |
+| 04 stage1_04_final_narrow | 22:05～22:06:57 | 接受；真实桥/路由消费语义，读取0、差异1 |
+| 05 stage1_05_unchanged_binding | 22:06:40～22:06:53 | 接受；第8节完整文本同旧版、MCP表面未变，读取0、差异1 |
+| 06 stage1_06_narrow_resume | 22:05:40 | 接受；两处补文关闭、共享Host/HTTP范围成立，pwsh0 |
+
+- **00于2026-10-11T22:09:26.7438610+08:00 冻结C3/C4-0.3.2**。权威文件docs/plans/agents/00-c3-c4-contract-candidate.md，SHA256 **7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203**；strict请求ContractRevision仍cfg-0.3.2，不因评审后缀造新协议；字段矩阵SHA2FC8A1C55AA1E62A741EFC0D4B4F44DFC20CC86EB19584F355BA37F9CF1BC7E1，完整142非秘密/9秘密兼容/48响应/170属性保留。本版签名/语义修改必须登记新版本并窄核实际消费者；不能自行改已冻接口或造HTTP路由。
+- **阶段一准入通过；21.2的01十文件认领现生效，单一实施席位reserved/尚未派发，未开始源码施工。** 只读复核者不自动转为实施者；后续00将实际实施执行者绑定席位，核输入后可开工，不再重复询问本轮业务/例行授权。00十四旧Host/公共入口队列独占有效，每批写前登记input hash/改段；无旧文件临时移交、无其它写者。Stage1准入与Wave1准出是两道不同门禁。
+- 01/02/04/06各只读路径定位错误已纠正，01/03/05预期diff1已显式检查；04两次错误路径1、02错误查询1/2、06rg通配2/shell1后成功0。root另一次误猜Headless GlobalUsings.cs引起rg2/shell1，立刻停止，改只查真实CompositionRoot和实际csproj Using成功0；未因误查创造平行文件。上述不隐藏、也不虚报成当前产品行为故障。
+
+### 21.4 完整准入审计、实施验收与下游门禁
+
+| 具体开工要求 | 本轮当前权威证据 | 00核对 |
+| --- | --- | --- |
+| 本次任务/业务授权明确 | 当前持续推进到阶段一可开工目标、21.1实际两答案及已裁决Token | 满足；无生产/推送权限扩张 |
+| 当前源码/项目引用/真实旧调用链 | 557安全路径逐hash仅00两文档变；Core无业务引用，Storage只引Core，Headless引Core/Platforms/Storage且未引Model | 满足；旧改动保留，非本轮源码成果 |
+| C1/C2现有前置接入和运行基线 | 真实CompositionRoot:69～72先绑定Platforms/Storage clock→唯一AppDatabase→typed旧导入；Review现有共享DB/迁移/future schema/clock及备份恢复用例20.8；Safety/Architecture20.6 | 满足当前开工前置；既有局部契约不冒称全部重构已完成 |
+| C3/C4完整业务面及消费确认/06早期协作 | 本节六正式角色同7B7CB92A…、142FieldId连续唯一；Token/设备/会话裁决已闭合 | 满足；统一保存/C4真实implementation仍未实现 |
+| 唯一写权/旧文件交接/共享合入 | 21.2十01路径+十四00队列，01两个现有源输入hash匹配，八NEW路径未存在，无并发源码写者 | 满足；新额外文件或引用必须先补登记 |
+| 适用当前基线实际执行有效 | 原安全baseline receipt SHA52001EED153C764F5B9C282A59D9CFBCA3E0F4E3D8384544A5BA25558EBCEE8C及20.6/20.8逐命令/时间/exit；本轮源码与六DLL指纹均未漂移 | 满足定向准入基线；不重跑同一绿测试制造进展 |
+| 实施用例/兼容/回退/失败归属可执行 | 冻结契约9.2/9.3及下列准出要求、明确角色与旧补丁队列 | 满足开工计划；不把未实现用例当已验收 |
+
+- 22:07:00+08 pwsh退出0：557封闭源路径对发布源输入仅两个owned文档不同，六DLL逐hash与20.6/20.8一致；142FieldId完整唯一、两文档围栏/尾空白和scoped git diff --check通过，字段矩阵hash未变。21:41:22原生git stdout字节口径index B88D046BA5B191EFD3A4E8F98974FC1395B9BB2ABA5CC7D691F41ED5EA611A1B、status4F36ACD5746F7541F6A8CDA3A18D9EB816FCB819B449468A3E6F19D121C79033与封存源相同，展开354项/暂存20删除；不混用186目录折叠或LF-join摘要。封闭清单外未知未跟踪文件不读取、不清理、不算覆盖。
+- 当前基线实际结果沿用20.6/20.8的原命令/时间而不是称本轮新执行：Headless/solution构建退出0，独立Headless Rebuild八既有CS0108/零错误；Architecture159/0、Safety594/0、Review主192/0（children另列）、SettingsScope failures0（无成功计数）、真实宿主s21=37/0、s36=98/0、s50=14/0、s52=119/0。仅CLI版本查询/静态核对不算新的行为验收，未启动容器/协议端/生产或查看日志。
+- **Wave1准出仍须**：01完整统一保存/全部分区+秘密同TX、CAS/幂等/receipt/floor/容量与故障/并发；00同锁条件发布（仅首次Changed+Committed）、所有legacy writer/版本参与、Token write-only GET/UI/旧空整批拒绝与显式Delete；Device stableKey/tombstone/hello/任务/control及commit后failclosed；安全Read/masking/raw key/nameRaw；新测试公共入口真实注册、独立Headless Rebuild后的真实Host调用链、完整适用回归及合成迁移/整套产物数据库回退。不以孤立Storage编译、预期diff1或旧四场景替代。
+- **失败处理**：基线与源码指纹一一绑定；实际新失败按改段/接口/调用链定位owner，不能仅按时间甩给某Agent。失败/未知兼容或证据漂移冻结受影响接入/下游、保留原断言/棘轮，先定位再最小修复；确认是既有失败也记录未覆盖/影响，不降低门禁。Shared补丁按21.2分批核对和集成；无真实调用链证据不删除旧实现。
+- **下游解锁**：Wave1验收后02/03非交叉逐文件认领才并行；02的来源路由envelope/dedup实例范围与03真实传输接入仍需对应准入/验收，03不得动态resolver null回落启动缓存。Wave1/2后04、随后05、最后06后端/ZBA集成；各波次真实生命周期/管理/取消/资源释放与回退门禁不免。Web必须Wave1～5、必选ZBA、认证安全、资源实测与回退完整，再由00提报负责人明确批准，00本轮不能解锁。
+- 未覆盖且不冒称通过：新增统一保存/Device/C4实现行为、全probe/harness矩阵及S42官方协议、MCP SDK/StreamableHTTP互通、代表性资源测量、生产部署/回退。源码存在、旧Host采用、已有行为基线通过和新阶段可开工四种事实分别报告。本轮仅两文档修改及ignored安全证据，未提交/推送；远端旧47e6607不含本轮闭合。
+- 完成审计结论：原目标“阶段一可开工”现有逐要求正面证据，不改目标为小型基线任务；本轮结束Agent00准入准备，后续实施从21.2明确席位/路径和冻结hash开始。未宣称Wave1验收、其它波次启动或项目完工，实际goal状态以工具返回为准。
+- 最终安全封存路径（既有00 ignored派生认领）：.git/agent00-contract-20261011-2104/contract-frozen-0.3.2.md、stage1-admission-20261011.json。仅文档、输入hash、实际签署及基线命令/时间/exit/计数；旧baseline-readiness-20261011.json保留历史原样，不能把原phase1Open=false覆写成从未阻断。
+
+## 二十二、Agent-01 实施席位绑定与共享集成（2026-10-12）
+
+### 22.1 本次授权、准入与写权
+
+- 负责人本次明确答复：**授权 Agent-01 十文件实施与合成验证，协调 Agent-00 合入共享补丁**。当前主聊天/root 绑定 Agent-01 唯一实施席位；/root/agent00_integration 绑定 Agent-00 共享最终集成席位。21.2 十文件范围与十四共享队列保持，未移交共享源码给01；无提交、推送、部署、发布、生产或下游源码写权扩张。
+- 00于 2026-10-12T10:19:00.1917597+08:00 复核：唯一仓库 %WORKDIR%\bot-agent；HEAD=1f3181e21e8d1f9531e41066b033d8d60218d580；契约 SHA256=7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203；AppDatabase 输入033C222A9FB5B5D282A04F798EC25E0F1C8043A6199B91629B14AC25AE2E22C6、SecretsStore 输入074D4701B5EF8C045D47FFAD36560F32308900F7BEE144B25A9335AA9118CE15 均匹配；八NEW路径均不存在。当前status既有改动/20暂存删除保留，不归本任务成果。三次pwsh只读核对退出0；没有运行build/test。适用src/tests/docs嵌套AGENTS搜索为空；两级AGENTS、总规划/执行总纲/01手册及冻结契约已读取。
+- 本总纲本批输入SHA256=A370A1F157596A8C8B45733F1199DC48887596BA3A522203AE26A7A9761E1F92。只增本节，当前仍无源码改动；Agent-01原十文件准入生效，可在原有约束下实施。各共享补丁实际写前另登记输入hash/改段/协商接口，串行验证防共享构建产物碰撞；实现准入不等于Wave1准出。
+
+### 22.2 待批准的精确范围调整
+
+- 01发现142 Changes+142 View属性、145 FieldId及其它契约按正常格式难以在唯一ConfigurationContracts.cs内满足Domain每文件≤300棘轮，不能压行或放宽阈值。请求额外六路径均为**待负责人授权，尚无写权**：src/BotAgent.Core/Domain/Configuration/ConfigurationFields.cs、ConfigurationChanges.cs、ConfigurationViews.cs、ConfigurationObjects.cs、ConfigurationEdits.cs、ConfigurationSecrets.cs。namespace/FQN/冻结成员保持；不改契约hash。
+- SensitiveInput秘密无public借用接口。拟在额外ConfigurationSecrets.cs放精准assembly InternalsVisibleTo(BotAgent.Storage)，仅私有复制/消费seam；Storage既认领Properties/AssemblyInfo.cs仍只授权BotAgent.Headless及BotAgent.ReviewRemediationProbe。此额外Core路径同样待批准，不能因需要friend自行越权。00审查接受最小私有seam方向，但具体代码须核仅秘密接管副本/无公开逃逸、finally清零与合成Dispose负例。
+
+### 22.3 实际六路径批准与扩展认领
+
+- 2026-10-12T10:19:14.4617092+08:00 收到负责人实际答复：**授权六个精确拆分文件，保持契约和护栏不变**。22.2六个Core精确路径现授予/root Agent-01；加原21.2十路径，共16文件完整独占写权。ConfigurationContracts.cs保留请求/结果及ReadField，其它分别Fields enum、Changes、Views、Objects、Edits、Secrets；FQN/成员/namespace及冻结hash不变，非无限目录写权。00确认Core精准friend BotAgent.Storage仅为SensitiveInput私有复制/接管，不新增公开原值/任意callback；Storage friend保持两准确使用者。每文件≤300规则照旧；实际内容超限须继续拆分授权，不能压行绕过。
+- 席位绑定与新增认领完成。01可实施上述16路径；00只写本总纲及原共享队列独立登记批次，原旧Host/共享设置及公共入口不移交。未构建/测试/提交；Wave1未验收，下游仍锁定。
+
+### 22.4 当前源码写入入口与Host接入缺口（只读）
+
+- SettingsStore仅Headless实现：Adapters/Persistence/SettingsStore.cs:82整JSON与AuditLogStore.AppendInTransaction同连接；SettingsHotReload.cs:78→SettingsBox.ApplyPersisted正常return必Exchange，现无结构结果条件发布。新保存需同_gate读取/持久/条件publish，不能旧锁外判断。
+- Legacy参与者：BotConfig.Load:44把environment overlay重写settings（新真源必须停止该overlay回写）；CompositionRoot:105→ModelProviderStore.EnsurePrimary→UpsertMetadata写primary，重启不能覆盖用户元数据；Storage/LegacyJsonImporter.cs:95首次settings INSERT在受控Host激活前。SecretsStore公开旧Save也须版本参与；SettingsStore direct Save及PanelDeploy.cs:271经ApplyRuntimeSettings的稀疏URL写需统一下层覆盖。PanelDeploy不在共享改动队列，不因找到调用自行扩写。
+- WebUiServer.Settings.cs:131旧mutate内五种允许secret独立Save（FeishuSecret/EncryptKey、TtsKey、AgentServerKey、ApiKey），Token明文settings字段291、GET991；afterPersist另含TTS/mood。实施应先纯LegacyPlan，全批校验→同TX配置/秘密/version/audit/receipt，外部步骤真实账本分开；TTS target注入不得合成测试fallback生产挂载。
+- Device当前AppSettings.DeviceConfig无Key，ParseDeviceConfigs六旧字段，IsDeviceEnabled未匹配true；AgentBridgeServer hello453按host登记，PickBridge153、worker692及SendAsync827无持久撤销检查。需稳定Key/active+desired/tombstone同TX、hello/在线选择/每次worker/control派发均查已提交事实且Unavailable fail-closed；不得信自报key或旧SettingsBox授权。原AgentCommandService.cs路由需消费同门禁，不因任务已入队重放允许。
+- 本轮两只读误查：Storage/SettingsStore.cs不存在、rg带Windows路径通配AgentCommandService*.cs退出1/2；立即停止并改实际Headless文件及rg目录-g过滤，后续退出0。不用误查创造重复接口。上述为当前源码差距，不是已运行复现故障；没有新build/test成绩。
+
+### 22.5 共享批1a：条件发布seam登记（实施前）
+
+- 2026-10-12T10:22:01.8397449+08:00 Agent-01确认00先合入硬编码SettingsBox.ApplyConfiguration：唯一改路径src/BotAgent.Headless/Services/SettingsBox.cs；输入SHA256=04F0FABCC7AA5AB341AF97C5E4CDB0DC36C1D637522513A41D2B5F46E4BFF20E。改段只新增Core.Configuration using及新的条件提交方法，旧Apply/ApplyPersisted与既有改动保留。范围无扩大、不删除旧通路。
+- 同_gate内fork当前→persist返回候选/真实result→仅Ok且首次非Replay且Receipt Changed+Committed才Exchange/published，其余全不发布。published回传真实步骤结果；意外throw不冒称NotCommitted，保留提交事实并报告Failed，具体步骤由Host应用adapter识别及账本持久化。本批只是seam存在，待真实HTTP/Storage接入及合成验收，不称宿主已采用。
+- 当前Core尚在01实施，00本批不build/test；后续与01串行协调。回退只逆向此新增方法和using，不复盖整个文件，不逆向其它人的既有改动。
+
+- 共享批1a实施完成：SettingsBox新增硬编码ApplyConfiguration，输出SHA256=1267FD05D1E9B0BBD64D42CDAB05DE38898EAF1371CEB9EC78223F555B2A9A14，scoped git diff --check退出0；旧路径保留。尚无build/test/真实采用证据。published异常返回Failed并保留Committed；此内存兜底不声称ledger已写，Find仍需真账本。
+- 补充已定位旧writer：Storage/PluginStore.cs:SetPluginEnabled→AppDatabase.SetMeta(plugins_state)，per-instance锁、IgnoreCase/Trim；src检索仅定义和interface，无真实消费者。该文件不在01/00已认领源码路径，不擅自改，需通过统一DB参与机制或新增逐文件批准解决。不存在的PluginConfigStore误查已纠正到真实PluginStore；未据误查造文件。新test文件当时尚未存在，不能提前注册猜测方法。
+
+### 22.6 共享批1b：新Core surface合成测试公共注册（实施前）
+
+- 2026-10-12T10:24:49.8858153+08:00 01报告真实Core构建10:22:24～10:22:26+08退出0、零警告/错误（本条为01交回证据，不是00另执行）。现存新test精确SurfaceAsync(Action<bool,string>)入口已读；00唯一路径tests/BotAgent.ReviewRemediationProbe/Program.cs输入SHA256=D43AF626ECD80366133950362DF9D3B867CB0A29CB6D53F02128516CAA5E2191。仅Main的现有RunAsync队列增加configuration Core surface注册，不新增child猜测、不删旧断言/入口。
+- 本批注册后由01串行build/run；version wire三负例当前预期红待01converter实现，不跳过或改断言换绿。回退只去掉本批新增一行，保留旧共享改动。
+
+### 22.7 Core/条件发布合成结果与模块schema决定
+
+- 01交回本批真实执行证据（00未另并行构建）：Core 10:22:24～10:22:26+08 build退出0、0警告/错误。Review首次10:25:26～10:25:34 build0（8既有CS0108）；10:25:34～10:25:37 run退出1、主228/1，新增Version wire负例红、旧192通过；保留该红，不删断言。
+- 01补非负Int64 string converter及privacy/SettingsBox条件发布/并发测试后，Review 10:26:57～10:27:03 build0（8既有CS0108）；10:27:03～10:27:06 run0、主241/0（新增49；children另列future4/restore3/clock10/12）。Architecture 10:27:21～10:27:22 build0、0warn；10:27:22～10:27:24 run0、312 files/54439 lines、159/0，Baseline/原断言未改。仅这些当前覆盖，不写全Host IT或Wave1验收。
+- 00评审接受01新配置模块独立schema revision=1：物理user_version保持9，新增配置version/generations/ledger/device/tombstone闭集表，唯一AppDatabase同writer/同TX建表与module revision。模块revision>1在任何配置写、受控激活或桥入口前拒绝；初始化故障无半提交，重入幂等。原future physical10拒绝/恢复9断言保留，不通过改旧断言换绿。新增future-module2/初始化故障/重启测试由01在已认领新test实现。
+- 独立module revision不宣称旧binary支持新撤销：回退仍需先关闭桥入口及任务派发，恢复整套旧产物与合成前镜像，不能混DLL或旧binary读新库。Storage新实现/HTTP真实接入、Token/UI/legacy各writer、Device全链/应用ledger、完整兼容与全矩阵回退仍待实施验收；Wave1施工中，下游锁定。
+- 共享批1b实际注册完成：Program输出SHA256=7F95CCF3BA63ABA78D36FF59EAD0A5D60394BC8ACBAB2FE1F44DB17C9453109E、scoped diff --check0；仅新增真实SurfaceAsync入口，未删旧测试。
+
+### 22.8 共享批1c：现有同连接原语抽取（实施前）
+
+- 00唯一修改两路径：src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs输入SHA256=B113A3372A61F1339EB73A6BCBA6A85A3AEDE3CA71D4A43EF3145435FD23EDB9；src/BotAgent.Headless/Adapters/Persistence/ModelProviderStore.cs输入SHA256=8C565C1E96A872190A983F4DFBDDFCF289B20676C46E4082F2B956D91D1C17D8。
+- 抽取internal SaveInTransaction(SqliteConnection,AppSettings,AuditEvent?,IAuditChain?)与UpsertMetadataInTransaction(SqliteConnection,ModelProviderDefinition)，旧Save/UpsertMetadata以唯一AppDatabase.Write调用这些原语。保持serialization/校验/Trim/circuit不变，供后续已授权Host participant复用；不另new库、不嵌套Write。AuditLogStore已有AppendInTransaction不改。
+- 本批不修改EnsurePrimary、启动overlay或旧HTTP，也不冒称全部legacy版本参与已接入；这些待真实store接口。回退逆向本批原语抽取；已有差异保留，build/run继续由01串行统一执行，00不并发产物。
+
+- 共享批1c实际抽取完成：SettingsStore输出F7754D6A4196D7C1DAC1FC253E52EA1D115905E6F8124E97F3001F0F648A085E；ModelProviderStore输出E1BF0401A6F4F5E0E98578D38CD5E58A1D110AF51B78EEF1512BD2B3B3607B4C；scoped diff --check0。旧wrapper暂保留、Audit文件未变；00未build/test，待01串行验证。
+- 01/00已评审Storage internal窄参与者方案：唯一受控Activate(IClock,participant)绑定进程唯一store，同clock/participant重入幂等，不同绑定拒；新generation/HMAC/floor/module schema同TX。SecretSources用具名闭集SecretMutation(Slot,Kind)仅投影metadata，不给Host秘密正文；Prepare依owned规范意图纯校验，Persist用上述同conn原语，Changed依最终规范事实且Device映射同TX，fingerprint保原null-key意图。精确FQN/方法以01随后实际代码为准，00不猜调用或造public接口。
+
+- 批1c审查后小修保持旧provider校验时序：wrapper在开writer前ValidateMetadata，same-conn原语也验证；最终ModelProviderStore SHA256=DA50EB8D02E4F194F32B270D6861CE0C2C12068E7819199DB54341C19D3ABDC6，之前E1BF为本批中间指纹，不当最终。原SQL/Trim/circuit不变，diff --check0。
+
+### 22.9 共享批1d：140 scalar纯映射（实施前）
+
+- 01确认00独占SettingsStore，允许本批helper；唯一路径src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs，输入SHA256=F7754D6A4196D7C1DAC1FC253E52EA1D115905E6F8124E97F3001F0F648A085E。新增ApplyScalarConfigurationFields(persistedBaseline,ConfigurationPatch)及typed scalar编辑helper，正常每字段一行；来源为已存在142精确Changes成员及AppSettings/PlatformOptions真实setter逐项核对，140 scalar（含Model/BaseUrl两特殊）与Device/Policy两复合分别记账。
+- EnableAgentMask实际setter是AgentMaskSensitive（字段矩阵62及旧Settings561），不创造同名AppSettings接口。Model/BaseUrl Clear移除用户override并使用既有AppSettings缺省，不把environment正文写入用户JSON；首次Set两旧属性归同意图。bool/int/double Clear守现有拒绝，ordinary string Clear显式空。
+- 本批仅pure helper、保19旧carry-forward，不声称Prepare/Read/Device/Policy/Registered、真实Host采用或Wave1完成；后续participant从同conn用户JSON调用并完成复合/alias/秘密/最终跨对象校验。无独立Save/IO/DB协调器。回退仅逆向新增helper，不撤旧原语；构建继续由01串行统一执行。
+- 本批静态property核对先误把EnableAgentMask当旧setter，查真实矩阵/源码后纠正到AgentMaskSensitive；该名不存在不作为新接口需求。scalar完整140核对成功，预检查未写入。
+
+### 22.10 共享批1e：真实Storage合成测试注册（实施前）
+
+- 唯一路径tests/BotAgent.ReviewRemediationProbe/Program.cs输入SHA256=7F95CCF3BA63ABA78D36FF59EAD0A5D60394BC8ACBAB2FE1F44DB17C9453109E；01新test的StorageAsync(Action<bool,string>)实际入口已存在，00仅增加configuration transaction module RunAsync行，其余Core/旧入口断言保留。测试以真实Store/DB和synthetic participant验证同TX/CAS/NoChanges/replay/Find/secret/fault/clock/并发，不声称production Host采用。
+- 本批首次登记pwsh括号语法错误退出1未执行，但编排未检查shell exit即加一行，已立即仅逆向本批一行并复核回到原输入hash；现补登记后再合入。不隐藏该流程错误，后续编排先检查exec返回exit_code再执行写入。未动其它既有改动，未构建或测试。
+- 仅01串行build/run，00不并发；回退只新增注册一行。RecordApply/LegacyPlan当前还未ready，不猜调用。
+- 批1d scalarhelper实际输出SHA256=6A26BD9F4BD87566E4E5F45A4527CAF52F6977CBE08AE73FAB19F1A4E5B0913A、289行、scoped diff --check0；尚无独立build/test/Host真实采用证据。
+
+### 22.11 本批Storage行为通过、架构门禁失败（下游冻结）
+
+- 01交回当前命令证据：Review 10:48:06～10:48:30+08 build0（8既有CS0108）；10:48:30～10:48:34 run0、主268/0（新增76，children原另列）。这是synthetic participant/真实Store行为，不是实际production Host采用。
+- 随后Architecture 10:48:47～10:48:50退出1，315 files/56046 lines、157/2。R2精确SQL位置未允许新的owned ConfigurationStore.cs共21命中、ConfigurationStorageBridge.cs1命中；全域SQL总数166>137。新增本批实现导致，不归旧基线；不能用行为绿掩盖架构红。
+- 01/00共同停止受影响新接入/Read helper批1f与下游准出；不得放宽137/删断言、拆SQL碎片绕扫描、盲删其它模块SQL凑数。需要为新Storage真实责任位置精确批准最小允许范围及负例（守Core/Panel SQL禁止），护栏源码当前不在本次共享队列，先提报负责人逐路径授权。总数由实际重复SQL复用/单一实现消重解决；其它既有Storage路径改动仍需精确追加授权。
+- RecordApply已存在internal(caller,key,ImmutableArray<ApplyStepReport>)及closed安全错误码，但尚无真实外部steps消费者。本条不将方法存在称已应用恢复。既有失败和新增未覆盖继续保留，下游冻结。
+
+### 22.12 共享批1g：负责人精确批准的SQL职责护栏（实施前）
+
+- 负责人已实际批准护栏两文件精确登记及负例，棘轮保持。00新增独占两准确路径：tests/BotAgent.ArchitectureProbe/Baseline.cs输入E6944A4194645B79E5FFDF62ABC410002F7272CB758FC2512916CD713D9AEA73；tests/BotAgent.ArchitectureProbe/Program.cs输入41495488C2F09D9FFC90752D2272FD6DF23995D3EE134409639CAED5B6E6B288。
+- Baseline只增加独立exact配置SQL职责登记两项src/BotAgent.Storage/ConfigurationStore.cs与ConfigurationStorageBridge.cs及AllowsSql精确membership，不假造旧迁移映射、不给全Storage前缀/Services/Core/Panel放行、不增加IO/引用/时钟例外。SqlLiteralTotal137及其它棘轮原值、原所有断言保持。
+- Program在现有scanner自检增加两真实职责允许与Core/Panel/其它Storage/Headless Services/Model同名SQL拒绝，负例执行真实RatchetChecks并捕获R2拒绝，不仅字符串查表。已授权两文件之外零护栏写权，不改Metrics/SourceIndex扫描口径。
+- SQL总数失败继续如实红；01只在已认领AppDatabase/Secrets/Store/Bridge复用真实重复原语，其它八旧Store路径尚未获本次授权，不越界。1f Read及下游仍冻结，待Architecture所有真实门禁恢复。00本批不build/run，交01串行执行；回退仅逆向本批exact登记与新增测试，不撤既有护栏。
+
+- 共享批1g实际实施：Baseline输出SHA256=6744D1B10A2E401C3C2DEDF5CBC8682B83901FD1457E95E4FE613485216CBAFB；Program最终输出5B8C0484327ED637ED68E548113652626D6EF4B5968A69A9D2B29BA8EB9C89DA。六新增断言（准确allow两文件合一及五个真实R2负例）由默认scanner自检和--self-test共同执行；fixture的Tightenable副作用单独隔离，不污染真实阈值建议。scoped diff --check0，SqlLiteralTotal仍137；00未build/run，等待01串行实际结果，不能把许可位置登记等于SQL总数恢复。
+
+### 22.13 共享批1g实际自检失败与fixture修正（实施前）
+
+- 01实际10:55:16～10:55:23+08 Architecture build0/0warning，run退出1：仅执行准确两路径allow后因Sequence contains no elements终止，未到SQL总数。诊断重复同终止，不能冒称已测total或SQL护栏全绿。
+- 归00新负例fixture：单行class中的expression-bodied Value未被真实Metrics.LongestMemberBlock认作有块方法，RatchetChecks最长方法查询.Where(nonnull).First为空。保持原Ratchet与新增五拒绝目标，改fixture为正常多行class及braced Value方法，不删断言、不改First为空逻辑掩盖真实源缺失。
+- 唯一路径tests/BotAgent.ArchitectureProbe/Program.cs本补丁输入5B8C0484327ED637ED68E548113652626D6EF4B5968A69A9D2B29BA8EB9C89DA；只改本批合成source字符串，回退仅该字符串。01合法SQL去重继续由其认领范围实现，八额外Store尚未答复，00不改。1f/下游继续冻结，修后由01串行实际重跑。
+
+### 22.14 负责人实际批准八Storage路径的限定SQL复用（实施前）
+
+- 负责人实际答复：**授权这八文件的限定复用与合成回归**。00将以下准确路径追加给/root Agent-01，原16文件+8准确路径共24文件；00仍最终写共享队列与已批准两护栏路径，未移交互写。每项仅既有重复SQL投影/同conn原语复用，保原mapper/排序/filter/存储及隐私语义；没有目录级无限写权或新路径授权。
+
+| 写入所有者 | 精确路径 | 当前输入SHA256 | 限定改段 |
+| --- | --- | --- | --- |
+| /root Agent-01 | src/BotAgent.Storage/JargonStore.cs | A0754E717C1A4F60F466442E78F38CBEB340C67A4E584C747A4DAEFE58819D04 | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/PromptTemplateStore.cs | 747C3FB0388729FB6695A03C9D9368975552310B3623BEAA8F5462F8706A6FB7 | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/EpisodeStore.cs | 1A99D7059CC310E791B419D90057D0DCDF71C3C1B166587AD4EA29367BC7A42C | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/ConversationStore.cs | D562B11B8E6A3AD6222F7A8633931AA5DFBCDFF6695B1AF79F1C4A7582AA21C7 | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/MemberProfileStore.cs | 07C9A18B2B360B95A050575205ACB0C5E0253B6AC75108AF192D681F73009758 | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/MoodStore.cs | 6918F5C076501E9A49692EB1BF3BD83C502AE47406B67DB967E08236A7719B24 | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/LegacyJsonImporter.cs | F940A244FA03EBF6586A0B3E01435366AE70FE59ED29B587A1963E910F34FCF3 | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+| /root Agent-01 | src/BotAgent.Storage/StickerStore.cs | 25207C238BB5A19D1FC9786D30A6C761A0FFE0F94DFB871AA114B8799D14F0CC | 限定已有完整SQL投影复用及同连接原语，不改存储/隐私/扫描语义 |
+
+- 01先读真实调用点，仅改最少足以恢复137棘轮的实际重复查询；不为授权覆盖而全改八文件。AppDatabase已认领同conn闭集原语复用；完整SQL保持可读且scanner仍能计数，不拼断关键字/盲删IO/改业务保绿。其余未改文件保持原指纹。相关合成回归仍由01串行执行；旧Headless不会因此获得新增互写权。回退只逆向本批实际拥有的改段，不whole-file覆盖既有源码改动。
+- 当前01诊断--print SQL合计146（166→146），仅诊断不是验收。11:00:10～11:00:18+08 Review build0（8既有CS0108），11:00:18～11:00:21 run0、主283/0，新增ownedsecret/array冻结及closed编辑Unicode等，旧future10/recovery9/migration仍通过（children另列）。原生Python初次默认gbk读源码UnicodeDecodeError1且未写；纠正显式utf8后成功，未丢其它apply_patch改段。架构仍未恢复至137，下游冻结，不能用print0或定向Review绿解除。
+
+### 22.15 共享批1h：限定复用专项真实合成入口（实施前）
+
+- 01已实际只改八授权路径中的五个：Jargon四相同SELECT row projection归一、Prompt三snapshot projection与两Deactivate全文归一、Episode两rowprojection、Conversation两DeleteMessages全文、Member两ReadFoldedSequence全文归一；filters/order/mapper/scope原语义不变，共减少九个重复SQL定义。Mood/Importer/Sticker不因获授权全改，保持原状态。完整SELECT/FROM或DELETE/UPDATE全文在可读常量/同conn原语，不拆关键词规避扫描。
+- 新test精确QueryReuseAsync(Action<bool,string>)已存在且00已读入口，覆盖五真实仓储查询/排序/状态/作用域/删除/折叠边界；00唯一路径tests/BotAgent.ReviewRemediationProbe/Program.cs本批输入027158343E0F3267AF6128EBE9323C7086BB4D14C90F671BA0485AE3C38FFED0，只追加独立configuration query reuse注册，不删旧/Core/transaction断言。
+- 随后01串行先普通Architecture真实门禁，再Review；当前尚无修fixture后的真实Architecture结果，不拿print合计代验收。1f/下游继续冻结直到适用护栏真实恢复。00不并发build/run；回退仅新增注册行。
+
+### 22.16 当前架构门禁真实恢复、恢复批1f但不准出
+
+- 01实际11:05:41～11:05:45+08 Architecture build0/0warning；11:05:45～11:05:47 default run0，315 files/56076 lines、165/0（原159+本批六真实自检），SQL total实测137。数值棘轮保持，五跨层exact SQL拒绝负例实际通过；此前Sequence故障未被隐藏/删断言。
+- 解除本次新增架构失败，允许恢复00安全Read purehelper/participant typedmapping；不是Wave1准出或下游解锁。Store真实LegacyPlan/strictcodec/devicegate/完整多对象最终校验及Host接入/重启回退仍待实施验收；CurrentRecordApply存在不等于外部steps已应用。
+- 00恢复批1f唯一路径src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs，当前input=6A26BD9F4BD87566E4E5F45A4527CAF52F6977CBE08AE73FAB19F1A4E5B0913A。只增exact Storage private bridge alias与typedRead purehelper：同conn ReadFieldState、ProjectField，142七分区scalar+已安全Device/Policy/Registered子投影；不新公共接口/任意JSON/object map，不读取或保存Environment正文。
+- Read输入是persisted user facts与真实effective facts/provenance，旧未tracked字段LegacyCompatibility/LegacyNeedsReview；Overview Hidden不持raw，Display string复用AgentMask.Shorten，允许编辑值按UserMode选择用户/实际effective，nameRaw由安全子投影负责。FieldEffect须可信Host实际确认，未知保守Restart。这里只是helper源码、尚无HTTP/Host真实调用，不能冒称管理读取验收。
+- 回退仅本批新增helper/alias，不撤前批scalar/同conn原语；01仍串行build/run。当前SQL137空间不通过新增Host重复SQL再破坏，pureRead只复用Bridge已有SQL。
+
+- 批1f实际完成purehelper源码：SettingsStore最终SHA256=8DB5C9D23CCE72493FE51FD657FD96877817DCD7EE3CFBE5682D1A78DBA75D86、533行；七分区独立private方法与六字段context，避免整142映射单大方法破198棘轮。Overview Hidden raw为default、display string过AgentMask.Shorten；effectiveSource必须可信真实投影提供，未tracked UserConfiguration纠正到LegacyCompatibility/Default。scoped diff --check0，00未build/run；还需participant/HTTP实际调用及合成原生验收。
+
+### 22.17 共享批1i：配置安全审计同连接原语（实施前）
+
+- 01已确认固定FieldID/版本安全AppendAudit方案；00唯一路径src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs，本批输入8DB5C9D23CCE72493FE51FD657FD96877817DCD7EE3CFBE5682D1A78DBA75D86。新增internal AppendConfigurationAuditInTransaction(conn,ConfigurationReceipt,ImmutableArray<ConfigurationFieldId>)，复用真实AuditLogStore.AppendInTransaction同conn，不新增SQL/另一writer。
+- 输出仅固定ASCII事件/actor/resource、允许数值FieldId、Observed/CommittedVersion、Decision/CommitState/ApplyState及已冻结revision；不含rawcaller/operation key/name/URL/秘密/body字段名，不预写applied。保原旧Audit与保存入口；此原语尚待真实participant.AppendAudit调用与故障注入验证，不称真实链已采用。
+- 回退仅本批新增方法；01继续串行build/run，00不并发；不修改AuditLogStore已有改动。
+
+### 22.18 中断恢复与当前证据边界（2026-10-12）
+
+- 2026-10-12T15:29:03.2865075+08:00 00恢复只读核验：HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580；冻结契约仍7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203；SettingsStore最终F35C4D7406D8996C910A2EB24A0BD93604E5F3433331745B3279F5B63DDA77A6匹配。该值为批1i最终指纹，批1f中间值不替代当前源。
+- 01/root的24准确路径写权仍21.2+22.3+22.14；24源码均存在，不整理既有改动/20暂存删除。00原十四共享队列和22.12两准确guard写权有效；guard当前Baseline=6744D1B10A2E401C3C2DEDF5CBC8682B83901FD1457E95E4FE613485216CBAFB、Program=A8A6F1A537EEA7393DBB16BCECA639AB637AF3F96556CF1082896848D3A47662。展开git status370项是当前带新路径口径，不直接与旧目录折叠数比较。
+- 01确认旧Review handle34793已missing、无该旧运行进程，最终run结果未取回，**不当通过**；本次00观察当前dotnet四进程，仅视为01新串行验证活动，不当旧handle复活或新成绩。等待01交回当前Review/Architecture终态；00不并行build/run，也不在当前源码验证窗口编辑共享源码。
+- 已重新读真实Key scalar converter、Bridge ReadFieldState/ProjectField/Activate及participant成员、Store Read/Save/Find/internalRecordApply。Core keycodec更新不代表Host strictparser完成；Store暂未有实际LegacyPlan/devicegate。现有140 scalar/142安全Read/同connaudit helper与条件发布只有源码及部分合成证据，尚无runtime Hostparticipant采用，不授下游/阶段二准入。
+- 本总纲本次输入70FD226E57B7E5E91F6F901C65DE409A4843B4D71435943048AC7C3CF2FBBC96，仅增恢复记录，不覆盖旧失败记录或他人改动；source补丁窗口下一批必须先与01新运行结束确认。下一确切共享批拟在原SettingsStore内完成participant Prepare/Read/AppendAudit并用真实方法接CompositionRoot/SettingsHotReload/旧HTTP；完整legacy writer、Token/UI及Device每次dispatch仍后续登记，不造未知桥成员/HTTP路径。需额外文件/接口先提报，不扩大队列。
+- 第一次恢复批只读结尾rg嵌套AGENTS为无匹配退出1（预期no AGENTS，不是产品失败）；没有借此写source。随后显式hash/24路径/真实桥与key读取pwsh0。全部是源/安全元数据，没有真实群聊/数据库正文/日志/协议端或生产操作。
+
+### 22.19 恢复后真实串行验证、部分通过不冒称准出
+
+- 01/root实际Review build 2026-10-12T15:26:44.8708709～15:26:51.8693414+08退出0；run至15:26:54.4549123退出0、主298/0，children另列4/0、3/0、10/0、12/0。源哈希before/after无变；覆盖当前Core surface/事务治理/五Store查询复用和旧基线。旧34793缺终态不计通过，未将源编辑窗口结果混入新receipt。
+- Architecture实际build+default run 15:28:14.8651912～15:28:17.1356446+08两退出0、165/0，SQL137、315源文件/56427行、Domain max268。数值棘轮/原断言保持；绑定SettingsStore F35C4D7406D8996C910A2EB24A0BD93604E5F3433331745B3279F5B63DDA77A6及当前两个guard。这不是全Host IT、Wave1验收或阶段二解锁。
+- 00可继续下一登记共享source批，但任何新改动使受影响证据需重新绑定；Root24和00共享队列继续独占。新增Configuration module future2/初始化失败重试由01新test的child验证，公共Program由00先查询真实模式后按准确method登记分派，不猜新文件或改旧future10/restore9断言。
+- Strict/Legacy最后model key Delete与primaryEnabled矛盾由01依据冻结证据核对，未确认前不隐改只读Enabled、回落缓存凭据或宣称真实Host cross-domain已验收。
+
+### 22.20 共享批1j：模块schema恢复实际child注册（实施前）
+
+- 01实际新test已定义ConfigurationContractTests.TryRunChildAsync(args)识别两个closed modes --configuration-future-module及--configuration-module-atomic-fault；ModuleRecoveryAsync(Action<bool,string>)主入口启动两child，预期4/0与6/0，未执行不作为成绩。
+- 00准确唯一路径tests/BotAgent.ReviewRemediationProbe/Program.cs输入14E8E10F7BE8C762216846CDFE202FB63FFE470F5E11F5A64B6F179DB86ACE94；Main在已有Clock/Database/Storage child分派旁增加这一实际factory，在已有配置surface/transaction/query队列增加ModuleRecoveryAsync独立注册。不删旧入口/断言，不扩工程或新路径；Root本批只有新test修改、无module源码修改。
+- 覆盖未来configuration_schema2拒绝且不改、module初始化注入失败全部新表rollback/移除trigger后能重试；旧physical future10/recovery9保持。仅01串行build/run，00不并发；回退只这两新增行。
+- 删key边界按当前唯一冻结495+700核对：strict enabled需key provider无配置最终拒绝；旧Legacy按历史Delete和HotSave fallback保留，不能隐式改primary.Enabled只读项或复活cachedkey。01继续核已签03/06/完整字段矩阵是否另有矛盾，未做未经批准裁决。当前以上都不是Host实际采用证明。
+
+### 22.21 Root RecordApply终态保留修正与Strict/Legacy查核
+
+- 01核冻结495/700/718与完整矩阵330：Strict enabled需key provider最终不可Unconfigured；旧Legacy保历史Delete/fallback/无CAS。03/06手册无相反已签override。本次没有改冻结语义、隐改primary.Enabled只读项；真实Hostparticipant各profile最终校验与兼容负例仍必需，synthetic Delete绿不替代该验收。
+- 01发现现自有src/BotAgent.Storage/ConfigurationStore.cs RecordApply任何一步Failed/RestartRequired就terminal=1，即使其它步骤NotStarted，违反冻结731/749过期Pending/Unknown保留与未终态不驱逐。输入SHA256=4380E07DC4481F6C15D8DB38D8F31B5E4141F484BB3664E393428B65E2F14398；在原24准确写权内只修terminal判断为八步骤均具Applied/Failed/RestartRequired真实终态才terminal1，聚合ApplyState如实保持，不增SQL/接口/新路径。
+- 01在已认领ConfigurationContractTests补ledger故障/partial/Unknown/expiry保留真实同DB合成测试，公共入口若现已注册同方法无需新注册；新增method则00另记准确签名。不删除原断言换绿。回退仅本批判断片段，不能回退其它Root/00旧改动；所有构建与验证仍01串行。该缺口归新增实现自身，未假定生产已触发。
+- 批1j公共Program实际输出SHA256=7878935331645BDDE3B2B5D4635E0464F62944CBA00F0C10EE0A32384476A2B9、scoped diff --check0；新module children还待当前串行结果，不预写通过。
+
+### 22.22 ledger真实红绿与当前restore验证窗口
+
+- 01实际新红：15:36:45.9057～15:36:59.439+08 Review build0，run至15:37:03.625退出1、主284/1；筛选重跑15:37:30.012～15:37:31.526退出1，精确incomplete failure remains nonterminal，新module children4/0+6/0。原断言和该新红均保留，不凭编译成功跳过。
+- 只修22.21 Store terminal条件后，15:37:49.576～15:37:55.718 build0（8既有CS0108），run至15:37:58.908退出0、主310/0；新module4/0+6/0，旧future4/0、restore3/0另列。覆盖ledger注入故障、Unknown/partial/完整Failed/Replay不重做及过期未完成Restart保留；不虚称外部actions完成或Host采用。
+- Architecture15:38:26.219～15:38:31.606 build/default run两0、165/0，全部数值棘轮不变，scoped diffcheck0。Store输出C252C3C7EE134DF0EE9A06855D6FBD6CAE80FE44AD355B00E629E837B010695B；test7401AE9FAA05B4606E8521A4117B6B4896EED487EA482801E27439DA7C20A6AF（后续restore child改动会使这份test指纹过期），Program仍7878935…。
+- 01在已owned test扩现factory支持closed --configuration-restart及8assert，从真实VacuumIntoBackup复制至现UUID合成根子目录，独立进程Activate新generation恢复version/secretmode，旧receipt可Find/replay但缺旧key拒绝，persist/application不重做。预期不是成绩，未初始化真实路径或生产操作；现有公共factory无需新增Program写入。
+- 00当前只读及总纲写，逐hash复核SettingsStore F35C4D7406D8996C910A2EB24A0BD93604E5F3433331745B3279F5B63DDA77A6、Program7878935331645BDDE3B2B5D4635E0464F62944CBA00F0C10EE0A32384476A2B9，确认01短串行build/run窗口。窗口终态前00不编辑共享源码、不并发构建；下一Hostparticipant/Legacy privateprofile仍先讨论并登记准确改段。
+
+### 22.23 Root private Strict/Legacy保存profile（实施前）
+
+- 00窄评审准入：仅原24准确路径中的ConfigurationStore/ConfigurationStorageBridge/新ConfigurationContractTests，Root仍唯一写入者；不改公开C3/FQN/新路径/其它波次。当前输入：
+- src/BotAgent.Storage/ConfigurationStore.cs 输入SHA256=C252C3C7EE134DF0EE9A06855D6FBD6CAE80FE44AD355B00E629E837B010695B
+- src/BotAgent.Storage/ConfigurationStorageBridge.cs 输入SHA256=38A8115AB6DD9AA7B7DFBB90D11E17CB8807AA18BCBDB5D866666564865B002D
+- tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs 输入SHA256=4B633805FF900F2AD38D3BE493BB7187BCA7134765B1CE94480EB969CF11C42F
+
+- Bridge增加internal ConfigurationStorageProfile {Strict,Legacy}；实际participant.Prepare最后参数profile。public SaveAsync恒定Strict，抽私有SaveCore而保持Strict原fingerprint字节；internal Store SaveLegacyAsync(caller,key,typed ConfigurationPatch,typed ImmutableArray<SecretEdit>,ct)固定Legacy，Bridge同签名窄转发，无public profile/body grant/keyfactory。
+- Legacy同一Write内读取ObservedVersion并跳过外CAS；fingerprint的原expectedNumber位置换两个固定Legacy/NoExpectedVersion marker，其它caller/revision/key/ownedpatch/slots绑定保留，同key跨profile Conflict。Host旧pureparser在writer前只产稀疏missing/null/Clamp/clear意图，不读锁外version或合并runtime snapshot；Prepare同conn最新用户facts合并，19内部/未知旧carry-forward只源自DB。
+- 新test更新实际synthetic override并测无外CAS/同TX原子/replay/跨profile冲突/structuredReject/并行Legacy，原Strict所有断言保留。Legacy的Device/Policy兼容不是假定完全规范可复用，未知兼容仍LegacyNeedsReview；Token/mood/Device真实行为和生产Host链仍须后续验收。
+- 00新的真实SettingsStore participant将在此已登记private profile成员落地后消费；Root不写共享SettingsStore、00不写Root三输入，串行构建先同步两个source窗口完整，不拿中间编译或fake participant成绩作宿主验收。回退仅profile本批改段，保留已有源码/断言/棘轮。
+- Restore短窗口15:44:40.451～15:44:43.407+08 Review增量build0/0新警告（不称8既有警告已修），run至15:44:45.962退出0、主312/0，CFG restart8/0、future4/0、atomic6/0、C2 future4/0 restore3/0。before/after四输入hash无变；证明新代version/mode/tokenDeleted/历史Failed保留，oldreceipt等参重放/异参冲突、旧代缺record拒绝、synthetic写计数0，不冒称旧产物回退或生产Host采用。
+- Root15:49:24.175～15:49:26.450增量build0，run至15:49:29.060主322/0及既有children，新增300/301s/Tick倒退/预取消/version溢出/subject256容量、Replay/异参优先与其它主体准入。Root未先确认新短窗口流程疏漏已报告；00确认同期无共享source编辑，仍由Root actual before/after hash核绑定，不因未询而自动虚报通过。当前两共享source依旧F35C4D.../7878935...。
+
+### 22.24 共享批2a：实际Host scalar participant与安全Read（实施前）
+
+- 01确认00立即实现已评审7参数internal ConfigurationParticipant，只有以下两既有共享队列路径；不加Headless friend、新路径或公开C3接口。当前输入：
+- src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs inputSHA256=F35C4D7406D8996C910A2EB24A0BD93604E5F3433331745B3279F5B63DDA77A6
+- src/BotAgent.Headless/Adapters/Persistence/ModelProviderStore.cs inputSHA256=DA50EB8D02E4F194F32B270D6861CE0C2C12068E7819199DB54341C19D3ABDC6
+
+- SettingsStore新增嵌套真实Storage.ConfigurationStorageParticipant实现，ctor接唯一SettingsBox、可信authorization、6slot metadata、安全RegisteredRead、effectiveSource/effect及primaryRequiresCredential；override按已登记Root private profile区分Strict最终key拒绝/Legacy历史规则。同conn用户facts与opaque旧属性保留，140 scalar闭集映射、实际provider primary.IsEnabled判断（不能单靠bool虚构启用元数据）、已批准同connAudit；Read142安全投影。
+- 固定Model/BaseUrl非秘密fallback只在trusted构造时按当前BotConfig三个固定别名优先级捕获，不在Read动态查环境、不读任意env名、不回写用户JSON。primary元数据在同TX由既有完整SQL原语更新，旧公开LoadAll在同conn原语委托，SQL定义仅一处，不增加137计数。
+- Device/Policy/Registered复杂修改暂固定安全错误、不silent-save；非空旧复合未迁移Read返回LegacyNeedsReview并保真实header/version/generation，不虚构空数组或raw JSON。该缺口是临时待完成，不将此batch称完整C3、生产Host采用、Wave1准出或下游解锁；旧HTTP仍保持直到完整Legacy通路验收。
+- 真实private ctor测试由01现owned新test反射调用并独立child Activate实际adapter，非fake participant；Owner真实DI在后续CompositionRoot接入，不因程序集通过就冒称host采纳。Root私有profile与此batchsource窗口均完成通知后仅01串行build/run；00不并发构建。回退只新增adapter/同conn抽取改段，保前批及所有旧改动。
+
+### 22.25 共享批2a实际源码完成（待串行编译与真实adapter测试）
+
+- 00只在22.24两共享路径完成：SettingsStore嵌套实际ConfigurationParticipant（538行，7参数internal ctor552行），Prepare消费Root实际privateprofile；ModelProviderStore.LoadAllInTransaction125行复用既有完整SELECT。源码不是生产CompositionRoot采用证据，00未运行build/test。
+- 同conn读最新DB用户JSON并保原未知属性，140scalar mapping、Strict真实primary.IsEnabled与可信proposedSources判断credential_required；缺primary/未分类binding固定拒审，Legacy不隐改Enabled、不重映射未知binding。primary模型/URL/source metadata同conn原语持久，固定非秘密Model/BaseURL环境别名fallback在trusted ctor捕获，空值/trim同BotConfig.Str规则，不进入用户JSON。
+- 安全Read使用实际142 typed view.Rule显式闭集，无反射投影/任意JSON正文输出；授权回调、安全RegisteredRead与source/effect均trusted DI，不从请求自报。非空旧Device/Policy复合临时LegacyNeedsReview保真实header/version/generation，complexedit固定错误并上限32，非silent commit。本批未实现全部provider/plugin/policy/device、Token启动迁移、Legacy HTTP纯parser与生产DI，Wave1/下一阶段保持未准出。
+- 输出SettingsStore SHA256=0C5C49BDA2D33FE456F1285E8F5B5AFE4E490DB9DCF41EC7124804DB627D1203；ModelProviderStore SHA256=4E36E7B8DD3E698395A3490861BB68F7E9227FA14358B66B94C7FD225E081351；scoped git diff --check退出0，SettingsStore当前879行低于既有1765门槛（正式Architecture仍待01串行）。00已通知Rootsource窗口结束，后续编译/真实private ctor合成adapter验证只由01执行。
+- Root22.23私有profile输出reported：Store14C9F88ACA94A1247937D6C41DDF59E141F80918F4CA19F2BF28A2D4B65C5903，Bridge846F858086C8E80CC2A6019435904AC0613210F7D3C70FDFE5EE5CD61B0771AB，test0073A4089B972B6A4D4AE932B952384A3B2F358AB6F46757198E252EEBC989F2，Root scoped diffcheck0；golden Strict HMAC/Legacy最新观察与跨profile原子并发测试源码存在，尚未build，不能写成通过。
+- 本轮先读不存在Core根路径导致Get-Content退出1（只读，无写），已用真实目录纠正。全部后续原生命令退出码检查；保留冻结契约/棘轮/旧改动。回退仅22.24新增adapter/同conn抽取，不回滚前批或Rootprofile。
+
+### 22.26 共享2a与Root privateprofile联合编译/回归（Host行为待验）
+
+- 01串行真实Review build16:11:18.171～16:11:29.192+08退出0（8既有CS0108）；run至16:11:32.065退出0、主332/0，新增Legacy9assert与严格旧HMACgolden通过，CFG restart8/0、future4/0、atomic6/0，原children另列。六源码输入before/after一致（含22.25两shared输出），这只证明源码可编译、治理/合成participant，不是production Host链采用。
+- Architecture16:12:48.395～16:12:50.662 build/default run两0、165/0、315files/56795lines，全部数值棘轮/SQL137保持，不删除断言、改阈值或拆SQL隐藏。此批解除编译/棘轮门禁，不解除完整管理/保存行为与Wave1准出。
+- 00主动标记2a PrimaryProjection潜在空Keep假Changed：旧primary env:QQCHAT_API_KEY且实际None时会校正secretRef。01先在现owned测试真实private ctor/独立child重现，再最小注册修，不在红前改源码、不把fakeparticipant空Keep验收冒称actualHost。
+- 当前00只读/总纲写，暂停两shared源码供01真实Hostadapter child验证窗口；回归红/终态后再登记精确修段，未扩写权/Token hook/旧HTTP。
+
+### 22.27 共享批2b：真实Host空Keep绑定假Changed红与最小修（实施前）
+
+- 01实际Host ctor child红：16:20:18.450～16:20:21.379 build0、run至16:20:22.629退出1 host0/1；固定assert label再build0，16:20:56.343～16:20:57.404 run1，精确all Keep cannot rewrite empty primary binding。真实7参数Hostparticipant及合成DB六槽，不是fake participant；空KeepLegacy必须NoChanges/version0/保原envref。21assert为计划，尚未通过。
+- 00只在SettingsStore现shared写权，输入0C5C49BDA2D33FE456F1285E8F5B5AFE4E490DB9DCF41EC7124804DB627D1203：同conn读当前六槽metadata，PrimaryProjection只在proposed primary credential元数据与current真实facts不同才变已分类binding；Keep不为校正旧binding制造变更，不读secret/env正文。用户scalar和metadata与审计同TX、未知binding保留并Strict拒审、原public及profile不变。不增加SQL或路径。
+- 01另加冻结494/904 credential-bearing changed endpoint在缺可信policy时安全拒绝负例，00不在该红出现前混入这批或臆造endpoint允许表。2b只修空Keep，production DI/HTTP仍未采用；后续endpoint/secrets完整授权仍门禁，stage2保持锁。回退仅此current/proposed比较片段，保旧断言与其它Source。
+
+
+### 22.28 私有Prepare显式六槽mutation意图：真实第二红后最小联合改签（实施前）
+
+- src/BotAgent.Storage/ConfigurationStore.cs inputSHA256=14C9F88ACA94A1247937D6C41DDF59E141F80918F4CA19F2BF28A2D4B65C5903
+- src/BotAgent.Storage/ConfigurationStorageBridge.cs inputSHA256=846F858086C8E80CC2A6019435904AC0613210F7D3C70FDFE5EE5CD61B0771AB
+- tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=964A43400E05819E631CE03548FCC534CFAFFBB4A201A47D1A5A0DE9C9426230
+- src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs inputSHA256=CAE305B7BE060C51A582EBCD430550D1E5C062C045C0993B757D77823B0F561A
+
+- 01真实第二红：16:23:52.009～16:23:57.404 build0（8既有CS0108）/run至16:23:58.777退出1、actualHost child9/1；空Keep第一红已绿。既有DB凭据+合法旧env primaryRef，显式Replace新DB值时current/proposed Configured/Source相同却没有选择DB，精确explicit Replace selects primary DB binding even when source metadata is unchanged。Source比较无法还原Keep/Replace/Delete意图，不缓存或猜秘密动作。
+- Root只改原owned Store/Bridge/test：Prepare(conn,ownedPatch,proposedMetadata,ImmutableArray<SecretMutation> proposedMutations,profile)，profile仍最后；Store同一owned6槽闭集mutation数组同时给SecretSources与Prepare，无secret正文、Core/public形状或FQN变化。更新实际synthetic和反射actualHost测试签名，旧断言保留。Ctor7param不变。
+- 00只改现shared SettingsStore override与PrimaryProjection：消费同owned意图Keep保旧ref、Replace选固定DB ref、Delete按可信proposedSource选旧HotSave环境fallback/未配置槽；未知ref仍Strict拒审、Legacy保留，不反推意图、不新增SQL/路径。Root独占三输入、00独占SettingsStore，先互相通知source改段完成再串行build。
+- Endpoint trusted policy拒绝仍下一红，未混入这批、未臆造allowlist。此前2b空Keep改段此批仅替换意图识别实现，保所有其它既有修改。通过编译不等于生产Host采用/Wave1准出。
+
+### 22.29 共享批2c：无可信endpoint授权时Strict凭据携带端点变更fail-closed（实施前）
+
+- 22.28意图修实际绿到Host child10assert；下一红16:25:58.359～16:26:04.384+08 build0（8既有CS0108），run至16:26:06.120退出1、child10/1，精确missing trusted endpoint authorization rejects credential-bearing endpoint change。Root三输出Store4919A4C99717156ECB9232E221C0EEA8891CE4A34CDFC51FCE7739E962E4CF54，Bridge58CD0B94A179700E7358A64FC435865DBB1B3C4905B8863592FBCA9CF5E79DA9，test2E8EE42DD86E6EB8C8A576F9DB6438AFC9B1AB2E79D2E295A2742C9467F87851；scoped diffcheck0，不提前将全child称通过。
+- 00只改SettingsStore现shared路径，输入043C71BE1E978F5CC03A967F643172DE2CCF65704EF0CE6187A5D1642F4E3A85。Prepare Strict判断primary已登记、可信proposed ModelApiKey Configured且ModelBaseUrl Set/Clear的最终新URL不同已登记BaseUrl时固定安全endpoint_authorization_required。没有trusted endpoint/caller用途授权seam前拒绝，Legacy明确保持旧规则；不网络IO、不硬编allow域名、不把SafeUrl IP限制冒称凭据端点授权。
+- 原七参数ctor/profile/publicshape/FQN不变，不增加SQL/路径。该临时failclosed不等于用户新端点已可管理，不假称全scalar/跨域C3完整。后续真正actor-specific endpointseam须先评审把caller传私有Prepare及复用实际网络policy；未签方案不造接口。保已登记alias目录校验/Strict read-only项/原断言，回退仅此守卫改段，Host生产接入仍禁。
+
+### 22.30 00恢复与验证source窗口冻结
+
+- 00于2026-10-12T17:10:22.9001378+08:00 恢复唯一shared最终写/总纲登记席位，未派新agent、未扩权。实际只读重新核HEAD1f3181e21e8d1f9531e41066b033d8d60218d580，Root Store4919A4C99717156ECB9232E221C0EEA8891CE4A34CDFC51FCE7739E962E4CF54、Bridge58CD0B94A179700E7358A64FC435865DBB1B3C4905B8863592FBCA9CF5E79DA9、test2E8EE42DD86E6EB8C8A576F9DB6438AFC9B1AB2E79D2E295A2742C9467F87851、shared SettingsStore8FD01EE4F5AEB034DADD6BACA93D9C5B4B6FDB11DC4C055D798B93E0EB8B3D68均匹配，冻结契约7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203未变。
+- 上轮中断的是只读Get-Content/rg调用，00未启动dotnet或写source；当前只读/总纲写并保持source冻结供01串行actualHost child/完整Review/Architecture。当前Get-Process仅计数dotnet5与01开始验证窗口相符，不终止或读取数据/日志。
+- 22.29 endpoint临时failclosed尚未验证，未登记为绿；完整允许端点seam、复杂对象、旧Legacyparser、生产采用/Token/Device行为仍缺，不因临时deny或编译就准出/打开第二阶段。后续仍按已有24Root+shared精确路径和每批input登记，缺新路径/契约先提报。
+
+### 22.31 2c真实actualHost绿及Token下一批只读核实
+
+- 01真实17:09:33.698～17:09:53.129 Review build0（8既有CS0108），actualHost child至17:09:54.090退出0、22/0；六输入before/after不变。全Review17:10:40.328～17:10:43.387退出0、主333/0（CFG restart8/0、future4/0、atomic6/0、actualHost22/0；C2 future4/0、restore3/0另列）。Architecture17:10:43.391～17:10:45.458 build/default两0、165/0、315files/56815lines、Domain max268，数值棘轮/SQL137不变。
+- 此为实际private Hostparticipant合成调用链而非fake participant，仍没有production CompositionRoot/HTTP采用、完整复杂对象/授权endpointseam；临时safe拒绝不等于管理要求完成，Wave1/第二阶段保持未准出。
+- Token最新真实时序：CompositionRoot.BootstrapSettings Initialize→LegacyJsonImporter.ImportIfNeeded→BotConfig.Load；BotConfig.Load先HasStored/Load→ApplyInfrastructureEnvironment51～85→ApplyBehaviorEnvironment88～99→ApplyPanelOverrides420→Normalize→hasStored Save44。Token399在SeedBehaviorFromEnvironment273～417；hasStored=true时Warn后return，不每启env覆盖。00先前分段读误认infrastructure的消息已撤回，此处以全方法重新核为准。
+- 真正Token秘密显示缺口：BehaviorEnvTable194把Token列入行为环境表，WarnIgnoredBehaviorEnvVars247～266的Truncate(envValue/fileValue)会保留两秘密片段；后续BotConfig只固定环境名称/configured/source，不回显片段。Token声明来自Platforms.PlatformOptions47继承且未JsonIgnore，不在此写权，不能盲改Platforms或隐藏同名新属性。旧HTTP291明文Setter/GET991和app.js仍须替代管理同批保持有效。
+- 下一private Initialize闭集seam尚未定签/登记源码批：原Store Activate唯一Write内迁Token slot/marker/移旧JSON/用户version、安全audit，default no-op；仅未初始化允许固定首次种子，deleted不复活，旧空不是显式Delete。初始化失败全rollback、未来module不变、重启幂等必须actual合成测试；未迁移入口不能开放。迁移来源真实JSON但仅合成验证，不读现库。
+- 本轮另一次只读Get-Content猜错Storage AssemblyInfo直属位置退出1，无写文件或构建，后续应目录查询精确路径，不把此只读工具错记产品失败。
+
+
+### 22.32 Token私有受控初始化、版本审计与marker-aware启动安全批（实施前）
+
+- src/BotAgent.Storage/ConfigurationStore.cs inputSHA256=4919A4C99717156ECB9232E221C0EEA8891CE4A34CDFC51FCE7739E962E4CF54
+- src/BotAgent.Storage/ConfigurationStorageBridge.cs inputSHA256=58CD0B94A179700E7358A64FC435865DBB1B3C4905B8863592FBCA9CF5E79DA9
+- tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=2E8EE42DD86E6EB8C8A576F9DB6438AFC9B1AB2E79D2E295A2742C9467F87851
+- src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs inputSHA256=8FD01EE4F5AEB034DADD6BACA93D9C5B4B6FDB11DC4C055D798B93E0EB8B3D68
+- src/BotAgent.Headless/Adapters/Persistence/BotConfig.cs inputSHA256=49EF637419221B0FB257640CC9C2E2CF9441F99B1E222036E54A284837DB025E
+
+- Root确认最少private hook internal virtual bool Initialize(SqliteConnection conn,long serverUnixSeconds)=>false；internal virtual void AppendInitializationAudit(conn,ConfigurationVersion before,ConfigurationVersion after){}。只Root原owned Store/Bridge/test，公开C3、FQN、接口revision不变，不新造用户receipt/operation ledger或独立writer。Activate既有Write内EnsureModule→校验floor→Initialize(floor)→Changed时checked before+1复用现完整UPDATE version常量→AppendInitializationAudit→floor/generation。异常全TX回滚，_active仅commit后赋值；tests真实fault/future模块/clock/重启slot marker和版本恢复，旧断言保留。
+- 00只有现shared SettingsStore/BotConfig：嵌套实际Host初始化只Token槽5、fixed verification_token_initialized标记、旧用户JSON Token明文剔除（保其它/未知属性）、用户version与安全固定slot/version审计同TX；不发布/外IO/Read迁移，不触其它五槽/Device/动作。不读真实DB/真实Env验证，只有Root独立synthetic child。
+- 已deleted不回种，initialized不再播种；legacy有用户settings行但Token空/缺省时既不按首次env播种，也不伪装显式Delete，标初始化完成无值；只有未初始化且没有旧用户settings行才固定BOTAGENT_FEISHU_VERIFICATION_TOKEN→QQCHAT_FEISHU_VERIFICATION_TOKEN首次种子。非空legacy值严格UTF8/16384字节/Trim/禁零，别名碰撞或非法形状固定安全拒审，不输出正文/片段。已有slot/marker在对应已初始化规则下保持真源。
+- BotConfig重新核seed273～417/Token399，marker-ready时实际DB slot投影覆盖seed/旧plain，deleted保持空、不回种；停止把runtime-overlay普通Save回写用户JSON（只ready路径，未ready legacy当前通路保持）。WarnIgnoredBehaviorEnvVars Token只固定环境名称/configured状态，不能Truncate两端秘密。现继承Platforms属性/旧GET/UI不单边忽略/隐藏，生产Host/HTTP尚不Activate此实现，替代管理与serializer/UI切换必须后续完整同批验收。
+- 五路径精确分属Root3/00两shared，不改其它源/扩路径/放宽护栏。Root及00双方完成source窗口再由Root串行编译/actual adapter child/Review/Architecture；新环境测试只设置合成值或按名移除，不输出开发环境秘密。回退只本初始化hook/Token改段，保既有2a～2c与全部旧改动，初始化前整套DB镜像回退未演练不说兼容已通过。
+
+### 22.33 Token共享源码就绪（未编译/未生产采用）
+
+- 00已完成22.32两shared源码并通知01source窗口结束，未自行build/run。SettingsStore输出A64C8B219F866A421B107FBEB08D5F856E2F650C4465A74068FC2EC7E45E7614、989行；BotConfig输出D9BBC84FEC4AC595CA8DF0F77A1A5B41151A28B898678F774CB85F879ADD86F6；scoped git diff --check退出0，不将此静态检查称编译通过。
+- SettingsStore actual Host Initialize622行、AppendInitializationAudit664行只同conn Token5/marker/剔旧JSON；marker已初始化不seed，deleted有秘密行冲突拒绝，不回种；legacy Token空/缺省但有用户行不seed、不伪造Delete，首次无行才固定二aliasseed。旧未知用户属性保留，slot/legacy非空不一致无marker时固定安全拒审；严格UTF8/16384字节/零/type/别名碰撞安全拒绝，不返回原文。
+- markerReady启动投影真实DB-only，BotConfig ready路径不Save runtime overlay，Token警告只固定env名/状态。只有私有新participant的Merge剔Token明文；没有单边改旧public Save serializer/GET/UI或未经授权Platforms继承属性。生产CompositionRoot未Activate此实现，尚不声称Token管理替代/重启行为验收通过。
+- Root真实private ctor旧NoChanges/version0断言不能放松：新未初始化fixture会产生初始化version事实，旧行为专用fixture先显式种已初始化marker，新初始化测试则证明准确version增量。双方source完成后仍仅01串行编译/真实child/Review/Architecture，临时pending不是绿。
+
+### 22.34 Token初始化基础hook真实门禁（旧Token/真实启动投影专项待验）
+
+- 01真实17:30:12.398～17:30:23.128 Review build0（8既有CS0108），run至17:30:26.896退出0、主334/0；CFG initialization8/0、actualHost22/0、future4/0、atomic6/0、restart8/0，C2 future4/0、restore3/0另列。五源码input before/after不变，01报告Store156336E1…、Bridge5433D533…、shared SettingsStoreA64C8B…/BotConfigD9BBC…、testAFB606…，后续test新增会使该test指纹过期。
+- Architecture17:31:46.272～17:31:48.163 build/default两0、165/0，SQL实测137、315files/56920lines、Domain max268；全部棘轮/旧断言不变。支持hook同TXaudit故障/overflow/clock/version trigger/retry/generation事实；此时还未证明真实旧Token迁移、首次seed/initialized/deleted对真实BotConfig.Load和warning不泄露、无runtime overlay回写。
+- actualHost旧NoChanges用activation后真实Read.Version基准证明用户Save不增量，未放松NoChanges业务断言；初始化版本精确增量另由真实初始化8断言证明，不把相对基准假当迁移完成。00此前preseed-marker仅fixture建议，现按01实际相对版本方法登记。
+- 01继续只在原owned新test添加真实Token旧格式/seed/marker/deleted/重启和BotConfig warning合成cases，00两shared source保持冻结，未接production Activate/旧HTTP。专项红需独立记录后最小修；hook基本绿不自动Wave1验收或开启第二阶段。
+
+### 22.35 真实Token迁移/启动投影专项通过（生产接入仍待）
+
+- 01实adapter专项17:36:38.444～17:36:43.076 Review build0、run至17:36:51.048主350/0，16cases（valid6×11、invalid10×3）。补真实Strict Token Delete→Vacuum备份→独立进程新代与BotConfig不同env不回种后，17:41:52.820～17:41:56.471 build0、17:41:57.827 child14/0（restart5/0）；全Review17:42:38.117～17:42:45.021退出0主351/0，17Token cases、新initialization8/0、Host22/0及既有children另列。
+- 五source before/after无变，当前test60167587D95217811D19A2B83EC902C9ACBA8A34E5F13BFECE9EB4388F4A4212。证明actual Host initializer旧JSON去Plain/保opaque、marker/slot优先、仅无用户row才env首次seed、旧empty/missing不seed或伪装Delete、非法形状/audit/version/generation/overflow全rollback；真实BotConfig.Load无Token片段警告且不回写runtime overlay。真实Delete备份跨进程恢复V2/原Find/无重复audit、env不复活，不只是合成participant marker恢复。
+- 此为合成根/进程的实际adapter链，不是production CompositionRoot/HTTP/UI采用，不是旧产物回退证明，不能据此解除管理替代/设备/复杂对象/完整Wave1门禁。source窗口现结束，下一WebUiServer.Settings纯LegacyPlan/6slot/action分离先窄评审并登记，再真实小批实施；Root设备stableKey/tombstone接口也须先精确评审，SQL137不得放宽。
+
+### 22.36 共享批3a：pure Legacy六槽秘密与独立动作意图解析（实施前）
+
+- Root窄确认00只写已认领src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs，inputSHA256=B5071F26A303C41152F8673E929A11736B9FF5A01995ABF8EB694ADA3F6253AB；不新路径/公开Core接口/生产HTTP接入。新增private static ParseLegacySecrets(JsonObject)返回private IDisposable LegacySecretPlan，固定六slot owned SensitiveInput，结果Code、独立typed Mood意图与TtsProjectionRequested。不读取Input internal正文getter，外部持有inputs仅Dispose，临时编码数组清零。
+- 完整9旧秘密/clear输入：Missing/null Keep；apiKey/agentServerKey空Delete；tts/FeishuSecret/Encrypt空Keep，clear bool TryGetValue==true优先，否则保持旧容错；非空Token Replace、空/纯空白Token整批LegacyNeedsReview；官方Secret/clear任意case含null/false存在都副作用前拒绝；旧ttsKey只忽略审计输入，不成为slot别名。duplicate/未知strictRootCodec待后续HTTP解析，不冒称JsonObject已证明wire重复拒绝。
+- parser不Save/env/IO/log/action，不调用TTS/Mood，不拿runtime snapshot合并用户配置；Model/Agent/Behaviour/Platform等142 puretyped组映射继续下一小批，19只DB carryforward，不能silent丢复杂对象或临时deny当目标完成。现旧HTTP入口继续原路直到所有pureplan与设备/策略/应用ledger完整验收。
+- 独立Mood intent只有Keep/Set/Reset（FieldEdit<string>），TTSflag仅代表计划外部投影而非已执行/原子。实际动作幂等/可观察持久结果与安全回执后续按冻结719实施，不能由旧bool推断Applied。
+- 00落真实成员后通知Root，Root只在现ownedtest反射实际private parser并用合成数据验证输入边界/六slots/清零/无side-effect。仅Root串行build/run，保全部旧断言/SQL137/冻结hash；回退只本parser新片段，未授权提交/部署/真实数据。
+
+### 22.37 pure秘密parser真实回归与限定MemberProfile查询复用准入
+
+- 01真实17:56:28.2210641～17:56:36.9213965+08 Review build0（8既有CS0108），run至17:56:46.7501098退出0主444/0，较351新增93 actual private parser断言；六源码before/after无变，test FC204A4BC9AD15613DEDF8D890C3FE8BDAD6691271951CCB699BD36D269AC07A、WebSettings6132B913…。Architecture17:56:53.8172663～17:56:56.3075752 build/default两0、165/0、315files/57021lines；筛选重跑退出0、SQL137/Domain268。不是HTTP/production采用或完整LegacyPlan。
+- Root在原已获批8Store范围内查出真实MemberProfile重复查询，只该owned路径inputSHA256=C7C86A3B5B7CC504C26A8651E0989AD6720181E903A0438BD2E8A14A607A91BA；owned ConfigurationContractTests inputSHA256=FC204A4BC9AD15613DEDF8D890C3FE8BDAD6691271951CCB699BD36D269AC07A。Root准入最小真实复用：既有ReadFoldedSequenceSql扩同row through_seq/text/folded_count projection，loop一次读原同uid/scope row，原Scalar保首列through_seq；ForPrompt两个相同完整SELECT uid抽一个完整constant，各自scope WHERE suffix原样。预计减3定义/2往返是计划不是实测，保所有SQL语义、完整可读关键词/scanner/137棘轮，不split逃逸。
+- 不为授权覆盖而动其它7Store；Root只该MemberProfile/ownedtest，00不写。新增回归证明scope/through_seq/折叠计数/文本shape/ForPrompt排序保持，只合成文本，不读真实成员资料。source完成后由Root与00纯mapper窗口同步串行build/Architecture，真实后置SQL度量再记headroom，不据计划宣称134。
+
+
+### 22.38 Device私有闭集持久计划与每次运行派发门禁（实施前）
+
+- src/BotAgent.Storage/ConfigurationStore.cs inputSHA256=156336E1F2D19E7F96B6F8E9D41BDD89B774CC733AF102D300840CEEB0322E61
+- src/BotAgent.Storage/ConfigurationStorageBridge.cs inputSHA256=5433D5338DF7746D89C13842756BC7B3445E79726A4B28D65056A58D0B5E1058
+- tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=A822581E91560CF9ED57A5A01CF89F5FDD5DC519F46531E6C2BEE20287500853
+
+- 00核冻结518/520及真实AppSettings.ParseDeviceConfigs615：NameRaw.Trim需在owned规范化/HMAC前统一，保真名不mask，OrdinalIgnoreCase碰撞/撤销名拒绝。Root只三owned路径：Bridge闭集 ConfigurationDeviceState(Key,ActiveName,DesiredName,DesiredEnabled,Deleted,RenamePending,RevokedNames)，LoadDevices(conn)；PrepareDevices(conn,desired fulltable,profile)→PreparedDeviceChange(Changed,Errors,Assignments,DesiredWithKeys,Persist)。纯同conn读/计划，Persist才复用UPSERT，assigned keys不进入原请求fingerprint；prepared安全ToString，不输出名称。
+- Strict仅nullKey create，未知给定Key/重复trim+IgnoreCase/active-desired跨Key碰撞/revoked整批拒绝。Legacy无key只唯一旧active/desired保key，省略delete，改名delete-create；歧义/tombstone LegacyNeedsReview副作用0。PreparedConfigurationChange新增可选FailureCode闭集仅ValidationFailed/LegacyNeedsReview，Store准确返回，不把兼容拒审假称普通validation或silent loss。
+- AuthorizeDeviceHello(name)仅Host已Token认证后调用、不收clientKey；同AppDatabase.Write查gate，唯一pending desired匹配复用UPSERT确认active并INSERT旧active revoke。CanDispatchDevice(name,DeviceKey? serverBoundKey)每真正send前查持久gate，registered需active名一致/desired_enabled/notdeleted/notrevoked，serverBoundKey只能服务端关联且如有必须相同；pending新desired未确认不派、已enabled原active可派，disabled/deleted立即撤销。未知从未登记且无boundKey才保旧legacy规则，不借未知默认复活被撤销key/name；DB异常deny不回显异常正文。
+- 新private participant virtual AppendDeviceRuntimeAudit(conn,DeviceKey)默认no-op，Host后续固定安全事件同TX（不名字、不client身份值、不造配置receipt），active确认属runtime事实不递增用户配置version，如circuit。初始旧Devices在Host Initialize后续同TX导入并按现一次version+audit，不在Read迁移；本批Root只计划/gate+合成，Host JSON/opaque保留与全部hello/选择/worker/control后续shared批。
+- 原已批MemberProfile真实去重预计3SQL余量，此批Device仅3完整SQL snapshot LEFT JOIN revokednames、UPSERT、revoked INSERT，各操作复用，不额外拆关键词或新增数字容量。SQL137棘轮保持，Member去重和本批仍须真实defaultArchitecture验收，不拿schema存在/临时deny当功能完成。不增publicCore/FQN/新路径、冻结contract hash不改；Root source完与00mapper同步串行build，原断言保留。
+
+### 22.39 Member查询余量实测与共享批3b pure140 scalar映射（实施前）
+
+- Root22.37真实18:05:34.8515752～18:05:41.1032465 Review build0（8既有CS0108），run至18:05:52.4779805退出0主451/0，新7回归绿，3source before/after无变，Member8D9ECFB70B6124D6B4C618745CBC57D968B254C238882BB8EB8F22491CDFEF69/testA822581…绑定。Architecture18:06:07.8358608～18:06:09.9050050 build/default两0、165/0、SQL实测134/137、Domain268。headroom是真实而非计划；保已定137棘轮供22.38三完整Device原语，不放宽或以拆SQL换绿。
+- 00只原shared WebUiServer.Settings.cs inputSHA256=6132B913A8BB8F46D082C3F7CE8F173C8609C4538E768A502DA1861735DFCCA2，Root已同意并行pure140 scalar source；新增private ParseLegacyScalarFields(JsonObject)→七组ConfigurationPatch，116 simple scalar复制真实旧setter GetValue/Trim/Clamp/Max，24特殊保旧missing/null Keep、budget原空忽略/空白Set、agentreasoning/动作catalog、agentURL无效Keep、agentPrompt/levels截断、healthclock旧ToString/宽松HH:mm规则、model/base空Clear。无I/O/env/log/Save/runtime baseline读取。
+- 此helper明确只140 scalar；剩两AgentDevices/PlatformPolicies通过下一专门typed复合/legacy适配完成，不将默认Keep冒称已经处理输入。9秘密由3a独立拥有，19旧属性仅从同TX DB carry-forward，不能反射public setter或造额外可写字段。没有新增publicCore/FQN/路径、没改旧HTTP调用或替代管理通路。
+- Role legacyClamp字段与Strict最终validation的兼容仍需实际Root privateLegacy profile测试，direct model/base Clear旧HotSave只QQCHAT别名→默认不同Startup，另红再最小修；复合策略/设备及prelude Normalize/Synchronize必须基于同TX最新用户facts，不能锁外runtime snapshot拼patch。此batch只pure parser源码与测试，不称完整LegacyPlan/原子旧HTTP。
+- 双方source窗口都完成后由Root串行build/实际parser/Device/Review/Architecture，00不build；现旧路保留、原断言全部保留，回退仅3b新增mapper/纯helpers，不能倒退3a/Token/Root已写Device或旧工作区修改。
+
+### 22.40 Root Device真实红绿及shared140源码窗口冻结
+
+- 00批3b pure140源码输出WebSettings C1F8186E033D764219BA608F89955026D7E4488154B027835ECA616095BA1F66、1396行、scoped diffcheck0；真实private ParseLegacyScalarFields25行与七typed helper已就绪，未接旧HTTP。Root source窗口完成后00保持冻结供Device与actual mapper测试，未自行build。
+- Root Device实际18:15:22.8077688～18:15:29.5445405 Review build0（8既有CS0108），child至18:15:30.8030246退出1、27/1；18:16:04.1208281～18:16:08.6274925再次build0/child1。安全code/count证明触发回滚完整，真实CommitFailed；测试错期待StorageUnavailable。查既有Store callback/原子负例后仅纠精确测试枚举，保version/rows/secretAbsent/FindNotFound全部断言，未改产品掩红。
+- 18:16:36.9027391～18:16:42.2526767 build0/child0、30/0，覆盖singlewriter gate/keys分配及replay/trimHMAC/跨key/disable与re-enable/pending-confirm rename及fault/runtime确认不增用户version/旧名撤销/Legacy删除创建/full Clear/storage fault关闭fallback/部分upsert秘密与version整体rollback和重试。该Storage计划/持久gate合成不是production Host hello/selection/worker/control采用。
+- 00只读发现Root新FieldError调用与Core真实FieldAddress ctor不匹配已主动报告，由Root在ownedBridge修正，没有扩Core接口；Root另查真实Nonce/ReadEditable/security_audit_log/event_type修正测试位置，不臆造接口或表。Source现待Root actual140mapper测试/全Review/Architecture终态，SQL三新定义及Member134余量需合成后真正default实测，不预报棘轮通过。
+
+### 22.41 140mapper与Device联合真实门禁783及23:11恢复
+
+- 01真实18:24:13.1212076～18:24:18.5137495 build0，run至18:24:30.6555674退出1、主779/1；新fixture用defaultTopP JsonValue<int>(99)，不匹配真实旧GetValue<double>节点类型。只纠fixture为99.0，未改mapper/产品或断言；18:25:03.4018638～18:25:07.4767186 build0，run至18:25:21.0963747退出0、主783/0，Device30/0。Architecture18:25:41.5506922～18:25:45.4413814 build/default两0、165/0、SQL137、315files/57474lines、Domain268。
+- 七输入hash绑定重跑18:26:10.2049171～18:26:20.3217433退出0主783/0，before/after全无变、diffcheck0。Root Store D97A67A6EA499B5A9C95BA252C1E3ECC5822BC39BBEBD5AFA37709EF4331FEB2、Bridge19F1F4BCACE0BB6A20FD80F18EB78F464E3F7DB0640F66FD21F3779F82887961、Member8D9ECFB70B6124D6B4C618745CBC57D968B254C238882BB8EB8F22491CDFEF69、test AF77CA2C013E65BF9F58544BF6673F2A98B8BDF79437DBD6124D0462939E773E；WebSettingsC1F8186E…、SettingsStoreA64C8B…、BotConfigD9BBC84F…无变。这仅actual private140mapper/六槽/Storage gate与adapter，非HTTP/production采用。
+- 23:11恢复00唯一shared集成/总纲登记席位，重新只读HEAD1f3181e21e8d1f9531e41066b033d8d60218d580与Store/Bridge/shared上述hash全匹配；未重派/扩权/并发build，保370展开状态与20暂存删除。未完成Device Host Initialize/Prepare/Read、剩两复合mapper、生产Bootstrap/legacyHTTP/UI/实际dispatch链，不能phase2 ready。
+
+### 22.42 Root Device备份跨进程恢复测试增量与短验证窗口
+
+- Root原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputAF77CA2C013E65BF9F58544BF6673F2A98B8BDF79437DBD6124D0462939E773E，新source报告完成，当前SHA256=7DE52F1DA2B6E93859944DCDB5B85984273D3F2520B48AD32ED6FE313C18A146。只此原授权test新增真VacuumIntoBackup至同UUID父根/device-restore、closed --configuration-device-restart独立child，由现TryRunChild factory接入，无Program/新路径改写。DeviceChild32/Restart7是测试计划，尚未build，不能登记为绿。
+- 先校验准确父根和限定子目录，不操作真实库/群聊/成员；重放旧Clear不删除恢复后新active2，deletedKey与active/desired历史名不defaultAllow，newgeneration/原receipt/slot/audit/version不重写。不是旧binary回退/混DLL或production行为。
+- 因00上轮中断，Root18:26派发的本批登记本轮补齐在Rootsource完成之后，未假称前置登记已发生；路径/验证本身仍既有明确授权，后续source batch必须先登记。00确认shared SettingsStore=A64C8B219F866A421B107FBEB08D5F856E2F650C4465A74068FC2EC7E45E7614、WebSettings=C1F8186E033D764219BA608F89955026D7E4488154B027835ECA616095BA1F66，准许Root短串行build+Devicechild，00不写sharedsource/不build；新HostDevice方案先评审后登记，不抢本窗口。原空指纹为PowerShell插值误吞紧邻中文，恢复后实测补正，未假定未知hash。
+
+### 22.43 Device备份跨进程真实门禁32/7
+
+- Root23:14:40.0685209～23:15:03.5912286 Review build0（增量0warn不等于修既有警告），Device child至23:15:06.1999135退出0，parent32/0+nested restart7/0；exec15661最后poll确认为exit0已关闭，五input before/after无变，test7DE52F1DA2B6E93859944DCDB5B85984273D3F2520B48AD32ED6FE313C18A146绑定。证明新代/旧Clear Find replay不删除后续2active/slot原样/version audit不重做/稳定deletedKey与active-desired历史名deny；非旧binary回退或production Host采用。
+
+### 22.44 shared Device Host同TX初始化/Prepare/Read与pureLegacy Device（实施前）
+- 00 src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs inputSHA256=A64C8B219F866A421B107FBEB08D5F856E2F650C4465A74068FC2EC7E45E7614
+- 00 src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs inputSHA256=C1F8186E033D764219BA608F89955026D7E4488154B027835ECA616095BA1F66
+
+- Root已窄确认，00只两existing shared。SettingsStore internal pure ParseLegacyDevices(string?,bool readStoredKeys)全表六旧field，旧新body未知nested项含key/secret/password拒审，已DB opaque只原样carry；Name trim/IgnoreCase collision整批拒审。实际旧UI app.js2493～2500只发送name/enable/model/workdir/tools/timeoutSec，user JSON保持六fields不新增key；stableKey只schema，trusted同conn唯一desired/active关联。已导入关联Key后Root Strict初始化保身份，首导入Legacy；Read不生成Key。初始化不改原Device JSON或旧rawtimeout。
+- 旧Timeout Num仅Int32，否则0；实际NewTask304/worker只正值override，<=0 typed归0，>0 Clamp30..7200；legacy保存已DB rawtimeout规范等效则原样保留，不误把负值Clamp30。strict明确编辑存规范值。Device Changed除Root gateFacts还比较Model/workdir/tools/timeout用户JSON事实，不能遗漏同key参数变化。
+- Host Initialize同现唯一TX Token+Device导入，现一次版本/audit，Key/opaque不进SafeDTO；Prepare Set/Clear真正Root plan，合并Changed/Assignments/FailureCode，用户JSON+device+secret/provider/audit/receipt一TX，无新SQL。Read desired/effective分开，NameEditable只授权nameRaw、Display mask、Overview Hidden不持raw/opaque；enable来自持久gate，effective model等仅实际runtime快照；persistent pending对应RenameState RestartRequired，不能伪称whole remote行为已Applied。AppendDeviceRuntimeAudit固定key/safe事件同TX不增userVersion。
+- WebSettings private ParseLegacyDeviceFields(JsonObject)只pure typed Device，missing/null Keep，空字符串=空全表；不接HTTP/productionActivate，Policy第二复合先真实catalog/基线评审另批。不放宽护栏/新增路径，source完成后Root串行actualHost合成测试。回退仅本batch片段，保Token/140/parser/Root Device。
+
+### 22.45 Root private Started claim与当前代真实global4096（实施前）
+- Root src/BotAgent.Storage/ConfigurationStore.cs inputSHA256=D97A67A6EA499B5A9C95BA252C1E3ECC5822BC39BBEBD5AFA37709EF4331FEB2
+- Root src/BotAgent.Storage/ConfigurationStorageBridge.cs inputSHA256=19F1F4BCACE0BB6A20FD80F18EB78F464E3F7DB0640F66FD21F3779F82887961
+- Root tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=7DE52F1DA2B6E93859944DCDB5B85984273D3F2520B48AD32ED6FE313C18A146
+
+- Root只Store/Bridge/test新增internal TryStartApplyStep(caller,key,step)→(CanRun,ConfigurationFindResult)，现同writer。first Changed+Committed、现Version==CommittedVersion、step缺省或NotStarted才claim，先持久Unknown/apply_unknown再true。非NotStarted一律不二次执行，ledger故障false；未开始而superseded记Failed/configuration_superseded（真实被阻断，不表示动作已执行失败），其它历史steps不变。共用现完整UPDATE receipt/terminal helper，不新SQL/Core枚举/FQN；Host未来同SettingsBox串行Save→publish，claim不假称无锁永不被新版本改变，mood不塞八steps。
+- 当前代global4096仅Root原ownedtest：隔离bounded child用16实际caller×256真实NoChanges，17subject新Save cap，原key replay/异参Conflict优先；expiry仅terminal prune、Unknown/Pending保留。不是伪SQL造ledger，不造mg1/C4记录、不放宽4096/timeout或删断言；跨代预算另child后续，不预报绿。现factory足够，无Program新改。
+- Root两增量同test单owner顺序编辑，00shared独占两source；双方source完成通知后统一串行build/Review/Architecture。所有验证合成根/环境/进程，未授权生产/发布/commit/push。
+
+### 22.46 Started退态窗口修准入与Strict端点目录负责人裁决
+
+- Root22.45 Started原source8FDBE0BAC6044BE1A7457F30FC98ACA8F4604645F5100313540DB876DEB9AB83、Bridge0BE0B31044324FE194F759681D72E6540802B871FB28D30D60CA840CE4EB02B5、testED8D78CE1FA9FF44266F4AF480BF5527482CFDDDF3E2F4B89747D8CA29A1DC70均已source完成/diffcheck0，待短串行。00准入Root原owned Store（当前hash=8FDBE0BAC6044BE1A7457F30FC98ACA8F4604645F5100313540DB876DEB9AB83）真实red后最小guard：已有非NotStarted step不能通过RecordApply退回NotStarted解除持久claim，不抹其它历史结果，不增SQL/Core接口；保当前13applyclaim和global4096真实断言，pending不能预报绿。
+- 负责人本次明确Strict新模型端点用途授权仅复用已登记Provider端点。用途=模型Provider既有目录；验证同TX已存在元数据快照，不允许body本批先改Provider URL给自己登记/授权。URI规范匹配、现网络安全规则保留，不硬编域名/任意env。未经登记目标继续endpoint_authorization_required；不扩大代码路径/秘密用途、公有C3/FQN/冻结hash，此业务确认登记于此，不擅改冻结candidate原文件。
+- 下一00独立shared批以实际已登记端点集合替代临时全deny，先核实际URI/出网原语与Host消费再登记输入/改段、合法/未登记/同批自授权/规范化负例。此窗口不得改当前endpoint守卫，shared SettingsStoreAFBD67DCABE835D63BD6EEA09477E555EE8788FC41D33A56381FE9792A00DA95/WebSettings005E5B3EB9D7B8D90B1F9AA3C084559D21ACF3EF52DACA59A345583ACE3E3398冻结供Root短build/applyclaim真实redgreen/global4096/actualHostDevice。
+
+### 22.47 shared Device源码就绪、Started真实红绿与global4096
+
+- 22.44仅两shared完成：SettingsStoreAFBD67DCABE835D63BD6EEA09477E555EE8788FC41D33A56381FE9792A00DA95/1168行，WebSettings005E5B3EB9D7B8D90B1F9AA3C084559D21ACF3EF52DACA59A345583ACE3E3398/1405行，scoped diffcheck0；internal pure ParseLegacyDevices与private Web ParseLegacyDeviceFields、实际Host Initialize/Prepare/Read/RuntimeAudit已落，旧JSON不新增key、不重写初始化rawtimeout，schema trusted关联。编译基本可用尚需actualHostDevice专验；未HTTP/production启动采用，Policy仍待实际catalog方案。
+- Started真实新红23:28:27.9961035～23:28:59.4986855 Review build0（8既有CS0108），claimchild至23:29:01.8242483退出1、6/1，精确Unknown→NotStarted reset原RecordApply可解除claim。只RootStore加22.46已登记退态guard，不增SQL/改Core/删断言；23:29:28.0686295～23:29:56.7267961 build0、child至23:29:59.0046779退出0、13/0，原红与其它原断言保留。
+- 当前代global4096真实child23:30:07.7223852～23:30:20.3043007退出0、9/0，12.6s在原parent60s以内，未改timeout/容量。真实16caller×256 NoChanges达满额后replay/conflict仍优先，TTL只terminal清理、Unknown保留；无伪SQLledger/mg1或Scanner逃逸。这不是跨代全容量/C4验收。
+- 尚未全Review/default Architecture或新增actualHost Device Initialize/Prepare/Read专项，00两shared AFBD/005E继续冻结，Root只ownedtest扩实际反射调用。Only oneRoot build窗口、00不并行build，不用13/9单child绿提前phase2 ready。
+
+### 22.48 2026-10-13恢复与actualHost Device专项红窗口
+
+- 00恢复唯一shared集成/登记席位，重新核HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、冻结contract7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203；无新增嵌套AGENTS。shared SettingsStoreAFBD67DCABE835D63BD6EEA09477E555EE8788FC41D33A56381FE9792A00DA95/WebSettings005E5B3EB9D7B8D90B1F9AA3C084559D21ACF3EF52DACA59A345583ACE3E3398实测匹配，继续源码冻结，00不build。
+- Root原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=ED8D78CE1FA9FF44266F4AF480BF5527482CFDDDF3E2F4B89747D8CA29A1DC70，只新增actualHostDevice18专项，既有TryRunChild/ModuleRecovery接入，无Program/新路径。Root恢复后已在00本轮登记前完成source，当前实测6C538A64FDF24F9EC9B7607413F7EC08D76FE64DDDC7FE65A98B71EE8701EAF6；此处如实补登记既有授权test增量，不假称已前置登记。
+- 固定安全label收集两待验负例：requested空Inherited需实际runtime有效值；field3预Explicit且compact六facts语义相同时必须NoChanges，不用模式迁移掩格式假Changed。其余Initializer版本/稳定key/原JSON/opaque/rawtimeout/参数真实Changed/desired-vs-runtime/renameaudit/secret故障整批rollback/Clear/replay/tombstone/newKey均保断言。18是计划数不是通过。
+- 准入Root唯一短串行Review build及--configuration-host-devices实际红窗口，00保持AFBD/005E，不在本窗口改endpoint或Policy。Root发真实红后00另登记SettingsStore精确最小修再合入；专项绿不等于生产DI/HTTP/dispatch或Wave1验收。
+
+### 22.49 actualHost Device两真实红与共享最小修（实施前）
+
+- Root12:04:17.0618855～12:04:30.2839689首Review build1：fixture错用Core EnableAgentMask作Host属性；查询真实AppSettings后仅纠fixture AgentMaskSensitive，不造接口。12:04:46.7000686～12:04:49.5839492 build0，child至12:04:51.2217143退出1、host-devices16/2。两固定红：inherited empty requested fields expose actual effective values；compact format alone is not a configuration change。其余16初始化/opaque/rawtimeout/参数Changed/rename/audit/原子/tombstone/assignment真实断言通过，test实测7ACB17A91D0F2A5CFD7B6D34A9A1B29A0BCEDA42C1D1DB9EA2E4786DCB9BABB5冻结。
+- 00只已认领src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs，inputSHA256=AFBD67DCABE835D63BD6EEA09477E555EE8788FC41D33A56381FE9792A00DA95实测匹配。改段限SerializeDesiredDevices末尾：完整JsonNode.DeepEquals(original,result)时返回原originalJson，避免仅重排indent生成假Changed；DeviceViews三个model/workdir/tools requested取值非空白才用用户项，Inherited空/null/空白使用真实runtime有效值。保用户JSON/opaque/rawtimeout、真实参数Changed、mode/version/赋Key行为，未混endpoint/Policy或生产接入，不动Root测试/旧断言/SQL/护栏。
+- Source完成后00冻结并交Root唯一串行重建/实际child红绿，再全Review/defaultArchitecture；当前不预报通过。回退仅本四小改段，保22.44和工作区既有变更，禁止强制reset/清理/提交发布。
+
+### 22.50 actualHost Device最小修绿与下一端点边界
+
+- 00四段最小修输出SettingsStore85153CD330A18682DE5C11F9BB1E07CD28B99A15B3C4669E1EB4C73B5E1E03F4，Web005E5B3EB9D7B8D90B1F9AA3C084559D21ACF3EF52DACA59A345583ACE3E3398未改、scoped diffcheck0。Root12:05:47.3146666～12:05:50.5768083 Review build0（8既有CS0108），actualHostDevice child至12:05:51.2627900退出0、18/0；五input before/after不变。保原16及两红断言，未用模式迁移或format整写放松NoChanges。
+- Root继续唯一全Review/defaultArchitecture窗口，00shared8515/005E保持冻结不build，不提前改endpoint。真实production DI/HTTP/设备派发尚未接入；actual private Host adapter十八断言不是Wave1验收。
+- 下一独立SettingsStore端点批窄评审：复用Prepare同TX providers原快照，完整Uri.AbsoluteUri规范相等（scheme/host/defaultPort标准化，path/query/fragment保精确），不按host授权/不由本批body登记端点，不增SQL或网络IO。保Core已有userinfo/长度/UTF安全，不自创未冻结query/fragment禁令。SafeUrl是已有静态URL/IP防护，模型transport尚未采用其DNS/redirect安全连接；Save源码不能冒称整条出网链通过，transport文件未授权不扩写。
+
+### 22.51 合法Device实现后旧暂拒fixture迁移（实施前）
+
+- 全Review12:06:51.4637246～12:06:54.4530745退出1、main764/1，五input哈希无变。旧actualHost22曾以合法Device输入要求adapter_unavailable，现22.44真正支持Device后该临时缺口断言与新目标矛盾；其空数组Read也不应永远LegacyNeedsReview。不能为了旧临时拒绝恢复产品缺口。
+- Root只原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA256=7ACB17A91D0F2A5CFD7B6D34A9A1B29A0BCEDA42C1D1DB9EA2E4786DCB9BABB5。仅两fixture按真实永久安全边界更新：写入unknown supplied DeviceKey→invalid_device_identity，保整批ValidationFailed、AiDesire43与versionBefore不变；Read种合法但schema未分配Key的新legacy名→LegacyNeedsReview，保Viewnull、真实version+generation、Read不隐迁移/不泄露。没有删除原子性/版本/header/安全断言，合法Device成功另有actualHostDevice18证明，不放宽数值棘轮。
+- Root完成后仍唯一串行全Review/defaultArchitecture，008515/005E冻结不改源码/不build。此为功能实施后旧临时fixture迁移而非删断言换绿；实际结果后置登记，仍不宣称production或Wave1通过。
+
+### 22.52 统一门禁786/165与Strict既有Provider端点批（实施前）
+
+- Root12:08:27.5149570～12:08:30.2435659 Review build0增量，run至12:08:42.0741175退出0、main786/0；actualHost22、HostDevice18、Device32/restart7、Started13、真实Global4096/9、Token17cases均过。22.51只两旧临时拒绝fixture迁永久非法/未迁移事实，原子性/版本/header/安全断言保留，合法Device18另证功能。Architecture12:09:22.4295941～12:09:24.7053471 build/default两0、165/0、SQL137、315files57713lines、Domain268；scoped diffcheck0。test D577ABF1FBEDF36AFD42A15ECA5293D156EC329026A40600FD366B2A63BCBEDD。不是production采用/Wave1验收。
+- 下一00仅已认领src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs，inputSHA256=85153CD330A18682DE5C11F9BB1E07CD28B99A15B3C4669E1EB4C73B5E1E03F4实测匹配。依22.46负责人确认，Strict显式ModelBaseUrl Set/Clear无论当前凭据Configured与否，都以原同TX providers快照授权；不能先冷凭据改未知端点再Replace绕用途授权。本批body不改目录，不新增SQL/networkIO/构造public接口。未改旧endpoint与Legacy旧行为保持。
+- 规范完整Uri.AbsoluteUri相等，仅标准URI scheme/host/defaultPort规范化，path/query/fragment保精确；候选164/743已拒UserInfo并保合法旧query，不自创query/fragment禁令。实际目标变化复用现SafeUrl.TryValidate(url,false,...)纯静态公共地址政策，不读图片私网env扩大模型权限；已原primary规范同端点不表示新增目的地。错误只固定endpoint_authorization_required，不吐reason/URL。DNS/redirect安全传输未接，不能把Save静态检查称整条出网通过；transport源码未获写权不扩写。
+- Root下一ownedtest实际Host目录已登记允许、未登记拒绝、冷凭据拒绝、URI规范/路径query精确/私网-userinfo拒绝、同批body自授权拒绝后唯一串行重建/全Review/Architecture。00source完成交窗口，暂不接HTTP/productionActivation，不改Policy/Core/hash/棘轮。回退限本目录检查替换与私有helper，原Device/Token均保。
+
+### 22.53 端点source输出与Policy真实消费者待授权清单
+
+- 00端点source已完成SettingsStore28874373DF5933DECDE3E95F1D45AD73C3C09BD33BC997FA48E799B940816688、scoped diffcheck0，仅该文件，不build。Root实际endpoint合成验证待结果；新源码不凭目录/静态SafeUrl检查自称DNS/redirect安全或production采用。
+- 仅只读评审，以下八existing路径是Policy前置整改候选、**尚未授权/未认领，00与Root都不得据此写入**：src/BotAgent.Platforms/PlatformOptions.cs（旧List<PlatformPolicySettings>二元config）；Governance/PlatformPolicyResolver.cs（Resolve46二元IgnoreCase+channel缺实例）；Governance/PlatformRegistry.cs（字典14/15二元、GetSnapshots51丢Instance）；Governance/PlatformSwitchSettings.cs（Read/Find旧scope任意fallback）；src/BotAgent.Core/Domain/Platforms/PlatformPolicy.cs（bool?/字符串旧覆盖与feature字典）；src/BotAgent.Core/Domain/Ports/IPlatformAdapter.cs（snapshot/registry二元surface）；src/BotAgent.Headless/Services/Qq/WhitelistGate.cs（AllowsKey130只channel，飞书直接true）；src/BotAgent.Platforms/Feishu/FeishuBotGateway.cs（IsAllowed477只platform首命中，显式空回legacy且不隔account）。Core PlatformId.cs已有PlatformContext三元，不需为名称猜新接口。
+- 真实当前链：CompositionRoot110构造Resolver→WhitelistGate139/ReplyPipeline467、555/PlainSender227、276/QqActionTool280按channel ResolveForChannel→Resolver36构造缺Instance context→Registry二元snapshot。Feishu自己的IsAllowed477另绕policy scope。最小配置整改需typed规则容器+AccountDefault/Instance逐字段继承、可信配置目录含disabled实例、三元Ordinal注册与唯一旧二元匹配、Switch/Whitelist/Feishu实际同context策略消费；仅两个shared puremapper或RestartRequired无法证明隔离。现消息envelope来源Instance传递及回复/工具链是否属此次前置整改须02冻结，不在本清单暗授权Wave2全改。
+- 需负责人明确Agent02限定前置整改或精确shared临时移交写权，00登记后实施。Policy受影响接入停止，其他已授权endpoint/Device/Token合成继续；不声称Wave1或Wave2准入。本轮一个只读rg查QqActionCatalog声明在猜测目录无命中exit1已停止该command，无源码写入/测试失败，不以文件名猜不存在接口。
+
+### 22.54 Root actualHost endpoint合成测试增量（实施前）
+
+- Root只原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA256=D577ABF1FBEDF36AFD42A15ECA5293D156EC329026A40600FD366B2A63BCBEDD；原public TryRunChild/ModuleRecovery factory接actualHost endpoint child，无Program/新路径。覆盖冷/已配置凭据仅prior目录、完整URI规范匹配、path/query/fragment不同拒绝、UserInfo/新私网安全拒绝、Legacy兼容、同批body自授权reject；不读取原secret正文，错误仅安全Code/field/version与行计数。不把未登记fragment变化拒绝写成全面禁止合法fragment。
+- 00shared SettingsStore28874373DF5933DECDE3E95F1D45AD73C3C09BD33BC997FA48E799B940816688/Web005E保持源码冻结、不build，test增量只Root写，终态后唯一串行build/child/全Review/defaultArchitecture。22.53八Policy路径在负责人答复前仍未授权/不可写，02先只读评审不是下游准入。
+
+### 22.55 actualHost endpoint专项16通过（统一回归待终态）
+
+- Root2026-10-13 14:31:09.737～14:31:34.489 Review build退出0（8条既有HttpFetcher隐藏成员警告），--configuration-host-endpoints至14:31:37.287退出0、16/0，五源码before/after哈希不变。SettingsStore28874373…/Web005E…冻结，test报告293EB15B…；详细全量test指纹与统一回归终态后置登记。
+- 专项证明实际Host participant对冷/暖未知端点拒绝、既有目录规范完整URI匹配、path/query/fragment精确、UserInfo/新私网拒绝、已登记Clear fallback、同批自授权拒绝、Legacy及未改变旧private兼容、安全错误无URI/credential。没有网络IO/DNS/重定向验证，不是生产DI/HTTP采用，不是Phase2准入。
+- Root继续唯一全Review/defaultArchitecture，00保持shared source冻结仅登记不build；Policy八候选仍未获明确写权，不能本专项绿擅自接入或解锁Wave2。
+
+### 22.56 Strict Clear旧fixture补新目录授权前提（实施前）
+
+- 全Review14:35:12.689～14:35:15.705退出1、764/1，actualHost child16/1；唯一旧Clear正例的环境fallback端点未登记，现按负责人22.46规则正确拒绝。五哈希无变，不放宽产品校验。一次旧summary路径Get-FileHash错误exit1未启动dotnet，Root随后查询真实Adapters/Persistence；非产品失败。
+- Root仅原owned ConfigurationContractTests.cs（端点16输出指纹293EB15B…），保原Clear所有结果/用户/primary/版本断言，先追加未登记Clear整批拒绝且版本/用户/primary不变，再以既有ModelProviderStore同合成fixture登记fallback端点，用新operation key重试原Clear正例。不是本批body自授权，不删原安全断言，增加负例锁住新门禁。00本轮实测25A7A5B8F4203E850955AD463AC6E3C93FB2F73DD12C194CD84CF44C7C20B123已是Root限定小修之后而非前置input，Root已确认；此处如实记录登记晚于该test编辑，不能把output当input。
+- 00shared2887/005E继续冻结，只Root该test小改与串行重建/全Review/Architecture；真结果后置登记，不宣称生产/Wave1或放宽任何阈值。
+
+- Root报告14:36 build0、独立actualHost23/0（具体起止时间待完整终态）；父全Review仍764/1因原精确子汇总期待passed22。准入仅父精确汇总期待22→23以计入新增拒绝断言，不删/减断言或放宽产品阈值；已按Root报告修正，重新完整回归待终态。子专项绿不替代尚红的父工程门禁。
+
+### 22.57 端点统一Review787与八文件Platform条件授权
+
+- Root14:36:56.116开始build→14:36:59.555 build0/增量0warn（不等于既有warning已修）→14:37:14.078 Review退出0、main787/0，actualHost23/0、Endpoints16/0及全部既有children通过，五hash无变。test C4809B8191EB30276DF26C2D69F96BC807698A3CF4DA9388C187C471EC728731。主786→787为新增endpoint父模块入口；Host22→23为新增未登记Clear拒绝断言，保原全部正例/原子/版本/header断言。产品未放宽目录授权。
+- Root传达负责人本次明确授权22.53列八文件平台限定前置整改：**Agent02先只读评审，之后00登记最小整改写权**；Core/Headless共享由00最终合入。这不是当前即准入八文件源码编辑，也不是Wave2整体准入；准确批次/接口/consumer改段及input哈希待02报告冻结。Root将启动已明确角色02只读席位，00不得抢先写八路径/扩大消息链或其它平台文件。
+- 此刻shared2887/005E仍冻结供唯一Architecture窗口，00仅登记不build；DefaultArchitecture终态与02只读报告分别后置，Review787不能代替架构或production真实采用。
+
+### 22.58 Architecture与Safety实际终态、Root Started跨进程恢复测试准入
+
+- Root14:38:03.452～14:38:09.295 Architecture build/default run均退出0，SQL137、Domain268，scoped diffcheck0（仅既有CRLF提示）；初筛未捕获中文passed汇总，精确总计待补，不将历史165冒称本次已捕获。源码冻结窗口可结束，但产品采用/Wave1仍未验收。Root20:16:56.535～20:17:19.634真实Safety工程build/run退出0、594/0，全部合成无真实数据，00未并行构建。
+- Agent02首次启动usage-limit终止，无只读报告、无源码修改、无已登记源码写权；Root已同席位followup重试八文件只读（非新线程/抢写）。02前置评审未完成不能据此直接改八文件或冒称Wave2准入。
+- Root下一仅原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA256=C4809B8191EB30276DF26C2D69F96BC807698A3CF4DA9388C187C471EC728731实测匹配。现apply-claims追加真实VacuumIntoBackup及fresh dotnet闭合--configuration-claim-restart子路由，同文件factory/no Program。证明Unknown ContextWindow/Schedulers与Applied TTS跨重启不二次执行、旧generation Replay保原ledger、NotStarted降级拒绝、version/audit/secret/userwrites无副作用；只合成UUID受控目录，先核父根/目标，仍原SingleDB/Clock/SyntheticParticipant，不碰真实路径。
+- 父13→14为新增恢复子结果断言，子预计8～9未运行不能当通过。Root获本条登记后编辑，实际红后查真实原语不删断言；不改public契约/Store/共享源码，不冒称生产application恢复。完成后与00/02source状态确认唯一串行验证窗口，Root仍唯一builder。
+
+### 22.59 Started跨进程恢复真实通过与兼容基线窗口
+
+- Root20:19:25.611～20:19:29.182 Review build0/增量0warning，child至20:19:30.830退出0、parent14/0+nested9/0。真备份持久Unknown ContextWindow/Schedulers、AppliedTTS与supersession ModelFailed，freshprocess新generation、不重做Unknown/Applied、不降NotStarted，旧Replay保ledger、version2/audit不变、writes0、nonterminal2（两个Changed都未全八step终态，不伪造terminal）。
+- 完整Review20:19:49.227～20:20:01.459退出0、main787/0，到20:20:02.580 defaultArchitecture退出0、165/0；scoped diffcheck0、五hash无变，test1F06E1DA9857D14113BE6A6DA3C3F402F5DD9C13C18EDCEF1B0528F1904A9C9D。子新增恢复断言未新增父module，所以主数保持787。非production pipeline/自动未知恢复重做证明。
+- 下一Root唯一SettingsScope/ProductionSpec/Frontend兼容baseline合成窗口准入，00shared2887/005E source继续冻结不build。先清子shell BOTAGENT/QQCHAT/OPENAI环境名称不读取/回显值，确保DataDir仅合成UUID根。后续IT S21/S36/S52须先读真实StartBot mock隔离/非external模式并真实Headless Rebuild，另确认窗口；baseline绿也不是新C3宿主采用。
+
+### 22.60 Registered真实接口评审与未冻结秘密facts阻断
+
+- 00仅只读盘点：ModelProviderStore.LoadAllInTransaction/UpsertMetadataInTransaction已可同TX复用，无新增SQL；SettingsStore Prepare当前RegisteredProviders/Plugins暂adapter_unavailable，Read目录委托可信_registeredRead但未证明production绑定。IPluginRegistry真实GetAll/Find/IsEnabled；PluginManager已CompositionRoot224～231登记7preset，具体SetEnabled存在但未证明各功能消费者gate/生命周期采用。PluginStore全src无consumer，现自有_gate与GetMeta/SetMeta wrapper不可在配置TX内再开另一writer。纠正00初核误称PluginManager无CompositionRoot引用，以此实际源码为准。
+- 最小Provider产品方向已Root认可但**未准入源码**：sameconn prior注册目录，已登记对象metadata规范比较/全批校验/同TXupsert，safeRead来自真实metadata，primary Priority/Enabled按冻结497 ReadOnly，非primary无热切换证据RestartRequired；新端点沿prior目录授权、未知key整批拒绝、disabled Unconfigured合法。primaryModel/BaseUrl别名需Rootowned canonicalization并保已登记验证，不可dropPrimary使未登记绕过。
+- 真阻断：当前main槽SecretMetadata不足以证明每个旧env:QQCHAT_API_KEY及secret:apiKey的实际ready。CompositionRoot635～657前者QQCHAT→OPENAI→函数settings.ApiKey、后者DB-only；03真实caller后核确认该参数来自settingsBox.Current而非仅startup snapshot，00初核startup措辞已纠正。非primary候选/runner仍启动捕获，但凭据callback当前snapshot不能混。Startup/HotSave/proposed删除行为需03实际resolver冻结，只闭集known refs/binding/configured、无secret原值，不能任意env命名或以mainSource推ready。未新增ctor/callback/source；03本次仅只读授权，不授实现权。
+- Plugin后续候选额外路径src/BotAgent.Storage/PluginStore.cs（同connmeta原语，不新增SQL/独立gate）及src/BotAgent.Headless/Services/Plugins/PluginManager.cs（持久状态初始化/实际启用消费），**目前未授权/未认领**；IPluginStore优先不改公共面。Root将向负责人提精确限定扩权，不能把先存bool或插件登记存在当持久化+宿主行为验收。00不擅改这两文件或Core插件端口。
+
+### 22.61 旧宿主兼容baseline与真实重建后IT终态
+
+- Root SettingsScope20:22:12.701～20:22:16.187 build/run0、17PASS failures0；ProductionSpec20:22:16.188～20:22:19.811 build/run0、62/0；Frontend20:22:19.812～20:22:27.429 node0、356/0。验证前仅按环境名称清继承敏感环境，不读取回显值，测试根均合成隔离。
+- 真Headless -t:Rebuild20:26:33.841～20:26:39.677退出0（8既有warnings），Harness -t:Rebuild20:26:39.678～20:26:42.771退出0（2既有warnings）；随后s21 20:26:42.772～20:26:50.597退出0/37/0，s36 20:26:50.598～20:26:57.661退出0/98/0，s52 20:26:57.661～20:27:04.205退出0/119/0。四sourcehash无变，Headless产物SHA256=4A3F073EA3077CE84B55C6F2FF03494C9CE3C80801D602BB8EBF094FF5044175。
+- 提前查实际StartBot仅清QQCHAT，子shell另按名字清BOTAGENT/QQCHAT/OPENAI/FEISHU/MINIMAX/TTS，mock+NewDataDir UUID临时根、非external；未读真实日志/DB/协议。一次只读误猜RuntimeSettingsScenario.cs命令exit1后查真实ModelConfigScenario/PlatformSwitchScenario纠正，无测试源码修改/产品失败。真实旧HTTP兼容通过，不是新C3 HTTP/DI采用/Phase2准入。
+- 串行source窗口已结束。下一产品batch需另登记输入/接口，Agent02与03前置未冻结仍不能抢写；00未运行构建或验证，全部真实成绩由Root提供，工作区旧改动/20暂存删除保留。
+
+### 22.62 Root真实满4096跨generation容量恢复测试（实施前）
+
+- Root仅原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA256=1F06E1DA9857D14113BE6A6DA3C3F402F5DD9C13C18EDCEF1B0528F1904A9C9D实测匹配。在现4096真实满额处VacuumIntoBackup至合成UUID父根已验证子目录、fresh dotnet closed --configuration-capacity-restart路由同factory，恢复4096旧代真实ledger；新代第17subject新key须CapacityExceeded，旧代Replay/异参Conflict优先，HMAC两generation仅形状计数保留；TTL仅终态prune后新代NoChanges准入。
+- 不伪插mg1/receipt、不减4096/256实际Save构造，不删原9断言/改timeout，父9→10新增子结果断言，子约8为计划非绿。ProductStoreA0B8F70E…/Bridge0BE0…不改、公有合同/Program不改。00shared不抢源码，Rootsource完成后先协调唯一串行验证，真实结果后置。
+
+### 22.63 Agent02八文件只读评审完成（局部整改未源码准入）
+
+- Agent02 2026-10-13 20:26+08报告已按序补读两级AGENTS、无嵌套、规划/总纲截断均补分段及02手册；未写/未build/test/未读真实数据。HEAD1f3181…、370展开dirty/20暂存删除、冻结7B7CB…不变。八hash与00既核输入一致：Options90E7A6…、Resolver551AC5…、RegistryB09BC3…、SwitchB3C956…、CorePolicyC89183…、CorePorts28B856…、WhitelistB0F870…、FeishuC9A9C5…；实际完整hash由02报告和00前述核验保留，源码批仍须逐文件前置登记。
+- 八文件可局部exact三元索引、typed逐字段继承与飞书自身真实Context gate，**不足完整来源/出站隔离**。生产BotAgentHost100/210→ReplyPipeline467/486/555/1203按channel→PlainSender150/159/167/178 _source.SendTextAsync→ChannelRouter175/197按target-id/channel，没有经过Registry.GetMessenger。QqChatSourcePlatformAdapter62/160只platform/account且丢instance。QQ/official/local当前Context空instance，Feishu真实feishu-main。仅新增重载不能谎称生产调用已采用。
+- 拟最小slice只CorePorts additive exact PlatformContext查询及Snapshot init InstanceId保旧位置ctor、Registry三元Ordinal拒重复/旧二元唯一兼容。Options/CorePolicy保旧序列化DTO，未来JsonIgnore可信immutable typed运行投影复用既有C3类型，不塞旧body可写Target，不从policy或loaded snapshots授予配置目录。Switch逐field Instance→AccountDefault→仅四canonical baseline；Whitelist/Feishu显式空止fallback、完整context，未来源旧入口不能替任意实例授权。具体签名/归属待Root确认后00登记才写，八总授权不等于本条自准入。
+- 02定位额外consumer路径（未授权）包括Platforms/OneBot/OneBotModels.cs；Core/Domain/Messaging/ConversationId.cs；Headless/Adapters/Platforms/QqChatSourcePlatformAdapter.cs；Services/Qq/ChannelRouter.cs；Services/BotAgentHost.cs；Services/Reply/ReplyPipeline.cs、ReplyPipeline.Delivery.cs、ReplyPipeline.Proactive.cs、PlainSender.cs；Services/Agent/QqActionTool.cs、AgentCommandService.cs；Services/Conversations/ConversationRegistry.cs。CompositionRoot/SettingsHotReload属00旧shared仍需另批实际改段；消息五元ConversationId不加instance，不能用共享会话单一lastSource覆盖并发来源。仅consumer盘点，不暗授权后续Wave2/media全链。
+- 02只读路径误猜/QqChatMessage等已据真实src纠正；一次rg路径exit2未立即终止后续只读的流程疏漏已透明报告，随后逐exit复查，无写/运行产品。接受局部源码slice必须明确未覆盖，不能借其green称C3政策全部/Instance隔离/production/Wave1或Wave2准出。
+
+### 22.64 Registry三元最小两文件产品slice（登记后仍等待Root窗口）
+
+- Root已窄确认。00最终写src/BotAgent.Core/Domain/Ports/IPlatformAdapter.cs，inputSHA256=28B856FE3B3AB7DC59A7B288C903870FB668BF17EBD9F0BA8495E3A63374E058；02独占临时写src/BotAgent.Platforms/Governance/PlatformRegistry.cs，inputSHA256=B09BC352403F1AA31DEE8EC8B71382884D3CA5133D4674B2BAD357FDF7F8D884。两input本轮实测匹配；02不得写其他七文件/00文件。Registry仍属00协调最终合入队列，02该单路径移交明确登记于此，完成后交回00审查。
+- Core additive exact签名IPlatformAdapter? GetAdapter(PlatformContext context)、IPlatformMessenger? GetMessenger(PlatformContext context)；保旧二元签名/defaults，PlatformStatusSnapshot保原位置ctor并加init string InstanceId默认空。Default implementation用于旧Synthetic消费者：adapter仅完整三元唯一匹配，messenger不能枚举时仅同账号Adapters唯一且返回旧messenger.Context完整三元匹配才给，歧义deny，不能绕回二元任取。非空platform先Normalize，scope/instance保有效原文Ordinal；空Instance是旧具体实例，不是AccountDefault。
+- Registry concrete adapter/messenger分别完整三元索引，重复键显式拒绝不覆盖，exact查询不回退；旧二元查询同platform/account候选唯一才返回，否则null，保已登记旧单实例调用/ctor。Snapshot带真实Context.InstanceId，暂不伪造管理desired/capability/连接；目录仍非loaded集合。Core该文件≤300必须真正Architecture检验，不改阈值/旧断言。
+- Root同文件追加受控输入freeze：constructor两个输入先过滤null→ToArray→Array.AsReadOnly，字段IReadOnlyList，public Adapters不返回可改内部List，避免input/public集合修改与三元索引不一致。02先查src/tests未发现Adapters cast/Add/Clear消费者；空/空白显式scope无效不以Default授权，原无account参数的既有Default正常；该改段仍仅Registry，不扩文件/接口。
+- 当前Root容量窗口尚未终态，**源码仍冻结，此条登记不是立即开写**；收到Root窗口结束后00/02按两归属各写，完成通知Root，再其ownedtest真实collision/exact/二元ambiguity与默认interface安全负例串行build。只局部Registry覆盖/任取修复，不声称C3 Policy、源Instance透传/完整dispatch或Wave2准入。
+
+### 22.65 跨代容量恢复真实红的审计fixture精确修
+
+- Root20:34:33.481～20:34:37.280 build0，专项至20:34:41.973退出1、nested7/1 parent5/1，未继续全Review。第8fixture错期待TTL准入新NoChanges仍audit零增；真实Store219每个已批准Changed/NoChanges均AppendAudit，新的合法NoChanges准确新增一次安全决策审计，不应改产品隐藏行为。
+- 仅Root原owned ConfigurationContractTests.cs，红inputDBF671…完整SHA未随summary提供；本轮实测90C5…已为修后输出，见22.66透明记录。保原user/secret/version/HMAC不变断言，新增TTL前replay/conflict/reject审计不变，最后精确audit=before+1。不删断言/放宽写入或SQL阈值；source产品A0B/0BE/2887/005E仍冻结不改，修后由Root重建专项真实红绿。此次登记晚于test编辑不能冒称前置，22.64两file源码仍等窗口终态。
+
+### 22.66 容量跨代恢复红绿与CorePorts源码输出
+
+- Root确认20:34红inputDBF671…、00本轮实测90C5BD2C782720D913E1DE7BF96401435F6B553095491C0888BFFEA2213E4785已是审计fixture精确修后输出，登记晚于本次test编辑，如实区分input/output、不伪造前置顺序。产品Store不改；保version/user/secret/HMAC无写，TTL前reject/replay/conflict audit不增，TTL准入新NoChanges仅增1audit。
+- 20:35:41.453～20:35:44.269 build0，容量专项至20:35:48.131退出0、nested8/0 parent10/0；全Review至20:36:00.076退出0 main787/0，test90C5…绑定。真实4096旧代ledger新进程新代仍满额，Replay/Conflict优先、TTL只终态清理，不伪SQL/减构造/改timeout；非生产跨介质恢复或mg1管理验收。
+- Root解除冻结后00按22.64仅CorePorts写实际additive默认查询与Snapshot.InstanceId，输出SHA256=7D514028526F8A26790ED23714102B0C9E49704D256D6E1ED2E8A3A421935C79、108行、scoped diffcheck0。只是source/行计数，未编译/真实Architecture通过；保旧ctor/二元signatures。02仅Registry独占已通知开始，完成后Root唯一构建。其它六文件/生产来源链未写。
+
+### 22.67 Root Registry两文件slice真实合成测试准入
+
+- Root仅原owned ConfigurationContractTests.cs，inputSHA256=90C5BD2C782720D913E1DE7BF96401435F6B553095491C0888BFFEA2213E4785。允许按刚落地CorePorts签名与02实际Registrysource补真实三元collision/exact adapter-messenger匹配、旧二元ambiguity/唯一兼容、platformNormalize与scope-instance Ordinal、空legacyInstance与AccountDefault不混、默认interface无法枚举messenger时failclosed、Snapshot真实instance/连接facts及duplicate不覆盖负例。预计15+而未运行不能报绿，不新增路径/公共Program/架构阈值。
+- Root先查实际source成员再编写，02source完成和00冻结确认后唯一build/Review/defaultArchitecture/Safety，真实Headless重建后legacy S52另串行窗口。00/02不build、互不写对方路径；本slice只Registry，不能借其成功声称整个Policy目录/来源与派发隔离或第二阶段准入。
+- Root明确收口本test输入90C5…不变，落现SurfaceAsync，合成endpoint实现IPlatformAdapter/IPlatformMessenger、零IO，18～20为计划：同账号a/b exact、二元ambiguity/missing不fallback、Normalize后adapter/messengerduplicate分别拒、scope/instance大小写Ordinal、旧空instance唯一兼容、snapshotinstance、inputlist/public Adapters不可变、旧registry default exactadapter及messenger多实例/错实例拒/单例兼容、零Send。仅原test不动Program；本条前置登记后准入Root实施。
+
+### 22.68 两文件Registry slice源码就绪/临时写权交回
+
+- 02 20:40:26.814+08报告Registry单文件完成，outputSHA256=F7F83C4D59DD9865D35060EA8EB363BF27C5C20F2135DA57BDC36E0480ED581B、110行、scoped diffcheck0，untracked尾空白直接检查0；其它七文件不写。02主动交回该单路径临时写权，后续冻结不再写、不build；00实际读完整新source与hash复审匹配，接受明确fullKey去重/逐集合冻结/exact查询/旧二元唯一/安全错误固定code，不作调用链验收。
+- CorePorts7D514028526F8A26790ED23714102B0C9E49704D256D6E1ED2E8A3A421935C79/108行，00最终合入。两input→output可核、旧快照位置ctor/default二元签名保持，显式无效query过去借default改null属于已批准failclosed收紧；Enabled=true只legacy loaded事实不冒管理desired。scoped diffcheck0，待真正构建/架构棘轮。
+- 两source均冻结，Root根据22.67实际test source完成后唯一build/Review/defaultArchitecture/Safety/先真Headless重建后的legacy S52。00/02不得抢test/build或擅改其它六文件；局部索引源码成立仍不证明完整来源/消息路由、C3 Policy或production/Wave准出。回退仅本两路径四改段及依赖测试，保原迁移输入/工作区，禁止全文件restore/reset/clean。
+
+### 22.69 Registry实际20断言/Review807与Architecture、Safety通过
+
+- Root20:42:30.695 Review build退出0（8既有warnings），fullrun至20:42:51.377退出0、807/0，新增20实际Registry断言全部PASS。Architecture20:42:51.378～20:42:53.052 build/default run0、165/0、SQL137、Domain268；Safety20:42:53.052～20:43:08.750 build/run0、594/0。六source哈希窗口未变，test6E815D4768E97649A69F971FC120F25975E44ED8DE2EF7D288B19E68CF275279。
+- Root第一次test apply_patch因多余逆序context验证失败未改任何文件，随后最小hunks正确应用，无编造接口。新增20锁定exact/ambiguity/duplicate/Ordinal/immutable/default-interface安全/zeroSend，原assert保留，棘轮未放宽；CoreDomain≤300通过真实defaultProbe，不只108行口头断言。
+- 局部Registry实现已由真实HostBuild constructor引用，尚未source Instance调用链采用exact重载，不能称完整隔离/C3 Policy/Phase2。Root继续真Headless Rebuild→旧S52，00shared及Core/Registry仍冻结不build；终态后才可新独立source批。
+
+### 22.70 Registry旧宿主S52通过与alias-1三文件准入（实施前）
+
+- Root20:44:33.260～20:44:38.336 Headless -t:Rebuild退出0（8warnings），S52至20:44:46.438退出0、119/0；scoped diffcheck0、四sourcehash无变，产物SHA256=E331180E79E582780FEDD9876C34D45C03365C59E886702AD629B258C69D48B0。20:46:32工作区HEAD1f3181…、git status -uall370/20暂存删除；该status字符串UTF8/LFjoin SHA256=6DBE8C0E86BD0AE76EC8418BD28B8983BDDA99A0733C015A5A06814EEDF70ACE。旧compat通过不是exact来源派发采用，Source窗口已终态。
+- alias-1仅三existing路径：Root src/BotAgent.Storage/ConfigurationStore.cs inputSHA256=A0B8F70EC8B9AB5102AA46667C19F54FA0AB779E5B93C31E78AA95F38479DD92；Root tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=6E815D4768E97649A69F971FC120F25975E44ED8DE2EF7D288B19E68CF275279；00 src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs inputSHA256=28874373DF5933DECDE3E95F1D45AD73C3C09BD33BC997FA48E799B940816688。本轮实测匹配、各owner独占，Bridge/Core/Registry/publiccfg/冻结hash不改。
+- 新内部codec_revision cfg-0.3.2/alias-1；同TX按request.Key.Generation所存codec选择旧raw冻结/HMAC或新alias canonical Patch/Fields/Modes，不能Own锁外先施新alias_conflict使旧代request失配。旧Strict/Legacy HMAC bytes及golden保真，旧generation Replay按其codec；unknown codec安全failclosed/Find不按最新默认解释，原两SELECT扩codec列不新增SQL。新primary ModelName/BaseUrl采用真实direct Model/Base规范器并归direct，同种同规范意图合并，Set与Clear/继承冲突返回ValidationFailed不是CommitFailed；Canonical fingerprint剔空primaryaliasmarker而Host仍查已登记，不丢非aliasmetadata。
+- 00仅Host私有helper允许Key=primary、Name/Priority/BaseUrl/ModelName/Enabled全部Keep、Credential KeepExisting的空marker且同TXprimary确已登记；其余非Keep仍暂adapter_unavailable，marker缺登记整批拒绝。主固定known凭据/原endpoint prior目录守卫仍现有Prepare校验，不新增providerCredentialFacts、不依03未冻结新binding/不假非primary完整。Legacy marker也不得凭body造注册；当前有效旧路保留。
+- Root合成旧codec/golden跨代Replay、新单/双alias等价与冲突、primary缺登记拒绝、审计Fields/Modes一致、unknowncodec及原子fault后验收；00只Hostmarker不build，双方source完成后Root唯一串行编译/真实调用/Review/defaultArchitecture。不混Registry/Policy/plugin路径，未全Provider支持/productionDI/HTTP/Wave1准出，回退仅本新codec/helper片段并保旧reader/generation兼容，不混旧binary新DB。
+
+### 22.71 Agent03凭据实际调用链只读评审（facts签名/源码准入待）
+
+- 负责人本次只授权Agent03只读契约评审，03完整补分段总纲/手册/冻结493～497/704～706，无源码/测试动作。读取输入SettingsStore06C9F3EFD333C68CE0050952DB5F91AAE972359213CF5ECE977231F693B55A23（00本marker输出）、CompositionRoot1819F4647F19EB5E1B6344F201AD21235076C64034F1EAECAAC8B3F9EA59C1FC、ModelProviderStore4E36E7B8DD3E698395A3490861BB68F7E9227FA14358B66B94C7FD225E081351。Route函数每次caller settingsBox.Current，startup捕获的是metadata候选/runner/cache，纠正原startup参数误推断。
+- 拟可信私有ProviderFacts必须区别main槽metadata：输入同TXfinalDB ModelApiKey无值Configured/KeyUsable、实际Current或ProposedHotSave/Startup main snapshot无值facts、明确phase/KeepReplaceDelete；输出仅Binding/Source/Configured/RouteReady固定enum/bool。精确knownrefs仅secret:apiKey(DB-only)、env:QQCHAT_API_KEY(固定QQCHAT非空白→OPENAI非空白→对应phase mainSnapshot)，其他任意ref Unclassified未读值即deny，无BOTAGENT动态env选择。Keep不换ref，nonprimary不跟primary自动改ref；primaryReplace→DB，Delete保已冻主HotSave回落/规范binding。
+- 真实差异不可统一猜first-nonblank：BotConfig.Secret先三个_FILE再三个direct；HotSave Delete用??，空白QQCHAT shadow OPENAI后Trim空，旧provider env resolver跳空白。Configured与RouteReady分离，现TryBuildProviderRoute还拒http(s)形状key；Replace KeyUsable由Root Store对已owned规范值投影bool，callback不得读SensitiveInput/开放secret getter，Keep需复用可信同conn现原语事实，不加猜SQL。
+- 目前仅接受评审方向，**准确私有签名/input/write batch未冻结，不新增ctor/callback或全Provider源码**。Host/Model两个OpenAiClient副本三条null→启动cache仍在，需额外精确路径授权后03/00真实拒绝测试；DNS/redirect安全transport也超当前14shared，不暗扩大ModelTransport/HttpFetcher写权。修前production采用受影响停止，facts/metadata局部绿不能证明真实routing安全。
+
+### 22.72 alias专项真实通过与OpenAiClient六处有限写权（仍等窗口）
+
+- Root21:00:56.250～21:00:59.212 Review build0/增量0warning，actualHostprimary-aliases至21:01:00.582退出0、17/0；oldcodecs+unknown至21:01:00.886退出0、9/0。Fields75/Modes继承/单-双alias等参replay/冲突原子/缺登记marker拒/新未知endpoint拒/未知codec Save-Find-claim拒通过。oldprotocolfixture明确模拟留存codec及独立旧字节重建，不冒旧binary回退。Root全Review/defaultArchitecture尚运行，源码冻结，不能以专项代替统一终态。
+- Root传达负责人新增精确授权两existing文件**仅六处dynamicResolver存在且返回null不得回缓存**及合成测试：00最终写src/BotAgent.Headless/Services/Agent/OpenAiClient.cs，inputSHA256=3AF3845ED6CBB0F5F3EA82D282935A8EAC19BB73E55DDBE44A8372316A387D87；03临时独占写src/BotAgent.Model/OpenAiClient.cs，inputSHA256=6BEA54EB5C888DBE182901651023230B9D9B5F200402B8AF58958E3996AF4AF4，03完成交回00协调最终审查。两input本轮实测匹配，Root不写这两文件。
+- 改段限定两副本原283/371/595每条route选择：仅_providerRouteResolver为null才允许原_providerRoutes缓存；resolver已存在的null即该candidate不可路由，沿现不可用分支，不发该cached route，不新fallback/credential env读取或接口。真实独立3×2条拒绝负例+无resolver旧兼容由Root原ownedtest负责，读取实际成员后前置登记，不改其它transport/Model源码/FQN/Core。没有Wave3整体准入。
+- **当前alias全回归窗口未终态，不得开始写**；收到Root解除后00只Headless三处、03只Model三处，同步完成冻结给Root唯一builder。未知codec/alias批与本routing批分开证据，不把六处安全修称全部模型凭据/ProviderFacts或DNS/redirect已完成；回退仅本六处branch，但保已登记安全策略，不能把回缓存恢复当可运行生产回退。
+
+### 22.73 alias统一809/165通过与routing Source窗口释放
+
+- Root21:04:00.335～21:04:13.276完整Review退出0、809/0；Architecture至21:04:14.295退出0、165/0、SQL137、Domain268；scoped diffcheck0，五source哈希不变。Store688794FF0AC5A737B3094A85642D124E5761AF05274009992DDCECC48713D1AA、test4BB0FAD32766BDAAFCBB5137041AFE1A05771CE725A578BD128D0E4A534BC936、Bridge0BE…、Host06C9…/Web005E…；publiccfg-0.3.2/冻结7B7C…未改，internal代选择codec/旧golden/unknown failclosed真正通过。旧codec模拟不是旧binary回退/productionDI采用。
+- Root解除alias冻结，00按22.72只HeadlessOpenAiClient三处guard完成，输出SHA256=C98564A9C34DC5FE057A73E8DC9FF9B55EAF909E0C4DB3023EAA0A56445CCDE8，直接检索新guard三处/scoped diffcheck0。03获Root通知仅Model三处同guard source，尚待output/最终交回。双方无build，其他Model/出网transport/fullProvider与Policy仍未准入。
+- Root下一ownedtest routing负例输入4BB0…，具体实现前登记为下一独立test批；不可Root源码/publicProgram抢写两OpenAiClient，Source完成后同步冻结唯一builder。六处零cached发送与无resolver兼容证据待真实运行，不能以条件源码存在当行为已验收。
+
+### 22.74 2026-10-14恢复、Model三guard输出及Root routing测试准入
+
+- Root07:52恢复原角色工作，报告HEAD1f3181…/status-uall371/20暂存删除（比前370新增一未跟踪项，未清理），此刻无其他live席位；00原共享席位恢复，不建新角色、不接管Root24source。00重新实测冻结7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203、HEAD完整1f3181e21e8d1f9531e41066b033d8d60218d580、Store688794…/test4BB0…/Settings06C9…全部匹配。
+- Model outputSHA256=977EF9E21CE386DA7D6E2CB906F99EFFB389F1BAFE3E87279FFC182D9C1B7D98，与HeadlessC98564A9C34DC5FE057A73E8DC9FF9B55EAF909E0C4DB3023EAA0A56445CCDE8两副本各284/372/596新guard三处实测一致，scoped diffcheck0。03本轮未重新执行/构建，Root转述该单文件source已完成；00接受实际源码复审输出，Model临时源码写权收回00协调队列并冻结，后续改段必须再登记，不捏造新的03测试/交付消息。仍仅六guard，不扩其它Model或transport。
+- Root下一仅原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA256=4BB0FAD32766BDAAFCBB5137041AFE1A05771CE725A578BD128D0E4A534BC936实测匹配。按真实两个OpenAiClient×三path（SendThroughProviders/CompleteChat/providerPayload）构造resolver返回null而cache有值的负例，counter必须0；无resolver的原cached兼容正例/合法其他candidate继续可用，fixed安全code/统计不带URL/key值。不造接口，先查ctor/实际http mock原语；existingfactory/Surface入口优先，不新Program或路径。
+- 本条前置登记后Root准入编辑该test，双方client/全部shared保持冻结，Root唯一builder。source完成后先短专项真实红绿，再全Review/defaultArchitecture/Safety及先重建Headless的合成IT另窗口；六处zeroSend证明仅本安全门禁，不是fullProvider/Facts/出网DNS/Policy或第二阶段准入。新用户目标持续推进到具备第二阶段条件但不擅自开启，与既有权限一致。
+
+- Agent03随后正式消息交回22.72 Model单文件并冻结：10-13 21:07:11仅三guardsource完成，10-14 07:52:54只读再核977EF9E2…。三条件于内存逆向替换后SHA精确等旧input6BEA54EB…，保所有其它既有输入；pwsh静态核及scoped diffcheck退出0，无build/test。00另对Headless同样内存逆向SHA精确等3AF3845ED6CBB0F5F3EA82D282935A8EAC19BB73E55DDBE44A8372316A387D87、命令退出0，未写文件，锁定恰三改段。两副本临时移交与保旧工作区证据完整；逆回会复活已撤销凭据cache，不能自动作安全production回退。
+
+### 22.75 routing实际测试源码就绪与known-ref下一批窄确认
+
+- Root按22.74仅owned ConfigurationContractTests.cs已落closed --configuration-provider-routing factory；实际两IModelClient/ProviderFailoverRunner×CompleteAsync、CompleteChatAsync、SummarizeSessionTitleAsync(aux)×resolver-denied(cache有值)、legacy无resolver、liveResolver、合法secondary共24实际断言。复用csproj既有extern ModelModule与真实IHttpFetcher/IModelTransport合成计数，无socket；Model仅child日志handler noop防stderr污染。FQN/工程引用未增，尚未运行不能预报24通过。
+- Root07:57:42.266开始唯一build+专项session13617仍运行；00两clients/sharedsource冻结不build，只登记。终态后真实哈希/完整回归后置。
+- Root窄确认下一独立00原shared CompositionRoot.ResolveProviderSecret闭集仅精确secret:apiKey/env:QQCHAT_API_KEY，其它ref在读取任何值之前null、metadata旧row不删，固定env QQCHAT非空白→OPENAI→当前settings.ApiKey保持。限该函数、不混EnsurePrimary/DNS/transport/完整ProviderFacts。需本routing窗口结束后前置登记input1819F…，Rootownedtest反射真实privateResolve/TryBuild合成mockSecrets noLoad/knownrefs/phase/keyusable边界；此条只是方向确认，当前不得写新source。
+
+- 首实际终态07:57:42.266～07:57:58.021 Review build0（8既有warnings），child至07:58:00.905退出0、24/0。两实际client六path resolver-denied计数0，legacy/live/secondary计数1。Root随后同已准入ownedtest批加强原24断言以排除setup提前失败假零IO：动态resolver确被调1或2、legacy0、精确candidate顺序、main transport计数1/两aux-chat路径http计数1。只补真实调用证据、不减/删原assert或改24数；强化后重新build/专项/全Review/Architecture/Safety待终态，旧24绿不替强化验收。
+
+### 22.76 routing父stderr门禁真实红与synthetic日志fixture收口
+
+- 增强24专项08:00:46.755～08:00:49.781 build0，child至08:00:50.830退出0、24/0；全Review至08:00:55.485退出1、789/1。父要求child stderr空的原门禁命中真实Headless FileLog.Warn两条纯synthetic warning；初判断第二条是fake旧模型结构提示被后续实际定位反证，见下述更正，不是六路径行为断言失败。
+- Root只原owned ConfigurationContractTests.cs，实测inputSHA256=C2B5D2C90FB77295A58CAE2570EE6900838CA2261F5AB06C9AA94456E2A78D10；保父stderr空/其它原assert，不改产品/阈值。fake模型输出补合法action=reply减少非本目标旧协议warning；child局部capture Console.Error，新增严格只1条预期固定Provider拒绝reason/hops安全形状断言，任何多/未知stderr仍fail，finally恢复原writer。不显示capture原文/URL/credential，失败仅固定label；新增一assert child24→25、父精确期待25，不把捕获当丢日志或静默换绿。
+- 本条准入Root该限定fixture修后重建专项+全Review/defaultArchitecture/Safety，真实结果后置；客户端C985/977/Host06C9/Web005E仍冻结不改，00不build，不拿独立child24绿代父工程红门禁。
+
+- 新真实红08:05 build0/child24/1；只形状临时诊断08:07、08:08均build0/child1，原24路径保持全绿，新增第25日志断言红。Root查真实Host SummarizeSessionTitleAsync854～858：denied Aux返回null触发既有固定标题不改名WARN；实际仅Host path0/mode0的Provider不可用(reason/hops1)及Host path2/mode0的标题不改名两条。准入仅ownedtest收口严格精确有序这两条既有固定日志，任何额外/不同仍fail，finally恢复Console.Error；父stderr空/child25/原24业务assert全保。移除临时case形状诊断，不打印原文/secret/url；fakeaction=reply保持合法合成schema，不能把误判当产品问题。inputSHA256=055AB918DF5AB2FE98432E86D33D6D0A71FDA8E6763181A7E664E2A4E46DD1CE实测匹配，本条确认后再Root编辑。
+
+### 22.77 routing六处真行为25/Review810通过与legacy验证窗口
+
+- Root08:10:42.834～08:10:45.800 Review build0/增量0warning，routing child至08:10:46.555退出0、25/0；全Review至08:10:59.220退出0、810/0。Architecture08:10:59.221～08:11:01.212 build/default run0、165/0、SQL137、Domain268；Safety08:11:01.212～08:11:17.116 build/run0、594/0。五sourcehash无变，testE86B6AC0AC307947F2B5CE93F3E5C46E037C080A1F5E8245C63C03DFB362693B。
+- 保原24实际path×mode断言+严格有序两既有固定WARN的1条诊断断言，父stderr空门禁原样，无未知日志静默丢弃。08:10:12 build1是fixture同scope expected变量重名，仅rename expectedDiagnostics，未改产品/接口/安全阈值。resolver确调用/candidate顺序/HTTP-transport分别计数证明非setup假零IO，cached-positive而dynamic-deny真正零发送；无resolver/live/secondary compatibility有一次发送。
+- Root下一唯一真Headless Rebuild→合成S21/S36/S52旧宿主链复验，00clients/其他shared继续冻结不build；25纯mock通过不替旧真实HTTP兼容。终态后才前置登记CompositionRoot1819F…闭集单函数+ownedtestE86…批，不混其他Model/transport/ProviderFacts。当前六guards行为验收仅该安全前置，非fullC3生产DI/HTTP或第二阶段准入。
+
+### 22.78 routing旧宿主Rebuild/IT通过与knownrefs真实红前置准入
+
+- Root08:16:31.061～08:16:36.273 Headless -t:Rebuild退出0，Harness Rebuild08:16:36.292～08:16:39.465退出0；s21 08:16:39.469～08:16:47.302退出0/37/0，s36 08:16:47.325～08:16:54.354退出0/98/0，s52 08:16:54.356～08:17:00.933退出0/119/0。先按名字清六类环境、mock/UUID隔离/非external，安全计数输出。四sourceC985/977/Comp1819/testE86无变，Headless artifactSHA256=54EC2A5DE9754B7112B95F469F1333C171C12BA19CD81A89AAE362EF9AD7DBC6。
+- HEAD不变，status-uall371/20暂存删除，LFjoin/UTF8状态SHA256=46BB16A133ADAEB7353396A114746EA6F98F8181661A8A87F268DA951178B2DD。只旧真实HTTP兼容与六guards行为，不是新C3管理/阶段二准入；窗口终态。
+- 下一两exact路径准入：00 src/BotAgent.Headless/Host/CompositionRoot.cs inputSHA256=1819F4647F19EB5E1B6344F201AD21235076C64034F1EAECAAC8B3F9EA59C1FC；Root tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=E86B6AC0AC307947F2B5CE93F3E5C46E037C080A1F5E8245C63C03DFB362693B。本轮实测匹配，Root先添真实private ResolveProviderSecret/TryBuildProviderRoute synthetic mock边界并build专项锁红，**00此刻仍不写函数，Root真实红终态通知后才写**。
+- 目标仅精确secret:apiKey/env:QQCHAT_API_KEY，其它ref在任何secret/env读取前null；固定DB-apiKey/QQCHAT非空白→OPENAI→当前settings.ApiKey及HTTPkey RouteReady旧边界保持，unknown旧metadata不删/不重写。Root测试noLoad计数/route不可用+known相同phase，case/前后缀伪装不授任意秘密，不记录输出值。复用现factory/合成子环境/真实ISecretsRepository，不添接口/路径/publicProgram。00后续仅该函数，不混EnsurePrimary/Facts/DNS/transport，两个client六guard不回缓存保持。
+- Root获本条登记可立即编辑ownedtest、唯一红验证；初始可能红是目标未实施，不能改fixture变允许。测试完成后00明确小改段/hash交Root统一验证，当前所有其它shared冻结、不build。回退只闭集函数片段且旧任意秘密回读将重引安全风险，不当自动生产回退。
+
+- Root细化本条已准入test：仅E86原ownedfile增closed --configuration-provider-refs及父入口，反射真实CompositionRoot两个private方法，12unknownref→null且genericLoadCalls0（mock任意Load返回synthetic值捕捉越界）；3DB-only missing/blank不env回退；5fixed env/current snapshot；9实际route primary/secondary metadata-current差异/URL形key/空值。29+父1是计划，不预报通过。已查真实ISecretsRepository全方法/ModelTransportContract route/ProviderCircuitBreaker枚举；误猜独立ModelProviderRoute文件只读exit1后实查ModelTransportContract.cs，无source改动。保持unknown无值输出，不造接口，00source继续等待真实红后才写。
+
+### 22.79 knownrefs真实红后单函数source完成
+
+- Root08:19:09.643～08:19:13.051 Review build0/增量0warning，--configuration-provider-refs 08:19:13.055～08:19:14.808退出1、passed0 failed1 InvalidOperationException；首unknown secret:agentServerKey旧StartsWith确读mock非空而触发closeddeny断言，不是setup/编译失败。test输出2A6E64212820BC9B2B35DCCCF53CCE12398A2DA21217F57039A6F10919CF0E6C冻结，Compinput1819F…保持，Root明确解除红窗口准00仅ResolveProviderSecret函数。
+- 00已写该函数两Ordinal exactrefs，未知先null且不读任何secret/env；DB固定Load(apiKey)，env固定QQCHAT非空白→OPENAI→当前settings.ApiKey，未删metadata或改其他函数/EnsurePrimary/Facts/transport。CompositionRoot输出SHA256=2552BF1416D8F46F1204BADC1D45318A7D81C6C0247AFC7785AB8ADB5C567639，scoped diffcheck0。
+- 00在内存把该唯一method片段逆回原完整片段，全文SHA精确重现1819F4647F19EB5E1B6344F201AD21235076C64034F1EAECAAC8B3F9EA59C1FC，pwsh退出0、未写任何逆回文件，证明外部所有既有改动保留。Source现冻结交Root唯一真实build/专项29/全Review/defaultArchitecture/Safety；00未build，29仍待终态，不凭source称行为通过/全ProviderFacts签名已冻或第二阶段准入。
+
+### 22.80 knownrefs实际29/统一811及架构Safety通过
+
+- Root08:21:32.360～08:21:35.360 Review build0（8既有warnings），provider-refs至08:21:35.461退出0、29/0；全Review至08:21:48.983退出0、811/0（810+父入口1）。Architecture build08:21:49.006～08:21:49.937、run08:21:49.946～08:21:50.695均0、165/0、Domain268；本次tail过滤未保SQL行，精确SQL待Rootdefault重跑，不能借历史137冒本次已捕获。Safety build08:21:50.698～08:21:54.216、run08:21:54.217～08:22:06.470均0、594/0。
+- 四hashComp2552…/test2A6E…/clientsC985…与977…不变。原unknown secret读值真红→fixedknownrefs且unknownnoLoad为29真绿，fixedenv当前snapshot与DBonly/actualroute边界保持；既有旧metadata不删。整条新C3生产保存/ProviderFacts/Policy/第二阶段仍未验收。
+- Root后续唯一true Headless Rebuild+S21/S36/S52，source保持冻结，00不build。03facts仍只读未签/未写，新增SecretMutation无值facts只最小提案待实际原语与phase冻结；插件两额外路径尚未授权，Agent04只读gates授权请求未答前不得启动/扩写。不得由本批29推断fullProvider/Plugin或出网transport成立。
+
+### 22.81 knownrefs defaultSQL实测及真实重建后旧chain通过
+
+- RootArchitecture default重跑08:22:37.968～08:22:38.693退出0、165/0，当前SQL137/阈137本次实际捕获（补22.80缺行）。Headless Rebuild08:22:38.730～08:22:43.627退出0（8warnings），Harness08:22:43.629～08:22:46.626退出0（2warnings）；s21 08:22:46.628～08:22:54.338退出0/37/0，s36 08:22:54.340～08:23:01.427退出0/98/0，s52 08:23:01.428～08:23:08.013退出0/119/0。
+- 四hashComp2552…/test2A6E…/clientsC985…、977…无变，Headless artifact0A37611206EC44DE0DD336F25D5A47A6C809BF539C95E266AEEB619A59F2B100。Root唯一builder且env名字清除/UUIDmock非external边界保持；不是新C3 HTTP/DI/完整Provider或第二阶段准入，source验证窗口终态。
+
+### 22.82 Model-only primary无值facts四文件与真红测试准入（实施前）
+
+- Root src/BotAgent.Storage/ConfigurationStore.cs inputSHA256=688794FF0AC5A737B3094A85642D124E5761AF05274009992DDCECC48713D1AA；Root src/BotAgent.Storage/ConfigurationStorageBridge.cs inputSHA256=0BE0B31044324FE194F759681D72E6540802B871FB28D30D60CA840CE4EB02B5；Root tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputSHA256=2A6E64212820BC9B2B35DCCCF53CCE12398A2DA21217F57039A6F10919CF0E6C；00 src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs inputSHA256=06C9F3EFD333C68CE0050952DB5F91AAE972359213CF5ECE977231F693B55A23。全由00本轮实测原input匹配，四owner独占；无其它source/publiccfg/hash改动。
+- 03 final只读确认后冻结准确最小面：existing internal readonly record struct SecretMutation(Slot,Kind)保2arg ctor/FQN，新增init bool FactsKnown/DatabaseConfigured/DatabaseKeyUsable，仅ModelApiKey补。Bridge internal ObserveModelApiKey(SqliteConnection)→同一SecretMutation(ModelApiKey,Keep)安全bits，调用真实SecretsStore.LoadInTransaction(conn,ModelApiKey)，white→null否则Trim，复用现SQL。Root可internal ProjectModelApiKeyMutation(SecretEditKind,string? normalizedOwnedValue)仅Storage消费owned值；Store治理/CAS后、SecretSources前同conn Keep Observe、Replace从owned.NormalizedValue、Deleteknown true/false/false，两个现消费者收到同owned数组。不新Prepare/SecretSources签名或secret value getter，不把其它五slotdefaultUnknown误当未配置。
+- 00 nested private readonly record struct PrimaryCredentialFacts(bool Known,bool Configured,bool KeyUsable,CredentialSource Source)；private static ProjectProposedHotSavePrimaryFacts(string finalRef,SecretMutation modelMutation,SecretMetadata proposedMain,AppSettings current)。仅Strict primarySave，现PrimaryProjection先决定Keep/Replace/Delete finalRef再评价；DB-only依据sameconnDBbits，不以mainEnvConfigured反推DB。Source enum真实仅None/Database/Environment，Unknown=Knownfalse/SourceNone，FactsKnownfalse/KeyUsable&&!Configured/非法Sourceenum failclosed。当前snapshot.ApiKey Keep一次，不新ctor/callback/Startup框架。
+- 两fixedenv各只观测一次：实际env-ref QQCHAT非空白→OPENAI非空白→ProposedHotSaveMain；main Keep current.ApiKey raw谓词，Replace DBbits，Delete保QQCHAT??OPENAI的空白shadow再Trim。DB/publicLoad与ownedReplace对Trim后谓词；fixedenv/current fallback保现TryBuild先raw.StartsWith http(s)拒后才route.Trim，不悄改前导白URL旧行为/任何其它函数。KeyUsable仅当前key谓词不是实际鉴权/整体RouteReady。未知ref在读取值前Unknown，nonprimary/Read全catalog/MainBinding/Unconfigured/未来Startup投影仍未施工。
+- **先仅Roottestsource，Storage/Bridge/00Settings仍冻结不写**：test2A6E增closed --configuration-primary-facts+父入口，actualHost privateparticipant/唯一Store真实publicSave。首Keep DBref/DBmissing但可信mainMetadataEnvConfiguredtrue应整批ValidationFailed且version/audit/DB/runtime不动；再goodDB Keep、URLshapeKeep/Replace原子拒、GoodReplace、Delete finalenv合法、QQblank main shadow与env-refskipwhite差异、Current fallback、ModelOnly安全bits/其它槽Unknown。18～20为计划非通过，不改旧DB-only Token fixture/构造接口。
+- Root真实build专项锁红后才开四paths产品source并通知00；Root唯一builder，00不build、不越写Rootfile。最终Read/全Provider/路由热采用与生产保存链仍待后续，不能拿最小primary校验当完整Wave1或第二阶段准入。回退仅本bits/helper/gate改段并保其安全风险说明，现closedrefs/六cacheguard/aliascodec全保。
+
+### 22.83 primaryfacts真实红后四paths source完成冻结
+
+- Root08:30:37.830～08:30:40.251 compile1因fixture猜GeneralChanges，查询真实ConfigurationChanges.cs39后仅纠为BehaviorChanges；08:31:00.569～08:31:03.637 build0/增量0warning，child08:31:03.641～08:31:05.943退出1、passed0/failed1，固定missing_database_not_main_environment：DBref missing/main envmetadata true旧Host错误允许，非setup失败。testA7F385821D37E5FB04BB3CB7C6F9B0A26358142B520172C92B6AFF2912341F8F，原20asserts保留。
+- Root明确解除红窗口，owned Store/Bridge仅Modelbits/Observe/project完成，输出Store1F238419E8F56CE88A70AA7EAB0519849396FB6AFC6593F89E594F4FD2E9A703、BridgeEB2D7734B17DBE0E7CE8AFCD985BD57538B231AECFCBBBC8E91B661937C6A260，scoped diffcheck0，无新SQL/Prepare签名/值输出。Root内存逆片段全文hash精确回原688794…/0BE0…、命令exit0，无任何逆写，保所有外部既有改动。
+- 00只SettingsStore移除旧mainMetadata.Configured假ready门禁→现PrimaryProjection finalRef之后private Model-only facts严格校验；DB bool/fixedenv raw/HotSave shadow/Current一次/Unknown_knownfalse，ctor/Legacy/nonprimary/Read/TryBuild均未改。输出SHA256=58899E85931AF792F265C90C96B7EC86FBEBB28AD17C7D78B443D1F25F886AF8、1250行/scoped diffcheck0。00内存逆旧3改段全文hash精确回06C9F3EFD333C68CE0050952DB5F91AAE972359213CF5ECE977231F693B55A23、pwsh退出0，未写逆回文件，保Device/alias/Token全部既有改动。
+- 四source正式冻结，Root唯一build20专项/统一Review/defaultArchitecture/Safety，00无build；Source存在不预报20绿，也不宣称完整Provider/Startup/Read目录/production采用。异常facts_knownfalse不当Unconfigured，SourceNone是合法enum而Known决定未知，未造public enum成员。
+
+### 22.84 primary真实20/统一812及重建兼容全部通过
+
+- Root Review build08:35:38.803～08:35:45.363退出0（8warnings），primary20专项至08:35:46.981退出0、20/0；full至08:36:01.210退出0、812/0。Architecture build08:36:01.228～08:36:02.173/run08:36:02.174～08:36:02.999均0、165/0、Domain268；Safety build08:36:03.003～08:36:06.609/run08:36:06.610～08:36:18.885均0、594/0。四hashStore1F238…/BridgeEB2…/Settings588…/testA7F385…完全不变。实际publicSave→真实Host私有participant DBmissing/mainEnv错误读真红→原子拒、URL不可用拒与finalenv合法真正通过，不是纯声明。
+- defaultArchitecture08:38:06.181～08:38:06.932退出0、165/0、SQL本次精确当前137/阈137。SettingsScope build08:38:06.967～08:38:08.726/run08:38:08.728～08:38:10.119均0、failures0，输出未给pass总计不借旧17；ProductionSpec build08:38:10.122～08:38:11.855/run08:38:11.857～08:38:13.352均0、62/0；Frontend08:38:13.353～08:38:20.887 node0、356/0。
+- 真Headless Rebuild08:38:20.892～08:38:25.606退出0（8warnings），Harness08:38:25.607～08:38:28.752退出0（2warnings）；s21 08:38:28.762～08:38:36.468退出0/37/0、s36 08:38:36.469～08:38:43.489退出0/98/0、s52 08:38:43.490～08:38:50.090退出0/119/0。四hash无变，Headlessartifact5A04E2742CDF3773BAC788487DD839202FC3B573EA85255D598C44C3B37C02E1；HEAD/status371/20D/statusSHA46BB…/cfg0.3.2与冻结7B7C…不变。一次只读误猜ProductionSpec无Probe路径exit1后实际Directory更正，native本批全部0，不是产品失败。
+- source窗口终态但下一fullBinding未准入。内部model:unconfigured/model:primary仅表达候选未冻结字串，不是已批准新knownrefs。00最新Find建议后明确撤回为不完整原子/应用方案：Find metadata一conn+Secrets.Load另一conn可混版本，且把desiredURL/model提前热用违反Started/发布与nonprimaryRestartRequired。必须先03只读freeze coherent安全gate/read/use及真正consumer batch；保持captured路由metadata，live只能revocation/binding安全gate，不得cached复活或未Model应用偷换endpoint。当前所有source仍冻，无ctor/newbinding/EnsurePrimary/transport改动，不作fullProvider/production/第二阶段宣称。
+
+### 22.85 本批交付checkpoint后03 coherent route只读结论（未源码准入）
+
+- Root确认22.84为本批交付证据入口，goal未完成/第二阶段锁定，本批无更多编辑/构建/提交发布。03只读建议复用真实AppDatabase.Open+BeginTransaction(deferred:true)（Store98范例）、sameconn ModelProviderStore.LoadAllInTransaction与fixed StorageSecrets.LoadInTransaction；current row缺失/disabled/unclassified/Unconfigured或binding≠captured拒路由，nonprimary desiredURL/model≠captured也拒，避免新key送旧目的地。继续capturedURL/model/priority/候选，不freshFind整行偷热/不选另一实例，六guards已防deny后旧cache复活。
+- 该方案仍**候选未准入**：FindAsync写floor且依caller/key不可滥作每route只读gate；LatestApply仅private最新receipt聚合非每providerModel。DB readTX一致不等于DB+SettingsBox.Current跨介质一致，Current主snapshot需一次捕获并如实报告阶段，未建立原子bundle不能宣称已建立。
+- 现已冻旧known legacy DBref每次读取committed DB值是live事实，可能早于ApplyStep.ModelProjection Started；若保留必须明确是committed credential安全消费，不作ModelProjection Applied。若要求所有key更新也Started之后才可用，需另审runtime epoch/binding-version契约，不能偷偷新增。实际Core ApplyStep.ModelProjection=2（不是误名ModelRuntime）；TryStartApplyStep/RecordApply已存在但现SettingsBox先Exchange再published，并未完成claim→完整routing snapshot构造→单引用交换→真实ledgerResult的应用链。
+- 需00/03/06或负责人明确分维度语义/准确consumer batch后冻结sentinel字串与source；Unconfigured不伤共享DBslot、UsePrimary必须live-main不复制env仅表达方向。当前无新增helper/ctor/ref码/metadata/gate source，plugin两个额外paths与sourceInstance消费者扩权尚未批准，Agent04只读授权未答不得开席。局部green不解除全Provider/生产/第二阶段门禁。
+
+### 22.86 2026-10-14恢复与负责人第二阶段/凭据维度裁决
+
+- 00恢复原登记/共享席位，仅只读+本文，不build；实测HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、status-uall371/20暂存删除、LFjoinUTF8状态SHA46BB16A133ADAEB7353396A114746EA6F98F8181661A8A87F268DA951178B2DD原样。五source完整hash仍Store1F238419E8F56CE88A70AA7EAB0519849396FB6AFC6593F89E594F4FD2E9A703、BridgeEB2D7734B17DBE0E7CE8AFCD985BD57538B231AECFCBBBC8E91B661937C6A260、Settings58899E85931AF792F265C90C96B7EC86FBEBB28AD17C7D78B443D1F25F886AF8、Comp2552BF1416D8F46F1204BADC1D45318A7D81C6C0247AFC7785AB8ADB5C567639、testA7F385821D37E5FB04BB3CB7C6F9B0A26358142B520172C92B6AFF2912341F8F，公开cfg0.3.2与7B7C冻结不变。
+- 负责人本次明确“第二阶段”指**Wave2A/2B平台与模型迁移**，不是独立Web；目标是完整Wave1验收后具备开启资格，不授权直接启动2A/2B。Web仍依Wave1～5+必选ZBA+安全/资源/回退+明确解锁，不能以此新释义提前打开Web，也不能把全Wave5义务倒塞Wave1。
+- 负责人确认保留旧精确secret:apiKey每调用消费已committed DB凭据及立即安全撤销门禁这一实际语义；URL/model/enable/binding配置的明确应用/需重启另维度，不把前者说成ApplyStep.ModelProjection Applied。same-readTX安全观察/保captured路由/拒不匹配是下一实际consumer冻结内容；不是批准freshFind整行热采用或未签sentinel字符串。若以后改成所有key必须Started后才使用，须新明确契约，当前不暗引runtime epoch。
+- 00重新按现21.4完整准出条款核范围（当前标题行1849；历史1170行号已漂移），不以局部primary/旧4scenario代替：全部C3分区及允许秘密同TX、CAS/幂等/版本/所有旧writers、首次ChangedCommitted条件发布、Token write-only GET/UI/旧空整批拒与明确Delete、Device稳定key/tombstone与真实hello/任务/control/commit后failclosed、安全Read/rawkey/nameRaw、真实注册测试入口/独立Headless Rebuild/完整适用回归/合成迁移与整套产物+DB回退。当前源码局部通过不满足这整组要求，Wave1仍未验收。
+
+### 22.87 下一Wave1必要消费依赖图（不扩成整后端）
+
+1. **C3全部配置域闭合**：现SettingsStore Prepare/Read仍对Field102/Registered.Policies与Plugins/非primaryProviders拒或未可信投影，不能以primary20充全部分区。完整Registered provider先freeze两个内部binding语义、sameTX最终校验/metadata与真实safeRead，再接真实coherent安全consumer；Policy依02可信declared catalog/purelegacy+typedmeta方案，Core既有DTO/Read seam复用；Plugin依明确的限定持久状态/既有preset状态consumer事实与授权，不能存bool称全部Engine已迁移。Wave3完整Engine生命周期不作为本条偷扩范围。
+2. **一条统一writer/版本通路**：CompositionRoot受控初始化/一次Activate→BotConfig恢复用户/秘密→SettingsBox同_gate save基准→真实Store事务→首次ChangedCommitted publish；现生产未Activate，SettingsHotReload75→旧ApplyPersisted/SettingsRepo.Save、WebSettings453/494旧setter内秘密先写、PanelDeploy经同下层，以及direct SettingsStore.Save/Secrets旧wrapper/EnsurePrimary启动覆盖仍须收口到同协调器。先保证旧有效路径，再替换，不直接删旧setter或放行任意JSON。
+3. **真实commit/apply/action结果**：SettingsBox83现先Exchange再published；八ApplyStep须复用已落TryStart/RecordApply将claim-before-work与真实结果接入HotReload实际runtime-policy/model/concurrency/context/scheduler，Replay/Find不重做，已commit应用失败不假回滚。TTS文件与Mood独立状态不得冒sameSQLite原子；MoodStore吞错语义整改请求未批准前不写，该兼容动作怎样关联安全结果需精确batch而非整个Wave5 ZBA。
+4. **管理替代安全面与设备采用**：oldGET仍回FeishuVerificationToken明文（WebSettings1354）及旧JS回送，write-only metadata/显式ReplaceDelete必须GET/POST/UI同批保持唯一保存通路；TokenSlot5 startup恢复已有synthetic证明仍需生产Bootstrap采用。Device已有同TX计划/gate，AgentBridgeServer hello/selection/worker/每次SendGate后真send与AgentCommandService control必须接持久门禁，NameRaw/显示mask不改key。与Wave2来源envelope/跨实例消息路由完整迁移分开，后者不得伪称已实现也不反塞整个Wave2工作作为Wave1。
+5. **准出证据闭合**：完整域+实际Host采用之后最终绑定source/产物指纹、真实工程/逐nativeexit、保既有断言/棘轮全适用回归，旧格式/并发/fault与整套旧artifact+对应合成preimage DB回退（不是codec模拟/新binary恢复）。当前已验证bundle可先按精确资产白名单捕获作未来preimage，未登记不得创建/复制；不读真实data/log、不git archive未知用户文件、不开第二仓库、不构建旧HEAD代替当时已验产物。
+- 门禁依赖：完整域→统一writer/启动采用→GET/UI+设备/真实apply消费→最终回归/整套回退→00 Wave1验收核对→负责人明确授权Wave2A/2B。02/03只读/有限前置安全修不是2A/2B整体准入；04只读授权未答前不建席、plugin额外paths和完整SourceInstance消费者未授写。ZBA完整管理端点/MCP SDK互通/整机资源/独立Web属于后续，不用缩小Wave1子集偷换完成，也不用后续全部工作无限扩Wave1。
+
+### 22.88 合成回退baseline bundle捕获前置登记（不是回退验收）
+
+- Root独占原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，13:14本轮实测inputSHA256=A7F385821D37E5FB04BB3CB7C6F9B0A26358142B520172C92B6AFF2912341F8F。仅既有closed factory新增 --configuration-capture-bundle <repoRoot> <captureRoot> <expectedHeadlessHash> 合成证据入口；无新源码路径/公共Program/业务接口/契约修改，00只本文登记、不build。Root获本条可编辑该测试并独占串行真实Review构建/捕获与Headless -t:Rebuild；所有shared及Storage产品源码继续冻结，不并行build。
+- 唯一证据根 %WORKDIR%\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670，Root独占，13:14实测不存在；本次仅其 bundle 子目录资产与安全manifest。不得创建第二工作仓库、复制真实DB/data/log/env/config或全目录archive。未来preimage.db只准现合成AppDatabase fixture与真实backup primitive产生，须下一明确登记后再创建，本条不准复制任何已有用户DB。
+- 00实读当前Headless.deps：12 managed runtime资产（含Headless/Core/Platforms/Storage）+22 declared native runtimeTargets+deps/runtimeconfig/apphost三项=37精确白名单；managed按真实输出leaf映射、native保持deps相对路径，需集合去重/实际存在/路径约束验证后才复制。拒absolute/traversal/重名/额外文件；source真实路径严格在现 src/BotAgent.Headless/bin/Release/net8.0，target严格在该nonce bundle，不跟随越界reparse/symlink。不收PDB、任意JSON、用户文件、日志或未声明资产；manifest只相对路径/SHA/sourceREV/冻结contract/captureUTC等安全形状，不写环境值。
+- 本轮当前Headless SHA256=5A04E2742CDF3773BAC788487DD839202FC3B573EA85255D598C44C3B37C02E1，deps=C5D165910A5ACA35AEB131848C24AA13C5F24FEF40FDF8E1F79DE3C24D5209F8、runtimeconfig=95505548C838F72A6A829FD5332DBC674C715CE26A216E9EB32BEC8B5821EAE2、apphost=0F4200FFE028C384C2B3FAC39015DD3DC5D136DCD550497418F2E9BC4B0270C6。先记录37asset逐项hash与五source指纹，再真实Headless Rebuild；期望Headless及所有来源asset前后不变，变动即停止绑定旧22.84已验baseline，说明并重新准入/验证，不能悄以新产物替旧。复制后逐项hash/完整集合核验，拒未知已有内容，不覆盖非本任务资产；记录命令/时间/exit及manifesthash，无失败自动清理。
+- 保存该baseline直到完整Wave1验收或负责人明确批准证据退役，不自动删除。后续旧bundle+对应合成preimage进程运行/比较才可证明整套回退；本批capture成功最多证明资产取证，不证明新宿主采用、旧binary兼容新schema、生产回退、Wave1或2A/2B准入。framework-dependent .NET8运行时/OS记录为外部环境，不假称bundle包含整机回退。
+
+### 22.89 Mood单路径追加授权事实（待精确batch，不准此刻写源码）
+
+- Root转达负责人已明确新增 src/BotAgent.Storage/MoodStore.cs 可观察持久结果限定整改及合成验证授权，扩展原八Store仅查询复用限制中该单路径，不扩其余七Store语义或其它源码。本轮实测inputSHA256=6918F5C076501E9A49692EB1BF3BD83C502AE47406B67DB967E08236A7719B24；后续Root原Storageowner实施，00只登记/共享最终消费。本条仅授权事实/候选界限，准确成员/测试/改段另登记后才source，现捕获窗口继续全source冻结。
+- 冻结候选719明确 LegacySaveOutcome(ConfigurationResult,LegacyActionResults)：Mood独立namespace key/NotStarted/Applied/Failed/Unknown，配置NoChanges不绕动作去重；旧SetText false混合invalid/nochange，SaveLocked吞持久异常，true不证明persist成功。不得改旧bool含义换Applied，不把Mood和configurationVersion绑定或声称一次SQLite回滚，不由无异常推成功。
+- 已核实际MoodStore133～153先clean/相等判false、先更新内存再SaveLocked；SaveLocked250～270同Write写text及保现poke列表后catch。候选最小整改是可观察同conn文本原语+确认commit后的projection seam，保持SetText/Reset/RecordPoke/Ttl旧签名、规范意图及poke历史，复用真实完整SQL不加扫描逃逸。完整独立receipt/dedup、HTTP组合真实结果另批冻结，不先造public接口或把Mood偷装八ApplyStep。
+- 00一次只读rg对ReplyPipeline*直接文件wildcard触发exit2（Windows路径非法），随后改真实目录+glob检索核消费，无写/构建，不算产品失败。本轮读取仅源码/冻结条款，不读真实心情或数据库。
+
+### 22.90 02完整Policy只读报告接收（候选，不授源写）
+
+- 原02席位13:07交回完整C3配置域只读方案，无写/build/test；四输入00再核仍PlatformOptions90E7A6AE0D94A93F5B7B6BBA457710A6B4BBCAE2E1A63315DACBB89C342D57AB、Resolver551AC5E975F7E6A7542769B3330F29E6DFB478F385F51F93F93ED2BE32490588、SwitchB3C9565C5C3848CEC9F77DBB67EBEDAFAEBD55446091F4C58ACE0914CD0E8BDE、Core旧PolicyC8918359BE39502DF1C2095FAF58E74FE783120483B507CBAD0140735AC365B6。Registry/CorePorts现三元局部输出不再修改，02暂时写权已交回。本条接收报告而非开放八文件源码，保持capture冻结。
+- 最小可信配置域方向：复用当前sameconn GetMetaInTransaction/SetMetaInTransaction及既有typed规则，单versioned typed-policy真源（键名/revision待准确冻结）；存在且empty也权威，Clear不能旧DTO复活。保原PlatformPolicies JSON类型作兼容，不把typedTarget塞旧反序列化DTO；Options只承载JsonIgnore immutable runtime/catalog；Switch集中pure逐字段Instance→AccountDefault→四canonical scalarbaseline，Features逐项、Explicit空/AllowAll不混；旧local union与未消费wildcard、不分类名单、schema交集/覆盖及旧IgnoreCase歧义保真实兼容/拒审。
+- Host可信声明目录须含qq.private/legacy空instance、qq.official/legacy空instance、local/legacy空instance与feishu/default/feishu-main，在disabled/credential/notloaded过滤前登记，不从loadedRegistry或请求policy自授注册。sameTX初始化/整表或稀疏保存、安全Read复用当前PolicyViews seam；Read不迁移、NoChanges不写格式/marker。未来准确payload/纯函数/目录signature与改段先Root/00冻结再认领。
+- 上述可形成完整C3 Policy配置域，不等于现源message/工具/dispatch采用exact来源；ResolverForChannel及_plain/_source→ChannelRouter仍旧链。完整来源envelope/后台并发来源/媒体动作隔离属明确后续Wave2路径与权限，不因八文件小改宣称隔离成立；已有受授权Whitelist/Feishu门禁局部消费亦需后续精确batch/真实测试，不以目录/DTO存在替验收。
+
+### 22.91 rollback baseline capture真实终态（仅取证）
+
+- Root报告2026-10-14 +08：Headless -t:Rebuild13:19:53.621～13:20:11.696退出0（8既有warnings）；Review build13:20:11.730～13:20:16.605退出0（增量0warning，不宣称既有warning修复）；capture13:20:16.840～13:20:22.304退出0、41/0，资产37。37asset重建前后及复制后全部hash一致，含22.84已验Headless5A04…，五产品source重建前后无变；仅ownedtest新增capturefactory，testoutputD4CD1561006E2C91A15CA8A91F337CD2C75FC7644A171B7013CB47116C3DFA89。
+- nonce根仍22.88唯一 .git/agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670，manifestSHA256=3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542；00后置只读独立核test及manifest完整hash匹配，未读真实数据/秘密，未运行build/capture。资产完整集合/reparse/traversal边界依本批41assert，不把仅manifesthash当执行证据。
+- Preimage=false、RollbackVerified=false；不自动删baseline，尚未任何旧bundle+对应合成DB运行比较。捕获结果只说明已验产物证据保全，非生产回退/旧binary理解新schema/fullC3采用/Wave1验收。Root可串行完整Review验证新factory无业务回归；00共享source继续冻结，仅readonly设计下一Provider origin/binding批，待Root具体Read-origin方案及准确input冻结后才source。
+
+### 22.92 capture factory完整回归与Provider业务收口
+
+- Root报告13:30:41.784～13:30:56.164 Review退出0、812/0；Architecture13:30:56.195～13:30:57.121退出0、165/0、SQL137、Domain268；testD4CD…与Headless5A04…保持，scoped diffcheck0。仅新合成证据factory回归，不是新的产品功能验收，37资产baseline及manifest3FC9…保留。
+- Root确认03/00本批准确语义：Ordinal model:primary为LIVE单次Current主凭据，不复制env；model:unconfigured永deny、不Delete共享槽；两旧ref兼容不改。所有final-enabled目录检查known/Configured/KeyUsable（不只edited对象）；disabled旧Unclassified且Keep原ref可保内部事实但不读值/路由，Read标unclassified/legacy，显式UsePrimary/Unconfigured可以修复。UseRegisteredModelCredential仍Unsupported。primary Priority/Enabled继续ReadOnly；Name可Clear空；nonprimaryURL/model Clear按required拒绝；bool/int Clear沿现Store field_cannot_clear，不造默认或priority范围。
+- captured或desired任一false不可路由；nonprimary desired URL/model/binding变化拒绝等待restart，不freshFind热采用；primary已有Current URL/model选择兼容保留，不假称metadata已Applied。负责人批准的committedDB key实时消费单独报告。Read origin不能由row存在推UserConfiguration；精确v1模式方案及activation writer fence纳入下条完整批，不以仅gate小修充全Provider。
+
+### 22.93 完整Registered Provider六路径实施前准入（先真实红）
+
+- 13:37 +08本轮00实测六input：Root src/BotAgent.Storage/ConfigurationStore.cs=1F238419E8F56CE88A70AA7EAB0519849396FB6AFC6593F89E594F4FD2E9A703；Root src/BotAgent.Storage/ConfigurationStorageBridge.cs=EB2D7734B17DBE0E7CE8AFCD985BD57538B231AECFCBBBC8E91B661937C6A260；00 src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs=58899E85931AF792F265C90C96B7EC86FBEBB28AD17C7D78B443D1F25F886AF8；00 src/BotAgent.Headless/Adapters/Persistence/ModelProviderStore.cs=4E36E7B8DD3E698395A3490861BB68F7E9227FA14358B66B94C7FD225E081351；00 src/BotAgent.Headless/Host/CompositionRoot.cs=2552BF1416D8F46F1204BADC1D45318A7D81C6C0247AFC7785AB8ADB5C567639；Root tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs=D4CD1561006E2C91A15CA8A91F337CD2C75FC7644A171B7013CB47116C3DFA89。五产品+一原ownedtest，无新增文件/Core公共shape/契约hash/工程依赖/数值棘轮改动；Root两产品与test独占，00三shared最终写。
+- 先Root仅test新增真实actualHost同TX保存/目录Read、实际runtime gate、startup-existing不覆盖/publicwriter/fence负例及闭合factory，锁定目前缺少合法Provider支持的真实红。此刻产品源全部冻结，Root唯一build；Root明确红终态后才同批分别写各自产品文件，不让reflection缺成员或compile失败冒缺功能真红。计数待实测，不预报通过。既有adapter/primary/alias/circuit/旧HTTP兼容断言保留；仅有明确功能升级时改变旧临时adapter_unavailable正例输入为永久非法对象并额外证明合法输入已支持。
+- Root私有fence：Store新增internal static bool RequiresCoordinatedConfigurationWrites，先Volatile.Read(activationInProgress)再Volatile.Read(_active)；Activate已有try在进入唯一AppDatabase.Write前设inProgress=1，finally既ZeroMemory(key)又复位0，_active仅真实commit返回后赋值；已激活幂等分支保留。Bridge只同名转发bool，无IO/新writer/public接口。00 publicUpsert在当前Write内部先检查，true抛固定configuration_writer_required；不拿ActivationGate，避免与唯一DBwriter反序死锁。若读false先占DBwriter，则写先于Activate事务；若Activate已commit必有active，不能趁赋值窗口绕过。
+- ModelProviderStore在原文件加入精确固定binding常量model:primary/model:unconfigured，分类两旧ref为主模型用途、新LIVE与Unconfigured及其它Unclassified，禁止动态环境/秘密名。Prepare现LoadAllInTransaction修改前目录、全部对象同TX稀疏合并，Name/Priority/Enabled/model/url/binding最终事实逐对象校验；metadata只写实际变化项且circuit不改，origin变化也算Changed。新目的地冷暖均使用prior目录+现完整URI/SafeUrl，不允许同批ProviderURL自授权；未变旧private保兼容，不冒DNS/redirect已验。
+- Host helper准确private tuple PrepareRegisteredProviders(conn,prior,edits,primaryProjection,current,modelMutation,proposedMain)返回MetadataWrites:ImmutableArray<ModelProviderDefinition>、Errors:ImmutableArray<FieldError>、FieldModes:ImmutableDictionary<string,int>、FieldModesChanged:bool。current在Prepare只捕获一次；ObserveProposedHotSaveProviderFacts(modelMutation,proposedMain,current)一次返回仅bool/source的DB/LegacyEnv/LivePrimary三facts，fixedQQCHAT/OPENAI各观察一次，保持raw-env/current谓词及Delete ??空白shadow；旧privatePrimaryhelper签名可同义委托，不泄值/造Startup框架。只当前真实需key能力例外参数保持旧primaryRequiresCredential语义，生产两transport需key不变。
+- origin唯一key configuration_provider_field_modes，closed v1结构精确 {version:1,entries:[{key:<exactID>,explicitFields:<bits>}]}；bits Name=1/BaseUrl=2/ModelName=4，mask仅0..7，exactOrdinal key唯一，root/entry未知或重复属性、非法类型/未来revision安全拒绝。ModelProviderStore internal LoadFieldModesInTransaction(conn)及WriteFieldModesInTransaction(conn,ImmutableDictionary<string,int>)复用现GetMeta/SetMeta完整SQL；不新schemaDDL/SQL/writer。无meta/entry字段按LegacyCompatibility+Explicit旧值事实，不称新User；明确Set/Clear合并bits，mode变化也是Changed并同TX写，Keep/NoChanges/Read不隐迁移或格式写。primary Model/Base用原direct75/76 user-mode真源，不用provider模式重复造来源。
+- Prepare/Read捕获固定origin JsonException→LegacyNeedsReview（保真实Read version/generation，不隐修）；DBIO失败沿真实StorageUnavailable/CommitFailed，不混格式与storage失败。public Upsert在激活前原wrapper如真变化对应Name/Base/Model，则同TX只清对应origin bits，未变字段不抹、等值无新mode写；激活中/后禁绕统一协调器。源码callers已核仅CompositionRoot105 EnsurePrimary、wrapper本身、SettingsStore813同TXprimitive，其它为合成tests。EnsurePrimary保持public签名，唯一Write同conn查existing，存在不覆用户metadata/binding/circuit，缺失才原upsert且不造user mode；其受控Bootstrap最终进入Initialize尚待统一启动批，不宣称本wrapper已完整初始化消费。
+- internal static ProjectRegisteredProviderViews(conn,desired,captured,kind)复用ProviderConfigurationView与ReadField：Name受授权NameEditable+masked Display，Overview Hidden不持raw；nonprimaryURL/model按实际模式投影，不回ref/secret字串。Credential仅safe enum；缺captured证据不报Applied，变化实际RestartRequired；primary在最终ProjectConfigurationView后以view.Model.Model及ModelBaseUrl两个现ReadField作with替换，避免另读Current/假User来源。保现registeredRead callback/7参数ctor，Read codec失败整体safe拒，不把callback声明本身当生产采用。
+- CompositionRoot原启动routes与dynamicResolver采用唯一private TryBuildCurrentProviderRoute(PersistedModelProvider captured,AppSettings current)：captured enabled检查→existing Open+BeginTransaction(deferred:true)→同conn LoadAllInTransaction及固定StorageSecrets.LoadInTransaction(ModelApiKey)，latest缺失/disabled/Unclassified/Unconfigured/binding不匹配拒；nonprimary URL/model不匹配拒，primary既有Current选择保持。DB异常failclosed且两client六guard不回cache。private ResolveProviderSecretInTransaction(knownRef,current,connection)只可信row固定ref；原ResolveProviderSecret/启动route同步识别两新增binding，未知先deny后读值，不修改transport/其它Model。newbinding/URL/model/enable未真实apply仅RestartRequired；legacy同refDB key按负责人裁决实时读commit而非ModelProjection Applied。
+- 合成回归目标：实际publicSave全部provider末段invalid/fault原子拒、secret/mode/metadata/version/audit/ledgerrollback、等值显式modeChanged/NoChanges/replay、disabledUnconfigured保slot、unknownrefsnoLoad、priorURL授权与self-registration拒、safeRead无raw/两主fields模式、corrupt/futurecodec不隐修、existingEnsurePrimary不覆、activating/activepublicwriter拒及失败激活fence恢复、sameReadTX gate不混metadata/key与captured事实/否决无cache、恢复mode/binding/circuit与并发。Root最终真实Review/defaultArchitecture/Safety/适用Probe/真HeadlessRebuild后旧IT逐exit/sourcehash；00不build。不包含Policy/Plugin/credentialregistry/DNS或完整Model热apply，不作生产新C3DI/HTTP/Wave1或Wave2宣称；回退仅本批精确片段且需保持原alias/事实/guards，不删除22.88已保baseline。
+
+### 22.94 完整Provider真实红后产品source完成冻结（尚未验证）
+
+- Root首次fixture13:48:32～13:48:39 compile1误用EnableAgentMask/AppSettings with，查真实AgentMaskSensitive及class后只纠test，不算功能红。13:48:56.920～13:49:00.512 Review build0/增量0warning；actual Save child13:49:00.516～13:49:01.932退出1、passed0 failed1固定registered_name_save_supported，合法已登记secondary Name仍旧unsupported；真实功能红而非reflection缺成员。Root明确释放产品窗口，仅各owner写22.93路径。
+- Root报告fence两owned source输出Store17FAFD207E5BFB827E1E91A26D615BE1692B96AAE173B41BC70FD3E27AAFD9E3、Bridge4AF961649D2404661DE814011648DFFBC80502B5653AD6FB4C39ACDC64FC03CC，scoped diff0；在内存仅逆本fence片段全文hash精确回22.93原1F238/EB2，不回写。Root继续原ownedtest两closed factories，已确认sameconn callback与outer SettingsStore static真实helper；四激活后publicUpsert仅synthetic setup改用已有sameTXprimitive反射，保旧全部行为assert，新真实publicwriter拒绝assert不放松。Mood仅提案无source。
+- 00三shared13:57source完成并冻结：SettingsStoreSHA256=D3DCC93AB72CA9E3254C3F06BA5630C0D5C6890FAC48292C76726963EE15F009（1407行）；ModelProviderStoreSHA256=47306880347919572B1C709BA5FC59D06ADE605516810EE2E2533CE4AFDA3E14（295行）；CompositionRootSHA256=A9E5D61BECC4A178F7DD300DADA34B3BC6F63E6BD26FD25495139D680C5A6BB8（730行）。pwsh逐sourcehash/linecount与scoped git diff --check退出0（已有CRLF提示，不是代码失败），00未build/test。shared采用完整Prepare tuple/modes事实、全final-enabled与legacy例外、同TXmetadata/origin与可信Read；private一次三bindingfacts、公开wrapper fence及missingonlyEnsurePrimary落源码，尚不凭存在称已编译/行为通过。
+- ProjectRegisteredProviderViews准确放外层SettingsStore internal static(conn,desired,captured,kind)，不新ctor；primary两ReadField最终with复用view.Model。Root补安全要求后同scope校验legacy userinfo：stored/effective主ModelBaseUrl及Override、目录desired/capturedURL存在userinfo时Read整体LegacyNeedsReview，保header、无viewraw，不能maskDisplay后仍回凭据。Strict最终目录同时校验http(s)/userinfo合法；旧同目的private兼容与Legacy保存规则不变。注册凭据registry未有，C3真实ResultCode无Unsupported成员，固定credential_registry_unavailable校验拒而非造enum或假支持。
+- actual runtime closure已调用TryBuildCurrentProviderRoute，sameReadTX固定DBkey+desired gate与captured路由维度；原启动/Resolve同步识别新两literal，unknownref不读。旧模型transport/DNS/redirect未改，主Current兼容不冒metadata热Applied。全部source现交Root唯一真实build/专项/全Review/Architecture等，未知编译或新红先归因再登记修，不放宽原断言/SQL137/Domain300。保baseline37资产及manifest，不把产品变更当已完成回退或Wave1/2A/2B准出。
+
+### 22.95 Provider57/fence11实际专项通过（全回归待执行）
+
+- Root首产品build13:58:06.807～13:58:12.974退出0（8既有warnings）；Provider child13:58:12.979～13:58:14.491退出1，先passed41后provider_fault_rolls_back_all_participants失败。初“meta已bits7故不写”的定位仅假设，后实际诊断真实fixtureURL旧secondary已不在prior授权目录→ValidationFailed/unchangedTrue，根本未进入注入fault；不当产品漏回滚或靠额外写meta换绿。
+- 仅ownedtest修为current已登记URL并显式Set此前未tracked legacy Model字段等值以形成真实origin变化，保全部五触发故障/用户秘密版本审计回执断言。writer首次7/1是Task.Run在Initialize内继承WriteDepth AsyncLocal，造成测试成嵌套writer；改在writer外创建Task、event接入激活阶段，原真实外部writer拒绝断言保留，不改产品锁/反而放开嵌套Write。
+- Root14:00:27.833～14:00:31.128 Review build退出0（增量0warning，不宣称既有warning消失）；14:00:31.130～14:00:32.782 actualProvider退出0、57/0；14:00:32.782～14:00:33.023 fence退出0、11/0。五trigger实际CommitFailed/unchangedTrue，metadata/modes/secrets/version/audit/receipt无部分提交；实际Save/Read/coherent gate/CAS/origin及before/activating/activewriter通过，不靠syntheticfakeparticipant替Host。
+- 当前三shared与Root两产品保持22.94冻结未改；Root只原ownedtest父ModuleRecovery添加两closedfactory精确57/11注册，再唯一全Review/defaultArchitecture/Safety。03可按原许可只读审新source，未赋新源码写权。专项通过不是尚未跑的全回归、最终统一生产writer/HTTP采用/Model热apply或Wave1验收，baseline/preimage回退亦未验。
+
+### 22.96 完整Provider回归终态与URI静态门禁最小后继准入
+
+- Root完整Review14:01:18.716～14:01:34.449退出0、814/0，新父两factory57/11纳入且旧primary20/alias17/refs29/host23等保绿，testoutput34B8DE945BB43DAEAEFB071862D8BE85F9919749F38D8EB4B6C8ED27DD42A788。14:02:02～14:02:27四真实probe各build/run退出0，Safety594/0、Scope failures0、Production62/0；Architecture实际SQL137、Domain≤300通过（本消息未给精确passedsummary/linecount，不借历史165充本次捕获）。Frontend14:02:59.796～14:03:07.352退出0、356/0。
+- 真Headless -t:Rebuild→Harness -t:Rebuild→mock/隔离S21/S36/S52逐nativeexit0，脚本至14:03:36.676退出0，S52实119/0；部分中段stdout工具截断，本条不捏细分时间/S21或S36本次计数，后续原始安全汇总可补。五产品sourceD3/473/A9/17FA/4AF保持，旧baseline37及manifest不换为新产物。当前窗口结束；本批完整typedProvider同TX/Read/coherentgate与旧宿主兼容有行为证据，生产统一Activate/新HTTP/publish八steps尚未采用，不把它说成Wave1准出。
+- 00静态发现安全边界：Read/Strict保存已拒userinfo，但旧startup/runtime BuildProviderRoute仍可能构造legacy含userinfo目的地。Root明确批准原Comp同scope最小收口：选择primary Current或nonprimary captured effective baseUrl后静态HTTP(S)/长度≤2048/绝对URI/UserInfo==0，再沿原Trim输出；不改变旧unchanged私网兼容，不新增域名/query/fragment白名单，不冒DNS/redirect已覆盖。
+- 后继仅00 src/BotAgent.Headless/Host/CompositionRoot.cs，14:05实测inputA9E5D61BECC4A178F7DD300DADA34B3BC6F63E6BD26FD25495139D680C5A6BB8；Root原ownedtest实测input34B8DE945BB43DAEAEFB071862D8BE85F9919749F38D8EB4B6C8ED27DD42A788。Root可先添加actual startup/gate userinfo与invalidscheme真实负例（非fakeIO或反射缺成员）并唯一build锁红；00暂不写该段，Root红终态通知后才最小补guard，其它产品source保持冻结。保原sameTX/credential/rawtrim/privatecompat与57/11全部assert，未授权额外transport/source路径。
+
+### 22.97 03发现本批Legacy typed Provider遗漏（先真红，责任不归旧fixture）
+
+- 03只读五input匹配，指出新RejectUnimplementedObjects删除所有Provider分支而PrepareRegisteredProviders只Strict，Legacy分支只primaryProjection/modes，内部SaveLegacyAsync接受typed Registered Provider意图后静默忽略，可能提交其它字段；原primary全Keep marker缺登记拒绝亦丢失。根因属于本批00实现遗漏，不能因旧HTTP parser不产生此对象或专项57绿就免责；不作为生产使用旧API输入的已验证漏洞泛化，先实际桥真红证明。
+- Root原ownedtest可追加两实际Legacy桥整批负例：nonprimary/未知Provider+Behavior必须整批拒，missing-primary全Keep marker须registration_required。既有NoCAS、原HMAC与旧primary Delete允许正例全部保留；不把Legacy升级Strict最终key/CAS行为。
+- 待修仅00 SettingsStore，input仍D3DCC93AB72CA9E3254C3F06BA5630C0D5C6890FAC48292C76726963EE15F009，准确段在现Prepare按profile.Legacy显式检查每Registered Provider：仅原IsPrimaryAliasMarker允许且必须priorprimary已登记，所有非marker安全adapter_unavailable拒绝；marker无注册固定registration_required。unknownmarker不默认另一对象。Root真实红终态前不写该段，Comp URI同样继续等待22.96负例真红，无其它源/契约/SQL改动；整批重新回归前不宣称完整Provider准出。
+
+### 22.98 Legacy/URI两真实红后最小修准入
+
+- Root14:05:44.914～14:05:48.774 build0，Provider expanded child14:05:48.778～14:05:50.916退出1、passed56后legacy_registered_intent_not_silently_ignored：未知Provider+Behavior实际被忽略，确认本批00遗漏。14:06:46.127～14:06:49.530 build0，actual startuprefs14:06:49.534～14:06:50.724退出1、passed29后userinfo拒绝assert，旧29保绿而真实route仍非null；不是setup/反射问题。
+- Root明确释放两source，仅00 SettingsStore现Prepare Legacy对象检查、CompositionRoot现BuildProviderRoute选择effective baseUrl后静态URIguard。00写前再次核inputSettingsD3DCC93AB72CA9E3254C3F06BA5630C0D5C6890FAC48292C76726963EE15F009及CompA9E5D61BECC4A178F7DD300DADA34B3BC6F63E6BD26FD25495139D680C5A6BB8匹配；对应22.97与22.96精确改段准入，无其它源/契约/SQL/旧Legacy Delete及CAS变更。
+- Root保所有原assert，追加missing-primary marker、实际Provider匹配userinfo runtime拒等，Provider预计62/refs34仅计划计数，须真实终态后记录。00仅最小两段后hash交回冻结，不build；再Root专项及全回归，未通过前不以既有814绿掩新红。
+
+- 00于14:07:41～14:07:42仅上述两段完成，Settings输出12FEF7A7BD073840E442AA8B59DB436912288DFA716E6EB400D5046744DFC688、Comp输出6B40AFFB4B2BA84ED4764A672336F54B165709805CC8EB4016A979E47C1B5C4F；pwsh hash/scoped diffcheck退出0（已有CRLF提示）。随后内存逆两exact段全文SHA精确重现原D3D…与A9E…，命令退出0，无逆写/覆原文件；其余既有模式/metadata/路由/秘密及工作区改动原样。正式冻结交Root唯一重建专项及回归，00无build，尚不预报62/34绿。
+
+### 22.99 Legacy/URI修复专项真实通过（全回归仍等待）
+
+- Root14:08:23.070～14:08:25.712 Review build退出0（8既有warnings）；Provider62/0退出0至14:08:26.386，覆盖实际Legacy非marker拒/缺登记marker拒、matching runtime userinfo与startup URI；refs34/0退出0至14:08:26.456（旧29+新增5，原断言全保）；fence11/0至14:08:26.703、primaryfacts20/0至14:08:27.114、HostAdapter23/0至14:08:27.625，均exit0。
+- Root只原ownedtest父汇总期望57→62、29→34对应新增assert，未删/放宽；真实红Legacy56后/refs29后→源最小两段→专项62/34通过，是产品遗漏修复不是fixture掩红。其它14:00五trigger/CAS/codec/同TXorigin/安全门禁原assert持续通过。
+- Root唯一整套Review/Architecture/Safety/Scope/Production session90157仍运行，未拿专项冒其终态；全source12FE/473/6B40/17FA/4AF冻结、SQL137阈不变，00未build/不编辑。Mood可观察持久seam准确batch仍候选，未写且不混本批，Wave1完整Host/HTTP/回退门禁仍未闭合。
+
+### 22.100 完整Provider含两修复最终统一验证终态
+
+- Root每build/run原生exit0：Review14:08:47.890～14:09:03.427、814/0；Architecture至14:09:05.070、165/0、SQL137；Safety至14:09:20.695、594/0；Scope至14:09:23.839、failures0；Production至14:09:27.900、62/0。前段消息仅各终点，未冒起点/分段build时间，均真工程/非历史成绩。
+- Frontend14:10:45.139～14:10:52.760 exit0、356/0；Headless trueRebuild14:10:52.762～14:10:57.312 exit0（8warnings）、Harness trueRebuild至14:11:00.408 exit0（2warnings）；S21至14:11:08.129 exit0/37/0、S36至14:11:15.193 exit0/98/0、S52至14:11:21.750 exit0/119/0，均隔离mock/非external且逐nativeexit核对。
+- HeadlessartifactSHA10691D63A0ABB387EE033F5D782763FBB12822B130CAE32DE5CF0D137F32118C；testAD9307B00E9D4A339B04E06B78574D4A5A0BFB761E3627257F0344BB6A4837DE；五产品17FA/4AF/12FE/473/6B40保持，旧37assetbaseline与manifest3FC9…保留未替换。不拿新binary/newDB恢复冒旧artifact回退，不把完整Provider源码/真实局部消费者/legacyIT通过冒生产C3DI/HTTP或全Wave1准出。03只读发现的Legacy遗漏与URI缺口已有真红→仅两source片段→62/34专项及全回归证明，未放宽棘轮/原断言。
+
+### 22.101 Mood可观察独立持久结果两原owner路径准入（先真红）
+
+- 00本轮再核Root独占src/BotAgent.Storage/MoodStore.cs input6918F5C076501E9A49692EB1BF3BD83C502AE47406B67DB967E08236A7719B24、Root原ownedtests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputAD9307B00E9D4A339B04E06B78574D4A5A0BFB761E3627257F0344BB6A4837DE匹配。依据22.89负责人单路径限定语义整改许可，不扩其余七Store/Headless/Core/公开接口；所有Provider/其它shared继续冻结。Root先仅test真实故障不publish/旧bool不能冒Applied等锁红，真实终态后才只Mood源码，Root唯一builder，00仅登记/不build。不能用反射缺新成员或编译失败冒目标真红。
+- 同原MoodStore文件新增internal nested enum MoodTextWriteState {Rejected=0,Unchanged=1,Committed=2,Failed=3,Unknown=4}、internal readonly record struct MoodTextWriteResult(MoodTextWriteState State,bool IntentChanged)，ToString固定安全类型摘要无text/time/错误正文。internal SetTextObserved(string?,DateTimeOffset)、ResetObserved(DateTimeOffset)返回此结果；不是Core/C3公共shape，不装八ApplyStep或configVersion。
+- SetText清洗/24字限制/相等不写不刷时间保原。旧public SetText委托Observed后仍return IntentChanged：非法/相等false，accepted-changed即使Failed/Unknown仍true，与旧bool含义兼容，但不作Applied证据。Reset void委托Observed，仍alwaysrefresh/write，不造same-now NoChanges；不清戳列表。只有真实独立AppDatabase.Write正常返回才更新Text/UpdatedAt；callback内故障Failed，callback完整后commit/dispose错误Unknown，不先发布内存或虚称回滚成功；日志只固定码/异常类型，不新增文本/时间/SQL正文回显。
+- 原mood UPSERT抽完整常量并由internal static WriteTextInTransaction(conn,string? normalized,DateTimeOffset? updatedAt)共享；原唯一poke INSERT抽完整常量由private static WritePokesInTransaction(conn,IEnumerable<long>)共享，两原SQL定义复用、不拆关键字/加SQL。SaveLocked与Observed callback均同conn写text+原_pokeTimes foreach，保失败RecordPoke留内存戳在后续Set/Reset/Expire成功flush的真实恢复语义；RecordPoke/Prune控制、列表及公共签名不改，不嵌套Write。Mood _gate→独立DBwriter锁序保原，任何未来统一consumer不得在DB锁内反拿Mood _gate。
+- TTL过期仍在Describe/CurrentText逻辑隐藏；新增pure IsStale(now)检查，不因清库失败重新暴露expired text。Expire清text持久成功才null内存、保oldUpdatedAt；失败保持真实内存事实但逻辑显示无主观心情；TTL0不expire，prune/自动描述/poke恢复保原。未读真实Mood/DB，只使用合成text与隔离数据库faults。
+- ownedtest覆盖原invalid/equal/清洗/24边界/accepted-changedbool/Reset更新时间与戳不清/TTL0/过期故障隐藏、真正text/poke写故障回滚且未publish、pendingpoke恢复、commit阶段Unknown可观测安全结果（无法确定真实终态不伪Committed）；使用现实际MoodStore/现backup/真实工程，不新测试路径或公共Program。精确计数后置，所有旧assert/SQL137等棘轮保留。
+- 此批不实现独立actionreceipt/dedup/LegacySaveOutcome HTTP消费；那些依冻结719独立namespace另准入，配置NoChanges不能绕动作去重，也不能从本Observed.Committed直接声称外部HTTP动作完整Applied。旧bool consumer日志若仍误称成功列后续精确shared批，不偷扩本路径。新模块green不自动完Wave1/开Wave2；回退仅本seam/primitive复用/commit后projection及TTL逻辑片段，保所有既有戳状态/工作区，不清理baseline证据。
+
+### 22.102 Mood真实故障红后单产品源码窗口
+
+- Root14:19:07.982～14:19:11.975 Review build退出0（增量0warning）；actual old public MoodStore.SetText合成UPDATE trigger fault14:19:11.977～14:19:14.150退出1、passed4后failed_text_write_never_publishes_memory。原校验/清洗/等值断言先通过，旧bool accepted-intent真而memory先变化/DB保旧，确认是真功能红，不是未存在Observed反射或编译失败。
+- Root明确仅Mood原owner路径按22.101窗口实施，全部Provider/其它shared冻结，无并行build。后续原ownedtest将继续poke故障与pending恢复、TTL逻辑隐藏、真实deferred-FK commit失败Unknown、并发/恢复/配置version独立；计数与终态后置，不因已有4通过预报其余绿。00不写Mood、不build，独立actionledger/HTTP消费仍未准出。
+
+### 22.103 2026-10-14 21:17恢复：未捕获native终态不计成绩
+
+- Root报告原native91640句柄Unknown，恢复时CIM无dotnet进程，最终结果未捕获；不假记绿色或退出码。Root现唯一重跑Mood完整真实回归，00恢复原登记/shared只读席位，所有产品source冻结、无其它build。不得由source存在或旧成绩补齐丢失native结果。
+- 00于21:18独立实核当前HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、status-uall371/20暂存删除保持；Mood新sourceA38D42A82B2097D71C8ADD646C55DF26F1C1ED53F6D48EA7F7E22881EBDA7599、test5450B586E84FF0A7AC2BA24E3B7804FC129BA961699C13876D4D881EA7B396C5。五Provider产品仍Store17FAFD207E5BFB827E1E91A26D615BE1692B96AAE173B41BC70FD3E27AAFD9E3、Bridge4AF961649D2404661DE814011648DFFBC80502B5653AD6FB4C39ACDC64FC03CC、Settings12FEF7A7BD073840E442AA8B59DB436912288DFA716E6EB400D5046744DFC688、ProviderStore47306880347919572B1C709BA5FC59D06ADE605516810EE2E2533CE4AFDA3E14、Comp6B40AFFB4B2BA84ED4764A672336F54B165709805CC8EB4016A979E47C1B5C4F，pwsh查询退出0。
+- Mood源码新seam仅说明已实施22.101，不替新真实命令/时间/退出码/覆盖成绩，终态后另记录。下一完整C3 Policy仍02已回的只读候选，privatepayload/catalog/pure函数signature准确冻结与owner input登记前不写，不能由本恢复开Wave2或扩大SourceInstance路径。
+
+### 22.104 Mood恢复真实统一结果与00独立内存逆向核验
+
+- Root报告实际Mood专项14:21:38.979～14:21:40.292退出0、22/0（原21+TTL精确边界），A38/545 source不变；不是丢失native91640终态的替代记录。21:18恢复session92787每build/run0：Review21:18:25.082～21:18:41.494、815/0，父含Mood22与Provider62/refs34/fence11；Architecture至21:18:43.685、165/0、SQL137；Safety至21:19:02.212、594/0；Scope至21:19:05.811、failures0；Production至21:19:09.296、62/0。终点之外未提供分段起点不冒写，实际工程成绩非历史拼接。
+- 00只读检查新Mood observed/commit后projection、shared完整SQL/pendingpoke与TTL隐藏段；随后pwsh仅在内存逆22.101新增using、内部result/enum/常量、Observed/Reset/expiry逻辑及共享两SQL调用，全文SHA精确回原input6918F5C076501E9A49692EB1BF3BD83C502AE47406B67DB967E08236A7719B24，命令退出0且无任何逆写/临时源码落盘，证明该单路径既有其它内容保留。回退候选只本batch语义片段，退回会重引先publish及过期清库失败可见风险，不自动当生产可执行回退。
+- Root真Headless Rebuild→Harness Rebuild→S21/S36/S52 session16553仍运行，本条不提前报其结果；全产品继续冻结，00不build不改产品。test向AD930的逆证据待Root实测另补。Observed模块成功只说明独立文本持久结果，无receipt/dedup/HTTP组合Applied或全Wave1验收，完整Policy仍先readonly准确冻结。
+
+### 22.105 Mood真宿主重建/legacyIT终态与两路径保留证据闭合
+
+- Root session16553每nativeexit0：Headless trueRebuild21:20:21.491～21:20:27.909（8warnings）；Harness trueRebuild至21:20:32.071（2warnings）；S21 21:20:32.075～21:20:39.932、37/0；S36至21:20:47.105、98/0；S52至21:20:53.761、119/0。仅隔离mock、真实宿主新产物，不external或真实用户数据。
+- HeadlessartifactEC8A8D65835FD5D3C270E5F7143DD60844EFD42D7E6356DAEE5F82CDB7897D9A、Storageartifact07EEC6F1B73CF6915C23FE8BB8470DD507C21702849A3E37AD67562F7DD7C5E4；MoodA38/test545保持，scoped diff0；旧baseline37及manifest3FC9未替换。Root在内存只移本Mood factory/父入口/方法，test全文SHA精确回AD9307B00E9D4A339B04E06B78574D4A5A0BFB761E3627257F0344BB6A4837DE，pwsh0无任何逆写；与00Mood精确6918逆证明两原owner路径其它旧改动完整保留。
+- 本批producer可观察文本持久结果及旧宿主bool副作用已行为验收，仍无独立actionreceipt/dedup/HTTP组合真实结果，不能把Committed producer当用户动作完整Applied或Wave1完成。当前无活native，所有产品冻结，下一完整C3 Policy由02原只读席精化privatepayload/catalog/pure signature，00仅read/doc，不又以局部gate替全域也不提前源码或Wave2。
+
+### 22.106 Policy origin只读形状纠正（未冻结新增源码）
+
+- Root与02交叉核实际Core ConfigurationObjects89～90：PolicyEdit(Target,PlatformPolicyConfiguration)，六Configuration成员均mandatory，Registered.Policies仅target稀疏，不存在六个FieldEdit/字段wirepresence。00先前依据六ReadField提“仅dirty字段bits”的臆测不成立，已明确撤回；当时只是只读候选，未改Core/协议/产品源码，不把该猜想落实。
+- 待冻结准确origin方向：同一private typedpayload每entry wrapper {policy:<原CoreEntry>,explicitFields:0..63}，legacy初始化0，全表Field102 Set所有entries63，Registered.PolicyEdit每个被列target完整Replace→63（包括有意Inherit/Features空），未列targets及bits原样；只有真实legacy scalar alias桥局部意图可OR对应bit，不能按值相等猜用户没编辑。Features实际ImmutableArray整map，不新造FieldEdit或每featurepatch。wrapper私有额外属性不交Coreentry反序列化，键名/revision/codec/pure函数仍下一批准确冻结后才源。
+- FieldId实际PlatformPolicies=102，135是VoiceVol，不按错名写。Root DesiredModes现只direct102，未来原ownedStore对非空Registered.Policies补102 Explicit须独立前置登记、无新SQL；整体table mode不意味着未编辑的legacy entry全是新User来源。Read六字段的UserMode与effectiveSource按原163：有意Inherit模式与实际父/基线effective来源分开；Explicit有用户值、Inherited/Absent编辑值是安全effective，不能为了origin伪造公共字段。逐entrybit只作来源事实，具体Inherited/Absent与legacy规则在准确signature表一并冻结，源仍全冻。
+
+### 22.107 完整C3 Policy十一原路径准入与确切私有接口（先真实红）
+
+- 依据负责人既有八路径限定前置整改许可、02两轮只读评审及Root本次明确完整Policy施工要求，00于22:11 +08实核如下input；无新增文件/publicC3 shape/冻结hash/SQL/schemaDDL/数值棘轮改动。Root仅三原owned：src/BotAgent.Storage/ConfigurationStore.cs=17FAFD207E5BFB827E1E91A26D615BE1692B96AAE173B41BC70FD3E27AAFD9E3、ConfigurationStorageBridge.cs=4AF961649D2404661DE814011648DFFBC80502B5653AD6FB4C39ACDC64FC03CC、tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs=5450B586E84FF0A7AC2BA24E3B7804FC129BA961699C13876D4D881EA7B396C5。
+- 02临时认领四Platform源码，仅本条改段（shared最终00复审合入）：src/BotAgent.Platforms/PlatformOptions.cs=90E7A6AE0D94A93F5B7B6BBA457710A6B4BBCAE2E1A63315DACBB89C342D57AB、Governance/PlatformSwitchSettings.cs=B3C9565C5C3848CEC9F77DBB67EBEDAFAEBD55446091F4C58ACE0914CD0E8BDE、Governance/PlatformPolicyResolver.cs=551AC5E975F7E6A7542769B3330F29E6DFB478F385F51F93F93ED2BE32490588、Feishu/FeishuBotGateway.cs=C9A9C5DFED46E44DB205820D2A5CD2902FD880B6AB38A81648140E91383AB24F。02须Root真实红通知后才写、不build；完成全文hash/改段交回写权，不改Registry/CorePorts/其余路径。
+- 00独占四Headless共享：Adapters/Persistence/SettingsStore.cs=12FEF7A7BD073840E442AA8B59DB436912288DFA716E6EB400D5046744DFC688、Host/CompositionRoot.cs=6B40AFFB4B2BA84ED4764A672336F54B165709805CC8EB4016A979E47C1B5C4F、Adapters/Persistence/BotConfig.cs=D9BBC84FEC4AC595CA8DF0F77A1A5B41151A28B898678F774CB85F879ADD86F6、Services/Qq/WhitelistGate.cs=B0F870451410C52873CB4D23D5DFC7D9E993F088031F1B171470E996EA204D84。当前所有产品仍冻结，先Root只test真实C3合法Policy拒/legacy缺口/现名单门禁负例；不得reflection缺新成员或compile失败冒功能红。Root唯一builder，红终态后分别放行已认领产品小段，并在所有source完成freeze后串行验证。
+- **Root Storage producer**：existing ConfigurationStorageBridge internal LoadPlatformPolicies(SqliteConnection)→internal readonly record struct ConfigurationPlatformPolicySnapshot(bool Stored,ImmutableArray<PlatformPolicyEntry> Entries,ImmutableDictionary<PolicyTarget,int> ExplicitFields)，ToString固定安全类型；internal WritePlatformPolicies(SqliteConnection,ImmutableArray<PlatformPolicyEntry>,ImmutableDictionary<PolicyTarget,int>)。fixed唯一meta键configuration_platform_policies，closed v1 {version:1,entries:[{policy:<原Core PlatformPolicyEntry>,explicitFields:int0..63}]}；absent→Storedfalse，存在empty→Storedtrue权威空，空串/未来rev/缺失或duplicate/unknown属性/非法enum/Unicode/重复target安全固定JsonException，不自动重建/迁移。writer稳定TargetOrder，不另schema/SQL/writer，复用真实GetMetaInTransaction/SetMetaInTransaction。
+- Root可将现Store FreezeTarget/FreezePolicy/TargetOrder从private精准internal供同Storage producer复用，方法规则/旧HMAC byte行为保持，不另造规范器，不依赖PlatformOptions/Headless。这里只closed结构与Core不变量；trusted driver/action语义目录由Platforms/Host验证。DesiredModes对非空Registered.Policies补Field102 Explicit（已有directSet/Clear仍一次、重叠仍原AliasConflict），同既有modeSQL无新增定义。Read/Keep/NoChanges/replay不写codec/marker。Root不改Headless/Platforms。
+- **02 Options运行事实**：五个[JsonIgnore] public immutable属性：RuntimePlatformPolicies:ImmutableArray<PlatformPolicyEntry>?（null未采用，Empty已权威Clear）；RuntimePlatformPolicyExplicitFields:ImmutableDictionary<PolicyTarget,int>=Empty；RuntimePlatformPolicyBaselineSources:ImmutableDictionary<ConfigurationFieldId,ConfigurationValueSource>=Empty；DeclaredPlatformDrivers:ImmutableArray<DriverKey>=Empty；DeclaredPlatformActions:ImmutableArray<ActionId>=Empty。CopyPlatformPropertiesTo逐项复制immutable引用，保旧PlatformPolicies DTO/JSON类型及深clone，不把typedTarget/runtime目录反序列化进旧body。
+- **02 Switch pure接口**：ImportLegacyPolicies(PlatformOptions legacy,ImmutableArray<DriverKey> declaredDrivers,ImmutableArray<ActionId> qqActionBaseline)返回(Code:ConfigurationResultCode,Entries:ImmutableArray<PlatformPolicyEntry>,Errors:ImmutableArray<FieldError>)；ValidatePolicyEntries(entries,declaredDrivers,registeredActions)返回ImmutableArray<FieldError>，第三参真实canonical动作目录，与global baseline子集分开。ResolvePolicyRules(settings,PolicyTarget,qqActionBaseline)及(settings,PlatformContext,qqActionBaseline)返回现PlatformPolicyConfiguration，后者只构造真实Instance target；invalid/undeclared Context安全deny，不补默认scope/另实例。ResolvePolicySources(settings,PolicyTarget)返回六named ConfigurationValueSource tuple(Enabled,ChatEnabled,GroupWhitelist,PrivateWhitelist,AllowedActions,Features)，与同规则递归共享算法，不复制第三份查找。
+- pure规则Instance→同account AccountDefault→仅四canonical scalarbaseline；Explicit空终止继承，AllowAll只名单，不越enabled/chat/global/connected/capability；features逐项overlay，empty继承parent false；新scope默认disabled/chat-disabled/explicit-empty/actions-empty。Source对explicit叶按bit1 UserConfiguration/bit0 LegacyCompatibility，Inherited递归父/实际baseline source map，缺proof Unclassified；Features混合Unclassified不造Mixed枚举。Mode无entry→Absent、rule继承→Inherited、explicit→Explicit，editable inherited/absent值为安全effective，不用origin冒旧runtime已经应用。
+- LegacyImport用未被Normalize变更的旧事实，schema<1原交集/≥1原覆盖；旧二元/IgnoreCase只对可信目录唯一映射，重复/歧义/未知动作features/不可无损旧scopeLegacyNeedsReview。私域分区→MessageWhitelist/空deny，官方分区/空AllowAll，飞书raw+alias，local旧两分区union→LocalChannelIds且“*”all位原不消费，不升AllowAll。Normalize/SynchronizeLegacy在RuntimePolicies.HasValue（含Empty）时旁路旧DTO恢复；旧Read(string,string)只兼容旧profile，不把channel-only当可信来源。
+- **02 Resolver/Feishu**：Resolver保原2argctor并add 3argctor(IPlatformSettingsBox box,IPlatformRegistry? registry,Func<PlatformOptions,ImmutableArray<ActionId>> qqActionBaseline)，exact Resolve(Context)一次Current→三元Ordinal snapshot→sameSnapshot pure rules，与connect/desired/chat/hardcap分开；global delegate只真实ParseAllowed。Feishu真实Context已有feishu-main，入站IsAllowed按exact rules/category/raw+alias，Explicit空止fallback，拒绝不消费dedup/回调；Send先比platform/account/instance Ordinal再token/HTTP，跨实例零IO。保无typedlegacy旧兼容、原凭据/cache/dedup/ConversationId/协议语义不扩。
+- **00 Host prepare/init/read**：SettingsStore用Root Bridge唯一codec，无Headless第二codec；private PreparePlatformPolicies(conn,persistedUser,scalarCandidate,intent,profile)返回(Changed,Entries,ExplicitFields,Errors,Code)。trusted目录从单次可信runtimeOptions snapshot取得，不改已有7arg participantctor。Initialize仅当Storedfalse pure legacyImport并同TX写一次，迁移bits0/auditField102、一次总version；Read不迁移。direct102 Set完整table所有entry63、Clear权威empty；每Registered.PolicyEdit完整target Replace63，未列原样；mode-only变化亦Changed，canonical排序/格式不制造Changed。任何末段target/action/features/list校验失败整批拒，persist与user/secret/provider/device/version/audit/receipt一TX、无独立Save。
+- Legacy scalar名单只baseline，原非空policy override继续盖住，不OR bits替换该override；旧toggle仅按真实body出现/原ApplyLegacy同步canonical AccountDefault并OR位，实际现键officialEnabled/officialChatEnabled/privateChatEnabled/feishuEnabled/localChannelIds等，不创造不存在的ApplyExplicit/qqPrivateEnabled。仅真legacy wholeDTO table输入意图才替换，若已有typed含Instance/AllowAll/Explicit-empty等不能无损成旧二元表，整批LegacyNeedsReview，不删/压缩。已Stored时Keep/Read/NoChanges绝不从留存旧DTO重建。旧HTTP当前统一writer采用另后继批，不把未接API说成已接。
+- internal static ProjectPlatformPoliciesInTransaction(conn,AppSettings settings)从同TXsnapshot填运行Entries/bits及baselineSource事实；SettingsStore.Load userJSON+typedmeta用同读TX，typedfuture/corrupt不进入旧catch返回defaults冒授权；BotConfig环境/用户overlay之后保护typed事实、runtimeSource来源如实捕获，不回写任意runtimeJSON。Read填现ProjectConfigurationView requested/effectivePolicies seam；requested用最新TX source/modes，effective只用单次Current捕获的Entries/bits/baselineSources，不借最新DB mode称旧runtimeUser。Overview不持raw名单，Display mask、Key原样、Inherited/Absent safe editable、未加载或未真正应用不报Applied。
+- **00 boot/gate**：CompositionRoot在optional enabled/credential/adapter筛选之前可信声明四key(qq.private,legacy,空instance)/(qq.official,legacy,空instance)/(local,legacy,空instance)/(feishu,default,feishu-main)，动作目录从真实QqActionCatalog.All/spec.Name捕获immutable，不能ParseAllowed子集充目录；globalActions delegate从同snapshot AgentServerQqActions.ParseAllowed，已批准Action实现/平台权限仍实际交集，不由text cap获得QQ管理动作。Whitelist新增exact PlatformContext名单判断复用Switch返回规则及旧实际匹配，不从key反推instance/另一scope；原channel/key入口只保已证明canonical legacy兼容，来源缺失不假装exact adopted。
+- **驗证/边界/回退**：Root既有test闭合factory/实际Store+Hostparticipant/真实Switch Resolver Gateway，无新路径或公共Program；初始化/全table/targetReplace/modeonly/NoChanges/Clear不复活、可信disabled/notloaded目录、Ordinal/casecollision、Explicit空/AllowAll/feature父false/globalActionsubset/legacy矩阵与local*、同TX末写fault/rollback/replay/CAS/恢复、SafeRead sources含Inherited/runtime旧bits与未知codec、Feishu跨context零tokenHTTP、旧有效名单不被新scalar覆盖均需真实证据。全producer/Host消费/Platforms source冻结后Root唯一真实build/Review/defaultArchitecture/Safety/Scope/Production/Frontend及真Headless Rebuild→适用S50/S52及旧场景，保原断言/SQL137/Domain300/file1765。00 SettingsStore当前1418仅余347行，结构codec已自然放Storage，不压多成员一行或放宽阈值；若仍真超预算须停止精确提路径/复用，不塞ModelProviderStore。
+- 本批完整C3 Policy配置域及已真实Context局部门禁，不包含未授权消息来源envelope/全工具与dispatch纵向迁移，不开Wave2A/2B，不把declared目录/metadata/局部Resolve当完整来源隔离。生产新C3 DI/HTTP/八step实际应用与整套oldbundle+preimage回退仍后续完整Wave1义务。回退仅本11paths认领片段、反核后续依赖，保oldDTO/public构造/字段/所有既有改动及37asset证据，禁止reset/checkout/clean；未知新typedSchema不靠旧JSON投影假回退。
+
+### 22.108 Policy真实红后十一owner源窗口与00四共享冻结（未build）
+
+- Root报告22:25:04.127～22:25:19.996 Review build退出0/增量0warning；实际C3Store+真实SettingsParticipant对已声明qq.private/legacy AccountDefault合法whole typed table Save，22:25:19.998～22:25:22.375退出1、passed0，固定whole_typed_policy_save_supported。是真实Save拒绝，不是新成员反射缺失或编译失败。Root明确释放22.107各owner产品source，Root只Store/Bridge，02临时四Platforms，00四Headless，彼此不抢路径、不build，待全部freeze后Root唯一builder。
+- Root producer输出StoreCC823310DA9A6FD4CFCA87CE3A5D97AEE5F5D48221DBB16C389DD9E2EE66022A、Bridge3783F283B6998BA6D9A228A1A52003D9D677C04EF05128FDFC97F949AE0F8B6F；00已实际读新增producer，closed meta/snapshot/loadwrite、现freeze复用及sameconn原meta原语与登记对应，未改Root源码，不把静态检查冒行为通过。
+- 2026-10-15 11:42 +08恢复只读实核00四shared已落，正式冻结不重复实现：SettingsStore1608行/SHA521A835248A33AADDE4114E47206F120ACA423A2AB607A8487D4055E3978CEDA，CompositionRoot746行/SHA8C311CDD879DC54F5947B6FFFF6CA5424ECD5845F8201EF3F341D91756F4CC26，BotConfig742行/SHA7D9BE0BE14207BC2425FC9D7D10FD3274AB47AE04C48872FDA359D70B2B0855A，WhitelistGate257行/SHAF4085548C3974DC3B4AD406E909DF2A4D94886FF7233C2D0023764F1769D5108。pwsh hash/linecount/scoped diffcheck退出0（原CRLF提示保留），Settings未超1765、不压成员/不放宽阈值；00未build/test，02Resolver3arg尚待完成交回，不能现称整批可编译。
+- 源码包括同TX初始化/prepare/可信Read与origin、权威empty不复活、tuple/canonical模式事实、声明目录在Box前、实际All动作目录与global子集分开、现7ctor保持、typed startup不会由旧DTO恢复、exact白名单overload与channel旧入口边界。Root确认channel-only兼容仅canonical AccountDefault、同账号declared/loaded唯一且无Instance override，否则source_context_required，不从channel装成真实instance；Feishu真实Context走exact。rootfixture对standaloneLoad明确再注入受控目录或调用Comp.DeclarePlatformCatalog，不能typed DB对象自行授目录。
+- Headless首patch因重复context校验失败无任何写，随后准确hunk成功；只读查询曾误猜Core PlatformContext/Headless AppSettings/WhitelistPolicy独立路径退出1/2，已按真实src查Domain.Platforms.PlatformId、Services.AppSettings与Core.Domain.Qq.WhitelistPolicy；BotConfig BehaviorEnvTable实际方法已按真实调用纠正，不创造属性。均未运行产品或当产品故障。11:42:49实核HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、20暂存删除与冻结契约7B7C保持，status-uall实际372（上批371），未擅清或冒未查原因，已通知Root。
+- 负责人新增“不做过量测试”：本批后续仅必要Policy专项、架构与实际影响链，保原断言，不再默认无关全套。计数/退出码/准出必须后置真实运行；现只有Source完成与静态差异证据，未预报专项绿、生产C3DI/HTTP采用、完整来源隔离、旧产物回退或Wave1/Wave2准入。
+- 随后Root/00同读发现ImportLegacyPolicies内部用legacy.DeclaredPlatformActions验证canonical目录，而JSON忽略运行目录；仅传global允许子集不足。Root明确只解除Settings两个Import前四赋值窗口，00向受控DB snapshot传runtime可信Drivers+AllActions，未改pure/ctor/公共shape；Settings新1612行/SHAC7223BCE9D3BB45B098AAFD4E79985B8867F4AB2FCD528F293F7AF5BA6E3FEE9、scoped diffcheck0，立即重新freeze，其余三Host未动，无build。Root必要专项新增真实受控Declare调用、Inherited source/Overview/未假Applied、13坏codec与Feishu跨Context零fetch，不扩大无关测试。
+- Root报告纯内存逆本Policy段命令0：Store精确回17FAFD…、Bridge回4AF961…、最新test4D936861C3CC3E196A9EAD446393D904430EF89448D126FCAEADE42F648E9C6A精确回5450B5…，未写逆文件/临时源码，保全部既有改动；Root源亦冻结，CIM无dotnet，等待02四source交回后唯一必要验证。该证据非产品行为验收。
+
+### 22.109 Policy四Platforms临时写权交回与Local构造gate最小采用
+
+- 2026-10-15 12:04 +08恢复，00实核四Host仍C722/1612、8C311/746、7D9/742、F408/257，未重复实现或额外产品写。00尝试只在内存逆本Policy Settings片段，首次全文hash未匹配、命令退出1，无任何源码逆写/临时文件；因此仅记“未证明”，不冒精确input保留证明。Root要求不为凑证据重复过量尝试，停止该诊断，以已登记input/确切改段供后续审查。
+- 02正式交回四路径临时写权并冻结，00实核输出：PlatformOptions144行/AE0B0A7A7BD440F52DFDAEEBDCC3EFA5140D22A2AE97BF204B0DE8CC41C6E42A；PlatformSwitchSettings430行/A06C3D3CEFA020DA6B6442E2B433A1C232EFABA73DA9CA611F3798A673B07A5C；PlatformPolicyResolver196行/020231C5523899237D6F247303768B4C50ACBCD4312A09E72B59792CDF949223；FeishuBotGateway742行/AC3339B0A86B6ECEB992D634CFABC8140033C2FEFCBE3BF243359A0362D78180。00接收最终复审职责，02不再改源/build；Registry/CorePorts未混改。
+- 02静态发现Comp原Local构造gate使用旧Switch.Read，而新Read对typed旁路返回false会误禁用真实typedLocal。Root明确只解除同Comp单gate：typed调用已冻结ResolvePolicyRules(AccountDefault(local,legacy),真实ParseAllowed baseline)判断Enabled；未typed分支精确保留旧Read.Enabled且LocalChannelIds非空，不将旧scalar名单非空再附加到新typed表。00仅该处完成后750行/SHA177A21CFD1ADF3266513B5FB62A1AD58DF1788593D816F057C01FAFC12A79304，scoped diffcheck0、立即重冻，SettingsC722/Bot7D9/WhitelistF408不变。
+- 当前11源均交Root唯一必要Review build+Policy专项，之后仅Architecture与必要S50/S52影响链；00没有build/test，不预报可编译/专项绿，不把完整配置域/typed本地构造消费变成完整来源隔离或生产统一保存采用。
+
+### 22.110 Policy首轮66真实通过与旧白名单入口loaded门禁补全
+
+- Root首轮真实Review build12:04:56.001～12:05:17.313退出0（8既有warning），Policy专项至12:05:20.815退出0、66/0。这是实际C3Store/Host/pure/Gateway专项，未用compile代行为；后续架构/影响IT仍待，不冒全Wave1准出。
+- 00静态指出自己的AllowsCanonical仅核declared唯一与无Instance override，AllowsKey会先Resolver门禁但public AllowsSource(bool,id)/IsOfficialPrivateExplicit没有同样loaded核验；不能用另一路绿替代。Root确认同22.107停止线必须闭合，明确仅解冻Whitelist此helper，input为已登记F4085548C3974DC3B4AD406E909DF2A4D94886FF7233C2D0023764F1769D5108，复用现Resolver.ResolveForChannel安全canonical视图并要求Registered/Connected/Enabled/ChatEnabled，无新增instance推断/目录/公共接口。
+- 00仅该helper两行补全，输出259行/SHA0B072FBA00EACA5E3BEE0856B8416D406B637AFE7D1EEAD7AF6F4E36E90CA57F、scoped diffcheck0、立即重冻，无build；其余10源保持。Root仅ownedtest补缺loaded负例与必要legacy迁移/source断言，后续真实结果后置，不拿首轮66冒新断言已通过，不加无关全套。
+
+### 22.111 Policy必要专项72与实际架构通过（影响IT尚运行）
+
+- Root最终必要Policy专项12:06:53.422～12:06:56.802退出0、72/0，覆盖legacy schema交集/覆盖、大小写歧义、local“*”不升级、真实初始化knownAction目录与bits0、mode-only版本及loaded缺失deny；新增loaded负例通过，不用首轮66代替。原Host adapter23/0至12:06:57.293退出0，原断言保留。
+- Root Architecture build退出0至12:06:58.397；真实默认运行至12:07:03.104退出0、165/0，原数值棘轮未放宽。本消息未附本次SQL具体扫描计数，不把历史137冒作当前捕获，必要终态后按真实汇总补。
+- Root仅原ownedtest把72加入既有ModuleRecovery工厂列表，无公共Program或新测试路径。当前唯一session87057执行真Headless Rebuild→Harness build→最终test注册编译→S50/S52，仍运行；只受影响链，不其它无关全套，不提前记IT通过或退出码。全部产品source保持22.109/110冻结，00只登记、不build/改产品；生产统一C3DI/HTTP与完整Wave1准出仍未宣称。
+
+### 22.112 Policy真宿主重建与必要S50/S52终态
+
+- Root session87057最终退出0：Headless trueRebuild12:07:27.993～12:07:38.861退出0（8既有warning），Harness build至12:07:40.005退出0；最终test工厂注册编译退出0，中段工具输出截断，不捏精确结束时间。S50 command返回0且脚本继续S52，S50计数/精确分段时间输出截断，保留此证据缺项、不重跑凑数也不借旧成绩填；S52 12:07:47.830～12:07:54.429退出0、119/0。
+- 本次真实HeadlessartifactSHA37FAAB7EE31ABB5A9C8D7758E0A2DF3415457EDD0A3F8199B344270A4892621F、Storageartifact0B54EFB9A0D5323041887CCEE5139455965E1953925139EF9443A832BCF2DF65；test353081E7543706EFA5969C7DAE576AC27F8BC0A1D4B9DF4659955851BD9E04A4仅原ModuleRecovery增72入口，原owned路径不扩。旧37assetbaseline/manifest3FC9仍保留，不把本新binary当旧产物回退。
+- 本批具实际C3Store/真实Hostparticipant/pure Resolver/局部可信Context门禁及新宿主旧链兼容证据；新统一C3生产DI/HTTP未采用，channel-only兼容不是完整来源实例隔离，未宣称Wave1完成或开启Wave2A/2B。当前产品source继续freeze，下一按21.4真实门禁只读选择最短已有写权关键批，不扩源/不先build。
+
+### 22.113 迁移前合成数据库前镜像捕获单步准入（不是回退验收）
+
+- Root明确同意本最短前镜像单步，00实核唯一源码路径为Root原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA353081E7543706EFA5969C7DAE576AC27F8BC0A1D4B9DF4659955851BD9E04A4。仅同文件closed child/factory复用既有真实仓储/备份，不新增源码/测试路径、公共Program、公开C3接口或产品patch；全部产品保持冻结，00不build，Root唯一必要捕获命令，不顺带无关全套。
+- Root独占原ignored证据根 %WORKDIR%\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670 下精确派生写权：preimage.db、preimage-manifest.json、backup-staging目录及本child产生的合成DB/日志性SQLite sidecar/备份暂存文件。只用于此一次UUID隔离fixture和真实备份，路径必须解析后仍在该nonce根/明确staging内；目标已存在、重复或越界即拒，不覆盖/删除未知文件，不复制真实data/env/config/log。旧37asset bundle及manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542一字不改、不替换为当前新binary、不自动退役证据。
+- closed child只初始化隔离synthetic AppDatabase，复用原SettingsStore.Save、固定可写slot、provider真实原语及旧六字段device用户JSON形成与旧Headless5A04格式预期兼容的基准事实；不调用ConfigurationStore.Activate、不写新typed policy/provider sentinel/origin，不把当前module声明当旧binary实读证明。不读真实环境或数据库；子进程按名字清继承环境再仅设合成路径/值，输出仅固定码、计数/hash/版本，不回显fixture秘密或配置内容。
+- 实际备份接口已查询为AppDatabase.VacuumIntoBackup(string? backupDir=null,int maxRetained=3)，本次maxRetained=int.MaxValue，backupDir仅nonce内backup-staging，避免retention删除其它备份；备份正常返回后核返回路径在staging且为本次产物，再仅精确移到不存在的preimage.db，不递归move/delete。文件hash与预期表形状/版本形成preimage-manifest.json，记录固定baseline artifact5A04、契约/源版本、相对名、安全hash/计数/版本；不写秘密/JSON正文/真实路径配置。
+- 本次RollbackVerified=false，旧bundle+preimage联合实际恢复尚未执行，格式预期兼容不作BaselineCompatibilityVerified。后继统一writer/迁移完成后须独立真正新版本→恢复这份前镜像+原整套旧bundle的行为演练，不能用本捕获、新binary重启或codec fixture代替。源完成后Root只必要build+closed capture取真实时间/exit/hash/形状，结果后置；失败保留证据并拒绝伪造成功，不为凑验收重跑无关probe。
+
+### 22.114 合成前镜像捕获真实终态（旧产物兼容/回退仍未验）
+
+- Root首次Review编译12:13:40退出1，test误用没有Initialize(path)重载的Headless facade，查实际StorageDatabase.Initialize(path)后仅纠ownedtest；不是产品失败或臆造新重载。12:13:49.309～12:13:53.252 Review build退出0/增量0warning，真实closed preimage capture12:13:53.256～12:13:59.038退出0、18项，未改产品源码。
+- preimage.db SHA954F62E5721B3BA96EC1DBC377A2DEA1000DA589F5D3E3790DDF1717D448238D；独立preimage-manifest.json SHAE925741572580BE05DC685A1BF39C799B7B2636426D055622CCAB3AA1A54F955。旧37asset bundle及原manifest3FC9前后完整核验，未覆盖/换新产物。OldBinaryCompatibilityVerified=false、RollbackVerified=false如实保留，本次只是真实合成旧格式前镜像和备份捕获，不是旧binary已读取或整套回退演练。
+- Root同意下一原ownedWeb.Settings纯完整LegacyPlan方向，当前仅冻结真实parser复用签名/准入准备；无生产Activate、不改实际POST、不创建重复公开接口，产品source仍冻。具体输入/私有成员另前置登记，再仅该既有路径施工和必要合成验证，不扩大旧writer范围或开启Wave2。
+- Root后置testSHA为BC46EEF0CBC10810915829BA0DE880C08199BEB9F4044049FDC02E42E6B6F16D；纯内存仅移新capture factory与CaptureLegacyPreimage方法后全文精确回353081E7543706EFA5969C7DAE576AC27F8BC0A1D4B9DF4659955851BD9E04A4，pwsh退出0、无任何逆写，scoped diff0；原preimage954F与独立manifestE925实核不变。此证明ownedtest其它既有改动保留，不把18项捕获当旧binary兼容通过。
+
+### 22.115 原Web单文件纯完整LegacyPlan组装准入（未接实际POST）
+
+- Root明确确认复用方案；本批两原owner路径：00 src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs input005E5B3EB9D7B8D90B1F9AA3C084559D21ACF3EF52DACA59A345583ACE3E3398（实核1405行），Root tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs inputBC46EEF0CBC10810915829BA0DE880C08199BEB9F4044049FDC02E42E6B6F16D。只原文件私有纯函数/既有ownedtest closed factory，不新source/公共Program/公开C3接口、SQL、环境/DBIO/日志/动作或生产Activate。其余所有产品继续freeze，00不build；单Web source冻结后Root仅一次必要编译+组合专项。
+- exact私有入口 private static LegacySecretPlan ParseLegacyConfiguration(JsonObject body,BotAgent.Platforms.PlatformOptions trustedOptions)。沿用唯一现LegacySecretPlan及原六参ctor、Code/ErrorCode/Secrets/Mood/TtsProjectionRequested/Dispose/ToString，不复制_owned/不建第二秘密owner；新增nullable ConfigurationPatch Changes只可由同private plan受控AttachChanges一次装配，二次拒，原ParseLegacySecrets签名/独立行为保留，Rejected计划Changes为空。
+- 原ParseLegacyScalarFields(JsonObject)签名保留，委托同file ParseLegacyFields(body,devices,policies)复用同一七分区构造表；原Agent/Platform单参mapper保留，委托WithDevices/WithPolicies原initializer新增复合slot，不复制140映射或对非record class用with。devices仍现ParseLegacyDeviceFields→SettingsStore.ParseLegacyDevices，无DB/自报identity授权；typedtimeout规范与未知body字段拒审照旧。全部非秘密mapper在分配SensitiveInput前完成，坏末段policy/device没有秘密owner分配/Changes，无副作用。
+- 官方Secret任何case presence（包括null/空/false）优先固定official_secret_environment_only拒绝：只把现ParseLegacySecrets的presence谓词提成同file共享private helper，复合入口先复用，再纯解析非秘密。合法非秘密完整后调用原ParseLegacySecrets一次、成功才AttachChanges；旧空Token整批LegacyNeedsReview，绝不新增clearToken或别名秘密字段，旧六槽Keep/Replace/Delete、Mood独立intent/TTS标志原样，ToString/诊断不含秘密。
+- Policy按真实旧handler：body缺省或platformPolicies显式null均Keep，非null仅经现TryParsePlatformPolicies旧DTO解析；数组[]为Set(empty)而不是臆造Clear。临时旧PlatformOptions只承载解析新DTO、SchemaVersion=1和由trustedOptions一次捕获的真实Driver/AllAction目录，再用现PlatformSwitchSettings.ImportLegacyPolicies；这是新旧HTTP whole table的覆盖规则，不冒存量schema0初始化；Inherit保持规则，不在parser计算或写运行基线。global allowed子集不冒注册目录，不能请求对象自授目录，未知/歧义/不可无损对象安全拒审。既有field无body时Keep，body/trusted对象均不得修改。
+- Root组合专项约10项，复用原140/六槽细粒度证据而不再重复全矩阵：七分区+旧六字段device+真实wholepolicy+秘密/Mood/TTS同一plan、未初始化Storage时零IO、body/trusted不变、null与[]区别、坏末段policy/device无secret owner与Changes、官方presence优先、空Token拒、唯一ownerDispose失效。新函数本身尚未存在，不把反射缺成员或编译失败当功能红；产品不接HTTP，目标纯组装行为可在source落地后必要验证。实际POST453～520旧链仍未改，不宣称统一writer采用或完整Wave1/2准出。
+
+### 22.116 纯完整LegacyPlan单Web源码冻结（尚未验证）
+
+- 00仅22.115 Web原路径完成，输出1475行/SHA78E26E49C4E31D9C78F878A033A078229DC98CF42A023E8467B824C59172903A，scoped diffcheck退出0（原CRLF提示），立即freeze；无build/test、无其它产品写入、未改变旧实际POST或生产Activate。
+- ParseLegacyConfiguration准确使用已登记签名与同一LegacySecretPlan，原六参ctor/ParseLegacySecrets保留；Changes由AttachChanges受控一次装配，拒绝plan为空；官方presence共享原谓词优先拒，device/wholepolicy/七分区全部解析后才原sixslot分配一次。ParseLegacyFields承载唯一七分区构造表，Scalar原入口仍仅140字段，WithDevices/WithPolicies复用原initializer，不复制_owned/重复秘密owner、不对class使用with。nullablePolicy Keep/数组空Setempty按真实旧handler，临时Schema1+受控目录仅纯legacy整表转换，不执行运行求值/动作/IO。
+- 当前只新增私有纯组装能力，未把它接到HTTP，不把源码存在冒采用。Root仅原ownedtest必要组合专项，源码冻结后唯一一次必要build+target；具体计数/时间/退出码/未覆盖后置记录，原140/sixslot细粒度assert无需重复扩大无关全套。
+
+### 22.117 纯完整LegacyPlan必要组合专项14真实通过
+
+- Root首Review build12:18:12.150～12:18:17.566退出0；first probe至12:18:19.006退出1、passed0。实际原因是Root新fixture臆用camelCase policy键，而现旧Web.Json无naming/case-insensitive、app.js:2037及S52真实wire为PascalCase；仅纠fixture按既有wire，不改产品解析器/兼容语义，不把该fixture失败计产品红或以放宽解析器换绿。
+- 12:19:09.840～12:19:13.528 Review build退出0/增量0warning；组合probe12:19:13.532～12:19:14.847退出0、14/0，产品Web78E26保持未改。Root仅原ownedtest ModuleRecovery登记该14入口，无公共Program/新增路径，无无关全套、未重跑preimage捕获。
+- 证明真实私有纯组合入口与既有mapper/单秘密owner工作，不是实际POST采用。S50/S52对应旧37FA Policy批产物，早于本次新增unused parser，不能冒成本次parser宿主IT；由于未接运行入口，本批不为未触及的链重复凑数。当前产品继续freeze，实际统一writer/publish、Token GET/UI、Mood独立receipt与设备运行门禁等21.4余项仍未完成，不开启Wave2A/2B。
+- Root最终组合testSHA99FEEDB05F876AB2B3FE65FBC6DEDD6E0D026C48829FD471C9380AE0B8392190；纯内存仅移组合factory、父14入口及LegacyConfigurationPlanChild后全文精确回BC46EEF0CBC10810915829BA0DE880C08199BEB9F4044049FDC02E42E6B6F16D，pwsh0/scoped diff0，无任何逆写。Web78E26/冻结契约7B7C与status372/20暂存删除保持，未把既有改动归入本批。
+
+### 22.118 Wave1注册插件保存缺口与待权限路径（不授施工）
+
+- Root实际只读指出PluginStore旧plugins_state仍IgnoreCase/坏格式吞错，PluginManager.SetEnabled仅内存、CompositionRoot七preset不消费PluginStore；Registered.Plugins当前Host明确adapter_unavailable，不能以其它分区通过说完整C3保存已完成。此缺口仅是Wave1必要注册对象保存/可信目录/后续应用契约，不把Wave2/3/5全C4生命周期反推为本批额外全部任务。
+- 00按真实rg文件枚举核两待授权路径及当前input：src/BotAgent.Storage/PluginStore.cs=F04EBC288B89E1DADB0D417C50F8C9D6B4DBA17792E984E3318A6980061D1D20；src/BotAgent.Headless/Services/Plugins/PluginManager.cs=549D3B385A31C5FFE0D36C6393A4488924D5959D9746B6447E8BB9C5A99C0284。两路径不在Root本轮已认领/00原14共享范围，当前仅待权限与只读事实，不可因本登记取得source写权；IPluginStore虽真实存在亦未请求改动，不扩接口文件。04只读/实施席位是否获授以负责人答复为准，本条不新开席位或冒已授权。
+- 下一Device两个原14路径只读方案已向Root提交：AgentBridgeServer真实BridgeConnection、已存在HTTP token边界、Root现AuthorizeDeviceHello/CanDispatchDevice消费；精确准入仍待Root确认另条登记，不先源写或build，不把该方向当统一POST已采用。
+
+### 22.119 Device真实hello/dispatch/control两个原共享路径准入（先实际server红）
+
+- Root明确确认本最小批，00已按真实文件核input：仅00 src/BotAgent.Headless/Services/Agent/AgentBridgeServer.cs=7FF57D85A9C0CEFD93512A62E1039714C60857488736103A8BAE57229877F1E5、AgentCommandService.cs=CF634BDC52DA1D64C664E5ADDF5F30A589C880F42BBE8E4BCC7FC667DC9911B9；仅Root原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs=99FEEDB05F876AB2B3FE65FBC6DEDD6E0D026C48829FD471C9380AE0B8392190。两个产品皆21.2原14共享队列，不新增路径/公开Core/Storage接口，Root不写shared，00现仍冻结；先仅Root原test真实server+合成WebSocket锁功能红，不能以缺新helper/编译失败冒红。终态红后再单独释放两source，00不build。
+- 真实连接类型为AgentBridgeServer内private BridgeConnection（现Socket/Lifetime/Token/Id/SendGate/Registered/Name），保原两ctor签名、队列/单工人/单Receive/心跳与同名replacement清理。新增仅server赋值DeviceKey? BoundDeviceKey，hello当前453段在入_bridges之前调用已有StorageBridge.AuthorizeDeviceHello(name)，成功才绑定returnedKey与现concrete连接Id；任何自报key都不能进入授权或赋值。无active的pending改名确认会因既有安全audit要求而拒并同TX回滚，不冒确认成功或另开writer；空表未知legacy名保原兼容，不靠注册表空默认拒全部。
+- 已只读核真实认证链在未认领Adapters/Panel/WebUiServer.Agent.cs:24～68先固定AgentToken验证→AcceptWebSocket→HandleAsync；本批不改该partial、不新增认证参数/协议，sharedToken+自报名不是物理设备身份，不能夸称防冒用其它已授权名。Storage当前两现成gate已具失败关闭/稳定Key/tombstone/历史名规则，复用不复制SQL或派生目录；DB异常不得旧SettingsBox继续放行。
+- 准确消费改段：Connected/BridgeNames/IsDeviceOnline/AnyBridge/DeviceInfo/PickBridge等选择与在线投影仅返回持久gate允许的具体conn，现runtime旧enable限制保留；worker依旧固定target及ConnectionId，最终SendGate内task/control/ping在Socket.SendAsync前再次CanDispatchDevice(Name,BoundDeviceKey)，不在队列早期检查一次冒最终检查。nonhello回包在现concrete/任务Id所有权外再持久gate，撤销后晚结果不更新任务/回调；拒绝只固定safe码/本地stop与原cleanup，无新增rawname/秘密/logbody。Disconnect CloseOutput前也核门禁，失败仅本地停止不外发。
+- 现Cancel按DeviceName重新选择可能把旧任务control转发到同名replacement；本批限定只向原ConnectionId匹配conn发送，不改Cancel公共签名或后台语义。AgentCommandService现ResolveRoute保原runtime IsDeviceEnabled/global开关/server fallback，额外调用AgentBridgeServer新增internal bool CanDispatchToDevice(string name)（现gate安全薄封装、只server-held key、不新catalog），撤销/DB失败不能被旧snapshot标签与自动选择绕过。所有gate查询不在_stateLock内形成DB写锁倒置；不将user配置version用于每次hello运行事实确认。
+- Root仅约8～12必要真实consumer断言：disabled/deleted hello拒且clientkey无grant、选桥/worker任务及control最终检查、sameName replacement取消不重定向、撤销晚结果拒、empty表旧兼容、DBfault关闭fallback与pending确认/审计边界；实际constructor/HandleAsync/队列/Socket方法先查询再写fixture，未获权partial不动，无新认证协议。不重复既有Storage30/备份7全矩阵，不无关全套。产品全部freeze后Root唯一必要build/target与实际桥影响场景；本批不等于生产统一保存/HTTP或完整Wave1准出，不开启Wave2。
+
+### 22.120 Device实际server红后两个共享消费者源码冻结
+
+- Root真实Review build12:27:07.492～12:27:11.178退出0/增量0warning；AgentBridgeServer.HandleAsync+loopbackTCP WebSocket pair在既有HTTP认证之后的实际server边界，先过设备commit与actual models控制正例2项，随后Save committed disabled而真实IsDeviceOnline/Connected/BridgeNames/AnyBridge仍露在线；12:27:11.182～12:27:12.862退出1、passed2，固定committed_disable_removes_real_bridge_from_all_selectors。是真实调用链红，不是缺新成员或编译失败，不修改认证partial。Root明确释放22.119两个产品source，Root仅续原ownedtest必要8～12断言。
+- 00仅两个原路径完成并冻结：AgentBridgeServer1034行/SHAC862B2AC9564588EDDC6A5C245D5C8BD2EAC7F8E6B501D76507EB5A80DE3FC17；AgentCommandService845行/SHA1349E5F25B98771B3165519E1F762B2ADB0A99F0B244BD3F3E79CAA81B2E232D；scoped diffcheck0，无build。其余产品保持既有冻结输入，未改WebUiServer.Agent/Storage/认证/公开Core接口。
+- Conn新增server-only BoundDeviceKey，hello入字典前Authorize返回成功才绑定；selector/在线与Describe过滤IsDispatchAllowed；worker沿原concrete conn+Id，private SendAsync(conn,…)成为instance以在SendGate内同时核当前dictionary仍同一conn与真实持久gate，所有task/control/ping统一经过该最终点；incoming晚帧在任务Id所有权前再gate否决。未知legacy空表保持原行为，DB失败/root gate拒则本地Stop，不让Current旧快照放行，不新增rawname/secret拒绝日志。
+- Cancel仅捕获原ConnectionId对应conn，绝不按同名重新选择；实际Send与Finished通知置于_stateLock外，保原本地取消收尾/计数与队列语义，防新增DB gate置于任务state锁内。Disconnect显式name取原conn，仅持久gate允许时CloseOutput，拒绝通过finally本地Stop无外发；Any/name为空仍只挑允许conn。Command仅在旧runtime DeviceEnabled外加真实internal CanDispatchToDevice约束，原全局后端/server fallback保留。源码存在尚不冒行为通过，已交Root唯一必要编译+consumer专项，实际计数与回归终态后置。
+
+### 22.121 Device真实WebSocket消费专项12通过（唯一影响IT仍运行）
+
+- Root Review build12:29:49.139～12:29:54.389退出0（8既有warning）；真实loopback WebSocket consumer child12:29:54.392～12:29:57.677退出0、12/0，覆盖serverKey绑定/selector/control/tombstone、SendGate最终revocation竞态零task帧、撤销晚done不能成功、rename+安全audit且不增加用户version、未知legacy兼容及真实缺表读故障failclosed。不是只有Storage单元或编译证据；HTTP认证原边界未改，本批不冒新认证协议验收。
+- Cancel采用受控合法replacement窗口（旧current+新socket字典索引）证明控制不被重定向，不声称自然时序穷举或物理身份认证。关键生产消费者现确实调用Bridge gate，但统一C3生产Activate/保存入口仍未接，不把该consumer采用泛化为完整Wave1。
+- Root仅原ownedtest父入口注册12，当前唯一session83703真实Headless Rebuild→Harness build→父注册编译→S33影响链，仅此适用场景，不无关全套。终态未知不预报；两个shared C862/1349与其它产品继续freeze，00只登记、不build或额外产品修改。
+
+### 22.122 Device真宿主S33终态与两共享输入保留核验
+
+- Root session83703最终退出0：Headless trueRebuild12:30:27.795～12:30:32.574退出0，Harness build至12:30:33.471退出0，父12注册编译至12:30:37.895退出0；S33 12:30:37.896～12:30:54.315退出0、57/0。仅实际影响桥场景，不无关全套；本条取代22.121未终态状态，不把专项12当S33替代证据。
+- 本次新HeadlessartifactAE32C719F846332109A7C77397F8E22816E658C66557ECC00402EC4642809A71，Storage仍0B54EFB9A0D5323041887CCEE5139455965E1953925139EF9443A832BCF2DF65；testB274926D1583B7849FEE9FF67BE4AD6854AB61084EB83BDC53CAB0FA01309D5F。Root纯内存移bridge factory/父12/方法与Peer类，全文精确回99FEEDB05F876AB2B3FE65FBC6DEDD6E0D026C48829FD471C9380AE0B8392190，pwsh0/scoped diff0、无逆写。
+- Root要求最多一次00两产品内存逆核，00本次一次pwsh/Python只在内存逆22.119改段，两全文SHA分别精确回原AgentBridgeServer7FF57D85A9C0CEFD93512A62E1039714C60857488736103A8BAE57229877F1E5及AgentCommandServiceCF634BDC52DA1D64C664E5ADDF5F30A589C880F42BBE8E4BCC7FC667DC9911B9，命令退出0，未创建临时源码/未逆写文件，证明各路径其它既有改动保留。回退只能逆本片段并核后续依赖，退回会重引撤销绕过/同名control重定向风险，不自动授权生产回退。
+- 旧37assetmanifest3FC9与preimage954F保留未变；整套旧产物+前镜像实际回退仍未验。Root末次原生指纹0：HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、status374/20暂存删除、LFjoinSHACB6F497C2AF70381C9A85A397DCA0DF0B3EAD9CA572505F50AEB4C62B1F6A111；两个shared实际均M，不随口称状态无变化，不清理。Root当前无活native，所有产品冻结；下一fullHTTP同锁writer/允许secret版本+Token GET/UI批只读冻结实际接口/范围后另准入，不提前施工或扩大权限，不开启Wave2A/2B。
+
+### 22.123 现SettingsBox单锁显式发布许可最小准入
+
+- Root明确确认并恢复指令，本批仅00原共享src/BotAgent.Headless/Services/SettingsBox.cs，实核input1267FD05D1E9B0BBD64D42CDAB05DE38898EAF1371CEB9EC78223F555B2A9A14；仅Root原ownedtestConfigurationContractTests.cs inputB274926D1583B7849FEE9FF67BE4AD6854AB61084EB83BDC53CAB0FA01309D5F。无新文件/Core公开形状/数据库或第二协调器；不改其它产品，不生产Activate，不把许可值来自不可信body。
+- 保原public ApplyConfiguration(Func<AppSettings,(AppSettings Snapshot,ConfigurationSaveResult Result)> persist,Func<AppSettings,ConfigurationSaveResult,ConfigurationSaveResult>? published=null)完整CLR/source签名，其仅包装现tuple2结果为tuple3且PublishAllowed=true。新增仅internal同名overload，persist类型为Func<AppSettings,(AppSettings Snapshot,ConfigurationSaveResult Result,bool PublishAllowed)>，published签名同原；实际lock(_gate)与现首次CodeOk、非Replay、DecisionChanged且Committed条件/Exchange/published逻辑唯一放在该overload，不再造Box/DBwriter或新公开接口。原tuple2直接调用仍兼容，不改其既有行为断言。
+- internal overload在现原保存eligibility之外额外PublishAllowed才Exchange；false原样return真实Result、完全不Exchange/published，不伪造Replay/NoChanges/错误码或提交事实。Host未来persist回调须同锁先Save，再仅首次Changed+Committed TryStart(PublishSnapshot)；真实StorageUnavailable保Code及Committed/CommittedVersion，已有claim/superseded等CanRun=false但CodeOk也能携原真实Receipt而许可false，不假设不可达。claim成功才许可true，结果账本失败保Unknown且不得自动重做；此Box不声称自身持久化任何step，原publish异常兜底仍只是响应提交事实，不能冒Find已写新ledger。
+- Root仅必要定向断言验证许可false/true与真实Result保留、claim之前不Exchange、已有claim/账本故障/superseded不发布，复用原public条件发布断言，不重复全套或无关IT。新internal入口尚未存在，不用反射缺成员冒功能红；source冻结后Root唯一必要build+target。完整HTTP/允许秘密统一版本与Token GET/UI实际采用仍后续整批，不能先开部分Activate绕过旧唯一保存路径。
+
+### 22.124 SettingsBox发布许可真实14专项终态（生产HTTP尚未接线）
+
+- 00仅22.123原SettingsBox小段完成，输出117行/SHAEEAE3ABCD8A6727DBB60844A896E92EBE19F99BC590986E3839FDF6304624C6C；原public tuple2完整签名保留，新增internal tuple3许可同_gate唯一实现，false原样返回真实Result且不Exchange/不published，没有伪造Replay/NoChanges/错误码或第二writer。产品现freeze，00未build/test。
+- Root真实Review build14:22:56.320～14:23:22.803退出0（8既有warning）；实际Store+Box专项14:23:22.815～14:23:25.099退出0、14/0。原public七断言保留；新增真实已保存/首claim后重复Unknown claim保持CodeOk+Committed且不Exchange、真实UPDATE触发器导致claim账本失败保持StorageUnavailable+Committed、首次许可发布及RecordApply真实落账、Replay/CAS并发/superseded闭集，不能用纯bool模拟代替真实Store分支。
+- Root最新ownedtestSHA为CF4718DF73497E8715ACE0BD1BF65BB1F56BB524D1E514BF3A5C0F0D051B439D，00本次实核同值。Root纯内存移factory/父14项/method精确回B274926D1583B7849FEE9FF67BE4AD6854AB61084EB83BDC53CAB0FA01309D5F，pwsh0/scoped diff0，无逆写；父入口14字面量追加尚未单独重新编译，留下一必要编译顺带，不冒其已编译或重复无关全套。该专项不证明生产POST/DI采用，生产Activate仍未调用。
+- Root恢复核对默认status193是未跟踪目录折叠；按旧--untracked-files=all仍374/20暂存删除、LFjoinSHACB6F497C2AF70381C9A85A397DCA0DF0B3EAD9CA572505F50AEB4C62B1F6A111，未发现丢改动。HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580，冻结契约7B7C不变。00本次只读Get-FileHash误用不存在ReviewRegressionProbe路径退出1，按本总纲真实ReviewRemediationProbe修正后退出0，不算产品失败；只读rg使用Windows wildcard/猜Netease partial路径失败亦未写产品，改用真实目录检索定位WebUiServer.Music.cs。
+- PluginStore/PluginManager额外路径限定写权仍待负责人答复，未授不写。下一仅只读冻结现POST兼容+新strict profile Read/Find/Save、六slot旧writer与非C3音乐cookie边界、同锁Save/claim/publish及Token GET/UI与Mood独立action receipt；不得提前部分Activate或在未认领PanelRoutes绕集中router，也不以此Box绿宣称完整Wave1/开启Wave2A/2B。
+
+### 22.125 完整HTTP/Token闭合接入私有提案与实际停止项（待Root确认，不授产品写）
+
+- 00本轮只读核现PanelRoutes.cs:124～126为*方法/api/settings，只有POST进入HandleSettingsSaveAsync，其余直接无context BuildSettingsPayload。该router未认领，禁止在已领WebUiServer.RouteAsync前偷塞分叉绕集中路由。最小候选只在现POST内用显式configuration=read/save/find query：无query旧CompatibilityProfile，无ExpectedVersion；新save直接采用冻结2.2五成员输入，新read为kind、新find为key闭集对象。具体query尚待Root技术确认，不称已有HTTP契约/实现；不新增任意secret JSON、clearToken或caller/access。2.2已精确约定六slot/kind/value私密输入，须手工接管SensitiveInput，不得Deserialize整ConfigurationSaveRequest绕Core OutputGuard；未知/重复/必需/Unicode预检须在JsonNode折叠前完成。候选1MiB/depth16/4解析准入仅新profile待确认，不无声套旧合法body。
+- 真实统一接入拟同批连接Comp唯一Activate、SettingsParticipant真实同conn投影、HotReload单Box锁Save→同提交version读回→durable stage claim→许可Exchange→真实逐step报告、原POST纯LegacyPlan、Token GET安全元数据与新UI原key/Find/显式Delete。不能拆先Activate再补唯一管理通路；读Current即有效的Policy/Model必须在Exchange前有真实Started，不能交换后再补假Started。NoChanges/Replay/Find/Unknown不发布/重建；Box许可false保真实Code/Committed。固定DB模型credential实时消费与路由metadata apply/restart分维度保持已裁决事实，不冒ModelProjection Applied。
+- 已核旧writers准确路径：WebUiServer.Settings旧ApplyRuntimeSettings及直接五secret wrapper；另唯一PanelDeploy.cs:271只PanelDeployUrl，路径未认领不可写。可在原HotReload public签名内部把该实际caller的唯一field96变化归一成typed Legacy patch，其它变化拒绝，避免任意JSON绕写。SettingsStore.Save与Storage SecretsStore.Save(name,value[,throwOnError])需在各原Write内核同activation fence；后者固定六slot名字阻断，不误伤非C3 NeteaseCookie/panelPassword等。官方历史API任何时候拒写且不自动删旧row。真实WebUiServer.Music.cs SaveNeteaseCookie→PatchSettings只patch runtime cookie保原兼容、不扫入C3版本或改未领Music partial。BotConfig启动环境overlay不得普通Save回写用户事实，controlledInitialize承担真正迁移/版本。
+- Token实际泄露/回写链仍在BuildRuntimePayload输出feishuVerificationToken原值、app.js加载原值并始终post空/原值；必须同批移除raw/mask头尾，仅configured/source，输入总空/未改omit、新Delete用slot5 kind2，旧空/白请求副作用前LegacyNeedsReview+固定刷新提示。新UIstrict保存需真正dirty typed意图，保原version string/generation/serverTime/key及同key Find恢复，不全表回写旧二元Policy/丢Device stableKey，超时/Unknown不盲换key；旧GET兼容投影不能从旧Read误恢复typed-empty后的授权。
+- Mood现只有configuration_operations表，现ReadReceipt/InsertReceipt/Scope带cfg1假设，不能直接调用现Find读Mood或塞八apply steps。候选在Root原Store/Bridge复用现完整SELECT/INSERT/UPDATE定义为闭集namespace原语（不新增SQL/表/第二writer，cfg1旧codec/HMAC字节不动），私有legacy-mood1 namespace和由同cfg key派生mood1存储键；规范Mood意图单独HMAC/无text正文receipt，共享全代4096/每主体256/TTL/8192预算。配置TX同时校验并预留独立NotStarted actionreceipt，NoChanges亦预留，防同key异Mood在配置已提交后才发现冲突或Replay追加动作。释放DB锁后持久claim Unknown→现Mood_gate→独立ObservedWrite→真实结果再落账；绝不DB锁内反拿Mood_gate。Replay/Find只读原动作事实不补执行Unknown，配置与Mood不是同一个回滚TX；Host私有LegacySaveOutcome/LegacyActionResults复用冻结719。此精确内部签名/预留与重放停止线尚待Root冻结，不称已有action API/已实现。
+- 真正未决：上述POST query/new-only budgets和Mood私有reservation语义需Root窄确认；PluginStore/PluginManager额外写权仍等负责人，Registered.Plugins不可静默忽略。现已领SettingsStore/BotConfig/Comp/HotReload/Web.Settings/WebUiServer/app.js及Root原Store/Bridge/Secrets/Mood/test可承担其余连通批，逐文件input/改段正式准入尚未登记，当前全部产品继续freeze/00不build。整套旧37bundle+preimage回退仍必须后续真实演练；不以Box14或pure parser绿冒生产统一HTTP采用/Wave1准出，不开启Wave2A/2B。
+- 本轮只读路径错误透明：误猜PanelAuth.cs导致rg退出2后已停止该命令，按实际目录定位WebUiServer.Auth.cs再核session撤销/过期；没有产品/数据读取或写入。授权复用现IsAuthorized/IsSameOrigin且participant提交前重新校验受控request scope，不缓存无限主体/token、不从body自授caller/access，不因外层入口通过就省略事务内重授权。
+
+### 22.126 POST私有wire技术确认与Mood独立reservation四原路径准入
+
+- Root明确技术接受22.125现POST内精确query configuration=read/save/find，无query旧兼容；六槽输入只冻结2.2 slot/kind/value，Core OutputGuard/Router/未领PanelDeploy/Music不改。新profile1MiB/depth16/同时4解析准入仍是候选，Root已普通文字询负责人，答复前不记批准；PluginStore/PluginManager额外写权亦仍待答。此条仅给下面Root四路径产品准入，不释放任何Host/前端产品source或提前生产Activate。
+- 00实核HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580；Root原owner精确input：src/BotAgent.Storage/ConfigurationStore.cs=CC823310DA9A6FD4CFCA87CE3A5D97AEE5F5D48221DBB16C389DD9E2EE66022A；src/BotAgent.Storage/ConfigurationStorageBridge.cs=3783F283B6998BA6D9A228A1A52003D9D677C04EF05128FDFC97F949AE0F8B6F；src/BotAgent.Storage/MoodStore.cs=A38D42A82B2097D71C8ADD646C55DF26F1C1ED53F6D48EA7F7E22881EBDA7599；tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs=CF4718DF73497E8715ACE0BD1BF65BB1F56BB524D1E514BF3A5C0F0D051B439D。只这四原路径，保原全部改动/公开签名/旧语义、SQL137及其它棘轮；00不写四路径/不build，Root唯一实施与必要定向验证。
+- ConfigurationStorageBridge.cs准确新增internal API：SaveLegacyWithMoodAsync(ConfigurationStore store,ConfigurationCaller caller,ConfigurationOperationKey key,ConfigurationPatch changes,ImmutableArray<SecretEdit> secrets,FieldEdit<string> mood,CancellationToken ct=default)返回ValueTask<LegacySaveOutcome>，仅配置保存+同TX预留，不执行Mood；FindLegacyAsync(ConfigurationStore store,ConfigurationCaller caller,ConfigurationOperationKey key,CancellationToken ct=default)返回ValueTask<LegacyFindOutcome>，同治理TX读两事实，不apply；ApplyLegacyMood(ConfigurationStore store,ConfigurationCaller caller,ConfigurationOperationKey key,FieldEdit<string> mood,BotAgent.Adapters.Persistence.MoodStore instance)返回LegacyActionResult。原SaveLegacyAsync参数/返回ConfigurationSaveResult完整保留，不改Core公共shape/契约hash，不另造writer或任意JSON/secret入口。
+- 同Bridge文件internal类型：LegacyActionState {NotStarted=0,Applied=1,Failed=2,Unknown=3}；LegacyActionResult(string Action,LegacyActionState State,string? ErrorCode)，Action固定mood；LegacySaveOutcome(ConfigurationSaveResult ConfigurationResult,ImmutableArray<LegacyActionResult> LegacyActionResults)；LegacyFindOutcome(ConfigurationFindResult ConfigurationResult,ImmutableArray<LegacyActionResult> LegacyActionResults)。ToString固定安全摘要，receipt/error不存text/请求原文/异常正文，不塞八配置apply steps或新mg1。
+- Store复用现configuration_operations与原完整SELECT/INSERT/UPDATE有限namespace原语，cfg1原codec/HMAC bytes保真；仅legacy-mood1 namespace、mood1派生存储键和独立规范意图HMAC。所有带/不带Mood请求均检查原key是否已有action reservation：原带Mood重放省略、原纯配置后来追加Mood、同key不同规范意图均在用户配置写前冲突；配置TX同时预留必要两条容量再落configuration+Mood NotStarted，NoChanges亦预留，不以配置NoChanges逃动作幂等。共享所有代/命名空间4096/每主体256/24h/8192预算与同授权/治理，不新增SQL定义/表或放宽扫描。
+- ApplyLegacyMood先同writer重验权限/原reservation/规范HMAC及治理并durable claim Unknown，事务结束后才取Mood_gate执行实际Observed，最后独立结果UPDATE；不能DB锁内拿Mood_gate。原Unknown/终态不再执行，结果账本故障保Unknown，不把配置/Mood宣称一个回滚TX。Root确认此key/mood签名不能独自识别本次Host是否Replayed，首次非Replay资格由可信Host真实ConfigurationResult消费点保证；模块只声称持久claim/终态NoRedo。Host同Box范围只对首次成功配置决定（Changed已知Committed或NoChanges合法决定）调用，替换LegacyActionResults返回真实结果；Find/Replay只读原action，不补执行，不伪Applied。
+- MoodStore仅抽原Trim().Trim('。','.','！','!','，',',')及1～24UTF16纯校验给reservation/执行复用，清理后非法在配置写前整批拒绝（Root明确确认）。原SetText/Reset/TTL/poke/SetTextObserved及旧bool含义保留，不要求其内存Unchanged承担新增durable承诺。新legacy专用Observed入口在同Mood_gate内复用原Load SQL核DB已达成才可报Applied；不一致则真实写且commit后projection，IO失败真实Failed/Unknown，动作时间只Store已注入clock，不读第二clock。新结果持久失败仍无自动重做，pending poke原恢复语义不丢。
+- Root明确本批新reservation API尚不存在，不以反射缺成员/编译失败或旧Observed未有新承诺冒功能红；允许先实现上述准确私有面，再真实合成reservation/原语故障/NoChanges/冲突/claim/restart必要验证，不无关全套。真正HTTP功能红留后续旧实际POST连通批。source完成交hash/freeze后Root唯一必要build/target；所有其它Host产品继续freeze，完整Wave1/第二阶段门禁不变。
+
+### 22.127 Mood独立reservation实现、两真实审查红修复与必要专项终态
+
+- Root仅22.126四原路径完成，首冻结输出Store2DDDA94C95F4E614BF4DAAC5581E46621E1E03C0631BD847415C00CA49234773（1506行）、BridgeC8EDB471444A462E2582636CD6605EAEFE109328A60011151D4BA7FD6C131BDB、Mood489C53C427B60E2645BFD8686464C31444467ED26527F87D5C80EC46F823519D、test17A83E556BB77991E401BEA9F321BFD27C5D8C0A0A9547EE0F201739153A2422，00只读实核匹配。三新增Bridge签名/四internal结果与原SaveLegacyAsync保留，同TX两reservation/NoChanges、原cfg指纹分支不加Mood、DB事务结束再取Mood_gate、固定输出无text/secret静态符合；没有生产Host/HTTP消费或Activate，不冒源码即行为。
+- 00集中审查提出两项可复现阻断：其一在用户写/version/config receipt之后MoodFingerprint失败抛ReceiptCodecException，被旧catch正常转Rejected而可能提交缺action的部分事实；其二新Mood receipt缺省或重复state可经默认Deserialize重开已终态为NotStarted。Root用实际合成UPDATE OF version触发器损坏generation codec，以及已Applied动作receipt缺state/重复state验证；不是接口缺失或编译失败。audit build14:45:58.044～14:46:05.263退出0；真probe14:46:05.292～14:46:06.996退出1，passed7/failed3，精确三条均红。
+- Root仅原Store最小修：writesStarted在任何用户/audit/receipt写前置true，ReceiptCodecException仅在!writesStarted可返回安全拒绝，写后必须抛出由唯一Write整体回滚；NoChanges的receipt/action写亦覆盖。新private DecodeMoodReceipt闭集恰action/state/errorCode三个必需唯一属性、state整数enum、state-code配对；原ReadOperation完整SELECT追加namespace/terminal列并核真实namespace及动作terminal一致，不新增SQL定义/表，不改旧cfg HMAC/公开contract。00本次已只读精确复核这两个实际修段，无产品写或build。
+- 修后Review build14:46:42.111～14:46:49.969退出0（8既有warning）；audit14:46:49.975～14:46:51.496退出0、10/0；主legacy-mood14:46:51.497～14:46:52.156退出0、21/0，其中实际fresh-process reopen3/0计父1。首轮主在17之后失败是fixture只AFTER INSERT计数遗漏UPSERT UPDATE，Root补实际AFTER UPDATE计数，未改产品门禁/删断言；不把该fixture错归产品红。两条预留容量边界使用合成预填ledger，仅证明本批required=2算术门禁，不替代此前真实16×256/4096及跨代容量证据，也不为凑数重复全场。
+- 当前冻结Store98635145F78053064022CE0C5967D279C8B0AAC3BAA5D0DFFC89D8F57C08FF64（1526行），BridgeC8ED及Mood489C不变；ownedtestAF8D6A5152C96791EB621EA69589A6BACE89906E5F2A96C7836CF47EA8867DD3。00实核四hash匹配。Root下一仅必要父入口编译+旧cfg/alias codec和Box许可两影响链、实际架构SQL137，仍待终态，不预报其退出或把旧成绩冒本次；无HostIT/无关全套。全Host/前端产品继续freeze，Plugin额外权与新profile预算仍待负责人，完整Wave1/第二阶段门禁不变。
+
+### 22.128 Mood独立reservation必要影响链与实际架构终态
+
+- Root session47552最终退出0：父注册Review build14:47:37.286～14:47:42.414退出0、增量0warning（不冒既有warning已修）；retained alias-codecs14:47:42.419～14:47:44.281退出0、9/0；真实Box/storeclaims14:47:44.282～14:47:44.675退出0、14/0。新Mood21和audit10两个父入口已真实编译，取代此前父字面量尚未重编状态。仅必要影响链，不重复无关全套。
+- Architecture build14:47:44.676～14:47:46.169退出0，真实默认run14:47:46.170～14:47:47.796退出0、165/0，护栏未改、SQL阈137不放宽；本消息未附实测SQL具体总数，不把阈值或历史计数冒当前捕获。scoped diffcheck0，无删断言/放宽棘轮换绿。
+- 最终ownedtestSHA4F31962026D6925A77E486EC19EE5F7A54E59A0E5A51DB3F8935D70B17FD9644，00本条实核匹配；三个产品Store98635145F78053064022CE0C5967D279C8B0AAC3BAA5D0DFFC89D8F57C08FF64、BridgeC8EDB471444A462E2582636CD6605EAEFE109328A60011151D4BA7FD6C131BDB、Mood489C53C427B60E2645BFD8686464C31444467ED26527F87D5C80EC46F823519D保持。Root实核HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580、展开status374/20暂存删除、LFjoinSHACB6F497C2AF70381C9A85A397DCA0DF0B3EAD9CA572505F50AEB4C62B1F6A111，公共cfg-0.3.2/冻结7B7C不变。
+- 当前无活native；全部产品继续freeze，00只登记未build/改产品。本批未连接实际HTTP/生产Activate，未做Host Rebuild+IT、未整套旧bundle+preimage回退，不把模块21或影响链绿冒统一宿主采用/Wave1准出。预算与Plugin额外权两个负责人问题仍待答；不因本终态绕过待授权或开启Wave2A/2B。
+
+### 22.129 完整HTTP闭合批私有Host契约与精确input冻结（技术接受，仍待施工准入）
+
+- 本轮仅按Root要求有界只读实核/接口结论，无产品修改、build、项目测试或后台任务。Root接受以下技术契约；不是source施工授权。新profile预算1MiB/depth16/4解析准入与PluginStore/PluginManager额外写权仍待负责人，受影响实现保持停止，全source继续freeze，禁止提前Activate/未Bind fallback或开启Wave2。
+- 已确认wire：仅现POST HandleSettingsSaveAsync内精确query configuration=read/save/find；无query仍旧兼容。新main Save恰冻结2.2五成员，秘密按六slot/kind/value手工接管，不改Core guard。旧POST可选X-BotAgent-Configuration-Key header携原cfg1 key，非法/重复header安全拒绝；无header只单请求分配key，不冒网络重试幂等，header不作caller/授权。strict主保存成功或NoChanges且已知首次决定后，dirty Mood另新key旧POST {mood}，UI保两key/两事实分别Find，主失败/Unknown不盲发或新key重试，不称跨请求/动作原子。secret值及frozen payload只限浏览器内存，禁止local/sessionStorage、URL、日志；跨刷新如需恢复最多有界非秘密key元数据。
+- 已确认Root桥窄seam：internal ConfigurationStorageBridge.ReadConfigurationVersion(SqliteConnection)返回ConfigurationVersion，仅复用现Store.Version方法/完整SQL，不新增SQL或新连接；尚未实施，Root两个准确input见下表，source本条不释放。Host同conn runtime读回必须核expected，不能独立ReadAsync后再另一连接拼user/metadata/secret快照。
+- HotReload同文件internal nested ConfigurationRequestAuthorization：IDisposable Enter(ConfigurationCaller,Func<bool> reauthorize)、bool TryGetCaller(ConfigurationAccess required,out ConfigurationCaller caller)、bool Reauthorize(ConfigurationCaller,ConfigurationAccess required)。唯一AsyncLocal request scope，finally恢复，disposed闭包失效，无无限主体/key/token字典；仅Web既有认证/同源门禁后的可信caller与当前IsAuthorized闭包，事务前/内重授权，不接受body caller/access。Comp可先创建该scope holder给现participant授权回调，避免构造循环，原participant七参ctor保留。
+- 原HotReload public11参ctor不改；internal一次性BindConfiguration(ConfigurationStore store,ConfigurationRequestAuthorization authorization,Func<ConfigurationVersion,AppSettings,ImmutableArray<SecretMutation>,AppSettings> readCommittedSnapshot,MoodStore mood,Action reapplyHealthReports,Func<ConfigurationVersion,AppSettings,ApplyStepReport> projectTts)。同绑定只同引用幂等、不同绑定固定拒；Comp同一次Build且任何HTTP/bridge/task开放前真实完成，不把未Bind兼容fallback当可运行入口，不另造Store/Box/writer。
+- HotReload直接消费成员：ValueTask<ConfigurationReadResult> ReadConfigurationAsync(ConfigurationReadKind,CancellationToken ct=default)；ValueTask<LegacyFindOutcome> FindConfigurationAsync(ConfigurationOperationKey,CancellationToken ct=default)，复用现FindLegacyAsync、strict key的actions为空；ValueTask<ConfigurationSaveResult> SaveConfigurationAsync(ConfigurationSaveRequest,CancellationToken ct=default)；ValueTask<LegacySaveOutcome> SaveLegacyConfigurationAsync(ConfigurationOperationKey? key,ConfigurationPatch changes,ImmutableArray<SecretEdit> secrets,FieldEdit<string> mood,bool ttsProjectionRequested,CancellationToken ct=default)。caller从有效scope取得，原ApplyRuntimeSettings签名保留但激活后仅实际PanelDeployUrl单field diff归typed Legacy，未知mutation拒，未领PanelDeploy不写。必要提交后账本收尾不依赖HTTP取消、scope仍在真实完成前有效。
+- 同Box唯一_gate内：Storage Save→首次实际决定→同conn/CommittedVersion候选→preclaim PublishSnapshot/RuntimePolicy/ModelProjection→tuple3许可；任一preclaim失败不Exchange、不Mood，原Result/Committed事实保留，不fakeReplay/错误。NoChanges+Mood仅首次真实合法决定可在persist返回前执行现ApplyLegacyMood，Changed在published真实步骤后消费；Replay/Find只查询、Unknown不补执行，独立结果回现LegacySaveOutcome。不得在Box锁外补动作造成倒序，也不新增Box接口。原RebuildRuntime不得再整段重复运行。
+- 八step精确已有消费者：PublishSnapshot=唯一Exchange成功再RecordApply；RuntimePolicy=现Approvals.RebuildPolicy→Participation.Rebuild→Whitelist.Rebuild/PruneNonWhitelisted→AgentCmds.RebuildAgentUsers；ModelProjection=现SyncBrainFields，primary Current与captured nonprimary路由按真实维度，非热metadata如实RestartRequired，legacy committed DB凭据不冒ModelApplied；ConcurrencyGate=Reply.ResizeGate；ContextWindow=Registry.Snapshot逐会话MaxMessages/TrimToMax；Schedulers=Scheduler.RebuildIfNeeded+HealthReports.Reapply；TtsFileProjection=本version相关意图才claim→版本核对同conn固定Tts槽+该snapshot，释放readTX后现文件原语一次，失败/不确定Unknown、不据旧void/catch推Applied；RegisteredConfiguration=仅真实支持投影Applied，其余连接/路由重建/未批准plugin消费者不伪热应用、真实RestartRequired，不借此完成C4生命周期。每个动作Started在副作用前，结果账本失败Unknown、不自动重做；实际无工作step可真实no-op Applied，通知最后一次。
+- SettingsStore拟直接消费入口internal AppSettings LoadCommittedRuntimeSnapshot(ConfigurationVersion expected,AppSettings previous,ImmutableArray<SecretMutation> mutations)：单deferred readTX内复用ReadSettingsSql/typedPolicy/provider/固定六slot，Root版本桥核expected，BotConfig现HotSave overlay纯复用，不调用Load()/Save()/另一连接、不把环境runtime写回user；mutations只固定Slot/Kind且Save前捕获，不从source相等猜Keep/Replace/Delete。restart-only当前值逐字段按现FieldEffect/真实消费者保留，不一刀切所有Model/Platform。Token已有投影只因子同conn overload复用原签名，不能重复播种或Read时迁移。
+- UI可复用typed Read member名而非第二张140mapper。只读源码结构核对Views142个ReadField，原mapper134显式property/flatkey对camelCase差异0；旧save首payload对象136键不等于140 scalar全有控件。typed未在该首对象的10 scalar为agentMaxQueued/agentServerUseGate/agentTools/defaultTemperature/defaultTopP/feishuEnabled/localChannelIds/officialChatEnabled/officialEnabled/privateChatEnabled，不臆造空控件写入。将现唯一getter对象原样提collectSettingsInputs供渲染后baseline/保存复用；遍历固定七typed partition成员，精确own-key相交、rule.id/visibility/editable核准，3/102走专用路；仅真实dirty或显式reset生成FieldEdit，Inherited/Absent未触不变Explicit、Hidden不回填display，数字不靠字符串/NaN转null，model/base明确编辑空才Clear，其它空string按Set，reset须CanClear。这是源码形状检查不是额外项目/行为测试。
+- Device专用：Read Key及nameRaw进本地表，新项nullKey，原项rename保Key，只有表dirty才Set完整desired；只key/nameRaw/enable/model/workDir/tools/timeoutSeconds，不夹online/cwd/models/runtime，未可信加载不允许省略造成delete，显示mask不写回。Policy专用：每row持原Target，不从显示key/loaded snapshot注册；只dirty target发Registered.PolicyEdit完整六成员，其它target不动。未编辑成员按Read.userMode重建原Inherit（Inherited/Absent）或明确value，Features inherited为空、explicit保原全部override只改真点击项，不用capSupported造false；typed row不再同步flat名单制造双意图。旧collectPlatformPolicies不能作为strict全表来源。
+
+下一闭合批拟改input（00本次实核；仅冻结、没有产品准入）：
+
+| Owner | 精确路径（仓库根%WORKDIR%\bot-agent） | SHA256 |
+| --- | --- | --- |
+| 00 | src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs | 459F4DE9F8A17A4DD5F1C95DFC6E89D8EECE6EE403B118EC63FFD1420DAE42AF |
+| 00 | src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs | C7223BCE9D3BB45B098AAFD4E79985B8867F4AB2FCD528F293F7AF5BA6E3FEE9 |
+| 00 | src/BotAgent.Headless/Adapters/Persistence/BotConfig.cs | 7D9BE0BE14207BC2425FC9D7D10FD3274AB47AE04C48872FDA359D70B2B0855A |
+| 00 | src/BotAgent.Headless/Host/CompositionRoot.cs | 177A21CFD1ADF3266513B5FB62A1AD58DF1788593D816F057C01FAFC12A79304 |
+| 00 | src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs | 78E26E49C4E31D9C78F878A033A078229DC98CF42A023E8467B824C59172903A |
+| 00 | src/BotAgent.Headless/Adapters/Panel/WebUiServer.cs | 7C77654516BFB4DB26AF03466AB0E55577CF2E19BEE0788999C72607BA1A578F |
+| 00 | src/BotAgent.Headless/wwwroot/app.js | E01AC150E7344CB772B843BB3FEF9B02AB5820D3FA78704C25919C53D4387554 |
+| Root | src/BotAgent.Storage/SecretsStore.cs | C45C9AC0684D462ACC8786187BDF346F76874AC75605869469A5896ABE986D84 |
+| Root | src/BotAgent.Storage/ConfigurationStore.cs | 98635145F78053064022CE0C5967D279C8B0AAC3BAA5D0DFFC89D8F57C08FF64 |
+| Root | src/BotAgent.Storage/ConfigurationStorageBridge.cs | C8EDB471444A462E2582636CD6605EAEFE109328A60011151D4BA7FD6C131BDB |
+| Root | tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs | 4F31962026D6925A77E486EC19EE5F7A54E59A0E5A51DB3F8935D70B17FD9644 |
+
+- 只读复用无拟改：SettingsBox EEAE3ABCD8A6727DBB60844A896E92EBE19F99BC590986E3839FDF6304624C6C、MoodStore489C53C427B60E2645BFD8686464C31444467ED26527F87D5C80EC46F823519D。PanelRoutes/PanelDeploy/Music不改；Plugin两个未授权路径不列已批准input。六slot公开writer fence只固定允许槽，官方历史写API环境红线拒，非C3音乐cookie/PanelPassword路径保兼容；不得以禁止绕写误伤音乐登录。
+- Root接受上述Host方向及停止线。当前仅doc落账，source均冻结，等待两个负责人答复后再按准确改段/产品准入释放，不为等待继续拆unused helper/额外测试或后台工作。整套旧bundle+preimage回退仍后继真实验收义务，未以此提案宣称生产采用或Wave1完成。
+
+### 22.130 负责人两项批准与完整HTTP/Token闭合批source正式准入
+
+- 负责人新明确“都授权和批准”，Root确认仅最后两项：Root新增src/BotAgent.Storage/PluginStore.cs限定严格读取/同conn统一保存/activation fence及合成验证（不授权PluginManager）；新strict-only累计UTF8 1MiB/depth16/最多4解析准入及合成验证。不是额外Wave2/3、部署或生产授权，旧CompatibilityProfile不套新body限额，所有输入/秘密/权限闭集保持冻结2.2。此前22.128/129待批准状态由本条仅这两项更新。
+- 00实核22.129十一input逐项完全相同，正式释放该完整闭合批source：00独占原七shared HotReload/SettingsStore/BotConfig/CompositionRoot/WebUiServer.Settings/WebUiServer/app.js，Root独占原Store/Bridge/Secrets/test；新增Root单路径PluginStore inputF04EBC288B89E1DADB0D417C50F8C9D6B4DBA17792E984E3318A6980061D1D20。总十二拟改路径，没有转交对方source权。SettingsBox/Mood只复用无本批新改权；PluginManager/Router/PanelDeploy/Music/工程引用不写，新路径先报。所有既有改动/20暂存删除保留，不提交/推送/部署/生产操作。
+- 执行采用22.129已接受的私有Host API与wire：可信request-local scope及事务内再授权、同Box锁Save→同conn版本投影→preclaims许可→八step真实消费者、旧POST纯LegacyPlan/无ExpectedVersion/可选原key header、strict新read/save/find codec与body准入、Token GET只configured/source且UI dirty/显式Delete/key recovery、旧writer精确fence与音乐cookie兼容。Root增加ReadConfigurationVersion(conn)仅复用现Store.Version SQL，不新连接/SQL定义；Root实现六槽公开Save同activation fence，official历史写拒，非C3音乐cookie/PanelPassword不误伤。
+- Plugin同conn准确需求：保原Storage.IPluginStore与public LoadPluginStates/SetPluginEnabled签名，新增internal static IReadOnlyDictionary<string,bool> LoadPluginStatesInTransaction(SqliteConnection connection)、internal static void SavePluginStatesInTransaction(SqliteConnection connection,IReadOnlyDictionary<string,bool> states)，只复用plugins_state现Get/SetMeta原语。严格object/bool/解码后重复/损坏拒、Ordinal stable key不trim合并、不吞错误重建允许；Host按真实七preset目录exact验证稀疏合并，未列保留，missing entry沿现Register默认true，启动用其既有defaultEnabled参数，不改PluginManager。public Set在原Write内fence，同conn保存不嵌套Write；无新Core public接口/任意JSON写入口/SQL。
+- 00可按源码逻辑段实施七shared连通批，不另拆unused helper进度；Root并行只其五路径原语/必要真实HTTP合成test。全部source完成并冻结通知后才由Root唯一builder执行必要定向验证；00不build/test，不并行碰产物。本批最后一次闭合交付前产物不启动，不提前对外Activate不完整通路；任何接口/文件冲突/预算无法保持即停受影响部分并报，不放宽SQL137/Domain300/文件1765或删断言换绿。新能力只有后续真实Host/HTTP与完整回退证据后验收，source准入不等于Wave1完成或Wave2A/2B开启。
+
+
+### 22.131 完整HTTP/Token闭合批首次源码冻结（尚未构建或验收）
+
+- 2026-10-15 21:44 +08 本轮只读/源码静态核验：HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580，展开status376/20暂存删除，LFjoin SHA D5E4C54AB20A7A7AE5481A1719D178DA16D1BAA43A1B265FC0CE9AD110DD4850；不同于上一374，不清理/不伪称状态未变。冻结候选全文SHA7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203不变。00只改22.130七shared与本总纲，未写Root源/新增路径/未授权文件，未build/test/启动任何产物。
+- Root四产品实际已落、00只读复核：ConfigurationStore211C446693AEF49077C16E61A963A888B66F6171DA2F85AF0A0B8FBBE27263F9；BridgeCF8FD677C840A2FB78BADCCD7CF58326BAAEE36BDAD99AC996274B85D85AA34D；Secrets637F3ACF68CB058B5A5A8A7C157FAD05D7B1A7700EFE0089E527BED8DDB6E914；Plugin44CB2730C0007F50575A34E6406C3E803401058323536E43BD0DB0FCDA865548。版本桥复用原同conn SQL；六槽公开writer在原Write内fence，official历史API拒/不读旧row，非C3cookie/password保兼容；Plugin复用唯一meta SQL、strict decodedduplicate/坏格式/Ordinal拒审，同conn API已存在且公开Set fence。Root test最新56BDEBE8BE3E8A8B34453AE3AC4B3199F399827617927F85E601E0FF226FDCBC，本批writer-boundaries预期27与真实独立进程HTTP factory均未实测，不报绿。旧HostAdapter故意污染DB fixture改用限定同conn原语，保原NeedsReview/版本断言，不关闭产品fence换绿。
+
+| 00完整路径（均在%WORKDIR%\bot-agent\） | 冻结SHA256 | 行数 |
+| --- | --- | --- |
+| src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs | 85DA3A17D83C5AFED1BF756DF6DA4DD008B270AA5AB507B4311492052AEF2549 | 451 |
+| src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs | AF7590D88E31B98CADEC585A43F2EA0460EB56325338982DF39CA2796830F25A | 1732 |
+| src/BotAgent.Headless/Adapters/Persistence/BotConfig.cs | CFF7A9E02DE5ABC9BC8C965CE22A655A7506788406EF95BD9C792BDE51564156 | 806 |
+| src/BotAgent.Headless/Host/CompositionRoot.cs | 1516E646937C0B8F672F346DF09995214FCE9E833959E149D1D6CCDB4943D949 | 818 |
+| src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs | A0C450831F72A69C042C0886AFDCE66CED2870B24960A8D092525B5CF584C1DC | 1108 |
+| src/BotAgent.Headless/Adapters/Panel/WebUiServer.cs | A0BCE3E8C5A557B344FB93C362B37831F3D355D8C9997918C15C9A1A443FA710 | 945 |
+| src/BotAgent.Headless/wwwroot/app.js | FBACDC4E6F63FC0353D64EC009D522223E3CA5CE5FEE52EB9C52F02B4481A377 | 5738 |
+
+- 实际接线：CompositionRoot同次Build在构造任何gateway/bridge/HTTP消费者之前唯一Activate，原七参participant保持；缺失primary元数据/首次behavior seed/Token/typedpolicy/devices都在受控Initialize原TX。初始真实同Box再投影Token和typed表，启动PluginManager只用既有Register(defaultEnabled)消费受控exact七preset目录/strict存量状态，不改PluginManager。callback允许声明目录与loaded runtime分离；没有从body或快照注册新对象。
+- HotReload绑定唯一store/授权/同conn投影/Mood/health/TTS六引用，重复Bind必须六引用全同。request-local lease执行finally恢复、disposed标记不可复活，实际事务权限来自原Web认证/同源再次检查。Save持原Box_gate→提交→同conn核精确CommittedVersion→唯一现scalar getter/setter规范事实投影（含两条primary ModelName/BaseUrl alias，非第二140映射）→Publish/RuntimePolicy/Model preclaim→许可Exchange→八step真实执行/落账。preclaim拒/账本失败不Exchange、不Mood，不伪Replay/NoChanges。RuntimePolicy/Model/Concurrency/Context/Schedulers沿原消费者，TTS核同版本固定DB槽后TryWrite真实返回，失败不以旧void/catch冒Applied；Registered stage覆盖真正restart-only字段、nonprimary元数据/插件及三个startup捕获gateway secret，不一刀切所有Model/Platform。模型固定DB credential实时安全消费仍分维度保原裁决，不据此宣称ModelProjection已应用metadata。
+- exact POST wire保持22.129确认：现/api/settings只在HandleSettingsSaveAsync内configuration=read/save/find；read body仅kind，成功返回原ConfigurationReadResult（code/version/generation/contractRevision/serverUnixSeconds/view/secrets/fields/latestApplyState）；无合法generation的拒绝固定error/code/refreshRequired，绝不serialize Guid.Empty。save原五成员，手工闭集六slot秘密所有权，不改Core OutputGuard，返回原code/replayed/receipt/currentVersion/errors；find仅key，返回configurationResult与legacyActionResults，绝不执行动作。旧无query仍纯LegacyPlan/无外CAS，单key header仅旧POST，非法/重复拒，缺header单请求自分配不冒网络幂等。旧成功保runtime/env/settingsFile并加configurationResult/legacyActionResults；失败固定safe error，旧空Token409/refresh_required整批拒。
+- 新profile仅1MiB累计UTF8/depth16/4解析准入，decoded重复/未知/必需/非法enum/Unicode/type在Storage前拒。storageStarted之后异常不转换为“非法JSON”遮盖已提交事实。成功200、validation/revision400、forbidden403、conflict/expired/generation/needsreview409、capacity429、storage/commit/unknown503、find-missing404、过大413。旧profile不套新限额；Router不改/不绕路。
+- UI使用原唯一control getter表、typed Read member名定位七分区，渲染后baseline只发dirty；缺少的十控件Keep，不造空值；设备用真实stableKey/nameRaw/只dirty完整目标表，Policy只发被改target完整六成员Registered.PolicyEdit，保未改target与Inherit/Explicit空/AllowAll/Features原事实。Token不装载明文，六槽显式Replace/Delete，old GET只configured/source/无prefix/suffix。strict main与独立dirtyMood各一个原key/事实，主首次已知成功/NoChanges且发布已知才发Mood；Unknown先Find，用户明确同意且NotFound才原key/原内存payload重发，不新key盲重试。pending payload仅内存，历史有界非秘密key/结果，无local/sessionStorage/URL/log秘密。callback兼容停止线：bound旧ApplyRuntimeSettings唯一现PanelDeploy caller只field96归typed；未识别额外变化/非空published callback明确拒而不绕过单锁；非C3 music仅cookie投影，不把任意mutator带入C3。
+- 本次pwsh/Python编辑与scoped git diff --check均退出0（仅现CRLF提示），只是源码/静态形状，不是编译、行为或性能成绩；误猜一次Token facade方法无匹配exit1，未调用产品/数据，已改用实际固定槽LoadInTransaction。七source现全freeze并通知Root唯一必要编译/真实HTTP与writer专项；红时只释放准确受影响段。此表不宣称通过原1765/SQL137架构probe，须Root实际验证，不增阈值/删断言。旧37bundle/前镜像仍保原，整套artifact/preimage回退尚未演练；Wave1未准出、Wave2A/2B未开，禁止提交/推送/部署/生产。
+
+
+### 22.132 完整HTTP首次真实27/24通过与UI集中审查待修段
+
+- Root唯一首窗真实终态：Headless trueRebuild21:45:02.919～21:45:20.923退出0/8既有warning；Review21:45:20.928～21:45:25.472退出1仅Root fixture三处误用facade.SetMetaInTransaction，原语实际StorageDatabase；只改测试alias后21:45:41.130～21:45:45.536 build退出0，不算产品红。writer-boundaries21:45:45.540～21:45:47.636退出0、27/0；Harness build21:45:47.637～21:45:49.030退出0；actualHTTP21:45:49.031～21:45:51.500退出0、24/0。包含两次真实独立Headless启动/重启、HTTP/CAS/秘密+提交/发布/原key恢复，以及chunked累计限额/depth/八partial连接→四解析准入等；不能以组件编译替代该实际调用链。
+- Root session1145已真实exit0；当前全部产品保持22.131冻结。Root仅下一必要普通record必需成员负例/父24注册及一次完整适用Review/Architecture/Safety/Scope、Frontend和影响S50/S52，尚无终态不预报，00不构建/不启动。不重复无关IT矩阵，旧bundle37/preimage仍未实际rollback，不准Wave1/不开放Wave2A/B。
+- 00依Root要求仅集中只读UI发现两真实候选：projectTypedDevices当前直接取Inherited的effective value装whole-table，会将未编辑继承空值/0物化；status失败可能旧device draft搭新strict版本。应按userMode保requested空串/0，先用本次已成功strict snapshot建立authoritative draft，再把status仅作在线信息。另Save成功后六secret输入/删除标记未顾lateEdits，会抹在途新输入；Unknown→Find后没有明确ack已知commit秘密，下一新key可能重新Replace。建议pending保存原main frozen/seq，只有已知commit才按原输入对照清理、保后续编辑，两个key/事实分开；Find不自动补Mood。typed Policy规则目前Inherit/Explicit空/AllowAll/Features及稀疏target保真未发现反向覆盖。以上仅审查，不在活验证窗修；等待Root终态再释放app.js准确段，不新增路径/测试范围。
+
+
+### 22.133 仅UI两处真实保真缺口准入与源码重冻
+
+- Root确认首窗session1145已终态，明确只释放app.js，准确input FBACDC4E6F63FC0353D64EC009D522223E3CA5CE5FEE52EB9C52F02B4481A377；只修22.132两个消费缺口，其它六shared和Root产品仍冻结。00实核该input后才写，无新文件/接口/解析预算/构建或测试。
+- 设备先由本次成功strict Read建authoritative draft及saved基线，online status只补当前状态；Inherited/Absent的model/workdir/tools还原请求空串，timeout还原0，不把effective值写成显式覆盖；稳定Key/nameRaw保留。status失败不把旧表同新version混合后全表提交。
+- 秘密ack保pending.mainFrozen/mainKey/mainResult及各槽发送时revision，revision由新Delete/input与现两旧Clear按钮共同推进。只有真实Committed或真实NoChanges回执，且当前input与原发送值、revision均相同才清输入/本次标记；在途新编辑不被一刀清空。Unknown先Find原main事实再做同一ack，不补执行Mood；独立Mood的key/frozen变更不丢main事实。两key依然分别可Find，秘密与冻结payload仅内存、不写local/sessionStorage/URL/log。
+- 输出app.js 5769行/SHA6F5EDEC68206EEBF029F3F955AEC1CD397860F41EBF83A768D8C80885E582215；scoped diffcheck退出0，只有现CRLF提示。已重冻通知Root唯一必要编译/消费者验证，尚不报UI行为通过。Root只读已发现原FrontendProbe/probe.mjs和browser-fixture.mjs仍将任意POST当flat旧协议且静态硬匹配payload.agentDevices=JSON.stringify；未获两测试路径写权不改、不绕fixture造假绿，也不让新UI退回旧全表覆盖。若实际probe因此失败，须按真实问题分类并向负责人单独提权，保原保护目标，不删断言换绿。
+
+
+### 22.134 HTTP26真实通过、Frontend旧fixture失败及完整Review预期诊断真红
+
+- Root session30641已真实终态：Headless Rebuild21:50:04～21:50:09退出0，Review build至21:50:14.460退出0，actualHTTP26/0至21:50:19.193退出0（原24加ordinary record必需bool与null partition闭集用例）。同原命令node tests/BotAgent.FrontendProbe/probe.mjs于21:50:19.194～21:50:20.677退出1，原mock未实现configuration=read的code/view，仍将所有POST当flat旧保存；静态仍硬匹配payload.agentDevices=JSON.stringify和旧全量字段，不把该失败冒产品红/新UI已过。产品全保持22.131加22.133 app冻结，未为旧fixture降回legacy全表写。
+- 00只读实核probe.mjs 364～418静态表、675起fetch、makeEl/VM和999起旧flat断言；最小迁移只需该文件，browser-fixture.mjs目前只独立抽api/session片段，本批未受影响，不顺带扩大授权。保原DOM覆盖/未加载拒写/名与XSS/官方secret/lateEdit/设备保全/策略继承全部保护，将flat全表断言更新为真实typed sparse/no-op与原key/Find事实，DOM补真实最低Select.add/Option/insertAdjacentElement/动态ID和webcrypto，不屏蔽真实生产异常。作用域旧断言失败来自其硬要求afterSettingsSaved；新save实际调用顶层loadSettings，无refreshAgentDevicesFull私有跨作用域调用，不能为通过静态实现形式而改生产回原旧hook。Root已向负责人普通文字申请probe.mjs精确权限，未答不写测试路径。
+- 两UI修补必要用例限设备Inherited保持空/0与Key、status失败不混version、已提交秘密ack不抹在途编辑、Delete/Replace revision保后意图、Unknown→Find只ack不补Mood、main/Mood两key分事实等；不重复140字段矩阵或扩全套。
+- 完整Review21:53:13.142～21:53:24.871退出1、799/1，ModuleRecovery到writer-boundaries停止：其子27/0但stderr实际恰7条预期安全拒绝WARN（官方1+固定槽6），父原stderr必须空规则仍保。Root独立受控捕获21:53:56.740～21:53:56.989退出0确认形状；只拟对预期bool拒绝逐次局部捕获且严格固定单WARN，绝不放宽父空stderr/计数。不是产品红；Arch/Safety/Scope因串行fail-fast尚未执行，不冒旧成绩充本次绿。00不构建/不改产品/不改Root测试，只后置登记。
+- Root后继提出真旧37产物+前镜像演练。00已只读确认候选可沿原Root测试路径与ignored安全证据范围，精确source/input和新临时派生范围仍须下一前置条目；当前不创建/复制/启动。原bundle/preimage两manifest不改、false仍false，需真旧binary与前镜像启动→新宿主副本迁移提交→停净→恢复旧资产+前镜像副本→真旧宿主比较，并另写安全hash/count证明，不以codec fixture代替。Wave1及Wave2门禁继续保持。
+
+
+### 22.135 R9真实架构红与两既有shared组合seam最小修复准入
+
+- Root Architecture真实21:55:54 build退出0；21:55:55.501～21:55:57.607 default run退出1、164/1，21:56:06.453～21:56:07.308诊断仍退出1；唯一R9 Services引用Adapters命中本批SettingsHotReload85DA。SQL137/IO62/Domain268/maxsource1764仍守住，Safety/Scope未跑，不放宽任何护栏。Root另Mood父恢复子21/0但stderr一条真实预期mood_text_write_failed，只故障点捕获并严核固定诊断、不动父空stderr原则。源缺陷与fixture诊断分开归因，不拿旧架构绿充本批。
+- 00只读查实际ArchitectureProbe/Program.cs599～604与HotReload：using BotAgent.Adapters.Persistence只为BotConfig.ConfigurationEffect，另两个StorageModule::BotAgent.Adapters.Persistence.MoodStore具体字段/Bind参数是新反向依赖。不是调namespace alias隐藏字符串的修复；不改扫描、allowlist或阈值。一次只读误猜DependencyChecks.cs不存在退出1，已定位真实Program，无产品/数据操作。
+- Root明确释放仅原HotReload输入85DA3A17D83C5AFED1BF756DF6DA4DD008B270AA5AB507B4311492052AEF2549与Comp输入1516E646937C0B8F672F346DF09995214FCE9E833959E149D1D6CCDB4943D949。Bind原MoodStore实例参数改为Func<ConfigurationCaller,ConfigurationOperationKey,FieldEdit<string>,LegacyActionResult>，实际CompositionRoot闭包持唯一真实Mood并调用现Bridge.ApplyLegacyMood；同internal Bind末尾追加Func<ConfigurationFieldId,FieldEffect>，Comp传真实BotConfig.ConfigurationEffect。HotReload只消费两个typed能力函数，不认识具体adapter；既有RequiresRestart语义、流程/原public ctor/participant七ctor/Core公开契约不变。七个绑定实参逐一ReferenceEquals，disposed lease保护保留。不新文件/第二接口/SQL或控制器，不放宽R9。
+- 先本条登记才实施两准确段，完成重冻报全文hash；Root原测试若有Bind反射只更真实私有签名，无公共入口变更。其它产品继续freeze、00不build/test，Root唯一必要验证。后续whole rollback仍另前置输入登记，当前未演练。
+
+
+### 22.136 真实旧产物加前镜像三阶段回退演练准入（尚未执行）
+
+- Root确认仅原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs添加唯一closed factory --configuration-whole-rollback <repo> <capture>；00当前实测input821BF19B33AA084C4E4205F43315EA1BC4C2608174FD87C255573E35C584CD06。Root写前核input，若自有前序fixture更改已不同，先续登记新指纹，不逆写/覆盖。无新测试路径/公共Program/产品源码，本条后才实施；00不构建/启动。
+- 派生写权精确仅Path.GetTempPath()/botagent-configuration-whole-rollback-<32hex>首次全新staging，及原capture %WORKDIR%\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670/rollback-proof-<同32hex>.json（exclusive create、拒已有目标/reparse/越界）。原bundle37与manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542、preimage954F62E5721B3BA96EC1DBC377A2DEA1000DA589F5D3E3790DDF1717D448238D、preimage-manifestE925741572580BE05DC685A1BF39C799B7B2636426D055622CCAB3AA1A54F955全只读，原两false布尔不改。37asset按manifest相对路径逐hash复制/核验，不全目录复制或混用新Storage/DLL；不得复制真实DB/env/config/log。
+- 固定三阶段：先旧37bundle+前镜像副本真实启动捕获safe基线→停止且实际exit可见→同staging的新完整候选启动并迁移/合成typed配置与秘密提交→停止所有自有进程/非pool连接关闭→精确恢复旧37产物与原前镜像副本→再次真实旧Headless启动比较settings/device/provider/六固定槽受控hash/shape。旧产物须dotnet旧DLL/真实native依赖启动，不用新C3/codec fixture冒兼容；初次旧artifact兼容也必须真验，当前仍false。只允许本次staging内RuntimeRoot/data/qqchat.db及其-wal/-shm恢复处置，先实际路径边界验证、进程全停/自有连接关闭与必要清池后才能覆盖；绝不全局kill或递归清未知目录。恢复不碰原前镜像/真实数据。
+- 每个子进程清继承BOTAGENT/QQCHAT/OPENAI/FEISHU/MINIMAX/TTS名称后仅固定synthetic/mock/loopback环境，关闭真实协议/主动任务/bridge外发；原preimage是physical9/version0、六slot6、primary disabled、旧六字段device且无typedpolicy/provider-origin，不提前灌新meta/sentinel。旧GET可能保旧plain Token路径，测试只在内存比hash/shape，绝不回显/写证据正文或secret。新proof只有相对名/hash/计数/版本/exit/时间/布尔，真通过再独立记事实，不预置RollbackVerified=true。
+- Root两次只读误猜DataRoot.cs/Storage ModelProviderStore.cs导致rg退出2立即停，后已枚举定位真实Storage/AppPaths.cs及Headless适配器ModelProviderStore，不算产品失败。Root唯一builder等22.135两shared重冻与本test源就绪才验证；当前本条只是准入，不宣称回退通过/Wave1准出/Wave2开启。
+
+
+### 22.137 R9两原共享source重冻（待真实架构验证）
+
+- 22.135准入后00只改两个释放片段并重冻：SettingsHotReload455行/SHA592FCC5896FB41930B71E1D19D0FA8C26C685014DCB31A3EF1D3152011B883B5；CompositionRoot819行/SHAE928C7352989702AB12239B89F8F79C536CFCFD32DF5C7A834DD4A3B80FF46A3。using具体Persistence、MoodStore字段/参数、BotConfig反向依赖全部真正移出用例层；实际Mood调用在既有唯一Comp闭包，effect来自同一真实BotConfig函数，不只是改alias/分割关键词规避扫描。Bind七个实参全null-check/ReferenceEquals，原公开ctor/participant七ctor/ApplyState与业务流程保持。
+- 源静态pwsh/Python/scoped diffcheck退出0（仅现CRLF提示），Root测试实搜没有BindConfiguration反射调用，rg无匹配退出1为预期空结果，无需猜造fixture改签。00未build/test/启动，真实R9/HTTP回归仍由Root唯一执行后记，不拿“No Adapters字符串”静态事实代替架构通过。
+- Root whole rollback输入821BF19B33AA084C4E4205F43315EA1BC4C2608174FD87C255573E35C584CD06与22.136闭合路径/三阶段已通知准入；原37bundle/preimage四对象只读，未把准入当执行。其余五shared加app6F5E、Root产品保持冻结，Frontend单路径授权仍待负责人。不额外开SourceInstance/PluginManager或Wave2任务。
+
+
+### 22.138 真三阶段whole rollback与R9恢复（其余门禁仍待终态）
+
+- Root session16745当前已完事实：Headless trueRebuild22:00:52.281～22:00:57.186退出0/8既有warning，Review build至22:01:02.703退出0；whole-rollback22:01:02.703～22:01:23.092退出0、23/0。实际三次独立宿主旧baseline→新候选迁移提交→精确恢复旧37产物与原前镜像再启动，不是codec模拟或只重开新binary。Architecture22:01:23.092～22:01:23.921 default实际退出0、165/0，SQL137/Domain268、R9不放宽；Safety build至22:01:27.801退出0，后续run/Scope尚待终态，不预报。
+- 新ignored proof精确capture/rollback-proof-ae8f5e10651541d0a33690825f53c1d5.json，SHA22DE923A60A00F86141877DDAE22290E5754C29E15D24EB6047C2C8CC89A22D1。00只读复核hash/JSON形状，字段仅Format/time/前后asset和DB hash、版本/计数/ProcessExits、两布尔及settings/fixedslots/provider/device观察hash，无已知合成秘密前缀，不读取DB正文/GET响应。新proof OldBinaryCompatibilityVerified=true/RollbackVerified=true；原manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542、preimage954F62E5721B3BA96EC1DBC377A2DEA1000DA589F5D3E3790DDF1717D448238D、preimage-manifestE925741572580BE05DC685A1BF39C799B7B2636426D055622CCAB3AA1A54F955实测仍原hash，原历史false不改。此为明确本候选/合成前镜像证据，不自动授权生产回退/部署。
+- C4只读范围核对：当前src仅Core/Domain/Ports/IManagedCapabilities.cs:11声明，无实现/真实consumer；ManagedCapability surface只证类型。总规划94明确Wave1为Core/Storage接入与统一管理/保存契约；冻结候选912明确C4真实动作implementation按各波次，871明确后续真实adapter/mocks/取消/释放才Supported=true；本总纲21.4下游项也把真实生命周期/管理/取消/释放放各波次。21.4准出项明确C3全保存、secret、legacy发布、Token/Device、安全Read、Host/回归及整套回退，未写Wave1实现全部IManagedCapabilities runtime/新ZBA，不能倒灌后续全管理范围。
+- 也不能据此冒C4已采用：冻结候选867～875的安全List/Inspect目录+auth/真实state、Validate独立权限与同Save只读归一、Unsupported零IO、mg1总预算/持久受理/query/cancel仍缺真实宿主证据。§8末条保留“C4协议/type是否足以01管理准入及谁实现unsupported adapter由真消费者确认”；六角色同hash签署并非实现成绩。建议Wave1最终报告明确C4契约/签署已交付、runtime按后续波次并请负责人确认准出边界，不自行补假readonly catalog/擅扩当前source，不提前开Wave2。00此次仅只读/文档，误猜一次ManagedCapabilities.cs复数路径退出1，实际已枚举定位ManagedCapability.cs与Ports声明，不算缺接口或产品失败。
+
+
+### 22.139 完整Review823、Safety/Scope通过；S50真实链回归失败继续阻断
+
+- Root session16745最终退出0：Safety22:01:27.802～22:01:40.161为594/0；Scope build22:01:40.161～22:01:42.219退出0，Scope22:01:42.220～22:01:44.148 failures0。whole rollback proof三个自有宿主被夹具主动停止，ProcessExits各-1，不冒自然退出0；安全事实版本0→2→0，原37assets/精确前镜像不改。本次wrapper23/0/exit0只表示该预期受控停止与比较真实通过。
+- Root完整Review22:02:28.885～22:02:52.526退出0、主823/0，HTTP26/writer27/Mood21/audit10/Device32/Policy72/Token17 modes等children均由父真实注册且通过，不把子数加主数。Root test FE924ABB7C7017A611F462A070B190933147746F3D1A1B2C12304402C0CE7AB1；Harness build至22:02:53.579退出0。22:03实测HEAD原值、展开376/20暂存删除、LFjoinSHAD5E4C54AB20A7A7AE5481A1719D178DA16D1BAA43A1B265FC0CE9AD110DD4850，契约7B7C不变。
+- session27182最终退出1：S50 22:02:53.592～22:04:26.505真实10/4。Webhook接收/鉴权/超限/16槽/dedup通过，但无Feishu REST回复/内容目标、真实synthetic storage故障修复后相同事件不回复及重启fresh事件不回复；S52按非零立即停止未执行。不把旧fixtureflat POST问题泛化为此项：S50不保存设置，是当前产品真实链回归，故不能称唯一Frontend阻断。全产品继续冻结，00只读定位不修源/不build。
+- 00实际链候选：Activate后typed RuntimePlatformPolicies.HasValue→ReplyPipeline/WhitelistGate.AllowsKey typed→AllowsCanonical通用Matches/WhitelistPolicy.ParseWhitelist把Feishu raw chat whitelist当QQ数字解析；Gateway已按真实Context+raw名单接受，主链却按alias数字拒绝，吻合Webhook200/dedup成功但不回复。Model/固定env凭据路径暂未见首要异常；未经真实反例/恢复验证不称根因已闭合。最小建议三原路径Gateway窄只读OriginalOf+复用IsAllowed raw/alias、WhitelistGate trusted Func gate、Comp真实实例注入，保canonical唯一/noInstance override/loaded/开关/名单空否决，禁止typed Feishu直接return true/伪来源envelope；Gateway旧临时写权已交回，未本批释放前不写。Root并行只读取合成证据，不读真实日志/数据。
+- C4范围Root已确认冻结912按各wave实现，最终报告分层：契约/六签署是本轮证据，当前IManagedCapabilities只有Core定义不是runtime采用；后续各wave仍要实际producer/consumer/生命周期/query-cancel与取消释放验收，当前不扩大做Unsupported catalog/不先开Wave2。Frontend单测试授权仍待负责人且红未修，S50真产品红及未执行S52同样阻断21.4最终准出。
+
+
+### 22.140 S50真实Feishu raw/alias名单消费修复方案与先红准入（产品暂不释放）
+
+- Root接受三原已授权路径最小方案、明确此刻只登记不编辑产品：Platforms/Feishu/FeishuBotGateway.cs inputAC3339B0A86B6ECEB992D634CFABC8140033C2FEFCBE3BF243359A0362D78180；Headless/Services/Qq/WhitelistGate.cs input0B072FBA00EACA5E3BEE0856B8416D406B637AFE7D1EEAD7AF6F4E36E90CA57F；Headless/Host/CompositionRoot.cs inputE928C7352989702AB12239B89F8F79C536CFCFD32DF5C7A834DD4A3B80FF46A3。先Root原owned ConfigurationContractTests.cs inputFE924ABB7C7017A611F462A070B190933147746F3D1A1B2C12304402C0CE7AB1新增closed --configuration-feishu-whitelist及必要父入口，无公共Program/新测试路径。产品释放须该真实红终态后Root另明确指令，不自行开工。
+- 精确新增Gateway只读public bool AllowsMappedTarget(bool isGroup,long alias)：一次Current快照，disposed/alias<=0/未配置拒，typed enabled/chat再核，现private_ids.OriginalOf(alias,同app,真实group/participant kind)失败拒，再复用private IsAllowed(settings,isGroup,raw)的raw/alias规则；不返回raw/秘密，不新增身份分配/HTTP/dedup/生命周期/route。WhitelistGate保原两参ctor，再加三参可信Func<bool,long,bool>，仅canonical Feishu在原声明唯一、无Instance override、loaded Registered/Connected/Enabled/Chat和规则开关门禁后调用；无delegate或异常failclosed，不走QQ数字ParseWhitelist，也不typed Feishu unconditional true。CompositionRoot仅同次真实gateway实例methodgroup注入，未加载null；不从channel构造authenticated来源envelope，Wave2真实来源传递仍未覆盖。
+- Root先有界16项真实FeishuIdMap+Gateway+Gate合成：raw group/private匹配；不同raw/Explicit空/未映射/跨app/身份kind/disabled/chatfalse/notloaded/无委托/多实例/Instance override拒；AllowAll仍需真实mapping、零HTTP等。只在新ctor/方法未落时回用原两参ctor，让既有行为形成红，不把缺成员或编译失败冒红；真实S50已10/4仍保，修后独立Headless重建+影响S50/S52，不重复无关矩阵。
+- 最终whole rollback只在所有源（含已获批前端修）稳定后唯一复验，现23 proof为历史候选不改字冒最终；新nonce proof保留旧证据。当前Frontend测试精确授权仍未新答，产品全freeze，00不build/test/不写以上三源。
+
+
+### 22.141 Feishu真实typed Gate红与三原路径source释放
+
+- Root first Review build22:09:51～22:09:54.958退出1仅测试漏DQ.Channels using两错误，改using未动产品；Review build22:10:15.999～22:10:20.382退出0。真实closed --configuration-feishu-whitelist22:10:20.386～22:10:21.890退出1、10通过6失败，原typed gate确走旧两ctor，raw group/private被canonical数字比名单拒绝，AllowAll对未映射/跨app/kind及无trusted mapper却可意外允许。不是缺新成员的假红，不替换原产品为mock。
+- Root明确释放22.140三个精确input AC3339/0B072/E928；00此刻再次实核全文SHA后才实施。严格仅新增Gateway真实alias→raw→原IsAllowed的只读helper、Whitelist两ctor兼容+可信delegate三ctor/canonical分支、CompositionRoot同次实际gateway注入；typed enabled/chat核actual Context、disposed/配置/身份/Explicit空名单均保拒绝。Root16必要用例及父入口已源注册，当前无native；其它产品/test不编辑，不改guard/阈值/公开Core契约/来源envelope/协议。完成重冻后只Root唯一构建/目标+受影响S50/S52。
+
+
+### 22.142 Feishu三原路径最小修复源码重冻（行为仍待终态）
+
+- 恢复原00席位后再次逐hash核22.140三input完全匹配，确认22.141已源释放且此前尚未产品编辑；只同三准确段实施，不重复旧红/不写Root或Frontend/不build/test。Gateway输出769行/SHA3E79AF6EA678A3D7A978BBF3E57A0D5566B5489EC7889FAD5B4420FAD32DB6E1；WhitelistGate271行/SHA19FBC1154359E990019D1F4B6911D22C9CF75B77CFF1E60F964CDACCAF5DC3E9；CompositionRoot820行/SHAA1B0A106F46D680CA006515F5F776B2E49C7AA8104704B741A9E36518C2AB590。
+- 实际共享接线为同次Build持有的真实feishu.AllowsMappedTarget methodgroup→Whitelist三ctor可信函数；原两ctor保留委托null，canonical原声明唯一/无Instance override/loaded/enable/chat后才调用，缺mapper/异常拒。Gateway一次Current，disposed/alias<=0/Configured拒，typed实际Context rules或旧Read enable/chat再次核验，OriginalOf同app+真实group/participant kind失败拒，再复用现IsAllowed raw/alias匹配；不typed无条件true、不制造identity/网络/新dedup/来源envelope/协议。不修改QQ/local/official的原名单匹配。
+- scoped diffcheck退出0（仅既有CRLF提示）。00额外一次纯内存逆向静态尝试在首个Gateway全文SHA未精确回AC3339（得到350A9F973598833F2A363D5C8C07AE4C0CD41C40E94DD5DA0E40B438BBF012C4）即assert退出1，后两个未执行；无产品逆写/临时源码/总纲部分写，不反复试凑证据、不称该逆向通过。输入原hash断言和限定替换成立，但逐字节逆证目前缺；不把其猜归行尾/BOM或冒产品行为失败。回退只可逆本段且须另核后续依赖，逆回会重引真实raw/alias拒与未映射AllowAll风险，不自动授权生产回退。
+- 三源已重冻并通知Root，Root只读复核seam/diff0后单一session11757按Headless Rebuild→Review build→16专项→Harness build→S50→S52逐exit/红即停；只影响链，尚无终态不预报。其它源/护栏/Core合同保持，Frontend精确probe.mjs授权仍待负责人、未擅自认领；旧whole-proof仅历史候选，所有源稳定后最终唯一回退与其余21.4证据另记，Wave1/2门禁未解锁。
+
+### 22.143 S50真实恢复、S52真实行为红及兼容修复只读结论
+
+- Root session11757已终态退出1：2026-10-16 Headless trueRebuild12:30:31.373～12:30:49.151退出0/8既有warning；Review build49.152～55.313退出0；真实mapped-gate专项55.314～58.676为16/0退出0；Harness build58.677～12:31:00.065退出0；S50 12:31:00.067～12:31:05.169为14/0退出0，原10/4恢复。S52 12:31:05.170～12:31:29.321为79/40退出1，119原断言保留；本轮不是仅Frontend fixture阻断，不能称Wave1准出。三产品保持22.142输出冻结，00不重复测试或重修已恢复S50。
+- 只读真实根因：Platforms/Governance/PlatformSwitchSettings.cs:15 typed存在即Read返回false，EditablePolicies:72/112、Panel WebUiServer.Local.cs:25/58及Platforms.cs:69真实消费，造成四canonical旧GET错误以及local已构造但inject403。SettingsStore.cs:918～920遗漏Feishu同时Chat/local roster双toggle，且whole table已替换后仍无条件Sync导致legacy scalar反盖canonical；Sync缺entry直接return也丢合法旧alias。Web.Settings.cs:405～419 pure whole DTO导入与scalar装配未恢复旧优先级。已有Bootstrap Normalize只处理legacy snapshot，Activate后typed权威并未做安全兼容投影，不能改回从旧DTO重建typed或把resolved值写回inherited baseline。
+- Panel WebUiServer.Platforms.cs:36/62仍构造empty Instance上下文做status Resolve，飞书实际声明feishu-main因此exact拒绝。该显示链应按真实snapshot.InstanceId或唯一可信declared key构造完整Context，unknown/歧义/未声明拒；不得为UI改Resolver.Resolve(empty)推断来源。status只显示desired/loaded/capability事实，不给消息/工具授权。普通exact及channel-only安全停止线保持。
+- 推荐同一闭合补丁（尚未产品源释放）：Switch.Read仅四canonical、可信声明唯一、无同account Instance override时投影AccountDefault typed规则；未typed走原pre-v1 AND/schema1覆盖，未知/多实例/Instance override拒。EditablePolicies typed直接构造只读四canonical兼容DTO，不回查/恢复旧DTO且不改输入。Store Legacy whole-table Keep才Sync真正出现的旧toggle：Feishu双开关、Local roster双开关，目标缺失时创建其余规则Inherit的最小AccountDefault；whole表本身优先，Strict语义不变。pure LegacyPlan在body显式wholeDTO时做旧alias优先归一/名单映射，不套Strict冲突规则。Web旧flat payload只做兼容投影：canonical开关来自typed requested规则、restart scalar需要同TX desired事实，不回写runtime baseline、不谎称热应用；strict Read仍保requested/effective/Apply真实分离。Comp启动工厂按typed真实规则决定构造optional adapters，未typed保旧分支，不更改FieldEffect.Restart/secret捕获规则。Panelstatus使用完整可信Context，保原reasons/connected/restart语义。具体源段须新定向红后再释放，不在本次只读中开工。
+- 一次只读误猜tests/BotAgent.ReviewProbe路径导致Get-FileHash退出1，随后rg --files查实ReviewRemediationProbe；一次git旧方法匹配误带static使Select-Object Skip失败，后用真实方法名查询纠正。均无产品/测试写入，不当功能失败；后续显式Stop与native退出码检查。
+
+### 22.144 负责人更新范围：两精确测试/显示路径及先红、单文件临时移交
+
+- 负责人明确后续按推荐方式执行无需逐次再问授权，仍不自动开Wave2/提交/推送/部署/生产；任何新增实际路径须00先登记。Root转述此前两精确补批生效：tests/BotAgent.FrontendProbe/probe.mjs input1D3FE07B83DCE2467BA3BFA145C67612263C74B68B55780677374002B4869305；src/BotAgent.Headless/Adapters/Panel/WebUiServer.Platforms.cs input0714D1404EB7A45CDFF43805E215E22865BCE8C4F7451D6E04331CA27812D1AF。00本轮已实核二hash匹配。
+- probe.mjs仅该单文件临时交Root实施已说明的真实configuration read/save/find mock与typed dirty消费者fixture迁移；00最终复核/合入。保原保护语义/父stderr/全部实际场景，不降低产品回旧flat、不删断言换绿；不得修改browser-fixture或其它未登记测试。Root自有ConfigurationContractTests.cs实核input36DE6A81A3F4C0D63C68D5C0862EDEC9F16ED1669872228151BE42A57D1DAFFF，准入新增closed --configuration-platform-compatibility与必要父入口，约18有界真实断言：迁移AND/Local baseline、canonical只读及未知/多实例/Instance override拒、Editable不修改事实、真实LegacyPlan→Host participant→Store Feishu/Local/table优先、Strict Inherit/Clear不污染baseline，empty Feishu Context仍拒。不新测试路径/工程引用。
+- 00可准备现已授权五产品准确input：Switch A06C3D3CEFA020DA6B6442E2B433A1C232EFABA73DA9CA611F3798A673B07A5C；SettingsStore AF7590D88E31B98CADEC585A43F2EA0460EB56325338982DF39CA2796830F25A；Web.Settings A0C450831F72A69C042C0886AFDCE66CED2870B24960A8D092525B5CF584C1DC；CompositionRoot A1B0A106F46D680CA006515F5F776B2E49C7AA8104704B741A9E36518C2AB590；新增Panelstatus 0714D1404EB7A45CDFF43805E215E22865BCE8C4F7451D6E04331CA27812D1AF。原其它产品冻结，当前仅测试先红准入；源实施仍待Root定向红终态后明确释放，00不build/test。SettingsStore现1732行，仅33行预算，实施须自然精简复用/不压成员绕棘轮或放宽1765。若真实预算/语义需更多路径，先提报登记，不偷写Local/BootReport/HealthReport或Core。
+
+### 22.145 平台兼容20项真实红与五产品精确段释放
+
+- Root Review build12:42:44.920～12:42:54.050退出0；真实--configuration-platform-compatibility12:42:54.054～12:42:56.058退出1、12/8（20项），Read QQ/local、Editable四行、Feishu双toggle、local roster两case与whole优先/requested roster失败；Strict scalar/Clear基线、只读纯净、exact Feishu空Instance拒等原安全边界保留。非缺成员/编译假红，00不重跑。
+- Root现明确释放22.144五产品原inputs，仅22.143闭合方案；Node单file仍Root临时写，测试其它Root独占，00不build。whole DTO body归一只克隆body内明确事实，当前requested依据留participant同TX。兼容JSON单独从同一受控读事务的requested JSON+typed表取得显示事实并补可信catalog，不写回DB/Box baseline；启动真实optional构造用typed canonical gate+原credential条件。Panelstatus完整三元snapshot及无loaded AccountDefault显示不作为认证来源；Read仍canonical唯一/noInstanceOverride拒绝边界。Restart/SourceMode/Strict/Public C3/SQL及棘轮均不改。
+
+### 22.146 平台兼容五产品源码重冻（待必要行为验证）
+
+- 仅22.145五精确路径实施并重冻：Switch456行/SHA BF662B59CC811EBC18FC70A0125C8A8EF569FE3880676686EE7459B7BBFAA039；SettingsStore1740行/SHA C9DD37457BE27B0539296C4A4E83E58924CAB9AF23C6C78F3A5E06DF079D07E3；Web.Settings1147行/SHA 07AA94A0475A3DC50F654F868DDABEF7292398B268ACB63C0540417689941067；CompositionRoot822行/SHA 0F16F7CA041CF7CDE1E3CC677B8E7FC9A89C2B3E4D14C52D0A0104C2B2616CC7；Panelstatus206行/SHA 8B37E0D9E5D74ED4CDC397E6373031D9608EF1EF389A82B4ABA3B3749F180F8A。所有起始SHA先逐一assert，未改Root测试/Node/其它产品。SettingsStore仍低于1765，无SQL/Domain/护栏变化。
+- Switch typed Read仅canonical+可信有效catalog同account唯一且无Instance override→AccountDefault规则；未知/歧义拒，不改变exact Resolver。typed Editable构造独立四canonical DTO，绝不更新旧DTO/meta或输入。Legacy Plan克隆body仅在显式wholeDTO时按该body可证明的toggle/名单事实归一（含Local roster），保caller body/原secret owner；Store只在Legacy wholeTable Keep时同步旧出现字段，Feishu/Local双toggle、目标缺省建其余Inherit的目标。Strict原分支、Restart效果与用户基线均保持。
+- 旧flat输出在PopulatePlatformSettings复用原_settingsRepo.Load同读TX JSON+typed权威表，补同次可信catalog，单独覆盖JSON显示四开关/roster；其余秘密/基础设施仍当前runtime，不把该显示snapshot写入Box或当Applied。Comp optional构造用安全canonical typed规则加原凭据条件；no typed仍旧Read。Panelstatus不再二元map覆盖同账号实例，保每真实snapshot及InstanceId，以真完整Context作exact显示解析；无loaded只AccountDefault显示，connectedfalse/restart按desired，duplicate exact failclosed。不把显示Context授予入站/工具/dispatch。
+- 00只做源码与scoped diffcheck（退出0，仅现CRLF提示），未build/test/运行产物，行为成绩仍待Root。Node probe.mjs临时Root修改及其最终交回另记，最终whole rollback仍待所有源稳定后唯一演练；不冒Wave1/2准出。
+
+### 22.147 wholePlan局部变量唯一命名收尾（无行为改动）
+
+- Root仅释放Web.Settings input07AA94A0475A3DC50F654F868DDABEF7292398B268ACB63C0540417689941067的wholePlan pattern局部命名，避免不同if作用域歧义。00先assert原SHA，四名精确改为officialEnabled/officialChat/privateChat/feishuEnabled，无控制流/表达式/输入/副作用变化，其它四产品不写。新输出1147行/SHA待本次命令实测如下；Node尚Root施工，无native窗，00不编译测试。
+- Web.Settings重冻SHA D4D314DB4A115A1687C410D6C6042EB2F4C9A06D90829AA59E2A47970536569D，scoped diffcheck见本次退出码；语义证据仍待Root唯一窗口。
+
+### 22.148 typed Policy UI状态显示真实缺口与先红停止线
+
+- Root负责人再次确认按已登记推荐范围执行，无需重复问授权；当前五产品冻结，00仅只读。app.js实测input6F5EDEC68206EEBF029F3F955AEC1CD397860F41EBF83A768D8C80885E582215。loadSettings:2300只调renderTypedPlatformPolicies；旧loadPlatformPolicies:1882只有定义无调用，其/api/platforms获取、在线/未连接/状态暂不可用/需重启标签不再被真实typed UI消费。typed2595～2660只有target标题与六规则编辑，没有状态标签，真实旧可观测保护丢失，不是只probe静态字符串过时。
+- 不可直接再调用旧loader：它replaceChildren并创建flat checkbox/whitelist，会破坏typed configurationTarget/Value/Original及六规则Inherit/dirty保真。最小候选仅抽共享status fetch/文案（旧loader与typed复用），typed async renderer由loadSettings await；插入只读状态span，任何成功/失败状态均不得写configurationValue/Original或标dirty。Instance按platform/account/instance完整Ordinal键唯一匹配；AccountDefault显示同账号真实loaded/online汇总而非二元map覆盖或任选。缺行未加载/未连接，获取失败状态暂不可用，重复exact状态不可判定。restart仅来自真实/api/platforms.restartRequired，不用现PolicyViews请求态粗粒度RestartRequired推断实际需重启或热采用；能力缺失显示未知，不当false。不得新建路由/放宽权限/改变保存wire。
+- Root将在原probe.mjs临时席位补真实typed DOM行为红，00此刻未改app.js/其它产品、未build/test；只读方案不是源释放。Root明确红终态后另释放app.js该准确段，完成重冻后唯一Root串行必要验证。Node单路径迁移仍Root施工，00最后复核交回，不能把新fixture存在当Frontend已通过。
+
+### 22.149 Wave1到Wave2A/2B最终门禁只读矩阵（当前仍关闭）
+
+- 21.4真实准出范围未缩：全七分区/registered对象/允许秘密同TX、CAS/幂等与receipt/floor/预算/故障并发；唯一writer与所有legacy写者参与版本、同锁条件发布和8steps真实结果；Token GET/UI write-only及旧空整批拒/显式Delete；Device stableKey/tombstone/hello/task/control持久闸；安全Read/脱敏/nameRaw原key；公共测试真实注册、独立Headless Rebuild真实宿主链、完整适用回归及合成迁移/整套artifact+DB回退。当前已有分批真实证据见22.123～147，不能拿旧指纹通过作为新五源/最终app候选已验。
+- 当前必要缺证/阻断：①22.145红后五产品兼容修仅source/diff0，20专项、保原119 S52及其必要影响链尚无新绿；②Frontend旧probe仍历史红，Root迁移中，并发现148真实typed状态缺口待红→最小app修→Node真实行为绿；③所有源/test稳定后的单次完整适用Review/Architecture/Safety/Scope与相关Headless Rebuild/宿主影响回归，命令/时间/exit/计数须绑定最终hash；④已有whole rollback23 proof绑定旧候选，仅历史证明，最终候选仍需唯一三阶段旧37asset+原preimage→新迁移提交→停净恢复旧产物+原preimage的独立proof；⑤00最终逐21.4汇总工作区/提交/契约/全部写者/源与宿主采用/覆盖未覆盖/回退局限，明确父入口和原断言/棘轮未放松后再提Wave1准出。无证据的项不预报，既有真实通过不反复无关重测凑数。
+- C4边界按冻结912及Root已确认：本轮交付契约/type/六角色签署；IManagedCapabilities仅声明，无runtime producer/consumer，不冒采用。真实生命周期/管理/取消释放按各后续wave验，不能将整个C4/新ZBA/Web倒灌成Wave1额外实现，也不能称interface存在满足后续动作。Wave2A/B只在Wave1真实验收完成后由00登记非冲突02/03路径/接口准入；平台真实source-envelope/跨实例入出站授权和模型真实传输/路由与取消等仍其wave义务，当前新增exact registry/安全gate不等完整迁移。Wave5/Web仍按总规划独立后端/ZBA/安全/资源/回退门禁，当前不提前开启Wave2或Web、不授权commit/push/生产。
+
+### 22.150 typed状态真实DOM红与app.js单段释放
+
+- Root node原命令2026-10-16 12:53:46.374～12:53:54.379退出1、350/7，其中4项是真typed DOM缺状态（不可用/断线/已连/需重启），另外3项Root独占旧全表fixture残余迁移，不混为产品失败。现释放app.js input6F5EDEC68206EEBF029F3F955AEC1CD397860F41EBF83A768D8C80885E582215，仅共享status fetch/文案、typed async/span及loadSettings await。保旧loader兼容，不调用其replaceChildren重建typed；不触六规则/Original/dirty或Root测试，不build/test。
+- 实读Root新fixture初用requiresRestart/loaded，但真实status只restartRequired（无loaded字段），已通知并由Root更正fixture，产品不得添加虚构wire兼容。只读state置于title内，不改变三态编辑控件结构。完整Instance exact唯一匹配，duplicate不可判定；AccountDefault汇总数量/在线/any真实restart不任选。能力未知不冒不支持。
+
+### 22.151 typed状态最小修复重冻（待真实Node验证）
+
+- app.js仅22.150释放段完成并重冻5792行/SHA 72DC3052647B35A2678AC40B166F17A267A89AC018F7780174C5AE3617667BCE。fetchPlatformPolicyStatus共享同一/api/platforms获取，固定诊断不回显错误正文；旧loader保原编辑逻辑，仅共用获取/状态文案。typed renderer变async且loadSettings await，状态span放title内，不改变两个三态/名单/action/features控件、configurationValue/Original、collectDirty、基线、key/secrets/Mood流程。
+- Instance完整三元唯一匹配；AccountDefault保全同account行汇总实例/在线数量及any真实restartRequired，不二元覆盖/任选；重复exact显示状态不可判定（不可用），不冒在线。断线/在线/需重启/不可用恢复真实只读显示，能力字段缺失或各实例不一致显示未知，不把部分支持说成全不支持。未为fixture添加requiresRestart/loaded假wire兼容。
+- scoped diffcheck与输出hash为静态证据，00未node/build/test；实际原probe及20兼容专项/受影响S52等待Root唯一窗口。Root当前实核工作区377/20暂存删除，LFjoin SHA21C590A9A9733B4EBFA04F60D758AD5CA93B216448655DCDCE946F2B50F47E8F，HEAD原值；不继续冒旧376当前。前五产品仍22.146/147冻结，Node单文件Root临时修改尚待交回及00最终审查。
+
+### 22.152 Frontend fixture差分复核与最终有界验证计划
+
+- Root临时probe.mjs 5822F5CE76DC85FA035846A93D0903533B05215BFC14E61C87E16C6E19493970曾暂冻结，00只读抽核429增/221删：旧flat全表传值断言迁为真实strict闭集五成员、142字段目录/dirty/Keep；不改控件就不发送的断言仍证明原值保留，不从snapshot填补实际未发送请求。设备不完整拒/稀疏目标六字段/Explicit空与AllowAll/Inherit/无额外动作授权、官方Secret只读以及late secret ack和独立main/Mood Find事实均有新消费者断言，未让新UI退全表。只抽核非全量审完，不提前接收未终态文件为最终通过。
+- Root最新真实node 12:56:14～12:56:22退出1、351/16；其报告2项状态fixture把Inherited resolved value错误设0、其余race之间未显式刷新而沿旧ExpectedVersion引发409，现仅Root修fixture，不要求产品绕CAS/自动覆盖late draft或status生成权限。原2条disabled/muted区别在线/断线的文案保护仍建议在现typed段保真补回，非新测试矩阵。00读取测试含符号时Python默认gbk stdout编码错误退出1，无写；随后显式utf8只读成功，不当产品失败。
+- Root提出最终一次顺序证据计划，00按21.4认可有界范围：先Frontend真实probe；全源冻结后Headless Rebuild→Review build→compat20→mapped16→Harness build→S52/S50/S21/S36；定向绿后一次完整Review+Architecture+Safety+Scope，最后唯一新nonce整套wholeRollback23。逐native exit/失败停止；不扩无关IT矩阵，不把父注册编译/数值棘轮声明当真实run，最终回退proof必须绑定最终候选。既有Production等不受此小批影响的历史证据原样注明，不伪报本次重跑。
+- 完整准出仍须22.149逐项事实汇总（含全部旧writer/fence、秘密/Token GET/UI、设备、统一保存/发布真实Host链、覆盖与局限、冻结hash/状态及旧37/preimage最终回退），不能先宣布Wave2。02/03后续真实source/transport及C4runtime按各wave；无需为Wave1自行增加新fake capability实现。当前所有产品仍freeze，Node尚Root修复未交回，00无测试/构建/新产品写入。
+
+### 22.153 Frontend真实370恢复与临时单文件交回
+
+- Root node --check 2026-10-16 13:01:03.724～13:01:03.817退出0；原probe13:01:03.818～13:01:11.913真实370/0退出0，源码app72DC未变。补回停用/静音两文案行为；“无getter字段Keep”和“已登记必需DOM被移除则整批拒/零POST/保dirty/draft”分开证明，不误称支持任意partial DOM。probe最终SHA00D0DFB9067B09FC3EF4884B569DC9B1AD069B7CDD85073DB5748CB4CC2319AD、scoped diff0；Root正式交回本单路径，00接收最终集成写权，不含其它Frontend文件。先前366/1剩余requiredDOM结构破坏测试口径经实际source2502/2759确认，不修改产品或删除保护换绿。
+
+### 22.154 平台影响链恢复、S21绑定维度真红与三路径准入
+
+- Root唯一C#窗口：Headless Rebuild12:59:05.501～12:59:25.546退出0/8既有warning，Review build25.547～31.948退出0；compat20/0至34.469、mapped16/0至34.596均退出0；Harness build至35.806退出0；S52 35.808～43.372真实119/0退出0（原79/40恢复），S50 43.373～46.636真实14/0退出0；S21 12:59:46.636～13:00:19.267为35/2退出1，S36按失败停止未执行。不是仅Frontend旧fixture阻断，亦不把S21旧热期望直接改名当绿。
+- 真实链：Comp启动ProviderRunner捕获metadata；当前TryBuildCurrentProviderRoute719～725 sameReadTX对desired binding与captured binding不同即deny，primary URL/model仍由BuildProviderRoute760/763读Current动态字段，legacy相同secret:apiKey读取已commit值仍即时。S21从env起步且一次POST同时URL/model/APIkey Replace，primary env→DB绑定变化触真拒绝，B0/A1（A1保存前）。owner允许binding显式apply或重启，不允许伪ModelApplied。现HotReload249对只SyncBrainFields（人设等）直接报告ModelProjection Applied，RequiresRestart181不覆盖该实际主binding变化，是真结果缺口。
+- Root自有test原B977376A2EA3081EC79679D67745151C03447597FE4BB22B79A68456C1E6EDDB准入新增唯一真实HTTP断言（父26→27），实际输出E1CC40F82CDD3002230078AF2D76C5928F7769F745FD71213506F17E25C2F969。Review build13:02:56.821～13:03:01.756退出0；HTTP13:03:01.757～13:03:04.221退出1、passed5/failed1，固定actual_env_to_database_binding_commit_reports_model_restart_not_false_applied，原首strict env起步slot0 Replace真实路径，非缺接口红。
+- Root现释放00原Comp input0F16F7CA041CF7CDE1E3CC677B8E7FC9A89C2B3E4D14C52D0A0104C2B2616CC7、HotReload input592FCC5896FB41930B71E1D19D0FA8C26C685014DCB31A3EF1D3152011B883B5，以及新限定测试路径tests/BotAgent.IntegrationHarness/ModelConfigScenario.cs input61A8369AA50E56A23F2390D5792283D2E760CD03F4DA4E054F0350EFB5D1204A。00最终写三路径；Root测试仍Root独占、app/Node与其余产品冻结，00不build/test。
+- 精确私有seam：BindConfiguration仅新增Func<ConfigurationVersion,ApplyStepReport> modelProjectionState，同引用/null完整核验，原public ctor/公共C3不改。Comp复用同conn Version+LoadAllInTransaction，以本提交version及真实runner同份captured metadata对比binding/启用/priority与非primary URL/model；primary URL/model仍Current，不读秘密值/新SQL/新连接协调器。版本漂移或观察失败报Unknown，不先Applied再覆盖；RestartRequired表示捕获routing待重启，不新建runner生命周期。HotReload仅在原Model Started后作真实判断+SyncBrainFields、一次记录真实结果；registered结果亦保该未完成维度，不由DB凭据实时消费冒metadata Applied。
+- S21只作该新契约适配：env→DB一次绑定变化保持commit/持久/不泄密，新增真实receipt Restart及路由拒绝旧/新端点零发送证据；原两热URL/model保护不是删除，移到第二次真实启动已captured secret:apiKey的稳定ref前提，仍检验即时正确新URL与模型名，之后恢复原B/model继续快速档/思考/重启原断言。无其它Harness源/新测试矩阵/阈值改动。最终全绿与整套回退仍待真实终态，不宣告Wave1/2准出。
+
+### 22.155 主模型捕获差异真实报告与S21稳定引用保护重冻
+
+- 仅22.154三个准入路径完成重冻：HotReload467行/SHA15B25EC9B4280503245A5731A1F2E7E63DACFBA31EF2F6BAE2F33A460EF227B6；CompositionRoot836行/SHA859229747BDAA85E9B935F6F4C89F01AE7DBBA33ED5E8559627DE8BA895E54B7；ModelConfigScenario321行/SHA54F072E0EAEBD5DBE325787E5513E6E63E0E936E017CCA29988B07A80AFDBEBE。三input逐hash assert，未写Root测试/app/Node/其它产品；scoped diffcheck退出0（原CRLF提示），00不编译测试。
+- Bind新增内部modelProjectionState可信delegate，null/重复绑定逐引用一致检查，原public ctor/所有C3类型不变。Comp真实runner/route构造现在直接消费同份capturedProviders数组，去掉原第二次LoadAll，报告与真实consumer不分别猜两份启动记录。InspectModelProjection复用现sameReadTX/Version/LoadAllInTransaction，对本提交version和captured元数据ID/引用/enable/priority以及nonprimary URL/model差异判断Restart；primary URL/model仍Current动态，DBslot值不读取/不比较，不把相同DBref已提交credential安全读取当metadata应用。无新SQL/新writer/新生命周期。
+- Model已经原preclaim后才判断；判断失败/版本漂移/不合法结果一次真实Unknown，不先Applied再覆盖；SyncBrainFields仍原真消费者，仅成功判断后执行；Model真实Restart也传递Registered未完成维度。未构建新runner，不擅热切换binding，门禁deny仍保。其它七step/条件Exchange/Replay/NoChanges/Find/权限/原效果保持。
+- S21不是删除两热保护：env→DB一次保存新增真实Committed+ModelRestart回执检查，随后发送合成消息并等固定provider_secret_unavailable安全日志形状，核旧A请求无增/新B为0；原持久化、不泄密、重启B与快速模型/思考原断言保持。原两个立即新URL/新模型断言移到第二次真实进程已captured secret:apiKey的稳定引用前提，实际POST改到A/model-hot-stable-ref、不改key，核Model Applied且真A请求/模型正确，再恢复原B/model继续后续原检查。只本Scenario、原mock/隔离路径，无新Harness文件或真实服务。
+- 预期由Root唯一一次必要窗口：原HTTP新增27反例先绿；独立Headless重建后S21应保原37断言并新增提交/拒绝/stableApplied/恢复B等检查（实际总计以运行输出为准），S36随后；已绿Frontend370、compat20、mapped16、S52/S50119/14不为文档重跑。之后最终一次完整适用guards/Review、唯一新nonce整套回退绑定本候选。当前尚无新行为成绩，不预报Wave1/2准出。
+
+### 22.156 模型结果修复真实目标窗口全绿（最终guards/回退待终态）
+
+- Root唯一target窗口2026-10-16所有native退出0：Headless trueRebuild13:07:04.596～13:07:09.624（8既有warning）；Review build09.625～14.720；实际HTTP27/0为14.720～18.137；Harness build18.137～21.554（2既有warning）；真实S21 41/0为21.556～30.037，原两个稳定ref热URL/model保护保留、env→DB真实Restart/零旧新IO新增均通过；S36 98/0为30.038～38.029。与22.154原35/2闭合，不靠删除原保护或把commit冒Applied换绿。
+- 绑定最终三hash仍22.155：Comp859229747BDAA85E9B935F6F4C89F01AE7DBBA33ED5E8559627DE8BA895E54B7；HotReload15B25EC9B4280503245A5731A1F2E7E63DACFBA31EF2F6BAE2F33A460EF227B6；S21Scenario54F072E0EAEBD5DBE325787E5513E6E63E0E936E017CCA29988B07A80AFDBEBE。Frontend370实测并交回00、app72DC未改；平台compat20/mapped16与S52 119/S50 14已绿和本模型改段不交叉，保前轮真实影响覆盖而不为记录再跑。完整Review/Architecture/Safety/Scope与唯一新nonce整套回退此刻仍Root执行中，未终态不预报、不先开Wave2。
+
+### 22.157 21.4最终源码/真实入口与写者审计（等待最后行为凭据补齐）
+
+- 00仅只读核当前实际接线：Comp131唯一Host ConfigurationBridge.Activate→真实SettingsStore.ConfigurationParticipant→同一Storage ConfigurationStore/AppDatabase；Comp260在HTTP/bridge/task对外前Bind原同一Box/HotReload。HotReload119/127/134与167连接read/find/strictSave/LegacyWithMood；Web.Settings656/666/674通过同一request-local权限scope真实调用；SaveAndApply持原Box_gate，sameconn核提交version及真实规范事实→Publish/RuntimePolicy/Model Started→条件Exchange→八step。Model已按22.155分清Captured待重启和DB凭据实时安全消费，不用独立Model实例/写协调器伪原子。
+- 实核激活/激活中fence仍位于真实原Write内：SettingsStore173、ModelProviderStore59/71、Storage.PluginStore31、Storage.SecretsStore148，六固定槽与官方Secret闭集分开；official历史接口固定拒且不读旧row，Netease Cookie/password非C3不误封。真正旧ApplyRuntimeSettings唯一caller为PanelDeploy.cs271；HotReload325只允许field96 typed Legacy patch，额外mutator/published拒绝；Music63/66沿原非C3 cookie保存+PatchSettings，398仅允许该非JSON cookie投影，不把任意runtime JSON写入宣称统一保存。Mood独立namespace reservation/claim/result保持，不塞配置八steps或夸跨介质原子。每个真实故障/并发/预算/重启证据仍引用Root此前合成tests，不将静态fence搜到当行为绿。
+- 公共入口实核ReviewRemediationProbe/Program.cs42真实注册ConfigurationContractTests.ModuleRecoveryAsync；该原factory包含HTTP27、platform-compatibility20、feishu-whitelist16、Mood21/audit10等精确汇总，closed whole-rollback接受已登记repo/capture参数。最终完整run仍待Root终态，不能只用父字面量/编译冒子执行。
+- 当前git原生实测HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、展开status378/20暂存删除、LFjoinSHA F48B937C366724AFAF9630EF653E1735550E820B2C0B5034AC9B64DC5576B352。新增S21限定M与此前probe M属已登记；保所有迁移/untracked/原暂存删除，未提交/推送/部署/生产。各批源input SHA先assert/限定段替换与diffcheck记录，Root owned逆向保留证据与00已注明失败/未证明逆向不混；不声称全部既有文件逐字节逆向证明。原37asset/preimage及历史proof不覆盖，最后新proof须独立绑定最终候选。
+- 21.4待补仅最终完整适用验证与新nonce whole rollback终态、00按最终hash/工作区汇总覆盖未覆盖与回退局限；C4真实producer/consumer按后续wave不冒实现，SourceInstance真通路及Model完整迁移仍Wave2A/B准入后各角色路径/接口/真实生命周期验收。当前没有“已开启第二阶段”决定。00此次只读误猜Deploy/SettingsBox路径rg退出2后停止，随后rg --files定位真实PanelDeploy.cs与Services/SettingsBox.cs；无产品/测试写或额外执行。
+
+### 22.158 最终完整Review/架构/安全/作用域真实终态
+
+- Root所有命令pwsh/真实工程、逐native退出0：完整Review13:07:59.680～13:08:23.859为825/0，所有已注册child含HTTP27/compat20/mapped16/Token等真实执行，子数不混加主数；Architecture build23.860～25.272退出0，default25.272～27.548为165/0，SQL137/Domain268/maxsource1764，原棘轮/断言未放宽；Safety build27.548～31.687退出0，run31.687～44.827为594/0；Scope build44.827～46.845退出0，run46.846～49.140 failures0，不编造成功计数。全产品/test继续冻结，00仅总纲写入。
+
+### 22.159 最终候选whole proof只读绑定（外层exit未观测，不冒0）
+
+- Root原session53075在新用户消息后句柄Unknown process id，外层exit输出丢失；00不把proof文件存在等同原生命令exit0。只读精确ignored新proof rollback-proof-70d7b41eda544d02987ef76aa8b42ad6.json，SHA0AB7FAD91E3638A141F703988372850593BBC1CB8F43796D7F866C452FD528C3。安全字段仅hash/计数/版本/布尔/退出形状，WholeAssetCount37、版本0→2→0、两verified=true；三个自有宿主ForcedStop=true/ExitCode=-1，是刻意停止事实，不自然退出0。
+- proof CandidateHeadlessSha256=5E477261605EC318683C89537DAACED2616EFC10C24E0B98A7A6FC7846C1271B，与当前最终重建Headless真实hash一致；BaselineHeadless5A04、manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542、preimage954F62E5721B3BA96EC1DBC377A2DEA1000DA589F5D3E3790DDF1717D448238D、preimage-manifestE925741572580BE05DC685A1BF39C799B7B2636426D055622CCAB3AA1A54F955均实测不变，37asset逐一SHA精确匹配manifest。对应Temp nonce目录现不存在；源码finally先停止并观察自有process退出/Dispose、关闭mock与SQLite pools，绝对父目录+32hex限定、拒reparse后才删自有staging，不清未知文件/真实data。
+- 已证明proof内容/最终candidate绑定与安全清理形状，但缺外层native exit终态仍如实留门。Root为逐命令exit要求建议只必要复验whole一次并将原生结果持久到22.160派生native-results，00同意不重复其余已绿矩阵；新proof另nonce且原历史证据只读。21.4最后准出仍待此终态及最终来源/覆盖/发布边界汇总，不提前开启Wave2。
+
+### 22.160 用户明确review分支落点与隔离发布准备准入（未提交/未发布）
+
+- 负责人新增明确要求可落点提交至GitHub ZhaoJun233/bot-agent 的review/core-platforms，非main/dev/部署/Wave2。Root已查询/fetch真实review tip47e66072419808b219430693908acaadd0598b50，已有Stage1 Core/Storage/Platforms/文档；dev26227b7、main7cc69d不触碰。必须按已存在远端review树与当前脱敏后差异形成白名单，不按本地旧HEAD378项盲stage或纳入所有既有修改。
+- 精确派生目录.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b/认领给Root独占，可写publish_checkpoint.py、manifest.json、source.index、native-results.json、publish-result.json及其封闭publish/verify子目录；不写外部工作目录/原%WORKDIR%发布脚本/产品/真实git index/HEAD。source.index仅子进程GIT_INDEX_FILE基于已fetch47e树叠经审定白名单，commit-tree创建明确本地checkpoint sourcecommit、导出该commit，不能把旧HEAD/任意未提交工作区假称发布来源；原20暂存删除/index原样保留，禁止stageall/reset/checkout/clean。Root负责实际commit/push，00本席只审计与总纲。
+- 原publish-qqchat.py的REPO仍旧qqchat-src、clone硬dev，不能直接跑；允许新nonce adapter只注入明确源repo/sourcecommit/目标review clone与普通push分支，复用原完整脱敏REPLACEMENTS、黑名单与类别双审计以及推后独立完整克隆内容/历史复检，任何审计失败停止。禁止借adapter放宽扫描器、强推、改main/dev或泄露秘密/本地证据；日志只安全码/hash/count，原bundle/DB/proof/.git内证据不入sourcearchive。
+- 00只读raw-LF启发比较远端review树与真实存在文件，src/tests37差异+14新增、0缺失，与Root原56路径（另5docs）吻合；该比较明确非最终脱敏diff，git diff远端→本地旧index会把仍untracked的新模块误报删除，不能作为候选清单。实际闭合集包括新Core配置10文件、Storage Store/Bridge/friend和统一治理/必要查询复用、14原Headless共享/Model三guard/五Platforms、架构2精确登记+负例、Frontend与S21/Review真实测试入口；既有Stage1项目引用/旧平台迁移已在47e，不重纳20暂存删除。
+- 一项应剔除的纯既有噪声：Core/Domain/Ports/IQqActions.cs与47e真实文件比较仅末尾多一空行，非本次接口变更/闭合依赖；建议不叠入独立index（工作区不改）。README/CONTRIBUTING/.github及其它全部已有修改不可盲纳；五docs须明确选择公开安全交付/契约文档，内部执行台账和真实%WORKDIR%运维内容不按当前总纲可写即自动公开。最终白名单仍以原替换表内存脱敏后的实际diff逐项审定，原始路径/时间/hash证据只放ignored manifest，不宣称已commit/push或发布审计已过。
+
+### 22.161 最终whole rollback原生命令终态补齐
+
+- Root唯一必要补验2026-10-16 17:40:45.876～17:41:00.504 +08原生退出0，whole-rollback23/0、assets37；结果持久于22.160隔离目录native-results.json。00只读实核其exitCode=0与SHA98C7B698002F685708F10FDCE242E516B65D9518B40711F626C1B93C19B003CA。原13:09 proof保留且原外层exit仍未知，不倒写成0，不重复其余已绿矩阵。
+- 新独立proof精确rollback-proof-585bdeea1cd54f28bfbe0116793899fe.json，SHA8F2A37B631CF12A2FC2CF18BB6B7A0451BC510B5196D008D2ABDF5ADFAE9B09F，00实核37assets、两verified=true、版本0→2→0；Candidate Headless5E477261605EC318683C89537DAACED2616EFC10C24E0B98A7A6FC7846C1271B与当前真实产物相同，原37bundle manifest3FC9/preimage954F/manifestE925哈希保持。三阶段自有process均ForcedStop=true/-1，不冒自然退出0；新nonce Temp staging现不存在，原capture不修改。该最终候选完成旧whole artifact+原前镜像基线→新迁移提交→停净恢复旧artifact+原DB并真启动比较，不是codec伪旧产物或仅新binary重开。
+
+### 22.162 Wave1技术准出核对与review落点冻结交付（未开启Wave2）
+
+| 21.4义务 | 当前真实结论与证据边界 |
+| --- | --- |
+| Core/Storage实际接入、全分区/registered/允许秘密、同TX | 唯一Host Activate/同Store/同AppDatabase、真实participant/同conn原语、7分区/6秘密/registered Provider与Plugin/typed Policy/Device已经HTTP与完整825父子入口验证；CAS/去重/冲突/clock/floor/容量/故障/并发/跨代恢复在原合成Store测试保留，不把任意JSON或跨介质称原子。 |
+| 所有旧writer/统一版本/条件发布 | 原Settings/Provider/Plugin/六槽Secret写者激活fence；旧POST无CAS走同锁同TX latest事实与原操作key，PanelDeploy96受控typed桥、Netease非C3例外；唯一Box持锁Save→Started→许可Exchange，NoChanges/Replay/Find不重新发布，8step真实结果；Model binding/captured变化Restart、相同DBref已commit凭据即时读取不冒metadata Applied。 |
+| Token/Secret边界与UI | Token旧plain受控同TX迁移+marker，GET不载原值，旧空整批拒/Strict Delete/删除重启不回种；官方Secret仅环境、presence拒。Frontend370及HTTP27真实进程覆盖dirty/六规则/稳定key/nameRaw、晚编辑ack、Find/两key Mood不补执行、秘密不入持久浏览器存储；requiredDOM结构损坏拒而无getter字段Keep分开。 |
+| Device和安全Read | 稳定Key/tombstone/rename pending-confirm、Hello/selectors/task/control/send gate/late结果/具体Connection绑定真WS与S33旧影响覆盖，重启备份恢复保撤销；安全Read权限/Hidden无值/显示mask与raw存储/key、nameRaw分离；不冒Wave2完整SourceInstance入站/出站路由已迁移。 |
+| 宿主/公共测试/架构与必要回归 | 最终独立Headless Rebuild→HTTP27/S21 41/S36 98；平台批compat20/mapped16/S52 119/S50 14在不交叉hash下真实绿保留；Frontend370、完整Review825/0、Architecture165/0（SQL137/Domain268/maxsource1764原棘轮）、Safety594/0、Scope failures0，命令/时间/exit见158/156/153，不混子数或造Scope成功计数。 |
+| 迁移/兼容/回退 | 最终161的三阶段whole rollback23/0与持久native exit0绑定当前5E477候选及旧37完整asset/原前镜像；原format兼容/future拒绝/模块初始化原子/DBsecretmode/账本重开证据保留。是合成闭合回退演练，不是生产部署/混旧binary新DB获准。 |
+
+- **00结论**：按21.4本轮Wave1技术准出义务已具备逐项真实证据，可以提报Wave2A/2B的正式准入准备；当前并未启动02/03迁移、未认领其后续源、未部署。C4-0.3.2契约/type/六角色评审属于本轮交付，冻结912明确真实管理/生命周期动作按各wave；当前IManagedCapabilities只有接口而非实现，不冒runtime采用。后续SourceInstance真实envelope/路由隔离、模型完整transport/取消、各wave C4生产者消费者、MCP/资源/ZBA/Web等仍按后续波次单独登记与验收，不能将本轮安全seam冒全部后端完成，亦不倒灌为本轮额外实现。
+- **授权与写权**：Root=01本轮owned Core/Storage/测试，00=总纲/逐批共享最终合入；02/03限定共享曾临时移交均已交回，Frontend probe单文件Root迁移00已接收终审。最终source冻结：Comp859229747BDAA85E9B935F6F4C89F01AE7DBBA33ED5E8559627DE8BA895E54B7、HotReload15B25EC9B4280503245A5731A1F2E7E63DACFBA31EF2F6BAE2F33A460EF227B6、app72DC3052647B35A2678AC40B166F17A267A89AC018F7780174C5AE3617667BCE、S21Scenario54F072E0EAEBD5DBE325787E5513E6E63E0E936E017CCA29988B07A80AFDBEBE、Frontend00D0DFB9067B09FC3EF4884B569DC9B1AD069B7CDD85073DB5748CB4CC2319AD、Root testE1CC40F82CDD3002230078AF2D76C5928F7769F745FD71213506F17E25C2F969，00本次再次实核；其余各路径沿相应批次input/output记录，无文件全量回退。
+- **提交/工作区与接口版本**：当前唯一源仓库HEAD1f3181e21e8d1f9531e41066b033d8d60218d580、展开378/20暂存删除、LFjoin SHA F48B937C366724AFAF9630EF653E1735550E820B2C0B5034AC9B64DC5576B352。此时尚未创建checkpoint commit/普通push，不能假称已GitHub落点；旧未提交/未跟踪与20暂存删除均保留。本轮public C3/C4 cfg-0.3.2/SHA7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203不变，内部module1/alias codec分支有旧byte兼容，未放宽架构/删断言换绿。
+- **发布范围与停止线**：负责人明确仅review/core-platforms落点，Root准备22.160新nonce适配器/独立index与已fetch47e基线，最终脱敏差异52路径待00manifest终审，原IQqActions/field-review空行及2历史规划不纳，不能378项stageall；原真实index/HEAD/20删除不动。原REPLACEMENTS/黑名单/类别双审计/推后完整克隆复检均必须真实通过；源checkpoint只供导出，严禁将未脱敏原始checkpoint直接push。review普通快进，不碰dev/main、无force/部署/生产。任何source/hash漂移或审计失败停止。最终发布结果后只写ignored证据/聊天，不为结果偷改本冻结总纲而导致source manifest漂移。
+- **兼容与未覆盖**：旧合法单例/原POST/已有运行链经保原断言验证；新的权限/fence/撤销/端点用途限制按冻结明确收紧。没有读取真实群聊/成员/DB正文/原始协议报文或未经筛选日志；测试仅mock与合成隔离根。未证明实际QQ/飞书生产服务、DNS/redirect全出网防护、完整多实例来源迁移、全C4管理动作、生产资源/生产发布与生产回退；不得借review分支提交声称这些已完成。
+- 本总纲至此源码/文档内容冻结，00将单独向Root发送全文SHA作为制作最终52路径manifest输入。待办仅Root安全发布准备与00最终manifest审查/实际发布结果回报；不再改产品、不运行构建/测试、不擅自开启第二阶段。
+
+### 22.163 冻结前最后派生发布命令退出证据路径登记
+
+- 在Root prepare尚未执行、最终总纲SHA尚未发出前，补其明确请求的唯一派生路径：22.160准入目录内checked-commands.json由Root独占，只允许固定安全命令argv/exitCode，不保存stdout/原审计命中/替换表值/环境正文/认证token或带凭据URL；如argv本身含秘密则不记录原值、须先拒绝该命令形式。无产品/外部发布脚本/真实git index/HEAD写权扩张。
+- Root适配器已落但尚未执行，prepare/publish分离，待本总纲最终SHA冻结后才制作52-path manifest交00终审，再普通推review；没有审计通过/提交/发布成功事实。原archive/subject显式sourceCommit、clone目标review的3种参数重定向之外，不得删双审计/完整克隆复检或改发布保护。此为本冻结总纲最后内容，后续运行证据仅ignored派生文件/聊天，全文最终SHA以此后实测向Root发送值为准。
+
+### 22.164 发布快照根安全纠正（prepare前，未提交/推送）
+
+- Root执行前预检发现原publisher sanitize/inlinecheck/prune按完整绝对路径识别.git段；实际快照若位于22.160的.git祖先下会跳过这些闸，不能运行或放宽扫描器掩盖。此刻prepare/commit/push均未执行；此前.git目录发布/verify子目录准入仅作为历史提案，实际clone/导出不再使用它们。
+- 新精确生成根认领给Root独占：%WORKDIR%\bot-agent\publish\wave1-0355336c81ff4a7897eb17425f45bb6b\，仅release/verify两个闭合子目录供实际快照/clone与完整复检；仍位于唯一工作仓库内，git原生check-ignore确认现有.gitignore的publish/规则覆盖，无需修改.gitignore或info/exclude。adapter/manifest/source.index/native-results/checked-commands/publish-result仍原.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b，所有原证据/bundle/preimage保持。
+- Root adapter仅重定向PUBLISH_ROOT及自有临时删除boundary到新精确nonce根，不改任何sanitize/inline/prune/黑名单/类别扫描规则，不改变显式sourceCommit/review分支/普通push/完整克隆复检。删除前须解析绝对路径确认位于该精确生成根内并拒reparse/越界，不清理其它publish内容。Root已核双审计按root相对路径扫描，不因祖先publish忽略；必须实际覆盖release/verify内容，不能据check-ignore误当审计允许跳过。
+- 此为必要发布安全修正的最后文档增量，重新冻结全文SHA向Root发送，52路径manifest必须使用新的文档hash；未伪称原93483184版本仍为当前输入。之后保持源/文档冻结，00不运行adapter/构建/测试/commit/push；prepare完成仍先manifest终审，任何扫描/差异/来源异常停止。
+
+### 22.165 prepare首轮空白门禁真实失败及三精确blob格式准入
+
+- Root首次prepare2026-10-16 17:45:26.286～17:45:47.309退出1，真实停在独立index git diff --cached --check 47e（该native退出2），尚无checkpoint commit/clone/push；checked-commands与失败结果历史追加保留，不覆盖为后续成功。失败仅三个new EOF blank，不是行内空白或产品行为失败；不删diffcheck/放宽规则/改实际工作文件凑绿。
+- 仅允许独立GIT_INDEX_FILE中的三个精确source blob作发布格式归一，保一个最终LF：docs/plans/agents/00-c3-c4-contract-candidate.md、src/BotAgent.Core/Domain/Management/ManagedCapability.cs、src/BotAgent.Storage/LegacyJsonImporter.cs。00只读实核当前原工作文件SHA依次7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203、FC7B5DB4FFD1CB01B52570E40842D0A38ACD3444F8D3288E597FC0EDFEB932FC、F940A244FA03EBF6586A0B3E01435366AE70FE59ED29B587A1963E910F34FCF3，按LF观察尾部换行数2/3/2。禁止实际文件逆写、改冻结7B7原字节/编译产物、泛化任意文件rstrip或清其它空白。
+- 适配器必须在这3项上断言仅EOF空行差异（LF正文精确相同，仅尾部多余LF→单LF），manifest逐项记录工作文件原SHA、sourceBlob、commitBlob、eofOnlyNormalized以及原/后尾LF数；其它路径不得被该规则改写。仍运行原独立index diff --check，任何其它空白错误/正文变化都停止。该提交blob只是可逆发布格式镜像，不是新C3/C4接口或重新签署；公开镜像candidate提交blob哈希可能因EOF与7B7源字节不同，不能误称公开blob逐字节等于源冻结hash。源冻结7B7/既有签署/原工作区仍不变，核验应追manifest原源hash与明确EOF映射，不伪造签署字节。
+- 本必要说明发生于Root尚未下一次prepare之前，重新冻结总纲全文SHA再发送，取代164的文档hash供52路径manifest制作；不改变52白名单、sourcecommit明确导出、review唯一分支、原真实index/HEAD/20删除保全、实际release/verify无.git祖先及完整脱敏/双审计/克隆复检。00没有执行adapter/commit/push/build/test，原失败命令exit不改。
+
+### 22.166 发布审计输入根隐私校正（审计规则不变，prepare尚未重试）
+
+- Root执行前核实既有_audit_publish.py还递归BOTAGENT_PUBLISH_SOURCE工作树，默认原仓库只排docs/.git/bin/obj而不排真实data/runtime；对原工作树整树运行会违反禁止读取真实群聊JSON/运行数据。首次prepare已在diffcheck停止，尚未执行该审计；不得为了发布便利扫描原工作仓库任意data/runtime。
+- 仅通过现有BOTAGENT_PUBLISH_SOURCE审计子进程参数明确每次输入根等于该同次--snapshot的封闭脱敏clone：prepare为已登记publish/wave1-0355336c81ff4a7897eb17425f45bb6b/release，推后独立完整复检为同nonce verify。仅此精确生成根可作为workingtree/snapshot输入，HEAD/历史读取其公开review克隆；不改扫描器/排除规则/REPLACEMENTS/FORBIDDEN，全部候选字节仍完整inline、黑名单与类别扫描，完整远端克隆内容/历史复检不得省略。适配器module.REPO仍原源仓库，仅导出明确sourceCommit/读取提交标题；本轮源读取限定52白名单及git归档，不递归真实运行数据，不把原工作树搬进候选。
+- Root须在每个审计调用前解析/断言环境SOURCE与同次snapshot精确一致且位于release/verify边界内，子进程不得回落原Root；任何不一致/未覆盖候选字节则失败停止。审计输出含命中原值仅内存、安全码计数/hash落证据，不落秘密或未经脱敏内容。此是审计输入边界纠正，不是缩减候选扫描或放宽双审计。
+- 三EOF index-only准入仍165，manifest补原/后尾LF计数与正文完全相同断言，实际工作文件/7B7不改；失败命令历史追加保留。总纲再次最终冻结后发送SHA，prepare仍先manifest终审，尚无commit/push/成功审计事实。00不执行审计/扫描原仓库data、适配器、构建或测试；后续记录仅ignored派生证据与聊天。

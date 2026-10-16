@@ -72,6 +72,8 @@ public sealed class MemberMessageRecord
 /// </summary>
 public class MemberProfileStore : IProfileRepository
 {
+    private const string ReadFoldedSequenceSql = "SELECT through_seq, text, folded_count FROM member_summaries WHERE uid = $uid AND scope = $scope";
+    private const string SummaryProjectionSql = "SELECT scope, text, override_text, evidence_json FROM member_summaries WHERE uid = $uid ";
     private const int MaxMessagesPerMember = 100; // 每个会话范围各留最近 100 条（跨群不再互相挤占）
 
     /// <summary>一次摘要最多折多少条（太多单次请求会过大；剩下的下一轮接着折）。</summary>
@@ -127,13 +129,14 @@ public class MemberProfileStore : IProfileRepository
             foreach (var c in candidates)
             {
                 var scope = ScopeKey(c.GroupId);
-                var throughSeq = AppDatabase.Scalar<long?>(
-                    "SELECT through_seq FROM member_summaries WHERE uid = $uid AND scope = $scope",
-                    ("$uid", c.Uid), ("$scope", scope)) ?? long.MinValue;
-
-                var existingSummary = AppDatabase.Scalar<string>(
-                    "SELECT text FROM member_summaries WHERE uid = $uid AND scope = $scope",
-                    ("$uid", c.Uid), ("$scope", scope)) ?? string.Empty;
+                // These three facts describe one summary row; read that row only once.
+                var summary = AppDatabase.Query(ReadFoldedSequenceSql, r => (
+                    Through: AppDatabase.LongOrNull(r, "through_seq"),
+                    Text: AppDatabase.Str(r, "text"),
+                    Folded: AppDatabase.LongOrNull(r, "folded_count")),
+                    ("$uid", c.Uid), ("$scope", scope)).FirstOrDefault();
+                var throughSeq = summary.Through ?? long.MinValue;
+                var existingSummary = summary.Text ?? string.Empty;
 
                 // 一次只折最旧的一批（按序号升序），下一轮接着折剩下的：
                 // 这样既不会单次请求过大，也不会永远跳过中间的一段。
@@ -150,9 +153,7 @@ public class MemberProfileStore : IProfileRepository
                     continue;
                 }
 
-                var folded = AppDatabase.Scalar<long?>(
-                    "SELECT folded_count FROM member_summaries WHERE uid = $uid AND scope = $scope",
-                    ("$uid", c.Uid), ("$scope", scope)) ?? 0;
+                var folded = summary.Folded ?? 0;
 
                 result.Add(new SummaryCandidate(
                     c.Uid,
@@ -296,7 +297,7 @@ public class MemberProfileStore : IProfileRepository
 
             var summaries = allScopes
                 ? AppDatabase.Query(
-                    "SELECT scope, text, override_text, evidence_json FROM member_summaries WHERE uid = $uid AND (text <> '' OR override_text <> '')",
+                    SummaryProjectionSql + "AND (text <> '' OR override_text <> '')",
                     r => (
                         Scope: AppDatabase.Str(r, "scope") ?? string.Empty,
                         Text: AppDatabase.Str(r, "text") ?? string.Empty,
@@ -304,7 +305,7 @@ public class MemberProfileStore : IProfileRepository
                         EvidenceJson: AppDatabase.Str(r, "evidence_json") ?? string.Empty),
                     ("$uid", uid))
                 : AppDatabase.Query(
-                    "SELECT scope, text, override_text, evidence_json FROM member_summaries WHERE uid = $uid AND scope = $scope AND (text <> '' OR override_text <> '')",
+                    SummaryProjectionSql + "AND scope = $scope AND (text <> '' OR override_text <> '')",
                     r => (
                         Scope: AppDatabase.Str(r, "scope") ?? string.Empty,
                         Text: AppDatabase.Str(r, "text") ?? string.Empty,
@@ -319,7 +320,7 @@ public class MemberProfileStore : IProfileRepository
 
             // 画像已折叠到的序号：比它更早的原文不用再带（无画像时用 long.MinValue —— 补录的群历史序号是负数）
             var foldedThrough = AppDatabase.Scalar<long?>(
-                "SELECT through_seq FROM member_summaries WHERE uid = $uid AND scope = $scope",
+                ReadFoldedSequenceSql,
                 ("$uid", uid), ("$scope", scopedScope)) ?? long.MinValue;
 
             var older = new List<MemberMessageRecord>();

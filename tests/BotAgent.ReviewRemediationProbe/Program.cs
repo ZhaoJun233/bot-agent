@@ -25,6 +25,7 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
+        if (await ConfigurationContractTests.TryRunChildAsync(args) is { } configurationChildExit) return configurationChildExit;
         if (await ClockContractTests.TryRunChildAsync(args) is { } childExit) return childExit;
         if (await DatabaseContractTests.TryRunChildAsync(args) is { } databaseChildExit) return databaseChildExit;
         if (StorageMigrationTests.TryRunChild(args) is { } storageChildExit) return storageChildExit;
@@ -35,6 +36,10 @@ internal static class Program
         try
         {
             AppDatabase.Initialize();
+            await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
+            await RunAsync("configuration transaction module", () => ConfigurationContractTests.StorageAsync(Check));
+            await RunAsync("configuration query reuse", () => ConfigurationContractTests.QueryReuseAsync(Check));
+            await RunAsync("configuration module recovery", () => ConfigurationContractTests.ModuleRecoveryAsync(Check));
             await RunAsync("shared database", () => DatabaseContractTests.SharedAsync(Check));
             await RunAsync("Storage episode adoption", () => StorageMigrationTests.EpisodeAsync(Check));
             await RunAsync("Storage bound import root", () => StorageMigrationTests.BoundRootAsync(Check));

@@ -1,8 +1,8 @@
-# C3/C4精确契约候选
+# C3/C4精确契约
 
-> 版本：C3/C4-candidate-0.3，2026-10-10；**完整文档候选，未冻结**。替换已拒绝的0.2 surface，而不是在旧矛盾规则上叠errata。不存在可调用的新Core接口；不是代码、路由/OpenAPI、Wave1验收或生产授权。
-> 认领/确认/状态唯一来源：[总纲第十八节](00-orchestration-and-dependency-graph.md)。事实输入：[完整字段矩阵](00-c3-c4-field-contract-review.md)，SHA `2FC8A1C55AA1E62A741EFC0D4B4F44DFC20CC86EB19584F355BA37F9CF1BC7E1`。旧0.2-review-1 SHA `F824B65510B9C7D65677B7CACB0C4D5C3C74830544877080855C1C60768B17DC`仅历史。
-> 142非秘密输入、9秘密/clear兼容输入、48仅响应和170属性全部保留。既有入口/类型是源码事实；下列新类型、数值与规则全部候选。01/06早期消费评审及02～05确认仍待真实交付；不得拿00/旧设计顾问代签。
+> 版本：C3/C4-0.3.2，2026-10-11；负责人业务决策闭合版，**冻结生效以总纲21节的实际签署与准入登记为准**。review-2六消费者技术接受已登记；本版仅落实删除设备禁止连接、同平台同账号多实例共享会话及准确文件划分。Token旧空请求整批拒绝刷新保持。新Core接口尚未实现；本文件不是源码、HTTP路由/OpenAPI、Wave1验收或生产授权。
+> 认领/确认/状态唯一来源：[总纲第二十一节；技术基线见20.6/20.8，旧版评审见18.4](00-orchestration-and-dependency-graph.md)。事实输入：[完整字段矩阵](00-c3-c4-field-contract-review.md)，SHA `2FC8A1C55AA1E62A741EFC0D4B4F44DFC20CC86EB19584F355BA37F9CF1BC7E1`。review-2 SHA `B517D3F58E54D3DE31970C82F7D22C438A7E612EBA6F7396B1FA88198763C198`是本版差异评审基准。
+> 142非秘密输入、9秘密/clear兼容输入、48仅响应和170属性全部保留。既有入口/类型是源码事实；新类型、数值与规则为待实现契约。20.6六角色签署不被历史“未确认”覆盖；本版只窄核受影响项，具体执行者、时间与hash只登记总纲。
 
 ## 1. 使用步骤与完成条件
 
@@ -34,7 +34,7 @@ public enum ConfigurationReadKind { Overview = 0, Editable = 1 }
 public enum ConfigurationAccess
 {
     None = 0, ReadOverview = 1, ReadEditable = 2,
-    SaveConfiguration = 4, EditAllowedSecrets = 8
+    SaveConfiguration = 4, EditAllowedSecrets = 8, ValidateConfiguration = 16
 }
 public sealed record ConfigurationCaller(
     string AuthorityId, string SubjectId, string ResourceId,
@@ -47,6 +47,9 @@ public sealed record ConfigurationSaveRequest(
     string ContractRevision, ConfigurationVersion ExpectedVersion,
     ConfigurationOperationKey Key, ConfigurationPatch Changes,
     ImmutableArray<SecretEdit> Secrets);
+public sealed record ConfigurationValidationRequest(
+    string ContractRevision, ConfigurationVersion ExpectedVersion,
+    ConfigurationPatch Changes, ImmutableArray<SecretEdit> Secrets);
 public sealed record ConfigurationPatch(
     BehaviorChanges? Behavior, ModelChanges? Model, AgentChanges? Agent,
     PlatformChanges? Platform, VoiceChanges? Voice, MusicChanges? Music,
@@ -88,7 +91,9 @@ public sealed record ConfigurationReceipt(
     ConfigurationOperationKey Key, string ContractRevision,
     ConfigurationDecision Decision, ConfigurationVersion ObservedVersion,
     ConfigurationVersion? CommittedVersion, CommitState CommitState,
-    ApplyState ApplyState, ImmutableArray<ApplyStepReport> Steps);
+    ApplyState ApplyState, ImmutableArray<ApplyStepReport> Steps,
+    ImmutableArray<DeviceKeyAssignment> DeviceKeyAssignments);
+public sealed record DeviceKeyAssignment(int InputOrdinal, DeviceKey Key);
 public abstract record ConfigurationObjectAddress
 {
     private ConfigurationObjectAddress() { }
@@ -152,12 +157,23 @@ public sealed record ConfigurationView(
 - 所有数组用ImmutableArray，default数组拒绝，empty可合法；所有元素getter/init-only、嵌套递归不可变。分区null=Keep，空对象全Keep。实现首次await前检查/深拷贝冻结规范意图并接管私有秘密buffer；fingerprint、最终校验和写入使用同一owned快照。caller随后Dispose/构造with新record不改变已接管请求。
 - FieldEdit默认Keep；Set严格T/non-null，引用null及非法enum拒绝；bool false/int0是Set。bool/数字Clear拒绝；普通string Clear→空字符串，model/modelBaseUrl Clear→移除用户override/继承固定环境，列表Clear→空表；Policy空表表示无显式策略/按兼容baseline继承，**不是所有平台全拦**。继承、明确拒绝、全允许用Policy规则区分。
 - numeric新Set仅接受矩阵旧Clamp范围内值、Math.Max对应≥0且≤Int32.MaxValue，double有限且在原范围；旧HTTP继续原Clamp/null/ToString兼容。未修改合法旧值保留；非规范旧值标LegacyNeedsReview，不由新上限删掉。字符串旧Trim、截长、白名单原样行为由矩阵逐项映射，新的不同归一须消费者确认。
-- Version非负Int64，Changed成功加一，溢出拒绝。NoChanges也在同TX写receipt/必要安全审计，但不改配置/秘密/version，不publish/外部IO：Decision=NoChanges、ObservedVersion有值、CommittedVersion=null、CommitState=NotCommitted、ApplyState=NotStarted、Steps为空。这是幂等决策成功，不是用户配置提交；同键原结果不被后来配置变化重解释。Changed的CommittedVersion仅CommitState=Committed可靠。
+- Version非负Int64，Changed成功加一，溢出拒绝。NoChanges也在同TX写receipt/必要安全审计，但不改配置/秘密/version，不publish/外部IO：Decision=NoChanges、ObservedVersion有值、CommittedVersion=null、CommitState=NotCommitted、ApplyState=NotStarted、Steps及DeviceKeyAssignments为空（不是default数组）。这是幂等决策成功，不是用户配置提交；同键原结果不被后来配置变化重解释。Changed的CommittedVersion仅CommitState=Committed可靠。
 - UnknownCommit必须保留key供Find，不断言未提交。Find无record是NotFound且不能据此自动Save新key。提交后的ApplyState可随真实阶段报告更新，重放不再执行；CurrentVersion是当前真版本，不冒充原receipt版本。
 - FieldAddress对象种类由Field限定：3设备、102策略、143插件、144provider、145秘密；其余Object=null。无任意字段路径/反射/object maps，Code固定许可ASCII码不含值、端点、异常Message或body属性名。错误最多32，超量返回安全总类码，不截断后称全部校验完。
 - ReadField的精确wire closed forms共同包含visibility/display/rule/userMode/effectiveSource/applyState：Hidden无value/nameRaw；Editable增加value:T；NameEditable仅T=string、增加nameRaw:string。converter从TryGetEditableValue取得已授权编辑值，Hidden不持有可序列化raw getter。Explicit时value是用户值；Inherited/Absent时value是安全可编辑的当前effective值并明确无用户override，UI只提交dirty字段，不将全表value重写为Set。Display为effective显示，Requested/UserMode与EffectiveSource/ApplyState分别报告，环境覆盖下不能把用户值称已运行。NameRaw只在受授权编辑投影；所有Read/写隐私DTO的ToString固定安全类型摘要，不输出成员值。
 - 概览的名称/名单/目录/提示词/URL仅mask Display；编辑态按字段权限定typed raw value。存储/key保持原样、编辑姓名只能nameRaw，不把显示占位符写回。URL概览不完整输出，新URL拒UserInfo。秘密只有configured/source，不给masked头尾或原值；19内部属性/48旧响应项不直接透传AppSettings。
 - 本节给出wire形状而非已存在HTTP codec；06必须按这份hash确认converter/严格未知重复字段/权限。FieldEffect尚未证明Hot的字段保守Restart或LegacyNeedsReview；不是读到新SettingsBox引用就宣称实际消费者全部热更新。
+
+### 2.2 strict输入closed codec（候选；不替换旧HTTP解析器）
+
+- ContractRevision固定`cfg-0.3.2`；新Save和Validate均必需。旧HTTP由独立CompatibilityProfile解析，不将下面规则悄悄用于旧请求。C#成员wire采用首字母小写、其余原样的精确名称，区分大小写；分区只能behavior/model/agent/platform/voice/music/reporting/registered。重复属性在JSON escape解码之后检测，任意层重复/未知/错大小写字段、非法Unicode标量、注释、尾逗号均整批拒绝，不能忽略后继续写。错误仅FieldId/安全错误码，不回显属性原文或输入值。
+- Save对象恰有contractRevision/expectedVersion/key/changes/secrets；Validate恰有contractRevision/expectedVersion/changes/secrets，均必需，禁止caller/access或额外属性。changes非null；其中分区缺省/null=Keep，分区对象只能第3节所列成员。registered缺省/null=不修改；出现时只允许plugins/providers/policies，缺省集合归一为空集合，显式null拒绝。secrets必须数组（空合法），不能null/default。
+- FieldEdit闭集：缺省属性=Keep；显式对象只有`{"kind":0}`（Keep）、`{"kind":1,"value":T}`（Set）、`{"kind":2}`（Clear）。Kind以整数enum编码，不接受字符串/浮点/未定义值。Keep/Clear携value即拒（即使null），Set缺value/null或T不符拒。非编辑普通record按明确C#成员闭集，nullable成员可null但不能新增任意属性；必需非nullable成员缺失拒绝。
+- ListRule只有`{"kind":0}`（Inherit）、`{"kind":1,"value":""}`或非空string（Explicit）、`{"kind":2}`（AllowAll）。Inherit/AllowAll不能携value；Explicit空值保持明确空拒绝，不归一为Inherit。ActionRule恰有kind/actions，kind只0或1，Inherit的actions必须空，Explicit空数组合法；action字符串来自已登记catalog且无重复。所有enum用其明示整数、不得越界，bool只能JSON boolean，int只能Int32整数token（不接受指数/小数/字符串），double只能有限JSON number，不接受NaN/Infinity。
+- SecretEdit只有`{"slot":n,"kind":0}`（Keep）、`{"slot":n,"kind":2}`（Delete）、`{"slot":n,"kind":1,"value":"synthetic"}`（Replace）；n仅六个WritableSecretSlot明示值。value仅Replace允许且必需，按严格Unicode→UTF8转换后走第5节Trim非空校验；Keep/Delete带value或重复slot拒。SensitiveInput无输出serializer，以上是私密输入形状，不可日志/审计原样输出。
+- CredentialBindingEdit闭集kind=0/1/2不携key，kind=3必需已登记ModelCredentialKey字符串key；未知kind/多余字段拒。PolicyTarget恰为kind=`accountDefault`+platformId/accountScope，或kind=`instance`+key（DriverKey三成员）；ManagedObjectKey精确kind仅`driver`/`plugin`/`provider`/`device`/`mcp`，ManagedCommand精确kind仅`driver`/`plugin`/`provider`/`mcp`（没有DeviceCommand），各自只能携本类型必需成员，不通过任意type名/反射反序列化。相同目标key按该类型定义的比较规则判重复，不能用显示名去重。
+- ConfigurationVersion wire为非负Int64十进制string（`0`或无前导零正整数），避免JS浮点损失；Guid型key采用非零小写N格式32ASCII string；cfg1/mg1 operation key按第7/8节字符串codec，不能互换命名空间。Provider/Plugin/Action/RegisteredId的字符串原文不改key、不做大小写折叠。数组每层typed/递归冻结，object/数组/string大小受第7节已明确的新profile预算；不存在允许任意object的逃逸分区。
+- 接入必须通过真实C# converter/共享pure parser并进行合成负例；以上是明确wire契约，不声称目前有HTTP路由、serializer或解析实现。配置/校验采用同一归一意图，JSON表示差异不改变幂等fingerprint。
 
 ## 3. 全字段typed分区
 
@@ -476,14 +492,33 @@ public sealed record RegisteredConfigurationView(
 
 - Registered三集合为按已登记key稀疏修改，空=不改、不删除未列项；Policies是102同一领域的逐对象适配，不新增FieldId。与整表PlatformPolicies同时Set/Clear重叠即拒绝；duplicate直接field/对象key拒绝。归一为内部closed typed atoms，公共消费仍七组Patch；别名重叠只允许完全相同Set/Clear/继承意图，否则AliasConflict，顺序不定优先级。
 - 143/144只改已登记插件/provider配置，不安装/删除实现，不增无限对象。Provider新注册credential分支当前无已批准registry时Unsupported；ModelCredentialKey不能包含env名或secret仓储名。KeepExisting也重验凭据用途/provider/新BaseUrl端点授权及出网政策；旧任意secret:/env:Unclassified内部保留但禁止读值/路由。官方、Panel/OneBot/Agent/NapCat/Cookie秘密不用于模型。
-- Unconfigured允许禁用provider暂存；需key transport的enabled provider不能通过最终整批校验。当前CompositionRoot:611～618/ModelTransport:239～243拒绝空key，**不是匿名能力**。固定主模型凭据适配只允许已确认DB覆盖和按真实BotConfig优先级的固定BOTAGENT_API_KEY/QQCHAT_API_KEY/OPENAI_API_KEY回落；不得Core动态GetEnvironmentVariable(name)。现有provider env:QQCHAT_API_KEY特殊处理与BotConfig别名差异须03明确，不只漏掉BOTAGENT别名后声称完全兼容。
+- Unconfigured允许禁用provider暂存；需key transport的enabled provider不能通过最终整批校验。当前CompositionRoot:611～618/ModelTransport:239～243拒绝空key，**不是匿名能力**。固定主凭据Startup沿BotConfig既有DB/用户覆盖及BOTAGENT_API_KEY→QQCHAT_API_KEY→OPENAI_API_KEY规则；HotSave ApiKey删除仅沿旧QQCHAT_API_KEY→OPENAI_API_KEY回落。已启动provider的旧env:QQCHAT_API_KEY沿CompositionRoot:635～657读取QQCHAT→OPENAI→settings.ApiKey，旧secret:apiKey仅取DB；这些不是同一个统一projector。Host在私有兼容适配中保留已知两种引用及阶段差异，并输出真实source/apply规则；其它任意secret:/env:保持Unclassified且禁路由，不能通过注册凭据把任意环境名放行。Core不得动态GetEnvironmentVariable(name)，不能谎称保存主槽后所有引用立即同值。
+- 动态路由resolver存在时，其授权/凭据不可用返回null是终止性不可路由，不能回落启动缓存复活已撤销凭据。当前宿主采用的Headless/Services/Agent/OpenAiClient.cs:283～285/371～373/595～597及独立Model副本均有该回落，03必须交三条路径的拒绝负例与迁移补丁；只有没有动态resolver的已登记旧兼容构造才可用启动缓存。这是新凭据安全语义的必要接入，不将独立Model存在或当前源码宣称已满足。
 - primary Model/BaseUrl及旧对应字段归一到同一用户override；Clear继承与Set恰等于环境仍是不同意图，拒冲突。primary Priority/Enabled先ReadOnly直到03确认。metadata同TX，circuit独立；启动EnsurePrimary只能受协调缺失初始化/投影，不能每次重写用户元数据。实际非primary路由被启动捕获，未证明热切换时RestartRequired，不能写DB就称Applied。
-- DriverKey三元Ordinal，PlatformId先非空再真实Normalize，scope/instance保留有效原文。空Instance仅旧具体实例ID，不等于AccountDefault；多实例新登记非空且唯一。旧二元/IgnoreCase查找只能唯一已登记匹配，否则安全歧义拒绝。现有Registry、Resolver、Switch、WhitelistGate和Feishu真实消费必须同批迁移，单改DTO无隔离证据。
-- Policy新Explicit("")是明确空拒绝，Inherit是继承账号default/兼容baseline，AllowAll显式全量；ActionRule Explicit(empty)明确无动作，Inherit的Actions必须空。Feature仅11项/无重复；动作须真实catalog允许，消息能力≠管理动作。旧二元策略迁AccountDefault；新实例覆盖同scope default，不跨scope回落；新账号无default采用明确安全基线，旧非canonical依赖legacy的账户先LegacyNeedsReview，不能默默拒绝旧业务。
-- **保持旧已确认语义**：私域空分区回落MessageWhitelist，官方有效空全允许，本地/飞书有效空全拦。pure legacy mapper把旧空翻译对应Inherit/AllowAll/ExplicitEmpty，不因新Clear规则偷改。legacy镜像仅qq.private/legacy、qq.official/legacy、local/legacy、feishu/default，不跨scope回写；全部更改需02/06确认。
-- Plugin canonical Key采用manager Ordinal、原文不变；旧store IgnoreCase/Trim迁移只接受唯一对照，大小写碰撞LegacyNeedsReview，不合并两个插件。DesiredEnabled不是Initialize/Shutdown或实际停止；initialized独立台账保证禁用后已初始化资源仍释放。
-- Device Key=null仅新设备意图；第一次TX生成Guid并持久，指纹仍未分配意图，重放回原映射不再生Key。配置写NameRaw/Key，内部持久ActiveBridgeName、DesiredName、RenamePending、DesiredEnabled；未远端改名返回RestartRequired。新UI按Key保身份；旧无Key全表六字段无法推断rename，要按经04/06确认的delete+create兼容策略或显式LegacyNeedsReview，不猜同名。
-- removed/disabled旧bridge连接必须显式门禁，不回落当前IsDeviceEnabled缺省true。原AgentDevices JSON禁止进ReadView；未知嵌套密码/key等新输入拒绝，合法旧六字段投影与未知兼容载荷内部保留。DeviceView仅允许字段/授权nameRaw，无原始字符串。实际修改旧路由/UI/资源需要共享补丁与真实负例，不称文档已修复。
+- DriverKey三元Ordinal，PlatformId先非空再真实Normalize，scope/instance保留有效原文。空Instance仅旧具体实例ID，不等于AccountDefault；多实例新登记非空且唯一。旧二元/IgnoreCase查找只能唯一已登记匹配，否则安全歧义拒绝。现有Registry、Resolver、Switch、WhitelistGate和Feishu真实消费必须同批迁移，单改DTO无隔离证据。配置目录由可信Host登记的配置声明提供，包含合法但disabled、缺凭据、未构造adapter的DriverKey；可以编辑已登记配置，不等于loaded registry。运行时索引、Resolve、Switch、入站名单与出站路由均按来源DriverKey三元，不由channel或同账号任意实例代替。配置目录不是任意输入创建实例的公共CRUD通路，Platforms不得因此反向引用Storage/Headless。
+- 负责人已选择同平台同账号多实例**共享会话上下文**：既有ConversationId(PlatformId,AccountScope,Kind,NativeTargetId,ThreadId)有意不增加InstanceId；相同五元会话归同一上下文，不同平台/账号/类别/target/thread仍隔离。保留既有raw conversation key及旧codec唯一映射，不重命名存储key或跨scope/大小写碰撞合并。共享的是历史/上下文，不是实例权限、策略、审批、凭据、连接状态或出站选择；每次入站及对应工具/回复仍保留并重验来源DriverKey，源实例不可用时明确拒绝/未知，不能任选同账号实例代发。当前InboundMessage/OutboundMessage没有来源实例字段，未来Wave2通过经过评审的关联envelope/路由状态承接，不把本版管理DriverKey当消息链已接入证据。相同MessageRef的重复投递需复用真实dedup端口，不能因不同InstanceId重复入史/回复；同一共享会话并发写需协调且实例A允许不替实例B授权。此选择不授权同一QQ号两个协议端同时在线。
+- Policy逐字段解析，不按整对象首次命中。Instance的Inherit/缺失Feature先继承同PlatformId/AccountScope的AccountDefault；AccountDefault的Inherit/缺失Feature才进该账号baseline。仅qq.private/legacy、qq.official/legacy、local/legacy、feishu/default四canonical账号可用对应兼容baseline，不跨账号/平台回落。新scope没有default或default Inherit时baseline明确为Enabled=false、ChatEnabled=false、Group=Explicit("")、Private=Explicit("")、Actions=Explicit([])；Features无覆盖只是不附加限制，不授予开关/名单/动作。旧非canonical曾实际依赖legacy且不能无损确定baseline时LegacyNeedsReview停止该对象迁移，不静默变成新deny。旧二元策略迁AccountDefault，空Instance绝不等同AccountDefault。
+- Toggle Enabled/Disabled、List Explicit/AllowAll、Action Explicit终止该字段继承；Explicit("")/Explicit([])明确空拒绝，不能回落；Inherit动作数组必须空。Feature逐项继承，Instance.Features空仍继承账号default的false。最终聊天取来源DriverKey已加载/可连接、DesiredEnabled、ResolvedChatEnabled、凭据就绪、该消息类别名单交集；最终Feature再交真实adapter hard capability、全局开关和Feature覆盖，显式true不能绕global false/hardcap false。Feature闭集11项无重复。
+- AllowedActions只能来自真实catalog canonical ID：当前QQ十项like/poke/emoji_like/recall/ban/kick/card/group_name/leave/send。Inherit经同账号default/baseline取得候选集合，再与全局AgentServerQqActions按旧parser所得集合、真实动作实现能力、平台及运行权限交集；全局空字符串沿旧默认安全四项，非空全错得到空集，未知/非canonical旧字符串不获得新canonical授权。消息hard capability不等于管理动作支持，不能由SupportsText推导QQ动作。
+- canonical兼容baseline由pure LegacyPlan按旧调用链无损构造：私域各类别按旧非空policy分区→旧分区字段→MessageWhitelist，最终空拒绝；官方按旧非空policy分区→官方类别分区字段，最终空AllowAll；飞书按对应非空policy类别分区→FeishuWhitelist，最终空拒绝且保留原raw target/别名匹配。local/legacy保留旧联集兼容事实：任一旧policy分区非空时取两分区union，否则LocalChannelIds；当前local wildcard解析的all标志不被消费，不将旧“*”翻成通用AllowAll放开本地。新strict名单分区不能无声改变旧local不分类联集求值。旧switch schema<1交集及schema>=1覆盖先按原规则纯解析，不重写成统一假设。
+- Instance永不镜像legacy。仅上述canonical AccountDefault可作兼容投影且不跨scope；QQ群/私聊可分别投影。local/Feishu两typed名单无法无损压成单legacy字符串时，typed policy是真源；旧单字符串只留内部兼容投影/原值，禁止group-first/private-first/union/清空后反向恢复typed policy。旧单名单编辑按对应兼容规则生成本批意图；新strict与Policy异意图重叠AliasConflict，不能制造第二真源。旧HTTP先完成原纯解析/优先级再归一，不用新strict冲突规则暗改旧请求顺序。
+
+| 当前字段 | 解析结果（之后仍受最终门禁） |
+| --- | --- |
+| Instance明确值 | 本字段明确值 |
+| Instance Inherit/Feature缺失 | 同账号AccountDefault的同字段 |
+| AccountDefault明确值 | 本字段明确值 |
+| canonical AccountDefault Inherit | 对应canonical兼容baseline |
+| 新scope无default/default Inherit | 明确新scope deny baseline |
+| 旧非canonical曾依赖legacy | LegacyNeedsReview，不静默迁移 |
+| Explicit空 | 空集，不再回落 |
+| AllowAll | 仅名单不限，不绕其它权限 |
+- Plugin canonical Key采用manager Ordinal、原文不变；旧store IgnoreCase/Trim迁移只接受唯一对照，大小写碰撞LegacyNeedsReview，不合并两个插件。DesiredEnabled不是Initialize/Shutdown或实际停止；保存被运行时消费后DesiredEnabled=false立即禁止新的工具/IO/后台派发，不能因Shutdown pending继续调度。initialized独立台账保证禁用后已初始化资源仍释放；在途动作按真实取消/Unknown规则，不冒称已撤副作用。04必须提供门禁消费和收尾证据。
+- Device Key=null仅新设备意图；第一次TX生成Guid并持久，指纹仍未分配意图，重放回原映射不再生Key。Changed回执包含DeviceKeyAssignment(InputOrdinal,Key)：InputOrdinal是本批Set设备数组从0开始的原始序号，仅为Key=null的新项生成对应映射，排序按ordinal，unique且key非零；无新项为空。Save/Find/重放回同一持久映射，不按名称再配key，Read也能按授权编辑值恢复已持久key。UnknownCommit不生成猜测映射，须原key Find。
+- 配置写NameRaw/Key，内部持久ActiveBridgeName、DesiredName、RenamePending、DesiredEnabled。负责人已批准删除后**禁止连接**，这是对旧IsDeviceEnabled未匹配默认true的有意收紧，不宣称旧等价。删除/禁用在同一配置TX持久撤销门禁；删除另外持久tombstone，关联稳定Key及全部已登记active/desired桥名，重启/重放不复活。hello注册、已在线对象选择、每次任务/控制派发均重验当前门禁，删除后关闭连接、停新派发；在途不能保证撤回者报告CancelRequested/Unknown，不把abort称远端副作用已撤销。Key或旧名字命中撤销记录时不能沿未匹配默认启用、任意在线桥或自动注册回落。
+- 撤销门禁以已提交事实为准；commit后publish/重建失败、撤销状态未同步或门禁读取失败均fail-closed，禁止沿旧SettingsBox允许快照继续连接/派发。响应仍如实区分Committed与未Applied，不能通过虚构事务回滚来恢复允许。现有共享Token+自报hello.host只证明通道认证及路由名，不证明物理设备身份；本轮保证稳定Key/已登记名字撤销，不宣称能阻止持有共享Token者冒用另一个已授权名字，不能把自报Key当新的授权凭据。逐设备认证若需要须另冻结协议与迁移，不默默新增接口。
+- 新UI按Key保身份。按同一Key改NameRaw只改DesiredName；RenamePending期间未删除且enabled的原ActiveBridgeName可继续对应原Key，不绑定另一设备；未确认远端改名返回RestartRequired。确认新名字且唯一匹配后再切active；旧名字此后撤销，不得误连其它Key。旧无Key全表只能对唯一已登记旧名保Key；省略旧设备是删除，改名字只能delete-create（不推断rename、不保旧Key），新项分配新Key并回执。这一兼容降级需响应/UI明确提示刷新后用Key保身份；名称歧义、碰撞或企图复用已删除/tombstoned名字则整批LegacyNeedsReview且副作用0，不自动解除撤销。未知从未登记名字的旧首次连接规则不因本次“删除”决策自动改成全局deny，但不能借此复活撤销Key/名字；新strict注册/授权不获得旧自动授权。这里不是新桥身份认证协议，连接Token等现有认证门禁继续必需。
+- 原AgentDevices JSON禁止进ReadView；未知嵌套密码/key等新输入拒绝，合法旧六字段投影与未知兼容载荷内部保留。DeviceView仅允许字段/授权nameRaw，无原始字符串。实际旧路由/UI/资源接入由00共享补丁完成：AppSettings、AgentBridgeServer（hello/选择/worker/control）、AgentCommandService路由等都须真实负例，不能仅改IsDeviceEnabled。旧产物不认识tombstone，回退须先停桥入口/任务派发、恢复相容整套版本及数据库，单换旧binary不保证撤销门禁；离线演练前不允许生产回退。
 
 ## 4. 配置FieldId注册表
 
@@ -661,13 +696,13 @@ public sealed class SensitiveInput : IDisposable
 ```
 
 - 无公开Value/UseUtf8(callback)，Storage通过Core明确internal/friend seam消费，不能把可逃逸ReadOnlyMemory借给任意调用者。factory私有复制、ToString固定[redacted]、输出serializer拒绝。首次await前writer取得私有owned副本，ct/Dispose不能擦正在提交副本，finally清零。传输string/JSON临时副本不承诺全部擦除。
-- Replace(nonempty UTF8)经旧秘密Trim规则归一，Delete/Keep无值，重复slot/非法组合整批拒绝。六槽仅既有五槽加VerificationToken安全迁移候选，第六槽未取得01/02/06确认不实施；不会增加其它秘密可写能力。
-- 旧兼容：Missing/null→Keep；apiKey/agentServerKey空→Delete；ttsApiKey/feishuAppSecret/feishuEncryptKey空→Keep且clear true优先；旧verificationToken空→Delete。clear类型容错只由pure LegacyPlan保留。旧audit ttsKey仅忽略的审计输入，不新造可写槽。QQ官方Secret/clear任意大小写存在含null/空/false均在副作用前拒绝，任何来源只直接读取QQCHAT_OFFICIAL_APP_SECRET，面板不收/存/导出/回显。
+- Replace须严格UTF8解码（非法序列拒绝，不使用replacement fallback），再按旧string.Trim规则归一；归一后非空才允许Replace。零字节、全空白、非法UTF8均ValidationFailed，不能降为Delete或Keep；只有显式Delete删除。Delete/Keep不得携值，重复slot/非法组合整批拒绝。六槽仅既有五槽加VerificationToken安全迁移候选，第六槽未取得01/02/06确认不实施；不会增加其它秘密可写能力。
+- 旧兼容：Missing/null→Keep；apiKey/agentServerKey空→Delete；ttsApiKey/feishuAppSecret/feishuEncryptKey空→Keep且clear true优先。负责人2026-10-11明确选择“旧空值整批拒绝并提示刷新”：旧verificationToken含空/纯空白string时在任何副作用前返回LegacyNeedsReview，整批配置/秘密/mood/TTS均不执行；不降为Keep或Delete。非空旧token按Replace处理；新strict请求只通过显式SecretEdit.Delete删除。clear类型容错只由pure LegacyPlan保留。旧audit ttsKey仅忽略的审计输入，不新造可写槽。QQ官方Secret/clear任意大小写存在含null/空/false均在副作用前拒绝，任何来源只直接读取QQCHAT_OFFICIAL_APP_SECRET，面板不收/存/导出/回显。
 - VerificationToken一次迁移同TX写新slot、Initialized/Deleted标记、移除settings明文及用户版本事实；只有尚未初始化时可用固定环境首次种子，删除不会重启复活。AppSecret/EncryptKey原基础设施环境优先与Token行为首次种子不同，不混同source metadata。
-- Token旧GET明文取消与UI未改omit/明确删除按钮同批；仅隐藏GET会让旧UI空串Delete。缓存旧UI兼容必须06提出版本识别或明确LegacyNeedsReview拒绝与更新路径，现有旧请求无法区分“空未改”与“有意删除”，不谎称可完全透明兼容。新行为迁移未批准/替代通路未验收前保留旧有效通路且不实施单边隐藏。
+- Token旧GET明文取消与UI未改omit/明确删除按钮同批；旧UI空串统一按已裁决的LegacyNeedsReview整批拒绝并提供安全刷新提示，不能返回原Token片段作为更新提示。GET只给configured/source；旧Missing/null保留，非空仍可更新，新UI按strict显式Delete。旧空请求删除功能明确退出兼容范围，不能谎称完全透明兼容。06须同批实现HTTP错误/刷新提示/UI删除入口及旧请求负例，在替代通路验收前不单边隐藏或拆断管理通路。此次业务裁决不等于新schema/宿主行为验收。
 - 行为真源SQLite用户配置；19旧入口未改的属性见矩阵3.2内部carry-forward，秘密/infra不因public setter新增槽。Host environment是固定只读overlay，不普通Save回写用户配置，不绕version。Legacy importer用同验证/writer，CLI只读，文件编辑不是自动真源。
 - 主model/base/key维持已有用户override胜固定环境；ApiKey/AgentServerKey Delete仅删DB覆盖，允许环境回落不等于彻底吊销。飞书AppSecret/EncryptKey维持实际基础设施环境优先、runtime捕获需Restart；Token首次播种规则单列。
-- FastModel/FastReply本候选**保持旧启动环境优先**，不擅自改为仅播种。热保存与启动采用同effective projector：环境有值时用户值虽Committed但EffectiveSource=Environment，不称新值已运行；环境缺省时用户值按原业务生效。请求/userVersion、effective source与apply状态分别展示。这是消除热/重启不一致的候选，需要03/06确认，未批准不改旧源码。
+- FastModel/FastReply保留现有分阶段规则：HotSave直接采用本批用户值（WebUiServer.Settings.cs:691～700）；Startup按BotConfig.cs:58～59固定环境别名优先，未配置才采用保存值。不再以统一effective projector改变旧行为。Read的effectiveSource/applyState报告当前实际运行值；字段规则须同时说明“热保存用户值生效，重启可能被环境覆盖”，不能将未来启动值谎报为当前生效值。环境是否存在只从可信Host投影取得，不在Read重新读取或返回环境正文。03/06仍须确认此兼容规则及对应wire表达。
 - 迁移不读真实配置；只用合成旧格式及环境。新schema版本具体值由01实现评审登记，现schema9不直接提高；旧C2未来版本拒绝保留。回退新schema/secret时恢复前镜像和整套旧产物，不能混DLL或运行中替库，未经演练不说旧版本可读新DB。
 
 ## 6. 单writer、提交与兼容顺序
@@ -676,12 +711,12 @@ public sealed class SensitiveInput : IDisposable
 2. 一次Storage AppDatabase.Write内捕获返回结果（真实入口是void Action，没有臆造Write<T>）；所有startup/import/HTTP/provider/plugin配置参与者共享协调。同连接先持久key治理floor、查scope+key ledger；同参结果先于容量/CAS，异参冲突，不重新发布/应用。
 3. key门禁及最终跨域校验通过→同TX写全部用户配置、允许秘密、provider/plugin元数据、递增version、安全审计、receipt/未开始steps。任何参与写失败throw整体回滚，包括秘密/审计。不能在mutate调用各自独立Save，也不嵌套AppDatabase.Write。Rejected若仅floor安全更新，结构结果返回让floor提交；没有用户配置部分提交。
 4. NoChanges是最终规范意图对当前事实无变更，同TX写受保护参数与NoChanges receipt/安全结果，version不变。只保留请求不含原值；重放返回原决策，别的保存不会把原NoChanges重新执行。
-5. commit之后第一执行者publish运行快照，再执行被登记应用步骤；外部/非幂等阶段先记Started、再结果，崩溃Unknown不自动重做。配置和发布/重建/裁消息/清台账/调度/TTS/mood不是同事务；Replay/Find不触发这些副作用。后续step账本写失败保留Unknown，不伪称应用或回滚。
+5. 只有首次执行、Decision=Changed且CommitState=Committed时才publish运行快照并执行登记应用步骤。Rejected、NoChanges、Replay、Find、UnknownCommit全部禁止Exchange及重建。真实SettingsBox.ApplyPersisted的persist参数是Action，正常返回必定Exchange；因此不能直接把结构拒绝结果塞进该回调。01提交结果由00自有Host条件发布接入点消费：在同一串行writer范围内保持读取基准→持久化结果→条件发布的顺序；仅满足上述条件时才进入Exchange/published，禁止在旧锁外先判断再无条件Apply，避免并发倒序发布。该接入点是待实现共享补丁，不是已有接口，也不要求用throw回滚已写floor的合法拒绝。外部/非幂等阶段先记Started、再结果，崩溃Unknown不自动重做。配置和发布/重建/裁消息/清台账/调度/TTS/mood不是同事务；后续step账本写失败保留Unknown，不伪称应用或回滚。
 6. apply报告最多八种步骤是聚合结果：任何目标失败/需重启/unknown不得该步骤或总状态标全Applied。每对象状态通过C4 Inspect恢复，不能用八条回执掩盖128对象未完成。新版本到来不把旧未应用版本自动标Applied，superseded仍保留真实历史事实。
 7. 请求ct在提交开始前CancelledBeforeCommit；提交点之后不由HTTP取消异常推断NotCommitted。DB commit错误有不确定窗口则UnknownCommit+原key，Find核对；不盲换key。提交后的必要账本/安全收尾不依赖请求ct，资源仍有有界任务/停机语义。
 8. 重启仅恢复最新Committed用户配置及安全可重建runtime投影；不重放裁剪、清审批、通知或外部动作。TTS按version只合并一次，Unknown非幂等写不自重做。需幂等marker/temp替换须00/06另审，不把现有WriteAllText当原子。
 9. 旧HTTP无ExpectedVersion：纯LegacyPlan由writer在锁/同TX最新baseline上按旧稀疏规则合并，不能强加新CAS让旧client失效；新的Save总要求版本。旧客户端若原来没有key，兼容adapter只能分配单次请求key，不宣称网络自动重试已幂等；新UI必须持有原key/Find。
-10. 旧mood独立操作：LegacySaveOutcome(ConfigurationResult,LegacyActionResults)，每动作独立namespace key、状态NotStarted/Applied/Failed/Unknown及安全错误；配置NoChanges也不绕过动作幂等。不会提交配置后声称mood成功或同一个SQLite回滚，响应丢失必须查原事实。
+10. 旧mood独立操作：LegacySaveOutcome(ConfigurationResult,LegacyActionResults)，每动作独立namespace key、状态NotStarted/Applied/Failed/Unknown及安全错误；配置NoChanges也不绕过动作幂等。实际MoodStore.SetText的false混合非法/未变化，SaveLocked吞持久化异常，true也不是持久成功证据；禁止从bool或“无异常”推断Applied。04/00须复用/扩展可观察持久结果和相同规范意图的纯校验，不能识别真实终态时只报Unknown；不可为了成功响应直接改旧bool含义。不会提交配置后声称mood成功或同一个SQLite回滚，响应丢失必须查原事实。
 11. 审计只FieldId/允许对象种类或保护标识、version/decision/slot/action/结果，不写值、URL、客户端任意字段名；不提前result=applied。HMAC只内部请求等同性，现有SHA256链不冒称HMAC/DB加密。
 
 ## 7. key时间、恢复与预算
@@ -712,7 +747,7 @@ public sealed class SensitiveInput : IDisposable
 | Plugin/Provider | 128/64 edits，key128 UTF16 units | 已登记原文key，未知/duplicate拒；不创建任意credential/对象 |
 | 合计修改 | 142直接槽+32policy+128plugin+64provider+6secret≤372意图 | 结构表/逐对象重叠拒；防通过空分区/keep灌无限数组 |
 | Config/management账本 | 所有代、所有命名空间合计4096条，每Authority+Subject+Resource256条 | 同参重放先查；未过期/未终态不驱逐；满拒新执行。不仅当前generation |
-| receipt | 每条8192byte、fingerprint32byte、step8/errors32 | 固定安全类型，超过返回安全失败不做截断伪成功；约32MiB活动payload不是DB总盘或堆预算 |
+| receipt | 每条8192byte、fingerprint32byte、step8/errors32、Device映射≤128 | Device映射与完整安全回执一并计算最终UTF8编码预算，并预留八步骤合法终态/安全错误码的最坏编码空间，必须在用户写/version递增/commit前检查；超过返回CapacityExceeded全批不改，不能commit后截断或漏key。仅内部compact ledger编码可紧凑表示，公开wire仍按精确类型；约32MiB活动payload不是DB总盘或堆预算 |
 | HMAC key | 当前+有receipt的代≤4097代、每代32byte | raw上限131104byte，无receipt才删oldkey/codec；计算与治理元数据另计资源 |
 | List page | default50；1..100；cursor≤512byte | caller+kind+catalog revision+位置签名，无持久paging session；stale重读 |
 | key/TTL | ≤96 ASCII；TTL86400s；未来≤300s | same key异参拒绝、时间checked、回拨/重启/备份负例；mgmt命名空间同样受控 |
@@ -755,7 +790,8 @@ public enum ManagedResultCode
     UnsupportedAction = 4, VersionConflict = 5, ValidationFailed = 6,
     StaleCursor = 7, InvalidCursor = 8, IdempotencyConflict = 9,
     KeyExpired = 10, KeyGenerationMismatch = 11, CapacityExceeded = 12,
-    StorageUnavailable = 13, Unknown = 14
+    StorageUnavailable = 13, Unknown = 14,
+    ClockRegression = 15, UnsupportedContractRevision = 16
 }
 public sealed record ActionCapability(
     ManagedAction Action, bool Supported, string ReasonCode);
@@ -801,6 +837,15 @@ public sealed record ManagedOperationResult(
     ManagedResultCode Code, bool Replayed, ManagedReceipt? Receipt);
 public sealed record ManagedCancellationResult(
     ManagedResultCode Code, ManagedOperationState State);
+public enum ManagedPermission { Inspect = 0, Execute = 1, Query = 2, Cancel = 3 }
+public sealed record ManagedAuthorizationRequest(
+    ConfigurationCaller Caller, ManagedObjectKey Target,
+    ManagedPermission Permission, ManagedAction? Action);
+public interface IManagedAuthorization
+{
+    ValueTask<bool> IsAllowedAsync(ManagedAuthorizationRequest request,
+        CancellationToken ct = default);
+}
 public interface IManagedCapabilities
 {
     ValueTask<ManagedPage> ListAsync(ConfigurationCaller caller,
@@ -808,7 +853,7 @@ public interface IManagedCapabilities
     ValueTask<ManagedInspectResult> InspectAsync(ConfigurationCaller caller,
         ManagedObjectKey key, CancellationToken ct = default);
     ValueTask<ManagedValidationResult> ValidateAsync(ConfigurationCaller caller,
-        ConfigurationVersion expected, ConfigurationPatch changes,
+        ConfigurationValidationRequest request,
         CancellationToken ct = default);
     ValueTask<ManagedOperationResult> ExecuteAsync(ConfigurationCaller caller,
         ManagedExecuteRequest request, CancellationToken ct = default);
@@ -819,46 +864,55 @@ public interface IManagedCapabilities
 }
 ```
 
-- List/Inspect纯安全查询不读秘密正文；DesiredEnabled取真实配置而非当前Snapshots硬编码true，RuntimeState/connection独立。Validate针对整batch跨域纯校验、expected不保留版本、不写DB/秘密/外部测试；Save仍最终重验，不设第二条Configure写路。Validate不能保证随后Save一定成功。
+- List/Inspect从可信配置目录与运行台账投影安全结果，不读秘密正文；DesiredEnabled取该DriverKey真实配置/策略，RuntimeState、Connected与凭据就绪独立。已登记但未加载返回NotLoaded而不是NotFound，不继承Registry硬编码Enabled=true或虚报Connected/Starting。保存不能证明adapter构造/重连生效；未完成生命周期消费如实RestartRequired/NotLoaded，不报Applied。Validate要求独立ConfigurationAccess.ValidateConfiguration，含非Keep秘密须另有EditAllowedSecrets；不从SaveConfiguration推导验证权，也不因验证权授予写权。其请求包含ContractRevision、ExpectedVersion、完整Patch及本批SecretEdit，使用与Save相同的类型/秘密/跨对象归一和校验规则；首次await前私有复制并接管秘密，finally清零，不能因调用者Dispose改变结果。其expected只检查、不预留版本；无operation key、不写floor/receipt/DB/秘密、不执行外部测试、不种植Token。Save仍在真正事务内最终重验，不设第二条Configure写路；Validate成功不能保证随后Save成功。
+- IManagedAuthorization是候选Core跨模块授权seam，由可信Host提供当前策略实现；当前WebUiServer.IsAuthorized不是该实现。Caller稳定身份由认证adapter产生，body不能声明权限。SaveConfiguration和EditAllowedSecrets都不授予任何管理动作。Inspect/List只展示当前Inspect授权的目标（Permission=Inspect、Action=null），未授权对象和能力不泄露；cursor仍绑定主体和可见catalog revision。
+- Execute在持久受理前与外部dispatch前分别重新调用授权seam，Permission=Execute且Action是闭集command的确切动作，target/action/revision/key不可在队列中替换。撤权后尚未dispatch的已受理操作终结Failed/Forbidden，不外部执行；授权不可判定则不执行并保留Unknown安全状态。支持能力不等于允许当前调用者执行；服务身份只继承原caller事实，不自动system提权。Query/Cancel按receipt绑定的原target/action分别核Permission=Query/Cancel，原caller/resource与key绑定仍必需；撤权不得通过旧receipt重放绕过，Forbidden不暴露存在性。已发远端动作的取消/未知窗口继续如实报告。
 - cursor signed closed payload绑定caller/resource/kind/catalog revision/排序位置≤512byte，目录变化StaleCursor，limit0默认50，1..100否则reject；不持久无界分页会话。实现codec/hashkey及06wire要确认后落地，不创造HTTP路径。
-- ManagedCommand按对象闭集；Device当前仅Inspect/Validate/Configure，没有虚构桥热启停动作。当前缺管理adapter的Driver/Plugin/Provider/MCP动作明确Unsupported，未登记NotFound，**interface存在不等于动作支持**。各后续波次必须通过真实adapter/mocks/取消与释放后才能Supported=true，MCP Wave4必选不豁免。
+- ManagedCommand按对象闭集；Device当前仅Inspect/Validate/Configure，没有虚构桥热启停动作。MCP RegisteredId须1..128 UTF16 units、无控制字符、Ordinal原文稳定，由受控注册流程产生；不可用显示名、URL或协议sessionId替代。更改endpoint不变对象身份；删除后再登记必须新ID且不重用保留receipt的旧ID，旧receipt只绑定原登记事实，不执行在新对象上。当前缺管理adapter的Driver/Plugin/Provider/MCP动作明确Unsupported，未登记NotFound，**interface存在不等于动作支持**。各后续波次必须通过真实adapter/mocks/取消与释放后才能Supported=true，MCP Wave4必选不豁免。
 - Execute只使用已登记对象参数，无任意URL/env/secret输入；ExpectedDescriptorRevision不匹配VersionConflict，避免之前Unsupported的旧意图在能力改变后变成新执行。Unsupported/纯validation拒绝未被接受且无副作用；不宣称已有accepted receipt。真支持动作只有持久Accepted/NotStarted后才外部执行，不接受后内存失踪。
-- 管理key独立`mg1`namespace、同第7节generation/TTL/floor/HMAC、同一总体4096/256有界预算；绑定caller/resource/target/action/descriptor revision。配置key不能作管理key。Replay/Query绝不重发远程动作；Unknown不自动重试，取消不撤已完成远端副作用。
+- 管理key独立`mg1`namespace、同第7节generation/TTL/floor/HMAC、同一总体4096/256有界预算；绑定caller/resource/target/action/descriptor revision。配置key不能作管理key。治理失败按语义映射ManagedResultCode，不强转C3枚举数值：回拨/Tick倒退/checked溢出→ClockRegression，未知契约版本→UnsupportedContractRevision，未来key/非法结构→ValidationFailed；过期/代不符/满额/异参分别映射同名码，事务失败且明确未提交→StorageUnavailable，不确定提交→Unknown。Replay/Query绝不重发远程动作；Unknown不自动重试，取消不撤已完成远端副作用。
 - Query/Cancel重新核授权；Cancel仅请求协作取消，CancelRequested不冒称Cancelled，ct停止等待不等于远端已撤销；重复Cancel不会重复发非幂等外部动作，仍查询同key。需要协议cancel时通过05已冻结真实版本，不臆造SDK。
 - Driver停止退订、结束owned任务/释放连接，投递已发不可保证撤回；Plugin initialized台账独立enabled、禁用后不新调工具/停机释放已初始化对象；Provider不强套Start/Stop，测试取消释放本地request/stream而不改circuit配置；MCP连接/会话/取消/释放后续真实adapter验收。报告未知，不把本地任务完成当远端成功。
 - C4协议/type是否足以01管理准入及谁实现unsupported adapter由真消费者确认；一律不得以readonly catalog或当前Unsupported替代将来验收。Core仅必要跨模块contract，不搬Engine插件实现进Core。
 
 ## 9. 消费确认、用例与共享补丁
 
-### 9.1 角色确认表（等待真实报告）
+### 9.1 消费确认与负责人裁决
+
+review-2完整技术面已获六角色同hash接受，见总纲20.6；本版只将负责人“禁止连接，共享会话”落实为第3节语义及9.3确切划分，Token旧空拒绝刷新保持。01/02/04/06按这两项及相应路径窄确认；03/05表面无变只核差异并绑定，不重开完整技术评审。实际freeze与写权只在总纲21登记；阶段一开工不等于Wave1准出，业务裁决也不冒称实现通过。
 
 | 角色 | 本具体版本必须核对 | 状态 |
 | --- | --- | --- |
-| 01 | Core依赖与完整类型、整TX/NoChanges、floor/epoch/HMAC/capacity、迁移/schema/内部原语、C4管理seam | 未确认；00/设计顾问不代签 |
-| 06早期 | typed wire/owned secrets、旧HTTP与UI兼容、身份及安全方案边界、提交/Find/部分应用、TTS替换seam及回退 | 未确认；不等于Wave5准出 |
-| 02 | 三元及PolicyTarget、旧名单继承/官方empty、Resolver/Feishu/switch真实消费，飞书secret/env | 未确认 |
-| 03 | primary意图/credentials runtime、fast旧环境投影、路由热/重启、circuit独立 | 未确认 |
-| 04 | DeviceKey/nameRaw/rename与旧连接门禁、插件ID/初始化收尾、mood/TTS独立动作 | 未确认 |
-| 05 | C4预留MCP闭集及取消/释放、unsupported当前边界，后续Wave4不得豁免 | 未确认 |
+| 01 | 删除/tombstone事务与Key映射、会话保持旧标识、9.3文件/namespace/内部原语 | review-2接受；本版窄确认见总纲21 |
+| 06早期 | 旧无Key删除/改名兼容、连接及派发门禁共享补丁、来源实例路由/回退 | review-2接受；本版窄确认见总纲21；非Wave5准出 |
+| 02 | 同账号共享上下文与实例策略/来源路由不共享，旧key与dedup兼容 | review-2接受；本版窄确认见总纲21 |
+| 03 | primary意图/credentials runtime、fast旧环境投影、路由热/重启、circuit独立 | review-2接受；未改变表面，差异绑定见总纲21 |
+| 04 | 删除/tombstone、稳定Key改名、连接/任务/控制与在途取消 | review-2接受；本版窄确认见总纲21 |
+| 05 | C4预留MCP闭集及取消/释放、unsupported边界，Wave4仍实体验收 | review-2接受；未改变表面，差异绑定见总纲21 |
 
 “确认”只能含实际执行者、时间、本文件hash、手册需求逐项、源码调用点、接受/异议及具体建议，不仅同意方向。角色技术审查不是负责人对兼容业务、安全方案或资源测量预算的批准；仍需批准项由00集中提报，不重复询问例行文档继续授权。
 
 ### 9.2 合成行为矩阵与失败归属
 
-- C3：完整多分区合法+秘密/provider/plugin一批；末段非法类型/跨字段拒全批；每一个实际TX写点故障（settings、secret、metadata、version、ledger、audit）全回滚；失败不publish，秘密失败不得吞。
-- 冻结/wire：首次await后改源数组/Dispose输入不能改变fingerprint/持久值；所有Read/ToString/JSON秘密无值/头尾，Hidden无value/nameRaw，device未知嵌套拒，nameRaw编辑不回写mask。
+- C3：完整多分区合法+秘密/provider/plugin一批；末段非法类型/跨字段拒全批；每一个实际TX写点故障（settings、secret、metadata、version、ledger、audit）全回滚；失败不publish，秘密失败不得吞。条件发布专项：Rejected/NoChanges/Replay/Find/Unknown的Exchange及RebuildRuntime计数均0，首次Changed+Committed为1；floor-only拒绝允许floor持久化而用户版本不变，并发提交不得旧版覆盖新版。
+- 秘密/Validate专项：非法UTF8、零字节和Trim后为空的Replace均拒绝且不删除旧值；显式Delete与Keep区别验证。Validate包含秘密时发现与Save相同的跨域错误，Disposed调用者buffer不影响owned副本；Validate前后floor/ledger/secret/settings不变，未知契约及mg1 clock错误映射不依赖enum强转。
+- 冻结/wire：首次await后改源数组/Dispose输入不能改变fingerprint/持久值；所有Read/ToString/JSON秘密无值/头尾，Hidden无value/nameRaw，device未知嵌套拒，nameRaw编辑不回写mask。codec逐层未知/重复/错大小写/escape后重复/非法Unicode、Keep/Clear携值/Set-null、ListRule显式空与继承、Secret未知slot/重复slot、registered-null、Int64 string安全边界均整批拒绝负例或明确合法例，不以serializer默认忽略替代。
+- Device回执：多个null-key新项按原ordinal唯一映射，同key Save/Find/重放逐字同映射且不再分配；预算含映射与未来步骤最坏编码，边界8192/8193在提交前判断，拒绝不产生用户版本/设备写；NoChanges映射空，Unknown只按原key恢复，不按name猜key。
+- 管理授权：仅Save权不能Execute，仅Validate权不能写；List不显示未授权对象；受理后撤权则dispatch前拒绝且外部计数0；重放/Query/Cancel重新授权、不泄存在性，queue内容不可替换target/action/revision。插件禁用且Shutdown pending时新工具/IO/后台派发为0；mood吞写错误不能Applied；MCP删除再登记新ID不继承旧receipt。
 - 并发/幂等：同version竞争；同key同参/异参、合法不同规范表达、primaryClear/Set不同意图；NoChanges响应丢失→别人改配置→原key返回原决策；ct提交前/跨提交点、commit不确定供Find，重放无二次发布/清理/文件IO。
 - 时间/容量：fake真实IClock24h/未来300边界、wall回拨/Tick倒退/算术溢出、floor事务失败后不能假Expired；受控重启新代、整体备份回退无旧key重做；跨代/命名空间/主体满额、Pending/Unknown不驱逐、codec/HMAC保留和有界清理。
-- 对象：同scope多实例/账号default vs空instance、旧official空允许/私域继承/local与飞书空deny、legacy不跨scope镜像、IgnoreCase→Ordinal碰撞；provider历史secret/env引用越权、Keep改BaseUrl送key拒绝、Unconfigured transport拒、primary只读项/非primaryRestartRequired、fast环境重启一致。
-- 兼容：完整142/9旧missing/null/Clamp/清除优先、19内部载荷与48readonly、无ExpectedVersion的旧稀疏writer；Token首次种子/删除不复活/缓存旧UI空串；旧device全表无法识别rename时明确拒审或批准delete-create、禁用/移除连接不default-enable；旧secret/用户配置schema合成迁移+整套旧产物/前镜像回退。
+- 对象：同scope多实例/账号default vs空instance、旧official空允许/私域继承/local与飞书空deny、legacy不跨scope镜像、IgnoreCase→Ordinal碰撞；provider历史secret/env引用越权、Keep改BaseUrl送key拒绝、Unconfigured transport拒、primary只读项/非primaryRestartRequired。Fast分别测无环境、仅QQCHAT别名、BOTAGENT别名优先：热保存采用用户值，重启按旧环境规则投影，Read如实报告当前阶段而非要求两阶段值相同。
+- 兼容：完整142/9旧missing/null/Clamp/清除优先、19内部载荷与48readonly、无ExpectedVersion的旧稀疏writer；Token首次种子/删除不复活/缓存旧UI空串；设备同Key改名pending/唯一确认/旧名撤销，旧全表省略delete与改名delete-create、重放/重启后tombstone、hello/在线选择/worker/control拒绝且外部新IO为0、歧义/删除名复用整批拒审。共享会话同五元跨实例复用旧key/历史、相同MessageRef不重复入史或回复、并发协调、B拒绝不借A权限、来源失效不换实例发；跨平台/账号/类别/target/thread不共享。旧secret/用户配置schema合成迁移+整套旧产物/前镜像回退，旧binary不支持撤销时先关闭桥入口并演练。
 - 应用/C4：各publish/运行重建/外部TTS失败Committed事实留存、Find查询最新真实step、不自动重做unknown；mood配置组合两事实，TTS同version合并一次且只合成临时target；unsupported不得远程IO；真实supported动作每个启停/取消/资源释放/远端unknown专项。
 - 只使用现有真实ReviewRemediation/SettingsScope/Safety/Production/Architecture等工程和IntegrationHarness，新增测试文件/公共入口先认领；IT前单独Rebuild Headless，修改UI运行真实FrontendProbe。上述用例**未执行**，没有编造新测试名/工程/全绿。
 - 当前静态缺口归既有源码或0.2设计，非已复现产品故障；未来新失败按本批实际改路径/hash归属，未定位或兼容不明冻结受影响下游，保留架构棘轮/断言，不提高阈值换绿。
 
 ### 9.3 路径与回退安排
 
-新Core/Storage文件仍是候选：`src/BotAgent.Core/Domain/Configuration/ConfigurationContracts.cs`、`Domain/Ports/IConfigurationChanges.cs`、`Domain/Management/ManagedCapability.cs`、`src/BotAgent.Storage/ConfigurationStore.cs`；最终划分由01/00确认，不当已有入口/自动写权。C4动作契约归Core跨模块最小类型，真实implementation按各波次而非搬全部到Storage。
+阶段一精确拟划分由01/00窄核后在总纲登记写权：新`src/BotAgent.Core/Domain/Configuration/ConfigurationContracts.cs`承载第2～7节类型，namespace BotAgent.Domain.Configuration；新`Domain/Ports/IConfigurationChanges.cs`仅拆出第2节interface，保持同一BotAgent.Domain.Configuration namespace，不因物理Ports目录改变冻结FQN。新`Domain/Management/ManagedCapability.cs`承载第8节类型，namespace BotAgent.Domain.Management；新`Domain/Ports/IManagedCapabilities.cs`仅拆出IManagedCapabilities及IManagedAuthorization，保持同一BotAgent.Domain.Management namespace。C4真实动作implementation按各波次，不搬全部到Storage。
 
-00最终共享补丁队列为真实`src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs`、`AuditLogStore.cs`、`BotConfig.cs`、`ModelProviderStore.cs`，`Services/AppSettings.cs`、`SettingsBox.cs`、`Settings/SettingsHotReload.cs`，`Adapters/Panel/WebUiServer.Settings.cs`、`WebUiServer.cs`、`wwwroot/app.js`及`Host/CompositionRoot.cs`；平台/模型/Engine源改动须本波次逐文件认领/交接。没有本批代码写权，不删除旧保存通路，不同时给多个执行者写同文件。
+Storage新`src/BotAgent.Storage/ConfigurationStore.cs`承载C3实现，namespace BotAgent.Storage，复用现有唯一AppDatabase.Write；现有`AppDatabase.cs`/`SecretsStore.cs`新增schema/version/ledger/tombstone及同连接内部原语。共享Host调用确需内部同连接原语时，只准新增`src/BotAgent.Storage/ConfigurationStorageBridge.cs`窄桥和`Properties/AssemblyInfo.cs`的准确friend范围（BotAgent.Headless、BotAgent.ReviewRemediationProbe），不暴露原始秘密/任意环境读取为公共配置接口、不另建DB协调器；路径未认领前不能写。新测试仅`tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs`，公共Program.cs及工程引用由00合入。现有旧Host类型、namespace和合法源码引用保留直到真实迁移验收，不移除兼容入口。
 
-本轮只替换00自有候选与追加总纲；原0.2-review-1文本/hash保留内存作仅本批逆向，回退前确认后续依赖，不整份覆盖他人新改。未来数据/产物回退必须前镜像+相容整套版本演练，不声称文档逆向是生产恢复。提交/推送/部署/发布/生产均无授权；最终命令、hash及正式消费报告登记只在总纲。
+00最终共享补丁队列为真实`src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs`、`AuditLogStore.cs`、`BotConfig.cs`、`ModelProviderStore.cs`，`Services/AppSettings.cs`、`SettingsBox.cs`、`Settings/SettingsHotReload.cs`，`Services/Agent/AgentBridgeServer.cs`、`AgentCommandService.cs`及其确有必要的partial（须逐路径另登记），`Adapters/Panel/WebUiServer.Settings.cs`、`WebUiServer.cs`、`wwwroot/app.js`及`Host/CompositionRoot.cs`；平台/模型/Engine源改动须本波次逐文件认领/交接。认领未登记前不写、不删除旧保存通路，不同时给多个执行者写同文件。
+
+本轮只改00自有契约与总纲；实际修改前原文在已认领.git/agent00-contract-20261011-2104/*-before-business-close.md，回退只逆向本批确切片段并确认后续依赖，不整份覆盖他人新改。未来数据/产物回退必须前镜像+相容整套版本演练，不声称文档逆向是生产恢复。提交/推送/部署/发布/生产均无授权；最终命令、hash及正式消费报告登记只在总纲。

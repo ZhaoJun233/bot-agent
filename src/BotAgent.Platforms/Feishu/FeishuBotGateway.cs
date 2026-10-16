@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +7,7 @@ using System.Text.Json.Nodes;
 using BotAgent.Platforms.Net;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Ports;
@@ -13,6 +15,7 @@ using BotAgent.Domain.Qq;
 using BotAgent.Services;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Qq;
+using BotAgent.Services.Platforms;
 
 namespace BotAgent.Adapters.Platforms.Feishu;
 
@@ -64,13 +67,26 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     public PlatformCapabilities Capabilities { get; }
     public string? LastErrorCode { get; private set; }
 
-    public bool IsConnected => _box.Current.FeishuEnabled && IsConfigured;
+    public bool IsConnected
+    {
+        get
+        {
+            var settings = _box.Current;
+            var enabled = settings.RuntimePlatformPolicies.HasValue
+                ? PlatformSwitchSettings.ResolvePolicyRules(settings, Context, ImmutableArray<ActionId>.Empty).Enabled == ToggleRule.Enabled
+                : settings.FeishuEnabled;
+            return enabled && Configured(settings);
+        }
+    }
 
     public bool IsConfigured
-        => !string.IsNullOrWhiteSpace(_box.Current.FeishuAppId)
-           && !string.IsNullOrWhiteSpace(_box.Current.FeishuAppSecret)
-           && (!string.IsNullOrWhiteSpace(_box.Current.FeishuEncryptKey)
-               || !string.IsNullOrWhiteSpace(_box.Current.FeishuVerificationToken));
+        => Configured(_box.Current);
+
+    private static bool Configured(PlatformOptions settings)
+        => !string.IsNullOrWhiteSpace(settings.FeishuAppId)
+           && !string.IsNullOrWhiteSpace(settings.FeishuAppSecret)
+           && (!string.IsNullOrWhiteSpace(settings.FeishuEncryptKey)
+               || !string.IsNullOrWhiteSpace(settings.FeishuVerificationToken));
 
     public IReadOnlyList<FeishuOutboxItem> Outbox => _outbox.ToArray();
 
@@ -85,6 +101,33 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         return _ids.AliasFor(CurrentAppId(), "participant", original);
     }
 
+    /// <summary>Canonical compatibility gate over an existing app/kind identity; never a new identity or an HTTP action.</summary>
+    public bool AllowsMappedTarget(bool isGroup, long alias)
+    {
+        if (_disposed || alias <= 0) return false;
+        try
+        {
+            var settings = _box.Current;
+            if (!Configured(settings)) return false;
+            if (settings.RuntimePlatformPolicies.HasValue)
+            {
+                var rules = PlatformSwitchSettings.ResolvePolicyRules(settings, Context, ImmutableArray<ActionId>.Empty);
+                if (rules.Enabled != ToggleRule.Enabled || rules.ChatEnabled != ToggleRule.Enabled) return false;
+            }
+            else
+            {
+                var rules = PlatformSwitchSettings.Read(settings, Context.PlatformId, Context.AccountScope);
+                if (!rules.Enabled || !rules.ChatEnabled) return false;
+            }
+            var raw = _ids.OriginalOf(alias, settings.FeishuAppId?.Trim() ?? string.Empty, IdentityKind(isGroup));
+            return !string.IsNullOrWhiteSpace(raw) && IsAllowed(settings, isGroup, raw);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     public string? OriginalOf(long alias) => _ids.OriginalOf(alias, CurrentAppId(), "participant");
 
     private string CurrentAppId() => _box.Current.FeishuAppId?.Trim() ?? string.Empty;
@@ -93,9 +136,8 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     private sealed record FeishuSettingsSnapshot(string AppId, string AppSecret, string ApiBase);
     private sealed record FeishuTokenCache(FeishuSettingsSnapshot Settings, string Token, DateTimeOffset ExpiresAt);
 
-    private FeishuSettingsSnapshot Snapshot()
+    private static FeishuSettingsSnapshot Snapshot(PlatformOptions settings)
     {
-        var settings = _box.Current;
         var baseUri = string.IsNullOrWhiteSpace(settings.FeishuApiBase) ? "https://open.feishu.cn" : settings.FeishuApiBase.TrimEnd('/');
         return new FeishuSettingsSnapshot(settings.FeishuAppId?.Trim() ?? string.Empty, settings.FeishuAppSecret ?? string.Empty, baseUri);
     }
@@ -311,7 +353,8 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         long? replyToMessageId = null,
         bool directAddress = false)
     {
-        var settings = Snapshot();
+        var policySettings = _box.Current;
+        var settings = Snapshot(policySettings);
         var rawTarget = _ids.OriginalOf(targetId, settings.AppId, IdentityKind(isGroup));
         if (string.IsNullOrEmpty(rawTarget))
         {
@@ -322,7 +365,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         var rawReply = replyToMessageId.HasValue ? _ids.OriginalOf(replyToMessageId.Value, settings.AppId, "message") : null;
         if (replyToMessageId.HasValue && rawReply is null) return new SendResult(false, 0);
         var outMsg = new OutboundMessage(conv, text, rawReply);
-        var res = await SendWithSnapshotAsync(Context, outMsg, settings, ct).ConfigureAwait(false);
+        var res = await SendWithSnapshotAsync(Context, outMsg, settings, policySettings, ct).ConfigureAwait(false);
         var numId = res.IsSuccess && !string.IsNullOrWhiteSpace(res.MessageId)
             ? _ids.AliasFor(settings.AppId, "message", res.MessageId) : 0;
         return new SendResult(res.IsSuccess, numId);
@@ -339,21 +382,27 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         PlatformContext context,
         OutboundMessage message,
         CancellationToken ct = default)
-        => SendWithSnapshotAsync(context, message, Snapshot(), ct);
+    {
+        var settings = _box.Current;
+        return SendWithSnapshotAsync(context, message, Snapshot(settings), settings, ct);
+    }
 
     private async Task<DeliveryResult> SendWithSnapshotAsync(
-        PlatformContext context, OutboundMessage message, FeishuSettingsSnapshot settings, CancellationToken ct)
+        PlatformContext context, OutboundMessage message, FeishuSettingsSnapshot settings,
+        PlatformOptions policySettings, CancellationToken ct)
     {
-        if (context is null || message is null)
+        if (context is null || message is null || message.Target is null)
         {
             LastErrorCode = "bad_request";
             return DeliveryResult.Rejected("bad_request");
         }
 
         var expectedPlatform = PlatformId.Normalize(Context.PlatformId);
-        if (!string.Equals(PlatformId.Normalize(context.PlatformId), expectedPlatform, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(PlatformId.Normalize(message.Target.PlatformId), expectedPlatform, StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(context.PlatformId) || string.IsNullOrWhiteSpace(message.Target.PlatformId)
+            || !string.Equals(PlatformId.Normalize(context.PlatformId), expectedPlatform, StringComparison.Ordinal)
+            || !string.Equals(PlatformId.Normalize(message.Target.PlatformId), expectedPlatform, StringComparison.Ordinal)
             || !string.Equals(context.AccountScope, Context.AccountScope, StringComparison.Ordinal)
+            || !string.Equals(context.InstanceId, Context.InstanceId, StringComparison.Ordinal)
             || !string.Equals(message.Target.AccountScope, Context.AccountScope, StringComparison.Ordinal)
             || message.Target.Kind is not (ConversationKind.GroupChat or ConversationKind.PrivateChat)
             || string.IsNullOrWhiteSpace(message.Target.NativeTargetId))
@@ -363,6 +412,12 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         }
 
         var rawTarget = message.Target.NativeTargetId;
+        if (policySettings.RuntimePlatformPolicies.HasValue
+            && !IsAllowed(policySettings, message.Target.Kind == ConversationKind.GroupChat, rawTarget))
+        {
+            LastErrorCode = "platform_policy_rejected";
+            return DeliveryResult.Rejected("platform_policy_rejected");
+        }
         string token;
         try
         {
@@ -476,10 +531,23 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
     private bool IsAllowed(PlatformOptions settings, bool isGroup, string target)
     {
+        if (settings.RuntimePlatformPolicies.HasValue)
+        {
+            var rules = PlatformSwitchSettings.ResolvePolicyRules(settings, Context, ImmutableArray<ActionId>.Empty);
+            if (rules.Enabled != ToggleRule.Enabled || rules.ChatEnabled != ToggleRule.Enabled) return false;
+            var rule = isGroup ? rules.GroupWhitelist : rules.PrivateWhitelist;
+            if (rule.Kind == ListRuleKind.AllowAll) return true;
+            return rule.TryGetExplicitValue(out var explicitList) && MatchesWhitelist(settings, isGroup, target, explicitList);
+        }
         var policy = (settings.PlatformPolicies ?? new List<PlatformPolicySettings>())
             .FirstOrDefault(p => p is not null && string.Equals(PlatformId.Normalize(p.PlatformId), PlatformId.Feishu, StringComparison.OrdinalIgnoreCase));
         var policyWl = isGroup ? policy?.GroupWhitelist : policy?.PrivateWhitelist;
         var wl = !string.IsNullOrWhiteSpace(policyWl) ? policyWl : settings.FeishuWhitelist;
+        return MatchesWhitelist(settings, isGroup, target, wl);
+    }
+
+    private bool MatchesWhitelist(PlatformOptions settings, bool isGroup, string target, string? wl)
+    {
         if (string.IsNullOrWhiteSpace(wl)) return false;
         var tokens = wl.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (tokens.Contains("*") || tokens.Contains("all", StringComparer.OrdinalIgnoreCase)) return true;

@@ -18,6 +18,7 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class ConversationStore : IConversationRepository
 {
+    private const string DeleteMessagesSql = "DELETE FROM messages WHERE source_key = $key";
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     /// <summary>加载全部会话（不含归档消息；归档由面板的 /api/archive 单独查）。</summary>
@@ -190,7 +191,7 @@ public class ConversationStore : IConversationRepository
         {
             AppDatabase.Write(conn =>
             {
-                AppDatabase.Exec(conn, "DELETE FROM messages WHERE source_key = $key", ("$key", sourceKey));
+                AppDatabase.Exec(conn, DeleteMessagesSql, ("$key", sourceKey));
                 AppDatabase.Exec(conn, "DELETE FROM conversations WHERE source_key = $key", ("$key", sourceKey));
             });
         }
@@ -283,7 +284,7 @@ public class ConversationStore : IConversationRepository
         _lock.Wait();
         try
         {
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM messages WHERE source_key = $key", ("$key", sourceKey)));
+            AppDatabase.Write(conn => AppDatabase.Exec(conn, DeleteMessagesSql, ("$key", sourceKey)));
         }
         finally
         {

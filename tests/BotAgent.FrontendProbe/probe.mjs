@@ -20,6 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import { webcrypto } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { extractSessionSource } from "./browser-fixture.mjs";
 
@@ -361,9 +362,11 @@ check("★ 二维码要显示“多久前更新/可能已过期”，否则死�
 
 console.log("\n▶ 静态：保存字段必须都在加载时回填");
 
-// 从 saveSettings 的 payload 字面量里提取 “字段名 -> 读取的 DOM id”
+// The production getter table is the only control map; strict saves contain dirty edits, not a flat form copy.
 const saveBody = js.slice(js.indexOf("async function saveSettings"), js.indexOf("/* ─────────── 日志"));
-const saveFields = [...saveBody.matchAll(/(\w+):\s*(Number\()?\$\("([A-Za-z0-9_]+)"\)\.(value|checked)/g)]
+const inputBody = js.slice(js.indexOf("function settingsInputGetters"), js.indexOf("function collectSettingsInputs"));
+const strictBody = js.slice(js.indexOf("function buildStrictConfiguration"), js.indexOf("function acknowledgeConfigurationSecrets"));
+const saveFields = [...inputBody.matchAll(/(\w+):\s*get\s*=>\s*(Number\()?get\("([A-Za-z0-9_]+)"\)\.(value|checked)/g)]
   .map((m) => ({ key: m[1], numeric: !!m[2], id: m[3], prop: m[4] }));
 
 // loadSettings 里被赋值（回填）的 id
@@ -387,13 +390,13 @@ check(
 // 曾经这条漏写 → 在面板里改设备配置点保存完全没用（服务器还是旧值，管理员报过）。
 check(
   "★ 保存请求带上设备表 agentDevices（没带 = 面板改设备配置白改）",
-  /payload\.agentDevices\s*=\s*JSON\.stringify\(\s*agentDevices/.test(saveBody),
-  "saveSettings 的 payload 里没有 agentDevices"
+  /agentDevices\s*=\s*\{\s*kind:\s*1,\s*value:\s*devices\s*\}/.test(strictBody) && /typedDeviceDraft\(\)/.test(strictBody),
+  "strict changes.agent.agentDevices must use the typed complete device draft"
 );
 check(
   "★ 设备表未拉取成功时不许回写（防止一次保存把设备配置清空）",
-  /if \(agentDevicesLoaded\)/.test(saveBody),
-  "回写 agentDevices 前必须先判断 agentDevicesLoaded"
+  /if \(agentDevicesEdited\)/.test(strictBody) && /if \(!agentDevicesLoaded\) throw/.test(strictBody),
+  "An edited but incomplete device table must reject the save, not overwrite or silently omit edits"
 );
 // 设备表状态必须声明在**外层作用域**：填表在 bindUi() 里、读表在 saveSettings() 里，
 // 写在 bindUi 内部时 saveSettings 会直接 ReferenceError（实测踩过：保存按钮静默失效）。
@@ -407,8 +410,8 @@ check(
 // 直接调 refreshAgentDevicesFull() 会 ReferenceError → 被 catch 成“保存失败”（其实已保存）。
 check(
   "★ saveSettings 不直接调用 bindUi() 内部的函数（要走走 afterSettingsSaved 钩子）",
-  !/refreshAgentDevicesFull\s*\(/.test(saveBody) && /afterSettingsSaved/.test(saveBody),
-  "saveSettings 里直接引用了 refreshAgentDevicesFull（定义在 bindUi 内部）—— 请改成 afterSettingsSaved 钩子"
+  !/refreshAgentDevicesFull\s*\(/.test(saveBody) && /await loadSettings\(\)/.test(saveBody),
+  "saveSettings must refresh through its real top-level loadSettings, never a bindUi-local function"
 );
 const notFilled = saveFields.filter((f) => !filledIds.has(f.id));
 check(
@@ -435,7 +438,7 @@ function fire(id, type, ev) {
 }
 
 function makeEl(id, tag = "div") {
-  return {
+  const element = {
     id,
     tagName: tag.toUpperCase(),
     value: "",
@@ -460,8 +463,11 @@ function makeEl(id, tag = "div") {
       toggle(c, on) { classCalls.push(["toggle", c, on]); },
       contains: () => false
     },
+    listeners: new Map(),
     addEventListener(type, fn) {
-      const key = `${id}:${type}`;
+      if (!this.listeners.has(type)) this.listeners.set(type, []);
+      this.listeners.get(type).push(fn);
+      const key = `${this.id}:${type}`;
       if (!handlers.has(key)) handlers.set(key, []);
       handlers.get(key).push(fn);
       if (id === "saveBtn" && type === "click") saveClicks.push(fn);
@@ -469,9 +475,17 @@ function makeEl(id, tag = "div") {
         navClicks.push({ page: id.replace(/^(nav|mtab)-/, ""), fn });
       }
     },
+    dispatchEvent(event) {
+      event.target ||= this;
+      for (const fn of this.listeners.get(event.type) || []) fn(event);
+      return true;
+    },
     removeEventListener() {},
-    appendChild(c) { this.children.push(c); return c; },
-    append(...nodes) { this.children.push(...nodes); },
+    appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
+    append(...nodes) { nodes.forEach(node => this.appendChild(node)); },
+    add(option) { this.appendChild(option); },
+    get options() { return this.children.filter(node => node.tagName === "OPTION"); },
+    insertAdjacentElement(_position, node) { node.parentNode = this.parentNode; return node; },
     insertBefore(c) { this.children.unshift(c); return c; },
     replaceChildren(...nodes) { this.children = [...nodes]; },
     querySelector: () => makeEl(id + ":child"),
@@ -483,7 +497,7 @@ function makeEl(id, tag = "div") {
           ? node.dataset?.feature !== undefined
           : selector === "[data-policy]"
             ? node.dataset?.policy !== undefined
-            : false;
+            : ["input", "select", "button"].includes(selector) ? node.tagName === selector.toUpperCase() : false;
       const walk = (nodes) => { for (const node of nodes) { if (match(node)) matches.push(node); walk(node.children || []); } };
       walk(this.children);
       return matches;
@@ -495,11 +509,18 @@ function makeEl(id, tag = "div") {
     setAttribute() {},
     scrollIntoView() {}
   };
+  let identity = id;
+  Object.defineProperty(element, "id", { enumerable: true, get: () => identity, set(value) {
+    if (elCache.get(identity) === element) elCache.delete(identity);
+    identity = String(value); elCache.set(identity, element);
+  } });
+  return element;
 }
 
 const elCache = new Map();
 const document = {
   getElementById(id) {
+    if (elCache.has(id)) return elCache.get(id); // Real dynamically installed delete/find controls.
     if (!htmlIds.has(id)) return undefined; // 与真浏览器一致：取不到就是 undefined
     if (!elCache.has(id)) elCache.set(id, makeEl(id));
     return elCache.get(id);
@@ -603,6 +624,148 @@ let settingsDelayMs = 0;           // 模拟保存请求在飞（用来看保存
 let agentStatusHits = 0;
 let agentWorkbenchReady = false;
 let agentRunDelayMs = 0;
+
+// Mock the frozen wire, not a second UI field map. Names/partitions/IDs come from the real Core declarations.
+const coreConfiguration = path.resolve(here, "../../src/BotAgent.Core/Domain/Configuration");
+const changeTypes = fs.readFileSync(path.join(coreConfiguration, "ConfigurationChanges.cs"), "utf8");
+const fieldTypes = fs.readFileSync(path.join(coreConfiguration, "ConfigurationFields.cs"), "utf8");
+const fieldIds = new Map([...fieldTypes.matchAll(/^\s+(\w+) = (\d+),?$/gm)].map(m => [m[1], Number(m[2])]));
+const configurationSchema = new Map();
+for (const group of changeTypes.matchAll(/public sealed class (\w+)Changes\s*\{([\s\S]*?)\r?\n\}/g)) {
+  for (const field of group[2].matchAll(/public FieldEdit<([^\r\n]+)> (\w+) \{ get; init; \}/g)) {
+    configurationSchema.set(field[2][0].toLowerCase() + field[2].slice(1), {
+      partition: group[1][0].toLowerCase() + group[1].slice(1), type: field[1], id: fieldIds.get(field[2])
+    });
+  }
+}
+if (configurationSchema.size !== 142 || [...configurationSchema.values()].some(field => !field.id))
+  throw new Error("Synthetic configuration schema does not match the real 142-field Core contract");
+const clone = value => JSON.parse(JSON.stringify(value));
+const secretMembers = ["apiKey", "agentServerKey", "ttsApiKey", "feishuAppSecret", "feishuEncryptKey", "feishuVerificationToken"];
+const configuredSecrets = new Set([0, 1]);
+const configurationReceipts = new Map();
+const typedPolicyOverrides = new Map();
+let configurationVersion = 1;
+let deviceIdentity = 1;
+let loseNextConfigurationResponse = false;
+let loseNextMoodResponse = false;
+const configurationGeneration = "11111111111111111111111111111111";
+const configurationField = (value, id, userMode = 2) => ({ visibility: 1, display: "synthetic", value: clone(value), userMode,
+  effectiveSource: 3, applyState: 1, rule: { id, effect: 0, canClear: true, editable: true, legacyUnclassified: false } });
+const canonicalTargets = [
+  ["qq.private", "legacy", ""], ["qq.official", "legacy", ""], ["feishu", "default", "feishu-main"], ["local", "legacy", ""]
+].map(([platformId, accountScope, instanceId]) => ({ kind: "instance", key: { platformId, accountScope, instanceId } }));
+const inheritedPolicy = () => ({ enabled: 0, chatEnabled: 0, groupWhitelist: { kind: 0 }, privateWhitelist: { kind: 0 },
+  allowedActions: { kind: 0, actions: [] }, features: [] });
+const policyKey = target => JSON.stringify(target);
+function serverPolicies() {
+  const entries = new Map();
+  for (const policy of RUNTIME.platformPolicies || []) {
+    const get = name => policy[name] ?? policy[name[0].toLowerCase() + name.slice(1)];
+    const target = { kind: "accountDefault", platformId: get("PlatformId"), accountScope: get("AccountScope") || "default" };
+    const list = text => text ? { kind: 1, value: text } : { kind: 0 };
+    const features = ["text", "image", "voice", "quote", "recall", "thread", "stickers", "music", "poke", "linkPreview", "webSearch"];
+    entries.set(policyKey(target), { target, configuration: {
+      enabled: get("Enabled") === undefined || get("Enabled") === null ? 0 : get("Enabled") ? 1 : 2,
+      chatEnabled: get("ChatEnabled") === undefined || get("ChatEnabled") === null ? 0 : get("ChatEnabled") ? 1 : 2,
+      groupWhitelist: list(get("GroupWhitelist")), privateWhitelist: list(get("PrivateWhitelist")),
+      allowedActions: { kind: get("InheritActionAllowlist") ? 0 : 1, actions: get("AllowedActions") || [] },
+      features: Object.entries(get("FeatureOverrides") || {}).map(([name, enabled]) => ({ feature: features.indexOf(name), enabled }))
+    } });
+  }
+  for (const target of canonicalTargets) entries.set(policyKey(target), { target, configuration: inheritedPolicy() });
+  for (const [key, entry] of typedPolicyOverrides) entries.set(key, clone(entry));
+  return [...entries.values()];
+}
+function configurationRead() {
+  const view = { registered: { plugins: [], providers: [] } };
+  for (const [member, field] of configurationSchema) {
+    let value = RUNTIME[member];
+    if (member === "model") value = ENV.model;
+    if (member === "modelBaseUrl") value = ENV.modelBaseUrl;
+    if (member === "agentServerModel") value = RUNTIME.serverModel;
+    if (value === undefined) value = field.type === "bool" ? false : /^(int|long|double)$/.test(field.type) ? 0
+      : field.type.startsWith("ImmutableArray") ? [] : "";
+    (view[field.partition] ||= {})[member] = configurationField(value, field.id);
+  }
+  view.agent.agentDevices.value = serverDevices.map(device => {
+    device.key ||= (deviceIdentity++).toString(16).padStart(32, "0");
+    const nameRaw = device.nameRaw || device.name;
+    return { key: device.key, name: { ...configurationField(nameRaw, 3), visibility: 2, nameRaw, display: device.displayName || nameRaw },
+      enable: configurationField(device.enable !== false, 3),
+      model: configurationField(device.model || "", 3, device.modelMode ?? (device.model ? 2 : 1)),
+      workDir: configurationField(device.workdir || "", 3, device.workdirMode ?? (device.workdir ? 2 : 1)),
+      tools: configurationField(device.tools || "", 3, device.toolsMode ?? (device.tools ? 2 : 1)),
+      timeoutSeconds: configurationField(device.timeoutSec || 0, 3, device.timeoutMode ?? (device.timeoutSec ? 2 : 1)), renameState: 1 };
+  });
+  const policies = serverPolicies();
+  view.platform.platformPolicies.value = policies.map(({ target, configuration }) => {
+    const row = { target };
+    for (const [member, value] of Object.entries(configuration)) {
+      const inherited = typeof value === "number" ? value === 0 : member === "features" ? value.length === 0 : value.kind === 0;
+      let effective = value;
+      if (["enabled", "chatEnabled"].includes(member) && value === 0) {
+        const key = target.kind === "instance" ? target.key : target;
+        const parent = policies.find(entry => entry.target.kind === "accountDefault" && entry.target.platformId === key.platformId
+          && entry.target.accountScope === key.accountScope);
+        const legacy = key.platformId === "qq.private" ? (member === "enabled" || RUNTIME.privateChatEnabled !== false)
+          : key.platformId === "qq.official" ? (member === "enabled" ? RUNTIME.officialEnabled : RUNTIME.officialChatEnabled)
+            : key.platformId === "feishu" ? RUNTIME.feishuEnabled : !!RUNTIME.localChannelIds?.trim();
+        effective = target.kind === "instance" && parent?.configuration[member] ? parent.configuration[member] : legacy ? 1 : 2;
+      }
+      row[member] = configurationField(effective, 102, inherited ? 1 : 2);
+    }
+    return row;
+  });
+  return { code: 0, version: configurationVersion, generation: configurationGeneration, contractRevision: "cfg-0.3.2",
+    serverUnixSeconds: 1900000000, view, fields: [...configurationSchema.values()].map(({ id }) => ({ id })),
+    secrets: secretMembers.map((_, slot) => ({ slot, configured: configuredSecrets.has(slot), source: configuredSecrets.has(slot) ? 1 : 0 })), latestApplyState: 1 };
+}
+const settingsOperation = call => new URL(call.url, "http://127.0.0.1").searchParams.get("configuration");
+const isSettingsSave = call => call.method === "POST" && new URL(call.url, "http://127.0.0.1").pathname === "/api/settings"
+  && settingsOperation(call) === "save";
+// Assertions for individual old controls read ONLY edits actually sent, never fill omitted edits from the snapshot.
+function requestIntent(call) {
+  const wire = JSON.parse(call.body);
+  if (!isSettingsSave(call)) return wire;
+  const result = {};
+  for (const fields of Object.values(wire.changes || {})) for (const [member, edit] of Object.entries(fields || {})) {
+    if (member === "policies" || member === "providers" || member === "plugins") continue;
+    if (edit.kind === 1) result[member] = member === "agentDevices" ? JSON.stringify(edit.value) : edit.value;
+    else if (edit.kind === 2) result[member] = "";
+  }
+  for (const edit of wire.secrets || []) if (edit.kind === 1 || edit.kind === 2)
+    result[secretMembers[edit.slot]] = edit.kind === 1 ? edit.value : "";
+  return result;
+}
+function saveConfiguration(wire, frozen) {
+  const found = configurationReceipts.get(wire.key);
+  if (found) return found.frozen === frozen ? { status: 200, payload: { ...found.result, replayed: true } }
+    : { status: 409, payload: { error: "idempotency_conflict", code: 6 } };
+  if (wire.expectedVersion !== configurationVersion) return { status: 409, payload: { error: "version_conflict", code: 5 } };
+  const ordinary = Object.entries(wire.changes || {}).filter(([key]) => key !== "registered");
+  for (const [partition, edits] of ordinary) for (const [member, edit] of Object.entries(edits || {})) {
+    if (configurationSchema.get(member)?.partition !== partition || ![0, 1, 2].includes(edit.kind))
+      throw new Error("Unexpected configuration wire in synthetic test");
+    if (edit.kind === 0) continue;
+    if (member === "agentDevices") serverDevices = edit.value.map(device => ({ key: device.key || (deviceIdentity++).toString(16).padStart(32, "0"),
+      name: device.nameRaw, nameRaw: device.nameRaw, enable: device.enable, model: device.model || "", workdir: device.workDir || "",
+      tools: device.tools || "", timeoutSec: device.timeoutSeconds, online: false, models: [] }));
+    else { RUNTIME[member] = edit.kind === 1 ? clone(edit.value) : "";
+      if (member === "model") ENV.model = RUNTIME[member]; if (member === "modelBaseUrl") ENV.modelBaseUrl = RUNTIME[member];
+      if (member === "agentServerModel") RUNTIME.serverModel = RUNTIME[member]; }
+  }
+  for (const entry of wire.changes?.registered?.policies || []) typedPolicyOverrides.set(policyKey(entry.target), clone(entry));
+  for (const edit of wire.secrets || []) { if (edit.kind === 1) configuredSecrets.add(edit.slot); if (edit.kind === 2) configuredSecrets.delete(edit.slot); }
+  const changed = ordinary.some(([, edits]) => Object.keys(edits || {}).length) || (wire.secrets || []).length
+    || (wire.changes?.registered?.policies || []).length;
+  const observedVersion = configurationVersion; if (changed) configurationVersion++;
+  const result = { code: changed ? 0 : 13, replayed: false, currentVersion: configurationVersion, errors: [], receipt: {
+    key: wire.key, contractRevision: "cfg-0.3.2", decision: changed ? 0 : 1, observedVersion,
+    committedVersion: changed ? configurationVersion : null, commitState: changed ? 1 : 0, applyState: 1,
+    steps: Array.from({ length: 8 }, (_, step) => ({ step, state: 1, errorCode: null })), deviceKeyAssignments: [] } };
+  configurationReceipts.set(wire.key, { frozen, result, actions: [] }); return { status: 200, payload: result };
+}
 // 批次 I：待批单列表（服务端合成一份；面板要画卡、也要能批准）
 let approvalsPayload = {
   available: true, enabled: true, tokenConfigured: true, canDecide: true,
@@ -673,13 +836,32 @@ const fetchStub = async (url, opts) => {
         capabilities: { supportsText: true, supportsVoice: true, supportsMusic: true, supportsStickers: true, supportsPoke: true } }
     ], feishu: { enabled: true, configured: true, loaded: true, effectiveEnabled: true } };
   } else if (target.includes("/api/settings")) {
-    if (method === "POST" && settingsDelayMs) await new Promise((r) => setTimeout(r, settingsDelayMs));
-    if (method === "POST" && opts && opts.body) {
-      const sent = JSON.parse(opts.body);
-      if (typeof sent.agentDevices === "string") {
-        // 服务端与 AppSettings 一致：整表替换（只存配置字段，online/models 是算出来的）
-        serverDevices = JSON.parse(sent.agentDevices).map((d) => ({ ...d, online: false, models: [] }));
-      }
+    const operation = new URL(target, "http://127.0.0.1").searchParams.get("configuration");
+    const response = (status, body) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) });
+    if (method === "POST" && operation === "read") return response(200, configurationRead());
+    if (method === "POST" && operation === "find") {
+      const entry = configurationReceipts.get(JSON.parse(opts.body).key);
+      return entry ? response(200, { configurationResult: { code: entry.result.code, receipt: entry.result.receipt }, legacyActionResults: entry.actions })
+        : response(404, { configurationResult: { code: 14, receipt: null }, legacyActionResults: [] });
+    }
+    if (method === "POST" && operation === "save") {
+      if (settingsDelayMs) await new Promise(resolve => setTimeout(resolve, settingsDelayMs));
+      const result = saveConfiguration(JSON.parse(opts.body), opts.body);
+      if (loseNextConfigurationResponse) { loseNextConfigurationResponse = false; throw new Error("synthetic lost commit response"); }
+      return response(result.status, result.payload);
+    }
+    if (method === "POST") {
+      const body = JSON.parse(opts.body), key = opts.headers?.["X-BotAgent-Configuration-Key"];
+      if (operation || Object.keys(body).some(member => member !== "mood") || !key)
+        throw new Error("Unexpected legacy settings write; the UI must use the frozen strict contract");
+      const prior = configurationReceipts.get(key);
+      if (prior) return response(200, { configurationResult: { ...prior.result, replayed: true }, legacyActionResults: prior.actions });
+      RUNTIME.mood = body.mood;
+      const result = { code: 13, receipt: { key, decision: 1, commitState: 0, applyState: 1, steps: [] } };
+      const actions = [{ action: "mood", state: 1, errorCode: null }];
+      configurationReceipts.set(key, { frozen: opts.body, result, actions });
+      if (loseNextMoodResponse) { loseNextMoodResponse = false; throw new Error("synthetic lost action response"); }
+      return response(200, { configurationResult: result, legacyActionResults: actions });
     }
     payload = { runtime: RUNTIME, env: ENV, settingsFile: "/data/data/settings.json" };
   } else if (target.includes("/api/qqlogin")) {
@@ -733,6 +915,8 @@ const store = new Map();
 let confirmAnswer = true;
 const sandbox = {
   document,
+  crypto: webcrypto,
+  Option: function(text, value) { const option = makeEl("created-option", "option"); option.textContent = text; option.value = value; return option; },
   location: { href: "http://127.0.0.1:8080/?token=test-token", reload() {}, pathname: "/", search: "?token=test-token", hash: "" },
   history: { replaceState() {} },
   localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) },
@@ -759,6 +943,12 @@ const probeMarker = 'document.addEventListener("DOMContentLoaded", boot);';
 const jsRun = js.replace(probeMarker, `globalThis.probe = {
     loadSettings, saveSettings, markSettingsDirty,
     loadPlatformPolicies, collectPlatformPolicies,
+    renderTypedPlatformPolicies, collectDirtyPlatformPolicies,
+    configurationInputMembers: () => Object.keys(settingsInputGetters()),
+    policyDraft: () => [...$("platformPolicyRows").children].map(row => ({ target: row.configurationTarget,
+      configuration: cloneConfiguration(row.configurationValue) })),
+    pendingConfiguration: () => configurationPending ? { mainKey: configurationPending.mainKey, key: configurationPending.key,
+      operation: configurationPending.operation } : null,
     refreshParticipation,
   deviceDraft: () => agentDevices.map((d) => ({ ...d })),
   deviceLoaded: () => agentDevicesLoaded,
@@ -991,177 +1181,123 @@ check(
 // 保存
 const before = calls.length;
 // 先把成功提示清空：否则它可能是上游某一步留下的旧值，这条检查就形同虚设
-const barEl = document.getElementById("saveBarText");
+const barEl = document.getElementById("toast");
 if (barEl) barEl.textContent = "";
 try { await saveClicks[0]({}); } catch (e) { console.log("    （保存点击抛错：" + (e && e.message) + "）"); }
 await new Promise((r) => setTimeout(r, 300));
 
-const saveCall = calls.slice(before).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+const saveCall = calls.slice(before).find((c) => isSettingsSave(c));
 check("点击保存确实发出了 POST /api/settings", !!saveCall);
 
 // 保存流程不能自己抛错：曾经 refreshAgentDevicesFull 跨作用域调用 → ReferenceError，
 // 被 catch 成“保存失败”（服务器其实存上了），靠 saveBarText 这句话也能看出来。
 check(
   "★ 点保存后提示的是“已保存”（不是“保存失败”）",
-  String(document.getElementById("saveBarText")?.textContent || "").includes("已保存"),
-  String(document.getElementById("saveBarText")?.textContent || "(保存提示为空 = 保存过程抛错了)")
+  String(document.getElementById("toast")?.textContent || "").includes("已保存"),
+  String(document.getElementById("toast")?.textContent || "(保存提示为空 = 保存过程抛错了)")
 );
 
 if (saveCall) {
-  const payload = JSON.parse(saveCall.body);
+  const wire = JSON.parse(saveCall.body), payload = requestIntent(saveCall);
   check("真实保存请求不提交官方 Secret 或清空指令",
-    !Object.keys(payload).some((key) => /^(officialAppSecret|clearOfficialAppSecret)$/i.test(key)));
-  // 设备表与平台策略是各自有契约的附加字段，不在旧的 DOM-id 表单字段集合中。
-  const declaredKeys = Object.keys(payload).filter((k) => k !== "agentDevices" && k !== "platformPolicies");
-  check("payload 字段数与表单一致（设备表与平台策略单独校验）", declaredKeys.length === saveFields.length,
-    `${declaredKeys.length} vs ${saveFields.length}`);
-  const feishuPolicy = payload.platformPolicies?.find((p) => p.PlatformId === "feishu" && p.AccountScope === "default");
-  check("平台策略表单保存实例开关、白名单和功能覆盖",
-    !!feishuPolicy && feishuPolicy.Enabled === true && feishuPolicy.ChatEnabled === true
-      && feishuPolicy.GroupWhitelist === "synthetic-group" && feishuPolicy.PrivateWhitelist === "synthetic-user"
-      && feishuPolicy.FeatureOverrides?.music === false,
-    JSON.stringify(feishuPolicy));
-
-  // 核心不变式：**什么都不改直接保存，payload 必须与服务端当前值完全一致**。
-  // 一旦有字段没被回填，它就会以 0/空/false 发回来 → 服务端把它压到最小值
-  // （白名单被清空则直接进入严格模式并删光会话）。
-  const drifted = Object.entries(payload).filter(([k, v]) => k !== "platformPolicies" && RUNTIME[k] !== undefined && v !== RUNTIME[k]);
-  check(
-    "★ 不改动直接保存，payload 与服务端值完全一致（没被空值污染）",
-    drifted.length === 0,
-    drifted.map(([k, v]) => `${k}: 发出=${JSON.stringify(v)} 服务器=${JSON.stringify(RUNTIME[k])}`).join("; ")
-  );
-
-  check("payload 携带了真实人设", payload.botPersona === RUNTIME.botPersona, String(payload.botPersona));
-  check("payload 携带了真实白名单", payload.messageWhitelist === RUNTIME.messageWhitelist, String(payload.messageWhitelist));
-  check("payload 携带了真实 maxTokens", payload.maxTokens === RUNTIME.maxTokens, String(payload.maxTokens));
+    Object.keys(wire).sort().join(",") === "changes,contractRevision,expectedVersion,key,secrets"
+      && wire.secrets.every(edit => edit.slot >= 0 && edit.slot <= 5));
+  check("strict保存闭集五成员而不是重复整表控件", Object.keys(wire).length === 5 && configurationSchema.size === 142);
+  check("未修改的平台继承/名单/功能保持原样，不发送整表", !wire.changes.registered && !wire.changes.platform?.platformPolicies
+    && sandbox.probe.policyDraft().some(row => row.configuration.groupWhitelist.value === "synthetic-group"));
+  check("★ 不改动直接保存不会被空值污染", Object.keys(wire.changes).length === 0 && wire.secrets.length === 0);
+  check("真实人设保留且未变更时发送Keep", document.getElementById("setPersona").value === RUNTIME.botPersona && payload.botPersona === undefined);
+  check("真实白名单保留且未变更时发送Keep", document.getElementById("setWhitelist").value === RUNTIME.messageWhitelist && payload.messageWhitelist === undefined);
+  check("真实maxTokens保留且未变更时发送Keep", Number(document.getElementById("setMaxTokens").value) === RUNTIME.maxTokens && payload.maxTokens === undefined);
 }
 
-/* Centralized policies remain editable even if connection status is unavailable. */
+/* Typed policy controls preserve the old protection goals without invoking the unused legacy renderer. */
 {
-  const b = calls.length;
+  const rows = () => document.getElementById("platformPolicyRows").children;
+  const text = node => [node.textContent || "", ...(node.children || []).map(text)].join(" ");
+  const account = platformId => ({ kind: "accountDefault", platformId, accountScope: platformId === "feishu" ? "default" : "legacy" });
+  const rowFor = target => rows().find(row => JSON.stringify(row.configurationTarget) === JSON.stringify(target));
+  const explicit = { enabled: 1, chatEnabled: 1, groupWhitelist: { kind: 1, value: "synthetic-group" },
+    privateWhitelist: { kind: 1, value: "synthetic-user" }, allowedActions: { kind: 1, actions: [] }, features: [{ feature: 7, enabled: false }] };
+  const setServerPolicy = (target, configuration) => typedPolicyOverrides.set(policyKey(target), { target: clone(target), configuration: clone(configuration) });
   platformStatusFails = true;
   await sandbox.probe.loadSettings();
-  const policies = sandbox.probe.collectPlatformPolicies();
-  const feishu = policies.find((p) => p.PlatformId === "feishu");
-  check("Status failure preserves saved policies, whitelist and feature overrides",
-    policies.length === 4 && feishu?.Enabled === true && feishu.ChatEnabled === true
-      && feishu.GroupWhitelist === "synthetic-group" && feishu.FeatureOverrides.music === false);
-  await sandbox.probe.saveSettings();
-  const posted = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const payload = posted ? JSON.parse(posted.body) : {};
-  check("Status failure cannot save an empty policy list", payload.platformPolicies?.length === 4);
-  check("Missing standard policies retain action inheritance in POST",
-    payload.platformPolicies?.filter((p) => p.PlatformId !== "feishu").every((p) => p.InheritActionAllowlist === true));
-  check("Existing explicit policy with absent inheritance flag keeps empty action deny",
-    payload.platformPolicies?.find((p) => p.PlatformId === "feishu")?.InheritActionAllowlist === false
-      && payload.platformPolicies.find((p) => p.PlatformId === "feishu").AllowedActions.length === 0);
-  check("POST has no duplicate legacy platform switches",
-    !!posted && ["officialEnabled", "feishuEnabled", "officialChatEnabled", "privateChatEnabled"].every((key) => !(key in payload)));
-  await sandbox.probe.loadPlatformPolicies([], { officialEnabled: false, officialChatEnabled: false,
-    privateChatEnabled: false, feishuEnabled: false, localChannelIds: "" });
-  const fallback = sandbox.probe.collectPlatformPolicies();
-  check("Absent standard platforms default off instead of enabling on save",
-    fallback.length === 4 && fallback.filter((p) => p.PlatformId !== "qq.private").every((p) => p.Enabled === false));
-  check("Legacy chat flags retain off values in fallback",
-    fallback.filter((p) => p.PlatformId.startsWith("qq.")).every((p) => p.ChatEnabled === false));
-  check("Missing standard Feishu and local chat policies inherit disabled legacy flags",
-    fallback.filter((p) => ["feishu", "local"].includes(p.PlatformId)).every((p) => p.ChatEnabled === false));
-  await sandbox.probe.loadPlatformPolicies([
-    { PlatformId: "feishu", AccountScope: "synthetic-other", Enabled: true, ChatEnabled: null },
-    { PlatformId: "local", AccountScope: "synthetic-other", Enabled: true, ChatEnabled: null },
-    { PlatformId: "synthetic-platform", AccountScope: "synthetic-other", Enabled: true, ChatEnabled: null }
-  ], { feishuEnabled: false, localChannelIds: "" });
-  const nullableDraft = sandbox.probe.collectPlatformPolicies().filter((p) => p.AccountScope === "synthetic-other");
-  check("Nullable nonstandard chat preferences inherit disabled legacy flags and unknown defaults",
-    nullableDraft.length === 3 && nullableDraft.every((p) => p.Enabled === true && p.ChatEnabled === false));
-  const nullableBefore = calls.length;
-  await sandbox.probe.saveSettings();
-  const nullablePost = calls.slice(nullableBefore).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const nullableSaved = nullablePost ? JSON.parse(nullablePost.body).platformPolicies.filter((p) => p.AccountScope === "synthetic-other") : [];
-  check("Unrelated settings POST cannot unmute nullable nonstandard policies",
-    nullableSaved.length === 3 && nullableSaved.every((p) => p.Enabled === true && p.ChatEnabled === false));
-  await sandbox.probe.loadPlatformPolicies([{ PlatformId: "feishu", AccountScope: "default",
-    Enabled: false, ChatEnabled: true, AllowedActions: ["synthetic.action"] }], {});
-  const independent = sandbox.probe.collectPlatformPolicies().find((p) => p.PlatformId === "feishu");
-  check("Disabled platform retains its independent chat preference and allowed actions",
-    independent?.Enabled === false && independent.ChatEnabled === true && independent.AllowedActions[0] === "synthetic.action");
-  const independentBefore = calls.length;
-  await sandbox.probe.saveSettings();
-  const independentPost = calls.slice(independentBefore).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const independentPayload = independentPost ? JSON.parse(independentPost.body) : {};
-  const savedIndependent = independentPayload.platformPolicies?.find((p) => p.PlatformId === "feishu");
-  check("POST retains chat preference when its platform is disabled",
-    savedIndependent?.Enabled === false && savedIndependent.ChatEnabled === true
-      && savedIndependent.AllowedActions[0] === "synthetic.action");
-  check("Status-failure POST does not enable absent official or local platforms",
-    independentPayload.platformPolicies?.filter((p) => ["qq.official", "local"].includes(p.PlatformId))
-      .every((p) => p.Enabled === false) === true);
-  const priorRows = [...document.getElementById("platformPolicyRows").children];
-  let releaseStatus;
-  platformStatusWait = new Promise((resolve) => { releaseStatus = resolve; });
-  const pending = sandbox.probe.loadPlatformPolicies(RUNTIME.platformPolicies, RUNTIME);
-  check("Pending status request does not destroy existing switches",
-    priorRows.length === 4 && priorRows.every((row, i) => document.getElementById("platformPolicyRows").children[i] === row));
-  releaseStatus();
-  await pending;
-  platformStatusWait = null;
-  const independentRow = document.getElementById("platformPolicyRows").children.find((row) => row.dataset.platformId === "feishu");
-  const independentSwitches = independentRow.querySelectorAll("[data-policy]").filter((input) => input.type === "checkbox");
-  check("Each platform has exactly two independent switches",
-    document.getElementById("platformPolicyRows").children.every((row) => row.querySelectorAll("[data-policy]").filter((input) => input.type === "checkbox").length === 2));
-  independentSwitches.find((input) => input.dataset.policy === "enabled").checked = false;
-  const disabledDraft = sandbox.probe.collectPlatformPolicies().find((p) => p.PlatformId === "feishu");
-  check("Turning platform off keeps chat preference and chat control editable",
-    disabledDraft.Enabled === false && disabledDraft.ChatEnabled === true
-      && independentSwitches.find((input) => input.dataset.policy === "chatEnabled").disabled === false);
-  independentSwitches.find((input) => input.dataset.policy === "chatEnabled").checked = false;
-  independentSwitches.find((input) => input.dataset.policy === "enabled").checked = true;
-  const mutedDraft = sandbox.probe.collectPlatformPolicies().find((p) => p.PlatformId === "feishu");
-  check("Turning platform back on does not reset a muted chat preference",
-    mutedDraft.Enabled === true && mutedDraft.ChatEnabled === false);
-  platformStatusFails = false;
-  platformStatusOverride = [
-    { platformId: "qq.private", accountScope: "legacy", connected: true },
-    { platformId: "qq.official", accountScope: "legacy", connected: true },
-    { platformId: "feishu", accountScope: "different-account", connected: true },
-    { platformId: "feishu", accountScope: "default", connected: false, restartRequired: true },
-    { platformId: "local", accountScope: "legacy", connected: true }
-  ];
-  await sandbox.probe.loadPlatformPolicies([
-    { PlatformId: "qq.private", AccountScope: "legacy", Enabled: false, ChatEnabled: true },
-    { PlatformId: "qq.official", AccountScope: "legacy", Enabled: true, ChatEnabled: false },
-    { platformId: "feishu", accountScope: "default", enabled: true, chatEnabled: true },
-    { PlatformId: "local", AccountScope: "legacy", Enabled: true, ChatEnabled: true }
-  ], {});
-  const rowState = (id) => document.getElementById("platformPolicyRows").children
-    .find((row) => row.dataset.platformId === id && row.dataset.accountScope !== "different-account")?.children[0].children[1].textContent;
-  check("Disabled state is distinct from disconnected", rowState("qq.private").startsWith("已停用"));
-  check("Muted state is distinct from online", rowState("qq.official").startsWith("聊天已静音"));
-  check("Disconnected instance shows restart status and matches exact account",
-    rowState("feishu").startsWith("未连接") && rowState("feishu").includes("需重启生效"));
-  check("Enabled connected chatting platform shows online", rowState("local").startsWith("在线"));
-  platformStatusOverride = null;
-  await sandbox.probe.loadPlatformPolicies([
-    { PlatformId: "qq.private", AccountScope: "legacy", Enabled: true, ChatEnabled: true, InheritActionAllowlist: true, AllowedActions: [] },
-    { platformId: "qq.official", accountScope: "legacy", enabled: true, chatEnabled: true, inheritActionAllowlist: true, allowedActions: [] },
-    { PlatformId: "feishu", AccountScope: "default", Enabled: true, ChatEnabled: true, InheritActionAllowlist: false, AllowedActions: [] },
-    { PlatformId: "local", AccountScope: "legacy", Enabled: true, ChatEnabled: true, InheritActionAllowlist: false, AllowedActions: ["synthetic.action"] }
-  ], {});
-  const actionBefore = calls.length;
-  await sandbox.probe.saveSettings();
-  const actionPost = calls.slice(actionBefore).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const actionPolicies = actionPost ? JSON.parse(actionPost.body).platformPolicies : [];
-  check("GET action inheritance survives POST in Pascal and camel case",
-    actionPolicies.filter((p) => p.PlatformId.startsWith("qq.")).length === 2
-      && actionPolicies.filter((p) => p.PlatformId.startsWith("qq.")).every((p) => p.InheritActionAllowlist === true && p.AllowedActions.length === 0));
-  const explicitEmpty = actionPolicies.find((p) => p.PlatformId === "feishu");
-  const explicitActions = actionPolicies.find((p) => p.PlatformId === "local");
-  check("Explicit empty action deny and nonempty action list remain unchanged in POST",
-    explicitEmpty?.InheritActionAllowlist === false && explicitEmpty.AllowedActions.length === 0
-      && explicitActions?.InheritActionAllowlist === false && explicitActions.AllowedActions.length === 1
-      && explicitActions.AllowedActions[0] === "synthetic.action");
+  const target = account("feishu"), original = rowFor(target);
+  check("Status failure preserves saved policies, whitelist and feature overrides", original?.configurationValue.groupWhitelist.value === "synthetic-group"
+    && original.configurationValue.features.some(feature => feature.feature === 7 && feature.enabled === false));
+  const before = calls.length; await sandbox.probe.saveSettings();
+  const posted = calls.slice(before).find(isSettingsSave), payload = posted ? JSON.parse(posted.body) : {};
+  check("Status failure cannot save an empty policy list", !!posted && payload.changes?.platform?.platformPolicies === undefined);
+  check("Missing standard policies retain action inheritance", sandbox.probe.policyDraft().filter(row => row.target.kind === "instance")
+    .every(row => row.configuration.allowedActions.kind === 0));
+  check("Existing explicit policy retains empty action deny", rowFor(target)?.configurationValue.allowedActions.kind === 1
+    && rowFor(target).configurationValue.allowedActions.actions.length === 0);
+  check("POST has no duplicate legacy platform switches", !!posted && !["officialEnabled", "feishuEnabled", "officialChatEnabled", "privateChatEnabled"]
+    .some(member => Object.values(payload.changes || {}).some(partition => Object.hasOwn(partition, member))));
+  check("Absent platform targets retain inheritance instead of enabling on save", sandbox.probe.policyDraft()
+    .filter(row => row.target.kind === "instance").every(row => row.configuration.enabled === 0 && row.configuration.chatEnabled === 0));
+  setServerPolicy(account("qq.private"), { ...inheritedPolicy(), enabled: 2, chatEnabled: 2 });
   await sandbox.probe.loadSettings();
+  check("Legacy chat-off preferences remain explicit rather than truthy defaults",
+    rowFor(account("qq.private"))?.configurationValue.enabled === 2 && rowFor(account("qq.private"))?.configurationValue.chatEnabled === 2);
+  setServerPolicy(account("local"), { ...inheritedPolicy(), enabled: 2, chatEnabled: 2 });
+  await sandbox.probe.loadSettings();
+  check("Missing standard Feishu/local preferences are not fabricated from status", rowFor(account("local"))?.configurationValue.chatEnabled === 2);
+  const alternate = { kind: "accountDefault", platformId: "feishu", accountScope: "synthetic-other" };
+  setServerPolicy(alternate, { ...inheritedPolicy(), enabled: 1, chatEnabled: 0 });
+  await sandbox.probe.loadSettings();
+  check("Nonstandard chat preference remains Inherit", rowFor(alternate)?.configurationValue.enabled === 1 && rowFor(alternate)?.configurationValue.chatEnabled === 0);
+  const nullableBefore = calls.length; await sandbox.probe.saveSettings();
+  check("Unrelated save cannot unmute nonstandard policy", !JSON.parse(calls.slice(nullableBefore).find(isSettingsSave).body).changes.registered);
+  setServerPolicy(target, { ...explicit, enabled: 2, chatEnabled: 1, allowedActions: { kind: 1, actions: ["like"] } });
+  await sandbox.probe.loadSettings();
+  check("Disabled platform retains independent chat and registered actions", rowFor(target)?.configurationValue.enabled === 2
+    && rowFor(target).configurationValue.chatEnabled === 1 && rowFor(target).configurationValue.allowedActions.actions[0] === "like");
+  const independentlyBefore = calls.length; await sandbox.probe.saveSettings();
+  check("Unchanged disabled policy is Keep rather than a lossy full-table POST", !JSON.parse(calls.slice(independentlyBefore).find(isSettingsSave).body).changes.registered);
+  check("Typed disabled state is not mislabelled as disconnected", /已停用/.test(text(rowFor(target))) && !/未连接|在线/.test(text(rowFor(target))));
+  const priorRows = [...rows()];
+  check("Status unavailability cannot destroy authenticated configuration rows", priorRows.length >= 5 && rowFor(target) === priorRows.find(row => row.configurationTarget?.platformId === "feishu"));
+  check("Each target has two independent tri-state switches", rows().every(row => row.children.slice(1, 3).every(label => label.children[0]?.tagName === "SELECT")));
+  const switches = rowFor(target).children.slice(1, 3).map(label => label.children[0]);
+  switches[0].value = "1"; switches[0].dispatchEvent({ type: "change", target: switches[0] });
+  switches[1].value = "2"; switches[1].dispatchEvent({ type: "change", target: switches[1] });
+  check("Turning platform on does not reset muted chat preference", rowFor(target).configurationValue.enabled === 1 && rowFor(target).configurationValue.chatEnabled === 2);
+  switches[0].value = "2"; switches[0].dispatchEvent({ type: "change", target: switches[0] });
+  check("Turning platform off keeps chat independently editable", rowFor(target).configurationValue.chatEnabled === 2 && !switches[1].disabled);
+  const sparseBefore = calls.length; await sandbox.probe.saveSettings();
+  const sparse = JSON.parse(calls.slice(sparseBefore).find(isSettingsSave).body).changes.registered;
+  check("POST edits only the dirty target with its complete six rules", sparse?.policies.length === 1 && Object.keys(sparse.policies[0].configuration).length === 6
+    && JSON.stringify(sparse.policies[0].target) === JSON.stringify(target));
+  check("POST preserves explicit action deny/inheritance without inventing permissions", sparse.policies[0].configuration.allowedActions.actions[0] === "like"
+    && sparse.policies[0].configuration.features.some(feature => feature.feature === 7 && !feature.enabled));
+  setServerPolicy(target, { ...explicit, groupWhitelist: { kind: 1, value: "" }, privateWhitelist: { kind: 2 }, allowedActions: { kind: 0, actions: [] } });
+  await sandbox.probe.loadSettings();
+  const empty = rowFor(target).configurationValue;
+  check("Explicit empty, AllowAll and Inherit remain distinct", empty.groupWhitelist.kind === 1 && empty.groupWhitelist.value === ""
+    && empty.privateWhitelist.kind === 2 && empty.allowedActions.kind === 0);
+  check("A parent false feature is retained when the target has no feature override", (() => {
+    const instance = canonicalTargets.find(value => value.key.platformId === "feishu");
+    return rowFor(instance).configurationValue.features.length === 0 && rowFor(target).configurationValue.features.some(feature => !feature.enabled);
+  })());
+  setServerPolicy(target, { ...explicit, enabled: 1, chatEnabled: 2 }); await sandbox.probe.loadSettings();
+  check("Typed chat mute is not mislabelled as online", /聊天已静音/.test(text(rowFor(target))) && !/在线/.test(text(rowFor(target))));
+  setServerPolicy(target, explicit); await sandbox.probe.loadSettings();
+  check("Typed policy marks unavailable runtime status instead of claiming online", /状态.*不可用|状态.*获取失败/.test(text(rowFor(target))));
+  platformStatusFails = false;
+  platformStatusOverride = [{ platformId: "feishu", accountScope: "default", instanceId: "feishu-main",
+    enabled: true, effectiveEnabled: true, chatEnabled: true, connected: false, restartRequired: false }];
+  await sandbox.probe.loadSettings();
+  const instance = canonicalTargets.find(value => value.key.platformId === "feishu");
+  check("Typed instance shows disconnected runtime without disabling chat preference", /未连接|离线/.test(text(rowFor(instance)))
+    && rowFor(instance).configurationValue.chatEnabled === 0);
+  platformStatusOverride[0].connected = true;
+  await sandbox.probe.loadSettings();
+  check("Typed instance shows real connected status", /已连接|在线/.test(text(rowFor(instance))));
+  platformStatusOverride[0].connected = false; platformStatusOverride[0].restartRequired = true;
+  await sandbox.probe.loadSettings();
+  check("Typed desired-but-unloaded instance shows restart required, not connected", /需重启/.test(text(rowFor(instance))) && !/已连接|在线/.test(text(rowFor(instance))));
+  platformStatusOverride = null; typedPolicyOverrides.clear(); await sandbox.probe.loadSettings();
 }
 
 /* ─────────── 4) 服务器健康日报（定时私聊推送） ─────────── */
@@ -1205,8 +1341,8 @@ check("来源提示写明“来自面板”（与聊天那把 key 同样措辞�
   fire("setAgentServerKey", "input", { target: { id: "setAgentServerKey" } });
   try { await saveClicks[0]({}); } catch (e) { /* 上面已覆盖 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const has = post && JSON.parse(post.body).agentServerKey !== undefined;
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const has = post && requestIntent(post).agentServerKey !== undefined;
   check("★ 密钥框留空时保存**不带** agentServerKey（否则每保存一次就把已存的密钥抹掉）",
     !!post && !has, post ? post.body.slice(0, 160) : "没发出 POST");
 }
@@ -1218,15 +1354,15 @@ check("来源提示写明“来自面板”（与聊天那把 key 同样措辞�
   fire("setAgentServerKey", "input", { target: { id: "setAgentServerKey" } });
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body).agentServerKey : undefined;
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post).agentServerKey : undefined;
   check("★ 填了密钥后保存发的是原值（服务端存 secrets 表）", sent === "sk-agent-test-123",
     `发出=${JSON.stringify(sent)}`);
   check("保存成功后输入框自己清空（不回显）", String(agentKeyInput.value) === "",
     JSON.stringify(agentKeyInput.value));
 }
 
-// 点“清除密钥”→ 必须显式发空串（留空本身 = 不改，两者不能混）
+// 点“清除密钥”→ strict Delete，留空本身 = Keep，两者不能混
 {
   fire("clearAgentServerKey", "click");
   check("★ 点「清除密钥」后提示“待清除”（跟聊天那把一样要二次确认）",
@@ -1235,19 +1371,92 @@ check("来源提示写明“来自面板”（与聊天那把 key 同样措辞�
   const b = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body).agentServerKey : undefined;
-  check("★ 清除时显式发空串（服务端删掉该密钥、回退环境变量 / 聊天那把）", sent === "",
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post).agentServerKey : undefined;
+  check("★ 清除时显式发 Delete 且不包含秘密值", sent === "" && JSON.parse(post.body).secrets.some(edit => edit.slot === 1 && edit.kind === 2 && !Object.hasOwn(edit, "value")),
     `发出=${JSON.stringify(sent)}`);
 
   // 清除后同一轮里再保存一次，不能再重复发空串（标记要归位）
   const b2 = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post2 = calls.slice(b2).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
+  const post2 = calls.slice(b2).find((c) => isSettingsSave(c));
   check("清除标记归位：下一轮保存不再重复发空串",
-    !!post2 && JSON.parse(post2.body).agentServerKey === undefined,
+    !!post2 && requestIntent(post2).agentServerKey === undefined,
     post2 ? post2.body.slice(0, 160) : "没发出 POST");
+}
+
+/* Frozen wire: acknowledgement races and unknown results, through the real UI handlers. */
+{
+  const input = document.getElementById("setApiKey");
+  const editSecret = value => { input.value = value; fire("setApiKey", "input", { target: input }); fire("pageSettings", "input", { target: input }); };
+  const moodWrites = rows => rows.filter(call => call.method === "POST" && new URL(call.url, "http://127.0.0.1").pathname === "/api/settings" && !settingsOperation(call));
+  const finds = rows => rows.filter(call => settingsOperation(call) === "find");
+  const wait = () => new Promise(resolve => setTimeout(resolve, 35));
+  editSecret("synthetic-sent-secret"); settingsDelayMs = 100;
+  let before = calls.length, flight = sandbox.probe.saveSettings(); await wait();
+  editSecret("synthetic-later-secret"); await flight; settingsDelayMs = 0;
+  const sent = JSON.parse(calls.slice(before).find(isSettingsSave).body);
+  check("In-flight Replace sends the frozen value and preserves a newer secret draft", sent.secrets.some(edit => edit.slot === 0 && edit.kind === 1 && edit.value === "synthetic-sent-secret")
+    && input.value === "synthetic-later-secret" && sandbox.probe.isDirty());
+  // Re-read after a known commit before reconfirming the late draft: stale versions must not silently bypass CAS.
+  await sandbox.probe.loadSettings(); editSecret("synthetic-later-secret");
+  // A newer Delete after a sent Replace must survive acknowledgement.
+  settingsDelayMs = 100; flight = sandbox.probe.saveSettings(); await wait();
+  fire("setApiKeyDelete", "click"); await flight; settingsDelayMs = 0;
+  await sandbox.probe.loadSettings(); fire("setApiKeyDelete", "click");
+  before = calls.length; await sandbox.probe.saveSettings();
+  check("A late Delete survives Replace acknowledgement and is sent without a value", JSON.parse(calls.slice(before).find(isSettingsSave).body).secrets
+    .some(edit => edit.slot === 0 && edit.kind === 2 && !Object.hasOwn(edit, "value")));
+  fire("setApiKeyDelete", "click"); settingsDelayMs = 100;
+  flight = sandbox.probe.saveSettings(); await wait(); editSecret("synthetic-after-delete"); await flight; settingsDelayMs = 0;
+  check("A late Replace survives Delete acknowledgement", input.value === "synthetic-after-delete" && sandbox.probe.isDirty());
+  await sandbox.probe.loadSettings(); editSecret("synthetic-after-delete");
+  await sandbox.probe.saveSettings();
+  check("Only an acknowledged unchanged Replace clears its input", input.value === "");
+  // A lost main response must not cause an automatic Mood action, even after Find.
+  editSecret("synthetic-unknown-main");
+  document.getElementById("setMood").value = "synthetic-mood-one";
+  fire("pageSettings", "input", { target: document.getElementById("setMood") });
+  before = calls.length; loseNextConfigurationResponse = true; await sandbox.probe.saveSettings();
+  const pendingMain = sandbox.probe.pendingConfiguration(), afterUnknown = calls.length;
+  check("Lost main response retains its original key and does not execute Mood", !!pendingMain && pendingMain.operation === "save" && moodWrites(calls.slice(before)).length === 0);
+  await document.getElementById("configurationFindLast").dispatchEvent({ type: "click" }); await wait();
+  await sandbox.probe.saveSettings();
+  const recovered = calls.slice(afterUnknown);
+  check("Find recovers the original main key without a new save or automatic Mood", finds(recovered).some(call => JSON.parse(call.body).key === pendingMain.mainKey)
+    && !recovered.some(isSettingsSave) && moodWrites(recovered).length === 0 && sandbox.probe.pendingConfiguration() === null && input.value === "");
+  await sandbox.probe.loadSettings();
+  // Main commit and the separately committed Mood each keep their own operation fact.
+  editSecret("synthetic-before-mood"); document.getElementById("setMood").value = "synthetic-mood-two";
+  fire("pageSettings", "input", { target: document.getElementById("setMood") });
+  before = calls.length; loseNextMoodResponse = true; await sandbox.probe.saveSettings();
+  const pendingMood = sandbox.probe.pendingConfiguration();
+  check("Unknown Mood keeps two distinct keys after main acknowledgement", !!pendingMood && pendingMood.operation === "legacy" && pendingMood.mainKey !== pendingMood.key
+    && calls.slice(before).filter(isSettingsSave).length === 1 && moodWrites(calls.slice(before)).length === 1 && input.value === "");
+  editSecret("synthetic-after-mood"); before = calls.length;
+  document.getElementById("configurationFindLast").dispatchEvent({ type: "click" }); await wait();
+  await sandbox.probe.saveSettings();
+  const recoveredMood = calls.slice(before), foundKeys = finds(recoveredMood).map(call => JSON.parse(call.body).key);
+  check("Find exposes main and Mood facts without reapplying either or erasing a later secret", foundKeys.includes(pendingMood.mainKey) && foundKeys.includes(pendingMood.key)
+    && !recoveredMood.some(isSettingsSave) && moodWrites(recoveredMood).length === 0 && input.value === "synthetic-after-mood");
+  editSecret(""); await sandbox.probe.loadSettings();
+  const getElementById = document.getElementById;
+  const persona = getElementById("setPersona"); persona.value = "synthetic-preserved-draft";
+  fire("pageSettings", "input", { target: persona });
+  document.getElementById = id => id === "setAgentServerDocker" ? undefined : getElementById.call(document, id);
+  before = calls.length;
+  try { await sandbox.probe.saveSettings(); }
+  finally { document.getElementById = getElementById; }
+  check("Damaged required DOM rejects the entire batch without fabricated false or lost draft", !calls.slice(before).some(isSettingsSave)
+    && sandbox.probe.isDirty() && persona.value === "synthetic-preserved-draft");
+  await sandbox.probe.loadSettings(); before = calls.length; await sandbox.probe.saveSettings();
+  const untouched = [...configurationSchema.keys()].filter(member => !sandbox.probe.configurationInputMembers().includes(member));
+  const wire = JSON.parse(calls.slice(before).find(isSettingsSave).body);
+  check("Fields without implemented UI getters are Keep, not manufactured edits", untouched.length > 0
+    && untouched.every(member => Object.values(wire.changes).every(partition => !Object.hasOwn(partition, member))));
+  check("Secrets and frozen requests never enter browser persistent storage", [...store.values()].every(value => !String(value).includes("synthetic-unknown-main")
+    && !String(value).includes("synthetic-after-mood") && !String(value).includes('"secrets"')));
 }
 
 /* ─────────── 4) 服务器 agent 的 QQ 动作（点赞/戳一戳…） ─────────── */
@@ -1270,9 +1479,9 @@ check("★ 把“实际会开哪几个”回显出来（留空≠没有，写错
   const b = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body).agentServerQqActions : undefined;
-  check("★ 保存时把 QQ 动作一起发给服务端（原样，规范化交给服务端做）", sent === "like,poke,ban",
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post).agentServerQqActions : undefined;
+  check("★ 未改的 QQ 动作保持原样且发送 Keep", sent === undefined && qqActionsInput.value === "like,poke,ban",
     `发出=${JSON.stringify(sent)}`);
 }
 
@@ -1293,9 +1502,9 @@ check("★ 已配置的值回填到开关上",
   const b = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body).agentServerKeepContext : undefined;
-  check("★ 保存时把开关一起发出去（true/false，不是字符串）", sent === true, `发出=${JSON.stringify(sent)}`);
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post).agentServerKeepContext : undefined;
+  check("★ 未改上下文开关保持布尔值且发送 Keep", sent === undefined && keepCtx.checked === true, `发出=${JSON.stringify(sent)}`);
 }
 
 /* ─────────── 4) 白名单：群聊 / 私聊两个框 ─────────── */
@@ -1319,10 +1528,10 @@ check("★ 哪边在用旧的共用名单，面板就如实说哪边",
   const b = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body) : {};
-  check("★ 保存时两个白名单都发出去（不是只发旧的）",
-    sent.whitelistGroups === "10001,20002" && sent.whitelistPrivates === "",
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post) : {};
+  check("★ 未改的两份白名单独立保留且发送 Keep",
+    sent.whitelistGroups === undefined && sent.whitelistPrivates === undefined && wlGroups.value === "10001,20002" && wlPrivates.value === "",
     `groups=${JSON.stringify(sent.whitelistGroups)} privates=${JSON.stringify(sent.whitelistPrivates)}`);
 }
 
@@ -1339,9 +1548,9 @@ check("★ 服务端返回 false 时开关是关的（高风险默认不能自�
   const b = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body).agentServerDocker : undefined;
-  check("★ 保存时把 docker 开关一起发出去", sent === false, `发出=${JSON.stringify(sent)}`);
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post).agentServerDocker : undefined;
+  check("★ 未改高风险 docker 开关保持关闭且发送 Keep", sent === undefined && dockerSwitch.checked === false, `发出=${JSON.stringify(sent)}`);
 }
 
 /* ─────────── 4) 面板一键部署（上传/拉取产物 + 回滚） ─────────── */
@@ -1368,10 +1577,11 @@ check("★ 已记住的产物地址回填到输入框",
   const b = calls.length;
   try { await saveClicks[0]({}); } catch (e) { /* 同上 */ }
   await new Promise((r) => setTimeout(r, 250));
-  const post = calls.slice(b).find((c) => c.method === "POST" && c.url.includes("/api/settings"));
-  const sent = post ? JSON.parse(post.body) : {};
-  check("★ 保存时开关与地址一起发出",
-    sent.panelDeployEnabled === true && sent.panelDeployUrl === "https://example.com/app.tar.gz",
+  const post = calls.slice(b).find((c) => isSettingsSave(c));
+  const sent = post ? requestIntent(post) : {};
+  check("★ 未改部署开关与地址保持原值且发送 Keep",
+    sent.panelDeployEnabled === undefined && sent.panelDeployUrl === undefined && document.getElementById("setPanelDeployEnabled").checked === true
+      && document.getElementById("deployUrl").value === "https://example.com/app.tar.gz",
     `enabled=${JSON.stringify(sent.panelDeployEnabled)} url=${JSON.stringify(sent.panelDeployUrl)}`);
 }
 
@@ -1410,7 +1620,7 @@ console.log("\n▶ 动态：外部设备表（加载 / 保存 / 放弃 / 转义 
 // 静态：这一组修复的关键点（缺一个就会退回“改了半天没保存/新设备自己消失”）
 const loadBodyFull = js.slice(js.indexOf("async function loadSettings"), js.indexOf("async function saveSettings"));
 check("★ 进设置页时就拉设备表（只靠手动点刷新 = 首次进来是空表）",
-  /await loadAgentDevices\(\)/.test(loadBodyFull),
+  /projectTypedDevices\(snapshot\)/.test(loadBodyFull) && /await loadAgentDevices\(\)/.test(loadBodyFull),
   "loadSettings 里没有调 loadAgentDevices()");
 check("★ 设备名/目录进 innerHTML 前要转义",
   /function escapeHtml\(/.test(js) && (js.match(/escapeHtml\(/g) || []).length >= 8,
@@ -1429,8 +1639,8 @@ const enterSettings = async () => {
   await new Promise((r) => setTimeout(r, 300));
 };
 const lastSettingsBody = () => {
-  const c = [...calls].reverse().find((x) => x.method === "POST" && x.url.includes("/api/settings"));
-  return c ? JSON.parse(c.body) : null;
+  const c = [...calls].reverse().find((x) => isSettingsSave(x));
+  return c ? requestIntent(c) : null;
 };
 
 // ① 指定设备（agentTarget = 设备名）：loadSettings 会走 ensureDeviceOption —— 曾经这里是 ReferenceError
@@ -1458,7 +1668,7 @@ await saveClicks[0]({});
 await new Promise((r) => setTimeout(r, 200));
 const sentDevices = JSON.parse(lastSettingsBody()?.agentDevices || "[]");
 check("★ 新增的设备真的进了保存请求（以前被 agentDevicesLoaded 拦下）",
-  sentDevices.some((d) => d.name === "DEV-NEW"), JSON.stringify(lastSettingsBody()?.agentDevices));
+  sentDevices.some((d) => d.nameRaw === "DEV-NEW"), JSON.stringify(lastSettingsBody()?.agentDevices));
 check("★ 保存后服务端设备表里也有它（不再被保存后的刷新覆盖）",
   serverDevices.some((d) => d.name === "DEV-NEW"), JSON.stringify(serverDevices.map((d) => d.name)));
 check("保存后草稿与服务端一致", probe.deviceDraft().length === serverDevices.length,
@@ -1501,22 +1711,23 @@ check("★ 保存期间的新编辑不会被刷新结果盖掉",
   probe.deviceDraft()[0]?.tools === "late-edit", JSON.stringify(probe.deviceDraft()[0]));
 check("★ 保存期间有新编辑时，未保存提示要留着（不能谎报已存下）", probe.isDirty() === true);
 check("保存提示里说明了还有新修改",
-  String(document.getElementById("saveBarText")?.textContent || "").includes("新的修改"),
-  String(document.getElementById("saveBarText")?.textContent || "(空)"));
+  String(document.getElementById("toast")?.textContent || "").includes("新编辑尚未保存"),
+  String(document.getElementById("toast")?.textContent || "(空)"));
 
 // ⑥ 设备表拉不到 + 用户改了设备行：既不能发半份表（服务端整表替换 = 删光其它设备），也不能无声丢掉
 agentStatusFails = true;
 probe.forgetDevices();
 const devicesBefore = JSON.stringify(serverDevices);
+const incompleteBefore = calls.length;
 probe.setDraft([{ name: "DEV-PARTIAL", online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] }]);
 await saveClicks[0]({});
 await new Promise((r) => setTimeout(r, 200));
 agentStatusFails = false;
 check("★ 设备表没拉到时不发半份设备表（发了就等于把其它设备配置删光）",
-  lastSettingsBody()?.agentDevices === undefined, String(lastSettingsBody()?.agentDevices));
+  !calls.slice(incompleteBefore).some(isSettingsSave), "Incomplete authoritative draft must reject the whole write");
 check("★ 但保存提示要说清“设备改动没保存”（不能无声丢掉）",
-  String(document.getElementById("saveBarText")?.textContent || "").includes("设备相关改动"),
-  String(document.getElementById("saveBarText")?.textContent || "(空)"));
+  String(document.getElementById("toast")?.textContent || "").includes("设备表未完整加载"),
+  String(document.getElementById("toast")?.textContent || "(空)"));
 check("服务端的设备配置没被清空", JSON.stringify(serverDevices) === devicesBefore);
 check("设备表请求真的失败过（否则上面三条形同虚设 —— 拉不到才该跳过）", agentStatusHits > 0, `hits=${agentStatusHits}`);
 
@@ -1539,6 +1750,7 @@ check("设备表请求真的失败过（否则上面三条形同虚设 —— �
   document.getElementById("setApprovalApprovers").value = "10002, 10003";
   await saveClicks[0]({});
   await new Promise((r) => setTimeout(r, 200));
+  const sentApproval = lastSettingsBody() || {};
   // ⑧ P1：参与状态机的上限必须“回填 + 发得出去”，只读状态面板必须能画出来
   // 注意：桩 DOM 的 value 是普通属性，赋进去的是**数字**（不是字符串）→ 一律 String() 后再比
   const partVals = Object.fromEntries(["setPartMaxReplies", "setPartCooldown", "setPartProbing",
@@ -1563,8 +1775,8 @@ check("设备表请求真的失败过（否则上面三条形同虚设 —— �
   await saveClicks[0]({});
   await new Promise((r) => setTimeout(r, 200));
   const sentSwitches = lastSettingsBody() || {};
-  check("★ 保存请求带上这两个开关",
-    sentSwitches.enableParticipationGating === true && sentSwitches.enableQuestions === true,
+  check("★ 保存发送已改的闸门开关，未改提问开关为 Keep",
+    sentSwitches.enableParticipationGating === true && sentSwitches.enableQuestions === undefined && document.getElementById("setEnableQuestions").checked === true,
     JSON.stringify(sentSwitches));
 
   document.getElementById("setPartMaxReplies").value = "6";
@@ -1572,12 +1784,12 @@ check("设备表请求真的失败过（否则上面三条形同虚设 —— �
   await saveClicks[0]({});
   await new Promise((r) => setTimeout(r, 200));
   const sentParticipation = lastSettingsBody() || {};
-  check("★ 保存请求带上 5 个参与上限字段",
+  check("★ 参与上限发送两个已改字段，另三个 Keep 且不漂移",
     sentParticipation.participationMaxConsecutiveReplies === 6 &&
     sentParticipation.participationCooldownSeconds === 45 &&
-    sentParticipation.participationProbingMaxReplies === 2 &&
-    sentParticipation.participationMaxActiveLifetimeSeconds === 600 &&
-    sentParticipation.participationMaxExitingLifetimeSeconds === 120,
+    sentParticipation.participationProbingMaxReplies === undefined && document.getElementById("setPartProbing").value === "2" &&
+    sentParticipation.participationMaxActiveLifetimeSeconds === undefined && document.getElementById("setPartActiveLife").value === "600" &&
+    sentParticipation.participationMaxExitingLifetimeSeconds === undefined && document.getElementById("setPartExitingLife").value === "120",
     JSON.stringify(sentParticipation));
 
   // 只读状态：画出来的是“形状”（状态/原因/计数），且必须走安全文本节点。
@@ -1593,7 +1805,7 @@ check("设备表请求真的失败过（否则上面三条形同虚设 —— �
     partText.includes("连续 ≤3"), partText.slice(0, 120));
   check("★ 参与状态用的是文本节点，不是 innerHTML（会话名里可能有别人写的字）",
     partBox.children.every((c) => c.tagName === "DIV" && String(c.innerHTML || "") === ""),
-    "子节点数=" + partBox.children.length);  const sentApproval = lastSettingsBody() || {};
+    "子节点数=" + partBox.children.length);
   check("★ 保存请求带上 scenarioPreset / enableApprovals / approvalApprovers",
     sentApproval.scenarioPreset === "research" && sentApproval.enableApprovals === false &&
     sentApproval.approvalApprovers === "10002, 10003", JSON.stringify(sentApproval));
@@ -1953,7 +2165,7 @@ check("Agent 执行期间有 busy 状态与重复提交保护",
     runCalls.length === 1, `请求数=${runCalls.length}`);
   const posted = runCalls[0];
   let body = null;
-  try { body = posted ? JSON.parse(posted.body) : null; } catch {}
+  try { body = posted ? requestIntent(posted) : null; } catch {}
   check("★ 执行请求体包含 prompt / timeoutSec / target",
     body && body.key === "panel:workspace" && body.sessionId && body.prompt === prompt && Number.isFinite(body.timeoutSec) && body.target === "server",
     posted ? posted.body : "没有发出请求");
@@ -1976,7 +2188,7 @@ check("Agent 执行期间有 busy 状态与重复提交保护",
   const before = calls.length;
   await sandbox.probe.saveAgentWorkbenchConfig();
   const call = calls.slice(before).find((call) => call.method === "POST" && call.url.includes("/api/settings"));
-  const payload = call ? JSON.parse(call.body) : {};
+  const payload = call ? requestIntent(call) : {};
   check("★ 保存时模型与推理参数各自独立",
     payload.agentServerModel === "synthetic-selected-model" && payload.agentReasoningEffort === "custom-level");
   check("★ 权限全部取消不序列化成后端的空值全开",
@@ -2059,8 +2271,8 @@ check("★ 写路径指向 /api/approvals/decide（唯一一条写路径）",
   await new Promise((r) => setTimeout(r, 30));
   const posted = calls.slice(before).find((c) => String(c.url).includes("/api/approvals/decide"));
   check("★ 点批准 → POST /api/approvals/decide（带编号与 approve=true）",
-    !!posted && posted.method === "POST" && JSON.parse(posted.body).id === "ABC234" &&
-    JSON.parse(posted.body).approve === true,
+    !!posted && posted.method === "POST" && requestIntent(posted).id === "ABC234" &&
+    requestIntent(posted).approve === true,
     posted ? `${posted.method} ${posted.url} ${posted.body}` : "没有发出请求");
 }
 
@@ -2074,7 +2286,7 @@ check("index.html 有步进循环控件（1~3，默认 1）",
 
 check("★ app.js 回填它（loadSettings 与 saveSettings 字段集合必须一致）",
   js.includes('$("setMaxAgentSteps").value = r.maxAgentSteps') &&
-  js.includes("maxAgentSteps: Number("));
+  /maxAgentSteps: get => Number\(get\("setMaxAgentSteps"\)\.value\)/.test(inputBody));
 
 check("★ 拖动步进滑块时同步更新数值徽标",
   js.includes('$("setMaxAgentSteps").addEventListener("input"') &&
@@ -2084,11 +2296,11 @@ const beforeStepSave = calls.length;
 await sandbox.probe.saveSettings();
 check("★ 保存请求带 maxAgentSteps（回填的是 1，发出去的也是 1）",
   (() => {
-    const sent = calls.slice(beforeStepSave).filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
-    return !!sent && JSON.parse(sent.body).maxAgentSteps === 1;
+    const sent = calls.slice(beforeStepSave).filter((c) => isSettingsSave(c)).pop();
+    return !!sent && requestIntent(sent).maxAgentSteps === undefined && Number(document.getElementById("setMaxAgentSteps").value) === 1;
   })(),
   (() => {
-    const sent = calls.slice(beforeStepSave).filter((c) => String(c.url).includes("/api/settings") && c.method === "POST").pop();
+    const sent = calls.slice(beforeStepSave).filter((c) => isSettingsSave(c)).pop();
     return sent ? "最后一次保存：" + sent.body : "没有保存请求";
   })());
 /* ─────────── S) 交互演练场（阶段一 §3.1） ─────────── */
@@ -2169,7 +2381,8 @@ for (const depth of ["off", "low", "medium", "high", "xhigh", "custom"]) {
     document.getElementById("thinkingCustomBudgetWrap").hidden === (depth !== "custom"));
   await sandbox.probe.saveSettings();
   check(`思考深度 ${depth} 保存无漂移`,
-    lastSettingsBody()?.thinkingBudget === depth && lastSettingsBody()?.thinkingCustomBudget === "8192");
+    lastSettingsBody()?.thinkingBudget === undefined && lastSettingsBody()?.thinkingCustomBudget === undefined
+      && document.getElementById("setThinkingBudget").value === depth);
 }
 document.getElementById("setThinkingBudget").value = "off";
 fire("setThinkingBudget", "change", { target: document.getElementById("setThinkingBudget") });
@@ -2242,7 +2455,7 @@ delete RUNTIME.officialSecretSource;
 delete RUNTIME.officialSecretMasked;
 check("全部设置保存请求均无官方 Secret 字段", calls.filter((call) => call.method === "POST"
   && String(call.url).includes("/api/settings")).every((call) =>
-    !Object.keys(JSON.parse(call.body)).some((key) => /^(officialAppSecret|clearOfficialAppSecret)$/i.test(key))));
+    !Object.keys(requestIntent(call)).some((key) => /^(officialAppSecret|clearOfficialAppSecret)$/i.test(key))));
 
 console.log("");
 if (failures.length === 0) {

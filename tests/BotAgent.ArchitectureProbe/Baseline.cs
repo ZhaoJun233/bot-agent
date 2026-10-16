@@ -219,7 +219,15 @@ internal static class Baseline
         ["src/BotAgent.Platforms/Common/OfficialIdMap.cs"] = "src/BotAgent.Headless/Adapters/Persistence/OfficialIdMap.cs",
     };
 
+    // New configuration persistence ownership, not fictitious equivalent legacy migrations.
+    public static readonly IReadOnlyDictionary<string, string> ConfigurationSqlPaths = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["src/BotAgent.Storage/ConfigurationStore.cs"] = "C3 configuration transaction, CAS, governance and recovery ledger",
+        ["src/BotAgent.Storage/ConfigurationStorageBridge.cs"] = "Private same-connection configuration field provenance projection",
+    };
+
     public static bool AllowsSql(string path) => path.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase)
+        || ConfigurationSqlPaths.ContainsKey(path)
         || (MigratedPersistencePaths.TryGetValue(path, out var old) && old.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase));
 
     public static bool AllowsFileIo(string path) => path.StartsWith(FileIoAllowedPrefix, StringComparison.OrdinalIgnoreCase)

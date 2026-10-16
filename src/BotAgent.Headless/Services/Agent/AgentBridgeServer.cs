@@ -1,3 +1,5 @@
+extern alias StorageModule;
+
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
@@ -5,6 +7,8 @@ using System.Text.Json;
 using BotAgent.Services.Agent;
 using BotAgent.Domain.Agent;
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Configuration;
+using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 
 namespace BotAgent.Services.Agent;
 
@@ -49,6 +53,7 @@ public sealed class AgentBridgeServer
         public SemaphoreSlim SendGate { get; } = new(1, 1);
         public bool Registered { get; set; }
         public string Name { get; set; } = "device";
+        public DeviceKey? BoundDeviceKey { get; set; }
 
         public void Stop()
         {
@@ -70,7 +75,8 @@ public sealed class AgentBridgeServer
     private readonly ConcurrentDictionary<string, BridgeConnection> _bridges = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>当前在线的外部设备名（面板 / //status 用）。</summary>
-    public IReadOnlyList<string> BridgeNames => _bridges.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+    public IReadOnlyList<string> BridgeNames => _bridges.Values.Where(IsDispatchAllowed)
+        .Select(conn => conn.Name).OrderBy(name => name, StringComparer.Ordinal).ToList();
 
     // ---- 任务队列（单工人：本机 pi 串行跑，避免同一台机器上几个 agent 抢同一个工作区）----
     private readonly ConcurrentQueue<AgentTask> _queue = new();
@@ -110,11 +116,25 @@ public sealed class AgentBridgeServer
     }
 
     /// <summary>桥是否在线（任意一台）。</summary>
-    public bool Connected => !_bridges.IsEmpty;
+    public bool Connected => _bridges.Values.Any(IsDispatchAllowed);
 
     /// <summary>指定设备是否在线（传空 = 任意一台在线）。</summary>
     public bool IsDeviceOnline(string? name)
-        => string.IsNullOrWhiteSpace(name) ? Connected : _bridges.ContainsKey(name.Trim());
+        => string.IsNullOrWhiteSpace(name) ? Connected
+            : _bridges.TryGetValue(name.Trim(), out var conn) && IsDispatchAllowed(conn);
+
+    internal bool CanDispatchToDevice(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        name = name.Trim();
+        return ConfigurationBridge.CanDispatchDevice(name,
+            _bridges.TryGetValue(name, out var conn) ? conn.BoundDeviceKey : null);
+    }
+
+    private bool IsDispatchAllowed(BridgeConnection conn)
+        => conn.Registered && !conn.Token.IsCancellationRequested && conn.Socket.State == WebSocketState.Open
+            && _bridges.TryGetValue(conn.Name, out var live) && ReferenceEquals(live, conn)
+            && ConfigurationBridge.CanDispatchDevice(conn.Name, conn.BoundDeviceKey);
 
     /// <summary>任意一台在线设备的（名字、目录、pi 版本）；都没有就返回 null。</summary>
     public (string Name, string? Cwd, string? Pi)? AnyBridge
@@ -123,7 +143,7 @@ public sealed class AgentBridgeServer
         {
             foreach (var (name, conn) in _bridges)
             {
-                return (name, conn.Cwd, conn.PiVersion);
+                if (IsDispatchAllowed(conn)) return (name, conn.Cwd, conn.PiVersion);
             }
 
             return null;
@@ -132,7 +152,7 @@ public sealed class AgentBridgeServer
 
     /// <summary>指定设备的详情（//status 面板/群里显示：pi 版本 + 目录）。</summary>
     public (string Name, string? Cwd, string? Pi)? DeviceInfo(string name)
-        => _bridges.TryGetValue(name, out var conn) ? (conn.Name, conn.Cwd, conn.PiVersion) : null;
+        => _bridges.TryGetValue(name, out var conn) && IsDispatchAllowed(conn) ? (conn.Name, conn.Cwd, conn.PiVersion) : null;
 
     /// <summary>指定设备上报的 pi 会话列表（没指定就取第一台在线的）。</summary>
     public List<JsonObject> DevicePiSessions(string? name = null)
@@ -154,12 +174,12 @@ public sealed class AgentBridgeServer
     {
         if (!string.IsNullOrWhiteSpace(preferName))
         {
-            return _bridges.TryGetValue(preferName.Trim(), out var named) ? named : null;
+            return _bridges.TryGetValue(preferName.Trim(), out var named) && IsDispatchAllowed(named) ? named : null;
         }
 
         foreach (var conn in _bridges.Values)
         {
-            return conn;
+            if (IsDispatchAllowed(conn)) return conn;
         }
 
         return null;
@@ -201,6 +221,8 @@ public sealed class AgentBridgeServer
     public int Cancel(string sourceKey)
     {
         var cancelled = 0;
+        BridgeConnection? cancelTarget = null;
+        AgentTask? finished = null;
 
         lock (_stateLock)
         {
@@ -209,7 +231,8 @@ public sealed class AgentBridgeServer
                 cur.CancelRequested = true;
                 cancelled++;
                 // 通知桥把 pi 杀掉（不杀就等于关不掉：任务还占着本机 CPU）
-                _ = SendAsync(new JsonObject { ["type"] = "cancel", ["id"] = cur.Id }, cur.DeviceName);
+                if (cur.DeviceName is { } name && _bridges.TryGetValue(name, out var target)
+                    && target.Id == cur.ConnectionId) cancelTarget = target;
 
                 // 立即收尾，而不是等桥回一句“已取消”：
                 // ① 管理员发 //stop 就是要“马上停”，不能还挂着；
@@ -217,9 +240,13 @@ public sealed class AgentBridgeServer
                 cur.Fail("已取消");
                 _outstanding.TryRemove(cur.Id, out _);
                 _current = null;
-                Finished?.Invoke(cur);
+                finished = cur;
             }
         }
+        // Never acquire the database gate while holding the task state lock, or re-resolve a replacement by name.
+        if (cancelTarget is not null && finished is not null)
+            _ = SendAsync(cancelTarget, new JsonObject { ["type"] = "cancel", ["id"] = finished.Id });
+        if (finished is not null) Finished?.Invoke(finished);
 
         // 排队中的直接摘掉（ConcurrentQueue 不能按条件删 → 重建一份）
         var keep = new List<AgentTask>();
@@ -318,7 +345,9 @@ public sealed class AgentBridgeServer
     /// <summary>踢掉某台设备的连接（面板里的“断开”）；返回是不是真踢了。</summary>
     public async Task<bool> DisconnectAsync(string? deviceName)
     {
-        var conn = PickBridge(deviceName);
+        BridgeConnection? conn;
+        if (string.IsNullOrWhiteSpace(deviceName)) conn = PickBridge(null);
+        else _bridges.TryGetValue(deviceName.Trim(), out conn);
         if (conn is null)
         {
             return false;
@@ -331,6 +360,7 @@ public sealed class AgentBridgeServer
         {
             await conn.SendGate.WaitAsync(timeout.Token);
             entered = true;
+            if (!IsDispatchAllowed(conn)) return false;
             // HandleAsync owns ReceiveAsync; CloseAsync would start a competing receiver.
             await conn.Socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "panel-disconnect", timeout.Token);
         }
@@ -443,6 +473,11 @@ public sealed class AgentBridgeServer
         if (conn.Token.IsCancellationRequested) return;
         if (type != "hello" && (!conn.Registered ||
             !_bridges.TryGetValue(conn.Name, out var active) || !ReferenceEquals(active, conn))) return;
+        if (type != "hello" && !IsDispatchAllowed(conn))
+        {
+            conn.Stop();
+            return;
+        }
         if (type is "started" or "progress" or "chunk" or "done" or "error")
         {
             if (FindTask(id) is not { } owned || owned.ConnectionId != conn.Id) return;
@@ -459,7 +494,15 @@ public sealed class AgentBridgeServer
                     conn.Stop();
                     return;
                 }
+                var authorization = ConfigurationBridge.AuthorizeDeviceHello(name);
+                if (!authorization.Allowed)
+                {
+                    _log("configuration_device_denied");
+                    conn.Stop();
+                    return;
+                }
                 conn.Name = name;
+                conn.BoundDeviceKey = authorization.Key;
 
                 conn.Cwd = node?["cwd"]?.GetValue<string>();
                 conn.PiVersion = node?["pi"]?.GetValue<string>();
@@ -824,7 +867,7 @@ public sealed class AgentBridgeServer
         return conn is null ? Task.FromResult(false) : SendAsync(conn, payload);
     }
 
-    private static async Task<bool> SendAsync(BridgeConnection conn, JsonObject payload)
+    private async Task<bool> SendAsync(BridgeConnection conn, JsonObject payload)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(conn.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(SendTimeoutSeconds));
@@ -833,7 +876,11 @@ public sealed class AgentBridgeServer
         {
             await conn.SendGate.WaitAsync(timeout.Token);
             entered = true;
-            if (conn.Socket.State != WebSocketState.Open || conn.Token.IsCancellationRequested) return false;
+            if (!IsDispatchAllowed(conn))
+            {
+                conn.Stop();
+                return false;
+            }
             var bytes = Encoding.UTF8.GetBytes(payload.ToJsonString());
             await conn.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, timeout.Token);
             return true;
@@ -863,6 +910,7 @@ public sealed class AgentBridgeServer
         }
 
         var devices = _bridges.ToArray()
+            .Where(kv => IsDispatchAllowed(kv.Value))
             .Select(kv => $"{kv.Key}（pi {kv.Value.PiVersion ?? "?"}，目录 {_settings.ResolveAgentWorkDir(kv.Key, kv.Value.Cwd) ?? "?"}）")
             .ToList();
 

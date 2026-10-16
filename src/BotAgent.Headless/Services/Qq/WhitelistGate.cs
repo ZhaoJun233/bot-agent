@@ -2,6 +2,8 @@ using BotAgent.Domain.Qq;
 using BotAgent.Domain.Platforms;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Platforms;
+using BotAgent.Domain.Configuration;
+using System.Collections.Immutable;
 
 namespace BotAgent.Services.Qq;
 
@@ -21,6 +23,7 @@ public sealed class WhitelistGate
 {
     private readonly SettingsBox _box;
     private readonly PlatformPolicyResolver _platformPolicies;
+    private readonly Func<bool, long, bool>? _feishuTargetAllowed;
 
     private HashSet<long> _groups = new();
     private bool _allGroups;
@@ -43,9 +46,14 @@ public sealed class WhitelistGate
     private bool _privatesFromLegacy;
 
     public WhitelistGate(SettingsBox box, PlatformPolicyResolver platformPolicies)
+        : this(box, platformPolicies, null) { }
+
+    public WhitelistGate(SettingsBox box, PlatformPolicyResolver platformPolicies,
+        Func<bool, long, bool>? feishuTargetAllowed)
     {
         _box = box ?? throw new ArgumentNullException(nameof(box));
         _platformPolicies = platformPolicies ?? throw new ArgumentNullException(nameof(platformPolicies));
+        _feishuTargetAllowed = feishuTargetAllowed;
         Rebuild();
     }
 
@@ -114,13 +122,43 @@ public sealed class WhitelistGate
             msg.IsGroup,
             msg.IsGroup ? msg.GroupId : msg.UserId));
 
+    /// <summary>A caller must supply its authenticated source context; no instance is inferred from a key.</summary>
+    public bool AllowsMessage(PlatformContext context, QqChatMessage msg)
+        => AllowsSource(context, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+
+    public bool AllowsSource(PlatformContext context, bool isGroup, long id)
+    {
+        var settings = _settings;
+        if (!settings.RuntimePlatformPolicies.HasValue)
+            return context == new PlatformContext(PlatformId.QqPrivate, AccountScope.Legacy) && AllowsSource(isGroup, id);
+        var policy = _platformPolicies.Resolve(context);
+        if (!policy.Registered || !policy.Connected || !policy.Enabled || !policy.ChatEnabled) return false;
+        var rules = PlatformSwitchSettings.ResolvePolicyRules(settings, context, Actions(settings));
+        return Matches(isGroup ? rules.GroupWhitelist : rules.PrivateWhitelist, id, context.PlatformId == PlatformId.Local);
+    }
+
+    private static ImmutableArray<ActionId> Actions(AppSettings settings)
+        => BotAgent.Services.Agent.QqActionCatalog.ParseAllowed(settings.AgentServerQqActions)
+            .Select(value => new ActionId(value)).ToImmutableArray();
+
+    private static bool Matches(ListRule rule, long id, bool local)
+    {
+        if (id <= 0) return false;
+        if (rule.Kind == ListRuleKind.AllowAll) return true;
+        if (!rule.TryGetExplicitValue(out var text)) return false;
+        var (ids, all) = WhitelistPolicy.ParseWhitelist(text);
+        return local ? ids.Select(Channels.LocalTarget).Contains(id) : all || ids.Contains(id);
+    }
+
     /// <summary>
     /// 群/私聊是否在白名单里（戳一戳事件没有 QqChatMessage，只能单拎一个判据）。
     /// 两边**各用各的名单**（管理员 2026-09-18：“私聊白名单和群聊白名单两个框分开”）：以前只比数字，
     /// 所以把一个 QQ 号填进去，连“同号的群”也一起放行了。
     /// </summary>
     public bool AllowsSource(bool isGroup, long id)
-        => isGroup
+        => _settings.RuntimePlatformPolicies.HasValue
+            ? AllowsCanonical(PlatformId.QqPrivate, AccountScope.Legacy, isGroup, id)
+            : isGroup
             ? _allGroups || _groups.Contains(id)
             : _allPrivates || _privates.Contains(id);
 
@@ -141,6 +179,13 @@ public sealed class WhitelistGate
             return false;
         }
 
+        if (_settings.RuntimePlatformPolicies.HasValue)
+        {
+            var platform = Channels.IsLocal(channel) ? PlatformId.Local : Channels.IsFeishu(channel) ? PlatformId.Feishu
+                : Channels.IsOfficial(channel) ? PlatformId.QqOfficial : PlatformId.QqPrivate;
+            return AllowsCanonical(platform, platform == PlatformId.Feishu ? AccountScope.Default : AccountScope.Legacy, isGroup, id);
+        }
+
         if (Channels.IsLocal(channel))
         {
             // 本地通道：只有点名的 id 收（空 = 全拦，fail-closed）
@@ -158,6 +203,26 @@ public sealed class WhitelistGate
                 ? _officialAllGroups || _officialGroups.Contains(id)
                 : _officialAllPrivates || _officialPrivates.Contains(id)
             : AllowsSource(isGroup, id);
+    }
+
+    private bool AllowsCanonical(string platform, string account, bool isGroup, long id)
+    {
+        var settings = _settings;
+        var declared = settings.DeclaredPlatformDrivers.Where(key => key.PlatformId == platform && key.AccountScope == account).ToArray();
+        if (declared.Length != 1 || settings.RuntimePlatformPolicies!.Value.Any(entry =>
+            entry.Target is PolicyTarget.Instance target && target.Key.PlatformId == platform && target.Key.AccountScope == account))
+            return false;
+        var loaded = _platformPolicies.ResolveForChannel(platform);
+        if (!loaded.Registered || !loaded.Connected || !loaded.Enabled || !loaded.ChatEnabled) return false;
+        var rules = PlatformSwitchSettings.ResolvePolicyRules(settings, new PolicyTarget.AccountDefault(platform, account), Actions(settings));
+        if (rules.Enabled != ToggleRule.Enabled || rules.ChatEnabled != ToggleRule.Enabled) return false;
+        if (platform == PlatformId.Feishu)
+        {
+            // This is the unique canonical compatibility lane, not an inferred authenticated instance envelope.
+            try { return _feishuTargetAllowed?.Invoke(isGroup, id) == true; }
+            catch (Exception) { return false; }
+        }
+        return Matches(isGroup ? rules.GroupWhitelist : rules.PrivateWhitelist, id, platform == PlatformId.Local);
     }
 
     /// <summary>闸门现在的样子（启动日志与“被忽略”日志都用它，措辞与以前逐字一致）。</summary>
@@ -194,5 +259,13 @@ public sealed class WhitelistGate
     /// 空名单不算“全部允许”：执行命令的权限必须落到具体某个人身上。
     /// </summary>
     public bool IsOfficialPrivateExplicit(long userId)
-        => _officialPrivates.Count > 0 && _officialPrivates.Contains(userId);
+    {
+        var settings = _settings;
+        if (!settings.RuntimePlatformPolicies.HasValue) return _officialPrivates.Count > 0 && _officialPrivates.Contains(userId);
+        var rules = PlatformSwitchSettings.ResolvePolicyRules(settings,
+            new PolicyTarget.AccountDefault(PlatformId.QqOfficial, AccountScope.Legacy), Actions(settings));
+        return rules.PrivateWhitelist.TryGetExplicitValue(out var text)
+            && WhitelistPolicy.ParseWhitelist(text).Ids.Contains(userId)
+            && AllowsCanonical(PlatformId.QqOfficial, AccountScope.Legacy, false, userId);
+    }
 }

@@ -1,4 +1,6 @@
 using BotAgent.Domain.Platforms;
+using BotAgent.Domain.Configuration;
+using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 
 namespace BotAgent.Platforms;
@@ -67,6 +69,21 @@ public class PlatformOptions
     public string WhitelistPrivates { get; set; } = string.Empty;
     public string MessageWhitelist { get; set; } = string.Empty;
 
+    /// <summary>Null is pre-adoption; an empty array is an authoritative cleared policy table.</summary>
+    [JsonIgnore]
+    public ImmutableArray<PlatformPolicyEntry>? RuntimePlatformPolicies { get; set; }
+    [JsonIgnore]
+    public ImmutableDictionary<PolicyTarget, int> RuntimePlatformPolicyExplicitFields { get; set; }
+        = ImmutableDictionary<PolicyTarget, int>.Empty;
+    [JsonIgnore]
+    public ImmutableDictionary<ConfigurationFieldId, ConfigurationValueSource> RuntimePlatformPolicyBaselineSources { get; set; }
+        = ImmutableDictionary<ConfigurationFieldId, ConfigurationValueSource>.Empty;
+    /// <summary>Trusted host declarations, including disabled or unconstructed drivers; not loaded registry state.</summary>
+    [JsonIgnore]
+    public ImmutableArray<DriverKey> DeclaredPlatformDrivers { get; set; } = ImmutableArray<DriverKey>.Empty;
+    [JsonIgnore]
+    public ImmutableArray<ActionId> DeclaredPlatformActions { get; set; } = ImmutableArray<ActionId>.Empty;
+
     public void CopyPlatformPropertiesTo(PlatformOptions target)
     {
         target.OneBotProtocol = OneBotProtocol;
@@ -96,6 +113,11 @@ public class PlatformOptions
         target.WhitelistGroups = WhitelistGroups;
         target.WhitelistPrivates = WhitelistPrivates;
         target.MessageWhitelist = MessageWhitelist;
+        target.RuntimePlatformPolicies = RuntimePlatformPolicies;
+        target.RuntimePlatformPolicyExplicitFields = RuntimePlatformPolicyExplicitFields;
+        target.RuntimePlatformPolicyBaselineSources = RuntimePlatformPolicyBaselineSources;
+        target.DeclaredPlatformDrivers = DeclaredPlatformDrivers;
+        target.DeclaredPlatformActions = DeclaredPlatformActions;
     }
 }
 

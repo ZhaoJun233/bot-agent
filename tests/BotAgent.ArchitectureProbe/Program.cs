@@ -242,6 +242,7 @@ public static class Program
             catch (InvalidOperationException) { rejected = true; }
             Check("显式源码根无效时不得退回真实仓库假绿", rejected);
             MetricsContractTests();
+            ConfigurationSqlOwnershipTests();
             var storage = SourceFile.FromText("src/BotAgent.Storage/EpisodeStore.cs", "public class EpisodeStore { }");
             const string facadeCode = "extern alias StorageModule; public class EpisodeStore : StorageModule::BotAgent.Adapters.Persistence.EpisodeStore { }";
             Check("C2 facade实际引用存在且没有SQL/IO", IsStorageFacade(SourceFile.FromText("fixture", facadeCode), storage, "EpisodeStore"));
@@ -317,6 +318,39 @@ public static class Program
         }
         finally { Console.SetOut(output); (_passed, _failed) = (passed, failed); }
         Check(label, rejected);
+    }
+
+    private static void ConfigurationSqlOwnershipTests()
+    {
+        Check("C3 SQL registration contains only two exact owned paths",
+            Baseline.ConfigurationSqlPaths.Count == 2
+            && Baseline.AllowsSql("src/BotAgent.Storage/ConfigurationStore.cs")
+            && Baseline.AllowsSql("src/BotAgent.Storage/ConfigurationStorageBridge.cs"));
+        foreach (var path in new[]
+        {
+            "src/BotAgent.Core/Domain/Configuration/ConfigurationStore.cs",
+            "src/BotAgent.Panel/ConfigurationStorageBridge.cs",
+            "src/BotAgent.Storage/OtherConfigurationStore.cs",
+            "src/BotAgent.Headless/Services/ConfigurationStore.cs",
+            "src/BotAgent.Model/ConfigurationStorageBridge.cs",
+        })
+        {
+            var fixture = new SourceIndex
+            {
+                Root = "synthetic",
+                Files = new[] { SourceFile.FromText(path,
+                    "namespace Synthetic;\npublic class Synthetic\n{\n"
+                    + "    private string query = \"SELECT 1\";\n"
+                    + "    public int Value()\n    {\n        return 1;\n    }\n}\n") },
+            };
+            var tightenCount = Tightenable.Count;
+            try
+            {
+                CheckProbeRejects(fixture, RatchetChecks,
+                    "C3 SQL exact ownership rejects " + path, "R2：SQL");
+            }
+            finally { Tightenable.RemoveRange(tightenCount, Tightenable.Count - tightenCount); }
+        }
     }
 
     private static void MetricsContractTests()

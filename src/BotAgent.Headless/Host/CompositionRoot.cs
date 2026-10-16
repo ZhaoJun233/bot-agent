@@ -1,3 +1,10 @@
+extern alias StorageModule;
+
+using BotAgent.Domain.Configuration;
+using System.Collections.Immutable;
+using StorageSecrets = StorageModule::BotAgent.Adapters.Persistence.SecretsStore;
+using ConfigurationModule = StorageModule::BotAgent.Storage;
+using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Adapters.Panel;
 using BotAgent.Adapters.Model;
@@ -89,6 +96,7 @@ internal static class CompositionRoot
     {
         BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
         BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
+        DeclarePlatformCatalog(settings);
         // 配置的唯一发布点：所有组件都从它读"当前生效的那一份"。
         // 面板热更新换的是它背后的实例（不是就地改共享对象），这样在途的那一轮不会读到半新半旧的配置
         // （review-findings #4）。见 SettingsBox。
@@ -102,25 +110,55 @@ internal static class CompositionRoot
         // Provider 注册表只登记非敏感路由元数据；实际密钥仍由环境变量/密钥库提供。
         // 启动时同步 primary 的地址与模型名，但不覆盖已有熔断状态。
         var providerStore = new ModelProviderStore();
-        providerStore.EnsurePrimary(settings);
+        var authorization = new SettingsHotReload.ConfigurationRequestAuthorization();
+        IReadOnlyList<PersistedModelProvider> capturedProviders = Array.Empty<PersistedModelProvider>();
+        var declaredPlugins = new[] { "preset.feature.music", "preset.feature.voice", "preset.feature.stickers",
+            "preset.feature.poke", "preset.feature.vibes", "preset.feature.profiles", "preset.feature.websearch" };
+        RegisteredConfigurationView ReadRegistered(Microsoft.Data.Sqlite.SqliteConnection connection, ConfigurationReadKind kind)
+        {
+            var desired = ConfigurationModule.PluginStore.LoadPluginStatesInTransaction(connection);
+            return new(declaredPlugins.Select(id => new PluginConfigurationView(new(id),
+                    !desired.TryGetValue(id, out var enabled) || enabled)).ToImmutableArray(),
+                SettingsStore.ProjectRegisteredProviderViews(connection, ModelProviderStore.LoadAllInTransaction(connection), capturedProviders, kind));
+        }
+        var participant = new SettingsStore.ConfigurationParticipant(settingsBox, authorization.Reauthorize,
+            (connection, mutations) => ConfigurationSecretMetadata(connection, settingsBox.Current, mutations), ReadRegistered,
+            id => BotConfig.ConfigurationEffect(id) == FieldEffect.Restart
+                || id == ConfigurationFieldId.Model && string.IsNullOrWhiteSpace(settingsBox.Current.ModelOverride)
+                || id == ConfigurationFieldId.ModelBaseUrl && string.IsNullOrWhiteSpace(settingsBox.Current.ModelBaseUrlOverride)
+                    ? ConfigurationValueSource.Unclassified : ConfigurationValueSource.UserConfiguration,
+            BotConfig.ConfigurationEffect, true);
+        var configuration = ConfigurationBridge.Activate(BotAgent.Adapters.Time.ClockBindings.Source, participant);
+        var initialized = settingsStore.LoadInitializedRuntimeSnapshot(settings);
+        settings = settingsBox.Apply(next =>
+        {
+            next.FeishuVerificationToken = initialized.FeishuVerificationToken;
+            next.RuntimePlatformPolicies = initialized.RuntimePlatformPolicies;
+            next.RuntimePlatformPolicyExplicitFields = initialized.RuntimePlatformPolicyExplicitFields;
+            next.RuntimePlatformPolicyBaselineSources = initialized.RuntimePlatformPolicyBaselineSources;
+        });
+        capturedProviders = providerStore.LoadAll().ToArray();
 
         // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
         var riskBackoff = new ProtocolRiskBackoff(msg => FileLog.Write("OneBot", msg));
         var (gateway, source, official, local, feishu, platformRegistry) = BuildChannelLayer(settings, settingsBox, riskBackoff);
-        var platformPolicies = new PlatformPolicyResolver(settingsBox, platformRegistry);
+        var platformPolicies = new PlatformPolicyResolver(settingsBox, platformRegistry, options =>
+            QqActionCatalog.ParseAllowed(((AppSettings)options).AgentServerQqActions)
+                .Select(value => new ActionId(value)).ToImmutableArray());
 
         // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
         var ttsBreaker = new ToolCircuitBreaker("tts");
         var searchBreaker = new ToolCircuitBreaker("search");
         var (brain, store, profiles, stickers, agentBridge, voice, music, links, research) =
-            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, ttsBreaker, searchBreaker);
+            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, capturedProviders, ttsBreaker, searchBreaker);
 
         // ---------------- 用例层：谁依赖谁，只在这里看得到 ----------------
         // 共享状态先建：登录号 / 收摊标记 / 事件聚合 / 白名单闸门（其余组件都要问它们）
         var identity = new BotIdentity();
         var lifetime = new BotLifetime();
         var ui = new PanelNotifier();
-        var whitelist = new WhitelistGate(settingsBox, platformPolicies);
+        var whitelist = new WhitelistGate(settingsBox, platformPolicies,
+            feishu is null ? null : feishu.AllowsMappedTarget);
 
         // 数据侧
         var registry = new ConversationRegistry(store, settingsBox, source, whitelist.AllowsKey, ui.EmitLog);
@@ -219,16 +257,29 @@ internal static class CompositionRoot
             new HttpFetcher(TimeSpan.FromSeconds(6), msg => FileLog.Write("Net", msg), "health"),
             hostFacts);
 
+        settingsHotReload.BindConfiguration(configuration, authorization, settingsStore.LoadCommittedRuntimeSnapshot,
+            (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(configuration, caller, key, intent, mood),
+            healthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
+            version => InspectModelProjection(version, capturedProviders));
+
         var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
 
         var plugins = new PluginManager(ui.EmitLog);
-        plugins.Register(new MusicPresetPlugin(music));
-        plugins.Register(new VoicePresetPlugin(voice));
-        plugins.Register(new StickersPresetPlugin(stickers));
-        plugins.Register(new PokePresetPlugin(poke));
-        plugins.Register(new VibesPresetPlugin(vibes, participation));
-        plugins.Register(new ProfilesPresetPlugin(profiles));
-        plugins.Register(new WebSearchPresetPlugin(research, links));
+        IReadOnlyDictionary<string, bool> startupPluginStates;
+        using (var connection = AppDatabase.Open())
+            startupPluginStates = ConfigurationModule.PluginStore.LoadPluginStatesInTransaction(connection);
+        void RegisterPlugin(Domain.Plugins.IBotPlugin plugin)
+        {
+            if (!declaredPlugins.Contains(plugin.Id, StringComparer.Ordinal)) throw new InvalidOperationException("plugin_catalog_mismatch");
+            plugins.Register(plugin, !startupPluginStates.TryGetValue(plugin.Id, out var enabled) || enabled);
+        }
+        RegisterPlugin(new MusicPresetPlugin(music));
+        RegisterPlugin(new VoicePresetPlugin(voice));
+        RegisterPlugin(new StickersPresetPlugin(stickers));
+        RegisterPlugin(new PokePresetPlugin(poke));
+        RegisterPlugin(new VibesPresetPlugin(vibes, participation));
+        RegisterPlugin(new ProfilesPresetPlugin(profiles));
+        RegisterPlugin(new WebSearchPresetPlugin(research, links));
 
         var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
@@ -286,6 +337,34 @@ internal static class CompositionRoot
             sessionPolicies,
             traces,
             audit);
+
+    private static ImmutableArray<SecretMetadata> ConfigurationSecretMetadata(
+        Microsoft.Data.Sqlite.SqliteConnection connection, AppSettings current,
+        ImmutableArray<ConfigurationModule.SecretMutation> mutations)
+    {
+        var result = ImmutableArray.CreateBuilder<SecretMetadata>();
+        foreach (var slot in Enum.GetValues<WritableSecretSlot>())
+        {
+            var mutation = mutations.FirstOrDefault(value => value.Slot == slot);
+            var kind = mutation.Kind;
+            var stored = StorageSecrets.LoadInTransaction(connection, slot);
+            var configured = kind == SecretEditKind.Replace || kind == SecretEditKind.Keep && !string.IsNullOrWhiteSpace(stored);
+            var source = configured ? CredentialSource.Database : CredentialSource.None;
+            string? environment = slot switch
+            {
+                WritableSecretSlot.FeishuAppSecret or WritableSecretSlot.FeishuEncryptKey => BotConfig.FixedConfigurationEnvironmentSecret(slot),
+                WritableSecretSlot.ModelApiKey when kind == SecretEditKind.Delete =>
+                    (Environment.GetEnvironmentVariable("QQCHAT_API_KEY") ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY"))?.Trim(),
+                WritableSecretSlot.ModelApiKey when kind == SecretEditKind.Keep && string.IsNullOrWhiteSpace(current.ApiKeyOverride) => current.ApiKey,
+                WritableSecretSlot.AgentServerKey when kind == SecretEditKind.Delete => Environment.GetEnvironmentVariable("QQCHAT_AGENT_SERVER_KEY")?.Trim(),
+                WritableSecretSlot.AgentServerKey when kind == SecretEditKind.Keep && string.IsNullOrWhiteSpace(current.AgentServerApiKeyOverride) => current.AgentServerApiKey,
+                _ => null,
+            };
+            if (!string.IsNullOrWhiteSpace(environment)) { configured = true; source = CredentialSource.Environment; }
+            result.Add(new(slot, configured, source));
+        }
+        return result.ToImmutable();
+    }
 
     private static WebUiServer BuildWebUiServer(
         AppSettings settings,
@@ -367,6 +446,16 @@ internal static class CompositionRoot
     /// 上行通道层：私域协议端 →（配齐了 appid/secret 且开关打开时）官方通道 → 聚合器。
     /// 两条路交给**同一个** Agent，隔离靠会话 key 的通道前缀（见 Channels.Key）。顺序与日志措辞逐字搬来。
     /// </summary>
+    internal static void DeclarePlatformCatalog(AppSettings settings)
+    {
+        settings.DeclaredPlatformDrivers = ImmutableArray.Create(
+            new DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, string.Empty),
+            new DriverKey(PlatformId.QqOfficial, AccountScope.Legacy, string.Empty),
+            new DriverKey(PlatformId.Local, AccountScope.Legacy, string.Empty),
+            new DriverKey(PlatformId.Feishu, AccountScope.Default, "feishu-main"));
+        settings.DeclaredPlatformActions = QqActionCatalog.All.Select(spec => new ActionId(spec.Name)).ToImmutableArray();
+    }
+
     private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local, FeishuBotGateway? Feishu, IPlatformRegistry Registry) BuildChannelLayer(
         AppSettings settings, SettingsBox settingsBox, ProtocolRiskBackoff riskBackoff)
     {
@@ -379,7 +468,9 @@ internal static class CompositionRoot
         OfficialBotGateway? official = null;
         LocalChannelSource? local = null;
         FeishuBotGateway? feishu = null;
-        if (settings.OfficialEnabled
+        var officialEnabled = PlatformSwitchSettings.Read(settings, PlatformId.QqOfficial, AccountScope.Legacy).Enabled;
+        var feishuEnabled = PlatformSwitchSettings.Read(settings, PlatformId.Feishu, AccountScope.Default).Enabled;
+        if (officialEnabled
             && !string.IsNullOrWhiteSpace(settings.OfficialAppId)
             && !string.IsNullOrWhiteSpace(settings.OfficialAppSecret))
         {
@@ -396,14 +487,18 @@ internal static class CompositionRoot
                                         + "正式群里 @ 机器人不会被推送，日志里也不会有任何行。要在正式群用，取消面板「用沙箱环境」并重启。");
             }
         }
-        else if (settings.OfficialEnabled)
+        else if (officialEnabled)
         {
             FileLog.Write("Channel", "官方通道开关是开的，但 appid/secret 没配齐 → 这次只跑私域通道");
         }
 
         // 本地通道（批次 F）：**名单非空才建**（默认关）。
-        if (Services.Platforms.PlatformSwitchSettings.Read(settings, PlatformId.Local, AccountScope.Legacy).Enabled
-            && !string.IsNullOrWhiteSpace(settings.LocalChannelIds))
+        var localEnabled = settings.RuntimePlatformPolicies.HasValue
+            ? PlatformSwitchSettings.ResolvePolicyRules(settings, new PolicyTarget.AccountDefault(PlatformId.Local, AccountScope.Legacy),
+                QqActionCatalog.ParseAllowed(settings.AgentServerQqActions).Select(value => new ActionId(value)).ToImmutableArray()).Enabled == ToggleRule.Enabled
+            : PlatformSwitchSettings.Read(settings, PlatformId.Local, AccountScope.Legacy).Enabled
+                && !string.IsNullOrWhiteSpace(settings.LocalChannelIds);
+        if (localEnabled)
         {
             local = new LocalChannelSource(msg => FileLog.Write("Local", msg));
             source = source is ChannelRouter r1
@@ -414,7 +509,7 @@ internal static class CompositionRoot
         }
 
         // 飞书通道（阶段 4）：默认关，开启且配置了 appid 才构造，禁用的平台零网络零凭据。
-        if (settings.FeishuEnabled && !string.IsNullOrWhiteSpace(settings.FeishuAppId))
+        if (feishuEnabled && !string.IsNullOrWhiteSpace(settings.FeishuAppId))
         {
             feishu = new FeishuBotGateway(
                 settingsBox,
@@ -428,7 +523,7 @@ internal static class CompositionRoot
 
             FileLog.Write("Channel", $"飞书通道已启用（appid={settings.FeishuAppId}，入口：POST /api/webhooks/feishu）");
         }
-        else if (settings.FeishuEnabled)
+        else if (feishuEnabled)
         {
             FileLog.Write("Channel", "飞书通道开关是开的，但 appid 没配齐 → 这次不启用飞书通道");
         }
@@ -485,7 +580,7 @@ internal static class CompositionRoot
     private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
         AgentBridgeServer AgentBridge, VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
         BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
-            ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
+            IReadOnlyList<PersistedModelProvider> persistedProviders, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
     {
         var allowPrivateOutbound = Environment.GetEnvironmentVariable("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
         // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒
@@ -503,7 +598,6 @@ internal static class CompositionRoot
         var transport = new ModelTransport(
             settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout());
 
-        var persistedProviders = providerStore.LoadAll();
         var providerRoutes = persistedProviders
             .Select(p => TryBuildProviderRoute(p, settings, secrets))
             .Where(route => route is not null)
@@ -531,7 +625,7 @@ internal static class CompositionRoot
             {
                 var provider = persistedProviders.FirstOrDefault(p =>
                     string.Equals(p.Id, providerId, StringComparison.Ordinal));
-                return provider is null ? null : TryBuildProviderRoute(provider, settingsBox.Current, secrets);
+                return provider is null ? null : TryBuildCurrentProviderRoute(provider, settingsBox.Current);
             })
         {
             BotIdentity = string.IsNullOrWhiteSpace(settings.NormalizedUin) ? null : settings.NormalizedUin,
@@ -605,10 +699,68 @@ internal static class CompositionRoot
         return (brain, store, profiles, stickers, agentBridge, voice, music, links, research);
     }
 
+    private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, IReadOnlyList<PersistedModelProvider> captured)
+    {
+        using var connection = AppDatabase.Open();
+        using var transaction = connection.BeginTransaction(deferred: true);
+        if (ConfigurationBridge.ReadConfigurationVersion(connection) != expected)
+            throw new InvalidOperationException("configuration_superseded");
+        var desired = ModelProviderStore.LoadAllInTransaction(connection).ToDictionary(provider => provider.Id, StringComparer.Ordinal);
+        var restart = desired.Count != captured.Count || captured.Any(provider => !desired.TryGetValue(provider.Id, out var current)
+            || current.SecretKeyRef != provider.SecretKeyRef || current.IsEnabled != provider.IsEnabled || current.Priority != provider.Priority
+            || provider.Id != "primary" && (current.BaseUrl != provider.BaseUrl || current.ModelName != provider.ModelName));
+        transaction.Commit();
+        return new(ApplyStep.ModelProjection, restart ? ApplyState.RestartRequired : ApplyState.Applied, restart ? "restart_required" : null);
+    }
+
     private static ModelProviderRoute? TryBuildProviderRoute(
         PersistedModelProvider provider, AppSettings settings, ISecretsRepository secrets)
     {
+        if (!provider.IsEnabled) return null;
         var apiKey = ResolveProviderSecret(provider.SecretKeyRef, settings, secrets);
+        return BuildProviderRoute(provider, settings, apiKey);
+    }
+
+    private static ModelProviderRoute? TryBuildCurrentProviderRoute(PersistedModelProvider captured, AppSettings current)
+    {
+        if (!captured.IsEnabled || captured.Id.Trim() != captured.Id) return null;
+        try
+        {
+            using var connection = AppDatabase.Open();
+            using var transaction = connection.BeginTransaction(deferred: true);
+            var desired = ModelProviderStore.LoadAllInTransaction(connection)
+                .FirstOrDefault(provider => string.Equals(provider.Id, captured.Id, StringComparison.Ordinal));
+            if (desired is null || !desired.IsEnabled || desired.SecretKeyRef != captured.SecretKeyRef
+                || ModelProviderStore.ClassifyCredentialBinding(desired.SecretKeyRef)
+                    is CredentialBindingState.Unclassified or CredentialBindingState.Unconfigured) return null;
+            if (captured.Id != "primary"
+                && (desired.BaseUrl != captured.BaseUrl || desired.ModelName != captured.ModelName)) return null;
+            var key = ResolveProviderSecretInTransaction(desired.SecretKeyRef, current, connection);
+            var route = BuildProviderRoute(captured, current, key);
+            transaction.Commit();
+            return route;
+        }
+        catch (Exception)
+        {
+            // A failed coherent safety observation denies the route; callers must not revive startup caches.
+            return null;
+        }
+    }
+
+    private static string? ResolveProviderSecretInTransaction(string knownRef, AppSettings current,
+        Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        if (knownRef == "secret:apiKey")
+        {
+            var value = StorageSecrets.LoadInTransaction(connection, WritableSecretSlot.ModelApiKey);
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+        if (knownRef == ModelProviderStore.PrimaryModelCredentialReference) return current.ApiKey;
+        return knownRef == "env:QQCHAT_API_KEY" ? ResolveFixedEnvironmentModelKey(current) : null;
+    }
+
+    private static ModelProviderRoute? BuildProviderRoute(PersistedModelProvider provider, AppSettings settings, string? apiKey)
+    {
                 if (string.IsNullOrWhiteSpace(apiKey) ||
             apiKey.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             apiKey.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
@@ -624,7 +776,9 @@ internal static class CompositionRoot
         var model = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
             ? settings.Model
             : provider.ModelName;
-        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
+        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model)
+            || baseUrl.Length > 2048 || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var endpoint)
+            || endpoint.Scheme is not ("http" or "https") || endpoint.UserInfo.Length != 0)
         {
             return null;
         }
@@ -635,29 +789,31 @@ internal static class CompositionRoot
     private static string? ResolveProviderSecret(
         string secretRef, AppSettings settings, ISecretsRepository secrets)
     {
-        if (secretRef.StartsWith("secret:", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(secretRef, "secret:apiKey", StringComparison.Ordinal))
         {
-            return secrets.Load(secretRef["secret:".Length..].Trim());
+            return secrets.Load("apiKey");
         }
 
-        if (secretRef.StartsWith("env:", StringComparison.OrdinalIgnoreCase))
-        {
-            var name = secretRef["env:".Length..].Trim();
-            var value = Environment.GetEnvironmentVariable(name);
-            if (string.IsNullOrWhiteSpace(value) &&
-                string.Equals(name, "QQCHAT_API_KEY", StringComparison.OrdinalIgnoreCase))
-            {
-                value = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-            }
+        if (secretRef == ModelProviderStore.PrimaryModelCredentialReference) return settings.ApiKey;
 
-            // 兼容 BotConfig 已经解析好的环境变量快照；不把它写回注册表。
-            return string.IsNullOrWhiteSpace(value) &&
-                   string.Equals(name, "QQCHAT_API_KEY", StringComparison.OrdinalIgnoreCase)
-                ? settings.ApiKey
-                : value;
+        if (!string.Equals(secretRef, "env:QQCHAT_API_KEY", StringComparison.Ordinal))
+        {
+            return null;
         }
 
-        return null;
+        return ResolveFixedEnvironmentModelKey(settings);
+    }
+
+    private static string? ResolveFixedEnvironmentModelKey(AppSettings settings)
+    {
+        var value = Environment.GetEnvironmentVariable("QQCHAT_API_KEY");
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            value = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        }
+
+        // Preserve the known reference's current settings snapshot fallback, never an arbitrary environment name.
+        return string.IsNullOrWhiteSpace(value) ? settings.ApiKey : value;
     }
 
     private static ProviderCircuitSnapshot ToCircuitSnapshot(PersistedModelProvider provider)

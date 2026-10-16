@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BotAgent.Domain.Ports;
 using BotAgent.Services;
+using Microsoft.Data.Sqlite;
 
 namespace BotAgent.Adapters.Persistence;
 
@@ -19,6 +20,17 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class MoodStore : IMoodRepository
 {
+    private const string ReadMoodTextSql = "SELECT text, updated_unix FROM mood WHERE id = 1";
+    private const string SaveMoodTextSql =
+        "INSERT INTO mood(id, text, updated_unix) VALUES(1, $t, $u) " +
+        "ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_unix = excluded.updated_unix";
+    private const string SaveMoodPokeSql = "INSERT INTO mood_pokes(at_unix) VALUES($a) ON CONFLICT(at_unix) DO NOTHING";
+
+    internal enum MoodTextWriteState { Rejected = 0, Unchanged = 1, Committed = 2, Failed = 3, Unknown = 4 }
+    internal readonly record struct MoodTextWriteResult(MoodTextWriteState State, bool IntentChanged)
+    {
+        public override string ToString() => "MoodTextWriteResult";
+    }
     /// <summary>滚动窗口：只数窗口内被戳过几次，过期的不算（“烦”会随时间自己消）。</summary>
     private static readonly TimeSpan PokeWindow = TimeSpan.FromMinutes(15);
 
@@ -66,7 +78,7 @@ public class MoodStore : IMoodRepository
 
             try
             {
-                var row = AppDatabase.Query("SELECT text, updated_unix FROM mood WHERE id = 1", r => (
+                var row = AppDatabase.Query(ReadMoodTextSql, r => (
                     Text: AppDatabase.Str(r, "text"),
                     Updated: AppDatabase.LongOrNull(r, "updated_unix")));
 
@@ -131,26 +143,56 @@ public class MoodStore : IMoodRepository
 
     /// <summary>模型自己写的心情（空 = 忽略；太长的不收，避免污染提示词）。</summary>
     public bool SetText(string? text, DateTimeOffset now)
+        => SetTextObserved(text, now).IntentChanged;
+
+    // The legacy bool describes accepted changed intent, not a durable or applied result.
+    internal MoodTextWriteResult SetTextObserved(string? text, DateTimeOffset now)
     {
-        var cleaned = text?.Trim().Trim('。', '.', '！', '!', '，', ',');
-        if (string.IsNullOrWhiteSpace(cleaned) || cleaned.Length > 24)
+        if (!TryNormalizeText(text, out var cleaned))
         {
-            return false;
+            return new(MoodTextWriteState.Rejected, false);
         }
 
         lock (_gate)
         {
             if (cleaned == Text)
             {
-                return false; // 没变就不写库，也不刷日志
+                return new(MoodTextWriteState.Unchanged, false); // 没变就不写库，也不刷日志
             }
 
-            Text = cleaned;
-            UpdatedAt = now;
-            SaveLocked();
+            return WriteTextLocked(cleaned, now);
         }
+    }
 
-        return true;
+    internal static bool TryNormalizeText(string? text, out string normalized)
+    {
+        normalized = text?.Trim().Trim('。', '.', '！', '!', '，', ',') ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(normalized) && normalized.Length <= 24;
+    }
+
+    // The legacy action ledger needs durable evidence, unlike SetText's accepted-intent bool.
+    internal MoodTextWriteResult ApplyLegacyTextObserved(string? normalized, DateTimeOffset now)
+    {
+        if (normalized is not null && (!TryNormalizeText(normalized, out var cleaned) || cleaned != normalized))
+            return new(MoodTextWriteState.Rejected, false);
+        lock (_gate)
+        {
+            if (normalized is not null && normalized == Text)
+            {
+                try
+                {
+                    var rows = AppDatabase.Query(ReadMoodTextSql, reader => (
+                        Text: AppDatabase.Str(reader, "text"), Updated: AppDatabase.LongOrNull(reader, "updated_unix")));
+                    if (rows.Count == 1 && rows[0].Text == normalized)
+                    {
+                        UpdatedAt = rows[0].Updated is { } stamp ? DateTimeOffset.FromUnixTimeSeconds(stamp) : null;
+                        return new(MoodTextWriteState.Unchanged, false);
+                    }
+                }
+                catch (Exception) { return new(MoodTextWriteState.Failed, false); }
+            }
+            return WriteTextLocked(normalized, now);
+        }
     }
 
     /// <summary>给提示词用的一段话（心情 + 客观依据）。永远有值，模型才知道自己“现在什么状态”。</summary>
@@ -166,14 +208,16 @@ public class MoodStore : IMoodRepository
             _ => $"有点烦，{PokeWindow.TotalMinutes:F0} 分钟内被戳了 {count} 次"
         };
 
-        var text = string.IsNullOrWhiteSpace(Text) ? auto : Text!;
-        if (string.IsNullOrWhiteSpace(Text))
+        lock (_gate)
         {
-            return text;
-        }
+            // A failed durable expiry must not make already expired text visible again.
+            var hasText = !string.IsNullOrWhiteSpace(Text) && !IsStale(now);
+            if (!hasText) return auto;
+            var text = Text!;
 
-        var age = UpdatedAt is null ? string.Empty : $"，这是 {(now - UpdatedAt.Value).TotalMinutes:F0} 分钟前的心情";
-        return count > 0 ? $"{text}（最近 {PokeWindow.TotalMinutes:F0} 分钟被戳 {count} 次{age}）" : $"{text}{age}";
+            var age = UpdatedAt is null ? string.Empty : $"，这是 {(now - UpdatedAt.Value).TotalMinutes:F0} 分钟前的心情";
+            return count > 0 ? $"{text}（最近 {PokeWindow.TotalMinutes:F0} 分钟被戳 {count} 次{age}）" : $"{text}{age}";
+        }
     }
 
     /// <summary>面板显示用：过期的（模型写的那句）要当作没有，否则界面上留着一句早就不算数的心情。</summary>
@@ -182,7 +226,7 @@ public class MoodStore : IMoodRepository
         ExpireIfStale(now);
         lock (_gate)
         {
-            return Text;
+            return IsStale(now) ? null : Text;
         }
     }
 
@@ -194,32 +238,62 @@ public class MoodStore : IMoodRepository
     {
         lock (_gate)
         {
-            if (string.IsNullOrWhiteSpace(Text) || UpdatedAt is null || Ttl <= TimeSpan.Zero)
-            {
-                return;
-            }
-
-            var age = now - UpdatedAt.Value;
-            if (age <= Ttl)
-            {
-                return;
-            }
-
-            FileLog.Write("Mood", $"心情“{Text}”已过期（{age.TotalHours:F1} 小时没更新，上限 {Ttl.TotalHours:F1} 小时）→ 回落到按被戳次数自动描述");
-            Text = null;
-            SaveLocked();
+            if (!IsStale(now)) return;
+            if (WriteTextLocked(null, UpdatedAt).State == MoodTextWriteState.Committed)
+                FileLog.Write("Mood", "主观心情已过期（code=mood_text_expired）→ 回落到按被戳次数自动描述");
         }
+    }
+
+    // Caller holds _gate; this is a logical visibility rule independent of durable cleanup success.
+    private bool IsStale(DateTimeOffset now)
+    {
+        var ttl = Ttl;
+        return !string.IsNullOrWhiteSpace(Text) && UpdatedAt is { } updated
+            && ttl > TimeSpan.Zero && now - updated > ttl;
     }
 
     /// <summary>面板手改心情（留空 = 交回代码按被戳次数自动描述）。</summary>
     public void Reset(DateTimeOffset now)
+        => ResetObserved(now);
+
+    internal MoodTextWriteResult ResetObserved(DateTimeOffset now)
     {
         lock (_gate)
         {
-            Text = null;
-            UpdatedAt = now;
-            SaveLocked();
+            return WriteTextLocked(null, now);
         }
+    }
+
+    private MoodTextWriteResult WriteTextLocked(string? text, DateTimeOffset? updatedAt)
+    {
+        var callbackComplete = false;
+        try
+        {
+            AppDatabase.Write(conn =>
+            {
+                WriteTextInTransaction(conn, text, updatedAt);
+                WritePokesInTransaction(conn, _pokeTimes);
+                callbackComplete = true;
+            });
+            Text = text;
+            UpdatedAt = updatedAt;
+            return new(MoodTextWriteState.Committed, true);
+        }
+        catch (Exception ex)
+        {
+            var state = callbackComplete ? MoodTextWriteState.Unknown : MoodTextWriteState.Failed;
+            var code = callbackComplete ? "mood_text_write_unknown" : "mood_text_write_failed";
+            FileLog.Warn("Mood", $"心情文本持久化未确认（code={code},type={ex.GetType().Name}）");
+            return new(state, true);
+        }
+    }
+
+    internal static void WriteTextInTransaction(SqliteConnection connection, string? normalized, DateTimeOffset? updatedAt)
+        => AppDatabase.Exec(connection, SaveMoodTextSql, ("$t", normalized), ("$u", updatedAt?.ToUnixTimeSeconds()));
+
+    private static void WritePokesInTransaction(SqliteConnection connection, IEnumerable<long> times)
+    {
+        foreach (var at in times) AppDatabase.Exec(connection, SaveMoodPokeSql, ("$a", at));
     }
 
     /// <summary>过期时间点丢掉：窗口外的戳不该继续影响心情。必须在锁内调用。</summary>
@@ -253,15 +327,8 @@ public class MoodStore : IMoodRepository
         {
             AppDatabase.Write(conn =>
             {
-                AppDatabase.Exec(conn,
-                    "INSERT INTO mood(id, text, updated_unix) VALUES(1, $t, $u) " +
-                    "ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_unix = excluded.updated_unix",
-                    ("$t", Text), ("$u", UpdatedAt?.ToUnixTimeSeconds()));
-
-                foreach (var at in _pokeTimes)
-                {
-                    AppDatabase.Exec(conn, "INSERT INTO mood_pokes(at_unix) VALUES($a) ON CONFLICT(at_unix) DO NOTHING", ("$a", at));
-                }
+                WriteTextInTransaction(conn, Text, UpdatedAt);
+                WritePokesInTransaction(conn, _pokeTimes);
             });
         }
         catch (Exception ex)

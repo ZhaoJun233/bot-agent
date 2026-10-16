@@ -545,7 +545,8 @@ public sealed partial class AgentCommandService
 
         // 面板里把某台设备关掉了 → 就当它不可用（并告诉管理员是开关关的，不是没连上）
         var deviceName = named ?? bridge?.AnyBridge?.Name;
-        var deviceDisabled = deviceName is not null && !_settings.IsDeviceEnabled(deviceName);
+        var deviceDisabled = deviceName is not null && (!_settings.IsDeviceEnabled(deviceName)
+            || bridge is not null && !bridge.CanDispatchToDevice(deviceName));
 
         var hostOnly = named is not null ||
                        want.Equals("host", StringComparison.OrdinalIgnoreCase) ||

@@ -1,5 +1,7 @@
 using BotAgent.Services;
 using BotAgent.Domain.Ports;
+using BotAgent.Domain.Configuration;
+using Microsoft.Data.Sqlite;
 
 namespace BotAgent.Adapters.Persistence;
 
@@ -18,6 +20,45 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class SecretsStore : ISecretsRepository
 {
+    private const string ReadSecretSql = "SELECT value FROM secrets WHERE name=$name";
+    private const string DeleteSecretSql = "DELETE FROM secrets WHERE name=$name";
+    private const string SaveSecretSql = "INSERT INTO secrets(name,value,updated_unix) VALUES($name,$value,$now) " +
+        "ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_unix=excluded.updated_unix";
+    internal static string SlotName(WritableSecretSlot slot) => slot switch
+    {
+        WritableSecretSlot.ModelApiKey => "apiKey",
+        WritableSecretSlot.AgentServerKey => "agentServerKey",
+        WritableSecretSlot.TtsApiKey => "ttsKey",
+        WritableSecretSlot.FeishuAppSecret => "feishuAppSecret",
+        WritableSecretSlot.FeishuEncryptKey => "feishuEncryptKey",
+        WritableSecretSlot.FeishuVerificationToken => "feishuVerificationToken",
+        _ => throw new ArgumentException("invalid_secret_slot")
+    };
+
+    internal static string? LoadInTransaction(SqliteConnection connection, WritableSecretSlot slot)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = ReadSecretSql;
+        command.Parameters.AddWithValue("$name", SlotName(slot));
+        return command.ExecuteScalar() as string;
+    }
+
+    internal static void SaveInTransaction(SqliteConnection connection, WritableSecretSlot slot,
+        string? normalizedValue, long nowUnixSeconds)
+    {
+        if (normalizedValue is not null && string.IsNullOrWhiteSpace(normalizedValue))
+            throw new ArgumentException("invalid_secret_replace");
+        SaveNamedInTransaction(connection, SlotName(slot), normalizedValue, nowUnixSeconds);
+        if (slot == WritableSecretSlot.FeishuVerificationToken)
+            AppDatabase.SetMetaInTransaction(connection, "verification_token_initialized",
+                normalizedValue is null ? "deleted" : "initialized");
+    }
+
+    private static void SaveNamedInTransaction(SqliteConnection connection, string name, string? value, long now)
+    {
+        if (value is null) AppDatabase.Exec(connection, DeleteSecretSql, ("$name", name));
+        else AppDatabase.Exec(connection, SaveSecretSql, ("$name", name), ("$value", value), ("$now", now));
+    }
     /// <summary>数据根目录（与 data/、stickers/ 同级）。</summary>
     public static void Init(string dataRoot)
     {
@@ -53,13 +94,12 @@ public class SecretsStore : ISecretsRepository
     public bool SaveTtsKey(string? key) => Save("ttsKey", key);
 
     /// <summary>
-    /// 官方通道（QQ 开放平台）的 AppSecret。
-    /// 以前它只能走环境变量（<c>QQCHAT_OFFICIAL_APP_SECRET</c>）—— 改一次得重建容器，太别扭；
-    /// 现在与其它密钥一样存库里、面板可填可改（只回显掩码）。
-    /// 环境变量仍优先（部署在容器的环境里写了就用环境里的），其次是这里。
+    /// Historical compatibility member: official credentials are not a database source.
+    /// The Host reads only <c>QQCHAT_OFFICIAL_APP_SECRET</c>; old rows remain untouched.
     /// </summary>
     public string? LoadOfficialSecret() => Load("officialAppSecret");
 
+    /// <summary>Always rejects; official credentials cannot be persisted through this repository.</summary>
     public bool SaveOfficialSecret(string? secret) => Save("officialAppSecret", secret);
 
     /// <summary>飞书通道（Feishu Bot API）的 AppSecret 与 EncryptKey。</summary>
@@ -76,9 +116,11 @@ public class SecretsStore : ISecretsRepository
 
     public string? Load(string name, bool throwOnError)
     {
+        // Historical rows remain untouched, but official credentials are never a database source.
+        if (string.Equals(name, "officialAppSecret", StringComparison.OrdinalIgnoreCase)) return null;
         try
         {
-            var value = AppDatabase.Scalar<string>("SELECT value FROM secrets WHERE name = $n", ("$n", name));
+            var value = AppDatabase.Scalar<string>(ReadSecretSql, ("$name", name));
             if (throwOnError && value is not null && string.IsNullOrWhiteSpace(value))
                 throw new InvalidDataException("Invalid stored secret: " + name);
             return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -98,17 +140,16 @@ public class SecretsStore : ISecretsRepository
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(value))
+            if (string.Equals(name, "officialAppSecret", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("official_secret_environment_only");
+            var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            AppDatabase.Write(conn =>
             {
-                AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM secrets WHERE name = $n", ("$n", name)));
-            }
-            else
-            {
-                AppDatabase.Write(conn => AppDatabase.Exec(conn,
-                    "INSERT INTO secrets(name, value, updated_unix) VALUES($n, $v, $now) " +
-                    "ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_unix = excluded.updated_unix",
-                    ("$n", name), ("$v", value.Trim()), ("$now", Clock.Now.ToUnixTimeSeconds())));
-            }
+                if (ConfigurationStore.RequiresCoordinatedConfigurationWrites && name is
+                    "apiKey" or "agentServerKey" or "ttsKey" or "feishuAppSecret" or "feishuEncryptKey" or "feishuVerificationToken")
+                    throw new InvalidOperationException("configuration_writer_required");
+                SaveNamedInTransaction(conn, name, normalized, Clock.Now.ToUnixTimeSeconds());
+            });
 
             RestrictDbPermissions();
             return true;

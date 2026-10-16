@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
+
 namespace BotAgent.Services;
 
 /// <summary>
@@ -60,6 +63,55 @@ public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox
             Interlocked.Exchange(ref _current, next);
             published?.Invoke(next);
             return next;
+        }
+    }
+
+    /// <summary>
+    /// A structured commit is evaluated and published under the existing writer lock.
+    /// Rejections, replay and uncertain commits must not exchange the runtime snapshot.
+    /// Application failure retains the committed fact; this method does not persist a ledger.
+    /// </summary>
+    public ConfigurationSaveResult ApplyConfiguration(
+        Func<AppSettings, (AppSettings Snapshot, ConfigurationSaveResult Result)> persist,
+        Func<AppSettings, ConfigurationSaveResult, ConfigurationSaveResult>? published = null)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        return ApplyConfiguration(current =>
+        {
+            var (next, result) = persist(current);
+            return (next, result, true);
+        }, published);
+    }
+
+    /// <summary>The trusted Host must acquire its durable publish claim before allowing Exchange.</summary>
+    internal ConfigurationSaveResult ApplyConfiguration(
+        Func<AppSettings, (AppSettings Snapshot, ConfigurationSaveResult Result, bool PublishAllowed)> persist,
+        Func<AppSettings, ConfigurationSaveResult, ConfigurationSaveResult>? published = null)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        lock (_gate)
+        {
+            var (next, result, publishAllowed) = persist(Current.Snapshot());
+            if (result.Code != ConfigurationResultCode.Ok || result.Replayed ||
+                result.Receipt is not { Decision: ConfigurationDecision.Changed,
+                    CommitState: CommitState.Committed } receipt)
+                return result;
+
+            if (!publishAllowed) return result;
+
+            ArgumentNullException.ThrowIfNull(next);
+            Interlocked.Exchange(ref _current, next);
+            try
+            {
+                return published?.Invoke(next, result) ?? result;
+            }
+            catch (Exception)
+            {
+                var steps = receipt.Steps.IsDefault ? ImmutableArray<ApplyStepReport>.Empty : receipt.Steps;
+                if (!steps.Any(step => step.Step == ApplyStep.PublishSnapshot))
+                    steps = steps.Add(new ApplyStepReport(ApplyStep.PublishSnapshot, ApplyState.Applied, null));
+                return result with { Receipt = receipt with { ApplyState = ApplyState.Failed, Steps = steps } };
+            }
         }
     }
 }

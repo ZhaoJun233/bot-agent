@@ -269,6 +269,8 @@ public sealed partial class WebUiServer : IDisposable
 
     public void Start()
     {
+        // A listener must never open before the unique configuration coordinator is bound.
+        _ = _settingsHotReload.ConfigurationAuthorization;
 
         // 订阅面板事件（订阅写法一字未改：事件本体本来就在 PanelNotifier 上，以前只是 BotAgentHost 转发了一层）
         _ui.MessageAdded += OnMessageAdded;
