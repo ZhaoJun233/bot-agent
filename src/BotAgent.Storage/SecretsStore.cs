@@ -95,7 +95,7 @@ public class SecretsStore : ISecretsRepository
 
     /// <summary>
     /// Historical compatibility member: official credentials are not a database source.
-    /// The Host reads only <c>QQCHAT_OFFICIAL_APP_SECRET</c>; old rows remain untouched.
+    /// The Host reads only <c>BOTAGENT_OFFICIAL_APP_SECRET</c> (legacy <c>QQCHAT_OFFICIAL_APP_SECRET</c>); old rows remain untouched.
     /// </summary>
     public string? LoadOfficialSecret() => Load("officialAppSecret");
 

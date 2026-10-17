@@ -13,6 +13,9 @@
 #    3) docker compose restart qqchat   →  readyz 变 200
 #
 #  或者用反向 WS（不用登 WebUI 开端口，见文件底部的说明）
+#
+#  命名说明：环境变量 BOTAGENT_* 为规范名，QQCHAT_* 兼容旧部署（代码两者都读，规范名优先）；
+#  服务/网络名 qqchat 属于部署兼容名，N1 不改。数据库默认 botagent.db，旧 qqchat.db 自动回退。
 # ══════════════════════════════════════════════════════════════
 
 services:

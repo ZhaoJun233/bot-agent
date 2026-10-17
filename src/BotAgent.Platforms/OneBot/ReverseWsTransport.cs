@@ -23,6 +23,10 @@ public sealed class ReverseWsTransport : IOneBotTransport
     private TcpListener? _listener;
     private volatile WsConnection? _connection;
     private Task? _loopTask;
+    private readonly ConcurrentDictionary<long, Task> _handlers = new();
+    private long _nextHandler;
+    private int _stopRequested;
+    private int _disposed;
 
     public event Action<string>? OnText;
     public event Action<bool>? OnStateChanged;
@@ -39,6 +43,8 @@ public sealed class ReverseWsTransport : IOneBotTransport
 
     public Task StartAsync()
     {
+        if (Volatile.Read(ref _stopRequested) != 0) throw new InvalidOperationException("transport_stopped");
+        if (_loopTask is { IsCompleted: false }) return Task.CompletedTask;
         _listener = new TcpListener(_ip, _port);
         _listener.Start();
 
@@ -52,6 +58,7 @@ public sealed class ReverseWsTransport : IOneBotTransport
 
     public void Stop()
     {
+        if (Interlocked.Exchange(ref _stopRequested, 1) != 0) return;
         _cts.Cancel();
         lock (_connectionLock)
         {
@@ -78,6 +85,19 @@ public sealed class ReverseWsTransport : IOneBotTransport
 
     public void Dispose() => Stop();
 
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        Stop();
+        if (_loopTask is { } loop)
+        {
+            try { await loop.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+        // The accept loop is now finished, so the handler set cannot grow again.
+        await Task.WhenAll(_handlers.Values).ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) _cts.Dispose();
+    }
+
     public async Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default)
     {
         var connection = _connection ?? throw new InvalidOperationException("协议端尚未连接");
@@ -103,7 +123,11 @@ public sealed class ReverseWsTransport : IOneBotTransport
 
                 _clients.TryAdd(client, 0);
                 // Never let a silent/partial handshake hold the listener's accept loop.
-                _ = HandleClientAsync(client, ct);
+                var id = Interlocked.Increment(ref _nextHandler);
+                var handler = HandleClientAsync(client, ct);
+                _handlers[id] = handler;
+                _ = handler.ContinueWith(completed => { _handlers.TryRemove(id, out var ignored); },
+                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
             catch (OperationCanceledException)
             {

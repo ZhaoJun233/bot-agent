@@ -5,6 +5,7 @@ using BotAgent.Services.Music;
 using BotAgent.Services.Qq;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.Resilience;
+using BotAgent.Services.Platforms;
 
 namespace BotAgent.Services.OneBot;
 
@@ -32,6 +33,9 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
     private readonly Dictionary<string, TaskCompletionSource<JsonNode?>> _pending = new();
     private IOneBotTransport? _transport;
     private CancellationTokenSource? _cts;
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private bool _disposed;
+    private readonly PlatformOperationLifetime _operations = new();
     // 配置读取入口：指向**当前发布版**（热更新是换引用，见 SettingsBox）——不要改成缓存实例。
     private PlatformOptions _settings => _box.Current;
 
@@ -75,42 +79,80 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
 
     public void Start()
     {
+        // Legacy hot reload explicitly rebuilds the configured transport.
         Stop();
-
-        _cts = new CancellationTokenSource();
-        _transport = _transportFactory?.Invoke(_settings) ?? CreateTransport(_settings);
-        _transport.OnText += OnTransportText;
-        _transport.OnStateChanged += OnTransportStateChanged;
-
-        try
-        {
-            _ = _transport.StartAsync();
-        }
-        catch (Exception ex)
-        {
-            Log(ex.Message);
-        }
-
-        Log($"已启动 ({_settings.OneBotProtocol} → {_settings.OneBotAddress})");
+        StartAsync().GetAwaiter().GetResult();
     }
 
     public void Stop()
     {
-        if (_transport is not null)
-        {
-            _transport.OnText -= OnTransportText;
-            _transport.OnStateChanged -= OnTransportStateChanged;
-            _transport.Stop();
-            _transport.Dispose();
-            _transport = null;
-        }
+        StopAsync().GetAwaiter().GetResult();
+    }
 
-        _cts?.Cancel();
+    public async Task StartAsync(CancellationToken ct = default)
+    {
+        await _lifecycle.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_transport is not null) return;
+            ct.ThrowIfCancellationRequested();
+            _operations.Start();
+            _cts = new CancellationTokenSource();
+            var transport = _transportFactory?.Invoke(_settings) ?? CreateTransport(_settings);
+            _transport = transport;
+            transport.OnText += OnTransportText;
+            transport.OnStateChanged += OnTransportStateChanged;
+            try { await transport.StartAsync().ConfigureAwait(false); }
+            catch
+            {
+                await StopCoreAsync().ConfigureAwait(false);
+                throw;
+            }
+            Log($"已启动 ({_settings.OneBotProtocol} → {_settings.OneBotAddress})");
+        }
+        finally { _lifecycle.Release(); }
+    }
+
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        // Once requested, cleanup is not abandoned when an HTTP waiter cancels.
+        await _lifecycle.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try { await StopCoreAsync().ConfigureAwait(false); }
+        finally { _lifecycle.Release(); }
+    }
+
+    private async Task StopCoreAsync()
+    {
+        var transport = _transport;
+        _transport = null;
+        var lifetime = _cts;
         _cts = null;
+        lifetime?.Cancel();
+        var ownedRequests = _operations.StopAsync();
+        if (transport is not null)
+        {
+            transport.OnText -= OnTransportText;
+            transport.OnStateChanged -= OnTransportStateChanged;
+            await transport.StopAsync().ConfigureAwait(false);
+            transport.Dispose();
+        }
+        lock (_gate)
+        {
+            foreach (var pending in _pending.Values) pending.TrySetCanceled();
+            _pending.Clear();
+        }
+        await ownedRequests.ConfigureAwait(false);
+        lifetime?.Dispose();
         SetConnected(false);
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        _disposed = true;
+        Stop();
+        _operations.Dispose();
+    }
 
     /// <summary>向某个私聊/群聊发送纯文本消息。</summary>
     /// <summary>收到戳一戳（post_type=notice）。别人互戳也会报上来。</summary>
@@ -713,6 +755,9 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
 
     private async Task<JsonNode?> SendActionAsync(string action, string paramsJson, CancellationToken ct)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return null;
+        ct = operation.Token;
         var transport = _transport;
         if (transport is null)
         {
@@ -755,6 +800,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
 
     private void OnTransportStateChanged(bool connected)
     {
+        if (!_operations.IsActive) return;
         SetConnected(connected);
         if (connected)
         {
@@ -764,6 +810,7 @@ public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
 
     private void OnTransportText(string json)
     {
+        if (!_operations.IsActive) return;
         JsonNode? root;
         try
         {

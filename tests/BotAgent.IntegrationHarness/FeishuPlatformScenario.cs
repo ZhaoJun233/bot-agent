@@ -205,7 +205,7 @@ public static partial class Program
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
-                DataSource = Path.Combine(dataDir, "data", "qqchat.db"),
+                DataSource = DbProbe.DbPath(dataDir),
                 Mode = SqliteOpenMode.ReadWrite,
                 Pooling = false,
                 DefaultTimeout = 5,

@@ -20,6 +20,7 @@ public static class Program
     public static async Task<int> Main()
     {
         BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+        BotAgent.Adapters.Time.ClockBindings.InitializeModel();
         var dataRoot = Path.Combine(Path.GetTempPath(), "botagent-chaos-fault-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", dataRoot);
         var passed = 0;
@@ -170,12 +171,12 @@ public static class Program
                 Model = "synthetic-model-v2"
             });
             var refreshed = providerStore.Find("primary");
-            Check(refreshed?.BaseUrl == "https://example.com/v2"
-                && refreshed.ModelName == "synthetic-model-v2"
+            Check(refreshed?.BaseUrl == "https://example.com/v1"
+                && refreshed.ModelName == "synthetic-model"
                 && refreshed.CircuitState == ProviderCircuitState.Open
                 && refreshed.ConsecutiveHardFailures == 3
                 && refreshed.CooldownUntil == cooldownBeforeRefresh,
-                "重复登记 Provider 只更新元数据且不重置熔断状态", ref passed, ref failed, failures);
+                "重复登记 Provider 不覆盖已有元数据与熔断状态", ref passed, ref failed, failures);
             var missingProviderError = false;
             try
             {

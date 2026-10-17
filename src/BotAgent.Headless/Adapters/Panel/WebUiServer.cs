@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Conversation;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
@@ -217,7 +218,7 @@ public sealed partial class WebUiServer : IDisposable
         WriteTtsConfToHost();
         _bind = !_panelPassword.IsConfigured
             ? "127.0.0.1"
-            : Environment.GetEnvironmentVariable("QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
+            : EnvironmentAliases.Get("BOTAGENT_HEALTH_BIND", "QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
                 ? custom
                 : "+";
     }

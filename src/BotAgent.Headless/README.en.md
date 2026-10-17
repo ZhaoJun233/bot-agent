@@ -54,7 +54,7 @@ Then send an `@bot hello` into a whitelisted group.
 
 ## Environment variables
 
-Configuration is either **changed in the panel** (stored in `data/qqchat.db`, see below) or supplied through environment variables — environment variables act as a seed **on first start only**. After that, anything changed in the panel wins (further changes to the environment variable have no effect, and the bot lists them at startup to remind you).
+Configuration is either **changed in the panel** (stored in `data/botagent.db`, or the legacy `data/qqchat.db` if it already exists; see below) or supplied through environment variables — environment variables act as a seed **on first start only**. After that, anything changed in the panel wins (further changes to the environment variable have no effect, and the bot lists them at startup to remind you).
 Variables with a `_FILE` suffix read their value from a file, which suits Docker secrets:
 
 ```yaml
@@ -167,7 +167,7 @@ secrets:
 
 | Path | Contents |
 | --- | --- |
-| `data/qqchat.db` | **SQLite database**: settings, conversations, messages (including the archive), member profiles and personas, mood, songs heard, sticker index, secrets. WAL mode, accompanied by `-wal` / `-shm` |
+| `data/botagent.db` (legacy `qqchat.db` falls back automatically) | **SQLite database**: settings, conversations, messages (including the archive), member profiles and personas, mood, songs heard, sticker index, secrets. WAL mode, accompanied by `-wal` / `-shm` |
 | `data/legacy-json/` | Archive of old JSON data (moved here after the automatic import on first start; **not deleted**) |
 | `data/feishu-ids-v2.json` | Feishu v2 native identity-to-alias map (persisted when new identities are bound); include in data backups, with no automatic legacy-alias migration |
 | `stickers/*.png` | **Sticker image data** (the index is in the database; binary data does not belong in there — backup, preview and cleanup all get awkward) |
@@ -175,7 +175,7 @@ secrets:
 
 > Why SQLite replaced "a pile of JSON": ① conversations / messages / profiles were spread across several files, a single crash could write only half of them, and cross-file transactions were impossible; ② messages are append-only, while JSON rewrote everything each time (noticeably slow at a few thousand entries); ③ the panel's "earlier messages in this group / one person's persona in one group / dig through the archive" could only be done by loading everything into memory and filtering, whereas in SQL it is one statement.
 >
-> Database backup: copy `data/qqchat.db` (together with `-wal` / `-shm`); when Feishu is enabled, retain and back up `data/feishu-ids-v2.json` too — restoring only the database is insufficient. To inspect settings with SQL, `json_extract(json,'$.AiDesire')` works.
+> Database backup: copy `data/botagent.db` or the legacy `data/qqchat.db` if it exists (together with `-wal` / `-shm`); when Feishu is enabled, retain and back up `data/feishu-ids-v2.json` too — restoring only the database is insufficient. To inspect settings with SQL, `json_extract(json,'$.AiDesire')` works.
 > Secrets (API keys entered in the panel) live in the `secrets` table, which is why **the database file mode is 600** (kept out of `settings`, so it never gets pasted out along with the configuration).
 
 JSON inside the database never escapes Chinese characters, so `sqlite3 ... "SELECT text FROM messages LIMIT 3"` is readable as-is.

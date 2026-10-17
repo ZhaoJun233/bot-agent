@@ -4,6 +4,7 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Platforms;
+using BotAgent.Services.Qq;
 
 namespace BotAgent.Services.Agent;
 
@@ -196,6 +197,7 @@ public interface IQqActionHost
 public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools.IToolExecutor
 {
     private readonly IQqActions _gateway;
+    private readonly PlatformSourceLease? _sourceLease;
     private readonly bool _isGroup;
     private readonly long _targetId;
     private readonly long _senderId;
@@ -207,7 +209,8 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
     public SessionQqActionHost(IQqActions gateway, bool isGroup, long targetId, long senderId, long messageId, long selfId,
         PlatformPolicyResolver? platformPolicies = null, string? channel = null)
     {
-        _gateway = gateway;
+        _sourceLease = PlatformSourceExecution.Current;
+        _gateway = _sourceLease?.Source as IQqActions ?? gateway;
         _isGroup = isGroup;
         _targetId = targetId;
         _senderId = senderId;
@@ -266,6 +269,7 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
             return null;
         }
 
+        if (_sourceLease is not null) return _platformPolicies.Resolve(_sourceLease.Context);
         var channel = _channel;
         if (channel is null)
         {
@@ -289,6 +293,11 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
         };
     public async Task<string> ExecuteAsync(QqActionSpec spec, JsonObject args, CancellationToken ct)
     {
+        using var sourceScope = PlatformSourceExecution.Enter(_sourceLease);
+        if (_sourceLease is { IsCurrent: false }) return "source_retired";
+        using var lifetime = _sourceLease is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, _sourceLease.Lifetime);
+        ct = lifetime?.Token ?? ct;
+        ct.ThrowIfCancellationRequested();
         var policy = ResolveTargetPolicy();
         if (policy is not null)
         {

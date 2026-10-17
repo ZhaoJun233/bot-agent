@@ -41,6 +41,16 @@ public sealed class FeishuIdMap
             && parts[2] == appId && parts[3] == kind ? parts[4] : null;
     }
 
+    /// <summary>Only resolve a binding previously created by authenticated ingress or a successful send.</summary>
+    public bool TryGetAlias(string appId, string kind, string nativeId, out long alias)
+    {
+        alias = 0;
+        if (string.IsNullOrWhiteSpace(appId) || string.IsNullOrWhiteSpace(nativeId)
+            || kind is not ("group" or "participant" or "message")) return false;
+        var key = JsonSerializer.Serialize(new[] { "v2", PlatformId.Feishu, appId, kind, nativeId });
+        return _ids.TryGetAlias(key, out alias);
+    }
+
     private static bool IsIdentity(string key)
     {
         try

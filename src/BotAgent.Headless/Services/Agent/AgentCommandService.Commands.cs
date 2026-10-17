@@ -408,10 +408,16 @@ public sealed partial class AgentCommandService
         var rest = payload.Length > head.Length ? payload[(head.Length)..].Trim() : string.Empty;
         if (head is "new" or "新会话")
         {
-            var backend = ResolveRoute(want, bridge, named).Backend;
-            var created = _agentSessions.Create(conversation.SourceKey, backend, rest.Length > 0 ? rest : null, named);
+            var route = ResolveRoute(want, bridge, named);
+            if (route.Backend == "none")
+            {
+                await ReplyNoRouteAsync(conversation, named, bridge, route.HostSwitch, route.ServerSwitch,
+                    route.HostOnline, route.DeviceDisabled, route.DeviceName);
+                return true;
+            }
+            var created = _agentSessions.Create(conversation.SourceKey, route.Backend, rest.Length > 0 ? rest : null, named);
             await _hooks.SendPlainAsync(conversation,
-                $"已开新会话「{MaybeMask(created.Name, conversation.SourceKey)}」（{(backend == "server" ? "服务器内置" : $"外部 {created.Device ?? bridge?.AnyBridge?.Name ?? "设备"}")}）。" +
+                $"已开新会话「{MaybeMask(created.Name, conversation.SourceKey)}」（{(route.Backend == "server" ? "服务器内置" : $"外部 {created.Device ?? bridge?.AnyBridge?.Name ?? "设备"}")}）。" +
                 "下一句 //指令 就从空上下文开始；想切回去用 //use 名字。");
             return true;
         }
@@ -613,6 +619,7 @@ public sealed partial class AgentCommandService
             {
                 Id = $"s{Clock.Now.ToUnixTimeMilliseconds()}",
                 SourceKey = conversation.SourceKey,
+                SourceLease = PlatformSourceExecution.Current,
                 Prompt = promptText,
                 Session = serverSession.PiSessionId,
                 SessionRef = serverSession,
@@ -624,12 +631,14 @@ public sealed partial class AgentCommandService
             task.RunId = serverRunId;
 
             // 自备一个 CTS：//stop 要能把正在跑的那条 bash 也杀掉（不能只标个标记）
-            var cts = new CancellationTokenSource();
+            var cts = task.SourceLease is { } lease
+                ? CancellationTokenSource.CreateLinkedTokenSource(lease.Lifetime) : new CancellationTokenSource();
             _serverAgentCurrent[conversation.SourceKey] = (task, cts);
 
             await _hooks.SendPlainAsync(conversation, $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
             _ = Task.Run(async () =>
             {
+                using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
                 try
                 {
                     await _serverAgent.RunAsync(task, cts.Token);

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BotAgent.Platforms.Net;
+using BotAgent.Platforms;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Configuration;
@@ -24,7 +25,7 @@ public sealed record FeishuOutboxItem(long MessageId, string SourceKey, string T
 /// <summary>
 /// 飞书平台网关与适配器（阶段 4：首个非 QQ 外部平台）。
 /// </summary>
-public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatformMessenger, IDisposable
+public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatformMessenger, IPlatformInboundChatSource, IFeishuTargetMap, IDisposable
 {
     private const int OutboxCapacity = 200;
     private const int SeenCapacity = 500;
@@ -44,6 +45,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     private FeishuTokenCache? _tokenCache;
     private readonly SemaphoreSlim _tokenGate = new(1, 1);
     private bool _disposed;
+    private readonly PlatformOperationLifetime _operations = new();
 
     public FeishuBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, Action<string>? log = null, FeishuIdMap? ids = null)
         : this(box, http, log, ids, null) { }
@@ -75,7 +77,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
             var enabled = settings.RuntimePlatformPolicies.HasValue
                 ? PlatformSwitchSettings.ResolvePolicyRules(settings, Context, ImmutableArray<ActionId>.Empty).Enabled == ToggleRule.Enabled
                 : settings.FeishuEnabled;
-            return enabled && Configured(settings);
+            return !_disposed && _operations.IsActive && enabled && Configured(settings);
         }
     }
 
@@ -92,6 +94,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
     public event Action<QqChatMessage>? MessageReceived;
     public event Action<InboundMessage>? InboundReceived;
+    public event Action<QqChatMessage, InboundMessage>? RichInboundReceived;
     public event Action<QqPokeEvent>? Poked { add { } remove { } }
     public event Action<QqRecallEvent>? MessageRecalled { add { } remove { } }
     public event Action<bool>? ConnectionChanged;
@@ -104,7 +107,7 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     /// <summary>Canonical compatibility gate over an existing app/kind identity; never a new identity or an HTTP action.</summary>
     public bool AllowsMappedTarget(bool isGroup, long alias)
     {
-        if (_disposed || alias <= 0) return false;
+        if (_disposed || !_operations.IsActive || alias <= 0) return false;
         try
         {
             var settings = _box.Current;
@@ -130,6 +133,40 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
     public string? OriginalOf(long alias) => _ids.OriginalOf(alias, CurrentAppId(), "participant");
 
+    /// <summary>Project an authenticated native conversation to an existing compatibility target, without allocation.</summary>
+    public bool TryGetTargetAlias(ConversationId conversation, out long alias)
+    {
+        alias = 0;
+        var settings = _box.Current;
+        if (_disposed || !_operations.IsActive || !Configured(settings) || conversation is null
+            || string.IsNullOrWhiteSpace(conversation.PlatformId)
+            || PlatformId.Normalize(conversation.PlatformId) != PlatformId.Feishu
+            || !string.Equals(conversation.AccountScope, Context.AccountScope, StringComparison.Ordinal)
+            || conversation.Kind is not (ConversationKind.GroupChat or ConversationKind.PrivateChat)
+            || !string.IsNullOrEmpty(conversation.ThreadId) || string.IsNullOrWhiteSpace(conversation.NativeTargetId)) return false;
+        var appId = settings.FeishuAppId?.Trim() ?? string.Empty;
+        var kind = IdentityKind(conversation.Kind == ConversationKind.GroupChat);
+        if (!_ids.TryGetAlias(appId, kind, conversation.NativeTargetId, out var existing)
+            || !string.Equals(_ids.OriginalOf(existing, appId, kind), conversation.NativeTargetId, StringComparison.Ordinal)) return false;
+        alias = existing;
+        return true;
+    }
+
+    /// <summary>Recover a native conversation only from a verified existing compatibility binding.</summary>
+    public bool TryGetTargetConversation(bool isGroup, long alias, out ConversationId? target)
+    {
+        target = null;
+        var settings = _box.Current;
+        if (_disposed || !_operations.IsActive || !Configured(settings) || alias <= 0) return false;
+        var appId = settings.FeishuAppId?.Trim() ?? string.Empty;
+        var kind = IdentityKind(isGroup);
+        var native = _ids.OriginalOf(alias, appId, kind);
+        if (string.IsNullOrWhiteSpace(native) || !_ids.TryGetAlias(appId, kind, native, out var existing) || existing != alias) return false;
+        target = new(Context.PlatformId, Context.AccountScope,
+            isGroup ? ConversationKind.GroupChat : ConversationKind.PrivateChat, native);
+        return true;
+    }
+
     private string CurrentAppId() => _box.Current.FeishuAppId?.Trim() ?? string.Empty;
     private static string IdentityKind(bool isGroup) => isGroup ? "group" : "participant";
 
@@ -150,6 +187,9 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         string? verificationToken = null,
         CancellationToken ct = default)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return (false, 503, "{\"error\":\"source_unavailable\"}");
+        ct = operation.Token;
         await Task.CompletedTask;
         var settings = _box.Current;
         ct.ThrowIfCancellationRequested();
@@ -191,24 +231,8 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         }
 
         // URL challenge 必须独立认证；没有配置 token 时默认拒绝外部 challenge。
-        if (string.Equals(type, "url_verification", StringComparison.OrdinalIgnoreCase))
-        {
-            if (string.IsNullOrWhiteSpace(configuredVerificationToken)
-                || !string.Equals(suppliedVerificationToken, configuredVerificationToken, StringComparison.Ordinal))
-            {
-                LastErrorCode = "verification_token_mismatch";
-                return (false, 403, "{\"error\":\"verification_token_mismatch\"}");
-            }
-
-            if (string.IsNullOrWhiteSpace(challenge))
-            {
-                return (false, 400, "{\"error\":\"missing_challenge\"}");
-            }
-
-            ct.ThrowIfCancellationRequested();
-            var escapedChallenge = JsonValue.Create(challenge)?.ToJsonString() ?? "\"\"";
-            return (true, 200, $"{{\"challenge\":{escapedChallenge}}}");
-        }
+        if (TryHandleUrlVerification(settings, type, challenge, suppliedVerificationToken, ct) is { } challengeResult)
+            return challengeResult;
 
         // 配置 Encrypt Key 时走签名 + 时间窗；否则普通事件必须带匹配的 Verification Token。
         if (!string.IsNullOrWhiteSpace(settings.FeishuEncryptKey))
@@ -339,10 +363,32 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
         _log?.Invoke($"[飞书] 收到入站消息（会话={targetRaw}，字数={text.Length}）");
         ct.ThrowIfCancellationRequested();
+        RichInboundReceived?.Invoke(qqMsg, inMsg);
+        ct.ThrowIfCancellationRequested();
         MessageReceived?.Invoke(qqMsg);
         ct.ThrowIfCancellationRequested();
         InboundReceived?.Invoke(inMsg);
         return (true, 200, "{\"code\":0}");
+    }
+
+    private (bool Handled, int StatusCode, string ResponseBody)? TryHandleUrlVerification(
+        PlatformOptions settings, string? type, string? challenge, string? suppliedVerificationToken, CancellationToken ct)
+    {
+        if (!string.Equals(type, "url_verification", StringComparison.OrdinalIgnoreCase)) return null;
+        var configuredVerificationToken = settings.FeishuVerificationToken?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(configuredVerificationToken)
+            || !string.Equals(suppliedVerificationToken, configuredVerificationToken, StringComparison.Ordinal))
+        {
+            LastErrorCode = "verification_token_mismatch";
+            return (false, 403, "{\"error\":\"verification_token_mismatch\"}");
+        }
+        if (string.IsNullOrWhiteSpace(challenge))
+        {
+            return (false, 400, "{\"error\":\"missing_challenge\"}");
+        }
+        ct.ThrowIfCancellationRequested();
+        var escapedChallenge = JsonValue.Create(challenge)?.ToJsonString() ?? "\"\"";
+        return (true, 200, $"{{\"challenge\":{escapedChallenge}}}");
     }
 
     public async Task<SendResult> SendTextAsync(
@@ -391,6 +437,9 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         PlatformContext context, OutboundMessage message, FeishuSettingsSnapshot settings,
         PlatformOptions policySettings, CancellationToken ct)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return DeliveryResult.Rejected("source_unavailable");
+        ct = operation.Token;
         if (context is null || message is null || message.Target is null)
         {
             LastErrorCode = "bad_request";
@@ -410,10 +459,14 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
             LastErrorCode = "context_mismatch";
             return DeliveryResult.Rejected("context_mismatch");
         }
+        if ((message.ImageData is { Length: > 0 }) || !string.IsNullOrWhiteSpace(message.VoiceUrl))
+            return DeliveryResult.Rejected("unsupported_media");
+        if (!string.IsNullOrEmpty(message.Target.ThreadId)) return DeliveryResult.Rejected("unsupported_thread");
 
         var rawTarget = message.Target.NativeTargetId;
-        if (policySettings.RuntimePlatformPolicies.HasValue
-            && !IsAllowed(policySettings, message.Target.Kind == ConversationKind.GroupChat, rawTarget))
+        var legacySwitches = PlatformSwitchSettings.Read(policySettings, Context.PlatformId, Context.AccountScope);
+        if ((!policySettings.RuntimePlatformPolicies.HasValue && (!legacySwitches.Enabled || !legacySwitches.ChatEnabled))
+            || !IsAllowed(policySettings, message.Target.Kind == ConversationKind.GroupChat, rawTarget))
         {
             LastErrorCode = "platform_policy_rejected";
             return DeliveryResult.Rejected("platform_policy_rejected");
@@ -471,6 +524,23 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
 
         try
         {
+            // Token acquisition may yield while policy or credentials are revoked. Never
+            // dispatch a message under the entrance snapshot after that revocation.
+            ct.ThrowIfCancellationRequested();
+            var currentSettings = _box.Current;
+            if (settings != Snapshot(currentSettings))
+            {
+                LastErrorCode = "source_configuration_changed";
+                return DeliveryResult.Rejected(LastErrorCode);
+            }
+            var currentSwitches = PlatformSwitchSettings.Read(currentSettings, Context.PlatformId, Context.AccountScope);
+            if (!Configured(currentSettings)
+                || (!currentSettings.RuntimePlatformPolicies.HasValue && (!currentSwitches.Enabled || !currentSwitches.ChatEnabled))
+                || !IsAllowed(currentSettings, isGroup, rawTarget))
+            {
+                LastErrorCode = "platform_policy_rejected";
+                return DeliveryResult.Rejected(LastErrorCode);
+            }
             using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
             var respText = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             JsonNode? respNode = null;
@@ -764,6 +834,23 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
     {
         if (_disposed) return;
         _disposed = true;
+        StopAsync().GetAwaiter().GetResult();
+        _operations.Dispose();
         _tokenGate.Dispose();
+    }
+
+    public Task StartAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _operations.Start();
+        ConnectionChanged?.Invoke(IsConnected);
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        await _operations.StopAsync().ConfigureAwait(false);
+        ConnectionChanged?.Invoke(false);
     }
 }

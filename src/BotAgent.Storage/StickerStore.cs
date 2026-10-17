@@ -12,7 +12,7 @@ namespace BotAgent.Adapters.Persistence;
 /// 表情包库：**全局共用一份**（不分会话）—— 用户明确要求“不同会话公用一个表情包存储就可以了”。
 ///
 /// 存储：
-///   data/qqchat.db 里的 stickers 表   索引（说明、关键词、使用次数、是否表情包）
+///   data/botagent.db（兼容旧 qqchat.db）里的 stickers 表   索引（说明、关键词、使用次数、是否表情包）
 ///   data/stickers/&lt;hash&gt;.&lt;ext&gt;      图片本体
 /// 为什么图片不放进库：二进制大对象放库里之后，备份/预览/清理都会变麻烦（BLOB 不能直接给面板当图片返回），
 /// 索引进库已经拿到“一句 SQL 查库/去重/统计”的好处了。

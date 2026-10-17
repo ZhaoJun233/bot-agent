@@ -104,13 +104,15 @@ docker compose up -d
 | `QQCHAT_PROFILE_LOOKUP` | `8` | 附带的人物档案数量上限 |
 ### 运维与日志相关
 
+> 环境变量命名：`BOTAGENT_*` 优先，`QQCHAT_*` 作为旧部署兼容回退（两者都支持）。
+
 | 变量 | 默认值 | 通俗说明 |
 | --- | --- | --- |
-| `QQCHAT_DATA_DIR` | `/data` | 容器内的数据目录，必须挂载宿主机卷以实现数据持久化 |
-| `QQCHAT_HEALTH_PORT` | `8080` | 内置 Web 面板与健康检查监听端口，`0` 为关闭 |
-| `QQCHAT_HEALTH_BIND` | `+` | 监听绑定地址（Windows 环境下若无管理员权限会自动回退至 `127.0.0.1`） |
-| `QQCHAT_VERBOSE` | `1` | 日志详细程度：`1` 输出完整流程，`0` 仅输出关键提示 |
-| `QQCHAT_LOG_FILE` | `1` | 是否输出日志到文件：`1` 写入 `logs/qqchat.log`，`0` 仅输出到终端标准输出 |
+| `BOTAGENT_DATA_DIR`（兼容 `QQCHAT_DATA_DIR`） | `/data` | 容器内的数据目录，必须挂载宿主机卷以实现数据持久化 |
+| `BOTAGENT_HEALTH_PORT`（兼容 `QQCHAT_HEALTH_PORT`） | `8080` | 内置 Web 面板与健康检查监听端口，`0` 为关闭 |
+| `BOTAGENT_HEALTH_BIND`（兼容 `QQCHAT_HEALTH_BIND`） | `+` | 监听绑定地址（Windows 环境下若无管理员权限会自动回退至 `127.0.0.1`） |
+| `BOTAGENT_VERBOSE`（兼容 `QQCHAT_VERBOSE`） | `1` | 日志详细程度：`1` 输出完整流程，`0` 仅输出关键提示 |
+| `BOTAGENT_LOG_FILE`（兼容 `QQCHAT_LOG_FILE`） | `1` | 是否输出日志到文件：`1` 写入 `logs/qqchat.log`，`0` 仅输出到终端标准输出 |
 | `TZ` | `Asia/Shanghai` | 系统时区，直接影响群聊消息时间戳与机器人对“当前时间”的感知 |
 
 ### 丰富互动特性（表情包 / 戳一戳 / 语音 / 联网搜索）
@@ -153,7 +155,7 @@ docker compose up -d
 
 | 路径 | 内容 | 说明 |
 | --- | --- | --- |
-| `data/qqchat.db` | **SQLite 核心数据库** | 设置、群聊与私聊会话、聊天历史与归档、人物画像档案、心情记录、听歌记录、表情包索引及加密密钥。采用 WAL 模式（伴随 `-wal`/`-shm` 文件） |
+| `data/botagent.db`（旧库 `qqchat.db` 自动回退） | **SQLite 核心数据库** | 设置、群聊与私聊会话、聊天历史与归档、人物画像档案、心情记录、听歌记录、表情包索引及加密密钥。采用 WAL 模式（伴随 `-wal`/`-shm` 文件） |
 | `data/legacy-json/` | 旧版本数据归档 | 早期旧版本 JSON 数据在首次启动自动导入数据库后安全保留于此，不影响日常读写 |
 | `data/feishu-ids-v2.json` | 飞书身份映射表 | 仅在使用飞书通道时生成，用于飞书用户与会话映射，需随同数据库一起备份 |
 | `stickers/*.png` | 表情包图片本体 | 机器人收集和使用的表情包真实图片文件（索引与情绪关键词保存在数据库中） |

@@ -3,12 +3,18 @@ namespace BotAgent.Storage;
 /// <summary>The host resolves paths once; modules never rediscover environment or workspace roots.</summary>
 public static class StoragePaths
 {
+    public const string CanonicalDatabaseFileName = "botagent.db";
+    public const string LegacyDatabaseFileName = "qqchat.db";
+
     private static string? _runtimeRoot;
 
     public static string RuntimeRoot => Volatile.Read(ref _runtimeRoot)
         ?? throw new InvalidOperationException("storage_paths_not_initialized");
     public static string DataDir => Path.Combine(RuntimeRoot, "data");
     public static string SettingsFile => Path.Combine(DataDir, "settings.json");
+
+    /// <summary>Canonical path only; the database adapter resolves an existing legacy file.</summary>
+    public static string DatabasePath => Path.Combine(DataDir, CanonicalDatabaseFileName);
 
     public static void Initialize(string runtimeRoot)
     {

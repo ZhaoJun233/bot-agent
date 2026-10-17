@@ -12,6 +12,8 @@ public sealed class ForwardWsTransport : IOneBotTransport
     private ClientWebSocket? _socket;
     private Task? _loopTask;
     private bool _stopped;
+    private int _stopRequested;
+    private int _disposed;
 
     public event Action<string>? OnText;
     public event Action<bool>? OnStateChanged;
@@ -26,6 +28,7 @@ public sealed class ForwardWsTransport : IOneBotTransport
 
     public Task StartAsync()
     {
+        if (_stopped) throw new InvalidOperationException("transport_stopped");
         if (_loopTask is null || _loopTask.IsCompleted)
         {
             _loopTask = Task.Run(() => RunWithReconnectAsync(_cts.Token));
@@ -36,6 +39,7 @@ public sealed class ForwardWsTransport : IOneBotTransport
 
     public void Stop()
     {
+        if (Interlocked.Exchange(ref _stopRequested, 1) != 0) return;
         _stopped = true;
         _cts.Cancel();
         try
@@ -52,6 +56,17 @@ public sealed class ForwardWsTransport : IOneBotTransport
     }
 
     public void Dispose() => Stop();
+
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        Stop();
+        if (_loopTask is { } loop)
+        {
+            try { await loop.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) _cts.Dispose();
+    }
 
     public async Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default)
     {

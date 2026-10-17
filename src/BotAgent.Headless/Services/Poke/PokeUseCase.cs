@@ -85,7 +85,7 @@ public sealed class PokeUseCase
         }
 
         var conversation = _hooks.GetOrCreateConversation(new QqChatMessage(
-            0, poke.IsGroup, poke.UserId, poke.GroupId, string.Empty, string.Empty, poke.Time, false));
+            0, poke.IsGroup, poke.UserId, poke.GroupId, string.Empty, string.Empty, poke.Time, false) { Channel = poke.Channel });
         if (conversation is null)
         {
             return;

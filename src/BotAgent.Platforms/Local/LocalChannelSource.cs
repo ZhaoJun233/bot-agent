@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Qq;
+using BotAgent.Services.Platforms;
 
 // 本地通道的目标号在**专属号段**（Channels.LocalBase 起）：路由器按数字路由出站，
 // 与真实 QQ 号/官方别名三段互不相撞（见 Channels.LocalBase 的注释）。
@@ -22,7 +23,7 @@ namespace BotAgent.Services.Local;
 ///   · **自带白名单**：只有名单里的本地 id 收（空 = 全拦，与官方的"空 = 全收"故意不同）；
 ///   · **不越权**：它只是又一条上行 —— 工具、审批、预算、脱敏一概复用，没有任何"本地专用"的例外。
 /// </summary>
-public sealed class LocalChannelSource : IQqChatSource
+public sealed class LocalChannelSource : IQqChatSource, IDisposable
 {
     /// <summary>出箱最多留多少条（内存台账要有界）。</summary>
     public const int OutboxCapacity = 200;
@@ -30,6 +31,8 @@ public sealed class LocalChannelSource : IQqChatSource
     private readonly Action<string>? _log;
     private readonly ConcurrentQueue<LocalMessage> _outbox = new();
     private long _nextMessageId = 1;
+    private readonly PlatformOperationLifetime _operations = new();
+    private bool _disposed;
 
     public LocalChannelSource(Action<string>? log = null) => _log = log;
 
@@ -37,7 +40,7 @@ public sealed class LocalChannelSource : IQqChatSource
     public string Channel => Channels.Local;
 
     /// <summary>本地通道没有"连接"这回事（它就是本进程里的一张表）—— 恒为在线。</summary>
-    public bool IsConnected => true;
+    public bool IsConnected => !_disposed && _operations.IsActive;
 
     public event Action<QqChatMessage>? MessageReceived;
 
@@ -65,6 +68,8 @@ public sealed class LocalChannelSource : IQqChatSource
     /// </summary>
     public QqChatMessage Inject(bool isGroup, long id, string senderName, string text, long? messageId = null, bool? mentioned = null, long? replyToMessageId = null)
     {
+        using var operation = _operations.TryEnter(CancellationToken.None);
+        if (_disposed || operation is null) throw new InvalidOperationException("source_unavailable");
         var msg = new QqChatMessage(
             MessageId: messageId ?? Interlocked.Increment(ref _nextMessageId),
             IsGroup: isGroup,
@@ -87,6 +92,9 @@ public sealed class LocalChannelSource : IQqChatSource
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default,
         long? replyToMessageId = null, bool directAddress = false)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return Task.FromResult(new SendResult(false));
+        operation.Token.ThrowIfCancellationRequested();
         var key = Channels.Key(Channels.Local, isGroup, targetId);
         var id = Interlocked.Increment(ref _nextMessageId);
         _outbox.Enqueue(new LocalMessage(id, key, text ?? string.Empty, Clock.Now));
@@ -108,6 +116,23 @@ public sealed class LocalChannelSource : IQqChatSource
 
     public Task<string?> GetGroupNameAsync(long groupId, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
+
+    public Task StartAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _operations.Start();
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken ct = default) => _operations.StopAsync();
+
+    public void Dispose()
+    {
+        _disposed = true;
+        StopAsync().GetAwaiter().GetResult();
+        _operations.Dispose();
+    }
 }
 
 /// <summary>本地通道出箱里的一条（**只有形状与长度**：正文不外传，harness 只看它在不在）。</summary>

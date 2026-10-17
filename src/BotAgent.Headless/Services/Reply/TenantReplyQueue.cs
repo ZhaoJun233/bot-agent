@@ -8,6 +8,7 @@ namespace BotAgent.Services.Reply;
 public sealed class TenantReplyQueue
 {
     public const int DefaultCapacity = 5;
+    public const int HardCapacity = 256;
     private readonly object _gate = new();
     private readonly Queue<PendingReply> _items = new();
 
@@ -35,7 +36,7 @@ public sealed class TenantReplyQueue
 
     public PendingReplyOffer Enqueue(PendingReply item, int capacity)
     {
-        if (capacity < 1)
+        if (capacity < 1 || capacity > HardCapacity)
         {
             throw new ArgumentOutOfRangeException(nameof(capacity));
         }
@@ -53,7 +54,7 @@ public sealed class TenantReplyQueue
             if (!item.MustPreserve)
             {
                 var values = _items.ToArray();
-                var replaceAt = Array.FindLastIndex(values, static value => !value.MustPreserve);
+                var replaceAt = Array.FindLastIndex(values, value => !value.MustPreserve && SameSource(value.Source, item.Source));
                 if (replaceAt >= 0)
                 {
                     values[replaceAt] = item;
@@ -66,13 +67,14 @@ public sealed class TenantReplyQueue
                     return PendingReplyOffer.CoalescedOld;
                 }
 
-                return PendingReplyOffer.CoalescedIncoming;
+                return values.Any(value => SameSource(value.Source, item.Source))
+                    ? PendingReplyOffer.CoalescedIncoming : PendingReplyOffer.RejectedCapacity;
             }
 
             // 需要保序的事件不能无条件丢弃。优先移除最早的普通观望轮次，
             // 如果队列全是保序事件，则允许短暂超过容量，由调用方显式记录。
             var retained = _items.ToArray();
-            var removeAt = Array.FindIndex(retained, static value => !value.MustPreserve);
+            var removeAt = Array.FindIndex(retained, value => !value.MustPreserve && SameSource(value.Source, item.Source));
             if (removeAt >= 0)
             {
                 _items.Clear();
@@ -85,6 +87,7 @@ public sealed class TenantReplyQueue
                 }
             }
 
+            if (_items.Count >= HardCapacity) return PendingReplyOffer.RejectedCapacity;
             _items.Enqueue(item);
             return removeAt >= 0
                 ? PendingReplyOffer.AcceptedAfterCoalescing
@@ -106,18 +109,24 @@ public sealed class TenantReplyQueue
             return true;
         }
     }
+
+    private static bool SameSource(BotAgent.Services.Qq.PlatformSourceLease? left, BotAgent.Services.Qq.PlatformSourceLease? right)
+        => left is null ? right is null : right is not null && left.Origin.Driver == right.Origin.Driver
+            && left.Lifetime == right.Lifetime;
 }
 
 public readonly record struct PendingReply(
     long? TriggerMessageId,
     bool Proactive,
-    bool MustPreserve);
+    bool MustPreserve,
+    BotAgent.Services.Qq.PlatformSourceLease? Source = null);
 
 public enum PendingReplyOffer
 {
     Accepted,
     CoalescedOld,
     CoalescedIncoming,
+    RejectedCapacity,
     AcceptedAfterCoalescing,
     PreservedOverflow
 }

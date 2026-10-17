@@ -3,6 +3,8 @@ using BotAgent.Domain.Ops;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
+using BotAgent.Services.Qq;
+using System.Collections.Concurrent;
 
 namespace BotAgent.Services.Permissions;
 
@@ -30,6 +32,7 @@ public sealed class ApprovalUseCase
     private readonly IAuditChain? _audit;
 
     private readonly ApprovalStore _approvals = new();
+    private readonly ConcurrentDictionary<string, PlatformSourceLease> _sources = new(StringComparer.Ordinal);
     private readonly ToolCallBudget _toolBudget = new();
 
     private ChatCapabilitySet? _capabilities;
@@ -190,6 +193,19 @@ public sealed class ApprovalUseCase
 
         var conversationKey = Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
         var parsed = command.Value;
+        _sources.TryGetValue(parsed.RequestId, out var originalSource);
+        var incomingSource = PlatformSourceExecution.Current;
+        if (originalSource is not null && (!originalSource.IsCurrent || incomingSource is null
+            || incomingSource.Origin.Driver != originalSource.Origin.Driver || incomingSource.Lifetime != originalSource.Lifetime))
+            return true;
+        if (originalSource is not null)
+        {
+            var request = _approvals.Get(parsed.RequestId, Clock.Now);
+            var actualKey = originalSource.Owner.ConversationKey(msg, candidate => candidate == request?.ConversationKey);
+            if (actualKey is null || actualKey != request?.ConversationKey) return true;
+            conversationKey = actualKey;
+        }
+        using var sourceScope = PlatformSourceExecution.Enter(originalSource ?? incomingSource);
 
         var result = ApprovalFlow.Handle(
             _approvals,
@@ -275,6 +291,9 @@ public sealed class ApprovalUseCase
             return (false, "unknown_request");
         }
 
+        _sources.TryGetValue(requestId, out var originalSource);
+        if (originalSource is { IsCurrent: false }) return (false, "source_retired");
+        using var sourceScope = PlatformSourceExecution.Enter(originalSource);
         var conversationKey = request.ConversationKey;
         var result = ApprovalFlow.Handle(
             _approvals,
@@ -398,6 +417,9 @@ public sealed class ApprovalUseCase
             return false;
         }
 
+        if (created.Request is { } question && PlatformSourceExecution.Current is { } questionSource)
+            _sources[question.RequestId] = questionSource;
+
         _hooks.Log($"[提问] 新建待答问题 {created.Request?.RequestId}"
                    + $"（v{policyVersion}，{ApprovalFlow.TtlSeconds}s 有效）：{conversation.Name}");
 
@@ -478,6 +500,9 @@ public sealed class ApprovalUseCase
             return false;
         }
 
+        if (created.Request is { } approval && PlatformSourceExecution.Current is { } approvalSource)
+            _sources[approval.RequestId] = approvalSource;
+
         _hooks.Log($"[审批] 新建待批单 {created.Request?.RequestId}（{ApprovalFlow.FixedToolId}"
                    + $"，v{policyVersion}，"
                    + $"{ApprovalFlow.TtlSeconds}s 有效）：{conversation.Name}");
@@ -503,6 +528,8 @@ public sealed class ApprovalUseCase
 
         _lastPrune = now;
         var pruned = _approvals.Prune(now);
+        foreach (var id in _sources.Keys)
+            if (_approvals.Get(id, now) is null) _sources.TryRemove(id, out _);
         if (pruned > 0)
         {
             _hooks.Log($"[审批] 台账清理：移除 {pruned} 张已结束的单子");

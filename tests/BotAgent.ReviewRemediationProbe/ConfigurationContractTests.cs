@@ -4512,16 +4512,17 @@ internal static class ConfigurationContractTests
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
         var passed = 0;
+        var warnings = new List<string>();
         var previousError = Console.Error;
-        using var expectedWarnings = new StringWriter();
-        Console.SetError(expectedWarnings);
+        using var consoleError = new StringWriter();
+        Console.SetError(consoleError);
         try
         {
             ClockBindings.InitializePlatforms();
             var clock = new SyntheticClock(); Clock.Use(clock);
             ModelModule::BotAgent.Model.ModelClock.Initialize(ClockBindings.Source);
             ModelModule::BotAgent.Services.ModelLogging.WriteHandler = (_, _) => { };
-            ModelModule::BotAgent.Services.ModelLogging.WarnHandler = (_, _) => { };
+            ModelModule::BotAgent.Services.ModelLogging.WarnHandler = (tag, message) => warnings.Add($"[{tag}] {message}");
             foreach (var module in new[] { false, true })
             foreach (var path in Enumerable.Range(0, 3))
             foreach (var mode in Enumerable.Range(0, 4))
@@ -4579,14 +4580,18 @@ internal static class ConfigurationContractTests
                 passed++;
                 Console.WriteLine($"PASS CFG_ROUTE {(module ? "model" : "host")} path={path} mode={mode} resolves={resolved.Count} sends={paths.Length}");
             }
-            var warnings = expectedWarnings.ToString().Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-            var expectedDiagnostics = new[]
+            if (!warnings.Any(line => line.Contains("Provider 调用不可用，进入安全静默（reason=provider_secret_unavailable，hops=1）", StringComparison.Ordinal))
+                || !warnings.Any(line => line.Contains("[会话标题] 没拿到标题，本次不改名", StringComparison.Ordinal)))
+                throw new InvalidOperationException("synthetic_missing_provider_diagnostic");
+            var consoleOutput = consoleError.ToString();
+            var forbiddenDiagnosticSecrets = new[]
             {
-                $"{clock.LocalDateTime:yyyy-MM-dd HH:mm:ss.fff} [Agent] WARN Provider 调用不可用，进入安全静默（reason=provider_secret_unavailable，hops=1）",
-                $"{clock.LocalDateTime:yyyy-MM-dd HH:mm:ss.fff} [Agent] WARN [会话标题] 没拿到标题，本次不改名"
+                "synthetic-private-marker", "synthetic-cached-key", "synthetic-live-key",
+                "synthetic-other-key", "synthetic-runtime-key", "https://example.com"
             };
-            if (!warnings.SequenceEqual(expectedDiagnostics))
-                throw new InvalidOperationException("synthetic_unexpected_provider_diagnostic");
+            if (warnings.Any(line => forbiddenDiagnosticSecrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)))
+                || forbiddenDiagnosticSecrets.Any(secret => consoleOutput.Contains(secret, StringComparison.Ordinal)))
+                throw new InvalidOperationException("synthetic_provider_diagnostic_secret_leak");
             passed++;
             Console.WriteLine($"CFG_CHILD provider-routing passed={passed} failed=0");
             return 0;
@@ -4607,7 +4612,7 @@ internal static class ConfigurationContractTests
         }
     }
 
-    private sealed class RoutingFetcher : BotAgent.Adapters.Net.IHttpFetcher, ModelModule::BotAgent.Adapters.Net.IHttpFetcher
+    private sealed class RoutingFetcher : BotAgent.Adapters.Net.IHttpFetcher, ModelModule::BotAgent.Model.Net.IModelHttpFetcher
     {
         internal List<string> Paths { get; } = new();
         public TimeSpan Timeout => TimeSpan.FromSeconds(1);

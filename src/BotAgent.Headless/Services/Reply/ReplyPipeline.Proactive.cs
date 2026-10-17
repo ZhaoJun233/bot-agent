@@ -1,5 +1,6 @@
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Qq;
+using BotAgent.Services.Qq;
 
 namespace BotAgent.Services.Reply;
 
@@ -33,6 +34,9 @@ public sealed partial class ReplyPipeline
 
         foreach (var conversation in _registry.Snapshot())
         {
+            var source = (_source as ChannelRouter)?.CaptureForConversation(conversation.SourceKey);
+            if (_source is ChannelRouter && (source is null || !source.IsCurrent)) continue;
+            using var sourceScope = PlatformSourceExecution.Enter(source);
             if (_riskBackoff?.IsActive(conversation.SourceKey) == true)
             {
                 continue;
@@ -48,7 +52,9 @@ public sealed partial class ReplyPipeline
                 continue;
             }
 
-            if (!_whitelist.AllowsKey(conversation.SourceKey) || !AllowReply(conversation))
+            var (isGroup, targetId) = conversation.Target;
+            if (!(source is null ? _whitelist.AllowsKey(conversation.SourceKey)
+                    : _whitelist.AllowsSource(source.Context, isGroup, targetId)) || !AllowReply(conversation))
             {
                 continue;
             }

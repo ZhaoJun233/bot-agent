@@ -5,7 +5,8 @@ using BotAgent.Services;
 namespace BotAgent.Adapters.Persistence;
 
 /// <summary>
-/// 全局唯一的 SQLite 数据库：<c>{RuntimeRoot}/data/qqchat.db</c>。
+/// 全局唯一的 SQLite 数据库：<c>{RuntimeRoot}/data/botagent.db</c>；
+/// 若同目录只有旧 <c>qqchat.db</c>，则继续使用旧文件（N1 只做回退，不自动复制）。
 ///
 /// 为什么从“一堆 JSON 文件”换成数据库（2026-09-13 管理员要求）：
 ///   • **一致性**：会话/消息/档案分散在 conversations.json + member_profiles/*.json + archive/*.jsonl 里，
@@ -42,8 +43,19 @@ public static class AppDatabase
                 return _filePath;
             }
 
-            return Path.GetFullPath(Path.Combine(AppPaths.DataDir, "qqchat.db"));
+            return StoragePaths.DatabasePath;
         }
+    }
+
+    /// <summary>Canonical botagent.db wins; an existing qqchat.db is used only when canonical is absent.</summary>
+    public static string ResolveDatabasePath(string runtimeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeRoot);
+        var dataDir = Path.Combine(Path.GetFullPath(runtimeRoot), "data");
+        var canonical = Path.Combine(dataDir, StoragePaths.CanonicalDatabaseFileName);
+        if (File.Exists(canonical)) return canonical;
+        var legacy = Path.Combine(dataDir, StoragePaths.LegacyDatabaseFileName);
+        return File.Exists(legacy) ? legacy : canonical;
     }
 
     /// <summary>是否已经初始化过（面板/日志用来提示“数据在库里”）。</summary>

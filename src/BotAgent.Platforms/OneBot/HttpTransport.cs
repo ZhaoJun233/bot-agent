@@ -15,6 +15,8 @@ public sealed class HttpTransport : IOneBotTransport
     private readonly CancellationTokenSource _cts = new();
     private Task? _loopTask;
     private int _failCount;
+    private int _stopRequested;
+    private int _disposed;
 
     public event Action<string>? OnText;
     public event Action<bool>? OnStateChanged;
@@ -29,6 +31,7 @@ public sealed class HttpTransport : IOneBotTransport
 
     public Task StartAsync()
     {
+        if (Volatile.Read(ref _stopRequested) != 0) throw new InvalidOperationException("transport_stopped");
         if (_loopTask is null || _loopTask.IsCompleted)
         {
             _loopTask = Task.Run(PollLoopAsync);
@@ -39,11 +42,23 @@ public sealed class HttpTransport : IOneBotTransport
 
     public void Stop()
     {
+        if (Interlocked.Exchange(ref _stopRequested, 1) != 0) return;
         _cts.Cancel();
         SetConnected(false);
     }
 
     public void Dispose() => Stop();
+
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        Stop();
+        if (_loopTask is { } loop)
+        {
+            try { await loop.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) _cts.Dispose();
+    }
 
     public async Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default)
     {
@@ -53,7 +68,7 @@ public sealed class HttpTransport : IOneBotTransport
         }
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
-        await PostAsync(action, paramsJson, linked.Token);
+        using var response = await PostAsync(action, paramsJson, linked.Token);
     }
 
     private async Task PollLoopAsync()
@@ -110,7 +125,7 @@ public sealed class HttpTransport : IOneBotTransport
             http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
         }
 
-        var request = new HttpRequestMessage(HttpMethod.Post, _baseUrl + "/" + action)
+        using var request = new HttpRequestMessage(HttpMethod.Post, _baseUrl + "/" + action)
         {
             Content = new StringContent(paramsJson, Encoding.UTF8, "application/json")
         };

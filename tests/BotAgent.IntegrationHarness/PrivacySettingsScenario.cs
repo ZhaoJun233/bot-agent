@@ -28,7 +28,7 @@ public static partial class Program
 
         const int openAiPort = 17881;
         const int agentAiPort = 17882;
-        const int botWsPort = 13095;
+        var botWsPort = FreePort(13095);
         const int panelPort = 18115;
         const long groupId = 66760;
         const string fakeChatKey = "group:123456789";   // 刻意用长 id：好验「前 3 后 2」

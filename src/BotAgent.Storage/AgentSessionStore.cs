@@ -183,8 +183,9 @@ public class AgentSessionStore : IAgentSessionStore
         lock (_gate)
         {
             var chat = EnsureChat(sourceKey);
-            var created = CreateLocked(sourceKey, chat, backend, name, device, piSessionId, piOwned);
-            chat.Current[backend] = created.Id;
+            var storedBackend = backend == "server" ? "server" : "host";
+            var created = CreateLocked(sourceKey, chat, storedBackend, name, device, piSessionId, piOwned);
+            chat.Current[storedBackend] = created.Id;
             Save();
             return created;
         }

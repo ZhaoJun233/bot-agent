@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 
-namespace BotAgent.Services.Net;
+namespace BotAgent.Model.Net;
 
 /// <summary>共享的出站地址分类，供安全 URL 校验和连接回调使用。</summary>
 public static class OutboundAddressPolicy

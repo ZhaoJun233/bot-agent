@@ -1,19 +1,24 @@
 using BotAgent.Domain.Conversation;
+using System.Globalization;
 using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Ports;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Qq;
+using BotAgent.Services.Platforms;
 
 namespace BotAgent.Adapters.Platforms;
 
 /// <summary>
 /// 将既有 <see cref="IQqChatSource"/> 包装为平台中立的 <see cref="IPlatformAdapter"/> 与 <see cref="IPlatformMessenger"/>。
 /// </summary>
-public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMessenger, IDisposable
+public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMessenger, IPlatformInboundChatSource, IPlatformSourceBinding, IDisposable
 {
     private readonly IQqChatSource _source;
     private bool _disposed;
+    private readonly PlatformOperationLifetime _operations = new();
+    private readonly object _subscriptions = new();
+    private bool _attached = true;
 
     public QqChatSourcePlatformAdapter(
         IQqChatSource source,
@@ -24,6 +29,9 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         Context = context ?? throw new ArgumentNullException(nameof(context));
+        if (string.IsNullOrWhiteSpace(context.PlatformId) || string.IsNullOrWhiteSpace(context.AccountScope)
+            || context.InstanceId is null || (context.InstanceId.Length > 0 && string.IsNullOrWhiteSpace(context.InstanceId)))
+            throw new ArgumentException("invalid_platform_context", nameof(context));
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
         DisplayName = displayName;
         Tag = tag;
@@ -33,18 +41,20 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
     }
 
     public PlatformContext Context { get; }
+    public IQqChatSource Source => _source;
 
     public string DisplayName { get; }
 
     public string Tag { get; }
 
-    public bool IsConnected => _source.IsConnected;
+    public bool IsConnected => !_disposed && _operations.IsActive && _source.IsConnected;
 
     public PlatformCapabilities Capabilities { get; }
 
     public string? LastErrorCode { get; private set; }
 
     public event Action<InboundMessage>? InboundReceived;
+    public event Action<QqChatMessage, InboundMessage>? RichInboundReceived;
 
     public event Action<bool>? ConnectionChanged;
 
@@ -53,20 +63,28 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         OutboundMessage message,
         CancellationToken ct = default)
     {
-        if (context is null || message is null)
+        if (context is null || message is null || message.Target is null)
         {
             return DeliveryResult.Rejected("bad_request");
         }
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return DeliveryResult.Rejected("source_unavailable");
+        ct = operation.Token;
+        ct.ThrowIfCancellationRequested();
 
         var expectedPlatform = PlatformId.Normalize(Context.PlatformId);
         if (!string.Equals(PlatformId.Normalize(context.PlatformId), expectedPlatform, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(PlatformId.Normalize(message.Target.PlatformId), expectedPlatform, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(context.AccountScope, Context.AccountScope, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(message.Target.AccountScope, Context.AccountScope, StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(context.AccountScope, Context.AccountScope, StringComparison.Ordinal)
+            || !string.Equals(context.InstanceId, Context.InstanceId, StringComparison.Ordinal)
+            || !string.Equals(message.Target.AccountScope, Context.AccountScope, StringComparison.Ordinal))
         {
             LastErrorCode = "context_mismatch";
             return DeliveryResult.Rejected("context_mismatch");
         }
+        if (message.Target.Kind is not (ConversationKind.GroupChat or ConversationKind.PrivateChat)
+            || !string.IsNullOrEmpty(message.Target.ThreadId))
+            return DeliveryResult.Rejected("unsupported_target");
 
         if (!long.TryParse(message.Target.NativeTargetId, out var targetId) || targetId <= 0)
         {
@@ -75,6 +93,8 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         }
 
         var isGroup = message.Target.Kind == ConversationKind.GroupChat;
+        if (isGroup ? !Capabilities.SupportsGroup : !Capabilities.SupportsDirect)
+            return DeliveryResult.Rejected("unsupported_target");
         var wantsImage = message.ImageData is { Length: > 0 };
         var wantsVoice = !string.IsNullOrWhiteSpace(message.VoiceUrl);
         var wantsQuote = !string.IsNullOrWhiteSpace(message.ReplyToMessageId);
@@ -116,6 +136,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
                 ? DeliveryResult.Rejected(deg.ReasonCodes[0])
                 : DeliveryResult.Rejected("empty_content");
         }
+        if (!Capabilities.SupportsText) return DeliveryResult.Rejected("text_unsupported");
 
         var sendRes = await _source.SendTextAsync(isGroup, targetId, textToSend, ct, replyToId).ConfigureAwait(false);
         if (!sendRes.Ok)
@@ -137,13 +158,16 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         MessageRef messageRef,
         CancellationToken ct = default)
     {
-        if (messageRef is null)
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null || messageRef is null || !Capabilities.SupportsQuote)
         {
             return (null, null);
         }
+        ct = operation.Token;
 
         var expectedPlatform = PlatformId.Normalize(Context.PlatformId);
-        if (!string.Equals(PlatformId.Normalize(messageRef.Conversation.PlatformId), expectedPlatform, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(PlatformId.Normalize(messageRef.Conversation.PlatformId), expectedPlatform, StringComparison.Ordinal)
+            || !string.Equals(messageRef.Conversation.AccountScope, Context.AccountScope, StringComparison.Ordinal))
         {
             return (null, null);
         }
@@ -159,11 +183,13 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
 
     private void OnMessageReceived(QqChatMessage msg)
     {
+        using var operation = _operations.TryEnter(CancellationToken.None);
+        if (_disposed || operation is null || msg.MessageId <= 0 || msg.UserId <= 0 || (msg.IsGroup && msg.GroupId <= 0)) return;
         var kind = msg.IsGroup ? ConversationKind.GroupChat : ConversationKind.PrivateChat;
-        var nativeTarget = (msg.IsGroup ? msg.GroupId : msg.UserId).ToString();
+        var nativeTarget = (msg.IsGroup ? msg.GroupId : msg.UserId).ToString(CultureInfo.InvariantCulture);
         var convId = new ConversationId(Context.PlatformId, Context.AccountScope, kind, nativeTarget);
-        var msgRef = new MessageRef(convId, msg.MessageId.ToString());
-        var sender = new ParticipantId(Context.PlatformId, Context.AccountScope, msg.UserId.ToString());
+        var msgRef = new MessageRef(convId, msg.MessageId.ToString(CultureInfo.InvariantCulture));
+        var sender = new ParticipantId(Context.PlatformId, Context.AccountScope, msg.UserId.ToString(CultureInfo.InvariantCulture));
         var inbound = new InboundMessage(
             Ref: msgRef,
             Sender: sender,
@@ -172,11 +198,15 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
             Timestamp: msg.Time,
             ReplyToMessageId: msg.ReplyToMessageId?.ToString(),
             IsMentioned: msg.MentionedSelf,
-            ImageUrls: msg.ImageUrls);
+            ImageUrls: msg.ImageUrls is null ? null : Array.AsReadOnly(msg.ImageUrls.ToArray()));
+        RichInboundReceived?.Invoke(msg, inbound);
         InboundReceived?.Invoke(inbound);
     }
 
-    private void OnConnectionChanged(bool connected) => ConnectionChanged?.Invoke(connected);
+    private void OnConnectionChanged(bool connected)
+    {
+        if (!_disposed && _operations.IsActive) ConnectionChanged?.Invoke(connected);
+    }
 
     public void Dispose()
     {
@@ -186,7 +216,40 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         }
 
         _disposed = true;
-        _source.MessageReceived -= OnMessageReceived;
-        _source.ConnectionChanged -= OnConnectionChanged;
+        StopAsync().GetAwaiter().GetResult();
+        _operations.Dispose();
+    }
+
+    public Task StartAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (_subscriptions)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _operations.Start();
+            if (!_attached)
+            {
+                _source.MessageReceived += OnMessageReceived;
+                _source.ConnectionChanged += OnConnectionChanged;
+                _attached = true;
+            }
+        }
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        Task stopped;
+        lock (_subscriptions)
+        {
+            if (_attached)
+            {
+                _source.MessageReceived -= OnMessageReceived;
+                _source.ConnectionChanged -= OnConnectionChanged;
+                _attached = false;
+            }
+            stopped = _operations.StopAsync();
+        }
+        await stopped.ConfigureAwait(false);
     }
 }

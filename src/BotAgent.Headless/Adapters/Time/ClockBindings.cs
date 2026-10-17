@@ -11,6 +11,12 @@ public static class ClockBindings
     public static IClock Source { get; } = new ForwardingClock();
 
     public static void InitializePlatforms() => BotAgent.Platforms.PlatformClock.Initialize(Source);
+    public static void InitializeModel()
+    {
+        BotAgent.Model.ModelClock.Initialize(Source);
+        BotAgent.Services.ModelLogging.WriteHandler = BotAgent.Services.FileLog.Write;
+        BotAgent.Services.ModelLogging.WarnHandler = BotAgent.Services.FileLog.Warn;
+    }
     public static void InitializeStorage()
     {
         StorageModule::BotAgent.Storage.StorageClock.Initialize(Source);

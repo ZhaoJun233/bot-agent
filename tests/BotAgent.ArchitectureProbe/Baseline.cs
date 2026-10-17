@@ -188,8 +188,9 @@ internal static class Baseline
     /// <summary>
     /// 直接文件 IO 总处数（棘轮：只许往下调；新加的请落在 Adapters/**）。
     /// 批次 3：61 → 62（+1 = TtsConfFile 的写入；其余是搬迁，总数几乎没动）。
+    /// N1 命名兼容：62 → 59（LegacyJsonImporter 的重复前置检查收敛；数据库路径解析落在持久化适配器）。
     /// </summary>
-    public const int FileIoTotal = 62;
+    public const int FileIoTotal = 59;
 
     // 逐文件迁移角色映射，不是新工程目录白名单。旧副本仍扫描、仍计入全局总数。
     // 前 21 项原位于 Headless/Adapters/Persistence；OfficialIdMap 是已迁出的同一旧持久化类型。

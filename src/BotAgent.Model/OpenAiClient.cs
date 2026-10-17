@@ -1,3 +1,5 @@
+using BotAgent.Domain.Configuration;
+using BotAgent.Model.Net;
 using System.Net;
 using BotAgent.Domain.Stickers;
 using System.Net.Http;
@@ -22,7 +24,7 @@ namespace BotAgent.Model;
 public class OpenAiClient : IModelClient
 {
     /// <summary>辅助调用（画像摘要 / 表情包审核 / 听歌 / 综结标题…）用的出网：这些不该拖，60 秒拿不到就放弃。</summary>
-    private readonly IHttpFetcher _auxHttp = null!;
+    private readonly IModelHttpFetcher _auxHttp = null!;
 
     /// <summary>
     /// 聊天那次请求单独一个客户端，超时放宽（默认 120 秒，可用 <c>QQCHAT_MODEL_TIMEOUT_SECONDS</c> 覆盖）。
@@ -32,7 +34,7 @@ public class OpenAiClient : IModelClient
     /// 第一次拿到就是拿到，真卡住了第二次 30 秒内给个结果（成功就用它，不成就丢掉这一轮）。
     /// 辅助调用继续用 60 秒那个，免得网关抽风时把画像/审核也拖几分钟。
     /// </summary>
-    private readonly IHttpFetcher _chatHttp = null!;
+    private readonly IModelHttpFetcher _chatHttp = null!;
 
     /// <summary>超时重试用的小预算（秒）：第一次已经等过一大截了，第二次不该再等满。</summary>
     private const int TimeoutRetrySeconds = 30;
@@ -41,7 +43,7 @@ public class OpenAiClient : IModelClient
     /// 装配点用同一个口径造聊天那条出网客户端（见 <c>CompositionRoot</c>）。</summary>
     public static TimeSpan ModelTimeout()
     {
-        var raw = Environment.GetEnvironmentVariable("QQCHAT_MODEL_TIMEOUT_SECONDS");
+        var raw = EnvironmentAliases.Get("BOTAGENT_MODEL_TIMEOUT_SECONDS", "QQCHAT_MODEL_TIMEOUT_SECONDS");
         var seconds = double.TryParse(raw, out var parsed) && parsed > 0 ? parsed : 120;
         return TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 1800));
     }
@@ -69,7 +71,7 @@ public class OpenAiClient : IModelClient
     private readonly Func<ModelOptions> _options;
 
     public OpenAiClient(
-        Func<ModelOptions> options, IHttpFetcher auxHttp, IHttpFetcher chatHttp, IImageDownloader images, IModelTransport transport,
+        Func<ModelOptions> options, IModelHttpFetcher auxHttp, IModelHttpFetcher chatHttp, IImageDownloader images, IModelTransport transport,
         ProviderFailoverRunner? providerFailover = null,
         IReadOnlyDictionary<string, ModelProviderRoute>? providerRoutes = null,
         Func<string, ModelProviderRoute?>? providerRouteResolver = null)
@@ -232,7 +234,7 @@ public class OpenAiClient : IModelClient
         if (!ModelJson.HasChoices(json))
         {
             Services.FileLog.Write("Agent",
-                $"上游连续两次都没给 choices（带图 {built.AttachedImages} 张）→ 本轮按沉默处理：{Truncate(json, 200)}");
+                $"model_empty_choices images={built.AttachedImages}");
             return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true,
                 PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops);
         }
@@ -266,7 +268,7 @@ public class OpenAiClient : IModelClient
         }
 
         // 有 choices 但里面没有 message.content：同样按沉默处理，不招异常
-        Services.FileLog.Write("Agent", $"模型返回里没有 message.content → 本轮按沉默处理：{Truncate(json, 200)}");
+        Services.FileLog.Write("Agent", "model_content_missing");
         return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true,
             PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops);
     }
@@ -292,9 +294,16 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
                 ? route.ModelName
                 : requestedModel ?? route.ModelName;
             var effectiveRoute = route with { ModelName = model };
-            var outcome = await _transport.SendAsync(
-                built.Payload, built.AttachedImages, built.AttachedImageIds, effectiveRoute, token)
-                .ConfigureAwait(false);
+            SendOutcome outcome;
+            try
+            {
+                outcome = await _transport.SendAsync(
+                    built.Payload, built.AttachedImages, built.AttachedImageIds, effectiveRoute, token).ConfigureAwait(false);
+            }
+            catch (ModelFault fault)
+            {
+                return ProviderCallResult<SendOutcome>.Failure(fault.ErrorCode, hardFailure: true);
+            }
 
             // 空 choices 不是成功响应：让 L1 继续尝试下一 Provider，同时仍保留最终安全静默。
             return ModelJson.HasChoices(outcome.Json)
@@ -310,12 +319,12 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
                 return null;
             }
 
-            throw new HttpRequestException($"Provider 调用不可用（reason={result.ReasonCode}）");
+            throw new ModelFault(result.ReasonCode);
         }
 
         if (result.FallbackHops > 0)
         {
-            FileLog.Write("Agent", $"Provider 已故障转移（hops={result.FallbackHops}，provider={result.ProviderId}）");
+            FileLog.Write("Agent", $"model_provider_fallback hops={result.FallbackHops}");
         }
 
         return result.Value with { FallbackHops = result.FallbackHops };
@@ -386,6 +395,24 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         return result.Succeeded ? result.Value : null;
     }
     private async Task<string?> CompleteChatCoreAsync(
+        string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
+        int maxTokens, double temperature, string? reasoningEffort, CancellationToken ct,
+        string? baseUrlOverride, string? apiKeyOverride)
+    {
+        try
+        {
+            return await CompleteChatCoreUnsafeAsync(model, systemPrompt, messages, maxTokens, temperature,
+                reasoningEffort, ct, baseUrlOverride, apiKeyOverride).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            FileLog.Warn("Agent", $"model_aux_failed code={ModelFault.SafeCode(ex)}");
+            return null;
+        }
+    }
+
+    private async Task<string?> CompleteChatCoreUnsafeAsync(
         string model,
         string systemPrompt,
         IReadOnlyList<(string Role, string Text)> messages,
@@ -438,7 +465,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
             }
             catch (Exception ex)
             {
-                FileLog.Warn("Agent", $"补全请求失败：{ex.Message}");
+                FileLog.Warn("Agent", $"model_aux_failed code={ModelFault.SafeCode(ex)}");
                 return null;
             }
 
@@ -451,7 +478,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
                     if (!doc.RootElement.TryGetProperty("choices", out var choices) ||
                         choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
                     {
-                        FileLog.Warn("Agent", $"补全返回空结果：{Truncate(body, 160)}");
+                        FileLog.Warn("Agent", "model_aux_empty");
                         return null;
                     }
 
@@ -479,7 +506,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
                 }
                 if (attempt >= 1 || (status < 500 && status != 429))
                 {
-                    FileLog.Warn("Agent", $"补全请求失败 {status}：{Truncate(body, 120)}");
+                    FileLog.Warn("Agent", $"model_aux_failed status={status} code={ModelFault.StatusError(response.StatusCode)}");
                     return null;
                 }
 
@@ -556,7 +583,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         }
         catch (Exception ex)
         {
-            FileLog.Warn("Sticker", $"表情包巡检请求失败：{ex.Message}");
+            FileLog.Warn("Sticker", $"model_sticker_curation_failed code={ModelFault.SafeCode(ex)}");
             return empty;
         }
         finally
@@ -566,6 +593,17 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
     }
 
     private async Task<string?> SendAuxPayloadAsync(JsonObject payload, CancellationToken ct, bool keepRequestedModel = false)
+    {
+        try { return await SendAuxPayloadCoreAsync(payload, ct, keepRequestedModel).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            FileLog.Warn("Agent", $"model_aux_failed code={ModelFault.SafeCode(ex)}");
+            return null;
+        }
+    }
+
+    private async Task<string?> SendAuxPayloadCoreAsync(JsonObject payload, CancellationToken ct, bool keepRequestedModel)
     {
         if (_providerFailover is null)
         {
@@ -748,7 +786,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         }
         catch (Exception ex)
         {
-            FileLog.Warn("Sticker", $"表情包识别失败：{ex.Message}");
+            FileLog.Warn("Sticker", $"model_sticker_recognition_failed code={ModelFault.SafeCode(ex)}");
             return (null, null, null);
         }
         finally
@@ -880,7 +918,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
                 }
                 else
                 {
-                    Services.FileLog.Warn("Agent", $"[会话标题] 模型没给 title 字段，本次不改名：{Truncate(raw, 80)}");
+                    Services.FileLog.Warn("Agent", "model_title_missing");
                     return null;
                 }
             }
@@ -899,7 +937,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         }
         catch (Exception ex)
         {
-            Services.FileLog.Warn("Agent", $"[会话标题] 综结失败（不影响任务）：{ex.Message}");
+            Services.FileLog.Warn("Agent", $"model_title_failed code={ModelFault.SafeCode(ex)}");
             return null;
         }
     }
@@ -1057,7 +1095,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
             var body = await SendAuxPayloadAsync(payload, ct, keepRequestedModel: true).ConfigureAwait(false);
             if (body is null)
             {
-                Services.FileLog.Warn("Agent", $"[Music] 音频识别模型 {model} 未返回有效响应");
+                Services.FileLog.Warn("Agent", "model_audio_empty");
                 return null;
             }
 
@@ -1072,16 +1110,16 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
             if (content.Contains("听不到", StringComparison.Ordinal) || content.Contains("无法接收", StringComparison.Ordinal) ||
                 content.Contains("无法播放", StringComparison.Ordinal) || content.Contains("没有声音", StringComparison.Ordinal))
             {
-                Services.FileLog.Warn("Agent", $"[Music] 音频识别模型 {model} 声称听不到音频（该模型/链路可能不支持 input_audio）");
+                Services.FileLog.Warn("Agent", "model_audio_unsupported");
                 return null;
             }
 
-            Services.FileLog.Write("Agent", $"[Music] {model} 听感：{Truncate(content, 200)}");
+            Services.FileLog.Write("Agent", $"model_audio_received chars={content.Length}");
             return content;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Services.FileLog.Warn("Agent", $"[Music] 音频识别请求失败（{model}）: {ex.Message}");
+            Services.FileLog.Warn("Agent", $"model_audio_failed code={ModelFault.SafeCode(ex)}");
             return null;
         }
     }
@@ -1116,7 +1154,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
 
     /// <summary>
     /// 把解析器“要说给日志听的话”按原来的措辞写出来（<see cref="ModelOutputParser" /> 是纯函数，不自己写日志）。
-    /// ⚠ 这几行是**对外契约**（管理员按它们排障），搬家时逐字保留；只记形状与长度，不记正文（V3 §8.2）。
+    /// 诊断只记安全代码、形状与长度，不记正文或单字预览。
     /// </summary>
     private static void LogParseNotices(IReadOnlyList<ParseNotice> notices)
     {
@@ -1136,11 +1174,11 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
 
                 case ParseNoticeKind.SingleCharNoise:
                     FileLog.Warn("Agent",
-                        $"模型只回了 1 个字“{notice.ReplyChar}”，不属于正常应答，按沉默处理。原文：{notice.Preview}");
+                        $"model_single_char_noise chars={notice.Length}");
                     break;
 
                 case ParseNoticeKind.SingleCharReply:
-                    FileLog.Write("Agent", $"模型回复只有 1 个字（{notice.ReplyChar}），原文：{notice.Preview}");
+                    FileLog.Write("Agent", $"model_single_char_reply chars={notice.Length}");
                     break;
 
                 case ParseNoticeKind.SilentMarkerInBody:

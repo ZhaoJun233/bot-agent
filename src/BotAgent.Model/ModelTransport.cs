@@ -1,3 +1,5 @@
+using System.Net;
+using BotAgent.Model.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -34,12 +36,12 @@ public class ModelTransport : IModelTransport
     private const string RecallMark = "[已撤回] ";
 
     private readonly Func<ModelOptions> _options;
-    private readonly IHttpFetcher _chatHttp;
-    private readonly IHttpFetcher _auxHttp;
+    private readonly IModelHttpFetcher _chatHttp;
+    private readonly IModelHttpFetcher _auxHttp;
     private readonly ImageDownloader _imageDownloader;
     private readonly TimeSpan _chatTimeout;
 
-    public ModelTransport(Func<ModelOptions> options, IHttpFetcher chatHttp, IHttpFetcher auxHttp, ImageDownloader imageDownloader, TimeSpan chatTimeout)
+    public ModelTransport(Func<ModelOptions> options, IModelHttpFetcher chatHttp, IModelHttpFetcher auxHttp, ImageDownloader imageDownloader, TimeSpan chatTimeout)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _chatHttp = chatHttp;
@@ -227,187 +229,125 @@ public class ModelTransport : IModelTransport
         JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds,
         ModelProviderRoute? provider, CancellationToken ct)
     {
-        // Provider 路由只在本次请求内生效，不修改 SettingsBox，避免并发请求互相污染配置。
-        var requestPayload = provider is null
-            ? payload
-            : (JsonObject)payload.DeepClone();
+        try { return await SendCoreAsync(payload, attachedImages, attachedImageIds, provider, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (ModelFault) { throw; }
+        catch (Exception ex) { throw new ModelFault(ModelFault.SafeCode(ex)); }
+    }
+
+    private async Task<SendOutcome> SendCoreAsync(
+        JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds,
+        ModelProviderRoute? provider, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        // Request-local copies preserve provider isolation and the caller's original payload.
+        var requestPayload = (JsonObject)payload.DeepClone();
         if (provider is not null && !string.IsNullOrWhiteSpace(provider.ModelName))
-        {
             requestPayload["model"] = provider.ModelName.Trim();
-        }
-
         var requestUrl = provider is null ? Url() : BuildUrl(provider.BaseUrl);
-        var apiKey = provider is null ? _settings.ApiKey.Trim() : provider.ApiKey.Trim();
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            throw new InvalidOperationException($"Provider '{provider?.ProviderId ?? "primary"}' 未配置 API Key");
-        }
+        var apiKey = (provider is null ? _settings.ApiKey : provider.ApiKey).Trim();
+        if (string.IsNullOrWhiteSpace(apiKey)) throw new ModelFault("model_credential_missing");
 
-        // 请求体是一次性的（HttpContent 只能读一次），每次重发都要重建一份带鉴权头的请求
-        var request = new HttpRequestMessage(HttpMethod.Post, requestUrl)
-        {
-            Content = new StringContent(requestPayload.ToJsonString(), Encoding.UTF8, "application/json")
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-
-        // 5xx/429 与**超时**各重试一次。
-        // 为什么要：上游网关（多账号池网关之类）经常回 503 auth_unavailable / No capacity ——
-        // 实测 17:28 连挨三次，每条都直接“模型请求失败”丢掉一次回复；晚 2 秒再问一次往往就能拿到。
-        // 超时同理：管理员 11:30 那次就是 60 秒到点被取消（当时超时写死 60 秒），其实再问一次经常能拿到。
-        // 只重试一次、且只对 5xx/429/超时：4xx 是请求本身的问题，重试没意义。
-        HttpResponseMessage? response = null;
-        string? failureDetail = null;
+        string json;
         for (var attempt = 0; ; attempt++)
         {
-            // 第二次尝试只给 30 秒（第一次已经等了一大截，卡住就早点放手）
-            using var retryBudget = attempt > 0
-                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-                : null;
-            if (retryBudget is not null)
-            {
-                retryBudget.CancelAfter(TimeSpan.FromSeconds(TimeoutRetrySeconds));
-            }
-
-            var sendToken = retryBudget?.Token ?? ct;
+            using var retryBudget = attempt > 0 ? CancellationTokenSource.CreateLinkedTokenSource(ct) : null;
+            retryBudget?.CancelAfter(TimeSpan.FromSeconds(TimeoutRetrySeconds));
+            (HttpStatusCode Status, string Body) reply;
             try
             {
-                response = await _chatHttp.SendAsync(request, sendToken);
+                reply = await SendOnceAsync(_chatHttp, requestPayload, requestUrl, apiKey, retryBudget?.Token ?? ct);
             }
-            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                // 不是调用方取消的 = 超时（HttpClient 自己的，或者上面那个 30 秒预算）
-                response?.Dispose();
-                response = null;
-                var limit = attempt > 0 ? TimeoutRetrySeconds : (int)_chatTimeout.TotalSeconds;
-                failureDetail = $"模型请求超时（{limit} 秒没回应）";
-                if (attempt >= 1)
-                {
-                    break;
-                }
-
-                Services.FileLog.Write("Agent", $"模型请求超时（{limit} 秒）→ 2 秒后重试一次（这次最多等 {TimeoutRetrySeconds} 秒）");
+                if (attempt >= 1) throw new ModelFault("model_timeout");
+                FileLog.Write("Agent", "model_timeout retry=1");
                 await Clock.Delay(TimeSpan.FromSeconds(2), ct);
-                request = new HttpRequestMessage(HttpMethod.Post, requestUrl)
-                {
-                    Content = new StringContent(requestPayload.ToJsonString(), Encoding.UTF8, "application/json")
-                };
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 continue;
             }
-
-            if (response.IsSuccessStatusCode)
+            catch (HttpRequestException ex) when (ex is not ModelFault)
             {
+                throw new ModelFault("model_network_error", ex.StatusCode);
+            }
+
+            if ((int)reply.Status is >= 200 and < 300)
+            {
+                ModelFault.ValidateEnvelope(reply.Body);
+                json = reply.Body;
                 break;
             }
 
-            var detail = await response.Content.ReadAsStringAsync(ct);
-            var status = (int)response.StatusCode;
-            var isReasoningError = detail.Contains("reason", StringComparison.OrdinalIgnoreCase) ||
-                                   detail.Contains("effort", StringComparison.OrdinalIgnoreCase) ||
-                                   detail.Contains("thinking", StringComparison.OrdinalIgnoreCase) ||
-                                   detail.Contains("budget", StringComparison.OrdinalIgnoreCase);
-            if (status is 400 or 422 && (requestPayload.ContainsKey("reasoning_effort") || requestPayload.ContainsKey("max_thinking_tokens")) && isReasoningError)
+            var status = (int)reply.Status;
+            var reasoningError = reply.Body.Contains("reason", StringComparison.OrdinalIgnoreCase)
+                || reply.Body.Contains("effort", StringComparison.OrdinalIgnoreCase)
+                || reply.Body.Contains("thinking", StringComparison.OrdinalIgnoreCase)
+                || reply.Body.Contains("budget", StringComparison.OrdinalIgnoreCase);
+            if (status is 400 or 422 && reasoningError &&
+                (requestPayload.ContainsKey("reasoning_effort") || requestPayload.ContainsKey("max_thinking_tokens")))
             {
                 requestPayload.Remove("reasoning_effort");
                 requestPayload.Remove("max_thinking_tokens");
-                Services.FileLog.Warn("Agent", "模型拒绝 reasoning_effort/max_thinking_tokens，自动降级为默认重试");
-                response.Dispose();
-                response = null;
-                request = new HttpRequestMessage(HttpMethod.Post, requestUrl)
-                {
-                    Content = new StringContent(requestPayload.ToJsonString(), Encoding.UTF8, "application/json")
-                };
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-                attempt--;
+                FileLog.Warn("Agent", "model_reasoning_unsupported fallback=default");
+                attempt--; // One parameter fallback, in addition to the original bounded transient retry.
                 continue;
             }
-
-            failureDetail = $"Chat Completions 返回 {status}：{Truncate(detail, 200)}";
             if (attempt >= 1 || (status < 500 && status != 429))
-            {
-                response.Dispose();
-                response = null;
-                break;
-            }
-            Services.FileLog.Write("Agent", $"模型返回 {status}（{Truncate(detail, 80)}）→ 2 秒后重试一次");
-            response.Dispose();
-            response = null;
+                throw new ModelFault(ModelFault.StatusError(reply.Status), reply.Status);
+            FileLog.Write("Agent", $"model_transient_error status={status} retry=1");
             await Clock.Delay(TimeSpan.FromSeconds(2), ct);
-
-            // 请求体是一次性的，重试要重建一份
-            request = new HttpRequestMessage(HttpMethod.Post, requestUrl)
-            {
-                Content = new StringContent(requestPayload.ToJsonString(), Encoding.UTF8, "application/json")
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
 
-        if (response is null)
+        if (!HasChoices(json))
         {
-            throw new HttpRequestException(failureDetail ?? "Chat Completions 请求失败");
-        }
-
-        using var _ = response;
-
-        var json = await response.Content.ReadAsStringAsync(ct);
-
-        for (var emptyTry = 0; emptyTry < 1 && !HasChoices(json); emptyTry++)
-        {
-            Services.FileLog.Write("Agent", $"上游返回空 choices（{Truncate(json, 140)}）→ 2 秒后重试一次");
+            FileLog.Write("Agent", "model_empty_choices retry=1");
             await Clock.Delay(TimeSpan.FromSeconds(2), ct);
-
-            // 请求体是一次性的，重试要重建一份（与上面 5xx 重试同理）
-            using var retryRequest = new HttpRequestMessage(HttpMethod.Post, requestUrl)
+            var retry = await SendFallbackAsync(requestPayload, requestUrl, apiKey, ct);
+            if ((int)retry.Status is >= 200 and < 300)
             {
-                Content = new StringContent(requestPayload.ToJsonString(), Encoding.UTF8, "application/json")
-            };
-            retryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            using var retryResponse = await _auxHttp.SendAsync(retryRequest, ct);
-            if (!retryResponse.IsSuccessStatusCode)
-            {
-                // 重试本身也塌了：保留上一次的响应文本（下面按空响应处理），别再把它覆盖成错误页
-                Services.FileLog.Write("Agent", $"空 choices 后的重试返回 {(int)retryResponse.StatusCode} → 这轮按空响应处理");
-                break;
+                ModelFault.ValidateEnvelope(retry.Body);
+                json = retry.Body;
             }
-
-            json = await retryResponse.Content.ReadAsStringAsync(ct);
+            else FileLog.Write("Agent", $"model_empty_retry_failed status={(int)retry.Status}");
         }
 
-        // ③ 带图的两轮都空 → 去掉图片再试一次。
-        //    为什么值得试：上游（上游网关 后端）对某些内容会直接回**零候选**（HTTP 200、
-        //    用量里只有 prompt tokens），表现就是“这个群这几轮怎么问都是空的”。
-        //    实测那种情况下同一个 payload 重发多少次都空（22:42-22:46 同一尺寸两发两空），
-        //    而同时段别的会话正常 —— 是内容触发，不是网络抖动。
-        //    去掉图往往就能说话：这一轮先据文字回（总比一句话不说强），
-        //    同时把嫌疑图片的消息 id 记下来 —— 后续上下文不再重复送它们（自愈）。
         var textOnlyRetry = false;
         if (!HasChoices(json) && attachedImages > 0)
         {
-            var stripped = StripImages(requestPayload);
-            using var plainRequest = new HttpRequestMessage(HttpMethod.Post, requestUrl)
+            var plain = await SendFallbackAsync(StripImages(requestPayload), requestUrl, apiKey, ct);
+            if ((int)plain.Status is >= 200 and < 300)
             {
-                Content = new StringContent(stripped.ToJsonString(), Encoding.UTF8, "application/json")
-            };
-            plainRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            using var plainResponse = await _auxHttp.SendAsync(plainRequest, ct);
-            if (plainResponse.IsSuccessStatusCode)
-            {
-                var plainJson = await plainResponse.Content.ReadAsStringAsync(ct);
-                if (HasChoices(plainJson))
+                ModelFault.ValidateEnvelope(plain.Body);
+                if (HasChoices(plain.Body))
                 {
-                    json = plainJson;
+                    json = plain.Body;
                     textOnlyRetry = true;
                     RememberSuspectImages(attachedImageIds);
-                    Services.FileLog.Write("Agent",
-                        $"两轮空后去掉图片再试 → 拿到了回复：疑似图片触发上游过滤（消息 {string.Join(",", attachedImageIds)}），本轮只据文字回；" +
-                        $"这些图后续会从上下文里跳过");
+                    FileLog.Write("Agent", $"model_text_only_fallback images={attachedImages}");
                 }
             }
         }
-
         return new SendOutcome(json, textOnlyRetry);
     }
 
+    private static async Task<(HttpStatusCode Status, string Body)> SendOnceAsync(
+        IModelHttpFetcher http, JsonObject payload, string url, string apiKey, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        using var response = await http.SendAsync(request, ct);
+        return (response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+    }
+
+    private async Task<(HttpStatusCode Status, string Body)> SendFallbackAsync(
+        JsonObject payload, string url, string apiKey, CancellationToken ct)
+    {
+        try { return await SendOnceAsync(_auxHttp, payload, url, apiKey, ct); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new ModelFault("model_timeout"); }
+        catch (HttpRequestException ex) when (ex is not ModelFault) { throw new ModelFault("model_network_error", ex.StatusCode); }
+    }
     /// <summary>
     /// 响应里到底有没有 choices。空数组 / 根本没这个字段 = 上游把回复吞了，
     /// **不是**“模型自己决定不说话”—— 两件事在日志里必须分得清，否则主人看不出是网关出事了。

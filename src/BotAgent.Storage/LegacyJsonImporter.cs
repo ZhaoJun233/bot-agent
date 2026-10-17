@@ -74,10 +74,12 @@ public static class LegacyJsonImporter
 
     // ─────────────────────────── 各项导入 ───────────────────────────
 
+    private static bool ShouldImport(string path, Func<bool> hasRows) => !File.Exists(path) || hasRows();
+
     private static void ImportSettings(List<string> moved, List<string> counts, Action<string> validateSettingsJson)
     {
         var path = AppPaths.SettingsFile;
-        if (!File.Exists(path) || AppDatabase.Scalar<long>("SELECT COUNT(1) FROM settings") > 0)
+        if (ShouldImport(path, () => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM settings") > 0))
         {
             return;
         }
@@ -102,7 +104,7 @@ public static class LegacyJsonImporter
     private static void ImportSecrets(List<string> moved, List<string> counts)
     {
         var path = Path.Combine(AppPaths.DataDir, "secrets.json");
-        if (!File.Exists(path) || AppDatabase.Scalar<long>("SELECT COUNT(1) FROM secrets") > 0)
+        if (ShouldImport(path, () => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM secrets") > 0))
         {
             return;
         }
@@ -126,7 +128,7 @@ public static class LegacyJsonImporter
     private static void ImportConversations(List<string> moved, List<string> counts)
     {
         var path = Path.Combine(AppPaths.DataDir, "conversations.json");
-        if (!File.Exists(path) || AppDatabase.Scalar<long>("SELECT COUNT(1) FROM conversations") > 0)
+        if (ShouldImport(path, () => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM conversations") > 0))
         {
             return;
         }
@@ -374,7 +376,7 @@ public static class LegacyJsonImporter
     private static void ImportMood(List<string> moved, List<string> counts)
     {
         var path = Path.Combine(AppPaths.DataDir, "mood.json");
-        if (!File.Exists(path) || AppDatabase.Scalar<long>("SELECT COUNT(1) FROM mood") > 0)
+        if (ShouldImport(path, () => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM mood") > 0))
         {
             return;
         }
@@ -404,7 +406,7 @@ public static class LegacyJsonImporter
     private static void ImportHeardSongs(List<string> moved, List<string> counts)
     {
         var path = Path.Combine(AppPaths.DataDir, "music", "listened.json");
-        if (!File.Exists(path) || AppDatabase.Scalar<long>("SELECT COUNT(1) FROM heard_songs") > 0)
+        if (ShouldImport(path, () => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM heard_songs") > 0))
         {
             return;
         }
@@ -446,7 +448,7 @@ public static class LegacyJsonImporter
     private static void ImportStickers(List<string> moved, List<string> counts)
     {
         var path = Path.Combine(AppPaths.RuntimeRoot, "stickers", "index.json");
-        if (!File.Exists(path) || AppDatabase.Scalar<long>("SELECT COUNT(1) FROM stickers") > 0)
+        if (ShouldImport(path, () => AppDatabase.Scalar<long>("SELECT COUNT(1) FROM stickers") > 0))
         {
             return;
         }

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using BotAgent.Domain.Configuration;
 using BotAgent.Services.Resilience;
 
 namespace BotAgent.Services.Net;
@@ -606,5 +607,5 @@ public sealed partial class WebSearchService
 
     /// <summary>是否允许抓内网/回环地址（自建 SearxNG 时需要；与图片、链接预览共用同一个开关）。</summary>
     private static bool AllowPrivateForTests()
-        => Environment.GetEnvironmentVariable("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
+        => EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
 }

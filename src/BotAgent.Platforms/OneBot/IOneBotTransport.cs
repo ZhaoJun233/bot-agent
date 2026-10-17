@@ -23,4 +23,11 @@ public interface IOneBotTransport : IDisposable
     Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default);
 
     void Stop();
+
+    /// <summary>Stops accepting events and waits for owned workers. Compatibility fakes may stop synchronously.</summary>
+    Task StopAsync(CancellationToken ct = default)
+    {
+        Stop();
+        return Task.CompletedTask;
+    }
 }

@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace BotAgent.Services.Net;
+namespace BotAgent.Model.Net;
 
 /// <summary>
 /// 出站 URL 的安全闸门（SSRF 防护）：图片、链接与页面抓取共用。
@@ -69,7 +69,7 @@ public static class SafeUrl
     /// 返回的响应由调用方负责释放；中间响应在跳转时立即释放。
     /// </summary>
     public static async Task<HttpResponseMessage> SendFollowingRedirectsAsync(
-        IHttpFetcher http,
+        IModelHttpFetcher http,
         Uri start,
         Func<Uri, HttpRequestMessage> createRequest,
         bool allowPrivate,

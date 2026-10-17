@@ -12,7 +12,7 @@ using Microsoft.Data.Sqlite;
 namespace BotAgent.Storage;
 
 /// <summary>C3 transaction and recovery module. Host projection participates through a private typed seam.</summary>
-public sealed class ConfigurationStore : IConfigurationChanges
+public sealed partial class ConfigurationStore : IConfigurationChanges
 {
     private const string Revision = "cfg-0.3.2";
     private const string AliasCodecRevision = "cfg-0.3.2/alias-1";

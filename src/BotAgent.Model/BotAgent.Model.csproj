@@ -14,8 +14,7 @@
   <ItemGroup>
     <Using Include="BotAgent.Model" />
     <Using Include="BotAgent.Services" />
-    <Using Include="BotAgent.Adapters.Net" />
-    <Using Include="BotAgent.Services.Net" />
+    <Using Include="BotAgent.Model.Net" />
     <Using Include="BotAgent.Services.Model" />
     <Using Include="BotAgent.Services.Resilience" />
   </ItemGroup>

@@ -168,6 +168,16 @@ internal static class ConfigurationStorageBridge
     private const string RevokeDeviceNameSql = "INSERT INTO configuration_revoked_names(name,device_key) VALUES($name,$key) ON CONFLICT(name) DO NOTHING";
     internal static ConfigurationStore Activate(IClock clock, ConfigurationStorageParticipant participant)
         => ConfigurationStore.Activate(clock, participant);
+
+    internal static ValueTask<BotAgent.Domain.Management.ManagedValidationResult> ValidateAsync(
+        ConfigurationStore store, ConfigurationCaller caller, ConfigurationValidationRequest request,
+        CancellationToken ct = default)
+        => store.ValidateAsync(caller, request, ct);
+
+    internal static BotAgent.Domain.Management.IManagedCapabilities CreateManagedCapabilities(ConfigurationStore store,
+        BotAgent.Domain.Management.IManagedAuthorization authorization, Func<ManagedCatalogSnapshot> catalog,
+        Func<BotAgent.Domain.Management.ManagedCommand, CancellationToken, ValueTask<ManagedDispatchResult>> dispatch)
+        => store.CreateManagedCapabilities(authorization, catalog, dispatch);
     internal static SecretMutation ObserveModelApiKey(SqliteConnection connection)
     {
         var value = SecretsStore.LoadInTransaction(connection, WritableSecretSlot.ModelApiKey);

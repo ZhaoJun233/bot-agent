@@ -14,7 +14,7 @@
 
 **不要读取、不要复述、不要粘出来**：
 
-- 会话与消息：`data/conversations.json`、`agent-sessions.json`、SQLite（`qqchat.db`）里的 `messages` / `member_*` 表
+- 会话与消息：`data/conversations.json`、`agent-sessions.json`、SQLite（`botagent.db`；旧库 `qqchat.db` 兼容）里的 `messages` / `member_*` 表
 - 人物档案：`data/member_profiles/*.json`
 - 日志正文：`logs/qqchat.log` 里的「收到 …」「已回复 …」这类行（带着发言原文）
 - 协议端报文：NapCat 的 OneBot 事件 JSON（`message` / `raw_message` / `post_type` 字段）
@@ -22,6 +22,8 @@
 - 不 grep 的 `docker logs` / `tail -n 200` 整段输出
 
 例外只有一个：用户明确让你看某一条，并且只看那一条。
+
+> 命名兼容（N1）：基础设施/密钥类环境变量 `BOTAGENT_*` 优先、`QQCHAT_*` 兼容；行为类变量目前仍以 `QQCHAT_*` 为主。数据库默认 `botagent.db`，旧 `qqchat.db` 自动回退。平台 ID、会话 key、DB schema、secret ref 不改。
 
 ---
 

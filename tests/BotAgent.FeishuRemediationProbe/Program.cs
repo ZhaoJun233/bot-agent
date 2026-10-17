@@ -190,7 +190,7 @@ await Test("parallel refresh is single flight per complete snapshot", async () =
     Require(http.TokenCalls == 2, $"expected 2 single-flight refreshes, actual {http.TokenCalls}");
 });
 
-await Test("in-flight refresh and queued sends retain entire old/new snapshot", async () =>
+await Test("credential change after token await rejects old snapshot and sends only the new one", async () =>
 {
     var box = Settings();
     var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -219,8 +219,11 @@ await Test("in-flight refresh and queued sends retain entire old/new snapshot", 
     box.Apply(s => { s.FeishuAppId = "app-b"; s.FeishuAppSecret = "secret-b"; s.FeishuApiBase = "https://b.example.com"; });
     var newQueued = gateway.SendAsync(gateway.Context, Message());
     release.SetResult();
-    Require((await Task.WhenAll(first, oldQueued, newQueued)).All(r => r.IsSuccess), "snapshot send failed");
-    Require(sent.Count(p => p == ("a.example.com", "token-app-a")) == 2 && sent.Count(p => p == ("b.example.com", "token-app-b")) == 1, "token sent to wrong API base");
+    var results = await Task.WhenAll(first, oldQueued, newQueued);
+    Require(!results[0].IsSuccess && !results[1].IsSuccess && results[2].IsSuccess,
+        $"snapshot outcomes: {string.Join(",", results.Select(r => r.IsSuccess))}");
+    // Only the new snapshot may reach the network; the old snapshot is rejected after the change.
+    Require(sent.Count == 1 && sent.All(p => p == ("b.example.com", "token-app-b")), "token sent to wrong API base");
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess && http.TokenCalls == 2, "old refresh poisoned new cache");
 });
 

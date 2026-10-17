@@ -1,5 +1,6 @@
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Ports;
-using BotAgent.Services.Net;
+using BotAgent.Model.Net;
 
 namespace BotAgent.Model;
 
@@ -8,9 +9,9 @@ namespace BotAgent.Model;
 public class ImageDownloader : IImageDownloader
 {
     /// <summary>出网（由装配点给的那个"图片专用"客户端，超时 8 秒）。</summary>
-    private readonly IHttpFetcher _http;
+    private readonly IModelHttpFetcher _http;
 
-    public ImageDownloader(IHttpFetcher http) => _http = http;
+    public ImageDownloader(IModelHttpFetcher http) => _http = http;
 
     private const int MaxImageBytes = 6 * 1024 * 1024;
 
@@ -45,13 +46,13 @@ public class ImageDownloader : IImageDownloader
     public int RefreshedCount { get; private set; }
 
     /// <summary>
-    /// 是否允许从内网/回环地址下载（QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS=1）。
+    /// 是否允许从内网/回环地址下载（BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS=1，旧名 QQCHAT_* 兼容）。
     /// 默认关闭：图片 URL 来自 QQ 事件，属不可信输入，SSRF 防护必须默认生效。
     /// 只在“自建 NapCat 用内网地址、或集成测试用本地图片服务器”时手动打开，
     /// 官方镜像与远程部署都不应该打开它。
     /// </summary>
     public bool AllowPrivateHosts { get; init; } =
-        Environment.GetEnvironmentVariable("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
+        EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
 
     /// <summary>
     /// 下载图片字节（失败返回 null）。供多模态识图与表情包库共用。
@@ -60,6 +61,7 @@ public class ImageDownloader : IImageDownloader
     /// <param name="messageId">这条图片来自哪条消息（可选）：地址过期时用它能找协议端重新签发。</param>
     public async Task<(byte[] Data, string Mime, string Ext)?> DownloadBytesAsync(string url, CancellationToken ct, long? messageId = null)
     {
+        ct.ThrowIfCancellationRequested();
         try
         {
             if (TryGetCached(url) is { } cached)
@@ -87,12 +89,12 @@ public class ImageDownloader : IImageDownloader
                 result = await FetchRefreshedAsync(url, mid, outcome.Status, ct);
                 if (result is null)
                 {
-                    Services.FileLog.Write("Vision", $"图片取不到：原地址 HTTP {outcome.Status}，协议端重签后仍然失败（消息 {mid}）");
+                    Services.FileLog.Write("Vision", $"image_refresh_failed status={outcome.Status}");
                 }
             }
             else if (result is null && outcome.Status > 0)
             {
-                Services.FileLog.Write("Vision", $"图片下载失败（HTTP {outcome.Status}）: {Truncate(url, 120)}");
+                Services.FileLog.Write("Vision", $"image_http_error status={outcome.Status}");
             }
 
             if (result is not { } ok)
@@ -114,7 +116,7 @@ public class ImageDownloader : IImageDownloader
         }
         catch (Exception ex)
         {
-            Services.FileLog.Write("Vision", $"图片下载异常（{ex.GetType().Name}: {ex.Message}）: {Truncate(url, 120)}");
+            Services.FileLog.Write("Vision", $"image_download_failed code={ModelFault.SafeCode(ex)}");
             return null;
         }
     }
@@ -130,15 +132,16 @@ public class ImageDownloader : IImageDownloader
         {
             fresh = await RefreshUrls!(messageId, ct);
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            Services.FileLog.Write("Vision", $"重新签发图片地址失败（消息 {messageId}）: {ex.GetType().Name} {ex.Message}");
+            Services.FileLog.Write("Vision", $"image_refresh_failed code={ModelFault.SafeCode(ex)}");
             return null;
         }
 
         if (fresh.Count == 0)
         {
-            Services.FileLog.Write("Vision", $"图片地址已过期，协议端也拿不到新地址（消息 {messageId}）");
+            Services.FileLog.Write("Vision", "image_refresh_empty");
             return null;
         }
 
@@ -153,7 +156,7 @@ public class ImageDownloader : IImageDownloader
         {
             RefreshedCount++;
             // 信息性一行（不是错误）：QQ 的图片地址本来就短命，重签取回是正常路径
-            Services.FileLog.Write("Vision", $"图片地址已过期（HTTP {status}）→ 已用协议端重签的地址取回（消息 {messageId}）");
+            Services.FileLog.Write("Vision", $"image_refreshed status={status}");
         }
 
         return bytes.Image;
@@ -180,7 +183,7 @@ public class ImageDownloader : IImageDownloader
         {
             if (!SafeUrl.TryValidate(url, AllowPrivateHosts, out var uri, out _))
             {
-                Services.FileLog.Write("Vision", $"图片地址被拒（SSRF 防护）: {Truncate(url, 120)}");
+                Services.FileLog.Write("Vision", "image_target_rejected");
                 return new FetchOutcome(null, false, 0);
             }
 
@@ -200,14 +203,14 @@ public class ImageDownloader : IImageDownloader
             if (response.Content.Headers.ContentLength is long declared &&
                 (declared <= 0 || declared > MaxImageBytes))
             {
-                Services.FileLog.Write("Vision", $"图片声明大小异常 {declared}: {Truncate(url, 120)}");
+                Services.FileLog.Write("Vision", $"image_size_rejected bytes={declared}");
                 return new FetchOutcome(null, false, 0);
             }
 
             var bytes = await ReadCappedAsync(response.Content, MaxImageBytes, ct);
             if (bytes is null || bytes.Length == 0)
             {
-                Services.FileLog.Write("Vision", $"图片超限或为空: {Truncate(url, 120)}");
+                Services.FileLog.Write("Vision", "image_size_rejected");
                 return new FetchOutcome(null, false, 0);
             }
 
@@ -227,7 +230,7 @@ public class ImageDownloader : IImageDownloader
         }
         catch (Exception ex)
         {
-            Services.FileLog.Write("Vision", $"图片下载异常: {ex.Message} | {Truncate(url, 120)}");
+            Services.FileLog.Write("Vision", $"image_download_failed code={ModelFault.SafeCode(ex)}");
             return new FetchOutcome(null, false, 0);
         }
     }

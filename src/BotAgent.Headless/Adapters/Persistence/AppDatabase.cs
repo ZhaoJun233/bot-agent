@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using BotAgent.Services;
 using BotAgent.Adapters.Time;
 using Database = StorageModule::BotAgent.Adapters.Persistence.AppDatabase;
+using StoragePaths = StorageModule::BotAgent.Storage.StoragePaths;
 
 namespace BotAgent.Adapters.Persistence;
 
@@ -11,7 +12,9 @@ namespace BotAgent.Adapters.Persistence;
 public static class AppDatabase
 {
     public static string FilePath => Database.IsReady
-        ? Database.FilePath : Path.Combine(AppPaths.DataDir, "qqchat.db");
+        ? Database.FilePath : Database.ResolveDatabasePath(AppPaths.RuntimeRoot);
+
+    public static string ResolveDatabasePath(string runtimeRoot) => Database.ResolveDatabasePath(runtimeRoot);
     public static bool IsReady => Database.IsReady;
 
     public static void Initialize()

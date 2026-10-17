@@ -25,6 +25,11 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
+        if (await ModelMigrationTests.TryRunChildAsync(args) is { } modelChildExit) return modelChildExit;
+        if (await PlatformLifecycleTests.TryRunChildAsync(args) is { } platformChildExit) return platformChildExit;
+        if (await ManagedOperationContractTests.TryRunChildAsync(args) is { } managedOperationsExit) return managedOperationsExit;
+        if (await ManagedHostCapabilityTests.TryRunChildAsync(args) is { } managedHostExit) return managedHostExit;
+        if (await ManagedCapabilityContractTests.TryRunChildAsync(args) is { } managedChildExit) return managedChildExit;
         if (await ConfigurationContractTests.TryRunChildAsync(args) is { } configurationChildExit) return configurationChildExit;
         if (await ClockContractTests.TryRunChildAsync(args) is { } childExit) return childExit;
         if (await DatabaseContractTests.TryRunChildAsync(args) is { } databaseChildExit) return databaseChildExit;
@@ -37,6 +42,12 @@ internal static class Program
         {
             AppDatabase.Initialize();
             await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
+            await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));
+            await RunAsync("managed operations", () => ManagedOperationContractTests.RunAsync(Check));
+            await RunAsync("managed host capabilities", () => ManagedHostCapabilityTests.RunAsync(Check));
+            await RunAsync("naming compatibility", () => { NamingCompatibilityTests.RunAsync(Check); return Task.CompletedTask; });
+            await RunAsync("platform lifecycle", () => PlatformLifecycleTests.RunAsync(Check));
+            await RunAsync("Model transport migration", () => ModelMigrationTests.RunAsync(Check));
             await RunAsync("configuration transaction module", () => ConfigurationContractTests.StorageAsync(Check));
             await RunAsync("configuration query reuse", () => ConfigurationContractTests.QueryReuseAsync(Check));
             await RunAsync("configuration module recovery", () => ConfigurationContractTests.ModuleRecoveryAsync(Check));

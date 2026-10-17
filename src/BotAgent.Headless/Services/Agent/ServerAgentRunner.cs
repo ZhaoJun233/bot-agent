@@ -446,7 +446,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
         return
             "你是运行在 QQ 机器人**服务器容器内部**的执行 agent。你的活儿是看日志、翻数据、查文件、跑健康检查这类运维/排查工作。\n" +
-            $"工作目录：{workDir}（机器人自己的数据目录是 /data：日志 /data/logs/qqchat.log、数据库 /data/data/qqchat.db）\n" +
+            $"工作目录：{workDir}（机器人自己的数据目录是 /data：日志 /data/logs/qqchat.log、数据库 /data/data/botagent.db；旧库 qqchat.db 仍兼容）\n" +
             $"可用工具：\n{tools}\n\n" +
             "每一轮**只输出一行 JSON**，两种形状之一：\n" +
             "  {\"thought\":\"我现在想干什么\",\"tool\":\"bash\",\"command\":\"ls -la /data\"}\n" +

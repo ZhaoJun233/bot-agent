@@ -84,7 +84,11 @@ public sealed record QqChatMessage(
     /// 默认私域 —— 官方通道的网关在上报前会把它改成 <c>official</c>，
     /// 上层据此拼会话 key（<see cref="BotAgent.Domain.Qq.Channels.Key"/>），两套场景的上下文才不会串。
     /// </summary>
-    string Channel = BotAgent.Domain.Qq.Channels.Private);
+    string Channel = BotAgent.Domain.Qq.Channels.Private)
+{
+    [JsonIgnore] public BotAgent.Domain.Messaging.PlatformInboundEnvelope? Envelope { get; init; }
+    [JsonIgnore] public CancellationToken SourceLifetime { get; init; }
+}
 
 /// <summary>
 /// 戳一戳事件（OneBot v11：post_type=notice）。
@@ -101,7 +105,11 @@ public sealed record QqPokeEvent(
     DateTimeOffset Time,
 
     /// <summary>来自哪条通道（见 <see cref="BotAgent.Domain.Qq.Channels"/>）。</summary>
-    string Channel = BotAgent.Domain.Qq.Channels.Private);
+    string Channel = BotAgent.Domain.Qq.Channels.Private)
+{
+    [JsonIgnore] public BotAgent.Domain.Messaging.PlatformMessageOrigin? Origin { get; init; }
+    [JsonIgnore] public CancellationToken SourceLifetime { get; init; }
+}
 
 /// <summary>
 /// 撤回事件（OneBot v11：<c>post_type=notice</c> + <c>notice_type=group_recall</c> / <c>friend_recall</c>）。
@@ -118,7 +126,11 @@ public sealed record QqRecallEvent(
     DateTimeOffset Time,
 
     /// <summary>来自哪条通道（见 <see cref="BotAgent.Domain.Qq.Channels"/>）。</summary>
-    string Channel = BotAgent.Domain.Qq.Channels.Private);
+    string Channel = BotAgent.Domain.Qq.Channels.Private)
+{
+    [JsonIgnore] public BotAgent.Domain.Messaging.PlatformMessageOrigin? Origin { get; init; }
+    [JsonIgnore] public CancellationToken SourceLifetime { get; init; }
+}
 
 public static class OneBotJson
 {

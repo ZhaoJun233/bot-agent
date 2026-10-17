@@ -100,6 +100,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
     private async Task<CadenceSendReport> SendWithCadenceCoreAsync(PlatformContext? context,
         bool isGroup, long targetId, string reply, long? replyTo, bool directAddress, ConversationId? conversationScope)
     {
+        context = PlatformSourceExecution.Current?.Context ?? context;
         var policy = context is not null && _platformPolicies is not null
             ? _platformPolicies.Resolve(context)
             : ResolveTargetPolicy(isGroup, targetId);
@@ -205,6 +206,9 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
     /// <summary>发一条纯文本（agent 回话 / 审批公告专用：不走人设、不分句、不受群冷却限制）。</summary>
     public async Task SendPlainAsync(BotConversation conversation, string text)
     {
+        var source = PlatformSourceExecution.Current ?? (_source as ChannelRouter)?.CaptureForConversation(conversation.SourceKey);
+        if (_source is ChannelRouter && (source is null || !source.IsCurrent)) return;
+        using var sourceScope = PlatformSourceExecution.Enter(source);
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
@@ -223,7 +227,9 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
 
         var (isGroup, targetId) = conversation.Target;
         var channel = Channels.ChannelOf(conversation.SourceKey);
-        var policy = !string.IsNullOrEmpty(channel) && _platformPolicies is not null
+        var policy = PlatformSourceExecution.Current is { } lease && _platformPolicies is not null
+            ? _platformPolicies.Resolve(lease.Context)
+            : !string.IsNullOrEmpty(channel) && _platformPolicies is not null
             ? _platformPolicies.ResolveForChannel(channel)
             : ResolveTargetPolicy(isGroup, targetId);
         var textDecision = policy?.Feature("text", globallyEnabled: true);
@@ -266,6 +272,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             return null;
         }
 
+        if (PlatformSourceExecution.Current is { } lease) return _platformPolicies.Resolve(lease.Context);
         var channel = Channels.IsAliasId(targetId)
             ? Channels.Official
             : Channels.IsLocalId(targetId)

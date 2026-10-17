@@ -17,7 +17,7 @@ public static class ConversationIdCodec
     {
         ArgumentNullException.ThrowIfNull(id);
 
-        if (string.Equals(id.AccountScope, AccountScope.Legacy, StringComparison.OrdinalIgnoreCase)
+        if (string.Equals(id.AccountScope, AccountScope.Legacy, StringComparison.Ordinal)
             && string.IsNullOrEmpty(id.ThreadId))
         {
             var isGroup = id.Kind == ConversationKind.GroupChat;

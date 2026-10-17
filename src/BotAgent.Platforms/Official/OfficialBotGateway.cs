@@ -8,6 +8,7 @@ using BotAgent.Services.Qq;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
 using BotAgent.Platforms.Net;
+using BotAgent.Services.Platforms;
 
 namespace BotAgent.Services.Official;
 
@@ -84,6 +85,8 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private bool _disposed;
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly PlatformOperationLifetime _operations = new();
 
     public OfficialBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, IOfficialIdMap ids, Action<string> log)
     {
@@ -115,28 +118,49 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// <summary>起连接循环（不阻塞；断了自动退避重连）。</summary>
     public void Start()
     {
-        if (_loop is not null)
-        {
-            return;
-        }
-
-        _cts = new CancellationTokenSource();
-        _loop = Task.Run(() => RunAsync(_cts.Token));
+        StartAsync().GetAwaiter().GetResult();
     }
 
     public void Stop()
     {
+        StopAsync().GetAwaiter().GetResult();
+    }
+
+    public async Task StartAsync(CancellationToken ct = default)
+    {
+        await _lifecycle.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_loop is { IsCompleted: false }) return;
+            _operations.Start();
+            _cts?.Dispose();
+            var lifetime = new CancellationTokenSource();
+            _cts = lifetime;
+            _loop = Task.Run(() => RunAsync(lifetime.Token));
+        }
+        finally { _lifecycle.Release(); }
+    }
+
+    public async Task StopAsync(CancellationToken ct = default)
+    {
+        await _lifecycle.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             _cts?.Cancel();
-            _loop?.Wait(TimeSpan.FromSeconds(3));
+            await _operations.StopAsync().ConfigureAwait(false);
+            if (_loop is { } loop)
+            {
+                try { await loop.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
+            _loop = null;
+            _cts?.Dispose();
+            _cts = null;
+            SetConnected(false);
+            _ids.Flush();
         }
-        catch (Exception)
-        {
-            // 退出路径：别因为收尾失败把整个进程拖死
-        }
-
-        _ids.Flush();
+        finally { _lifecycle.Release(); }
     }
 
     // ═══════════════════ 发送 ═══════════════════
@@ -144,6 +168,9 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// <summary>发文本。优先当**被动回复**（带上刚收到的 msg_id，能引用上下文），失败就退化成主动消息。</summary>
     public async Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return new SendResult(false);
+        ct = operation.Token;
         var openId = _ids.OriginalOf(targetId);
         if (string.IsNullOrEmpty(openId))
         {
@@ -222,6 +249,9 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// </summary>
     public async Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return false;
+        ct = operation.Token;
         var openId = _ids.OriginalOf(targetId);
         if (string.IsNullOrEmpty(openId))
         {
@@ -250,6 +280,9 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// <summary>发图片：同样是富媒体（file_type=1）+ <c>msg_type=7</c>。</summary>
     public async Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
     {
+        using var operation = _operations.TryEnter(ct);
+        if (_disposed || operation is null) return false;
+        ct = operation.Token;
         var openId = _ids.OriginalOf(targetId);
         if (string.IsNullOrEmpty(openId) || data.Length == 0)
         {
@@ -1114,6 +1147,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
 
         _disposed = true;
         Stop();
+        _operations.Dispose();
         _cts?.Dispose();
         _sendGate.Dispose();
         // 出网客户端由装配点持有并统一释放（见 HttpFetcher），这里只收自己的东西

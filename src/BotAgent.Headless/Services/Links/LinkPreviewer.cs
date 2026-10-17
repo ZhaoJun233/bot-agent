@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using BotAgent.Domain.Configuration;
 using BotAgent.Services.Net;
 
 namespace BotAgent.Services.Links;
@@ -218,11 +219,11 @@ public sealed partial class LinkPreviewer
     }
 
     /// <summary>
-    /// 是否允许抓内网/回环地址（QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS=1，仅供自建/测试）。
+    /// 是否允许抓内网/回环地址（BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS=1，旧名 QQCHAT_* 兼容；仅供自建/测试）。
     /// 与图片下载共用同一个开关：两者都是“群友给的 URL”，风险一样。
     /// </summary>
     private static bool AllowPrivateForTests()
-        => Environment.GetEnvironmentVariable("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
+        => EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
 
     private static Dictionary<string, string> ReadAttrs(string tag)
     {

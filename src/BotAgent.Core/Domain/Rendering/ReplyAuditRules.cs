@@ -30,8 +30,8 @@ public static class ReplyAuditRules
 
     private static readonly string[] LocalPathMarkers =
     {
-        "/opt/qqchat", "/data/", "qqchat.db", "docker.sock", "/host/qqchat",
-        ".pem", ".env",
+        "/opt/qqchat", "/data/", "qqchat.db", "botagent.db", "qqchat.log", "botagent.log",
+        "docker.sock", "/host/qqchat", ".pem", ".env",
     };
 
     private static readonly string[] SystemPromptMarkers =

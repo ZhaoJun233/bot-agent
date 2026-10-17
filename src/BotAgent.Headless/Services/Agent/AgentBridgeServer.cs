@@ -1,6 +1,8 @@
 extern alias StorageModule;
 
 using System.Collections.Concurrent;
+using BotAgent.Services.Qq;
+using System.Text.Json.Serialization;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -201,7 +203,7 @@ public sealed class AgentBridgeServer
         if (!Connected)
         {
             task.Fail("本机的 agent 桥没连上");
-            Finished?.Invoke(task);
+            RaiseFinished(task);
             return true;   // “没桥”不是队列满，交给上层去回一句人话
         }
 
@@ -246,7 +248,7 @@ public sealed class AgentBridgeServer
         // Never acquire the database gate while holding the task state lock, or re-resolve a replacement by name.
         if (cancelTarget is not null && finished is not null)
             _ = SendAsync(cancelTarget, new JsonObject { ["type"] = "cancel", ["id"] = finished.Id });
-        if (finished is not null) Finished?.Invoke(finished);
+        if (finished is not null) RaiseFinished(finished);
 
         // 排队中的直接摘掉（ConcurrentQueue 不能按条件删 → 重建一份）
         var keep = new List<AgentTask>();
@@ -256,7 +258,7 @@ public sealed class AgentBridgeServer
             {
                 task.CancelRequested = true;
                 task.Fail("已取消");
-                Finished?.Invoke(task);
+                RaiseFinished(task);
                 cancelled++;
             }
             else
@@ -321,6 +323,7 @@ public sealed class AgentBridgeServer
         {
             Id = $"a{Interlocked.Increment(ref _sequence)}-{Clock.Now.ToUnixTimeMilliseconds()}",
             SourceKey = sourceKey,
+            SourceLease = PlatformSourceExecution.Current,
             Prompt = prompt,
             Instructions = string.IsNullOrWhiteSpace(_settings.AgentPrompt) ? null : _settings.AgentPrompt.Trim(),
             Session = session,
@@ -452,7 +455,7 @@ public sealed class AgentBridgeServer
                 failed.Add(task);
             }
         }
-        foreach (var task in failed) Finished?.Invoke(task);
+        foreach (var task in failed) RaiseFinished(task);
     }
 
     private void HandleBridgeMessage(BridgeConnection conn, string json)
@@ -473,6 +476,7 @@ public sealed class AgentBridgeServer
         if (conn.Token.IsCancellationRequested) return;
         if (type != "hello" && (!conn.Registered ||
             !_bridges.TryGetValue(conn.Name, out var active) || !ReferenceEquals(active, conn))) return;
+        // Revocation invalidates late results; only a locally stopped connection is cleaned up.
         if (type != "hello" && !IsDispatchAllowed(conn))
         {
             conn.Stop();
@@ -570,7 +574,7 @@ public sealed class AgentBridgeServer
                 }
 
                 task.LastNote = node?["note"]?.GetValue<string>();
-                Progress?.Invoke(task);
+                RaiseProgress(task);
                 return;
             }
 
@@ -615,6 +619,17 @@ public sealed class AgentBridgeServer
                 _log($"agent 桥发来未知消息类型 {type}（已忽略）");
                 return;
         }
+    }
+
+    private void RaiseFinished(AgentTask task)
+    {
+        using var scope = PlatformSourceExecution.Enter(task.SourceLease);
+        Finished?.Invoke(task);
+    }
+    private void RaiseProgress(AgentTask task)
+    {
+        using var scope = PlatformSourceExecution.Enter(task.SourceLease);
+        Progress?.Invoke(task);
     }
 
     private AgentTask? FindTask(string? id)
@@ -664,7 +679,7 @@ public sealed class AgentBridgeServer
             _outstanding.TryRemove(task.Id, out _);
             if (ReferenceEquals(_current, task)) _current = null;
         }
-        Finished?.Invoke(task);
+        RaiseFinished(task);
         if (!_queue.IsEmpty && Connected) StartWorker();
     }
 
@@ -707,7 +722,7 @@ public sealed class AgentBridgeServer
                         if (age.TotalSeconds > running.TimeoutSeconds + 60)
                         {
                             running.Fail($"超时未返回（已等 {age.TotalSeconds:F0}s）");
-                            Finished?.Invoke(running);
+                            RaiseFinished(running);
                             _outstanding.TryRemove(running.Id, out _);
                             _current = null;
                         }
@@ -725,10 +740,17 @@ public sealed class AgentBridgeServer
                     return;
                 }
 
+                using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
+                if (task.SourceLease is { IsCurrent: false })
+                {
+                    task.Fail("source_retired");
+                    RaiseFinished(task);
+                    continue;
+                }
                 if (task.CancelRequested)
                 {
                     task.Fail("已取消");
-                    Finished?.Invoke(task);
+                    RaiseFinished(task);
                     continue;
                 }
 
@@ -744,7 +766,7 @@ public sealed class AgentBridgeServer
                     task.Fail(string.IsNullOrWhiteSpace(task.TargetDevice)
                         ? "没有在线的外部 agent 设备"
                         : $"指定的外部设备「{task.TargetDevice}」不在线");
-                    Finished?.Invoke(task);
+                    RaiseFinished(task);
                     continue;
                 }
 
@@ -821,7 +843,7 @@ public sealed class AgentBridgeServer
                     ["model"] = task.Model ?? string.Empty,
                     ["tools"] = task.Tools ?? string.Empty,
                     ["timeoutSec"] = task.TimeoutSeconds
-                });
+                }, requireDispatch: true);
 
                 if (!sent)
                 {
@@ -867,7 +889,7 @@ public sealed class AgentBridgeServer
         return conn is null ? Task.FromResult(false) : SendAsync(conn, payload);
     }
 
-    private async Task<bool> SendAsync(BridgeConnection conn, JsonObject payload)
+    private async Task<bool> SendAsync(BridgeConnection conn, JsonObject payload, bool requireDispatch = false)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(conn.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(SendTimeoutSeconds));
@@ -876,11 +898,8 @@ public sealed class AgentBridgeServer
         {
             await conn.SendGate.WaitAsync(timeout.Token);
             entered = true;
-            if (!IsDispatchAllowed(conn))
-            {
-                conn.Stop();
-                return false;
-            }
+            // Connection liveness is independent from dispatch; task frames still recheck revocation.
+            if (requireDispatch && !IsDispatchAllowed(conn)) return false;
             var bytes = Encoding.UTF8.GetBytes(payload.ToJsonString());
             await conn.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, timeout.Token);
             return true;
@@ -937,6 +956,9 @@ public sealed class AgentTask
 
     /// <summary>哪个会话提的（群聊 group:123 / 私聊 private:456）。</summary>
     public required string SourceKey { get; init; }
+
+    [JsonIgnore]
+    public PlatformSourceLease? SourceLease { get; internal set; }
 
     public required string Prompt { get; init; }
 

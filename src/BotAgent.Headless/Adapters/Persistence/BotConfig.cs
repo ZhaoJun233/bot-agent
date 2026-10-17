@@ -9,7 +9,7 @@ namespace BotAgent.Adapters.Persistence;
 /// <summary>
 /// 十二要素配置：settings.json 提供默认值，环境变量覆盖。
 /// 支持 <c>XXX_FILE</c> 形式读取 Docker secrets（/run/secrets/*），避免密钥出现在环境变量里。
-/// QQ 官方 Secret 例外：仅使用 QQCHAT_OFFICIAL_APP_SECRET 的直接环境值，不读取文件或旧仓储。
+/// QQ 官方 Secret 例外：仅使用 BOTAGENT_OFFICIAL_APP_SECRET（兼容 QQCHAT_OFFICIAL_APP_SECRET）的直接环境值，不读取文件或旧仓储。
 ///
 /// 优先级分三类（重要）：
 ///   • 基础设施（协议端地址、Token、QQ 号…）：**环境变量永远优先** —— 它们属于部署环境职责。
@@ -94,7 +94,7 @@ public static class BotConfig
             {
                 next.AgentServerApiKeyOverride = mutation.Kind == SecretEditKind.Replace ? fixedDatabaseSecret(mutation.Slot)?.Trim() : null;
                 next.AgentServerApiKey = next.AgentServerApiKeyOverride
-                    ?? (Environment.GetEnvironmentVariable("QQCHAT_AGENT_SERVER_KEY") ?? string.Empty).Trim();
+                    ?? (EnvironmentAliases.Get("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY") ?? string.Empty).Trim();
             }
         }
         // Gateway credentials are startup-captured, not magically reconnected by exchanging a settings reference.
@@ -144,7 +144,7 @@ public static class BotConfig
         s.NapCatWebUiUrl = Str("BOTAGENT_NAPCAT_WEBUI_URL", "QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
         s.NapCatWebUiToken = Secret("BOTAGENT_NAPCAT_WEBUI_TOKEN", "QQCHAT_NAPCAT_WEBUI_TOKEN") ?? s.NapCatWebUiToken;
         s.FeishuAppSecret = Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET") ?? s.FeishuAppSecret;
-        s.OfficialAppSecret = Str("QQCHAT_OFFICIAL_APP_SECRET") ?? string.Empty;
+        s.OfficialAppSecret = Str("BOTAGENT_OFFICIAL_APP_SECRET", "QQCHAT_OFFICIAL_APP_SECRET") ?? string.Empty;
         s.FeishuEncryptKey = Secret("BOTAGENT_FEISHU_ENCRYPT_KEY", "QQCHAT_FEISHU_ENCRYPT_KEY") ?? s.FeishuEncryptKey;
         s.VerboseLog = Bool("BOTAGENT_VERBOSE", "QQCHAT_VERBOSE") ?? s.VerboseLog;
     }
@@ -256,10 +256,10 @@ public static class BotConfig
     [nameof(AppSettings.VoiceSpeed)] = new[] { "QQCHAT_VOICE_SPEED" },
         [nameof(AppSettings.VoicePitch)] = new[] { "QQCHAT_VOICE_PITCH" },
         [nameof(AppSettings.VoiceVol)] = new[] { "QQCHAT_VOICE_VOL" },
-        [nameof(AppSettings.VoiceEmotion)] = new[] { "QQCHAT_VOICE_EMOTION" },
+        [nameof(AppSettings.VoiceEmotion)] = new[] { "BOTAGENT_VOICE_EMOTION", "QQCHAT_VOICE_EMOTION" },
     [nameof(AppSettings.VoiceMaxChars)] = new[] { "QQCHAT_VOICE_MAX_CHARS" },
     [nameof(AppSettings.TtsServiceUrl)] = new[] { "QQCHAT_TTS_URL" },
-    [nameof(AppSettings.OfficialEnabled)] = new[] { "QQCHAT_OFFICIAL" },
+    [nameof(AppSettings.OfficialEnabled)] = new[] { "BOTAGENT_OFFICIAL", "QQCHAT_OFFICIAL" },
     [nameof(AppSettings.OfficialAppId)] = new[] { "QQCHAT_OFFICIAL_APP_ID" },
     [nameof(AppSettings.OfficialSandbox)] = new[] { "QQCHAT_OFFICIAL_SANDBOX" },
     [nameof(AppSettings.OfficialWhitelistGroups)] = new[] { "QQCHAT_OFFICIAL_WHITELIST_GROUPS" },
@@ -426,7 +426,7 @@ public static class BotConfig
         s.AgentServerQqActions = Str("QQCHAT_AGENT_SERVER_QQ_ACTIONS") ?? s.AgentServerQqActions;
         s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;
         s.AgentServerBaseUrl = Str("QQCHAT_AGENT_SERVER_URL") ?? s.AgentServerBaseUrl;
-        s.AgentServerApiKey = Secret("QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
+        s.AgentServerApiKey = Secret("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
         s.AgentMaskSensitive = Bool("QQCHAT_AGENT_MASK") ?? s.AgentMaskSensitive;
         // 附加提示词：环境变量只当种子（空字符串也算“明确不带”吗？不算 —— 空 = 保持默认，
         // 要去掉就在面板里清空后保存，否则每次重启都被环境变量重新种回来）
@@ -458,7 +458,7 @@ public static class BotConfig
         s.VoiceSpeed = Int("QQCHAT_VOICE_SPEED") ?? s.VoiceSpeed;
             s.VoicePitch = Int("QQCHAT_VOICE_PITCH") ?? s.VoicePitch;
             s.VoiceVol = Int("QQCHAT_VOICE_VOL") ?? s.VoiceVol;
-            var voiceEmotionEnv = Environment.GetEnvironmentVariable("QQCHAT_VOICE_EMOTION");
+            var voiceEmotionEnv = EnvironmentAliases.Get("BOTAGENT_VOICE_EMOTION", "QQCHAT_VOICE_EMOTION");
             if (!string.IsNullOrWhiteSpace(voiceEmotionEnv))
             {
                 s.VoiceEmotion = voiceEmotionEnv.Trim();
@@ -555,9 +555,9 @@ public static class BotConfig
         // 服务器 agent 的密钥同理：面板填过就以面板为准（以前只能改 .env 重启，2026-09-18 补上面板入口）
         if (!string.IsNullOrWhiteSpace(s.AgentServerApiKeyOverride))
         {
-            if (!string.IsNullOrWhiteSpace(Secret("QQCHAT_AGENT_SERVER_KEY")))
+            if (!string.IsNullOrWhiteSpace(Secret("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY")))
             {
-                PanelOverriddenEnvVars.Add("QQCHAT_AGENT_SERVER_KEY → 面板里填的密钥");
+                PanelOverriddenEnvVars.Add("BOTAGENT_AGENT_SERVER_KEY / QQCHAT_AGENT_SERVER_KEY → 面板里填的密钥");
             }
 
             s.AgentServerApiKey = s.AgentServerApiKeyOverride!.Trim();

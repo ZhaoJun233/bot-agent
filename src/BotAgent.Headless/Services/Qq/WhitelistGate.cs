@@ -1,5 +1,6 @@
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Platforms;
+using BotAgent.Platforms;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Platforms;
 using BotAgent.Domain.Configuration;
@@ -133,6 +134,15 @@ public sealed class WhitelistGate
             return context == new PlatformContext(PlatformId.QqPrivate, AccountScope.Legacy) && AllowsSource(isGroup, id);
         var policy = _platformPolicies.Resolve(context);
         if (!policy.Registered || !policy.Connected || !policy.Enabled || !policy.ChatEnabled) return false;
+        if (PlatformId.Normalize(context.PlatformId) == PlatformId.Feishu)
+        {
+            var current = PlatformSourceExecution.Current;
+            if (current is not null)
+                return current.IsCurrent && current.Context == context
+                    && current.Source is IFeishuTargetMap native
+                    && native.AllowsMappedTarget(isGroup, id);
+            return _feishuTargetAllowed?.Invoke(isGroup, id) == true;
+        }
         var rules = PlatformSwitchSettings.ResolvePolicyRules(settings, context, Actions(settings));
         return Matches(isGroup ? rules.GroupWhitelist : rules.PrivateWhitelist, id, context.PlatformId == PlatformId.Local);
     }

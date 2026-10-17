@@ -376,7 +376,11 @@ public static partial class Program
             ["durationMs"] = 300,
             ["toolCalls"] = 0
         });
-        await WaitUntilAsync(() => Sent().Any(t => t.Contains("设备配置那单的结论")), TimeSpan.FromSeconds(30));
+        // The device was revoked while the task was in flight; its late success must not reach the group.
+        await Task.Delay(1200, cts.Token);
+        Check("★ 撤销后晚到的成功结果不会发到群里",
+            !Sent().Any(t => t.Contains("设备配置那单的结论")),
+            string.Join(" | ", Sent().TakeLast(2)));
 
         var tasksBeforeDisabled = bridge.Tasks.Count;
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//设备关掉后这条", 15041, mentionBot: false, ct: cts.Token);
@@ -430,6 +434,11 @@ public static partial class Program
         }
 
         await Task.Delay(400);
+        // Revocation stopped the old socket by design; reconnect after the device is re-enabled.
+        var reconnected = await bridge.TryConnectAsync(cts.Token);
+        await Task.Delay(500, cts.Token);
+        Check("★ 重新启用后桥可以重连", reconnected, "synthetic bridge reconnect");
+
         var beforeBadModel = bridge.Tasks.Count;
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//模型配错了也要能跑", 15050, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => bridge.Tasks.Count > beforeBadModel, TimeSpan.FromSeconds(30));

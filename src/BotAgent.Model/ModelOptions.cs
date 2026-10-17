@@ -63,24 +63,9 @@ public sealed class ModelOptions
 
     public (string Effort, int BudgetTokens) ResolveThinkingBudget(bool isFastModel = false)
     {
-        var budget = isFastModel ? FastThinkingBudget : ThinkingBudget;
-        var custom = isFastModel ? FastThinkingCustomBudget : ThinkingCustomBudget;
-        var defaultPreset = isFastModel ? "low" : "medium";
-        var defaultTokens = isFastModel ? 1024 : 4096;
-        var preset = (budget ?? defaultPreset).Trim().ToLowerInvariant();
-        return preset switch
-        {
-            "off" or "none" or "disabled" => ("none", 0),
-            "low" => ("low", isFastModel ? 1024 : 0),
-            "medium" => ("medium", isFastModel ? 4096 : 0),
-            "high" => ("high", isFastModel ? 16384 : 0),
-            "xhigh" or "max" => ("xhigh", 0),
-            "custom" => int.TryParse(custom, out var c) && c > 0
-                ? (custom, c)
-                : (!string.IsNullOrWhiteSpace(custom) ? (custom, defaultTokens) : (defaultPreset, defaultTokens)),
-            _ => (defaultPreset, isFastModel ? defaultTokens : 0)
-        };
+        return ThinkingBudgetResolver.ResolveBudget(
+            isFastModel ? FastThinkingBudget : ThinkingBudget,
+            isFastModel ? FastThinkingCustomBudget : ThinkingCustomBudget, isFastModel);
     }
-
     public (string Effort, int BudgetTokens) ResolveFastThinkingBudget() => ResolveThinkingBudget(isFastModel: true);
 }

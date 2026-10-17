@@ -413,7 +413,9 @@ public sealed class BotConversation
     }
 
     /// <summary>解析 SourceKey → (是否群聊, QQ号/群号)（通道前缀在 <see cref="BotAgent.Domain.Qq.Channels"/> 里吃掉）。</summary>
-    public (bool IsGroup, long Id) Target => BotAgent.Domain.Qq.Channels.Parse(SourceKey);
+    internal Func<(bool IsGroup, long Id)>? TargetResolver { get; set; }
+
+    public (bool IsGroup, long Id) Target => TargetResolver?.Invoke() ?? BotAgent.Domain.Qq.Channels.Parse(SourceKey);
 
     private static string FirstChar(string name)
     {

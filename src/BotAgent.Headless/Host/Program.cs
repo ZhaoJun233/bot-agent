@@ -68,15 +68,14 @@ public static class Program
         }
 
         // ---------- 组装服务（唯一的装配点）----------
-        var graph = CompositionRoot.Build(settings);
+        await using var graph = CompositionRoot.Build(settings);
 
         // 先恢复磁盘会话并订阅事件，再连接协议端，避免启动期消息竞态
         // 先把官方那条也起上（它就是一条 WS 长连接 + 定时刷 token），再连私域
-        graph.Official?.Start();
         graph.Agent.Start();
+        await graph.Management.StartAsync();
         // 启动自述放在"会话已恢复、表情包库已载入"之后：那两行讲的就是此刻这张图的状态
         graph.BootReport.Write();
-        graph.Gateway.Start();
         graph.HealthReports.Start();
 
         using var web = graph.Web;
@@ -131,11 +130,6 @@ public static class Program
         }
 
         FileLog.Write("Host", "收到停止信号，正在退出…");
-        graph.HealthReports.Dispose();
-        graph.Agent.Dispose();
-        graph.Gateway.Stop();
-        graph.Official?.Stop();
-        (graph.Source as IDisposable)?.Dispose();
         FileLog.Write("Host", "已停止。");
         return 0;
     }
@@ -253,12 +247,12 @@ public static class Program
 
             用法: BotAgent.Headless [--help] [--version]
 
-            配置文件: $QQCHAT_DATA_DIR/data/settings.json（也可挂载旧版 runtime/data/settings.json）
-            环境变量覆盖（优先级高于 settings.json）:
+            配置文件: $BOTAGENT_DATA_DIR/data/settings.json（兼容 $QQCHAT_DATA_DIR；也可挂载旧版 runtime/data/settings.json）
+            环境变量覆盖（优先级高于 settings.json；BOTAGENT_* 优先，QQCHAT_* 兼容旧部署）:
 
-              QQCHAT_DATA_DIR          运行时数据目录（默认 ./runtime 或 /data）
-              QQCHAT_LOG_FILE          =0 则不写日志文件，只输出 stdout
-              QQCHAT_VERBOSE           =0 关闭详细日志
+              BOTAGENT_DATA_DIR        运行时数据目录（默认 ./runtime 或 /data；兼容 QQCHAT_DATA_DIR）
+              BOTAGENT_LOG_FILE        =0 则不写日志文件，只输出 stdout（兼容 QQCHAT_LOG_FILE）
+              BOTAGENT_VERBOSE         =0 关闭详细日志（兼容 QQCHAT_VERBOSE）
 
               QQCHAT_API_KEY           OpenAI 兼容 API Key（也支持 OPENAI_API_KEY；_FILE 变体读文件）
               QQCHAT_BASE_URL          接口地址，如 https://api.deepseek.com/v1（或 OPENAI_BASE_URL）

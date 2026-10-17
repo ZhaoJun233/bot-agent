@@ -1,8 +1,8 @@
 using System.Net.Http;
 
-namespace BotAgent.Adapters.Net;
+namespace BotAgent.Model.Net;
 
-public interface IHttpFetcher
+public interface IModelHttpFetcher
 {
     TimeSpan Timeout { get; }
     Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct = default);

@@ -88,7 +88,12 @@ public sealed class ConversationRegistry
             _log($"入站通道未知或未声明，拒绝创建会话（channel={msg.Channel ?? "<null>"}）");
             return null;
         }
-        var key = Channels.Key(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        string? key;
+        lock (_gate)
+            key = _source is ChannelRouter router
+                ? router.ConversationKey(msg, candidate => _conversations.Any(value => value.SourceKey == candidate))
+                : Channels.Key(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        if (key is null) { _log("conversation_origin_rejected"); return null; }
         _source.RegisterTarget(channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
 
         lock (_gate)
@@ -105,6 +110,7 @@ public sealed class ConversationRegistry
             var conversation = new BotConversation
             {
                 SourceKey = key,
+                TargetResolver = _source is ChannelRouter targetRouter ? () => targetRouter.CompatibilityTarget(key) : null,
                 Kind = msg.IsGroup ? ConversationKind.GroupChat : ConversationKind.PrivateChat,
                 Name = name,
                 MaxMessages = _settings.MaxMessagesPerConversation
@@ -249,6 +255,8 @@ public sealed class ConversationRegistry
                     }
 
                     var restoredConv = BotConversation.FromRecord(record, _settings.MaxMessagesPerConversation, ArchiveEvicted);
+                    if (_source is ChannelRouter router)
+                        restoredConv.TargetResolver = () => router.CompatibilityTarget(restoredConv.SourceKey);
                     _conversations.Add(restoredConv);
 
                     // 历史会话即使当前不在白名单也要恢复，供面板查询与审计回看；

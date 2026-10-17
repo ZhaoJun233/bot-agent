@@ -375,13 +375,11 @@ public sealed partial class AgentCommandService
     /// <summary>丢给服务器 agent 的 QQ 动作现场</summary>
     private IQqActionHost? BuildQqHost(BotConversation conversation, QqChatMessage msg)
     {
-        if (Gateway is null)
-        {
-            return null;
-        }
-
+        var lease = PlatformSourceExecution.Current;
+        var actions = lease?.Source as IQqActions ?? (_source is ChannelRouter ? null : Gateway);
+        if (actions is null || lease is { IsCurrent: false }) return null;
         var (isGroup, targetId) = conversation.Target;
-        return new SessionQqActionHost(Gateway, isGroup, targetId, msg.UserId, msg.MessageId, _hooks.SelfId(), _platformPolicies,
+        return new SessionQqActionHost(actions, isGroup, targetId, msg.UserId, msg.MessageId, _hooks.SelfId(), _platformPolicies,
             Channels.ChannelOf(conversation.SourceKey));
     }
 
@@ -683,6 +681,8 @@ public sealed partial class AgentCommandService
     /// <summary>agent 任务的进度/结果回群。供 AgentBridgeServer 的事件调。</summary>
     private async void OnAgentProgress(AgentTask task)
     {
+        using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
+        if (_source is ChannelRouter && (task.SourceLease is null || !task.SourceLease.IsCurrent)) return;
         try
         {
             var every = Math.Clamp(_settings.AgentProgressSeconds, 0, 3600);
@@ -711,6 +711,7 @@ public sealed partial class AgentCommandService
 
     private async void OnAgentFinished(AgentTask task)
     {
+        using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
         try
         {
             // 服务器内置后端：把这一轮的对话存回会话（下一轮同一会话能接上）
@@ -729,6 +730,7 @@ public sealed partial class AgentCommandService
                     task.ToolCalls, task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             }
 
+            if (_source is ChannelRouter && (task.SourceLease is null || !task.SourceLease.IsCurrent)) return;
             if (!ConversationsByKey(task.SourceKey, out var conversation))
             {
                 return;

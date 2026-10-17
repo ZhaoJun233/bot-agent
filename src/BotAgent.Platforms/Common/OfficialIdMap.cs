@@ -98,6 +98,17 @@ public sealed class OfficialIdMap : IOfficialIdMap
         }
     }
 
+    /// <summary>Read an existing binding without allocating an identity or writing the map.</summary>
+    public bool TryGetAlias(string original, out long alias)
+    {
+        alias = 0;
+        if (string.IsNullOrWhiteSpace(original)) return false;
+        lock (_gate)
+        {
+            return _toAlias.TryGetValue(original, out alias);
+        }
+    }
+
     public int Count
     {
         get
