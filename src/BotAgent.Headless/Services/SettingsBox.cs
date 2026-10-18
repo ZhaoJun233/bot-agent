@@ -19,7 +19,7 @@ namespace BotAgent.Services;
 ///   ② 写入统一走 <see cref="Apply" /> / <see cref="ApplyPersisted" />（禁止就地改共享配置）；
 ///   ③ 拿在手里的 <see cref="AppSettings" /> 是**某一版**，别跨轮长期持有它（要长期持有就持这个箱子）。
 /// </summary>
-public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox
+public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox, ISettingsBox
 {
     /// <summary>发布串行化：两个人同时保存时，后一个不能把前一个的修改盖掉（各自都从最新版 fork）。</summary>
     private readonly object _gate = new();

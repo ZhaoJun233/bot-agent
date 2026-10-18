@@ -9,7 +9,7 @@ namespace BotAgent.Services.Resilience;
 /// 退避 key 是完整会话 key，不使用全局开关：一个会话触发风控时，其他租户仍可正常发送。
 /// 这里只保存时间、动作和原因码，不保存消息正文或协议端原始响应。
 /// </summary>
-public sealed class ProtocolRiskBackoff
+public sealed class ProtocolRiskBackoff : IProtocolRiskBackoff
 {
     public static readonly TimeSpan DefaultDuration = TimeSpan.FromMinutes(30);
     public const int MaxShortTextChars = 240;
@@ -143,16 +143,3 @@ public sealed class ProtocolRiskBackoff
         int Retcode,
         string Action);
 }
-
-public readonly record struct ProtocolBackoffDecision(
-    bool Allowed,
-    string Text,
-    bool Restricted,
-    string ReasonCode);
-
-public sealed record ProtocolBackoffSnapshot(
-    string SourceKey,
-    DateTimeOffset Until,
-    string ReasonCode,
-    int Retcode,
-    string Action);

@@ -173,7 +173,8 @@ try
         Check(read.Text is not null && read.Error is null && pages.Urls.Count == 4 && models.Urls.Count == 0,
             "untrusted page reads use dedicated page transport");
         var modelResult = await search.SearchAsync("synthetic query", default);
-        Check(modelResult.Answer == "synthetic answer" && models.Urls.Single().Host == "localhost" && models.Authorization.Single() == "Bearer synthetic-key",
+        Check(modelResult is not null && modelResult.Answer == "synthetic answer"
+                && models.Urls.Single().Host == "localhost" && models.Authorization.Single() == "Bearer synthetic-key",
             "trusted configured internal model search remains available");
         Check(pages.Authorization.All(auth => auth is null), "page hops do not forward model authorization");
         var deniedPages = new SyntheticHttp(_ => SyntheticHttp.Redirect("http://127.0.0.1/private"));

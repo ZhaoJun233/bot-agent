@@ -129,7 +129,7 @@ internal static class ModelMigrationTests
             await transport.SendAsync(built.Payload, 0, Array.Empty<long>(), default);
             var wire = fetcher.Payloads.Last();
             check(wire["max_thinking_tokens"]!.GetValue<int>() == (fast ? 1024 : 4096), "actual custom invalid numeric and empty boundaries preserve default budget");
-            check(ModelModule::BotAgent.Model.ThinkingBudgetResolver.ResolveBudget("custom", custom, fast) == options.ResolveThinkingBudget(fast), "canonical custom budget mapping remains unique");
+            check(BotAgent.Model.ThinkingBudgetResolver.ResolveBudget("custom", custom, fast) == options.ResolveThinkingBudget(fast), "canonical custom budget mapping remains unique");
         }
         options.Model = "o3-synthetic";
         options.FastReply = false;

@@ -363,7 +363,7 @@
       toast("已开始巡检，结果会记在运行日志里");
       setTimeout(refreshStickerLib, 4000);
     } catch (e) {
-      toast("巡检失败：" + e.message);
+      toast("巡检失败：" + (e.data?.error || e.message));
     }
   }
 
@@ -374,7 +374,7 @@
       toast("正在从 QQ 收藏表情导入，稍后刷新看结果");
       setTimeout(refreshStickerLib, 6000);
     } catch (e) {
-      toast("导入失败：" + e.message);
+      toast("导入失败：" + (e.data?.error || e.message));
     }
   }
 

@@ -97,9 +97,9 @@ public class PromptTemplateStore : IPromptTemplateRepository
     {
         return key switch
         {
-            "persona" => AppSettings.DefaultPersona,
-            "agent_prompt" => AppSettings.DefaultAgentPrompt,
-            _ => AppSettings.DefaultSystemPrompt
+            "persona" => DefaultPromptTexts.DefaultPersona,
+            "agent_prompt" => DefaultPromptTexts.DefaultAgentPrompt,
+            _ => DefaultPromptTexts.DefaultSystemPrompt
         };
     }
 

@@ -38,6 +38,8 @@ using BotAgent.Services.Panel;
 using BotAgent.Services.Settings;
 using BotAgent.Services.Plugins;
 using BotAgent.Services.Plugins.Presets;
+using BotAgent.Services.Evaluation;
+using BotAgent.Services.Mcp;
 namespace BotAgent.Host;
 
 /// <summary>
@@ -64,8 +66,10 @@ internal sealed record AppGraph(
     HealthReportService HealthReports,
     WebUiServer Web,
     PluginManager Plugins,
+    BackgroundEvaluatorQueue Background,
     PlatformDriverOperations DriverOperations,
-    ManagedCapabilityBinding Management) : IAsyncDisposable
+    ManagedCapabilityBinding Management,
+    McpRuntime? Mcp) : IAsyncDisposable
 {
     private readonly object _disposeGate = new();
     private Task? _disposeTask;
@@ -76,6 +80,8 @@ internal sealed record AppGraph(
     private async Task DisposeCoreAsync()
     {
         var failures = new List<Exception>();
+        try { await Background.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
+        try { if (Mcp is not null) await Mcp.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { HealthReports.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
@@ -94,6 +100,7 @@ internal static class CompositionRoot
     public static AppSettings BootstrapSettings()
     {
         BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+        BotAgent.Adapters.Time.ClockBindings.InitializeEngine();
         BotAgent.Adapters.Time.ClockBindings.InitializeModel();
         BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
         AppDatabase.Initialize();
@@ -116,6 +123,7 @@ internal static class CompositionRoot
     public static AppGraph Build(AppSettings settings, BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization = null)
     {
         BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+        BotAgent.Adapters.Time.ClockBindings.InitializeEngine();
         BotAgent.Adapters.Time.ClockBindings.InitializeModel();
         BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
         DeclarePlatformCatalog(settings);
@@ -197,8 +205,8 @@ internal static class CompositionRoot
 
         // 发送（分句/节奏/记账）：聊天、agent 回话、审批回执共用
         // 决策轨迹（批次 C）：一轮一条、只有形状；回复链 / 发送层 / 能力闸门三处往上记节点。
-        var traces = new TurnTraceStore(archive: new TraceArchiveStore());
-        var audit = new AuditLogStore();
+        var traces = new TurnTraceStore(() => BotAgent.Adapters.Time.Clock.Now, new TraceArchiveStore());
+        var audit = new AuditLogStore(); var mcp = McpConfiguration.Build(secrets, audit, msg => FileLog.Write("Mcp", msg));
         var plain = new PlainSender(settingsBox, source, registry, ui, ownLedger, ui.EmitLog, traces, audit, riskBackoff,
             platformPolicies, brain);
 
@@ -212,12 +220,17 @@ internal static class CompositionRoot
         var sessionPolicies = new SessionPolicyLedger();
         var approvals = BuildApprovalUseCase(settingsBox, ui, registry, plain, sessionPolicies, traces, audit);
 
+        // Wave3：插件注册与能力门禁先于 agent 命令与回复链建立；显式 QQ 动作也要吃同一份门禁。
+        var plugins = RegisterPresetPlugins(ui, declaredPlugins);
+        var pluginGate = new PluginGate(plugins);
+        poke.PluginEnabled = () => pluginGate.Allows(PluginGate.PokeCapability);
+        stickers.PluginEnabled = () => pluginGate.Allows(PluginGate.StickersCapability);
         // agent 命令（//）：会话台账 + 内置/外部两路后端
         var sessions = new AgentSessionStore(
             Path.Combine(AppPaths.DataDir, "agent-sessions.json"), msg => FileLog.Write("Agent", msg));
         var serverAgent = new ServerAgentRunner(settingsBox, brain,
             new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "server-agent"),
-            msg => FileLog.Write("ServerAgent", msg));
+            msg => FileLog.Write("ServerAgent", msg), mcp.UseCase);
         var agentCmds = new AgentCommandService(settingsBox, source, brain, registry, ui, sessions, serverAgent, agentBridge,
             new AgentImageStore(),
             new AgentHooks(
@@ -226,7 +239,17 @@ internal static class CompositionRoot
                 IsOfficialUserAllowed: whitelist.IsOfficialPrivateExplicit,
                 SendPlainAsync: plain.SendPlainAsync),
              actionGateway: gateway,
-             platformPolicies: platformPolicies);
+             platformPolicies: platformPolicies,
+             pluginAllows: pluginGate.Allows);
+
+        var background = new BackgroundEvaluatorQueue(new BackgroundEvaluatorOptions
+        {
+            Capacity = 64,
+            MaxConcurrency = 2,
+            MaxAttempts = 1,
+            PerJobTimeout = TimeSpan.FromSeconds(30),
+            DrainTimeout = TimeSpan.FromSeconds(3),
+        });
 
         // 回复主链（要用到上面所有用例）→ 建好之后把"戳一戳请求一轮回复"这条边接上
         var quotas = new TenantQuotaStore();
@@ -239,12 +262,15 @@ internal static class CompositionRoot
             traces, riskBackoff,
             quotas: quotas,
             platformPolicies: platformPolicies,
-            inboundDedup: inboundDedup);
+            inboundDedup: inboundDedup,
+            plugins: pluginGate,
+            background: background);
         poke.RequestReply = conversation => reply.RequestReply(conversation, null);
 
         // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）
         var scheduler = new BotScheduler(settingsBox, source, profiles, brain, reply, stickers, ui,
-            new BotSchedulerHooks(Log: ui.EmitLog, IsDisposed: () => lifetime.IsDisposed));
+            new BotSchedulerHooks(Log: ui.EmitLog, IsDisposed: () => lifetime.IsDisposed),
+            pluginGate.Allows);
 
         // 配置热更新的扇出（面板保存设置 / 一键部署记住产物地址）：顺序在它内部，见 SettingsHotReload
         var settingsHotReload = new SettingsHotReload(settingsBox, settingsStore, approvals, participation, whitelist, agentCmds,
@@ -282,19 +308,16 @@ internal static class CompositionRoot
 
         var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
 
-        var plugins = RegisterPresetPlugins(ui, declaredPlugins, music, voice, stickers, poke, vibes, participation,
-            profiles, research, links);
-
         var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
             reply, participation, agentCmds, quotas, agentBridge, healthReports,
             sessionPolicies, traces, hostFacts, audit, approvals, local, official, feishu, platformRegistry, platformPolicies,
-            circuitStatusProvider, plugins);
+            circuitStatusProvider, background, plugins);
 
         var management = BuildManagedCapabilityBinding(configuration, authorization, driverOperations, settingsBox,
             platformPolicies, settings, feishu, platformRegistry, capturedProviders, managedAuthorization);
         return new AppGraph(settings, settingsBox, source, gateway, official, brain, agentBridge, agent, bootReport, loginQr,
-            healthReports, web, plugins, driverOperations, management);
+            healthReports, web, plugins, background, driverOperations, management, mcp.Runtime);
     }
 
     /// <summary>
@@ -337,9 +360,7 @@ internal static class CompositionRoot
     /// 预设插件注册：开关状态读插件表（面板写），目录对不上直接抛装配错误。
     /// 读库与注册都发生在面板建好之前 —— 面板首屏要读到同一批插件状态。
     /// </summary>
-    private static PluginManager RegisterPresetPlugins(PanelNotifier ui, string[] declaredPlugins,
-        MusicUseCase music, VoiceUseCase voice, StickerService stickers, PokeUseCase poke, VibeTracker vibes,
-        ParticipationUseCase participation, MemberProfileStore profiles, ResearchUseCase research, LinkPreviewer links)
+    private static PluginManager RegisterPresetPlugins(PanelNotifier ui, string[] declaredPlugins)
     {
         var plugins = new PluginManager(ui.EmitLog);
         IReadOnlyDictionary<string, bool> startupPluginStates;
@@ -350,13 +371,13 @@ internal static class CompositionRoot
             if (!declaredPlugins.Contains(plugin.Id, StringComparer.Ordinal)) throw new InvalidOperationException("plugin_catalog_mismatch");
             plugins.Register(plugin, !startupPluginStates.TryGetValue(plugin.Id, out var enabled) || enabled);
         }
-        RegisterPlugin(new MusicPresetPlugin(music));
-        RegisterPlugin(new VoicePresetPlugin(voice));
-        RegisterPlugin(new StickersPresetPlugin(stickers));
-        RegisterPlugin(new PokePresetPlugin(poke));
-        RegisterPlugin(new VibesPresetPlugin(vibes, participation));
-        RegisterPlugin(new ProfilesPresetPlugin(profiles));
-        RegisterPlugin(new WebSearchPresetPlugin(research, links));
+        RegisterPlugin(new MusicPresetPlugin());
+        RegisterPlugin(new VoicePresetPlugin());
+        RegisterPlugin(new StickersPresetPlugin());
+        RegisterPlugin(new PokePresetPlugin());
+        RegisterPlugin(new VibesPresetPlugin());
+        RegisterPlugin(new ProfilesPresetPlugin());
+        RegisterPlugin(new WebSearchPresetPlugin());
         return plugins;
     }
 
@@ -584,6 +605,7 @@ internal static class CompositionRoot
         IPlatformRegistry platformRegistry,
         PlatformPolicyResolver platformPolicies,
         Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> circuitStatusProvider,
+        BackgroundEvaluatorQueue background,
         Domain.Plugins.IPluginRegistry? plugins = null)
     {
         // 面板自己的两条出网（模型列表探测 20s / 自建网易云登录 15s）
@@ -620,7 +642,8 @@ internal static class CompositionRoot
             platformRegistry: platformRegistry,
             feishuGateway: feishu,
             platformPolicies: platformPolicies,
-            plugins: plugins);
+            plugins: plugins,
+            background: background);
     }
 
     /// <summary>

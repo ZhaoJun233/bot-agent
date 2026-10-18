@@ -42,7 +42,10 @@ using (var cancel = new CancellationTokenSource(30))
     Check(breaker.Snapshot().ConsecutiveTimeouts == 0, "external cancellation does not count as timeout");
 }
 
-var gateType = typeof(ToolCircuitBreaker).Assembly.GetType("BotAgent.Services.Reply.ResizableReplyGate");
+// 2026-10-18（Wave3 复审 F6）：ResizableReplyGate 已随回复链迁入 BotAgent.Engine，
+// 不能再从 ToolCircuitBreaker 所在的 Host 程序集里找 —— 从真实 Engine 类型定位。
+var gateType = typeof(BotAgent.Services.Reply.ReplyPipeline).Assembly
+    .GetType("BotAgent.Services.Reply.ResizableReplyGate");
 Check(gateType is not null, "gate retirement uses reference counted leases");
 if (gateType is not null)
 {

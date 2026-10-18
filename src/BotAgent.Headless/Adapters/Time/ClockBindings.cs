@@ -11,6 +11,7 @@ public static class ClockBindings
     public static IClock Source { get; } = new ForwardingClock();
 
     public static void InitializePlatforms() => BotAgent.Platforms.PlatformClock.Initialize(Source);
+    public static void InitializeEngine() => BotAgent.Engine.Runtime.EngineClock.Initialize(Source);
     public static void InitializeModel()
     {
         BotAgent.Model.ModelClock.Initialize(Source);

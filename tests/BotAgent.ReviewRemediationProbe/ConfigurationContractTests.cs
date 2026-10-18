@@ -2458,7 +2458,40 @@ internal static class ConfigurationContractTests
                 && Hash(manifestPath) == baselineHash && Hash(original) == preimageHash && Hash(preimageManifest) == preimageManifestHash;
             Check(OriginalIntact(), "whole_old_bundle_and_preimage_remain_intact");
             var source = Bound(repository, "src/BotAgent.Headless/bin/Release/net8.0");
-            var candidate = assets.Keys.ToDictionary(name => name, name => Hash(Bound(source, name)), StringComparer.Ordinal);
+            var candidateNames = Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+                .Where(path => !path.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase))
+                .Select(path => Path.GetRelativePath(source, path).Replace('\\', '/')).ToArray();
+            // 候选闭包不再写死数量：从真实 deps.json 的 runtime/runtimeTargets 推导。
+            // 这样新增工程/SDK 资产必须由实际依赖锁定解释，不能只改一个预期数字换绿。
+            using (var runtimeDeps = JsonDocument.Parse(File.ReadAllText(Bound(source, "BotAgent.Headless.deps.json"))))
+            {
+                var target = runtimeDeps.RootElement.GetProperty("targets").EnumerateObject().First().Value;
+                var declared = new HashSet<string>(StringComparer.Ordinal)
+                {
+                    "BotAgent.Headless.deps.json",
+                    "BotAgent.Headless.runtimeconfig.json",
+                    "BotAgent.Headless.exe",
+                };
+                foreach (var library in target.EnumerateObject())
+                {
+                    if (library.Value.TryGetProperty("runtime", out var runtimeAssets))
+                        foreach (var asset in runtimeAssets.EnumerateObject())
+                            declared.Add(Path.GetFileName(asset.Name.Replace('\\', '/')));
+
+                    if (library.Value.TryGetProperty("runtimeTargets", out var runtimeTargets))
+                        foreach (var asset in runtimeTargets.EnumerateObject())
+                            declared.Add(asset.Name.Replace('\\', '/'));
+                }
+
+                Check(candidateNames.ToHashSet(StringComparer.Ordinal).SetEquals(declared),
+                    "candidate_closure_matches_deps_declared_runtime_assets");
+                Check(assets.Keys.All(declared.Contains),
+                    "every_old_37_asset_is_still_part_of_the_current_closure");
+                Check(new[] { "BotAgent.Model.dll", "BotAgent.Engine.dll", "BotAgent.Mcp.dll", "ModelContextProtocol.Core.dll" }
+                        .All(declared.Contains),
+                    "current_closure_contains_real_model_engine_mcp_and_official_sdk_assemblies");
+            }
+            var candidate = candidateNames.ToDictionary(name => name, name => Hash(Bound(source, name)), StringComparer.Ordinal);
             Check(candidate["BotAgent.Headless.dll"] != assets["BotAgent.Headless.dll"], "candidate_is_distinct_real_host_artifact");
             var proofPath = Bound(capture, "rollback-proof-" + nonce + ".json");
             Check(!Directory.Exists(root) && !File.Exists(root) && !File.Exists(proofPath) && !Directory.Exists(proofPath),
@@ -2470,6 +2503,23 @@ internal static class ConfigurationContractTests
             void CopyBundle(string from, IReadOnlyDictionary<string, string> expected)
             {
                 if (process is not null) throw new InvalidOperationException("rollback_host_still_running");
+                // 只允许清理本夹具从当前候选产物复制进来的、旧包没有的资产；
+                // 数量不是“放宽到 39”，每个候选专属资产都必须与候选哈希逐项一致。
+                foreach (var retiredName in candidate.Keys.Where(name => !expected.ContainsKey(name)).ToArray())
+                {
+                    var retired = Bound(bundle, retiredName);
+                    if (!File.Exists(retired))
+                    {
+                        continue;
+                    }
+
+                    if (Hash(retired) != candidate[retiredName])
+                    {
+                        throw new InvalidOperationException("rollback_owned_asset_drift");
+                    }
+
+                    File.Delete(retired);
+                }
                 foreach (var asset in expected)
                 {
                     var input = Bound(from, asset.Key); var output = Bound(bundle, asset.Key);
@@ -2477,7 +2527,7 @@ internal static class ConfigurationContractTests
                     Directory.CreateDirectory(Path.GetDirectoryName(output)!); File.Copy(input, output, overwrite: true);
                     if (Hash(output) != asset.Value) throw new InvalidOperationException("rollback_asset_copy_drift");
                 }
-                Check(Directory.EnumerateFiles(bundle, "*", SearchOption.AllDirectories).Count() == 37,
+                Check(Directory.EnumerateFiles(bundle, "*", SearchOption.AllDirectories).Count() == expected.Count,
                     "exact_whole_bundle_count_after_copy");
             }
             void RestoreDatabase()
@@ -2595,10 +2645,11 @@ internal static class ConfigurationContractTests
             Check(restoredFacts == oldFacts && restoredObservation == oldObservation, "real_old_host_restores_settings_six_slots_provider_and_device_facts");
             Check(OriginalIntact() && assets.All(p => Hash(Bound(bundle, p.Key)) == p.Value)
                 && candidate.All(p => Hash(Bound(source, p.Key)) == p.Value), "original_evidence_and_current_repo_artifacts_never_overwritten");
-            var proof = JsonSerializer.Serialize(new { Format = "wave1-whole-rollback-1", VerifiedAtUtc = DateTimeOffset.UtcNow,
+            var proof = JsonSerializer.Serialize(new { Format = "wave2-whole-rollback-1", VerifiedAtUtc = DateTimeOffset.UtcNow,
                 BaselineManifestSha256 = baselineHash, PreimageSha256 = preimageHash, PreimageManifestSha256 = preimageManifestHash,
                 BaselineHeadlessSha256 = assets["BotAgent.Headless.dll"], CandidateHeadlessSha256 = candidate["BotAgent.Headless.dll"],
-                WholeAssetCount = 37, OldConfigurationVersion = oldFacts.Version, CandidateConfigurationVersion = candidateFacts.Version,
+                BaselineAssets = assets, CandidateAssets = candidate, WholeAssetCount = assets.Count, CandidateWholeAssetCount = candidate.Count,
+                OldConfigurationVersion = oldFacts.Version, CandidateConfigurationVersion = candidateFacts.Version,
                 RestoredConfigurationVersion = restoredFacts.Version, OldBinaryCompatibilityVerified = true, RollbackVerified = true,
                 ProcessExits = processExits, SettingsSha256 = restoredFacts.Settings, FixedSlotsSha256 = restoredFacts.Slots,
                 ProviderMetadataSha256 = restoredFacts.Providers, LegacyDeviceObservationSha256 = restoredObservation },
@@ -2606,7 +2657,7 @@ internal static class ConfigurationContractTests
             using (var file = new FileStream(proofPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             { file.Write(Encoding.UTF8.GetBytes(proof)); file.Flush(flushToDisk: true); }
             Check(File.ReadAllText(proofPath) == proof && OriginalIntact(), "new_durable_proof_does_not_rewrite_historical_false_flags");
-            Console.WriteLine($"CFG_CHILD whole-rollback passed={passed} failed=0 assets=37 proof={Path.GetFileName(proofPath)} proofSha256={Hash(proofPath)}");
+            Console.WriteLine($"CFG_CHILD whole-rollback passed={passed} failed=0 assets={assets.Count} candidateAssets={candidate.Count} proof={Path.GetFileName(proofPath)} proofSha256={Hash(proofPath)}");
             return 0;
         }
         catch (Exception error)

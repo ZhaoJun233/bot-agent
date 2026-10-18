@@ -70,7 +70,8 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
 node tests/BotAgent.FrontendProbe/probe.mjs                       # 面板冒烟（无浏览器）
-QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+BOTAGENT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+# 规范名优先，旧 QQCHAT_IT_ONLY 兼容；场景内的行为变量照旧用 QQCHAT_*
 # 结构护栏（只读源码，不连库不起进程）：基线在 ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
 dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll

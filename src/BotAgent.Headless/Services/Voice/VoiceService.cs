@@ -17,7 +17,7 @@ namespace BotAgent.Services.Voice;
 ///
 /// 只有面板「试听一句」才真把 wav 拉到本地 —— 那是给浏览器播的。
 /// </summary>
-public sealed class VoiceService
+public sealed class VoiceService : IVoiceSynthesis
 {
     private readonly IHttpFetcher _http;
     private readonly Func<AppSettings> _settings;

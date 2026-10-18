@@ -25,7 +25,7 @@ namespace BotAgent.Services.Qq;
 /// 事件方向则相反：入站消息会在 <see cref="QqChatMessage.Channel"/> 上打标，
 /// 上层用 <see cref="Channels.Key"/> 拼会话 key —— 会话隔离就是这么落地的。
 /// </summary>
-public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
+public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IPlatformSourceOwner, IPlatformSourceRouter, IDisposable
 {
     private readonly List<IQqChatSource> _sources;
     private readonly Action<string>? _log;
@@ -149,6 +149,8 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
         return new(this, source, new(bound.Driver.Key, trigger), lifetime, Current);
     }
 
+    PlatformSourceLease? IPlatformSourceRouter.CaptureForConversation(string sourceKey) => CaptureForConversation(sourceKey);
+
     public PlatformSourceLease? CaptureForConversation(string sourceKey)
     {
         if (_platformRegistry is null || !ConversationIdCodec.TryParse(sourceKey, out var conversation)) return null;
@@ -167,7 +169,10 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
         return string.Equals(context.AccountScope, conversation.AccountScope, StringComparison.Ordinal);
     }
 
-    internal string? ConversationKey(QqChatMessage message, Func<string, bool> exists)
+    string? IPlatformSourceOwner.ConversationKey(QqChatMessage message, Func<string, bool> exists)
+        => ConversationKey(message, exists);
+
+    public string? ConversationKey(QqChatMessage message, Func<string, bool> exists)
     {
         var lease = PlatformSourceExecution.Current;
         if (lease is null || !ReferenceEquals(lease.Owner, this) || !lease.IsCurrent) return null;
@@ -186,7 +191,7 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
         return key;
     }
 
-    internal (bool IsGroup, long Id) CompatibilityTarget(string sourceKey)
+    public (bool IsGroup, long Id) CompatibilityTarget(string sourceKey)
     {
         if (!ConversationIdCodec.TryParse(sourceKey, out var conversation)) return (false, 0);
         var lease = PlatformSourceExecution.Current;

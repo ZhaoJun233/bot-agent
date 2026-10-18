@@ -65,10 +65,13 @@ internal sealed class SourceIndex
     public int TotalLines => Files.Sum(f => f.LineCount);
 
     public IEnumerable<SourceFile> In(string folder) => Files.Where(f => f.Under(folder));
-    public IEnumerable<SourceFile> DomainFiles => Files.Where(f => f.ProjectName == "BotAgent.Core"
-        || f.ProjectRelativePath.StartsWith("Domain/", StringComparison.Ordinal));
+    /// <summary>各工程实际的 <c>Domain/</c> 目录（Core 的 Contracts 不算规则，不参与 R6/R7 规模判定）。</summary>
+    public IEnumerable<SourceFile> DomainFiles => Files.Where(f =>
+        f.ProjectRelativePath.StartsWith("Domain/", StringComparison.Ordinal));
+    /// <summary>用例层：Wave3 后 Engine 整体是用例层，Headless 里只剩 <c>Services/**</c>。</summary>
     public IEnumerable<SourceFile> UseCaseFiles => Files.Where(f => f.ProjectName == "BotAgent.Engine"
         || f.ProjectRelativePath.StartsWith("Services/", StringComparison.Ordinal));
+    /// <summary>面板：未来独立的 Panel 工程 + 现有 Headless 的 <c>Adapters/Panel/**</c>。</summary>
     public IEnumerable<SourceFile> PanelFiles => Files.Where(f => f.ProjectName == "BotAgent.Panel"
         || f.ProjectRelativePath.StartsWith("Adapters/Panel/", StringComparison.Ordinal));
 
@@ -245,7 +248,8 @@ internal sealed class SourceIndex
 
     private static string ResolveRepositoryRoot()
     {
-        var fromEnv = Environment.GetEnvironmentVariable("QQCHAT_SRC_ROOT");
+        var fromEnv = Environment.GetEnvironmentVariable("BOTAGENT_SRC_ROOT")
+            ?? Environment.GetEnvironmentVariable("QQCHAT_SRC_ROOT");
         if (!string.IsNullOrWhiteSpace(fromEnv))
         {
             return Path.GetFullPath(fromEnv.Trim()); // 显式无效根也要失败，不退回另一份 checkout。

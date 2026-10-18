@@ -1,6 +1,6 @@
 namespace BotAgent.Storage;
 
-internal static class AppSettings
+internal static class DefaultPromptTexts
 {
     public const string DefaultSystemPrompt = "你是一个在聊天群里的真人群友，说话自然随性，不做作。";
     public const string DefaultPersona = "说话简短、口语化，偶尔吐槽，有自己的喜好与情绪。";

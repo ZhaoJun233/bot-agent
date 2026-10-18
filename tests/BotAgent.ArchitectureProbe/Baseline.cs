@@ -9,7 +9,7 @@ internal static class Baseline
 {
     // R3-source-guard-v1：当前必需工程；未来工程只有实际出现后才检查，不把缺席写成已完成。
     public static readonly IReadOnlyList<string> RequiredProjects = new[]
-        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Headless" };
+        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Headless" };
     public static readonly IReadOnlyDictionary<string, string[]> AllowedProjectReferences = new Dictionary<string, string[]>
     {
         ["BotAgent.Core"] = Array.Empty<string>(),
@@ -43,11 +43,13 @@ internal static class Baseline
     /// </summary>
     /// <summary>
     /// 2026-09-24（批次 E 有限步进循环）：2328 → **2320** —— 上面登记的债**当场还了一部分**：
-    /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `Services/Reply/AgentTurnLoop.cs`，
-    /// “当场做掉只读工具”搬进 `Services/Reply/InlineTurnTools.cs`。
-    /// 这格仍然只许往下调：回复主链里动作分派那一段还能拆，谁接着拆记得同步这里。
+    /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `AgentTurnLoop.cs`，
+    /// “当场做掉只读工具”搬进 `InlineTurnTools.cs`。
+    /// 2026-10-18 Wave3：回复主链（ReplyPipeline / AgentTurnLoop / InlineTurnTools / PlainSender）
+    /// 整体搬到 `src/BotAgent.Engine/Reply/`；全 src 最大文件回落到 SettingsStore（1740），
+    /// 这格随实测下调 1765 → **1740**（仍然只许往下调）。
     /// </summary>
-    public const int MaxFileLines = 1765;
+    public const int MaxFileLines = 1740;
     public const string BotAgentHostPath = "src/BotAgent.Headless/Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。

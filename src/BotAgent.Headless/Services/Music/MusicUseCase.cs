@@ -11,7 +11,7 @@ namespace BotAgent.Services.Music;
 /// 听完要不要再给模型一次开口机会（<c>RequestReply</c>）、失败要不要记一次参与状态，
 /// 这些都属于"一次回复该怎么走"，留在了 BotAgentHost；这里只做"音乐这一件事"。
 /// </summary>
-public sealed class MusicUseCase
+public sealed class MusicUseCase : IMusicUseCase
 {
     private readonly MusicService? _music;
     private readonly IQqChatSource _source;
@@ -85,7 +85,7 @@ public sealed class MusicUseCase
     /// 去听一首歌（真实出网、可能几秒），听完把"听感"攒进这个会话的笔记里（下一轮注入）。
     /// 返回听感文本；没搜到 / 没听到 / 出错 → null（调用方据此记一次工具失败）。
     /// </summary>
-    public async Task<string?> ListenAsync(string sourceKey, string song, string requester)
+    public async Task<string?> ListenAsync(string sourceKey, string song, string requester, CancellationToken ct = default)
     {
         if (_music is null)
         {
@@ -94,7 +94,7 @@ public sealed class MusicUseCase
 
         try
         {
-            var note = await _music.DescribeByNameAsync(song, requester, CancellationToken.None);
+            var note = await _music.DescribeByNameAsync(song, requester, ct);
             if (string.IsNullOrWhiteSpace(note))
             {
                 _log($"[Music] 没搜到/没听到「{song}」");
@@ -126,21 +126,21 @@ public sealed class MusicUseCase
     /// 搜歌 → 发一张网易云音乐卡片；协议端不认卡片就退化成发链接（绝不能什么都不发）。
     /// 返回是否发出去了（卡片或链接）。
     /// </summary>
-    public async Task<bool> ShareAsync(string song, bool isGroup, long targetId)
+    public async Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
     {
         if (_music is null || targetId == 0 || !_source.IsConnected)
         {
             return false;
         }
 
-        var songId = await _music.ResolveSongIdByNameAsync(song, CancellationToken.None);
+        var songId = await _music.ResolveSongIdByNameAsync(song, ct);
         if (string.IsNullOrWhiteSpace(songId))
         {
             _log($"[Music] 想分享「{song}」但没搜到，不发卡片");
             return false;
         }
 
-        var ok = await _source.SendMusicAsync(isGroup, targetId, "163", songId, title: song, ct: CancellationToken.None);
+        var ok = await _source.SendMusicAsync(isGroup, targetId, "163", songId, title: song, ct: ct);
         _log(ok ? $"[Music] 已分享卡片「{song}」(# {songId})" : $"[Music] 卡片发送失败，改用链接分享: {song}");
 
         // 协议端不接卡片（NapCat 各版本对 music 段的接受程度不一样）时退化成发链接：
@@ -148,7 +148,7 @@ public sealed class MusicUseCase
         if (!ok)
         {
             var link = $"https://music.163.com/song?id={songId}";
-            var sentLink = await _source.SendTextAsync(isGroup, targetId, link, CancellationToken.None);
+            var sentLink = await _source.SendTextAsync(isGroup, targetId, link, ct);
             _log(sentLink.Ok ? $"[Music] 已用链接分享：{link}" : $"[Music] 链接也发送失败：{link}");
             return sentLink.Ok;
         }

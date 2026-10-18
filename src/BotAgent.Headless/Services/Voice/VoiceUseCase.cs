@@ -11,7 +11,7 @@ namespace BotAgent.Services.Voice;
 /// 所以这里不再按气氛/积极性去拦人，只挡"连发"这种会卡住合成队列的情况。
 /// 真正的发送编排（发哪几段、失败改文字）留在回复流程里，因为它要和分句/记账一起看。
 /// </summary>
-public sealed class VoiceUseCase
+public sealed class VoiceUseCase : IVoiceUseCase
 {
     /// <summary>
     /// 代码侧唯一的语音硬护栏（秒）——**只是防炸**，不是"该不该发语音"的判断。
@@ -41,7 +41,9 @@ public sealed class VoiceUseCase
     public VoiceService? Client => _voice;
 
     /// <summary>面板上「语音积极性」对应给模型的**建议节奏**（秒）——只进提示词，不拦人。</summary>
-    public int SuggestIntervalSeconds => OpenAiClient.VoiceIntervalSeconds(_settings.VoiceEagerness);
+    public int SuggestIntervalSeconds => VoiceCadence.IntervalSeconds(_settings.VoiceEagerness);
+
+    public string? ClientVoiceName => _voice?.VoiceName;
 
     /// <summary>
     /// 语音频率门。为什么要它：

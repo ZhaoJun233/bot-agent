@@ -25,7 +25,7 @@ namespace BotAgent.Services.Agent;
 ///
 /// 宿主能力（日志、自己的 QQ 号、官方白名单、回话）从 <see cref="AgentHooks" /> 注入 —— 方向是「用例 → 宿主」。
 /// </summary>
-public sealed partial class AgentCommandService
+public sealed partial class AgentCommandService : IAgentCommandService
 {
     private readonly SettingsBox _box;
     private readonly IQqChatSource _source;
@@ -39,6 +39,7 @@ public sealed partial class AgentCommandService
     private readonly AgentHooks _hooks;
     private readonly IQqActions? _actionGateway;
     private readonly PlatformPolicyResolver? _platformPolicies;
+    private readonly Func<string, bool>? _pluginAllows;
 
     public AgentCommandService(
         SettingsBox box,
@@ -52,7 +53,8 @@ public sealed partial class AgentCommandService
         IAgentImageStore images,
         AgentHooks hooks,
         IQqActions? actionGateway = null,
-        PlatformPolicyResolver? platformPolicies = null)
+        PlatformPolicyResolver? platformPolicies = null,
+        Func<string, bool>? pluginAllows = null)
     {
         _box = box;
         _source = source;
@@ -66,6 +68,7 @@ public sealed partial class AgentCommandService
         _hooks = hooks;
         _actionGateway = actionGateway;
         _platformPolicies = platformPolicies;
+        _pluginAllows = pluginAllows;
 
         // 进度/结果事件只服务这一块，订阅跟着搬过来（以前挂在 BotAgentHost 构造函数里）
         if (_agentBridge is not null)
@@ -283,7 +286,7 @@ public sealed partial class AgentCommandService
             Prompt = prompt,
             Session = "qqchat-panel",
             // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
-            QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private)
+            QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
         };
 
         if (_serverAgent is null)
@@ -380,7 +383,7 @@ public sealed partial class AgentCommandService
         if (actions is null || lease is { IsCurrent: false }) return null;
         var (isGroup, targetId) = conversation.Target;
         return new SessionQqActionHost(actions, isGroup, targetId, msg.UserId, msg.MessageId, _hooks.SelfId(), _platformPolicies,
-            Channels.ChannelOf(conversation.SourceKey));
+            Channels.ChannelOf(conversation.SourceKey), _pluginAllows);
     }
 
     /// <summary>服务器内置 agent 正在跑的会话（单会话串行）。</summary>

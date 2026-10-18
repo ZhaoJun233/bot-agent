@@ -1,6 +1,11 @@
+extern alias StorageModule;
+
+using System.Collections.Immutable;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Text;
+using System.Text.Json.Nodes;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Adapters.Time;
 using BotAgent.Domain.Configuration;
@@ -9,6 +14,7 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Services;
 using BotAgent.Services.Platforms;
 using Microsoft.Data.Sqlite;
+using StorageConfiguration = StorageModule::BotAgent.Storage;
 
 namespace BotAgent.ReviewRemediationProbe;
 
@@ -54,12 +60,14 @@ internal static class ManagedHostCapabilityTests
             ClockBindings.InitializeStorage();
             AppDatabase.Initialize();
 
+            using var providerEndpoint = new SyntheticProviderEndpoint();
             var port = FreeTcpPort();
             var settings = new AppSettings
             {
                 ApiKey = "synthetic-model-key",
+                ApiKeyOverride = "synthetic-model-key",
                 Model = "synthetic-model",
-                ModelBaseUrl = "https://model.example.com/v1",
+                ModelBaseUrl = providerEndpoint.BaseUrl,
                 OneBotProtocol = "ReverseWebSocket",
                 OneBotAddress = "http://127.0.0.1:" + port,
                 OneBotToken = string.Empty,
@@ -69,6 +77,8 @@ internal static class ManagedHostCapabilityTests
                 VerboseLog = false,
             };
             new SettingsStore().Save(settings);
+            Check(new SecretsStore().SaveApiKey("synthetic-model-key"), "synthetic provider credential is persisted before activation");
+            new ModelProviderStore().EnsurePrimary(settings);
 
             var allowed = new ConfigurationCaller("synthetic-authority", "synthetic-manager", "bot",
                 ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration);
@@ -120,6 +130,8 @@ internal static class ManagedHostCapabilityTests
             Check(deniedPage.Code == ManagedResultCode.Ok && deniedPage.Items.Length == 0,
                 "unauthorized listing is fail-closed and exposes no managed drivers");
 
+            await VerifyProviderAsync(management, capabilities, allowed, providerEndpoint, Check);
+
             await InvokeLifecycleAsync(management, "StartAsync");
             Check(await CanConnectAsync(port), "tokenless OneBot driver StartAsync opens the reverse WebSocket TCP port");
             Check(AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations WHERE namespace='mg1'") > 0,
@@ -169,9 +181,137 @@ internal static class ManagedHostCapabilityTests
         }
     }
 
+    private static async Task VerifyProviderAsync(object management, IManagedCapabilities capabilities,
+        ConfigurationCaller allowed, SyntheticProviderEndpoint endpoint, Action<bool, string> check)
+    {
+        var store = (StorageConfiguration.ConfigurationStore)BindingField(management, "_store")!;
+        var authorization = BindingField(management, "_configurationAuthorization")!;
+        var enter = authorization.GetType().GetMethod("Enter", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var configurationCaller = allowed with
+        {
+            Access = ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration | ConfigurationAccess.EditAllowedSecrets
+        };
+        IDisposable Enter() => (IDisposable)enter.Invoke(authorization,
+            new object[] { configurationCaller, (Func<bool>)(() => true) })!;
+        async Task<ConfigurationReadResult> Header()
+        {
+            using var scope = Enter();
+            var header = await store.ReadAsync(configurationCaller, ConfigurationReadKind.Editable);
+            check(header.Code == ConfigurationResultCode.Ok, "actual Host participant authorizes the synthetic configuration header");
+            return header;
+        }
+        var provider = new ManagedObjectKey.Provider(new("primary"));
+        async Task<ManagedExecuteRequest> Request()
+        {
+            var header = await Header();
+            var inspected = await capabilities.InspectAsync(allowed, provider);
+            check(inspected.Code == ManagedResultCode.Ok && inspected.Descriptor is not null,
+                "actual Host catalog exposes the registered primary Provider");
+            return new("cfg-0.3.2", inspected.Descriptor!.DescriptorRevision,
+                new(header.Generation, header.ServerUnixSeconds, Guid.NewGuid()),
+                new ManagedCommand.Provider(provider.Key, ProviderCommand.TestConnection));
+        }
+        var request = await Request();
+        var rejected = await capabilities.ExecuteAsync(allowed with { }, request);
+        check(rejected.Code == ManagedResultCode.Forbidden && rejected.Receipt is null && endpoint.Requests.Count == 0,
+            "equal caller fields and configuration flags cannot impersonate the trusted management caller");
+        endpoint.EnqueueReply();
+        var result = await capabilities.ExecuteAsync(allowed, request);
+        check(result.Code == ManagedResultCode.Ok && result.Receipt?.State == ManagedOperationState.Completed
+            && endpoint.Requests.Count == 1, "actual Host managed Provider dispatch completes exactly one local HTTP chat request");
+        var payload = endpoint.Requests.Single();
+        check(payload["model"]?.GetValue<string>() == "synthetic-model" && payload["max_tokens"]?.GetValue<int>() == 64
+            && payload.Count == 3 && payload["messages"]?.AsArray().Count == 1,
+            "real Provider tester uses only the fixed minimal chat payload and 64-token budget");
+        check(endpoint.LastAuthorization == "Bearer synthetic-model-key", "real Provider request resolves the committed database credential");
+        check(AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations WHERE namespace='mg1'") > 0,
+            "actual Provider dispatch has a durable receipt in the shared configuration ledger");
+        var queried = await capabilities.QueryAsync(allowed, request.Key);
+        var replay = await capabilities.ExecuteAsync(allowed, request);
+        check(queried.Receipt?.State == ManagedOperationState.Completed && replay.Replayed
+            && replay.Receipt?.State == ManagedOperationState.Completed && endpoint.Requests.Count == 1,
+            "query and replay retain the actual Provider outcome without a second HTTP request");
+
+        async Task SaveSecret(SecretEdit edit)
+        {
+            var header = await Header();
+            using var scope = Enter();
+            var saved = await store.SaveAsync(configurationCaller, new("cfg-0.3.2", header.Version,
+                new(header.Generation, header.ServerUnixSeconds, Guid.NewGuid()),
+                new(null, null, null, null, null, null, null, null), ImmutableArray.Create(edit)));
+            if (saved.Code != ConfigurationResultCode.Ok || saved.Receipt?.CommitState != CommitState.Committed
+                || saved.Receipt.ApplyState != ApplyState.NotStarted)
+                Console.WriteLine($"MANAGED_HOST_C3 code={saved.Code} commit={saved.Receipt?.CommitState} apply={saved.Receipt?.ApplyState} "
+                    + "errors=" + string.Join(",", saved.Errors.Select(error => error.Code)));
+            check(saved.Code == ConfigurationResultCode.Ok && saved.Receipt?.CommitState == CommitState.Committed
+                && saved.Receipt.ApplyState == ApplyState.NotStarted,
+                "actual C3 commits the credential change without falsely claiming runtime application");
+        }
+        using (var input = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("synthetic-model-key-replaced")))
+            await SaveSecret(SecretEdit.Replace(WritableSecretSlot.ModelApiKey, input));
+        var replacement = await Request();
+        endpoint.EnqueueReply();
+        var replaced = await capabilities.ExecuteAsync(allowed, replacement);
+        check(replaced.Receipt?.State == ManagedOperationState.Completed && endpoint.Requests.Count == 2
+            && endpoint.LastAuthorization == "Bearer synthetic-model-key-replaced",
+            "Host Provider tester reads the newly committed key without resurrecting the startup cache");
+        var beforeDelete = await Header();
+        using (var scope = Enter())
+        {
+            var invalidDelete = await store.SaveAsync(configurationCaller, new("cfg-0.3.2", beforeDelete.Version,
+                new(beforeDelete.Generation, beforeDelete.ServerUnixSeconds, Guid.NewGuid()),
+                new(null, null, null, null, null, null, null, null),
+                ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.ModelApiKey))));
+            check(invalidDelete.Code == ConfigurationResultCode.ValidationFailed && invalidDelete.CurrentVersion == beforeDelete.Version
+                && invalidDelete.Errors.Any(error => error.Code == "credential_required") && endpoint.Requests.Count == 2,
+                "deleting a still-enabled Provider credential rejects the whole batch without version advance or HTTP");
+            var disablePrimary = new RegisteredConfigurationChanges(ImmutableArray<PluginEnabledEdit>.Empty,
+                ImmutableArray.Create(new ProviderEdit(provider.Key, new(default, default, default, default,
+                    FieldEdit<bool>.Set(false), CredentialBindingEdit.KeepExisting()))), ImmutableArray<PolicyEdit>.Empty);
+            var invalidDisable = await store.SaveAsync(configurationCaller, new("cfg-0.3.2", beforeDelete.Version,
+                new(beforeDelete.Generation, beforeDelete.ServerUnixSeconds, Guid.NewGuid()),
+                new(null, null, null, null, null, null, null, disablePrimary),
+                ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.ModelApiKey))));
+            check(invalidDisable.Code == ConfigurationResultCode.ValidationFailed && invalidDisable.CurrentVersion == beforeDelete.Version
+                && invalidDisable.Errors.Any(error => error.Code == "field_read_only") && endpoint.Requests.Count == 2,
+                "read-only primary enabled metadata cannot bypass the credential deletion invariant");
+        }
+        var retained = await capabilities.InspectAsync(allowed, provider);
+        check(retained.Descriptor?.CredentialConfigured == true, "rejected credential deletion retains the configured metadata");
+        var afterRejectedDelete = await Request();
+        endpoint.EnqueueReply();
+        var preserved = await capabilities.ExecuteAsync(allowed, afterRejectedDelete);
+        check(preserved.Receipt?.State == ManagedOperationState.Completed && endpoint.Requests.Count == 3
+            && endpoint.LastAuthorization == "Bearer synthetic-model-key-replaced",
+            "whole-batch deletion rejection retains the committed credential and real Provider connectivity");
+    }
+
+    private sealed class SyntheticProviderEndpoint : IDisposable
+    {
+        private readonly object _mock;
+        private readonly Type _type;
+        internal SyntheticProviderEndpoint()
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BotAgent.slnx"))) directory = directory.Parent;
+            var repository = directory?.FullName ?? throw new InvalidOperationException("synthetic_repository_missing");
+            var harness = Assembly.LoadFrom(Path.Combine(repository,
+                "tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll"));
+            _type = harness.GetType("BotAgent.IntegrationHarness.MockOpenAi", throwOnError: true)!;
+            _mock = Activator.CreateInstance(_type, new object[] { FreeTcpPort(), "127.0.0.1" })!;
+            try { _type.GetMethod("Start")!.Invoke(_mock, null); }
+            catch { ((IDisposable)_mock).Dispose(); throw; }
+        }
+        internal string BaseUrl => (string)_type.GetProperty("BaseUrl")!.GetValue(_mock)!;
+        internal IReadOnlyList<JsonObject> Requests => (IReadOnlyList<JsonObject>)_type.GetProperty("Requests")!.GetValue(_mock)!;
+        internal string? LastAuthorization => (string?)_type.GetProperty("LastAuthorization")!.GetValue(_mock);
+        internal void EnqueueReply() => _type.GetMethod("EnqueueReply")!.Invoke(_mock, new object[] { "OK" });
+        public void Dispose() => ((IDisposable)_mock).Dispose();
+    }
+
     private static object Build(AppSettings settings, IManagedAuthorization authorization)
     {
-        var root = typeof(AppSettings).Assembly.GetType("BotAgent.Host.CompositionRoot", throwOnError: true)!;
+        var root = typeof(BotAgent.Services.SettingsBox).Assembly.GetType("BotAgent.Host.CompositionRoot", throwOnError: true)!;
         var build = root.GetMethod("Build", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException("managed_host_build_missing");
         try
@@ -260,7 +400,9 @@ internal static class ManagedHostCapabilityTests
         {
             ct.ThrowIfCancellationRequested();
             return ValueTask.FromResult(ReferenceEquals(request.Caller, _allowed)
-                && request.Target is ManagedObjectKey.Driver);
+                && (request.Target is ManagedObjectKey.Driver
+                    || request.Target is ManagedObjectKey.Provider provider && provider.Key.Value == "primary"
+                    && request.Action is null or ManagedAction.Inspect or ManagedAction.TestConnection));
         }
     }
 }

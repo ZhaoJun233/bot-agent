@@ -14,7 +14,7 @@ namespace BotAgent.Services.Music;
 /// ② 任何一步失败都不影响回消息：拿不到音源就只给歌词，拿不到歌词就只给卡片里的歌名 —— 逐级降级，绝不空转。
 /// ③ 同一首歌反复被分享时走台账缓存，不再重复下载解码。
 /// </summary>
-public sealed partial class MusicService
+public sealed partial class MusicService : IMusicCatalog
 {
     [GeneratedRegex(@"(?:song|songDetail)[\?/]?(?:id=)?(?<id>\d{3,20})", RegexOptions.IgnoreCase)]
     private static partial Regex SongIdFromUrl();

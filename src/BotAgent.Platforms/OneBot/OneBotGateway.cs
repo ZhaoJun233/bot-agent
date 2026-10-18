@@ -21,7 +21,7 @@ public enum GatewayState
 /// 账号登录方案（NapCat / Lagrange / LLOneBot 等协议端）通过此网关接入，
 /// 同时实现统一消息源接口 IQqChatSource。
 /// </summary>
-public sealed class OneBotGateway : IQqChatSource, IQqActions, IDisposable
+public sealed class OneBotGateway : IQqChatSource, IPlatformHistorySource, IQqActions, IDisposable
 {
     /// <summary>
     /// 这条路是私域通道（自建协议端 NapCat / OneBot）。

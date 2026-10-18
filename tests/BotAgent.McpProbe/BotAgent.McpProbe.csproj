@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Wave4 MCP 探针：真实 McpToolSource + 进程内合成 MCP 服务器、Engine 治理、Host 配置装配。
+    纯合成输入；不连公网、不读写数据目录、不接触任何真实会话。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BotAgent.McpProbe</AssemblyName>
+    <RootNamespace>BotAgent.McpProbe</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BotAgent.Core\BotAgent.Core.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Engine\BotAgent.Engine.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Mcp\BotAgent.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Headless\BotAgent.Headless.csproj" />
+  </ItemGroup>
+
+</Project>

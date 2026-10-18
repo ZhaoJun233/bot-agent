@@ -12,6 +12,7 @@ using BotAgent.Domain.Conversation;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Conversations;
+using BotAgent.Services.Evaluation;
 using BotAgent.Services.Music;
 using BotAgent.Services.NapCat;
 using BotAgent.Services.Net;
@@ -117,6 +118,7 @@ public sealed partial class WebUiServer : IDisposable
     private readonly ITenantQuotaLedger _quotas;
     private readonly IJargonRepository _jargons;
     private readonly Domain.Plugins.IPluginRegistry? _plugins;
+    private readonly BackgroundEvaluatorQueue? _background;
     private readonly DateTimeOffset _startedAt = Clock.Now;
     private readonly CancellationTokenSource _cts = new();
 
@@ -168,7 +170,8 @@ public sealed partial class WebUiServer : IDisposable
         Platforms.Feishu.FeishuBotGateway? feishuGateway = null,
          PlatformPolicyResolver? platformPolicies = null,
         IJargonRepository? jargons = null,
-        Domain.Plugins.IPluginRegistry? plugins = null)
+        Domain.Plugins.IPluginRegistry? plugins = null,
+        BackgroundEvaluatorQueue? background = null)
     {
         _port = port;
         _box = box;
@@ -213,6 +216,7 @@ public sealed partial class WebUiServer : IDisposable
         _feishuGateway = feishuGateway;
         _platformPolicies = platformPolicies;
         _plugins = plugins;
+        _background = background;
         // 启动时把密钥库里那份 TTS 密钥重新写给 tts 容器（容器可能刚被重建、
         // 或者上次写文件前我们就重启了）——否则面板里存着 key，语音却发不出去。
         WriteTtsConfToHost();

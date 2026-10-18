@@ -122,6 +122,7 @@ public static partial class Program
             await Scenario("s50", RunFeishuPlatformScenarioAsync);
             await Scenario("s51", RunQuotaPanelScenarioAsync);
             await Scenario("s52", RunPlatformSwitchScenarioAsync);
+            await Scenario("s53", RunMcpServerScenarioAsync);
         // s42（官方通道）**暂未接入回归**：2026-09-21 子代理写的这套端到端场景只跑到 7✓/9✗
         // 而且**会挂死**（假网关推事件的时序 + 等待没上超时）。已确认的结论：官方出站（token→/gateway/bot→
         // identify）与入站事件分发**都是通的**（机器人日志里能看到官方那条的“忽略（不在白名单）: 群 8000…”，
@@ -2060,11 +2061,14 @@ public static partial class Program
             StandardErrorEncoding = Encoding.UTF8
         };
 
-        // 不继承宿主机的 QQCHAT_* 配置，避免污染
+        // 不继承宿主机的 QQCHAT_* / BOTAGENT_MCP_* 配置，避免污染
+        //（MCP 那条必须一起清：别的场景如果继承了 BOTAGENT_MCP_SERVERS，会在启动时尝试连一个不存在的外部服务器）
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
             var key = entry.Key?.ToString();
-            if (key is not null && key.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase))
+            if (key is not null &&
+                (key.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase) ||
+                 key.StartsWith("BOTAGENT_MCP_", StringComparison.OrdinalIgnoreCase)))
             {
                 psi.Environment.Remove(key);
             }
@@ -2195,10 +2199,11 @@ public static partial class Program
 
     // ---------- 断言 ----------
 
-    /// <summary>是否应该跑某个场景（QQCHAT_IT_ONLY=s16 只跑该场景）。</summary>
+    /// <summary>是否应该跑某个场景（BOTAGENT_IT_ONLY=s16，旧名 QQCHAT_IT_ONLY 兼容）。</summary>
     private static bool ShouldRun(string tag)
     {
-        var only = Environment.GetEnvironmentVariable("QQCHAT_IT_ONLY");
+        var only = Environment.GetEnvironmentVariable("BOTAGENT_IT_ONLY")
+            ?? Environment.GetEnvironmentVariable("QQCHAT_IT_ONLY");
         if (string.IsNullOrWhiteSpace(only))
         {
             return true;

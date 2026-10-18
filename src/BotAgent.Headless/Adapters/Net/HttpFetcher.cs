@@ -51,6 +51,13 @@ public sealed class HttpFetcher : IHttpFetcher, IDisposable
 {
     private readonly HttpClient _client;
 
+    /// <summary>
+    /// 给需要复用同一套连接策略的 SDK（当前是 MCP 的 HttpClientTransport）用的底层客户端。
+    /// 所有权仍在本实例：调用方**不得** Dispose；SSRF 连接回调、DNS 固定、是否自动跟随重定向
+    /// 都由这个实例的 handler 决定。
+    /// </summary>
+    public HttpClient SharedClient => _client;
+
     public HttpFetcher(
         TimeSpan timeout,
         Action<string>? log = null,

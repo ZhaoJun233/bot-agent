@@ -46,7 +46,7 @@ public sealed record LinkPreview(string Url, string? Title, string? Description,
 ///  ② 有界：只读前 256KB、单条超时（默认 5 秒）、总量上限也有限，绝不因为一个慢站点拖住机器人；
 ///  ③ 缓存：同一链接只取一次，失败的也记下来（别反复捅同一个坏链接）。
 /// </summary>
-public sealed partial class LinkPreviewer
+public sealed partial class LinkPreviewer : ILinkPreviewer
 {
     private const int ReadCap = 256 * 1024;
 

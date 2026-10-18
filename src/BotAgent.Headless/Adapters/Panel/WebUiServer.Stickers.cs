@@ -12,6 +12,7 @@ using BotAgent.Services.Agent;
 using BotAgent.Services.NapCat;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
+using BotAgent.Services.Plugins;
 using BotAgent.Services.Stickers;
 using BotAgent.Adapters.Persistence;
 
@@ -36,7 +37,7 @@ public sealed partial class WebUiServer
         {
             await WriteJsonAsync(context, 200, new JsonObject
             {
-                ["enabled"] = _settings.EnableStickers,
+                ["enabled"] = StickerOperationsEnabled(),
                 ["max"] = _settings.StickerLibraryMax,
                 ["candidates"] = _settings.StickerCandidates,
                 ["curateIntervalSeconds"] = _settings.StickerCurateIntervalSeconds,
@@ -119,38 +120,118 @@ public sealed partial class WebUiServer
             switch (id.ToLowerInvariant())
             {
                 case "curate":
-                    // 别让面板等模型：先回一句，跑完往面板推日志
-                    _ = Task.Run(async () =>
+                    if (!StickerOperationsEnabled())
                     {
-                        try
+                        await WriteJsonAsync(context, 409, new JsonObject
                         {
-                            FileLog.Write("Sticker", await _stickers.CurateAsync(force: true));
-                        }
-                        catch (Exception ex)
+                            ["ok"] = false,
+                            ["started"] = false,
+                            ["error"] = "表情包功能已停用（插件或功能开关），未执行巡检"
+                        });
+                        return;
+                    }
+
+                    var curateStart = TryStartStickerPanelAction("curate");
+                    if (curateStart.Error is not null)
+                    {
+                        await WriteJsonAsync(context, curateStart.Status, new JsonObject
                         {
-                            FileLog.Warn("Sticker", $"手动巡检失败：{ex.Message}");
-                        }
-                    });
+                            ["ok"] = false,
+                            ["started"] = false,
+                            ["error"] = curateStart.Error
+                        });
+                        return;
+                    }
+
                     await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = true, ["started"] = true });
                     return;
 
                 case "import":
-                    _ = Task.Run(async () =>
+                    if (!StickerOperationsEnabled())
                     {
-                        try
+                        await WriteJsonAsync(context, 409, new JsonObject
                         {
-                            FileLog.Write("Sticker", await _stickers.ImportFromAlbumAsync());
-                        }
-                        catch (Exception ex)
+                            ["ok"] = false,
+                            ["started"] = false,
+                            ["error"] = "表情包功能已停用（插件或功能开关），未执行导入"
+                        });
+                        return;
+                    }
+
+                    var importStart = TryStartStickerPanelAction("import");
+                    if (importStart.Error is not null)
+                    {
+                        await WriteJsonAsync(context, importStart.Status, new JsonObject
                         {
-                            FileLog.Warn("Sticker", $"导入收藏表情失败：{ex.Message}");
-                        }
-                    });
+                            ["ok"] = false,
+                            ["started"] = false,
+                            ["error"] = importStart.Error
+                        });
+                        return;
+                    }
+
                     await WriteJsonAsync(context, 200, new JsonObject { ["ok"] = true, ["started"] = true });
                     return;
             }
         }
 
         await WriteJsonAsync(context, 404, new JsonObject { ["error"] = "not found", ["path"] = path });
+    }
+
+    /// <summary>
+    /// 面板手动入口与定时器共用同一份判定：功能开关 + 库上限 + stickers 插件。
+    /// 插件停用时直接拒绝，不创建任何后台作业。
+    /// </summary>
+    private bool StickerOperationsEnabled()
+    {
+        if (!_settings.EnableStickers || _settings.StickerLibraryMax <= 0)
+        {
+            return false;
+        }
+
+        if (_plugins is not null && !new PluginGate(_plugins).Allows(PluginGate.StickersCapability))
+        {
+            return false;
+        }
+
+        return _stickers.CanOperate;
+    }
+
+    /// <summary>
+    /// 排进与回复链共用的有界后台队列（容量/去重/停机收口都在队列里）。
+    /// 队列未接线时 fail closed：面板手动入口不再有独立的 Task.Run 旁路。
+    /// </summary>
+    private (int Status, string? Error) TryStartStickerPanelAction(string action)
+    {
+        if (_background is null)
+        {
+            return (503, "后台队列未接线，未启动表情包操作");
+        }
+
+        var dedupKey = "panel-sticker-" + action;
+        var jobId = dedupKey + ":" + Guid.NewGuid().ToString("N");
+        return _background.TryEnqueue(jobId, dedupKey, ct => RunStickerPanelActionAsync(action, ct))
+            ? (200, null)
+            : (409, "同一操作已在执行或后台队列已满，未重复启动");
+    }
+
+    private async Task RunStickerPanelActionAsync(string action, CancellationToken ct)
+    {
+        try
+        {
+            var summary = action == "curate"
+                ? await _stickers.CurateAsync(force: true, ct)
+                : await _stickers.ImportFromAlbumAsync(ct: ct);
+            FileLog.Write("Sticker", summary);
+        }
+        catch (OperationCanceledException)
+        {
+            FileLog.Warn("Sticker", "表情包面板操作已取消");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            FileLog.Warn("Sticker", $"表情包面板操作失败：{ex.Message}");
+        }
     }
 }
