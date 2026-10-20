@@ -95,7 +95,9 @@ internal sealed class SourceIndex
         var projectPaths = SourcePaths(src).Where(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => p, StringComparer.Ordinal).ToList();
         var names = projectPaths.Select(p => Path.GetFileNameWithoutExtension(p)).ToHashSet(StringComparer.Ordinal);
-        if (!Baseline.RequiredProjects.All(names.Contains)) throw Fault("required_project_missing");
+        var missingProjects = Baseline.RequiredProjects.Where(name => !names.Contains(name)).ToList();
+        if (missingProjects.Count > 0)
+            throw Fault("required_project_missing:" + string.Join(",", missingProjects));
         if (names.Count != projectPaths.Count) throw Fault("duplicate_project_identity");
         var files = new List<SourceFile>();
         var projects = new List<SourceProject>();

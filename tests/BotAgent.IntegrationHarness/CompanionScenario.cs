@@ -57,6 +57,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var http = CreatePanelHttpClient(panelPort, 30);
         using var protocol = new MockProtocol { SelfId = 10001 };

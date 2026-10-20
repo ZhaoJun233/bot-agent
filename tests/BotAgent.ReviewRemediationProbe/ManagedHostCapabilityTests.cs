@@ -207,7 +207,7 @@ internal static class ManagedHostCapabilityTests
             var inspected = await capabilities.InspectAsync(allowed, provider);
             check(inspected.Code == ManagedResultCode.Ok && inspected.Descriptor is not null,
                 "actual Host catalog exposes the registered primary Provider");
-            return new("cfg-0.3.2", inspected.Descriptor!.DescriptorRevision,
+            return new("cfg-0.3.3", inspected.Descriptor!.DescriptorRevision,
                 new(header.Generation, header.ServerUnixSeconds, Guid.NewGuid()),
                 new ManagedCommand.Provider(provider.Key, ProviderCommand.TestConnection));
         }
@@ -236,7 +236,7 @@ internal static class ManagedHostCapabilityTests
         {
             var header = await Header();
             using var scope = Enter();
-            var saved = await store.SaveAsync(configurationCaller, new("cfg-0.3.2", header.Version,
+            var saved = await store.SaveAsync(configurationCaller, new("cfg-0.3.3", header.Version,
                 new(header.Generation, header.ServerUnixSeconds, Guid.NewGuid()),
                 new(null, null, null, null, null, null, null, null), ImmutableArray.Create(edit)));
             if (saved.Code != ConfigurationResultCode.Ok || saved.Receipt?.CommitState != CommitState.Committed
@@ -258,7 +258,7 @@ internal static class ManagedHostCapabilityTests
         var beforeDelete = await Header();
         using (var scope = Enter())
         {
-            var invalidDelete = await store.SaveAsync(configurationCaller, new("cfg-0.3.2", beforeDelete.Version,
+            var invalidDelete = await store.SaveAsync(configurationCaller, new("cfg-0.3.3", beforeDelete.Version,
                 new(beforeDelete.Generation, beforeDelete.ServerUnixSeconds, Guid.NewGuid()),
                 new(null, null, null, null, null, null, null, null),
                 ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.ModelApiKey))));
@@ -268,7 +268,7 @@ internal static class ManagedHostCapabilityTests
             var disablePrimary = new RegisteredConfigurationChanges(ImmutableArray<PluginEnabledEdit>.Empty,
                 ImmutableArray.Create(new ProviderEdit(provider.Key, new(default, default, default, default,
                     FieldEdit<bool>.Set(false), CredentialBindingEdit.KeepExisting()))), ImmutableArray<PolicyEdit>.Empty);
-            var invalidDisable = await store.SaveAsync(configurationCaller, new("cfg-0.3.2", beforeDelete.Version,
+            var invalidDisable = await store.SaveAsync(configurationCaller, new("cfg-0.3.3", beforeDelete.Version,
                 new(beforeDelete.Generation, beforeDelete.ServerUnixSeconds, Guid.NewGuid()),
                 new(null, null, null, null, null, null, null, disablePrimary),
                 ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.ModelApiKey))));

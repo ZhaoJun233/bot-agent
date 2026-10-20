@@ -25,7 +25,7 @@ namespace BotAgent.Services.Qq;
 /// 事件方向则相反：入站消息会在 <see cref="QqChatMessage.Channel"/> 上打标，
 /// 上层用 <see cref="Channels.Key"/> 拼会话 key —— 会话隔离就是这么落地的。
 /// </summary>
-public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IPlatformSourceOwner, IPlatformSourceRouter, IDisposable
+public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChannelRegistry, IPlatformSourceOwner, IPlatformSourceRouter, IDisposable
 {
     private readonly List<IQqChatSource> _sources;
     private readonly Action<string>? _log;
@@ -381,6 +381,12 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IPlatformSo
 
     public Task<string?> GetGroupNameAsync(long groupId, CancellationToken ct = default)
         => Resolve(true, groupId)?.GetGroupNameAsync(groupId, ct) ?? Task.FromResult<string?>(null);
+
+    /// <summary>群历史补录也按目标号路由；通道不支持该能力时返回空表（上层据此跳过补录）。</summary>
+    public Task<List<QqChatMessage>> GetGroupMsgHistoryAsync(long groupId, int count = 20, CancellationToken ct = default)
+        => Resolve(true, groupId) is IPlatformHistorySource source
+            ? source.GetGroupMsgHistoryAsync(groupId, count, ct)
+            : Task.FromResult(new List<QqChatMessage>());
 
     public Task<GroupMemberInfo?> GetGroupMemberInfoAsync(long groupId, long userId, CancellationToken ct = default)
         => Resolve(true, groupId)?.GetGroupMemberInfoAsync(groupId, userId, ct) ?? Task.FromResult<GroupMemberInfo?>(null);

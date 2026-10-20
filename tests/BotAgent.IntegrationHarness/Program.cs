@@ -103,7 +103,6 @@ public static partial class Program
         await Scenario("s30", RunCompanionScenarioAsync);
         await Scenario("s31", RunImageFetchScenarioAsync);
         await Scenario("s32", RunBurstScenarioAsync);
-        await Scenario("s33", RunAgentBridgeScenarioAsync);
         await Scenario("s34", RunServerAgentScenarioAsync);
         await Scenario("s35", RunHealthReportScenarioAsync);
         await Scenario("s36", RunPrivacySettingsScenarioAsync);
@@ -123,12 +122,9 @@ public static partial class Program
             await Scenario("s51", RunQuotaPanelScenarioAsync);
             await Scenario("s52", RunPlatformSwitchScenarioAsync);
             await Scenario("s53", RunMcpServerScenarioAsync);
-        // s42（官方通道）**暂未接入回归**：2026-09-21 子代理写的这套端到端场景只跑到 7✓/9✗
-        // 而且**会挂死**（假网关推事件的时序 + 等待没上超时）。已确认的结论：官方出站（token→/gateway/bot→
-        // identify）与入站事件分发**都是通的**（机器人日志里能看到官方那条的“忽略（不在白名单）: 群 8000…”，
-        // 假网关也收到了 QQBot 头与 intents=1<<25）——不过那几条断言的状态时序没搭对。
-        // 修好超时与白名单重置后再挂回来；细节见 docs（§4.24 官方通道）。
-        // await Scenario("s42", RunOfficialChannelScenarioAsync);
+            await Scenario("s54", RunZbaHostScenarioAsync);
+            await Scenario("s55", RunZbaEventRestartScenarioAsync);
+        await Scenario("s42", RunOfficialChannelScenarioAsync);
         }
         catch (Exception ex)
         {
@@ -392,8 +388,13 @@ public static partial class Program
         openAi.EnqueueReply("""{"suitability": 90, "reply": "超时那次的无效回复"}""");
         openAi.EnqueueReply("""{"suitability": 90, "reply": "慢也答上了"}""");
         await protocol.SendGroupMessageAsync(99999, 20006, "老王", "@机器人 慢慢想", 7010, mentionBot: true, ct: cts.Token);
-        // 第一次请求一落到假上游并且开始延迟后，再把后续延迟调回 0：模拟“第一次卡住、重试那下很快”（真上游换账号后常见）
-        await WaitUntilAsync(() => openAi.Requests.Count > reqsBeforeSlow, TimeSpan.FromSeconds(30));
+        // 等到**这一条**带“慢慢想”的请求真的进了假上游（MockOpenAi 在请求入口就锁定延迟），
+        // 再把后续延迟调回 0：模拟“第一次卡住、重试那下很快”（真上游换账号后常见）。
+        // 不能只等 Requests 计数：别的后台请求先到也会把计数顶上去，导致这条还没开始就被改成 0。
+        await WaitUntilAsync(
+            () => Enumerable.Range(0, openAi.Requests.Count).Skip(reqsBeforeSlow)
+                .Any(i => openAi.DescribeRequest(i).Contains("慢慢想", StringComparison.Ordinal)),
+            TimeSpan.FromSeconds(30));
         await Task.Delay(200);
         openAi.ResponseDelayMs = 0;
         await WaitUntilAsync(() => protocol.ActionsReceived
@@ -421,7 +422,8 @@ public static partial class Program
         Section("S3 白名单严格模式");
 
         const int openAiPort = 17802;
-        const int botWsPort = 13012;
+        // 固定端口会被本机其它程序的普通绑定/出站连接占掉（本项目踩过多次）→ 用 FreePort 兜底。
+        var botWsPort = FreePort(13012);
         var dataDir = NewDataDir("s3");
 
         using var openAi = new MockOpenAi(openAiPort);
@@ -542,7 +544,7 @@ public static partial class Program
         Section("S4 模型沉默时不发言");
 
         const int openAiPort = 17803;
-        const int botWsPort = 13013;
+        var botWsPort = FreePort(13013);
         var dataDir = NewDataDir("s4");
 
         using var openAi = new MockOpenAi(openAiPort);
@@ -1604,6 +1606,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -1683,6 +1687,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -1776,6 +1782,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001, AccountOnline = true };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -1923,8 +1931,8 @@ public static partial class Program
         var (s401, _) = await HttpGetAsync($"{panel}/api/qqlogin");
         Check("★ 二维码接口同样受面板令牌保护", s401 == 401, $"HTTP {s401}");
         var (bridgeStatus, bridgeBody) = await HttpGetAsync($"{panel}/agent-bridge?token=wrong");
-        Check("桥入口绕过面板口令门，但仍由桥自身拒绝错误令牌",
-            bridgeStatus == 401 && bridgeBody.Contains("bad token"), $"HTTP {bridgeStatus}");
+        Check("桥入口已随 cfg-0.3.3 移除（不再有独立认证例外）",
+            bridgeStatus == 401 && bridgeBody.Contains("unauthorized"), $"HTTP {bridgeStatus} {Truncate(bridgeBody, 120)}");
 
         // ---- 2) 二维码图片 ----
         var (svgStatus, svg) = await HttpGetAsync($"{panel}/api/qqlogin/qrcode.svg?token={panelToken}");

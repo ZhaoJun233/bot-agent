@@ -134,20 +134,11 @@ new("GET", PanelMatch.Exact, "/metrics", (r) => WriteMetricsAsync(r.Context)),
             ? HandleHealthReportAsync(r.Context)
             : WriteJsonAsync(r.Context, 200, BuildHealthReportPayload())),
 
-        // ─────────── 本机 Agent 桥（handoff-4 §31） ───────────
-        // 桥是本机那个进程主动连过来的（本机在 NAT 后面，只能它出站）；这里把 WS 接住。
-        // 注意：**这个端口能让人在管理员电脑上执行命令** —— 所以：没配令牌就直接拒绝。
-        new("*", PanelMatch.Exact, "/agent-bridge", (r) => HandleAgentBridgeAsync(r.Context)),
+        // ─────────── 服务器内置 Agent（cfg-0.3.3；本机桥/下载/握手入口已移除） ───────────
         new("GET", PanelMatch.Exact, "/api/agent/status", (r) => WriteJsonAsync(r.Context, 200, BuildAgentStatusPayload())),
         new("POST", PanelMatch.Exact, "/api/agent/test", (r) => HandleAgentTestAsync(r.Context)),
         new("*", PanelMatch.Exact, "/api/agent/models", (r) => HandleAgentModelsAsync(r.Context, r.Method)),
-        new("GET", PanelMatch.Exact, "/api/agent/setup", (r) => HandleAgentSetupAsync(r.Context)),
-        new("*", PanelMatch.Exact, "/api/agent/disconnect", HandleAgentDisconnectAsync),
         new("*", PanelMatch.Exact, "/api/agent/sessions", (r) => HandleAgentSessionsAsync(r.Context, r.Method)),
-        new("GET", PanelMatch.Exact, "/api/agent/pi-sessions", HandlePiSessionsAsync),
-        new("GET", PanelMatch.Exact, "/agent-bridge-script", (r) => WriteEmbeddedAgentScriptAsync(r.Context, "pi-bridge.py")),
-        // 服务器文件操作脚本（sftp 包装；同样从仓库 tools/ 内嵌）—— 给外部 pi agent 用
-        new("GET", PanelMatch.Exact, "/agent-sftp-script", (r) => WriteEmbeddedAgentScriptAsync(r.Context, "server-files.py")),
 
         // ─────────── 参与状态（工程 V3 · P1，**只读**）───────────
         // 为什么只读：状态机目前**只观测不拦截**，面板不该也不能改它 —— 改的是上面的参数。

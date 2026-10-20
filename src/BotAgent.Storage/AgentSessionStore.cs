@@ -25,7 +25,7 @@ public class AgentSessionStore : IAgentSessionStore
     /// <summary>服务器内置后端：单个会话最多留多少轮对话。</summary>
     private const int MaxTurns = 40;
 
-    /// <summary>每个聊天最多几个执行会话（超出时删最久没动的，当前会话不动）。</summary>
+    /// <summary>每个聊天最多几个活跃服务器执行会话（旧 host 归档不计入，也不自动淘汰）。</summary>
     public const int MaxSessionsPerChat = 12;
 
     /// <summary>单个会话历史最多多少字（超了从头砍）。</summary>
@@ -59,25 +59,28 @@ public class AgentSessionStore : IAgentSessionStore
 
     // ══════════ 查询 ══════════
 
-    /// <summary>某个聊天的全部执行会话（新的在前）。</summary>
+    /// <summary>某个聊天的执行会话（新的在前）；host 历史只保留在存储里，不进入正常执行列表。</summary>
     public List<AgentSession> List(string sourceKey)
     {
         lock (_gate)
         {
             return _chats.TryGetValue(sourceKey, out var chat)
-                ? chat.Sessions.OrderByDescending(s => s.UpdatedAt).ToList()
+                ? chat.Sessions.Where(IsServer).OrderByDescending(s => s.UpdatedAt).ToList()
                 : new List<AgentSession>();
         }
     }
 
+    private static bool IsServer(AgentSession session) => session.Backend == "server";
+
     /// <summary>当前会话（指定后端；没有就建一个默认的）。</summary>
     public AgentSession EnsureCurrent(string sourceKey, string backend)
     {
+        if (backend != "server") throw new InvalidOperationException("host_backend_removed");
         lock (_gate)
         {
             var chat = EnsureChat(sourceKey);
             if (chat.Current.TryGetValue(backend, out var id) &&
-                chat.Sessions.FirstOrDefault(s => s.Id == id) is { } found)
+                chat.Sessions.FirstOrDefault(s => s.Id == id && IsServer(s)) is { } found)
             {
                 return found;
             }
@@ -98,6 +101,7 @@ public class AgentSessionStore : IAgentSessionStore
     /// </summary>
     public AgentSession? FindCurrent(string sourceKey, string preferBackend)
     {
+        if (preferBackend != "server") return null;
         lock (_gate)
         {
             if (!_chats.TryGetValue(sourceKey, out var chat) || chat.Sessions.Count == 0)
@@ -106,12 +110,12 @@ public class AgentSessionStore : IAgentSessionStore
             }
 
             if (chat.Current.TryGetValue(preferBackend, out var id) &&
-                chat.Sessions.FirstOrDefault(s => s.Id == id) is { } preferred)
+                chat.Sessions.FirstOrDefault(s => s.Id == id && IsServer(s)) is { } preferred)
             {
                 return preferred;
             }
 
-            return chat.Sessions.OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
+            return chat.Sessions.Where(IsServer).OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
         }
     }
 
@@ -180,10 +184,11 @@ public class AgentSessionStore : IAgentSessionStore
     public AgentSession Create(string sourceKey, string backend, string? name, string? device = null,
         string? piSessionId = null, bool piOwned = true)
     {
+        if (backend != "server") throw new InvalidOperationException("host_backend_removed");
         lock (_gate)
         {
             var chat = EnsureChat(sourceKey);
-            var storedBackend = backend == "server" ? "server" : "host";
+            var storedBackend = "server";
             var created = CreateLocked(sourceKey, chat, storedBackend, name, device, piSessionId, piOwned);
             chat.Current[storedBackend] = created.Id;
             Save();
@@ -196,8 +201,9 @@ public class AgentSessionStore : IAgentSessionStore
         lock (_gate)
         {
             used = _chats.TryGetValue(sourceKey, out var chat) && chat is not null ? Resolve(chat, idNameOrIndex) : null;
-            if (used is null || chat is null)
+            if (used is null || chat is null || !IsServer(used))
             {
+                used = null;
                 return false;
             }
 
@@ -219,7 +225,7 @@ public class AgentSessionStore : IAgentSessionStore
             }
 
             var found = Resolve(chat, idNameOrIndex);
-            if (found is null)
+            if (found is null || !IsServer(found))
             {
                 return null;
             }
@@ -250,7 +256,7 @@ public class AgentSessionStore : IAgentSessionStore
             }
 
             var session = Resolve(chat, idNameOrIndex);
-            if (session is null)
+            if (session is null || !IsServer(session))
             {
                 return null;
             }
@@ -276,7 +282,7 @@ public class AgentSessionStore : IAgentSessionStore
         {
             var session = Find(sourceKey, idNameOrIndex);
             var name = (newName ?? string.Empty).Trim();
-            if (session is null || name.Length == 0)
+            if (session is null || !IsServer(session) || name.Length == 0)
             {
                 return false;
             }
@@ -294,7 +300,7 @@ public class AgentSessionStore : IAgentSessionStore
     {
         lock (_gate)
         {
-            if (FindSession(sourceKey, sessionId) is not { } session)
+            if (FindSession(sourceKey, sessionId) is not { } session || !IsServer(session))
             {
                 return;
             }
@@ -326,7 +332,7 @@ public class AgentSessionStore : IAgentSessionStore
     {
         lock (_gate)
         {
-            if (FindSession(sourceKey, sessionId) is not { } session)
+            if (FindSession(sourceKey, sessionId) is not { } session || !IsServer(session))
             {
                 return string.Empty;
             }
@@ -336,7 +342,7 @@ public class AgentSessionStore : IAgentSessionStore
                 Id = NewId(),
                 Prompt = Shorten(prompt, 80),
                 Device = device ?? session.Device,
-                PiSession = session.Backend == "server" ? null : session.PiSessionId
+                PiSession = null
             };
             session.Runs.Insert(0, run);
             while (session.Runs.Count > MaxRunsPerSession)
@@ -356,7 +362,10 @@ public class AgentSessionStore : IAgentSessionStore
     {
         lock (_gate)
         {
-            var run = FindSession(sourceKey, sessionId)?.Runs.FirstOrDefault(r => r.Id == runId);
+            var session = FindSession(sourceKey, sessionId);
+            var run = session is { } owned && IsServer(owned)
+                ? owned.Runs.FirstOrDefault(r => r.Id == runId)
+                : null;
             if (run is null)
             {
                 return;
@@ -474,9 +483,9 @@ public class AgentSessionStore : IAgentSessionStore
         lock (_gate)
         {
             return _chats
-                .Where(kv => kv.Value.Sessions.Count > 0)
-                .Select(kv => (kv.Key, kv.Value.Sessions.OrderByDescending(s => s.UpdatedAt).ToList()))
-                .OrderByDescending(x => x.Item2.FirstOrDefault()?.UpdatedAt ?? DateTimeOffset.MinValue)
+                .Select(kv => (kv.Key, Sessions: kv.Value.Sessions.Where(IsServer).OrderByDescending(s => s.UpdatedAt).ToList()))
+                .Where(kv => kv.Sessions.Count > 0)
+                .OrderByDescending(x => x.Sessions[0].UpdatedAt)
                 .ToList();
         }
     }
@@ -560,11 +569,15 @@ public class AgentSessionStore : IAgentSessionStore
     private AgentSession CreateLocked(string sourceKey, ChatSessions chat, string backend, string? name, string? device,
         string? piSessionId = null, bool piOwned = true)
     {
-        // 超出上限：删最久没动的（当前会话不动）
-        if (chat.Sessions.Count >= MaxSessionsPerChat)
+        if (backend != "server") throw new InvalidOperationException("host_backend_removed");
+
+        // 旧 host 会话是只读归档，不能计入 server 配额，也不能被自动淘汰。
+        // 上限只约束活跃 server 会话；归档即使超过 12 条也原样保留。
+        var serverSessions = chat.Sessions.Where(IsServer).ToList();
+        if (serverSessions.Count >= MaxSessionsPerChat)
         {
             var keep = chat.Current.Values.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var victim = chat.Sessions.Where(s => !keep.Contains(s.Id)).OrderBy(s => s.UpdatedAt).FirstOrDefault();
+            var victim = serverSessions.Where(s => !keep.Contains(s.Id)).OrderBy(s => s.UpdatedAt).FirstOrDefault();
             if (victim is not null)
             {
                 chat.Sessions.Remove(victim);
@@ -575,7 +588,7 @@ public class AgentSessionStore : IAgentSessionStore
         var session = new AgentSession
         {
             Id = id,
-            Name = name is { Length: > 0 } n ? (n.Length > 24 ? n[..24] : n) : $"会话{chat.Sessions.Count + 1}",
+            Name = name is { Length: > 0 } n ? (n.Length > 24 ? n[..24] : n) : $"会话{chat.Sessions.Count(IsServer) + 1}",
             AutoNamed = name is not { Length: > 0 },
             Backend = backend == "server" ? "server" : "host",
             Device = device,

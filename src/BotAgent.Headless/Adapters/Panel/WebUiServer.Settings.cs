@@ -23,16 +23,15 @@ namespace BotAgent.Adapters.Panel;
 
 public sealed partial class WebUiServer
 {
-    /// <summary>Only the 140 scalar inputs; composite device/policy plans are assembled separately.</summary>
+    /// <summary>Only the 133 scalar inputs; composite policy plans are assembled separately.</summary>
     private static ConfigurationPatch ParseLegacyScalarFields(JsonObject body)
-        => ParseLegacyFields(body, default, default);
+        => ParseLegacyFields(body, default);
 
     private static ConfigurationPatch ParseLegacyFields(JsonObject body,
-        FieldEdit<ImmutableArray<DeviceConfiguration>> devices,
         FieldEdit<ImmutableArray<PlatformPolicyEntry>> policies)
     {
         ArgumentNullException.ThrowIfNull(body);
-        return new(ParseLegacyBehaviorFields(body), ParseLegacyModelFields(body), ParseLegacyAgentFieldsWithDevices(body, devices),
+        return new(ParseLegacyBehaviorFields(body), ParseLegacyModelFields(body), ParseLegacyAgentFields(body),
             ParseLegacyPlatformFieldsWithPolicies(body, policies), ParseLegacyVoiceFields(body), ParseLegacyMusicFields(body),
             ParseLegacyReportingFields(body), null);
     }
@@ -117,16 +116,11 @@ public sealed partial class WebUiServer
         };
 
     private static AgentChanges ParseLegacyAgentFields(JsonObject body)
-        => ParseLegacyAgentFieldsWithDevices(body, default);
-
-    private static AgentChanges ParseLegacyAgentFieldsWithDevices(JsonObject body,
-        FieldEdit<ImmutableArray<DeviceConfiguration>> devices)
-        => new()
+    {
+        RejectRemovedAgentFields(body);
+        return new()
         {
-            AgentDevices = devices,
             AgentAllowedUsers = LegacyField(body, "agentAllowedUsers", node => node.GetValue<string>() ?? string.Empty),
-            AgentMaxQueued = LegacyField(body, "agentMaxQueued", node => Math.Clamp(node.GetValue<int>(), 1, 20)),
-            AgentModel = LegacyField(body, "agentModel", node => (node.GetValue<string>() ?? string.Empty).Trim()),
             AgentPrefix = LegacyField(body, "agentPrefix", node => (node.GetValue<string>() ?? "//").Trim()),
             AgentProgressSeconds = LegacyField(body, "agentProgressSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 3600)),
             AgentPrompt = LegacyField(body, "agentPrompt", node => LegacyTruncate((node.ToString() ?? string.Empty).Trim(), 8000)),
@@ -143,17 +137,26 @@ public sealed partial class WebUiServer
             AgentServerTools = LegacyField(body, "agentServerTools", node => (node.GetValue<string>() ?? string.Empty).Trim()),
             AgentServerUseGate = LegacyField(body, "agentServerUseGate", node => node.GetValue<bool>()),
             AgentServerWorkDir = LegacyField(body, "agentServerWorkDir", node => (node.GetValue<string>() ?? "/data").Trim()),
-            AgentTarget = LegacyField(body, "agentTarget", node => (node.GetValue<string>() ?? "auto").Trim()),
-            AgentTimeoutSeconds = LegacyField(body, "agentTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 30, 7200)),
-            AgentTools = LegacyField(body, "agentTools", node => (node.GetValue<string>() ?? string.Empty).Trim()),
-            AgentWorkDir = LegacyField(body, "agentWorkDir", node => (node.GetValue<string>() ?? string.Empty).Trim()),
             EnableAgentBridge = LegacyField(body, "enableAgentBridge", node => node.GetValue<bool>()),
             EnableAgentMask = LegacyField(body, "enableAgentMask", node => node.GetValue<bool>()),
-            EnableHostAgent = LegacyField(body, "enableHostAgent", node => node.GetValue<bool>()),
             EnableServerAgent = LegacyField(body, "enableServerAgent", node => node.GetValue<bool>()),
             PanelDeployEnabled = LegacyField(body, "panelDeployEnabled", node => node.GetValue<bool>()),
             PanelDeployUrl = LegacyField(body, "panelDeployUrl", node => (node.GetValue<string>() ?? string.Empty).Trim()),
         };
+    }
+
+    /// <summary>cfg-0.3.3 removed the host/device editor; any legacy key rejects the whole batch.</summary>
+    private static void RejectRemovedAgentFields(JsonObject body)
+    {
+        foreach (var key in new[]
+                 {
+                     "agentDevices", "agentTarget", "agentTimeoutSeconds", "agentTools", "agentWorkDir",
+                     "agentMaxQueued", "agentModel", "enableHostAgent"
+                 })
+        {
+            if (body.ContainsKey(key)) throw new ArgumentException("host_backend_removed");
+        }
+    }
 
     private static PlatformChanges ParseLegacyPlatformFields(JsonObject body)
         => ParseLegacyPlatformFieldsWithPolicies(body, default);
@@ -224,15 +227,6 @@ public sealed partial class WebUiServer
 
     private static FieldEdit<T> LegacyField<T>(JsonObject body, string key, Func<JsonNode, T> parse)
         => body[key] is { } node ? FieldEdit<T>.Set(parse(node)) : FieldEdit<T>.Keep();
-
-    /// <summary>The legacy UI posts exactly six fields; schema identities are never client credentials.</summary>
-    private static FieldEdit<ImmutableArray<DeviceConfiguration>> ParseLegacyDeviceFields(JsonObject body)
-    {
-        ArgumentNullException.ThrowIfNull(body);
-        return body["agentDevices"] is { } node
-            ? FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(SettingsStore.ParseLegacyDevices(node.GetValue<string>(), false))
-            : FieldEdit<ImmutableArray<DeviceConfiguration>>.Keep();
-    }
 
     private static string LegacyTruncate(string value, int maximum)
         => value.Length > maximum ? value[..maximum] : value;
@@ -392,12 +386,6 @@ public sealed partial class WebUiServer
             return RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "official_secret_environment_only");
         try
         {
-            FieldEdit<ImmutableArray<DeviceConfiguration>> devices;
-            try { devices = ParseLegacyDeviceFields(body); }
-            catch (InvalidOperationException)
-            {
-                return RejectedLegacySecrets(ConfigurationResultCode.LegacyNeedsReview, "legacy_device_needs_review");
-            }
             var policies = FieldEdit<ImmutableArray<PlatformPolicyEntry>>.Keep();
             var scalarBody = body;
             if (body["platformPolicies"] is { } policyNode)
@@ -440,7 +428,7 @@ public sealed partial class WebUiServer
                             !string.IsNullOrWhiteSpace(policy.GroupWhitelist) ? policy.GroupWhitelist : policy.PrivateWhitelist ?? string.Empty;
                 }
             }
-            var changes = ParseLegacyFields(scalarBody, devices, policies);
+            var changes = ParseLegacyFields(scalarBody, policies);
             var plan = ParseLegacySecrets(body);
             if (plan.Code == ConfigurationResultCode.Ok) plan.AttachChanges(changes);
             return plan;
@@ -960,22 +948,13 @@ public sealed partial class WebUiServer
         ["enableAgentBridge"] = s.EnableAgentBridge,
         ["agentPrefix"] = s.AgentPrefix,
         ["agentAllowedUsers"] = s.AgentAllowedUsers,
-        ["agentWorkDir"] = s.AgentWorkDir,
-        ["agentModel"] = s.AgentModel,
-        ["agentTools"] = s.AgentTools,
-        ["agentTimeoutSeconds"] = s.AgentTimeoutSeconds,
         ["agentReplyMaxChars"] = s.AgentReplyMaxChars,
         ["agentProgressSeconds"] = s.AgentProgressSeconds,
-        ["agentMaxQueued"] = s.AgentMaxQueued,
-        ["agentTarget"] = s.AgentTarget,
         ["enableServerAgent"] = s.EnableServerAgent,
-        ["enableHostAgent"] = s.EnableHostAgent,
-        ["hostAgent"] = s.EnableHostAgent,
         ["agentServerTools"] = s.AgentServerTools,
         ["agentServerQqActions"] = s.AgentServerQqActions,
         ["agentServerQqActionsEffective"] = QqActionCatalog.Summarize(QqActionCatalog.ParseAllowed(s.AgentServerQqActions)),
         ["agentServerModel"] = s.AgentServerModel,
-        ["agentModel"] = s.AgentModel,
         ["agentReasoningEffort"] = s.AgentReasoningEffort,
         ["agentReasoningLevels"] = s.AgentReasoningLevels,
         ["agentServerBaseUrl"] = s.AgentServerBaseUrl,
@@ -985,7 +964,6 @@ public sealed partial class WebUiServer
         ["agentServerKeySource"] = !string.IsNullOrWhiteSpace(s.AgentServerApiKeyOverride)
             ? "panel"
             : (string.IsNullOrWhiteSpace(s.AgentServerApiKey) ? "none" : "env"),
-        ["agentDevices"] = s.AgentDevices,
         ["scenarioPreset"] = s.ScenarioPreset,
         ["scenarioPresets"] = new JsonArray(Domain.Permissions.ScenarioPresets.All
             .Select(name => (JsonNode)name!).ToArray()),

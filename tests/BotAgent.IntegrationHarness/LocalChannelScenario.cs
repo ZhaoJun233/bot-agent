@@ -97,12 +97,15 @@ public static partial class Program
         // ── ② 名单外的本地 id：一封都不回（fail-closed）──
         openAi.ClearRequests();
         openAi.EnqueueReply("{\"suitability\": 99, \"reply\": \"这条不该被发出去\"}");
-        var before = protocol.ActionsReceived.Count;
+        // 只数“真的发出去的消息”：账号在线探测等后台动作会在这段时间里发生，不能算成“回了”。
+        static int SendCount(MockProtocol p) => p.ActionsReceived.Count(a =>
+            a["action"]?.GetValue<string>() is "send_group_msg" or "send_private_msg");
+        var before = SendCount(protocol);
         var (outsiderCode, _) = await LocalPostAsync(unknownLocalId, "我是名单外的人");
         await Task.Delay(2500);
         Check("★ 名单外的本地 id 被白名单拦下（一封都不回，也不进模型）",
-            outsiderCode == 202 && openAi.Requests.Count == 0 && protocol.ActionsReceived.Count == before,
-            $"HTTP {outsiderCode} 模型请求 {openAi.Requests.Count} 次 / 协议端动作 {protocol.ActionsReceived.Count - before} 个");
+            outsiderCode == 202 && openAi.Requests.Count == 0 && SendCount(protocol) == before,
+            $"HTTP {outsiderCode} 模型请求 {openAi.Requests.Count} 次 / 发出去的消息 {SendCount(protocol) - before} 条");
 
         // ── ③ 名单内的本地 id：走完整条链（模型 → 回复 → 出箱）──
         openAi.ClearRequests();

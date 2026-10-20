@@ -236,6 +236,11 @@ public sealed partial class ReplyPipeline
             if (!_deferredTriggers.TryRemove(deferredKey, out var deferred)) continue;
             if (_source is IPlatformSourceRouter && (deferred.Source is null || !deferred.Source.IsCurrent)) continue;
             using var deferredScope = PlatformSourceExecution.Enter(deferred.Source);
+            if (deferred.TriggerId > 0)
+            {
+                _hooks.Log($"补一次评估：拿被挡下的触发 #{deferred.TriggerId} 再问一次"
+                    + (deferred.Direct ? "（窗口里有 @ 机器人 / 引用它的话）" : string.Empty));
+            }
             RequestReply(conversation, deferred.TriggerId > 0 ? deferred.TriggerId : null,
                 catchUp: true, directInWindow: deferred.Direct);
         }

@@ -192,8 +192,6 @@ public sealed class SettingsStore : ISettingsRepository
         if (patch.Agent is { } agent)
         {
             ApplyScalar(agent.AgentAllowedUsers, value => next.AgentAllowedUsers = value);
-            ApplyScalar(agent.AgentMaxQueued, value => next.AgentMaxQueued = value);
-            ApplyScalar(agent.AgentModel, value => next.AgentModel = value);
             ApplyScalar(agent.AgentPrefix, value => next.AgentPrefix = value);
             ApplyScalar(agent.AgentProgressSeconds, value => next.AgentProgressSeconds = value);
             ApplyScalar(agent.AgentPrompt, value => next.AgentPrompt = value);
@@ -210,13 +208,8 @@ public sealed class SettingsStore : ISettingsRepository
             ApplyScalar(agent.AgentServerTools, value => next.AgentServerTools = value);
             ApplyScalar(agent.AgentServerUseGate, value => next.AgentServerUseGate = value);
             ApplyScalar(agent.AgentServerWorkDir, value => next.AgentServerWorkDir = value);
-            ApplyScalar(agent.AgentTarget, value => next.AgentTarget = value);
-            ApplyScalar(agent.AgentTimeoutSeconds, value => next.AgentTimeoutSeconds = value);
-            ApplyScalar(agent.AgentTools, value => next.AgentTools = value);
-            ApplyScalar(agent.AgentWorkDir, value => next.AgentWorkDir = value);
             ApplyScalar(agent.EnableAgentBridge, value => next.EnableAgentBridge = value);
             ApplyScalar(agent.EnableAgentMask, value => next.AgentMaskSensitive = value);
-            ApplyScalar(agent.EnableHostAgent, value => next.EnableHostAgent = value);
             ApplyScalar(agent.EnableServerAgent, value => next.EnableServerAgent = value);
             ApplyScalar(agent.PanelDeployEnabled, value => next.PanelDeployEnabled = value);
             ApplyScalar(agent.PanelDeployUrl, value => next.PanelDeployUrl = value);
@@ -374,13 +367,12 @@ public sealed class SettingsStore : ISettingsRepository
         AppSettings user, AppSettings effective, ConfigurationReadKind kind, ApplyState latestApply,
         IReadOnlySet<string> legacyProperties, Func<ConfigurationFieldId, ConfigurationValueSource> actualSource,
         Func<ConfigurationFieldId, FieldEffect> effect,
-        ImmutableArray<DeviceConfigurationView> requestedDevices, ImmutableArray<DeviceConfigurationView> effectiveDevices,
         ImmutableArray<PlatformPolicyEntryView> requestedPolicies, ImmutableArray<PlatformPolicyEntryView> effectivePolicies,
         RegisteredConfigurationView registered)
     {
         var fields = new ConfigurationReadFields(connection, kind, latestApply, legacyProperties, actualSource, effect);
         return new ConfigurationView(ProjectBehaviorView(user, effective, fields), ProjectModelView(user, effective, fields),
-            ProjectAgentView(user, effective, fields, requestedDevices, effectiveDevices),
+            ProjectAgentView(user, effective, fields),
             ProjectPlatformView(user, effective, fields, requestedPolicies, effectivePolicies),
             ProjectVoiceView(user, effective, fields), ProjectMusicView(user, effective, fields),
             ProjectReportingView(user, effective, fields), registered);
@@ -417,7 +409,6 @@ public sealed class SettingsStore : ISettingsRepository
             ImmutableArray<ProviderConfigurationView>.Empty);
         var view = ProjectConfigurationView(connection, user, user, ConfigurationReadKind.Editable, ApplyState.NotStarted,
             properties, _ => ConfigurationValueSource.Unclassified, BotConfig.ConfigurationEffect,
-            ImmutableArray<DeviceConfigurationView>.Empty, ImmutableArray<DeviceConfigurationView>.Empty,
             ImmutableArray<PlatformPolicyEntryView>.Empty, ImmutableArray<PlatformPolicyEntryView>.Empty, emptyRegistered);
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         var facts = JsonSerializer.SerializeToNode(view, options)!.AsObject();
@@ -452,7 +443,6 @@ public sealed class SettingsStore : ISettingsRepository
             }
         }
         var next = ApplyScalarConfigurationFields(previous, patch.Deserialize<ConfigurationPatch>(options)!);
-        if (changes.Agent?.AgentDevices.Kind is EditKind.Set or EditKind.Clear) next.AgentDevices = user.AgentDevices;
         ProjectPlatformPoliciesInTransaction(connection, next);
         var sources = next.RuntimePlatformPolicyBaselineSources.ToBuilder();
         foreach (var pair in previous.RuntimePlatformPolicyBaselineSources)
@@ -499,7 +489,7 @@ public sealed class SettingsStore : ISettingsRepository
                 _ => "[configured]",
             });
             var rule = new FieldDescriptor(id, _effect(id), typeof(T) == typeof(string)
-                || id is ConfigurationFieldId.AgentDevices or ConfigurationFieldId.PlatformPolicies,
+                || id is ConfigurationFieldId.PlatformPolicies,
                 _kind == ConfigurationReadKind.Editable, present && !state.Tracked);
             return ConfigurationBridge.ProjectField(visibility, display, rule, state.UserMode,
                 source, _latestApply, editable);
@@ -585,15 +575,10 @@ public sealed class SettingsStore : ISettingsRepository
             ThinkingCustomBudget = fields.Field(ConfigurationFieldId.ThinkingCustomBudget, user.ThinkingCustomBudget, effective.ThinkingCustomBudget, nameof(AppSettings.ThinkingCustomBudget)),
         };
 
-    private static AgentView ProjectAgentView(AppSettings user, AppSettings effective, ConfigurationReadFields fields
-        , ImmutableArray<DeviceConfigurationView> requestedDevices, ImmutableArray<DeviceConfigurationView> effectiveDevices)
+    private static AgentView ProjectAgentView(AppSettings user, AppSettings effective, ConfigurationReadFields fields)
         => new()
         {
             AgentAllowedUsers = fields.Field(ConfigurationFieldId.AgentAllowedUsers, user.AgentAllowedUsers, effective.AgentAllowedUsers, nameof(AppSettings.AgentAllowedUsers)),
-            AgentDevices = fields.Field(ConfigurationFieldId.AgentDevices, requestedDevices, effectiveDevices,
-                nameof(AppSettings.AgentDevices), effectiveDevices.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + " items"),
-            AgentMaxQueued = fields.Field(ConfigurationFieldId.AgentMaxQueued, user.AgentMaxQueued, effective.AgentMaxQueued, nameof(AppSettings.AgentMaxQueued)),
-            AgentModel = fields.Field(ConfigurationFieldId.AgentModel, user.AgentModel, effective.AgentModel, nameof(AppSettings.AgentModel)),
             AgentPrefix = fields.Field(ConfigurationFieldId.AgentPrefix, user.AgentPrefix, effective.AgentPrefix, nameof(AppSettings.AgentPrefix)),
             AgentProgressSeconds = fields.Field(ConfigurationFieldId.AgentProgressSeconds, user.AgentProgressSeconds, effective.AgentProgressSeconds, nameof(AppSettings.AgentProgressSeconds)),
             AgentPrompt = fields.Field(ConfigurationFieldId.AgentPrompt, user.AgentPrompt, effective.AgentPrompt, nameof(AppSettings.AgentPrompt)),
@@ -610,13 +595,8 @@ public sealed class SettingsStore : ISettingsRepository
             AgentServerTools = fields.Field(ConfigurationFieldId.AgentServerTools, user.AgentServerTools, effective.AgentServerTools, nameof(AppSettings.AgentServerTools)),
             AgentServerUseGate = fields.Field(ConfigurationFieldId.AgentServerUseGate, user.AgentServerUseGate, effective.AgentServerUseGate, nameof(AppSettings.AgentServerUseGate)),
             AgentServerWorkDir = fields.Field(ConfigurationFieldId.AgentServerWorkDir, user.AgentServerWorkDir, effective.AgentServerWorkDir, nameof(AppSettings.AgentServerWorkDir)),
-            AgentTarget = fields.Field(ConfigurationFieldId.AgentTarget, user.AgentTarget, effective.AgentTarget, nameof(AppSettings.AgentTarget)),
-            AgentTimeoutSeconds = fields.Field(ConfigurationFieldId.AgentTimeoutSeconds, user.AgentTimeoutSeconds, effective.AgentTimeoutSeconds, nameof(AppSettings.AgentTimeoutSeconds)),
-            AgentTools = fields.Field(ConfigurationFieldId.AgentTools, user.AgentTools, effective.AgentTools, nameof(AppSettings.AgentTools)),
-            AgentWorkDir = fields.Field(ConfigurationFieldId.AgentWorkDir, user.AgentWorkDir, effective.AgentWorkDir, nameof(AppSettings.AgentWorkDir)),
             EnableAgentBridge = fields.Field(ConfigurationFieldId.EnableAgentBridge, user.EnableAgentBridge, effective.EnableAgentBridge, nameof(AppSettings.EnableAgentBridge)),
             EnableAgentMask = fields.Field(ConfigurationFieldId.EnableAgentMask, user.AgentMaskSensitive, effective.AgentMaskSensitive, nameof(AppSettings.AgentMaskSensitive)),
-            EnableHostAgent = fields.Field(ConfigurationFieldId.EnableHostAgent, user.EnableHostAgent, effective.EnableHostAgent, nameof(AppSettings.EnableHostAgent)),
             EnableServerAgent = fields.Field(ConfigurationFieldId.EnableServerAgent, user.EnableServerAgent, effective.EnableServerAgent, nameof(AppSettings.EnableServerAgent)),
             PanelDeployEnabled = fields.Field(ConfigurationFieldId.PanelDeployEnabled, user.PanelDeployEnabled, effective.PanelDeployEnabled, nameof(AppSettings.PanelDeployEnabled)),
             PanelDeployUrl = fields.Field(ConfigurationFieldId.PanelDeployUrl, user.PanelDeployUrl, effective.PanelDeployUrl, nameof(AppSettings.PanelDeployUrl)),
@@ -693,7 +673,8 @@ public sealed class SettingsStore : ISettingsRepository
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(receipt);
-        if (receipt.ContractRevision != "cfg-0.3.2" || !Enum.IsDefined(receipt.Decision)
+        if (receipt.ContractRevision is not (ConfigurationContract.Revision or ConfigurationContract.LegacyRevision)
+            || !Enum.IsDefined(receipt.Decision)
             || !Enum.IsDefined(receipt.CommitState) || !Enum.IsDefined(receipt.ApplyState)
             || fields.IsDefault || fields.Any(field => !Enum.IsDefined(field)))
             throw new ArgumentException("invalid_configuration_audit_fields");
@@ -1010,17 +991,7 @@ public sealed class SettingsStore : ISettingsRepository
                     imported.Entries.ToImmutableDictionary(entry => entry.Target, _ => 0));
                 fields.Add(ConfigurationFieldId.PlatformPolicies);
             }
-            var states = ConfigurationBridge.LoadDevices(connection);
-            var desired = BindStoredDevices(ParseLegacyDevices(stored.User.AgentDevices, true), states);
-            var profile = states.Length == 0 ? StorageConfiguration.ConfigurationStorageProfile.Legacy
-                : StorageConfiguration.ConfigurationStorageProfile.Strict;
-            var plan = ConfigurationBridge.PrepareDevices(connection, desired, profile);
-            if (plan.Code != ConfigurationResultCode.Ok) throw new InvalidOperationException("legacy_device_needs_review");
-            if (plan.Changed)
-            {
-                plan.Persist(connection);
-                fields.Add(ConfigurationFieldId.AgentDevices);
-            }
+            // Legacy device rows remain in storage untouched; cfg-0.3.3 never reconciles or exposes them.
             _initializationFields = fields.ToImmutable();
             return fields.Count != 0;
         }
@@ -1075,13 +1046,8 @@ public sealed class SettingsStore : ISettingsRepository
                 + ";observed=" + before.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + ";committed=" + after.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
             new AuditLogStore().AppendInTransaction(connection, new BotAgent.Services.Ops.AuditEvent(
-                "configuration_initialization", "configuration-writer", "bot", detail, "cfg-0.3.2"));
+                "configuration_initialization", "configuration-writer", "bot", detail, ConfigurationContract.Revision));
         }
-
-        internal override void AppendDeviceRuntimeAudit(Microsoft.Data.Sqlite.SqliteConnection connection, DeviceKey key)
-            => new AuditLogStore().AppendInTransaction(connection, new BotAgent.Services.Ops.AuditEvent(
-                "configuration_device_runtime", "configuration-writer", "bot",
-                "key=" + key.Value.ToString("N") + ";rename=confirmed", "cfg-0.3.2"));
 
         internal override ImmutableArray<SecretMetadata> SecretSources(Microsoft.Data.Sqlite.SqliteConnection connection,
             ImmutableArray<StorageConfiguration.SecretMutation> proposed) => _secretSources(connection, proposed);
@@ -1158,19 +1124,8 @@ public sealed class SettingsStore : ISettingsRepository
             var policyPlan = PreparePlatformPolicies(connection, stored.User, candidate, ownedIntent, profile);
             if (policyPlan.Code != ConfigurationResultCode.Ok)
                 return new(false, policyPlan.Errors, ImmutableArray<DeviceKeyAssignment>.Empty, _ => { }, policyPlan.Code);
-            StorageConfiguration.PreparedDeviceChange? devicePlan = null;
-            if (ownedIntent.Agent is { } agent && agent.AgentDevices.Kind != EditKind.Keep)
-            {
-                var desired = agent.AgentDevices.TryGetValue(out var devices) ? devices : ImmutableArray<DeviceConfiguration>.Empty;
-                var states = ConfigurationBridge.LoadDevices(connection);
-                devicePlan = ConfigurationBridge.PrepareDevices(connection, desired, profile);
-                if (devicePlan.Code != ConfigurationResultCode.Ok)
-                    return new(false, devicePlan.Errors, ImmutableArray<DeviceKeyAssignment>.Empty, _ => { }, devicePlan.Code);
-                candidate.AgentDevices = SerializeDesiredDevices(stored.User.AgentDevices, devicePlan.DesiredWithKeys, states, profile);
-            }
             var nextJson = MergeUserFacts(stored.Original, candidate);
             var changed = MergeUserFacts(stored.Original, stored.User) != nextJson;
-            if (devicePlan?.Changed == true) changed = true;
             if (policyPlan.Changed) changed = true;
             var metadata = PrimaryProjection(primary, candidate, ownedIntent, credentialMutation.Kind, credential);
             ImmutableArray<ModelProviderDefinition> metadataWrites;
@@ -1200,9 +1155,8 @@ public sealed class SettingsStore : ISettingsRepository
                     ImmutableArray<DeviceKeyAssignment>.Empty, _ => { }, ConfigurationResultCode.LegacyNeedsReview);
             }
             if (metadataWrites.Length != 0 || modesChanged || pluginsChanged) changed = true;
-            return new(changed, ImmutableArray<FieldError>.Empty, devicePlan?.Assignments ?? ImmutableArray<DeviceKeyAssignment>.Empty, conn =>
+            return new(changed, ImmutableArray<FieldError>.Empty, ImmutableArray<DeviceKeyAssignment>.Empty, conn =>
             {
-                devicePlan?.Persist(conn);
                 if (pluginsChanged) StorageConfiguration.PluginStore.SavePluginStatesInTransaction(conn, pluginStates);
                 AppDatabase.Exec(conn, WriteSettingsSql, ("$json", nextJson), ("$now", Clock.Now.ToUnixTimeSeconds()));
                 foreach (var provider in metadataWrites) ModelProviderStore.UpsertMetadataInTransaction(conn, provider);
@@ -1404,95 +1358,6 @@ public sealed class SettingsStore : ISettingsRepository
         private static FieldError Error(ConfigurationFieldId id, string code, ConfigurationObjectAddress? target = null)
             => new(new(id, target), code);
 
-        private static ImmutableArray<DeviceConfiguration> BindStoredDevices(ImmutableArray<DeviceConfiguration> desired,
-            ImmutableArray<StorageConfiguration.ConfigurationDeviceState> states)
-        {
-            var result = ImmutableArray.CreateBuilder<DeviceConfiguration>(desired.Length);
-            foreach (var item in desired)
-            {
-                var matches = states.Where(state => string.Equals(state.DesiredName, item.NameRaw, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(state.ActiveName, item.NameRaw, StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (matches.Length > 1 || matches.Any(state => state.Deleted)
-                    || (item.Key is { } key && (matches.Length != 1 || matches[0].Key != key)))
-                    throw new InvalidOperationException("legacy_device_needs_review");
-                result.Add(matches.Length == 1 ? item with { Key = matches[0].Key } : item);
-            }
-            return result.MoveToImmutable();
-        }
-
-        private static string SerializeDesiredDevices(string originalJson, ImmutableArray<DeviceConfiguration> desired,
-            ImmutableArray<StorageConfiguration.ConfigurationDeviceState> states, StorageConfiguration.ConfigurationStorageProfile profile)
-        {
-            var original = string.IsNullOrWhiteSpace(originalJson) ? new JsonArray() : JsonNode.Parse(originalJson) as JsonArray
-                ?? throw new InvalidOperationException("legacy_device_needs_review");
-            var result = new JsonArray();
-            foreach (var item in desired)
-            {
-                var previous = states.FirstOrDefault(state => state.Key == item.Key);
-                var old = original.OfType<JsonObject>().SingleOrDefault(prior =>
-                {
-                    var name = prior["name"]?.GetValue<string>()?.Trim();
-                    return string.Equals(name, previous?.DesiredName ?? item.NameRaw, StringComparison.OrdinalIgnoreCase);
-                });
-                var node = old?.DeepClone().AsObject() ?? new JsonObject();
-                node["name"] = item.NameRaw; node["enable"] = item.Enable;
-                node["model"] = item.Model; node["workdir"] = item.WorkDir; node["tools"] = item.Tools;
-                var keepTimeout = profile == StorageConfiguration.ConfigurationStorageProfile.Legacy && old is not null
-                    && ParseLegacyDevices(new JsonArray(old.DeepClone()).ToJsonString(), true)[0].TimeoutSeconds == item.TimeoutSeconds;
-                if (!keepTimeout) node["timeoutSec"] = item.TimeoutSeconds;
-                result.Add(node);
-            }
-            return JsonNode.DeepEquals(original, result) ? originalJson : result.ToJsonString(UserJsonOptions);
-        }
-
-        private static ImmutableArray<DeviceConfigurationView> DeviceViews(ImmutableArray<DeviceConfiguration> desired,
-            ImmutableArray<StorageConfiguration.ConfigurationDeviceState> states, AppSettings runtime,
-            ConfigurationReadKind kind, ApplyState apply, bool requested)
-        {
-            var result = ImmutableArray.CreateBuilder<DeviceConfigurationView>();
-            foreach (var item in desired)
-            {
-                var state = states.Single(candidate => candidate.Key == item.Key);
-                var current = runtime.DeviceConfigFor(state.ActiveName);
-                var model = !string.IsNullOrWhiteSpace(current?.Model) ? current.Model : runtime.AgentModel;
-                var workdir = !string.IsNullOrWhiteSpace(current?.WorkDir) ? current.WorkDir : runtime.AgentWorkDir;
-                var tools = !string.IsNullOrWhiteSpace(current?.Tools) ? current.Tools : runtime.AgentTools;
-                var timeout = Math.Clamp(current is { TimeoutSeconds: > 0 } ? current.TimeoutSeconds : runtime.AgentTimeoutSeconds, 30, 7200);
-                var visibility = kind == ConfigurationReadKind.Editable ? FieldVisibility.NameEditable : FieldVisibility.Hidden;
-                var nameRule = new FieldDescriptor(ConfigurationFieldId.AgentDevices, FieldEffect.Restart, false,
-                    kind == ConfigurationReadKind.Editable, false);
-                var rename = state.RenamePending ? ApplyState.RestartRequired : ApplyState.Applied;
-                var name = ConfigurationBridge.ProjectField(visibility, BotAgent.Services.Agent.AgentMask.Shorten(state.ActiveName),
-                    nameRule, UserValueKind.Explicit, ConfigurationValueSource.UserConfiguration, rename,
-                    requested ? state.DesiredName : state.ActiveName);
-                result.Add(new(state.Key, name,
-                    DeviceField(kind, state.DesiredEnabled && !state.Deleted, state.DesiredEnabled && !state.Deleted,
-                        UserValueKind.Explicit, FieldEffect.Hot, apply),
-                    DeviceField(kind, requested && !string.IsNullOrWhiteSpace(item.Model) ? item.Model : model, model,
-                        string.IsNullOrWhiteSpace(item.Model) ? UserValueKind.Inherited : UserValueKind.Explicit, FieldEffect.Hot, apply),
-                    DeviceField(kind, requested && !string.IsNullOrWhiteSpace(item.WorkDir) ? item.WorkDir : workdir, workdir,
-                        string.IsNullOrWhiteSpace(item.WorkDir) ? UserValueKind.Inherited : UserValueKind.Explicit, FieldEffect.Hot, apply),
-                    DeviceField(kind, requested && !string.IsNullOrWhiteSpace(item.Tools) ? item.Tools : tools, tools,
-                        string.IsNullOrWhiteSpace(item.Tools) ? UserValueKind.Inherited : UserValueKind.Explicit, FieldEffect.Hot, apply),
-                    DeviceField(kind, requested && item.TimeoutSeconds > 0 ? item.TimeoutSeconds : timeout, timeout,
-                        item.TimeoutSeconds == 0 ? UserValueKind.Inherited : UserValueKind.Explicit, FieldEffect.Hot, apply), rename));
-            }
-            return result.ToImmutable();
-        }
-
-        private static ReadField<T> DeviceField<T>(ConfigurationReadKind kind, T value, T effective,
-            UserValueKind mode, FieldEffect effect, ApplyState apply)
-        {
-            var visibility = kind == ConfigurationReadKind.Editable ? FieldVisibility.Editable : FieldVisibility.Hidden;
-            var rule = new FieldDescriptor(ConfigurationFieldId.AgentDevices, effect, typeof(T) == typeof(string),
-                kind == ConfigurationReadKind.Editable, false);
-            var display = effective is string text ? BotAgent.Services.Agent.AgentMask.Shorten(text)
-                : Convert.ToString(effective, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
-            return ConfigurationBridge.ProjectField(visibility, display, rule, mode,
-                mode == UserValueKind.Explicit ? ConfigurationValueSource.UserConfiguration : ConfigurationValueSource.Default,
-                apply, value);
-        }
-
         internal override ConfigurationReadResult Read(Microsoft.Data.Sqlite.SqliteConnection connection,
             ConfigurationCaller caller, ConfigurationReadKind kind, ConfigurationVersion version,
             ConfigurationGeneration generation, long serverUnixSeconds, ApplyState latestApplyState)
@@ -1502,7 +1367,7 @@ public sealed class SettingsStore : ISettingsRepository
             var effective = _runtime.Current.Snapshot();
             if (ContainsEndpointUserInfo(stored.User.ModelBaseUrl) || ContainsEndpointUserInfo(stored.User.ModelBaseUrlOverride)
                 || ContainsEndpointUserInfo(effective.ModelBaseUrl) || ContainsEndpointUserInfo(effective.ModelBaseUrlOverride))
-                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, "cfg-0.3.2",
+                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, ConfigurationContract.Revision,
                     serverUnixSeconds, null, secrets, ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
             RegisteredConfigurationView registered;
             try
@@ -1520,19 +1385,11 @@ public sealed class SettingsStore : ISettingsRepository
             }
             catch (JsonException)
             {
-                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, "cfg-0.3.2",
+                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, ConfigurationContract.Revision,
                     serverUnixSeconds, null, secrets, ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
             }
-            var states = ConfigurationBridge.LoadDevices(connection);
-            var desired = BindStoredDevices(ParseLegacyDevices(stored.User.AgentDevices, true), states);
-            if (desired.Any(item => item.Key is null))
-                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, "cfg-0.3.2",
-                    serverUnixSeconds, null, secrets, ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
-            var requestedDevices = DeviceViews(desired, states, effective, kind, latestApplyState, true);
-            var effectiveDevices = DeviceViews(desired, states, effective, kind, latestApplyState, false);
             var view = ProjectConfigurationView(connection, stored.User, effective, kind, latestApplyState,
                 stored.Properties, _effectiveSource, _effect,
-                requestedDevices, effectiveDevices,
                 PolicyViews(stored.User, effective, kind, true), PolicyViews(stored.User, effective, kind, false), registered);
             view = view with
             {
@@ -1542,7 +1399,7 @@ public sealed class SettingsStore : ISettingsRepository
                         ? provider with { ModelName = view.Model.Model, BaseUrl = view.Model.ModelBaseUrl } : provider).ToImmutableArray(),
                 },
             };
-            return new(ConfigurationResultCode.Ok, version, generation, "cfg-0.3.2", serverUnixSeconds,
+            return new(ConfigurationResultCode.Ok, version, generation, ConfigurationContract.Revision, serverUnixSeconds,
                 view, secrets, CollectFieldDescriptors(view), latestApplyState);
         }
 
@@ -1566,9 +1423,6 @@ public sealed class SettingsStore : ISettingsRepository
         private static ImmutableArray<FieldDescriptor> CollectFieldDescriptors(ConfigurationView view)
             => ImmutableArray.Create(
                 view.Agent.AgentAllowedUsers.Rule,
-                view.Agent.AgentDevices.Rule,
-                view.Agent.AgentMaxQueued.Rule,
-                view.Agent.AgentModel.Rule,
                 view.Agent.AgentPrefix.Rule,
                 view.Agent.AgentProgressSeconds.Rule,
                 view.Agent.AgentPrompt.Rule,
@@ -1585,13 +1439,8 @@ public sealed class SettingsStore : ISettingsRepository
                 view.Agent.AgentServerTools.Rule,
                 view.Agent.AgentServerUseGate.Rule,
                 view.Agent.AgentServerWorkDir.Rule,
-                view.Agent.AgentTarget.Rule,
-                view.Agent.AgentTimeoutSeconds.Rule,
-                view.Agent.AgentTools.Rule,
-                view.Agent.AgentWorkDir.Rule,
                 view.Agent.EnableAgentBridge.Rule,
                 view.Agent.EnableAgentMask.Rule,
-                view.Agent.EnableHostAgent.Rule,
                 view.Agent.EnableServerAgent.Rule,
                 view.Agent.PanelDeployEnabled.Rule,
                 view.Agent.PanelDeployUrl.Rule,

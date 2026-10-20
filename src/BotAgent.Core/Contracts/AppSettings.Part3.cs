@@ -63,6 +63,8 @@ public sealed partial class AppSettings
     /// **空 = 谁都不能用** —— 这是默认值：这个功能能在管理员电脑上执行命令，宁可先不给任何人。</summary>
     public string AgentAllowedUsers { get; set; } = string.Empty;
 
+    // cfg-0.3.3：以下 host/device 字段只用于解码旧 settings/回退数据；不在 view/change 中暴露，
+    // 旧请求会在面板/契约入口拒绝。不要用它们重新启用任何桥或设备执行路径。
     /// <summary>本机 pi 的工作目录（桥侧执行目录）。留空 = 桥自己的默认目录。</summary>
     public string AgentWorkDir { get; set; } = string.Empty;
 

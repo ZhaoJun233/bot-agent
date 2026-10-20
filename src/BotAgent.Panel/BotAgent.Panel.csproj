@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>BotAgent.Panel</RootNamespace>
+    <AssemblyName>BotAgent.Panel</AssemblyName>
+    <Version>1.0.0</Version>
+    <Description>Z-bot Backend API（ZBA）：宿主同进程承载、只依赖 Core 契约的 HTTP 适配层。</Description>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>high</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
+  </ItemGroup>
+
+</Project>

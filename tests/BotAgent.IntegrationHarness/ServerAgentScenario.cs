@@ -29,7 +29,6 @@ public static partial class Program
         const int botWsPort = 13065;
         const int healthPort = 18104;
         const long groupId = 66740;
-        const string token = "tok-s34-secret";
 
         var dataDir = NewDataDir("s34");
 
@@ -46,7 +45,6 @@ public static partial class Program
         agentAi.AddRule("服务器上来一句",
             """{"thought":"先看看容器里能不能跑命令","tool":"bash","command":"echo hello-server-agent"}""",
             """{"thought":"拿到输出了","final":"服务器上跑完了：hello-server-agent"}""");
-        agentAi.AddRule("关掉外部开关后这条", """{"final":"关掉外部开关后的结论"}""");
         // //stop 那一轮要的是“真在跑、而且跑得久”的一步（sleep 30），不然没东西可停
         agentAi.AddRule("跑个很久的活", """{"thought":"慢慢想","tool":"bash","command":"sleep 30"}""");
         // 会话测试（服务器后端）：第一句 / 第二句 / 新会话一句
@@ -72,9 +70,7 @@ public static partial class Program
             ["QQCHAT_HEALTH_PORT"] = healthPort.ToString(),
             ["QQCHAT_AGENT"] = "1",
             ["QQCHAT_AGENT_USERS"] = "20002",
-            ["QQCHAT_AGENT_TOKEN"] = token,
             ["QQCHAT_AGENT_SERVER"] = "1",
-            ["QQCHAT_AGENT_TARGET"] = "auto",
             ["QQCHAT_AGENT_SERVER_WORKDIR"] = "/tmp",
             ["QQCHAT_AGENT_SERVER_URL"] = agentAi.BaseUrl,      // ← 服务器 agent 走自己的接口
             ["QQCHAT_AGENT_SERVER_MODEL"] = "custom-agent-model",
@@ -136,89 +132,51 @@ public static partial class Program
             bot.OutputLines.Any(l => l.Contains("agent 命令（20002）")),
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("agent 命令")).TakeLast(2)));
 
-        // ---- ② auto + 外部设备在线 → 走外部 ----
-        using var bridge = new MockAgentBridge($"ws://127.0.0.1:{healthPort}/agent-bridge?token={token}",
-            new JsonObject { ["host"] = "S34-DEVICE", ["cwd"] = "E:/bot", ["pi"] = "test-2.0" });
-        var connected = await bridge.TryConnectAsync(cts.Token);
-        Check("外部设备连上了（后面用它验路由）", connected, connected ? "ok" : "没连上");
-        await Task.Delay(300);
-
-        var requestsBefore = openAi.Requests.Count;
-        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//这条应该走外部", 16002, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => bridge.Tasks.Count > 0, TimeSpan.FromSeconds(30));
-        Check("★ auto：外部设备在线时任务派给了外部（不是服务器）",
-            bridge.Tasks.Count == 1 && openAi.Requests.Count == requestsBefore,
-            $"桥任务 {bridge.Tasks.Count} 个；模型请求 {requestsBefore} → {openAi.Requests.Count}");
-        Check("★ 外部任务带回话里的设备名",
-            Sent().Any(t => t.Contains("去S34-DEVICE上跑一下")), string.Join(" | ", Sent().TakeLast(3)));
-
-        // 把这个外部任务收尾：不然它一直“在跑”，后面的任务会被串行门挡在外面
-        bridge.Send(new JsonObject
-        {
-            ["type"] = "done",
-            ["id"] = bridge.Tasks[^1]["id"]!.GetValue<string>(),
-            ["text"] = "外部设备的结论",
-            ["exitCode"] = 0,
-            ["durationMs"] = 800,
-            ["toolCalls"] = 0
-        });
-        await WaitUntilAsync(() => Sent().Any(t => t.Contains("外部设备的结论")), TimeSpan.FromSeconds(30));
-
-        // ---- ③ 强制 server（群命令里单条指定）：外部在线也走服务器 ----
-        var bridgeTasksBefore = bridge.Tasks.Count;
-        var modelBefore = openAi.Requests.Count;
+        // ---- ② //@server 单条指定：外部目标已移除，服务器仍可显式指定 ----
+        var serverForcedBefore = agentAi.Requests.Count;
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//@server 这条强制走服务器", 16003, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => openAi.Requests.Count > modelBefore, TimeSpan.FromSeconds(40));
-        Check("★ //@server 单条指定：外部在线也不用它（桥那边一个任务都没收到）",
-            bridge.Tasks.Count == bridgeTasksBefore,
-            $"桥任务 {bridgeTasksBefore} → {bridge.Tasks.Count}");
+        await WaitUntilAsync(() => agentAi.Requests.Count > serverForcedBefore, TimeSpan.FromSeconds(40));
+        Check("★ //@server 单条指定：仍然走服务器内置 agent",
+            agentAi.Requests.Count > serverForcedBefore,
+            $"自定义接口 {serverForcedBefore} → {agentAi.Requests.Count}");
 
-        // ---- ③b 面板里把“外部设备”开关关掉 → auto 也得走服务器（管理员踩过的那个：切了却没生效）----
+        // ---- ③ 已移除的 host/@设备目标必须在副作用前拒绝 ----
+        var removedBefore = agentAi.Requests.Count;
+        var sentBeforeRemoved = Sent().Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//@host 这条应该被拒绝", 16008, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Skip(sentBeforeRemoved).Any(t => t.Contains("已退役")), TimeSpan.FromSeconds(30));
+        Check("★ //@host 被明确拒绝（不静默回退服务器）",
+            Sent().Skip(sentBeforeRemoved).Any(t => t.Contains("已退役")),
+            string.Join(" | ", Sent().TakeLast(3)));
+        Check("★ //@host 不产生模型调用", agentAi.Requests.Count == removedBefore,
+            $"自定义接口 {removedBefore} → {agentAi.Requests.Count}");
+
+        sentBeforeRemoved = Sent().Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//@S34-DEVICE 这条也应该被拒绝", 16009, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Skip(sentBeforeRemoved).Any(t => t.Contains("已退役")), TimeSpan.FromSeconds(30));
+        Check("★ //@设备名 被明确拒绝", Sent().Skip(sentBeforeRemoved).Any(t => t.Contains("已退役")),
+            string.Join(" | ", Sent().TakeLast(2)));
+
+        sentBeforeRemoved = Sent().Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//import 随便", 16010, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Skip(sentBeforeRemoved).Any(t => t.Contains("退役")), TimeSpan.FromSeconds(30));
+        Check("★ //import 被明确拒绝", Sent().Skip(sentBeforeRemoved).Any(t => t.Contains("退役")),
+            string.Join(" | ", Sent().TakeLast(2)));
+
+        // ---- ④ 服务器开关关闭 → 如实报错，不静默执行 ----
         using (var http = CreatePanelHttpClient(healthPort, 15))
         {
-            var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":false}", Encoding.UTF8, "application/json");
+            var body = new StringContent("{\"enableServerAgent\":false}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
         }
 
         await Task.Delay(400);
-        var hostOffTasksBefore = bridge.Tasks.Count;
-        var hostOffModelBefore = openAi.Requests.Count;
-        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//关掉外部开关后这条", 16008, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => openAi.Requests.Count > hostOffModelBefore, TimeSpan.FromSeconds(40));
-        Check("★ 关掉“外部设备”开关后，auto 真的走服务器（不是还打给外部设备）",
-            bridge.Tasks.Count == hostOffTasksBefore,
-            $"桥任务 {hostOffTasksBefore} → {bridge.Tasks.Count}");
-
-        // ---- ③c 设备开关打开时：//@设备名 能单条指定外部设备 ----
-        using (var http = CreatePanelHttpClient(healthPort, 15))
-        {
-            var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":true}", Encoding.UTF8, "application/json");
-            await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
-        }
-
-        await Task.Delay(400);
-        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//@S34-DEVICE 单条指定外部", 16009, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => bridge.Tasks.Count > hostOffTasksBefore, TimeSpan.FromSeconds(30));
-        Check("★ //@设备名 能单条指定外部设备（多台设备时改接哪台）",
-            bridge.Tasks.Count > hostOffTasksBefore,
-            $"桥任务 {hostOffTasksBefore} → {bridge.Tasks.Count}；" + string.Join(" | ", Sent().TakeLast(2)));
-
-        // ---- ④ 两边都不可用 → 如实报错（不静默）----
-        using (var http = CreatePanelHttpClient(healthPort, 15))
-        {
-            var body = new StringContent("{\"agentTarget\":\"host\",\"enableHostAgent\":true,\"enableServerAgent\":false}", Encoding.UTF8, "application/json");
-            await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
-        }
-
-        bridge.Dispose();      // 设备下线
-        await Task.Delay(1200);
-
-        var modelBeforeHost = openAi.Requests.Count;
-        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//设备不在线这条", 16004, mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(() => Sent().Any(t => t.Contains("没法跑")), TimeSpan.FromSeconds(40));
-        Check("★ 两边都不可用时如实报错（服务器开关关、外部离线；不会被静默接走）",
-            Sent().Any(t => t.Contains("没法跑")) && openAi.Requests.Count == modelBeforeHost,
-            string.Join(" | ", Sent().TakeLast(2)) + $"（模型请求 {modelBeforeHost} → {openAi.Requests.Count}）");
+        var modelBeforeDisabled = agentAi.Requests.Count;
+        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//@server 关掉后这条", 16004, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => Sent().Any(t => t.Contains("开关是关的")), TimeSpan.FromSeconds(30));
+        Check("★ 服务器开关关闭时如实报错（不静默执行、不调模型）",
+            Sent().Any(t => t.Contains("开关是关的")) && agentAi.Requests.Count == modelBeforeDisabled,
+            string.Join(" | ", Sent().TakeLast(2)) + $"（模型请求 {modelBeforeDisabled} → {agentAi.Requests.Count}）");
 
         Section("-- S34 后半：//stop / //status --");
 
@@ -228,7 +186,7 @@ public static partial class Program
         // （以前是靠“④那轮任务还在跑”这个巧合蒙对的 —— 时机一变就报假红）。
         using (var http = CreatePanelHttpClient(healthPort, 15))
         {
-            var body = new StringContent("{\"agentTarget\":\"server\",\"enableHostAgent\":true,\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
+            var body = new StringContent("{\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
         }
 
@@ -245,15 +203,15 @@ public static partial class Program
         // ---- ⑧ //status 一眼看到两边状态 ----
         using (var http = CreatePanelHttpClient(healthPort, 15))
         {
-            var body = new StringContent("{\"agentTarget\":\"auto\",\"enableHostAgent\":true,\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
+            var body = new StringContent("{\"enableServerAgent\":true}", Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
         }
 
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "//status", 16005, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Any(t => t.Contains("服务器内置 agent：")), TimeSpan.FromSeconds(30));
         var status = Sent().LastOrDefault(t => t.Contains("服务器内置 agent：")) ?? string.Empty;
-        Check("★ //status 同时报出两个开关、在线设备与当前会走哪边",
-            status.Contains("外部设备 agent：") && status.Contains("服务器内置 agent：") &&
+        Check("★ //status 报出服务器开关与当前会走哪边",
+            status.Contains("服务器内置 agent：") &&
             status.Contains("当前会走：") && status.Contains("单条指定："),
             $"最后几条发出去的是：{string.Join(" ⏐ ", Sent().TakeLast(5))}");
 
@@ -265,7 +223,7 @@ public static partial class Program
         using (var http = CreatePanelHttpClient(healthPort, 15))
         {
             var body = new StringContent(
-                "{\"enableServerAgent\":true,\"agentTarget\":\"server\",\"agentServerKeepContext\":true}",
+                "{\"enableServerAgent\":true,\"agentServerKeepContext\":true}",
                 Encoding.UTF8, "application/json");
             await http.PostAsync($"http://127.0.0.1:{healthPort}/api/settings", body);
         }

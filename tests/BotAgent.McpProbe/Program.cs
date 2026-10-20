@@ -804,14 +804,14 @@ public static class Program
             Check(fake.CallCount == 0, "runner never calls the fake source on the no_conversation path");
         });
 
-        await StepAsync("C7 McpArguments envelope", async () =>
+        await StepAsync("C7 McpArguments envelope", () =>
         {
             var method = typeof(ServerAgentRunner).GetMethod("McpArguments",
                 BindingFlags.NonPublic | BindingFlags.Static);
             Check(method is not null, "ServerAgentRunner.McpArguments is present");
             if (method is null)
             {
-                return;
+                return Task.CompletedTask;
             }
 
             var raw = new JsonObject
@@ -833,6 +833,7 @@ public static class Program
             Check(result["url"]?.GetValue<string>() == "https://example.com/page", "McpArguments keeps url");
             Check(result["message"]?.GetValue<string>() == "hi", "McpArguments keeps message");
             Check(raw.ContainsKey("tool") && raw.ContainsKey("final"), "McpArguments does not mutate the input object");
+            return Task.CompletedTask;
         });
 
         await StepAsync("C8 contract ToString redaction", () =>

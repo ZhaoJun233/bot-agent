@@ -44,8 +44,8 @@ public sealed partial class WebUiServer
         }
 
         var body = await ReadAuthBodyAsync(context);
-        var password = body?["password"]?.GetValue<string>();
-        if (password is null || password.Length > 200)
+        if (body is not JsonObject login || !TryReadAuthString(login, "password", out var password) ||
+            password is null || password.Length > 200)
         {
             await AuthErrorAsync(context, 400, "请输入面板密码");
             return;
@@ -95,11 +95,18 @@ public sealed partial class WebUiServer
     {
         context.Response.Headers["Cache-Control"] = "no-store";
         var body = await ReadAuthBodyAsync(context);
-        var current = body?["currentPassword"]?.GetValue<string>();
-        var next = body?["newPassword"]?.GetValue<string>();
-        if (next is null || next.Length < 8 || next.Length > 200 || string.IsNullOrWhiteSpace(next))
+        if (body is not JsonObject change || !TryReadAuthString(change, "newPassword", out var next) ||
+            next is null || next.Length < 8 || next.Length > 200 || string.IsNullOrWhiteSpace(next))
         {
             await AuthErrorAsync(context, 400, "新密码至少 8 位，最多 200 位");
+            return;
+        }
+
+        string? current = null;
+        if (change.ContainsKey("currentPassword") &&
+            !TryReadAuthString(change, "currentPassword", out current))
+        {
+            await AuthErrorAsync(context, 400, "请输入面板密码");
             return;
         }
         lock (_loginGate)
@@ -259,6 +266,13 @@ public sealed partial class WebUiServer
         CleanupExpiredPanelSessions(now);
         var session = context.Request.Cookies["panel_session"]?.Value;
         return session is not null && _panelSessions.TryGetValue(session, out var expires) && expires > now;
+    }
+
+    private static bool TryReadAuthString(JsonObject body, string name, out string? value)
+    {
+        value = null;
+        return body.TryGetPropertyValue(name, out var node) &&
+            node is JsonValue scalar && scalar.TryGetValue<string>(out value);
     }
 
     private static async Task<JsonNode?> ReadAuthBodyAsync(HttpListenerContext context)

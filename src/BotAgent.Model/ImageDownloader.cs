@@ -156,7 +156,7 @@ public class ImageDownloader : IImageDownloader
         {
             RefreshedCount++;
             // 信息性一行（不是错误）：QQ 的图片地址本来就短命，重签取回是正常路径
-            Services.FileLog.Write("Vision", $"image_refreshed status={status}");
+            Services.FileLog.Write("Vision", $"图片地址已过期（HTTP {status}）→ 协议端重签后取回");
         }
 
         return bytes.Image;

@@ -376,43 +376,11 @@ const filledIds = new Set([...loadBody.matchAll(/\$\("([A-Za-z0-9_]+)"\)\.(?:val
 for (const match of loadBody.matchAll(/renderReasoningSelect\(\$\("([A-Za-z0-9_]+)"\)/g)) filledIds.add(match[1]);
 
 check(
-  "★ 设备行标出目录来源（设备专属 / 全局默认 / 桥自报）",
-  /"设备专属"/.test(js) && /"全局默认"/.test(js) && /"桥自报"/.test(js),
-  "设备行必须写清这个工作目录是哪来的：只写个目录名时，改全局目录会让人以为没生效"
-);
-check(
   "能从 saveSettings 解析出待保存字段",
   saveFields.length > 0,
   `解析到 ${saveFields.length} 个`
 );
 
-// 设备表（模型/目录/工具/超时/启用）不在 DOM-id 那套字段里，单独盯一眼：
-// 曾经这条漏写 → 在面板里改设备配置点保存完全没用（服务器还是旧值，管理员报过）。
-check(
-  "★ 保存请求带上设备表 agentDevices（没带 = 面板改设备配置白改）",
-  /agentDevices\s*=\s*\{\s*kind:\s*1,\s*value:\s*devices\s*\}/.test(strictBody) && /typedDeviceDraft\(\)/.test(strictBody),
-  "strict changes.agent.agentDevices must use the typed complete device draft"
-);
-check(
-  "★ 设备表未拉取成功时不许回写（防止一次保存把设备配置清空）",
-  /if \(agentDevicesEdited\)/.test(strictBody) && /if \(!agentDevicesLoaded\) throw/.test(strictBody),
-  "An edited but incomplete device table must reject the save, not overwrite or silently omit edits"
-);
-// 设备表状态必须声明在**外层作用域**：填表在 bindUi() 里、读表在 saveSettings() 里，
-// 写在 bindUi 内部时 saveSettings 会直接 ReferenceError（实测踩过：保存按钮静默失效）。
-const topLevelDeviceLet = /^ {2}let agentDevices = \[\];$/m.test(js) && /^ {2}let agentDevicesLoaded = false;$/m.test(js);
-check(
-  "★ 设备表状态声明在外层作用域（写在 bindUi() 里 = 保存直接 ReferenceError）",
-  topLevelDeviceLet,
-  "agentDevices / agentDevicesLoaded 必须是顶层 let（缩进两格），不能在 bindUi() 内部"
-);
-// 同一类坑：saveSettings() 在外层，bindUi() 内部的函数它看不见。
-// 直接调 refreshAgentDevicesFull() 会 ReferenceError → 被 catch 成“保存失败”（其实已保存）。
-check(
-  "★ saveSettings 不直接调用 bindUi() 内部的函数（要走走 afterSettingsSaved 钩子）",
-  !/refreshAgentDevicesFull\s*\(/.test(saveBody) && /await loadSettings\(\)/.test(saveBody),
-  "saveSettings must refresh through its real top-level loadSettings, never a bindUi-local function"
-);
 const notFilled = saveFields.filter((f) => !filledIds.has(f.id));
 check(
   `待保存的 ${saveFields.length} 个字段全部在 loadSettings 中回填`,
@@ -638,8 +606,8 @@ for (const group of changeTypes.matchAll(/public sealed class (\w+)Changes\s*\{(
     });
   }
 }
-if (configurationSchema.size !== 142 || [...configurationSchema.values()].some(field => !field.id))
-  throw new Error("Synthetic configuration schema does not match the real 142-field Core contract");
+if (configurationSchema.size !== 134 || [...configurationSchema.values()].some(field => !field.id))
+  throw new Error("Synthetic configuration schema does not match the real 134-field Core contract");
 const clone = value => JSON.parse(JSON.stringify(value));
 const secretMembers = ["apiKey", "agentServerKey", "ttsApiKey", "feishuAppSecret", "feishuEncryptKey", "feishuVerificationToken"];
 const configuredSecrets = new Set([0, 1]);
@@ -688,16 +656,6 @@ function configurationRead() {
       : field.type.startsWith("ImmutableArray") ? [] : "";
     (view[field.partition] ||= {})[member] = configurationField(value, field.id);
   }
-  view.agent.agentDevices.value = serverDevices.map(device => {
-    device.key ||= (deviceIdentity++).toString(16).padStart(32, "0");
-    const nameRaw = device.nameRaw || device.name;
-    return { key: device.key, name: { ...configurationField(nameRaw, 3), visibility: 2, nameRaw, display: device.displayName || nameRaw },
-      enable: configurationField(device.enable !== false, 3),
-      model: configurationField(device.model || "", 3, device.modelMode ?? (device.model ? 2 : 1)),
-      workDir: configurationField(device.workdir || "", 3, device.workdirMode ?? (device.workdir ? 2 : 1)),
-      tools: configurationField(device.tools || "", 3, device.toolsMode ?? (device.tools ? 2 : 1)),
-      timeoutSeconds: configurationField(device.timeoutSec || 0, 3, device.timeoutMode ?? (device.timeoutSec ? 2 : 1)), renameState: 1 };
-  });
   const policies = serverPolicies();
   view.platform.platformPolicies.value = policies.map(({ target, configuration }) => {
     const row = { target };
@@ -950,11 +908,6 @@ const jsRun = js.replace(probeMarker, `globalThis.probe = {
     pendingConfiguration: () => configurationPending ? { mainKey: configurationPending.mainKey, key: configurationPending.key,
       operation: configurationPending.operation } : null,
     refreshParticipation,
-  deviceDraft: () => agentDevices.map((d) => ({ ...d })),
-  deviceLoaded: () => agentDevicesLoaded,
-  editDevice: (i, patch) => { if (agentDevices[i]) Object.assign(agentDevices[i], patch); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
-  setDraft: (rows) => { agentDevices = rows.map((d) => ({ ...d })); if (typeof agentDevicesEdited !== "undefined") agentDevicesEdited = true; markSettingsDirty(); },
-  forgetDevices: () => { agentDevicesLoaded = false; if (typeof agentDevicesSaved !== "undefined") agentDevicesSaved = []; },
   agentSnapshot: () => ({ active: state.agent.activeSessionKey, rows: state.agent.rows.map((row) => ({ key: row.identity, source: row.sourceKind, backend: row.backend, local: !!row.session.localOnly })), messages: [...state.agent.conversations.entries()].map(([key, entries]) => ({ key, entries: entries.map((entry) => ({ ...entry })) })), drafts: [...state.agent.drafts.entries()], lastResult: state.agent.lastResult }),
   selectAgentSession, createLocalAgentSession, renderAgentSessions,
   renderReasoningSelect, saveAgentWorkbenchConfig,
@@ -1016,17 +969,17 @@ check("★ boot() 会把手机端视图初始化成列表（body.m-chat-open）"
   classCalls.some((c) => c[0] === "toggle" && c[1] === "m-chat-open"),
   JSON.stringify(classCalls.slice(0, 6)));
 
-// ─────────── 本机 Agent 卡片（// 命令，handoff-4 §31）───────────
-check("面板有本机 Agent 卡片（开关 / 可用 QQ / 前缀 / 测试按钮）",
-  ["setEnableAgentBridge", "setAgentAllowedUsers", "setAgentPrefix", "setAgentWorkDir",
-   "agentTestGo", "agentStatusGo", "agentTestPrompt", "agentOut"]
+// ─────────── Agent 卡片（// 命令，cfg-0.3.3 服务器内置）───────────
+check("面板有 Agent 卡片（开关 / 可用 QQ / 前缀 / 测试按钮）",
+  ["setEnableAgentBridge", "setAgentAllowedUsers", "setAgentPrefix", "setEnableServerAgent",
+   "setAgentServerTools", "agentTestGo", "agentStatusGo", "agentTestPrompt", "agentOut"]
     .every((id) => html.includes(`id="${id}"`)),
   ["setEnableAgentBridge", "setAgentAllowedUsers", "agentTestGo"]
     .filter((id) => !html.includes(`id="${id}"`)).join(", ") || "都在");
 check("app.js 把 agent 设置读进表单（渲染）/ 写回保存体",
   js.includes("setEnableAgentBridge") && js.includes("enableAgentBridge:") &&
   js.includes("agentAllowedUsers:") && js.includes("agentPrefix:"));
-check("app.js 绑定了“送到本机跑一下 / 看连接状态”两个按钮",
+check("app.js 绑定了“送到服务器跑一下 / 看状态”两个按钮",
   js.includes('$("agentTestGo").addEventListener') && js.includes('$("agentStatusGo").addEventListener'));
 
 // ─────────── Agent 会话（自动标题 / 总览 / 新建切换删除）───────────
@@ -1041,8 +994,9 @@ check("★ app.js 实现了会话列表/切换/改名/删除（与群里同一�
   js.includes('action: "rename"') && js.includes('action: "delete"') && js.includes('action: "use"'));
 check("★ 会话总览（全部聊天 + 总数）在面板里可见",
   js.includes('全部聊天（共') && js.includes("会话总数："));
-check("面板引用了 /api/agent/sessions 且 /api/agent/setup 走带令牌的地址",
-  js.includes("withToken(`${apiBase()}/api/agent/setup") || js.includes("/api/agent/setup"));
+check("★ 本机桥入口已从面板移除（/agent-bridge、setup、pi-sessions、下载脚本）",
+  !js.includes("/api/agent/setup") && !js.includes("/api/agent/pi-sessions") &&
+  !js.includes("/agent-bridge") && !js.includes("pi-bridge.py") && !js.includes("agent-sftp-script"));
 
 // ─────────── 列出会话时脱敏 + Agent 附加提示词（默认：不读取敏感信息）───────────
 check("面板有「列出会话时脱敏」开关（群名/昵称/QQ 号只留前 3 后 2）",
@@ -1063,16 +1017,13 @@ check("★ 会话/聊天都带序号（面板的顺序 = 群里 //sessions 的�
   js.includes("${i + 1}) ") && js.includes("#${i + 1}") && js.includes("${i + 1}. ${escapeHtml(c.name || k)}"),
   "没序号的话，面板上看到第几个、群里 //use 第几个就对不上");
 const agentSessionsRenderer = js.slice(js.indexOf("async function refreshAgentSessions"), js.indexOf('$("agentSessionRefresh")'));
-const piSessionRenderer = js.slice(js.indexOf('$("agentSessionImport")'), js.indexOf('$("agentSessionNew")'));
-check("★ Agent 会话渲染统一转义接口/桥返回的文本和属性字段",
+check("★ Agent 会话渲染统一转义接口返回的文本和属性字段",
   agentSessionsRenderer.includes("escapeHtml(c.name || k)") &&
   agentSessionsRenderer.includes("escapeHtml(x.name)") &&
   agentSessionsRenderer.includes("escapeHtml(r.prompt || \"\")") &&
   agentSessionsRenderer.includes("escapeHtml(r.result)") &&
-  agentSessionsRenderer.includes('data-sess-use="${escapeHtml(x.id)}"') &&
-  piSessionRenderer.includes("escapeHtml((it.title || \"(无标题)\")") &&
-  piSessionRenderer.includes('data-pi-import="${escapeHtml(it.id || \"\")}"'),
-  "会话标题、prompt/result、pi 标题或动作属性缺少 escapeHtml");
+  agentSessionsRenderer.includes('data-sess-use="${escapeHtml(x.id)}"'),
+  "会话标题、prompt/result 或动作属性缺少 escapeHtml");
 
 // Behavioural selector regression; real HTML parsing/XSS acceptance lives in the native-browser fixture.
 {
@@ -1202,7 +1153,7 @@ if (saveCall) {
   check("真实保存请求不提交官方 Secret 或清空指令",
     Object.keys(wire).sort().join(",") === "changes,contractRevision,expectedVersion,key,secrets"
       && wire.secrets.every(edit => edit.slot >= 0 && edit.slot <= 5));
-  check("strict保存闭集五成员而不是重复整表控件", Object.keys(wire).length === 5 && configurationSchema.size === 142);
+  check("strict保存闭集五成员而不是重复整表控件", Object.keys(wire).length === 5 && configurationSchema.size === 134);
   check("未修改的平台继承/名单/功能保持原样，不发送整表", !wire.changes.registered && !wire.changes.platform?.platformPolicies
     && sandbox.probe.policyDraft().some(row => row.configuration.groupWhitelist.value === "synthetic-group"));
   check("★ 不改动直接保存不会被空值污染", Object.keys(wire.changes).length === 0 && wire.secrets.length === 0);
@@ -1613,125 +1564,13 @@ check("回到设置页后提示被清掉", dirtyHint.hidden === true);
 fire("pageSettings", "change", { target: { id: "setTheme" } });
 check("改主题不会被当成未保存的修改", dirtyHint.hidden === true);
 
-/* ─────────── 5) 外部设备表：加载 / 保存 / 放弃 / 转义 / 竞态 ─────────── */
-
-console.log("\n▶ 动态：外部设备表（加载 / 保存 / 放弃 / 转义 / 竞态）");
-
-// 静态：这一组修复的关键点（缺一个就会退回“改了半天没保存/新设备自己消失”）
-const loadBodyFull = js.slice(js.indexOf("async function loadSettings"), js.indexOf("async function saveSettings"));
-check("★ 进设置页时就拉设备表（只靠手动点刷新 = 首次进来是空表）",
-  /projectTypedDevices\(snapshot\)/.test(loadBodyFull) && /await loadAgentDevices\(\)/.test(loadBodyFull),
-  "loadSettings 里没有调 loadAgentDevices()");
-check("★ 设备名/目录进 innerHTML 前要转义",
-  /function escapeHtml\(/.test(js) && (js.match(/escapeHtml\(/g) || []).length >= 8,
-  `escapeHtml 出现 ${(js.match(/escapeHtml\(/g) || []).length} 次`);
-check("★ ensureDeviceOption 必须是顶层函数（定义在 bindUi() 内部时“指定设备 + 重进设置页”直接 ReferenceError）",
-  /^ {2}function ensureDeviceOption\(name\) \{/m.test(js));
-check("★ 保存期间的新编辑不被回填盖掉（改动序号门卡）",
-  /settingsEditSeq/.test(saveBody) && /const seqAtSend = settingsEditSeq;/.test(saveBody),
-  "saveSettings 里没有 settingsEditSeq 门卡");
+/* ─────────── 汇总 ─────────── */
 
 const probe = sandbox.probe;
-const tableHtml = () => String(document.getElementById("agentDeviceTable")?.innerHTML || "");
-const selectHtml = () => String(document.getElementById("setAgentDevice")?.innerHTML || "");
-const enterSettings = async () => {
-  fire("nav-settings", "click");
-  await new Promise((r) => setTimeout(r, 300));
-};
 const lastSettingsBody = () => {
   const c = [...calls].reverse().find((x) => isSettingsSave(x));
   return c ? requestIntent(c) : null;
 };
-
-// ① 指定设备（agentTarget = 设备名）：loadSettings 会走 ensureDeviceOption —— 曾经这里是 ReferenceError
-RUNTIME.agentTarget = "DEV-A";
-serverDevices = [{ name: "DEV-A", online: true, enable: true, model: "provider/model-a",
-  workdir: "C:/synthetic/device-a", tools: "", timeoutSec: 0, models: ["provider/model-a"] }];
-await enterSettings();
-check("★ 指定设备时重新进设置页能跑完（不再 ReferenceError）",
-  probe.deviceLoaded() === true && probe.deviceDraft().length === 1, JSON.stringify(probe.deviceDraft()));
-check("★ 进设置页就把设备表填好了（不用先手动点「刷新设备」）",
-  probe.deviceDraft()[0]?.name === "DEV-A" && tableHtml().includes("C:/synthetic/device-a"),
-  tableHtml().slice(0, 160));
-check("★ 指定设备的下拉里保留了那一项", document.getElementById("setAgentDevice").value === "DEV-A",
-  String(document.getElementById("setAgentDevice").value));
-
-// ② 新增设备 ——> 保存：新行必须进请求，且保存后不能被刷新覆盖
-// （只取第一个处理函数：本探针为了验扫码卡片又跑了一遍 boot()，事件处理会被注册两次 ——
-//  这是探针自己的事，app.js 里 agentDeviceAdd 只绑一次）
-sandbox.prompt = () => "DEV-NEW";
-const rowsBeforeAdd = probe.deviceDraft().length;
-(handlers.get("agentDeviceAdd:click") || [])[0]();
-check("点「添加设备」后草稿里多一行",
-  probe.deviceDraft().length === rowsBeforeAdd + 1, JSON.stringify(probe.deviceDraft().map((d) => d.name)));
-await saveClicks[0]({});
-await new Promise((r) => setTimeout(r, 200));
-const sentDevices = JSON.parse(lastSettingsBody()?.agentDevices || "[]");
-check("★ 新增的设备真的进了保存请求（以前被 agentDevicesLoaded 拦下）",
-  sentDevices.some((d) => d.nameRaw === "DEV-NEW"), JSON.stringify(lastSettingsBody()?.agentDevices));
-check("★ 保存后服务端设备表里也有它（不再被保存后的刷新覆盖）",
-  serverDevices.some((d) => d.name === "DEV-NEW"), JSON.stringify(serverDevices.map((d) => d.name)));
-check("保存后草稿与服务端一致", probe.deviceDraft().length === serverDevices.length,
-  `${probe.deviceDraft().length} vs ${serverDevices.length}`);
-
-// ③ 放弃草稿：离开未保存的页面再回来，草稿必须回到服务端的值（否则下次保存会把放弃的改动一起提交）
-probe.editDevice(0, { workdir: "C:/synthetic/unsaved" });
-confirmAnswer = true;
-fire("nav-chat", "click");
-await enterSettings();
-check("★ 放弃后重新进设置页，设备草稿回到服务端的值",
-  probe.deviceDraft()[0]?.workdir === "C:/synthetic/device-a", JSON.stringify(probe.deviceDraft()[0]));
-await saveClicks[0]({});
-await new Promise((r) => setTimeout(r, 200));
-check("★ 放弃后的那次保存没有提交已放弃的设备目录",
-  !String(lastSettingsBody()?.agentDevices).includes("unsaved"), String(lastSettingsBody()?.agentDevices));
-
-// ④ 转义：设备名/目录/工具白名单全部来自配置与桥上报
-serverDevices = [{ name: '<b id="review-marker">literal</b>', online: false, enable: true, model: "p/m",
-  workdir: 'C:/x" onfocus="alert(1)', tools: "bash,read", timeoutSec: 0, models: ["p/m"], pi: "<img src=x>" }];
-await enterSettings();
-const escaped = tableHtml();
-check("★ 设备名转义后才进 innerHTML",
-  !escaped.includes('<b id="review-marker">') && escaped.includes("&lt;b id=&quot;review-marker&quot;&gt;"),
-  escaped.slice(0, 200));
-check("★ 目录里的引号不能跑出 value 属性",
-  !escaped.includes('onfocus="alert(1)"') && escaped.includes("C:/x&quot;"), escaped.slice(0, 200));
-check("★ 桥上报的 pi 版本号也要转义", !escaped.includes("<img src=x>"), escaped.slice(0, 200));
-check("★ 指定设备下拉同样转义", !selectHtml().includes('<b id="review-marker">'), selectHtml().slice(0, 160));
-
-// ⑤ 保存请求在飞时用户又改了东西：刷新结果不能盖掉新编辑，也不能谎报“已保存”
-settingsDelayMs = 250;
-const inFlight = saveClicks[0]({});
-await new Promise((r) => setTimeout(r, 60));
-probe.editDevice(0, { tools: "late-edit" });
-await inFlight;
-await new Promise((r) => setTimeout(r, 200));
-settingsDelayMs = 0;
-check("★ 保存期间的新编辑不会被刷新结果盖掉",
-  probe.deviceDraft()[0]?.tools === "late-edit", JSON.stringify(probe.deviceDraft()[0]));
-check("★ 保存期间有新编辑时，未保存提示要留着（不能谎报已存下）", probe.isDirty() === true);
-check("保存提示里说明了还有新修改",
-  String(document.getElementById("toast")?.textContent || "").includes("新编辑尚未保存"),
-  String(document.getElementById("toast")?.textContent || "(空)"));
-
-// ⑥ 设备表拉不到 + 用户改了设备行：既不能发半份表（服务端整表替换 = 删光其它设备），也不能无声丢掉
-agentStatusFails = true;
-probe.forgetDevices();
-const devicesBefore = JSON.stringify(serverDevices);
-const incompleteBefore = calls.length;
-probe.setDraft([{ name: "DEV-PARTIAL", online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] }]);
-await saveClicks[0]({});
-await new Promise((r) => setTimeout(r, 200));
-agentStatusFails = false;
-check("★ 设备表没拉到时不发半份设备表（发了就等于把其它设备配置删光）",
-  !calls.slice(incompleteBefore).some(isSettingsSave), "Incomplete authoritative draft must reject the whole write");
-check("★ 但保存提示要说清“设备改动没保存”（不能无声丢掉）",
-  String(document.getElementById("toast")?.textContent || "").includes("设备表未完整加载"),
-  String(document.getElementById("toast")?.textContent || "(空)"));
-check("服务端的设备配置没被清空", JSON.stringify(serverDevices) === devicesBefore);
-check("设备表请求真的失败过（否则上面三条形同虚设 —— 拉不到才该跳过）", agentStatusHits > 0, `hits=${agentStatusHits}`);
-
-/* ─────────── 汇总 ─────────── */
 
 // ⑦ 工程：场景预设与人工审批必须“回填 + 发得出去”（只做服务端字段 = 面板改了没用）
   await probe.loadSettings();

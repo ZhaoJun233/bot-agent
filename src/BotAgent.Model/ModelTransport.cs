@@ -261,7 +261,7 @@ public class ModelTransport : IModelTransport
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 if (attempt >= 1) throw new ModelFault("model_timeout");
-                FileLog.Write("Agent", "model_timeout retry=1");
+                FileLog.Write("Agent", "模型请求超时 → 2 秒后重试一次（第二次 30 秒封顶）");
                 await Clock.Delay(TimeSpan.FromSeconds(2), ct);
                 continue;
             }
@@ -293,13 +293,13 @@ public class ModelTransport : IModelTransport
             }
             if (attempt >= 1 || (status < 500 && status != 429))
                 throw new ModelFault(ModelFault.StatusError(reply.Status), reply.Status);
-            FileLog.Write("Agent", $"model_transient_error status={status} retry=1");
+            FileLog.Write("Agent", $"上游 {status} → 2 秒后重试一次");
             await Clock.Delay(TimeSpan.FromSeconds(2), ct);
         }
 
         if (!HasChoices(json))
         {
-            FileLog.Write("Agent", "model_empty_choices retry=1");
+            FileLog.Write("Agent", "上游空 choices → 2 秒后重试一次");
             await Clock.Delay(TimeSpan.FromSeconds(2), ct);
             var retry = await SendFallbackAsync(requestPayload, requestUrl, apiKey, ct);
             if ((int)retry.Status is >= 200 and < 300)
@@ -322,7 +322,7 @@ public class ModelTransport : IModelTransport
                     json = plain.Body;
                     textOnlyRetry = true;
                     RememberSuspectImages(attachedImageIds);
-                    FileLog.Write("Agent", $"model_text_only_fallback images={attachedImages}");
+                    FileLog.Write("Agent", $"疑似图片触发上游过滤：去掉图片再试一次（本轮回复是去掉图片后拿到的，那张图已被拉黑）images={attachedImages}");
                 }
             }
         }

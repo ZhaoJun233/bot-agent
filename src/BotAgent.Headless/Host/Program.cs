@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using BotAgent.Adapters.Panel;
+using BotAgent.Adapters.Panel.Zba;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.NapCat;
@@ -44,6 +45,13 @@ public static class Program
             return 0;
         }
 
+        // 只读 CLI：不启动宿主、不读写数据库，只走本机 ZBA 的 GET 投影。
+        if (ZbaCli.IsRequest(args))
+        {
+            using var cliHttp = CreateHttpClient(TimeSpan.FromSeconds(10));
+            return await ZbaCli.RunAsync(args, ResolveHealthPort(), cliHttp);
+        }
+
         // 容器 HEALTHCHECK 用：探测自身 /healthz，不依赖镜像里的 curl
         if (args.Contains("--health"))
         {
@@ -68,7 +76,7 @@ public static class Program
         }
 
         // ---------- 组装服务（唯一的装配点）----------
-        await using var graph = CompositionRoot.Build(settings);
+        await using var graph = CompositionRoot.Build(settings, new ZbaCallerAuthorization());
 
         // 先恢复磁盘会话并订阅事件，再连接协议端，避免启动期消息竞态
         // 先把官方那条也起上（它就是一条 WS 长连接 + 定时刷 token），再连私域
@@ -149,16 +157,19 @@ public static class Program
 
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var http = CreateHttpClient(TimeSpan.FromSeconds(3));
             var response = await http.GetAsync($"http://127.0.0.1:{port}/healthz");
             return response.IsSuccessStatusCode ? 0 : 1;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"健康探测失败: {ex.Message}");
+            Console.Error.WriteLine($"健康探测失败: {ex.GetType().Name}");
             return 1;
         }
     }
+
+    /// <summary>出网客户端的唯一构造点（架构棘轮只允许 Program.cs 造它）。</summary>
+    private static HttpClient CreateHttpClient(TimeSpan timeout) => new() { Timeout = timeout };
 
     /// <summary>
     /// 面板 / 健康检查端口：三个环境变量名都认（与 BotConfig 的优先级一致），都没设才回落到配置默认值。
@@ -245,7 +256,7 @@ public static class Program
             """
             Bot Agent（Headless / 容器版）
 
-            用法: BotAgent.Headless [--help] [--version]
+            用法: BotAgent.Headless [--help] [--version] [只读 CLI 选项]
 
             配置文件: $BOTAGENT_DATA_DIR/data/settings.json（兼容 $QQCHAT_DATA_DIR；也可挂载旧版 runtime/data/settings.json）
             环境变量覆盖（优先级高于 settings.json；BOTAGENT_* 优先，QQCHAT_* 兼容旧部署）:
@@ -279,6 +290,10 @@ public static class Program
               QQCHAT_PROFILE_LOOKUP    附带人物档案数上限（默认 8）
 
               QQCHAT_HEALTH_PORT       面板/健康检查端口，0=关闭（默认 18245；也认 BOTAGENT_HEALTH_PORT / HEALTH_PORT）
+              BOTAGENT_ZBA_TOKEN       ZBA 管理员 Bearer（写路径必需；兼容 QQCHAT_ZBA_TOKEN）
+              BOTAGENT_ZBA_READ_TOKEN  ZBA 只读 Bearer（可选；兼容 QQCHAT_ZBA_READ_TOKEN）
+              BOTAGENT_ZBA_ALLOW_LOOPBACK  =1 时无令牌仅允许回环（仅本机开发；默认关闭）
+              BOTAGENT_ZBA_URL         只读 CLI 的基址（默认 http://127.0.0.1:<健康端口>/zba/v1）
               QQCHAT_NAPCAT_WEBUI_URL  NapCat WebUI 地址（默认 http://napcat:6099）
               QQCHAT_NAPCAT_WEBUI_TOKEN  NapCat WebUI 令牌（napcat/config/webui.json 的 token）
                                        配了它，面板就能直接显示登录二维码（扫码登录）
@@ -290,7 +305,12 @@ public static class Program
             端点:     GET /healthz      存活探针（始终 200）
                       GET /readyz       就绪探针（已连上协议端 200，否则 503）
                       GET /status       运行状态 JSON
+                      ZBA /zba/v1/*     Bearer 后端接口（health 公开；其余需要读/管理令牌）
             运维:     --health        探测本机 /healthz（容器 HEALTHCHECK 用，无需 curl）
+                      --status        只读：整体状态与组件（走 ZBA）
+                      --capabilities  只读：已登记驱动/插件/模型 provider
+                      --tasks         只读：最近任务状态
+                      --events        只读：事件（--after N 从序号恢复；需要读令牌）
 
             退出: Ctrl+C 或 SIGTERM（容器 docker stop）会优雅收尾并落盘。
             """);

@@ -57,6 +57,10 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 协议端和面板是**两个独立启动阶段**（Host/Program.cs）：只等 botWsPort 就在 Linux
+        // 容器里读过 /api/settings，会稳定拿到 Connection refused。这里按面板端口有界等待，
+        // 断言本身不放宽（仍要求 200 + 具体字段）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         // 先把生效的配置看清楚：这是全新数据目录，环境变量应当作为“种子”生效
         var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");

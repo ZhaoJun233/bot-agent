@@ -1,4 +1,5 @@
 using BotAgent.Domain.Ports;
+using BotAgent.Domain.Qq;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Panel;
@@ -233,7 +234,11 @@ public sealed class BotScheduler
     /// </summary>
     public async Task CheckAccountOnlineAsync()
     {
-        if (_hooks.IsDisposed() || _source is not OneBotGateway gateway || !gateway.IsConnected)
+        // 装配点给的是 ChannelRouter（私域 + 可选官方/本地/飞书），账号在线探测只认私域那条 OneBot；
+        // 只看 _source 本身的话，路由之后永远探测不到 → 面板一直显示“未知”。
+        var gateway = _source as OneBotGateway
+            ?? (_source as IChannelRegistry)?.Get(Channels.Private) as OneBotGateway;
+        if (_hooks.IsDisposed() || gateway is null || !gateway.IsConnected)
         {
             return;
         }

@@ -4,9 +4,9 @@ public enum ConfigurationFieldId
 {
     AdaptiveSamplingEnabled = 1,
     AgentAllowedUsers = 2,
-    AgentDevices = 3,
-    AgentMaxQueued = 4,
-    AgentModel = 5,
+    AgentDevices = 3,          // reserved: cfg-0.3.3 removed the device editor
+    AgentMaxQueued = 4,        // reserved: host queue removed
+    AgentModel = 5,            // reserved: host model removed
     AgentPrefix = 6,
     AgentProgressSeconds = 7,
     AgentPrompt = 8,
@@ -23,10 +23,10 @@ public enum ConfigurationFieldId
     AgentServerTools = 19,
     AgentServerUseGate = 20,
     AgentServerWorkDir = 21,
-    AgentTarget = 22,
-    AgentTimeoutSeconds = 23,
-    AgentTools = 24,
-    AgentWorkDir = 25,
+    AgentTarget = 22,          // reserved: host target removed
+    AgentTimeoutSeconds = 23,  // reserved: host timeout removed
+    AgentTools = 24,           // reserved: host tools removed
+    AgentWorkDir = 25,         // reserved: host workdir removed
     AiDesire = 26,
     AiModeEnabled = 27,
     ApprovalApprovers = 28,
@@ -39,7 +39,7 @@ public enum ConfigurationFieldId
     EnableAgentMask = 35,
     EnableApprovals = 36,
     EnableAtmosphereDamping = 37,
-    EnableHostAgent = 38,
+    EnableHostAgent = 38,      // reserved: host switch removed
     EnableLinkPreview = 39,
     EnableMusic = 40,
     EnableParticipationGating = 41,

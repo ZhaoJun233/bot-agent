@@ -159,13 +159,6 @@ internal static class ConfigurationStorageBridge
         FROM configuration_devices d LEFT JOIN configuration_revoked_names r ON r.device_key=d.device_key
         ORDER BY d.device_key,r.name
         """;
-    private const string SaveDeviceSql = """
-        INSERT INTO configuration_devices(device_key,active_name,desired_name,desired_enabled,deleted,rename_pending)
-        VALUES($key,$active,$desired,$enabled,$deleted,$pending)
-        ON CONFLICT(device_key) DO UPDATE SET active_name=excluded.active_name,desired_name=excluded.desired_name,
-          desired_enabled=excluded.desired_enabled,deleted=excluded.deleted,rename_pending=excluded.rename_pending
-        """;
-    private const string RevokeDeviceNameSql = "INSERT INTO configuration_revoked_names(name,device_key) VALUES($name,$key) ON CONFLICT(name) DO NOTHING";
     internal static ConfigurationStore Activate(IClock clock, ConfigurationStorageParticipant participant)
         => ConfigurationStore.Activate(clock, participant);
 
@@ -261,120 +254,6 @@ internal static class ConfigurationStorageBridge
         return result.ToImmutable();
     }
 
-    internal static PreparedDeviceChange PrepareDevices(SqliteConnection connection,
-        ImmutableArray<DeviceConfiguration> desired, ConfigurationStorageProfile profile)
-    {
-        var code = profile == ConfigurationStorageProfile.Legacy
-            ? ConfigurationResultCode.LegacyNeedsReview : ConfigurationResultCode.ValidationFailed;
-        PreparedDeviceChange Reject() => new(false, code,
-            ImmutableArray.Create(new FieldError(new FieldAddress(ConfigurationFieldId.AgentDevices, null), "invalid_device_identity")),
-            ImmutableArray<DeviceKeyAssignment>.Empty, ImmutableArray<DeviceConfiguration>.Empty, _ => { });
-        if (desired.IsDefault || desired.Length > 128 || !Enum.IsDefined(profile)) return Reject();
-        var existing = LoadDevices(connection);
-        var states = existing.ToDictionary(x => x.Key);
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var retained = new HashSet<DeviceKey>();
-        var normalized = ImmutableArray.CreateBuilder<DeviceConfiguration>();
-        var assignments = ImmutableArray.CreateBuilder<DeviceKeyAssignment>();
-        for (var ordinal = 0; ordinal < desired.Length; ordinal++)
-        {
-            var item = desired[ordinal];
-            if (item is null || !ValidDeviceName(item.NameRaw) || !names.Add(item.NameRaw)) return Reject();
-            ConfigurationDeviceState? previous = null;
-            if (item.Key is { } provided)
-            {
-                if (!states.TryGetValue(provided, out previous) || previous.Deleted) return Reject();
-            }
-            else if (profile == ConfigurationStorageProfile.Legacy)
-            {
-                var matches = existing.Where(x => SameName(x.ActiveName, item.NameRaw) || SameName(x.DesiredName, item.NameRaw)).ToArray();
-                if (matches.Length > 1 || matches.Any(x => x.Deleted)) return Reject();
-                previous = matches.SingleOrDefault();
-            }
-            if (existing.Any(x => x.RevokedNames.Any(n => SameName(n, item.NameRaw)))) return Reject();
-            if (existing.Any(x => x.Key != previous?.Key
-                && (SameName(x.ActiveName, item.NameRaw) || SameName(x.DesiredName, item.NameRaw)))) return Reject();
-            var key = previous?.Key ?? new DeviceKey(Guid.NewGuid());
-            if (!retained.Add(key)) return Reject();
-            if (previous is null) assignments.Add(new(ordinal, key));
-            var revoked = previous?.RevokedNames ?? ImmutableArray<string>.Empty;
-            if (previous is { RenamePending: true } && !SameName(previous.DesiredName, item.NameRaw)
-                && !SameName(previous.DesiredName, previous.ActiveName))
-                revoked = AddName(revoked, previous.DesiredName);
-            var active = previous?.ActiveName ?? item.NameRaw;
-            states[key] = new(key, active, item.NameRaw, item.Enable, false, !SameName(active, item.NameRaw), revoked);
-            normalized.Add(item with { Key = key });
-        }
-        foreach (var omitted in existing.Where(x => !x.Deleted && !retained.Contains(x.Key)))
-            states[omitted.Key] = omitted with { DesiredEnabled = false, Deleted = true, RenamePending = false,
-                RevokedNames = AddName(AddName(omitted.RevokedNames, omitted.ActiveName), omitted.DesiredName) };
-        var planned = states.Values.OrderBy(x => x.Key.Value).ToImmutableArray();
-        // Cross-check names revoked by this batch too (including abandoned pending names).
-        if (normalized.Any(x => planned.Any(state => state.RevokedNames.Any(n => SameName(n, x.NameRaw))))) return Reject();
-        var changed = planned.Any(state => !existing.Any(old => EquivalentDeviceState(old, state)))
-            || planned.Length != existing.Length;
-        return new(changed, ConfigurationResultCode.Ok, ImmutableArray<FieldError>.Empty,
-            assignments.ToImmutable(), normalized.ToImmutable(), conn =>
-            {
-                foreach (var state in planned.Where(state => !existing.Any(old => EquivalentDeviceState(old, state))))
-                    PersistDevice(conn, state);
-            });
-    }
-
-    /// <summary>Trusted Host calls only after existing connection-token authentication; no client key is accepted.</summary>
-    internal static ConfigurationDeviceGate AuthorizeDeviceHello(string name)
-    {
-        var denied = new ConfigurationDeviceGate(false, false, null, false);
-        try
-        {
-            name = name.Trim();
-            if (!ValidDeviceName(name)) return denied;
-            var result = denied;
-            AppDatabase.Write(conn =>
-            {
-                var states = LoadDevices(conn);
-                var matches = states.Where(x => KnownName(x, name)).ToArray();
-                if (matches.Length == 0) { result = new(true, false, null, false); return; }
-                if (matches.Length != 1) return;
-                var state = matches[0];
-                result = new(false, true, state.Key, state.RenamePending);
-                if (state.Deleted || !state.DesiredEnabled || state.RevokedNames.Any(n => SameName(n, name))) return;
-                if (state.RenamePending && SameName(state.DesiredName, name))
-                {
-                    state = state with { ActiveName = state.DesiredName, RenamePending = false,
-                        RevokedNames = AddName(state.RevokedNames, state.ActiveName) };
-                    PersistDevice(conn, state);
-                    ConfigurationStore.AppendDeviceRuntimeAudit(conn, state.Key);
-                }
-                if (SameName(state.ActiveName, name)) result = new(true, true, state.Key, state.RenamePending);
-            });
-            return result;
-        }
-        catch { return denied; }
-    }
-
-    /// <summary>Read committed gate immediately before actual task/control dispatch; never trust stale SettingsBox.</summary>
-    internal static bool CanDispatchDevice(string name, DeviceKey? serverBoundKey)
-    {
-        try
-        {
-            name = name.Trim();
-            if (!ValidDeviceName(name) || serverBoundKey is { Value: var key } && key == Guid.Empty) return false;
-            using var conn = AppDatabase.Open();
-            var states = LoadDevices(conn);
-            var matches = states.Where(x => KnownName(x, name)).ToArray();
-            if (matches.Length == 0) return serverBoundKey is null;
-            if (matches.Length != 1) return false;
-            var state = matches[0];
-            return !state.Deleted && state.DesiredEnabled && SameName(state.ActiveName, name)
-                && !state.RevokedNames.Any(n => SameName(n, name))
-                && (serverBoundKey is null || serverBoundKey == state.Key);
-        }
-        catch { return false; }
-    }
-
-    private static bool KnownName(ConfigurationDeviceState state, string name)
-        => SameName(state.ActiveName, name) || SameName(state.DesiredName, name) || state.RevokedNames.Any(n => SameName(n, name));
     private static bool SameName(string left, string right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
     private static bool ValidDeviceName(string name)
     {
@@ -384,19 +263,6 @@ internal static class ConfigurationStorageBridge
     }
     private static ImmutableArray<string> AddName(ImmutableArray<string> names, string name)
         => names.Any(x => SameName(x, name)) ? names : names.Add(name);
-    private static bool EquivalentDeviceState(ConfigurationDeviceState left, ConfigurationDeviceState right)
-        => left.Key == right.Key && left.ActiveName == right.ActiveName && left.DesiredName == right.DesiredName
-            && left.DesiredEnabled == right.DesiredEnabled && left.Deleted == right.Deleted
-            && left.RenamePending == right.RenamePending
-            && left.RevokedNames.OrderBy(x => x, StringComparer.Ordinal).SequenceEqual(right.RevokedNames.OrderBy(x => x, StringComparer.Ordinal));
-    private static void PersistDevice(SqliteConnection connection, ConfigurationDeviceState state)
-    {
-        var key = state.Key.Value.ToString("N");
-        AppDatabase.Exec(connection, SaveDeviceSql, ("$key", key), ("$active", state.ActiveName), ("$desired", state.DesiredName),
-            ("$enabled", state.DesiredEnabled ? 1 : 0), ("$deleted", state.Deleted ? 1 : 0), ("$pending", state.RenamePending ? 1 : 0));
-        foreach (var name in state.RevokedNames)
-            AppDatabase.Exec(connection, RevokeDeviceNameSql, ("$name", name), ("$key", key));
-    }
 }
 
 internal readonly record struct ConfigurationPlatformPolicySnapshot(bool Stored,
@@ -410,12 +276,6 @@ internal sealed record ConfigurationDeviceState(DeviceKey Key, string ActiveName
 {
     public override string ToString() => "ConfigurationDeviceState";
 }
-internal sealed record PreparedDeviceChange(bool Changed, ConfigurationResultCode Code, ImmutableArray<FieldError> Errors,
-    ImmutableArray<DeviceKeyAssignment> Assignments, ImmutableArray<DeviceConfiguration> DesiredWithKeys, Action<SqliteConnection> Persist)
-{
-    public override string ToString() => "PreparedDeviceChange";
-}
-internal readonly record struct ConfigurationDeviceGate(bool Allowed, bool Registered, DeviceKey? Key, bool RenamePending);
 
 internal readonly record struct SecretMutation(WritableSecretSlot Slot, SecretEditKind Kind)
 {
@@ -447,7 +307,6 @@ internal abstract class ConfigurationStorageParticipant
     internal virtual bool Initialize(SqliteConnection connection, long serverUnixSeconds) => false;
     internal virtual void AppendInitializationAudit(SqliteConnection connection,
         ConfigurationVersion before, ConfigurationVersion after) { }
-    internal virtual void AppendDeviceRuntimeAudit(SqliteConnection connection, DeviceKey key) { }
     internal abstract bool Reauthorize(ConfigurationCaller caller, ConfigurationAccess required);
     internal abstract ImmutableArray<SecretMetadata> SecretSources(
         SqliteConnection connection, ImmutableArray<SecretMutation> proposed);

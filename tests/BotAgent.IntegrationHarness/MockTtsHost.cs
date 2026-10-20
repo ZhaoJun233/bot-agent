@@ -33,7 +33,7 @@ public sealed class MockTtsHost : IDisposable
     }
 
     /// <summary>一次 /speak 调用的参数（从查询串里取出来的原文）。</summary>
-    public readonly record struct SpeakCall(string Text, string Voice, string Speed);
+    public readonly record struct SpeakCall(string Text, string Voice, string Speed, string Format);
 
     /// <summary>可用音色（/health 会列出来；不在里面的音色会返回 404）。</summary>
     public string[] Voices { get; set; } = ["zh_CN-huayan-medium", "zh_CN-xiao_ya-medium"];
@@ -122,10 +122,11 @@ public sealed class MockTtsHost : IDisposable
                 var text = query["text"] ?? string.Empty;
                 var voice = query["voice"] ?? string.Empty;
                 var speed = query["speed"] ?? string.Empty;
+                var format = query["format"] ?? string.Empty;
 
                 lock (_gate)
                 {
-                    _speakCalls.Add(new SpeakCall(text, voice, speed));
+                    _speakCalls.Add(new SpeakCall(text, voice, speed, format));
                 }
 
                 if (Voices.Length > 0 && !Voices.Contains(voice))

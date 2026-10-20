@@ -32,7 +32,9 @@ public sealed record PlatformCapabilities(
     public static PlatformCapabilities QqOfficial { get; } = new(
         SupportsText: true,
         SupportsImage: true,
-        SupportsVoice: false,
+        // 官方语音不是 OneBot 的 record 段：先 /files（file_type=3，silk）再发 msg_type=7。
+        // 网关已实现这条链（OfficialBotGateway.SendVoiceAsync），能力表不能继续声明“不支持”。
+        SupportsVoice: true,
         SupportsQuote: true,
         SupportsRecall: false,
         SupportsDirect: true,

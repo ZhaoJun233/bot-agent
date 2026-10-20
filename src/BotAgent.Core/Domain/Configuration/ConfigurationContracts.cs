@@ -4,6 +4,14 @@ using System.Text.Json.Serialization;
 
 namespace BotAgent.Domain.Configuration;
 
+/// <summary>Wire revisions are additive; old receipts stay decodable after a revision bump.</summary>
+public static class ConfigurationContract
+{
+    public const string Revision = "cfg-0.3.3";
+    public const string LegacyRevision = "cfg-0.3.2";
+    public const string AliasCodecRevision = "cfg-0.3.2/alias-1";
+}
+
 /// <summary>Only an authorized projection retains an editable value; Hidden retains none.</summary>
 [JsonConverter(typeof(ReadFieldConverterFactory))]
 public sealed class ReadField<T>

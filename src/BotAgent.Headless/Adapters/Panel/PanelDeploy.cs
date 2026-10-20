@@ -81,14 +81,15 @@ public sealed partial class WebUiServer
         var containerStart = await RunDockerAsync("inspect --format \"{{.State.StartedAt}}\" qqchat-bot", 15);
         var imageInfo = await RunDockerAsync("inspect --format \"{{.Id}} {{.Created}}\" qqchat-agent:latest", 15);
         var prevInfo = await RunDockerAsync("inspect --format \"{{.Id}} {{.Created}}\" qqchat-agent:prev", 15);
+        var tarFile = new FileInfo(DeployTar);
 
         var payload = new JsonObject
         {
             ["enabled"] = _settings.PanelDeployEnabled,
             ["url"] = _settings.PanelDeployUrl,
             ["dirReady"] = Directory.Exists(DeployDir),
-            ["tarBytes"] = File.Exists(DeployTar) ? new FileInfo(DeployTar).Length : 0,
-            ["tarUpdated"] = File.Exists(DeployTar) ? File.GetLastWriteTime(DeployTar).ToString("O") : null,
+            ["tarBytes"] = tarFile.Exists ? tarFile.Length : 0,
+            ["tarUpdated"] = tarFile.Exists ? tarFile.LastWriteTime.ToString("O") : null,
             ["containerStarted"] = containerStart.Ok ? containerStart.Output.Trim().Trim('"') : null,
             ["image"] = imageInfo.Ok ? imageInfo.Output.Trim() : null,
             ["previousImage"] = prevInfo.Ok ? prevInfo.Output.Trim() : null,

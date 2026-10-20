@@ -103,10 +103,15 @@ def main() -> int:
     check("★ 远端路径用双引号包（空格不再靠反斜杠转义）",
           batch.startswith('get "/tmp/my file.txt"') and "\\ " not in batch, batch[:70])
 
-    # ③b 本地路径转成正斜杠（Windows 的反斜杠会被 sftp 当转义吃掉）
-    code, out, tmp = run_case(["put", r"C:\temp\a.txt"])
+    # ③b 本地路径先转绝对路径，再把反斜杠转成正斜杠（Windows 上 sftp 会把反斜杠当转义吃掉）。
+    # 这里刻意用 Windows 形状的输入：在 POSIX 上它不是绝对路径，abspath 会按当前目录解释，
+    # 断言要跟着操作系统走，而不是无条件要求 Windows 盘符语义（2026-10-20 Linux 验收 LNX-V03）。
+    local_input = r"C:\temp\a.txt"
+    expected_local = os.path.abspath(os.path.expanduser(local_input)).replace("\\", "/")
+    code, out, tmp = run_case(["put", local_input])
     batch = (tmp / "batch.txt").read_text(encoding="utf-8").strip()
-    check("★ 本地 Windows 路径转正斜杠后才写进批处理", batch.startswith('put "C:/temp/a.txt"') and "\\\\" not in batch, batch)
+    check("★ 本地路径先转绝对路径，再转正斜杠后才写进批处理",
+          batch == f'put "{expected_local}"' and "\\\\" not in batch, batch)
 
     # ④ 子命令拼出来的批处理对不对
     for sub, args, expect in [

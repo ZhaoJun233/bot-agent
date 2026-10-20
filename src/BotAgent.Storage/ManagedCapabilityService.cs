@@ -16,7 +16,7 @@ internal sealed record ManagedDispatchResult(ManagedOperationState State, string
 /// <summary>One coordinator over the existing configuration writer; runtime facts and dispatch come from the trusted host.</summary>
 internal sealed class ManagedCapabilityService : IManagedCapabilities, IAsyncDisposable
 {
-    private const string Revision = "cfg-0.3.2";
+    private const string Revision = ConfigurationContract.Revision;
     private static readonly JsonSerializerOptions Codec = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,

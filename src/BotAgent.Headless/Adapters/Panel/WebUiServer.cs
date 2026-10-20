@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.WebSockets;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
 using System.Text;
@@ -30,6 +29,7 @@ using BotAgent.Services.Platforms;
 using BotAgent.Services.Voice;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Ports;
+using BotAgent.Panel;
 using BotAgent.Services.Ports;
 
 namespace BotAgent.Adapters.Panel;
@@ -129,6 +129,10 @@ public sealed partial class WebUiServer : IDisposable
     private Task? _loop;
     private int _convBroadcastPending;
     private long _convBroadcastVersion;
+    private ZbaEndpoint? _zba;
+
+    /// <summary>由组合根在管理面建好后挂上；ZBA 自带 Bearer 认证，不复用旧面板的 Cookie 会话。</summary>
+    public void AttachZba(ZbaEndpoint endpoint) => _zba = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
 
     public WebUiServer(
         int port,
@@ -156,7 +160,6 @@ public sealed partial class WebUiServer : IDisposable
         ParticipationUseCase participation,
         AgentCommandService agentCmds,
         ITenantQuotaLedger quotas,
-         AgentBridgeServer? agentBridge = null,
         HealthReportService? healthReports = null,
         SessionPolicyLedger? sessionPolicies = null,
         TurnTraceStore? traces = null,
@@ -201,7 +204,6 @@ public sealed partial class WebUiServer : IDisposable
         _agentCmds = agentCmds;
         _quotas = quotas;
         _jargons = jargons ?? new JargonStore();
-         _agentBridge = agentBridge;
         _healthReports = healthReports;
         _sessionPolicies = sessionPolicies;
         _traces = traces;
@@ -232,9 +234,6 @@ public sealed partial class WebUiServer : IDisposable
     private readonly IHttpFetcher _modelProbeHttp;
 
     private readonly IHttpFetcher _neteaseHttp;
-
-    /// <summary>本机 Agent 桥（没启用时为 null）。</summary>
-    private readonly AgentBridgeServer? _agentBridge;
 
     /// <summary>服务器健康日报（管理员 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
     private readonly HealthReportService? _healthReports;
@@ -290,8 +289,10 @@ public sealed partial class WebUiServer : IDisposable
 
         if (!_panelPassword.IsConfigured)
         {
-            FileLog.Warn("Web",
-                $"[安全警告] 当前面板未设置密码，已自动启用免密模式并强制限制绑定 127.0.0.1:{_port}（仅限本机访问）。如需开放公网，请在设置中配置面板密码（至少 8 位）。");
+            var tokenConfigured = !string.IsNullOrWhiteSpace(_settings.PanelToken);
+            FileLog.Warn("Web", tokenConfigured
+                ? $"当前面板未设置密码；已配置面板令牌，API 将要求 X-Panel-Token，绑定限制为 127.0.0.1:{_port}。"
+                : $"[安全警告] 当前面板未设置密码，已自动启用免密模式并强制限制绑定 127.0.0.1:{_port}（仅限本机访问）。如需开放公网，请在设置中配置面板密码（至少 8 位）。");
         }
 
         var candidates = _bind == "+" && !OperatingSystem.IsWindows()
@@ -355,6 +356,28 @@ public sealed partial class WebUiServer : IDisposable
             var path = context.Request.Url?.AbsolutePath ?? "/";
             var method = context.Request.HttpMethod;
 
+            // ZBA 是独立的 Bearer 边界：不走旧面板的 Cookie/同源判定，也不继承旧面板的免密回环规则。
+            if (_zba is not null && path.StartsWith("/zba/", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await ZbaHttpListenerAdapter.HandleAsync(context, _zba, _zba.MaxBodyBytes, _cts.Token);
+                }
+                finally
+                {
+                    try
+                    {
+                        context.Response.Close();
+                    }
+                    catch
+                    {
+                        // 客户端已断开
+                    }
+                }
+
+                return;
+            }
+
             var isFeishuWebhook = path.Equals("/api/webhooks/feishu", StringComparison.OrdinalIgnoreCase);
             var publicPath = isFeishuWebhook ||
                 path.Equals("/healthz", StringComparison.OrdinalIgnoreCase) ||
@@ -362,7 +385,6 @@ public sealed partial class WebUiServer : IDisposable
                 path.Equals("/metrics", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/status", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
-                path.Equals("/agent-bridge", StringComparison.OrdinalIgnoreCase) ||
                 (method == "GET" && (path == "/" || path == "/app.css" || path == "/app.js" ||
                     path == "/trace.css" || path == "/trace.js" || path == "/dash.js" || path == "/favicon.ico" ||
                     path.Equals("/playground", StringComparison.OrdinalIgnoreCase) || path.Equals("/playground.html", StringComparison.OrdinalIgnoreCase)));
@@ -427,7 +449,10 @@ public sealed partial class WebUiServer : IDisposable
 
     private bool IsAuthorized(HttpListenerContext context)
     {
-        if (!_panelPassword.IsConfigured) return true;
+        // 免密只对“既没密码、也没配置令牌”的本机面板成立。
+        // 配了令牌而没配密码时必须校验令牌，否则隧道把远端请求转成回环后就能绕过令牌（Issue #78）。
+        if (!_panelPassword.IsConfigured)
+            return string.IsNullOrWhiteSpace(_settings.PanelToken) || IsLegacyAuthorized(context);
         var now = Clock.Now;
         if (IsLegacyAuthorized(context)) return true;
         return TryGetValidPanelSession(context, now) && !_panelPassword.MustChange;
@@ -464,19 +489,78 @@ public sealed partial class WebUiServer : IDisposable
             return true;
         }
 
-        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || uri.UserInfo.Length != 0)
         {
             return false;
         }
 
-        var requestHost = context.Request.Url?.Host ?? string.Empty;
-        if (string.Equals(uri.Host, requestHost, StringComparison.OrdinalIgnoreCase))
+        var request = context.Request.Url;
+        if (request is null || string.IsNullOrWhiteSpace(request.Host))
+        {
+            return false;
+        }
+
+        // A TLS-terminating reverse proxy is the only caller allowed to describe the
+        // browser-facing scheme; trusting this header from a public peer would let any
+        // client choose its own origin.  The panel is reachable through Caddy on the
+        // same host, where the source address is loopback.
+        var scheme = request.Scheme;
+        var forwarded = context.Request.Headers["X-Forwarded-Proto"]?.Trim();
+        if (context.Request.IsLocal &&
+            (string.Equals(forwarded, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(forwarded, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            scheme = forwarded!;
+        }
+
+        if (!string.Equals(uri.Scheme, scheme, StringComparison.OrdinalIgnoreCase) ||
+            !SameHost(uri, request))
+        {
+            return false;
+        }
+
+        // HttpListener reports its own listening port when the Host header has no
+        // port.  Behind Caddy that is the internal port, while the browser's origin
+        // is the public default port for the forwarded scheme.
+        var hostHeader = context.Request.Headers["Host"];
+        var port = HostHeaderHasPort(hostHeader) || string.IsNullOrWhiteSpace(hostHeader)
+            ? request.Port
+            : DefaultPort(scheme);
+
+        return uri.Port == port;
+    }
+
+    private static int DefaultPort(string scheme) =>
+        string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ? 443 : 80;
+
+    private static bool HostHeaderHasPort(string? host)
+    {
+        host = host?.Trim();
+        if (string.IsNullOrEmpty(host))
+        {
+            return false;
+        }
+
+        if (host[0] == '[')
+        {
+            var end = host.IndexOf(']');
+            return end > 0 && end + 1 < host.Length && host[end + 1] == ':';
+        }
+
+        var colon = host.IndexOf(':');
+        return colon > 0 && colon == host.LastIndexOf(':') && colon + 1 < host.Length;
+    }
+
+    private static bool SameHost(Uri origin, Uri request)
+    {
+        if (string.Equals(origin.IdnHost.TrimEnd('.'), request.IdnHost.TrimEnd('.'), StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        // localhost 与 127.0.0.1 视为同一台机器的两种写法
-        return uri.IsLoopback && requestHost is "localhost" or "127.0.0.1" or "::1";
+        // localhost, 127.0.0.1 and [::1] are the same machine for a loopback panel,
+        // but that alias never weakens the port or scheme checks above.
+        return origin.IsLoopback && request.IsLoopback;
     }
 
     /// <summary>QQ 登录二维码信息（面板内扫码）。</summary>
@@ -576,41 +660,6 @@ public sealed partial class WebUiServer : IDisposable
         }
 
         await WriteJsonAsync(r.Context, 200, new JsonObject { ["aiMode"] = _settings.AiModeEnabled });
-    }
-
-    /// <summary>断开某台设备（面板里踢掉；本机那边会自动重连，所以也是"重连"按钮）。</summary>
-    private async Task HandleAgentDisconnectAsync(PanelRequest r)
-    {
-        var body = await ReadJsonAsync(r.Context);
-        var device = body?["device"]?.GetValue<string>();
-        var ok = _agentBridge is not null && await _agentBridge.DisconnectAsync(device);
-        await WriteJsonAsync(r.Context, 200, new JsonObject { ["ok"] = ok });
-    }
-
-    /// <summary>设备上 pi 里的会话（面板"从 pi 导入"用）。</summary>
-    private async Task HandlePiSessionsAsync(PanelRequest r)
-    {
-        var device = r.Context.Request.QueryString["device"];
-        if (_agentBridge is not null && _agentBridge.Connected)
-        {
-            await _agentBridge.RequestPiSessionsAsync(device ?? string.Empty);
-            for (var i = 0; i < 10; i++)
-            {
-                await Clock.Delay(500);
-                if (_agentBridge.DevicePiSessions(device).Count > 0)
-                {
-                    break;
-                }
-            }
-        }
-
-        var list = _agentBridge is null ? new List<JsonObject>() : _agentBridge.DevicePiSessions(device);
-        await WriteJsonAsync(r.Context, 200, new JsonObject
-        {
-            ["device"] = device,
-            ["connected"] = _agentBridge?.Connected ?? false,
-            ["sessions"] = new JsonArray(list.Select(x => (JsonNode)_dto.PiSession(x)).ToArray())
-        });
     }
 
     // ══════════════ SSE ══════════════
@@ -777,33 +826,18 @@ public sealed partial class WebUiServer : IDisposable
             value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
             value.Equals("yes", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>读取嵌入的静态资源（wwwroot/*，LogicalName = web/文件名）。</summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> AssetCache = new(StringComparer.OrdinalIgnoreCase);
-
+    /// <summary>读取发布目录的静态资源（wwwroot/*）；缺失时只影响旧页面，不影响 API/健康/ZBA。</summary>
     private static async Task WriteAssetAsync(HttpListenerContext context, string fileName, string contentType)
     {
-        // 静态文件提供协商缓存与高性能内存缓存
+        // 静态文件提供协商缓存
         context.Response.Headers["Cache-Control"] = "no-cache, must-revalidate";
 
-        if (!AssetCache.TryGetValue(fileName, out var bytes))
+        var bytes = PanelAssets.Read(fileName);
+        if (bytes is null)
         {
-            var assembly = Assembly.GetExecutingAssembly();
-            var resource = assembly.GetManifestResourceNames()
-                .FirstOrDefault(n => n.EndsWith("." + fileName, StringComparison.OrdinalIgnoreCase) ||
-                                     n.Equals("web/" + fileName, StringComparison.OrdinalIgnoreCase));
-
-            if (resource is null)
-            {
-                var message = Encoding.UTF8.GetBytes($"asset not found: {fileName}");
-                await WriteBytesAsync(context, 404, "text/plain; charset=utf-8", message);
-                return;
-            }
-
-            await using var stream = assembly.GetManifestResourceStream(resource)!;
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer);
-            bytes = buffer.ToArray();
-            AssetCache[fileName] = bytes;
+            var message = Encoding.UTF8.GetBytes($"asset not found: {fileName}");
+            await WriteBytesAsync(context, 404, "text/plain; charset=utf-8", message);
+            return;
         }
 
         await WriteBytesAsync(context, 200, contentType, bytes);

@@ -27,6 +27,12 @@ public static class BotConfig
     /// <summary>被面板设置覆盖掉的环境变量（启动时提示用户，否则“改了 .env 怎么不生效”很难排查）。</summary>
     public static List<string> PanelOverriddenEnvVars { get; } = new();
 
+    /// <summary>
+    /// 本次启动读取配置时“库里到底存过配置没有”的结果，在初始化写入行为种子**之前**捕获。
+    /// 这是“这个数据目录运行过”的既有持久化证据；ZBA 用它排除伪首次安装（W5-G1-BOOT-LOSS）。
+    /// </summary>
+    internal static bool HadStoredSettingsAtLoad { get; private set; }
+
     /// <summary>加载配置：配置文件 → 环境变量 → 必要的合规修正。</summary>
     public static AppSettings Load()
     {
@@ -35,6 +41,7 @@ public static class BotConfig
         // 用它当判据会让“首次部署用环境变量当种子”永远不生效（踩过：白名单直接变空，机器人谁都不理）。
         var settingsStore = new SettingsStore();
         var hasStored = settingsStore.HasStoredSettings();
+        HadStoredSettingsAtLoad = hasStored;
         var settings = settingsStore.Load();
         ApplyInfrastructureEnvironment(settings);
         ApplyBehaviorEnvironment(settings, seedOnly: !hasStored);
@@ -282,20 +289,13 @@ public static class BotConfig
     [nameof(AppSettings.EnableAgentBridge)] = new[] { "QQCHAT_AGENT" },
     [nameof(AppSettings.AgentPrefix)] = new[] { "QQCHAT_AGENT_PREFIX" },
     [nameof(AppSettings.AgentAllowedUsers)] = new[] { "QQCHAT_AGENT_USERS" },
-    [nameof(AppSettings.AgentWorkDir)] = new[] { "QQCHAT_AGENT_WORKDIR" },
-    [nameof(AppSettings.AgentModel)] = new[] { "QQCHAT_AGENT_MODEL" },
-    [nameof(AppSettings.AgentTools)] = new[] { "QQCHAT_AGENT_TOOLS" },
-    [nameof(AppSettings.AgentTimeoutSeconds)] = new[] { "QQCHAT_AGENT_TIMEOUT" },
     [nameof(AppSettings.AgentReplyMaxChars)] = new[] { "QQCHAT_AGENT_REPLY_CHARS" },
     [nameof(AppSettings.AgentProgressSeconds)] = new[] { "QQCHAT_AGENT_PROGRESS" },
-    [nameof(AppSettings.AgentTarget)] = new[] { "QQCHAT_AGENT_TARGET" },
     [nameof(AppSettings.EnableServerAgent)] = new[] { "QQCHAT_AGENT_SERVER" },
-    [nameof(AppSettings.EnableHostAgent)] = new[] { "QQCHAT_AGENT_HOST" },
     [nameof(AppSettings.AgentServerTools)] = new[] { "QQCHAT_AGENT_SERVER_TOOLS" },
     [nameof(AppSettings.AgentServerQqActions)] = new[] { "QQCHAT_AGENT_SERVER_QQ_ACTIONS" },
     [nameof(AppSettings.AgentServerModel)] = new[] { "QQCHAT_AGENT_SERVER_MODEL" },
     [nameof(AppSettings.AgentServerBaseUrl)] = new[] { "QQCHAT_AGENT_SERVER_URL" },
-    [nameof(AppSettings.AgentDevices)] = new[] { "QQCHAT_AGENT_DEVICES" },
     [nameof(AppSettings.AgentMaskSensitive)] = new[] { "QQCHAT_AGENT_MASK" },
     [nameof(AppSettings.AgentPrompt)] = new[] { "QQCHAT_AGENT_PROMPT" },
     [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
@@ -413,15 +413,9 @@ public static class BotConfig
         s.EnableAgentBridge = Bool("QQCHAT_AGENT") ?? s.EnableAgentBridge;
         s.AgentPrefix = Str("QQCHAT_AGENT_PREFIX") ?? s.AgentPrefix;
         s.AgentAllowedUsers = Str("QQCHAT_AGENT_USERS") ?? s.AgentAllowedUsers;
-        s.AgentWorkDir = Str("QQCHAT_AGENT_WORKDIR") ?? s.AgentWorkDir;
-        s.AgentModel = Str("QQCHAT_AGENT_MODEL") ?? s.AgentModel;
-        s.AgentTools = Str("QQCHAT_AGENT_TOOLS") ?? s.AgentTools;
-        s.AgentTimeoutSeconds = Int("QQCHAT_AGENT_TIMEOUT") ?? s.AgentTimeoutSeconds;
         s.AgentReplyMaxChars = Int("QQCHAT_AGENT_REPLY_CHARS") ?? s.AgentReplyMaxChars;
         s.AgentProgressSeconds = Int("QQCHAT_AGENT_PROGRESS") ?? s.AgentProgressSeconds;
-        s.AgentTarget = Str("QQCHAT_AGENT_TARGET") ?? s.AgentTarget;
         s.EnableServerAgent = Bool("QQCHAT_AGENT_SERVER") ?? s.EnableServerAgent;
-        s.EnableHostAgent = Bool("QQCHAT_AGENT_HOST") ?? s.EnableHostAgent;
         s.AgentServerTools = Str("QQCHAT_AGENT_SERVER_TOOLS") ?? s.AgentServerTools;
         s.AgentServerQqActions = Str("QQCHAT_AGENT_SERVER_QQ_ACTIONS") ?? s.AgentServerQqActions;
         s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;

@@ -141,20 +141,41 @@ public sealed class MockOfficialGateway : IDisposable
         }
     }
 
-    /// <summary>把 socket 掐掉（模拟官方网关掉线 / op7），验证机器人会重连并重新 identify。</summary>
+    /// <summary>
+    /// 把 socket 掐掉（模拟官方网关掉线 / op7），验证机器人会重连并重新 identify。
+    ///
+    /// 先发 Close 帧、不等对端回帧（<see cref="WebSocket.CloseOutputAsync"/>）：
+    /// Linux 的托管 HttpListener 上 <c>Abort()</c> 只把托管状态改成 Aborted，TCP 连接不会断，
+    /// 客户端的 ReceiveAsync 会一直挂着（2026-10-20 的 Linux 容器验收里，s42 的“掉线自愈”
+    /// 15 秒等不到任何 identify/resume，就是这个平台差异）。Windows 上 Abort 会立刻断，
+    /// 所以这个差异以前没暴露。CloseOutput 在两边都能让客户端立即收到关闭，之后再 Abort 兜底。
+    /// </summary>
     public async Task CloseSocketAsync()
     {
         var socket = _socket;
-        if (socket is not null)
+        if (socket is null)
         {
-            try
-            {
-                await socket.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "mock-close", _cts.Token).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // 已经断了
-            }
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "mock gateway offline", cts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 对端已经断了 / 关闭帧发不出去：交给下面的 Abort 兜底
+        }
+
+        try
+        {
+            socket.Abort();
+        }
+        catch (Exception)
+        {
+            // 已经断了
         }
     }
 
@@ -188,6 +209,27 @@ public sealed class MockOfficialGateway : IDisposable
         }
 
         return _messages.Count >= count;
+    }
+
+    /// <summary>
+    /// 等一条指定形状的发送请求出现（从 <paramref name="afterIndex"/> 起）。
+    /// 上传完成与真正发消息是两次独立的 HTTP 调用：只等上传就断言 msg_type=7，
+    /// 在慢一点的 Linux 容器里会读到“上传已回、消息还没到”的中间态。
+    /// </summary>
+    public async Task<bool> WaitForMessageAsync(int afterIndex, Func<JsonObject, bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.Now + timeout;
+        while (DateTimeOffset.Now < deadline)
+        {
+            if (_messages.ToArray().Skip(afterIndex).Any(predicate))
+            {
+                return true;
+            }
+
+            await Task.Delay(100).ConfigureAwait(false);
+        }
+
+        return _messages.ToArray().Skip(afterIndex).Any(predicate);
     }
 
     public async Task<bool> WaitForUploadAsync(int count, TimeSpan timeout)

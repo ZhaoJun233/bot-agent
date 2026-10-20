@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ZBA v1 契约探针：进程内合成 IZbaBackend，验证路由/OpenAPI、鉴权、闭包 JSON、
+    配置/能力/任务/审批/事件映射与真实 HttpListener 适配。纯合成输入，不读写数据目录。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>BotAgent.ZbaProbe</AssemblyName>
+    <RootNamespace>BotAgent.ZbaProbe</RootNamespace>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>high</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BotAgent.Panel\BotAgent.Panel.csproj" />
+  </ItemGroup>
+
+</Project>

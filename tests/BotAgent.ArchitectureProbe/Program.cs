@@ -111,6 +111,7 @@ public static class Program
 
         ScannerContractTests(index);
         ProjectChecks(index);
+        DockerfileChecks(index);
         SelfTests(index);
         RatchetChecks(index);
         LayoutChecks(index);
@@ -141,7 +142,7 @@ public static class Program
     // ─────────────────────────── 自检：扫描器本身不能骗人 ───────────────────────────
 
     private static readonly string[] FixtureProjects =
-        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Headless" };
+        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel", "BotAgent.Headless" };
 
     private static void ScannerContractTests(SourceIndex index)
     {
@@ -157,7 +158,7 @@ public static class Program
             Directory.CreateDirectory(Path.Combine(complete, "src/BotAgent.Core/bin"));
             File.WriteAllText(Path.Combine(complete, "src/BotAgent.Core/bin/Ignored.cs"), "class Ignored { }");
             var snapshot = LoadFixture(complete);
-            Check("六个业务工程全部扫描且排除 bin/obj", snapshot.Files.Count == 6);
+            Check("八个业务工程全部扫描且排除 bin/obj", snapshot.Files.Count == 8);
             Check("同名源文件保留工程身份，不做模糊回退",
                 snapshot.ByPath("src/BotAgent.Core/Domain/Rules.cs") is not null
                 && snapshot.ByPath("src/BotAgent.Model/Domain/Rules.cs") is not null
@@ -166,7 +167,7 @@ public static class Program
             var aliasRoot = CreateFixture(root, "storage-alias");
             File.WriteAllText(Path.Combine(aliasRoot, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Storage/BotAgent.Storage.csproj\" Aliases=\"StorageModule\" /></ItemGroup></Project>");
-            Check("唯一 Host Storage 别名仍扫描真实引用与全部源码", LoadFixture(aliasRoot).Files.Count == 6);
+            Check("唯一 Host Storage 别名仍扫描真实引用与全部源码", LoadFixture(aliasRoot).Files.Count == 8);
             foreach (var alias in new[] { "global", "global,StorageModule", "StorageModule,Other", "Other", "storageModule" })
                 FixtureMustFail(root, "alias-" + alias.Replace(',', '-'), p => File.WriteAllText(
                     Path.Combine(p, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
@@ -464,9 +465,58 @@ public static class Program
         var host = index.Projects.Single(p => p.Name == "BotAgent.Headless");
         Check("Wave3 落位：Headless 直接引用 BotAgent.Engine",
             host.References.Contains("src/BotAgent.Engine/BotAgent.Engine.csproj", StringComparer.OrdinalIgnoreCase));
+        Check("Wave5 落位：Headless 直接引用 BotAgent.Panel",
+            host.References.Contains("src/BotAgent.Panel/BotAgent.Panel.csproj", StringComparer.OrdinalIgnoreCase));
+        var panel = index.Projects.SingleOrDefault(p => p.Name == "BotAgent.Panel");
+        Check("Wave5 落位：BotAgent.Panel 只直接引用 Core",
+            panel is not null && panel.References.Count == 1
+            && panel.References[0].Equals("src/BotAgent.Core/BotAgent.Core.csproj", StringComparison.OrdinalIgnoreCase),
+            panel is null ? "Panel 工程缺失" : string.Join(",", panel.References));
         foreach (var name in new[] { "BotAgent.Storage", "BotAgent.Model", "BotAgent.Engine" })
             if (!host.References.Contains($"src/{name}/{name}.csproj", StringComparer.OrdinalIgnoreCase))
                 Console.WriteLine($"  未接入登记：Headless 未直接引用 {name}（不据此宣告对应波次准出）");
+    }
+
+    private static void DockerfileChecks(SourceIndex index)
+    {
+        Section("源码镜像闭包（Dockerfile 的 COPY 必须覆盖真实传递项目引用）");
+
+        var path = Path.Combine(index.Root, "src/BotAgent.Headless/Dockerfile");
+        if (!File.Exists(path))
+        {
+            Check("源码 Dockerfile 存在", false, path);
+            return;
+        }
+
+        var dockerfile = File.ReadAllText(path);
+        var projects = index.Projects.ToDictionary(p => p.RelativePath, StringComparer.OrdinalIgnoreCase);
+        var required = new SortedSet<string>(StringComparer.Ordinal);
+        void Visit(SourceProject project)
+        {
+            if (!required.Add(project.Name))
+            {
+                return;
+            }
+
+            foreach (var reference in project.References)
+            {
+                if (projects.TryGetValue(reference, out var dependency))
+                {
+                    Visit(dependency);
+                }
+            }
+        }
+
+        Visit(index.Projects.Single(p => p.Name == "BotAgent.Headless"));
+        var missingSources = required.Where(name => !Regex.IsMatch(dockerfile,
+            $@"^COPY\s+src/{Regex.Escape(name)}/\s+src/{Regex.Escape(name)}/\s*$", RegexOptions.Multiline)).ToList();
+        var missingProjects = required.Where(name => !Regex.IsMatch(dockerfile,
+            $@"^COPY\s+src/{Regex.Escape(name)}/{Regex.Escape(name)}\.csproj\s+src/{Regex.Escape(name)}/\s*$",
+            RegexOptions.Multiline)).ToList();
+
+        Check($"Headless 的传递源码闭包 {required.Count} 个工程都进入 Dockerfile",
+            missingSources.Count == 0 && missingProjects.Count == 0,
+            string.Join("、", missingSources.Select(x => x + "/").Concat(missingProjects.Select(x => x + ".csproj"))));
     }
 
     private static IReadOnlyList<(string Path, int Count)> UseCaseIo(SourceIndex index)

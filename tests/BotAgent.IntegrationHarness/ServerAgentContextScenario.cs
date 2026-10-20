@@ -231,9 +231,9 @@ public static partial class Program
         Check("★ 散文没有被原样发回群里",
             Sent().All(t => !t.Contains("好的，我看看服务器状态")), string.Join(" | ", Sent().TakeLast(3)));
 
-        // ── ⑤ //reset 真的清干净（含标题），哪怕命令里写着 @某台不在线的设备 ──
+        // ── ⑤ //reset 真的清干净（含标题）；cfg-0.3.3 起只有服务器会话 ──
         var beforeReset = Sent().Count;
-        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//@ghost reset", 18007, mentionBot: false, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//reset", 18007, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Count > beforeReset && Sent().Last().Contains("已清空"), TimeSpan.FromSeconds(30));
         await Task.Delay(500);
 
@@ -260,15 +260,16 @@ public static partial class Program
             names.Count > 0 && names.All(n => !n.Contains("服务器资源")),
             string.Join(" | ", names));
 
-        // ── ⑥ //status 对写错的设备名说实话 ──
+        // ── ⑥ //status 只报服务器路径，不再提示任何外部设备 ──
         var beforeStatus = Sent().Count;
-        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//@ghost status", 18009, mentionBot: false, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, ownerId, "老王", "//status", 18009, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Count > beforeStatus && Sent().Last().Contains("当前会走"), TimeSpan.FromSeconds(30));
         await Task.Delay(400);
 
         var status = Sent().LastOrDefault(t => t.Contains("当前会走")) ?? string.Empty;
-        Check("★★ //status 不再骗人：@某台不在线的设备时如实说会走服务器、并提示那台没在用",
-            status.Contains("当前会走：服务器 agent") && status.Contains("ghost") && status.Contains("没在用"),
+        Check("★★ //status 不再骗人：只报告服务器路径，不再提外部设备",
+            status.Contains("当前会走：服务器 agent") && status.Contains("服务器内置 agent：")
+            && !status.Contains("外部设备 agent：") && !status.Contains("ghost"),
             status.Length > 0 ? status.Replace("\n", " ⏐ ") : "(没收到状态)");
 
         Check("★ 全程没有“不认识的动作 / 工具执行出错”这类回话",

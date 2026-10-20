@@ -61,6 +61,69 @@ public static partial class Program
                 ["newPassword"] = "synthetic-s46-changed-password"
             }.ToJsonString(), System.Text.Encoding.UTF8, "application/json"), cts.Token);
         Check("完成改密后获得正式面板会话", changed.IsSuccessStatusCode, $"HTTP {(int)changed.StatusCode}");
+
+        // ── 登录/改密的非法 JSON 形状必须映射成 400，不能因为索引异常留下 200 空响应 ──
+        using (var malformedClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            foreach (var malformedBody in new[] { "[]", "1", """{"password":12}""", """{"password":[]}""", """{"password":{}}""" })
+            {
+                using var response = await malformedClient.PostAsync($"{panel}/api/auth/login",
+                    new StringContent(malformedBody, System.Text.Encoding.UTF8, "text/plain"), cts.Token);
+                Check($"非法登录请求形状返回 400（{malformedBody}）", (int)response.StatusCode == 400,
+                    $"HTTP {(int)response.StatusCode}");
+            }
+        }
+
+        foreach (var malformedBody in new[] { "[]", """{"newPassword":12}""", """{"newPassword":[]}""" })
+        {
+            using var response = await sessionHttp.PostAsync($"{panel}/api/auth/change-password",
+                new StringContent(malformedBody, System.Text.Encoding.UTF8, "text/plain"), cts.Token);
+            Check($"非法改密请求形状返回 400（{malformedBody}）", (int)response.StatusCode == 400,
+                $"HTTP {(int)response.StatusCode}");
+        }
+
+        // 校验失败不能损坏原密码；成功登录仍应正常。
+        using (var validClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var validLogin = await validClient.PostAsync($"{panel}/api/auth/login",
+            new StringContent("{\"password\":\"synthetic-s46-changed-password\"}", System.Text.Encoding.UTF8, "application/json"), cts.Token))
+        {
+            Check("非法形状之后原密码仍可登录", validLogin.IsSuccessStatusCode, $"HTTP {(int)validLogin.StatusCode}");
+        }
+
+        // ── Origin 必须同时校验 scheme + host + effective port ──
+        var panelOrigin = $"http://127.0.0.1:{healthPort}";
+        var otherOriginPort = FreePort(healthPort + 1);
+        async Task<(int Code, string Body)> OriginPostAsync(string origin, string json, string? host = null, string? forwarded = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{panel}/api/settings");
+            request.Headers.TryAddWithoutValidation("Origin", origin);
+            if (host is not null) request.Headers.Host = host;
+            if (forwarded is not null) request.Headers.TryAddWithoutValidation("X-Forwarded-Proto", forwarded);
+            request.Content = new StringContent(json, System.Text.Encoding.UTF8, "text/plain");
+            using var response = await sessionHttp.SendAsync(request, cts.Token);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(cts.Token));
+        }
+        async Task<string> SavedCooldownAsync()
+        {
+            using var response = await sessionHttp.GetAsync($"{panel}/api/settings", cts.Token);
+            var root = JsonNode.Parse(await response.Content.ReadAsStringAsync(cts.Token)) as JsonObject;
+            return root?["runtime"]?["groupCooldownSeconds"]?.ToString() ?? "(missing)";
+        }
+
+        var (sameOriginCode, _) = await OriginPostAsync(panelOrigin, """{"groupCooldownSeconds":11}""");
+        Check("同源 Cookie 写请求仍成功", sameOriginCode == 200 && await SavedCooldownAsync() == "11",
+            $"HTTP {sameOriginCode} cooldown={await SavedCooldownAsync()}");
+        var (crossPortCode, _) = await OriginPostAsync($"http://127.0.0.1:{otherOriginPort}", """{"groupCooldownSeconds":22}""");
+        Check("★ 同主机异端口 Origin 被拒且不落盘", crossPortCode == 403 && await SavedCooldownAsync() == "11",
+            $"HTTP {crossPortCode} cooldown={await SavedCooldownAsync()}");
+        var (crossSchemeCode, _) = await OriginPostAsync($"https://127.0.0.1:{healthPort}", """{"groupCooldownSeconds":33}""");
+        Check("★ 同主机异协议 Origin 被拒且不落盘", crossSchemeCode == 403 && await SavedCooldownAsync() == "11",
+            $"HTTP {crossSchemeCode} cooldown={await SavedCooldownAsync()}");
+        var (proxyCode, _) = await OriginPostAsync("https://panel.example", """{"groupCooldownSeconds":44}""",
+            host: "panel.example", forwarded: "https");
+        Check("★ 可信回环反向代理的完整 Origin 仍可写", proxyCode == 200 && await SavedCooldownAsync() == "44",
+            $"HTTP {proxyCode} cooldown={await SavedCooldownAsync()}");
+
         var (anonymousCode, _) = await HttpGetAsync($"{panel}/api/tools");
         Check("未登录读取工具目录仍返回 401", anonymousCode == 401, $"HTTP {anonymousCode}");
 

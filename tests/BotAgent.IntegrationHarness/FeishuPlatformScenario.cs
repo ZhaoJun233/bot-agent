@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
@@ -131,10 +132,13 @@ public static partial class Program
         Check("★ 错误 Verification Token 的普通事件被拒绝", (int)invalidTokenResp.StatusCode == 401,
             $"HTTP {(int)invalidTokenResp.StatusCode}");
 
-        using var oversizedContent = new StringContent(new string('x', 1_048_577), Encoding.UTF8, "application/json");
-        using var oversizedResp = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", oversizedContent, cts.Token);
-        Check("★ 超限 Webhook body 在解析前返回 413", (int)oversizedResp.StatusCode == 413,
-            $"HTTP {(int)oversizedResp.StatusCode}");
+        // 服务端只按 Content-Length 就会拒绝；真把 1MiB 写出去时，Linux 上服务端先回 413
+        // 再关连接，客户端会偶发 “Broken pipe”/“Error while copying content”。这里只发
+        // 声明超限长度的请求头、不写正文：仍验证“解析前按长度拒绝”，又不会把测试卡在上传竞态上。
+        var oversizedStatus = await PostDeclaredLengthAsync(
+            panelPort, "/api/webhooks/feishu", 1_048_577, cts.Token);
+        Check("★ 超限 Webhook body 在解析前返回 413", oversizedStatus == 413,
+            $"HTTP {oversizedStatus}");
 
         var overloadGate = new BlockingBodyGate(16);
         var heldRequests = Enumerable.Range(0, 16).Select(async _ =>
@@ -305,6 +309,30 @@ public static partial class Program
         }
 
         public void Release() => _release.TrySetResult();
+    }
+
+    /// <summary>
+    /// 只用请求头声明一个超限的 Content-Length、不发送正文，读回 HTTP 状态码。
+    /// 用于验证服务端在读取/解析正文之前就按长度拒绝（真发 1MiB 会因服务端提前关闭连接而竞态）。
+    /// </summary>
+    private static async Task<int> PostDeclaredLengthAsync(
+        int port, string path, long contentLength, CancellationToken ct)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, ct);
+        await using var stream = client.GetStream();
+        var headers = $"POST {path} HTTP/1.1\r\n"
+            + $"Host: 127.0.0.1:{port}\r\n"
+            + "Content-Type: application/json\r\n"
+            + $"Content-Length: {contentLength}\r\n"
+            + "Connection: close\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(headers), ct);
+        await stream.FlushAsync(ct);
+
+        using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
+        var statusLine = await reader.ReadLineAsync(ct) ?? string.Empty;
+        var parts = statusLine.Split(' ', 3);
+        return parts.Length >= 2 && int.TryParse(parts[1], out var status) ? status : 0;
     }
 
     private sealed class BlockingWebhookContent : HttpContent

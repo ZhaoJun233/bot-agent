@@ -7,6 +7,7 @@ using ConfigurationModule = StorageModule::BotAgent.Storage;
 using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Adapters.Panel;
+using BotAgent.Adapters.Panel.Zba;
 using BotAgent.Adapters.Model;
 using BotAgent.Adapters.Platforms;
 using BotAgent.Adapters.Platforms.Feishu;
@@ -59,7 +60,6 @@ internal sealed record AppGraph(
     OneBotGateway Gateway,
     OfficialBotGateway? Official,
     OpenAiClient Brain,
-    AgentBridgeServer AgentBridge,
     BotAgentHost Agent,
     BootReport BootReport,
     LoginQrService LoginQr,
@@ -69,7 +69,8 @@ internal sealed record AppGraph(
     BackgroundEvaluatorQueue Background,
     PlatformDriverOperations DriverOperations,
     ManagedCapabilityBinding Management,
-    McpRuntime? Mcp) : IAsyncDisposable
+    McpRuntime? Mcp,
+    ZbaRuntime? Zba) : IAsyncDisposable
 {
     private readonly object _disposeGate = new();
     private Task? _disposeTask;
@@ -82,6 +83,7 @@ internal sealed record AppGraph(
         var failures = new List<Exception>();
         try { await Background.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { if (Mcp is not null) await Mcp.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
+        try { if (Zba is not null) await Zba.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { HealthReports.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
@@ -180,7 +182,7 @@ internal static class CompositionRoot
         // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
         var ttsBreaker = new ToolCircuitBreaker("tts");
         var searchBreaker = new ToolCircuitBreaker("search");
-        var (brain, store, profiles, stickers, agentBridge, voice, music, links, research) =
+        var (brain, store, profiles, stickers, voice, music, links, research) =
             BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, capturedProviders, ttsBreaker, searchBreaker);
 
         // ---------------- 用例层：谁依赖谁，只在这里看得到 ----------------
@@ -231,7 +233,7 @@ internal static class CompositionRoot
         var serverAgent = new ServerAgentRunner(settingsBox, brain,
             new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "server-agent"),
             msg => FileLog.Write("ServerAgent", msg), mcp.UseCase);
-        var agentCmds = new AgentCommandService(settingsBox, source, brain, registry, ui, sessions, serverAgent, agentBridge,
+        var agentCmds = new AgentCommandService(settingsBox, source, brain, registry, ui, sessions, serverAgent,
             new AgentImageStore(),
             new AgentHooks(
                 Log: ui.EmitLog,
@@ -300,24 +302,36 @@ internal static class CompositionRoot
         var healthReports = new HealthReportService(settingsBox, registry, reply, identity, scheduler, voice, gateway,
             new HttpFetcher(TimeSpan.FromSeconds(6), msg => FileLog.Write("Net", msg), "health"),
             hostFacts);
-
         settingsHotReload.BindConfiguration(configuration, authorization, settingsStore.LoadCommittedRuntimeSnapshot,
             (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(configuration, caller, key, intent, mood),
             healthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
             version => InspectModelProjection(version, capturedProviders));
-
         var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
-
         var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, agentBridge, healthReports,
+            reply, participation, agentCmds, quotas, healthReports,
             sessionPolicies, traces, hostFacts, audit, approvals, local, official, feishu, platformRegistry, platformPolicies,
             circuitStatusProvider, background, plugins);
 
         var management = BuildManagedCapabilityBinding(configuration, authorization, driverOperations, settingsBox,
-            platformPolicies, settings, feishu, platformRegistry, capturedProviders, managedAuthorization);
-        return new AppGraph(settings, settingsBox, source, gateway, official, brain, agentBridge, agent, bootReport, loginQr,
-            healthReports, web, plugins, background, driverOperations, management, mcp.Runtime);
+            platformPolicies, settings, feishu, platformRegistry, capturedProviders, managedAuthorization,
+            plugins: () => ManagedPluginDescriptors(plugins));
+        var zba = BuildZba(settingsBox, settingsHotReload, management.Capabilities, sessions, agentCmds, approvals,
+            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad);
+        return new AppGraph(settings, settingsBox, source, gateway, official, brain, agent, bootReport, loginQr,
+            healthReports, web, plugins, background, driverOperations, management, mcp.Runtime, zba);
+    }
+
+    private static ZbaRuntime BuildZba(
+        SettingsBox box, SettingsHotReload hotReload, BotAgent.Domain.Management.IManagedCapabilities capabilities,
+        IAgentSessionStore sessions, AgentCommandService agent, ApprovalUseCase? approvals,
+        BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
+        WebUiServer web, bool hadStoredConfigurationBeforeStartup)
+    {
+        var runtime = ZbaRuntime.Create(box, hotReload, capabilities, sessions, agent, approvals, plugins, registry,
+            () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup);
+        web.AttachZba(runtime.Endpoint);
+        return runtime;
     }
 
     /// <summary>
@@ -395,7 +409,8 @@ internal static class CompositionRoot
         FeishuBotGateway? feishu,
         IPlatformRegistry platformRegistry,
         IReadOnlyList<PersistedModelProvider> capturedProviders,
-        BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization)
+        BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization,
+        Func<ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor>>? plugins = null)
     {
         bool DriverReady(DriverKey key)
         {
@@ -428,7 +443,7 @@ internal static class CompositionRoot
                 return new ConfigurationModule.ManagedDispatchResult(result.Succeeded
                     ? BotAgent.Domain.Management.ManagedOperationState.Completed : BotAgent.Domain.Management.ManagedOperationState.Failed,
                     result.Succeeded ? null : result.ErrorCode);
-            }, managedAuthorization, providerTestHttp);
+            }, managedAuthorization, providerTestHttp, plugins);
     }
 
     private static bool DriverCredentialConfigured(DriverKey key, AppSettings current)
@@ -445,6 +460,23 @@ internal static class CompositionRoot
         transaction.Commit();
         return configured;
     }
+
+    private static ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor> ManagedPluginDescriptors(
+        PluginManager plugins)
+        => plugins.GetAll().Select(plugin => new BotAgent.Domain.Management.ManagedDescriptor(
+            new BotAgent.Domain.Management.ManagedObjectKey.Plugin(new(plugin.Id)),
+            "plugin", plugin.IsEnabled,
+            plugin.IsEnabled ? BotAgent.Domain.Management.ManagedRuntimeState.Running
+                : BotAgent.Domain.Management.ManagedRuntimeState.Disabled,
+            ImmutableArray.Create(
+                new BotAgent.Domain.Management.ActionCapability(
+                    BotAgent.Domain.Management.ManagedAction.Start, false, "configuration_required"),
+                new BotAgent.Domain.Management.ActionCapability(
+                    BotAgent.Domain.Management.ManagedAction.Stop, false, "configuration_required")),
+            CredentialConfigured: true,
+            ErrorCode: null,
+            DescriptorRevision: ""))
+            .ToImmutableArray();
 
     private static ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor> ManagedProviderDescriptors(
         IReadOnlyList<PersistedModelProvider> captured, AppSettings current)
@@ -592,7 +624,6 @@ internal static class CompositionRoot
         ParticipationUseCase participation,
         AgentCommandService agentCmds,
         ITenantQuotaLedger quotas,
-        AgentBridgeServer? agentBridge,
         HealthReportService healthReports,
         SessionPolicyLedger sessionPolicies,
         TurnTraceStore traces,
@@ -614,7 +645,7 @@ internal static class CompositionRoot
 
         return new WebUiServer(settings.HealthPort, settingsBox, gateway, source, agent, loginQr, panelHttp, neteaseHttp,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, agentBridge, healthReports,
+            reply, participation, agentCmds, quotas, healthReports,
             sessionPolicies: sessionPolicies,
             traces: traces,
             hostFacts: hostFacts,
@@ -795,7 +826,7 @@ internal static class CompositionRoot
     /// 语音、音乐与链接预览、联网研究。都是"拿到配置就能造出来"的件，与用例之间的接线无关（见 Build）。
     /// </summary>
     private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
-        AgentBridgeServer AgentBridge, VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
+        VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
         BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
             IReadOnlyList<PersistedModelProvider> persistedProviders, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
     {
@@ -861,9 +892,7 @@ internal static class CompositionRoot
         // 都要在**任何一轮回复之前**读到它。载入属启动顺序，所以放在装配点（§6.1）。
         stickers.Load(AppPaths.RuntimeRoot);
 
-        // 本机 Agent 桥（// 命令）：机器人**监听**一个 WS 端点，管理员本机那个 pi-bridge 主动连进来。
-        // 为什么不让机器人直接连本机：管理员的电脑在 NAT 后面（没公网入口，也不应该开一个）。
-        var agentBridge = new AgentBridgeServer(settingsBox, msg => FileLog.Write("Agent", msg));
+        // 本机 Agent 桥已按方案退役：// 命令只走服务器内置 agent（ServerAgentRunner）。
         // 语音（TTS）：客户端、频率门、面板试听都在这个用例里（HttpClient 也只在这里造一个）
         var voiceHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "voice");
         var voice = new VoiceUseCase(
@@ -913,7 +942,7 @@ internal static class CompositionRoot
             msg => FileLog.Write("Search", msg));
 
 
-        return (brain, store, profiles, stickers, agentBridge, voice, music, links, research);
+        return (brain, store, profiles, stickers, voice, music, links, research);
     }
 
     private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, IReadOnlyList<PersistedModelProvider> captured)

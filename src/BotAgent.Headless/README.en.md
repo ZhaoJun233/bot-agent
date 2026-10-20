@@ -552,7 +552,7 @@ Coverage: reverse / forward WebSocket handshake, login-number detection, group a
 staying silent when the model is silent, quoted replies (a quote is attached only when someone cut in; targets the model points at are validated; no wrong credit when repeating; **incoming quoted replies are recognised too**),
 sentence splitting without losing characters, parenthetical narration tagged as `〔旁白：…〕` without triggering a reply on its own, member profile reads and writes,
 prompt assembly (persona / profiles / the `{sender}{content--time}` format), conversation recovery after a restart, and the health endpoints.
-The harness dispatches S1, S3–S41 and S43–S51. S2 prompt assertions run inside S1; S42 (official channel) remains excluded from harness/CI regression, so official-channel end-to-end coverage is not claimed.
+The harness dispatches S1 and S3–S55. S2 prompt assertions run inside S1, S33 retired with the pi bridge, and S42 (official channel) is part of harness/CI synthetic regression (fake gateway and local mocks; no real Open Platform credentials).
 The historical 2026-09-24 snapshot was 728 pass / 1 soft warning line (system prompt < 4000 characters, measuring ~4364; **it is a sentinel, not a target, so don't move the threshold**), not this round's result or a fixed current assertion count.
 `QQCHAT_IT_ONLY=s19` runs one scenario. The harness project does not reference the bot project; build the bot separately after source changes.
 

@@ -103,9 +103,9 @@ public static partial class Program
         var (getCode, getBody) = await PanelGetAsync($"{panel}/api/settings");
         var settings = (JsonNode.Parse(getBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
         Check("GET /api/settings 正常", getCode == 200 && settings.Count > 0, $"HTTP {getCode}");
-        Check("★ 面板看到的是「已设置」+ 掩码（前 4 位 + ****），不是明文",
+        Check("★ 面板看到的是「已设置」+ 统一掩码（不暴露任何前缀），不是明文",
             settings["agentServerKeySet"]?.GetValue<bool>() == true &&
-            settings["agentServerKeyMasked"]?.GetValue<string>() == "sk-a****",
+            settings["agentServerKeyMasked"]?.GetValue<string>() == "***",
             $"set={settings["agentServerKeySet"]?.ToJsonString()} masked={settings["agentServerKeyMasked"]?.ToJsonString()}");
         Check("★ 来源标成 panel（面板填过就以面板为准，与聊天那把同一套规矩）",
             settings["agentServerKeySource"]?.GetValue<string>() == "panel",

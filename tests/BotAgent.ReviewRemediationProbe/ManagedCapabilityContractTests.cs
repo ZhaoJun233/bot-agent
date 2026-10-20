@@ -93,7 +93,7 @@ internal static class ManagedCapabilityContractTests
             Check(header.Code == ConfigurationResultCode.Ok);
             ConfigurationPatch Patch(int value = 21) => new(new BehaviorChanges
                 { AiDesire = FieldEdit<int>.Set(value) }, null, null, null, null, null, null, null);
-            ConfigurationValidationRequest Request(ConfigurationPatch? patch = null) => new("cfg-0.3.2",
+            ConfigurationValidationRequest Request(ConfigurationPatch? patch = null) => new("cfg-0.3.3",
                 header.Version, patch ?? Patch(), ImmutableArray<SecretEdit>.Empty);
             var before = DatabaseFingerprint();
             async Task<ManagedValidationResult> Validate(ConfigurationValidationRequest request,
@@ -149,7 +149,7 @@ internal static class ManagedCapabilityContractTests
                 new ModelChanges { ModelBaseUrl = FieldEdit<string>.Set("https://unregistered.example.com/v1") },
                 null, null, null, null, null, null);
             var validation = await Validate(Request(unavailableEndpoint));
-            var save = await store.SaveAsync(caller, new("cfg-0.3.2", header.Version,
+            var save = await store.SaveAsync(caller, new("cfg-0.3.3", header.Version,
                 new(header.Generation, header.ServerUnixSeconds, Guid.NewGuid()), unavailableEndpoint, ImmutableArray<SecretEdit>.Empty));
             Check(validation.Code == ManagedResultCode.ValidationFailed && save.Code == ConfigurationResultCode.ValidationFailed
                 && validation.Errors.SequenceEqual(save.Errors));

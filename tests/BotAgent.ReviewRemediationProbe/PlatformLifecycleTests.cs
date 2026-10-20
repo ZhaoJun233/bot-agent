@@ -228,12 +228,19 @@ internal static class PlatformLifecycleTests
         using var official = new OfficialBotGateway(settingsBox, http, officialIds, _ => { });
         check((await official.SendTextAsync(true, officialTarget, "synthetic")).Ok,
             "real official API send uses injected HTTP and existing alias map");
+        var officialVoice = PlatformCapabilities.QqOfficial.EvaluateDegradation(wantsImage: false, wantsVoice: true, wantsQuote: false);
+        var voiceSource = new SyntheticSource();
         var officialContext = new PlatformContext(PlatformId.QqOfficial, AccountScope.Legacy, "");
-        using var officialAdapter = new QqChatSourcePlatformAdapter(official, officialContext, PlatformCapabilities.QqOfficial, "synthetic", "test");
+        using var officialVoiceAdapter = new QqChatSourcePlatformAdapter(voiceSource, officialContext,
+            PlatformCapabilities.QqOfficial, "synthetic", "test");
+        var voiceTarget = new ConversationId(PlatformId.QqOfficial, AccountScope.Legacy, ConversationKind.GroupChat,
+            officialTarget.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var voiceSent = await officialVoiceAdapter.SendAsync(officialContext,
+            new(voiceTarget, "", VoiceUrl: "https://example.com/synthetic"));
+        check(PlatformCapabilities.QqOfficial.SupportsVoice && officialVoice.SendVoice && !officialVoice.IsDegraded
+            && voiceSent.IsSuccess && voiceSource.Voices == 1,
+            "official capabilities declare and dispatch voice through rich media");
         requests = http.Requests;
-        check(!(await officialAdapter.SendAsync(officialContext,
-            new(new(PlatformId.QqOfficial, AccountScope.Legacy, ConversationKind.GroupChat, officialTarget.ToString()), "", VoiceUrl: "https://example.com/synthetic"))).IsSuccess
-            && http.Requests == requests, "official unsupported voice does not dispatch HTTP");
         await official.StopAsync();
         check(!(await official.SendTextAsync(true, officialTarget, "synthetic")).Ok && http.Requests == requests,
             "real official stop prevents new API sends");
@@ -361,52 +368,17 @@ internal static class PlatformLifecycleTests
         check(generationQueue.Enqueue(new(105, false, false, freshLease), 1) != PendingReplyOffer.CoalescedOld,
             "same driver key in a new lifetime cannot coalesce a retired generation");
 
-        var bridge = new AgentBridgeServer(settings, _ => { });
-        AgentTask? agentTask = null;
-        void CaptureAgentTask(QqChatMessage message)
+        var agentTask = new AgentTask
         {
-            if (PlatformSourceExecution.Current?.Origin.Driver == firstDriver.Key)
-                agentTask = bridge.NewTask("group:10001", "synthetic", "synthetic-session");
-        }
-        router.MessageReceived += CaptureAgentTask;
-        first.Emit(Message(106));
-        router.MessageReceived -= CaptureAgentTask;
-        check(agentTask?.SourceLease?.Origin.Driver == firstDriver.Key,
-            "actual AgentBridge NewTask explicitly captures the original authenticated source");
-        PlatformSourceLease? finishedSource = null;
-        PlatformSourceLease? restoredSecondSource = null;
-        Task<SendResult>? completionReply = null;
-        bridge.Finished += _ =>
-        {
-            finishedSource = PlatformSourceExecution.Current;
-            completionReply = router.SendTextAsync(true, 10001, "synthetic");
+            Id = "synthetic-task",
+            SourceKey = "group:10001",
+            Prompt = "synthetic",
+            Session = string.Empty
         };
-        void CompleteFromSecondSource(QqChatMessage message)
-        {
-            if (PlatformSourceExecution.Current?.Origin.Driver != secondDriver.Key || agentTask is null) return;
-            bridge.TryEnqueue(agentTask); // No connected device: real synchronous completion callback, no external I/O.
-            restoredSecondSource = PlatformSourceExecution.Current;
-        }
-        router.MessageReceived += CompleteFromSecondSource;
-        var firstSends = first.Sends;
-        second.Emit(Message(107));
-        check(ReferenceEquals(finishedSource, agentTask?.SourceLease) && completionReply is not null && (await completionReply).Ok
-            && first.Sends == firstSends + 1 && restoredSecondSource?.Origin.Driver == secondDriver.Key,
-            "AgentTask finished callback restores original A origin instead of borrowing callback flow B, then restores B");
-        if (agentTask is not null)
-        {
-            var wire = JsonSerializer.SerializeToNode(agentTask)!.AsObject();
-            check(!wire.ContainsKey(nameof(AgentTask.SourceLease)), "AgentTask source lease is not exposed in serialized task bodies");
-            wire[nameof(AgentTask.SourceLease)] = "synthetic-untrusted-source";
-            check(wire.Deserialize<AgentTask>()?.SourceLease is null, "task body cannot inject an authenticated source lease");
-        }
-        await drivers.DispatchAsync(firstDriver.Key, DriverCommand.Stop);
-        await drivers.DispatchAsync(firstDriver.Key, DriverCommand.Start);
-        firstSends = first.Sends;
-        second.Emit(Message(108));
-        check(completionReply is not null && !(await completionReply).Ok && first.Sends == firstSends,
-            "late AgentTask completion keeps its retired original lease and cannot send after source restart");
-        router.MessageReceived -= CompleteFromSecondSource;
+        var wire = JsonSerializer.SerializeToNode(agentTask)!.AsObject();
+        check(!wire.ContainsKey(nameof(AgentTask.SourceLease)), "AgentTask source lease is not exposed in serialized task bodies");
+        wire[nameof(AgentTask.SourceLease)] = "synthetic-untrusted-source";
+        check(wire.Deserialize<AgentTask>()?.SourceLease is null, "task body cannot inject an authenticated source lease");
 
         settings.Apply(next => next.EnableApprovals = true);
         var approvalReplies = 0;
@@ -631,6 +603,7 @@ internal static class PlatformLifecycleTests
         public int Sends { get; private set; }
         public int Images { get; private set; }
         public int Quotes { get; private set; }
+        public int Voices { get; private set; }
         public bool IsConnected => true;
         public event Action<QqChatMessage>? MessageReceived;
         public event Action<QqPokeEvent>? Poked { add { } remove { } }
@@ -646,6 +619,11 @@ internal static class PlatformLifecycleTests
         public Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
         {
             Images++;
+            return Task.FromResult(true);
+        }
+        public Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
+        {
+            Voices++;
             return Task.FromResult(true);
         }
         public Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default)

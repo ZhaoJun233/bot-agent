@@ -14,8 +14,9 @@ namespace BotAgent.Storage;
 /// <summary>C3 transaction and recovery module. Host projection participates through a private typed seam.</summary>
 public sealed partial class ConfigurationStore : IConfigurationChanges
 {
-    private const string Revision = "cfg-0.3.2";
-    private const string AliasCodecRevision = "cfg-0.3.2/alias-1";
+    private const string Revision = ConfigurationContract.Revision;
+    private const string LegacyRevision = ConfigurationContract.LegacyRevision;
+    private const string AliasCodecRevision = ConfigurationContract.AliasCodecRevision;
     private const long LifetimeSeconds = 86400;
     private const int FutureSeconds = 300;
     private const string ReadFloorSql = "SELECT floor FROM configuration_state WHERE id=1";
@@ -131,10 +132,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         CancellationToken ct = default)
         => SaveCore(caller, request, ConfigurationStorageProfile.Strict, ct);
 
-    internal static void AppendDeviceRuntimeAudit(SqliteConnection connection, DeviceKey key)
-        => (_active ?? throw new InvalidOperationException("configuration_not_activated"))
-            ._participant.AppendDeviceRuntimeAudit(connection, key);
-
     internal ValueTask<ConfigurationSaveResult> SaveLegacyAsync(ConfigurationCaller caller,
         ConfigurationOperationKey key, ConfigurationPatch changes, ImmutableArray<SecretEdit> secrets,
         CancellationToken ct = default)
@@ -180,6 +177,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                 {
                     result = new(new(key.Generation != _generation ? ConfigurationResultCode.KeyGenerationMismatch
                         : code == ConfigurationResultCode.Ok ? ConfigurationResultCode.NotFound : code, null), empty);
+                    return;
+                }
+                if (LegacyReceipt(receipt))
+                {
+                    result = new(new(ConfigurationResultCode.LegacyNeedsReview, null), empty);
                     return;
                 }
                 var action = ReadMoodReceipt(conn, caller, key, out var actionFingerprint);
@@ -376,6 +378,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         try
         {
             var record = ReadReceipt(conn, caller, request.Key, out protectedFingerprint);
+            if (record is not null && LegacyReceipt(record))
+            {
+                if (protectedFingerprint is not null) CryptographicOperations.ZeroMemory(protectedFingerprint);
+                return Rejected(ConfigurationResultCode.LegacyNeedsReview, version);
+            }
             fingerprint = Fingerprint(conn, caller, request, owned, profile, out owned);
             if (record is not null && (fingerprint is null || protectedFingerprint is null
                     || !CryptographicOperations.FixedTimeEquals(fingerprint, protectedFingerprint)))
@@ -488,6 +495,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                 var record = ReadReceipt(conn, caller, key, out var fingerprint);
                 if (fingerprint is not null) CryptographicOperations.ZeroMemory(fingerprint);
                 if (code == ConfigurationResultCode.KeyExpired) result = new(code, null);
+                else if (record is not null && LegacyReceipt(record)) result = new(ConfigurationResultCode.LegacyNeedsReview, null);
                 else if (record is not null) result = new(ConfigurationResultCode.Ok, record);
                 else if (key.Generation != _generation) result = new(ConfigurationResultCode.KeyGenerationMismatch, null);
                 else result = new(code == ConfigurationResultCode.Ok ? ConfigurationResultCode.NotFound : code, null);
@@ -516,6 +524,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                 var receipt = ReadReceipt(conn, caller, key, out var fingerprint);
                 if (fingerprint is not null) CryptographicOperations.ZeroMemory(fingerprint);
                 if (receipt is null) { result = new(ConfigurationResultCode.NotFound, null); return; }
+                if (LegacyReceipt(receipt)) { result = new(ConfigurationResultCode.LegacyNeedsReview, null); return; }
                 if (receipt.Decision != ConfigurationDecision.Changed || receipt.CommitState != CommitState.Committed)
                 { result = new(ConfigurationResultCode.ValidationFailed, receipt); return; }
                 var previous = receipt.Steps.SingleOrDefault(r => r.Step == step);
@@ -554,6 +563,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                 var receipt = ReadReceipt(conn, caller, key, out var fingerprint);
                 if (fingerprint is not null) CryptographicOperations.ZeroMemory(fingerprint);
                 if (receipt is null) { result = new(ConfigurationResultCode.NotFound, null); return; }
+                if (LegacyReceipt(receipt)) { result = new(ConfigurationResultCode.LegacyNeedsReview, null); return; }
                 if (receipt.Decision != ConfigurationDecision.Changed || receipt.CommitState != CommitState.Committed)
                 { result = new(ConfigurationResultCode.ValidationFailed, receipt); return; }
                 if (reports.Any(report => report.State == ApplyState.NotStarted && receipt.Steps.Any(previous =>
@@ -797,7 +807,9 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         SensitiveInput? Bytes, string? NormalizedValue)
     { public override string ToString() => "[redacted]"; }
 
-    private static bool KnownCodec(string revision) => revision is Revision or AliasCodecRevision;
+    private static bool KnownCodec(string revision) => revision is Revision or LegacyRevision or AliasCodecRevision;
+    private static bool LegacyReceipt(ConfigurationReceipt receipt)
+        => string.Equals(receipt.ContractRevision, LegacyRevision, StringComparison.Ordinal);
     private sealed class ReceiptCodecException : Exception;
     private sealed class AliasIntentException(ConfigurationFieldId field, string code) : Exception
     {
@@ -906,9 +918,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         var agent = new AgentChanges
         {
             AgentAllowedUsers = FreezeEdit(ConfigurationFieldId.AgentAllowedUsers, agentSource.AgentAllowedUsers, fields),
-            AgentDevices = FreezeDevices(ConfigurationFieldId.AgentDevices, agentSource.AgentDevices, fields),
-            AgentMaxQueued = FreezeEdit(ConfigurationFieldId.AgentMaxQueued, agentSource.AgentMaxQueued, fields),
-            AgentModel = FreezeEdit(ConfigurationFieldId.AgentModel, agentSource.AgentModel, fields),
             AgentPrefix = FreezeEdit(ConfigurationFieldId.AgentPrefix, agentSource.AgentPrefix, fields),
             AgentProgressSeconds = FreezeEdit(ConfigurationFieldId.AgentProgressSeconds, agentSource.AgentProgressSeconds, fields),
             AgentPrompt = FreezeEdit(ConfigurationFieldId.AgentPrompt, agentSource.AgentPrompt, fields),
@@ -925,13 +934,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             AgentServerTools = FreezeEdit(ConfigurationFieldId.AgentServerTools, agentSource.AgentServerTools, fields),
             AgentServerUseGate = FreezeEdit(ConfigurationFieldId.AgentServerUseGate, agentSource.AgentServerUseGate, fields),
             AgentServerWorkDir = FreezeEdit(ConfigurationFieldId.AgentServerWorkDir, agentSource.AgentServerWorkDir, fields),
-            AgentTarget = FreezeEdit(ConfigurationFieldId.AgentTarget, agentSource.AgentTarget, fields),
-            AgentTimeoutSeconds = FreezeEdit(ConfigurationFieldId.AgentTimeoutSeconds, agentSource.AgentTimeoutSeconds, fields),
-            AgentTools = FreezeEdit(ConfigurationFieldId.AgentTools, agentSource.AgentTools, fields),
-            AgentWorkDir = FreezeEdit(ConfigurationFieldId.AgentWorkDir, agentSource.AgentWorkDir, fields),
             EnableAgentBridge = FreezeEdit(ConfigurationFieldId.EnableAgentBridge, agentSource.EnableAgentBridge, fields),
             EnableAgentMask = FreezeEdit(ConfigurationFieldId.EnableAgentMask, agentSource.EnableAgentMask, fields),
-            EnableHostAgent = FreezeEdit(ConfigurationFieldId.EnableHostAgent, agentSource.EnableHostAgent, fields),
             EnableServerAgent = FreezeEdit(ConfigurationFieldId.EnableServerAgent, agentSource.EnableServerAgent, fields),
             PanelDeployEnabled = FreezeEdit(ConfigurationFieldId.PanelDeployEnabled, agentSource.PanelDeployEnabled, fields),
             PanelDeployUrl = FreezeEdit(ConfigurationFieldId.PanelDeployUrl, agentSource.PanelDeployUrl, fields),
@@ -1220,32 +1224,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         return text;
     }
 
-    private static FieldEdit<ImmutableArray<DeviceConfiguration>> FreezeDevices(ConfigurationFieldId field,
-        FieldEdit<ImmutableArray<DeviceConfiguration>> edit, ImmutableArray<ConfigurationFieldId>.Builder fields)
-    {
-        if (edit.Kind == EditKind.Keep) return default;
-        fields.Add(field);
-        if (edit.Kind == EditKind.Clear) return edit;
-        if (!edit.TryGetValue(out var array) || array.IsDefault || array.Length > 128)
-            throw new ArgumentException("invalid_devices");
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var keys = new HashSet<DeviceKey>();
-        var copy = ImmutableArray.CreateBuilder<DeviceConfiguration>();
-        foreach (var device in array)
-        {
-            if (device is null || string.IsNullOrWhiteSpace(device.NameRaw) || device.NameRaw.Length > 128
-                || device.NameRaw.Contains('\0') || !names.Add(device.NameRaw.Trim())
-                || (device.Key is { } key && (key.Value == Guid.Empty || !keys.Add(key)))
-                || (device.TimeoutSeconds != 0 && (device.TimeoutSeconds < 30 || device.TimeoutSeconds > 7200)))
-                throw new ArgumentException("invalid_device");
-            StrictUtf8.GetByteCount(device.NameRaw);
-            foreach (var text in new[] { device.Model, device.WorkDir, device.Tools })
-                if (text is not null && StrictUtf8.GetByteCount(text) > 32768) throw new ArgumentException("device_string_too_large");
-            copy.Add(device with { NameRaw = device.NameRaw.Trim() });
-        }
-        return FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(copy.ToImmutable());
-    }
-
     private static FieldEdit<ImmutableArray<PlatformPolicyEntry>> FreezePolicies(ConfigurationFieldId field,
         FieldEdit<ImmutableArray<PlatformPolicyEntry>> edit, ImmutableArray<ConfigurationFieldId>.Builder fields)
     {
@@ -1361,9 +1339,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             modes.Add((field, inherit ? UserValueKind.Inherited : UserValueKind.Explicit));
         }
         Add(ConfigurationFieldId.AgentAllowedUsers, patch.Agent!.AgentAllowedUsers);
-        Add(ConfigurationFieldId.AgentDevices, patch.Agent!.AgentDevices);
-        Add(ConfigurationFieldId.AgentMaxQueued, patch.Agent!.AgentMaxQueued);
-        Add(ConfigurationFieldId.AgentModel, patch.Agent!.AgentModel);
         Add(ConfigurationFieldId.AgentPrefix, patch.Agent!.AgentPrefix);
         Add(ConfigurationFieldId.AgentProgressSeconds, patch.Agent!.AgentProgressSeconds);
         Add(ConfigurationFieldId.AgentPrompt, patch.Agent!.AgentPrompt);
@@ -1380,13 +1355,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.AgentServerTools, patch.Agent!.AgentServerTools);
         Add(ConfigurationFieldId.AgentServerUseGate, patch.Agent!.AgentServerUseGate);
         Add(ConfigurationFieldId.AgentServerWorkDir, patch.Agent!.AgentServerWorkDir);
-        Add(ConfigurationFieldId.AgentTarget, patch.Agent!.AgentTarget);
-        Add(ConfigurationFieldId.AgentTimeoutSeconds, patch.Agent!.AgentTimeoutSeconds);
-        Add(ConfigurationFieldId.AgentTools, patch.Agent!.AgentTools);
-        Add(ConfigurationFieldId.AgentWorkDir, patch.Agent!.AgentWorkDir);
         Add(ConfigurationFieldId.EnableAgentBridge, patch.Agent!.EnableAgentBridge);
         Add(ConfigurationFieldId.EnableAgentMask, patch.Agent!.EnableAgentMask);
-        Add(ConfigurationFieldId.EnableHostAgent, patch.Agent!.EnableHostAgent);
         Add(ConfigurationFieldId.EnableServerAgent, patch.Agent!.EnableServerAgent);
         Add(ConfigurationFieldId.PanelDeployEnabled, patch.Agent!.PanelDeployEnabled);
         Add(ConfigurationFieldId.PanelDeployUrl, patch.Agent!.PanelDeployUrl);

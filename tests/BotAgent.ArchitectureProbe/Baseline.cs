@@ -9,7 +9,7 @@ internal static class Baseline
 {
     // R3-source-guard-v1：当前必需工程；未来工程只有实际出现后才检查，不把缺席写成已完成。
     public static readonly IReadOnlyList<string> RequiredProjects = new[]
-        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Headless" };
+        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel", "BotAgent.Headless" };
     public static readonly IReadOnlyDictionary<string, string[]> AllowedProjectReferences = new Dictionary<string, string[]>
     {
         ["BotAgent.Core"] = Array.Empty<string>(),
@@ -101,8 +101,8 @@ internal static class Baseline
         "src/BotAgent.Platforms/OneBot/HttpTransport.cs", // 原 Headless/Services/OneBot/HttpTransport.cs 的同一协议实现
     };
 
-    /// <summary>出网客户端构造处数（棘轮：只许往下调）。2026-09-23：15 → 5（面板那两条也收进 IHttpFetcher）。</summary>
-    public const int HttpClientNews = 4;
+    /// <summary>出网客户端构造处数（棘轮：只许往下调）。2026-10-18 Wave5 实测 3（Program 唯一构造点改为共享 helper）。</summary>
+    public const int HttpClientNews = 3;
     /// <summary>
     /// 面板主文件里直接调 <c>_agent.</c> 的次数（棘轮口径只数 <c>WebUiServer.cs</c> 这一个文件）。
     /// 2026-09-23 批次 5 第 3 步：**归零** —— 面板不再经过 BotAgentHost 这层 façade 够组件，
@@ -123,6 +123,8 @@ internal static class Baseline
     public static readonly IReadOnlyList<string> PanelExemptFiles = new[]
     {
         "src/BotAgent.Headless/Adapters/Panel/PanelDeploy.cs",
+        // Wave5：静态资源从嵌入改为发布目录读取；这是交付适配，不是面板编排。
+        "src/BotAgent.Headless/Adapters/Panel/PanelAssets.cs",
     };
 
     /// <summary>R5：面板（除例外文件外）的 SQL 字面量处数 —— 恒为 0，别让它长出来。</summary>
@@ -134,8 +136,11 @@ internal static class Baseline
     /// <summary>R5：面板（除例外文件外）直读系统时间的处数 —— 恒为 0（走 Clock / 注入的 IClock）。</summary>
     public const int PanelClockReads = 0;
 
-    /// <summary>例外文件自己的文件 IO 处数（棘轮，只许往下调：现在全是 PanelDeploy 的部署产物读写）。</summary>
-    public const int PanelExemptFileIo = 15;
+    /// <summary>
+    /// 例外文件自己的文件 IO 处数（棘轮，只许往下调）：PanelDeploy 13 + 静态资源交付 1。
+    /// Wave5 把发布状态的两次 <c>File.Exists</c> 合并成一次 <c>FileInfo</c>，腾出静态资源读取这一处。
+    /// </summary>
+    public const int PanelExemptFileIo = 14;
 
     /// <summary>唯一允许持有配置实例的类（发布点）；别处都只持有 SettingsBox。</summary>
     public const string SettingsOwnerPath = "src/BotAgent.Headless/Services/SettingsBox.cs";
@@ -191,8 +196,11 @@ internal static class Baseline
     /// 直接文件 IO 总处数（棘轮：只许往下调；新加的请落在 Adapters/**）。
     /// 批次 3：61 → 62（+1 = TtsConfFile 的写入；其余是搬迁，总数几乎没动）。
     /// N1 命名兼容：62 → 59（LegacyJsonImporter 的重复前置检查收敛；数据库路径解析落在持久化适配器）。
+    /// Wave5：工作树起点 59；PanelDeploy 合并一次 File.Exists（-1）+ PanelAssets 静态资源读取（+1）净 -1 → 58。
+    /// W5-G1：事件序号高水位持久化（读、临时写、move）净 +3 → 61；只存一个整数，不存事件内容。
+    /// HEAD 的 62 是未含 Wave1–4 迁移的基线，不能与工作树 61 当成同一 diff。
     /// </summary>
-    public const int FileIoTotal = 59;
+    public const int FileIoTotal = 61;
 
     // 逐文件迁移角色映射，不是新工程目录白名单。旧副本仍扫描、仍计入全局总数。
     // 前 21 项原位于 Headless/Adapters/Persistence；OfficialIdMap 是已迁出的同一旧持久化类型。

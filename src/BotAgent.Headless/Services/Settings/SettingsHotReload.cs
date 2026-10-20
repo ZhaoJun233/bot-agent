@@ -121,7 +121,7 @@ public sealed class SettingsHotReload
         if (_configuration is null || !ConfigurationAuthorization.TryGetCaller(kind == ConfigurationReadKind.Editable
             ? ConfigurationAccess.ReadEditable : ConfigurationAccess.ReadOverview, out var caller))
             return ValueTask.FromResult(new ConfigurationReadResult(ConfigurationResultCode.Forbidden, default, default,
-                "cfg-0.3.2", 0, null, ImmutableArray<SecretMetadata>.Empty, ImmutableArray<FieldDescriptor>.Empty, ApplyState.Unknown));
+                ConfigurationContract.Revision, 0, null, ImmutableArray<SecretMetadata>.Empty, ImmutableArray<FieldDescriptor>.Empty, ApplyState.Unknown));
         return _configuration.ReadAsync(caller, kind, ct);
     }
     internal ValueTask<ConfigurationModule.LegacyFindOutcome> FindConfigurationAsync(ConfigurationOperationKey key, CancellationToken ct = default)

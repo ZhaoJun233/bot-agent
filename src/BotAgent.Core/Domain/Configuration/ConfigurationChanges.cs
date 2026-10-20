@@ -5,9 +5,6 @@ namespace BotAgent.Domain.Configuration;
 public sealed class AgentChanges
 {
     public FieldEdit<string> AgentAllowedUsers { get; init; }
-    public FieldEdit<ImmutableArray<DeviceConfiguration>> AgentDevices { get; init; }
-    public FieldEdit<int> AgentMaxQueued { get; init; }
-    public FieldEdit<string> AgentModel { get; init; }
     public FieldEdit<string> AgentPrefix { get; init; }
     public FieldEdit<int> AgentProgressSeconds { get; init; }
     public FieldEdit<string> AgentPrompt { get; init; }
@@ -24,13 +21,8 @@ public sealed class AgentChanges
     public FieldEdit<string> AgentServerTools { get; init; }
     public FieldEdit<bool> AgentServerUseGate { get; init; }
     public FieldEdit<string> AgentServerWorkDir { get; init; }
-    public FieldEdit<string> AgentTarget { get; init; }
-    public FieldEdit<int> AgentTimeoutSeconds { get; init; }
-    public FieldEdit<string> AgentTools { get; init; }
-    public FieldEdit<string> AgentWorkDir { get; init; }
     public FieldEdit<bool> EnableAgentBridge { get; init; }
     public FieldEdit<bool> EnableAgentMask { get; init; }
-    public FieldEdit<bool> EnableHostAgent { get; init; }
     public FieldEdit<bool> EnableServerAgent { get; init; }
     public FieldEdit<bool> PanelDeployEnabled { get; init; }
     public FieldEdit<string> PanelDeployUrl { get; init; }

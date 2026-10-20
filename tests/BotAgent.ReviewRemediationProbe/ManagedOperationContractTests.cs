@@ -80,7 +80,7 @@ internal static class ManagedOperationContractTests
             try { StorageConfiguration.ConfigurationStorageBridge.CreateManagedCapabilities(store, new Authorization(), catalog, dispatch); }
             catch (InvalidOperationException) { duplicateRejected = true; }
             Check(duplicateRejected);
-            ManagedExecuteRequest Request(ManagedCommand? command = null) => new("cfg-0.3.2", "descriptor-one",
+            ManagedExecuteRequest Request(ManagedCommand? command = null) => new("cfg-0.3.3", "descriptor-one",
                 new(header.Generation, clock.Seconds, Guid.NewGuid()), command ?? new ManagedCommand.Provider(provider.Key, ProviderCommand.TestConnection));
             var page = await service.ListAsync(caller, new(ManagedKind.Provider, 1, null));
             Check(page.Code == ManagedResultCode.Ok && page.Items.Length == 1 && page.NextCursor is not null
@@ -159,7 +159,7 @@ internal static class ManagedOperationContractTests
             while (AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations") < 256)
             {
                 var key = new ConfigurationOperationKey(header.Generation, clock.Seconds, Guid.NewGuid());
-                var saved = await store.SaveAsync(caller, new("cfg-0.3.2", header.Version, key,
+                var saved = await store.SaveAsync(caller, new("cfg-0.3.3", header.Version, key,
                     new(null, null, null, null, null, null, null, null), ImmutableArray<SecretEdit>.Empty));
                 if (saved.Code != ConfigurationResultCode.NoChanges)
                     throw new InvalidOperationException("synthetic_c3_capacity_fill_failed");
@@ -169,7 +169,7 @@ internal static class ManagedOperationContractTests
             var fullDispatches = dispatchCount;
             Check((await service.ExecuteAsync(caller, Request())).Code == ManagedResultCode.CapacityExceeded
                 && dispatchCount == fullDispatches);
-            Check((await store.SaveAsync(caller, new("cfg-0.3.2", header.Version,
+            Check((await store.SaveAsync(caller, new("cfg-0.3.3", header.Version,
                 new(header.Generation, clock.Seconds, Guid.NewGuid()), new(null, null, null, null, null, null, null, null),
                 ImmutableArray<SecretEdit>.Empty))).Code == ConfigurationResultCode.CapacityExceeded);
             Check((await service.ExecuteAsync(caller, initial)).Replayed && dispatchCount == fullDispatches);
@@ -310,7 +310,7 @@ internal static class ManagedOperationContractTests
         await using var owner = (IAsyncDisposable)service;
         if (!recover)
         {
-            original = new("cfg-0.3.2", "descriptor-one", new(header.Generation, clock.Seconds, Guid.NewGuid()),
+            original = new("cfg-0.3.3", "descriptor-one", new(header.Generation, clock.Seconds, Guid.NewGuid()),
                 new ManagedCommand.Provider(provider.Key, ProviderCommand.TestConnection));
             await service.ExecuteAsync(caller, original);
             return 1; // The parent must observe Running and deliberately terminate this process first.
@@ -370,7 +370,7 @@ internal static class ManagedOperationContractTests
         internal override ConfigurationReadResult Read(SqliteConnection connection, ConfigurationCaller caller,
             ConfigurationReadKind kind, ConfigurationVersion version, ConfigurationGeneration generation,
             long serverUnixSeconds, ApplyState latestApplyState)
-            => new(ConfigurationResultCode.Ok, version, generation, "cfg-0.3.2", serverUnixSeconds, null,
+            => new(ConfigurationResultCode.Ok, version, generation, "cfg-0.3.3", serverUnixSeconds, null,
                 ImmutableArray<SecretMetadata>.Empty, ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
         internal override void AppendAudit(SqliteConnection connection, ConfigurationReceipt receipt,
             ImmutableArray<ConfigurationFieldId> fields) { }

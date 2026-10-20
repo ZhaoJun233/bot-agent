@@ -279,6 +279,12 @@ public sealed class MockOpenAi : IDisposable
 
     private async Task HandleAsync(HttpListenerContext context)
     {
+        // 在请求**进入处理**时就锁定这次延迟，而不是等取完脚本回复再读全局值。
+        // 慢上游场景要先把 ResponseDelayMs 调成 9 秒、等第一条请求被记录后再调回 0；
+        // Linux 容器里线程池调度慢，原来“记录请求 → 读 ResponseDelayMs”之间可能已经过了 200ms，
+        // 第一条请求因此拿到 0 延迟、根本不会超时（2026-10-20 的 Linux 全量就是这样红的）。
+        var responseDelayMs = ResponseDelayMs;
+
         using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
         var body = await reader.ReadToEndAsync();
 
@@ -464,9 +470,9 @@ public sealed class MockOpenAi : IDisposable
 
         string content = TakeRuleReply(body) ?? TakeScriptedReply();
 
-        if (ResponseDelayMs > 0)
+        if (responseDelayMs > 0)
         {
-            await Task.Delay(ResponseDelayMs);
+            await Task.Delay(responseDelayMs);
         }
 
         await WriteCompletionAsync(context, payload, content);

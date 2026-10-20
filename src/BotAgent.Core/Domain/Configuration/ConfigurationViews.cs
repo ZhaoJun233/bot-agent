@@ -5,9 +5,6 @@ namespace BotAgent.Domain.Configuration;
 public sealed class AgentView
 {
     public required ReadField<string> AgentAllowedUsers { get; init; }
-    public required ReadField<ImmutableArray<DeviceConfigurationView>> AgentDevices { get; init; }
-    public required ReadField<int> AgentMaxQueued { get; init; }
-    public required ReadField<string> AgentModel { get; init; }
     public required ReadField<string> AgentPrefix { get; init; }
     public required ReadField<int> AgentProgressSeconds { get; init; }
     public required ReadField<string> AgentPrompt { get; init; }
@@ -24,13 +21,8 @@ public sealed class AgentView
     public required ReadField<string> AgentServerTools { get; init; }
     public required ReadField<bool> AgentServerUseGate { get; init; }
     public required ReadField<string> AgentServerWorkDir { get; init; }
-    public required ReadField<string> AgentTarget { get; init; }
-    public required ReadField<int> AgentTimeoutSeconds { get; init; }
-    public required ReadField<string> AgentTools { get; init; }
-    public required ReadField<string> AgentWorkDir { get; init; }
     public required ReadField<bool> EnableAgentBridge { get; init; }
     public required ReadField<bool> EnableAgentMask { get; init; }
-    public required ReadField<bool> EnableHostAgent { get; init; }
     public required ReadField<bool> EnableServerAgent { get; init; }
     public required ReadField<bool> PanelDeployEnabled { get; init; }
     public required ReadField<string> PanelDeployUrl { get; init; }

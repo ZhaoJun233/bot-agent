@@ -53,8 +53,6 @@ internal static class ConfigurationContractTests
             return LegacyMoodReopenChildAsync(args[1], args[2]);
         if (args.Length == 1 && args[0] == "--configuration-publish-permission")
             return PublishPermissionChildAsync();
-        if (args.Length == 1 && args[0] == "--configuration-bridge-devices")
-            return BridgeDeviceGateChildAsync();
         if (args.Length == 1 && args[0] == "--configuration-legacy-plan")
             return Task.FromResult<int?>(LegacyConfigurationPlanChild());
         if (args.Length == 4 && args[0] == "--configuration-capture-preimage")
@@ -67,12 +65,6 @@ internal static class ConfigurationContractTests
             return HostAdapterChildAsync();
         if (args.Length == 1 && args[0] == "--configuration-initialization")
             return Task.FromResult<int?>(InitializationChild());
-        if (args.Length == 1 && args[0] == "--configuration-devices")
-            return DeviceChildAsync();
-        if (args.Length == 1 && args[0] == "--configuration-host-devices")
-            return HostDeviceChildAsync();
-        if (args.Length == 1 && args[0] == "--configuration-host-endpoints")
-            return HostEndpointChildAsync();
         if (args.Length == 1 && args[0] is "--configuration-primary-aliases" or "--configuration-alias-codecs")
             return AliasChildAsync(args[0] == "--configuration-alias-codecs");
         if (args.Length == 1 && args[0] == "--configuration-provider-routing")
@@ -89,8 +81,6 @@ internal static class ConfigurationContractTests
             return MoodPersistenceChildAsync();
         if (args.Length == 1 && args[0] == "--configuration-platform-policies")
             return PlatformPoliciesChildAsync();
-        if (args.Length == 4 && args[0] == "--configuration-device-restart")
-            return DeviceRestartChildAsync(args[1], args[2], args[3]);
         if (args.Length == 4 && args[0] == "--configuration-claim-restart")
             return ClaimRestartChildAsync(args[1], args[2], args[3]);
         if (args.Length == 3 && args[0] == "--configuration-capacity-restart")
@@ -185,506 +175,6 @@ internal static class ConfigurationContractTests
         }
     }
 
-    private static async Task<int?> DeviceChildAsync()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-devices-" + Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
-        Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
-        var passed = 0;
-        void Check(bool condition, string label)
-        {
-            if (!condition) throw new InvalidOperationException(label);
-            passed++;
-        }
-        try
-        {
-            ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
-            var clock = new SyntheticClock(); Clock.Use(clock);
-            AppDatabase.Initialize();
-            new SettingsStore().Save(new AppSettings { AiDesire = 10 });
-            var participant = new SyntheticParticipant { ManageDevices = true };
-            participant.DeviceRuntimeAudit = (conn, _) => new AuditLogStore().AppendInTransaction(conn,
-                new AuditEvent("device_activation", "synthetic-writer", "bot", "synthetic_device", "cfg-0.3.2"));
-            var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant);
-            var caller = new ConfigurationCaller("synthetic-authority", "synthetic-device-owner", "bot",
-                ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration | ConfigurationAccess.EditAllowedSecrets);
-            var header = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            ConfigurationSaveRequest Request(ImmutableArray<DeviceConfiguration> devices, bool clear = false)
-                => new("cfg-0.3.2", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
-                    new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
-                    new(null, null, new AgentChanges { AgentDevices = clear
-                        ? FieldEdit<ImmutableArray<DeviceConfiguration>>.Clear() : FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(devices) },
-                        null, null, null, null, null), ImmutableArray<SecretEdit>.Empty);
-            DeviceConfiguration Device(string name, DeviceKey? key = null, bool enabled = true)
-                => new(key, name, enabled, null, null, null, 0);
-            ImmutableArray<StorageConfiguration.ConfigurationDeviceState> States()
-            {
-                using var conn = AppDatabase.Open();
-                return StorageConfiguration.ConfigurationStorageBridge.LoadDevices(conn);
-            }
-            long Version() => AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
-            long AuditCount() => AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log WHERE event_type='device_activation'");
-            Check(StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-unknown").Allowed, "unknown legacy hello"); // 1
-            Check(StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-unknown", null), "unknown legacy dispatch"); // 2
-            Check(!StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-unknown", new(Guid.NewGuid())), "unknown bound dispatch denied"); // 3
-            var creation = Request(ImmutableArray.Create(Device(" synthetic-device-a "), Device("synthetic-device-b")));
-            var created = await store.SaveAsync(caller, creation);
-            var assignments = created.Receipt!.DeviceKeyAssignments;
-            Check(created.Code == ConfigurationResultCode.Ok && assignments.Length == 2
-                && assignments.Select(x => x.InputOrdinal).SequenceEqual(new[] { 0, 1 }), "creation assignments"); // 4
-            var a = assignments[0].Key; var b = assignments[1].Key;
-            Check(a.Value != Guid.Empty && a != b && States().Single(x => x.Key == a).DesiredName == "synthetic-device-a", "durable canonical identities"); // 5
-            var version = Version();
-            var replay = await store.SaveAsync(caller, creation);
-            Check(replay.Replayed && replay.Receipt!.DeviceKeyAssignments.SequenceEqual(assignments)
-                && Version() == version && States().Length == 2, "replay preserves allocations"); // 6
-            var trimmed = creation with { Changes = creation.Changes with { Agent = new AgentChanges {
-                AgentDevices = FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(ImmutableArray.Create(Device("synthetic-device-a"), Device("synthetic-device-b"))) } } };
-            Check((await store.SaveAsync(caller, trimmed)).Replayed, "trim canonical HMAC replay"); // 7
-            Check((await store.SaveAsync(caller, Request(ImmutableArray.Create(Device("same"), Device(" same "))))).Code
-                == ConfigurationResultCode.ValidationFailed && Version() == version, "trim collision rejected"); // 8
-            Check((await store.SaveAsync(caller, Request(ImmutableArray.Create(Device("synthetic-device-a", new(Guid.NewGuid())))))).Code
-                == ConfigurationResultCode.ValidationFailed && Version() == version, "unknown provided key rejected"); // 9
-            Check((await store.SaveAsync(caller, Request(ImmutableArray.Create(Device("synthetic-device-b", a), Device("synthetic-device-a", b))))).Code
-                == ConfigurationResultCode.ValidationFailed, "cross-key name swap rejected"); // 10
-            await store.SaveAsync(caller, Request(ImmutableArray.Create(Device("synthetic-device-a", a, false), Device("synthetic-device-b", b))));
-            Check(!StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-a").Allowed
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-a", a), "committed disabled gate"); // 11
-            await store.SaveAsync(caller, Request(ImmutableArray.Create(Device("synthetic-device-a", a), Device("synthetic-device-b", b))));
-            Check(StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-a", a), "explicit re-enable not deleted"); // 12
-            var rename = Request(ImmutableArray.Create(Device("synthetic-device-renamed", a), Device("synthetic-device-b", b)));
-            await store.SaveAsync(caller, rename);
-            Check(States().Single(x => x.Key == a).RenamePending
-                && StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-a", a)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-renamed", a), "desired rename remains pending"); // 13
-            Check(StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-a") is { Allowed: true, RenamePending: true }, "old active pending hello"); // 14
-            version = Version(); var audits = AuditCount();
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, """
-                CREATE TRIGGER synthetic_device_confirm_fault BEFORE INSERT ON security_audit_log WHEN NEW.event_type='device_activation'
-                BEGIN SELECT RAISE(ABORT,'synthetic_device_confirm_fault'); END;
-                """));
-            Check(!StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-renamed").Allowed
-                && States().Single(x => x.Key == a).RenamePending && Version() == version && AuditCount() == audits,
-                "confirm audit fault atomically denies"); // 15
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, "DROP TRIGGER synthetic_device_confirm_fault"));
-            var confirmed = StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-renamed");
-            Check(confirmed is { Allowed: true, RenamePending: false } && confirmed.Key == a
-                && Version() == version && AuditCount() == audits + 1
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-a", a), "runtime confirm preserves user version and revokes old name"); // 16
-            Check(StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-renamed", a)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-renamed", b), "server-bound key required to match"); // 17
-            StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-renamed");
-            Check(AuditCount() == audits + 1 && (await store.FindAsync(caller, rename.Key)).Receipt!.CommittedVersion!.Value.Value == version,
-                "confirmed hello idempotent no fake receipt"); // 18
-            var oldName = Request(ImmutableArray.Create(Device("synthetic-device-a"), Device("synthetic-device-b", b)));
-            Check((await store.SaveAsync(caller, oldName)).Code == ConfigurationResultCode.ValidationFailed
-                && (await store.SaveLegacyAsync(caller, oldName.Key with { Nonce = Guid.NewGuid() }, oldName.Changes, oldName.Secrets)).Code
-                    == ConfigurationResultCode.LegacyNeedsReview, "revoked name strict and legacy rejection"); // 19
-            var legacy = Request(ImmutableArray.Create(Device("synthetic-device-renamed"), Device("synthetic-device-b")));
-            var legacyResult = await store.SaveLegacyAsync(caller, legacy.Key, legacy.Changes, legacy.Secrets);
-            Check(legacyResult.Code == ConfigurationResultCode.NoChanges && States().Single(x => x.DesiredName == "synthetic-device-renamed").Key == a,
-                "legacy unique names preserve keys"); // 20
-            var legacyRename = Request(ImmutableArray.Create(Device("synthetic-device-legacy-new"), Device("synthetic-device-b")));
-            var legacyRenamed = await store.SaveLegacyAsync(caller, legacyRename.Key, legacyRename.Changes, legacyRename.Secrets);
-            var c = legacyRenamed.Receipt!.DeviceKeyAssignments.Single().Key;
-            Check(c != a && States().Single(x => x.Key == a).Deleted
-                && !StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-renamed").Allowed,
-                "legacy rename delete-create persists tombstone"); // 21
-            Check(StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-legacy-new", c)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-a", null), "deleted historical aliases never default allow"); // 22
-            Check((await store.SaveAsync(caller, Request(ImmutableArray.Create(Device("synthetic-device-resurrected", a))))).Code
-                == ConfigurationResultCode.ValidationFailed, "deleted key cannot resurrect"); // 23
-            var deletedName = Request(ImmutableArray.Create(Device("synthetic-device-renamed")));
-            Check((await store.SaveLegacyAsync(caller, deletedName.Key, deletedName.Changes, deletedName.Secrets)).Code
-                == ConfigurationResultCode.LegacyNeedsReview, "deleted legacy name cannot resurrect"); // 24
-            var clearing = Request(ImmutableArray<DeviceConfiguration>.Empty, clear: true);
-            var cleared = await store.SaveAsync(caller, clearing);
-            Check(cleared.Code == ConfigurationResultCode.Ok && States().All(x => x.Deleted)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-b", b), "clear full table durable delete"); // 25
-            Check((await store.SaveAsync(caller, clearing)).Replayed && States().All(x => x.Deleted), "delete replay no resurrection"); // 26
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, "ALTER TABLE configuration_devices RENAME TO synthetic_hidden_devices"));
-            Check(!StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-unknown", null)
-                && !StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-unknown").Allowed, "gate storage read failure closes even unknown fallback"); // 27
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, "ALTER TABLE synthetic_hidden_devices RENAME TO configuration_devices"));
-            version = Version(); var count = States().Length;
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, """
-                CREATE TRIGGER synthetic_device_save_fault BEFORE INSERT ON configuration_devices WHEN NEW.desired_name='synthetic-device-fault'
-                BEGIN SELECT RAISE(ABORT,'synthetic_device_save_fault'); END;
-                """));
-            using var credential = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("synthetic-device-fault-credential"));
-            var fault = Request(ImmutableArray.Create(Device("synthetic-device-first"), Device("synthetic-device-fault")));
-            fault = fault with { Secrets = ImmutableArray.Create(SecretEdit.Replace(WritableSecretSlot.TtsApiKey, credential)) };
-            var faultResult = await store.SaveAsync(caller, fault);
-            Check(faultResult.Code == ConfigurationResultCode.CommitFailed && Version() == version && States().Length == count
-                && new SecretsStore().LoadTtsKey() is null && (await store.FindAsync(caller, fault.Key)).Code == ConfigurationResultCode.NotFound,
-                "device partial upsert fault rolls back whole save"); // 28
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, "DROP TRIGGER synthetic_device_save_fault"));
-            var retry = await store.SaveAsync(caller, fault);
-            Check(retry.Code == ConfigurationResultCode.Ok && retry.Receipt!.DeviceKeyAssignments.Length == 2
-                && new SecretsStore().LoadTtsKey() == "synthetic-device-fault-credential", "failed save can retry same original operation"); // 29
-            Check(States().All(x => x.ToString() == "ConfigurationDeviceState") && States().Single(x => x.Key == a).RevokedNames
-                .Contains("synthetic-device-a"), "durable histories and safe diagnostics"); // 30
-            var restore = Path.Combine(root, "device-restore");
-            Directory.CreateDirectory(Path.Combine(restore, "data"));
-            File.Copy(AppDatabase.VacuumIntoBackup(), Path.Combine(restore, "data", "qqchat.db"));
-            var start = new ProcessStartInfo("dotnet")
-            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-            start.ArgumentList.Add(typeof(ConfigurationContractTests).Assembly.Location);
-            start.ArgumentList.Add("--configuration-device-restart");
-            start.ArgumentList.Add(restore);
-            start.ArgumentList.Add(JsonSerializer.Serialize(clearing));
-            start.ArgumentList.Add(a.Value.ToString("N"));
-            using var child = Process.Start(start) ?? throw new InvalidOperationException("configuration_device_restart_start");
-            var output = child.StandardOutput.ReadToEndAsync();
-            var error = child.StandardError.ReadToEndAsync();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            try { await child.WaitForExitAsync(timeout.Token); }
-            catch { if (!child.HasExited) child.Kill(entireProcessTree: true); throw; }
-            var text = await output;
-            Console.Write(text);
-            Check(child.ExitCode == 0 && text.Contains("CFG_CHILD device-restart passed=7 failed=0", StringComparison.Ordinal)
-                && string.IsNullOrWhiteSpace(await error), "fresh process restores keys and revoked gates"); // 31
-            Check(Version() == version + 1 && States().Count(x => !x.Deleted) == 2,
-                "backup child never replaces live desired state"); // 32
-            Console.WriteLine($"CFG_CHILD devices passed={passed} failed=0");
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"CFG_CHILD devices passed={passed} failed=1 type={ex.GetType().Name}");
-            return 1;
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            var full = Path.GetFullPath(root);
-            if (!string.Equals(Path.GetDirectoryName(full), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
-                || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(full), "^botagent-configuration-devices-[0-9a-f]{32}$"))
-                throw new InvalidOperationException("configuration_fixture_cleanup_scope");
-            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
-        }
-    }
-
-    private static async Task<int?> DeviceRestartChildAsync(string directory, string requestJson, string deletedKey)
-    {
-        var full = Path.GetFullPath(directory);
-        var parent = Path.GetDirectoryName(full)!;
-        if (Path.GetFileName(full) != "device-restore"
-            || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(parent), "^botagent-configuration-devices-[0-9a-f]{32}$")
-            || !string.Equals(Path.GetDirectoryName(parent), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
-            || !Guid.TryParseExact(deletedKey, "N", out var deleted) || deleted == Guid.Empty)
-            return 1;
-        Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", full);
-        Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", full);
-        var passed = 0;
-        void Check(bool condition) { if (!condition) throw new InvalidOperationException("synthetic_device_restart_assertion"); passed++; }
-        try
-        {
-            ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
-            var clock = new SyntheticClock(); Clock.Use(clock);
-            AppDatabase.Initialize();
-            var initialVersion = AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
-            var audits = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log");
-            var participant = new SyntheticParticipant { ManageDevices = true };
-            var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant);
-            var request = JsonSerializer.Deserialize<ConfigurationSaveRequest>(requestJson)!;
-            var caller = new ConfigurationCaller("synthetic-authority", "synthetic-device-owner", "bot",
-                ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration | ConfigurationAccess.EditAllowedSecrets);
-            var read = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            Check(read.Generation != request.Key.Generation && read.Version.Value == initialVersion); // 1
-            ImmutableArray<StorageConfiguration.ConfigurationDeviceState> states;
-            using (var conn = AppDatabase.Open()) states = StorageConfiguration.ConfigurationStorageBridge.LoadDevices(conn);
-            Check(states.Single(x => x.Key.Value == deleted) is { Deleted: true, DesiredEnabled: false }
-                && !StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-device-renamed").Allowed); // 2
-            Check(!StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-a", null)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-b", null)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-device-renamed", new(deleted))); // 3
-            var active = states.Single(x => x.DesiredName == "synthetic-device-first");
-            Check(!active.Deleted && StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice(active.ActiveName, active.Key)); // 4
-            var found = await store.FindAsync(caller, request.Key);
-            Check(found.Code == ConfigurationResultCode.Ok && found.Receipt is { CommitState: CommitState.Committed }); // 5
-            var replay = await store.SaveAsync(caller, request);
-            using (var conn = AppDatabase.Open()) states = StorageConfiguration.ConfigurationStorageBridge.LoadDevices(conn);
-            Check(replay.Replayed && replay.Receipt!.CommittedVersion == found.Receipt!.CommittedVersion
-                && states.Count(x => !x.Deleted) == 2 && participant.Writes == 0); // 6
-            Check(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1") == initialVersion
-                && AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log") == audits
-                && new SecretsStore().LoadTtsKey() == "synthetic-device-fault-credential"); // 7
-            Console.WriteLine($"CFG_CHILD device-restart passed={passed} failed=0");
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"CFG_CHILD device-restart passed={passed} failed=1 type={ex.GetType().Name}");
-            return 1;
-        }
-        finally { SqliteConnection.ClearAllPools(); }
-    }
-
-    private static async Task<int?> HostEndpointChildAsync()
-    {
-        foreach (var name in Environment.GetEnvironmentVariables().Keys.Cast<string>().Where(name =>
-            name.StartsWith("BOTAGENT_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("OPENAI_", StringComparison.OrdinalIgnoreCase)).ToArray())
-            Environment.SetEnvironmentVariable(name, null);
-        const string allowed = "https://example.com/registered/v1";
-        const string qualified = "https://example.com/registered/query?tenant=synthetic#fragment";
-        var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-endpoints-" + Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
-        Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
-        Environment.SetEnvironmentVariable("BOTAGENT_BASE_URL", qualified);
-        var passed = 0;
-        void Check(bool condition, string label)
-        { if (!condition) { Console.WriteLine("FAIL CFG_ENDPOINT " + label); throw new InvalidOperationException(label); } passed++; }
-        try
-        {
-            ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
-            var clock = new SyntheticClock(); Clock.Use(clock);
-            AppDatabase.Initialize();
-            var initial = new AppSettings { Model = "synthetic-model", ModelBaseUrl = "https://example.com/original" };
-            new SettingsStore().Save(initial);
-            var providers = new ModelProviderStore();
-            foreach (var entry in new[] { ("primary", initial.ModelBaseUrl), ("allowed", allowed), ("qualified", qualified),
-                ("private", "http://127.0.0.1/v1") })
-                providers.UpsertMetadata(new(entry.Item1, 0, "synthetic-provider", entry.Item2, "synthetic-model", "secret:apiKey", false));
-            var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source,
-                CreateActualTokenAdapter(new SettingsBox(initial)));
-            var caller = new ConfigurationCaller("synthetic-authority", "synthetic-endpoint-owner", "bot",
-                ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration | ConfigurationAccess.EditAllowedSecrets);
-            var header = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            long Version() => AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
-            ConfigurationSaveRequest Request(FieldEdit<string> endpoint, RegisteredConfigurationChanges? registered = null)
-                => new("cfg-0.3.2", new(Version()), new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
-                    new(null, new ModelChanges { ModelBaseUrl = endpoint }, null, null, null, null, null, registered), ImmutableArray<SecretEdit>.Empty);
-            var before = Version();
-            var cold = await store.SaveAsync(caller, Request(FieldEdit<string>.Set("https://example.com/unregistered")));
-            Check(cold.Code == ConfigurationResultCode.ValidationFailed && cold.Errors.Any(error => error.Code == "endpoint_authorization_required")
-                && Version() == before && new SecretsStore().LoadApiKey() is null, "cold credential cannot self-register arbitrary destination"); // 1
-            var canonical = await store.SaveAsync(caller, Request(FieldEdit<string>.Set("https://EXAMPLE.com:443/registered/v1")));
-            Check(canonical.Code == ConfigurationResultCode.Ok && new Uri(providers.Find("primary")!.BaseUrl).AbsoluteUri == allowed,
-                "registered destination permits standard URI normalization"); // 2
-            Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Set(allowed)))).Code is ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges,
-                "same canonical current endpoint remains compatible"); // 3
-            using var credential = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("synthetic-endpoint-credential"));
-            var binding = Request(FieldEdit<string>.Keep()) with {
-                Secrets = ImmutableArray.Create(SecretEdit.Replace(WritableSecretSlot.ModelApiKey, credential)) };
-            Check((await store.SaveAsync(caller, binding)).Code == ConfigurationResultCode.Ok,
-                "registered purpose accepts allowed credential binding"); // 4
-            before = Version();
-            var rejected = await store.SaveAsync(caller, Request(FieldEdit<string>.Set("https://example.com/warm-unregistered")));
-            Check(rejected.Code == ConfigurationResultCode.ValidationFailed && Version() == before
-                && providers.Find("primary")!.BaseUrl == allowed, "warm credential unknown destination rejected atomically"); // 5
-            Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Set(qualified)))).Code == ConfigurationResultCode.Ok
-                && providers.Find("primary")!.BaseUrl == qualified, "registered full path-query-fragment permitted"); // 6
-            foreach (var endpoint in new[] { "https://example.com/registered/other?tenant=synthetic#fragment",
-                "https://example.com/registered/query?tenant=different#fragment", "https://example.com/registered/query?tenant=synthetic#other" })
-            {
-                before = Version();
-                Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Set(endpoint)))).Code == ConfigurationResultCode.ValidationFailed
-                    && Version() == before, "same host cannot authorize different path-query-fragment"); // 7..9
-            }
-            before = Version();
-            Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Set("http://127.0.0.1/v1")))).Code == ConfigurationResultCode.ValidationFailed
-                && Version() == before, "registered private address still subject to static target policy"); // 10
-            Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Set("https://synthetic:credential@example.com/registered/v1")))).Code
-                == ConfigurationResultCode.ValidationFailed && Version() == before, "userinfo rejected before credential use"); // 11
-            await store.SaveAsync(caller, Request(FieldEdit<string>.Set(allowed)));
-            Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Clear()))).Code == ConfigurationResultCode.Ok
-                && providers.Find("primary")!.BaseUrl == qualified, "inherited fallback needs existing registered purpose"); // 12
-            var self = new RegisteredConfigurationChanges(ImmutableArray<PluginEnabledEdit>.Empty,
-                ImmutableArray.Create(new ProviderEdit(new ProviderKey("allowed"), new ProviderMetadataPatch(FieldEdit<string>.Keep(),
-                    FieldEdit<int>.Keep(), FieldEdit<string>.Set("https://example.com/self-authorized"), FieldEdit<string>.Keep(),
-                    FieldEdit<bool>.Keep(), CredentialBindingEdit.KeepExisting()))), ImmutableArray<PolicyEdit>.Empty);
-            before = Version();
-            var selfAuthorized = await store.SaveAsync(caller, Request(FieldEdit<string>.Set("https://example.com/self-authorized"), self));
-            Check(selfAuthorized.Code == ConfigurationResultCode.ValidationFailed && Version() == before
-                && selfAuthorized.Errors.Any(error => error.Code == "endpoint_authorization_required") && providers.Find("allowed")!.BaseUrl == allowed,
-                "request body cannot authorize its own endpoint in the same transaction"); // 13
-            var legacy = Request(FieldEdit<string>.Set("https://example.com/legacy-unregistered"));
-            Check((await store.SaveLegacyAsync(caller, legacy.Key, legacy.Changes, legacy.Secrets)).Code == ConfigurationResultCode.Ok,
-                "Legacy retains historical endpoint management"); // 14
-            var privateLegacy = Request(FieldEdit<string>.Set("http://127.0.0.1/v1"));
-            await store.SaveLegacyAsync(caller, privateLegacy.Key, privateLegacy.Changes, privateLegacy.Secrets);
-            Check((await store.SaveAsync(caller, Request(FieldEdit<string>.Set("http://127.0.0.1:80/v1")))).Code is
-                ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges, "unchanged historical private destination is not falsely treated as new"); // 15
-            var safeErrors = JsonSerializer.Serialize(rejected.Errors);
-            Check(!safeErrors.Contains("example.com", StringComparison.Ordinal) && !safeErrors.Contains("synthetic-endpoint-credential", StringComparison.Ordinal)
-                && new SecretsStore().LoadApiKey() == "synthetic-endpoint-credential", "rejection metadata never prints destination or credential"); // 16
-            Console.WriteLine($"CFG_CHILD host-endpoints passed={passed} failed=0");
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"CFG_CHILD host-endpoints passed={passed} failed=1 type={ex.GetType().Name}");
-            return 1;
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            var full = Path.GetFullPath(root);
-            if (!string.Equals(Path.GetDirectoryName(full), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
-                || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(full), "^botagent-configuration-endpoints-[0-9a-f]{32}$"))
-                throw new InvalidOperationException("configuration_fixture_cleanup_scope");
-            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
-        }
-    }
-
-    private static async Task<int?> HostDeviceChildAsync()
-    {
-        foreach (var name in Environment.GetEnvironmentVariables().Keys.Cast<string>().Where(name =>
-            name.StartsWith("BOTAGENT_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("OPENAI_", StringComparison.OrdinalIgnoreCase)).ToArray())
-            Environment.SetEnvironmentVariable(name, null);
-        var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-hostdevices-" + Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
-        Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
-        var passed = 0; var failed = 0;
-        void Check(bool condition, string label)
-        {
-            if (condition) passed++;
-            else { failed++; Console.WriteLine("FAIL CFG_HOST_DEV " + label); }
-        }
-        try
-        {
-            ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
-            var clock = new SyntheticClock(); Clock.Use(clock);
-            AppDatabase.Initialize();
-            var parseMethod = typeof(SettingsStore).GetMethod("ParseLegacyDevices", BindingFlags.NonPublic | BindingFlags.Static)!;
-            ImmutableArray<DeviceConfiguration> Parse(string json, bool stored = false)
-            {
-                try { return (ImmutableArray<DeviceConfiguration>)parseMethod.Invoke(null, new object[] { json, stored })!; }
-                catch (TargetInvocationException ex) when (ex.InnerException is not null)
-                { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw(); throw; }
-            }
-            var normalized = Parse("[{\"name\":\" synthetic-normalized \",\"timeoutSec\":-1,\"enable\":0}]")[0];
-            Check(normalized.NameRaw == "synthetic-normalized" && normalized.TimeoutSeconds == 0 && normalized.Enable && normalized.Key is null,
-                "legacy six-field normalization"); // 1
-            Check(new[] { "[{\"name\":\"a\",\"password\":\"synthetic-private\"}]",
-                "[{\"name\":\"a\",\"key\":\"00000000000000000000000000000000\"}]",
-                "[{\"name\":\"a\"},{\"name\":\" A \"}]" }.All(json => Throws<InvalidOperationException>(() => Parse(json))),
-                "new body unknown and colliding identity rejection"); // 2
-            var legacyJson = "[{\"name\":\"synthetic-host-a\",\"enable\":true,\"model\":\"\",\"workdir\":\"\",\"tools\":\"\",\"timeoutSec\":99999,\"opaque\":{\"password\":\"synthetic-opaque-private\"}},"
-                + "{\"name\":\"synthetic-host-b\",\"enable\":true,\"model\":\"synthetic-old-model\",\"workdir\":\"/synthetic\",\"tools\":\"synthetic-tools\",\"timeoutSec\":180}]";
-            var initial = new AppSettings { AgentDevices = legacyJson, AgentModel = "synthetic-runtime-model",
-                AgentWorkDir = "/synthetic-runtime", AgentTools = "synthetic-runtime-tools", Model = "synthetic-model",
-                ModelBaseUrl = "https://example.com/v1", AgentMaskSensitive = true };
-            new SettingsStore().Save(initial);
-            AppDatabase.SetMeta("verification_token_initialized", "initialized");
-            AppDatabase.Write(conn => AppDatabase.Exec(conn,
-                "INSERT INTO configuration_field_modes(field_id,user_mode) VALUES($field,$mode)",
-                ("$field", (int)ConfigurationFieldId.AgentDevices), ("$mode", (int)UserValueKind.Explicit)));
-            new ModelProviderStore().UpsertMetadata(new("primary", 0, "synthetic-primary", "https://example.com/v1",
-                "synthetic-model", "secret:apiKey", false));
-            var runtime = new SettingsBox(initial);
-            var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, CreateActualTokenAdapter(runtime));
-            var caller = new ConfigurationCaller("synthetic-authority", "synthetic-hostdevice-owner", "bot",
-                ConfigurationAccess.ReadEditable | ConfigurationAccess.ReadOverview | ConfigurationAccess.SaveConfiguration | ConfigurationAccess.EditAllowedSecrets);
-            long Version() => AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
-            string Json() => AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1")!;
-            string DevicesJson() => JsonNode.Parse(Json())!["AgentDevices"]!.GetValue<string>();
-            ImmutableArray<StorageConfiguration.ConfigurationDeviceState> States()
-            { using var conn = AppDatabase.Open(); return StorageConfiguration.ConfigurationStorageBridge.LoadDevices(conn); }
-            var read = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            read.View!.Agent.AgentDevices.TryGetEditableValue(out var views);
-            var a = views[0].Key; var b = views[1].Key;
-            Check(read.Code == ConfigurationResultCode.Ok && Version() == 1 && a != b && DevicesJson() == legacyJson,
-                "actual initializer allocates stable keys once without rewriting legacy payload"); // 3
-            Check(views[0].Model.UserMode == UserValueKind.Inherited
-                && views[0].Model.TryGetEditableValue(out var inheritedModel) && inheritedModel == "synthetic-runtime-model"
-                && views[0].WorkDir.TryGetEditableValue(out var inheritedDirectory) && inheritedDirectory == "/synthetic-runtime"
-                && views[0].Tools.TryGetEditableValue(out var inheritedTools) && inheritedTools == "synthetic-runtime-tools",
-                "inherited empty requested fields expose actual effective values"); // 4
-            var overview = await store.ReadAsync(caller, ConfigurationReadKind.Overview);
-            var safe = JsonSerializer.Serialize(overview);
-            Check(!overview.View!.Agent.AgentDevices.TryGetEditableValue(out _)
-                && !safe.Contains("synthetic-opaque-private", StringComparison.Ordinal)
-                && !safe.Contains("synthetic-host-a", StringComparison.Ordinal), "overview retains no raw device or opaque values"); // 5
-            ConfigurationSaveRequest Request(ImmutableArray<DeviceConfiguration> devices, bool clear = false)
-                => new("cfg-0.3.2", new(Version()), new(read.Generation, clock.WallSeconds, Guid.NewGuid()),
-                    new(null, null, new AgentChanges { AgentDevices = clear ? FieldEdit<ImmutableArray<DeviceConfiguration>>.Clear()
-                        : FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(devices) }, null, null, null, null, null), ImmutableArray<SecretEdit>.Empty);
-            var desired = Parse(legacyJson, true).Select((item, ordinal) => item with { Key = ordinal == 0 ? a : b }).ToImmutableArray();
-            var oldVersion = Version();
-            var same = Request(Parse("[{\"name\":\"synthetic-host-a\",\"enable\":true,\"model\":\"\",\"workdir\":\"\",\"tools\":\"\",\"timeoutSec\":99999},"
-                + "{\"name\":\"synthetic-host-b\",\"enable\":true,\"model\":\"synthetic-old-model\",\"workdir\":\"/synthetic\",\"tools\":\"synthetic-tools\",\"timeoutSec\":180}]"));
-            var noChanges = await store.SaveLegacyAsync(caller, same.Key, same.Changes, same.Secrets);
-            Check(noChanges.Code == ConfigurationResultCode.NoChanges && Version() == oldVersion && DevicesJson() == legacyJson,
-                "compact format alone is not a configuration change"); // 6
-            Check(JsonNode.Parse(DevicesJson())![0]!["timeoutSec"]!.GetValue<int>() == 99999,
-                "legacy equivalent timeout retains historical raw fact"); // 7
-            var parameterRequest = Request(desired.SetItem(1, desired[1] with { Model = "synthetic-new-model" }));
-            var parameters = await store.SaveAsync(caller, parameterRequest);
-            Check(parameters.Code == ConfigurationResultCode.Ok && parameters.Receipt!.DeviceKeyAssignments.IsEmpty
-                && States().Single(x => x.Key == b).DesiredName == "synthetic-host-b", "same-key parameters participate in Changed"); // 8
-            var changedRead = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            changedRead.View!.Agent.AgentDevices.TryGetEditableValue(out var changedViews);
-            Check(changedViews[1].Model.TryGetEditableValue(out var requestedModel) && requestedModel == "synthetic-new-model"
-                && changedViews[1].Model.Display != "synthetic-new-model" && runtime.Current.AgentDevices == legacyJson,
-                "requested values are separate from unapplied runtime"); // 9
-            Check(DevicesJson().Contains("synthetic-opaque-private", StringComparison.Ordinal)
-                && JsonNode.Parse(DevicesJson())!.AsArray().All(node => node!["key"] is null), "opaque DB facts retained without new legacy key fields"); // 10
-            var renamed = desired.SetItem(1, desired[1] with { NameRaw = "synthetic-host-renamed", Model = "synthetic-new-model" });
-            await store.SaveAsync(caller, Request(renamed));
-            Check(States().Single(x => x.Key == b).RenamePending
-                && StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-host-b", b)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-host-renamed", b), "actual Host rename remains pending"); // 11
-            oldVersion = Version();
-            var confirmed = StorageConfiguration.ConfigurationStorageBridge.AuthorizeDeviceHello("synthetic-host-renamed");
-            var audit = AppDatabase.Scalar<string>("SELECT action_detail FROM security_audit_log WHERE event_type='configuration_device_runtime' ORDER BY id DESC LIMIT 1")!;
-            Check(confirmed.Allowed && confirmed.Key == b && Version() == oldVersion && audit.Contains(b.Value.ToString("N"), StringComparison.Ordinal)
-                && !audit.Contains("synthetic-host", StringComparison.Ordinal), "actual Host runtime audit is atomic and safe"); // 12
-            var renameRead = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            renameRead.View!.Agent.AgentDevices.TryGetEditableValue(out var renamedViews);
-            Check(renamedViews[1].Name.TryGetEditableValue(out var nameRaw) && nameRaw == "synthetic-host-renamed"
-                && renamedViews[1].RenameState == ApplyState.Applied, "confirmed identity editable as real nameRaw"); // 13
-            var before = Json(); oldVersion = Version();
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, """
-                CREATE TRIGGER synthetic_host_device_secret_fault BEFORE INSERT ON secrets WHEN NEW.name='ttsKey'
-                BEGIN SELECT RAISE(ABORT,'synthetic_host_device_secret_fault'); END;
-                """));
-            using var credential = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("synthetic-host-device-credential"));
-            var fault = Request(renamed.SetItem(1, renamed[1] with { Enable = false, Model = "synthetic-fault-model" }));
-            fault = fault with { Secrets = ImmutableArray.Create(SecretEdit.Replace(WritableSecretSlot.TtsApiKey, credential)) };
-            var failedSave = await store.SaveAsync(caller, fault);
-            Check(failedSave.Code == ConfigurationResultCode.CommitFailed && Json() == before && Version() == oldVersion
-                && States().Single(x => x.Key == b).DesiredEnabled && new SecretsStore().LoadTtsKey() is null,
-                "actual user-device-secret-version transaction rolls back completely"); // 14
-            AppDatabase.Write(conn => AppDatabase.Exec(conn, "DROP TRIGGER synthetic_host_device_secret_fault"));
-            var clearing = Request(ImmutableArray<DeviceConfiguration>.Empty, true);
-            var deleted = await store.SaveAsync(caller, clearing);
-            Check(deleted.Code == ConfigurationResultCode.Ok && (await store.SaveAsync(caller, clearing)).Replayed,
-                "actual clear receipt replays without applying"); // 15
-            Check(DevicesJson() == "[]" && States().All(state => state.Deleted)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-host-b", null)
-                && !StorageConfiguration.ConfigurationStorageBridge.CanDispatchDevice("synthetic-host-renamed", null), "actual clear persists all tombstones"); // 16
-            var resurrect = Request(ImmutableArray.Create(new DeviceConfiguration(null, "synthetic-host-b", true, null, null, null, 0)));
-            Check((await store.SaveLegacyAsync(caller, resurrect.Key, resurrect.Changes, resurrect.Secrets)).Code == ConfigurationResultCode.LegacyNeedsReview,
-                "actual Legacy tombstone reuse requires review"); // 17
-            var added = await store.SaveAsync(caller, Request(ImmutableArray.Create(new DeviceConfiguration(null, "synthetic-host-new", true, null, null, null, 0))));
-            Check(added.Code == ConfigurationResultCode.Ok && added.Receipt!.DeviceKeyAssignments is { Length: 1 }
-                && added.Receipt.DeviceKeyAssignments[0].Key != a && added.Receipt.DeviceKeyAssignments[0].Key != b,
-                "actual new device receives new persistent identity"); // 18
-            Console.WriteLine($"CFG_CHILD host-devices passed={passed} failed={failed}");
-            return failed == 0 ? 0 : 1;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"CFG_CHILD host-devices passed={passed} failed={failed + 1} type={ex.GetType().Name}");
-            return 1;
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            var full = Path.GetFullPath(root);
-            if (!string.Equals(Path.GetDirectoryName(full), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
-                || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(full), "^botagent-configuration-hostdevices-[0-9a-f]{32}$"))
-                throw new InvalidOperationException("configuration_fixture_cleanup_scope");
-            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
-        }
-    }
-
     private static async Task<int?> GovernanceChildAsync(string mode)
     {
         var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-governance-" + Guid.NewGuid().ToString("N"));
@@ -705,7 +195,7 @@ internal static class ConfigurationContractTests
             var header = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             long Version() => AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
             long Rows() => AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations");
-            ConfigurationSaveRequest Request(int? desire = null) => new("cfg-0.3.2", new(Version()),
+            ConfigurationSaveRequest Request(int? desire = null) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(desire is null ? null : new BehaviorChanges {
                     AiDesire = FieldEdit<int>.Set(desire.Value) }, null, null, null, null, null, null, null), ImmutableArray<SecretEdit>.Empty);
             if (mode == "--configuration-global-capacity")
@@ -935,7 +425,7 @@ internal static class ConfigurationContractTests
             var original = JsonSerializer.Deserialize<ConfigurationSaveRequest>(requestJson)!;
             var read = await store.ReadAsync(Caller(0), ConfigurationReadKind.Editable);
             long Rows() => AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations");
-            ConfigurationSaveRequest Request() => new("cfg-0.3.2", read.Version,
+            ConfigurationSaveRequest Request() => new("cfg-0.3.3", read.Version,
                 new(read.Generation, clock.WallSeconds, Guid.NewGuid()), new(null, null, null, null, null, null, null, null),
                 ImmutableArray<SecretEdit>.Empty);
             Check(read.Code == ConfigurationResultCode.Ok && read.Generation != original.Key.Generation && read.Version.Value == 0,
@@ -1124,7 +614,7 @@ internal static class ConfigurationContractTests
                     SeedSyntheticProviderMetadata(new("primary", 0, "synthetic-primary", "https://example.com/v1",
                         "synthetic-model", "secret:apiKey", false));
                     var key = new ConfigurationOperationKey(read.Generation, clock.WallSeconds, Guid.NewGuid());
-                    var request = new ConfigurationSaveRequest("cfg-0.3.2", read.Version, key,
+                    var request = new ConfigurationSaveRequest("cfg-0.3.3", read.Version, key,
                         new(null, null, null, null, null, null, null, null),
                         ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.FeishuVerificationToken)));
                     var deleted = await store.SaveAsync(caller, request);
@@ -1263,7 +753,7 @@ internal static class ConfigurationContractTests
                 {
                     if (after.Value != before.Value + 1) throw new InvalidOperationException("synthetic_init_version");
                     new AuditLogStore().AppendInTransaction(connection,
-                        new AuditEvent("configuration_migration", "synthetic-writer", "bot", "synthetic_initialization", "cfg-0.3.2"));
+                        new AuditEvent("configuration_migration", "synthetic-writer", "bot", "synthetic_initialization", "cfg-0.3.3"));
                     if (auditFault) throw new IOException("synthetic_init_audit_fault");
                 }
             };
@@ -1395,7 +885,7 @@ internal static class ConfigurationContractTests
             var generation = read.Generation;
             var initialVersion = read.Version.Value;
             ConfigurationSaveRequest Request(ConfigurationPatch? changes = null, ImmutableArray<SecretEdit> secrets = default)
-                => new("cfg-0.3.2", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
+                => new("cfg-0.3.3", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
                     new(generation, clock.WallSeconds, Guid.NewGuid()), changes ?? new(null, null, null, null, null, null, null, null),
                     secrets.IsDefault ? ImmutableArray<SecretEdit>.Empty : secrets);
             var empty = Request();
@@ -1403,9 +893,12 @@ internal static class ConfigurationContractTests
                 empty.Key, empty.Changes, empty.Secrets);
             Check(noChanges.Code == ConfigurationResultCode.NoChanges && noChanges.CurrentVersion.Value == initialVersion
                 && providers.Find("primary")?.SecretKeyRef == "env:QQCHAT_API_KEY", "all Keep cannot rewrite empty primary binding");
-            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 142
-                && read.Fields.Select(rule => (int)rule.Id).OrderBy(id => id).SequenceEqual(Enumerable.Range(1, 142)),
-                "actual 142 typed projection and descriptors");
+            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 134
+                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 134
+                && !read.Fields.Any(rule => rule.Id is ConfigurationFieldId.AgentDevices or ConfigurationFieldId.AgentMaxQueued
+                    or ConfigurationFieldId.AgentModel or ConfigurationFieldId.AgentTarget or ConfigurationFieldId.AgentTimeoutSeconds
+                    or ConfigurationFieldId.AgentTools or ConfigurationFieldId.AgentWorkDir or ConfigurationFieldId.EnableHostAgent),
+                "actual 134 typed projection and descriptors");
             Check(read.View!.Behavior.BotPersona.Visibility == FieldVisibility.Hidden
                 && !read.View.Behavior.BotPersona.TryGetEditableValue(out _)
                 && !JsonSerializer.Serialize(read).Contains(initial.BotPersona, StringComparison.Ordinal), "Overview drops raw editable value");
@@ -1489,20 +982,6 @@ internal static class ConfigurationContractTests
             editable = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(editable.View!.Model.Model.TryGetEditableValue(out var effectiveModel) && effectiveModel == initial.Model
                 && providers.Find("primary")?.ModelName == "synthetic-env-model", "Read reports actual runtime and does not reread environment");
-            var before = AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
-            var complex = await store.SaveAsync(caller, Request(new(new() { AiDesire = FieldEdit<int>.Set(44) }, null,
-                new() { AgentDevices = FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(ImmutableArray.Create(
-                    new DeviceConfiguration(new DeviceKey(Guid.NewGuid()), "synthetic-device", true, null, null, null, 0))) }, null, null, null, null, null)));
-            Check(complex.Code == ConfigurationResultCode.ValidationFailed && complex.Errors.Any(error => error.Code == "invalid_device_identity")
-                && settings.Load().AiDesire == 43 && complex.CurrentVersion.Value == before, "invalid device identity rejects entire batch safely");
-            // Deliberately corrupt only this synthetic legacy fact; a normal Save is now correctly fenced.
-            AppDatabase.Write(conn => AppDatabase.Exec(conn,
-                "UPDATE settings SET json=json_set(json,'$.AgentDevices',$devices) WHERE id=1",
-                ("$devices", "[{\"name\":\"synthetic-unmapped-device\"}]")));
-            var unsupportedRead = await store.ReadAsync(caller, ConfigurationReadKind.Overview);
-            Check(unsupportedRead.Code == ConfigurationResultCode.LegacyNeedsReview && unsupportedRead.View is null
-                && unsupportedRead.Version.Value == before && unsupportedRead.Generation == generation,
-                "unmigrated legacy compound fact is not fabricated empty view");
             allow = false;
             var denied = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(denied.Code == ConfigurationResultCode.Forbidden && denied.View is null
@@ -1603,9 +1082,7 @@ internal static class ConfigurationContractTests
         foreach (var fixture in new[] { ("--configuration-future-module", "CFG_CHILD future passed=4 failed=0"),
             ("--configuration-module-atomic-fault", "CFG_CHILD atomic passed=6 failed=0"),
             ("--configuration-initialization", "CFG_CHILD initialization passed=8 failed=0"),
-            ("--configuration-host-adapter", "CFG_CHILD host passed=23 failed=0"),
-            ("--configuration-host-devices", "CFG_CHILD host-devices passed=18 failed=0"),
-            ("--configuration-host-endpoints", "CFG_CHILD host-endpoints passed=16 failed=0"),
+            ("--configuration-host-adapter", "CFG_CHILD host passed=21 failed=0"),
             ("--configuration-primary-aliases", "CFG_CHILD primary-aliases passed=17 failed=0"),
             ("--configuration-alias-codecs", "CFG_CHILD alias-codecs passed=9 failed=0"),
             ("--configuration-provider-routing", "CFG_CHILD provider-routing passed=25 failed=0"),
@@ -1618,13 +1095,11 @@ internal static class ConfigurationContractTests
             ("--configuration-feishu-whitelist", "CFG_CHILD feishu-whitelist passed=16 failed=0"),
             ("--configuration-platform-compatibility", "CFG_CHILD platform-compatibility passed=20 failed=0"),
             ("--configuration-legacy-plan", "CFG_CHILD legacy-plan passed=14 failed=0"),
-            ("--configuration-bridge-devices", "CFG_CHILD bridge-devices passed=12 failed=0"),
             ("--configuration-publish-permission", "CFG_CHILD publish-permission passed=14 failed=0"),
             ("--configuration-write-boundaries", "CFG_CHILD write-boundaries passed=27 failed=0"),
             ("--configuration-http", "CFG_CHILD configuration-http passed=27 failed=0"),
             ("--configuration-legacy-mood", "CFG_CHILD legacy-mood passed=21 failed=0"),
             ("--configuration-legacy-mood-audit", "CFG_CHILD legacy-mood-audit passed=10 failed=0"),
-            ("--configuration-devices", "CFG_CHILD devices passed=32 failed=0"),
             ("--configuration-apply-claims", "CFG_CHILD apply-claims passed=14 failed=0"),
             ("--configuration-global-capacity", "CFG_CHILD global-capacity passed=10 failed=0") })
         {
@@ -1741,7 +1216,7 @@ internal static class ConfigurationContractTests
             var manifest = JsonSerializer.Serialize(new
             {
                 Format = "wave1-baseline-bundle-1", Purpose = "synthetic-rollback-baseline-only", Revision = revision,
-                ContractRevision = "cfg-0.3.2", CapturedAtUtc = DateTimeOffset.UtcNow, HeadlessSha256 = expectedHeadlessHash,
+                ContractRevision = "cfg-0.3.3", CapturedAtUtc = DateTimeOffset.UtcNow, HeadlessSha256 = expectedHeadlessHash,
                 Assets = fingerprints, SourceFingerprints = sourceFingerprints, PreimageCaptured = false, RollbackVerified = false
             }, new JsonSerializerOptions { WriteIndented = true });
             var manifestPath = BoundAsset(capture, "manifest.json");
@@ -1783,7 +1258,7 @@ internal static class ConfigurationContractTests
             var caller = new ConfigurationCaller("synthetic-authority", "synthetic-publisher", "bot",
                 ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration);
             var header = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            ConfigurationSaveRequest Request(int value) => new("cfg-0.3.2",
+            ConfigurationSaveRequest Request(int value) => new("cfg-0.3.3",
                 new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
                 new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(value) }, null, null, null, null, null, null, null),
@@ -1996,7 +1471,7 @@ internal static class ConfigurationContractTests
                 JsonSerializer.Deserialize<ConfigurationGeneration>(read["generation"]!.ToJsonString()),
                 read["serverUnixSeconds"]!.GetValue<long>(), Guid.NewGuid())).Trim('"');
             string SaveBody(JsonObject read, string key, JsonObject? changes = null, JsonArray? secrets = null)
-                => new JsonObject { ["contractRevision"] = "cfg-0.3.2", ["expectedVersion"] = read["version"]!.DeepClone(),
+                => new JsonObject { ["contractRevision"] = "cfg-0.3.3", ["expectedVersion"] = read["version"]!.DeepClone(),
                     ["key"] = key, ["changes"] = changes ?? new JsonObject(), ["secrets"] = secrets ?? new JsonArray() }.ToJsonString();
             JsonObject Ai(int value) => new() { ["behavior"] = new JsonObject { ["aiDesire"] = new JsonObject { ["kind"] = 1, ["value"] = value } } };
             await Launch();
@@ -2006,7 +1481,7 @@ internal static class ConfigurationContractTests
                 "real_settings_writes_retain_same_origin_gate");
             var initial = await Read();
             Check(initial.Status == 200 && initial.Body["code"]!.GetValue<int>() == 0
-                && initial.Body["fields"]!.AsArray().Count == 142 && initial.Body["version"] is JsonValue
+                && initial.Body["fields"]!.AsArray().Count == 134 && initial.Body["version"] is JsonValue
                 && initial.Body["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 10,
                 "actual_host_adopts_store_and_returns_versioned_editable_projection");
             http.DefaultRequestHeaders.Add("X-Panel-Token", "synthetic-http-panel-token");
@@ -2273,7 +1748,7 @@ internal static class ConfigurationContractTests
                 ["privateChatEnabled"] = false, ["feishuEnabled"] = false, ["localChannelIds"] = "" });
             Check(new[] { "qq.private", "qq.official", "feishu", "local" }.All(p => Rules(Desired(), p) == (true, true)), "whole_legacy_table_wins_over_conflicting_scalar_aliases");
             Check(Desired().LocalChannelIds == "101", "whole_local_policy_retains_its_requested_roster");
-            ConfigurationSaveRequest Strict(ConfigurationPatch changes, ConfigurationOperationKey? key = null) => new("cfg-0.3.2",
+            ConfigurationSaveRequest Strict(ConfigurationPatch changes, ConfigurationOperationKey? key = null) => new("cfg-0.3.3",
                 new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")), key ?? Key(), changes, ImmutableArray<SecretEdit>.Empty);
             var official = new PlatformPolicyEntry(new PolicyTarget.AccountDefault("qq.official", "legacy"), new(ToggleRule.Enabled, ToggleRule.Enabled,
                 ListRule.Inherit(), ListRule.Inherit(), new(ActionRuleKind.Inherit, ImmutableArray<ActionId>.Empty), ImmutableArray<FeatureOverride>.Empty));
@@ -2630,7 +2105,7 @@ internal static class ConfigurationContractTests
             var key = JsonSerializer.Serialize(new ConfigurationOperationKey(
                 JsonSerializer.Deserialize<ConfigurationGeneration>(read["generation"]!.ToJsonString()),
                 read["serverUnixSeconds"]!.GetValue<long>(), Guid.NewGuid())).Trim('"');
-            var saved = await Post("save", new JsonObject { ["contractRevision"] = "cfg-0.3.2", ["expectedVersion"] = read["version"]!.DeepClone(),
+            var saved = await Post("save", new JsonObject { ["contractRevision"] = "cfg-0.3.3", ["expectedVersion"] = read["version"]!.DeepClone(),
                 ["key"] = key, ["changes"] = new JsonObject { ["behavior"] = new JsonObject { ["aiDesire"] = new JsonObject { ["kind"] = 1, ["value"] = 23 } } },
                 ["secrets"] = new JsonArray(new JsonObject { ["slot"] = 0, ["kind"] = 1, ["value"] = "synthetic-rollback-candidate-key" }) }.ToJsonString());
             Check(saved["code"]!.GetValue<int>() == 0 && saved["receipt"]!["commitState"]!.GetValue<int>() == 1,
@@ -3054,242 +2529,6 @@ internal static class ConfigurationContractTests
         catch (Exception) { Console.WriteLine("CFG_CHILD legacy-mood-reopen failed=1"); return 1; }
     }
 
-    private static async Task<int?> BridgeDeviceGateChildAsync()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-bridge-" + Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
-        Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
-        var passed = 0;
-        void Check(bool condition, string label)
-        {
-            if (!condition) { Console.WriteLine("FAIL CFG_BRIDGE_DEVICES " + label); throw new InvalidOperationException(label); }
-            passed++;
-        }
-        try
-        {
-            ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
-            var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
-            var settings = new AppSettings { EnableAgentBridge = true, AgentTimeoutSeconds = 30 };
-            new SettingsStore().Save(settings);
-            var participant = new SyntheticParticipant { ManageDevices = true };
-            participant.DeviceRuntimeAudit = (conn, _) => new AuditLogStore().AppendInTransaction(conn,
-                new AuditEvent("device_activation", "synthetic-writer", "bot", "synthetic-device", "cfg-0.3.2"));
-            var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant);
-            var caller = new ConfigurationCaller("synthetic-authority", "synthetic-bridge-owner", "bot",
-                ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration);
-            var header = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            ConfigurationSaveRequest Request(ImmutableArray<DeviceConfiguration> devices)
-                => new("cfg-0.3.2", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
-                    new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
-                    new(null, null, new AgentChanges { AgentDevices = FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(devices) },
-                        null, null, null, null, null), ImmutableArray<SecretEdit>.Empty);
-            var created = await store.SaveAsync(caller, Request(ImmutableArray.Create(
-                new DeviceConfiguration(null, "synthetic-device-a", true, null, null, null, 30))));
-            Check(created.Code == ConfigurationResultCode.Ok && created.Receipt!.DeviceKeyAssignments.Length == 1,
-                "registered_device_committed_before_bridge_use");
-            var key = created.Receipt!.DeviceKeyAssignments.Single().Key;
-            var bridge = new BotAgent.Services.Agent.AgentBridgeServer(new SettingsBox(settings), _ => { });
-            // Exercise the actual server after its existing HTTP authentication boundary, not a substitute auth protocol.
-            await using var peer = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-device-a");
-            var limit = Stopwatch.StartNew();
-            while (!bridge.IsDeviceOnline("synthetic-device-a") && limit.Elapsed < TimeSpan.FromSeconds(2))
-                await Task.Delay(10);
-            Check(bridge.IsDeviceOnline("synthetic-device-a") && await bridge.RequestModelsAsync("synthetic-device-a")
-                && (await peer.ReceiveAsync())?["type"]?.GetValue<string>() == "models", "real_bridge_control_positive_before_revocation");
-            object Connection(string name)
-            {
-                var connections = bridge.GetType().GetField("_bridges", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(bridge)!;
-                return connections.GetType().GetProperty("Item")!.GetValue(connections, new object[] { name })!;
-            }
-            async Task<bool> Until(Func<bool> predicate)
-            {
-                var elapsed = Stopwatch.StartNew();
-                while (!predicate() && elapsed.Elapsed < TimeSpan.FromSeconds(2)) await Task.Delay(10);
-                return predicate();
-            }
-            Task<ConfigurationSaveResult> Enable(bool enabled) => store.SaveAsync(caller, Request(ImmutableArray.Create(
-                new DeviceConfiguration(key, "synthetic-device-a", enabled, null, null, null, 30)))).AsTask();
-            var originalConnection = Connection("synthetic-device-a");
-            var disabled = await store.SaveAsync(caller, Request(ImmutableArray.Create(
-                new DeviceConfiguration(key, "synthetic-device-a", false, null, null, null, 30))));
-            Check(disabled.Code == ConfigurationResultCode.Ok && !bridge.IsDeviceOnline("synthetic-device-a")
-                && !bridge.Connected && bridge.BridgeNames.Count == 0 && bridge.AnyBridge is null,
-                "committed_disable_removes_real_bridge_from_all_selectors");
-            Check(!await bridge.RequestPiSessionsAsync("synthetic-device-a") && await peer.ReceiveAsync() is null,
-                "committed_disable_blocks_control_before_websocket_write");
-            Check(originalConnection.GetType().GetProperty("BoundDeviceKey")!.GetValue(originalConnection) is DeviceKey bound && bound == key,
-                "bridge_ignores_client_key_and_binds_server_owned_identity");
-            await Enable(true);
-            await using (var racePeer = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-device-a"))
-            {
-                if (!await Until(() => bridge.IsDeviceOnline("synthetic-device-a"))) throw new InvalidOperationException("synthetic_bridge_not_ready");
-                var connection = Connection("synthetic-device-a");
-                var gate = (SemaphoreSlim)connection.GetType().GetProperty("SendGate")!.GetValue(connection)!;
-                await gate.WaitAsync();
-                var task = bridge.NewTask("group:10001", "synthetic-task", "synthetic-session", "synthetic-device-a");
-                var queued = bridge.TryEnqueue(task);
-                bool selected;
-                ConfigurationSaveResult revoked;
-                try
-                {
-                    selected = await Until(() => ReferenceEquals(bridge.Current, task));
-                    revoked = await Enable(false);
-                }
-                finally { gate.Release(); }
-                Check(queued && selected && revoked.Code == ConfigurationResultCode.Ok && await Until(() => task.Done)
-                    && !task.Ok && await racePeer.ReceiveAsync() is null,
-                    "task_revoked_while_waiting_send_gate_has_zero_task_frames");
-            }
-            await Enable(true);
-            var late = bridge.NewTask("group:10001", "synthetic-late-task", "synthetic-session", "synthetic-device-a");
-            await using (var latePeer = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-device-a"))
-            {
-                if (!await Until(() => bridge.IsDeviceOnline("synthetic-device-a"))) throw new InvalidOperationException("synthetic_bridge_not_ready");
-                var queued = bridge.TryEnqueue(late);
-                var delivered = await latePeer.ReceiveAsync();
-                await Enable(false);
-                await latePeer.SendAsync(new JsonObject { ["type"] = "done", ["id"] = late.Id, ["text"] = "synthetic-result", ["exitCode"] = 0 });
-                Check(queued && delivered?["type"]?.GetValue<string>() == "task" && await Until(() => late.Done) && !late.Ok,
-                    "revoked_connection_late_success_cannot_settle_task_as_success");
-            }
-            await Enable(true);
-            await using (var replacement = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-device-a"))
-            {
-                if (!await Until(() => bridge.IsDeviceOnline("synthetic-device-a"))) throw new InvalidOperationException("synthetic_bridge_not_ready");
-                // Model the legal replacement window: the old task is still current while the new socket is indexed.
-                var stateLock = bridge.GetType().GetField("_stateLock", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(bridge)!;
-                int cancelled;
-                lock (stateLock)
-                {
-                    bridge.GetType().GetField("_current", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(bridge, late);
-                    cancelled = bridge.Cancel(late.SourceKey);
-                }
-                Check(cancelled == 1 && await replacement.ReceiveAsync() is null,
-                    "cancel_never_redirects_old_connection_id_to_same_name_replacement");
-            }
-            var deleted = await store.SaveAsync(caller, Request(ImmutableArray<DeviceConfiguration>.Empty));
-            await using (var deletedPeer = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-device-a"))
-                Check(deleted.Code == ConfigurationResultCode.Ok && await Until(() => deletedPeer.Closed)
-                    && !bridge.IsDeviceOnline("synthetic-device-a"), "tombstoned_name_cannot_rejoin_with_forged_client_key");
-            var renameCreated = await store.SaveAsync(caller, Request(ImmutableArray.Create(
-                new DeviceConfiguration(null, "synthetic-rename-old", true, null, null, null, 30))));
-            var renameKey = renameCreated.Receipt!.DeviceKeyAssignments.Single().Key;
-            await using (var oldPeer = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-rename-old"))
-            {
-                if (!await Until(() => bridge.IsDeviceOnline("synthetic-rename-old"))) throw new InvalidOperationException("synthetic_bridge_not_ready");
-                await store.SaveAsync(caller, Request(ImmutableArray.Create(
-                    new DeviceConfiguration(renameKey, "synthetic-rename-new", true, null, null, null, 30))));
-                var renameVersion = AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
-                var audits = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log WHERE event_type='device_activation'");
-                await using var newPeer = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-rename-new");
-                Check(await Until(() => bridge.IsDeviceOnline("synthetic-rename-new")) && !bridge.IsDeviceOnline("synthetic-rename-old")
-                    && AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1") == renameVersion
-                    && AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log WHERE event_type='device_activation'") == audits + 1,
-                    "real_hello_confirms_pending_rename_with_audit_without_new_configuration_version");
-            }
-            await using (var unknown = await SyntheticBridgePeer.ConnectAsync(bridge, "synthetic-unregistered"))
-            {
-                Check(await Until(() => bridge.IsDeviceOnline("synthetic-unregistered")) && await bridge.RequestModelsAsync("synthetic-unregistered")
-                    && (await unknown.ReceiveAsync())?["type"]?.GetValue<string>() == "models", "unknown_legacy_first_connection_compatibility_preserved");
-                AppDatabase.Write(conn => AppDatabase.Exec(conn, "ALTER TABLE configuration_devices RENAME TO synthetic_unavailable_devices"));
-                try
-                {
-                    Check(!await bridge.RequestModelsAsync("synthetic-unregistered") && !bridge.IsDeviceOnline("synthetic-unregistered")
-                        && await unknown.ReceiveAsync() is null, "storage_read_failure_denies_even_unknown_legacy_control");
-                }
-                finally { AppDatabase.Write(conn => AppDatabase.Exec(conn, "ALTER TABLE synthetic_unavailable_devices RENAME TO configuration_devices")); }
-            }
-            Console.WriteLine($"CFG_CHILD bridge-devices passed={passed} failed=0");
-            return 0;
-        }
-        catch (Exception error)
-        {
-            Console.WriteLine($"CFG_CHILD bridge-devices passed={passed} failed=1 type={error.GetType().Name}");
-            return 1;
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            var full = Path.GetFullPath(root);
-            if (!string.Equals(Path.GetDirectoryName(full), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
-                || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(full), "^botagent-configuration-bridge-[0-9a-f]{32}$"))
-                throw new InvalidOperationException("configuration_bridge_fixture_cleanup_scope");
-            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
-        }
-    }
-
-    private sealed class SyntheticBridgePeer : IAsyncDisposable
-    {
-        private readonly System.Net.Sockets.TcpClient _clientTcp;
-        private readonly System.Net.Sockets.TcpClient _serverTcp;
-        private readonly System.Net.WebSockets.WebSocket _client;
-        private readonly CancellationTokenSource _stop = new();
-        private readonly Task _handler;
-
-        private SyntheticBridgePeer(BotAgent.Services.Agent.AgentBridgeServer bridge,
-            System.Net.Sockets.TcpClient client, System.Net.Sockets.TcpClient server)
-        {
-            _clientTcp = client; _serverTcp = server;
-            _client = System.Net.WebSockets.WebSocket.CreateFromStream(client.GetStream(), false, null, Timeout.InfiniteTimeSpan);
-            var socket = System.Net.WebSockets.WebSocket.CreateFromStream(server.GetStream(), true, null, Timeout.InfiniteTimeSpan);
-            _handler = bridge.HandleAsync(socket, _stop.Token);
-        }
-
-        internal static async Task<SyntheticBridgePeer> ConnectAsync(BotAgent.Services.Agent.AgentBridgeServer bridge, string name)
-        {
-            using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var client = new System.Net.Sockets.TcpClient();
-            try
-            {
-                await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
-                var server = await listener.AcceptTcpClientAsync();
-                var peer = new SyntheticBridgePeer(bridge, client, server);
-                try
-                {
-                    var bytes = Encoding.UTF8.GetBytes(new JsonObject { ["type"] = "hello", ["host"] = name,
-                        ["key"] = Guid.NewGuid().ToString("N") }.ToJsonString());
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                    await peer._client.SendAsync(new ArraySegment<byte>(bytes), System.Net.WebSockets.WebSocketMessageType.Text, true, timeout.Token);
-                    return peer;
-                }
-                catch { await peer.DisposeAsync(); throw; }
-            }
-            catch { client.Dispose(); throw; }
-        }
-
-        internal async Task<JsonObject?> ReceiveAsync()
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-            try
-            {
-                var bytes = new byte[4096];
-                var result = await _client.ReceiveAsync(new ArraySegment<byte>(bytes), timeout.Token);
-                if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close) return null;
-                if (!result.EndOfMessage) throw new InvalidOperationException("synthetic_bridge_unexpected_frame_shape");
-                return JsonNode.Parse(Encoding.UTF8.GetString(bytes, 0, result.Count))!.AsObject();
-            }
-            catch (Exception error) when (error is OperationCanceledException or System.Net.WebSockets.WebSocketException or ObjectDisposedException)
-            { return null; }
-        }
-
-        internal bool Closed => _handler.IsCompleted;
-
-        internal async Task SendAsync(JsonObject message)
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            var bytes = Encoding.UTF8.GetBytes(message.ToJsonString());
-            await _client.SendAsync(new ArraySegment<byte>(bytes), System.Net.WebSockets.WebSocketMessageType.Text, true, timeout.Token);
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            _stop.Cancel(); _client.Abort();
-            await _handler.WaitAsync(TimeSpan.FromSeconds(3));
-            _client.Dispose(); _clientTcp.Dispose(); _serverTcp.Dispose(); _stop.Dispose();
-        }
-    }
-
     private static int LegacyConfigurationPlanChild()
     {
         var passed = 0;
@@ -3315,7 +2554,6 @@ internal static class ConfigurationContractTests
             {
                 ["aiDesire"] = 11, ["model"] = "synthetic-model", ["enableVoice"] = false, ["enableMusic"] = false,
                 ["healthReportEnabled"] = false, ["apiKey"] = " synthetic-plan-key ", ["mood"] = "synthetic-mood", ["ttsProvider"] = "synthetic-provider",
-                ["agentDevices"] = """[{"name":"synthetic-device-a","enable":true,"model":"synthetic-model","workdir":"","tools":"","timeoutSec":120}]""",
                 ["platformPolicies"] = new JsonArray(new JsonObject
                 {
                     ["PlatformId"] = "qq.private", ["AccountScope"] = "legacy", ["Enabled"] = true, ["ChatEnabled"] = true,
@@ -3334,11 +2572,10 @@ internal static class ConfigurationContractTests
                     "aggregate_assembles_all_seven_partitions");
                 Check(changes.Behavior!.AiDesire.TryGetValue(out var desire) && desire == 11
                     && changes.Model!.Model.TryGetValue(out var model) && model == "synthetic-model"
-                    && changes.Agent!.AgentDevices.TryGetValue(out var devices) && devices.Single().Key is null
-                    && devices.Single().NameRaw == "synthetic-device-a"
+                    && changes.Agent!.AgentAllowedUsers.Kind == EditKind.Keep
                     && changes.Platform!.PlatformPolicies.TryGetValue(out var policies)
                     && policies.Single().Target == new PolicyTarget.AccountDefault("qq.private", "legacy"),
-                    "aggregate_preserves_scalar_device_and_whole_policy_intent");
+                    "aggregate_preserves_scalar_and_whole_policy_intent");
                 Check(changes.Voice!.EnableVoice.TryGetValue(out var voice) && !voice
                     && changes.Music!.EnableMusic.TryGetValue(out var music) && !music
                     && changes.Reporting!.HealthReportEnabled.TryGetValue(out var reporting) && !reporting,
@@ -3514,7 +2751,7 @@ internal static class ConfigurationContractTests
             {
                 Format = "wave1-legacy-preimage-1", Purpose = "synthetic-rollback-preimage-only", CapturedAtUtc = DateTimeOffset.UtcNow,
                 BaselineManifestSha256 = baselineManifestHash, BaselineHeadlessSha256 = baseline.RootElement.GetProperty("HeadlessSha256").GetString(),
-                ContractRevision = "cfg-0.3.2", PreimageSha256 = preimageHash, PhysicalSchemaVersion = physicalVersion,
+                ContractRevision = "cfg-0.3.3", PreimageSha256 = preimageHash, PhysicalSchemaVersion = physicalVersion,
                 ConfigurationVersion = 0, SettingsRows = 1, FixedSecretSlots = 6, ProviderRows = 1, LegacyDeviceCount = 1,
                 PreimageCaptured = true, OldBinaryCompatibilityVerified = false, RollbackVerified = false
             }, new JsonSerializerOptions { WriteIndented = true });
@@ -3608,7 +2845,7 @@ internal static class ConfigurationContractTests
             var account = new PolicyTarget.AccountDefault("qq.private", "legacy");
             var instance = new PolicyTarget.Instance(declared[0]);
             ConfigurationSaveRequest Request(FieldEdit<ImmutableArray<PlatformPolicyEntry>> table = default, params PolicyEdit[] edits)
-                => new("cfg-0.3.2", new(Version()), new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
+                => new("cfg-0.3.3", new(Version()), new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
                     new(null, null, null, new PlatformChanges { PlatformPolicies = table }, null, null, null,
                         new(ImmutableArray<PluginEnabledEdit>.Empty, ImmutableArray<ProviderEdit>.Empty, edits.ToImmutableArray())), ImmutableArray<SecretEdit>.Empty);
             var entry = new PlatformPolicyEntry(account, Rules(ToggleRule.Enabled, ToggleRule.Enabled, ListRule.Explicit("10001"),
@@ -4082,7 +3319,7 @@ internal static class ConfigurationContractTests
             ProviderEdit Edit(string id = "synthetic-secondary", FieldEdit<string> name = default, FieldEdit<string> url = default,
                 FieldEdit<string> model = default, FieldEdit<bool> enabled = default, FieldEdit<int> priority = default,
                 CredentialBindingEdit? binding = null) => new(new(id), new(name, priority, url, model, enabled, binding ?? CredentialBindingEdit.KeepExisting()));
-            ConfigurationSaveRequest Request(params ProviderEdit[] edits) => new("cfg-0.3.2", new(Version()),
+            ConfigurationSaveRequest Request(params ProviderEdit[] edits) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(null, null, null, null, null, null, null,
                     new(ImmutableArray<PluginEnabledEdit>.Empty, edits.ToImmutableArray(), ImmutableArray<PolicyEdit>.Empty)), ImmutableArray<SecretEdit>.Empty);
             var request = Request(Edit(name: FieldEdit<string>.Set("synthetic-edited-name")));
@@ -4344,7 +3581,7 @@ internal static class ConfigurationContractTests
                 StorageSecrets.SaveInTransaction(conn, WritableSecretSlot.ModelApiKey, value, clock.WallSeconds));
             var desire = 10;
             ValueTask<ConfigurationSaveResult> Save(SecretEdit? edit = null) => store.SaveAsync(caller,
-                new("cfg-0.3.2", new(Version()), new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
+                new("cfg-0.3.3", new(Version()), new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
                     new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(++desire) }, null, null, null, null, null, null, null),
                     edit is null ? ImmutableArray<SecretEdit>.Empty : ImmutableArray.Create(edit)));
             (long Version, long Audits, string? Key, PersistedModelProvider? Provider, AppSettings Runtime) State()
@@ -4741,7 +3978,7 @@ internal static class ConfigurationContractTests
             long Audits() => AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log");
             ProviderEdit Alias(FieldEdit<string> model = default, FieldEdit<string> url = default) => new(new("primary"),
                 new(default, default, url, model, default, CredentialBindingEdit.KeepExisting()));
-            ConfigurationSaveRequest Request(ModelChanges? model = null, ProviderEdit? provider = null) => new("cfg-0.3.2", new(Version()),
+            ConfigurationSaveRequest Request(ModelChanges? model = null, ProviderEdit? provider = null) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(null, model, null, null, null, null, null,
                     provider is null ? null : new(ImmutableArray<PluginEnabledEdit>.Empty, ImmutableArray.Create(provider), ImmutableArray<PolicyEdit>.Empty)),
                 ImmutableArray<SecretEdit>.Empty);
@@ -4751,7 +3988,7 @@ internal static class ConfigurationContractTests
             if (oldProtocol)
             {
                 // A synthetic retained-protocol fixture, not a claim that an old binary was rebuilt or restored.
-                SetCodec("cfg-0.3.2");
+                SetCodec("cfg-0.3.3");
                 var raw = Request(new ModelChanges { Model = FieldEdit<string>.Set("synthetic-old-direct") },
                     Alias(FieldEdit<string>.Set("synthetic-old-provider")));
                 var saved = await store.SaveAsync(caller, raw);
@@ -4768,7 +4005,7 @@ internal static class ConfigurationContractTests
                         == ConfigurationResultCode.StorageUnavailable); // 6
                 Check((await store.SaveAsync(caller, raw with { Key = raw.Key with { Nonce = Guid.NewGuid() } })).Code
                     == ConfigurationResultCode.StorageUnavailable && synthetic.Writes == writes && Version() == version && Audits() == audits); // 7
-                SetCodec("cfg-0.3.2");
+                SetCodec("cfg-0.3.3");
                 Check((await store.SaveAsync(caller, raw)).Replayed && StrictFingerprintMatches(caller, raw)); // 8
                 var legacy = Request(raw.Changes.Model, raw.Changes.Registered!.Providers.Single());
                 var legacySaved = await store.SaveLegacyAsync(caller, legacy.Key, legacy.Changes, legacy.Secrets);
@@ -4933,8 +4170,8 @@ internal static class ConfigurationContractTests
             ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 145)));
         var partitions = new[] { typeof(AgentChanges), typeof(BehaviorChanges), typeof(ModelChanges),
             typeof(MusicChanges), typeof(PlatformChanges), typeof(ReportingChanges), typeof(VoiceChanges) };
-        check("configuration seven partitions cover all 142 direct fields",
-            partitions.Sum(t => t.GetProperties().Length) == 142);
+        check("configuration seven partitions cover all 134 direct fields",
+            partitions.Sum(t => t.GetProperties().Length) == 134);
         foreach (var type in partitions)
         {
             var view = type.Assembly.GetType(type.FullName!.Replace("Changes", "View"))!;
@@ -4981,8 +4218,7 @@ internal static class ConfigurationContractTests
             typeof(RegisteredConfigurationChanges).GetProperty("Plugins")!.PropertyType
                 == typeof(ImmutableArray<PluginEnabledEdit>));
         check("configuration device/policy views do not expose raw write DTOs",
-            typeof(AgentView).GetProperty("AgentDevices")!.PropertyType
-                == typeof(ReadField<ImmutableArray<DeviceConfigurationView>>)
+            typeof(AgentView).GetProperty("AgentDevices") is null
             && typeof(PlatformView).GetProperty("PlatformPolicies")!.PropertyType
                 == typeof(ReadField<ImmutableArray<PlatformPolicyEntryView>>));
         var bytes = Encoding.UTF8.GetBytes("synthetic-private-input");
@@ -5068,8 +4304,8 @@ internal static class ConfigurationContractTests
         }
         var empty = Parse(new JsonObject());
         var scalar = Edits(empty).Where(x => x.Name is not ("AgentDevices" or "PlatformPolicies")).ToArray();
-        check("configuration legacy mapper exactly 140 scalar fields with missing Keep",
-            scalar.Length == 140 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
+        check("configuration legacy mapper exactly 133 scalar fields with missing Keep",
+            scalar.Length == 133 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
                 && Edits(empty).All(x => Kind(x.Edit) == EditKind.Keep));
         foreach (var field in scalar)
         {
@@ -5125,7 +4361,7 @@ internal static class ConfigurationContractTests
             clock.Reporting!.HealthReportTime.Kind == EditKind.Keep
                 && clock.Reporting.HealthReportTargets.TryGetValue(out var targets) && targets.StartsWith("[", StringComparison.Ordinal));
         var ignored = Parse(new JsonObject { ["apiKey"] = "synthetic-secret", ["feishuVerificationToken"] = "synthetic-token",
-            ["agentDevices"] = "[]", ["platformPolicies"] = new JsonObject(), ["unknown"] = true });
+            ["platformPolicies"] = new JsonObject(), ["unknown"] = true });
         check("configuration legacy scalar mapper does not claim complex or secret processing",
             Edits(ignored).All(x => Kind(x.Edit) == EditKind.Keep));
         check("configuration legacy scalar bad type rejects before applying any Set", Throws<InvalidOperationException>(() =>
@@ -5243,7 +4479,7 @@ internal static class ConfigurationContractTests
     private static void CheckPublication(Action<string, bool> check)
     {
         var key = new ConfigurationOperationKey(new(Guid.NewGuid()), 1, Guid.NewGuid());
-        var receipt = new ConfigurationReceipt(key, "cfg-0.3.2", ConfigurationDecision.Changed,
+        var receipt = new ConfigurationReceipt(key, "cfg-0.3.3", ConfigurationDecision.Changed,
             new(0), new ConfigurationVersion(1), CommitState.Committed, ApplyState.NotStarted,
             ImmutableArray<ApplyStepReport>.Empty, ImmutableArray<DeviceKeyAssignment>.Empty);
         var committed = new ConfigurationSaveResult(ConfigurationResultCode.Ok, false, receipt,
@@ -5317,7 +4553,7 @@ internal static class ConfigurationContractTests
             var read = await store.ReadAsync(caller, ConfigurationReadKind.Overview);
             var generation = read.Generation;
             ConfigurationSaveRequest Request(int? desire = null, ImmutableArray<SecretEdit> secrets = default)
-                => new("cfg-0.3.2", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
+                => new("cfg-0.3.3", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
                     new(generation, clock.Now.ToUnixTimeSeconds(), Guid.NewGuid()),
                     new(desire is null ? null : new BehaviorChanges { AiDesire = FieldEdit<int>.Set(desire.Value) },
                         null, null, null, null, null, null, null),
@@ -5394,21 +4630,6 @@ internal static class ConfigurationContractTests
                     && new SecretsStore().LoadApiKey() == "synthetic-owned-credential");
             }
             await store.SaveAsync(caller, Request(null, ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.ModelApiKey))));
-            var array = new[] { new DeviceConfiguration(new(Guid.NewGuid()), "synthetic-device", true, null, null, null, 0) };
-            using (var started = new ManualResetEventSlim())
-            using (var release = new ManualResetEventSlim())
-            {
-                participant.PrepareStarted = started; participant.PrepareRelease = release;
-                var pendingRequest = Request() with { Changes = new(null, null,
-                    new AgentChanges { AgentDevices = FieldEdit<ImmutableArray<DeviceConfiguration>>.Set(
-                        System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(array)) },
-                    null, null, null, null, null) };
-                var pending = Task.Run(async () => await store.SaveAsync(caller, pendingRequest));
-                check("configuration array freeze precedes participant execution", started.Wait(TimeSpan.FromSeconds(10)));
-                array[0] = array[0] with { NameRaw = "synthetic-replaced-device" }; release.Set();
-                await pending; participant.PrepareStarted = null; participant.PrepareRelease = null;
-                check("configuration caller array mutation cannot alter owned intent", participant.ObservedDeviceName == "synthetic-device");
-            }
             await CheckTransactionFaults(store, participant, caller, Request, check);
             var raceBase = Request(50);
             var race = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Task.Run(async () =>
@@ -5760,25 +4981,14 @@ internal static class ConfigurationContractTests
             PrepareStarted?.Set();
             if (PrepareRelease is not null && !PrepareRelease.Wait(TimeSpan.FromSeconds(10)))
                 throw new InvalidOperationException("synthetic_prepare_timeout");
-            if (intent.Agent!.AgentDevices.TryGetValue(out var devices) && devices.Length != 0) ObservedDeviceName = devices[0].NameRaw;
-            StorageConfiguration.PreparedDeviceChange? devicePlan = null;
-            if (ManageDevices && intent.Agent.AgentDevices.Kind != EditKind.Keep)
-            {
-                devicePlan = StorageConfiguration.ConfigurationStorageBridge.PrepareDevices(connection,
-                    intent.Agent.AgentDevices.Kind == EditKind.Clear ? ImmutableArray<DeviceConfiguration>.Empty : devices, profile);
-                if (!devicePlan.Errors.IsEmpty)
-                    return new(false, devicePlan.Errors, ImmutableArray<DeviceKeyAssignment>.Empty, _ => { }, devicePlan.Code);
-            }
             using var command = connection.CreateCommand(); command.CommandText = "SELECT json FROM settings WHERE id=1";
             var baseline = JsonSerializer.Deserialize<AppSettings>(command.ExecuteScalar() as string ?? "{}")!;
             var old = baseline.AiDesire;
             if (intent.Behavior!.AiDesire.TryGetValue(out var value)) baseline.AiDesire = value;
-            if (devicePlan is not null) baseline.AgentDevices = JsonSerializer.Serialize(devicePlan.DesiredWithKeys);
-            return new(baseline.AiDesire != old || devicePlan is { Changed: true }, ImmutableArray<FieldError>.Empty,
-                devicePlan?.Assignments ?? ImmutableArray<DeviceKeyAssignment>.Empty,
+            return new(baseline.AiDesire != old, ImmutableArray<FieldError>.Empty,
+                ImmutableArray<DeviceKeyAssignment>.Empty,
                 conn =>
                 {
-                    devicePlan?.Persist(conn);
                     AppDatabase.Exec(conn, "INSERT INTO settings(id,json,updated_unix) VALUES(1,$json,0) " +
                         "ON CONFLICT(id) DO UPDATE SET json=excluded.json",
                         ("$json", JsonSerializer.Serialize(baseline)));
@@ -5788,15 +4998,13 @@ internal static class ConfigurationContractTests
         internal override ConfigurationReadResult Read(SqliteConnection connection, ConfigurationCaller caller,
             ConfigurationReadKind kind, ConfigurationVersion version, ConfigurationGeneration generation,
             long serverUnixSeconds, ApplyState latestApplyState)
-            => new(ConfigurationResultCode.Ok, version, generation, "cfg-0.3.2", serverUnixSeconds, null,
+            => new(ConfigurationResultCode.Ok, version, generation, "cfg-0.3.3", serverUnixSeconds, null,
                 SecretSources(connection, ImmutableArray<StorageConfiguration.SecretMutation>.Empty),
                 ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
         internal override void AppendAudit(SqliteConnection connection, ConfigurationReceipt receipt,
             ImmutableArray<ConfigurationFieldId> fields)
             => new AuditLogStore().AppendInTransaction(connection,
-                new AuditEvent("configuration_decision", "synthetic-writer", "bot", "synthetic_configuration", "cfg-0.3.2"));
-        internal override void AppendDeviceRuntimeAudit(SqliteConnection connection, DeviceKey key)
-            => DeviceRuntimeAudit?.Invoke(connection, key);
+                new AuditEvent("configuration_decision", "synthetic-writer", "bot", "synthetic_configuration", "cfg-0.3.3"));
     }
 
     private sealed class SyntheticClock : IClock
