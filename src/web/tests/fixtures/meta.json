@@ -1,0 +1,18 @@
+{
+  "contractVersion": "zba-1.0",
+  "serverVersion": "0.0.0-synthetic",
+  "authentication": "bearer",
+  "scopes": ["read", "admin"],
+  "sse": false,
+  "mcpManagement": false,
+  "dockerManagement": false,
+  "maxBodyBytes": 262144,
+  "instanceId": "zi-synthetic-0001",
+  "features": [
+    "sessions.list",
+    "sessions.ensure",
+    "tasks.result",
+    "tasks.find",
+    "tasks.receipts"
+  ]
+}

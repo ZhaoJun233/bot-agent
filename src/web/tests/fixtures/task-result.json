@@ -1,0 +1,11 @@
+{
+  "id": "task-synthetic-done",
+  "state": 3,
+  "updatedAt": "2026-10-20T12:00:00+00:00",
+  "available": true,
+  "summary": "合成任务完成。",
+  "summaryTruncated": false,
+  "summaryChars": 7,
+  "toolCalls": 2,
+  "durationMs": 1234
+}

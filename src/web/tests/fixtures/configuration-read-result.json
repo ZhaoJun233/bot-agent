@@ -1,0 +1,345 @@
+{
+  "code": 0,
+  "version": "1",
+  "generation": "0123456789abcdef0123456789abcdef",
+  "contractRevision": "cfg-0.3.3",
+  "serverUnixSeconds": 1760000000,
+  "secrets": [
+    {
+      "slot": 0,
+      "configured": true,
+      "source": 2
+    },
+    {
+      "slot": 1,
+      "configured": false,
+      "source": 0
+    },
+    {
+      "slot": 2,
+      "configured": false,
+      "source": 0
+    },
+    {
+      "slot": 3,
+      "configured": false,
+      "source": 0
+    },
+    {
+      "slot": 4,
+      "configured": false,
+      "source": 0
+    },
+    {
+      "slot": 5,
+      "configured": false,
+      "source": 0
+    }
+  ],
+  "fields": [
+    {
+      "id": 29,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 117,
+      "effect": 0,
+      "canClear": false,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 77,
+      "effect": 0,
+      "canClear": false,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 75,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 8,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 141,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 102,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 132,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 86,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 60,
+      "effect": 0,
+      "canClear": false,
+      "editable": false,
+      "legacyNeedsReview": true
+    },
+    {
+      "id": 144,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": false
+    },
+    {
+      "id": 76,
+      "effect": 0,
+      "canClear": true,
+      "editable": false,
+      "legacyNeedsReview": true
+    }
+  ],
+  "latestApplyState": 0,
+  "view": {
+    "behavior": {
+      "botPersona": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 29,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      },
+      "splitReplies": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 117,
+          "effect": 0,
+          "canClear": false,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      },
+      "moodTtlSeconds": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 77,
+          "effect": 0,
+          "canClear": false,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      }
+    },
+    "model": {
+      "model": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 75,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 4,
+        "applyState": 0
+      }
+    },
+    "agent": {
+      "agentPrompt": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 8,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      }
+    },
+    "platform": {
+      "whitelistGroups": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 141,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      },
+      "platformPolicies": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 102,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      }
+    },
+    "voice": {
+      "voiceName": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 132,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      }
+    },
+    "music": {
+      "musicSources": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 86,
+          "effect": 0,
+          "canClear": true,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      }
+    },
+    "reporting": {
+      "healthReportEnabled": {
+        "visibility": 0,
+        "display": "***",
+        "rule": {
+          "id": 60,
+          "effect": 0,
+          "canClear": false,
+          "editable": false,
+          "legacyNeedsReview": true
+        },
+        "userMode": 2,
+        "effectiveSource": 3,
+        "applyState": 0
+      }
+    },
+    "registered": {
+      "plugins": [
+        {
+          "key": "plugin-sample-1",
+          "desiredEnabled": true
+        },
+        {
+          "key": "plugin-sample-2",
+          "desiredEnabled": true
+        }
+      ],
+      "providers": [
+        {
+          "key": "provider-sample",
+          "name": {
+            "visibility": 0,
+            "display": "***",
+            "rule": {
+              "id": 144,
+              "effect": 0,
+              "canClear": true,
+              "editable": false,
+              "legacyNeedsReview": false
+            },
+            "userMode": 2,
+            "effectiveSource": 3,
+            "applyState": 0
+          },
+          "baseUrl": {
+            "visibility": 0,
+            "display": "***",
+            "rule": {
+              "id": 76,
+              "effect": 0,
+              "canClear": true,
+              "editable": false,
+              "legacyNeedsReview": true
+            },
+            "userMode": 2,
+            "effectiveSource": 4,
+            "applyState": 0
+          },
+          "modelName": {
+            "visibility": 0,
+            "display": "***",
+            "rule": {
+              "id": 75,
+              "effect": 0,
+              "canClear": true,
+              "editable": false,
+              "legacyNeedsReview": true
+            },
+            "userMode": 2,
+            "effectiveSource": 4,
+            "applyState": 0
+          },
+          "priority": 0,
+          "desiredEnabled": true,
+          "credential": 1,
+          "runtimeApplyState": 0
+        }
+      ]
+    }
+  }
+}

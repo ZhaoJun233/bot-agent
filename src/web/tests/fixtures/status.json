@@ -1,0 +1,35 @@
+{
+  "state": "healthy",
+  "ready": true,
+  "version": "0.0.0-synthetic",
+  "startedAt": "2026-10-20T11:00:00+00:00",
+  "updatedAt": "2026-10-20T12:00:00+00:00",
+  "configurationVersion": "v-synthetic-1",
+  "configurationApplyState": "Applied",
+  "components": [
+    {
+      "id": "driver:synthetic",
+      "kind": "driver",
+      "displayName": "合成驱动",
+      "state": "Ready",
+      "available": true,
+      "updatedAt": "2026-10-20T11:59:00+00:00"
+    },
+    {
+      "id": "plugin:synthetic",
+      "kind": "plugin",
+      "displayName": "合成插件",
+      "state": "Disabled",
+      "available": false,
+      "reasonCode": "disabled_by_operator",
+      "updatedAt": "2026-10-20T11:58:00+00:00"
+    }
+  ],
+  "recentErrors": [
+    {
+      "at": "2026-10-20T11:57:00+00:00",
+      "scope": "model",
+      "code": "model_timeout"
+    }
+  ]
+}
