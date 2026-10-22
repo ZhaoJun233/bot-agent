@@ -36,14 +36,14 @@ jobs:
         uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
         with:
           python-version: '3.12'
-      - name: Restore core and probes (high/critical NuGet audit gate)
+      - name: Restore core, harness and probes (high/critical NuGet audit gate)
         # Core restore audits all dependencies; NU1903/NU1904 are errors, not advisory scanner output.
         run: |
           dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
+          dotnet restore tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj
           dotnet restore tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj
           dotnet restore tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj
           dotnet restore tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj
-          dotnet restore tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj
           dotnet restore tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj
           dotnet restore tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj
           dotnet restore tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj
@@ -54,17 +54,20 @@ jobs:
           dotnet restore tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj
           dotnet restore tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj
           dotnet restore tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj
-      - name: Build core (Release)
-        run: dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
+          dotnet restore tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj
+          dotnet restore tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj
+      - name: Build core and harness (Release)
+        run: |
+          dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
+          dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
       - name: Architecture and safety probes
         run: |
           dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release --no-restore
-      - name: Participation and device bridge probes
+      - name: Participation and server-files probes
         run: |
           dotnet run --project tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj -c Release --no-restore
-          dotnet run --project tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj -c Release --no-restore
-          python -m unittest discover -s tests/BotAgent.BridgeProbe -p "test_*.py"
+          python tests/BotAgent.ServerFilesProbe/test_server_files.py
       - name: Synthetic persistence, resilience and frontend probes
         run: |
           dotnet run --project tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj -c Release --no-restore
@@ -82,6 +85,8 @@ jobs:
           dotnet run --project tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release --no-restore
 
   integration:
     name: Synthetic integration test (${{ matrix.name }})
@@ -96,8 +101,8 @@ jobs:
             scenarios: "s1,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17"
           - name: "Media & Tools (S18-S31)"
             scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31"
-          - name: "Governance & Multi-Platform (S32-S51)"
-            scenarios: "s32,s33,s34,s35,s36,s37,s38,s39,s40,s41,s43,s44,s45,s46,s47,s48,s49,s50,s51"
+          - name: "Governance & Multi-Platform (S32-S55)"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

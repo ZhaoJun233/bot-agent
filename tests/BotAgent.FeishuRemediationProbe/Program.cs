@@ -10,8 +10,10 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Services;
 using BotAgent.Adapters.Time;
 using Microsoft.Data.Sqlite;
+using BotAgent.Domain.Ports;
 
 using var databaseTemp = new TempDirectory();
+ClockBindings.InitializePlatforms();
 Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", databaseTemp.Path);
 AppDatabase.Initialize();
 
@@ -39,7 +41,7 @@ await Test("token changes after secret hot reload", async () =>
 {
     var box = Settings();
     var http = new FakeHttp();
-    using var gateway = new FeishuBotGateway(box, http);
+    using var gateway = new FeishuBotGateway(box, http, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess, "first send failed");
     box.Apply(s => s.FeishuAppSecret = "secret-b");
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess, "second send failed");
@@ -50,7 +52,7 @@ await Test("token credential key preserves the exact secret", async () =>
 {
     var box = Settings();
     var http = new FakeHttp();
-    using var gateway = new FeishuBotGateway(box, http);
+    using var gateway = new FeishuBotGateway(box, http, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess, "first send failed");
     box.Apply(s => s.FeishuAppSecret = "secret-a ");
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess && http.TokenCalls == 2, "changed secret was trimmed into stale cache key");
@@ -62,7 +64,7 @@ await Test("identity write failure gives controlled webhook failure", async () =
     var path = Path.Combine(temp.Path, "map.json");
     var ids = new FeishuIdMap(path);
     Directory.CreateDirectory(path);
-    using var gateway = new FeishuBotGateway(Settings(), new FakeHttp(), ids: ids);
+    using var gateway = new FeishuBotGateway(Settings(), new FakeHttp(), ids: ids, log: null, dedupStore: new FeishuWebhookDedupStore());
     var received = 0;
     gateway.MessageReceived += _ => received++;
     var result = await gateway.HandleWebhookAsync(Webhook("event-write-failure"), null, null, null);
@@ -98,7 +100,7 @@ await Test("kind/account isolation and old aliases fail closed without network",
     Require(aliases.Distinct().Count() == 4 && aliases.All(a => a >= FeishuIdMap.AliasBase && a < FeishuIdMap.AliasLimit), "identity collision or range mismatch");
     var http = new FakeHttp();
     var box = Settings();
-    using var gateway = new FeishuBotGateway(box, http, ids: ids);
+    using var gateway = new FeishuBotGateway(box, http, ids: ids, log: null, dedupStore: new FeishuWebhookDedupStore());
     Require(!(await gateway.SendTextAsync(true, aliases[1], "synthetic")).Ok, "participant used as group");
     Require(!(await gateway.SendTextAsync(true, Channels.FeishuBase + 10001, "synthetic")).Ok, "legacy alias routed");
     box.Apply(s => s.FeishuAppId = "app-b");
@@ -119,7 +121,7 @@ await Test("gateway restart sends persisted target and quote; send ID uses same 
         Require(request.RequestUri!.AbsolutePath.EndsWith("/quote-synthetic/reply"), "quote ID lost");
         return Task.FromResult(FakeHttp.Json("{\"code\":0,\"data\":{\"message_id\":\"sent-synthetic\"}}"));
     };
-    using var gateway = new FeishuBotGateway(Settings(), http, ids: new FeishuIdMap(path));
+    using var gateway = new FeishuBotGateway(Settings(), http, ids: new FeishuIdMap(path), log: null, dedupStore: new FeishuWebhookDedupStore());
     var sent = await gateway.SendTextAsync(true, target, "synthetic", replyToMessageId: quote);
     Require(sent.Ok, "restart send failed");
     Require(new FeishuIdMap(path).OriginalOf(sent.MessageId, "app-a", "message") == "sent-synthetic", "sent message ID differs from outbox/persisted mapping");
@@ -160,7 +162,7 @@ await Test("token binds app ID, secret, normalized API base and cleared credenti
 {
     var box = Settings();
     var http = new FakeHttp();
-    using var gateway = new FeishuBotGateway(box, http);
+    using var gateway = new FeishuBotGateway(box, http, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess, "first send");
     box.Apply(s => s.FeishuAppId = "app-b");
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess && http.TokenCalls == 2, "app ID not refreshed");
@@ -178,7 +180,7 @@ await Test("parallel refresh is single flight per complete snapshot", async () =
 {
     var box = Settings();
     var http = new FakeHttp();
-    using var gateway = new FeishuBotGateway(box, http);
+    using var gateway = new FeishuBotGateway(box, http, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
     foreach (var secret in new[] { "secret-a", "secret-b" })
     {
         box.Apply(s => s.FeishuAppSecret = secret);
@@ -188,7 +190,7 @@ await Test("parallel refresh is single flight per complete snapshot", async () =
     Require(http.TokenCalls == 2, $"expected 2 single-flight refreshes, actual {http.TokenCalls}");
 });
 
-await Test("in-flight refresh and queued sends retain entire old/new snapshot", async () =>
+await Test("credential change after token await rejects old snapshot and sends only the new one", async () =>
 {
     var box = Settings();
     var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -210,15 +212,18 @@ await Test("in-flight refresh and queued sends retain entire old/new snapshot", 
         sent.Add((request.RequestUri!.Host, request.Headers.Authorization!.Parameter!));
         return Task.FromResult(FakeHttp.Json("{\"code\":0,\"data\":{\"message_id\":\"sent-synthetic\"}}"));
     };
-    using var gateway = new FeishuBotGateway(box, http);
+    using var gateway = new FeishuBotGateway(box, http, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
     var first = gateway.SendAsync(gateway.Context, Message());
     await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
     var oldQueued = gateway.SendAsync(gateway.Context, Message());
     box.Apply(s => { s.FeishuAppId = "app-b"; s.FeishuAppSecret = "secret-b"; s.FeishuApiBase = "https://b.example.com"; });
     var newQueued = gateway.SendAsync(gateway.Context, Message());
     release.SetResult();
-    Require((await Task.WhenAll(first, oldQueued, newQueued)).All(r => r.IsSuccess), "snapshot send failed");
-    Require(sent.Count(p => p == ("a.example.com", "token-app-a")) == 2 && sent.Count(p => p == ("b.example.com", "token-app-b")) == 1, "token sent to wrong API base");
+    var results = await Task.WhenAll(first, oldQueued, newQueued);
+    Require(!results[0].IsSuccess && !results[1].IsSuccess && results[2].IsSuccess,
+        $"snapshot outcomes: {string.Join(",", results.Select(r => r.IsSuccess))}");
+    // Only the new snapshot may reach the network; the old snapshot is rejected after the change.
+    Require(sent.Count == 1 && sent.All(p => p == ("b.example.com", "token-app-b")), "token sent to wrong API base");
     Require((await gateway.SendAsync(gateway.Context, Message())).IsSuccess && http.TokenCalls == 2, "old refresh poisoned new cache");
 });
 
@@ -230,7 +235,7 @@ await Test("signed nonce/event retry after persistence repair and normal duplica
     Directory.CreateDirectory(path);
     var box = Settings();
     box.Apply(s => s.FeishuEncryptKey = "signing-synthetic");
-    using var gateway = new FeishuBotGateway(box, new FakeHttp(), ids: ids);
+    using var gateway = new FeishuBotGateway(box, new FakeHttp(), ids: ids, log: null, dedupStore: new FeishuWebhookDedupStore());
     var received = 0;
     gateway.MessageReceived += _ => Interlocked.Increment(ref received);
     var body = Webhook("event-signed-retry");
@@ -249,7 +254,7 @@ await Test("concurrent same event emits once and not-whitelisted never emits", a
     using var temp = new TempDirectory();
     var box = Settings();
     var http = new FakeHttp();
-    using var gateway = new FeishuBotGateway(box, http, ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")));
+    using var gateway = new FeishuBotGateway(box, http, ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")), log: null, dedupStore: new FeishuWebhookDedupStore());
     var received = 0;
     gateway.MessageReceived += _ => Interlocked.Increment(ref received);
     var body = Webhook("event-parallel-dedup");
@@ -269,7 +274,7 @@ await Test("numeric whitelist allocation failure returns zero safely and never e
     Directory.CreateDirectory(path);
     var box = Settings();
     box.Apply(s => s.FeishuWhitelist = $"0,{expected}");
-    using var gateway = new FeishuBotGateway(box, new FakeHttp(), ids: ids);
+    using var gateway = new FeishuBotGateway(box, new FakeHttp(), ids: ids, log: null, dedupStore: new FeishuWebhookDedupStore());
     var received = 0;
     gateway.MessageReceived += _ => received++;
     var result = await gateway.HandleWebhookAsync(Webhook("event-numeric-write-failure"), null, null, null);
@@ -286,6 +291,142 @@ await Test("strict candidate collision never probes to an arrival-dependent alia
     try { _ = ids.AliasFor("second-synthetic"); } catch (InvalidOperationException) { rejected = true; }
     Require(rejected && ids.OriginalOf(10001) == "first-synthetic", "collision replaced or reallocated identity");
     Require(new OfficialIdMap(path, 10001, 10002, durable: true).OriginalOf(10001) == "first-synthetic", "collision corrupted persisted mapping");
+    await Task.CompletedTask;
+});
+
+await Test("dedup persistence failure returns retryable 503 without consuming nonce/event", async () =>
+{
+    using var temp = new TempDirectory();
+    var box = Settings();
+    box.Apply(s => s.FeishuEncryptKey = "signing-synthetic");
+    var dedup = new RecoverableDedupStore();
+    using var gateway = new FeishuBotGateway(box, new FakeHttp(), ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")), log: null, dedupStore: dedup);
+    var received = 0;
+    gateway.MessageReceived += _ => received++;
+    var body = Webhook("event-dedup-storage-retry");
+    var timestamp = Clock.UtcNow.ToUnixTimeSeconds().ToString();
+    const string nonce = "nonce-dedup-storage-retry";
+    var signature = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(timestamp + nonce + "signing-synthetic" + body)));
+    var failed = await gateway.HandleWebhookAsync(body, signature, timestamp, nonce);
+    Require(failed.StatusCode == 503 && failed.ResponseBody == "{\"error\":\"dedup_unavailable\"}" && received == 0, "storage failure was acknowledged or emitted");
+    dedup.Unavailable = false;
+    var retry = await gateway.HandleWebhookAsync(body, signature, timestamp, nonce);
+    Require(retry.StatusCode == 200 && received == 1, "same nonce/event could not recover after storage repair");
+    var duplicate = await gateway.HandleWebhookAsync(body, signature, timestamp, nonce);
+    Require(duplicate.StatusCode == 200 && duplicate.ResponseBody.Contains("duplicate") && received == 1, "recovered event emitted twice");
+});
+
+await Test("duplicate batch does not consume another fresh nonce", async () =>
+{
+    IWebhookDedupStore store = new FeishuWebhookDedupStore();
+    var now = Clock.UtcNow;
+    var ttl = TimeSpan.FromMinutes(10);
+    Require(store.TryRegister(new[] { "event:synthetic-atomic-duplicate" }, now, ttl), "initial event registration failed");
+    Require(!store.TryRegister(new[] { "nonce:synthetic-fresh-nonce", "event:synthetic-atomic-duplicate" }, now, ttl), "duplicate batch was accepted");
+    Require(store.TryRegister(new[] { "nonce:synthetic-fresh-nonce" }, now, ttl), "duplicate event consumed fresh nonce");
+    await Task.CompletedTask;
+});
+
+await Test("real SQLite failure rolls back nonce/event and the signed retry recovers", async () =>
+{
+    using var temp = new TempDirectory();
+    var box = Settings();
+    box.Apply(s => s.FeishuEncryptKey = "signing-synthetic");
+    using var gateway = new FeishuBotGateway(box, new FakeHttp(), ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")), log: null, dedupStore: new FeishuWebhookDedupStore());
+    var received = 0;
+    gateway.MessageReceived += _ => received++;
+    var body = Webhook("synthetic-sqlite-failure");
+    var timestamp = Clock.UtcNow.ToUnixTimeSeconds().ToString();
+    const string nonce = "synthetic-sqlite-failure-nonce";
+    var signature = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(timestamp + nonce + "signing-synthetic" + body)));
+    AppDatabase.Write(conn => AppDatabase.Exec(conn, """
+        CREATE TRIGGER r5_synthetic_dedup_failure BEFORE INSERT ON feishu_webhook_dedup
+        WHEN NEW.event_key = 'event:synthetic-sqlite-failure'
+        BEGIN SELECT RAISE(ABORT, 'synthetic storage unavailable'); END;
+        """));
+    try
+    {
+        var failed = await gateway.HandleWebhookAsync(body, signature, timestamp, nonce);
+        Require(failed.StatusCode == 503 && received == 0 && gateway.LastErrorCode == "dedup_unavailable", "real database failure emitted or acknowledged");
+        Require(failed.ResponseBody == "{\"error\":\"dedup_unavailable\"}", "database exception leaked into response");
+    }
+    finally
+    {
+        AppDatabase.Write(conn => AppDatabase.Exec(conn, "DROP TRIGGER r5_synthetic_dedup_failure;"));
+    }
+    var retry = await gateway.HandleWebhookAsync(body, signature, timestamp, nonce);
+    Require(retry.StatusCode == 200 && received == 1 && gateway.LastErrorCode is null, "database failure partially consumed keys or poisoned memory cache");
+    using var reopened = new FeishuBotGateway(box, new FakeHttp(), ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")), log: null, dedupStore: new FeishuWebhookDedupStore());
+    reopened.MessageReceived += _ => received++;
+    var repeated = await reopened.HandleWebhookAsync(body, signature, timestamp, nonce);
+    Require(repeated.StatusCode == 200 && repeated.ResponseBody.Contains("duplicate") && received == 1, "new gateway forgot persisted registration");
+});
+
+await Test("missing persistent dedup injection fails closed but handshake remains available", async () =>
+{
+    using var temp = new TempDirectory();
+    using var gateway = new FeishuBotGateway(Settings(), new FakeHttp(), ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")));
+    var received = 0;
+    gateway.MessageReceived += _ => received++;
+    var challenge = await gateway.HandleWebhookAsync("{\"type\":\"url_verification\",\"token\":\"verify-synthetic\",\"challenge\":\"synthetic\"}", null, null, null);
+    Require(challenge.StatusCode == 200, "dedup configuration blocked handshake");
+    var result = await gateway.HandleWebhookAsync(Webhook("synthetic-unconfigured-store"), null, null, null);
+    Require(result.StatusCode == 503 && result.ResponseBody == "{\"error\":\"dedup_unavailable\"}" && received == 0, "missing store silently fell back to platform IO");
+});
+
+await Test("concurrent persistent batches have one winner across adapter instances", async () =>
+{
+    var keys = new[] { "nonce:synthetic-port-parallel", "event:synthetic-port-parallel" };
+    var now = Clock.UtcNow;
+    var results = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(() =>
+        new FeishuWebhookDedupStore().TryRegister(keys, now, TimeSpan.FromMinutes(10)))));
+    Require(results.Count(r => r) == 1, "persistent batch had zero or multiple winners");
+});
+
+await Test("legacy single key and TTL boundary retain compatibility without key normalization", async () =>
+{
+    IWebhookDedupStore store = new FeishuWebhookDedupStore();
+    var now = DateTimeOffset.FromUnixTimeSeconds(Clock.UtcNow.ToUnixTimeSeconds());
+    var ttl = TimeSpan.FromMinutes(10);
+    const string key = " event:synthetic-raw-key ";
+    Require(AppDatabase.TryRegisterFeishuWebhook(key, now, ttl), "legacy single registration failed");
+    Require(store.TryRegister(new[] { key.Trim() }, now, ttl), "raw key was normalized");
+    Require(!store.TryRegister(new[] { key }, now + ttl, ttl), "inclusive legacy TTL boundary changed");
+    Require(store.TryRegister(new[] { key }, now + ttl + TimeSpan.FromSeconds(1), ttl), "expired key was not reusable");
+    await Task.CompletedTask;
+});
+
+await Test("invalid batch fails before consuming any valid key", async () =>
+{
+    IWebhookDedupStore store = new FeishuWebhookDedupStore();
+    var now = Clock.UtcNow;
+    var rejected = false;
+    try { store.TryRegister(new[] { "event:synthetic-valid-batch-key", "" }, now, TimeSpan.FromMinutes(10)); }
+    catch (ArgumentException) { rejected = true; }
+    Require(rejected && store.TryRegister(new[] { "event:synthetic-valid-batch-key" }, now, TimeSpan.FromMinutes(10)), "invalid batch partially registered a valid key");
+    await Task.CompletedTask;
+});
+
+await Test("existing four-parameter constructor remains available", async () =>
+{
+    var original = typeof(FeishuBotGateway).GetConstructor(new[]
+    {
+        typeof(BotAgent.Platforms.IPlatformSettingsBox), typeof(BotAgent.Platforms.Net.IPlatformHttpFetcher),
+        typeof(Action<string>), typeof(FeishuIdMap),
+    });
+    Require(original is not null, "original public constructor signature was removed");
+    await Task.CompletedTask;
+});
+
+await Test("preexisting synthetic dedup row remains a duplicate without consuming a fresh nonce", async () =>
+{
+    var now = Clock.UtcNow;
+    AppDatabase.Write(conn => AppDatabase.Exec(conn,
+        "INSERT INTO feishu_webhook_dedup(event_key, seen_unix) VALUES($key, $seen);",
+        ("$key", "event:synthetic-preexisting-row"), ("$seen", now.ToUnixTimeSeconds())));
+    IWebhookDedupStore store = new FeishuWebhookDedupStore();
+    Require(!store.TryRegister(new[] { "nonce:synthetic-preexisting-fresh", "event:synthetic-preexisting-row" }, now, TimeSpan.FromMinutes(10)), "preexisting row was not recognized");
+    Require(store.TryRegister(new[] { "nonce:synthetic-preexisting-fresh" }, now, TimeSpan.FromMinutes(10)), "preexisting duplicate consumed fresh nonce");
     await Task.CompletedTask;
 });
 
@@ -315,6 +456,19 @@ sealed class FakeHttp : IHttpFetcher
     public Task<HttpResponseMessage> GetAsync(Uri url, HttpCompletionOption option, CancellationToken ct = default) => throw new NotSupportedException();
     public Task<HttpResponseMessage> GetAsync(Uri url, CancellationToken ct = default) => throw new NotSupportedException();
     public Task<HttpResponseMessage> GetAsync(string url, HttpCompletionOption option, CancellationToken ct = default) => throw new NotSupportedException();
+}
+
+sealed class RecoverableDedupStore : IWebhookDedupStore
+{
+    private readonly HashSet<string> _keys = new(StringComparer.Ordinal);
+    public bool Unavailable { get; set; } = true;
+    public bool TryRegister(IReadOnlyList<string> keys, DateTimeOffset seenAt, TimeSpan ttl)
+    {
+        if (Unavailable) throw new InvalidOperationException("synthetic storage unavailable");
+        if (keys.Any(_keys.Contains)) return false;
+        foreach (var key in keys) _keys.Add(key);
+        return true;
+    }
 }
 
 sealed class TempDirectory : IDisposable

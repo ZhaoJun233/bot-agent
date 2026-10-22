@@ -220,7 +220,7 @@ The service includes built-in X.509 certificate management for Linux platforms, 
 ## Compatibility and Data Migration
 
 - **Feishu Identity Mapping**: Runtime persistence maintains `data/feishu-ids-v2.json`, using a distinct ID range (`FeishuBase + 1e12` to `FeishuBase + 2e12`) separated from legacy 32-bit aliases. Back up this file alongside data when enabling Feishu. Legacy conversations are preserved but require reconfiguring native Feishu ID whitelists.
-- **OwnMessage Ledger Isolation**: Outgoing messages are partitioned by platform, account, conversation, and native message ID into `own_messages_scoped`. Legacy bare-numeric ID rows remain archived; older versions cannot read scoped entries backwards. Always create a full backup of `data/qqchat.db` prior to upgrading.
+- **OwnMessage Ledger Isolation**: Outgoing messages are partitioned by platform, account, conversation, and native message ID into `own_messages_scoped`. Legacy bare-numeric ID rows remain archived; older versions cannot read scoped entries backwards. Always create a full backup of `data/botagent.db` (legacy `data/qqchat.db` remains supported) prior to upgrading.
 - **Tool Call Hard Timeouts**: Hard timeouts enforce the maximum wait duration for the caller and send cancellation signals; they do not guarantee instantaneous termination of underlying external operations, which remain governed by host invocation policies.
 
 ---
@@ -241,7 +241,7 @@ dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.Integration
 node tests/BotAgent.FrontendProbe/probe.mjs
 ```
 
-The test suite covers S1–S51 real end-to-end scenarios (whitelists, silent decisions, sentence splitting, long-term memory & profiles, stickers & magic-byte validation, context quoting, hot model reconfiguration, speech synthesis, recall awareness, web search, QR login, Feishu channel isolation, multi-platform policies, daily token quota ledgers, etc.), as well as sub-second architectural ratchets (`ArchitectureProbe`), safety boundaries (`SafetyProbe`), and production specification probes (`ProductionSpecProbe`).
+The test suite covers S1–S55 synthetic end-to-end scenarios (whitelists, silent decisions, sentence splitting, long-term memory & profiles, stickers & magic-byte validation, context quoting, hot model reconfiguration, speech synthesis, recall awareness, web search, QR login, Feishu channel isolation, multi-platform policies, daily token quota ledgers, and the official channel through a local fake gateway; S2 is covered inside S1, S33 retired with the pi bridge, and S42 uses local mocks/synthetic credentials only), as well as sub-second architectural ratchets (`ArchitectureProbe`), safety boundaries (`SafetyProbe`), and production specification probes (`ProductionSpecProbe`).
 
 ---
 

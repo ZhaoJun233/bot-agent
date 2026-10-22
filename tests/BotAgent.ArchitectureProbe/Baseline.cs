@@ -7,6 +7,21 @@ namespace BotAgent.ArchitectureProbe;
 /// </summary>
 internal static class Baseline
 {
+    // R3-source-guard-v1：当前必需工程；未来工程只有实际出现后才检查，不把缺席写成已完成。
+    public static readonly IReadOnlyList<string> RequiredProjects = new[]
+        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel", "BotAgent.Headless" };
+    public static readonly IReadOnlyDictionary<string, string[]> AllowedProjectReferences = new Dictionary<string, string[]>
+    {
+        ["BotAgent.Core"] = Array.Empty<string>(),
+        ["BotAgent.Storage"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Platforms"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Model"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Engine"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Mcp"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Panel"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Headless"] = new[] { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel" },
+    };
+
     // ── 规模 ──
     // ⚠ 批次 2（配置快照）如实登记：引入 SettingsBox 后 BotAgentHost 长了 25 行、+1 个字段、+1 个方法、
     //    面板 +1 处调用。这是机制成本，**批次 4（用例层拆分）必须还回去**，不许当成新常态。
@@ -28,12 +43,14 @@ internal static class Baseline
     /// </summary>
     /// <summary>
     /// 2026-09-24（批次 E 有限步进循环）：2328 → **2320** —— 上面登记的债**当场还了一部分**：
-    /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `Services/Reply/AgentTurnLoop.cs`，
-    /// “当场做掉只读工具”搬进 `Services/Reply/InlineTurnTools.cs`。
-    /// 这格仍然只许往下调：回复主链里动作分派那一段还能拆，谁接着拆记得同步这里。
+    /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `AgentTurnLoop.cs`，
+    /// “当场做掉只读工具”搬进 `InlineTurnTools.cs`。
+    /// 2026-10-18 Wave3：回复主链（ReplyPipeline / AgentTurnLoop / InlineTurnTools / PlainSender）
+    /// 整体搬到 `src/BotAgent.Engine/Reply/`；全 src 最大文件回落到 SettingsStore（1740），
+    /// 这格随实测下调 1765 → **1740**（仍然只许往下调）。
     /// </summary>
-    public const int MaxFileLines = 1765;
-    public const string BotAgentHostPath = "Services/BotAgentHost.cs";
+    public const int MaxFileLines = 1740;
+    public const string BotAgentHostPath = "src/BotAgent.Headless/Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。
     /// <summary>
@@ -62,7 +79,7 @@ internal static class Baseline
     /// 它是 <c>IClock</c> 的唯一实现（<c>Adapters/Time/SystemClock.cs</c>）。
     /// 别处一律走 <c>Clock.Now</c> / 注入的 <c>IClock</c>（见 architecture-optimization.md §6.3）。
     /// </summary>
-    public const string ClockAllowedPath = "Adapters/Time/SystemClock.cs";
+    public const string ClockAllowedPath = "src/BotAgent.Headless/Adapters/Time/SystemClock.cs";
 
     /// <summary>
     /// 读系统时间总处数（只数 <see cref="ClockAllowedPath" /> 里的；其余任何文件出现一处就违规）。
@@ -78,14 +95,14 @@ internal static class Baseline
     /// </summary>
     public static readonly IReadOnlyList<string> HttpClientAllowedFiles = new[]
     {
-        "Adapters/Net/HttpFetcher.cs",
-        "Host/Program.cs",
-        "Adapters/Panel/PanelDeploy.cs",
-        "Services/OneBot/HttpTransport.cs",
+        "src/BotAgent.Headless/Adapters/Net/HttpFetcher.cs",
+        "src/BotAgent.Headless/Host/Program.cs",
+        "src/BotAgent.Headless/Adapters/Panel/PanelDeploy.cs",
+        "src/BotAgent.Platforms/OneBot/HttpTransport.cs", // 原 Headless/Services/OneBot/HttpTransport.cs 的同一协议实现
     };
 
-    /// <summary>出网客户端构造处数（棘轮：只许往下调）。2026-09-23：15 → 5（面板那两条也收进 IHttpFetcher）。</summary>
-    public const int HttpClientNews = 4;
+    /// <summary>出网客户端构造处数（棘轮：只许往下调）。2026-10-18 Wave5 实测 3（Program 唯一构造点改为共享 helper）。</summary>
+    public const int HttpClientNews = 3;
     /// <summary>
     /// 面板主文件里直接调 <c>_agent.</c> 的次数（棘轮口径只数 <c>WebUiServer.cs</c> 这一个文件）。
     /// 2026-09-23 批次 5 第 3 步：**归零** —— 面板不再经过 BotAgentHost 这层 façade 够组件，
@@ -105,7 +122,9 @@ internal static class Baseline
     /// </summary>
     public static readonly IReadOnlyList<string> PanelExemptFiles = new[]
     {
-        "Adapters/Panel/PanelDeploy.cs",
+        "src/BotAgent.Headless/Adapters/Panel/PanelDeploy.cs",
+        // Wave5：静态资源从嵌入改为发布目录读取；这是交付适配，不是面板编排。
+        "src/BotAgent.Headless/Adapters/Panel/PanelAssets.cs",
     };
 
     /// <summary>R5：面板（除例外文件外）的 SQL 字面量处数 —— 恒为 0，别让它长出来。</summary>
@@ -117,11 +136,14 @@ internal static class Baseline
     /// <summary>R5：面板（除例外文件外）直读系统时间的处数 —— 恒为 0（走 Clock / 注入的 IClock）。</summary>
     public const int PanelClockReads = 0;
 
-    /// <summary>例外文件自己的文件 IO 处数（棘轮，只许往下调：现在全是 PanelDeploy 的部署产物读写）。</summary>
-    public const int PanelExemptFileIo = 15;
+    /// <summary>
+    /// 例外文件自己的文件 IO 处数（棘轮，只许往下调）：PanelDeploy 13 + 静态资源交付 1。
+    /// Wave5 把发布状态的两次 <c>File.Exists</c> 合并成一次 <c>FileInfo</c>，腾出静态资源读取这一处。
+    /// </summary>
+    public const int PanelExemptFileIo = 14;
 
     /// <summary>唯一允许持有配置实例的类（发布点）；别处都只持有 SettingsBox。</summary>
-    public const string SettingsOwnerPath = "Services/SettingsBox.cs";
+    public const string SettingsOwnerPath = "src/BotAgent.Headless/Services/SettingsBox.cs";
 
     // ── 目标布局的常量 ──
     // Domain 单文件行数：**目标 300 已达成**。批次 1 只挪位置，五个搬进来的文件本身就超了（最大 467），
@@ -143,7 +165,7 @@ internal static class Baseline
     // 现在它是**硬规则**（与 R1/R2/R3/R6 同类）：再来一个引用适配层的 Services 文件就红。
 
     // ── R2：SQL 只允许出现在这一层（批次 3 达成，别让它再散出去）──
-    public const string SqlAllowedPrefix = "Adapters/Persistence/";
+    public const string SqlAllowedPrefix = "src/BotAgent.Headless/Adapters/Persistence/";
 
     /// <summary>
     /// SQL 字面量总数（默认只许往下调；新增版本化 schema 必须在 Adapters/Persistence 里并在这里如实登记）。
@@ -157,22 +179,70 @@ internal static class Baseline
     public const int SqlLiteralTotal = 137;
 
     // ── R3：直接文件 IO 只允许出现在 Adapters/** 与下列具名例外 ──
-    public const string FileIoAllowedPrefix = "Adapters/";
+    public const string FileIoAllowedPrefix = "src/BotAgent.Headless/Adapters/";
 
     /// <summary>
     /// 三个具名例外 + 一条明说的白名单。每一条都有理由，新增条目请先想清楚"它为什么不是 IO 实现细节"。
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> FileIoAllowedFiles = new Dictionary<string, string>
     {
-        ["Services/FileLog.cs"] = "日志本体：它就是「写文件」这件事，没有别的持有者",
-        ["Services/AppPaths.cs"] = "发现运行根目录（要试着写一下才知道有没有权限）",
-        ["Adapters/Panel/PanelDeploy.cs"] = "部署产物的状态文件（部署自己的事，见 §3.4 R3）",
-        ["Services/Agent/ServerAgentRunner.cs"] = "服务器 agent 的文件工具：按用户指令读写任意路径，不是数据存取",
+        ["src/BotAgent.Headless/Services/FileLog.cs"] = "日志本体：它就是「写文件」这件事，没有别的持有者",
+        ["src/BotAgent.Headless/Services/AppPaths.cs"] = "发现运行根目录（要试着写一下才知道有没有权限）",
+        ["src/BotAgent.Headless/Adapters/Panel/PanelDeploy.cs"] = "部署产物的状态文件（部署自己的事，见 §3.4 R3）",
+        ["src/BotAgent.Headless/Services/Agent/ServerAgentRunner.cs"] = "服务器 agent 的文件工具：按用户指令读写任意路径，不是数据存取",
     };
 
     /// <summary>
     /// 直接文件 IO 总处数（棘轮：只许往下调；新加的请落在 Adapters/**）。
     /// 批次 3：61 → 62（+1 = TtsConfFile 的写入；其余是搬迁，总数几乎没动）。
+    /// N1 命名兼容：62 → 59（LegacyJsonImporter 的重复前置检查收敛；数据库路径解析落在持久化适配器）。
+    /// Wave5：工作树起点 59；PanelDeploy 合并一次 File.Exists（-1）+ PanelAssets 静态资源读取（+1）净 -1 → 58。
+    /// W5-G1：事件序号高水位持久化（读、临时写、move）净 +3 → 61；只存一个整数，不存事件内容。
+    /// HEAD 的 62 是未含 Wave1–4 迁移的基线，不能与工作树 61 当成同一 diff。
     /// </summary>
-    public const int FileIoTotal = 62;
+    public const int FileIoTotal = 61;
+
+    // 逐文件迁移角色映射，不是新工程目录白名单。旧副本仍扫描、仍计入全局总数。
+    // 前 21 项原位于 Headless/Adapters/Persistence；OfficialIdMap 是已迁出的同一旧持久化类型。
+    public static readonly IReadOnlyDictionary<string, string> MigratedPersistencePaths = new Dictionary<string, string>
+    {
+        ["src/BotAgent.Storage/AgentImageStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AgentImageStore.cs",
+        ["src/BotAgent.Storage/AgentSessionStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AgentSessionStore.cs",
+        ["src/BotAgent.Storage/AppDatabase.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AppDatabase.cs",
+        ["src/BotAgent.Storage/AudioCache.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AudioCache.cs",
+        ["src/BotAgent.Storage/ConversationStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/ConversationStore.cs",
+        ["src/BotAgent.Storage/EpisodeStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/EpisodeStore.cs",
+        ["src/BotAgent.Storage/HostMetrics.cs"] = "src/BotAgent.Headless/Adapters/Persistence/HostMetrics.cs",
+        ["src/BotAgent.Storage/JargonStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/JargonStore.cs",
+        ["src/BotAgent.Storage/LegacyJsonImporter.cs"] = "src/BotAgent.Headless/Adapters/Persistence/LegacyJsonImporter.cs",
+        ["src/BotAgent.Storage/MemberProfileStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/MemberProfileStore.cs",
+        ["src/BotAgent.Storage/MemberRoleStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/MemberRoleStore.cs",
+        ["src/BotAgent.Storage/MoodStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/MoodStore.cs",
+        ["src/BotAgent.Storage/MusicStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/MusicStore.cs",
+        ["src/BotAgent.Storage/OwnMessageStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/OwnMessageStore.cs",
+        ["src/BotAgent.Storage/PanelPasswordStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/PanelPasswordStore.cs",
+        ["src/BotAgent.Storage/PromptTemplateStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/PromptTemplateStore.cs",
+        ["src/BotAgent.Storage/SecretFiles.cs"] = "src/BotAgent.Headless/Adapters/Persistence/SecretFiles.cs",
+        ["src/BotAgent.Storage/SecretsStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/SecretsStore.cs",
+        ["src/BotAgent.Storage/StickerStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/StickerStore.cs",
+        ["src/BotAgent.Storage/TenantQuotaStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TenantQuotaStore.cs",
+        ["src/BotAgent.Storage/TtsConfFile.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TtsConfFile.cs",
+        ["src/BotAgent.Platforms/Common/OfficialIdMap.cs"] = "src/BotAgent.Headless/Adapters/Persistence/OfficialIdMap.cs",
+    };
+
+    // New configuration persistence ownership, not fictitious equivalent legacy migrations.
+    public static readonly IReadOnlyDictionary<string, string> ConfigurationSqlPaths = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["src/BotAgent.Storage/ConfigurationStore.cs"] = "C3 configuration transaction, CAS, governance and recovery ledger",
+        ["src/BotAgent.Storage/ConfigurationStorageBridge.cs"] = "Private same-connection configuration field provenance projection",
+    };
+
+    public static bool AllowsSql(string path) => path.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase)
+        || ConfigurationSqlPaths.ContainsKey(path)
+        || (MigratedPersistencePaths.TryGetValue(path, out var old) && old.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase));
+
+    public static bool AllowsFileIo(string path) => path.StartsWith(FileIoAllowedPrefix, StringComparison.OrdinalIgnoreCase)
+        || FileIoAllowedFiles.ContainsKey(path)
+        || (MigratedPersistencePaths.TryGetValue(path, out var old)
+            && (old.StartsWith(FileIoAllowedPrefix, StringComparison.OrdinalIgnoreCase) || FileIoAllowedFiles.ContainsKey(old)));
 }

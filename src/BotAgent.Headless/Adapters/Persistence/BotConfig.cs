@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
 using System.Globalization;
 using BotAgent.Services;
 using BotAgent.Adapters.Persistence;
@@ -7,6 +9,7 @@ namespace BotAgent.Adapters.Persistence;
 /// <summary>
 /// 十二要素配置：settings.json 提供默认值，环境变量覆盖。
 /// 支持 <c>XXX_FILE</c> 形式读取 Docker secrets（/run/secrets/*），避免密钥出现在环境变量里。
+/// QQ 官方 Secret 例外：仅使用 BOTAGENT_OFFICIAL_APP_SECRET（兼容 QQCHAT_OFFICIAL_APP_SECRET）的直接环境值，不读取文件或旧仓储。
 ///
 /// 优先级分三类（重要）：
 ///   • 基础设施（协议端地址、Token、QQ 号…）：**环境变量永远优先** —— 它们属于部署环境职责。
@@ -24,6 +27,12 @@ public static class BotConfig
     /// <summary>被面板设置覆盖掉的环境变量（启动时提示用户，否则“改了 .env 怎么不生效”很难排查）。</summary>
     public static List<string> PanelOverriddenEnvVars { get; } = new();
 
+    /// <summary>
+    /// 本次启动读取配置时“库里到底存过配置没有”的结果，在初始化写入行为种子**之前**捕获。
+    /// 这是“这个数据目录运行过”的既有持久化证据；ZBA 用它排除伪首次安装（W5-G1-BOOT-LOSS）。
+    /// </summary>
+    internal static bool HadStoredSettingsAtLoad { get; private set; }
+
     /// <summary>加载配置：配置文件 → 环境变量 → 必要的合规修正。</summary>
     public static AppSettings Load()
     {
@@ -32,18 +41,94 @@ public static class BotConfig
         // 用它当判据会让“首次部署用环境变量当种子”永远不生效（踩过：白名单直接变空，机器人谁都不理）。
         var settingsStore = new SettingsStore();
         var hasStored = settingsStore.HasStoredSettings();
+        HadStoredSettingsAtLoad = hasStored;
         var settings = settingsStore.Load();
         ApplyInfrastructureEnvironment(settings);
         ApplyBehaviorEnvironment(settings, seedOnly: !hasStored);
         ApplyPanelOverrides(settings); // 面板改过的模型配置：优先于环境变量
         Normalize(settings);
-
-        if (hasStored)
+        // Preserve the captured typed table; bootstrap environment observations are not user edits.
+        if (!hasStored)
         {
-            settingsStore.Save(settings); // 把环境变量带来的基础设施值写回，保持库与实态一致
+            var sources = settings.RuntimePlatformPolicyBaselineSources.ToBuilder();
+            var behavior = BehaviorEnvTable();
+            foreach (var id in sources.Keys.ToArray())
+            {
+                if (behavior.TryGetValue(id.ToString(), out var names)
+                    && names.Any(name => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))))
+                    sources[id] = BotAgent.Domain.Configuration.ConfigurationValueSource.Unclassified;
+            }
+            settings.RuntimePlatformPolicyBaselineSources = sources.ToImmutable();
         }
 
+        if (hasStored) SettingsStore.TryProjectInitializedVerificationToken(settings);
+        // Runtime infrastructure overlays never become user edits or bypass the configuration version.
+
+
         return settings;
+    }
+
+    internal static AppSettings CreateBehaviorSeed()
+    {
+        var seed = new AppSettings();
+        ApplyBehaviorEnvironment(seed, seedOnly: true);
+        return seed;
+    }
+    internal static FieldEffect ConfigurationEffect(ConfigurationFieldId field) => field switch
+    {
+        ConfigurationFieldId.FeishuAppId or ConfigurationFieldId.FeishuApiBase
+            or ConfigurationFieldId.OfficialAppId or ConfigurationFieldId.OfficialSandbox
+            or ConfigurationFieldId.FeishuEnabled or ConfigurationFieldId.OfficialEnabled
+            or ConfigurationFieldId.LocalChannelIds or ConfigurationFieldId.RegisteredPlugins
+            or ConfigurationFieldId.RegisteredProviders => FieldEffect.Restart,
+        ConfigurationFieldId.TtsApiBase or ConfigurationFieldId.TtsModel or ConfigurationFieldId.TtsProvider => FieldEffect.ExternalProjection,
+        _ => FieldEffect.Hot,
+    };
+    internal static void ProjectHotSaveSecrets(AppSettings next, AppSettings previous,
+        ImmutableArray<(WritableSecretSlot Slot, SecretEditKind Kind)> mutations,
+        Func<WritableSecretSlot, string?> fixedDatabaseSecret)
+    {
+        foreach (var mutation in mutations)
+        {
+            if (mutation.Kind == SecretEditKind.Keep) continue;
+            if (mutation.Slot == WritableSecretSlot.ModelApiKey)
+            {
+                next.ApiKeyOverride = mutation.Kind == SecretEditKind.Replace ? fixedDatabaseSecret(mutation.Slot)?.Trim() : null;
+                next.ApiKey = next.ApiKeyOverride ?? (Environment.GetEnvironmentVariable("QQCHAT_API_KEY")
+                    ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty).Trim();
+            }
+            else if (mutation.Slot == WritableSecretSlot.AgentServerKey)
+            {
+                next.AgentServerApiKeyOverride = mutation.Kind == SecretEditKind.Replace ? fixedDatabaseSecret(mutation.Slot)?.Trim() : null;
+                next.AgentServerApiKey = next.AgentServerApiKeyOverride
+                    ?? (EnvironmentAliases.Get("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY") ?? string.Empty).Trim();
+            }
+        }
+        // Gateway credentials are startup-captured, not magically reconnected by exchanging a settings reference.
+        next.FeishuAppSecret = previous.FeishuAppSecret; next.FeishuEncryptKey = previous.FeishuEncryptKey;
+        next.FeishuVerificationToken = previous.FeishuVerificationToken;
+    }
+    internal static string? FixedConfigurationEnvironmentSecret(WritableSecretSlot slot) => slot switch
+    {
+        WritableSecretSlot.FeishuAppSecret => Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET"),
+        WritableSecretSlot.FeishuEncryptKey => Secret("BOTAGENT_FEISHU_ENCRYPT_KEY", "QQCHAT_FEISHU_ENCRYPT_KEY"),
+        _ => null,
+    };
+    internal static void ProjectModelOverrides(AppSettings next, AppSettings user, bool modelChanged, bool urlChanged)
+    {
+        var defaults = new AppSettings();
+        if (modelChanged)
+        {
+            next.ModelOverride = user.ModelOverride;
+            next.Model = !string.IsNullOrWhiteSpace(user.ModelOverride) ? user.ModelOverride.Trim()
+                : Str("BOTAGENT_MODEL", "QQCHAT_MODEL", "OPENAI_MODEL") ?? defaults.Model;
+        }
+        if (urlChanged)
+        {
+            next.ModelBaseUrlOverride = user.ModelBaseUrlOverride;
+            next.ModelBaseUrl = !string.IsNullOrWhiteSpace(user.ModelBaseUrlOverride) ? user.ModelBaseUrlOverride.Trim()
+                : Str("BOTAGENT_BASE_URL", "QQCHAT_BASE_URL", "OPENAI_BASE_URL") ?? defaults.ModelBaseUrl;
+        }
     }
 
     /// <summary>基础设施与密钥：环境变量始终覆盖（改这些要重启容器）。</summary>
@@ -66,7 +151,7 @@ public static class BotConfig
         s.NapCatWebUiUrl = Str("BOTAGENT_NAPCAT_WEBUI_URL", "QQCHAT_NAPCAT_WEBUI_URL") ?? s.NapCatWebUiUrl;
         s.NapCatWebUiToken = Secret("BOTAGENT_NAPCAT_WEBUI_TOKEN", "QQCHAT_NAPCAT_WEBUI_TOKEN") ?? s.NapCatWebUiToken;
         s.FeishuAppSecret = Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET") ?? s.FeishuAppSecret;
-        s.OfficialAppSecret = Secret("QQCHAT_OFFICIAL_APP_SECRET") ?? s.OfficialAppSecret;
+        s.OfficialAppSecret = Str("BOTAGENT_OFFICIAL_APP_SECRET", "QQCHAT_OFFICIAL_APP_SECRET") ?? string.Empty;
         s.FeishuEncryptKey = Secret("BOTAGENT_FEISHU_ENCRYPT_KEY", "QQCHAT_FEISHU_ENCRYPT_KEY") ?? s.FeishuEncryptKey;
         s.VerboseLog = Bool("BOTAGENT_VERBOSE", "QQCHAT_VERBOSE") ?? s.VerboseLog;
     }
@@ -178,10 +263,10 @@ public static class BotConfig
     [nameof(AppSettings.VoiceSpeed)] = new[] { "QQCHAT_VOICE_SPEED" },
         [nameof(AppSettings.VoicePitch)] = new[] { "QQCHAT_VOICE_PITCH" },
         [nameof(AppSettings.VoiceVol)] = new[] { "QQCHAT_VOICE_VOL" },
-        [nameof(AppSettings.VoiceEmotion)] = new[] { "QQCHAT_VOICE_EMOTION" },
+        [nameof(AppSettings.VoiceEmotion)] = new[] { "BOTAGENT_VOICE_EMOTION", "QQCHAT_VOICE_EMOTION" },
     [nameof(AppSettings.VoiceMaxChars)] = new[] { "QQCHAT_VOICE_MAX_CHARS" },
     [nameof(AppSettings.TtsServiceUrl)] = new[] { "QQCHAT_TTS_URL" },
-    [nameof(AppSettings.OfficialEnabled)] = new[] { "QQCHAT_OFFICIAL" },
+    [nameof(AppSettings.OfficialEnabled)] = new[] { "BOTAGENT_OFFICIAL", "QQCHAT_OFFICIAL" },
     [nameof(AppSettings.OfficialAppId)] = new[] { "QQCHAT_OFFICIAL_APP_ID" },
     [nameof(AppSettings.OfficialSandbox)] = new[] { "QQCHAT_OFFICIAL_SANDBOX" },
     [nameof(AppSettings.OfficialWhitelistGroups)] = new[] { "QQCHAT_OFFICIAL_WHITELIST_GROUPS" },
@@ -204,20 +289,13 @@ public static class BotConfig
     [nameof(AppSettings.EnableAgentBridge)] = new[] { "QQCHAT_AGENT" },
     [nameof(AppSettings.AgentPrefix)] = new[] { "QQCHAT_AGENT_PREFIX" },
     [nameof(AppSettings.AgentAllowedUsers)] = new[] { "QQCHAT_AGENT_USERS" },
-    [nameof(AppSettings.AgentWorkDir)] = new[] { "QQCHAT_AGENT_WORKDIR" },
-    [nameof(AppSettings.AgentModel)] = new[] { "QQCHAT_AGENT_MODEL" },
-    [nameof(AppSettings.AgentTools)] = new[] { "QQCHAT_AGENT_TOOLS" },
-    [nameof(AppSettings.AgentTimeoutSeconds)] = new[] { "QQCHAT_AGENT_TIMEOUT" },
     [nameof(AppSettings.AgentReplyMaxChars)] = new[] { "QQCHAT_AGENT_REPLY_CHARS" },
     [nameof(AppSettings.AgentProgressSeconds)] = new[] { "QQCHAT_AGENT_PROGRESS" },
-    [nameof(AppSettings.AgentTarget)] = new[] { "QQCHAT_AGENT_TARGET" },
     [nameof(AppSettings.EnableServerAgent)] = new[] { "QQCHAT_AGENT_SERVER" },
-    [nameof(AppSettings.EnableHostAgent)] = new[] { "QQCHAT_AGENT_HOST" },
     [nameof(AppSettings.AgentServerTools)] = new[] { "QQCHAT_AGENT_SERVER_TOOLS" },
     [nameof(AppSettings.AgentServerQqActions)] = new[] { "QQCHAT_AGENT_SERVER_QQ_ACTIONS" },
     [nameof(AppSettings.AgentServerModel)] = new[] { "QQCHAT_AGENT_SERVER_MODEL" },
     [nameof(AppSettings.AgentServerBaseUrl)] = new[] { "QQCHAT_AGENT_SERVER_URL" },
-    [nameof(AppSettings.AgentDevices)] = new[] { "QQCHAT_AGENT_DEVICES" },
     [nameof(AppSettings.AgentMaskSensitive)] = new[] { "QQCHAT_AGENT_MASK" },
     [nameof(AppSettings.AgentPrompt)] = new[] { "QQCHAT_AGENT_PROMPT" },
     [nameof(AppSettings.AgentServerWorkDir)] = new[] { "QQCHAT_AGENT_SERVER_WORKDIR" },
@@ -259,8 +337,9 @@ public static class BotConfig
                 var fileValue = property?.GetValue(s);
                 if (!ValuesMatch(property?.PropertyType, envValue, fileValue))
                 {
-                    IgnoredBehaviorEnvVars.Add(
-                        $"{names[0]}={Truncate(envValue)}  ≠ 配置文件的 {Truncate(fileValue?.ToString())}");
+                    IgnoredBehaviorEnvVars.Add(field == nameof(AppSettings.FeishuVerificationToken)
+                        ? $"{names[0]}: configured environment seed ignored; user configuration retained"
+                        : $"{names[0]}={Truncate(envValue)}  ≠ 配置文件的 {Truncate(fileValue?.ToString())}");
                 }
             }
     }
@@ -334,20 +413,14 @@ public static class BotConfig
         s.EnableAgentBridge = Bool("QQCHAT_AGENT") ?? s.EnableAgentBridge;
         s.AgentPrefix = Str("QQCHAT_AGENT_PREFIX") ?? s.AgentPrefix;
         s.AgentAllowedUsers = Str("QQCHAT_AGENT_USERS") ?? s.AgentAllowedUsers;
-        s.AgentWorkDir = Str("QQCHAT_AGENT_WORKDIR") ?? s.AgentWorkDir;
-        s.AgentModel = Str("QQCHAT_AGENT_MODEL") ?? s.AgentModel;
-        s.AgentTools = Str("QQCHAT_AGENT_TOOLS") ?? s.AgentTools;
-        s.AgentTimeoutSeconds = Int("QQCHAT_AGENT_TIMEOUT") ?? s.AgentTimeoutSeconds;
         s.AgentReplyMaxChars = Int("QQCHAT_AGENT_REPLY_CHARS") ?? s.AgentReplyMaxChars;
         s.AgentProgressSeconds = Int("QQCHAT_AGENT_PROGRESS") ?? s.AgentProgressSeconds;
-        s.AgentTarget = Str("QQCHAT_AGENT_TARGET") ?? s.AgentTarget;
         s.EnableServerAgent = Bool("QQCHAT_AGENT_SERVER") ?? s.EnableServerAgent;
-        s.EnableHostAgent = Bool("QQCHAT_AGENT_HOST") ?? s.EnableHostAgent;
         s.AgentServerTools = Str("QQCHAT_AGENT_SERVER_TOOLS") ?? s.AgentServerTools;
         s.AgentServerQqActions = Str("QQCHAT_AGENT_SERVER_QQ_ACTIONS") ?? s.AgentServerQqActions;
         s.AgentServerModel = Str("QQCHAT_AGENT_SERVER_MODEL") ?? s.AgentServerModel;
         s.AgentServerBaseUrl = Str("QQCHAT_AGENT_SERVER_URL") ?? s.AgentServerBaseUrl;
-        s.AgentServerApiKey = Secret("QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
+        s.AgentServerApiKey = Secret("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY") ?? s.AgentServerApiKey;
         s.AgentMaskSensitive = Bool("QQCHAT_AGENT_MASK") ?? s.AgentMaskSensitive;
         // 附加提示词：环境变量只当种子（空字符串也算“明确不带”吗？不算 —— 空 = 保持默认，
         // 要去掉就在面板里清空后保存，否则每次重启都被环境变量重新种回来）
@@ -379,7 +452,7 @@ public static class BotConfig
         s.VoiceSpeed = Int("QQCHAT_VOICE_SPEED") ?? s.VoiceSpeed;
             s.VoicePitch = Int("QQCHAT_VOICE_PITCH") ?? s.VoicePitch;
             s.VoiceVol = Int("QQCHAT_VOICE_VOL") ?? s.VoiceVol;
-            var voiceEmotionEnv = Environment.GetEnvironmentVariable("QQCHAT_VOICE_EMOTION");
+            var voiceEmotionEnv = EnvironmentAliases.Get("BOTAGENT_VOICE_EMOTION", "QQCHAT_VOICE_EMOTION");
             if (!string.IsNullOrWhiteSpace(voiceEmotionEnv))
             {
                 s.VoiceEmotion = voiceEmotionEnv.Trim();
@@ -419,13 +492,9 @@ public static class BotConfig
     private static void ApplyPanelOverrides(AppSettings s)
     {
         SecretsStore.Init(AppPaths.RuntimeRoot);
+        SettingsStore.TryProjectInitializedVerificationToken(s);
 
-    // 密钥库里存着的官方通道 AppSecret（面板填的）—— 环境变量优先，其次是这里。
-    // 必须在 SecretsStore.Init 之后读（前面那堆 env 种子跑得比 Init 早）。
-    if (string.IsNullOrWhiteSpace(s.OfficialAppSecret) && new SecretsStore().LoadOfficialSecret() is { Length: > 0 } storedSecret)
-    {
-        s.OfficialAppSecret = storedSecret;
-    }
+    // Historical official secret rows remain untouched; they are never a runtime configuration source.
     if (string.IsNullOrWhiteSpace(s.FeishuAppSecret) && new SecretsStore().LoadFeishuSecret() is { Length: > 0 } storedFeishuSecret)
     {
         s.FeishuAppSecret = storedFeishuSecret;
@@ -480,9 +549,9 @@ public static class BotConfig
         // 服务器 agent 的密钥同理：面板填过就以面板为准（以前只能改 .env 重启，2026-09-18 补上面板入口）
         if (!string.IsNullOrWhiteSpace(s.AgentServerApiKeyOverride))
         {
-            if (!string.IsNullOrWhiteSpace(Secret("QQCHAT_AGENT_SERVER_KEY")))
+            if (!string.IsNullOrWhiteSpace(Secret("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY")))
             {
-                PanelOverriddenEnvVars.Add("QQCHAT_AGENT_SERVER_KEY → 面板里填的密钥");
+                PanelOverriddenEnvVars.Add("BOTAGENT_AGENT_SERVER_KEY / QQCHAT_AGENT_SERVER_KEY → 面板里填的密钥");
             }
 
             s.AgentServerApiKey = s.AgentServerApiKeyOverride!.Trim();

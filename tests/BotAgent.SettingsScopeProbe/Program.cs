@@ -11,6 +11,9 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Services.Reply;
 using BotAgent.Services.OneBot;
 using Microsoft.Data.Sqlite;
+using BotAgent.Platforms;
+using BotAgent.Services.Platforms;
+using System.Text.Json;
 
 var root = Path.Combine(Path.GetTempPath(), "bot-settings-scope-probe-" + Guid.NewGuid().ToString("N"));
 Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
@@ -31,6 +34,194 @@ try
     var oldJson = "[{\"id\":10004,\"text\":\"synthetic legacy JSON\",\"at\":\"1970-01-01T00:00:00Z\"}]";
     File.WriteAllText(Path.Combine(AppPaths.DataDir, "own-messages.json"), oldJson);
     AppDatabase.Initialize();
+    Check("host settings and platform interface share platform values in both directions", () =>
+    {
+        var settings = new AppSettings
+        {
+            OfficialEnabled = true, OfficialChatEnabled = false,
+            OfficialAppId = "synthetic-official", OfficialAppSecret = "synthetic-official-secret",
+            OfficialSandbox = true, OfficialWhitelistGroups = "10001", OfficialWhitelistPrivates = "10002",
+            OfficialApiBase = "https://example.com/official", OfficialTokenUrl = "https://example.com/token",
+            FeishuEnabled = true, FeishuAppId = "synthetic-feishu", FeishuAppSecret = "synthetic-feishu-secret",
+            FeishuVerificationToken = "synthetic-verification", FeishuEncryptKey = "synthetic-encrypt-key",
+            FeishuWhitelist = "synthetic-chat", FeishuApiBase = "https://example.com/feishu",
+            LocalChannelIds = "10003", PrivateChatEnabled = false, PlatformSwitchSchemaVersion = 1,
+            PlatformPolicies = new()
+            {
+                new() { PlatformId = PlatformId.QqOfficial, AccountScope = AccountScope.Legacy,
+                    Enabled = true, ChatEnabled = false, InheritActionAllowlist = false }
+            }
+        };
+        var box = new SettingsBox(settings);
+        var platform = ((IPlatformSettingsAccessor)box).Current;
+        Require(platform.OfficialEnabled && !platform.OfficialChatEnabled
+            && platform.OfficialAppId == "synthetic-official" && platform.OfficialAppSecret == "synthetic-official-secret"
+            && platform.OfficialSandbox && platform.OfficialWhitelistGroups == "10001" && platform.OfficialWhitelistPrivates == "10002"
+            && platform.OfficialApiBase == "https://example.com/official" && platform.OfficialTokenUrl == "https://example.com/token"
+            && platform.FeishuEnabled && platform.FeishuAppId == "synthetic-feishu" && platform.FeishuAppSecret == "synthetic-feishu-secret"
+            && platform.FeishuVerificationToken == "synthetic-verification" && platform.FeishuEncryptKey == "synthetic-encrypt-key"
+            && platform.FeishuWhitelist == "synthetic-chat" && platform.FeishuApiBase == "https://example.com/feishu"
+            && platform.LocalChannelIds == "10003" && !platform.PrivateChatEnabled && platform.PlatformSwitchSchemaVersion == 1
+            && ReferenceEquals(platform.PlatformPolicies, settings.PlatformPolicies),
+            "host-assigned platform values were lost through the platform settings interface");
+        var policy = new PlatformPolicyResolver(box).ResolveForChannel("official");
+        Require(policy.Enabled && !policy.ChatEnabled && policy.ActionAllowlistConfigured && policy.AllowedActions.Count == 0,
+            "real policy resolver missed the host configuration or opened an explicit empty allowlist");
+        var replacement = new PlatformOptions
+        {
+            OfficialAppId = "synthetic-other-official", OfficialAppSecret = "synthetic-other-official-secret",
+            OfficialWhitelistGroups = "10004", OfficialWhitelistPrivates = "10005",
+            OfficialApiBase = "https://example.com/other-official", OfficialTokenUrl = "https://example.com/other-token",
+            FeishuAppId = "synthetic-other-feishu", FeishuAppSecret = "synthetic-other-feishu-secret",
+            FeishuVerificationToken = "synthetic-other-verification", FeishuEncryptKey = "synthetic-other-encrypt-key",
+            FeishuWhitelist = "synthetic-other-chat", FeishuApiBase = "https://example.com/other-feishu",
+            LocalChannelIds = "10006"
+        };
+        replacement.CopyPlatformPropertiesTo(platform);
+        Require(!settings.OfficialEnabled && settings.OfficialChatEnabled && !settings.OfficialSandbox
+            && settings.OfficialAppId == "synthetic-other-official" && settings.OfficialAppSecret == "synthetic-other-official-secret"
+            && settings.OfficialWhitelistGroups == "10004" && settings.OfficialWhitelistPrivates == "10005"
+            && settings.OfficialApiBase == "https://example.com/other-official" && settings.OfficialTokenUrl == "https://example.com/other-token"
+            && !settings.FeishuEnabled && settings.FeishuAppId == "synthetic-other-feishu" && settings.FeishuAppSecret == "synthetic-other-feishu-secret"
+            && settings.FeishuVerificationToken == "synthetic-other-verification" && settings.FeishuEncryptKey == "synthetic-other-encrypt-key"
+            && settings.FeishuWhitelist == "synthetic-other-chat" && settings.FeishuApiBase == "https://example.com/other-feishu"
+            && settings.LocalChannelIds == "10006" && settings.PrivateChatEnabled && settings.PlatformSwitchSchemaVersion == 0
+            && settings.PlatformPolicies.Count == 0,
+            "platform-assigned values were lost through the host settings view");
+    });
+    Check("platform credentials are runtime only in either JSON view and settings persistence", () =>
+    {
+        var settings = new AppSettings
+        {
+            OneBotToken = "synthetic-onebot-secret", OfficialAppSecret = "synthetic-official-secret",
+            FeishuAppSecret = "synthetic-feishu-secret", FeishuEncryptKey = "synthetic-encrypt-key",
+            FeishuVerificationToken = "synthetic-verification", OfficialAppId = "synthetic-official"
+        };
+        var secretNames = new[] { "OneBotToken", "OfficialAppSecret", "FeishuAppSecret", "FeishuEncryptKey" };
+        foreach (var json in new[] { JsonSerializer.Serialize(settings), JsonSerializer.Serialize<PlatformOptions>(settings) })
+        {
+            using var document = JsonDocument.Parse(json);
+            Require(secretNames.All(name => !document.RootElement.TryGetProperty(name, out _)),
+                "runtime platform credentials entered a serialized configuration view");
+            Require(!document.RootElement.TryGetProperty("NormalizedUin", out _)
+                && !document.RootElement.TryGetProperty("UinOrZero", out _),
+                "derived login values entered a serialized configuration view");
+        }
+        const string injected = "{\"OneBotToken\":\"synthetic-injected\",\"OfficialAppSecret\":\"synthetic-injected\","
+            + "\"FeishuAppSecret\":\"synthetic-injected\",\"FeishuEncryptKey\":\"synthetic-injected\"}";
+        foreach (var restored in new PlatformOptions[]
+        {
+            JsonSerializer.Deserialize<AppSettings>(injected)!, JsonSerializer.Deserialize<PlatformOptions>(injected)!
+        })
+            Require(restored.OneBotToken == "" && restored.OfficialAppSecret == ""
+                && restored.FeishuAppSecret == "" && restored.FeishuEncryptKey == "",
+                "JSON credential injection replaced runtime-only values");
+        var store = new SettingsStore();
+        store.Save(settings);
+        var loaded = store.Load();
+        Require(loaded.OneBotToken == "" && loaded.OfficialAppSecret == ""
+            && loaded.FeishuAppSecret == "" && loaded.FeishuEncryptKey == "",
+            "runtime platform credentials survived settings persistence");
+        Require(loaded.OfficialAppId == "synthetic-official" && loaded.FeishuVerificationToken == "synthetic-verification",
+            "non-excluded legacy configuration was lost while excluding credentials");
+    });
+    Check("legacy platform JSON and defaults survive normalization save publish and reload", () =>
+    {
+        var defaults = new AppSettings();
+        Require(!defaults.OfficialEnabled && defaults.OfficialChatEnabled && !defaults.OfficialSandbox
+            && !defaults.FeishuEnabled && defaults.PrivateChatEnabled && defaults.LocalChannelIds == ""
+            && defaults.PlatformSwitchSchemaVersion == 0 && defaults.PlatformPolicies.Count == 0,
+            "legacy platform defaults changed");
+        const string legacyJson = """
+            {"OneBotProtocol":"ReverseWebSocket","OneBotAddress":"https://example.com/onebot","QuickLoginUin":" 10001 ",
+             "WhitelistGroups":"10002","WhitelistPrivates":"10003","MessageWhitelist":"synthetic-rule",
+             "OfficialEnabled":false,"OfficialChatEnabled":true,"OfficialAppId":"synthetic-official","OfficialSandbox":true,
+             "OfficialWhitelistGroups":"10004","OfficialWhitelistPrivates":"10005",
+             "OfficialApiBase":"https://example.com/official","OfficialTokenUrl":"https://example.com/token",
+             "FeishuEnabled":true,"FeishuAppId":"synthetic-feishu","FeishuVerificationToken":"synthetic-verification",
+             "FeishuWhitelist":"synthetic-chat","FeishuApiBase":"https://example.com/feishu",
+             "LocalChannelIds":"10006","PrivateChatEnabled":false,"PlatformSwitchSchemaVersion":0,
+             "PlatformPolicies":[{"PlatformId":"qq.official","AccountScope":"legacy","Enabled":true,"ChatEnabled":true,
+               "AllowedActions":["read"],"FeatureOverrides":{"image":false}}]}
+            """;
+        var original = JsonSerializer.Deserialize<AppSettings>(legacyJson)!;
+        var box = new SettingsBox(original);
+        var accessor = (IPlatformSettingsAccessor)box;
+        var store = new SettingsStore();
+        var migrated = box.ApplyPersisted(PlatformSwitchSettings.Normalize, store.Save);
+        Require(migrated.PlatformSwitchSchemaVersion == 1 && !migrated.PlatformPolicies.Single().Enabled!.Value
+            && migrated.PlatformPolicies.Single().ChatEnabled == true && !migrated.OfficialEnabled,
+            "legacy disabled switch intersection was lost in migration");
+        Require(original.PlatformSwitchSchemaVersion == 0 && original.PlatformPolicies.Single().Enabled == true,
+            "normalization changed the in-flight legacy snapshot");
+        var next = box.ApplyPersisted(s =>
+        {
+            var row = s.PlatformPolicies.Single();
+            row.Enabled = true;
+            row.AllowedActions.Add("search");
+            row.FeatureOverrides["image"] = true;
+            PlatformSwitchSettings.Normalize(s);
+        }, store.Save);
+        var loaded = store.Load();
+        var policy = new PlatformPolicyResolver(box).ResolveForChannel("official");
+        Require(ReferenceEquals(accessor.Current, next) && policy.Enabled && policy.ChatEnabled
+            && policy.CanUseAction("search") && loaded.OfficialEnabled && loaded.PlatformSwitchSchemaVersion == 1
+            && loaded.PlatformPolicies.Single().AllowedActions.SequenceEqual(new[] { "read", "search" }),
+            "persist publish reload and the real platform resolver disagreed");
+        Require(migrated.PlatformPolicies.Single().Enabled == false
+            && migrated.PlatformPolicies.Single().AllowedActions.SequenceEqual(new[] { "read" })
+            && !migrated.PlatformPolicies.Single().FeatureOverrides["image"],
+            "nested policy mutation escaped the candidate snapshot");
+        Require(loaded.OneBotProtocol == "ReverseWebSocket" && loaded.OneBotAddress == "https://example.com/onebot"
+            && loaded.QuickLoginUin == " 10001 " && loaded.NormalizedUin == "10001" && loaded.UinOrZero == 10001
+            && loaded.WhitelistGroups == "10002" && loaded.WhitelistPrivates == "10003" && loaded.MessageWhitelist == "synthetic-rule"
+            && loaded.OfficialChatEnabled && loaded.OfficialAppId == "synthetic-official" && loaded.OfficialSandbox
+            && loaded.OfficialWhitelistGroups == "10004" && loaded.OfficialWhitelistPrivates == "10005"
+            && loaded.OfficialApiBase == "https://example.com/official" && loaded.OfficialTokenUrl == "https://example.com/token"
+            && loaded.FeishuEnabled && loaded.FeishuAppId == "synthetic-feishu" && loaded.FeishuVerificationToken == "synthetic-verification"
+            && loaded.FeishuWhitelist == "synthetic-chat" && loaded.FeishuApiBase == "https://example.com/feishu"
+            && loaded.LocalChannelIds == "10006" && !loaded.PrivateChatEnabled,
+            "legacy platform property names or values failed to roundtrip");
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(loaded));
+        using var legacyDocument = JsonDocument.Parse(legacyJson);
+        foreach (var property in legacyDocument.RootElement.EnumerateObject())
+            Require(document.RootElement.EnumerateObject().Count(p => p.Name == property.Name) == 1,
+                "a legacy platform field was missing or serialized twice");
+        var copy = next.Snapshot();
+        copy.PlatformPolicies.Single().AllowedActions.Clear();
+        copy.PlatformPolicies.Single().FeatureOverrides.Clear();
+        copy.PlatformPolicies.Clear();
+        Require(next.PlatformPolicies.Count == 1 && next.PlatformPolicies.Single().AllowedActions.Count == 2
+            && next.PlatformPolicies.Single().FeatureOverrides["image"], "explicit snapshot shares nested collections");
+    });
+    Check("failed platform save does not mutate either runtime view or nested policy collections", () =>
+    {
+        var original = new AppSettings
+        {
+            PlatformSwitchSchemaVersion = 1,
+            PlatformPolicies = new() { new() { PlatformId = PlatformId.Local, AccountScope = AccountScope.Legacy,
+                Enabled = true, ChatEnabled = true, AllowedActions = new() { "read" }, FeatureOverrides = new() { ["image"] = false } } }
+        };
+        var box = new SettingsBox(original);
+        var observed = false;
+        try
+        {
+            box.ApplyPersisted(s =>
+            {
+                s.LocalChannelIds = "10001";
+                s.PlatformPolicies.Single().ChatEnabled = false;
+                s.PlatformPolicies.Single().AllowedActions.Add("search");
+                s.PlatformPolicies.Single().FeatureOverrides["image"] = true;
+            }, _ => throw new IOException("synthetic platform save failure"));
+        }
+        catch (IOException) { observed = true; }
+        var platform = ((IPlatformSettingsAccessor)box).Current;
+        Require(observed && ReferenceEquals(box.Current, original) && ReferenceEquals(platform, original)
+            && platform.LocalChannelIds == "" && platform.PlatformPolicies.Single().ChatEnabled == true
+            && platform.PlatformPolicies.Single().AllowedActions.SequenceEqual(new[] { "read" })
+            && !platform.PlatformPolicies.Single().FeatureOverrides["image"],
+            "failed persistence changed platform state or an in-flight nested collection");
+    });
     Check("save failure propagates and rolls settings back", () =>
     {
         var store = new SettingsStore();

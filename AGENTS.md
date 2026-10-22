@@ -14,7 +14,7 @@
 
 **不要读取、不要复述、不要粘出来**：
 
-- 会话与消息：`data/conversations.json`、`agent-sessions.json`、SQLite（`qqchat.db`）里的 `messages` / `member_*` 表
+- 会话与消息：`data/conversations.json`、`agent-sessions.json`、SQLite（`botagent.db`；旧库 `qqchat.db` 兼容）里的 `messages` / `member_*` 表
 - 人物档案：`data/member_profiles/*.json`
 - 日志正文：`logs/qqchat.log` 里的「收到 …」「已回复 …」这类行（带着发言原文）
 - 协议端报文：NapCat 的 OneBot 事件 JSON（`message` / `raw_message` / `post_type` 字段）
@@ -22,6 +22,8 @@
 - 不 grep 的 `docker logs` / `tail -n 200` 整段输出
 
 例外只有一个：用户明确让你看某一条，并且只看那一条。
+
+> 命名兼容（N1）：基础设施/密钥类环境变量 `BOTAGENT_*` 优先、`QQCHAT_*` 兼容；行为类变量目前仍以 `QQCHAT_*` 为主。数据库默认 `botagent.db`，旧 `qqchat.db` 自动回退。平台 ID、会话 key、DB schema、secret ref 不改。
 
 ---
 
@@ -58,8 +60,8 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 
 | 开关 | 字段 / 环境变量 | 默认 | 作用 |
 | --- | --- | --- | --- |
-| 列出会话时脱敏 | `enableAgentMask` / `QQCHAT_AGENT_MASK` | **开** | 群名、昵称、QQ 号只留前 3 后 2（`940***75`）；`//sessions` `//sessions all` `//runs` `//pi` 与面板会话列表都遵守 |
-| Agent 附加提示词 | `agentPrompt` / `QQCHAT_AGENT_PROMPT` | 隐私红线 | 每个 `//` 任务都带上：外部设备（pi）拼在任务前面，服务器内置 agent 拼进**系统提示词**；默认值 = `AppSettings.DefaultAgentPrompt`（即本文件第 1、2 节） |
+| 列出会话时脱敏 | `enableAgentMask` / `QQCHAT_AGENT_MASK` | **开** | 群名、昵称、QQ 号只留前 3 后 2（`940***75`）；`//sessions` `//sessions all` `//runs` 与面板会话列表都遵守 |
+| Agent 附加提示词 | `agentPrompt` / `QQCHAT_AGENT_PROMPT` | 隐私红线 | 每个 `//` 任务都会拼进服务器内置 agent 的**系统提示词**；默认值 = `AppSettings.DefaultAgentPrompt`（即本文件第 1、2 节）。cfg-0.3.3 起本机 pi 桥/`//pi`/`//import` 已移除 |
 
 ---
 
@@ -68,7 +70,8 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
 node tests/BotAgent.FrontendProbe/probe.mjs                       # 面板冒烟（无浏览器）
-QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+BOTAGENT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+# 规范名优先，旧 QQCHAT_IT_ONLY 兼容；场景内的行为变量照旧用 QQCHAT_*
 # 结构护栏（只读源码，不连库不起进程）：基线在 ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
 dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll

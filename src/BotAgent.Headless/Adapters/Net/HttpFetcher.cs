@@ -19,7 +19,7 @@ namespace BotAgent.Adapters.Net;
 /// 窄口要么丢掉这些，要么自己重写一个 HttpClient —— 后者更糟。所以端口刻意**镜像 HttpClient 的
 /// 被用到的那一小撮 API**（见下面 5 个方法），换掉实现时调用点一行都不用改。
 /// </summary>
-public interface IHttpFetcher
+public interface IHttpFetcher : BotAgent.Platforms.Net.IPlatformHttpFetcher, BotAgent.Model.Net.IModelHttpFetcher
 {
     /// <summary>这个客户端的超时（面板/日志要能如实显示）。</summary>
     TimeSpan Timeout { get; }
@@ -50,6 +50,13 @@ public interface IHttpFetcher
 public sealed class HttpFetcher : IHttpFetcher, IDisposable
 {
     private readonly HttpClient _client;
+
+    /// <summary>
+    /// 给需要复用同一套连接策略的 SDK（当前是 MCP 的 HttpClientTransport）用的底层客户端。
+    /// 所有权仍在本实例：调用方**不得** Dispose；SSRF 连接回调、DNS 固定、是否自动跟随重定向
+    /// 都由这个实例的 handler 决定。
+    /// </summary>
+    public HttpClient SharedClient => _client;
 
     public HttpFetcher(
         TimeSpan timeout,

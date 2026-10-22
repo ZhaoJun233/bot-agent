@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/BotAgent.Headless/Services/OneBot/ReverseWsTransport.cs" Link="ReverseWsTransport.cs" />
-    <Compile Include="../../src/BotAgent.Headless/Services/OneBot/IOneBotTransport.cs" Link="IOneBotTransport.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/OneBot/ReverseWsTransport.cs" Link="ReverseWsTransport.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/OneBot/IOneBotTransport.cs" Link="IOneBotTransport.cs" />
   </ItemGroup>
 </Project>

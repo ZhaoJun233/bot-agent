@@ -1,3 +1,9 @@
+extern alias StorageModule;
+
+using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
+using ConfigurationModule = StorageModule::BotAgent.Storage;
+using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 using BotAgent.Services.Ports;
 using BotAgent.Domain.Ports;
 using BotAgent.Services.Agent;
@@ -37,6 +43,250 @@ public sealed class SettingsHotReload
     private readonly ConversationRegistry _registry;
     private readonly PanelNotifier _ui;
     private readonly ISettingsRepository _settingsRepo;
+    private ConfigurationModule.ConfigurationStore? _configuration;
+    private ConfigurationRequestAuthorization? _configurationAuthorization;
+    private Func<ConfigurationVersion, AppSettings, ConfigurationPatch, ImmutableArray<ConfigurationModule.SecretMutation>, AppSettings>? _readCommitted;
+    private Func<ConfigurationCaller, ConfigurationOperationKey, FieldEdit<string>, ConfigurationModule.LegacyActionResult>? _applyLegacyMood;
+    private Func<ConfigurationFieldId, FieldEffect>? _fieldEffect;
+    private Action? _reapplyHealthReports;
+    private Func<ConfigurationVersion, AppSettings, ApplyStepReport>? _projectTts;
+    private Func<ConfigurationVersion, ApplyStepReport>? _modelProjectionState;
+
+    internal sealed class ConfigurationRequestAuthorization
+    {
+        private sealed class Request(ConfigurationCaller caller, Func<bool> authorize)
+        {
+            internal readonly ConfigurationCaller Caller = caller;
+            internal readonly Func<bool> Authorize = authorize;
+            internal int Active = 1;
+        }
+        private sealed class Lease(ConfigurationRequestAuthorization owner, Request request, Request? previous) : IDisposable
+        {
+            private int _disposed;
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                Volatile.Write(ref request.Active, 0);
+                if (ReferenceEquals(owner._request.Value, request))
+                    owner._request.Value = previous is not null && Volatile.Read(ref previous.Active) == 1 ? previous : null;
+            }
+        }
+        private readonly AsyncLocal<Request?> _request = new();
+        internal IDisposable Enter(ConfigurationCaller caller, Func<bool> reauthorize)
+        {
+            ArgumentNullException.ThrowIfNull(caller); ArgumentNullException.ThrowIfNull(reauthorize);
+            var previous = _request.Value; var request = new Request(caller, reauthorize);
+            _request.Value = request; return new Lease(this, request, previous);
+        }
+        internal bool Reauthorize(ConfigurationCaller caller, ConfigurationAccess required)
+        {
+            var request = _request.Value;
+            if (request is null || Volatile.Read(ref request.Active) != 1 || request.Caller != caller || (caller.Access & required) != required) return false;
+            try { return request.Authorize(); } catch (Exception) { return false; }
+        }
+        internal bool TryGetCaller(ConfigurationAccess required, out ConfigurationCaller caller)
+        {
+            caller = _request.Value?.Caller!;
+            return caller is not null && Reauthorize(caller, required);
+        }
+    }
+
+    internal void BindConfiguration(ConfigurationModule.ConfigurationStore store, ConfigurationRequestAuthorization authorization,
+        Func<ConfigurationVersion, AppSettings, ConfigurationPatch, ImmutableArray<ConfigurationModule.SecretMutation>, AppSettings> readCommittedSnapshot,
+        Func<ConfigurationCaller, ConfigurationOperationKey, FieldEdit<string>, ConfigurationModule.LegacyActionResult> applyLegacyMood,
+        Action reapplyHealthReports, Func<ConfigurationVersion, AppSettings, ApplyStepReport> projectTts,
+        Func<ConfigurationFieldId, FieldEffect> fieldEffect, Func<ConfigurationVersion, ApplyStepReport> modelProjectionState)
+    {
+        ArgumentNullException.ThrowIfNull(store); ArgumentNullException.ThrowIfNull(authorization);
+        ArgumentNullException.ThrowIfNull(readCommittedSnapshot); ArgumentNullException.ThrowIfNull(applyLegacyMood);
+        ArgumentNullException.ThrowIfNull(reapplyHealthReports); ArgumentNullException.ThrowIfNull(projectTts);
+        ArgumentNullException.ThrowIfNull(fieldEffect); ArgumentNullException.ThrowIfNull(modelProjectionState);
+        if (_configuration is not null)
+        {
+            if (ReferenceEquals(_configuration, store) && ReferenceEquals(_configurationAuthorization, authorization)
+                && ReferenceEquals(_readCommitted, readCommittedSnapshot) && ReferenceEquals(_applyLegacyMood, applyLegacyMood)
+                && ReferenceEquals(_reapplyHealthReports, reapplyHealthReports) && ReferenceEquals(_projectTts, projectTts)
+                && ReferenceEquals(_fieldEffect, fieldEffect) && ReferenceEquals(_modelProjectionState, modelProjectionState)) return;
+            throw new InvalidOperationException("configuration_already_bound");
+        }
+        _configurationAuthorization = authorization; _readCommitted = readCommittedSnapshot; _applyLegacyMood = applyLegacyMood;
+        _fieldEffect = fieldEffect; _modelProjectionState = modelProjectionState;
+        _reapplyHealthReports = reapplyHealthReports; _projectTts = projectTts; _configuration = store;
+    }
+    internal ConfigurationRequestAuthorization ConfigurationAuthorization
+        => _configurationAuthorization ?? throw new InvalidOperationException("configuration_not_bound");
+
+    internal ValueTask<ConfigurationReadResult> ReadConfigurationAsync(ConfigurationReadKind kind, CancellationToken ct = default)
+    {
+        if (_configuration is null || !ConfigurationAuthorization.TryGetCaller(kind == ConfigurationReadKind.Editable
+            ? ConfigurationAccess.ReadEditable : ConfigurationAccess.ReadOverview, out var caller))
+            return ValueTask.FromResult(new ConfigurationReadResult(ConfigurationResultCode.Forbidden, default, default,
+                ConfigurationContract.Revision, 0, null, ImmutableArray<SecretMetadata>.Empty, ImmutableArray<FieldDescriptor>.Empty, ApplyState.Unknown));
+        return _configuration.ReadAsync(caller, kind, ct);
+    }
+    internal ValueTask<ConfigurationModule.LegacyFindOutcome> FindConfigurationAsync(ConfigurationOperationKey key, CancellationToken ct = default)
+    {
+        if (_configuration is null || !ConfigurationAuthorization.TryGetCaller(ConfigurationAccess.SaveConfiguration, out var caller))
+            return ValueTask.FromResult(new ConfigurationModule.LegacyFindOutcome(new(ConfigurationResultCode.Forbidden, null),
+                ImmutableArray<ConfigurationModule.LegacyActionResult>.Empty));
+        return ConfigurationBridge.FindLegacyAsync(_configuration, caller, key, ct);
+    }
+    internal ValueTask<ConfigurationSaveResult> SaveConfigurationAsync(ConfigurationSaveRequest request, CancellationToken ct = default)
+    {
+        if (_configuration is null || !ConfigurationAuthorization.TryGetCaller(ConfigurationAccess.SaveConfiguration, out var caller))
+            return ValueTask.FromResult(ConfigurationRejected(ConfigurationResultCode.Forbidden));
+        var result = SaveAndApply(caller, request.Key, request.Changes, request.Secrets,
+            () => _configuration.SaveAsync(caller, request, ct).GetAwaiter().GetResult(),
+            TtsRequested(request.Changes, request.Secrets));
+        return ValueTask.FromResult(result);
+    }
+    internal ValueTask<ConfigurationModule.LegacySaveOutcome> SaveLegacyConfigurationAsync(ConfigurationOperationKey? key,
+        ConfigurationPatch changes, ImmutableArray<SecretEdit> secrets, FieldEdit<string> mood,
+        bool ttsProjectionRequested, CancellationToken ct = default)
+    {
+        var empty = ImmutableArray<ConfigurationModule.LegacyActionResult>.Empty;
+        if (_configuration is null || !ConfigurationAuthorization.TryGetCaller(ConfigurationAccess.SaveConfiguration, out var caller))
+            return ValueTask.FromResult(new ConfigurationModule.LegacySaveOutcome(ConfigurationRejected(ConfigurationResultCode.Forbidden), empty));
+        if (key is null)
+        {
+            var header = _configuration.ReadAsync(caller, ConfigurationReadKind.Overview, ct).GetAwaiter().GetResult();
+            if (header.Generation.Value == Guid.Empty)
+                return ValueTask.FromResult(new ConfigurationModule.LegacySaveOutcome(ConfigurationRejected(header.Code), empty));
+            key = new(header.Generation, header.ServerUnixSeconds, Guid.NewGuid());
+        }
+        var actualKey = key.Value;
+        ConfigurationModule.LegacySaveOutcome? outcome = null;
+        void ApplyMood()
+        {
+            if (mood.Kind == EditKind.Keep || outcome is null || outcome.ConfigurationResult.Replayed) return;
+            var action = _applyLegacyMood!(caller, actualKey, mood);
+            outcome = outcome with { LegacyActionResults = ImmutableArray.Create(action) };
+        }
+        var result = SaveAndApply(caller, actualKey, changes, secrets, () =>
+        {
+            outcome = ConfigurationBridge.SaveLegacyWithMoodAsync(_configuration, caller, actualKey, changes, secrets, mood, ct)
+                .GetAwaiter().GetResult();
+            return outcome.ConfigurationResult;
+        }, ttsProjectionRequested, ApplyMood);
+        return ValueTask.FromResult((outcome ?? new(result, empty)) with { ConfigurationResult = result });
+    }
+    private static ConfigurationSaveResult ConfigurationRejected(ConfigurationResultCode code)
+        => new(code, false, null, default, ImmutableArray<FieldError>.Empty);
+    private static bool FirstChanged(ConfigurationSaveResult result)
+        => !result.Replayed && result.Code == ConfigurationResultCode.Ok
+            && result.Receipt is { Decision: ConfigurationDecision.Changed, CommitState: CommitState.Committed };
+    private static bool TtsRequested(ConfigurationPatch patch, ImmutableArray<SecretEdit> secrets)
+        => secrets.Any(edit => edit.Slot == WritableSecretSlot.TtsApiKey && edit.Kind != SecretEditKind.Keep)
+            || patch.Voice is { } voice && (voice.TtsProvider.Kind != EditKind.Keep
+                || voice.TtsApiBase.Kind != EditKind.Keep || voice.TtsModel.Kind != EditKind.Keep);
+    private bool RequiresRestart(ConfigurationPatch patch, ImmutableArray<SecretEdit> secrets)
+    {
+        if (secrets.Any(edit => edit.Kind != SecretEditKind.Keep && edit.Slot is WritableSecretSlot.FeishuAppSecret
+            or WritableSecretSlot.FeishuEncryptKey or WritableSecretSlot.FeishuVerificationToken)) return true;
+        if (patch.Registered is { } registered && (!registered.Plugins.IsEmpty || registered.Providers.Any(edit =>
+            edit.Key.Value != "primary" || edit.Changes.NameRaw.Kind != EditKind.Keep
+            || edit.Changes.Priority.Kind != EditKind.Keep || edit.Changes.Enabled.Kind != EditKind.Keep
+            || edit.Changes.Credential.Kind != CredentialBindingEditKind.KeepExisting))) return true;
+        var node = System.Text.Json.JsonSerializer.SerializeToNode(patch)!.AsObject();
+        foreach (var partition in node.Where(pair => pair.Key != nameof(ConfigurationPatch.Registered)))
+        {
+            if (partition.Value is not System.Text.Json.Nodes.JsonObject edits) continue;
+            foreach (var edit in edits)
+                if (Enum.TryParse<ConfigurationFieldId>(edit.Key, out var field)
+                    && _fieldEffect!(field) == FieldEffect.Restart
+                    && edit.Value?["kind"]?.GetValue<int>() != (int)EditKind.Keep) return true;
+        }
+        return false;
+    }
+    private ConfigurationSaveResult SaveAndApply(ConfigurationCaller caller, ConfigurationOperationKey key,
+        ConfigurationPatch changes, ImmutableArray<SecretEdit> secrets, Func<ConfigurationSaveResult> persist,
+        bool projectTts, Action? applyMood = null)
+    {
+        var mutations = Enum.GetValues<WritableSecretSlot>().Select(slot => new ConfigurationModule.SecretMutation(slot,
+            secrets.FirstOrDefault(edit => edit.Slot == slot)?.Kind ?? SecretEditKind.Keep)).ToImmutableArray();
+        return _box.ApplyConfiguration(previous =>
+        {
+            var saved = persist();
+            if (!saved.Replayed && saved.Code == ConfigurationResultCode.NoChanges
+                && saved.Receipt is { Decision: ConfigurationDecision.NoChanges, CommitState: CommitState.NotCommitted })
+                applyMood?.Invoke();
+            if (!FirstChanged(saved)) return (previous, saved, false);
+            AppSettings next;
+            try { next = _readCommitted!(saved.Receipt!.CommittedVersion!.Value, previous, changes, mutations); }
+            catch (Exception) { return (previous, saved with { Code = ConfigurationResultCode.StorageUnavailable }, false); }
+            foreach (var step in new[] { ApplyStep.PublishSnapshot, ApplyStep.RuntimePolicy, ApplyStep.ModelProjection })
+            {
+                var claim = ConfigurationBridge.TryStartApplyStep(_configuration!, caller, key, step);
+                if (!claim.CanRun)
+                    return (previous, saved with { Code = claim.Result.Code, Receipt = claim.Result.Receipt ?? saved.Receipt }, false);
+                saved = saved with { Receipt = claim.Result.Receipt ?? saved.Receipt };
+            }
+            return (next, saved, true);
+        }, (next, saved) =>
+        {
+            bool Report(ApplyStepReport report)
+            {
+                var recorded = _configuration!.RecordApply(caller, key, ImmutableArray.Create(report));
+                saved = saved with { Code = recorded.Code, Receipt = recorded.Receipt ?? saved.Receipt };
+                return recorded.Code == ConfigurationResultCode.Ok;
+            }
+            bool Run(ApplyStep step, Action action, bool claimed = false)
+            {
+                if (!claimed)
+                {
+                    var claim = ConfigurationBridge.TryStartApplyStep(_configuration!, caller, key, step);
+                    saved = saved with { Code = claim.Result.Code, Receipt = claim.Result.Receipt ?? saved.Receipt };
+                    if (!claim.CanRun) return false;
+                }
+                try { action(); return Report(new(step, ApplyState.Applied, null)); }
+                catch (Exception) { Report(new(step, ApplyState.Failed, "apply_failed")); return false; }
+            }
+            if (!Report(new(ApplyStep.PublishSnapshot, ApplyState.Applied, null))) return saved;
+            if (!Run(ApplyStep.RuntimePolicy, () =>
+            {
+                _approvals.RebuildPolicy(); _participation.Rebuild(); _whitelist.Rebuild();
+                PruneNonWhitelisted(); _agentCmds.RebuildAgentUsers();
+            }, true)) return saved;
+            ApplyStepReport modelReport;
+            try
+            {
+                modelReport = _modelProjectionState!(saved.Receipt!.CommittedVersion!.Value);
+                if (modelReport.Step != ApplyStep.ModelProjection
+                    || modelReport.State is not (ApplyState.Applied or ApplyState.RestartRequired))
+                    throw new InvalidOperationException("model_projection_state_invalid");
+                SyncBrainFields();
+            }
+            catch (Exception) { Report(new(ApplyStep.ModelProjection, ApplyState.Unknown, "projection_unavailable")); return saved; }
+            if (!Report(modelReport)) return saved;
+            if (!Run(ApplyStep.ConcurrencyGate, () => _reply.ResizeGate(Math.Clamp(next.MaxConcurrentReplies, 1, 16)))) return saved;
+            if (!Run(ApplyStep.ContextWindow, () =>
+            {
+                foreach (var conversation in _registry.Snapshot())
+                { conversation.MaxMessages = next.MaxMessagesPerConversation; conversation.TrimToMax(); }
+            })) return saved;
+            if (!Run(ApplyStep.Schedulers, () => { _scheduler.RebuildIfNeeded(); _reapplyHealthReports!(); })) return saved;
+            foreach (var step in new[] { ApplyStep.TtsFileProjection, ApplyStep.RegisteredConfiguration })
+            {
+                var claim = ConfigurationBridge.TryStartApplyStep(_configuration!, caller, key, step);
+                saved = saved with { Code = claim.Result.Code, Receipt = claim.Result.Receipt ?? saved.Receipt };
+                if (!claim.CanRun) return saved;
+                var report = new ApplyStepReport(step, ApplyState.Applied, null);
+                if (step == ApplyStep.TtsFileProjection && projectTts)
+                {
+                    try { report = _projectTts!(saved.Receipt!.CommittedVersion!.Value, next); }
+                    catch (Exception) { report = new(step, ApplyState.Unknown, "projection_unavailable"); }
+                }
+                if (step == ApplyStep.RegisteredConfiguration
+                    && (modelReport.State == ApplyState.RestartRequired || RequiresRestart(changes, secrets)))
+                    report = new(step, ApplyState.RestartRequired, "restart_required");
+                if (!Report(report)) return saved;
+            }
+            applyMood?.Invoke();
+            _ui.EmitLog("配置已更新"); _ui.NotifyConversationsChanged(); _ui.NotifyStateChanged();
+            return saved;
+        });
+    }
+
 
     public SettingsHotReload(
         SettingsBox box,
@@ -75,6 +325,26 @@ public sealed class SettingsHotReload
     public void ApplyRuntimeSettings(Action<AppSettings> mutate, AuditEvent? auditEvent = null,
         IAuditChain? auditChain = null, Action<AppSettings>? published = null)
     {
+        if (_configuration is not null)
+        {
+            if (published is not null) throw new InvalidOperationException("configuration_typed_writer_required");
+            var previous = _box.Current; var candidate = previous.Snapshot(); mutate(candidate);
+            var before = System.Text.Json.JsonSerializer.SerializeToNode(previous)!.AsObject();
+            var after = System.Text.Json.JsonSerializer.SerializeToNode(candidate)!.AsObject();
+            before.Remove(nameof(AppSettings.PanelDeployUrl)); after.Remove(nameof(AppSettings.PanelDeployUrl));
+            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(before, after))
+                throw new InvalidOperationException("configuration_typed_writer_required");
+            var caller = new ConfigurationCaller("headless", "panel-deploy", "bot", ConfigurationAccess.SaveConfiguration | ConfigurationAccess.ReadOverview);
+            using var scope = ConfigurationAuthorization.Enter(caller, () => true);
+            var result = SaveLegacyConfigurationAsync(null, new(null, null, new AgentChanges
+                { PanelDeployUrl = FieldEdit<string>.Set(candidate.PanelDeployUrl) }, null, null, null, null, null),
+                ImmutableArray<SecretEdit>.Empty, FieldEdit<string>.Keep(), false).GetAwaiter().GetResult().ConfigurationResult;
+            if (result.Code is not (ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges))
+                throw new InvalidOperationException("configuration_save_failed");
+            return;
+        }
+        if (ConfigurationBridge.RequiresCoordinatedConfigurationWrites)
+            throw new InvalidOperationException("configuration_not_bound");
         _box.ApplyPersisted(mutate,
             next => _settingsRepo.Save(next, auditEvent, auditChain),
             next =>
@@ -125,7 +395,19 @@ public sealed class SettingsHotReload
     /// 用在"已经在别处持久化过"的运行时值上 —— 例如网易云登录态（存 secrets 表、<c>[JsonIgnore]</c> 不进 settings.json）：
     /// 它既不该触发白名单清理，也不该让面板多出一条"配置已更新"。
     /// </summary>
-    public void PatchSettings(Action<AppSettings> mutate) => _box.Apply(mutate);
+    public void PatchSettings(Action<AppSettings> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        _box.Apply(next =>
+        {
+            // The only current caller is the non-C3 music cookie projection. Never publish arbitrary user edits.
+            var candidate = next.Snapshot(); mutate(candidate);
+            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.JsonSerializer.SerializeToNode(next),
+                System.Text.Json.JsonSerializer.SerializeToNode(candidate)))
+                throw new InvalidOperationException("configuration_typed_writer_required");
+            next.NeteaseCookie = candidate.NeteaseCookie;
+        });
+    }
 
     /// <summary>
     /// 会话被删除 / 移出白名单时，把它在各台账里的痕迹一起清掉（V3 §7.2 / §9.4：内存台账要有界）。

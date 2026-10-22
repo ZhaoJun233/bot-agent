@@ -5,7 +5,7 @@
 1. Reuse the existing SQLite `AppDatabase.Write` transaction for episode insertion IDs and prompt version allocation. Read `last_insert_rowid()` on the inserting connection; allocate the existing per-key `vN` format inside the write transaction before deactivation/insertion. No schema or port changes.
 2. Keep the existing Jargon 500-scope, 200-phrase and 15-minute cooldown rules. Serialize buffer admission/eviction, evict the lowest-frequency phrase when full, and remove cooldown entries when their scope is evicted. Keep repository calls outside the buffer lock.
 3. Separate health-report current-run success counts from the lifetime `SentCount`. Preserve existing success, failure, partial-skip and empty-target behavior.
-4. Synchronize contributor documentation with S42's explicit harness/CI exclusion and the reviewed snapshot-to-`dev`, PR-to-`main` release path.
+4. Synchronize contributor documentation with the harness/CI scenario set and the reviewed snapshot-to-`dev`, PR-to-`main` release path.
 
 ## Verification
 
@@ -24,6 +24,6 @@ This focused probe is now restored and run by the CI `verify` job alongside the 
 - The existing panel Jargon routes use `JargonStore` for CRUD. `JargonService` observation/discovery/prompt rendering currently have no runtime call sites.
 - `EpisodeStore` and `PromptTemplateStore` currently have no runtime consumers; fixes do not imply automatic episode extraction, recall or versioned prompt use is enabled.
 - Health reports are wired at startup and to the panel, but currently receive the OneBot gateway rather than the multi-channel source/router. The synthetic official-alias case verifies existing channel gating only, not official transport delivery.
-- S42 remains excluded; this probe does not add or claim official-channel end-to-end coverage.
+- S42 is now registered in the integration harness/CI as synthetic fake-gateway coverage; this probe still does not establish real Open Platform interoperability or credentials validation.
 
 No composition root, transport/fetcher, SafeUrl, frontend or integration-harness entry-point changes are made by this scope.

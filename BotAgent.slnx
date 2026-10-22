@@ -1,9 +1,18 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/BotAgent.Core/BotAgent.Core.csproj" />
+    <Project Path="src/BotAgent.Model/BotAgent.Model.csproj" />
+    <Project Path="src/BotAgent.Storage/BotAgent.Storage.csproj" />
+    <Project Path="src/BotAgent.Platforms/BotAgent.Platforms.csproj" />
+    <Project Path="src/BotAgent.Engine/BotAgent.Engine.csproj" />
+    <Project Path="src/BotAgent.Mcp/BotAgent.Mcp.csproj" />
+    <Project Path="src/BotAgent.Panel/BotAgent.Panel.csproj" />
     <Project Path="src/BotAgent.Headless/BotAgent.Headless.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj" />
     <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
+    <Project Path="tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj" />
+    <Project Path="tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj" />
+    <Project Path="tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj" />
   </Folder>
 </Solution>

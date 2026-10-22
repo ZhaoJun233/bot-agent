@@ -363,7 +363,7 @@
       toast("已开始巡检，结果会记在运行日志里");
       setTimeout(refreshStickerLib, 4000);
     } catch (e) {
-      toast("巡检失败：" + e.message);
+      toast("巡检失败：" + (e.data?.error || e.message));
     }
   }
 
@@ -374,7 +374,7 @@
       toast("正在从 QQ 收藏表情导入，稍后刷新看结果");
       setTimeout(refreshStickerLib, 6000);
     } catch (e) {
-      toast("导入失败：" + e.message);
+      toast("导入失败：" + (e.data?.error || e.message));
     }
   }
 
@@ -383,33 +383,9 @@
   // 按 key 复用 DOM 节点，避免每次事件都重建整个列表（重建会重载头像图、强制重排）
   const convNodes = new Map();
   let convSignature = "";
-
-  // 外部设备表（面板里「外部设备」那张表）的**内存副本**：
-  //   · 设备表自己不在 DOM-id 那套表单字段里，所以保存时得单独把它拼进 payload（saveSettings 用）；
-  //   · 声明在外层作用域，因为填表的是 bindUi()、而读表的是 saveSettings() —— 各自在其他地方都看不见对方。
-  //   · loaded 这个标记是为了防“设备表没拉到 + 点保存 = 把设备配置写成空”。
-  let agentDevices = [];
-  let agentDevicesLoaded = false;
-  // 上一份与服务端对齐的设备表：重新进设置页 / 放弃修改时用它还原草稿。
-  // 只有 loaded 标记是不够的 —— 草稿留在内存里的话，下次保存会把“已经放弃的改动”一起提交（实测踩过）。
-  let agentDevicesSaved = [];
-  // 用户在面板里加/删/改过设备行（还没有权威设备表时，保存必须明确告知“设备改动没保存”）
-  let agentDevicesEdited = false;
-  // 本次保存是否因为“没拉到设备表”而跳过了设备改动（只在保存提示里说一句）
-  let deviceTableSkipped = false;
   // 任何一次表单改动都 +1。保存请求发出去之后用户又改了东西时，这次刷新结果已经过时，
   // 用它回填会把新编辑盖掉（实测踩过）。
   let settingsEditSeq = 0;
-
-  // 保存设置后要顺手刷新的东西（由 bindUi() 注册进来；没注册就跳过）。
-  // 用钩子而不是直接调用的原因：refreshAgentDevicesFull 定义在 bindUi() **内部**，而 saveSettings() 在外层 ——
-  // 直接 `await refreshAgentDevicesFull()` 就是 ReferenceError，被 catch 成一句“保存失败”
-  // （其实服务器那边已经存上了，报错完全指错方向；实测踩过）。
-  let afterSettingsSaved = null;
-  // bindUi() 注册：把设备草稿画出来（顶层的 loadAgentDevices() 看不见绑在 DOM 上的那套渲染代码）
-  let renderAgentDeviceList = null;
-  // 全局默认工作目录（面板里那个「工作目录」）：设备行用它标注“这个目录是哪来的”。
-  let agentGlobalWorkdir = "";
 
   function convSignatureOf(items) {
     return items.map((c) =>
@@ -1465,45 +1441,6 @@ function renderChannelStatus(channels) {
       .replace(/'/g, "&#39;");
   }
 
-  /* ─────────── 外部设备表：拉取 / 草稿回滚 / 指定设备下拉 ─────────── */
-
-  /// 拉服务端的设备表：作为编辑草稿 + “已保存快照”。
-  /// 进设置页、点「刷新设备」、保存之后都走它 —— 以前只有点刷新才拉，
-  /// 结果首次进设置页时表是空的：加了一台设备保存时被 loaded 判断拦下，保存后的刷新又把那行覆盖掉。
-  async function loadAgentDevices() {
-    const r = await api("/api/agent/status");
-    agentDevices = (r.deviceList || []).map((d) => ({ ...d }));
-    agentDevicesSaved = agentDevices.map((d) => ({ ...d }));
-    agentGlobalWorkdir = r.globalWorkdir || "";
-    agentDevicesLoaded = true;
-    agentDevicesEdited = false;
-    if (renderAgentDeviceList) renderAgentDeviceList(r);
-    return r;
-  }
-
-  /// 放弃草稿 = 回到上次与服务端对齐的那份。
-  function resetAgentDeviceDraft() {
-    agentDevices = agentDevicesSaved.map((d) => ({ ...d }));
-    agentDevicesEdited = false;
-    if (renderAgentDeviceList) renderAgentDeviceList();
-  }
-
-  /// 指定设备下拉里补一项。
-  /// 这里必须用 DOM API（value/textContent）而不是拼 innerHTML：设备名是外部输入。
-  /// 另外它得是**顶层函数** —— loadSettings() 在外层，以前它定义在 bindUi() 内部，
-  /// “指定设备 + 重新进设置页”直接 ReferenceError（loadSettings 的 catch 会把它吞成“设置页打不开”）。
-  function ensureDeviceOption(name) {
-    if (!name) return;
-    const sel = $("setAgentDevice");
-    if (!sel) return;
-    const opts = sel.options ? Array.from(sel.options) : [];
-    if (opts.some((o) => o.value === name)) return;
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    sel.appendChild(opt);
-  }
-
   function modelProviderName(value, fallback) {
     const raw = String(value || "").trim();
     if (!raw) return fallback;
@@ -1610,15 +1547,14 @@ function renderChannelStatus(channels) {
   function renderModelStudio() {
     const list = $("modelProviderList");
     if (!list) return;
-    const context = state.modelStudio.context || "chat";
+    const context = state.modelStudio.context === "server" ? "server" : "chat";
     for (const button of list.querySelectorAll("[data-model-context]")) {
       button.classList.toggle("active", button.dataset.modelContext === context);
     }
 
     const panes = {
       chat: $("modelChatPane"),
-      server: $("modelServerPane"),
-      host: $("modelHostPane")
+      server: $("modelServerPane")
     };
     for (const [key, pane] of Object.entries(panes)) {
       if (pane) pane.hidden = key !== context;
@@ -1628,7 +1564,6 @@ function renderChannelStatus(channels) {
     const model = $("setModel")?.value || "";
     const serverBaseUrl = $("setAgentServerBaseUrl")?.value || "";
     const serverModel = $("setAgentServerModel")?.value || "";
-    const hostModel = $("setAgentModel")?.value || "";
     const chatProvider = modelProviderName(baseUrl, "未配置接口");
     const serverProvider = modelProviderName(serverBaseUrl, serverBaseUrl.trim() ? "接口地址无效" : chatProvider);
 
@@ -1637,12 +1572,10 @@ function renderChannelStatus(channels) {
       modelChatModelLabel: model || "未配置模型",
       modelServerProviderLabel: serverProvider,
       modelServerModelLabel: serverModel || "跟随聊天模型",
-      modelHostModelLabel: hostModel || "设备默认模型",
       modelChatProviderName: chatProvider,
       modelChatProviderSource: baseUrl ? "由 Base URL 自动识别" : "使用容器环境变量中的接口",
       modelServerProviderName: serverProvider,
-      modelServerProviderSource: serverBaseUrl ? "服务器 Agent 独立接口" : "回退到聊天模型接口",
-      modelHostProviderSource: hostModel ? "已选择外部设备模型" : "需要设备在线才能拉取模型"
+      modelServerProviderSource: serverBaseUrl ? "服务器 Agent 独立接口" : "回退到聊天模型接口"
     };
     for (const [id, value] of Object.entries(values)) {
       const node = $(id);
@@ -1655,9 +1588,6 @@ function renderChannelStatus(channels) {
       if (context === "server") {
         title.textContent = "服务器 Agent";
         subtitle.textContent = `${serverProvider} · 独立运行后端`;
-      } else if (context === "host") {
-        title.textContent = "外部设备 Agent";
-        subtitle.textContent = hostModel || "设备默认模型";
       } else {
         title.textContent = model || "聊天模型";
         subtitle.textContent = `${chatProvider} · 主模型`;
@@ -1879,18 +1809,31 @@ function renderChannelStatus(channels) {
     }
   }
 
+  async function fetchPlatformPolicyStatus() {
+    try {
+      const status = await api("/api/platforms");
+      if (!Array.isArray(status.platforms)) throw new Error("invalid_platform_status");
+      return { snapshots: status.platforms, statusUnavailable: false };
+    } catch {
+      console.warn("加载平台策略状态失败");
+      return { snapshots: [], statusUnavailable: true };
+    }
+  }
+  function platformPolicyStateText(enabled, chatEnabled, matches, statusUnavailable, capabilities = null) {
+    const online = matches.filter(item => item.connected === true).length;
+    const connection = matches.length > 1 ? `${matches.length} 实例 · ${online ? `${online} 在线` : "未连接"}`
+      : online ? "在线" : "未连接";
+    const supportFacts = matches.map(item => item.capabilities?.supportsText);
+    const textSupport = capabilities?.supportsText ?? (supportFacts.length && supportFacts.every(value => typeof value === "boolean")
+      && new Set(supportFacts).size === 1 ? supportFacts[0] : null);
+    return `${enabled === false ? "已停用" : chatEnabled === false ? "聊天已静音" : statusUnavailable ? "状态暂不可用" : connection}`
+      + `${matches.some(item => item.restartRequired === true) ? " · 需重启生效" : ""}`
+      + ` · ${textSupport === true ? "支持文本" : textSupport === false ? "不支持文本" : "文本能力状态未知"}`;
+  }
   async function loadPlatformPolicies(policies, runtime) {
     const host = $("platformPolicyRows");
     const empty = $("platformPolicyEmpty");
-    let snapshots = [];
-    let statusUnavailable = false;
-    try {
-      const status = await api("/api/platforms");
-      snapshots = Array.isArray(status.platforms) ? status.platforms : [];
-    } catch (err) {
-      statusUnavailable = true;
-      console.warn("加载平台策略状态失败：", err);
-    }
+    const { snapshots, statusUnavailable } = await fetchPlatformPolicyStatus();
     host.replaceChildren();
 
     const read = (obj, lower, upper) => obj?.[lower] ?? obj?.[upper];
@@ -1940,8 +1883,8 @@ function renderChannelStatus(channels) {
       name.textContent = `${snapshot?.displayName || platformId} · ${accountScope}`;
       const stateText = document.createElement("span");
       stateText.className = "platform-policy-state";
-      stateText.textContent = `${enabled !== true ? "已停用" : chatEnabled !== true ? "聊天已静音"
-        : statusUnavailable ? "状态暂不可用" : snapshotByKey.get(key)?.connected ? "在线" : "未连接"}${snapshot?.restartRequired ? " · 需重启生效" : ""} · ${snapshot?.capabilities?.supportsText ? "支持文本" : "不支持文本"}`;
+      stateText.textContent = platformPolicyStateText(enabled === true, chatEnabled === true,
+        snapshotByKey.has(key) ? [snapshotByKey.get(key)] : [], statusUnavailable, snapshot?.capabilities);
       title.append(name, stateText);
       row.append(title);
 
@@ -2049,6 +1992,9 @@ function renderChannelStatus(channels) {
 
   async function loadSettings() {
     state.settingsLoaded = false; // 重新加载期间先封住保存
+    const snapshot = await api("/api/settings?configuration=read", { method: "POST", body: JSON.stringify({ kind: 1 }) });
+    if (snapshot.code !== 0 || !snapshot.view) throw new Error("配置需要审查，禁止用默认表单覆盖");
+    configurationSnapshot = { ...snapshot, observedAt: Date.now() };
     const data = await api("/api/settings");
     const r = data.runtime, e = data.env;
 
@@ -2189,24 +2135,10 @@ function renderChannelStatus(channels) {
     state.agentPromptDefault = r.agentPromptDefault || "";
     $("setAgentAllowedUsers").value = r.agentAllowedUsers || "";
     $("setAgentPrefix").value = r.agentPrefix || "//";
-    $("setAgentTimeoutSeconds").value = r.agentTimeoutSeconds;
     $("setAgentReplyMaxChars").value = r.agentReplyMaxChars;
     $("setAgentProgressSeconds").value = r.agentProgressSeconds;
-    $("setAgentWorkDir").value = r.agentWorkDir || "";
-    $("setEnableHostAgent").checked = r.enableHostAgent !== false;
     $("setEnableServerAgent").checked = r.enableServerAgent !== false;
 
-    // “优先用哪边”与“指定设备”共用 AgentTarget：名字在三种模式之外 → 就是指定设备
-    const target = (r.agentTarget || "auto").trim();
-    const modes = ["auto", "host", "server"];
-    if (modes.includes(target)) {
-      $("setAgentTargetMode").value = target;
-      $("setAgentDevice").value = "";
-    } else {
-      $("setAgentTargetMode").value = "auto";
-      ensureDeviceOption(target);
-      $("setAgentDevice").value = target;
-    }
     $("setAgentServerTools").value = r.agentServerTools || "";
     $("setAgentServerQqActions").value = r.agentServerQqActions || "";
     // 记住上下文（默认关：每条指令单独对待）
@@ -2238,8 +2170,6 @@ function renderChannelStatus(channels) {
       ? "来自面板（存服务端密钥库，不回显）"
       : r.agentServerKeySource === "env" ? "来自环境变量" : "未配置（会用聊天那把密钥）";
     pendingAgentServerKeyClear = false;
-    fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
-    $("setAgentModel").value = r.agentModel || "";
 
     // ─────────── 服务器健康日报（定时私聊推送）───────────
     $("setHealthReportEnabled").checked = r.healthReportEnabled === true;
@@ -2274,7 +2204,8 @@ function renderChannelStatus(channels) {
     $("setFeishuAppSecret").placeholder = r.feishuSecretConfigured
       ? `${r.feishuSecretMasked}（已设置${r.feishuSecretSource === "env" ? "，来自环境变量" : ""}，留空即不修改）`
       : "还没配 App Secret，在这里填一个";
-    $("setFeishuVerificationToken").value = r.feishuVerificationToken || "";
+    $("setFeishuVerificationToken").value = "";
+    $("setFeishuVerificationToken").placeholder = r.feishuVerificationTokenConfigured ? "已设置，留空保留" : "未设置，留空保留";
     $("setFeishuEncryptKey").value = "";
     $("setFeishuEncryptKey").placeholder = r.feishuEncryptKeyConfigured
       ? `${r.feishuEncryptKeyMasked}（已设置${r.feishuEncryptKeySource === "env" ? "，来自环境变量" : ""}，留空即不修改）`
@@ -2284,17 +2215,16 @@ function renderChannelStatus(channels) {
 
     // 官方通道（与私域并存）；secret 不回填（它只从环境变量读，面板不接也不存）
     $("setOfficialAppId").value = r.officialAppId || "";
-    // AppSecret：只回显掩码，留空 = 不改（与 TTS 密钥同规矩）
-    $("setOfficialAppSecret").value = "";
-    $("setOfficialAppSecret").placeholder = r.officialSecretConfigured
-      ? `${r.officialSecretMasked}（已设置${r.officialSecretSource === "env" ? "，来自环境变量" : ""}，留空即不修改）`
-      : "还没配 AppSecret，在这里填一个";
+    // 官方 Secret 仅展示环境配置状态，不接收值、掩码或清空指令。
+    $("officialSecretStatus").textContent = r.officialSecretConfigured === true
+      ? "已配置（仅来自环境变量；面板不显示或修改密钥）"
+      : "未配置：请由部署环境设置 QQCHAT_OFFICIAL_APP_SECRET 后重启";
     $("setOfficialSandbox").checked = r.officialSandbox === true;
     $("setOfficialWhitelistGroups").value = r.officialWhitelistGroups || "";
     $("setOfficialWhitelistPrivates").value = r.officialWhitelistPrivates || "";
     renderOfficialConversations(r.officialConversations);
     renderChannelStatus(r.channels);
-    await loadPlatformPolicies(r.platformPolicies, r);
+    await renderTypedPlatformPolicies(snapshot);
     $("setLinkPreviewTimeout").value = r.linkPreviewTimeoutSeconds;
     $("setLinkPreviewMax").value = r.linkPreviewMax;
 
@@ -2311,256 +2241,431 @@ function renderChannelStatus(channels) {
         ? "协议端连着，但 QQ 账号登录已失效 —— 消息一条都收不到。回到「聊天」页，顶部卡片里直接扫码就能重新登录。"
         : `无法连接 ${e.oneBotAddress}。请确认 NapCat 容器正在运行且已开启对应的 OneBot 服务。`;
     $("napcatLoginBtn").hidden = d.level === "on";
-
-    // 设备表也是设置的一部分：跟普通字段一样回填（拉不到就保留上一份，绝不清空）。
-    // 以前只有点「刷新设备」才拉 —— 首次进来表是空的，加了一台设备保存时被 loaded 判断拦下。
-    try {
-      await loadAgentDevices();
-    } catch (err) {
-      console.warn("加载设备表失败：", err);
-      resetAgentDeviceDraft(); // 回到上一份已保存快照，不保留已经放弃的改动
-    }
-
     await loadQuotaPanel();
     renderModelStudio();
     await loadPluginsPanel();
 
-    // 放在最后：全部回填成功才认为可保存
+    projectSettingsInputs(snapshot);
+    installSecretDeleteControls();
+    configurationBaseline = collectSettingsInputs();
+    // Capture the rendered baseline, not inherited effective values as explicit overrides.
     state.settingsLoaded = true;
     clearSettingsDirty(); // 刚和服务端对齐，没未保存的修改
   }
 
-  async function saveSettings() {
-    // 关键防护：表单没回填完就保存 = 所有字段是空/0，会把白名单清空（→ 忽略全部消息）、
-    // 把 AI 关掉、把所有数值压倒最小值 —— 相当于一键把自己的配置全毁掉。
-    if (!state.settingsLoaded) {
-      toast("设置还没加载成功，请刷新页面后重试");
-      return;
-    }
-
-    const payload = {
+  // One control getter table is shared by rendering, baseline capture and sparse strict saves.
+  function settingsInputGetters() {
+    return {
       // 模型接口（面板可改；留空 = 回退环境变量）
-      modelBaseUrl: $("setBaseUrl").value.trim(),
-      model: $("setModel").value.trim(),
-      fastReply: $("setFastReply").checked,
-      fastModel: $("setFastModel").value.trim(),
-      botPersona: $("setPersona").value,
-      messageWhitelist: $("setWhitelist").value,
-      whitelistGroups: $("setWhitelistGroups").value,
-      whitelistPrivates: $("setWhitelistPrivates").value,
-      aiDesire: Number($("setDesire").value),
-      suitabilityThreshold: Number($("setThreshold").value),
-      maxAgentSteps: Number($("setMaxAgentSteps").value),
-      adaptiveSamplingEnabled: $("setAdaptiveSampling").checked,
-      rationalTemperature: Number($("setRationalTemp").value),
-      rationalTopP: Number($("setRationalTopP").value),
-      emotionalTemperature: Number($("setEmotionalTemp").value),
-      emotionalTopP: Number($("setEmotionalTopP").value),
-      aiModeEnabled: $("setAiMode").checked,
-      maxTokens: Number($("setMaxTokens").value),
-      thinkingBudget: $("setThinkingBudget").value,
-      thinkingCustomBudget: $("setThinkingCustomBudget").value,
-      fastThinkingBudget: $("setFastThinkingBudget").value,
-      fastThinkingCustomBudget: $("setFastThinkingCustomBudget").value,
-      groupCooldownSeconds: Number($("setGroupCooldown").value),
-      privateCooldownSeconds: Number($("setPrivateCooldown").value),
-      idleFallbackSeconds: Number($("setIdleFallback").value),
-      splitReplies: $("setSplitReplies").checked,
-      enableProactive: $("setEnableProactive").checked,
-      proactiveCooldownSeconds: Number($("setProactiveCooldown").value),
-      proactiveQuietSeconds: Number($("setProactiveQuiet").value),
-      ignoreBracketMessages: $("setIgnoreBrackets").checked,
-      filterActionNarration: $("setFilterActionNarration").checked,
-      enableAtmosphereDamping: $("setEnableAtmosphereDamping").checked,
-      segmentDelayMs: Number($("setSegmentDelay").value),
-      maxContextMessages: Number($("setMaxContext").value),
-      maxMessagesPerConversation: Number($("setMaxMessages").value),
-      maxConcurrentReplies: Number($("setConcurrency").value),
-      profileLookupCount: Number($("setProfileLookup").value),
-      profileSummaryLines: Number($("setProfileLines").value),
-      maxProfileChars: Number($("setProfileChars").value),
-      enableProfileSummary: $("setEnableSummary").checked,
-      profileSummaryThreshold: Number($("setSummaryThreshold").value),
-      profileSummaryMaxChars: Number($("setSummaryChars").value),
-      profileSummaryIntervalSeconds: Number($("setSummaryInterval").value),
-      enableStickers: $("setEnableStickers").checked,
-      stickerLibraryMax: Number($("setStickerMax").value),
-      stickerCandidates: Number($("setStickerCandidates").value),
-      stickerCurateIntervalSeconds: Number($("setStickerCurate").value),
-      stickerCooldownSeconds: Number($("setStickerCooldown").value),
-      enablePoke: $("setEnablePoke").checked,
-      pokeCooldownSeconds: Number($("setPokeCooldown").value),
-      moodTtlSeconds: Number($("setMoodTtl").value),
-      mood: $("setMood").value.trim(),
+      modelBaseUrl: get => get("setBaseUrl").value.trim(),
+      model: get => get("setModel").value.trim(),
+      fastReply: get => get("setFastReply").checked,
+      fastModel: get => get("setFastModel").value.trim(),
+      botPersona: get => get("setPersona").value,
+      messageWhitelist: get => get("setWhitelist").value,
+      whitelistGroups: get => get("setWhitelistGroups").value,
+      whitelistPrivates: get => get("setWhitelistPrivates").value,
+      aiDesire: get => Number(get("setDesire").value),
+      suitabilityThreshold: get => Number(get("setThreshold").value),
+      maxAgentSteps: get => Number(get("setMaxAgentSteps").value),
+      adaptiveSamplingEnabled: get => get("setAdaptiveSampling").checked,
+      rationalTemperature: get => Number(get("setRationalTemp").value),
+      rationalTopP: get => Number(get("setRationalTopP").value),
+      emotionalTemperature: get => Number(get("setEmotionalTemp").value),
+      emotionalTopP: get => Number(get("setEmotionalTopP").value),
+      aiModeEnabled: get => get("setAiMode").checked,
+      maxTokens: get => Number(get("setMaxTokens").value),
+      thinkingBudget: get => get("setThinkingBudget").value,
+      thinkingCustomBudget: get => get("setThinkingCustomBudget").value,
+      fastThinkingBudget: get => get("setFastThinkingBudget").value,
+      fastThinkingCustomBudget: get => get("setFastThinkingCustomBudget").value,
+      groupCooldownSeconds: get => Number(get("setGroupCooldown").value),
+      privateCooldownSeconds: get => Number(get("setPrivateCooldown").value),
+      idleFallbackSeconds: get => Number(get("setIdleFallback").value),
+      splitReplies: get => get("setSplitReplies").checked,
+      enableProactive: get => get("setEnableProactive").checked,
+      proactiveCooldownSeconds: get => Number(get("setProactiveCooldown").value),
+      proactiveQuietSeconds: get => Number(get("setProactiveQuiet").value),
+      ignoreBracketMessages: get => get("setIgnoreBrackets").checked,
+      filterActionNarration: get => get("setFilterActionNarration").checked,
+      enableAtmosphereDamping: get => get("setEnableAtmosphereDamping").checked,
+      segmentDelayMs: get => Number(get("setSegmentDelay").value),
+      maxContextMessages: get => Number(get("setMaxContext").value),
+      maxMessagesPerConversation: get => Number(get("setMaxMessages").value),
+      maxConcurrentReplies: get => Number(get("setConcurrency").value),
+      profileLookupCount: get => Number(get("setProfileLookup").value),
+      profileSummaryLines: get => Number(get("setProfileLines").value),
+      maxProfileChars: get => Number(get("setProfileChars").value),
+      enableProfileSummary: get => get("setEnableSummary").checked,
+      profileSummaryThreshold: get => Number(get("setSummaryThreshold").value),
+      profileSummaryMaxChars: get => Number(get("setSummaryChars").value),
+      profileSummaryIntervalSeconds: get => Number(get("setSummaryInterval").value),
+      enableStickers: get => get("setEnableStickers").checked,
+      stickerLibraryMax: get => Number(get("setStickerMax").value),
+      stickerCandidates: get => Number(get("setStickerCandidates").value),
+      stickerCurateIntervalSeconds: get => Number(get("setStickerCurate").value),
+      stickerCooldownSeconds: get => Number(get("setStickerCooldown").value),
+      enablePoke: get => get("setEnablePoke").checked,
+      pokeCooldownSeconds: get => Number(get("setPokeCooldown").value),
+      moodTtlSeconds: get => Number(get("setMoodTtl").value),
+      mood: get => get("setMood").value.trim(),
       // 场景预设（空 = 跟随开关）与人工审批（默认关）
-      scenarioPreset: $("setScenarioPreset").value,
-      enableApprovals: $("setEnableApprovals").checked,
-      approvalApprovers: $("setApprovalApprovers").value.trim(),
+      scenarioPreset: get => get("setScenarioPreset").value,
+      enableApprovals: get => get("setEnableApprovals").checked,
+      approvalApprovers: get => get("setApprovalApprovers").value.trim(),
       // P1：参与状态机的上限（服务端会再钳一次）
-      participationMaxConsecutiveReplies: Number($("setPartMaxReplies").value),
-      participationCooldownSeconds: Number($("setPartCooldown").value),
-      participationProbingMaxReplies: Number($("setPartProbing").value),
-      participationMaxActiveLifetimeSeconds: Number($("setPartActiveLife").value),
-      participationMaxExitingLifetimeSeconds: Number($("setPartExitingLife").value),
+      participationMaxConsecutiveReplies: get => Number(get("setPartMaxReplies").value),
+      participationCooldownSeconds: get => Number(get("setPartCooldown").value),
+      participationProbingMaxReplies: get => Number(get("setPartProbing").value),
+      participationMaxActiveLifetimeSeconds: get => Number(get("setPartActiveLife").value),
+      participationMaxExitingLifetimeSeconds: get => Number(get("setPartExitingLife").value),
       // 两个会真正改变行为的开关（都默认关）
-      enableParticipationGating: $("setPartGating").checked,
-      enableQuestions: $("setEnableQuestions").checked,
-      enableMusic: $("setEnableMusic").checked,
-      musicSources: $("setMusicSources").value.trim(),
-      musicBitrate: Number($("setMusicBitrate").value),
-      musicMaxDownloadMb: Number($("setMusicMaxMb").value),
-      musicMaxAnalysisSeconds: Number($("setMusicAnalysisSeconds").value),
-      musicLibraryMax: Number($("setMusicLibraryMax").value),
-      musicNoteTtlDays: Number($("setMusicNoteTtlDays").value),
-      musicListenCooldownSeconds: Number($("setMusicListenCooldown").value),
-      musicUnderstandModel: $("setMusicUnderstandModel").value.trim(),
-      musicSendAudioToModel: $("setMusicSendAudio").checked,
-      neteaseBaseUrl: $("audioNeteaseBase").value.trim(),
-      musicKeepAudio: $("setMusicKeepAudio").checked,
-      enableLinkPreview: $("setEnableLinkPreview").checked,
-      enableWebSearch: $("setEnableWebSearch").checked,
-      enableAgentBridge: $("setEnableAgentBridge").checked,
-      enableAgentMask: $("setAgentMask").checked,
-      agentPrompt: $("setAgentPrompt").value,
-      healthReportEnabled: $("setHealthReportEnabled").checked,
-      healthReportTime: $("setHealthReportTime").value.trim() || "18:00",
-      healthReportTargets: $("setHealthReportTargets").value.trim(),
-      agentAllowedUsers: $("setAgentAllowedUsers").value.trim(),
-      agentPrefix: $("setAgentPrefix").value.trim() || "//",
-      agentTimeoutSeconds: Number($("setAgentTimeoutSeconds").value),
-      agentReplyMaxChars: Number($("setAgentReplyMaxChars").value),
-      agentProgressSeconds: Number($("setAgentProgressSeconds").value),
-      agentWorkDir: $("setAgentWorkDir").value.trim(),
-      agentTarget: $("setAgentDevice").value.trim() || $("setAgentTargetMode").value,
-      enableHostAgent: $("setEnableHostAgent").checked,
-      enableServerAgent: $("setEnableServerAgent").checked,
-      agentServerTools: $("setAgentServerTools").value.trim(),
-      agentServerQqActions: $("setAgentServerQqActions").value.trim(),
-      agentServerKeepContext: $("setAgentServerKeepContext").checked,
-      agentServerDocker: $("setAgentServerDocker").checked,
-      panelDeployEnabled: $("setPanelDeployEnabled").checked,
-      panelDeployUrl: $("deployUrl").value.trim(),
-      agentServerMaxSteps: Number($("setAgentServerMaxSteps").value),
-      agentServerWorkDir: $("setAgentServerWorkDir").value.trim() || "/data",
-      agentServerCommandTimeoutSeconds: Number($("setAgentServerCommandTimeoutSeconds").value),
-      agentServerModel: $("setAgentServerModel").value.trim(),
-      agentReasoningEffort: $("setAgentReasoningEffort").value || "auto",
-      agentReasoningLevels: $("setAgentReasoningLevels").value.trim(),
-      agentServerBaseUrl: $("setAgentServerBaseUrl").value.trim(),
-      agentModel: $("setAgentModel").value,
-      webSearchUseModelSearch: $("setWebSearchUseModelSearch").checked,
-      webSearchSources: $("setWebSearchSources").value.trim(),
-      webSearchMaxResults: Number($("setWebSearchMaxResults").value),
-      webSearchCooldownSeconds: Number($("setWebSearchCooldown").value),
-      webSearchTimeoutSeconds: Number($("setWebSearchTimeoutSeconds").value),
-      enableVoice: $("setEnableVoice").checked,
-      voiceName: $("setVoiceName").value.trim(),
-      voiceSpeed: Number($("setVoiceSpeed").value),
-    voiceEmotion: $("setVoiceEmotion").value.trim(),
-    voicePitch: Number($("setVoicePitch").value),
-    voiceVol: Number($("setVoiceVol").value),
-      voiceMaxChars: Number($("setVoiceMaxChars").value),
-      voiceEagerness: Number($("setVoiceEagerness").value),
-      ttsServiceUrl: $("setTtsServiceUrl").value.trim(),
+      enableParticipationGating: get => get("setPartGating").checked,
+      enableQuestions: get => get("setEnableQuestions").checked,
+      enableMusic: get => get("setEnableMusic").checked,
+      musicSources: get => get("setMusicSources").value.trim(),
+      musicBitrate: get => Number(get("setMusicBitrate").value),
+      musicMaxDownloadMb: get => Number(get("setMusicMaxMb").value),
+      musicMaxAnalysisSeconds: get => Number(get("setMusicAnalysisSeconds").value),
+      musicLibraryMax: get => Number(get("setMusicLibraryMax").value),
+      musicNoteTtlDays: get => Number(get("setMusicNoteTtlDays").value),
+      musicListenCooldownSeconds: get => Number(get("setMusicListenCooldown").value),
+      musicUnderstandModel: get => get("setMusicUnderstandModel").value.trim(),
+      musicSendAudioToModel: get => get("setMusicSendAudio").checked,
+      neteaseBaseUrl: get => get("audioNeteaseBase").value.trim(),
+      musicKeepAudio: get => get("setMusicKeepAudio").checked,
+      enableLinkPreview: get => get("setEnableLinkPreview").checked,
+      enableWebSearch: get => get("setEnableWebSearch").checked,
+      enableAgentBridge: get => get("setEnableAgentBridge").checked,
+      enableAgentMask: get => get("setAgentMask").checked,
+      agentPrompt: get => get("setAgentPrompt").value,
+      healthReportEnabled: get => get("setHealthReportEnabled").checked,
+      healthReportTime: get => get("setHealthReportTime").value.trim() || "18:00",
+      healthReportTargets: get => get("setHealthReportTargets").value.trim(),
+      agentAllowedUsers: get => get("setAgentAllowedUsers").value.trim(),
+      agentPrefix: get => get("setAgentPrefix").value.trim() || "//",
+      agentReplyMaxChars: get => Number(get("setAgentReplyMaxChars").value),
+      agentProgressSeconds: get => Number(get("setAgentProgressSeconds").value),
+      enableServerAgent: get => get("setEnableServerAgent").checked,
+      agentServerTools: get => get("setAgentServerTools").value.trim(),
+      agentServerQqActions: get => get("setAgentServerQqActions").value.trim(),
+      agentServerKeepContext: get => get("setAgentServerKeepContext").checked,
+      agentServerDocker: get => get("setAgentServerDocker").checked,
+      panelDeployEnabled: get => get("setPanelDeployEnabled").checked,
+      panelDeployUrl: get => get("deployUrl").value.trim(),
+      agentServerMaxSteps: get => Number(get("setAgentServerMaxSteps").value),
+      agentServerWorkDir: get => get("setAgentServerWorkDir").value.trim() || "/data",
+      agentServerCommandTimeoutSeconds: get => Number(get("setAgentServerCommandTimeoutSeconds").value),
+      agentServerModel: get => get("setAgentServerModel").value.trim(),
+      agentReasoningEffort: get => get("setAgentReasoningEffort").value || "auto",
+      agentReasoningLevels: get => get("setAgentReasoningLevels").value.trim(),
+      agentServerBaseUrl: get => get("setAgentServerBaseUrl").value.trim(),
+      webSearchUseModelSearch: get => get("setWebSearchUseModelSearch").checked,
+      webSearchSources: get => get("setWebSearchSources").value.trim(),
+      webSearchMaxResults: get => Number(get("setWebSearchMaxResults").value),
+      webSearchCooldownSeconds: get => Number(get("setWebSearchCooldown").value),
+      webSearchTimeoutSeconds: get => Number(get("setWebSearchTimeoutSeconds").value),
+      enableVoice: get => get("setEnableVoice").checked,
+      voiceName: get => get("setVoiceName").value.trim(),
+      voiceSpeed: get => Number(get("setVoiceSpeed").value),
+    voiceEmotion: get => get("setVoiceEmotion").value.trim(),
+    voicePitch: get => Number(get("setVoicePitch").value),
+    voiceVol: get => Number(get("setVoiceVol").value),
+      voiceMaxChars: get => Number(get("setVoiceMaxChars").value),
+      voiceEagerness: get => Number(get("setVoiceEagerness").value),
+      ttsServiceUrl: get => get("setTtsServiceUrl").value.trim(),
       // 留空 = **不改**（服务端把空字符串当“保持原样”）。
       // 早期版本把空当“清空”，真实踩到：改个白名单就把 TTS key 抹了 → 语音全部失败（retcode 1200）。
       // TTS 密钥：字段照发（与表单一一对应），但**空 = 不改**（服务端按这个口径处理）
-      ttsApiKey: $("setTtsApiKey").value.trim(),
-      ttsProvider: $("setTtsProvider").value,
-      ttsApiBase: $("setTtsApiBase").value.trim(),
-      ttsModel: $("setTtsModel").value.trim(),
+      ttsApiKey: get => get("setTtsApiKey").value.trim(),
+      ttsProvider: get => get("setTtsProvider").value,
+      ttsApiBase: get => get("setTtsApiBase").value.trim(),
+      ttsModel: get => get("setTtsModel").value.trim(),
       // 飞书通道（Feishu Bot）
-      feishuAppId: $("setFeishuAppId").value.trim(),
-      feishuAppSecret: $("setFeishuAppSecret").value.trim(),
-      feishuVerificationToken: $("setFeishuVerificationToken").value.trim(),
-      feishuEncryptKey: $("setFeishuEncryptKey").value.trim(),
-      feishuWhitelist: $("setFeishuWhitelist").value.trim(),
-      feishuApiBase: $("setFeishuApiBase").value.trim(),
+      feishuAppId: get => get("setFeishuAppId").value.trim(),
+      feishuAppSecret: get => get("setFeishuAppSecret").value.trim(),
+      feishuVerificationToken: get => get("setFeishuVerificationToken").value.trim(),
+      feishuEncryptKey: get => get("setFeishuEncryptKey").value.trim(),
+      feishuWhitelist: get => get("setFeishuWhitelist").value.trim(),
+      feishuApiBase: get => get("setFeishuApiBase").value.trim(),
       // 官方通道（QQ 开放平台）
-      officialAppId: $("setOfficialAppId").value.trim(),
-      // 空 = 不改（服务端按这个口径处理，别把它当清空）
-      officialAppSecret: $("setOfficialAppSecret").value.trim(),
-      officialSandbox: $("setOfficialSandbox").checked,
-      officialWhitelistGroups: $("setOfficialWhitelistGroups").value.trim(),
-      officialWhitelistPrivates: $("setOfficialWhitelistPrivates").value.trim(),
-      platformPolicies: collectPlatformPolicies(),
-      linkPreviewTimeoutSeconds: Number($("setLinkPreviewTimeout").value),
-      linkPreviewMax: Number($("setLinkPreviewMax").value)
+      officialAppId: get => get("setOfficialAppId").value.trim(),
+      officialSandbox: get => get("setOfficialSandbox").checked,
+      officialWhitelistGroups: get => get("setOfficialWhitelistGroups").value.trim(),
+      officialWhitelistPrivates: get => get("setOfficialWhitelistPrivates").value.trim(),
+      linkPreviewTimeoutSeconds: get => Number(get("setLinkPreviewTimeout").value),
+      linkPreviewMax: get => Number(get("setLinkPreviewMax").value)
     };
-
-    // 外部设备表：以前这个字段**根本没进保存请求** —— 面板里改了某台设备的模型/目录/工具/超时/启用，
-    // 点保存也白改（服务器那边还是旧值；管理员报过“状态显示的工作目录被固定了”）。
-    // 只回写配置字段（online/cwd/pi/models 是服务器算出来的，不要捎回去）。
-    // 且**只有真的拉过一份设备表才回写**：否则一次「加载失败 + 保存」就会把设备配置清空。
-    if (agentDevicesLoaded) {
-      payload.agentDevices = JSON.stringify(agentDevices.map((d) => ({
-        name: d.name,
-        enable: !!d.enable,
-        model: d.model || "",
-        workdir: d.workdir || "",
-        tools: d.tools || "",
-        timeoutSec: Number(d.timeoutSec) || 0
-      })));
-    } else if (agentDevicesEdited) {
-      // 设备表没拉到、但用户在面板里加/删/改过：
-      //   ① 只发这一份 → 服务端是**整表替换**，别的设备配置会被一起删掉；
-      //   ② 直接丢掉 → 就是以前那个“新加的设备保存后又自己消失”的毛病。
-      // 所以什么都不发，但保存提示里要说清“设备改动这次没保存”（不能无声无息）。
-      deviceTableSkipped = true;
+  }
+  function collectSettingsInputs(strictNumbers = false) {
+    return Object.fromEntries(Object.entries(settingsInputGetters()).map(([key, read]) => {
+      let blankNumber = false;
+      const value = read(id => { const input = $(id); if (input?.type === "number" && input.value.trim() === "") blankNumber = true; return input; });
+      if (strictNumbers && typeof value === "number" && (blankNumber || !Number.isFinite(value)))
+        throw new Error("数值不能为空或非法");
+      return [key, value];
+    }));
+  }
+  let configurationSnapshot = null;
+  let configurationBaseline = null;
+  let configurationPending = null;
+  const configurationSecretDeletes = new Set();
+  const configurationSecretRevision = Array(6).fill(0);
+  const configurationHistory = []; // Non-secret operation metadata only; never browser persistent storage.
+  function rememberConfigurationFact(key, result) {
+    configurationHistory.push({ key, result });
+    if (configurationHistory.length > 4) configurationHistory.shift();
+  }
+  const configurationSecretControls = ["setApiKey", "setAgentServerKey", "setTtsApiKey", "setFeishuAppSecret", "setFeishuEncryptKey", "setFeishuVerificationToken"];
+  const cloneConfiguration = value => JSON.parse(JSON.stringify(value));
+  const sameConfiguration = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+  function configurationFields(view) {
+    const fields = new Map();
+    for (const [partition, values] of Object.entries(view || {})) {
+      if (partition === "registered") continue;
+      for (const [member, field] of Object.entries(values || {}))
+        if (field?.rule) fields.set(member, { partition, field });
     }
-
-    // 密钥单独处理：输入框留空 = 不改（否则每次保存都会把已存的密钥抹掉）；
-    // 想清除要点“清除密钥”按钮（那里有二次确认）。
-    const typedKey = $("setApiKey").value.trim();
-    if (typedKey) payload.apiKey = typedKey;
-    else if (pendingApiKeyClear) payload.apiKey = "";
-
-    // 服务器 agent 的密钥：同样的规矩（留空 = 不改；清除要显式点按钮，二次确认在那边）
-    const typedAgentKey = $("setAgentServerKey").value.trim();
-    if (typedAgentKey) payload.agentServerKey = typedAgentKey;
-    else if (pendingAgentServerKeyClear) payload.agentServerKey = "";
-
-    // 用所有 .card-save-btn 做 loading 状态
-    const activeSaveBtns = [...document.querySelectorAll(".card-save-btn")];
-    activeSaveBtns.forEach(b => { b.disabled = true; b.textContent = "保存中…"; });
-    const deviceTableSkippedHere = deviceTableSkipped;
-    deviceTableSkipped = false;
-    // 快照一下改动序号：请求在飞时用户又改了东西的话，这次返回的刷新结果已经过时
+    return fields;
+  }
+  function configurationKey() {
+    if (!configurationSnapshot?.generation) throw new Error("请重新加载配置");
+    const elapsed = Math.max(0, Math.floor((Date.now() - configurationSnapshot.observedAt) / 1000));
+    const nonce = crypto.randomUUID().replaceAll("-", "");
+    return `cfg1:${configurationSnapshot.generation}:${configurationSnapshot.serverUnixSeconds + elapsed}:${nonce}`;
+  }
+  function projectSettingsInputs(snapshot) {
+    const getters = settingsInputGetters();
+    for (const [member, { field }] of configurationFields(snapshot.view)) {
+      if ([3, 102].includes(field.rule.id) || !field.rule.editable || field.visibility === 0 || !getters[member]) continue;
+      const ids = [];
+      getters[member](id => { ids.push(id); return $(id); });
+      const unique = [...new Set(ids)];
+      if (unique.length !== 1) continue; // Composite controls retain their existing renderer.
+      const input = $(unique[0]);
+      const value = Object.hasOwn(field, "nameRaw") ? field.nameRaw : field.value;
+      if (typeof value === "boolean") input.checked = value;
+      else if (typeof value === "string" || typeof value === "number") input.value = String(value);
+    }
+  }
+  function installSecretDeleteControls() {
+    if (!document.getElementById("configurationFindLast")) {
+      const find = document.createElement("button"); find.type = "button"; find.id = "configurationFindLast";
+      find.textContent = "查询最近保存结果";
+      find.addEventListener("click", async () => {
+        const keys = configurationPending ? [configurationPending.mainKey, configurationPending.key].filter(Boolean)
+          : configurationHistory.map(value => value.key);
+        try {
+          for (const key of [...new Set(keys)]) {
+            const found = await api("/api/settings?configuration=find", { method: "POST", body: JSON.stringify({ key }) });
+            rememberConfigurationFact(key, found); toast(`保存状态：${found.configurationResult.code}；动作状态：${(found.legacyActionResults || []).map(action => action.state).join(",") || "无"}`);
+          }
+        } catch { toast("结果仍未知，保留原 key，不会重复应用"); }
+      });
+      $("setFeishuVerificationToken")?.insertAdjacentElement("afterend", find);
+    }
+    configurationSecretControls.forEach((id, slot) => {
+      const input = $(id);
+      if (!input || document.getElementById(`${id}Delete`)) return;
+      const button = document.createElement("button");
+      button.type = "button"; button.id = `${id}Delete`; button.textContent = "删除已存密钥";
+      button.addEventListener("click", () => {
+        if (!confirm("明确删除此密钥？环境变量回退与需重启状态会单独显示。")) return;
+        configurationSecretRevision[slot]++;
+        configurationSecretDeletes.add(slot); input.value = ""; markSettingsDirty();
+      });
+      input.addEventListener("input", () => {
+        configurationSecretRevision[slot]++;
+        if (input.value) configurationSecretDeletes.delete(slot);
+      });
+      input.insertAdjacentElement("afterend", button);
+    });
+  }
+  async function renderTypedPlatformPolicies(snapshot) {
+    const { snapshots, statusUnavailable } = await fetchPlatformPolicyStatus();
+    const host = $("platformPolicyRows"); host.replaceChildren();
+    const rows = snapshot.view?.platform?.platformPolicies?.value;
+    if (!Array.isArray(rows)) throw new Error("平台策略不可编辑");
+    const rule = (field, inherit) => field.userMode === 2 ? cloneConfiguration(field.value) : cloneConfiguration(inherit);
+    for (const entry of rows) {
+      const row = document.createElement("section"); row.className = "platform-policy-row";
+      row.configurationTarget = cloneConfiguration(entry.target);
+      row.configurationValue = { enabled: rule(entry.enabled, 0), chatEnabled: rule(entry.chatEnabled, 0),
+        groupWhitelist: rule(entry.groupWhitelist, { kind: 0 }), privateWhitelist: rule(entry.privateWhitelist, { kind: 0 }),
+        allowedActions: rule(entry.allowedActions, { kind: 0, actions: [] }), features: rule(entry.features, []) };
+      row.configurationOriginal = cloneConfiguration(row.configurationValue);
+      const title = document.createElement("div");
+      const target = entry.target.kind === "instance" ? entry.target.key : entry.target;
+      title.textContent = `${target.platformId} · ${target.accountScope}${entry.target.kind === "instance" ? " · 实例" : " · 账户默认"}`;
+      title.className = "platform-policy-title";
+      const matches = snapshots.filter(item => item?.platformId === target.platformId && item.accountScope === target.accountScope
+        && (entry.target.kind !== "instance" || item.instanceId === target.instanceId));
+      const keys = new Set(matches.map(item => JSON.stringify([item.platformId, item.accountScope, item.instanceId])));
+      const ambiguous = keys.size !== matches.length;
+      const stateText = document.createElement("span"); stateText.className = "platform-policy-state";
+      stateText.textContent = platformPolicyStateText(entry.enabled.value === 1, entry.chatEnabled.value === 1,
+        ambiguous ? [] : matches, statusUnavailable || ambiguous);
+      title.append(stateText);
+      row.append(title);
+      for (const member of ["enabled", "chatEnabled"]) {
+        const label = document.createElement("label"); label.textContent = member === "enabled" ? "启用" : "聊天";
+        const select = document.createElement("select");
+        ["继承", "开启", "关闭"].forEach((text, value) => select.add(new Option(text, String(value))));
+        select.value = String(row.configurationValue[member]);
+        select.addEventListener("change", () => { row.configurationValue[member] = Number(select.value); markSettingsDirty(); });
+        label.append(select); row.append(label);
+      }
+      for (const member of ["groupWhitelist", "privateWhitelist"]) {
+        const label = document.createElement("label"); label.textContent = member === "groupWhitelist" ? "群/频道名单" : "私聊名单";
+        const select = document.createElement("select");
+        ["继承", "显式名单（空即拒绝）", "全部允许（不绕过开关）"].forEach((text, value) => select.add(new Option(text, String(value))));
+        const input = document.createElement("input"); input.type = "text"; input.maxLength = 4096;
+        select.value = String(row.configurationValue[member].kind);
+        input.value = row.configurationValue[member].value || "";
+        const update = () => { row.configurationValue[member] = Number(select.value) === 1
+          ? { kind: 1, value: input.value } : { kind: Number(select.value) }; input.disabled = select.value !== "1"; markSettingsDirty(); };
+        input.disabled = select.value !== "1";
+        select.addEventListener("change", update); input.addEventListener("input", update);
+        label.append(select, input); row.append(label);
+      }
+      // Preserve all untouched action/feature rules. Editing a target replaces its complete six-field configuration.
+      const actions = document.createElement("input"); actions.type = "text";
+      actions.value = row.configurationValue.allowedActions.actions.join(",");
+      const inheritActions = document.createElement("input"); inheritActions.type = "checkbox";
+      inheritActions.checked = row.configurationValue.allowedActions.kind === 0;
+      const actionsLabel = document.createElement("label"); actionsLabel.textContent = "动作继承 / 精确动作ID";
+      const updateActions = () => { row.configurationValue.allowedActions = { kind: inheritActions.checked ? 0 : 1,
+        actions: inheritActions.checked ? [] : actions.value.split(/[,\s]+/).filter(Boolean) }; markSettingsDirty(); };
+      actions.addEventListener("input", updateActions); inheritActions.addEventListener("change", updateActions);
+      actionsLabel.append(inheritActions, actions); row.append(actionsLabel);
+      for (const [feature, text] of ["文本", "图片", "语音", "引用", "撤回", "线程", "表情", "音乐", "戳一戳", "链接", "搜索"].entries()) {
+        const label = document.createElement("label"); label.textContent = text;
+        const select = document.createElement("select");
+        ["继承", "允许", "禁止"].forEach((name, value) => select.add(new Option(name, String(value))));
+        const configured = row.configurationValue.features.find(value => value.feature === feature);
+        select.value = configured ? configured.enabled ? "1" : "2" : "0";
+        select.addEventListener("change", () => {
+          row.configurationValue.features = row.configurationValue.features.filter(value => value.feature !== feature);
+          if (select.value !== "0") row.configurationValue.features.push({ feature, enabled: select.value === "1" });
+          row.configurationValue.features.sort((left, right) => left.feature - right.feature); markSettingsDirty();
+        });
+        label.append(select); row.append(label);
+      }
+      host.append(row);
+    }
+    $("platformPolicyEmpty").hidden = rows.length > 0;
+  }
+  function collectDirtyPlatformPolicies() {
+    return [...$("platformPolicyRows").querySelectorAll(".platform-policy-row")]
+      .filter(row => row.configurationTarget && !sameConfiguration(row.configurationValue, row.configurationOriginal))
+      .map(row => ({ target: row.configurationTarget, configuration: cloneConfiguration(row.configurationValue) }));
+  }
+  function buildStrictConfiguration(values) {
+    const changes = {};
+    for (const [member, { partition, field }] of configurationFields(configurationSnapshot.view)) {
+      if ([3, 102].includes(field.rule.id) || !Object.hasOwn(values, member) || !field.rule.editable || field.visibility === 0) continue;
+      const value = values[member];
+      if (sameConfiguration(value, configurationBaseline[member])) continue;
+      if (typeof value === "number" && !Number.isFinite(value)) throw new Error("数值不能为空或非法");
+      const edit = ["model", "modelBaseUrl"].includes(member) && value === "" ? { kind: 2 } : { kind: 1, value };
+      if (edit.kind === 2 && !field.rule.canClear) throw new Error("此字段不允许清空");
+      (changes[partition] ||= {})[member] = edit;
+    }    const policies = collectDirtyPlatformPolicies();
+    if (policies.length) changes.registered = { plugins: [], providers: [], policies };
+    const secrets = [];
+    configurationSecretControls.forEach((id, slot) => {
+      const value = $(id)?.value || "";
+      const deleted = configurationSecretDeletes.has(slot) || slot === 0 && pendingApiKeyClear || slot === 1 && pendingAgentServerKeyClear;
+      if (value.trim()) secrets.push({ slot, kind: 1, value });
+      else if (deleted) secrets.push({ slot, kind: 2 });
+    });
+    return { contractRevision: configurationSnapshot.contractRevision, expectedVersion: configurationSnapshot.version,
+      key: configurationKey(), changes, secrets };
+  }
+  function acknowledgeConfigurationSecrets(pending, result) {
+    if (pending.secretsAcknowledged || !result?.receipt
+        || !(result.receipt.commitState === 1 || result.receipt.decision === 1 && result.receipt.commitState === 0)) return;
+    const sent = JSON.parse(pending.mainFrozen).secrets;
+    for (const edit of sent) {
+      const slot = edit.slot, input = $(configurationSecretControls[slot]);
+      if (!input || configurationSecretRevision[slot] !== pending.secretRevision[slot]) continue;
+      if (edit.kind === 1 && input.value !== edit.value || edit.kind === 2 && input.value !== "") continue;
+      if (edit.kind === 1) input.value = "";
+      configurationSecretDeletes.delete(slot);
+      if (slot === 0) pendingApiKeyClear = false;
+      if (slot === 1) pendingAgentServerKeyClear = false;
+    }
+    pending.secretsAcknowledged = true;
+  }
+  function knownConfigurationSuccess(result) {
+    return [0, 13].includes(result?.code) && result.receipt && [0, 1].includes(result.receipt.commitState);
+  }
+  async function recoverConfigurationRequest(pending) {
+    let found;
+    try { found = await api("/api/settings?configuration=find", { method: "POST", body: JSON.stringify({ key: pending.key }) }); }
+    catch (error) {
+      if (error.status !== 404 || error.data?.configurationResult?.code !== 14
+          || !confirm("原 key 尚无回执。是否使用原 key 和完全相同的内存请求再次发送？")) throw new Error("状态尚未确定；保留原请求，不生成新 key");
+      const path = pending.operation === "legacy" ? "/api/settings" : "/api/settings?configuration=save";
+      const reply = await api(path, { method: "POST", body: pending.frozen,
+        headers: pending.operation === "legacy" ? { "X-BotAgent-Configuration-Key": pending.key } : {} });
+      found = pending.operation === "legacy" ? reply : { configurationResult: reply, legacyActionResults: [] };
+    }
+    if (!found.configurationResult?.receipt) throw new Error("状态尚未确定；保留原请求，不生成新 key");
+    pending.result = { ...found.configurationResult, replayed: true };
+    if (pending.operation !== "legacy") pending.mainResult = pending.result;
+    acknowledgeConfigurationSecrets(pending, pending.mainResult);
+    rememberConfigurationFact(pending.key, found);
+    return pending.result;
+  }
+  async function saveSettings() {
+    if (!state.settingsLoaded || !configurationSnapshot || !configurationBaseline) { toast("请先完整加载设置"); return; }
+    const buttons = [...document.querySelectorAll(".card-save-btn")];
+    buttons.forEach(button => { button.disabled = true; button.textContent = "保存中…"; });
     const seqAtSend = settingsEditSeq;
     try {
-      const data = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
-      state.aiMode = data.runtime.aiModeEnabled;
-      renderAiMode();
-      // 设备表按服务器实际状态重画：改完目录/模型后，那行"目录 …"提示与输入框都跟着新值走。
-      // 单独兜住：刷新失败不影响"保存成功"这个事实（否则会把刷新的锅扣在保存上）。
-      // 但请求期间用户又改了东西时**不能**刷：那等于用旧结果盖掉他刚敲的字。
-      const lateEdits = settingsEditSeq !== seqAtSend;
-      if (!lateEdits) {
-        try {
-          if (afterSettingsSaved) await afterSettingsSaved();
-        } catch (e) {
-          console.warn("保存后刷新设备表失败：", e);
-        }
+      if (configurationPending) {
+        await recoverConfigurationRequest(configurationPending);
+        configurationPending = null;
+        toast("已找回原请求结果；不会自动补执行心情，请核对两个操作并重新确认未保存的编辑"); return;
       }
-      const bar = $("saveBar");
-      bar.hidden = false;
-      $("saveBarText").textContent = "设置已保存并按对应设置生效" +
-        (deviceTableSkippedHere ? "；设备表这次没加载成功，设备相关改动**没有**保存 —— 点「刷新设备」后再保存一次" : "") +
-        (lateEdits ? "；保存期间你又有新的修改，那些还没保存" : "");
-      // 密钥保存/清除后清空输入框（不回显），并把"待清除"标记归位
-      $("setApiKey").value = "";
-      pendingApiKeyClear = false;
-      $("setAgentServerKey").value = "";
-      pendingAgentServerKeyClear = false;
-      // 保存期间还有新编辑 → 未保存标记要留着（清掉就等于告诉他"已经存下了"）
-      if (!lateEdits) clearSettingsDirty();
-      clearTimeout(bar._t);
-      bar._t = setTimeout(() => { bar.hidden = true; }, 4000);
-    } catch (err) {
-      toast("保存失败：" + err.message);
-    } finally {
-      activeSaveBtns.forEach(b => { b.disabled = false; b.textContent = "保存"; });
-    }
+      const values = collectSettingsInputs(true);
+      const payload = buildStrictConfiguration(values);
+      const frozen = JSON.stringify(payload);
+      const pending = { key: payload.key, mainKey: payload.key, operation: "save", frozen, mainFrozen: frozen,
+        secretRevision: [...configurationSecretRevision], secretsAcknowledged: false, mainResult: null, mood: values.mood,
+        moodDirty: !sameConfiguration(values.mood, configurationBaseline.mood), result: null };
+      configurationPending = pending;
+      let result;
+      try { result = await api("/api/settings?configuration=save", { method: "POST", body: pending.frozen }); }
+      catch (error) {
+        if (error.data?.receipt && [0, 1].includes(error.data.receipt.commitState)) {
+          pending.result = error.data; pending.mainResult = error.data;
+          acknowledgeConfigurationSecrets(pending, error.data);
+          toast("保存结果已返回，配置提交和应用状态请分别核对"); return;
+        }
+        if (error.status && error.status < 500) configurationPending = null;
+        throw new Error(error.status ? `配置拒绝（HTTP ${error.status}），请重新加载` : "结果未知；下次保存先查询原 key");
+      }
+      pending.result = result; pending.mainResult = result;
+      acknowledgeConfigurationSecrets(pending, result);
+      rememberConfigurationFact(payload.key, result);
+      if (!knownConfigurationSuccess(result)) throw new Error("结果未知；保留原 key 查询");
+      const publicationKnown = result.code === 13 || result.receipt.steps.some(step => step.step === 0 && step.state === 1);
+      if (pending.moodDirty && !result.replayed && publicationKnown) {
+        pending.key = configurationKey(); pending.operation = "legacy"; pending.frozen = JSON.stringify({ mood: pending.mood });
+        try {
+          const action = await api("/api/settings", { method: "POST", headers: { "X-BotAgent-Configuration-Key": pending.key }, body: pending.frozen });
+          rememberConfigurationFact(pending.key, action);
+          if (!action.legacyActionResults?.every(value => value.state === 1)) throw new Error("心情动作未确认应用");
+        } catch { throw new Error("配置结果已知，独立心情动作状态待查询；不生成新 key 重试"); }
+      }
+      configurationPending = null;
+      toast(result.receipt.applyState === 3 ? "配置已保存；部分设置需重启" : "配置已保存；请核对应用状态");
+      if (settingsEditSeq === seqAtSend) await loadSettings();
+      else toast("保存期间的新编辑尚未保存，请保留草稿");
+    } catch (error) { toast(error.message); }
+    finally { buttons.forEach(button => { button.disabled = false; button.textContent = "保存"; }); }
   }
 
   /* ─────────── 日志 ─────────── */
@@ -2899,27 +3004,16 @@ function renderChannelStatus(channels) {
   function agentTargetReady(target) {
     const status = state.agent.status;
     if (!status) return false;
-    if (target === "server") return status.enabled === true && status.serverAgent === true;
-    return status.enabled === true && status.connected === true;
+    return status.enabled === true && status.serverAgent === true;
   }
 
   function agentModelKey(target) {
-    return target === "server" ? "server" : "host";
+    return "server";
   }
 
   function agentStatusModel(target) {
     const status = state.agent.status || {};
-    return target === "server" ? (status.serverModel || "") : (status.agentModel || "");
-  }
-
-  function ensureAgentTargetOption(target) {
-    if (!target) return;
-    const select = $("agentDefaultTarget");
-    if (!select || (select.options && Array.from(select.options).some((option) => option.value === target))) return;
-    const option = document.createElement("option");
-    option.value = target;
-    option.textContent = target;
-    select.appendChild(option);
+    return status.serverModel || "";
   }
 
   function renderAgentModelOptions(target) {
@@ -3000,19 +3094,14 @@ function renderChannelStatus(channels) {
   function renderAgentConfig() {
     const status = state.agent.status || {};
     const approvals = state.agent.approvals || {};
-    const defaultTarget = String(status.target || "auto").trim() || "auto";
-    const defaultSelect = $("agentDefaultTarget");
-    const modelTarget = $("agentWorkbenchTarget").value || "server";
-    const modelKey = agentModelKey(modelTarget);
+    const modelTarget = "server";
+    const modelKey = "server";
 
-    ensureAgentTargetOption(defaultTarget);
     if (!state.agent.configDirty) {
-      defaultSelect.value = defaultTarget;
-      $("agentExternalWorkdir").value = status.globalWorkdir || "";
+      $("agentDefaultTarget").value = "server";
       $("agentServerWorkdir").value = status.serverWorkdir || "";
       $("agentApprovalsToggle").checked = approvals.enabled === true;
       state.agent.draftModels.server = status.serverModel || "";
-      state.agent.draftModels.host = status.agentModel || "";
     }
 
     renderAgentModelOptions(modelTarget);
@@ -3066,10 +3155,7 @@ function renderChannelStatus(channels) {
     state.agent.draftModels[agentModelKey(modelTarget)] = $("agentModelSelect").value.trim();
     const tools = selectedAgentTools();
     const payload = {
-      agentTarget: $("agentDefaultTarget").value || "auto",
-      agentModel: state.agent.draftModels.host || "",
       agentServerModel: state.agent.draftModels.server || "",
-      agentWorkDir: $("agentExternalWorkdir").value.trim(),
       agentServerWorkDir: $("agentServerWorkdir").value.trim(),
       enableApprovals: $("agentApprovalsToggle").checked,
       agentServerKeepContext: $("agentContextToggle").checked,
@@ -3979,7 +4065,6 @@ function renderChannelStatus(channels) {
       markAgentConfigDirty();
     });
     $("agentReasoningSelect").addEventListener("change", markAgentConfigDirty);
-    $("agentExternalWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentServerWorkdir").addEventListener("input", markAgentConfigDirty);
     $("agentApprovalsToggle").addEventListener("change", markAgentConfigDirty);
     $("agentContextToggle").addEventListener("change", markAgentConfigDirty);
@@ -4055,7 +4140,7 @@ function renderChannelStatus(channels) {
       });
     }
     for (const id of [
-      "setBaseUrl", "setModel", "setAgentServerBaseUrl", "setAgentServerModel", "setAgentModel"
+      "setBaseUrl", "setModel", "setAgentServerBaseUrl", "setAgentServerModel"
     ]) {
       const field = $(id);
       if (field) {
@@ -4231,6 +4316,7 @@ function renderChannelStatus(channels) {
     $("clearApiKey").addEventListener("click", () => {
       if (!state.settingsLoaded) { toast("设置还没加载成功，请刷新页面后重试"); return; }
       pendingApiKeyClear = true;
+      configurationSecretRevision[0]++;
       $("setApiKey").value = "";
       $("apiKeySrc").textContent = "待清除（点保存后生效）";
       markSettingsDirty();
@@ -4241,6 +4327,7 @@ function renderChannelStatus(channels) {
     $("clearAgentServerKey").addEventListener("click", () => {
       if (!state.settingsLoaded) { toast("设置还没加载成功，请刷新页面后重试"); return; }
       pendingAgentServerKeyClear = true;
+      configurationSecretRevision[1]++;
       $("setAgentServerKey").value = "";
       $("agentServerKeySrc").textContent = "待清除（点保存后生效）";
       markSettingsDirty();
@@ -4619,227 +4706,6 @@ function renderChannelStatus(channels) {
       }
     });
 
-    /* 刷新外部设备（pi）的模型列表 */
-    $("agentHostModelsGo").addEventListener("click", async () => {
-      const out = $("agentOut");
-      out.textContent = "正在问外部设备有哪些模型…";
-      try {
-        const r = await api("/api/agent/models?target=host");
-        const models = r.models || [];
-        fillSelect($("setAgentModel"), models, $("setAgentModel").value, "（用 pi 自己的默认）");
-        out.textContent = models.length > 0
-          ? `设备上的模型（${models.length} 个）：${models.join("、")}`
-          : (r.note || "设备没上报模型列表");
-      } catch (e) {
-        out.textContent = "拉取失败：" + e.message;
-      }
-    });
-
-    /* ─────────── 外部设备：一键连接 + 每设备配置 ─────────── */
-
-    // 设备表内存副本（声明在外层作用域：saveSettings 保存时要读它）
-
-    function renderAgentDevices() {
-      const box = $("agentDeviceTable");
-      if (agentDevices.length === 0) {
-        box.innerHTML = '<div style="padding:6px 0">还没有外部设备。点「一键连接本机…」按提示接入。</div>';
-        return;
-      }
-
-      box.innerHTML = agentDevices.map((d, i) => {
-        const online = d.online ? "在线" : "离线";
-        const name = escapeHtml(d.name);
-        const hint = d.online
-          ? ""
-          : `<div class="hint" style="margin-top:4px">还没接上来：点「一键连接本机…」把「${name}」这个名字填进去，脚本会在本机报同一个名字；名字不一致会在表里多出一行，把这一行删掉即可。</div>`;
-
-        // 配的模型设备上没有 → 直接标出来（这种错只能靠“填了就能看出不对”来防）
-        const models = d.models || [];
-        const badModel = d.model && models.length > 0 && !models.includes(d.model);
-        const badHint = badModel
-          ? `<div class="hint" style="margin-top:4px;color:#c62828">「${escapeHtml(d.model)}」这台设备上没有 —— pi 只认 <code>provider/model</code>（比如 <code>localhost/xxx</code>），不是聊天网关那个模型名；请从下面下拉里重选，或者留空用 pi 默认。</div>`
-          : "";
-        const modelOptions = models.map((m) =>
-          `<option value="${escapeHtml(m)}"${m === d.model ? " selected" : ""}>${escapeHtml(m)}</option>`).join("");
-        // 这一行显示的是**生效的**工作目录，并标出它从哪来：
-        //   设备专属（面板里给这台设备填的）→ 全局默认（面板里那个「工作目录」）→ 桥自报（仅兵底）
-        // 以前只写个目录名，看上去像“设备专属”，其实可能是全局值，改全局时让人以为没生效。
-        const devDir = d.workdir || "";
-        const gDir = agentGlobalWorkdir || "";
-        const effDir = devDir || gDir || d.cwd || "";
-        const dirFrom = devDir ? "设备专属" : (gDir ? "全局默认" : "桥自报");
-        const dirExtra = devDir && gDir && devDir !== gDir ? ` · 全局默认是 ${escapeHtml(gDir)}` : "";
-        const dirHint = effDir ? ` · 目录 ${escapeHtml(effDir)}（${dirFrom}）${dirExtra}` : "";
-        // 下面这些值（设备名/模型/目录/工具白名单）全部来自配置与桥上报，一律转义后再拼
-        return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <b>${name}</b>
-            <span class="hint">${online}${d.pi ? ` · pi ${escapeHtml(d.pi)}` : ""}${dirHint}</span>
-            <label class="switch-row" style="padding:0"><input type="checkbox" data-dev-enable="${i}"${d.enable ? " checked" : ""} /><span class="switch"></span><span class="hint">启用</span></label>
-            <button class="ghost-btn" data-dev-toggle="${i}">${d.online ? "断开" : "重连"}</button>
-            <button class="ghost-btn" data-dev-del="${i}">删除</button>
-          </div>
-          ${hint}
-          ${badHint}
-          <div class="grid-2" style="margin-top:6px">
-            <div class="field"><label class="hint">模型</label>
-              <select data-dev-model="${i}">
-                <option value="">（用 pi 默认）</option>${modelOptions}
-                ${d.model && !(d.models || []).includes(d.model) ? `<option value="${escapeHtml(d.model)}" selected>${escapeHtml(d.model)}</option>` : ""}
-              </select>
-            </div>
-            <div class="field"><label class="hint">工作目录</label>
-              <input type="text" data-dev-workdir="${i}" value="${escapeHtml(d.workdir || "")}" placeholder="留空 = 用全局默认${agentGlobalWorkdir ? `（${escapeHtml(agentGlobalWorkdir)}）` : "目录"}" />
-            </div>
-          </div>
-          <div class="grid-2">
-            <div class="field"><label class="hint">工具白名单（空=全开）</label>
-              <input type="text" data-dev-tools="${i}" value="${escapeHtml(d.tools || "")}" placeholder="bash,read,fetch" />
-            </div>
-            <div class="field"><label class="hint">超时（秒，0=用全局）</label>
-              <input type="number" data-dev-timeout="${i}" value="${d.timeoutSec || 0}" min="0" max="7200" step="30" />
-            </div>
-          </div>
-          ${badHint}
-        </div>`;
-      }).join("");
-
-      box.querySelectorAll("[data-dev-model]").forEach((el) => el.addEventListener("change", () => {
-        agentDevices[Number(el.dataset.devModel)].model = el.value;
-        agentDevicesEdited = true;
-        markSettingsDirty();
-      }));
-      box.querySelectorAll("[data-dev-workdir]").forEach((el) => el.addEventListener("input", () => {
-        agentDevices[Number(el.dataset.devWorkdir)].workdir = el.value.trim();
-        agentDevicesEdited = true;
-        markSettingsDirty();
-      }));
-      box.querySelectorAll("[data-dev-tools]").forEach((el) => el.addEventListener("input", () => {
-        agentDevices[Number(el.dataset.devTools)].tools = el.value.trim();
-        agentDevicesEdited = true;
-        markSettingsDirty();
-      }));
-      box.querySelectorAll("[data-dev-timeout]").forEach((el) => el.addEventListener("input", () => {
-        agentDevices[Number(el.dataset.devTimeout)].timeoutSec = Number(el.value) || 0;
-        agentDevicesEdited = true;
-        markSettingsDirty();
-      }));
-      box.querySelectorAll("[data-dev-enable]").forEach((el) => el.addEventListener("change", () => {
-        agentDevices[Number(el.dataset.devEnable)].enable = el.checked;
-        agentDevicesEdited = true;
-        markSettingsDirty();
-      }));
-      box.querySelectorAll("[data-dev-del]").forEach((el) => el.addEventListener("click", () => {
-        agentDevices.splice(Number(el.dataset.devDel), 1);
-        agentDevicesEdited = true;
-        renderAgentDevices();
-        markSettingsDirty();
-      }));
-      box.querySelectorAll("[data-dev-toggle]").forEach((el) => el.addEventListener("click", async () => {
-        const d = agentDevices[Number(el.dataset.devToggle)];
-        if (d.online) {
-          await api("/api/agent/disconnect", { method: "POST", body: JSON.stringify({ device: d.name }) });
-          toast(`已断开 ${d.name}（本机那边会自动重连）`);
-        } else {
-          toast(`离线设备要接上来：点「一键连接本机…」，把名字填成 ${d.name}，在本机跑一次那个脚本`);
-        }
-        await refreshAgentDevicesFull();
-      }));
-    }
-
-    async function refreshAgentDevicesFull() {
-      const out = $("agentOut");
-      try {
-        const r = await loadAgentDevices();      // 顶层：草稿 + 已保存快照 + 重画
-        fillSelect($("setAgentModel"), r.deviceModels || [], $("setAgentModel").value, "（用 pi 自己的默认）");
-        return r;
-      } catch (e) {
-        out.textContent = "刷新设备失败：" + e.message;
-        return null;
-      }
-    }
-
-    // 注册给 saveSettings()：保存成功后刷新设备表（跨作用域只能这样搭桥，不能直接调用）
-    afterSettingsSaved = refreshAgentDevicesFull;
-    // 顶层 loadAgentDevices() / resetAgentDeviceDraft() 拿不到 bindUi() 里的渲染函数，注册给它
-    renderAgentDeviceList = (r) => {
-      renderAgentDevices();
-      if (r) refreshAgentDevices(r.devices || []);
-    };
-
-    $("agentDeviceAdd").addEventListener("click", () => {
-      const name = prompt("设备名（本机桥握手时上报的 host 名，例如 ZHAOSPC；现在也可以随便写，接上来就会匹配）：");
-      if (!name) return;
-      agentDevices.push({ name: name.trim(), online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] });
-      agentDevicesEdited = true;
-      renderAgentDevices();
-      markSettingsDirty();
-    });
-
-    $("agentDeviceRefresh").addEventListener("click", async () => {
-      await refreshAgentDevicesFull();
-      toast("设备状态已刷新");
-    });
-
-    /* 一键连接：先问一个设备名（名字要跟本机报上来的一致），再生成带名/带地址/带令牌的脚本 */
-    $("agentConnectGo").addEventListener("click", async () => {
-      const out = $("agentConnectOut");
-      out.style.display = "";
-
-      const suggest = (agentDevices[0] && agentDevices[0].name) || "";
-      const name = (prompt(
-        "给这台机器起个设备名（面板里按这个名字认设备；本机桥默认报的是主机名，比如 Windows 的 COMPUTERNAME）。\n" +
-        "留空 = 用本机主机名。", suggest) || "").trim();
-
-      try {
-        await saveSettings();   // 保证服务端用最新的设备配置
-      } catch (e) {
-        out.textContent = "保存设置失败：" + e.message;
-        return;
-      }
-
-      // 面板里还没这行设备就先加上（这样接上来就能直接看到并配模型）
-      if (name && !agentDevices.some((d) => (d.name || "").toLowerCase() === name.toLowerCase())) {
-        agentDevices.push({ name, online: false, enable: true, model: "", workdir: "", tools: "", timeoutSec: 0, models: [] });
-        agentDevicesEdited = true;
-        renderAgentDevices();
-        await saveSettings();
-      }
-
-      const isWin = !/Mac|Linux|Android|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "");
-      const os = isWin ? "win" : "sh";
-      const url = withToken(`${apiBase()}/api/agent/setup?os=${os}&name=${encodeURIComponent(name)}`);
-      out.textContent = [
-        name ? `设备名：${name}（脚本里已经带上，本机跑完报上来的就是这个名字）` : `设备名：用本机主机名（脚本里没指定）`,
-        "",
-        "① 点下面按钮下载启动脚本（里面已经带好地址、令牌、设备名，不用手改）",
-        "② 把 pi-bridge.py 也放到本机同一目录（下面给链接）",
-        isWin ? "③ 双击运行 connect-pi-bridge.cmd（窗口别关）" : "③ 运行 sh connect-pi-bridge.sh（窗口别关）",
-        "④ 回来后点「我已运行，检测连接」，看到 在线 就是成了",
-        "",
-        "服务器文件：桥会额外把本机一个端口转发到服务器的 sshd（默认 2222），",
-        "agent 就能用 sftp/scp 直接读写服务器文件；批量操作可用 server-files.py（上面也能下载）。",
-        ""
-      ].join("\n");
-      out.insertAdjacentHTML("beforeend",
-        `<div class="sticker-actions">\n` +
-        `  <a class="ghost-btn" href="${url}" download>下载 ${isWin ? "connect-pi-bridge.cmd" : "connect-pi-bridge.sh"}</a>\n` +
-        `  <a class="ghost-btn" href="${withToken(`${apiBase()}/agent-bridge-script`)}" download="pi-bridge.py">下载 pi-bridge.py</a>\n` +
-        `  <a class="ghost-btn" href="${withToken(`${apiBase()}/agent-sftp-script`)}" download="server-files.py">下载 server-files.py</a>\n` +
-        `  <button class="ghost-btn js-agent-connect-check">我已运行，检测连接</button>\n` +
-        `</div>`);
-
-      // 注意：这个按钮是动态插进来的，用 class 而不是 id —— 面板探针会去 index.html 里核对
-      // “app.js 引用的 id 是否都存在”，动态节点的 id 会被判为不存在（踩过）。
-      out.querySelector(".js-agent-connect-check").addEventListener("click", async () => {
-        const r = await refreshAgentDevicesFull();
-        const list = (r && r.devices) || [];
-        out.textContent += list.length > 0
-          ? `\n✓ 已连上：${list.join("、")}（模型 ${(r.deviceModels || []).length} 个）`
-          : "\n…还没收到连接。确认脚本窗口还开着、令牌没改错。";
-      });
-    });
-
     /* ─────────── Agent 会话：总数/标题总览 + 新建/切换/改名/删除/清空 ───────────
        与群里 //sessions / //new / //use / //rename / //del / //reset 是同一套存储。 */
 
@@ -4952,42 +4818,6 @@ function renderChannelStatus(channels) {
     });
 
     $("agentSessionChat").addEventListener("change", refreshAgentSessions);
-
-    /* 从 pi 导入：把设备上已有的 pi 会话接过来当会话（管理员：外部 Agent 则获取 pi 里面的会话） */
-    $("agentSessionImport").addEventListener("click", async () => {
-      const key = $("agentSessionChat").value;
-      if (!key || key === "__all__") { toast("先在左边选一个具体的聊天，再导入"); return; }
-      const out = $("agentSessionTable");
-      out.innerHTML = '<div class="hint">正在问设备上有哪些 pi 会话…</div>';
-      try {
-        const r = await api("/api/agent/pi-sessions");
-        const list = r.sessions || [];
-        if (!r.connected) { out.innerHTML = '<div class="hint">外部设备不在线，列不出 pi 会话。</div>'; return; }
-        if (list.length === 0) { out.innerHTML = '<div class="hint">设备上没找到 pi 会话（~/.pi/agent/sessions/… 为空？）。</div>'; return; }
-
-        out.innerHTML = `<div class="hint" style="padding:4px 0">设备上的 pi 会话（${escapeHtml(list.length)} 个，最新的在前）——点「接用」把它变成这个聊天的一个会话：</div>` +
-          list.slice(0, 20).map((it) => {
-            const when = it.mtime ? new Date(it.mtime * 1000).toLocaleString() : "";
-            return `<div style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <b>${escapeHtml((it.title || "(无标题)").slice(0, 40))}</b>
-              <span class="hint">${escapeHtml(when)} · ${escapeHtml(it.cwd || "")} · ${escapeHtml((it.id || "").slice(0, 12))}…</span>
-              <button class="ghost-btn" data-pi-import="${escapeHtml(it.id || "")}">接用</button>
-            </div>`;
-          }).join("");
-
-        out.querySelectorAll("[data-pi-import]").forEach((el) => el.addEventListener("click", async () => {
-          const resp = await api("/api/agent/sessions", {
-            method: "POST",
-            body: JSON.stringify({ key, action: "import", piSession: el.dataset.piImport })
-          });
-          toast(resp.message || "已接用");
-          await refreshAgentSessions();
-        }));
-      } catch (e) {
-        out.innerHTML = '<div class="hint">拉取失败：' + escapeHtml(e.message) + '</div>';
-      }
-    });
-
     // ─────────── 本机 Agent（// 命令）───────────
     // 「恢复默认」：默认那份在服务端（AppSettings.DefaultAgentPrompt），前端不抄一份，免得两处漂移
     $("agentPromptReset").addEventListener("click", () => {
@@ -5000,7 +4830,7 @@ function renderChannelStatus(channels) {
       const key = $("agentSessionChat").value;
       if (!key || key === "__all__") { toast("先在左边选一个具体的聊天（群/好友），再新建会话"); return; }
       const name = prompt("新会话名字（可空 —— 空的话，跑完一轮会按内容自动总结标题）：", "") || "";
-      const backend = ($("setAgentTargetMode").value === "server" || !$("setEnableHostAgent").checked) ? "server" : "host";
+      const backend = "server";
       try {
         const r = await api("/api/agent/sessions", { method: "POST", body: JSON.stringify({ key, action: "new", name, backend }) });
         await refreshAgentSessions();
@@ -5015,39 +4845,25 @@ function renderChannelStatus(channels) {
       out.textContent = "查询中…";
       try {
         const r = await api("/api/agent/status");
-        refreshAgentDevices(r.devices || []);
-        fillSelect($("setAgentModel"), r.deviceModels || [], r.agentModel || "", "（用 pi 自己的默认）");
         refreshAgentSessions();
         out.textContent = [
-          `开关：总体${r.enabled ? "开" : "关"}｜外部设备 ${r.hostAgent === false ? "关" : "开"}｜服务器 ${r.serverAgent ? "开" : "关"}`,
+          `开关：总体${r.enabled ? "开" : "关"}｜服务器 ${r.serverAgent ? "开" : "关"}`,
           `前缀：${r.prefix}`,
           `可用 QQ：${r.allowedUsers || "（空 —— 谁都不能用）"}`,
-          `令牌：${r.tokenConfigured ? "已配置" : "没有配置（外部设备连不上）"}`,
-          `优先：${r.target}（auto = 外部在线优先）`,
-          `在线设备：${r.connected ? (r.devices || []).join("、") : "不在线"}`,
-          `当前：${r.summary}`
+          `模式：${r.mode || "server-only"}`,
+          `当前：${r.summary || "服务器内置 agent"}`
         ].join("\n");
       } catch (e) {
         out.textContent = "查询失败：" + e.message;
       }
     });
 
-    /* 设备下拉：在线设备自动出现；旧值（比如已下线的设备）保留一项，免得保存时被改掉 */
-    function refreshAgentDevices(devices) {
-      const sel = $("setAgentDevice");
-      const keep = sel.value;
-      const list = Array.from(new Set([...(devices || []), keep].filter(Boolean)));
-      sel.innerHTML = '<option value="">（不指定，跟着上面）</option>' +
-        list.map((d) => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("");
-      sel.value = list.includes(keep) ? keep : "";
-    }
-
     $("agentTestGo").addEventListener("click", async () => {
       const out = $("agentOut");
       const prompt = $("agentTestPrompt").value.trim();
       if (!prompt) { toast("先写一句要它干的活"); return; }
-      const target = $("agentTestTarget").value;
-      out.textContent = `已送到${target === "server" ? "服务器 agent" : "外部设备"}，正在跑…（长任务可能要几分钟，别关页面）`;
+      const target = "server";
+      out.textContent = "已送到服务器 agent，正在跑…（长任务可能要几分钟，别关页面）";
       try {
         await saveSettings();   // 先用当前设置，不然测的是旧配置
         const r = await api("/api/agent/test", {

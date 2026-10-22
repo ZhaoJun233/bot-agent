@@ -23,13 +23,13 @@
     <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
   </PropertyGroup>
 
-  <!-- Web 面板静态资源嵌入程序集（单文件发布，无需挂载 wwwroot） -->
+  <!--
+    Wave5：Web 静态资源不再嵌入程序集，改为随发布产物复制到 wwwroot/。
+    后端启动、API、健康检查、配置保存与 Agent 执行都不依赖这些文件；
+    资源缺失时只有旧页面 404。两个 agent 桥脚本仍按原方式嵌入。
+  -->
   <ItemGroup>
-    <EmbeddedResource Include="wwwroot/**" LogicalName="web/%(Filename)%(Extension)" />
-    <!-- 本机 agent 桥脚本：面板里「下载 pi-bridge.py」直接吐这个（源码只有 tools/ 一份） -->
-    <EmbeddedResource Include="../../tools/pi-bridge.py" LogicalName="tools/pi-bridge.py" />
-    <!-- 服务器文件操作脚本（sftp 包装）：面板里也可下载，给外部 pi agent 用 -->
-    <EmbeddedResource Include="../../tools/server-files.py" LogicalName="tools/server-files.py" />
+    <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--
@@ -51,6 +51,16 @@
         拖进镜像 —— 那个包在 Linux 上需要 libgdiplus，容器里没有，是运行时地雷。
       · 直接输出 SVG：矢量图在手机上看更锐利，体积也只有 PNG 的几十分之一。
   -->
+  <ItemGroup>
+    <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
+    <ProjectReference Include="..\BotAgent.Platforms\BotAgent.Platforms.csproj" />
+    <ProjectReference Include="..\BotAgent.Model\BotAgent.Model.csproj" />
+    <ProjectReference Include="..\BotAgent.Engine\BotAgent.Engine.csproj" />
+    <ProjectReference Include="..\BotAgent.Mcp\BotAgent.Mcp.csproj" />
+    <ProjectReference Include="..\BotAgent.Panel\BotAgent.Panel.csproj" />
+    <ProjectReference Include="..\BotAgent.Storage\BotAgent.Storage.csproj" Aliases="StorageModule" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
     <PackageReference Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />

@@ -57,6 +57,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板与协议端分开启动：只等 botWsPort 会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 联网搜索配置生效（开关 + 搜索源 + 结果数）",

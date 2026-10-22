@@ -1,6 +1,13 @@
 using System.Collections.Concurrent;
 using BotAgent.Services.OneBot;
 using BotAgent.Domain.Qq;
+using BotAgent.Platforms;
+using BotAgent.Domain.Configuration;
+using BotAgent.Domain.Messaging;
+using BotAgent.Domain.Platforms;
+using BotAgent.Domain.Ports;
+using BotAgent.Services.Platforms;
+using BotAgent.Domain.Conversation;
 
 namespace BotAgent.Services.Qq;
 
@@ -18,7 +25,7 @@ namespace BotAgent.Services.Qq;
 /// 事件方向则相反：入站消息会在 <see cref="QqChatMessage.Channel"/> 上打标，
 /// 上层用 <see cref="Channels.Key"/> 拼会话 key —— 会话隔离就是这么落地的。
 /// </summary>
-public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
+public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChannelRegistry, IPlatformSourceOwner, IPlatformSourceRouter, IDisposable
 {
     private readonly List<IQqChatSource> _sources;
     private readonly Action<string>? _log;
@@ -32,15 +39,37 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
 
     private readonly object _gate = new();
     private bool _disposed;
+    private readonly IPlatformRegistry? _platformRegistry;
+    private readonly PlatformDriverOperations? _drivers;
+    private readonly Func<IPlatformAdapter, bool>? _identityIsCurrent;
+    private Func<PlatformContext, bool, long, string, bool>? _outboundAllowed;
+    private readonly List<Action> _detachTrusted = new();
 
     public ChannelRouter(IEnumerable<IQqChatSource> sources, Action<string>? log = null)
+        : this(sources, log, null, null) { }
+
+    public ChannelRouter(IEnumerable<IQqChatSource> sources, IPlatformRegistry registry,
+        PlatformDriverOperations drivers, Action<string>? log = null, Func<IPlatformAdapter, bool>? identityIsCurrent = null)
+        : this(sources, log, registry, drivers, identityIsCurrent) { }
+
+    private ChannelRouter(IEnumerable<IQqChatSource> sources, Action<string>? log,
+        IPlatformRegistry? registry, PlatformDriverOperations? drivers, Func<IPlatformAdapter, bool>? identityIsCurrent = null)
     {
         _sources = [.. sources.Where(s => s is not null)];
         _log = log;
+        _platformRegistry = registry;
+        _drivers = drivers;
+        _identityIsCurrent = identityIsCurrent;
 
         foreach (var src in _sources)
         {
-            _byChannel[src.Channel] = src;
+            if (_sources.Count(candidate => string.Equals(candidate.Channel, src.Channel, StringComparison.OrdinalIgnoreCase)) == 1)
+                _byChannel[src.Channel] = src;
+            if (_platformRegistry is not null)
+            {
+                SubscribeTrusted(src);
+                continue;
+            }
             src.MessageReceived += OnMessage;
             src.Poked += OnPoked;
             src.MessageRecalled += OnRecall;
@@ -96,6 +125,132 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
     }
 
     // ---------- 入站：打上通道标签再往上走 ----------
+
+    private (IPlatformAdapter Adapter, PlatformDriverRegistration Driver)? Binding(IQqChatSource source)
+    {
+        var matches = _platformRegistry!.Adapters.Where(adapter => ReferenceEquals(adapter, source)
+            || adapter is IPlatformSourceBinding binding && ReferenceEquals(binding.Source, source)).Take(2).ToArray();
+        if (matches.Length != 1) return null;
+        var adapter = matches[0];
+        var context = adapter.Context;
+        var driver = _drivers!.TryGet(new(PlatformId.Normalize(context.PlatformId), context.AccountScope, context.InstanceId));
+        return driver is not null && ReferenceEquals(driver.Adapter, adapter) ? (adapter, driver) : null;
+    }
+
+    private PlatformSourceLease? Capture(IQqChatSource source, MessageRef? trigger = null)
+    {
+        var binding = Binding(source);
+        if (binding is not { } bound) return null;
+        var context = bound.Adapter.Context;
+        var lifetime = bound.Driver.Lifetime;
+        bool Current() => !_disposed && (_identityIsCurrent?.Invoke(bound.Adapter) ?? true) && bound.Driver.IsActive && !lifetime.IsCancellationRequested
+            && ReferenceEquals(_platformRegistry!.GetAdapter(context), bound.Adapter);
+        if (!Current()) return null;
+        return new(this, source, new(bound.Driver.Key, trigger), lifetime, Current);
+    }
+
+    PlatformSourceLease? IPlatformSourceRouter.CaptureForConversation(string sourceKey) => CaptureForConversation(sourceKey);
+
+    public PlatformSourceLease? CaptureForConversation(string sourceKey)
+    {
+        if (_platformRegistry is null || !ConversationIdCodec.TryParse(sourceKey, out var conversation)) return null;
+        var matches = _sources.Where(source => MatchesConversation(source, conversation)).Take(2).ToArray();
+        return matches.Length == 1 ? Capture(matches[0]) : null;
+    }
+
+    private bool MatchesConversation(IQqChatSource source, ConversationId conversation)
+    {
+        if (Binding(source) is not { } binding) return false;
+        var context = binding.Adapter.Context;
+        if (PlatformId.Normalize(context.PlatformId) != PlatformId.Normalize(conversation.PlatformId)) return false;
+        if (source is IFeishuTargetMap native && conversation.AccountScope == AccountScope.Legacy
+            && long.TryParse(conversation.NativeTargetId, out var alias))
+            return native.TryGetTargetConversation(conversation.Kind == ConversationKind.GroupChat, alias, out _);
+        return string.Equals(context.AccountScope, conversation.AccountScope, StringComparison.Ordinal);
+    }
+
+    string? IPlatformSourceOwner.ConversationKey(QqChatMessage message, Func<string, bool> exists)
+        => ConversationKey(message, exists);
+
+    public string? ConversationKey(QqChatMessage message, Func<string, bool> exists)
+    {
+        var lease = PlatformSourceExecution.Current;
+        if (lease is null || !ReferenceEquals(lease.Owner, this) || !lease.IsCurrent) return null;
+        var conversation = message.Envelope?.Message.Ref.Conversation ?? new ConversationId(
+            lease.Context.PlatformId, lease.Context.AccountScope,
+            message.IsGroup ? ConversationKind.GroupChat : ConversationKind.PrivateChat,
+            (message.IsGroup ? message.GroupId : message.UserId).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!MatchesConversation(lease.Source, conversation)) return null;
+        var key = ConversationIdCodec.Encode(conversation);
+        if (!ConversationIdCodec.TryParse(key, out _)) return null;
+        if (lease.Source is IFeishuTargetMap native && native.TryGetTargetAlias(conversation, out var alias))
+        {
+            var oldKey = Channels.Key(Channels.Feishu, message.IsGroup, alias);
+            if (exists(oldKey)) return exists(key) && key != oldKey ? null : oldKey;
+        }
+        return key;
+    }
+
+    public (bool IsGroup, long Id) CompatibilityTarget(string sourceKey)
+    {
+        if (!ConversationIdCodec.TryParse(sourceKey, out var conversation)) return (false, 0);
+        var lease = PlatformSourceExecution.Current;
+        if (lease is null || !ReferenceEquals(lease.Owner, this) || !MatchesConversation(lease.Source, conversation))
+            lease = CaptureForConversation(sourceKey);
+        if (lease is null || !lease.IsCurrent) return (false, 0);
+        var isGroup = conversation.Kind == ConversationKind.GroupChat;
+        if (lease.Source is IFeishuTargetMap native)
+        {
+            if (conversation.AccountScope == AccountScope.Legacy && long.TryParse(conversation.NativeTargetId, out var oldAlias)
+                && native.TryGetTargetConversation(isGroup, oldAlias, out _)) return (isGroup, oldAlias);
+            return native.TryGetTargetAlias(conversation, out var alias) ? (isGroup, alias) : (false, 0);
+        }
+        return long.TryParse(conversation.NativeTargetId, out var id) && id > 0 ? (isGroup, id) : (false, 0);
+    }
+
+    private void SubscribeTrusted(IQqChatSource source)
+    {
+        var bound = Binding(source) ?? throw new ArgumentException("source_adapter_binding_required");
+        if (bound.Adapter is not IPlatformInboundChatSource rich)
+            throw new ArgumentException("source_rich_binding_required");
+        void Message(QqChatMessage legacy, InboundMessage native)
+        {
+            PlatformSourceLease? lease;
+            PlatformInboundEnvelope envelope;
+            try
+            {
+                lease = Capture(source, native.Ref);
+                if (lease is null) return;
+                envelope = new(lease.Origin, native);
+            }
+            catch (ArgumentException) { _log?.Invoke("invalid_platform_envelope"); return; }
+            var channel = Channels.Declared(source.Channel);
+            if (string.IsNullOrEmpty(channel) || !lease.IsCurrent) return;
+            Learn(channel, legacy.IsGroup, legacy.IsGroup ? legacy.GroupId : legacy.UserId);
+            using var scope = PlatformSourceExecution.Enter(lease);
+            MessageReceived?.Invoke(legacy with { Channel = channel, Envelope = envelope, SourceLifetime = lease.Lifetime });
+        }
+        void Poke(QqPokeEvent value)
+        {
+            var lease = Capture(source);
+            if (lease is null) return;
+            using var scope = PlatformSourceExecution.Enter(lease);
+            Poked?.Invoke(value with { Channel = source.Channel, Origin = lease.Origin, SourceLifetime = lease.Lifetime });
+        }
+        void Recall(QqRecallEvent value)
+        {
+            var lease = Capture(source);
+            if (lease is null) return;
+            using var scope = PlatformSourceExecution.Enter(lease);
+            MessageRecalled?.Invoke(value with { Channel = source.Channel, Origin = lease.Origin, SourceLifetime = lease.Lifetime });
+        }
+        rich.RichInboundReceived += Message;
+        source.Poked += Poke;
+        source.MessageRecalled += Recall;
+        source.ConnectionChanged += OnConnection;
+        _detachTrusted.Add(() => { rich.RichInboundReceived -= Message; source.Poked -= Poke;
+            source.MessageRecalled -= Recall; source.ConnectionChanged -= OnConnection; });
+    }
 
     private void OnMessage(QqChatMessage msg)
     {
@@ -172,11 +327,26 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
                     : Channels.Private;
     }
 
-    private IQqChatSource? Resolve(bool isGroup, long id)
+    internal void BindOutboundAuthorization(Func<PlatformContext, bool, long, string, bool> authorize)
     {
+        if (_outboundAllowed is not null) throw new InvalidOperationException("platform_outbound_already_bound");
+        _outboundAllowed = authorize ?? throw new ArgumentNullException(nameof(authorize));
+    }
+
+    private IQqChatSource? Resolve(bool isGroup, long id, string feature = "text")
+    {
+        if (_disposed) return null;
+        if (PlatformSourceExecution.Current is { } lease)
+            return ReferenceEquals(lease.Owner, this) && lease.IsCurrent
+                && (_outboundAllowed?.Invoke(lease.Context, isGroup, id, feature) ?? true) ? lease.Source : null;
         var channel = ResolveChannel(isGroup, id);
         if (_byChannel.TryGetValue(channel, out var src))
         {
+            if (_platformRegistry is not null)
+            {
+                var autonomous = Capture(src);
+                if (autonomous is null || !(_outboundAllowed?.Invoke(autonomous.Context, isGroup, id, feature) ?? true)) return null;
+            }
             return src;
         }
 
@@ -192,36 +362,63 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
     // ---------- 出站：按目标号路由 ----------
 
     public Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
-        => Resolve(isGroup, targetId)?.SendMusicAsync(isGroup, targetId, platform, songId, title, ct) ?? UnsupportedBoolAsync();
+        => Resolve(isGroup, targetId, "music")?.SendMusicAsync(isGroup, targetId, platform, songId, title, ct) ?? UnsupportedBoolAsync();
 
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
         => Resolve(isGroup, targetId)?.SendTextAsync(isGroup, targetId, text, ct, replyToMessageId, directAddress) ?? UnsupportedSendAsync();
 
     public Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default)
-        => Resolve(false, messageId)?.GetMessageInfoAsync(messageId, ct) ?? UnsupportedMessageAsync();
+        => ResolveRead("quote", messageId)?.GetMessageInfoAsync(messageId, ct) ?? UnsupportedMessageAsync();
 
     public Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
-        => Resolve(isGroup, targetId)?.SendVoiceAsync(isGroup, targetId, audioUrl, ct) ?? UnsupportedBoolAsync();
+        => Resolve(isGroup, targetId, "voice")?.SendVoiceAsync(isGroup, targetId, audioUrl, ct) ?? UnsupportedBoolAsync();
 
     public Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
-        => Resolve(isGroup, targetId)?.SendImageAsync(isGroup, targetId, data, ct, replyToMessageId) ?? UnsupportedBoolAsync();
+        => Resolve(isGroup, targetId, "image")?.SendImageAsync(isGroup, targetId, data, ct, replyToMessageId) ?? UnsupportedBoolAsync();
 
     public Task<bool> SendPokeAsync(bool isGroup, long targetId, long userId, CancellationToken ct = default)
-        => Resolve(isGroup, targetId)?.SendPokeAsync(isGroup, targetId, userId, ct) ?? UnsupportedBoolAsync();
+        => Resolve(isGroup, targetId, "poke")?.SendPokeAsync(isGroup, targetId, userId, ct) ?? UnsupportedBoolAsync();
 
     public Task<string?> GetGroupNameAsync(long groupId, CancellationToken ct = default)
         => Resolve(true, groupId)?.GetGroupNameAsync(groupId, ct) ?? Task.FromResult<string?>(null);
+
+    /// <summary>群历史补录也按目标号路由；通道不支持该能力时返回空表（上层据此跳过补录）。</summary>
+    public Task<List<QqChatMessage>> GetGroupMsgHistoryAsync(long groupId, int count = 20, CancellationToken ct = default)
+        => Resolve(true, groupId) is IPlatformHistorySource source
+            ? source.GetGroupMsgHistoryAsync(groupId, count, ct)
+            : Task.FromResult(new List<QqChatMessage>());
 
     public Task<GroupMemberInfo?> GetGroupMemberInfoAsync(long groupId, long userId, CancellationToken ct = default)
         => Resolve(true, groupId)?.GetGroupMemberInfoAsync(groupId, userId, ct) ?? Task.FromResult<GroupMemberInfo?>(null);
 
     public Task<List<string>> FetchCustomFacesAsync(int count = 48, CancellationToken ct = default)
-        => _byChannel.TryGetValue(Channels.Private, out var priv)
-            ? priv.FetchCustomFacesAsync(count, ct)
-            : Task.FromResult(new List<string>());
+    {
+        if (_platformRegistry is null)
+            return _byChannel.TryGetValue(Channels.Private, out var legacy) ? legacy.FetchCustomFacesAsync(count, ct)
+                : Task.FromResult(new List<string>());
+        var lease = PlatformSourceExecution.Current;
+        if (lease is null)
+        {
+            var candidates = _sources.Where(source => Binding(source)?.Adapter.Context.PlatformId == PlatformId.QqPrivate).Take(2).ToArray();
+            if (candidates.Length == 1) lease = Capture(candidates[0]);
+        }
+        return lease is not null && ReferenceEquals(lease.Owner, this) && lease.IsCurrent
+            && lease.Context.PlatformId == PlatformId.QqPrivate
+            && (_outboundAllowed?.Invoke(lease.Context, false, 0, "customfaces") ?? true)
+            ? lease.Source.FetchCustomFacesAsync(count, ct) : Task.FromResult(new List<string>());
+    }
+
+    private IQqChatSource? ResolveRead(string feature, long messageId)
+    {
+        if (_platformRegistry is null) return Resolve(false, messageId, feature);
+        if (PlatformSourceExecution.Current is not { IsCurrent: true } lease || !ReferenceEquals(lease.Owner, this)
+            || lease.Origin.Trigger is not { } trigger) return null;
+        var target = CompatibilityTarget(ConversationIdCodec.Encode(trigger.Conversation));
+        return target.Id > 0 ? Resolve(target.IsGroup, target.Id, feature) : null;
+    }
 
     public Task<IReadOnlyList<string>> RefreshImageUrlsAsync(long messageId, CancellationToken ct = default)
-        => Resolve(false, messageId)?.RefreshImageUrlsAsync(messageId, ct)
+        => ResolveRead("image", messageId)?.RefreshImageUrlsAsync(messageId, ct)
             ?? Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
     /// <summary>上层登记会话用（见 <see cref="RegisterKey"/>）。</summary>
@@ -251,6 +448,7 @@ public sealed class ChannelRouter : IQqChatSource, IChannelRegistry, IDisposable
             _disposed = true;
         }
 
+        foreach (var detach in _detachTrusted) detach();
         foreach (var src in _sources)
         {
             src.MessageReceived -= OnMessage;

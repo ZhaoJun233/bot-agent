@@ -19,61 +19,50 @@ public sealed partial class WebUiServer
     {
         var rawSnapshots = _platformRegistry?.GetSnapshots() ?? Array.Empty<Domain.Ports.PlatformStatusSnapshot>();
         var policies = _platformPolicies ?? new PlatformPolicyResolver(_box, _platformRegistry);
-        var snapshotMap = new Dictionary<(string PlatformId, string AccountScope), Domain.Ports.PlatformStatusSnapshot>();
-        foreach (var s in rawSnapshots)
-        {
-            snapshotMap[(Domain.Platforms.PlatformId.Normalize(s.PlatformId), s.AccountScope)] = s;
-        }
-
-        var allSnapshots = new List<Domain.Ports.PlatformStatusSnapshot>();
+        var settings = _box.Current;
+        // Keep every real instance; an account display row is never an authenticated source.
+        var allSnapshots = rawSnapshots.ToList();
         foreach (var std in StandardPlatforms)
         {
-            var key = (Domain.Platforms.PlatformId.Normalize(std.PlatformId), std.AccountScope);
-            if (snapshotMap.TryGetValue(key, out var live))
-            {
-                allSnapshots.Add(live);
-                snapshotMap.Remove(key);
-            }
-            else
-            {
-                var policy = policies.Resolve(new Domain.Platforms.PlatformContext(std.PlatformId, std.AccountScope));
-                allSnapshots.Add(new Domain.Ports.PlatformStatusSnapshot(
-                    PlatformId: std.PlatformId,
-                    AccountScope: std.AccountScope,
-                    DisplayName: std.DisplayName,
-                    Tag: std.Tag,
-                    Enabled: policy.Enabled,
-                    Connected: false,
-                    Capabilities: std.Capabilities,
-                    LastErrorCode: null));
-            }
+            if (rawSnapshots.Any(live => Domain.Platforms.PlatformId.Normalize(live.PlatformId) == std.PlatformId
+                && live.AccountScope == std.AccountScope)) continue;
+            allSnapshots.Add(new Domain.Ports.PlatformStatusSnapshot(std.PlatformId, std.AccountScope,
+                std.DisplayName, std.Tag, false, false, std.Capabilities, null));
         }
-
-        foreach (var remaining in snapshotMap.Values)
-        {
-            allSnapshots.Add(remaining);
-        }
+        var instanceCounts = rawSnapshots.GroupBy(snapshot => (Domain.Platforms.PlatformId.Normalize(snapshot.PlatformId),
+            snapshot.AccountScope, snapshot.InstanceId)).ToDictionary(group => group.Key, group => group.Count());
 
         var arr = new JsonArray();
         foreach (var s in allSnapshots)
         {
-            var policy = policies.Resolve(new Domain.Platforms.PlatformContext(s.PlatformId, s.AccountScope));
+            var loaded = rawSnapshots.Contains(s);
+            var contextKey = (Domain.Platforms.PlatformId.Normalize(s.PlatformId), s.AccountScope, s.InstanceId);
+            var exact = loaded && instanceCounts.GetValueOrDefault(contextKey) == 1;
+            var actual = new Domain.Platforms.PlatformContext(s.PlatformId, s.AccountScope, s.InstanceId);
+            var policy = exact ? policies.Resolve(actual) : null;
+            var accountView = PlatformSwitchSettings.Read(settings, s.PlatformId, s.AccountScope);
+            var configuredChat = exact ? settings.RuntimePlatformPolicies.HasValue
+                ? PlatformSwitchSettings.ResolvePolicyRules(settings, actual,
+                    System.Collections.Immutable.ImmutableArray<Domain.Configuration.ActionId>.Empty).ChatEnabled == Domain.Configuration.ToggleRule.Enabled
+                : accountView.ChatEnabled : !loaded && accountView.ChatEnabled;
+            var enabled = exact ? policy!.Enabled : !loaded && accountView.Enabled;
             arr.Add(new JsonObject
             {
                 ["platformId"] = s.PlatformId,
                 ["accountScope"] = s.AccountScope,
+                ["instanceId"] = s.InstanceId,
                 ["displayName"] = s.DisplayName,
                 ["tag"] = s.Tag,
-                ["enabled"] = policy.Enabled,
-                ["effectiveEnabled"] = policy.Enabled,
-                ["configuredChatEnabled"] = PlatformSwitchSettings.Read(_box.Current, s.PlatformId, s.AccountScope).ChatEnabled,
-                ["chatEnabled"] = policy.ChatEnabled,
-                ["connected"] = s.Connected,
-                ["restartRequired"] = policy.Enabled && !rawSnapshots.Any(live =>
-                    Domain.Platforms.PlatformId.Normalize(live.PlatformId) == Domain.Platforms.PlatformId.Normalize(s.PlatformId)
-                    && live.AccountScope == s.AccountScope),
+                ["enabled"] = enabled,
+                ["effectiveEnabled"] = enabled,
+                ["configuredChatEnabled"] = configuredChat,
+                ["chatEnabled"] = enabled && configuredChat,
+                ["connected"] = exact && s.Connected,
+                ["restartRequired"] = enabled && !loaded,
                 ["lastErrorCode"] = s.LastErrorCode,
-                ["reasons"] = new JsonArray(policy.Reasons.Select(r => (JsonNode?)JsonValue.Create(r)).ToArray()),
+                ["reasons"] = policy is not null
+                    ? new JsonArray(policy.Reasons.Select(r => (JsonNode?)JsonValue.Create(r)).ToArray())
+                    : new JsonArray(JsonValue.Create(loaded ? "ambiguous_platform_instance" : "platform_unregistered")),
                 ["capabilities"] = new JsonObject
                 {
                     ["supportsText"] = s.Capabilities.SupportsText,
@@ -92,7 +81,8 @@ public sealed partial class WebUiServer
         }
 
         var feishuLoaded = _feishuGateway is not null;
-        var feishuEnabled = _box.Current.FeishuEnabled;
+        var feishuEnabled = PlatformSwitchSettings.Read(settings, Domain.Platforms.PlatformId.Feishu,
+            Domain.Platforms.AccountScope.Default).Enabled;
         var feishuConfigured = _feishuGateway?.IsConfigured
             ?? (!string.IsNullOrWhiteSpace(_box.Current.FeishuAppId)
                 && !string.IsNullOrWhiteSpace(_box.Current.FeishuAppSecret)

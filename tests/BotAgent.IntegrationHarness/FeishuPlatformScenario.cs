@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 
 namespace BotAgent.IntegrationHarness;
 
@@ -40,9 +42,11 @@ public static partial class Program
         using var feishuServer = new MockFeishuServer(feishuPort);
         feishuServer.Start();
 
-        using var bot = StartBot(new Dictionary<string, string>
+        var botEnv = new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = dataDir,
+            ["BOTAGENT_DATA_DIR"] = dataDir,
+            ["QQCHAT_LOG_FILE"] = "0",
             ["QQCHAT_API_KEY"] = "sk-mock",
             ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
             ["QQCHAT_MODEL"] = "mock-model",
@@ -63,7 +67,8 @@ public static partial class Program
             ["QQCHAT_FEISHU_VERIFICATION_TOKEN"] = verifyToken,
             ["QQCHAT_FEISHU_API_BASE"] = feishuServer.BaseUrl,
             ["QQCHAT_FEISHU_WHITELIST"] = targetChat,
-        });
+        };
+        using var bot = StartBot(botEnv);
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
         await WaitForPortAsync(panelPort, cts.Token, bot);
@@ -127,10 +132,13 @@ public static partial class Program
         Check("★ 错误 Verification Token 的普通事件被拒绝", (int)invalidTokenResp.StatusCode == 401,
             $"HTTP {(int)invalidTokenResp.StatusCode}");
 
-        using var oversizedContent = new StringContent(new string('x', 1_048_577), Encoding.UTF8, "application/json");
-        using var oversizedResp = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", oversizedContent, cts.Token);
-        Check("★ 超限 Webhook body 在解析前返回 413", (int)oversizedResp.StatusCode == 413,
-            $"HTTP {(int)oversizedResp.StatusCode}");
+        // 服务端只按 Content-Length 就会拒绝；真把 1MiB 写出去时，Linux 上服务端先回 413
+        // 再关连接，客户端会偶发 “Broken pipe”/“Error while copying content”。这里只发
+        // 声明超限长度的请求头、不写正文：仍验证“解析前按长度拒绝”，又不会把测试卡在上传竞态上。
+        var oversizedStatus = await PostDeclaredLengthAsync(
+            panelPort, "/api/webhooks/feishu", 1_048_577, cts.Token);
+        Check("★ 超限 Webhook body 在解析前返回 413", oversizedStatus == 413,
+            $"HTTP {oversizedStatus}");
 
         var overloadGate = new BlockingBodyGate(16);
         var heldRequests = Enumerable.Range(0, 16).Select(async _ =>
@@ -196,7 +204,85 @@ public static partial class Program
             && feishuServer.Messages.Count == beforeMsgCount,
             $"去重回执: {dupBody}, 消息计数: {feishuServer.Messages.Count}");
 
+        // Fault injection touches only this scenario's synthetic database.
+        void DedupSql(string sql)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = DbProbe.DbPath(dataDir),
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+                DefaultTimeout = 5,
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+
+        var failedEventJson = eventJson.Replace("evt_harness_001", "evt_harness_storage_failure")
+            .Replace("om_in_001", "om_in_storage_failure");
+        openAi.ClearRequests();
+        var beforeRecoveryCount = feishuServer.Messages.Count;
+        DedupSql("""
+            CREATE TRIGGER r5_synthetic_host_dedup_failure BEFORE INSERT ON feishu_webhook_dedup
+            WHEN NEW.event_key = 'event:evt_harness_storage_failure'
+            BEGIN SELECT RAISE(ABORT, 'synthetic storage unavailable'); END;
+            """);
+        try
+        {
+            using var failedContent = new StringContent(failedEventJson, Encoding.UTF8, "application/json");
+            using var failedResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", failedContent, cts.Token);
+            var failedBody = await failedResponse.Content.ReadAsStringAsync(cts.Token);
+            Check("R5: real host storage failure is retryable and does not enter model/send chain",
+                (int)failedResponse.StatusCode == 503 && failedBody == "{\"error\":\"dedup_unavailable\"}"
+                && openAi.Requests.Count == 0 && feishuServer.Messages.Count == beforeRecoveryCount,
+                $"HTTP {(int)failedResponse.StatusCode}; modelRequests={openAi.Requests.Count}; sends={feishuServer.Messages.Count}");
+        }
+        finally
+        {
+            DedupSql("DROP TRIGGER r5_synthetic_host_dedup_failure;");
+        }
+        openAi.EnqueueReply("{\"suitability\":90,\"reply\":\"synthetic recovery\"}");
+        using (var recoveryContent = new StringContent(failedEventJson, Encoding.UTF8, "application/json"))
+        using (var recoveryResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", recoveryContent, cts.Token))
+        {
+            Check("R5: same event recovers after real storage repair through model and platform send",
+                recoveryResponse.IsSuccessStatusCode
+                && await feishuServer.WaitForMessageAsync(beforeRecoveryCount + 1, TimeSpan.FromSeconds(30))
+                && openAi.Requests.Count > 0 && feishuServer.Messages.Count == beforeRecoveryCount + 1);
+        }
+
         await bot.StopAsync();
+        using var restarted = StartBot(botEnv);
+        await WaitForPortAsync(botWsPort, cts.Token, restarted);
+        await WaitForPortAsync(panelPort, cts.Token, restarted);
+        using var restartedProtocol = new MockProtocol { SelfId = 10001 };
+        await restartedProtocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
+        await restartedProtocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
+        openAi.ClearRequests();
+        var afterRestartCount = feishuServer.Messages.Count;
+        using (var replayContent = new StringContent(failedEventJson, Encoding.UTF8, "application/json"))
+        using (var replayResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", replayContent, cts.Token))
+        {
+            var replayBody = await replayResponse.Content.ReadAsStringAsync(cts.Token);
+            await Task.Delay(300, cts.Token);
+            Check("R5: restarted host retains persistent dedup without model/send replay",
+                replayResponse.IsSuccessStatusCode && replayBody.Contains("duplicate")
+                && openAi.Requests.Count == 0 && feishuServer.Messages.Count == afterRestartCount);
+        }
+        var freshEventJson = eventJson.Replace("evt_harness_001", "evt_harness_restart_fresh")
+            .Replace("om_in_001", "om_in_restart_fresh");
+        openAi.EnqueueReply("{\"suitability\":90,\"reply\":\"synthetic restart\"}");
+        using (var freshContent = new StringContent(freshEventJson, Encoding.UTF8, "application/json"))
+        using (var freshResponse = await http.PostAsync($"{panelUrl}/api/webhooks/feishu", freshContent, cts.Token))
+        {
+            Check("R5: restarted host still accepts fresh events through the real reply chain",
+                freshResponse.IsSuccessStatusCode
+                && await feishuServer.WaitForMessageAsync(afterRestartCount + 1, TimeSpan.FromSeconds(30))
+                && openAi.Requests.Count > 0 && feishuServer.Messages.Count == afterRestartCount + 1);
+        }
+        await restarted.StopAsync();
     }
 
     private sealed class BlockingBodyGate
@@ -223,6 +309,30 @@ public static partial class Program
         }
 
         public void Release() => _release.TrySetResult();
+    }
+
+    /// <summary>
+    /// 只用请求头声明一个超限的 Content-Length、不发送正文，读回 HTTP 状态码。
+    /// 用于验证服务端在读取/解析正文之前就按长度拒绝（真发 1MiB 会因服务端提前关闭连接而竞态）。
+    /// </summary>
+    private static async Task<int> PostDeclaredLengthAsync(
+        int port, string path, long contentLength, CancellationToken ct)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, ct);
+        await using var stream = client.GetStream();
+        var headers = $"POST {path} HTTP/1.1\r\n"
+            + $"Host: 127.0.0.1:{port}\r\n"
+            + "Content-Type: application/json\r\n"
+            + $"Content-Length: {contentLength}\r\n"
+            + "Connection: close\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(headers), ct);
+        await stream.FlushAsync(ct);
+
+        using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
+        var statusLine = await reader.ReadLineAsync(ct) ?? string.Empty;
+        var parts = statusLine.Split(' ', 3);
+        return parts.Length >= 2 && int.TryParse(parts[1], out var status) ? status : 0;
     }
 
     private sealed class BlockingWebhookContent : HttpContent

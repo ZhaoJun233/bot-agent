@@ -12,7 +12,7 @@ namespace BotAgent.Services.Panel;
 /// 纪律：**这里的通知一律不吞异常**（除了日志推送 —— 它历史上就是吞的），
 /// 因为订阅方是面板，它抛异常应该看得见，不该被悄悄吃掉。
 /// </summary>
-public sealed class PanelNotifier
+public sealed class PanelNotifier : IPanelNotifier
 {
     /// <summary>新消息落库（sourceKey, 消息）。</summary>
     public event Action<string, ChatMessage>? MessageAdded;

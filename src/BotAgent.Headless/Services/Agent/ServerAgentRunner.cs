@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
+using BotAgent.Services.Mcp;
 using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Agent;
@@ -10,7 +11,7 @@ namespace BotAgent.Services.Agent;
 ///
 /// 为什么不用“在容器里再装一个 pi”：
 ///   • 镜像要加 Node + npm + pi（几百 MB），而容器里真正缺的是**干活的脑子**，不是那个 CLI；
-///   • pi 的价值在管理员本机的文件/工具链 —— 那是**本机桥**（AgentBridgeServer）的事；
+///   • pi 的价值在管理员本机的文件/工具链 —— 本机桥已于 cfg-0.3.3 移除，服务器路径不再依赖它；
 ///   • 容器里的 agent 要干的是“看日志、翻数据、查库存、跑健康检查”这类运维活：bash + 读写文件 + 抓 URL 就够。
 /// 所以这里是一个**原生 C# 的工具循环**：同一个模型、同一套白名单，只是执行地点在容器里。
 ///
@@ -26,6 +27,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
     private readonly SettingsBox _box;
     private readonly OpenAiClient _brain;
+    private readonly McpToolUseCase? _mcp;
     private readonly Action<string> _log;
 
     /// <summary>一轮里最多做几个 QQ 动作（防“给每个人都点一遍”——真去 QQ 里刷一圈比多跑几步麻烦得多）。</summary>
@@ -39,12 +41,14 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     /// </summary>
     private const int TaskMaxSeconds = 240;
 
-    public ServerAgentRunner(SettingsBox box, OpenAiClient brain, IHttpFetcher http, Action<string> log)
+    public ServerAgentRunner(SettingsBox box, OpenAiClient brain, IHttpFetcher http, Action<string> log,
+        McpToolUseCase? mcp = null)
     {
         _box = box;
         _brain = brain;
         _http = http;
         _log = log;
+        _mcp = mcp;
     }
 
     /// <summary>出网（服务器 agent 抓页面用）：socket 由装配点持有，见 <see cref="IHttpFetcher" />。</summary>
@@ -82,6 +86,12 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 "wrong_executor", "QQ 动作由会话宿主执行（要会话现场才能解析 sender/me/this）。");
         }
 
+        if (_mcp?.IsMcpTool(tool) == true)
+        {
+            return BotAgent.Domain.Tools.ToolOutcome.Failure(
+                "no_conversation", "MCP 工具只能在 // 会话路径执行（需要会话 key 做审计与预算）。");
+        }
+
         var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
         var allowed = ParseTools(_settings.AgentServerTools);
         if (!_settings.AgentServerDocker)
@@ -100,7 +110,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             call.Arguments?["command"]?.GetValue<string>(), null, call.Arguments ?? new JsonObject());
 
         var output = await RunToolAsync(tool, step, workDir, allowed,
-            QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions), qqHost: null, ct);
+            QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions), qqHost: null,
+            conversationKey: string.Empty, callIndex: call.CallIndex, ct);
 
         return BotAgent.Domain.Tools.ToolOutcome.Success(output, $"服务器工具 {tool}");
     }
@@ -134,7 +145,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var prohibitedQqActions = new List<string>();
         var failedQqActions = new List<string>();
 
-        var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost);
+        await RefreshMcpAsync(ct); var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost);
 
         // 会话上下文：**默认不带**（每条 // 指令单独对待）——
         // 管理员 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
@@ -188,7 +199,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 {
                     // 不是 JSON：先给一次机会，让它把话说进协议里（模型偶尔会拿散文答话，
                     // 而散文一旦被当成结论，工具就一次都不会调 —— 管理员会看到一份“凭空编的答案”）。
-                    if (nudged == 0 && allowed.Count > 0)
+                    if (nudged == 0 && (allowed.Count > 0 || _mcp is { ToolCount: > 0 }))
                     {
                         nudged++;
                         messages.Add(("assistant", raw.Trim()));
@@ -221,16 +232,17 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 }
 
                 var name = step0.Tool;
-                task.LastNote = DescribeTool(name, step0.Command, step0.Arg, step0.Raw);
+                task.LastNote = _mcp?.IsMcpTool(name) == true ? "MCP " + name : DescribeTool(name, step0.Command, step0.Arg, step0.Raw);
                 task.ToolCalls = step;
                 Progress?.Invoke(task);
 
                 string output;
                 try
                 {
-                    // 一轮里最多做 5 个 QQ 动作：模型偶尔会上头（“给每个人都点一遍”），
-                    // 真去 QQ 里刷一圈比多跑几步麻烦得多。
-                    if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
+                    // MCP 不经过静态 ServerToolGate（那边只认识内建 6 个工具）；授权/预算/Schema 在 McpToolUseCase 里另过一次。
+                    if (_mcp?.IsMcpTool(name) == true)
+                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, task.SourceKey, step - 1, ct);
+                    else if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
                     {
                         output = $"这次已经做了 {MaxQqActionsPerTask} 个 QQ 动作，不再做了（要接着做请再发一条指令）。";
                     }
@@ -246,7 +258,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     }
                     else
                     {
-                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, ct);
+                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost,
+                            task.SourceKey, step - 1, ct);
                     }
                 }
                 catch (OperationCanceledException)
@@ -271,7 +284,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     }
                 }
 
-                _log($"[ServerAgent] 第 {step} 步 {task.LastNote} → {Shorten(output.Replace('\n', ' '), 110)}");
+                _log($"[ServerAgent] 第 {step} 步 {task.LastNote} → " + (_mcp?.IsMcpTool(name) == true ? "MCP（内容不回显）" : Shorten(output.Replace('\n', ' '), 110)));
 
                 messages.Add(("assistant", raw));
                 messages.Add(("user", $"工具输出（{name}）：\n{output}\n\n（继续：要么再调工具，要么给 final）"));
@@ -399,6 +412,10 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost)
     {
         var list = new List<string>();
+        if (_mcp?.PromptText() is { Length: > 0 } mcpText)
+        {
+            list.Add(mcpText + "\n调用 MCP 时 tool 写完整名，参数直接放在同一 JSON 对象里。");
+        }
         // 批次 D：先给出**统一目录**生成的清单（名字 + 一句话 + 参数），下面每条再写容器里的实情。
         list.Add("工具清单（服务端登记表，按面板开关裁剪）：" + string.Join("、", ServerToolSpecs.All
             .Where(s => allowed.Contains(s.Id))
@@ -446,7 +463,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
         return
             "你是运行在 QQ 机器人**服务器容器内部**的执行 agent。你的活儿是看日志、翻数据、查文件、跑健康检查这类运维/排查工作。\n" +
-            $"工作目录：{workDir}（机器人自己的数据目录是 /data：日志 /data/logs/qqchat.log、数据库 /data/data/qqchat.db）\n" +
+            $"工作目录：{workDir}（机器人自己的数据目录是 /data：日志 /data/logs/qqchat.log、数据库 /data/data/botagent.db；旧库 qqchat.db 仍兼容）\n" +
             $"可用工具：\n{tools}\n\n" +
             "每一轮**只输出一行 JSON**，两种形状之一：\n" +
             "  {\"thought\":\"我现在想干什么\",\"tool\":\"bash\",\"command\":\"ls -la /data\"}\n" +
@@ -551,8 +568,21 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     }
 
     private async Task<string> RunToolAsync(string tool, StepCall call, string workDir, HashSet<string> allowed,
-        HashSet<string> qqAllowed, IQqActionHost? qqHost, CancellationToken ct)
+        HashSet<string> qqAllowed, IQqActionHost? qqHost, string conversationKey, int callIndex,
+        CancellationToken ct)
     {
+        if (_mcp?.IsMcpTool(tool) == true)
+        {
+            if (string.IsNullOrWhiteSpace(conversationKey))
+            {
+                return "MCP 工具需要会话上下文（// 路径）";
+            }
+
+            var outcome = await _mcp.ExecuteAsync(conversationKey, tool, McpArguments(call.Raw), callIndex, ct);
+            return outcome.ModelText
+                   ?? (outcome.Ok ? "（MCP 工具已完成，没有文本输出）" : $"MCP 工具失败（{outcome.ReasonCode}）");
+        }
+
         var arg = call.Arg;
         var command = call.Command;
 
@@ -729,6 +759,39 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         }
 
         return $"退出码 {process.ExitCode}\n" + Truncate(text, 4000, "（输出太长，只给了前 4000 字）");
+    }
+
+    private async Task RefreshMcpAsync(CancellationToken ct)
+    {
+        if (_mcp is not { Enabled: true })
+        {
+            return;
+        }
+
+        try
+        {
+            await _mcp.RefreshAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log($"[ServerAgent] MCP 发现失败（{ex.GetType().Name}）");
+        }
+    }
+
+    /// <summary>MCP 参数只去掉协议信封字段；url/path/command 等同名字段可能是工具自己的参数，保留。</summary>
+    private static JsonObject McpArguments(JsonObject raw)
+    {
+        var args = (JsonObject)raw.DeepClone();
+        foreach (var key in new[] { "tool", "name", "thought", "final", "answer", "reply" })
+        {
+            args.Remove(key);
+        }
+
+        return args;
     }
 
     private static string? Resolve(string? path, string workDir)

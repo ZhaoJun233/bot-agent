@@ -10,7 +10,7 @@ namespace BotAgent.Services.Net;
 /// 要不要过能力闸门、搜完要不要再给模型一次开口机会、失败要不要记一次参与状态，
 /// 都属于"一次回复该怎么走"。这里只做"出网拿资料 + 把资料攒成一段笔记"。
 /// </summary>
-public sealed class ResearchUseCase
+public sealed class ResearchUseCase : IResearchUseCase
 {
     private readonly WebSearchService? _search;
     private readonly Action<string> _log;
@@ -63,6 +63,11 @@ public sealed class ResearchUseCase
         }
 
         var result = await _search.SearchAsync(query, ct);
+        if (result is null)
+        {
+            return null;
+        }
+
         AddNote(sourceKey, result.Describe());
         return result;
     }
@@ -108,10 +113,16 @@ public sealed class ResearchUseCase
         => _notes.TryRemove(sourceKey, out var note) ? note : null;
 
     /// <summary>面板自测：真跑一次搜索，把结果（或失败原因）原样给面板看。</summary>
-    public Task<WebSearchResult> TestSearchAsync(string query, CancellationToken ct)
-        => _search is null
-            ? Task.FromResult(new WebSearchResult(query, null, Array.Empty<WebSearchHit>(), "无", "搜索服务还没初始化"))
-            : _search.SearchAsync(query, ct);
+    public async Task<WebSearchResult> TestSearchAsync(string query, CancellationToken ct)
+    {
+        if (_search is null)
+        {
+            return new WebSearchResult(query, null, Array.Empty<WebSearchHit>(), "无", "搜索服务还没初始化");
+        }
+
+        return await _search.SearchAsync(query, ct)
+            ?? new WebSearchResult(query, null, Array.Empty<WebSearchHit>(), "无", "搜索没有返回结果");
+    }
 
     /// <summary>面板自测：真读一个页面。</summary>
     public Task<(string? Text, string? Error)> TestReadPageAsync(string url, CancellationToken ct)

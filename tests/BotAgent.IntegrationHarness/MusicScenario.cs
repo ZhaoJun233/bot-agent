@@ -59,6 +59,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板与协议端分开启动：只等 botWsPort 会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         var (status, body) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 音乐相关配置生效（开关默认开 / 音源模板 / 码率 / 分析上限）",

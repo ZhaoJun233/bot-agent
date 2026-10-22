@@ -25,7 +25,7 @@ namespace BotAgent.Services.Agent;
 ///
 /// 宿主能力（日志、自己的 QQ 号、官方白名单、回话）从 <see cref="AgentHooks" /> 注入 —— 方向是「用例 → 宿主」。
 /// </summary>
-public sealed partial class AgentCommandService
+public sealed partial class AgentCommandService : IAgentCommandService
 {
     private readonly SettingsBox _box;
     private readonly IQqChatSource _source;
@@ -34,11 +34,11 @@ public sealed partial class AgentCommandService
     private readonly PanelNotifier _ui;
     private readonly IAgentSessionStore _agentSessions;
     private readonly ServerAgentRunner _serverAgent;
-    private readonly AgentBridgeServer? _agentBridge;
     private readonly IAgentImageStore _images;
     private readonly AgentHooks _hooks;
     private readonly IQqActions? _actionGateway;
     private readonly PlatformPolicyResolver? _platformPolicies;
+    private readonly Func<string, bool>? _pluginAllows;
 
     public AgentCommandService(
         SettingsBox box,
@@ -48,11 +48,11 @@ public sealed partial class AgentCommandService
         PanelNotifier ui,
         IAgentSessionStore agentSessions,
         ServerAgentRunner serverAgent,
-        AgentBridgeServer? agentBridge,
         IAgentImageStore images,
         AgentHooks hooks,
         IQqActions? actionGateway = null,
-        PlatformPolicyResolver? platformPolicies = null)
+        PlatformPolicyResolver? platformPolicies = null,
+        Func<string, bool>? pluginAllows = null)
     {
         _box = box;
         _source = source;
@@ -61,19 +61,13 @@ public sealed partial class AgentCommandService
         _ui = ui;
         _agentSessions = agentSessions;
         _serverAgent = serverAgent;
-        _agentBridge = agentBridge;
         _images = images;
         _hooks = hooks;
         _actionGateway = actionGateway;
         _platformPolicies = platformPolicies;
+        _pluginAllows = pluginAllows;
 
         // 进度/结果事件只服务这一块，订阅跟着搬过来（以前挂在 BotAgentHost 构造函数里）
-        if (_agentBridge is not null)
-        {
-            _agentBridge.Progress += OnAgentProgress;
-            _agentBridge.Finished += OnAgentFinished;
-        }
-
         _serverAgent.Progress += OnAgentProgress;
         RebuildAgentUsers();
     }
@@ -274,7 +268,7 @@ public sealed partial class AgentCommandService
     }
 
     /// <summary>面板“试一条”用的：直接在容器里跑一次服务器内置 agent（不经过 QQ、不经过外部设备）。</summary>
-    public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds)
+    public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds, CancellationToken ct = default)
     {
         var task = new AgentTask
         {
@@ -283,7 +277,7 @@ public sealed partial class AgentCommandService
             Prompt = prompt,
             Session = "qqchat-panel",
             // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
-            QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private)
+            QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
         };
 
         if (_serverAgent is null)
@@ -291,41 +285,40 @@ public sealed partial class AgentCommandService
             task.Fail("服务器内置 agent 没开（面板里打上）");
             return task;
         }
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 900)));
-        await _serverAgent.RunAsync(task, cts.Token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 900)));
+        await _serverAgent.RunAsync(task, timeout.Token);
         return task;
     }
 
     /// <summary>面板工作台用的持久化单次执行入口：把运行流水写回指定 Agent 会话。</summary>
-    public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt, int timeoutSeconds, string target)
+    public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt,
+        int timeoutSeconds, string target, CancellationToken ct = default)
     {
+        if (!target.Equals("server", StringComparison.OrdinalIgnoreCase)
+            && !target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("host_backend_removed");
+        }
+
         var session = _agentSessions.Find(sourceKey, sessionId);
-        if (session is null)
+        if (session is null || session.Backend != "server")
         {
             throw new InvalidOperationException("Agent 会话不存在或已被删除");
         }
 
-        var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, target.Equals("host", StringComparison.OrdinalIgnoreCase) ? session.Device : null);
+        var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, null);
         try
         {
-            AgentTask task;
-            if (target.Equals("server", StringComparison.OrdinalIgnoreCase) || target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
-            {
-                task = await RunServerAgentDirectAsync(prompt, timeoutSeconds);
-            }
-            else
-            {
-                if (_agentBridge is null || !_agentBridge.Connected)
-                {
-                    throw new InvalidOperationException("外部 agent 设备没连上");
-                }
-
-                task = await _agentBridge.RunDirectAsync(prompt, TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 10, 900)), CancellationToken.None);
-            }
-
+            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct);
             _agentSessions.FinishRun(sourceKey, session.Id, runId, task.Ok, task.DurationMs, task.ToolCalls,
                 task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             return task;
+        }
+        catch (OperationCanceledException)
+        {
+            _agentSessions.FinishRun(sourceKey, session.Id, runId, false, 0, 0, "cancelled");
+            throw;
         }
         catch (Exception ex)
         {
@@ -375,14 +368,12 @@ public sealed partial class AgentCommandService
     /// <summary>丢给服务器 agent 的 QQ 动作现场</summary>
     private IQqActionHost? BuildQqHost(BotConversation conversation, QqChatMessage msg)
     {
-        if (Gateway is null)
-        {
-            return null;
-        }
-
+        var lease = PlatformSourceExecution.Current;
+        var actions = lease?.Source as IQqActions ?? (_source is ChannelRouter ? null : Gateway);
+        if (actions is null || lease is { IsCurrent: false }) return null;
         var (isGroup, targetId) = conversation.Target;
-        return new SessionQqActionHost(Gateway, isGroup, targetId, msg.UserId, msg.MessageId, _hooks.SelfId(), _platformPolicies,
-            Channels.ChannelOf(conversation.SourceKey));
+        return new SessionQqActionHost(actions, isGroup, targetId, msg.UserId, msg.MessageId, _hooks.SelfId(), _platformPolicies,
+            Channels.ChannelOf(conversation.SourceKey), _pluginAllows);
     }
 
     /// <summary>服务器内置 agent 正在跑的会话（单会话串行）。</summary>
@@ -451,48 +442,24 @@ public sealed partial class AgentCommandService
             }).ToArray())
         };
 
-    /// <summary>面板/其它入口：新建 agent 会话。</summary>
+    /// <summary>面板/其它入口：新建 agent 会话（cfg-0.3.3 起只允许 server）。</summary>
     public AgentSession CreateAgentSession(string sourceKey, string backend, string? name)
-        => _agentSessions.Create(sourceKey, backend == "server" ? "server" : "host", name);
+        => _agentSessions.Create(sourceKey, backend == "server" ? "server" : throw new InvalidOperationException("host_backend_removed"), name);
 
     /// <summary>面板/其它入口：切换会话。</summary>
     public bool UseAgentSession(string sourceKey, string idOrName)
         => _agentSessions.Use(sourceKey, idOrName, out _);
 
-    /// <summary>面板/其它入口：删除会话（外部会话同时让设备删 pi 那份）。</summary>
+    /// <summary>面板/其它入口：删除服务器会话（host 历史只读，不在这里删）。</summary>
     public bool DeleteAgentSession(string sourceKey, string idOrName)
     {
         var deleted = _agentSessions.Delete(sourceKey, idOrName);
-        if (deleted is null)
-        {
-            return false;
-        }
-
-        if (deleted.Backend != "server" && deleted.PiOwned && deleted.PiSessionId.Length > 0 && _agentBridge is not null)
-        {
-            _ = _agentBridge.ForgetSessionAsync(deleted.PiSessionId);
-        }
-
-        return true;
+        return deleted is not null;
     }
 
     /// <summary>面板/其它入口：清空会话历史。</summary>
-    /// <summary>面板/其它入口：把设备上 pi 里的会话接过来用（新建一个指向它的会话）。</summary>
     public AgentSession? ImportPiSession(string sourceKey, string piSessionId, string? name)
-    {
-        if (string.IsNullOrWhiteSpace(piSessionId))
-        {
-            return null;
-        }
-
-        // 从设备上报的 pi 会话里找标题（有就用它当名字）
-        var hit = _agentSessions.LastPiSessions()
-            .FirstOrDefault(x => x["id"]?.GetValue<string>() == piSessionId.Trim());
-        var title = name is { Length: > 0 } ? name : hit?["title"]?.GetValue<string>();
-        return _agentSessions.Create(sourceKey, "host",
-            string.IsNullOrWhiteSpace(title) ? null : AgentSessionText.AutoTitle(title),
-            null, piSessionId.Trim(), piOwned: false);
-    }
+        => throw new InvalidOperationException("host_backend_removed");
 
     /// <summary>面板/其它入口：给会话改名（改过就不再被自动标题覆盖）。</summary>
     public bool RenameAgentSession(string sourceKey, string idOrName, string title)
@@ -502,66 +469,37 @@ public sealed partial class AgentCommandService
     {
         var session = _agentSessions.Find(sourceKey, idOrName);
         var reset = session is null ? null : _agentSessions.Reset(sourceKey, session.Id);
-        if (session is null || reset is null)
-        {
-            return false;
-        }
-
-        if (session.Backend != "server" && session.PiOwned && session.PiSessionId.Length > 0 && _agentBridge is not null)
-        {
-            _ = _agentBridge.ForgetSessionAsync(session.PiSessionId);
-        }
-
-        return true;
+        return session is not null && reset is not null;
     }
 
-    /// <summary>这条命令会走哪个后端（供会话管理用：//new 就在这个后端里开）。</summary>
-    private string WillUseBackend(string want, AgentBridgeServer? bridge, string? named)
-        => ResolveRoute(want, bridge, named).Backend;
-
     /// <summary>
-    /// 这一条命令**实际**会走哪边 —— 分发、`//status`、`//reset` 共用这一个判断。
-    ///
-    /// 为什么必须同源：以前 `//status`/`//reset` 只看到“写了 @设备名”就当成外部设备，
-    /// 而实际分发会因为那台设备不在线、开关关了等原因改走服务器 ——
-    /// 于是 `//@某台不在线的设备 看下日志` 跑在服务器上，管理员 `//reset` 却去清了**那台空的外部会话**，
-    /// 被污染的历史一直没清掉（2026-09-18 实测：reset 两次都没用）。
+    /// 这一条命令**实际**会走哪边。cfg-0.3.3 起只有 server；host/@设备 是已移除目标，
+    /// 返回 none + RemovedTarget，由调用方在创建会话/入队/模型调用之前拒绝。
     /// </summary>
     private sealed record AgentRoute(
-        string Backend,          // host / server / none
+        string Backend,          // server / none
         bool UseHost,
         bool UseServer,
         bool HostSwitch,
         bool ServerSwitch,
         bool HostOnline,
         bool DeviceDisabled,
-        string? DeviceName);
+        string? DeviceName,
+        bool RemovedTarget);
 
-    private AgentRoute ResolveRoute(string want, AgentBridgeServer? bridge, string? named)
+    private AgentRoute ResolveRoute(string want, string? named)
     {
-        var hostSwitch = _settings.EnableHostAgent;
         var serverSwitch = _settings.EnableServerAgent;
-        var hostOnline = bridge is not null && bridge.IsDeviceOnline(named);
-
-        // 面板里把某台设备关掉了 → 就当它不可用（并告诉管理员是开关关的，不是没连上）
-        var deviceName = named ?? bridge?.AnyBridge?.Name;
-        var deviceDisabled = deviceName is not null && !_settings.IsDeviceEnabled(deviceName);
-
-        var hostOnly = named is not null ||
-                       want.Equals("host", StringComparison.OrdinalIgnoreCase) ||
-                       want.Equals("外部", StringComparison.OrdinalIgnoreCase);
-        var serverOnly = want.Equals("server", StringComparison.OrdinalIgnoreCase) ||
-                         want.Equals("服务器", StringComparison.OrdinalIgnoreCase);
-
-        var canHost = hostSwitch && !deviceDisabled && bridge is not null && hostOnline;
-        var canServer = serverSwitch && _serverAgent is not null;
-
-        var useHost = canHost && (hostOnly || (!serverOnly &&
-            (named is not null || want.Equals("auto", StringComparison.OrdinalIgnoreCase) || want.Length == 0)));
-        var useServer = !useHost && canServer;
-
-        return new AgentRoute(useHost ? "host" : useServer ? "server" : "none",
-            useHost, useServer, hostSwitch, serverSwitch, hostOnline, deviceDisabled, deviceName);
+        var removed = named is not null
+            || want.Equals("host", StringComparison.OrdinalIgnoreCase)
+            || want.Equals("外部", StringComparison.OrdinalIgnoreCase)
+            || (want.Length > 0
+                && !want.Equals("auto", StringComparison.OrdinalIgnoreCase)
+                && !want.Equals("server", StringComparison.OrdinalIgnoreCase)
+                && !want.Equals("服务器", StringComparison.OrdinalIgnoreCase));
+        var useServer = !removed && serverSwitch && _serverAgent is not null;
+        return new(useServer ? "server" : "none", false, useServer, false, serverSwitch,
+            false, false, named, removed);
     }
 
     /// <summary>把“名字”或“序号”解析成会话 id（//sessions 里给的序号可用）。</summary>
@@ -582,25 +520,25 @@ public sealed partial class AgentCommandService
         var list = _agentSessions.List(sourceKey);
         var current = list.FirstOrDefault(s => _agentSessions.IsCurrent(sourceKey, s));
         return
-            "本机/服务器 Agent 命令：\n" +
-            "//<要做的事>         把这句话交给 agent 去干（例：//看下 E:/bot 里最新的报错）\n" +
+            "服务器 Agent 命令：\n" +
+            "//<要做的事>         把这句话交给服务器内置 agent 去干（例：//看下 E:/bot 里最新的报错）\n" +
             "//@server <事>       这一条强制走服务器内置 agent\n" +
-            "//@host <事>        这一条强制走外部设备（//@设备名 指定哪一台）\n" +
             "//sessions         列出这个聊天的会话（几个、叫什么、多少轮、哪个是当前）\n" +
             "//sessions all     列出**所有聊天**的会话总数与标题\n" +
             "//new [名字]       开一个新会话并切过去（不带名字就用第一句话自动起标题）\n" +
             "//use 序号|名字     切到某个会话\n" +
             "//rename 名字      给当前会话改名字\n" +
-            "//reset            清空当前会话（历史与外部那边的记录一起清）\n" +
-            "//del 序号|名字     删掉某个会话\n" +
-            "//stop             停掉正在跑的任务\n" +
-            "//status           看两个后端的开关/在线情况/当前会走哪边\n" +
+            "//reset            清空当前服务器会话\n" +
+            "//del 序号|名字     删掉某个服务器会话\n" +
+            "//stop             停掉正在跑的服务器任务\n" +
+            "//status           看服务器 agent 的开关/当前会走哪边\n" +
             "//help             看这份说明\n" +
+            "（//@host、//@设备名、//import、//pi 已随本机桥退役，会被明确拒绝）\n" +
             $"（当前会话：{(current is null ? "还没有，发一句 //指令 会自动建" : $"「{MaybeMask(current.Name, sourceKey)}」 {current.Turns} 轮")}）";
     }
 
-    /// <summary>//sessions all：所有聊天的会话总数与标题。</summary>
-    private string DescribeAllSessions(AgentBridgeServer? bridge)
+    /// <summary>//sessions all：所有聊天的服务器会话总数与标题。</summary>
+    private string DescribeAllSessions()
     {
         var chats = _agentSessions.AllChats();
         var total = chats.Sum(c => c.Sessions.Count);
@@ -617,7 +555,7 @@ public sealed partial class AgentCommandService
             var conv = _registry.Snapshot().FirstOrDefault(c => c.SourceKey == key);
             var name = conv is not null ? ChatLabel(conv) : (_settings.AgentMaskSensitive ? AgentMask.ChatLabel(key) : key);
             var titles = sessions.Take(6).Select((s, i) =>
-                $"{i + 1}) {(s.Backend == "server" ? "服务器" : (s.Device ?? "外部"))}·{MaybeMask(s.Name, key)}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
+                $"{i + 1}) 服务器·{MaybeMask(s.Name, key)}({s.Turns}轮){(_agentSessions.IsCurrent(key, s) ? "←" : string.Empty)}");
             var more = sessions.Count > 6 ? $" 等 {sessions.Count} 个" : string.Empty;
             lines.Add($"{chatIndex}. {name}（{sessions.Count} 个）：{string.Join("、", titles)}{more}");
         }
@@ -631,8 +569,8 @@ public sealed partial class AgentCommandService
         return string.Join("\n", lines);
     }
 
-    /// <summary>//sessions 的展示文本。</summary>
-    private string DescribeSessions(string sourceKey, AgentBridgeServer? bridge)
+    /// <summary>//sessions 的展示文本（只列服务器会话）。</summary>
+    private string DescribeSessions(string sourceKey)
     {
         var list = _agentSessions.List(sourceKey);
         if (list.Count == 0)
@@ -641,12 +579,12 @@ public sealed partial class AgentCommandService
                    "用法：//new [名字] 新建、//use <名字|序号> 切换、//del <名字|序号> 删除、//reset 清空当前。";
         }
 
-        var primary = _agentSessions.FindCurrent(sourceKey, ResolveRoute(_settings.AgentTarget, bridge, null).Backend);
+        var primary = _agentSessions.FindCurrent(sourceKey, "server");
         var lines = new List<string> { $"agent 会话（共 {list.Count} 个，← 是下一句指令会用的；改它们用 //use 序号）：" };
         for (var i = 0; i < list.Count; i++)
         {
             var s = list[i];
-            var where = s.Backend == "server" ? "服务器内置" : $"外部 {s.Device ?? bridge?.AnyBridge?.Name ?? "设备"}";
+            var where = "服务器内置";
             var ago = Clock.Now - s.UpdatedAt;
             var when = ago.TotalMinutes < 1 ? "刚刚"
                 : ago.TotalHours < 1 ? $"{(int)ago.TotalMinutes} 分钟前"
@@ -654,9 +592,7 @@ public sealed partial class AgentCommandService
                 : $"{(int)ago.TotalDays} 天前";
             // “当前”要标得让人一眼分清：只有主那个（下一句真会用的）带 ←，
             // 另一个后端的当前会话写成「另一路的当前」—— 不然 //rename/`//reset` 改到哪个全靠猜。
-            var mark = primary is not null && s.Id == primary.Id
-                ? " ←"
-                : _agentSessions.IsCurrent(sourceKey, s) ? "（另一路的当前）" : string.Empty;
+            var mark = primary is not null && s.Id == primary.Id ? " ←" : string.Empty;
             lines.Add($"{i + 1}. {MaybeMask(s.Name, sourceKey)} [{where}] {s.Turns} 轮 · {when}{mark}");
         }
 
@@ -679,9 +615,11 @@ public sealed partial class AgentCommandService
         return true;
     }
 
-    /// <summary>agent 任务的进度/结果回群。供 AgentBridgeServer 的事件调。</summary>
+    /// <summary>agent 任务的进度回群（服务器路径）。</summary>
     private async void OnAgentProgress(AgentTask task)
     {
+        using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
+        if (_source is ChannelRouter && (task.SourceLease is null || !task.SourceLease.IsCurrent)) return;
         try
         {
             var every = Math.Clamp(_settings.AgentProgressSeconds, 0, 3600);
@@ -699,8 +637,7 @@ public sealed partial class AgentCommandService
             _agentProgressAt[task.SourceKey] = now;
             var elapsed = now - task.StartedAt;
             var note = string.IsNullOrWhiteSpace(task.LastNote) ? string.Empty : $"（{MaybeMask(task.LastNote, task.SourceKey)}）";
-            var place = string.IsNullOrWhiteSpace(task.DeviceName) ? "服务器" : task.DeviceName!;
-            await _hooks.SendPlainAsync(conversation, $"⏳ 还在{place}上跑…已 {elapsed.TotalSeconds:F0} 秒{note}");
+            await _hooks.SendPlainAsync(conversation, $"⏳ 还在服务器上跑…已 {elapsed.TotalSeconds:F0} 秒{note}");
         }
         catch (Exception ex)
         {
@@ -710,6 +647,7 @@ public sealed partial class AgentCommandService
 
     private async void OnAgentFinished(AgentTask task)
     {
+        using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
         try
         {
             // 服务器内置后端：把这一轮的对话存回会话（下一轮同一会话能接上）
@@ -728,6 +666,7 @@ public sealed partial class AgentCommandService
                     task.ToolCalls, task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             }
 
+            if (_source is ChannelRouter && (task.SourceLease is null || !task.SourceLease.IsCurrent)) return;
             if (!ConversationsByKey(task.SourceKey, out var conversation))
             {
                 return;
@@ -745,7 +684,7 @@ public sealed partial class AgentCommandService
             else
             {
                 _hooks.Log($"agent 失败（{seconds:F0}s）: {task.Error}");
-                await _hooks.SendPlainAsync(conversation, $"❌ 本机那边报错（{seconds:F0}s）：{TextRules.Shorten(task.Error ?? "未知错误", 300)}");
+                await _hooks.SendPlainAsync(conversation, $"❌ 服务器上跑失败了（{seconds:F0}s）：{TextRules.Shorten(task.Error ?? "未知错误", 300)}");
             }
 
             // 跑完再综结标题：拿最近的轮次（含刚刚这轮）给模型，综结出一个能认出“这个会话在干什么”的标题。

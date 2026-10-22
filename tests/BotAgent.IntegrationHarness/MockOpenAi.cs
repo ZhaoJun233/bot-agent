@@ -279,6 +279,12 @@ public sealed class MockOpenAi : IDisposable
 
     private async Task HandleAsync(HttpListenerContext context)
     {
+        // 在请求**进入处理**时就锁定这次延迟，而不是等取完脚本回复再读全局值。
+        // 慢上游场景要先把 ResponseDelayMs 调成 9 秒、等第一条请求被记录后再调回 0；
+        // Linux 容器里线程池调度慢，原来“记录请求 → 读 ResponseDelayMs”之间可能已经过了 200ms，
+        // 第一条请求因此拿到 0 延迟、根本不会超时（2026-10-20 的 Linux 全量就是这样红的）。
+        var responseDelayMs = ResponseDelayMs;
+
         using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
         var body = await reader.ReadToEndAsync();
 
@@ -327,6 +333,20 @@ public sealed class MockOpenAi : IDisposable
                     _lastAuthorization = authorization;
                 }
             }
+        }
+
+        // 测试注入：命中标记直接 400（不可重试），让真宿主的任务确定性地失败。
+        var failMarker = FailChatMarker;
+        if (failMarker is not null && body.Contains(failMarker, StringComparison.Ordinal))
+        {
+            var failBody = Encoding.UTF8.GetBytes(
+                "{\"error\":{\"code\":400,\"message\":\"synthetic marker failure\"}}");
+            context.Response.StatusCode = 400;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = failBody.Length;
+            await context.Response.OutputStream.WriteAsync(failBody);
+            context.Response.Close();
+            return;
         }
 
         // 上游（Gemini 等）会给“以模型发言结尾”的请求直接返回 400：
@@ -464,9 +484,9 @@ public sealed class MockOpenAi : IDisposable
 
         string content = TakeRuleReply(body) ?? TakeScriptedReply();
 
-        if (ResponseDelayMs > 0)
+        if (responseDelayMs > 0)
         {
-            await Task.Delay(ResponseDelayMs);
+            await Task.Delay(responseDelayMs);
         }
 
         await WriteCompletionAsync(context, payload, content);
@@ -474,6 +494,12 @@ public sealed class MockOpenAi : IDisposable
 
     /// <summary>接下来 N 次聊天请求直接回 503（模拟上游“No capacity”）。</summary>
     public int FailChatTimes { get; set; }
+
+    /// <summary>
+    /// 命中该标记的聊天请求直接回 400（不可重试），用于在真宿主链路制造确定的 agent 失败。
+    /// 只用于合成测试；命中后不消耗脚本回复。
+    /// </summary>
+    public string? FailChatMarker { get; set; }
 
     /// <summary>接下来 N 次聊天请求回 200 但**没有 choices**（实测：慢的 `-high` 模型“思考”把预算吃光时会这样）。</summary>
     public int EmptyChoicesTimes { get; set; }

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Wave3 Engine 确定性探针：PluginGate + BackgroundEvaluatorQueue。
+    纯合成输入、纯断言；不连网、不启动机器人、不读写数据目录、不接触真实会话。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BotAgent.EngineProbe</AssemblyName>
+    <RootNamespace>BotAgent.EngineProbe</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BotAgent.Core\BotAgent.Core.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Engine\BotAgent.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

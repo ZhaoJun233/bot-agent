@@ -19,13 +19,11 @@ public sealed partial class AgentCommandService
 {
     private async Task HandleAgentCommandAsync(BotConversation conversation, QqChatMessage msg, string payload)
     {
-        // 本机 Agent 桥 / 服务器 agent 共用的入口
-        if (_agentBridge is null && _serverAgent is null)
+        // 服务器内置 agent 是 cfg-0.3.3 唯一保留的 // 后端。
+        if (_serverAgent is null)
         {
             return;
         }
-        var bridge = _agentBridge;
-
 
         // 权限闸单独一个方法：它与「这条命令到底怎么跑」无关，挤在分发链上只会让主线看不清。顺序一字未改。
         if (!await AllowAgentCommandAsync(conversation, msg, payload))
@@ -36,7 +34,7 @@ public sealed partial class AgentCommandService
         _hooks.Log($"agent 命令（{msg.UserId}）: {TextRules.Shorten(payload, 120)}");
 
         // 子命令：//stop 取消、//status 看状态、//（空）看用法
-        // @目标 要先剥掉：这样 //@server status / //@host new 这类写法也能认出来
+        // @目标 要先剥掉：这样 //@server status 这类写法也能认出来
         var (wantParsed, payloadStripped) = StripTargetPrefix(payload);
         payload = payloadStripped;
 
@@ -47,10 +45,17 @@ public sealed partial class AgentCommandService
             ? want
             : null;
 
+        // 已移除目标必须在任何会话创建/入队/模型调用之前拒绝（含 //@host new、//import）。
+        var route = ResolveRoute(want, named);
+        if (route.RemovedTarget)
+        {
+            await ReplyRemovedTargetAsync(conversation, named ?? want);
+            return;
+        }
 
         // 不派任务的子命令（//stop //status //help + //sessions 那些会话管理）整块挪进了
         // TryHandleAgentSubCommandAsync —— 它们只动台账，不该混在「派任务」的主线里。
-        if (await TryHandleAgentSubCommandAsync(conversation, msg, payload, want, named, bridge))
+        if (await TryHandleAgentSubCommandAsync(conversation, msg, payload, want, named))
         {
             return;
         }
@@ -61,40 +66,15 @@ public sealed partial class AgentCommandService
             return;
         }
 
-        // 图片：agent 任务以前只传正文，图片在那条消息里只剩一个「[图片]」占位 —— 两个后端
-        // 都看不到图（管理员 2026-09-19 报“给 agent 发图片识别不了”）。把直链与“服务器留档”
-        // 一起写进任务正文，不动桥的报文格式（两边都吃纯文本）。
+        // 图片：agent 任务只传正文时图片只剩「[图片]」占位；把直链与“服务器留档”写进正文。
         payload += await BuildAgentImageNoteAsync(msg);
 
-        // ── 这一条走哪边？（管理员 2026-09-17：两个开关各自管一边，还能单条指定）──
-        //   ① 命令里带 @ 目标：`//@server …` / `//@host …` / `//@ZHAOSPC …`（优先级最高）
-        //   ② 否则看 settings.AgentTarget：auto = 外部在线就用外部，否则服务器；server / host / 设备名 = 指定
-        //   ③ 选中的那边被开关关了 / 不在线 → 若还有另一边可用就用另一边，否则如实报错
-
-
-        var route = ResolveRoute(want, bridge, named);
-        var hostSwitch = route.HostSwitch;
-        var serverSwitch = route.ServerSwitch;
-        var hostOnline = route.HostOnline;
-        var deviceDisabled = route.DeviceDisabled;
-        var onlineDeviceName = route.DeviceName;
-        var useHost = route.UseHost;
-        var useServer = route.UseServer;
-
-        // 两边都不可用、或指定的那边不在 → 说人话（不要静默改道）
-        if (!useHost && !useServer)
+        if (!route.UseServer)
         {
-            await ReplyNoRouteAsync(conversation, named, bridge, hostSwitch, serverSwitch, hostOnline, deviceDisabled, onlineDeviceName);
+            await ReplyNoRouteAsync(conversation, route.ServerSwitch);
             return;
         }
 
-        if (useHost)
-        {
-            await RunOnHostAsync(conversation, bridge, payload, named);
-            return;
-        }
-
-        // 服务器内置 agent（与外部设备**互不影响**：它不占外部队列，两边可以同时跑）
         await RunOnServerAsync(conversation, msg, payload);
     }
 
@@ -139,14 +119,12 @@ public sealed partial class AgentCommandService
     /// ⚠ 这些分支必须留在回复派发之前：它们是纯台账操作，不该被当成任务派给 agent。
     /// </summary>
     private async Task<bool> TryHandleAgentSubCommandAsync(
-        BotConversation conversation, QqChatMessage msg, string payload, string want, string? named, AgentBridgeServer? bridge)
+        BotConversation conversation, QqChatMessage msg, string payload, string want, string? named)
     {
         var head = payload.Split(' ', 2)[0].ToLowerInvariant();
         if (head is "stop" or "cancel" or "停止" or "取消" or "中断")
         {
-            var cancelled = bridge?.Cancel(conversation.SourceKey) ?? 0;
-
-            // 服务器内置 agent 也可能在跑：一起停（否则“//stop”对这个后端就是假的）
+            var cancelled = 0;
             if (_serverAgentCurrent.TryGetValue(conversation.SourceKey, out var running))
             {
                 running.Task.CancelRequested = true;
@@ -168,41 +146,18 @@ public sealed partial class AgentCommandService
         }
 
         if (head is "status" or "状态")
-        {            var devices = bridge is null || !bridge.Connected
-                ? "（无）"
-                : string.Join("、", bridge.BridgeNames);
-            var deviceDetail = bridge is null || !bridge.Connected
-                ? string.Empty
-                : string.Join("；", bridge.BridgeNames.Select(n =>
-                {
-                    var info = bridge.DeviceInfo(n);
-                    return $"{n}（pi {info?.Pi ?? "?"}，目录 {info?.Cwd ?? "?"}）";
-                }));
+        {
             var preferred = (_settings.AgentTarget ?? "auto").Trim();
-            var hostOn = _settings.EnableHostAgent;
             var serverOn = _settings.EnableServerAgent;
-            var online = bridge is not null && bridge.Connected;
-
-            // “当前会走”用**和真实分发同一个函数**算（named 也传进去）：
-            // 以前这里自己再推一遍，结果 `//@某台不在线的设备 …` 显示“走外部设备”、实际跑在服务器上。
-            var decision = ResolveRoute(want, bridge, named);
-            var willUse = decision.Backend switch
-            {
-                "server" => "服务器 agent",
-                "host" => $"外部设备（{named ?? devices}）",
-                _ => "（两个开关都关了，或指定的那边不可用）"
-            };
-
-            if (named is not null && decision.Backend != "host")
-            {
-                willUse += $"（你写的「{named}」没在用：{(decision.DeviceDisabled ? "面板里关掉了" : "不在线")}）";
-            }
+            var decision = ResolveRoute(want, named);
+            var willUse = decision.RemovedTarget
+                ? "（已退役的 host/@设备目标；请把 AgentTarget 改成 server 或 auto）"
+                : decision.UseServer ? "服务器 agent" : "（服务器 agent 开关关闭）";
 
             await _hooks.SendPlainAsync(conversation,
-                $"外部设备 agent：{(hostOn ? "开" : "关")}（在线：{(online ? deviceDetail : "无")}）\n" +
                 $"服务器内置 agent：{(serverOn ? "开" : "关")}（工具 {(_settings.AgentServerTools.Length == 0 ? "全部" : _settings.AgentServerTools)}）\n" +
                 $"  QQ 动作：{QqActionCatalog.Summarize(QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions))}\n" +
-                $"优先：{preferred}\n当前会走：{willUse}\n单条指定：//@server … 或 //@host … 或 //@设备名 …");
+                $"优先：{preferred}\n当前会走：{willUse}\n单条指定：//@server …（//@host、//@设备名、//import、//pi 已退役）");
             return true;
         }
 
@@ -213,18 +168,18 @@ public sealed partial class AgentCommandService
         }
 
 
-        // 会话管理三块：查询（//sessions //runs //pi）、接用与改名（//import //rename）、增删切（//new //use //del //reset）
-        if (await TryHandleSessionQueryAsync(conversation, payload, head, want, named, bridge))
+        // 会话管理三块：查询（//sessions //runs）、改名（//rename）、增删切（//new //use //del //reset）
+        if (await TryHandleSessionQueryAsync(conversation, payload, head, want, named))
         {
             return true;
         }
 
-        if (await TryHandleSessionImportAsync(conversation, payload, head, want, named, bridge))
+        if (await TryHandleSessionImportAsync(conversation, payload, head, want, named))
         {
             return true;
         }
 
-        if (await TryHandleSessionMutationAsync(conversation, payload, head, want, named, bridge))
+        if (await TryHandleSessionMutationAsync(conversation, payload, head, want, named))
         {
             return true;
         }
@@ -232,9 +187,9 @@ public sealed partial class AgentCommandService
         return false;
     }
 
-    /// <summary>会话查询：`//sessions`（含 `//sessions all`）、`//runs`（执行记录）、`//pi`（设备上的 pi 会话）。</summary>
+    /// <summary>会话查询：`//sessions`（含 `//sessions all`）、`//runs`（执行记录）。</summary>
     private async Task<bool> TryHandleSessionQueryAsync(
-        BotConversation conversation, string payload, string head, string want, string? named, AgentBridgeServer? bridge)
+        BotConversation conversation, string payload, string head, string want, string? named)
     {
         var rest = payload.Length > head.Length ? payload[(head.Length)..].Trim() : string.Empty;
 
@@ -243,17 +198,17 @@ public sealed partial class AgentCommandService
             // //sessions all = 所有聊天的总数与标题（“现在有多少个会话及其标题”）
             if (rest.Equals("all", StringComparison.OrdinalIgnoreCase) || rest is "全部" or "所有")
             {
-                await _hooks.SendPlainAsync(conversation, DescribeAllSessions(bridge));
+                await _hooks.SendPlainAsync(conversation, DescribeAllSessions());
                 return true;
             }
 
-            await _hooks.SendPlainAsync(conversation, DescribeSessions(conversation.SourceKey, bridge));
+            await _hooks.SendPlainAsync(conversation, DescribeSessions(conversation.SourceKey));
             return true;
         }
 
         if (head is "runs" or "流水" or "记录")
         {
-            var cur = _agentSessions.FindCurrent(conversation.SourceKey, ResolveRoute(want, bridge, named).Backend);
+            var cur = _agentSessions.FindCurrent(conversation.SourceKey, "server");
             if (cur is null)
             {
                 await _hooks.SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
@@ -278,40 +233,14 @@ public sealed partial class AgentCommandService
                           (r.Result.Length > 0 ? $" → {MaybeMask(TextRules.Shorten(r.Result, 26), conversation.SourceKey)}" : string.Empty));
             }
 
-            lines.Add("（//sessions 看会话、//pi 看设备上 pi 里的会话）");
+            lines.Add("（//sessions 看会话）");
             await _hooks.SendPlainAsync(conversation, string.Join("\n", lines));
             return true;
         }
 
-        if (head is "pi" or "Pi" or "PI")
+        if (head is "pi" or "Pi" or "PI" or "import" or "导入")
         {
-            if (bridge is null || !bridge.Connected)
-            {
-                await _hooks.SendPlainAsync(conversation, "外部设备不在线，列不出它上面的 pi 会话。");
-                return true;
-            }
-
-            var got = await bridge.RequestPiSessionsAsync(named ?? string.Empty);
-            await Clock.Delay(1200);
-            var list = _agentSessions.LastPiSessions(named);
-            if (!got || list.Count == 0)
-            {
-                await _hooks.SendPlainAsync(conversation, "设备没上报 pi 会话（桥版本旧？重启一下桥）。");
-                return true;
-            }
-
-            var lines = new List<string> { $"设备上的 pi 会话（{list.Count} 个，最近的在前）：" };
-            for (var i = 0; i < Math.Min(10, list.Count); i++)
-            {
-                var it = list[i];
-                var title = it["title"]?.GetValue<string>();
-                var when = DateTimeOffset.FromUnixTimeSeconds(it["mtime"]?.GetValue<long>() ?? 0).ToLocalTime().ToString("MM-dd HH:mm");
-                var shown = string.IsNullOrWhiteSpace(title) ? "(无标题)" : MaybeMask(TextRules.Shorten(title, 30), conversation.SourceKey);
-                lines.Add($"{i + 1}. {when} {shown}");
-            }
-
-            lines.Add("想把某个接过来当自己的会话：//import 序号（或 //import <会话id>）");
-            await _hooks.SendPlainAsync(conversation, string.Join("\n", lines));
+            await _hooks.SendPlainAsync(conversation, "//pi / //import 已随本机桥退役；现在只有服务器内置 agent 会话。");
             return true;
         }
 
@@ -319,48 +248,14 @@ public sealed partial class AgentCommandService
         return false;
     }
 
-    /// <summary>接用设备上的 pi 会话（`//import`）与给当前会话改名（`//rename`）。</summary>
+    /// <summary>接用 pi 会话已退役；保留 //rename。</summary>
     private async Task<bool> TryHandleSessionImportAsync(
-        BotConversation conversation, string payload, string head, string want, string? named, AgentBridgeServer? bridge)
+        BotConversation conversation, string payload, string head, string want, string? named)
     {
         var rest = payload.Length > head.Length ? payload[(head.Length)..].Trim() : string.Empty;
         if (head is "import" or "导入")
         {
-            if (rest.Length == 0)
-            {
-                await _hooks.SendPlainAsync(conversation, "用法：//import <序号|会话id>（先 //pi 看设备上有什么）");
-                return true;
-            }
-
-            var list = _agentSessions.LastPiSessions(named);
-            string? piId = null;
-            string? piTitle = null;
-            if (int.TryParse(rest, out var idx) && idx >= 1 && idx <= list.Count)
-            {
-                piId = list[idx - 1]["id"]?.GetValue<string>();
-                piTitle = list[idx - 1]["title"]?.GetValue<string>();
-            }
-            else if (list.FirstOrDefault(x => x["id"]?.GetValue<string>() == rest.Trim()) is { } hit)
-            {
-                piId = rest.Trim();
-                piTitle = hit["title"]?.GetValue<string>();
-            }
-            else
-            {
-                piId = rest.Trim();   // 也允许直接给 id（不在列表里也认）
-            }
-
-            if (string.IsNullOrWhiteSpace(piId))
-            {
-                await _hooks.SendPlainAsync(conversation, "没认出你说的是哪个会话（先 //pi 列一遍，或直接给会话 id）。");
-                return true;
-            }
-
-            var created = _agentSessions.Create(conversation.SourceKey, "host",
-                string.IsNullOrWhiteSpace(piTitle) ? null : AgentSessionText.AutoTitle(piTitle), named, piId, piOwned: false);
-            await _hooks.SendPlainAsync(conversation,
-                $"已把 pi 会话「{MaybeMask(created.Name, conversation.SourceKey)}」接过来当当前会话（id {MaybeMask(piId, conversation.SourceKey)}）——下一句 //指令 就接着它的上下文跑。\n" +
-                "注意：这是设备上已有的会话，//del 只会从列表里去掉、不会删它的文件。");
+            await _hooks.SendPlainAsync(conversation, "//import 已随本机桥退役；现在只有服务器内置 agent 会话。");
             return true;
         }
 
@@ -374,7 +269,7 @@ public sealed partial class AgentCommandService
 
             // 关键：这里**不新建**会话，也不按“下一句会走哪个后端”去找 ——
             // 否则管理员看到的是 A 会话，改的却是 B（甚至凭空建一个空的）；也正好是“rename 改错会话”那个 bug。
-            var cur = _agentSessions.FindCurrent(conversation.SourceKey, ResolveRoute(want, bridge, named).Backend);
+            var cur = _agentSessions.FindCurrent(conversation.SourceKey, "server");
             if (cur is null)
             {
                 await _hooks.SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
@@ -383,7 +278,7 @@ public sealed partial class AgentCommandService
 
             if (_agentSessions.Rename(conversation.SourceKey, cur.Id, rest))
             {
-                var where = cur.Backend == "server" ? "服务器内置" : $"外部 {cur.Device ?? bridge?.AnyBridge?.Name ?? "设备"}";
+                var where = "服务器内置";
                 // 回话里名字**原样回显**（主人自己打的字，再遮一道只会让人以为改错了）；
                 // 但要写清楚改的是哪一个会话：哪条后端、多少轮。
                 await _hooks.SendPlainAsync(conversation,
@@ -403,15 +298,20 @@ public sealed partial class AgentCommandService
 
     /// <summary>新建（`//new`）、切换（`//use`）、删除（`//del`）、清空历史（`//reset`）。</summary>
     private async Task<bool> TryHandleSessionMutationAsync(
-        BotConversation conversation, string payload, string head, string want, string? named, AgentBridgeServer? bridge)
+        BotConversation conversation, string payload, string head, string want, string? named)
     {
         var rest = payload.Length > head.Length ? payload[(head.Length)..].Trim() : string.Empty;
         if (head is "new" or "新会话")
         {
-            var backend = ResolveRoute(want, bridge, named).Backend;
-            var created = _agentSessions.Create(conversation.SourceKey, backend, rest.Length > 0 ? rest : null, named);
+            var route = ResolveRoute(want, named);
+            if (!route.UseServer)
+            {
+                await ReplyNoRouteAsync(conversation, route.ServerSwitch);
+                return true;
+            }
+            var created = _agentSessions.Create(conversation.SourceKey, "server", rest.Length > 0 ? rest : null, null);
             await _hooks.SendPlainAsync(conversation,
-                $"已开新会话「{MaybeMask(created.Name, conversation.SourceKey)}」（{(backend == "server" ? "服务器内置" : $"外部 {created.Device ?? bridge?.AnyBridge?.Name ?? "设备"}")}）。" +
+                $"已开新会话「{MaybeMask(created.Name, conversation.SourceKey)}」（服务器内置）。" +
                 "下一句 //指令 就从空上下文开始；想切回去用 //use 名字。");
             return true;
         }
@@ -432,7 +332,7 @@ public sealed partial class AgentCommandService
             }
 
             await _hooks.SendPlainAsync(conversation,
-                $"好，切到会话「{MaybeMask(used!.Name, conversation.SourceKey)}」（{(used.Backend == "server" ? "服务器内置" : "外部设备")}，已有 {used.Turns} 轮）。" +
+                $"好，切到会话「{MaybeMask(used!.Name, conversation.SourceKey)}」（服务器内置，已有 {used.Turns} 轮）。" +
                 "下一句 //指令 就接在它后面。");
             return true;
         }
@@ -453,144 +353,75 @@ public sealed partial class AgentCommandService
                 return true;
             }
 
-            // 外部后端且这个 pi 会话是我们建的：让设备把它也删掉（导入进来的不动，那不是我们的）
-            if (deleted.Backend != "server" && deleted.PiOwned && deleted.PiSessionId.Length > 0 && bridge is not null)
-            {
-                await bridge.ForgetSessionAsync(deleted.PiSessionId);
-            }
-
+            // host 历史只读：Delete 对非 server 返回 null，这里不会删掉旧设备会话。
             await _hooks.SendPlainAsync(conversation, $"已删除会话「{MaybeMask(deleted.Name, conversation.SourceKey)}」。当前会话已自动换成新的。");
             return true;
         }
 
         if (head is "reset" or "clear" or "清空")
         {
-            // 两个后端各有一份当前会话，而 `//reset` 的语义是“这个聊天的 agent 记忆清空” ——
-            // 所以**两边都清**。以前按“下一句会走哪边”只清一边，路由一变就清错：
-            // 管理员 `//@某台不在线的设备 …` 实际跑在服务器上，reset 却去清了那台空的外部会话，
-            // 被污染的历史一直留着（2026-09-18 实测：reset 两次都没用）。
-            var cleared = new List<string>();
-            foreach (var backendName in new[] { "server", "host" })
+            // cfg-0.3.3 起只清服务器会话；host 历史是只读留存，不能被 //reset 改掉。
+            var current = _agentSessions.FindCurrent(conversation.SourceKey, "server");
+            if (current is null)
             {
-                var current = _agentSessions.FindCurrent(conversation.SourceKey, backendName);
-                if (current is null)
-                {
-                    continue;
-                }
-
-                var had = current.History.Count;
-                var hadRuns = current.Runs.Count;
-                var oldTitle = current.Name;
-                var reset = _agentSessions.Reset(conversation.SourceKey, current.Id);
-                if (reset is not null && reset.Backend != "server" && reset.PiOwned &&
-                    current.PiSessionId.Length > 0 && bridge is not null)
-                {
-                    await bridge.ForgetSessionAsync(current.PiSessionId);   // 旧的那份 pi 记录清掉
-                }
-
-                // 标题也换回中性的自动名：管理员说“reset 并没有删除此会话的全部内容”——
-                // 历史清了、记录清了，但标题还挂着“服务器资源与容器运行状态”这种旧话题，看着就像没清。
-                if (oldTitle.Length > 0)
-                {
-                    RenameSessionQuietly(conversation.SourceKey, current.Id);
-                }
-
-                var label = backendName == "server" ? "服务器" : "外部";
-                var parts = new List<string>();
-                if (had > 0)
-                {
-                    parts.Add($"{had} 条历史");
-                }
-
-                if (hadRuns > 0)
-                {
-                    parts.Add($"{hadRuns} 条执行记录");
-                }
-
-                cleared.Add($"{label}「{MaybeMask(oldTitle, conversation.SourceKey)}」{(parts.Count > 0 ? "清了 " + string.Join("、", parts) : "本来就空")}");
-            }
-
-            if (cleared.Count == 0)
-            {
-                await _hooks.SendPlainAsync(conversation, "这个聊天还没有 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
+                await _hooks.SendPlainAsync(conversation, "这个聊天还没有服务器 agent 会话（发一条 //指令 会自动建一个，或 //new 新建）。");
                 return true;
             }
 
+            var had = current.History.Count;
+            var hadRuns = current.Runs.Count;
+            var oldTitle = current.Name;
+            var reset = _agentSessions.Reset(conversation.SourceKey, current.Id);
+            if (reset is null)
+            {
+                await _hooks.SendPlainAsync(conversation, "清空没成功（会话可能已不存在）。");
+                return true;
+            }
+
+            // 标题也换回中性的自动名：历史清了但标题还挂着旧话题，看着就像没清。
+            if (oldTitle.Length > 0)
+            {
+                RenameSessionQuietly(conversation.SourceKey, current.Id);
+            }
+
+            var parts = new List<string>();
+            if (had > 0)
+            {
+                parts.Add($"{had} 条历史");
+            }
+
+            if (hadRuns > 0)
+            {
+                parts.Add($"{hadRuns} 条执行记录");
+            }
+
             await _hooks.SendPlainAsync(conversation,
-                $"已清空（{string.Join("、", cleared)}）—— 下一句从零开始，不会再带着上一轮的话题。");
+                $"已清空服务器会话「{MaybeMask(oldTitle, conversation.SourceKey)}」{(parts.Count > 0 ? "（" + string.Join("、", parts) + "）" : "（本来就空）")}—— 下一句从零开始。");
             return true;
         }
 
         return false;
     }
 
-    /// <summary>两个后端都用不了时的那句实话（哪边关着、哪边不在线、指定的设备怎么了）。</summary>
-    private async Task ReplyNoRouteAsync(
-        BotConversation conversation, string? named, AgentBridgeServer? bridge,
-        bool hostSwitch, bool serverSwitch, bool hostOnline, bool deviceDisabled, string? onlineDeviceName)
+    /// <summary>服务器 agent 用不了时的那句实话（开关关着，或请求指向已退役的 host）。</summary>
+    private async Task ReplyNoRouteAsync(BotConversation conversation, bool serverSwitch)
     {
-            var parts = new List<string>();
-            if (!hostSwitch)
-            {
-                parts.Add("外部设备 agent：开关是关的");
-            }
-            else if (deviceDisabled)
-            {
-                parts.Add($"外部设备「{onlineDeviceName}」在面板里被关掉了");
-            }
-            else if (!hostOnline)
-            {
-                parts.Add(named is null
-                    ? "外部设备：不在线"
-                    : $"外部设备「{named}」不在线（在线：{(bridge!.BridgeNames.Count == 0 ? "没有" : string.Join("、", bridge.BridgeNames))}）");
-            }
-
-            if (!serverSwitch)
-            {
-                parts.Add("服务器 agent：开关是关的");
-            }
-
-            await _hooks.SendPlainAsync(conversation, "这条没法跑：" + string.Join("；", parts) +
-                (parts.Count == 0 ? "没有可用的 agent" : string.Empty) + "。面板里打上开关、或指定另一边试试（//@server / //@host）。");
-            return;
+        await _hooks.SendPlainAsync(conversation, serverSwitch
+            ? "这条没法跑：服务器 agent 现在不可用。"
+            : "这条没法跑：服务器 agent 开关是关的，请在面板里打上。");
     }
 
-    /// <summary>派给外部设备（本机那座桥）。队列满了 / 设备缺模型都要当场说清楚，别让人等一个不会来的结果。</summary>
-
-    private async Task RunOnHostAsync(BotConversation conversation, AgentBridgeServer? bridge, string payload, string? named)
+    /// <summary>已移除的 host/@设备目标：在创建会话、入队、模型调用之前明确拒绝。</summary>
+    private async Task ReplyRemovedTargetAsync(BotConversation conversation, string target)
     {
-            var hostSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "host");
-            var task = bridge!.NewTask(conversation.SourceKey, payload, hostSession.PiSessionId, named);
-            task.SessionRef = hostSession;
-            task.RunId = _agentSessions.StartRun(conversation.SourceKey, hostSession.Id, payload, named);   // 记一条“小会话”
-            // 注意：这里**不再**拿指令当标题。标题改成“跑完后按上下文综结”，
-            // 否则每发一条新命令就把会话改名成那条命令的前几个字，会话号就认不出来了。
-            if (!bridge.TryEnqueue(task))
-            {
-                await _hooks.SendPlainAsync(conversation, $"这个会话已经排了 {bridge.QueuedCount} 个任务，等跑完再发吧。");
-                return;
-            }
-
-            await _hooks.SendPlainAsync(conversation,
-                bridge.Current is null
-                    ? $"收到，去{(named ?? bridge.AnyBridge?.Name ?? "管理员设备")}上跑一下（会话「{MaybeMask(hostSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}"
-                    : "收到，排在后面 —— 做完我告诉你。");
-
-            // 面板里给这台设备配的模型它自己没有 → 提前说一声（不然群里只会看到结果，不知道降级了）
-            var liveModel = _settings.DeviceConfigFor(named ?? bridge.AnyBridge?.Name)?.Model;
-            if (!string.IsNullOrWhiteSpace(liveModel) && bridge.DeviceModels(named).Length > 0 &&
-                !bridge.DeviceModels(named).Contains(liveModel, StringComparer.OrdinalIgnoreCase))
-            {
-                await _hooks.SendPlainAsync(conversation,
-                    $"⚠️ 面板里给这台设备配的模型「{liveModel}」它没有（pi 只认 provider/model 这种写法）—— " +
-                    "这次先用它的默认模型跑，能选的话在面板设备表里重选一个。");
-            }
-
-            return;
+        await _hooks.SendPlainAsync(conversation,
+            $"「{MaybeMask(target, conversation.SourceKey)}」是已退役的外部设备目标；本机 pi 桥已移除，// 命令现在只走服务器内置 agent。" +
+            "请把 AgentTarget 改成 server/auto，并使用 //@server。");
     }
+
 
     /// <summary>
-    /// 派给服务器内置 agent（与外部设备互不影响：它不占外部队列）。
+    /// 派给服务器内置 agent（cfg-0.3.3 唯一保留的 // 后端）。
     /// “接着上一句说”只有两种入口：面板开关，或本条指令写 `//接着 …`（默认**不**带上下文）；
     /// 同一会话串行（忙的时候如实回一句），自备 CTS 是为了让 `//stop` 能把正在跑的 bash 也杀掉。
     /// </summary>
@@ -613,6 +444,7 @@ public sealed partial class AgentCommandService
             {
                 Id = $"s{Clock.Now.ToUnixTimeMilliseconds()}",
                 SourceKey = conversation.SourceKey,
+                SourceLease = PlatformSourceExecution.Current,
                 Prompt = promptText,
                 Session = serverSession.PiSessionId,
                 SessionRef = serverSession,
@@ -624,12 +456,14 @@ public sealed partial class AgentCommandService
             task.RunId = serverRunId;
 
             // 自备一个 CTS：//stop 要能把正在跑的那条 bash 也杀掉（不能只标个标记）
-            var cts = new CancellationTokenSource();
+            var cts = task.SourceLease is { } lease
+                ? CancellationTokenSource.CreateLinkedTokenSource(lease.Lifetime) : new CancellationTokenSource();
             _serverAgentCurrent[conversation.SourceKey] = (task, cts);
 
             await _hooks.SendPlainAsync(conversation, $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
             _ = Task.Run(async () =>
             {
+                using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
                 try
                 {
                     await _serverAgent.RunAsync(task, cts.Token);

@@ -1,5 +1,6 @@
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Ports;
+using BotAgent.Domain.Qq;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.OneBot;
@@ -180,10 +181,9 @@ public sealed class BotAgentHost : IDisposable
     {
         try
         {
-            if (_source is not OneBotGateway gateway)
-            {
-                return;
-            }
+            var gateway = _source as OneBotGateway
+                ?? (_source as IChannelRegistry)?.Get(Channels.Private) as OneBotGateway;
+            if (gateway is null) return;
 
             // 给协议端一点握手时间（NapCat 刚连上时 get_login_info 可能还没就绪）
             await Clock.Delay(1500);

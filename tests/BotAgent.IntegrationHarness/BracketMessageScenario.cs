@@ -50,6 +50,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         var (_, settings) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 面板能读到这个开关（默认关，这里是按环境变量开着的）",

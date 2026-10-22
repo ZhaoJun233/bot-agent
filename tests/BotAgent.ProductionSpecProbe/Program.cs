@@ -23,6 +23,7 @@ public static class Program
 {
     public static int Main()
     {
+        ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-production-spec-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
 
@@ -411,7 +412,7 @@ public static class Program
             FeishuVerificationToken = "feishu_verify_token",
             FeishuWhitelist = "oc_synthetic_chat"
         });
-        var fsGateway = new FeishuBotGateway(settingsBox, mockHttp);
+        var fsGateway = new FeishuBotGateway(settingsBox, mockHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var reg = new PlatformRegistry(new IPlatformAdapter[] { fsGateway }, new IPlatformMessenger[] { fsGateway });
         Check(reg.GetAdapter(PlatformId.Feishu) is not null && reg.GetMessenger(PlatformId.Feishu) is not null,
             "PlatformRegistry 能根据平台标识准确检索适配器与发送端");
@@ -470,7 +471,7 @@ public static class Program
             FeishuEncryptKey = "test_signing_key_456",
             FeishuWhitelist = "oc_synthetic_chat"
         });
-        var securedGateway = new FeishuBotGateway(boxWithSecret, mockHttp);
+        var securedGateway = new FeishuBotGateway(boxWithSecret, mockHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var unverifiedRes = securedGateway.HandleWebhookAsync("{\"type\":\"event_callback\"}", "bad_sig", "1700000000", "nonce1").GetAwaiter().GetResult();
         Check(!unverifiedRes.Handled && unverifiedRes.StatusCode == 401,
             "飞书配置加密签名密钥时伪造签名的事件请求直接返回 401");
@@ -548,7 +549,7 @@ public static class Program
             FeishuAppSecret = "sec_test",
             FeishuVerificationToken = "feishu_verify_token"
         });
-        var emptyWhitelistGateway = new FeishuBotGateway(emptyWhitelistBox, mockHttp);
+        var emptyWhitelistGateway = new FeishuBotGateway(emptyWhitelistBox, mockHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var deniedByEmptyWhitelist = emptyWhitelistGateway.HandleWebhookAsync(
             messageEvtJson.Replace("evt_test_001", "evt_empty_whitelist_002"), null, null, null).GetAwaiter().GetResult();
         Check(deniedByEmptyWhitelist.Handled && deniedByEmptyWhitelist.ResponseBody.Contains("not_whitelisted"),
@@ -568,7 +569,7 @@ public static class Program
                 Content = new StringContent("{\"code\":0}")
             }
         };
-        var failingGateway = new FeishuBotGateway(settingsBox, httpFailure);
+        var failingGateway = new FeishuBotGateway(settingsBox, httpFailure, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var failedDelivery = failingGateway.SendAsync(failingGateway.Context, new OutboundMessage(
             new ConversationId(PlatformId.Feishu, AccountScope.Default, ConversationKind.GroupChat, "oc_synthetic_chat"),
             "HTTP 状态失败测试")).GetAwaiter().GetResult();
@@ -576,7 +577,7 @@ public static class Program
         {
             TokenResponse = "{\"code\":0,\"tenant_access_token\":123,\"expire\":{}}"
         };
-        var malformedTokenGateway = new FeishuBotGateway(settingsBox, malformedTokenHttp);
+        var malformedTokenGateway = new FeishuBotGateway(settingsBox, malformedTokenHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var malformedTokenDelivery = malformedTokenGateway.SendAsync(
             malformedTokenGateway.Context,
             new OutboundMessage(
@@ -587,7 +588,7 @@ public static class Program
             "飞书 token 接口返回异常结构时按受控失败结果返回");
 
         var malformedTokenRootHttp = new MockProbeHttp { TokenResponse = "[]" };
-        var malformedTokenRootGateway = new FeishuBotGateway(settingsBox, malformedTokenRootHttp);
+        var malformedTokenRootGateway = new FeishuBotGateway(settingsBox, malformedTokenRootHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var malformedTokenRootDelivery = malformedTokenRootGateway.SendAsync(
             malformedTokenRootGateway.Context,
             new OutboundMessage(

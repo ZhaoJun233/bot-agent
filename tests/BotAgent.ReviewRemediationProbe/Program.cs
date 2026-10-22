@@ -23,14 +23,45 @@ internal static class Program
     private static int _passed;
     private static int _failed;
 
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
+        if (await ModelMigrationTests.TryRunChildAsync(args) is { } modelChildExit) return modelChildExit;
+        if (await PlatformLifecycleTests.TryRunChildAsync(args) is { } platformChildExit) return platformChildExit;
+        if (await ManagedOperationContractTests.TryRunChildAsync(args) is { } managedOperationsExit) return managedOperationsExit;
+        if (await ManagedHostCapabilityTests.TryRunChildAsync(args) is { } managedHostExit) return managedHostExit;
+        if (await ManagedCapabilityContractTests.TryRunChildAsync(args) is { } managedChildExit) return managedChildExit;
+        if (await ConfigurationContractTests.TryRunChildAsync(args) is { } configurationChildExit) return configurationChildExit;
+        if (await ClockContractTests.TryRunChildAsync(args) is { } childExit) return childExit;
+        if (await DatabaseContractTests.TryRunChildAsync(args) is { } databaseChildExit) return databaseChildExit;
+        if (StorageMigrationTests.TryRunChild(args) is { } storageChildExit) return storageChildExit;
+        ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-review-remediation-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
         try
         {
             AppDatabase.Initialize();
+            await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
+            await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));
+            await RunAsync("managed operations", () => ManagedOperationContractTests.RunAsync(Check));
+            await RunAsync("managed host capabilities", () => ManagedHostCapabilityTests.RunAsync(Check));
+            await RunAsync("naming compatibility", () => { NamingCompatibilityTests.RunAsync(Check); return Task.CompletedTask; });
+            await RunAsync("engine wiring", () => EngineWiringTests.RunAsync(Check));
+            await RunAsync("platform lifecycle", () => PlatformLifecycleTests.RunAsync(Check));
+            await RunAsync("Model transport migration", () => ModelMigrationTests.RunAsync(Check));
+            await RunAsync("configuration transaction module", () => ConfigurationContractTests.StorageAsync(Check));
+            await RunAsync("configuration query reuse", () => ConfigurationContractTests.QueryReuseAsync(Check));
+            await RunAsync("configuration module recovery", () => ConfigurationContractTests.ModuleRecoveryAsync(Check));
+            await RunAsync("shared database", () => DatabaseContractTests.SharedAsync(Check));
+            await RunAsync("Storage episode adoption", () => StorageMigrationTests.EpisodeAsync(Check));
+            await RunAsync("Storage bound import root", () => StorageMigrationTests.BoundRootAsync(Check));
+            await RunAsync("Storage binding and typed import", () => StorageMigrationTests.BindingAndImportAsync(Check));
+            await RunAsync("nested database write", () => DatabaseContractTests.NestedWriteAsync(Check));
+            await RunAsync("future database schema", () => DatabaseContractTests.FutureSchemaAsync(Check));
+            await RunAsync("database backup path", () => DatabaseContractTests.BackupPathAsync(Check));
+            await RunAsync("database atomicity", () => DatabaseContractTests.AtomicityAsync(Check));
+            await RunAsync("database restore", () => DatabaseContractTests.RestoreAsync(Check));
+            await RunAsync("clock propagation", () => ClockContractTests.PropagationAsync(Check));
             await RunAsync("episode IDs", EpisodeIdsAsync);
             await RunAsync("prompt version concurrency", PromptVersionsAsync);
             await RunAsync("jargon phrase limits", JargonPhraseLimitsAsync);
