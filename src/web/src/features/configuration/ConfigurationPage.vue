@@ -12,6 +12,7 @@ import {
 } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
+import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import {
   baselineRaw,
   buildPatch,
@@ -368,21 +369,56 @@ function reportAuthFailure(cause: unknown): boolean {
   return false
 }
 
-async function reload(): Promise<void> {
+/**
+ * 读取配置基线。
+ *
+ * `mode='background'` 是事件驱动的补读：**只更新基线快照，绝不碰草稿**
+ * （计划要求后台把 status/配置重读一遍，同时保留各自的草稿与错误语义）。
+ * 返回 false 表示这次读取确实失败，调用方（调度器）据此不签"已追平"。
+ */
+async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'): Promise<boolean> {
   const sequence = ++loadSequence
   loading.value = true
   error.value = null
   try {
     const next = await props.client.readConfiguration(1)
-    if (sequence !== loadSequence) return
+    if (sequence !== loadSequence) return true
+    // 代际变化：旧写计划作废（计划 §9.3 第 242 行）。草稿保留，由用户决定。
+    if (mode === 'background' && snapshot.value !== null
+      && snapshot.value.generation !== next.generation) {
+      phase.value = 'idle'
+      pendingKey.value = null
+    }
     snapshot.value = next
     loadedAt.value = formatTime(new Date().toISOString())
+    return true
   } catch (cause) {
-    if (sequence !== loadSequence) return
-    if (reportAuthFailure(cause)) return
+    if (sequence !== loadSequence) return true
+    // 认证失效也是"没读到"：不能签已追平。
+    if (reportAuthFailure(cause)) return false
     error.value = toUiError(cause)
+    return false
   } finally {
     if (sequence === loadSequence) loading.value = false
+  }
+}
+
+// ── 共享事件同步（计划 §9.3：配置也是五类补读之一） ──────────────────
+const detachScheduler = ref<(() => void) | null>(null)
+
+function attachScheduler(client: ZbaClient): void {
+  detachScheduler.value?.()
+  const { scheduler, release } = acquireScheduler(client)
+  const off = scheduler.subscribe({
+    name: 'configuration',
+    matches: (event) => event.type === 'configuration.saved',
+    reload: async () => {
+      if (!(await reloadBaseline('background'))) throw new Error('configuration_read_failed')
+    }
+  })
+  detachScheduler.value = () => {
+    off()
+    release()
   }
 }
 
@@ -691,6 +727,8 @@ function discardSecretsOnLeave(): void {
 
 /** 会话结束（锁定、401、换令牌）时立即清空内存草稿与秘密输入。 */
 function endSession(): void {
+  detachScheduler.value?.()
+  detachScheduler.value = null
   if (leaveResolve !== null) closeLeave(false)
   draft.value = {}
   secretDrafts.value = {}
@@ -709,15 +747,31 @@ function endSession(): void {
 
 onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
-  void reload()
+  attachScheduler(props.client)
+  void reloadBaseline()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  detachScheduler.value?.()
+  detachScheduler.value = null
   secretDrafts.value = {}
 })
 
-defineExpose({ reload, refreshOnEnter, requestLeave, discardSecretsOnLeave, endSession, draftCount: dirtyCount })
+/** 用户显式「重新读取」：交互式语义（撤下旧基线），不接受参数。 */
+function reload(): Promise<boolean> {
+  return reloadBaseline('interactive')
+}
+
+defineExpose({
+  // App 的「刷新」按钮与模板里的按钮都调 reload()：无参、可当点击处理器。
+  reload,
+  refreshOnEnter,
+  requestLeave,
+  discardSecretsOnLeave,
+  endSession,
+  draftCount: dirtyCount
+})
 </script>
 
 <template>
@@ -736,7 +790,7 @@ defineExpose({ reload, refreshOnEnter, requestLeave, discardSecretsOnLeave, endS
         <span class="mode-badge" :data-mode="props.mode" data-testid="config-mode-badge">
           {{ props.mode === 'admin' ? '管理员模式' : '标准模式' }}
         </span>
-        <button type="button" class="tonal" data-testid="config-reload" :disabled="busy" @click="reload">
+        <button type="button" class="tonal" data-testid="config-reload" :disabled="busy" @click="reload()">
           {{ loading ? '读取中…' : '重新读取' }}
         </button>
       </div>

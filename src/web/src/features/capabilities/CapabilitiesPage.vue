@@ -14,6 +14,7 @@ import {
   type ZbaManagedRuntimeState
 } from '../../api/zba'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
+import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 
@@ -309,9 +310,12 @@ async function loadContext(): Promise<void> {
 
 let loadSequence = 0
 
-async function load(cursor?: string): Promise<void> {
-  if (loading.value) return
+async function load(cursor?: string, mode: 'initial' | 'interactive' | 'background' = 'initial'): Promise<boolean> {
+  if (loading.value) return false
   const sequence = ++loadSequence
+  // 后台/交互式补读都要保住旧快照：读取失败显示旧目录，而不是假装"没有能力"。
+  const snapshot = mode === 'initial' ? null : items.value
+  const snapshotCursor = nextCursor.value
   loading.value = true
   error.value = null
   pageError.value = null
@@ -322,24 +326,47 @@ async function load(cursor?: string): Promise<void> {
       limit: 100,
       cursor
     })
-    if (sequence !== loadSequence) return
+    if (sequence !== loadSequence) return true
     items.value = cursor ? [...items.value, ...page.items] : page.items
     nextCursor.value = page.nextCursor ?? null
     lastLoadedAt.value = new Date().toISOString()
+    return true
   } catch (cause) {
-    if (sequence !== loadSequence) return
-    if (reportAuthFailure(cause)) return
+    if (sequence !== loadSequence) return true
+    if (reportAuthFailure(cause)) return false
     const ui = toUiError(cause)
     if (cursor) {
       // 翻页失败不能丢掉已加载的列表，也不能假装加载成功。
       pageError.value = ui
     } else {
       error.value = ui
-      items.value = []
-      nextCursor.value = null
+      // 读取失败保留旧目录：显示旧数据 + 明确失败提示（与任务页同一语义）。
+      items.value = snapshot ?? []
+      nextCursor.value = snapshotCursor
     }
+    return false
   } finally {
     if (sequence === loadSequence) loading.value = false
+  }
+}
+
+// ── 共享事件同步（计划 §9.3：能力目录也是五类补读之一） ──────────────
+const detachScheduler = ref<(() => void) | null>(null)
+
+function attachScheduler(client: ZbaClient): void {
+  detachScheduler.value?.()
+  const { scheduler, release } = acquireScheduler(client)
+  const off = scheduler.subscribe({
+    name: 'capabilities',
+    matches: (event) => event.type === 'capability.executed',
+    // 失败必须抛给调度器：自己吞掉会让它误签"已追平"并推进游标（R2）。
+    reload: async () => {
+      if (!(await load(undefined, 'background'))) throw new Error('capabilities_read_failed')
+    }
+  })
+  detachScheduler.value = () => {
+    off()
+    release()
   }
 }
 
@@ -964,6 +991,12 @@ function abandonInFlight(): void {
   actionError.value = null
 }
 
+watch(() => props.client, (value, previous) => {
+  if (value === previous) return
+  // 换身份：先释放旧调度器（丢弃旧游标），再挂新的。
+  attachScheduler(value)
+})
+
 watch(() => props.active, (value) => {
   if (value === false) abandonInFlight()
 })
@@ -977,12 +1010,15 @@ watch(() => props.writesEnabled, (value) => {
 })
 
 onMounted(() => {
+  attachScheduler(props.client)
   void load()
 })
 
 onBeforeUnmount(() => {
   unmounted = true
   ownership += 1
+  detachScheduler.value?.()
+  detachScheduler.value = null
   pendingAction.value = null
   actionBusy.value = false
   operations.value = []

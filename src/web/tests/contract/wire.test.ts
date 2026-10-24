@@ -674,6 +674,125 @@ describe('冻结 wire 样例', () => {
     expect(JSON.stringify(error)).not.toMatch(/detail|prompt|authorization/i)
   })
 
+
+  /**
+   * S3 契约回归：真实宿主的三个 decoder 缺口。
+   *
+   * 这三条都是"用真宿主返回值作契约回归"——之前用信封/显式 null 的样例测过，
+   * 却没测真实 wire，于是 S3-02/S3-03 一路绿测到验收才暴露。
+   */
+  describe('S3 真实 wire 回归', () => {
+    function clientWithBody(body: unknown, status = 200): ZbaClient {
+      return new ZbaClient({
+        fetchImpl: async () => new Response(JSON.stringify(body), {
+          status,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      })
+    }
+
+    it('任务末页省略 nextCursor（JsonIgnoreCondition 写 null 为省略）仍能解码', async () => {
+      const client = clientWithBody({
+        items: [{
+          id: 'zt-1', state: 3, target: 'server', sessionId: 'synthetic-session',
+          createdAt: '2026-10-23T00:00:00Z', updatedAt: '2026-10-23T00:00:01Z',
+          cancellationRequested: false
+        }]
+      })
+      const page = await client.listTasks({ limit: 50 })
+      expect(page.items).toHaveLength(1)
+      expect(page.nextCursor ?? null).toBeNull()
+    })
+
+    it('会话末页同样省略 nextCursor', async () => {
+      const client = clientWithBody({
+        items: [{
+          id: 's-1', name: 'synthetic', backend: 'server', current: true, turns: 0,
+          historyChars: 0, createdAt: '2026-10-23T00:00:00Z', updatedAt: '2026-10-23T00:00:00Z'
+        }]
+      })
+      const page = await client.listSessions('panel:synthetic')
+      expect(page.items).toHaveLength(1)
+      expect(page.nextCursor ?? null).toBeNull()
+    })
+
+    it('审批队列是裸数组（不是 {items:[]} 信封）', async () => {
+      const client = clientWithBody([{
+        id: 'a-1', toolId: 'synthetic.tool', summary: '合成摘要',
+        session: 'synthetic-session', expiresAt: '2026-10-23T01:00:00Z', policyVersion: 1
+      }])
+      const approvals = await client.listApprovals()
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0]?.id).toBe('a-1')
+    })
+
+    it('审批队列为空数组时返回空而不是报错', async () => {
+      const client = clientWithBody([])
+      await expect(client.listApprovals()).resolves.toEqual([])
+    })
+
+    it('审批队列格式无效时抛错，不会被当成"确认没有审批"', async () => {
+      const client = clientWithBody({ wrong: 'shape' })
+      await expect(client.listApprovals()).rejects.toMatchObject({ code: 'invalid_json' })
+    })
+
+    it('found 必须带完整任务摘要：畸形 task.id=42 不能升级成已受理', async () => {
+      const client = clientWithBody({
+        code: 'found', instanceId: 'synthetic-instance', task: { id: 42 }, taskId: null, acceptedAt: null
+      })
+      await expect(client.findTask('task1-x')).rejects.toMatchObject({ code: 'invalid_json' })
+    })
+
+    it('expired 必须给受理时的 taskId，缺失即无效', async () => {
+      const missing = clientWithBody({
+        code: 'expired', instanceId: 'synthetic-instance', task: null, taskId: null, acceptedAt: null
+      })
+      await expect(missing.findTask('task1-x')).rejects.toMatchObject({ code: 'invalid_json' })
+
+      const ok = clientWithBody({
+        code: 'expired', instanceId: 'synthetic-instance', task: null,
+        taskId: 'zt-9', acceptedAt: '2026-10-23T00:00:00Z'
+      })
+      await expect(ok.findTask('task1-x')).resolves.toMatchObject({ code: 'expired', taskId: 'zt-9' })
+    })
+
+    it('事件分页可解码，resyncRequired 与锚点原样保留', async () => {
+      const client = clientWithBody({
+        items: [{ sequence: 4, type: 'task.updated', at: '2026-10-23T00:00:00Z', taskId: 'zt-1', state: 'running' }],
+        nextSequence: 4, resyncRequired: false, generatedAt: '2026-10-23T00:00:01Z'
+      })
+      const page = await client.listEvents(3, 100)
+      expect(page.nextSequence).toBe(4)
+      expect(page.resyncRequired).toBe(false)
+      expect(page.items[0]?.taskId).toBe('zt-1')
+    })
+
+    // ── R5：202 + 空任务 id 不是稳定身份，不能当受理成功 ──────────────
+    it('202 回执的 id 为空字符串时必须判为非法响应，不能当受理成功', async () => {
+      const client = clientWithBody({ id: '', state: 0, acceptedAt: '2026-10-23T00:00:00Z' }, 202)
+      await expect(client.submitTask({
+        sourceKey: 'panel:synthetic', sessionId: 'synthetic-session',
+        prompt: '合成任务', target: 'server', timeoutSeconds: 120
+      }, 'task1-synthetic-key')).rejects.toMatchObject({ code: 'invalid_json' })
+    })
+
+    it('稳定 id 的 202 回执仍正常解码', async () => {
+      const client = clientWithBody({ id: 'zt-1', state: 0, acceptedAt: '2026-10-23T00:00:00Z' }, 202)
+      await expect(client.submitTask({
+        sourceKey: 'panel:synthetic', sessionId: 'synthetic-session',
+        prompt: '合成任务', target: 'server', timeoutSeconds: 120
+      }, 'task1-synthetic-key')).resolves.toMatchObject({ id: 'zt-1', state: 0 })
+    })
+
+    it('5xx 错误体即使长得像成功回包也不能算受理', async () => {
+      const client = clientWithBody({ id: 'zt-1', state: 0, acceptedAt: '2026-10-23T00:00:00Z' }, 502)
+      await expect(client.submitTask({
+        sourceKey: 'panel:synthetic', sessionId: 'synthetic-session',
+        prompt: '合成任务', target: 'server', timeoutSeconds: 120
+      }, 'task1-synthetic-key')).rejects.toMatchObject({ status: 502 })
+    })
+  })
+
   it('契约守卫拒绝未知字段、缺失字段与任意层级的重复 key', () => {
     expect(() => assertWire({ ...statusFixture, extra: true }, statusShape)).toThrow(/unknown field/)
     const { state: _state, ...withoutState } = statusFixture

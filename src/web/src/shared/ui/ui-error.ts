@@ -28,7 +28,7 @@ export function toUiError(cause: unknown): UiError {
     }
     return {
       code: cause.code,
-      message: messages[cause.status] ?? cause.message,
+      message: messages[cause.status] ?? 'ZBA 请求失败（HTTP ' + cause.status + '）。',
       status: cause.status,
       requestId: cause.requestId
     }

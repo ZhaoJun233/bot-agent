@@ -272,6 +272,20 @@ describe('ZbaClient', () => {
       .resolves.toMatchObject({ code: 14 })
   })
 
+  it('拒绝可选字段类型错误的任务结果回包', async () => {
+    const invalidBodies = [
+      { id: 'task-synthetic', state: 3, updatedAt: '2026-10-20T12:00:00Z', available: true, summaryTruncated: false, summaryChars: 0, summary: {} },
+      { id: 'task-synthetic', state: 3, updatedAt: '2026-10-20T12:00:00Z', available: true, summaryTruncated: false, summaryChars: 0, reasonCode: 42 },
+      { id: 'task-synthetic', state: 3, updatedAt: '2026-10-20T12:00:00Z', available: true, summaryTruncated: false, summaryChars: 0, errorCode: [] },
+      { id: 'task-synthetic', state: 3, updatedAt: '2026-10-20T12:00:00Z', available: true, summaryTruncated: false, summaryChars: 0, summary: null }
+    ]
+    for (const body of invalidBodies) {
+      const { fetchImpl } = fakeFetch(jsonResponse(body))
+      await expect(new ZbaClient({ fetchImpl }).getTaskResult('task-synthetic'))
+        .rejects.toMatchObject({ status: 200, code: 'invalid_json' })
+    }
+  })
+
   it('配置核对在 HTTP 409 上接受代际变化结果', async () => {
     const { fetchImpl } = fakeFetch(jsonResponse({ code: 6 }, 409))
     const client = new ZbaClient({ token: 'x', fetchImpl })

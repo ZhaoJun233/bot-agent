@@ -2086,6 +2086,60 @@ tr.dirty td {
 .cap-op-desc { min-width: 0; overflow-wrap: anywhere; }
 .cap-op-state { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 
+/* ── S3：任务与审批 ─────────────────────────────────────────────────────── */
+.task-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.task-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.task-form label > span { color: var(--text-muted); }
+.task-form input,
+.task-form textarea {
+  padding: 8px 10px;
+  border: 1px solid rgba(27, 28, 29, 0.16);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+}
+.task-form input:disabled,
+.task-form textarea:disabled { background: #f4f4f5; color: var(--text-muted); }
+.task-form-wide { grid-column: 1 / -1; }
+.task-submission { margin-top: 14px; display: grid; gap: 10px; }
+.task-list { display: grid; gap: 14px; margin-top: 18px; }
+.task-item {
+  border: 1px solid rgba(27, 28, 29, 0.1);
+  border-radius: 12px;
+  padding: 16px;
+  background: #fff;
+}
+.task-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.task-id { font-size: 14px; margin: 2px 0; overflow-wrap: anywhere; }
+.task-approval-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; }
+.task-approval-list li {
+  border: 1px solid rgba(27, 28, 29, 0.1);
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+.task-approval-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* 决定没有生效的审批：保留给人看原因，但入口关闭（不靠反复提交争取成功）。 */
+.task-approval-list li.task-approval-stale { opacity: 0.72; border-style: dashed; }
+/* 重新执行的二次确认框：明显比主按钮更重，避免顺手点到。 */
+.task-submission .inline-notice.bad { display: grid; gap: 8px; }
+.task-approval-summary { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.task-approval-meta { margin: 0; color: var(--text-muted); font-size: 12px; }
+.task-detail { margin-top: 18px; }
+.task-summary { font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+
 @media (max-width: 640px) {
   .cap-grid { grid-template-columns: minmax(0, 1fr); }
   .cap-card { padding: 16px; }

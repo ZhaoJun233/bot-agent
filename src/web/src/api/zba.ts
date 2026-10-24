@@ -50,6 +50,85 @@ export interface ZbaMeta {
 // 以下为 S2 写操作前的 wire 类型；枚举在 zba-1.0 中按数字传输。
 export type ZbaTaskState = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 
+export interface ZbaTaskPage {
+  items: ZbaTaskSummary[]
+  /**
+   * 末页没有下一个游标。
+   *
+   * ZbaJson 用 JsonIgnoreCondition.WhenWritingNull 序列化：null 会被**整段省略**，
+   * 所以真实末页是「没有这个字段」，不是 `nextCursor: null`。强制要求它存在
+   * 会把合法末页判成 invalid_json（S3-02）。
+   */
+  nextCursor?: string | null
+}
+
+/** 事件环里的一条事件：只带标识/状态/错误码，不带提示词、工具载荷或聊天正文。 */
+export interface ZbaEvent {
+  sequence: number
+  type: string
+  at: string
+  taskId?: string | null
+  state?: string | null
+  version?: string | null
+  reasonCode?: string | null
+}
+
+/**
+ * 事件分页。
+ *
+ * `nextSequence` 是服务端已确认的游标锚点；`resyncRequired` 表示中间有缺口
+ * （环淘汰、序号落盘失败、进程重启），必须先整份重读状态，再从记录的锚点补读。
+ */
+export interface ZbaEventPage {
+  items: ZbaEvent[]
+  nextSequence: number
+  resyncRequired: boolean
+  generatedAt: string
+}
+
+export interface ZbaSessionSummary {
+  id: string
+  name: string
+  backend: string
+  current: boolean
+  turns: number
+  historyChars: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ZbaSessionPage {
+  items: ZbaSessionSummary[]
+  /** 与任务列表同源：末页整段省略该字段。 */
+  nextCursor?: string | null
+}
+
+export interface ZbaSessionEnsureResult {
+  session: ZbaSessionSummary
+  created: boolean
+}
+
+export interface ZbaTaskListQuery {
+  limit?: number
+  cursor?: string
+}
+
+export interface ZbaTaskAccepted {
+  id: string
+  state: ZbaTaskState
+  acceptedAt: string
+}
+
+export interface ZbaTaskSubmission {
+  sourceKey: string
+  sessionId: string
+  prompt: string
+  target: 'server'
+  timeoutSeconds: number
+}
+
+const TASK_FIND_CODES: ZbaTaskFindCode[] = ['found', 'expired', 'accepted_unknown', 'unknown']
+
 export interface ZbaTaskSummary {
   id: string
   state: ZbaTaskState
@@ -452,6 +531,13 @@ type AuthMode = 'required' | 'none'
 
 export class ZbaClient {
   readonly baseUrl: string
+  /**
+   * 本地身份上下文标签：令牌的**单向摘要**。
+   *
+   * 只用于「同服务 + 同身份」的本地比对（例如锁定后恢复未决提交的只读核对），
+   * 不参与鉴权、不进请求、不落存储，也无法从它还原令牌。
+   */
+  readonly identityLabel: string
   private readonly token: string
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
@@ -459,6 +545,7 @@ export class ZbaClient {
   constructor(options: ZbaClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '/zba/v1').replace(/\/+$/, '')
     this.token = options.token?.trim() ?? ''
+    this.identityLabel = digest(this.token)
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = options.timeoutMs ?? 10_000
   }
@@ -613,6 +700,145 @@ export class ZbaClient {
     throw this.invalidResponse(response)
   }
 
+  // ── S3：Agent 会话 ───────────────────────────────────────────────────────
+
+  /** 列出某个来源下已存在的 server 会话。 */
+  async listSessions(sourceKey: string, limit = 50): Promise<ZbaSessionPage> {
+    const params = new URLSearchParams({ sourceKey, limit: String(limit) })
+    const response = await this.fetchJson(`/sessions?${params.toString()}`, { method: 'GET' }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isSessionPage(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  /**
+   * 确保来源下存在一个当前 server 会话。
+   *
+   * 提交任务前必须先有会话：后端对不存在的 sessionId 直接 404 session_not_found，
+   * 不会替你新建。这里是唯一被允许的“顺带创建”入口。
+   */
+  async ensureSession(sourceKey: string): Promise<ZbaSessionEnsureResult> {
+    const response = await this.fetchJson('/sessions/ensure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceKey })
+    }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isSessionEnsureResult(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  // ── S3：Agent 任务 ───────────────────────────────────────────────────────
+
+  /** 任务列表（分页）。游标由后端签发，客户端只原样回传。 */
+  async listTasks(query: ZbaTaskListQuery = {}): Promise<ZbaTaskPage> {
+    const params = new URLSearchParams()
+    if (query.limit !== undefined) params.set('limit', String(query.limit))
+    if (query.cursor !== undefined) params.set('cursor', query.cursor)
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    const response = await this.fetchJson(`/tasks${suffix}`, { method: 'GET' }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isTaskPage(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  /**
+   * 提交任务。幂等键由调用方持有：同键重复提交不会产生第二个任务，
+   * 结果未知时用它 /tasks/find 核对，而不是换键重提。
+   */
+  async submitTask(request: ZbaTaskSubmission, idempotencyKey: string): Promise<ZbaTaskAccepted> {
+    const response = await this.fetchJson('/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(request)
+    }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isTaskAccepted(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  /** 按幂等键核对提交结果：found / expired / accepted_unknown / unknown。 */
+  async findTask(key: string): Promise<ZbaTaskFindResult> {
+    const response = await this.fetchJson('/tasks/find', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key })
+    }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isTaskFindResult(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  /** 单个任务当前状态；404 是可解释结果（任务不存在）。 */
+  async getTask(id: string): Promise<ZbaTaskSummary | null> {
+    const response = await this.fetchJson(`/tasks/${encodeURIComponent(id)}`, { method: 'GET' })
+    if (response.status === 200 && isTaskSummary(response.data)) return response.data
+    if (response.status === 404 && isTaskNotFound(response.data)) return null
+    if (!response.ok) throw this.errorFrom(response)
+    throw this.invalidResponse(response)
+  }
+
+  /** 有界结果摘要；admin 路由，不可用时 available=false 并给出 reasonCode。 */
+  async getTaskResult(id: string): Promise<ZbaTaskResult | null> {
+    const response = await this.fetchJson(`/tasks/${encodeURIComponent(id)}/result`, { method: 'GET' })
+    if (response.status === 200 && isTaskResult(response.data)) return response.data
+    if (response.status === 404 && isTaskNotFound(response.data)) return null
+    if (!response.ok) throw this.errorFrom(response)
+    throw this.invalidResponse(response)
+  }
+
+  /** 请求取消：返回服务端真实状态，不把“已请求”写成“已取消”。 */
+  async cancelTask(id: string): Promise<ZbaTaskCancelResult> {
+    const response = await this.fetchJson(`/tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isTaskCancelResult(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  // ── S3：审批 ────────────────────────────────────────────────────────────
+
+  /** 待审批列表（已脱敏摘要，不含工具载荷）。 */
+  async listApprovals(): Promise<ZbaApprovalSummary[]> {
+    const response = await this.fetchJson('/approvals', { method: 'GET' }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (!isApprovalList(response.data)) throw this.invalidResponse(response)
+    return Array.isArray(response.data) ? response.data : response.data.items
+  }
+
+  /** 批准或拒绝一次待审批请求；拒绝与过期都不能当作已执行。 */
+  async decideApproval(id: string, approve: boolean): Promise<ZbaApprovalDecisionResult> {
+    const response = await this.fetchJson(`/approvals/${encodeURIComponent(id)}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve })
+    }, 'required')
+    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
+    if (!response.ok) throw this.errorFrom(response)
+    if (isApprovalDecisionResult(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  /**
+   * 读取 after 之后的有序事件。
+   *
+   * 事件只是**失效通知**：不携带结果，也不能当作状态。客户端据此重读对应资源，
+   * 最终状态以资源读取为准。resyncRequired=true 表示中间有缺口，必须整份重读。
+   */
+  async listEvents(after: number, limit = 100): Promise<ZbaEventPage> {
+    const params = new URLSearchParams({ after: String(after), limit: String(limit) })
+    const response = await this.fetchJson(`/events?${params.toString()}`, { method: 'GET' }, 'required')
+    if (!response.ok) throw this.errorFrom(response)
+    if (isEventPage(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
   /**
    * 只读地确认当前 Bearer 是否具备 admin 角色：
 
@@ -736,10 +962,210 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+/**
+ * 令牌 → 本地身份标签。
+ *
+ * FNV-1a 32 位双通道：不是密码学哈希，也不需要是——它只在本机内存里做
+ * 「这两个会话是不是同一个身份」的判断，从不外发、从不落盘。空令牌得到固定
+ * 标签，未连接时不会误配到任何真实会话。
+ */
+function digest(value: string): string {
+  if (value.length === 0) return 'anonymous'
+  let h1 = 0x811c9dc5
+  let h2 = 0x01000193
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    h1 ^= code
+    h1 = Math.imul(h1, 0x01000193) >>> 0
+    h2 = (Math.imul(h2 ^ code, 0x85ebca6b) + index) >>> 0
+  }
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0')
+}
+
 function isTaskNotFound(value: unknown): boolean {
   return isRecord(value)
     && isRecord(value.error)
     && value.error.code === 'task_not_found'
+}
+
+function isSessionSummary(value: unknown): value is ZbaSessionSummary {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.backend === 'string'
+    && typeof value.current === 'boolean'
+    && typeof value.turns === 'number'
+    && typeof value.historyChars === 'number'
+    && typeof value.createdAt === 'string'
+    && typeof value.updatedAt === 'string'
+}
+
+function isSessionPage(value: unknown): value is ZbaSessionPage {
+  return isRecord(value)
+    && Array.isArray(value.items)
+    && value.items.every(isSessionSummary)
+    && isOptionalString(value.nextCursor)
+}
+
+/** 末页游标被服务端整段省略：undefined / null / string 都是合法 wire。 */
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === 'string'
+}
+
+/** 可选字段出现就必须是对的类型；缺失/null 都算「没有」。 */
+function isOptionalResultString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function isOptionalNonNegativeFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+}
+
+function isOptionalNonEmptyString(value: unknown): value is string | undefined | null {
+  return value === undefined || value === null || (typeof value === 'string' && value.length > 0)
+}
+
+function isSessionEnsureResult(value: unknown): value is ZbaSessionEnsureResult {
+  return isRecord(value) && isSessionSummary(value.session) && typeof value.created === 'boolean'
+}
+
+function isTaskSummary(value: unknown): value is ZbaTaskSummary {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.state === 'number'
+    && typeof value.target === 'string'
+    && typeof value.sessionId === 'string'
+    && typeof value.createdAt === 'string'
+    && typeof value.updatedAt === 'string'
+    && typeof value.cancellationRequested === 'boolean'
+}
+
+function isTaskPage(value: unknown): value is ZbaTaskPage {
+  return isRecord(value)
+    && Array.isArray(value.items)
+    && value.items.every(isTaskSummary)
+    && isOptionalString(value.nextCursor)
+}
+
+/**
+ * 受理回执的运行时校验（R5）。
+ *
+ * 计划 §9.1 第 226 行：**返回稳定 id 才跟踪为已受理**。只检查
+ * `typeof id === 'string'` 会让 `{id:"",state:0,acceptedAt:...}` 这种 202
+ * 被当成受理成功——没有稳定任务 id 就无从查询/取消/核对，关联却已被"解决"。
+ * 空 id 判为非法响应：submitTask 抛出 invalid_json，页面保持结果未知并保留原键。
+ */
+function isTaskAccepted(value: unknown): value is ZbaTaskAccepted {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && value.id.length > 0
+    && typeof value.state === 'number'
+    && typeof value.acceptedAt === 'string'
+}
+
+function isTaskResult(value: unknown): value is ZbaTaskResult {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.state === 'number'
+    && typeof value.updatedAt === 'string'
+    && typeof value.available === 'boolean'
+    && typeof value.summaryTruncated === 'boolean'
+    && typeof value.summaryChars === 'number' && Number.isFinite(value.summaryChars) && value.summaryChars >= 0
+    && isOptionalResultString(value.reasonCode)
+    && isOptionalResultString(value.summary)
+    && isOptionalResultString(value.errorCode)
+    && isOptionalNonNegativeFiniteNumber(value.toolCalls)
+    && isOptionalNonNegativeFiniteNumber(value.durationMs)
+}
+
+/**
+ * `/tasks/find` 的运行时校验。
+ *
+ * 只检查 code + instanceId 会让 `{code:'found',task:{id:42}}` 这种畸形回包
+ * 把未决关联升级成「已受理」（S3-08）。这里按 code 分别要求配套身份：
+ * - `found`：必须带**完整**的任务摘要，且 id 是稳定字符串；
+ * - `expired` / `accepted_unknown`：持久回执存在，必须给受理时的 taskId；
+ * - `unknown`：不给身份（但「查不到」不等于「没执行」。）
+ */
+function isTaskFindResult(value: unknown): value is ZbaTaskFindResult {
+  if (!isRecord(value)) return false
+  if (typeof value.code !== 'string' || !TASK_FIND_CODES.includes(value.code as ZbaTaskFindCode)) return false
+  if (typeof value.instanceId !== 'string' || value.instanceId.length === 0) return false
+  if (!isOptionalNonEmptyString(value.taskId)) return false
+  if (value.acceptedAt !== undefined && value.acceptedAt !== null && typeof value.acceptedAt !== 'string') return false
+  switch (value.code) {
+    case 'found':
+      return isTaskSummary(value.task) && typeof (value.task as ZbaTaskSummary).id === 'string'
+        && (value.task as ZbaTaskSummary).id.length > 0
+        && (value.taskId === undefined || value.taskId === null || value.taskId === (value.task as ZbaTaskSummary).id)
+    case 'expired':
+    case 'accepted_unknown':
+      return (value.task === undefined || value.task === null) && typeof value.taskId === 'string'
+    default:
+      return value.task === undefined || value.task === null
+  }
+}
+
+function isEvent(value: unknown): value is ZbaEvent {
+  return isRecord(value)
+    && typeof value.sequence === 'number'
+    && Number.isSafeInteger(value.sequence)
+    && value.sequence >= 0
+    && typeof value.type === 'string'
+    && value.type.length > 0
+    && typeof value.at === 'string'
+    && isOptionalNonEmptyString(value.taskId)
+    && isOptionalNonEmptyString(value.state)
+    && isOptionalNonEmptyString(value.version)
+    && isOptionalNonEmptyString(value.reasonCode)
+}
+
+function isEventPage(value: unknown): value is ZbaEventPage {
+  return isRecord(value)
+    && Array.isArray(value.items)
+    && value.items.every(isEvent)
+    && typeof value.nextSequence === 'number'
+    && Number.isSafeInteger(value.nextSequence)
+    && value.nextSequence >= 0
+    && typeof value.resyncRequired === 'boolean'
+    && typeof value.generatedAt === 'string'
+}
+
+function isTaskCancelResult(value: unknown): value is ZbaTaskCancelResult {
+  return isRecord(value)
+    && typeof value.state === 'number'
+    && typeof value.cancellationRequested === 'boolean'
+    && typeof value.outcome === 'string'
+}
+
+function isApprovalSummary(value: unknown): value is ZbaApprovalSummary {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.toolId === 'string'
+    && typeof value.summary === 'string'
+    && typeof value.session === 'string'
+    && typeof value.expiresAt === 'string'
+    && typeof value.policyVersion === 'number'
+}
+
+/**
+ * 审批队列的真实 wire 是**裸数组**（ZbaEndpoint.Approvals.cs 直接 Json(IReadOnlyList)）。
+ *
+ * 之前只认 `{items:[]}`，真实 HTTP 200 数组被判成 invalid_json，队列显示成空
+ * ——把「读取失败」伪装成「确认没有审批」（S3-03）。这里以裸数组为准，
+ * 同时容忍带 `items` 的分页信封，但两种形态都必须逐条通过身份校验；
+ * 都不是就抛错，让 UI 显示读取失败而不是空队列。
+ */
+function isApprovalList(value: unknown): value is { items: ZbaApprovalSummary[] } {
+  if (Array.isArray(value)) return value.every(isApprovalSummary)
+  return isRecord(value) && Array.isArray(value.items) && value.items.every(isApprovalSummary)
+}
+
+function isApprovalDecisionResult(value: unknown): value is ZbaApprovalDecisionResult {
+  return isRecord(value)
+    && typeof value.ok === 'boolean'
+    && typeof value.decision === 'string'
+    && typeof value.reasonCode === 'string'
 }
 
 function isHealth(value: unknown): value is ZbaHealth {

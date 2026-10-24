@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AuthGate from './features/auth/AuthGate.vue'
 import OverviewPage from './features/overview/OverviewPage.vue'
 import ConfigurationPage from './features/configuration/ConfigurationPage.vue'
 import CapabilitiesPage from './features/capabilities/CapabilitiesPage.vue'
+import TasksPage from './features/tasks/TasksPage.vue'
 import AppIcon from './shared/ui/AppIcon.vue'
 import BrandMark from './shared/ui/BrandMark.vue'
 import { evaluateCompatibility } from './api/compat'
@@ -15,6 +16,8 @@ import {
   type ZbaStatus
 } from './api/zba'
 import { toUiError, type UiError } from './shared/ui/ui-error'
+import { acquireScheduler } from './shared/sync/event-scheduler'
+import { registerAppResources, resetAppResourceSignals } from './shared/sync/app-resources'
 
 const token = ref('')
 const mode = ref<'read' | 'admin'>('read')
@@ -27,13 +30,16 @@ const adminError = ref<UiError | null>(null)
 const loading = ref(false)
 const connecting = ref(false)
 const lastSuccessAt = ref<string | null>(null)
-const view = ref<'overview' | 'configuration' | 'capabilities'>('overview')
+const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks'>('overview')
 const configurationPage = ref<InstanceType<typeof ConfigurationPage> | null>(null)
 // 配置页首次进入后保持挂载（v-show），草稿因此跨页保留；锁定/换令牌时才卸载。
 const configurationMounted = ref(false)
 const capabilitiesPage = ref<InstanceType<typeof CapabilitiesPage> | null>(null)
 // 能力页同样首次进入后保持挂载（v-show）：待核对的操作键要能跨视图存活。
 const capabilitiesMounted = ref(false)
+const tasksPage = ref<InstanceType<typeof TasksPage> | null>(null)
+// 任务页同样常驻：提交记录与幂等键要能跨视图存活。
+const tasksMounted = ref(false)
 const sessionNotice = ref<string | null>(null)
 const configDraftCount = computed(() => configurationPage.value?.draftCount ?? 0)
 
@@ -58,6 +64,7 @@ function clearSession(): void {
   configurationMounted.value = false
   // 会话结束 = 旧操作键作废：卸载能力页，连同未完成的动作一起丢弃。
   capabilitiesMounted.value = false
+  tasksMounted.value = false
   sessionGeneration += 1
   token.value = ''
   mode.value = 'read'
@@ -103,6 +110,9 @@ async function load(): Promise<void> {
     if (token.value.length === 0) return
 
     const nextMeta = await activeClient.meta()
+    // 与 reloadStatus 同一条规则：meta 落地后先复核归属，会话在两次 await 之间失效时
+    // 不该再向旧 client 发第二次读取（LIFE-04）。
+    if (!current()) return
     const nextStatus = await activeClient.status()
     if (!current()) return
     meta.value = nextMeta
@@ -123,6 +133,51 @@ async function load(): Promise<void> {
     }
   } finally {
     if (sequence === loadSequence) loading.value = false
+  }
+}
+
+/**
+ * 重读概览所需的两份资源（status + meta）。
+ *
+ * 这是共享调度器在 resync 时调用的「status」补读：它必须走**真实的概览读取**，
+ * 而不是只更新一个信号量——否则计划要求的「resync 覆盖 status」在界面上是空的。
+ *
+ * 后台读取与手动读取走**同一套会话归属、错误呈现与 401 失效规则**（M1）：
+ *
+ * - 失败：保留旧数据（status 不清空），置 error → 概览显示 stale 横幅；
+ * - 成功：清错误、刷新 lastSuccessAt；
+ * - 401 / 未配置：与手动读取一样 clearSession() 并锁门，不留"已连接/管理员模式"的假象；
+ * - 失败照常抛出：调度器据此不签"已追平"（R2）。
+ */
+async function reloadStatus(): Promise<void> {
+  const session = sessionGeneration
+  const activeClient = client.value
+  const current = (): boolean => session === sessionGeneration && activeClient === client.value
+  try {
+    const nextMeta = await activeClient.meta()
+    // meta 落地后先复核归属：会话在此期间失效时，不该再向旧 client 发第二次读取。
+    if (!current()) return
+    const nextStatus = await activeClient.status()
+    if (!current()) return
+    meta.value = nextMeta
+    status.value = nextStatus
+    lastSuccessAt.value = new Date().toISOString()
+    // 成功即恢复：清掉上一次后台失败留下的错误与 stale 横幅。
+    error.value = null
+    adminError.value = null
+    if (mode.value === 'admin' && !compatibility.value.writesEnabled) mode.value = 'read'
+  } catch (cause) {
+    if (!current()) return
+    const ui = toUiError(cause)
+    // 旧数据保留在屏幕上，但必须明确"它可能过期"。
+    error.value = ui
+    if (cause instanceof ZbaRequestError && (cause.status === 401 || cause.code === 'zba_not_configured')) {
+      // 后台也要锁门：认证已失效时不能继续显示已连接与管理员模式。
+      clearSession()
+      authError.value = ui
+      if (sessionNotice.value === null) sessionNotice.value = '管理会话已失效，请重新连接。'
+    }
+    throw cause
   }
 }
 
@@ -148,6 +203,10 @@ async function refresh(): Promise<void> {
   }
   if (view.value === 'capabilities') {
     await capabilitiesPage.value?.reload()
+    return
+  }
+  if (view.value === 'tasks') {
+    await tasksPage.value?.reload()
     return
   }
   await load()
@@ -187,12 +246,27 @@ async function openCapabilities(): Promise<void> {
   if (!firstVisit) await capabilitiesPage.value?.reload()
 }
 
+async function openTasks(): Promise<void> {
+  if (view.value === 'configuration') {
+    const allowed = await configurationPage.value?.requestLeave('downgrade') ?? true
+    if (!allowed) return
+  }
+  if (view.value === 'tasks') return
+  const firstVisit = !tasksMounted.value
+  tasksMounted.value = true
+  view.value = 'tasks'
+  await nextTick()
+  // 首次进入由 onMounted 读取；再次进入只重读，提交记录与幂等键保留。
+  if (!firstVisit) await tasksPage.value?.reload()
+}
+
 async function lock(): Promise<void> {
   const allowed = await configurationPage.value?.requestLeave('lock') ?? true
   if (!allowed) return
   configurationPage.value?.endSession()
   configurationMounted.value = false
   capabilitiesMounted.value = false
+  tasksMounted.value = false
   connectSequence += 1
   clearSession()
   loadSequence += 1
@@ -258,6 +332,43 @@ async function disableAdmin(): Promise<void> {
   adminError.value = null
 }
 
+// ── 会话级共享同步（计划 §9.3：五类资源一个调度器） ─────────────────
+const sessionScheduler = ref<ReturnType<typeof acquireScheduler> | null>(null)
+
+function attachSessionSync(activeClient: ZbaClient, enabled: boolean): void {
+  sessionScheduler.value?.release()
+  sessionScheduler.value = null
+  if (!enabled) return
+  const shared = acquireScheduler(activeClient)
+  // status 走真实重读；配置与能力由 app-resources 自己探测。
+  registerAppResources(shared.scheduler, activeClient, { status: reloadStatus })
+  sessionScheduler.value = shared
+}
+
+/**
+ * 连接建立后挂上会话级同步，锁定/换令牌时释放。
+ *
+ * 只监听令牌：`client` 完全由令牌派生，多一个监听会在同一次刷新里二次
+ * attach（先 release 再 acquire，游标被无谓清零）。
+ *
+ * 释放会 stop() 调度器并丢弃游标：旧身份的游标绝不带给下一个会话。
+ * 任务页自己也 acquire 同一个 client 上的调度器（引用计数），所以两边共享一条
+ * events 轮询链，不会各开一个定时器。
+ */
+watch(() => token.value, () => {
+  // 令牌变化 = 新身份：资源快照与游标都属于旧身份。
+  // 这里**不推进** sessionGeneration：beginSession() 已经推进过，重复推进会
+  // 让紧随其后的 load() 全部判为过期（current() 失配），页面永远读不到东西。
+  // 在途读取的作废靠 reloadStatus() 自己的 (session, client) 双重比对。
+  resetAppResourceSignals()
+  attachSessionSync(client.value, token.value.length > 0)
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  sessionScheduler.value?.release()
+  sessionScheduler.value = null
+})
+
 onMounted(load)
 </script>
 
@@ -310,7 +421,14 @@ onMounted(load)
               {{ configDraftCount }}
             </span>
           </button>
-          <button type="button" class="side-nav-item" disabled title="即将推出">
+          <button
+            type="button"
+            class="side-nav-item"
+            :class="{ active: view === 'tasks' }"
+            :aria-current="view === 'tasks' ? 'page' : undefined"
+            data-testid="nav-tasks"
+            @click="openTasks"
+          >
             <AppIcon name="tasks" />
             <span>任务</span>
           </button>
@@ -333,7 +451,7 @@ onMounted(load)
           <div class="crumbs" aria-label="面包屑">
             <span>工作台</span>
             <span class="crumb-sep" aria-hidden="true">/</span>
-            <strong>{{ view === 'configuration' ? '配置' : view === 'capabilities' ? '能力' : '概览' }}</strong>
+            <strong>{{ view === 'configuration' ? '配置' : view === 'capabilities' ? '能力' : view === 'tasks' ? '任务' : '概览' }}</strong>
           </div>
           <div class="topbar-actions">
             <span class="connection-chip" data-testid="connection-state">
@@ -376,6 +494,17 @@ onMounted(load)
             :mode="mode"
             :writes-enabled="compatibility.writesEnabled"
             :active="view === 'capabilities'"
+            @enable-admin="enableAdmin"
+            @auth-expired="onAuthExpired"
+          />
+          <TasksPage
+            v-if="tasksMounted"
+            v-show="view === 'tasks'"
+            ref="tasksPage"
+            :client="client"
+            :mode="mode"
+            :writes-enabled="compatibility.writesEnabled"
+            :active="view === 'tasks'"
             @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
           />
