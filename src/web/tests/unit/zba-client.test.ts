@@ -294,4 +294,14 @@ describe('ZbaClient', () => {
       .resolves.toMatchObject({ code: 6 })
   })
 
+  it('配置校验的业务码与 HTTP 状态不配对时拒绝，配对时接受', async () => {
+    const request = { contractRevision: 'cfg-0.3.3', expectedVersion: '1', changes: {}, secrets: [] }
+    const bad = fakeFetch(jsonResponse({ code: 0, errors: [] }, 503))
+    await expect(new ZbaClient({ token: 'x', fetchImpl: bad.fetchImpl }).validateConfiguration(request))
+      .rejects.toMatchObject({ name: 'ZbaRequestError', status: 503 })
+    const ok = fakeFetch(jsonResponse({ code: 5, errors: [] }, 409))
+    await expect(new ZbaClient({ token: 'x', fetchImpl: ok.fetchImpl }).validateConfiguration(request))
+      .resolves.toMatchObject({ code: 5 })
+  })
+
 })

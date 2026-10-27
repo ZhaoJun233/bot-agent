@@ -20,6 +20,7 @@
   --warn-text: #8a5a00;
   --bad-bg: #fdeeee;
   --bad-text: #a03a3a;
+  --danger: #b3261e;
   --neutral-bg: #eef2f6;
   --neutral-text: #4b5b6b;
   --radius: 12px;
@@ -579,7 +580,7 @@ button.primary:disabled {
   margin: 22px 28px 0;
   padding: 13px 0 17px;
   border-top: 1px solid #edf2f6;
-  color: #718396;
+  color: #5f7084;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-align: center;
@@ -626,7 +627,7 @@ button.primary:disabled {
 }
 
 .auth-form input::placeholder {
-  color: #7b8a99;
+  color: #5f7084;
 }
 
 .auth-form input:hover:not(:disabled) {
@@ -1317,7 +1318,7 @@ tbody tr:hover td {
 
 .inline-notice.bad {
   border-color: #f2d0d0;
-  border-left-color: #c0504d;
+  border-left-color: var(--danger);
   background: #fdf5f5;
   color: #8f3b3b;
 }
@@ -2048,7 +2049,7 @@ tr.dirty td {
   overflow-wrap: anywhere;
 }
 
-.cap-error-code { color: #b3261e; font-family: var(--font-mono, ui-monospace, monospace); }
+.cap-error-code { color: var(--danger); font-family: var(--font-mono, ui-monospace, monospace); }
 
 .cap-actions {
   display: flex;
@@ -2058,7 +2059,7 @@ tr.dirty td {
 }
 
 .cap-actions .cap-action { min-height: 32px; padding: 0 12px; font-size: 13px; }
-.cap-actions .cap-action.danger { border-color: rgba(179, 38, 30, 0.35); color: #b3261e; }
+.cap-actions .cap-action.danger { border-color: color-mix(in srgb, var(--danger) 35%, transparent); color: var(--danger); }
 
 .cap-none, .cap-reason {
   margin: 0;
@@ -2186,4 +2187,9 @@ tr.dirty td {
   .cap-grid { grid-template-columns: minmax(0, 1fr); }
   .cap-card { padding: 16px; }
   .cap-toolbar { align-items: flex-start; }
+}
+
+.config-input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.14);
 }

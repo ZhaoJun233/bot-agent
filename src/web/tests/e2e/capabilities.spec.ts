@@ -142,12 +142,12 @@ test('能力页：真实宿主已受理但响应丢失后，核对入口可用�
   expect(attempts[0]?.code).toBe(0)
 
   // 重试不是第二次执行：同一个键，服务端按幂等回放。
-  await page.getByTestId('cap-confirm-ok').click()
+  await page.getByTestId('cap-result-retry').click()
   await expect.poll(() => attempts.length).toBe(2)
   expect(attempts[1]?.key).toBe(attempts[0]?.key)
 
   // 第三次放行：拿到的是同一次操作的回执，不是新动作。
-  await page.getByTestId('cap-confirm-ok').click()
+  await page.getByTestId('cap-result-retry').click()
   await expect.poll(() => attempts.length).toBe(3)
   expect(attempts[2]?.key).toBe(attempts[0]?.key)
   expect(attempts[2]?.replayed).toBe(true)
@@ -390,7 +390,7 @@ for (const mode of ['retry', 'card'] as const) {
     const key = (await page.getByTestId('cap-op-key').textContent())?.trim()
 
     if (mode === 'card') await page.locator('[data-testid="' + actionId + '"]').click()
-    await page.getByTestId('cap-confirm-ok').click()
+    await page.getByTestId(mode === 'card' ? 'cap-confirm-ok' : 'cap-result-retry').click()
     await expect.poll(() => keys.length).toBe(2)
     await expect(page.getByTestId('cap-result-code')).toHaveText('1')
 
@@ -402,7 +402,7 @@ for (const mode of ['retry', 'card'] as const) {
 
     // 再确认仍然是同一个键。
     if (mode === 'card') await page.locator('[data-testid="' + actionId + '"]').click()
-    await page.getByTestId('cap-confirm-ok').click()
+    await page.getByTestId(mode === 'card' ? 'cap-confirm-ok' : 'cap-result-retry').click()
     await expect.poll(() => keys.length).toBe(3)
     expect(keys[1]).toBe(keys[0])
     expect(keys[2]).toBe(keys[0])

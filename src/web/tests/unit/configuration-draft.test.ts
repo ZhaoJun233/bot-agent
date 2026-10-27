@@ -117,12 +117,21 @@ describe('配置草稿', () => {
     expect(errors).toContain('槽位 1：替换值不能为空')
   })
 
-  it('冲突比较能识别与新基线不同的字段', () => {
+  it('冲突比较的是起草基线与新基线：只报对方也改过的字段', () => {
     const draft: DraftMap = {
-      [fieldPath('behavior', 'botPersona')]: { kind: 'set', raw: '对方也改了' },
-      [fieldPath('behavior', 'splitReplies')]: { kind: 'set', raw: baselineRaw(field('behavior', 'splitReplies')) }
+      [fieldPath('behavior', 'botPersona')]: { kind: 'set', raw: '我改的人格' },
+      [fieldPath('behavior', 'splitReplies')]: { kind: 'set', raw: '我改的值' }
     }
-    expect(conflictingPaths(draft, view)).toEqual(['behavior.botPersona'])
+    const next = structuredClone(view)
+    next.behavior.botPersona = { ...next.behavior.botPersona!, value: '对方改的人格' }
+    // 用户自己改过、对方没动的 splitReplies 不能被误报。
+    expect(conflictingPaths(draft, view, next)).toEqual(['behavior.botPersona'])
+    expect(conflictingPaths(draft, view, view)).toEqual([])
+  })
+
+  it('没有起草基线时无从证明对方没改，保守全部列出', () => {
+    const draft: DraftMap = { [fieldPath('behavior', 'botPersona')]: { kind: 'clear' } }
+    expect(conflictingPaths(draft, null, view)).toEqual(['behavior.botPersona'])
   })
 
   it('操作键符合 cfg1:<generation>:<issued>:<nonce>', () => {

@@ -21,7 +21,7 @@
  * 首次 tick 安排在一个间隔之后：挂载时页面已经整份读取过，立刻再取一次只是
  * 重复流量。
  */
-import type { ZbaClient, ZbaEvent } from '../../api/zba'
+import { ZbaRequestError, type ZbaClient, type ZbaEvent } from '../../api/zba'
 
 export type SyncState = 'idle' | 'live' | 'syncing' | 'stale'
 
@@ -240,7 +240,7 @@ export class EventScheduler {
         this.settle()
         // 重读期间可能又产生事件：立刻从锚点补读一轮，不丢事件。
         // 连续 resync 说明服务端在反复要求重读，必须退避，不能忙循环。
-        this.schedule(this.consecutiveResync >= 2 ? this.backoffDelay() : 0)
+        this.schedule(this.consecutiveResync >= 2 ? this.resyncBackoffDelay() : 0)
         return true
       }
 
@@ -275,7 +275,7 @@ export class EventScheduler {
       // 这一页满了说明还有积压，追完再等间隔。
       this.schedule(page.items.length >= PAGE_SIZE ? 0 : this.nextIntervalMs())
       return true
-    } catch {
+    } catch (cause) {
       // events 请求本身失败：不知道服务端追平到哪里，游标原样保留。
       //
       // 成功路径在 await 之后都复核 current()，失败路径同样必须复核（L1 的迟到
@@ -285,6 +285,12 @@ export class EventScheduler {
       this.failures += 1
       this.failedResource = null
       this.setState('stale')
+      // 401/403 不是临时故障：重试只会反复打认证失败（还可能触发限流）。
+      // 停在 stale、不续排；换令牌会 release 重建，显式 kick/切回前台仍可再试一轮。
+      if (cause instanceof ZbaRequestError && (cause.status === 401 || cause.status === 403)) {
+        this.clearTimer()
+        return false
+      }
       this.schedule(this.backoffDelay())
       return false
     } finally {
@@ -297,8 +303,20 @@ export class EventScheduler {
       // 没有 kick 则只在 timer 被消费后续排；schedule 会清掉旧 timer，始终只留一条链。
       if (epoch !== this.epoch && this.running && (this.kickRequested || this.timer === null)) {
         this.schedule(this.kickRequested ? 0 : this.nextIntervalMs())
+      } else if (epoch === this.epoch && this.running && this.kickRequested) {
+        // 本轮进行中收到的 kick（本地刚写完）：不等常规间隔，立刻再补一轮。
+        this.schedule(0)
       }
     }
+  }
+
+  /**
+   * 连续 resync 的退避：settle() 会把 failures 清零，所以不能复用 backoffDelay()
+   * （那样永远是 1 个间隔）。按连续 resync 次数指数增长：第 2 次 1 倍，之后翻倍，封顶。
+   */
+  private resyncBackoffDelay(): number {
+    const steps = Math.max(0, Math.min(this.consecutiveResync - 2, 5))
+    return Math.min(this.nextIntervalMs() * 2 ** steps, this.maxBackoffMs)
   }
 
   /** 前台/后台各自的正常间隔。 */

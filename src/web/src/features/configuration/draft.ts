@@ -251,17 +251,48 @@ export function buildSecrets(drafts: SecretDrafts): { secrets: ZbaSecretEdit[]; 
   return { secrets, errors }
 }
 
-/** 冲突后重新读取基线：草稿值与新基线不同的字段，说明对方改过同一字段。 */
-export function conflictingPaths(draft: DraftMap, view: ZbaConfigurationView): string[] {
+/** 字段在某个快照里的可比较形态：可见性 + 值（隐藏字段只比可见性与展示串）。 */
+function fieldSignature(field: ZbaReadField): string {
+  return JSON.stringify([field.visibility, field.visibility === 1 ? (field.value ?? null) : field.display])
+}
+
+/**
+ * 冲突后重新读取基线：找出**对方**改过、且本地草稿也改了的字段。
+ *
+ * 比较的是「草稿起草时的基线」与「新基线」，不是草稿与新基线——
+ * 后者会把用户自己改过的每个字段都误报成冲突。
+ * 没有起草基线（`base === null`）时无从证明对方没改，保守地全部列出。
+ */
+export function conflictingPaths(
+  draft: DraftMap,
+  base: ZbaConfigurationView | null,
+  next: ZbaConfigurationView
+): string[] {
   return Object.keys(draft).filter((path) => {
     const parts = splitPath(path)
     if (parts === null) return true
-    const field = editableField(view, parts[0], parts[1])
-    if (field === undefined) return true
-    const edit = draft[path]
-    if (edit === undefined) return false
-    if (edit.kind === 'clear') return field.value !== undefined && field.value !== null
-    return edit.raw !== baselineRaw(field)
+    const after = editableField(next, parts[0], parts[1])
+    if (after === undefined) return true
+    if (base === null) return true
+    const before = editableField(base, parts[0], parts[1])
+    if (before === undefined) return true
+    return fieldSignature(before) !== fieldSignature(after)
+  })
+}
+
+/** 供应商改名的冲突：起草基线与新基线的 nameRaw（或可见性）不同。 */
+export function conflictingProviderNames(
+  drafts: ProviderNameDrafts,
+  base: ZbaConfigurationView | null,
+  next: ZbaConfigurationView
+): string[] {
+  return Object.keys(drafts).filter((key) => {
+    const after = next.registered.providers.find((item) => item.key === key)
+    if (after === undefined || base === null) return true
+    const before = base.registered.providers.find((item) => item.key === key)
+    if (before === undefined) return true
+    return before.name.visibility !== after.name.visibility
+      || providerNameBaseline(before.name) !== providerNameBaseline(after.name)
   })
 }
 

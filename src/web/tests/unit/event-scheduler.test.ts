@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventScheduler } from '../../src/shared/sync/event-scheduler'
-import type { ZbaClient, ZbaEvent, ZbaEventPage } from '../../src/api/zba'
+import { ZbaRequestError, type ZbaClient, type ZbaEvent, type ZbaEventPage } from '../../src/api/zba'
 
 /**
  * 共享事件调度器（阶段计划 §9.3）。
@@ -233,6 +233,29 @@ describe('EventScheduler 复验项（R2/R3）', () => {
     hidden = false
     await vi.advanceTimersByTimeAsync(400)
     expect(client.calls.length).toBeGreaterThan(0)
+    scheduler.stop()
+  })
+
+  it('events 返回 403 时停在 stale 不续排；显式 kick 仍可再试一轮', async () => {
+    const client = fakeClient([
+      new ZbaRequestError(403, 'forbidden', 'synthetic'),
+      page([], 1, true)
+    ])
+    const scheduler = new EventScheduler(client, { intervalMs: 100, isHidden: () => false })
+    scheduler.subscribe({ name: 'tasks', matches: () => true, reload: async () => undefined })
+    scheduler.start()
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(client.calls).toHaveLength(1)
+    expect(scheduler.snapshot().state).toBe('stale')
+    // 认证失败不是临时故障：再等很久也不应自己重试。
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(client.calls).toHaveLength(1)
+
+    scheduler.kick()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.calls).toHaveLength(2)
+    expect(scheduler.snapshot().state).toBe('live')
     scheduler.stop()
   })
 

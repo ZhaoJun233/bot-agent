@@ -621,7 +621,9 @@ export class ZbaClient {
       body: JSON.stringify(request)
     }, 'required')
     // 版本冲突/校验失败以 409/400 返回，但 body 仍是结果对象而不是 error 体。
-    if (isManagedValidationResult(response.data)) return response.data
+    // 与其它 managed 接口一致：业务码必须与 HTTP 状态构成契约配对，否则不具权威性。
+    if (isManagedValidationResult(response.data)
+      && managedResultStatus(response.data.code as ZbaManagedResultCode) === response.status) return response.data
     if (!response.ok) throw this.errorFrom(response)
     throw this.invalidResponse(response)
   }
@@ -1569,10 +1571,15 @@ function combineSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
   if (typeof AbortSignal.any === 'function') return AbortSignal.any([first, second])
 
   const controller = new AbortController()
-  const abort = (): void => controller.abort()
   if (first.aborted || second.aborted) {
     controller.abort()
   } else {
+    // 任一方触发后把两边的监听都摘掉，长寿命 signal 上不留悬挂闭包。
+    const abort = (): void => {
+      first.removeEventListener('abort', abort)
+      second.removeEventListener('abort', abort)
+      controller.abort()
+    }
     first.addEventListener('abort', abort, { once: true })
     second.addEventListener('abort', abort, { once: true })
   }

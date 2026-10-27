@@ -57,6 +57,28 @@ async function externalSave(
   expect(response.status()).toBe(200)
 }
 
+/**
+ * 用例隔离：所有写配置的用例都共用同一个宿主进程。用例中途失败时，
+ * 用例末尾的 UI 恢复步骤不会执行，残留值会污染后续用例（以及其它浏览器 project）。
+ * 这里在首个用例前记下基线，每个用例结束后经 API 兜底恢复。
+ */
+let baselineMoodTtl: unknown
+
+test.beforeEach(async ({ request }) => {
+  if (baselineMoodTtl !== undefined) return
+  const current = await readConfiguration(request)
+  baselineMoodTtl = current.view.behavior.moodTtlSeconds?.value
+})
+
+test.afterEach(async ({ request }) => {
+  if (baselineMoodTtl === undefined) return
+  const current = await readConfiguration(request)
+  if (current.view.behavior.moodTtlSeconds?.value === baselineMoodTtl) return
+  await externalSave(request, current.generation, current.version, {
+    behavior: { moodTtlSeconds: { kind: 1, value: baselineMoodTtl } }
+  })
+})
+
 test('配置页：只读令牌可查看 8 分区与秘密元数据，且不发写请求', async ({ page }) => {
   const writes: string[] = []
   page.on('request', (request) => {
