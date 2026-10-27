@@ -27,7 +27,30 @@ const emit = defineEmits<{
   refresh: []
   'enable-admin': []
   'disable-admin': []
+  navigate: [target: 'capabilities' | 'configuration' | 'tasks', event: MouseEvent]
 }>()
+
+/** 欢迎页的「下一步去哪」：每张卡片说清楚那一页能做什么。 */
+const quickStarts = [
+  {
+    target: 'capabilities' as const,
+    icon: 'capabilities' as const,
+    title: '插件与平台',
+    copy: '查看平台驱动、插件、模型提供商和 MCP 是否在线，一键启停，点「设置」改插件参数。'
+  },
+  {
+    target: 'configuration' as const,
+    icon: 'config' as const,
+    title: '配置文件',
+    copy: '调整回复风格、冷却时间、上下文条数等运行参数；改完在底部保存条统一提交。'
+  },
+  {
+    target: 'tasks' as const,
+    icon: 'tasks' as const,
+    title: '任务',
+    copy: '给服务器内置 agent 派活、看进度和结果，处理需要人工审批的操作。'
+  }
+]
 
 const components = computed(() => Array.isArray(props.status.components) ? props.status.components : [])
 const recentErrors = computed(() => Array.isArray(props.status.recentErrors) ? props.status.recentErrors : [])
@@ -281,5 +304,29 @@ function reasonText(code: string | undefined | null): string | null {
         </section>
       </div>
     </div>
+    <section class="ov-quick" aria-labelledby="quick-title">
+      <div class="ov-quick-head">
+        <h2 id="quick-title">接下来可以做什么</h2>
+        <p class="ov-panel-sub">常用入口，和左侧导航一一对应</p>
+      </div>
+      <div class="ov-quick-grid">
+        <button
+          v-for="item in quickStarts"
+          :key="item.target"
+          type="button"
+          class="ov-quick-card"
+          :data-target="item.target"
+          :data-testid="'quick-' + item.target"
+          @click="emit('navigate', item.target, $event)"
+        >
+          <span class="ov-chip" aria-hidden="true"><AppIcon :name="item.icon" :size="18" /></span>
+          <span class="ov-quick-text">
+            <strong>{{ item.title }}</strong>
+            <span>{{ item.copy }}</span>
+          </span>
+          <span class="ov-quick-arrow" aria-hidden="true">→</span>
+        </button>
+      </div>
+    </section>
   </section>
 </template>

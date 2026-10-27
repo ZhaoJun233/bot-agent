@@ -62,20 +62,20 @@ async function externalSave(
  * 用例末尾的 UI 恢复步骤不会执行，残留值会污染后续用例（以及其它浏览器 project）。
  * 这里在首个用例前记下基线，每个用例结束后经 API 兜底恢复。
  */
-let baselineMoodTtl: unknown
+let baselineGroupCooldown: unknown
 
 test.beforeEach(async ({ request }) => {
-  if (baselineMoodTtl !== undefined) return
+  if (baselineGroupCooldown !== undefined) return
   const current = await readConfiguration(request)
-  baselineMoodTtl = current.view.behavior.moodTtlSeconds?.value
+  baselineGroupCooldown = current.view.behavior.privateCooldownSeconds?.value
 })
 
 test.afterEach(async ({ request }) => {
-  if (baselineMoodTtl === undefined) return
+  if (baselineGroupCooldown === undefined) return
   const current = await readConfiguration(request)
-  if (current.view.behavior.moodTtlSeconds?.value === baselineMoodTtl) return
+  if (current.view.behavior.privateCooldownSeconds?.value === baselineGroupCooldown) return
   await externalSave(request, current.generation, current.version, {
-    behavior: { moodTtlSeconds: { kind: 1, value: baselineMoodTtl } }
+    behavior: { privateCooldownSeconds: { kind: 1, value: baselineGroupCooldown } }
   })
 })
 
@@ -130,7 +130,7 @@ test('配置页：管理员保存一个数字字段并回读，随后恢复', as
   const before = await readConfiguration(request)
 
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -141,22 +141,22 @@ test('配置页：管理员保存一个数字字段并回读，随后恢复', as
 
   const after = await readConfiguration(request)
   expect(after.version).not.toBe(before.version)
-  expect(after.view.behavior.moodTtlSeconds?.value).toBe(original + 1)
+  expect(after.view.behavior.privateCooldownSeconds?.value).toBe(original + 1)
 
   // 恢复原值，避免影响后续用例
-  await page.getByTestId('config-field-moodTtlSeconds').locator('input').fill(String(original))
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original))
   await page.getByTestId('config-save').click()
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
   const restored = await readConfiguration(request)
-  expect(restored.view.behavior.moodTtlSeconds?.value).toBe(original)
+  expect(restored.view.behavior.privateCooldownSeconds?.value).toBe(original)
 })
 
 test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新比较', async ({ page, request }) => {
   await openConfiguration(page)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.moodTtlSeconds?.value)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
   await externalSave(request, before.generation, before.version, {
-    behavior: { moodTtlSeconds: { kind: 1, value: original + 1 } }
+    behavior: { privateCooldownSeconds: { kind: 1, value: original + 1 } }
   })
 
   const saveRequests: string[] = []
@@ -165,7 +165,7 @@ test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新
   })
 
   await page.getByTestId('config-nav-behavior').click()
-  await page.getByTestId('config-field-moodTtlSeconds').locator('input').fill(String(original + 2))
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original + 2))
   await page.getByTestId('config-save').click()
 
   await expect(page.getByTestId('config-conflict')).toBeVisible({ timeout: 15_000 })
@@ -174,12 +174,12 @@ test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新
 
   await page.getByTestId('config-reload-conflict').click()
   await expect(page.getByTestId('config-validation')).toContainText('已读取最新快照', { timeout: 15_000 })
-  await expect(page.getByTestId('config-field-moodTtlSeconds')).toContainText('与对方修改重叠')
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText('与对方修改重叠')
   await page.getByTestId('config-discard').click()
 
   const latest = await readConfiguration(request)
   await externalSave(request, latest.generation, latest.version, {
-    behavior: { moodTtlSeconds: { kind: 1, value: original } }
+    behavior: { privateCooldownSeconds: { kind: 1, value: original } }
   })
 })
 
@@ -187,11 +187,11 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
   test.setTimeout(60_000)
   await openConfiguration(page)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.moodTtlSeconds?.value)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
   const next = original + 5
 
   await page.getByTestId('config-nav-behavior').click()
-  await page.getByTestId('config-field-moodTtlSeconds').locator('input').fill(String(next))
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(next))
 
   const saveRequests: string[] = []
   page.on('request', (req) => {
@@ -213,9 +213,9 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
   expect(saveRequests).toHaveLength(1)
 
   const saved = await readConfiguration(request)
-  expect(saved.view.behavior.moodTtlSeconds?.value).toBe(next)
+  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(next)
 
-  await page.getByTestId('config-field-moodTtlSeconds').locator('input').fill(String(original))
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original))
   await page.getByTestId('config-save').click()
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
 })
@@ -223,7 +223,7 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
 test('配置页：切到概览再回来，草稿与输入值保留', async ({ page }) => {
   await openConfiguration(page)
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -234,7 +234,7 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 
   await page.getByTestId('nav-configuration').click()
   await expect(page.getByTestId('configuration')).toBeVisible()
-  await expect(page.getByTestId('config-field-moodTtlSeconds').locator('input')).toHaveValue(String(original + 1))
+  await expect(page.getByTestId('config-field-privateCooldownSeconds').locator('input')).toHaveValue(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
   await page.getByTestId('config-discard').click()
@@ -245,7 +245,7 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 test('配置页：离开配置页会清空秘密替换输入，但保留普通字段草稿', async ({ page }) => {
   await openConfiguration(page)
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -259,7 +259,7 @@ test('配置页：离开配置页会清空秘密替换输入，但保留普通�
   await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
 
   await page.getByTestId('nav-configuration').click()
-  await expect(page.getByTestId('config-field-moodTtlSeconds').locator('input')).toHaveValue(String(original + 1))
+  await expect(page.getByTestId('config-field-privateCooldownSeconds').locator('input')).toHaveValue(String(original + 1))
   await expect(page.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
@@ -278,7 +278,7 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
   expect(preventedClean).toBe(false)
 
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -295,7 +295,7 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
 test('配置页：锁定前确认，继续编辑保留草稿，明确放弃后清除', async ({ page }) => {
   await openConfiguration(page)
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 3))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -319,18 +319,18 @@ test('配置页：锁定前确认，继续编辑保留草稿，明确放弃后�
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
   await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
   // 重连后默认是标准模式，字段以只读文本渲染；值必须回到未修改的宿主基线。
-  await expect(page.getByTestId('config-field-moodTtlSeconds')).toContainText(String(original))
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText(String(original))
 })
 
 test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存', async ({ page, request }) => {
   test.setTimeout(60_000)
   await openConfiguration(page)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.moodTtlSeconds?.value)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
   const next = original + 7
 
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   await input.fill(String(next))
 
   const keys: string[] = []
@@ -362,7 +362,7 @@ test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存',
   expect(keys[0]).not.toBe(keys[1])
 
   const saved = await readConfiguration(request)
-  expect(saved.view.behavior.moodTtlSeconds?.value).toBe(next)
+  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(next)
 
   await input.fill(String(original))
   await page.getByTestId('config-save').click()
@@ -372,7 +372,7 @@ test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存',
 test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 并保留草稿', async ({ browser, request }) => {
   test.setTimeout(60_000)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.moodTtlSeconds?.value)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
   const contextA = await browser.newContext()
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
@@ -382,8 +382,8 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
     await openConfiguration(pageB)
     await pageA.getByTestId('config-nav-behavior').click()
     await pageB.getByTestId('config-nav-behavior').click()
-    const inputA = pageA.getByTestId('config-field-moodTtlSeconds').locator('input')
-    const inputB = pageB.getByTestId('config-field-moodTtlSeconds').locator('input')
+    const inputA = pageA.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    const inputB = pageB.getByTestId('config-field-privateCooldownSeconds').locator('input')
     await inputA.fill(String(original + 1))
     await inputB.fill(String(original + 2))
 
@@ -399,15 +399,15 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
     await pageA.getByTestId('config-save').click()
     await expect(pageA.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
     const restored = await readConfiguration(request)
-    expect(restored.view.behavior.moodTtlSeconds?.value).toBe(original)
+    expect(restored.view.behavior.privateCooldownSeconds?.value).toBe(original)
   } finally {
     await contextA.close()
     await contextB.close()
     // 即使断言失败也把共享宿主恢复原值，避免污染后续用例。
     const latest = await readConfiguration(request)
-    if (Number(latest.view.behavior.moodTtlSeconds?.value) !== original) {
+    if (Number(latest.view.behavior.privateCooldownSeconds?.value) !== original) {
       await externalSave(request, latest.generation, latest.version, {
-        behavior: { moodTtlSeconds: { kind: 1, value: original } }
+        behavior: { privateCooldownSeconds: { kind: 1, value: original } }
       })
     }
   }
@@ -506,7 +506,7 @@ test('配置页：读取 401 会退回认证页并清掉秘密输入', async ({ 
 test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作键供核对', async ({ page }) => {
   await openConfiguration(page)
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -553,7 +553,7 @@ test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作�
 test('配置页：成功码缺少回执时不清草稿也不显示已保存', async ({ page }) => {
   await openConfiguration(page)
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -573,7 +573,7 @@ test('配置页：成功码缺少回执时不清草稿也不显示已保存', as
 test('配置页：核对矛盾响应保留未知态，权威 NotFound 后才恢复编辑', async ({ page }) => {
   await openConfiguration(page)
   await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 

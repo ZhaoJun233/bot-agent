@@ -39,9 +39,9 @@ const emit = defineEmits<{
 
 const kinds: Array<{ value: ZbaManagedKind | 'all'; label: string }> = [
   { value: 'all', label: '全部' },
-  { value: 0, label: '驱动' },
+  { value: 0, label: '平台驱动' },
   { value: 1, label: '插件' },
-  { value: 2, label: '供应商' },
+  { value: 2, label: '模型提供商' },
   { value: 3, label: '设备' },
   { value: 4, label: 'MCP' }
 ]
@@ -1282,7 +1282,7 @@ defineExpose({
   <section class="capabilities" data-testid="capabilities">
     <header class="page-heading">
       <div>
-        <p class="eyebrow">能力</p>
+        <p class="eyebrow">插件与平台</p>
         <h1 id="capabilities-title" ref="pageHeading" tabindex="-1">已登记能力</h1>
         <p class="subtitle">
           驱动 {{ counts.driver }} · 插件 {{ counts.plugin }} · 供应商 {{ counts.provider }}
@@ -1316,7 +1316,7 @@ defineExpose({
     </p>
 
     <div class="cap-toolbar" data-testid="cap-toolbar">
-      <div class="cap-filters" role="group" aria-label="按类型筛选">
+      <div class="cap-filters cap-tabs" role="group" aria-label="按类型筛选">
         <button
           v-for="option in kinds"
           :key="String(option.value)"

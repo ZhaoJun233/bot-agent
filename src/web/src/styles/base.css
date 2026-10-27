@@ -2456,3 +2456,220 @@ body {
 .cap-switch-notice[data-tone="warn"] { background: var(--warn-bg, #fff4dc); color: var(--warn-text, #8a5a00); }
 .cap-switch-notice[data-tone="bad"] { background: var(--bad-bg, #fde8e8); color: var(--bad-text, #a12a2a); }
 @media (prefers-reduced-motion: reduce) { .cap-switch-track, .cap-switch-thumb { transition: none; } }
+
+
+/* ───────────── AstrBot 风格主题层（侧栏分组 / 页面说明 / 分段标签 / 卡片） ───────────── */
+:root {
+  --astr-primary: #3c7cf6;
+  --astr-primary-soft: #eaf1fe;
+  --astr-violet: #7c5cf0;
+  --astr-teal: #14a39a;
+  --astr-amber: #e59a1b;
+  --astr-rose: #e2557a;
+}
+
+.sidebar {
+  min-height: 100vh;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.side-nav-group {
+  margin: 14px 10px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.side-nav-item {
+  position: relative;
+  border-radius: 999px;
+}
+
+.side-nav-item.active {
+  background: var(--astr-primary-soft);
+  color: var(--astr-primary);
+  font-weight: 600;
+}
+
+.side-nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 10px;
+  bottom: 10px;
+  width: 4px;
+  border-radius: 0 4px 4px 0;
+  background: var(--astr-primary);
+}
+
+.side-nav-item:hover:not(.active) {
+  background: #f1f5fb;
+  color: var(--text);
+}
+
+/* 页面说明条：每页顶部写明“这页做什么、怎么用” */
+.page-guide {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin: 0 0 20px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--guide-tone, var(--astr-primary));
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.page-guide[data-view="overview"] { --guide-tone: var(--astr-teal); }
+.page-guide[data-view="capabilities"] { --guide-tone: var(--astr-violet); }
+.page-guide[data-view="configuration"] { --guide-tone: var(--astr-primary); }
+.page-guide[data-view="tasks"] { --guide-tone: var(--astr-amber); }
+
+.page-guide-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  color: var(--guide-tone, var(--astr-primary));
+  background: color-mix(in srgb, var(--guide-tone, var(--astr-primary)) 12%, white);
+}
+
+.page-guide-body { min-width: 0; }
+
+.page-guide-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.page-guide-title span {
+  margin-left: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.page-guide-tips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 6px 0 0;
+  padding: 0 0 0 18px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+/* 能力页分类：分段标签 */
+.cap-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #eef2f8;
+}
+
+.cap-tabs .chip {
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 6px 14px;
+}
+
+.cap-tabs .chip.active {
+  background: var(--surface);
+  color: var(--astr-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
+}
+
+.cap-card {
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.cap-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--astr-primary) 35%, var(--border));
+  box-shadow: 0 12px 28px -14px rgba(60, 124, 246, 0.35);
+}
+
+@media (max-width: 640px) {
+  .page-guide { padding: 12px 14px; }
+  .page-guide-title span { display: block; margin: 2px 0 0; }
+  .page-guide-tips { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cap-card, .cap-card:hover { transition: none; transform: none; }
+}
+
+/* ── 欢迎页快捷入口 ─────────────────────────────── */
+.ov-quick { display: grid; gap: 12px; }
+.ov-quick-head h2 { margin: 0; font-size: 19px; }
+.ov-quick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.ov-quick-card {
+  display: flex; align-items: flex-start; gap: 14px; text-align: left;
+  padding: 18px 20px; border-radius: 16px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-1);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+.ov-quick-card:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 14px 32px -18px rgba(31,111,158,.45); }
+.ov-quick-text { display: grid; gap: 4px; flex: 1; }
+.ov-quick-text strong { font-size: 15.5px; }
+.ov-quick-text span { color: var(--text-muted); font-size: 13.5px; line-height: 1.5; }
+.ov-quick-arrow { color: var(--accent-deep); font-size: 18px; align-self: center; transition: transform 160ms ease; }
+.ov-quick-card:hover .ov-quick-arrow { transform: translateX(3px); }
+.ov-quick-card[data-target="configuration"] .ov-chip { background: rgba(124, 92, 214, .12); color: #6a4fc4; }
+.ov-quick-card[data-target="tasks"] .ov-chip { background: rgba(33, 163, 102, .12); color: #1a7f4b; }
+@media (max-width: 900px) { .ov-quick-grid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .ov-quick-card, .ov-quick-arrow { transition: none; } .ov-quick-card:hover { transform: none; } }
+
+/* 配置分区说明 */
+.config-guide {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--accent-tint);
+  color: var(--text-soft);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+/* ── 登录页说明（重构第 4 轮） ── */
+.auth-points {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 13.5px;
+}
+.auth-points li {
+  position: relative;
+  padding-left: 20px;
+}
+.auth-points li::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0.62em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.75;
+}
+.auth-hint {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}

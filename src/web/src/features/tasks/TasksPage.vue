@@ -1044,6 +1044,7 @@ defineExpose({
     <section class="panel" data-testid="task-submit-panel">
       <div class="panel-heading">
         <h2>提交任务</h2>
+        <p class="config-guide">把一件要后台 Agent 做的事写进提示词，提交后在下方列表跟进度。和在群里说 // 指令效果一样，只是不用经过聊天。</p>
         <p>幂等键在提交前生成并冻结；结果未知时只能用它核对，换键重提会让服务端再执行一次。</p>
       </div>
       <div class="task-form">
@@ -1160,6 +1161,7 @@ defineExpose({
     <section class="panel" data-testid="task-approvals">
       <div class="panel-heading">
         <h2>待审批</h2>
+        <p class="config-guide">Agent 想做有风险的操作（例如改文件、执行命令）时会停在这里等你点头。批准才会继续，拒绝或过期都不会执行。</p>
         <p>摘要由服务端脱敏；批准与拒绝都绑定审批 id，过期后不会执行。</p>
       </div>
       <ErrorNotice :error="approvalError" title="读取待审批失败" />

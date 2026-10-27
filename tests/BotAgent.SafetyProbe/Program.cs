@@ -72,6 +72,7 @@ public static partial class Program
         SessionPolicyTests();
         PlatformPolicyActionTests();
         ServerActionOutcomeTests();
+        NaturalAgentTests();
         ReplyAuditTests();
         MessageMarkerTests();
         TurnTraceTests();

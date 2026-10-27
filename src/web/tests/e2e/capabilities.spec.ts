@@ -71,7 +71,7 @@ test('能力页：从配置页带草稿切到能力页会先询问', async ({ pa
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 

@@ -1,32 +1,9 @@
-using BotAgent.Services.Plugins;
 using BotAgent.Services.Evaluation;
 using BotAgent.Engine.Runtime;
 using BotAgent.Domain.Conversation;
-using BotAgent.Domain.Ports;
-using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ops;
-using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Reply;
-using BotAgent.Domain.Stickers;
 using BotAgent.Services.Agent;
-using BotAgent.Services.Conversations;
-using BotAgent.Services.Links;
-using BotAgent.Services.Music;
-using BotAgent.Services.Net;
-using BotAgent.Services.OneBot;
-using BotAgent.Services.Panel;
-using BotAgent.Services.Ports;
-using BotAgent.Services.Ops;
-using BotAgent.Services.Participation;
-using BotAgent.Services.Permissions;
-using BotAgent.Services.Poke;
-using BotAgent.Services.Platforms;
-using BotAgent.Services.Qq;
-using BotAgent.Services.Resilience;
-using BotAgent.Services.Stickers;
-using BotAgent.Services.Voice;
-using System.Collections.Concurrent;
-using System.Text;
 
 namespace BotAgent.Services.Reply;
 
@@ -62,13 +39,13 @@ public sealed partial class ReplyPipeline
 
         if (trigger is not null && result.AgentTask is { Length: > 0 } task)
         {
-            _hooks.Log($"[自然 agent] 从对话里接了一件活（{elapsed:F0}ms）: {conversation.Name}");
+            _hooks.Log($"[自然 agent] 从对话里接了一件活（{elapsed:F0}ms）");
             _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, "agent", reasonCode: "natural_agent");
             _ = _agentCmds.RunNaturalSafeAsync(conversation, trigger, task, result.AgentAck);
             return true;
         }
 
-        _hooks.Log($"[自然 agent] 模型想派活但本轮不够资格（{result.ReasonCode}），按静默处理: {conversation.Name}");
+        _hooks.Log($"[自然 agent] 模型想派活但本轮不够资格（{result.ReasonCode}），按静默处理");
         return false;
     }
 }

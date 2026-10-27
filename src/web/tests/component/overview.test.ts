@@ -105,4 +105,13 @@ describe('OverviewPage', () => {
     await wrapper.get('[data-testid="enable-admin"]').trigger('click')
     expect(wrapper.emitted('enable-admin')).toHaveLength(1)
   })
+
+  it('快捷入口只发出 navigate 事件并带上目标页', async () => {
+    const wrapper = mountPage()
+    for (const target of ['capabilities', 'configuration', 'tasks'] as const) {
+      await wrapper.find('[data-testid="quick-' + target + '"]').trigger('click')
+    }
+    const events = wrapper.emitted('navigate') ?? []
+    expect(events.map((e) => e[0])).toEqual(['capabilities', 'configuration', 'tasks'])
+  })
 })

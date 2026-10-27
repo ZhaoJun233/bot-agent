@@ -43,6 +43,36 @@ const tasksMounted = ref(false)
 const sessionNotice = ref<string | null>(null)
 const configDraftCount = computed(() => configurationPage.value?.draftCount ?? 0)
 
+type GuideIcon = 'overview' | 'capabilities' | 'config' | 'tasks'
+/** 每个页面顶部的「这一页是干什么的」：一句话用途 + 两三条怎么用。 */
+const pageGuides: Record<typeof view.value, { title: string; icon: GuideIcon; summary: string; tips: string[] }> = {
+  overview: {
+    title: '欢迎',
+    icon: 'overview',
+    summary: '机器人此刻的整体健康度、各组件状态和最近的错误。',
+    tips: ['先看顶部问候卡：绿色代表一切正常，橙色或红色说明有组件需要处理。', '组件表里点不动的原因码已翻译成中文，悬停可看原始代码。', '要改东西，先点「进入管理员模式」。']
+  },
+  capabilities: {
+    title: '插件与平台',
+    icon: 'capabilities',
+    summary: '按类别管理平台驱动、插件、模型提供商与 MCP：开关、启动停止和插件设置都在这里。',
+    tips: ['用上方标签按类别筛选。', '插件卡片上的开关决定功能是否生效，「⚙ 设置」打开该插件自己的参数。', '启动 / 停止等动作需要管理员模式，提交后会自动核对结果。']
+  },
+  configuration: {
+    title: '配置文件',
+    icon: 'config',
+    summary: '机器人的回复风格、冷却、上下文与模型供应商等全局参数。',
+    tips: ['左侧选分区，右侧逐项修改；改动先进草稿，不会立刻生效。', '底部保存条显示修改条数，「检查」可先做校验再保存。', '插件自己的参数已移到「插件与平台」里的插件设置。']
+  },
+  tasks: {
+    title: 'Agent 任务',
+    icon: 'tasks',
+    summary: '提交后台 Agent 任务、查看进度结果，并处理等待人工审批的请求。',
+    tips: ['填写来源与提示词后提交；同一幂等键重复提交不会重复执行。', '待审批列表里逐条批准或拒绝。', '点开任务可查看结果摘要，运行中的任务可以取消。']
+  }
+}
+const currentGuide = computed(() => pageGuides[view.value])
+
 // 每次连接/锁定都推进 sessionGeneration，使迟到的异步结果失效。
 let sessionGeneration = 0
 // 连接尝试单独计数：旧连接不能清掉新连接的 busy，但会话失效时自己的 busy 必须释放。
@@ -272,6 +302,13 @@ async function openTasks(event?: MouseEvent): Promise<void> {
   if (!firstVisit) await tasksPage.value?.reload()
 }
 
+/** 欢迎页快捷卡片：走与侧栏相同的切页路径（含未保存保护与首次挂载）。 */
+async function navigateFromOverview(target: 'capabilities' | 'configuration' | 'tasks', event: MouseEvent): Promise<void> {
+  if (target === 'capabilities') await openCapabilities(event)
+  else if (target === 'configuration') await openConfiguration()
+  else await openTasks(event)
+}
+
 async function lock(event?: MouseEvent): Promise<void> {
   const allowed = await configurationPage.value?.requestLeave('lock', navTrigger(event)) ?? true
   if (!allowed) return
@@ -397,7 +434,7 @@ onMounted(load)
         </div>
 
         <nav class="side-nav" aria-label="主导航">
-          <p class="side-nav-group" aria-hidden="true">看一看</p>
+          <p class="side-nav-group" aria-hidden="true">系统</p>
           <button
             type="button"
             class="side-nav-item"
@@ -407,9 +444,8 @@ onMounted(load)
             @click="showOverview"
           >
             <AppIcon name="overview" />
-            <span class="side-nav-text"><span>概览</span><small class="side-nav-hint">机器人现在好不好</small></span>
+            <span class="side-nav-text"><span>欢迎</span><small class="side-nav-hint">运行状态一眼看清</small></span>
           </button>
-          <p class="side-nav-group" aria-hidden="true">动手改</p>
           <button
             type="button"
             class="side-nav-item"
@@ -419,7 +455,7 @@ onMounted(load)
             @click="openCapabilities($event)"
           >
             <AppIcon name="capabilities" />
-            <span class="side-nav-text"><span>能力</span><small class="side-nav-hint">驱动、插件与模型的开关</small></span>
+            <span class="side-nav-text"><span>插件与平台</span><small class="side-nav-hint">平台、插件、模型与 MCP</small></span>
           </button>
           <button
             type="button"
@@ -430,11 +466,12 @@ onMounted(load)
             @click="openConfiguration"
           >
             <AppIcon name="config" />
-            <span class="side-nav-text"><span>配置</span><small class="side-nav-hint">回复风格与运行参数</small></span>
+            <span class="side-nav-text"><span>配置文件</span><small class="side-nav-hint">回复风格与运行参数</small></span>
             <span v-if="configDraftCount > 0" class="nav-badge" data-testid="nav-config-draft">
               {{ configDraftCount }}
             </span>
           </button>
+          <p class="side-nav-group" aria-hidden="true">扩展功能</p>
           <button
             type="button"
             class="side-nav-item"
@@ -444,7 +481,7 @@ onMounted(load)
             @click="openTasks($event)"
           >
             <AppIcon name="tasks" />
-            <span class="side-nav-text"><span>任务</span><small class="side-nav-hint">后台活儿的进度</small></span>
+            <span class="side-nav-text"><span>Agent 任务</span><small class="side-nav-hint">后台任务与人工审批</small></span>
           </button>
         </nav>
 
@@ -465,7 +502,7 @@ onMounted(load)
           <div class="crumbs" aria-label="面包屑">
             <span>工作台</span>
             <span class="crumb-sep" aria-hidden="true">/</span>
-            <strong>{{ view === 'configuration' ? '配置' : view === 'capabilities' ? '能力' : view === 'tasks' ? '任务' : '概览' }}</strong>
+            <strong>{{ currentGuide.title }}</strong>
           </div>
           <div class="topbar-actions">
             <span class="connection-chip" data-testid="connection-state">
@@ -491,6 +528,15 @@ onMounted(load)
         </header>
 
         <main class="app-main">
+          <aside class="page-guide" :data-view="view" data-testid="page-guide" aria-label="本页说明">
+            <span class="page-guide-icon"><AppIcon :name="currentGuide.icon" :size="20" /></span>
+            <div class="page-guide-body">
+              <p class="page-guide-title">{{ currentGuide.title }}<span>{{ currentGuide.summary }}</span></p>
+              <ul class="page-guide-tips">
+                <li v-for="tip in currentGuide.tips" :key="tip">{{ tip }}</li>
+              </ul>
+            </div>
+          </aside>
           <OverviewPage
             v-if="view === 'overview' && health && meta && status"
             :health="health"
@@ -506,6 +552,7 @@ onMounted(load)
             @refresh="refresh"
             @enable-admin="enableAdmin"
             @disable-admin="disableAdmin"
+            @navigate="navigateFromOverview"
           />
           <CapabilitiesPage
             v-if="capabilitiesMounted"

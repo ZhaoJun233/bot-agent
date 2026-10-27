@@ -52,14 +52,14 @@ const emit = defineEmits<{
 }>()
 
 const sectionMeta = [
-  { key: 'behavior', label: '行为', hint: '触发、人格与冷却' },
-  { key: 'model', label: '模型', hint: '模型、采样与思考预算' },
-  { key: 'agent', label: 'Agent', hint: '服务器 Agent 与工具' },
-  { key: 'platform', label: '平台', hint: '通道、白名单与策略' },
-  { key: 'voice', label: '语音', hint: 'TTS 与语音参数' },
-  { key: 'music', label: '音乐', hint: '点歌、解析与缓存' },
-  { key: 'reporting', label: '报告', hint: '健康日报' },
-  { key: 'registered', label: '模型供应商', hint: '已登记的模型供应商' }
+  { key: 'behavior', label: '行为', hint: '触发、人格与冷却', guide: '决定机器人什么时候开口、用什么人设说话，以及两次回复之间要冷却多久。改动保存后对新消息立即生效。' },
+  { key: 'model', label: '模型', hint: '模型、采样与思考预算', guide: '选择聊天用的模型与采样参数。温度越高回复越发散；思考预算越大越慢但更周到。' },
+  { key: 'agent', label: 'Agent', hint: '服务器 Agent 与工具', guide: '控制服务器内置 Agent：能否接 // 指令或自然对话任务、最多走几步、能用哪些工具。' },
+  { key: 'platform', label: '平台', hint: '通道、白名单与策略', guide: '接入哪些聊天通道、谁能和机器人说话（白名单），以及群聊与私聊的处理策略。' },
+  { key: 'voice', label: '语音', hint: 'TTS 与语音参数', guide: '云端语音合成的开关、音色与语速。' },
+  { key: 'music', label: '音乐', hint: '点歌、解析与缓存', guide: '点歌后端地址、解析方式与缓存策略。' },
+  { key: 'reporting', label: '报告', hint: '健康日报', guide: '每天自动生成健康日报的时间与接收方式。' },
+  { key: 'registered', label: '模型供应商', hint: '已登记的模型供应商', guide: '模型供应商的名称与密钥槽位。密钥只能替换或删除，不会回显。' }
 ] as const
 
 /** 插件相关设置挪到「能力」页的插件卡片上；整个分区归插件的不再出现在导航里。 */
@@ -1140,6 +1140,7 @@ defineExpose({
             <h2 :id="`config-${active}-title`">{{ activeMeta.label }}</h2>
             <p>{{ activeMeta.hint }} · {{ activeFields.length }} 个字段</p>
           </div>
+          <p class="config-guide">{{ activeMeta.guide }}</p>
           <p v-if="activeFields.length === 0" class="empty-state">该分区没有字段。</p>
           <div v-else class="table-scroll">
             <table data-testid="config-fields">
@@ -1241,6 +1242,7 @@ defineExpose({
             <h2 id="config-registered-title">模型供应商</h2>
             <p v-if="registered">{{ registered.providers.length }} 个已登记供应商</p>
           </div>
+          <p class="config-guide">{{ activeMeta.guide }}</p>
 
           <p v-if="!registered" class="empty-state" data-testid="config-registered-empty">
             快照没有返回已登记信息。

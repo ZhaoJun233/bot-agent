@@ -60,7 +60,12 @@ function submit(): void {
           </div>
         </div>
         <h1 id="auth-title">连接 ZBA</h1>
-        <p class="auth-subtitle">输入访问令牌以继续</p>
+        <p class="auth-subtitle">输入访问令牌，查看并管理你的 QQ 机器人</p>
+        <ul class="auth-points">
+          <li>看机器人现在是否正常、哪个组件出了问题</li>
+          <li>开关插件、调整回复风格与运行参数</li>
+          <li>给后台 Agent 派活，审批它的危险操作</li>
+        </ul>
         <BrandMark class="auth-watermark" :size="150" />
       </header>
 
@@ -81,6 +86,7 @@ function submit(): void {
             :disabled="props.busy"
           />
         </div>
+        <p class="auth-hint">令牌就是服务器上 <code>BOTAGENT_ZBA_TOKEN</code> 的值（只读令牌为 <code>BOTAGENT_ZBA_READ_TOKEN</code>）。它只保存在当前页面内存里，关掉页面或点「锁定」后需要重新输入。</p>
 
         <p v-if="props.busy" class="inline-notice" data-testid="auth-loading" role="status">
           正在检查 ZBA 连接…

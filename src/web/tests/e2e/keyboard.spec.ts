@@ -160,7 +160,7 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
   await page.getByTestId('config-nav-behavior').click()
 
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -297,9 +297,9 @@ test('键盘：配置保存主线全程只用键盘完成', async ({ page }) => 
   // 定位到行为分区，再 Tab 到目标字段的输入框（行 testid 由 closest 提供）。
   await tabTo(page, 'config-nav-behavior')
   await page.keyboard.press('Enter')
-  await tabToRow(page, 'config-field-moodTtlSeconds')
+  await tabToRow(page, 'config-field-privateCooldownSeconds')
 
-  const input = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = await input.inputValue()
   // 全选后输入：只发键盘事件，不调用 fill。
   await page.keyboard.press('ControlOrMeta+A')
@@ -315,7 +315,7 @@ test('键盘：配置保存主线全程只用键盘完成', async ({ page }) => 
   // 收尾：改回原值，避免同一宿主的后续用例看到被改过的配置。
   // 焦点此时在保存条（文档末尾），所以反向 Shift+Tab 回到字段行——
   // 向后 Tab 会走出文档进入浏览器外壳，那不是我们的 Tab 顺序。
-  await tabBackToRow(page, 'config-field-moodTtlSeconds')
+  await tabBackToRow(page, 'config-field-privateCooldownSeconds')
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type(original)
   await tabTo(page, 'config-save')
@@ -404,7 +404,7 @@ test('键盘：离开框在保存提交期间仍能接住 Escape', async ({ page
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
   await page.getByTestId('config-nav-behavior').click()
-  const field = page.getByTestId('config-field-moodTtlSeconds').locator('input')
+  const field = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   await field.fill(String(Number(await field.inputValue()) + 1))
 
   let release!: () => void

@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ConfigurationPage from '../../src/features/configuration/ConfigurationPage.vue'
 import {
   ZbaClient, ZbaNetworkError, ZbaRequestError,
-  type ZbaConfigurationReadResult, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest
+  type ZbaApplyState, type ZbaConfigurationReadResult, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest
 } from '../../src/api/zba'
 import editableFixture from '../fixtures/configuration-read-editable-result.json'
 
@@ -1053,5 +1053,81 @@ describe('ConfigurationPage', () => {
     expect(providerInput(wrapper).element.value).toBe('Synthetic Provider A')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
     expect(wrapper.get('[data-testid="config-providers"]').text()).not.toContain('已改名')
+  })
+})
+
+describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', () => {
+  async function saveWith(applyState: ZbaApplyState) {
+    const client = clientWith(editableFixture, {
+      saveConfiguration: async (request) => ({
+        code: 0,
+        replayed: false,
+        receipt: { ...committedReceipt(request, '2'), applyState, steps: [{ step: 0, state: applyState }] },
+        currentVersion: '2',
+        errors: []
+      })
+    })
+    const wrapper = mountPage({ client, mode: 'admin' })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await saveDraft(wrapper)
+    return wrapper
+  }
+
+  it('已保存但需重启：回执显示「需重启」并提示重启后才完全生效，不显示已生效', async () => {
+    const wrapper = await saveWith(3)
+    const panel = wrapper.get('[data-testid="config-receipt"]').text()
+    expect(panel).toContain('已提交')
+    expect(panel).toContain('需重启')
+    expect(panel).toContain('需要重启后完全生效')
+    expect(panel).not.toContain('已生效')
+  })
+
+  it('已保存但应用失败：回执如实显示「失败」，不冒报已生效', async () => {
+    const wrapper = await saveWith(4)
+    const panel = wrapper.get('[data-testid="config-receipt"]').text()
+    expect(panel).toContain('已提交')
+    expect(panel).toContain('失败')
+    expect(panel).not.toContain('已生效')
+  })
+
+  it('部分生效：回执总状态显示「部分生效」，逐步列出失败步骤与错误码，不冒报整体已生效', async () => {
+    const client = clientWith(editableFixture, {
+      saveConfiguration: async (request) => ({
+        code: 0,
+        replayed: false,
+        receipt: {
+          ...committedReceipt(request, '2'),
+          applyState: 2,
+          steps: [{ step: 0, state: 1 }, { step: 2, state: 4, errorCode: 'synthetic_projection_failed' }]
+        },
+        currentVersion: '2',
+        errors: []
+      })
+    })
+    const wrapper = mountPage({ client, mode: 'admin' })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await saveDraft(wrapper)
+    const grid = wrapper.get('[data-testid="config-receipt"] .receipt-grid').text()
+    expect(grid).toContain('部分生效')
+    expect(grid).not.toContain('已生效')
+    const steps = wrapper.get('[data-testid="config-receipt-steps"]').text()
+    expect(steps).toContain('发布快照：已生效')
+    expect(steps).toContain('模型投影：失败')
+    expect(steps).toContain('synthetic_projection_failed')
+  })
+
+  it('秘密槽位只给元数据：不回显值，也没有 QQ 官方 Secret 的写入口', async () => {
+    const wrapper = mountPage({ mode: 'admin' })
+    await flushPromises()
+    const secrets = wrapper.get('[data-testid="config-secrets"]')
+    expect(secrets.findAll('li')).toHaveLength(6)
+    expect(secrets.text()).not.toMatch(/官方|official/i)
+    for (const input of secrets.findAll('input')) {
+      expect(input.attributes('type')).toBe('password')
+      expect((input.element as HTMLInputElement).value).toBe('')
+    }
+    expect(wrapper.text()).not.toMatch(/officialAppSecret|官方 App ?Secret/i)
   })
 })
