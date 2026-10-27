@@ -397,6 +397,7 @@ onMounted(load)
         </div>
 
         <nav class="side-nav" aria-label="主导航">
+          <p class="side-nav-group" aria-hidden="true">看一看</p>
           <button
             type="button"
             class="side-nav-item"
@@ -406,8 +407,9 @@ onMounted(load)
             @click="showOverview"
           >
             <AppIcon name="overview" />
-            <span>概览</span>
+            <span class="side-nav-text"><span>概览</span><small class="side-nav-hint">机器人现在好不好</small></span>
           </button>
+          <p class="side-nav-group" aria-hidden="true">动手改</p>
           <button
             type="button"
             class="side-nav-item"
@@ -417,7 +419,7 @@ onMounted(load)
             @click="openCapabilities($event)"
           >
             <AppIcon name="capabilities" />
-            <span>能力</span>
+            <span class="side-nav-text"><span>能力</span><small class="side-nav-hint">驱动、插件与模型的开关</small></span>
           </button>
           <button
             type="button"
@@ -428,7 +430,7 @@ onMounted(load)
             @click="openConfiguration"
           >
             <AppIcon name="config" />
-            <span>配置</span>
+            <span class="side-nav-text"><span>配置</span><small class="side-nav-hint">回复风格与运行参数</small></span>
             <span v-if="configDraftCount > 0" class="nav-badge" data-testid="nav-config-draft">
               {{ configDraftCount }}
             </span>
@@ -442,7 +444,7 @@ onMounted(load)
             @click="openTasks($event)"
           >
             <AppIcon name="tasks" />
-            <span>任务</span>
+            <span class="side-nav-text"><span>任务</span><small class="side-nav-hint">后台活儿的进度</small></span>
           </button>
         </nav>
 
@@ -534,6 +536,7 @@ onMounted(load)
             :client="client"
             :mode="mode"
             :writes-enabled="compatibility.writesEnabled"
+            @open-capabilities="openCapabilities()"
             @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
           />

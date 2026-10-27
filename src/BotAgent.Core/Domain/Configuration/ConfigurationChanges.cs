@@ -15,6 +15,7 @@ public sealed class AgentChanges
     public FieldEdit<int> AgentServerCommandTimeoutSeconds { get; init; }
     public FieldEdit<bool> AgentServerDocker { get; init; }
     public FieldEdit<bool> AgentServerKeepContext { get; init; }
+    public FieldEdit<bool> EnableNaturalAgent { get; init; }
     public FieldEdit<int> AgentServerMaxSteps { get; init; }
     public FieldEdit<string> AgentServerModel { get; init; }
     public FieldEdit<string> AgentServerQqActions { get; init; }

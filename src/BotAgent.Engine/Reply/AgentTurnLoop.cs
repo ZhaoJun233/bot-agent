@@ -65,7 +65,8 @@ public sealed class AgentTurnLoop
         Domain.Permissions.ChatCapabilitySet caps,
         bool proactive,
         int maxSteps,
-        Func<CompletionResult, Task<string?>> runInlineTool)
+        Func<CompletionResult, Task<string?>> runInlineTool,
+        string? agentHint = null)
     {
         var steps = Math.Clamp(maxSteps, MinSteps, MaxSteps);
         var feed = turn.SearchText;
@@ -106,7 +107,8 @@ public sealed class AgentTurnLoop
                 enableVoice: turn.Snapshot.EnableVoice,
                 enableAsk: turn.Snapshot.EnableQuestions,
                 enableToolRequest: turn.Snapshot.EnableApprovals,
-                toolList: ToolPromptText.Render(caps),
+                // 自然对话驱动 agent：只有本轮够资格（开关开 + 白名单 + 在跟机器人说话）才会带上这段说明
+                toolList: string.Concat(ToolPromptText.Render(caps), agentHint),
                 sampling: sampling);
 
             totalPromptTokens += result.PromptTokens;

@@ -1456,6 +1456,12 @@
             </label>
 
             <label class="switch-row">
+                <input type="checkbox" id="setEnableNaturalAgent" />
+                <span class="switch"></span>
+                <span>自然对话驱动 agent<span class="hint">默认关：打开后白名单里的人 @ 机器人或私聊时直接说「帮我看下服务器内存」就会去干活，不必写 //；// 指令照旧可用。</span></span>
+            </label>
+
+            <label class="switch-row">
                 <input type="checkbox" id="setAgentServerDocker" />
                 <span class="switch"></span>
                 <span>允许 agent 透过 docker 操作服务器<span class="hint">高权限（docker.sock ≈ root）：打开后它能 docker ps/logs/exec、能 docker run -v /:/host … 读整个服务器文件系统，也能直接读写部署目录 /host/qqchat（宿主机的 /opt/qqchat）。默认关；挂载是常挂的，这个开关决定它会不会去用。</span></span>

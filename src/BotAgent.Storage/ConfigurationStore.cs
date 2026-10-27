@@ -928,6 +928,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             AgentServerCommandTimeoutSeconds = FreezeEdit(ConfigurationFieldId.AgentServerCommandTimeoutSeconds, agentSource.AgentServerCommandTimeoutSeconds, fields),
             AgentServerDocker = FreezeEdit(ConfigurationFieldId.AgentServerDocker, agentSource.AgentServerDocker, fields),
             AgentServerKeepContext = FreezeEdit(ConfigurationFieldId.AgentServerKeepContext, agentSource.AgentServerKeepContext, fields),
+            EnableNaturalAgent = FreezeEdit(ConfigurationFieldId.EnableNaturalAgent, agentSource.EnableNaturalAgent, fields),
             AgentServerMaxSteps = FreezeEdit(ConfigurationFieldId.AgentServerMaxSteps, agentSource.AgentServerMaxSteps, fields),
             AgentServerModel = FreezeEdit(ConfigurationFieldId.AgentServerModel, agentSource.AgentServerModel, fields),
             AgentServerQqActions = FreezeEdit(ConfigurationFieldId.AgentServerQqActions, agentSource.AgentServerQqActions, fields),
@@ -1349,6 +1350,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.AgentServerCommandTimeoutSeconds, patch.Agent!.AgentServerCommandTimeoutSeconds);
         Add(ConfigurationFieldId.AgentServerDocker, patch.Agent!.AgentServerDocker);
         Add(ConfigurationFieldId.AgentServerKeepContext, patch.Agent!.AgentServerKeepContext);
+        Add(ConfigurationFieldId.EnableNaturalAgent, patch.Agent!.EnableNaturalAgent);
         Add(ConfigurationFieldId.AgentServerMaxSteps, patch.Agent!.AgentServerMaxSteps);
         Add(ConfigurationFieldId.AgentServerModel, patch.Agent!.AgentServerModel);
         Add(ConfigurationFieldId.AgentServerQqActions, patch.Agent!.AgentServerQqActions);

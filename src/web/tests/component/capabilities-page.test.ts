@@ -83,10 +83,13 @@ describe('CapabilitiesPage', () => {
     expect(wrapper.get('[data-testid="cap-mode-badge"]').text()).toBe('管理员模式')
     expect(wrapper.get('[data-testid="cap-count"]').text()).toContain('1')
     expect(wrapper.get('[data-testid="cap-item-plugin:preset.feature.music"]').text()).toContain('运行中')
-    expect(wrapper.get('[data-testid="cap-item-plugin:preset.feature.music"]').text()).toContain('已配置')
+    expect(wrapper.get('[data-testid="cap-item-plugin:preset.feature.music"]').text()).toContain('已启用')
     // 支持矩阵：停止可用，启动带原因码
     expect(wrapper.find('[data-testid="cap-action-plugin:preset.feature.music-4"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="cap-reason-plugin:preset.feature.music-3"]').text()).toContain('configuration_required')
+    const reason = wrapper.get('[data-testid="cap-reason-plugin:preset.feature.music-3"]')
+    expect(reason.text()).toContain('需要先完成配置')
+    // 原始码保留在 title 里，方便对照服务端日志
+    expect(reason.get('span').attributes('title')).toBe('configuration_required')
   })
 
   it('标准模式可浏览但不能执行动作', async () => {
@@ -702,5 +705,98 @@ describe('CapabilitiesPage', () => {
     await flushPromises()
     // 没有回执的核对结果不能把「执行中」抹掉。
     expect(wrapper.get('[data-testid="cap-result-state"]').text()).toContain('执行中')
+  })
+})
+
+describe('PluginSettingsDialog（插件卡片上的设置）', () => {
+  const field = (value: unknown) => ({
+    visibility: 1, display: String(value), value, userMode: 2, effectiveSource: 1, applyState: 1,
+    rule: { id: 1, effect: 0, canClear: false, editable: true, legacyNeedsReview: false }
+  })
+  const editable = {
+    ...readResult,
+    view: {
+      behavior: { botPersona: field('x') }, model: {}, agent: {}, platform: { platformPolicies: field([]) },
+      voice: {}, music: { enableMusic: field(true), musicBitrate: field(128) }, reporting: {},
+      registered: { plugins: [], providers: [] }
+    }
+  }
+
+  it('点设置打开弹窗，只显示该插件字段，保存只发改动的字段', async () => {
+    let sent: any = null
+    const client = clientWith({
+      readConfiguration: async () => editable,
+      saveConfiguration: async (req: unknown) => {
+        sent = req
+        return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt: {
+          key: 'k', contractRevision: 'cfg-0.3.3', decision: 0, observedVersion: '1', committedVersion: '2',
+          commitState: 1, applyState: 1, steps: [], deviceKeyAssignments: [] } }
+      }
+    })
+    const wrapper = mountPage(client)
+    await flushPromises()
+    await wrapper.get('[data-testid="cap-settings-plugin:preset.feature.music"]').trigger('click')
+    await flushPromises()
+    const dialog = document.querySelector('[data-testid="plugin-settings"]')!
+    expect(dialog).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="plugin-field-musicBitrate"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="plugin-field-botPersona"]')).toBeNull()
+    const input = dialog.querySelector('[data-testid="plugin-field-musicBitrate"] input') as HTMLInputElement
+    input.value = '192'
+    input.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(dialog.querySelector('[data-testid="plugin-settings-save"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(sent.changes).toEqual({ music: { musicBitrate: { kind: 1, value: 192 } } })
+    expect(sent.expectedVersion).toBe('1')
+  })
+
+  it('卡片上的启用开关直接写启用字段', async () => {
+    let sent: any = null
+    let current = true
+    const client = clientWith({
+      readConfiguration: async () => ({
+        ...editable,
+        view: { ...editable.view, music: { enableMusic: field(current), musicBitrate: field(128) } }
+      }),
+      saveConfiguration: async (req: any) => {
+        sent = req
+        current = req.changes.music.enableMusic.value
+        return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt: { key: 'k' } }
+      }
+    })
+    const wrapper = mountPage(client)
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="cap-switch-plugin:preset.feature.music"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    ;(toggle.element as HTMLInputElement).checked = false
+    await toggle.trigger('change')
+    await flushPromises()
+    expect(sent.changes).toEqual({ music: { enableMusic: { kind: 1, value: false } } })
+    expect((wrapper.get('[data-testid="cap-switch-plugin:preset.feature.music"]').element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.get('[data-testid="cap-switch-notice-plugin:preset.feature.music"]').text()).toContain('已停用')
+  })
+
+  it('标准模式下开关禁用', async () => {
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => editable }), 'read')
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="cap-switch-plugin:preset.feature.music"]')
+    expect((toggle.element as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('有未保存修改时第一次关闭只提示，第二次才关闭', async () => {
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => editable }))
+    await flushPromises()
+    await wrapper.get('[data-testid="cap-settings-plugin:preset.feature.music"]').trigger('click')
+    await flushPromises()
+    const input = document.querySelector('[data-testid="plugin-field-musicBitrate"] input') as HTMLInputElement
+    input.value = '64'
+    input.dispatchEvent(new Event('input'))
+    await flushPromises()
+    const close = () => (document.querySelector('[data-testid="plugin-settings-close"]') as HTMLButtonElement).click()
+    close(); await flushPromises()
+    expect(document.querySelector('[data-testid="plugin-settings-discard"]')).not.toBeNull()
+    close(); await flushPromises()
+    expect(document.querySelector('[data-testid="plugin-settings"]')).toBeNull()
   })
 })

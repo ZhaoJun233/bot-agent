@@ -75,6 +75,9 @@ public sealed class AgentTask
     /// </summary>
     public IQqActionHost? QqHost { get; set; }
 
+    /// <summary>这件活是从自然对话里接的（不是 // 指令）：结果要用聊天的口吻说回去。</summary>
+    public bool Natural { get; set; }
+
     public DateTimeOffset StartedAt { get; set; } = Clock.Now;
 
     public long DurationMs { get; set; }

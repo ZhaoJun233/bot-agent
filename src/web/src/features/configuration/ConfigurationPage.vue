@@ -37,6 +37,7 @@ import {
   type SecretDrafts
 } from './draft'
 import { fieldLabel } from './field-labels'
+import { pluginOwnedPaths, pluginOwnedSections } from '../capabilities/plugin-settings'
 
 const props = defineProps<{
   client: ZbaClient
@@ -47,6 +48,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'enable-admin': []
   'auth-expired': [error: UiError]
+  'open-capabilities': []
 }>()
 
 const sectionMeta = [
@@ -57,8 +59,15 @@ const sectionMeta = [
   { key: 'voice', label: '语音', hint: 'TTS 与语音参数' },
   { key: 'music', label: '音乐', hint: '点歌、解析与缓存' },
   { key: 'reporting', label: '报告', hint: '健康日报' },
-  { key: 'registered', label: '已登记', hint: '插件与模型供应商' }
+  { key: 'registered', label: '模型供应商', hint: '已登记的模型供应商' }
 ] as const
+
+/** 插件相关设置挪到「能力」页的插件卡片上；整个分区归插件的不再出现在导航里。 */
+const visibleSections = sectionMeta.filter((section) => !pluginOwnedSections.includes(section.key as never))
+
+function ownedByPlugin(section: string, key: string): boolean {
+  return pluginOwnedSections.includes(section as never) || pluginOwnedPaths.has(section + '.' + key)
+}
 
 type SectionKey = typeof sectionMeta[number]['key']
 type SavePhase = 'idle' | 'saving' | 'unconfirmed' | 'saved' | 'conflict' | 'error'
@@ -141,9 +150,9 @@ const counts = computed<Record<SectionKey, number>>(() => {
   const view = snapshot.value?.view
   if (!view) return result
   for (const key of ['behavior', 'model', 'agent', 'platform', 'voice', 'music', 'reporting'] as const) {
-    result[key] = Object.keys(view[key]).length
+    result[key] = Object.keys(view[key]).filter((field) => !ownedByPlugin(key, field)).length
   }
-  result.registered = view.registered.plugins.length + view.registered.providers.length
+  result.registered = view.registered.providers.length
   return result
 })
 
@@ -157,7 +166,9 @@ const activeFields = computed<Array<{ key: string; field: ZbaReadField }>>(() =>
   const view: ZbaConfigurationView | undefined = snapshot.value?.view
   if (!view || active.value === 'registered') return []
   const section = view[active.value] as Record<string, ZbaReadField>
-  return Object.entries(section).map(([key, field]) => ({ key, field }))
+  return Object.entries(section)
+    .filter(([key]) => !ownedByPlugin(active.value, key))
+    .map(([key, field]) => ({ key, field }))
 })
 
 const dirtyCount = computed(() =>
@@ -1064,6 +1075,13 @@ defineExpose({
       </button>
     </p>
 
+    <p class="inline-notice" data-testid="config-plugin-moved">
+      语音、点歌、表情包、戳一戳、氛围、人物画像、联网搜索这些插件的设置，已经放到「能力」页对应插件卡片的「设置」里。
+      <button type="button" class="tonal inline-action" data-testid="config-open-capabilities" @click="emit('open-capabilities')">
+        去能力页
+      </button>
+    </p>
+
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
     <ul v-if="fieldErrors.length > 0" id="config-field-errors" class="field-errors" data-testid="config-field-errors" role="alert">
@@ -1099,7 +1117,7 @@ defineExpose({
       <div class="config-body">
         <nav class="config-nav" aria-label="配置分区">
           <button
-            v-for="section in sectionMeta"
+            v-for="section in visibleSections"
             :key="section.key"
             type="button"
             class="config-nav-item"
@@ -1220,35 +1238,14 @@ defineExpose({
 
         <section v-else class="panel config-panel" aria-labelledby="config-registered-title">
           <div class="panel-heading">
-            <h2 id="config-registered-title">已登记</h2>
-            <p v-if="registered">
-              {{ registered.plugins.length }} 个插件 ·
-              {{ registered.providers.length }} 个供应商
-            </p>
+            <h2 id="config-registered-title">模型供应商</h2>
+            <p v-if="registered">{{ registered.providers.length }} 个已登记供应商</p>
           </div>
 
           <p v-if="!registered" class="empty-state" data-testid="config-registered-empty">
             快照没有返回已登记信息。
           </p>
           <template v-else>
-            <h3 class="subhead">插件</h3>
-            <p v-if="registered.plugins.length === 0" class="empty-state">没有已登记插件。</p>
-            <div v-else class="table-scroll">
-              <table data-testid="config-plugins">
-                <caption class="sr-only">已登记插件</caption>
-                <thead>
-                  <tr><th scope="col">插件</th><th scope="col">期望状态</th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="plugin in registered.plugins" :key="plugin.key">
-                    <td><strong>{{ plugin.key }}</strong></td>
-                    <td>{{ plugin.desiredEnabled ? '启用' : '停用' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <h3 class="subhead">模型供应商</h3>
             <p v-if="registered.providers.length === 0" class="empty-state">没有已登记供应商。</p>
             <div v-else class="table-scroll">
               <table data-testid="config-providers">

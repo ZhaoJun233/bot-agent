@@ -893,12 +893,12 @@ internal static class ConfigurationContractTests
                 empty.Key, empty.Changes, empty.Secrets);
             Check(noChanges.Code == ConfigurationResultCode.NoChanges && noChanges.CurrentVersion.Value == initialVersion
                 && providers.Find("primary")?.SecretKeyRef == "env:QQCHAT_API_KEY", "all Keep cannot rewrite empty primary binding");
-            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 134
-                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 134
+            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 135
+                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 135
                 && !read.Fields.Any(rule => rule.Id is ConfigurationFieldId.AgentDevices or ConfigurationFieldId.AgentMaxQueued
                     or ConfigurationFieldId.AgentModel or ConfigurationFieldId.AgentTarget or ConfigurationFieldId.AgentTimeoutSeconds
                     or ConfigurationFieldId.AgentTools or ConfigurationFieldId.AgentWorkDir or ConfigurationFieldId.EnableHostAgent),
-                "actual 134 typed projection and descriptors");
+                "actual 135 typed projection and descriptors");
             Check(read.View!.Behavior.BotPersona.Visibility == FieldVisibility.Hidden
                 && !read.View.Behavior.BotPersona.TryGetEditableValue(out _)
                 && !JsonSerializer.Serialize(read).Contains(initial.BotPersona, StringComparison.Ordinal), "Overview drops raw editable value");
@@ -1481,7 +1481,7 @@ internal static class ConfigurationContractTests
                 "real_settings_writes_retain_same_origin_gate");
             var initial = await Read();
             Check(initial.Status == 200 && initial.Body["code"]!.GetValue<int>() == 0
-                && initial.Body["fields"]!.AsArray().Count == 134 && initial.Body["version"] is JsonValue
+                && initial.Body["fields"]!.AsArray().Count == 135 && initial.Body["version"] is JsonValue
                 && initial.Body["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 10,
                 "actual_host_adopts_store_and_returns_versioned_editable_projection");
             http.DefaultRequestHeaders.Add("X-Panel-Token", "synthetic-http-panel-token");
@@ -4167,11 +4167,11 @@ internal static class ConfigurationContractTests
         RegistryIsolation(check);
         var ids = Enum.GetValues<ConfigurationFieldId>();
         check("configuration FieldIds are exactly 1..145",
-            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 145)));
+            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 146)));
         var partitions = new[] { typeof(AgentChanges), typeof(BehaviorChanges), typeof(ModelChanges),
             typeof(MusicChanges), typeof(PlatformChanges), typeof(ReportingChanges), typeof(VoiceChanges) };
-        check("configuration seven partitions cover all 134 direct fields",
-            partitions.Sum(t => t.GetProperties().Length) == 134);
+        check("configuration seven partitions cover all 135 direct fields",
+            partitions.Sum(t => t.GetProperties().Length) == 135);
         foreach (var type in partitions)
         {
             var view = type.Assembly.GetType(type.FullName!.Replace("Changes", "View"))!;
@@ -4304,8 +4304,8 @@ internal static class ConfigurationContractTests
         }
         var empty = Parse(new JsonObject());
         var scalar = Edits(empty).Where(x => x.Name is not ("AgentDevices" or "PlatformPolicies")).ToArray();
-        check("configuration legacy mapper exactly 133 scalar fields with missing Keep",
-            scalar.Length == 133 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
+        check("configuration legacy mapper exactly 134 scalar fields with missing Keep",
+            scalar.Length == 134 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
                 && Edits(empty).All(x => Kind(x.Edit) == EditKind.Keep));
         foreach (var field in scalar)
         {

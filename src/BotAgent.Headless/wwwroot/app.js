@@ -2143,6 +2143,8 @@ function renderChannelStatus(channels) {
     $("setAgentServerQqActions").value = r.agentServerQqActions || "";
     // 记住上下文（默认关：每条指令单独对待）
     $("setAgentServerKeepContext").checked = !!r.agentServerKeepContext;
+    // 自然对话驱动 agent（默认关：不写 // 也能让它干活）
+    $("setEnableNaturalAgent").checked = !!r.enableNaturalAgent;
     // 透过 docker 操作服务器（高权限，默认关）
     $("setAgentServerDocker").checked = !!r.agentServerDocker;
     // 面板一键部署（高权限，默认关）+ 记住的产物地址
@@ -2350,6 +2352,7 @@ function renderChannelStatus(channels) {
       agentServerTools: get => get("setAgentServerTools").value.trim(),
       agentServerQqActions: get => get("setAgentServerQqActions").value.trim(),
       agentServerKeepContext: get => get("setAgentServerKeepContext").checked,
+      enableNaturalAgent: get => get("setEnableNaturalAgent").checked,
       agentServerDocker: get => get("setAgentServerDocker").checked,
       panelDeployEnabled: get => get("setPanelDeployEnabled").checked,
       panelDeployUrl: get => get("deployUrl").value.trim(),

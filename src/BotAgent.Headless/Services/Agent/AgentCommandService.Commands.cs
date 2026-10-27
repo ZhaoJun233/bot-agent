@@ -426,7 +426,8 @@ public sealed partial class AgentCommandService
     /// 同一会话串行（忙的时候如实回一句），自备 CTS 是为了让 `//stop` 能把正在跑的 bash 也杀掉。
     /// </summary>
 
-    private async Task RunOnServerAsync(BotConversation conversation, QqChatMessage msg, string payload)
+    private async Task RunOnServerAsync(BotConversation conversation, QqChatMessage msg, string payload,
+        string? ack = null, bool natural = false)
     {
         if (_serverAgentBusy.TryAdd(conversation.SourceKey, true))
         {
@@ -451,7 +452,8 @@ public sealed partial class AgentCommandService
                 History = seededHistory,
                 UseHistory = useHistory,
                 // 现场：不做这一步，模型知道“点赞”却不知道给谁点、在哪条消息上点
-                QqHost = BuildQqHost(conversation, msg)
+                QqHost = BuildQqHost(conversation, msg),
+                Natural = natural
             };
             task.RunId = serverRunId;
 
@@ -460,7 +462,10 @@ public sealed partial class AgentCommandService
                 ? CancellationTokenSource.CreateLinkedTokenSource(lease.Lifetime) : new CancellationTokenSource();
             _serverAgentCurrent[conversation.SourceKey] = (task, cts);
 
-            await _hooks.SendPlainAsync(conversation, $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
+            // 自然对话：用模型自己那句接话（没有就给一句口语的），不报会话名、不复述指令
+            await _hooks.SendPlainAsync(conversation, natural
+                ? (string.IsNullOrWhiteSpace(ack) ? "好，我去弄一下～" : ack.Trim())
+                : $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
             _ = Task.Run(async () =>
             {
                 using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
@@ -484,6 +489,8 @@ public sealed partial class AgentCommandService
         }
 
         // 同一个会话的服务器任务串行（不同会话不受影响）
-        await _hooks.SendPlainAsync(conversation, "这个会话上一条 //指令还在跑，等它完事再发。");
+        await _hooks.SendPlainAsync(conversation, natural
+            ? "上一件事我还在弄，等我弄完再接这个～（想让我先停下就说一声“停一下”）"
+            : "这个会话上一条 //指令还在跑，等它完事再发。");
     }
 }

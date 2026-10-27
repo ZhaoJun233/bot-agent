@@ -561,6 +561,8 @@ const RUNTIME = {
   agentServerQqActionsEffective: "安全档 like/poke，已点名打开 ban",
   // 记住上下文：默认关（每条指令单独对待）—— fixture 里故意开一个，验证回填
   agentServerKeepContext: true,
+  // 自然对话驱动 agent：默认关 —— fixture 里开一个，验证回填
+  enableNaturalAgent: true,
   // 面板一键部署（高权限，默认关）+ 记住的产物地址
   panelDeployEnabled: true, panelDeployUrl: "https://example.com/app.tar.gz",
   // 透过 docker 操作服务器（高权限，默认关）
@@ -606,8 +608,8 @@ for (const group of changeTypes.matchAll(/public sealed class (\w+)Changes\s*\{(
     });
   }
 }
-if (configurationSchema.size !== 134 || [...configurationSchema.values()].some(field => !field.id))
-  throw new Error("Synthetic configuration schema does not match the real 134-field Core contract");
+if (configurationSchema.size !== 135 || [...configurationSchema.values()].some(field => !field.id))
+  throw new Error("Synthetic configuration schema does not match the real 135-field Core contract");
 const clone = value => JSON.parse(JSON.stringify(value));
 const secretMembers = ["apiKey", "agentServerKey", "ttsApiKey", "feishuAppSecret", "feishuEncryptKey", "feishuVerificationToken"];
 const configuredSecrets = new Set([0, 1]);
@@ -1153,7 +1155,7 @@ if (saveCall) {
   check("真实保存请求不提交官方 Secret 或清空指令",
     Object.keys(wire).sort().join(",") === "changes,contractRevision,expectedVersion,key,secrets"
       && wire.secrets.every(edit => edit.slot >= 0 && edit.slot <= 5));
-  check("strict保存闭集五成员而不是重复整表控件", Object.keys(wire).length === 5 && configurationSchema.size === 134);
+  check("strict保存闭集五成员而不是重复整表控件", Object.keys(wire).length === 5 && configurationSchema.size === 135);
   check("未修改的平台继承/名单/功能保持原样，不发送整表", !wire.changes.registered && !wire.changes.platform?.platformPolicies
     && sandbox.probe.policyDraft().some(row => row.configuration.groupWhitelist.value === "synthetic-group"));
   check("★ 不改动直接保存不会被空值污染", Object.keys(wire.changes).length === 0 && wire.secrets.length === 0);

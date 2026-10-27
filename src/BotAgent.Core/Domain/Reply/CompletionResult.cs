@@ -63,7 +63,13 @@ public readonly record struct CompletionResult(int? Suitability, string? Reply, 
     int CompletionTokens = 0,
 
     /// <summary>本轮 Provider 故障转移跳数（0 为主通道直出）。</summary>
-    int FallbackHops = 0);
+    int FallbackHops = 0,
+
+    /// <summary>action=agent 时模型托付的任务（已清洗）；只交给服务端 agent 闸门，不是正文。</summary>
+    string? AgentTask = null,
+
+    /// <summary>action=agent 时模型想先回的一句应答（单行）；闸门放行后由服务端发出。</summary>
+    string? AgentAck = null);
 
 /// <summary>
 /// 解析器要"说给日志听"的一件事（<see cref="ModelOutputParser" /> 是纯函数，不自己写日志）。

@@ -48,6 +48,12 @@ public sealed partial class AppSettings
     /// </summary>
     public bool AgentServerKeepContext { get; set; }
 
+    /// <summary>
+    /// 自然对话驱动 agent（默认关）：白名单里的人在跟机器人说话时，不写 // 也能让它去干活 ——
+    /// 由聊天模型判断“这是要我动手”（action=agent）再交给服务器 agent。// 指令照旧可用。
+    /// </summary>
+    public bool EnableNaturalAgent { get; set; }
+
     /// <summary>服务器内置 agent 最多跑几步工具循环（每步一次模型调用）。</summary>
     public int AgentServerMaxSteps { get; set; } = 8;
 

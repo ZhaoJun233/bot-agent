@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { stateName } from '../friendly'
 
 const props = withDefaults(defineProps<{
   state: string
   available?: boolean
-}>(), { available: undefined })
+  /** 显示中文状态名，原始值放进 title 便于排障。 */
+  friendly?: boolean
+}>(), { available: undefined, friendly: false })
 
 const rawState = computed(() => typeof props.state === 'string' && props.state.length > 0 ? props.state : 'unknown')
 
@@ -38,12 +41,13 @@ const label = computed(() => {
     || state.includes('disabled') || state.includes('stopped') || state.includes('paused')
     || state.includes('inactive')
   // available=true 只表示“已登记/可调用”，不能覆盖未知、停用或失败状态。
-  if (props.available === true && !notAffirmative) return `${rawState.value} · 可用`
-  if (props.available === false) return `${rawState.value} · 不可用`
-  return rawState.value
+  const name = props.friendly ? stateName(rawState.value) : rawState.value
+  if (props.available === true && !notAffirmative) return props.friendly ? name : `${name} · 可用`
+  if (props.available === false) return props.friendly && state.includes('disabled') ? name : `${name} · 不可用`
+  return name
 })
 </script>
 
 <template>
-  <span class="status-badge" :data-tone="tone">{{ label }}</span>
+  <span class="status-badge" :data-tone="tone" :title="props.friendly ? rawState : undefined">{{ label }}</span>
 </template>

@@ -202,6 +202,7 @@ public sealed class SettingsStore : ISettingsRepository
             ApplyScalar(agent.AgentServerCommandTimeoutSeconds, value => next.AgentServerCommandTimeoutSeconds = value);
             ApplyScalar(agent.AgentServerDocker, value => next.AgentServerDocker = value);
             ApplyScalar(agent.AgentServerKeepContext, value => next.AgentServerKeepContext = value);
+            ApplyScalar(agent.EnableNaturalAgent, value => next.EnableNaturalAgent = value);
             ApplyScalar(agent.AgentServerMaxSteps, value => next.AgentServerMaxSteps = value);
             ApplyScalar(agent.AgentServerModel, value => next.AgentServerModel = value);
             ApplyScalar(agent.AgentServerQqActions, value => next.AgentServerQqActions = value);
@@ -589,6 +590,7 @@ public sealed class SettingsStore : ISettingsRepository
             AgentServerCommandTimeoutSeconds = fields.Field(ConfigurationFieldId.AgentServerCommandTimeoutSeconds, user.AgentServerCommandTimeoutSeconds, effective.AgentServerCommandTimeoutSeconds, nameof(AppSettings.AgentServerCommandTimeoutSeconds)),
             AgentServerDocker = fields.Field(ConfigurationFieldId.AgentServerDocker, user.AgentServerDocker, effective.AgentServerDocker, nameof(AppSettings.AgentServerDocker)),
             AgentServerKeepContext = fields.Field(ConfigurationFieldId.AgentServerKeepContext, user.AgentServerKeepContext, effective.AgentServerKeepContext, nameof(AppSettings.AgentServerKeepContext)),
+            EnableNaturalAgent = fields.Field(ConfigurationFieldId.EnableNaturalAgent, user.EnableNaturalAgent, effective.EnableNaturalAgent, nameof(AppSettings.EnableNaturalAgent)),
             AgentServerMaxSteps = fields.Field(ConfigurationFieldId.AgentServerMaxSteps, user.AgentServerMaxSteps, effective.AgentServerMaxSteps, nameof(AppSettings.AgentServerMaxSteps)),
             AgentServerModel = fields.Field(ConfigurationFieldId.AgentServerModel, user.AgentServerModel, effective.AgentServerModel, nameof(AppSettings.AgentServerModel)),
             AgentServerQqActions = fields.Field(ConfigurationFieldId.AgentServerQqActions, user.AgentServerQqActions, effective.AgentServerQqActions, nameof(AppSettings.AgentServerQqActions)),
@@ -1433,6 +1435,7 @@ public sealed class SettingsStore : ISettingsRepository
                 view.Agent.AgentServerCommandTimeoutSeconds.Rule,
                 view.Agent.AgentServerDocker.Rule,
                 view.Agent.AgentServerKeepContext.Rule,
+                view.Agent.EnableNaturalAgent.Rule,
                 view.Agent.AgentServerMaxSteps.Rule,
                 view.Agent.AgentServerModel.Rule,
                 view.Agent.AgentServerQqActions.Rule,

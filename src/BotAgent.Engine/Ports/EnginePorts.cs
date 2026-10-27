@@ -25,6 +25,19 @@ namespace BotAgent.Services.Agent
     {
         bool TryParseCommand(string rawText, out string payload);
         Task RunCommandSafeAsync(BotConversation conversation, QqChatMessage message, string payload);
+
+        /// <summary>
+        /// 自然对话驱动 agent：这个人在这个会话里能不能“说句话就让 agent 干活”
+        /// （面板开关 + agent 总开关 + AgentAllowedUsers 白名单）。默认 false = 不支持。
+        /// </summary>
+        bool CanRunNatural(BotConversation conversation, long senderId) => false;
+
+        /// <summary>
+        /// 把模型从自然对话里理解出的任务交给服务器 agent（ack = 模型想先说的那句接话）。
+        /// 异常只记日志，不带崩回复流程。
+        /// </summary>
+        Task RunNaturalSafeAsync(BotConversation conversation, ChatMessage trigger, string task, string? ack)
+            => Task.CompletedTask;
     }
 }
 

@@ -15,6 +15,7 @@ public sealed class AgentView
     public required ReadField<int> AgentServerCommandTimeoutSeconds { get; init; }
     public required ReadField<bool> AgentServerDocker { get; init; }
     public required ReadField<bool> AgentServerKeepContext { get; init; }
+    public required ReadField<bool> EnableNaturalAgent { get; init; }
     public required ReadField<int> AgentServerMaxSteps { get; init; }
     public required ReadField<string> AgentServerModel { get; init; }
     public required ReadField<string> AgentServerQqActions { get; init; }

@@ -20,6 +20,13 @@ public enum ReplyAction
 
     /// <summary>想调用工具（普通群聊路径没有工具，必须经过 P3 的权限与审批）。</summary>
     Tool = 3,
+
+    /// <summary>
+    /// 自然对话驱动的 agent：模型判断"这句话其实是在托我办事"，把任务交给服务器内置 agent。
+    /// **不构成授权**：服务端仍按开关 + AgentAllowedUsers 白名单 + 是否在跟机器人说话来判定，
+    /// 判不过就当没发生（静默或按普通回复）。
+    /// </summary>
+    Agent = 4,
 }
 
 /// <summary>
@@ -48,7 +55,13 @@ public readonly record struct DecisionVerdict(
     /// **它不是正文**：<see cref="Content"/> 仍然是 null（不变量不变），
     /// 服务端会把它包在**自己的**文案里（带编号与有效期）再发出去。
     /// </summary>
-    string? QuestionText = null)
+    string? QuestionText = null,
+
+    /// <summary>action=agent 时模型托付的任务（已清洗；**不是正文**，只交给服务端 agent 闸门）。</summary>
+    string? AgentTask = null,
+
+    /// <summary>action=agent 时模型想先回的一句应答（单行、已截断；服务端判定放行后才发）。</summary>
+    string? AgentAck = null)
 {
     /// <summary>只给日志用的单行摘要（**不含正文**）。</summary>
     public string Describe()
@@ -69,7 +82,7 @@ public readonly record struct DecisionVerdict(
 ///      调用方即使不看 <c>Send</c> 也拿不到要发的东西（控制标记进不了发送队列）；
 ///   3. **不确定时降级，不升级**：解析失败、字段超长、动作不认识 → 静默，不按“普通文本”放行。
 /// </summary>
-public static class ReplyDecisionRules
+public static partial class ReplyDecisionRules
 {
     /// <summary>兼容用的显式静默标记（旧协议：模型直接回这一串）。</summary>
     public const string SilentMarker = "[SILENT]";
@@ -87,6 +100,7 @@ public static class ReplyDecisionRules
             "silent" or "silence" or "skip" => ReplyAction.Silent,
             "ask" or "question" => ReplyAction.Ask,
             "tool" or "call" => ReplyAction.Tool,
+            "agent" or "task" or "delegate" => ReplyAction.Agent,
             _ => null,
         };
     }
@@ -186,7 +200,8 @@ public static class ReplyDecisionRules
         string? reasonCode = null,
         bool upstreamEmpty = false,
         string? toolRequest = null,
-        bool askEnabled = false)
+        bool askEnabled = false,
+        string? agentTask = null)
     {
         var body = (reply ?? string.Empty).Trim();
 
@@ -248,6 +263,16 @@ public static class ReplyDecisionRules
                 // 普通群聊路径没有工具权限（V3 §9.1）：静默，等 P3 的策略与审批生效
                 return new DecisionVerdict(
                     ReplyAction.Tool, false, "tool_not_enabled", null, ToolId: SanitizeToolId(toolRequest));
+
+            case ReplyAction.Agent:
+                // 自然对话托付任务：正文**不直接发**（Send=false ⇒ Content=null 不变量不变），
+                // 任务与应答各自带出去，由服务端判定"谁、在哪、开关开没开"之后才可能执行/发送。
+                var task = SanitizeAgentTask(agentTask);
+                return task is null
+                    ? new DecisionVerdict(ReplyAction.Silent, false, "agent_task_missing", null, Malformed: true)
+                    : new DecisionVerdict(
+                        ReplyAction.Agent, false, "agent_requested", null,
+                        AgentTask: task, AgentAck: SanitizeQuestion(body));
 
             default:
                 if (body.Length == 0)

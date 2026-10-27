@@ -99,20 +99,24 @@ async function expectCleanProviderDraft(wrapper: ReturnType<typeof mountPage>, n
 }
 
 describe('ConfigurationPage', () => {
-  it('渲染 8 个分区、字段行与 6 个秘密槽位', async () => {
+  it('渲染 6 个分区（语音/音乐已移到插件设置）、字段行与 6 个秘密槽位', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
     expect(wrapper.find('[data-testid="configuration"]').exists()).toBe(true)
-    expect(wrapper.findAll('.config-nav-item')).toHaveLength(8)
-    expect(wrapper.findAll('[data-testid="config-fields"] tbody tr')).toHaveLength(3)
+    expect(wrapper.findAll('.config-nav-item')).toHaveLength(6)
+    expect(wrapper.find('[data-testid="config-nav-voice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-nav-music"]').exists()).toBe(false)
+    // moodTtlSeconds 归「氛围与心情」插件，配置页不再重复展示
+    expect(wrapper.findAll('[data-testid="config-fields"] tbody tr')).toHaveLength(2)
+    expect(wrapper.find('[data-testid="config-field-moodTtlSeconds"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('示例人格')
     expect(wrapper.findAll('[data-testid="config-secrets"] li')).toHaveLength(6)
     expect(wrapper.text()).toContain('版本')
     expect(wrapper.find('[data-testid="config-readonly"]').exists()).toBe(true)
   })
 
-  it('切换分区后显示对应字段，已登记分区显示插件与供应商', async () => {
+  it('切换分区后显示对应字段，已登记分区显示供应商并指向插件设置', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
@@ -120,7 +124,8 @@ describe('ConfigurationPage', () => {
     expect(wrapper.get('[data-testid="config-field-model"]').text()).toContain('sample-model')
 
     await wrapper.get('[data-testid="config-nav-registered"]').trigger('click')
-    expect(wrapper.findAll('[data-testid="config-plugins"] tbody tr')).toHaveLength(2)
+    expect(wrapper.find('[data-testid="config-plugins"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-open-capabilities"]').exists()).toBe(true)
     expect(wrapper.findAll('[data-testid="config-providers"] tbody tr')).toHaveLength(1)
     expect(wrapper.text()).toContain('provider-sample')
   })

@@ -18,6 +18,11 @@ import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
+import PluginSettingsDialog from './PluginSettingsDialog.vue'
+import { settingsFor, type PluginSettingsSpec } from './plugin-settings'
+import { confirmToggle, readSwitches, setPluginEnabled, type PluginSwitchState } from './plugin-toggle'
+import { reasonLabel } from './reason-labels'
+import { capabilityTitle } from '../../shared/friendly'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -175,6 +180,117 @@ function ownedBy(epoch: number, client: ZbaClient): boolean {
 const formatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium', timeStyle: 'medium', hour12: false
 })
+
+// ── 插件设置弹窗 ───────────────────────────────────────────────
+const settingsTarget = ref<{ spec: PluginSettingsSpec; displayName: string } | null>(null)
+let settingsTrigger: HTMLElement | null = null
+
+function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | undefined {
+  return descriptor.key.kind === 'plugin' ? settingsFor(descriptor.key.key) : undefined
+}
+
+function openSettings(descriptor: ZbaManagedDescriptor, event?: MouseEvent): void {
+  const spec = pluginSpec(descriptor)
+  if (!spec) return
+  settingsTrigger = eventTrigger(event)
+  settingsTarget.value = { spec, displayName: capabilityTitle(descriptor.displayName, descriptor.key) || spec.title }
+}
+
+function closeSettings(saved: boolean): void {
+  settingsTarget.value = null
+  const trigger = settingsTrigger
+  settingsTrigger = null
+  void nextTick(() => restoreFocus(trigger, pageHeading.value))
+  // 保存过：重读目录，让卡片上的运行状态/开关跟上。
+  if (saved) void load(undefined, 'background')
+}
+
+// ── 插件「启用」开关 ─────────────────────────────────────────
+const switches = ref<Record<string, PluginSwitchState>>({})
+const switchBusy = ref<string | null>(null)
+const switchNotice = ref<{ pluginKey: string; tone: 'ok' | 'warn' | 'bad'; text: string } | null>(null)
+
+function switchOf(descriptor: ZbaManagedDescriptor): PluginSwitchState | null {
+  if (descriptor.key.kind !== 'plugin' || !pluginSpec(descriptor)?.enableField) return null
+  const state = switches.value[descriptor.key.key]
+  return state && state.enabled !== null ? state : null
+}
+
+/** 开关状态来自配置快照（read kind 1）；读不到就不显示开关，不影响目录本身。 */
+async function loadSwitches(): Promise<void> {
+  try {
+    const snapshot = await props.client.readConfiguration(1)
+    switches.value = snapshot.view ? readSwitches(snapshot.view) : {}
+  } catch (cause) {
+    if (reportAuthFailure(cause)) return
+    switches.value = {}
+  }
+}
+
+async function toggleSwitch(descriptor: ZbaManagedDescriptor, event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const spec = pluginSpec(descriptor)
+  const state = switchOf(descriptor)
+  if (!spec || !state || !canWrite.value || switchBusy.value !== null) {
+    if (state) input.checked = state.enabled === true
+    return
+  }
+  const target = input.checked
+  const pluginKey = spec.pluginKey
+  switchBusy.value = pluginKey
+  switchNotice.value = null
+  try {
+    let result = await setPluginEnabled(props.client, spec, target)
+    if (result.kind === 'unconfirmed') {
+      const confirmed = await confirmToggle(props.client, result.key)
+      if (confirmed === true) result = { kind: 'saved', enabled: target }
+      else if (confirmed === false) {
+        result = { kind: 'error', error: { code: 'not_applied', message: '服务端没有这次提交的记录，开关没有变。' } }
+      }
+    }
+    const name = capabilityTitle(descriptor.displayName, descriptor.key) || spec.title
+    switch (result.kind) {
+      case 'saved':
+      case 'noop':
+        switchNotice.value = { pluginKey, tone: 'ok', text: name + (result.enabled ? ' 已启用。' : ' 已停用。') }
+        break
+      case 'conflict':
+        switchNotice.value = { pluginKey, tone: 'warn', text: '设置刚被其他人改过，已读取最新状态，确认后再切一次。' }
+        break
+      case 'unconfirmed':
+        switchNotice.value = { pluginKey, tone: 'warn', text: '没收到服务端确认，不确定有没有生效；已重新读取当前状态。' }
+        break
+      case 'auth':
+        emit('auth-expired', result.error)
+        break
+      case 'error':
+        switchNotice.value = { pluginKey, tone: 'bad', text: result.error.message }
+        break
+    }
+  } finally {
+    await loadSwitches()
+    const latest = switchOf(descriptor)
+    input.checked = latest?.enabled === true
+    switchBusy.value = null
+    void load(undefined, 'background')
+  }
+}
+
+/** 卡片上的开关状态用人话：「期望 启用」对用户没有意义。 */
+function desiredLabel(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return value ? '已启用' : '已停用'
+}
+
+/** 详情/回执面板出现在页面底部：打开后滚过去，否则用户以为按钮没反应。 */
+function revealPanel(testid: string): void {
+  void nextTick(() => {
+    const node = document.querySelector('[data-testid="' + testid + '"]')
+    if (node instanceof HTMLElement && typeof node.scrollIntoView === 'function') {
+      node.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  })
+}
 
 const canWrite = computed(() => props.mode === 'admin' && props.writesEnabled)
 const filterCount = computed(() => items.value.length)
@@ -343,6 +459,7 @@ async function load(cursor?: string, mode: 'initial' | 'interactive' | 'backgrou
     items.value = cursor ? [...items.value, ...page.items] : page.items
     nextCursor.value = page.nextCursor ?? null
     lastLoadedAt.value = new Date().toISOString()
+    if (!cursor && switchBusy.value === null) void loadSwitches()
     return true
   } catch (cause) {
     if (sequence !== loadSequence) return true
@@ -404,6 +521,7 @@ async function inspect(descriptor: ZbaManagedDescriptor): Promise<void> {
   selected.value = descriptor
   selectedError.value = null
   selectedBusy.value = true
+  revealPanel('cap-detail')
   try {
     const result = await props.client.inspectCapability(descriptor.key)
     if (result.descriptor) {
@@ -622,6 +740,7 @@ function beginRecord(input: {
   trimOperations()
   dismissNotice.value = null
   activeKey.value = record.key
+  revealPanel('cap-result')
   return record
 }
 
@@ -1110,6 +1229,7 @@ watch(() => props.client, (value) => {
  */
 function abandonInFlight(): void {
   ownership += 1
+  if (props.active === false) settingsTarget.value = null
   const hadDialog = pendingAction.value !== null
   pendingAction.value = null
   actionError.value = null
@@ -1233,13 +1353,15 @@ defineExpose({
         v-for="item in items"
         :key="keyIdentity(item.key)"
         class="cap-card"
+        :data-kind="item.key.kind"
         :data-testid="'cap-item-' + keySlug(item.key)"
         :data-cap-identity="keyIdentity(item.key)"
       >
         <header class="cap-card-head">
-          <div>
+          <span class="cap-avatar" aria-hidden="true">{{ capabilityTitle(item.displayName, item.key).slice(0, 1) }}</span>
+          <div class="cap-title">
             <p class="cap-kind">{{ kindLabel(item.key.kind) }}</p>
-            <h2 class="cap-name">{{ item.displayName }}</h2>
+            <h2 class="cap-name">{{ capabilityTitle(item.displayName, item.key) }}</h2>
             <p class="cap-key">{{ keyLabel(item.key) }}</p>
           </div>
           <span class="status-badge" :data-tone="runtimeTone(item.runtimeState)" data-testid="cap-state">
@@ -1247,12 +1369,38 @@ defineExpose({
           </span>
         </header>
 
+        <div v-if="switchOf(item)" class="cap-switch-row" :data-testid="'cap-switch-row-' + keySlug(item.key)">
+          <label class="cap-switch" :class="{ busy: switchBusy === item.key.key }">
+            <input
+              type="checkbox"
+              role="switch"
+              :checked="switchOf(item)?.enabled === true"
+              :disabled="!canWrite || !switchOf(item)?.editable || switchBusy !== null"
+              :aria-label="'启用 ' + capabilityTitle(item.displayName, item.key)"
+              :data-testid="'cap-switch-' + keySlug(item.key)"
+              @change="toggleSwitch(item, $event)"
+            />
+            <span class="cap-switch-track" aria-hidden="true"><span class="cap-switch-thumb" /></span>
+            <span class="cap-switch-label">
+              {{ switchBusy === item.key.key ? '正在保存…' : (switchOf(item)?.enabled ? '功能已开启' : '功能已关闭') }}
+            </span>
+          </label>
+          <span v-if="!canWrite" class="cap-switch-hint">管理员模式下可切换</span>
+        </div>
+        <p
+          v-if="switchNotice && switchNotice.pluginKey === item.key.key"
+          class="cap-switch-notice"
+          :data-tone="switchNotice.tone"
+          role="status"
+          :data-testid="'cap-switch-notice-' + keySlug(item.key)"
+        >{{ switchNotice.text }}</p>
+
         <dl class="cap-meta">
           <div>
-            <dt>期望</dt>
-            <dd>{{ item.desiredEnabled === null || item.desiredEnabled === undefined ? '—' : item.desiredEnabled ? '启用' : '停用' }}</dd>
+            <dt>开关</dt>
+            <dd>{{ desiredLabel(item.desiredEnabled) }}</dd>
           </div>
-          <div>
+          <div v-if="item.key.kind !== 'plugin'">
             <dt>凭据</dt>
             <dd>{{ item.credentialConfigured ? '已配置' : '未配置' }}</dd>
           </div>
@@ -1284,20 +1432,30 @@ defineExpose({
             class="cap-reason"
             :data-testid="'cap-reason-' + keySlug(item.key) + '-' + capability.action"
           >
-            {{ actionLabel(capability.action) }}：{{ capability.reasonCode }}
+            <span :title="capability.reasonCode">{{ actionLabel(capability.action) }}不可用：{{ reasonLabel(capability.reasonCode) }}</span>
           </p>
         </div>
 
         <footer class="cap-card-foot">
+          <button
+            v-if="pluginSpec(item)"
+            type="button"
+            class="tonal cap-settings"
+            :data-testid="'cap-settings-' + keySlug(item.key)"
+            :aria-label="'设置 ' + capabilityTitle(item.displayName, item.key)"
+            @click="openSettings(item, $event)"
+          >
+            <span aria-hidden="true">⚙</span> 设置
+          </button>
           <button
             type="button"
             class="link-button"
             :data-testid="'cap-inspect-' + keySlug(item.key)"
             @click="inspect(item)"
           >
-            查看描述符
+            详情
           </button>
-          <span class="cap-rev">描述符 {{ item.descriptorRevision.slice(0, 10) }}…</span>
+          <span class="cap-rev" :title="item.descriptorRevision">版本 {{ item.descriptorRevision.slice(0, 8) }}</span>
         </footer>
       </article>
     </div>
@@ -1311,16 +1469,16 @@ defineExpose({
 
     <section v-if="selected" class="panel cap-detail" data-testid="cap-detail" aria-labelledby="cap-detail-title">
       <div class="panel-heading">
-        <h2 id="cap-detail-title">{{ selected.displayName }}</h2>
+        <h2 id="cap-detail-title">{{ capabilityTitle(selected.displayName, selected.key) }}</h2>
         <p>{{ kindLabel(selected.key.kind) }} · {{ keyLabel(selected.key) }}</p>
       </div>
       <p v-if="selectedBusy" class="empty-state">正在读取描述符…</p>
       <ErrorNotice :error="selectedError" title="查看描述符失败" />
       <dl class="cap-meta">
         <div><dt>运行时</dt><dd>{{ runtimeLabel(selected.runtimeState) }}</dd></div>
-        <div><dt>期望</dt><dd>{{ selected.desiredEnabled ? '启用' : '停用' }}</dd></div>
-        <div><dt>凭据</dt><dd>{{ selected.credentialConfigured ? '已配置' : '未配置' }}</dd></div>
-        <div><dt>支持矩阵</dt><dd>{{ supportedActions(selected).map((a) => actionLabel(a.action)).join('、') || '无' }}</dd></div>
+        <div><dt>开关</dt><dd>{{ desiredLabel(selected.desiredEnabled) }}</dd></div>
+        <div v-if="selected.key.kind !== 'plugin'"><dt>凭据</dt><dd>{{ selected.credentialConfigured ? '已配置' : '未配置' }}</dd></div>
+        <div><dt>可执行动作</dt><dd>{{ supportedActions(selected).map((a) => actionLabel(a.action)).join('、') || '无' }}</dd></div>
       </dl>
       <button type="button" class="link-button" data-testid="cap-detail-close" @click="closeDetail">收起</button>
     </section>
@@ -1435,6 +1593,19 @@ defineExpose({
         </li>
       </ul>
     </section>
+
+    <PluginSettingsDialog
+      v-if="settingsTarget"
+      :key="settingsTarget.spec.pluginKey"
+      :client="props.client"
+      :mode="props.mode"
+      :writes-enabled="props.writesEnabled"
+      :spec="settingsTarget.spec"
+      :display-name="settingsTarget.displayName"
+      @close="closeSettings"
+      @enable-admin="emit('enable-admin')"
+      @auth-expired="(e) => emit('auth-expired', e)"
+    />
 
     <Teleport to="body">
       <div v-if="pendingAction" class="dialog-backdrop" data-testid="cap-confirm">

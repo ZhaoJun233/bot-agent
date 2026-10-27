@@ -145,7 +145,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var prohibitedQqActions = new List<string>();
         var failedQqActions = new List<string>();
 
-        await RefreshMcpAsync(ct); var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost);
+        await RefreshMcpAsync(ct); var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost) + (task.Natural ? NaturalTone : string.Empty);
 
         // 会话上下文：**默认不带**（每条 // 指令单独对待）——
         // 管理员 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
@@ -500,6 +500,13 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             (string.IsNullOrWhiteSpace(_settings.AgentPrompt) ? string.Empty : "\n\n" + _settings.AgentPrompt.Trim()) +
             (_settings.AgentServerBaseUrl is { Length: > 0 } ? $"\n（你的模型接口：{_settings.AgentServerBaseUrl}，模型 {(_settings.AgentServerModel.Length > 0 ? _settings.AgentServerModel : _settings.Model)}）" : string.Empty);
     }
+
+    /// <summary>自然对话派来的活：final 用聊天口吻说（像在群里接着刚才的话），不写报告体。</summary>
+    private const string NaturalTone =
+        "\n\n[这件活是群友在聊天里顺口托你的]\n" +
+        "• final 用聊天的口吻说，像接着刚才的话往下聊：先说结论，必要的数字/路径照实给，别写成报告、别分级标题；\n" +
+        "• 一般 1~4 句就够；结果很长时挑重点说，剩下的一句话概括；\n" +
+        "• 没做成就直说卡在哪、要对方补什么。";
 
     private static HashSet<string> ParseTools(string raw)
     {

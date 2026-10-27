@@ -1170,12 +1170,17 @@ public sealed partial class ReplyPipeline
 
         CompletionResult result;
 
+        // 自然对话驱动 agent（默认关）：够资格才在提示词里出现 action=agent 这条路（见 ReplyPipeline.NaturalAgent.cs）。
+        var naturalTrigger = NaturalAgentTrigger(conversation, triggerMessageId, proactive, snapshot.EnableNaturalAgent);
+        var naturalAgent = naturalTrigger is not null;
+
         try
         {
             // 批次 E：模型步骤交给有限步进循环（默认 1 步 = 只调一次，与改造前逐字一致）。
             var outcome = await _turnLoop.RunAsync(
                 conversation.SourceKey, turn, caps, proactive, snapshot.MaxAgentSteps,
-                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2));
+                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2),
+                naturalAgent ? NaturalAgentPrompt.Hint : null);
             result = outcome.Result;
             _quotas?.RecordUsage(conversation.SourceKey, result.PromptTokens, result.CompletionTokens);
         }
@@ -1197,6 +1202,11 @@ public sealed partial class ReplyPipeline
         var elapsed = (EngineClock.LocalDateTime - turn.Started).TotalMilliseconds;
         Volatile.Write(ref _lastGenerationMs, (long)elapsed);
         SetThinking(conversation, false);
+
+        if (TryDispatchNaturalAgent(conversation, naturalTrigger, result, elapsed))
+        {
+            return;
+        }
 
         // 发言适合度门槛：以前只写在提示词里、代码不执行；现在真正生效。
         // 模型未按 JSON 输出（Suitability == null）时按普通文本回复处理，不拦截。

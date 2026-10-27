@@ -56,7 +56,8 @@ public readonly partial record struct ModelOutputDeclaration(
     string? Action,
     string? Reason,
     string? Tool,
-    string? Intent = null)
+    string? Intent = null,
+    string? AgentTask = null)
 {
     /// <summary>
     /// 把模型输出里的 JSON 对象读成声明（只读、不判定；格式不合法的一律当"没给"）。
@@ -74,7 +75,20 @@ public readonly partial record struct ModelOutputDeclaration(
         return new ModelOutputDeclaration(
             suitability, reply, vibe, vibeNote, stickerId, replyToId, pokeTargetId, mood,
             listen, shareSong, both, speak, voiceEmotion, voiceSpeed, voicePitch,
-            search, read, action, reason, tool, intent);
+            search, read, action, reason, tool, intent, ReadAgentTask(root));
+    }
+
+    /// <summary>action=agent 时托付的任务（agentTask / agent_task / task；只认字符串）。</summary>
+    private static string? ReadAgentTask(JsonElement root)
+    {
+        if (root.TryGetProperty("agentTask", out var t) ||
+            root.TryGetProperty("agent_task", out t) ||
+            root.TryGetProperty("task", out t))
+        {
+            return t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        }
+
+        return null;
     }
 
     /// <summary>结构化动作：action / reasonCode / toolRequest。</summary>

@@ -103,7 +103,7 @@ test('配置页：只读令牌可查看 8 分区与秘密元数据，且不发�
   await expect(page.getByTestId('config-field-model')).toBeVisible()
 
   await page.getByTestId('config-nav-registered').click()
-  await expect(page.getByTestId('config-plugins')).toBeVisible()
+  await expect(page.getByTestId('config-open-capabilities')).toBeVisible()
   await expect(page.getByTestId('config-providers')).toBeVisible()
 
   await page.getByTestId('nav-overview').click()

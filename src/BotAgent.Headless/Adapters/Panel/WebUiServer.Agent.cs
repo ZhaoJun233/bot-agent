@@ -192,6 +192,7 @@ public sealed partial class WebUiServer
             ["reasoningEffort"] = _settings.AgentReasoningEffort,
             ["reasoningLevels"] = _settings.AgentReasoningLevels,
             ["serverKeepContext"] = _settings.AgentServerKeepContext,
+            ["naturalAgent"] = _settings.EnableNaturalAgent,
             ["serverTools"] = _settings.AgentServerTools,
             ["serverDocker"] = _settings.AgentServerDocker,
             ["serverWorkdir"] = _settings.AgentServerWorkDir,

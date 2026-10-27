@@ -146,5 +146,6 @@ public enum ConfigurationFieldId
     WhitelistPrivates = 142,
     RegisteredPlugins = 143,
     RegisteredProviders = 144,
-    AllowedSecretEdits = 145
+    AllowedSecretEdits = 145,
+    EnableNaturalAgent = 146
 }

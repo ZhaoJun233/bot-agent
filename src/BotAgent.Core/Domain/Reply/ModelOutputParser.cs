@@ -136,7 +136,8 @@ public static class ModelOutputParser
             var verdict = ReplyDecisionRules.Decide(
                 declared.Action, declared.Reply, declared.Reason,
                 toolRequest: declared.Tool,
-                askEnabled: questionsEnabled);
+                askEnabled: questionsEnabled,
+                agentTask: declared.AgentTask);
 
             if (verdict.Send && ReplyDecisionRules.ContainsSilentMarker(verdict.Content))
             {
@@ -185,7 +186,9 @@ public static class ModelOutputParser
                     Malformed: verdict.Malformed,
                     ToolId: verdict.ToolId,
                     QuestionText: verdict.QuestionText,
-                    Intent: declared.Intent),
+                    Intent: declared.Intent,
+                    AgentTask: verdict.AgentTask,
+                    AgentAck: verdict.AgentAck),
                 notices);
         }
         catch (JsonException)
