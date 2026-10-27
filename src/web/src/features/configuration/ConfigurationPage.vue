@@ -20,6 +20,7 @@ import {
   buildPatch,
   buildSecrets,
   conflictingPaths,
+  conflictingProviderNames,
   createOperationKey,
   draftRaw,
   editableField,
@@ -69,6 +70,14 @@ const loadedAt = ref<string | null>(null)
 const active = ref<SectionKey>('behavior')
 
 const draft = ref<DraftMap>({})
+/**
+ * 草稿起草时所依据的快照（CAS 基准）。
+ *
+ * 后台补读 / 切页重读会替换 `snapshot`，但草稿是在旧快照上写的：保存与校验
+ * 必须带**起草时**的版本作为 expectedVersion，否则别人刚保存的同一字段会被
+ * 静默覆盖（409 永远不会触发）。只有用户在冲突后显式"读取最新"才会改基。
+ */
+const draftBase = ref<ZbaConfigurationReadResult | null>(null)
 const secretDrafts = ref<SecretDrafts>({})
 /**
  * 供应商改名草稿（S4-L1）。
@@ -85,6 +94,18 @@ const saveError = ref<UiError | null>(null)
 const receipt = ref<ZbaConfigurationReceipt | null>(null)
 const fieldErrors = ref<string[]>([])
 const validationMessage = ref<string | null>(null)
+/** 本地校验错误里能定位到字段的路径（"section.key：原因"），用于 aria-invalid。 */
+const invalidPaths = computed(() => {
+  const paths = new Set<string>()
+  for (const item of fieldErrors.value) {
+    const cut = item.indexOf('：')
+    if (cut > 0) paths.add(item.slice(0, cut))
+  }
+  return paths
+})
+function fieldInvalid(section: string, key: string): boolean {
+  return invalidPaths.value.has(`${section}.${key}`)
+}
 const conflictCurrentVersion = ref<string | null>(null)
 const conflictKeys = ref<string[]>([])
 const pendingKey = ref<string | null>(null)
@@ -151,6 +172,18 @@ const unconfirmed = computed(() => phase.value === 'unconfirmed')
 const inputsLocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
 const saveBlocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
 const hasDraft = computed(() => dirtyCount.value > 0)
+// 草稿全部清空后释放起草基线：下一次起草锚定当时的快照。
+watch(hasDraft, (value) => { if (!value) draftBase.value = null })
+
+/** 开始（或继续）起草前调用：没有草稿时锚定当前快照作为 CAS 基准。 */
+function anchorDraft(): void {
+  if (!hasDraft.value || draftBase.value === null) draftBase.value = snapshot.value
+}
+
+/** 保存/校验用的期望版本：起草基线优先。 */
+function expectedVersion(): string {
+  return (draftBase.value ?? snapshot.value)?.version ?? ''
+}
 
 const leaveTitle = computed(() => leavePrompt.value === 'lock'
   ? '锁定前确认未保存修改'
@@ -312,6 +345,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
   const field = editableField(view, section as ZbaPatchSectionLike, key)
   if (!field) return
   const path = fieldPath(section as ZbaPatchSectionLike, key)
+  anchorDraft()
   const next: DraftMap = { ...draft.value }
   if (raw === baselineRaw(field)) delete next[path]
   else next[path] = { kind: 'set', raw }
@@ -322,6 +356,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
 
 function clearField(section: SectionKey, key: string): void {
   if (inputsLocked.value) return
+  anchorDraft()
   draft.value = { ...draft.value, [fieldPath(section as ZbaPatchSectionLike, key)]: { kind: 'clear' } }
   phase.value = 'idle'
   validationMessage.value = null
@@ -361,6 +396,7 @@ function secretInputValue(slot: number): string {
 
 function setSecretAction(slot: number, action: SecretAction): void {
   if (inputsLocked.value) return
+  anchorDraft()
   secretDrafts.value = { ...secretDrafts.value, [slot]: action }
   phase.value = 'idle'
   fieldErrors.value = []
@@ -397,6 +433,7 @@ function buildRequest(): {
 /** 供应商改名输入（S4-L1）：只接受真名，不接受脱敏展示串。 */
 function providerNameInput(key: string, raw: string): void {
   if (inputsLocked.value) return
+  anchorDraft()
   const next: ProviderNameDrafts = { ...providerNames.value }
   if (raw === providerNameBaseline(providerField(key))) delete next[key]
   else next[key] = raw
@@ -465,11 +502,20 @@ async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'
     const next = await props.client.readConfiguration(1)
     if (sequence !== loadSequence) return true
     // 代际变化：旧写计划作废（计划 §9.3 第 242 行）。草稿保留，由用户决定。
+    // 保存中 / 结果未知 / 冲突是尚未结束的提交上下文：不能悄悄改回 idle，
+    // 否则迟到的保存结果被丢弃、核对入口消失、冲突提示被抹掉。
+    // 结果未知的旧键交给"核对"去拿权威答复（代际已变化 = code 6）。
     if (mode === 'background' && snapshot.value !== null
       && snapshot.value.generation !== next.generation) {
-      phase.value = 'idle'
-      pendingKey.value = null
-      pendingNames.value = {}
+      const open = phase.value === 'saving' || phase.value === 'unconfirmed' || phase.value === 'conflict'
+      if (!open) {
+        phase.value = 'idle'
+        pendingKey.value = null
+        pendingNames.value = {}
+      }
+      if (hasDraft.value) {
+        validationMessage.value = '配置代际已变化（服务重启或重新加载）。草稿已保留；保存时会先按起草时的版本核对，有冲突会提示你读取最新。'
+      }
     }
     snapshot.value = next
     loadedAt.value = formatTime(new Date().toISOString())
@@ -511,9 +557,16 @@ async function reloadAfterConflict(): Promise<void> {
   pendingKey.value = null
   // 冲突未落盘：保留草稿，结束这次操作的意图记账。
   pendingNames.value = {}
+  const base = draftBase.value?.view ?? null
   await reload()
   if (snapshot.value?.view) {
-    conflictKeys.value = conflictingPaths(draft.value, snapshot.value.view)
+    const next = snapshot.value.view
+    conflictKeys.value = [
+      ...conflictingPaths(draft.value, base, next),
+      ...conflictingProviderNames(providerNames.value, base, next).map((key) => `provider:${key}`)
+    ]
+    // 用户已看到最新快照并逐项确认：从这里起草稿改基到新版本。
+    draftBase.value = hasDraft.value ? snapshot.value : null
   }
   if (conflictKeys.value.length > 0) {
     validationMessage.value = `已读取最新快照；${conflictKeys.value.length} 个字段与对方修改重叠，请逐项确认。`
@@ -536,7 +589,7 @@ async function validate(): Promise<void> {
   try {
     const result = await props.client.validateConfiguration({
       contractRevision: snapshot.value.contractRevision,
-      expectedVersion: snapshot.value.version,
+      expectedVersion: expectedVersion(),
       changes: request.changes,
       secrets: request.secrets
     })
@@ -586,7 +639,7 @@ async function save(): Promise<'unchanged' | void> {
   try {
     const result = await props.client.saveConfiguration({
       contractRevision: snapshot.value.contractRevision,
-      expectedVersion: snapshot.value.version,
+      expectedVersion: expectedVersion(),
       key,
       changes: request.changes,
       secrets: request.secrets
@@ -916,6 +969,7 @@ function endSession(): void {
   conflictKeys.value = []
   saveError.value = null
   snapshot.value = null
+  draftBase.value = null
   loadedAt.value = null
   error.value = null
 }
@@ -1012,10 +1066,10 @@ defineExpose({
 
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
-    <ul v-if="fieldErrors.length > 0" class="field-errors" data-testid="config-field-errors">
+    <ul v-if="fieldErrors.length > 0" id="config-field-errors" class="field-errors" data-testid="config-field-errors" role="alert">
       <li v-for="item in fieldErrors" :key="item">{{ item }}</li>
     </ul>
-    <p v-if="validationMessage" class="inline-notice" data-testid="config-validation">{{ validationMessage }}</p>
+    <p v-if="validationMessage" class="inline-notice" data-testid="config-validation" role="status">{{ validationMessage }}</p>
 
     <p v-if="loading && !snapshot" class="empty-state" data-testid="config-loading">正在读取配置快照…</p>
     <p v-else-if="!snapshot" class="empty-state" data-testid="config-empty">还没有配置快照；请重新读取。</p>
@@ -1100,6 +1154,8 @@ defineExpose({
                         class="config-input"
                         :value="currentDraftRaw(active, item.key, item.field)"
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                        :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
+                        :aria-describedby="fieldInvalid(active, item.key) ? 'config-field-errors' : undefined"
                         :disabled="inputsLocked"
                         @change="onFieldInput(active, item.key, inputValue($event))"
                       >
@@ -1112,6 +1168,8 @@ defineExpose({
                         :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
                         :value="currentDraftRaw(active, item.key, item.field)"
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                        :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
+                        :aria-describedby="fieldInvalid(active, item.key) ? 'config-field-errors' : undefined"
                         :disabled="inputsLocked"
                         @input="onFieldInput(active, item.key, inputValue($event))"
                       />

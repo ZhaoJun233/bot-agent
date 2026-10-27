@@ -201,6 +201,45 @@ describe('ConfigurationPage', () => {
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
+  it('起草后基线被重读：保存仍带起草时的 expectedVersion，不静默覆盖对方', async () => {
+    let current = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    current.version = '1'
+    const versions: string[] = []
+    const client = clientWith(current, {
+      readConfiguration: async () => current,
+      saveConfiguration: async (request) => {
+        versions.push(request.expectedVersion)
+        return { code: 3, replayed: false, currentVersion: '2', errors: [] }
+      }
+    })
+    const wrapper = mountPage({ client, mode: 'admin' })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('我的人格')
+    // 对方在此期间保存了同一字段，本页因切页/补读重读到 version 2。
+    const other = structuredClone(current)
+    other.version = '2'
+    other.view!.behavior.botPersona = { ...other.view!.behavior.botPersona!, value: '对方的人格' }
+    current = other
+    await (wrapper.vm as unknown as { reload: () => Promise<boolean> }).reload()
+    await flushPromises()
+
+    await saveDraft(wrapper)
+    expect(versions).toEqual(['1'])
+    expect(wrapper.find('[data-testid="config-conflict"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="config-reload-conflict"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    // 只报对方也改过的字段；用户草稿保留。
+    expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('与对方修改重叠')
+    expect((wrapper.get('[data-testid="config-field-botPersona"] input').element as HTMLInputElement).value).toBe('我的人格')
+
+    // 读取最新后改基：再次保存带新版本。
+    await saveDraft(wrapper)
+    expect(versions).toEqual(['1', '2'])
+  })
+
   it('HTTP 5xx 保存结果未知时保留原操作键并允许核对回执', async () => {
     const keys: string[] = []
     const findKeys: string[] = []

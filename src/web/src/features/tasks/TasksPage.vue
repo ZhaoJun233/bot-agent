@@ -332,6 +332,8 @@ function reconcileCancelMarks(): void {
  * 任务是否结束以资源读取为准（S3-07）。
  */
 async function cancelTask(task: ZbaTaskSummary): Promise<void> {
+  // 单飞：上一次取消/详情请求还没回来时不再发第二个写请求。
+  if (detailBusy.value) return
   if (!canWrite.value) {
     detailError.value = { code: 'read_only', message: '当前不是管理员模式，不能请求取消。' }
     return
@@ -342,6 +344,8 @@ async function cancelTask(task: ZbaTaskSummary): Promise<void> {
     detailError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次取消没有发送。' }
     return
   }
+  // 单飞：取消请求在途时不再发第二次（按钮同时按 detailBusy 禁用）。
+  if (detailBusy.value) return
   detailBusy.value = true
   detailError.value = null
   try {
@@ -447,11 +451,14 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
     if (reportAuthFailure(cause)) return
     const ui = toUiError(cause)
     const reason = cause instanceof ZbaRequestError ? cause.reason : undefined
-    decisionError.value = {
-      ...ui,
-      message: ui.message + decideReasonText(reason)
-    }
-    markStale(approval.id, decideReasonText(reason))
+    // 网络中断、5xx、2xx 回执读不懂：决定可能已经生效，不能写成"未接受"。
+    const outcomeUnknown = cause instanceof ZbaNetworkError
+      || (cause instanceof ZbaRequestError && (cause.status >= 500 || (cause.status >= 200 && cause.status < 300)))
+    const reasonText = outcomeUnknown
+      ? '这次决定的结果未知，队列已重新读取，请以队列为准再操作。'
+      : decideReasonText(reason)
+    decisionError.value = { ...ui, message: ui.message + reasonText }
+    markStale(approval.id, reasonText)
   } finally {
     approvalBusy.value = approvalBusy.value.filter((id) => id !== approval.id)
     // 失败/过期/已决定都补读独立队列；成功路径也已 kick 调度器。
@@ -506,8 +513,8 @@ const submitBlockedNote = ref<string | null>(null)
 const restartArmed = ref<string | null>(null)
 
 const canFillForm = computed(() => canWrite.value)
+// 会话 ID 由 ensureSession 按会话来源分配并回填，不是提交的必填项。
 const formFilled = computed(() => prompt.value.trim().length > 0
-  && sessionId.value.trim().length > 0
   && sourceKey.value.trim().length > 0)
 
 /**
@@ -579,12 +586,15 @@ function newRecordId(): string {
  *   只是已经无法核对——换键重提就是第二次执行。
  */
 const UNVERIFIABLE_CODES = new Set(['idempotency_unverifiable', 'invalid_json'])
+const AMBIGUOUS_STATUSES = new Set([408, 409, 429])
 
 function classifySubmitFailure(cause: unknown): SubmissionPhase {
   if (cause instanceof ZbaRequestError) {
     if (cause.status >= 500) return 'unknown'
     if (cause.status >= 200 && cause.status < 300) return 'unknown'
     if (UNVERIFIABLE_CODES.has(cause.code)) return 'unknown'
+    // 408 超时、409 冲突、429 限流都不能证明服务端没有建任务（可能是网关/重放层回的）。
+    if (AMBIGUOUS_STATUSES.has(cause.status)) return 'unknown'
     if (cause.status >= 400 && cause.status < 500) return 'rejected'
     return 'unknown'
   }
@@ -712,8 +722,13 @@ async function findSubmission(record: SubmissionRecord): Promise<void> {
   record.busy = true
   record.error = null
   record.findProblem = null
+  // 发起时固定会话代际：换身份/换服务后迟到的核对结果不能写进新会话。
+  const owner = ownership
+  // 已受理是终局结论：之后的 expired/unknown 只说明回执过了保留期，不能把它降级回未知。
+  const wasAccepted = record.phase === 'accepted'
   try {
     const result = await props.client.findTask(record.key)
+    if (owner !== ownership) return
     record.findCode = result.code
     record.taskId = result.task?.id ?? result.taskId ?? record.taskId
     if (result.code === 'found') {
@@ -723,6 +738,8 @@ async function findSubmission(record: SubmissionRecord): Promise<void> {
       if (live !== null) settlePending(live.token, 'resolved', record.taskId)
       await load(undefined, 'background')
       scheduler.value?.kick()
+    } else if (wasAccepted) {
+      // 已受理的行只更新核对码，不重新占用未决名额。
     } else {
       // expired：持久回执证明**曾经受理**（记录已被内存台账淘汰）；
       // accepted_unknown / unknown：都无法证明没有执行。
@@ -735,6 +752,7 @@ async function findSubmission(record: SubmissionRecord): Promise<void> {
       }
     }
   } catch (cause) {
+    if (owner !== ownership) return
     if (reportAuthFailure(cause)) return
     const ui = toUiError(cause)
     record.error = ui
@@ -852,6 +870,9 @@ function resetForSession(): void {
   submitBlockedNote.value = null
   restartArmed.value = null
   cancelMarks.clear()
+  // 旧会话的"未生效"标记属于旧身份，不能带进新会话。
+  staleIds.clear()
+  staleReasons.clear()
   error.value = null
   pageError.value = null
   lastLoadedAt.value = null
@@ -1031,7 +1052,7 @@ defineExpose({
           <input v-model="sourceKey" data-testid="task-source-key" placeholder="panel:synthetic" :disabled="!canFillForm" />
         </label>
         <label>
-          <span>会话 ID</span>
+          <span>会话 ID（服务端按来源分配，提交后回填）</span>
           <input v-model="sessionId" data-testid="task-session-id" placeholder="synthetic-session" :disabled="!canFillForm" />
         </label>
         <label class="task-form-wide">
@@ -1051,7 +1072,7 @@ defineExpose({
       <p v-if="capacityFull" class="inline-notice warn" data-testid="task-submit-capacity">
         {{ capacityNote }}
       </p>
-      <p v-if="submitBlockedNote" class="inline-notice warn" data-testid="task-submit-blocked">
+      <p v-if="submitBlockedNote" class="inline-notice warn" data-testid="task-submit-blocked" role="status">
         {{ submitBlockedNote }}
       </p>
 
@@ -1098,6 +1119,7 @@ defineExpose({
             type="button"
             class="tonal"
             :data-testid="'task-restart-' + index"
+            :disabled="!canWrite"
             @click="armRestart(submission)"
           >
             作为新任务重新提交…
@@ -1125,6 +1147,7 @@ defineExpose({
             type="button"
             class="primary"
             :data-testid="'task-restart-confirm-' + index"
+            :disabled="!canWrite"
             @click="confirmRestart(submission)"
           >
             我明白，按新任务重新提交
@@ -1141,7 +1164,7 @@ defineExpose({
       </div>
       <ErrorNotice :error="approvalError" title="读取待审批失败" />
       <ErrorNotice :error="decisionError" title="审批没有完成" />
-      <p v-if="decisionNotice" class="inline-notice" data-testid="task-decision-notice">{{ decisionNotice }}</p>
+      <p v-if="decisionNotice" class="inline-notice" data-testid="task-decision-notice" role="status">{{ decisionNotice }}</p>
       <p
         v-if="approvals.length === 0 && approvalsLoaded && !approvalError"
         class="empty-state"
@@ -1219,7 +1242,7 @@ defineExpose({
           <div><dt>更新</dt><dd>{{ formatTime(task.updatedAt) }}</dd></div>
           <div v-if="task.toolCalls !== undefined"><dt>工具调用</dt><dd>{{ task.toolCalls }}</dd></div>
           <div v-if="task.errorCode"><dt>错误</dt><dd class="cap-error-code">{{ task.errorCode }}</dd></div>
-          <div v-if="task.cancellationRequested"><dt>取消</dt><dd>已请求（未确认）</dd></div>
+          <div v-if="task.cancellationRequested"><dt>取消</dt><dd>{{ isTerminal(task.state) ? '已请求（任务已结束，以状态为准）' : '已请求（未确认）' }}</dd></div>
         </dl>
         <div class="dialog-actions">
           <button type="button" class="tonal" :data-testid="'task-result-' + task.id" @click="openDetail(task)">
@@ -1230,7 +1253,7 @@ defineExpose({
             type="button"
             class="tonal"
             :data-testid="'task-cancel-' + task.id"
-            :disabled="!canWrite"
+            :disabled="!canWrite || detailBusy"
             @click="cancelTask(task)"
           >
             请求取消

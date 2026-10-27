@@ -33,7 +33,7 @@ export interface AppResourceSignals {
   status: { state: string; ready: boolean; configurationVersion: string | null } | null
   /** 最近一次成功读到的配置代际与版本（不含任何字段值）。 */
   configuration: { generation: string; version: string } | null
-  /** 最近一次成功读到的能力目录修订与总数。 */
+  /** 最近一次成功读到的能力目录修订；count 是探测页（limit=1）的条数，不是目录总数。 */
   capabilities: { descriptorRevision: string; count: number } | null
   /** 各类资源最近一次读取失败的安全错误码（成功后清空）。 */
   errors: { status: string | null; configuration: string | null; capabilities: string | null }

@@ -282,7 +282,7 @@ describe('CapabilitiesPage', () => {
     expect(wrapper.find('[data-testid="cap-result-query"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="cap-op-key"]').text()).toBe(keys[0])
 
-    await wrapper.get('[data-testid="cap-confirm-ok"]').trigger('click')
+    await wrapper.get('[data-testid="cap-result-retry"]').trigger('click')
     await flushPromises()
     expect(keys).toHaveLength(2)
     expect(keys[1]).toBe(keys[0])
@@ -619,7 +619,7 @@ describe('CapabilitiesPage', () => {
     expect(wrapper.find('[data-testid="cap-result-unknown"]').exists()).toBe(true)
 
     // 专用重试入口：同键重发被拒。
-    await wrapper.get('[data-testid="cap-confirm-ok"]').trigger('click')
+    await wrapper.get('[data-testid="cap-result-retry"]').trigger('click')
     await flushPromises()
 
     // 拒绝不能把这次操作降级成「确认没执行」。

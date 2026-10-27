@@ -113,6 +113,25 @@ describe('TasksPage', () => {
     expect(wrapper.get('[data-testid="task-submission-state"]').text()).toContain('已受理')
   })
 
+  for (const code of ['expired', 'unknown'] as const) {
+    it(`已受理的行再核对返回 ${code} 时保持已受理，不降级成未知`, async () => {
+      const wrapper = mountPage(clientWith({
+        findTask: async () => ({ code, instanceId: 'i-1' })
+      }))
+      await flushPromises()
+      await fill(wrapper)
+      await wrapper.get('[data-testid="task-submit"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="task-submission-state"]').text()).toContain('已受理')
+      await wrapper.get('[data-testid="task-find"]').trigger('click')
+      await flushPromises()
+      const state = wrapper.get('[data-testid="task-submission-state"]').text()
+      expect(state).toContain('已受理')
+      expect(state).not.toContain('结果未知')
+      expect(wrapper.find('[data-testid="task-find-code"]').exists()).toBe(true)
+    })
+  }
+
   it('提交丢响应时保留幂等键，核对复用同一个键', async () => {
     const findKeys: string[] = []
     const submitKeys: string[] = []
@@ -264,6 +283,21 @@ describe('TasksPage', () => {
     expect(state).not.toContain('没有产生任务')
   })
 
+  for (const status of [408, 409, 429]) {
+    it(`提交返回 HTTP ${status} 时保持结果未知，不判成明确拒绝`, async () => {
+      const wrapper = mountPage(clientWith({
+        submitTask: async () => { throw new ZbaRequestError(status, 'http_error', 'synthetic') }
+      }))
+      await flushPromises()
+      await fill(wrapper)
+      await wrapper.get('[data-testid="task-submit"]').trigger('click')
+      await flushPromises()
+      const state = wrapper.get('[data-testid="task-submission-state"]').text()
+      expect(state).toContain('结果未知')
+      expect(state).not.toContain('没有产生任务')
+    })
+  }
+
   for (const code of ['expired', 'unknown'] as const) {
     it(`核对返回 ${code} 时保持未知，不声称没有产生任务`, async () => {
       const wrapper = mountPage(clientWith({
@@ -339,7 +373,9 @@ describe('TasksPage', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="task-state"]').text()).toBe('已完成')
-    expect(wrapper.text()).toContain('已请求（未确认）')
+    // 终态下不再说「未确认」，只记录请求过、以状态为准。
+    expect(wrapper.text()).not.toContain('已请求（未确认）')
+    expect(wrapper.text()).toContain('已请求（任务已结束，以状态为准）')
   })
 
   // ── S3-09：审批失败补读队列并阻止反复提交 ───────────────────────

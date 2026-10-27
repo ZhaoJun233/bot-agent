@@ -1054,6 +1054,14 @@ function closeResult(): void {
   dismissNotice.value = null
   operations.value = operations.value.filter((item) => item.key !== record.key)
   activeKey.value = operations.value[0]?.key ?? null
+  // 关闭按钮随面板一起被卸载，焦点不能掉回 body。
+  void nextTick(() => { restoreFocus(null, pageHeading.value) })
+}
+
+/** 收起描述符：收起按钮随区块卸载，焦点退到页面标题。 */
+function closeDetail(): void {
+  selected.value = null
+  void nextTick(() => { restoreFocus(null, pageHeading.value) })
 }
 
 function focusRecord(record: OperationRecord): void {
@@ -1102,8 +1110,12 @@ watch(() => props.client, (value) => {
  */
 function abandonInFlight(): void {
   ownership += 1
+  const hadDialog = pendingAction.value !== null
   pendingAction.value = null
   actionError.value = null
+  // 确认框被收走时焦点在框里；页面仍可见就把焦点还回去，不让它掉到 body。
+  if (hadDialog && props.active !== false) restoreActionFocus()
+  else actionTrigger.value = null
 }
 
 watch(() => props.client, (value, previous) => {
@@ -1211,7 +1223,7 @@ defineExpose({
     <p v-if="pageError" class="inline-notice warn" data-testid="cap-page-error">
       下一页没有加载：服务端拒绝了游标（原始错误见上）。已加载的 {{ filterCount }} 项仍然有效。
     </p>
-    <p v-if="abortedNotice" class="inline-notice warn" data-testid="cap-aborted">{{ abortedNotice }}</p>
+    <p v-if="abortedNotice" class="inline-notice warn" data-testid="cap-aborted" role="status">{{ abortedNotice }}</p>
 
     <p v-if="loading && items.length === 0" class="empty-state" data-testid="cap-loading">正在读取能力目录…</p>
     <p v-else-if="!error && items.length === 0" class="empty-state" data-testid="cap-empty">没有已登记的能力。</p>
@@ -1310,7 +1322,7 @@ defineExpose({
         <div><dt>凭据</dt><dd>{{ selected.credentialConfigured ? '已配置' : '未配置' }}</dd></div>
         <div><dt>支持矩阵</dt><dd>{{ supportedActions(selected).map((a) => actionLabel(a.action)).join('、') || '无' }}</dd></div>
       </dl>
-      <button type="button" class="link-button" data-testid="cap-detail-close" @click="selected = null">收起</button>
+      <button type="button" class="link-button" data-testid="cap-detail-close" @click="closeDetail">收起</button>
     </section>
 
     <section
@@ -1390,7 +1402,7 @@ defineExpose({
           v-if="canRetry(activeRecord) && pendingAction === null"
           type="button"
           class="primary"
-          data-testid="cap-confirm-ok"
+          data-testid="cap-result-retry"
           :disabled="activeRecord.busy || !canWrite"
           @click="retryRecord(activeRecord)"
         >

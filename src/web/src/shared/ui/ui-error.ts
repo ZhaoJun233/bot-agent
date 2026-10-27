@@ -14,6 +14,15 @@ export interface UiError {
  */
 export function toUiError(cause: unknown): UiError {
   if (cause instanceof ZbaRequestError) {
+    // 2xx 但响应体无法验证：服务端可能已经处理，只是回执读不懂——不能写成"失败"。
+    if (cause.status >= 200 && cause.status < 300) {
+      return {
+        code: cause.code,
+        message: '服务端已响应，但回执无法验证：结果未知，请重新读取确认后再操作。',
+        status: cause.status,
+        requestId: cause.requestId
+      }
+    }
     const messages: Record<number, string> = {
       400: '请求无效。',
       401: '令牌无效或已过期，请重新输入。',
@@ -35,6 +44,10 @@ export function toUiError(cause: unknown): UiError {
   }
 
   if (cause instanceof ZbaNetworkError) {
+    // 超时：请求可能已经到达服务端，结果未知。
+    if (cause.detail === 'timeout') {
+      return { code: 'timeout', message: '请求超时：结果未知，请重新读取确认后再操作，不要直接重复提交。' }
+    }
     return { code: 'network_unavailable', message: '无法连接 ZBA 服务，请检查地址与网络。' }
   }
 
