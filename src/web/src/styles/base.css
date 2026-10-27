@@ -63,9 +63,8 @@ button:disabled {
   opacity: 0.55;
 }
 
-button:focus-visible,
-input:focus-visible,
-a:focus-visible {
+/* 任何可聚焦元素（含浏览器自动可聚焦的横滚容器、textarea、select）都要有可见焦点。 */
+:focus-visible {
   outline: 3px solid var(--accent-deep);
   outline-offset: 2px;
 }
@@ -97,8 +96,18 @@ code {
 }
 
 .app-shell--console {
+  --sidebar-w: 236px;
   display: flex;
-  background: var(--bg);
+  /* 侧栏底色画在外壳上：页面再长，左列底色与分隔线都铺满（sticky 侧栏只有 100vh 高）。 */
+  background:
+    linear-gradient(
+      to right,
+      var(--surface) calc(var(--sidebar-w) - 1px),
+      var(--border) calc(var(--sidebar-w) - 1px),
+      var(--border) var(--sidebar-w),
+      transparent var(--sidebar-w)
+    ),
+    var(--bg);
 }
 
 .app-shell--auth {
@@ -191,7 +200,7 @@ code {
   flex: none;
   flex-direction: column;
   gap: 24px;
-  width: 236px;
+  width: var(--sidebar-w);
   height: 100vh;
   padding: 22px 16px 18px;
   border-right: 1px solid var(--border);
@@ -397,9 +406,18 @@ button.tonal:hover:not(:disabled) {
 }
 
 button.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
   border: 1px solid var(--accent);
+  border-radius: 9px;
   background: var(--accent);
   color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
@@ -1233,6 +1251,10 @@ tbody tr:hover td {
   overflow-wrap: anywhere;
 }
 
+.cell-sub .breakable-id {
+  overflow-wrap: break-word;
+}
+
 .empty-state {
   margin: 0;
   padding: 14px;
@@ -1569,7 +1591,7 @@ tr.dirty td {
 }
 
 .save-bar {
-  position: sticky;
+  position: static;
   bottom: 12px;
   z-index: 5;
   display: flex;
@@ -1582,6 +1604,13 @@ tr.dirty td {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow-1);
+}
+
+/* 只有待保存/保存中/待核对时才浮在底部，空闲时不遮挡最后一行字段。 */
+.save-bar--floating {
+  position: sticky;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1), 0 0 0 3px var(--accent-soft);
 }
 
 .save-bar-info {
@@ -1708,8 +1737,8 @@ tr.dirty td {
 /* ---------- responsive ---------- */
 
 @media (max-width: 1080px) {
-  .sidebar {
-    width: 214px;
+  .app-shell--console {
+    --sidebar-w: 214px;
   }
 
   .app-main {
@@ -1720,6 +1749,7 @@ tr.dirty td {
 @media (max-width: 900px) {
   .app-shell--console {
     flex-direction: column;
+    background: var(--bg);
   }
 
   .sidebar {
@@ -2087,6 +2117,17 @@ tr.dirty td {
 .cap-op-state { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 
 /* ── S3：任务与审批 ─────────────────────────────────────────────────────── */
+/* 页面纵向节奏由容器 gap 统一给出，子块自身不再带外边距（S5）。 */
+.tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.tasks > .inline-notice,
+.tasks > .empty-state,
+.tasks > .task-list,
+.tasks > .cap-more,
+.tasks > .task-detail { margin: 0; }
 .task-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -2110,10 +2151,11 @@ tr.dirty td {
 .task-submission { margin-top: 14px; display: grid; gap: 10px; }
 .task-list { display: grid; gap: 14px; margin-top: 18px; }
 .task-item {
-  border: 1px solid rgba(27, 28, 29, 0.1);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  background: #fff;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
 }
 .task-item-head {
   display: flex;
@@ -2124,7 +2166,7 @@ tr.dirty td {
 .task-id { font-size: 14px; margin: 2px 0; overflow-wrap: anywhere; }
 .task-approval-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 12px; }
 .task-approval-list li {
-  border: 1px solid rgba(27, 28, 29, 0.1);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px;
   display: grid;

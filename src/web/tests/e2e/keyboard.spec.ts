@@ -123,26 +123,32 @@ test('键盘：Tab 顺序覆盖四个导航入口，焦点始终可见', async (
   // 不调用 blur —— 脚本改焦点等于绕过键盘路径（SR-EVIDENCE-01）。
   expect(await focused(page), '认证框收起后焦点应回到文档起点').toBe('body')
   const seen: string[] = []
+  const invisible: string[] = []
   for (let step = 0; step < 40; step += 1) {
     await page.keyboard.press('Tab')
-    seen.push(await focused(page))
+    const id = await focused(page)
+    seen.push(id)
+    // Tab 循环走到文档末尾会短暂回到 body（浏览器地址栏位），这一步不算元素焦点。
+    if (id === 'body') continue
+    // 每一步焦点都必须落在有可见轮廓的元素上（不是"看不见的焦点"）；
+    // 只看第 40 步会随可聚焦元素个数变化而撞上 body，测不到真问题。
+    const visible = await page.evaluate(() => {
+      const el = document.activeElement as HTMLElement | null
+      if (!el || el === document.body) return false
+      const style = getComputedStyle(el)
+      const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth || '0') > 0
+      const shadow = style.boxShadow !== 'none'
+      const rect = el.getBoundingClientRect()
+      return rect.width > 0 && rect.height > 0 && (outline || shadow)
+    })
+    if (!visible) invisible.push(id)
   }
 
   for (const nav of ['nav-overview', 'nav-capabilities', 'nav-configuration', 'nav-tasks']) {
     expect(seen, nav).toContain(nav)
   }
-
-  // 焦点必须真的落在元素上，且该元素有可见的轮廓（不是"看不见的焦点"）。
-  const visible = await page.evaluate(() => {
-    const el = document.activeElement as HTMLElement | null
-    if (!el || el === document.body) return false
-    const style = getComputedStyle(el)
-    const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth || '0') > 0
-    const shadow = style.boxShadow !== 'none'
-    const rect = el.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0 && (outline || shadow)
-  })
-  expect(visible).toBe(true)
+  expect(seen.some((id) => id !== 'body'), '至少有一步焦点落在元素上').toBe(true)
+  expect(invisible, '这些焦点没有可见轮廓').toEqual([])
 })
 
 test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继续编辑', async ({ page }) => {

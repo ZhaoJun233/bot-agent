@@ -1332,7 +1332,11 @@ defineExpose({
         </p>
       </section>
 
-      <div class="save-bar" data-testid="config-save-bar">
+      <div
+        class="save-bar"
+        :class="{ 'save-bar--floating': hasDraft || busy || unconfirmed }"
+        data-testid="config-save-bar"
+      >
         <div class="save-bar-info">
           <strong>{{ dirtyCount }} 项修改</strong>
           <span v-if="phase === 'saving'">保存中…</span>

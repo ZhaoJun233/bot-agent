@@ -470,7 +470,14 @@ onMounted(load)
               <span class="dot" aria-hidden="true"></span>
               已连接
             </span>
-            <button type="button" class="tonal" data-testid="header-refresh" :disabled="loading" @click="refresh">
+            <button
+              v-if="view !== 'overview'"
+              type="button"
+              class="tonal"
+              data-testid="header-refresh"
+              :disabled="loading"
+              @click="refresh"
+            >
               <AppIcon name="refresh" :size="16" />
               刷新
             </button>

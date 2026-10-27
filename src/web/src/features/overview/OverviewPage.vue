@@ -4,6 +4,7 @@ import type { Compatibility } from '../../api/compat'
 import type { ZbaHealth, ZbaMeta, ZbaStatus } from '../../api/zba'
 import AppIcon from '../../shared/ui/AppIcon.vue'
 import StatusBadge from '../../shared/ui/StatusBadge.vue'
+import BreakableId from '../../shared/ui/BreakableId.vue'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import type { UiError } from '../../shared/ui/ui-error'
 
@@ -137,8 +138,8 @@ function formatDate(value: string | undefined | null): string {
           <p class="ov-kpi-label">配置版本</p>
           <p class="ov-kpi-value ov-kpi-value--compact">{{ props.status.configurationVersion ?? '未记录' }}</p>
           <div class="ov-kpi-foot">
+            <span>生效状态</span>
             <StatusBadge :state="props.status.configurationApplyState" />
-            <span>生效状态 {{ props.status.configurationApplyState }}</span>
           </div>
         </div>
       </article>
@@ -187,7 +188,7 @@ function formatDate(value: string | undefined | null): string {
               <tr v-for="component in components" :key="component.id">
                 <td>
                   <strong>{{ component.displayName }}</strong>
-                  <span class="cell-sub">{{ component.id }}</span>
+                  <span class="cell-sub mono"><BreakableId :value="component.id" /></span>
                 </td>
                 <td>{{ component.kind }}</td>
                 <td><StatusBadge :state="component.state" :available="component.available" /></td>
