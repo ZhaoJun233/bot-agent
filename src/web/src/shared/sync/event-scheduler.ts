@@ -235,7 +235,7 @@ export class EventScheduler {
           this.schedule(this.backoffDelay())
           return false
         }
-        this.cursor = Math.max(this.cursor, anchor)
+        this.cursor = anchor
         this.initialized = true
         this.settle()
         // 重读期间可能又产生事件：立刻从锚点补读一轮，不丢事件。

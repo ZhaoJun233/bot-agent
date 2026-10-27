@@ -3,6 +3,7 @@ import type {
   ZbaConfigurationView,
   ZbaFieldEdit,
   ZbaPatchSection,
+  ZbaProviderNameEdit,
   ZbaReadField,
   ZbaSecretEdit,
   ZbaSecretSlot
@@ -152,6 +153,77 @@ export function buildPatch(draft: DraftMap, view: ZbaConfigurationView): PatchBu
   }
 
   return { patch, errors }
+}
+
+/**
+ * 供应商改名的草稿（S4-L1）。
+ *
+ * key 是供应商的登记键（例如 `primary`），值是用户输入的真名。
+ * 基线与提交都只认 `nameRaw`：`display` 是脱敏串，拿它当基线会让
+ * 「没改过」和「改成了占位名」分不出来。
+ */
+export type ProviderNameDrafts = Record<string, string>
+
+/** 供应商的改名基线：可改名投影带 nameRaw，其它形态没有可写值。 */
+export function providerNameBaseline(field: ZbaReadField): string {
+  if (field.visibility !== 2) return ''
+  return field.nameRaw ?? ''
+}
+
+/**
+ * 把供应商改名草稿合并进 patch。
+ *
+ * 与标量字段一样只提交**真正改过**的项：没改的供应商一个字节都不发，
+ * 否则每次保存都会把整张供应商表重写成 Clear/Set，把别人的改动覆盖掉。
+ */
+export function applyProviderNames(
+  patch: ZbaConfigurationPatch,
+  drafts: ProviderNameDrafts,
+  view: ZbaConfigurationView
+): string[] {
+  const errors: string[] = []
+  const edits: ZbaProviderNameEdit[] = []
+  for (const [key, raw] of Object.entries(drafts)) {
+    const provider = view.registered.providers.find((item) => item.key === key)
+    if (provider === undefined) {
+      errors.push(`供应商 ${key}：不存在`)
+      continue
+    }
+    // 只有 visibility=2（可改名投影）才带 nameRaw；别的形态没有真名可写，
+    // 硬发一个 nameRaw 会把「看不到的值」当成改名提交上去。
+    if (provider.name.visibility !== 2) {
+      errors.push(`供应商 ${key}：这一版读回的名称不可改名`)
+      continue
+    }
+    const baseline = providerNameBaseline(provider.name)
+    if (raw === baseline) continue
+    // 空名会被后端拒（Name 允许为空串但界面不该交上去）；这里当校验错误处理。
+    if (raw.trim().length === 0) {
+      errors.push(`供应商 ${key}：名称不能为空`)
+      continue
+    }
+    // 真名与脱敏展示串相同 = 用户把占位符当成了名字（PNL-11 明确禁止写回）。
+    if (raw === provider.name.display && raw !== baseline) {
+      errors.push(`供应商 ${key}：这是脱敏后的展示名，不是真名，不能写回`)
+      continue
+    }
+    edits.push({
+      key,
+      // ProviderMetadataPatch 是闭合记录：六个字段都得出现，没改的用 Keep。
+      changes: {
+        nameRaw: { kind: 1, value: raw },
+        priority: { kind: 0 },
+        baseUrl: { kind: 0 },
+        modelName: { kind: 0 },
+        enabled: { kind: 0 },
+        credential: { kind: 0 }
+      }
+    })
+  }
+  if (edits.length > 0) {
+    patch.registered = { plugins: [], policies: [], providers: edits }
+  }
+  return errors
 }
 
 export function buildSecrets(drafts: SecretDrafts): { secrets: ZbaSecretEdit[]; errors: string[] } {

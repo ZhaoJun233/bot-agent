@@ -57,6 +57,12 @@ const hostEnvNoToken: Record<string, string> = {
 delete hostEnvNoToken.BOTAGENT_ZBA_TOKEN
 delete hostEnvNoToken.BOTAGENT_ZBA_READ_TOKEN
 
+// 进程级认证限流的用例（zz-rate-limit）会按远端地址封锁 1 分钟。
+// 三个浏览器 project 共用同一批 webServer（同一个宿主进程），所以它必须
+// 单独放到**最后**一个 project 里跑，否则封锁窗口会漏进下一个引擎的整批用例。
+// 这不是浏览器差异，是测试之间互相污染。
+const RATE_LIMIT_ONLY = /zz-rate-limit\.spec\.ts$/
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30_000,
@@ -66,7 +72,12 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     baseURL: 'http://127.0.0.1:4174',
-    trace: 'retain-on-failure',
+    // Windows 上 `retain-on-failure` 的 trace 落盘会和 artifacts 目录清理抢同一批文件，
+    // 偶发让**已经通过**的用例在 teardown 里以
+    // `browserContext.close: ENOENT ... -recordingNNN.trace` 失败（S4-F5）。
+    // 那不是断言失败，却会把整套矩阵染红。所以默认关掉，需要排查时用
+    // `PW_TRACE=1` 显式打开——不靠 retries 掩盖，也不放宽任何断言。
+    trace: process.env.PW_TRACE === '1' ? 'retain-on-failure' : 'off',
     screenshot: 'only-on-failure'
   },
   webServer: [
@@ -118,8 +129,26 @@ export default defineConfig({
     }
   ],
   projects: [
+    // S4：跨浏览器矩阵。三个引擎跑同一套用例、同一套断言——
+    // 不给某个引擎定制更宽松的通过标准，否则"矩阵"只是换个名字的单浏览器测试。
     {
       name: 'chromium',
+      testIgnore: RATE_LIMIT_ONLY,
+      use: { ...devices['Desktop Chrome'] }
+    },
+    {
+      name: 'firefox',
+      testIgnore: RATE_LIMIT_ONLY,
+      use: { ...devices['Desktop Firefox'] }
+    },
+    {
+      name: 'webkit',
+      testIgnore: RATE_LIMIT_ONLY,
+      use: { ...devices['Desktop Safari'] }
+    },
+    {
+      name: 'chromium-rate-limit',
+      testMatch: RATE_LIMIT_ONLY,
       use: { ...devices['Desktop Chrome'] }
     }
   ]

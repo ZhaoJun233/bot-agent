@@ -145,7 +145,7 @@ Harness 另启 Headless 进程，必须先构建 Headless。S21/S36/S52 只是�
 
 - 负责人在本次聊天答复「1.允许 / 2.是 / 3.是」：允许既有改动作为迁移输入，批准登记认领、运行合成基线及契约评审；基线修复另批逐文件写权。该答复不授权提交、推送、部署、发布或生产操作。
 - 本阶段任务：B0 基线登记与契约评审准备；执行者 / 交付对象：Agent-00 / 负责人及后续执行 Agent。
-- 唯一工作仓库：`E:\bot\bot-agent`；基线分支 `main`，HEAD `1f3181e21e8d1f9531e41066b033d8d60218d580`。
+- 唯一工作仓库：`%WORKDIR%\bot-agent`；基线分支 `main`，HEAD `1f3181e21e8d1f9531e41066b033d8d60218d580`。
 - 开始指纹时间：`2026-10-08 12:03:01 +08:00`；Windows 原生命令均从仓库根使用 pwsh。
 - 既有状态共 292 条：已暂存删除 20、未暂存删除 92、未暂存修改 6、未跟踪 174。原执行者尚未核实；允许使用不等于将其归属于 00。
 - 状态及对应文件 SHA-256：`495FD73BD62A42A6F8EFA27C229036006EC154C8FD53704CBEF54B7D281C36DB`。
@@ -154,7 +154,7 @@ Harness 另启 Headless 进程，必须先构建 Headless。S21/S36/S52 只是�
 
 | 执行者 | 本次认领的确切写入路径 | 状态 / 交接 |
 | --- | --- | --- |
-| 00 | `E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | 已认领；保存原文件内容及哈希用于本任务片段回退；不暂存 |
+| 00 | `%WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | 已认领；保存原文件内容及哈希用于本任务片段回退；不暂存 |
 | 00 | 各已存在工程的忽略式 bin/obj 构建产物；本次验证的独立合成临时目录 | 仅限获准验证的派生产物；临时目录使用新 UUID，测试进程的两套数据根均指向该目录；不构成源码修复写权，不清理其他产物 |
 | 01～06 | 尚无源码或测试文件认领 | 本阶段只准备契约评审；共享文件补丁及旧文件移交须另列确切路径、取得批准并登记 |
 | 07 | 无 | Wave 6 锁定，无 Web 施工授权 |
@@ -233,7 +233,7 @@ V3 / V5 在独立 pwsh 子进程内移除继承的 `BOTAGENT_*`、`QQCHAT_*`、`
 
 ### 4.6 待批准的逐文件修复批次
 
-以下路径均相对唯一仓库 `E:\bot\bot-agent`；R1 / R2 / R3 / R4 已单独获批并分别在第五 / 六 / 七 / 八节登记，不因列入此表自动获得额外写权。00 最终合入共享路径；临时移交前另登记接收者、基准、开始时间及交回条件。
+以下路径均相对唯一仓库 `%WORKDIR%\bot-agent`；R1 / R2 / R3 / R4 已单独获批并分别在第五 / 六 / 七 / 八节登记，不因列入此表自动获得额外写权。00 最终合入共享路径；临时移交前另登记接收者、基准、开始时间及交回条件。
 
 | 批次 | 拟修改的确切路径 | 修复目标 / 必须复验 |
 | --- | --- | --- |
@@ -254,9 +254,9 @@ R1 / R2 / R3 / R4 已单独批准执行；R5-A 随后独立获批收口飞书去
 
 | 执行者 | 确切写入路径 | R1 开始 SHA-256 / 交接 |
 | --- | --- | --- |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs` | `0C70B47DE30AF695D47E8F6C9D6C78F25A6A6D55C6B9FDA6640E1E4DBD62FE7F`；保留原有修改 |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Platforms\PlatformOptions.cs` | `B133D13CC7B690714039B8E50DA36295FD16FEE03CC57790A96FFD2BCA4F5A52`；保留原有未跟踪实现 |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.SettingsScopeProbe\Program.cs` | `4285BBD1E29CCA3473E7FD04CB8EBA8113EE65BF469A889AF5F6B1B4415BA046`；只追加合成回归 |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs` | `0C70B47DE30AF695D47E8F6C9D6C78F25A6A6D55C6B9FDA6640E1E4DBD62FE7F`；保留原有修改 |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Platforms\PlatformOptions.cs` | `B133D13CC7B690714039B8E50DA36295FD16FEE03CC57790A96FFD2BCA4F5A52`；保留原有未跟踪实现 |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.SettingsScopeProbe\Program.cs` | `4285BBD1E29CCA3473E7FD04CB8EBA8113EE65BF469A889AF5F6B1B4415BA046`；只追加合成回归 |
 
 - 已在会话中保存四个认领文件的原始字节压缩副本及哈希；不复制生产数据、不创建全仓库备份。回退只撤销 R1 片段；有后续修改则先协调。
 - 已批准的回归边界：`AppSettings` / `PlatformOptions` 双静态类型、`SettingsBox` 平台接口、真实策略解析与开关归一化、`Snapshot`、`SettingsStore.Save/Load` 及 JSON 秘密排除。保持签名、旧非秘密字段名、默认值及 fail-closed 语义；不新增统一保存或 ZBA 契约，不将现有接口登记为消费者已签署冻结。
@@ -328,12 +328,12 @@ R1 / R2 / R3 / R4 已单独批准执行；R5-A 随后独立获批收口飞书去
 
 | 执行者 | 确切写入路径 | R2 开始 SHA-256 |
 | --- | --- | --- |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs` | `57F36BE09FB8961BB0640A8B1BB28EBECEF9A06C19FCD0CF7F642AF2844174EC` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\BotConfig.cs` | `B1E5982E95E6EFAAD720B11673A0E0557CAA93A05B00FD9076B9C33F158C28D6` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\wwwroot\app.js` | `19D962381A80482BDBB2F89F6597F5D89BAB05A6CA910307863A8950C547080F` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\wwwroot\index.html` | `BCB187B561F0C1A8308FDB61E8751205E8902BBAF549CBEF81718533AAF4E453` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.IntegrationHarness\PrivacySettingsScenario.cs` | `48A57CC33079897BE994D8290C8E96673D98B521E597C2F828569D3087926F47` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.FrontendProbe\probe.mjs` | `B1283612402587F2A4554E62430E31C7626456C497AE68AB81EFB7703D5BBA28` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs` | `57F36BE09FB8961BB0640A8B1BB28EBECEF9A06C19FCD0CF7F642AF2844174EC` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\BotConfig.cs` | `B1E5982E95E6EFAAD720B11673A0E0557CAA93A05B00FD9076B9C33F158C28D6` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\wwwroot\app.js` | `19D962381A80482BDBB2F89F6597F5D89BAB05A6CA910307863A8950C547080F` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\wwwroot\index.html` | `BCB187B561F0C1A8308FDB61E8751205E8902BBAF549CBEF81718533AAF4E453` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.IntegrationHarness\PrivacySettingsScenario.cs` | `48A57CC33079897BE994D8290C8E96673D98B521E597C2F828569D3087926F47` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.FrontendProbe\probe.mjs` | `B1283612402587F2A4554E62430E31C7626456C497AE68AB81EFB7703D5BBA28` |
 
 - 已批准的合成回归边界：真实 Headless 的 `GET/POST /api/settings`、重启 / 环境配置恢复、既有秘密仓储不变性、旧页面实际保存请求及安全状态显示。复用当前保存 / 发布服务，不新增 ZBA 路由或统一保存契约。
 - 政策与兼容口径：官方 Secret 仅从 `QQCHAT_OFFICIAL_APP_SECRET` 的直接环境值读取，忽略旧仓储、设置 JSON 及 `QQCHAT_OFFICIAL_APP_SECRET_FILE`；面板提交 secret / clear 字段（包括空、null、false）拒绝整批请求，不忽略后继续保存。响应只允许 configured 布尔及 env/none 来源，不含值片段。此为已批准红线的兼容收紧，不自动配置生产环境或删除旧记录。
@@ -379,7 +379,7 @@ R1 / R2 / R3 / R4 已单独批准执行；R5-A 随后独立获批收口飞书去
 | R2-V20 | `git diff --check` | 12:55:08；0 | 已跟踪补丁空白检查；文档单独复核 |
 
 - 验证配置：pwsh 子进程先按名称清除继承的 BOTAGENT / QQCHAT / OPENAI / MINIMAX / TTS / HARNESS 配置及 HEALTH_PORT，不查看值。纯探针新 UUID 两套数据根一致；harness 父进程不设置可能覆盖场景的数据别名，S36 / S52 自行设置两套合成根。真实宿主的模型 / 官方 token / 网关全部固定到本地 mock；旧 JSON 的行为种子也显式固定 mock 地址，不依赖环境覆盖旧配置。
-- harness 显式 `QQCHAT_IT_ONLY=s36` 或 `s52`，`QQCHAT_BOT_DLL=E:\bot\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll`；V7 独立强制重建在所有绿色集成运行前。未运行外部模式，没有访问真实协议、数据库或日志。
+- harness 显式 `QQCHAT_IT_ONLY=s36` 或 `s52`，`QQCHAT_BOT_DLL=%WORKDIR%\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll`；V7 独立强制重建在所有绿色集成运行前。未运行外部模式，没有访问真实协议、数据库或日志。
 - 覆盖：旧仓储不回填且行哈希保留、仅文件不生效、空白直接环境值不回填、直接值去空白恢复、重启轮换、移除环境值后关闭；真实适配器仅把直接环境值交给本地 mock。九类 secret / clear 请求涵盖非空、空、null、对象、true/false、大小写变体；配置 JSON / 秘密行哈希、审计数量、运行时值均不变。普通保存保持有效、重启可恢复，环境凭据不被普通保存清空。
 - 警告归属：Headless 的 8 个 CS0108 仍是未改的 HttpFetcher；harness 重新编译显露 `MockOpenAi.cs:439`、`AgentBridgeScenario.cs:417` 的 2 个 CS8602，两文件与开始一致。原增量构建没有显示这些警告，不代表原源码无警告。本批无新增警告，不修改清单外文件消警。
 - 不覆盖：完整浏览器 / 缓存及滚动发布兼容、全矩阵和明确排除的 S42、真实官方消息协议互通、生产环境配置切换、ZBA、资源测量、部署回滚。局部官方取 token mock 证据不是 S42 已解锁或完整协议验收。
@@ -422,11 +422,11 @@ R1 / R2 / R3 / R4 已单独批准执行；R5-A 随后独立获批收口飞书去
 
 | 执行者 | 确切写入路径 | 开始 SHA-256 |
 | --- | --- | --- |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\SourceIndex.cs` | `544085A66C9F079A051C642D9337B549BF27A0C2492FB219424FCBF8B80A2851` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\Program.cs` | `23D20D86B1C1A792364A46F7318A9D7EF69AC9C06F0842549D0D902CE7AEFD9D` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\Baseline.cs` | `5CD5780785097C0E96B736800E37AABC4E5C6B260C9CB1F64BEBF4390815A667` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\Metrics.cs` | `2F900029598F455D1C3CA5A576F83B34DAF5BD43F85CCE0E4E6429DECC4E0E58` |
-| 00 | `E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | `92FB727CDCE5ECFCC44ADA883A9DFBF76C0DF823242E30737275B09EC602C720` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\SourceIndex.cs` | `544085A66C9F079A051C642D9337B549BF27A0C2492FB219424FCBF8B80A2851` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\Program.cs` | `23D20D86B1C1A792364A46F7318A9D7EF69AC9C06F0842549D0D902CE7AEFD9D` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\Baseline.cs` | `5CD5780785097C0E96B736800E37AABC4E5C6B260C9CB1F64BEBF4390815A667` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\Metrics.cs` | `2F900029598F455D1C3CA5A576F83B34DAF5BD43F85CCE0E4E6429DECC4E0E58` |
+| 00 | `%WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | `92FB727CDCE5ECFCC44ADA883A9DFBF76C0DF823242E30737275B09EC602C720` |
 
 ### 7.2 本批护栏契约与停止边界
 
@@ -534,11 +534,11 @@ V1 失败结束该项，不作为波次准出。R3 内部合成负例及定向�
 
 | 执行者 | 确切写入路径 | 开始 SHA-256 |
 | --- | --- | --- |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.ReverseTransportProbe\BotAgent.ReverseTransportProbe.csproj` | `2B6EA30C73E5B5534749B0DC631201E4042DB5EEAE5515B73845610244B4CDF5` |
-| 00 | `E:\bot\bot-agent\.github\workflows\ci.yml` | `0EBA96B371DAC8E07D3CD6841C45CC0A8E0E982FF6C9A86BCBC8E41A5D10F566` |
-| 00 | `E:\bot\bot-agent\CONTRIBUTING.md` | `49B5B08DA73F6ED694B92AED548F813CE7B3DB4A4A6C67B7B9B0EA7A16471C87` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Dockerfile` | `93E492B4E0FC44788C81CA44B584E7EDB1B73252197125934463C567B15BCB7C` |
-| 00 | `E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | `0BED989FADD80CDC474171BCF367AFA0EF83E3050F12DC7BEBF7AF91D5E9B1A2` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.ReverseTransportProbe\BotAgent.ReverseTransportProbe.csproj` | `2B6EA30C73E5B5534749B0DC631201E4042DB5EEAE5515B73845610244B4CDF5` |
+| 00 | `%WORKDIR%\bot-agent\.github\workflows\ci.yml` | `0EBA96B371DAC8E07D3CD6841C45CC0A8E0E982FF6C9A86BCBC8E41A5D10F566` |
+| 00 | `%WORKDIR%\bot-agent\CONTRIBUTING.md` | `49B5B08DA73F6ED694B92AED548F813CE7B3DB4A4A6C67B7B9B0EA7A16471C87` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Dockerfile` | `93E492B4E0FC44788C81CA44B584E7EDB1B73252197125934463C567B15BCB7C` |
+| 00 | `%WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | `0BED989FADD80CDC474171BCF367AFA0EF83E3050F12DC7BEBF7AF91D5E9B1A2` |
 
 ### 8.2 范围、接口与停止边界
 
@@ -664,16 +664,16 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 执行者 | 确切路径 | 开始 SHA-256（MISSING 为拟新增） |
 | --- | --- | --- |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Core\Domain\Ports\IWebhookDedupStore.cs` | `MISSING` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\FeishuWebhookDedupStore.cs` | `MISSING` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs` | `43A1652AB400A47C6501318285BA844A377F92262AE6A00C40DB31BC997E92E4` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Platforms\Feishu\FeishuBotGateway.cs` | `6EDCC9DD3F9B9950F5081E04230BC2730FDD084D80B6A411681445EA9F5B36E1` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Platforms\Persistence\PlatformDedupStore.cs` | `7C1560814DA9F692C968B215DDCE8667DF60CD55BA7246C13B4959D73546F3C4` |
-| 00 | `E:\bot\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs` | `2F9F166B9763DB07E2D695D9106C9CA7C02141D6F4E03976A737CFCD40BFEB6F` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.FeishuRemediationProbe\Program.cs` | `9EC5F1C3DBAF4275763102F510CC61315B42D7790825074331E86DA01AE23A2F` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.ProductionSpecProbe\Program.cs` | `1E08FACA04453CB495744A096AFEEF4355CC9E7AD8C29A89345D28106E0A5F9A` |
-| 00 | `E:\bot\bot-agent\tests\BotAgent.IntegrationHarness\FeishuPlatformScenario.cs` | `C0821442484D6C490B0E5764BC56C4E081159F1ABEAE2C78DFFD67340666B00E` |
-| 00 | `E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | `A389A1B50D73E9A838DBB1D4DC0F8023E97EB44B9743B00B66288A8539FDE86C` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Core\Domain\Ports\IWebhookDedupStore.cs` | `MISSING` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\FeishuWebhookDedupStore.cs` | `MISSING` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs` | `43A1652AB400A47C6501318285BA844A377F92262AE6A00C40DB31BC997E92E4` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Platforms\Feishu\FeishuBotGateway.cs` | `6EDCC9DD3F9B9950F5081E04230BC2730FDD084D80B6A411681445EA9F5B36E1` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Platforms\Persistence\PlatformDedupStore.cs` | `7C1560814DA9F692C968B215DDCE8667DF60CD55BA7246C13B4959D73546F3C4` |
+| 00 | `%WORKDIR%\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs` | `2F9F166B9763DB07E2D695D9106C9CA7C02141D6F4E03976A737CFCD40BFEB6F` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.FeishuRemediationProbe\Program.cs` | `9EC5F1C3DBAF4275763102F510CC61315B42D7790825074331E86DA01AE23A2F` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.ProductionSpecProbe\Program.cs` | `1E08FACA04453CB495744A096AFEEF4355CC9E7AD8C29A89345D28106E0A5F9A` |
+| 00 | `%WORKDIR%\bot-agent\tests\BotAgent.IntegrationHarness\FeishuPlatformScenario.cs` | `C0821442484D6C490B0E5764BC56C4E081159F1ABEAE2C78DFFD67340666B00E` |
+| 00 | `%WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md` | `A389A1B50D73E9A838DBB1D4DC0F8023E97EB44B9743B00B66288A8539FDE86C` |
 
 ### 9.2 局部契约冻结与消费者核对
 
@@ -702,7 +702,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 - harness Rebuild：`dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release -t:Rebuild`。
 - ArchitectureProbe：`dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release`。V9 / V10 根据已输出源码根和 cwd 核对目标；当时设置的 BOTAGENT_SOURCE_ROOT 不是该探针实际读取的入口，不将其声称为生效绑定。V30 查询真实入口后显式设置 QQCHAT_SRC_ROOT。
 - ProductionSpecProbe、SettingsScopeProbe、SafetyProbe、ReverseTransportProbe：分别执行 `dotnet run --project tests/BotAgent.<对应探针>/BotAgent.<对应探针>.csproj -c Release`，对应工程均先核实；不改入口或断言。
-- harness：`dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll`；每次 QQCHAT_IT_ONLY 为单个 s50 / s36 / s52，QQCHAT_BOT_DLL 显式绑定 `E:\bot\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll`；最终运行前 V20 / V21 已独立强制重建。
+- harness：`dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll`；每次 QQCHAT_IT_ONLY 为单个 s50 / s36 / s52，QQCHAT_BOT_DLL 显式绑定 `%WORKDIR%\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll`；最终运行前 V20 / V21 已独立强制重建。
 
 | 编号 | 命令 / 对象 | 时间（2026-10-08 / UTC+08:00）/ 退出码 | 实际结果 |
 | --- | --- | --- | --- |
@@ -813,7 +813,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 10.1 本次授权、唯一写权与输入指纹
 
 - 上轮只读盘点后提出 R6-A：仅更新本总纲，登记 Wave 1 缺口、契约评审和旧文件交接；负责人本次答复「继续 agent00 的下一个任务」，按该已提出范围执行。此为文档任务授权，不是 Wave 1 代码、构建、项目测试、创建执行 Agent 或后续批次授权。
-- 执行者 / 最终共享写入者 / 交付对象：Agent-00 / Agent-00 / 负责人。唯一认领路径为 `E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md`；开始副本已保存为会话内 gzip 字节，仅用于本批片段回退。不创建仓库内附加文件、不移交写权，01～07 当前认领集合均为空。
+- 执行者 / 最终共享写入者 / 交付对象：Agent-00 / Agent-00 / 负责人。唯一认领路径为 `%WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md`；开始副本已保存为会话内 gzip 字节，仅用于本批片段回退。不创建仓库内附加文件、不移交写权，01～07 当前认领集合均为空。
 - 准入核对 `2026-10-08T21:34:12.7205156+08:00`；认领及副本时间 `2026-10-08T21:36:20.8655860+08:00`。HEAD 为 `1f3181e21e8d1f9531e41066b033d8d60218d580`，分支 main；313 条状态：暂存删除 20、未暂存删除 92、未暂存修改 26、未跟踪 175。全部保留，不把既有迁移或 R1～R5 成果重记为 R6-A 成果。
 - 510 项安全清单 SHA-256 为 `7A5966944CFBE70984E1D0F5DD018CBFAA736E2328C6F3F700DA6932FFE0379F`；状态行 SHA-256 为 `9353FF0259B28EFB53571685EE09CF8147C503A33BADBCEBE1F76BDFE40E41CA`；暂存 raw SHA-256 为 `65BAD5C332E0A9C57B0A9ABD3EE2DFF8ACF9364DCE375D0F47BFF1F5D72146BC`。清单 / 状态算法沿用 8.6；排除 bin/obj、运行数据、日志等，清单不是全磁盘扫描。
 - 本总纲开始 SHA-256 为 `5D413C7724AE7F15999D3737FECC599ABBBA22383856A2FC5228C6782D2E8A3C`，117207 字节。全部 510 项与上轮只读盘点一致，9.7 的九项源码 / 缺失旧路径及十份 DLL 共 19 个绑定均匹配；匹配只证明未漂移，不是本次重跑成绩。
@@ -1092,7 +1092,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 12.1 授权、唯一写权与准入
 
 - 上轮00请求确认C2/C3候选方向并批准单文件协调登记，明确不同时授权代码施工或Wave1；负责人本轮答复「批准，并进行你最建议的方向」。按建议先收口唯一数据库/迁移边界，再处理配置类型、秘密事务及提交/应用语义；本轮只有文档写权。
-- 执行者/共享最终写入者/交付对象：Agent-00 / Agent-00 / 负责人。唯一认领路径为 E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md；精准更新三处当前索引并追加第十二节。无源码/测试/项目引用写权，无构建/项目测试授权；不创建执行Agent、不移交写权。
+- 执行者/共享最终写入者/交付对象：Agent-00 / Agent-00 / 负责人。唯一认领路径为 %WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md；精准更新三处当前索引并追加第十二节。无源码/测试/项目引用写权，无构建/项目测试授权；不创建执行Agent、不移交写权。
 - 准入2026-10-09T18:08:45.5928876+08:00：main，HEAD 1f3181e21e8d1f9531e41066b033d8d60218d580；319条状态（暂存删除20、未暂存删除92、修改30、未跟踪177）。512项安全清单全部与上轮18:00:51只读交付一致；保留既有变更，不重记为本轮成果。
 - 开始清单SHA-256：97BD74BA21096A11A6D1D6D935D0D858CABE1904D752AB9E3CB024336CC024C1；状态SHA-256：100D94E6DEA22B06969F2B67B82632E5EE5A9948901F737951A4EEF497DC1336；暂存raw SHA-256：65BAD5C332E0A9C57B0A9ABD3EE2DFF8ACF9364DCE375D0F47BFF1F5D72146BC。算法同8.6/11.6，同口径逐项比较，不遍历运行数据或读取日志/数据库。
 - 总纲开始SHA-256：6EFE9FA4F48D36DD4640ED5C06E89F4669816F652316C3CFFDFA2F9D8E9CA1D4，163943字节；18:08:46会话保存gzip原始字节，18:10:05内存往返哈希匹配。副本只用于片段定位，不可覆盖后续编辑或全仓库回退。
@@ -1119,25 +1119,25 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 实际文件位置（绝对路径） | 当前实现与后续要求 |
 | --- | --- |
-| E:\bot\bot-agent\src\BotAgent.Storage\AppDatabase.cs:24,27,53,82,139,170,191；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs:24,52,120,159 | 同FQN、不同程序集静态状态，目前仅旧宿主采用。真实读入口是Query/Scalar，10.4的Read是历史泛称，不存在同名方法。Storage WriteGate不等于全进程writer已统一；Open/Exec公共表面、迁移及备份需逐项评审 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\AppDatabase.cs:24,27,53,82,139,170,191；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs:24,52,120,159 | 同FQN、不同程序集静态状态，目前仅旧宿主采用。真实读入口是Query/Scalar，10.4的Read是历史泛称，不存在同名方法。Storage WriteGate不等于全进程writer已统一；Open/Exec公共表面、迁移及备份需逐项评审 |
 | 两份AppDatabase去重入口 | Host已有R5整批方法，Storage仍仅单key。迁移保留原始key、Ordinal、TTL边界、任一重复整批不新增、中途失败全回滚，不改回独立事务循环 |
-| E:\bot\bot-agent\src\BotAgent.Storage\AppPaths.cs:5,22,27；E:\bot\bot-agent\src\BotAgent.Headless\Services\AppPaths.cs:12,23,51,65 | 环境别名顺序相同但解析语义不同：Storage每次解析、优先既存runtime、/data仅查存在；Host缓存根、找.git并检查/data可写、创建目录。须冻结一次确定的运行根/路径政策，不能假定上下文等价 |
-| E:\bot\bot-agent\src\BotAgent.Storage\AppDatabase.cs:266,272,557,589,671,678 | 先建表再读schema版本、迁移至9，部分DDL/version分开写，旧迁移有DROP member_messages分支；整套崩溃恢复、较新schema拒绝及合成备份恢复未证明。VacuumIntoBackup有独立连接，不伪装进写事务 |
-| E:\bot\bot-agent\src\BotAgent.Storage\LegacyJsonImporter.cs:88；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\LegacyJsonImporter.cs:88 | 新版仅语法解析，旧版反序列化AppSettings；保留类型校验，通过评审seam避免Storage→Host。写入/归档/完成标记非一笔全局事务，部分导入/崩溃/重试政策待确认 |
-| E:\bot\bot-agent\src\BotAgent.Storage\StorageOptions.cs；E:\bot\bot-agent\src\BotAgent.Storage\FileLog.cs；E:\bot\bot-agent\src\BotAgent.Storage\Clock.cs | Options只有定义，没有options初始化调用，不臆造Initialize(options)。未来先绑定显式时钟再导入/备份；StorageLogging默认Console，须接入宿主安全日志政策 |
-| E:\bot\bot-agent\src\BotAgent.Storage\IPluginStore.cs；E:\bot\bot-agent\src\BotAgent.Storage\PluginStore.cs:9,44,48；E:\bot\bot-agent\src\BotAgent.Headless\Services\Plugins\PluginManager.cs | IPluginStore在Storage，不是Core应用端口，未发现生产消费者。每实例锁、读写分开可能导致多实例丢更新（静态风险，未动态验证）；Host启停仅内存，不称插件配置已统一持久化 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\AppPaths.cs:5,22,27；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\AppPaths.cs:12,23,51,65 | 环境别名顺序相同但解析语义不同：Storage每次解析、优先既存runtime、/data仅查存在；Host缓存根、找.git并检查/data可写、创建目录。须冻结一次确定的运行根/路径政策，不能假定上下文等价 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\AppDatabase.cs:266,272,557,589,671,678 | 先建表再读schema版本、迁移至9，部分DDL/version分开写，旧迁移有DROP member_messages分支；整套崩溃恢复、较新schema拒绝及合成备份恢复未证明。VacuumIntoBackup有独立连接，不伪装进写事务 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\LegacyJsonImporter.cs:88；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\LegacyJsonImporter.cs:88 | 新版仅语法解析，旧版反序列化AppSettings；保留类型校验，通过评审seam避免Storage→Host。写入/归档/完成标记非一笔全局事务，部分导入/崩溃/重试政策待确认 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\StorageOptions.cs；%WORKDIR%\bot-agent\src\BotAgent.Storage\FileLog.cs；%WORKDIR%\bot-agent\src\BotAgent.Storage\Clock.cs | Options只有定义，没有options初始化调用，不臆造Initialize(options)。未来先绑定显式时钟再导入/备份；StorageLogging默认Console，须接入宿主安全日志政策 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\IPluginStore.cs；%WORKDIR%\bot-agent\src\BotAgent.Storage\PluginStore.cs:9,44,48；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Plugins\PluginManager.cs | IPluginStore在Storage，不是Core应用端口，未发现生产消费者。每实例锁、读写分开可能导致多实例丢更新（静态风险，未动态验证）；Host启停仅内存，不称插件配置已统一持久化 |
 
 两份数据库DefaultTimeout30秒/busy_timeout30000，WriteAsync仅Task.Run，无取消参数或有界队列。R5立即故障不覆盖长锁响应预算；C2须定义锁顺序、嵌套事务限制、长锁/取消/关闭和恢复预算，不悄悄改超时或宣称WAL提供全局原子性。10.3的21对交接仍为候选；六个Host独有文件均保留，禁止整体删除Persistence目录。
 
 ### 12.4 C3 真实保存链及静态缺口
 
-1. **保留正确边界**：E:\bot\bot-agent\src\BotAgent.Headless\Services\SettingsBox.cs:46～64同Box锁内候选→mutate→persist→发布→published；persist失败不发布，published失败不回滚已提交。E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SettingsStore.cs:58～90把配置及指定AuditLogStore的一条审计写在同一SQLite事务，优先复用，不重造同义接口。
-2. **不能原样移Core**：E:\bot\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs依赖Host AppSettings/Ops；E:\bot\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs:17,901～908继承Platforms，Snapshot在内存仍携带运行凭据，JsonIgnore不等于外部安全DTO。原样搬Core会反向依赖。E:\bot\bot-agent\src\BotAgent.Headless\Services\Ops\IAuditChain.cs只有Append/Verify；AppendInTransaction属于具体AuditLogStore，不虚构端口方法。
-3. **最高优先候选风险**：E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs:131～147,298～324,414～422,593～599,725～732的mutate会先保存Feishu/Tts/Agent/Api秘密；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SecretsStore.cs:95～120每次独立事务、默认失败返回false，调用处不检查。后续字段校验/settings事务失败可能留下秘密更改；秘密失败也可能继续发布。仅静态风险，未在本轮复现，不归为C1引入回归。
-4. **提交≠应用**：旧链HandleSettingsSaveAsync→SettingsHotReload.ApplyRuntimeSettings→SettingsBox.ApplyPersisted→SettingsStore.Save→AuditLogStore.AppendInTransaction→发布→RebuildRuntime→afterPersist。E:\bot\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs:75～121顺序更新派生状态；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Audit.cs:28～43预写result=applied；提交后失败仍可能HTTP500/settings_save_failed，无持久化操作结果查询。须区分已提交/已应用/应用失败/需重启，不能从500推断事务回滚。
+1. **保留正确边界**：%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\SettingsBox.cs:46～64同Box锁内候选→mutate→persist→发布→published；persist失败不发布，published失败不回滚已提交。%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SettingsStore.cs:58～90把配置及指定AuditLogStore的一条审计写在同一SQLite事务，优先复用，不重造同义接口。
+2. **不能原样移Core**：%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs依赖Host AppSettings/Ops；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs:17,901～908继承Platforms，Snapshot在内存仍携带运行凭据，JsonIgnore不等于外部安全DTO。原样搬Core会反向依赖。%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Ops\IAuditChain.cs只有Append/Verify；AppendInTransaction属于具体AuditLogStore，不虚构端口方法。
+3. **最高优先候选风险**：%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs:131～147,298～324,414～422,593～599,725～732的mutate会先保存Feishu/Tts/Agent/Api秘密；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SecretsStore.cs:95～120每次独立事务、默认失败返回false，调用处不检查。后续字段校验/settings事务失败可能留下秘密更改；秘密失败也可能继续发布。仅静态风险，未在本轮复现，不归为C1引入回归。
+4. **提交≠应用**：旧链HandleSettingsSaveAsync→SettingsHotReload.ApplyRuntimeSettings→SettingsBox.ApplyPersisted→SettingsStore.Save→AuditLogStore.AppendInTransaction→发布→RebuildRuntime→afterPersist。%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs:75～121顺序更新派生状态；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Audit.cs:28～43预写result=applied；提交后失败仍可能HTTP500/settings_save_failed，无持久化操作结果查询。须区分已提交/已应用/应用失败/需重启，不能从500推断事务回滚。
 5. **审计/跨介质**：轮换审计是提交后的新事务，非秘密/配置整批原子；Settings文件:167的ttsKey与:418的ttsApiKey不一致，显式清空/飞书encrypt等审计覆盖也未证明。同文件:30～58的TTS外部文件失败只记日志，不得把DB成功称为文件已应用；恢复应来自持久化结果，不伪装跨介质回滚。
-6. **版本/幂等/输入**：settings仅id/json/updated_unix，无外部版本/请求结果账本；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.cs:854～866全量ReadToEndAsync，此处无请求体限额；旧保存无全局未知字段拒绝，null/空串随字段区别处理。新ZBA严格输入、秘密显式动作须与旧HTTP兼容一起冻结，不擅自收紧旧API。
-7. **其它写入口**：E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\BotConfig.cs:29～44启动可能普通Save回写环境投影，须区分环境和用户持久配置、定义版本/审计语义；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\ModelProviderStore.cs的UpsertMetadata/SaveCircuit各自事务，01/03/06区分配置元数据与熔断运行态，不把每次熔断计成配置更新。
+6. **版本/幂等/输入**：settings仅id/json/updated_unix，无外部版本/请求结果账本；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.cs:854～866全量ReadToEndAsync，此处无请求体限额；旧保存无全局未知字段拒绝，null/空串随字段区别处理。新ZBA严格输入、秘密显式动作须与旧HTTP兼容一起冻结，不擅自收紧旧API。
+7. **其它写入口**：%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\BotConfig.cs:29～44启动可能普通Save回写环境投影，须区分环境和用户持久配置、定义版本/审计语义；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\ModelProviderStore.cs的UpsertMetadata/SaveCircuit各自事务，01/03/06区分配置元数据与熔断运行态，不把每次熔断计成配置更新。
 8. **官方Secret**：Core旧LoadOfficialSecret/SaveOfficialSecret及两个仓储定义仍在，未查到生产调用；保留旧行不允许新API写入/恢复回填。本轮不删除API或旧行，兼容清理另批。官方Secret仍只取直接环境值，面板拒收、不回显。
 
 ### 12.5 已确认方向与冻结待办
@@ -1155,16 +1155,16 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 - 当前只有12.1的00单文档认领；01～07代码/测试集合为空，旧文件移交为空。10.3的21对、10.5角色边界仍有效，字节相同不授权删除；实际代码批次须另报确切新增/修改/删除路径、开始哈希及验证授权。
 - **下一最建议任务（只读、待批准）**：准备C2唯一数据库接入最小切片，连同C3非秘密配置/审计seam的真实签名候选和消费者矩阵；先解决同FQN遮蔽、双初始化、路径/时钟/日志与R5兼容，不先删除旧文件。提交逐文件补丁方案和真实合成入口，再请求代码授权；不启动完整Wave1或全部角色。
-- C2已有审查路径：E:\bot\bot-agent\src\BotAgent.Storage\AppDatabase.cs、E:\bot\bot-agent\src\BotAgent.Storage\AppPaths.cs、E:\bot\bot-agent\src\BotAgent.Storage\FileLog.cs、E:\bot\bot-agent\src\BotAgent.Storage\LegacyJsonImporter.cs；与E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs、E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\LegacyJsonImporter.cs、E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\FeishuWebhookDedupStore.cs对照。仅审查队列，不是已冻结施工集合。
-- C3共享审查路径：E:\bot\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs、E:\bot\bot-agent\src\BotAgent.Headless\Services\SettingsBox.cs、E:\bot\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs、E:\bot\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs及12.4所列配置/秘密/审计/启动/供应商/WebUiServer路径。新Core类型/文件尚未定，不把候选名登记成现有接口。
-- 01只在另批Core/Storage精确路径施工；02/03须Wave1准出、独立授权且写权不交叉才并行；04/05/07仍锁定。06提供集成方案/补丁，不与00同时写Host。E:\bot\bot-agent\BotAgent.slnx、E:\bot\bot-agent\src\BotAgent.Headless\BotAgent.Headless.csproj、E:\bot\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs、共享设置/护栏/公共测试/CI/部署由00最终合入，当前无这些文件写权。
+- C2已有审查路径：%WORKDIR%\bot-agent\src\BotAgent.Storage\AppDatabase.cs、%WORKDIR%\bot-agent\src\BotAgent.Storage\AppPaths.cs、%WORKDIR%\bot-agent\src\BotAgent.Storage\FileLog.cs、%WORKDIR%\bot-agent\src\BotAgent.Storage\LegacyJsonImporter.cs；与%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs、%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\LegacyJsonImporter.cs、%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\FeishuWebhookDedupStore.cs对照。仅审查队列，不是已冻结施工集合。
+- C3共享审查路径：%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs、%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\SettingsBox.cs、%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs、%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs及12.4所列配置/秘密/审计/启动/供应商/WebUiServer路径。新Core类型/文件尚未定，不把候选名登记成现有接口。
+- 01只在另批Core/Storage精确路径施工；02/03须Wave1准出、独立授权且写权不交叉才并行；04/05/07仍锁定。06提供集成方案/补丁，不与00同时写Host。%WORKDIR%\bot-agent\BotAgent.slnx、%WORKDIR%\bot-agent\src\BotAgent.Headless\BotAgent.Headless.csproj、%WORKDIR%\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs、共享设置/护栏/公共测试/CI/部署由00最终合入，当前无这些文件写权。
 - 合入顺序：契约确认/负例seam→实现→00宿主接入→真实调用链→逐文件旧实现处置→全门禁；每批绑定HEAD+工作区+文件哈希。接口未冻结、文件冲突或兼容不明停止；证据过期/新失败冻结受影响下游。临时共享移交另登接收者/路径/起止时间、暂停其它写入。
 
 ### 12.7 后续合成验证、准出与回退（本轮未执行）
 
 - 新用例优先覆盖真实HTTP混合秘密/配置在后续校验或事务故障时零部分写入；配置/版本/允许DB秘密/审计中途故障；同基准版本竞争、幂等同参数重放/不同参数冲突、响应丢失查询/重启恢复；持久化失败不发布、提交后派生状态/TTS外部文件失败可区分可恢复。
 - C2覆盖非法类型旧导入、原始key/TTL/整批重复/中途回滚/并发/重启、较新schema拒绝、迁移中断、长锁预算及合成备份恢复。旧SettingsScope的纯mutate失败/同Box并发不替代HTTP秘密副作用/外部版本用例。
-- 已查询15个真实测试csproj；优先复用E:\bot\bot-agent\tests\BotAgent.SettingsScopeProbe\BotAgent.SettingsScopeProbe.csproj、E:\bot\bot-agent\tests\BotAgent.FeishuRemediationProbe\BotAgent.FeishuRemediationProbe.csproj，以及实际Review/Safety/Architecture/Production工程和E:\bot\bot-agent\tests\BotAgent.IntegrationHarness\BotAgent.IntegrationHarness.csproj。新增用例文件/公共入口随代码清单另批，不造测试工程。
+- 已查询15个真实测试csproj；优先复用%WORKDIR%\bot-agent\tests\BotAgent.SettingsScopeProbe\BotAgent.SettingsScopeProbe.csproj、%WORKDIR%\bot-agent\tests\BotAgent.FeishuRemediationProbe\BotAgent.FeishuRemediationProbe.csproj，以及实际Review/Safety/Architecture/Production工程和%WORKDIR%\bot-agent\tests\BotAgent.IntegrationHarness\BotAgent.IntegrationHarness.csproj。新增用例文件/公共入口随代码清单另批，不造测试工程。
 - 获准后先独立Headless Rebuild，存储批按需重建真实Storage，再solution/适用探针；每个原生命令核对退出码。集成前再次独立重建Headless，再构建真实harness，明确本仓库新DLL+单个s21/s36/s50/s52。架构失败停止准出；红灯下独立定向诊断另批且标非准出。
 - 全部UUID合成根/两套路径一致/本机mock，按名称清除继承配置、不显示值；不读真实数据。完整矩阵、SDK8 CI、当前镜像、ZBA安全/资源、产物及数据恢复分别取证；S42仍排除，不以本地局部成功代替。
 - Wave1准出须唯一Storage实际采用、无同名旧类型遮蔽/双初始化，真实保存/审计/去重/重启链、兼容/恢复及适用安全/架构/行为门禁完整；01交付后00核对并提交负责人。02/03仍另批；Web须Wave1～5、必选ZBA、安全、资源、回退齐全后负责人明确解锁。
@@ -1205,19 +1205,19 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 执行者 | 确切认领路径 | 开始 SHA-256 / 状态 |
 | --- | --- | --- |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\AppDatabase.cs | E1E5DEA68D540817853CFD50C84C21DB8AADA4A983048DCB33C500A744D6CE61；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs | 670EBDDDC9B956DFD7BCF5044B090EA02AC458EF2EF6417AD4DE71D5DA2045F1；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Time\ClockBindings.cs | 94034E00CD6BE381255DD3D0F709C3709E1415642CB078784C1E244AE55E3EB1；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs | 47763388337E6DFB218A2C6978D49A60713953BD85B9EB2C5F86C98975BF5609；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\BotAgent.Headless.csproj | EA3EDDB3E0D49B436E3B7704C9EA9776204A26DA46C1A478E4C2E27FADDCF69C；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\FeishuWebhookDedupStore.cs | 5C8033BD0D33F57C172764736B0D6D3113696BDA8310429A4CEE906B864CD148；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Dockerfile | 8ACD7744E376D8A6E76ABF624607AEA60C1958F6503CB5CBA05D31A11469F68C；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\SourceIndex.cs | 803663A9DD87C9AC422FA6E6D05FDF0317A906071BE8CF0673D418268D906FF3；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\Program.cs | 6AD0159DAC07A5B411114D304249BAC8BB8ABDEE63A3F5348E5DEE1DAA3F9407；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\Program.cs | 3137DC7D7AD986C1325DEC7C13ABE68125514E63884897F27F4E44E846274011；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\DatabaseContractTests.cs | MISSING；已交付收口 |
-| 00 | E:\bot\bot-agent\CONTRIBUTING.md | 4902B89AC128B62A9F3242307232FA0B22F24AA0E2C343A75E341D6378F4D5C9；已交付收口 |
-| 00 | E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md | 84E6E5F03A5D9B37A47FE93EF58F92992EFB8D24C81677B361B32E79E0BDD1BF；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\AppDatabase.cs | E1E5DEA68D540817853CFD50C84C21DB8AADA4A983048DCB33C500A744D6CE61；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AppDatabase.cs | 670EBDDDC9B956DFD7BCF5044B090EA02AC458EF2EF6417AD4DE71D5DA2045F1；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Time\ClockBindings.cs | 94034E00CD6BE381255DD3D0F709C3709E1415642CB078784C1E244AE55E3EB1；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs | 47763388337E6DFB218A2C6978D49A60713953BD85B9EB2C5F86C98975BF5609；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\BotAgent.Headless.csproj | EA3EDDB3E0D49B436E3B7704C9EA9776204A26DA46C1A478E4C2E27FADDCF69C；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\FeishuWebhookDedupStore.cs | 5C8033BD0D33F57C172764736B0D6D3113696BDA8310429A4CEE906B864CD148；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Dockerfile | 8ACD7744E376D8A6E76ABF624607AEA60C1958F6503CB5CBA05D31A11469F68C；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\SourceIndex.cs | 803663A9DD87C9AC422FA6E6D05FDF0317A906071BE8CF0673D418268D906FF3；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\Program.cs | 6AD0159DAC07A5B411114D304249BAC8BB8ABDEE63A3F5348E5DEE1DAA3F9407；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\Program.cs | 3137DC7D7AD986C1325DEC7C13ABE68125514E63884897F27F4E44E846274011；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\DatabaseContractTests.cs | MISSING；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\CONTRIBUTING.md | 4902B89AC128B62A9F3242307232FA0B22F24AA0E2C343A75E341D6378F4D5C9；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md | 84E6E5F03A5D9B37A47FE93EF58F92992EFB8D24C81677B361B32E79E0BDD1BF；已交付收口 |
 
 仅修改以上 13 路径。允许派生 bin/obj 与本次 UUID 合成临时根；两套数据根一致，移除继承的配置/凭据环境但不回显值。批准的验证边界为公开 Host/Storage 数据库、R5、备份恢复、路径冲突/嵌套写及精确引用扫描；先负例后实现，再独立重建 Headless/定向探针及 harness。已知架构红灯不算准出；独立定向验证记录为诊断证据。
 
@@ -1229,21 +1229,21 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 执行者 | 新增确切认领路径 | 开始 SHA-256 |
 | --- | --- | --- |
-| 00 | E:\bot\bot-agent\tests\BotAgent.BridgeProbe\BotAgent.BridgeProbe.csproj | BEC1AAFA8F4C53565E57C1B24898D86FB81334738A46251D5FB5AF47BD427F68 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ChaosFaultProbe\BotAgent.ChaosFaultProbe.csproj | AC1DC0C36E591CF9EBF13F6BFCDEED5D3C8C39FF38A31BAD0FE143256D1DB44A |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ConcurrencyStressProbe\BotAgent.ConcurrencyStressProbe.csproj | BBB796845CB11573E2107C226723FE4C13319ADC3C964568921DB0CAA0928530 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.DeadlineGateProbe\BotAgent.DeadlineGateProbe.csproj | 969D88F2720797473FB72B5826B0CD583C32FB8BBE7265207399B57672BCC039 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.FeishuRemediationProbe\BotAgent.FeishuRemediationProbe.csproj | BEC1AAFA8F4C53565E57C1B24898D86FB81334738A46251D5FB5AF47BD427F68 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ParticipationProbe\BotAgent.ParticipationProbe.csproj | 21D125985B2AA7B00390DDFA062CD891099DA423059EA371407D943FADCB0D52 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.PipelineEval\BotAgent.PipelineEval.csproj | 0E4342072266EF907860AF375951CE85331876FF6A5DBCAA6254436220BABF4F |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ProductionSpecProbe\BotAgent.ProductionSpecProbe.csproj | 71ED481431BBD5952E32937DF63350F3B817B4D878BABB819F6563562512252A |
-| 00 | E:\bot\bot-agent\tests\BotAgent.SafetyProbe\BotAgent.SafetyProbe.csproj | 3F8501098D68397F9F5D82E7EAFF75E1003B522F0807722AC82777BBD8C327EA |
-| 00 | E:\bot\bot-agent\tests\BotAgent.SettingsScopeProbe\BotAgent.SettingsScopeProbe.csproj | BEC1AAFA8F4C53565E57C1B24898D86FB81334738A46251D5FB5AF47BD427F68 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.SsrfProbe\BotAgent.SsrfProbe.csproj | 71AA22197986675D0C32B0694FD1E38DF219AAFCBC931EAA12218173A40DC0F4 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.BridgeProbe\BotAgent.BridgeProbe.csproj | BEC1AAFA8F4C53565E57C1B24898D86FB81334738A46251D5FB5AF47BD427F68 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ChaosFaultProbe\BotAgent.ChaosFaultProbe.csproj | AC1DC0C36E591CF9EBF13F6BFCDEED5D3C8C39FF38A31BAD0FE143256D1DB44A |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ConcurrencyStressProbe\BotAgent.ConcurrencyStressProbe.csproj | BBB796845CB11573E2107C226723FE4C13319ADC3C964568921DB0CAA0928530 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.DeadlineGateProbe\BotAgent.DeadlineGateProbe.csproj | 969D88F2720797473FB72B5826B0CD583C32FB8BBE7265207399B57672BCC039 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.FeishuRemediationProbe\BotAgent.FeishuRemediationProbe.csproj | BEC1AAFA8F4C53565E57C1B24898D86FB81334738A46251D5FB5AF47BD427F68 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ParticipationProbe\BotAgent.ParticipationProbe.csproj | 21D125985B2AA7B00390DDFA062CD891099DA423059EA371407D943FADCB0D52 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.PipelineEval\BotAgent.PipelineEval.csproj | 0E4342072266EF907860AF375951CE85331876FF6A5DBCAA6254436220BABF4F |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ProductionSpecProbe\BotAgent.ProductionSpecProbe.csproj | 71ED481431BBD5952E32937DF63350F3B817B4D878BABB819F6563562512252A |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.SafetyProbe\BotAgent.SafetyProbe.csproj | 3F8501098D68397F9F5D82E7EAFF75E1003B522F0807722AC82777BBD8C327EA |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.SettingsScopeProbe\BotAgent.SettingsScopeProbe.csproj | BEC1AAFA8F4C53565E57C1B24898D86FB81334738A46251D5FB5AF47BD427F68 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.SsrfProbe\BotAgent.SsrfProbe.csproj | 71AA22197986675D0C32B0694FD1E38DF219AAFCBC931EAA12218173A40DC0F4 |
 
 ### 13.3 实际调用链、命令与合成证据
 
-- 宿主启动：E:\bot\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs BootstrapSettings → ClockBindings.InitializeStorage → Host AppDatabase.Initialize → Storage.Initialize(Host FilePath) → Storage schema/WriteGate。纯仓储探针绕过CompositionRoot时，Host兼容Initialize仍先绑定同一Source。C1 child分支仍在绑定/数据库之前退出。
+- 宿主启动：%WORKDIR%\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs BootstrapSettings → ClockBindings.InitializeStorage → Host AppDatabase.Initialize → Storage.Initialize(Host FilePath) → Storage schema/WriteGate。纯仓储探针绕过CompositionRoot时，Host兼容Initialize仍先绑定同一Source。C1 child分支仍在绑定/数据库之前退出。
 - 配置/审计：旧SettingsStore/AuditLogStore通过Host Write/Exec转发到同一Storage连接/事务；飞书IWebhookDedupStore→Host批次转发→Storage R5整批。备份→同WriteGate但无事务的VACUUM；默认根来自已绑定数据库，时间来自Host稳定Source。直接Open/Exec公共表面仍保留，不称全局版本化保存或跨进程writer已验收。
 - 13原路径及13.2的11补充路径实际变更，未移交/删除其它旧文件。旧Host LegacyJsonImporter保留AppSettings类型校验；CreateSchema、CreateModelProviderTable、ApplyMigrations三段与批次前旧Host正文（仅归一换行）逐字相同；原22个公开成员声明逐项一致。schema仍9；新拒绝只针对较新schema。原始key、Ordinal、TTL/R5保持，不写真实数据。
 
@@ -1294,26 +1294,26 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 真实产物路径 | SHA-256 |
 | --- | --- |
-| E:\bot\bot-agent\src\BotAgent.Core\bin\Release\net8.0\BotAgent.Core.dll | D754B1B38FD92C9F14C193F1198D7612CD51E7EBDAFCAD5AA8905AC788A852FD |
-| E:\bot\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll | 98864EBEF1F03AE0E53CC1310BBFF1FC4AC0809A4E53CC825034B7F7BF6418B5 |
-| E:\bot\bot-agent\src\BotAgent.Model\bin\Release\net8.0\BotAgent.Model.dll | A5823E5A4B54DCB81E1B7C7E6827E9AFF7FBE77262856C9ADA20360A8DB22A20 |
-| E:\bot\bot-agent\src\BotAgent.Platforms\bin\Release\net8.0\BotAgent.Platforms.dll | 7BB869F8B1DE1DA742274D358D10F17053F42BC48DCB2DC9E6F5BC2C7D3958B6 |
-| E:\bot\bot-agent\src\BotAgent.Storage\bin\Release\net8.0\BotAgent.Storage.dll | 431A52EB16616C0C7E6109D5D3828A88671C2A0555894A4ED587E661FAF5DD63 |
-| E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\bin\Release\net8.0\BotAgent.ArchitectureProbe.dll | E4E3C1D43901818469C36946896C650265E81F002D14179EA5855E473DEFAC2B |
-| E:\bot\bot-agent\tests\BotAgent.BridgeProbe\bin\Release\net8.0\BotAgent.BridgeProbe.dll | 6B846FB2544D6AECC3FBA5522139819D1DC8942EF1EDB95D8B4019D0F4630FD3 |
-| E:\bot\bot-agent\tests\BotAgent.ChaosFaultProbe\bin\Release\net8.0\BotAgent.ChaosFaultProbe.dll | F54883BED2D64020189359F138AA0BD69C7B5ACC1B8CFC1FEFFE8219E601F440 |
-| E:\bot\bot-agent\tests\BotAgent.ConcurrencyStressProbe\bin\Release\net8.0\BotAgent.ConcurrencyStressProbe.dll | 6C17F09DD0F7A6012BCB9E66A164B4BB636903857BDB606D32C4DDED0D6AEA00 |
-| E:\bot\bot-agent\tests\BotAgent.DeadlineGateProbe\bin\Release\net8.0\BotAgent.DeadlineGateProbe.dll | 1CCE331D1ECF17BFD183C60E8F4AFAC75F3AF570B76A774F10FC554919CE9E24 |
-| E:\bot\bot-agent\tests\BotAgent.FeishuRemediationProbe\bin\Release\net8.0\BotAgent.FeishuRemediationProbe.dll | 81F271B7279602F90A214A22C7D01E6C0440C0B0144A979843540972A8180C4B |
-| E:\bot\bot-agent\tests\BotAgent.IntegrationHarness\bin\Release\net8.0\BotAgent.IntegrationHarness.dll | 40268FF4F2F13D0A6A1E4CBB396397EDCDC2E71C0F8F74269FF5DF0C04E8D5C8 |
-| E:\bot\bot-agent\tests\BotAgent.ParticipationProbe\bin\Release\net8.0\BotAgent.ParticipationProbe.dll | BEC099A5202E6D7A7055C80D2C1EC4FFF9876873ABD9E3F421AF5AEE036B6618 |
-| E:\bot\bot-agent\tests\BotAgent.PipelineEval\bin\Release\net8.0\BotAgent.PipelineEval.dll | 1324B1F90849147767D939F16068CCA94455B543A5928F531C2E3E2135187E0C |
-| E:\bot\bot-agent\tests\BotAgent.ProductionSpecProbe\bin\Release\net8.0\BotAgent.ProductionSpecProbe.dll | 5736D72D26E8AAF60FB4FBD1FC07D55BF71E0AB9D3AC969195A4360D98DC056E |
-| E:\bot\bot-agent\tests\BotAgent.ReverseTransportProbe\bin\Release\net8.0\BotAgent.ReverseTransportProbe.dll | F12214E01A38DCDA762A29D2C65641AB7080C1DCB28BE988B31A0B6F5FDFDCEB |
-| E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\bin\Release\net8.0\BotAgent.ReviewRemediationProbe.dll | 7FA8BCCF3FF8216731416249E57E02C22E4BBB044B0426F0EB6C2DC4B2F70780 |
-| E:\bot\bot-agent\tests\BotAgent.SafetyProbe\bin\Release\net8.0\BotAgent.SafetyProbe.dll | 1BBCB5F43F160F1E55C47DBEA525D91E96A54F230DDB38DCB815E5AE25D8DF9B |
-| E:\bot\bot-agent\tests\BotAgent.SettingsScopeProbe\bin\Release\net8.0\BotAgent.SettingsScopeProbe.dll | FD009716327733FABB18515ECF533B21820E4D30A67C2AB129A66D0E2DCCB9C8 |
-| E:\bot\bot-agent\tests\BotAgent.SsrfProbe\bin\Release\net8.0\BotAgent.SsrfProbe.dll | 3881DB0A6D47395EF9A2E3119A341FB9EFDE9DF0AE2FFCD6DDDAAC6F8696CE59 |
+| %WORKDIR%\bot-agent\src\BotAgent.Core\bin\Release\net8.0\BotAgent.Core.dll | D754B1B38FD92C9F14C193F1198D7612CD51E7EBDAFCAD5AA8905AC788A852FD |
+| %WORKDIR%\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll | 98864EBEF1F03AE0E53CC1310BBFF1FC4AC0809A4E53CC825034B7F7BF6418B5 |
+| %WORKDIR%\bot-agent\src\BotAgent.Model\bin\Release\net8.0\BotAgent.Model.dll | A5823E5A4B54DCB81E1B7C7E6827E9AFF7FBE77262856C9ADA20360A8DB22A20 |
+| %WORKDIR%\bot-agent\src\BotAgent.Platforms\bin\Release\net8.0\BotAgent.Platforms.dll | 7BB869F8B1DE1DA742274D358D10F17053F42BC48DCB2DC9E6F5BC2C7D3958B6 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\bin\Release\net8.0\BotAgent.Storage.dll | 431A52EB16616C0C7E6109D5D3828A88671C2A0555894A4ED587E661FAF5DD63 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\bin\Release\net8.0\BotAgent.ArchitectureProbe.dll | E4E3C1D43901818469C36946896C650265E81F002D14179EA5855E473DEFAC2B |
+| %WORKDIR%\bot-agent\tests\BotAgent.BridgeProbe\bin\Release\net8.0\BotAgent.BridgeProbe.dll | 6B846FB2544D6AECC3FBA5522139819D1DC8942EF1EDB95D8B4019D0F4630FD3 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ChaosFaultProbe\bin\Release\net8.0\BotAgent.ChaosFaultProbe.dll | F54883BED2D64020189359F138AA0BD69C7B5ACC1B8CFC1FEFFE8219E601F440 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ConcurrencyStressProbe\bin\Release\net8.0\BotAgent.ConcurrencyStressProbe.dll | 6C17F09DD0F7A6012BCB9E66A164B4BB636903857BDB606D32C4DDED0D6AEA00 |
+| %WORKDIR%\bot-agent\tests\BotAgent.DeadlineGateProbe\bin\Release\net8.0\BotAgent.DeadlineGateProbe.dll | 1CCE331D1ECF17BFD183C60E8F4AFAC75F3AF570B76A774F10FC554919CE9E24 |
+| %WORKDIR%\bot-agent\tests\BotAgent.FeishuRemediationProbe\bin\Release\net8.0\BotAgent.FeishuRemediationProbe.dll | 81F271B7279602F90A214A22C7D01E6C0440C0B0144A979843540972A8180C4B |
+| %WORKDIR%\bot-agent\tests\BotAgent.IntegrationHarness\bin\Release\net8.0\BotAgent.IntegrationHarness.dll | 40268FF4F2F13D0A6A1E4CBB396397EDCDC2E71C0F8F74269FF5DF0C04E8D5C8 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ParticipationProbe\bin\Release\net8.0\BotAgent.ParticipationProbe.dll | BEC099A5202E6D7A7055C80D2C1EC4FFF9876873ABD9E3F421AF5AEE036B6618 |
+| %WORKDIR%\bot-agent\tests\BotAgent.PipelineEval\bin\Release\net8.0\BotAgent.PipelineEval.dll | 1324B1F90849147767D939F16068CCA94455B543A5928F531C2E3E2135187E0C |
+| %WORKDIR%\bot-agent\tests\BotAgent.ProductionSpecProbe\bin\Release\net8.0\BotAgent.ProductionSpecProbe.dll | 5736D72D26E8AAF60FB4FBD1FC07D55BF71E0AB9D3AC969195A4360D98DC056E |
+| %WORKDIR%\bot-agent\tests\BotAgent.ReverseTransportProbe\bin\Release\net8.0\BotAgent.ReverseTransportProbe.dll | F12214E01A38DCDA762A29D2C65641AB7080C1DCB28BE988B31A0B6F5FDFDCEB |
+| %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\bin\Release\net8.0\BotAgent.ReviewRemediationProbe.dll | 7FA8BCCF3FF8216731416249E57E02C22E4BBB044B0426F0EB6C2DC4B2F70780 |
+| %WORKDIR%\bot-agent\tests\BotAgent.SafetyProbe\bin\Release\net8.0\BotAgent.SafetyProbe.dll | 1BBCB5F43F160F1E55C47DBEA525D91E96A54F230DDB38DCB815E5AE25D8DF9B |
+| %WORKDIR%\bot-agent\tests\BotAgent.SettingsScopeProbe\bin\Release\net8.0\BotAgent.SettingsScopeProbe.dll | FD009716327733FABB18515ECF533B21820E4D30A67C2AB129A66D0E2DCCB9C8 |
+| %WORKDIR%\bot-agent\tests\BotAgent.SsrfProbe\bin\Release\net8.0\BotAgent.SsrfProbe.dll | 3881DB0A6D47395EF9A2E3119A341FB9EFDE9DF0AE2FFCD6DDDAAC6F8696CE59 |
 
 - 收口静态核验：19:01:37、pwsh/git退出0，44个登记的现有绝对路径存在，Docker实际3个跨工程csproj输入齐全，正文尾空白0。19:03:52前分组验证22份原字节GZip副本解压内存哈希通过；总纲撤销三处当前索引及第十三节后的内存哈希与开始84E6E5F0一致，新增测试标MISSING；不实际覆盖/回退。一次全副本验证脚本超Windows命令长度，CreateProcess错误206、未启动进程/未写入；改分组后退出0。HEAD/index及范围外输入不变；24路径写权本批关闭，后续修改另登记范围。最终SHA交付聊天，无自引用。
 
@@ -1330,52 +1330,52 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 执行者 | 本批确切路径 | 开始SHA-256 / 交接 |
 | --- | --- | --- |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AgentImageStore.cs | 4AEFA1EF552ACBB7738B8D9AE9A6732BAE0266F423D78A0ECD7501932E7E3D49；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AgentSessionStore.cs | 412F72EB28A97506207F8C88BA28F598EC8A8EF7BA6036E75373C898D4CD03DC；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AudioCache.cs | E1ED7BB5B07BA98BEF357A9A3CABC25171E83DC405036FFF7CCE5E18312AFF03；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\ConversationStore.cs | AF6645EC6BA9F8BD103434FEFA412E8C93EA375B167DB81FD5B3A980DA106628；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\EpisodeStore.cs | BADFE1A22A5D9FFA2A3BB63CDB28D51430FCC54CE69B86897ACB63991FE4AEA3；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\HostMetrics.cs | 13BB69B7A416BB1AA385AAA882AA6AB5FF5FA38D4CD827F24F95D4F992963899；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\JargonStore.cs | 4049B23E1F632BB566D844A91363916D6C4F81B288DD2B815A6791B0C0DCFAAC；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MemberProfileStore.cs | 6943E76F666566D88C2FF98D7BC6F8E54F8C9564E8C0F450F8B253169B3ABB08；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MemberRoleStore.cs | A1511099843859EB037F24DA8CCE750ED2F1E2BA7E6A2334C08861220BE75061；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MoodStore.cs | 88AF0430E91D9FAF492508DB75A8C71B00D9BD0CDD41EC04DE4E6C6B0029811E；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MusicStore.cs | F64E6E3F5CC0D1185CA2AABA5DEC670559D961F2C80942164352360C498AFFB1；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\OwnMessageStore.cs | 7720D67BD50FBE298117B4002FAF791118CF869F553000D8E0647F626FDD4C79；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\PanelPasswordStore.cs | 3A22D12DDC88A4756E8C0017BC47E263EC380EF50534D8B52DD7E28295C2679E；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\PromptTemplateStore.cs | 25BD46154B136221DB32231B3BE8ADC3675AAE8CE9EB424F3DD4D34CC0977628；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SecretsStore.cs | 4FD10E7009E8F409BC00093BC59AD29AE5641BE368E2115D83A51A2C8F2AFD7A；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\StickerStore.cs | FB3C0D2A4B3BF28DD1F951B5A64B99FD38C0010E574CF4FAFEC3686FAD341E24；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\TenantQuotaStore.cs | CBA1FFDFB45BB0A82A8E6B1EFE849A98318932A3A6A1F501A31F3D47CE99E86D；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SecretFiles.cs | 794E68D35FF8D243615988A8CEEB270B07D5BB02691B43FC38C7774F79E90063；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\TtsConfFile.cs | 4B011261A3E54DC983F1EF41C30DED70DC2A5F234BBD9BB72515B3B98EF0B46F；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\LegacyJsonImporter.cs | F486A363E15E118E9F67474197F6258AE5F476D542CA7F4B09437D2360F50CED；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\AgentImageStore.cs | 4AEFA1EF552ACBB7738B8D9AE9A6732BAE0266F423D78A0ECD7501932E7E3D49；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\AgentSessionStore.cs | 412F72EB28A97506207F8C88BA28F598EC8A8EF7BA6036E75373C898D4CD03DC；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\AudioCache.cs | E1ED7BB5B07BA98BEF357A9A3CABC25171E83DC405036FFF7CCE5E18312AFF03；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\ConversationStore.cs | AF6645EC6BA9F8BD103434FEFA412E8C93EA375B167DB81FD5B3A980DA106628；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\EpisodeStore.cs | BADFE1A22A5D9FFA2A3BB63CDB28D51430FCC54CE69B86897ACB63991FE4AEA3；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\HostMetrics.cs | 13BB69B7A416BB1AA385AAA882AA6AB5FF5FA38D4CD827F24F95D4F992963899；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\JargonStore.cs | 4049B23E1F632BB566D844A91363916D6C4F81B288DD2B815A6791B0C0DCFAAC；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\MemberProfileStore.cs | 6943E76F666566D88C2FF98D7BC6F8E54F8C9564E8C0F450F8B253169B3ABB08；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\MemberRoleStore.cs | A1511099843859EB037F24DA8CCE750ED2F1E2BA7E6A2334C08861220BE75061；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\MoodStore.cs | 88AF0430E91D9FAF492508DB75A8C71B00D9BD0CDD41EC04DE4E6C6B0029811E；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\MusicStore.cs | F64E6E3F5CC0D1185CA2AABA5DEC670559D961F2C80942164352360C498AFFB1；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\OwnMessageStore.cs | 7720D67BD50FBE298117B4002FAF791118CF869F553000D8E0647F626FDD4C79；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\PanelPasswordStore.cs | 564B7A16D5A7156C59EF963F90C05C91E639C149CA9ADA2C5DAF5979013765AE；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\PromptTemplateStore.cs | 25BD46154B136221DB32231B3BE8ADC3675AAE8CE9EB424F3DD4D34CC0977628；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\SecretsStore.cs | 4FD10E7009E8F409BC00093BC59AD29AE5641BE368E2115D83A51A2C8F2AFD7A；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\StickerStore.cs | FB3C0D2A4B3BF28DD1F951B5A64B99FD38C0010E574CF4FAFEC3686FAD341E24；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\TenantQuotaStore.cs | CBA1FFDFB45BB0A82A8E6B1EFE849A98318932A3A6A1F501A31F3D47CE99E86D；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\LegacyJsonImporter.cs | 61E1FED11548E5913287BDAE54A624843B4E35737FE62504A6C69397A2E56C3F；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Storage\AppPaths.cs | A4151851A390EFDCA6F90B3DF2503742FCE394406F9B29CDAA419E2755123F5C；已交付收口 |
-| 00 | E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Time\ClockBindings.cs | 43A35B90A69BC9BBF04629A9F4EB5E91A68A1A1AC2A32BEDA6FAB9EA8C3DD712；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\Program.cs | 6415436DD5D43CD4649BAC0BB8898974640A71FB9369A7AA372CA0A42416EC24；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\DatabaseContractTests.cs | A533B5C4F64BB8FB22D24DA5A1ABA2234BF57E93954FD28F99BC0294B77B81D1；未修改，认领关闭 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\StorageMigrationTests.cs | MISSING；已交付收口 |
-| 00 | E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\Program.cs | 46C98BCA926D04830BD3369FCD3D09D7314F258CA19BA1A76A7135121AECF751；已交付收口 |
-| 00 | E:\bot\bot-agent\CONTRIBUTING.md | 225823991CAD51D718DEAE0BF5EBDDF4F43A299E9167FCA0C99CE88FE988A4F4；已交付收口 |
-| 00 | E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md | 345807D80FC4398A3BA8E2631F5C6C71F2F7671F5D98FC63165B97C6C1640BE3；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AgentImageStore.cs | 4AEFA1EF552ACBB7738B8D9AE9A6732BAE0266F423D78A0ECD7501932E7E3D49；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AgentSessionStore.cs | 412F72EB28A97506207F8C88BA28F598EC8A8EF7BA6036E75373C898D4CD03DC；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\AudioCache.cs | E1ED7BB5B07BA98BEF357A9A3CABC25171E83DC405036FFF7CCE5E18312AFF03；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\ConversationStore.cs | AF6645EC6BA9F8BD103434FEFA412E8C93EA375B167DB81FD5B3A980DA106628；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\EpisodeStore.cs | BADFE1A22A5D9FFA2A3BB63CDB28D51430FCC54CE69B86897ACB63991FE4AEA3；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\HostMetrics.cs | 13BB69B7A416BB1AA385AAA882AA6AB5FF5FA38D4CD827F24F95D4F992963899；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\JargonStore.cs | 4049B23E1F632BB566D844A91363916D6C4F81B288DD2B815A6791B0C0DCFAAC；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MemberProfileStore.cs | 6943E76F666566D88C2FF98D7BC6F8E54F8C9564E8C0F450F8B253169B3ABB08；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MemberRoleStore.cs | A1511099843859EB037F24DA8CCE750ED2F1E2BA7E6A2334C08861220BE75061；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MoodStore.cs | 88AF0430E91D9FAF492508DB75A8C71B00D9BD0CDD41EC04DE4E6C6B0029811E；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\MusicStore.cs | F64E6E3F5CC0D1185CA2AABA5DEC670559D961F2C80942164352360C498AFFB1；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\OwnMessageStore.cs | 7720D67BD50FBE298117B4002FAF791118CF869F553000D8E0647F626FDD4C79；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\PanelPasswordStore.cs | 3A22D12DDC88A4756E8C0017BC47E263EC380EF50534D8B52DD7E28295C2679E；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\PromptTemplateStore.cs | 25BD46154B136221DB32231B3BE8ADC3675AAE8CE9EB424F3DD4D34CC0977628；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SecretsStore.cs | 4FD10E7009E8F409BC00093BC59AD29AE5641BE368E2115D83A51A2C8F2AFD7A；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\StickerStore.cs | FB3C0D2A4B3BF28DD1F951B5A64B99FD38C0010E574CF4FAFEC3686FAD341E24；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\TenantQuotaStore.cs | CBA1FFDFB45BB0A82A8E6B1EFE849A98318932A3A6A1F501A31F3D47CE99E86D；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SecretFiles.cs | 794E68D35FF8D243615988A8CEEB270B07D5BB02691B43FC38C7774F79E90063；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\TtsConfFile.cs | 4B011261A3E54DC983F1EF41C30DED70DC2A5F234BBD9BB72515B3B98EF0B46F；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\LegacyJsonImporter.cs | F486A363E15E118E9F67474197F6258AE5F476D542CA7F4B09437D2360F50CED；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\AgentImageStore.cs | 4AEFA1EF552ACBB7738B8D9AE9A6732BAE0266F423D78A0ECD7501932E7E3D49；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\AgentSessionStore.cs | 412F72EB28A97506207F8C88BA28F598EC8A8EF7BA6036E75373C898D4CD03DC；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\AudioCache.cs | E1ED7BB5B07BA98BEF357A9A3CABC25171E83DC405036FFF7CCE5E18312AFF03；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\ConversationStore.cs | AF6645EC6BA9F8BD103434FEFA412E8C93EA375B167DB81FD5B3A980DA106628；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\EpisodeStore.cs | BADFE1A22A5D9FFA2A3BB63CDB28D51430FCC54CE69B86897ACB63991FE4AEA3；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\HostMetrics.cs | 13BB69B7A416BB1AA385AAA882AA6AB5FF5FA38D4CD827F24F95D4F992963899；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\JargonStore.cs | 4049B23E1F632BB566D844A91363916D6C4F81B288DD2B815A6791B0C0DCFAAC；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\MemberProfileStore.cs | 6943E76F666566D88C2FF98D7BC6F8E54F8C9564E8C0F450F8B253169B3ABB08；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\MemberRoleStore.cs | A1511099843859EB037F24DA8CCE750ED2F1E2BA7E6A2334C08861220BE75061；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\MoodStore.cs | 88AF0430E91D9FAF492508DB75A8C71B00D9BD0CDD41EC04DE4E6C6B0029811E；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\MusicStore.cs | F64E6E3F5CC0D1185CA2AABA5DEC670559D961F2C80942164352360C498AFFB1；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\OwnMessageStore.cs | 7720D67BD50FBE298117B4002FAF791118CF869F553000D8E0647F626FDD4C79；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\PanelPasswordStore.cs | 564B7A16D5A7156C59EF963F90C05C91E639C149CA9ADA2C5DAF5979013765AE；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\PromptTemplateStore.cs | 25BD46154B136221DB32231B3BE8ADC3675AAE8CE9EB424F3DD4D34CC0977628；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\SecretsStore.cs | 4FD10E7009E8F409BC00093BC59AD29AE5641BE368E2115D83A51A2C8F2AFD7A；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\StickerStore.cs | FB3C0D2A4B3BF28DD1F951B5A64B99FD38C0010E574CF4FAFEC3686FAD341E24；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\TenantQuotaStore.cs | CBA1FFDFB45BB0A82A8E6B1EFE849A98318932A3A6A1F501A31F3D47CE99E86D；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\LegacyJsonImporter.cs | 61E1FED11548E5913287BDAE54A624843B4E35737FE62504A6C69397A2E56C3F；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Storage\AppPaths.cs | A4151851A390EFDCA6F90B3DF2503742FCE394406F9B29CDAA419E2755123F5C；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Time\ClockBindings.cs | 43A35B90A69BC9BBF04629A9F4EB5E91A68A1A1AC2A32BEDA6FAB9EA8C3DD712；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\Program.cs | 6415436DD5D43CD4649BAC0BB8898974640A71FB9369A7AA372CA0A42416EC24；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\DatabaseContractTests.cs | A533B5C4F64BB8FB22D24DA5A1ABA2234BF57E93954FD28F99BC0294B77B81D1；未修改，认领关闭 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\StorageMigrationTests.cs | MISSING；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\Program.cs | 46C98BCA926D04830BD3369FCD3D09D7314F258CA19BA1A76A7135121AECF751；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\CONTRIBUTING.md | 225823991CAD51D718DEAE0BF5EBDDF4F43A299E9167FCA0C99CE88FE988A4F4；已交付收口 |
+| 00 | %WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md | 345807D80FC4398A3BA8E2631F5C6C71F2F7671F5D98FC63165B97C6C1640BE3；已交付收口 |
 
 以上46路径构成本批唯一代码/测试/文档集合；无目录级写权，不改六个Host独有仓储、Core端口/共享设置、CI/部署。允许真实工程bin/obj及本批独立合成临时根。新StoragePaths类型与导入重载是本批明确局部接口，候选C3/C4类型仍不得假称已有。
 
@@ -1443,26 +1443,26 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 实际DLL绝对路径 | SHA256 |
 | --- | --- |
-| E:\bot\bot-agent\src\BotAgent.Core\bin\Release\net8.0\BotAgent.Core.dll | D754B1B38FD92C9F14C193F1198D7612CD51E7EBDAFCAD5AA8905AC788A852FD |
-| E:\bot\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll | 5E20031B7914D61D8FB2AFFFF05642F7893FBEE2694CC103ABE811E8879FB652 |
-| E:\bot\bot-agent\src\BotAgent.Model\bin\Release\net8.0\BotAgent.Model.dll | A5823E5A4B54DCB81E1B7C7E6827E9AFF7FBE77262856C9ADA20360A8DB22A20 |
-| E:\bot\bot-agent\src\BotAgent.Platforms\bin\Release\net8.0\BotAgent.Platforms.dll | 7BB869F8B1DE1DA742274D358D10F17053F42BC48DCB2DC9E6F5BC2C7D3958B6 |
-| E:\bot\bot-agent\src\BotAgent.Storage\bin\Release\net8.0\BotAgent.Storage.dll | B90414E1B985F0AA97AB84EABFA074B5773C31B4A73CD9E530DDA313157F39D0 |
-| E:\bot\bot-agent\tests\BotAgent.ArchitectureProbe\bin\Release\net8.0\BotAgent.ArchitectureProbe.dll | 664342F7E07AAEFA20EC38ABDCC57D48D476BA3A451CBF89E0AD6C55CB683B56 |
-| E:\bot\bot-agent\tests\BotAgent.BridgeProbe\bin\Release\net8.0\BotAgent.BridgeProbe.dll | 5D53C94BA1845A48B66F97C8685BE38C69567C88F6BEA9B21A7147E1F45569A0 |
-| E:\bot\bot-agent\tests\BotAgent.ChaosFaultProbe\bin\Release\net8.0\BotAgent.ChaosFaultProbe.dll | 1A283CFD8522F155D10456872061455F0771C8F3AD4B4FD12CC88A26B74F0763 |
-| E:\bot\bot-agent\tests\BotAgent.ConcurrencyStressProbe\bin\Release\net8.0\BotAgent.ConcurrencyStressProbe.dll | 4793007D5B2A4D4AE93C33BEFA2B8E55DFF7DCAFEE16F2D6ACF1952F7B52EE6E |
-| E:\bot\bot-agent\tests\BotAgent.DeadlineGateProbe\bin\Release\net8.0\BotAgent.DeadlineGateProbe.dll | 343C5192D4605CD59E9795CA3B63D32D81DD1D73A3C92D7376ABF3407AD5D092 |
-| E:\bot\bot-agent\tests\BotAgent.FeishuRemediationProbe\bin\Release\net8.0\BotAgent.FeishuRemediationProbe.dll | 204C2F092CFB301A5939663079321E8E7C619A2A074C526EB80559B7BF20CAC3 |
-| E:\bot\bot-agent\tests\BotAgent.IntegrationHarness\bin\Release\net8.0\BotAgent.IntegrationHarness.dll | 40268FF4F2F13D0A6A1E4CBB396397EDCDC2E71C0F8F74269FF5DF0C04E8D5C8 |
-| E:\bot\bot-agent\tests\BotAgent.ParticipationProbe\bin\Release\net8.0\BotAgent.ParticipationProbe.dll | FC865CDBF49E45109C6567C2CF09CB96A349780955DAE8289F5E5824CFD940A7 |
-| E:\bot\bot-agent\tests\BotAgent.PipelineEval\bin\Release\net8.0\BotAgent.PipelineEval.dll | 59132A5B1F570A184144549B6980CB972EC9DD422FB38E92CF07B57457AF4D0D |
-| E:\bot\bot-agent\tests\BotAgent.ProductionSpecProbe\bin\Release\net8.0\BotAgent.ProductionSpecProbe.dll | 0B9D7FE0DE8C4C34A80E95DC7CE66835810F8794E886D3F25227A077A8073B53 |
-| E:\bot\bot-agent\tests\BotAgent.ReverseTransportProbe\bin\Release\net8.0\BotAgent.ReverseTransportProbe.dll | F12214E01A38DCDA762A29D2C65641AB7080C1DCB28BE988B31A0B6F5FDFDCEB |
-| E:\bot\bot-agent\tests\BotAgent.ReviewRemediationProbe\bin\Release\net8.0\BotAgent.ReviewRemediationProbe.dll | 891C4803182211C44869134FF58E08976DE0B23147D94EA298D41026B6E57652 |
-| E:\bot\bot-agent\tests\BotAgent.SafetyProbe\bin\Release\net8.0\BotAgent.SafetyProbe.dll | 62B5FACFB39161BEC887AFB0A81C9BCBBBD3632D025D26AF6708792930FE7B44 |
-| E:\bot\bot-agent\tests\BotAgent.SettingsScopeProbe\bin\Release\net8.0\BotAgent.SettingsScopeProbe.dll | 3F34500AA20BE52104540885C3B45997057FF26FE6C65A53EE1883B8ECCCF2FB |
-| E:\bot\bot-agent\tests\BotAgent.SsrfProbe\bin\Release\net8.0\BotAgent.SsrfProbe.dll | A3AC1BFF8EC6BEFF121E22673351ACACE78B3275FF3719FB9A655D906F8BE068 |
+| %WORKDIR%\bot-agent\src\BotAgent.Core\bin\Release\net8.0\BotAgent.Core.dll | D754B1B38FD92C9F14C193F1198D7612CD51E7EBDAFCAD5AA8905AC788A852FD |
+| %WORKDIR%\bot-agent\src\BotAgent.Headless\bin\Release\net8.0\BotAgent.Headless.dll | 5E20031B7914D61D8FB2AFFFF05642F7893FBEE2694CC103ABE811E8879FB652 |
+| %WORKDIR%\bot-agent\src\BotAgent.Model\bin\Release\net8.0\BotAgent.Model.dll | A5823E5A4B54DCB81E1B7C7E6827E9AFF7FBE77262856C9ADA20360A8DB22A20 |
+| %WORKDIR%\bot-agent\src\BotAgent.Platforms\bin\Release\net8.0\BotAgent.Platforms.dll | 7BB869F8B1DE1DA742274D358D10F17053F42BC48DCB2DC9E6F5BC2C7D3958B6 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\bin\Release\net8.0\BotAgent.Storage.dll | B90414E1B985F0AA97AB84EABFA074B5773C31B4A73CD9E530DDA313157F39D0 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ArchitectureProbe\bin\Release\net8.0\BotAgent.ArchitectureProbe.dll | 664342F7E07AAEFA20EC38ABDCC57D48D476BA3A451CBF89E0AD6C55CB683B56 |
+| %WORKDIR%\bot-agent\tests\BotAgent.BridgeProbe\bin\Release\net8.0\BotAgent.BridgeProbe.dll | 5D53C94BA1845A48B66F97C8685BE38C69567C88F6BEA9B21A7147E1F45569A0 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ChaosFaultProbe\bin\Release\net8.0\BotAgent.ChaosFaultProbe.dll | 1A283CFD8522F155D10456872061455F0771C8F3AD4B4FD12CC88A26B74F0763 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ConcurrencyStressProbe\bin\Release\net8.0\BotAgent.ConcurrencyStressProbe.dll | 4793007D5B2A4D4AE93C33BEFA2B8E55DFF7DCAFEE16F2D6ACF1952F7B52EE6E |
+| %WORKDIR%\bot-agent\tests\BotAgent.DeadlineGateProbe\bin\Release\net8.0\BotAgent.DeadlineGateProbe.dll | 343C5192D4605CD59E9795CA3B63D32D81DD1D73A3C92D7376ABF3407AD5D092 |
+| %WORKDIR%\bot-agent\tests\BotAgent.FeishuRemediationProbe\bin\Release\net8.0\BotAgent.FeishuRemediationProbe.dll | 204C2F092CFB301A5939663079321E8E7C619A2A074C526EB80559B7BF20CAC3 |
+| %WORKDIR%\bot-agent\tests\BotAgent.IntegrationHarness\bin\Release\net8.0\BotAgent.IntegrationHarness.dll | 40268FF4F2F13D0A6A1E4CBB396397EDCDC2E71C0F8F74269FF5DF0C04E8D5C8 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ParticipationProbe\bin\Release\net8.0\BotAgent.ParticipationProbe.dll | FC865CDBF49E45109C6567C2CF09CB96A349780955DAE8289F5E5824CFD940A7 |
+| %WORKDIR%\bot-agent\tests\BotAgent.PipelineEval\bin\Release\net8.0\BotAgent.PipelineEval.dll | 59132A5B1F570A184144549B6980CB972EC9DD422FB38E92CF07B57457AF4D0D |
+| %WORKDIR%\bot-agent\tests\BotAgent.ProductionSpecProbe\bin\Release\net8.0\BotAgent.ProductionSpecProbe.dll | 0B9D7FE0DE8C4C34A80E95DC7CE66835810F8794E886D3F25227A077A8073B53 |
+| %WORKDIR%\bot-agent\tests\BotAgent.ReverseTransportProbe\bin\Release\net8.0\BotAgent.ReverseTransportProbe.dll | F12214E01A38DCDA762A29D2C65641AB7080C1DCB28BE988B31A0B6F5FDFDCEB |
+| %WORKDIR%\bot-agent\tests\BotAgent.ReviewRemediationProbe\bin\Release\net8.0\BotAgent.ReviewRemediationProbe.dll | 891C4803182211C44869134FF58E08976DE0B23147D94EA298D41026B6E57652 |
+| %WORKDIR%\bot-agent\tests\BotAgent.SafetyProbe\bin\Release\net8.0\BotAgent.SafetyProbe.dll | 62B5FACFB39161BEC887AFB0A81C9BCBBBD3632D025D26AF6708792930FE7B44 |
+| %WORKDIR%\bot-agent\tests\BotAgent.SettingsScopeProbe\bin\Release\net8.0\BotAgent.SettingsScopeProbe.dll | 3F34500AA20BE52104540885C3B45997057FF26FE6C65A53EE1883B8ECCCF2FB |
+| %WORKDIR%\bot-agent\tests\BotAgent.SsrfProbe\bin\Release\net8.0\BotAgent.SsrfProbe.dll | A3AC1BFF8EC6BEFF121E22673351ACACE78B3275FF3719FB9A655D906F8BE068 |
 
 ## 十五、C3/C4 契约准入评审（Agent-00，持续授权）
 
@@ -1470,7 +1470,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 - 负责人已授权00持续推进至阶段一可开工，不重复请求批准；仍不授权提交/推送/部署/发布/生产。C2-B于2026-10-09T19:43:36+08:00已关闭46认领（45实际变化/1未改），架构/实际宿主证据见第十四节，不复用历史红灯状态。
 - 本批只写本总纲，不改代码/项目引用/测试/CI/部署，不运行新项目构建或测试。00独占最终文档写入，三个只读设计评审助手无写权/旧文件交接/波次执行权，不将其候选意见冒充01～06整体冻结或Wave1验收。评审采用codebase-design的DESIGN-IT-TWICE流程，分别比较最小入口、跨消费者扩展、旧宿主/06默认调用；所有提案标为候选，真实接口先查定义。
-- 开始输入：HEAD 1f3181e21e8d1f9531e41066b033d8d60218d580，main；安全库存514/SHA 99A076BE134C78783BF0879513E03CC7DE8FE4111E848A3503BDFC8E9CF5FC9C；352状态/SHA 43AB8B338E84450A291641A94A57E238A420ADBE87EB29089644BDB73818E538；index SHA 65BAD5C332E0A9C57B0A9ABD3EE2DFF8ACF9364DCE375D0F47BFF1F5D72146BC。唯一认领 E:\bot\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md，开始 SHA 8127E1AF4F588F15A506533803BBD8562D02DC42CED3E0D247D7A507495D6040；会话保留开始字节副本/哈希，仅作本批片段对照。既有源码及C1/C2成果不计为本批改动。
+- 开始输入：HEAD 1f3181e21e8d1f9531e41066b033d8d60218d580，main；安全库存514/SHA 99A076BE134C78783BF0879513E03CC7DE8FE4111E848A3503BDFC8E9CF5FC9C；352状态/SHA 43AB8B338E84450A291641A94A57E238A420ADBE87EB29089644BDB73818E538；index SHA 65BAD5C332E0A9C57B0A9ABD3EE2DFF8ACF9364DCE375D0F47BFF1F5D72146BC。唯一认领 %WORKDIR%\bot-agent\docs\plans\agents\00-orchestration-and-dependency-graph.md，开始 SHA 8127E1AF4F588F15A506533803BBD8562D02DC42CED3E0D247D7A507495D6040；会话保留开始字节副本/哈希，仅作本批片段对照。既有源码及C1/C2成果不计为本批改动。
 - 只看源码/计划及安全元数据，不读真实数据/环境值/日志。评审依赖分类：候选构造/校验/发布为in-process；真实SQLite、独立临时文件为local-substitutable；平台/模型远端检查为true external，仅以合成mock验证，不能混入DB事务。用户要求保留全部原断言，设计技能中replace测试不适用于本批，不删测试。
 - 尚缺：C3精确非秘密类型/字段、生效及环境投影、版本/幂等/响应丢失、事务审计seam/旧HTTP兼容；C4稳定标识/能力/动作支持矩阵；C5早期06安全/组装审查。当前没有新Core业务签名，不据只读报告宣布阶段一可开工。
 - 辅助只读错误单列：上一轮候选IStorage.cs查询pwsh1（真实目录无该接口），立即停止该读链，随后枚举并读实际ISettingsRepository/Secrets/Platform/Plugins定义；不创建错误文件或使用臆造接口。14.4手册逆向校验初次失败已单列，其后验证通过。
@@ -1484,13 +1484,13 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 | 已有定义/真实消费者 | 当前证据及C3/C4影响 |
 | --- | --- |
-| E:\bot\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs；E:\bot\bot-agent\src\BotAgent.Headless\Services\SettingsBox.cs:46～64；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SettingsStore.cs:58～90 | Host类型耦合仍在；保存先persist后publish，配置与具体AuditLogStore事务已有可复用入口；不能原样把AppSettings/Platforms依赖搬Core，不能虚构IAuditChain的事务方法 |
-| E:\bot\bot-agent\src\BotAgent.Storage\AppDatabase.cs:178～209；E:\bot\bot-agent\src\BotAgent.Storage\SecretsStore.cs:95～120；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs:131～147,298～324,414～422,725～732 | C2唯一writer拒绝嵌套Write；秘密Save依旧独立事务/默认false，旧HTTP mutate仍直接调用且忽略bool。外层Write包旧Save不是整批原子；这是静态缺口，本批未动态复现，不归为C2迁移新回归 |
-| E:\bot\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs:593～642；同Settings.cs:291,515,893,991 | DeviceConfig本身没有Key，安全parser只取固定字段；但AgentDevices原字符串仍可含任意字段并原样保存/回显。feishuVerificationToken仍明文配置入出。非秘密快照须允许列表和结构化设备投影，不能仅剔apiKey或把JsonIgnore当安全证明 |
-| E:\bot\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs:87～120,170～182；同Settings.cs:30～58 | 发布后步骤含待回复/参与/审批清理、消息窗口裁剪、后续registry.Save和外部TTS文件写入。都不等于同一配置TX；重放不得再次发布/裁剪/外部IO，部分应用/崩溃必须可查询且诚实报告未知 |
-| E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\BotConfig.cs:29～44；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\ModelProviderStore.cs:40～90 | 启动环境投影仍普通Save回写，旧入口不能绕版本；模型配置元数据与熔断运行态分开，SaveCircuit不计配置版本 |
-| E:\bot\bot-agent\src\BotAgent.Core\Domain\Platforms\PlatformId.cs:41～44；E:\bot\bot-agent\src\BotAgent.Platforms\Governance\PlatformRegistry.cs:14～33,56～64 | 已有InstanceId，但实际索引只有PlatformId/AccountScope，不同实例覆盖；Enabled硬编码true。新增管理标识须实例隔离，不能继承这两个伪状态作为验收 |
-| E:\bot\bot-agent\src\BotAgent.Core\Domain\Plugins\IPluginRegistry.cs；E:\bot\bot-agent\src\BotAgent.Headless\Services\Plugins\PluginManager.cs:41～79；E:\bot\bot-agent\src\BotAgent.Storage\PluginStore.cs:9～48 | 查询端口可复用；SetEnabled仅内存，批量生命周期不等于热启停或禁用IO。PluginStore未发现生产采用，实例锁和先读后写不保证多个实例不丢更新；插件ID大小写与旧状态兼容须明确 |
+| %WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\SettingsBox.cs:46～64；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SettingsStore.cs:58～90 | Host类型耦合仍在；保存先persist后publish，配置与具体AuditLogStore事务已有可复用入口；不能原样把AppSettings/Platforms依赖搬Core，不能虚构IAuditChain的事务方法 |
+| %WORKDIR%\bot-agent\src\BotAgent.Storage\AppDatabase.cs:178～209；%WORKDIR%\bot-agent\src\BotAgent.Storage\SecretsStore.cs:95～120；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs:131～147,298～324,414～422,725～732 | C2唯一writer拒绝嵌套Write；秘密Save依旧独立事务/默认false，旧HTTP mutate仍直接调用且忽略bool。外层Write包旧Save不是整批原子；这是静态缺口，本批未动态复现，不归为C2迁移新回归 |
+| %WORKDIR%\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs:593～642；同Settings.cs:291,515,893,991 | DeviceConfig本身没有Key，安全parser只取固定字段；但AgentDevices原字符串仍可含任意字段并原样保存/回显。feishuVerificationToken仍明文配置入出。非秘密快照须允许列表和结构化设备投影，不能仅剔apiKey或把JsonIgnore当安全证明 |
+| %WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs:87～120,170～182；同Settings.cs:30～58 | 发布后步骤含待回复/参与/审批清理、消息窗口裁剪、后续registry.Save和外部TTS文件写入。都不等于同一配置TX；重放不得再次发布/裁剪/外部IO，部分应用/崩溃必须可查询且诚实报告未知 |
+| %WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\BotConfig.cs:29～44；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\ModelProviderStore.cs:40～90 | 启动环境投影仍普通Save回写，旧入口不能绕版本；模型配置元数据与熔断运行态分开，SaveCircuit不计配置版本 |
+| %WORKDIR%\bot-agent\src\BotAgent.Core\Domain\Platforms\PlatformId.cs:41～44；%WORKDIR%\bot-agent\src\BotAgent.Platforms\Governance\PlatformRegistry.cs:14～33,56～64 | 已有InstanceId，但实际索引只有PlatformId/AccountScope，不同实例覆盖；Enabled硬编码true。新增管理标识须实例隔离，不能继承这两个伪状态作为验收 |
+| %WORKDIR%\bot-agent\src\BotAgent.Core\Domain\Plugins\IPluginRegistry.cs；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Plugins\PluginManager.cs:41～79；%WORKDIR%\bot-agent\src\BotAgent.Storage\PluginStore.cs:9～48 | 查询端口可复用；SetEnabled仅内存，批量生命周期不等于热启停或禁用IO。PluginStore未发现生产采用，实例锁和先读后写不保证多个实例不丢更新；插件ID大小写与旧状态兼容须明确 |
 
 - 父任务按真实Settings.cs写入段提取到153个body字段名引用，含审计专用ttsKey、clear与状态动作，不是153个合法可写字段/已冻结schema。只有逐setter/验证器/secret与即时动作分类后，才能成为完整字段矩阵。
 - Core/Storage/Platforms/Model当前依赖维持第十四节事实；新Engine/Mcp/Panel/Web并未开工。MCP检索无匹配按查询结果登记，不作为协议互通验收。旧HTTP、新ZBA与跨介质应用必须分别确认兼容和安全边界。
@@ -1521,8 +1521,8 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 15.4 未冻结项、确切审查队列与下一合入条件
 
 - **阶段一仍不能宣告可开工**：完整C3字段/秘密/生效/环境投影矩阵、精确类型/签名与消费者确认、版本及幂等TTL/容量/过期政策、旧HTTP兼容、C4实例/动作能力与取消释放、C5早期安全消费审查尚不完整。三个顾问报告完成不是正式消费者整体冻结；00不把这些缺口掩成可并行施工或Wave1准出。
-- 后续01审查：拟新增（尚不存在、非认领）E:\bot\bot-agent\src\BotAgent.Core\Domain\Configuration\ConfigurationContracts.cs、E:\bot\bot-agent\src\BotAgent.Core\Domain\Ports\IConfigurationChanges.cs、E:\bot\bot-agent\src\BotAgent.Core\Domain\Management\ManagedCapability.cs；实际事务实现候选E:\bot\bot-agent\src\BotAgent.Storage\ConfigurationStore.cs、E:\bot\bot-agent\src\BotAgent.Storage\AuditLogStore.cs。名字/文件划分随精确契约评审调整，不能当作已有调用入口或自动写权。
-- 00共享补丁审查确切现有路径：E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SettingsStore.cs、AuditLogStore.cs、BotConfig.cs、ModelProviderStore.cs（后三者同目录）；E:\bot\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs、SettingsBox.cs；E:\bot\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs；E:\bot\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs；E:\bot\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs、WebUiServer.Audit.cs、WebUiServer.cs；E:\bot\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs。均为审查队列，不因本批文档认领获得代码写权，不删除旧保存通路。
+- 后续01审查：拟新增（尚不存在、非认领）%WORKDIR%\bot-agent\src\BotAgent.Core\Domain\Configuration\ConfigurationContracts.cs、%WORKDIR%\bot-agent\src\BotAgent.Core\Domain\Ports\IConfigurationChanges.cs、%WORKDIR%\bot-agent\src\BotAgent.Core\Domain\Management\ManagedCapability.cs；实际事务实现候选%WORKDIR%\bot-agent\src\BotAgent.Storage\ConfigurationStore.cs、%WORKDIR%\bot-agent\src\BotAgent.Storage\AuditLogStore.cs。名字/文件划分随精确契约评审调整，不能当作已有调用入口或自动写权。
+- 00共享补丁审查确切现有路径：%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Persistence\SettingsStore.cs、AuditLogStore.cs、BotConfig.cs、ModelProviderStore.cs（后三者同目录）；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\AppSettings.cs、SettingsBox.cs；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Ports\ISettingsRepository.cs；%WORKDIR%\bot-agent\src\BotAgent.Headless\Services\Settings\SettingsHotReload.cs；%WORKDIR%\bot-agent\src\BotAgent.Headless\Adapters\Panel\WebUiServer.Settings.cs、WebUiServer.Audit.cs、WebUiServer.cs；%WORKDIR%\bot-agent\src\BotAgent.Headless\Host\CompositionRoot.cs。均为审查队列，不因本批文档认领获得代码写权，不删除旧保存通路。
 - 消费者评审队列：02对PlatformOptions/PlatformRegistry三元实例及字段生效，03对ModelProviderStore元数据/熔断及Model思考none语义，04对Plugins状态/工具调度及业务仓储，05对未实现MCP未来配置及远程失败语义，06对HTTP输入/安全DTO/恢复/启动与TTS跨介质；00登记实际确认者、时间、版本/文件并最终合入共享补丁。02/03代码仍冻结，04～07无新增写权，旧文件交接为空。
 - 新ZBA具体认证/授权、Cookie-CSRF、跨域/流认证安全边界仍按面板规划由06提交、负责人批准；本批不改安全方案、不猜路由/OpenAPI。旧HTTP字段/null/裁剪行为兼容需逐项映射，不把新严格规则直接施加旧请求；CLI依旧只读，官方Secret禁令不因旧接口而豁免。
 - 后续合成用例必须通过真实新保存入口/旧HTTPadapter：合法多分区及允许秘密一起提交；后段非法类型或各事务写点故障全回滚；secret.Save故障不得被吞；同版本竞争/同键同参/异参/响应丢失/重启/过期及有界容量；persist失败不发布、发布/派生/TTS文件失败保留提交事实、重放不重新清理/裁剪；设备嵌套未知secret字段和verification token不回显；启动环境投影不绕CAS；三元实例同scope隔离、插件禁用/停止/取消释放与unsupported动作。只用现有真实Review/SettingsScope/Architecture/Safety/Production工程及IntegrationHarness，新文件/公共入口认领后落地；集成前重建Headless，不造测试工程、不删原断言。
@@ -1644,7 +1644,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 19.1 本次专项发布授权与范围
 
 - 负责人本次明确要求推送当前进度/文档到ZhaoJun233/bot-agent的review/core-platforms，随后明确“代码也推送”。授权仅当前代码/文档快照、必要本地提交对象及该分支普通快进推送；不推main/dev、不强推、不部署/发布应用或生产操作，不批准0.3契约/波次。
-- 源仓库唯一E:\bot\bot-agent，当前main/1f3181e21e8d1f9531e41066b033d8d60218d580及既有354状态/20暂存删除保留；源码既有改动是发布输入，不改称00本任务全部成果。17:50:06.1258108+08:00，557登记路径/465现存文件，逐路径哈希或MISSING全量库存SHA 5EDC76A1103E0599DE38CE2F0EE5638DD962BB06256AA46D6BD6B5C166FE0925；index SHA 65BAD5C332E0A9C57B0A9ABD3EE2DFF8ACF9364DCE375D0F47BFF1F5D72146BC；展开状态SHA 3F79627FF5A7F7AF3029DEF0603AA9101C3B982292949B5AF12E602732B66230。
+- 源仓库唯一%WORKDIR%\bot-agent，当前main/1f3181e21e8d1f9531e41066b033d8d60218d580及既有354状态/20暂存删除保留；源码既有改动是发布输入，不改称00本任务全部成果。17:50:06.1258108+08:00，557登记路径/465现存文件，逐路径哈希或MISSING全量库存SHA 5EDC76A1103E0599DE38CE2F0EE5638DD962BB06256AA46D6BD6B5C166FE0925；index SHA 65BAD5C332E0A9C57B0A9ABD3EE2DFF8ACF9364DCE375D0F47BFF1F5D72146BC；展开状态SHA 3F79627FF5A7F7AF3029DEF0603AA9101C3B982292949B5AF12E602732B66230。
 - 远端指定分支已通过git ls-remote核实为56d3f4dd9e912ff1d7f295e12fb9d51cb2c53073；只将这个父提交作为公开评审快照的基底，源HEAD/index不移动。采用独立临时index→已提交快照对象→git archive该精确commit→独立公开临时clone的脱敏树；不直接推带源历史的提交，避免内部历史外泄。
 - 00追加本总纲发布记录写权及仅本批派生目录.git/agent00-publish-20261010-175006/**（helper、临时index、快照/克隆、归档及安全计数证据）；该目录须解析后在本仓库.git内且原先不存在。不修改源码/测试/CI/部署或现有外部发布脚本，不写原暂存区；不将临时helper纳入公开文件。不清理他人目录。
 - 全量源码/测试/文档及必要根文件作为封闭文件清单，排除真实data/logs/runtime/.env/密钥、构建产物及内部handoff；.env.example仅合成模板且仍受双审计。先冻结输入指纹，归档后复核无漂移。现有发布main固定dev不能盲跑，复用其REPLACEMENTS/FORBIDDEN/历史禁路径与两独立审计原实现，参数化snapshot扫描，绝不放宽RULES或删门禁。
@@ -1872,7 +1872,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 22.1 本次授权、准入与写权
 
 - 负责人本次明确答复：**授权 Agent-01 十文件实施与合成验证，协调 Agent-00 合入共享补丁**。当前主聊天/root 绑定 Agent-01 唯一实施席位；/root/agent00_integration 绑定 Agent-00 共享最终集成席位。21.2 十文件范围与十四共享队列保持，未移交共享源码给01；无提交、推送、部署、发布、生产或下游源码写权扩张。
-- 00于 2026-10-12T10:19:00.1917597+08:00 复核：唯一仓库 E:\bot\bot-agent；HEAD=1f3181e21e8d1f9531e41066b033d8d60218d580；契约 SHA256=7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203；AppDatabase 输入033C222A9FB5B5D282A04F798EC25E0F1C8043A6199B91629B14AC25AE2E22C6、SecretsStore 输入074D4701B5EF8C045D47FFAD36560F32308900F7BEE144B25A9335AA9118CE15 均匹配；八NEW路径均不存在。当前status既有改动/20暂存删除保留，不归本任务成果。三次pwsh只读核对退出0；没有运行build/test。适用src/tests/docs嵌套AGENTS搜索为空；两级AGENTS、总规划/执行总纲/01手册及冻结契约已读取。
+- 00于 2026-10-12T10:19:00.1917597+08:00 复核：唯一仓库 %WORKDIR%\bot-agent；HEAD=1f3181e21e8d1f9531e41066b033d8d60218d580；契约 SHA256=7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203；AppDatabase 输入033C222A9FB5B5D282A04F798EC25E0F1C8043A6199B91629B14AC25AE2E22C6、SecretsStore 输入074D4701B5EF8C045D47FFAD36560F32308900F7BEE144B25A9335AA9118CE15 均匹配；八NEW路径均不存在。当前status既有改动/20暂存删除保留，不归本任务成果。三次pwsh只读核对退出0；没有运行build/test。适用src/tests/docs嵌套AGENTS搜索为空；两级AGENTS、总规划/执行总纲/01手册及冻结契约已读取。
 - 本总纲本批输入SHA256=A370A1F157596A8C8B45733F1199DC48887596BA3A522203AE26A7A9761E1F92。只增本节，当前仍无源码改动；Agent-01原十文件准入生效，可在原有约束下实施。各共享补丁实际写前另登记输入hash/改段/协商接口，串行验证防共享构建产物碰撞；实现准入不等于Wave1准出。
 
 ### 22.2 待批准的精确范围调整
@@ -2521,7 +2521,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 22.88 合成回退baseline bundle捕获前置登记（不是回退验收）
 
 - Root独占原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，13:14本轮实测inputSHA256=A7F385821D37E5FB04BB3CB7C6F9B0A26358142B520172C92B6AFF2912341F8F。仅既有closed factory新增 --configuration-capture-bundle <repoRoot> <captureRoot> <expectedHeadlessHash> 合成证据入口；无新源码路径/公共Program/业务接口/契约修改，00只本文登记、不build。Root获本条可编辑该测试并独占串行真实Review构建/捕获与Headless -t:Rebuild；所有shared及Storage产品源码继续冻结，不并行build。
-- 唯一证据根 E:\bot\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670，Root独占，13:14实测不存在；本次仅其 bundle 子目录资产与安全manifest。不得创建第二工作仓库、复制真实DB/data/log/env/config或全目录archive。未来preimage.db只准现合成AppDatabase fixture与真实backup primitive产生，须下一明确登记后再创建，本条不准复制任何已有用户DB。
+- 唯一证据根 %WORKDIR%\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670，Root独占，13:14实测不存在；本次仅其 bundle 子目录资产与安全manifest。不得创建第二工作仓库、复制真实DB/data/log/env/config或全目录archive。未来preimage.db只准现合成AppDatabase fixture与真实backup primitive产生，须下一明确登记后再创建，本条不准复制任何已有用户DB。
 - 00实读当前Headless.deps：12 managed runtime资产（含Headless/Core/Platforms/Storage）+22 declared native runtimeTargets+deps/runtimeconfig/apphost三项=37精确白名单；managed按真实输出leaf映射、native保持deps相对路径，需集合去重/实际存在/路径约束验证后才复制。拒absolute/traversal/重名/额外文件；source真实路径严格在现 src/BotAgent.Headless/bin/Release/net8.0，target严格在该nonce bundle，不跟随越界reparse/symlink。不收PDB、任意JSON、用户文件、日志或未声明资产；manifest只相对路径/SHA/sourceREV/冻结contract/captureUTC等安全形状，不写环境值。
 - 本轮当前Headless SHA256=5A04E2742CDF3773BAC788487DD839202FC3B573EA85255D598C44C3B37C02E1，deps=C5D165910A5ACA35AEB131848C24AA13C5F24FEF40FDF8E1F79DE3C24D5209F8、runtimeconfig=95505548C838F72A6A829FD5332DBC674C715CE26A216E9EB32BEC8B5821EAE2、apphost=0F4200FFE028C384C2B3FAC39015DD3DC5D136DCD550497418F2E9BC4B0270C6。先记录37asset逐项hash与五source指纹，再真实Headless Rebuild；期望Headless及所有来源asset前后不变，变动即停止绑定旧22.84已验baseline，说明并重新准入/验证，不能悄以新产物替旧。复制后逐项hash/完整集合核验，拒未知已有内容，不覆盖非本任务资产；记录命令/时间/exit及manifesthash，无失败自动清理。
 - 保存该baseline直到完整Wave1验收或负责人明确批准证据退役，不自动删除。后续旧bundle+对应合成preimage进程运行/比较才可证明整套回退；本批capture成功最多证明资产取证，不证明新宿主采用、旧binary兼容新schema、生产回退、Wave1或2A/2B准入。framework-dependent .NET8运行时/OS记录为外部环境，不假称bundle包含整机回退。
@@ -2710,7 +2710,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 22.113 迁移前合成数据库前镜像捕获单步准入（不是回退验收）
 
 - Root明确同意本最短前镜像单步，00实核唯一源码路径为Root原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs，inputSHA353081E7543706EFA5969C7DAE576AC27F8BC0A1D4B9DF4659955851BD9E04A4。仅同文件closed child/factory复用既有真实仓储/备份，不新增源码/测试路径、公共Program、公开C3接口或产品patch；全部产品保持冻结，00不build，Root唯一必要捕获命令，不顺带无关全套。
-- Root独占原ignored证据根 E:\bot\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670 下精确派生写权：preimage.db、preimage-manifest.json、backup-staging目录及本child产生的合成DB/日志性SQLite sidecar/备份暂存文件。只用于此一次UUID隔离fixture和真实备份，路径必须解析后仍在该nonce根/明确staging内；目标已存在、重复或越界即拒，不覆盖/删除未知文件，不复制真实data/env/config/log。旧37asset bundle及manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542一字不改、不替换为当前新binary、不自动退役证据。
+- Root独占原ignored证据根 %WORKDIR%\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670 下精确派生写权：preimage.db、preimage-manifest.json、backup-staging目录及本child产生的合成DB/日志性SQLite sidecar/备份暂存文件。只用于此一次UUID隔离fixture和真实备份，路径必须解析后仍在该nonce根/明确staging内；目标已存在、重复或越界即拒，不覆盖/删除未知文件，不复制真实data/env/config/log。旧37asset bundle及manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542一字不改、不替换为当前新binary、不自动退役证据。
 - closed child只初始化隔离synthetic AppDatabase，复用原SettingsStore.Save、固定可写slot、provider真实原语及旧六字段device用户JSON形成与旧Headless5A04格式预期兼容的基准事实；不调用ConfigurationStore.Activate、不写新typed policy/provider sentinel/origin，不把当前module声明当旧binary实读证明。不读真实环境或数据库；子进程按名字清继承环境再仅设合成路径/值，输出仅固定码、计数/hash/版本，不回显fixture秘密或配置内容。
 - 实际备份接口已查询为AppDatabase.VacuumIntoBackup(string? backupDir=null,int maxRetained=3)，本次maxRetained=int.MaxValue，backupDir仅nonce内backup-staging，避免retention删除其它备份；备份正常返回后核返回路径在staging且为本次产物，再仅精确移到不存在的preimage.db，不递归move/delete。文件hash与预期表形状/版本形成preimage-manifest.json，记录固定baseline artifact5A04、契约/源版本、相对名、安全hash/计数/版本；不写秘密/JSON正文/真实路径配置。
 - 本次RollbackVerified=false，旧bundle+preimage联合实际恢复尚未执行，格式预期兼容不作BaselineCompatibilityVerified。后继统一writer/迁移完成后须独立真正新版本→恢复这份前镜像+原整套旧bundle的行为演练，不能用本捕获、新binary重启或codec fixture代替。源完成后Root只必要build+closed capture取真实时间/exit/hash/形状，结果后置；失败保留证据并拒绝伪造成功，不为凑验收重跑无关probe。
@@ -2846,7 +2846,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 下一闭合批拟改input（00本次实核；仅冻结、没有产品准入）：
 
-| Owner | 精确路径（仓库根E:\bot\bot-agent） | SHA256 |
+| Owner | 精确路径（仓库根%WORKDIR%\bot-agent） | SHA256 |
 | --- | --- | --- |
 | 00 | src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs | 459F4DE9F8A17A4DD5F1C95DFC6E89D8EECE6EE403B118EC63FFD1420DAE42AF |
 | 00 | src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs | C7223BCE9D3BB45B098AAFD4E79985B8867F4AB2FCD528F293F7AF5BA6E3FEE9 |
@@ -2877,7 +2877,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 - 2026-10-15 21:44 +08 本轮只读/源码静态核验：HEAD仍1f3181e21e8d1f9531e41066b033d8d60218d580，展开status376/20暂存删除，LFjoin SHA D5E4C54AB20A7A7AE5481A1719D178DA16D1BAA43A1B265FC0CE9AD110DD4850；不同于上一374，不清理/不伪称状态未变。冻结候选全文SHA7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203不变。00只改22.130七shared与本总纲，未写Root源/新增路径/未授权文件，未build/test/启动任何产物。
 - Root四产品实际已落、00只读复核：ConfigurationStore211C446693AEF49077C16E61A963A888B66F6171DA2F85AF0A0B8FBBE27263F9；BridgeCF8FD677C840A2FB78BADCCD7CF58326BAAEE36BDAD99AC996274B85D85AA34D；Secrets637F3ACF68CB058B5A5A8A7C157FAD05D7B1A7700EFE0089E527BED8DDB6E914；Plugin44CB2730C0007F50575A34E6406C3E803401058323536E43BD0DB0FCDA865548。版本桥复用原同conn SQL；六槽公开writer在原Write内fence，official历史API拒/不读旧row，非C3cookie/password保兼容；Plugin复用唯一meta SQL、strict decodedduplicate/坏格式/Ordinal拒审，同conn API已存在且公开Set fence。Root test最新56BDEBE8BE3E8A8B34453AE3AC4B3199F399827617927F85E601E0FF226FDCBC，本批writer-boundaries预期27与真实独立进程HTTP factory均未实测，不报绿。旧HostAdapter故意污染DB fixture改用限定同conn原语，保原NeedsReview/版本断言，不关闭产品fence换绿。
 
-| 00完整路径（均在E:\bot\bot-agent\） | 冻结SHA256 | 行数 |
+| 00完整路径（均在%WORKDIR%\bot-agent\） | 冻结SHA256 | 行数 |
 | --- | --- | --- |
 | src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs | 85DA3A17D83C5AFED1BF756DF6DA4DD008B270AA5AB507B4311492052AEF2549 | 451 |
 | src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs | AF7590D88E31B98CADEC585A43F2EA0460EB56325338982DF39CA2796830F25A | 1732 |
@@ -2930,7 +2930,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 22.136 真实旧产物加前镜像三阶段回退演练准入（尚未执行）
 
 - Root确认仅原owned tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs添加唯一closed factory --configuration-whole-rollback <repo> <capture>；00当前实测input821BF19B33AA084C4E4205F43315EA1BC4C2608174FD87C255573E35C584CD06。Root写前核input，若自有前序fixture更改已不同，先续登记新指纹，不逆写/覆盖。无新测试路径/公共Program/产品源码，本条后才实施；00不构建/启动。
-- 派生写权精确仅Path.GetTempPath()/botagent-configuration-whole-rollback-<32hex>首次全新staging，及原capture E:\bot\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670/rollback-proof-<同32hex>.json（exclusive create、拒已有目标/reparse/越界）。原bundle37与manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542、preimage954F62E5721B3BA96EC1DBC377A2DEA1000DA589F5D3E3790DDF1717D448238D、preimage-manifestE925741572580BE05DC685A1BF39C799B7B2636426D055622CCAB3AA1A54F955全只读，原两false布尔不改。37asset按manifest相对路径逐hash复制/核验，不全目录复制或混用新Storage/DLL；不得复制真实DB/env/config/log。
+- 派生写权精确仅Path.GetTempPath()/botagent-configuration-whole-rollback-<32hex>首次全新staging，及原capture %WORKDIR%\bot-agent\.git\agent01-wave1-rollback-b3a84e32821f442cb72d0d7aee14d670/rollback-proof-<同32hex>.json（exclusive create、拒已有目标/reparse/越界）。原bundle37与manifest3FC9BC4DC7E8B91BAAFFC1604B0E8B8A47E51F62003720B28494F02E37279542、preimage954F62E5721B3BA96EC1DBC377A2DEA1000DA589F5D3E3790DDF1717D448238D、preimage-manifestE925741572580BE05DC685A1BF39C799B7B2636426D055622CCAB3AA1A54F955全只读，原两false布尔不改。37asset按manifest相对路径逐hash复制/核验，不全目录复制或混用新Storage/DLL；不得复制真实DB/env/config/log。
 - 固定三阶段：先旧37bundle+前镜像副本真实启动捕获safe基线→停止且实际exit可见→同staging的新完整候选启动并迁移/合成typed配置与秘密提交→停止所有自有进程/非pool连接关闭→精确恢复旧37产物与原前镜像副本→再次真实旧Headless启动比较settings/device/provider/六固定槽受控hash/shape。旧产物须dotnet旧DLL/真实native依赖启动，不用新C3/codec fixture冒兼容；初次旧artifact兼容也必须真验，当前仍false。只允许本次staging内RuntimeRoot/data/qqchat.db及其-wal/-shm恢复处置，先实际路径边界验证、进程全停/自有连接关闭与必要清池后才能覆盖；绝不全局kill或递归清未知目录。恢复不碰原前镜像/真实数据。
 - 每个子进程清继承BOTAGENT/QQCHAT/OPENAI/FEISHU/MINIMAX/TTS名称后仅固定synthetic/mock/loopback环境，关闭真实协议/主动任务/bridge外发；原preimage是physical9/version0、六slot6、primary disabled、旧六字段device且无typedpolicy/provider-origin，不提前灌新meta/sentinel。旧GET可能保旧plain Token路径，测试只在内存比hash/shape，绝不回显/写证据正文或secret。新proof只有相对名/hash/计数/版本/exit/时间/布尔，真通过再独立记事实，不预置RollbackVerified=true。
 - Root两次只读误猜DataRoot.cs/Storage ModelProviderStore.cs导致rg退出2立即停，后已枚举定位真实Storage/AppPaths.cs及Headless适配器ModelProviderStore，不算产品失败。Root唯一builder等22.135两shared重冻与本test源就绪才验证；当前本条只是准入，不宣称回退通过/Wave1准出/Wave2开启。
@@ -3089,10 +3089,10 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 22.160 用户明确review分支落点与隔离发布准备准入（未提交/未发布）
 
 - 负责人新增明确要求可落点提交至GitHub ZhaoJun233/bot-agent 的review/core-platforms，非main/dev/部署/Wave2。Root已查询/fetch真实review tip47e66072419808b219430693908acaadd0598b50，已有Stage1 Core/Storage/Platforms/文档；dev26227b7、main7cc69d不触碰。必须按已存在远端review树与当前脱敏后差异形成白名单，不按本地旧HEAD378项盲stage或纳入所有既有修改。
-- 精确派生目录.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b/认领给Root独占，可写publish_checkpoint.py、manifest.json、source.index、native-results.json、publish-result.json及其封闭publish/verify子目录；不写外部工作目录/原E:\bot发布脚本/产品/真实git index/HEAD。source.index仅子进程GIT_INDEX_FILE基于已fetch47e树叠经审定白名单，commit-tree创建明确本地checkpoint sourcecommit、导出该commit，不能把旧HEAD/任意未提交工作区假称发布来源；原20暂存删除/index原样保留，禁止stageall/reset/checkout/clean。Root负责实际commit/push，00本席只审计与总纲。
+- 精确派生目录.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b/认领给Root独占，可写publish_checkpoint.py、manifest.json、source.index、native-results.json、publish-result.json及其封闭publish/verify子目录；不写外部工作目录/原%WORKDIR%发布脚本/产品/真实git index/HEAD。source.index仅子进程GIT_INDEX_FILE基于已fetch47e树叠经审定白名单，commit-tree创建明确本地checkpoint sourcecommit、导出该commit，不能把旧HEAD/任意未提交工作区假称发布来源；原20暂存删除/index原样保留，禁止stageall/reset/checkout/clean。Root负责实际commit/push，00本席只审计与总纲。
 - 原publish-qqchat.py的REPO仍旧qqchat-src、clone硬dev，不能直接跑；允许新nonce adapter只注入明确源repo/sourcecommit/目标review clone与普通push分支，复用原完整脱敏REPLACEMENTS、黑名单与类别双审计以及推后独立完整克隆内容/历史复检，任何审计失败停止。禁止借adapter放宽扫描器、强推、改main/dev或泄露秘密/本地证据；日志只安全码/hash/count，原bundle/DB/proof/.git内证据不入sourcearchive。
 - 00只读raw-LF启发比较远端review树与真实存在文件，src/tests37差异+14新增、0缺失，与Root原56路径（另5docs）吻合；该比较明确非最终脱敏diff，git diff远端→本地旧index会把仍untracked的新模块误报删除，不能作为候选清单。实际闭合集包括新Core配置10文件、Storage Store/Bridge/friend和统一治理/必要查询复用、14原Headless共享/Model三guard/五Platforms、架构2精确登记+负例、Frontend与S21/Review真实测试入口；既有Stage1项目引用/旧平台迁移已在47e，不重纳20暂存删除。
-- 一项应剔除的纯既有噪声：Core/Domain/Ports/IQqActions.cs与47e真实文件比较仅末尾多一空行，非本次接口变更/闭合依赖；建议不叠入独立index（工作区不改）。README/CONTRIBUTING/.github及其它全部已有修改不可盲纳；五docs须明确选择公开安全交付/契约文档，内部执行台账和真实E:\bot运维内容不按当前总纲可写即自动公开。最终白名单仍以原替换表内存脱敏后的实际diff逐项审定，原始路径/时间/hash证据只放ignored manifest，不宣称已commit/push或发布审计已过。
+- 一项应剔除的纯既有噪声：Core/Domain/Ports/IQqActions.cs与47e真实文件比较仅末尾多一空行，非本次接口变更/闭合依赖；建议不叠入独立index（工作区不改）。README/CONTRIBUTING/.github及其它全部已有修改不可盲纳；五docs须明确选择公开安全交付/契约文档，内部执行台账和真实%WORKDIR%运维内容不按当前总纲可写即自动公开。最终白名单仍以原替换表内存脱敏后的实际diff逐项审定，原始路径/时间/hash证据只放ignored manifest，不宣称已commit/push或发布审计已过。
 
 ### 22.161 最终whole rollback原生命令终态补齐
 
@@ -3125,7 +3125,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 ### 22.164 发布快照根安全纠正（prepare前，未提交/推送）
 
 - Root执行前预检发现原publisher sanitize/inlinecheck/prune按完整绝对路径识别.git段；实际快照若位于22.160的.git祖先下会跳过这些闸，不能运行或放宽扫描器掩盖。此刻prepare/commit/push均未执行；此前.git目录发布/verify子目录准入仅作为历史提案，实际clone/导出不再使用它们。
-- 新精确生成根认领给Root独占：E:\bot\bot-agent\publish\wave1-0355336c81ff4a7897eb17425f45bb6b\，仅release/verify两个闭合子目录供实际快照/clone与完整复检；仍位于唯一工作仓库内，git原生check-ignore确认现有.gitignore的publish/规则覆盖，无需修改.gitignore或info/exclude。adapter/manifest/source.index/native-results/checked-commands/publish-result仍原.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b，所有原证据/bundle/preimage保持。
+- 新精确生成根认领给Root独占：%WORKDIR%\bot-agent\publish\wave1-0355336c81ff4a7897eb17425f45bb6b\，仅release/verify两个闭合子目录供实际快照/clone与完整复检；仍位于唯一工作仓库内，git原生check-ignore确认现有.gitignore的publish/规则覆盖，无需修改.gitignore或info/exclude。adapter/manifest/source.index/native-results/checked-commands/publish-result仍原.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b，所有原证据/bundle/preimage保持。
 - Root adapter仅重定向PUBLISH_ROOT及自有临时删除boundary到新精确nonce根，不改任何sanitize/inline/prune/黑名单/类别扫描规则，不改变显式sourceCommit/review分支/普通push/完整克隆复检。删除前须解析绝对路径确认位于该精确生成根内并拒reparse/越界，不清理其它publish内容。Root已核双审计按root相对路径扫描，不因祖先publish忽略；必须实际覆盖release/verify内容，不能据check-ignore误当审计允许跳过。
 - 此为必要发布安全修正的最后文档增量，重新冻结全文SHA向Root发送，52路径manifest必须使用新的文档hash；未伪称原93483184版本仍为当前输入。之后保持源/文档冻结，00不运行adapter/构建/测试/commit/push；prepare完成仍先manifest终审，任何扫描/差异/来源异常停止。
 
@@ -3147,7 +3147,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 - 本条是负责人新目标下的后续执行记录，不改写22.162–166发布前历史或其冻结字节。已只读复核`.git/agent01-wave1-landing-0355336c81ff4a7897eb17425f45bb6b/publish-result.json`：`published=true`、目标`review/core-platforms`、提交`95a466b757be9b1e1d0ccef880f2018eb733452f`、源checkpoint`9b60769b51e6d0609ed6538580f6f3909eed099e`、原index/HEAD保留、独立完整clone复检通过，记录时间`2026-10-16T10:08:23.013728+00:00`。本条只核既有安全结果，不重跑发布、不将review快照当作生产部署。
 - 负责人已明确授权根据文档持续推进工程、减少不必要测试、不再逐步询问确认/授权，直至第三阶段门口；本阶段按已澄清波次完成Wave2A平台及Wave2B模型，停在Wave3 Engine门口。此授权取代旧的“尚未开启Wave2”当前状态，不追改旧证据；Wave3/4/5/6、Engine/Mcp/Web新工程、提交/推送/部署/生产操作均未获本轮启动许可。
-- 唯一仓库`E:\bot\bot-agent`，Windows命令使用pwsh。2026-10-17 10:57 +08:00复核：分支main、HEAD`1f3181e21e8d1f9531e41066b033d8d60218d580`、`git status --porcelain=v1 -uall`展开378项、原20项暂存删除保留；index SHA-256 `D60C435A419AB1D2567C2FC886466CA1FD2C02DB5B456DA44D139C615D2A87FD`。不整理、暂存、恢复或清理任何原有改动。根及仓库AGENTS已重读，`src/tests/docs`未发现nested AGENTS；总规划、总纲职责/22.162–166及01/02/03手册已核。
+- 唯一仓库`%WORKDIR%\bot-agent`，Windows命令使用pwsh。2026-10-17 10:57 +08:00复核：分支main、HEAD`1f3181e21e8d1f9531e41066b033d8d60218d580`、`git status --porcelain=v1 -uall`展开378项、原20项暂存删除保留；index SHA-256 `D60C435A419AB1D2567C2FC886466CA1FD2C02DB5B456DA44D139C615D2A87FD`。不整理、暂存、恢复或清理任何原有改动。根及仓库AGENTS已重读，`src/tests/docs`未发现nested AGENTS；总规划、总纲职责/22.162–166及01/02/03手册已核。
 - C3/C4 cfg-0.3.2源冻结仍`7B7CB92AC50AF2441B1759E2190BCEC7C65885155B2581E6C2D2E18C3A3C1203`，现有FQN/签名不改；真实后续缺口分批认领、实现、以必要合成验证准出。Root兼Agent-01负责Core/Storage及唯一builder；Agent-00负责Host/projects/公共测试Program/本总纲等共享最终写入，其余角色不得直接改共享源，临时移交必须逐文件登记。
 - 当前只完成本条及22.168最小独立准入，不宣称Wave2A/B或整C4管理已完成。平台SourceInstance入站至queue/approval/tools/proactive/media出站仍须真实闭合；五元会话共享不能代替DriverKey三元路由、授权及策略隔离，不允许全局last-source或任选同账号实例。Model仍需真实Host采用唯一算法并保留兼容薄facade，不引入未有SSE。Host可信catalog/auth、同Store同账本管理及真实lifecycle/Provider连接检查仍为后续冻结登记义务。
 
@@ -3294,7 +3294,7 @@ V16 的换行诊断和最终文档 / 指纹核对见 8.6；不将验证工具问
 
 - 负责人明确：根据文档多 Agent 协作持续推进至第三阶段入口，不擅自开启第三阶段。本轮只做 Wave2A（平台）/Wave2B（模型）及必要共享收口。
 - 未创建 `Engine` / `Mcp` / `Panel` / `web` 独立工程；未启动 Wave3/4/5/6；未提交、未推送、未部署；未读取真实群聊、成员、DB 正文或生产日志。测试全部使用合成数据/隔离临时根。
-- 唯一仓库 `E:\bot\bot-agent`；HEAD 仍为 `1f3181e21e8d1f9531e41066b033d8d60218d580`；原 20 项暂存删除保留；未执行 `add -A`、reset、clean、checkout 强覆盖。
+- 唯一仓库 `%WORKDIR%\bot-agent`；HEAD 仍为 `1f3181e21e8d1f9531e41066b033d8d60218d580`；原 20 项暂存删除保留；未执行 `add -A`、reset、clean、checkout 强覆盖。
 - 本轮结束时间约 2026-10-17 23:22 +08:00；工作树 415 项（87 修改、20 已暂存删除、95 工作区删除、213 未跟踪），无 stash。
 
 ### 23.2 本轮产品源码修复（逐文件）

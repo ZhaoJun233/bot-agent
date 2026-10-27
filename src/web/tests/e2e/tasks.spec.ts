@@ -79,11 +79,12 @@ test('任务页：事件恢复真的订阅 events，resyncRequired 触发整份�
     cursors.push(after)
     if (firstEventsCall) {
       firstEventsCall = false
-      // 服务端要求重读：给出锚点 7
-      await route.fulfill({ json: { items: [], nextSequence: 7, resyncRequired: true, generatedAt: new Date().toISOString() } })
+      // 服务端要求重读：给出不同于旧回退值 7 的锚点。
+      await route.fulfill({ json: { items: [], nextSequence: 17, resyncRequired: true, generatedAt: new Date().toISOString() } })
       return
     }
-    const anchor = /^d+$/.test(after) ? Number(after) : 7
+    expect(after).toMatch(/^[0-9]+$/)
+    const anchor = Number(after)
     await route.fulfill({ json: { items: [], nextSequence: anchor, resyncRequired: false, generatedAt: new Date().toISOString() } })
   })
   await page.route('**/zba/v1/tasks?*', async (route) => {
@@ -97,6 +98,7 @@ test('任务页：事件恢复真的订阅 events，resyncRequired 触发整份�
   // resyncRequired 之后必须整份重读任务队列，而不是只认事件
   await expect.poll(() => listReads.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
   await expect(page.getByTestId('task-sync-state')).toHaveText('已追平')
+  await expect.poll(() => cursors[1], { timeout: 20_000 }).toBe('17')
 })
 
 test('任务页：事件同步失败时显示旧数据，不冒报已追平', async ({ page }) => {

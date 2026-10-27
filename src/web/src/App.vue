@@ -225,16 +225,28 @@ async function openConfiguration(): Promise<void> {
   }
 }
 
+/**
+ * 点击事件里的那个按钮。
+ *
+ * 三个引擎对"点按钮要不要给按钮焦点"并不一致（WebKit 不给），
+ * 所以"关闭模态后把焦点还给触发器"不能只靠读 activeElement。
+ */
+function navTrigger(event?: MouseEvent): HTMLElement | null {
+  const target = event?.currentTarget
+  return target instanceof HTMLElement ? target : null
+}
+
 /** 切回概览不销毁配置页，字段草稿保留；秘密输入在离开视图时丢弃。 */
 function showOverview(): void {
   configurationPage.value?.discardSecretsOnLeave()
   view.value = 'overview'
 }
 
-async function openCapabilities(): Promise<void> {
+async function openCapabilities(event?: MouseEvent): Promise<void> {
   if (view.value === 'configuration') {
     // 配置页有草稿时先走同一个三选一，避免切页绕过未保存保护。
-    const allowed = await configurationPage.value?.requestLeave('downgrade') ?? true
+    // 把点击的按钮传下去：WebKit 点按钮不给焦点，只靠 activeElement 还原不了。
+    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
     if (!allowed) return
   }
   if (view.value === 'capabilities') return
@@ -246,9 +258,9 @@ async function openCapabilities(): Promise<void> {
   if (!firstVisit) await capabilitiesPage.value?.reload()
 }
 
-async function openTasks(): Promise<void> {
+async function openTasks(event?: MouseEvent): Promise<void> {
   if (view.value === 'configuration') {
-    const allowed = await configurationPage.value?.requestLeave('downgrade') ?? true
+    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
     if (!allowed) return
   }
   if (view.value === 'tasks') return
@@ -260,8 +272,8 @@ async function openTasks(): Promise<void> {
   if (!firstVisit) await tasksPage.value?.reload()
 }
 
-async function lock(): Promise<void> {
-  const allowed = await configurationPage.value?.requestLeave('lock') ?? true
+async function lock(event?: MouseEvent): Promise<void> {
+  const allowed = await configurationPage.value?.requestLeave('lock', navTrigger(event)) ?? true
   if (!allowed) return
   configurationPage.value?.endSession()
   configurationMounted.value = false
@@ -402,7 +414,7 @@ onMounted(load)
             :class="{ active: view === 'capabilities' }"
             :aria-current="view === 'capabilities' ? 'page' : undefined"
             data-testid="nav-capabilities"
-            @click="openCapabilities"
+            @click="openCapabilities($event)"
           >
             <AppIcon name="capabilities" />
             <span>能力</span>
@@ -427,7 +439,7 @@ onMounted(load)
             :class="{ active: view === 'tasks' }"
             :aria-current="view === 'tasks' ? 'page' : undefined"
             data-testid="nav-tasks"
-            @click="openTasks"
+            @click="openTasks($event)"
           >
             <AppIcon name="tasks" />
             <span>任务</span>
@@ -462,7 +474,7 @@ onMounted(load)
               <AppIcon name="refresh" :size="16" />
               刷新
             </button>
-            <button type="button" class="tonal" data-testid="lock" @click="lock">
+            <button type="button" class="tonal" data-testid="lock" @click="lock($event)">
               <AppIcon name="lock" :size="16" />
               锁定
             </button>

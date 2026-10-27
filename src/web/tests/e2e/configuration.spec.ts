@@ -391,6 +391,77 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
   }
 })
 
+
+test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且不写回脱敏展示名', async ({ page, request }) => {
+  test.setTimeout(60_000)
+  const before = await request.post('/zba/v1/configuration/read', {
+    data: { kind: 1 },
+    headers: CONFIG_HEADERS
+  })
+  const initial = (await before.json()) as {
+    generation: string
+    version: string
+    view: { registered: { providers: { key: string; name: { visibility: number; nameRaw?: string; display: string } }[] } }
+  }
+  const provider = initial.view.registered.providers[0]!
+  // 真实宿主返回 visibility=2 + nameRaw；没有这个形态就没有"真名"可改，本用例不成立。
+  expect(provider.name.visibility).toBe(2)
+  const original = provider.name.nameRaw!
+  expect(original.length).toBeGreaterThan(0)
+  const renamed = `${original}-renamed`
+
+  await openConfiguration(page)
+  await page.getByTestId('config-nav-registered').click()
+  await expect(page.getByTestId('config-providers')).toBeVisible()
+
+  const nameInput = page.getByTestId(`config-provider-name-${provider.key}`)
+  await expect(nameInput).toHaveValue(original)
+  // 输入框里必须是真名，不是 "Pri***ry" 这种脱敏串。
+  expect(await nameInput.inputValue()).not.toBe(provider.name.display)
+
+  try {
+    await nameInput.fill(renamed)
+    await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+    await page.getByTestId('config-save').click()
+    await expect(page.getByTestId('config-receipt')).toBeVisible({ timeout: 20_000 })
+
+    const after = await request.post('/zba/v1/configuration/read', {
+      data: { kind: 1 },
+      headers: CONFIG_HEADERS
+    })
+    const readBack = (await after.json()) as typeof initial
+    expect(readBack.view.registered.providers[0]!.name.nameRaw).toBe(renamed)
+    // 展示串仍是脱敏形态：写进去的是真名，显示照旧脱敏。
+    expect(readBack.view.registered.providers[0]!.name.display).not.toBe(renamed)
+  } finally {
+    const latest = await request.post('/zba/v1/configuration/read', {
+      data: { kind: 1 },
+      headers: CONFIG_HEADERS
+    })
+    const current = (await latest.json()) as typeof initial
+    if (current.view.registered.providers[0]!.name.nameRaw !== original) {
+      await externalSave(request, current.generation, current.version, {
+        registered: {
+          plugins: [],
+          policies: [],
+          // ProviderMetadataPatch 是闭合记录：六个字段都得给，没改的用 Keep。
+          providers: [{
+            key: provider.key,
+            changes: {
+              nameRaw: { kind: 1, value: original },
+              priority: { kind: 0 },
+              baseUrl: { kind: 0 },
+              modelName: { kind: 0 },
+              enabled: { kind: 0 },
+              credential: { kind: 0 }
+            }
+          }]
+        }
+      })
+    }
+  }
+})
+
 test('配置页：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
   await openConfiguration(page)
   const secrets = page.getByTestId('config-secrets')

@@ -416,6 +416,9 @@ internal static class PlatformLifecycleTests
             var decision = approvals.PanelDecide(requestId, true);
             check(decision.Ok && approvalReplies == 1 && approvalReplySource?.Origin.Driver == firstDriver.Key,
                 "Panel approval callback restores original A source rather than selecting an arbitrary peer");
+            var replayDecision = approvals.PanelDecide(requestId, true);
+            check(!replayDecision.Ok && replayDecision.ReasonCode == "already_decided" && approvalReplies == 1,
+                "replaying a panel approval reports failure and does not execute twice");
         }
         router.MessageReceived += OpenApproval;
         first.Emit(Message(111));

@@ -16,6 +16,7 @@ import {
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 
 const props = withDefaults(defineProps<{
@@ -104,7 +105,19 @@ type PendingAction = { descriptor: ZbaManagedDescriptor; capability: ZbaActionCa
 const pendingAction = ref<PendingAction | null>(null)
 const actionBusy = ref(false)
 const actionError = ref<UiError | null>(null)
+const confirmDialog = ref<HTMLElement | null>(null)
 const confirmButton = ref<HTMLButtonElement | null>(null)
+const confirmCancelButton = ref<HTMLButtonElement | null>(null)
+/** 页面标题：触发器已经不在了时的安全落点（tabindex="-1"，不进 Tab 顺序）。 */
+const pageHeading = ref<HTMLElement | null>(null)
+/**
+ * 打开确认框之前焦点落在哪个元素上（S4-M1）。
+ *
+ * 关闭确认框后必须把焦点还给它：键盘用户按下 Enter 打开、按 Escape 取消，
+ * 如果焦点掉到 body，下一次 Tab 就要从页面开头重新走一遍。
+ * WebKit 点按钮不会给按钮焦点，所以这里同时接受事件目标作为兜底。
+ */
+const actionTrigger = ref<HTMLElement | null>(null)
 
 /**
  * 一次动作的完整上下文，独立于「回执」保存。
@@ -433,7 +446,11 @@ function commandFor(descriptor: ZbaManagedDescriptor, capability: ZbaActionCapab
   return null
 }
 
-function requestAction(descriptor: ZbaManagedDescriptor, capability: ZbaActionCapability): void {
+function requestAction(
+  descriptor: ZbaManagedDescriptor,
+  capability: ZbaActionCapability,
+  event?: MouseEvent
+): void {
   if (!canWrite.value || pendingAction.value !== null) return
   actionError.value = null
   abortedNotice.value = null
@@ -450,14 +467,111 @@ function requestAction(descriptor: ZbaManagedDescriptor, capability: ZbaActionCa
     activeKey.value = open.key
     return
   }
+  const trigger = eventTrigger(event)
   pendingAction.value = { descriptor, capability, reuseKey: open?.key ?? null }
-  void nextTick(() => confirmButton.value?.focus())
+  // 焦点落点必须**可用**（S4-M2）：读不到配置代际时"确认执行"是禁用的，
+  // 对禁用按钮 focus() 是无声空操作，焦点会留在背景卡片上，
+  // 于是 Escape 事件根本到不了模态——键盘用户被困住。
+  void nextTick(() => {
+    const confirm = confirmButton.value
+    if (confirm !== null && !confirm.disabled) {
+      confirm.focus()
+      return
+    }
+    confirmCancelButton.value?.focus()
+  })
+  actionTrigger.value = trigger
 }
 
+/**
+ * 打开模态的那个按钮。
+ *
+ * 优先取点击目标：WebKit 点按钮**不给**按钮焦点，只读 activeElement 会拿到
+ * body，关框后就没地方还焦点了。键盘 Enter 打开时两者是同一个元素。
+ */
+function eventTrigger(event?: MouseEvent): HTMLElement | null {
+  const target = event?.currentTarget
+  if (target instanceof HTMLElement && isRestorable(target)) return target
+  const active = document.activeElement
+  return active instanceof HTMLElement && isRestorable(active) ? active : null
+}
+
+/**
+ * 取消当前的确认意图（S4-R1）。
+ *
+ * 取消**永远不发写请求**，所以它不能受"另一个动作正在提交"的限制。上一轮
+ * 就是这个 `if (actionBusy) return` 让第二个确认框的两个按钮一起被禁用：
+ * 焦点留在背景卡片上，Escape 进不了模态，用户被上一个请求的耗时锁住。
+ * 在途动作的忙锁只该锁**写**，不该锁**退**。
+ */
 function cancelAction(): void {
-  if (actionBusy.value) return
   pendingAction.value = null
   actionError.value = null
+  restoreActionFocus()
+}
+
+/** 关闭确认框后把焦点还给打开它的按钮（S4-M1）；触发器不在时退到页面标题。 */
+function restoreActionFocus(): void {
+  const trigger = actionTrigger.value
+  actionTrigger.value = null
+  void nextTick(() => {
+    restoreFocus(trigger, pageHeading.value)
+  })
+}
+
+/**
+ * 确认框开着时，焦点不能掉到框外（S4-M4）。
+ *
+ * 提交期间 actionBusy 会把两个按钮都禁用，浏览器于是把焦点丢回 body，
+ * keydown 落到背景页面上——模态在"正在提交"这个状态里接不住键盘。
+ * 与 S4-M2 同类：落点不可用就等于模态失效。
+ */
+watch([actionBusy, pendingAction], () => {
+  if (pendingAction.value === null) return
+  const active = document.activeElement
+  const root = confirmDialog.value
+  if (root !== null && active instanceof HTMLElement && root.contains(active) && isRestorable(active)) return
+  void nextTick(() => {
+    const confirm = confirmButton.value
+    if (confirm !== null && !confirm.disabled) {
+      confirm.focus()
+      return
+    }
+    confirmCancelButton.value?.focus()
+  })
+}, { flush: 'post' })
+
+/**
+ * 确认框的键盘退出与焦点循环。
+ *
+ * 配置页的离开确认框早就有这一套（Escape = 安全动作、Tab 不跑出遮罩），
+ * 能力页却没有——同一个产品里两个模态的键盘行为不该不一样（S4-F2）。
+ * Escape 在这里等于"取消"，因为它就是安全动作：不发出任何写请求。
+ */
+function onConfirmKeydown(event: KeyboardEvent): void {
+  if (pendingAction.value === null) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    cancelAction()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const root = confirmDialog.value
+  if (!root) return
+  const focusable = Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled])'))
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) return
+  const active = document.activeElement as HTMLElement | null
+  const outside = active === null || !root.contains(active)
+  if (event.shiftKey && (active === first || outside)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (active === last || outside)) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function recordFor(key: string): OperationRecord | undefined {
@@ -620,6 +734,7 @@ async function confirmAction(): Promise<void> {
   // 先关掉确认框再提交：遮罩留着会挡住页面上的锁定/导航和核对入口，
   // 用户在最需要离开的时候反而点不到任何东西。
   pendingAction.value = null
+  restoreActionFocus()
   try {
     if (resume) await resendUnknown(resume)
     else await submitNew(pending, command)
@@ -1036,7 +1151,7 @@ defineExpose({
     <header class="page-heading">
       <div>
         <p class="eyebrow">能力</p>
-        <h1 id="capabilities-title">已登记能力</h1>
+        <h1 id="capabilities-title" ref="pageHeading" tabindex="-1">已登记能力</h1>
         <p class="subtitle">
           驱动 {{ counts.driver }} · 插件 {{ counts.plugin }} · 供应商 {{ counts.provider }}
           <template v-if="lastLoadedAt"> · 读取于 {{ formatTime(lastLoadedAt) }}</template>
@@ -1145,7 +1260,7 @@ defineExpose({
               :class="{ danger: isDangerous(capability.action) }"
               :disabled="!canWrite"
               :data-testid="'cap-action-' + keySlug(item.key) + '-' + capability.action"
-              @click="requestAction(item, capability)"
+              @click="requestAction(item, capability, $event)"
             >
               {{ actionLabel(capability.action) }}
             </button>
@@ -1311,7 +1426,14 @@ defineExpose({
 
     <Teleport to="body">
       <div v-if="pendingAction" class="dialog-backdrop" data-testid="cap-confirm">
-        <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="cap-confirm-title">
+        <section
+          ref="confirmDialog"
+          class="dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cap-confirm-title"
+          @keydown="onConfirmKeydown"
+        >
           <h2 id="cap-confirm-title">确认{{ actionLabel(pendingAction.capability.action) }}</h2>
           <p class="dialog-copy">
             目标：<strong>{{ keyLabel(pendingAction.descriptor.key) }}</strong>
@@ -1324,9 +1446,22 @@ defineExpose({
           <p v-if="pendingAction.reuseKey" class="inline-notice warn" data-testid="cap-confirm-reuse">
             这个动作上次结果未知；确认后会沿用同一个操作键，服务端不会重复执行。
           </p>
+          <p v-if="context === null" class="inline-notice warn" data-testid="cap-confirm-no-context">
+            还没有读到配置代际，现在不能提交动作；按 Esc 或"取消"退出这个确认框。
+          </p>
+          <p v-if="actionBusy" class="inline-notice warn" data-testid="cap-confirm-busy">
+            上一个动作还在提交，现在不能确认新的动作；按 Esc 或"取消"可以退出这个确认框，
+            上一个动作结束后再回来确认即可。
+          </p>
           <ErrorNotice :error="actionError" title="动作失败" />
           <div class="dialog-actions">
-            <button type="button" class="tonal" data-testid="cap-confirm-cancel" :disabled="actionBusy" @click="cancelAction">
+            <button
+              ref="confirmCancelButton"
+              type="button"
+              class="tonal"
+              data-testid="cap-confirm-cancel"
+              @click="cancelAction"
+            >
               取消
             </button>
             <button
@@ -1337,7 +1472,7 @@ defineExpose({
               :disabled="actionBusy || !canWrite || context === null"
               @click="confirmAction"
             >
-              {{ actionBusy ? '提交中…' : '确认执行' }}
+              {{ actionBusy ? '上一个动作提交中…' : '确认执行' }}
             </button>
           </div>
         </section>

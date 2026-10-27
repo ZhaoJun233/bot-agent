@@ -421,7 +421,39 @@ export interface ZbaFieldEdit {
 export type ZbaPatchSection =
   | 'behavior' | 'model' | 'agent' | 'platform' | 'voice' | 'music' | 'reporting'
 
-export type ZbaConfigurationPatch = Partial<Record<ZbaPatchSection, Record<string, ZbaFieldEdit>>>
+/**
+ * 已登记对象的改名意图（S4-L1）。
+ *
+ * 与标量分区不同：供应商改名走 `changes.registered.providers[].changes.nameRaw`，
+ * 它的值必须来自 `nameRaw`（真名），**绝不能**用 `display`（服务端已脱敏的
+ * 展示串）——那会把「Pri***ry」写回数据库，正是 PNL-11 禁止的回写路径。
+ */
+export interface ZbaProviderNameEdit {
+  key: string
+  /**
+   * 六个字段必须**全部**出现：Core 的 ProviderMetadataPatch 是闭合记录
+   * （未知字段拒绝、缺字段同样拒绝），只发 nameRaw 会被服务端判成
+   * save_2「服务端校验失败」。没改的字段一律用 Keep（kind:0）。
+   */
+  changes: {
+    nameRaw: ZbaFieldEdit
+    priority: ZbaFieldEdit
+    baseUrl: ZbaFieldEdit
+    modelName: ZbaFieldEdit
+    enabled: ZbaFieldEdit
+    credential: { kind: 0 | 1 | 2 | 3; key?: string }
+  }
+}
+
+export interface ZbaRegisteredConfigurationPatch {
+  plugins: unknown[]
+  policies: unknown[]
+  providers: ZbaProviderNameEdit[]
+}
+
+export type ZbaConfigurationPatch =
+  Partial<Record<ZbaPatchSection, Record<string, ZbaFieldEdit>>>
+  & { registered?: ZbaRegisteredConfigurationPatch }
 
 export interface ZbaConfigurationSaveRequest {
   contractRevision: string

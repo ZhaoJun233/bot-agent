@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import AppIcon from '../../shared/ui/AppIcon.vue'
 import BrandMark from '../../shared/ui/BrandMark.vue'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
@@ -22,6 +22,25 @@ const token = ref('')
 const input = ref<HTMLInputElement | null>(null)
 
 onMounted(() => input.value?.focus())
+
+/**
+ * 输入框被 `disabled` 时浏览器会把焦点丢回 body，恢复可用后不会自己还回来。
+ *
+ * App 首帧就会发 health 探测，`busy` 随之变 true——于是"挂载时聚焦"紧接着
+ * 就被这一次禁用抹掉，用户落地时焦点在 body 上（S4-F1，键盘/焦点门禁）。
+ * 所以聚焦要跟着 `busy` 回到 false 再做一次；只在**焦点本来就在本表单里或
+ * 已经丢了**时补，不抢用户主动点到别处的焦点。
+ *
+ * `flush: 'post'` 不能省：默认的 pre 时机在组件重渲染之前，那一刻 `:disabled`
+ * 还没摘掉，对禁用控件调用 focus() 是无声的空操作——正是这个时序让"补聚焦"
+ * 看起来生效了、实际没有。
+ */
+watch(() => props.busy, (busy) => {
+  if (busy) return
+  const active = document.activeElement as HTMLElement | null
+  if (active && active !== document.body && active !== input.value && active.isConnected) return
+  input.value?.focus()
+}, { flush: 'post' })
 
 function submit(): void {
   const value = token.value.trim()

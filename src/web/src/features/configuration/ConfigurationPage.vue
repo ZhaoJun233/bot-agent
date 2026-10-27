@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ZbaClient,
   ZbaNetworkError,
@@ -11,9 +11,11 @@ import {
   type ZbaReadField
 } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import {
+  applyProviderNames,
   baselineRaw,
   buildPatch,
   buildSecrets,
@@ -26,8 +28,10 @@ import {
   isEditable,
   newNonce,
   nowSeconds,
+  providerNameBaseline,
   valueKind,
   type DraftMap,
+  type ProviderNameDrafts,
   type SecretAction,
   type SecretDrafts
 } from './draft'
@@ -66,6 +70,16 @@ const active = ref<SectionKey>('behavior')
 
 const draft = ref<DraftMap>({})
 const secretDrafts = ref<SecretDrafts>({})
+/**
+ * 供应商改名草稿（S4-L1）。
+ *
+ * 单独一张表：供应商的 name 字段是 visibility=2 的「可改名投影」，
+ * 它不是标量分区里的普通字段，塞进 DraftMap 会污染 fieldPath 的语义。
+ */
+const providerNames = ref<ProviderNameDrafts>({})
+/** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
+const pendingNames = ref<ProviderNameDrafts>({})
+let findSequence = 0
 const phase = ref<SavePhase>('idle')
 const saveError = ref<UiError | null>(null)
 const receipt = ref<ZbaConfigurationReceipt | null>(null)
@@ -82,8 +96,20 @@ const leaveMessage = ref<string | null>(null)
 const leaveBusy = ref(false)
 const leaveSafeButton = ref<HTMLButtonElement | null>(null)
 const leaveDialog = ref<HTMLElement | null>(null)
+/** 页面标题：触发器已经不在了时的安全落点（tabindex="-1"，不进 Tab 顺序）。 */
+const pageHeading = ref<HTMLElement | null>(null)
 let leaveResolve: ((allowed: boolean) => void) | null = null
 let leavePromise: Promise<boolean> | null = null
+/** 打开当前这个离开框的按钮（S4-M1）：关闭后要把焦点还回去。 */
+let leaveTrigger: HTMLElement | null = null
+/**
+ * 离开框的代际（S4-M3）。
+ *
+ * 每次 requestLeave 推进一次。异步的"保存并离开"在 await 之后必须核对代际：
+ * 用户可能在保存途中关掉这个框、又开了一个新的离开框，迟到的保存结果
+ * 绝不能替用户**批准**那个还没人选择过的新框。
+ */
+let leaveGeneration = 0
 
 let loadSequence = 0
 
@@ -115,6 +141,7 @@ const activeFields = computed<Array<{ key: string; field: ZbaReadField }>>(() =>
 
 const dirtyCount = computed(() =>
   Object.keys(draft.value).length
+  + Object.keys(providerNames.value).length
   + Object.values(secretDrafts.value).filter((action) => action !== undefined && action.kind !== 'keep').length)
 
 const canWrite = computed(() => props.mode === 'admin' && props.writesEnabled)
@@ -312,11 +339,13 @@ function resetAll(): void {
   if (unconfirmed.value) return
   draft.value = {}
   secretDrafts.value = {}
+  providerNames.value = {}
   fieldErrors.value = []
   validationMessage.value = null
   conflictCurrentVersion.value = null
   conflictKeys.value = []
   pendingKey.value = null
+  pendingNames.value = {}
   phase.value = 'idle'
   saveError.value = null
 }
@@ -348,13 +377,65 @@ function onSecretInput(slot: number, raw: string): void {
   setSecretAction(slot, { kind: 'replace', value: raw })
 }
 
-function buildRequest(): { changes: ReturnType<typeof buildPatch>['patch']; secrets: ReturnType<typeof buildSecrets>['secrets']; errors: string[] } | null {
+function buildRequest(): {
+  changes: ReturnType<typeof buildPatch>['patch']
+  secrets: ReturnType<typeof buildSecrets>['secrets']
+  errors: string[]
+  nameIntents: ProviderNameDrafts
+} | null {
   const view = snapshot.value?.view
   if (!view) return null
   const patch = buildPatch(draft.value, view)
+  const nameErrors = applyProviderNames(patch.patch, providerNames.value, view)
   const secrets = buildSecrets(secretDrafts.value)
-  const errors = [...patch.errors, ...secrets.errors]
-  return { changes: patch.patch, secrets: secrets.secrets, errors }
+  const errors = [...patch.errors, ...nameErrors, ...secrets.errors]
+  // 意图与 patch 分开记账：同值名称不用写入，但本次成功仍应结束该意图。
+  const nameIntents = { ...providerNames.value }
+  return { changes: patch.patch, secrets: secrets.secrets, errors, nameIntents }
+}
+
+/** 供应商改名输入（S4-L1）：只接受真名，不接受脱敏展示串。 */
+function providerNameInput(key: string, raw: string): void {
+  if (inputsLocked.value) return
+  const next: ProviderNameDrafts = { ...providerNames.value }
+  if (raw === providerNameBaseline(providerField(key))) delete next[key]
+  else next[key] = raw
+  providerNames.value = next
+  phase.value = 'idle'
+  validationMessage.value = null
+}
+
+const EMPTY_NAME_FIELD: ZbaReadField = {
+  visibility: 0,
+  display: '',
+  rule: { id: 0, effect: 0, canClear: false, editable: false, legacyNeedsReview: false },
+  userMode: 0,
+  effectiveSource: 0,
+  applyState: 0
+}
+
+function providerField(key: string): ZbaReadField {
+  const view = snapshot.value?.view
+  if (!view) return EMPTY_NAME_FIELD
+  const provider = view.registered.providers.find((item) => item.key === key)
+  return provider?.name ?? EMPTY_NAME_FIELD
+}
+
+function providerNameRaw(key: string): string {
+  return providerNames.value[key] ?? providerNameBaseline(providerField(key))
+}
+
+function isProviderDirty(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(providerNames.value, key)
+}
+
+/** 只结束本次操作所确认且值未改变的意图，不让旧回执删除新的名称。 */
+function settleProviderNames(intents: ProviderNameDrafts): void {
+  const next: ProviderNameDrafts = { ...providerNames.value }
+  for (const [key, raw] of Object.entries(intents)) {
+    if (next[key] === raw) delete next[key]
+  }
+  providerNames.value = next
 }
 
 /**
@@ -388,6 +469,7 @@ async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'
       && snapshot.value.generation !== next.generation) {
       phase.value = 'idle'
       pendingKey.value = null
+      pendingNames.value = {}
     }
     snapshot.value = next
     loadedAt.value = formatTime(new Date().toISOString())
@@ -427,6 +509,8 @@ async function reloadAfterConflict(): Promise<void> {
   conflictCurrentVersion.value = null
   phase.value = 'idle'
   pendingKey.value = null
+  // 冲突未落盘：保留草稿，结束这次操作的意图记账。
+  pendingNames.value = {}
   await reload()
   if (snapshot.value?.view) {
     conflictKeys.value = conflictingPaths(draft.value, snapshot.value.view)
@@ -473,7 +557,7 @@ async function validate(): Promise<void> {
   }
 }
 
-async function save(): Promise<void> {
+async function save(): Promise<'unchanged' | void> {
   if (!canWrite.value || !snapshot.value) return
   // 单飞：保存中不能再发第二个写请求（包括离开对话框的“保存并离开”）。
   if (phase.value === 'saving') return
@@ -484,13 +568,15 @@ async function save(): Promise<void> {
   fieldErrors.value = request.errors
   if (request.errors.length > 0) return
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
+    settleProviderNames(request.nameIntents)
     validationMessage.value = '没有需要保存的修改。'
-    return
+    return 'unchanged'
   }
 
   // 每次新的用户意图都用新操作键；旧键只属于“结果未知”的那一次提交。
   const key = createOperationKey(snapshot.value.generation, nowSeconds(), newNonce())
   pendingKey.value = key
+  pendingNames.value = request.nameIntents
   phase.value = 'saving'
   saveError.value = null
   validationMessage.value = null
@@ -505,6 +591,7 @@ async function save(): Promise<void> {
       changes: request.changes,
       secrets: request.secrets
     })
+    if (pendingKey.value !== key) return
     // 服务端明确回报“结果未知”（12）：保留操作键与草稿，冻结后先核对。
     if (result.code === 12) {
       receipt.value = result.receipt ?? null
@@ -520,11 +607,15 @@ async function save(): Promise<void> {
     }
     // 明确的完整响应结束“未知”。
     pendingKey.value = null
+    pendingNames.value = {}
     if (result.code === 0 || result.code === 13) {
       receipt.value = result.receipt ?? null
       phase.value = 'saved'
       draft.value = {}
       secretDrafts.value = {}
+      // SR-NAME-01：名称意图也必须在这里结束，否则保存条一直是"1 项修改"，
+      // 切页会弹未保存确认，下一次无关保存还会把已确认的旧名字重发给新基线。
+      settleProviderNames(request.nameIntents)
       fieldErrors.value = []
       await reload()
       return
@@ -541,18 +632,19 @@ async function save(): Promise<void> {
       message: saveCodeMessages[result.code] ?? `保存失败（code ${result.code}）。`
     }
   } catch (cause) {
+    if (pendingKey.value !== key) return
     if (reportAuthFailure(cause)) return
     // 传输失败，或服务端已回 2xx 但响应体无法解码：都不能证明“没提交”。
     const outcomeUnknown = cause instanceof ZbaNetworkError
       || (cause instanceof ZbaRequestError
-        && cause.code === 'invalid_json'
-        && cause.status >= 200
-        && cause.status < 300)
+        && (cause.status >= 500
+          || (cause.code === 'invalid_json' && cause.status >= 200 && cause.status < 300)))
     if (outcomeUnknown) {
       phase.value = 'unconfirmed'
       return
     }
     pendingKey.value = null
+    pendingNames.value = {}
     phase.value = 'error'
     saveError.value = toUiError(cause)
   }
@@ -571,29 +663,37 @@ async function save(): Promise<void> {
 async function checkPending(): Promise<void> {
   const key = pendingKey.value
   if (key === null || findBusy.value) return
+  const nameIntents = pendingNames.value
+  const sequence = ++findSequence
   findBusy.value = true
   validationMessage.value = '核对中…'
   saveError.value = null
   try {
     const result = await props.client.findConfiguration(key)
+    if (pendingKey.value !== key) return
     if (result.code === 0 && result.receipt) {
       receipt.value = result.receipt
       phase.value = 'saved'
       pendingKey.value = null
+      pendingNames.value = {}
       draft.value = {}
       secretDrafts.value = {}
+      // 核对确认本次操作已落盘，包括无需重复写入的同值名称。
+      settleProviderNames(nameIntents)
       validationMessage.value = null
       await reload()
       return
     }
     if (result.code === 14) {
       pendingKey.value = null
+      pendingNames.value = {}
       phase.value = 'idle'
       validationMessage.value = '没有找到这次提交的回执：修改没有落盘。草稿已保留，请确认内容后重新保存（会使用新的操作键）。'
       return
     }
     if (result.code === 6) {
       pendingKey.value = null
+      pendingNames.value = {}
       phase.value = 'idle'
       validationMessage.value = '配置代际已变化，旧操作键无法再核对；已重新读取快照，请确认字段实际值后再保存。'
       await reload()
@@ -602,6 +702,7 @@ async function checkPending(): Promise<void> {
     if (result.code === 5) {
       // 操作键 24 小时后过期，服务端不再接受核对；留着旧键只会把页面永久锁死。
       pendingKey.value = null
+      pendingNames.value = {}
       phase.value = 'idle'
       validationMessage.value = '操作键已过期（超过 24 小时），无法再核对回执；已重新读取快照，请按实际值确认后重新保存（会使用新的操作键）。'
       await reload()
@@ -612,11 +713,13 @@ async function checkPending(): Promise<void> {
       message: `核对失败（code ${result.code}）；提交结果仍然未知，操作键与草稿已保留。`
     }
   } catch (cause) {
+    if (pendingKey.value !== key) return
     if (reportAuthFailure(cause)) return
     saveError.value = toUiError(cause)
     validationMessage.value = '核对未完成：这次响应不能当作权威结果（HTTP 状态与结果码矛盾，或请求本身失败）。'
       + '操作键与草稿继续保留，可以稍后用同一个键再次核对。'
   } finally {
+    if (sequence !== findSequence) return
     findBusy.value = false
     if (validationMessage.value === '核对中…') validationMessage.value = null
   }
@@ -633,12 +736,14 @@ async function refreshOnEnter(): Promise<void> {
  * 返回 true 表示允许离开；false 表示用户选择继续编辑。同一时间只有一个
  * 待决对话框，重复调用复用同一个 Promise，避免出现两个遮罩。
  */
-function requestLeave(reason: LeaveReason): Promise<boolean> {
+function requestLeave(reason: LeaveReason, trigger?: HTMLElement | null): Promise<boolean> {
   if (!hasDraft.value && pendingKey.value === null) return Promise.resolve(true)
   if (leavePromise) return leavePromise
   leavePrompt.value = reason
   leaveMessage.value = null
   leaveBusy.value = false
+  leaveGeneration += 1
+  leaveTrigger = currentTrigger(trigger)
   leavePromise = new Promise<boolean>((resolve) => {
     leaveResolve = resolve
   })
@@ -646,13 +751,36 @@ function requestLeave(reason: LeaveReason): Promise<boolean> {
   return leavePromise
 }
 
+/**
+ * 打开离开框的那个元素。
+ *
+ * 优先用调用方传下来的点击目标：WebKit 点按钮**不给**按钮焦点，
+ * 只读 activeElement 会拿到上一个位置甚至 body，关框后就没地方还焦点。
+ * 没传（例如概览页发出的"退出管理员"事件没有事件对象）才退回 activeElement。
+ */
+function currentTrigger(trigger?: HTMLElement | null): HTMLElement | null {
+  if (trigger !== undefined && trigger !== null && isRestorable(trigger)) return trigger
+  const active = document.activeElement
+  return active instanceof HTMLElement && isRestorable(active) ? active : null
+}
+
 function closeLeave(allowed: boolean): void {
+  const trigger = leaveTrigger
+  leaveTrigger = null
+  // 关闭即推进代际：任何还在 await 里的"保存并离开"从此不属于任何对话框。
+  leaveGeneration += 1
   leavePrompt.value = null
   leaveMessage.value = null
   leaveBusy.value = false
   leaveResolve?.(allowed)
   leaveResolve = null
   leavePromise = null
+  // 关闭后把焦点还给触发器（S4-M1）：否则键盘用户下一次 Tab 要从页面开头重走。
+  // 页面可能正要切走（allowed=true），此时触发器仍在 DOM 里但马上会隐藏，
+  // 恢复焦点只是给它一个确定的落点，不影响导航。
+  void nextTick(() => {
+    restoreFocus(trigger, pageHeading.value)
+  })
 }
 
 function leaveStay(): void {
@@ -666,12 +794,27 @@ function leaveDiscard(): void {
   closeLeave(true)
 }
 
+/**
+ * 保存并离开（S4-M3）。
+ *
+ * 关键约束：await 之后这个对话框可能已经不是当初那个了。
+ * 用户可以在保存途中按"继续编辑"关掉它，再从导航打开一个新的离开框；
+ * 迟到的保存结果如果直接调用 closeLeave()，就会替用户**批准**那个
+ * 一个选择都没做过的新框，并把页面跳到别处。
+ *
+ * 所以进入时冻结代际，await 之后先核对：代际变了就只更新保存状态，
+ * 一个新框的 resolver 都不许碰。
+ */
 async function leaveSave(): Promise<void> {
   if (leaveBusy.value || busy.value || unconfirmed.value || !canWrite.value) return
+  const generation = leaveGeneration
   leaveBusy.value = true
-  await save()
+  const outcome = await save()
+  // 代际变了 = 这个框已经被关掉、甚至被换成了新的一个。
+  // 忙碌标记归新框自己管（它可能正在保存），保存结果也不许替它做决定。
+  if (generation !== leaveGeneration) return
   leaveBusy.value = false
-  if (phase.value === 'saved') {
+  if ((outcome === 'unchanged' || phase.value === 'saved') && !hasDraft.value && pendingKey.value === null) {
     closeLeave(true)
     return
   }
@@ -679,6 +822,32 @@ async function leaveSave(): Promise<void> {
     ? '保存结果未知：请先核对回执，再决定是否离开。'
     : '保存没有完成；已留在本页，请先处理页面上的提示。'
 }
+
+/**
+ * 模态开着的时候，焦点必须一直留在框里（S4-M4）。
+ *
+ * 禁用当前焦点元素（例如「保存并锁定」提交期间按钮变 disabled）会让浏览器
+ * 把焦点**直接丢回 body**，keydown 于是落在背景页面上，Escape 再也到不了模态——
+ * 用户被卡在一个既不能保存也不能退出的框里。这和 S4-M2 是同一类缺陷：
+ * 落点不可用，就等于模态接不住键盘。
+ *
+ * 所以只要框还在，焦点一旦跑到框外就把它拉回安全按钮。
+ */
+// flush: 'post' 不能省：默认的 pre 时机在**DOM 更新之前**跑，
+// 那时按钮还没被禁用、焦点也还在它身上，判断会得出"一切正常"；
+// 真正的失焦发生在紧随其后的 DOM 更新里，而 watcher 已经返回了。
+watch(leavePrompt, (prompt) => {
+  if (prompt === null) return
+  void nextTick(() => leaveSafeButton.value?.focus())
+}, { flush: 'post' })
+
+watch([busy, unconfirmed, leaveBusy], () => {
+  if (leavePrompt.value === null) return
+  const active = document.activeElement
+  const root = leaveDialog.value
+  if (root !== null && active instanceof HTMLElement && root.contains(active) && isRestorable(active)) return
+  void nextTick(() => leaveSafeButton.value?.focus())
+}, { flush: 'post' })
 
 /** 模态内的焦点循环；Esc 等于“继续编辑”（安全动作）。 */
 function onLeaveKeydown(event: KeyboardEvent): void {
@@ -727,12 +896,18 @@ function discardSecretsOnLeave(): void {
 
 /** 会话结束（锁定、401、换令牌）时立即清空内存草稿与秘密输入。 */
 function endSession(): void {
+  loadSequence += 1
+  findSequence += 1
+  loading.value = false
+  findBusy.value = false
   detachScheduler.value?.()
   detachScheduler.value = null
   if (leaveResolve !== null) closeLeave(false)
   draft.value = {}
   secretDrafts.value = {}
+  providerNames.value = {}
   pendingKey.value = null
+  pendingNames.value = {}
   phase.value = 'idle'
   receipt.value = null
   fieldErrors.value = []
@@ -752,6 +927,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  endSession()
   window.removeEventListener('beforeunload', handleBeforeUnload)
   detachScheduler.value?.()
   detachScheduler.value = null
@@ -779,7 +955,7 @@ defineExpose({
     <header class="page-heading">
       <div>
         <p class="eyebrow">配置</p>
-        <h1 id="configuration-title">配置快照</h1>
+        <h1 id="configuration-title" ref="pageHeading" tabindex="-1">配置快照</h1>
         <p class="subtitle">
           版本 <strong>{{ snapshot?.version ?? '—' }}</strong>
           · 契约 {{ snapshot?.contractRevision ?? '—' }}
@@ -1033,7 +1209,22 @@ defineExpose({
                 <tbody>
                   <tr v-for="provider in registered.providers" :key="provider.key">
                     <td><strong>{{ provider.key }}</strong></td>
-                    <td>{{ formatValue(provider.name) }}</td>
+                    <td class="config-value">
+                      <template v-if="canWrite && provider.name.visibility === 2">
+                        <input
+                          class="config-input"
+                          type="text"
+                          :value="providerNameRaw(provider.key)"
+                          :aria-label="`${provider.key} 的真名（显示用 ${provider.name.display}）`"
+                          :placeholder="provider.name.display"
+                          :disabled="inputsLocked"
+                          :data-testid="`config-provider-name-${provider.key}`"
+                          @input="providerNameInput(provider.key, inputValue($event))"
+                        />
+                        <span v-if="isProviderDirty(provider.key)" class="cell-sub">已改名</span>
+                      </template>
+                      <span v-else :title="valueTitle(provider.name)">{{ formatValue(provider.name) }}</span>
+                    </td>
                     <td class="config-value">{{ formatValue(provider.baseUrl) }}</td>
                     <td>{{ formatValue(provider.modelName) }}</td>
                     <td>{{ provider.priority }}</td>

@@ -340,7 +340,7 @@ public sealed class ApprovalUseCase
             _ = SendToKeyAsync(conversationKey, reply);
         }
 
-        return (result.Handled, result.ReasonCode);
+        return (result.Ok, result.ReasonCode);
     }
 
     /// <summary>面板那条路把回执发回原会话（没有入站消息可用，所以按 key 发）。</summary>

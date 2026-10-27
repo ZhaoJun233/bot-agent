@@ -313,21 +313,29 @@ describe('TasksPage', () => {
   // ── S3-07：迟到取消回包不覆盖已观察到的终态 ─────────────────────
   it('已确认完成的任务不被迟到的取消回包倒退回已请求取消', async () => {
     let current: ZbaTaskSummary = task({ state: 1 })
+    let releaseCancel!: (result: { state: 5; cancellationRequested: true; outcome: 'cancel_requested' }) => void
+    let cancelCalls = 0
+    const response = new Promise<{ state: 5; cancellationRequested: true; outcome: 'cancel_requested' }>((resolve) => {
+      releaseCancel = resolve
+    })
     const client = clientWith({
       listTasks: async () => ({ items: [task({ ...current })], nextCursor: null }),
-      cancelTask: async () => ({ state: 5, cancellationRequested: true, outcome: 'cancel_requested' })
+      cancelTask: async () => { cancelCalls += 1; return response }
     })
     const wrapper = mountPage(client)
     await flushPromises()
     expect(wrapper.get('[data-testid="task-state"]').text()).toBe('执行中')
 
-    // 取消回包还没落地时，后台轮询已经把状态读成"已完成"。
+    await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+    expect(cancelCalls).toBe(1)
+    // 取消响应仍挂起；先通过资源读取确认终态。
     current = task({ state: 3 })
-    const cancelling = wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
-    await wrapper.setProps({ active: true })
-    // 用同一份 client 重新读取：模拟查询确认终态
     await wrapper.vm.reload()
-    await cancelling
+    await flushPromises()
+    expect(wrapper.get('[data-testid="task-state"]').text()).toBe('已完成')
+    expect(wrapper.text()).not.toContain('已请求（未确认）')
+
+    releaseCancel({ state: 5, cancellationRequested: true, outcome: 'cancel_requested' })
     await flushPromises()
 
     expect(wrapper.get('[data-testid="task-state"]').text()).toBe('已完成')
@@ -341,9 +349,13 @@ describe('TasksPage', () => {
       session: 'synthetic-session', expiresAt: '2026-10-22T11:00:00Z', policyVersion: 1
     }]
     let reads = 0
+    const decisions: Array<{ id: string; approve: boolean }> = []
     const wrapper = mountPage(clientWith({
       listApprovals: async () => { reads += 1; return approvals },
-      decideApproval: async () => { throw new ZbaRequestError(409, 'approval_rejected', '审批未执行。', 'expired') }
+      decideApproval: async (id: string, approve: boolean) => {
+        decisions.push({ id, approve })
+        throw new ZbaRequestError(409, 'approval_rejected', '审批未执行。', 'expired')
+      }
     }))
     await flushPromises()
     const before = reads
@@ -354,11 +366,11 @@ describe('TasksPage', () => {
     expect(wrapper.text()).toContain('approval_rejected')
     expect(wrapper.get('[data-testid="task-approval-stale-0"]').text()).toContain('未生效')
     expect(wrapper.get('[data-testid="task-approve-0"]').attributes('disabled')).toBeDefined()
-    // 不反复提交：再点也不发新决定
-    const decisions: unknown[] = []
+    expect(decisions).toEqual([{ id: 'a-1', approve: true }])
+    // 不反复提交：再点也不发新决定。
     await wrapper.get('[data-testid="task-approve-0"]').trigger('click')
     await flushPromises()
-    expect(decisions).toHaveLength(0)
+    expect(decisions).toEqual([{ id: 'a-1', approve: true }])
   })
 
   // ── S3-03：空队列与读取失败必须能区分开 ─────────────────────────

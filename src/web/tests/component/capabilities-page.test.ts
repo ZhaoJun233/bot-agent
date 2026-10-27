@@ -200,6 +200,58 @@ describe('CapabilitiesPage', () => {
     expect(document.body.querySelector<HTMLButtonElement>('[data-testid="cap-confirm-ok"]')?.disabled).toBe(true)
   })
 
+
+  /**
+   * S4-R1：在途动作不能把新确认意图的退出路径一起锁死。
+   *
+   * 组件级只验不变量本身：框里有可用按钮、取消不需要等请求、取消不发写请求。
+   * 浏览器里的焦点与 Escape 由 tests/e2e/capabilities.spec.ts 覆盖。
+   */
+  it('上一个动作在途时，新确认框的取消仍然可用且不发写请求', async () => {
+    const writes: unknown[] = []
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const seen = new Promise<void>((resolve) => { entered = resolve })
+    const second = descriptor({ key: { kind: 'plugin', key: 'preset.feature.stickers' } })
+    const wrapper = mountPage(clientWith({
+      listCapabilities: async () => ({ code: 0, items: [descriptor(), second], nextCursor: null, descriptorRevision: 'rev-1' }),
+      inspectCapability: async () => {
+        entered()
+        await held
+        throw new ZbaRequestError(503, 'storage_unavailable', '暂不可用。')
+      },
+      executeCapability: async (request: unknown) => { writes.push(request); return { code: 0, replayed: false } }
+    }))
+    await flushPromises()
+
+    // 第一个动作：确认后卡在预检上。
+    await wrapper.get('[data-testid="cap-action-plugin:preset.feature.music-4"]').trigger('click')
+    document.body.querySelector<HTMLButtonElement>('[data-testid="cap-confirm-ok"]')?.click()
+    await seen
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="cap-confirm"]')).toBeNull()
+
+    // 第二个动作：在途窗口里打开。
+    await wrapper.get('[data-testid="cap-action-plugin:preset.feature.stickers-4"]').trigger('click')
+    await flushPromises()
+    const dialog = document.body.querySelector('[data-testid="cap-confirm"]')
+    expect(dialog).not.toBeNull()
+    const usable = Array.from(dialog!.querySelectorAll('button')).filter((button) => !button.disabled)
+    expect(usable.length, '在途时新框至少要有一个可用按钮').toBeGreaterThan(0)
+    expect(document.body.querySelector('[data-testid="cap-confirm-busy"]')).not.toBeNull()
+
+    // 取消必须立刻生效，不需要先释放上一个请求。
+    document.body.querySelector<HTMLButtonElement>('[data-testid="cap-confirm-cancel"]')?.click()
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="cap-confirm"]')).toBeNull()
+    expect(writes, '取消新意图不得发出写请求').toHaveLength(0)
+
+    release()
+    await flushPromises()
+    await flushPromises()
+  })
+
   it('401 上报会话失效，不在本页吞掉', async () => {
     const wrapper = mountPage(clientWith({
       listCapabilities: async () => { throw new ZbaRequestError(401, 'unauthorized', 'expired') }

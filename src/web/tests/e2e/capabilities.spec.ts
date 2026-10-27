@@ -277,6 +277,78 @@ test('能力页：核对没有回执时未知操作仍保留操作键', async ({
   await expect(page.getByTestId('cap-op-key')).toHaveText(key ?? '')
 })
 
+// ── S4-R1：在途动作不得锁死新确认意图的退出路径 ─────────────────────────────
+
+/**
+ * 上一个动作还在提交时，用户仍可以打开**另一个**动作的确认框。
+ *
+ * 这里要求的是「新意图自己可取消」而不是「禁止打开新框」：在途窗口可能很长
+ * （服务端慢、网络卡），把入口一关了事会让用户在这段时间里什么都不能做。
+ * 所以不变量是：
+ *   ① 新框里必须有**可用**的焦点（禁用按钮不算落点）；
+ *   ② Escape 必须真的关掉它，且不需要等上一个请求结束；
+ *   ③ 取消新意图不能发出第二个写请求。
+ */
+test('能力页：上一个动作在途时打开的新确认框仍可取消，且不发第二个写请求', async ({ page }) => {
+  await connect(page, ADMIN)
+  await page.getByTestId('cap-enable-admin').click()
+  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+
+  const actions = page.locator('[data-testid^="cap-action-"]:not([disabled])')
+  expect(await actions.count()).toBeGreaterThan(1)
+
+  // 扣住第一次预检：这就是"在途窗口"，不能用快响应把它掩盖掉。
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  let entered!: () => void
+  const seen = new Promise<void>((resolve) => { entered = resolve })
+  await page.route('**/zba/v1/capabilities/inspect', async (route) => {
+    entered()
+    await held
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'service_unavailable', message: 'synthetic delayed preflight' } })
+    })
+  })
+
+  const writes: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().includes('/capabilities/execute')) writes.push(request.url())
+  })
+
+  await actions.first().click()
+  await page.getByTestId('cap-confirm-ok').click()
+  await seen
+  await expect(page.getByTestId('cap-confirm')).toHaveCount(0)
+
+  // 第二个意图：键盘 Enter 打开（不点鼠标，顺带覆盖键盘路径）。
+  await actions.nth(1).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('cap-confirm')).toBeVisible()
+
+  // ① 焦点必须在框内，且不是被禁用的按钮。
+  const focus = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null
+    const inDialog = !!el?.closest('[role="dialog"]')
+    const disabled = el instanceof HTMLButtonElement ? el.disabled : false
+    return { inDialog, disabled, enabledInDialog: document.querySelectorAll('[data-testid="cap-confirm"] button:not([disabled])').length }
+  })
+  expect(focus.inDialog, '在途时新框里必须有可用焦点').toBe(true)
+  expect(focus.disabled, '焦点不能落在被禁用的按钮上（focus() 对禁用元素是空操作）').toBe(false)
+  expect(focus.enabledInDialog, '新框至少要有一个可用按钮').toBeGreaterThan(0)
+
+  // ② 不需要释放上一个请求就能退出。
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('cap-confirm')).toHaveCount(0)
+
+  // ③ 取消不等于提交。
+  expect(writes, '取消新意图不得发出写请求').toHaveLength(0)
+
+  release()
+  await expect(page.getByTestId('cap-result')).toBeVisible({ timeout: 15_000 })
+})
+
 // ── S23-R2-F2：未知历史不被「无回执拒绝」抹掉 ───────────────────────────────
 
 for (const mode of ['retry', 'card'] as const) {

@@ -20,7 +20,10 @@ public readonly record struct ApprovalInboundResult(
     bool ShouldExecute,
     string ReasonCode,
     string? Reply = null,
-    ApprovalTicket? Ticket = null);
+    ApprovalTicket? Ticket = null)
+{
+    public bool Ok => ReasonCode is "approved" or "rejected";
+}
 
 /// <summary>模型想调工具时，服务端要不要开一张审批单。</summary>
 public readonly record struct ApprovalCreateResult(

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import editableFixture from '../fixtures/configuration-read-editable-result.json'
-import type { ZbaConfigurationView } from '../../src/api/zba'
+import type { ZbaConfigurationPatch, ZbaConfigurationView } from '../../src/api/zba'
 import {
+  applyProviderNames,
   baselineRaw,
   buildPatch,
   buildSecrets,
@@ -20,6 +21,49 @@ function field(section: 'behavior' | 'model' | 'agent' | 'platform', key: string
 }
 
 describe('配置草稿', () => {
+  it('供应商改名只提交改过的项，且拒绝把脱敏展示名写回（PNL-11）', () => {
+    // 真实宿主返回的是 visibility=2 + nameRaw 的可改名投影；fixture 是 visibility=1 的只读形态，
+    // 所以这里在测试里显式换成宿主真实形态，避免拿假形状测出假结论。
+    const renamableView = structuredClone(view) as ZbaConfigurationView
+    const provider = renamableView.registered.providers[0]!
+    ;(provider.name as { visibility: number }).visibility = 2
+    ;(provider.name as { nameRaw?: string }).nameRaw = 'sample-provider'
+    ;(provider.name as { display: string }).display = 'sam***er'
+    delete (provider.name as { value?: string }).value
+
+    const patch: ZbaConfigurationPatch = {}
+    expect(applyProviderNames(patch, { 'provider-sample': '真名样例' }, renamableView)).toEqual([])
+    // ProviderMetadataPatch 是闭合记录：六个字段全在，没改的都是 Keep。
+    expect(patch.registered?.providers).toEqual([{
+      key: 'provider-sample',
+      changes: {
+        nameRaw: { kind: 1, value: '真名样例' },
+        priority: { kind: 0 },
+        baseUrl: { kind: 0 },
+        modelName: { kind: 0 },
+        enabled: { kind: 0 },
+        credential: { kind: 0 }
+      }
+    }])
+
+    // 没改动 -> 一个字节都不发（否则每次保存都会覆盖别人的改名）。
+    const untouched: ZbaConfigurationPatch = {}
+    expect(applyProviderNames(untouched, { 'provider-sample': 'sample-provider' }, renamableView)).toEqual([])
+    expect(untouched.registered).toBeUndefined()
+
+    // 把脱敏串当名字写回 = 明确拒绝。
+    const placeholder: ZbaConfigurationPatch = {}
+    const placeholderErrors = applyProviderNames(placeholder, { 'provider-sample': 'sam***er' }, renamableView)
+    expect(placeholderErrors).toHaveLength(1)
+    expect(placeholderErrors[0]).toContain('脱敏')
+    expect(placeholder.registered).toBeUndefined()
+
+    // 空名、不存在的供应商、以及只读形态（visibility=1）都拦在客户端。
+    expect(applyProviderNames({}, { 'provider-sample': '   ' }, renamableView)).toHaveLength(1)
+    expect(applyProviderNames({}, { 'no-such-provider': 'x' }, renamableView)).toHaveLength(1)
+    expect(applyProviderNames({}, { 'provider-sample': '真名' }, view)[0]).toContain('不可改名')
+  })
+
   it('只把 Set/Clear 转成 patch，并保留字段类型', () => {
     const draft: DraftMap = {
       [fieldPath('behavior', 'botPersona')]: { kind: 'set', raw: '新人格' },

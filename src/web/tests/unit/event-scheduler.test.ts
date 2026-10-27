@@ -57,6 +57,31 @@ describe('EventScheduler', () => {
     scheduler.stop()
   })
 
+  it('服务端要求 resync 且锚点回退时，完整补读后游标跟随新代际', async () => {
+    const client = fakeClient([
+      page([], 9, true),
+      page([], 3, true),
+      page([event(4)], 4)
+    ])
+    const scheduler = new EventScheduler(client, { isHidden: () => false })
+    const reloads: number[] = []
+    scheduler.subscribe({
+      name: 'tasks',
+      matches: () => true,
+      reload: async () => { reloads.push(scheduler.snapshot().cursor) }
+    })
+
+    expect(await scheduler.pollOnce()).toBe(true)
+    expect(scheduler.snapshot().cursor).toBe(9)
+    expect(await scheduler.pollOnce()).toBe(true)
+    expect(scheduler.snapshot().cursor).toBe(3)
+    expect(await scheduler.pollOnce()).toBe(true)
+    expect(client.calls).toEqual([0, 9, 3])
+    expect(scheduler.snapshot().cursor).toBe(4)
+    expect(reloads).toEqual([0, 9, 3])
+    scheduler.stop()
+  })
+
   it('同一 sequence 不重复处理，乱序事件按序号处理', async () => {
     const client = fakeClient([
       page([], 0, true),
