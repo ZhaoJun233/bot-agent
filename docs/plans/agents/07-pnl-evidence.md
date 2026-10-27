@@ -114,3 +114,5 @@
 | 残留 | `botagent-web.drill-dd487ca`（可用于前滚）、`botagent-web.pre-drill-20261027`（备份） |
 
 结论：前端可独立发布、独立回退，回退只操作本次交付产物，不需重编或重启后端。演练结束时线上停在回退后的 `7a6628a` 产物。发布签署由项目组发布负责人完成。
+
+> 更正（2026-10-27 21:00）：本次演练只验了 `/web/` 返回 200，**没验 index.html 引用的 JS/CSS 能否加载**。07dff41 发布时构建漏了 `--base=/web/`，资源请求 `/assets/*` 被反代到后端，面板白屏，已回退后重发。修复：`base: '/web/'` 写进 `src/web/vite.config.ts`；新增 e2e `tests/e2e/base-path.spec.ts`（资源都在 /web/ 下且可加载）；发布后必跑 `tools/verify-web-deploy.sh`（逐个核对引用文件存在，并经 Caddy 带口令请求每个资源的状态码与类型）。
