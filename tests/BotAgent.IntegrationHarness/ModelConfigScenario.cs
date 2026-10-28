@@ -226,9 +226,34 @@ public static partial class Program
                 backModelInReq == "model-from-panel", $"请求里的 model = {backModelInReq ?? "(无)"}");
             var backThinkingEffort = backHit?["reasoning_effort"]?.GetValue<string>();
             var backThinkingTokens = backHit?["max_thinking_tokens"]?.GetValue<int>();
-            Check("★★ 回到主模型后恢复主模型独立思考预算（high · 16384 tokens）",
-                backThinkingEffort == "high" && backThinkingTokens == 16384,
+            Check("主模型使用 High 思考深度，不附加固定 Token 预算",
+                backThinkingEffort == "high" && backThinkingTokens is null,
                 $"主模型 effort={backThinkingEffort ?? "(无)"}, tokens={backThinkingTokens?.ToString() ?? "(无)"}");
+
+            var depths = new[] { "off", "low", "medium", "high", "xhigh" };
+            foreach (var depth in depths)
+            {
+                using var depthHttp = CreatePanelHttpClient(panelPort, 10);
+                using var depthContent = new StringContent(
+                    new JsonObject { ["thinkingBudget"] = depth }.ToJsonString(), Encoding.UTF8, "application/json");
+                using var depthResponse = await depthHttp.PostAsync(settingsUrl, depthContent, cts.Token);
+                var (_, savedBody) = await PanelGetAsync(settingsUrl);
+                Check($"思考深度 {depth} 保存并回显",
+                    depthResponse.IsSuccessStatusCode && JsonNode.Parse(savedBody)?["runtime"]?["thinkingBudget"]?.GetValue<string>() == depth);
+
+                var marker = "synthetic-depth-" + depth;
+                openAiB.ClearRequests();
+                openAiB.EnqueueReply("""{"suitability":90,"reply":"synthetic reply"}""");
+                await protocol2.SendGroupMessageAsync(groupId, 20001, "群友A", marker,
+                    51100 + Array.IndexOf(depths, depth),
+                    mentionBot: true, ct: cts.Token);
+                await WaitUntilAsync(() => openAiB.Requests.Any(r => UserTexts(r).Any(t => t.Contains(marker))),
+                    TimeSpan.FromSeconds(25));
+                var depthHit = openAiB.Requests.LastOrDefault(r => UserTexts(r).Any(t => t.Contains(marker)));
+                Check($"思考深度 {depth} 生效于主模型请求",
+                    depthHit?["reasoning_effort"]?.GetValue<string>() == (depth == "off" ? "none" : depth)
+                    && depthHit?["max_thinking_tokens"] is null);
+            }
 
             // ---- 7) 清空密钥 → 回退环境变量 ----
             using (var http = CreatePanelHttpClient(panelPort, 10))
@@ -247,6 +272,13 @@ public static partial class Program
 
             await bot2.StopAsync();
         }
+
+        using var bot3 = StartBot(env);
+        await WaitForPortAsync(panelPort, cts.Token, bot3);
+        var (_, persistedDepth) = await PanelGetAsync(settingsUrl);
+        Check("重启后保留 xHigh 思考深度",
+            JsonNode.Parse(persistedDepth)?["runtime"]?["thinkingBudget"]?.GetValue<string>() == "xhigh");
+        await bot3.StopAsync();
     }
 
     private static string oldKeyFromEnvPlaceholder() => "sk-from-env";

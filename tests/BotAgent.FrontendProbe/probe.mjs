@@ -532,6 +532,8 @@ const document = {
 };
 
 const RUNTIME = {
+  thinkingBudget: "medium", thinkingCustomBudget: "4096",
+  fastThinkingBudget: "low", fastThinkingCustomBudget: "1024",
   botPersona: "老群友", messageWhitelist: "123,456", aiDesire: 50, suitabilityThreshold: 10,
   aiModeEnabled: true, maxTokens: 4096, groupCooldownSeconds: 8, privateCooldownSeconds: 3,
   // 批次 E：聊天侧有限步进循环（1 = 与改造前逐字一致）
@@ -2150,6 +2152,26 @@ check("app.js 实现配额按平台分组与筛选逻辑",
   js.includes("updateQuotaChannelCounts") &&
   js.includes("quotaChanTabs") &&
   js.includes("optgroup"));
+
+const depthSelectHtml = html.match(/<select id="setThinkingBudget">([\s\S]*?)<\/select>/)?.[1];
+check("主模型思考深度提供 Off / Low / Medium / High / xHigh",
+  ["Off", "Low", "Medium", "High", "xHigh"].every((label) => depthSelectHtml?.includes(`>${label}</option>`)));
+for (const depth of ["off", "low", "medium", "high", "xhigh", "custom"]) {
+  RUNTIME.thinkingBudget = depth;
+  RUNTIME.thinkingCustomBudget = "8192";
+  await sandbox.probe.loadSettings();
+  check(`思考深度 ${depth} 正确回填`, document.getElementById("setThinkingBudget").value === depth);
+  check(`思考深度 ${depth} 自定义字段显隐正确`,
+    document.getElementById("thinkingCustomBudgetWrap").hidden === (depth !== "custom"));
+  await sandbox.probe.saveSettings();
+  check(`思考深度 ${depth} 保存无漂移`,
+    lastSettingsBody()?.thinkingBudget === depth && lastSettingsBody()?.thinkingCustomBudget === "8192");
+}
+document.getElementById("setThinkingBudget").value = "off";
+fire("setThinkingBudget", "change", { target: document.getElementById("setThinkingBudget") });
+await sandbox.probe.saveSettings();
+check("由旧自定义配置切换 Off 后保存生效",
+  lastSettingsBody()?.thinkingBudget === "off" && document.getElementById("thinkingCustomBudgetWrap").hidden === true);
 
 /* ─────────── 移动端底栏与卡片头规范 ─────────── */
 
