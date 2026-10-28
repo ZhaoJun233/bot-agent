@@ -24,7 +24,7 @@ Migration must never turn an old disabled platform on. Null fields fall back to 
 - dotnet build tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release --no-restore
 - dotnet tests/BotAgent.SafetyProbe/bin/Release/net8.0/BotAgent.SafetyProbe.dll
 - node --check src/BotAgent.Headless/wwwroot/app.js
-- node tests/BotAgent.FrontendProbe/probe.mjs
+- node tests/BotAgent.WebUiProbe/probe.mjs
 - dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
 - Run integration s52 (new), s48 (local), s50 (Feishu), s15 (settings), and health-report probes. Existing official s42 is disabled in harness because it can hang; do not claim it passed.
 - Run ArchitectureProbe without raising baseline thresholds.

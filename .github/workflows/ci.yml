@@ -70,7 +70,7 @@ jobs:
           dotnet run --project tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj -c Release --no-restore
-          node tests/BotAgent.FrontendProbe/probe.mjs
+          node tests/BotAgent.WebUiProbe/probe.mjs
       - name: Deterministic pipeline evaluation
         run: |
           dotnet run --project tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj -c Release --no-restore

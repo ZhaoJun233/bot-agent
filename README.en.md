@@ -238,7 +238,7 @@ dotnet build tests/BotAgent.IntegrationHarness -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 
 # Run frontend static and runtime probes
-node tests/BotAgent.FrontendProbe/probe.mjs
+node tests/BotAgent.WebUiProbe/probe.mjs
 ```
 
 The test suite covers S1–S51 real end-to-end scenarios (whitelists, silent decisions, sentence splitting, long-term memory & profiles, stickers & magic-byte validation, context quoting, hot model reconfiguration, speech synthesis, recall awareness, web search, QR login, Feishu channel isolation, multi-platform policies, daily token quota ledgers, etc.), as well as sub-second architectural ratchets (`ArchitectureProbe`), safety boundaries (`SafetyProbe`), and production specification probes (`ProductionSpecProbe`).

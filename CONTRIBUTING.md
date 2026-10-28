@@ -25,14 +25,14 @@ dotnet run --project tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemedi
 dotnet run --project tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj -c Release
 dotnet run --project tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj -c Release
 dotnet run --project tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs
+node tests/BotAgent.WebUiProbe/probe.mjs
 dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 ```
 
 The integration harness starts a separate bot process; build the core project first. The synthetic integration suite runs the enabled scenarios from S1–S51: S2 is covered inside S1; S42 (official channel) is explicitly excluded from both the harness entry point and the CI matrix because its synthetic gateway timing/timeout and whitelist-reset assertions are not yet reliable. A green run is **not** evidence of S42 end-to-end coverage. `.github/workflows/ci.yml` runs the probes explicitly listed in its `verify` job and deterministic evaluations, and partitions the enabled integration scenarios into parallel matrix slices (`Core & Chat`, `Media & Tools`, `Governance & Multi-Platform`) under `integration` on `dev`, `main`, and PRs; inspect the actual run before calling it green.
 
-The `verify` job also restores and runs `ReviewRemediationProbe`, `ReverseTransportProbe`, `DeadlineGateProbe`, `FeishuRemediationProbe`, `SettingsScopeProbe`, and `SsrfProbe`. These focused synthetic checks do not establish production or excluded official-channel end-to-end coverage. Core and the standalone integration harness each explicitly enable transitive NuGet auditing (`all`, severity threshold `high`) and treat high/critical findings (`NU1903`/`NU1904`) as restore errors; these are per-project gates, not proof that every repository package graph has been audited; `dotnet list package --vulnerable` output is informational and its exit code alone is not an audit gate. The isolated native-browser fixture under `tests/BotAgent.FrontendProbe` remains a manual check, not a browser CI job.
+The `verify` job also restores and runs `ReviewRemediationProbe`, `ReverseTransportProbe`, `DeadlineGateProbe`, `FeishuRemediationProbe`, `SettingsScopeProbe`, and `SsrfProbe`. These focused synthetic checks do not establish production or excluded official-channel end-to-end coverage. Core and the standalone integration harness each explicitly enable transitive NuGet auditing (`all`, severity threshold `high`) and treat high/critical findings (`NU1903`/`NU1904`) as restore errors; these are per-project gates, not proof that every repository package graph has been audited; `dotnet list package --vulnerable` output is informational and its exit code alone is not an audit gate. The Web UI static probe under `tests/BotAgent.WebUiProbe` checks DOM id wiring, auth endpoint alignment and settings-key alignment by reading source text. It does not start a browser or a process, so runtime behaviour remains a manual check.
 
 ## Publishing and release coverage
 

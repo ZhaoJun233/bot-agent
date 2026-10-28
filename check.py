@@ -134,7 +134,7 @@ def check_js_syntax(www: Path):
 
 def check_frontend_probe(root: Path):
     hdr("4b. 前端探针冒烟测试（probe.mjs）")
-    probe_script = root / "tests/BotAgent.FrontendProbe/probe.mjs"
+    probe_script = root / "tests/BotAgent.WebUiProbe/probe.mjs"
     if not probe_script.exists():
         caution("未找到 probe.mjs，跳过")
         return

@@ -549,10 +549,10 @@ harness 可调度 S1、S3–S41、S43–S51；S2 的提示词断言并入 S1，S
 
 另有几支**秒级探针**（合成场景，不访问生产数据或服务，改完对应部分各跑一遍）：`ArchitectureProbe`（架构棘轮）、
 `SafetyProbe`（机制与多平台策略安全边界）、`ParticipationProbe`、`PipelineEval`（隔离评测）、
-`ProductionSpecProbe`（生产契约与降级）、[FrontendProbe](<../../tests/BotAgent.FrontendProbe/probe.mjs>)（面板静态 + 运行时）。S50 飞书 Webhook 接入与 S51 每日 Token 配额面板也在集成场景列表中；计数以本地命令输出为准：
+`ProductionSpecProbe`（生产契约与降级）、[WebUiProbe](<../../tests/BotAgent.WebUiProbe/probe.mjs>)（面板静态 + 运行时）。S50 飞书 Webhook 接入与 S51 每日 Token 配额面板也在集成场景列表中；计数以本地命令输出为准：
 
 ```bash
-node tests/BotAgent.FrontendProbe/probe.mjs
+node tests/BotAgent.WebUiProbe/probe.mjs
 ```
 
 ---

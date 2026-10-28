@@ -67,7 +67,7 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs                       # panel smoke test (no browser)
+node tests/BotAgent.WebUiProbe/probe.mjs                       # panel smoke test (no browser)
 QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 # structural guardrails (read source only, no database, no process): baseline lives in ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release

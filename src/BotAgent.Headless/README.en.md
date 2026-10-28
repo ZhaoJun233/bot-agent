@@ -558,10 +558,10 @@ The historical 2026-09-24 snapshot was 728 pass / 1 soft warning line (system pr
 
 There are also several **sub-second probes** (synthetic scenarios, no production data or services; run after changing the corresponding part): `ArchitectureProbe` (architecture ratchet),
 `SafetyProbe` (mechanisms and multi-platform safety boundaries), `ParticipationProbe`, `PipelineEval` (isolated evaluation),
-`ProductionSpecProbe` (production specs & fallbacks), and [FrontendProbe](<../../tests/BotAgent.FrontendProbe/probe.mjs>) (panel static + runtime). S50 Feishu Webhook and S51 Daily Token Quota are also in the integration scenario list; counts come from local command output:
+`ProductionSpecProbe` (production specs & fallbacks), and [WebUiProbe](<../../tests/BotAgent.WebUiProbe/probe.mjs>) (panel static + runtime). S50 Feishu Webhook and S51 Daily Token Quota are also in the integration scenario list; counts come from local command output:
 
 ```bash
-node tests/BotAgent.FrontendProbe/probe.mjs
+node tests/BotAgent.WebUiProbe/probe.mjs
 ```
 
 ---

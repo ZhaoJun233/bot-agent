@@ -67,7 +67,7 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs                       # 面板冒烟（无浏览器）
+node tests/BotAgent.WebUiProbe/probe.mjs                       # 面板冒烟（无浏览器）
 QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 # 结构护栏（只读源码，不连库不起进程）：基线在 ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release

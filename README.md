@@ -238,7 +238,7 @@ dotnet build tests/BotAgent.IntegrationHarness -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 
 # 运行前端静态与运行时探针
-node tests/BotAgent.FrontendProbe/probe.mjs
+node tests/BotAgent.WebUiProbe/probe.mjs
 ```
 
 测试集涵盖 S1–S51 真实端到端场景（白名单、静默决策、分句节拍、长期记忆与档案、表情包与魔数校验、上下文引用、模型热切、语音合成、撤回感知、联网搜索、扫码登录、飞书通道隔离、多平台策略与每日 Token 配额账本等），以及微秒级架构棘轮（ArchitectureProbe）、安全边界（SafetyProbe）与生产契约探针（ProductionSpecProbe）。
