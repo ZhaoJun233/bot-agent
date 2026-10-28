@@ -12,7 +12,8 @@ public static class PluginDiagnosticAnalyzer
         string pluginId,
         string assemblyName,
         Exception ex,
-        PluginLifecycleState state)
+        PluginLifecycleState state,
+        DateTimeOffset occurredAt)
     {
         var evidence = new List<string>();
         CollectEvidence(ex, evidence);
@@ -89,7 +90,7 @@ public static class PluginDiagnosticAnalyzer
             rootCause,
             remediations,
             evidence,
-            DateTimeOffset.UtcNow);
+            occurredAt);
     }
 
     private static void CollectEvidence(Exception? ex, List<string> list)

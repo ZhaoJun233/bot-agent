@@ -32,7 +32,7 @@ internal static class Baseline
     /// “当场做掉只读工具”搬进 `Services/Reply/InlineTurnTools.cs`。
     /// 这格仍然只许往下调：回复主链里动作分派那一段还能拆，谁接着拆记得同步这里。
     /// </summary>
-    public const int MaxFileLines = 1765;
+    public const int MaxFileLines = 1764;
     public const string BotAgentHostPath = "Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。
@@ -54,7 +54,7 @@ internal static class Baseline
     /// ApplyChannelAndAgentSettings），全 src 超过 200 行的成员块 **0 个**。基线按 DoD 钉死在 200。
     /// 诊断用 <c>--longest</c> 看当前最长的若干个（拆的时候从上往下走）。
     /// </summary>
-    public const int LongestMethodAnywhere = 198;
+    public const int LongestMethodAnywhere = 197;
 
     // ── 易变细节 ──
     /// <summary>
@@ -85,7 +85,7 @@ internal static class Baseline
     };
 
     /// <summary>出网客户端构造处数（棘轮：只许往下调）。2026-09-23：15 → 5（面板那两条也收进 IHttpFetcher）。</summary>
-    public const int HttpClientNews = 4;
+    public const int HttpClientNews = 3;
     /// <summary>
     /// 面板主文件里直接调 <c>_agent.</c> 的次数（棘轮口径只数 <c>WebUiServer.cs</c> 这一个文件）。
     /// 2026-09-23 批次 5 第 3 步：**归零** —— 面板不再经过 BotAgentHost 这层 façade 够组件，
@@ -118,7 +118,7 @@ internal static class Baseline
     public const int PanelClockReads = 0;
 
     /// <summary>例外文件自己的文件 IO 处数（棘轮，只许往下调：现在全是 PanelDeploy 的部署产物读写）。</summary>
-    public const int PanelExemptFileIo = 15;
+    public const int PanelExemptFileIo = 0;
 
     /// <summary>唯一允许持有配置实例的类（发布点）；别处都只持有 SettingsBox。</summary>
     public const string SettingsOwnerPath = "Services/SettingsBox.cs";
@@ -174,5 +174,5 @@ internal static class Baseline
     /// 直接文件 IO 总处数（棘轮：只许往下调；新加的请落在 Adapters/**）。
     /// 批次 3：61 → 62（+1 = TtsConfFile 的写入；其余是搬迁，总数几乎没动）。
     /// </summary>
-    public const int FileIoTotal = 62;
+    public const int FileIoTotal = 48;
 }

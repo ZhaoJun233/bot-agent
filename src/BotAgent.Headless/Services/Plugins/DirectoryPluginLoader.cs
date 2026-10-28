@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using BotAgent.Domain.Plugins;
+using BotAgent.Domain.Ports;
 
 namespace BotAgent.Services.Plugins;
 
@@ -11,12 +12,14 @@ public sealed class DirectoryPluginLoader : IPluginLoader
 {
     private readonly string _pluginsDirectory;
     private readonly IDiagnosticEventBus? _diagnostics;
+    private readonly IClock _clock;
     private readonly List<IBotPlugin> _embeddedPlugins = new();
 
-    public DirectoryPluginLoader(string pluginsDirectory, IDiagnosticEventBus? diagnostics = null)
+    public DirectoryPluginLoader(string pluginsDirectory, IDiagnosticEventBus? diagnostics, IClock clock)
     {
         _pluginsDirectory = pluginsDirectory;
         _diagnostics = diagnostics;
+        _clock = clock;
     }
 
     /// <summary>登记预置/桥接插件，统一由加载器接管生命周期。</summary>
@@ -56,7 +59,7 @@ public sealed class DirectoryPluginLoader : IPluginLoader
                         }
                         catch (Exception ex)
                         {
-                            var report = PluginDiagnosticAnalyzer.Analyze(type.FullName ?? "Unknown", fileName, ex, PluginLifecycleState.Quarantined);
+                            var report = PluginDiagnosticAnalyzer.Analyze(type.FullName ?? "Unknown", fileName, ex, PluginLifecycleState.Quarantined, _clock.UtcNow);
                             _diagnostics?.Publish(report);
                             context.Log($"[-] 插件 {type.Name} 实例化失败，已安全跳过并隔离。故障码: {report.ErrorCode} ({report.RootCause.Message})");
                         }
@@ -64,7 +67,7 @@ public sealed class DirectoryPluginLoader : IPluginLoader
                 }
                 catch (Exception ex)
                 {
-                    var report = PluginDiagnosticAnalyzer.Analyze("Assembly." + fileName, fileName, ex, PluginLifecycleState.Quarantined);
+                    var report = PluginDiagnosticAnalyzer.Analyze("Assembly." + fileName, fileName, ex, PluginLifecycleState.Quarantined, _clock.UtcNow);
                     _diagnostics?.Publish(report);
                     context.Log($"[-] 程序集 {fileName} 加载失败，已安全跳过并隔离。故障码: {report.ErrorCode} ({report.RootCause.Message})");
                     try { alc?.Unload(); } catch { }
@@ -82,7 +85,7 @@ public sealed class DirectoryPluginLoader : IPluginLoader
             }
             catch (Exception ex)
             {
-                var report = PluginDiagnosticAnalyzer.Analyze(plugin.Id, plugin.GetType().Assembly.GetName().Name ?? "Unknown", ex, PluginLifecycleState.Quarantined);
+                var report = PluginDiagnosticAnalyzer.Analyze(plugin.Id, plugin.GetType().Assembly.GetName().Name ?? "Unknown", ex, PluginLifecycleState.Quarantined, _clock.UtcNow);
                 _diagnostics?.Publish(report);
                 context.Log($"[-] 插件 {plugin.Name} 初始化异常，已安全隔离并跳过。故障码: {report.ErrorCode} ({report.RootCause.Message})");
             }

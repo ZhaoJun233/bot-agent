@@ -60,31 +60,34 @@ internal sealed class SourceIndex
 
     public static SourceIndex Load()
     {
-        var root = ResolveSourceRoot();
+        var roots = ResolveSourceRoots();
         var files = new List<SourceFile>();
-        foreach (var full in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-                                   .OrderBy(p => p, StringComparer.Ordinal))
+        foreach (var (root, prefix) in roots)
         {
-            var rel = Path.GetRelativePath(root, full).Replace('\\', '/');
-            if (IsBuildOutput(rel))
+            foreach (var full in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+                                       .OrderBy(p => p, StringComparer.Ordinal))
             {
-                continue;
-            }
+                var rel = prefix + Path.GetRelativePath(root, full).Replace('\\', '/');
+                if (IsBuildOutput(rel))
+                {
+                    continue;
+                }
 
-            var raw = File.ReadAllText(full);
-            CsharpText.Strip(raw, out var noComments, out var codeOnly);
-            files.Add(new SourceFile
-            {
-                RelativePath = rel,
-                Lines = SplitLines(raw),
-                Raw = raw,
-                NoComments = noComments,
-                CodeOnly = codeOnly,
-                CodeOnlyLines = SplitLines(codeOnly),
-            });
+                var raw = File.ReadAllText(full);
+                CsharpText.Strip(raw, out var noComments, out var codeOnly);
+                files.Add(new SourceFile
+                {
+                    RelativePath = rel,
+                    Lines = SplitLines(raw),
+                    Raw = raw,
+                    NoComments = noComments,
+                    CodeOnly = codeOnly,
+                    CodeOnlyLines = SplitLines(codeOnly),
+                });
+            }
         }
 
-        return new SourceIndex { Root = root, Files = files };
+        return new SourceIndex { Root = string.Join(", ", roots.Select(r => r.Root)), Files = files };
     }
 
     private static bool IsBuildOutput(string relativePath)
@@ -112,7 +115,33 @@ internal sealed class SourceIndex
         return lines;
     }
 
-    private static string ResolveSourceRoot()
+    /// <summary>
+    /// 要扫描的源码根。核心（Headless）是主根，RelativePath 不带前缀 ——
+    /// 已有断言里的 Adapters/... 这类相对路径因此不受影响。
+    /// 插件工程挂在后面并带工程名前缀：插件化之后面板与预设功能的代码都在那里，
+    /// 不纳入扫描就等于看不见它们（锚点会全部报「一个都没有」）。
+    /// </summary>
+    private static List<(string Root, string Prefix)> ResolveSourceRoots()
+    {
+        var repoRoot = FindRepoRoot();
+        var roots = new List<(string, string)>
+        {
+            (Path.Combine(repoRoot, "src", "BotAgent.Headless"), string.Empty)
+        };
+
+        foreach (var project in new[] { "BotAgent.Plugins.WebUi", "BotAgent.Plugins.Presets" })
+        {
+            var dir = Path.Combine(repoRoot, "src", project);
+            if (Directory.Exists(dir))
+            {
+                roots.Add((dir, project + "/"));
+            }
+        }
+
+        return roots;
+    }
+
+    private static string FindRepoRoot()
     {
         var fromEnv = Environment.GetEnvironmentVariable("QQCHAT_SRC_ROOT");
         if (!string.IsNullOrWhiteSpace(fromEnv))
@@ -120,7 +149,7 @@ internal sealed class SourceIndex
             var candidate = Path.Combine(fromEnv, "src", "BotAgent.Headless");
             if (Directory.Exists(candidate))
             {
-                return candidate;
+                return fromEnv;
             }
         }
 
@@ -130,7 +159,7 @@ internal sealed class SourceIndex
             var candidate = Path.Combine(dir.FullName, "src", "BotAgent.Headless");
             if (File.Exists(Path.Combine(candidate, "BotAgent.Headless.csproj")))
             {
-                return candidate;
+                return dir.FullName;
             }
 
             dir = dir.Parent;

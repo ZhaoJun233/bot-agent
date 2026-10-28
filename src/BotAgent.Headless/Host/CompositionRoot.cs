@@ -1,4 +1,6 @@
 using BotAgent.Adapters.Persistence;
+using BotAgent.Adapters.Plugins;
+using BotAgent.Adapters.Time;
 using BotAgent.Adapters.Model;
 using BotAgent.Adapters.Platforms;
 using BotAgent.Adapters.Platforms.Feishu;
@@ -79,34 +81,41 @@ internal static class CompositionRoot
     }
 
     /// <summary>
+    /// 装配的地基：配置发布点、功能存在性判定、密钥/配置/Provider 三个无状态存储。
+    /// 单独拆出来是因为 Build 已贴近架构探针的最长方法上限（198 行），
+    /// 这一段与后续依赖编织无关，抽走不改变装配顺序。
+    /// </summary>
+    private static (SettingsBox Box, FeatureAvailability Availability, SecretsStore Secrets,
+        SettingsStore Store, ModelProviderStore Providers) BuildFoundation(AppSettings settings)
+    {
+        // 配置的唯一发布点：所有组件都从它读“当前生效的那一份”。
+        // 热更新换的是它背后的实例，在途那一轮不会读到半新半旧的配置（review-findings #4）。
+        var box = new SettingsBox(settings);
+
+        // 功能存在性判定：供给该功能的插件程序集已加载且配置开关为 true，否则功能实例以“未启用”状态构造。
+        var presetsAssembly = Path.Combine(AppPaths.RuntimeRoot, "plugins", "BotAgent.Plugins.Presets.dll");
+        var availability = new FeatureAvailability(
+            () => PluginAssemblyProbe.Exists(presetsAssembly),
+            () => box.Current);
+
+        // 密钥库与配置库都无状态，全进程共用一个实例只为少造对象。
+        var secrets = new SecretsStore();
+        var store = new SettingsStore();
+
+        // Provider 注册表只登记非敏感路由元数据；启动时同步 primary 的地址与模型名，不覆盖已有熔断状态。
+        var providers = new ModelProviderStore();
+        providers.EnsurePrimary(settings);
+
+        return (box, availability, secrets, store, providers);
+    }
+
+    /// <summary>
     /// 阶段二：按依赖顺序把服务接起来。
     /// 顺序：协议端（必要时两条 → 聚合器）→ 模型客户端 → 仓储 → host 用例 → 面板。
     /// </summary>
     public static AppGraph Build(AppSettings settings)
     {
-        // 配置的唯一发布点：所有组件都从它读"当前生效的那一份"。
-        // 面板热更新换的是它背后的实例（不是就地改共享对象），这样在途的那一轮不会读到半新半旧的配置
-        // （review-findings #4）。见 SettingsBox。
-        var settingsBox = new SettingsBox(settings);
-
-        // 功能存在性判定：**功能在不在**，而不是"面板要不要显示它"。
-        // 判定口径：供给该功能的插件程序集已加载 && 该功能的配置开关为 true。
-        // 任一不满足 → 功能实例以"未启用"状态构造，其全部对外方法短路。
-        // 这样"插件禁用/不存在"与"功能不存在"才是同一件事（面板也就不会挂空壳功能）。
-        var presetsAssembly = Path.Combine(AppPaths.RuntimeRoot, "plugins", "BotAgent.Plugins.Presets.dll");
-        var featureAvailability = new FeatureAvailability(
-            () => File.Exists(presetsAssembly),
-            () => settingsBox.Current);
-
-        // 密钥库：无状态（每次都直接读写库里那几条），全进程共用一个实例只是为了少造对象。
-        var secrets = new SecretsStore();
-        // 配置库：同样无状态；热更新与面板共用它。
-        var settingsStore = new SettingsStore();
-
-        // Provider 注册表只登记非敏感路由元数据；实际密钥仍由环境变量/密钥库提供。
-        // 启动时同步 primary 的地址与模型名，但不覆盖已有熔断状态。
-        var providerStore = new ModelProviderStore();
-        providerStore.EnsurePrimary(settings);
+        var (settingsBox, featureAvailability, secrets, settingsStore, providerStore) = BuildFoundation(settings);
 
         // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
         var riskBackoff = new ProtocolRiskBackoff(msg => FileLog.Write("OneBot", msg));
@@ -261,7 +270,7 @@ internal static class CompositionRoot
         if (links != null) pluginContext.RegisterService(links);
         if (local != null) pluginContext.RegisterService(local);
 
-        var pluginLoader = new DirectoryPluginLoader(Path.Combine(AppPaths.RuntimeRoot, "plugins"), diagnosticBus);
+        var pluginLoader = new DirectoryPluginLoader(Path.Combine(AppPaths.RuntimeRoot, "plugins"), diagnosticBus, new SystemClock());
         // 插件启停 → 真实配置字段：绑定由插件自己注册在 pluginContext 上，
         // 落库与热重载走 SettingsHotReload（与面板保存设置同一条扇出）。
         var plugins = new PluginManager(
