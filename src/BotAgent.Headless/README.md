@@ -1,7 +1,5 @@
 # Bot Agent Headless
 
-[English](README.en.md) | 简体中文
-
 **无界面、轻量化、支持多平台的聊天机器人服务**：这是 Bot Agent 的常驻后台核心服务，支持连接 QQ 私域（NapCat / OneBot v11）、QQ 开放平台官方通道、飞书应用机器人及本地无依赖测试通道。通过接入 OpenAI 兼容大模型（如 DeepSeek、ChatGPT、通义千问、Ollama 或自建中转接口），实现私聊与群聊的拟人化智能交互，并自带一个优雅易用的轻量 Web 管理面板。
 
 ```
