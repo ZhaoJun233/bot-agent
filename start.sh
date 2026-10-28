@@ -77,28 +77,10 @@ export QQCHAT_IDLE_FALLBACK="${QQCHAT_IDLE_FALLBACK:-${IDLE_FALLBACK:-60}}"
 export QQCHAT_SPLIT_REPLIES="${QQCHAT_SPLIT_REPLIES:-${SPLIT_REPLIES:-1}}"
 export QQCHAT_SEGMENT_DELAY_MS="${QQCHAT_SEGMENT_DELAY_MS:-${SEGMENT_DELAY_MS:-700}}"
 
-export QQCHAT_PANEL_PASSWORD="${QQCHAT_PANEL_PASSWORD:-${PANEL_PASSWORD:-}}"
-export QQCHAT_PANEL_TOKEN="${QQCHAT_PANEL_TOKEN:-${PANEL_TOKEN:-}}"
-export QQCHAT_DISABLE_PANEL_AUTH="${QQCHAT_DISABLE_PANEL_AUTH:-${DISABLE_PANEL_AUTH:-}}"
-export QQCHAT_TLS_CERT="${QQCHAT_TLS_CERT:-${TLS_CERT:-}}"
-export QQCHAT_TLS_KEY="${QQCHAT_TLS_KEY:-${TLS_KEY:-}}"
-export QQCHAT_HEALTH_PORT="${QQCHAT_HEALTH_PORT:-${HEALTH_PORT:-18245}}"
 export QQCHAT_DATA_DIR="${QQCHAT_DATA_DIR:-$DIR/runtime}"
 
 export QQCHAT_NAPCAT_WEBUI_URL="${QQCHAT_NAPCAT_WEBUI_URL:-${NAPCAT_WEBUI_URL:-http://127.0.0.1:6099}}"
 export QQCHAT_NAPCAT_WEBUI_TOKEN="${QQCHAT_NAPCAT_WEBUI_TOKEN:-${NAPCAT_WEBUI_TOKEN:-}}"
-
-# 检查必填项
-if [ -z "$QQCHAT_API_KEY" ] || [ "$QQCHAT_API_KEY" = "sk-xxxxxxxxxxxxxxxxxxxxxxxx" ]; then
-    echo "[!] 错误: 未配置有效的 MODEL_API_KEY / QQCHAT_API_KEY。"
-    echo "请在 $ENV_FILE 中设置 MODEL_API_KEY 后重试。"
-    exit 1
-fi
-
-# 如果未设置 PANEL_PASSWORD，则控制面板为公开免密模式（可在面板设置中随时配置）
-if [ -z "$QQCHAT_PANEL_PASSWORD" ]; then
-    echo "[*] 提示: 未配置 PANEL_PASSWORD，面板将以免密模式运行。"
-fi
 
 # 自动检测与适配运行环境（标准 Linux / Termux）
 IS_TERMUX=false
@@ -137,53 +119,44 @@ fi
 
 PROJECT_FILE="$DIR/src/BotAgent.Headless/BotAgent.Headless.csproj"
 DLL_FILE="$DIR/src/BotAgent.Headless/bin/Release/net8.0/BotAgent.Headless.dll"
+PLUGINS_PROJECT="$DIR/src/BotAgent.Plugins.Presets/BotAgent.Plugins.Presets.csproj"
+WEBUI_PROJECT="$DIR/src/BotAgent.Plugins.WebUi/BotAgent.Plugins.WebUi.csproj"
+PLUGINS_DIR="$DIR/runtime/plugins"
 
-# 如果产物不存在，先编译
-if [ ! -f "$DLL_FILE" ]; then
-    echo "首次运行，正在编译源码 (Release)..."
-    dotnet build "$PROJECT_FILE" -c Release
+echo "正在检查并构建最新核心与插件源码 (Release)..."
+dotnet build "$PROJECT_FILE" -c Release -v q --nologo
+if [ -f "$PLUGINS_PROJECT" ]; then
+    mkdir -p "$PLUGINS_DIR"
+    dotnet build "$PLUGINS_PROJECT" -c Release -o "$PLUGINS_DIR" -v q --nologo
+fi
+if [ -f "$WEBUI_PROJECT" ]; then
+    dotnet build "$WEBUI_PROJECT" -c Release -o "$PLUGINS_DIR" -v q --nologo
 fi
 
 # 运行模式选择（直接从源码项目运行）
 if [ "$1" = "--foreground" ] || [ "$1" = "-f" ]; then
-    echo "正在以前台模式从源码运行 Bot Agent..."
+    echo "正在以前台模式从源码运行 Bot Agent (Headless)..."
     echo $$ > "$PID_FILE"
     trap 'rm -f "$PID_FILE"' EXIT INT TERM
     exec dotnet exec "$DLL_FILE"
 fi
 
-echo "正在以后台模式从源码运行 Bot Agent..."
+echo "正在以后台模式从源码运行 Bot Agent (Headless)..."
 nohup dotnet exec "$DLL_FILE" < /dev/null >> "$LOG_FILE" 2>&1 &
 BOT_PID=$!
 disown "$BOT_PID" 2>/dev/null || true
 echo $BOT_PID > "$PID_FILE"
 
 echo "正在启动服务，请稍候..."
-STARTED=false
-for i in $(seq 1 20); do
-    if ! kill -0 $BOT_PID 2>/dev/null; then
-        break
-    fi
-    if curl -s -m 1 "http://127.0.0.1:${QQCHAT_HEALTH_PORT}/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
-        STARTED=true
-        break
-    fi
-    sleep 1
-done
-
-if [ "$STARTED" = true ]; then
-    echo "[+] Bot Agent 启动成功 (PID: $BOT_PID)"
-    echo "    Web 面板: http://127.0.0.1:${QQCHAT_HEALTH_PORT}/"
+sleep 2
+if kill -0 $BOT_PID 2>/dev/null; then
+    echo "[+] Bot Agent (Headless) 启动成功 (PID: $BOT_PID)"
+    echo "    运行模式: 纯无头服务（常驻守护）"
     echo "    运行日志: $LOG_FILE"
     echo "使用 './status.sh' 查看状态，'./stop.sh' 停止服务。"
 else
-    if kill -0 $BOT_PID 2>/dev/null; then
-        echo "[!] 进程已启动 (PID: $BOT_PID)，正在后台初始化中..."
-        echo "请稍后运行 './status.sh' 检查状态，或查看日志: $LOG_FILE"
-    else
-        echo "[!] Bot Agent 启动失败，请查看日志:"
-        tail -n 25 "$LOG_FILE"
-        rm -f "$PID_FILE"
-        exit 1
-    fi
+    echo "[!] Bot Agent 启动失败，请查看日志:"
+    tail -n 25 "$LOG_FILE"
+    rm -f "$PID_FILE"
+    exit 1
 fi

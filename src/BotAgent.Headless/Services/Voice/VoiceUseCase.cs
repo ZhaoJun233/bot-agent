@@ -28,17 +28,24 @@ public sealed class VoiceUseCase
     /// <summary>每个会话最近一次发语音的时间（频率门：语音是“稀罕事”，不能每句都发）。</summary>
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSent = new();
 
-    public VoiceUseCase(VoiceService? voice, SettingsBox box, Action<string> log)
+    public VoiceUseCase(VoiceService? voice, SettingsBox box, Action<string> log, bool enabled = true)
     {
         _voice = voice;
         _box = box;
         _log = log;
+        Enabled = enabled;
     }
 
     private AppSettings _settings => _box.Current;
 
+    /// <summary>
+    /// 功能是否已启用。false 时本对象全部对外方法短路：
+    /// 不允许发语音、拼不出 URL、面板试听直接返回未启用。
+    /// </summary>
+    public bool Enabled { get; }
+
     /// <summary>语音客户端（面板试听 / 音色管理用；TTS 地址没配好时为 null）。</summary>
-    public VoiceService? Client => _voice;
+    public VoiceService? Client => Enabled ? _voice : null;
 
     /// <summary>面板上「语音积极性」对应给模型的**建议节奏**（秒）——只进提示词，不拦人。</summary>
     public int SuggestIntervalSeconds => OpenAiClient.VoiceIntervalSeconds(_settings.VoiceEagerness);
@@ -52,6 +59,12 @@ public sealed class VoiceUseCase
     public bool Allow(string sourceKey, out string reason)
     {
         reason = string.Empty;
+        if (!Enabled)
+        {
+            reason = "语音功能未启用";
+            return false;
+        }
+
         if (!_lastSent.TryGetValue(sourceKey, out var last))
         {
             return true;
@@ -78,7 +91,7 @@ public sealed class VoiceUseCase
     public List<string> BuildSpeakUrls(IReadOnlyList<string> parts, string? emotion, double? speed, int? pitch)
     {
         var urls = new List<string>();
-        if (_voice is null || parts.Count == 0)
+        if (!Enabled || _voice is null || parts.Count == 0)
         {
             return urls;
         }
@@ -117,9 +130,9 @@ public sealed class VoiceUseCase
         int? speedOverride,
         CancellationToken ct)
     {
-        if (_voice is null)
+        if (_voice is null || !Enabled)
         {
-            return (null, "语音服务还没初始化");
+            return (null, "语音功能未启用");
         }
 
         var (data, error) = await _voice.SynthesizeAsync(text, voiceOverride, speedOverride, ct);

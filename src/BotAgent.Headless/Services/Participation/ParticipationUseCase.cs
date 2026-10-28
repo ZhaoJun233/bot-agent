@@ -17,10 +17,17 @@ public sealed class ParticipationUseCase
     private readonly Action<string> _log;
     private readonly ParticipationRegistry _registry = new(new ParticipationPolicy());
 
-    public ParticipationUseCase(SettingsBox box, Action<string> log)
+    /// <summary>
+    /// 功能是否已启用。false 时本对象全部对外方法短路 —— 氛围阻尼功能不存在。
+    /// 与 <c>EnableAtmosphereDamping</c> 的区别：那个是"要不要参与"，这个是"功能在不在"。
+    /// </summary>
+    public bool Enabled { get; } = true;
+
+    public ParticipationUseCase(SettingsBox box, Action<string> log, bool enabled = true)
     {
         _box = box;
         _log = log;
+        Enabled = enabled;
     }
 
     private AppSettings _settings => _box.Current;

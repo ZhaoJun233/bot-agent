@@ -23,15 +23,21 @@ public sealed class MusicUseCase
     /// <summary>每会话攒下的"听完的感觉"：下一轮生成时注入，然后取走（一次性）。</summary>
     private readonly ConcurrentDictionary<string, string> _notes = new();
 
-    public MusicUseCase(MusicService? music, IQqChatSource source, Action<string> log)
+    public MusicUseCase(MusicService? music, IQqChatSource source, Action<string> log, bool enabled = true)
     {
         _music = music;
         _source = source;
         _log = log;
+        Enabled = enabled;
     }
 
+    /// <summary>
+    /// 功能是否已启用。false 时本对象全部对外方法短路：不搜歌、不分享、不攒笔记。
+    /// </summary>
+    public bool Enabled { get; }
+
     /// <summary>音乐服务就绪（面板自测 / 模型动作都要先看它）。</summary>
-    public bool IsReady => _music is not null;
+    public bool IsReady => Enabled && _music is not null;
 
     /// <summary>
     /// 最近一次「面板自测听歌」测的是哪首（面板要拿它回报；没测过 / 这次没搜到 = null）。
@@ -46,7 +52,7 @@ public sealed class MusicUseCase
     public async Task<string?> TestByNameAsync(string song, CancellationToken ct)
     {
         LastTestHeader = null;
-        if (_music is null)
+        if (_music is null || !Enabled)
         {
             return null;
         }
@@ -61,7 +67,7 @@ public sealed class MusicUseCase
 
     /// <summary>群里有人分享了歌：按分享内容去听一遍（识别平台/歌名那步在 MusicService 里）。</summary>
     public Task<string?> DescribeShareAsync(MusicShare share, string sender)
-        => _music is null ? Task.FromResult<string?>(null) : _music.DescribeAsync(share, sender, CancellationToken.None);
+        => _music is null || !Enabled ? Task.FromResult<string?>(null) : _music.DescribeAsync(share, sender, CancellationToken.None);
 
     /// <summary>
     /// 冷却门（"去听歌"这一侧的频率限制）。返回 true 表示这次可以听（并**已经记上时间**）。
@@ -69,6 +75,12 @@ public sealed class MusicUseCase
     public bool TryBeginListen(string sourceKey, int cooldownSeconds, out string reason)
     {
         reason = string.Empty;
+        if (!Enabled)
+        {
+            reason = "音乐功能未启用";
+            return false;
+        }
+
         var now = Clock.Now;
         var cooldown = TimeSpan.FromSeconds(Math.Max(0, cooldownSeconds));
         if (_lastListen.TryGetValue(sourceKey, out var lastAt) && now - lastAt < cooldown)
@@ -87,7 +99,7 @@ public sealed class MusicUseCase
     /// </summary>
     public async Task<string?> ListenAsync(string sourceKey, string song, string requester)
     {
-        if (_music is null)
+        if (_music is null || !Enabled)
         {
             return null;
         }
@@ -128,7 +140,7 @@ public sealed class MusicUseCase
     /// </summary>
     public async Task<bool> ShareAsync(string song, bool isGroup, long targetId)
     {
-        if (_music is null || targetId == 0 || !_source.IsConnected)
+        if (_music is null || !Enabled || targetId == 0 || !_source.IsConnected)
         {
             return false;
         }

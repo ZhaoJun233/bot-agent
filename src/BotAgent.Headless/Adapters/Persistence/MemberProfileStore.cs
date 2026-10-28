@@ -81,12 +81,20 @@ public sealed class MemberProfileStore : IProfileRepository
     public static string ScopeKey(long groupId) => groupId > 0 ? $"group:{groupId}" : "private";
 
     /// <summary>
+    /// 功能是否已启用。false 时画像既不写入也不读出 —— 人物画像功能不存在。
+    /// 由装配点按"插件是否加载 + 配置开关"决定，构造后不变。
+    /// </summary>
+    public bool Enabled { get; }
+
+    public MemberProfileStore(bool enabled = true) => Enabled = enabled;
+
+    /// <summary>
     /// 找出需要（重新）摘要的候选：某会话范围里，自上次摘要之后又积累了足够多的新发言。
     /// </summary>
     public List<SummaryCandidate> FindSummarizable(int minNewMessages, int maxCandidates)
     {
         var result = new List<SummaryCandidate>();
-        if (minNewMessages <= 0)
+        if (!Enabled || minNewMessages <= 0)
         {
             return result;
         }
@@ -176,7 +184,7 @@ public sealed class MemberProfileStore : IProfileRepository
     /// <summary>写入画像（摘要成功后调用）。折叠边界只前进不后退。</summary>
     public void ApplySummary(string uid, string scope, string text, long throughSeq, int foldedCount)
     {
-        if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(scope))
+        if (!Enabled || string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(scope))
         {
             return;
         }
@@ -207,7 +215,7 @@ public sealed class MemberProfileStore : IProfileRepository
     /// <param name="seq">会话内单调序号（可选，用于精确去重）。</param>
     public void Append(string uid, string name, string text, DateTimeOffset time, string? groupName, long groupId = 0, long seq = 0)
     {
-        if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(text))
+        if (!Enabled || string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(text))
         {
             return;
         }
@@ -285,7 +293,7 @@ public sealed class MemberProfileStore : IProfileRepository
         long beforeUnix = long.MaxValue,
         bool allScopes = false)
     {
-        if (string.IsNullOrWhiteSpace(uid))
+        if (!Enabled || string.IsNullOrWhiteSpace(uid))
         {
             return string.Empty;
         }
@@ -414,7 +422,7 @@ public sealed class MemberProfileStore : IProfileRepository
 
     public void SetProfileOverride(string uid, string scope, string? overrideText)
     {
-        if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(scope))
+        if (!Enabled || string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(scope))
         {
             return;
         }
@@ -433,7 +441,7 @@ public sealed class MemberProfileStore : IProfileRepository
 
     public void SetEvidence(string uid, string scope, string evidenceJson)
     {
-        if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(scope))
+        if (!Enabled || string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(scope))
         {
             return;
         }

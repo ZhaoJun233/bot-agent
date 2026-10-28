@@ -66,16 +66,27 @@ public sealed partial class LinkPreviewer
     private readonly Action<string> _log;
     private readonly ConcurrentDictionary<string, LinkPreview?> _cache = new();
 
-    public LinkPreviewer(IHttpFetcher http, Func<AppSettings> settings, Action<string> log)
+    public LinkPreviewer(IHttpFetcher http, Func<AppSettings> settings, Action<string> log, bool enabled = true)
     {
         _http = http;
         _settings = settings;
         _log = log;
+        Enabled = enabled;
     }
+
+    /// <summary>
+    /// 功能是否已启用。false 时本对象不打开任何链接。
+    /// </summary>
+    public bool Enabled { get; }
 
     /// <summary>把一批链接的标题/摘要拼成给模型看的说明；全都拿不到时返回 null。</summary>
     public async Task<string?> DescribeAsync(IReadOnlyList<string> urls, CancellationToken ct)
     {
+        if (!Enabled)
+        {
+            return null;
+        }
+
         var lines = new List<string>();
         foreach (var url in urls)
         {

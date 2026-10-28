@@ -36,17 +36,29 @@ public sealed class StickerService : IDisposable
 
     private AppSettings _settings => _box.Current;
 
-    public StickerService(IStickerRepository store, IModelClient brain, IQqChatSource source, SettingsBox box, Action<string> log)
+    /// <summary>
+    /// 功能是否已启用。false 时本对象的全部对外方法直接短路：
+    /// 不收集、不发图、不巡检、不允许。这是"插件禁用/不存在 → 功能不存在"的落点。
+    /// </summary>
+    public bool Enabled { get; }
+
+    public StickerService(IStickerRepository store, IModelClient brain, IQqChatSource source, SettingsBox box, Action<string> log,
+        bool enabled = true)
     {
         _store = store;
         _brain = brain;
         _source = source;
         _box = box;
         _log = log;
+        Enabled = enabled;
     }
 
-    /// <summary>表情包库（面板展示、回复流程挑候选都用它）。</summary>
-    public IStickerRepository Store => _store;
+    /// <summary>
+    /// 表情包库（面板展示、回复流程挑候选都用它）。
+    /// 功能不存在时返回**空库**而不是真实库：否则回复流程仍会挑出候选塞进提示词，
+    /// 模型就会以为"有表情包可用"，功能其实已经不存在了。
+    /// </summary>
+    public IStickerRepository Store => Enabled ? _store : EmptyStickerRepository.Instance;
 
     /// <summary>正在等待生成说明的张数。</summary>
     public int PendingDescribe => _describeQueue.Count;
@@ -65,7 +77,8 @@ public sealed class StickerService : IDisposable
     {
         _timer?.Dispose();
         _timer = null;
-        if (!enabled || Volatile.Read(ref _disposed) != 0)
+        // 功能本体未启用（插件缺失/被禁用）时连定时器都不建：没有功能，就不该有后台巡检
+        if (!enabled || !Enabled || Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
@@ -86,6 +99,12 @@ public sealed class StickerService : IDisposable
     /// </summary>
     public async Task CollectAsync(List<string> urls, string fromUid, long fromGroup, long messageId = 0)
     {
+        // 功能不存在 → 一张都不收（不是"收进来但不发"，是根本不碰下载与写盘）
+        if (!Enabled)
+        {
+            return;
+        }
+
         try
         {
             var added = 0;
@@ -237,6 +256,11 @@ public sealed class StickerService : IDisposable
     /// </summary>
     public async Task<string> CurateAsync(bool force)
     {
+        if (!Enabled)
+        {
+            return "表情包功能未启用";
+        }
+
         var all = _store.Snapshot();
         if (all.Count == 0)
         {
@@ -296,6 +320,11 @@ public sealed class StickerService : IDisposable
     /// </summary>
     public async Task<string> ImportFromAlbumAsync(int limit = 30)
     {
+        if (!Enabled)
+        {
+            return "表情包功能未启用";
+        }
+
         if (_settings.StickerLibraryMax <= 0)
         {
             return "表情包库上限为 0，先在设置里放开";
@@ -341,6 +370,12 @@ public sealed class StickerService : IDisposable
     public bool Allow(string sourceKey, string stickerId, out string reason)
     {
         reason = string.Empty;
+        if (!Enabled)
+        {
+            reason = "表情包功能未启用";
+            return false;
+        }
+
         var cooldown = Math.Max(0, _settings.StickerCooldownSeconds);
         if (!_lastSent.TryGetValue(sourceKey, out var last))
         {
@@ -368,6 +403,11 @@ public sealed class StickerService : IDisposable
     /// 发出去才记账 —— 这条日志也是排查“为什么又发了”的唯一现场。</summary>
     public async Task<bool> SendAsync(bool isGroup, long targetId, StickerRecord sticker, long? replyTo, string sourceKey)
     {
+        if (!Enabled)
+        {
+            return false;
+        }
+
         try
         {
             var bytes = await _store.ReadBytesAsync(sticker);

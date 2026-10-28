@@ -21,14 +21,20 @@ public sealed class ResearchUseCase
     /// <summary>每会话攒下的"查回来的资料"：下一轮生成时注入，然后取走（一次性）。</summary>
     private readonly ConcurrentDictionary<string, string> _notes = new();
 
-    public ResearchUseCase(WebSearchService? search, Action<string> log)
+    public ResearchUseCase(WebSearchService? search, Action<string> log, bool enabled = true)
     {
         _search = search;
         _log = log;
+        Enabled = enabled;
     }
 
+    /// <summary>
+    /// 功能是否已启用。false 时本对象全部对外方法短路：不搜索、不读页面、不攒笔记。
+    /// </summary>
+    public bool Enabled { get; }
+
     /// <summary>搜索服务就绪（模型动作与面板自测都要先看它）。</summary>
-    public bool IsReady => _search is not null;
+    public bool IsReady => Enabled && _search is not null;
 
     /// <summary>
     /// 冷却门。返回 true 表示这次可以搜（并**已经记上时间**）；false 时 <paramref name="reason" /> 给日志。
@@ -36,6 +42,12 @@ public sealed class ResearchUseCase
     public bool TryBeginSearch(string sourceKey, int cooldownSeconds, out string reason)
     {
         reason = string.Empty;
+        if (!Enabled)
+        {
+            reason = "联网搜索功能未启用";
+            return false;
+        }
+
         var now = Clock.Now;
         var cooldown = TimeSpan.FromSeconds(Math.Max(0, cooldownSeconds));
         if (cooldown <= TimeSpan.Zero)
@@ -57,7 +69,7 @@ public sealed class ResearchUseCase
     /// <summary>搜一次并把结果攒进笔记。返回结果本身（调用方据此判断有没有内容）。</summary>
     public async Task<WebSearchResult?> SearchAsync(string sourceKey, string query, CancellationToken ct = default)
     {
-        if (_search is null)
+        if (_search is null || !Enabled)
         {
             return null;
         }
@@ -70,7 +82,7 @@ public sealed class ResearchUseCase
     /// <summary>读一个页面并把正文（或失败说明）攒进笔记。返回正文；失败为 null。</summary>
     public async Task<string?> ReadPageAsync(string sourceKey, string url, CancellationToken ct = default)
     {
-        if (_search is null)
+        if (_search is null || !Enabled)
         {
             return null;
         }
@@ -109,11 +121,13 @@ public sealed class ResearchUseCase
 
     /// <summary>面板自测：真跑一次搜索，把结果（或失败原因）原样给面板看。</summary>
     public Task<WebSearchResult> TestSearchAsync(string query, CancellationToken ct)
-        => _search is null
-            ? Task.FromResult(new WebSearchResult(query, null, Array.Empty<WebSearchHit>(), "无", "搜索服务还没初始化"))
+        => _search is null || !Enabled
+            ? Task.FromResult(new WebSearchResult(query, null, Array.Empty<WebSearchHit>(), "无", "联网搜索功能未启用"))
             : _search.SearchAsync(query, ct);
 
     /// <summary>面板自测：真读一个页面。</summary>
     public Task<(string? Text, string? Error)> TestReadPageAsync(string url, CancellationToken ct)
-        => _search is null ? Task.FromResult<(string?, string?)>((null, "搜索服务还没初始化")) : _search.ReadPageAsync(url, ct);
+        => _search is null || !Enabled
+            ? Task.FromResult<(string?, string?)>((null, "联网搜索功能未启用"))
+            : _search.ReadPageAsync(url, ct);
 }

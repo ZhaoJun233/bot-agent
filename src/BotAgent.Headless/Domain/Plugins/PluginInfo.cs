@@ -10,4 +10,11 @@ public sealed record PluginInfo(
     string Description,
     PluginCategory Category,
     bool IsPreset,
-    bool IsEnabled);
+    bool IsEnabled)
+{
+    /// <summary>启停是否已落到真实配置字段（true = 重启后仍有效）。</summary>
+    public bool Persisted { get; init; }
+
+    /// <summary>是否允许被禁用。管理类插件（Web 控制台）为 false。</summary>
+    public bool AllowDisable { get; init; } = true;
+}

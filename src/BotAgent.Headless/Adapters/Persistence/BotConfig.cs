@@ -555,11 +555,6 @@ public static class BotConfig
     {
         var errors = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(s.ApiKey))
-        {
-            errors.Add("未配置 API Key（设 QQCHAT_API_KEY 或在 settings.json 里填 ApiKey）");
-        }
-
         if (string.IsNullOrWhiteSpace(s.Model))
         {
             errors.Add("未配置模型名（QQCHAT_MODEL）");

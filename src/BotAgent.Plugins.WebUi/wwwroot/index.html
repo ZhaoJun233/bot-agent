@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Bot Agent 控制台</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 登录遮罩：进站后若无有效会话则显示。这是内嵌卡片，不做页面跳转。 -->
+  <div class="auth-overlay" id="auth-overlay" hidden>
+    <div class="auth-card">
+      <div class="auth-title">Bot Agent 控制台</div>
+      <div class="auth-sub" id="auth-sub">请输入面板访问口令</div>
+      <form id="auth-form" autocomplete="off">
+        <input type="text" id="auth-input" class="input-text auth-input"
+               autocomplete="off" autocorrect="off" autocapitalize="off"
+               spellcheck="false" placeholder="面板访问口令" />
+        <button type="submit" class="btn btn-primary auth-btn" id="auth-submit">登录</button>
+      </form>
+      <div class="auth-error" id="auth-error"></div>
+      <div class="auth-hint">口令来自环境变量 BOTAGENT_PANEL_TOKEN / QQCHAT_PANEL_TOKEN；
+        未配置时见 data/panel-credential.txt</div>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="header-left">
+      <span class="logo-text">Bot Agent 控制台</span>
+      <span class="status-tag status-ok" id="global-status">运行中</span>
+    </div>
+    <div class="header-right">
+      <span class="meta-item" id="meta-model">模型: --</span>
+      <span class="meta-item" id="meta-mem">内存: --</span>
+      <button class="btn btn-sm" id="btn-refresh">刷新</button>
+    </div>
+  </header>
+
+  <nav class="app-nav" id="app-nav">
+    <button class="nav-tab active" data-tab="overview">运行态势</button>
+    <button class="nav-tab" data-tab="settings">配置总线</button>
+    <button class="nav-tab" data-tab="conversations">会话通道</button>
+    <button class="nav-tab" data-tab="plugins">插件槽位</button>
+    <button class="nav-tab" data-tab="playground">演练沙箱</button>
+    <button class="nav-tab" data-tab="logs">日志总线</button>
+  </nav>
+
+  <main class="app-body">
+    <!-- 1. 仪表概览 -->
+    <section class="tab-pane active" id="pane-overview">
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-title">运行时长</div>
+          <div class="metric-value" id="val-uptime">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">内存消耗</div>
+          <div class="metric-value" id="val-memory">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">活跃会话数</div>
+          <div class="metric-value" id="val-sessions">--</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">插件状态</div>
+          <div class="metric-value" id="val-plugins">--</div>
+        </div>
+      </div>
+
+      <div class="section-box">
+        <div class="section-title">接入通道矩阵</div>
+        <div class="channel-list" id="channel-list">
+          <div class="channel-row">正在检测通道状态...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. 全量参数设置 -->
+    <section class="tab-pane" id="pane-settings">
+      <div class="settings-toolbar">
+        <span class="toolbar-title">配置总线 · 分组由已启用插件与核心共同供给</span>
+        <div class="toolbar-actions">
+          <button class="btn btn-sm" id="btn-settings-reset">重置变更</button>
+          <button class="btn btn-primary btn-sm" id="btn-settings-save">保存并立即生效</button>
+        </div>
+      </div>
+
+      <div class="settings-container">
+        <!-- 侧边导航锚点：由 /api/settings/schema 在运行时生成，不再写死 -->
+        <div class="settings-nav" id="settings-nav"></div>
+
+        <!-- 参数表单 -->
+        <div class="settings-form" id="settings-form-body">
+          <div class="loading-hint">正在读取全量系统配置...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 会话管理 -->
+    <section class="tab-pane" id="pane-conversations">
+      <div class="chat-layout" id="chat-layout-box">
+        <div class="chat-sidebar" id="chat-sidebar-panel">
+          <div class="sidebar-header">活跃会话列表</div>
+          <div class="session-items" id="session-items">
+            <div class="loading-hint">加载会话中...</div>
+          </div>
+        </div>
+        <div class="chat-main" id="chat-main-panel">
+          <div class="chat-header">
+            <button class="btn btn-sm mobile-back-btn" id="btn-back-to-sessions">返回会话列表</button>
+            <span id="current-chat-header">未选中会话</span>
+          </div>
+          <div class="chat-messages" id="chat-messages-box">
+            <div class="empty-hint">请从左侧选择会话查看历史记录</div>
+          </div>
+          <div class="chat-sender">
+            <input type="text" class="input-text" id="send-input" placeholder="输入以机器人身份代发的纯文本消息...">
+            <button class="btn btn-primary" id="btn-send-msg">代发消息</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 插件槽位与诊断分析 -->
+    <section class="tab-pane" id="pane-plugins">
+      <div class="section-box">
+        <div class="section-title">插件槽位 · 支持动态装卸与热启闭</div>
+        <div class="plugin-grid" id="plugin-grid">
+          <div class="loading-hint">检测插件列表中...</div>
+        </div>
+      </div>
+
+      <div class="section-box">
+        <div class="section-title">插件诊断台账</div>
+        <div class="diagnostic-box" id="diagnostic-box">
+          <div class="empty-hint">当前系统运转良好，未检测到隔离或故障插件。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. 演练沙箱 -->
+    <section class="tab-pane" id="pane-playground">
+      <div class="section-box">
+        <div class="section-title">演练沙箱 · 端到端注入</div>
+        <div class="form-row">
+          <label class="form-label">模拟发送者名称 / ID:</label>
+          <input type="text" class="input-text" id="pg-sender" value="演练测试员">
+        </div>
+        <div class="form-row">
+          <label class="form-label">触发模式:</label>
+          <select class="input-select" id="pg-mode">
+            <option value="at">@ 机器人模式</option>
+            <option value="quote">引用回复模式</option>
+            <option value="plain">普通群消息模式 (由自评阈值决策)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">演练输入正文:</label>
+          <textarea class="input-textarea" id="pg-text" rows="3" placeholder="输入测试对话，点击注入按钮进行研判..."></textarea>
+        </div>
+        <button class="btn btn-primary" id="btn-pg-inject">注入演练并研判</button>
+      </div>
+
+      <div class="section-box">
+        <div class="section-title">演练回复与轨迹输出</div>
+        <pre class="console-box" id="pg-output">等待演练注入...</pre>
+      </div>
+    </section>
+
+    <!-- 6. 日志总线 -->
+    <section class="tab-pane" id="pane-logs">
+      <div class="log-toolbar">
+        <span class="toolbar-title">日志总线 · 尾部增量</span>
+        <div class="toolbar-actions">
+          <button class="btn btn-sm" id="btn-log-pause">暂停轮询</button>
+          <button class="btn btn-sm" id="btn-log-clear">清屏</button>
+        </div>
+      </div>
+      <pre class="log-stream-box" id="log-stream">正在连接实时日志流...</pre>
+    </section>
+  </main>
+
+  <div class="toast" id="app-toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

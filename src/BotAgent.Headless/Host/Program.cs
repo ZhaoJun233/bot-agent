@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using BotAgent.Adapters.Panel;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.NapCat;
@@ -78,12 +77,6 @@ public static class Program
         graph.BootReport.Write();
         graph.Gateway.Start();
         graph.HealthReports.Start();
-
-        using var web = graph.Web;
-        if (settings.HealthPort > 0)
-        {
-            web.Start();
-        }
 
         // ---------- 常驻运行 + 优雅退出 ----------
         using var shutdown = new CancellationTokenSource();
@@ -210,10 +203,7 @@ public static class Program
         Console.WriteLine($"  通道       {settings.OneBotProtocol} → {settings.OneBotAddress}");
         Console.WriteLine($"  账号       {(string.IsNullOrWhiteSpace(settings.NormalizedUin) ? "未配置（自动识别）" : settings.NormalizedUin)}");
         Console.WriteLine($"  白名单     {(string.IsNullOrWhiteSpace(settings.MessageWhitelist) ? "空 → 严格模式：忽略全部消息" : settings.MessageWhitelist.Replace("\n", ","))}");
-        Console.WriteLine($"  Web 面板   {(settings.HealthPort > 0 ? $"http://127.0.0.1:{settings.HealthPort}/" : "关闭")}");
-        Console.WriteLine("  扫码登录   " + (loginQrConfigured
-            ? $"面板内可用（NapCat WebUI {settings.NapCatWebUiUrl}）"
-            : "未配置（设 QQCHAT_NAPCAT_WEBUI_TOKEN 后可在面板内扫码）"));
+        Console.WriteLine("  运行模式   纯无头服务（Headless 常驻守护）");
 
         // 行为类环境变量已被 settings.json 接管时明确告知，避免“改了不生效”的困惑
         if (BotConfig.IgnoredBehaviorEnvVars.Count > 0)

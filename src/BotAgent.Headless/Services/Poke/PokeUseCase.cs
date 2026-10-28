@@ -35,13 +35,19 @@ public sealed class PokeUseCase
     /// </summary>
     public Action<BotConversation>? RequestReply { get; set; }
 
-    public PokeUseCase(SettingsBox box, PokeHooks hooks)
+    public PokeUseCase(SettingsBox box, PokeHooks hooks, bool enabled = true)
     {
         _box = box;
         _hooks = hooks;
+        Enabled = enabled;
     }
 
     private AppSettings _settings => _box.Current;
+
+    /// <summary>
+    /// 功能是否已启用。false 时既不处理戳一戳事件，也不允许主动戳回去 —— 戳一戳功能不存在。
+    /// </summary>
+    public bool Enabled { get; }
 
     /// <summary>收到戳一戳（在协议端线程上跑）：异常不许逃出去 —— 处理不了顶多是不回，不能带崩接收循环。</summary>
     public void OnPoked(QqPokeEvent poke)
@@ -64,7 +70,7 @@ public sealed class PokeUseCase
     /// </summary>
     private void HandlePoke(QqPokeEvent poke)
     {
-        if (!_settings.EnablePoke)
+        if (!Enabled || !_settings.EnablePoke)
         {
             return;
         }
@@ -137,11 +143,11 @@ public sealed class PokeUseCase
 
     /// <summary>最近（<paramref name="within" /> 内）被戳过？—— 决定提示词里要不要给“可以戳回去”的指令。</summary>
     public bool RecentlyPoked(string sourceKey, TimeSpan within, DateTimeOffset now)
-        => _lastPoke.TryGetValue(sourceKey, out var last) && now - last.At < within;
+        => Enabled && _lastPoke.TryGetValue(sourceKey, out var last) && now - last.At < within;
 
     /// <summary>这个号码是不是“刚戳过机器人的人”—— 模型想戳回去时，它也算“确实出现过”（防编造号码）。</summary>
     public bool IsRecentPoker(string sourceKey, long userId)
-        => _lastPoke.TryGetValue(sourceKey, out var last) && last.PokerId == userId;
+        => Enabled && _lastPoke.TryGetValue(sourceKey, out var last) && last.PokerId == userId;
 
     /// <summary>
     /// 主动戳人的频率门：① 距上次戳人至少 <c>PokeCooldownSeconds</c>；
@@ -150,6 +156,12 @@ public sealed class PokeUseCase
     public bool AllowPokeBack(string sourceKey, long targetId, out string reason)
     {
         reason = string.Empty;
+        if (!Enabled)
+        {
+            reason = "戳一戳功能未启用";
+            return false;
+        }
+
         if (!_lastPokeSent.TryGetValue(sourceKey, out var last))
         {
             return true;

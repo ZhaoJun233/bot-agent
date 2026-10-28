@@ -34,8 +34,8 @@ public interface IBotPlugin
     /// <summary>是否为官方预设插件。</summary>
     bool IsPreset => true;
 
-    /// <summary>初始化插件资源。</summary>
-    Task InitializeAsync(CancellationToken ct);
+    /// <summary>初始化插件资源并注入间接宿主上下文。</summary>
+    Task InitializeAsync(IPluginContext context, CancellationToken ct);
 
     /// <summary>停止与清理插件资源。</summary>
     Task ShutdownAsync(CancellationToken ct);

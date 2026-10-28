@@ -1,5 +1,4 @@
 using BotAgent.Adapters.Persistence;
-using BotAgent.Adapters.Panel;
 using BotAgent.Adapters.Model;
 using BotAgent.Adapters.Platforms;
 using BotAgent.Adapters.Platforms.Feishu;
@@ -7,6 +6,7 @@ using BotAgent.Domain.Qq;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Model;
+using BotAgent.Domain.Plugins;
 using BotAgent.Services.Platforms;
 using BotAgent.Services.Resilience;
 using BotAgent.Services;
@@ -23,6 +23,7 @@ using BotAgent.Services.Local;
 using BotAgent.Services.Music;
 using BotAgent.Services.Net;
 using BotAgent.Services.Reply;
+using BotAgent.Services.Ports;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.Poke;
 using BotAgent.Services.Permissions;
@@ -30,7 +31,6 @@ using BotAgent.Services.Participation;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Settings;
 using BotAgent.Services.Plugins;
-using BotAgent.Services.Plugins.Presets;
 namespace BotAgent.Host;
 
 /// <summary>
@@ -55,7 +55,6 @@ internal sealed record AppGraph(
     BootReport BootReport,
     LoginQrService LoginQr,
     HealthReportService HealthReports,
-    WebUiServer Web,
     PluginManager Plugins);
 
 internal static class CompositionRoot
@@ -90,6 +89,15 @@ internal static class CompositionRoot
         // （review-findings #4）。见 SettingsBox。
         var settingsBox = new SettingsBox(settings);
 
+        // 功能存在性判定：**功能在不在**，而不是"面板要不要显示它"。
+        // 判定口径：供给该功能的插件程序集已加载 && 该功能的配置开关为 true。
+        // 任一不满足 → 功能实例以"未启用"状态构造，其全部对外方法短路。
+        // 这样"插件禁用/不存在"与"功能不存在"才是同一件事（面板也就不会挂空壳功能）。
+        var presetsAssembly = Path.Combine(AppPaths.RuntimeRoot, "plugins", "BotAgent.Plugins.Presets.dll");
+        var featureAvailability = new FeatureAvailability(
+            () => File.Exists(presetsAssembly),
+            () => settingsBox.Current);
+
         // 密钥库：无状态（每次都直接读写库里那几条），全进程共用一个实例只是为了少造对象。
         var secrets = new SecretsStore();
         // 配置库：同样无状态；热更新与面板共用它。
@@ -109,7 +117,7 @@ internal static class CompositionRoot
         var ttsBreaker = new ToolCircuitBreaker("tts");
         var searchBreaker = new ToolCircuitBreaker("search");
         var (brain, store, profiles, stickers, agentBridge, voice, music, links, research) =
-            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, ttsBreaker, searchBreaker);
+            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, ttsBreaker, searchBreaker, featureAvailability);
 
         // ---------------- 用例层：谁依赖谁，只在这里看得到 ----------------
         // 共享状态先建：登录号 / 收摊标记 / 事件聚合 / 白名单闸门（其余组件都要问它们）
@@ -136,10 +144,13 @@ internal static class CompositionRoot
             platformPolicies, brain);
 
         // 各域用例
-        var vibes = new VibeTracker();
+        // 氛围阻尼（vibes）：功能不在时构造为"未启用"，既不记气氛也不给提示词
+        var vibes = new VibeTracker(featureAvailability.IsAvailable(FeatureKeys.Vibes));
         var roles = new MemberRoleUseCase(source, new MemberRoleStore(ui.EmitLog), ui.EmitLog);
-        var participation = new ParticipationUseCase(settingsBox, ui.EmitLog);
-        var poke = BuildPokeUseCase(settingsBox, identity, whitelist, registry, ui, throttled, mood);
+        var participation = new ParticipationUseCase(settingsBox, ui.EmitLog,
+            featureAvailability.IsAvailable(FeatureKeys.Vibes));
+        var poke = BuildPokeUseCase(settingsBox, identity, whitelist, registry, ui, throttled, mood,
+            featureAvailability.IsAvailable(FeatureKeys.Poke));
 
         // 会话级权限元数据（批次 B）：内存台账，只记录不改判定 —— 面板的“工具/权限”那页读它。
         var sessionPolicies = new SessionPolicyLedger();
@@ -217,22 +228,63 @@ internal static class CompositionRoot
 
         var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
 
-        var plugins = new PluginManager(ui.EmitLog);
-        plugins.Register(new MusicPresetPlugin(music));
-        plugins.Register(new VoicePresetPlugin(voice));
-        plugins.Register(new StickersPresetPlugin(stickers));
-        plugins.Register(new PokePresetPlugin(poke));
-        plugins.Register(new VibesPresetPlugin(vibes, participation));
-        plugins.Register(new ProfilesPresetPlugin(profiles));
-        plugins.Register(new WebSearchPresetPlugin(research, links));
+        // 插件间接装配：核心与插件完全分离，宿主仅提供受限服务门面，全量由外部独立 Loader 加载
+        var pluginContext = new PluginHostContext(ui.EmitLog);
+        var diagnosticBus = new DiagnosticEventBus();
+        pluginContext.RegisterService<IDiagnosticEventBus>(diagnosticBus);
+        pluginContext.RegisterService(settingsBox);
+        pluginContext.RegisterService(settingsStore);
+        pluginContext.RegisterService(registry);
+        pluginContext.RegisterService<IQqMessageSender>(plain);
+        pluginContext.RegisterService(music);
+        pluginContext.RegisterService(voice);
+        pluginContext.RegisterService(stickers);
+        pluginContext.RegisterService(poke);
+        pluginContext.RegisterService(vibes);
+        pluginContext.RegisterService(participation);
+        pluginContext.RegisterService(profiles);
+        // 画像端口同时按接口注册：ProfilesPresetPlugin 取的是 IProfileRepository，
+        // 而 RegisterService(profiles) 只登记了具体类型 MemberProfileStore —— 键对不上就取到 null，
+        // 插件会静默拿到空引用。两个键都登记，谁取都能取到同一个实例。
+        pluginContext.RegisterService<IProfileRepository>(profiles);
+        pluginContext.RegisterService(research);
+        pluginContext.RegisterService<ISecretsRepository>(secrets);
+        // 面板所需只读事实端口：热重载扇出、平台连接快照、宿主指标、收摊标记、私域网关连接态。
+        // 没有它们，WebUI 只能自己编造（硬编码 connected=true、GC 内存冒充进程内存）。
+        pluginContext.RegisterService(settingsHotReload);
+        pluginContext.RegisterService<IPlatformRegistry>(platformRegistry);
+        pluginContext.RegisterService<IHostFacts>(hostFacts);
+        // 功能存在性判定：面板据此决定"哪些功能真的存在"，而不是照着写死的清单渲染。
+        pluginContext.RegisterService(featureAvailability);
+        pluginContext.RegisterService(lifetime);
+        pluginContext.RegisterService(gateway);
+        if (links != null) pluginContext.RegisterService(links);
+        if (local != null) pluginContext.RegisterService(local);
 
-        var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
-            settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, agentBridge, healthReports,
-            sessionPolicies, traces, hostFacts, audit, approvals, local, official, feishu, platformRegistry, platformPolicies,
-            circuitStatusProvider, plugins);
+        var pluginLoader = new DirectoryPluginLoader(Path.Combine(AppPaths.RuntimeRoot, "plugins"), diagnosticBus);
+        // 插件启停 → 真实配置字段：绑定由插件自己注册在 pluginContext 上，
+        // 落库与热重载走 SettingsHotReload（与面板保存设置同一条扇出）。
+        var plugins = new PluginManager(
+            ui.EmitLog,
+            bindingLookup: pluginContext.GetToggleBinding,
+            applySettings: mutate =>
+            {
+                try
+                {
+                    settingsHotReload.ApplyRuntimeSettings(mutate);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    FileLog.Write("Plugin", $"插件开关写入配置失败: {ex.Message}");
+                    return false;
+                }
+            });
+        plugins.AttachSettingsAccessor(() => settingsBox.Current);
+        pluginContext.RegisterService<IPluginRegistry>(plugins);
+        _ = plugins.LoadWithAsync(pluginLoader, pluginContext, CancellationToken.None);
 
-        return new AppGraph(settings, settingsBox, source, gateway, official, brain, agentBridge, agent, bootReport, loginQr, healthReports, web, plugins);
+        return new AppGraph(settings, settingsBox, source, gateway, official, brain, agentBridge, agent, bootReport, loginQr, healthReports, plugins);
     }
 
     private static PokeUseCase BuildPokeUseCase(
@@ -242,7 +294,8 @@ internal static class CompositionRoot
         ConversationRegistry registry,
         PanelNotifier ui,
         ThrottledLog throttled,
-        MoodStore mood) =>
+        MoodStore mood,
+        bool enabled) =>
         new(settingsBox, new PokeHooks(
             SelfId: () => identity.SelfId,
             IsSourceAllowed: whitelist.AllowsSource,
@@ -256,7 +309,8 @@ internal static class CompositionRoot
             },
             LogThrottled: (key, message) => throttled.Write(key, message),
             Log: ui.EmitLog,
-            RecordPokeMood: now => mood.RecordPoke(now)));
+            RecordPokeMood: now => mood.RecordPoke(now)),
+            enabled);
 
     private static ApprovalUseCase BuildApprovalUseCase(
         SettingsBox settingsBox,
@@ -282,82 +336,6 @@ internal static class CompositionRoot
             sessionPolicies,
             traces,
             audit);
-
-    private static WebUiServer BuildWebUiServer(
-        AppSettings settings,
-        SettingsBox settingsBox,
-        OneBotGateway gateway,
-        IQqChatSource source,
-        BotAgentHost agent,
-        LoginQrService loginQr,
-        SettingsHotReload settingsHotReload,
-        PanelNotifier ui,
-        StickerService stickers,
-        MoodStore mood,
-        VoiceUseCase voice,
-        MusicUseCase music,
-        ResearchUseCase research,
-        ConversationRegistry registry,
-        MemberProfileStore profiles,
-        ISecretsRepository secrets,
-        SettingsStore settingsStore,
-        BotIdentity identity,
-        BotScheduler scheduler,
-        ReplyPipeline reply,
-        ParticipationUseCase participation,
-        AgentCommandService agentCmds,
-        ITenantQuotaLedger quotas,
-        AgentBridgeServer? agentBridge,
-        HealthReportService healthReports,
-        SessionPolicyLedger sessionPolicies,
-        TurnTraceStore traces,
-        HostMetrics hostFacts,
-        AuditLogStore audit,
-        ApprovalUseCase approvals,
-        LocalChannelSource? local,
-        OfficialBotGateway? official,
-        FeishuBotGateway? feishu,
-        IPlatformRegistry platformRegistry,
-        PlatformPolicyResolver platformPolicies,
-        Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> circuitStatusProvider,
-        Domain.Plugins.IPluginRegistry? plugins = null)
-    {
-        // 面板自己的两条出网（模型列表探测 20s / 自建网易云登录 15s）
-        var panelHttp = new HttpFetcher(TimeSpan.FromSeconds(20), msg => FileLog.Write("Net", msg), "panel-models");
-        var neteaseHttp = new HttpFetcher(TimeSpan.FromSeconds(15), msg => FileLog.Write("Net", msg), "panel-netease");
-
-        return new WebUiServer(settings.HealthPort, settingsBox, gateway, source, agent, loginQr, panelHttp, neteaseHttp,
-            settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, agentBridge, healthReports,
-            sessionPolicies: sessionPolicies,
-            traces: traces,
-            hostFacts: hostFacts,
-            audit: audit,
-            approvals: approvals,
-            localChannel: local,
-            onRestart: () =>
-            {
-                FileLog.Write("Host", "一键重启：即将退出，让 Docker 把容器重新拉起来…");
-                foreach (var svc in new IDisposable?[] { official, feishu })
-                {
-                    try
-                    {
-                        svc?.Dispose();
-                    }
-                    catch (Exception)
-                    {
-                        // 退出路径，收尾失败不阻塞
-                    }
-                }
-
-                Environment.Exit(0);
-            },
-            circuitStatusProvider: circuitStatusProvider,
-            platformRegistry: platformRegistry,
-            feishuGateway: feishu,
-            platformPolicies: platformPolicies,
-            plugins: plugins);
-    }
 
     /// <summary>
     /// 上行通道层：私域协议端 →（配齐了 appid/secret 且开关打开时）官方通道 → 聚合器。
@@ -480,7 +458,7 @@ internal static class CompositionRoot
     private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
         AgentBridgeServer AgentBridge, VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
         BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
-            ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
+            ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker, FeatureAvailability features)
     {
         var allowPrivateOutbound = Environment.GetEnvironmentVariable("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
         // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒
@@ -537,10 +515,13 @@ internal static class CompositionRoot
         };
 
         var store = new ConversationStore();
-        var profiles = new MemberProfileStore();
+        // 画像：功能不在时构造为"未启用"，其全部读写直接短路（不落库、不返回摘要）
+        var profiles = new MemberProfileStore(features.IsAvailable(FeatureKeys.Profiles));
 
-        // 表情包运营（收图/说明/自巡检/频率门）：状态与定时器都在它自己身上，装配在这里、只装配一次
-        var stickers = new StickerService(new StickerStore(), brain, source, settingsBox, msg => FileLog.Write("Sticker", msg));
+        // 表情包运营（收图/说明/自巡检/频率门）：状态与定时器都在它自己身上，装配在这里、只装配一次。
+        // 功能不在（插件缺失/被禁用）时 enabled=false：不收图、不写盘、不巡检、不发图。
+        var stickers = new StickerService(new StickerStore(), brain, source, settingsBox, msg => FileLog.Write("Sticker", msg),
+            features.IsAvailable(FeatureKeys.Stickers));
         // 表情包库建好即就位：巡检定时器（BotScheduler.RebuildIfNeeded → EnsureTimer）与面板首屏
         // 都要在**任何一轮回复之前**读到它。载入属启动顺序，所以放在装配点（§6.1）。
         stickers.Load(AppPaths.RuntimeRoot);
@@ -553,7 +534,8 @@ internal static class CompositionRoot
         var voice = new VoiceUseCase(
             new VoiceService(voiceHttp, () => settingsBox.Current, secrets, msg => FileLog.Write("Voice", msg), ttsBreaker),
             settingsBox,
-            msg => FileLog.Write("Voice", msg));
+            msg => FileLog.Write("Voice", msg),
+            features.IsAvailable(FeatureKeys.Voice));
 
         // 音乐（听歌/分享）与链接预览：各自的 HttpClient 在这里造，依赖顺着构造函数往下传。
         // 音乐数据放 data/music/：台账常驻，音频默认分析完就丢（只在 MusicKeepAudio 打开时才留在 audio/）。
@@ -575,14 +557,16 @@ internal static class CompositionRoot
                 musicStore, netease, audioResolver, brain, () => settingsBox.Current,
                 Path.Combine(AppPaths.DataDir, "music", "audio"), new AudioCache(), msg => FileLog.Write("Music", msg)),
             source,
-            msg => FileLog.Write("Music", msg));
+            msg => FileLog.Write("Music", msg),
+            features.IsAvailable(FeatureKeys.Music));
         var linkHttp = new HttpFetcher(
             TimeSpan.FromSeconds(45),
             msg => FileLog.Write("Net", msg),
             "links",
             allowAutoRedirect: false,
             rejectPrivateDestinations: !allowPrivateOutbound);
-        var links = new LinkPreviewer(linkHttp, () => settingsBox.Current, msg => FileLog.Write("Links", msg));
+        var links = new LinkPreviewer(linkHttp, () => settingsBox.Current, msg => FileLog.Write("Links", msg),
+            features.IsAvailable(FeatureKeys.LinkPreview));
 
         // 联网研究（搜索 / 读页面）：它自己的 HttpClient 超时给宽松点（检索要等上游模型回话）
         var researchHttp = new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "search");
@@ -594,7 +578,8 @@ internal static class CompositionRoot
             rejectPrivateDestinations: !allowPrivateOutbound);
         var research = new ResearchUseCase(
             new WebSearchService(researchHttp, () => settingsBox.Current, msg => FileLog.Write("Search", msg), searchBreaker, researchPageHttp),
-            msg => FileLog.Write("Search", msg));
+            msg => FileLog.Write("Search", msg),
+            features.IsAvailable(FeatureKeys.WebSearch));
 
 
         return (brain, store, profiles, stickers, agentBridge, voice, music, links, research);

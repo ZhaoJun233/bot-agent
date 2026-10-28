@@ -13,12 +13,24 @@ public sealed class VibeTracker
 {
     private readonly ConcurrentDictionary<string, (string Vibe, string Note, DateTimeOffset At)> _vibes = new();
 
+    /// <summary>
+    /// 功能是否已启用。false 时既不记气氛也不给提示词 —— 氛围阻尼功能不存在。
+    /// </summary>
+    public bool Enabled { get; }
+
+    public VibeTracker(bool enabled = true) => Enabled = enabled;
+
     /// <summary>气氛的保留时长：超过就当"上一轮"已经过去，不再影响提示词。</summary>
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(45);
 
     /// <summary>记下这一轮读到的气氛（下一轮当底色用；没有 vibe / 中性 就不记）。</summary>
     public void Remember(string sourceKey, string? vibe, string? note)
     {
+        if (!Enabled)
+        {
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(vibe) || vibe == "中性")
         {
             _vibes.TryRemove(sourceKey, out _);
@@ -30,12 +42,13 @@ public sealed class VibeTracker
 
     /// <summary>当前还记得的气氛（过期/没记返回空串）。</summary>
     public string Current(string sourceKey)
-        => _vibes.TryGetValue(sourceKey, out var v) && Clock.Now - v.At <= Ttl ? v.Vibe : string.Empty;
+        => !Enabled ? string.Empty
+            : _vibes.TryGetValue(sourceKey, out var v) && Clock.Now - v.At <= Ttl ? v.Vibe : string.Empty;
 
     /// <summary>给模型的"上一轮感觉"（带一句人话），没有就返回 null。</summary>
     public string? Hint(string sourceKey)
     {
-        if (!_vibes.TryGetValue(sourceKey, out var v) || Clock.Now - v.At > Ttl)
+        if (!Enabled || !_vibes.TryGetValue(sourceKey, out var v) || Clock.Now - v.At > Ttl)
         {
             return null;
         }
@@ -48,5 +61,5 @@ public sealed class VibeTracker
     /// 机器人丢个表情包过去看着就像在笑。（语音也不算合适，一句就够，别弄得很热闹）
     /// </summary>
     public bool IsSober(string sourceKey)
-        => Current(sourceKey) is "低落" or "求助" or "吵架" or "生气" or "吐槽";
+        => Enabled && Current(sourceKey) is "低落" or "求助" or "吵架" or "生气" or "吐槽";
 }

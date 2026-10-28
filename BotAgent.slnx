@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/BotAgent.Headless/BotAgent.Headless.csproj" />
+    <Project Path="src/BotAgent.Plugins.Presets/BotAgent.Plugins.Presets.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj" />

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>BotAgent.Plugins.WebUi</RootNamespace>
+    <AssemblyName>BotAgent.Plugins.WebUi</AssemblyName>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../BotAgent.Headless/BotAgent.Headless.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- 静态资源随插件产物落盘到 <输出目录>/wwwroot。
+       前端必须由插件自带：放在 runtime/webroot 那种运行期目录里会被 .gitignore 忽略，
+       一旦清理运行期文件就会把全部前端代码删掉（已经发生过一次，靠手工复制才救回）。 -->
+  <ItemGroup>
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
