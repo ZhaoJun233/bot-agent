@@ -42,7 +42,7 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 ### 多平台接入与实例策略
 - **统一平台策略总控**：支持 QQ 私域通道、QQ 官方开放平台、飞书机器人及本地通道。设置页「平台实例策略」是各平台「启用平台」「启用聊天」的唯一入口，同时配置独立群聊/私聊白名单及特性覆盖。关闭聊天可保持连接，关闭平台会阻止聊天；凭据、连接状态、白名单和全局 AI 开关仍是独立安全前置。
 - **每日 Token 配额账本**：按平台与会话来源（SourceKey）划分 UTC 日预算管理，支持按平台筛选租户、查看用量与剩余额度，超额后自动进入节能静默。
-- **零依赖本地演练场通道**：内置进程内独立测试通道，通过 Web 交互演练场（`/playground.html`）或 `POST /api/local/message` 注入测试消息，完整走过模型决策与六步治理流水线。
+- **零依赖本地演练场通道**：内置进程内独立测试通道，通过面板「演练沙箱」页签（`POST /api/playground/inject`）注入测试消息，完整走过模型决策与六步治理流水线。
 
 ---
 
@@ -70,37 +70,52 @@ sudo apt-get install -y dotnet-sdk-8.0 git curl openssl
 git clone -b main https://github.com/ZhaoJun233/bot-agent.git
 cd bot-agent
 
-# 生成并编辑配置文件
+# 生成并编辑配置文件（可全部留空，之后在面板里填）
 cp .env.example .env
 vim .env
 ```
 
-#### 3. 运维管理
+构建分三步。解决方案文件是 `BotAgent.slnx`，.NET 8 SDK 不支持整解决方案构建，**必须逐工程执行**：
+
+```bash
+# ① 核心（纯无头宿主）
+dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
+
+# ② 预设功能插件 → 输出到 runtime/plugins
+dotnet build src/BotAgent.Plugins.Presets/BotAgent.Plugins.Presets.csproj -c Release -o runtime/plugins
+
+# ③ Web 面板插件 → 输出到 runtime/plugins（含前端静态资源 wwwroot）
+dotnet build src/BotAgent.Plugins.WebUi/BotAgent.Plugins.WebUi.csproj -c Release -o runtime/plugins
+```
+
+构建产物落在两个地方，二者不可混淆：
+
+| 路径 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| `src/BotAgent.Headless/bin/Release/net8.0/` | 核心宿主 DLL | `start.sh` 启动它 |
+| `runtime/plugins/` | 两个插件工程 + `wwwroot/` | 插件目录，运行时按 DLL 动态加载 |
+
+`runtime/` 整个目录被 `.gitignore` 忽略，属于运行期产物：删掉它不会丢失任何源码，重新构建即可恢复。
+
+#### 3. 启动与首次登录
 
 项目包含跨 Linux 发行版兼容的控制脚本：
 
-- **后台启动**：
-  ```bash
-  ./start.sh
-  ```
-- **前台启动（调试控制台输出）**：
-  ```bash
-  ./start.sh -f
-  ```
-- **检查运行状态与探针**：
-  ```bash
-  ./status.sh
-  ```
-- **安全停止服务**：
-  ```bash
-  ./stop.sh
-  ```
-- **查看日志输出**：
-  ```bash
-  tail -f runtime/logs/bot-agent.log
-  ```
+```bash
+./start.sh          # 后台启动
+./start.sh -f       # 前台启动，直接看控制台输出
+./status.sh         # 检查进程状态、端口监听与健康探针
+./stop.sh           # 安全停止
+tail -f runtime/logs/bot-agent.log   # 跟踪日志
+```
 
-服务启动后，浏览器访问 `http://127.0.0.1:8080/` 即可进入 Web 管理面板。
+首次启动后，面板口令是自动生成并落盘的（详见 [面板登录](#1-面板登录)）：
+
+```bash
+cat runtime/data/panel-credential.txt
+```
+
+拿到口令后，浏览器访问 `http://127.0.0.1:18245/`，在弹出的内嵌登录卡片里输入即可。端口不是 8080，默认是 **18245**（可用 `HEALTH_PORT` 覆盖）。
 
 ---
 
@@ -129,13 +144,13 @@ docker compose logs -f napcat
 
 | 配置项 | 示例值 | 说明 |
 | :--- | :--- | :--- |
-| `MODEL_API_KEY` | `sk-...` | OpenAI 兼容接口的 API Key（必填） |
+| `MODEL_API_KEY` | `sk-...` | OpenAI 兼容接口的 API Key。留空也能启动，此时 AI 回复不可用；改在面板「模型 API 密钥」填入即可（存入独立密钥库，优先于环境变量） |
 | `MODEL_BASE_URL` | `https://api.deepseek.com/v1` | 模型调用 Base URL |
 | `MODEL_NAME` | `deepseek-chat` | 使用的模型标识 |
 | `MAX_TOKENS` | `2048` | 单次回复 Token 上限 |
-| `PANEL_PASSWORD` | `your_password_here` | Web 控制面板访问密码（可选，留空则免密访问；可在面板中随时修改或清除） |
-| `DISABLE_PANEL_AUTH` | `1` | 强制禁用控制面板认证（可选，默认 0） |
-| `HEALTH_PORT` | `8080` | Web 控制面板与健康探针监听端口 |
+| `BOTAGENT_PANEL_TOKEN` | `my-panel-pass` | 面板登录口令。留空则自动生成并写入 `runtime/data/panel-credential.txt`，详见 [1. 面板登录](#1-面板登录) |
+| `QQCHAT_PANEL_TOKEN` | `my-panel-pass` | 同上，`BOTAGENT_PANEL_TOKEN` 的兼容别名（前者优先） |
+| `HEALTH_PORT` | `18245` | Web 控制面板与健康探针监听端口（同义变量：`QQCHAT_HEALTH_PORT`、`BOTAGENT_HEALTH_PORT`） |
 | `WHITELIST` | `*` 或 `123456,789012` | 允许响应的 QQ 群号或用户号（逗号分隔，`*` 为全量） |
 | `ONEBOT_PROTOCOL` | `ForwardWebSocket` | 协议端通信模式（`ForwardWebSocket` / `ReverseWebSocket`） |
 | `ONEBOT_URL` | `ws://127.0.0.1:3001` | 协议端 WebSocket 接入地址 |
@@ -159,21 +174,106 @@ OFFICIAL_APP_SECRET=your_app_secret
 
 ---
 
-## Web 控制面板与移动端体验
+## 使用方法
 
-访问 `http://<服务器IP>:8080/` 即可直接进入控制面板：
+### 1. 面板登录
 
-- **免密访问与安全管控**：控制面板无需强制设置密码即可直接使用；同时支持在面板「设置」页随时设置保护密码或清除已有密码。
-- **两级分类导航架构**：设置页按 5 大类聚合（通道接入、模型与 Agent、聊天与互动、语音与检索、其他），宽屏手风琴折叠展开，移动端双层胶囊联动。
-- **移动端与液态玻璃导航**：深度适配智能手机屏幕与触控操作，底部导航栏采用 Apple 风格的液态玻璃（Liquid Glass）胶囊浮动 Dock 样式，完美支持 iOS/Android 的 Safe Area 安全区域。设置页专属避让保存底栏，标题栏常驻一键保存入口，并在键盘弹出时自动隐藏避让。
-- **全链路性能优化**：
-  - **内存静态资产缓存 (Asset Cache)**：静态文件与前端资产在内存中高效驻留，规避频繁的文件系统与程序集反射流开销。
-  - **动态 GZip 压缩**：对 HTML、JavaScript、CSS、JSON、SVG 等文本内容根据浏览器请求头动态进行 GZip 压缩，整体网络传输体积减少约 70%。
-  - **硬件加速与渲染隔离**：运用 CSS Containment、GPU 合成层加速 (`translateZ`) 与原生弹性滚动，确保长会话列表高帧率丝滑滑动。
-- **会话监视与上下文栈**：以对话气泡形式实时展示私聊与群聊会话流、用户画像与上下文堆栈。
-- **参数热调与模型切换**：在线调整互动欲望、回复阈值、冷却间隔、API 地址与模型配置，即时生效。
-- **状态观测与扫码接入**：实时查看 `/healthz`、`/readyz` 及系统监控指标；协议端离线时直接渲染扫码登录二维码。
-- **实时日志流**：采用 Server-Sent Events (SSE) 持续推流控制台日志，首屏秒级回填历史记录。
+面板不提供「免密访问」。首次启动时若没有配置口令，宿主会自动生成一个 24 字符随机口令，写入 `runtime/data/panel-credential.txt`（Unix 下权限 600），并在日志里记一行 `未配置面板口令，已自动生成并写入 ...`。
+
+**口令来源优先级**（从高到低）：
+
+| 顺序 | 来源 | 说明 |
+| :--- | :--- | :--- |
+| 1 | `BOTAGENT_PANEL_TOKEN` 环境变量 | 显式指定，最高优先 |
+| 2 | `QQCHAT_PANEL_TOKEN` 环境变量 | 兼容别名 |
+| 3 | `runtime/data/panel-credential.txt` | 上一次生成的口令，重启沿用 |
+| 4 | 自动生成 | 上述都没有时随机生成并落盘 |
+
+取口令：
+
+```bash
+cat runtime/data/panel-credential.txt
+```
+
+**登录行为**：
+
+- 浏览器打开 `http://<服务器IP>:18245/`，若没有有效会话，页面就地弹出内嵌登录卡片，**不做页面跳转**。
+- 登录成功前不会发起任何业务接口请求；登录成功后卡片关闭并立即加载面板数据。
+- 会话凭据是 `HttpOnly` + `SameSite=Strict` 的 Cookie（名 `botagent_sid`），JS 读不到，有效期 12 小时且滑动续期（一直在用不会中途被踢）。
+- 会话过期或服务重启后，任何 `/api/*` 返回 401 时前端会重新弹出卡片，不静默失败。
+- 同一来源 5 分钟内连续失败 5 次会短暂拒绝（返回 429「尝试过于频繁」）。此时即使口令正确也会被挡，等窗口过去或重启进程即可清零。
+- 登出：`POST /api/auth/logout`，服务端撤销会话并下发失效 Cookie。
+
+**取口令时的常见坑**：`cat` 出来的内容末尾没有换行时，zsh 会补画一个反显的 `%`（`PROMPT_EOL_MARK`），复制粘贴会把 `%` 一起带进输入框，表现为「口令明明对却提示错误」。当前版本写入口令文件时已补尾随换行；若手上是旧文件，`cat` 后请只选中 24 个字符本体。
+
+### 2. 面板页签
+
+| 页签 | 内容 |
+| :--- | :--- |
+| 运行态势 | 进程状态、内存占用、通道连接状态、首屏概览 |
+| 配置总线 | 全部配置项。分组由后端 `GET /api/settings/schema` 下发，前端零硬编码，插件存在才出现对应分组 |
+| 会话通道 | 会话列表与消息流，可代发消息 |
+| 插件槽位 | 已加载插件清单、启停开关、故障诊断报告 |
+| 演练沙箱 | 本地通道注入测试消息，不依赖 QQ 协议端 |
+| 日志总线 | 增量拉取 `runtime/logs/bot-agent.log` 尾部 |
+
+页签是否出现由能力探针决定：例如没有本地通道时「演练沙箱」不会渲染，避免点了才发现功能不存在。
+
+### 3. 配置优先级
+
+| 层 | 位置 | 优先级 |
+| :--- | :--- | :--- |
+| 密钥库 | `secrets` 表（面板填入） | 最高 |
+| 环境变量 | `.env` / 进程环境 | 次之 |
+| 配置文件 | `runtime/data/settings.json` | 最低（面板保存后以它为准） |
+
+密钥纪律：`ApiKey` 等密钥字段只存 `secrets` 表，不写入 `settings.json`，面板只回显「已配置 / 未配置」。在面板里填过的密钥会覆盖环境变量，想改回环境变量需先在面板清除密钥。
+
+面板保存的配置走热更新扇出，多数项即时生效，无需重启。
+
+### 4. 插件管理
+
+- 插件从 `runtime/plugins/*.dll` 动态加载（可卸载的 AssemblyLoadContext）。新增插件只需把 DLL 放进该目录再重启。
+- 启停走 `POST /api/plugins/toggle`。插件通过 `IPluginToggleBinding` 自己声明「开关对应哪个配置字段」，落库与热重载复用同一套扇出。
+- 管理类插件（如 Web 面板本身）声明 `AllowDisable => false`，服务端硬拒绝禁用请求 —— 否则面板会把自己关掉。
+- 功能是否可用由 `FeatureAvailability` 在装配期判定：插件 DLL 未加载或配置开关为关，功能实例以「未启用」状态构造、对外方法短路，面板也不渲染对应入口。
+- 插件加载失败会被隔离并产出结构化诊断（故障码 + 根因 + 修复建议），在「插件槽位 → 诊断」里可读。
+
+### 5. 接口一览
+
+除 `/healthz`、`/readyz`、`/api/auth/*` 之外，所有 `/api/*` 都要求已登录，否则返回 401。
+
+| 方法与路径 | 用途 |
+| :--- | :--- |
+| `GET /healthz` | 存活探针（免鉴权，容器 HEALTHCHECK 用） |
+| `GET /readyz` | 就绪探针，协议端连上才返回 200 |
+| `GET /api/auth/status` | 会话探测，返回 `authenticated` |
+| `POST /api/auth/login` | 登录，请求体 `{"pw":"..."}`，成功下发 Cookie |
+| `POST /api/auth/logout` | 登出并撤销会话 |
+| `GET /api/capabilities` | 能力探针，前端据此裁剪页签 |
+| `GET /api/status` | 运行时状态与通道连接 |
+| `GET/POST /api/settings` | 读取 / 保存配置 |
+| `GET /api/settings/schema` | 配置分组与字段描述（由插件贡献） |
+| `POST /api/settings/secrets` | 写入密钥（存 `secrets` 表） |
+| `GET /api/conversations` | 会话列表 |
+| `GET /api/conversations/messages` | 指定会话消息 |
+| `POST /api/messages/send` | 代发消息 |
+| `GET /api/plugins` | 插件清单 |
+| `GET /api/plugins/diagnostics` | 插件诊断报告 |
+| `POST /api/plugins/toggle` | 启用 / 禁用插件 |
+| `POST /api/playground/inject` | 本地演练场注入消息 |
+| `GET /api/logs?lines=200` | 日志尾部 |
+
+### 6. 排障
+
+| 现象 | 原因与处理 |
+| :--- | :--- |
+| 提示「口令不正确」 | 确认没有把终端行尾的 `%`、首尾空格一起粘贴；再查日志有无 `面板登录失败` 记录 |
+| 提示「尝试过于频繁」 | 触发了 5 次 / 5 分钟限流，等待窗口结束或重启进程 |
+| 面板打不开 | 确认端口是 18245 而非 8080；用 `./status.sh` 看监听与进程 |
+| 页面空白或样式全丢 | `runtime/plugins/wwwroot/` 缺失，重新构建 WebUi 插件工程即可 |
+| AI 不回复 | 检查面板「模型 API 密钥」是否已配置；未配置时启动正常但模型调用被跳过 |
+| 想彻底重置运行期数据 | 停进程后删除 `runtime/`，重新构建并启动，面板口令会重新生成 |
 
 ---
 
@@ -204,7 +304,7 @@ OFFICIAL_APP_SECRET=your_app_secret
 +-------------------------+          官方 Open API           |   +-- 人物画像与 SQLite 持久化   |
 | QQ 官方开放平台          | <----------------------------> |   +-- 飞书 Webhook 接入网关      |
 +-------------------------+                                 |   +-- 本地交互演练场通道         |
-                                                            |   +-- 内置 Web 控制面板服务      |
+                                                            |   +-- 插件宿主与功能可用性判定  |
 +-------------------------+          平台 Webhook           |   +-- 平台实例策略与配额账本     |
 | 飞书开放平台 (Feishu)    | <----------------------------> |   +-- 熔断容灾与租户队列隔离     |
 +-------------------------+                                 +-----------------+----------------+
@@ -230,16 +330,21 @@ OFFICIAL_APP_SECRET=your_app_secret
 项目包含端到端集成测试套件与高频安全约束探针：
 
 ```bash
-# 执行自动化单元评测与架构探针
-dotnet test
+# 架构护栏探针（棘轮 / 分层规则 / 红线锚点）
+dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
 
-# 运行集成测试套件
+# 安全边界探针
+dotnet run --project tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release
+
+# 面板前端静态检查（DOM id、鉴权链路、接口路径、配置键对齐）
+node tests/BotAgent.WebUiProbe/probe.mjs
+
+# 端到端集成套件
 dotnet build tests/BotAgent.IntegrationHarness -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
-
-# 运行前端静态与运行时探针
-node tests/BotAgent.WebUiProbe/probe.mjs
 ```
+
+注意：解决方案文件是 `BotAgent.slnx`，.NET 8 SDK 不支持整解决方案构建，`dotnet test` 无法一次性跑完，需按上面的工程逐个执行。架构探针自插件化起会同时扫描 `BotAgent.Headless`、`BotAgent.Plugins.WebUi`、`BotAgent.Plugins.Presets` 三处源码。
 
 测试集涵盖 S1–S51 真实端到端场景（白名单、静默决策、分句节拍、长期记忆与档案、表情包与魔数校验、上下文引用、模型热切、语音合成、撤回感知、联网搜索、扫码登录、飞书通道隔离、多平台策略与每日 Token 配额账本等），以及微秒级架构棘轮（ArchitectureProbe）、安全边界（SafetyProbe）与生产契约探针（ProductionSpecProbe）。
 
