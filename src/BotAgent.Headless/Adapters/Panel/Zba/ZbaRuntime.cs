@@ -35,7 +35,10 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         IPluginRegistry? plugins,
         ConversationRegistry registry,
         Func<DateTimeOffset> now,
-        bool hadStoredConfigurationBeforeStartup)
+        bool hadStoredConfigurationBeforeStartup,
+        BotAgent.Adapters.Plugins.PluginMarketService? market = null,
+        Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
+        BotAgent.Model.ProviderModelDiscovery? discovery = null)
     {
         var options = FromEnvironment();
         var version = typeof(ZbaRuntime).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
@@ -63,7 +66,10 @@ internal sealed class ZbaRuntime : IAsyncDisposable
             events,
             taskReceipts,
             instanceId,
-            message => FileLog.Write("Zba", message));
+            message => FileLog.Write("Zba", message),
+            market,
+            providerRoute,
+            discovery);
         var endpoint = new ZbaEndpoint(backend, options, now, version, instanceId,
             message => FileLog.Write("Zba", message));
         return new ZbaRuntime(endpoint, backend);

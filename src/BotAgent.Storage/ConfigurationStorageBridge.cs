@@ -279,9 +279,14 @@ internal sealed record ConfigurationDeviceState(DeviceKey Key, string ActiveName
 
 internal readonly record struct SecretMutation(WritableSecretSlot Slot, SecretEditKind Kind)
 {
+    /// <summary>非空表示这条变更指向已登记模型凭据，而不是固定槽位；固定槽位的事实观察按此过滤。</summary>
+    internal ModelCredentialKey? CredentialKey { get; init; }
+    /// <summary>仅当 <see cref="CredentialKey"/> 非空时携带，供参与者在提交前预演凭据事实。</summary>
+    internal string? NormalizedValue { get; init; }
     internal bool FactsKnown { get; init; }
     internal bool DatabaseConfigured { get; init; }
     internal bool DatabaseKeyUsable { get; init; }
+    public override string ToString() => "[redacted]";
 }
 internal enum ConfigurationStorageProfile { Strict, Legacy }
 

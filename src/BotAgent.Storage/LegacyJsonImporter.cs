@@ -84,7 +84,7 @@ public static class LegacyJsonImporter
             return;
         }
 
-        var json = File.ReadAllText(path, Encoding.UTF8);
+        var json = TextSnapshotFile.ReadRequired(path);
         if (string.IsNullOrWhiteSpace(json))
         {
             return;
@@ -109,7 +109,7 @@ public static class LegacyJsonImporter
             return;
         }
 
-        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        using var doc = JsonDocument.Parse(TextSnapshotFile.ReadRequired(path));
         var apiKey = doc.RootElement.TryGetProperty("apiKey", out var v) ? v.GetString() : null;
         if (string.IsNullOrWhiteSpace(apiKey))
         {
@@ -133,7 +133,7 @@ public static class LegacyJsonImporter
             return;
         }
 
-        var records = JsonSerializer.Deserialize<List<ConversationRecord>>(File.ReadAllText(path, Encoding.UTF8), ReadOptions);
+        var records = JsonSerializer.Deserialize<List<ConversationRecord>>(TextSnapshotFile.ReadRequired(path), ReadOptions);
         if (records is not { Count: > 0 })
         {
             moved.Add(Archive(path));
@@ -299,7 +299,7 @@ public static class LegacyJsonImporter
             List<MemberProfileRecord> records;
             try
             {
-                var text = File.ReadAllText(file, Encoding.UTF8);
+                var text = TextSnapshotFile.ReadRequired(file);
                 if (file == legacySingle)
                 {
                     records = JsonSerializer.Deserialize<List<MemberProfileRecord>>(text, ReadOptions) ?? new();
@@ -381,7 +381,7 @@ public static class LegacyJsonImporter
             return;
         }
 
-        using var doc = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+        using var doc = JsonDocument.Parse(TextSnapshotFile.ReadRequired(path));
         var root = doc.RootElement;
         var text = root.TryGetProperty("text", out var t) ? t.GetString() : null;
         long? updated = root.TryGetProperty("updatedAt", out var u) && u.ValueKind == JsonValueKind.Number ? u.GetInt64() : null;
@@ -411,7 +411,7 @@ public static class LegacyJsonImporter
             return;
         }
 
-        var songs = JsonSerializer.Deserialize<List<HeardSong>>(File.ReadAllText(path, Encoding.UTF8), ReadOptions);
+        var songs = JsonSerializer.Deserialize<List<HeardSong>>(TextSnapshotFile.ReadRequired(path), ReadOptions);
         if (songs is not { Count: > 0 })
         {
             moved.Add(Archive(path));
@@ -453,7 +453,7 @@ public static class LegacyJsonImporter
             return;
         }
 
-        var items = JsonSerializer.Deserialize<List<StickerRecord>>(File.ReadAllText(path, Encoding.UTF8), ReadOptions);
+        var items = JsonSerializer.Deserialize<List<StickerRecord>>(TextSnapshotFile.ReadRequired(path), ReadOptions);
         if (items is not { Count: > 0 })
         {
             moved.Add(Archive(path));

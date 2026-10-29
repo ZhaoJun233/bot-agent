@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BotAgent.Headless/BotAgent.Headless.csproj" />
+    <!-- Storage is aliased so the host facade, not the raw adapter, owns the visible AppDatabase name. -->
+    <ProjectReference Include="../../src/BotAgent.Storage/BotAgent.Storage.csproj" Aliases="StorageModule" />
+  </ItemGroup>
+</Project>

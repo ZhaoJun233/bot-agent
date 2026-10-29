@@ -361,11 +361,31 @@ export interface ZbaProviderConfigurationView {
   desiredEnabled: boolean
   credential: ZbaCredentialBindingState
   runtimeApplyState: ZbaApplyState
+  /** Absent on legacy snapshots: OpenAI Chat Completions remains the default. */
+  protocol?: ZbaProviderProtocol
+  options?: ZbaProviderOptions | null
+  credentialKey?: string | null
+  credentialConfigured?: boolean
+}
+
+export type ZbaProviderProtocol = 0 | 1 | 2 | 3 | 4 | 5
+
+export interface ZbaProviderModels {
+  models: string[]
+  errorCode?: string
+}
+
+export interface ZbaProviderOptions {
+  azureDeployment?: string | null
+  azureApiVersion?: string
+  anthropicVersion?: string
+  timeoutSeconds?: number | null
 }
 
 export interface ZbaRegisteredConfigurationView {
   plugins: ZbaPluginConfigurationView[]
   providers: ZbaProviderConfigurationView[]
+  modelCredentials?: Array<{ key: string; configured: boolean; keyUsable: boolean }>
 }
 
 /** `platform` 分区除通用字段外还带策略列表；其余分区只按字段名索引。 */
@@ -404,11 +424,10 @@ export type ZbaConfigurationReadKind = 0 | 1
 export type ZbaSecretSlot = 0 | 1 | 2 | 3 | 4 | 5
 export type ZbaSecretEditKind = 0 | 1 | 2
 
-export interface ZbaSecretEdit {
-  slot: ZbaSecretSlot
-  kind: ZbaSecretEditKind
-  value?: string
-}
+export type ZbaSecretEdit = { kind: ZbaSecretEditKind; value?: string } & (
+  | { slot: ZbaSecretSlot; credentialKey?: never }
+  | { credentialKey: string; slot?: never }
+)
 
 export type ZbaFieldEditKind = 0 | 1 | 2
 
@@ -430,6 +449,9 @@ export type ZbaPatchSection =
  */
 export interface ZbaProviderNameEdit {
   key: string
+  /** Legacy updates omit operation; 1 creates disabled, 2 deletes. */
+  operation?: 0 | 1 | 2
+  authorizeEndpoint?: boolean
   /**
    * 六个字段必须**全部**出现：Core 的 ProviderMetadataPatch 是闭合记录
    * （未知字段拒绝、缺字段同样拒绝），只发 nameRaw 会被服务端判成
@@ -442,6 +464,8 @@ export interface ZbaProviderNameEdit {
     modelName: ZbaFieldEdit
     enabled: ZbaFieldEdit
     credential: { kind: 0 | 1 | 2 | 3; key?: string }
+    protocol?: ZbaFieldEdit
+    options?: ZbaFieldEdit
   }
 }
 
@@ -519,6 +543,144 @@ export interface ZbaConfigurationFindResult {
   receipt?: ZbaConfigurationReceipt
 }
 
+// ── 插件市场（冻结线 wire） ───────────────────────────────────────────────
+//
+// 与配置面不同，插件市场的写操作自带幂等键：同键重放返回原回执，因此结果
+// 未知时一律用 findPluginOperation 核对，绝不换键重提。
+
+export type ZbaPluginSettingType = 'string' | 'boolean' | 'number' | 'secret' | 'select'
+
+export interface ZbaPluginSettingDefinition {
+  key: string
+  label: string
+  type: ZbaPluginSettingType
+  defaultValue?: string | null
+  required?: boolean
+  choices?: string[] | null
+}
+
+export interface ZbaPluginDependency {
+  id: string
+  version: string
+}
+
+export interface ZbaPluginPackageManifest {
+  id: string
+  version: string
+  entryAssembly: string
+  entryType: string
+  sha256: string
+  downloadUrl: string
+  apiVersion: number
+  targetFramework: string
+  minimumHostVersion?: string | null
+  permissions?: string[] | null
+  dependencies?: ZbaPluginDependency[] | null
+  settings?: ZbaPluginSettingDefinition[] | null
+}
+
+/**
+ * 目录/已安装条目。冻结字段是 manifest + 安装状态；展示元数据
+ * （name/summary/category/author/tags/repository）是服务端可选附带，出现即
+ * 校验类型，缺失时由页面回落到 manifest.id，而不是判成非法响应。
+ */
+export interface ZbaPluginCatalogItem {
+  manifest: ZbaPluginPackageManifest
+  installedVersion?: string | null
+  enabled: boolean
+  status: string
+  restartRequired: boolean
+  name?: string
+  summary?: string
+  category?: string
+  author?: string
+  tags?: string[] | null
+  repository?: string
+}
+
+export interface ZbaPluginCatalogQuery {
+  q?: string
+  category?: string
+}
+
+export interface ZbaPluginCatalog {
+  revision: string
+  source: string
+  trustNotice: string
+  categories: string[]
+  plugins: ZbaPluginCatalogItem[]
+}
+
+export interface ZbaPluginSourceResolution {
+  manifest: ZbaPluginPackageManifest
+  trustNotice: string
+}
+
+export interface ZbaInstalledPlugins {
+  revision: string
+  plugins: ZbaPluginCatalogItem[]
+}
+
+export type ZbaPluginOperationKind = 'install' | 'update' | 'uninstall'
+export type ZbaPluginOperationStatus = 'staged' | 'restart_required' | 'failed'
+
+export interface ZbaPluginOperation {
+  id: string
+  pluginId: string
+  kind: ZbaPluginOperationKind
+  status: ZbaPluginOperationStatus
+  restartRequired: boolean
+  errorCode?: string
+}
+
+/** 变更受理与按幂等键核对共用同一回执形状；revision 是下一次变更的期望代际。 */
+export interface ZbaPluginOperationResult {
+  operation: ZbaPluginOperation
+  revision: string
+}
+
+export interface ZbaPluginInstallRequest {
+  manifest: ZbaPluginPackageManifest
+  expectedRevision: string
+  idempotencyKey: string
+  /** 字面量 true：没有显式确认信任的请求不该被序列化出来。 */
+  trustAcknowledged: true
+}
+
+export interface ZbaPluginUpdateRequest {
+  manifest: ZbaPluginPackageManifest
+  expectedRevision: string
+  idempotencyKey: string
+  trustAcknowledged: true
+}
+
+export interface ZbaPluginUninstallRequest {
+  expectedRevision: string
+  idempotencyKey: string
+}
+
+export interface ZbaPluginSettings {
+  revision: string
+  schema: ZbaPluginSettingDefinition[]
+  values: Record<string, string>
+  configuredSecrets: Record<string, boolean>
+  restartRequired: boolean
+}
+
+/** 0 保留、1 设置、2 删除（删除只对 secret 有意义）。 */
+export type ZbaPluginSettingEditKind = 0 | 1 | 2
+
+export interface ZbaPluginSettingEdit {
+  key: string
+  kind: ZbaPluginSettingEditKind
+  value?: string
+}
+
+export interface ZbaPluginSettingsSaveRequest {
+  expectedRevision: string
+  idempotencyKey: string
+  edits: ZbaPluginSettingEdit[]
+}
 export class ZbaRequestError extends Error {
   readonly status: number
   readonly code: string
@@ -613,6 +775,122 @@ export class ZbaClient {
     }, 'required', isConfigurationReadResult)
   }
 
+  /** Discovery uses only the saved provider on the host, never a browser vendor request. */
+  providerModels(key: string): Promise<ZbaProviderModels> {
+    return this.request(`/providers/${encodeURIComponent(key)}/models`, { method: 'GET' }, 'required', isProviderModels)
+  }
+
+
+  // ── 插件市场（冻结线） ──────────────────────────────────────────────────
+  //
+  // 三条只读入口（catalog/sources/installed/settings）用 request 的「状态码 →
+  // 校验器」顺序；写入口先拿原始 response，因为失败仍可能带回执（幂等冲突/
+  // 结果未知），页面必须能分辨「没提交」与「不知道有没有提交」。
+
+  /** 读取市场目录；q/category 为空时不带查询参数。绝不在这里拉取清单里的地址。 */
+  pluginCatalog(query: ZbaPluginCatalogQuery = {}): Promise<ZbaPluginCatalog> {
+    const params = new URLSearchParams()
+    const q = query.q?.trim() ?? ''
+    const category = query.category?.trim() ?? ''
+    if (q.length > 0) params.set('q', q)
+    if (category.length > 0) params.set('category', category)
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    return this.request(`/plugins/catalog${suffix}`, { method: 'GET' }, 'required', isPluginCatalog)
+  }
+
+  /**
+   * 解析一个数据源地址（GitHub 仓库或固定版本 Release）为清单。
+   *
+   * 地址只交给主机解析；浏览器本地只用 githubSourceError 做形状校验，
+   * 既不发 fetch 也不把地址拼进任何请求。
+   */
+  async resolvePluginSource(sourceUrl: string): Promise<ZbaPluginSourceResolution> {
+    const response = await this.fetchJson('/plugins/sources/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceUrl })
+    }, 'required')
+    if (!response.ok) throw this.errorFrom(response)
+    if (!isPluginSourceResolution(response.data)) throw this.invalidResponse(response)
+    return response.data
+  }
+
+  /** 已安装/已暂存插件；与目录同一条目形状，单列出来供页面独立刷新。 */
+  installedPlugins(): Promise<ZbaInstalledPlugins> {
+    return this.request('/plugins/installed', { method: 'GET' }, 'required', isInstalledPlugins)
+  }
+
+  /**
+   * 发起一次插件变更（安装/更新/卸载）。
+   *
+   * 404 plugin_operation_not_found / 409 idempotency_conflict 走 errorFrom，
+   * 由调用方按 code 识别（与 managedResultStatus 的既有模式一致）：
+   * 前者表示该幂等键从未被受理，后者表示同键换体，都必须人工核对而不是重试。
+   */
+  installPlugin(request: ZbaPluginInstallRequest): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin('/plugins/install', {
+      manifest: request.manifest,
+      expectedRevision: request.expectedRevision,
+      idempotencyKey: request.idempotencyKey,
+      trustAcknowledged: true
+    })
+  }
+
+  updatePlugin(request: ZbaPluginUpdateRequest): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin('/plugins/update', {
+      manifest: request.manifest,
+      expectedRevision: request.expectedRevision,
+      idempotencyKey: request.idempotencyKey,
+      trustAcknowledged: true
+    })
+  }
+
+  uninstallPlugin(id: string, request: ZbaPluginUninstallRequest): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin(`/plugins/${encodeURIComponent(id)}/uninstall`, {
+      expectedRevision: request.expectedRevision,
+      idempotencyKey: request.idempotencyKey
+    })
+  }
+
+  /** 按幂等键核对一次插件变更的最终状态（只读，绝不能换键重试）。 */
+  pluginOperation(idempotencyKey: string): Promise<ZbaPluginOperationResult> {
+    return this.request(`/plugins/operations/${encodeURIComponent(idempotencyKey)}`, { method: 'GET' }, 'required', isPluginOperationResult)
+  }
+
+  /** 读取某个插件的声明式设置；密钥只回 configuredSecrets 布尔值。 */
+  pluginSettings(id: string): Promise<ZbaPluginSettings> {
+    return this.request(`/plugins/${encodeURIComponent(id)}/settings`, { method: 'GET' }, 'required', isPluginSettings)
+  }
+
+  /** 写入声明式设置。Keep(0) 表示不动该字段，因此旧值永不回显、也不会被覆盖。 */
+  async savePluginSettings(id: string, request: ZbaPluginSettingsSaveRequest): Promise<ZbaPluginSettings> {
+    const response = await this.fetchJson(`/plugins/${encodeURIComponent(id)}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expectedRevision: request.expectedRevision,
+        idempotencyKey: request.idempotencyKey,
+        edits: request.edits.map((edit) => edit.kind === 0
+          ? { key: edit.key, kind: 0 }
+          : { key: edit.key, kind: edit.kind, value: edit.value ?? '' })
+      })
+    }, 'required')
+    if (!response.ok) throw this.errorFrom(response)
+    if (!isPluginSettings(response.data)) throw this.invalidResponse(response)
+    return response.data
+  }
+
+  /** 插件变更的共享发送路径：先验 HTTP 状态，再认回执形状。 */
+  private async mutatePlugin(path: string, body: unknown): Promise<ZbaPluginOperationResult> {
+    const response = await this.fetchJson(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, 'required')
+    if (!response.ok) throw this.errorFrom(response)
+    if (!isPluginOperationResult(response.data)) throw this.invalidResponse(response)
+    return response.data
+  }
   /** 只校验、不落盘；需要 admin（路由 scope 为 Admin）。 */
   async validateConfiguration(request: ZbaConfigurationValidationRequest): Promise<ZbaManagedValidationResult> {
     const response = await this.fetchJson('/capabilities/validate', {
@@ -1310,6 +1588,20 @@ function isConfigurationSection(value: unknown): boolean {
   return isRecord(value) && Object.values(value).every(isReadField)
 }
 
+function isProviderModels(value: unknown): value is ZbaProviderModels {
+  return isRecord(value) && Array.isArray(value.models) && value.models.length <= 5000
+    && value.models.every((model) => typeof model === 'string' && model.length > 0 && model.length <= 1024)
+    && (value.errorCode === undefined || typeof value.errorCode === 'string')
+}
+
+function isProviderOptions(value: unknown): value is ZbaProviderOptions {
+  return isRecord(value)
+    && (value.azureDeployment === undefined || value.azureDeployment === null || typeof value.azureDeployment === 'string')
+    && (value.azureApiVersion === undefined || typeof value.azureApiVersion === 'string')
+    && (value.anthropicVersion === undefined || typeof value.anthropicVersion === 'string')
+    && (value.timeoutSeconds === undefined || value.timeoutSeconds === null || (isInteger(value.timeoutSeconds) && value.timeoutSeconds > 0))
+}
+
 function isRegisteredView(value: unknown): value is ZbaRegisteredConfigurationView {
   if (!isRecord(value) || !Array.isArray(value.plugins) || !Array.isArray(value.providers)) return false
   const pluginsValid = value.plugins.every((plugin) =>
@@ -1323,8 +1615,14 @@ function isRegisteredView(value: unknown): value is ZbaRegisteredConfigurationVi
     && isInteger(provider.priority)
     && typeof provider.desiredEnabled === 'boolean'
     && isInteger(provider.credential)
-    && isInteger(provider.runtimeApplyState))
-  return pluginsValid && providersValid
+    && isInteger(provider.runtimeApplyState)
+    && (provider.protocol === undefined || (isInteger(provider.protocol) && provider.protocol >= 0 && provider.protocol <= 5))
+    && (provider.options === undefined || provider.options === null || isProviderOptions(provider.options))
+    && (provider.credentialKey === undefined || provider.credentialKey === null || typeof provider.credentialKey === 'string')
+    && (provider.credentialConfigured === undefined || typeof provider.credentialConfigured === 'boolean'))
+  const credentialsValid = value.modelCredentials === undefined || (Array.isArray(value.modelCredentials) && value.modelCredentials.every((item) =>
+    isRecord(item) && typeof item.key === 'string' && typeof item.configured === 'boolean' && typeof item.keyUsable === 'boolean'))
+  return pluginsValid && providersValid && credentialsValid
 }
 
 function isConfigurationView(value: unknown): value is ZbaConfigurationView {
@@ -1556,6 +1854,130 @@ function isManagedValidationResult(value: unknown): value is ZbaManagedValidatio
     && isInteger(value.code)
     && Array.isArray(value.errors)
     && value.errors.every(isFieldError)
+}
+
+/**
+ * 插件市场的运行时解码。
+ *
+ * 与配置面同一策略：冻结字段一个都不能少、类型不能漂移；展示元数据
+ * （name/summary/category/author/tags/repository）是可选的，缺失就由页面回落。
+ * `id`/`version` 为空串按非法响应拒绝——没有稳定 id 的条目不能进 UI，
+ * 否则「读取失败」会被显示成「插件不存在」。
+ */
+function isPluginSettingDefinition(value: unknown): value is ZbaPluginSettingDefinition {
+  return isRecord(value)
+    && typeof value.key === 'string'
+    && value.key.length > 0
+    && value.key.length <= 80
+    && typeof value.label === 'string'
+    && (value.type === 'string' || value.type === 'boolean' || value.type === 'number'
+      || value.type === 'secret' || value.type === 'select')
+    && (value.defaultValue === undefined || value.defaultValue === null || typeof value.defaultValue === 'string')
+    && (value.required === undefined || typeof value.required === 'boolean')
+    && (value.choices === undefined || value.choices === null || isStringArray(value.choices))
+}
+
+function isPluginDependency(value: unknown): value is ZbaPluginDependency {
+  return isRecord(value)
+    && typeof value.id === 'string' && value.id.length > 0
+    && typeof value.version === 'string' && value.version.length > 0
+}
+
+function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManifest {
+  if (!isRecord(value)
+    || typeof value.id !== 'string' || value.id.length === 0
+    || typeof value.version !== 'string' || value.version.length === 0
+    || typeof value.entryAssembly !== 'string'
+    || typeof value.entryType !== 'string'
+    || typeof value.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(value.sha256)
+    || typeof value.downloadUrl !== 'string'
+    || !isInteger(value.apiVersion)
+    || typeof value.targetFramework !== 'string') return false
+  if (value.minimumHostVersion !== undefined && value.minimumHostVersion !== null && typeof value.minimumHostVersion !== 'string') return false
+  if (value.permissions !== undefined && value.permissions !== null && !isStringArray(value.permissions)) return false
+  if (value.dependencies !== undefined && value.dependencies !== null
+    && (!Array.isArray(value.dependencies) || !value.dependencies.every(isPluginDependency))) return false
+  if (value.settings === undefined || value.settings === null) return true
+  if (!Array.isArray(value.settings) || !value.settings.every(isPluginSettingDefinition)) return false
+  // 声明键是设置的唯一身份：重复键会让「保存哪一项」没有确定答案。
+  const keys = new Set<string>()
+  for (const setting of value.settings) {
+    if (keys.has(setting.key)) return false
+    keys.add(setting.key)
+  }
+  return true
+}
+
+function isPluginCatalogItem(value: unknown): value is ZbaPluginCatalogItem {
+  return isRecord(value)
+    && isPluginPackageManifest(value.manifest)
+    && (value.installedVersion === undefined || value.installedVersion === null || typeof value.installedVersion === 'string')
+    && typeof value.enabled === 'boolean'
+    && typeof value.status === 'string'
+    && typeof value.restartRequired === 'boolean'
+    && (value.name === undefined || typeof value.name === 'string')
+    && (value.summary === undefined || typeof value.summary === 'string')
+    && (value.category === undefined || typeof value.category === 'string')
+    && (value.author === undefined || typeof value.author === 'string')
+    && (value.tags === undefined || value.tags === null || isStringArray(value.tags))
+    && (value.repository === undefined || typeof value.repository === 'string')
+}
+
+function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
+  return isRecord(value)
+    && typeof value.revision === 'string'
+    && typeof value.source === 'string'
+    && typeof value.trustNotice === 'string'
+    && isStringArray(value.categories)
+    && Array.isArray(value.plugins)
+    && value.plugins.length <= 5000
+    && value.plugins.every(isPluginCatalogItem)
+}
+
+function isPluginSourceResolution(value: unknown): value is ZbaPluginSourceResolution {
+  return isRecord(value)
+    && isPluginPackageManifest(value.manifest)
+    && typeof value.trustNotice === 'string'
+}
+
+function isInstalledPlugins(value: unknown): value is ZbaInstalledPlugins {
+  return isRecord(value)
+    && typeof value.revision === 'string'
+    && Array.isArray(value.plugins)
+    && value.plugins.length <= 5000
+    && value.plugins.every(isPluginCatalogItem)
+}
+
+function isPluginOperation(value: unknown): value is ZbaPluginOperation {
+  return isRecord(value)
+    && typeof value.id === 'string' && value.id.length > 0
+    && typeof value.pluginId === 'string' && value.pluginId.length > 0
+    && (value.kind === 'install' || value.kind === 'update' || value.kind === 'uninstall')
+    && (value.status === 'staged' || value.status === 'restart_required' || value.status === 'failed')
+    && typeof value.restartRequired === 'boolean'
+    && (value.errorCode === undefined || typeof value.errorCode === 'string')
+}
+
+function isPluginOperationResult(value: unknown): value is ZbaPluginOperationResult {
+  return isRecord(value) && isPluginOperation(value.operation) && typeof value.revision === 'string'
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string')
+}
+
+function isBooleanRecord(value: unknown): value is Record<string, boolean> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'boolean')
+}
+
+function isPluginSettings(value: unknown): value is ZbaPluginSettings {
+  return isRecord(value)
+    && typeof value.revision === 'string'
+    && Array.isArray(value.schema)
+    && value.schema.every(isPluginSettingDefinition)
+    && isStringRecord(value.values)
+    && isBooleanRecord(value.configuredSecrets)
+    && typeof value.restartRequired === 'boolean'
 }
 
 function parseJson(text: string): unknown {

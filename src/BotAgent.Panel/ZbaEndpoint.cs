@@ -23,7 +23,16 @@ public sealed partial class ZbaEndpoint
         "sessions.ensure",
         "tasks.result",
         "tasks.find",
-        "tasks.receipts"
+        "tasks.receipts",
+        "plugins.catalog",
+        "plugins.installed",
+        "plugins.install",
+        "plugins.update",
+        "plugins.uninstall",
+        "plugins.operations.get",
+        "plugins.settings.read",
+        "plugins.settings.save",
+        "providers.models"
     };
 
     public ZbaEndpoint(
@@ -103,6 +112,16 @@ public sealed partial class ZbaEndpoint
                 "approvals.list" => await HandleApprovalsListAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
                 "approvals.decide" => await HandleApprovalDecideAsync(CreateCaller(principal!), match.Values["id"], request, requestId, ct).ConfigureAwait(false),
                 "events.read" => await HandleEventsAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
+                "plugins.catalog" => await HandlePluginCatalogAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
+                "plugins.installed" => await HandlePluginInstalledAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
+                "plugins.sources.resolve" => await HandlePluginSourceResolveAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "plugins.install" => await HandlePluginMutationAsync(CreateCaller(principal!), request, requestId, ct, update: false).ConfigureAwait(false),
+                "plugins.update" => await HandlePluginMutationAsync(CreateCaller(principal!), request, requestId, ct, update: true).ConfigureAwait(false),
+                "plugins.uninstall" => await HandlePluginUninstallAsync(CreateCaller(principal!), match.Values["id"], request, requestId, ct).ConfigureAwait(false),
+                "plugins.operations.get" => await HandlePluginOperationAsync(CreateCaller(principal!), match.Values["key"], requestId, ct).ConfigureAwait(false),
+                "plugins.settings.read" => await HandlePluginSettingsReadAsync(CreateCaller(principal!), match.Values["id"], requestId, ct).ConfigureAwait(false),
+                "plugins.settings.save" => await HandlePluginSettingsSaveAsync(CreateCaller(principal!), match.Values["id"], request, requestId, ct).ConfigureAwait(false),
+                "providers.models" => await HandleProviderModelsAsync(CreateCaller(principal!), match.Values["key"], requestId, ct).ConfigureAwait(false),
                 _ => Error(404, "not_found", "路径不存在。", requestId: requestId)
             };
 

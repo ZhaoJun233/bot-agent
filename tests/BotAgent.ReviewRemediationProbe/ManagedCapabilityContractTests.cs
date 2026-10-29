@@ -139,7 +139,7 @@ internal static class ManagedCapabilityContractTests
                 SecretEdit.Delete(WritableSecretSlot.TtsApiKey)) })).Code == ManagedResultCode.Ok);
             var alias = new RegisteredConfigurationChanges(ImmutableArray<PluginEnabledEdit>.Empty,
                 ImmutableArray.Create(new ProviderEdit(new("primary"), new(default, default, default,
-                    FieldEdit<string>.Set("synthetic-alias-model"), default, CredentialBindingEdit.KeepExisting()))),
+                    FieldEdit<string>.Set("synthetic-alias-model"), default, CredentialBindingEdit.KeepExisting(), default, default))),
                 ImmutableArray<PolicyEdit>.Empty);
             var conflictingAlias = new ConfigurationPatch(null,
                 new ModelChanges { Model = FieldEdit<string>.Set("synthetic-direct-model") },
@@ -207,7 +207,7 @@ internal static class ManagedCapabilityContractTests
                 return new SecretMetadata(slot, configured, configured ? CredentialSource.Database : CredentialSource.None);
             }).ToImmutableArray();
         Func<SqliteConnection, ConfigurationReadKind, RegisteredConfigurationView> registered = (_, _) =>
-            new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty);
+            new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty, ImmutableArray<ModelCredentialView>.Empty);
         Func<ConfigurationFieldId, ConfigurationValueSource> provenance = _ => ConfigurationValueSource.UserConfiguration;
         Func<ConfigurationFieldId, FieldEffect> effect = _ => FieldEffect.Restart;
         var type = typeof(SettingsStore).GetNestedType("ConfigurationParticipant", BindingFlags.NonPublic)

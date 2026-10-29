@@ -70,6 +70,8 @@ public sealed partial class ZbaEndpoint
             throw new ZbaBadRequestException("invalid_contract_revision");
         if (changes is null) throw new ZbaBadRequestException("missing_changes");
         if (secrets is null) throw new ZbaBadRequestException("missing_secrets");
-        if (secrets.Count > 6) throw new ZbaBadRequestException("too_many_secrets");
+        var (slots, credentialKeys) = ZbaRules.CountDistinctSecretTargets(secrets);
+        if (slots > ZbaRules.MaxSecretSlots || credentialKeys > ZbaRules.MaxCredentialKeyTargets)
+            throw new ZbaBadRequestException("too_many_secrets");
     }
 }

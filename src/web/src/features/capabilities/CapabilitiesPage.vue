@@ -11,7 +11,8 @@ import {
   type ZbaManagedKind,
   type ZbaManagedObjectKey,
   type ZbaManagedOperationResult,
-  type ZbaManagedRuntimeState
+  type ZbaManagedRuntimeState,
+  type ZbaProviderConfigurationView
 } from '../../api/zba'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
@@ -19,6 +20,9 @@ import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 import PluginSettingsDialog from './PluginSettingsDialog.vue'
+import ProviderEditorDialog from './ProviderEditorDialog.vue'
+import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
+import { protocolLabel } from './provider-protocols'
 import { settingsFor, type PluginSettingsSpec } from './plugin-settings'
 import { confirmToggle, readSwitches, setPluginEnabled, type PluginSwitchState } from './plugin-toggle'
 import { reasonLabel } from './reason-labels'
@@ -205,6 +209,52 @@ function closeSettings(saved: boolean): void {
   if (saved) void load(undefined, 'background')
 }
 
+// Provider editors remain mounted while hidden so an unconfirmed operation key survives navigation.
+const providerTarget = ref<{ key?: string; trigger: HTMLElement | null } | null>(null)
+const providerViews = ref<ZbaProviderConfigurationView[]>([])
+function openProvider(key?: string, event?: MouseEvent): void {
+  providerTarget.value = { key, trigger: eventTrigger(event) }
+}
+function providerView(item: ZbaManagedDescriptor): ZbaProviderConfigurationView | undefined {
+  return item.key.kind === 'provider' ? providerViews.value.find((provider) => provider.key === item.key.key) : undefined
+}
+// ── 插件市场弹窗 ───────────────────────────────────────────────
+/** 只记住「一眼插件 id」，打开弹窗后自动滚到它的声明设置；弹窗是 v-if 挂载，
+ *  所以清单目录只在用户打开市场时才读取，页面挂载不发任何插件请求。 */
+const marketplaceTarget = ref<{ focusPluginId?: string; trigger: HTMLElement | null } | null>(null)
+function openMarketplace(focusPluginId?: string, event?: MouseEvent): void {
+  marketplaceTarget.value = { focusPluginId, trigger: eventTrigger(event) }
+}
+function closeMarketplace(): void {
+  const trigger = marketplaceTarget.value?.trigger ?? null
+  marketplaceTarget.value = null
+  void nextTick(() => restoreFocus(trigger, pageHeading.value))
+  // 安装/卸载/设置都可能改变卡片的运行状态：关闭时后台重读一次目录。
+  void load(undefined, 'background')
+}
+
+async function testSavedProvider(key: string): Promise<void> {
+  if (!canWrite.value) return
+  const epoch = ownership
+  const client = props.client
+  try {
+    const result = await client.inspectCapability({ kind: 'provider', key })
+    if (!ownedBy(epoch, client)) return
+    const descriptor = result.descriptor
+    const action = descriptor?.actions.find((capability) => capability.action === 5 && capability.supported)
+    if (result.code !== 0 || !descriptor || !action) {
+      abortedNotice.value = '此提供商暂未公布测试能力。保存的配置不受影响；请重新读取能力目录。'
+      providerTarget.value = null
+      return
+    }
+    providerTarget.value = null
+    await nextTick()
+    if (ownedBy(epoch, client)) requestAction(descriptor, action)
+  } catch (cause) {
+    if (ownedBy(epoch, client) && !reportAuthFailure(cause)) actionError.value = toUiError(cause)
+  }
+}
+
 // ── 插件「启用」开关 ─────────────────────────────────────────
 const switches = ref<Record<string, PluginSwitchState>>({})
 const switchBusy = ref<string | null>(null)
@@ -221,6 +271,7 @@ async function loadSwitches(): Promise<void> {
   try {
     const snapshot = await props.client.readConfiguration(1)
     switches.value = snapshot.view ? readSwitches(snapshot.view) : {}
+    providerViews.value = snapshot.view?.registered.providers ?? []
   } catch (cause) {
     if (reportAuthFailure(cause)) return
     switches.value = {}
@@ -1194,6 +1245,8 @@ function focusRecord(record: OperationRecord): void {
  */
 function resetForSession(): void {
   ownership += 1
+  providerTarget.value = null
+  providerViews.value = []
   pendingAction.value = null
   actionBusy.value = false
   actionError.value = null
@@ -1293,6 +1346,8 @@ defineExpose({
         <span class="mode-badge" :data-mode="props.mode" data-testid="cap-mode-badge">
           {{ props.mode === 'admin' ? '管理员模式' : '标准模式' }}
         </span>
+        <button type="button" class="tonal" data-testid="cap-add-provider" @click="openProvider(undefined, $event)">添加提供商</button>
+        <button type="button" class="tonal" data-testid="cap-marketplace" @click="openMarketplace(undefined, $event)">数据源市场</button>
         <button type="button" class="tonal" data-testid="cap-reload" :disabled="loading" @click="load()">
           {{ loading ? '读取中…' : '重新读取' }}
         </button>
@@ -1436,7 +1491,12 @@ defineExpose({
           </p>
         </div>
 
+        <p v-if="providerView(item)" class="cap-reason" :data-testid="'cap-provider-summary-' + keySlug(item.key)">
+          {{ protocolLabel(providerView(item)?.protocol) }} · 优先级 {{ providerView(item)?.priority }} · {{ providerView(item)?.desiredEnabled ? '配置已启用' : '配置已停用' }}
+          <span v-if="providerView(item)?.runtimeApplyState === 3"> · 需重启</span>
+        </p>
         <footer class="cap-card-foot">
+          <button v-if="item.key.kind === 'provider'" type="button" class="tonal cap-settings" :data-testid="'cap-provider-edit-' + keySlug(item.key)" :aria-label="'设置 ' + capabilityTitle(item.displayName, item.key)" @click="openProvider(item.key.key, $event)">设置</button>
           <button
             v-if="pluginSpec(item)"
             type="button"
@@ -1446,6 +1506,16 @@ defineExpose({
             @click="openSettings(item, $event)"
           >
             <span aria-hidden="true">⚙</span> 设置
+          </button>
+          <button
+            v-if="item.key.kind === 'plugin'"
+            type="button"
+            class="link-button"
+            :data-testid="'cap-marketplace-' + keySlug(item.key)"
+            :aria-label="'数据源与设置 ' + capabilityTitle(item.displayName, item.key)"
+            @click="openMarketplace(item.key.key, $event)"
+          >
+            市场
           </button>
           <button
             type="button"
@@ -1593,6 +1663,23 @@ defineExpose({
         </li>
       </ul>
     </section>
+
+    <PluginMarketplaceDialog
+      v-if="marketplaceTarget"
+      :client="props.client"
+      :mode="props.mode"
+      :writes-enabled="props.writesEnabled"
+      :active="props.active"
+      :focus-plugin-id="marketplaceTarget.focusPluginId"
+      :trigger="marketplaceTarget.trigger"
+      :fallback="pageHeading"
+      @close="closeMarketplace"
+      @changed="load(undefined, 'background')"
+      @enable-admin="emit('enable-admin')"
+      @auth-expired="(e) => emit('auth-expired', e)"
+    />
+
+    <ProviderEditorDialog v-if="providerTarget" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
 
     <PluginSettingsDialog
       v-if="settingsTarget"

@@ -2069,12 +2069,24 @@ tr.dirty td {
 
 .cap-card-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid rgba(27, 28, 29, 0.06);
+}
+
+/* 窄屏：市场/设置/详情按钮各占一行也不横向溢出（390x844 验收） */
+@media (max-width: 640px) {
+  .cap-card-foot > button {
+    flex: 1 1 auto;
+  }
+
+  .cap-rev {
+    flex: 1 1 100%;
+  }
 }
 
 .cap-rev { color: var(--text-muted); font-size: 11px; }

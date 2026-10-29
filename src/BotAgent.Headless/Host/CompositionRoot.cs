@@ -38,7 +38,6 @@ using BotAgent.Services.Participation;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Settings;
 using BotAgent.Services.Plugins;
-using BotAgent.Services.Plugins.Presets;
 using BotAgent.Services.Evaluation;
 using BotAgent.Services.Mcp;
 namespace BotAgent.Host;
@@ -65,13 +64,14 @@ internal sealed record AppGraph(
     LoginQrService LoginQr,
     HealthReportService HealthReports,
     WebUiServer Web,
-    PluginManager Plugins,
+    PluginRuntime PluginRuntime,
     BackgroundEvaluatorQueue Background,
     PlatformDriverOperations DriverOperations,
     ManagedCapabilityBinding Management,
     McpRuntime? Mcp,
     ZbaRuntime? Zba) : IAsyncDisposable
 {
+    internal PluginManager Plugins => PluginRuntime.Registry;
     private readonly object _disposeGate = new();
     private Task? _disposeTask;
     public ValueTask DisposeAsync()
@@ -88,6 +88,7 @@ internal sealed record AppGraph(
         try { await Management.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { Agent.Dispose(); } catch (Exception exception) { failures.Add(exception); }
+        try { await PluginRuntime.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { (Source as IDisposable)?.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         if (failures.Count > 0) throw new AggregateException("host_shutdown_incomplete", failures);
     }
@@ -95,6 +96,13 @@ internal sealed record AppGraph(
 
 internal static class CompositionRoot
 {
+    /// <summary>
+    /// 模型出网客户端的"天花板"：单次调用真正等多久由传输层按 provider 的 timeoutSeconds
+    /// 逐次下发（1..300 秒，见 <c>ProviderRequestBudget</c>），这里只给 HttpClient 一个不会
+    /// 提前掐断长请求的上限。设成 300 是因为面板允许的最大值就是 300。
+    /// </summary>
+    private static readonly TimeSpan ModelHttpCeiling = TimeSpan.FromSeconds(300);
+
     /// <summary>
     /// 阶段一：数据层 → 配置 → 日志。
     /// ⚠ 顺序很重要：<see cref="BotConfig.Load" /> 会从 settings 表读配置，之前必须先把库准备好。
@@ -144,14 +152,15 @@ internal static class CompositionRoot
         var providerStore = new ModelProviderStore();
         var authorization = new SettingsHotReload.ConfigurationRequestAuthorization();
         IReadOnlyList<PersistedModelProvider> capturedProviders = Array.Empty<PersistedModelProvider>();
-        var declaredPlugins = new[] { "preset.feature.music", "preset.feature.voice", "preset.feature.stickers",
-            "preset.feature.poke", "preset.feature.vibes", "preset.feature.profiles", "preset.feature.websearch" };
+        var ui = new PanelNotifier();
+        var pluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), ui.EmitLog);
         RegisteredConfigurationView ReadRegistered(Microsoft.Data.Sqlite.SqliteConnection connection, ConfigurationReadKind kind)
         {
-            var desired = ConfigurationModule.PluginStore.LoadPluginStatesInTransaction(connection);
-            return new(declaredPlugins.Select(id => new PluginConfigurationView(new(id),
-                    !desired.TryGetValue(id, out var enabled) || enabled)).ToImmutableArray(),
-                SettingsStore.ProjectRegisteredProviderViews(connection, ModelProviderStore.LoadAllInTransaction(connection), capturedProviders, kind));
+            var providers = ModelProviderStore.LoadAllInTransaction(connection);
+            return new RegisteredConfigurationView(pluginRuntime.ReadConfiguration(connection),
+                SettingsStore.ProjectRegisteredProviderViews(connection, providers, capturedProviders, kind),
+                // 已登记凭据只投影“存在/可用”，正文永不离开密钥库。
+                SettingsStore.ProjectModelCredentials(connection, providers));
         }
         var participant = new SettingsStore.ConfigurationParticipant(settingsBox, authorization.Reauthorize,
             (connection, mutations) => ConfigurationSecretMetadata(connection, settingsBox.Current, mutations), ReadRegistered,
@@ -189,7 +198,6 @@ internal static class CompositionRoot
         // 共享状态先建：登录号 / 收摊标记 / 事件聚合 / 白名单闸门（其余组件都要问它们）
         var identity = new BotIdentity();
         var lifetime = new BotLifetime();
-        var ui = new PanelNotifier();
         var whitelist = new WhitelistGate(settingsBox, platformPolicies,
             feishu is null ? null : feishu.AllowsMappedTarget);
 
@@ -223,7 +231,7 @@ internal static class CompositionRoot
         var approvals = BuildApprovalUseCase(settingsBox, ui, registry, plain, sessionPolicies, traces, audit);
 
         // Wave3：插件注册与能力门禁先于 agent 命令与回复链建立；显式 QQ 动作也要吃同一份门禁。
-        var plugins = RegisterPresetPlugins(ui, declaredPlugins);
+        var plugins = pluginRuntime.Registry;
         var pluginGate = new PluginGate(plugins);
         poke.PluginEnabled = () => pluginGate.Allows(PluginGate.PokeCapability);
         stickers.PluginEnabled = () => pluginGate.Allows(PluginGate.StickersCapability);
@@ -315,21 +323,26 @@ internal static class CompositionRoot
 
         var management = BuildManagedCapabilityBinding(configuration, authorization, driverOperations, settingsBox,
             platformPolicies, settings, feishu, platformRegistry, capturedProviders, managedAuthorization,
-            plugins: () => ManagedPluginDescriptors(plugins));
-        var zba = BuildZba(settingsBox, settingsHotReload, management.Capabilities, sessions, agentCmds, approvals,
-            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad);
+            plugins: pluginRuntime.Describe);
+        var zba = BuildZba(settingsBox, settingsHotReload, management, sessions, agentCmds, approvals,
+            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime);
         return new AppGraph(settings, settingsBox, source, gateway, official, brain, agent, bootReport, loginQr,
-            healthReports, web, plugins, background, driverOperations, management, mcp.Runtime, zba);
+            healthReports, web, pluginRuntime, background, driverOperations, management, mcp.Runtime, zba);
     }
 
     private static ZbaRuntime BuildZba(
-        SettingsBox box, SettingsHotReload hotReload, BotAgent.Domain.Management.IManagedCapabilities capabilities,
+        SettingsBox box, SettingsHotReload hotReload, ManagedCapabilityBinding management,
         IAgentSessionStore sessions, AgentCommandService agent, ApprovalUseCase? approvals,
         BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
-        WebUiServer web, bool hadStoredConfigurationBeforeStartup)
+        WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime)
     {
-        var runtime = ZbaRuntime.Create(box, hotReload, capabilities, sessions, agent, approvals, plugins, registry,
-            () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup);
+        // 提供商发现复用测试通道的受限出网（同一条拒绝私网/禁跳转的策略），不另开 socket。
+        var discovery = management.ProviderTransport is { } providerHttp
+            ? new BotAgent.Model.ProviderModelDiscovery(providerHttp)
+            : null;
+        var runtime = ZbaRuntime.Create(box, hotReload, management.Capabilities, sessions, agent, approvals, plugins,
+            registry, () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup,
+            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current), discovery);
         web.AttachZba(runtime.Endpoint);
         return runtime;
     }
@@ -368,31 +381,6 @@ internal static class CompositionRoot
             ui.EmitLog($"已删除会话 {conversation.Name}");
             ui.NotifyConversationsChanged();
         };
-    }
-
-    /// <summary>
-    /// 预设插件注册：开关状态读插件表（面板写），目录对不上直接抛装配错误。
-    /// 读库与注册都发生在面板建好之前 —— 面板首屏要读到同一批插件状态。
-    /// </summary>
-    private static PluginManager RegisterPresetPlugins(PanelNotifier ui, string[] declaredPlugins)
-    {
-        var plugins = new PluginManager(ui.EmitLog);
-        IReadOnlyDictionary<string, bool> startupPluginStates;
-        using (var connection = AppDatabase.Open())
-            startupPluginStates = ConfigurationModule.PluginStore.LoadPluginStatesInTransaction(connection);
-        void RegisterPlugin(Domain.Plugins.IBotPlugin plugin)
-        {
-            if (!declaredPlugins.Contains(plugin.Id, StringComparer.Ordinal)) throw new InvalidOperationException("plugin_catalog_mismatch");
-            plugins.Register(plugin, !startupPluginStates.TryGetValue(plugin.Id, out var enabled) || enabled);
-        }
-        RegisterPlugin(new MusicPresetPlugin());
-        RegisterPlugin(new VoicePresetPlugin());
-        RegisterPlugin(new StickersPresetPlugin());
-        RegisterPlugin(new PokePresetPlugin());
-        RegisterPlugin(new VibesPresetPlugin());
-        RegisterPlugin(new ProfilesPresetPlugin());
-        RegisterPlugin(new WebSearchPresetPlugin());
-        return plugins;
     }
 
     /// <summary>
@@ -435,8 +423,9 @@ internal static class CompositionRoot
             () => ManagedProviderDescriptors(capturedProviders, settingsBox.Current),
             async (command, ct) =>
             {
-                var registered = capturedProviders.SingleOrDefault(provider => provider.Id == command.Key.Value);
-                var route = registered is null ? null : TryBuildCurrentProviderRoute(registered, settingsBox.Current);
+                // Explicit administrator tests use current metadata, including newly saved disabled providers.
+                // Chat/failover routes remain bound to the startup registry until a restart.
+                var route = TryBuildProviderTestRoute(command.Key.Value, settingsBox.Current);
                 if (route is null) return new ConfigurationModule.ManagedDispatchResult(
                     BotAgent.Domain.Management.ManagedOperationState.Failed, "model_route_unavailable");
                 var result = await providerTester.TestAsync(route, ct).ConfigureAwait(false);
@@ -461,23 +450,6 @@ internal static class CompositionRoot
         return configured;
     }
 
-    private static ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor> ManagedPluginDescriptors(
-        PluginManager plugins)
-        => plugins.GetAll().Select(plugin => new BotAgent.Domain.Management.ManagedDescriptor(
-            new BotAgent.Domain.Management.ManagedObjectKey.Plugin(new(plugin.Id)),
-            "plugin", plugin.IsEnabled,
-            plugin.IsEnabled ? BotAgent.Domain.Management.ManagedRuntimeState.Running
-                : BotAgent.Domain.Management.ManagedRuntimeState.Disabled,
-            ImmutableArray.Create(
-                new BotAgent.Domain.Management.ActionCapability(
-                    BotAgent.Domain.Management.ManagedAction.Start, false, "configuration_required"),
-                new BotAgent.Domain.Management.ActionCapability(
-                    BotAgent.Domain.Management.ManagedAction.Stop, false, "configuration_required")),
-            CredentialConfigured: true,
-            ErrorCode: null,
-            DescriptorRevision: ""))
-            .ToImmutableArray();
-
     private static ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor> ManagedProviderDescriptors(
         IReadOnlyList<PersistedModelProvider> captured, AppSettings current)
     {
@@ -486,17 +458,20 @@ internal static class CompositionRoot
         var items = ModelProviderStore.LoadAllInTransaction(connection).Select(provider =>
         {
             var runtime = captured.SingleOrDefault(item => item.Id == provider.Id);
-            var configured = ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef)
-                is not (CredentialBindingState.Unclassified or CredentialBindingState.Unconfigured)
-                && !string.IsNullOrWhiteSpace(ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection));
+            var binding = ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef);
+            var configured = binding != CredentialBindingState.Unclassified
+                && (provider.Protocol == ModelProtocol.Ollama
+                    || binding != CredentialBindingState.Unconfigured
+                        && !string.IsNullOrWhiteSpace(ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection)));
             var restart = runtime is null || runtime.SecretKeyRef != provider.SecretKeyRef
                 || runtime.IsEnabled != provider.IsEnabled || runtime.Priority != provider.Priority
+                || runtime.Protocol != provider.Protocol || runtime.Options != provider.Options
                 || provider.Id != "primary" && (runtime.BaseUrl != provider.BaseUrl || runtime.ModelName != provider.ModelName);
             return new BotAgent.Domain.Management.ManagedDescriptor(
                 new BotAgent.Domain.Management.ManagedObjectKey.Provider(new(provider.Id)), "model-provider", provider.IsEnabled,
                 runtime is null ? BotAgent.Domain.Management.ManagedRuntimeState.NotLoaded : BotAgent.Domain.Management.ManagedRuntimeState.Unknown,
                 ImmutableArray.Create(new BotAgent.Domain.Management.ActionCapability(BotAgent.Domain.Management.ManagedAction.TestConnection,
-                    provider.IsEnabled && configured && !restart, "registered_route_required")),
+                    configured, "provider_credential_required")),
                 configured, restart ? "provider_restart_required" : null, "");
         }).ToImmutableArray();
         transaction.Commit();
@@ -579,7 +554,8 @@ internal static class CompositionRoot
         var result = ImmutableArray.CreateBuilder<SecretMetadata>();
         foreach (var slot in Enum.GetValues<WritableSecretSlot>())
         {
-            var mutation = mutations.FirstOrDefault(value => value.Slot == slot);
+            // 已登记模型凭据的变更没有自己的槽位（默认落在 ModelApiKey 上），必须排除，否则会污染 apiKey 的事实。
+            var mutation = mutations.FirstOrDefault(value => value.CredentialKey is null && value.Slot == slot);
             var kind = mutation.Kind;
             var stored = StorageSecrets.LoadInTransaction(connection, slot);
             var configured = kind == SecretEditKind.Replace || kind == SecretEditKind.Keep && !string.IsNullOrWhiteSpace(stored);
@@ -831,9 +807,12 @@ internal static class CompositionRoot
             IReadOnlyList<PersistedModelProvider> persistedProviders, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
     {
         var allowPrivateOutbound = EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
-        // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒
-        var modelAuxHttp = new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "model-aux");
-        var modelChatHttp = new HttpFetcher(OpenAiClient.ModelTimeout(), msg => FileLog.Write("Net", msg), "model-chat");
+        // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒。
+        // 客户端只把 300 秒当"天花板"——真正的每次调用预算由传输层按 provider 的 timeoutSeconds
+        // 或上面这两个默认值逐次下发（见 ModelTransport/OpenAiClient 的 auxiliaryTimeout），
+        // 否则面板里把超时设到 120 秒以上也永远打不到线上。
+        var modelAuxHttp = new HttpFetcher(ModelHttpCeiling, msg => FileLog.Write("Net", msg), "model-aux");
+        var modelChatHttp = new HttpFetcher(ModelHttpCeiling, msg => FileLog.Write("Net", msg), "model-chat");
         var imageHttp = new HttpFetcher(
             TimeSpan.FromSeconds(8),
             msg => FileLog.Write("Net", msg),
@@ -844,7 +823,8 @@ internal static class CompositionRoot
         // 图片下载器与传输层（模型那条路的两个 IO 件）：都在这里造，客户端只拿端口。
         var imageDownloader = new ImageDownloader(imageHttp);
         var transport = new ModelTransport(
-            settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout());
+            settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout(),
+            TimeSpan.FromSeconds(60));
 
         var providerRoutes = persistedProviders
             .Select(p => TryBuildProviderRoute(p, settings, secrets))
@@ -874,7 +854,8 @@ internal static class CompositionRoot
                 var provider = persistedProviders.FirstOrDefault(p =>
                     string.Equals(p.Id, providerId, StringComparison.Ordinal));
                 return provider is null ? null : TryBuildCurrentProviderRoute(provider, settingsBox.Current);
-            })
+            },
+            auxiliaryTimeout: TimeSpan.FromSeconds(60))
         {
             BotIdentity = string.IsNullOrWhiteSpace(settings.NormalizedUin) ? null : settings.NormalizedUin,
             BotPersona = settings.BotPersona,
@@ -954,6 +935,7 @@ internal static class CompositionRoot
         var desired = ModelProviderStore.LoadAllInTransaction(connection).ToDictionary(provider => provider.Id, StringComparer.Ordinal);
         var restart = desired.Count != captured.Count || captured.Any(provider => !desired.TryGetValue(provider.Id, out var current)
             || current.SecretKeyRef != provider.SecretKeyRef || current.IsEnabled != provider.IsEnabled || current.Priority != provider.Priority
+            || current.Protocol != provider.Protocol || current.Options != provider.Options
             || provider.Id != "primary" && (current.BaseUrl != provider.BaseUrl || current.ModelName != provider.ModelName));
         transaction.Commit();
         return new(ApplyStep.ModelProjection, restart ? ApplyState.RestartRequired : ApplyState.Applied, restart ? "restart_required" : null);
@@ -967,6 +949,28 @@ internal static class CompositionRoot
         return BuildProviderRoute(provider, settings, apiKey);
     }
 
+    private static ModelProviderRoute? TryBuildProviderTestRoute(string providerId, AppSettings current)
+    {
+        try
+        {
+            using var connection = AppDatabase.Open();
+            using var transaction = connection.BeginTransaction(deferred: true);
+            var provider = ModelProviderStore.LoadAllInTransaction(connection)
+                .FirstOrDefault(item => string.Equals(item.Id, providerId, StringComparison.Ordinal));
+            if (provider is null || ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef)
+                is CredentialBindingState.Unclassified) return null;
+            var key = ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection);
+            var route = BuildProviderRoute(provider, current, key);
+            transaction.Commit();
+            return route;
+        }
+        catch (Exception)
+        {
+            // A failed coherent observation must not test a stale endpoint or resurrect an old key.
+            return null;
+        }
+    }
+
     private static ModelProviderRoute? TryBuildCurrentProviderRoute(PersistedModelProvider captured, AppSettings current)
     {
         if (!captured.IsEnabled || captured.Id.Trim() != captured.Id) return null;
@@ -977,8 +981,10 @@ internal static class CompositionRoot
             var desired = ModelProviderStore.LoadAllInTransaction(connection)
                 .FirstOrDefault(provider => string.Equals(provider.Id, captured.Id, StringComparison.Ordinal));
             if (desired is null || !desired.IsEnabled || desired.SecretKeyRef != captured.SecretKeyRef
-                || ModelProviderStore.ClassifyCredentialBinding(desired.SecretKeyRef)
-                    is CredentialBindingState.Unclassified or CredentialBindingState.Unconfigured) return null;
+                || desired.Protocol != captured.Protocol || desired.Options != captured.Options) return null;
+            var binding = ModelProviderStore.ClassifyCredentialBinding(desired.SecretKeyRef);
+            if (binding == CredentialBindingState.Unclassified
+                || binding == CredentialBindingState.Unconfigured && desired.Protocol != ModelProtocol.Ollama) return null;
             if (captured.Id != "primary"
                 && (desired.BaseUrl != captured.BaseUrl || desired.ModelName != captured.ModelName)) return null;
             var key = ResolveProviderSecretInTransaction(desired.SecretKeyRef, current, connection);
@@ -1002,21 +1008,25 @@ internal static class CompositionRoot
             return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
         if (knownRef == ModelProviderStore.PrimaryModelCredentialReference) return current.ApiKey;
+        if (ModelProviderStore.TryGetRegisteredCredentialKey(knownRef, out var credentialKey))
+            return ModelCredentialStore.LoadInTransaction(connection, credentialKey);
         return knownRef == "env:QQCHAT_API_KEY" ? ResolveFixedEnvironmentModelKey(current) : null;
     }
 
     private static ModelProviderRoute? BuildProviderRoute(PersistedModelProvider provider, AppSettings settings, string? apiKey)
     {
-                if (string.IsNullOrWhiteSpace(apiKey) ||
-            apiKey.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            apiKey.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(provider.BaseUrl) ||
-            string.IsNullOrWhiteSpace(provider.ModelName))
+        apiKey = apiKey?.Trim() ?? string.Empty;
+        if (!Enum.IsDefined(provider.Protocol)
+            || provider.Protocol != ModelProtocol.Ollama && string.IsNullOrWhiteSpace(apiKey)
+            || apiKey.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || apiKey.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(provider.BaseUrl)
+            || string.IsNullOrWhiteSpace(provider.ModelName))
         {
             return null;
         }
 
-                var baseUrl = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
+        var baseUrl = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
             ? settings.ModelBaseUrl
             : provider.BaseUrl;
         var model = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
@@ -1029,7 +1039,7 @@ internal static class CompositionRoot
             return null;
         }
 
-        return new ModelProviderRoute(provider.Id, baseUrl.Trim(), model.Trim(), apiKey.Trim());
+        return new ModelProviderRoute(provider.Id, baseUrl.Trim(), model.Trim(), apiKey, provider.Protocol, provider.Options);
     }
 
     private static string? ResolveProviderSecret(
@@ -1041,6 +1051,8 @@ internal static class CompositionRoot
         }
 
         if (secretRef == ModelProviderStore.PrimaryModelCredentialReference) return settings.ApiKey;
+        if (ModelProviderStore.TryGetRegisteredCredentialKey(secretRef, out var credentialKey))
+            return new ModelCredentialStore().Load(credentialKey);
 
         if (!string.Equals(secretRef, "env:QQCHAT_API_KEY", StringComparison.Ordinal))
         {

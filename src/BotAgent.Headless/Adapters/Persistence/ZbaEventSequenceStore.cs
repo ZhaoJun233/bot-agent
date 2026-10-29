@@ -1,4 +1,7 @@
+extern alias StorageModule;
+
 using System.Globalization;
+using TextSnapshotFile = StorageModule::BotAgent.Adapters.Persistence.TextSnapshotFile;
 
 namespace BotAgent.Adapters.Persistence;
 
@@ -122,11 +125,9 @@ internal sealed class ZbaEventSequenceStore
     internal static bool TryWriteTextAtomic(string path, string body, Action<string>? log,
         Func<Exception, string> failureMessage)
     {
-        var temp = path + ".tmp";
         try
         {
-            File.WriteAllText(temp, body);
-            File.Move(temp, path, overwrite: true);
+            TextSnapshotFile.Write(path, body);
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -140,21 +141,10 @@ internal sealed class ZbaEventSequenceStore
     {
         try
         {
-            text = File.ReadAllText(path).Trim();
+            var snapshot = TextSnapshotFile.Read(path);
+            text = snapshot?.Trim() ?? string.Empty;
             failure = null;
-            return ReadOutcome.Ok;
-        }
-        catch (FileNotFoundException)
-        {
-            text = string.Empty;
-            failure = null;
-            return ReadOutcome.Missing;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            text = string.Empty;
-            failure = null;
-            return ReadOutcome.Missing;
+            return snapshot is null ? ReadOutcome.Missing : ReadOutcome.Ok;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

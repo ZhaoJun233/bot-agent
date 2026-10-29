@@ -3,6 +3,7 @@ extern alias StorageModule;
 using System.IO;
 using System.Collections.Immutable;
 using BotAgent.Domain.Configuration;
+using BotAgent.Domain.Model;
 using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -24,7 +25,7 @@ namespace BotAgent.Adapters.Persistence;
 /// 它仍然在库里 —— 备份、查询（<c>json_extract(json,'$.AiDesire')</c>）、事务都成立。
 /// 老版本的 <c>settings.json</c> 由 LegacyJsonImporter 导入后归档。
 /// </summary>
-public sealed class SettingsStore : ISettingsRepository
+public sealed partial class SettingsStore : ISettingsRepository
 {
     private const string ReadSettingsSql = "SELECT json FROM settings WHERE id = 1";
     private const string WriteSettingsSql = "INSERT INTO settings(id, json, updated_unix) VALUES(1, $json, $now) "
@@ -407,7 +408,7 @@ public sealed class SettingsStore : ISettingsRepository
         var user = JsonSerializer.Deserialize<AppSettings>(json) ?? throw new JsonException("configuration_missing");
         var properties = JsonNode.Parse(json)!.AsObject().Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
         var emptyRegistered = new RegisteredConfigurationView(ImmutableArray<PluginConfigurationView>.Empty,
-            ImmutableArray<ProviderConfigurationView>.Empty);
+            ImmutableArray<ProviderConfigurationView>.Empty, ImmutableArray<ModelCredentialView>.Empty);
         var view = ProjectConfigurationView(connection, user, user, ConfigurationReadKind.Editable, ApplyState.NotStarted,
             properties, _ => ConfigurationValueSource.Unclassified, BotConfig.ConfigurationEffect,
             ImmutableArray<PlatformPolicyEntryView>.Empty, ImmutableArray<PlatformPolicyEntryView>.Empty, emptyRegistered);
@@ -706,7 +707,8 @@ public sealed class SettingsStore : ISettingsRepository
             var running = captured.FirstOrDefault(candidate => candidate.Id == provider.Id);
             var changed = running is null || running.IsEnabled != provider.IsEnabled || running.Priority != provider.Priority
                 || running.BaseUrl != provider.BaseUrl || running.ModelName != provider.ModelName
-                || running.SecretKeyRef != provider.SecretKeyRef;
+                || running.SecretKeyRef != provider.SecretKeyRef || running.Protocol != provider.Protocol
+                || running.Options != provider.Options;
             var apply = changed ? ApplyState.RestartRequired : ApplyState.NotStarted;
             var binding = ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef);
             ReadField<string> Field(string requested, string display, int bit, bool name)
@@ -721,13 +723,45 @@ public sealed class SettingsStore : ISettingsRepository
                     UserValueKind.Explicit, explicitField ? ConfigurationValueSource.UserConfiguration
                         : ConfigurationValueSource.LegacyCompatibility, apply, requested);
             }
+            // 凭据“是否已配置”只投影存在性：主凭据看固定槽位，已登记凭据看 model:<key> 那一行，永不回显正文。
+            var credentialKey = ModelProviderStore.TryGetRegisteredCredentialKey(provider.SecretKeyRef, out var registered)
+                ? registered : (ModelCredentialKey?)null;
+            var credentialConfigured = credentialKey is { } key
+                ? ModelCredentialStore.LoadInTransaction(connection, key) is not null
+                : binding == CredentialBindingState.PrimaryModel
+                    && !string.IsNullOrWhiteSpace(StorageSecrets.LoadInTransaction(connection, WritableSecretSlot.ModelApiKey));
             return new ProviderConfigurationView(new ProviderKey(provider.Id),
                 Field(provider.Name, running?.Name ?? provider.Name, 1, true),
                 Field(provider.BaseUrl, running?.BaseUrl ?? provider.BaseUrl, 2, false),
                 Field(provider.ModelName, running?.ModelName ?? provider.ModelName, 4, false),
-                provider.Priority, provider.IsEnabled, binding, apply);
+                provider.Priority, provider.IsEnabled, binding, apply, provider.Protocol, provider.Options,
+                credentialKey, credentialConfigured);
         }).ToImmutableArray();
     }
+
+    /// <summary>
+    /// 已登记凭据（<c>model:&lt;key&gt;</c>）的只读投影：只从 provider 引用推导，绝不枚举密钥库，
+    /// 也绝不回显密钥正文。键值按首次出现顺序去重。
+    /// </summary>
+    internal static ImmutableArray<ModelCredentialView> ProjectModelCredentials(
+        Microsoft.Data.Sqlite.SqliteConnection connection, IReadOnlyList<PersistedModelProvider> desired)
+    {
+        var builder = ImmutableArray.CreateBuilder<ModelCredentialView>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var provider in desired)
+        {
+            if (!ModelProviderStore.TryGetRegisteredCredentialKey(provider.SecretKeyRef, out var key)
+                || !seen.Add(key.Value)) continue;
+            var value = ModelCredentialStore.LoadInTransaction(connection, key);
+            builder.Add(new ModelCredentialView(key, !string.IsNullOrWhiteSpace(value), IsUsable(value)));
+        }
+        return builder.ToImmutable();
+    }
+
+    private static bool IsUsable(string? value)
+        => !string.IsNullOrWhiteSpace(value)
+            && !value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !value.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsEndpointUserInfo(string? endpoint)
         => Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) && uri.UserInfo.Length != 0;
@@ -803,7 +837,7 @@ public sealed class SettingsStore : ISettingsRepository
         return result.ToImmutable();
     }
 
-    internal sealed class ConfigurationParticipant : StorageConfiguration.ConfigurationStorageParticipant
+    internal sealed partial class ConfigurationParticipant : StorageConfiguration.ConfigurationStorageParticipant
     {
         private readonly SettingsBox _runtime;
         private readonly Func<ConfigurationCaller, ConfigurationAccess, bool> _authorization;
@@ -1090,13 +1124,15 @@ public sealed class SettingsStore : ISettingsRepository
                 return new(false, ImmutableArray.Create(Error(ConfigurationFieldId.RegisteredProviders, "registration_needs_review")),
                     ImmutableArray<DeviceKeyAssignment>.Empty, _ => { }, ConfigurationResultCode.LegacyNeedsReview);
             var primary = providers.FirstOrDefault(provider => provider.Id == "primary");
-            var errors = RejectUnimplementedObjects(ownedIntent, primary is not null);
+            var errors = ValidateProviderOperations(ownedIntent, providers, profile);
             var credential = proposedSecrets.Single(secret => secret.Slot == WritableSecretSlot.ModelApiKey);
             var credentialMutation = proposedMutations.FirstOrDefault(mutation => mutation.Slot == WritableSecretSlot.ModelApiKey);
             if (profile == StorageConfiguration.ConfigurationStorageProfile.Legacy && ownedIntent.Registered is { } registered)
             {
                 foreach (var provider in registered.Providers)
                 {
+                    // 新建/删除意图已在 ValidateProviderOperations 里按 Legacy 拒绝，这里只处理旧客户端的更新。
+                    if (provider.Operation != ProviderEditOperation.Update) continue;
                     var address = new ConfigurationObjectAddress.Provider(provider.Key);
                     if (!IsPrimaryAliasMarker(provider))
                         errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "adapter_unavailable", address));
@@ -1131,23 +1167,27 @@ public sealed class SettingsStore : ISettingsRepository
             if (policyPlan.Changed) changed = true;
             var metadata = PrimaryProjection(primary, candidate, ownedIntent, credentialMutation.Kind, credential);
             ImmutableArray<ModelProviderDefinition> metadataWrites;
+            ImmutableArray<string> providerDeletions;
             ImmutableDictionary<string, int> fieldModes;
             var modesChanged = false;
             try
             {
                 if (profile == StorageConfiguration.ConfigurationStorageProfile.Strict)
                 {
+                    var registeredFacts = ObserveRegisteredCredentialFacts(connection, proposedMutations, providers);
                     var plan = PrepareRegisteredProviders(connection, providers, ownedIntent.Registered, metadata,
-                        _runtime.Current, credentialMutation, credential);
+                        _runtime.Current, credentialMutation, credential, registeredFacts);
                     if (plan.Errors.Length != 0)
                         return new(false, plan.Errors, ImmutableArray<DeviceKeyAssignment>.Empty, _ => { });
                     metadataWrites = plan.MetadataWrites;
+                    providerDeletions = plan.Deletions;
                     fieldModes = plan.FieldModes;
                     modesChanged = plan.FieldModesChanged;
                 }
                 else
                 {
                     metadataWrites = metadata is null ? ImmutableArray<ModelProviderDefinition>.Empty : ImmutableArray.Create(metadata);
+                    providerDeletions = ImmutableArray<string>.Empty;
                     fieldModes = ModelProviderStore.LoadFieldModesInTransaction(connection);
                 }
             }
@@ -1156,23 +1196,17 @@ public sealed class SettingsStore : ISettingsRepository
                 return new(false, ImmutableArray.Create(Error(ConfigurationFieldId.RegisteredProviders, "provider_modes_needs_review")),
                     ImmutableArray<DeviceKeyAssignment>.Empty, _ => { }, ConfigurationResultCode.LegacyNeedsReview);
             }
-            if (metadataWrites.Length != 0 || modesChanged || pluginsChanged) changed = true;
+            if (metadataWrites.Length != 0 || providerDeletions.Length != 0 || modesChanged || pluginsChanged) changed = true;
             return new(changed, ImmutableArray<FieldError>.Empty, ImmutableArray<DeviceKeyAssignment>.Empty, conn =>
             {
                 if (pluginsChanged) StorageConfiguration.PluginStore.SavePluginStatesInTransaction(conn, pluginStates);
                 AppDatabase.Exec(conn, WriteSettingsSql, ("$json", nextJson), ("$now", Clock.Now.ToUnixTimeSeconds()));
                 foreach (var provider in metadataWrites) ModelProviderStore.UpsertMetadataInTransaction(conn, provider);
+                foreach (var providerId in providerDeletions) ModelProviderStore.DeleteInTransaction(conn, providerId);
                 if (modesChanged) ModelProviderStore.WriteFieldModesInTransaction(conn, fieldModes);
                 if (policyPlan.Changed) ConfigurationBridge.WritePlatformPolicies(conn, policyPlan.Entries, policyPlan.ExplicitFields);
             });
         }
-
-        private readonly record struct PrimaryCredentialFacts(
-            bool Known, bool Configured, bool KeyUsable, CredentialSource Source);
-
-        private static PrimaryCredentialFacts ProjectProposedHotSavePrimaryFacts(string finalRef,
-            StorageConfiguration.SecretMutation modelMutation, SecretMetadata proposedMain, AppSettings current)
-            => ProjectProviderBindingFacts(finalRef, ObserveProposedHotSaveProviderFacts(modelMutation, proposedMain, current));
 
         private static (PrimaryCredentialFacts Database, PrimaryCredentialFacts LegacyEnvironment, PrimaryCredentialFacts LivePrimary)
             ObserveProposedHotSaveProviderFacts(StorageConfiguration.SecretMutation modelMutation,
@@ -1199,6 +1233,13 @@ public sealed class SettingsStore : ISettingsRepository
             return (database, legacy, main);
         }
 
+        /// <summary>绑定到已登记凭据时用本次提交 + 库里的凭据事实；其余引用沿用固定槽位口径。</summary>
+        private static PrimaryCredentialFacts ResolveBindingFacts(string reference,
+            (PrimaryCredentialFacts Database, PrimaryCredentialFacts LegacyEnvironment, PrimaryCredentialFacts LivePrimary) facts,
+            IReadOnlyDictionary<string, PrimaryCredentialFacts> registeredFacts)
+            => registeredFacts.TryGetValue(reference, out var registered) ? registered
+                : ProjectProviderBindingFacts(reference, facts);
+
         private static PrimaryCredentialFacts ProjectProviderBindingFacts(string reference,
             (PrimaryCredentialFacts Database, PrimaryCredentialFacts LegacyEnvironment, PrimaryCredentialFacts LivePrimary) facts)
             => reference switch
@@ -1210,20 +1251,75 @@ public sealed class SettingsStore : ISettingsRepository
                 _ => default,
             };
 
-        private (ImmutableArray<ModelProviderDefinition> MetadataWrites, ImmutableArray<FieldError> Errors,
-            ImmutableDictionary<string, int> FieldModes, bool FieldModesChanged) PrepareRegisteredProviders(
+        private (ImmutableArray<ModelProviderDefinition> MetadataWrites, ImmutableArray<string> Deletions,
+            ImmutableArray<FieldError> Errors, ImmutableDictionary<string, int> FieldModes, bool FieldModesChanged)
+            PrepareRegisteredProviders(
             Microsoft.Data.Sqlite.SqliteConnection connection, IReadOnlyList<PersistedModelProvider> prior,
             RegisteredConfigurationChanges? edits, ModelProviderDefinition? primaryProjection, AppSettings current,
-            StorageConfiguration.SecretMutation modelMutation, SecretMetadata proposedMain)
+            StorageConfiguration.SecretMutation modelMutation, SecretMetadata proposedMain,
+            IReadOnlyDictionary<string, PrimaryCredentialFacts> registeredFacts)
         {
             var oldModes = ModelProviderStore.LoadFieldModesInTransaction(connection);
             var modes = oldModes.ToBuilder();
             var final = prior.ToDictionary(provider => provider.Id, Definition, StringComparer.Ordinal);
             if (primaryProjection is not null) final[primaryProjection.Id] = primaryProjection;
             var errors = ImmutableArray.CreateBuilder<FieldError>();
+            var deletions = ImmutableArray.CreateBuilder<string>();
+            var creations = ImmutableArray.CreateBuilder<ModelProviderDefinition>();
             foreach (var edit in edits?.Providers ?? ImmutableArray<ProviderEdit>.Empty)
             {
                 var address = new ConfigurationObjectAddress.Provider(edit.Key);
+                if (edit.Operation == ProviderEditOperation.Delete)
+                {
+                    // 删除只移除元数据行；已登记凭据与主模型密钥是独立对象，由各自的操作处理。
+                    if (!final.ContainsKey(edit.Key.Value))
+                        errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "registration_required", address));
+                    else
+                    {
+                        final.Remove(edit.Key.Value);
+                        deletions.Add(edit.Key.Value);
+                        modes.Remove(edit.Key.Value);
+                    }
+                    continue;
+                }
+                if (edit.Operation == ProviderEditOperation.Create)
+                {
+                    if (final.ContainsKey(edit.Key.Value))
+                    {
+                        errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_already_registered", address));
+                        continue;
+                    }
+                    var createdChange = edit.Changes;
+                    // 新建永远以停用落地：启用是另一次显式保存，避免"建好即路由"。
+                    if (createdChange.Enabled.Kind == EditKind.Set && createdChange.Enabled.TryGetValue(out var wanted) && wanted)
+                        errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_create_must_be_disabled", address));
+                    if (!createdChange.NameRaw.TryGetValue(out var createdName) || string.IsNullOrWhiteSpace(createdName))
+                        errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_metadata_required", address));
+                    var createdRef = createdChange.Credential.Kind switch
+                    {
+                        CredentialBindingEditKind.UsePrimaryModelCredential => ModelProviderStore.PrimaryModelCredentialReference,
+                        CredentialBindingEditKind.UseRegisteredModelCredential => RegisteredReference(createdChange.Credential),
+                        CredentialBindingEditKind.Unconfigured => ModelProviderStore.UnconfiguredModelCredentialReference,
+                        _ => null,
+                    };
+                    if (createdRef is null)
+                        errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_required", address));
+                    else if (createdRef.StartsWith(ModelProviderStore.RegisteredCredentialPrefix, StringComparison.Ordinal)
+                        && ModelProviderStore.TryGetRegisteredCredentialKey(createdRef, out var createdKey)
+                        && string.IsNullOrWhiteSpace(ModelCredentialStore.LoadInTransaction(connection, createdKey)))
+                        errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_required", address));
+                    var created = new ModelProviderDefinition(edit.Key.Value,
+                        createdChange.Priority.TryGetValue(out var createdPriority) ? createdPriority : 0,
+                        createdName?.Trim() ?? string.Empty,
+                        Text(createdChange.BaseUrl, string.Empty), Text(createdChange.ModelName, string.Empty),
+                        createdRef ?? ModelProviderStore.UnconfiguredModelCredentialReference,
+                        false,
+                        createdChange.Protocol.TryGetValue(out var createdProtocol) ? createdProtocol : ModelProtocol.OpenAiChat,
+                        createdChange.Options.TryGetValue(out var createdOptions) ? createdOptions : null);
+                    final[created.Id] = created;
+                    creations.Add(created);
+                    continue;
+                }
                 if (!final.TryGetValue(edit.Key.Value, out var original))
                 {
                     errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "registration_required", address));
@@ -1237,10 +1333,14 @@ public sealed class SettingsStore : ISettingsRepository
                 {
                     CredentialBindingEditKind.UsePrimaryModelCredential => ModelProviderStore.PrimaryModelCredentialReference,
                     CredentialBindingEditKind.Unconfigured => ModelProviderStore.UnconfiguredModelCredentialReference,
+                    CredentialBindingEditKind.UseRegisteredModelCredential => RegisteredReference(change.Credential),
                     _ => original.SecretKeyRef,
                 };
-                if (change.Credential.Kind == CredentialBindingEditKind.UseRegisteredModelCredential)
-                    errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_registry_unavailable", address));
+                // 绑定到已登记凭据时先验证存在性：引用合法但库里没有那一行，等于“需要先填密钥”。
+                if (nextRef is not null && nextRef.StartsWith(ModelProviderStore.RegisteredCredentialPrefix, StringComparison.Ordinal)
+                    && ModelProviderStore.TryGetRegisteredCredentialKey(nextRef, out var referenced)
+                    && string.IsNullOrWhiteSpace(ModelCredentialStore.LoadInTransaction(connection, referenced)))
+                    errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_required", address));
                 var next = original with
                 {
                     Name = Text(change.NameRaw, original.Name),
@@ -1248,7 +1348,10 @@ public sealed class SettingsStore : ISettingsRepository
                     ModelName = Text(change.ModelName, original.ModelName),
                     Priority = change.Priority.TryGetValue(out var priority) ? priority : original.Priority,
                     IsEnabled = change.Enabled.TryGetValue(out var enabled) ? enabled : original.IsEnabled,
-                    SecretKeyRef = nextRef,
+                    SecretKeyRef = nextRef ?? original.SecretKeyRef,
+                    Protocol = change.Protocol.TryGetValue(out var protocol) ? protocol : original.Protocol,
+                    Options = change.Options.Kind == EditKind.Keep ? original.Options
+                        : change.Options.TryGetValue(out var options) ? options : null,
                 };
                 var bits = modes.TryGetValue(original.Id, out var existingBits) ? existingBits : 0;
                 if (change.NameRaw.Kind != EditKind.Keep) bits |= 1;
@@ -1268,23 +1371,31 @@ public sealed class SettingsStore : ISettingsRepository
                 else if (!TryModelEndpoint(provider.BaseUrl, out _))
                     errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_endpoint_invalid", address));
                 if (!provider.IsEnabled || provider.Id == "primary" && !_primaryRequiresCredential) continue;
-                var credential = ProjectProviderBindingFacts(provider.SecretKeyRef, facts);
+                var credential = ResolveBindingFacts(provider.SecretKeyRef, facts, registeredFacts);
+                // model:<key> 是合法引用，但只有在库里真有那一行时才算“已知”；否则报 facts unknown 而不是误报缺密钥。
                 if (!credential.Known || !credential.Configured || !credential.KeyUsable)
                     errors.Add(Error(provider.Id == "primary" ? ConfigurationFieldId.AllowedSecretEdits : ConfigurationFieldId.RegisteredProviders,
                         credential.Known ? "credential_required" : "credential_facts_unknown",
                         provider.Id == "primary" ? new ConfigurationObjectAddress.Secret(WritableSecretSlot.ModelApiKey) : address));
             }
-            var writes = prior.Where(provider => final[provider.Id] != Definition(provider))
-                .Select(provider => final[provider.Id]).ToImmutableArray();
+            var writes = prior.Where(provider => final.TryGetValue(provider.Id, out var next) && next != Definition(provider))
+                .Select(provider => final[provider.Id]).Concat(creations).ToImmutableArray();
             var nextModes = modes.ToImmutable();
             var modeChanged = nextModes.Count != oldModes.Count || nextModes.Any(entry => !oldModes.TryGetValue(entry.Key, out var bits) || bits != entry.Value);
-            return (writes, errors.Take(32).ToImmutableArray(), nextModes, modeChanged);
+            return (writes, deletions.ToImmutable(), errors.Take(32).ToImmutableArray(), nextModes, modeChanged);
 
             static string Text(FieldEdit<string> edit, string original)
                 => edit.Kind == EditKind.Clear ? string.Empty : edit.TryGetValue(out var value) ? value.Trim() : original;
             static ModelProviderDefinition Definition(PersistedModelProvider provider)
-                => new(provider.Id, provider.Priority, provider.Name, provider.BaseUrl, provider.ModelName, provider.SecretKeyRef, provider.IsEnabled);
+                => new(provider.Id, provider.Priority, provider.Name, provider.BaseUrl, provider.ModelName,
+                    provider.SecretKeyRef, provider.IsEnabled, provider.Protocol, provider.Options);
         }
+
+        /// <summary>把“绑定到已登记凭据”的编辑翻译成持久化引用 <c>model:&lt;key&gt;</c>；键非法时返回 null。</summary>
+        private static string? RegisteredReference(CredentialBindingEdit credential)
+            => credential.TryGetRegisteredKey(out var key)
+                ? ModelProviderStore.RegisteredCredentialPrefix + key.Value
+                : null;
 
         private static PrimaryCredentialFacts ProjectPrimaryKeyFacts(string? value, CredentialSource source)
         {
@@ -1341,13 +1452,37 @@ public sealed class SettingsStore : ISettingsRepository
                 };
             }
             if (model == primary.ModelName && baseUrl == primary.BaseUrl && secretRef == primary.SecretKeyRef) return null;
-            return new(primary.Id, primary.Priority, primary.Name, baseUrl, model, secretRef, primary.IsEnabled);
+            return new(primary.Id, primary.Priority, primary.Name, baseUrl, model, secretRef, primary.IsEnabled,
+                primary.Protocol, primary.Options);
         }
 
-        private static ImmutableArray<FieldError>.Builder RejectUnimplementedObjects(ConfigurationPatch intent,
-            bool primaryRegistered)
+        /// <summary>
+        /// 校验 Provider 的新建/删除意图：旧存储档位（Legacy）一律拒绝，Strict 档位要求
+        /// 键未被占用（新建）或确实已登记（删除），并且不允许对 primary 做这两类操作。
+        /// 单纯的元数据更新在这里不判，交给 <see cref="PrepareRegisteredProviders"/>。
+        /// </summary>
+        private static ImmutableArray<FieldError>.Builder ValidateProviderOperations(ConfigurationPatch intent,
+            IReadOnlyList<PersistedModelProvider> registered,
+            StorageConfiguration.ConfigurationStorageProfile profile)
         {
             var errors = ImmutableArray.CreateBuilder<FieldError>();
+            foreach (var edit in intent.Registered?.Providers ?? ImmutableArray<ProviderEdit>.Empty)
+            {
+                if (edit.Operation == ProviderEditOperation.Update) continue;
+                var address = new ConfigurationObjectAddress.Provider(edit.Key);
+                if (profile != StorageConfiguration.ConfigurationStorageProfile.Strict)
+                {
+                    errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "adapter_unavailable", address));
+                    continue;
+                }
+                var exists = registered.Any(provider => string.Equals(provider.Id, edit.Key.Value, StringComparison.Ordinal));
+                if (edit.Key.Value == "primary")
+                    errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "field_read_only", address));
+                else if (edit.Operation == ProviderEditOperation.Create && exists)
+                    errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_already_registered", address));
+                else if (edit.Operation == ProviderEditOperation.Delete && !exists)
+                    errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "registration_required", address));
+            }
             return errors;
         }
 
@@ -1355,7 +1490,9 @@ public sealed class SettingsStore : ISettingsRepository
             => provider.Key.Value == "primary" && provider.Changes.NameRaw.Kind == EditKind.Keep
                 && provider.Changes.Priority.Kind == EditKind.Keep && provider.Changes.BaseUrl.Kind == EditKind.Keep
                 && provider.Changes.ModelName.Kind == EditKind.Keep && provider.Changes.Enabled.Kind == EditKind.Keep
-                && provider.Changes.Credential.Kind == CredentialBindingEditKind.KeepExisting;
+                && provider.Changes.Credential.Kind == CredentialBindingEditKind.KeepExisting
+                // 协议/选项与基础字段同级：带协议变更的“别名”不是空标记。
+                && provider.Changes.Protocol.Kind == EditKind.Keep && provider.Changes.Options.Kind == EditKind.Keep;
 
         private static FieldError Error(ConfigurationFieldId id, string code, ConfigurationObjectAddress? target = null)
             => new(new(id, target), code);

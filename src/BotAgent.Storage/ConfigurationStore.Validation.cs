@@ -41,10 +41,12 @@ public sealed partial class ConfigurationStore
             if (Version(connection) != request.ExpectedVersion)
                 return ValueTask.FromResult(Result(ManagedResultCode.VersionConflict));
             ct.ThrowIfCancellationRequested();
-            var mutations = owned.Secrets.Select(secret => secret.Slot == WritableSecretSlot.ModelApiKey
-                ? secret.Kind == SecretEditKind.Keep ? ConfigurationStorageBridge.ObserveModelApiKey(connection)
-                    : ConfigurationStorageBridge.ProjectModelApiKeyMutation(secret.Kind, secret.NormalizedValue)
-                : new SecretMutation(secret.Slot, secret.Kind)).ToImmutableArray();
+            var mutations = owned.Secrets.Select(secret => secret.CredentialKey is { } key
+                ? new SecretMutation(secret.Slot, secret.Kind) { CredentialKey = key, NormalizedValue = secret.NormalizedValue }
+                : secret.Slot == WritableSecretSlot.ModelApiKey
+                    ? secret.Kind == SecretEditKind.Keep ? ConfigurationStorageBridge.ObserveModelApiKey(connection)
+                        : ConfigurationStorageBridge.ProjectModelApiKeyMutation(secret.Kind, secret.NormalizedValue)
+                    : new SecretMutation(secret.Slot, secret.Kind)).ToImmutableArray();
             var proposed = _participant.SecretSources(connection, mutations);
             if (proposed.IsDefault || proposed.Length != 6
                 || proposed.Select(secret => secret.Slot).Distinct().Count() != 6)

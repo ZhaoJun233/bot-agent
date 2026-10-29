@@ -29,7 +29,17 @@ internal static class ZbaRoutes
         new("POST", "/zba/v1/tasks/{id}/cancel", ZbaScope.Admin, false, "tasks.cancel", "Request cancellation without claiming remote success", null, "ZbaTaskCancelResult"),
         new("GET", "/zba/v1/approvals", ZbaScope.Read, false, "approvals.list", "List pending approvals with redacted summaries", null, "ZbaApprovalSummaryList"),
         new("POST", "/zba/v1/approvals/{id}/decide", ZbaScope.Admin, false, "approvals.decide", "Approve or reject one pending request", "ZbaApprovalDecision", "ZbaApprovalDecisionResult"),
-        new("GET", "/zba/v1/events", ZbaScope.Read, false, "events.read", "Read ordered events after a sequence or require resync", null, "ZbaEventPage")
+        new("GET", "/zba/v1/events", ZbaScope.Read, false, "events.read", "Read ordered events after a sequence or require resync", null, "ZbaEventPage"),
+        new("GET", "/zba/v1/plugins/catalog", ZbaScope.Read, false, "plugins.catalog", "Browse the configured plugin marketplace catalog", null, "ZbaPluginCatalog"),
+        new("GET", "/zba/v1/plugins/installed", ZbaScope.Read, false, "plugins.installed", "List installed plugin packages with real state", null, "ZbaInstalledPlugins"),
+        new("POST", "/zba/v1/plugins/sources/resolve", ZbaScope.Admin, false, "plugins.sources.resolve", "Resolve one pinned public GitHub release into a manifest", "ZbaPluginSourceResolveRequest", "ZbaPluginSourceResolution"),
+        new("POST", "/zba/v1/plugins/install", ZbaScope.Admin, false, "plugins.install", "Stage a plugin install; takes effect after restart", "ZbaPluginMutationRequest", "ZbaPluginOperationResult"),
+        new("POST", "/zba/v1/plugins/update", ZbaScope.Admin, false, "plugins.update", "Stage a plugin update; takes effect after restart", "ZbaPluginMutationRequest", "ZbaPluginOperationResult"),
+        new("POST", "/zba/v1/plugins/{id}/uninstall", ZbaScope.Admin, false, "plugins.uninstall", "Stage a plugin uninstall; takes effect after restart", "ZbaPluginUninstallRequest", "ZbaPluginOperationResult"),
+        new("GET", "/zba/v1/plugins/operations/{key}", ZbaScope.Read, false, "plugins.operations.get", "Read one staged plugin operation by idempotency key", null, "ZbaPluginOperationResult"),
+        new("GET", "/zba/v1/plugins/{id}/settings", ZbaScope.Read, false, "plugins.settings.read", "Read a plugin's declared settings without secret values", null, "ZbaPluginSettings"),
+        new("PUT", "/zba/v1/plugins/{id}/settings", ZbaScope.Admin, false, "plugins.settings.save", "Save plugin settings with expected revision", "ZbaPluginSettingsSaveRequest", "ZbaPluginSettings"),
+        new("GET", "/zba/v1/providers/{key}/models", ZbaScope.Read, false, "providers.models", "Discover upstream models for a saved provider route", null, "ZbaProviderModels")
     };
 
     internal static IReadOnlyList<ZbaRouteInfo> All => RouteTable;
@@ -40,6 +50,7 @@ internal static class ZbaRoutes
         "capabilities.list" => new[] { "kind", "limit", "cursor" },
         "tasks.list" => new[] { "limit", "cursor" },
         "events.read" => new[] { "after", "limit" },
+        "plugins.catalog" => new[] { "q", "category" },
         _ => Array.Empty<string>()
     };
 
@@ -48,17 +59,26 @@ internal static class ZbaRoutes
         foreach (var route in RouteTable)
         {
             if (!route.Method.Equals(method, StringComparison.Ordinal)) continue;
-            if (TryMatch(route.Template, path, out var values)) return new ZbaRouteMatch(route, values);
+            if (TryMatch(route, path, out var values)) return new ZbaRouteMatch(route, values);
         }
 
         return null;
     }
 
     internal static bool HasPath(string path)
-        => RouteTable.Any(route => TryMatch(route.Template, path, out _));
+        => RouteTable.Any(route => TryMatch(route, path, out _));
 
-    private static bool TryMatch(string template, string path, out IReadOnlyDictionary<string, string> values)
+    /// <summary>
+    /// 只有插件的幂等键需要更宽的字符集：前端生成的键形如
+    /// <c>plugin:install:id@version:issued:nonce</c>，含冒号与 <c>@</c>。
+    /// 其余 <c>{id}</c> 段继续走严格字符集，避免放宽所有路径段。
+    /// </summary>
+    private static bool AllowsExtendedSegment(ZbaRouteInfo route) => route.OperationId is "plugins.operations.get";
+
+    private static bool TryMatch(ZbaRouteInfo route, string path, out IReadOnlyDictionary<string, string> values)
     {
+        var template = route.Template;
+        var allowExtended = AllowsExtendedSegment(route);
         values = Empty;
         var templateParts = template.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var pathParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -72,7 +92,7 @@ internal static class ZbaRoutes
             if (expected.StartsWith('{') && expected.EndsWith('}'))
             {
                 var name = expected[1..^1];
-                if (!TryDecodeSegment(actual, out var decoded)) return false;
+                if (!TryDecodeSegment(actual, allowExtended, out var decoded)) return false;
                 captured[name] = decoded;
             }
             else if (!expected.Equals(actual, StringComparison.Ordinal))
@@ -86,15 +106,24 @@ internal static class ZbaRoutes
     }
 
     internal static bool TryDecodeSegment(string value, out string decoded)
+        => TryDecodeSegment(value, false, out decoded);
+
+    private static bool TryDecodeSegment(string value, bool allowExtended, out string decoded)
     {
         decoded = string.Empty;
         if (value.Length is 0 or > 512) return false;
         try
         {
             var result = Uri.UnescapeDataString(value);
-            if (result.Length is 0 or > 128 || result.Contains('/') || result.Contains('\\')) return false;
-            if (!result.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.' or '~'))
+            var maxLength = allowExtended ? 256 : 128;
+            if (result.Length is 0 || result.Length > maxLength
+                || result.Contains('/') || result.Contains('\\')) return false;
+            if (!result.All(character => char.IsAsciiLetterOrDigit(character)
+                || character is '-' or '_' or '.' or '~'
+                || (allowExtended && character is ':' or '@')))
+            {
                 return false;
+            }
             decoded = result;
             return true;
         }

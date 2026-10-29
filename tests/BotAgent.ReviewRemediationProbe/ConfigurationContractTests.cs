@@ -146,7 +146,9 @@ internal static class ConfigurationContractTests
                     command.CommandText = "SELECT COUNT(*) FROM meta WHERE key='configuration_schema'";
                     Check(Convert.ToInt64(command.ExecuteScalar()) == 0, "module marker rolled back");
                     command.CommandText = "PRAGMA user_version";
-                    Check(Convert.ToInt64(command.ExecuteScalar()) == 9, "legacy physical revision unchanged");
+                    // v10 (provider protocol/options) migrates before the configuration module is written, so the
+                    // committed physical revision is 10 even when module creation faults; module state is what must roll back.
+                    Check(Convert.ToInt64(command.ExecuteScalar()) == 10, "physical revision advanced only by the migration");
                     StorageDatabase.Exec(connection, "DROP TRIGGER synthetic_module_fault;");
                 }
                 StorageDatabase.Initialize(path);
@@ -478,7 +480,7 @@ internal static class ConfigurationContractTests
                 return new SecretMetadata(slot, configured, configured ? CredentialSource.Database : CredentialSource.None);
             }).ToImmutableArray();
         Func<SqliteConnection, ConfigurationReadKind, RegisteredConfigurationView> registered = (_, _) =>
-            new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty);
+            new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty, ImmutableArray<ModelCredentialView>.Empty);
         Func<ConfigurationFieldId, ConfigurationValueSource> provenance = _ => ConfigurationValueSource.UserConfiguration;
         Func<ConfigurationFieldId, FieldEffect> effect = _ => FieldEffect.Restart;
         var type = typeof(SettingsStore).GetNestedType("ConfigurationParticipant", BindingFlags.NonPublic)
@@ -869,7 +871,7 @@ internal static class ConfigurationContractTests
                     return new SecretMetadata(slot, configured, configured ? CredentialSource.Database : CredentialSource.None);
                 }).ToImmutableArray();
             Func<SqliteConnection, ConfigurationReadKind, RegisteredConfigurationView> registered = (_, _) =>
-                new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty);
+                new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty, ImmutableArray<ModelCredentialView>.Empty);
             Func<ConfigurationFieldId, ConfigurationValueSource> provenance = _ => ConfigurationValueSource.UserConfiguration;
             Func<ConfigurationFieldId, FieldEffect> effect = _ => FieldEffect.Restart;
             var adapterType = typeof(SettingsStore).GetNestedType("ConfigurationParticipant", BindingFlags.NonPublic)
@@ -986,7 +988,7 @@ internal static class ConfigurationContractTests
             var denied = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(denied.Code == ConfigurationResultCode.Forbidden && denied.View is null
                 && (await store.SaveAsync(caller, Request())).Code == ConfigurationResultCode.Forbidden, "trusted authorization denies forged flags");
-            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 9,
+            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 10,
                 "real adapter uses the sole bound Storage database");
             Console.WriteLine($"CFG_CHILD host passed={passed} failed=0");
             return 0;
@@ -1088,7 +1090,7 @@ internal static class ConfigurationContractTests
             ("--configuration-provider-routing", "CFG_CHILD provider-routing passed=25 failed=0"),
             ("--configuration-provider-refs", "CFG_CHILD provider-refs passed=34 failed=0"),
             ("--configuration-primary-facts", "CFG_CHILD primary-facts passed=20 failed=0"),
-            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=62 failed=0"),
+            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=67 failed=0"),
             ("--configuration-provider-writer-fence", "CFG_CHILD provider-writer-fence passed=11 failed=0"),
             ("--configuration-mood-persistence", "CFG_CHILD mood-persistence passed=22 failed=0"),
             ("--configuration-platform-policies", "CFG_CHILD platform-policies passed=72 failed=0"),
@@ -3283,13 +3285,19 @@ internal static class ConfigurationContractTests
             {
                 // The first red is an actual Save result, never a missing-member/reflection failure.
                 var project = typeof(SettingsStore).GetMethod("ProjectRegisteredProviderViews", BindingFlags.NonPublic | BindingFlags.Static);
-                if (project is null) return new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty);
+                if (project is null) return new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty, ImmutableArray<ModelCredentialView>.Empty);
                 try
                 {
+                    var loaded = (System.Collections.IEnumerable)typeof(ModelProviderStore)
+                        .GetMethod("LoadAllInTransaction", BindingFlags.NonPublic | BindingFlags.Static)!
+                        .Invoke(null, new object[] { conn })!;
+                    // 凭据视图走生产同一条 internal static 投影，避免探针自己造一份假的。
+                    var credentials = typeof(SettingsStore).GetMethod("ProjectModelCredentials", BindingFlags.NonPublic | BindingFlags.Static) is { } credentialsMethod
+                        ? (ImmutableArray<ModelCredentialView>)credentialsMethod.Invoke(null, new object[] { conn, loaded })!
+                        : ImmutableArray<ModelCredentialView>.Empty;
                     return new(ImmutableArray<PluginConfigurationView>.Empty,
-                        (ImmutableArray<ProviderConfigurationView>)project.Invoke(null, new object[] { conn,
-                            typeof(ModelProviderStore).GetMethod("LoadAllInTransaction", BindingFlags.NonPublic | BindingFlags.Static)!
-                                .Invoke(null, new object[] { conn })!, captured, kind })!);
+                        (ImmutableArray<ProviderConfigurationView>)project.Invoke(null, new object[] { conn, loaded, captured, kind })!,
+                        credentials);
                 }
                 catch (TargetInvocationException ex) when (ex.InnerException is JsonException)
                 { throw new JsonException("synthetic_origin_codec"); }
@@ -3318,7 +3326,7 @@ internal static class ConfigurationContractTests
                 Operations = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations") });
             ProviderEdit Edit(string id = "synthetic-secondary", FieldEdit<string> name = default, FieldEdit<string> url = default,
                 FieldEdit<string> model = default, FieldEdit<bool> enabled = default, FieldEdit<int> priority = default,
-                CredentialBindingEdit? binding = null) => new(new(id), new(name, priority, url, model, enabled, binding ?? CredentialBindingEdit.KeepExisting()));
+                CredentialBindingEdit? binding = null) => new(new(id), new(name, priority, url, model, enabled, binding ?? CredentialBindingEdit.KeepExisting(), default, default));
             ConfigurationSaveRequest Request(params ProviderEdit[] edits) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(null, null, null, null, null, null, null,
                     new(ImmutableArray<PluginEnabledEdit>.Empty, edits.ToImmutableArray(), ImmutableArray<PolicyEdit>.Empty)), ImmutableArray<SecretEdit>.Empty);
@@ -3387,9 +3395,31 @@ internal static class ConfigurationContractTests
             Check((await store.SaveAsync(caller, Request(Edit(enabled: FieldEdit<bool>.Set(false), binding: CredentialBindingEdit.Unconfigured())))).Code
                 == ConfigurationResultCode.Ok && providers.Find("synthetic-secondary")!.SecretKeyRef == "model:unconfigured"
                 && new StorageSecrets().LoadApiKey() == "synthetic-database-key", "disabled_unconfigured_keeps_shared_secret");
-            before = State();
-            Check((await store.SaveAsync(caller, Request(Edit(binding: CredentialBindingEdit.UseRegisteredModelCredential(new("synthetic-credential")))))).Code
-                == ConfigurationResultCode.ValidationFailed && State() == before, "unsupported_credential_registry_rejected");
+            // 已登记凭据是真的：先建行、再绑定启用，删除行必须整体拒绝。
+            using (var registeredInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("synthetic-registered-key")))
+            {
+                var credentialKey = new ModelCredentialKey("synthetic-credential");
+                var create = Request() with { Secrets = ImmutableArray.Create(SecretEdit.Replace(credentialKey, registeredInput)) };
+                Check((await store.SaveAsync(caller, create)).Code == ConfigurationResultCode.Ok
+                    && new StorageSecrets().LoadApiKey() == "synthetic-database-key", "credential_row_create_leaves_slots_untouched");
+                Check((await store.SaveAsync(caller, Request(Edit(binding: CredentialBindingEdit.UseRegisteredModelCredential(credentialKey))))).Code
+                    == ConfigurationResultCode.Ok && providers.Find("synthetic-secondary")!.SecretKeyRef == "model:synthetic-credential",
+                    "registered_credential_binding_supported");
+                Check((await store.SaveAsync(caller, Request(Edit(enabled: FieldEdit<bool>.Set(true))))).Code == ConfigurationResultCode.Ok,
+                    "enabled_registered_credential_validated_by_vault");
+                var boundRead = (await store.ReadAsync(caller, ConfigurationReadKind.Editable)).View!.Registered;
+                var boundProvider = boundRead.Providers.Single(x => x.Key.Value == "synthetic-secondary");
+                Check(boundProvider.CredentialKey?.Value == "synthetic-credential" && boundProvider.CredentialConfigured
+                    && boundRead.ModelCredentials.Any(x => x.Key.Value == "synthetic-credential" && x.Configured && x.KeyUsable)
+                    && !JsonSerializer.Serialize(boundRead).Contains("synthetic-registered-key", StringComparison.Ordinal),
+                    "registered_credential_projected_without_secret");
+                before = State();
+                var drop = Request() with { Secrets = ImmutableArray.Create(SecretEdit.Delete(credentialKey)) };
+                Check((await store.SaveAsync(caller, drop)).Code == ConfigurationResultCode.ValidationFailed && State() == before,
+                    "enabled_credential_delete_whole_rejection");
+                Check((await store.SaveAsync(caller, Request(Edit(enabled: FieldEdit<bool>.Set(false))))).Code == ConfigurationResultCode.Ok,
+                    "disable_after_credential_rejection");
+            }
             Check((await store.SaveAsync(caller, Request(Edit("synthetic-legacy", name: FieldEdit<string>.Set("synthetic-legacy-retained"))))).Code
                 == ConfigurationResultCode.Ok && providers.Find("synthetic-legacy")!.SecretKeyRef == "synthetic-unknown-reference", "disabled_unclassified_keep_retained");
             before = State();
@@ -3564,7 +3594,7 @@ internal static class ConfigurationContractTests
             };
             Func<ConfigurationCaller, ConfigurationAccess, bool> authorization = (_, _) => true;
             Func<SqliteConnection, ConfigurationReadKind, RegisteredConfigurationView> registered = (_, _) =>
-                new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty);
+                new(ImmutableArray<PluginConfigurationView>.Empty, ImmutableArray<ProviderConfigurationView>.Empty, ImmutableArray<ModelCredentialView>.Empty);
             Func<ConfigurationFieldId, ConfigurationValueSource> provenance = _ => ConfigurationValueSource.UserConfiguration;
             Func<ConfigurationFieldId, FieldEffect> effect = _ => FieldEffect.Restart;
             var type = typeof(SettingsStore).GetNestedType("ConfigurationParticipant", BindingFlags.NonPublic)!;
@@ -3681,6 +3711,7 @@ internal static class ConfigurationContractTests
             string? Resolve(string reference) => (string?)resolve.Invoke(null, new object[] { reference, settings, secrets });
             PersistedModelProvider Provider(string reference, string id = "primary") => new(id, 0, "synthetic-provider",
                 "https://example.com/registered", "synthetic-registered-model", reference, true,
+                default, null,
                 BotAgent.Services.Resilience.ProviderCircuitState.Closed, 0, null,
                 new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
             ModelProviderRoute? Build(PersistedModelProvider provider) =>
@@ -3977,7 +4008,7 @@ internal static class ConfigurationContractTests
             long Version() => AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1");
             long Audits() => AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log");
             ProviderEdit Alias(FieldEdit<string> model = default, FieldEdit<string> url = default) => new(new("primary"),
-                new(default, default, url, model, default, CredentialBindingEdit.KeepExisting()));
+                new(default, default, url, model, default, CredentialBindingEdit.KeepExisting(), default, default));
             ConfigurationSaveRequest Request(ModelChanges? model = null, ProviderEdit? provider = null) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(null, model, null, null, null, null, null,
                     provider is null ? null : new(ImmutableArray<PluginEnabledEdit>.Empty, ImmutableArray.Create(provider), ImmutableArray<PolicyEdit>.Empty)),
@@ -4545,7 +4576,7 @@ internal static class ConfigurationContractTests
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant)));
             check("configuration activation rejects another participant", Throws<InvalidOperationException>(() =>
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant())));
-            check("configuration module migration preserves physical schema 9", AppDatabase.Scalar<long>("PRAGMA user_version") == 9
+            check("configuration module migration preserves physical schema 10", AppDatabase.Scalar<long>("PRAGMA user_version") == 10
                 && AppDatabase.GetMeta("configuration_schema") == "1");
             var caller = new ConfigurationCaller("synthetic-authority", "synthetic-owner", "bot",
                 ConfigurationAccess.ReadOverview | ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration

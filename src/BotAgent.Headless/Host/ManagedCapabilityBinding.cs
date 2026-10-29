@@ -59,6 +59,9 @@ internal sealed class ManagedCapabilityBinding : IManagedAuthorization, IAsyncDi
 
     internal IManagedCapabilities Capabilities { get; }
 
+    /// <summary>提供商测试/发现共用的受限出网客户端（所有权仍在本实例，调用方不得 Dispose）。</summary>
+    internal BotAgent.Adapters.Net.IHttpFetcher? ProviderTransport => _providerTransport as BotAgent.Adapters.Net.IHttpFetcher;
+
     public ValueTask<bool> IsAllowedAsync(ManagedAuthorizationRequest request, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

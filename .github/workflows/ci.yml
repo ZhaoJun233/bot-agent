@@ -56,6 +56,11 @@ jobs:
           dotnet restore tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj
           dotnet restore tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj
           dotnet restore tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj
+          dotnet restore tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj
+          dotnet restore tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj
+          dotnet restore tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj
+          dotnet restore tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj
+          dotnet restore tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj
       - name: Build core and harness (Release)
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
@@ -87,6 +92,13 @@ jobs:
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release --no-restore
+      - name: Provider protocol, plugin and snapshot probes
+        run: |
+          dotnet run --project tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj -c Release --no-restore
 
   web:
     name: Web build and browser tests

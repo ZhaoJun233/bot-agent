@@ -54,7 +54,17 @@ public class SecretsStore : ISecretsRepository
                 normalizedValue is null ? "deleted" : "initialized");
     }
 
-    private static void SaveNamedInTransaction(SqliteConnection connection, string name, string? value, long now)
+    /// <summary>Read an arbitrary named secret inside a caller-owned transaction (plugin settings, provider keys).</summary>
+    internal static string? LoadNamedInTransaction(SqliteConnection connection, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = ReadSecretSql;
+        command.Parameters.AddWithValue("$name", name);
+        return command.ExecuteScalar() as string;
+    }
+
+    /// <summary>Write an arbitrary named secret inside a caller-owned transaction.</summary>
+    internal static void SaveNamedInTransaction(SqliteConnection connection, string name, string? value, long now)
     {
         if (value is null) AppDatabase.Exec(connection, DeleteSecretSql, ("$name", name));
         else AppDatabase.Exec(connection, SaveSecretSql, ("$name", name), ("$value", value), ("$now", now));

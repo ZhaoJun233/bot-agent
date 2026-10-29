@@ -11,7 +11,8 @@ public sealed class OpenAiClient : BotAgent.Model.OpenAiClient
         SettingsBox box, IHttpFetcher auxHttp, IHttpFetcher chatHttp, IImageDownloader images, IModelTransport transport,
         ProviderFailoverRunner? providerFailover = null,
         IReadOnlyDictionary<string, ModelProviderRoute>? providerRoutes = null,
-        Func<string, ModelProviderRoute?>? providerRouteResolver = null)
+        Func<string, ModelProviderRoute?>? providerRouteResolver = null,
+        TimeSpan? auxiliaryTimeout = null)
         : base(HostModelOptions.CreateAccessor(box), auxHttp, chatHttp, images, transport,
-            providerFailover, providerRoutes, providerRouteResolver) { }
+            providerFailover, providerRoutes, providerRouteResolver, auxiliaryTimeout) { }
 }

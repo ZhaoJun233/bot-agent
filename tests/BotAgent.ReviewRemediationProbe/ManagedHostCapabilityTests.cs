@@ -28,6 +28,7 @@ internal static class ManagedHostCapabilityTests
 {
     private const string SuccessMarker = "MANAGED_HOST failed=0 passed=";
     private const string TempPrefix = "botagent-managed-host-";
+    private const string DisabledProviderId = "synthetic-disabled";
 
     internal static async Task<int?> TryRunChildAsync(string[] args)
         => args is ["--managed-host-capabilities"] ? await ChildAsync() : null;
@@ -221,7 +222,8 @@ internal static class ManagedHostCapabilityTests
             && endpoint.Requests.Count == 1, "actual Host managed Provider dispatch completes exactly one local HTTP chat request");
         var payload = endpoint.Requests.Single();
         check(payload["model"]?.GetValue<string>() == "synthetic-model" && payload["max_tokens"]?.GetValue<int>() == 64
-            && payload.Count == 3 && payload["messages"]?.AsArray().Count == 1,
+            && payload.Count == 4 && payload["stream"]?.GetValue<bool>() == false
+            && payload["messages"]?.AsArray().Count == 1,
             "real Provider tester uses only the fixed minimal chat payload and 64-token budget");
         check(endpoint.LastAuthorization == "Bearer synthetic-model-key", "real Provider request resolves the committed database credential");
         check(AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations WHERE namespace='mg1'") > 0,
@@ -267,7 +269,7 @@ internal static class ManagedHostCapabilityTests
                 "deleting a still-enabled Provider credential rejects the whole batch without version advance or HTTP");
             var disablePrimary = new RegisteredConfigurationChanges(ImmutableArray<PluginEnabledEdit>.Empty,
                 ImmutableArray.Create(new ProviderEdit(provider.Key, new(default, default, default, default,
-                    FieldEdit<bool>.Set(false), CredentialBindingEdit.KeepExisting()))), ImmutableArray<PolicyEdit>.Empty);
+                    FieldEdit<bool>.Set(false), CredentialBindingEdit.KeepExisting(), default, default))), ImmutableArray<PolicyEdit>.Empty);
             var invalidDisable = await store.SaveAsync(configurationCaller, new("cfg-0.3.3", beforeDelete.Version,
                 new(beforeDelete.Generation, beforeDelete.ServerUnixSeconds, Guid.NewGuid()),
                 new(null, null, null, null, null, null, null, disablePrimary),
@@ -286,27 +288,83 @@ internal static class ManagedHostCapabilityTests
             "whole-batch deletion rejection retains the committed credential and real Provider connectivity");
     }
 
+    private sealed record SyntheticProviderRequest(JsonObject Payload, string PathAndQuery,
+        string? Authorization, string? ApiKey, string? AnthropicVersion, string? GeminiKey);
+
     private sealed class SyntheticProviderEndpoint : IDisposable
     {
-        private readonly object _mock;
-        private readonly Type _type;
+        private readonly System.Net.HttpListener _listener = new();
+        private readonly CancellationTokenSource _lifetime = new();
+        private readonly object _gate = new();
+        private readonly List<SyntheticProviderRequest> _requests = new();
+        private readonly Queue<string> _replies = new();
+        private readonly Task _serve;
+
         internal SyntheticProviderEndpoint()
         {
-            var directory = new DirectoryInfo(AppContext.BaseDirectory);
-            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BotAgent.slnx"))) directory = directory.Parent;
-            var repository = directory?.FullName ?? throw new InvalidOperationException("synthetic_repository_missing");
-            var harness = Assembly.LoadFrom(Path.Combine(repository,
-                "tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll"));
-            _type = harness.GetType("BotAgent.IntegrationHarness.MockOpenAi", throwOnError: true)!;
-            _mock = Activator.CreateInstance(_type, new object[] { FreeTcpPort(), "127.0.0.1" })!;
-            try { _type.GetMethod("Start")!.Invoke(_mock, null); }
-            catch { ((IDisposable)_mock).Dispose(); throw; }
+            var origin = "http://127.0.0.1:" + FreeTcpPort();
+            BaseUrl = origin + "/v1";
+            _listener.Prefixes.Add(origin + "/");
+            _listener.Start();
+            _serve = ServeAsync();
         }
-        internal string BaseUrl => (string)_type.GetProperty("BaseUrl")!.GetValue(_mock)!;
-        internal IReadOnlyList<JsonObject> Requests => (IReadOnlyList<JsonObject>)_type.GetProperty("Requests")!.GetValue(_mock)!;
-        internal string? LastAuthorization => (string?)_type.GetProperty("LastAuthorization")!.GetValue(_mock);
-        internal void EnqueueReply() => _type.GetMethod("EnqueueReply")!.Invoke(_mock, new object[] { "OK" });
-        public void Dispose() => ((IDisposable)_mock).Dispose();
+
+        internal string BaseUrl { get; }
+        internal IReadOnlyList<JsonObject> Requests
+        {
+            get { lock (_gate) return _requests.Select(request => request.Payload).ToArray(); }
+        }
+        internal SyntheticProviderRequest LastRequest
+        {
+            get { lock (_gate) return _requests.Last(); }
+        }
+        internal string? LastAuthorization => LastRequest.Authorization;
+        internal void EnqueueReply() => EnqueueResponse("""{"choices":[{"message":{"role":"assistant","content":"OK"}}]}""");
+        internal void EnqueueResponse(string json)
+        {
+            lock (_gate) _replies.Enqueue(json);
+        }
+
+        private async Task ServeAsync()
+        {
+            try
+            {
+                while (!_lifetime.IsCancellationRequested)
+                {
+                    var context = await _listener.GetContextAsync().WaitAsync(_lifetime.Token);
+                    try
+                    {
+                        using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
+                        var body = JsonNode.Parse(await reader.ReadToEndAsync(_lifetime.Token))!.AsObject();
+                        string? response;
+                        lock (_gate)
+                        {
+                            _requests.Add(new(body, context.Request.Url!.PathAndQuery,
+                                context.Request.Headers["Authorization"], context.Request.Headers["api-key"]
+                                    ?? context.Request.Headers["x-api-key"],
+                                context.Request.Headers["anthropic-version"], context.Request.Headers["x-goog-api-key"]));
+                            response = _replies.Count > 0 ? _replies.Dequeue() : null;
+                        }
+                        context.Response.StatusCode = response is null ? 500 : 200;
+                        context.Response.ContentType = "application/json";
+                        var bytes = Encoding.UTF8.GetBytes(response ?? "{}");
+                        context.Response.ContentLength64 = bytes.Length;
+                        await context.Response.OutputStream.WriteAsync(bytes, _lifetime.Token);
+                    }
+                    finally { context.Response.Close(); }
+                }
+            }
+            catch (Exception error) when (_lifetime.IsCancellationRequested
+                && error is OperationCanceledException or ObjectDisposedException or System.Net.HttpListenerException) { }
+        }
+
+        public void Dispose()
+        {
+            _lifetime.Cancel();
+            _listener.Close();
+            _serve.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            _lifetime.Dispose();
+        }
     }
 
     private static object Build(AppSettings settings, IManagedAuthorization authorization)
@@ -401,7 +459,7 @@ internal static class ManagedHostCapabilityTests
             ct.ThrowIfCancellationRequested();
             return ValueTask.FromResult(ReferenceEquals(request.Caller, _allowed)
                 && (request.Target is ManagedObjectKey.Driver
-                    || request.Target is ManagedObjectKey.Provider provider && provider.Key.Value == "primary"
+                    || request.Target is ManagedObjectKey.Provider provider && provider.Key.Value is "primary" or DisabledProviderId
                     && request.Action is null or ManagedAction.Inspect or ManagedAction.TestConnection));
         }
     }

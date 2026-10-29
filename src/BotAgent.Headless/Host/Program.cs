@@ -80,6 +80,7 @@ public static class Program
 
         // 先恢复磁盘会话并订阅事件，再连接协议端，避免启动期消息竞态
         // 先把官方那条也起上（它就是一条 WS 长连接 + 定时刷 token），再连私域
+        await graph.PluginRuntime.StartAsync();
         graph.Agent.Start();
         await graph.Management.StartAsync();
         // 启动自述放在"会话已恢复、表情包库已载入"之后：那两行讲的就是此刻这张图的状态

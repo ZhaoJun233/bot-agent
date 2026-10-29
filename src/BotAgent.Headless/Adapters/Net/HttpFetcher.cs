@@ -19,24 +19,30 @@ namespace BotAgent.Adapters.Net;
 /// 窄口要么丢掉这些，要么自己重写一个 HttpClient —— 后者更糟。所以端口刻意**镜像 HttpClient 的
 /// 被用到的那一小撮 API**（见下面 5 个方法），换掉实现时调用点一行都不用改。
 /// </summary>
+// 平台侧与模型侧各有一张同名端口，成员签名逐字一致（Timeout 与那 7 个 HttpClient 镜像方法）。
+// 这里只做**合并**：再抄一遍会让编译器按"隐藏继承成员"报警（CS0108），
+// 而抄出来的副本一旦和任一侧漂移，实现类就会被迫实现两份不同的契约。
+//
+// 合并成一个"最具体"的成员（new 而不是 override/重复声明）有两个必须的后果：
+//   ① 消除 CS0108；② 调用点只看到**一个**候选，不会因为两张基接口各给一份而 CS0121 二义。
 public interface IHttpFetcher : BotAgent.Platforms.Net.IPlatformHttpFetcher, BotAgent.Model.Net.IModelHttpFetcher
 {
     /// <summary>这个客户端的超时（面板/日志要能如实显示）。</summary>
-    TimeSpan Timeout { get; }
+    new TimeSpan Timeout { get; }
 
-    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct = default);
+    new Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct = default);
 
-    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken ct = default);
+    new Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken ct = default);
 
-    Task<HttpResponseMessage> GetAsync(string url, CancellationToken ct = default);
+    new Task<HttpResponseMessage> GetAsync(string url, CancellationToken ct = default);
 
-    Task<HttpResponseMessage> GetAsync(Uri url, HttpCompletionOption completionOption, CancellationToken ct = default);
+    new Task<HttpResponseMessage> GetAsync(Uri url, HttpCompletionOption completionOption, CancellationToken ct = default);
 
-    Task<HttpResponseMessage> GetAsync(Uri url, CancellationToken ct = default);
+    new Task<HttpResponseMessage> GetAsync(Uri url, CancellationToken ct = default);
 
-    Task<HttpResponseMessage> GetAsync(string url, HttpCompletionOption completionOption, CancellationToken ct = default);
+    new Task<HttpResponseMessage> GetAsync(string url, HttpCompletionOption completionOption, CancellationToken ct = default);
 
-    Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default);
+    new Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default);
 }
 
 /// <summary>

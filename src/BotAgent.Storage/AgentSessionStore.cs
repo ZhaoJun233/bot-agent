@@ -608,12 +608,9 @@ public class AgentSessionStore : IAgentSessionStore
     {
         try
         {
-            if (!File.Exists(_path))
-            {
-                return;
-            }
-
-            using var doc = JsonDocument.Parse(File.ReadAllText(_path, Encoding.UTF8));
+            var snapshot = TextSnapshotFile.Read(_path);
+            if (snapshot is null) return;
+            using var doc = JsonDocument.Parse(snapshot);
             if (doc.RootElement.ValueKind != JsonValueKind.Object ||
                 !doc.RootElement.TryGetProperty("chats", out var chats) ||
                 chats.ValueKind != JsonValueKind.Object)
@@ -854,7 +851,7 @@ public class AgentSessionStore : IAgentSessionStore
                 Directory.CreateDirectory(dir);
             }
 
-            File.WriteAllText(_path, payload.ToJsonString(), Encoding.UTF8);
+            TextSnapshotFile.Write(_path, payload.ToJsonString());
         }
         catch (Exception ex)
         {

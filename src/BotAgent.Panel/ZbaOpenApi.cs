@@ -161,8 +161,11 @@ internal static partial class ZbaOpenApi
             new[] { "contractRevision", "expectedVersion", "key", "changes", "secrets" },
             ("contractRevision", String()), ("expectedVersion", String()), ("key", Ref("ConfigurationOperationKey")),
             ("changes", Ref("ConfigurationPatch")), ("secrets", Array(Ref("ZbaSecretEdit")))),
-        ["ZbaSecretEdit"] = RequiredObject(new[] { "slot", "kind" },
-            ("slot", Integer()), ("kind", Integer()), ("value", NullableString())),
+        // 目标二选一（slot / credentialKey），因此只在 required 里保留 kind；
+        // 恰好一个的约束由服务端校验，schema 只表达字段形状。
+        ["ZbaSecretEdit"] = RequiredObject(new[] { "kind" },
+            ("kind", Integer()), ("slot", NullableInteger()), ("credentialKey", NullableString()),
+            ("value", NullableString())),
         ["ConfigurationOperationKey"] = new JsonObject
         {
             ["type"] = "string",
@@ -249,6 +252,53 @@ internal static partial class ZbaOpenApi
             ("reasonCode", NullableString())),
         ["ZbaEventPage"] = Object(("items", Array(Ref("ZbaEvent"))), ("nextSequence", Integer()),
             ("resyncRequired", Boolean()), ("generatedAt", String())),
+        // 插件市场：manifest 是宿主的强类型契约，这里只表达形状（additionalProperties 允许其内部字段演进）。
+        ["PluginManifest"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["description"] = "PluginPackageManifest；由宿主校验，未列出的内部字段按 manifest 契约解释。",
+            ["required"] = new JsonArray("id", "version"),
+            ["properties"] = new JsonObject { ["id"] = String(), ["version"] = String() },
+            ["additionalProperties"] = true
+        },
+        ["PluginSettingDefinition"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["description"] = "PluginSettingDefinition；秘密项只声明存在，不回显值。",
+            ["additionalProperties"] = true
+        },
+        ["ZbaPluginCatalogEntry"] = Object(("manifest", Ref("PluginManifest")),
+            ("installedVersion", NullableString()), ("enabled", Boolean()), ("status", String()),
+            ("restartRequired", Boolean()), ("name", NullableString()), ("summary", NullableString()),
+            ("category", NullableString())),
+        ["ZbaPluginCatalog"] = Object(("revision", String()), ("source", String()), ("trustNotice", String()),
+            ("categories", Array(String())), ("plugins", Array(Ref("ZbaPluginCatalogEntry")))),
+        ["ZbaInstalledPlugins"] = Object(("revision", String()),
+            ("plugins", Array(Ref("ZbaPluginCatalogEntry")))),
+        ["ZbaPluginSourceResolveRequest"] = RequiredObject(new[] { "sourceUrl" }, ("sourceUrl", String())),
+        ["ZbaPluginSourceResolution"] = Object(("manifest", Ref("PluginManifest")), ("trustNotice", String())),
+        ["ZbaPluginMutationRequest"] = RequiredObject(
+            new[] { "manifest", "expectedRevision", "idempotencyKey", "trustAcknowledged" },
+            ("manifest", Ref("PluginManifest")), ("expectedRevision", String()),
+            ("idempotencyKey", String()), ("trustAcknowledged", Boolean())),
+        ["ZbaPluginUninstallRequest"] = RequiredObject(
+            new[] { "expectedRevision", "idempotencyKey" },
+            ("expectedRevision", String()), ("idempotencyKey", String())),
+        ["ZbaPluginOperation"] = Object(("id", String()), ("pluginId", String()), ("kind", String()),
+            ("status", String()), ("restartRequired", Boolean()), ("errorCode", NullableString())),
+        ["ZbaPluginOperationResult"] = Object(("operation", Ref("ZbaPluginOperation")), ("revision", String())),
+        ["ZbaPluginSettingEdit"] = RequiredObject(new[] { "key", "kind" },
+            ("key", String()), ("kind", Integer()), ("value", NullableString())),
+        ["ZbaPluginSettingsSaveRequest"] = RequiredObject(
+            new[] { "expectedRevision", "idempotencyKey", "edits" },
+            ("expectedRevision", String()), ("idempotencyKey", String()),
+            ("edits", Array(Ref("ZbaPluginSettingEdit")))),
+        ["ZbaPluginSettings"] = Object(("revision", String()),
+            ("schema", Array(Ref("PluginSettingDefinition"))),
+            ("values", new JsonObject { ["type"] = "object", ["additionalProperties"] = String() }),
+            ("configuredSecrets", new JsonObject { ["type"] = "object", ["additionalProperties"] = Boolean() }),
+            ("restartRequired", Boolean())),
+        ["ZbaProviderModels"] = Object(("models", Array(String())), ("errorCode", NullableString())),
         ["OpenApiDocument"] = new JsonObject { ["type"] = "object", ["additionalProperties"] = true }
     };
 
@@ -278,6 +328,8 @@ internal static partial class ZbaOpenApi
     private static JsonObject NullableString() => new() { ["type"] = new JsonArray("string", "null") };
 
     private static JsonObject Integer() => new() { ["type"] = "integer" };
+
+    private static JsonObject NullableInteger() => new() { ["type"] = new JsonArray("integer", "null") };
 
     private static JsonObject Boolean() => new() { ["type"] = "boolean" };
 

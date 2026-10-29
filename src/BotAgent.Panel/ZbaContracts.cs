@@ -148,9 +148,15 @@ public sealed record ZbaConfigurationFindRequest([property: JsonRequired] Config
 
 public sealed record ZbaCapabilityInspectRequest([property: JsonRequired] ManagedObjectKey Key);
 
+/// <summary>
+/// 秘密编辑的目标是“固定槽位”或“已登记凭据键”二者之一：两个字段都可选，但必须恰好给出一个。
+/// 形状保持封闭（<see cref="ZbaJson.Wire" /> 拒绝未知字段）；真正的目标校验在
+/// <see cref="ZbaRules.ValidateSecrets" />。
+/// </summary>
 public sealed record ZbaSecretEdit(
-    [property: JsonRequired] WritableSecretSlot Slot,
     [property: JsonRequired] SecretEditKind Kind,
+    WritableSecretSlot? Slot,
+    string? CredentialKey,
     string? Value);
 
 /// <summary>
@@ -374,6 +380,38 @@ public interface IZbaBackend
 
     ValueTask<ZbaEventPage> ReadEventsAsync(
         ConfigurationCaller caller, long after, int limit, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginCatalog> ListPluginCatalogAsync(
+        ConfigurationCaller caller, string? query, string? category, CancellationToken ct = default);
+
+    ValueTask<ZbaInstalledPlugins> ListInstalledPluginsAsync(
+        ConfigurationCaller caller, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginSourceResolution> ResolvePluginSourceAsync(
+        ConfigurationCaller caller, string sourceUrl, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginOperationResult> InstallPluginAsync(
+        ConfigurationCaller caller, ZbaPluginMutationRequest request, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginOperationResult> UpdatePluginAsync(
+        ConfigurationCaller caller, ZbaPluginMutationRequest request, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginOperationResult> UninstallPluginAsync(
+        ConfigurationCaller caller, string pluginId, ZbaPluginUninstallRequest request,
+        CancellationToken ct = default);
+
+    ValueTask<ZbaPluginOperationResult> FindPluginOperationAsync(
+        ConfigurationCaller caller, string idempotencyKey, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginSettings> ReadPluginSettingsAsync(
+        ConfigurationCaller caller, string pluginId, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginSettings> SavePluginSettingsAsync(
+        ConfigurationCaller caller, string pluginId, ZbaPluginSettingsSaveRequest request,
+        CancellationToken ct = default);
+
+    ValueTask<ZbaProviderModels> ListProviderModelsAsync(
+        ConfigurationCaller caller, string providerKey, CancellationToken ct = default);
 }
 
 internal static class ZbaCallers

@@ -25,29 +25,24 @@ public sealed class ProviderConnectionTester
     {
         ArgumentNullException.ThrowIfNull(trustedRoute);
         ct.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(trustedRoute.ProviderId) || string.IsNullOrWhiteSpace(trustedRoute.ApiKey)
+        if (string.IsNullOrWhiteSpace(trustedRoute.ProviderId) || (trustedRoute.Protocol != ModelProtocol.Ollama && string.IsNullOrWhiteSpace(trustedRoute.ApiKey))
             || string.IsNullOrWhiteSpace(trustedRoute.ModelName)
             || !Uri.TryCreate(trustedRoute.BaseUrl, UriKind.Absolute, out var endpoint)
             || (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
             return new(false, "model_route_unavailable", null);
 
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budget.CancelAfter(_http.Timeout);
-        var token = budget.Token;
         int? observedStatus = null;
         try
         {
+            using var budget = ProviderRequestBudget.Create(trustedRoute, TimeSpan.FromSeconds(15), ct);
+            var token = budget.Token;
             var payload = new JsonObject
             {
                 ["model"] = trustedRoute.ModelName,
                 ["max_tokens"] = 64,
                 ["messages"] = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = "Reply with OK." })
             };
-            using var request = new HttpRequestMessage(HttpMethod.Post, ModelTransport.BuildUrl(trustedRoute.BaseUrl))
-            {
-                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", trustedRoute.ApiKey.Trim());
+            using var request = Protocols.ModelProtocolAdapter.CreateRequest(trustedRoute, payload);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
             ct.ThrowIfCancellationRequested();
             var status = (int)response.StatusCode;
@@ -65,20 +60,21 @@ public sealed class ProviderConnectionTester
                 if (buffer.Length + count > MaxResponseBytes) return new(false, "model_response_too_large", status);
                 buffer.Write(chunk, 0, count);
             }
-            using var doc = JsonDocument.Parse(buffer.ToArray());
+            using var doc = JsonDocument.Parse(Protocols.ModelProtocolAdapter.NormalizeResponse(trustedRoute.Protocol, Encoding.UTF8.GetString(buffer.ToArray())));
             var root = doc.RootElement;
             var valid = root.ValueKind == JsonValueKind.Object
                 && root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array
                 && choices.GetArrayLength() > 0 && choices[0].ValueKind == JsonValueKind.Object
                 && choices[0].TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
                 && message.TryGetProperty("content", out var content) && HasText(content);
-            ct.ThrowIfCancellationRequested();
+            token.ThrowIfCancellationRequested();
             return new(valid, valid ? "ok" : "model_malformed_response", status);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(false, "model_timeout", null); }
         catch (OperationCanceledException) { throw; }
         catch (Exception) when (ct.IsCancellationRequested) { throw new OperationCanceledException(ct); }
         catch (JsonException) { return new(false, "model_malformed_response", observedStatus); }
+        catch (ModelFault fault) { return new(false, fault.ErrorCode, observedStatus); }
         catch (HttpRequestException) { return new(false, "model_network_error", null); }
         catch (Exception) { return new(false, "model_operation_failed", null); }
     }

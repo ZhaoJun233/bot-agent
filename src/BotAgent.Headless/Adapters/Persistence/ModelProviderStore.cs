@@ -3,6 +3,7 @@ extern alias StorageModule;
 using System.Collections.Immutable;
 using System.Text.Json;
 using BotAgent.Domain.Configuration;
+using BotAgent.Domain.Model;
 using StorageDatabase = StorageModule::BotAgent.Adapters.Persistence.AppDatabase;
 using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 using BotAgent.Services;
@@ -18,10 +19,18 @@ public sealed class ModelProviderStore
 {
     internal const string PrimaryModelCredentialReference = "model:primary";
     internal const string UnconfiguredModelCredentialReference = "model:unconfigured";
+    /// <summary>已登记模型凭据在 <c>secret_key_ref</c> 里的前缀：<c>model:&lt;credentialKey&gt;</c>。</summary>
+    internal const string RegisteredCredentialPrefix = "model:";
     private const string FieldModesKey = "configuration_provider_field_modes";
+    private static readonly JsonSerializerOptions ProtocolOptionsJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+    };
     private const string ProviderRowsSql = """
         SELECT id, priority, name, base_url, model_name, secret_key_ref,
-               is_enabled, circuit_state, consecutive_hard_failures, cooldown_until, updated_at
+               is_enabled, circuit_state, consecutive_hard_failures, cooldown_until, updated_at,
+               protocol, options
         FROM model_providers
         ORDER BY priority, id;
         """;
@@ -90,8 +99,24 @@ public sealed class ModelProviderStore
         {
             "secret:apiKey" or "env:QQCHAT_API_KEY" or PrimaryModelCredentialReference => CredentialBindingState.PrimaryModel,
             UnconfiguredModelCredentialReference => CredentialBindingState.Unconfigured,
+            _ when TryGetRegisteredCredentialKey(reference, out _) => CredentialBindingState.RegisteredModel,
             _ => CredentialBindingState.Unclassified,
         };
+
+    /// <summary>
+    /// 解析 <c>model:&lt;credentialKey&gt;</c> 形式的引用。两个保留引用
+    /// （<c>model:primary</c> / <c>model:unconfigured</c>）不是已登记凭据，必须排除。
+    /// </summary>
+    internal static bool TryGetRegisteredCredentialKey(string? reference, out ModelCredentialKey key)
+    {
+        key = default;
+        if (reference is null || !reference.StartsWith(RegisteredCredentialPrefix, StringComparison.Ordinal)) return false;
+        if (reference is PrimaryModelCredentialReference or UnconfiguredModelCredentialReference) return false;
+        var text = reference[RegisteredCredentialPrefix.Length..];
+        if (string.IsNullOrWhiteSpace(text) || text.Trim() != text || text.Length > 128) return false;
+        key = new ModelCredentialKey(text);
+        return true;
+    }
 
     internal static ImmutableDictionary<string, int> LoadFieldModesInTransaction(Microsoft.Data.Sqlite.SqliteConnection connection)
     {
@@ -153,8 +178,8 @@ public sealed class ModelProviderStore
 
         AppDatabase.Exec(conn, """
             INSERT INTO model_providers
-              (id, priority, name, base_url, model_name, secret_key_ref, is_enabled, updated_at)
-            VALUES ($id, $priority, $name, $base, $model, $secret, $enabled, $updated)
+              (id, priority, name, base_url, model_name, secret_key_ref, is_enabled, updated_at, protocol, options)
+            VALUES ($id, $priority, $name, $base, $model, $secret, $enabled, $updated, $protocol, $options)
             ON CONFLICT(id) DO UPDATE SET
               priority = excluded.priority,
               name = excluded.name,
@@ -162,7 +187,9 @@ public sealed class ModelProviderStore
               model_name = excluded.model_name,
               secret_key_ref = excluded.secret_key_ref,
               is_enabled = excluded.is_enabled,
-              updated_at = excluded.updated_at;
+              updated_at = excluded.updated_at,
+              protocol = excluded.protocol,
+              options = excluded.options;
             """,
             ("$id", provider.Id.Trim()),
             ("$priority", provider.Priority),
@@ -171,12 +198,34 @@ public sealed class ModelProviderStore
             ("$model", provider.ModelName.Trim()),
             ("$secret", provider.SecretKeyRef.Trim()),
             ("$enabled", provider.IsEnabled ? 1 : 0),
-            ("$updated", Clock.UtcNow.ToString("O")));
+            ("$updated", Clock.UtcNow.ToString("O")),
+            ("$protocol", (int)provider.Protocol),
+            ("$options", SerializeOptions(provider.Options)));
+    }
+
+    /// <summary>删除一行非敏感 Provider 元数据；不存在时返回 false。只删元数据，不碰任何密钥行。</summary>
+    internal static bool DeleteInTransaction(Microsoft.Data.Sqlite.SqliteConnection conn, string id)
+    {
+        ArgumentNullException.ThrowIfNull(conn);
+        if (string.IsNullOrWhiteSpace(id) || id.Trim() != id)
+            throw new ArgumentException("configuration_registration_needs_review", nameof(id));
+        return AppDatabase.ExecCount(conn, "DELETE FROM model_providers WHERE id = $id", ("$id", id)) != 0;
+    }
+
+    private static string? SerializeOptions(ModelProtocolOptions? options)
+        => options is null ? null : JsonSerializer.Serialize(options, ProtocolOptionsJson);
+
+    private static ModelProtocolOptions? DeserializeOptions(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<ModelProtocolOptions>(json, ProtocolOptionsJson); }
+        catch (JsonException) { throw new JsonException("provider_options_needs_review"); }
     }
 
     private static void ValidateMetadata(ModelProviderDefinition provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        if (!Enum.IsDefined(provider.Protocol)) throw new ArgumentException("provider_protocol_invalid", nameof(provider));
         if (string.IsNullOrWhiteSpace(provider.Id)) throw new ArgumentException("Provider id is required.", nameof(provider));
         if (provider.Id.Trim() != provider.Id) throw new ArgumentException("configuration_registration_needs_review", nameof(provider));
         if (string.IsNullOrWhiteSpace(provider.BaseUrl)) throw new ArgumentException("Provider base URL is required.", nameof(provider));
@@ -252,10 +301,18 @@ public sealed class ModelProviderStore
             AppDatabase.Str(reader, "model_name") ?? string.Empty,
             AppDatabase.Str(reader, "secret_key_ref") ?? string.Empty,
             AppDatabase.Bool(reader, "is_enabled", true),
+            ReadProtocol(reader),
+            DeserializeOptions(AppDatabase.Str(reader, "options")),
             state,
             Math.Max(0, AppDatabase.Int(reader, "consecutive_hard_failures")),
             cooldown,
             updated);
+    }
+
+    private static ModelProtocol ReadProtocol(Microsoft.Data.Sqlite.SqliteDataReader reader)
+    {
+        var value = AppDatabase.Int(reader, "protocol");
+        return Enum.IsDefined(typeof(ModelProtocol), value) ? (ModelProtocol)value : ModelProtocol.OpenAiChat;
     }
 
     private static DateTimeOffset? ParseDate(string? value)
@@ -279,7 +336,9 @@ public sealed record ModelProviderDefinition(
     string BaseUrl,
     string ModelName,
     string SecretKeyRef,
-    bool IsEnabled = true);
+    bool IsEnabled = true,
+    ModelProtocol Protocol = ModelProtocol.OpenAiChat,
+    ModelProtocolOptions? Options = null);
 
 public sealed record PersistedModelProvider(
     string Id,
@@ -289,6 +348,8 @@ public sealed record PersistedModelProvider(
     string ModelName,
     string SecretKeyRef,
     bool IsEnabled,
+    ModelProtocol Protocol,
+    ModelProtocolOptions? Options,
     ProviderCircuitState CircuitState,
     int ConsecutiveHardFailures,
     DateTimeOffset? CooldownUntil,

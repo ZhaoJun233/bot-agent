@@ -95,7 +95,7 @@ public static class AppDatabase
                     DefaultTimeout = 30
                 }.ToString();
                 using var conn = Open();
-                if (SchemaVersion() > 9) throw new InvalidOperationException("database_schema_newer");
+                if (SchemaVersion() > 10) throw new InvalidOperationException("database_schema_newer");
                 ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
@@ -661,6 +661,8 @@ public static class AppDatabase
               base_url                   TEXT NOT NULL,
               model_name                 TEXT NOT NULL,
               secret_key_ref             TEXT NOT NULL,
+              protocol                   INTEGER NOT NULL DEFAULT 0,
+              options                    TEXT,
               is_enabled                 INTEGER NOT NULL DEFAULT 1,
               circuit_state              TEXT NOT NULL DEFAULT 'closed',
               consecutive_hard_failures  INTEGER NOT NULL DEFAULT 0,
@@ -685,13 +687,14 @@ public static class AppDatabase
     /// </summary>
     private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
     {
-        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9)) throw new ArgumentException("invalid_legacy_schema");
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10)) throw new ArgumentException("invalid_legacy_schema");
         Exec(connection, $"PRAGMA user_version = {version};");
     }
 
     private static bool HasLegacyColumn(SqliteConnection connection, string table, string column, bool primaryKeyOnly)
     {
-        if (table is not ("conversations" or "member_messages" or "member_roles" or "stickers" or "member_summaries"))
+        // v10 加入 model_providers：列内省复用这一条语句，别再复制一份 SELECT pragma_table_info。
+        if (table is not ("conversations" or "member_messages" or "member_roles" or "stickers" or "member_summaries" or "model_providers"))
             throw new ArgumentException("invalid_legacy_table");
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(1) FROM pragma_table_info($table) WHERE name=$column AND ($pk=0 OR pk>0)";
@@ -809,6 +812,17 @@ public static class AppDatabase
             }
 
             Write(conn2 => SetLegacySchemaVersion(conn2, 9));
+        }
+
+        // v10：Provider 协议（protocol）与协议附加项（options）。
+        // 新库建表时两列已经在；跑过 v6~v9 的库在这里补，逐列内省，重复执行只是空转。
+        if (version < 10)
+        {
+            if (!HasLegacyColumn(conn, "model_providers", "protocol", false))
+                Write(conn2 => Exec(conn2, "ALTER TABLE model_providers ADD COLUMN protocol INTEGER NOT NULL DEFAULT 0;"));
+            if (!HasLegacyColumn(conn, "model_providers", "options", false))
+                Write(conn2 => Exec(conn2, "ALTER TABLE model_providers ADD COLUMN options TEXT;"));
+            Write(conn2 => SetLegacySchemaVersion(conn2, 10));
         }
     }
 

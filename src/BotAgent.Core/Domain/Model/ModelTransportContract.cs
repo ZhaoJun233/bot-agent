@@ -15,4 +15,25 @@ public sealed record ModelProviderRoute(
     string ProviderId,
     string BaseUrl,
     string ModelName,
-    string ApiKey);
+    string ApiKey,
+    ModelProtocol Protocol = ModelProtocol.OpenAiChat,
+    ModelProtocolOptions? Options = null)
+{
+    // Keep the original four-field source deconstruction contract.
+    public void Deconstruct(out string providerId, out string baseUrl, out string modelName, out string apiKey)
+        => (providerId, baseUrl, modelName, apiKey) = (ProviderId, BaseUrl, ModelName, ApiKey);
+
+    // Positional records otherwise print credentials in incidental diagnostics.
+    public override string ToString() => $"ModelProviderRoute {{ Protocol = {Protocol} }}";
+}
+
+public enum ModelProtocol
+{
+    OpenAiChat, OpenAiResponses, AnthropicMessages, GeminiGenerateContent, AzureOpenAi, Ollama
+}
+
+public sealed record ModelProtocolOptions(
+    string? AzureDeployment = null,
+    string AzureApiVersion = "2024-10-21",
+    string AnthropicVersion = "2023-06-01",
+    int? TimeoutSeconds = null);

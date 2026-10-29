@@ -40,14 +40,19 @@ public class ModelTransport : IModelTransport
     private readonly IModelHttpFetcher _auxHttp;
     private readonly ImageDownloader _imageDownloader;
     private readonly TimeSpan _chatTimeout;
+    private readonly TimeSpan _auxiliaryTimeout;
 
-    public ModelTransport(Func<ModelOptions> options, IModelHttpFetcher chatHttp, IModelHttpFetcher auxHttp, ImageDownloader imageDownloader, TimeSpan chatTimeout)
+    public ModelTransport(Func<ModelOptions> options, IModelHttpFetcher chatHttp, IModelHttpFetcher auxHttp,
+        ImageDownloader imageDownloader, TimeSpan chatTimeout, TimeSpan? auxiliaryTimeout = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _chatHttp = chatHttp;
         _auxHttp = auxHttp;
         _imageDownloader = imageDownloader;
         _chatTimeout = chatTimeout;
+        // The transport owns the default per-call budget; the injected HTTP client may allow a
+        // longer ceiling so a provider's explicit 1..300 second override can actually take effect.
+        _auxiliaryTimeout = auxiliaryTimeout ?? auxHttp.Timeout;
     }
 
     /// <summary>配置读取入口（强类型切片）。</summary>
@@ -244,9 +249,7 @@ public class ModelTransport : IModelTransport
         var requestPayload = (JsonObject)payload.DeepClone();
         if (provider is not null && !string.IsNullOrWhiteSpace(provider.ModelName))
             requestPayload["model"] = provider.ModelName.Trim();
-        var requestUrl = provider is null ? Url() : BuildUrl(provider.BaseUrl);
-        var apiKey = (provider is null ? _settings.ApiKey : provider.ApiKey).Trim();
-        if (string.IsNullOrWhiteSpace(apiKey)) throw new ModelFault("model_credential_missing");
+        var route = provider ?? new ModelProviderRoute("default", _settings.BaseUrl, _settings.Model, _settings.ApiKey);
 
         string json;
         for (var attempt = 0; ; attempt++)
@@ -256,7 +259,7 @@ public class ModelTransport : IModelTransport
             (HttpStatusCode Status, string Body) reply;
             try
             {
-                reply = await SendOnceAsync(_chatHttp, requestPayload, requestUrl, apiKey, retryBudget?.Token ?? ct);
+                reply = await SendOnceAsync(_chatHttp, requestPayload, route, retryBudget?.Token ?? ct, _chatTimeout);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -301,7 +304,7 @@ public class ModelTransport : IModelTransport
         {
             FileLog.Write("Agent", "上游空 choices → 2 秒后重试一次");
             await Clock.Delay(TimeSpan.FromSeconds(2), ct);
-            var retry = await SendFallbackAsync(requestPayload, requestUrl, apiKey, ct);
+            var retry = await SendFallbackAsync(requestPayload, route, ct);
             if ((int)retry.Status is >= 200 and < 300)
             {
                 ModelFault.ValidateEnvelope(retry.Body);
@@ -313,7 +316,7 @@ public class ModelTransport : IModelTransport
         var textOnlyRetry = false;
         if (!HasChoices(json) && attachedImages > 0)
         {
-            var plain = await SendFallbackAsync(StripImages(requestPayload), requestUrl, apiKey, ct);
+            var plain = await SendFallbackAsync(StripImages(requestPayload), route, ct);
             if ((int)plain.Status is >= 200 and < 300)
             {
                 ModelFault.ValidateEnvelope(plain.Body);
@@ -330,21 +333,21 @@ public class ModelTransport : IModelTransport
     }
 
     private static async Task<(HttpStatusCode Status, string Body)> SendOnceAsync(
-        IModelHttpFetcher http, JsonObject payload, string url, string apiKey, CancellationToken ct)
+        IModelHttpFetcher http, JsonObject payload, ModelProviderRoute route, CancellationToken ct,
+        TimeSpan? defaultTimeout = null)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        using var response = await http.SendAsync(request, ct);
-        return (response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+        using var budget = ProviderRequestBudget.Create(route, defaultTimeout ?? http.Timeout, ct);
+        using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload);
+        using var response = await http.SendAsync(request, budget.Token);
+        var body = await response.Content.ReadAsStringAsync(budget.Token);
+        budget.Token.ThrowIfCancellationRequested();
+        return (response.StatusCode, response.IsSuccessStatusCode ? Protocols.ModelProtocolAdapter.NormalizeResponse(route.Protocol, body) : body);
     }
 
     private async Task<(HttpStatusCode Status, string Body)> SendFallbackAsync(
-        JsonObject payload, string url, string apiKey, CancellationToken ct)
+        JsonObject payload, ModelProviderRoute route, CancellationToken ct)
     {
-        try { return await SendOnceAsync(_auxHttp, payload, url, apiKey, ct); }
+        try { return await SendOnceAsync(_auxHttp, payload, route, ct, _auxiliaryTimeout); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new ModelFault("model_timeout"); }
         catch (HttpRequestException ex) when (ex is not ModelFault) { throw new ModelFault("model_network_error", ex.StatusCode); }
     }

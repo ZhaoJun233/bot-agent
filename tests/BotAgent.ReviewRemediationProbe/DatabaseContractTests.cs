@@ -27,7 +27,7 @@ internal static class DatabaseContractTests
             using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
             {
                 conn.Open();
-                HostDatabase.Exec(conn, "PRAGMA user_version = 10; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
+                HostDatabase.Exec(conn, "PRAGMA user_version = 11; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
             }
             var hash = SHA256.HashData(File.ReadAllBytes(path));
             ClockBindings.InitializeStorage();
@@ -67,7 +67,7 @@ internal static class DatabaseContractTests
         {
             HostDatabase.Initialize();
             if (!StorageDatabase.IsReady || HostDatabase.GetMeta("synthetic:c2-backup") != "snapshot-value"
-                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 9) return 1;
+                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 10) return 1;
             Console.WriteLine("C2_CHILD restore passed=3 failed=0");
             return 0;
         }

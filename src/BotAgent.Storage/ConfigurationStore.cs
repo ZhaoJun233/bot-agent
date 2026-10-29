@@ -417,10 +417,12 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             if (profile == ConfigurationStorageProfile.Strict && request.ExpectedVersion != version)
                 return Rejected(ConfigurationResultCode.VersionConflict, version);
             if (ct.IsCancellationRequested) return Rejected(ConfigurationResultCode.CancelledBeforeCommit, version);
-            var mutations = owned.Secrets.Select(s => s.Slot == WritableSecretSlot.ModelApiKey
-                ? s.Kind == SecretEditKind.Keep ? ConfigurationStorageBridge.ObserveModelApiKey(conn)
-                    : ConfigurationStorageBridge.ProjectModelApiKeyMutation(s.Kind, s.NormalizedValue)
-                : new SecretMutation(s.Slot, s.Kind)).ToImmutableArray();
+            var mutations = owned.Secrets.Select(s => s.CredentialKey is { } key
+                ? new SecretMutation(s.Slot, s.Kind) { CredentialKey = key, NormalizedValue = s.NormalizedValue }
+                : s.Slot == WritableSecretSlot.ModelApiKey
+                    ? s.Kind == SecretEditKind.Keep ? ConfigurationStorageBridge.ObserveModelApiKey(conn)
+                        : ConfigurationStorageBridge.ProjectModelApiKeyMutation(s.Kind, s.NormalizedValue)
+                    : new SecretMutation(s.Slot, s.Kind)).ToImmutableArray();
             var proposed = _participant.SecretSources(conn, mutations);
             if (proposed.IsDefault || proposed.Length != 6
                 || proposed.Select(s => s.Slot).Distinct().Count() != 6)
@@ -732,7 +734,10 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     {
         foreach (var secret in owned.Secrets.Where(s => s.Kind != SecretEditKind.Keep))
         {
-            if (!string.Equals(SecretsStore.LoadInTransaction(conn, secret.Slot), secret.NormalizedValue, StringComparison.Ordinal))
+            var current = secret.CredentialKey is { } key
+                ? ModelCredentialStore.LoadInTransaction(conn, key)
+                : SecretsStore.LoadInTransaction(conn, secret.Slot);
+            if (!string.Equals(current, secret.NormalizedValue, StringComparison.Ordinal))
                 return true;
             if (secret.Slot == WritableSecretSlot.FeishuVerificationToken)
             {
@@ -745,7 +750,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     private static void PersistSecrets(SqliteConnection conn, OwnedIntent owned, long now)
     {
         foreach (var edit in owned.Secrets)
-            if (edit.Kind != SecretEditKind.Keep) SecretsStore.SaveInTransaction(conn, edit.Slot, edit.NormalizedValue, now);
+        {
+            if (edit.Kind == SecretEditKind.Keep) continue;
+            if (edit.CredentialKey is { } key) ModelCredentialStore.SaveInTransaction(conn, key, edit.NormalizedValue, now);
+            else SecretsStore.SaveInTransaction(conn, edit.Slot, edit.NormalizedValue, now);
+        }
     }
     private static byte[]? Fingerprint(SqliteConnection conn, ConfigurationCaller caller,
         ConfigurationSaveRequest request, OwnedIntent owned, ConfigurationStorageProfile profile, out OwnedIntent effective)
@@ -780,7 +789,12 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                 }
                 JsonSerializer.Serialize(writer, effective.FingerprintPatch ?? effective.Patch, Codec);
                 foreach (var secret in owned.Secrets)
-                { writer.WriteNumberValue((int)secret.Slot); writer.WriteNumberValue((int)secret.Kind); writer.WriteStringValue(secret.NormalizedValue); }
+                {
+                    // 已登记凭据没有槽位，写成名字，否则两条同名不同内容的凭据会撞成同一个指纹。
+                    if (secret.CredentialKey is { } key) writer.WriteStringValue(ModelCredentialStore.Name(key));
+                    else writer.WriteNumberValue((int)secret.Slot);
+                    writer.WriteNumberValue((int)secret.Kind); writer.WriteStringValue(secret.NormalizedValue);
+                }
                 writer.WriteEndArray();
             }
             payload = buffer.ToArray();
@@ -803,8 +817,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         internal required ImmutableArray<(ConfigurationFieldId Field, UserValueKind Mode)> Modes { get; init; }
         public void Dispose() { foreach (var secret in Secrets) secret.Bytes?.Dispose(); }
     }
-    private sealed record OwnedSecret(WritableSecretSlot Slot, SecretEditKind Kind,
-        SensitiveInput? Bytes, string? NormalizedValue)
+    private sealed record OwnedSecret(WritableSecretSlot Slot, ModelCredentialKey? CredentialKey,
+        SecretEditKind Kind, SensitiveInput? Bytes, string? NormalizedValue)
     { public override string ToString() => "[redacted]"; }
 
     private static bool KnownCodec(string revision) => revision is Revision or LegacyRevision or AliasCodecRevision;
@@ -821,7 +835,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     {
         var registered = raw.Patch.Registered!;
         var primary = registered.Providers.FirstOrDefault(provider => provider.Key.Value == "primary");
-        if (primary is null) return raw;
+        // 只有“更新”意图才把 primary 当作模型别名；新建/删除 primary 是显式对象操作。
+        if (primary is null || primary.Operation != ProviderEditOperation.Update) return raw;
         var fields = raw.Fields.ToBuilder();
         FieldEdit<string> Merge(ConfigurationFieldId field, FieldEdit<string> direct, FieldEdit<string> alias)
         {
@@ -865,10 +880,13 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     }
 
     private static bool EmptyPrimaryMarker(ProviderEdit provider)
-        => provider.Key.Value == "primary" && provider.Changes.NameRaw.Kind == EditKind.Keep
+        => provider.Key.Value == "primary" && provider.Operation == ProviderEditOperation.Update
+            && provider.Changes.NameRaw.Kind == EditKind.Keep
             && provider.Changes.Priority.Kind == EditKind.Keep && provider.Changes.BaseUrl.Kind == EditKind.Keep
             && provider.Changes.ModelName.Kind == EditKind.Keep && provider.Changes.Enabled.Kind == EditKind.Keep
-            && provider.Changes.Credential.Kind == CredentialBindingEditKind.KeepExisting;
+            && provider.Changes.Credential.Kind == CredentialBindingEditKind.KeepExisting
+            // 协议/选项与基础字段同级：带协议变更的“别名”不是空标记。
+            && provider.Changes.Protocol.Kind == EditKind.Keep && provider.Changes.Options.Kind == EditKind.Keep;
 
     private static OwnedIntent Own(ConfigurationSaveRequest request)
     {
@@ -876,9 +894,16 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         try
         {
             var slots = new HashSet<WritableSecretSlot>();
+            var credentials = new HashSet<string>(StringComparer.Ordinal);
             foreach (var source in request.Secrets)
             {
-                if (source is null || !Enum.IsDefined(source.Slot) || !Enum.IsDefined(source.Kind) || !slots.Add(source.Slot))
+                if (source is null || !Enum.IsDefined(source.Kind)) throw new ArgumentException("invalid_secret_edit");
+                // 固定槽位与已登记凭据是两个命名空间：各自去重，槽位照旧全部补 Keep。
+                if (source.CredentialKey is { } credentialKey)
+                {
+                    if (!credentials.Add(ModelCredentialStore.Name(credentialKey))) throw new ArgumentException("invalid_secret_edit");
+                }
+                else if (!Enum.IsDefined(source.Slot) || !slots.Add(source.Slot))
                     throw new ArgumentException("invalid_secret_edit");
                 SensitiveInput? copy = null;
                 string? normalized = null;
@@ -896,17 +921,21 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                         }
                         finally { CryptographicOperations.ZeroMemory(bytes); }
                     }
-                    secrets.Add(new(source.Slot, source.Kind, copy, normalized));
+                    secrets.Add(new(source.Slot, source.CredentialKey, source.Kind, copy, normalized));
                     copy = null;
                 }
                 finally { copy?.Dispose(); }
             }
             foreach (var slot in Enum.GetValues<WritableSecretSlot>())
-                if (!slots.Contains(slot)) secrets.Add(new(slot, SecretEditKind.Keep, null, null));
+                if (!slots.Contains(slot)) secrets.Add(new(slot, null, SecretEditKind.Keep, null, null));
             var fields = ImmutableArray.CreateBuilder<ConfigurationFieldId>();
             var patch = FreezePatch(request.Changes, fields);
             if (secrets.Any(s => s.Kind != SecretEditKind.Keep)) fields.Add(ConfigurationFieldId.AllowedSecretEdits);
-            return new() { Patch = patch, Secrets = secrets.OrderBy(s => s.Slot).ToImmutableArray(),
+            // 槽位在前、已登记凭据在后（从未登记凭据侧没有槽位），两段各自有序，指纹才可复现。
+            var ordered = secrets.Where(s => s.CredentialKey is null).OrderBy(s => s.Slot)
+                .Concat(secrets.Where(s => s.CredentialKey is not null).OrderBy(s => s.CredentialKey!.Value.Value, StringComparer.Ordinal))
+                .ToImmutableArray();
+            return new() { Patch = patch, Secrets = ordered,
                 Fields = fields.Distinct().OrderBy(f => f).ToImmutableArray(), Modes = DesiredModes(patch) };
         }
         catch
@@ -1266,12 +1295,16 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     {
         if (provider is null || provider.Changes is not { } changes || changes.Credential is null)
             throw new ArgumentException("invalid_provider");
+        if (!Enum.IsDefined(provider.Operation)) throw new ArgumentException("invalid_provider_operation");
         var field = ConfigurationFieldId.RegisteredProviders;
         var result = new ProviderMetadataPatch(FreezeEdit(field, changes.NameRaw, fields),
             FreezeEdit(field, changes.Priority, fields), FreezeEdit(field, changes.BaseUrl, fields),
-            FreezeEdit(field, changes.ModelName, fields), FreezeEdit(field, changes.Enabled, fields), changes.Credential);
+            FreezeEdit(field, changes.ModelName, fields), FreezeEdit(field, changes.Enabled, fields), changes.Credential,
+            FreezeEdit(field, changes.Protocol, fields), FreezeEdit(field, changes.Options, fields));
         if (result.BaseUrl.TryGetValue(out var url)) ValidateUrl(url);
-        return new(new(CheckKey(provider.Key.Value)), result);
+        if (result.Options.TryGetValue(out var options))
+            result = result with { Options = FieldEdit<BotAgent.Domain.Model.ModelProtocolOptions>.Set(FreezeProtocolOptions(options)) };
+        return new(new(CheckKey(provider.Key.Value)), result, provider.Operation);
     }
 
     private static string CheckKey(string text)
@@ -1321,6 +1354,27 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             StrictUtf8.GetByteCount(text); return ListRule.Explicit(text);
         }
         return rule.Kind == ListRuleKind.Inherit ? ListRule.Inherit() : ListRule.AllowAll();
+    }
+
+    /// <summary>
+    /// 协议附加项在写库前收敛：文本裁剪并限长，超时的秒数夹到面板允许的 1..300。
+    /// 夹取而不是报错，是为了让"服务端始终能落库一个自洽的预算"，与 ProviderRequestBudget 一致。
+    /// </summary>
+    private static BotAgent.Domain.Model.ModelProtocolOptions FreezeProtocolOptions(BotAgent.Domain.Model.ModelProtocolOptions options)
+    {
+        static string? Text(string? value, int max)
+        {
+            if (value is null) return null;
+            var trimmed = value.Trim();
+            if (trimmed.Length == 0) return null;
+            if (trimmed.Length > max) throw new ArgumentException("invalid_provider_options");
+            return trimmed;
+        }
+        var deployment = Text(options.AzureDeployment, 256);
+        var azureVersion = Text(options.AzureApiVersion, 64) ?? "2024-10-21";
+        var anthropicVersion = Text(options.AnthropicVersion, 64) ?? "2023-06-01";
+        var timeout = options.TimeoutSeconds is { } seconds ? Math.Clamp(seconds, 1, 300) : (int?)null;
+        return new(deployment, azureVersion, anthropicVersion, timeout);
     }
 
     private static void ValidateUrl(string text)

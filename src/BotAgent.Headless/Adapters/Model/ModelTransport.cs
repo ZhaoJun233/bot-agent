@@ -7,6 +7,6 @@ namespace BotAgent.Adapters.Model;
 internal sealed class ModelTransport : BotAgent.Model.ModelTransport
 {
     public ModelTransport(SettingsBox box, IHttpFetcher chatHttp, IHttpFetcher auxHttp,
-        ImageDownloader imageDownloader, TimeSpan chatTimeout)
-        : base(HostModelOptions.CreateAccessor(box), chatHttp, auxHttp, imageDownloader, chatTimeout) { }
+        ImageDownloader imageDownloader, TimeSpan chatTimeout, TimeSpan? auxiliaryTimeout = null)
+        : base(HostModelOptions.CreateAccessor(box), chatHttp, auxHttp, imageDownloader, chatTimeout, auxiliaryTimeout) { }
 }

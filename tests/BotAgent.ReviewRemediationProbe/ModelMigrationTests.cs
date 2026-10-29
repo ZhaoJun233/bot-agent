@@ -205,7 +205,9 @@ internal static class ModelMigrationTests
         var tested = await new ConnectionTester(http).TestAsync(route);
         var wire = http.Payloads.Single();
         check(tested.Succeeded && tested.ErrorCode == "ok" && http.Count == 1 && http.AllDisposed, "provider connection makes exactly one disposed synthetic request");
-        check(wire["max_tokens"]!.GetValue<int>() == 64 && !wire.ContainsKey("temperature") && !wire.ContainsKey("top_p") && !wire.ContainsKey("reasoning_effort") && !wire.ContainsKey("stream"), "provider test has fixed minimal nonstreaming payload");
+        // The protocol adapter always states the stream flag explicitly (stream:false = non-streaming),
+        // so the minimal provider probe asserts the flag is false rather than absent.
+        check(wire["max_tokens"]!.GetValue<int>() == 64 && !wire.ContainsKey("temperature") && !wire.ContainsKey("top_p") && !wire.ContainsKey("reasoning_effort") && wire["stream"]?.GetValue<bool>() == false, "provider test has fixed minimal nonstreaming payload");
         foreach (var item in new[] { (401, "model_auth_failed"), (429, "model_rate_limited"), (503, "model_upstream_error"), (200, "model_malformed_response") })
         {
             http = new ProbeFetcher { Handler = (_, _) => Task.FromResult(Response(item.Item1, Marker)) };

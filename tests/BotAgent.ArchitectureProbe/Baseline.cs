@@ -227,6 +227,7 @@ internal static class Baseline
         ["src/BotAgent.Storage/StickerStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/StickerStore.cs",
         ["src/BotAgent.Storage/TenantQuotaStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TenantQuotaStore.cs",
         ["src/BotAgent.Storage/TtsConfFile.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TtsConfFile.cs",
+        ["src/BotAgent.Storage/TextSnapshotFile.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TextSnapshotFile.cs",
         ["src/BotAgent.Platforms/Common/OfficialIdMap.cs"] = "src/BotAgent.Headless/Adapters/Persistence/OfficialIdMap.cs",
     };
 

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BotAgent.Domain.Model;
 
 namespace BotAgent.Domain.Configuration;
 
@@ -103,11 +104,18 @@ public enum CredentialBindingEditKind
 public sealed record ProviderMetadataPatch(
     FieldEdit<string> NameRaw, FieldEdit<int> Priority,
     FieldEdit<string> BaseUrl, FieldEdit<string> ModelName,
-    FieldEdit<bool> Enabled, CredentialBindingEdit Credential)
+    FieldEdit<bool> Enabled, CredentialBindingEdit Credential,
+    FieldEdit<ModelProtocol> Protocol, FieldEdit<ModelProtocolOptions> Options)
 {
     public override string ToString() => "ProviderMetadataPatch";
 }
-public sealed record ProviderEdit(ProviderKey Key, ProviderMetadataPatch Changes)
+/// <summary>Provider 写入意图：0 更新（旧客户端省略 operation 时的默认值）、1 新建、2 删除。</summary>
+public enum ProviderEditOperation
+{
+    Update = 0, Create = 1, Delete = 2
+}
+public sealed record ProviderEdit(ProviderKey Key, ProviderMetadataPatch Changes,
+    ProviderEditOperation Operation = ProviderEditOperation.Update)
 {
     public override string ToString() => "ProviderEdit";
 }
@@ -129,13 +137,20 @@ public sealed record ProviderConfigurationView(
     ProviderKey Key, ReadField<string> Name,
     ReadField<string> BaseUrl, ReadField<string> ModelName,
     int Priority, bool DesiredEnabled, CredentialBindingState Credential,
-    ApplyState RuntimeApplyState)
+    ApplyState RuntimeApplyState, ModelProtocol Protocol, ModelProtocolOptions? Options,
+    ModelCredentialKey? CredentialKey, bool CredentialConfigured)
 {
     public override string ToString() => "ProviderConfigurationView";
 }
+/// <summary>已登记模型凭据的**只读投影**：只报存在性与可用性，永不回显密钥正文。</summary>
+public sealed record ModelCredentialView(ModelCredentialKey Key, bool Configured, bool KeyUsable)
+{
+    public override string ToString() => "ModelCredentialView";
+}
 public sealed record RegisteredConfigurationView(
     ImmutableArray<PluginConfigurationView> Plugins,
-    ImmutableArray<ProviderConfigurationView> Providers)
+    ImmutableArray<ProviderConfigurationView> Providers,
+    ImmutableArray<ModelCredentialView> ModelCredentials)
 {
     public override string ToString() => "RegisteredConfigurationView";
 }

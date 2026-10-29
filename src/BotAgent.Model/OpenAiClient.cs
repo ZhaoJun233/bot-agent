@@ -69,15 +69,18 @@ public class OpenAiClient : IModelClient
     private ModelOptions _settings => _options();
 
     private readonly Func<ModelOptions> _options;
+    private readonly TimeSpan _auxiliaryTimeout;
 
     public OpenAiClient(
         Func<ModelOptions> options, IModelHttpFetcher auxHttp, IModelHttpFetcher chatHttp, IImageDownloader images, IModelTransport transport,
         ProviderFailoverRunner? providerFailover = null,
         IReadOnlyDictionary<string, ModelProviderRoute>? providerRoutes = null,
-        Func<string, ModelProviderRoute?>? providerRouteResolver = null)
+        Func<string, ModelProviderRoute?>? providerRouteResolver = null,
+        TimeSpan? auxiliaryTimeout = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _auxHttp = auxHttp;
+        _auxiliaryTimeout = auxiliaryTimeout ?? auxHttp.Timeout;
         _chatHttp = chatHttp;
         _imageDownloader = images;
         ChatTimeout = chatHttp.Timeout;
@@ -272,7 +275,7 @@ public class OpenAiClient : IModelClient
         return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true,
             PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops);
     }
-private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, CancellationToken ct)
+    private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, CancellationToken ct)
     {
         if (_providerFailover is null)
         {
@@ -386,7 +389,7 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
             var routedModel = string.IsNullOrWhiteSpace(route.ModelName) ? model : route.ModelName;
             var response = await CompleteChatCoreAsync(
                 routedModel, systemPrompt, messages, maxTokens, temperature,
-                reasoningEffort, token, route.BaseUrl, route.ApiKey).ConfigureAwait(false);
+                reasoningEffort, token, route.BaseUrl, route.ApiKey, route).ConfigureAwait(false);
             return response is null
                 ? ProviderCallResult<string>.Failure("chat_completion_failed", hardFailure: true)
                 : ProviderCallResult<string>.Success(response);
@@ -397,12 +400,12 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
     private async Task<string?> CompleteChatCoreAsync(
         string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
         int maxTokens, double temperature, string? reasoningEffort, CancellationToken ct,
-        string? baseUrlOverride, string? apiKeyOverride)
+        string? baseUrlOverride, string? apiKeyOverride, ModelProviderRoute? route = null)
     {
         try
         {
             return await CompleteChatCoreUnsafeAsync(model, systemPrompt, messages, maxTokens, temperature,
-                reasoningEffort, ct, baseUrlOverride, apiKeyOverride).ConfigureAwait(false);
+                reasoningEffort, ct, baseUrlOverride, apiKeyOverride, route).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -421,15 +424,15 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
         string? reasoningEffort,
         CancellationToken ct,
         string? baseUrlOverride,
-        string? apiKeyOverride)
+        string? apiKeyOverride, ModelProviderRoute? route = null)
     {
-        var apiKey = string.IsNullOrWhiteSpace(apiKeyOverride) ? _settings.ApiKey?.Trim() : apiKeyOverride!.Trim();
-        if (string.IsNullOrWhiteSpace(apiKey))
+        var apiKey = route is not null ? route.ApiKey : string.IsNullOrWhiteSpace(apiKeyOverride) ? _settings.ApiKey : apiKeyOverride;
+        if (route?.Protocol != ModelProtocol.Ollama && string.IsNullOrWhiteSpace(apiKey))
         {
             return null;
         }
 
-        var url = string.IsNullOrWhiteSpace(baseUrlOverride) ? BuildUrl() : BuildUrl(baseUrlOverride!);
+        route ??= new ModelProviderRoute("default", string.IsNullOrWhiteSpace(baseUrlOverride) ? _settings.BaseUrl : baseUrlOverride, model, apiKey);
         var payload = new JsonObject
         {
             ["model"] = string.IsNullOrWhiteSpace(model) ? _settings.Model : model,
@@ -449,15 +452,12 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
 
         for (var attempt = 0; ; attempt++)
         {
+            using var budget = ProviderRequestBudget.Create(route, _auxiliaryTimeout, ct);
             HttpResponseMessage response;
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Post, url)
-                {
-                    Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
-                };
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-                response = await _auxHttp.SendAsync(request, ct).ConfigureAwait(false);
+                using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload);
+                response = await _auxHttp.SendAsync(request, budget.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -471,10 +471,11 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
 
             using (response)
             {
-                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync(budget.Token).ConfigureAwait(false);
+                budget.Token.ThrowIfCancellationRequested();
                 if (response.IsSuccessStatusCode)
                 {
-                    using var doc = JsonDocument.Parse(body);
+                    using var doc = JsonDocument.Parse(Protocols.ModelProtocolAdapter.NormalizeResponse(route.Protocol, body));
                     if (!doc.RootElement.TryGetProperty("choices", out var choices) ||
                         choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
                     {
@@ -642,14 +643,13 @@ private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, C
                 cloned["model"] = route.ModelName;
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, BuildUrl(route.BaseUrl))
-            {
-                Content = new StringContent(cloned.ToJsonString(), Encoding.UTF8, "application/json")
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", route.ApiKey.Trim());
+            using var budget = ProviderRequestBudget.Create(route, _auxiliaryTimeout, token);
+            using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, cloned);
 
-            using var response = await _auxHttp.SendAsync(request, token).ConfigureAwait(false);
-            var json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            using var response = await _auxHttp.SendAsync(request, budget.Token).ConfigureAwait(false);
+            var json = await response.Content.ReadAsStringAsync(budget.Token).ConfigureAwait(false);
+            budget.Token.ThrowIfCancellationRequested();
+            if (response.IsSuccessStatusCode) json = Protocols.ModelProtocolAdapter.NormalizeResponse(route.Protocol, json);
             var code = (int)response.StatusCode;
             if (!response.IsSuccessStatusCode || !ModelJson.HasChoices(json))
             {

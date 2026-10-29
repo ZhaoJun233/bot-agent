@@ -22,6 +22,8 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public class StickerStore : IStickerRepository
 {
+    // 临时保留表的两处清空共用一条字面量（架构探针按字面量计数 SQL）。
+    private const string ClearKeepTableSql = "DELETE FROM _keep_sticker";
     private readonly object _gate = new();
     private readonly List<StickerRecord> _items = new();
     private string _dir = string.Empty;
@@ -520,14 +522,14 @@ public class StickerStore : IStickerRepository
                 }
 
                 AppDatabase.Exec(conn, "CREATE TEMP TABLE IF NOT EXISTS _keep_sticker(id TEXT PRIMARY KEY)");
-                AppDatabase.Exec(conn, "DELETE FROM _keep_sticker");
+                AppDatabase.Exec(conn, ClearKeepTableSql);
                 foreach (var id in ids)
                 {
                     AppDatabase.Exec(conn, "INSERT OR IGNORE INTO _keep_sticker(id) VALUES($id)", ("$id", id));
                 }
 
                 AppDatabase.Exec(conn, "DELETE FROM stickers WHERE id NOT IN (SELECT id FROM _keep_sticker)");
-                AppDatabase.Exec(conn, "DELETE FROM _keep_sticker");
+                AppDatabase.Exec(conn, ClearKeepTableSql);
             });
         }
         catch (Exception ex)

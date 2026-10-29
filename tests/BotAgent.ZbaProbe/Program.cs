@@ -55,6 +55,7 @@ internal static class Program
         await RunAsync("H. events", () => EventChecksAsync(backend, endpoint));
         await RunAsync("I. HttpListener adapter smoke", () => HttpListenerSmokeAsync(backend));
         await RunAsync("J. sessions", () => SessionChecksAsync());
+        await RunAsync("K. plugin marketplace / provider discovery", () => PluginChecksAsync());
 
         Console.WriteLine();
         Console.WriteLine($"passed={_passed} failed={_failed} skipped={_skipped}");
@@ -291,6 +292,18 @@ internal static class Program
         "sessions.list" => Req("GET", route.Template, token: AdminToken, query: "?sourceKey=panel%3Aworkspace"),
         "sessions.ensure" => Req("POST", route.Template, "{\"sourceKey\":\"panel:workspace\"}", AdminToken),
         "approvals.decide" => Req("POST", route.Template.Replace("{id}", "approval-ok"), "{\"approve\":true}", AdminToken),
+        "plugins.catalog" => Req("GET", route.Template, token: AdminToken),
+        "plugins.installed" => Req("GET", route.Template, token: AdminToken),
+        "plugins.sources.resolve" => Req("POST", route.Template,
+            "{\"sourceUrl\":\"https://github.com/example-org/example-plugins/releases/tag/" + "community.example.hello-1.0.0\"}", AdminToken),
+        "plugins.install" or "plugins.update" => Req("POST", route.Template, PluginMutationJson(), AdminToken),
+        "plugins.uninstall" => Req("POST", route.Template.Replace("{id}", "community.example.hello"),
+            "{\"expectedRevision\":\"p0000000000000000\",\"idempotencyKey\":\"plugin:uninstall:route-smoke\"}", AdminToken),
+        "plugins.operations.get" => Req("GET", route.Template.Replace("{key}", "plugin:install:route-smoke"), token: AdminToken),
+        "plugins.settings.read" => Req("GET", route.Template.Replace("{id}", "community.example.hello"), token: AdminToken),
+        "plugins.settings.save" => Req("PUT", route.Template.Replace("{id}", "community.example.hello"),
+            "{\"expectedRevision\":\"r1\",\"idempotencyKey\":\"plugin:settings:route-smoke\",\"edits\":[]}", AdminToken),
+        "providers.models" => Req("GET", route.Template.Replace("{key}", "synthetic-provider"), token: AdminToken),
         _ => throw new InvalidOperationException("unmapped synthetic route " + route.OperationId)
     };
 
@@ -473,9 +486,58 @@ internal static class Program
             await endpoint.ProcessAsync(Req("POST", "/zba/v1/capabilities/validate",
                 "{\"contractRevision\":\"zba-1.0\",\"expectedVersion\":\"7\",\"changes\":{},\"secrets\":null}",
                 AdminToken)), 400, "missing_secrets");
-        var sevenSecrets = "[" + string.Join(",", Enumerable.Repeat("{\"slot\":0,\"kind\":0}", 7)) + "]";
-        CheckStatus("more than six secrets 400",
-            await SaveAsync(endpoint, "zba-1.0", sevenSecrets), 400, "too_many_secrets");
+        // 目标去重按“目标”计算：七个相同的固定槽位只算一个目标，因此先撞重复而不是超限。
+        var sevenIdenticalSlots = "[" + string.Join(",", Enumerable.Repeat("{\"slot\":0,\"kind\":0}", 7)) + "]";
+        CheckStatus("seven identical slots 400",
+            await SaveAsync(endpoint, "zba-1.0", sevenIdenticalSlots), 400, "duplicate_secret_slot");
+        var sixDistinctSlots = "[{\"slot\":0,\"kind\":0},{\"slot\":1,\"kind\":0},{\"slot\":2,\"kind\":0},"
+            + "{\"slot\":3,\"kind\":0},{\"slot\":4,\"kind\":0},{\"slot\":5,\"kind\":0}]";
+        CheckStatus("six distinct slots 200", await SaveAsync(endpoint, "zba-1.0", sixDistinctSlots), 200);
+        var tooManyKeys = "[" + string.Join(",",
+            Enumerable.Range(0, 65).Select(index => "{\"credentialKey\":\"synthetic-key-" + index + "\",\"kind\":0}")) + "]";
+        CheckStatus("more than sixty-four credential targets 400",
+            await SaveAsync(endpoint, "zba-1.0", tooManyKeys), 400, "too_many_secrets");
+        var sixtyFourKeys = "[" + string.Join(",",
+            Enumerable.Range(0, 64).Select(index => "{\"credentialKey\":\"synthetic-key-" + index + "\",\"kind\":0}")) + "]";
+        CheckStatus("sixty-four credential targets 200", await SaveAsync(endpoint, "zba-1.0", sixtyFourKeys), 200);
+
+        CheckStatus("both secret targets 400",
+            await SaveAsync(endpoint, "zba-1.0",
+                "[{\"slot\":0,\"credentialKey\":\"synthetic-key\",\"kind\":0}]"), 400, "invalid_secret_slot");
+        CheckStatus("no secret target 400",
+            await SaveAsync(endpoint, "zba-1.0", "[{\"kind\":0}]"), 400, "invalid_secret_slot");
+        CheckStatus("duplicate credential key 400",
+            await SaveAsync(endpoint, "zba-1.0",
+                "[{\"credentialKey\":\"synthetic-key\",\"kind\":0},{\"credentialKey\":\"synthetic-key\",\"kind\":0}]"),
+            400, "duplicate_secret_slot");
+        CheckStatus("padded credential key 400",
+            await SaveAsync(endpoint, "zba-1.0", "[{\"credentialKey\":\" synthetic-key \",\"kind\":0}]"),
+            400, "invalid_secret_slot");
+
+        var credentialReplace = await SaveAsync(endpoint, "zba-1.0",
+            "[{\"credentialKey\":\"synthetic-key\",\"kind\":1,\"value\":\"" + SecretValue + "\"}]");
+        CheckStatus("credential key replace 200", credentialReplace, 200);
+        Check("credential key replace reaches backend",
+            backend.LastSave is { Secrets.Count: 1 }
+            && backend.LastSave.Secrets[0].CredentialKey == "synthetic-key"
+            && backend.LastSave.Secrets[0].Value == SecretValue,
+            "synthetic credential edit shape mismatch");
+        Check("credential key replace hides secret value",
+            !BodyText(credentialReplace).Contains(SecretValue, StringComparison.Ordinal));
+        CheckStatus("credential key delete 200",
+            await SaveAsync(endpoint, "zba-1.0", "[{\"credentialKey\":\"synthetic-key\",\"kind\":2}]"), 200);
+        Check("credential key delete reaches backend",
+            backend.LastSave is { Secrets.Count: 1 }
+            && backend.LastSave.Secrets[0].CredentialKey == "synthetic-key"
+            && backend.LastSave.Secrets[0].Kind == SecretEditKind.Delete,
+            "synthetic credential delete shape mismatch");
+        CheckStatus("credential key keep 200",
+            await SaveAsync(endpoint, "zba-1.0", "[{\"credentialKey\":\"synthetic-key\",\"kind\":0}]"), 200);
+        Check("credential key keep reaches backend",
+            backend.LastSave is { Secrets.Count: 1 }
+            && backend.LastSave.Secrets[0].CredentialKey == "synthetic-key"
+            && backend.LastSave.Secrets[0].Kind == SecretEditKind.Keep,
+            "synthetic credential keep shape mismatch");
 
         var secretJson = "[{\"slot\":0,\"kind\":1,\"value\":\"" + SecretValue + "\"}]";
         var saved = await SaveAsync(endpoint, "zba-1.0", secretJson);
@@ -672,6 +734,132 @@ internal static class Program
         => "{\"sourceKey\":\"synthetic-source\",\"sessionId\":\"synthetic-session\",\"prompt\":\"" + prompt
            + "\",\"target\":\"" + target + "\",\"timeoutSeconds\":" + timeoutSeconds + "}";
 
+    /// <summary>合成安装请求：清单是固定版本 + 全 a 的 SHA-256，绝不指向真实仓库。</summary>
+    private static string PluginMutationJson(
+        string idempotencyKey = "plugin:install:route-smoke",
+        string expectedRevision = "p0000000000000000",
+        bool trustAcknowledged = true,
+        string manifestId = "community.example.hello")
+        => "{\"manifest\":{\"id\":\"" + manifestId + "\",\"version\":\"1.0.0\","
+           + "\"entryAssembly\":\"HelloPlugin.dll\",\"entryType\":\"Marketplace.Examples.HelloPlugin\","
+           + "\"sha256\":\"" + new string('a', 64) + "\","
+           + "\"downloadUrl\":\"https://github.com/example-org/example-plugins/releases/download/"
+           + manifestId + "-1.0.0/" + manifestId + "-1.0.0.zip\","
+           + "\"apiVersion\":1,\"targetFramework\":\"net8.0\",\"minimumHostVersion\":\"1.0.0\","
+           + "\"permissions\":[],\"dependencies\":[],\"settings\":[]},"
+           + "\"expectedRevision\":\"" + expectedRevision + "\","
+           + "\"idempotencyKey\":\"" + idempotencyKey + "\","
+           + "\"trustAcknowledged\":" + (trustAcknowledged ? "true" : "false") + "}";
+
+    // ───────────────────────── K. plugin marketplace ─────────────────────────
+
+    private static async Task PluginChecksAsync()
+    {
+        var backend = new SyntheticZbaBackend();
+        var endpoint = CreateEndpoint(backend, ConfiguredOptions());
+
+        var catalog = await endpoint.ProcessAsync(Req("GET", "/zba/v1/plugins/catalog", token: ReadToken));
+        CheckStatus("plugin catalog 200 for read token", catalog, 200);
+        var catalogBody = BodyJson(catalog);
+        Check("plugin catalog exposes revision/source/trustNotice/categories/plugins",
+            catalogBody.TryGetProperty("revision", out _) && catalogBody.TryGetProperty("source", out _)
+            && catalogBody.TryGetProperty("trustNotice", out _) && catalogBody.TryGetProperty("categories", out _)
+            && catalogBody.GetProperty("plugins").GetArrayLength() == 1);
+        var entry = catalogBody.GetProperty("plugins")[0];
+        Check("catalog entry carries manifest and real state",
+            entry.GetProperty("manifest").GetProperty("id").GetString() == "community.example.hello"
+            && entry.GetProperty("enabled").GetBoolean() == false
+            && entry.GetProperty("status").GetString() == "not_installed"
+            && entry.GetProperty("restartRequired").GetBoolean() == false);
+        Check("catalog search filters", BodyJson(await endpoint.ProcessAsync(Req("GET", "/zba/v1/plugins/catalog",
+                token: ReadToken, query: "?q=nomatch"))).GetProperty("plugins").GetArrayLength() == 0);
+        CheckStatus("catalog rejects unknown query name",
+            await endpoint.ProcessAsync(Req("GET", "/zba/v1/plugins/catalog", token: ReadToken, query: "?source=evil")),
+            400, "unknown_query_parameter");
+
+        var installed = await endpoint.ProcessAsync(Req("GET", "/zba/v1/plugins/installed", token: ReadToken));
+        CheckStatus("installed plugins 200", installed, 200);
+        Check("installed plugins report installed version",
+            BodyJson(installed).GetProperty("plugins")[0].GetProperty("installedVersion").GetString() == "1.0.0");
+
+        CheckStatus("install without trust acknowledgement 400",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install",
+                PluginMutationJson(trustAcknowledged: false), AdminToken)), 400, "trust_not_acknowledged");
+        CheckStatus("install with bad manifest id 400",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install",
+                PluginMutationJson(manifestId: "Community.Example"), AdminToken)), 400, "invalid_plugin_id");
+        CheckStatus("install with non-fixed version 400",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install",
+                PluginMutationJson().Replace("\"version\":\"1.0.0\"", "\"version\":\"latest\"", StringComparison.Ordinal),
+                AdminToken)), 400, "invalid_manifest");
+        CheckStatus("install with short sha256 400",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install",
+                PluginMutationJson().Replace(new string('a', 64), "abc", StringComparison.Ordinal),
+                AdminToken)), 400, "invalid_manifest");
+        CheckStatus("install rejects short idempotency key 400",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install",
+                PluginMutationJson(idempotencyKey: "short"), AdminToken)), 400, "invalid_idempotency_key");
+        CheckStatus("read token cannot install",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install", PluginMutationJson(), ReadToken)),
+            403, "forbidden");
+        var install = await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/install",
+            PluginMutationJson(), AdminToken));
+        CheckStatus("install 200", install, 200);
+        Check("install reaches backend with the submitted manifest",
+            backend.LastInstall is { Manifest.Id: "community.example.hello", TrustAcknowledged: true });
+        var operation = BodyJson(install).GetProperty("operation");
+        Check("install operation is restart-bound",
+            operation.GetProperty("kind").GetString() == "install"
+            && operation.GetProperty("status").GetString() == "restart_required"
+            && operation.GetProperty("restartRequired").GetBoolean());
+
+        CheckStatus("update requires admin", await endpoint.ProcessAsync(
+            Req("POST", "/zba/v1/plugins/update", PluginMutationJson(), ReadToken)), 403, "forbidden");
+        CheckStatus("update 200", await endpoint.ProcessAsync(
+            Req("POST", "/zba/v1/plugins/update", PluginMutationJson(), AdminToken)), 200);
+
+        CheckStatus("uninstall rejects bad plugin id 400",
+            await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/Bad.Id/uninstall",
+                "{\"expectedRevision\":\"p0000000000000000\",\"idempotencyKey\":\"plugin:uninstall:bad\"}", AdminToken)),
+            400, "invalid_plugin_id");
+        CheckStatus("uninstall 200", await endpoint.ProcessAsync(Req("POST",
+            "/zba/v1/plugins/community.example.hello/uninstall",
+            "{\"expectedRevision\":\"p0000000000000000\",\"idempotencyKey\":\"plugin:uninstall:ok\"}", AdminToken)), 200);
+
+        var found = await endpoint.ProcessAsync(Req("GET",
+            "/zba/v1/plugins/operations/plugin%3Ainstall%3Aroute-smoke", token: ReadToken));
+        CheckStatus("operation lookup by idempotency key 200", found, 200);
+        Check("operation lookup returns the receipt", BodyJson(found).TryGetProperty("revision", out _));
+
+        var settings = await endpoint.ProcessAsync(Req("GET",
+            "/zba/v1/plugins/community.example.hello/settings", token: ReadToken));
+        CheckStatus("plugin settings read 200", settings, 200);
+        var settingsBody = BodyJson(settings);
+        Check("settings never echo secret values",
+            settingsBody.GetProperty("configuredSecrets").GetProperty("apiKey").GetBoolean()
+            && !settingsBody.GetProperty("values").TryGetProperty("apiKey", out _));
+        CheckStatus("settings save rejects unknown key 400",
+            await endpoint.ProcessAsync(Req("PUT", "/zba/v1/plugins/community.example.hello/settings",
+                "{\"expectedRevision\":\"r1\",\"idempotencyKey\":\"plugin:settings:bad\",\"edits\":[],"
+                + "\"extra\":true}", AdminToken)), 400, "invalid_json");
+        CheckStatus("settings save 200", await endpoint.ProcessAsync(Req("PUT",
+            "/zba/v1/plugins/community.example.hello/settings",
+            "{\"expectedRevision\":\"r1\",\"idempotencyKey\":\"plugin:settings:ok\","
+            + "\"edits\":[{\"key\":\"greeting\",\"kind\":1,\"value\":\"hi\"},"
+            + "{\"key\":\"verbose\",\"kind\":0}]}", AdminToken)), 200);
+        Check("settings edits reach backend", backend.LastSettingsSave is { Edits.Count: 2 });
+
+        var models = await endpoint.ProcessAsync(Req("GET", "/zba/v1/providers/synthetic-provider/models", token: ReadToken));
+        CheckStatus("provider models 200", models, 200);
+        Check("provider models lists identifiers", BodyJson(models).GetProperty("models").GetArrayLength() == 2
+            && backend.LastProviderKey == "synthetic-provider");
+        var missing = await endpoint.ProcessAsync(Req("GET", "/zba/v1/providers/synthetic-missing/models", token: ReadToken));
+        Check("provider models failure stays 200 with errorCode",
+            missing.Status == 200 && BodyJson(missing).GetProperty("errorCode").GetString() == "model_route_unavailable");
+        CheckStatus("provider models needs authentication",
+            await endpoint.ProcessAsync(Req("GET", "/zba/v1/providers/synthetic-provider/models")), 401);
+    }
+
     // ───────────────────────── G. approvals ─────────────────────────
 
     private static async Task ApprovalChecksAsync(ZbaEndpoint endpoint)
@@ -844,7 +1032,7 @@ internal static class Program
 }
 
 /// <summary>确定性宿主实现：所有结果由合成 revision / key / id 决定，无外部 IO。</summary>
-internal sealed class SyntheticZbaBackend : IZbaBackend
+internal sealed partial class SyntheticZbaBackend : IZbaBackend
 {
     private readonly Dictionary<string, string> _idempotent = new(StringComparer.Ordinal);
     private int _nextTask;
