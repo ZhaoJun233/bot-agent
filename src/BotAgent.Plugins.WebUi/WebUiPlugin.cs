@@ -1041,11 +1041,14 @@ public sealed class WebUiPlugin : IBotPlugin
                 new { key = "OfficialChatEnabled", label = "官方通道允许对话", type = "boolean", desc = "关闭后保留长连接但不再回复消息", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "OfficialWhitelistGroups", label = "官方通道群白名单", type = "text", desc = "填 group_openid，逗号分隔；留空 = 不响应任何群消息；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "OfficialWhitelistPrivates", label = "官方通道私聊白名单", type = "text", desc = "填 user_openid，逗号分隔；留空 = 不响应任何私聊；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "OfficialApiBase", label = "官方 REST 接口根地址", type = "text", desc = "留空 = 自动选：正式 https://api.bot.qq.com，沙箱 https://sandbox.api.sgroup.qq.com。官方改版时可在此覆盖，无需改代码", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "OfficialTokenUrl", label = "官方取 access_token 地址", type = "text", desc = "留空 = https://bots.qq.com/app/getAppAccessToken。官方换域名时可在此覆盖", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "FeishuAppId", label = "飞书机器人 App ID", type = "text", desc = "飞书开放平台应用 ID", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "FeishuSecret", label = "飞书机器人 App Secret", type = "secret", desc = "存入独立密钥库，不写入配置文件", step = (string?)null, options = (string[]?)null, secret_name = "feishuAppSecret", secret_flag = "_secretFeishuConfigured" },
                 new { key = "FeishuEnabled", label = "启用飞书机器人通道", type = "boolean", desc = "打开后须与 App ID、App Secret 同时齐备才真正注册事件回调", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "FeishuVerificationToken", label = "飞书事件订阅 Verification Token", type = "text", desc = "飞书开放平台「事件订阅」页的校验令牌，用于回调验签", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
-                new { key = "FeishuWhitelist", label = "飞书通道白名单", type = "text", desc = "填飞书 chat_id 或 open_id，逗号分隔；留空 = 不响应；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null }
+                new { key = "FeishuWhitelist", label = "飞书通道白名单", type = "text", desc = "填飞书 chat_id 或 open_id，逗号分隔；留空 = 不响应；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "FeishuApiBase", label = "飞书 REST 接口根地址", type = "text", desc = "留空 = https://open.feishu.cn。飞书改版或走自建代理时可在此覆盖", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null }
             }
         },
         new

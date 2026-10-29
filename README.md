@@ -157,18 +157,36 @@ docker compose logs -f napcat
 | `QQCHAT_TLS_CERT` | `/etc/letsencrypt/live/.../fullchain.pem` | 自定义 TLS/HTTPS 证书链路径（可选，支持 Let's Encrypt） |
 | `QQCHAT_TLS_KEY` | `/etc/letsencrypt/live/.../privkey.pem` | 自定义 TLS/HTTPS 证书私钥路径（可选） |
 
-### QQ 官方开放平台（可选）
+### QQ 官方开放平台与飞书（可选）
 
-如需启用官方 Bot API：
+官方通道与私域通道**并存**：会话、上下文、白名单完全隔离（靠会话 key 的通道前缀）。两条通道都建议优先在面板里配（「配置总线 → 接入协议」），只有想用环境变量时才需要下面这些：
 
 ```ini
-OFFICIAL_ENABLED=1
-OFFICIAL_APP_ID=your_app_id
-OFFICIAL_APP_SECRET=your_app_secret
+# QQ 官方开放平台
+QQCHAT_OFFICIAL=1
+QQCHAT_OFFICIAL_APP_ID=your_app_id
+QQCHAT_OFFICIAL_APP_SECRET=your_app_secret
+QQCHAT_OFFICIAL_SANDBOX=0
+QQCHAT_OFFICIAL_WHITELIST_GROUPS=
+QQCHAT_OFFICIAL_WHITELIST_PRIVATES=
+# 接口地址软编码：留空用官方默认值，官方改版时在这里覆盖，不必改代码
+QQCHAT_OFFICIAL_API_BASE=
+QQCHAT_OFFICIAL_TOKEN_URL=
+
+# 飞书机器人
+QQCHAT_FEISHU=1
+QQCHAT_FEISHU_APP_ID=
+QQCHAT_FEISHU_APP_SECRET=
+QQCHAT_FEISHU_VERIFICATION_TOKEN=
+QQCHAT_FEISHU_WHITELIST=
+QQCHAT_FEISHU_API_BASE=
 ```
 
+> [!IMPORTANT]
+> 变量名必须带 `QQCHAT_` 前缀。代码只认 `BotConfig` 里那张别名表，写 `OFFICIAL_ENABLED=1` 这类无前缀名字不会报错，但**也不会有任何效果**。
+
 > [!NOTE]
-> 进程完成初始化后，大多数运行时行为（如人设、回复阈值、冷却时间、表情开关等）均可在 Web 控制面板内在线动态调整并持久化，无须重启服务。
+> 通道开关改动后**必须重启进程**才会建立连接：通道层在装配期构建，配置热更新只重建白名单、闸门与定时器，不重建通道。
 
 ---
 
@@ -262,7 +280,39 @@ cat runtime/data/panel-credential.txt
 | `POST /api/playground/inject` | 本地演练场注入消息 |
 | `GET /api/logs?lines=200` | 日志尾部 |
 
-### 6. 排障
+### 6. 官方 / 飞书通道启用
+
+面板「配置总线 → 接入协议」已提供全部相关字段。
+
+**官方开放平台三步**：
+
+1. `启用 QQ 官方开放平台通道` 设为开
+2. 填 `AppID` 与 `AppSecret`（AppSecret 存密钥库，不写入 `settings.json`）
+3. 填 `官方通道群白名单` / `官方通道私聊白名单` —— 这里必须写 **openid**（`group_openid` / `user_openid`），写 QQ 号无效；留空 = 不响应任何消息，填 `*` = 全量放行
+
+**飞书四步**：
+
+1. `启用飞书机器人通道` 设为开
+2. 填 `App ID` 与 `App Secret`
+3. 填事件订阅的 `Verification Token`（回调验签用）
+4. 填 `飞书通道白名单`（`chat_id` / `open_id`，留空 = 不响应）
+
+**接口地址软编码**：三项全部留空即用官方默认值。
+
+| 面板字段 | 留空时的默认值 |
+| :--- | :--- |
+| 官方 REST 接口根地址 | 正式 `https://api.bot.qq.com`，沙箱 `https://sandbox.api.sgroup.qq.com` |
+| 官方取 access_token 地址 | `https://bots.qq.com/app/getAppAccessToken` |
+| 飞书 REST 接口根地址 | `https://open.feishu.cn` |
+
+官方或飞书改版、换域名、走自建反向代理时，直接在这三项里覆盖，不需要改代码重新编译。
+
+**两个必知的坑**：
+
+- 改开关后**要重启进程**：通道层在装配期构建，热更新只重建白名单、闸门与定时器，不重建通道。不重启时 `/api/status` 里看不到该通道。
+- 正式环境要先在开放平台把服务器的**出口 IP** 加进 IP 白名单，否则连不上。
+
+### 7. 排障
 
 | 现象 | 原因与处理 |
 | :--- | :--- |
