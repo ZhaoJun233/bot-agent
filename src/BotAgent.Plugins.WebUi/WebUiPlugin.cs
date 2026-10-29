@@ -870,6 +870,9 @@ public sealed class WebUiPlugin : IBotPlugin
         };
 
         var bytes = await File.ReadAllBytesAsync(filePath);
+        // 前端资源必须每次回源校验：面板一更新，用户浏览器里的旧 app.js 会让新字段/新逻辑全部失效，
+        // 表现就是「改了没反应、保存不了」。no-cache = 可以缓存但每次都要验证。
+        resp.Headers["Cache-Control"] = "no-cache, must-revalidate";
         resp.ContentLength64 = bytes.Length;
         await resp.OutputStream.WriteAsync(bytes);
         resp.Close();
@@ -1237,6 +1240,10 @@ public sealed class WebUiPlugin : IBotPlugin
     private static async Task WriteJsonAsync(HttpListenerResponse resp, int statusCode, object data)
     {
         resp.StatusCode = statusCode;
+        // 面板的每个数字都靠这条链路刷新。没有 Cache-Control 时浏览器会自行决定怎么缓存 GET 响应，
+        // 于是「保存成功但页面上看不到变化」「矩阵永远显示旧状态」这类问题会反复出现。
+        resp.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+        resp.Headers["Pragma"] = "no-cache";
         resp.ContentType = "application/json; charset=utf-8";
         var json = JsonSerializer.Serialize(data, JsonOptions);
         var bytes = Encoding.UTF8.GetBytes(json);

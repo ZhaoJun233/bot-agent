@@ -23,7 +23,9 @@
   async function apiFetch(endpoint, method = "GET", body = null) {
     const opts = {
       method: method,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
+      // 面板每 2.5 秒轮询一次状态，缓存命中会让「改了没变」看起来像功能坏了
+      cache: "no-store"
     };
     if (body) opts.body = JSON.stringify(body);
     try {
