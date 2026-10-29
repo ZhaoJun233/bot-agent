@@ -890,6 +890,7 @@ public sealed class WebUiPlugin : IBotPlugin
         node["_secretApiKeyConfigured"] = !string.IsNullOrWhiteSpace(_secrets?.LoadApiKey());
         node["_secretOfficialConfigured"] = !string.IsNullOrWhiteSpace(_secrets?.LoadOfficialSecret());
         node["_secretFeishuConfigured"] = !string.IsNullOrWhiteSpace(_secrets?.LoadFeishuSecret());
+        node["_secretFeishuEncryptConfigured"] = !string.IsNullOrWhiteSpace(_secrets?.LoadFeishuEncryptKey());
         node["_secretNeteaseConfigured"] = !string.IsNullOrWhiteSpace(_secrets?.LoadNeteaseCookie());
         node["_secretTtsConfigured"] = !string.IsNullOrWhiteSpace(_secrets?.LoadTtsKey());
 
@@ -1047,6 +1048,7 @@ public sealed class WebUiPlugin : IBotPlugin
                 new { key = "FeishuSecret", label = "飞书机器人 App Secret", type = "secret", desc = "存入独立密钥库，不写入配置文件", step = (string?)null, options = (string[]?)null, secret_name = "feishuAppSecret", secret_flag = "_secretFeishuConfigured" },
                 new { key = "FeishuEnabled", label = "启用飞书机器人通道", type = "boolean", desc = "打开后须与 App ID、App Secret 同时齐备才真正注册事件回调", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "FeishuVerificationToken", label = "飞书事件订阅 Verification Token", type = "text", desc = "飞书开放平台「事件订阅」页的校验令牌，用于回调验签", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "FeishuEncryptKey", label = "飞书事件加密 Encrypt Key", type = "secret", desc = "开启事件加密时填写，用于回调体解密；存入独立密钥库，不写入配置文件。留空表示未加密", step = (string?)null, options = (string[]?)null, secret_name = "feishuEncryptKey", secret_flag = "_secretFeishuEncryptConfigured" },
                 new { key = "FeishuWhitelist", label = "飞书通道白名单", type = "text", desc = "填飞书 chat_id 或 open_id，逗号分隔；留空 = 不响应；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "FeishuApiBase", label = "飞书 REST 接口根地址", type = "text", desc = "留空 = https://open.feishu.cn。飞书改版或走自建代理时可在此覆盖", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null }
             }

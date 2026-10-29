@@ -294,7 +294,7 @@ cat runtime/data/panel-credential.txt
 
 1. `启用飞书机器人通道` 设为开
 2. 填 `App ID` 与 `App Secret`
-3. 填事件订阅的 `Verification Token`（回调验签用）
+3. 填事件订阅的 `Verification Token`（回调验签用）；若在飞书侧开了事件加密，再填 `Encrypt Key`（存密钥库，留空 = 未加密）
 4. 填 `飞书通道白名单`（`chat_id` / `open_id`，留空 = 不响应）
 
 **接口地址软编码**：三项全部留空即用官方默认值。
