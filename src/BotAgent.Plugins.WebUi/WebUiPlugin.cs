@@ -945,8 +945,11 @@ public sealed class WebUiPlugin : IBotPlugin
     }
 
     /// <summary>
-    /// 构造通道事实：以平台注册表的真实快照为准（enabled / connected / lastErrorCode），
-    /// 未构造的通道显式补一条"未配置"，让面板能区分"未启用"与"连不上"。
+    /// 构造通道事实：**只列已连接的协议端**。
+    ///
+    /// 为什么不列未连接/未配置的：这张表是「现在有哪些路是通的」，
+    /// 把「没有这个通道」和「有但连不上」混在同一张表里，看的人分不清是没配还是掉线。
+    /// 没连上时这张表就是空的，面板会显示「暂无已连接的协议端」。
     /// </summary>
     private object[] BuildChannelFacts(AppSettings? settings)
     {
@@ -957,6 +960,11 @@ public sealed class WebUiPlugin : IBotPlugin
         {
             foreach (var s in snapshots)
             {
+                if (!s.Connected)
+                {
+                    continue;
+                }
+
                 list.Add(new
                 {
                     platform_id = s.PlatformId,
@@ -969,46 +977,17 @@ public sealed class WebUiPlugin : IBotPlugin
             }
         }
 
-        // 私域通道若未出现在快照里（理论上不会），用网关直连状态兜底
-        if (list.Count == 0)
+        // 私域通道若未出现在快照里（理论上不会），用网关直连状态兜底 —— 同样只收在线的
+        if (list.Count == 0 && (_gateway?.IsConnected ?? false))
         {
             list.Add(new
             {
                 platform_id = "qq-private",
                 name = "QQ 私域 OneBot 通道",
                 enabled = true,
-                connected = _gateway?.IsConnected ?? false,
+                connected = true,
                 last_error_code = (string?)null,
                 address = settings?.OneBotAddress ?? ""
-            });
-        }
-
-        // 未构造的官方/飞书通道：显式补"未配置"，与"连接失败"区分开
-        var hasOfficial = snapshots?.Any(s => s.PlatformId.Contains("official", StringComparison.OrdinalIgnoreCase)) ?? false;
-        if (!hasOfficial)
-        {
-            list.Add(new
-            {
-                platform_id = "qq-official",
-                name = "QQ 官方开放平台通道",
-                enabled = false,
-                connected = false,
-                last_error_code = (string?)null,
-                address = "未配置（需要 AppID 与 Secret）"
-            });
-        }
-
-        var hasFeishu = snapshots?.Any(s => s.PlatformId.Contains("feishu", StringComparison.OrdinalIgnoreCase)) ?? false;
-        if (!hasFeishu)
-        {
-            list.Add(new
-            {
-                platform_id = "feishu",
-                name = "飞书机器人通道",
-                enabled = false,
-                connected = false,
-                last_error_code = (string?)null,
-                address = "未配置（需要 App ID 与 Secret）"
             });
         }
 

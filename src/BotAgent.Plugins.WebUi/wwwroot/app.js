@@ -127,11 +127,11 @@
     chBox.innerHTML = "";
     const channels = data.channels || [];
     if (channels.length === 0) {
-      chBox.innerHTML = `<div class="channel-row">未检测到任何通道</div>`;
+      chBox.innerHTML = `<div class="channel-row">暂无已连接的协议端</div>`;
       return;
     }
 
-    // 通道三态：未配置（未启用）/ 已连接 / 连接中断（已启用但未连上）
+    // 只有已连接的协议端才会出现在这份数据里；这里仍按 connected 判断一次，防止后端将来放宽。
     channels.forEach(ch => {
       let stateText = "未配置";
       let stateColor = "#94a3b8";
