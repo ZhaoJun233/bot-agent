@@ -129,7 +129,12 @@ public static partial class Program
             secondRequest is not null && UserTexts(secondRequest).Any(t => t.Contains("hello-server-agent")),
             secondRequest is null ? "(只有一次请求)" : Snippet(UserTexts(secondRequest).LastOrDefault() ?? "(空)", "hello-server-agent"));
         Check("★ 服务器 agent 那轮读了 settings 里的白名单（不是消息白名单）",
-            bot.OutputLines.Any(l => l.Contains("agent 命令（20002）")),
+            bot.OutputLines.Any(l => l.Contains("agent 命令")),
+            string.Join(" | ", bot.OutputLines.Where(l => l.Contains("agent 命令")).TakeLast(2)));
+        // 隐私红线（AGENTS §1/§3）：这行日志不许出现原始 QQ 号，也不许带命令正文。
+        Check("★ agent 命令日志已脱敏（无原始 QQ 号、无命令正文）",
+            bot.OutputLines.Where(l => l.Contains("agent 命令"))
+                .All(l => !l.Contains("20002") && !l.Contains("这条强制走服务器") && !l.Contains("hello-server-agent")),
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("agent 命令")).TakeLast(2)));
 
         // ---- ② //@server 单条指定：外部目标已移除，服务器仍可显式指定 ----

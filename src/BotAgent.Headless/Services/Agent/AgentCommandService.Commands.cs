@@ -31,7 +31,9 @@ public sealed partial class AgentCommandService
             return;
         }
 
-        _hooks.Log($"agent 命令（{msg.UserId}）: {TextRules.Shorten(payload, 120)}");
+        // 隐私红线（AGENTS §1/§3）：日志里不写原始 QQ 号，也不写命令正文，只留脱敏标识与长度。
+        // 与自然对话那条同口径（AgentCommandService.Natural.cs）。
+        _hooks.Log($"agent 命令（{AgentMask.Shorten(msg.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture))}）: 长度 {payload.Length}");
 
         // 子命令：//stop 取消、//status 看状态、//（空）看用法
         // @目标 要先剥掉：这样 //@server status 这类写法也能认出来
