@@ -250,12 +250,12 @@ public static partial class Program
             postCode == 404, $"HTTP {postCode}");
 
         var (healthCode, _) = await SessionGetAsync($"{panel}/healthz");
-        // 批次 H（追踪页）：新增的静态文件必须真的发得出来（否则页面白屏，而探针是静态检查看不出来）
-        var (traceJsCode, traceJsBody) = await SessionGetAsync($"{panel}/trace.js");
-        Check("★ 面板发得出 /trace.js（追踪页脚本，嵌进程序集）",
-            traceJsCode == 200 && traceJsBody.Contains("TracePage", StringComparison.Ordinal),
-            $"HTTP {traceJsCode} {traceJsBody[..Math.Min(80, traceJsBody.Length)]}");
-        var (traceCssCode, traceCssBody) = await SessionGetAsync($"{panel}/trace.css");
+        // S6：旧面板静态文件（/trace.js /trace.css /dash.js）已随 wwwroot 整体删除。
+        // 这里反向钉住"不再由宿主发页面/脚本"，数据面 /api/dashboard 与 /api/traces 才是要保的契约。
+        var (traceJsCode, _) = await SessionGetAsync($"{panel}/trace.js");
+        Check("★ 旧追踪页脚本已移除（S6）", traceJsCode == 404, $"HTTP {traceJsCode}");
+        var (traceCssCode, _) = await SessionGetAsync($"{panel}/trace.css");
+        Check("旧追踪页样式已移除（S6）", traceCssCode == 404, $"HTTP {traceCssCode}");
         var (dashCode, dashBody) = await SessionGetAsync($"{panel}/api/dashboard");
         var dashRoot = JsonNode.Parse(dashBody) as JsonObject ?? new JsonObject();
         Check("★ /api/dashboard 一屏给全（运行 / 延迟 / 内存 / 工具 / 权限 / 轨迹，全是只读汇总）",
@@ -265,11 +265,7 @@ public static partial class Program
             && (dashRoot["traces"] as JsonObject)?["capacity"]?.GetValue<int>() == 50,
             $"HTTP {dashCode} {dashBody[..Math.Min(160, dashBody.Length)]}");
         var (dashJsCode, _) = await SessionGetAsync($"{panel}/dash.js");
-        Check("面板发得出 /dash.js（仪表盘脚本）", dashJsCode == 200, $"HTTP {dashJsCode}");
-
-        Check("面板发得出 /trace.css（追踪页样式）",
-            traceCssCode == 200 && traceCssBody.Contains(".trace-body", StringComparison.Ordinal),
-            $"HTTP {traceCssCode} {traceCssBody[..Math.Min(80, traceCssBody.Length)]}");
+        Check("旧仪表盘脚本已移除（S6）", dashJsCode == 404, $"HTTP {dashJsCode}");
 
         // 批次 C：决策轨迹的只读数据面（形状检查；轨迹内容的语义由 SafetyProbe 的台账断言钉住）
         var (tracesCode, tracesBody) = await SessionGetAsync($"{panel}/api/traces");
