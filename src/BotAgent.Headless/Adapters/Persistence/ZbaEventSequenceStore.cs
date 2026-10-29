@@ -127,7 +127,9 @@ internal sealed class ZbaEventSequenceStore
     {
         try
         {
-            TextSnapshotFile.Write(path, body);
+            // 确定性临时路径（path + ".tmp"）是既有契约：S55 用“占住这个路径”注入写失败，
+            // 换成随机临时名会让跨重启缺口证据这条测试失去意义。
+            TextSnapshotFile.Write(path, body, path + ".tmp");
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

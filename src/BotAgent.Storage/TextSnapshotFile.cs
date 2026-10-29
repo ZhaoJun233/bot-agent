@@ -42,11 +42,20 @@ public static class TextSnapshotFile
         return Decode(bytes);
     }
 
-    public static void Write(string path, string content)
+    public static void Write(string path, string content) => Write(path, content, temporaryPath: null);
+
+    /// <summary>
+    /// 同目录原子写。<paramref name="temporaryPath" /> 只给**合成故障注入**用：确定性临时路径
+    /// 才能让测试用“占住这个路径”的方式制造写失败（随机名会让注入失效）。
+    /// 产品路径一律传 null，临时名随机生成，避免并发写互相覆盖。
+    /// </summary>
+    public static void Write(string path, string content, string? temporaryPath)
     {
         ArgumentNullException.ThrowIfNull(content);
         var target = Path.GetFullPath(path);
-        var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var temporary = temporaryPath is null
+            ? target + "." + Guid.NewGuid().ToString("N") + ".tmp"
+            : Path.GetFullPath(temporaryPath);
         try
         {
             using (var output = CreateSnapshot(temporary))
