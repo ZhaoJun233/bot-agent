@@ -119,7 +119,7 @@ internal static class CompositionRoot
 
         // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
         var riskBackoff = new ProtocolRiskBackoff(msg => FileLog.Write("OneBot", msg));
-        var (gateway, source, official, local, feishu, platformRegistry) = BuildChannelLayer(settings, settingsBox, riskBackoff);
+        var (gateway, source, official, local, feishu, platformRegistry, officialHotSwap) = BuildChannelLayer(settings, settingsBox, riskBackoff);
         var platformPolicies = new PlatformPolicyResolver(settingsBox, platformRegistry);
 
         // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
@@ -200,7 +200,7 @@ internal static class CompositionRoot
 
         // 配置热更新的扇出（面板保存设置 / 一键部署记住产物地址）：顺序在它内部，见 SettingsHotReload
         var settingsHotReload = new SettingsHotReload(settingsBox, settingsStore, approvals, participation, whitelist, agentCmds,
-            brain, reply, scheduler, registry, ui);
+            brain, reply, scheduler, registry, ui, officialHotSwap);
 
         // 会话被删 → 把它在各台账里的痕迹一起清掉（回复冷却 / 待回复队列 / 参与 / 审批），
         // 并按老样子记一条日志 + 再通知一次面板。订阅点在这里是因为它同时要 reply 与 settingsHotReload；
@@ -350,7 +350,31 @@ internal static class CompositionRoot
     /// 上行通道层：私域协议端 →（配齐了 appid/secret 且开关打开时）官方通道 → 聚合器。
     /// 两条路交给**同一个** Agent，隔离靠会话 key 的通道前缀（见 Channels.Key）。顺序与日志措辞逐字搬来。
     /// </summary>
-    private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local, FeishuBotGateway? Feishu, IPlatformRegistry Registry) BuildChannelLayer(
+    /// <summary>
+    /// 按**当前生效**的配置构造官方网关；开关关闭或凭证不齐返回 null。
+    ///
+    /// 为什么放在 Host 层：要 new <c>HttpFetcher</c> 与 <c>OfficialIdMap</c>（都住在 Adapters），
+    /// 而架构探针的 R9 禁止 Services 层引用 Adapters —— 热切换控制器只接收这个工厂委托。
+    /// 用 <c>settingsBox.Current</c> 而不是启动时的快照：热更新换的是它背后的实例。
+    /// </summary>
+    private static OfficialBotGateway? CreateOfficialGateway(SettingsBox settingsBox)
+    {
+        var s = settingsBox.Current;
+        if (!s.OfficialEnabled
+            || string.IsNullOrWhiteSpace(s.OfficialAppId)
+            || string.IsNullOrWhiteSpace(s.OfficialAppSecret))
+        {
+            return null;
+        }
+
+        return new OfficialBotGateway(
+            settingsBox,
+            new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "official"),
+            new OfficialIdMap(Path.Combine(AppPaths.DataDir, "official-ids.json")),
+            msg => FileLog.Write("Official", msg));
+    }
+
+    private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local, FeishuBotGateway? Feishu, IPlatformRegistry Registry, OfficialChannelHotSwap OfficialHotSwap) BuildChannelLayer(
         AppSettings settings, SettingsBox settingsBox, ProtocolRiskBackoff riskBackoff)
     {
         var gateway = new OneBotGateway(settingsBox, riskBackoff)
@@ -370,19 +394,27 @@ internal static class CompositionRoot
                 new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "official"),
                 new OfficialIdMap(Path.Combine(AppPaths.DataDir, "official-ids.json")),
                 msg => FileLog.Write("Official", msg));
-            source = new ChannelRouter(new IQqChatSource[] { gateway, official }, msg => FileLog.Write("Channel", msg));
             FileLog.Write("Channel", $"官方通道已启用（appid={settings.OfficialAppId}，" +
                                    $"{(settings.OfficialSandbox ? "沙箱" : "正式")}环境，与私域通道隔离）");
             if (settings.OfficialSandbox)
             {
                 FileLog.Write("Channel", "⚠ 官方通道跑在**沙箱环境**：只能收到开放平台「沙箱配置」里那些沙箱群/沙箱单聊的事件；"
-                                        + "正式群里 @ 机器人不会被推送，日志里也不会有任何行。要在正式群用，取消面板「用沙箱环境」并重启。");
+                                        + "正式群里 @ 机器人不会被推送，日志里也不会有任何行。要在正式群用，取消面板「用沙箱环境」。");
             }
         }
         else if (settings.OfficialEnabled)
         {
             FileLog.Write("Channel", "官方通道开关是开的，但 appid/secret 没配齐 → 这次只跑私域通道");
         }
+
+        // 官方通道挂在可交换门面上：装配期能建就建，没建则用空壳占位。
+        // 之后面板改开关走 OfficialChannelHotSwap.Sync 热切换，不必重启进程。
+        var officialFacade = new SwappableChannelSource(official ?? (IQqChatSource)new InactiveOfficialSource());
+        var officialHotSwap = new OfficialChannelHotSwap(officialFacade,
+            msg => FileLog.Write("Channel", msg), settings, () => CreateOfficialGateway(settingsBox));
+
+        source = new ChannelRouter(new IQqChatSource[] { gateway, officialFacade },
+            msg => FileLog.Write("Channel", msg));
 
         // 本地通道（批次 F）：**名单非空才建**（默认关）。
         if (Services.Platforms.PlatformSwitchSettings.Read(settings, PlatformId.Local, AccountScope.Legacy).Enabled
@@ -457,7 +489,7 @@ internal static class CompositionRoot
         }
 
         var platformRegistry = new PlatformRegistry(adapters, messengers);
-        return (gateway, source, official, local, feishu, platformRegistry);
+        return (gateway, source, official, local, feishu, platformRegistry, officialHotSwap);
     }
 
     /// <summary>

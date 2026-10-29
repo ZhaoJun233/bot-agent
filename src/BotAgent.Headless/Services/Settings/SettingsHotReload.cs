@@ -6,6 +6,7 @@ using BotAgent.Services.Ops;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Participation;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Official;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Reply;
 
@@ -38,6 +39,12 @@ public sealed class SettingsHotReload
     private readonly PanelNotifier _ui;
     private readonly ISettingsRepository _settingsRepo;
 
+    /// <summary>
+    /// 官方通道热切换控制器。通道层是唯一「保存设置后还需要动长连接」的东西：
+    /// 其余派生物都在 RebuildRuntime 里重建，官方 ws 连接由它按配置差异单独校准。
+    /// </summary>
+    private readonly OfficialChannelHotSwap? _officialChannels;
+
     public SettingsHotReload(
         SettingsBox box,
         ISettingsRepository settingsRepo,
@@ -49,7 +56,8 @@ public sealed class SettingsHotReload
         ReplyPipeline reply,
         BotScheduler scheduler,
         ConversationRegistry registry,
-        PanelNotifier ui)
+        PanelNotifier ui,
+        OfficialChannelHotSwap? officialChannels = null)
     {
         _box = box;
         _settingsRepo = settingsRepo;
@@ -62,6 +70,7 @@ public sealed class SettingsHotReload
         _scheduler = scheduler;
         _registry = registry;
         _ui = ui;
+        _officialChannels = officialChannels;
     }
 
     /// <summary>配置读取入口：指向**当前发布版**（热更新是换引用，见 <see cref="SettingsBox" />）。</summary>
@@ -114,6 +123,10 @@ public sealed class SettingsHotReload
 
         // 定时器类配置（静默兜底 / 画像巡检）：只在真的改了时才重建，否则不生效
         _scheduler.RebuildIfNeeded();
+
+        // 官方通道：只有影响连接本身的字段变了才会真的重建（签名比对在控制器内部）。
+        // 放在最后，避免连接重建和上面的派生物重建互相干扰。
+        _officialChannels?.Sync(_settings);
 
         _ui.EmitLog("配置已更新");
         _ui.NotifyConversationsChanged();
