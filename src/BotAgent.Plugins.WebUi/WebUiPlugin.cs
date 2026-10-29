@@ -1036,8 +1036,16 @@ public sealed class WebUiPlugin : IBotPlugin
                 new { key = "QuickLoginUin", label = "机器人登录 QQ 账号", type = "text", desc = "用于自我消息过滤与 @ 识别，留空自动识别", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "OfficialAppId", label = "QQ 官方开放平台 AppID", type = "text", desc = "官方机器人凭证，不使用留空", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "OfficialSecret", label = "QQ 官方开放平台 AppSecret", type = "secret", desc = "存入独立密钥库，不写入配置文件", step = (string?)null, options = (string[]?)null, secret_name = "officialAppSecret", secret_flag = "_secretOfficialConfigured" },
+                new { key = "OfficialEnabled", label = "启用 QQ 官方开放平台通道", type = "boolean", desc = "打开后与私域通道并存；须与 AppID、AppSecret 同时齐备才真正建立连接", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "OfficialSandbox", label = "官方通道使用沙箱环境", type = "boolean", desc = "沙箱用于联调；正式上线请关闭", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "OfficialChatEnabled", label = "官方通道允许对话", type = "boolean", desc = "关闭后保留长连接但不再回复消息", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "OfficialWhitelistGroups", label = "官方通道群白名单", type = "text", desc = "填 group_openid，逗号分隔；留空 = 不响应任何群消息；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "OfficialWhitelistPrivates", label = "官方通道私聊白名单", type = "text", desc = "填 user_openid，逗号分隔；留空 = 不响应任何私聊；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
                 new { key = "FeishuAppId", label = "飞书机器人 App ID", type = "text", desc = "飞书开放平台应用 ID", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
-                new { key = "FeishuSecret", label = "飞书机器人 App Secret", type = "secret", desc = "存入独立密钥库，不写入配置文件", step = (string?)null, options = (string[]?)null, secret_name = "feishuAppSecret", secret_flag = "_secretFeishuConfigured" }
+                new { key = "FeishuSecret", label = "飞书机器人 App Secret", type = "secret", desc = "存入独立密钥库，不写入配置文件", step = (string?)null, options = (string[]?)null, secret_name = "feishuAppSecret", secret_flag = "_secretFeishuConfigured" },
+                new { key = "FeishuEnabled", label = "启用飞书机器人通道", type = "boolean", desc = "打开后须与 App ID、App Secret 同时齐备才真正注册事件回调", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "FeishuVerificationToken", label = "飞书事件订阅 Verification Token", type = "text", desc = "飞书开放平台「事件订阅」页的校验令牌，用于回调验签", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null },
+                new { key = "FeishuWhitelist", label = "飞书通道白名单", type = "text", desc = "填飞书 chat_id 或 open_id，逗号分隔；留空 = 不响应；填 * = 全量放行", step = (string?)null, options = (string[]?)null, secret_name = (string?)null, secret_flag = (string?)null }
             }
         },
         new
