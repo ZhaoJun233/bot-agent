@@ -56,9 +56,9 @@ else
 fi
 
 # 兼容映射标准 .env 变量到 QQCHAT_* 环境变量
-export QQCHAT_BASE_URL="${QQCHAT_BASE_URL:-${MODEL_BASE_URL:-https://api.openai.com/v1}}"
+export QQCHAT_BASE_URL="${QQCHAT_BASE_URL:-${MODEL_BASE_URL:-}}"
 export QQCHAT_API_KEY="${QQCHAT_API_KEY:-${MODEL_API_KEY:-}}"
-export QQCHAT_MODEL="${QQCHAT_MODEL:-${MODEL_NAME:-gpt-4o-mini}}"
+export QQCHAT_MODEL="${QQCHAT_MODEL:-${MODEL_NAME:-}}"
 export QQCHAT_MAX_TOKENS="${QQCHAT_MAX_TOKENS:-${MAX_TOKENS:-2048}}"
 
 export QQCHAT_ONEBOT_PROTOCOL="${QQCHAT_ONEBOT_PROTOCOL:-${ONEBOT_PROTOCOL:-ForwardWebSocket}}"

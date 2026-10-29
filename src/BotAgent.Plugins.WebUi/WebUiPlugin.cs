@@ -474,7 +474,23 @@ public sealed class WebUiPlugin : IBotPlugin
             // 会话窗口/定时器这些派生状态。绕过它就会出现"保存成功但什么都没变"。
             if (_hotReload != null)
             {
-                _hotReload.ApplyRuntimeSettings(target => MergePersistable(target, updated));
+                _hotReload.ApplyRuntimeSettings(target =>
+                {
+                    MergePersistable(target, updated);
+
+                    // 面板保存过 = 用户的最新意图。把端点与模型名标成「面板覆盖」状态，
+                    // 否则下次启动时 .env / start.sh 里的种子值会把它们盖回去 ——
+                    // 症状就是「面板改成 deepseek，一重启又变回 openai 默认值」。
+                    if (!string.IsNullOrWhiteSpace(updated.ModelBaseUrl))
+                    {
+                        target.ModelBaseUrlOverride = updated.ModelBaseUrl.Trim();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(updated.Model))
+                    {
+                        target.ModelOverride = updated.Model.Trim();
+                    }
+                });
                 _context?.Log("[Web] 全局参数已通过控制台更新并触发全量热重载。");
                 await WriteJsonAsync(resp, 200, new { ok = true, degraded = false });
             }
