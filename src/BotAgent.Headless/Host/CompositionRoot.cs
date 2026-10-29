@@ -458,17 +458,17 @@ internal static class CompositionRoot
         adapters.Add(gwAdapter);
         messengers.Add(gwAdapter);
 
-        if (official is not null)
-        {
-            var offAdapter = new QqChatSourcePlatformAdapter(
-                official,
-                new PlatformContext(PlatformId.QqOfficial, AccountScope.Legacy),
-                PlatformCapabilities.QqOfficial,
-                "QQ官方",
-                "官方");
-            adapters.Add(offAdapter);
-            messengers.Add(offAdapter);
-        }
+        // 官方通道**恒注册**，且 adapter 指向可交换门面而不是装配期那个具体实例 ——
+        // 否则热切换换了新网关后，注册表快照里读到的还是旧实例的连接状态，
+        // 面板矩阵会一直显示「未配置 / 未连接」，与实际连接情况相反。
+        var offAdapter = new QqChatSourcePlatformAdapter(
+            officialFacade,
+            new PlatformContext(PlatformId.QqOfficial, AccountScope.Legacy),
+            PlatformCapabilities.QqOfficial,
+            "QQ官方",
+            "官方");
+        adapters.Add(offAdapter);
+        messengers.Add(offAdapter);
 
         if (local is not null)
         {
