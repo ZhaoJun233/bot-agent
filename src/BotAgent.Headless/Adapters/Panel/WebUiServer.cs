@@ -37,8 +37,8 @@ namespace BotAgent.Adapters.Panel;
 /// <summary>
 /// Web 面板 + 健康检查服务（复用 in-box HttpListener，不引入 ASP.NET，保持镜像体积）。
 ///
-///   面板      GET  /                       会话列表 / 聊天气泡 / 设置（自带 Web 面板）
-///   静态      GET  /app.css  /app.js
+///   面板      旧内置页面已移除（S6）：前端只有 src/web 的 Vue 面板，由 Caddy 以 /web/ 提供；
+///             宿主只留 API 与健康检查，GET / 不再返回页面。
 ///   健康      GET  /healthz               存活（docker HEALTHCHECK）
 ///             GET  /readyz                就绪（已连协议端）
 ///             GET  /status                状态 JSON（兼容原接口）
@@ -385,9 +385,7 @@ public sealed partial class WebUiServer : IDisposable
                 path.Equals("/metrics", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/status", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
-                (method == "GET" && (path == "/" || path == "/app.css" || path == "/app.js" ||
-                    path == "/trace.css" || path == "/trace.js" || path == "/dash.js" || path == "/favicon.ico" ||
-                    path.Equals("/playground", StringComparison.OrdinalIgnoreCase) || path.Equals("/playground.html", StringComparison.OrdinalIgnoreCase)));
+                (method == "GET" && path == "/favicon.ico");
             if (!publicPath && !(path.Equals("/api/auth/change-password", StringComparison.OrdinalIgnoreCase) && HasPendingSession(context)))
             {
                 if (!IsAuthorized(context))
@@ -825,23 +823,6 @@ public sealed partial class WebUiServer : IDisposable
            (value.Equals("1", StringComparison.Ordinal) ||
             value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
             value.Equals("yes", StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>读取发布目录的静态资源（wwwroot/*）；缺失时只影响旧页面，不影响 API/健康/ZBA。</summary>
-    private static async Task WriteAssetAsync(HttpListenerContext context, string fileName, string contentType)
-    {
-        // 静态文件提供协商缓存
-        context.Response.Headers["Cache-Control"] = "no-cache, must-revalidate";
-
-        var bytes = PanelAssets.Read(fileName);
-        if (bytes is null)
-        {
-            var message = Encoding.UTF8.GetBytes($"asset not found: {fileName}");
-            await WriteBytesAsync(context, 404, "text/plain; charset=utf-8", message);
-            return;
-        }
-
-        await WriteBytesAsync(context, 200, contentType, bytes);
-    }
 
     private static async Task WriteJsonAsync(HttpListenerContext context, int status, JsonNode payload)
         => await WriteBytesAsync(context, status, "application/json; charset=utf-8",

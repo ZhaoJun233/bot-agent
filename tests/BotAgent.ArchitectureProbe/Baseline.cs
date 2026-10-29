@@ -123,8 +123,6 @@ internal static class Baseline
     public static readonly IReadOnlyList<string> PanelExemptFiles = new[]
     {
         "src/BotAgent.Headless/Adapters/Panel/PanelDeploy.cs",
-        // Wave5：静态资源从嵌入改为发布目录读取；这是交付适配，不是面板编排。
-        "src/BotAgent.Headless/Adapters/Panel/PanelAssets.cs",
     };
 
     /// <summary>R5：面板（除例外文件外）的 SQL 字面量处数 —— 恒为 0，别让它长出来。</summary>
@@ -199,8 +197,9 @@ internal static class Baseline
     /// Wave5：工作树起点 59；PanelDeploy 合并一次 File.Exists（-1）+ PanelAssets 静态资源读取（+1）净 -1 → 58。
     /// W5-G1：事件序号高水位持久化（读、临时写、move）净 +3 → 61；只存一个整数，不存事件内容。
     /// HEAD 的 62 是未含 Wave1–4 迁移的基线，不能与工作树 61 当成同一 diff。
+    /// S6：删除旧面板静态资源（wwwroot + PanelAssets 的 File.ReadAllBytes）→ 61 降为 60。
     /// </summary>
-    public const int FileIoTotal = 61;
+    public const int FileIoTotal = 60;
 
     // 逐文件迁移角色映射，不是新工程目录白名单。旧副本仍扫描、仍计入全局总数。
     // 前 21 项原位于 Headless/Adapters/Persistence；OfficialIdMap 是已迁出的同一旧持久化类型。

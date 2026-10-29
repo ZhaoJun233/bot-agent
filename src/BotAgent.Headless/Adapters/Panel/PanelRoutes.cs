@@ -75,16 +75,9 @@ public sealed partial class WebUiServer
     private IReadOnlyList<PanelRoute> BuildRoutes() => new PanelRoute[]
     {
         // ─────────── 静态资源 ───────────
-        new("*", PanelMatch.ExactFile, "", (r) => WriteAssetAsync(r.Context, "index.html", "text/html; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/playground", (r) => WriteAssetAsync(r.Context, "playground.html", "text/html; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/playground.html", (r) => WriteAssetAsync(r.Context, "playground.html", "text/html; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/app.css", (r) => WriteAssetAsync(r.Context, "app.css", "text/css; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/app.js", (r) => WriteAssetAsync(r.Context, "app.js", "application/javascript; charset=utf-8")),
-        // 追踪页（批次 H）：只读页面的脚本与样式 —— 与 app.js/app.css 同一套路（嵌进程序集，不引 CDN）
-        new("*", PanelMatch.ExactFile, "/trace.js", (r) => WriteAssetAsync(r.Context, "trace.js", "application/javascript; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/trace.css", (r) => WriteAssetAsync(r.Context, "trace.css", "text/css; charset=utf-8")),
-        // 仪表盘（批次 J）：与追踪页同一套路（同一份样式文件，脚本各一份）
-        new("*", PanelMatch.ExactFile, "/dash.js", (r) => WriteAssetAsync(r.Context, "dash.js", "application/javascript; charset=utf-8")),
+        // 旧面板（wwwroot/index.html + app.js 等）已随 S6 删除：面板前端只有 src/web 的 Vue 面板，
+        // 由 Caddy 从 /var/www/botagent-web 以 /web/ 前缀提供。宿主不再内置任何页面，
+        // 这里只保留 favicon 的空响应（浏览器会无条件请求它）。
         new("*", PanelMatch.ExactFile, "/favicon.ico", (r) => WriteBytesAsync(r.Context, 204, "image/x-icon", Array.Empty<byte>())),
 
         new("GET", PanelMatch.Exact, "/api/auth/status", (r) => HandleAuthStatusAsync(r.Context)),

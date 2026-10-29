@@ -24,15 +24,6 @@
   </PropertyGroup>
 
   <!--
-    Wave5：Web 静态资源不再嵌入程序集，改为随发布产物复制到 wwwroot/。
-    后端启动、API、健康检查、配置保存与 Agent 执行都不依赖这些文件；
-    资源缺失时只有旧页面 404。两个 agent 桥脚本仍按原方式嵌入。
-  -->
-  <ItemGroup>
-    <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <!--
     两个"到处都要用"的适配器命名空间，声明成全局 using（与 ImplicitUsings 的做法一致）：
       · Adapters/Time  —— 时间的进程内入口 Clock（IClock 的唯一实现在那里）；
       · Adapters/Net   —— 出网端口 IHttpFetcher（socket 的唯一构造点在那里）。

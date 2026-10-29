@@ -317,15 +317,11 @@ public static partial class Program
                 Check(phase.Name + ": legacy row retained", StoredState().Secret == Hash(storedSecret), "stored hash equality only");
                 if (phase.Name == "stored ignored")
                 {
-                    var (scriptCode, scriptBody) = await PanelGetAsync(panel + "/app.js", panelToken);
-                    Check("real host serves the credential-free script", scriptCode == 200
-                        && scriptBody.Contains("officialSecretStatus", StringComparison.Ordinal)
-                        && !scriptBody.Contains("setOfficialAppSecret", StringComparison.Ordinal)
-                        && !scriptBody.Contains("officialSecretMasked", StringComparison.Ordinal), "static asset shape only");
-                    var (pageCode, pageBody) = await PanelGetAsync(panel + "/", panelToken);
-                    Check("real host serves the status-only official secret control", pageCode == 200
-                        && pageBody.Contains("id=\"officialSecretStatus\"", StringComparison.Ordinal)
-                        && !pageBody.Contains("id=\"setOfficialAppSecret\"", StringComparison.Ordinal), "static control ids only");
+                    // S6：旧面板页面已删除，宿主不再提供 /app.js 与 /；隐私保证改由
+                    // ① 设置 schema（不下发 secret 字段）与 ② 后端拒绝写入 来证明，见下面的 forbidden requests。
+                    var (pageCode, _) = await PanelGetAsync(panel + "/", panelToken);
+                    Check("★ 旧面板页面已移除（S6）：宿主不再返回内置 HTML", pageCode == 404,
+                        "status only; 面板前端改由 Caddy 的 /web/ 提供");
                     var attempts = new[]
                     {
                         "{\"officialAppSecret\":\"" + submittedSecret + "\",\"aiDesire\":37}",

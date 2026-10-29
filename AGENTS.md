@@ -69,7 +69,8 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs                       # 面板冒烟（无浏览器）
+# 面板前端在 src/web（Vue）；旧的 wwwroot/FrontendProbe 已随 S6 删除，改跑 web 的 typecheck/unit/e2e
+(cd src/web && npm run typecheck && npm run test:unit)
 BOTAGENT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 # 规范名优先，旧 QQCHAT_IT_ONLY 兼容；场景内的行为变量照旧用 QQCHAT_*
 # 结构护栏（只读源码，不连库不起进程）：基线在 ArchitectureProbe/Baseline.cs

@@ -64,13 +64,16 @@ public static partial class Program
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         var root = $"http://127.0.0.1:{panelPort}/zba/v1";
 
-        var page = await http.GetAsync($"http://127.0.0.1:{panelPort}/");
-        var pageBody = await page.Content.ReadAsStringAsync();
-        Check("★ 静态资源从发布目录提供（不再嵌入程序集）",
-            page.IsSuccessStatusCode && pageBody.Contains("<html", StringComparison.OrdinalIgnoreCase),
-            ((int)page.StatusCode).ToString());
-        var asset = await http.GetAsync($"http://127.0.0.1:{panelPort}/app.js");
-        Check("静态脚本仍可读", asset.IsSuccessStatusCode, ((int)asset.StatusCode).ToString());
+        // S6：旧面板（wwwroot）已整体删除，宿主不再内置页面；面板前端只由 Caddy 的 /web/ 提供。
+        // 这里钉住"不再回页面"，避免以后有人顺手把内置页面加回来。
+        // 未认证时连 401 都在所难免（/ 已不在免鉴权白名单），所以带令牌再验一遍真实状态。
+        var anonPage = await http.GetAsync($"http://127.0.0.1:{panelPort}/");
+        Check("★ 未认证的 / 直接 401（不再回页面，S6）", anonPage.StatusCode == HttpStatusCode.Unauthorized,
+            ((int)anonPage.StatusCode).ToString());
+        var page = await PanelGetAsync($"http://127.0.0.1:{panelPort}/");
+        Check("★ 宿主不再内置旧面板页面（S6）", page.Status == 404, page.Status.ToString());
+        var asset = await PanelGetAsync($"http://127.0.0.1:{panelPort}/app.js");
+        Check("旧面板脚本已移除（S6）", asset.Status == 404, asset.Status.ToString());
 
         var protectedApi = await http.GetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 旧面板无密码但配令牌时不再免密（Issue #78）",

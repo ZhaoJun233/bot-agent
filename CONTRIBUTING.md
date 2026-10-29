@@ -32,7 +32,7 @@ dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release
 dotnet run --project tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj -c Release
 dotnet run --project tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj -c Release
 dotnet run --project tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs
+(cd src/web && npm run typecheck && npm run test:unit)   # panel UI checks (legacy FrontendProbe retired in S6)
 dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 ```

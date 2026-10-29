@@ -73,12 +73,13 @@ jobs:
         run: |
           dotnet run --project tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj -c Release --no-restore
           python tests/BotAgent.ServerFilesProbe/test_server_files.py
-      - name: Synthetic persistence, resilience and frontend probes
+      - name: Synthetic persistence and resilience probes
         run: |
           dotnet run --project tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj -c Release --no-restore
-          node tests/BotAgent.FrontendProbe/probe.mjs
+          # S6：旧面板（src/BotAgent.Headless/wwwroot）已删除，FrontendProbe 随之退役；
+          # 面板前端由 src/web 的 Vue 工程覆盖（web / e2e 两个 job）。
       - name: Deterministic pipeline evaluation
         run: |
           dotnet run --project tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj -c Release --no-restore

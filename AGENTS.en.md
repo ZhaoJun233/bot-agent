@@ -67,7 +67,8 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs                       # panel smoke test (no browser)
+# Panel UI lives in src/web (Vue); the legacy wwwroot/FrontendProbe retired with S6 — use web checks
+(cd src/web && npm run typecheck && npm run test:unit)
 QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 # structural guardrails (read source only, no database, no process): baseline lives in ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
