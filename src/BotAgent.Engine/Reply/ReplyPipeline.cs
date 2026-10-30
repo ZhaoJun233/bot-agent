@@ -71,7 +71,8 @@ public sealed partial class ReplyPipeline
     /// <summary>决策轨迹（批次 C）：一轮一条，只有形状 —— 见 <see cref="TurnTraceStore" /> 的注释。</summary>
     private readonly TurnTraceStore _traces;
     private readonly IProtocolRiskBackoff? _riskBackoff;
-    private readonly ITenantQuotaLedger? _quotas;
+    private readonly ITokenUsageRecorder? _usage;
+    private readonly PluginReplyPolicies? _replyPolicies;
     private readonly IPlatformPolicyResolver _platformPolicies;
     private readonly IWebhookDedupStore? _inboundDedup;
     private readonly PluginGate? _plugins;
@@ -106,11 +107,12 @@ public sealed partial class ReplyPipeline
         ReplyHooks hooks,
         TurnTraceStore traces,
         IProtocolRiskBackoff? riskBackoff = null,
-        ITenantQuotaLedger? quotas = null,
+        ITokenUsageRecorder? usage = null,
         IPlatformPolicyResolver? platformPolicies = null,
         IWebhookDedupStore? inboundDedup = null,
         PluginGate? plugins = null,
-        BackgroundEvaluatorQueue? background = null)
+        BackgroundEvaluatorQueue? background = null,
+        PluginReplyPolicies? replyPolicies = null)
     {
         _box = box;
         _source = source;
@@ -136,7 +138,8 @@ public sealed partial class ReplyPipeline
         _hooks = hooks;
         _traces = traces;
         _riskBackoff = riskBackoff;
-        _quotas = quotas;
+        _usage = usage;
+        _replyPolicies = replyPolicies;
         _platformPolicies = platformPolicies ?? PlatformPolicyResolver.ForSettings(box);
         _inboundDedup = inboundDedup;
         _plugins = plugins;
@@ -1138,12 +1141,12 @@ public sealed partial class ReplyPipeline
             return;
         }
 
-        if (_quotas?.IsEnergySaving(conversation.SourceKey) == true &&
-            (proactive || (triggerMessageId is not long directMentionId ||
-             conversation.Messages.FirstOrDefault(m => m.QqMessageId == directMentionId)?.MentionedBot != true)))
+        var policyContext = new BotAgent.Domain.Plugins.ReplyPolicyContext(conversation.SourceKey, proactive,
+            triggerMessageId is long directMentionId &&
+            conversation.Messages.FirstOrDefault(m => m.QqMessageId == directMentionId)?.MentionedBot == true);
+        if (_replyPolicies?.BlockReason(policyContext) is { } blockReason)
         {
-            _hooks.Log($"[配额] 租户已达到当日 Token 配额上限，进入节能静默: {conversation.Name}");
-            _traces.Node(conversation.SourceKey, TurnNodeKind.Participation, "silent", reasonCode: "quota_energy_saving");
+            _traces.Node(conversation.SourceKey, TurnNodeKind.Participation, "silent", reasonCode: blockReason);
             return;
         }
 
@@ -1182,7 +1185,7 @@ public sealed partial class ReplyPipeline
                 result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2),
                 naturalAgent ? NaturalAgentPrompt.Hint : null);
             result = outcome.Result;
-            _quotas?.RecordUsage(conversation.SourceKey, result.PromptTokens, result.CompletionTokens);
+            _usage?.RecordUsage(conversation.SourceKey, result.PromptTokens, result.CompletionTokens);
         }
         catch (Exception ex)
         {

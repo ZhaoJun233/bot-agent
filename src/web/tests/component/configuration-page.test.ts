@@ -39,6 +39,8 @@ function mountPage(overrides: Partial<{
   client: ZbaClient
   mode: 'read' | 'admin'
   writesEnabled: boolean
+  scope: string
+  active: boolean
 }> = {}) {
   const wrapper = mount(ConfigurationPage, {
     props: {
@@ -99,25 +101,68 @@ async function expectCleanProviderDraft(wrapper: ReturnType<typeof mountPage>, n
 }
 
 describe('ConfigurationPage', () => {
-  it('渲染 6 个分区（语音/音乐已移到插件设置）、字段行与 6 个秘密槽位', async () => {
+  it.each([
+    ['basic', 'lock'], ['basic', 'downgrade'], ['models', 'lock'], ['models', 'downgrade']
+  ] as const)('隐藏的 %s 草稿只能通过明确的 %s 确认保存', async (scope, reason) => {
+    const requests: ZbaConfigurationSaveRequest[] = []
+    const wrapper = mountPage({ mode: 'admin', scope, client: clientWith(editableFixture, {
+      saveConfiguration: async request => { requests.push(request); return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt } }
+    }) })
+    await flushPromises()
+    const key = scope === 'basic' ? 'botPersona' : 'model'
+    await wrapper.get('[data-testid="config-field-' + key + '"] input').setValue('Synthetic retained draft')
+    await wrapper.setProps({ active: false }); await flushPromises()
+    // 隐藏普通保存入口（包括直接分派事件）不能绕过写保护。
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    expect(requests).toHaveLength(0)
+    const leaving = wrapper.vm.requestLeave(reason); await flushPromises()
+    const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
+    expect(dialog.textContent).not.toContain('标准模式下不能保存')
+    const saveButton = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')!
+    expect(saveButton.disabled).toBe(false)
+    expect(requests).toHaveLength(0)
+    saveButton.click(); await flushPromises()
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.changes).toEqual({ [scope === 'basic' ? 'behavior' : 'model']: { [key]: { kind: 1, value: 'Synthetic retained draft' } } })
+    await expect(leaving).resolves.toBe(true)
+  })
+
+  it.each(['mode', 'writesEnabled'] as const)('离开确认期间 %s 权限失效仍不能保存隐藏草稿', async permission => {
+    let writes = 0
+    const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, {
+      saveConfiguration: async () => { writes += 1; return { code: 0, errors: [], replayed: false, receipt, currentVersion: '2' } }
+    }) })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic draft')
+    await wrapper.setProps({ active: false })
+    const leaving = wrapper.vm.requestLeave('lock'); await flushPromises()
+    await wrapper.setProps(permission === 'mode' ? { mode: 'read' } : { writesEnabled: false })
+    const button = document.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')!
+    expect(button.disabled).toBe(true)
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flushPromises()
+    expect(writes).toBe(0)
+    document.querySelector<HTMLButtonElement>('[data-testid="config-leave-stay"]')!.click()
+    await expect(leaving).resolves.toBe(false)
+  })
+  it('基础配置只展示必要字段，不含其它能力和秘密入口', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
     expect(wrapper.find('[data-testid="configuration"]').exists()).toBe(true)
-    expect(wrapper.findAll('.config-nav-item')).toHaveLength(6)
+    expect(wrapper.findAll('.config-nav-item')).toHaveLength(1)
     expect(wrapper.find('[data-testid="config-nav-voice"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="config-nav-music"]').exists()).toBe(false)
     // moodTtlSeconds 归「氛围与心情」插件，配置页不再重复展示
-    expect(wrapper.findAll('[data-testid="config-fields"] tbody tr')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="config-fields"] tbody tr')).toHaveLength(1)
     expect(wrapper.find('[data-testid="config-field-moodTtlSeconds"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('示例人格')
-    expect(wrapper.findAll('[data-testid="config-secrets"] li')).toHaveLength(6)
+    expect(wrapper.find('[data-testid="config-secrets"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('版本')
     expect(wrapper.find('[data-testid="config-readonly"]').exists()).toBe(true)
   })
 
-  it('切换分区后显示对应字段，已登记分区显示供应商并指向插件设置', async () => {
-    const wrapper = mountPage()
+  it('模型能力保留模型字段和已登记供应商编辑', async () => {
+    const wrapper = mountPage({ scope: 'models' })
     await flushPromises()
 
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
@@ -125,7 +170,7 @@ describe('ConfigurationPage', () => {
 
     await wrapper.get('[data-testid="config-nav-registered"]').trigger('click')
     expect(wrapper.find('[data-testid="config-plugins"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="config-open-capabilities"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="config-open-capabilities"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="config-providers"] tbody tr')).toHaveLength(1)
     expect(wrapper.text()).toContain('provider-sample')
   })
@@ -430,11 +475,11 @@ describe('ConfigurationPage', () => {
   })
 
   it('离开配置视图会清空秘密替换输入，但保留普通字段草稿', async () => {
-    const wrapper = mountPage({ mode: 'admin' })
+    const wrapper = mountPage({ mode: 'admin', scope: 'models' })
     await flushPromises()
     const page = wrapper.vm as unknown as { discardSecretsOnLeave: () => void }
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('字段草稿')
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('字段草稿')
     await wrapper.get('[data-testid="config-secrets"] [data-testid="secret-replace"]').trigger('click')
     await wrapper.get('[data-testid="config-secrets"] input[type="password"]').setValue('sk-synthetic-leave-7c41')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
@@ -443,7 +488,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="config-secrets"] input[type="password"]')).toHaveLength(0)
-    expect((wrapper.get('[data-testid="config-field-botPersona"] input').element as HTMLInputElement).value).toBe('字段草稿')
+    expect((wrapper.get('[data-testid="config-field-model"] input').element as HTMLInputElement).value).toBe('字段草稿')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
@@ -453,7 +498,7 @@ describe('ConfigurationPage', () => {
         throw new ZbaNetworkError(new Error('offline'))
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
     const page = wrapper.vm as unknown as { discardSecretsOnLeave: () => void }
 
@@ -671,10 +716,10 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('改过的人格')
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('改过的人格')
     await renameProvider(wrapper, 'Synthetic Provider A2')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
 
@@ -683,7 +728,7 @@ describe('ConfigurationPage', () => {
 
     expect(saveRequests).toHaveLength(1)
     const request = saveRequests[0]!
-    expect(request.changes.behavior?.botPersona).toEqual({ kind: 1, value: '改过的人格' })
+    expect(request.changes.model?.model).toEqual({ kind: 1, value: '改过的人格' })
     expect(request.changes.registered?.providers).toHaveLength(1)
     const edit = request.changes.registered!.providers[0]!
     expect(edit.key).toBe('provider-sample')
@@ -717,7 +762,7 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -758,7 +803,7 @@ describe('ConfigurationPage', () => {
         return { code: 0, receipt: { ...receipt, key, observedVersion: '1', committedVersion: '2' } }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -792,7 +837,7 @@ describe('ConfigurationPage', () => {
         return { code: 14 }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -837,7 +882,7 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -884,15 +929,15 @@ describe('ConfigurationPage', () => {
       },
       findConfiguration: async () => ({ code: 0, receipt: confirmed })
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
     await renameProvider(wrapper, 'Synthetic converged B')
     current = providerSnapshot('Synthetic converged B', '2')
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
-    await wrapper.get('[data-testid="config-nav-behavior"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic ordinary edit 1')
+    await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit 1')
     await saveDraft(wrapper)
     expect(requests[0]!.changes.registered?.providers ?? []).toHaveLength(0)
     if (completion === 'find') {
@@ -907,8 +952,8 @@ describe('ConfigurationPage', () => {
     current = providerSnapshot('Synthetic later C', '4')
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-testid="config-nav-behavior"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic ordinary edit 2')
+    await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit 2')
     await saveDraft(wrapper)
     expect(requests).toHaveLength(2)
     expect(requests[1]!.changes.registered?.providers ?? []).toHaveLength(0)
@@ -918,7 +963,7 @@ describe('ConfigurationPage', () => {
   it.each(['lock', 'downgrade'] as const)('SR-NAME-02 同值草稿保存并 %s 无需空请求即可完成离开', async (reason) => {
     let current = providerSnapshot()
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => { writes += 1; throw new Error('No empty write expected') }
     }) })
@@ -946,7 +991,7 @@ describe('ConfigurationPage', () => {
   it('SR-NAME-02 纯同值草稿显式保存时就地结束，不发空请求也不伪造回执', async () => {
     let current = providerSnapshot()
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => { writes += 1; throw new Error('No empty write expected') }
     }) })
@@ -968,7 +1013,7 @@ describe('ConfigurationPage', () => {
 
   it.each([3, 4, 12] as const)('SR-NAME-02 保存 code %s 不结束同值名称草稿', async (code) => {
     let current = providerSnapshot()
-    const wrapper = mountPage({ mode: 'admin', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => ({ code, replayed: false, currentVersion: '2', errors: [] })
     }) })
@@ -977,8 +1022,8 @@ describe('ConfigurationPage', () => {
     current = providerSnapshot('Synthetic converged B', '2')
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-testid="config-nav-behavior"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic ordinary edit')
+    await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit')
     await saveDraft(wrapper)
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
   })
@@ -988,7 +1033,7 @@ describe('ConfigurationPage', () => {
     let release!: () => void
     const delayed = new Promise<void>((resolve) => { release = resolve })
     const requests: ZbaConfigurationSaveRequest[] = []
-    const wrapper = mountPage({ mode: 'admin', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async (request) => {
         requests.push(request)
@@ -1029,7 +1074,7 @@ describe('ConfigurationPage', () => {
         throw new Error('会话结束时不得再发写请求')
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1119,10 +1164,10 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
   })
 
   it('秘密槽位只给元数据：不回显值，也没有 QQ 官方 Secret 的写入口', async () => {
-    const wrapper = mountPage({ mode: 'admin' })
+    const wrapper = mountPage({ mode: 'admin', scope: 'models' })
     await flushPromises()
     const secrets = wrapper.get('[data-testid="config-secrets"]')
-    expect(secrets.findAll('li')).toHaveLength(6)
+    expect(secrets.findAll('li')).toHaveLength(1)
     expect(secrets.text()).not.toMatch(/官方|official/i)
     for (const input of secrets.findAll('input')) {
       expect(input.attributes('type')).toBe('password')

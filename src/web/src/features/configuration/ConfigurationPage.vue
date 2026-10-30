@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import {
   ZbaClient,
   ZbaNetworkError,
@@ -37,13 +37,18 @@ import {
   type SecretDrafts
 } from './draft'
 import { fieldLabel } from './field-labels'
-import { pluginOwnedPaths, pluginOwnedSections } from '../capabilities/plugin-settings'
+import { configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   client: ZbaClient
   mode: 'read' | 'admin'
   writesEnabled: boolean
-}>()
+  scope?: string
+  active?: boolean
+}>(), { scope: 'basic', active: true })
+
+const editorId = useId()
+const domId = (key: string): string => editorId + '-' + key
 
 const emit = defineEmits<{
   'enable-admin': []
@@ -63,10 +68,14 @@ const sectionMeta = [
 ] as const
 
 /** 插件相关设置挪到「能力」页的插件卡片上；整个分区归插件的不再出现在导航里。 */
-const visibleSections = sectionMeta.filter((section) => !pluginOwnedSections.includes(section.key as never))
-
+const capability = computed(() => configurationFor(props.scope))
+const editorTitle = computed(() => props.scope === 'basic' ? '基础配置' : capability.value?.title ?? '能力配置')
+const visibleSections = computed(() => sectionMeta.filter(section => section.key === 'registered'
+  ? capability.value?.providers === true
+  : props.scope === 'basic' ? section.key === 'behavior' : capability.value?.sections.includes(section.key) === true))
+const visibleSecrets = computed(() => (snapshot.value?.secrets ?? []).filter(secret => capability.value?.secrets.some(slot => slot === secret.slot)))
 function ownedByPlugin(section: string, key: string): boolean {
-  return pluginOwnedSections.includes(section as never) || pluginOwnedPaths.has(section + '.' + key)
+  return !ownsConfiguration(props.scope, section, key)
 }
 
 type SectionKey = typeof sectionMeta[number]['key']
@@ -76,7 +85,7 @@ const snapshot = ref<ZbaConfigurationReadResult | null>(null)
 const loading = ref(false)
 const error = ref<UiError | null>(null)
 const loadedAt = ref<string | null>(null)
-const active = ref<SectionKey>('behavior')
+const active = ref<SectionKey>((visibleSections.value[0]?.key ?? 'behavior') as SectionKey)
 
 const draft = ref<DraftMap>({})
 /**
@@ -120,7 +129,7 @@ const conflictKeys = ref<string[]>([])
 const pendingKey = ref<string | null>(null)
 const findBusy = ref(false)
 
-type LeaveReason = 'lock' | 'downgrade'
+type LeaveReason = 'lock' | 'downgrade' | 'close'
 const leavePrompt = ref<LeaveReason | null>(null)
 const leaveMessage = ref<string | null>(null)
 const leaveBusy = ref(false)
@@ -152,11 +161,11 @@ const counts = computed<Record<SectionKey, number>>(() => {
   for (const key of ['behavior', 'model', 'agent', 'platform', 'voice', 'music', 'reporting'] as const) {
     result[key] = Object.keys(view[key]).filter((field) => !ownedByPlugin(key, field)).length
   }
-  result.registered = view.registered.providers.length
+  result.registered = capability.value?.providers ? view.registered.providers.length : 0
   return result
 })
 
-const fieldCount = computed(() => snapshot.value?.fields.length ?? 0)
+const fieldCount = computed(() => Object.values(counts.value).reduce((sum, count) => sum + count, 0))
 
 const registered = computed(() => snapshot.value?.view?.registered ?? null)
 
@@ -176,7 +185,10 @@ const dirtyCount = computed(() =>
   + Object.keys(providerNames.value).length
   + Object.values(secretDrafts.value).filter((action) => action !== undefined && action.kind !== 'keep').length)
 
-const canWrite = computed(() => props.mode === 'admin' && props.writesEnabled)
+const hasWritePermission = computed(() => props.mode === 'admin' && props.writesEnabled)
+const canWrite = computed(() => props.active && hasWritePermission.value)
+// Only an explicit leave confirmation may save a retained draft while its editor is hidden.
+const canSaveOnLeave = computed(() => leavePrompt.value !== null && hasWritePermission.value)
 const busy = computed(() => loading.value || phase.value === 'saving')
 /** 提交结果未知时冻结整批内容：既不能改草稿，也不能放弃核对入口。 */
 const unconfirmed = computed(() => phase.value === 'unconfirmed')
@@ -196,14 +208,14 @@ function expectedVersion(): string {
   return (draftBase.value ?? snapshot.value)?.version ?? ''
 }
 
-const leaveTitle = computed(() => leavePrompt.value === 'lock'
+const leaveTitle = computed(() => leavePrompt.value === 'close' ? '关闭前确认未保存修改' : leavePrompt.value === 'lock'
   ? '锁定前确认未保存修改'
   : '退出管理员模式前确认未保存修改')
-const leaveCopy = computed(() => leavePrompt.value === 'lock'
+const leaveCopy = computed(() => leavePrompt.value === 'close' ? '关闭能力设置前，可以保存修改或明确放弃草稿。' : leavePrompt.value === 'lock'
   ? '锁定会结束当前会话并清除内存中的草稿与秘密输入。'
   : '退出管理员模式后写入口关闭；草稿会保留，可以重新进入管理员模式后继续。')
-const leaveSaveLabel = computed(() => leavePrompt.value === 'lock' ? '保存并锁定' : '保存并退出管理员')
-const leaveDiscardLabel = computed(() => leavePrompt.value === 'lock' ? '放弃并锁定' : '放弃并退出管理员')
+const leaveSaveLabel = computed(() => leavePrompt.value === 'close' ? '保存并关闭' : leavePrompt.value === 'lock' ? '保存并锁定' : '保存并退出管理员')
+const leaveDiscardLabel = computed(() => leavePrompt.value === 'close' ? '放弃并关闭' : leavePrompt.value === 'lock' ? '放弃并锁定' : '放弃并退出管理员')
 
 const formatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
@@ -350,7 +362,7 @@ function isFieldDirty(section: SectionKey, key: string, field: ZbaReadField): bo
 }
 
 function onFieldInput(section: SectionKey, key: string, raw: string): void {
-  if (inputsLocked.value) return
+  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
   const view = snapshot.value?.view
   if (!view) return
   const field = editableField(view, section as ZbaPatchSectionLike, key)
@@ -366,7 +378,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
 }
 
 function clearField(section: SectionKey, key: string): void {
-  if (inputsLocked.value) return
+  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
   anchorDraft()
   draft.value = { ...draft.value, [fieldPath(section as ZbaPatchSectionLike, key)]: { kind: 'clear' } }
   phase.value = 'idle'
@@ -406,7 +418,7 @@ function secretInputValue(slot: number): string {
 }
 
 function setSecretAction(slot: number, action: SecretAction): void {
-  if (inputsLocked.value) return
+  if (!canWrite.value || inputsLocked.value || !capability.value?.secrets.some(owned => owned === slot)) return
   anchorDraft()
   secretDrafts.value = { ...secretDrafts.value, [slot]: action }
   phase.value = 'idle'
@@ -443,7 +455,7 @@ function buildRequest(): {
 
 /** 供应商改名输入（S4-L1）：只接受真名，不接受脱敏展示串。 */
 function providerNameInput(key: string, raw: string): void {
-  if (inputsLocked.value) return
+  if (!canWrite.value || inputsLocked.value || !capability.value?.providers) return
   anchorDraft()
   const next: ProviderNameDrafts = { ...providerNames.value }
   if (raw === providerNameBaseline(providerField(key))) delete next[key]
@@ -622,7 +634,11 @@ async function validate(): Promise<void> {
 }
 
 async function save(): Promise<'unchanged' | void> {
-  if (!canWrite.value || !snapshot.value) return
+  return commitDraft(false)
+}
+
+async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' | void> {
+  if (!(fromLeaveConfirmation ? canSaveOnLeave.value : canWrite.value) || !snapshot.value) return
   // 单飞：保存中不能再发第二个写请求（包括离开对话框的“保存并离开”）。
   if (phase.value === 'saving') return
   // 结果未知时先核对；冲突时先读取最新基线。两者都不允许再发一次写请求。
@@ -870,10 +886,10 @@ function leaveDiscard(): void {
  * 一个新框的 resolver 都不许碰。
  */
 async function leaveSave(): Promise<void> {
-  if (leaveBusy.value || busy.value || unconfirmed.value || !canWrite.value) return
+  if (leaveBusy.value || busy.value || unconfirmed.value || !canSaveOnLeave.value) return
   const generation = leaveGeneration
   leaveBusy.value = true
-  const outcome = await save()
+  const outcome = await commitDraft(true)
   // 代际变了 = 这个框已经被关掉、甚至被换成了新的一个。
   // 忙碌标记归新框自己管（它可能正在保存），保存结果也不许替它做决定。
   if (generation !== leaveGeneration) return
@@ -985,6 +1001,7 @@ function endSession(): void {
   error.value = null
 }
 
+watch(() => props.active, active => { if (!active) discardSecretsOnLeave() })
 onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   attachScheduler(props.client)
@@ -1011,16 +1028,18 @@ defineExpose({
   requestLeave,
   discardSecretsOnLeave,
   endSession,
-  draftCount: dirtyCount
+  draftCount: dirtyCount,
+  hasUnresolvedIntent: computed(() => phase.value === 'saving' || phase.value === 'unconfirmed')
 })
 </script>
 
 <template>
-  <section class="configuration" data-testid="configuration" aria-labelledby="configuration-title">
+  <section class="configuration" :class="{ 'capability-editor': props.scope !== 'basic' }" data-testid="configuration" :aria-labelledby="domId('configuration-title')">
     <header class="page-heading">
       <div>
-        <p class="eyebrow">配置</p>
-        <h1 id="configuration-title" ref="pageHeading" tabindex="-1">配置快照</h1>
+        <p class="eyebrow">系统管理 / 配置</p>
+        <h1 :id="domId('configuration-title')" ref="pageHeading" tabindex="-1">{{ editorTitle }}</h1>
+        <p class="page-description">{{ capability?.summary ?? '只保留对话总开关、人设、冷却、上下文与并发等基础设置。其它设置在对应能力中管理。' }}</p>
         <p class="subtitle">
           版本 <strong>{{ snapshot?.version ?? '—' }}</strong>
           · 契约 {{ snapshot?.contractRevision ?? '—' }}
@@ -1075,8 +1094,8 @@ defineExpose({
       </button>
     </p>
 
-    <p class="inline-notice" data-testid="config-plugin-moved">
-      语音、点歌、表情包、戳一戳、氛围、人物画像、联网搜索这些插件的设置，已经放到「能力」页对应插件卡片的「设置」里。
+    <p v-if="props.scope === 'basic'" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
+      <span><strong>按能力管理其它设置</strong><br />模型、平台、Agent、报告与插件设置均在对应能力中管理，密钥也随能力配置。</span>
       <button type="button" class="tonal inline-action" data-testid="config-open-capabilities" @click="emit('open-capabilities')">
         去能力页
       </button>
@@ -1084,7 +1103,7 @@ defineExpose({
 
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
-    <ul v-if="fieldErrors.length > 0" id="config-field-errors" class="field-errors" data-testid="config-field-errors" role="alert">
+    <ul v-if="fieldErrors.length > 0" :id="domId('config-field-errors')" class="field-errors" data-testid="config-field-errors" role="alert">
       <li v-for="item in fieldErrors" :key="item">{{ item }}</li>
     </ul>
     <p v-if="validationMessage" class="inline-notice" data-testid="config-validation" role="status">{{ validationMessage }}</p>
@@ -1126,7 +1145,7 @@ defineExpose({
             :data-testid="`config-nav-${section.key}`"
             @click="active = section.key"
           >
-            <span>{{ section.label }}</span>
+            <span class="config-nav-copy"><span>{{ section.label }}</span><small>{{ section.hint }}</small></span>
             <span class="config-count">{{ counts[section.key] }}</span>
           </button>
         </nav>
@@ -1134,18 +1153,18 @@ defineExpose({
         <section
           v-if="active !== 'registered'"
           class="panel config-panel"
-          :aria-labelledby="`config-${active}-title`"
+          :aria-labelledby="`${editorId}-config-${active}-title`"
         >
           <div class="panel-heading">
-            <h2 :id="`config-${active}-title`">{{ activeMeta.label }}</h2>
+            <h2 :id="`${editorId}-config-${active}-title`">{{ editorTitle }}</h2>
             <p>{{ activeMeta.hint }} · {{ activeFields.length }} 个字段</p>
           </div>
-          <p class="config-guide">{{ activeMeta.guide }}</p>
+          <p class="config-guide">{{ capability?.summary ?? '基础设置保存后对新消息生效；具体能力的行为与接入参数请在能力页调整。' }}</p>
           <p v-if="activeFields.length === 0" class="empty-state">该分区没有字段。</p>
-          <div v-else class="table-scroll">
-            <table data-testid="config-fields">
+          <div v-else class="settings-container">
+            <table class="settings-table" role="table" data-testid="config-fields">
               <caption class="sr-only">{{ activeMeta.label }}字段</caption>
-              <thead>
+              <thead class="sr-only">
                 <tr>
                   <th scope="col">字段</th>
                   <th scope="col">当前值 / 编辑</th>
@@ -1154,27 +1173,30 @@ defineExpose({
                   <th scope="col">规则</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody role="rowgroup">
                 <tr
+                  role="row"
                   v-for="item in activeFields"
                   :key="item.key"
                   :class="{ dirty: isFieldDirty(active, item.key, item.field) }"
                   :data-testid="`config-field-${item.key}`"
                 >
-                  <td>
-                    <strong class="config-label">{{ fieldLabel(item.key) }}</strong>
+                  <td class="setting-identity" role="cell">
+                    <label v-if="canWrite && isEditable(item.field)" class="config-label" :for="`${editorId}-config-input-${active}-${item.key}`">{{ fieldLabel(item.key) }}</label>
+                    <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
                     <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
                   </td>
-                  <td class="config-value">
+                  <td class="config-value setting-editor" role="cell">
                     <template v-if="canWrite && isEditable(item.field)">
                       <select
                         v-if="valueKind(item.field) === 'boolean'"
+                        :id="`${editorId}-config-input-${active}-${item.key}`"
                         class="config-input"
                         :value="currentDraftRaw(active, item.key, item.field)"
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
-                        :aria-describedby="fieldInvalid(active, item.key) ? 'config-field-errors' : undefined"
+                        :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
                         :disabled="inputsLocked"
                         @change="onFieldInput(active, item.key, inputValue($event))"
                       >
@@ -1183,12 +1205,13 @@ defineExpose({
                       </select>
                       <input
                         v-else
+                        :id="`${editorId}-config-input-${active}-${item.key}`"
                         class="config-input"
                         :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
                         :value="currentDraftRaw(active, item.key, item.field)"
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
-                        :aria-describedby="fieldInvalid(active, item.key) ? 'config-field-errors' : undefined"
+                        :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
                         :disabled="inputsLocked"
                         @input="onFieldInput(active, item.key, inputValue($event))"
                       />
@@ -1218,16 +1241,19 @@ defineExpose({
                       与对方修改重叠
                     </span>
                   </td>
-                  <td>
+                  <td class="setting-source setting-meta" role="cell">
+                    <span class="meta-label">来源</span>
                     <span>{{ sourceLabel(item.field.effectiveSource) }}</span>
                     <span class="cell-sub">{{ userModeLabel(item.field.userMode) }}</span>
                   </td>
-                  <td>
+                  <td class="setting-apply setting-meta" role="cell">
+                    <span class="meta-label">生效</span>
                     <span class="status-badge" :data-tone="applyTone(item.field.applyState)">
                       {{ applyLabel(item.field.applyState) }}
                     </span>
                   </td>
-                  <td>
+                  <td :id="`${editorId}-config-rule-${active}-${item.key}`" class="setting-rules setting-meta" role="cell">
+                    <span class="meta-label">规则</span>
                     <span>{{ fieldRule(item.field.rule) }}</span>
                     <span class="cell-sub">{{ item.field.visibility === 0 ? '仅概览' : '可读' }}</span>
                   </td>
@@ -1237,20 +1263,20 @@ defineExpose({
           </div>
         </section>
 
-        <section v-else class="panel config-panel" aria-labelledby="config-registered-title">
+        <section v-else class="panel config-panel" :aria-labelledby="domId('config-registered-title')">
           <div class="panel-heading">
-            <h2 id="config-registered-title">模型供应商</h2>
+            <h2 :id="domId('config-registered-title')">模型供应商</h2>
             <p v-if="registered">{{ registered.providers.length }} 个已登记供应商</p>
           </div>
-          <p class="config-guide">{{ activeMeta.guide }}</p>
+          <p class="config-guide">{{ capability?.summary }}</p>
 
           <p v-if="!registered" class="empty-state" data-testid="config-registered-empty">
             快照没有返回已登记信息。
           </p>
           <template v-else>
             <p v-if="registered.providers.length === 0" class="empty-state">没有已登记供应商。</p>
-            <div v-else class="table-scroll">
-              <table data-testid="config-providers">
+            <div v-else class="settings-container">
+              <table class="provider-table" role="table" data-testid="config-providers">
                 <caption class="sr-only">已登记模型供应商</caption>
                 <thead>
                   <tr>
@@ -1264,11 +1290,13 @@ defineExpose({
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="provider in registered.providers" :key="provider.key">
-                    <td><strong>{{ provider.key }}</strong></td>
-                    <td class="config-value">
+                  <tr v-for="provider in registered.providers" :key="provider.key" role="row">
+                    <td class="provider-identity" role="cell"><strong>{{ provider.key }}</strong></td>
+                    <td class="config-value provider-name" role="cell">
+                      <label v-if="canWrite && provider.name.visibility === 2" class="meta-label" :for="`${editorId}-config-provider-input-${provider.key}`">名称</label>
                       <template v-if="canWrite && provider.name.visibility === 2">
                         <input
+                          :id="`${editorId}-config-provider-input-${provider.key}`"
                           class="config-input"
                           type="text"
                           :value="providerNameRaw(provider.key)"
@@ -1282,11 +1310,11 @@ defineExpose({
                       </template>
                       <span v-else :title="valueTitle(provider.name)">{{ formatValue(provider.name) }}</span>
                     </td>
-                    <td class="config-value">{{ formatValue(provider.baseUrl) }}</td>
-                    <td>{{ formatValue(provider.modelName) }}</td>
-                    <td>{{ provider.priority }}</td>
-                    <td>{{ credentialLabels[provider.credential] ?? provider.credential }}</td>
-                    <td>
+                    <td class="config-value provider-url"><span class="meta-label">Base URL</span>{{ formatValue(provider.baseUrl) }}</td>
+                    <td class="provider-model"><span class="meta-label">模型</span>{{ formatValue(provider.modelName) }}</td>
+                    <td class="provider-meta"><span class="meta-label">优先级</span>{{ provider.priority }}</td>
+                    <td class="provider-meta"><span class="meta-label">凭据</span>{{ credentialLabels[provider.credential] ?? provider.credential }}</td>
+                    <td class="provider-meta"><span class="meta-label">运行时</span>
                       <span class="status-badge" :data-tone="applyTone(provider.runtimeApplyState)">
                         {{ applyLabel(provider.runtimeApplyState) }}
                       </span>
@@ -1299,15 +1327,16 @@ defineExpose({
         </section>
       </div>
 
-      <section class="panel" aria-labelledby="config-secrets-title">
+      <section v-if="visibleSecrets.length" class="panel secrets-panel" :aria-labelledby="domId('config-secrets-title')">
         <div class="panel-heading">
-          <h2 id="config-secrets-title">秘密槽位</h2>
+          <h2 :id="domId('config-secrets-title')">秘密槽位</h2>
           <p>只显示是否存在与来源，后端不返回秘密值。</p>
         </div>
         <ul class="secret-list" data-testid="config-secrets">
-          <li v-for="secret in snapshot.secrets" :key="secret.slot">
+          <li v-for="secret in visibleSecrets" :key="secret.slot">
             <div class="secret-head">
-              <span class="secret-slot">{{ secretSlotLabel(secret.slot) }}</span>
+              <label v-if="secretAction(secret.slot)?.kind === 'replace' && canWrite" class="secret-slot" :for="`${editorId}-config-secret-input-${secret.slot}`">{{ secretSlotLabel(secret.slot) }}</label>
+              <span v-else class="secret-slot">{{ secretSlotLabel(secret.slot) }}</span>
               <span class="status-badge" :data-tone="secret.configured ? 'ok' : 'neutral'">
                 {{ secret.configured ? '已配置' : '未配置' }}
               </span>
@@ -1317,6 +1346,7 @@ defineExpose({
               <template v-if="secretAction(secret.slot)?.kind === 'replace'">
                 <input
                   class="config-input"
+                  :id="`${editorId}-config-secret-input-${secret.slot}`"
                   type="password"
                   autocomplete="off"
                   :aria-label="`替换 ${secretSlotLabel(secret.slot)}`"
@@ -1356,9 +1386,9 @@ defineExpose({
         </ul>
       </section>
 
-      <section v-if="receipt" class="panel" aria-labelledby="config-receipt-title" data-testid="config-receipt">
+      <section v-if="receipt" class="panel" :aria-labelledby="domId('config-receipt-title')" data-testid="config-receipt">
         <div class="panel-heading">
-          <h2 id="config-receipt-title">最近一次提交</h2>
+          <h2 :id="domId('config-receipt-title')">最近一次提交</h2>
           <p>
             {{ receipt.decision === 0 ? '有变更' : '无变更' }} ·
             持久化版本 {{ receipt.committedVersion ?? '—' }}
@@ -1415,7 +1445,7 @@ defineExpose({
           <button
             type="button"
             data-testid="config-validate"
-            :disabled="saveBlocked || dirtyCount === 0"
+            :disabled="saveBlocked || dirtyCount === 0 || !canWrite"
             @click="validate"
           >
             校验
@@ -1439,11 +1469,11 @@ defineExpose({
             class="dialog"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="config-leave-title"
+            :aria-labelledby="domId('config-leave-title')"
             data-testid="config-leave-dialog"
             @keydown="onLeaveKeydown"
           >
-            <h2 id="config-leave-title">{{ leaveTitle }}</h2>
+            <h2 :id="domId('config-leave-title')">{{ leaveTitle }}</h2>
             <p class="dialog-copy">
               {{ leaveCopy }}
               当前有 <strong>{{ dirtyCount }}</strong> 项修改。
@@ -1454,7 +1484,7 @@ defineExpose({
             <p v-if="unconfirmed" class="inline-notice warn" data-testid="config-leave-unconfirmed">
               提交结果未知：请先核对回执。核对完成前不能离开或锁定。
             </p>
-            <p v-else-if="!canWrite && hasDraft" class="inline-notice">
+            <p v-else-if="!hasWritePermission && hasDraft" class="inline-notice">
               标准模式下不能保存；可以继续编辑，或明确放弃后再离开。
             </p>
             <p v-if="leaveMessage" class="inline-notice bad" data-testid="config-leave-message">{{ leaveMessage }}</p>
@@ -1471,7 +1501,7 @@ defineExpose({
               <button
                 type="button"
                 data-testid="config-leave-save"
-                :disabled="!canWrite || leaveBusy || busy || unconfirmed"
+                :disabled="!canSaveOnLeave || leaveBusy || busy || unconfirmed"
                 @click="leaveSave"
               >
                 {{ leaveBusy ? '保存中…' : leaveSaveLabel }}
@@ -1492,3 +1522,61 @@ defineExpose({
     </template>
   </section>
 </template>
+
+<style scoped>
+.configuration { display: grid; gap: 20px; min-width: 0; }
+.config-body { min-width: 0; }
+.capability-editor .page-heading .eyebrow, .capability-editor .page-heading h1, .capability-editor .page-description { display: none; }
+.capability-editor .page-heading { margin: 0; border-bottom: 0; padding-bottom: 0; }
+.capability-editor .config-body { display: block; }
+.capability-editor .config-nav { display: flex; flex-wrap: wrap; position: static; gap: 8px; margin-bottom: 16px; }
+.capability-editor .config-nav-item { flex: 1 1 160px; }
+.capability-editor .config-summary { display: none; }
+.config-panel, .settings-container { min-width: 0; }
+.config-nav-copy { display: grid; gap: 5px; }
+.config-nav-copy small { font-size: 11px; color: var(--text-muted); }
+.plugin-notice { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.settings-table, .provider-table { display: block; width: 100%; border: 0; }
+.settings-table tbody, .provider-table tbody { display: block; }
+.settings-table tr { display: grid; grid-template-columns: minmax(160px, .9fr) minmax(200px, 1.2fr); gap: 10px 24px; padding: 22px 0; border-bottom: 1px solid var(--border); }
+.settings-table tr:first-child { padding-top: 4px; }
+.settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
+.settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }
+.setting-identity { grid-column: 1; }
+.setting-editor { grid-column: 2; grid-row: 1 / span 4; }
+.setting-meta { grid-column: 1; color: var(--text-muted); font-size: 12px; }
+.meta-label { display: block; color: var(--text-soft); font-size: 11px; margin-bottom: 5px; }
+.config-input { font-size: 14px; min-height: 42px; }
+.config-label { font-size: 14px; font-weight: 600; }
+.config-key { font-size: 11px; margin-top: 3px; }
+.edit-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.edit-actions button { min-height: 32px; }
+.provider-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.provider-table tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--border); }
+.provider-identity { grid-column: 1 / -1; }
+.provider-name { grid-column: 1 / -1; }
+.provider-url { grid-column: 1 / span 2; }
+.provider-model, .provider-url { overflow-wrap: anywhere; }
+.secret-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.secret-list li { display: grid; min-width: 0; align-content: start; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.secret-list li:last-child { border: 1px solid var(--border); }
+.secret-head { gap: 8px; }
+.secret-slot { font-weight: 600; }
+.secret-actions { flex-wrap: nowrap; gap: 8px; }
+.secret-actions .config-input { flex: 1; width: 0; max-width: none; }
+.secret-actions button { flex-shrink: 0; }
+.receipt-grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0,1fr)); }
+.receipt-grid dd { margin: 6px 0 0; overflow-wrap: anywhere; }
+.field-errors { color: var(--bad-text); }
+.conflict-flag { color: var(--bad-text); }
+@media (max-width: 900px) { .config-body { grid-template-columns: minmax(0,1fr); } .config-nav { position: static; display: flex; flex-wrap: wrap; } }
+@media (max-width: 600px) {
+  .configuration { gap: 16px; }
+  .settings-table tr { grid-template-columns: minmax(0,1fr); gap: 12px; }
+  .setting-identity, .setting-editor, .setting-meta { grid-column: 1; grid-row: auto; }
+  .setting-meta .meta-label { display: inline; margin-right: 8px; }
+  .secret-list, .receipt-grid { grid-template-columns: minmax(0,1fr); }
+  .provider-table tr { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .provider-url, .provider-name, .provider-identity { grid-column: 1 / -1; }
+}
+</style>

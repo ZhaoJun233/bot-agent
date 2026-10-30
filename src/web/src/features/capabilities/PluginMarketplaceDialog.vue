@@ -371,19 +371,20 @@ onBeforeUnmount(() => { alive = false })
 </template>
 
 <style scoped>
-.eyebrow { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
-.muted, .field-hint { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
-.notice { overflow-wrap: anywhere; }
-.notice.warn { border-color: var(--warn, #d29922); }
-.notice.bad { border-color: var(--danger, #d1242f); }
-.source-panel, .settings-panel { border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 18px 0; display: grid; gap: 10px; min-width: 0; }
-.source-panel h3, .settings-panel h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.eyebrow { color: var(--accent-deep); font-size: 11px; font-weight: 650; letter-spacing: .1em; }
+.muted, .field-hint { color: var(--text-muted); font-size: 13px; line-height: 1.7; }
+.notice { overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-block: 12px; background: var(--surface-muted); color: var(--text-muted); font-size: 13px; line-height: 1.65; }
+.notice.warn { background: var(--warn-bg); color: var(--warn-text); border-color: var(--border-strong); }
+.notice.bad { background: var(--bad-bg); color: var(--bad-text); border-color: var(--border-strong); }
+.notice p { margin: 0 0 8px; }
+.source-panel, .settings-panel { border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 22px 0; display: grid; gap: 12px; min-width: 0; background: var(--surface); }
+.source-panel { background: var(--surface-muted); }
+.source-panel h3, .settings-panel h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; letter-spacing: -.01em; }
+.source-panel .field-hint { margin: 0; font-size: 12px; }
 .source-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
-.source-row .grow { flex: 1 1 260px; display: grid; gap: 6px; font-size: 13px; font-weight: 600; min-width: 0; }
-.source-row input { width: 100%; min-width: 0; }
+.source-row .grow { flex: 1 1 260px; display: grid; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); min-width: 0; }
+.source-row input { width: 100%; min-width: 0; min-height: 36px; border-radius: 8px; background: var(--surface); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-@media (max-width: 700px) {
-  .source-row > button { flex: 1 1 auto; }
-  .settings-actions > button { flex: 1 1 auto; }
-}
+button { min-height: 36px; border-radius: 8px; }
+@media (max-width: 767px) { .source-panel, .settings-panel { padding: 14px; }.source-row > button, .settings-actions > button { flex: 1 1 auto; }button, .source-row input { min-height: 44px; } }
 </style>

@@ -40,6 +40,10 @@ public sealed class MockOpenAi : IDisposable
     /// <summary>人为拖慢响应，用于可靠地测「触发消息与回复之间被插话」的引用行为。</summary>
     public int ResponseDelayMs { get; set; }
 
+    /// <summary>Optional synthetic usage for successful completions; zero keeps the existing wire response unchanged.</summary>
+    public int PromptTokens { get; set; }
+    public int CompletionTokens { get; set; }
+
     /// <summary>收到的请求体（已解析）。</summary>
     public IReadOnlyList<JsonObject> Requests
     {
@@ -588,7 +592,7 @@ public sealed class MockOpenAi : IDisposable
         }
     }
 
-    private static async Task WriteCompletionAsync(HttpListenerContext context, JsonObject? payload, string content)
+    private async Task WriteCompletionAsync(HttpListenerContext context, JsonObject? payload, string content)
     {
         var response = new JsonObject
         {
@@ -605,6 +609,14 @@ public sealed class MockOpenAi : IDisposable
                 }
             }
         };
+
+        if (PromptTokens != 0 || CompletionTokens != 0)
+            response["usage"] = new JsonObject
+            {
+                ["prompt_tokens"] = PromptTokens,
+                ["completion_tokens"] = CompletionTokens,
+                ["total_tokens"] = PromptTokens + CompletionTokens
+            };
 
         var bytes = Encoding.UTF8.GetBytes(response.ToJsonString());
         context.Response.StatusCode = 200;

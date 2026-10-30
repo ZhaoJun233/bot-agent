@@ -4,7 +4,7 @@
  * 纯装饰：相邻文本提供可读名称，因此固定 aria-hidden。
  */
 withDefaults(defineProps<{
-  name: 'overview' | 'capabilities' | 'config' | 'tasks' | 'refresh' | 'lock' | 'shield' | 'spark' | 'link' | 'bolt' | 'alert'
+  name: 'overview' | 'capabilities' | 'config' | 'tasks' | 'refresh' | 'lock' | 'shield' | 'spark' | 'link' | 'bolt' | 'alert' | 'sun' | 'moon' | 'help' | 'arrow' | 'check'
   size?: number
 }>(), { size: 18 })
 </script>
@@ -75,6 +75,13 @@ withDefaults(defineProps<{
       <path d="M10.5 13.5a4.5 4.5 0 0 0 6.4 0l2-2a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1" />
       <path d="M13.5 10.5a4.5 4.5 0 0 0-6.4 0l-2 2a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1" />
     </template>
+    <template v-else-if="name === 'sun'">
+      <circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5" />
+    </template>
+    <template v-else-if="name === 'moon'"><path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z" /></template>
+    <template v-else-if="name === 'help'"><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 1 1 4.4 1.6C12.8 11.4 12 12 12 13.5M12 17h.01" /></template>
+    <template v-else-if="name === 'arrow'"><path d="M5 12h14m-5-5 5 5-5 5" /></template>
+    <template v-else-if="name === 'check'"><path d="m5 12 4.5 4.5L19 7" /></template>
     <template v-else>
       <path d="M13 2.5 4.8 13.4h6.1L9.9 21.5l8.3-11.1h-6.1l1-7.9Z" />
     </template>

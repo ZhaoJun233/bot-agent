@@ -317,6 +317,13 @@ public sealed class ZbaBackendException : Exception
 /// </summary>
 public interface IZbaBackend
 {
+    ValueTask<ZbaQuotaPage> ListQuotasAsync(ConfigurationCaller caller, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "quota_management_unavailable", "Quota management is unavailable.");
+    ValueTask<ZbaQuotaSaveResult> SaveQuotaAsync(ConfigurationCaller caller, ZbaQuotaSaveRequest request, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "quota_management_unavailable", "Quota management is unavailable.");
+    ValueTask<ZbaQuotaFindResult> FindQuotaAsync(ConfigurationCaller caller, string idempotencyKey, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "quota_management_unavailable", "Quota management is unavailable.");
+
     ValueTask<ZbaHealth> GetHealthAsync(CancellationToken ct = default);
 
     ValueTask<ZbaStatus> GetStatusAsync(ConfigurationCaller caller, CancellationToken ct = default);

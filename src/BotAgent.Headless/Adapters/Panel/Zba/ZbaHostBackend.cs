@@ -55,7 +55,9 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         Action<string>? log = null,
         BotAgent.Adapters.Plugins.PluginMarketService? market = null,
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
-        BotAgent.Model.ProviderModelDiscovery? discovery = null)
+        BotAgent.Model.ProviderModelDiscovery? discovery = null,
+        BotAgent.Services.Conversations.ConversationRegistry? quotaRegistry = null,
+        TenantQuotaStore? quotaStore = null)
     {
         _box = box;
         _hotReload = hotReload;
@@ -73,6 +75,8 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _market = market;
         _providerRoute = providerRoute;
         _discovery = discovery;
+        _quotaRegistry = quotaRegistry;
+        _quotaStore = quotaStore;
         _tasks = new ZbaTaskRegistry(sessions, agent, now, serverEnabled, events, taskReceipts, instanceId, log);
     }
 

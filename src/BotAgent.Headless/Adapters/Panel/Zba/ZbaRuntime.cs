@@ -38,7 +38,8 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         bool hadStoredConfigurationBeforeStartup,
         BotAgent.Adapters.Plugins.PluginMarketService? market = null,
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
-        BotAgent.Model.ProviderModelDiscovery? discovery = null)
+        BotAgent.Model.ProviderModelDiscovery? discovery = null,
+        TenantQuotaStore? quotas = null)
     {
         var options = FromEnvironment();
         var version = typeof(ZbaRuntime).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
@@ -69,7 +70,9 @@ internal sealed class ZbaRuntime : IAsyncDisposable
             message => FileLog.Write("Zba", message),
             market,
             providerRoute,
-            discovery);
+            discovery,
+            registry,
+            quotas ?? new TenantQuotaStore());
         var endpoint = new ZbaEndpoint(backend, options, now, version, instanceId,
             message => FileLog.Write("Zba", message));
         return new ZbaRuntime(endpoint, backend);

@@ -51,78 +51,57 @@ function submit(): void {
 <template>
   <section class="auth-stage" data-testid="auth-gate" aria-labelledby="auth-title">
     <div class="auth-card">
-      <header class="auth-card-head">
+      <aside class="auth-story" aria-label="BotAgent 工作台">
         <div class="auth-brand-head">
-          <span class="brand-badge auth-logo"><BrandMark :size="34" /></span>
-          <div class="auth-wordmark">
-            <strong>BotAgent</strong>
-            <span>ZBA 工作台</span>
-          </div>
+          <span class="brand-badge auth-logo"><BrandMark :size="26" /></span>
+          <div class="auth-wordmark"><strong>BotAgent</strong><span>AGENT CONSOLE</span></div>
         </div>
-        <h1 id="auth-title">连接 ZBA</h1>
-        <p class="auth-subtitle">输入访问令牌，查看并管理你的 QQ 机器人</p>
+        <p class="eyebrow">YOUR AGENT, UNDER CONTROL</p>
+        <h2>让能力有序协作，<br />让执行始终可控。</h2>
+        <p>一个专注的工作空间，掌握机器人状态、连接工具与模型，管理 Agent 的每一步。</p>
         <ul class="auth-points">
-          <li>看机器人现在是否正常、哪个组件出了问题</li>
-          <li>开关插件、调整回复风格与运行参数</li>
-          <li>给后台 Agent 派活，审批它的危险操作</li>
+          <li><AppIcon name="overview" :size="17" />运行状态与异常，一目了然</li>
+          <li><AppIcon name="capabilities" :size="17" />插件、平台与模型，统一管理</li>
+          <li><AppIcon name="shield" :size="17" />关键操作，经你审批</li>
         </ul>
-        <BrandMark class="auth-watermark" :size="150" />
-      </header>
-
-      <form class="auth-form" @submit.prevent="submit">
-        <label for="zha-token">访问令牌</label>
-        <div class="input-shell">
-          <AppIcon class="input-icon" name="lock" :size="18" />
-          <input
-            id="zha-token"
-            ref="input"
-            v-model="token"
-            data-testid="token-input"
-            type="password"
-            name="token"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="输入 Bearer 令牌"
-            :disabled="props.busy"
-          />
-        </div>
-        <p class="auth-hint">令牌就是服务器上 <code>BOTAGENT_ZBA_TOKEN</code> 的值（只读令牌为 <code>BOTAGENT_ZBA_READ_TOKEN</code>）。它只保存在当前页面内存里，关掉页面或点「锁定」后需要重新输入。</p>
-
-        <p v-if="props.busy" class="inline-notice" data-testid="auth-loading" role="status">
-          正在检查 ZBA 连接…
-        </p>
-        <button
-          type="submit"
-          class="primary auth-submit"
-          :class="{ 'auth-submit--busy': props.busy }"
-          data-testid="connect-button"
-          :disabled="props.busy || token.trim().length === 0"
-        >
-          <span>{{ props.busy ? '连接中…' : '连接' }}</span>
-        </button>
-
-        <ErrorNotice :error="props.error" title="无法连接" />
-
-        <p v-if="props.notice" class="inline-notice warn" data-testid="auth-notice" role="status">
-          {{ props.notice }}
-        </p>
-
-        <p v-if="props.configured === false && !props.error" class="inline-notice warn" data-testid="not-configured">
-          后端尚未配置访问令牌。请先在服务器设置 <code>BOTAGENT_ZBA_TOKEN</code>（可选
-          <code>BOTAGENT_ZBA_READ_TOKEN</code>）后重试。
-        </p>
-        <p
-          v-else-if="!props.error && props.contractVersion && props.contractVersion !== 'zba-1.0'"
-          class="inline-notice warn"
-          data-testid="contract-warning"
-        >
-          后端契约版本为 {{ props.contractVersion }}，本页面按 zba-1.0 构建；写入口会被禁用。
-        </p>
-      </form>
-
-      <footer class="auth-card-foot">
-        <span>ZBA 1.0</span>
-      </footer>
+        <div class="auth-story-foot">BOTAGENT / ZBA 1.0</div>
+      </aside>
+      <div class="auth-entry">
+        <header class="auth-card-head">
+          <p class="eyebrow">工作空间认证</p>
+          <h1 id="auth-title">连接 ZBA</h1>
+          <p class="auth-subtitle">欢迎回来。使用访问令牌连接你的 BotAgent 工作台。</p>
+        </header>
+        <form class="auth-form" :aria-busy="props.busy" @submit.prevent="submit">
+          <label for="zha-token">访问令牌</label>
+          <div class="input-shell">
+            <AppIcon class="input-icon" name="lock" :size="17" />
+            <input id="zha-token" ref="input" v-model="token" data-testid="token-input"
+              type="password" name="token" autocomplete="off" spellcheck="false"
+              placeholder="输入 Bearer 令牌" aria-describedby="auth-token-hint"
+              :aria-invalid="props.error?.status === 401 ? 'true' : undefined" :disabled="props.busy" />
+          </div>
+          <p id="auth-token-hint" class="auth-hint">令牌仅保存在当前页面内存中。锁定或关闭页面后，需要重新认证。</p>
+          <p v-if="props.busy" class="inline-notice" data-testid="auth-loading" role="status">正在检查 ZBA 连接…</p>
+          <button type="submit" class="primary auth-submit" :class="{ 'auth-submit--busy': props.busy }"
+            data-testid="connect-button" :disabled="props.busy || token.trim().length === 0">
+            <span>{{ props.busy ? '连接中…' : '连接' }}</span><AppIcon v-if="!props.busy" name="arrow" :size="16" />
+          </button>
+          <ErrorNotice :error="props.error" title="无法连接" />
+          <p v-if="props.notice" class="inline-notice warn" data-testid="auth-notice" role="status">{{ props.notice }}</p>
+          <p v-if="props.configured === false && !props.error" class="inline-notice warn" data-testid="not-configured">
+            后端尚未配置访问令牌。请先在服务器设置 <code>BOTAGENT_ZBA_TOKEN</code>（可选 <code>BOTAGENT_ZBA_READ_TOKEN</code>）后重试。
+          </p>
+          <p v-else-if="!props.error && props.contractVersion && props.contractVersion !== 'zba-1.0'"
+            class="inline-notice warn" data-testid="contract-warning">
+            后端契约版本为 {{ props.contractVersion }}，本页面按 zba-1.0 构建；写入口会被禁用。
+          </p>
+        </form>
+        <details class="auth-token-help"><summary>在哪里获取访问令牌？</summary>
+          <p>使用服务器配置的 <code>BOTAGENT_ZBA_TOKEN</code>；只读访问使用 <code>BOTAGENT_ZBA_READ_TOKEN</code>。连接后默认进入标准模式。</p>
+        </details>
+        <footer class="auth-card-foot"><AppIcon name="shield" :size="15" /><span>默认只读 · 写入前验证管理员权限</span></footer>
+      </div>
     </div>
   </section>
 </template>

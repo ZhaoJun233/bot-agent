@@ -21,7 +21,7 @@ const viteBin = path.join(webRoot, 'node_modules/vite/bin/vite.js')
 
 const HOST_PORT = 18129
 const WS_PORT = 13078
-const PREVIEW_PORT = 4176
+const PREVIEW_PORT = Number(process.env.BOTAGENT_WEB_TEST_PORT ?? 4174) + 2
 const PREVIEW_URL = `http://127.0.0.1:${PREVIEW_PORT}`
 const ADMIN_TOKEN = 'synthetic-web-admin-token'
 

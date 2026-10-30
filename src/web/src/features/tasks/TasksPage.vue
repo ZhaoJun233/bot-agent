@@ -1041,165 +1041,177 @@ defineExpose({
     <ErrorNotice :error="error" title="读取任务失败" />
     <ErrorNotice :error="pageError" title="加载下一页失败" />
 
-    <section class="panel" data-testid="task-submit-panel">
-      <div class="panel-heading">
-        <h2>提交任务</h2>
-        <p class="config-guide">把一件要后台 Agent 做的事写进提示词，提交后在下方列表跟进度。和在群里说 // 指令效果一样，只是不用经过聊天。</p>
-        <p>幂等键在提交前生成并冻结；结果未知时只能用它核对，换键重提会让服务端再执行一次。</p>
-      </div>
-      <div class="task-form">
-        <label>
-          <span>会话来源</span>
-          <input v-model="sourceKey" data-testid="task-source-key" placeholder="panel:synthetic" :disabled="!canFillForm" />
-        </label>
-        <label>
-          <span>会话 ID（服务端按来源分配，提交后回填）</span>
-          <input v-model="sessionId" data-testid="task-session-id" placeholder="synthetic-session" :disabled="!canFillForm" />
-        </label>
-        <label class="task-form-wide">
-          <span>任务内容</span>
-          <textarea v-model="prompt" rows="3" data-testid="task-prompt" :disabled="!canFillForm" />
-        </label>
-        <label>
-          <span>超时（秒）</span>
-          <input v-model.number="timeoutSeconds" type="number" min="10" max="900" data-testid="task-timeout" :disabled="!canFillForm" />
-        </label>
-      </div>
-      <div class="dialog-actions">
-        <button type="button" class="primary" data-testid="task-submit" :disabled="!canSubmit" @click="submit">
-          {{ unresolved ? '先核对上一次提交' : submissions.some((item) => item.busy) ? '提交中…' : '提交任务' }}
-        </button>
-      </div>
-      <p v-if="capacityFull" class="inline-notice warn" data-testid="task-submit-capacity">
-        {{ capacityNote }}
-      </p>
-      <p v-if="submitBlockedNote" class="inline-notice warn" data-testid="task-submit-blocked" role="status">
-        {{ submitBlockedNote }}
-      </p>
-
-      <div
-        v-for="(submission, index) in submissions"
-        :key="submission.id"
-        class="task-submission"
-        data-testid="task-submission"
-      >
-        <p
-          class="inline-notice"
-          :class="{ warn: submission.phase === 'unknown' }"
-          data-testid="task-submission-state"
-        >
-          <template v-if="submission.phase === 'preparing'">正在准备提交…</template>
-          <template v-else-if="submission.phase === 'submitting'">已提交，正在等待服务端受理…</template>
-          <template v-else-if="submission.phase === 'unknown'">
-            没有拿到可信的受理回执：结果未知，幂等键已保留。请先按原键核对；换键重提会让服务端再执行一次。
-          </template>
-          <template v-else-if="submission.phase === 'accepted'">已受理{{ submission.taskId ? '（任务 ' + submission.taskId + '）' : '' }}。</template>
-          <template v-else>服务端明确拒绝，这次没有产生任务。</template>
-        </p>
-        <p v-if="submission.restored" class="inline-notice" data-testid="task-submission-restored">
-          这是上一个会话留下的未决提交：只保留了幂等键与任务 id，任务内容与请求体没有保留。
-        </p>
-        <p v-if="submission.findCode || submission.findProblem" class="inline-notice" data-testid="task-find-code">
-          <template v-if="submission.findCode">核对结果：{{ findCodeLabels[submission.findCode] }}</template>
-          <template v-else>核对结果：{{ submission.findProblem }}</template>
-        </p>
-        <ErrorNotice :error="submission.error" title="提交没有完成" />
-        <div class="dialog-actions">
-          <button
-            v-if="submission.phase === 'unknown' || submission.phase === 'accepted'"
-            type="button"
-            class="tonal"
-            data-testid="task-find"
-            :disabled="submission.busy || !canWrite"
-            @click="findSubmission(submission)"
-          >
-            {{ submission.busy ? '核对中…' : '核对受理结果' }}
-          </button>
-          <button
-            v-if="submission.phase === 'unknown'"
-            type="button"
-            class="tonal"
-            :data-testid="'task-restart-' + index"
-            :disabled="!canWrite"
-            @click="armRestart(submission)"
-          >
-            作为新任务重新提交…
-          </button>
-          <button
-            v-if="submission.phase !== 'unknown' && submission.phase !== 'submitting'"
-            type="button"
-            class="link-button"
-            data-testid="task-submission-dismiss"
-            @click="dismiss(submission)"
-          >
-            收起
-          </button>
+    <div class="task-workspace">
+      <section class="panel task-composer" data-testid="task-submit-panel" aria-labelledby="task-composer-title">
+        <div class="panel-heading">
+          <p class="section-eyebrow">任务编排</p>
+          <h2 id="task-composer-title">提交任务</h2>
+          <p class="config-guide">把要交给后台 Agent 的工作写在这里，提交后在执行记录中跟进。与群里的 // 指令效果相同。</p>
         </div>
-        <div
-          v-if="restartArmed === submission.id"
-          class="inline-notice bad"
-          :data-testid="'task-restart-warning-' + index"
-        >
-          <p>
-            重新执行是「新的一次提交」：会生成新的幂等键，服务端可能再执行一次相同的工具副作用。
-            原幂等键 <code>{{ submission.key }}</code> 的核对记录会被放弃。
-          </p>
-          <button
-            type="button"
-            class="primary"
-            :data-testid="'task-restart-confirm-' + index"
-            :disabled="!canWrite"
-            @click="confirmRestart(submission)"
-          >
-            我明白，按新任务重新提交
-          </button>
+        <div class="task-form">
+          <label>
+            <span>会话来源</span>
+            <input v-model="sourceKey" data-testid="task-source-key" placeholder="panel:synthetic" :disabled="!canFillForm" />
+          </label>
+          <label>
+            <span>会话 ID</span>
+            <input v-model="sessionId" data-testid="task-session-id" placeholder="synthetic-session" aria-describedby="task-session-hint" :disabled="!canFillForm" />
+            <small id="task-session-hint" class="field-hint">服务端按来源分配，提交后回填。</small>
+          </label>
+          <label class="task-form-wide">
+            <span>任务内容</span>
+            <textarea v-model="prompt" rows="4" data-testid="task-prompt" placeholder="描述目标、必要的上下文和预期结果…" :disabled="!canFillForm" />
+          </label>
+          <label class="task-timeout-field">
+            <span>超时（秒）</span>
+            <input v-model.number="timeoutSeconds" type="number" min="10" max="900" data-testid="task-timeout" aria-describedby="task-timeout-hint" :disabled="!canFillForm" />
+            <small id="task-timeout-hint" class="field-hint">10–900 秒</small>
+          </label>
         </div>
-        <p class="cap-op-key">幂等键 <code data-testid="task-idempotency-key">{{ submission.key }}</code></p>
-      </div>
-    </section>
-
-    <section class="panel" data-testid="task-approvals">
-      <div class="panel-heading">
-        <h2>待审批</h2>
-        <p class="config-guide">Agent 想做有风险的操作（例如改文件、执行命令）时会停在这里等你点头。批准才会继续，拒绝或过期都不会执行。</p>
-        <p>摘要由服务端脱敏；批准与拒绝都绑定审批 id，过期后不会执行。</p>
-      </div>
-      <ErrorNotice :error="approvalError" title="读取待审批失败" />
-      <ErrorNotice :error="decisionError" title="审批没有完成" />
-      <p v-if="decisionNotice" class="inline-notice" data-testid="task-decision-notice" role="status">{{ decisionNotice }}</p>
-      <p
-        v-if="approvals.length === 0 && approvalsLoaded && !approvalError"
-        class="empty-state"
-        data-testid="task-approvals-empty"
-      >
-        当前没有待审批请求。
-      </p>
-      <p v-else-if="approvals.length === 0 && !approvalError" class="empty-state" data-testid="task-approvals-unknown">
-        还没读到待审批队列。
-      </p>
-      <ul v-else class="task-approval-list">
-        <li
-          v-for="(approval, index) in approvals"
-          :key="approval.id"
-          :data-testid="'task-approval-' + index"
-          :class="{ 'task-approval-stale': approval.stale }"
-        >
-          <div class="task-approval-head">
-            <strong>{{ approval.toolId }}</strong>
-            <span v-if="approval.stale" class="status-badge" data-tone="bad" :data-testid="'task-approval-stale-' + index">
-              未生效
-            </span>
-            <span v-else class="status-badge" data-tone="warn">{{ formatTime(approval.expiresAt) }} 过期</span>
-          </div>
-          <p class="task-approval-summary">{{ approval.summary }}</p>
-          <p class="task-approval-meta">
-            会话 {{ approval.session }} · 策略版本 {{ approval.policyVersion }}
-            <template v-if="approval.stale"> · {{ approval.staleReason }}</template>
-          </p>
+        <div class="task-compose-footer">
+          <p class="task-submit-hint">幂等键在提交前生成并冻结。结果未知时请先核对，换键重提会再次执行。</p>
           <div class="dialog-actions">
+            <button type="button" class="primary" data-testid="task-submit" :disabled="!canSubmit" @click="submit">
+              {{ unresolved ? '先核对上一次提交' : submissions.some((item) => item.busy) ? '提交中…' : '提交任务' }}
+            </button>
+          </div>
+        </div>
+        <p v-if="capacityFull" class="inline-notice warn" data-testid="task-submit-capacity">
+          {{ capacityNote }}
+        </p>
+        <p v-if="submitBlockedNote" class="inline-notice warn" data-testid="task-submit-blocked" role="status">
+          {{ submitBlockedNote }}
+        </p>
+
+        <div
+          v-for="(submission, index) in submissions"
+          :key="submission.id"
+          class="task-submission"
+          data-testid="task-submission"
+        >
+          <p
+            class="inline-notice"
+            :class="{ warn: submission.phase === 'unknown' }"
+            data-testid="task-submission-state"
+          >
+            <template v-if="submission.phase === 'preparing'">正在准备提交…</template>
+            <template v-else-if="submission.phase === 'submitting'">已提交，正在等待服务端受理…</template>
+            <template v-else-if="submission.phase === 'unknown'">
+              没有拿到可信的受理回执：结果未知，幂等键已保留。请先按原键核对；换键重提会让服务端再执行一次。
+            </template>
+            <template v-else-if="submission.phase === 'accepted'">已受理{{ submission.taskId ? '（任务 ' + submission.taskId + '）' : '' }}。</template>
+            <template v-else>服务端明确拒绝，这次没有产生任务。</template>
+          </p>
+          <p v-if="submission.restored" class="inline-notice" data-testid="task-submission-restored">
+            这是上一个会话留下的未决提交：只保留了幂等键与任务 id，任务内容与请求体没有保留。
+          </p>
+          <p v-if="submission.findCode || submission.findProblem" class="inline-notice" data-testid="task-find-code">
+            <template v-if="submission.findCode">核对结果：{{ findCodeLabels[submission.findCode] }}</template>
+            <template v-else>核对结果：{{ submission.findProblem }}</template>
+          </p>
+          <ErrorNotice :error="submission.error" title="提交没有完成" />
+          <div class="dialog-actions">
+            <button
+              v-if="submission.phase === 'unknown' || submission.phase === 'accepted'"
+              type="button"
+              class="tonal"
+              data-testid="task-find"
+              :disabled="submission.busy || !canWrite"
+              @click="findSubmission(submission)"
+            >
+              {{ submission.busy ? '核对中…' : '核对受理结果' }}
+            </button>
+            <button
+              v-if="submission.phase === 'unknown'"
+              type="button"
+              class="tonal"
+              :data-testid="'task-restart-' + index"
+              :disabled="!canWrite"
+              @click="armRestart(submission)"
+            >
+              作为新任务重新提交…
+            </button>
+            <button
+              v-if="submission.phase !== 'unknown' && submission.phase !== 'submitting'"
+              type="button"
+              class="link-button"
+              data-testid="task-submission-dismiss"
+              @click="dismiss(submission)"
+            >
+              收起
+            </button>
+          </div>
+          <div
+            v-if="restartArmed === submission.id"
+            class="inline-notice bad"
+            :data-testid="'task-restart-warning-' + index"
+          >
+            <p>
+              重新执行是「新的一次提交」：会生成新的幂等键，服务端可能再执行一次相同的工具副作用。
+              原幂等键 <code>{{ submission.key }}</code> 的核对记录会被放弃。
+            </p>
             <button
               type="button"
               class="primary"
+              :data-testid="'task-restart-confirm-' + index"
+              :disabled="!canWrite"
+              @click="confirmRestart(submission)"
+            >
+              我明白，按新任务重新提交
+            </button>
+          </div>
+          <p class="cap-op-key">幂等键 <code data-testid="task-idempotency-key">{{ submission.key }}</code></p>
+        </div>
+      </section>
+
+      <section class="panel task-approvals" data-testid="task-approvals" aria-labelledby="task-approvals-title">
+        <div class="panel-heading">
+          <p class="section-eyebrow">人工确认</p>
+          <div class="task-section-title">
+            <h2 id="task-approvals-title">待审批</h2>
+            <span v-if="approvalsLoaded && !approvalError" class="status-badge" :data-tone="pendingApprovals.length ? 'warn' : 'neutral'">{{ pendingApprovals.length }} 项待处理</span>
+          </div>
+          <p class="config-guide">改文件、执行命令等风险操作会在此等待确认。批准后才继续，拒绝或过期不会执行。</p>
+          <p class="field-hint">摘要已脱敏；每次决定都绑定审批 ID。</p>
+        </div>
+        <ErrorNotice :error="approvalError" title="读取待审批失败" />
+        <ErrorNotice :error="decisionError" title="审批没有完成" />
+        <p v-if="decisionNotice" class="inline-notice" data-testid="task-decision-notice" role="status">{{ decisionNotice }}</p>
+        <p
+          v-if="approvals.length === 0 && approvalsLoaded && !approvalError"
+          class="empty-state"
+          data-testid="task-approvals-empty"
+        >
+          当前没有待审批请求。
+        </p>
+        <p v-else-if="approvals.length === 0 && !approvalError" class="empty-state" data-testid="task-approvals-unknown">
+          还没读到待审批队列。
+        </p>
+        <ul v-else class="task-approval-list">
+          <li
+            v-for="(approval, index) in approvals"
+            :key="approval.id"
+            :data-testid="'task-approval-' + index"
+            :class="{ 'task-approval-stale': approval.stale }"
+          >
+            <div class="task-approval-head">
+              <strong>{{ approval.toolId }}</strong>
+              <span v-if="approval.stale" class="status-badge" data-tone="bad" :data-testid="'task-approval-stale-' + index">
+                未生效
+              </span>
+              <span v-else class="status-badge" data-tone="warn">{{ formatTime(approval.expiresAt) }} 过期</span>
+            </div>
+            <p class="task-approval-summary">{{ approval.summary }}</p>
+            <p class="task-approval-meta">
+              会话 {{ approval.session }} · 策略版本 {{ approval.policyVersion }}
+              <template v-if="approval.stale"> · {{ approval.staleReason }}</template>
+            </p>
+            <div class="dialog-actions">
+              <button
+                type="button"
+                class="primary"
+
+
               :data-testid="'task-approve-' + index"
               :disabled="!canWrite || approval.stale || approvalBusy.includes(approval.id)"
               @click="decide(approval, true)"
@@ -1220,6 +1232,16 @@ defineExpose({
       </ul>
     </section>
 
+    </div>
+
+    <section class="panel task-history" aria-labelledby="task-history-title">
+      <div class="task-history-heading">
+        <div>
+          <p class="section-eyebrow">执行记录</p>
+          <h2 id="task-history-title">任务历史</h2>
+        </div>
+        <p class="task-history-meta">当前已载入 {{ tasks.length }} 项 · 进行中 {{ activeTasks.length }}</p>
+      </div>
     <p v-if="loading && tasks.length === 0" class="empty-state" data-testid="task-loading">正在读取任务…</p>
     <p v-else-if="!error && tasks.length === 0" class="empty-state" data-testid="task-empty">还没有任务。</p>
     <div v-else class="task-list">
@@ -1232,7 +1254,7 @@ defineExpose({
         <header class="task-item-head">
           <div>
             <p class="cap-kind">{{ task.target }}</p>
-            <h2 class="task-id">{{ task.id }}</h2>
+            <h3 class="task-id">{{ task.id }}</h3>
             <p class="cap-key">会话 {{ task.sessionId }}</p>
           </div>
           <span class="status-badge" :data-tone="stateTone(task.state)" data-testid="task-state">
@@ -1270,10 +1292,16 @@ defineExpose({
       </button>
     </div>
 
-    <section v-if="detail || detailError" class="panel task-detail" data-testid="task-detail">
+    </section>
+
+    <section v-if="detail || detailError" class="panel task-detail" data-testid="task-detail" aria-labelledby="task-detail-title">
       <div class="panel-heading">
-        <h2>任务结果</h2>
-        <p v-if="detail">任务 {{ detail.id }} · {{ stateLabel(detail.state) }}</p>
+        <p class="section-eyebrow">执行输出</p>
+        <div class="task-section-title">
+          <h2 id="task-detail-title">任务结果</h2>
+          <span v-if="detail" class="status-badge" :data-tone="stateTone(detail.state)">{{ stateLabel(detail.state) }}</span>
+        </div>
+        <p v-if="detail" class="task-result-id">任务 {{ detail.id }}</p>
       </div>
       <ErrorNotice :error="detailError" title="读取结果失败" />
       <template v-if="detail">
@@ -1298,3 +1326,90 @@ defineExpose({
     </section>
   </section>
 </template>
+
+<style scoped>
+.tasks { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.tasks .panel { min-width: 0; margin: 0; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: none; }
+.heading-actions { flex-wrap: wrap; }
+.task-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.tasks .task-composer { border-top: 2px solid var(--accent-deep); }
+.tasks .panel-heading { display: grid; gap: 8px; margin: 0 0 20px; }
+.tasks .panel-heading h2, .task-history-heading h2 { margin: 0; color: var(--text); font-size: 18px; font-weight: 650; letter-spacing: -.025em; line-height: 1.4; }
+.tasks .panel-heading p { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.65; }
+.tasks .section-eyebrow { margin: 0 0 4px; color: var(--text-soft); font-size: 11px; font-weight: 650; line-height: 1.4; letter-spacing: .08em; }
+.task-section-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.task-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; margin: 0; }
+.task-form label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 13px; }
+.task-form label > span { color: var(--text); font-weight: 550; }
+.task-form input, .task-form textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 36px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; line-height: 1.5; }
+.task-form textarea { min-height: 126px; resize: vertical; }
+.task-form input::placeholder, .task-form textarea::placeholder { color: var(--text-soft); }
+.task-form input:disabled, .task-form textarea:disabled { background: var(--surface-muted); color: var(--text-muted); cursor: not-allowed; }
+.task-form-wide { grid-column: 1 / -1; }
+.task-timeout-field { max-width: 180px; }
+.tasks .field-hint { color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.6; }
+.task-compose-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
+.task-submit-hint { flex: 1; max-width: 52ch; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+.tasks .dialog-actions { border-top: 0; padding-top: 0; display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 8px; margin: 0; }
+.task-compose-footer .dialog-actions { flex-shrink: 0; }
+.tasks button { min-height: 36px; border-radius: 8px; }
+.tasks button:focus-visible, .task-form input:focus-visible, .task-form textarea:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 3px; }
+.tasks .inline-notice { max-width: 100%; line-height: 1.7; overflow-wrap: anywhere; }
+.tasks .inline-notice button { white-space: normal; }
+.task-submission { display: grid; gap: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.task-submission > .inline-notice { margin: 0; }
+.task-submission .cap-op-key { margin: 0; color: var(--text-soft); font-size: 12px; overflow-wrap: anywhere; }
+.task-submission code { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.task-approval-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.task-approval-list li { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
+.task-approval-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.task-approval-head strong { min-width: 0; color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.task-approval-head .status-badge { white-space: normal; }
+.task-approval-summary { margin: 0; color: var(--text); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
+.task-approval-meta { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.task-approval-list li.task-approval-stale { opacity: 1; border-style: dashed; }
+.task-approval-stale .task-approval-head strong { color: var(--text-muted); }
+.task-approval-list .dialog-actions { padding-top: 4px; }
+.tasks .empty-state { margin: 0; padding: 28px 16px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--surface-muted); color: var(--text-muted); text-align: center; font-size: 13px; line-height: 1.7; }
+.task-history-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.task-history-meta { margin: 0; color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-list { display: grid; gap: 0; margin: 0; }
+.task-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 24px; min-width: 0; padding: 20px 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none; }
+.task-item:first-child { padding-top: 0; border-top: 0; }
+.task-item:last-child { padding-bottom: 0; }
+.task-item-head { display: flex; grid-column: 1 / -1; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
+.task-item-head > div { min-width: 0; }
+.task-item .cap-kind { margin: 0 0 5px; color: var(--text-soft); font-size: 11px; font-weight: 550; }
+.task-id { margin: 0; color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.task-item .cap-key { margin: 5px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.tasks .cap-meta { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 24px; min-width: 0; margin: 0; }
+.tasks .cap-meta > div { display: grid; gap: 4px; min-width: 0; }
+.tasks .cap-meta dt { color: var(--text-soft); font-size: 11px; }
+.tasks .cap-meta dd { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tasks .cap-meta .cap-error-code { color: var(--bad-text); font-family: var(--font-mono, ui-monospace, monospace); }
+.task-item > .dialog-actions { align-self: end; justify-content: flex-end; }
+.task-history .cap-more { margin: 20px 0 0; padding-top: 20px; border-top: 1px solid var(--border); text-align: center; }
+.tasks .task-detail { border-inline-start: 3px solid var(--accent-deep); }
+.task-detail .task-result-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; overflow-wrap: anywhere; }
+.task-summary { margin: 0 0 20px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); color: var(--text); font-size: 14px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-detail > .link-button { margin-top: 16px; }
+@media (min-width: 1200px) { .task-workspace { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); } }
+@media (max-width: 767px) {
+  .tasks { gap: 16px; }
+  .task-workspace { gap: 16px; }
+  .tasks .panel { padding: 18px; }
+  .task-compose-footer { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .task-compose-footer .dialog-actions { width: 100%; }
+  .task-item { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .task-item > .dialog-actions { justify-content: flex-start; }
+  .tasks button, .task-form input { min-height: 44px; }
+  .task-form textarea { min-height: 140px; }
+  .task-approval-head { flex-direction: column; }
+}
+@media (max-width: 479px) {
+  .task-form { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .task-timeout-field { max-width: none; }
+  .task-compose-footer .primary { width: 100%; }
+  .task-summary { padding: 14px; }
+}
+</style>

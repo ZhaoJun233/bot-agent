@@ -244,7 +244,7 @@ test('契约版本不兼容时禁用管理员入口并说明原因', async ({ pa
 })
 
 test('真实无令牌宿主返回 503 zba_not_configured，页面不伪装成功', async ({ page }) => {
-  await page.goto('http://127.0.0.1:4175/')
+  await page.goto(`http://127.0.0.1:${Number(process.env.BOTAGENT_WEB_TEST_PORT ?? 4174) + 1}/`)
 
   await expect(page.getByTestId('not-configured')).toBeVisible()
   await connect(page, 'synthetic-unconfigured-token')

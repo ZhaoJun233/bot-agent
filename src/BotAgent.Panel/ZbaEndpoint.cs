@@ -19,6 +19,7 @@ public sealed partial class ZbaEndpoint
     /// <summary>本进程实际提供的能力；客户端据此判断新入口是否可用，不靠版本号猜。</summary>
     private static readonly string[] Features =
     {
+        "quotas.list", "quotas.save", "quotas.find",
         "sessions.list",
         "sessions.ensure",
         "tasks.result",
@@ -91,6 +92,9 @@ public sealed partial class ZbaEndpoint
                 "health" => await HandleHealthAsync(requestId, ct).ConfigureAwait(false),
                 "meta" => MetaResponse(requestId),
                 "openapi" => OpenApiResponse(requestId),
+                "quotas.list" => await HandleQuotaListAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
+                "quotas.save" => await HandleQuotaSaveAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "quotas.find" => await HandleQuotaFindAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
                 "status" => await HandleStatusAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
                 "sessions.list" => await HandleSessionsListAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "sessions.ensure" => await HandleSessionsEnsureAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),

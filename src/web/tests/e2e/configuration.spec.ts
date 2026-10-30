@@ -79,7 +79,7 @@ test.afterEach(async ({ request }) => {
   })
 })
 
-test('配置页：只读令牌可查看 8 分区与秘密元数据，且不发写请求', async ({ page }) => {
+test('基础配置只显示必要字段；模型与凭据位于能力设置，只读不发写请求', async ({ page }) => {
   const writes: string[] = []
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname
@@ -97,14 +97,20 @@ test('配置页：只读令牌可查看 8 分区与秘密元数据，且不发�
   await expect(page.getByTestId('config-mode-badge')).toHaveText('标准模式')
   await expect(page.getByTestId('config-fields')).toBeVisible()
   await expect(page.getByTestId('config-field-botPersona')).toBeVisible()
-  await expect(page.getByTestId('config-secrets').locator('li')).toHaveCount(6)
+  await expect(page.getByTestId('config-secrets')).toHaveCount(0)
+  await expect(page.getByTestId('config-nav-model')).toHaveCount(0)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByTestId('config-secrets').locator('li')).toHaveCount(1)
 
   await page.getByTestId('config-nav-model').click()
   await expect(page.getByTestId('config-field-model')).toBeVisible()
 
   await page.getByTestId('config-nav-registered').click()
-  await expect(page.getByTestId('config-open-capabilities')).toBeVisible()
   await expect(page.getByTestId('config-providers')).toBeVisible()
+  await page.getByTestId('ability-configuration-dialog-close').click()
 
   await page.getByTestId('nav-overview').click()
   await expect(page.getByTestId('overview')).toBeVisible()
@@ -244,27 +250,30 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 
 test('配置页：离开配置页会清空秘密替换输入，但保留普通字段草稿', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('config-nav-behavior').click()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
-  const original = Number(await input.inputValue())
-  await input.fill(String(original + 1))
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  const input = dialog.getByTestId('config-field-model').locator('input')
+  const original = await input.inputValue()
+  await input.fill(original + '-synthetic-draft')
 
-  const secretList = page.getByTestId('config-secrets')
+  const secretList = dialog.getByTestId('config-secrets')
   await secretList.getByTestId('secret-replace').first().click()
   await secretList.locator('input[type=password]').first().fill('sk-synthetic-leave-7c41')
-  await expect(page.getByTestId('config-save-bar')).toContainText('2 项修改')
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('2 项修改')
 
-  await page.getByTestId('nav-overview').click()
+  // Simulate application navigation while a modal is mounted; pointer navigation is intentionally covered.
+  await page.getByTestId('nav-overview').evaluate((element: HTMLElement) => element.click())
   await expect(page.getByTestId('overview')).toBeVisible()
-  await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
+  await expect(page.getByTestId('nav-ability-draft')).toHaveText('1')
 
-  await page.getByTestId('nav-configuration').click()
-  await expect(page.getByTestId('config-field-privateCooldownSeconds').locator('input')).toHaveValue(String(original + 1))
-  await expect(page.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
-  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+  await page.getByTestId('nav-capabilities').click()
+  await expect(dialog.getByTestId('config-field-model').locator('input')).toHaveValue(original + '-synthetic-draft')
+  await expect(dialog.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
 
-  await page.getByTestId('config-discard').click()
-  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+  await dialog.getByTestId('config-discard').click()
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
 })
 
 test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ page }) => {
@@ -321,6 +330,35 @@ test('配置页：锁定前确认，继续编辑保留草稿，明确放弃后�
   // 重连后默认是标准模式，字段以只读文本渲染；值必须回到未修改的宿主基线。
   await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText(String(original))
 })
+
+for (const action of ['lock', 'downgrade'] as const) {
+  test('配置草稿跨页后可明确保存并' + (action === 'lock' ? '锁定' : '退出管理员'), async ({ page, request }) => {
+    await openConfiguration(page)
+    const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    const next = Number(await input.inputValue()) + 1
+    await input.fill(String(next))
+    const writes: string[] = []
+    page.on('request', req => { if (new URL(req.url()).pathname === '/zba/v1/configuration/save') writes.push(req.url()) })
+    await page.getByTestId('nav-overview').click()
+    await expect(page.getByTestId('configuration')).toBeHidden()
+    await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
+    await page.getByTestId(action === 'lock' ? 'lock' : 'disable-admin').click()
+    const confirmation = page.getByTestId('config-leave-dialog')
+    await expect(confirmation).toBeVisible()
+    await expect(confirmation).not.toContainText('标准模式下不能保存')
+    await expect(page.getByTestId('config-leave-save')).toBeEnabled()
+    expect(writes).toHaveLength(0)
+    await page.getByTestId('config-leave-save').click()
+    if (action === 'lock') await expect(page.getByTestId('auth-gate')).toBeVisible()
+    else {
+      await expect(confirmation).toHaveCount(0)
+      await expect(page.getByTestId('enable-admin')).toBeVisible()
+      await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
+    }
+    expect(writes).toHaveLength(1)
+    expect((await readConfiguration(request)).view.behavior.privateCooldownSeconds?.value).toBe(next)
+  })
+}
 
 test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存', async ({ page, request }) => {
   test.setTimeout(60_000)
@@ -433,6 +471,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
   const renamed = `${original}-renamed`
 
   await openConfiguration(page)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
   await page.getByTestId('config-nav-registered').click()
   await expect(page.getByTestId('config-providers')).toBeVisible()
 
@@ -443,9 +483,10 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 
   try {
     await nameInput.fill(renamed)
-    await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
-    await page.getByTestId('config-save').click()
-    await expect(page.getByTestId('config-receipt')).toBeVisible({ timeout: 20_000 })
+    const dialog = page.getByTestId('ability-configuration-dialog')
+    await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
+    await dialog.getByTestId('config-save').click()
+    await expect(dialog.getByTestId('config-receipt')).toBeVisible({ timeout: 20_000 })
 
     const after = await request.post('/zba/v1/configuration/read', {
       data: { kind: 1 },
@@ -484,19 +525,21 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
   }
 })
 
-test('配置页：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
+test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
   await openConfiguration(page)
-  const secrets = page.getByTestId('config-secrets')
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const secrets = page.getByTestId('ability-configuration-dialog').getByTestId('config-secrets')
   await secrets.getByTestId('secret-replace').first().click()
   await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')
-  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+  await expect(page.getByTestId('ability-configuration-dialog').getByTestId('config-save-bar')).toContainText('1 项修改')
 
   await page.route('**/zba/v1/configuration/read', (route) => route.fulfill({
     status: 401,
     contentType: 'application/json',
     json: { error: { code: 'unauthorized', message: 'synthetic expired' } }
   }))
-  await page.getByTestId('config-reload').click()
+  await page.getByTestId('ability-configuration-dialog').getByTestId('config-reload').click()
 
   await expect(page.getByTestId('auth-gate')).toBeVisible()
   await expect(page.getByTestId('error-notice')).toContainText('unauthorized')

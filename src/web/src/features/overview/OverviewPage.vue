@@ -3,12 +3,13 @@ import { computed } from 'vue'
 import type { Compatibility } from '../../api/compat'
 import type { ZbaHealth, ZbaMeta, ZbaStatus } from '../../api/zba'
 import AppIcon from '../../shared/ui/AppIcon.vue'
+import PageHeader from '../../shared/ui/PageHeader.vue'
 import StatusBadge from '../../shared/ui/StatusBadge.vue'
 import BreakableId from '../../shared/ui/BreakableId.vue'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import type { UiError } from '../../shared/ui/ui-error'
 import { reasonLabel } from '../capabilities/reason-labels'
-import { componentTitle, errorName, greeting, kindName, relativeTime, stateName, uptime } from '../../shared/friendly'
+import { componentTitle, errorName, kindName, relativeTime, stateName, uptime } from '../../shared/friendly'
 
 const props = defineProps<{
   health: ZbaHealth
@@ -36,19 +37,19 @@ const quickStarts = [
     target: 'capabilities' as const,
     icon: 'capabilities' as const,
     title: '插件与平台',
-    copy: '查看平台驱动、插件、模型提供商和 MCP 是否在线，一键启停，点「设置」改插件参数。'
+    copy: '连接模型与工具，管理平台和插件。'
   },
   {
     target: 'configuration' as const,
     icon: 'config' as const,
-    title: '配置文件',
-    copy: '调整回复风格、冷却时间、上下文条数等运行参数；改完在底部保存条统一提交。'
+    title: '配置管理',
+    copy: '调整运行参数，校验并统一保存。'
   },
   {
     target: 'tasks' as const,
     icon: 'tasks' as const,
     title: '任务',
-    copy: '给服务器内置 agent 派活、看进度和结果，处理需要人工审批的操作。'
+    copy: '提交任务，跟进执行与人工审批。'
   }
 ]
 
@@ -101,18 +102,14 @@ function reasonText(code: string | undefined | null): string | null {
 
 <template>
   <section class="overview" data-testid="overview" aria-labelledby="overview-title">
-    <header class="ov-hero" :data-tone="heroTone">
-      <div class="ov-hero-main">
-        <p class="ov-greeting">{{ greeting() }}，这里是 BotAgent 的运行状态</p>
-        <h1 id="overview-title">{{ headline }}</h1>
-        <p class="ov-sub">
+    <PageHeader title="系统概览" title-id="overview-title" eyebrow="WORKSPACE OVERVIEW" description="掌握系统运行状态，及时处理需要关注的事项。">
+      <template #metadata><p class="ov-sub">
           <span v-if="uptimeLabel">已连续运行 <strong>{{ uptimeLabel }}</strong></span>
           <span v-if="uptimeLabel" class="ov-sub-sep" aria-hidden="true">·</span>
           最后一次成功读取：<strong data-testid="last-success">{{ lastSuccessLabel }}</strong>
           <span class="ov-sub-sep" aria-hidden="true">·</span>
           契约 {{ props.meta.contractVersion }}
-        </p>
-      </div>
+        </p></template>
       <div class="ov-head-actions">
         <span class="ov-pill" :data-tone="props.mode === 'admin' ? 'accent' : 'neutral'" data-testid="mode-badge">
           <span class="ov-pill-dot" aria-hidden="true"></span>
@@ -138,7 +135,12 @@ function reasonText(code: string | undefined | null): string | null {
           {{ props.busy ? '刷新中…' : '刷新' }}
         </button>
       </div>
-    </header>
+    </PageHeader>
+
+    <div class="ov-health-line" :data-tone="heroTone" role="status">
+      <span class="health-mark"><AppIcon :name="heroTone === 'ok' ? 'check' : 'alert'" :size="19" /></span>
+      <div><strong>{{ headline }}</strong><p>{{ props.status.ready ? '服务已就绪' : '服务准备中' }} · {{ availableCount }} / {{ components.length }} 个组件可用 · {{ recentErrors.length }} 条最近错误</p></div>
+    </div>
 
     <p v-if="props.stale" class="inline-notice warn" data-testid="stale-banner" role="status">
       显示的是上次成功读取的数据；最近一次刷新失败，状态可能已过期。
@@ -207,7 +209,7 @@ function reasonText(code: string | undefined | null): string | null {
         <div class="ov-kpi-body">
           <p class="ov-kpi-label">最近错误</p>
           <p class="ov-kpi-value">{{ recentErrors.length }}</p>
-          <p class="ov-kpi-foot">{{ recentErrors.length > 0 ? '看右侧列表' : '风平浪静' }}</p>
+          <p class="ov-kpi-foot">{{ recentErrors.length > 0 ? '需要关注' : '没有记录到错误' }}</p>
         </div>
       </article>
     </div>
@@ -244,6 +246,10 @@ function reasonText(code: string | undefined | null): string | null {
                 <td>
                   <strong>{{ componentTitle(component.displayName, component.kind, component.id) }}</strong>
                   <span class="cell-sub mono"><BreakableId :value="component.id" /></span>
+                  <span class="component-mobile-detail">
+                    {{ kindName(component.kind) }} · {{ relativeTime(component.updatedAt) }}
+                    <span v-if="component.reasonCode">{{ reasonText(component.reasonCode) ?? component.reasonCode }}<span v-if="reasonText(component.reasonCode)" class="cell-sub mono">{{ component.reasonCode }}</span></span>
+                  </span>
                 </td>
                 <td><span class="kind-tag" :data-kind="component.kind">{{ kindName(component.kind) }}</span></td>
                 <td><StatusBadge :state="component.state" :available="component.available" friendly /></td>
@@ -307,7 +313,7 @@ function reasonText(code: string | undefined | null): string | null {
     <section class="ov-quick" aria-labelledby="quick-title">
       <div class="ov-quick-head">
         <h2 id="quick-title">接下来可以做什么</h2>
-        <p class="ov-panel-sub">常用入口，和左侧导航一一对应</p>
+        <p class="ov-panel-sub">从这里继续管理你的工作空间</p>
       </div>
       <div class="ov-quick-grid">
         <button

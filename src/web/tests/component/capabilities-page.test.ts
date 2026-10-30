@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
+import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
 import {
   ZbaClient,
   ZbaNetworkError,
@@ -722,6 +723,29 @@ describe('PluginSettingsDialog（插件卡片上的设置）', () => {
     }
   }
 
+  it('动态登记的插件设置可打开、编辑并只提交其字段', async () => {
+    const undo = registerPlugin({ pluginKey: 'ext.synthetic-review', title: 'Synthetic extension', summary: 'Synthetic settings',
+      fields: [{ section: 'behavior', key: 'syntheticExtension' }] })
+    let sent: unknown
+    try {
+      const wrapper = mountPage(clientWith({
+        listCapabilities: async () => page({ items: [descriptor({ key: { kind: 'plugin', key: 'ext.synthetic-review' } })] }),
+        readConfiguration: async () => ({ ...editable, view: { ...editable.view, behavior: { ...editable.view.behavior, syntheticExtension: field(1) } } }),
+        saveConfiguration: async (request: unknown) => { sent = request; return { code: 0, errors: [], receipt: { key: 'synthetic', contractRevision: 'cfg-0.3.3', decision: 0, observedVersion: '1', committedVersion: '2', commitState: 1, applyState: 1, steps: [], deviceKeyAssignments: [] } } }
+      }))
+      await flushPromises()
+      await wrapper.get('[data-testid="cap-settings-plugin:ext.synthetic-review"]').trigger('click')
+      await flushPromises()
+      const dialog = document.querySelector('[data-testid="ability-configuration-dialog"]')
+      expect(dialog).not.toBeNull()
+      expect(dialog!.querySelector('[data-testid="config-field-botPersona"]')).toBeNull()
+      const input = dialog!.querySelector<HTMLInputElement>('[data-testid="config-field-syntheticExtension"] input')!
+      input.value = '2'; input.dispatchEvent(new Event('input')); await flushPromises()
+      dialog!.querySelector<HTMLButtonElement>('[data-testid="config-save"]')!.click(); await flushPromises()
+      expect(sent).toMatchObject({ expectedVersion: '1', changes: { behavior: { syntheticExtension: { kind: 1, value: 2 } } } })
+    } finally { undo() }
+  })
+
   it('点设置打开弹窗，只显示该插件字段，保存只发改动的字段', async () => {
     let sent: any = null
     const client = clientWith({
@@ -737,18 +761,44 @@ describe('PluginSettingsDialog（插件卡片上的设置）', () => {
     await flushPromises()
     await wrapper.get('[data-testid="cap-settings-plugin:preset.feature.music"]').trigger('click')
     await flushPromises()
-    const dialog = document.querySelector('[data-testid="plugin-settings"]')!
+    const dialog = document.querySelector('[data-testid="ability-configuration-dialog"]')!
     expect(dialog).not.toBeNull()
-    expect(dialog.querySelector('[data-testid="plugin-field-musicBitrate"]')).not.toBeNull()
-    expect(dialog.querySelector('[data-testid="plugin-field-botPersona"]')).toBeNull()
-    const input = dialog.querySelector('[data-testid="plugin-field-musicBitrate"] input') as HTMLInputElement
+    expect(dialog.querySelector('[data-testid="config-field-musicBitrate"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-field-botPersona"]')).toBeNull()
+    const input = dialog.querySelector('[data-testid="config-field-musicBitrate"] input') as HTMLInputElement
     input.value = '192'
     input.dispatchEvent(new Event('input'))
     await flushPromises()
-    ;(dialog.querySelector('[data-testid="plugin-settings-save"]') as HTMLButtonElement).click()
+    ;(dialog.querySelector('[data-testid="config-save"]') as HTMLButtonElement).click()
     await flushPromises()
     expect(sent.changes).toEqual({ music: { musicBitrate: { kind: 1, value: 192 } } })
     expect(sent.expectedVersion).toBe('1')
+  })
+
+  it('未确认保存跨切页保留原键，隐藏时禁止改写，核对后才可关闭', async () => {
+    const sent: string[] = []; const found: string[] = []
+    const client = clientWith({ readConfiguration: async () => editable,
+      saveConfiguration: async (req: { key: string }) => { sent.push(req.key); throw new ZbaNetworkError(new Error('synthetic offline')) },
+      findConfiguration: async (key: string) => { found.push(key); return { code: 14 } }
+    })
+    const wrapper = mountPage(client)
+    await flushPromises()
+    await wrapper.get('[data-testid="cap-settings-plugin:preset.feature.music"]').trigger('click'); await flushPromises()
+    const input = document.querySelector('[data-testid="config-field-musicBitrate"] input') as HTMLInputElement
+    input.value = '192'; input.dispatchEvent(new Event('input')); await flushPromises()
+    ;(document.querySelector('[data-testid="config-save"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(document.querySelector('[data-testid="config-unconfirmed"]')).not.toBeNull()
+    ;(document.querySelector('[data-testid="ability-configuration-dialog-close"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(document.querySelector('[data-testid="ability-configuration-dialog"]')).not.toBeNull()
+    await wrapper.setProps({ active: false }); await flushPromises()
+    input.value = '320'; input.dispatchEvent(new Event('input')); await flushPromises()
+    await wrapper.setProps({ active: true }); await flushPromises()
+    expect((document.querySelector('[data-testid="config-field-musicBitrate"] input') as HTMLInputElement).value).toBe('192')
+    ;(document.querySelector('[data-testid="config-check-pending"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(found).toEqual(sent); expect(sent).toHaveLength(1)
+    ;(document.querySelector('[data-testid="ability-configuration-dialog-close"]') as HTMLButtonElement).click(); await flushPromises()
+    ;(document.querySelector('[data-testid="config-leave-discard"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(document.querySelector('[data-testid="ability-configuration-dialog"]')).toBeNull()
   })
 
   it('卡片上的启用开关直接写启用字段', async () => {
@@ -789,14 +839,14 @@ describe('PluginSettingsDialog（插件卡片上的设置）', () => {
     await flushPromises()
     await wrapper.get('[data-testid="cap-settings-plugin:preset.feature.music"]').trigger('click')
     await flushPromises()
-    const input = document.querySelector('[data-testid="plugin-field-musicBitrate"] input') as HTMLInputElement
+    const input = document.querySelector('[data-testid="config-field-musicBitrate"] input') as HTMLInputElement
     input.value = '64'
     input.dispatchEvent(new Event('input'))
     await flushPromises()
-    const close = () => (document.querySelector('[data-testid="plugin-settings-close"]') as HTMLButtonElement).click()
+    const close = () => (document.querySelector('[data-testid="ability-configuration-dialog-close"]') as HTMLButtonElement).click()
     close(); await flushPromises()
-    expect(document.querySelector('[data-testid="plugin-settings-discard"]')).not.toBeNull()
-    close(); await flushPromises()
-    expect(document.querySelector('[data-testid="plugin-settings"]')).toBeNull()
+    expect(document.querySelector('[data-testid="config-leave-dialog"]')).not.toBeNull()
+    ;(document.querySelector('[data-testid="config-leave-discard"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(document.querySelector('[data-testid="ability-configuration-dialog"]')).toBeNull()
   })
 })

@@ -56,6 +56,7 @@ internal static class Program
         await RunAsync("I. HttpListener adapter smoke", () => HttpListenerSmokeAsync(backend));
         await RunAsync("J. sessions", () => SessionChecksAsync());
         await RunAsync("K. plugin marketplace / provider discovery", () => PluginChecksAsync());
+        await RunAsync("L. quota management contract", () => QuotaChecksAsync());
 
         Console.WriteLine();
         Console.WriteLine($"passed={_passed} failed={_failed} skipped={_skipped}");
@@ -273,6 +274,9 @@ internal static class Program
 
     private static ZbaRequest RouteSmokeRequest(ZbaRouteInfo route) => route.OperationId switch
     {
+        "quotas.list" => Req("GET", route.Template, token: AdminToken),
+        "quotas.save" => Req("POST", route.Template, "{\"sourceKey\":\"group:10001\",\"expectedRevision\":\"0\",\"idempotencyKey\":\"quota-route-smoke\",\"dailyTokenLimit\":70}", AdminToken),
+        "quotas.find" => Req("POST", route.Template, "{\"idempotencyKey\":\"quota-route-smoke\"}", AdminToken),
         "health" => Req("GET", route.Template),
         "meta" or "openapi" or "status" or "capabilities.list" or "tasks.list" or "approvals.list"
             => Req("GET", route.Template, token: AdminToken),
@@ -752,6 +756,25 @@ internal static class Program
            + "\"trustAcknowledged\":" + (trustAcknowledged ? "true" : "false") + "}";
 
     // ───────────────────────── K. plugin marketplace ─────────────────────────
+
+    private static async Task QuotaChecksAsync()
+    {
+        var endpoint = CreateEndpoint(new SyntheticZbaBackend(), ConfiguredOptions());
+        const string save = "{\"sourceKey\":\"group:10001\",\"expectedRevision\":\"0\",\"idempotencyKey\":\"quota-test-0001\",\"dailyTokenLimit\":70}";
+        CheckStatus("quota anonymous list denied", await endpoint.ProcessAsync(Req("GET", "/zba/v1/quotas")), 401);
+        CheckStatus("quota read bearer lists", await endpoint.ProcessAsync(Req("GET", "/zba/v1/quotas", token: ReadToken)), 200);
+        CheckStatus("quota read bearer cannot save", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", save, ReadToken)), 403);
+        CheckStatus("quota read bearer cannot find receipts", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/find", "{\"idempotencyKey\":\"quota-test-0001\"}", ReadToken)), 403);
+        CheckStatus("quota cookie is not bearer", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", save)), 401);
+        CheckStatus("quota administrator saves", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", save, AdminToken)), 200);
+        CheckStatus("quota range checked", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", save.Replace(":70", ":0"), AdminToken)), 400, "invalid_daily_token_limit");
+        CheckStatus("quota revision checked", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", save.Replace("\"0\"", "\"-1\""), AdminToken)), 400, "invalid_quota_revision");
+        CheckStatus("quota unknown fields rejected", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", save.Replace(":70}", ":70,\"usedTokens\":0}"), AdminToken)), 400);
+        CheckStatus("quota missing required fields rejected", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/save", "{}", AdminToken)), 400);
+        CheckStatus("quota receipt lookup", await endpoint.ProcessAsync(Req("POST", "/zba/v1/quotas/find", "{\"idempotencyKey\":\"quota-test-0001\"}", AdminToken)), 200);
+        var meta = BodyJson(await endpoint.ProcessAsync(Req("GET", "/zba/v1/meta", token: ReadToken)));
+        Check("quota feature negotiation", meta.GetProperty("features").EnumerateArray().Any(x => x.GetString() == "quotas.find"));
+    }
 
     private static async Task PluginChecksAsync()
     {

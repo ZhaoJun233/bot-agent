@@ -298,6 +298,17 @@ internal static partial class ZbaOpenApi
             ("values", new JsonObject { ["type"] = "object", ["additionalProperties"] = String() }),
             ("configuredSecrets", new JsonObject { ["type"] = "object", ["additionalProperties"] = Boolean() }),
             ("restartRequired", Boolean())),
+        ["ZbaQuota"] = Object(("sourceKey", String()), ("displayName", String()), ("revision", String()),
+            ("dailyTokenLimit", Integer()), ("usedPromptTokens", Integer()), ("usedCompletionTokens", Integer()),
+            ("usedTokens", Integer()), ("remainingTokens", Integer()), ("resetDate", String()),
+            ("nextResetAt", String()), ("energySaving", Boolean()), ("minimumDailyTokenLimit", Integer()),
+            ("maximumDailyTokenLimit", Integer())),
+        ["ZbaQuotaPage"] = Object(("items", Array(Ref("ZbaQuota")))),
+        ["ZbaQuotaSaveRequest"] = RequiredObject(new[] { "sourceKey", "expectedRevision", "idempotencyKey", "dailyTokenLimit" },
+            ("sourceKey", String()), ("expectedRevision", String()), ("idempotencyKey", String()), ("dailyTokenLimit", Integer())),
+        ["ZbaQuotaSaveResult"] = Object(("quota", Ref("ZbaQuota"))),
+        ["ZbaQuotaFindRequest"] = RequiredObject(new[] { "idempotencyKey" }, ("idempotencyKey", String())),
+        ["ZbaQuotaFindResult"] = Object(("found", Boolean()), ("quota", Ref("ZbaQuota"))),
         ["ZbaProviderModels"] = Object(("models", Array(String())), ("errorCode", NullableString())),
         ["OpenApiDocument"] = new JsonObject { ["type"] = "object", ["additionalProperties"] = true }
     };

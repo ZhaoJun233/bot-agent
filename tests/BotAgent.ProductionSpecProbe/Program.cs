@@ -36,6 +36,7 @@ public static class Program
             TraceArchiveTests();
             OnlineBackupTests(root);
             MultiTenantIsolationTests(root);
+            QuotaManagementTests();
             MultiPlatformBotAgentTests(root);
             Console.WriteLine($"通过 {_passed}，失败 0");
             return 0;
@@ -232,6 +233,69 @@ public static class Program
         cmd.CommandText = "SELECT COUNT(1) FROM settings;";
         var count = Convert.ToInt32(cmd.ExecuteScalar());
         Check(count >= 1, "备份文件具备完整 SQLite 结构与数据一致性");
+    }
+
+    private static void QuotaManagementTests()
+    {
+        const string tenant = "synthetic:quota-management";
+        const string scope = "synthetic:quota-admin";
+        var first = new TenantQuotaStore();
+        var second = new TenantQuotaStore();
+        first.RecordUsage(tenant, 60, 20);
+        var initial = first.ReadManagement(tenant);
+        var saved = first.SaveManagement(tenant, 70, initial.Revision, "quota-save-0001", scope);
+        Check(saved.Quota.UsedTotalTokens == 80 && saved.Quota.EnergySaving && saved.Revision == 1,
+            "quota save preserves usage and recomputes energy state");
+        second.RecordUsage(tenant, 1, 1);
+        Check(second.SaveManagement(tenant, 70, initial.Revision, "quota-save-0001", scope) == saved,
+            "quota exact retry returns durable committed receipt before stale CAS");
+        Check(second.FindManagement("quota-save-0001", scope) == saved
+            && second.FindManagement("quota-save-0001", "synthetic:another-admin") is null,
+            "quota receipt lookup survives store recreation and is caller scoped");
+        ExpectQuota("idempotency_conflict", () => first.SaveManagement(tenant, 71, initial.Revision, "quota-save-0001", scope));
+        second.SetDailyTokenLimit(tenant, 100);
+        ExpectQuota("quota_revision_conflict", () => first.SaveManagement(tenant, 90, saved.Revision, "quota-save-0002", scope));
+        Check(first.FindManagement("quota-save-0002", scope) is null && first.GetQuota(tenant).DailyTokenLimit == 100,
+            "quota conflict commits neither receipt nor limit");
+        var revision = first.ReadManagement(tenant).Revision;
+        Parallel.For(0, 32, i => new TenantQuotaStore().RecordUsage(tenant, 2, 1));
+        Check(first.ReadManagement(tenant).Revision == revision && first.GetQuota(tenant).UsedTotalTokens == 178,
+            "multiple quota store instances retain concurrent usage without changing limit revision");
+        Parallel.Invoke(
+            () => Parallel.For(0, 32, i => new TenantQuotaStore().RecordUsage(tenant, 2, 1)),
+            () => second.SaveManagement(tenant, 1000, revision, "quota-save-0003", scope));
+        var final = first.ReadManagement(tenant);
+        Check(final.Quota.UsedTotalTokens == 274 && final.Quota.DailyTokenLimit == 1000 && !final.Quota.EnergySaving,
+            "concurrent quota management and usage preserve both updates");
+        var auditCalls = 0;
+        var auditSaved = first.SaveManagement(tenant, 2000, final.Revision, "quota-audit-0001", scope,
+            (conn, before, after) => { Check(before.DailyTokenLimit == 1000 && after.DailyTokenLimit == 2000,
+                "quota audit sees accurate atomic before and after limits"); auditCalls++; });
+        second.SaveManagement(tenant, 2000, final.Revision, "quota-audit-0001", scope, (conn, before, after) => auditCalls++);
+        Check(auditCalls == 1, "quota exact replay does not append audit twice");
+        try { first.SaveManagement(tenant, 3000, auditSaved.Revision, "quota-audit-failure", scope,
+            (conn, before, after) => throw new InvalidOperationException("synthetic-audit-failure")); }
+        catch (InvalidOperationException ex) when (ex.Message == "synthetic-audit-failure") { }
+        Check(first.FindManagement("quota-audit-failure", scope) is null
+            && first.ReadManagement(tenant) == auditSaved, "quota audit failure atomically rolls back limit revision and receipt");
+        final = first.ReadManagement(tenant);
+        const string capacityScope = "synthetic:quota-capacity";
+        var capacityRevision = final.Revision;
+        for (var i = 0; i < TenantQuotaStore.MaximumReceiptsPerCaller; i++)
+            first.SaveManagement(tenant, 1000, capacityRevision++, "capacity-" + i, capacityScope);
+        ExpectQuota("quota_receipt_capacity", () => first.SaveManagement(tenant, 1001, capacityRevision, "capacity-over", capacityScope));
+        Check(second.FindManagement("capacity-0", capacityScope) is not null
+            && first.GetQuota(tenant).DailyTokenLimit == 1000,
+            "quota receipt capacity fails closed and preserves oldest receipt");
+        var replay = second.SaveManagement(tenant, 1000, final.Revision, "capacity-0", capacityScope);
+        Check(replay.Revision == final.Revision + 1, "quota replay remains available at receipt capacity");
+    }
+
+    private static void ExpectQuota(string code, Action operation)
+    {
+        try { operation(); }
+        catch (TenantQuotaManagementException ex) when (ex.Code == code) { Check(true, code); return; }
+        throw new InvalidOperationException("expected " + code);
     }
 
     private static void MultiTenantIsolationTests(string root)

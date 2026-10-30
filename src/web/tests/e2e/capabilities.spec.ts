@@ -88,7 +88,7 @@ test('能力页：从配置页带草稿切到能力页会先询问', async ({ pa
 
 test('能力页：真实宿主接受自己签发的游标，第二页能加载', async ({ page }) => {
   await connect(page, READ)
-  await expect(page.getByTestId('cap-count')).toContainText('已加载 12 项')
+  await expect(page.getByTestId('cap-count')).toContainText('已加载 13 项')
 
   // 只改请求参数，不伪造响应：游标仍然由真实宿主签发、真实宿主接收。
   await page.route('**/zba/v1/capabilities?*', async (route) => {

@@ -153,7 +153,8 @@ internal static class CompositionRoot
         var authorization = new SettingsHotReload.ConfigurationRequestAuthorization();
         IReadOnlyList<PersistedModelProvider> capturedProviders = Array.Empty<PersistedModelProvider>();
         var ui = new PanelNotifier();
-        var pluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), ui.EmitLog);
+        var quotas = new TenantQuotaStore();
+        var pluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), ui.EmitLog, quotas);
         RegisteredConfigurationView ReadRegistered(Microsoft.Data.Sqlite.SqliteConnection connection, ConfigurationReadKind kind)
         {
             var providers = ModelProviderStore.LoadAllInTransaction(connection);
@@ -262,7 +263,6 @@ internal static class CompositionRoot
         });
 
         // 回复主链（要用到上面所有用例）→ 建好之后把"戳一戳请求一轮回复"这条边接上
-        var quotas = new TenantQuotaStore();
         var reply = new ReplyPipeline(settingsBox, source, brain, profiles, registry, ui, whitelist, approvals,
             participation, poke, vibes, roles, ownLedger, agentCmds, plain, stickers, voice, music, research, links, mood,
             new ReplyHooks(
@@ -270,11 +270,11 @@ internal static class CompositionRoot
                 SelfId: () => identity.SelfId,
                 IsDisposed: () => lifetime.IsDisposed),
             traces, riskBackoff,
-            quotas: quotas,
+            usage: quotas,
             platformPolicies: platformPolicies,
             inboundDedup: inboundDedup,
             plugins: pluginGate,
-            background: background);
+            background: background, replyPolicies: new PluginReplyPolicies(plugins));
         poke.RequestReply = conversation => reply.RequestReply(conversation, null);
 
         // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）

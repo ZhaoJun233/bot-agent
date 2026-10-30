@@ -19,7 +19,9 @@ import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
-import PluginSettingsDialog from './PluginSettingsDialog.vue'
+import CapabilityConfigurationDialog from './CapabilityConfigurationDialog.vue'
+import { configurationCapabilities, configurationFor, type CapabilityConfiguration } from './configuration-ownership'
+import TokenQuotaDialog from './TokenQuotaDialog.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
 import { protocolLabel } from './provider-protocols'
@@ -32,6 +34,7 @@ const props = withDefaults(defineProps<{
   client: ZbaClient
   mode: 'read' | 'admin'
   writesEnabled: boolean
+  features?: readonly string[]
   /** 视图是否在前台；离开视图后不允许把在途动作继续发出去。 */
   active?: boolean
 }>(), { active: true })
@@ -186,8 +189,17 @@ const formatter = new Intl.DateTimeFormat('zh-CN', {
 })
 
 // ── 插件设置弹窗 ───────────────────────────────────────────────
-const settingsTarget = ref<{ spec: PluginSettingsSpec; displayName: string } | null>(null)
+const settingsTarget = ref<{ capability: CapabilityConfiguration; trigger: HTMLElement | null } | null>(null)
+const configurationDialog = ref<InstanceType<typeof CapabilityConfigurationDialog> | null>(null)
+const standaloneConfigurations = configurationCapabilities().filter(item => !item.pluginKey)
+function openCapabilityConfiguration(capability: CapabilityConfiguration, event?: MouseEvent): void {
+  if (settingsTarget.value || quotaTarget.value) return
+  settingsTrigger = eventTrigger(event)
+  settingsTarget.value = { capability, trigger: settingsTrigger }
+}
 let settingsTrigger: HTMLElement | null = null
+// Keep quota intents mounted across navigation; an unresolved key must survive hiding.
+const quotaTarget = ref<{ trigger: HTMLElement | null } | null>(null)
 
 function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | undefined {
   return descriptor.key.kind === 'plugin' ? settingsFor(descriptor.key.key) : undefined
@@ -196,11 +208,16 @@ function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | unde
 function openSettings(descriptor: ZbaManagedDescriptor, event?: MouseEvent): void {
   const spec = pluginSpec(descriptor)
   if (!spec) return
+  if (spec.pluginKey === 'preset.feature.token-quota') {
+    quotaTarget.value ??= { trigger: eventTrigger(event) }
+    return
+  }
   settingsTrigger = eventTrigger(event)
-  settingsTarget.value = { spec, displayName: capabilityTitle(descriptor.displayName, descriptor.key) || spec.title }
+  const capability = configurationFor(spec.pluginKey)
+  if (capability) openCapabilityConfiguration(capability, event)
 }
 
-function closeSettings(saved: boolean): void {
+function closeSettings(saved = true): void {
   settingsTarget.value = null
   const trigger = settingsTrigger
   settingsTrigger = null
@@ -345,6 +362,16 @@ function revealPanel(testid: string): void {
 
 const canWrite = computed(() => props.mode === 'admin' && props.writesEnabled)
 const filterCount = computed(() => items.value.length)
+// Search only the loaded descriptors; pagination and server category filters retain their contracts.
+const search = ref('')
+const visibleItems = computed(() => {
+  const query = search.value.trim().toLocaleLowerCase()
+  if (!query) return items.value
+  return items.value.filter((item) => [
+    capabilityTitle(item.displayName, item.key), item.displayName, keyLabel(item.key),
+    kindLabel(item.key.kind), runtimeLabel(item.runtimeState), item.errorCode ?? ''
+  ].join(' ').toLocaleLowerCase().includes(query))
+})
 const counts = computed(() => {
   const result = { driver: 0, plugin: 0, provider: 0, device: 0, mcp: 0 }
   for (const item of items.value) result[item.key.kind] += 1
@@ -1246,6 +1273,8 @@ function focusRecord(record: OperationRecord): void {
 function resetForSession(): void {
   ownership += 1
   providerTarget.value = null
+  quotaTarget.value = null
+  settingsTarget.value = null
   providerViews.value = []
   pendingAction.value = null
   actionBusy.value = false
@@ -1282,7 +1311,7 @@ watch(() => props.client, (value) => {
  */
 function abandonInFlight(): void {
   ownership += 1
-  if (props.active === false) settingsTarget.value = null
+  if (props.active === false) configurationDialog.value?.discardSecretsOnLeave()
   const hadDialog = pendingAction.value !== null
   pendingAction.value = null
   actionError.value = null
@@ -1327,6 +1356,9 @@ onBeforeUnmount(() => {
 
 defineExpose({
   reload: () => load(),
+  requestLeave: (reason: 'lock' | 'downgrade', trigger?: HTMLElement | null) => configurationDialog.value?.requestLeave(reason, trigger) ?? Promise.resolve(true),
+  discardSecretsOnLeave: () => configurationDialog.value?.discardSecretsOnLeave(),
+  configurationDraftCount: computed(() => configurationDialog.value?.draftCount ?? 0),
   describe: () => ({ items: items.value.length, operations: operations.value.length })
 })
 </script>
@@ -1337,6 +1369,7 @@ defineExpose({
       <div>
         <p class="eyebrow">插件与平台</p>
         <h1 id="capabilities-title" ref="pageHeading" tabindex="-1">已登记能力</h1>
+        <p class="cap-description">管理平台连接、插件与模型服务，查看运行状态并执行受支持的操作。</p>
         <p class="subtitle">
           驱动 {{ counts.driver }} · 插件 {{ counts.plugin }} · 供应商 {{ counts.provider }}
           <template v-if="lastLoadedAt"> · 读取于 {{ formatTime(lastLoadedAt) }}</template>
@@ -1386,9 +1419,28 @@ defineExpose({
           {{ option.label }}
         </button>
       </div>
-      <p class="cap-count" data-testid="cap-count">已加载 {{ filterCount }} 项</p>
+      <div class="cap-search-row">
+        <label class="cap-search">
+          <span>搜索能力</span>
+          <input v-model="search" type="search" placeholder="搜索名称、标识或运行状态" data-testid="cap-search" aria-describedby="cap-search-hint">
+        </label>
+        <div class="cap-search-summary">
+          <p class="cap-count" data-testid="cap-count">已加载 {{ filterCount }} 项<template v-if="search.trim()"> · 匹配 {{ visibleItems.length }} 项</template></p>
+          <p id="cap-search-hint" class="cap-search-hint">搜索当前已加载的能力<template v-if="nextCursor">，可继续加载更多</template></p>
+        </div>
+      </div>
     </div>
 
+    <section class="ability-settings" aria-labelledby="ability-settings-title" data-testid="ability-settings">
+      <h2 id="ability-settings-title">能力配置</h2>
+      <p>按功能管理运行参数与凭据。插件设置仍在对应插件卡片中，基础配置页只保留通用必需项。</p>
+      <div class="ability-settings-grid">
+        <button v-for="capability in standaloneConfigurations" :key="capability.id" type="button"
+          :data-testid="'ability-settings-' + capability.id" :disabled="settingsTarget !== null || quotaTarget !== null" @click="openCapabilityConfiguration(capability, $event)">
+          <strong>{{ capability.title }}</strong><span>{{ capability.summary }}</span>
+        </button>
+      </div>
+    </section>
     <ErrorNotice :error="contextError" title="读取配置代际失败" />
     <p v-if="contextError" class="inline-notice warn" data-testid="cap-context-error">
       没有配置代际就不能提交动作；能力目录仍可浏览。
@@ -1403,9 +1455,14 @@ defineExpose({
     <p v-if="loading && items.length === 0" class="empty-state" data-testid="cap-loading">正在读取能力目录…</p>
     <p v-else-if="!error && items.length === 0" class="empty-state" data-testid="cap-empty">没有已登记的能力。</p>
 
+    <div v-else-if="search.trim() && visibleItems.length === 0" class="empty-state cap-search-empty" data-testid="cap-search-empty">
+      <strong>没有匹配的能力</strong>
+      <p>尝试其他名称、标识或运行状态，或继续加载下一页。</p>
+      <button type="button" class="tonal" @click="search = ''">清除搜索</button>
+    </div>
     <div v-else class="cap-grid">
       <article
-        v-for="item in items"
+        v-for="item in visibleItems"
         :key="keyIdentity(item.key)"
         class="cap-card"
         :data-kind="item.key.kind"
@@ -1466,6 +1523,7 @@ defineExpose({
         </dl>
 
         <div class="cap-actions">
+          <p class="cap-actions-label">运行操作</p>
           <template v-if="supportedActions(item).length > 0">
             <button
               v-for="capability in supportedActions(item)"
@@ -1681,15 +1739,19 @@ defineExpose({
 
     <ProviderEditorDialog v-if="providerTarget" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
 
-    <PluginSettingsDialog
-      v-if="settingsTarget"
-      :key="settingsTarget.spec.pluginKey"
+    <TokenQuotaDialog v-if="quotaTarget" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled"
+      :features="props.features ?? []" :active="props.active" :trigger="quotaTarget.trigger" :fallback="pageHeading"
+      :runtime-state="items.find(item => item.key.kind === 'plugin' && item.key.key === 'preset.feature.token-quota')?.runtimeState"
+      @close="quotaTarget = null" @saved="load(undefined, 'background')" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
+
+    <CapabilityConfigurationDialog
+      v-if="settingsTarget" ref="configurationDialog"
+      :key="settingsTarget.capability.id"
       :client="props.client"
       :mode="props.mode"
       :writes-enabled="props.writesEnabled"
-      :spec="settingsTarget.spec"
-      :display-name="settingsTarget.displayName"
-      @close="closeSettings"
+      :capability="settingsTarget.capability" :active="props.active" :trigger="settingsTarget.trigger" :fallback="pageHeading"
+      @close="closeSettings()"
       @enable-admin="emit('enable-admin')"
       @auth-expired="(e) => emit('auth-expired', e)"
     />
@@ -1698,7 +1760,7 @@ defineExpose({
       <div v-if="pendingAction" class="dialog-backdrop" data-testid="cap-confirm">
         <section
           ref="confirmDialog"
-          class="dialog"
+          class="dialog cap-confirm-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby="cap-confirm-title"
@@ -1750,3 +1812,89 @@ defineExpose({
     </Teleport>
   </section>
 </template>
+
+<style scoped>
+.ability-settings { margin: 20px 0; }
+.ability-settings h2 { font-size: 17px; margin-bottom: 6px; }
+.ability-settings p { color: var(--text-muted); font-size: 13px; line-height: 1.7; }
+.ability-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 10px; }
+.ability-settings-grid button { display: grid; text-align: left; gap: 6px; padding: 16px; border-color: var(--border); }
+.ability-settings-grid span { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.capabilities { min-width: 0; }
+.capabilities .page-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 0; }
+.page-heading > div:first-child { flex: 1 1 360px; min-width: 0; }
+.page-heading h1 { margin: 0; font-size: 28px; line-height: 1.25; letter-spacing: -.035em; }
+.eyebrow { margin: 0 0 8px; color: var(--accent-deep); font-size: 11px; font-weight: 650; letter-spacing: .1em; }
+.cap-description { color: var(--text-muted); margin: 10px 0 6px; line-height: 1.65; }
+.subtitle { margin: 0; color: var(--text-soft); font-size: 12px; }
+.heading-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cap-toolbar { display: grid; justify-content: stretch; align-items: stretch; gap: 16px; margin: 0; padding: 0; border: 0; background: transparent; }
+.cap-filters { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.cap-filters .chip { min-height: 36px; padding: 6px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-muted); box-shadow: none; }
+.cap-filters .chip.active { border-color: var(--border); color: var(--accent-deep); background: var(--accent-soft); }
+.cap-search-row { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; }
+.cap-search { display: grid; gap: 6px; flex: 0 1 380px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.cap-search input { width: 100%; min-width: 0; height: 36px; border-radius: 8px; }
+.cap-search-summary { text-align: right; }
+.cap-count { margin: 0; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.cap-search-hint { margin: 4px 0 0; font-size: 12px; color: var(--text-soft); }
+.cap-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.cap-card { display: flex; flex-direction: column; min-width: 0; gap: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 18px; background: var(--surface); box-shadow: none; transform: none; }
+.cap-card::before { display: none; }
+.cap-card:hover { border-color: var(--border-strong); box-shadow: none; transform: none; }
+.cap-card-head { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.cap-avatar { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); color: var(--text-muted); font-size: 15px; font-weight: 650; box-shadow: none; }
+.cap-title { flex: 1; min-width: 0; }
+.cap-kind { margin: 0 0 3px; font-size: 11px; font-weight: 600; color: var(--text-soft); }
+.cap-name { margin: 0; font-size: 16px; letter-spacing: -.015em; overflow-wrap: anywhere; }
+.cap-key { margin: 5px 0 0; color: var(--text-soft); font-size: 11px; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, monospace); }
+.cap-card-head .status-badge { flex: none; font-size: 11px; }
+.cap-switch-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
+.cap-switch { display: inline-flex; align-items: center; position: relative; min-height: 28px; gap: 10px; cursor: pointer; }
+.cap-switch input { position: absolute; opacity: 0; width: 36px; height: 28px; margin: 0; }
+.cap-switch-track { display: block; width: 34px; height: 20px; flex: none; border-radius: 20px; background: var(--border-strong); position: relative; }
+.cap-switch-thumb { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: none; }
+.cap-switch input:checked + .cap-switch-track { background: var(--accent-deep); }
+.cap-switch input:checked + .cap-switch-track .cap-switch-thumb { transform: translateX(14px); }
+.cap-switch input:focus-visible + .cap-switch-track { outline: 2px solid var(--accent-deep); outline-offset: 3px; }
+.cap-switch input:disabled + .cap-switch-track { opacity: .5; }
+.cap-switch-label { font-size: 12px; font-weight: 600; }
+.cap-switch-hint { color: var(--text-soft); font-size: 11px; }
+.cap-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0; }
+.cap-meta > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.cap-meta dt { color: var(--text-soft); font-size: 12px; }
+.cap-meta dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.cap-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 12px; border-top: 1px solid var(--border); }
+.cap-actions-label { flex-basis: 100%; margin: 0; font-size: 11px; font-weight: 600; color: var(--text-soft); }
+.cap-action { min-height: 36px; border-radius: 8px; font-size: 12px; }
+.cap-action.danger { color: var(--bad-text); }
+.cap-reason { flex-basis: 100%; margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.cap-none { color: var(--text-soft); font-size: 12px; margin: 0; }
+.cap-card-foot { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border-top: 1px solid var(--border); padding-top: 10px; margin-top: auto; }
+.cap-card-foot button { min-height: 36px; font-size: 12px; }
+.cap-rev { font-size: 10px; color: var(--text-soft); margin-left: auto; font-family: var(--font-mono, ui-monospace, monospace); }
+.cap-more { display: grid; justify-items: center; margin: 24px 0; gap: 8px; }
+.cap-more-hint { margin: 0; font-size: 12px; color: var(--text-soft); }
+.cap-detail, .cap-result, .cap-ops { margin-top: 20px; border-radius: 8px; min-width: 0; }
+.cap-op-key { font-size: 11px; color: var(--text-soft); overflow-wrap: anywhere; }
+.cap-search-empty { border: 1px dashed var(--border-strong); border-radius: 8px; padding: 36px 20px; text-align: center; }
+.cap-search-empty p { color: var(--text-muted); }
+.cap-confirm-dialog { width: min(480px, calc(100vw - 32px)); border-radius: 8px; }
+.cap-confirm-dialog h2 { font-size: 20px; letter-spacing: -.025em; }
+.cap-confirm-dialog .dialog-copy { overflow-wrap: anywhere; }
+@media (min-width: 1360px) { .cap-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 767px) {
+  .page-heading h1 { font-size: 24px; }
+  .page-heading > div:first-child { flex-basis: 100%; }
+  .cap-grid { grid-template-columns: minmax(0, 1fr); }
+  .cap-card { padding: 16px; }
+  .cap-search { flex-basis: 100%; }
+  .cap-search-summary { text-align: left; }
+  .capabilities button, .cap-search input, .cap-confirm-dialog button { min-height: 44px; }
+  .cap-switch { min-height: 44px; }
+  .cap-switch input { height: 44px; }
+  .cap-switch-row { padding-block: 2px; }
+  .heading-actions { width: 100%; }
+  .heading-actions button { flex: 1 1 auto; }
+}
+</style>

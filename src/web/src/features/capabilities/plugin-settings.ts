@@ -42,6 +42,11 @@ const ref = (section: ZbaPatchSection, key: string): PluginFieldRef => ({ sectio
 
 const presets: PluginSettingsSpec[] = [
   {
+    pluginKey: 'preset.feature.token-quota',
+    title: 'Token 配额',
+    summary: '按来源管理每日 Token 额度与用量；耗尽后进入节能模式'
+  },
+  {
     pluginKey: 'preset.feature.music',
     title: '点歌与音乐解析',
     summary: '点歌开关、音源、下载与音频分析',

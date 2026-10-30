@@ -26,7 +26,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
 
     private readonly string _root;
 
-    internal PluginRuntime(string rootDirectory, Action<string> log)
+    internal PluginRuntime(string rootDirectory, Action<string> log, BotAgent.Domain.Ports.ITenantQuotaLedger quotas)
     {
         _log = log;
         _root = rootDirectory;
@@ -38,7 +38,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
         Registry = new PluginManager(log);
         var desired = LoadDesiredStates();
         IBotPlugin[] presets = [new MusicPresetPlugin(), new VoicePresetPlugin(), new StickersPresetPlugin(),
-            new PokePresetPlugin(), new VibesPresetPlugin(), new ProfilesPresetPlugin(), new WebSearchPresetPlugin()];
+            new PokePresetPlugin(), new VibesPresetPlugin(), new ProfilesPresetPlugin(), new WebSearchPresetPlugin(),
+            new TokenQuotaPresetPlugin(quotas)];
         foreach (var plugin in presets)
         {
             _presetIds.Add(plugin.Id);

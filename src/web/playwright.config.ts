@@ -13,6 +13,9 @@ if (!fs.existsSync(headlessDll)) {
   throw new Error(`Headless DLL not found: ${headlessDll}. Build BotAgent.Headless Release first.`)
 }
 
+// Override preview ports on hosts where Windows reserves the default range.
+const previewPort = Number(process.env.BOTAGENT_WEB_TEST_PORT ?? 4174)
+const noTokenPreviewPort = previewPort + 1
 const hostPort = 18127
 const wsPort = 13076
 const noTokenHostPort = 18128
@@ -71,7 +74,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:4174',
+    baseURL: `http://127.0.0.1:${previewPort}`,
     // Windows 上 `retain-on-failure` 的 trace 落盘会和 artifacts 目录清理抢同一批文件，
     // 偶发让**已经通过**的用例在 teardown 里以
     // `browserContext.close: ENOENT ... -recordingNNN.trace` 失败（S4-F5）。
@@ -92,9 +95,9 @@ export default defineConfig({
       stderr: 'pipe'
     },
     {
-      command: 'npm run preview -- --port 4174 --strictPort',
+      command: `npm run preview -- --port ${previewPort} --strictPort`,
       cwd: webRoot,
-      url: 'http://127.0.0.1:4174',
+      url: `http://127.0.0.1:${previewPort}`,
       timeout: 30_000,
       reuseExistingServer: false,
       env: {
@@ -115,9 +118,9 @@ export default defineConfig({
       stderr: 'pipe'
     },
     {
-      command: 'npm run preview -- --port 4175 --strictPort',
+      command: `npm run preview -- --port ${noTokenPreviewPort} --strictPort`,
       cwd: webRoot,
-      url: 'http://127.0.0.1:4175',
+      url: `http://127.0.0.1:${noTokenPreviewPort}`,
       timeout: 30_000,
       reuseExistingServer: false,
       env: {
