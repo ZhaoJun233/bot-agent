@@ -288,7 +288,20 @@ internal static class ReviewAgentStorageRegression
             try { await pending; }
             catch (OperationCanceledException) { cancelled = true; }
             check(cancelled, "B24 in-flight caller cancellation is propagated after readers settle");
-            check(ids.Split(',').All(id => HasExited(int.Parse(id))), "B24 caller cancellation cleans parent and descendant process");
+            var pids = ids.Split(',').Select(int.Parse).ToArray();
+            var allExited = pids.All(HasExited);
+            if (!allExited && OperatingSystem.IsLinux())
+                foreach (var pid in pids)
+                {
+                    try
+                    {
+                        var stat = File.ReadAllText($"/proc/{pid}/stat");
+                        var end = stat.LastIndexOf(')');
+                        Console.WriteLine($"B24 synthetic liveness pid={pid} state={(end >= 0 && end + 2 < stat.Length ? stat[end + 2] : '?')}");
+                    }
+                    catch (Exception ex) { Console.WriteLine($"B24 synthetic liveness pid={pid} read={ex.GetType().Name}"); }
+                }
+            check(allExited, "B24 caller cancellation cleans parent and descendant process");
         }
         finally
         {
