@@ -12,7 +12,8 @@ import {
   type ZbaManagedObjectKey,
   type ZbaManagedOperationResult,
   type ZbaManagedRuntimeState,
-  type ZbaProviderConfigurationView
+  type ZbaProviderConfigurationView,
+  type ZbaConfigurationReadResult
 } from '../../api/zba'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
@@ -26,7 +27,7 @@ import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
 import { protocolLabel } from './provider-protocols'
 import { settingsFor, type PluginSettingsSpec } from './plugin-settings'
-import { confirmToggle, readSwitches, setPluginEnabled, type PluginSwitchState } from './plugin-toggle'
+import RegisteredPluginSwitch from './RegisteredPluginSwitch.vue'
 import { reasonLabel } from './reason-labels'
 import { capabilityTitle } from '../../shared/friendly'
 
@@ -207,7 +208,7 @@ function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | unde
 
 function openSettings(descriptor: ZbaManagedDescriptor, event?: MouseEvent): void {
   const spec = pluginSpec(descriptor)
-  if (!spec) return
+  if (!spec || pluginCards.value.some(card => cardClient(card) === props.client && card.busy)) return
   if (spec.pluginKey === 'preset.feature.token-quota') {
     quotaTarget.value ??= { trigger: eventTrigger(event) }
     return
@@ -272,76 +273,58 @@ async function testSavedProvider(key: string): Promise<void> {
   }
 }
 
-// ── 插件「启用」开关 ─────────────────────────────────────────
-const switches = ref<Record<string, PluginSwitchState>>({})
-const switchBusy = ref<string | null>(null)
-const switchNotice = ref<{ pluginKey: string; tone: 'ok' | 'warn' | 'bad'; text: string } | null>(null)
-
-function switchOf(descriptor: ZbaManagedDescriptor): PluginSwitchState | null {
-  if (descriptor.key.kind !== 'plugin' || !pluginSpec(descriptor)?.enableField) return null
-  const state = switches.value[descriptor.key.key]
-  return state && state.enabled !== null ? state : null
+// ── 插件开关：组件持有提交键，卡片刷新/筛选不能卸载未决意图 ──────
+const switchSnapshot = ref<ZbaConfigurationReadResult | null>(null)
+let switchReadSequence = 0
+let cardSequence = 0
+interface CapabilityCard {
+  id: number; descriptor: ZbaManagedDescriptor
+  configuration: ZbaConfigurationReadResult | null; busy: boolean; pinned: boolean
 }
-
-/** 开关状态来自配置快照（read kind 1）；读不到就不显示开关，不影响目录本身。 */
+const pluginCards = ref<CapabilityCard[]>([])
+const cardClients = new Map<number, ZbaClient>()
+function cardClient(card: CapabilityCard): ZbaClient { return cardClients.get(card.id)! }
+function rememberPluginCards(): void {
+  for (const descriptor of items.value) {
+    if (descriptor.key.kind !== 'plugin') continue
+    const old = pluginCards.value.find(card => cardClient(card) === props.client && keyIdentity(card.descriptor.key) === keyIdentity(descriptor.key))
+    if (old) old.descriptor = descriptor
+    else {
+      const id = ++cardSequence
+      cardClients.set(id, props.client)
+      pluginCards.value.push({ id, descriptor, configuration: switchSnapshot.value, busy: false, pinned: false })
+    }
+  }
+}
+watch(items, rememberPluginCards, { flush: 'sync' })
+const cards = computed(() => {
+  const current = visibleItems.value.map(descriptor => descriptor.key.kind === 'plugin'
+    ? pluginCards.value.find(card => cardClient(card) === props.client && keyIdentity(card.descriptor.key) === keyIdentity(descriptor.key))!
+    : { id: keyIdentity(descriptor.key), descriptor, busy: false, pinned: false })
+  return [...current, ...pluginCards.value.filter(card => !current.some(item => item.id === card.id))]
+})
+function cardVisible(card: { id: string | number; descriptor: ZbaManagedDescriptor; busy: boolean; pinned: boolean }): boolean {
+  if (typeof card.id === 'string') return true
+  return (cardClients.get(card.id) === props.client && visibleItems.value.some(item => keyIdentity(item.key) === keyIdentity(card.descriptor.key))) || card.busy || card.pinned
+}
+function currentCard(id: string | number): CapabilityCard | undefined {
+  return pluginCards.value.find(card => card.id === id)
+}
 async function loadSwitches(): Promise<void> {
+  const client = props.client
+  const current = ++switchReadSequence
+  const epoch = ownership
   try {
-    const snapshot = await props.client.readConfiguration(1)
-    switches.value = snapshot.view ? readSwitches(snapshot.view) : {}
-    providerViews.value = snapshot.view?.registered.providers ?? []
+    const snapshot = await client.readConfiguration(1)
+    if (unmounted || current !== switchReadSequence || client !== props.client || epoch !== ownership) return
+    switchSnapshot.value = snapshot.code === 0 ? snapshot : null
+    providerViews.value = snapshot.code === 0 ? snapshot.view?.registered.providers ?? [] : []
   } catch (cause) {
-    if (reportAuthFailure(cause)) return
-    switches.value = {}
+    if (unmounted || current !== switchReadSequence || client !== props.client || epoch !== ownership) return
+    switchSnapshot.value = null
+    reportAuthFailure(cause)
   }
-}
-
-async function toggleSwitch(descriptor: ZbaManagedDescriptor, event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement
-  const spec = pluginSpec(descriptor)
-  const state = switchOf(descriptor)
-  if (!spec || !state || !canWrite.value || switchBusy.value !== null) {
-    if (state) input.checked = state.enabled === true
-    return
-  }
-  const target = input.checked
-  const pluginKey = spec.pluginKey
-  switchBusy.value = pluginKey
-  switchNotice.value = null
-  try {
-    let result = await setPluginEnabled(props.client, spec, target)
-    if (result.kind === 'unconfirmed') {
-      const confirmed = await confirmToggle(props.client, result.key)
-      if (confirmed === true) result = { kind: 'saved', enabled: target }
-      else if (confirmed === false) {
-        result = { kind: 'error', error: { code: 'not_applied', message: '服务端没有这次提交的记录，开关没有变。' } }
-      }
-    }
-    const name = capabilityTitle(descriptor.displayName, descriptor.key) || spec.title
-    switch (result.kind) {
-      case 'saved':
-      case 'noop':
-        switchNotice.value = { pluginKey, tone: 'ok', text: name + (result.enabled ? ' 已启用。' : ' 已停用。') }
-        break
-      case 'conflict':
-        switchNotice.value = { pluginKey, tone: 'warn', text: '设置刚被其他人改过，已读取最新状态，确认后再切一次。' }
-        break
-      case 'unconfirmed':
-        switchNotice.value = { pluginKey, tone: 'warn', text: '没收到服务端确认，不确定有没有生效；已重新读取当前状态。' }
-        break
-      case 'auth':
-        emit('auth-expired', result.error)
-        break
-      case 'error':
-        switchNotice.value = { pluginKey, tone: 'bad', text: result.error.message }
-        break
-    }
-  } finally {
-    await loadSwitches()
-    const latest = switchOf(descriptor)
-    input.checked = latest?.enabled === true
-    switchBusy.value = null
-    void load(undefined, 'background')
-  }
+  for (const card of pluginCards.value) if (cardClient(card) === client) card.configuration = switchSnapshot.value
 }
 
 /** 卡片上的开关状态用人话：「期望 启用」对用户没有意义。 */
@@ -537,7 +520,7 @@ async function load(cursor?: string, mode: 'initial' | 'interactive' | 'backgrou
     items.value = cursor ? [...items.value, ...page.items] : page.items
     nextCursor.value = page.nextCursor ?? null
     lastLoadedAt.value = new Date().toISOString()
-    if (!cursor && switchBusy.value === null) void loadSwitches()
+    if (!cursor) void loadSwitches()
     return true
   } catch (cause) {
     if (sequence !== loadSequence) return true
@@ -1276,6 +1259,12 @@ function resetForSession(): void {
   quotaTarget.value = null
   settingsTarget.value = null
   providerViews.value = []
+  switchSnapshot.value = null
+  ++switchReadSequence
+  ++loadSequence
+  loading.value = false
+  pluginCards.value = pluginCards.value.filter(card => card.busy || card.pinned)
+  for (const id of cardClients.keys()) if (!pluginCards.value.some(card => card.id === id)) cardClients.delete(id)
   pendingAction.value = null
   actionBusy.value = false
   actionError.value = null
@@ -1460,10 +1449,9 @@ defineExpose({
       <p>尝试其他名称、标识或运行状态，或继续加载下一页。</p>
       <button type="button" class="tonal" @click="search = ''">清除搜索</button>
     </div>
-    <div v-else class="cap-grid">
-      <article
-        v-for="item in visibleItems"
-        :key="keyIdentity(item.key)"
+    <div class="cap-grid">
+      <template v-for="card in cards" :key="card.id">
+      <article v-for="item in [card.descriptor]" :key="keyIdentity(item.key)" v-show="cardVisible(card)"
         class="cap-card"
         :data-kind="item.key.kind"
         :data-testid="'cap-item-' + keySlug(item.key)"
@@ -1481,35 +1469,20 @@ defineExpose({
           </span>
         </header>
 
-        <div v-if="switchOf(item)" class="cap-switch-row" :data-testid="'cap-switch-row-' + keySlug(item.key)">
-          <label class="cap-switch" :class="{ busy: switchBusy === item.key.key }">
-            <input
-              type="checkbox"
-              role="switch"
-              :checked="switchOf(item)?.enabled === true"
-              :disabled="!canWrite || !switchOf(item)?.editable || switchBusy !== null"
-              :aria-label="'启用 ' + capabilityTitle(item.displayName, item.key)"
-              :data-testid="'cap-switch-' + keySlug(item.key)"
-              @change="toggleSwitch(item, $event)"
-            />
-            <span class="cap-switch-track" aria-hidden="true"><span class="cap-switch-thumb" /></span>
-            <span class="cap-switch-label">
-              {{ switchBusy === item.key.key ? '正在保存…' : (switchOf(item)?.enabled ? '功能已开启' : '功能已关闭') }}
-            </span>
-          </label>
-          <span v-if="!canWrite" class="cap-switch-hint">管理员模式下可切换</span>
-        </div>
-        <p
-          v-if="switchNotice && switchNotice.pluginKey === item.key.key"
-          class="cap-switch-notice"
-          :data-tone="switchNotice.tone"
-          role="status"
-          :data-testid="'cap-switch-notice-' + keySlug(item.key)"
-        >{{ switchNotice.text }}</p>
+        <p v-if="typeof card.id === 'number' && cardClients.get(card.id) !== props.client && (card.busy || card.pinned)" class="notice warn">上一身份的启停意图已保留；切回原身份后核对。</p>
+        <RegisteredPluginSwitch v-if="item.key.kind === 'plugin' && currentCard(card.id)"
+          :client="props.client" :plugin-key="item.key.key" :compact="true" :configuration="currentCard(card.id)?.configuration"
+          :title="capabilityTitle(item.displayName, item.key)" :runtime-state="item.runtimeState"
+          :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active && cardClients.get(Number(card.id)) === props.client"
+          :blocked="!!quotaTarget || !!settingsTarget"
+          @busy="value => { const owner = currentCard(card.id); if (owner) owner.busy = value }"
+          @pinned="value => { const owner = currentCard(card.id); if (owner) owner.pinned = value }"
+          @saved="load(undefined, 'background')" @auth-expired="value => emit('auth-expired', value)" />
+
 
         <dl class="cap-meta">
           <div>
-            <dt>开关</dt>
+            <dt>{{ item.key.kind === 'plugin' ? '插件加载' : '开关' }}</dt>
             <dd>{{ desiredLabel(item.desiredEnabled) }}</dd>
           </div>
           <div v-if="item.key.kind !== 'plugin'">
@@ -1517,8 +1490,8 @@ defineExpose({
             <dd>{{ item.credentialConfigured ? '已配置' : '未配置' }}</dd>
           </div>
           <div v-if="item.errorCode">
-            <dt>错误</dt>
-            <dd class="cap-error-code">{{ item.errorCode }}</dd>
+            <dt>{{ item.errorCode === 'plugin_restart_required' ? '生效状态' : '错误' }}</dt>
+            <dd :class="item.errorCode === 'plugin_restart_required' ? 'muted' : 'cap-error-code'" :title="item.errorCode">{{ item.errorCode === 'plugin_restart_required' ? '需重启宿主' : item.errorCode }}</dd>
           </div>
         </dl>
 
@@ -1531,7 +1504,7 @@ defineExpose({
               type="button"
               class="tonal cap-action"
               :class="{ danger: isDangerous(capability.action) }"
-              :disabled="!canWrite"
+              :disabled="!canWrite || (typeof card.id === 'number' && cardClients.get(card.id) !== props.client)"
               :data-testid="'cap-action-' + keySlug(item.key) + '-' + capability.action"
               @click="requestAction(item, capability, $event)"
             >
@@ -1559,6 +1532,7 @@ defineExpose({
             v-if="pluginSpec(item)"
             type="button"
             class="tonal cap-settings"
+            :disabled="card.busy || (typeof card.id === 'number' && cardClients.get(card.id) !== props.client)"
             :data-testid="'cap-settings-' + keySlug(item.key)"
             :aria-label="'设置 ' + capabilityTitle(item.displayName, item.key)"
             @click="openSettings(item, $event)"
@@ -1586,6 +1560,7 @@ defineExpose({
           <span class="cap-rev" :title="item.descriptorRevision">版本 {{ item.descriptorRevision.slice(0, 8) }}</span>
         </footer>
       </article>
+      </template>
     </div>
 
     <div v-if="nextCursor" class="cap-more">

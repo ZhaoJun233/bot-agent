@@ -277,7 +277,7 @@ onBeforeUnmount(() => { alive = false; ++readSequence })
 .quota-metrics dt { color: var(--text-muted); font-size: 11px; }.quota-metrics dd { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 5px 0 0; overflow-wrap: anywhere; }
 .quota-source footer { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 12px; }
 .quota-editor { display: grid; gap: 10px; padding: 18px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-muted); margin-top: 20px; min-width: 0; }
-.quota-editor label { font-size: 12px; font-weight: 600; }.quota-editor input { min-width: 0; width: 100%; border-radius: 8px; min-height: 38px; }
+.quota-editor label { font-size: 12px; font-weight: 600; }.quota-editor input { min-width: 0; width: 100%; max-width: 280px; border-radius: 8px; min-height: 38px; }
 .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }button { min-height: 36px; border-radius: 8px; }
 @media (max-width: 600px) { .quota-source, .quota-editor { padding: 14px; }.quota-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.quota-metrics > div:first-child { grid-column: 1 / -1; }.quota-metrics dd { font-size: 17px; }button, .quota-editor input { min-height: 44px; }.editor-actions > button { flex: 1 1 auto; } }
 </style>

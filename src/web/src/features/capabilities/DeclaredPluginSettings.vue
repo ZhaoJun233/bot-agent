@@ -48,12 +48,13 @@ function mode(field: PluginSettingDefinition, event: Event): void {
   </fieldset>
 </template>
 <style scoped>
-.declared-fields { border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 12px 0; display: grid; gap: 20px; min-width: 0; background: var(--surface); }
+.declared-fields { border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 12px 0; display: grid; gap: 12px; min-width: 0; background: var(--surface); }
 .declared-fields legend { padding: 0 8px; font-weight: 600; font-size: 13px; color: var(--text); }
 .declared-field { display: grid; gap: 7px; min-width: 0; }
-.declared-field + .declared-field { border-top: 1px solid var(--border); padding-top: 16px; }
+.declared-field + .declared-field { border-top: 1px solid var(--border); padding-top: 12px; }
 .declared-field label { font-size: 12px; font-weight: 600; color: var(--text-muted); overflow-wrap: anywhere; }
 .declared-field input:not([type=checkbox]), .declared-field select { min-width: 0; width: 100%; min-height: 36px; border-radius: 8px; }
+.declared-field input[type=number], .declared-field select { max-width: 320px; }
 .field-help { color: var(--text-soft); font-size: 12px; margin: 0; line-height: 1.65; }
 .boolean-setting { display: flex; gap: 10px; align-items: center; min-height: 36px; }.boolean-setting input { accent-color: var(--accent-deep); }
 @media (max-width: 767px) { .declared-fields { padding: 14px; }.declared-field input:not([type=checkbox]), .declared-field select, .boolean-setting { min-height: 44px; } }

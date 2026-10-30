@@ -27,7 +27,6 @@ export function useConfigurationCommit(options: {
 
   function auth(cause: unknown): boolean {
     if (!(cause instanceof ZbaRequestError) || cause.status !== 401) return false
-    pendingKey.value = null
     options.onAuth(toUiError(cause))
     return true
   }
@@ -73,7 +72,11 @@ export function useConfigurationCommit(options: {
       error.value = { code: 'save_' + result.code, message: '保存被拒绝。请检查字段；仍被引用的提供商不能删除。' }
     } catch (cause) {
       if (!owned(client)) return false
-      if (auth(cause)) return false
+      if (auth(cause)) {
+        pendingKey.value = null
+        phase.value = 'idle'
+        return false
+      }
       if (cause instanceof ZbaRequestError && cause.status >= 400 && cause.status < 500) {
         phase.value = 'idle'
         pendingKey.value = null

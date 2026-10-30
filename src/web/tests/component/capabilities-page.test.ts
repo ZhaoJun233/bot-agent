@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
 import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
+import { providerSnapshot } from '../fixtures/provider-marketplace'
 import {
   ZbaClient,
   ZbaNetworkError,
@@ -812,7 +813,7 @@ describe('PluginSettingsDialog（插件卡片上的设置）', () => {
       saveConfiguration: async (req: any) => {
         sent = req
         current = req.changes.music.enableMusic.value
-        return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt: { key: 'k' } }
+        return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt: { key: req.key, decision: 0, commitState: 1, applyState: 1 } }
       }
     })
     const wrapper = mountPage(client)
@@ -824,7 +825,7 @@ describe('PluginSettingsDialog（插件卡片上的设置）', () => {
     await flushPromises()
     expect(sent.changes).toEqual({ music: { enableMusic: { kind: 1, value: false } } })
     expect((wrapper.get('[data-testid="cap-switch-plugin:preset.feature.music"]').element as HTMLInputElement).checked).toBe(false)
-    expect(wrapper.get('[data-testid="cap-switch-notice-plugin:preset.feature.music"]').text()).toContain('已停用')
+    expect(wrapper.get('[data-testid="cap-switch-notice-plugin:preset.feature.music"]').text()).toContain('已保存')
   })
 
   it('标准模式下开关禁用', async () => {
@@ -849,4 +850,154 @@ describe('PluginSettingsDialog（插件卡片上的设置）', () => {
     ;(document.querySelector('[data-testid="config-leave-discard"]') as HTMLButtonElement).click(); await flushPromises()
     expect(document.querySelector('[data-testid="ability-configuration-dialog"]')).toBeNull()
   })
+})
+
+describe('Capability card switch ownership', () => {
+  const quotaKey = 'preset.feature.token-quota'
+  const toggleId = '[data-testid="cap-switch-plugin:' + quotaKey + '"]'
+  const checkId = '[data-testid="cap-switch-check-plugin:' + quotaKey + '"]'
+  function snapshot(enabled = true, version = '1') {
+    const result = providerSnapshot([], version)
+    result.view!.registered.plugins = [{ key: quotaKey, desiredEnabled: enabled }]
+    return result
+  }
+  const quotaDescriptor = () => descriptor({ key: { kind: 'plugin', key: quotaKey }, displayName: 'Synthetic quota' })
+  const quotaPage = () => page({ items: [quotaDescriptor()] })
+  async function toggle(wrapper: ReturnType<typeof mountPage>) {
+    await flushPromises(); await wrapper.get(toggleId).setValue(false); await flushPromises()
+  }
+  it('writes registry enabled with CAS and restart semantics, not an invented enableField', async () => {
+    let current = snapshot()
+    const saveConfiguration = vi.fn(async (request: any) => {
+      current = snapshot(false, '2')
+      return { code: 0, errors: [], receipt: { key: request.key, decision: 0, commitState: 1, applyState: 3 } }
+    })
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => current, listCapabilities: async () => quotaPage(), saveConfiguration }))
+    await toggle(wrapper)
+    expect(saveConfiguration).toHaveBeenCalledTimes(1)
+    expect(saveConfiguration.mock.calls[0]![0]).toMatchObject({ contractRevision: 'cfg-0.3.3', expectedVersion: '1', changes: {
+      registered: { plugins: [{ key: quotaKey, enabled: false }], policies: [], providers: [] }
+    }, secrets: [] })
+    expect(wrapper.get(toggleId).attributes('role')).toBe('switch')
+    expect(wrapper.get(toggleId).attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('[data-testid="cap-switch-row-plugin:' + quotaKey + '"]').text()).toContain('不会自动重启')
+  })
+  it.each(['missing', 'failed', 'unsupported', 'duplicate'])('fails closed for %s snapshots, retaining read-only runtime status', async kind => {
+    const result = snapshot()
+    if (kind === 'missing') result.view!.registered.plugins = []
+    if (kind === 'failed') result.code = 16
+    if (kind === 'unsupported') result.contractRevision = 'cfg-future'
+    if (kind === 'duplicate') result.view!.registered.plugins.push({ key: quotaKey, desiredEnabled: false })
+    const saveConfiguration = vi.fn()
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => result, listCapabilities: async () => quotaPage(), saveConfiguration }), 'read')
+    await flushPromises()
+    expect(wrapper.find(toggleId).exists()).toBe(false)
+    expect(wrapper.get('[data-testid="cap-item-plugin:' + quotaKey + '"]').text()).toContain('运行中')
+    expect(saveConfiguration).not.toHaveBeenCalled()
+  })
+  it('retains unknown key through refresh, search, scope filter and navigation', async () => {
+    const saveConfiguration = vi.fn(async (_request: any) => { throw new ZbaNetworkError() })
+    const findConfiguration = vi.fn(async (_key: string) => ({ code: 12 }))
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => snapshot(), listCapabilities: async (request: any) => page({ items: request.kind === 2 ? [] : [quotaDescriptor()] }), saveConfiguration, findConfiguration }))
+    await toggle(wrapper)
+    const key = saveConfiguration.mock.calls[0]![0].key
+    await wrapper.vm.reload(); await flushPromises()
+    await wrapper.get('[data-testid="cap-search"]').setValue('no synthetic match')
+    expect(wrapper.get(checkId).isVisible()).toBe(true)
+    await wrapper.get('[data-testid="cap-filter-2"]').trigger('click'); await flushPromises()
+    expect(wrapper.get(checkId).isVisible()).toBe(true)
+    await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true }); await flushPromises()
+    await wrapper.get(checkId).trigger('click'); await flushPromises()
+    expect(findConfiguration).toHaveBeenCalledWith(key)
+    expect(saveConfiguration).toHaveBeenCalledTimes(1)
+    expect(wrapper.get(toggleId).attributes('disabled')).toBeDefined()
+  })
+  it('retains conflict target on explicit rebase and uses a new key/new CAS version', async () => {
+    let latest = snapshot()
+    const saveConfiguration = vi.fn(async (_request: any) => ({ code: 3 }))
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => latest, listCapabilities: async () => quotaPage(), saveConfiguration }))
+    await toggle(wrapper)
+    latest = snapshot(true, '2')
+    await wrapper.vm.reload(); await flushPromises()
+    expect(wrapper.get(toggleId).attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="cap-switch-reload-plugin:' + quotaKey + '"]').trigger('click'); await flushPromises()
+    expect(wrapper.get(toggleId).attributes('aria-checked')).toBe('false')
+    expect(saveConfiguration).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-testid="cap-switch-save-plugin:' + quotaKey + '"]').trigger('click'); await flushPromises()
+    const first = saveConfiguration.mock.calls[0]![0], second = saveConfiguration.mock.calls[1]![0]
+    expect(second.key).not.toBe(first.key); expect(second.expectedVersion).toBe('2')
+    expect(second.changes).toMatchObject({ registered: { plugins: [{ key: quotaKey, enabled: false }] } })
+  })
+  it('keeps old client unknown intent inactive on replacement and restores original owner only', async () => {
+    const saveConfiguration = vi.fn(async (_request: any) => { throw new ZbaNetworkError() })
+    const findConfiguration = vi.fn(async (_key: string) => ({ code: 12 }))
+    const original = clientWith({ readConfiguration: async () => snapshot(), listCapabilities: async () => quotaPage(), saveConfiguration, findConfiguration })
+    const otherFind = vi.fn()
+    const other = clientWith({ readConfiguration: async () => snapshot(), listCapabilities: async () => page({ items: [] }), findConfiguration: otherFind })
+    const wrapper = mountPage(original)
+    await toggle(wrapper)
+    await wrapper.setProps({ client: other }); await flushPromises()
+    expect(wrapper.get(checkId).attributes('disabled')).toBeDefined()
+    await wrapper.get(checkId).trigger('click'); await flushPromises()
+    expect(otherFind).not.toHaveBeenCalled(); expect(findConfiguration).not.toHaveBeenCalled()
+    await wrapper.setProps({ client: original }); await flushPromises()
+    await wrapper.get(checkId).trigger('click'); await flushPromises()
+    expect(findConfiguration).toHaveBeenCalledTimes(1); expect(saveConfiguration).toHaveBeenCalledTimes(1)
+  })
+  it('does not refresh or resubmit after save awaits across leave-and-return', async () => {
+    let resolve!: (value: unknown) => void
+    const readConfiguration = vi.fn(async () => snapshot())
+    const saveConfiguration = vi.fn(async (_request: any) => new Promise(resolveResult => { resolve = resolveResult }))
+    const wrapper = mountPage(clientWith({ readConfiguration, listCapabilities: async () => quotaPage(), saveConfiguration }))
+    await toggle(wrapper)
+    const reads = readConfiguration.mock.calls.length
+    await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true })
+    resolve({ code: 0, receipt: { key: saveConfiguration.mock.calls[0]![0].key, decision: 0, commitState: 1, applyState: 3 } }); await flushPromises()
+    expect(readConfiguration).toHaveBeenCalledTimes(reads); expect(saveConfiguration).toHaveBeenCalledTimes(1)
+    expect(wrapper.get(toggleId).attributes('disabled')).toBeDefined()
+  })
+  it('failed card snapshot refresh blocks stale writes and requires explicit reread', async () => {
+    let failure = false
+    const readConfiguration = vi.fn(async () => { if (failure) throw new ZbaNetworkError(); return snapshot() })
+    const saveConfiguration = vi.fn()
+    const wrapper = mountPage(clientWith({ readConfiguration, listCapabilities: async () => quotaPage(), saveConfiguration }))
+    await flushPromises()
+    expect(wrapper.get(toggleId).attributes('disabled')).toBeUndefined()
+    failure = true
+    await wrapper.vm.reload(); await flushPromises()
+    expect(wrapper.get(toggleId).attributes('disabled')).toBeDefined()
+    await wrapper.get(toggleId).setValue(false); await flushPromises()
+    expect(saveConfiguration).not.toHaveBeenCalled()
+    failure = false
+    await wrapper.get('[data-testid="cap-switch-reload-plugin:' + quotaKey + '"]').trigger('click'); await flushPromises()
+    expect(wrapper.get(toggleId).attributes('disabled')).toBeUndefined()
+  })
+  it('stale configuration reads cannot enable a replacement client switch', async () => {
+    let resolve!: (value: unknown) => void
+    const original = clientWith({ readConfiguration: async (kind: number) => kind === 0 ? snapshot() : new Promise(result => { resolve = result }), listCapabilities: async () => quotaPage() })
+    const wrapper = mountPage(original)
+    await flushPromises()
+    const saveConfiguration = vi.fn()
+    const other = clientWith({ readConfiguration: async () => ({ ...snapshot(), view: undefined }), listCapabilities: async () => quotaPage(), saveConfiguration })
+    await wrapper.setProps({ client: other }); await flushPromises()
+    resolve(snapshot()); await flushPromises()
+    expect(wrapper.find(toggleId).exists()).toBe(false)
+    expect(saveConfiguration).not.toHaveBeenCalled()
+  })
+
+  it('blocks a second quota switch editor while the card owns an unknown key', async () => {
+    const saveConfiguration = vi.fn(async (_request: any) => { throw new ZbaNetworkError() })
+    const findConfiguration = vi.fn(async (_key: string) => ({ code: 12 }))
+    const wrapper = mountPage(clientWith({ readConfiguration: async () => snapshot(), listCapabilities: async () => quotaPage(), saveConfiguration, findConfiguration }))
+    await toggle(wrapper)
+    const key = saveConfiguration.mock.calls[0]![0].key
+    const settings = wrapper.get('[data-testid="cap-settings-plugin:' + quotaKey + '"]')
+    expect(settings.attributes('disabled')).toBeDefined()
+    await settings.trigger('click'); await flushPromises()
+    expect(document.querySelector('[data-testid="token-quota-dialog"]')).toBeNull()
+    await wrapper.get(checkId).trigger('click'); await flushPromises()
+    expect(findConfiguration).toHaveBeenCalledWith(key)
+    expect(saveConfiguration).toHaveBeenCalledTimes(1)
+  })
+
 })

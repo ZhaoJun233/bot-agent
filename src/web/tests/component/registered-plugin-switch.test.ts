@@ -57,10 +57,15 @@ describe('registered quota plugin switch', () => {
       saveConfiguration: vi.fn<ZbaClient['saveConfiguration']>(async () => ({ code: 3, errors: [], currentVersion: '2', replayed: false })) })
     const wrapper = editor(client); await flushPromises()
     await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
-    expect(wrapper.find('[data-testid="quota-plugin-toggle"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="quota-plugin-toggle"]').attributes('role')).toBe('switch')
+    expect(wrapper.get('[data-testid="quota-plugin-toggle"]').attributes('disabled')).toBeDefined()
     await wrapper.get('[data-testid="quota-plugin-reload"]').trigger('click'); await flushPromises()
     await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
-    expect(vi.mocked(client.saveConfiguration).mock.calls[1]?.[0].expectedVersion).toBe('2')
+    const first = vi.mocked(client.saveConfiguration).mock.calls[0]![0]
+    const second = vi.mocked(client.saveConfiguration).mock.calls[1]![0]
+    expect(second.expectedVersion).toBe('2')
+    expect(second.key).not.toBe(first.key)
+    expect(second.changes.registered?.plugins).toEqual([{ key: pluginKey, enabled: false }])
   })
   it('requires reload when a confirmed save cannot refresh desired state', async () => {
     const client = clientWith({ readConfiguration: vi.fn<ZbaClient['readConfiguration']>().mockResolvedValueOnce(snapshot()).mockRejectedValue(new ZbaNetworkError()),

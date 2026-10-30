@@ -277,7 +277,8 @@ tr.dirty td { background: var(--accent-tint); }
 .dialog h2 { font-size: 18px; font-weight: 600; margin: 0 0 14px; letter-spacing: -.3px; }
 .dialog-copy { font-size: 13px; color: var(--text-muted); line-height: 1.8; margin: 0 0 16px; }
 .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
-.icon-close { display: grid; place-items: center; min-width: 32px; height: 32px; padding: 3px; border-color: var(--border); font-size: 22px; }
+.management-dialog .icon-close { display: grid; place-items: center; flex: 0 0 auto; width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-color: var(--border); border-radius: 5px; font-size: 22px; line-height: 1; }
+@media (max-width: 767px) { .management-dialog .icon-close { width: 44px; min-width: 44px; height: 44px; min-height: 44px; } }
 @keyframes backdrop-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 /* Integration primitives */

@@ -1538,23 +1538,30 @@ defineExpose({
 .plugin-notice { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .settings-table, .provider-table { display: block; width: 100%; border: 0; }
 .settings-table tbody, .provider-table tbody { display: block; }
-.settings-table tr { display: grid; grid-template-columns: minmax(160px, .9fr) minmax(200px, 1.2fr); gap: 10px 24px; padding: 22px 0; border-bottom: 1px solid var(--border); }
+.settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border); }
 .settings-table tr:first-child { padding-top: 4px; }
+.settings-table tbody tr:hover td, .settings-table tbody tr.dirty td { background: transparent; }
+.settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent-deep); }
 .settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
 .settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }
-.setting-identity { grid-column: 1; }
-.setting-editor { grid-column: 2; grid-row: 1 / span 4; }
-.setting-meta { grid-column: 1; color: var(--text-muted); font-size: 12px; }
+.setting-identity { flex: 0 0 200px; }
+.setting-editor { flex: 1 1 calc(100% - 220px); }
+.settings-table .setting-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-muted); font-size: 12px; }
+.setting-meta .meta-label, .setting-meta .cell-sub { display: inline; margin: 0; }
+.setting-editor .config-input { max-width: 640px; }
+.setting-editor select.config-input, .setting-editor input[type="number"] { max-width: 220px; }
 .meta-label { display: block; color: var(--text-soft); font-size: 11px; margin-bottom: 5px; }
-.config-input { font-size: 14px; min-height: 42px; }
+.config-input { font-size: 14px; height: 40px; min-height: 40px; padding-block: 6px; }
 .config-label { font-size: 14px; font-weight: 600; }
 .config-key { font-size: 11px; margin-top: 3px; }
 .edit-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .edit-actions button { min-height: 32px; }
+.edit-actions:empty { display: none; }
 .provider-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.provider-table tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--border); }
+.provider-table tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; padding: 14px 0; border-bottom: 1px solid var(--border); }
 .provider-identity { grid-column: 1 / -1; }
 .provider-name { grid-column: 1 / -1; }
+.provider-name .config-input { max-width: 440px; }
 .provider-url { grid-column: 1 / span 2; }
 .provider-model, .provider-url { overflow-wrap: anywhere; }
 .secret-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -1572,8 +1579,9 @@ defineExpose({
 @media (max-width: 900px) { .config-body { grid-template-columns: minmax(0,1fr); } .config-nav { position: static; display: flex; flex-wrap: wrap; } }
 @media (max-width: 600px) {
   .configuration { gap: 16px; }
-  .settings-table tr { grid-template-columns: minmax(0,1fr); gap: 12px; }
-  .setting-identity, .setting-editor, .setting-meta { grid-column: 1; grid-row: auto; }
+  .settings-table tr { gap: 8px 14px; }
+  .setting-identity, .setting-editor { flex-basis: 100%; }
+  .config-input { height: 44px; min-height: 44px; }
   .setting-meta .meta-label { display: inline; margin-right: 8px; }
   .secret-list, .receipt-grid { grid-template-columns: minmax(0,1fr); }
   .provider-table tr { grid-template-columns: repeat(2,minmax(0,1fr)); }

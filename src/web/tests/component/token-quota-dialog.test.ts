@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import TokenQuotaDialog from '../../src/features/capabilities/TokenQuotaDialog.vue'
+import RegisteredPluginSwitch from '../../src/features/capabilities/RegisteredPluginSwitch.vue'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
 import { settingsFor } from '../../src/features/capabilities/plugin-settings'
 import { ZbaClient, ZbaNetworkError, ZbaRequestError } from '../../src/api/zba'
@@ -141,5 +142,53 @@ describe('quota dialog single-intent lifecycle', () => {
     await wrapper.get('[data-testid="quota-edit-0"]').trigger('click'); await wrapper.get('[data-testid="quota-limit"]').setValue('120000'); await wrapper.get('form').trigger('submit'); await flushPromises()
     await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true }); await flushPromises()
     expect(wrapper.find('[data-testid="quota-unknown"]').exists()).toBe(true); expect(client.saveQuota).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('registered quota switch transaction', () => {
+  function switchEditor(overrides: Partial<ZbaClient> = {}, props = {}) {
+    const snapshot = providerSnapshot()
+    snapshot.view!.registered.plugins = [{ key: 'preset.feature.token-quota', desiredEnabled: true }]
+    const client = clientWith({ readConfiguration: vi.fn(async () => snapshot), ...overrides })
+    const wrapper = mount(RegisteredPluginSwitch, { props: { client, pluginKey: 'preset.feature.token-quota', mode: 'admin', writesEnabled: true, active: true, blocked: false, ...props } })
+    mounted.push(wrapper)
+    return { client, wrapper }
+  }
+  it('shows a visible switch with saved state in read-only mode, without permitting a mutation', async () => {
+    const saveConfiguration = vi.fn()
+    const { wrapper } = switchEditor({ saveConfiguration }, { mode: 'read' })
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="quota-plugin-toggle"]')
+    expect(toggle.element.tagName).toBe('BUTTON'); expect(toggle.attributes('role')).toBe('switch')
+    expect(toggle.attributes('aria-checked')).toBe('true'); expect(toggle.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="quota-plugin-desired"]').text()).toContain('启用')
+    await toggle.trigger('click'); expect(saveConfiguration).not.toHaveBeenCalled()
+  })
+  it('settles a rejected save401 instead of remaining saving, but cannot write after downgrade', async () => {
+    const saveConfiguration = vi.fn(async () => { throw new ZbaRequestError(401, 'unauthorized', 'synthetic') })
+    const { wrapper } = switchEditor({ saveConfiguration })
+    await flushPromises(); await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
+    expect(wrapper.emitted('auth-expired')).toHaveLength(1)
+    expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+    await wrapper.setProps({ mode: 'read' })
+    await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click')
+    expect(saveConfiguration).toHaveBeenCalledTimes(1)
+  })
+  it('preserves original unknown key after query401 and expired-key reload keeps the target', async () => {
+    const saveConfiguration = vi.fn<ZbaClient['saveConfiguration']>(async () => { throw new ZbaNetworkError() })
+    const findConfiguration = vi.fn<ZbaClient['findConfiguration']>().mockRejectedValueOnce(new ZbaRequestError(401, 'unauthorized', 'synthetic')).mockResolvedValueOnce({ code: 5 })
+    const { wrapper, client } = switchEditor({ saveConfiguration, findConfiguration })
+    await flushPromises(); await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
+    const key = saveConfiguration.mock.calls[0]![0].key
+    await wrapper.get('[data-testid="quota-plugin-check"]').trigger('click'); await flushPromises()
+    expect(wrapper.emitted('auth-expired')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="quota-plugin-check"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="quota-plugin-check"]').trigger('click'); await flushPromises()
+    expect(findConfiguration.mock.calls.map(call => call[0])).toEqual([key, key])
+    expect(wrapper.get('[data-testid="quota-plugin-toggle"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="quota-plugin-reload"]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[data-testid="quota-plugin-toggle"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('[data-testid="quota-plugin-save-"]').text()).toContain('保留')
+    expect(client.saveConfiguration).toHaveBeenCalledTimes(1)
   })
 })
