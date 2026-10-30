@@ -245,6 +245,11 @@ internal static class ReviewAgentStorageRegression
         if (int.TryParse(Property<string>(timedOut, "Stdout").Trim(), out var pid))
             check(HasExited(pid), "B24 timeout child process is cleaned up");
         else check(false, "B24 timeout fixture reached process barrier");
+        check(IsTerminatedLinuxStat("10001 (synthetic (child)) Z 1 0") && IsTerminatedLinuxStat("10001 (synthetic) X 1 0"),
+            "B24 Linux zombie/dead task is terminated even before reaping");
+        check(!IsTerminatedLinuxStat("10001 (synthetic) S 1 0") && !IsTerminatedLinuxStat("10001 (synthetic) R 1 0")
+            && !IsTerminatedLinuxStat("10001 (synthetic) D 1 0") && !IsTerminatedLinuxStat("10001 (synthetic) T 1 0")
+            && !IsTerminatedLinuxStat("malformed"), "B24 runnable blocked stopped or malformed Linux task is not terminated");
         await CancellationBarrierAsync(check);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
@@ -300,8 +305,25 @@ internal static class ReviewAgentStorageRegression
 
     private static bool HasExited(int pid)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            try { return IsTerminatedLinuxStat(File.ReadAllText($"/proc/{pid}/stat")); }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
         try { using var process = Process.GetProcessById(pid); return process.HasExited; }
         catch (ArgumentException) { return true; }
+    }
+
+    private static bool IsTerminatedLinuxStat(string stat)
+    {
+        // /proc retains a killed orphan as Z until its reaper collects it; it cannot execute.
+        // comm may contain spaces and parentheses, so state follows the final closing parenthesis.
+        var end = stat.LastIndexOf(')');
+        return end >= 0 && end + 3 < stat.Length && stat[end + 1] == ' '
+            && stat[end + 3] == ' ' && stat[end + 2] is 'Z' or 'X';
     }
 }
 
