@@ -99,7 +99,7 @@ npm run test:e2e                  # 先 build，再启动真实隔离 Headless +
 ## 阶段范围
 
 - 已实现：认证门、health/meta/status、契约兼容、概览组件/错误/空态、只读/管理员模式切换、锁定、配置 UI 归属收敛（基础配置白名单聚焦通用项、能力配置归属至能力管理 UI 并支持动态扩展插件）、能力目录/描述符/支持矩阵/动作回执/分页（S2-3）、Token 配额插件集成与专属配额管理、插件设置与启用开关、任务提交/审批/取消/事件恢复、供应商自定义与插件市场（S6）、淡蓝主题与响应式设计系统、chromium/firefox/webkit E2E 矩阵。
-- 静态生产承载：线上由 Caddy 从静态目录托管 `dist/`（`/web/*`），与后端容器解耦，可独立发布与回退（见 `docs/plans/agents/07-pnl-evidence.md`）；发布后必须跑 `tools/verify-web-deploy.sh`——只验 `/web/` 返回 200 不够，资源 MIME/路径错了照样白屏。
+- 静态生产承载：线上由 Caddy 从静态目录托管 `dist/`（`/web/*`），与后端容器解耦，可独立发布与回退；发布后必须跑 `tools/verify-web-deploy.sh`——只验 `/web/` 返回 200 不够，资源 MIME/路径错了照样白屏。
 - E2E 除既有 spec 外，`tests/e2e/marketplace.spec.ts` 覆盖市场对话框的只读/管理员两种入口、卡片级「市场」跳转，以及非 GitHub 数据源不发请求。
 - 未实现：MCP 管理页；资源预算只有本地测量，未设门禁。
 

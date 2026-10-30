@@ -231,8 +231,9 @@ dotnet test
 dotnet build tests/BotAgent.IntegrationHarness -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
 
-# Run frontend static and runtime probes
-node tests/BotAgent.FrontendProbe/probe.mjs
+# Run frontend type checks, unit tests and browser regression (under src/web)
+npm run typecheck && npm run test:unit
+npm run test:e2e
 ```
 
 The test suite covers S1–S55 synthetic end-to-end scenarios (whitelists, silent decisions, sentence splitting, long-term memory & profiles, stickers & magic-byte validation, context quoting, hot model reconfiguration, speech synthesis, recall awareness, web search, QR login, Feishu channel isolation, multi-platform policies, daily token quota ledgers, and the official channel through a local fake gateway; S2 is covered inside S1, S33 retired with the pi bridge, and S42 uses local mocks/synthetic credentials only), as well as sub-second architectural ratchets (`ArchitectureProbe`), safety boundaries (`SafetyProbe`), and production specification probes (`ProductionSpecProbe`).

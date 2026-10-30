@@ -22,6 +22,6 @@ curl -X POST http://127.0.0.1:8080/api/settings -H "Content-Type: application/js
 
 ## What these three configurations do **not** do (the honest boundary for a demo)
 
-- They do not connect to real QQ, do not connect to a real model and do not use real keys — every demo runs a **fake model + fake protocol side** (see `docs/engineering/demo-script.md`).
+- They do not connect to real QQ, do not connect to a real model and do not use real keys — every demo runs a **fake model + fake protocol side**.
 - Scenario presets **can only tighten**: they will not turn on a capability that is switched off in the panel; a misspelled name falls back to the **lowest permissions** (no capability enabled at all).
 - The approval turned on in `social` **covers only the fixed fake tool** `demo.echo` (one log line plus one receipt) and **does not mean** the system has shell / file / process control.
