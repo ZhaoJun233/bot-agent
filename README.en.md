@@ -40,8 +40,8 @@ The project natively supports running directly from source code across standard 
 - **Lifelike Typing Cadence**: Splits long replies at punctuation boundaries and sends them in batches simulating realistic typing delays.
 
 ### Multi-Platform Support & Instance Policies
-- **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. The settings "Platform Instance Policy" section is the single entry point for each platform's enable and chat switches, group/private whitelists, and feature overrides. Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
-- **Daily Token Quota Ledger**: Manages UTC daily budgets isolated by platform and conversation tenant (`SourceKey`), supporting platform-based tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted.
+- **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. The Web Console's "Platform Access & Policies" under "Capabilities" is the single entry point for each platform's enable and chat switches, group/private whitelists, and feature overrides. Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
+- **Daily Token Quota Ledger**: Runs as the preset plugin `preset.feature.token-quota`, managing UTC daily budgets isolated by platform and conversation tenant (`SourceKey`). Supports tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted; supports hot tuning and persistence directly from the Capabilities page.
 - **Zero-Dependency Local Playground Channel**: Features an in-process standalone testing channel. Inject test messages via the Web interactive playground (`/playground.html`) or `POST /api/local/message`, traversing the full model decision pipeline and six-stage governance timeline.
 
 ---
@@ -159,21 +159,15 @@ OFFICIAL_APP_SECRET=your_app_secret
 
 ---
 
-## Web Control Panel & Mobile Experience
+## Web Management Console
 
-Access `http://<Server_IP>:8080/` to directly open the control panel:
+A high-performance modern Single-Page Application (SPA) built with Vue 3 and TypeScript, communicating with the core service via the ZBA protocol with decoupled static deployment:
 
-- **Password-Free Access & Security Governance**: The console can be used immediately without forcing password setup; users can set a protection password or clear an existing password anytime on the Settings page.
-- **Two-Level Categorized Navigation**: Settings are aggregated into 5 major categories (Channels, Models & Agent, Chat & Interaction, Voice & Search, Other), featuring collapsible accordion sections on desktop and linked dual-row pills on mobile.
-- **Mobile Adaptation & Liquid Glass Navigation**: Deeply optimized for smartphone screens and touch controls. The bottom navigation bar employs an Apple-inspired Liquid Glass floating capsule Dock with full support for iOS/Android Safe Areas. Dedicated avoidance save bars in settings and auto-hiding during keyboard input prevent touch obstructions.
-- **Full-Stack Performance Optimization**:
-  - **In-Memory Asset Cache**: Static web assets are cached in memory to eliminate filesystem and assembly reflection overhead.
-  - **Dynamic GZip Compression**: Dynamically applies GZip compression to text assets (HTML, JS, CSS, JSON, SVG), reducing payload size by ~70%.
-  - **Hardware Acceleration & Render Containment**: Utilizes CSS Containment, GPU layer promotion (`translateZ`), and native momentum scrolling for smooth 60fps lists.
-- **Session Monitoring & Context Stacks**: Visualizes group and private chat message flows, user profiles, and context stacks in dialogue bubbles in real time.
-- **Hot Parameter Tuning & Model Switching**: Adjust interaction eagerness, response thresholds, cooldown intervals, API endpoints, and model configurations on the fly with immediate effect.
-- **Observability & QR Login**: Real-time status inspection via `/healthz`, `/readyz`, and metrics; renders QR login codes directly when the protocol client is offline.
-- **Live SSE Log Streaming**: Server-Sent Events (SSE) provide continuous log streaming with instant historical backfilling on initial load.
+- **Consolidated Configuration & Capability Ownership**: The "Basic Configuration" page retains only 7 essential parameters (AI switch, persona, cooldowns, concurrency, context limits); model services, server agent, platform access policies, health reports, and plugin settings are neatly consolidated into corresponding cards and dialogs under "Capabilities", supporting dynamic extension registration.
+- **Security Boundaries & In-Memory Sessions**: Bearer tokens are kept strictly in browser memory, cleared upon reload or session lock; secret slots are never echoed back; all mutation paths are protected by CAS versioning, single-flight locks, and unconfirmed operation key reconciliations.
+- **Integrated Capability & Plugin Ecosystem**: Visually inspect drivers, plugins, model providers, and MCP; install plugins from the catalog, configure custom OpenAI-compatible providers, test connectivity, and adjust Token Quotas.
+- **Dark/Light Theme & Accessibility**: Instant dark/light theme switching with system preference detection; full keyboard navigation support (focus ring trapping, Escape handling), high contrast, and responsive layout for mobile screens.
+- **Task Approvals & Real-Time Observability**: Submit and review background Agent tasks with interactive approval gates; observe component health and errors in real-time, with QR code display for easy login when protocol clients disconnect.
 
 ---
 

@@ -43,11 +43,26 @@ npm run test:e2e                  # 先 build，再启动真实隔离 Headless +
 - Windows 保留默认测试端口时，可运行 `BOTAGENT_WEB_TEST_PORT=18474 npm run test:e2e`，未配置令牌的预览自动使用下一个端口。默认仍为 4174/4175。
 - 视觉矩阵：`BOTAGENT_WEB_TEST_PORT=18474 npx playwright test --config playwright.visual.config.ts redesign.spec.ts`；覆盖 1440/1024/768/390/375/320、深浅主题、颜色对比度、页面溢出、弹窗边界、能力搜索、主题切换和锁定。`VISUAL_OUT` 可指定截图输出目录。
 
-## S2：配置读取与编辑
+## S2：配置读取、编辑与 UI 归属收敛
 
+- **基础配置与能力归属收敛**：
+  - 「基础配置」（配置页）仅展示 7 项关键通用参数白名单：`aiModeEnabled`（AI 对话开关）、`botPersona`（机器人人设）、`groupCooldownSeconds`（群聊冷却）、`privateCooldownSeconds`（私聊冷却）、`maxConcurrentReplies`（并发回复上限）、`maxContextMessages`（上下文条数）、`maxMessagesPerConversation`（会话保留条数）。
+  - 其余配置项与密钥槽位全部收敛到「能力管理」中对应能力与插件卡片的专属 UI：
+    - 对话与参与策略（`conversation`）：主动回复、参与节奏、分句、消息过滤与审批；
+    - 模型服务（`models`）：主模型连接、模型选择、采样参数、API 凭据与已登记提供商名称；
+    - Agent 与工具（`agent`）：任务执行、服务器连接、工具范围与 Agent 密钥；
+    - 平台接入与访问策略（`platform`）：私域、官方与飞书接入、白名单及飞书凭据；
+    - 健康报告（`reporting`）：报告开关、发送时间与接收范围；
+    - 插件专属配置：音乐、语音（含 TTS 密钥）、表情包、戳一戳、氛围、画像、搜索等收敛至能力页各插件卡片；
+    - Token 配额插件（`preset.feature.token-quota`）：专属卡片与管理弹窗，支持每日额度、用量及持久启停（参见 [Token 配额文档](../../docs/token-quota-plugin.md)）。
+  - 架构设计与映射细节见 [配置 UI 归属](../../docs/configuration-ui-ownership.md)。
+- **动态插件归属**：配置能力目录动态跟随插件注册表，支持模块加载后扩展插件的动态登记、撤销与重新配置，确保扩展插件配置即时可访问。
 - 读取：`POST /configuration/read`（kind=1 可编辑投影）；标准模式只读，管理员模式才能改字段与秘密槽位。
-- 草稿：只在本页内存；离开配置、锁定、降级或 401 时才清空秘密输入，普通字段草稿保留到明确放弃或会话结束。
+- 草稿：只在当前页面内存；离开配置、锁定、降级或 401 时清空秘密输入，普通字段草稿保留到明确放弃或会话结束。能力页导航实时展示草稿计数徽标。
 - 保存：`POST /configuration/save` 每次用户意图生成新操作键，整批提交字段与秘密；校验走 `/capabilities/validate`，不落盘。
+- 离开保存与写保护：
+  - 隐藏状态下的编辑器禁止普通编辑与保存，防范未关注状态下的后台意外写入；
+  - 在锁定会话或退出管理员模式时，可见的离开确认弹窗允许用户明确选择“保存并锁定”或“保存并退出管理员”（前提是仍然具备管理员权限与契约兼容性）。
 - 单飞：保存或校验在读时不允许再发第二个写请求，离开对话框里的“保存并离开”同样被拦住。
 - 回执：成功码（0/13）必须带回执才清草稿；`code 12`、网络中断、2xx 但缺少回执都进入“提交结果未知”，冻结编辑并保留草稿与操作键，只能用 `/configuration/find` 核对，不能直接重发。
 - 核对结果：找到回执=已提交；NotFound(14)=未落盘，可换新键重存；代际变化(6)/键过期(5) 无法核对时重读快照；其它错误继续保留未知态。
@@ -83,7 +98,7 @@ npm run test:e2e                  # 先 build，再启动真实隔离 Headless +
 
 ## 阶段范围
 
-- 已实现：认证门、health/meta/status、契约兼容、概览组件/错误/空态、只读/管理员模式切换、锁定、配置读取与编辑（S2-1/S2-2）、能力目录/描述符/支持矩阵/动作回执/分页（S2-3）、插件设置与启用开关、任务提交/审批/取消/事件恢复、供应商自定义与插件市场（S6）、chromium/firefox/webkit E2E 矩阵、界面美化（S5）。
+- 已实现：认证门、health/meta/status、契约兼容、概览组件/错误/空态、只读/管理员模式切换、锁定、配置 UI 归属收敛（基础配置白名单聚焦通用项、能力配置归属至能力管理 UI 并支持动态扩展插件）、能力目录/描述符/支持矩阵/动作回执/分页（S2-3）、Token 配额插件集成与专属配额管理、插件设置与启用开关、任务提交/审批/取消/事件恢复、供应商自定义与插件市场（S6）、淡蓝主题与响应式设计系统、chromium/firefox/webkit E2E 矩阵。
 - 静态生产承载：线上由 Caddy 从静态目录托管 `dist/`（`/web/*`），与后端容器解耦，可独立发布与回退（见 `docs/plans/agents/07-pnl-evidence.md`）；发布后必须跑 `tools/verify-web-deploy.sh`——只验 `/web/` 返回 200 不够，资源 MIME/路径错了照样白屏。
 - E2E 除既有 spec 外，`tests/e2e/marketplace.spec.ts` 覆盖市场对话框的只读/管理员两种入口、卡片级「市场」跳转，以及非 GitHub 数据源不发请求。
 - 未实现：MCP 管理页；资源预算只有本地测量，未设门禁。
@@ -96,3 +111,4 @@ npm run test:e2e                  # 先 build，再启动真实隔离 Headless +
   - 操作回执是有界文件（`data/plugins/operations.json`，256 条 / 7 天，原子替换）：`plugin_operation_not_found`(404) 表示这个键确实没有回执，服务端重启不会丢掉最近一次暂存的证据。
   - 暂存卸载会保留清单直到重启，所以“待卸载”在面板里始终可见；重启后 `Active` 被清掉、配置与上一版本保留。
 - `registered.modelCredentials` 与 `registered.providers[].credentialKey / credentialConfigured / protocol / options` 为 `configuration/read` 的追加字段。
+- `GET /quotas`、`POST /quotas/save`、`POST /quotas/find`：Token 配额管理端点，支持按 SourceKey 查询与保存每日额度、用量及幂等回执。
