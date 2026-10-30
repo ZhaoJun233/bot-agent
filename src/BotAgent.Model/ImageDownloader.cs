@@ -77,7 +77,10 @@ public class ImageDownloader : IImageDownloader
                 }
             }
 
-            var outcome = await FetchAsync(url, ct);
+            // One budget covers redirects, body reads, URL refresh and the single retry.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(_http.Timeout);
+            var outcome = await FetchAsync(url, deadline.Token);
             var result = outcome.Image;
             if (result is null && outcome.CanRetryWithFreshUrl && messageId is long mid && RefreshUrls is not null)
             {
@@ -86,7 +89,7 @@ public class ImageDownloader : IImageDownloader
                 // ★ 这里**不**打“下载失败”：地址过期→重签是设计好的正常路径，不是事故。
                 //   以前每张图都先刷一行红色“下载失败（HTTP 400）”，面板上看着像一直在出错
                 //   （管理员 2026-09-18 报的）；现在只在“重签也拿不到”时才报失败。
-                result = await FetchRefreshedAsync(url, mid, outcome.Status, ct);
+                result = await FetchRefreshedAsync(url, mid, outcome.Status, deadline.Token);
                 if (result is null)
                 {
                     Services.FileLog.Write("Vision", $"image_refresh_failed status={outcome.Status}");
@@ -97,6 +100,7 @@ public class ImageDownloader : IImageDownloader
                 Services.FileLog.Write("Vision", $"image_http_error status={outcome.Status}");
             }
 
+            deadline.Token.ThrowIfCancellationRequested();
             if (result is not { } ok)
             {
                 lock (_cacheGate)
@@ -179,6 +183,7 @@ public class ImageDownloader : IImageDownloader
 
     private async Task<FetchOutcome> FetchAsync(string url, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         try
         {
             if (!SafeUrl.TryValidate(url, AllowPrivateHosts, out var uri, out _))
@@ -187,11 +192,8 @@ public class ImageDownloader : IImageDownloader
                 return new FetchOutcome(null, false, 0);
             }
 
-            // 手动跳转仍共享原客户端的响应头超时，不能把 8 秒预算乘以跳数。
-            using var headersTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            headersTimeout.CancelAfter(_http.Timeout);
             using var response = await SafeUrl.SendFollowingRedirectsAsync(
-                _http, uri, target => new HttpRequestMessage(HttpMethod.Get, target), AllowPrivateHosts, headersTimeout.Token);
+                _http, uri, target => new HttpRequestMessage(HttpMethod.Get, target), AllowPrivateHosts, ct);
             if (!response.IsSuccessStatusCode)
             {
                 // 4xx/5xx ⇒ 值得拿协议端重新签发的地址再试一次（最常见的是 rkey 过期回 400）。

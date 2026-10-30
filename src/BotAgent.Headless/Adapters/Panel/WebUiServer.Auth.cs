@@ -121,6 +121,8 @@ public sealed partial class WebUiServer
                 {
                     _panelPassword.Change(next);
                     _panelSessions.Clear();
+                    Interlocked.Increment(ref _sseAuthGeneration);
+                    DisconnectSseClients();
                 }
             }
             else
@@ -128,6 +130,8 @@ public sealed partial class WebUiServer
                 // 免密状态下首次设置密码无需旧密码
                 _panelPassword.Change(next);
                 _panelSessions.Clear();
+                Interlocked.Increment(ref _sseAuthGeneration);
+                DisconnectSseClients();
             }
         }
         if (next is null)

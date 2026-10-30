@@ -169,8 +169,8 @@ internal static partial class ZbaRules
             || !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
             || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query)
             || !string.IsNullOrEmpty(uri.Fragment) || uri.IsDefaultPort is false
-            || uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries) is not { Length: 2 or 4 } parts
-            || (parts.Length == 4 && !(parts[2] == "releases" && parts[3] == "tag")))
+            || uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries) is not { Length: 2 or 5 } parts
+            || (parts.Length == 5 && !(parts[2] == "releases" && parts[3] == "tag" && parts[4].Length > 0)))
         {
             throw new ZbaBackendException(422, "plugin_source_invalid", "插件来源必须是公开 GitHub 仓库或其固定 release tag。");
         }

@@ -431,19 +431,24 @@ public sealed partial class AgentCommandService
     private async Task RunOnServerAsync(BotConversation conversation, QqChatMessage msg, string payload,
         string? ack = null, bool natural = false)
     {
-        if (_serverAgentBusy.TryAdd(conversation.SourceKey, true))
+        var admission = ServerAgentAdmission.TryAcquire(conversation.SourceKey, _serverAgentBusy, _serverAgentCurrent);
+        if (admission is null)
         {
-            // “接着上一句说”只有两种入口：面板开关，或本条指令写 //接着 …（默认**不**带上下文）
+            await _hooks.SendPlainAsync(conversation, natural
+                ? "上一件事我还在弄，等我弄完再接这个～（想让我先停下就说一声“停一下”）"
+                : "这个会话上一条 //指令还在跑，等它完事再发。");
+            return;
+        }
+
+        AgentTask? task = null;
+        var scheduled = false;
+        try
+        {
             var (wantsContinue, promptText) = StripContinuePrefix(payload);
             var useHistory = wantsContinue || _settings.AgentServerKeepContext;
-
             var serverSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "server");
             var seededHistory = useHistory ? _agentSessions.History(conversation.SourceKey, serverSession.Id) : new List<(string, string)>();
-            var serverRunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, promptText, null);
-            _hooks.Log(useHistory
-                ? $"[会话] 内置 agent 本轮带 {seededHistory.Count} 条历史（会话「{serverSession.Name}」，{(wantsContinue ? "//接着" : "面板开关开着")}）"
-                : $"[会话] 内置 agent 本轮**不带**上文（每条指令单独对待）：{TextRules.Shorten(promptText, 40)}");
-            var task = new AgentTask
+            task = new AgentTask
             {
                 Id = $"s{Clock.Now.ToUnixTimeMilliseconds()}",
                 SourceKey = conversation.SourceKey,
@@ -453,46 +458,30 @@ public sealed partial class AgentCommandService
                 SessionRef = serverSession,
                 History = seededHistory,
                 UseHistory = useHistory,
-                // 现场：不做这一步，模型知道“点赞”却不知道给谁点、在哪条消息上点
                 QqHost = BuildQqHost(conversation, msg),
                 Natural = natural
             };
-            task.RunId = serverRunId;
-
-            // 自备一个 CTS：//stop 要能把正在跑的那条 bash 也杀掉（不能只标个标记）
-            var cts = task.SourceLease is { } lease
-                ? CancellationTokenSource.CreateLinkedTokenSource(lease.Lifetime) : new CancellationTokenSource();
-            _serverAgentCurrent[conversation.SourceKey] = (task, cts);
-
-            // 自然对话：用模型自己那句接话（没有就给一句口语的），不报会话名、不复述指令
+            admission.Bind(task);
+            task.RunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, promptText, null);
+            _hooks.Log($"[会话] 内置 agent 本轮历史 {seededHistory.Count} 条，指令长度 {promptText.Length}");
             await _hooks.SendPlainAsync(conversation, natural
                 ? (string.IsNullOrWhiteSpace(ack) ? "好，我去弄一下～" : ack.Trim())
                 : $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
-            _ = Task.Run(async () =>
-            {
-                using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
-                try
-                {
-                    await _serverAgent.RunAsync(task, cts.Token);
-                }
-                finally
-                {
-                    _serverAgentBusy.TryRemove(conversation.SourceKey, out _);
-                    if (_serverAgentCurrent.TryRemove(conversation.SourceKey, out var done) &&
-                        ReferenceEquals(done.Task, task))
-                    {
-                        done.Cts.Dispose();
-                    }
-
-                    OnAgentFinished(task);
-                }
-            });
-            return;
+            _ = Task.Run(() => RunAdmittedServerAsync(task, admission));
+            scheduled = true;
         }
-
-        // 同一个会话的服务器任务串行（不同会话不受影响）
-        await _hooks.SendPlainAsync(conversation, natural
-            ? "上一件事我还在弄，等我弄完再接这个～（想让我先停下就说一声“停一下”）"
-            : "这个会话上一条 //指令还在跑，等它完事再发。");
+        catch (Exception ex)
+        {
+            task?.Fail("任务启动失败（" + ex.GetType().Name + "）");
+            throw;
+        }
+        finally
+        {
+            if (!scheduled)
+            {
+                admission.Dispose();
+                if (task?.RunId is { Length: > 0 }) OnAgentFinished(task);
+            }
+        }
     }
 }

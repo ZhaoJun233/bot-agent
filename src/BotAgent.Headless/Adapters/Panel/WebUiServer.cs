@@ -671,10 +671,11 @@ public sealed partial class WebUiServer : IDisposable
         response.Headers["X-Accel-Buffering"] = "no";
         response.SendChunked = true;
 
-        var client = new SseClient(response.OutputStream);
-        lock (_clientsGate)
+        SseClient client;
+        lock (_loginGate)
         {
-            _clients.Add(client);
+            client = new SseClient(response.OutputStream, SseAuthorization(context), _loginGate);
+            lock (_clientsGate) _clients.Add(client);
         }
 
         try
@@ -683,10 +684,11 @@ public sealed partial class WebUiServer : IDisposable
             await client.SendAsync("state", BuildState().ToJsonString(Json));
 
             // 心跳，避免代理/浏览器掐断空闲连接
-            while (!ct.IsCancellationRequested)
+            var ticks = 0;
+            while (!ct.IsCancellationRequested && client.IsAuthorized)
             {
-                await Task.Delay(15000, ct);
-                await client.SendCommentAsync("ping");
+                await Task.Delay(1000, ct);
+                if (++ticks % 15 == 0) await client.SendCommentAsync("ping");
             }
         }
         catch
@@ -699,6 +701,7 @@ public sealed partial class WebUiServer : IDisposable
             {
                 _clients.Remove(client);
             }
+            client.Dispose();
 
             try
             {
@@ -730,6 +733,7 @@ public sealed partial class WebUiServer : IDisposable
                     {
                         _clients.Remove(client);
                     }
+                    client.Dispose();
                 }
             }, TaskScheduler.Default);
         }
@@ -920,46 +924,4 @@ public sealed partial class WebUiServer : IDisposable
         _ = _loop;
     }
 
-    /// <summary>一个 SSE 订阅者。</summary>
-    private sealed class SseClient : IDisposable
-    {
-        private readonly Stream _stream;
-        private readonly SemaphoreSlim _lock = new(1, 1);
-
-        public SseClient(Stream stream) => _stream = stream;
-
-        public async Task SendAsync(string @event, string data)
-            => await WriteRawAsync($"event: {@event}\ndata: {data}\n\n");
-
-        public async Task SendCommentAsync(string comment) => await WriteRawAsync($": {comment}\n\n");
-
-        private async Task WriteRawAsync(string payload)
-        {
-            var bytes = Encoding.UTF8.GetBytes(payload);
-            await _lock.WaitAsync();
-            try
-            {
-                await _stream.WriteAsync(bytes);
-                await _stream.FlushAsync();
-            }
-            finally
-            {
-                _lock.Release();
-            }
-        }
-
-        public void Dispose()
-        {
-            try
-            {
-                _stream.Dispose();
-            }
-            catch
-            {
-                // 忽略
-            }
-
-            _lock.Dispose();
-        }
-    }
 }

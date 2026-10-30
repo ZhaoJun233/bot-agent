@@ -69,6 +69,25 @@ public sealed class HttpTransport : IOneBotTransport
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
         using var response = await PostAsync(action, paramsJson, linked.Token);
+        var json = await response.Content.ReadAsStringAsync(linked.Token);
+        using var result = JsonDocument.Parse(json);
+        if (result.RootElement.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("invalid_onebot_action_result");
+
+        // HTTP endpoints do not have to return echo. Correlate with this request, never a peer-supplied echo.
+        using var completed = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(completed))
+        {
+            writer.WriteStartObject();
+            foreach (var property in result.RootElement.EnumerateObject())
+            {
+                if (!property.NameEquals("echo")) property.WriteTo(writer);
+            }
+            writer.WriteString("echo", echo);
+            writer.WriteEndObject();
+        }
+        linked.Token.ThrowIfCancellationRequested();
+        OnText?.Invoke(Encoding.UTF8.GetString(completed.ToArray()));
     }
 
     private async Task PollLoopAsync()

@@ -564,7 +564,7 @@ internal static class CompositionRoot
             {
                 WritableSecretSlot.FeishuAppSecret or WritableSecretSlot.FeishuEncryptKey => BotConfig.FixedConfigurationEnvironmentSecret(slot),
                 WritableSecretSlot.ModelApiKey when kind == SecretEditKind.Delete =>
-                    (Environment.GetEnvironmentVariable("QQCHAT_API_KEY") ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY"))?.Trim(),
+                    BotConfig.FixedModelEnvironmentKey(),
                 WritableSecretSlot.ModelApiKey when kind == SecretEditKind.Keep && string.IsNullOrWhiteSpace(current.ApiKeyOverride) => current.ApiKey,
                 WritableSecretSlot.AgentServerKey when kind == SecretEditKind.Delete => EnvironmentAliases.Get("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY")?.Trim(),
                 WritableSecretSlot.AgentServerKey when kind == SecretEditKind.Keep && string.IsNullOrWhiteSpace(current.AgentServerApiKeyOverride) => current.AgentServerApiKey,
@@ -1064,11 +1064,7 @@ internal static class CompositionRoot
 
     private static string? ResolveFixedEnvironmentModelKey(AppSettings settings)
     {
-        var value = Environment.GetEnvironmentVariable("QQCHAT_API_KEY");
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            value = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        }
+        var value = BotConfig.FixedModelEnvironmentKey();
 
         // Preserve the known reference's current settings snapshot fallback, never an arbitrary environment name.
         return string.IsNullOrWhiteSpace(value) ? settings.ApiKey : value;

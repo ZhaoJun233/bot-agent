@@ -147,7 +147,7 @@ public sealed partial class WebUiServer
                 ["key"] = c.SourceKey,
                 ["id"] = id.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["isGroup"] = isGroup,
-                ["name"] = c.Name,
+                ["name"] = Services.Agent.MaskingRules.ChatLabel(_settings.AgentMaskSensitive, c),
             });
         }
 

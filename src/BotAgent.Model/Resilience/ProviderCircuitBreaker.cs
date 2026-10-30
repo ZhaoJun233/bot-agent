@@ -30,6 +30,8 @@ public sealed class ProviderCircuitBreaker
     private int _consecutiveHardFailures;
     private DateTimeOffset? _cooldownUntil;
     private bool _probeInFlight;
+    private object _generation = new();
+    private ProviderCircuitAdmission? _probeAdmission;
 
     public ProviderCircuitBreaker(
         string providerId,
@@ -61,8 +63,11 @@ public sealed class ProviderCircuitBreaker
     public string ProviderId { get; }
 
     /// <summary>尝试取得一次调用许可；open 状态未到冷却时间时直接拒绝。</summary>
-    public bool TryEnter(out ProviderCircuitSnapshot snapshot)
+    public bool TryEnter(out ProviderCircuitSnapshot snapshot) => TryEnter(out snapshot, out _);
+
+    internal bool TryEnter(out ProviderCircuitSnapshot snapshot, out ProviderCircuitAdmission? admission)
     {
+        admission = null;
         var now = _clock();
         lock (_gate)
         {
@@ -75,6 +80,7 @@ public sealed class ProviderCircuitBreaker
                 }
 
                 _state = ProviderCircuitState.HalfOpen;
+                _generation = new();
                 _probeInFlight = false;
             }
 
@@ -86,19 +92,27 @@ public sealed class ProviderCircuitBreaker
                     return false;
                 }
 
+                admission = new ProviderCircuitAdmission(_generation, IsProbe: true);
+                _probeAdmission = admission;
                 _probeInFlight = true;
             }
 
+            admission ??= new ProviderCircuitAdmission(_generation, IsProbe: false);
             snapshot = SnapshotUnsafe();
             return true;
         }
     }
 
     /// <summary>记录成功调用，清除失败计数并关闭熔断器。</summary>
-    public ProviderCircuitSnapshot RecordSuccess()
+    public ProviderCircuitSnapshot RecordSuccess() => RecordSuccess(null);
+
+    internal ProviderCircuitSnapshot RecordSuccess(ProviderCircuitAdmission? admission)
     {
         lock (_gate)
         {
+            if (!CanCompleteUnsafe(admission)) return SnapshotUnsafe();
+            if (_state != ProviderCircuitState.Closed) _generation = new();
+            _probeAdmission = null;
             _state = ProviderCircuitState.Closed;
             _consecutiveHardFailures = 0;
             _cooldownUntil = null;
@@ -108,16 +122,21 @@ public sealed class ProviderCircuitBreaker
     }
 
     /// <summary>记录 5xx、429、连接失败或超时等硬错误。</summary>
-    public ProviderCircuitSnapshot RecordHardFailure()
+    public ProviderCircuitSnapshot RecordHardFailure() => RecordHardFailure(null);
+
+    internal ProviderCircuitSnapshot RecordHardFailure(ProviderCircuitAdmission? admission)
     {
         var now = _clock();
         lock (_gate)
         {
+            if (!CanCompleteUnsafe(admission)) return SnapshotUnsafe();
             _consecutiveHardFailures++;
+            _probeAdmission = null;
             _probeInFlight = false;
             if (_state == ProviderCircuitState.HalfOpen || _consecutiveHardFailures >= _failureThreshold)
             {
                 _state = ProviderCircuitState.Open;
+                _generation = new();
                 _cooldownUntil = now + _cooldown;
             }
 
@@ -125,12 +144,31 @@ public sealed class ProviderCircuitBreaker
         }
     }
 
-    /// <summary>外部取消时释放 half-open 探测锁，不计入失败，不改变状态。</summary>
+    // Runner completion always supplies its admission; stale closed callers cannot clear a newer probe.
+    internal ProviderCircuitSnapshot? ReleaseProbe(ProviderCircuitAdmission admission)
+    {
+        lock (_gate)
+        {
+            if (!admission.IsProbe || !CanCompleteUnsafe(admission)) return null;
+            _probeAdmission = null;
+            _probeInFlight = false;
+            _generation = new();
+            return SnapshotUnsafe();
+        }
+    }
+
+    private bool CanCompleteUnsafe(ProviderCircuitAdmission? admission) => admission is null ||
+        (ReferenceEquals(admission.Generation, _generation) &&
+         (!admission.IsProbe || ReferenceEquals(admission, _probeAdmission)));
+
+    /// <summary>兼容显式管理操作；并发调用应通过 runner 持有 admission。</summary>
     public void ReleaseProbe()
     {
         lock (_gate)
         {
+            _probeAdmission = null;
             _probeInFlight = false;
+            _generation = new();
         }
     }
 
@@ -147,6 +185,8 @@ public sealed class ProviderCircuitBreaker
 
         lock (_gate)
         {
+            _generation = new();
+            _probeAdmission = null;
             _state = snapshot.State;
             _consecutiveHardFailures = Math.Max(0, snapshot.ConsecutiveHardFailures);
             _cooldownUntil = snapshot.CooldownUntil;
@@ -273,50 +313,58 @@ public sealed class ProviderFailoverRunner
         foreach (var provider in _providers)
         {
             ct.ThrowIfCancellationRequested();
-            if (!provider.Enabled || !_breakers[provider.Id].TryEnter(out _))
+            var breaker = _breakers[provider.Id];
+            if (!provider.Enabled || !breaker.TryEnter(out _, out var admission))
             {
                 continue;
             }
 
-            attempted = true;
-            ProviderCallResult<T> result;
             try
             {
-                result = await call(provider, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                Publish(_breakers[provider.Id].RecordHardFailure());
-                lastReason = "provider_timeout";
+                attempted = true;
+                ProviderCallResult<T> result;
+                try
+                {
+                    result = await call(provider, ct).ConfigureAwait(false);
+                    ct.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    Publish(breaker.RecordHardFailure(admission));
+                    lastReason = "provider_timeout";
+                    fallbackHops++;
+                    continue;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    Publish(breaker.RecordHardFailure(admission));
+                    lastReason = "provider_exception";
+                    fallbackHops++;
+                    continue;
+                }
+
+                if (result.Succeeded)
+                {
+                    Publish(breaker.RecordSuccess(admission));
+                    return new ProviderRunResult<T>(true, result.Value, provider.Id, fallbackHops, "ok", false);
+                }
+
+                lastReason = result.ReasonCode ?? "provider_failure";
+                if (result.HardFailure)
+                {
+                    Publish(breaker.RecordHardFailure(admission));
+                }
+
                 fallbackHops++;
-                continue;
             }
-            catch (OperationCanceledException)
+            finally
             {
-                _breakers[provider.Id].ReleaseProbe();
-                throw;
+                if (breaker.ReleaseProbe(admission!) is { } released) Publish(released);
             }
-            catch
-            {
-                Publish(_breakers[provider.Id].RecordHardFailure());
-                lastReason = "provider_exception";
-                fallbackHops++;
-                continue;
-            }
-
-            if (result.Succeeded)
-            {
-                Publish(_breakers[provider.Id].RecordSuccess());
-                return new ProviderRunResult<T>(true, result.Value, provider.Id, fallbackHops, "ok", false);
-            }
-
-            lastReason = result.ReasonCode ?? "provider_failure";
-            if (result.HardFailure)
-            {
-                Publish(_breakers[provider.Id].RecordHardFailure());
-            }
-
-            fallbackHops++;
         }
 
         return new ProviderRunResult<T>(

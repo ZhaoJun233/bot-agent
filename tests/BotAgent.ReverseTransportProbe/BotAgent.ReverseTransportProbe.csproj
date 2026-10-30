@@ -8,5 +8,12 @@
   <ItemGroup>
     <Compile Include="../../src/BotAgent.Platforms/OneBot/ReverseWsTransport.cs" Link="ReverseWsTransport.cs" />
     <Compile Include="../../src/BotAgent.Platforms/OneBot/IOneBotTransport.cs" Link="IOneBotTransport.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/OneBot/HttpTransport.cs" Link="HttpTransport.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/OneBot/ForwardWsTransport.cs" Link="ForwardWsTransport.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/OneBot/WsMessageBuffer.cs" Link="WsMessageBuffer.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/OneBot/ReverseWsFrameReader.cs" Link="ReverseWsFrameReader.cs" />
+    <Compile Include="../../src/BotAgent.Platforms/Common/Clock.cs" Link="Clock.cs" />
+    <Compile Include="../../src/BotAgent.Core/Domain/Ports/IClock.cs" Link="IClock.cs" />
+    <Using Include="BotAgent.Platforms" />
   </ItemGroup>
 </Project>

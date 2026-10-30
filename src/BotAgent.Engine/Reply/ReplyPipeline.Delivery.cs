@@ -22,6 +22,86 @@ namespace BotAgent.Services.Reply;
 public sealed partial class ReplyPipeline
 {
     /// <summary>
+    /// 后台真去搜一次，把结果留给下一轮（并在允许时叫醒模型）。
+    /// 为什么要冷却：搜索是一次真实的模型调用 + 几秒等待；群里连问几个问题就排队了。
+    /// </summary>
+    private void QueueWebSearchAsync(BotConversation conversation, string query, AppSettings snapshot, EffectivePlatformPolicy platformPolicy)
+    {
+        var key = conversation.SourceKey;
+        if (!QueuedResearchAllowed(snapshot, platformPolicy, "web.search")) return;
+        if (!_research.TryBeginSearch(key, snapshot.WebSearchCooldownSeconds, out var searchWhy))
+        {
+            _hooks.Log($"[Search] 这次不搜（{searchWhy}）：{query}");
+            return;
+        }
+
+        _hooks.Log($"[Search] 模型想搜「{query}」");
+        QueueBackground("web-search:" + key + ":" + query, "web-search:" + key + ":" + query, async ct =>
+        {
+            if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.search")) return;
+            try
+            {
+                var result = await _research.SearchAsync(key, query, ct);
+                if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.search")) return;
+                if (result is not null && !result.HasContent)
+                {
+                    _hooks.Log($"[Search] 没搜到「{query}」：{result.Error}");
+                    // P1 观测：模型点名的工具没拿到东西 → 记一次失败（只降级不升级）
+                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
+                }
+
+                // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
+                RequestReply(conversation, null);
+            }
+            catch (OperationCanceledException)
+            {
+                // 停机/超时取消：不再把结果当成失败去降级。
+            }
+            catch (Exception ex)
+            {
+                _hooks.Log($"[Search] 搜「{query}」失败: {ex.Message}");
+                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
+            }
+        });
+    }
+    /// <summary>后台读一个网页的正文（模型填 read 时），留给下一轮。</summary>
+    private void QueuePageReadAsync(BotConversation conversation, string url, AppSettings snapshot, EffectivePlatformPolicy platformPolicy)
+    {
+        var key = conversation.SourceKey;
+        if (!QueuedResearchAllowed(snapshot, platformPolicy, "web.read")) return;
+        _hooks.Log($"[Search] 模型想读页面 {TextRules.Shorten(url, 80)}");
+        QueueBackground("web-read:" + key + ":" + url, "web-read:" + key + ":" + url, async ct =>
+        {
+            if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.read")) return;
+            try
+            {
+                var text = await _research.ReadPageAsync(key, url, ct);
+                if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.read")) return;
+                if (text is null)
+                {
+                    // P1 观测：读页面失败（工具失败 → 只降级）
+                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
+                }
+
+                RequestReply(conversation, null);
+            }
+            catch (OperationCanceledException)
+            {
+                // 停机/超时取消：不再把结果当成失败去降级。
+            }
+            catch (Exception ex)
+            {
+                _hooks.Log($"[Search] 读页面失败: {ex.Message}");
+                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
+            }
+        });
+    }
+    private bool QueuedResearchAllowed(AppSettings snapshot, EffectivePlatformPolicy platformPolicy, string toolId)
+        => _replyTools.Allows(snapshot, platformPolicy, toolId)
+            && _replyTools.Allows(_settings, platformPolicy, toolId);
+
+
+    /// <summary>
     /// 第 4 步的**动作**那一半：搜索 / 读页 / 听歌 / 分享歌（都是两轮动作，后台去跑、下一轮再开口）
     /// 加上表情包候选的校验（不在库里、没过审、频率门都要挡掉）。
     /// 每个动作都要过服务端能力闸门（P3：模型输出不构成授权）；返回这一轮真正要发的表情包（可能为 null）。
@@ -52,14 +132,14 @@ public sealed partial class ReplyPipeline
             // P3：联网是“真出网”，必须过服务端能力闸门（模型输出不构成授权）；策略用本轮快照
             if (_approvals.AllowCapability(conversation, "web.search", wantedQuery, out _, pinned: caps))
             {
-                QueueWebSearchAsync(conversation, wantedQuery);
+                QueueWebSearchAsync(conversation, wantedQuery, snapshot, platformPolicy);
             }
         }
         else if (platformPolicy.Feature("websearch", snapshot.EnableWebSearch).Enabled && AllowsFeature(PluginGate.WebSearchCapability) && _research.IsReady && result.Read is { Length: > 0 } pageUrl)
         {
             if (_approvals.AllowCapability(conversation, "web.read", pageUrl, out _, pinned: caps))
             {
-                QueuePageReadAsync(conversation, pageUrl);
+                QueuePageReadAsync(conversation, pageUrl, snapshot, platformPolicy);
             }
         }
 

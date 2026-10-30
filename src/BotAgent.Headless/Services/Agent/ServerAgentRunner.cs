@@ -714,58 +714,24 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add(command);
 
-        using var process = new Process { StartInfo = psi };
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-
-        try
+        var result = await BoundedShellProcess.RunAsync(psi, TimeSpan.FromSeconds(timeout), ct);
+        if (result.Failure is { } failure)
         {
-            process.Start();
-        }
-        catch (Exception ex)
-        {
-            return $"起不了 bash：{ex.Message}";
+            var truncation = result.Truncated ? "（此前输出已截断，未保留超出部分）" : string.Empty;
+            return (failure == "command_timeout"
+                ? $"命令超时（{timeout}s），已请求终止进程树。"
+                : $"命令失败（{failure}），已请求终止进程树。") + truncation;
         }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeout));
-        try
-        {
-            await process.WaitForExitAsync(cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // 已经退了
-            }
-
-            return $"命令超时（{timeout}s）已杀掉：{Truncate(command, 120, "…")}";
-        }
-
-        stdout.Append(await stdoutTask);
-        stderr.Append(await stderrTask);
-
-        var text = stdout.ToString();
-        if (stderr.Length > 0)
-        {
-            text += (text.Length > 0 ? "\n" : string.Empty) + "[stderr] " + stderr;
-        }
-
+        var text = result.Stdout;
+        if (result.Stderr.Length > 0)
+            text += (text.Length > 0 ? "\n" : string.Empty) + "[stderr] " + result.Stderr;
         text = text.Trim();
-        if (text.Length == 0)
-        {
-            return $"(命令退出码 {process.ExitCode}，没有输出)";
-        }
-
-        return $"退出码 {process.ExitCode}\n" + Truncate(text, 4000, "（输出太长，只给了前 4000 字）");
+        if (text.Length == 0) return $"(命令退出码 {result.ExitCode}，没有输出)";
+        var truncated = result.Truncated || text.Length > 4000;
+        var prefix = text.Length > 4000 ? text[..4000] : text;
+        return $"退出码 {result.ExitCode}\n" + prefix +
+            (truncated ? "\n（输出已截断；仅保留前 4000 字，超出部分未保存在内存中）" : string.Empty);
     }
 
     private async Task RefreshMcpAsync(CancellationToken ct)

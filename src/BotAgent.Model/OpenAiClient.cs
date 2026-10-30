@@ -953,7 +953,7 @@ public class OpenAiClient : IModelClient
         int maxChars,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_settings.ApiKey) || messages.Count == 0)
+        if ((_providerFailover is null && string.IsNullOrWhiteSpace(_settings.ApiKey)) || messages.Count == 0)
         {
             return null;
         }

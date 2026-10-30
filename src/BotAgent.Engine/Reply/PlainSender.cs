@@ -242,12 +242,15 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         }
 
         var index = 0;
+        var delivered = false;
         foreach (var segment in SplitForChat(text, Math.Clamp(_settings.AgentReplyMaxChars, 200, 3000)))
         {
             index++;
             var result = await _source.SendTextAsync(isGroup, targetId, segment);
             _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, result.Ok ? "sent" : "failed", count: segment.Length);
             _log($"agent 回话 → {(isGroup ? "群" : "私聊")}{targetId}（第 {index} 段，{segment.Length} 字，{(result.Ok ? "已发出" : "发送失败")}）: {TextRules.Shorten(segment.Replace('\n', ' '), 60)}");
+            if (!result.Ok) break; // No false Self entry; stop remaining segments after partial failure.
+            delivered = true;
             _ownLedger.Remember(conversation.SourceKey, result, segment);
 
             // 记进上下文：下一轮人设路线能看到"本机 agent 刚做了什么"，不会把它当外人说的话
@@ -262,8 +265,11 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             _ui.NotifyMessageAdded(conversation.SourceKey, appended);
         }
 
-        _registry.Touch(conversation);
-        _registry.Save();
+        if (delivered)
+        {
+            _registry.Touch(conversation);
+            _registry.Save();
+        }
     }
 
     private EffectivePlatformPolicy? ResolveTargetPolicy(bool isGroup, long targetId)

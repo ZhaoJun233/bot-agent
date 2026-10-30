@@ -134,5 +134,6 @@ await pendingAtStop.GetStream().WriteAsync(Encoding.ASCII.GetBytes("GET / HTTP/1
 transport.Stop();
 Check("stop closes pending sockets promptly", await Closed(pendingAtStop, TimeSpan.FromSeconds(2)));
 Check("stop reports disconnected", !transport.IsConnected);
+await ReviewTransportRegression.RunAsync(Check);
 Console.WriteLine($"failures={failures}");
 return failures == 0 ? 0 : 1;

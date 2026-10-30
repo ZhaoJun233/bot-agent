@@ -12,7 +12,17 @@ public sealed partial class ReplyPipeline
     /// <param name="TriggerId">要拿来当触发的那条消息 id（0 = 事件没有消息 id，例如戳一戳）。</param>
     /// <param name="Direct">这一窗口里有没有“直接跟机器人说话”的（@ 你 / 引用你的话）——那种必须被回答。</param>
     private readonly object _deferredGate = new();
-    private readonly record struct DeferredTrigger(long TriggerId, bool Direct, PlatformSourceLease? Source);
+    // Detached synchronous flushes retain ownership until enqueue admission finishes.
+    private readonly Dictionary<object, BotConversation> _flushingDeferred = new();
+    // Membership/offer/retirement share one short, no-callback critical section.
+    private readonly object _pendingGate = new();
+    private sealed class ReplyEpoch { public object Token = new(); }
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<BotConversation, ReplyEpoch> _replyEpochs = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (BotConversation Conversation, object Epoch)> _activeConversations = new();
+    private object CaptureReplyEpoch(BotConversation conversation) => Volatile.Read(ref _replyEpochs.GetValue(conversation, _ => new ReplyEpoch()).Token);
+    private bool IsReplyEpochCurrent(BotConversation conversation, object epoch) => ReferenceEquals(CaptureReplyEpoch(conversation), epoch);
+    private void RetireReplyEpoch(BotConversation conversation) => Interlocked.Exchange(ref _replyEpochs.GetValue(conversation, _ => new ReplyEpoch()).Token, new object());
+    private readonly record struct DeferredTrigger(long TriggerId, bool Direct, PlatformSourceLease? Source, BotConversation Conversation, object Epoch);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Conversation, BotAgent.Domain.Configuration.DriverKey? Driver, CancellationToken Lifetime), DeferredTrigger> _deferredTriggers = new();
     /// <summary>
     /// “要不要现在回” + “不能回就记下来”——**统一入口**。
@@ -27,7 +37,11 @@ public sealed partial class ReplyPipeline
         bool proactive = false,
         bool catchUp = false,
         bool directInWindow = false)
+        => RequestReplyInEpoch(conversation, triggerMessageId, proactive, catchUp, directInWindow, CaptureReplyEpoch(conversation));
+
+    private void RequestReplyInEpoch(BotConversation conversation, long? triggerMessageId, bool proactive, bool catchUp, bool directInWindow, object epoch)
     {
+        if (!IsReplyEpochCurrent(conversation, epoch)) return;
         var source = PlatformSourceExecution.Current ?? (_source as IPlatformSourceRouter)?.CaptureForConversation(conversation.SourceKey);
         if (_source is IPlatformSourceRouter && (source is null || !source.IsCurrent)) return;
         using var sourceScope = PlatformSourceExecution.Enter(source);
@@ -45,7 +59,7 @@ public sealed partial class ReplyPipeline
             }
 
             var mustPreserve = catchUp || directInWindow;
-            EnqueueReply(conversation, triggerMessageId, proactive, mustPreserve);
+            EnqueueReplyInEpoch(conversation, triggerMessageId, proactive, mustPreserve, epoch);
             return;
         }
 
@@ -53,6 +67,7 @@ public sealed partial class ReplyPipeline
         var key = conversation.SourceKey;
         lock (_deferredGate)
         {
+            if (!IsReplyEpochCurrent(conversation, epoch)) return;
             foreach (var retired in _deferredTriggers.Where(item => item.Value.Source is { IsCurrent: false }).Select(item => item.Key).ToArray())
                 _deferredTriggers.TryRemove(retired, out _);
             var deferredKey = (key, source?.Origin.Driver, source?.Lifetime ?? default);
@@ -63,13 +78,13 @@ public sealed partial class ReplyPipeline
             }
         _deferredTriggers.AddOrUpdate(
             (key, source?.Origin.Driver, source?.Lifetime ?? default),
-            _ => new DeferredTrigger(triggerMessageId ?? 0, directInWindow, source),
+            _ => new DeferredTrigger(triggerMessageId ?? 0, directInWindow, source, conversation, epoch),
             (_, old) =>
             {
                 var direct = old.Direct || directInWindow;
                 // 有直接跟你说话的 → 用那条当触发（那是最该回答的一条）；否则用最新的
                 var id = directInWindow || old.TriggerId == 0 ? (triggerMessageId ?? old.TriggerId) : old.TriggerId;
-                return new DeferredTrigger(id, direct, directInWindow || old.TriggerId == 0 ? source : old.Source);
+                return new DeferredTrigger(id, direct, directInWindow || old.TriggerId == 0 ? source : old.Source, conversation, epoch);
             });
         }
         _hooks.Log($"等这一轮说完再评估（被限流挡下的新消息已记下）: {conversation.Name}");
@@ -80,17 +95,25 @@ public sealed partial class ReplyPipeline
         long? triggerMessageId,
         bool proactive = false,
         bool mustPreserve = false)
+        => EnqueueReplyInEpoch(conversation, triggerMessageId, proactive, mustPreserve, CaptureReplyEpoch(conversation));
+
+    private void EnqueueReplyInEpoch(BotConversation conversation, long? triggerMessageId, bool proactive, bool mustPreserve, object epoch)
     {
         if (triggerMessageId is not null)
         {
             LastActiveRequestTime = EngineClock.LocalDateTime; // 主动请求刷新活跃时间
         }
 
-        _pendingConversations[conversation.SourceKey] = conversation;
-        var queue = _pendingReplies.GetOrAdd(conversation.SourceKey, _ => new TenantReplyQueue());
         var source = PlatformSourceExecution.Current ?? (_source as IPlatformSourceRouter)?.CaptureForConversation(conversation.SourceKey);
         if (_source is IPlatformSourceRouter && (source is null || !source.IsCurrent)) return;
-        var offer = queue.Enqueue(new PendingReply(triggerMessageId, proactive, mustPreserve, source), TenantReplyQueue.DefaultCapacity);
+        PendingReplyOffer offer;
+        lock (_pendingGate)
+        {
+            if (!IsReplyEpochCurrent(conversation, epoch)) return;
+            _pendingConversations[conversation.SourceKey] = conversation;
+            var queue = _pendingReplies.GetOrAdd(conversation.SourceKey, _ => new TenantReplyQueue());
+            offer = queue.Enqueue(new PendingReply(triggerMessageId, proactive, mustPreserve, source), TenantReplyQueue.DefaultCapacity);
+        }
         if (offer == PendingReplyOffer.RejectedCapacity)
         {
             _hooks.Log("queue_capacity_rejected");
@@ -121,30 +144,7 @@ public sealed partial class ReplyPipeline
 
                 foreach (var (key, queue) in _pendingReplies)
                 {
-                    if (_inFlight.ContainsKey(key))
-                    {
-                        continue; // 该会话已在跑 → 保持顺序，等它完成
-                    }
-
-                    if (queue.IsEmpty || !queue.TryDequeue(out var pending))
-                    {
-                        continue;
-                    }
-
-                    if (!_inFlight.TryAdd(key, 0))
-                    {
-                        // 并发抢占失败：把触发消息放回队首位置（重新入队到尾部也可，
-                        // 因为同一会话此时必定无其它待处理项）
-                        if (queue.Enqueue(pending, TenantReplyQueue.DefaultCapacity) == PendingReplyOffer.RejectedCapacity)
-                            _hooks.Log("queue_capacity_rejected");
-                        continue;
-                    }
-
-                    if (!_pendingConversations.TryGetValue(key, out var conversation))
-                    {
-                        _inFlight.TryRemove(key, out _);
-                        continue;
-                    }
+                    if (!TryClaimPending(key, queue, out var conversation, out var pending)) continue;
 
                     fired = true;
                     _ = RunReplyAsync(conversation, key, pending.TriggerMessageId, pending.Proactive, pending.Source);
@@ -175,9 +175,30 @@ public sealed partial class ReplyPipeline
             }
         }
     }
+    // A scheduler enumeration may still hold an intentionally dropped queue; claim only its current membership.
+    private bool TryClaimPending(string key, TenantReplyQueue expectedQueue, out BotConversation conversation, out PendingReply pending)
+    {
+        lock (_pendingGate)
+        {
+            conversation = null!;
+            pending = default;
+            if (!_pendingReplies.TryGetValue(key, out var current) || !ReferenceEquals(current, expectedQueue)
+                || !_pendingConversations.TryGetValue(key, out conversation!) || _inFlight.ContainsKey(key)
+                || current.IsEmpty || !_inFlight.TryAdd(key, 0)) return false;
+            if (current.TryDequeue(out pending))
+            {
+                _activeConversations[key] = (conversation, CaptureReplyEpoch(conversation));
+                return true;
+            }
+            _inFlight.TryRemove(key, out _);
+            return false;
+        }
+    }
+
     /// <summary>清掉已排空且不在途的会话条目，避免字典无限增长。</summary>
     private void CleanupPending()
     {
+        lock (_pendingGate)
         foreach (var key in _pendingReplies.Keys.ToList())
         {
             if (_inFlight.ContainsKey(key))
@@ -203,10 +224,10 @@ public sealed partial class ReplyPipeline
         var gate = _replyGate.Reserve();
         try
         {
-            await gate.WaitAsync();
+            await gate.WaitAsync(source?.Lifetime ?? default);
             if (_source is IPlatformSourceRouter && (source is null || !source.IsCurrent)) return;
             conversation.HasPendingReply = false;
-            await GenerateReplyAsync(conversation, triggerMessageId, proactive);
+            await GenerateReplyAsync(conversation, triggerMessageId, proactive, source?.Lifetime ?? default);
         }
         catch (Exception ex)
         {
@@ -216,7 +237,6 @@ public sealed partial class ReplyPipeline
         {
             gate.Dispose();
 
-            _inFlight.TryRemove(sourceKey, out _);
             LastActiveRequestTime = EngineClock.LocalDateTime;
             _traces.Complete(sourceKey, "done");
 
@@ -225,6 +245,12 @@ public sealed partial class ReplyPipeline
             // 只要第一轮生成完是沉默（或慢），后面那几条就要等到 60 秒静默兜底才有下一次机会。
             // 现在：这一轮说完，若中间又有消息被挡下，就**补一次评估**（每轮生成只补一次，不会打转）。
             FlushDeferred(conversation);
+            lock (_pendingGate)
+            {
+                if (_activeConversations.TryGetValue(sourceKey, out var active) && ReferenceEquals(active.Conversation, conversation))
+                    _activeConversations.TryRemove(sourceKey, out _);
+                _inFlight.TryRemove(sourceKey, out _);
+            }
 
             _ = DrainReplyQueueAsync(); // 唤醒调度器处理该会话的后续项
         }
@@ -233,7 +259,18 @@ public sealed partial class ReplyPipeline
     {
         foreach (var deferredKey in _deferredTriggers.Keys.Where(key => key.Conversation == conversation.SourceKey).ToArray())
         {
-            if (!_deferredTriggers.TryRemove(deferredKey, out var deferred)) continue;
+            DeferredTrigger deferred;
+            var flushOwner = new object();
+            lock (_deferredGate)
+            {
+                if (!_deferredTriggers.TryGetValue(deferredKey, out deferred)
+                    || !ReferenceEquals(deferred.Conversation, conversation)
+                    || !IsReplyEpochCurrent(conversation, deferred.Epoch)) continue;
+                _flushingDeferred.Add(flushOwner, conversation);
+                _deferredTriggers.TryRemove(deferredKey, out _);
+            }
+            try
+            {
             if (_source is IPlatformSourceRouter && (deferred.Source is null || !deferred.Source.IsCurrent)) continue;
             using var deferredScope = PlatformSourceExecution.Enter(deferred.Source);
             if (deferred.TriggerId > 0)
@@ -241,8 +278,10 @@ public sealed partial class ReplyPipeline
                 _hooks.Log($"补一次评估：拿被挡下的触发 #{deferred.TriggerId} 再问一次"
                     + (deferred.Direct ? "（窗口里有 @ 机器人 / 引用它的话）" : string.Empty));
             }
-            RequestReply(conversation, deferred.TriggerId > 0 ? deferred.TriggerId : null,
-                catchUp: true, directInWindow: deferred.Direct);
+            RequestReplyInEpoch(conversation, deferred.TriggerId > 0 ? deferred.TriggerId : null,
+                proactive: false, catchUp: true, directInWindow: deferred.Direct, deferred.Epoch);
+            }
+            finally { lock (_deferredGate) _flushingDeferred.Remove(flushOwner); }
         }
     }
 }

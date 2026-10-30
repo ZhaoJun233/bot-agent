@@ -131,26 +131,28 @@ public sealed class ForwardWsTransport : IOneBotTransport
         }
     }
 
-    private async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken ct)
+    private async Task ReceiveLoopAsync(WebSocket socket, CancellationToken ct)
     {
         var buffer = new byte[16384];
+        using var message = new WsMessageBuffer();
         while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
-            var sb = new StringBuilder();
+            message.Reset();
+            WebSocketMessageType? messageType = null;
             WebSocketReceiveResult result;
             do
             {
-                result = await socket.ReceiveAsync(buffer, ct);
-                if (result.MessageType == WebSocketMessageType.Close)
-                {
-                    return;
-                }
-
-                sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+                result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+                messageType ??= result.MessageType;
+                if (result.MessageType != messageType)
+                    throw new InvalidDataException("websocket_message_type_changed");
+                message.Append(buffer, result.Count);
             }
             while (!result.EndOfMessage);
 
-            OnText?.Invoke(sb.ToString());
+            // Binary messages are bounded and discarded; never publish them as OneBot text.
+            if (messageType == WebSocketMessageType.Text) OnText?.Invoke(message.DecodeText());
         }
     }
 

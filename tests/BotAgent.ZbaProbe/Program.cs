@@ -205,6 +205,7 @@ internal static class Program
             openApiResponse.ContentType);
 
         var openApi = BodyJson(openApiResponse);
+        ReviewPanelContractRegression.CheckOpenApi(openApi, (value, label) => Check(label, value));
         var declared = new HashSet<string>(StringComparer.Ordinal);
         foreach (var path in openApi.GetProperty("paths").EnumerateObject())
             foreach (var method in path.Value.EnumerateObject())
@@ -781,6 +782,10 @@ internal static class Program
         var backend = new SyntheticZbaBackend();
         var endpoint = CreateEndpoint(backend, ConfiguredOptions());
 
+        CheckStatus("B12 fixed release source reaches backend", await endpoint.ProcessAsync(Req("POST",
+            "/zba/v1/plugins/sources/resolve", "{\"sourceUrl\":\"https://github.com/example-org/example-plugins/releases/tag/probe-1.0.0\"}", AdminToken)), 200);
+        CheckStatus("B12 tag-less release path rejected", await endpoint.ProcessAsync(Req("POST",
+            "/zba/v1/plugins/sources/resolve", "{\"sourceUrl\":\"https://github.com/example-org/example-plugins/releases/tag\"}", AdminToken)), 422);
         var catalog = await endpoint.ProcessAsync(Req("GET", "/zba/v1/plugins/catalog", token: ReadToken));
         CheckStatus("plugin catalog 200 for read token", catalog, 200);
         var catalogBody = BodyJson(catalog);

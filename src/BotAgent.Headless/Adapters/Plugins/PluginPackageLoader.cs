@@ -31,7 +31,9 @@ internal sealed class PluginPackageLoader(string directory) : AssemblyLoadContex
             // Declarative settings are host-resolved; a plugin never reads the host database itself.
             if (settings is not null) env["pluginSettings"] = settings;
             await plugin.InitializeAsync(new PluginContext(context.Services, env), ct);
-            return new StartedPlugin(plugin, loader);
+            return plugin is IReplyPolicyPlugin policy
+                ? new StartedPolicyPlugin(policy, loader)
+                : new StartedPlugin(plugin, loader);
         }
         catch
         {
@@ -42,7 +44,7 @@ internal sealed class PluginPackageLoader(string directory) : AssemblyLoadContex
     }
 
     // PluginManager may call InitializeAsync again; initialization already succeeded before promotion.
-    private sealed class StartedPlugin(IBotPlugin plugin, PluginPackageLoader loader) : IBotPlugin
+    private class StartedPlugin(IBotPlugin plugin, PluginPackageLoader loader) : IBotPlugin
     {
         public string Id => plugin.Id;
         public string Name => plugin.Name;
@@ -50,10 +52,22 @@ internal sealed class PluginPackageLoader(string directory) : AssemblyLoadContex
         public string Description => plugin.Description;
         public PluginCategory Category => plugin.Category;
         public bool IsPreset => false;
+        public Task InitializeAsync(PluginContext context, CancellationToken ct) => Task.CompletedTask;
+        public Task InitializeAsync(CancellationToken ct) => Task.CompletedTask;
         public async Task ShutdownAsync(CancellationToken ct)
         {
             try { await plugin.ShutdownAsync(ct); }
             finally { loader.Unload(); }
         }
+    }
+
+    private sealed class StartedPolicyPlugin : StartedPlugin, IReplyPolicyPlugin
+    {
+        private readonly IReplyPolicyPlugin _policy;
+
+        public StartedPolicyPlugin(IReplyPolicyPlugin plugin, PluginPackageLoader loader) : base(plugin, loader)
+            => _policy = plugin;
+
+        public string? BlockReason(ReplyPolicyContext context) => _policy.BlockReason(context);
     }
 }

@@ -94,8 +94,7 @@ public static class BotConfig
             if (mutation.Slot == WritableSecretSlot.ModelApiKey)
             {
                 next.ApiKeyOverride = mutation.Kind == SecretEditKind.Replace ? fixedDatabaseSecret(mutation.Slot)?.Trim() : null;
-                next.ApiKey = next.ApiKeyOverride ?? (Environment.GetEnvironmentVariable("QQCHAT_API_KEY")
-                    ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? string.Empty).Trim();
+                next.ApiKey = next.ApiKeyOverride ?? FixedModelEnvironmentKey() ?? string.Empty;
             }
             else if (mutation.Slot == WritableSecretSlot.AgentServerKey)
             {
@@ -108,6 +107,16 @@ public static class BotConfig
         next.FeishuAppSecret = previous.FeishuAppSecret; next.FeishuEncryptKey = previous.FeishuEncryptKey;
         next.FeishuVerificationToken = previous.FeishuVerificationToken;
     }
+    internal static string? FixedModelEnvironmentKey()
+    {
+        foreach (var name in new[] { "BOTAGENT_API_KEY", "QQCHAT_API_KEY", "OPENAI_API_KEY" })
+        {
+            var value = Secret(name);
+            if (!string.IsNullOrWhiteSpace(value)) return value;
+        }
+        return null;
+    }
+
     internal static string? FixedConfigurationEnvironmentSecret(WritableSecretSlot slot) => slot switch
     {
         WritableSecretSlot.FeishuAppSecret => Secret("BOTAGENT_FEISHU_APP_SECRET", "QQCHAT_FEISHU_APP_SECRET"),
@@ -134,7 +143,7 @@ public static class BotConfig
     /// <summary>基础设施与密钥：环境变量始终覆盖（改这些要重启容器）。</summary>
     private static void ApplyInfrastructureEnvironment(AppSettings s)
     {
-        s.ApiKey = Secret("BOTAGENT_API_KEY", "QQCHAT_API_KEY", "OPENAI_API_KEY") ?? s.ApiKey;
+        s.ApiKey = FixedModelEnvironmentKey() ?? s.ApiKey;
         s.ModelBaseUrl = Str("BOTAGENT_BASE_URL", "QQCHAT_BASE_URL", "OPENAI_BASE_URL") ?? s.ModelBaseUrl;
         s.Model = Str("BOTAGENT_MODEL", "QQCHAT_MODEL", "OPENAI_MODEL") ?? s.Model;
         // 思考档位：快速回复（聊天用轻量模型）。这两个是“可由面板改”的，所以只在面板没改过时才播种 ——

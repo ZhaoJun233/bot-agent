@@ -559,7 +559,7 @@ internal static class EngineWiringTests
         var pipeline = new ReplyPipeline(box, source, null!, null!, null!, null!, null!, null!, null!,
             null!, null!, null!, null!, null!, null!, null!, null!, null!, research, null!, null!,
             new ReplyHooks(_ => { }, () => 10001, () => false), new TurnTraceStore(),
-            plugins: gate, background: background);
+            platformPolicies: new FixedPolicyResolver(EnabledPolicy()), plugins: gate, background: background);
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
         var queueSearch = typeof(ReplyPipeline).GetMethod("QueueWebSearchAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -572,7 +572,7 @@ internal static class EngineWiringTests
         });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        queueSearch.Invoke(pipeline, new object[] { conversation, "synthetic-query" });
+        queueSearch.Invoke(pipeline, new object[] { conversation, "synthetic-query", settings, EnabledPolicy() });
         check(research.Calls == 0 && background.Snapshot().Queued == 1,
             "web search is admitted through the bounded queue, not started inline");
 

@@ -4,6 +4,7 @@ using BotAgent.Domain.Ops;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Tools;
+using BotAgent.Domain.Permissions;
 using BotAgent.Services.Ops;
 
 namespace BotAgent.Services.Reply;
@@ -37,11 +38,13 @@ public sealed class AgentTurnLoop
 
     private readonly IModelClient _brain;
     private readonly TurnTraceStore? _traces;
+    private readonly ReplyToolAvailability _tools;
 
-    public AgentTurnLoop(IModelClient brain, TurnTraceStore? traces = null)
+    public AgentTurnLoop(IModelClient brain, TurnTraceStore? traces = null, ReplyToolAvailability? tools = null)
     {
         _brain = brain;
         _traces = traces;
+        _tools = tools ?? new ReplyToolAvailability();
     }
 
     /// <summary>一轮循环的产物：最终那次的结果 + 用了几步 + 当场执行过几次工具。</summary>
@@ -66,7 +69,9 @@ public sealed class AgentTurnLoop
         bool proactive,
         int maxSteps,
         Func<CompletionResult, Task<string?>> runInlineTool,
-        string? agentHint = null)
+        string? agentHint = null,
+        CancellationToken ct = default,
+        Action<CompletionResult>? recordCompletedStep = null)
     {
         var steps = Math.Clamp(maxSteps, MinSteps, MaxSteps);
         var feed = turn.SearchText;
@@ -80,6 +85,8 @@ public sealed class AgentTurnLoop
 
         while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            if (!_tools.IsCurrent) throw new OperationCanceledException("reply_source_retired", ct);
             used++;
             var lastTriggerText = turn.Context.LastOrDefault(m => m.Role == MessageRole.Peer)?.Text;
             var sampling = SamplingPolicy.Resolve(
@@ -92,25 +99,30 @@ public sealed class AgentTurnLoop
             result = await _brain.CompleteAsync(
                 turn.Context,
                 turn.Profiles.Count > 0 ? string.Join("\n\n", turn.Profiles) : null,
-                stickers: turn.StickerChoices.Count > 0 ? turn.StickerChoices : null,
-                pokeContext: turn.PokeContext,
+                ct: ct,
+                stickers: turn.StickerChoices.Count > 0 && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "sticker.send")
+                    && caps.Policy.AllowedTools.Contains("sticker.send") ? turn.StickerChoices : null,
+                pokeContext: turn.PokeContext && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "poke.send")
+                    && caps.Policy.AllowedTools.Contains("poke.send"),
                 moodText: turn.MoodText,
                 musicText: turn.MusicText,
                 linkText: turn.LinkText,
                 recallText: turn.RecallText,
-                enableWebSearch: turn.Snapshot.EnableWebSearch,
+                enableWebSearch: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "web.search") && caps.Policy.AllowedTools.Contains("web.search"),
                 searchText: feed,
                 groupRolesText: turn.GroupRoles,
                 vibeHint: turn.VibeHint,
                 proactive: proactive,
-                enableListen: turn.Snapshot.EnableMusic,
-                enableVoice: turn.Snapshot.EnableVoice,
-                enableAsk: turn.Snapshot.EnableQuestions,
-                enableToolRequest: turn.Snapshot.EnableApprovals,
+                enableListen: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "music.listen") && caps.Policy.AllowedTools.Contains("music.listen"),
+                enableVoice: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "voice.speak") && caps.Policy.AllowedTools.Contains("voice.speak"),
+                enableAsk: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.QuestionToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.QuestionToolId),
+                enableToolRequest: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.FixedToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.FixedToolId),
                 // 自然对话驱动 agent：只有本轮够资格（开关开 + 白名单 + 在跟机器人说话）才会带上这段说明
-                toolList: string.Concat(ToolPromptText.Render(caps), agentHint),
+                toolList: string.Concat(_tools.Render(turn.Snapshot, turn.PlatformPolicy, caps), agentHint),
                 sampling: sampling);
 
+            // Charge each known completion before later tool/model/cancellation exits; aggregate remains reporting-only.
+            recordCompletedStep?.Invoke(result);
             totalPromptTokens += result.PromptTokens;
             totalCompletionTokens += result.CompletionTokens;
             maxFallbackHops = Math.Max(maxFallbackHops, result.FallbackHops);
@@ -123,12 +135,16 @@ public sealed class AgentTurnLoop
                 declaredIntent = result.Intent;
             }
 
+            ct.ThrowIfCancellationRequested();
+            if (!_tools.IsCurrent) throw new OperationCanceledException("reply_source_retired", ct);
             if (used >= steps)
             {
                 break;
             }
 
             var note = await runInlineTool(result);
+            ct.ThrowIfCancellationRequested();
+            if (!_tools.IsCurrent) throw new OperationCanceledException("reply_source_retired", ct);
             if (string.IsNullOrWhiteSpace(note))
             {
                 // 没有“当场能做完”的工具 → 立刻收工（不空转、不为了凑步数再问一次）

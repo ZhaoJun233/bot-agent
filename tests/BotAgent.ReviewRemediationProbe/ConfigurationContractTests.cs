@@ -1088,7 +1088,7 @@ internal static class ConfigurationContractTests
             ("--configuration-primary-aliases", "CFG_CHILD primary-aliases passed=17 failed=0"),
             ("--configuration-alias-codecs", "CFG_CHILD alias-codecs passed=9 failed=0"),
             ("--configuration-provider-routing", "CFG_CHILD provider-routing passed=25 failed=0"),
-            ("--configuration-provider-refs", "CFG_CHILD provider-refs passed=34 failed=0"),
+            ("--configuration-provider-refs", "CFG_CHILD provider-refs passed=35 failed=0"),
             ("--configuration-primary-facts", "CFG_CHILD primary-facts passed=20 failed=0"),
             ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=67 failed=0"),
             ("--configuration-provider-writer-fence", "CFG_CHILD provider-writer-fence passed=11 failed=0"),
@@ -3738,8 +3738,10 @@ internal static class ConfigurationContractTests
             Check(Resolve("secret:apiKey") is null && Build(Provider("secret:apiKey")) is null,
                 "synthetic_missing_database_no_environment_fallback"); // 15
             loadCount = secrets.LoadNames.Count;
-            Check(Resolve("env:QQCHAT_API_KEY") == "synthetic-qqchat-key" && secrets.LoadNames.Count == loadCount,
-                "synthetic_fixed_environment_priority"); // 16
+            Check(Resolve("env:QQCHAT_API_KEY") == "synthetic-botagent-key" && secrets.LoadNames.Count == loadCount,
+                "synthetic_fixed_environment_canonical_priority"); // 16
+            Environment.SetEnvironmentVariable("BOTAGENT_API_KEY", null);
+            Check(Resolve("env:QQCHAT_API_KEY") == "synthetic-qqchat-key", "synthetic_fixed_environment_legacy_compatibility");
             Environment.SetEnvironmentVariable("QQCHAT_API_KEY", " ");
             Check(Resolve("env:QQCHAT_API_KEY") == "synthetic-openai-key", "synthetic_skip_blank_environment"); // 17
             Environment.SetEnvironmentVariable("OPENAI_API_KEY", " ");

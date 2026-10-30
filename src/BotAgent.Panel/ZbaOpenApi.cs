@@ -91,7 +91,25 @@ internal static partial class ZbaOpenApi
         return parameters;
     }
 
-    private static JsonObject Responses(ZbaRouteInfo route) => new()
+    private static JsonObject Responses(ZbaRouteInfo route)
+    {
+        var responses = StandardResponses(route);
+        string? schema = route.ResponseSchema switch
+        {
+            "ConfigurationReadResult" or "ConfigurationSaveResult" or "ConfigurationFindResult" => route.ResponseSchema,
+            "ZbaHealth" => route.ResponseSchema,
+            _ => null,
+        };
+        if (schema is null) return responses;
+        var statuses = schema == "ZbaHealth" ? new[] { "503" }
+            : new[] { "400", "403", "404", "409", "410", "429", "503" };
+        foreach (var status in statuses)
+            responses[status]!["content"]!["application/json"]!["schema"] = new JsonObject
+            { ["anyOf"] = new JsonArray(Ref(schema), Ref("ZbaErrorBody")) };
+        return responses;
+    }
+
+    private static JsonObject StandardResponses(ZbaRouteInfo route) => new()
     {
         ["200"] = new JsonObject
         {

@@ -29,24 +29,48 @@ public sealed class PluginPackageService
     public async Task<IReadOnlyList<InstalledPluginPackage>> GetInstalledAsync(CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        try
-        {
-            var result = new List<InstalledPluginPackage>();
-            foreach (var id in _store.Ids()) result.Add(await _store.ReadAsync(id, ct));
-            _snapshot = result.ToArray();
-            return result;
-        }
+        try { return await ReadInstalledLockedAsync(ct); }
         finally { _gate.Release(); }
     }
 
-    public async Task<InstalledPluginPackage> StageInstallAsync(PluginPackageManifest manifest, CancellationToken ct = default)
+    private async Task<IReadOnlyList<InstalledPluginPackage>> ReadInstalledLockedAsync(CancellationToken ct)
+    {
+        var result = new List<InstalledPluginPackage>();
+        foreach (var id in _store.Ids()) result.Add(await _store.ReadAsync(id, ct));
+        _snapshot = result.ToArray();
+        return result;
+    }
+
+    private async Task EnsureRevisionLockedAsync(string? expectedRevision, CancellationToken ct)
+    {
+        if (expectedRevision is null) return; // Original trusted lifecycle API remains compatible.
+        var installed = await ReadInstalledLockedAsync(ct);
+        if (PluginPackageRevision.Of(installed) != expectedRevision)
+            throw new BotAgent.Panel.ZbaBackendException(409, "plugin_revision_conflict",
+                "插件目录已变化，请重新读取后再提交。");
+    }
+
+    public Task<InstalledPluginPackage> StageInstallAsync(PluginPackageManifest manifest, CancellationToken ct = default)
+        => StageInstallCoreAsync(manifest, null, false, ct);
+
+    public Task<InstalledPluginPackage> StageInstallAsync(PluginPackageManifest manifest, string expectedRevision,
+        CancellationToken ct) => StageInstallCoreAsync(manifest, expectedRevision, false, ct);
+
+    internal Task<InstalledPluginPackage> StageUpdateAsync(PluginPackageManifest manifest, string expectedRevision,
+        CancellationToken ct) => StageInstallCoreAsync(manifest, expectedRevision, true, ct);
+
+    private async Task<InstalledPluginPackage> StageInstallCoreAsync(PluginPackageManifest manifest, string? expectedRevision,
+        bool requireInstalled, CancellationToken ct)
     {
         PluginPackageValidation.Validate(manifest);
         await _gate.WaitAsync(ct);
         var temporary = Path.Combine(_store.Root, ".stage-" + Guid.NewGuid().ToString("N"));
         try
         {
+            await EnsureRevisionLockedAsync(expectedRevision, ct);
             var state = await _store.ReadAsync(manifest.Id, ct);
+            if (requireInstalled && state.Active is null && state.Pending is null)
+                throw new BotAgent.Panel.ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装，无法更新。");
             foreach (var existing in new[] { state.Active, state.Previous, state.Pending })
                 if (existing?.Version == manifest.Version &&
                     System.Text.Json.JsonSerializer.Serialize(existing, PluginPackageValidation.JsonOptions) !=
@@ -75,12 +99,19 @@ public sealed class PluginPackageService
         }
     }
 
-    public async Task<InstalledPluginPackage> StageUninstallAsync(string id, CancellationToken ct = default)
+    public Task<InstalledPluginPackage> StageUninstallAsync(string id, CancellationToken ct = default)
+        => StageUninstallCoreAsync(id, null, ct);
+
+    public Task<InstalledPluginPackage> StageUninstallAsync(string id, string expectedRevision, CancellationToken ct)
+        => StageUninstallCoreAsync(id, expectedRevision, ct);
+
+    private async Task<InstalledPluginPackage> StageUninstallCoreAsync(string id, string? expectedRevision, CancellationToken ct)
     {
         PluginPackageValidation.ValidateId(id);
         await _gate.WaitAsync(ct);
         try
         {
+            await EnsureRevisionLockedAsync(expectedRevision, ct);
             var state = await _store.ReadAsync(id, ct);
             if (state.Active == null && state.Pending == null) throw new InvalidOperationException("Package is not installed.");
             // 保留清单直到重启：否则“已暂存卸载”的包在面板里会整条消失，用户看不到待处理状态。

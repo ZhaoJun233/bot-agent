@@ -21,6 +21,7 @@ public static class Program
 
     public static async Task<int> Main()
     {
+        await RunAsync("Review engine B03/B04/B16/B22/B25", ReviewEngineRegression.Run);
         await RunAsync("Token quota: plugin admission, isolation, mentions and disabled accounting", TokenQuotaTests.Run);
         await RunAsync("PluginGate: enabled capabilities and tools pass", PluginGateEnabledTests);
         await RunAsync("PluginGate: disabled/unregistered known capabilities fail closed", PluginGateDisabledTests);

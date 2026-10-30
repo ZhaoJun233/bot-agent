@@ -34,6 +34,7 @@ internal static class Program
         if (await ClockContractTests.TryRunChildAsync(args) is { } childExit) return childExit;
         if (await DatabaseContractTests.TryRunChildAsync(args) is { } databaseChildExit) return databaseChildExit;
         if (StorageMigrationTests.TryRunChild(args) is { } storageChildExit) return storageChildExit;
+        if (ReviewAgentStorageRegression.TryRunChild(args) is { } agentStorageChildExit) return agentStorageChildExit;
         ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-review-remediation-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
@@ -41,10 +42,12 @@ internal static class Program
         try
         {
             AppDatabase.Initialize();
+            await RunAsync("review agent/storage regressions", () => ReviewAgentStorageRegression.RunAsync(Check));
             await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
             await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));
             await RunAsync("managed operations", () => ManagedOperationContractTests.RunAsync(Check));
             await RunAsync("managed host capabilities", () => ManagedHostCapabilityTests.RunAsync(Check));
+            await RunAsync("backend review panel, rollback and secret regression", () => ReviewPanelRegression.RunAsync(Check));
             await RunAsync("naming compatibility", () => { NamingCompatibilityTests.RunAsync(Check); return Task.CompletedTask; });
             await RunAsync("engine wiring", () => EngineWiringTests.RunAsync(Check));
             await RunAsync("platform lifecycle", () => PlatformLifecycleTests.RunAsync(Check));

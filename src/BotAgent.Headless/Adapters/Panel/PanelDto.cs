@@ -100,7 +100,7 @@ internal sealed class PanelDto
     public JsonObject Conversation(BotConversation c)
     {
         var (isGroup, id) = c.Target;
-        var displayName = Mask(c.Name, c.SourceKey);
+        var displayName = MaskingRules.ChatLabel(_settings.AgentMaskSensitive, c);
         return new JsonObject
         {
             ["key"] = c.SourceKey,

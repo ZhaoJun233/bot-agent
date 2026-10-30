@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Collections.Immutable;
 using BotAgent.Adapters.Persistence;
@@ -29,6 +27,7 @@ public sealed class PluginMarketService
     private readonly PluginSettingsStore _settings;
     private readonly PluginCatalogSource _catalog;
     private readonly PluginOperationReceiptStore _receipts;
+    private readonly PluginMarketOperations _operations;
     private readonly Func<IReadOnlyDictionary<string, bool>>? _desiredStates;
     private readonly Action<string>? _log;
 
@@ -40,7 +39,8 @@ public sealed class PluginMarketService
         _packages = packages ?? throw new ArgumentNullException(nameof(packages));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
-        _receipts = new PluginOperationReceiptStore(receiptPath, now, log);
+        _operations = PluginMarketOperations.For(packages);
+        _receipts = _operations.Store(receiptPath, now, log);
         _desiredStates = desiredStates;
         _log = log;
     }
@@ -127,76 +127,49 @@ public sealed class PluginMarketService
         return new ZbaPluginSourceResolution(matched, TrustNotice);
     }
 
-    public async Task<ZbaPluginOperationResult> InstallAsync(ZbaPluginMutationRequest request, string caller,
+    public Task<ZbaPluginOperationResult> InstallAsync(ZbaPluginMutationRequest request, string caller,
         CancellationToken ct)
     {
         PluginPackageValidation.Validate(request.Manifest);
-        var replay = FindReceipt(request.IdempotencyKey);
-        if (replay is not null) return replay;
-        await EnsureRevisionAsync(request.ExpectedRevision, ct).ConfigureAwait(false);
-        try
-        {
-            await _packages.StageInstallAsync(request.Manifest, ct).ConfigureAwait(false);
-            return await RecordAsync(request.IdempotencyKey, request.Manifest.Id, "install",
-                StatusRestartRequired, null, caller, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception exception)
-        {
-            _log?.Invoke("[Plugin] 安装暂存失败：" + exception.GetType().Name);
-            return await RecordAsync(request.IdempotencyKey, request.Manifest.Id, "install", StatusFailed,
-                FailureCode(exception), caller, ct).ConfigureAwait(false);
-        }
+        return MutateAsync(request.IdempotencyKey, request.Manifest.Id, "install", request.Manifest,
+            request.TrustAcknowledged, caller, request.ExpectedRevision,
+            () => _packages.StageInstallAsync(request.Manifest, request.ExpectedRevision, ct), ct);
     }
 
-    public async Task<ZbaPluginOperationResult> UpdateAsync(ZbaPluginMutationRequest request, string caller,
+    public Task<ZbaPluginOperationResult> UpdateAsync(ZbaPluginMutationRequest request, string caller,
         CancellationToken ct)
     {
         PluginPackageValidation.Validate(request.Manifest);
-        var replay = FindReceipt(request.IdempotencyKey);
-        if (replay is not null) return replay;
-        var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
-        if (!installed.Any(package => package.Id == request.Manifest.Id))
-            throw new ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装，无法更新。");
-        await EnsureRevisionAsync(request.ExpectedRevision, ct).ConfigureAwait(false);
-        try
-        {
-            await _packages.StageInstallAsync(request.Manifest, ct).ConfigureAwait(false);
-            return await RecordAsync(request.IdempotencyKey, request.Manifest.Id, "update",
-                StatusRestartRequired, null, caller, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception exception)
-        {
-            _log?.Invoke("[Plugin] 更新暂存失败：" + exception.GetType().Name);
-            return await RecordAsync(request.IdempotencyKey, request.Manifest.Id, "update", StatusFailed,
-                FailureCode(exception), caller, ct).ConfigureAwait(false);
-        }
+        return MutateAsync(request.IdempotencyKey, request.Manifest.Id, "update", request.Manifest,
+            request.TrustAcknowledged, caller, request.ExpectedRevision,
+            () => _packages.StageUpdateAsync(request.Manifest, request.ExpectedRevision, ct), ct);
     }
 
-    public async Task<ZbaPluginOperationResult> UninstallAsync(string pluginId, ZbaPluginUninstallRequest request,
+    public Task<ZbaPluginOperationResult> UninstallAsync(string pluginId, ZbaPluginUninstallRequest request,
         string caller, CancellationToken ct)
     {
-        var replay = FindReceipt(request.IdempotencyKey);
-        if (replay is not null) return replay;
-        await EnsureRevisionAsync(request.ExpectedRevision, ct).ConfigureAwait(false);
-        try
-        {
-            await _packages.StageUninstallAsync(pluginId, ct).ConfigureAwait(false);
-            return await RecordAsync(request.IdempotencyKey, pluginId, "uninstall", StatusRestartRequired,
-                null, caller, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (InvalidOperationException)
-        {
-            throw new ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装。");
-        }
-        catch (Exception exception)
-        {
-            _log?.Invoke("[Plugin] 卸载暂存失败：" + exception.GetType().Name);
-            return await RecordAsync(request.IdempotencyKey, pluginId, "uninstall", StatusFailed,
-                FailureCode(exception), caller, ct).ConfigureAwait(false);
-        }
+        PluginPackageValidation.ValidateId(pluginId);
+        return MutateAsync(request.IdempotencyKey, pluginId, "uninstall", null, false, caller,
+            request.ExpectedRevision, async () =>
+            {
+                try { await _packages.StageUninstallAsync(pluginId, request.ExpectedRevision, ct).ConfigureAwait(false); }
+                catch (InvalidOperationException)
+                { throw new ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装。"); }
+            }, ct);
+    }
+
+    private Task<ZbaPluginOperationResult> MutateAsync(string key, string pluginId, string kind,
+        PluginPackageManifest? manifest, bool trust, string caller, string expectedRevision, Func<Task> stage,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 128 || key.Any(char.IsControl) ||
+            string.IsNullOrWhiteSpace(caller) || caller.Length > 256 || caller.Any(char.IsControl))
+            throw new ZbaBackendException(400, "invalid_plugin_operation", "插件操作键或调用方无效。");
+        var operation = new ZbaPluginOperation("po-" + Hash(key)[..16], pluginId, kind,
+            StatusRestartRequired, true, null);
+        return _operations.ExecuteAsync(_receipts, ReceiptKey(key),
+            PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller), caller, operation,
+            () => RevisionAsync(CancellationToken.None), expectedRevision, stage, ct);
     }
 
     /// <summary>按幂等键核对回执：没有回执时明确 404，让前端继续用同一个键。</summary>
@@ -215,13 +188,13 @@ public sealed class PluginMarketService
     {
         var manifest = await InstalledManifestAsync(pluginId, ct).ConfigureAwait(false);
         var current = _settings.ReadManifest(manifest);
-        if (!string.Equals(RevisionOf(current.Revision), request.ExpectedRevision, StringComparison.Ordinal))
-            throw new ZbaBackendException(409, "plugin_settings_revision_conflict", "设置已被修改，请重新读取后再提交。");
+        // Parse the caller precondition, but let the store resolve receipts before comparing current state.
+        var expectedRevision = ParseSettingsRevision(request.ExpectedRevision);
         var values = BuildChanges(request.Edits, current);
         PluginSettingsReceipt receipt;
         try
         {
-            receipt = _settings.Save(manifest, current.Revision, request.IdempotencyKey, values, caller);
+            receipt = _settings.Save(manifest, expectedRevision, request.IdempotencyKey, values, caller);
         }
         catch (PluginSettingsException exception)
         {
@@ -324,57 +297,26 @@ public sealed class PluginMarketService
         return new ZbaPluginCatalogEntry(manifest, active?.Version, enabled, status, pending is not null || uninstall);
     }
 
+    private static long ParseSettingsRevision(string revision)
+    {
+        if (revision is null || !revision.StartsWith('r') ||
+            !long.TryParse(revision.AsSpan(1), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var value) || RevisionOf(value) != revision)
+            throw SettingsFailure("plugin_settings_revision_conflict");
+        return value;
+    }
+
     private static string RevisionOf(long revision)
         => "r" + revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    /// <summary>目录代际：安装态摘要。任何暂存/激活/卸载都会换版本号，前端 CAS 才不会静默覆盖。</summary>
+    /// <summary>The same revision calculation is used inside the lifecycle CAS gate.</summary>
     private async Task<string> RevisionAsync(CancellationToken ct)
-    {
-        var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
-        var builder = new StringBuilder();
-        foreach (var package in installed.OrderBy(item => item.Id, StringComparer.Ordinal))
-        {
-            builder.Append(package.Id).Append('@')
-                .Append(package.Active?.Version ?? "-").Append('/')
-                .Append(package.Pending?.Version ?? "-").Append('/')
-                .Append(package.PendingUninstall ? 'u' : '-').Append(';');
-        }
-
-        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
-        return "p" + digest[..16].ToLowerInvariant();
-    }
-
-    private async Task EnsureRevisionAsync(string expected, CancellationToken ct)
-    {
-        var revision = await RevisionAsync(ct).ConfigureAwait(false);
-        if (!string.Equals(revision, expected, StringComparison.Ordinal))
-            throw new ZbaBackendException(409, "plugin_revision_conflict", "插件目录已变化，请重新读取后再提交。");
-    }
+        => PluginPackageRevision.Of(await _packages.GetInstalledAsync(ct).ConfigureAwait(false));
 
     private ZbaPluginOperationResult? FindReceipt(string idempotencyKey)
         => _receipts.Find(ReceiptKey(idempotencyKey));
 
-    /// <summary>回执与暂存分开：即使暂存失败也要留一条可核对的结果，否则前端只能盲目重提。</summary>
-    private async Task<ZbaPluginOperationResult> RecordAsync(string idempotencyKey, string pluginId, string kind,
-        string status, string? errorCode, string caller, CancellationToken ct)
-    {
-        var operation = new ZbaPluginOperation("po-" + Hash(idempotencyKey)[..16], pluginId, kind, status,
-            status == StatusRestartRequired, errorCode);
-        var revision = await RevisionAsync(ct).ConfigureAwait(false);
-        _receipts.TryAdd(ReceiptKey(idempotencyKey), operation, revision, caller);
-        return new ZbaPluginOperationResult(operation, revision);
-    }
-
-    private static string FailureCode(Exception exception) => exception switch
-    {
-        InvalidDataException => "plugin_package_invalid",
-        HttpRequestException => "plugin_download_failed",
-        IOException => "plugin_storage_failed",
-        UnauthorizedAccessException => "plugin_storage_failed",
-        _ => "plugin_operation_failed"
-    };
-
-    private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    private static string Hash(string value) => PluginPackageRevision.Hash(value);
 
     private static string ReceiptKey(string idempotencyKey) => "plugin_operation:" + Hash(idempotencyKey)[..32];
 

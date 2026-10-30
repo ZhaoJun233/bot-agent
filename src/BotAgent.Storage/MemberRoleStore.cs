@@ -59,36 +59,34 @@ public class MemberRoleStore : IMemberRoleRepository
         }
 
         var normalizedRole = NormalizeRole(role);
-        var normalizedTitle = (title ?? string.Empty).Trim();
+        var normalizedTitle = titleChecked ? (title ?? string.Empty).Trim() : string.Empty;
         var normalizedName = (name ?? string.Empty).Trim();
 
         try
         {
             var existing = Find(uid, groupId);
-            if (existing is not null &&
-                existing.Role == normalizedRole &&
-                existing.Title == normalizedTitle &&
-                existing.Name == normalizedName &&
-                existing.TitleChecked == titleChecked)
+            var effectiveTitle = titleChecked ? normalizedTitle : existing?.Title ?? string.Empty;
+            var effectiveChecked = titleChecked || existing?.TitleChecked == true;
+            var effectiveName = normalizedName.Length > 0 ? normalizedName : existing?.Name ?? string.Empty;
+            if (existing is not null && existing.Role == normalizedRole &&
+                existing.Title == effectiveTitle && existing.Name == effectiveName &&
+                existing.TitleChecked == effectiveChecked &&
+                (!titleChecked || Clock.Now - existing.UpdatedAt < TimeSpan.FromHours(12)))
             {
-                // 内容没变，但可以把“见过”的时间推后一点：下一次就不用再去问协议端了。
-                // 只在超过半天没更新时才写，避免每条消息一次写库。
-                if (Clock.Now - existing.UpdatedAt < TimeSpan.FromHours(12))
-                {
-                    return;
-                }
-            }
-            else if (existing is not null && normalizedRole.Length == 0 && normalizedTitle.Length == 0)
-            {
-                return;   // 新来的信息是空的（事件没带 role），别把已知的覆盖掉
+                return;
             }
 
+            // A message event updates role/name, not the authoritative title or its freshness clock.
+            // Merge in SQL as well: a lookup can finish between Find and this write.
             AppDatabase.Write(conn => AppDatabase.Exec(conn, """
                 INSERT INTO member_roles(uid, group_id, role, title, name, title_checked, updated_unix)
                 VALUES($uid, $gid, $role, $title, $name, $checked, $now)
                 ON CONFLICT(uid, group_id) DO UPDATE SET
-                  role = excluded.role, title = excluded.title, name = excluded.name,
-                  title_checked = excluded.title_checked, updated_unix = excluded.updated_unix
+                  role = excluded.role,
+                  title = CASE WHEN excluded.title_checked = 1 THEN excluded.title ELSE member_roles.title END,
+                  name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE member_roles.name END,
+                  title_checked = MAX(member_roles.title_checked, excluded.title_checked),
+                  updated_unix = CASE WHEN excluded.title_checked = 1 THEN excluded.updated_unix ELSE member_roles.updated_unix END
                 """,
                 ("$uid", uid), ("$gid", groupId), ("$role", normalizedRole),
                 ("$title", normalizedTitle), ("$name", normalizedName),

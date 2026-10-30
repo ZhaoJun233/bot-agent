@@ -2,6 +2,9 @@ using BotAgent.Services.Plugins;
 using BotAgent.Engine.Runtime;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Platforms;
+using BotAgent.Services.Platforms;
+using BotAgent.Services.Qq;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Tools;
 using System.Text.Json.Nodes;
@@ -31,32 +34,38 @@ public sealed class InlineTurnTools
     private readonly ParticipationUseCase _participation;
     private readonly Action<string> _log;
     private readonly PluginGate? _plugins;
+    private readonly ReplyToolAvailability _tools;
 
     public InlineTurnTools(
         IResearchUseCase research,
         ApprovalUseCase approvals,
         ParticipationUseCase participation,
         Action<string> log,
-        PluginGate? plugins = null)
+        PluginGate? plugins = null,
+        IPlatformPolicyResolver? policies = null,
+        Func<bool>? isDisposed = null)
     {
         _research = research;
         _approvals = approvals;
         _participation = participation;
         _log = log;
         _plugins = plugins;
+        _tools = new ReplyToolAvailability(plugins, policies, isDisposed, () => research.IsReady);
     }
 
     /// <summary>这一轮有没有"当场做工具"的可能（没开循环 / 没有搜索服务 / 插件禁用 = 没有）。</summary>
     public bool Enabled(AppSettings snapshot)
-        => snapshot.MaxAgentSteps > 1 && _research.IsReady && (_plugins?.AllowsTool("web.search") ?? true);
+        => snapshot.MaxAgentSteps > 1 && snapshot.EnableWebSearch && _research.IsReady && _tools.IsCurrent
+            && (_plugins?.AllowsTool("web.search") ?? true);
 
     /// <summary>
     /// 做掉这一步点名的工具，返回**喂回给模型**的那段文本；null/空 = 没有可当场做的事（循环据此收工）。
     /// </summary>
     public async Task<string?> RunAsync(
-        BotConversation conversation, AppSettings snapshot, ChatCapabilitySet caps, CompletionResult result)
+        BotConversation conversation, AppSettings snapshot, ChatCapabilitySet caps, CompletionResult result,
+        EffectivePlatformPolicy? platformPolicy = null, CancellationToken ct = default)
     {
-        if (!Enabled(snapshot))
+        if (ct.IsCancellationRequested || !Enabled(snapshot) || !_tools.Allows(snapshot, platformPolicy, "web.search"))
         {
             return null;   // 没开循环 / 没有搜索服务：什么都不做（这一支就是"改造前"）
         }
@@ -93,7 +102,10 @@ public sealed class InlineTurnTools
             }
 
             _log($"[循环] 当场搜索「{query}」（第一步就做掉，不再拖到下一轮）");
-            var found = await _research.SearchAsync(conversation.SourceKey, query);
+            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.search")) return null;
+            using var searchLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
+            var found = await _research.SearchAsync(conversation.SourceKey, query, searchLifetime.Token);
+            if (searchLifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.search")) return null;
             if (found is null || !found.HasContent)
             {
                 _participation.Observe(conversation.SourceKey, ParticipationEvent.ToolFailure);
@@ -127,7 +139,10 @@ public sealed class InlineTurnTools
             }
 
             _log($"[循环] 当场读页面 {TextRules.Shorten(url, 80)}");
-            var text = await _research.ReadPageAsync(conversation.SourceKey, url);
+            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
+            using var readLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
+            var text = await _research.ReadPageAsync(conversation.SourceKey, url, readLifetime.Token);
+            if (readLifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
             return string.IsNullOrWhiteSpace(text) ? null : "页面正文：\n" + text;
         }
 

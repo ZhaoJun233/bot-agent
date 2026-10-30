@@ -8,8 +8,18 @@ public sealed partial class ReplyPipeline
     /// <summary>丢掉某会话的待回复项（删会话/改白名单时用）。在途那次不中斷，但不再补发后续。</summary>
     private void DropPending(string sourceKey)
     {
-        _pendingReplies.TryRemove(sourceKey, out _);
-        _pendingConversations.TryRemove(sourceKey, out _);
+        // One lock order: deferred → pending. Rotate weak epochs to reject old work but permit fresh same-object requests.
+        lock (_deferredGate)
+        lock (_pendingGate)
+        {
+            foreach (var flushing in _flushingDeferred.Values.Where(c => c.SourceKey == sourceKey)) RetireReplyEpoch(flushing);
+            if (_pendingConversations.TryGetValue(sourceKey, out var pending)) RetireReplyEpoch(pending);
+            if (_activeConversations.TryGetValue(sourceKey, out var active)) RetireReplyEpoch(active.Conversation);
+            foreach (var key in _deferredTriggers.Keys.Where(key => key.Conversation == sourceKey).ToArray())
+                if (_deferredTriggers.TryRemove(key, out var deferred)) RetireReplyEpoch(deferred.Conversation);
+            _pendingReplies.TryRemove(sourceKey, out _);
+            _pendingConversations.TryRemove(sourceKey, out _);
+        }
     }
 
     // ══════════ 宿主（BotAgentHost）与面板要用的公开入口 ══════════

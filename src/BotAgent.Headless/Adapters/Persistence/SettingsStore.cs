@@ -1219,17 +1219,15 @@ public sealed partial class SettingsStore : ISettingsRepository
             var database = new PrimaryCredentialFacts(true, modelMutation.DatabaseConfigured,
                 modelMutation.DatabaseKeyUsable,
                 modelMutation.DatabaseConfigured ? CredentialSource.Database : CredentialSource.None);
-            // The reference resolver observes raw fixed environment values before its final route trim.
-            var qqchat = Environment.GetEnvironmentVariable("QQCHAT_API_KEY");
-            var openai = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+            var environment = BotConfig.FixedModelEnvironmentKey();
             var main = modelMutation.Kind switch
             {
                 SecretEditKind.Replace => database,
-                SecretEditKind.Delete => ProjectPrimaryKeyFacts((qqchat ?? openai ?? string.Empty).Trim(), proposedMain.Source),
+                SecretEditKind.Delete => ProjectPrimaryKeyFacts(environment ?? string.Empty, proposedMain.Source),
                 _ => ProjectPrimaryKeyFacts(current.ApiKey, proposedMain.Source),
             };
-            var legacy = !string.IsNullOrWhiteSpace(qqchat) ? ProjectPrimaryKeyFacts(qqchat, CredentialSource.Environment)
-                : !string.IsNullOrWhiteSpace(openai) ? ProjectPrimaryKeyFacts(openai, CredentialSource.Environment) : main;
+            var legacy = !string.IsNullOrWhiteSpace(environment)
+                ? ProjectPrimaryKeyFacts(environment, CredentialSource.Environment) : main;
             return (database, legacy, main);
         }
 

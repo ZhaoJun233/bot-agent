@@ -4,6 +4,7 @@ using BotAgent.Domain.Model;
 using BotAgent.Model.Protocols;
 
 var count = 0;
+await ReviewModelRegression.RunAsync(Check);
 void Check(bool value, string name) { if (!value) throw new Exception(name); count++; }
 var payload = JsonNode.Parse("""
 {"model":"example-model","max_tokens":32,"messages":[{"role":"system","content":"Synthetic system"},{"role":"user","content":[{"type":"text","text":"Synthetic prompt"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]},{"role":"assistant","content":null,"tool_calls":[{"id":"call_0","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_0","content":"Synthetic result"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}

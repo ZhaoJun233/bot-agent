@@ -333,24 +333,23 @@ public sealed partial class WebUiServer
                 File.Move(DeployTarNew, DeployTar, overwrite: true);
             }
 
-            // 回滚前先把当前 latest 留着（build 路径里也一样：万一新镜像起不来还能退回来）
-            var tag = await RunDockerAsync("tag qqchat-agent:latest qqchat-agent:prev", 30);
+            var rollbackImage = string.Empty;
+            if (!build)
+            {
+                var selected = await RunDockerAsync("image inspect qqchat-agent:prev --format '{{.Id}}'", 30);
+                rollbackImage = selected.Output.Trim();
+                if (!selected.Ok || !PanelDeploymentPlan.IsImageId(rollbackImage))
+                    return (false, new JsonObject { ["error"] = "没有可用的回滚镜像，未修改镜像标签。" });
+            }
+            // Normal deploy replaces prev; rollback preserves prev and captures the selected immutable image ID.
+            var tag = await RunDockerAsync(PanelDeploymentPlan.BackupArguments(build), 30);
             if (!tag.Ok)
             {
                 // 第一次部署时可能没有 latest（理论上不会）——不致命，只记一笔
                 FileLog.Write("部署", $"[部署] 标记 prev 失败（不致命）：{tag.Output.Trim()}");
             }
 
-            var composeBase = "docker compose -p qqchat --project-directory /work -f /work/docker-compose.yml";
-            var script = build
-                ? "exec > /work/deploy.last.log 2>&1; echo \"== 构建 $(date -Is) ==\"; " +
-                  "docker build -f Dockerfile.app -t qqchat-agent:latest /work && " +
-                  composeBase + " up -d --no-deps qqchat; " +
-                  "echo EXIT=$? > /work/deploy.last.exit; echo DONE >> /work/deploy.last.log"
-                : "exec > /work/deploy.last.log 2>&1; echo \"== 回滚 $(date -Is) ==\"; " +
-                  "docker tag qqchat-agent:prev qqchat-agent:latest && " +
-                  composeBase + " up -d --no-deps qqchat; " +
-                  "echo EXIT=$? > /work/deploy.last.exit; echo DONE >> /work/deploy.last.log";
+            var script = PanelDeploymentPlan.HelperScript(build, rollbackImage);
 
             // helper 容器：它挂宿主 docker，负责把我们这个容器换掉（我们在自己肚子里跑 compose 是跑不成的）
             var run = await RunDockerAsync(

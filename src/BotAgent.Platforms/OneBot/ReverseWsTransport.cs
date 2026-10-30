@@ -36,7 +36,9 @@ public sealed class ReverseWsTransport : IOneBotTransport
     public ReverseWsTransport(string address, string? token)
     {
         var uri = new Uri(address);
-        _ip = uri.Host is "localhost" or "0.0.0.0" or "*" ? IPAddress.Any : IPAddress.Parse(uri.Host);
+        _ip = uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            ? IPAddress.Loopback
+            : uri.Host is "0.0.0.0" or "*" ? IPAddress.Any : IPAddress.Parse(uri.Host.Trim('[', ']'));
         _port = uri.Port;
         _token = string.IsNullOrWhiteSpace(token) ? null : token;
     }
@@ -279,20 +281,16 @@ public sealed class ReverseWsTransport : IOneBotTransport
 
         public async Task RunAsync(CancellationToken ct)
         {
+            using var frames = new ReverseWsFrameReader(_stream);
             try
             {
                 while (IsOpen && !ct.IsCancellationRequested)
                 {
-                    var (closed, text) = await ReadFrameAsync(ct);
-                    if (closed)
-                    {
-                        break;
-                    }
-
-                    if (text is not null)
-                    {
-                        TextReceived?.Invoke(text);
-                    }
+                    var (opcode, payload, text) = await frames.ReadAsync(ct);
+                    if (opcode == 8) break;
+                    if (opcode == 9)
+                        await SendRawAsync(new byte[] { 0x8A, (byte)payload.Length }, payload, ct);
+                    if (text is not null) TextReceived?.Invoke(text);
                 }
             }
             catch (OperationCanceledException)
@@ -349,65 +347,6 @@ public sealed class ReverseWsTransport : IOneBotTransport
             }
         }
 
-        /// <summary>读取一帧。返回 (是否关闭连接, 聚合文本)。ping 自动回 pong。</summary>
-        private async Task<(bool Closed, string? Text)> ReadFrameAsync(CancellationToken ct)
-        {
-            var header = new byte[2];
-            await ReadExactAsync(header, ct);
-
-            var opcode = header[0] & 0x0F;
-            bool masked = (header[1] & 0x80) != 0;
-            long length = header[1] & 0x7F;
-
-            if (length == 126)
-            {
-                var lenBytes = new byte[2];
-                await ReadExactAsync(lenBytes, ct);
-                length = (lenBytes[0] << 8) | lenBytes[1];
-            }
-            else if (length == 127)
-            {
-                var lenBytes = new byte[8];
-                await ReadExactAsync(lenBytes, ct);
-                length = 0;
-                for (int i = 0; i < 8; i++)
-                {
-                    length = (length << 8) | lenBytes[i];
-                }
-            }
-
-            byte[] mask = new byte[4];
-            if (masked)
-            {
-                await ReadExactAsync(mask, ct);
-            }
-
-            var payload = new byte[length];
-            await ReadExactAsync(payload, ct);
-            if (masked)
-            {
-                for (int i = 0; i < payload.Length; i++)
-                {
-                    payload[i] ^= mask[i & 3];
-                }
-            }
-
-            switch (opcode)
-            {
-                case 0x8: // close
-                    return (true, null);
-                case 0x9: // ping -> pong（服务端帧不掩码）
-                    await SendRawAsync(new byte[] { 0x8A, (byte)payload.Length }, payload, ct);
-                    return (false, null);
-                case 0xA: // pong
-                    return (false, null);
-                case 0x1: // text
-                    return (false, Encoding.UTF8.GetString(payload));
-                default:
-                    return (false, null); // 忽略 continuation / binary
-            }
-        }
-
         private async Task SendRawAsync(byte[] header, byte[] payload, CancellationToken ct)
         {
             await _writeLock.WaitAsync(ct);
@@ -420,21 +359,6 @@ public sealed class ReverseWsTransport : IOneBotTransport
             finally
             {
                 _writeLock.Release();
-            }
-        }
-
-        private async Task ReadExactAsync(byte[] buffer, CancellationToken ct)
-        {
-            int read = 0;
-            while (read < buffer.Length)
-            {
-                int n = await _stream.ReadAsync(buffer.AsMemory(read), ct);
-                if (n <= 0)
-                {
-                    throw new EndOfStreamException("连接已关闭");
-                }
-
-                read += n;
             }
         }
 

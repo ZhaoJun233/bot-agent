@@ -81,6 +81,7 @@ public sealed partial class ReplyPipeline
     private readonly AgentTurnLoop _turnLoop;
     /// <summary>当场做掉只读工具（批次 E）：判定与冷却与“留给下一轮”那条路完全一致。</summary>
     private readonly InlineTurnTools _inlineTools;
+    private readonly ReplyToolAvailability _replyTools;
 
     public ReplyPipeline(
         ISettingsBox box,
@@ -144,8 +145,9 @@ public sealed partial class ReplyPipeline
         _inboundDedup = inboundDedup;
         _plugins = plugins;
         _background = background;
-        _turnLoop = new AgentTurnLoop(brain, traces);
-        _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log, plugins);
+        _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady);
+        _turnLoop = new AgentTurnLoop(brain, traces, _replyTools);
+        _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log, plugins, _platformPolicies, hooks.IsDisposed);
 
         _replyGate = new ResizableReplyGate(
             Math.Clamp(box.Current.MaxConcurrentReplies, 1, 16));
@@ -182,6 +184,7 @@ public sealed partial class ReplyPipeline
         }
 
         var source = PlatformSourceExecution.Current;
+        if (_hooks.IsDisposed() || source is { IsCurrent: false }) return false;
         if (_source is IPlatformSourceRouter router
             && (source is null || !ReferenceEquals(source.Owner, router)))
         {
@@ -192,7 +195,9 @@ public sealed partial class ReplyPipeline
         if (!_background.TryEnqueue(jobId, dedupKey, async ct =>
             {
                 using var sourceScope = PlatformSourceExecution.Enter(source);
-                await work(ct);
+                if (_hooks.IsDisposed() || source is { IsCurrent: false } || ct.IsCancellationRequested) return;
+                using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, source?.Lifetime ?? default);
+                await work(lifetime.Token);
             }))
         {
             _hooks.Log("[Queue] 后台任务被拒绝或合并: " + jobId);
@@ -750,79 +755,6 @@ public sealed partial class ReplyPipeline
     }
 
     /// <summary>
-    /// 后台真去搜一次，把结果留给下一轮（并在允许时叫醒模型）。
-    /// 为什么要冷却：搜索是一次真实的模型调用 + 几秒等待；群里连问几个问题就排队了。
-    /// </summary>
-    private void QueueWebSearchAsync(BotConversation conversation, string query)
-    {
-        var key = conversation.SourceKey;
-        if (!_research.TryBeginSearch(key, _settings.WebSearchCooldownSeconds, out var searchWhy))
-        {
-            _hooks.Log($"[Search] 这次不搜（{searchWhy}）：{query}");
-            return;
-        }
-
-        _hooks.Log($"[Search] 模型想搜「{query}」");
-        QueueBackground("web-search:" + key + ":" + query, "web-search:" + key + ":" + query, async ct =>
-        {
-            if (!AllowsFeature(PluginGate.WebSearchCapability)) return;
-            try
-            {
-                var result = await _research.SearchAsync(key, query, ct);
-                if (ct.IsCancellationRequested) return;
-                if (result is not null && !result.HasContent)
-                {
-                    _hooks.Log($"[Search] 没搜到「{query}」：{result.Error}");
-                    // P1 观测：模型点名的工具没拿到东西 → 记一次失败（只降级不升级）
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                }
-
-                // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
-                RequestReply(conversation, null);
-            }
-            catch (OperationCanceledException)
-            {
-                // 停机/超时取消：不再把结果当成失败去降级。
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Search] 搜「{query}」失败: {ex.Message}");
-                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-            }
-        });
-    }
-    /// <summary>后台读一个网页的正文（模型填 read 时），留给下一轮。</summary>
-    private void QueuePageReadAsync(BotConversation conversation, string url)
-    {
-        var key = conversation.SourceKey;
-        _hooks.Log($"[Search] 模型想读页面 {TextRules.Shorten(url, 80)}");
-        QueueBackground("web-read:" + key + ":" + url, "web-read:" + key + ":" + url, async ct =>
-        {
-            if (!AllowsFeature(PluginGate.WebSearchCapability)) return;
-            try
-            {
-                var text = await _research.ReadPageAsync(key, url, ct);
-                if (ct.IsCancellationRequested) return;
-                if (text is null)
-                {
-                    // P1 观测：读页面失败（工具失败 → 只降级）
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                }
-
-                RequestReply(conversation, null);
-            }
-            catch (OperationCanceledException)
-            {
-                // 停机/超时取消：不再把结果当成失败去降级。
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Search] 读页面失败: {ex.Message}");
-                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-            }
-        });
-    }
-    /// <summary>
     /// 听音乐：拿歌词 + 低码率音频做波形分析，把实测到的事实留给下一轮回复。
     /// 分析完成后单独触发一次发言机会 —— 这样模型是“听完再说”，而不是先瞎猜一遍再补课。
     /// </summary>
@@ -1131,7 +1063,7 @@ public sealed partial class ReplyPipeline
 
         TryProactiveSpeak();
     }
-    private async Task GenerateReplyAsync(BotConversation conversation, long? triggerMessageId, bool proactive = false)
+    private async Task GenerateReplyAsync(BotConversation conversation, long? triggerMessageId, bool proactive = false, CancellationToken ct = default)
     {
         if (_riskBackoff?.IsActive(conversation.SourceKey) == true &&
             (triggerMessageId is not long mentionId ||
@@ -1182,10 +1114,15 @@ public sealed partial class ReplyPipeline
             // 批次 E：模型步骤交给有限步进循环（默认 1 步 = 只调一次，与改造前逐字一致）。
             var outcome = await _turnLoop.RunAsync(
                 conversation.SourceKey, turn, caps, proactive, snapshot.MaxAgentSteps,
-                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2),
-                naturalAgent ? NaturalAgentPrompt.Hint : null);
+                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2, turn.PlatformPolicy, ct),
+                naturalAgent ? NaturalAgentPrompt.Hint : null, ct,
+                step => _usage?.RecordUsage(conversation.SourceKey, step.PromptTokens, step.CompletionTokens));
             result = outcome.Result;
-            _usage?.RecordUsage(conversation.SourceKey, result.PromptTokens, result.CompletionTokens);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || !_replyTools.IsCurrent)
+        {
+            SetThinking(conversation, false);
+            return; // Source retirement/shutdown is not a provider failure.
         }
         catch (Exception ex)
         {
