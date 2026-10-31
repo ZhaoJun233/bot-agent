@@ -113,6 +113,7 @@ public static class Program
         ProjectChecks(index);
         RepositoryGovernanceChecks(index);
         DocumentationChecks(index);
+        SurfaceDocumentationChecks(index);
         DockerfileChecks(index);
         SelfTests(index);
         RatchetChecks(index);
@@ -716,6 +717,69 @@ public static class Program
             if (target.Length == 0) continue;
             yield return target;
         }
+    }
+
+    // ─────────────────── 接口面与配置面文档覆盖（#125） ───────────────────
+
+    /// <summary>
+    /// 防的是「路由加了一条、文档表里没有」和「README 写了某个环境变量、代码里根本不读」这两类静默漂移。
+    /// 口径：① PanelRoutes.cs 里每条 <c>new(method, match, path, …)</c> 的 path 都要出现在 docs/api-surface.md；
+    ///      ② README 两版里出现的每个 UPPER_SNAKE 键，必须要么在 src/**/*.cs 里被当成环境变量名读，要么在 docker-compose.yml 里出现。
+    /// 只查「覆盖」不查「禁止新增」：文档多写几行不算错，漏写才红。
+    /// </summary>
+    private static void SurfaceDocumentationChecks(SourceIndex index)
+    {
+        Section("接口面与配置面文档覆盖（PanelRoutes → api-surface.md / README 键 → src 或 compose）");
+
+        var surfacePath = Path.Combine(index.Root, "docs/api-surface.md");
+        var surface = File.Exists(surfacePath) ? File.ReadAllText(surfacePath) : string.Empty;
+
+        var routeFile = Path.Combine(index.Root, "src/BotAgent.Headless/Adapters/Panel/PanelRoutes.cs");
+        var routeText = File.Exists(routeFile) ? File.ReadAllText(routeFile) : string.Empty;
+        var declaredPaths = Regex
+            .Matches(routeText, "new\\(\\s*\"(?<method>[^\"]*)\",\\s*PanelMatch\\.(?<match>[A-Za-z]+),\\s*\"(?<path>[^\"]*)\"")
+            .Select(m => m.Groups["path"].Value)
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+
+        var missingPaths = declaredPaths.Where(p => !surface.Contains(p, StringComparison.Ordinal)).ToList();
+        Check($"PanelRoutes.cs 声明的 {declaredPaths.Count} 条路径全部出现在 docs/api-surface.md",
+            missingPaths.Count == 0 && declaredPaths.Count > 0,
+            declaredPaths.Count == 0
+                ? "没有从 PanelRoutes.cs 解析出任何路由（正则是不是过期了？）"
+                : missingPaths.Count == 0 ? null : "文档缺：" + string.Join("、", missingPaths));
+
+        // README 里写的每个 UPPER_SNAKE 键都得有出处：要么被宿主真的读，要么在 compose 里被替换。
+        // 只写文档不读的键（例如早期的 TLS 证书路径）正是 #125 要清掉的那类死键。
+        var readmeFiles = new[] { "README.md", "README.en.md" }
+            .Select(name => Path.Combine(index.Root, name))
+            .Where(File.Exists)
+            .ToList();
+        if (readmeFiles.Count == 0)
+        {
+            Check("能找到 README 配置参考", false, "README.md / README.en.md 都不存在");
+            return;
+        }
+
+        var composePath = Path.Combine(index.Root, "docker-compose.yml");
+        var compose = File.Exists(composePath) ? File.ReadAllText(composePath) : string.Empty;
+        var sourceText = string.Concat(index.Files.Select(f => f.Raw));
+
+        var documentedKeys = readmeFiles
+            .SelectMany(file => Regex.Matches(File.ReadAllText(file), "[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+").Select(m => m.Value))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        var unbackedKeys = documentedKeys
+            .Where(key => !sourceText.Contains("\"" + key + "\"", StringComparison.Ordinal)
+                && !compose.Contains(key, StringComparison.Ordinal))
+            .ToList();
+        Check($"README 里记录的 {documentedKeys.Count} 个环境变量键都能在 src 或 docker-compose.yml 里找到出处",
+            unbackedKeys.Count == 0,
+            unbackedKeys.Count == 0 ? null : "无出处的键：" + string.Join("、", unbackedKeys));
     }
 
     private static void DockerfileChecks(SourceIndex index)

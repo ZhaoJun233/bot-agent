@@ -42,7 +42,7 @@ The project natively supports running directly from source code across standard 
 ### Multi-Platform Support & Instance Policies
 - **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. The Web Console's "Platform Access & Policies" under "Capabilities" is the single entry point for each platform's enable and chat switches, group/private whitelists, and feature overrides. Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
 - **Daily Token Quota Ledger**: Runs as the preset plugin `preset.feature.token-quota`, managing UTC daily budgets isolated by platform and conversation tenant (`SourceKey`). Supports tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted; supports hot tuning and persistence directly from the Capabilities page.
-- **Zero-Dependency Local Playground Channel**: Features an in-process standalone testing channel. Inject test messages via the Web interactive playground (`/playground.html`) or `POST /api/local/message`, traversing the full model decision pipeline and six-stage governance timeline.
+- **Zero-Dependency Local Test Channel**: an in-process standalone channel (no external long connection). Register virtual group IDs in the panel under "Capabilities → Platform Access Policies → Local Channel", then inject test messages with `POST /api/local/message`; they traverse the full model decision pipeline and the six-stage governance timeline.
 
 ---
 
@@ -100,7 +100,7 @@ The project includes cross-distribution compatible control scripts:
   tail -f runtime/logs/bot-agent.log
   ```
 
-Once the service starts, open `http://127.0.0.1:8080/` in your browser to access the Web management panel.
+Once the service starts: health probe at `http://127.0.0.1:18245/healthz` (port per the configuration reference below; 8080 inside the container image); **the host ships no pages at all** — `/` and `/web/` are served by the reverse proxy. See [`src/web/README.md`](src/web/README.md) for frontend deployment.
 
 ---
 
@@ -123,39 +123,72 @@ docker compose logs -f napcat
 
 ## Configuration Reference
 
-Core configuration is stored in the `.env` file in the project root.
+Configuration is not "one `.env` file rules everything". It is **two environment-variable layers plus one source of truth**. Mixing them up is the most common cause of "I changed it but nothing happened".
 
-### Core Parameters
+### The three layers
 
-| Variable | Example | Description |
+| Layer | Location | Owner | When it takes effect |
+| :--- | :--- | :--- | :--- |
+| 1. compose layer | `.env` in the repo root | deployer | only feeds `${VAR}` substitution in `docker-compose.yml`; **never reaches the container by itself** |
+| 2. host layer (environment) | the container's `environment:` / process env | read once at startup | secrets and infrastructure: **always override**, restart to apply |
+| 3. source of truth (panel + SQLite) | `data/botagent.db` | owned by the panel after a save | behavioural settings: applied live and persisted |
+
+Three ownership rules (same origin as the class comment in `src/BotAgent.Core/Contracts/AppSettings.Part1.cs`):
+
+1. **Secrets are read from the environment only** (`BOTAGENT_API_KEY` / `QQCHAT_API_KEY`, `BOTAGENT_QQ_ONEBOT_TOKEN`, `BOTAGENT_PANEL_TOKEN`, `BOTAGENT_AGENT_TOKEN`…). They are **never persisted**, so config files stay safe to back up or paste into a log.
+2. **Infrastructure** (model base URL, model name, protocol endpoint, listening port) is always overridden by the environment.
+3. **Behaviour** (persona, whitelists, thresholds, cooldowns, voice, search…) is owned solely by the panel and the database; environment variables are only a **seed for the first deployment**. Once the panel has saved a value, the same-named environment variable no longer applies — the startup log says "the following environment variables are overridden by the panel settings".
+
+### Layer 1: compose (`.env`)
+
+`.env` only serves the `${VAR}` placeholders in `docker-compose.yml`. Two traps:
+
+- **A new variable must also be declared in the compose `environment:` block**, otherwise the container never sees it.
+- Do not copy the repository `docker-compose.yml` over the deployment copy — the deployment one may carry hand edits (lose NapCat's `ACCOUNT` and you have to scan the QR code again).
+
+The key list lives in [`.env.example`](.env.example) (commented, the only maintained template). **Bare names without the `BOTAGENT_` / `QQCHAT_` prefix only work for compose substitution** — the host does not read them.
+
+### Layer 2: host (environment variables)
+
+The host reads prefixed names, **canonical `BOTAGENT_*` first, legacy `QQCHAT_*` as fallback** (`EnvironmentAliases.Get` falls through in order). The most common ones:
+
+| Canonical (wins) | Legacy aliases | Meaning |
 | :--- | :--- | :--- |
-| `MODEL_API_KEY` | `sk-...` | API Key for the OpenAI-compatible endpoint (Required) |
-| `MODEL_BASE_URL` | `https://api.deepseek.com/v1` | Base URL for model invocations |
-| `MODEL_NAME` | `deepseek-chat` | Model identifier |
-| `MAX_TOKENS` | `2048` | Max output tokens per reply |
-| `PANEL_PASSWORD` | `your_password_here` | Web console access password (Optional; leave empty for password-free access; can be changed/cleared anytime in panel) |
-| `DISABLE_PANEL_AUTH` | `1` | Force disable web console authentication (Optional, default `0`) |
-| `HEALTH_PORT` | `8080` | Listening port for web console and health endpoints |
-| `WHITELIST` | `*` or `123456,789012` | QQ groups or users permitted to receive replies (comma-separated, `*` for all) |
-| `ONEBOT_PROTOCOL` | `ForwardWebSocket` | Protocol client communication mode (`ForwardWebSocket` / `ReverseWebSocket`) |
-| `ONEBOT_URL` | `ws://127.0.0.1:3001` | Protocol client WebSocket connection URL |
-| `ONEBOT_TOKEN` | `your_token` | Protocol client auth token (if configured) |
-| `BOT_UIN` | `10001` | Bot QQ number (auto-detected on connection if left empty) |
-| `QQCHAT_TLS_CERT` | `/etc/letsencrypt/live/.../fullchain.pem` | Custom TLS/HTTPS certificate chain path (Optional, supports Let's Encrypt) |
-| `QQCHAT_TLS_KEY` | `/etc/letsencrypt/live/.../privkey.pem` | Custom TLS/HTTPS certificate private key path (Optional) |
+| `BOTAGENT_API_KEY` | `QQCHAT_API_KEY`, `OPENAI_API_KEY` | model key (required, never persisted) |
+| `BOTAGENT_BASE_URL` | `QQCHAT_BASE_URL`, `OPENAI_BASE_URL` | model base URL |
+| `BOTAGENT_MODEL` | `QQCHAT_MODEL`, `OPENAI_MODEL` | model identifier |
+| `BOTAGENT_QQ_ONEBOT_PROTOCOL` | `QQCHAT_ONEBOT_PROTOCOL` | `ForwardWebSocket` / `ReverseWebSocket` |
+| `BOTAGENT_QQ_ONEBOT_URL` | `QQCHAT_ONEBOT_URL` | protocol client WebSocket URL |
+| `BOTAGENT_QQ_ONEBOT_TOKEN` | `QQCHAT_ONEBOT_TOKEN` | protocol client auth token |
+| `BOTAGENT_QQ_UIN` | `QQCHAT_UIN` | bot account (auto-detected on connect when empty) |
+| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`, `HEALTH_PORT` | panel and health-probe port (**18245** native default, 8080 inside the image) |
+| `BOTAGENT_HEALTH_BIND` | `QQCHAT_HEALTH_BIND` | bind address (`127.0.0.1` by default, loopback only) |
+| `BOTAGENT_PANEL_TOKEN` | `QQCHAT_PANEL_TOKEN` | panel API token |
+| — | `QQCHAT_PANEL_PASSWORD` | **initial** panel password: written to the database on first start, changed in the panel afterwards |
+| `BOTAGENT_AGENT_TOKEN` | `QQCHAT_AGENT_TOKEN` | server agent token |
+| `BOTAGENT_NAPCAT_WEBUI_URL` | `QQCHAT_NAPCAT_WEBUI_URL` | NapCat WebUI URL (QR login in the panel) |
 
-### QQ Official Open Platform (Optional)
+> Panel authentication has exactly two forms — a password and a token. **There is no "disable authentication" switch.**
 
-To enable the official Bot API:
+### Layer 3: source of truth (panel + database)
 
-```ini
-OFFICIAL_ENABLED=1
-OFFICIAL_APP_ID=your_app_id
-OFFICIAL_APP_SECRET=your_app_secret
-```
+After initialisation almost every runtime behaviour is changed in the Web panel; saving persists it, applies it live and needs **no restart**: persona and the AI switch, group/private whitelists, reply thresholds and cooldowns, splitting and delays, stickers and pokes, voice and TTS, search, platform instance policies, plugins and MCP, model providers.
 
-> [!NOTE]
-> After process initialization, most runtime behaviors (such as bot persona, reply thresholds, cooldowns, sticker toggles, etc.) can be dynamically adjusted and persisted online via the Web console without restarting the service.
+Those keys still exist as environment variables in old deployments (`QQCHAT_WHITELIST`, `QQCHAT_PERSONA`, `QQCHAT_GROUP_COOLDOWN`…); they are now only a **first-deployment seed**.
+
+### QQ Official Open Platform (optional)
+
+The official channel's switch and credentials are also host-layer variables (AppId only answers to `QQCHAT_OFFICIAL_APP_ID`, there is no `BOTAGENT_` alias):
+
+| Key | Meaning |
+| :--- | :--- |
+| `BOTAGENT_OFFICIAL` / `QQCHAT_OFFICIAL` | `1` = enable the official channel |
+| `QQCHAT_OFFICIAL_APP_ID` | open-platform AppId |
+| `BOTAGENT_OFFICIAL_APP_SECRET` / `QQCHAT_OFFICIAL_APP_SECRET` | AppSecret (environment only, never echoed by the panel) |
+
+Once enabled it is **fully isolated** from the private channel: conversation keys carry an `official:` prefix and whitelists are independent.
+
+The full interface map is in [`docs/api-surface.md`](docs/api-surface.md).
 
 ---
 
@@ -171,20 +204,13 @@ A high-performance modern Single-Page Application (SPA) built with Vue 3 and Typ
 
 ---
 
-## SSL/TLS Security & Certificate Management
+## SSL/TLS and Reverse Proxy
 
-The service includes built-in X.509 certificate management for Linux platforms, supporting out-of-the-box self-signed certificates and standard Let's Encrypt certificate chains:
+The host itself **serves plain HTTP only** (`HttpListener`); it **does not terminate TLS and does not generate certificates**. HTTPS in production is the reverse proxy's job (Caddy / Nginx), which also serves the panel frontend under `/web/`.
 
-- **Automatic Self-Signed Certificate Generation**: If no certificate is detected at startup, the service automatically generates a standard self-signed certificate valid for 3 years, outputting to `runtime/certs/`:
-  - `runtime/certs/botagent.crt`: X.509 Public Certificate (PEM)
-  - `runtime/certs/botagent.key`: RSA-2048 Private Key (PEM)
-  - `runtime/certs/botagent.pfx`: PKCS#12 Keystore
-  You can also run `./tools/gencert.sh [domain] [IP]` to manually generate certificates with custom SAN extensions.
-- **Let's Encrypt / Production Certificate Loading**: If certificates are issued via certbot or acme.sh, mount them by specifying paths in `.env`:
-  ```ini
-  QQCHAT_TLS_CERT=/etc/letsencrypt/live/example.com/fullchain.pem
-  QQCHAT_TLS_KEY=/etc/letsencrypt/live/example.com/privkey.pem
-  ```
+- **Local self-signed certificate**: `./tools/gencert.sh [domain] [IP]` uses openssl to write a 1095-day self-signed set into `runtime/certs/` (`.crt` / `.key` / `.pfx`) for the proxy or a debug client.
+- **Production certificates**: issue them with certbot or acme.sh and reference them from the proxy; certificate paths are **proxy configuration**, not host environment variables.
+- **Common misconception**: older docs mentioned two environment variables pointing at certificate paths — the host no longer reads them, and setting them has no effect.
 
 ---
 

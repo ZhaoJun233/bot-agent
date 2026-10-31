@@ -72,6 +72,12 @@ public sealed partial class WebUiServer
 
     private IReadOnlyList<PanelRoute> Routes => _routes ??= BuildRoutes();
 
+    /// <summary>
+    /// 旧 <c>/api/*</c> 面已冻结（#125）：它不是前端契约，前端只用 ZBA（<c>/zba/v1/*</c>）。
+    /// 这里的既有行只随功能下线一起删，<b>不扩能力、不改语义</b>；要加接口请加到 <c>ZbaRoutes.cs</c>。
+    /// 每条路径都必须出现在 <c>docs/api-surface.md</c> 的表里，否则 ArchitectureProbe 的
+    /// 「接口面与配置面文档覆盖」会红 —— 加行要同步改文档，删行也要同步删文档。
+    /// </summary>
     private IReadOnlyList<PanelRoute> BuildRoutes() => new PanelRoute[]
     {
         // ─────────── 静态资源 ───────────

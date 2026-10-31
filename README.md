@@ -42,7 +42,7 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 ### 多平台接入与实例策略
 - **统一平台策略总控**：支持 QQ 私域通道、QQ 官方开放平台、飞书机器人及本地通道。控制台「能力管理」中的「平台接入与访问策略」是各平台「启用平台」「启用聊天」的统一入口，同时配置独立群聊/私聊白名单及特性覆盖。关闭聊天可保持连接，关闭平台会阻止聊天；凭据、连接状态、白名单和全局 AI 开关仍是独立安全前置。
 - **每日 Token 配额账本**：以预设插件 `preset.feature.token-quota` 运行，按平台与会话来源（SourceKey）划分 UTC 日预算管理，支持按平台筛选租户、查看用量与剩余额度，超额后自动进入节能静默；支持在控制台「能力管理」卡片中热调整额度与持久启停。
-- **零依赖本地演练场通道**：内置进程内独立测试通道，通过 Web 交互演练场（`/playground.html`）或 `POST /api/local/message` 注入测试消息，完整走过模型决策与六步治理流水线。
+- **零依赖本地测试通道**：内置进程内独立通道（无外部长连），在面板「能力管理 → 平台接入与访问策略 → 本地通道」里登记虚拟群号后，用 `POST /api/local/message` 注入测试消息，完整走过模型决策与六步治理流水线。
 
 ---
 
@@ -100,7 +100,7 @@ vim .env
   tail -f runtime/logs/bot-agent.log
   ```
 
-服务启动后，浏览器访问 `http://127.0.0.1:8080/` 即可进入 Web 管理面板。
+服务启动后：健康探针 `http://127.0.0.1:18245/healthz`（端口见下方配置参考，容器镜像内是 8080）；**宿主不再内置任何页面**，`/` 与 `/web/` 由反向代理提供，面板前端部署见 [`src/web/README.md`](src/web/README.md)。
 
 ---
 
@@ -123,39 +123,72 @@ docker compose logs -f napcat
 
 ## 配置参考
 
-核心运行配置位于根目录的 `.env` 文件。
+配置不是「一个 `.env` 说了算」，而是**两层环境变量 + 一个真源**。分不清这三者，是「改了却不生效」的最常见来源。
 
-### 核心参数
+### 三层模型
 
-| 配置项 | 示例值 | 说明 |
+| 层 | 位置 | 谁拥有 | 生效时机 |
+| :--- | :--- | :--- | :--- |
+| ① compose 层 | 根目录 `.env` | 部署者 | 只用于 `docker-compose.yml` 的 `${VAR}` 替换；**不会自动进容器** |
+| ② 宿主层（环境变量） | 容器的 `environment:` / 进程环境 | 宿主启动时读一次 | 密钥与基础设施：**始终覆盖**，改完要重启 |
+| ③ 真源（面板 + SQLite） | `data/botagent.db` | 面板保存后由它独占 | 行为类配置：面板改完即时生效并持久化 |
+
+三条所有权规则（与 `src/BotAgent.Core/Contracts/AppSettings.Part1.cs` 的类注释同源）：
+
+1. **密钥只从环境变量读**（`BOTAGENT_API_KEY` / `QQCHAT_API_KEY`、`BOTAGENT_QQ_ONEBOT_TOKEN`、`BOTAGENT_PANEL_TOKEN`、`BOTAGENT_AGENT_TOKEN`…），**不落盘、不进数据库**，所以配置文件可以随便备份、贴日志。
+2. **基础设施**（模型地址、模型名、协议端地址、监听端口）环境变量始终覆盖。
+3. **行为**（人设、白名单、阈值、冷却、语音、搜索…）面板 + 数据库是唯一所有者；环境变量只在**首次部署当种子**。面板保存过之后同名环境变量不再起作用，启动日志会用「以下环境变量已被【面板里的设置】覆盖」提示。
+
+### ① compose 层（`.env`）
+
+`.env` 只服务 `docker-compose.yml` 里的 `${VAR}` 占位符。两个坑：
+
+- **新加变量必须同时在 compose 的 `environment:` 里声明**，否则容器里根本看不到它。
+- 别把仓库里的 `docker-compose.yml` 直接覆盖到部署目录 —— 部署目录可能有手工条目（NapCat 的 `ACCOUNT` 丢了就要重新扫码）。
+
+键名清单以 [`.env.example`](.env.example) 为准（带注释，是唯一维护的模板）。**不带 `BOTAGENT_` / `QQCHAT_` 前缀的裸名只在 compose 替换里有效**，宿主不读它们。
+
+### ② 宿主层（环境变量）
+
+宿主读的是带前缀的名字，**规范名 `BOTAGENT_*` 优先，`QQCHAT_*` 兼容旧部署**（`EnvironmentAliases.Get` 依次回落）。最常用的几条：
+
+| 规范名（优先） | 兼容旧名 | 说明 |
 | :--- | :--- | :--- |
-| `MODEL_API_KEY` | `sk-...` | OpenAI 兼容接口的 API Key（必填） |
-| `MODEL_BASE_URL` | `https://api.deepseek.com/v1` | 模型调用 Base URL |
-| `MODEL_NAME` | `deepseek-chat` | 使用的模型标识 |
-| `MAX_TOKENS` | `2048` | 单次回复 Token 上限 |
-| `PANEL_PASSWORD` | `your_password_here` | Web 控制面板访问密码（可选，留空则免密访问；可在面板中随时修改或清除） |
-| `DISABLE_PANEL_AUTH` | `1` | 强制禁用控制面板认证（可选，默认 0） |
-| `HEALTH_PORT` | `8080` | Web 控制面板与健康探针监听端口 |
-| `WHITELIST` | `*` 或 `123456,789012` | 允许响应的 QQ 群号或用户号（逗号分隔，`*` 为全量） |
-| `ONEBOT_PROTOCOL` | `ForwardWebSocket` | 协议端通信模式（`ForwardWebSocket` / `ReverseWebSocket`） |
-| `ONEBOT_URL` | `ws://127.0.0.1:3001` | 协议端 WebSocket 接入地址 |
-| `ONEBOT_TOKEN` | `your_token` | 协议端鉴权令牌（如设置） |
-| `BOT_UIN` | `10001` | 机器人 QQ 号（留空时连接后自动获取） |
-| `QQCHAT_TLS_CERT` | `/etc/letsencrypt/live/.../fullchain.pem` | 自定义 TLS/HTTPS 证书链路径（可选，支持 Let's Encrypt） |
-| `QQCHAT_TLS_KEY` | `/etc/letsencrypt/live/.../privkey.pem` | 自定义 TLS/HTTPS 证书私钥路径（可选） |
+| `BOTAGENT_API_KEY` | `QQCHAT_API_KEY`、`OPENAI_API_KEY` | 模型密钥（必填，不落盘） |
+| `BOTAGENT_BASE_URL` | `QQCHAT_BASE_URL`、`OPENAI_BASE_URL` | 模型 Base URL |
+| `BOTAGENT_MODEL` | `QQCHAT_MODEL`、`OPENAI_MODEL` | 模型标识 |
+| `BOTAGENT_QQ_ONEBOT_PROTOCOL` | `QQCHAT_ONEBOT_PROTOCOL` | `ForwardWebSocket` / `ReverseWebSocket` |
+| `BOTAGENT_QQ_ONEBOT_URL` | `QQCHAT_ONEBOT_URL` | 协议端 WebSocket 地址 |
+| `BOTAGENT_QQ_ONEBOT_TOKEN` | `QQCHAT_ONEBOT_TOKEN` | 协议端鉴权令牌 |
+| `BOTAGENT_QQ_UIN` | `QQCHAT_UIN` | 机器人号（留空则连接后自动获取） |
+| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`、`HEALTH_PORT` | 面板与健康探针端口（原生默认 **18245**，容器镜像内默认 8080） |
+| `BOTAGENT_HEALTH_BIND` | `QQCHAT_HEALTH_BIND` | 监听地址（默认 `127.0.0.1`，只绑回环） |
+| `BOTAGENT_PANEL_TOKEN` | `QQCHAT_PANEL_TOKEN` | 面板 API 令牌 |
+| — | `QQCHAT_PANEL_PASSWORD` | 面板口令的**初始值**：首次启动写入库，之后在面板里改 |
+| `BOTAGENT_AGENT_TOKEN` | `QQCHAT_AGENT_TOKEN` | 服务器 Agent 令牌 |
+| `BOTAGENT_NAPCAT_WEBUI_URL` | `QQCHAT_NAPCAT_WEBUI_URL` | NapCat WebUI 地址（面板扫码登录用） |
+
+> 面板认证只有**口令**与**令牌**两种，**没有「关掉认证」的开关**。
+
+### ③ 真源（面板 + 数据库）
+
+初始化之后，绝大多数运行时行为都在 Web 面板里改，保存即持久化、即时生效、**不用重启**：人设与 AI 开关、群聊/私聊白名单、发言阈值与冷却、分句与延迟、表情包与戳一戳、语音与 TTS、搜索开关、平台实例策略、插件与 MCP、模型供应商。
+
+这些键在旧部署里还以环境变量形式存在（`QQCHAT_WHITELIST`、`QQCHAT_PERSONA`、`QQCHAT_GROUP_COOLDOWN`…），它们现在只是**首次部署的种子**。
 
 ### QQ 官方开放平台（可选）
 
-如需启用官方 Bot API：
+官方通道的开关与凭据同样是宿主层变量（AppId 只认 `QQCHAT_OFFICIAL_APP_ID`，没有 `BOTAGENT_` 别名）：
 
-```ini
-OFFICIAL_ENABLED=1
-OFFICIAL_APP_ID=your_app_id
-OFFICIAL_APP_SECRET=your_app_secret
-```
+| 键 | 说明 |
+| :--- | :--- |
+| `BOTAGENT_OFFICIAL` / `QQCHAT_OFFICIAL` | `1` = 启用官方通道 |
+| `QQCHAT_OFFICIAL_APP_ID` | 开放平台 AppId |
+| `BOTAGENT_OFFICIAL_APP_SECRET` / `QQCHAT_OFFICIAL_APP_SECRET` | AppSecret（只从环境变量读，面板不接不回显） |
 
-> [!NOTE]
-> 进程完成初始化后，大多数运行时行为（如人设、回复阈值、冷却时间、表情开关等）均可在 Web 控制面板内在线动态调整并持久化，无须重启服务。
+启用后与私域通道**完全隔离**：会话 key 带 `official:` 前缀，白名单各自独立。
+
+接口面的完整地图见 [`docs/api-surface.md`](docs/api-surface.md)。
 
 ---
 
@@ -171,20 +204,13 @@ OFFICIAL_APP_SECRET=your_app_secret
 
 ---
 
-## SSL/TLS 安全与证书管理
+## SSL/TLS 与反向代理
 
-服务内建针对 Linux 平台的 X.509 证书管理机制，支持开箱即用的自签名证书与标准 Let's Encrypt 证书链：
+宿主本身**只监听明文 HTTP**（`HttpListener`），**不终止 TLS、也不生成证书**。生产环境的 HTTPS 由反向代理（Caddy / Nginx）负责，面板前端也由反代以 `/web/` 提供。
 
-- **自签名证书自动生成**：启动时如未检测到已有证书，服务内核将自动生成有效期为 3 年的标准自签名证书，并输出至 `runtime/certs/` 目录：
-  - `runtime/certs/botagent.crt`：X.509 公钥证书 (PEM)
-  - `runtime/certs/botagent.key`：RSA-2048 私钥 (PEM)
-  - `runtime/certs/botagent.pfx`：PKCS#12 密钥库
-  亦可执行 `./tools/gencert.sh [域名] [IP]` 手动指定 SAN 扩展生成。
-- **Let's Encrypt / 生产证书加载**：若已通过 certbot 或 acme.sh 申请标准域名证书，可在 `.env` 中配置对应路径进行挂载：
-  ```ini
-  QQCHAT_TLS_CERT=/etc/letsencrypt/live/example.com/fullchain.pem
-  QQCHAT_TLS_KEY=/etc/letsencrypt/live/example.com/privkey.pem
-  ```
+- **本地自签证书**：`./tools/gencert.sh [域名] [IP]` 会用 openssl 生成一套有效期 1095 天的自签证书到 `runtime/certs/`（`.crt` / `.key` / `.pfx`），供反代或调试客户端使用。
+- **生产证书**：用 certbot 或 acme.sh 签发，再在反代里引用；证书路径属于**反代配置**，不是宿主的环境变量。
+- **常见误判**：旧版本文档提到过两个指向证书路径的环境变量 —— 宿主已不再读取它们，配了也不会有任何效果。
 
 ---
 
