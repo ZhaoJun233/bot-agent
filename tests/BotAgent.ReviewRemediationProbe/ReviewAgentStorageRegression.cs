@@ -289,7 +289,9 @@ internal static class ReviewAgentStorageRegression
             catch (OperationCanceledException) { cancelled = true; }
             check(cancelled, "B24 in-flight caller cancellation is propagated after readers settle");
             var pids = ids.Split(',').Select(int.Parse).ToArray();
-            var allExited = pids.All(HasExited);
+            // 取消是异步传播的：信号先回到调用方，子进程树的退出要再晚一点。
+            // 立即判定会在慢 runner 上偶发 state=R 的假红（CI 上两次踩到），这里改成有界等待。
+            var allExited = await WaitAllExitedAsync(pids, TimeSpan.FromSeconds(10));
             if (!allExited && OperatingSystem.IsLinux())
                 foreach (var pid in pids)
                 {
@@ -313,6 +315,17 @@ internal static class ReviewAgentStorageRegression
                 !Path.GetFileName(root).StartsWith("botagent-review-shell-", StringComparison.Ordinal))
                 throw new InvalidOperationException("unsafe_synthetic_shell_cleanup");
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task<bool> WaitAllExitedAsync(int[] pids, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (pids.All(HasExited)) return true;
+            if (DateTime.UtcNow >= deadline) return false;
+            await Task.Delay(50);
         }
     }
 
