@@ -69,10 +69,10 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
 # Panel UI lives in src/web (Vue); the legacy wwwroot/FrontendProbe retired with S6 — use web checks
 (cd src/web && npm run typecheck && npm run test:unit)
-QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 # structural guardrails (read source only, no database, no process): baseline lives in ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
-dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll
+dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.ArchitectureProbe.dll
 ```
 
 - The architecture guardrail is a **ratchet**: the thresholds in `Baseline.cs` may only be **lowered**, never raised (raising them = loosening a structural constraint).

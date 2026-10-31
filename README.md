@@ -52,7 +52,7 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 
 #### 1. 系统要求与环境准备
 - **操作系统**：标准 Linux 发行版（Ubuntu 20.04+、Debian 11+、CentOS 8+、Arch Linux 等）
-- **运行时依赖**：.NET 8.0 SDK / Runtime、Git、curl、openssl
+- **运行时依赖**：.NET 10.0 SDK / Runtime、Git、curl、openssl
 - **OneBot 协议端**：[NapCat Linux Shell 版](https://github.com/NapNeko/NapCatQQ)（如使用 QQ 私域通道）
 
 在 Debian / Ubuntu 上安装基础组件：
@@ -60,7 +60,7 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 ```bash
 # 更新软件包列表并安装依赖
 sudo apt-get update
-sudo apt-get install -y dotnet-sdk-8.0 git curl openssl
+sudo apt-get install -y dotnet-sdk-10.0 git curl openssl
 ```
 
 #### 2. 获取源码与编译构建
@@ -192,7 +192,7 @@ OFFICIAL_APP_SECRET=your_app_secret
 
 ```text
 +-------------------------+            OneBot v11            +----------------------------------+
-| OneBot 协议端 (NapCat)   | <---- [Forward WS / WS] ----> | BotAgent.Headless (C# / .NET 8)  |
+| OneBot 协议端 (NapCat)   | <---- [Forward WS / WS] ----> | BotAgent.Headless (C# / .NET 10)  |
 +-------------------------+                                 |   +-- OneBot 网关与事件分发      |
                                                             |   +-- 提示词组装与研判流水线   |
 +-------------------------+          官方 Open API           |   +-- 人物画像与 SQLite 持久化   |
@@ -230,7 +230,7 @@ dotnet test
 
 # 运行集成测试套件
 dotnet build tests/BotAgent.IntegrationHarness -c Release
-dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 
 # 运行前端类型检查、单元测试与浏览器回归（在 src/web 下）
 npm run typecheck && npm run test:unit

@@ -1176,7 +1176,7 @@ internal static class ConfigurationContractTests
                 || !System.Text.RegularExpressions.Regex.IsMatch(expectedHeadlessHash, "^[0-9A-F]{64}$")
                 || !System.Text.RegularExpressions.Regex.IsMatch(revision, "^[0-9a-f]{40}$"))
                 throw new InvalidOperationException("capture_scope_invalid");
-            var source = Path.Combine(repository, "src", "BotAgent.Headless", "bin", "Release", "net8.0");
+            var source = Path.Combine(repository, "src", "BotAgent.Headless", "bin", "Release", "net10.0");
             Check(Hash(BoundAsset(source, "BotAgent.Headless.dll")) == expectedHeadlessHash, "capture_baseline_drift");
             var deps = JsonNode.Parse(File.ReadAllText(BoundAsset(source, "BotAgent.Headless.deps.json")))!.AsObject();
             var target = deps["targets"]![deps["runtimeTarget"]!["name"]!.GetValue<string>()]!.AsObject();
@@ -1393,8 +1393,8 @@ internal static class ConfigurationContractTests
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BotAgent.slnx"))) directory = directory.Parent;
             var repository = directory?.FullName ?? throw new InvalidOperationException("synthetic_repository_missing");
-            var headless = Path.Combine(repository, "src", "BotAgent.Headless", "bin", "Release", "net8.0", "BotAgent.Headless.dll");
-            var harness = Assembly.LoadFrom(Path.Combine(repository, "tests", "BotAgent.IntegrationHarness", "bin", "Release", "net8.0", "BotAgent.IntegrationHarness.dll"));
+            var headless = Path.Combine(repository, "src", "BotAgent.Headless", "bin", "Release", "net10.0", "BotAgent.Headless.dll");
+            var harness = Assembly.LoadFrom(Path.Combine(repository, "tests", "BotAgent.IntegrationHarness", "bin", "Release", "net10.0", "BotAgent.IntegrationHarness.dll"));
             int Port()
             {
                 using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
@@ -1934,7 +1934,7 @@ internal static class ConfigurationContractTests
                 && Directory.EnumerateFiles(baseline, "*", SearchOption.AllDirectories).Count() == 37
                 && Hash(manifestPath) == baselineHash && Hash(original) == preimageHash && Hash(preimageManifest) == preimageManifestHash;
             Check(OriginalIntact(), "whole_old_bundle_and_preimage_remain_intact");
-            var source = Bound(repository, "src/BotAgent.Headless/bin/Release/net8.0");
+            var source = Bound(repository, "src/BotAgent.Headless/bin/Release/net10.0");
             var candidateNames = Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
                 .Where(path => !path.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase))
                 .Select(path => Path.GetRelativePath(source, path).Replace('\\', '/')).ToArray();
@@ -2044,7 +2044,7 @@ internal static class ConfigurationContractTests
                 listener.Start(); return ((IPEndPoint)listener.LocalEndpoint).Port;
             }
             var modelPort = Port(); var panelPort = Port(); var bridgePort = Port();
-            var harness = Assembly.LoadFrom(Bound(repository, "tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll"));
+            var harness = Assembly.LoadFrom(Bound(repository, "tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll"));
             var mockType = harness.GetType("BotAgent.IntegrationHarness.MockOpenAi", throwOnError: true)!;
             mock = (IDisposable)Activator.CreateInstance(mockType, new object[] { modelPort, "127.0.0.1" })!;
             mockType.GetMethod("Start")!.Invoke(mock, null);

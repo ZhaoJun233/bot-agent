@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const repoRoot = path.resolve(webRoot, '../..')
 const headlessDll = process.env.BOTAGENT_HEADLESS_DLL
-  ?? path.join(repoRoot, 'src/BotAgent.Headless/bin/Release/net8.0/BotAgent.Headless.dll')
+  ?? path.join(repoRoot, 'src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll')
 const viteBin = path.join(webRoot, 'node_modules/vite/bin/vite.js')
 
 const HOST_PORT = 18129

@@ -2023,7 +2023,7 @@ public static partial class Program
 
         foreach (var config in new[] { "Release", "Debug" })
         {
-            var candidate = Path.Combine(RepoRoot, "src", "BotAgent.Headless", "bin", config, "net8.0", "BotAgent.Headless.dll");
+            var candidate = Path.Combine(RepoRoot, "src", "BotAgent.Headless", "bin", config, "net10.0", "BotAgent.Headless.dll");
             if (File.Exists(candidate))
             {
                 return candidate;

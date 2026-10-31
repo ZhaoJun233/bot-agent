@@ -281,7 +281,7 @@ public static class Program
 
     private static void WriteFixtureProject(string root, string project, string? reference)
         => File.WriteAllText(Path.Combine(root, "src", project, project + ".csproj"),
-            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>"
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
             + (reference is null ? "" : $"<ItemGroup><ProjectReference Include=\"../{reference}/{reference}.csproj\" /></ItemGroup>") + "</Project>");
 
     private static SourceIndex LoadFixture(string root)

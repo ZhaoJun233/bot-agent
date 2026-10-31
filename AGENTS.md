@@ -71,11 +71,11 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
 # 面板前端在 src/web（Vue）；旧的 wwwroot/FrontendProbe 已随 S6 删除，改跑 web 的 typecheck/unit/e2e
 (cd src/web && npm run typecheck && npm run test:unit)
-BOTAGENT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+BOTAGENT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 # 规范名优先，旧 QQCHAT_IT_ONLY 兼容；场景内的行为变量照旧用 QQCHAT_*
 # 结构护栏（只读源码，不连库不起进程）：基线在 ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
-dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll
+dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.ArchitectureProbe.dll
 ```
 
 - 架构护栏是**棘轮**：`Baseline.cs` 里的阈值只允许**调低**，不允许调高（调高 = 放宽结构约束）。

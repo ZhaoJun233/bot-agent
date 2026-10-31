@@ -750,7 +750,7 @@ internal static class Program
            + "\"sha256\":\"" + new string('a', 64) + "\","
            + "\"downloadUrl\":\"https://github.com/example-org/example-plugins/releases/download/"
            + manifestId + "-1.0.0/" + manifestId + "-1.0.0.zip\","
-           + "\"apiVersion\":1,\"targetFramework\":\"net8.0\",\"minimumHostVersion\":\"1.0.0\","
+           + "\"apiVersion\":1,\"targetFramework\":\"net10.0\",\"minimumHostVersion\":\"1.0.0\","
            + "\"permissions\":[],\"dependencies\":[],\"settings\":[]},"
            + "\"expectedRevision\":\"" + expectedRevision + "\","
            + "\"idempotencyKey\":\"" + idempotencyKey + "\","

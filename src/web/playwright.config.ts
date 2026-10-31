@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const webRoot = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(webRoot, '../..')
 const headlessDll = process.env.BOTAGENT_HEADLESS_DLL
-  ?? path.join(repoRoot, 'src/BotAgent.Headless/bin/Release/net8.0/BotAgent.Headless.dll')
+  ?? path.join(repoRoot, 'src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll')
 
 if (!fs.existsSync(headlessDll)) {
   throw new Error(`Headless DLL not found: ${headlessDll}. Build BotAgent.Headless Release first.`)

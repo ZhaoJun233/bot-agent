@@ -11,7 +11,7 @@ This repository is a privacy-filtered public mirror of a chat application. Never
 
 ## Local verification
 
-Run these commands at the repository root with .NET 8, Node.js 22, and Python 3.12. On Windows, use PowerShell 7 (`pwsh`) and check `$LASTEXITCODE` after every native command; stop the affected verification chain on failure. Do not inherit production configuration or credentials into synthetic runs: clear `BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `MINIMAX_*`, `TTS_*`, `HARNESS_*`, and `HEALTH_PORT` in an isolated verification process. Data-dependent standalone probes must use fresh synthetic temporary roots; the integration scenarios create their own roots, so do not supply a parent data-root alias that overrides them.
+Run these commands at the repository root with .NET 10, Node.js 22, and Python 3.12. On Windows, use PowerShell 7 (`pwsh`) and check `$LASTEXITCODE` after every native command; stop the affected verification chain on failure. Do not inherit production configuration or credentials into synthetic runs: clear `BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `MINIMAX_*`, `TTS_*`, `HARNESS_*`, and `HEALTH_PORT` in an isolated verification process. Data-dependent standalone probes must use fresh synthetic temporary roots; the integration scenarios create their own roots, so do not supply a parent data-root alias that overrides them.
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
@@ -34,7 +34,7 @@ dotnet run --project tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csp
 dotnet run --project tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj -c Release
 (cd src/web && npm run typecheck && npm run test:unit)   # panel UI checks (legacy FrontendProbe retired in S6)
 dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release
-dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 ```
 
 The integration harness starts a separate bot process; rebuild Headless before integration validation (`dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release -t:Rebuild`), then build the harness. Building the harness alone does not rebuild the bot. The synthetic integration suite runs the 53 registered scenarios from S1–S55: S2 is covered inside S1, S33 retired with the pi bridge, and S42 (official channel) is registered in both the harness and CI with a fake gateway plus loopback mocks; it does not use real Open Platform credentials or prove production interoperability. S52 covers unified platform switches, migration, precedence, mute/disable, persistence, and restart with synthetic fixtures; S53 covers the server agent calling a loopback Streamable HTTP MCP tool with an explicit allowlist and a denied-tool negative; S54 covers the real host's ZBA Bearer boundary, capability catalog, structured configuration read/save/conflict, task submit/complete/idempotency/cancel, approvals/events, read-only CLI, disk-served static assets, and the legacy panel token fail-closed branch. A green harness run is **not** evidence of real Open Platform end-to-end coverage. `.github/workflows/ci.yml` runs the probes explicitly listed in its `verify` job and deterministic evaluations, and partitions the enabled integration scenarios into parallel matrix slices (`Core & Chat`, `Media & Tools`, `Governance & Multi-Platform`, including S42 and S52) under `integration` on `dev`, `main`, and PRs. Integration requires the `verify` job to pass; inspect the actual run before calling it green. A local directed run is not evidence that the entire matrix or GitHub CI passed.
@@ -53,7 +53,7 @@ Read-only operations can be checked without a browser:
 
 ```sh
 BOTAGENT_ZBA_URL=http://127.0.0.1:8080/zba/v1 BOTAGENT_ZBA_READ_TOKEN=... \
-  dotnet src/BotAgent.Headless/bin/Release/net8.0/BotAgent.Headless.dll --status
+  dotnet src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll --status
 # also: --capabilities, --tasks, --events --after 0, --zba-meta
 ```
 

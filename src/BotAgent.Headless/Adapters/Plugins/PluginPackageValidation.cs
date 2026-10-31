@@ -32,7 +32,8 @@ public static class PluginPackageValidation
             string.IsNullOrWhiteSpace(manifest.EntryType) || manifest.EntryType.Length > 512)
             throw new InvalidDataException("Managed entry point required.");
         ValidateUrl(manifest.DownloadUrl);
-        if (manifest.TargetFramework != "net8.0" || (manifest.MinimumHostVersion != null &&
+        if (!PluginPackageManifest.SupportedTargetFrameworks.Contains(manifest.TargetFramework, StringComparer.Ordinal)
+            || (manifest.MinimumHostVersion != null &&
             (!System.Version.TryParse(manifest.MinimumHostVersion, out var minimum) ||
              minimum > typeof(PluginPackageValidation).Assembly.GetName().Version)))
             throw new InvalidDataException("Incompatible host or framework.");

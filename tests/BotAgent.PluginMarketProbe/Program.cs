@@ -48,7 +48,7 @@ PluginPackageManifest Manifest(byte[] package, string id = "probe.market", strin
     IReadOnlyList<PluginSettingDefinition>? settings = null) => new(id, version, "probe.dll", "SyntheticMarketPlugin",
     Convert.ToHexString(SHA256.HashData(package)),
     "https://github.com/example-org/example-plugins/releases/download/" + id + "-" + version + "/" + id + "-" + version + ".zip",
-    1, "net8.0", "1.0.0", Array.Empty<string>(), Array.Empty<PluginPackageDependency>(),
+    1, "net10.0", "1.0.0", Array.Empty<string>(), Array.Empty<PluginPackageDependency>(),
     settings ?? Array.Empty<PluginSettingDefinition>());
 
 string Index(params PluginPackageManifest[] manifests)

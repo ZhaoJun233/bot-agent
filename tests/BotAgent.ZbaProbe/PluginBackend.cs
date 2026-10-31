@@ -21,7 +21,7 @@ internal sealed partial class SyntheticZbaBackend
         new string('a', 64),
         "https://github.com/example-org/example-plugins/releases/download/" + SyntheticPluginId + "-1.0.0/"
             + SyntheticPluginId + "-1.0.0.zip",
-        1, "net8.0", "1.0.0", Array.Empty<string>(), Array.Empty<PluginPackageDependency>(),
+        1, "net10.0", "1.0.0", Array.Empty<string>(), Array.Empty<PluginPackageDependency>(),
         ImmutableArray.Create(new PluginSettingDefinition("greeting", "问候语", "string", "hello"),
             new PluginSettingDefinition("verbose", "详细日志", "boolean", "false"),
             new PluginSettingDefinition("apiKey", "接口密钥", "secret", null, true)));

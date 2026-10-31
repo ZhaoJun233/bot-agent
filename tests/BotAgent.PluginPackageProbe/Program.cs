@@ -42,6 +42,12 @@ try
     foreach (var version in new[] { "latest", "1x0x0", "1.*", "../1.0.0" })
         await Reject(() => Task.Run(() => PluginPackageValidation.Validate(manifest with { Version = version })));
     await Reject(() => Task.Run(() => PluginPackageValidation.Validate(manifest with { Id = "preset.music" })));
+    // 宿主升级到 net10.0 后仍必须接受已发布的 net8.0 插件；其它框架（含未来版本）一律拒绝。
+    foreach (var framework in new[] { "net8.0", "net10.0" })
+        PluginPackageValidation.Validate(manifest with { TargetFramework = framework });
+    checks++;
+    foreach (var framework in new[] { "net6.0", "net9.0", "net11.0", "", "net10" })
+        await Reject(() => Task.Run(() => PluginPackageValidation.Validate(manifest with { TargetFramework = framework })));
     http.Bytes = good;
     await Reject(() => Service().StageInstallAsync(manifest with { Sha256 = new string('0', 64) }));
     foreach (var path in new[] { "../escape.dll", "/absolute.dll", "a/../../escape.dll", "C:/escape.dll", "a\\escape.dll", "CON.dll" })

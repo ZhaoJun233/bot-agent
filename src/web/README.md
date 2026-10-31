@@ -15,7 +15,7 @@ npx playwright install chromium   # 首次
 npm run test:e2e                  # 先 build，再启动真实隔离 Headless + Vite preview
 ```
 
-`test:e2e` 使用 `src/BotAgent.Headless/bin/Release/net8.0/BotAgent.Headless.dll`，在系统临时目录创建两个合成数据根：一台配置合成 ZBA 令牌，另一台**不配置** ZBA 令牌（验证真实 503 `zba_not_configured`）；模型地址指向 mock。不会读取真实数据。可用 `BOTAGENT_HEADLESS_DLL` 指向另一份 Release DLL。
+`test:e2e` 使用 `src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll`，在系统临时目录创建两个合成数据根：一台配置合成 ZBA 令牌，另一台**不配置** ZBA 令牌（验证真实 503 `zba_not_configured`）；模型地址指向 mock。不会读取真实数据。可用 `BOTAGENT_HEADLESS_DLL` 指向另一份 Release DLL。
 
 ## 安全边界
 

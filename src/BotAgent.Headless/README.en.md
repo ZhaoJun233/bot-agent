@@ -11,7 +11,7 @@ A **headless, pluggable multi-platform, container-deployable** universal chat ag
 Chat Platforms (QQ / Feishu / Local)  ←—Adapter Seam—  Bot Agent (Container)  ——→  Model API
 ```
 
-- **No UI, no Windows dependency**: `net8.0`, Docker image around 80MB (the runtime stage is based on `dotnet/runtime:8.0`)
+- **No UI, no Windows dependency**: `net10.0`, Docker image around 80MB (the runtime stage is based on `dotnet/runtime:10.0`)
 - **Runs as non-root**, keeps all data in the `/data` volume, and shuts down gracefully (SIGTERM / `docker stop`)
 - **Health checks built in**: `/healthz` (liveness), `/readyz` (is the protocol side connected), `/status` (runtime state as JSON)
 

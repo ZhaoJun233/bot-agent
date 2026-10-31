@@ -24,10 +24,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install .NET 8
+      - name: Install .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
       - name: Install Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -155,11 +155,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install .NET 8
+      - name: Install .NET 10
         # Playwright e2e starts the real Headless host, which the web config builds from source.
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
       - name: Install Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -207,10 +207,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install .NET 8
+      - name: Install .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
       - name: Restore core and harness (high/critical NuGet audit gate)
         # Both projects independently audit all dependencies; NU1903/NU1904 fail their restores.
         run: |
@@ -223,4 +223,4 @@ jobs:
       - name: Run synthetic integration suite
         env:
           QQCHAT_IT_ONLY: ${{ matrix.scenarios }}
-        run: dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+        run: dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll

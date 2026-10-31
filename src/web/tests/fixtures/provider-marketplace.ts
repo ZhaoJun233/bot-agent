@@ -33,5 +33,5 @@ export const syntheticSettings: PluginSettingDefinition[] = [
 export const syntheticManifest: PluginPackageManifest = {
   id: 'example.plugin', version: '1.0.0', entryAssembly: 'Example.Plugin.dll', entryType: 'Example.Plugin',
   sha256: 'a'.repeat(64), downloadUrl: 'https://example.com/fixture.zip', apiVersion: 1,
-  targetFramework: 'net8.0', permissions: ['network', 'messages.read'], settings: syntheticSettings
+  targetFramework: 'net10.0', permissions: ['network', 'messages.read'], settings: syntheticSettings
 }

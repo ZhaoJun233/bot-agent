@@ -52,7 +52,7 @@ The project natively supports running directly from source code across standard 
 
 #### 1. System Requirements & Environment Setup
 - **Operating System**: Standard Linux distribution (Ubuntu 20.04+, Debian 11+, CentOS 8+, Arch Linux, etc.)
-- **Runtime Dependencies**: .NET 8.0 SDK / Runtime, Git, curl, openssl
+- **Runtime Dependencies**: .NET 10.0 SDK / Runtime, Git, curl, openssl
 - **OneBot Protocol Client**: [NapCat Linux Shell](https://github.com/NapNeko/NapCatQQ) (if using QQ Private Channel)
 
 Install base dependencies on Debian / Ubuntu:
@@ -60,7 +60,7 @@ Install base dependencies on Debian / Ubuntu:
 ```bash
 # Update package lists and install prerequisites
 sudo apt-get update
-sudo apt-get install -y dotnet-sdk-8.0 git curl openssl
+sudo apt-get install -y dotnet-sdk-10.0 git curl openssl
 ```
 
 #### 2. Obtain Source Code & Build
@@ -192,7 +192,7 @@ The service includes built-in X.509 certificate management for Linux platforms, 
 
 ```text
 +-------------------------+            OneBot v11            +----------------------------------+
-| OneBot Client (NapCat)  | <---- [Forward WS / WS] ----> | BotAgent.Headless (C# / .NET 8)  |
+| OneBot Client (NapCat)  | <---- [Forward WS / WS] ----> | BotAgent.Headless (C# / .NET 10)  |
 +-------------------------+                                 |   +-- OneBot Gateway & Dispatch  |
                                                             |   +-- Prompt Pipeline & Decision |
 +-------------------------+          Official Open API      |   +-- Profiles & SQLite Storage  |
@@ -229,7 +229,7 @@ dotnet test
 
 # Run synthetic integration test suite
 dotnet build tests/BotAgent.IntegrationHarness -c Release
-dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 
 # Run frontend type checks, unit tests and browser regression (under src/web)
 npm run typecheck && npm run test:unit
