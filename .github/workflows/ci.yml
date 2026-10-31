@@ -28,6 +28,10 @@ jobs:
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          # NuGet 缓存（#123）：22 次 restore 每次从零拉会让 verify 逼近 20 分钟上限。
+          # 依赖指纹取全部 csproj —— 任何一个工程加包都会让缓存失效重建。
+          cache: true
+          cache-dependency-path: '**/*.csproj'
       - name: Install Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -36,31 +40,11 @@ jobs:
         uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
         with:
           python-version: '3.12'
-      - name: Restore core, harness and probes (high/critical NuGet audit gate)
+      - name: Restore the whole solution (high/critical NuGet audit gate)
+        # 一条 restore 覆盖 BotAgent.slnx 里的全部工程（#123 把 slnx 补到 30 个工程，
+        # 不再靠手写 22 行 restore 追着磁盘跑）。
         # Core restore audits all dependencies; NU1903/NU1904 are errors, not advisory scanner output.
-        run: |
-          dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
-          dotnet restore tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj
-          dotnet restore tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj
-          dotnet restore tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj
-          dotnet restore tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj
-          dotnet restore tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj
-          dotnet restore tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj
-          dotnet restore tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj
-          dotnet restore tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj
-          dotnet restore tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj
-          dotnet restore tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj
-          dotnet restore tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj
-          dotnet restore tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj
-          dotnet restore tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj
-          dotnet restore tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj
-          dotnet restore tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj
-          dotnet restore tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj
-          dotnet restore tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj
-          dotnet restore tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj
-          dotnet restore tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj
-          dotnet restore tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj
-          dotnet restore tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj
+        run: dotnet restore BotAgent.slnx
       - name: Build core and harness (Release)
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
@@ -69,9 +53,11 @@ jobs:
         run: |
           dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release --no-restore
-      - name: Participation and server-files probes
+      - name: Participation, engine and server-files probes
         run: |
           dotnet run --project tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj -c Release --no-restore
+          # EngineProbe（插件闸门 + 后台评测队列）此前从未进 CI —— #123 的"探针必须在 CI 出现"断言靠这条兜住
+          dotnet run --project tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj -c Release --no-restore
           python tests/BotAgent.ServerFilesProbe/test_server_files.py
       - name: Synthetic persistence and resilience probes
         run: |
@@ -160,6 +146,8 @@ jobs:
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
       - name: Install Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -211,6 +199,8 @@ jobs:
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
       - name: Restore core and harness (high/critical NuGet audit gate)
         # Both projects independently audit all dependencies; NU1903/NU1904 fail their restores.
         run: |

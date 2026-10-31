@@ -107,9 +107,7 @@ internal sealed class SourceIndex
             var relative = Relative(root, projectPath);
             if (!Baseline.AllowedProjectReferences.ContainsKey(name)) throw Fault("unregistered_project:" + name);
             if (relative != $"src/{name}/{name}.csproj") throw Fault("project_layout_unsupported:" + name);
-            foreach (var folder in new[] { root, src, Path.GetDirectoryName(projectPath)! })
-                if (File.Exists(Path.Combine(folder, "Directory.Build.props")) || File.Exists(Path.Combine(folder, "Directory.Build.targets")))
-                    throw Fault("inherited_build_settings_unsupported:" + name);
+            EnsureBuildBaselineIsDeclared(root);
             var xml = ReadXml(projectPath, relative);
             if (xml.Descendants().Any(e => e.Name.LocalName == "Import"
                 || e.Name.LocalName == "Compile"
@@ -184,6 +182,59 @@ internal sealed class SourceIndex
         }
         if (projects.Any(Cycle)) errors.Add("project_reference_cycle");
         return errors;
+    }
+
+    /// <summary>
+    /// 仓库级构建基线（Directory.Build.props，见 #123）只允许**声明式**的一小组属性：
+    /// 不许 Import、不许 Compile、不许任何 Condition —— 否则"某个工程为什么这样编译"就藏进了一个
+    /// 谁也不会去读的继承文件里，本探针无法再解释它。子目录里的同名文件一律禁止（只许仓库根一份）。
+    /// </summary>
+    private static void EnsureBuildBaselineIsDeclared(string root)
+    {
+        var allowedProps = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "LangVersion", "Nullable", "ImplicitUsings", "TreatWarningsAsErrors",
+            "NuGetAudit", "NuGetAuditMode", "NuGetAuditLevel", "WarningsAsErrors",
+            "Deterministic", "ContinuousIntegrationBuild",
+        };
+
+        var propsPath = Path.Combine(root, "Directory.Build.props");
+        if (File.Exists(propsPath))
+        {
+            var xml = ReadXml(propsPath, "Directory.Build.props");
+            foreach (var element in xml.Descendants())
+            {
+                if (element.Name.LocalName is "Import" or "Compile" or "ProjectReference")
+                    throw Fault("build_baseline_unsupported_element:" + element.Name.LocalName);
+                if (element.Attributes().Any(a => a.Name.LocalName == "Condition"))
+                    throw Fault("build_baseline_condition_unsupported");
+                if (element.Parent is not null && element.Parent.Name.LocalName == "PropertyGroup"
+                    && !allowedProps.Contains(element.Name.LocalName))
+                    throw Fault("build_baseline_unknown_property:" + element.Name.LocalName);
+            }
+
+            // 只允许 <Project><PropertyGroup>属性…</PropertyGroup></Project> 这一种形状。
+            var project = xml.Root;
+            if (project is null || project.Name.LocalName != "Project") throw Fault("build_baseline_unsupported_structure");
+            if (project.Attributes().Any()) throw Fault("build_baseline_unsupported_structure");
+            foreach (var child in project.Elements())
+            {
+                if (child.Name.LocalName != "PropertyGroup" || child.Attributes().Any())
+                    throw Fault("build_baseline_unsupported_structure");
+                foreach (var property in child.Elements())
+                    if (!allowedProps.Contains(property.Name.LocalName) || property.HasElements || property.Attributes().Any())
+                        throw Fault("build_baseline_unknown_property:" + property.Name.LocalName);
+            }
+        }
+
+        foreach (var stray in Directory.EnumerateFiles(root, "Directory.Build.*", SearchOption.AllDirectories))
+        {
+            var relative = Relative(root, stray);
+            if (relative.Contains("bin/", StringComparison.OrdinalIgnoreCase)
+                || relative.Contains("obj/", StringComparison.OrdinalIgnoreCase)) continue;
+            if (relative == "Directory.Build.props") continue;
+            throw Fault("inherited_build_settings_unsupported:" + relative);
+        }
     }
 
     private static void ValidateSolution(SourceIndex index)

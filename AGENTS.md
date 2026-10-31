@@ -79,6 +79,6 @@ dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.Architectur
 ```
 
 - 架构护栏是**棘轮**：`Baseline.cs` 里的阈值只允许**调低**，不允许调高（调高 = 放宽结构约束）。
-  变小了就用 `--print` 拿新数字改基线。方案与批次见 `docs/engineering/architecture-optimization.md`。
+  变小了就用 `--print` 拿新数字改基线。阈值口径与治理标准见 `docs/architecture/large-file-policy.md`。
 - 部署到服务器 / 发布公开快照 / 历史记录（仓库外的内部资料）由仓库外的脚本负责，细节见工作区那份 `AGENTS.md`。
 - 公开快照会做脱敏校验（域名、IP、QQ 号、昵称、模型名、密钥），**先 commit 再发布**。

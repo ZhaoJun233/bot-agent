@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  全仓构建基线（#123）。
+  这里只放"所有工程都该一样"的声明式属性；单个 csproj 里已有的同名属性会覆盖这里的值，
+  所以把某项写进 csproj 仍然有效（例如部分工程显式打开 TreatWarningsAsErrors）。
+
+  约束（由 ArchitectureProbe 的 EnsureBuildBaselineIsDeclared 强制）：
+    · 不许 Import / Compile / ProjectReference；
+    · 不许任何 Condition；
+    · 属性名必须在探针的允许表里（新增属性要同时改探针，等于显式承认"这会影响全仓构建"）。
+  改这里的默认值等于改全仓行为，务必在 PR 里写明影响面。
+-->
+<Project>
+
+  <PropertyGroup>
+    <!-- 语言与可空引用：全仓统一开启，避免"新工程忘了写"导致的风格漂移 -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- 警告当错误：默认关闭以保持升级前现状（逐批开见 #123 的后续排期），
+         显式打开它的工程（csproj 里写 true）不受影响 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!-- NuGet 安全审计：high/critical 直接当错误，不是"仅供参考"的扫描输出。
+         这是 CI 的门，不是建议——降级它会同时降低所有工程的门 -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>high</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+
+    <!-- 确定性构建：同样的输入产出同样的二进制，便于比对"重构前后行为等价" -->
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>

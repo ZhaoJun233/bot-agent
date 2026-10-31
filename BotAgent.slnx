@@ -1,18 +1,36 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/BotAgent.Core/BotAgent.Core.csproj" />
-    <Project Path="src/BotAgent.Model/BotAgent.Model.csproj" />
-    <Project Path="src/BotAgent.Storage/BotAgent.Storage.csproj" />
-    <Project Path="src/BotAgent.Platforms/BotAgent.Platforms.csproj" />
     <Project Path="src/BotAgent.Engine/BotAgent.Engine.csproj" />
-    <Project Path="src/BotAgent.Mcp/BotAgent.Mcp.csproj" />
-    <Project Path="src/BotAgent.Panel/BotAgent.Panel.csproj" />
     <Project Path="src/BotAgent.Headless/BotAgent.Headless.csproj" />
+    <Project Path="src/BotAgent.Mcp/BotAgent.Mcp.csproj" />
+    <Project Path="src/BotAgent.Model/BotAgent.Model.csproj" />
+    <Project Path="src/BotAgent.Panel/BotAgent.Panel.csproj" />
+    <Project Path="src/BotAgent.Platforms/BotAgent.Platforms.csproj" />
+    <Project Path="src/BotAgent.Storage/BotAgent.Storage.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
+    <Project Path="tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj" />
+    <Project Path="tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj" />
+    <Project Path="tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj" />
+    <Project Path="tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj" />
     <Project Path="tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj" />
+    <Project Path="tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj" />
+    <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
     <Project Path="tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj" />
+    <Project Path="tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj" />
+    <Project Path="tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj" />
+    <Project Path="tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj" />
+    <Project Path="tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj" />
+    <Project Path="tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj" />
+    <Project Path="tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj" />
+    <Project Path="tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj" />
+    <Project Path="tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj" />
+    <Project Path="tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj" />
+    <Project Path="tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj" />
+    <Project Path="tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj" />
+    <Project Path="tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj" />
+    <Project Path="tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj" />
     <Project Path="tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj" />
   </Folder>
 </Solution>

@@ -76,6 +76,6 @@ dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.Architectur
 ```
 
 - The architecture guardrail is a **ratchet**: the thresholds in `Baseline.cs` may only be **lowered**, never raised (raising them = loosening a structural constraint).
-  When a number drops, use `--print` to get the new value and update the baseline. The plan and its batches live in `docs/engineering/architecture-optimization.md`.
+  When a number drops, use `--print` to get the new value and update the baseline. Threshold policy and governance rules live in `docs/architecture/large-file-policy.md`.
 - Deploying to the server / publishing the public snapshot / historical records (internal material outside the repository) are handled by scripts outside the repository; the workspace `AGENTS.md` has the details.
 - The public snapshot runs masking checks (domains, IPs, QQ numbers, nicknames, model names, keys): **commit first, publish second**.

@@ -111,6 +111,8 @@ public static class Program
 
         ScannerContractTests(index);
         ProjectChecks(index);
+        RepositoryGovernanceChecks(index);
+        DocumentationChecks(index);
         DockerfileChecks(index);
         SelfTests(index);
         RatchetChecks(index);
@@ -214,8 +216,20 @@ public static class Program
             FixtureMustFail(root, "compile-override", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Model/BotAgent.Model.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><Compile Include=\"../external.cs\" /></ItemGroup></Project>"),
                 "未解释的显式编译输入不能绕过扫描");
-            FixtureMustFail(root, "props", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"), "<Project />"),
-                "未解释的继承构建设置必须失败");
+            // 仓库根允许**声明式**的构建基线（#123 的 Directory.Build.props），但只限探针认得的那组属性：
+            // 任何解释不了的东西都必须让扫描器停下来，否则"这个工程为什么这样编译"就藏进了没人读的文件里。
+            FixtureMustFail(root, "props-unknown", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"),
+                "<Project><PropertyGroup><Synthetic>1</Synthetic></PropertyGroup></Project>"),
+                "构建基线里的未知属性必须失败");
+            FixtureMustFail(root, "props-condition", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"),
+                "<Project><PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\"><Nullable>enable</Nullable></PropertyGroup></Project>"),
+                "构建基线里的条件分支必须失败");
+            FixtureMustFail(root, "props-import", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"),
+                "<Project><Import Project=\"synthetic.props\" /></Project>"),
+                "构建基线里的 Import 必须失败");
+            FixtureMustFail(root, "props-nested", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Core/Directory.Build.props"),
+                "<Project><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>"),
+                "子目录里的继承构建设置必须失败");
             FixtureMustFail(root, "unknown", p =>
             {
                 Directory.CreateDirectory(Path.Combine(p, "src/BotAgent.Unknown"));
@@ -475,6 +489,233 @@ public static class Program
         foreach (var name in new[] { "BotAgent.Storage", "BotAgent.Model", "BotAgent.Engine" })
             if (!host.References.Contains($"src/{name}/{name}.csproj", StringComparer.OrdinalIgnoreCase))
                 Console.WriteLine($"  未接入登记：Headless 未直接引用 {name}（不据此宣告对应波次准出）");
+    }
+
+    // ─────────────────── 仓库治理与构建基线（#123） ───────────────────
+
+    /// <summary>
+    /// 防的是「加了工程但没人跑」「加了探针但 CI 里没有」这类静默漂移。
+    /// 口径：只读仓库文件（slnx / ci.yml / Directory.Build.props / .github），不联网、不执行 CI。
+    /// </summary>
+    private static void RepositoryGovernanceChecks(SourceIndex index)
+    {
+        Section("仓库治理与构建基线（slnx 收口 / 探针必须进 CI / 治理文件齐备）");
+
+        var projectsOnDisk = Directory
+            .EnumerateFiles(Path.Combine(index.Root, "tests"), "*.csproj", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(index.Root, "src"), "*.csproj", SearchOption.AllDirectories))
+            .Select(p => Path.GetRelativePath(index.Root, p).Replace('\\', '/'))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+
+        var slnxPath = Path.Combine(index.Root, "BotAgent.slnx");
+        var slnx = File.Exists(slnxPath) ? File.ReadAllText(slnxPath) : string.Empty;
+        var inSlnx = Regex.Matches(slnx, "<Project\\s+Path=\"([^\"]+)\"")
+            .Select(m => m.Groups[1].Value.Replace('\\', '/'))
+            .ToList();
+        var missingFromSlnx = projectsOnDisk.Where(p => !inSlnx.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var staleInSlnx = inSlnx.Where(p => !projectsOnDisk.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        Check($"BotAgent.slnx 覆盖磁盘上全部 {projectsOnDisk.Count} 个工程（无遗漏、无悬空）",
+            missingFromSlnx.Count == 0 && staleInSlnx.Count == 0,
+            missingFromSlnx.Count == 0 && staleInSlnx.Count == 0
+                ? $"slnx 声明 {inSlnx.Count} 个"
+                : "缺：" + string.Join("、", missingFromSlnx) + "；悬空：" + string.Join("、", staleInSlnx));
+
+        // 「探针必须在 CI 出现」：tests/ 下每个带 csproj 的工程都要在 ci.yml 里被点名。
+        var ciPath = Path.Combine(index.Root, ".github/workflows/ci.yml");
+        var ci = File.Exists(ciPath) ? File.ReadAllText(ciPath) : string.Empty;
+        var probeProjects = projectsOnDisk.Where(p => p.StartsWith("tests/", StringComparison.Ordinal)).ToList();
+        var notInCi = probeProjects.Where(p => !ci.Contains(p, StringComparison.Ordinal)).ToList();
+        Check($"tests/ 下 {probeProjects.Count} 个探针工程全部出现在 ci.yml",
+            notInCi.Count == 0,
+            notInCi.Count == 0 ? null : "未进 CI：" + string.Join("、", notInCi));
+
+        var serverFiles = File.Exists(Path.Combine(index.Root, "tests/BotAgent.ServerFilesProbe/test_server_files.py"));
+        Check("python 探针 test_server_files.py 也出现在 ci.yml",
+            !serverFiles || ci.Contains("tests/BotAgent.ServerFilesProbe/test_server_files.py", StringComparison.Ordinal),
+            serverFiles ? null : "找不到 test_server_files.py（探针是不是被删了？）");
+
+        var propsPath = Path.Combine(index.Root, "Directory.Build.props");
+        var props = File.Exists(propsPath) ? File.ReadAllText(propsPath) : string.Empty;
+        Check("Directory.Build.props 存在并承载构建基线（Nullable/ImplicitUsings/NU1903 门）",
+            props.Length > 0
+            && props.Contains("<Nullable>enable</Nullable>", StringComparison.Ordinal)
+            && props.Contains("<ImplicitUsings>enable</ImplicitUsings>", StringComparison.Ordinal)
+            && props.Contains("NU1903", StringComparison.Ordinal),
+            File.Exists(propsPath) ? null : "找不到 Directory.Build.props");
+
+        var globalJson = Path.Combine(index.Root, "global.json");
+        Check("global.json 钉住 SDK（避免 CI 与开发机 SDK 漂移）",
+            File.Exists(globalJson)
+            && File.ReadAllText(globalJson).Contains("\"sdk\"", StringComparison.Ordinal),
+            File.Exists(globalJson) ? null : "找不到 global.json");
+
+        var governance = new (string Path, string Label)[]
+        {
+            (".github/CODEOWNERS", "CODEOWNERS"),
+            (".github/PULL_REQUEST_TEMPLATE.md", "PR 模板"),
+            (".github/ISSUE_TEMPLATE/bug.md", "Bug issue 模板"),
+            (".github/ISSUE_TEMPLATE/feature.md", "Feature issue 模板"),
+            ("CONTRIBUTING.md", "CONTRIBUTING.md"),
+            ("CONTRIBUTING.en.md", "CONTRIBUTING.en.md"),
+            ("SECURITY.md", "SECURITY.md"),
+            ("SECURITY.en.md", "SECURITY.en.md"),
+        };
+        var missing = governance
+            .Where(g => !File.Exists(Path.Combine(index.Root, g.Path)))
+            .Select(g => g.Label)
+            .ToList();
+        Check("治理文件齐备（" + string.Join(" / ", governance.Select(g => g.Label)) + "）",
+            missing.Count == 0, missing.Count == 0 ? null : "缺：" + string.Join("、", missing));
+
+        // PR 模板必须留着「重构前后 harness 对比」这一格 —— 那是 #106–#110 的行为等价证据位，
+        // 删掉它等于把重构验收的证据要求悄悄取消。
+        var prTemplate = Path.Combine(index.Root, ".github/PULL_REQUEST_TEMPLATE.md");
+        Check("PR 模板保留「重构前后 harness 场景对比」证据位",
+            File.Exists(prTemplate)
+            && File.ReadAllText(prTemplate).Contains("重构前后 harness 场景对比", StringComparison.Ordinal),
+            File.Exists(prTemplate) ? null : "找不到 PR 模板");
+    }
+
+// ─────────────────── 文档一致性与链接完整性（#124） ───────────────────
+
+    /// <summary>
+    /// 防的是「文档里的链接指向已经删掉的文件」——docs/engineering/ 整个目录被删过一次，
+    /// 引用它的 AGENTS.md 与探针注释就全成了死链，而没有任何东西会因此变红。
+    /// 口径：只读 git 跟踪的 *.md（用 git ls-files，避免把 publish/ 里那堆快照也算进来），
+    /// 只校验仓库内相对链接；http(s)、#锚点、mailto 不校验。
+    /// </summary>
+    private static void DocumentationChecks(SourceIndex index)
+    {
+        Section("文档一致性与链接完整性（内链存在 / 中英成对）");
+
+        var markdownFiles = TrackedMarkdownFiles(index.Root);
+        if (markdownFiles.Count == 0)
+        {
+            Check("能找到受版本控制的 markdown 文档", false, "git ls-files '*.md' 没有输出");
+            return;
+        }
+
+        var broken = new List<string>();
+        var checkedLinks = 0;
+        foreach (var relative in markdownFiles)
+        {
+            var text = File.ReadAllText(Path.Combine(index.Root, relative));
+            foreach (var target in LocalLinkTargets(text))
+            {
+                checkedLinks++;
+                var baseDirectory = Path.GetDirectoryName(Path.Combine(index.Root, relative)) ?? index.Root;
+                var resolved = Path.GetFullPath(Path.Combine(baseDirectory, target));
+                if (!File.Exists(resolved) && !Directory.Exists(resolved))
+                {
+                    broken.Add(relative + " → " + target);
+                }
+            }
+        }
+
+        Check($"受版本控制的 {markdownFiles.Count} 篇文档里 {checkedLinks} 条仓库内链接全部指向存在的文件",
+            broken.Count == 0,
+            broken.Count == 0 ? null : "断链：" + string.Join("、", broken.OrderBy(x => x, StringComparer.Ordinal)));
+
+        // 中英成对：这些文档对外是同一份内容的两版，缺一版等于其中一半读者没有入口。
+        var pairs = new (string Chinese, string English)[]
+        {
+            ("README.md", "README.en.md"),
+            ("AGENTS.md", "AGENTS.en.md"),
+            ("CONTRIBUTING.md", "CONTRIBUTING.en.md"),
+            ("SECURITY.md", "SECURITY.en.md"),
+        };
+        var unpaired = pairs.Where(p => !markdownFiles.Contains(p.Chinese, StringComparer.Ordinal)
+            || !markdownFiles.Contains(p.English, StringComparer.Ordinal)).ToList();
+        Check($"四对中英文档成对（{string.Join(" / ", pairs.Select(p => p.Chinese + "+" + p.English))}）",
+            unpaired.Count == 0,
+            unpaired.Count == 0 ? null : "不成对：" + string.Join("、", unpaired.Select(p => p.Chinese + "/" + p.English)));
+    }
+
+    /// <summary>git 跟踪的 markdown 文档（相对仓库、正斜杠、按路径排序）。读不到 git 时回退到受控目录扫描。</summary>
+    private static List<string> TrackedMarkdownFiles(string root)
+    {
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo("git")
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            start.ArgumentList.Add("ls-files");
+            start.ArgumentList.Add("*.md");
+            // 连未跟踪但未被忽略的也算：新建的文档在提交前就应该被校验，
+            // 否则「写完到提交之间」这段正好是死链最容易溜进来的窗口。
+            start.ArgumentList.Add("--cached");
+            start.ArgumentList.Add("--others");
+            start.ArgumentList.Add("--exclude-standard");
+            using var process = System.Diagnostics.Process.Start(start);
+            if (process is null) return FallbackMarkdownFiles(root);
+            var output = process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(TimeSpan.FromSeconds(30));
+            var listed = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim().Replace('\\', '/'))
+                .Where(line => line.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToList();
+            return listed.Count == 0 ? FallbackMarkdownFiles(root) : listed;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+        {
+            return FallbackMarkdownFiles(root);
+        }
+    }
+
+    private static List<string> FallbackMarkdownFiles(string root)
+    {
+        var roots = new[] { "docs", "src", "tests", "examples", ".github" };
+        var found = new List<string>();
+        var direct = new[] { "README.md", "README.en.md", "AGENTS.md", "AGENTS.en.md", "CONTRIBUTING.md", "CONTRIBUTING.en.md", "SECURITY.md", "SECURITY.en.md" };
+        foreach (var name in direct)
+        {
+            if (File.Exists(Path.Combine(root, name))) found.Add(name);
+        }
+
+        foreach (var folder in roots)
+        {
+            var directory = Path.Combine(root, folder);
+            if (!Directory.Exists(directory)) continue;
+            foreach (var path in Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                if (relative.StartsWith("bin/", StringComparison.Ordinal) || relative.Contains("/bin/", StringComparison.Ordinal)
+                    || relative.Contains("/obj/", StringComparison.Ordinal) || relative.Contains("/node_modules/", StringComparison.Ordinal)) continue;
+                found.Add(relative);
+            }
+        }
+
+        return found.Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>提取 <c>](…)</c> 里的仓库内相对路径；跳过 http(s)、mailto、纯锚点与绝对路径。</summary>
+    private static IEnumerable<string> LocalLinkTargets(string markdown)
+    {
+        foreach (Match match in Regex.Matches(markdown, "\\]\\(([^)]*)\\)"))
+        {
+            var raw = match.Groups[1].Value.Trim();
+            if (raw.Length == 0) continue;
+            // 去掉可选标题：](path "title")
+            var space = raw.IndexOf(' ');
+            var target = space >= 0 ? raw[..space] : raw;
+            target = target.Trim('<', '>', '"', '\'');
+            if (target.Length == 0) continue;
+            if (target.StartsWith('#') || target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (target.Contains("://", StringComparison.Ordinal)) continue;
+            if (Path.IsPathRooted(target)) continue;
+            var hash = target.IndexOf('#');
+            if (hash >= 0) target = target[..hash];
+            if (target.Length == 0) continue;
+            yield return target;
+        }
     }
 
     private static void DockerfileChecks(SourceIndex index)

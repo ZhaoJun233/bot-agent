@@ -260,25 +260,25 @@
 
 | 属性 | 当前类型/序列化 | 评审归属及边界 | 定义位置 |
 | --- | --- | --- | --- |
-| `WebSearchReadMaxChars` | int / 可序列化属性 | 旧保存未接受；非秘密行为配置；新是否可写须01/04/06明确，旧值保留 | [457](../../../src/BotAgent.Headless/Services/AppSettings.cs#L457) |
-| `MusicAudioToModelMaxKb` | int / 可序列化属性 | 回显863但没有保存分支；非秘密行为配置；01/04/06确认可写边界，不当成已可编辑 | [508](../../../src/BotAgent.Headless/Services/AppSettings.cs#L508) |
-| `NeteaseCookie` | string / JsonIgnore | 秘密；来自扫码/登录专用链路，不纳入全局配置Save；不回显Cookie；仅configured元数据 | [518](../../../src/BotAgent.Headless/Services/AppSettings.cs#L518) |
-| `PanelToken` | string / JsonIgnore | 环境认证秘密；不纳入配置Save/Read/export；认证方案归06 | [559](../../../src/BotAgent.Headless/Services/AppSettings.cs#L559) |
-| `AgentToken` | string / JsonIgnore | 环境认证秘密；不纳入配置Save/Read/export；设备连接认证归04/06 | [705](../../../src/BotAgent.Headless/Services/AppSettings.cs#L705) |
-| `AgentServerMaxTokens` | int / 可序列化属性 | 旧保存未接受；非秘密模型/Agent配置；01/03/04/06决定，不默认为运行时可写 | [805](../../../src/BotAgent.Headless/Services/AppSettings.cs#L805) |
-| `HealthPort` | int / 可序列化属性 | 环境基础设施/只读；修改后需宿主重启，不能经统一Save写 | [873](../../../src/BotAgent.Headless/Services/AppSettings.cs#L873) |
-| `VerboseLog` | bool / 可序列化属性 | 环境基础设施；旧Save无入口；安全诊断策略由06确认 | [876](../../../src/BotAgent.Headless/Services/AppSettings.cs#L876) |
-| `Theme` | string / 可序列化属性 | 源码注释遗留不用；保持兼容读取，不虚构新功能或默认删除 | [879](../../../src/BotAgent.Headless/Services/AppSettings.cs#L879) |
-| `NapCatWebUiUrl` | string / JsonIgnore | JsonIgnore运行时基础设施/代理地址；旧Save无入口；安全快照禁止完整端点/凭据URL默认输出 | [886](../../../src/BotAgent.Headless/Services/AppSettings.cs#L886) |
-| `NapCatWebUiToken` | string / JsonIgnore | 环境秘密；旧Save无入口；代理认证不纳入配置Save | [890](../../../src/BotAgent.Headless/Services/AppSettings.cs#L890) |
-| `OneBotProtocol` | string / 可序列化属性 | 环境基础设施/只读；驱动配置可编辑范围须02/06确认，不凭新DTO扩大 | [14](../../../src/BotAgent.Platforms/PlatformOptions.cs#L14) |
-| `OneBotAddress` | string / 可序列化属性 | 环境基础设施/只读；新安全快照不默认完整端点 | [15](../../../src/BotAgent.Platforms/PlatformOptions.cs#L15) |
-| `OneBotToken` | string / JsonIgnore | 环境秘密；Save/Read/export不接不回；仅安全元数据 | [18](../../../src/BotAgent.Platforms/PlatformOptions.cs#L18) |
-| `QuickLoginUin` | string / 可序列化属性 | 环境身份/只读；展示脱敏，存储与路由key原样 | [19](../../../src/BotAgent.Platforms/PlatformOptions.cs#L19) |
-| `OfficialAppSecret` | string / JsonIgnore | 仅QQCHAT_OFFICIAL_APP_SECRET；历史数据库行不采用、不迁移进新可写槽 | [33](../../../src/BotAgent.Platforms/PlatformOptions.cs#L33) |
-| `OfficialApiBase` | string / 可序列化属性 | 旧Save未接受；平台基础设施；02/06明确来源/可写/重启，不猜 | [38](../../../src/BotAgent.Platforms/PlatformOptions.cs#L38) |
-| `OfficialTokenUrl` | string / 可序列化属性 | 旧Save未接受；平台基础设施；02/06明确来源/可写/重启，不猜 | [39](../../../src/BotAgent.Platforms/PlatformOptions.cs#L39) |
-| `PlatformSwitchSchemaVersion` | int / 可序列化属性 | 内部迁移标记（0/1）；不能作为客户端任意可写配置 | [63](../../../src/BotAgent.Platforms/PlatformOptions.cs#L63) |
+| `WebSearchReadMaxChars` | int / 可序列化属性 | 旧保存未接受；非秘密行为配置；新是否可写须01/04/06明确，旧值保留 | [457](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L457) |
+| `MusicAudioToModelMaxKb` | int / 可序列化属性 | 回显863但没有保存分支；非秘密行为配置；01/04/06确认可写边界，不当成已可编辑 | [508](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L508) |
+| `NeteaseCookie` | string / JsonIgnore | 秘密；来自扫码/登录专用链路，不纳入全局配置Save；不回显Cookie；仅configured元数据 | [518](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L518) |
+| `PanelToken` | string / JsonIgnore | 环境认证秘密；不纳入配置Save/Read/export；认证方案归06 | [559](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L559) |
+| `AgentToken` | string / JsonIgnore | 环境认证秘密；不纳入配置Save/Read/export；设备连接认证归04/06 | [705](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L705) |
+| `AgentServerMaxTokens` | int / 可序列化属性 | 旧保存未接受；非秘密模型/Agent配置；01/03/04/06决定，不默认为运行时可写 | [805](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L805) |
+| `HealthPort` | int / 可序列化属性 | 环境基础设施/只读；修改后需宿主重启，不能经统一Save写 | [873](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L873) |
+| `VerboseLog` | bool / 可序列化属性 | 环境基础设施；旧Save无入口；安全诊断策略由06确认 | [876](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L876) |
+| `Theme` | string / 可序列化属性 | 源码注释遗留不用；保持兼容读取，不虚构新功能或默认删除 | [879](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L879) |
+| `NapCatWebUiUrl` | string / JsonIgnore | JsonIgnore运行时基础设施/代理地址；旧Save无入口；安全快照禁止完整端点/凭据URL默认输出 | [886](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L886) |
+| `NapCatWebUiToken` | string / JsonIgnore | 环境秘密；旧Save无入口；代理认证不纳入配置Save | [890](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs#L890) |
+| `OneBotProtocol` | string / 可序列化属性 | 环境基础设施/只读；驱动配置可编辑范围须02/06确认，不凭新DTO扩大 | [14](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L14) |
+| `OneBotAddress` | string / 可序列化属性 | 环境基础设施/只读；新安全快照不默认完整端点 | [15](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L15) |
+| `OneBotToken` | string / JsonIgnore | 环境秘密；Save/Read/export不接不回；仅安全元数据 | [18](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L18) |
+| `QuickLoginUin` | string / 可序列化属性 | 环境身份/只读；展示脱敏，存储与路由key原样 | [19](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L19) |
+| `OfficialAppSecret` | string / JsonIgnore | 仅QQCHAT_OFFICIAL_APP_SECRET；历史数据库行不采用、不迁移进新可写槽 | [33](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L33) |
+| `OfficialApiBase` | string / 可序列化属性 | 旧Save未接受；平台基础设施；02/06明确来源/可写/重启，不猜 | [38](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L38) |
+| `OfficialTokenUrl` | string / 可序列化属性 | 旧Save未接受；平台基础设施；02/06明确来源/可写/重启，不猜 | [39](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L39) |
+| `PlatformSwitchSchemaVersion` | int / 可序列化属性 | 内部迁移标记（0/1）；不能作为客户端任意可写配置 | [63](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs#L63) |
 
 ## 4. 横切兼容与事务缺口
 
@@ -368,11 +368,11 @@
 | 输入文件 | SHA256 |
 | --- | --- |
 | [src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs](../../../src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs) | `B5071F26A303C41152F8673E929A11736B9FF5A01995ABF8EB694ADA3F6253AB` |
-| [src/BotAgent.Headless/Services/AppSettings.cs](../../../src/BotAgent.Headless/Services/AppSettings.cs) | `AC59A571A97C37F202DE7AC5CA21DC0E0EFA040010729ED219882174B8171224` |
-| [src/BotAgent.Platforms/PlatformOptions.cs](../../../src/BotAgent.Platforms/PlatformOptions.cs) | `90E7A6AE0D94A93F5B7B6BBA457710A6B4BBCAE2E1A63315DACBB89C342D57AB` |
+| [src/BotAgent.Headless/Services/AppSettings.cs](../../../src/BotAgent.Core/Contracts/AppSettings.Part1.cs) | `AC59A571A97C37F202DE7AC5CA21DC0E0EFA040010729ED219882174B8171224` |
+| [src/BotAgent.Platforms/PlatformOptions.cs](../../../src/BotAgent.Core/Contracts/PlatformOptions.cs) | `90E7A6AE0D94A93F5B7B6BBA457710A6B4BBCAE2E1A63315DACBB89C342D57AB` |
 | [src/BotAgent.Headless/Adapters/Persistence/BotConfig.cs](../../../src/BotAgent.Headless/Adapters/Persistence/BotConfig.cs) | `49EF637419221B0FB257640CC9C2E2CF9441F99B1E222036E54A284837DB025E` |
 | [src/BotAgent.Headless/Adapters/Panel/WebUiServer.Audit.cs](../../../src/BotAgent.Headless/Adapters/Panel/WebUiServer.Audit.cs) | `F32BCD48C651115C789DFAD54FA02747AF9F1D14E998506774DBAD3F6DB06A35` |
-| [src/BotAgent.Headless/wwwroot/app.js](../../../src/BotAgent.Headless/wwwroot/app.js) | `E01AC150E7344CB772B843BB3FEF9B02AB5820D3FA78704C25919C53D4387554` |
+| ~~src/BotAgent.Headless/wwwroot/app.js~~ | ~~`E01AC150E7344CB772B843BB3FEF9B02AB5820D3FA78704C25919C53D4387554`~~ 旧面板脚本，随 S6 删除（现前端为 `src/web` 的 Vue 工程） |
 | [src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs](../../../src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs) | `459F4DE9F8A17A4DD5F1C95DFC6E89D8EECE6EE403B118EC63FFD1420DAE42AF` |
 | [src/BotAgent.Storage/SecretsStore.cs](../../../src/BotAgent.Storage/SecretsStore.cs) | `074D4701B5EF8C045D47FFAD36560F32308900F7BEE144B25A9335AA9118CE15` |
 

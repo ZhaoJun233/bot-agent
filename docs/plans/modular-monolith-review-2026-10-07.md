@@ -25,25 +25,25 @@
 
 | # | 失败断言 | 源码位置 |
 | --- | --- | --- |
-| 1 | 显式空动作名单保持 fail-closed，实际 configured=False | [PlatformPolicyTests:49](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L49>) |
-| 2 | QQ 官方实例策略白名单优先覆盖 | [PlatformPolicyTests:115](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L115>) |
-| 3 | 本地通道实例策略白名单优先覆盖 | [PlatformPolicyTests:117](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L117>) |
-| 4 | switch migration preserves the old disabled intersection | [PlatformPolicyTests:151](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L151>) |
-| 5 | canonical policy switches override stale legacy switches | [PlatformPolicyTests:158](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L158>) |
-| 6 | migration is idempotent and mirrors the canonical switches | [PlatformPolicyTests:161](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L161>) |
-| 7 | chat mute takes effect immediately without disabling the platform | [PlatformPolicyTests:165](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L165>) |
-| 8 | platform on restores the configured chat switch | [PlatformPolicyTests:173](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L173>) |
-| 9 | local enablement is separate from whitelist readiness | [PlatformPolicyTests:197](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L197>) |
-| 10 | legacy-only configurations retain fallback without new action policies | [PlatformPolicyTests:201](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L201>) |
-| 11 | synthesized standard rows inherit legacy whitelists to prevent roundtrip clearing | [PlatformPolicyTests:215](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L215>) |
-| 12 | explicit empty action allowlist remains configured and fail closed | [PlatformPolicyTests:233](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L233>) |
-| 13 | nonempty explicit actions are always configured even with inherited switch metadata | [PlatformPolicyTests:236](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L236>) |
-| 14 | nonstandard accounts project resolved null fallback without unmuting | [PlatformPolicyTests:280](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L280>) |
-| 15 | 名单中的本地短 id 换算后应接收 | [SafetyProbe Program:567](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/Program.cs#L567>) |
-| 16 | 超范围配置项丢弃，避免撞入官方号段 | [SafetyProbe Program:578](<E:/bot/bot-agent/tests/BotAgent.SafetyProbe/Program.cs#L578>) |
+| 1 | 显式空动作名单保持 fail-closed，实际 configured=False | [PlatformPolicyTests:49](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L49>) |
+| 2 | QQ 官方实例策略白名单优先覆盖 | [PlatformPolicyTests:115](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L115>) |
+| 3 | 本地通道实例策略白名单优先覆盖 | [PlatformPolicyTests:117](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L117>) |
+| 4 | switch migration preserves the old disabled intersection | [PlatformPolicyTests:151](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L151>) |
+| 5 | canonical policy switches override stale legacy switches | [PlatformPolicyTests:158](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L158>) |
+| 6 | migration is idempotent and mirrors the canonical switches | [PlatformPolicyTests:161](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L161>) |
+| 7 | chat mute takes effect immediately without disabling the platform | [PlatformPolicyTests:165](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L165>) |
+| 8 | platform on restores the configured chat switch | [PlatformPolicyTests:173](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L173>) |
+| 9 | local enablement is separate from whitelist readiness | [PlatformPolicyTests:197](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L197>) |
+| 10 | legacy-only configurations retain fallback without new action policies | [PlatformPolicyTests:201](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L201>) |
+| 11 | synthesized standard rows inherit legacy whitelists to prevent roundtrip clearing | [PlatformPolicyTests:215](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L215>) |
+| 12 | explicit empty action allowlist remains configured and fail closed | [PlatformPolicyTests:233](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L233>) |
+| 13 | nonempty explicit actions are always configured even with inherited switch metadata | [PlatformPolicyTests:236](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L236>) |
+| 14 | nonstandard accounts project resolved null fallback without unmuting | [PlatformPolicyTests:280](<../../tests/BotAgent.SafetyProbe/PlatformPolicyTests.cs#L280>) |
+| 15 | 名单中的本地短 id 换算后应接收 | [SafetyProbe Program:567](<../../tests/BotAgent.SafetyProbe/Program.cs#L567>) |
+| 16 | 超范围配置项丢弃，避免撞入官方号段 | [SafetyProbe Program:578](<../../tests/BotAgent.SafetyProbe/Program.cs#L578>) |
 
 
-架构探针的六项失败都表现为旧扫描根下找不到类型或锚点：工具声明、可用工具提示词、轨迹类型、本地号段、工具策略及门禁。当前 [SourceIndex](<E:/bot/bot-agent/tests/BotAgent.ArchitectureProbe/SourceIndex.cs#L115>) 只解析 Headless 源码根；Core 等模块迁出后，零命中不能证明它们没有 IO 或权限问题。这是已确认的覆盖缺口，不能通过删除失败断言来“修复”。
+架构探针的六项失败都表现为旧扫描根下找不到类型或锚点：工具声明、可用工具提示词、轨迹类型、本地号段、工具策略及门禁。当前 [SourceIndex](<../../tests/BotAgent.ArchitectureProbe/SourceIndex.cs#L115>) 只解析 Headless 源码根；Core 等模块迁出后，零命中不能证明它们没有 IO 或权限问题。这是已确认的覆盖缺口，不能通过删除失败断言来“修复”。
 
 历史的 SafetyProbe `594/0`、ArchitectureProbe `92/0`、S21 `37`、S52 `119` 只保留为历史记录。新增模块、宿主引用和路径迁移必须获得新的运行证据。
 
@@ -51,7 +51,7 @@
 
 ### R01 · High：当前验收失败，文档仍声明全绿并解锁后续波次
 
-**位置：** [总调度:82–85、99](<E:/bot/bot-agent/docs/plans/agents/00-orchestration-and-dependency-graph.md#L82>)、[Agent 01:59–62](<E:/bot/bot-agent/docs/plans/agents/01-agent-core-and-unified-storage.md#L59>)、[总规划:267–273、362–368](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L267>)。
+**位置：** [总调度:82–85、99](<../../docs/plans/agents/00-orchestration-and-dependency-graph.md#L82>)、[Agent 01:59–62](<../../docs/plans/agents/01-agent-core-and-unified-storage.md#L59>)、[总规划:267–273、362–368](<../../docs/plans/modular-monolith-refactoring-plan.md#L267>)。
 
 **问题与影响：** 本次安全探针 16 项失败、架构探针 6 项失败，直接反驳当前“594 项全绿”和全面完成的表述。以这些表述解锁新波次，会把未完成的策略迁移与护栏覆盖问题交给下游。
 
@@ -59,9 +59,9 @@
 
 ### R02 · High：把拟建接口和独立程序集误写成已完成的宿主集成
 
-**位置：** [Agent 01:7、30–46、53–57](<E:/bot/bot-agent/docs/plans/agents/01-agent-core-and-unified-storage.md#L30>)、[Agent 02](<E:/bot/bot-agent/docs/plans/agents/02-agent-platform-drivers.md>)、[Agent 03](<E:/bot/bot-agent/docs/plans/agents/03-agent-model-and-llms.md>)。
+**位置：** [Agent 01:7、30–46、53–57](<../../docs/plans/agents/01-agent-core-and-unified-storage.md#L30>)、[Agent 02](<../../docs/plans/agents/02-agent-platform-drivers.md>)、[Agent 03](<../../docs/plans/agents/03-agent-model-and-llms.md>)。
 
-**源码证据：** [Headless 项目:54–57](<E:/bot/bot-agent/src/BotAgent.Headless/BotAgent.Headless.csproj#L54>) 直接引用 Core、Platforms，没有直接引用 Storage、Model；宿主仍保留相应旧实现。源码搜索未找到规划声明的 `IUnifiedConfigurationStore`、`IPlatformDriver` 或 `IDriverRegistry`。已有真实契约是 [IPlatformAdapter](<E:/bot/bot-agent/src/BotAgent.Core/Domain/Ports/IPlatformAdapter.cs>)、[IBotPlugin](<E:/bot/bot-agent/src/BotAgent.Core/Domain/Plugins/IBotPlugin.cs>)、[IPluginRegistry](<E:/bot/bot-agent/src/BotAgent.Core/Domain/Plugins/IPluginRegistry.cs>) 和 [ISettingsRepository](<E:/bot/bot-agent/src/BotAgent.Headless/Services/Ports/ISettingsRepository.cs>)。
+**源码证据：** [Headless 项目:54–57](<../../src/BotAgent.Headless/BotAgent.Headless.csproj#L54>) 直接引用 Core、Platforms，没有直接引用 Storage、Model；宿主仍保留相应旧实现。源码搜索未找到规划声明的 `IUnifiedConfigurationStore`、`IPlatformDriver` 或 `IDriverRegistry`。已有真实契约是 [IPlatformAdapter](<../../src/BotAgent.Core/Domain/Ports/IPlatformAdapter.cs>)、[IBotPlugin](<../../src/BotAgent.Core/Domain/Plugins/IBotPlugin.cs>)、[IPluginRegistry](<../../src/BotAgent.Core/Domain/Plugins/IPluginRegistry.cs>) 和 [ISettingsRepository](<../../src/BotAgent.Headless/Services/Ports/ISettingsRepository.cs>)。
 
 **问题与影响：** 单独构建 Storage/Model 不证明生产路径调用它们。规划中的新名字不能作为可依赖的既有 API。没有直接项目引用也不单独证明程序集绝不可能被间接使用，应结合组装与调用路径验证。
 
@@ -69,7 +69,7 @@
 
 ### R03 · High：后端先行门禁没有包含 ZBA 的负责人和交付
 
-**位置：** [总调度:79–88](<E:/bot/bot-agent/docs/plans/agents/00-orchestration-and-dependency-graph.md#L79>)、[总规划:317–328](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L317>)、[Agent 06:56–62、84–88](<E:/bot/bot-agent/docs/plans/agents/06-agent-headless-cli-and-deploy.md#L56>)、[Agent 07:22、32、68–70](<E:/bot/bot-agent/docs/plans/agents/07-agent-modern-frontend.md#L22>)。
+**位置：** [总调度:79–88](<../../docs/plans/agents/00-orchestration-and-dependency-graph.md#L79>)、[总规划:317–328](<../../docs/plans/modular-monolith-refactoring-plan.md#L317>)、[Agent 06:56–62、84–88](<../../docs/plans/agents/06-agent-headless-cli-and-deploy.md#L56>)、[Agent 07:22、32、68–70](<../../docs/plans/agents/07-agent-modern-frontend.md#L22>)。
 
 **问题与影响：** Wave 5 交付 CLI 和宿主纯化后就释放 Web，Wave 6 却假定统一保存及 REST/SSE 已准备好。没有负责 ZBA 的 Agent，也没有逐插件、逐驱动、统一保存、认证和任务流的验收。当前已有旧面板接口，问题是目标版 ZBA 契约没有交付闭环，而非项目完全没有 HTTP API。
 
@@ -77,9 +77,9 @@
 
 ### R04 · High：过渡配置流程与真实配置真源冲突
 
-**位置：** [总规划:59–74、147](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L59>)、[Agent 06:20、34](<E:/bot/bot-agent/docs/plans/agents/06-agent-headless-cli-and-deploy.md#L20>)。
+**位置：** [总规划:59–74、147](<../../docs/plans/modular-monolith-refactoring-plan.md#L59>)、[Agent 06:20、34](<../../docs/plans/agents/06-agent-headless-cli-and-deploy.md#L20>)。
 
-**源码证据：** [SettingsStore:8–24](<E:/bot/bot-agent/src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs#L8>) 明确 SQLite 是配置真源，旧 JSON 由导入器迁移并归档，环境变量在未存过配置时作种子；[SettingsBox:46](<E:/bot/bot-agent/src/BotAgent.Headless/Services/SettingsBox.cs#L46>) 已有先持久化再发布的入口。
+**源码证据：** [SettingsStore:8–24](<../../src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs#L8>) 明确 SQLite 是配置真源，旧 JSON 由导入器迁移并归档，环境变量在未存过配置时作种子；[SettingsBox:46](<../../src/BotAgent.Headless/Services/SettingsBox.cs#L46>) 已有先持久化再发布的入口。
 
 **问题与影响：** 按“修改 JSON 或环境变量后重启”操作，不保证覆盖已有数据库配置。SQLite 与文件镜像同时承担真源又没有冲突规则，会造成保存成功但运行值不同。重新运行与重新编译被混用，也使运维流程失真。
 
@@ -87,7 +87,7 @@
 
 ### R05 · High：MCP 传输分类和生命周期缺少现代协议契约
 
-**位置：** [Agent 05:20、29–45、83–87](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L20>)、[总规划:185–189、299–308](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L185>)。
+**位置：** [Agent 05:20、29–45、83–87](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L20>)、[总规划:185–189、299–308](<../../docs/plans/modular-monolith-refactoring-plan.md#L185>)。
 
 **问题与影响：** `Sse 或 Docker` 混合了协议传输与进程启动方式。Streamable HTTP 可以返回 SSE，不能因为用了 SSE 就等同于旧 HTTP+SSE；Docker 本身也不是 MCP 传输协议。只实现 initialize 与 tools/list 不足以完成客户端生命周期。
 
@@ -97,7 +97,7 @@
 
 ### R06 · High：把 Docker Socket 描述成天然隔离与轻量执行通道
 
-**位置：** [Agent 05:18–20、30](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L18>)、[总规划:234–236](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L234>)。
+**位置：** [Agent 05:18–20、30](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L18>)、[总规划:234–236](<../../docs/plans/modular-monolith-refactoring-plan.md#L234>)。
 
 **问题与影响：** 访问默认 rootful Docker daemon 的 socket 可授予宿主级高权限，不能作为沙箱保证。容器中的 Node/Python 进程仍消耗同一台主机的内存，不能用“机器人容器没有该运行时”推导总体资源安全。当前镜像及生产资源未重新测量，不能断言裸跑某运行时必然 OOM。
 
@@ -107,17 +107,17 @@
 
 ### R07 · High：取消令牌被当作硬终止保证，且用户取消被误报为超时
 
-**位置：** [Agent 05:50–65](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L50>)、[Agent 04:31、90](<E:/bot/bot-agent/docs/plans/agents/04-agent-engine-and-gating.md#L31>)。
+**位置：** [Agent 05:50–65](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L50>)、[Agent 04:31、90](<../../docs/plans/agents/04-agent-engine-and-gating.md#L31>)。
 
-**问题与影响：** `CancelAfter` 依赖被调方响应取消，不保证远端副作用停止。统一捕获 `OperationCanceledException` 返回 `mcp_timeout` 会吞掉调用方取消；“超时”也不能单独证明动作没有完成。现有 [AgentTurnLoop](<E:/bot/bot-agent/src/BotAgent.Headless/Services/Reply/AgentTurnLoop.cs>) 没有 CancellationToken 参数，迁移不能自动获得端到端取消。
+**问题与影响：** `CancelAfter` 依赖被调方响应取消，不保证远端副作用停止。统一捕获 `OperationCanceledException` 返回 `mcp_timeout` 会吞掉调用方取消；“超时”也不能单独证明动作没有完成。现有 [AgentTurnLoop](<../../src/BotAgent.Engine/Reply/AgentTurnLoop.cs>) 没有 CancellationToken 参数，迁移不能自动获得端到端取消。
 
 **修正：** 传递任务级取消令牌，分别定义调用方取消、客户端超时、服务器错误与结果未知；HTTP/MCP 取消按协议发送并跟踪收口。副作用操作定义幂等或状态核验方式，不盲目重试。预算配置与停机预算分开验证，8 秒作为候选值而非未经验证的硬终止事实。
 
 ### R08 · High：示例调用了不存在的 Sanitize，并混淆审计与脱敏
 
-**位置：** [Agent 05:58–60、86](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L58>)。
+**位置：** [Agent 05:58–60、86](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L58>)。
 
-**源码证据：** [ReplyAuditRules:52](<E:/bot/bot-agent/src/BotAgent.Core/Domain/Rendering/ReplyAuditRules.cs#L52>) 导出 `Judge` 与 `Code`，没有 `Sanitize`。
+**源码证据：** [ReplyAuditRules:52](<../../src/BotAgent.Core/Domain/Rendering/ReplyAuditRules.cs#L52>) 导出 `Judge` 与 `Code`，没有 `Sanitize`。
 
 **问题与影响：** 示例无法按既有接口编译。回复审计判断能否发送，与显示层脱敏不是同一种行为；单一字符串清洗不能覆盖工具返回的其它内容形态。外部工具输出还应作为不可信数据处理。
 
@@ -125,7 +125,7 @@
 
 ### R09 · High：前端计划默认公开隐藏推理与原始工具载荷
 
-**位置：** [总规划:146、338](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L146>)、[Agent 07:35–39、60、68](<E:/bot/bot-agent/docs/plans/agents/07-agent-modern-frontend.md#L35>)。
+**位置：** [总规划:146、338](<../../docs/plans/modular-monolith-refactoring-plan.md#L146>)、[Agent 07:35–39、60、68](<../../docs/plans/agents/07-agent-modern-frontend.md#L35>)。
 
 **问题与影响：** “思维链折叠”“展开原始返回”可能公开隐藏推理、凭据、群聊内容或文件内容，与项目隐私红线冲突。折叠显示不构成访问控制。
 
@@ -133,7 +133,7 @@
 
 ### R10 · High：回退 SOP 会丢弃当前工作区修改
 
-**位置：** [总调度:103–107](<E:/bot/bot-agent/docs/plans/agents/00-orchestration-and-dependency-graph.md#L103>)。
+**位置：** [总调度:103–107](<../../docs/plans/agents/00-orchestration-and-dependency-graph.md#L103>)。
 
 **问题与影响：** `git checkout -f` 不只针对“本次波次”，可能清除用户或其它 Agent 的未提交修改。当前工作区已有多项更改，不能把它当作干净基线。
 
@@ -141,7 +141,7 @@
 
 ### R11 · High：统一保存只有分区方法，没有全局事务、版本与秘密语义
 
-**位置：** [Agent 01:36–45](<E:/bot/bot-agent/docs/plans/agents/01-agent-core-and-unified-storage.md#L36>)、[Agent 07:45、70](<E:/bot/bot-agent/docs/plans/agents/07-agent-modern-frontend.md#L45>)、[Agent 05:44](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L44>)。
+**位置：** [Agent 01:36–45](<../../docs/plans/agents/01-agent-core-and-unified-storage.md#L36>)、[Agent 07:45、70](<../../docs/plans/agents/07-agent-modern-frontend.md#L45>)、[Agent 05:44](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L44>)。
 
 **问题与影响：** 多次调用 SaveSettingsSlice 不能自然形成“全局原子提交”。`object options` 加自由 sectionKey 缺少允许分区与字段校验；没有版本冲突和缺省/清空语义，可能覆盖并发更新。AuthToken 进入普通描述对象而没有存储、序列化边界，容易被列表或日志回显。
 
@@ -149,7 +149,7 @@
 
 ### R12 · Medium：后置 Evaluator 的 Fire & Forget 缺少队列和停机语义
 
-**位置：** [Agent 04:21、32、90、112](<E:/bot/bot-agent/docs/plans/agents/04-agent-engine-and-gating.md#L21>)。
+**位置：** [Agent 04:21、32、90、112](<../../docs/plans/agents/04-agent-engine-and-gating.md#L21>)。
 
 **问题与影响：** 后台 Task 没有容量、并发、顺序、失败处理和停机预算，会积压内存或让异常失去观察；消息更新与画像归档可能乱序。异步化本身不证明用户延迟降至 1–2 秒。
 
@@ -157,15 +157,15 @@
 
 ### R13 · Medium：工程图、插件归属与实际工具迁移边界不一致
 
-**位置：** [总规划:169–201](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L169>)、[Agent 04:28–34、75–83](<E:/bot/bot-agent/docs/plans/agents/04-agent-engine-and-gating.md#L28>)、[Agent 05:85](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L85>)。
+**位置：** [总规划:169–201](<../../docs/plans/modular-monolith-refactoring-plan.md#L169>)、[Agent 04:28–34、75–83](<../../docs/plans/agents/04-agent-engine-and-gating.md#L28>)、[Agent 05:85](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L85>)。
 
-**问题与影响：** 图中有独立 `BotAgent.Plugins`，手册则把插件写入 Engine；真实 [ToolDirectory](<E:/bot/bot-agent/src/BotAgent.Headless/Services/Tools/ToolDirectory.cs>) 仍在 Headless，而 Mcp 计划直接注入它，缺少端口和目录更新的归属。开发者不能据此确定依赖方向与哪个实现是权威。
+**问题与影响：** 图中有独立 `BotAgent.Plugins`，手册则把插件写入 Engine；真实 [ToolDirectory](<../../src/BotAgent.Engine/Tools/ToolDirectory.cs>) 仍在 Headless，而 Mcp 计划直接注入它，缺少端口和目录更新的归属。开发者不能据此确定依赖方向与哪个实现是权威。
 
 **修正：** 确定预设插件位于 Engine 还是独立程序集，只保留一份目标图。将 ToolSpec、工具目录抽象、执行注册与 MCP 投影的依赖写清；组装根接入，底层不得引用 Headless。迁移后全仓扫描重复实现与实际调用点，不能靠新增同名类完成抽离。
 
 ### R14 · Medium：多份手册对共享文件声明独占写权限，缺少交接机制
 
-**位置：** [总调度:79–95](<E:/bot/bot-agent/docs/plans/agents/00-orchestration-and-dependency-graph.md#L79>)、[Agent 04:81–82](<E:/bot/bot-agent/docs/plans/agents/04-agent-engine-and-gating.md#L81>)、[Agent 05:79–80](<E:/bot/bot-agent/docs/plans/agents/05-agent-mcp-ecosystem.md#L79>)、[Agent 06:49、54](<E:/bot/bot-agent/docs/plans/agents/06-agent-headless-cli-and-deploy.md#L49>)。
+**位置：** [总调度:79–95](<../../docs/plans/agents/00-orchestration-and-dependency-graph.md#L79>)、[Agent 04:81–82](<../../docs/plans/agents/04-agent-engine-and-gating.md#L81>)、[Agent 05:79–80](<../../docs/plans/agents/05-agent-mcp-ecosystem.md#L79>)、[Agent 06:49、54](<../../docs/plans/agents/06-agent-headless-cli-and-deploy.md#L49>)。
 
 **问题与影响：** 多名 Agent 均修改解决方案和宿主项目文件。严格串行时不必然冲突，但“独占”没有波次内和波次间交接定义，不能直接用于并行执行。
 
@@ -173,7 +173,7 @@
 
 ### R15 · Medium：资源、构建和用户延迟数字被当作已证明收益
 
-**位置：** [总规划:23、33–44、57、219–220、232、288、350](<E:/bot/bot-agent/docs/plans/modular-monolith-refactoring-plan.md#L33>)、[Agent 06:17、28–34、62](<E:/bot/bot-agent/docs/plans/agents/06-agent-headless-cli-and-deploy.md#L17>)。
+**位置：** [总规划:23、33–44、57、219–220、232、288、350](<../../docs/plans/modular-monolith-refactoring-plan.md#L33>)、[Agent 06:17、28–34、62](<../../docs/plans/agents/06-agent-headless-cli-and-deploy.md#L17>)。
 
 **问题与影响：** 常驻 45–65MB、峰值 95MB、启动 0.8s、构建 1–2s、延迟减半没有测量条件。嵌入资源影响构建和产物，不等同于全部资源必然常驻 RAM；删除资源也不保证总解决方案构建骤降。框架语言本身不能证明某项目必然泄漏或 OOM。
 
@@ -183,7 +183,7 @@ SQLite 的“禁止跨进程写库”也需改正：WAL 可支持同一主机多
 
 ### R16 · Medium：测试数量和旧扫描根不能作为新架构验收标准
 
-**位置：** [总调度:99](<E:/bot/bot-agent/docs/plans/agents/00-orchestration-and-dependency-graph.md#L99>)、[Agent 06:69–78](<E:/bot/bot-agent/docs/plans/agents/06-agent-headless-cli-and-deploy.md#L69>)、[Agent 07:64](<E:/bot/bot-agent/docs/plans/agents/07-agent-modern-frontend.md#L64>)。
+**位置：** [总调度:99](<../../docs/plans/agents/00-orchestration-and-dependency-graph.md#L99>)、[Agent 06:69–78](<../../docs/plans/agents/06-agent-headless-cli-and-deploy.md#L69>)、[Agent 07:64](<../../docs/plans/agents/07-agent-modern-frontend.md#L64>)。
 
 **问题与影响：** 固定 594、95+、365+ 并不证明关键行为覆盖。现有架构探针只扫描 Headless，迁出去的 Domain 零违规可能是假空集；解决方案构建也不代替未纳入解决方案的探针执行。IntegrationHarness 从独立 DLL 启动宿主，仅构建 Harness 可能得到旧宿主结果。
 
@@ -191,7 +191,7 @@ SQLite 的“禁止跨进程写库”也需改正：WAL 可支持同一主机多
 
 ## 三、可以保留的方向与应调整的任务顺序
 
-可以保留 .NET 8 模块化单体、Core 纯领域端口、后台组装根、独立静态 Web、已有有限步进循环、插件门禁和 MCP 能力治理。优先复用 [ToolDirectory](<E:/bot/bot-agent/src/BotAgent.Headless/Services/Tools/ToolDirectory.cs>)、[AgentTurnLoop](<E:/bot/bot-agent/src/BotAgent.Headless/Services/Reply/AgentTurnLoop.cs>)、[SettingsBox](<E:/bot/bot-agent/src/BotAgent.Headless/Services/SettingsBox.cs>)、[SettingsStore](<E:/bot/bot-agent/src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs>)、平台策略与回复审计，避免在重构中重造相同功能。
+可以保留 .NET 8 模块化单体、Core 纯领域端口、后台组装根、独立静态 Web、已有有限步进循环、插件门禁和 MCP 能力治理。优先复用 [ToolDirectory](<../../src/BotAgent.Engine/Tools/ToolDirectory.cs>)、[AgentTurnLoop](<../../src/BotAgent.Engine/Reply/AgentTurnLoop.cs>)、[SettingsBox](<../../src/BotAgent.Headless/Services/SettingsBox.cs>)、[SettingsStore](<../../src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs>)、平台策略与回复审计，避免在重构中重造相同功能。
 
 建议将施工依赖整理为：
 
@@ -218,7 +218,7 @@ SQLite 的“禁止跨进程写库”也需改正：WAL 可支持同一主机多
 | 跨工程架构护栏 | QA/集成负责人 | 扫描新模块及依赖 DAG，棘轮不放宽 |
 | Beta 发布条件 | 项目组 | 后端先验收；前端独立交付；时间窗口受验收约束 |
 
-项目组需要明确角色分配与待定契约，但不必等这些决定才能修正文档中的事实错误。新面板的用户目标、四部分规划和建议 ZBA 契约已另存为 [Z-bot Panel v0.1 Beta 草案](<E:/bot/bot-agent/docs/plans/z-bot-panel-v0.1-beta-plan.md>)。
+项目组需要明确角色分配与待定契约，但不必等这些决定才能修正文档中的事实错误。新面板的用户目标、四部分规划和建议 ZBA 契约已另存为 [Z-bot Panel v0.1 Beta 草案](<../../docs/plans/z-bot-panel-v0.1-beta-plan.md>)。
 
 ## 五、本次交付与限制
 
