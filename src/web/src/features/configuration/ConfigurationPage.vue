@@ -37,6 +37,8 @@ import {
   type SecretDrafts
 } from './draft'
 import { fieldLabel } from './field-labels'
+import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
+import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 import { configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
 
 const props = withDefaults(defineProps<{
@@ -97,6 +99,12 @@ const draft = ref<DraftMap>({})
  */
 const draftBase = ref<ZbaConfigurationReadResult | null>(null)
 const secretDrafts = ref<SecretDrafts>({})
+const secretReconfirm = ref<Record<number, boolean>>({})
+const secretConfirmationBlocked = computed(() => Object.values(secretReconfirm.value).some(confirmed => !confirmed)
+  || Object.entries(secretReconfirm.value).some(([slot]) => {
+    const action = secretDrafts.value[Number(slot) as 0 | 1 | 2 | 3 | 4 | 5]
+    return action?.kind === 'replace' && action.value.length === 0
+  }))
 /**
  * 供应商改名草稿（S4-L1）。
  *
@@ -110,17 +118,9 @@ let findSequence = 0
 const phase = ref<SavePhase>('idle')
 const saveError = ref<UiError | null>(null)
 const receipt = ref<ZbaConfigurationReceipt | null>(null)
-const fieldErrors = ref<string[]>([])
+const fieldErrors = ref<ConfigurationFieldError[]>([])
 const validationMessage = ref<string | null>(null)
-/** 本地校验错误里能定位到字段的路径（"section.key：原因"），用于 aria-invalid。 */
-const invalidPaths = computed(() => {
-  const paths = new Set<string>()
-  for (const item of fieldErrors.value) {
-    const cut = item.indexOf('：')
-    if (cut > 0) paths.add(item.slice(0, cut))
-  }
-  return paths
-})
+const invalidPaths = computed(() => new Set(fieldErrors.value.flatMap(item => item.path ? [item.path] : [])))
 function fieldInvalid(section: string, key: string): boolean {
   return invalidPaths.value.has(`${section}.${key}`)
 }
@@ -128,6 +128,25 @@ const conflictCurrentVersion = ref<string | null>(null)
 const conflictKeys = ref<string[]>([])
 const pendingKey = ref<string | null>(null)
 const findBusy = ref(false)
+const operationTarget = computed(() => 'config:' + props.scope)
+const registeredOperation = computed(() => getPendingOperation(props.client, 'configuration', operationTarget.value))
+const restoredOperation = ref(false)
+let sessionRevision = 0
+watch(() => pendingOperations(props.client, 'configuration', operationTarget.value).map(item => item.key + ':' + item.state).join('|'), () => {
+  const record = registeredOperation.value
+  if (record && pendingKey.value === null) {
+    pendingKey.value = record.key
+    restoredOperation.value = true
+    phase.value = 'unconfirmed'
+    validationMessage.value = '已恢复原操作键；只核对回执，不会重新提交。秘密输入已清除。'
+  } else if (!record && (restoredOperation.value || (pendingKey.value !== null
+    && externallySettled(props.client, pendingKey.value, operationTarget.value)))) {
+    pendingKey.value = null
+    restoredOperation.value = false
+    phase.value = 'conflict'
+    validationMessage.value = '先前操作已结束，请读取最新快照后继续。'
+  }
+}, { immediate: true })
 
 type LeaveReason = 'lock' | 'downgrade' | 'close'
 const leavePrompt = ref<LeaveReason | null>(null)
@@ -193,7 +212,7 @@ const busy = computed(() => loading.value || phase.value === 'saving')
 /** 提交结果未知时冻结整批内容：既不能改草稿，也不能放弃核对入口。 */
 const unconfirmed = computed(() => phase.value === 'unconfirmed')
 const inputsLocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
-const saveBlocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
+const saveBlocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict' || secretConfirmationBlocked.value)
 const hasDraft = computed(() => dirtyCount.value > 0)
 // 草稿全部清空后释放起草基线：下一次起草锚定当时的快照。
 watch(hasDraft, (value) => { if (!value) draftBase.value = null })
@@ -201,6 +220,13 @@ watch(hasDraft, (value) => { if (!value) draftBase.value = null })
 /** 开始（或继续）起草前调用：没有草稿时锚定当前快照作为 CAS 基准。 */
 function anchorDraft(): void {
   if (!hasDraft.value || draftBase.value === null) draftBase.value = snapshot.value
+}
+
+function verifiedReceipt(value: ZbaConfigurationReceipt | undefined, key: string): value is ZbaConfigurationReceipt {
+  return value !== undefined && value.key === key && value.commitState !== 2 && (value.decision === 1 || value.commitState === 1)
+}
+function externallySettled(client: ZbaClient, key: string, target: string): boolean {
+  return pendingOperations(client, 'configuration', target).some(record => record.key === key && record.state === 'settled')
 }
 
 /** 保存/校验用的期望版本：起草基线优先。 */
@@ -397,6 +423,7 @@ function resetAll(): void {
   if (unconfirmed.value) return
   draft.value = {}
   secretDrafts.value = {}
+  secretReconfirm.value = {}
   providerNames.value = {}
   fieldErrors.value = []
   validationMessage.value = null
@@ -430,6 +457,9 @@ function cancelSecret(slot: number): void {
   const next: SecretDrafts = { ...secretDrafts.value }
   delete next[slot as 0 | 1 | 2 | 3 | 4 | 5]
   secretDrafts.value = next
+  const confirmations = { ...secretReconfirm.value }
+  delete confirmations[slot]
+  secretReconfirm.value = confirmations
 }
 
 function onSecretInput(slot: number, raw: string): void {
@@ -447,6 +477,7 @@ function buildRequest(): {
   const patch = buildPatch(draft.value, view)
   const nameErrors = applyProviderNames(patch.patch, providerNames.value, view)
   const secrets = buildSecrets(secretDrafts.value)
+  if (secretConfirmationBlocked.value) secrets.errors.push('秘密值无法比较：请明确确认，并重新输入替换值。')
   const errors = [...patch.errors, ...nameErrors, ...secrets.errors]
   // 意图与 patch 分开记账：同值名称不用写入，但本次成功仍应结束该意图。
   const nameIntents = { ...providerNames.value }
@@ -523,7 +554,7 @@ async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'
   error.value = null
   try {
     const next = await props.client.readConfiguration(1)
-    if (sequence !== loadSequence) return true
+    if (sequence !== loadSequence) return false
     // 代际变化：旧写计划作废（计划 §9.3 第 242 行）。草稿保留，由用户决定。
     // 保存中 / 结果未知 / 冲突是尚未结束的提交上下文：不能悄悄改回 idle，
     // 否则迟到的保存结果被丢弃、核对入口消失、冲突提示被抹掉。
@@ -544,7 +575,7 @@ async function reloadBaseline(mode: 'interactive' | 'background' = 'interactive'
     loadedAt.value = formatTime(new Date().toISOString())
     return true
   } catch (cause) {
-    if (sequence !== loadSequence) return true
+    if (sequence !== loadSequence) return false
     // 认证失效也是"没读到"：不能签已追平。
     if (reportAuthFailure(cause)) return false
     error.value = toUiError(cause)
@@ -575,13 +606,20 @@ function attachScheduler(client: ZbaClient): void {
 
 /** 重新读取基线但保留草稿；用于 409 冲突或代际变化后的显式“读取最新”。 */
 async function reloadAfterConflict(): Promise<void> {
+  if (loading.value) return
+  const base = draftBase.value?.view ?? null
+  if (!(await reload()) || !snapshot.value?.view) return
   conflictCurrentVersion.value = null
   phase.value = 'idle'
   pendingKey.value = null
-  // 冲突未落盘：保留草稿，结束这次操作的意图记账。
   pendingNames.value = {}
-  const base = draftBase.value?.view ?? null
-  await reload()
+  const reconfirm: Record<number, boolean> = {}
+  for (const [slot, action] of Object.entries(secretDrafts.value)) {
+    if (!action || action.kind === 'keep') continue
+    reconfirm[Number(slot)] = false
+    if (action.kind === 'replace') action.value = ''
+  }
+  secretReconfirm.value = reconfirm
   if (snapshot.value?.view) {
     const next = snapshot.value.view
     conflictKeys.value = [
@@ -591,7 +629,9 @@ async function reloadAfterConflict(): Promise<void> {
     // 用户已看到最新快照并逐项确认：从这里起草稿改基到新版本。
     draftBase.value = hasDraft.value ? snapshot.value : null
   }
-  if (conflictKeys.value.length > 0) {
+  if (Object.keys(secretReconfirm.value).length > 0) {
+    validationMessage.value = '已读取最新快照；秘密值无法比较，可能存在同槽位修改。请逐项明确确认，并重新输入替换值后再保存。'
+  } else if (conflictKeys.value.length > 0) {
     validationMessage.value = `已读取最新快照；${conflictKeys.value.length} 个字段与对方修改重叠，请逐项确认。`
   } else {
     validationMessage.value = '已读取最新快照，草稿与最新值没有重叠字段。'
@@ -601,7 +641,7 @@ async function reloadAfterConflict(): Promise<void> {
 async function validate(): Promise<void> {
   const request = buildRequest()
   if (!request || !snapshot.value) return
-  fieldErrors.value = request.errors
+  fieldErrors.value = localFieldErrors(request.errors)
   if (request.errors.length > 0) {
     validationMessage.value = null
     return
@@ -621,7 +661,7 @@ async function validate(): Promise<void> {
       phase.value = 'idle'
       return
     }
-    fieldErrors.value = result.errors.map((item) => `字段 ${item.address.field}：${item.code}`)
+    fieldErrors.value = configurationFieldErrors(result.errors, snapshot.value?.view)
     validationMessage.value = result.code === 5
       ? '版本已变化，请先读取最新快照。'
       : `校验未通过（code ${result.code}）。`
@@ -645,7 +685,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   if (unconfirmed.value || phase.value === 'conflict') return
   const request = buildRequest()
   if (!request) return
-  fieldErrors.value = request.errors
+  fieldErrors.value = localFieldErrors(request.errors)
   if (request.errors.length > 0) return
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
     settleProviderNames(request.nameIntents)
@@ -654,7 +694,13 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   }
 
   // 每次新的用户意图都用新操作键；旧键只属于“结果未知”的那一次提交。
+  const client = props.client
+  const target = operationTarget.value
+  const revision = sessionRevision
   const key = createOperationKey(snapshot.value.generation, nowSeconds(), newNonce())
+  try { beginOperation(client, { key, kind: 'configuration', target }) }
+  catch { saveError.value = { code: 'pending_operation_exists', message: '此配置仍有未决操作，请先核对原操作键。' }; return }
+  restoredOperation.value = false
   pendingKey.value = key
   pendingNames.value = request.nameIntents
   phase.value = 'saving'
@@ -664,14 +710,17 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   conflictKeys.value = []
 
   try {
-    const result = await props.client.saveConfiguration({
+    const result = await client.saveConfiguration({
       contractRevision: snapshot.value.contractRevision,
       expectedVersion: expectedVersion(),
       key,
       changes: request.changes,
       secrets: request.secrets
     })
-    if (pendingKey.value !== key) return
+    if (externallySettled(client, key, target)) return
+    const unknown = result.code === 12 || ((result.code === 0 || result.code === 13) && !verifiedReceipt(result.receipt, key))
+    markOperation(client, key, unknown ? 'unknown' : 'settled')
+    if (revision !== sessionRevision || pendingKey.value !== key) return
     // 服务端明确回报“结果未知”（12）：保留操作键与草稿，冻结后先核对。
     if (result.code === 12) {
       receipt.value = result.receipt ?? null
@@ -680,9 +729,9 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
       return
     }
     // 成功码必须带回执才能证明落盘；缺回执的 2xx 仍属未知，不能清草稿。
-    if ((result.code === 0 || result.code === 13) && result.receipt === undefined) {
+    if ((result.code === 0 || result.code === 13) && !verifiedReceipt(result.receipt, key)) {
       phase.value = 'unconfirmed'
-      validationMessage.value = '成功码缺少回执：无法确认此次提交已落盘。草稿与操作键已保留，请先核对。'
+      validationMessage.value = '成功码缺少有效回执：无法确认此次提交已落盘。草稿与操作键已保留，请先核对。'
       return
     }
     // 明确的完整响应结束“未知”。
@@ -693,6 +742,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
       phase.value = 'saved'
       draft.value = {}
       secretDrafts.value = {}
+      secretReconfirm.value = {}
       // SR-NAME-01：名称意图也必须在这里结束，否则保存条一直是"1 项修改"，
       // 切页会弹未保存确认，下一次无关保存还会把已确认的旧名字重发给新基线。
       settleProviderNames(request.nameIntents)
@@ -705,14 +755,19 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
       phase.value = 'conflict'
       return
     }
-    fieldErrors.value = result.errors.map((item) => `字段 ${item.address.field}：${item.code}`)
+    fieldErrors.value = configurationFieldErrors(result.errors, snapshot.value?.view)
     phase.value = 'error'
     saveError.value = {
       code: `save_${result.code}`,
       message: saveCodeMessages[result.code] ?? `保存失败（code ${result.code}）。`
     }
   } catch (cause) {
-    if (pendingKey.value !== key) return
+    // Classify and record even after the editor was unmounted or the session was locked.
+    const uncertain = cause instanceof ZbaNetworkError || (cause instanceof ZbaRequestError
+      && (cause.status >= 500 || (cause.code === 'invalid_json' && cause.status >= 200 && cause.status < 300)))
+    if (externallySettled(client, key, target)) return
+    markOperation(client, key, uncertain ? 'unknown' : 'settled')
+    if (revision !== sessionRevision || pendingKey.value !== key) return
     if (reportAuthFailure(cause)) return
     // 传输失败，或服务端已回 2xx 但响应体无法解码：都不能证明“没提交”。
     const outcomeUnknown = cause instanceof ZbaNetworkError
@@ -742,22 +797,30 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
  */
 async function checkPending(): Promise<void> {
   const key = pendingKey.value
-  if (key === null || findBusy.value) return
+  if (key === null || findBusy.value || registeredOperation.value?.state === 'in-flight') return
+  const client = props.client
+  const revision = sessionRevision
+  const target = operationTarget.value
   const nameIntents = pendingNames.value
   const sequence = ++findSequence
   findBusy.value = true
   validationMessage.value = '核对中…'
   saveError.value = null
   try {
-    const result = await props.client.findConfiguration(key)
-    if (pendingKey.value !== key) return
-    if (result.code === 0 && result.receipt) {
+    const result = await client.findConfiguration(key)
+    if (externallySettled(client, key, target)) return
+    const terminal = (result.code === 0 && verifiedReceipt(result.receipt, key)) || [14, 6, 5].includes(result.code)
+    if (terminal) markOperation(client, key, 'settled')
+    if (revision !== sessionRevision || pendingKey.value !== key) return
+    if (terminal) restoredOperation.value = false
+    if (result.code === 0 && verifiedReceipt(result.receipt, key)) {
       receipt.value = result.receipt
       phase.value = 'saved'
       pendingKey.value = null
       pendingNames.value = {}
       draft.value = {}
       secretDrafts.value = {}
+      secretReconfirm.value = {}
       // 核对确认本次操作已落盘，包括无需重复写入的同值名称。
       settleProviderNames(nameIntents)
       validationMessage.value = null
@@ -771,21 +834,16 @@ async function checkPending(): Promise<void> {
       validationMessage.value = '没有找到这次提交的回执：修改没有落盘。草稿已保留，请确认内容后重新保存（会使用新的操作键）。'
       return
     }
-    if (result.code === 6) {
+    if (result.code === 6 || result.code === 5) {
       pendingKey.value = null
       pendingNames.value = {}
-      phase.value = 'idle'
-      validationMessage.value = '配置代际已变化，旧操作键无法再核对；已重新读取快照，请确认字段实际值后再保存。'
-      await reload()
-      return
-    }
-    if (result.code === 5) {
-      // 操作键 24 小时后过期，服务端不再接受核对；留着旧键只会把页面永久锁死。
-      pendingKey.value = null
-      pendingNames.value = {}
-      phase.value = 'idle'
-      validationMessage.value = '操作键已过期（超过 24 小时），无法再核对回执；已重新读取快照，请按实际值确认后重新保存（会使用新的操作键）。'
-      await reload()
+      phase.value = 'conflict'
+      validationMessage.value = result.code === 6
+        ? '配置代际已变化，旧操作键无法再核对；请先读取最新快照。'
+        : '操作键已过期（超过 24 小时），无法再核对回执；请先读取最新快照。'
+      const recoveryMessage = validationMessage.value
+      await reloadAfterConflict()
+      validationMessage.value = recoveryMessage + (validationMessage.value ? ' ' + validationMessage.value : '')
       return
     }
     saveError.value = {
@@ -793,7 +851,8 @@ async function checkPending(): Promise<void> {
       message: `核对失败（code ${result.code}）；提交结果仍然未知，操作键与草稿已保留。`
     }
   } catch (cause) {
-    if (pendingKey.value !== key) return
+    if (externallySettled(client, key, target)) return
+    if (revision !== sessionRevision || pendingKey.value !== key) return
     if (reportAuthFailure(cause)) return
     saveError.value = toUiError(cause)
     validationMessage.value = '核对未完成：这次响应不能当作权威结果（HTTP 状态与结果码矛盾，或请求本身失败）。'
@@ -817,6 +876,7 @@ async function refreshOnEnter(): Promise<void> {
  * 待决对话框，重复调用复用同一个 Promise，避免出现两个遮罩。
  */
 function requestLeave(reason: LeaveReason, trigger?: HTMLElement | null): Promise<boolean> {
+  if (reason === 'lock') return Promise.resolve(true)
   if (!hasDraft.value && pendingKey.value === null) return Promise.resolve(true)
   if (leavePromise) return leavePromise
   leavePrompt.value = reason
@@ -972,10 +1032,13 @@ function discardSecretsOnLeave(): void {
   if (inputsLocked.value) return
   if (Object.keys(secretDrafts.value).length === 0) return
   secretDrafts.value = {}
+  secretReconfirm.value = {}
 }
 
 /** 会话结束（锁定、401、换令牌）时立即清空内存草稿与秘密输入。 */
 function endSession(): void {
+  sessionRevision += 1
+  restoredOperation.value = false
   loadSequence += 1
   findSequence += 1
   loading.value = false
@@ -985,6 +1048,7 @@ function endSession(): void {
   if (leaveResolve !== null) closeLeave(false)
   draft.value = {}
   secretDrafts.value = {}
+  secretReconfirm.value = {}
   providerNames.value = {}
   pendingKey.value = null
   pendingNames.value = {}
@@ -1014,6 +1078,7 @@ onBeforeUnmount(() => {
   detachScheduler.value?.()
   detachScheduler.value = null
   secretDrafts.value = {}
+  secretReconfirm.value = {}
 })
 
 /** 用户显式「重新读取」：交互式语义（撤下旧基线），不接受参数。 */
@@ -1075,7 +1140,7 @@ defineExpose({
     <p v-if="phase === 'conflict'" class="inline-notice bad" data-testid="config-conflict" role="alert">
       <strong>配置已被其他人修改（当前版本 {{ conflictCurrentVersion ?? '未知' }}）。</strong>
       你的草稿仍然保留，编辑暂时锁定；读取最新快照后才能确认哪些字段重叠。
-      <button type="button" class="tonal inline-action" data-testid="config-reload-conflict" @click="reloadAfterConflict">
+      <button type="button" class="tonal inline-action" data-testid="config-reload-conflict" :disabled="loading" @click="reloadAfterConflict">
         读取最新并比较
       </button>
     </p>
@@ -1087,7 +1152,7 @@ defineExpose({
         type="button"
         class="tonal inline-action"
         data-testid="config-check-pending"
-        :disabled="findBusy"
+        :disabled="findBusy || registeredOperation?.state === 'in-flight'"
         @click="checkPending"
       >
         {{ findBusy ? '核对中…' : '核对结果' }}
@@ -1104,7 +1169,7 @@ defineExpose({
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
     <ul v-if="fieldErrors.length > 0" :id="domId('config-field-errors')" class="field-errors" data-testid="config-field-errors" role="alert">
-      <li v-for="item in fieldErrors" :key="item">{{ item }}</li>
+      <li v-for="(item, index) in fieldErrors" :key="index">{{ item.message }}</li>
     </ul>
     <p v-if="validationMessage" class="inline-notice" data-testid="config-validation" role="status">{{ validationMessage }}</p>
 
@@ -1302,6 +1367,8 @@ defineExpose({
                           :value="providerNameRaw(provider.key)"
                           :aria-label="`${provider.key} 的真名（显示用 ${provider.name.display}）`"
                           :placeholder="provider.name.display"
+                          :aria-invalid="invalidPaths.has(providerErrorPath(provider.key)) ? 'true' : undefined"
+                          :aria-describedby="invalidPaths.has(providerErrorPath(provider.key)) ? domId('config-field-errors') : undefined"
                           :disabled="inputsLocked"
                           :data-testid="`config-provider-name-${provider.key}`"
                           @input="providerNameInput(provider.key, inputValue($event))"
@@ -1342,6 +1409,10 @@ defineExpose({
               </span>
               <span class="secret-source">{{ secretSourceLabel(secret.source) }}</span>
             </div>
+            <label v-if="canWrite && secretReconfirm[secret.slot] !== undefined" class="inline-notice warn">
+              <input type="checkbox" v-model="secretReconfirm[secret.slot]" :data-testid="'config-secret-reconfirm-' + secret.slot" />
+              秘密值无法比较；我确认仍要修改此槽位，并重新输入替换值。
+            </label>
             <div v-if="canWrite" class="secret-actions">
               <template v-if="secretAction(secret.slot)?.kind === 'replace'">
                 <input

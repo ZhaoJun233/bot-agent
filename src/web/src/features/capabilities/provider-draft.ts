@@ -72,6 +72,7 @@ export function providerEdit(key: string, draft: ProviderDraft, provider?: ZbaPr
   }
   const field = (value: unknown, previous: unknown): ZbaFieldEdit => remove || (provider && value === previous) ? keep() : { kind: 1, value }
   const options = {
+    ...provider?.options,
     azureDeployment: draft.azureDeployment.trim() || null,
     azureApiVersion: draft.azureApiVersion.trim(),
     anthropicVersion: draft.anthropicVersion.trim()

@@ -34,13 +34,14 @@ const fieldSwitch = !!spec?.enableField
 const title = computed(() => props.title ?? spec?.title ?? '插件')
 const commit = useConfigurationCommit({
   client: () => ownerClient,
+  target: () => 'plugin-switch:' + ownerKey,
   canWrite: () => authorized.value && !props.blocked && !loading.value && !reloadRequired.value && editable.value,
   canQuery: () => authorized.value,
   onAuth: value => emit('auth-expired', value)
 })
 const { phase, pendingKey, error: commitError, notice } = commit
 const busy = computed(() => pendingKey.value !== null || phase.value === 'saving' || phase.value === 'checking')
-watch(busy, value => emit('busy', value), { flush: 'sync' })
+watch(busy, value => emit('busy', value), { immediate: true, flush: 'sync' })
 watch(() => busy.value || target.value !== null || reloadRequired.value || !!error.value || !!commitError.value, value => emit('pinned', value), { flush: 'sync' })
 const canSave = computed(() => authorized.value && !props.blocked && !loading.value && !reloadRequired.value
   && editable.value && phase.value === 'idle' && desired.value !== null)

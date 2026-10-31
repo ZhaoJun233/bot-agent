@@ -94,7 +94,7 @@ function clearSession(): void {
   }
   configurationPage.value?.endSession()
   configurationMounted.value = false
-  // 会话结束 = 旧操作键作废：卸载能力页，连同未完成的动作一起丢弃。
+  // Clear sensitive UI now; minimal receipt keys survive in the identity-scoped registry.
   capabilitiesMounted.value = false
   tasksMounted.value = false
   sessionGeneration += 1
@@ -247,6 +247,7 @@ async function refresh(): Promise<void> {
 /** 配置页首次进入时挂载；之后只切换显隐，草稿随组件保留。 */
 async function openConfiguration(): Promise<void> {
   if (view.value === 'configuration') return
+  capabilitiesPage.value?.discardSecretsOnLeave()
   const firstVisit = !configurationMounted.value
   configurationMounted.value = true
   view.value = 'configuration'
@@ -297,6 +298,7 @@ async function openTasks(event?: MouseEvent): Promise<void> {
     if (!allowed) return
   }
   if (view.value === 'tasks') return
+  capabilitiesPage.value?.discardSecretsOnLeave()
   const firstVisit = !tasksMounted.value
   tasksMounted.value = true
   view.value = 'tasks'
@@ -388,13 +390,28 @@ async function disableAdmin(): Promise<void> {
 
 // ── 会话级共享同步（计划 §9.3：五类资源一个调度器） ─────────────────
 const sessionScheduler = ref<ReturnType<typeof acquireScheduler> | null>(null)
+let detachSessionAuth: (() => void) | null = null
 
 function attachSessionSync(activeClient: ZbaClient, enabled: boolean): void {
+  detachSessionAuth?.()
+  detachSessionAuth = null
   sessionScheduler.value?.release()
   sessionScheduler.value = null
   if (!enabled) return
   const shared = acquireScheduler(activeClient)
   // status 走真实重读；配置与能力由 app-resources 自己探测。
+  detachSessionAuth = shared.scheduler.onAuthFailure((cause) => {
+    if (activeClient !== client.value || token.value.length === 0) return
+    const ui = toUiError(cause)
+    if (cause.status === 401) onAuthExpired(ui)
+    else {
+      mode.value = 'read'
+      capabilitiesPage.value?.discardSecretsOnLeave()
+      configurationPage.value?.discardSecretsOnLeave()
+      error.value = ui
+      adminError.value = ui
+    }
+  })
   registerAppResources(shared.scheduler, activeClient, { status: reloadStatus })
   sessionScheduler.value = shared
 }
@@ -419,6 +436,8 @@ watch(() => token.value, () => {
 }, { immediate: true })
 
 onBeforeUnmount(() => {
+  detachSessionAuth?.()
+  detachSessionAuth = null
   sessionScheduler.value?.release()
   sessionScheduler.value = null
 })

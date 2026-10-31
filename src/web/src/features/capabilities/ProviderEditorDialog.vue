@@ -8,6 +8,7 @@ import { newNonce } from '../configuration/draft'
 import { useConfigurationCommit } from './configuration-commit'
 import { editableText, providerDraft, providerDraftErrors, providerEdit, providerSecrets } from './provider-draft'
 import { providerPresets, providerProtocols } from './provider-protocols'
+import { pendingOperations } from '../../shared/sync/pending-operations'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -25,7 +26,12 @@ const emit = defineEmits<{
   'enable-admin': []
   'auth-expired': [error: UiError]
 }>()
-const key = ref(props.providerKey ?? 'provider.' + newNonce())
+const createTargetPrefix = 'provider:create:'
+const recoveredCreate = props.providerKey === undefined
+  ? pendingOperations(props.client, 'configuration').find(item => item.state !== 'settled' && item.target.startsWith(createTargetPrefix))
+  : undefined
+const key = ref(props.providerKey ?? recoveredCreate?.target.slice(createTargetPrefix.length) ?? 'provider.' + newNonce())
+const commitTarget = computed(() => exists.value ? 'provider:' + key.value : createTargetPrefix + key.value)
 const exists = ref(props.providerKey !== undefined)
 const snapshot = ref<ZbaConfigurationReadResult | null>(null)
 const baseline = ref<ZbaProviderConfigurationView | undefined>()
@@ -46,6 +52,7 @@ let intent: 'save' | 'delete' = 'save'
 const canWrite = computed(() => props.active && props.mode === 'admin' && props.writesEnabled)
 const commit = useConfigurationCommit({
   client: () => props.client,
+  target: () => commitTarget.value,
   canWrite: () => canWrite.value,
   canQuery: () => props.active,
   onAuth: (value) => emit('auth-expired', value)
@@ -125,6 +132,7 @@ async function rebase(): Promise<void> {
   if (await load(true)) commit.acknowledgeReload()
 }
 async function afterSave(): Promise<void> {
+  discardSecretsOnLeave()
   changed.value = false
   deleteArmed.value = false
   baselineChanged.value = false
@@ -156,12 +164,25 @@ function requestClose(): void {
   if (changed.value && !discardArmed.value) { discardArmed.value = true; return }
   emit('close')
 }
+function discardSecretsOnLeave(): void { draft.credentialSecret = '' }
+async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement | null): Promise<boolean> {
+  discardSecretsOnLeave()
+  if (reason === 'lock') return true // The shared registry, not the dialog, owns unresolved keys.
+  if (pendingKey.value || phase.value === 'saving' || phase.value === 'checking') {
+    validation.value = ['提交結果尚未确认，请先核对原操作键。']
+    return false
+  }
+  if (changed.value) { discardArmed.value = true; return false }
+  return true
+}
+defineExpose({ requestLeave, discardSecretsOnLeave })
+watch(() => [props.mode, props.writesEnabled, props.client], () => { discardSecretsOnLeave() }, { flush: 'sync' })
 watch(() => props.active, (active) => {
-  if (!active) { ++readSequence; loading.value = false }
+  if (!active) { discardSecretsOnLeave(); ++readSequence; loading.value = false }
   else if ((!snapshot.value || needsReload.value) && !pendingKey.value) void load()
 })
 onMounted(() => { void load() })
-onBeforeUnmount(() => { alive = false; ++readSequence })
+onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence })
 </script>
 
 <template>

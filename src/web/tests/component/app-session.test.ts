@@ -161,3 +161,18 @@ describe('App 会话归属（LIFE-04）', () => {
     expect(vm.token).toBe('A')
   })
 })
+
+it('events401 revokes the App session without waiting for a manual refresh', async () => {
+  const actual = await import('../../src/api/zba')
+  const a = sessionClient('synthetic-auth', { listEvents: async () => { throw new actual.ZbaRequestError(401, 'unauthorized', 'Synthetic') } })
+  clients.set('synthetic-auth', a)
+  const wrapper = await mountApp()
+  const vm = wrapper.vm as unknown as { beginSession: (token: string) => void; load: () => Promise<void>; client: import('../../src/api/zba').ZbaClient; token: string }
+  vm.beginSession('synthetic-auth'); await vm.load(); await flushPromises()
+  const { acquireScheduler } = await import('../../src/shared/sync/event-scheduler')
+  const lease = acquireScheduler(vm.client)
+  await lease.scheduler.pollOnce(); await flushPromises()
+  expect(vm.token).toBe('')
+  expect(wrapper.find('[data-testid="connection-state"]').exists()).toBe(false)
+  lease.release()
+})

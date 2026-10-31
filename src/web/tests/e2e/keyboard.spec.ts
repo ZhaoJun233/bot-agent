@@ -165,7 +165,7 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
-  // 切回概览**不**弹确认框（草稿保留、秘密丢弃）；只有切到能力/任务或锁定时
+  // 切回概览**不**弹确认框（草稿保留、秘密丢弃）；切到能力/任务时
   // 才走同一个三选一守卫，所以这里必须用 nav-capabilities 触发。
   await page.getByTestId('nav-capabilities').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
@@ -418,12 +418,13 @@ test('键盘：离开框在保存提交期间仍能接住 Escape', async ({ page
     await route.fulfill({ response })
   })
 
-  await page.getByTestId('lock').click()
+  await page.getByTestId('nav-overview').click()
+  await page.getByTestId('disable-admin').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-save').click()
   await saveSeen
 
-  // 提交期间"保存并锁定"被禁用：焦点必须仍留在框内（不是 body）。
+  // 提交期间"保存并退出管理员"被禁用：焦点必须仍留在框内（不是 body）。
   await expect(page.getByTestId('config-leave-save')).toBeDisabled()
   const inDialog = await page.evaluate(() => {
     const el = document.activeElement as HTMLElement | null
@@ -434,6 +435,7 @@ test('键盘：离开框在保存提交期间仍能接住 Escape', async ({ page
   // 而且 Escape 必须真的能退出（安全动作）。
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('config-leave-dialog')).toHaveCount(0)
+  await page.getByTestId('nav-configuration').click()
   await expect(page.getByTestId('configuration')).toBeVisible()
   release()
   await page.waitForTimeout(300)

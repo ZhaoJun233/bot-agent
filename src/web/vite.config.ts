@@ -32,6 +32,8 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    // Keep the favicon as a fingerprinted file instead of an inline data URI.
+    assetsInlineLimit: 0,
     sourcemap: false
   }
 })

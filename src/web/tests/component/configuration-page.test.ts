@@ -6,8 +6,10 @@ import {
   type ZbaApplyState, type ZbaConfigurationReadResult, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest
 } from '../../src/api/zba'
 import editableFixture from '../fixtures/configuration-read-editable-result.json'
+import { getPendingOperation } from '../../src/shared/sync/pending-operations'
 
 const mounted: Array<{ unmount: () => void }> = []
+let clientIdentity = 0
 
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
@@ -17,9 +19,20 @@ function clientWith(
   result: unknown,
   overrides: Partial<Pick<ZbaClient, 'readConfiguration' | 'saveConfiguration' | 'validateConfiguration' | 'findConfiguration'>> = {}
 ): ZbaClient {
+  const identity = ++clientIdentity
   return {
+    baseUrl: '/synthetic-configuration-existing-' + identity,
+    identityLabel: 'configuration-existing-' + identity,
     readConfiguration: async () => result,
-    ...overrides
+    ...overrides,
+    ...(overrides.saveConfiguration ? { saveConfiguration: async (request: ZbaConfigurationSaveRequest) => {
+      const result = await overrides.saveConfiguration!(request)
+      return result.receipt?.key === receipt.key ? { ...result, receipt: { ...result.receipt, key: request.key } } : result
+    } } : {}),
+    ...(overrides.findConfiguration ? { findConfiguration: async (key: string) => {
+      const result = await overrides.findConfiguration!(key)
+      return result.receipt?.key === receipt.key ? { ...result, receipt: { ...result.receipt, key } } : result
+    } } : {})
   } as unknown as ZbaClient
 }
 
@@ -116,6 +129,16 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     expect(requests).toHaveLength(0)
     const leaving = wrapper.vm.requestLeave(reason); await flushPromises()
+    if (reason === 'lock') {
+      await expect(leaving).resolves.toBe(true)
+      expect(document.querySelector('[data-testid="config-leave-dialog"]')).toBeNull()
+      wrapper.vm.endSession()
+      await flushPromises()
+      expect(wrapper.vm.draftCount).toBe(0)
+      expect(wrapper.find('[data-testid="config-secrets"] input').exists()).toBe(false)
+      expect(requests).toHaveLength(0)
+      return
+    }
     const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
     expect(dialog.textContent).not.toContain('标准模式下不能保存')
     const saveButton = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')!
@@ -135,7 +158,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
     await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic draft')
     await wrapper.setProps({ active: false })
-    const leaving = wrapper.vm.requestLeave('lock'); await flushPromises()
+    const leaving = wrapper.vm.requestLeave('downgrade'); await flushPromises()
     await wrapper.setProps(permission === 'mode' ? { mode: 'read' } : { writesEnabled: false })
     const button = document.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')!
     expect(button.disabled).toBe(true)
@@ -435,7 +458,7 @@ describe('ConfigurationPage', () => {
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
   })
 
-  it('锁定前确认：继续编辑保留草稿，明确放弃后清空', async () => {
+  it('退出管理员前确认：继续编辑保留草稿，明确放弃后清空', async () => {
     const client = clientWith(editableFixture, {
       saveConfiguration: async () => ({ code: 0, replayed: false, receipt, currentVersion: '2', errors: [] })
     })
@@ -446,7 +469,7 @@ describe('ConfigurationPage', () => {
     }
 
     await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('未保存')
-    const pending = page.requestLeave('lock')
+    const pending = page.requestLeave('downgrade')
     await flushPromises()
     const dialog = document.body.querySelector<HTMLElement>('[data-testid="config-leave-dialog"]')
     expect(dialog).not.toBeNull()
@@ -457,7 +480,7 @@ describe('ConfigurationPage', () => {
     await expect(pending).resolves.toBe(false)
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
 
-    const second = page.requestLeave('lock')
+    const second = page.requestLeave('downgrade')
     await flushPromises()
     document.body.querySelector<HTMLButtonElement>('[data-testid="config-leave-discard"]')?.click()
     await flushPromises()
@@ -616,7 +639,7 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
-    const pending = page.requestLeave('lock')
+    const pending = page.requestLeave('downgrade')
     await flushPromises()
     const saveButton = document.body.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')
     const discardButton = document.body.querySelector<HTMLButtonElement>('[data-testid="config-leave-discard"]')
@@ -626,6 +649,8 @@ describe('ConfigurationPage', () => {
     discardButton?.click()
     await flushPromises()
     expect(saves).toBe(1)
+    await expect(page.requestLeave('lock')).resolves.toBe(true)
+    expect(getPendingOperation(client, 'configuration', 'config:basic')?.state).toBe('in-flight')
 
     release()
     await flushPromises()
@@ -977,15 +1002,20 @@ describe('ConfigurationPage', () => {
     const leaving = page.requestLeave(reason).then((result) => { allowed = result })
     await flushPromises()
     const saveButton = document.body.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')
-    expect(saveButton).not.toBeNull()
-    saveButton!.click()
+    if (reason === 'lock') {
+      expect(saveButton).toBeNull()
+      wrapper.vm.endSession()
+    } else {
+      expect(saveButton).not.toBeNull()
+      saveButton!.click()
+    }
     await flushPromises()
     expect(allowed).toBe(true)
     await leaving
     expect(document.body.querySelector('[data-testid="config-leave-save"]')).toBeNull()
     expect(writes).toBe(0)
     expect(wrapper.find('[data-testid="config-receipt"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
+    expect(wrapper.vm.draftCount).toBe(0)
   })
 
   it('SR-NAME-02 纯同值草稿显式保存时就地结束，不发空请求也不伪造回执', async () => {
@@ -1056,12 +1086,16 @@ describe('ConfigurationPage', () => {
     await flushPromises()
     await renameProvider(wrapper, 'Synthetic new C')
     await saveDraft(wrapper)
-    expect(requests).toHaveLength(2)
+    expect(requests).toHaveLength(1)
+    expect(wrapper.text()).toContain('未决操作')
     release()
     await flushPromises()
     await flushPromises()
     expect(providerInput(wrapper).element.value).toBe('Synthetic new C')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
+    await saveDraft(wrapper)
+    expect(requests).toHaveLength(2)
+    expect(requests[1]!.changes.registered!.providers[0]!.changes.nameRaw.value).toBe('Synthetic new C')
     expect(wrapper.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="config-receipt"]').exists()).toBe(false)
   })

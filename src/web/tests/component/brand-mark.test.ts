@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import favicon from '../../public/favicon.svg?raw'
+import favicon from '../../src/favicon.svg?raw'
 import BrandMark from '../../src/shared/ui/BrandMark.vue'
 
 describe('minimal conversation branding', () => {

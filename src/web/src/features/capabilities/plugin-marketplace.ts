@@ -1,6 +1,7 @@
 import {
   ZbaRequestError,
   type ZbaPluginCatalogItem,
+  type ZbaInstalledPlugins,
   type ZbaPluginOperation,
   type ZbaPluginOperationKind,
   type ZbaPluginSettingEdit
@@ -41,6 +42,19 @@ export function catalogEntry(item: ZbaPluginCatalogItem): PluginCatalogEntry {
     pendingVersion,
     pendingUninstall: pendingUninstall || undefined
   }
+}
+
+/** One row per plugin ID; the installed projection owns package state, not the index/source. */
+export function mergePluginCatalog(catalog: ZbaPluginCatalogItem[], installed: ZbaInstalledPlugins | null, sources: PluginCatalogEntry[]): PluginCatalogEntry[] {
+  const entries = new Map<string, PluginCatalogEntry>()
+  for (const item of catalog) entries.set(item.manifest.id, catalogEntry(item))
+  for (const source of sources) entries.set(source.id, { ...entries.get(source.id), ...source })
+  for (const item of installed?.plugins ?? []) {
+    const state = catalogEntry(item)
+    const entry = entries.get(state.id) ?? state
+    entries.set(state.id, { ...entry, installedVersion: state.installedVersion, pendingVersion: state.pendingVersion, pendingUninstall: state.pendingUninstall })
+  }
+  return [...entries.values()]
 }
 
 /** 同一个「插件 + 版本 + 动作」在重试时必须复用同一个键，所以键由调用方保存。 */

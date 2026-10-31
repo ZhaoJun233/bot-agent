@@ -41,6 +41,13 @@ describe('provider transport editor', () => {
     expect(edit.operation).toBe(2)
     expect(Object.values(edit.changes).every((field) => field?.kind === 0)).toBe(true)
   })
+  it('preserves all existing options when changing one protocol option', () => {
+    const provider = syntheticProvider({ protocol: 4, options: { azureDeployment: 'deployment-before', azureApiVersion: 'version-before', anthropicVersion: 'version-other', timeoutSeconds: 5 } })
+    const draft = providerDraft(provider)
+    draft.azureDeployment = 'deployment-after'
+    expect(providerEdit(provider.key, draft, provider).changes.options).toEqual({ kind: 1, value: { ...provider.options, azureDeployment: 'deployment-after' } })
+    expect(provider.options?.azureDeployment).toBe('deployment-before')
+  })
   it('validates transport-specific options and allows free-text models for every protocol', () => {
     for (const protocol of providerProtocols) {
       const draft = { ...providerDraft(syntheticProvider()), protocol: protocol.id, azureDeployment: 'deployment-example' }

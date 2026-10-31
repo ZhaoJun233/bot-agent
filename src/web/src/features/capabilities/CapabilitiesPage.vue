@@ -17,7 +17,9 @@ import {
 } from '../../api/zba'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
+import { markOperation, pendingOperations, type PendingOperation } from '../../shared/sync/pending-operations'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import BreakableId from '../../shared/ui/BreakableId.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 import CapabilityConfigurationDialog from './CapabilityConfigurationDialog.vue'
@@ -229,7 +231,31 @@ function closeSettings(saved = true): void {
 
 // Provider editors remain mounted while hidden so an unconfirmed operation key survives navigation.
 const providerTarget = ref<{ key?: string; trigger: HTMLElement | null } | null>(null)
+const providerDialog = ref<InstanceType<typeof ProviderEditorDialog> | null>(null)
+const quotaDialog = ref<InstanceType<typeof TokenQuotaDialog> | null>(null)
+const marketplaceDialog = ref<InstanceType<typeof PluginMarketplaceDialog> | null>(null)
 const providerViews = ref<ZbaProviderConfigurationView[]>([])
+const configurationRecoveries = computed(() => pendingOperations(props.client, 'configuration').filter(item => item.state !== 'settled'))
+const recoveryChecking = ref<string | null>(null)
+const configurationRecoveryNotice = ref('')
+async function checkConfigurationRecovery(record: PendingOperation): Promise<void> {
+  if (!canWrite.value || record.state === 'in-flight' || recoveryChecking.value) return
+  const client = props.client
+  recoveryChecking.value = record.key
+  configurationRecoveryNotice.value = ''
+  try {
+    const result = await client.findConfiguration(record.key)
+    const receipt = result.receipt
+    const confirmed = result.code === 0 && receipt?.key === record.key && receipt.commitState !== 2 && (receipt.decision === 1 || receipt.commitState === 1)
+    if (confirmed || result.code === 14) markOperation(client, record.key, 'settled')
+    if (client !== props.client || unmounted) return
+    configurationRecoveryNotice.value = confirmed ? '原提交已有确定回执。请重新读取当前配置；不会重新提交。'
+      : result.code === 14 ? '服务端确认没有这次提交。不会自动提交。' : '仍无法确认原提交。原操作键已保留，不会重发。'
+    if (confirmed) await load(undefined, 'background')
+  } catch (cause) {
+    if (client === props.client && !unmounted && !reportAuthFailure(cause)) configurationRecoveryNotice.value = '核对暂不可用，原操作键仍保留。'
+  } finally { if (client === props.client) recoveryChecking.value = null }
+}
 function openProvider(key?: string, event?: MouseEvent): void {
   providerTarget.value = { key, trigger: eventTrigger(event) }
 }
@@ -1300,7 +1326,7 @@ watch(() => props.client, (value) => {
  */
 function abandonInFlight(): void {
   ownership += 1
-  if (props.active === false) configurationDialog.value?.discardSecretsOnLeave()
+  if (props.active === false || props.mode !== 'admin' || !props.writesEnabled) discardEditorSecrets()
   const hadDialog = pendingAction.value !== null
   pendingAction.value = null
   actionError.value = null
@@ -1343,10 +1369,24 @@ onBeforeUnmount(() => {
   activeKey.value = null
 })
 
+function discardEditorSecrets(): void {
+  configurationDialog.value?.discardSecretsOnLeave()
+  providerDialog.value?.discardSecretsOnLeave()
+  marketplaceDialog.value?.discardSecretsOnLeave()
+}
+async function requestEditorLeave(reason: 'lock' | 'downgrade', trigger?: HTMLElement | null): Promise<boolean> {
+  // Lock clears secrets immediately; receipt keys remain in the identity-scoped registry.
+  if (reason === 'lock') { discardEditorSecrets(); return true }
+  for (const editor of [configurationDialog.value, providerDialog.value, quotaDialog.value, marketplaceDialog.value]) {
+    if (editor && !(await editor.requestLeave(reason, trigger))) return false
+  }
+  discardEditorSecrets()
+  return true
+}
 defineExpose({
   reload: () => load(),
-  requestLeave: (reason: 'lock' | 'downgrade', trigger?: HTMLElement | null) => configurationDialog.value?.requestLeave(reason, trigger) ?? Promise.resolve(true),
-  discardSecretsOnLeave: () => configurationDialog.value?.discardSecretsOnLeave(),
+  requestLeave: requestEditorLeave,
+  discardSecretsOnLeave: discardEditorSecrets,
   configurationDraftCount: computed(() => configurationDialog.value?.draftCount ?? 0),
   describe: () => ({ items: items.value.length, operations: operations.value.length })
 })
@@ -1354,6 +1394,14 @@ defineExpose({
 
 <template>
   <section class="capabilities" data-testid="capabilities">
+    <section v-if="configurationRecoveries.length" class="inline-notice warn" data-testid="cap-configuration-recovery" aria-label="未确认配置提交">
+      <p>以下原提交仍在等待或尚未确认。即使目标已从目录移除，也可按原操作键核对，不会重新提交。</p>
+      <p v-for="record in configurationRecoveries" :key="record.key">
+        <BreakableId :value="record.target" /> · <code>{{ record.key }}</code>
+        <button type="button" :data-testid="'cap-configuration-check-' + record.target" :disabled="!canWrite || record.state === 'in-flight' || recoveryChecking !== null" @click="checkConfigurationRecovery(record)">核对原提交</button>
+      </p>
+    </section>
+    <p v-if="configurationRecoveryNotice" class="inline-notice" role="status" data-testid="cap-configuration-recovery-notice">{{ configurationRecoveryNotice }}</p>
     <header class="page-heading">
       <div>
         <p class="eyebrow">插件与平台</p>
@@ -1698,7 +1746,7 @@ defineExpose({
     </section>
 
     <PluginMarketplaceDialog
-      v-if="marketplaceTarget"
+      v-if="marketplaceTarget" ref="marketplaceDialog"
       :client="props.client"
       :mode="props.mode"
       :writes-enabled="props.writesEnabled"
@@ -1712,9 +1760,9 @@ defineExpose({
       @auth-expired="(e) => emit('auth-expired', e)"
     />
 
-    <ProviderEditorDialog v-if="providerTarget" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
+    <ProviderEditorDialog v-if="providerTarget" ref="providerDialog" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
 
-    <TokenQuotaDialog v-if="quotaTarget" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled"
+    <TokenQuotaDialog v-if="quotaTarget" ref="quotaDialog" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled"
       :features="props.features ?? []" :active="props.active" :trigger="quotaTarget.trigger" :fallback="pageHeading"
       :runtime-state="items.find(item => item.key.kind === 'plugin' && item.key.key === 'preset.feature.token-quota')?.runtimeState"
       @close="quotaTarget = null" @saved="load(undefined, 'background')" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />

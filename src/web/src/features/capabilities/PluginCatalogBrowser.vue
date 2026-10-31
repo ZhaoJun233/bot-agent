@@ -6,6 +6,7 @@ const props = defineProps<{
   canWrite: boolean
   busy?: boolean
   loading?: boolean
+  unresolvedIds?: string[]
 }>()
 const emit = defineEmits<{
   install: [entry: PluginCatalogEntry]
@@ -22,14 +23,15 @@ const entries = computed(() => filterPluginCatalog(props.entries, search.value, 
 const selected = computed(() => entries.value.find((entry) => entry.id === selectedId.value) ?? entries.value[0])
 const repository = computed(() => safeGithubLink(selected.value?.repository))
 const pending = computed(() => Boolean(selected.value?.pendingVersion || selected.value?.pendingUninstall))
+const unresolved = computed(() => Boolean(selected.value && props.unresolvedIds?.includes(selected.value.id)))
 const sameVersion = computed(() => selected.value?.installedVersion === selected.value?.manifest.version)
 watch(() => [selected.value?.id, selected.value?.manifest.sha256, selected.value?.manifest.version], () => { trusted.value = false; uninstallArmed.value = false })
 function install(): void {
-  if (!selected.value || !props.canWrite || props.busy || pending.value || sameVersion.value || !trusted.value) return
+  if (!selected.value || !props.canWrite || props.busy || unresolved.value || pending.value || sameVersion.value || !trusted.value) return
   emit('install', selected.value)
 }
 function uninstall(): void {
-  if (!selected.value?.installedVersion || !props.canWrite || props.busy || pending.value || !uninstallArmed.value) return
+  if (!(selected.value?.installedVersion || selected.value?.pendingVersion) || !props.canWrite || props.busy || unresolved.value || selected.value?.pendingUninstall || !uninstallArmed.value) return
   emit('uninstall', selected.value)
 }
 </script>
@@ -72,11 +74,11 @@ function uninstall(): void {
       </section>
       <p class="muted">外部插件默认停用。安装、更新或卸载需要重启后生效；此处不会自动重启。</p>
       <div class="catalog-actions">
-        <button v-if="!sameVersion" type="button" class="primary" data-testid="marketplace-install" :disabled="!props.canWrite || props.busy || pending || !trusted" @click="install">{{ props.busy ? '处理中…' : selected.installedVersion ? '暂存此版本更新' : '安装此固定版本' }}</button>
+        <button v-if="!sameVersion" type="button" class="primary" data-testid="marketplace-install" :disabled="!props.canWrite || props.busy || unresolved || pending || !trusted" @click="install">{{ props.busy ? '处理中…' : selected.installedVersion ? '暂存此版本更新' : '安装此固定版本' }}</button>
         <button v-if="selected.installedVersion || selected.pendingVersion" type="button" data-testid="marketplace-settings" :disabled="props.busy" @click="emit('settings', selected)">设置与启用</button>
-        <button v-if="selected.installedVersion && !uninstallArmed" type="button" data-testid="marketplace-uninstall" :disabled="!props.canWrite || props.busy || pending" @click="uninstallArmed = true">卸载…</button>
+        <button v-if="(selected.installedVersion || selected.pendingVersion) && !uninstallArmed" type="button" data-testid="marketplace-uninstall" :disabled="!props.canWrite || props.busy || unresolved || selected.pendingUninstall" @click="uninstallArmed = true">卸载…</button>
       </div>
-      <div v-if="uninstallArmed" class="trust-warning" role="alert" data-testid="marketplace-uninstall-confirmation"><p>确认暂存卸载？服务不会自动重启。重启后的状态以宿主为准。</p><button type="button" data-testid="marketplace-uninstall-confirm" :disabled="!props.canWrite || props.busy || pending" @click="uninstall">确认卸载</button><button type="button" @click="uninstallArmed = false">取消</button></div>
+      <div v-if="uninstallArmed" class="trust-warning" role="alert" data-testid="marketplace-uninstall-confirmation"><p>确认暂存卸载？服务不会自动重启。重启后的状态以宿主为准。</p><button type="button" data-testid="marketplace-uninstall-confirm" :disabled="!props.canWrite || props.busy || unresolved || selected.pendingUninstall" @click="uninstall">确认卸载</button><button type="button" @click="uninstallArmed = false">取消</button></div>
     </section>
   </div>
 </template>

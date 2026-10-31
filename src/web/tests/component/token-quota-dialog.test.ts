@@ -7,10 +7,13 @@ import { settingsFor } from '../../src/features/capabilities/plugin-settings'
 import { ZbaClient, ZbaNetworkError, ZbaRequestError } from '../../src/api/zba'
 import { quota, quotaFeatures } from '../fixtures/quotas'
 import { providerSnapshot } from '../fixtures/provider-marketplace'
+import { getPendingOperation, pendingOperations } from '../../src/shared/sync/pending-operations'
 const mounted: Array<{ unmount: () => void }> = []
 afterEach(() => { for (const wrapper of mounted.splice(0)) wrapper.unmount(); document.body.replaceChildren() })
+let clientScope = 0
 function clientWith(overrides: Partial<ZbaClient> = {}): ZbaClient {
-  return { listQuotas: vi.fn(async () => ({ items: [quota(), quota({ sourceKey: 'group:20002', displayName: '群聊 200***02' })] })),
+  const scope = ++clientScope
+  return { baseUrl: '/synthetic/quota-' + scope, identityLabel: 'quota-test-' + scope, listQuotas: vi.fn(async () => ({ items: [quota(), quota({ sourceKey: 'group:20002', displayName: '群聊 200***02' })] })),
     saveQuota: vi.fn(async (request) => ({ quota: quota({ dailyTokenLimit: request.dailyTokenLimit, revision: '2' }) })),
     findQuota: vi.fn(async () => ({ found: false })), ...overrides } as unknown as ZbaClient
 }
@@ -92,6 +95,132 @@ describe('quota dialog single-intent lifecycle', () => {
     expect(client.findQuota).toHaveBeenCalledWith(vi.mocked(client.saveQuota).mock.calls[0]?.[0].idempotencyKey)
     expect(wrapper.find('[data-testid="quota-unknown"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('不能确认没有执行'); expect(client.listQuotas).toHaveBeenCalledTimes(1)
+  })
+  it('restoring the original numeric value is clean and creates no quota receipt', async () => {
+    const client = clientWith(); const { wrapper } = editor(client); await change(wrapper)
+    await wrapper.get('[data-testid="quota-limit"]').setValue('100000')
+    expect(wrapper.get('[data-testid="quota-save"]').attributes('disabled')).toBeDefined()
+    await submit(wrapper); expect(client.saveQuota).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="quota-cancel-edit"]').trigger('click')
+    expect(wrapper.find('[data-testid="quota-discard"]').exists()).toBe(false)
+    expect(wrapper.find('form').exists()).toBe(false)
+  })
+  it('releases a deterministic quota receipt capacity rejection for editing and close', async () => {
+    const client = clientWith({ saveQuota: vi.fn(async () => { throw new ZbaRequestError(503, 'quota_receipt_capacity', 'synthetic') }) })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    expect(wrapper.find('[data-testid="quota-unknown"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="quota-limit"]').attributes('disabled')).toBeUndefined()
+    expect(getPendingOperation(client, 'quota', 'group:10001')).toBeNull()
+    await wrapper.get('[data-testid="token-quota-dialog-close"]').trigger('click')
+    await wrapper.get('[data-testid="quota-discard-confirm"]').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+  it('retains an original unknown key on unmount and reopens only its nonsecret receipt lookup', async () => {
+    const client = clientWith({ saveQuota: vi.fn(async () => { throw new ZbaNetworkError() }) })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    const request = vi.mocked(client.saveQuota).mock.calls[0]![0]
+    expect(getPendingOperation(client, 'quota', request.sourceKey)?.key).toBe(request.idempotencyKey)
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1)
+    const { wrapper: reopened } = editor(client); await flushPromises()
+    expect(reopened.find('[data-testid="quota-unknown"]').exists()).toBe(true)
+    expect(reopened.find('[data-testid="quota-retry"]').exists()).toBe(false)
+    await reopened.get('[data-testid="quota-check"]').trigger('click'); await flushPromises()
+    expect(client.findQuota).toHaveBeenCalledWith(request.idempotencyKey)
+    expect(client.saveQuota).toHaveBeenCalledTimes(1)
+    expect(pendingOperations(client, 'quota')[0]?.meta).toEqual({ sourceKey: request.sourceKey, dailyTokenLimit: request.dailyTokenLimit })
+  })
+  it('allows only explicitly armed same-key retry from the original live owner', async () => {
+    const saveQuota = vi.fn<ZbaClient['saveQuota']>().mockRejectedValueOnce(new ZbaNetworkError()).mockImplementation(async request => ({ quota: quota({ dailyTokenLimit: request.dailyTokenLimit, revision: '2' }) }))
+    const client = clientWith({ saveQuota }); const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    await wrapper.get('[data-testid="quota-check"]').trigger('click'); await flushPromises()
+    expect(saveQuota).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-testid="quota-retry"]').trigger('click')
+    expect(saveQuota).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-testid="quota-retry-confirm"]').trigger('click'); await flushPromises()
+    expect(saveQuota.mock.calls[1]![0]).toEqual(saveQuota.mock.calls[0]![0])
+    expect(getPendingOperation(client, 'quota', 'group:10001')).toBeNull()
+  })
+  it('settles a verified late response even after the dialog unmounts', async () => {
+    let resolve!: (result: Awaited<ReturnType<ZbaClient['saveQuota']>>) => void
+    const client = clientWith({ saveQuota: vi.fn<ZbaClient['saveQuota']>(() => new Promise<Awaited<ReturnType<ZbaClient['saveQuota']>>>(result => { resolve = result })) })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    expect(getPendingOperation(client, 'quota', 'group:10001')?.state).toBe('in-flight')
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1)
+    resolve({ quota: quota({ dailyTokenLimit: 120000, revision: '2' }) }); await flushPromises()
+    expect(getPendingOperation(client, 'quota', 'group:10001')).toBeNull()
+    const { wrapper: reopened } = editor(client); await flushPromises()
+    expect(reopened.find('[data-testid="quota-unknown"]').exists()).toBe(false)
+    expect(client.saveQuota).toHaveBeenCalledTimes(1)
+  })
+  it('restores quota lookup using a fresh client with the same scope but not another identity', async () => {
+    const client = clientWith({ saveQuota: vi.fn(async () => { throw new ZbaNetworkError() }) })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    const key = vi.mocked(client.saveQuota).mock.calls[0]![0].idempotencyKey
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1)
+    const sameScope = clientWith({ baseUrl: client.baseUrl, identityLabel: client.identityLabel, findQuota: vi.fn<ZbaClient['findQuota']>(async () => ({ found: true, quota: quota({ dailyTokenLimit: 120000, revision: '2' }) })) })
+    const { wrapper: reopened } = editor(sameScope); await flushPromises()
+    await reopened.get('[data-testid="quota-check"]').trigger('click'); await flushPromises()
+    expect(sameScope.findQuota).toHaveBeenCalledWith(key)
+    expect(reopened.find('[data-testid="quota-unknown"]').exists()).toBe(false)
+    expect(sameScope.saveQuota).not.toHaveBeenCalled()
+    const { wrapper: other } = editor(clientWith({ baseUrl: client.baseUrl, identityLabel: 'other-identity' })); await flushPromises()
+    expect(other.find('[data-testid="quota-unknown"]').exists()).toBe(false)
+  })
+  it('keeps late transport failure registered after unmount and blocks downgrade but allows lock', async () => {
+    let reject!: (reason: unknown) => void
+    const client = clientWith({ saveQuota: vi.fn<ZbaClient['saveQuota']>(() => new Promise((_resolve, fail) => { reject = fail })) })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    expect(await wrapper.vm.requestLeave('downgrade')).toBe(false)
+    expect(await wrapper.vm.requestLeave('lock')).toBe(true)
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1)
+    reject(new ZbaNetworkError()); await flushPromises()
+    expect(getPendingOperation(client, 'quota', 'group:10001')?.state).toBe('unknown')
+  })
+  it('retains plugin enablement original key through quota unmount and reopen', async () => {
+    const snapshot = providerSnapshot()
+    snapshot.view!.registered.plugins = [{ key: 'preset.feature.token-quota', desiredEnabled: true }]
+    const client = clientWith({ readConfiguration: vi.fn(async () => snapshot), saveConfiguration: vi.fn(async () => { throw new ZbaNetworkError() }), findConfiguration: vi.fn(async () => ({ code: 12 as const })) })
+    const { wrapper } = editor(client); await flushPromises()
+    await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
+    const key = vi.mocked(client.saveConfiguration).mock.calls[0]![0].key
+    wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1)
+    const { wrapper: reopened } = editor(client); await flushPromises()
+    expect(reopened.get('[data-testid="quota-edit-0"]').attributes('disabled')).toBeDefined()
+    await reopened.get('[data-testid="quota-plugin-check"]').trigger('click'); await flushPromises()
+    expect(client.findConfiguration).toHaveBeenCalledWith(key)
+    expect(client.saveConfiguration).toHaveBeenCalledTimes(1)
+  })
+  it.each(['reject', 'not-found'] as const)('keeps an external confirmed quota terminal when another lookup returns late %s', async late => {
+    let resolve!: (value: Awaited<ReturnType<ZbaClient['findQuota']>>) => void
+    let reject!: (reason: unknown) => void
+    const findQuota = vi.fn<ZbaClient['findQuota']>().mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no }))
+      .mockResolvedValue({ found: true, quota: quota({ dailyTokenLimit: 120000, revision: '2' }) })
+    const client = clientWith({ saveQuota: vi.fn(async () => { throw new ZbaNetworkError() }), findQuota })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    const { wrapper: other } = editor(client); await flushPromises()
+    await wrapper.get('[data-testid="quota-check"]').trigger('click'); await flushPromises()
+    await other.get('[data-testid="quota-check"]').trigger('click'); await flushPromises()
+    expect(getPendingOperation(client, 'quota', 'group:10001')).toBeNull()
+    if (late === 'reject') reject(new ZbaNetworkError())
+    else resolve({ found: false })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="quota-unknown"]').exists()).toBe(false)
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="quota-refresh"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="quota-retry"]').exists()).toBe(false)
+  })
+  it('does not resurrect pending quota when a save fails after another view confirms it', async () => {
+    let reject!: (reason: unknown) => void
+    const client = clientWith({ saveQuota: vi.fn<ZbaClient['saveQuota']>(() => new Promise((_yes, no) => { reject = no })),
+      findQuota: vi.fn<ZbaClient['findQuota']>(async () => ({ found: true, quota: quota({ dailyTokenLimit: 120000, revision: '2' }) })) })
+    const { wrapper } = editor(client); await change(wrapper); await submit(wrapper)
+    const { wrapper: other } = editor(client); await flushPromises()
+    await other.get('[data-testid="quota-check"]').trigger('click'); await flushPromises()
+    reject(new ZbaNetworkError()); await flushPromises()
+    expect(getPendingOperation(client, 'quota', 'group:10001')).toBeNull()
+    expect(wrapper.find('[data-testid="quota-unknown"]').exists()).toBe(false)
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="quota-refresh"]').attributes('disabled')).toBeUndefined()
   })
   it('clears confirmed draft before failed refresh and locks editing until reload', async () => {
     const listQuotas = vi.fn<ZbaClient['listQuotas']>().mockResolvedValueOnce({ items: [quota()] }).mockRejectedValueOnce(new ZbaNetworkError()).mockResolvedValue({ items: [quota({ dailyTokenLimit: 120000, revision: '2' })] })

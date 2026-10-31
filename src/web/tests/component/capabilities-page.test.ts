@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
 import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
 import { providerSnapshot } from '../fixtures/provider-marketplace'
+import { beginOperation, markOperation, clearPendingOperations, getPendingOperation } from '../../src/shared/sync/pending-operations'
 import {
   ZbaClient,
   ZbaNetworkError,
@@ -13,6 +14,7 @@ import {
 
 const mounted: Array<{ unmount: () => void }> = []
 afterEach(() => {
+  clearPendingOperations()
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
 })
 
@@ -1000,4 +1002,21 @@ describe('Capability card switch ownership', () => {
     expect(saveConfiguration).toHaveBeenCalledTimes(1)
   })
 
+})
+
+it('keeps missing provider deletion receipt reachable after lock and remount', async () => {
+  const client = clientWith({ findConfiguration: async (key: string) => ({ code: 0, receipt: { key, contractRevision: 'cfg-0.3.3', decision: 0, observedVersion: '1', committedVersion: '2', commitState: 1, applyState: 3, steps: [], deviceKeyAssignments: [] }, errors: [], replayed: false }) })
+  beginOperation(client, { key: 'synthetic-deleted-provider-key', kind: 'configuration', target: 'provider:missing-provider' })
+  markOperation(client, 'synthetic-deleted-provider-key', 'unknown')
+  const wrapper = mountPage(client); await flushPromises()
+  expect(wrapper.get('[data-testid="cap-configuration-recovery"]').text()).toContain('synthetic-deleted-provider-key')
+  await wrapper.get('[data-testid="cap-configuration-check-provider:missing-provider"]').trigger('click'); await flushPromises()
+  expect(getPendingOperation(client, 'configuration', 'provider:missing-provider')).toBeNull()
+  expect(wrapper.get('[data-testid="cap-configuration-recovery-notice"]').text()).toContain('确定回执')
+})
+it('does not settle a foreign or unknown receipt from global recovery', async () => {
+  const client = clientWith({ findConfiguration: async () => ({ code: 0, receipt: { key: 'wrong-key', decision: 0, commitState: 2 }, errors: [], replayed: false }) })
+  beginOperation(client, { key: 'synthetic-unknown', kind: 'configuration', target: 'provider:missing-provider' }); markOperation(client, 'synthetic-unknown', 'unknown')
+  const wrapper = mountPage(client); await flushPromises(); await wrapper.get('[data-testid="cap-configuration-check-provider:missing-provider"]').trigger('click'); await flushPromises()
+  expect(getPendingOperation(client, 'configuration', 'provider:missing-provider')?.key).toBe('synthetic-unknown')
 })

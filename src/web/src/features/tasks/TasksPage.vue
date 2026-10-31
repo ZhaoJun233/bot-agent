@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   ZbaClient,
-  ZbaNetworkError,
   ZbaRequestError,
   type ZbaApprovalSummary,
   type ZbaTaskFindCode,
@@ -70,14 +69,18 @@ const findCodeLabels: Record<ZbaTaskFindCode, string> = {
   unknown: '查不到受理记录（这不等于任务没有执行）'
 }
 
-/** 审批队列的一行；`stale` 表示这次决定没生效、只能只读保留。 */
+/** 审批队列的一行；stale 阻止重放旧决定，unknown 不推断是否生效。 */
 interface ApprovalRow extends ZbaApprovalSummary {
   stale: boolean
   staleReason: string | null
+  unknown: boolean
 }
 
 const tasks = ref<ZbaTaskSummary[]>([])
 const nextCursor = ref<string | null>(null)
+// 展示列表可能因交互刷新临时撤下；回退基线只能来自成功读取。
+let lastGoodTasks: ZbaTaskSummary[] = []
+let lastGoodCursor: string | null = null
 const loading = ref(false)
 const error = ref<UiError | null>(null)
 const pageError = ref<UiError | null>(null)
@@ -178,8 +181,8 @@ async function load(cursor?: string, mode: RefreshMode = 'initial'): Promise<boo
   if (cursor && loading.value) return false
   const sequence = ++loadSequence
   // 后台/交互式读取都必须保住旧快照：读取失败要显示旧数据，不能伪装成空列表。
-  const snapshot = mode === 'initial' ? null : tasks.value
-  const snapshotCursor = nextCursor.value
+  const snapshot = lastGoodTasks
+  const snapshotCursor = lastGoodCursor
   if (mode === 'interactive' && !cursor) {
     // 撤下旧快照：这期间列表显示为空 + loading，不会把旧行留在屏幕上。
     tasks.value = []
@@ -199,6 +202,8 @@ async function load(cursor?: string, mode: RefreshMode = 'initial'): Promise<boo
     nextCursor.value = page.nextCursor ?? null
     lastLoadedAt.value = new Date().toISOString()
     reconcileCancelMarks()
+    lastGoodTasks = tasks.value
+    lastGoodCursor = nextCursor.value
     return true
   } catch (cause) {
     if (unmounted || sequence !== loadSequence) return true
@@ -210,8 +215,9 @@ async function load(cursor?: string, mode: RefreshMode = 'initial'): Promise<boo
     } else {
       error.value = ui
       // 读取失败把旧快照放回去：显示旧数据 + 明确的失败提示，而不是伪装成空列表。
-      tasks.value = snapshot ?? []
+      tasks.value = snapshot
       nextCursor.value = snapshotCursor
+      reconcileCancelMarks()
     }
     // 把失败如实告诉调用方（调度器据此不签"已追平"）。
     return false
@@ -229,15 +235,16 @@ async function loadMore(): Promise<void> {
 /**
  * 本次会话里决定失败过的审批。
  *
- * 决定失败（过期/已决/策略变更/回执错配）之后不允许在同一页面上反复提交争取成功；
- * 只有重新读取队列后它确实还在、且这次是新的意图才谈得上再决定——所以这里在整个
- * 页面生命周期里保持"未生效"，并把原因摆在行上。
+ * 过期/已决等明确终结保留只读痕迹；未知和临时拒绝也禁止重放旧意图。
+ * 后者只有人工重新读取成功、确认仍 Pending 后才能发起一次新的人工决定。
  */
 const staleIds = new Set<string>()
+const unknownIds = new Set<string>()
+const retryableIds = new Set<string>()
 
 let approvalSequence = 0
 
-async function loadApprovals(): Promise<boolean> {
+async function loadApprovals(allowFreshDecision = false): Promise<boolean> {
   if (unmounted) return true
   const sequence = ++approvalSequence
   const client = props.client
@@ -249,15 +256,29 @@ async function loadApprovals(): Promise<boolean> {
     approvalError.value = null
     // 以服务端队列为准；但决定失败过的行保留为只读痕迹（它可能已经不在队列里了，
     // 也可能因为策略变更又出现了）。刷新失败时下面的 catch 不清列表，显示旧数据。
+    if (allowFreshDecision) {
+      for (const item of fresh) {
+        if (!retryableIds.has(item.id) || approvalBusy.value.includes(item.id)
+          || !(Date.parse(item.expiresAt) > Date.now())) continue
+        staleIds.delete(item.id)
+        unknownIds.delete(item.id)
+        retryableIds.delete(item.id)
+        staleReasons.delete(item.id)
+      }
+    }
     const seen = new Set(fresh.map((item) => item.id))
     const carried = approvals.value.filter((row) => row.stale && !seen.has(row.id))
     approvals.value = [
       ...fresh.map((item) => ({
         ...item,
         stale: staleIds.has(item.id),
+        unknown: unknownIds.has(item.id),
         staleReason: staleIds.has(item.id) ? (previousReason(item.id) ?? '这次决定没有生效。') : null
       })),
-      ...carried.map((row) => ({ ...row, stale: true }))
+      ...carried.map((row) => ({
+        ...row, stale: true,
+        staleReason: row.unknown ? '当前已不在待审批队列；这不证明这次决定是否生效。' : row.staleReason
+      }))
     ]
     return true
   } catch (cause) {
@@ -429,7 +450,7 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
         code: 'decide_' + result.reasonCode,
         message: '审批没有生效（' + result.reasonCode + '）：' + (result.decision || '服务端未接受这次决定') + '。'
       }
-      markStale(approval.id, decideReasonText(result.reasonCode))
+      markStale(approval.id, decideReasonText(result.reasonCode), false, !isTerminalApprovalReason(result.reasonCode))
       return
     }
     // 成功体必须与本地意图一致：错配不能显示成"已批准"。
@@ -439,7 +460,7 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
         code: 'decide_mismatch',
         message: '服务端回执与本次决定不一致（发送 ' + expected + '，回执 ' + result.decision + '），请重新读取队列确认。'
       }
-      markStale(approval.id, '回执与本次决定不一致。')
+      markStale(approval.id, '回执与本次决定不一致，结果未知；请人工重新读取队列确认。', true, true)
       return
     }
     approvals.value = approvals.value.filter((item) => item.id !== approval.id)
@@ -452,25 +473,38 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
     const ui = toUiError(cause)
     const reason = cause instanceof ZbaRequestError ? cause.reason : undefined
     // 网络中断、5xx、2xx 回执读不懂：决定可能已经生效，不能写成"未接受"。
-    const outcomeUnknown = cause instanceof ZbaNetworkError
-      || (cause instanceof ZbaRequestError && (cause.status >= 500 || (cause.status >= 200 && cause.status < 300)))
+    const outcomeUnknown = !(cause instanceof ZbaRequestError)
+      || cause.status >= 500 || (cause.status >= 200 && cause.status < 300)
+      || [408, 429].includes(cause.status)
     const reasonText = outcomeUnknown
-      ? '这次决定的结果未知，队列已重新读取，请以队列为准再操作。'
+      ? '这次决定的结果未知；请人工重新读取队列，确认仍待审批后再作新决定。'
       : decideReasonText(reason)
     decisionError.value = { ...ui, message: ui.message + reasonText }
-    markStale(approval.id, reasonText)
+    markStale(approval.id, reasonText, outcomeUnknown, outcomeUnknown || !isTerminalApprovalReason(reason ?? (cause instanceof ZbaRequestError ? cause.code : undefined)))
   } finally {
-    approvalBusy.value = approvalBusy.value.filter((id) => id !== approval.id)
-    // 失败/过期/已决定都补读独立队列；成功路径也已 kick 调度器。
-    await loadApprovals()
+    if (!unmounted && client === props.client) {
+      approvalBusy.value = approvalBusy.value.filter((id) => id !== approval.id)
+      // 自动补读只更新证据，不能替用户确认新的决定或重放 POST。
+      await loadApprovals()
+    }
   }
 }
 
-function markStale(id: string, reason: string): void {
+function isTerminalApprovalReason(reason: string | undefined): boolean {
+  return ['expired', 'approval_expired', 'already_decided', 'source_retired', 'unknown_request', 'approval_not_found'].includes(reason ?? '')
+}
+
+function markStale(id: string, reason: string, unknown = false, retryable = false): void {
+  // 在决定结束之前发出的 GET 不能充当该决定之后的 fresh Pending 证据。
+  approvalSequence += 1
   staleIds.add(id)
+  if (unknown) unknownIds.add(id)
+  else unknownIds.delete(id)
+  if (retryable) retryableIds.add(id)
+  else retryableIds.delete(id)
   staleReasons.set(id, reason)
   approvals.value = approvals.value.map((row) => (row.id === id
-    ? { ...row, stale: true, staleReason: reason }
+    ? { ...row, stale: true, unknown, staleReason: reason }
     : row))
 }
 
@@ -509,6 +543,8 @@ const prompt = ref('')
 const sessionId = ref('')
 const sourceKey = ref('')
 const timeoutSeconds = ref(120)
+let draftRevision = 0
+watch([prompt, sourceKey, sessionId, timeoutSeconds], () => { draftRevision += 1 }, { flush: 'sync' })
 const submitBlockedNote = ref<string | null>(null)
 const restartArmed = ref<string | null>(null)
 
@@ -617,6 +653,8 @@ async function submit(): Promise<void> {
   const key = newIdempotencyKey()
   // 快照本次意图：异步流程里 prompt 可能被继续编辑。
   const promptText = prompt.value
+  const submittedTimeout = timeoutSeconds.value
+  let submittedRevision = draftRevision
   let requestSent = false
   // 记录必须用 reactive 包一层：异步流程持有的是这个代理，改字段才会驱动界面。
   // 发送前登记：从这一刻起这个幂等键就占用提交入口，即使本页随后被卸载。
@@ -674,7 +712,10 @@ async function submit(): Promise<void> {
       record.error = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次提交没有发送。' }
       return
     }
-    sessionId.value = ensured.session.id
+    if (draftRevision === submittedRevision) {
+      sessionId.value = ensured.session.id
+      submittedRevision = draftRevision
+    }
     // 任务 POST 真的要离开浏览器了：登记处据此把措辞从"准备中"改成"已发出"。
     markPendingSent(pending.token)
     const accepted = await client.submitTask({
@@ -682,13 +723,14 @@ async function submit(): Promise<void> {
       sessionId: ensured.session.id,
       prompt: promptText,
       target: 'server',
-      timeoutSeconds: timeoutSeconds.value
+      timeoutSeconds: submittedTimeout
     }, key)
     record.taskId = accepted.id
     record.phase = 'accepted'
     // 受理成功才清空输入：失败时保留原意图，用户要能用同一个键核对。
     // 登记处的结算统一在 finally 里按 record.phase 做（所有退出路径都要结算）。
-    prompt.value = ''
+    if (!ownedBy(epoch, client)) return
+    if (draftRevision === submittedRevision) prompt.value = ''
     await load(undefined, 'background')
     scheduler.value?.kick()
   } catch (cause) {
@@ -859,7 +901,10 @@ function resetForSession(): void {
   detailBusy.value = false
   tasks.value = []
   nextCursor.value = null
+  lastGoodTasks = []
+  lastGoodCursor = null
   approvals.value = []
+  approvalBusy.value = []
   approvalsLoaded.value = false
   detail.value = null
   detailError.value = null
@@ -873,6 +918,8 @@ function resetForSession(): void {
   // 旧会话的"未生效"标记属于旧身份，不能带进新会话。
   staleIds.clear()
   staleReasons.clear()
+  unknownIds.clear()
+  retryableIds.clear()
   error.value = null
   pageError.value = null
   lastLoadedAt.value = null
@@ -943,8 +990,11 @@ watch(() => props.writesEnabled, (value) => { if (!value) abandonInFlight() })
 
 /** 用户显式触发的读取：撤下旧快照再读，失败把旧快照放回去。 */
 async function reloadAll(): Promise<void> {
+  const client = props.client
+  const epoch = ownership
   await load(undefined, 'interactive')
-  await loadApprovals()
+  if (unmounted || client !== props.client || epoch !== ownership) return
+  await loadApprovals(true)
 }
 
 /**
@@ -976,6 +1026,8 @@ onBeforeUnmount(() => {
   // 未决提交的最小关联信息留在 pending-intent 里（内存），
   // prompt/结果/请求体一律不保留。
   tasks.value = []
+  lastGoodTasks = []
+  lastGoodCursor = null
   approvals.value = []
   detail.value = null
 })
@@ -1196,8 +1248,8 @@ defineExpose({
           >
             <div class="task-approval-head">
               <strong>{{ approval.toolId }}</strong>
-              <span v-if="approval.stale" class="status-badge" data-tone="bad" :data-testid="'task-approval-stale-' + index">
-                未生效
+              <span v-if="approval.stale" class="status-badge" :data-tone="approval.unknown ? 'warn' : 'bad'" :data-testid="'task-approval-stale-' + index">
+                {{ approval.unknown ? '结果未知' : '未生效' }}
               </span>
               <span v-else class="status-badge" data-tone="warn">{{ formatTime(approval.expiresAt) }} 过期</span>
             </div>

@@ -6,6 +6,7 @@ import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { newNonce } from '../configuration/draft'
 import RegisteredPluginSwitch from './RegisteredPluginSwitch.vue'
+import { beginOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -31,19 +32,23 @@ const baseline = ref<ZbaQuota | null>(null)
 const draft = ref('')
 // Full immutable intent, not just the key: reconciliation must match its source and limit.
 const pending = ref<ZbaQuotaSaveRequest | null>(null)
+const ownerClient = props.client
+const recovery = computed(() => pendingOperations(ownerClient, 'quota').find(item => item.state !== 'settled') ?? null)
+const retryAllowed = ref(false)
+const retryArmed = ref(false)
 const discard = ref<'close' | 'editor' | null>(null)
 const editorHeading = ref<HTMLElement | null>(null)
 const listHeading = ref<HTMLElement | null>(null)
 let alive = true
 let readSequence = 0
-const owns = (client: ZbaClient): boolean => alive && props.client === client
+const owns = (client: ZbaClient): boolean => alive && props.client === client && client === ownerClient
 const canList = computed(() => props.features.includes('quotas.list'))
-const canWrite = computed(() => props.active && props.mode === 'admin' && props.writesEnabled
+const canWrite = computed(() => props.client === ownerClient && props.active && props.mode === 'admin' && props.writesEnabled
   && canList.value && props.features.includes('quotas.save') && props.features.includes('quotas.find'))
-const canQuery = computed(() => props.active && props.mode === 'admin' && props.writesEnabled && props.features.includes('quotas.find'))
-const unsettled = computed(() => pending.value !== null)
-const dirty = computed(() => baseline.value !== null && draft.value !== String(baseline.value.dailyTokenLimit))
-const editable = computed(() => canWrite.value && !loading.value && !pluginBusy.value && phase.value === 'idle')
+const canQuery = computed(() => props.client === ownerClient && props.active && props.mode === 'admin' && props.writesEnabled && props.features.includes('quotas.find'))
+const unsettled = computed(() => pending.value !== null || recovery.value !== null)
+const dirty = computed(() => baseline.value !== null && (!/^\d+$/.test(draft.value) || Number(draft.value) !== baseline.value.dailyTokenLimit))
+const editable = computed(() => canWrite.value && !loading.value && !pluginBusy.value && !unsettled.value && phase.value === 'idle')
 const number = (value: number): string => value.toLocaleString('zh-CN')
 const resetTime = (value: string): string => new Date(value).toLocaleString('zh-CN', { hour12: false })
 function auth(cause: unknown): boolean {
@@ -53,7 +58,7 @@ function auth(cause: unknown): boolean {
 }
 
 async function load(): Promise<boolean> {
-  if (!props.active || !canList.value || loading.value || unsettled.value) return false
+  if (props.client !== ownerClient || !props.active || !canList.value || loading.value || unsettled.value) return false
   const client = props.client
   const sequence = ++readSequence
   loading.value = true
@@ -121,6 +126,8 @@ async function rebase(): Promise<void> {
 async function confirmed(quota: ZbaQuota): Promise<void> {
   // Clear the already-committed draft BEFORE reading usage. A failed read must never offer replay.
   pending.value = null
+  retryAllowed.value = false
+  retryArmed.value = false
   baseline.value = null
   draft.value = ''
   discard.value = null
@@ -141,58 +148,137 @@ async function save(): Promise<void> {
     validation.value = '请输入允许范围内的整数 Token 额度。'
     return
   }
-  const client = props.client
-  const request: ZbaQuotaSaveRequest = { sourceKey: base.sourceKey, expectedRevision: base.revision,
-    idempotencyKey: newNonce(), dailyTokenLimit: limit }
+  const request: ZbaQuotaSaveRequest = Object.freeze({ sourceKey: base.sourceKey, expectedRevision: base.revision,
+    idempotencyKey: newNonce(), dailyTokenLimit: limit })
+  try {
+    beginOperation(ownerClient, { key: request.idempotencyKey, kind: 'quota', target: request.sourceKey,
+      meta: { sourceKey: request.sourceKey, dailyTokenLimit: request.dailyTokenLimit } })
+  } catch {
+    validation.value = '此来源已有未决操作或登记已满；请先核对，不会生成另一笔写入。'
+    return
+  }
   pending.value = request
+  await send(request)
+}
+function rejected(cause: unknown): boolean {
+  return cause instanceof ZbaRequestError && ((cause.status === 409 && cause.code === 'quota_revision_conflict')
+    || (cause.status === 503 && cause.code === 'quota_receipt_capacity')
+    || ([400, 401, 403, 404].includes(cause.status) && cause.code !== 'http_error'))
+}
+let localSettlement: string | null = null
+function activeKey(key: string): boolean {
+  return pendingOperations(ownerClient, 'quota').some(item => item.key === key && item.state !== 'settled')
+}
+function settle(key: string): void {
+  localSettlement = key
+  try { markOperation(ownerClient, key, 'settled') } finally { localSettlement = null }
+}
+function matches(quota: ZbaQuota, sourceKey: unknown, limit: unknown): boolean {
+  return quota.sourceKey === sourceKey && quota.dailyTokenLimit === limit
+}
+async function send(request: ZbaQuotaSaveRequest): Promise<void> {
+  const client = ownerClient
   phase.value = 'saving'
+  retryAllowed.value = false
+  retryArmed.value = false
   error.value = null
   validation.value = ''
   notice.value = ''
   try {
     const result = await client.saveQuota(request)
-    if (!owns(client)) return
-    await confirmed(result.quota)
+    if (!matches(result.quota, request.sourceKey, request.dailyTokenLimit)) throw new Error('quota_receipt_mismatch')
+    // Shared settlement must survive lock/unmount; only UI work depends on ownership.
+    if (!activeKey(request.idempotencyKey)) return
+    settle(request.idempotencyKey)
+    if (owns(client)) await confirmed(result.quota)
   } catch (cause) {
+    if (!activeKey(request.idempotencyKey)) return
+    if (rejected(cause)) settle(request.idempotencyKey)
+    else markOperation(client, request.idempotencyKey, 'unknown')
     if (!owns(client)) return
-    if (cause instanceof ZbaRequestError && cause.status === 409 && cause.code === 'quota_revision_conflict') {
+    if (rejected(cause)) {
       pending.value = null
-      phase.value = 'conflict'
-      notice.value = '额度已被其他人修改。草稿已保留；读取最新后再核对，绝不会自动重试保存。'
-    } else if (cause instanceof ZbaRequestError && [400, 401, 403, 404].includes(cause.status) && cause.code !== 'http_error') {
-      pending.value = null
-      phase.value = 'idle'
-      if (!auth(cause)) error.value = toUiError(cause)
+      if (cause instanceof ZbaRequestError && cause.code === 'quota_revision_conflict') {
+        phase.value = 'conflict'
+        notice.value = '额度已被其他人修改。草稿已保留；读取最新后再核对，绝不会自动重试保存。'
+      } else {
+        phase.value = 'idle'
+        if (!auth(cause)) error.value = toUiError(cause)
+      }
     } else {
-      // Transport/schema/5xx and key-payload conflict provide no matching commit proof.
       phase.value = 'unknown'
       error.value = toUiError(cause)
     }
   }
 }
-async function check(): Promise<void> {
+async function retry(): Promise<void> {
   const request = pending.value
-  if (!request || phase.value !== 'unknown' || !canQuery.value) return
-  const client = props.client
+  if (!request || !canWrite.value || pluginBusy.value || phase.value !== 'unknown' || !retryAllowed.value
+    || recovery.value?.key !== request.idempotencyKey) return
+  if (!retryArmed.value) { retryArmed.value = true; return }
+  // Reuse exactly the live owner's immutable request; never reconstruct one after reopening.
+  await send(request)
+}
+async function check(): Promise<void> {
+  const record = recovery.value
+  if (!record || phase.value !== 'unknown' || !canQuery.value) return
+  const client = ownerClient
   phase.value = 'checking'
   error.value = null
   validation.value = ''
   try {
-    const result = await client.findQuota(request.idempotencyKey)
-    if (!owns(client)) return
-    if (result.found && result.quota.sourceKey === request.sourceKey && result.quota.dailyTokenLimit === request.dailyTokenLimit) {
-      await confirmed(result.quota)
+    const result = await client.findQuota(record.key)
+    if (!activeKey(record.key)) return
+    if (result.found && matches(result.quota, record.meta.sourceKey, record.meta.dailyTokenLimit)) {
+      settle(record.key)
+      if (owns(client)) await confirmed(result.quota)
       return
     }
+    if (!owns(client)) return
+    retryAllowed.value = !result.found && pending.value?.idempotencyKey === record.key
+    retryArmed.value = false
     phase.value = 'unknown'
     notice.value = result.found ? '回执与本次提交不匹配，仍无法确认结果。请继续核对原操作键。'
-      : '暂未找到回执，但不能确认没有执行。操作键与草稿保留，只能继续核对，不会重新保存。'
+      : '暂未找到回执，但不能确认没有执行。原操作键保留，不会自动重新保存；原视图可明确确认后按原请求同键重试。'
   } catch (cause) {
+    if (!activeKey(record.key)) return
+    markOperation(client, record.key, 'unknown')
     if (!owns(client)) return
     phase.value = 'unknown'
+    retryAllowed.value = false
+    retryArmed.value = false
     if (!auth(cause)) error.value = toUiError(cause)
   }
 }
+async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement | null): Promise<boolean> {
+  if (reason === 'lock') return true // The registry keeps quota and plugin operation keys independently.
+  if (unsettled.value || pluginBusy.value) {
+    validation.value = '提交结果尚未确认，请先核对原操作键。'
+    return false
+  }
+  if (dirty.value) { discard.value = 'close'; return false }
+  return true
+}
+defineExpose({ requestLeave })
+watch(recovery, (record, previous) => {
+  if (record) {
+    if (!pending.value) {
+      phase.value = 'unknown'
+      notice.value = '已恢复原操作键，只能核对先前提交；不会构造或重发请求。'
+    }
+  } else if (previous && localSettlement !== previous.key) {
+    pending.value = null
+    retryAllowed.value = false
+    retryArmed.value = false
+    baseline.value = null
+    draft.value = ''
+    error.value = null
+    validation.value = ''
+    phase.value = 'reload-required'
+    notice.value = '原提交已有确定结论，请读取最新额度后再编辑。'
+    if (props.active) void load()
+  }
+}, { immediate: true, flush: 'sync' })
 // Disabling the submitted form can drop focus to body. Keep Escape/Tab owned by the dialog.
 watch(() => unsettled.value || pluginBusy.value, (value) => {
   if (value && props.active) void nextTick(() => listHeading.value?.focus())
@@ -223,8 +309,14 @@ onBeforeUnmount(() => { alive = false; ++readSequence })
     <p v-if="validation" class="notice bad" role="alert" data-testid="quota-validation">{{ validation }}</p>
     <p v-if="notice" class="notice" role="status" data-testid="quota-notice">{{ notice }}</p>
     <div v-if="unsettled" class="notice warn" role="status" data-testid="quota-unknown">
-      <p>{{ phase === 'saving' ? '正在提交，请等待确认。' : '提交结果未知，操作键已保留。关闭、修改、再次保存均已锁定，只能核对这次提交。' }}</p>
+      <p>{{ phase === 'saving' ? '正在提交，请等待确认。' : '提交结果未知，原操作键已保留。请先核对；暂未找到回执时，仅原视图可明确确认后按原键重试。' }}</p>
       <button v-if="phase !== 'saving'" type="button" data-testid="quota-check" :disabled="!canQuery || phase === 'checking'" @click="check">{{ phase === 'checking' ? '正在核对…' : '核对提交结果' }}</button>
+      <button v-if="retryAllowed && pending && phase === 'unknown' && !retryArmed" type="button" data-testid="quota-retry" :disabled="!canWrite || pluginBusy" @click="retry">使用原操作键重试…</button>
+      <div v-if="retryArmed" data-testid="quota-retry-confirmation">
+        <p>只重试先前的同一来源、额度和版本，不会生成新操作键。确认继续？</p>
+        <button type="button" data-testid="quota-retry-confirm" :disabled="!canWrite || pluginBusy || phase !== 'unknown'" @click="retry">确认原键重试</button>
+        <button type="button" @click="retryArmed = false">取消</button>
+      </div>
     </div>
     <div v-if="phase === 'conflict'" class="notice warn" data-testid="quota-conflict">
       <p>读取最新额度不会替换你的草稿。核对后才能再次保存。</p>
@@ -252,7 +344,7 @@ onBeforeUnmount(() => { alive = false; ++readSequence })
       <h3 ref="editorHeading" tabindex="-1">{{ baseline.displayName }} · 每日额度</h3>
       <p class="muted" data-testid="quota-latest">服务端当前额度 {{ number(baseline.dailyTokenLimit) }} Token</p>
       <label for="quota-limit">每日 Token 额度</label>
-      <input id="quota-limit" v-model="draft" type="number" inputmode="numeric" step="1" :min="baseline.minimumDailyTokenLimit" :max="baseline.maximumDailyTokenLimit" :disabled="!editable" data-testid="quota-limit" required @input="discard = null; validation = ''">
+      <input id="quota-limit"  :value="draft" type="number" inputmode="numeric" step="1" :min="baseline.minimumDailyTokenLimit" :max="baseline.maximumDailyTokenLimit" :disabled="!editable" data-testid="quota-limit" required @input="draft = ($event.target as HTMLInputElement).value; discard = null; validation = ''">
       <p class="muted">允许范围：{{ number(baseline.minimumDailyTokenLimit) }}–{{ number(baseline.maximumDailyTokenLimit) }}。每次只保存当前来源，不修改其他来源。</p>
       <div class="editor-actions"><button type="submit" class="primary" data-testid="quota-save" :disabled="!editable || !dirty">保存额度</button>
         <button type="button" data-testid="quota-cancel-edit" :disabled="unsettled" @click="requestClose(true)">结束编辑</button></div>

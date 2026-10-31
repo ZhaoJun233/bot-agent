@@ -186,7 +186,7 @@ test('不可信文本：服务端摘要里的脚本/标签按文本渲染，不�
 /**
  * S4-M3：迟到的保存结果不许批准一个后来新建的离开框。
  *
- * 真实场景：用户点「保存并锁定」→ 保存请求已发出 → 等不及，按「继续编辑」
+ * 真实场景：用户点「保存并退出管理员」→ 保存请求已发出 → 等不及，按「继续编辑」
  * 关掉这个框 → 再点任务导航，弹出新的离开框 → 此时旧保存的响应才回来。
  * 旧回调如果直接 resolve，就会替用户批准那个一个选择都没做过的新框，
  * 并把页面跳到任务页。
@@ -219,7 +219,8 @@ test('未保存保护：旧保存迟到返回时不得替新离开框做决定',
     await route.fulfill({ response })
   })
 
-  await page.getByTestId('lock').click()
+  await page.getByTestId('nav-overview').click()
+  await page.getByTestId('disable-admin').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-save').click()
   await saveSeen
@@ -227,6 +228,7 @@ test('未保存保护：旧保存迟到返回时不得替新离开框做决定',
   // 用户放弃这个框，再从导航开一个新的：两次 requestLeave 属于不同代际。
   await page.getByTestId('config-leave-stay').click()
   await expect(page.getByTestId('config-leave-dialog')).toHaveCount(0)
+  await page.getByTestId('nav-configuration').click()
   await page.getByTestId('nav-tasks').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
 

@@ -142,6 +142,13 @@ export class EventScheduler {
     }
   }
 
+  private readonly authListeners = new Set<(cause: ZbaRequestError) => void>()
+
+  onAuthFailure(listener: (cause: ZbaRequestError) => void): () => void {
+    this.authListeners.add(listener)
+    return () => { this.authListeners.delete(listener) }
+  }
+
   onSnapshot(listener: (snapshot: SchedulerSnapshot) => void): () => void {
     this.listeners.add(listener)
     listener(this.snapshot())
@@ -289,6 +296,7 @@ export class EventScheduler {
       // 停在 stale、不续排；换令牌会 release 重建，显式 kick/切回前台仍可再试一轮。
       if (cause instanceof ZbaRequestError && (cause.status === 401 || cause.status === 403)) {
         this.clearTimer()
+        for (const listener of [...this.authListeners]) listener(cause)
         return false
       }
       this.schedule(this.backoffDelay())
