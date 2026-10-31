@@ -1376,9 +1376,12 @@ public static partial class Program
     {
         Section("S12 群历史补录：留得住 + 看得见 + 面板可见");
 
-        const int openAiPort = 17811;
-        const int botWsPort = 13021;
-        const int panelPort = 18085;
+        // 端口一律走 FreePort：写死时会被别的进程的一条普通出站连接占成临时端口，
+        // 面板 HttpListener 绑不上（实测现象：「绑定 http://127.0.0.1:18085/ 失败：另一个程序正在使用此文件」，
+        // 随后 /api/* 全部连接被拒）。见 FreePort 的注释。
+        var openAiPort = FreePort(17811);
+        var botWsPort = FreePort(13021);
+        var panelPort = FreePort(18085);
         const string panelToken = "synthetic-s12-panel-token";
         const long groupId = 66663;
         var dataDir = NewDataDir("s12");
@@ -1414,6 +1417,9 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板在协议端之后才起（CompositionRoot 里 web.Start() 排在 Agent.Start() 之后）：
+        // 只等 ws 端口不足以说明 /api/* 可用，必须单独等面板端口。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001 };
 

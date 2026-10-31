@@ -74,6 +74,35 @@
 结论：预案的 ②③④⑤ 步在隔离环境可执行且可验证；D3 顺带证明"新库配旧二进制"会被明确拒绝，
 不会静默跑坏数据 —— 这正是必须"先恢复数据库"的原因。
 
+### 4.1 跨版本演练（.NET 10 → .NET 8 → .NET 10，#105）
+
+上面 D1–D5 是**同版本内**的回滚演练。#105 又在同一套脚本上做了一次**真跨版本**演练，总用时 **10 s**：
+
+| 步 | 动作 | 实测 |
+| --- | --- | --- |
+| S1 | .NET 10 宿主首启（新数据目录） | `/healthz` 200（1 s）、`/readyz` 503、库 `user_version=10` / 表 29 / 4 096 B |
+| S2 | 面板保存一条行为配置 | **HTTP 503**（`configuration_rejected` / `code=10 CommitFailed`）—— 见 §4.2 |
+| S3 | 停写 + `VACUUM INTO` | 快照 274 432 B，0.04 s |
+| S4 | 换回 .NET 8 旧产物 + 恢复快照 | `/healthz` 200、`/status` running、库仍 10 / 29 / 274 432 B |
+| S5 | 再前滚 .NET 10 | `/healthz` 200、库仍 10 / 29 / 274 432 B |
+
+**关键结论**：本次升级没有改 schema（`src/BotAgent.Storage/AppDatabase.cs` 零改动），
+所以 .NET 8 旧二进制**能直接读** .NET 10 建的库。这是**特例，不是通则** —— 任何动了 schema 的升级
+仍然只能靠快照回退（见 §6）。
+
+### 4.2 回滚后验证时的一个坑：`POST /api/settings` 要发**最小体**
+
+跨版本演练里 S2 曾返回 503，一度被误判成升级回归。实测对照：
+
+| 请求体 | net10 宿主 | net8 宿主 |
+| --- | --- | --- |
+| 把 `GET /api/settings` 的 167 键 `runtime` 摊平后原样 POST | `code=10 configuration_rejected`，回读不变 | **同样 503**，回读不变 |
+| 最小体 `{"groupCooldownSeconds":7}` | **HTTP 200**，回读 7 | 同样成功 |
+
+原因：旧面板口径的 `POST /api/settings` 只认**顶层扁平字段**（`WebUiServer.Settings.cs:229-230` 的
+`LegacyField<T>` 逐字段取值），整包回灌会被判 `CommitFailed`（`src/BotAgent.Storage/ConfigurationStore.cs:360`）。
+→ 该行为与 .NET 版本无关。**验证回滚后的写入能力时，请只发要改的那几个字段。**
+
 ---
 
 ## 5. 常见故障与处置
@@ -101,5 +130,6 @@
 
 ## 7. 相关文档
 
-- [基线报告](../baseline/report-2026-10-31.md) —— §4.4 是本次演练的原始数据
+- [基线报告](../baseline/report-2026-10-31.md) —— §4.4 是 D1–D5 演练的原始数据
+- [.NET 10 升级回归验收报告](upgrade-acceptance-dotnet10.md) —— §4 是 S1–S5 跨版本演练的原始数据
 - [分支模型与合并路径](../architecture/branching-and-merge-path.md) —— 回滚后如何重新发版
