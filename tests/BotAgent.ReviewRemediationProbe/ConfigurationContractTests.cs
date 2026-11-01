@@ -1504,10 +1504,12 @@ internal static class ConfigurationContractTests
                 && saved.Body["receipt"]!["key"]!.GetValue<string>() == operation
                 && !saved.Body.ToJsonString().Contains("synthetic-token-after", StringComparison.Ordinal),
                 "actual_http_commits_configuration_and_fixed_secrets_before_reported_runtime_steps");
+            // #103：密钥来源从环境变量切到库是「请求级」材料，模型投影必须当场 Applied。
+            // 旧断言把「切绑定要重启、整条链路安全静默」当成了期望行为，等于把 bug 固化成规范。
             Check(saved.Body["receipt"]!["steps"]!.AsArray().Any(step => step!["step"]!.GetValue<int>() == (int)ApplyStep.ModelProjection
-                && step["state"]!.GetValue<int>() == (int)ApplyState.RestartRequired)
+                && step["state"]!.GetValue<int>() == (int)ApplyState.Applied)
                 && saved.Body["receipt"]!["commitState"]!.GetValue<int>() == (int)CommitState.Committed,
-                "actual_env_to_database_binding_commit_reports_model_restart_not_false_applied");
+                "actual_env_to_database_binding_commit_is_hot_applied");
             var after = await Read();
             Check(after.Body["version"]!.ToJsonString() == saved.Body["currentVersion"]!.ToJsonString()
                 && after.Body["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 17

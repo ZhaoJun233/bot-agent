@@ -705,10 +705,10 @@ public sealed partial class SettingsStore : ISettingsRepository
         return desired.Select(provider =>
         {
             var running = captured.FirstOrDefault(candidate => candidate.Id == provider.Id);
+            // SecretKeyRef 不在「需重启」判定里：密钥是请求级材料，换来源（env ↔ 库）运行期就能生效（#103）。
             var changed = running is null || running.IsEnabled != provider.IsEnabled || running.Priority != provider.Priority
                 || running.BaseUrl != provider.BaseUrl || running.ModelName != provider.ModelName
-                || running.SecretKeyRef != provider.SecretKeyRef || running.Protocol != provider.Protocol
-                || running.Options != provider.Options;
+                || running.Protocol != provider.Protocol || running.Options != provider.Options;
             var apply = changed ? ApplyState.RestartRequired : ApplyState.NotStarted;
             var binding = ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef);
             ReadField<string> Field(string requested, string display, int bit, bool name)

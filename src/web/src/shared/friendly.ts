@@ -55,6 +55,14 @@ const stateNames: Record<string, string> = {
 const errorNames: Record<string, string> = {
   model_timeout: '模型响应超时',
   model_unavailable: '模型暂时不可用',
+  model_auth_failed: '模型拒绝了这个密钥（401）',
+  model_http_error: '模型接口返回错误',
+  model_malformed_response: '模型返回的内容无法解析',
+  upstream_empty: '模型没有给出回复内容',
+  provider_secret_unavailable: '模型凭据不可用，本轮没有发起调用',
+  provider_route_unavailable: '模型路由不可用，本轮没有发起调用',
+  provider_restart_required: '模型供应商配置需要重启后生效',
+  endpoint_authorization_required: '这个模型端点还没被授权',
   disabled_by_operator: '已被手动停用',
   rate_limited: '请求太频繁',
   unauthorized: '令牌无效'

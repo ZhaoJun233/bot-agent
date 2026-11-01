@@ -14,7 +14,7 @@ public static partial class Program
 {
     private static async Task RunModelConfigScenarioAsync()
     {
-        Section("S21 模型接口保存与采用（绑定变更需重启；稳定引用热更新，不回滚）");
+        Section("S21 模型接口保存与采用（绑定切换即热生效；密钥请求级现取，不回滚）");
 
         const int openAiPortA = 17825; // 环境变量指向的“旧”中转
         const int openAiPortB = 17826; // 面板改成的新中转
@@ -105,22 +105,33 @@ public static partial class Program
             using var res = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", content, cts.Token);
             Check("面板保存模型接口（200）", res.IsSuccessStatusCode, res.StatusCode.ToString());
             var outcome = JsonNode.Parse(await res.Content.ReadAsStringAsync(cts.Token))?["configurationResult"];
-            Check("绑定变更保留提交事实且如实报告模型需重启",
+            var modelSteps = (outcome?["receipt"]?["steps"] as JsonArray)?.OfType<JsonObject>().ToList()
+                ?? new List<JsonObject>();
+            // 凭据来源从 env 切到库是「请求级」材料：面板第一次填 Key 时必然发生，不该要求重启（#103）。
+            Check("★ 绑定变更后模型投影当场 Applied（不再报需重启）",
                 outcome?["receipt"]?["commitState"]?.GetValue<int>() == 1
-                && (outcome?["receipt"]?["steps"] as JsonArray)?.OfType<JsonObject>()
-                    .Any(step => step["step"]?.GetValue<int>() == 2 && step["state"]?.GetValue<int>() == 3) == true,
-                "committed/restart flags only");
+                && modelSteps.Any(step => step["step"]?.GetValue<int>() == 2 && step["state"]?.GetValue<int>() == 1),
+                string.Join(",", modelSteps.Select(step => step["step"]?.ToJsonString() + ":" + step["state"]?.ToJsonString())));
         }
 
-        // ---- 3) env→DB 是绑定变化：持久提交不等于重建已捕获路由，不得把新凭据发给旧端点。 ----
-        var requestsBeforePendingBinding = openAiA.Requests.Count;
-        var unavailableBefore = bot.OutputLines.Count(line => line.Contains("provider_secret_unavailable", StringComparison.Ordinal));
-        await protocol.SendGroupMessageAsync(groupId, 20001, "群友A", "synthetic binding pending", 51002, mentionBot: true, ct: cts.Token);
-        var bindingDenied = await WaitUntilAsync(() => bot.OutputLines.Count(line => line.Contains("provider_secret_unavailable", StringComparison.Ordinal))
-            > unavailableBefore, TimeSpan.FromSeconds(10));
-        Check("绑定待重启时真实路由拒绝且不向旧新端点发送请求", bindingDenied
-            && openAiA.Requests.Count == requestsBeforePendingBinding && openAiB.Requests.Count == 0,
-            $"denied={bindingDenied}; oldDelta={openAiA.Requests.Count - requestsBeforePendingBinding}; newCount={openAiB.Requests.Count}");
+        // ---- 3) env→DB 是绑定变化，但密钥是请求级材料：不重启就要打到新端点、带新密钥、用新模型名。 ----
+        var requestsBeforeBindingSwitch = openAiA.Requests.Count;
+        openAiB.ClearRequests();
+        openAiB.EnqueueReply("""{"suitability": 90, "reply": "面板密钥当场生效"}""");
+        await protocol.SendGroupMessageAsync(groupId, 20001, "群友A", "synthetic binding switched", 51002, mentionBot: true, ct: cts.Token);
+        var switchedToB = await WaitUntilAsync(() => openAiB.Requests.Any(request => UserTexts(request)
+            .Any(text => text.Contains("synthetic binding switched"))), TimeSpan.FromSeconds(25));
+        var switchedIndex = Enumerable.Range(0, openAiB.Requests.Count).LastOrDefault(index => UserTexts(openAiB.Requests[index])
+            .Any(text => text.Contains("synthetic binding switched")), -1);
+        var switchedModel = switchedIndex >= 0 ? openAiB.Requests[switchedIndex]["model"]?.GetValue<string>() : null;
+        var switchedAuthorization = switchedIndex >= 0 ? openAiB.RequestAuthorizations[switchedIndex] : null;
+        Check("★ 绑定切换后不重启也走新端点（旧端点不再收请求）",
+            switchedToB && openAiA.Requests.Count == requestsBeforeBindingSwitch,
+            $"new={openAiB.Requests.Count}; oldDelta={openAiA.Requests.Count - requestsBeforeBindingSwitch}");
+        Check("★ 新请求带的是面板里填的新密钥",
+            switchedAuthorization?.Contains(newKey, StringComparison.Ordinal) == true,
+            switchedAuthorization is null ? "no authorization header" : "authorization presence only");
+        Check("★ 新请求用的是面板里填的模型名", switchedModel == "model-from-panel", "model equality only");
 
         // ---- 4) 落库与“密钥不落 settings” ----
         await Task.Delay(700);

@@ -933,8 +933,10 @@ internal static class CompositionRoot
         if (ConfigurationBridge.ReadConfigurationVersion(connection) != expected)
             throw new InvalidOperationException("configuration_superseded");
         var desired = ModelProviderStore.LoadAllInTransaction(connection).ToDictionary(provider => provider.Id, StringComparer.Ordinal);
+        // 凭据来源切换（env:QQCHAT_API_KEY ↔ secret:apiKey）不算装配级变化：密钥是请求级材料，
+        // 每次发请求现取，换来源不需要重建客户端。把它当重启条件会让「第一次在面板填 Key」静默哑火半天（#103）。
         var restart = desired.Count != captured.Count || captured.Any(provider => !desired.TryGetValue(provider.Id, out var current)
-            || current.SecretKeyRef != provider.SecretKeyRef || current.IsEnabled != provider.IsEnabled || current.Priority != provider.Priority
+            || current.IsEnabled != provider.IsEnabled || current.Priority != provider.Priority
             || current.Protocol != provider.Protocol || current.Options != provider.Options
             || provider.Id != "primary" && (current.BaseUrl != provider.BaseUrl || current.ModelName != provider.ModelName));
         transaction.Commit();
@@ -980,7 +982,11 @@ internal static class CompositionRoot
             using var transaction = connection.BeginTransaction(deferred: true);
             var desired = ModelProviderStore.LoadAllInTransaction(connection)
                 .FirstOrDefault(provider => string.Equals(provider.Id, captured.Id, StringComparison.Ordinal));
-            if (desired is null || !desired.IsEnabled || desired.SecretKeyRef != captured.SecretKeyRef
+            // 只把「装配级」差异当硬边界：协议与选项变了确实要重建客户端。
+            // 凭据来源（SecretKeyRef）是请求级材料：面板第一次填 Key 时它从 env:QQCHAT_API_KEY 变成
+            // secret:apiKey，如果这里也要求相等，整条路由会被拒 → 所有模型调用进入安全静默（#103 R1）。
+            // 端点授权在保存时已经校验过（SettingsStore 的 IsAuthorizedModelEndpoint），运行期只需能解析出密钥。
+            if (desired is null || !desired.IsEnabled
                 || desired.Protocol != captured.Protocol || desired.Options != captured.Options) return null;
             var binding = ModelProviderStore.ClassifyCredentialBinding(desired.SecretKeyRef);
             if (binding == CredentialBindingState.Unclassified

@@ -36,6 +36,8 @@ import {
   type SecretAction,
   type SecretDrafts
 } from './draft'
+import { errorName } from '../../shared/friendly'
+import { restartNoticeMessage } from './receipt-notice'
 import { fieldLabel } from './field-labels'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
@@ -299,6 +301,8 @@ const saveCodeMessages: Record<number, string> = {
   15: '旧配置需要人工复核。',
   16: '契约版本不受支持。'
 }
+
+const restartNotice = computed(() => restartNoticeMessage(receipt.value))
 
 function applyLabel(value: number): string {
   return applyLabels[value] ?? `未知状态 ${value}`
@@ -1482,11 +1486,11 @@ defineExpose({
         <ol v-if="receipt.steps.length > 0" class="receipt-steps" data-testid="config-receipt-steps">
           <li v-for="step in receipt.steps" :key="step.step">
             {{ stepLabels[step.step] ?? `步骤 ${step.step}` }}：{{ applyLabel(step.state) }}
-            <span v-if="step.errorCode" class="cell-sub">{{ step.errorCode }}</span>
+            <span v-if="step.errorCode" class="cell-sub">{{ errorName(step.errorCode) ?? step.errorCode }}</span>
           </li>
         </ol>
-        <p v-if="receipt.applyState === 3" class="inline-notice warn">
-          保存已提交，但需要重启后完全生效；首版不提供远程重启按钮。
+        <p v-if="restartNotice" class="inline-notice warn" data-testid="config-restart-notice">
+          {{ restartNotice }}
         </p>
       </section>
 

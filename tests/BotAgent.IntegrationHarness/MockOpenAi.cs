@@ -13,6 +13,7 @@ public sealed class MockOpenAi : IDisposable
 {
     private readonly HttpListener _listener = new();
     private readonly List<JsonObject> _requests = new();
+    private readonly List<string?> _requestAuthorizations = new();
     private string? _lastAuthorization;
     private readonly object _gate = new();
     private readonly Queue<string> _scriptedReplies = new();
@@ -56,6 +57,19 @@ public sealed class MockOpenAi : IDisposable
         }
     }
 
+    /// <summary>与 Requests 一一对应的 Authorization 头（没带就是 null）。
+    /// 换密钥、换端点这类断言要按请求索引取，不能只看“最近一次”。</summary>
+    public IReadOnlyList<string?> RequestAuthorizations
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _requestAuthorizations.ToArray();
+            }
+        }
+    }
+
     /// <summary>最近一次带 Authorization 的请求发的那个头（服务器 agent 用哪把密钥，就靠它钉住）。</summary>
     public string? LastAuthorization
     {
@@ -74,6 +88,7 @@ public sealed class MockOpenAi : IDisposable
         lock (_gate)
         {
             _requests.Clear();
+            _requestAuthorizations.Clear();
         }
     }
 
@@ -332,6 +347,7 @@ public sealed class MockOpenAi : IDisposable
             lock (_gate)
             {
                 _requests.Add(payload);
+                _requestAuthorizations.Add(string.IsNullOrWhiteSpace(authorization) ? null : authorization);
                 if (!string.IsNullOrWhiteSpace(authorization))
                 {
                     _lastAuthorization = authorization;

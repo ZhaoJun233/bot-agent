@@ -1,0 +1,85 @@
+# 模型配置的生效路径（#103）
+
+回答一个问题：**在面板里改一个模型配置，什么时候立刻生效，什么时候必须重启？**
+这份文件是那次 P1 故障（「改了模型配置但实际调用还是旧的」）的结论沉淀，
+改动这条链路前请先读一遍这里的判定规则。
+
+---
+
+## 1. 三段链路
+
+```
+面板/ZBA 提交  →  持久化（一个事务）  →  回读投影  →  运行期每请求解析路由
+                  settings +              ProviderConfigurationView   TryBuildCurrentProviderRoute
+                  model_providers +       （applyState 来自比对）     + ResolveProviderSecret*
+                  secrets
+```
+
+| 段 | 代码位置 | 说明 |
+| --- | --- | --- |
+| 持久化 | `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | 同一个事务写 settings JSON、`model_providers` 行与 `secrets` 行；密钥正文只进 `secrets` |
+| 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`SettingsStore.cs:695`） | `applyState` 由「库里这一行 vs 启动时捕获的那一行」比对得出 |
+| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.cs:976` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
+| 发送 | `src/BotAgent.Model/OpenAiClient.cs:278` `SendThroughProvidersAsync` | 拿不到路由就 `provider_secret_unavailable`，按设计**不降级到旧配置** |
+
+关键点：**没有「已建好的模型客户端」这层缓存**。路由是每次请求现拼的
+
+---
+
+## 2. 判定规则：请求级 vs 装配级
+
+| 字段 | 级别 | 为什么 |
+| --- | --- | --- |
+| API Key / 凭据来源（`env:QQCHAT_API_KEY` ↔ `secret:apiKey` ↔ `model:<key>`） | **请求级 · 热** | 密钥每请求现取；换来源不改变任何结构 |
+| Base URL、模型名（含 primary 的标量覆盖） | **请求级 · 热** | 只是拼 URL 与请求体 |
+| 采样参数、思考档位、快速回复档位 | **请求级 · 热** | 请求体字段 |
+| 协议（`ModelProtocol`）、`Options` | 装配级 · 需重启 | 决定编解码与传输形态，重建成本高且易踩在途请求 |
+| 供应商集合、顺序（`Priority`）、启用位 | 装配级 · 需重启 | failover 候选表是启动快照 |
+
+判定的落点：
+
+- `CompositionRoot.InspectModelProjection`（`CompositionRoot.cs:929`）只把**装配级**差异算成 `RestartRequired`；
+- `SettingsStore.ProjectRegisteredProviderViews` 的 `changed` 用同一套口径（否则回读会自己报「需重启」）；
+- `SettingsHotReload.RequiresRestart`（`SettingsHotReload.cs:182`）不得为请求级字段返回 `true`。
+
+> **曾经的错误**：凭据来源被当成装配级。面板第一次填 API Key 时 `SecretKeyRef` 从
+> `env:QQCHAT_API_KEY` 变成 `secret:apiKey`，运行期比对不相等 → 路由被拒 → **所有模型调用安全静默**，
+> 机器人一个字都不回。表现是「保存成功了、回读也是新值，但就是没反应」。
+> 更糟的是当时有测试把这段静默当成期望行为断言，等于把 bug 固化成规范。
+
+---
+
+## 3. 失败必须可见，不能静默
+
+- 路由解析不是失败关闭就是成功，**没有「悄悄用旧配置」这条路径**；
+  但「失败关闭」必须让运维看得见：
+  - 日志 `Provider 调用不可用，进入安全静默（reason=...，hops=...）`；
+  - 错误码 `provider_secret_unavailable` / `provider_route_unavailable` / `endpoint_authorization_required`
+    在前端 `src/web/src/shared/friendly.ts` 有中文文案；
+  - 保存回执的 `ModelProjection` 步骤如实报 `Applied` 或 `RestartRequired`；
+  - 前端「需重启」提示按步骤区分：**模型投影需重启时明确写「重启前机器人不会回复」**
+    （`src/web/src/features/configuration/receipt-notice.ts`）。
+- 端点授权在**保存时**校验（`IsAuthorizedModelEndpoint`），运行期只需能解析出密钥 ——
+  所以放宽运行期的凭据来源比较不会把流量引到未授权端点。
+
+---
+
+## 4. 两条模型通道（已知分叉）
+
+| 通道 | 走不走供应商注册表 | 说明 |
+| --- | --- | --- |
+| 聊天回复（含辅助调用） | 走 | 受 failover/熔断约束 |
+| 服务器 `//` Agent | 显式 override 时绕过 | `ServerAgentRunner` 传自己的 baseUrl/key |
+
+因此凭据不可用时可能表现为「普通聊天哑了、`//` 任务还能用」。这是**已知分叉**，
+统一两条通道会改变 failover 行为，属独立议题（见 #103 报告的 S3）。
+
+---
+
+## 5. 改这条链路时的检查单
+
+1. 新的配置字段先判定「请求级还是装配级」，再决定放进哪张表 / 哪个判定。
+2. 改 `InspectModelProjection` 必须同步改 `ProjectRegisteredProviderViews` 与 `RequiresRestart`，三处口径要一致。
+3. 回归至少要有三阶段：**保存 → 回读 → 重启后**（`tests/BotAgent.IntegrationHarness/ModelConfigScenario.cs`）。
+4. 不要写「保存后必须重启才能用」这类断言，除非那一步确实是装配级。
+5. 面板改动必跑 `cd src/web && npm run typecheck && npm run test:unit`。
