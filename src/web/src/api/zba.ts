@@ -469,9 +469,24 @@ export interface ZbaProviderNameEdit {
   }
 }
 
+/** 一条策略条目写入意图：目标 + 六个字段的完整配置（闭合记录）。 */
+export interface ZbaPolicyEdit {
+  target: ZbaPolicyTarget
+  configuration: ZbaPolicyConfiguration
+}
+
+export interface ZbaPolicyConfiguration {
+  enabled: number
+  chatEnabled: number
+  groupWhitelist: ZbaListRuleValue
+  privateWhitelist: ZbaListRuleValue
+  allowedActions: ZbaActionRuleValue
+  features: ZbaFeatureOverride[]
+}
+
 export interface ZbaRegisteredConfigurationPatch {
   plugins: unknown[]
-  policies: unknown[]
+  policies: ZbaPolicyEdit[]
   providers: ZbaProviderNameEdit[]
 }
 

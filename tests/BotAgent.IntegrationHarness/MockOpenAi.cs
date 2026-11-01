@@ -11,7 +11,7 @@ namespace BotAgent.IntegrationHarness;
 /// </summary>
 public sealed class MockOpenAi : IDisposable
 {
-    private readonly HttpListener _listener = new();
+    private HttpListener _listener = new();
     private readonly List<JsonObject> _requests = new();
     private readonly List<string?> _requestAuthorizations = new();
     private string? _lastAuthorization;
@@ -19,7 +19,8 @@ public sealed class MockOpenAi : IDisposable
     private readonly Queue<string> _scriptedReplies = new();
     private readonly Queue<string> _curationReplies = new();
     private readonly Queue<string> _stickerDescribeReplies = new();
-    private readonly int _port;
+    private int _port;
+    private readonly string _bind;
     private int _portraitRequests;
     private int _stickerDescribeRequests;
     private int _stickerCurateRequests;
@@ -28,7 +29,7 @@ public sealed class MockOpenAi : IDisposable
     public MockOpenAi(int port, string bind = "127.0.0.1")
     {
         _port = port;
-        _listener.Prefixes.Add($"http://{bind}:{port}/");
+        _bind = bind;
         BaseUrl = $"http://127.0.0.1:{_port}/v1";
     }
 
@@ -274,7 +275,13 @@ public sealed class MockOpenAi : IDisposable
 
     public void Start()
     {
-        _listener.Start();
+        // 端口冲突不该让整轮 harness 崩掉：换空闲端口并把 BaseUrl 指向新端口。
+        var bound = SyntheticListener.Start(ref _listener, _bind, _port);
+        if (bound != _port)
+        {
+            _port = bound;
+            BaseUrl = $"http://127.0.0.1:{_port}/v1";
+        }
         _ = Task.Run(AcceptLoopAsync);
     }
 

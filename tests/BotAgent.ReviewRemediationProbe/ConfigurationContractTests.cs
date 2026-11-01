@@ -1095,7 +1095,7 @@ internal static class ConfigurationContractTests
             ("--configuration-mood-persistence", "CFG_CHILD mood-persistence passed=22 failed=0"),
             ("--configuration-platform-policies", "CFG_CHILD platform-policies passed=72 failed=0"),
             ("--configuration-feishu-whitelist", "CFG_CHILD feishu-whitelist passed=16 failed=0"),
-            ("--configuration-platform-compatibility", "CFG_CHILD platform-compatibility passed=20 failed=0"),
+            ("--configuration-platform-compatibility", "CFG_CHILD platform-compatibility passed=22 failed=0"),
             ("--configuration-legacy-plan", "CFG_CHILD legacy-plan passed=14 failed=0"),
             ("--configuration-publish-permission", "CFG_CHILD publish-permission passed=14 failed=0"),
             ("--configuration-write-boundaries", "CFG_CHILD write-boundaries passed=27 failed=0"),
@@ -1697,6 +1697,12 @@ internal static class ConfigurationContractTests
                     new PolicyTarget.AccountDefault(platform, platform == "feishu" ? "default" : "legacy"), settings.DeclaredPlatformActions);
                 return (rule.Enabled == ToggleRule.Enabled, rule.ChatEnabled == ToggleRule.Enabled);
             }
+            (BotAgent.Domain.Configuration.ListRule Group, BotAgent.Domain.Configuration.ListRule Private) Lists(AppSettings settings, string platform)
+            {
+                var rule = BotAgent.Services.Platforms.PlatformSwitchSettings.ResolvePolicyRules(settings,
+                    new PolicyTarget.AccountDefault(platform, platform == "feishu" ? "default" : "legacy"), settings.DeclaredPlatformActions);
+                return (rule.GroupWhitelist, rule.PrivateWhitelist);
+            }
             string State() => JsonSerializer.Serialize(new { Json = AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1"),
                 Meta = AppDatabase.GetMeta("configuration_platform_policies"), Version = AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1"),
                 Operations = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations") });
@@ -1747,6 +1753,33 @@ internal static class ConfigurationContractTests
             await Legacy(new() { ["localChannelIds"] = "" });
             Check(Rules(Desired(), "local") == (false, false), "legacy_empty_roster_disables_both_policy_switches");
             await Legacy(new() { ["localChannelIds"] = "101" });
+            // Strict（新面板 / ZBA）路径同样要认标量：只带白名单文本与开关时，策略条目必须跟着变。
+            // 修复前门控是 profile == Legacy，于是新面板改了白名单也进不了判定所用的条目表（#104 S1）。
+            var strictScalar = await store.SaveAsync(caller, Strict(new(null, null, null, new PlatformChanges
+            {
+                WhitelistGroups = FieldEdit<string>.Set("30001"),
+                WhitelistPrivates = FieldEdit<string>.Set("30002"),
+                PrivateChatEnabled = FieldEdit<bool>.Set(false),
+            }, null, null, null, null)));
+            var afterStrict = Desired();
+            // 断言落在**存储的策略条目**上：条目字段是 Inherit 时判定会回落到标量，所以
+            // 只看解析结果无法区分「同步过」与「没同步、靠继承兜底」。这里要求条目自己带上 Explicit 名单。
+            var storedPrivate = (afterStrict.RuntimePlatformPolicies ?? ImmutableArray<PlatformPolicyEntry>.Empty)
+                .Single(entry => entry.Target is PolicyTarget.AccountDefault target && target.PlatformId == "qq.private")
+                .Configuration;
+            Check(strictScalar.Code == ConfigurationResultCode.Ok
+                && storedPrivate.GroupWhitelist.TryGetExplicitValue(out var storedGroups) && storedGroups == "30001"
+                && storedPrivate.PrivateWhitelist.TryGetExplicitValue(out var storedPrivates) && storedPrivates == "30002"
+                && !Rules(afterStrict, "qq.private").ChatEnabled,
+                "strict_scalar_whitelist_edit_reaches_policy_entries");
+
+            // 同步只写自己那一行：qq.private 的名单不得越界改到 local 的条目上（#104 验收「不同平台与实例互不覆盖」）。
+            var storedLocal = (afterStrict.RuntimePlatformPolicies ?? ImmutableArray<PlatformPolicyEntry>.Empty)
+                .Single(entry => entry.Target is PolicyTarget.AccountDefault target && target.PlatformId == "local")
+                .Configuration;
+            Check(storedLocal.GroupWhitelist.TryGetExplicitValue(out var localGroups) && localGroups == "101"
+                && storedLocal.PrivateWhitelist.TryGetExplicitValue(out var localPrivates) && localPrivates == "101",
+                "strict_scalar_edit_stays_inside_its_own_platform_entry");
             var whole = new JsonArray(new[] { "qq.private", "qq.official", "feishu", "local" }.Select(p => (JsonNode)Policy(p, true, true)).ToArray());
             await Legacy(new() { ["platformPolicies"] = whole, ["officialEnabled"] = false, ["officialChatEnabled"] = false,
                 ["privateChatEnabled"] = false, ["feishuEnabled"] = false, ["localChannelIds"] = "" });
@@ -1775,7 +1808,7 @@ internal static class ConfigurationContractTests
             Console.WriteLine($"CFG_CHILD platform-compatibility passed={passed} failed={failed}"); return failed == 0 ? 0 : 1;
         }
         catch (Exception error)
-        { Console.WriteLine($"CFG_CHILD platform-compatibility passed={passed} failed={failed + 1} type={error.GetType().Name}"); return 1; }
+        { Console.WriteLine($"CFG_CHILD platform-compatibility passed={passed} failed={failed + 1} type={error.GetType().Name} message={error.Message}"); return 1; }
         finally
         {
             SqliteConnection.ClearAllPools(); var full = Path.GetFullPath(root);

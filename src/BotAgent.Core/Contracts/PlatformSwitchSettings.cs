@@ -364,6 +364,40 @@ public static class PlatformSwitchSettings
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistPrivates,
             _ => groupField,
         };
+        var (group, direct) = ScalarListRules(platform, settings);
+        var qq = platform is PlatformId.QqPrivate or PlatformId.QqOfficial;
+        var actions = qq && !qqActionBaseline.IsDefault && !settings.DeclaredPlatformActions.IsDefault
+            ? qqActionBaseline.Where(action => settings.DeclaredPlatformActions.Contains(action)).Distinct()
+                .OrderBy(action => action.Value, StringComparer.Ordinal).ToImmutableArray() : ImmutableArray<ActionId>.Empty;
+        return new ResolvedPolicy(new PlatformPolicyConfiguration(ToToggle(toggles.Enabled), ToToggle(toggles.ChatEnabled),
+            group, direct, new ActionRule(ActionRuleKind.Explicit, actions), ImmutableArray<FeatureOverride>.Empty),
+            enabledSource, chatSource, Source(groupField), Source(privateField),
+            qq ? Source(ConfigurationFieldId.AgentServerQqActions) : ConfigurationValueSource.Default,
+            ImmutableDictionary<PlatformFeatureId, ConfigurationValueSource>.Empty);
+    }
+
+    /// <summary>
+    /// 平台标量名单（WhitelistGroups / WhitelistPrivates / OfficialWhitelistGroups / OfficialWhitelistPrivates /
+    /// FeishuWhitelist / LocalChannelIds）映射成该平台默认策略条目的两份名单规则。
+    /// 基线合成（<see cref="Baseline"/>）与「面板改标量后写回条目」（SettingsStore.PreparePlatformPolicies）都走这里：
+    /// 同一条语义只留一份实现，否则面板改标量与条目判定迟早会对不上。
+    /// </summary>
+    public static (ListRule Group, ListRule Private) ScalarListRules(string platform, PlatformOptions settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var groupField = platform switch
+        {
+            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistGroups) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistGroups,
+            PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistGroups,
+            PlatformId.Feishu => ConfigurationFieldId.FeishuWhitelist,
+            _ => ConfigurationFieldId.LocalChannelIds,
+        };
+        var privateField = platform switch
+        {
+            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistPrivates,
+            PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistPrivates,
+            _ => groupField,
+        };
         var group = platform switch
         {
             PlatformId.QqPrivate => ListRule.Explicit((groupField == ConfigurationFieldId.MessageWhitelist ? settings.MessageWhitelist : settings.WhitelistGroups) ?? string.Empty),
@@ -377,15 +411,7 @@ public static class PlatformSwitchSettings
             PlatformId.QqOfficial => string.IsNullOrWhiteSpace(settings.OfficialWhitelistPrivates) ? ListRule.AllowAll() : ListRule.Explicit(settings.OfficialWhitelistPrivates),
             _ => group,
         };
-        var qq = platform is PlatformId.QqPrivate or PlatformId.QqOfficial;
-        var actions = qq && !qqActionBaseline.IsDefault && !settings.DeclaredPlatformActions.IsDefault
-            ? qqActionBaseline.Where(action => settings.DeclaredPlatformActions.Contains(action)).Distinct()
-                .OrderBy(action => action.Value, StringComparer.Ordinal).ToImmutableArray() : ImmutableArray<ActionId>.Empty;
-        return new ResolvedPolicy(new PlatformPolicyConfiguration(ToToggle(toggles.Enabled), ToToggle(toggles.ChatEnabled),
-            group, direct, new ActionRule(ActionRuleKind.Explicit, actions), ImmutableArray<FeatureOverride>.Empty),
-            enabledSource, chatSource, Source(groupField), Source(privateField),
-            qq ? Source(ConfigurationFieldId.AgentServerQqActions) : ConfigurationValueSource.Default,
-            ImmutableDictionary<PlatformFeatureId, ConfigurationValueSource>.Empty);
+        return (group, direct);
     }
 
     private static ResolvedPolicy Denied() => new(new PlatformPolicyConfiguration(ToggleRule.Disabled, ToggleRule.Disabled,

@@ -40,6 +40,8 @@ import { errorName } from '../../shared/friendly'
 import { restartNoticeMessage } from './receipt-notice'
 import { fieldLabel } from './field-labels'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
+import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
+import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 import { configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
 
@@ -114,6 +116,15 @@ const secretConfirmationBlocked = computed(() => Object.values(secretReconfirm.v
  * 它不是标量分区里的普通字段，塞进 DraftMap 会污染 fieldPath 的语义。
  */
 const providerNames = ref<ProviderNameDrafts>({})
+/**
+ * 平台策略条目草稿（#104 S2）。
+ *
+ * 条目是判定的真相，标量只是基线：只存改过的行（键 = policyKey(target)），
+ * 保存时逐条 upsert，不整表替换（整表替换在 Legacy 档会被判 legacy_policy_needs_review）。
+ */
+const policyDrafts = ref<PolicyDrafts>({})
+const policyRows = computed(() => policyEntries(snapshot.value?.view))
+const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
 /** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
 const pendingNames = ref<ProviderNameDrafts>({})
 let findSequence = 0
@@ -204,6 +215,7 @@ const activeFields = computed<Array<{ key: string; field: ZbaReadField }>>(() =>
 const dirtyCount = computed(() =>
   Object.keys(draft.value).length
   + Object.keys(providerNames.value).length
+  + policyDirtyCount.value
   + Object.values(secretDrafts.value).filter((action) => action !== undefined && action.kind !== 'keep').length)
 
 const hasWritePermission = computed(() => props.mode === 'admin' && props.writesEnabled)
@@ -429,6 +441,7 @@ function resetAll(): void {
   secretDrafts.value = {}
   secretReconfirm.value = {}
   providerNames.value = {}
+  policyDrafts.value = {}
   fieldErrors.value = []
   validationMessage.value = null
   conflictCurrentVersion.value = null
@@ -480,9 +493,10 @@ function buildRequest(): {
   if (!view) return null
   const patch = buildPatch(draft.value, view)
   const nameErrors = applyProviderNames(patch.patch, providerNames.value, view)
+  const policyErrors = applyPolicyEdits(patch.patch, policyDrafts.value, view)
   const secrets = buildSecrets(secretDrafts.value)
   if (secretConfirmationBlocked.value) secrets.errors.push('秘密值无法比较：请明确确认，并重新输入替换值。')
-  const errors = [...patch.errors, ...nameErrors, ...secrets.errors]
+  const errors = [...patch.errors, ...nameErrors, ...policyErrors, ...secrets.errors]
   // 意图与 patch 分开记账：同值名称不用写入，但本次成功仍应结束该意图。
   const nameIntents = { ...providerNames.value }
   return { changes: patch.patch, secrets: secrets.secrets, errors, nameIntents }
@@ -693,6 +707,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   if (request.errors.length > 0) return
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
     settleProviderNames(request.nameIntents)
+    policyDrafts.value = {}
     validationMessage.value = '没有需要保存的修改。'
     return 'unchanged'
   }
@@ -747,6 +762,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
       draft.value = {}
       secretDrafts.value = {}
       secretReconfirm.value = {}
+      policyDrafts.value = {}
       // SR-NAME-01：名称意图也必须在这里结束，否则保存条一直是"1 项修改"，
       // 切页会弹未保存确认，下一次无关保存还会把已确认的旧名字重发给新基线。
       settleProviderNames(request.nameIntents)
@@ -825,6 +841,7 @@ async function checkPending(): Promise<void> {
       draft.value = {}
       secretDrafts.value = {}
       secretReconfirm.value = {}
+      policyDrafts.value = {}
       // 核对确认本次操作已落盘，包括无需重复写入的同值名称。
       settleProviderNames(nameIntents)
       validationMessage.value = null
@@ -1054,6 +1071,7 @@ function endSession(): void {
   secretDrafts.value = {}
   secretReconfirm.value = {}
   providerNames.value = {}
+  policyDrafts.value = {}
   pendingKey.value = null
   pendingNames.value = {}
   phase.value = 'idle'
@@ -1243,10 +1261,33 @@ defineExpose({
                 </tr>
               </thead>
               <tbody role="rowgroup">
+                <template v-for="item in activeFields" :key="item.key">
                 <tr
+                  v-if="active === 'platform' && item.key === 'platformPolicies'"
                   role="row"
-                  v-for="item in activeFields"
-                  :key="item.key"
+                  class="policy-shell"
+                  data-testid="config-field-platformPolicies"
+                >
+                  <td colspan="5" role="cell" class="policy-cell">
+                    <div class="policy-heading">
+                      <strong class="config-label">{{ fieldLabel(item.key) }}</strong>
+                      <span class="config-key">{{ item.key }}</span>
+                      <span v-if="policyDirtyCount > 0" class="cell-sub">已修改 {{ policyDirtyCount }} 条</span>
+                    </div>
+                    <p class="cell-sub">
+                      共 {{ policyRows.length }} 条条目：条目里显式写过的字段压过上面的开关与白名单文本。
+                    </p>
+                    <PlatformPolicyEditor
+                      :entries="policyRows"
+                      :model-value="policyDrafts"
+                      :locked="!canWrite || inputsLocked"
+                      @update:model-value="policyDrafts = $event"
+                    />
+                  </td>
+                </tr>
+                <tr
+                  v-else
+                  role="row"
                   :class="{ dirty: isFieldDirty(active, item.key, item.field) }"
                   :data-testid="`config-field-${item.key}`"
                 >
@@ -1327,6 +1368,7 @@ defineExpose({
                     <span class="cell-sub">{{ item.field.visibility === 0 ? '仅概览' : '可读' }}</span>
                   </td>
                 </tr>
+                </template>
               </tbody>
             </table>
           </div>
@@ -1629,6 +1671,10 @@ defineExpose({
 .config-input { font-size: 14px; height: 40px; min-height: 40px; padding-block: 6px; }
 .config-label { font-size: 14px; font-weight: 600; }
 .config-key { font-size: 11px; margin-top: 3px; }
+.policy-shell { display: block; width: 100%; }
+.policy-cell { width: 100%; min-width: 0; }
+.policy-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 4px; }
+.policy-heading .config-key { margin: 0; }
 .edit-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .edit-actions button { min-height: 32px; }
 .edit-actions:empty { display: none; }

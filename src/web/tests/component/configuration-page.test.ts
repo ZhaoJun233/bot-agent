@@ -1135,6 +1135,53 @@ describe('ConfigurationPage', () => {
   })
 })
 
+  it('平台策略条目改动只提交改过的那一条，未改字段一律 Keep (#104)', async () => {
+    const calls: ZbaConfigurationSaveRequest[] = []
+    const client = clientWith(editableFixture, {
+      saveConfiguration: async (request) => {
+        calls.push(request)
+        return { code: 0, replayed: false, receipt, currentVersion: '2', errors: [] }
+      }
+    })
+    // 平台分区只在 platform 能力下渲染（sections: ['platform']）。
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'platform' })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="config-nav-platform"]').trigger('click')
+    const row = wrapper.get('[data-testid="config-policy-instance:sample-platform:sample-account:sample-instance"]')
+    // 群名单从「显式 10001」改成「全收」：只有这一行该进请求体。
+    await row.get('[aria-label$="群名单模式"]').setValue('2')
+    // 夹具里的动作名是合成值，本地白名单不允许它原样提交：顺手改成合法动作。
+    await row.get('[aria-label$="动作名单"]').setValue('like')
+    expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
+
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(calls).toHaveLength(1)
+    const request = calls[0]!
+    const policies = request.changes.registered?.policies ?? []
+    expect(policies).toHaveLength(1)
+    const edit = policies[0]!
+    expect(edit.target).toEqual({
+      kind: 'instance',
+      key: { platformId: 'sample-platform', accountScope: 'sample-account', instanceId: 'sample-instance' }
+    })
+    expect(edit.configuration.groupWhitelist).toEqual({ kind: 2 })
+    // 条目是整体替换的：没改的字段按**读回来的显式值**原样回填（幂等），
+    // 只有本来就是「跟随基线」的字段才留 0，不会被折叠成新的用户意图。
+    expect(edit.configuration.enabled).toBe(1)
+    expect(edit.configuration.chatEnabled).toBe(1)
+    expect(edit.configuration.privateWhitelist).toEqual({ kind: 1, value: '10002' })
+    expect(edit.configuration.allowedActions).toEqual({ kind: 1, actions: ['like'] })
+    expect(edit.configuration.features).toEqual([{ feature: 0, enabled: true }])
+    // 标量与既有意图不被顺带改写。
+    expect(request.changes.behavior).toBeUndefined()
+    expect(request.changes.registered?.providers ?? []).toEqual([])
+    expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
+  })
+
 describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', () => {
   async function saveWith(applyState: ZbaApplyState) {
     const client = clientWith(editableFixture, {

@@ -930,39 +930,8 @@ public sealed partial class SettingsStore : ISettingsRepository
                     entries[edit.Target] = new(edit.Target, edit.Configuration);
                     modes[edit.Target] = 63;
                 }
-                if (profile == StorageConfiguration.ConfigurationStorageProfile.Legacy && table.Kind == EditKind.Keep && intent.Platform is { } legacy)
-                {
-                    Sync(PlatformId.QqOfficial, AccountScope.Legacy, legacy.OfficialEnabled, legacy.OfficialChatEnabled);
-                    Sync(PlatformId.QqPrivate, AccountScope.Legacy, default, legacy.PrivateChatEnabled);
-                    Sync(PlatformId.Feishu, AccountScope.Default, legacy.FeishuEnabled, legacy.FeishuEnabled);
-                    if (legacy.LocalChannelIds.TryGetValue(out var ids))
-                    {
-                        var enabled = FieldEdit<bool>.Set(!string.IsNullOrWhiteSpace(ids));
-                        Sync(PlatformId.Local, AccountScope.Legacy, enabled, enabled);
-                    }
-                }
-                void Sync(string platform, string account, FieldEdit<bool> enabled, FieldEdit<bool> chat)
-                {
-                    var target = new PolicyTarget.AccountDefault(platform, account);
-                    if (enabled.Kind == EditKind.Keep && chat.Kind == EditKind.Keep) return;
-                    if (!entries.TryGetValue(target, out var entry))
-                        entry = new(target, new(ToggleRule.Inherit, ToggleRule.Inherit, ListRule.Inherit(), ListRule.Inherit(),
-                            new(ActionRuleKind.Inherit, ImmutableArray<ActionId>.Empty), ImmutableArray<FeatureOverride>.Empty));
-                    var rules = entry.Configuration;
-                    var bits = modes.GetValueOrDefault(target);
-                    if (enabled.TryGetValue(out var e))
-                    {
-                        rules = rules with { Enabled = e ? ToggleRule.Enabled : ToggleRule.Disabled };
-                        bits |= 1;
-                    }
-                    if (chat.TryGetValue(out var c))
-                    {
-                        rules = rules with { ChatEnabled = c ? ToggleRule.Enabled : ToggleRule.Disabled };
-                        bits |= 2;
-                    }
-                    entries[target] = entry with { Configuration = rules };
-                    modes[target] = bits;
-                }
+                if (table.Kind == EditKind.Keep && intent.Platform is { } scalars)
+                    PlatformScalarSync.Apply(entries, modes, scalarCandidate, scalars);
                 var final = entries.Values.OrderBy(entry => JsonSerializer.Serialize(entry.Target), StringComparer.Ordinal).ToImmutableArray();
                 errors = PlatformSwitchSettings.ValidatePolicyEntries(final, runtime.DeclaredPlatformDrivers, runtime.DeclaredPlatformActions);
                 if (errors.Length != 0) return (false, final, modes.ToImmutable(), errors,
