@@ -1,0 +1,63 @@
+# 依赖升级机器人（#122）。
+#
+# 为什么只开三个生态：
+#   · nuget          —— 30 个 csproj 的包版本，是主要风险面；
+#   · github-actions —— CI 里的 action 版本（工作流本身已钉 commit SHA，这里只负责"该升级了"的提醒）；
+#   · npm            —— src/web 的前端依赖。
+# 暂不开 docker 生态：docker-compose.yml 里 3 个镜像有 2 个（qqchat-agent / qqchat-tts）是本仓库
+# 自己构建的产物，没有远端 digest 可解析；基镜像 digest 的升级流程写在
+# docs/operations/release-checklist.md 的「基镜像 digest 怎么升」。等外部镜像面稳定后再开。
+#
+# 分组：同一生态的小版本/补丁合并成一个 PR，避免一周开十几个 PR 把真正的 breaking change 埋掉。
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies]
+    groups:
+      dotnet-packages:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # 主版本单独走：它们经常要改代码，混在分组里会被顺手合并
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:30"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    labels: [dependencies, ci]
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /src/web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(web)"
+    labels: [dependencies, web]
+    groups:
+      frontend:
+        patterns: ["*"]
+        update-types: [minor, patch]

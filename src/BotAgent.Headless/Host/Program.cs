@@ -41,7 +41,9 @@ public static class Program
 
         if (args.Contains("--version"))
         {
-            Console.WriteLine("BotAgent.Headless 1.1.0");
+            // 版本号来自 Directory.Build.props 的单一 <Version>（#122），不再写死在代码里
+            var assembly = typeof(Program).Assembly.GetName();
+            Console.WriteLine(assembly.Name + " " + (assembly.Version?.ToString(3) ?? "0.0.0"));
             return 0;
         }
 
@@ -208,7 +210,8 @@ public static class Program
     private static void PrintBanner(AppSettings settings, bool loginQrConfigured)
     {
         Console.WriteLine("══════════════════════════════════════════════");
-        Console.WriteLine("  Bot Agent（Headless）  1.1.0");
+        // 横幅版本同样读程序集，避免又冒出一个写死的版本号（#122）
+        Console.WriteLine($"  Bot Agent（Headless）  {typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0"}");
         Console.WriteLine("══════════════════════════════════════════════");
         Console.WriteLine($"  数据目录   {AppPaths.RuntimeRoot}");
         Console.WriteLine($"  配置文件   {new SettingsStore().FilePath}" + (new SettingsStore().ExistsOnDisk ? "" : "（不存在，全部来自环境变量/默认值）"));

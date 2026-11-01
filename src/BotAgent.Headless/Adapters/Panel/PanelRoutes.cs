@@ -91,7 +91,12 @@ public sealed partial class WebUiServer
         new("POST", PanelMatch.Exact, "/api/auth/change-password", (r) => HandleAuthChangeAsync(r.Context)),
 
         // ─────────── 健康检查 ───────────
-        new("GET", PanelMatch.Exact, "/healthz", (r) => WriteJsonAsync(r.Context, 200, new JsonObject { ["status"] = "ok" })),
+        // 版本来自 Directory.Build.props 的单一 <Version>（#122）：运维不进容器翻文件就能回答"跑的是哪一版"
+        new("GET", PanelMatch.Exact, "/healthz", (r) => WriteJsonAsync(r.Context, 200, new JsonObject
+        {
+            ["status"] = "ok",
+            ["version"] = typeof(WebUiServer).Assembly.GetName().Version?.ToString(3) ?? "0.0.0"
+        })),
         new("GET", PanelMatch.Exact, "/readyz", (r) =>
         {
             var ready = _gateway.IsConnected;

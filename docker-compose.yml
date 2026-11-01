@@ -21,7 +21,8 @@
 services:
   # ─────────── QQ 协议端（Linux QQ + NapCat） ───────────
   napcat:
-    image: mlikiowa/napcat-docker:latest
+    # digest 钉死（#122）：这里只改 tag 不改 digest 等于没改。升级 NapCat 时两条一起改。
+    image: mlikiowa/napcat-docker:latest@sha256:696e9574a0f6fb2f86cbecba8a32048f2a5823117dc9b13c6c02637ad890fa8b
     container_name: qqchat-napcat
     restart: unless-stopped
     # 日志上限：不用它的话 json-file 日志会把小硬盘吃满（实测 8.8G 盘跑到 90%）。
@@ -57,6 +58,7 @@ services:
     build:
       context: .
       dockerfile: src/BotAgent.Headless/Dockerfile
+    # 本地构建产物：没有远端 digest 可钉（由本仓库 Dockerfile 构建），保留 :latest。
     image: qqchat-agent:latest
     container_name: qqchat-bot
     restart: unless-stopped
@@ -237,6 +239,7 @@ services:
     build:
       context: .
       dockerfile: tools/tts-cloud.Dockerfile
+    # 本地构建产物：没有远端 digest 可钉（由本仓库 tools/tts-cloud.Dockerfile 构建），保留 :latest。
     image: qqchat-tts:latest
     container_name: qqchat-tts
     restart: unless-stopped

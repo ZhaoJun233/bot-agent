@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [dev, main, Zhaodev]
+    # 发版 tag 也要跑：verify 里的版本一致性断言就是在这里对 tag 生效（#122）
+    tags: ['v*']
   pull_request:
     branches: [dev, main, Zhaodev]
   workflow_dispatch:
@@ -49,6 +51,55 @@ jobs:
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
+      - name: Version single source and tag consistency
+        # #122：版本号只能有一个真源（Directory.Build.props），且发版 tag 必须与它一致。
+        # 用编译出来的程序集反查 --version，等于同时验证"代码里没有偷偷写死版本"。
+        shell: bash
+        run: |
+          set -euo pipefail
+          props_version="$(sed -n 's#.*<Version>\([^<]*\)</Version>.*#\1#p' Directory.Build.props | head -1)"
+          echo "Directory.Build.props <Version> = ${props_version:-<missing>}"
+          if [ -z "${props_version:-}" ]; then
+            echo "::error::Directory.Build.props 里没有 <Version>"
+            exit 1
+          fi
+          offenders="$(grep -rl --include='*.csproj' '<Version>' . || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::这些 csproj 又各自写了 <Version>（会压过唯一真源）：$offenders"
+            exit 1
+          fi
+          cli_version="$(dotnet src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll --version | awk '{print $2}')"
+          echo "程序集版本（--version）= ${cli_version}"
+          if [ "$cli_version" != "$props_version" ]; then
+            echo "::error::程序集版本 ${cli_version} 与 props ${props_version} 不一致"
+            exit 1
+          fi
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              tag_version="${GITHUB_REF#refs/tags/}"
+              tag_version="${tag_version#v}"
+              if [ "$tag_version" != "$props_version" ]; then
+                echo "::error::tag ${GITHUB_REF} 与 props ${props_version} 不一致（发版要先把 <Version> 改成 tag 的版本）"
+                exit 1
+              fi
+              echo "tag 与版本号一致：${tag_version}"
+              ;;
+            *) echo "非 tag 构建，跳过 tag 一致性检查（${GITHUB_REF}）" ;;
+          esac
+      - name: Dependency snapshot (top-level and transitive)
+        # #122：不引 packages.lock.json；把一次完整的依赖图留成 artifact，
+        # 就能回答"当时依赖是什么"，也不会和 CI 的 restore 流程打架。
+        run: |
+          mkdir -p artifacts
+          dotnet list BotAgent.slnx package --include-transitive > artifacts/dependencies.txt
+          wc -l artifacts/dependencies.txt
+      - name: Upload dependency snapshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-snapshot
+          path: artifacts/dependencies.txt
+          retention-days: 30
+          if-no-files-found: error
       - name: Architecture and safety probes
         run: |
           dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore
@@ -167,7 +218,7 @@ jobs:
         run: npx playwright test --project=${{ matrix.browser }}
       - name: Upload Playwright artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-playwright-${{ matrix.browser }}
           path: |

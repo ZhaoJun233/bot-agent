@@ -100,7 +100,7 @@ vim .env
   tail -f runtime/logs/bot-agent.log
   ```
 
-服务启动后：健康探针 `http://127.0.0.1:18245/healthz`（端口见下方配置参考，容器镜像内是 8080）；**宿主不再内置任何页面**，`/` 与 `/web/` 由反向代理提供，面板前端部署见 [`src/web/README.md`](src/web/README.md)。
+服务启动后：健康探针 `http://127.0.0.1:18245/healthz` 回 `{"status":"ok","version":"x.y.z"}`（版本号来自仓库里的单一真源 `Directory.Build.props`，端口见下方配置参考，容器镜像内是 8080）；**宿主不再内置任何页面**，`/` 与 `/web/` 由反向代理提供，面板前端部署见 [`src/web/README.md`](src/web/README.md)。
 
 ---
 

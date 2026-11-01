@@ -115,6 +115,7 @@ public static class Program
         DocumentationChecks(index);
         SurfaceDocumentationChecks(index);
         DockerfileChecks(index);
+        ReleaseGovernanceChecks(index);
         SelfTests(index);
         RatchetChecks(index);
         LayoutChecks(index);
@@ -822,6 +823,109 @@ public static class Program
         Check($"Headless 的传递源码闭包 {required.Count} 个工程都进入 Dockerfile",
             missingSources.Count == 0 && missingProjects.Count == 0,
             string.Join("、", missingSources.Select(x => x + "/").Concat(missingProjects.Select(x => x + ".csproj"))));
+    }
+
+    private static void ReleaseGovernanceChecks(SourceIndex index)
+    {
+        Section("发布与版本治理（版本单一真源 / CHANGELOG / dependabot / 镜像 digest）");
+
+        // 快照目录与构建产物里的副本不算仓库内容：publish/ 是发布脚本的临时快照，bin/obj 是产物。
+        static bool Excluded(string path)
+        {
+            var separator = Path.DirectorySeparatorChar;
+            foreach (var name in new[] { "bin", "obj", "publish", "node_modules", ".git", "dist" })
+            {
+                var marker = separator + name + separator;
+                if (path.Contains(marker, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
+        }
+
+        // ① 全仓只有一个 <Version>：csproj 自己写会悄悄压过 Directory.Build.props，等于又回到多个真源
+        var csprojWithVersion = Directory.EnumerateFiles(index.Root, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !Excluded(path))
+            .Where(path => File.ReadAllText(path).Contains("<Version>", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(index.Root, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var propsPath = Path.Combine(index.Root, "Directory.Build.props");
+        var propsText = File.Exists(propsPath) ? File.ReadAllText(propsPath) : string.Empty;
+        var declared = Regex.Match(propsText, "<Version>\\s*([0-9]+\\.[0-9]+\\.[0-9]+)\\s*</Version>");
+        var versionSingle = csprojWithVersion.Count == 0 && declared.Success;
+        Check("全仓只有一个 <Version>，且写在 Directory.Build.props 里（形如 x.y.z）",
+            versionSingle,
+            versionSingle
+                ? null
+                : csprojWithVersion.Count > 0
+                    ? "这些 csproj 还各自写着 <Version>：" + string.Join("、", csprojWithVersion)
+                    : "Directory.Build.props 里没有形如 1.2.3 的 <Version>");
+        if (declared.Success) Console.WriteLine($"  版本：{declared.Groups[1].Value}（来自 Directory.Build.props）");
+
+        // ①b 展示层也不许写死版本：横幅曾经硬编码 1.1.0，于是真源改了它还是旧的
+        var hardcodedBanner = Directory.EnumerateFiles(Path.Combine(index.Root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !Excluded(path))
+            .Where(path => Regex.IsMatch(File.ReadAllText(path), "（Headless）\\s*[0-9]+\\.[0-9]+\\.[0-9]+"))
+            .Select(path => Path.GetRelativePath(index.Root, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        Check("启动横幅与版本输出都从程序集读版本（源码里没有写死的 x.y.z）",
+            hardcodedBanner.Count == 0,
+            hardcodedBanner.Count == 0 ? null : "这些文件写死了版本号：" + string.Join("、", hardcodedBanner));
+
+        // ② CHANGELOG：只要求存在 + 有 Unreleased 段（段内可以为空，发版后不该因此判红）
+        var changelogPath = Path.Combine(index.Root, "CHANGELOG.md");
+        var changelog = File.Exists(changelogPath) ? File.ReadAllText(changelogPath) : string.Empty;
+        var hasUnreleased = changelog.Contains("## [Unreleased]", StringComparison.Ordinal);
+        Check("CHANGELOG.md 存在且带 Unreleased 段",
+            hasUnreleased,
+            hasUnreleased ? null : File.Exists(changelogPath) ? "CHANGELOG.md 里没有 ## [Unreleased] 段" : "缺 CHANGELOG.md");
+
+        // ③ dependabot：三个生态都要有，否则"依赖升级"只覆盖一半
+        var dependabotPath = Path.Combine(index.Root, ".github", "dependabot.yml");
+        var dependabot = File.Exists(dependabotPath) ? File.ReadAllText(dependabotPath) : string.Empty;
+        var missingEcosystems = new[] { "nuget", "github-actions", "npm" }
+            .Where(name => !dependabot.Contains("package-ecosystem: " + name, StringComparison.Ordinal))
+            .ToList();
+        Check("dependabot 覆盖 nuget / github-actions / npm 三个生态",
+            missingEcosystems.Count == 0,
+            missingEcosystems.Count == 0 ? null : "缺生态：" + string.Join("、", missingEcosystems));
+
+        // ④ 所有 Dockerfile 的 FROM 都钉 digest：浮动 tag 会让"同一份代码"构建出不同镜像
+        var dockerfiles = Directory.EnumerateFiles(index.Root, "*Dockerfile*", SearchOption.AllDirectories)
+            .Where(path => !Excluded(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var floating = new List<string>();
+        foreach (var file in dockerfiles)
+        {
+            foreach (var line in File.ReadAllLines(file))
+            {
+                var trimmed = line.TrimStart();
+                if (!trimmed.StartsWith("FROM ", StringComparison.OrdinalIgnoreCase)) continue;
+                if (Regex.IsMatch(trimmed, "@sha256:[0-9a-f]{64}")) continue;
+                floating.Add(Path.GetRelativePath(index.Root, file).Replace(Path.DirectorySeparatorChar, '/') + " → " + trimmed);
+            }
+        }
+
+        var dockerfilesPinned = dockerfiles.Count > 0 && floating.Count == 0;
+        Check($"全部 {dockerfiles.Count} 个 Dockerfile 的 FROM 都钉了 digest",
+            dockerfilesPinned,
+            dockerfilesPinned ? null : dockerfiles.Count == 0 ? "一个 Dockerfile 都没找到" : string.Join("；", floating));
+
+        // ⑤ compose 里从外部拉取的镜像必须钉 digest；本地构建的 qqchat-* 没有远端 digest 可钉
+        var composePath = Path.Combine(index.Root, "docker-compose.yml");
+        var compose = File.Exists(composePath) ? File.ReadAllText(composePath) : string.Empty;
+        var externalImages = Regex.Matches(compose, "^\\s*image:\\s*(\\S+)\\s*$", RegexOptions.Multiline)
+            .Select(match => match.Groups[1].Value)
+            .Where(image => !image.StartsWith("qqchat-", StringComparison.Ordinal))
+            .ToList();
+        var unpinned = externalImages.Where(image => !Regex.IsMatch(image, "@sha256:[0-9a-f]{64}$")).ToList();
+        var composePinned = externalImages.Count > 0 && unpinned.Count == 0;
+        Check($"compose 里 {externalImages.Count} 个外部镜像全部钉了 digest",
+            composePinned,
+            composePinned ? null : externalImages.Count == 0 ? "没解析出任何外部镜像（正则是不是过期了？）" : "未钉：" + string.Join("、", unpinned));
     }
 
     private static IReadOnlyList<(string Path, int Count)> UseCaseIo(SourceIndex index)

@@ -15,7 +15,9 @@
 #
 # 构建（构建上下文里必须已有 `app.tar.gz`，`deploy-qqchat.py` 会生成并上传）：
 #   docker build -f Dockerfile.app -t qqchat-agent:latest .
-FROM mcr.microsoft.com/dotnet/runtime:10.0
+# digest 钉死（#122）：浮动 tag 会让"同一份代码"在不同日期构建出不同镜像。
+# 需要升级基线镜像时：docker buildx imagetools inspect mcr.microsoft.com/dotnet/runtime:10.0 取 digest 再改这里。
+FROM mcr.microsoft.com/dotnet/runtime:10.0@sha256:a3f9f81954b9c810af2ed18849716c8dc74a4707bd0907fdbd69be81554c0f30
 
 # ── docker CLI（可选能力：让容器里的 agent “透过 docker”看/改服务器）──
 # 为什么要它：要用 /var/run/docker.sock 就得有个客户端，而 mcr 的运行时镜像里什么都没有。

@@ -7,7 +7,6 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>BotAgent.Panel</RootNamespace>
     <AssemblyName>BotAgent.Panel</AssemblyName>
-    <Version>1.0.0</Version>
     <Description>Z-bot Backend API（ZBA）：宿主同进程承载、只依赖 Core 契约的 HTTP 适配层。</Description>
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>

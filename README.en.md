@@ -100,7 +100,7 @@ The project includes cross-distribution compatible control scripts:
   tail -f runtime/logs/bot-agent.log
   ```
 
-Once the service starts: health probe at `http://127.0.0.1:18245/healthz` (port per the configuration reference below; 8080 inside the container image); **the host ships no pages at all** — `/` and `/web/` are served by the reverse proxy. See [`src/web/README.md`](src/web/README.md) for frontend deployment.
+Once the service starts: the health probe at `http://127.0.0.1:18245/healthz` returns `{"status":"ok","version":"x.y.z"}` (the version comes from the single source of truth, `Directory.Build.props`; port per the configuration reference below, 8080 inside the container image); **the host ships no pages at all** — `/` and `/web/` are served by the reverse proxy. See [`src/web/README.md`](src/web/README.md) for frontend deployment.
 
 ---
 

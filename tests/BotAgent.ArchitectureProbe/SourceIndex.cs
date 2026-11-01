@@ -196,6 +196,8 @@ internal sealed class SourceIndex
             "LangVersion", "Nullable", "ImplicitUsings", "TreatWarningsAsErrors",
             "NuGetAudit", "NuGetAuditMode", "NuGetAuditLevel", "WarningsAsErrors",
             "Deterministic", "ContinuousIntegrationBuild",
+            // #122 版本单一真源：这是唯一允许出现在 csproj 之外的版本声明
+            "Version",
         };
 
         var propsPath = Path.Combine(root, "Directory.Build.props");

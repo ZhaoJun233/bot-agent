@@ -12,7 +12,7 @@
 # ══════════════════════════════════════════════════════════════
 
 # ---------- 构建阶段 ----------
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 WORKDIR /src
 
 # 先拷宿主及完整传递项目引用的 csproj，缓存 NuGet 还原层
@@ -45,7 +45,7 @@ RUN dotnet publish src/BotAgent.Headless/BotAgent.Headless.csproj \
  && rm -rf /app/publish/*.pdb
 
 # ---------- 运行阶段 ----------
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0@sha256:a3f9f81954b9c810af2ed18849716c8dc74a4707bd0907fdbd69be81554c0f30 AS runtime
 
 # 时区数据：消息时间戳按本地时区显示（否则容器 UTC 会让模型的“现在几点”判断错位）
 RUN apt-get update \

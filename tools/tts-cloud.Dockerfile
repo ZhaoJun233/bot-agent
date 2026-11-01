@@ -13,7 +13,8 @@
 # 和旧版（tools/tts.Dockerfile，Piper 本地模型）的区别：
 #   旧版 490MB 镜像 + 200MB+ 常驻内存 + 每句几百毫秒~几秒 CPU 推理；
 #   本版 ~60MB 镜像、~20MB 内存、零 CPU 推理（都交给云端），音色也更自然。
-FROM python:3.11-alpine
+# digest 钉死（#122）：浮动 tag 会让"同一份代码"在不同日期构建出不同镜像。
+FROM python:3.11-alpine@sha256:09d17d5e4c16d0a7a1eea690bcb7c6ab8616b211f8421e429e97c1bef5bd0ed2
 
 # 可选：官方通道发语音要**腾讯 SILK v3**，而 NapCat（私域）那边自己会转，不需要。
 # 需要时用构建参数把 silk_v3_encoder 塞进来（例如 kn007/silk-v3-decoder 的静态产物）：

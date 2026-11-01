@@ -717,6 +717,14 @@ public static partial class Program
             await WaitForPortAsync(healthPort, cts.Token, bot);
             var health = await HttpGetAsync($"http://127.0.0.1:{healthPort}/healthz");
             Check("/healthz 返回 200", health.Status == 200, health.Body);
+            // 版本必须能从运行时读到（#122）：值来自 Directory.Build.props 的单一 <Version>，
+            // 运维不进容器翻文件就能回答"跑的是哪一版"。这里只钉形状，具体数值由 CI 的版本一致性断言负责。
+            var healthVersion = ReadHealthVersion(health.Body);
+            Check("/healthz 回报形如 x.y.z 的版本号",
+                healthVersion is not null
+                && System.Text.RegularExpressions.Regex.IsMatch(healthVersion, @"^[0-9]+\.[0-9]+\.[0-9]+$")
+                && healthVersion != "0.0.0",
+                healthVersion ?? "(没有 version 字段)");
             var ready = await HttpGetAsync($"http://127.0.0.1:{healthPort}/readyz");
             Check("/readyz 已连接时返回 200", ready.Status == 200, ready.Body);
             var status = await PanelGetAsync($"http://127.0.0.1:{healthPort}/status");
@@ -2193,6 +2201,20 @@ public static partial class Program
         }
 
         return null;
+    }
+
+    // 从 /healthz 的 JSON 里取 version 字段；解析失败返回 null（不抛，避免把断言变成异常）
+    private static string? ReadHealthVersion(string body)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(body);
+            return document.RootElement.TryGetProperty("version", out var node) ? node.GetString() : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     private static async Task<(int Status, string Body)> HttpGetAsync(string url, string? panelToken = null)

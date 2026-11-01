@@ -8,7 +8,6 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>BotAgent</RootNamespace>
     <AssemblyName>BotAgent.Headless</AssemblyName>
-    <Version>1.1.0</Version>
     <Description>Bot Agent（通用聊天平台 Agent 运行时 / 无界面 / 容器版）：支持 QQ (OneBot/官方)、飞书及本地测试等可插拔聊天平台 + OpenAI 兼容模型驱动。</Description>
 
     <!-- 容器优化：不变文化 + 只保留英文附属资源，镜像更小 -->
