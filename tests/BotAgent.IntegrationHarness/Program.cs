@@ -124,6 +124,10 @@ public static partial class Program
             await Scenario("s53", RunMcpServerScenarioAsync);
             await Scenario("s54", RunZbaHostScenarioAsync);
             await Scenario("s55", RunZbaEventRestartScenarioAsync);
+            await Scenario("s56", RunFifoInvariantScenarioAsync);
+            await Scenario("s57", RunSilenceShortCircuitInvariantScenarioAsync);
+            await Scenario("s58", RunQuoteFirstSegmentInvariantScenarioAsync);
+            await Scenario("s59", RunVoiceTextDedupInvariantScenarioAsync);
         await Scenario("s42", RunOfficialChannelScenarioAsync);
         }
         catch (Exception ex)

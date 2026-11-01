@@ -116,6 +116,7 @@ public static class Program
         SurfaceDocumentationChecks(index);
         DockerfileChecks(index);
         ReleaseGovernanceChecks(index);
+        CoreInvariantAndBaselineChecks(index);
         SelfTests(index);
         RatchetChecks(index);
         LayoutChecks(index);
@@ -823,6 +824,54 @@ public static class Program
         Check($"Headless 的传递源码闭包 {required.Count} 个工程都进入 Dockerfile",
             missingSources.Count == 0 && missingProjects.Count == 0,
             string.Join("、", missingSources.Select(x => x + "/").Concat(missingProjects.Select(x => x + ".csproj"))));
+    }
+
+    // ───────────────────────────── 核心不变量与管线性能基线（#126） ─────────────────────────────
+
+    /// <summary>
+    /// 口径：四条核心不变量（FIFO / 静默短路 / 引用只挂第一条 / 语音文字去重）必须**各有显式场景**，
+    /// 且这些场景必须真的在 CI 里被执行（写进 ci.yml 的矩阵，不是只存在于 Program.cs）。
+    /// 另外管线性能基线文件必须在，字段必须齐 —— 缺了它就是“没有守护值”，属于失败关闭。
+    /// </summary>
+    private static void CoreInvariantAndBaselineChecks(SourceIndex index)
+    {
+        Section("核心不变量场景与管线性能基线（#126）");
+
+        var harnessPath = Path.Combine(index.Root, "tests", "BotAgent.IntegrationHarness", "Program.cs");
+        var harness = File.Exists(harnessPath) ? File.ReadAllText(harnessPath) : string.Empty;
+        var ciPath = Path.Combine(index.Root, ".github", "workflows", "ci.yml");
+        var ci = File.Exists(ciPath) ? File.ReadAllText(ciPath) : string.Empty;
+
+        // ① 四条不变量各自的场景 tag（s56 起，新增场景按顺序往上排）。
+        var invariants = new (string Tag, string Name)[]
+        {
+            ("s56", "每会话 FIFO（回复按到达顺序串行）"),
+            ("s57", "静默短路在发送前（复读守卫：生成了也不发）"),
+            ("s58", "引用只挂第一条（多段回复）"),
+            ("s59", "语音与文字不重复播报同一句")
+        };
+        var missing = invariants.Where(i => !harness.Contains("\"" + i.Tag + "\"", StringComparison.Ordinal)).Select(i => i.Tag).ToList();
+        Check($"四条核心不变量各有显式 harness 场景（{string.Join(" / ", invariants.Select(i => i.Tag + " " + i.Name))}）",
+            missing.Count == 0,
+            missing.Count == 0 ? null : "缺场景：" + string.Join("、", missing));
+
+        var notInCi = invariants.Where(i => !ci.Contains(i.Tag + ",", StringComparison.Ordinal) && !ci.Contains(i.Tag + "\"", StringComparison.Ordinal)).Select(i => i.Tag).ToList();
+        Check("四条不变量场景都进了 ci.yml 的集成矩阵（不会被悄悄排除出 CI）",
+            notInCi.Count == 0,
+            notInCi.Count == 0 ? null : "ci.yml 没点名：" + string.Join("、", notInCi));
+
+        // ② 性能基线必须是“随代码提交的守护值”，不能运行时现算。
+        var baselinePath = Path.Combine(index.Root, "tests", "fixtures", "pipeline", "baseline.json");
+        var baselineText = File.Exists(baselinePath) ? File.ReadAllText(baselinePath) : string.Empty;
+        var required = new[] { "p50Ms", "p95Ms", "maxMultiplier", "warmupRounds", "measuredRounds", "sweepsPerRound", "recordedAt", "environment" };
+        var missingFields = required.Where(f => !baselineText.Contains("\"" + f + "\"", StringComparison.Ordinal)).ToList();
+        Check("管线性能基线 tests/fixtures/pipeline/baseline.json 存在且字段齐全",
+            baselineText.Length > 0 && missingFields.Count == 0,
+            baselineText.Length == 0 ? "文件不存在" : (missingFields.Count == 0 ? null : "缺字段：" + string.Join("、", missingFields)));
+
+        Check("PipelineEval 在 ci.yml 里被执行（基线不只在本地生效）",
+            ci.Contains("BotAgent.PipelineEval", StringComparison.Ordinal),
+            ci.Contains("BotAgent.PipelineEval", StringComparison.Ordinal) ? null : "ci.yml 里找不到 PipelineEval");
     }
 
     private static void ReleaseGovernanceChecks(SourceIndex index)

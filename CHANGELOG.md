@@ -26,6 +26,9 @@
   `CHANGELOG.md`、dependabot、基镜像钉 digest、CI 产出依赖快照。
 - 文档：接口面地图 `docs/api-surface.md`（37 条 ZBA + 50 条旧 `/api/*`）、
   `CONTRIBUTING`/`SECURITY` 中英双版、基线报告与回滚预案、.NET 10 升级验收报告。
+- 核心不变量回归（#126）：S56 每会话 FIFO / S57 静默短路在发送前 / S58 引用只挂第一条 /
+  S59 语音与文字不重复播报，四个场景进 CI 矩阵；`PipelineEval` 新增确定性决策链性能基线
+  （`tests/fixtures/pipeline/baseline.json`，口径见 `docs/baseline/pipeline-performance-baseline.md`）。
 
 ### 变更
 
