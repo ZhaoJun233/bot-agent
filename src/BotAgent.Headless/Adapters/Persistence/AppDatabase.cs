@@ -14,6 +14,8 @@ public static class AppDatabase
     public static string FilePath => Database.IsReady
         ? Database.FilePath : Database.ResolveDatabasePath(AppPaths.RuntimeRoot);
 
+    public const string StartupCountMetaKey = Database.StartupCountMetaKey;
+
     public static string ResolveDatabasePath(string runtimeRoot) => Database.ResolveDatabasePath(runtimeRoot);
     public static bool IsReady => Database.IsReady;
 

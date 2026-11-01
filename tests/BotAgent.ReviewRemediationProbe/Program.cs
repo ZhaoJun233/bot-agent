@@ -289,6 +289,8 @@ internal static class Program
     {
         public long? MemoryLimitBytes() => null;
         public double? LoadAverage() => null;
+        public DateTimeOffset? ProcessStartTime() => null;
+        public (long Used, long Total)? SwapBytes() => null;
     }
 
     private sealed class FakeJargonRepository : IJargonRepository

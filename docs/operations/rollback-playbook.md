@@ -20,7 +20,9 @@
 | 7 | 容器镜像（若走容器） | `qqchat-agent:prev` 之类的本地 tag | `docker tag` 保留上一版 | `docker image inspect` 可读 |
 
 **权限要求**：备份文件与目录必须收紧到仅所有者可读写（POSIX `600` / 目录 `700`）。
-数据库当前实测权限是 `644`，且备份路径不会自动收紧 —— 备份完请手动 `chmod`，或按 #121 的运维基线落地后依赖自动收紧。
+自 #121 起宿主启动时会把库文件、以及每次热备的产物都设成 `600`（Windows 跳过，失败只 WARN）；
+**手工复制出来的快照不在自动收紧范围内**，手工 `cp` 之后仍要自己 `chmod 600`。口径与验证方式见
+[日志保留、每日热备与恢复演练](data-retention-and-backup.md)。
 
 ---
 
@@ -132,4 +134,5 @@
 
 - [基线报告](../baseline/report-2026-10-31.md) —— §4.4 是 D1–D5 演练的原始数据
 - [.NET 10 升级回归验收报告](upgrade-acceptance-dotnet10.md) —— §4 是 S1–S5 跨版本演练的原始数据
+- [日志保留、每日热备与恢复演练](data-retention-and-backup.md) —— 备份在哪、保留多久、怎么验证能恢复
 - [分支模型与合并路径](../architecture/branching-and-merge-path.md) —— 回滚后如何重新发版

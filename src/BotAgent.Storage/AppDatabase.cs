@@ -30,6 +30,9 @@ public static class AppDatabase
     private static bool _ready;
     private static string _filePath = string.Empty;
     private static string _connectionString = string.Empty;
+    /// <summary>meta 表里的键：宿主进程累计启动次数（#121 水位：容器重启次数 = 次数 - 1）。</summary>
+    public const string StartupCountMetaKey = "startup_count";
+
     private const string ReadMetaSql = "SELECT value FROM meta WHERE key = $k";
     private const string SaveMetaSql = "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
 
@@ -100,6 +103,7 @@ public static class AppDatabase
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
                 Write(EnsureConfigurationModule);
+                RestrictFilePermissions(fullPath, "库文件");
                 Volatile.Write(ref _ready, true);
             }
             catch
@@ -827,6 +831,30 @@ public static class AppDatabase
     }
 
     /// <summary>
+    /// 把库文件 / 备份文件收紧到 600（Unix 才有效；Windows 上没有这个权限位，直接跳过）。
+    ///
+    /// 为什么不是只在 <c>SecretsStore</c> 里做：那个调用点只覆盖“存过密钥”的那次写入，
+    /// 而库从第一次启动起就可能含敏感数据，备份产物更是完全绕开了它。
+    /// 失败只告警不抛：权限设不上（只读挂载、非 root 的奇怪 umask）不该让服务起不来。
+    /// </summary>
+    private static void RestrictFilePermissions(string path, string label)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception exception)
+        {
+            FileLog.Warn("Database", $"{label}权限设置失败（仍可用，但请手工 chmod 600）：{exception.Message}");
+        }
+    }
+
+    /// <summary>
     /// 在线备份 SQLite 数据库（VACUUM INTO），默认保留最近 3 份。
     /// </summary>
     public static string VacuumIntoBackup(string? backupDir = null, int maxRetained = 3)
@@ -857,6 +885,9 @@ public static class AppDatabase
         {
             Exec(conn, $"VACUUM INTO '{escapedPath}';");
         }
+
+        // 备份里同样装着明文 secrets（secrets 表的 value 是明文）：产物一落地就收紧权限。
+        RestrictFilePermissions(backupPath, "备份文件");
 
         try
         {

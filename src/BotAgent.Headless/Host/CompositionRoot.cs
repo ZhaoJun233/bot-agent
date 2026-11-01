@@ -63,6 +63,7 @@ internal sealed record AppGraph(
     BootReport BootReport,
     LoginQrService LoginQr,
     HealthReportService HealthReports,
+    DatabaseBackupService Backups,
     WebUiServer Web,
     PluginRuntime PluginRuntime,
     BackgroundEvaluatorQueue Background,
@@ -85,6 +86,7 @@ internal sealed record AppGraph(
         try { if (Mcp is not null) await Mcp.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { if (Zba is not null) await Zba.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { HealthReports.Dispose(); } catch (Exception exception) { failures.Add(exception); }
+        try { Backups.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { Agent.Dispose(); } catch (Exception exception) { failures.Add(exception); }
@@ -114,6 +116,8 @@ internal static class CompositionRoot
         BotAgent.Adapters.Time.ClockBindings.InitializeModel();
         BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
         AppDatabase.Initialize();
+        // 启动计数（#121 水位）：容器重启了几次看得出来；写在 meta 表里，重启后接着上次的数往上加。
+        RecordStartup();
         LegacyJsonImporter.ImportIfNeeded();
 
         var settings = BotConfig.Load();
@@ -300,16 +304,16 @@ internal static class CompositionRoot
 
         // 面板内的扫码登录：把 NapCat 的登录二维码搬进机器人面板
         // （用户打开面板看不到二维码，是远程部署卡住最久的原因）
-        var loginQr = new LoginQrService(settings.NapCatWebUiUrl, settings.NapCatWebUiToken,
-            new HttpFetcher(TimeSpan.FromSeconds(8), msg => FileLog.Write("Net", msg), "login-qr"));
-
+        var loginQr = CreateLoginQr(settings);
+        // 每日热备（#121）：VACUUM INTO 早就写好了，只是从来没人按时调它。
+        var backups = CreateBackups();
         // 服务器健康日报（每天定时私聊一条状态）：整条链路只用机器人自己 + 协议端，
         // **不经过外部设备 agent**（那台电脑可能根本没开）—— 管理员 2026-09-18 明确要求。
         // 宿主事实（cgroup 内存上限 / 负载）：健康日报与面板仪表盘共用同一份只读端口
         var hostFacts = new HostMetrics();
         var healthReports = new HealthReportService(settingsBox, registry, reply, identity, scheduler, voice, gateway,
             new HttpFetcher(TimeSpan.FromSeconds(6), msg => FileLog.Write("Net", msg), "health"),
-            hostFacts);
+            hostFacts, backups);
         settingsHotReload.BindConfiguration(configuration, authorization, settingsStore.LoadCommittedRuntimeSnapshot,
             (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(configuration, caller, key, intent, mood),
             healthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
@@ -317,7 +321,7 @@ internal static class CompositionRoot
         var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
         var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, healthReports,
+            reply, participation, agentCmds, quotas, healthReports, backups,
             sessionPolicies, traces, hostFacts, audit, approvals, local, official, feishu, platformRegistry, platformPolicies,
             circuitStatusProvider, background, plugins);
 
@@ -325,16 +329,58 @@ internal static class CompositionRoot
             platformPolicies, settings, feishu, platformRegistry, capturedProviders, managedAuthorization,
             plugins: pluginRuntime.Describe);
         var zba = BuildZba(settingsBox, settingsHotReload, management, sessions, agentCmds, approvals,
-            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime);
+            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime, backups);
         return new AppGraph(settings, settingsBox, source, gateway, official, brain, agent, bootReport, loginQr,
-            healthReports, web, pluginRuntime, background, driverOperations, management, mcp.Runtime, zba);
+            healthReports, backups, web, pluginRuntime, background, driverOperations, management, mcp.Runtime, zba);
     }
+
+    /// <summary>
+    /// 面板扫码登录（#54）：把 NapCat 的二维码搬进面板。单独抽出来只是为了让 Build 保持在棘轮线内。
+    /// </summary>
+    /// <summary>每次宿主启动把 <c>startup_count</c> 加一（读不到就从 1 开始）。</summary>
+    private static void RecordStartup()
+    {
+        var previous = AppDatabase.GetMeta(AppDatabase.StartupCountMetaKey);
+        var count = long.TryParse(previous, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0 ? value + 1 : 1;
+        AppDatabase.SetMeta(AppDatabase.StartupCountMetaKey,
+            count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static LoginQrService CreateLoginQr(AppSettings settings) =>
+        new(settings.NapCatWebUiUrl, settings.NapCatWebUiToken,
+            new HttpFetcher(TimeSpan.FromSeconds(8), msg => FileLog.Write("Net", msg), "login-qr"));
+
+    /// <summary>
+    /// 每日热备（#121）。用例层只吃委托：Services 层一旦出现 BotAgent.Adapters 会被架构探针 R9 判红，
+    /// 所以这里把「备份怎么做、上次成没成写在哪个键」都收在装配点，用例只看 Func/Action。
+    /// </summary>
+    private static DatabaseBackupService CreateBackups() =>
+        new(
+            () => AppDatabase.VacuumIntoBackup(null, DatabaseBackupService.MaxRetained),
+            () => long.TryParse(AppDatabase.GetMeta(DatabaseBackupService.LastBackupMetaKey),
+                    System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var utcMs)
+                ? utcMs
+                : null,
+            () => AppDatabase.GetMeta(DatabaseBackupService.LastFailureMetaKey),
+            (tag, message) => FileLog.Write(tag, message),
+            (ok, error) =>
+            {
+                if (ok)
+                {
+                    AppDatabase.SetMeta(DatabaseBackupService.LastBackupMetaKey,
+                        Clock.UtcNow.ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+
+                AppDatabase.SetMeta(DatabaseBackupService.LastFailureMetaKey, ok ? string.Empty : error ?? string.Empty);
+            });
 
     private static ZbaRuntime BuildZba(
         SettingsBox box, SettingsHotReload hotReload, ManagedCapabilityBinding management,
         IAgentSessionStore sessions, AgentCommandService agent, ApprovalUseCase? approvals,
         BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
-        WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime)
+        WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime,
+        DatabaseBackupService backups)
     {
         // 提供商发现复用测试通道的受限出网（同一条拒绝私网/禁跳转的策略），不另开 socket。
         var discovery = management.ProviderTransport is { } providerHttp
@@ -342,7 +388,8 @@ internal static class CompositionRoot
             : null;
         var runtime = ZbaRuntime.Create(box, hotReload, management.Capabilities, sessions, agent, approvals, plugins,
             registry, () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup,
-            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current), discovery);
+            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current), discovery,
+            backups: backups);
         web.AttachZba(runtime.Endpoint);
         return runtime;
     }
@@ -601,6 +648,7 @@ internal static class CompositionRoot
         AgentCommandService agentCmds,
         ITenantQuotaLedger quotas,
         HealthReportService healthReports,
+        DatabaseBackupService backups,
         SessionPolicyLedger sessionPolicies,
         TurnTraceStore traces,
         HostMetrics hostFacts,
@@ -622,6 +670,7 @@ internal static class CompositionRoot
         return new WebUiServer(settings.HealthPort, settingsBox, gateway, source, agent, loginQr, panelHttp, neteaseHttp,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
             reply, participation, agentCmds, quotas, healthReports,
+            backups: backups,
             sessionPolicies: sessionPolicies,
             traces: traces,
             hostFacts: hostFacts,

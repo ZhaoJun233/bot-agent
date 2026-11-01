@@ -242,7 +242,7 @@ jobs:
           # ⚠ 别改这个 name：分支保护的必需检查是按「Synthetic integration test (<name>)」命名的，
           # 改名等于让必需检查永远缺失、PR 永远合不了。s56–s59（#126 的核心不变量）**故意**留在这组里。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

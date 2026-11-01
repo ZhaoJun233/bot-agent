@@ -128,6 +128,7 @@ public static partial class Program
             await Scenario("s57", RunSilenceShortCircuitInvariantScenarioAsync);
             await Scenario("s58", RunQuoteFirstSegmentInvariantScenarioAsync);
             await Scenario("s59", RunVoiceTextDedupInvariantScenarioAsync);
+            await Scenario("s60", RunBackupRestoreScenarioAsync);
         await Scenario("s42", RunOfficialChannelScenarioAsync);
         }
         catch (Exception ex)

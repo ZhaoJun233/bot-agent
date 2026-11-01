@@ -35,6 +35,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     private readonly ZbaEventBuffer _events;
     private readonly ZbaTaskRegistry _tasks;
     private readonly Action<string>? _log;
+    private readonly BotAgent.Services.Ops.DatabaseBackupService? _backups;
     private int _disposed;
 
     internal ZbaHostBackend(
@@ -57,7 +58,8 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
         BotAgent.Model.ProviderModelDiscovery? discovery = null,
         BotAgent.Services.Conversations.ConversationRegistry? quotaRegistry = null,
-        TenantQuotaStore? quotaStore = null)
+        TenantQuotaStore? quotaStore = null,
+        BotAgent.Services.Ops.DatabaseBackupService? backups = null)
     {
         _box = box;
         _hotReload = hotReload;
@@ -77,6 +79,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _discovery = discovery;
         _quotaRegistry = quotaRegistry;
         _quotaStore = quotaStore;
+        _backups = backups;
         _tasks = new ZbaTaskRegistry(sessions, agent, now, serverEnabled, events, taskReceipts, instanceId, log);
     }
 
@@ -136,6 +139,9 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         var counts = _tasks.Counts();
         components.Add(new ZbaComponent("agent-tasks", "task", "agent-tasks",
             counts.Active > 0 ? "running" : "idle", true, $"{counts.Active}/{counts.Total}", now));
+
+        // 每日热备状态（#121）：过期/失败时面板顶部会亮红条 —— 这里给出结论，前端不自己算日期。
+        if (PanelStatusFacts.BuildBackupComponent(_backups, now) is { } backupComponent) components.Add(backupComponent);
 
         var configuration = await ReadConfigurationQuietAsync(caller, ct).ConfigureAwait(false);
         var faulted = components.Any(component => component.State is "faulted" or "error");

@@ -26,7 +26,8 @@ const kindNames: Record<string, string> = {
   device: '设备',
   mcp: 'MCP',
   model: '模型',
-  platform: '平台'
+  platform: '平台',
+  backup: '备份'
 }
 
 const stateNames: Record<string, string> = {
@@ -48,6 +49,8 @@ const stateNames: Record<string, string> = {
   stopped: '已停止',
   paused: '已暂停',
   inactive: '未启用',
+  stale: '已过期',
+  faulted: '出现故障',
   disconnected: '已断开',
   unknown: '未知'
 }

@@ -33,6 +33,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # 内存上限（#121）：NapCat 偶尔会为一条大图/大文件把 RSS 顶上去，1 GB 机器上不设限
+    # 会把机器人一起拖进 OOM。512m 足够它日常跑（含扫码登录），超了 Docker 自己重启容器。
+    mem_limit: 512m
     environment:
       # 容器内 Linux QQ 的运行用户，需与挂载目录属主一致
       - NAPCAT_UID=${NAPCAT_UID:-1000}
@@ -69,6 +72,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # 资源上限（#121）：部署机只有 1 GB 内存、1 核，旁边的 tts/napcat 也要活。
+    # 不设上限时一次内存尖峰是整个 Docker 一起被 OOM killer 挑；设了之后只会重启本容器，
+    # 而且健康日报里的「内存 X/Y」会提前几小时就看得出来在涨。
+    # ⚠ 改这两行要 `docker compose up -d` 重建容器才生效（不是重启）。
+    mem_limit: 768m
+    # 进程/线程上限：挡 agent 误起的死循环子进程（pids 打满时宿主机一起遭殃）。
+    pids_limit: 512
     depends_on:
       - napcat
     # ── “透过 docker 操作服务器”的挂载（管理员 2026-09-18 要的能力）──
@@ -77,9 +87,12 @@ services:
     # ⚠️ 这两个挂载是**常挂**的（compose 的挂载不能在运行时改）；
     #    面板上的「允许 agent 用 docker 操作服务器」开关决定 agent **会不会去用**它们
     #    —— 关着的时候它的工具表里没有 docker，提示词也不提这两条路径。
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/qqchat:/host/qqchat
+    # ⚠ 下面这两个挂载当前**没有生效**，是 #121 验收时发现的：本服务块里原本有两个 `volumes:` 键，
+    #   YAML 用后者覆盖前者，因此 docker.sock 与 /opt/qqchat 从来没真正挂上，现代 docker compose
+    #   还会把整份文件判成非法（duplicate key）。要给 agent 这条特权，得先决定安全边界（见 issue）。
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+    #   - /opt/qqchat:/host/qqchat
     environment:
       # ---- 模型（OpenAI 兼容：DeepSeek / OpenAI / 通义 / 本地 Ollama 等）----
       QQCHAT_BASE_URL: ${MODEL_BASE_URL:-https://api.openai.com/v1}

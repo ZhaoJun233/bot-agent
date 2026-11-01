@@ -199,7 +199,7 @@ internal static class Baseline
     /// HEAD 的 62 是未含 Wave1–4 迁移的基线，不能与工作树 61 当成同一 diff。
     /// S6：删除旧面板静态资源（wwwroot + PanelAssets 的 File.ReadAllBytes）→ 61 降为 60。
     /// </summary>
-    public const int FileIoTotal = 60;
+    public const int FileIoTotal = 57;
 
     // 逐文件迁移角色映射，不是新工程目录白名单。旧副本仍扫描、仍计入全局总数。
     // 前 21 项原位于 Headless/Adapters/Persistence；OfficialIdMap 是已迁出的同一旧持久化类型。

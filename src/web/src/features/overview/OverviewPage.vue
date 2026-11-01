@@ -56,6 +56,15 @@ const quickStarts = [
 const components = computed(() => Array.isArray(props.status.components) ? props.status.components : [])
 const recentErrors = computed(() => Array.isArray(props.status.recentErrors) ? props.status.recentErrors : [])
 const availableCount = computed(() => components.value.filter((component) => component.available).length)
+
+/** 每日热备（#121）：过期或失败时给一条红条 —— 备份没人看就等于没有备份。 */
+const backupComponent = computed(() => components.value.find((component) => component.id === 'backup'))
+const backupAlert = computed(() => {
+  const component = backupComponent.value
+  if (!component || component.available) return ''
+  const reason = component.reasonCode?.trim() || (component.state === 'stale' ? '备份过期了' : '备份失败了')
+  return `数据库热备异常：${reason}。请先在服务器上确认 data/backups 里还有可用的备份，再看日志排查。`
+})
 const attentionCount = computed(() => components.value.length - availableCount.value)
 const lastSuccessLabel = computed(() => props.lastSuccessAt === null ? '尚未成功读取' : formatDate(props.lastSuccessAt))
 const uptimeLabel = computed(() => uptime(props.status.startedAt))
@@ -141,6 +150,11 @@ function reasonText(code: string | undefined | null): string | null {
       <span class="health-mark"><AppIcon :name="heroTone === 'ok' ? 'check' : 'alert'" :size="19" /></span>
       <div><strong>{{ headline }}</strong><p>{{ props.status.ready ? '服务已就绪' : '服务准备中' }} · {{ availableCount }} / {{ components.length }} 个组件可用 · {{ recentErrors.length }} 条最近错误</p></div>
     </div>
+
+    <p v-if="backupAlert" class="inline-notice bad" data-testid="backup-stale-banner" role="alert">
+      <strong>⚠ 备份</strong>
+      <span>{{ backupAlert }}</span>
+    </p>
 
     <p v-if="props.stale" class="inline-notice warn" data-testid="stale-banner" role="status">
       显示的是上次成功读取的数据；最近一次刷新失败，状态可能已过期。

@@ -114,4 +114,25 @@ describe('OverviewPage', () => {
     const events = wrapper.emitted('navigate') ?? []
     expect(events.map((e) => e[0])).toEqual(['capabilities', 'configuration', 'tasks'])
   })
+
+  it('备份组件异常时顶部出现红条，健康时不出现（#121）', () => {
+    const broken: ZbaComponent = {
+      id: 'backup',
+      kind: 'backup',
+      displayName: 'database-backup',
+      state: 'stale',
+      available: false,
+      reasonCode: '备份已 3 天没跑',
+      updatedAt: '2026-10-20T11:00:00+00:00'
+    }
+
+    const alerting = mountPage({ status: { ...status, components: [...status.components, broken] } })
+    expect(alerting.get('[data-testid="backup-stale-banner"]').text()).toContain('备份已 3 天没跑')
+    expect(alerting.get('[data-testid="backup-stale-banner"]').attributes('role')).toBe('alert')
+
+    const healthy = mountPage({
+      status: { ...status, components: [...status.components, { ...broken, state: 'healthy', available: true, reasonCode: undefined }] }
+    })
+    expect(healthy.find('[data-testid="backup-stale-banner"]').exists()).toBe(false)
+  })
 })

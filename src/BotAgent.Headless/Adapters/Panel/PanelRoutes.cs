@@ -138,6 +138,11 @@ new("GET", PanelMatch.Exact, "/metrics", (r) => WriteMetricsAsync(r.Context)),
             ? HandleHealthReportAsync(r.Context)
             : WriteJsonAsync(r.Context, 200, BuildHealthReportPayload())),
 
+        // ─────────── 每日热备（#121）：GET 看现状，POST 立刻备一份 ───────────
+        new("*", PanelMatch.Exact, "/api/backup", (r) => r.Method == "POST"
+            ? HandleBackupAsync(r.Context)
+            : WriteJsonAsync(r.Context, 200, BuildBackupPayload())),
+
         // ─────────── 服务器内置 Agent（cfg-0.3.3；本机桥/下载/握手入口已移除） ───────────
         new("GET", PanelMatch.Exact, "/api/agent/status", (r) => WriteJsonAsync(r.Context, 200, BuildAgentStatusPayload())),
         new("POST", PanelMatch.Exact, "/api/agent/test", (r) => HandleAgentTestAsync(r.Context)),

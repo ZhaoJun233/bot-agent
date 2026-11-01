@@ -14,4 +14,10 @@ public interface IHostFacts
 
     /// <summary>1 分钟负载均值（非 Linux、读不到 = null）。</summary>
     double? LoadAverage();
+
+    /// <summary>进程启动时刻（宿主进程自己的 <c>Process.StartTime</c>；拿不到 = null）。</summary>
+    DateTimeOffset? ProcessStartTime();
+
+    /// <summary>swap 用量与总量（非 Linux、或读不到 = null）。</summary>
+    (long Used, long Total)? SwapBytes();
 }

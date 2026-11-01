@@ -29,6 +29,13 @@
 - 核心不变量回归（#126）：S56 每会话 FIFO / S57 静默短路在发送前 / S58 引用只挂第一条 /
   S59 语音与文字不重复播报，四个场景进 CI 矩阵；`PipelineEval` 新增确定性决策链性能基线
   （`tests/fixtures/pipeline/baseline.json`，口径见 `docs/baseline/pipeline-performance-baseline.md`）。
+- 运维基线（#121）：日志按天轮转并保留 7 天（单文件 10 MiB 或跨天滚动、旧档 gzip，
+  规则抽成 `LogRotation` 并有 10 条探针用例）；库与热备产物一律 `600`；宿主启动 10 分钟后自动每日热备
+  （保留 3 份、同一天不重复、同一时刻只跑一个，结果写 `meta` 表），面板新增 `GET/POST /api/backup`；
+  `/status` 与 ZBA status 暴露库/日志/最近备份/内存与 swap/启动次数，总览页对「备份过期或失败」显示红条；
+  compose 给 `qqchat`（768m/512）与 `napcat`（512m）加上限，并修掉重复 `volumes:` 键导致的
+  `docker compose config` 解析失败（特权挂载见 #131）。恢复演练落成集成场景 S60
+  （备份能独立打开、`user_version` 一致、放回去能起来）。
 
 ### 变更
 

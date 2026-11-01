@@ -2082,6 +2082,8 @@ public static partial class Program
     {
         public long? MemoryLimitBytes() => 1024L * 1024 * 1024;
         public double? LoadAverage() => 0.5;
+        public DateTimeOffset? ProcessStartTime() => new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        public (long Used, long Total)? SwapBytes() => (256L * 1024 * 1024, 2L * 1024 * 1024 * 1024);
     }
 
     private sealed class FakeOfficialIdMap : IOfficialIdMap

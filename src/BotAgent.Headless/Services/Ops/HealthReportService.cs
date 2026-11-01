@@ -55,6 +55,7 @@ public sealed class HealthReportService : IDisposable
     private readonly VoiceUseCase _voice;
     private readonly IQqChatSource _source;
     private readonly IHostFacts _host;
+    private readonly DatabaseBackupService? _backups;
 
     private Timer? _timer;
     private int _disposed;
@@ -77,7 +78,8 @@ public sealed class HealthReportService : IDisposable
         VoiceUseCase voice,
         IQqChatSource source,
         IHttpFetcher http,
-        IHostFacts host)
+        IHostFacts host,
+        DatabaseBackupService? backups = null)
     {
         _box = box;
         _conversations = conversations;
@@ -88,6 +90,7 @@ public sealed class HealthReportService : IDisposable
         _source = source;
         _http = http;
         _host = host;
+        _backups = backups;
         _knownTime = box.Current.HealthReportTime;
         _knownTargets = box.Current.HealthReportTargets;
         _knownEnabled = box.Current.HealthReportEnabled;
@@ -490,6 +493,25 @@ public sealed class HealthReportService : IDisposable
         if (warnCount > 0 && lastWarn is { Length: > 0 })
         {
             warnings.Add("最近告警：" + Trim(lastWarn, 70));
+        }
+
+        // ---- 备份：多久没跑（#121；保留期按天算，过期就得上日报提醒）----
+        if (_backups is not null)
+        {
+            var backupText = _backups.LastSuccessAt is { } lastBackup
+                ? $"最近一次 {lastBackup:MM-dd HH:mm}"
+                : "还没有成功过";
+            if (_backups.LastError is { Length: > 0 } backupFailure)
+            {
+                backupText += $"｜⚠ {Trim(backupFailure, 60)}";
+            }
+
+            lines.Add("备份：" + backupText);
+        }
+
+        if (_backups?.FailureSummary(now) is { } backupWarning)
+        {
+            warnings.Add(backupWarning);
         }
 
         // ---- 告警收尾：最多 4 条，别把日报写成长篇 ----

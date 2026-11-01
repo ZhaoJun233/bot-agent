@@ -35,6 +35,8 @@ public static class Program
             AuditChainTests();
             TraceArchiveTests();
             OnlineBackupTests(root);
+            LogRotationTests(root);
+            BackupSingleFlightTests();
             MultiTenantIsolationTests(root);
             QuotaManagementTests();
             MultiPlatformBotAgentTests(root);
@@ -233,6 +235,20 @@ public static class Program
         cmd.CommandText = "SELECT COUNT(1) FROM settings;";
         var count = Convert.ToInt32(cmd.ExecuteScalar());
         Check(count >= 1, "备份文件具备完整 SQLite 结构与数据一致性");
+
+        // 每日调度（#121）：定时器每小时醒一次，但「今天已经备过」时不能再备 —— 否则保留 3 份只剩 3 小时历史。
+        var calls = 0;
+        var nowMs = BotAgent.Adapters.Time.Clock.UtcNow.ToUnixTimeMilliseconds();
+        using var scheduler = new BotAgent.Services.Ops.DatabaseBackupService(
+            () => { calls++; return "synthetic.db"; },
+            () => nowMs,
+            () => null,
+            (_, _) => { });
+        var skipped = scheduler.RunNowAsync().GetAwaiter().GetResult();
+        Check(skipped.Ok && skipped.Path is null && calls == 0, "今天已经备过时每日调度不再重复备份");
+
+        var forced = scheduler.RunNowAsync(force: true).GetAwaiter().GetResult();
+        Check(forced.Ok && calls == 1 && forced.Path == "synthetic.db", "面板「立刻备一份」可以绕过当日去重");
     }
 
     private static void QuotaManagementTests()
@@ -296,6 +312,104 @@ public static class Program
         try { operation(); }
         catch (TenantQuotaManagementException ex) when (ex.Code == code) { Check(true, code); return; }
         throw new InvalidOperationException("expected " + code);
+    }
+
+    /// <summary>
+    /// 日志轮转（#121 验收①）：写满/跨天才滚、旧档 gzip、超过 7 天的档被删。
+    /// 这里直接打 LogRotation 的纯文件操作，不必等线上真写满 10 MiB。
+    /// </summary>
+    private static void LogRotationTests(string root)
+    {
+        var logs = Path.Combine(root, "logs-rotation");
+        Directory.CreateDirectory(logs);
+        var active = Path.Combine(logs, LogRotation.ActiveFileName);
+        var today = DateOnly.FromDateTime(Clock.LocalDateTime);
+
+        Check(LogRotation.ShouldRoll(Clock.LocalDateTime, LogRotation.DefaultMaxBytes + 1, today, LogRotation.DefaultMaxBytes),
+            "写满 10 MiB 就该滚动");
+        Check(!LogRotation.ShouldRoll(Clock.LocalDateTime, 1024, today, LogRotation.DefaultMaxBytes),
+            "既没写满也没跨天时不滚动");
+        Check(LogRotation.ShouldRoll(Clock.LocalDateTime.AddDays(-1), 1024, today, LogRotation.DefaultMaxBytes),
+            "跨天就滚动（按天转，不按份数）");
+
+        File.WriteAllText(active, "2026-11-01 00:00:00.000 [Probe] 第一行" + Environment.NewLine);
+        var archived = LogRotation.Roll(logs, today);
+        Check(archived is not null && File.Exists(archived!) && archived!.EndsWith(".gz", StringComparison.Ordinal),
+            "滚动后旧档被 gzip");
+        Check(!File.Exists(active), "滚动后活跃文件被改名（下一条日志重新创建它）");
+        Check(ReadGzip(archived!) is { } archivedText && archivedText.Contains("第一行", StringComparison.Ordinal),
+            "旧档内容完整、能解压回来");
+
+        File.WriteAllText(active, "2026-11-01 00:00:01.000 [Probe] 第二行" + Environment.NewLine);
+        var second = LogRotation.Roll(logs, today);
+        Check(second is not null && !string.Equals(second, archived, StringComparison.Ordinal) && File.Exists(archived!),
+            "同一天第二次滚动不覆盖上一份");
+
+        var expired = Path.Combine(logs, "qqchat-2000-01-01.log.gz");
+        File.WriteAllText(expired, "expired");
+        File.SetLastWriteTimeUtc(expired, Clock.UtcNow.UtcDateTime.AddDays(-8));
+        var fresh = Path.Combine(logs, "qqchat-2000-01-02.log.gz");
+        File.WriteAllText(fresh, "fresh");
+        File.SetLastWriteTimeUtc(fresh, Clock.UtcNow.UtcDateTime.AddDays(-3));
+        File.WriteAllText(active, "2026-11-01 00:00:02.000 [Probe] 活着" + Environment.NewLine);
+        var removed = LogRotation.Sweep(logs, Clock.UtcNow, LogRotation.DefaultRetentionDays);
+        Check(removed >= 1 && !File.Exists(expired), "超过 7 天的旧档被删（日志含群聊正文，保留期是硬约束）");
+        Check(File.Exists(fresh), "7 天内的旧档保留");
+        Check(File.Exists(active), "清理不会误删活跃日志");
+    }
+
+    /// <summary>热备是单任务（#121 验收③）：两个入口同时点火也只跑一个，第二个排队。
+    /// 之所以重要：定时器 + 面板按钮 + 重启后的新实例会同时触发，VACUUM 抢写锁只会互相拖慢。</summary>
+    private static void BackupSingleFlightTests()
+    {
+        var running = 0;
+        var peak = 0;
+        var calls = 0;
+        using var scheduler = new DatabaseBackupService(
+            () =>
+            {
+                Interlocked.Increment(ref calls);
+                var current = Interlocked.Increment(ref running);
+                InterlockedMax(ref peak, current);
+                Thread.Sleep(120);
+                Interlocked.Decrement(ref running);
+                return "synthetic.db";
+            },
+            () => null,
+            () => null,
+            (_, _) => { });
+        var first = Task.Run(() => scheduler.RunNowAsync(force: true));
+        var second = Task.Run(() => scheduler.RunNowAsync(force: true));
+        Task.WaitAll(first, second);
+        Check(peak == 1 && calls == 2, "同一时刻只有一个热备任务在跑（并发调用被串行化）");
+        Check(first.Result.Ok && second.Result.Ok, "串行化后两次调用都成功");
+    }
+
+    private static string? ReadGzip(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var gzip = new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress);
+            using var reader = new StreamReader(gzip, Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int current;
+        while (value > (current = Volatile.Read(ref target)))
+        {
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+            {
+                return;
+            }
+        }
     }
 
     private static void MultiTenantIsolationTests(string root)

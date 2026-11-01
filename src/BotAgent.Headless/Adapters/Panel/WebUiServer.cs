@@ -164,6 +164,7 @@ public sealed partial class WebUiServer : IDisposable
         SessionPolicyLedger? sessionPolicies = null,
         TurnTraceStore? traces = null,
         IHostFacts? hostFacts = null,
+        BotAgent.Services.Ops.DatabaseBackupService? backups = null,
          IAuditChain? audit = null,
         ApprovalUseCase? approvals = null,
         LocalChannelSource? localChannel = null,
@@ -210,6 +211,7 @@ public sealed partial class WebUiServer : IDisposable
         _traceArchive = traces?.Archive;
         _auditChain = audit;
         _hostFacts = hostFacts;
+        _backups = backups;
         _approvals = approvals;
         _localChannel = localChannel;
         _onRestart = onRestart;
@@ -248,6 +250,7 @@ public sealed partial class WebUiServer : IDisposable
 
     /// <summary>宿主事实（批次 J 的仪表盘要内存上限与负载）：只读端口，测试环境里可以是 null。</summary>
     private readonly IHostFacts? _hostFacts;
+    private readonly BotAgent.Services.Ops.DatabaseBackupService? _backups;
 
     /// <summary>审批用例（批次 I 的面板审批卡）：测试环境里可以是 null（那时端点报 available=false）。</summary>
     private readonly ApprovalUseCase? _approvals;

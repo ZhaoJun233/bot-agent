@@ -63,7 +63,7 @@
 
 ---
 
-## 二、旧 `/api/*`（50 条路由条目 / 49 条唯一路径，已冻结）
+## 二、旧 `/api/*`（51 条路由条目 / 50 条唯一路径，已冻结）
 
 > **冻结声明**
 >
@@ -72,7 +72,7 @@
 > 不要再往 `PanelRoutes.cs` 的这张表里加行 —— 它没有 OpenAPI、没有契约版本、也没有前端类型。
 > 既有行只做「随功能下线一起删」的维护，不做能力扩展。
 
-50 条路由条目里 `/api/quotas` 的 `GET` 与 `POST` 共用同一条路径，所以唯一路径是 49 条。
+51 条路由条目里 `/api/quotas` 的 `GET` 与 `POST` 共用同一条路径，所以唯一路径是 50 条。
 
 匹配模式：`Exact` 精确匹配、`Prefix` 前缀匹配（`r.Rest` 拿到剩余段）、`ExactFile` 精确文件；
 方法为 `*` 表示同一处理器按 `r.Method` 自行分派（通常是 GET 读 / POST 写）。
@@ -98,6 +98,7 @@
 | `GET` | `/api/quotas` | Exact | 读已登记 SourceKey 的每日 Token 配额与用量 |
 | `POST` | `/api/quotas` | Exact | 写单个配额上限（CAS + 持久化回执） |
 | `*` | `/api/health-report` | Exact | `GET` 读健康日报配置、`POST` 触发/保存 |
+| `*` | `/api/backup` | Exact | `GET` 读热备状态（最近成功时间、是否过期、保留份数）、`POST` 立刻做一次热备 |
 | `GET` | `/api/agent/status` | Exact | 服务器内置 Agent 的运行状态 |
 | `POST` | `/api/agent/test` | Exact | 对 Agent 当前模型做一次连通性测试 |
 | `*` | `/api/agent/models` | Exact | `GET` 列上游可用模型、`POST` 触发模型列表刷新 |

@@ -88,6 +88,7 @@ public static class Program
         // 启动自述放在"会话已恢复、表情包库已载入"之后：那两行讲的就是此刻这张图的状态
         graph.BootReport.Write();
         graph.HealthReports.Start();
+        graph.Backups.Start();
 
         using var web = graph.Web;
         if (settings.HealthPort > 0)
