@@ -43,6 +43,10 @@
   能力设置新增两条 Playwright 端到端（模型字段、群聊白名单保存并回读）。覆盖矩阵见
   [配置与权限回归测试矩阵](docs/testing/configuration-permission-regression.md)。
 
+- 协议 / 工具 / 插件回归矩阵（#112）：新增 S64 钉住 OneBot 动作响应 `message_id` 的
+  数字与字符串两种写法；矩阵 `docs/testing/protocol-tool-plugin-regression.md` 把协议收发、
+  排队并发、Agent 工具、插件生命周期、异常恢复逐条对到现有场景与探针。
+
 ### 变更
 
 - **升级到 .NET 10**（#102）：30 个工程 `TargetFramework=net10.0`，`global.json` 钉 SDK 10.0.101，

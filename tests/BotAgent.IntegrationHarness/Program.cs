@@ -132,6 +132,7 @@ public static partial class Program
             await Scenario("s61", RunProviderRegistryScenarioAsync);
             await Scenario("s62", RunLegacyVersionScenarioAsync);
         await Scenario("s63", RunWhitelistHotReloadScenarioAsync);
+        await Scenario("s64", RunOneBotWireScenarioAsync);
         await Scenario("s42", RunOfficialChannelScenarioAsync);
         }
         catch (Exception ex)
