@@ -142,7 +142,7 @@ public sealed class SettingsHotReload
     }
     internal ValueTask<ConfigurationModule.LegacySaveOutcome> SaveLegacyConfigurationAsync(ConfigurationOperationKey? key,
         ConfigurationPatch changes, ImmutableArray<SecretEdit> secrets, FieldEdit<string> mood,
-        bool ttsProjectionRequested, CancellationToken ct = default)
+        bool ttsProjectionRequested, ConfigurationVersion? expectedVersion = null, CancellationToken ct = default)
     {
         var empty = ImmutableArray<ConfigurationModule.LegacyActionResult>.Empty;
         if (_configuration is null || !ConfigurationAuthorization.TryGetCaller(ConfigurationAccess.SaveConfiguration, out var caller))
@@ -164,7 +164,7 @@ public sealed class SettingsHotReload
         }
         var result = SaveAndApply(caller, actualKey, changes, secrets, () =>
         {
-            outcome = ConfigurationBridge.SaveLegacyWithMoodAsync(_configuration, caller, actualKey, changes, secrets, mood, ct)
+            outcome = ConfigurationBridge.SaveLegacyWithMoodAsync(_configuration, caller, actualKey, changes, secrets, mood, ct, expectedVersion)
                 .GetAwaiter().GetResult();
             return outcome.ConfigurationResult;
         }, ttsProjectionRequested, ApplyMood);

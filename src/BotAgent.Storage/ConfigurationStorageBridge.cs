@@ -199,8 +199,9 @@ internal static class ConfigurationStorageBridge
         => store.SaveLegacyAsync(caller, key, changes, secrets, ct);
     internal static ValueTask<LegacySaveOutcome> SaveLegacyWithMoodAsync(ConfigurationStore store,
         ConfigurationCaller caller, ConfigurationOperationKey key, ConfigurationPatch changes,
-        ImmutableArray<SecretEdit> secrets, FieldEdit<string> mood, CancellationToken ct = default)
-        => store.SaveLegacyWithMoodAsync(caller, key, changes, secrets, mood, ct);
+        ImmutableArray<SecretEdit> secrets, FieldEdit<string> mood, CancellationToken ct = default,
+        ConfigurationVersion? expectedVersion = null)
+        => store.SaveLegacyWithMoodAsync(caller, key, changes, secrets, mood, ct, expectedVersion);
     internal static ValueTask<LegacyFindOutcome> FindLegacyAsync(ConfigurationStore store,
         ConfigurationCaller caller, ConfigurationOperationKey key, CancellationToken ct = default)
         => store.FindLegacyAsync(caller, key, ct);

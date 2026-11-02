@@ -1,4 +1,4 @@
-# 模型配置的生效路径（#103 / #128）
+# 模型配置的生效路径（#103 / #128 / #132）
 
 回答一个问题：**在面板里改一个模型配置，什么时候立刻生效，什么时候必须重启？**
 这份文件是那次 P1 故障（「改了模型配置但实际调用还是旧的」）的结论沉淀，
@@ -20,7 +20,8 @@
 | 持久化 | `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | 同一个事务写 settings JSON、`model_providers` 行与 `secrets` 行；密钥正文只进 `secrets` |
 | 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`SettingsStore.cs:695`） | 供应商级字段一律热应用（#128）：`applyState` 不再比对启动快照，`running` 只用于展示此刻生效的显示值 |
 | 候选表 | `CompositionRoot.InspectModelProjection`（`CompositionRoot.cs:1005`）+ `ModelProviderRegistry.Replace`（`Host/ModelProviderRegistry.cs`）+ `ProviderFailoverRunner.ReplaceCandidates`（`src/BotAgent.Model/Resilience/ProviderCircuitBreaker.cs:298`） | 保存配置时读一次新候选表并**整体替换**（#128）；执行器只造一次，熔断器按供应商 id 复用 |
-| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.cs:1066` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
+| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.cs:1096` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
+| 发现模型 | `CompositionRoot.TryBuildProviderTestRoute`（`CompositionRoot.cs:1065`） | 与运行期共用 `ProviderRouteBoundary`（#132）：面板能测通的端点，线上也一定接受；只多放行「未启用」这一条 |
 | 发送 | `src/BotAgent.Model/OpenAiClient.cs:278` `SendThroughProvidersAsync` | 拿不到路由就 `provider_secret_unavailable`，按设计**不降级到旧配置** |
 
 关键点：**没有「已建好的模型客户端」这层缓存**。路由是每次请求现拼的
@@ -71,6 +72,24 @@
 - 先换候选表再换 `Captured`：回读投影绝不能看到「新行 + 旧候选表」；
 - 供应商 id 相同的断路器必须复用；只有 id 消失时才丢弃。
 
+### 2.2 发现模型与真实调用共用同一条硬边界（#132）
+
+以前「面板里点发现模型」走的是另一条路：只读库、每次现开事务，**不比对装配快照**。
+于是会出现最难解释的一类现象 —— 面板测通、线上拒绝，日志里也看不出两条路差在哪。
+
+现在两边都过 `CompositionRoot.ProviderRouteBoundary`（`CompositionRoot.cs:1051`），
+返回同一种原因码：
+
+| 原因码 | 运行期路由 | 发现模型 |
+| --- | --- | --- |
+| `provider_id_not_trimmed` / `provider_protocol_changed` / `provider_options_changed` / `provider_endpoint_changed` | 拒绝 | 拒绝 |
+| `provider_disabled` | 拒绝 | **放行**（保存前先试连未启用的供应商，这是唯一更宽的一处） |
+| `provider_missing` | 拒绝 | 拒绝 |
+
+拒绝时两条通道都写日志：运行期 `provider_route_blocked`、测试路由 `provider_test_route_blocked`，
+都带 provider id 与 reason。判定表由探针 `ProviderRoutingBoundaryTests` 直接钉住（反射调私有方法），
+防止两边再次分叉。
+
 ---
 
 ## 3. 失败必须可见，不能静默
@@ -78,6 +97,8 @@
 - 路由解析不是失败关闭就是成功，**没有「悄悄用旧配置」这条路径**；
   但「失败关闭」必须让运维看得见：
   - 日志 `Provider 调用不可用，进入安全静默（reason=...，hops=...）`；
+  - 辅助通道（`//` 任务）同一口径（#132）：`辅助模型调用不可用，进入安全静默（reason=provider_secret_unavailable）`
+    —— 以前这里直接 `return null`、一行日志都没有，表现为「任务哑了、日志干净」；
   - 错误码 `provider_secret_unavailable` / `provider_route_unavailable` / `endpoint_authorization_required`
     在前端 `src/web/src/shared/friendly.ts` 有中文文案；
   - 保存回执的 `ModelProjection` 步骤如实报 `Applied` 或 `RestartRequired`；
@@ -95,8 +116,9 @@
 | 聊天回复（含辅助调用） | 走 | 受 failover/熔断约束 |
 | 服务器 `//` Agent | 显式 override 时绕过 | `ServerAgentRunner` 传自己的 baseUrl/key |
 
-因此凭据不可用时可能表现为「普通聊天哑了、`//` 任务还能用」。这是**已知分叉**，
-统一两条通道会改变 failover 行为，属独立议题（见 #103 报告的 S3）。
+因此凭据不可用时可能表现为「普通聊天哑了、`//` 任务还能用」。这是**已知分叉**；
+#132 只统一了「失败必须可见」（同错误码、同级别日志、都过同一条硬边界），
+把两条通道真正并成一条会改变 failover 行为，仍属独立议题（见 #103 报告的 S3）。
 
 ---
 
@@ -109,3 +131,7 @@
 5. 面板改动必跑 `cd src/web && npm run typecheck && npm run test:unit`。
 6. 动候选表（增删供应商 / 调优先级 / 启停）回归 `BOTAGENT_IT_ONLY=s61`：它钉住「不重启就换路由」与「删除后回到 primary」。
 7. 不要把断路器状态放进候选表一起换 —— 那等于让改配置顺手清掉熔断。
+8. 改 `ProviderRouteBoundary` 等于同时改「运行期身份」与「面板发现」，回归要同时跑
+   `BOTAGENT_IT_ONLY=s21`（运行期）与面板里的供应商测连；探针 `ProviderRoutingBoundaryTests` 会拦判定表漂移。
+9. 辅助通道的静默日志不要删：`tests/BotAgent.ProtocolProbe` 的 B23 用 `ModelLogging.WarnHandler` 捕获它，
+   删掉会红（这正是「任务哑了、日志干净」的回归护栏）。

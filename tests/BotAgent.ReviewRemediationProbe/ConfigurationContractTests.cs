@@ -47,6 +47,8 @@ internal static class ConfigurationContractTests
             return PlatformCompatibilityChildAsync();
         if (args.Length == 1 && args[0] == "--configuration-legacy-mood")
             return LegacyMoodChildAsync();
+        if (args.Length == 1 && args[0] == "--configuration-legacy-version")
+            return LegacyVersionChildAsync();
         if (args.Length == 1 && args[0] == "--configuration-legacy-mood-audit")
             return LegacyMoodChildAsync(audit: true);
         if (args.Length == 3 && args[0] == "--configuration-legacy-mood-reopen")
@@ -1101,6 +1103,7 @@ internal static class ConfigurationContractTests
             ("--configuration-write-boundaries", "CFG_CHILD write-boundaries passed=27 failed=0"),
             ("--configuration-http", "CFG_CHILD configuration-http passed=27 failed=0"),
             ("--configuration-legacy-mood", "CFG_CHILD legacy-mood passed=21 failed=0"),
+            ("--configuration-legacy-version", "CFG_CHILD legacy-version passed=3 failed=0"),
             ("--configuration-legacy-mood-audit", "CFG_CHILD legacy-mood-audit passed=10 failed=0"),
             ("--configuration-apply-claims", "CFG_CHILD apply-claims passed=14 failed=0"),
             ("--configuration-global-capacity", "CFG_CHILD global-capacity passed=10 failed=0") })
@@ -2307,6 +2310,55 @@ internal static class ConfigurationContractTests
             if (!string.Equals(Path.GetDirectoryName(full), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)
                 || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(full), "^botagent-configuration-writers-[0-9a-f]{32}$"))
                 throw new InvalidOperationException("configuration_writer_fixture_cleanup_scope");
+            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
+        }
+    }
+
+    private static async Task<int?> LegacyVersionChildAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-legacy-version-" + Guid.NewGuid().ToString("N"));
+        Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
+        Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
+        var passed = 0;
+        void Check(bool condition, string label)
+        {
+            if (!condition) { Console.WriteLine("FAIL CFG_LEGACY_VERSION " + label); throw new InvalidOperationException(label); }
+            passed++;
+        }
+        try
+        {
+            ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
+            var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
+            new SettingsStore().Save(new AppSettings { AiDesire = 10 });
+            var participant = new SyntheticParticipant();
+            var store = StorageConfiguration.ConfigurationStorageBridge.Activate(clock, participant);
+            var caller = new ConfigurationCaller("synthetic-authority", "synthetic-legacy-version-owner", "bot",
+                ConfigurationAccess.SaveConfiguration | ConfigurationAccess.ReadEditable);
+            var read = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
+            ConfigurationOperationKey Key() => new(read.Generation, clock.Now.ToUnixTimeSeconds(), Guid.NewGuid());
+            ConfigurationPatch Patch(int value) => new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(value) },
+                null, null, null, null, null, null, null);
+            ValueTask<StorageConfiguration.LegacySaveOutcome> Save(ConfigurationOperationKey key, int value,
+                ConfigurationVersion? expected)
+                => StorageConfiguration.ConfigurationStorageBridge.SaveLegacyWithMoodAsync(store, caller, key, Patch(value),
+                    ImmutableArray<SecretEdit>.Empty, FieldEdit<string>.Keep(), default, expected);
+            var currentVersion = read.Version;
+            var pinned = await Save(Key(), 11, currentVersion);
+            Check(pinned.ConfigurationResult.Code == ConfigurationResultCode.Ok && participant.Value == 11,
+                "legacy_save_with_current_expected_version_commits");
+            var stale = await Save(Key(), 12, currentVersion);
+            Check(stale.ConfigurationResult.Code == ConfigurationResultCode.VersionConflict && participant.Value == 11,
+                "legacy_save_with_stale_expected_version_conflicts");
+            var unversioned = await Save(Key(), 12, null);
+            Check(unversioned.ConfigurationResult.Code == ConfigurationResultCode.Ok && participant.Value == 12,
+                "legacy_save_without_expected_version_keeps_last_write_wins");
+            Console.WriteLine($"CFG_CHILD legacy-version passed={passed} failed=0"); return 0;
+        }
+        catch (Exception error)
+        { Console.WriteLine($"CFG_CHILD legacy-version passed={passed} failed=1 type={error.GetType().Name}"); return 1; }
+        finally
+        {
+            SqliteConnection.ClearAllPools(); var full = Path.GetFullPath(root);
             if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
         }
     }

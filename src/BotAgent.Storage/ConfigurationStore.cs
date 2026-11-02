@@ -140,10 +140,12 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
 
     internal async ValueTask<LegacySaveOutcome> SaveLegacyWithMoodAsync(ConfigurationCaller caller,
         ConfigurationOperationKey key, ConfigurationPatch changes, ImmutableArray<SecretEdit> secrets,
-        FieldEdit<string> mood, CancellationToken ct = default)
+        FieldEdit<string> mood, CancellationToken ct = default, ConfigurationVersion? expectedVersion = null)
     {
+        // 旧面板入口可以带上它读到的版本（#132）：带版本时按 Strict 同口径校验，不带版本时保持原有 last-write-wins
+        // 行为、但调用方会在回执里标 legacy_unverified，让「这次保存没有并发保护」这件事可被看见。
         var result = await SaveCore(caller, new(Revision, new(0), key, changes, secrets),
-            ConfigurationStorageProfile.Legacy, ct, mood);
+            ConfigurationStorageProfile.Legacy, ct, mood, expectedVersion);
         if (result.Code is not (ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges))
             return new(result, ImmutableArray<LegacyActionResult>.Empty);
         // This only reads the reservation. The trusted Host separately decides first-request execution.
@@ -318,7 +320,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     }
 
     private ValueTask<ConfigurationSaveResult> SaveCore(ConfigurationCaller caller, ConfigurationSaveRequest request,
-        ConfigurationStorageProfile profile, CancellationToken ct, FieldEdit<string> mood = default)
+        ConfigurationStorageProfile profile, CancellationToken ct, FieldEdit<string> mood = default,
+        ConfigurationVersion? expectedLegacyVersion = null)
     {
         if (!Allowed(caller, ConfigurationAccess.SaveConfiguration))
             return ValueTask.FromResult(Rejected(ConfigurationResultCode.Forbidden));
@@ -347,7 +350,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                         || (owned.Secrets.Any(s => s.Kind != SecretEditKind.Keep)
                             && !Allowed(caller, ConfigurationAccess.EditAllowedSecrets)))
                         outcome = Rejected(ConfigurationResultCode.Forbidden);
-                    else outcome = SaveInTransaction(conn, caller, request, owned, profile, ct, mood);
+                    else outcome = SaveInTransaction(conn, caller, request, owned, profile, ct, mood, expectedLegacyVersion);
                     callbackComplete = true;
                 });
             }
@@ -368,7 +371,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
 
     private ConfigurationSaveResult SaveInTransaction(SqliteConnection conn, ConfigurationCaller caller,
         ConfigurationSaveRequest request, OwnedIntent owned, ConfigurationStorageProfile profile, CancellationToken ct,
-        FieldEdit<string> mood = default)
+        FieldEdit<string> mood = default, ConfigurationVersion? expectedLegacyVersion = null)
     {
         var version = Version(conn);
         var governance = Govern(conn, request.Key, out var floor);
@@ -415,6 +418,10 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             if (!HasCapacity(conn, caller, floor, mood.Kind == EditKind.Keep ? 1 : 2))
                 return Rejected(ConfigurationResultCode.CapacityExceeded, version);
             if (profile == ConfigurationStorageProfile.Strict && request.ExpectedVersion != version)
+                return Rejected(ConfigurationResultCode.VersionConflict, version);
+            // #132：旧入口带版本时与 Strict 同口径；不带版本时保持 last-write-wins（回执由面板标 legacy_unverified）。
+            if (profile != ConfigurationStorageProfile.Strict && expectedLegacyVersion is { } legacyVersion
+                && legacyVersion != version)
                 return Rejected(ConfigurationResultCode.VersionConflict, version);
             if (ct.IsCancellationRequested) return Rejected(ConfigurationResultCode.CancelledBeforeCommit, version);
             var mutations = owned.Secrets.Select(s => s.CredentialKey is { } key

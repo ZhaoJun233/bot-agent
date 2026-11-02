@@ -47,6 +47,7 @@ internal static class Program
             await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));
             await RunAsync("managed operations", () => ManagedOperationContractTests.RunAsync(Check));
             await RunAsync("managed host capabilities", () => ManagedHostCapabilityTests.RunAsync(Check));
+            await RunAsync("model provider routing boundary", () => ProviderRoutingBoundaryTests.RunAsync(Check));
             await RunAsync("backend review panel, rollback and secret regression", () => ReviewPanelRegression.RunAsync(Check));
             await RunAsync("naming compatibility", () => { NamingCompatibilityTests.RunAsync(Check); return Task.CompletedTask; });
             await RunAsync("engine wiring", () => EngineWiringTests.RunAsync(Check));

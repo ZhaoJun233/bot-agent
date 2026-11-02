@@ -83,7 +83,21 @@ public sealed partial class WebUiServer
             }
             catch (JsonException) { await ConfigurationError(context, 400, "invalid_configuration_key"); return; }
         }
-        var outcome = await _settingsHotReload.SaveLegacyConfigurationAsync(key, plan.Changes!, plan.Secrets, plan.Mood, plan.TtsProjectionRequested);
+        // #132：旧面板入口接受可选的 expectedVersion。带上时与 ZBA 的 Strict 档同口径（不匹配 409），
+        // 不带时保持原来的 last-write-wins，但回执里显式标 legacy_unverified，让「没有并发保护」可被看见。
+        ConfigurationVersion? expectedVersion = null;
+        if (submitted["expectedVersion"] is { } expectedNode)
+        {
+            var parsedVersion = expectedNode is JsonValue expectedValue
+                && (expectedValue.TryGetValue<long>(out var expectedRaw)
+                    || (expectedValue.TryGetValue<string>(out var expectedText)
+                        && long.TryParse(expectedText, out expectedRaw)))
+                && expectedRaw >= 0 ? expectedRaw : (long?)null;
+            if (parsedVersion is null) { await ConfigurationError(context, 400, "invalid_expected_version"); return; }
+            expectedVersion = new ConfigurationVersion(parsedVersion.Value);
+        }
+        var outcome = await _settingsHotReload.SaveLegacyConfigurationAsync(key, plan.Changes!, plan.Secrets, plan.Mood,
+            plan.TtsProjectionRequested, expectedVersion);
         var result = outcome.ConfigurationResult;
         JsonObject payload;
         if (result.Code is ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges) payload = BuildSettingsPayload();
@@ -91,6 +105,7 @@ public sealed partial class WebUiServer
             ["refreshRequired"] = result.Code == ConfigurationResultCode.LegacyNeedsReview };
         payload["configurationResult"] = JsonSerializer.SerializeToNode(result, ConfigurationJson);
         payload["legacyActionResults"] = JsonSerializer.SerializeToNode(outcome.LegacyActionResults, ConfigurationJson);
+        payload["legacyVerification"] = expectedVersion is null ? "legacy_unverified" : "verified";
         await WriteJsonAsync(context, ConfigurationHttpStatus(result.Code), payload);
     }
     private async Task HandleConfigurationRequestAsync(HttpListenerContext context, string operation)

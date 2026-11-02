@@ -429,6 +429,9 @@ public class OpenAiClient : IModelClient
         var apiKey = route is not null ? route.ApiKey : string.IsNullOrWhiteSpace(apiKeyOverride) ? _settings.ApiKey : apiKeyOverride;
         if (route?.Protocol != ModelProtocol.Ollama && string.IsNullOrWhiteSpace(apiKey))
         {
+            // 与聊天通道同一口径（#132）：缺密钥不是「没有回复」，是安全静默。以前这里一行日志都没有，
+            // 于是 // 任务哑了而日志干净，只能靠猜。返回值仍是 null（可空契约，不能改成抛异常）。
+            FileLog.Warn("Agent", "辅助模型调用不可用，进入安全静默（reason=provider_secret_unavailable）");
             return null;
         }
 

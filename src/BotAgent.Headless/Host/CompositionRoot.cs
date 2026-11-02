@@ -340,7 +340,8 @@ internal static class CompositionRoot
             platformPolicies, settings, feishu, platformRegistry, () => modelRegistry.Captured, managedAuthorization,
             plugins: pluginRuntime.Describe);
         var zba = BuildZba(settingsBox, settingsHotReload, management, sessions, agentCmds, approvals,
-            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime, backups);
+            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime, backups,
+            () => modelRegistry.Captured);
         return new AppGraph(settings, settingsBox, source, gateway, official, brain, agent, bootReport, loginQr,
             healthReports, backups, web, pluginRuntime, background, driverOperations, management, mcp.Runtime, zba);
     }
@@ -391,7 +392,7 @@ internal static class CompositionRoot
         IAgentSessionStore sessions, AgentCommandService agent, ApprovalUseCase? approvals,
         BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
         WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime,
-        DatabaseBackupService backups)
+        DatabaseBackupService backups, Func<IReadOnlyList<PersistedModelProvider>> capturedProviders)
     {
         // 提供商发现复用测试通道的受限出网（同一条拒绝私网/禁跳转的策略），不另开 socket。
         var discovery = management.ProviderTransport is { } providerHttp
@@ -399,7 +400,7 @@ internal static class CompositionRoot
             : null;
         var runtime = ZbaRuntime.Create(box, hotReload, management.Capabilities, sessions, agent, approvals, plugins,
             registry, () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup,
-            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current), discovery,
+            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current, capturedProviders), discovery,
             backups: backups);
         web.AttachZba(runtime.Endpoint);
         return runtime;
@@ -483,7 +484,7 @@ internal static class CompositionRoot
             {
                 // Explicit administrator tests use current metadata, including newly saved disabled providers.
                 // Chat/failover routes remain bound to the startup registry until a restart.
-                var route = TryBuildProviderTestRoute(command.Key.Value, settingsBox.Current);
+                var route = TryBuildProviderTestRoute(command.Key.Value, settingsBox.Current, capturedProviders);
                 if (route is null) return new ConfigurationModule.ManagedDispatchResult(
                     BotAgent.Domain.Management.ManagedOperationState.Failed, "model_route_unavailable");
                 var result = await providerTester.TestAsync(route, ct).ConfigureAwait(false);
@@ -1041,7 +1042,28 @@ internal static class CompositionRoot
         return BuildProviderRoute(provider, settings, apiKey);
     }
 
-    private static ModelProviderRoute? TryBuildProviderTestRoute(string providerId, AppSettings current)
+    /// <summary>
+    /// 运行期路由与「发现模型」共用的硬边界（#132 S3）。以前测试路由只读库、不比对装配快照，
+    /// 于是面板测通、线上拒绝，排障时看不出差异。requireEnabled=false 是测试路由被允许更宽的唯一一处：
+    /// 还没启用的供应商也要能试连（保存前先测通再启用）；其余差异（协议 / Options / 非 primary 的端点）
+    /// 两条通道必须同样拒绝，拒绝原因写进日志，面板与 // 命令都能看到同一句话。
+    /// </summary>
+    private static string? ProviderRouteBoundary(PersistedModelProvider desired, PersistedModelProvider? captured,
+        bool requireEnabled)
+    {
+        if (desired.Id.Trim() != desired.Id) return "provider_id_not_trimmed";
+        if (requireEnabled && !desired.IsEnabled) return "provider_disabled";
+        if (captured is null) return null;
+        if (desired.Protocol != captured.Protocol) return "provider_protocol_changed";
+        if (desired.Options != captured.Options) return "provider_options_changed";
+        if (!string.Equals(desired.Id, "primary", StringComparison.Ordinal)
+            && (desired.BaseUrl != captured.BaseUrl || desired.ModelName != captured.ModelName))
+            return "provider_endpoint_changed";
+        return null;
+    }
+
+    private static ModelProviderRoute? TryBuildProviderTestRoute(string providerId, AppSettings current,
+        Func<IReadOnlyList<PersistedModelProvider>> captured)
     {
         try
         {
@@ -1051,6 +1073,14 @@ internal static class CompositionRoot
                 .FirstOrDefault(item => string.Equals(item.Id, providerId, StringComparison.Ordinal));
             if (provider is null || ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef)
                 is CredentialBindingState.Unclassified) return null;
+            var boundary = ProviderRouteBoundary(provider,
+                captured().FirstOrDefault(item => string.Equals(item.Id, providerId, StringComparison.Ordinal)),
+                requireEnabled: false);
+            if (boundary is not null)
+            {
+                FileLog.Warn("Model", $"provider_test_route_blocked provider={providerId} reason={boundary}");
+                return null;
+            }
             var key = ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection);
             var route = BuildProviderRoute(provider, current, key);
             transaction.Commit();
@@ -1076,13 +1106,20 @@ internal static class CompositionRoot
             // 凭据来源（SecretKeyRef）是请求级材料：面板第一次填 Key 时它从 env:QQCHAT_API_KEY 变成
             // secret:apiKey，如果这里也要求相等，整条路由会被拒 → 所有模型调用进入安全静默（#103 R1）。
             // 端点授权在保存时已经校验过（SettingsStore 的 IsAuthorizedModelEndpoint），运行期只需能解析出密钥。
-            if (desired is null || !desired.IsEnabled
-                || desired.Protocol != captured.Protocol || desired.Options != captured.Options) return null;
+            if (desired is null)
+            {
+                FileLog.Write("Model", $"provider_route_blocked provider={captured.Id} reason=provider_missing");
+                return null;
+            }
+            var boundary = ProviderRouteBoundary(desired, captured, requireEnabled: true);
+            if (boundary is not null)
+            {
+                FileLog.Write("Model", $"provider_route_blocked provider={captured.Id} reason={boundary}");
+                return null;
+            }
             var binding = ModelProviderStore.ClassifyCredentialBinding(desired.SecretKeyRef);
             if (binding == CredentialBindingState.Unclassified
                 || binding == CredentialBindingState.Unconfigured && desired.Protocol != ModelProtocol.Ollama) return null;
-            if (captured.Id != "primary"
-                && (desired.BaseUrl != captured.BaseUrl || desired.ModelName != captured.ModelName)) return null;
             var key = ResolveProviderSecretInTransaction(desired.SecretKeyRef, current, connection);
             var route = BuildProviderRoute(captured, current, key);
             transaction.Commit();

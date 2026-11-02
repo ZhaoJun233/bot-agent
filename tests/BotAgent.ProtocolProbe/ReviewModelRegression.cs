@@ -247,6 +247,19 @@ internal static class ReviewModelRegression
             var legacy = new OpenAiClient(() => options, http, http, images, transport);
             check(await legacy.SummarizePersonaAsync("Synthetic member", null, ["Synthetic statement"], 64) is null && http.Calls == 2,
                 "B23 unconfigured legacy persona still fails closed");
+            // #132：辅助通道缺密钥以前一行日志都没有（// 任务哑了、日志干净）。现在必须与聊天通道同一错误码。
+            var auxWarnings = new List<string>();
+            var originalWarn = BotAgent.Services.ModelLogging.WarnHandler;
+            BotAgent.Services.ModelLogging.WarnHandler = (tag, message) => auxWarnings.Add($"[{tag}] {message}");
+            try
+            {
+                check(await legacy.CompleteChatAsync("synthetic-model", "synthetic system",
+                        [("user", "synthetic prompt")], 64, 0.0) is null
+                    && auxWarnings.Any(line => line.Contains("provider_secret_unavailable", StringComparison.Ordinal)
+                        && line.Contains("安全静默", StringComparison.Ordinal)),
+                    "B23 " + protocol + " aux channel reports silent failure instead of returning quietly");
+            }
+            finally { BotAgent.Services.ModelLogging.WarnHandler = originalWarn; }
         }
     }
 
