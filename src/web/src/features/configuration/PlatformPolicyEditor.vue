@@ -98,7 +98,7 @@ function explicitCount(row: PolicyRowDraft): number {
         </legend>
         <p v-if="row.legacy" class="cell-sub conflict-flag">旧条目缺少显式字段：服务端要求人工核对后才允许改写。</p>
         <p v-if="row.unnamedInstance" class="cell-sub conflict-flag">
-          实例目标缺少 instanceId：该平台的实例级判定会失败关闭（全部拒绝），请补全实例标识或改用账户默认目标。
+          实例目标缺少 instanceId：这是内置驱动自己的身份（qq.private / qq.official / local 的驱动标识本来就是空的），不是「某个具体实例」。该平台只登记一个驱动时它照常生效；登记多个驱动时通道级判定仍会失败关闭。
         </p>
 
         <div class="policy-grid">
@@ -150,6 +150,9 @@ function explicitCount(row: PolicyRowDraft): number {
               @input="update(row.entry, draft => { draft.groupValue = ($event.target as HTMLInputElement).value })"
             />
             <span v-else-if="row.draft.groupKind === 2" class="cell-sub">显式全收：不再看基线白名单。</span>
+            <span v-if="row.draft.groupKind === 1 && row.draft.groupValue.trim().length === 0" class="cell-sub">
+              显式空名单 = 全拦名单外所有（和「全收」相反）；要全收请把模式改成「全收」。
+            </span>
           </div>
 
           <div class="policy-field policy-list">
@@ -174,6 +177,9 @@ function explicitCount(row: PolicyRowDraft): number {
               @input="update(row.entry, draft => { draft.privateValue = ($event.target as HTMLInputElement).value })"
             />
             <span v-else-if="row.draft.privateKind === 2" class="cell-sub">显式全收：不再看基线白名单。</span>
+            <span v-if="row.draft.privateKind === 1 && row.draft.privateValue.trim().length === 0" class="cell-sub">
+              显式空名单 = 全拦名单外所有（和「全收」相反）；要全收请把模式改成「全收」。
+            </span>
           </div>
 
           <div class="policy-field policy-actions">

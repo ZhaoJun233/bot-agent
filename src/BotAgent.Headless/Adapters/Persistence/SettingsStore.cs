@@ -819,8 +819,14 @@ public sealed partial class SettingsStore : ISettingsRepository
                     kind == ConfigurationReadKind.Editable, entry is not null && (bits & bit) == 0);
                 var applied = requested ? ApplyState.RestartRequired : runtime.RuntimePlatformPolicies.HasValue
                     ? ApplyState.Applied : ApplyState.NotStarted;
-                var display = effectiveValue is ListRule list && list.TryGetExplicitValue(out var text)
-                    ? BotAgent.Services.Agent.AgentMask.Shorten(text) : "[policy]";
+                // #129 S5：名单三态必须读得出来。「空」有两种相反的语义 —— 官方通道的标量留空是全收
+                // （AllowAll 规则），条目里的显式空串是全拦；以前两种都显示成 "[policy]" / 空串，面板上看不出区别。
+                var display = effectiveValue is not ListRule list ? "[policy]"
+                    : list.Kind == ListRuleKind.AllowAll ? "[policy] 全收（不限）"
+                    : list.Kind != ListRuleKind.Explicit ? "[policy] 跟随基线"
+                    : list.TryGetExplicitValue(out var text) && !string.IsNullOrWhiteSpace(text)
+                        ? BotAgent.Services.Agent.AgentMask.Shorten(text)
+                        : "[policy] 显式空（全拦名单外所有）";
                 return ConfigurationBridge.ProjectField(visibility, display, descriptor, mode, source, applied,
                     mode == UserValueKind.Explicit ? ruleValue : resolvedValue);
             }

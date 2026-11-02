@@ -60,18 +60,25 @@ public sealed class PlatformPolicyResolver : IPlatformPolicyResolver
         var candidates = _registry?.GetSnapshots().Where(snapshot => SameAccount(snapshot, context)).Take(2).ToArray();
         var canonical = platform == PlatformId.Feishu ? account == AccountScope.Default
             : platform is PlatformId.QqPrivate or PlatformId.QqOfficial or PlatformId.Local && account == AccountScope.Legacy;
-        var instanceOverride = settings.RuntimePlatformPolicies.Value.Any(entry => entry is not null && entry.Target is PolicyTarget.Instance instance
-            && !string.IsNullOrWhiteSpace(instance.Key.PlatformId) && PlatformId.Normalize(instance.Key.PlatformId) == platform
-            && instance.Key.AccountScope == account);
-        if (!canonical || drivers.IsDefault || drivers.Count(driver => !string.IsNullOrWhiteSpace(driver.PlatformId)
-                && PlatformId.Normalize(driver.PlatformId) == platform && driver.AccountScope == account) != 1
-            || candidates is not { Length: 1 } || instanceOverride)
+        var accountDrivers = drivers.Where(driver => !string.IsNullOrWhiteSpace(driver.PlatformId)
+            && PlatformId.Normalize(driver.PlatformId) == platform && driver.AccountScope == account).Take(2).ToArray();
+        // 「有名字的实例目标」代表某个具体实例的策略：通道级路径没有身份、不能替它判定 → 失败关闭（原有行为）。
+        // 空 instanceId 不是「某个实例」：内置驱动本来就没有实例标识（#129 S3），它就是这个驱动自己的策略；
+        // 以前也算进「存在实例级策略」，于是一条匹配不到任何东西的 id 就能把整个平台关掉。
+        var namedInstanceOverride = settings.RuntimePlatformPolicies.Value.Any(entry => entry is not null
+            && entry.Target is PolicyTarget.Instance instance && !string.IsNullOrWhiteSpace(instance.Key.PlatformId)
+            && PlatformId.Normalize(instance.Key.PlatformId) == platform && instance.Key.AccountScope == account
+            && !string.IsNullOrWhiteSpace(instance.Key.InstanceId));
+        if (!canonical || drivers.IsDefault || accountDrivers.Length != 1 || candidates is not { Length: 1 }
+            || namedInstanceOverride
+            || !string.Equals(accountDrivers[0].InstanceId, candidates[0].InstanceId, StringComparison.Ordinal))
             return Rejected(context, "source_context_required");
-        if (!drivers.Any(driver => !string.IsNullOrWhiteSpace(driver.PlatformId)
-                && PlatformId.Normalize(driver.PlatformId) == platform && driver.AccountScope == account
-                && string.Equals(driver.InstanceId, candidates[0].InstanceId, StringComparison.Ordinal)))
-            return Rejected(context, "source_context_required");
-        return ResolveTyped(settings, context, candidates[0], new PolicyTarget.AccountDefault(platform, account));
+        // 单驱动平台：无名实例目标就是这个驱动的身份，用实例目标结算（与带上下文的路径规则一致）；
+        // 有名字的驱动仍按账户默认结算（实例级覆盖已在上面失败关闭）。
+        PolicyTarget target = string.IsNullOrEmpty(accountDrivers[0].InstanceId)
+            ? new PolicyTarget.Instance(accountDrivers[0])
+            : new PolicyTarget.AccountDefault(platform, account);
+        return ResolveTyped(settings, context, candidates[0], target);
     }
 
     public EffectivePlatformPolicy Resolve(PlatformContext context)

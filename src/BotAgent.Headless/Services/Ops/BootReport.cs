@@ -50,6 +50,8 @@ public sealed class BootReport
             $"私聊白名单={gateState.Privates}{(gateState.PrivatesFromLegacy ? "（用旧的共用名单）" : "")}, " +
             // 官方那条的名单状态也得印：否则“官方通道被拦”时完全看不出到底是名单空了、还是填了不对的号
             $"官方白名单=群{gateState.OfficialGroups}/私聊{gateState.OfficialPrivates}, " +
+            // 实例级策略也印：它们会让账户级判定整条关闭，不印出来就只剩「莫名全拦」（#129 S3）
+            $"实例策略={gateState.Instances}, " +
             // 总开关状态也印：2026-09-21 线上出现过“某条通道的总开关被关掉 → 一条都不回 →
             // 日志里只有一行很容易被淹没的“忽略（…通道的总开关是关的）”，查了半天 ✗。
             $"对话总开关=私域{(privateSwitches.Enabled && privateSwitches.ChatEnabled ? "开" : "关")}/官方{(officialSwitches.Enabled && officialSwitches.ChatEnabled ? "开" : "关")}, " +

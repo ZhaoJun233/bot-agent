@@ -27,6 +27,12 @@ public sealed class WhitelistGate
     private readonly IPlatformPolicyResolver _platformPolicies;
     private readonly Func<bool, long, bool>? _feishuTargetAllowed;
 
+    /// <summary>惰性重建的串行化：只在发布版本换引用时才进锁。</summary>
+    private readonly object _rebuildGate = new();
+
+    /// <summary>上一份用来构建名单快照的配置版本（按引用比较；SettingsBox 换配置就是换引用）。</summary>
+    private AppSettings? _rebuiltFor;
+
     private HashSet<long> _groups = new();
     private bool _allGroups;
     private HashSet<long> _privates = new();
@@ -70,13 +76,15 @@ public sealed class WhitelistGate
     /// <summary>重建三份名单（启动时、以及每次设置热更新后）。</summary>
     public void Rebuild()
     {
-        var legacy = _settings.MessageWhitelist;
-        var qqPolicy = FindPolicy(PlatformId.QqPrivate, AccountScope.Legacy);
-        var offPolicy = FindPolicy(PlatformId.QqOfficial, AccountScope.Legacy);
-        var locPolicy = FindPolicy(PlatformId.Local, AccountScope.Legacy);
+        // 整个构建过程只认一个配置版本：中途被热更新换掉引用时，不能拼出"新白名单 + 旧阈值"的半版名单。
+        var settings = _box.Current;
+        var legacy = settings.MessageWhitelist;
+        var qqPolicy = FindPolicy(settings, PlatformId.QqPrivate, AccountScope.Legacy);
+        var offPolicy = FindPolicy(settings, PlatformId.QqOfficial, AccountScope.Legacy);
+        var locPolicy = FindPolicy(settings, PlatformId.Local, AccountScope.Legacy);
 
-        var groupSource = !string.IsNullOrWhiteSpace(qqPolicy?.GroupWhitelist) ? qqPolicy.GroupWhitelist : _settings.WhitelistGroups;
-        var privateSource = !string.IsNullOrWhiteSpace(qqPolicy?.PrivateWhitelist) ? qqPolicy.PrivateWhitelist : _settings.WhitelistPrivates;
+        var groupSource = !string.IsNullOrWhiteSpace(qqPolicy?.GroupWhitelist) ? qqPolicy.GroupWhitelist : settings.WhitelistGroups;
+        var privateSource = !string.IsNullOrWhiteSpace(qqPolicy?.PrivateWhitelist) ? qqPolicy.PrivateWhitelist : settings.WhitelistPrivates;
 
         _groupsFromLegacy = string.IsNullOrWhiteSpace(groupSource);
         _privatesFromLegacy = string.IsNullOrWhiteSpace(privateSource);
@@ -88,8 +96,8 @@ public sealed class WhitelistGate
 
         // 官方通道：单独的名单；两份都留空 = 全部接受（官方平台自身有准入与额度）——
         // 不能沿用 ParseWhitelist 的“空 = 全拦”，否则没配名单时官方通道会直接死掉。
-        var officialGroups = !string.IsNullOrWhiteSpace(offPolicy?.GroupWhitelist) ? offPolicy.GroupWhitelist : _settings.OfficialWhitelistGroups;
-        var officialPrivates = !string.IsNullOrWhiteSpace(offPolicy?.PrivateWhitelist) ? offPolicy.PrivateWhitelist : _settings.OfficialWhitelistPrivates;
+        var officialGroups = !string.IsNullOrWhiteSpace(offPolicy?.GroupWhitelist) ? offPolicy.GroupWhitelist : settings.OfficialWhitelistGroups;
+        var officialPrivates = !string.IsNullOrWhiteSpace(offPolicy?.PrivateWhitelist) ? offPolicy.PrivateWhitelist : settings.OfficialWhitelistPrivates;
         (_officialGroups, _officialAllGroups) = string.IsNullOrWhiteSpace(officialGroups)
             ? (new HashSet<long>(), true)
             : WhitelistPolicy.ParseWhitelist(officialGroups);
@@ -102,13 +110,31 @@ public sealed class WhitelistGate
         var hasLocPolicy = !string.IsNullOrWhiteSpace(locPolicy?.GroupWhitelist) || !string.IsNullOrWhiteSpace(locPolicy?.PrivateWhitelist);
         var localSource = hasLocPolicy
             ? $"{locPolicy?.GroupWhitelist},{locPolicy?.PrivateWhitelist}"
-            : _settings.LocalChannelIds;
+            : settings.LocalChannelIds;
         var (localIds, _) = WhitelistPolicy.ParseWhitelist(localSource);
         _local = localIds.Select(Channels.LocalTarget).Where(id => id > 0).ToHashSet();
+        _rebuiltFor = settings;
     }
 
-    private PlatformPolicySettings? FindPolicy(string platform, string account)
-        => (_settings.PlatformPolicies ?? new List<PlatformPolicySettings>()).FirstOrDefault(p =>
+    /// <summary>
+    /// 名单是快照，热更新之后必须重建。正常路径（SettingsHotReload 的 RuntimePolicy 步）会显式调
+    /// <see cref="Rebuild()" />，但任何绕过它的发布 —— 例如只换 SettingsBox 引用的运行时路径 ——
+    /// 以前会让闸门一直按旧名单拦：面板显示「已保存」，实际还是旧名单（#129 S7）。
+    /// 这里按「配置版本引用变了」惰性补一次重建：正常情况引用相同，等于一次引用比较；
+    /// 换了版本才进锁重建，锁内二次确认，避免并发把半收的名单发布出去。
+    /// </summary>
+    private void EnsureFresh()
+    {
+        var current = _box.Current;
+        if (ReferenceEquals(_rebuiltFor, current)) return;
+        lock (_rebuildGate)
+        {
+            if (!ReferenceEquals(_rebuiltFor, current)) Rebuild();
+        }
+    }
+
+    private static PlatformPolicySettings? FindPolicy(AppSettings settings, string platform, string account)
+        => (settings.PlatformPolicies ?? new List<PlatformPolicySettings>()).FirstOrDefault(p =>
             p is not null
             && string.Equals(PlatformId.Normalize(p.PlatformId), platform, StringComparison.OrdinalIgnoreCase)
             && string.Equals(string.IsNullOrWhiteSpace(p.AccountScope) ? AccountScope.Default : p.AccountScope,
@@ -167,17 +193,21 @@ public sealed class WhitelistGate
     /// 所以把一个 QQ 号填进去，连“同号的群”也一起放行了。
     /// </summary>
     public bool AllowsSource(bool isGroup, long id)
-        => _settings.RuntimePlatformPolicies.HasValue
+    {
+        EnsureFresh();
+        return _settings.RuntimePlatformPolicies.HasValue
             ? AllowsCanonical(PlatformId.QqPrivate, AccountScope.Legacy, isGroup, id)
             : isGroup
             ? _allGroups || _groups.Contains(id)
             : _allPrivates || _privates.Contains(id);
+    }
 
     /// <summary>
     /// 会话 key 能不能收（白名单）—— **唯一入口**：通道分开算，官方通道用另一份名单（别名号）。
     /// </summary>
     public bool AllowsKey(string sourceKey)
     {
+        EnsureFresh();
         var (isGroup, id) = Channels.Parse(sourceKey);
         if (id <= 0)
         {
@@ -220,12 +250,18 @@ public sealed class WhitelistGate
     {
         var settings = _settings;
         var declared = settings.DeclaredPlatformDrivers.Where(key => key.PlatformId == platform && key.AccountScope == account).ToArray();
+        // 通道级路径没有身份：一条「有名字的实例目标」足以让账户级判定不可信 → 失败关闭（原有行为）。
+        // 空 instanceId 不算实例级策略：内置驱动本来就没有实例标识，它就是这个驱动自己的身份（#129 S3）。
         if (declared.Length != 1 || settings.RuntimePlatformPolicies!.Value.Any(entry =>
-            entry.Target is PolicyTarget.Instance target && target.Key.PlatformId == platform && target.Key.AccountScope == account))
+            entry.Target is PolicyTarget.Instance target && target.Key.PlatformId == platform
+            && target.Key.AccountScope == account && !string.IsNullOrWhiteSpace(target.Key.InstanceId)))
             return false;
         var loaded = _platformPolicies.ResolveForChannel(platform);
         if (!loaded.Registered || !loaded.Connected || !loaded.Enabled || !loaded.ChatEnabled) return false;
-        var rules = PlatformSwitchSettings.ResolvePolicyRules(settings, new PolicyTarget.AccountDefault(platform, account), Actions(settings));
+        var rules = PlatformSwitchSettings.ResolvePolicyRules(settings,
+            string.IsNullOrEmpty(declared[0].InstanceId)
+                ? new PolicyTarget.Instance(declared[0])
+                : new PolicyTarget.AccountDefault(platform, account), Actions(settings));
         if (rules.Enabled != ToggleRule.Enabled || rules.ChatEnabled != ToggleRule.Enabled) return false;
         if (platform == PlatformId.Feishu)
         {
@@ -245,11 +281,25 @@ public sealed class WhitelistGate
         string Local,
         bool GroupsFromLegacy,
         bool PrivatesFromLegacy,
-        bool BothPrivateListsEmpty);
+        bool BothPrivateListsEmpty,
+        // 实例级策略摘要（#129 S3）：判定链把「该平台存在实例目标」当成账户级通道关闭，
+        // 这件事必须能被印出来，否则被拦时看不出原因。
+        string Instances);
 
     /// <summary>取一份可打印/可判定闸门状态的快照。</summary>
     public GateState Describe()
     {
+        EnsureFresh();
+        var policies = _settings.RuntimePlatformPolicies;
+        var instanceTargets = policies.HasValue
+            ? policies.Value.Where(entry => entry?.Target is PolicyTarget.Instance)
+                .Select(entry => ((PolicyTarget.Instance)entry!.Target).Key).ToArray()
+            : Array.Empty<DriverKey>();
+        var instances = instanceTargets.Length == 0
+            ? "无（账户级判定生效）"
+            : instanceTargets.Length + " 条（" + string.Join("、", instanceTargets.Select(key =>
+                key.PlatformId + "/" + key.AccountScope + "/" +
+                (string.IsNullOrWhiteSpace(key.InstanceId) ? "未命名" : key.InstanceId))) + "）";
         var groups = WhitelistPolicy.WhitelistSummary(_allGroups, _groups);
         var privates = WhitelistPolicy.WhitelistSummary(_allPrivates, _privates);
         return new GateState(
@@ -261,7 +311,8 @@ public sealed class WhitelistGate
             _local.Count == 0 ? "无（全拦）" : _local.Count + " 个",
             _groupsFromLegacy,
             _privatesFromLegacy,
-            groups is "(空，忽略全部)" && privates is "(空，忽略全部)");
+            groups is "(空，忽略全部)" && privates is "(空，忽略全部)",
+            instances);
     }
 
     /// <summary>

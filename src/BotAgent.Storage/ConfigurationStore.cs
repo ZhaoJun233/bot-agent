@@ -1351,10 +1351,27 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         if (rule.TryGetExplicitValue(out var text))
         {
             if (text.Length > 4096) throw new ArgumentException("list_too_large");
-            StrictUtf8.GetByteCount(text); return ListRule.Explicit(text);
+            StrictUtf8.GetByteCount(text); return ListRule.Explicit(NormalizeListText(text));
         }
         return rule.Kind == ListRuleKind.Inherit ? ListRule.Inherit() : ListRule.AllowAll();
     }
+
+    /// <summary>
+    /// 名单文本在写库前归一（#129 S8）：按逗号/分号/空白切分，去空项，按首次出现顺序去重，统一成逗号分隔。
+    /// 归一只发生在写库这一层，判定照旧按 token 集合走；显式空串保持空串（= 全拦），不会被改成别的状态
+    /// —— 「空名单」的两种相反语义（标量空 = 全收 / 条目显式空 = 全拦）由读侧标签区分，不靠改写规则种类。
+    /// </summary>
+    private static string NormalizeListText(string text)
+    {
+        if (text.Length == 0) return text;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var kept = new List<string>();
+        foreach (var token in text.Split(ListSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (seen.Add(token)) kept.Add(token);
+        return kept.Count == 0 ? string.Empty : string.Join(",", kept);
+    }
+
+    private static readonly char[] ListSeparators = { ',', '，', ';', '；', ' ', '\t', '\r', '\n' };
 
     /// <summary>
     /// 协议附加项在写库前收敛：文本裁剪并限长，超时的秒数夹到面板允许的 1..300。

@@ -321,6 +321,66 @@ internal static class PlatformLifecycleTests
             "actual source whitelist and policy allow A but do not grant same-account instance B authority");
         check(!policies.ResolveForChannel(Channels.Private).ChatEnabled,
             "channel-only policy cannot choose an instance when same-account policies differ");
+
+        // #129 S3：空 instanceId 的实例目标不是「定位不到实例」，而是内置驱动自己的身份
+        //（DeclarePlatformCatalog 给 qq.private/qq.official/local 的都是空 id）：
+        // 这条策略必须照常生效，不能因为「存在实例目标」就把账户级通道整条关掉。
+        var blankDriver = new DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, "");
+        var blankSource = new SyntheticSource();
+        using var blankAdapter = new QqChatSourcePlatformAdapter(blankSource, new PlatformContext(blankDriver.PlatformId, blankDriver.AccountScope, blankDriver.InstanceId),
+            PlatformCapabilities.QqOneBot, "synthetic", "test");
+        var blankRegistry = new PlatformRegistry(new[] { blankAdapter }, new[] { blankAdapter });
+        var blankBox = new SettingsBox(new AppSettings
+        {
+            DeclaredPlatformDrivers = ImmutableArray.Create(blankDriver),
+            RuntimePlatformPolicies = ImmutableArray.Create(
+                new PlatformPolicyEntry(new PolicyTarget.Instance(blankDriver),
+                    new(ToggleRule.Enabled, ToggleRule.Enabled, ListRule.Explicit("10001"), ListRule.Explicit("10001"),
+                        new ActionRule(ActionRuleKind.Inherit, ImmutableArray<ActionId>.Empty), ImmutableArray<FeatureOverride>.Empty)))
+        });
+        var blankGate = new WhitelistGate(blankBox,
+            new PlatformPolicyResolver(blankBox, blankRegistry, _ => ImmutableArray<ActionId>.Empty));
+        check(blankGate.AllowsSource(isGroup: true, id: 10001) && !blankGate.AllowsSource(isGroup: true, id: 10002),
+            "actual blank-instance target applies to the single built-in driver instead of locking the platform");
+        check(blankGate.Describe().Instances.Contains("未命名", StringComparison.Ordinal),
+            "gate summary reports the unnamed instance target so the policy row is diagnosable");
+        // 认不出的实例条目（不属于已登记驱动）仍然让通道失败关闭。
+        var foreignDriver = new DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, "synthetic-other");
+        var foreignBox = new SettingsBox(new AppSettings
+        {
+            DeclaredPlatformDrivers = ImmutableArray.Create(blankDriver),
+            RuntimePlatformPolicies = ImmutableArray.Create(
+                new PlatformPolicyEntry(new PolicyTarget.Instance(foreignDriver),
+                    new(ToggleRule.Enabled, ToggleRule.Enabled, ListRule.AllowAll(), ListRule.AllowAll(),
+                        new ActionRule(ActionRuleKind.Inherit, ImmutableArray<ActionId>.Empty), ImmutableArray<FeatureOverride>.Empty)))
+        });
+        check(!new WhitelistGate(foreignBox, new PlatformPolicyResolver(foreignBox, blankRegistry, _ => ImmutableArray<ActionId>.Empty))
+                .AllowsSource(isGroup: true, id: 10001),
+            "instance entry naming no declared driver still closes the channel (fail-closed preserved)");
+        // #129 S5：官方通道的「空名单」在标量基线上是全收（AllowAll 规则），条目里的显式空串才是全拦。
+        // 两条路径必须能被分辨，否则读回来都只是「空」，用户分不清自己选的是哪一种。
+        var officialBlank = PlatformSwitchSettings.ScalarListRules(PlatformId.QqOfficial,
+            new PlatformOptions { OfficialWhitelistGroups = "", OfficialWhitelistPrivates = "" });
+        check(officialBlank.Group.Kind == ListRuleKind.AllowAll && officialBlank.Private.Kind == ListRuleKind.AllowAll,
+            "blank official whitelist composes as allow-all rather than an empty explicit list");
+        var officialList = PlatformSwitchSettings.ScalarListRules(PlatformId.QqOfficial,
+            new PlatformOptions { OfficialWhitelistGroups = "10001", OfficialWhitelistPrivates = "10002" });
+        check(officialList.Group.TryGetExplicitValue(out var officialGroups) && officialGroups == "10001"
+            && officialList.Private.TryGetExplicitValue(out var officialPrivates) && officialPrivates == "10002",
+            "non-blank official whitelist composes as an explicit id list");
+        // #129 S7：闸门持的是名单快照。任何不经过 SettingsHotReload 的发布如果忘了重建，
+        // 面板显示「已保存」而闸门仍按旧名单拦 —— 横幅/状态与实际判定对不上。
+        // 惰性重建按「配置版本引用变了」补一次，正常热更新路径（引用已同步）等于零成本。
+        var staleBox = new SettingsBox(new AppSettings { WhitelistGroups = "10001", WhitelistPrivates = "10001" });
+        var staleGate = new WhitelistGate(staleBox,
+            new PlatformPolicyResolver(staleBox, blankRegistry, _ => ImmutableArray<ActionId>.Empty));
+        check(staleGate.AllowsSource(isGroup: true, id: 10001) && !staleGate.AllowsSource(isGroup: true, id: 10002),
+            "whitelist gate starts from the configured list");
+        staleBox.Apply(next => next.WhitelistGroups = "10002");
+        check(!staleGate.AllowsSource(isGroup: true, id: 10001) && staleGate.AllowsSource(isGroup: true, id: 10002),
+            "whitelist gate follows a published configuration it was not explicitly rebuilt for");
+        check(staleGate.Describe().Groups.Contains("10002", StringComparison.Ordinal),
+            "gate summary reports the current list instead of the stale one");
         check(PlatformSourceExecution.Current is null && router.CaptureForConversation("group:10001") is null
             && !(await router.SendTextAsync(true, 10001, "synthetic")).Ok && first.Sends == 1 && second.Sends == 1,
             "ambiguous autonomous sends cannot borrow either same-account instance");

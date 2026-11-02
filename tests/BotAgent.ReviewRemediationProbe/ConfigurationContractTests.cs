@@ -4615,6 +4615,29 @@ internal static class ConfigurationContractTests
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant())));
             check("configuration module migration preserves physical schema 10", AppDatabase.Scalar<long>("PRAGMA user_version") == 10
                 && AppDatabase.GetMeta("configuration_schema") == "1");
+            // #129 S3：空 instanceId 不是「野目标」，它本身就是内置驱动的身份
+            // （qq.private / qq.official / local 三个驱动的 InstanceId 就是空串），所以冻结时原样保留；
+            // 判定链改为按这个驱动结算，不再把「该平台存在实例目标」当成账户级通道关闭。
+            check("actual_blank_policy_instance_keeps_driver_identity",
+                StorageConfiguration.ConfigurationStore.FreezeTarget(new PolicyTarget.Instance(
+                    new DriverKey("QQ.Private ", "legacy", ""))) ==
+                new PolicyTarget.Instance(new DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, "")));
+            check("actual_null_policy_instance_is_still_rejected", Throws<ArgumentException>(() =>
+                StorageConfiguration.ConfigurationStore.FreezeTarget(new PolicyTarget.Instance(
+                    new DriverKey("qq.private", "legacy", null!)))));
+            check("actual_named_policy_instance_is_preserved",
+                StorageConfiguration.ConfigurationStore.FreezeTarget(new PolicyTarget.Instance(
+                    new DriverKey("qq.private", "legacy", "synthetic-instance"))) ==
+                new PolicyTarget.Instance(new DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, "synthetic-instance")));
+            // #129 S8：名单文本写库前归一（去空项、去重、统一逗号分隔），否则 "10001, 10001" 与 "10001"
+            // 会落成两份不同的条目文本，回读与提交永远对不上。显式空串仍是显式空（= 全拦），不改成别的状态。
+            var frozenList = StorageConfiguration.ConfigurationStore.FreezePolicy(new PlatformPolicyConfiguration(
+                ToggleRule.Inherit, ToggleRule.Inherit, ListRule.Explicit("  10002 , 10001,10002 ,, "), ListRule.Explicit(""),
+                new ActionRule(ActionRuleKind.Inherit, ImmutableArray<ActionId>.Empty), ImmutableArray<FeatureOverride>.Empty));
+            check("actual_policy_list_text_is_normalized_when_frozen",
+                frozenList.GroupWhitelist.TryGetExplicitValue(out var frozenGroups) && frozenGroups == "10002,10001");
+            check("actual_explicit_empty_list_stays_empty",
+                frozenList.PrivateWhitelist.TryGetExplicitValue(out var frozenPrivates) && frozenPrivates == "");
             var caller = new ConfigurationCaller("synthetic-authority", "synthetic-owner", "bot",
                 ConfigurationAccess.ReadOverview | ConfigurationAccess.ReadEditable | ConfigurationAccess.SaveConfiguration
                     | ConfigurationAccess.EditAllowedSecrets | ConfigurationAccess.ValidateConfiguration);
