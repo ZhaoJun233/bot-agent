@@ -64,7 +64,7 @@ ArchitectureProbe 有断言兜底（`harness 注册的 N 个集成场景与 ci.y
    否则该检查永远缺失。改完在本文档 §1 表格同步。
 3. 若新增/删除集成场景：同步矩阵，跑一次 `ArchitectureProbe`（它会断言双向一致）。
 4. 若新增探针工程：加进 verify 的某个 step，`ArchitectureProbe` 的「tests/ 下每个探针工程都要出现在 ci.yml」会兜底。
-5. 若调整超时：写清实测耗时依据（本机 `build-all` 74 s、集成 60 场景单机约 10–15 min 量级），并确认仍在预算内。
+5. 若调整超时：写清实测耗时依据（本机 `build-all` 74 s、集成 61 场景单机约 10–15 min 量级），并确认仍在预算内。
 
 ---
 

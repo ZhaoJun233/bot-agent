@@ -37,6 +37,12 @@
   `docker compose config` 解析失败（特权挂载见 #131）。恢复演练落成集成场景 S60
   （备份能独立打开、`user_version` 一致、放回去能起来）。
 
+- 配置与权限回归测试体系（#111）：新增 S63 覆盖白名单**运行时热生效**（面板改名单不重启即生效、
+  `*` 全放行、重复/空白写法不重复处理、清空回落旧单名单、群聊与私聊名单互不影响）并进 CI 矩阵；
+  `whitelist policy semantics` 钉住解析口径 14 条（空=全拦、通配、分隔符、去重、非法 token）；
+  能力设置新增两条 Playwright 端到端（模型字段、群聊白名单保存并回读）。覆盖矩阵见
+  [配置与权限回归测试矩阵](docs/testing/configuration-permission-regression.md)。
+
 ### 变更
 
 - **升级到 .NET 10**（#102）：30 个工程 `TargetFramework=net10.0`，`global.json` 钉 SDK 10.0.101，

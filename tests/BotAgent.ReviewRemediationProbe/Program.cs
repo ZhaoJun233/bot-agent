@@ -52,6 +52,7 @@ internal static class Program
             await RunAsync("naming compatibility", () => { NamingCompatibilityTests.RunAsync(Check); return Task.CompletedTask; });
             await RunAsync("engine wiring", () => EngineWiringTests.RunAsync(Check));
             await RunAsync("platform lifecycle", () => PlatformLifecycleTests.RunAsync(Check));
+            await RunAsync("whitelist policy semantics", () => WhitelistPolicyTests.RunAsync(Check));
             await RunAsync("Model transport migration", () => ModelMigrationTests.RunAsync(Check));
             await RunAsync("configuration transaction module", () => ConfigurationContractTests.StorageAsync(Check));
             await RunAsync("configuration query reuse", () => ConfigurationContractTests.QueryReuseAsync(Check));
