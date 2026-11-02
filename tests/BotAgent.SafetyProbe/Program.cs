@@ -78,6 +78,7 @@ public static partial class Program
         TurnTraceTests();
         ToolPromptTests();
         SearchPromptBudgetTests();
+        TemporalAwarenessPromptTests();
         PanelApprovalTests();
         TurnLoopTests();
         LocalChannelTests();

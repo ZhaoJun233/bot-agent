@@ -29,7 +29,9 @@ public static partial class Program
 
             Check("关闭搜索不注入搜索说明", !disabled.Contains("[联网搜索]", StringComparison.Ordinal));
             Check("搜索开关只追加对应段落，不改关闭时的既有提示", start >= 0 && enabled[..start] == disabled);
-            Check("搜索说明不超过 300 字，保留 S9 总预算", search.Length > 0 && search.Length <= 300,
+            // 300 → 340（#97）：新增「查到旧资料就说清是旧的，事件发生时间≠你检索的时间」一句；
+            // 真正的总预算仍是 S9 场景的系统提示 < 4000 字软线。
+            Check("搜索说明不超过 340 字，保留 S9 总预算", search.Length > 0 && search.Length <= 340,
                 $"搜索段 {search.Length} 字");
             Check("保留 JSON search/read、来源与下一轮回答契约",
                 new[] { "JSON", "search", "read", "URL", "群友", "来源", "下一轮" }.All(search.Contains));

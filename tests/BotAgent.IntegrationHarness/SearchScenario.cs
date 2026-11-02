@@ -109,6 +109,20 @@ public static partial class Program
             afterSearch.Contains("什么时候不用搜") && afterSearch.Contains("带上时间信息"),
             afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[联网搜索]"));
 
+        Check("★ 提示词声明了唯一时间基准（跨时区/跨日不拿用户说法当基准）",
+            afterSearch is not null && afterSearch.Contains("唯一的时间基准") &&
+            afterSearch.Contains("他报的时间也只是他说的"),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[现在的时间]"));
+        Check("★ 模型被告知知识截止未知、不能凭旧印象否认新事实",
+            afterSearch is not null && afterSearch.Contains("知识截止时间") &&
+            afterSearch.Contains("不确定是哪天") && afterSearch.Contains("还没更新") &&
+            !afterSearch.Contains("截至 20", StringComparison.Ordinal),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[现在的时间]"));
+        Check("★ 联网时区分事件发生时间与检索时间（旧资料不说成新消息）",
+            afterSearch is not null && afterSearch.Contains("事件发生时间") &&
+            afterSearch.Contains("你检索的时间"),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[联网搜索]"));
+
         var sends = await WaitForSendsAsync(protocol, 1, TimeSpan.FromSeconds(40));
         await WaitUntilAsync(() => sends.Any(a => MessageText(a).Contains("小仓唯")) ||
                                    GroupSendsSince(protocol, 0).Any(a => MessageText(a).Contains("小仓唯")),
@@ -302,6 +316,9 @@ public static partial class Program
         var afterOff = offIdx >= 0 ? openAi.DescribeRequest(offIdx) : null;
         Check("★ 关掉联网后仍然有 [现在的时间]（时间不是靠搜来的）",
             afterOff is not null && afterOff.Contains("[现在的时间]") && !afterOff.Contains("[联网搜索]"),
+            afterOff is null ? "(没等到请求)" : SectionOf(afterOff, "[现在的时间]"));
+        Check("★ 关掉联网后时效边界仍在（知识截止未知 / 不否认新事实）",
+            afterOff is not null && afterOff.Contains("知识截止时间") && afterOff.Contains("还没更新"),
             afterOff is null ? "(没等到请求)" : SectionOf(afterOff, "[现在的时间]"));
 
         // ---- 6c) 面板日志页的历史：/api/logs 能拿到之前的行（以前一刷新页面就空白）----
