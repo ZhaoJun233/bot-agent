@@ -19,9 +19,9 @@
 | --- | --- | --- |
 | 持久化 | `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | 同一个事务写 settings JSON、`model_providers` 行与 `secrets` 行；密钥正文只进 `secrets` |
 | 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`SettingsStore.cs:695`） | 供应商级字段一律热应用（#128）：`applyState` 不再比对启动快照，`running` 只用于展示此刻生效的显示值 |
-| 候选表 | `CompositionRoot.InspectModelProjection`（`CompositionRoot.cs:1005`）+ `ModelProviderRegistry.Replace`（`Host/ModelProviderRegistry.cs`）+ `ProviderFailoverRunner.ReplaceCandidates`（`src/BotAgent.Model/Resilience/ProviderCircuitBreaker.cs:298`） | 保存配置时读一次新候选表并**整体替换**（#128）；执行器只造一次，熔断器按供应商 id 复用 |
-| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.cs:1096` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
-| 发现模型 | `CompositionRoot.TryBuildProviderTestRoute`（`CompositionRoot.cs:1065`） | 与运行期共用 `ProviderRouteBoundary`（#132）：面板能测通的端点，线上也一定接受；只多放行「未启用」这一条 |
+| 候选表 | `CompositionRoot.InspectModelProjection`（`CompositionRoot.Model.cs:199`）+ `ModelProviderRegistry.Replace`（`Host/ModelProviderRegistry.cs`）+ `ProviderFailoverRunner.ReplaceCandidates`（`src/BotAgent.Model/Resilience/ProviderCircuitBreaker.cs:298`） | 保存配置时读一次新候选表并**整体替换**（#128）；执行器只造一次，熔断器按供应商 id 复用 |
+| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.Model.cs:289` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
+| 发现模型 | `CompositionRoot.TryBuildProviderTestRoute`（`CompositionRoot.Model.cs:258`） | 与运行期共用 `ProviderRouteBoundary`（#132）：面板能测通的端点，线上也一定接受；只多放行「未启用」这一条 |
 | 发送 | `src/BotAgent.Model/OpenAiClient.cs:278` `SendThroughProvidersAsync` | 拿不到路由就 `provider_secret_unavailable`，按设计**不降级到旧配置** |
 
 关键点：**没有「已建好的模型客户端」这层缓存**。路由是每次请求现拼的
@@ -40,7 +40,7 @@
 
 判定的落点：
 
-- `CompositionRoot.InspectModelProjection`（`CompositionRoot.cs:929`）只把**装配级**差异算成 `RestartRequired`；
+- `CompositionRoot.InspectModelProjection`（`CompositionRoot.Model.cs:199`）只把**装配级**差异算成 `RestartRequired`；
 - `SettingsStore.ProjectRegisteredProviderViews` 的 `changed` 用同一套口径（否则回读会自己报「需重启」）；
 - `SettingsHotReload.RequiresRestart`（`SettingsHotReload.cs:182`）不得为请求级字段返回 `true`。
 
@@ -77,7 +77,7 @@
 以前「面板里点发现模型」走的是另一条路：只读库、每次现开事务，**不比对装配快照**。
 于是会出现最难解释的一类现象 —— 面板测通、线上拒绝，日志里也看不出两条路差在哪。
 
-现在两边都过 `CompositionRoot.ProviderRouteBoundary`（`CompositionRoot.cs:1051`），
+现在两边都过 `CompositionRoot.ProviderRouteBoundary`（`CompositionRoot.Model.cs:244`），
 返回同一种原因码：
 
 | 原因码 | 运行期路由 | 发现模型 |

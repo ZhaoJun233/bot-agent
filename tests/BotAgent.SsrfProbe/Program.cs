@@ -204,7 +204,12 @@ try
     await Test("production composition/pinning contracts", () =>
     {
         var root = FindRoot();
-        var composition = File.ReadAllText(Path.Combine(root, "src/BotAgent.Headless/Host/CompositionRoot.cs"));
+        // 装配根按能力域拆成多个 partial 文件（#110），这里拼起来看全部构造点：
+        // 意图不变 —— 不可信出口必须关自动重定向并拒私网，可信配置出口保持原样。
+        var composition = string.Join("\n", Directory
+            .EnumerateFiles(Path.Combine(root, "src/BotAgent.Headless/Host"), "CompositionRoot*.cs")
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(File.ReadAllText));
         var fetcher = File.ReadAllText(Path.Combine(root, "src/BotAgent.Headless/Adapters/Net/HttpFetcher.cs"));
         foreach (var name in new[] { "imageHttp", "linkHttp", "researchPageHttp" })
         {

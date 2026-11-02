@@ -69,7 +69,7 @@
 | --- | --- | --- |
 | D1 | 空数据目录启动宿主 | `/healthz` 200；`/readyz` 503（未连协议端，符合语义）；`/status` 返回 `{"error":"unauthorized","mustChangePassword":false}`；产出 `botagent.db` 4096 B + `-shm` 32 768 B + `-wal` 646 872 B + `plugins/` + `zba-event-sequence.boot` |
 | D2 | `VACUUM INTO` 快照 | 成功；源库 `user_version`=10、表 30 张（业务表 29 + 1 张 sqlite 内部表）；快照库同为 10/30；文件 274 432 B |
-| D3 | 人为把 `user_version` 改成 11 后重启 | 宿主**拒绝启动**，日志首行 `Unhandled exception. System.InvalidOperationException: database_schema_newer` |
+| D3 | 人为把 `user_version` 改成比当时最新高 1（演练时是 11）后重启 | 宿主**拒绝启动**，日志首行 `Unhandled exception. System.InvalidOperationException: database_schema_newer`。⚠ #133 起最新 schema 就是 **11**，再复现这条要把版本改成 12 |
 | D4 | 用 D2 快照覆盖后重启 | `/healthz` 200；`user_version` 回到 10、表数 30 —— **快照确实能回滚** |
 | D5 | 检查数据库文件权限 | `644` —— `AppDatabase` 自身不 chmod，只有 `SecretsStore` 会收紧 |
 

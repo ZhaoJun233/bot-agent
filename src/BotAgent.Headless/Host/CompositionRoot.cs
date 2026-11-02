@@ -96,15 +96,9 @@ internal sealed record AppGraph(
     }
 }
 
-internal static class CompositionRoot
-{
-    /// <summary>
-    /// 模型出网客户端的"天花板"：单次调用真正等多久由传输层按 provider 的 timeoutSeconds
-    /// 逐次下发（1..300 秒，见 <c>ProviderRequestBudget</c>），这里只给 HttpClient 一个不会
-    /// 提前掐断长请求的上限。设成 300 是因为面板允许的最大值就是 300。
-    /// </summary>
-    private static readonly TimeSpan ModelHttpCeiling = TimeSpan.FromSeconds(300);
 
+internal static partial class CompositionRoot
+{
     /// <summary>
     /// 阶段一：数据层 → 配置 → 日志。
     /// ⚠ 顺序很重要：<see cref="BotConfig.Load" /> 会从 settings 表读配置，之前必须先把库准备好。
@@ -150,568 +144,17 @@ internal static class CompositionRoot
     public static AppGraph Build(AppSettings settings, BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization = null)
     {
         InitializeAssemblyPrerequisites(settings);
-        // 配置的唯一发布点：所有组件都从它读"当前生效的那一份"。
-        // 面板热更新换的是它背后的实例（不是就地改共享对象），这样在途的那一轮不会读到半新半旧的配置
-        // （review-findings #4）。见 SettingsBox。
-        var settingsBox = new SettingsBox(settings);
-
-        // 密钥库：无状态（每次都直接读写库里那几条），全进程共用一个实例只是为了少造对象。
-        var secrets = new SecretsStore();
-        // 配置库：同样无状态；热更新与面板共用它。
-        var settingsStore = new SettingsStore();
-
-        // Provider 注册表只登记非敏感路由元数据；实际密钥仍由环境变量/密钥库提供。
-        // 启动时同步 primary 的地址与模型名，但不覆盖已有熔断状态。
-        var providerStore = new ModelProviderStore();
-        var authorization = new SettingsHotReload.ConfigurationRequestAuthorization();
-        // 当前"装配事实"（#128）：启动时载入一次，之后每次保存配置由模型投影步骤整体替换。
-        // 路由解析、回读投影与托管能力描述都从这里读 —— 全进程只有这一份，不再各自抄启动快照。
-        var modelRegistry = new ModelProviderRegistry(Array.Empty<PersistedModelProvider>());
-        var ui = new PanelNotifier();
-        var quotas = new TenantQuotaStore();
-        var pluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), ui.EmitLog, quotas);
-        RegisteredConfigurationView ReadRegistered(Microsoft.Data.Sqlite.SqliteConnection connection, ConfigurationReadKind kind)
-        {
-            var providers = ModelProviderStore.LoadAllInTransaction(connection);
-            return new RegisteredConfigurationView(pluginRuntime.ReadConfiguration(connection),
-                SettingsStore.ProjectRegisteredProviderViews(connection, providers, modelRegistry.Captured, kind),
-                // 已登记凭据只投影“存在/可用”，正文永不离开密钥库。
-                SettingsStore.ProjectModelCredentials(connection, providers));
-        }
-        var participant = new SettingsStore.ConfigurationParticipant(settingsBox, authorization.Reauthorize,
-            (connection, mutations) => ConfigurationSecretMetadata(connection, settingsBox.Current, mutations), ReadRegistered,
-            id => BotConfig.ConfigurationEffect(id) == FieldEffect.Restart
-                || id == ConfigurationFieldId.Model && string.IsNullOrWhiteSpace(settingsBox.Current.ModelOverride)
-                || id == ConfigurationFieldId.ModelBaseUrl && string.IsNullOrWhiteSpace(settingsBox.Current.ModelBaseUrlOverride)
-                    ? ConfigurationValueSource.Unclassified : ConfigurationValueSource.UserConfiguration,
-            BotConfig.ConfigurationEffect, true);
-        var configuration = ConfigurationBridge.Activate(BotAgent.Adapters.Time.ClockBindings.Source, participant);
-        var initialized = settingsStore.LoadInitializedRuntimeSnapshot(settings);
-        settings = settingsBox.Apply(next =>
-        {
-            next.FeishuVerificationToken = initialized.FeishuVerificationToken;
-            next.RuntimePlatformPolicies = initialized.RuntimePlatformPolicies;
-            next.RuntimePlatformPolicyExplicitFields = initialized.RuntimePlatformPolicyExplicitFields;
-            next.RuntimePlatformPolicyBaselineSources = initialized.RuntimePlatformPolicyBaselineSources;
-        });
-        modelRegistry.Initialize(providerStore.LoadAll().ToArray());
-
-        // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
-        var riskBackoff = new ProtocolRiskBackoff(msg => FileLog.Write("OneBot", msg));
-        var inboundDedup = new FeishuWebhookDedupStore();
-        var (gateway, source, official, local, feishu, platformRegistry, driverOperations) = BuildChannelLayer(settings, settingsBox, riskBackoff, inboundDedup);
-        var platformPolicies = new PlatformPolicyResolver(settingsBox, platformRegistry, options =>
-            QqActionCatalog.ParseAllowed(((AppSettings)options).AgentServerQqActions)
-                .Select(value => new ActionId(value)).ToImmutableArray());
-
-        // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
-        var ttsBreaker = new ToolCircuitBreaker("tts");
-        var searchBreaker = new ToolCircuitBreaker("search");
-        var (brain, store, profiles, stickers, voice, music, links, research) =
-            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, modelRegistry, ttsBreaker, searchBreaker);
-
-        // ---------------- 用例层：谁依赖谁，只在这里看得到 ----------------
-        // 共享状态先建：登录号 / 收摊标记 / 事件聚合 / 白名单闸门（其余组件都要问它们）
-        var identity = new BotIdentity();
-        var lifetime = new BotLifetime();
-        var whitelist = new WhitelistGate(settingsBox, platformPolicies,
-            feishu is null ? null : feishu.AllowsMappedTarget);
-
-        if (source is ChannelRouter router)
-            router.BindOutboundAuthorization((context, isGroup, targetId, feature) =>
-            {
-                var policy = platformPolicies.Resolve(context);
-                if (feature == "customfaces") return policy.Registered && policy.Connected && policy.Enabled && policy.Capabilities.SupportsStickers;
-                return policy.Registered && policy.Connected && policy.Enabled && policy.ChatEnabled
-                    && whitelist.AllowsSource(context, isGroup, targetId) && policy.Feature(feature, globallyEnabled: true).Enabled;
-            });
-
-        // 数据侧：会话台账 / 自己发的消息 / 心情 / 限流日志，见 BuildConversationState
-        var (registry, ownLedger, mood, throttled) = BuildConversationState(store, settingsBox, source, whitelist, ui);
-
-        // 发送（分句/节奏/记账）：聊天、agent 回话、审批回执共用
-        // 决策轨迹（批次 C）：一轮一条、只有形状；回复链 / 发送层 / 能力闸门三处往上记节点。
-        var traces = new TurnTraceStore(() => BotAgent.Adapters.Time.Clock.Now, new TraceArchiveStore());
-        var audit = new AuditLogStore(); var mcp = McpConfiguration.Build(secrets, audit, msg => FileLog.Write("Mcp", msg));
-        var plain = new PlainSender(settingsBox, source, registry, ui, ownLedger, ui.EmitLog, traces, audit, riskBackoff,
-            platformPolicies, brain);
-
-        // 各域用例
-        var vibes = new VibeTracker();
-        var roles = new MemberRoleUseCase(source, new MemberRoleStore(ui.EmitLog), ui.EmitLog);
-        var participation = new ParticipationUseCase(settingsBox, ui.EmitLog);
-        var poke = BuildPokeUseCase(settingsBox, identity, whitelist, registry, ui, throttled, mood);
-
-        // 会话级权限元数据（批次 B）：内存台账，只记录不改判定 —— 面板的“工具/权限”那页读它。
-        var sessionPolicies = new SessionPolicyLedger();
-        var approvals = BuildApprovalUseCase(settingsBox, ui, registry, plain, sessionPolicies, traces, audit);
-
-        // Wave3：插件注册与能力门禁先于 agent 命令与回复链建立；显式 QQ 动作也要吃同一份门禁。
-        var plugins = pluginRuntime.Registry;
-        var pluginGate = new PluginGate(plugins);
-        poke.PluginEnabled = () => pluginGate.Allows(PluginGate.PokeCapability);
-        stickers.PluginEnabled = () => pluginGate.Allows(PluginGate.StickersCapability);
-        // agent 命令（//）：会话台账 + 内置/外部两路后端
-        var sessions = new AgentSessionStore(
-            Path.Combine(AppPaths.DataDir, "agent-sessions.json"), msg => FileLog.Write("Agent", msg));
-        var serverAgent = new ServerAgentRunner(settingsBox, brain,
-            new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "server-agent"),
-            msg => FileLog.Write("ServerAgent", msg), mcp.UseCase);
-        var agentCmds = new AgentCommandService(settingsBox, source, brain, registry, ui, sessions, serverAgent,
-            new AgentImageStore(),
-            new AgentHooks(
-                Log: ui.EmitLog,
-                SelfId: () => identity.SelfId,
-                IsOfficialUserAllowed: whitelist.IsOfficialPrivateExplicit,
-                SendPlainAsync: plain.SendPlainAsync),
-             actionGateway: gateway,
-             platformPolicies: platformPolicies,
-             pluginAllows: pluginGate.Allows);
-
-        var background = new BackgroundEvaluatorQueue(new BackgroundEvaluatorOptions
-        {
-            Capacity = 64,
-            MaxConcurrency = 2,
-            MaxAttempts = 1,
-            PerJobTimeout = TimeSpan.FromSeconds(30),
-            DrainTimeout = TimeSpan.FromSeconds(3),
-        });
-
-        // 回复主链（要用到上面所有用例）→ 建好之后把"戳一戳请求一轮回复"这条边接上
-        var reply = new ReplyPipeline(settingsBox, source, brain, profiles, registry, ui, whitelist, approvals,
-            participation, poke, vibes, roles, ownLedger, agentCmds, plain, stickers, voice, music, research, links, mood,
-            new ReplyHooks(
-                Log: ui.EmitLog,
-                SelfId: () => identity.SelfId,
-                IsDisposed: () => lifetime.IsDisposed),
-            traces, riskBackoff,
-            usage: quotas,
-            platformPolicies: platformPolicies,
-            inboundDedup: inboundDedup,
-            plugins: pluginGate,
-            background: background, replyPolicies: new PluginReplyPolicies(plugins));
-        poke.RequestReply = conversation => reply.RequestReply(conversation, null);
-
-        // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）
-        var scheduler = new BotScheduler(settingsBox, source, profiles, brain, reply, stickers, ui,
-            new BotSchedulerHooks(Log: ui.EmitLog, IsDisposed: () => lifetime.IsDisposed),
-            pluginGate.Allows);
-
-        // 配置热更新的扇出（面板保存设置 / 一键部署记住产物地址）：顺序在它内部，见 SettingsHotReload
-        var settingsHotReload = new SettingsHotReload(settingsBox, settingsStore, approvals, participation, whitelist, agentCmds,
-            brain, reply, scheduler, registry, ui);
-
-        // 会话被删 → 把它在各台账里的痕迹一起清掉，见 BindConversationDeletion
-        BindConversationDeletion(registry, reply, settingsHotReload, ui);
-
-        // 图片地址过期（QQ 的 rkey 有时效）时的重签通道：下载器 → 协议端 get_msg
-        // （**只在这里接一次** —— 它与配置无关，不再是"每次保存设置都重接一遍"）
-        brain.RefreshImageUrls = (messageId, ct) => source.RefreshImageUrlsAsync(messageId, ct);
-
-        var agent = new BotAgentHost(source, brain, ui, registry, reply, scheduler, poke, stickers, identity, lifetime);
-
-        // 启动自述（"AI=开/关、两份名单、模型、表情包库…"）：它读的就是上面这些件
-        var bootReport = new BootReport(settingsBox, whitelist, stickers);
-
-        // 面板内的扫码登录：把 NapCat 的登录二维码搬进机器人面板
-        // （用户打开面板看不到二维码，是远程部署卡住最久的原因）
-        var loginQr = CreateLoginQr(settings);
-        // 每日热备（#121）：VACUUM INTO 早就写好了，只是从来没人按时调它。
-        var backups = CreateBackups();
-        // 服务器健康日报（每天定时私聊一条状态）：整条链路只用机器人自己 + 协议端，
-        // **不经过外部设备 agent**（那台电脑可能根本没开）—— 管理员 2026-09-18 明确要求。
-        // 宿主事实（cgroup 内存上限 / 负载）：健康日报与面板仪表盘共用同一份只读端口
-        var hostFacts = new HostMetrics();
-        var healthReports = new HealthReportService(settingsBox, registry, reply, identity, scheduler, voice, gateway,
-            new HttpFetcher(TimeSpan.FromSeconds(6), msg => FileLog.Write("Net", msg), "health"),
-            hostFacts, backups);
-        settingsHotReload.BindConfiguration(configuration, authorization, settingsStore.LoadCommittedRuntimeSnapshot,
-            (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(configuration, caller, key, intent, mood),
-            healthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
-            version => InspectModelProjection(version, modelRegistry, settingsBox, secrets));
-        var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
-        var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
-            settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, healthReports, backups,
-            sessionPolicies, traces, hostFacts, audit, approvals, local, official, feishu, platformRegistry, platformPolicies,
-            circuitStatusProvider, background, plugins);
-
-        var management = BuildManagedCapabilityBinding(configuration, authorization, driverOperations, settingsBox,
-            platformPolicies, settings, feishu, platformRegistry, () => modelRegistry.Captured, managedAuthorization,
-            plugins: pluginRuntime.Describe);
-        var zba = BuildZba(settingsBox, settingsHotReload, management, sessions, agentCmds, approvals,
-            plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime, backups,
-            () => modelRegistry.Captured);
-        return new AppGraph(settings, settingsBox, source, gateway, official, brain, agent, bootReport, loginQr,
-            healthReports, backups, web, pluginRuntime, background, driverOperations, management, mcp.Runtime, zba);
-    }
-
-    /// <summary>
-    /// 面板扫码登录（#54）：把 NapCat 的二维码搬进面板。单独抽出来只是为了让 Build 保持在棘轮线内。
-    /// </summary>
-    /// <summary>每次宿主启动把 <c>startup_count</c> 加一（读不到就从 1 开始）。</summary>
-    private static void RecordStartup()
-    {
-        var previous = AppDatabase.GetMeta(AppDatabase.StartupCountMetaKey);
-        var count = long.TryParse(previous, System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0 ? value + 1 : 1;
-        AppDatabase.SetMeta(AppDatabase.StartupCountMetaKey,
-            count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-    }
-
-    private static LoginQrService CreateLoginQr(AppSettings settings) =>
-        new(settings.NapCatWebUiUrl, settings.NapCatWebUiToken,
-            new HttpFetcher(TimeSpan.FromSeconds(8), msg => FileLog.Write("Net", msg), "login-qr"));
-
-    /// <summary>
-    /// 每日热备（#121）。用例层只吃委托：Services 层一旦出现 BotAgent.Adapters 会被架构探针 R9 判红，
-    /// 所以这里把「备份怎么做、上次成没成写在哪个键」都收在装配点，用例只看 Func/Action。
-    /// </summary>
-    private static DatabaseBackupService CreateBackups() =>
-        new(
-            () => AppDatabase.VacuumIntoBackup(null, DatabaseBackupService.MaxRetained),
-            () => long.TryParse(AppDatabase.GetMeta(DatabaseBackupService.LastBackupMetaKey),
-                    System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var utcMs)
-                ? utcMs
-                : null,
-            () => AppDatabase.GetMeta(DatabaseBackupService.LastFailureMetaKey),
-            (tag, message) => FileLog.Write(tag, message),
-            (ok, error) =>
-            {
-                if (ok)
-                {
-                    AppDatabase.SetMeta(DatabaseBackupService.LastBackupMetaKey,
-                        Clock.UtcNow.ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
-                }
-
-                AppDatabase.SetMeta(DatabaseBackupService.LastFailureMetaKey, ok ? string.Empty : error ?? string.Empty);
-            });
-
-    private static ZbaRuntime BuildZba(
-        SettingsBox box, SettingsHotReload hotReload, ManagedCapabilityBinding management,
-        IAgentSessionStore sessions, AgentCommandService agent, ApprovalUseCase? approvals,
-        BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
-        WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime,
-        DatabaseBackupService backups, Func<IReadOnlyList<PersistedModelProvider>> capturedProviders)
-    {
-        // 提供商发现复用测试通道的受限出网（同一条拒绝私网/禁跳转的策略），不另开 socket。
-        var discovery = management.ProviderTransport is { } providerHttp
-            ? new BotAgent.Model.ProviderModelDiscovery(providerHttp)
-            : null;
-        var runtime = ZbaRuntime.Create(box, hotReload, management.Capabilities, sessions, agent, approvals, plugins,
-            registry, () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup,
-            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current, capturedProviders), discovery,
-            backups: backups);
-        web.AttachZba(runtime.Endpoint);
-        return runtime;
-    }
-
-    /// <summary>
-    /// 数据侧的四件共享状态：会话台账（面板首屏与命令都读它）、自己发的消息台账、
-    /// 心情的保留时长（现取配置）与限流日志。构造顺序与副作用（订阅 Changed / 载入心情）保持原样。
-    /// </summary>
-    private static (ConversationRegistry Registry, OwnMessageLedger OwnLedger, MoodStore Mood, ThrottledLog Throttled)
-        BuildConversationState(ConversationStore store, SettingsBox settingsBox, IQqChatSource source,
-            WhitelistGate whitelist, PanelNotifier ui)
-    {
-        var registry = new ConversationRegistry(store, settingsBox, source, whitelist.AllowsKey, ui.EmitLog);
-        registry.Changed += ui.NotifyConversationsChanged;
-        var ownLedger = new OwnMessageLedger(new OwnMessageStore(), ui.EmitLog);
-        // 心情的保留时长跟着配置走：MoodStore 现取（以前要记得"改完设置顺手同步一次"，忘了就用着旧上限）
-        var mood = new MoodStore(() => settingsBox.Current.MoodTtlSeconds);
-        mood.Load(AppPaths.RuntimeRoot);
-
-        var throttled = new ThrottledLog(ui.EmitLog);
-        return (registry, ownLedger, mood, throttled);
-    }
-
-    /// <summary>
-    /// 会话被删 → 把它在各台账里的痕迹一起清掉（回复冷却 / 待回复队列 / 参与 / 审批），
-    /// 并按老样子记一条日志 + 再通知一次面板。订阅必须在 reply 与 settingsHotReload 都建好之后；
-    /// 顺序与以前 BotAgentHost.DeleteConversation 逐字一致（注册表内部那次 ConversationsChanged 仍然先发）。
-    /// </summary>
-    private static void BindConversationDeletion(ConversationRegistry registry, ReplyPipeline reply,
-        SettingsHotReload settingsHotReload, PanelNotifier ui)
-    {
-        registry.Deleted += conversation =>
-        {
-            reply.ForgetSession(conversation.SourceKey);
-            settingsHotReload.ForgetSessionState(conversation.SourceKey);
-            ui.EmitLog($"已删除会话 {conversation.Name}");
-            ui.NotifyConversationsChanged();
-        };
-    }
-
-    /// <summary>
-    /// 管理面绑定：驱动是否就绪 / 凭据是否配齐 / 模型 provider 测试通道，全部现取配置。
-    /// 构造顺序保持原样（先建测试出网，再交给绑定；出网由绑定负责释放）。
-    /// </summary>
-    private static ManagedCapabilityBinding BuildManagedCapabilityBinding(
-        ConfigurationModule.ConfigurationStore configuration,
-        SettingsHotReload.ConfigurationRequestAuthorization authorization,
-        PlatformDriverOperations driverOperations,
-        SettingsBox settingsBox,
-        PlatformPolicyResolver platformPolicies,
-        AppSettings settings,
-        FeishuBotGateway? feishu,
-        IPlatformRegistry platformRegistry,
-        Func<IReadOnlyList<PersistedModelProvider>> capturedProviders,
-        BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization,
-        Func<ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor>>? plugins = null)
-    {
-        bool DriverReady(DriverKey key)
-        {
-            var adapter = platformRegistry.GetAdapter(new(key.PlatformId, key.AccountScope, key.InstanceId));
-            if (adapter is null || !DriverIdentityMatches(settings, settingsBox.Current, key.PlatformId)) return false;
-            return key.PlatformId switch
-            {
-                PlatformId.Feishu => feishu?.IsConfigured == true,
-                PlatformId.QqOfficial => !string.IsNullOrWhiteSpace(settingsBox.Current.OfficialAppId)
-                    && !string.IsNullOrWhiteSpace(settingsBox.Current.OfficialAppSecret),
-                PlatformId.QqPrivate => !string.IsNullOrWhiteSpace(settingsBox.Current.OneBotAddress),
-                PlatformId.Local => true,
-                _ => false
-            };
-        }
-        var providerTestHttp = new HttpFetcher(TimeSpan.FromSeconds(15), _ => { }, "provider-test", allowAutoRedirect: false);
-        var providerTester = new BotAgent.Model.ProviderConnectionTester(providerTestHttp);
-        return new ManagedCapabilityBinding(configuration, authorization, driverOperations,
-            () => settingsBox.Current.DeclaredPlatformDrivers,
-            key => platformPolicies.Resolve(new(key.PlatformId, key.AccountScope, key.InstanceId)).Enabled,
-            key => DriverCredentialConfigured(key, settingsBox.Current), DriverReady,
-            () => ManagedProviderDescriptors(capturedProviders(), settingsBox.Current),
-            async (command, ct) =>
-            {
-                // Explicit administrator tests use current metadata, including newly saved disabled providers.
-                // Chat/failover routes remain bound to the startup registry until a restart.
-                var route = TryBuildProviderTestRoute(command.Key.Value, settingsBox.Current, capturedProviders);
-                if (route is null) return new ConfigurationModule.ManagedDispatchResult(
-                    BotAgent.Domain.Management.ManagedOperationState.Failed, "model_route_unavailable");
-                var result = await providerTester.TestAsync(route, ct).ConfigureAwait(false);
-                return new ConfigurationModule.ManagedDispatchResult(result.Succeeded
-                    ? BotAgent.Domain.Management.ManagedOperationState.Completed : BotAgent.Domain.Management.ManagedOperationState.Failed,
-                    result.Succeeded ? null : result.ErrorCode);
-            }, managedAuthorization, providerTestHttp, plugins);
-    }
-
-    private static bool DriverCredentialConfigured(DriverKey key, AppSettings current)
-    {
-        if (key.PlatformId == PlatformId.Local) return false; // No credential is required; readiness is independent.
-        if (key.PlatformId == PlatformId.QqPrivate) return !string.IsNullOrWhiteSpace(current.OneBotToken); // Optional token.
-        if (key.PlatformId == PlatformId.QqOfficial) return !string.IsNullOrWhiteSpace(current.OfficialAppSecret);
-        if (key.PlatformId != PlatformId.Feishu) return false;
-        using var connection = AppDatabase.Open();
-        using var transaction = connection.BeginTransaction(deferred: true);
-        var metadata = ConfigurationSecretMetadata(connection, current, ImmutableArray<ConfigurationModule.SecretMutation>.Empty);
-        var configured = metadata.Any(value => value.Slot == WritableSecretSlot.FeishuAppSecret && value.Configured)
-            && metadata.Any(value => value.Slot is WritableSecretSlot.FeishuEncryptKey or WritableSecretSlot.FeishuVerificationToken && value.Configured);
-        transaction.Commit();
-        return configured;
-    }
-
-    private static ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor> ManagedProviderDescriptors(
-        IReadOnlyList<PersistedModelProvider> captured, AppSettings current)
-    {
-        using var connection = AppDatabase.Open();
-        using var transaction = connection.BeginTransaction(deferred: true);
-        var items = ModelProviderStore.LoadAllInTransaction(connection).Select(provider =>
-        {
-            var runtime = captured.SingleOrDefault(item => item.Id == provider.Id);
-            var binding = ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef);
-            var configured = binding != CredentialBindingState.Unclassified
-                && (provider.Protocol == ModelProtocol.Ollama
-                    || binding != CredentialBindingState.Unconfigured
-                        && !string.IsNullOrWhiteSpace(ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection)));
-            var restart = runtime is null || runtime.SecretKeyRef != provider.SecretKeyRef
-                || runtime.IsEnabled != provider.IsEnabled || runtime.Priority != provider.Priority
-                || runtime.Protocol != provider.Protocol || runtime.Options != provider.Options
-                || provider.Id != "primary" && (runtime.BaseUrl != provider.BaseUrl || runtime.ModelName != provider.ModelName);
-            return new BotAgent.Domain.Management.ManagedDescriptor(
-                new BotAgent.Domain.Management.ManagedObjectKey.Provider(new(provider.Id)), "model-provider", provider.IsEnabled,
-                runtime is null ? BotAgent.Domain.Management.ManagedRuntimeState.NotLoaded : BotAgent.Domain.Management.ManagedRuntimeState.Unknown,
-                ImmutableArray.Create(new BotAgent.Domain.Management.ActionCapability(BotAgent.Domain.Management.ManagedAction.TestConnection,
-                    configured, "provider_credential_required")),
-                configured, restart ? "provider_restart_required" : null, "");
-        }).ToImmutableArray();
-        transaction.Commit();
-        return items;
-    }
-
-    private static bool DriverIdentityMatches(AppSettings startup, AppSettings current, string platform)
-        => PlatformId.Normalize(platform) switch
-        {
-            PlatformId.QqPrivate => startup.NormalizedUin == current.NormalizedUin
-                && startup.OneBotProtocol == current.OneBotProtocol && startup.OneBotAddress == current.OneBotAddress
-                && startup.OneBotToken == current.OneBotToken,
-            PlatformId.QqOfficial => !string.IsNullOrWhiteSpace(startup.OfficialAppId)
-                && !string.IsNullOrWhiteSpace(startup.OfficialAppSecret)
-                && startup.OfficialAppId == current.OfficialAppId && startup.OfficialAppSecret == current.OfficialAppSecret
-                && startup.OfficialSandbox == current.OfficialSandbox
-                && startup.OfficialApiBase == current.OfficialApiBase && startup.OfficialTokenUrl == current.OfficialTokenUrl,
-            PlatformId.Feishu => !string.IsNullOrWhiteSpace(startup.FeishuAppId)
-                && startup.FeishuAppId == current.FeishuAppId && startup.FeishuAppSecret == current.FeishuAppSecret
-                && startup.FeishuApiBase == current.FeishuApiBase
-                && startup.FeishuEncryptKey == current.FeishuEncryptKey && startup.FeishuVerificationToken == current.FeishuVerificationToken,
-            PlatformId.Local => true,
-            _ => false
-        };
-
-    private static PokeUseCase BuildPokeUseCase(
-        SettingsBox settingsBox,
-        BotIdentity identity,
-        WhitelistGate whitelist,
-        ConversationRegistry registry,
-        PanelNotifier ui,
-        ThrottledLog throttled,
-        MoodStore mood) =>
-        new(settingsBox, new PokeHooks(
-            SelfId: () => identity.SelfId,
-            IsSourceAllowed: (isGroup, targetId) => PlatformSourceExecution.Current is { } source
-                ? source.IsCurrent && whitelist.AllowsSource(source.Context, isGroup, targetId)
-                : whitelist.AllowsSource(isGroup, targetId),
-            GetOrCreateConversation: registry.GetOrCreate,
-            RecordInbound: (conversation, message) =>
-            {
-                conversation.Append(message);
-                registry.Touch(conversation);
-                ui.NotifyMessageAdded(conversation.SourceKey, message);
-                registry.Save();
-            },
-            LogThrottled: (key, message) => throttled.Write(key, message),
-            Log: ui.EmitLog,
-            RecordPokeMood: now => mood.RecordPoke(now)));
-
-    private static ApprovalUseCase BuildApprovalUseCase(
-        SettingsBox settingsBox,
-        PanelNotifier ui,
-        ConversationRegistry registry,
-        PlainSender plain,
-        SessionPolicyLedger sessionPolicies,
-        TurnTraceStore traces,
-        AuditLogStore audit) =>
-        new(settingsBox, new ApprovalHooks(
-            Log: ui.EmitLog,
-            Mask: (text, key) => MaskingRules.Text(settingsBox.Current.AgentMaskSensitive, text,
-                key is null ? null : registry.KnownNames(key)),
-            SendPlainAsync: plain.SendPlainAsync,
-            SendApprovalReplyAsync: plain.SendApprovalReplyAsync,
-            // 批次 I（面板审批）：面板没有入站消息可回，回执按**会话 key**发回原会话
-            // （群里的人要看到“谁批了”）；会话已删就什么也不做（失败关闭）。
-            SendToKeyAsync: (key, text) =>
-            {
-                var target = registry.Find(key);
-                return target is null ? Task.CompletedTask : plain.SendPlainAsync(target, text);
-            }),
-            sessionPolicies,
-            traces,
-            audit);
-
-    private static ImmutableArray<SecretMetadata> ConfigurationSecretMetadata(
-        Microsoft.Data.Sqlite.SqliteConnection connection, AppSettings current,
-        ImmutableArray<ConfigurationModule.SecretMutation> mutations)
-    {
-        var result = ImmutableArray.CreateBuilder<SecretMetadata>();
-        foreach (var slot in Enum.GetValues<WritableSecretSlot>())
-        {
-            // 已登记模型凭据的变更没有自己的槽位（默认落在 ModelApiKey 上），必须排除，否则会污染 apiKey 的事实。
-            var mutation = mutations.FirstOrDefault(value => value.CredentialKey is null && value.Slot == slot);
-            var kind = mutation.Kind;
-            var stored = StorageSecrets.LoadInTransaction(connection, slot);
-            var configured = kind == SecretEditKind.Replace || kind == SecretEditKind.Keep && !string.IsNullOrWhiteSpace(stored);
-            var source = configured ? CredentialSource.Database : CredentialSource.None;
-            string? environment = slot switch
-            {
-                WritableSecretSlot.FeishuAppSecret or WritableSecretSlot.FeishuEncryptKey => BotConfig.FixedConfigurationEnvironmentSecret(slot),
-                WritableSecretSlot.ModelApiKey when kind == SecretEditKind.Delete =>
-                    BotConfig.FixedModelEnvironmentKey(),
-                WritableSecretSlot.ModelApiKey when kind == SecretEditKind.Keep && string.IsNullOrWhiteSpace(current.ApiKeyOverride) => current.ApiKey,
-                WritableSecretSlot.AgentServerKey when kind == SecretEditKind.Delete => EnvironmentAliases.Get("BOTAGENT_AGENT_SERVER_KEY", "QQCHAT_AGENT_SERVER_KEY")?.Trim(),
-                WritableSecretSlot.AgentServerKey when kind == SecretEditKind.Keep && string.IsNullOrWhiteSpace(current.AgentServerApiKeyOverride) => current.AgentServerApiKey,
-                _ => null,
-            };
-            if (!string.IsNullOrWhiteSpace(environment)) { configured = true; source = CredentialSource.Environment; }
-            result.Add(new(slot, configured, source));
-        }
-        return result.ToImmutable();
-    }
-
-    private static WebUiServer BuildWebUiServer(
-        AppSettings settings,
-        SettingsBox settingsBox,
-        OneBotGateway gateway,
-        IQqChatSource source,
-        BotAgentHost agent,
-        LoginQrService loginQr,
-        SettingsHotReload settingsHotReload,
-        PanelNotifier ui,
-        StickerService stickers,
-        MoodStore mood,
-        VoiceUseCase voice,
-        MusicUseCase music,
-        ResearchUseCase research,
-        ConversationRegistry registry,
-        MemberProfileStore profiles,
-        ISecretsRepository secrets,
-        SettingsStore settingsStore,
-        BotIdentity identity,
-        BotScheduler scheduler,
-        ReplyPipeline reply,
-        ParticipationUseCase participation,
-        AgentCommandService agentCmds,
-        ITenantQuotaLedger quotas,
-        HealthReportService healthReports,
-        DatabaseBackupService backups,
-        SessionPolicyLedger sessionPolicies,
-        TurnTraceStore traces,
-        HostMetrics hostFacts,
-        AuditLogStore audit,
-        ApprovalUseCase approvals,
-        LocalChannelSource? local,
-        OfficialBotGateway? official,
-        FeishuBotGateway? feishu,
-        IPlatformRegistry platformRegistry,
-        PlatformPolicyResolver platformPolicies,
-        Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> circuitStatusProvider,
-        BackgroundEvaluatorQueue background,
-        Domain.Plugins.IPluginRegistry? plugins = null)
-    {
-        // 面板自己的两条出网（模型列表探测 20s / 自建网易云登录 15s）
-        var panelHttp = new HttpFetcher(TimeSpan.FromSeconds(20), msg => FileLog.Write("Net", msg), "panel-models");
-        var neteaseHttp = new HttpFetcher(TimeSpan.FromSeconds(15), msg => FileLog.Write("Net", msg), "panel-netease");
-
-        return new WebUiServer(settings.HealthPort, settingsBox, gateway, source, agent, loginQr, panelHttp, neteaseHttp,
-            settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
-            reply, participation, agentCmds, quotas, healthReports,
-            backups: backups,
-            sessionPolicies: sessionPolicies,
-            traces: traces,
-            hostFacts: hostFacts,
-            audit: audit,
-            approvals: approvals,
-            localChannel: local,
-            onRestart: () =>
-            {
-                FileLog.Write("Host", "一键重启：即将退出，让 Docker 把容器重新拉起来…");
-                foreach (var svc in new IDisposable?[] { official, feishu })
-                {
-                    try
-                    {
-                        svc?.Dispose();
-                    }
-                    catch (Exception)
-                    {
-                        // 退出路径，收尾失败不阻塞
-                    }
-                }
-
-                Environment.Exit(0);
-            },
-            circuitStatusProvider: circuitStatusProvider,
-            platformRegistry: platformRegistry,
-            feishuGateway: feishu,
-            platformPolicies: platformPolicies,
-            plugins: plugins,
-            background: background);
+        // 装配顺序就是契约：每个 AssembleXxx 只往同一个容器里写自己那一段，
+        // 顺序被调换或漏掉一段都会由 Assembly.Complete() 在返回图之前立刻发现。
+        var assembly = new Assembly(settings);
+        AssembleCore(assembly);
+        AssembleChannels(assembly);
+        AssembleModel(assembly);
+        AssembleStores(assembly);
+        AssembleTools(assembly);
+        AssembleReply(assembly);
+        AssembleSurface(assembly, managedAuthorization);
+        return assembly.Complete();
     }
 
     /// <summary>
@@ -728,496 +171,178 @@ internal static class CompositionRoot
         settings.DeclaredPlatformActions = QqActionCatalog.All.Select(spec => new ActionId(spec.Name)).ToImmutableArray();
     }
 
-    private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local, FeishuBotGateway? Feishu, IPlatformRegistry Registry, PlatformDriverOperations Operations) BuildChannelLayer(
-        AppSettings settings, SettingsBox settingsBox, ProtocolRiskBackoff riskBackoff, IWebhookDedupStore inboundDedup)
-    {
-        var gateway = new OneBotGateway(settingsBox, riskBackoff)
-        {
-            SelfIdHint = settings.UinOrZero
-        };
-
-        var sources = new List<IQqChatSource> { gateway };
-        OfficialBotGateway? official = null;
-        LocalChannelSource? local = null;
-        FeishuBotGateway? feishu = null;
-        var officialEnabled = PlatformSwitchSettings.Read(settings, PlatformId.QqOfficial, AccountScope.Legacy).Enabled;
-        var feishuEnabled = PlatformSwitchSettings.Read(settings, PlatformId.Feishu, AccountScope.Default).Enabled;
-        if (officialEnabled
-            && !string.IsNullOrWhiteSpace(settings.OfficialAppId)
-            && !string.IsNullOrWhiteSpace(settings.OfficialAppSecret))
-        {
-            official = new OfficialBotGateway(settingsBox,
-                new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "official"),
-                new OfficialIdMap(Path.Combine(AppPaths.DataDir, "official-ids.json")),
-                msg => FileLog.Write("Official", msg));
-            sources.Add(official);
-            FileLog.Write("Channel", $"官方通道已启用（appid={settings.OfficialAppId}，" +
-                                   $"{(settings.OfficialSandbox ? "沙箱" : "正式")}环境，与私域通道隔离）");
-            if (settings.OfficialSandbox)
-            {
-                FileLog.Write("Channel", "⚠ 官方通道跑在**沙箱环境**：只能收到开放平台「沙箱配置」里那些沙箱群/沙箱单聊的事件；"
-                                        + "正式群里 @ 机器人不会被推送，日志里也不会有任何行。要在正式群用，取消面板「用沙箱环境」并重启。");
-            }
-        }
-        else if (officialEnabled)
-        {
-            FileLog.Write("Channel", "官方通道开关是开的，但 appid/secret 没配齐 → 这次只跑私域通道");
-        }
-
-        // 本地通道（批次 F）：**名单非空才建**（默认关）。
-        var localEnabled = settings.RuntimePlatformPolicies.HasValue
-            ? PlatformSwitchSettings.ResolvePolicyRules(settings, new PolicyTarget.AccountDefault(PlatformId.Local, AccountScope.Legacy),
-                QqActionCatalog.ParseAllowed(settings.AgentServerQqActions).Select(value => new ActionId(value)).ToImmutableArray()).Enabled == ToggleRule.Enabled
-            : PlatformSwitchSettings.Read(settings, PlatformId.Local, AccountScope.Legacy).Enabled
-                && !string.IsNullOrWhiteSpace(settings.LocalChannelIds);
-        if (localEnabled)
-        {
-            local = new LocalChannelSource(msg => FileLog.Write("Local", msg));
-            sources.Add(local);
-
-            FileLog.Write("Channel", "本地通道已启用（名单非空；入口：面板 POST /api/local/message，与另两条上行隔离）");
-        }
-
-        // 飞书通道（阶段 4）：默认关，开启且配置了 appid 才构造，禁用的平台零网络零凭据。
-        if (feishuEnabled && !string.IsNullOrWhiteSpace(settings.FeishuAppId))
-        {
-            feishu = new FeishuBotGateway(
-                settingsBox,
-                new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "feishu"),
-                msg => FileLog.Write("Feishu", msg),
-                ids: new FeishuIdMap(Path.Combine(AppPaths.DataDir, "feishu-ids-v2.json")),
-                dedupStore: inboundDedup);
-            sources.Add(feishu);
-
-            FileLog.Write("Channel", $"飞书通道已启用（appid={settings.FeishuAppId}，入口：POST /api/webhooks/feishu）");
-        }
-        else if (feishuEnabled)
-        {
-            FileLog.Write("Channel", "飞书通道开关是开的，但 appid 没配齐 → 这次不启用飞书通道");
-        }
-
-        var adapters = new List<IPlatformAdapter>();
-        var messengers = new List<IPlatformMessenger>();
-        var gwAdapter = new QqChatSourcePlatformAdapter(
-            gateway,
-            new PlatformContext(PlatformId.QqPrivate, AccountScope.Legacy),
-            PlatformCapabilities.QqOneBot,
-            "QQ私域",
-            "私域");
-        adapters.Add(gwAdapter);
-        messengers.Add(gwAdapter);
-
-        if (official is not null)
-        {
-            var offAdapter = new QqChatSourcePlatformAdapter(
-                official,
-                new PlatformContext(PlatformId.QqOfficial, AccountScope.Legacy),
-                PlatformCapabilities.QqOfficial,
-                "QQ官方",
-                "官方");
-            adapters.Add(offAdapter);
-            messengers.Add(offAdapter);
-        }
-
-        if (local is not null)
-        {
-            var locAdapter = new QqChatSourcePlatformAdapter(
-                local,
-                new PlatformContext(PlatformId.Local, AccountScope.Legacy),
-                PlatformCapabilities.Local,
-                "本地通道",
-                "本地");
-            adapters.Add(locAdapter);
-            messengers.Add(locAdapter);
-        }
-
-        if (feishu is not null)
-        {
-            adapters.Add(feishu);
-            messengers.Add(feishu);
-        }
-
-        var platformRegistry = new PlatformRegistry(adapters, messengers);
-        var registrations = new List<PlatformDriverRegistration>
-        {
-            new(gwAdapter, gateway.StartAsync, gateway.StopAsync, initiallyRunning: false)
-        };
-        foreach (var adapter in adapters)
-        {
-            if (ReferenceEquals(adapter, gwAdapter)) continue;
-            if (adapter is QqChatSourcePlatformAdapter legacy && ReferenceEquals(legacy.Source, official))
-                registrations.Add(new(adapter, official!.StartAsync, official.StopAsync, initiallyRunning: false));
-            else if (adapter is QqChatSourcePlatformAdapter localAdapter && ReferenceEquals(localAdapter.Source, local))
-                registrations.Add(new(adapter, local!.StartAsync, local.StopAsync, initiallyRunning: false));
-            else if (ReferenceEquals(adapter, feishu))
-                registrations.Add(new(adapter, feishu!.StartAsync, feishu.StopAsync, initiallyRunning: false));
-        }
-        var driverOperations = new PlatformDriverOperations(registrations);
-        var source = new ChannelRouter(sources, platformRegistry, driverOperations, msg => FileLog.Write("Channel", msg),
-            adapter => DriverIdentityMatches(settings, settingsBox.Current, adapter.Context.PlatformId));
-        return (gateway, source, official, local, feishu, platformRegistry, driverOperations);
-    }
-
     /// <summary>
-    /// 模型与媒体层：模型客户端（三个出网分别 60s / 聊天超时 / 8s）、两个仓储、表情包运营、本机 agent 桥、
-    /// 语音、音乐与链接预览、联网研究。都是"拿到配置就能造出来"的件，与用例之间的接线无关（见 Build）。
-    /// </summary>
-    private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
-        VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
-        BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
-            ModelProviderRegistry modelRegistry, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
-    {
-        var allowPrivateOutbound = EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
-        // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒。
-        // 客户端只把 300 秒当"天花板"——真正的每次调用预算由传输层按 provider 的 timeoutSeconds
-        // 或上面这两个默认值逐次下发（见 ModelTransport/OpenAiClient 的 auxiliaryTimeout），
-        // 否则面板里把超时设到 120 秒以上也永远打不到线上。
-        var modelAuxHttp = new HttpFetcher(ModelHttpCeiling, msg => FileLog.Write("Net", msg), "model-aux");
-        var modelChatHttp = new HttpFetcher(ModelHttpCeiling, msg => FileLog.Write("Net", msg), "model-chat");
-        var imageHttp = new HttpFetcher(
-            TimeSpan.FromSeconds(8),
-            msg => FileLog.Write("Net", msg),
-            "image",
-            allowAutoRedirect: false,
-            rejectPrivateDestinations: !allowPrivateOutbound);
-
-        // 图片下载器与传输层（模型那条路的两个 IO 件）：都在这里造，客户端只拿端口。
-        var imageDownloader = new ImageDownloader(imageHttp);
-        var transport = new ModelTransport(
-            settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout(),
-            TimeSpan.FromSeconds(60));
-
-        var persistedProviders = modelRegistry.Captured;
-        var providerRoutes = persistedProviders
-            .Select(p => TryBuildProviderRoute(p, settings, secrets))
-            .Where(route => route is not null)
-            .Cast<ModelProviderRoute>()
-            .ToDictionary(route => route.ProviderId, StringComparer.Ordinal);
-        var providerRunner = new ProviderFailoverRunner(
-            persistedProviders.Select(p => new ProviderCandidate(p.Id, p.Priority, p.IsEnabled)),
-            initialSnapshots: persistedProviders.Select(ToCircuitSnapshot),
-            onSnapshotChanged: snapshot =>
-            {
-                try
-                {
-                    providerStore.SaveCircuit(snapshot);
-                }
-                catch (Exception ex)
-                {
-                    FileLog.Warn("Model", $"Provider 熔断状态持久化失败（仅影响恢复台账）：{ex.GetType().Name}");
-                }
-            });
-
-        // 注册表热重建（#128）：执行器实例只造一次，候选表由模型投影步骤整体换掉；
-        // 上面这份 providerRoutes 只是"没有解析器时的兜底"，真正每次请求用的路由由下面这个解析器现取。
-        modelRegistry.Attach(providerRunner);
-
-        var brain = new OpenAiClient(settingsBox, modelAuxHttp, modelChatHttp, imageDownloader, transport,
-            providerRunner,
-            providerRoutes,
-            providerId =>
-            {
-                var provider = modelRegistry.Captured.FirstOrDefault(p =>
-                    string.Equals(p.Id, providerId, StringComparison.Ordinal));
-                return provider is null ? null : TryBuildCurrentProviderRoute(provider, settingsBox.Current);
-            },
-            auxiliaryTimeout: TimeSpan.FromSeconds(60))
-        {
-            BotIdentity = string.IsNullOrWhiteSpace(settings.NormalizedUin) ? null : settings.NormalizedUin,
-            BotPersona = settings.BotPersona,
-            AiDesire = settings.AiDesire,
-            SuitabilityThreshold = settings.SuitabilityThreshold,
-            MaxContextMessages = settings.MaxContextMessages // 漏了这行会让上下文窗口在面板修改后不同步
-        };
-
-        var store = new ConversationStore();
-        var profiles = new MemberProfileStore();
-
-        // 表情包运营（收图/说明/自巡检/频率门）：状态与定时器都在它自己身上，装配在这里、只装配一次
-        var stickers = new StickerService(new StickerStore(), brain, source, settingsBox, msg => FileLog.Write("Sticker", msg));
-        // 表情包库建好即就位：巡检定时器（BotScheduler.RebuildIfNeeded → EnsureTimer）与面板首屏
-        // 都要在**任何一轮回复之前**读到它。载入属启动顺序，所以放在装配点（§6.1）。
-        stickers.Load(AppPaths.RuntimeRoot);
-
-        // 本机 Agent 桥已按方案退役：// 命令只走服务器内置 agent（ServerAgentRunner）。
-        // 语音（TTS）：客户端、频率门、面板试听都在这个用例里（HttpClient 也只在这里造一个）
-        var voiceHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "voice");
-        var voice = new VoiceUseCase(
-            new VoiceService(voiceHttp, () => settingsBox.Current, secrets, msg => FileLog.Write("Voice", msg), ttsBreaker),
-            settingsBox,
-            msg => FileLog.Write("Voice", msg));
-
-        // 音乐（听歌/分享）与链接预览：各自的 HttpClient 在这里造，依赖顺着构造函数往下传。
-        // 音乐数据放 data/music/：台账常驻，音频默认分析完就丢（只在 MusicKeepAudio 打开时才留在 audio/）。
-        var mediaHttp = new HttpFetcher(TimeSpan.FromSeconds(45), msg => FileLog.Write("Net", msg), "media");
-        var musicStore = new MusicStore(() => settingsBox.Current.MusicLibraryMax, msg => FileLog.Write("Music", msg));
-        var netease = new NeteaseMusicClient(
-            mediaHttp,
-            () => settingsBox.Current.NeteaseCookie,
-            () => settingsBox.Current.NeteaseBaseUrl,
-            msg => FileLog.Write("Music", msg));
-        var audioResolver = new MusicAudioResolver(
-            mediaHttp,
-            () => settingsBox.Current.MusicSources.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-            () => Math.Clamp(settingsBox.Current.MusicBitrate, 32, 320),
-            () => Math.Clamp(settingsBox.Current.MusicMaxDownloadMb, 1, 64) * 1024 * 1024,
-            msg => FileLog.Write("Music", msg));
-        var music = new MusicUseCase(
-            new MusicService(
-                musicStore, netease, audioResolver, brain, () => settingsBox.Current,
-                Path.Combine(AppPaths.DataDir, "music", "audio"), new AudioCache(), msg => FileLog.Write("Music", msg)),
-            source,
-            msg => FileLog.Write("Music", msg));
-        var linkHttp = new HttpFetcher(
-            TimeSpan.FromSeconds(45),
-            msg => FileLog.Write("Net", msg),
-            "links",
-            allowAutoRedirect: false,
-            rejectPrivateDestinations: !allowPrivateOutbound);
-        var links = new LinkPreviewer(linkHttp, () => settingsBox.Current, msg => FileLog.Write("Links", msg));
-
-        // 联网研究（搜索 / 读页面）：它自己的 HttpClient 超时给宽松点（检索要等上游模型回话）
-        var researchHttp = new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "search");
-        var researchPageHttp = new HttpFetcher(
-            TimeSpan.FromSeconds(60),
-            msg => FileLog.Write("Net", msg),
-            "search-page",
-            allowAutoRedirect: false,
-            rejectPrivateDestinations: !allowPrivateOutbound);
-        var research = new ResearchUseCase(
-            new WebSearchService(researchHttp, () => settingsBox.Current, msg => FileLog.Write("Search", msg), searchBreaker, researchPageHttp),
-            msg => FileLog.Write("Search", msg));
-
-
-        return (brain, store, profiles, stickers, voice, music, links, research);
-    }
-
-    /// <summary>
-    /// 模型投影步：把库里刚提交的供应商行**真的装配进运行期**，不再只是"检查一下然后报要重启"（#128）。
+    /// 装配容器：**只由 <see cref="Build"/> 内部使用**，进程里不会有第二个实例。
     ///
-    /// 做法：同一事务里读 desired → 逐条重建路由 → 换掉故障转移候选表与注册表快照。
-    /// 为什么现在可以全热：路由（地址/模型名/协议/选项/密钥引用）由 <see cref="BuildProviderRoute"/> 每次现拼，
-    /// 传输层按路由逐请求取端点，进程里没有任何按供应商缓存的长生命周期对象（#103 已把密钥降为请求级）。
-    /// 因此旧的重启条件（启用位 / 优先级 / 协议 / 选项 / 非 primary 的地址与模型名）全部变成可热应用。
+    /// 规则只有三条（见 docs/decisions/0001-composition-root-assembly-split.md）：
+    /// ① 每个成员只有一个阶段写入（写入点 grep 得到）；
+    /// ② 阶段只读自己声明的上游成员 —— 顺序写在 <see cref="Build"/> 的八行里；
+    /// ③ <see cref="Complete"/> 按依赖顺序判空，漏写立刻抛 <c>assembly_incomplete:&lt;阶段&gt;.&lt;成员&gt;</c>，
+    ///    而不是让某个下游组件在几百毫秒之后才炸。
     ///
-    /// 失败口径：重建抛出（例如库读不出来）时**保留旧候选表与旧快照**，如实回 <c>RestartRequired</c>，
-    /// 而不是假装已应用 —— 面板据此提示"模型调用要重启后才生效"。
+    /// 这里存的是**已经造好的实例**，不是延迟工厂：构造期的副作用（订阅 Changed、载入心情、注册平台目录）
+    /// 仍然发生在 <see cref="Build"/> 返回之前，与拆分前完全一致。
     /// </summary>
-    private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, ModelProviderRegistry registry,
-        SettingsBox settingsBox, ISecretsRepository secrets)
+    private sealed class Assembly(AppSettings settings)
     {
-        using var connection = AppDatabase.Open();
-        using var transaction = connection.BeginTransaction(deferred: true);
-        if (ConfigurationBridge.ReadConfigurationVersion(connection) != expected)
-            throw new InvalidOperationException("configuration_superseded");
-        var desired = ModelProviderStore.LoadAllInTransaction(connection).ToArray();
-        var current = settingsBox.Current;
-        // 路由在事务内按同一份事实重建：任何一条建不出来（凭据来源未分类等）只说明它暂时不可路由，
-        // 与启动装配口径一致 —— 它仍在候选表里，只是解析器会拒绝，故障转移到下一个供应商。
-        var routes = desired
-            .Select(provider => TryBuildProviderRoute(provider, current, secrets))
-            .Where(route => route is not null)
-            .Cast<ModelProviderRoute>()
-            .ToArray();
-        transaction.Commit();
-        try
+        public AppSettings Settings { get; set; } = settings;
+
+        // ① AssembleCore：配置发布点与全进程共用的无状态服务
+        public SettingsBox Box { get; set; } = null!;
+        public StorageSecrets Secrets { get; set; } = null!;
+        public SettingsStore SettingsStore { get; set; } = null!;
+        public ModelProviderStore ProviderStore { get; set; } = null!;
+        public SettingsHotReload.ConfigurationRequestAuthorization Authorization { get; set; } = null!;
+        public ModelProviderRegistry ModelRegistry { get; set; } = null!;
+        public PanelNotifier Ui { get; set; } = null!;
+        public TenantQuotaStore Quotas { get; set; } = null!;
+        public PluginRuntime PluginRuntime { get; set; } = null!;
+        public Func<Microsoft.Data.Sqlite.SqliteConnection, ConfigurationReadKind, RegisteredConfigurationView> ReadRegistered { get; set; } = null!;
+        public SettingsStore.ConfigurationParticipant Participant { get; set; } = null!;
+        public ConfigurationModule.ConfigurationStore Configuration { get; set; } = null!;
+        public ProtocolRiskBackoff RiskBackoff { get; set; } = null!;
+        public FeishuWebhookDedupStore InboundDedup { get; set; } = null!;
+
+        // ② AssembleChannels：协议端与平台策略
+        public OneBotGateway Gateway { get; set; } = null!;
+        public IQqChatSource Source { get; set; } = null!;
+        public OfficialBotGateway? Official { get; set; }
+        public LocalChannelSource? Local { get; set; }
+        public FeishuBotGateway? Feishu { get; set; }
+        public IPlatformRegistry PlatformRegistry { get; set; } = null!;
+        public PlatformDriverOperations DriverOperations { get; set; } = null!;
+        public PlatformPolicyResolver PlatformPolicies { get; set; } = null!;
+
+        // ③ AssembleModel：模型客户端与媒体件
+        public ToolCircuitBreaker TtsBreaker { get; set; } = null!;
+        public ToolCircuitBreaker SearchBreaker { get; set; } = null!;
+        public OpenAiClient Brain { get; set; } = null!;
+        public ConversationStore Store { get; set; } = null!;
+        public MemberProfileStore Profiles { get; set; } = null!;
+        public StickerService Stickers { get; set; } = null!;
+        public VoiceUseCase Voice { get; set; } = null!;
+        public MusicUseCase Music { get; set; } = null!;
+        public LinkPreviewer Links { get; set; } = null!;
+        public ResearchUseCase Research { get; set; } = null!;
+
+        // ④ AssembleStores：用例层共享状态与各域用例
+        public BotIdentity Identity { get; set; } = null!;
+        public BotLifetime Lifetime { get; set; } = null!;
+        public WhitelistGate Whitelist { get; set; } = null!;
+        public ConversationRegistry Registry { get; set; } = null!;
+        public OwnMessageLedger OwnLedger { get; set; } = null!;
+        public MoodStore Mood { get; set; } = null!;
+        public ThrottledLog Throttled { get; set; } = null!;
+        public TurnTraceStore Traces { get; set; } = null!;
+        public AuditLogStore Audit { get; set; } = null!;
+        public McpWiring Mcp { get; set; } = null!;
+        public PlainSender Plain { get; set; } = null!;
+        public VibeTracker Vibes { get; set; } = null!;
+        public MemberRoleUseCase Roles { get; set; } = null!;
+        public ParticipationUseCase Participation { get; set; } = null!;
+        public PokeUseCase Poke { get; set; } = null!;
+        public SessionPolicyLedger SessionPolicies { get; set; } = null!;
+        public ApprovalUseCase Approvals { get; set; } = null!;
+
+        // ⑤ AssembleTools：插件门禁、agent 命令、后台评估队列
+        public PluginManager Plugins { get; set; } = null!;
+        public PluginGate PluginGate { get; set; } = null!;
+        public AgentSessionStore Sessions { get; set; } = null!;
+        public ServerAgentRunner ServerAgent { get; set; } = null!;
+        public AgentCommandService AgentCmds { get; set; } = null!;
+        public BackgroundEvaluatorQueue Background { get; set; } = null!;
+
+        // ⑥ AssembleReply：回复主链、调度、热更新扇出、宿主
+        public ReplyPipeline Reply { get; set; } = null!;
+        public BotScheduler Scheduler { get; set; } = null!;
+        public SettingsHotReload HotReload { get; set; } = null!;
+        public BotAgentHost Agent { get; set; } = null!;
+        public BootReport BootReport { get; set; } = null!;
+
+        // ⑦ AssembleSurface：面板与 ZBA（最后暴露出去的那一层）
+        public LoginQrService LoginQr { get; set; } = null!;
+        public DatabaseBackupService Backups { get; set; } = null!;
+        public HostMetrics HostFacts { get; set; } = null!;
+        public HealthReportService HealthReports { get; set; } = null!;
+        public Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> CircuitStatus { get; set; } = null!;
+        public WebUiServer Web { get; set; } = null!;
+        public ManagedCapabilityBinding Management { get; set; } = null!;
+        public ZbaRuntime? Zba { get; set; }
+
+        public AppGraph Complete()
         {
-            registry.Replace(desired, desired.Select(provider => new ProviderCandidate(provider.Id, provider.Priority, provider.IsEnabled)));
+            Require(Settings, "Core.Settings");
+            Require(Box, "Core.SettingsBox");
+            Require(Secrets, "Core.Secrets");
+            Require(SettingsStore, "Core.SettingsStore");
+            Require(ProviderStore, "Core.ProviderStore");
+            Require(Authorization, "Core.Authorization");
+            Require(ModelRegistry, "Core.ModelRegistry");
+            Require(Ui, "Core.Ui");
+            Require(Quotas, "Core.Quotas");
+            Require(PluginRuntime, "Core.PluginRuntime");
+            Require(ReadRegistered, "Core.ReadRegistered");
+            Require(Participant, "Core.Participant");
+            Require(Configuration, "Core.Configuration");
+            Require(RiskBackoff, "Core.RiskBackoff");
+            Require(InboundDedup, "Core.InboundDedup");
+            Require(Gateway, "Channels.Gateway");
+            Require(Source, "Channels.Source");
+            Require(PlatformRegistry, "Channels.PlatformRegistry");
+            Require(DriverOperations, "Channels.DriverOperations");
+            Require(PlatformPolicies, "Channels.PlatformPolicies");
+            Require(TtsBreaker, "Model.TtsBreaker");
+            Require(SearchBreaker, "Model.SearchBreaker");
+            Require(Brain, "Model.Brain");
+            Require(Store, "Model.Store");
+            Require(Profiles, "Model.Profiles");
+            Require(Stickers, "Model.Stickers");
+            Require(Voice, "Model.Voice");
+            Require(Music, "Model.Music");
+            Require(Links, "Model.Links");
+            Require(Research, "Model.Research");
+            Require(Identity, "Stores.Identity");
+            Require(Lifetime, "Stores.Lifetime");
+            Require(Whitelist, "Stores.Whitelist");
+            Require(Registry, "Stores.Registry");
+            Require(OwnLedger, "Stores.OwnLedger");
+            Require(Mood, "Stores.Mood");
+            Require(Throttled, "Stores.Throttled");
+            Require(Traces, "Stores.Traces");
+            Require(Audit, "Stores.Audit");
+            Require(Mcp, "Stores.Mcp");
+            Require(Plain, "Stores.Plain");
+            Require(Vibes, "Stores.Vibes");
+            Require(Roles, "Stores.Roles");
+            Require(Participation, "Stores.Participation");
+            Require(Poke, "Stores.Poke");
+            Require(SessionPolicies, "Stores.SessionPolicies");
+            Require(Approvals, "Stores.Approvals");
+            Require(Plugins, "Tools.Plugins");
+            Require(PluginGate, "Tools.PluginGate");
+            Require(Sessions, "Tools.Sessions");
+            Require(ServerAgent, "Tools.ServerAgent");
+            Require(AgentCmds, "Tools.AgentCmds");
+            Require(Background, "Tools.Background");
+            Require(Reply, "Reply.Reply");
+            Require(Scheduler, "Reply.Scheduler");
+            Require(HotReload, "Reply.HotReload");
+            Require(Agent, "Reply.Agent");
+            Require(BootReport, "Reply.BootReport");
+            Require(LoginQr, "Surface.LoginQr");
+            Require(Backups, "Surface.Backups");
+            Require(HostFacts, "Surface.HostFacts");
+            Require(HealthReports, "Surface.HealthReports");
+            Require(CircuitStatus, "Surface.CircuitStatus");
+            Require(Web, "Surface.Web");
+            Require(Management, "Surface.Management");
+            return new AppGraph(Settings, Box, Source, Gateway, Official, Brain, Agent, BootReport, LoginQr,
+                HealthReports, Backups, Web, PluginRuntime, Background, DriverOperations, Management, Mcp.Runtime, Zba);
         }
-        catch (Exception ex)
+
+        private static void Require(object? value, string member)
         {
-            FileLog.Warn("Model", $"Provider 注册表热重建失败，保留旧路由：{ex.GetType().Name}");
-            return new(ApplyStep.ModelProjection, ApplyState.RestartRequired, "restart_required");
+            if (value is null) throw new InvalidOperationException("assembly_incomplete:" + member);
         }
-        // 路由表只用于诊断/兜底（真正的请求路由由解析器现取）；这里记一行让"重建成功"可观测。
-        FileLog.Write("Model", $"provider_registry_rebuilt providers={desired.Length} routes={routes.Length}");
-        return new(ApplyStep.ModelProjection, ApplyState.Applied, null);
     }
-
-    private static ModelProviderRoute? TryBuildProviderRoute(
-        PersistedModelProvider provider, AppSettings settings, ISecretsRepository secrets)
-    {
-        if (!provider.IsEnabled) return null;
-        var apiKey = ResolveProviderSecret(provider.SecretKeyRef, settings, secrets);
-        return BuildProviderRoute(provider, settings, apiKey);
-    }
-
-    /// <summary>
-    /// 运行期路由与「发现模型」共用的硬边界（#132 S3）。以前测试路由只读库、不比对装配快照，
-    /// 于是面板测通、线上拒绝，排障时看不出差异。requireEnabled=false 是测试路由被允许更宽的唯一一处：
-    /// 还没启用的供应商也要能试连（保存前先测通再启用）；其余差异（协议 / Options / 非 primary 的端点）
-    /// 两条通道必须同样拒绝，拒绝原因写进日志，面板与 // 命令都能看到同一句话。
-    /// </summary>
-    private static string? ProviderRouteBoundary(PersistedModelProvider desired, PersistedModelProvider? captured,
-        bool requireEnabled)
-    {
-        if (desired.Id.Trim() != desired.Id) return "provider_id_not_trimmed";
-        if (requireEnabled && !desired.IsEnabled) return "provider_disabled";
-        if (captured is null) return null;
-        if (desired.Protocol != captured.Protocol) return "provider_protocol_changed";
-        if (desired.Options != captured.Options) return "provider_options_changed";
-        if (!string.Equals(desired.Id, "primary", StringComparison.Ordinal)
-            && (desired.BaseUrl != captured.BaseUrl || desired.ModelName != captured.ModelName))
-            return "provider_endpoint_changed";
-        return null;
-    }
-
-    private static ModelProviderRoute? TryBuildProviderTestRoute(string providerId, AppSettings current,
-        Func<IReadOnlyList<PersistedModelProvider>> captured)
-    {
-        try
-        {
-            using var connection = AppDatabase.Open();
-            using var transaction = connection.BeginTransaction(deferred: true);
-            var provider = ModelProviderStore.LoadAllInTransaction(connection)
-                .FirstOrDefault(item => string.Equals(item.Id, providerId, StringComparison.Ordinal));
-            if (provider is null || ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef)
-                is CredentialBindingState.Unclassified) return null;
-            var boundary = ProviderRouteBoundary(provider,
-                captured().FirstOrDefault(item => string.Equals(item.Id, providerId, StringComparison.Ordinal)),
-                requireEnabled: false);
-            if (boundary is not null)
-            {
-                FileLog.Warn("Model", $"provider_test_route_blocked provider={providerId} reason={boundary}");
-                return null;
-            }
-            var key = ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection);
-            var route = BuildProviderRoute(provider, current, key);
-            transaction.Commit();
-            return route;
-        }
-        catch (Exception)
-        {
-            // A failed coherent observation must not test a stale endpoint or resurrect an old key.
-            return null;
-        }
-    }
-
-    private static ModelProviderRoute? TryBuildCurrentProviderRoute(PersistedModelProvider captured, AppSettings current)
-    {
-        if (!captured.IsEnabled || captured.Id.Trim() != captured.Id) return null;
-        try
-        {
-            using var connection = AppDatabase.Open();
-            using var transaction = connection.BeginTransaction(deferred: true);
-            var desired = ModelProviderStore.LoadAllInTransaction(connection)
-                .FirstOrDefault(provider => string.Equals(provider.Id, captured.Id, StringComparison.Ordinal));
-            // 只把「装配级」差异当硬边界：协议与选项变了确实要重建客户端。
-            // 凭据来源（SecretKeyRef）是请求级材料：面板第一次填 Key 时它从 env:QQCHAT_API_KEY 变成
-            // secret:apiKey，如果这里也要求相等，整条路由会被拒 → 所有模型调用进入安全静默（#103 R1）。
-            // 端点授权在保存时已经校验过（SettingsStore 的 IsAuthorizedModelEndpoint），运行期只需能解析出密钥。
-            if (desired is null)
-            {
-                FileLog.Write("Model", $"provider_route_blocked provider={captured.Id} reason=provider_missing");
-                return null;
-            }
-            var boundary = ProviderRouteBoundary(desired, captured, requireEnabled: true);
-            if (boundary is not null)
-            {
-                FileLog.Write("Model", $"provider_route_blocked provider={captured.Id} reason={boundary}");
-                return null;
-            }
-            var binding = ModelProviderStore.ClassifyCredentialBinding(desired.SecretKeyRef);
-            if (binding == CredentialBindingState.Unclassified
-                || binding == CredentialBindingState.Unconfigured && desired.Protocol != ModelProtocol.Ollama) return null;
-            var key = ResolveProviderSecretInTransaction(desired.SecretKeyRef, current, connection);
-            var route = BuildProviderRoute(captured, current, key);
-            transaction.Commit();
-            return route;
-        }
-        catch (Exception)
-        {
-            // A failed coherent safety observation denies the route; callers must not revive startup caches.
-            return null;
-        }
-    }
-
-    private static string? ResolveProviderSecretInTransaction(string knownRef, AppSettings current,
-        Microsoft.Data.Sqlite.SqliteConnection connection)
-    {
-        if (knownRef == "secret:apiKey")
-        {
-            var value = StorageSecrets.LoadInTransaction(connection, WritableSecretSlot.ModelApiKey);
-            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-        }
-        if (knownRef == ModelProviderStore.PrimaryModelCredentialReference) return current.ApiKey;
-        if (ModelProviderStore.TryGetRegisteredCredentialKey(knownRef, out var credentialKey))
-            return ModelCredentialStore.LoadInTransaction(connection, credentialKey);
-        return knownRef == "env:QQCHAT_API_KEY" ? ResolveFixedEnvironmentModelKey(current) : null;
-    }
-
-    private static ModelProviderRoute? BuildProviderRoute(PersistedModelProvider provider, AppSettings settings, string? apiKey)
-    {
-        apiKey = apiKey?.Trim() ?? string.Empty;
-        if (!Enum.IsDefined(provider.Protocol)
-            || provider.Protocol != ModelProtocol.Ollama && string.IsNullOrWhiteSpace(apiKey)
-            || apiKey.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-            || apiKey.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(provider.BaseUrl)
-            || string.IsNullOrWhiteSpace(provider.ModelName))
-        {
-            return null;
-        }
-
-        var baseUrl = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
-            ? settings.ModelBaseUrl
-            : provider.BaseUrl;
-        var model = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
-            ? settings.Model
-            : provider.ModelName;
-        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model)
-            || baseUrl.Length > 2048 || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var endpoint)
-            || endpoint.Scheme is not ("http" or "https") || endpoint.UserInfo.Length != 0)
-        {
-            return null;
-        }
-
-        return new ModelProviderRoute(provider.Id, baseUrl.Trim(), model.Trim(), apiKey, provider.Protocol, provider.Options);
-    }
-
-    private static string? ResolveProviderSecret(
-        string secretRef, AppSettings settings, ISecretsRepository secrets)
-    {
-        if (string.Equals(secretRef, "secret:apiKey", StringComparison.Ordinal))
-        {
-            return secrets.Load("apiKey");
-        }
-
-        if (secretRef == ModelProviderStore.PrimaryModelCredentialReference) return settings.ApiKey;
-        if (ModelProviderStore.TryGetRegisteredCredentialKey(secretRef, out var credentialKey))
-            return new ModelCredentialStore().Load(credentialKey);
-
-        if (!string.Equals(secretRef, "env:QQCHAT_API_KEY", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        return ResolveFixedEnvironmentModelKey(settings);
-    }
-
-    private static string? ResolveFixedEnvironmentModelKey(AppSettings settings)
-    {
-        var value = BotConfig.FixedModelEnvironmentKey();
-
-        // Preserve the known reference's current settings snapshot fallback, never an arbitrary environment name.
-        return string.IsNullOrWhiteSpace(value) ? settings.ApiKey : value;
-    }
-
-    private static ProviderCircuitSnapshot ToCircuitSnapshot(PersistedModelProvider provider)
-        => new(provider.Id, provider.CircuitState, provider.ConsecutiveHardFailures,
-            provider.CooldownUntil, ProbeInFlight: false);
-
-    private static Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> BuildCircuitStatusProvider(
-        Domain.Ports.IModelClient brain,
-        ToolCircuitBreaker ttsBreaker,
-        ToolCircuitBreaker searchBreaker,
-        ProtocolRiskBackoff riskBackoff) => () =>
-    {
-        var list = new List<Domain.Ops.CircuitStatusSnapshot>();
-        list.AddRange(brain.CircuitSnapshots);
-        list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "tts", ttsBreaker.Snapshot().State.ToString().ToLowerInvariant()));
-        list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "search", searchBreaker.Snapshot().State.ToString().ToLowerInvariant()));
-        list.Add(new Domain.Ops.CircuitStatusSnapshot("protocol", "onebot", riskBackoff.HasAnyActive() ? "open" : "closed"));
-        return list;
-    };
 }

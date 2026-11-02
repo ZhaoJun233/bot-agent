@@ -49,6 +49,11 @@
 
 ### 变更
 
+- 装配根拆分（#110）：`src/BotAgent.Headless/Host/CompositionRoot.cs`（1223 行）按能力域拆成 8 个 `partial`
+  文件（core / channels / model / stores / tools / reply / surface + 装配容器），`Build` 从一段近 200 行的线性代码
+  变成 7 个显式阶段（`AssembleCore` → `…Channels` → `…Model` → `…Stores` → `…Tools` → `…Reply` → `…Surface`）
+  加一个按依赖顺序判空的 `Assembly` 容器；组件构造签名、装配顺序与失败关闭语义全部不变。
+  决策、阶段顺序契约与文件地图见 [ADR 0001](docs/decisions/0001-composition-root-assembly-split.md)。
 - **升级到 .NET 10**（#102）：30 个工程 `TargetFramework=net10.0`，`global.json` 钉 SDK 10.0.101，
   插件 TFM 白名单同步放宽。
 - 构建基线收敛到 `Directory.Build.props`（#123）：LangVersion / Nullable / ImplicitUsings /

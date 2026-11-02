@@ -33,31 +33,30 @@
 
 ---
 
-## 3. 当前实测分布（2026-11-02，含 #106 拆分后）
+## 3. 当前实测分布（2026-11-02，含 #110 拆分后）
 
-`src/**/*.cs` 共 **436** 个文件、**71 815** 行；`tests/**/*.cs` 共 **112** 个文件、**45 954** 行。
+`src/**/*.cs` 共 **451** 个文件、**71 560** 行；`tests/**/*.cs` 共 **118** 个文件、**46 869** 行。
 
 | 区间 | `src` | `tests` |
 | --- | --- | --- |
-| > 1000 行 | **8** | **7** |
-| 500–1000 行 | **19** | **15** |
-| 300–500 行 | **32** | **24** |
-| ≤ 300 行 | 377 | 66 |
+| > 1000 行 | **5** | **7** |
+| 500–1000 行 | **20** | **16** |
+| 300–500 行 | **38** | **25** |
+| ≤ 300 行 | 388 | 70 |
 
 超过 1000 行的 `src` 文件（按行数降序）：
 
 | 文件 | 行数 | 对应条目 |
 | --- | --- | --- |
-| `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | **1697** | #107 |
-| `src/BotAgent.Platforms/OneBot/OneBotGateway.cs` | **1607** | #108 |
-| `src/BotAgent.Storage/ConfigurationStore.cs` | **1553** | #107 |
-| `src/BotAgent.Model/OpenAiClient.cs` | **1198** | 未单列条目，随 #102 升级一并审查 |
-| `src/BotAgent.Platforms/Official/OfficialBotGateway.cs` | **1156** | 未单列条目，与 #108 同属平台层 |
-| `src/BotAgent.Headless/Host/CompositionRoot.cs` | **1146** | #110 |
-| `src/BotAgent.Headless/Adapters/Panel/WebUiServer.Settings.cs` | **1128** | #109 |
-| `src/BotAgent.Engine/Reply/ReplyPipeline.cs` | **1042** | #106（已从 1659 降下来：入站闸门/媒体入站/轮次上下文/决策动作/投递/引用裁决各自独立成类） |
+| `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | **1704** | #107 |
+| `src/BotAgent.Storage/ConfigurationStore.cs` | **1579** | #107 |
+| `src/BotAgent.Model/OpenAiClient.cs` | **1269** | 未单列条目，随 #102 升级一并审查 |
+| `src/BotAgent.Platforms/Official/OfficialBotGateway.cs` | **1155** | 未单列条目，与 #108 同属平台层 |
+| `src/BotAgent.Engine/Reply/ReplyPipeline.cs` | **1041** | #106（已从 1659 降下来：入站闸门/媒体入站/轮次上下文/决策动作/投递/引用裁决各自独立成类） |
 
-> 说明：**行数不是目标本身**。#106 拆完之后 `ReplyPipeline.cs` 仍有 1042 行，因为它是这条链路的编排层
+> 说明：**行数不是目标本身**。#110 把装配根拆成 8 个 `partial` 文件之后，`CompositionRoot.cs` 从 1223 行降到 349 行，
+> 最大的 `CompositionRoot.Model.cs` 441 行（装配阶段 + 模型路由族），已不在本表；拆分理由与文件地图见
+> `docs/decisions/0001-composition-root-assembly-split.md`。#106 拆完之后 `ReplyPipeline.cs` 仍有 1042 行，因为它是这条链路的编排层
 > （排队 → 取上下文 → 调模型 → 决策 → 投递），编排本身就该在一个地方看得见；剩下的 900 多行是
 > 顺序与分支，不是重复逻辑。判断标准仍是 §1 那条：**能不能在一个屏幕上说清它负责什么**。
 
@@ -65,13 +64,13 @@
 
 | 文件 | 行数 | 说明 |
 | --- | --- | --- |
-| `tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs` | **5189** | 契约用例集合，属"部分测试文件"例外，但需在顶部注释声明 |
-| `tests/BotAgent.SafetyProbe/Program.cs` | **2879** | 安全断言集合 |
-| `tests/BotAgent.IntegrationHarness/Program.cs` | **2461** | 场景注册表，属"路由表"例外 |
-| `tests/BotAgent.ArchitectureProbe/Program.cs` | **1706** | 扫描器 + 断言 |
-| `tests/BotAgent.ZbaProbe/Program.cs` | **1360** | ZBA 契约断言集合 |
-| `tests/BotAgent.ReviewRemediationProbe/EngineWiringTests.cs` | **1089** | 装配用例集合 |
-| `tests/BotAgent.McpProbe/Program.cs` | **1060** | MCP 断言集合 |
+| `tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs` | **5269** | 契约用例集合，属"部分测试文件"例外，但需在顶部注释声明 |
+| `tests/BotAgent.SafetyProbe/Program.cs` | **2881** | 安全断言集合 |
+| `tests/BotAgent.IntegrationHarness/Program.cs` | **2464** | 场景注册表，属"路由表"例外 |
+| `tests/BotAgent.ArchitectureProbe/Program.cs` | **1752** | 扫描器 + 断言 |
+| `tests/BotAgent.ZbaProbe/Program.cs` | **1359** | ZBA 契约断言集合 |
+| `tests/BotAgent.ReviewRemediationProbe/EngineWiringTests.cs` | **1097** | 装配用例集合 |
+| `tests/BotAgent.McpProbe/Program.cs` | **1059** | MCP 断言集合 |
 
 ---
 

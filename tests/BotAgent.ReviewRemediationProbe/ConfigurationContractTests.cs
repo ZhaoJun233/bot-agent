@@ -1202,9 +1202,15 @@ internal static class ConfigurationContractTests
                 .All(assets.Contains), "capture_declared_baseline_asset_set");
             var fingerprints = assets.OrderBy(value => value, StringComparer.Ordinal).ToDictionary(value => value,
                 value => Hash(BoundAsset(source, value)), StringComparer.Ordinal);
-            var sourceFiles = new[] { "src/BotAgent.Storage/ConfigurationStore.cs", "src/BotAgent.Storage/ConfigurationStorageBridge.cs",
-                "src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs", "src/BotAgent.Headless/Host/CompositionRoot.cs",
-                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs", "docs/plans/agents/00-c3-c4-contract-candidate.md" };
+            string[] sourceFiles = [
+                "src/BotAgent.Storage/ConfigurationStore.cs", "src/BotAgent.Storage/ConfigurationStorageBridge.cs",
+                "src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs",
+                // 装配根在 #110 里按能力域拆成多个 partial 文件：清单一并展开，摘要覆盖同样的代码面。
+                .. Directory.EnumerateFiles(Path.Combine(repository, "src/BotAgent.Headless/Host"), "CompositionRoot*.cs")
+                    .Select(path => path.Substring(repository.Length + 1).Replace('\\', '/'))
+                    .OrderBy(path => path, StringComparer.Ordinal),
+                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs", "docs/plans/agents/00-c3-c4-contract-candidate.md"
+            ];
             var sourceFingerprints = sourceFiles.ToDictionary(value => value, value => Hash(BoundAsset(repository, value)), StringComparer.Ordinal);
             var bundle = Path.Combine(capture, "bundle");
             _ = BoundAsset(Path.Combine(repository, ".git"), Path.GetFileName(capture) + "/bundle/BotAgent.Headless.dll");
