@@ -66,10 +66,16 @@ internal static class PanelLegacyConfiguration
                     }
                     else if (platform == Domain.Platforms.PlatformId.Feishu && policy.Enabled is bool feishuEnabled)
                         scalarBody["feishuEnabled"] = feishuEnabled;
-                    if (platform is Domain.Platforms.PlatformId.Feishu or Domain.Platforms.PlatformId.Local
+                    if (platform == Domain.Platforms.PlatformId.Local
                         && (policy.GroupWhitelist is not null || policy.PrivateWhitelist is not null))
-                        scalarBody[platform == Domain.Platforms.PlatformId.Local ? "localChannelIds" : "feishuWhitelist"] =
+                        scalarBody["localChannelIds"] =
                             !string.IsNullOrWhiteSpace(policy.GroupWhitelist) ? policy.GroupWhitelist : policy.PrivateWhitelist ?? string.Empty;
+                    if (platform == Domain.Platforms.PlatformId.Feishu)
+                    {
+                        // 群 / 私聊两个名单分开回写，不再把私聊摊平进群字段（#133）。
+                        if (policy.GroupWhitelist is not null) scalarBody["feishuWhitelist"] = policy.GroupWhitelist;
+                        if (policy.PrivateWhitelist is not null) scalarBody["feishuWhitelistPrivates"] = policy.PrivateWhitelist;
+                    }
                 }
             }
             var changes = PanelLegacyScalarFields.ParseLegacyFields(scalarBody, policies);

@@ -1077,6 +1077,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             FeishuAppId = FreezeEdit(ConfigurationFieldId.FeishuAppId, platformSource.FeishuAppId, fields),
             FeishuEnabled = FreezeEdit(ConfigurationFieldId.FeishuEnabled, platformSource.FeishuEnabled, fields),
             FeishuWhitelist = FreezeEdit(ConfigurationFieldId.FeishuWhitelist, platformSource.FeishuWhitelist, fields),
+            FeishuWhitelistPrivates = FreezeEdit(ConfigurationFieldId.FeishuWhitelistPrivates, platformSource.FeishuWhitelistPrivates, fields),
             LocalChannelIds = FreezeEdit(ConfigurationFieldId.LocalChannelIds, platformSource.LocalChannelIds, fields),
             MessageWhitelist = FreezeEdit(ConfigurationFieldId.MessageWhitelist, platformSource.MessageWhitelist, fields),
             OfficialAppId = FreezeEdit(ConfigurationFieldId.OfficialAppId, platformSource.OfficialAppId, fields),
@@ -1225,6 +1226,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             or ConfigurationFieldId.FeishuApiBase
             or ConfigurationFieldId.FeishuAppId
             or ConfigurationFieldId.FeishuWhitelist
+            or ConfigurationFieldId.FeishuWhitelistPrivates
             or ConfigurationFieldId.HealthReportTargets
             or ConfigurationFieldId.HealthReportTime
             or ConfigurationFieldId.Model
@@ -1525,6 +1527,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.FeishuAppId, patch.Platform!.FeishuAppId);
         Add(ConfigurationFieldId.FeishuEnabled, patch.Platform!.FeishuEnabled);
         Add(ConfigurationFieldId.FeishuWhitelist, patch.Platform!.FeishuWhitelist);
+        Add(ConfigurationFieldId.FeishuWhitelistPrivates, patch.Platform!.FeishuWhitelistPrivates);
         Add(ConfigurationFieldId.LocalChannelIds, patch.Platform!.LocalChannelIds);
         Add(ConfigurationFieldId.MessageWhitelist, patch.Platform!.MessageWhitelist);
         Add(ConfigurationFieldId.OfficialAppId, patch.Platform!.OfficialAppId);

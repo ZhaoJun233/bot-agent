@@ -318,6 +318,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             ApplyScalar(platform.FeishuAppId, value => next.FeishuAppId = value);
             ApplyScalar(platform.FeishuEnabled, value => next.FeishuEnabled = value);
             ApplyScalar(platform.FeishuWhitelist, value => next.FeishuWhitelist = value);
+            ApplyScalar(platform.FeishuWhitelistPrivates, value => next.FeishuWhitelistPrivates = value);
             ApplyScalar(platform.LocalChannelIds, value => next.LocalChannelIds = value);
             ApplyScalar(platform.MessageWhitelist, value => next.MessageWhitelist = value);
             ApplyScalar(platform.OfficialAppId, value => next.OfficialAppId = value);
@@ -613,6 +614,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             FeishuAppId = fields.Field(ConfigurationFieldId.FeishuAppId, user.FeishuAppId, effective.FeishuAppId, nameof(AppSettings.FeishuAppId)),
             FeishuEnabled = fields.Field(ConfigurationFieldId.FeishuEnabled, user.FeishuEnabled, effective.FeishuEnabled, nameof(AppSettings.FeishuEnabled)),
             FeishuWhitelist = fields.Field(ConfigurationFieldId.FeishuWhitelist, user.FeishuWhitelist, effective.FeishuWhitelist, nameof(AppSettings.FeishuWhitelist)),
+            FeishuWhitelistPrivates = fields.Field(ConfigurationFieldId.FeishuWhitelistPrivates, user.FeishuWhitelistPrivates, effective.FeishuWhitelistPrivates, nameof(AppSettings.FeishuWhitelistPrivates)),
             LocalChannelIds = fields.Field(ConfigurationFieldId.LocalChannelIds, user.LocalChannelIds, effective.LocalChannelIds, nameof(AppSettings.LocalChannelIds)),
             MessageWhitelist = fields.Field(ConfigurationFieldId.MessageWhitelist, user.MessageWhitelist, effective.MessageWhitelist, nameof(AppSettings.MessageWhitelist)),
             OfficialAppId = fields.Field(ConfigurationFieldId.OfficialAppId, user.OfficialAppId, effective.OfficialAppId, nameof(AppSettings.OfficialAppId)),
@@ -784,7 +786,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             ConfigurationFieldId.OfficialChatEnabled, ConfigurationFieldId.FeishuEnabled, ConfigurationFieldId.LocalChannelIds,
             ConfigurationFieldId.WhitelistGroups, ConfigurationFieldId.WhitelistPrivates, ConfigurationFieldId.MessageWhitelist,
             ConfigurationFieldId.OfficialWhitelistGroups, ConfigurationFieldId.OfficialWhitelistPrivates,
-            ConfigurationFieldId.FeishuWhitelist, ConfigurationFieldId.AgentServerQqActions })
+            ConfigurationFieldId.FeishuWhitelist, ConfigurationFieldId.FeishuWhitelistPrivates, ConfigurationFieldId.AgentServerQqActions })
         {
             var present = properties.ContainsKey(id.ToString());
             var state = ConfigurationBridge.ReadFieldState(connection, id, present);
@@ -1641,6 +1643,7 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Platform.FeishuAppId.Rule,
                 view.Platform.FeishuEnabled.Rule,
                 view.Platform.FeishuWhitelist.Rule,
+                view.Platform.FeishuWhitelistPrivates.Rule,
                 view.Platform.LocalChannelIds.Rule,
                 view.Platform.MessageWhitelist.Rule,
                 view.Platform.OfficialAppId.Rule,

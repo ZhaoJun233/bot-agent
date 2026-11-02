@@ -174,7 +174,8 @@ internal static class Baseline
     /// MemberProfile 双层覆盖与证据链（MaiBot 启发）：120 → 127（Override 与 Evidence 读写 + 迁移补列）。
     /// PromptTemplate 版本快照与出厂回滚（MaiBot 启发）：127 → 137（Prompt DDL 与版本切换激活）。
     /// </summary>
-    public const int SqlLiteralTotal = 137;
+    /// v11 配置字段号上限迁移（#133）：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省）。
+    public const int SqlLiteralTotal = 138;
 
     // ── R3：直接文件 IO 只允许出现在 Adapters/** 与下列具名例外 ──
     public const string FileIoAllowedPrefix = "src/BotAgent.Headless/Adapters/";

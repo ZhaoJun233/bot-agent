@@ -127,6 +127,7 @@ public static class PlatformSwitchSettings
                     {
                         PlatformId.QqPrivate => !string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? settings.WhitelistPrivates : settings.MessageWhitelist,
                         PlatformId.QqOfficial => settings.OfficialWhitelistPrivates,
+                        PlatformId.Feishu => FeishuPrivateList(settings),
                         _ => string.Empty,
                     },
                 };
@@ -362,6 +363,7 @@ public static class PlatformSwitchSettings
         {
             PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistPrivates,
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistPrivates,
+            PlatformId.Feishu => FeishuPrivateField(settings),
             _ => groupField,
         };
         var (group, direct) = ScalarListRules(platform, settings);
@@ -378,7 +380,7 @@ public static class PlatformSwitchSettings
 
     /// <summary>
     /// 平台标量名单（WhitelistGroups / WhitelistPrivates / OfficialWhitelistGroups / OfficialWhitelistPrivates /
-    /// FeishuWhitelist / LocalChannelIds）映射成该平台默认策略条目的两份名单规则。
+    /// FeishuWhitelist / FeishuWhitelistPrivates / LocalChannelIds）映射成该平台默认策略条目的两份名单规则。
     /// 基线合成（<see cref="Baseline"/>）与「面板改标量后写回条目」（SettingsStore.PreparePlatformPolicies）都走这里：
     /// 同一条语义只留一份实现，否则面板改标量与条目判定迟早会对不上。
     /// </summary>
@@ -396,6 +398,7 @@ public static class PlatformSwitchSettings
         {
             PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistPrivates,
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistPrivates,
+            PlatformId.Feishu => FeishuPrivateField(settings),
             _ => groupField,
         };
         var group = platform switch
@@ -409,10 +412,23 @@ public static class PlatformSwitchSettings
         {
             PlatformId.QqPrivate => ListRule.Explicit((privateField == ConfigurationFieldId.MessageWhitelist ? settings.MessageWhitelist : settings.WhitelistPrivates) ?? string.Empty),
             PlatformId.QqOfficial => string.IsNullOrWhiteSpace(settings.OfficialWhitelistPrivates) ? ListRule.AllowAll() : ListRule.Explicit(settings.OfficialWhitelistPrivates),
+            PlatformId.Feishu => ListRule.Explicit(FeishuPrivateList(settings)),
             _ => group,
         };
         return (group, direct);
     }
+
+    /// <summary>飞书私聊名单：空 = 跟随群名单（#133 迁移口径：旧部署只有一个名单）。</summary>
+    private static string FeishuPrivateList(PlatformOptions settings)
+        => string.IsNullOrWhiteSpace(settings.FeishuWhitelistPrivates)
+            ? settings.FeishuWhitelist ?? string.Empty
+            : settings.FeishuWhitelistPrivates;
+
+    /// <summary>私聊名单的生效来源字段：跟随群名单时如实报群字段，别把空值说成用户改过。</summary>
+    private static ConfigurationFieldId FeishuPrivateField(PlatformOptions settings)
+        => string.IsNullOrWhiteSpace(settings.FeishuWhitelistPrivates)
+            ? ConfigurationFieldId.FeishuWhitelist
+            : ConfigurationFieldId.FeishuWhitelistPrivates;
 
     private static ResolvedPolicy Denied() => new(new PlatformPolicyConfiguration(ToggleRule.Disabled, ToggleRule.Disabled,
         ListRule.Explicit(string.Empty), ListRule.Explicit(string.Empty), new ActionRule(ActionRuleKind.Explicit, ImmutableArray<ActionId>.Empty),

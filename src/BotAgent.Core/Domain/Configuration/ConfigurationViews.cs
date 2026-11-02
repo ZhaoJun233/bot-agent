@@ -128,6 +128,7 @@ public sealed class PlatformView
     public required ReadField<string> FeishuAppId { get; init; }
     public required ReadField<bool> FeishuEnabled { get; init; }
     public required ReadField<string> FeishuWhitelist { get; init; }
+    public required ReadField<string> FeishuWhitelistPrivates { get; init; }
     public required ReadField<string> LocalChannelIds { get; init; }
     public required ReadField<string> MessageWhitelist { get; init; }
     public required ReadField<string> OfficialAppId { get; init; }

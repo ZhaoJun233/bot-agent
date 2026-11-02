@@ -128,6 +128,7 @@ public sealed class PlatformChanges
     public FieldEdit<string> FeishuAppId { get; init; }
     public FieldEdit<bool> FeishuEnabled { get; init; }
     public FieldEdit<string> FeishuWhitelist { get; init; }
+    public FieldEdit<string> FeishuWhitelistPrivates { get; init; }
     public FieldEdit<string> LocalChannelIds { get; init; }
     public FieldEdit<string> MessageWhitelist { get; init; }
     public FieldEdit<string> OfficialAppId { get; init; }

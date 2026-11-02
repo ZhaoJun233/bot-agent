@@ -347,6 +347,7 @@ public sealed partial class WebUiServer
             ? "env"
             : (string.IsNullOrWhiteSpace(_secrets.LoadFeishuEncryptKey()) ? "none" : "panel");
         runtime["feishuWhitelist"] = s.FeishuWhitelist;
+        runtime["feishuWhitelistPrivates"] = s.FeishuWhitelistPrivates;
         runtime["feishuApiBase"] = s.FeishuApiBase;
     }
 

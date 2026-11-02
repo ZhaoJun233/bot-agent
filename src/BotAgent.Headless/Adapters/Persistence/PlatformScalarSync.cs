@@ -51,7 +51,8 @@ internal static class PlatformScalarSync
         if (scalars.OfficialWhitelistGroups.Kind != EditKind.Keep
             || scalars.OfficialWhitelistPrivates.Kind != EditKind.Keep)
             SyncList(PlatformId.QqOfficial, AccountScope.Legacy);
-        if (scalars.FeishuWhitelist.Kind != EditKind.Keep)
+        if (scalars.FeishuWhitelist.Kind != EditKind.Keep
+            || scalars.FeishuWhitelistPrivates.Kind != EditKind.Keep)
             SyncList(PlatformId.Feishu, AccountScope.Default);
         if (scalars.LocalChannelIds.Kind != EditKind.Keep)
             SyncList(PlatformId.Local, AccountScope.Legacy);

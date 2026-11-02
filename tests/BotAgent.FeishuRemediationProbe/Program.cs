@@ -26,14 +26,14 @@ async Task Test(string name, Func<Task> run)
 void Require(bool value, string reason) { if (!value) throw new Exception(reason); }
 SettingsBox Settings() => new(new AppSettings { FeishuEnabled = true, FeishuAppId = "app-a", FeishuAppSecret = "secret-a", FeishuApiBase = "https://a.example.com", FeishuVerificationToken = "verify-synthetic", FeishuWhitelist = "*" });
 OutboundMessage Message() => new(new ConversationId(PlatformId.Feishu, AccountScope.Default, ConversationKind.GroupChat, "chat-synthetic"), "synthetic");
-string Webhook(string id) => new JsonObject
+string Webhook(string id, string chatType = "group", string chatId = "chat-synthetic") => new JsonObject
 {
     ["token"] = "verify-synthetic",
     ["header"] = new JsonObject { ["event_id"] = id, ["event_type"] = "im.message.receive_v1" },
     ["event"] = new JsonObject
     {
         ["sender"] = new JsonObject { ["sender_id"] = new JsonObject { ["open_id"] = "user-synthetic" } },
-        ["message"] = new JsonObject { ["message_id"] = id, ["chat_id"] = "chat-synthetic", ["chat_type"] = "group", ["content"] = "{\"text\":\"synthetic\"}" }
+        ["message"] = new JsonObject { ["message_id"] = id, ["chat_id"] = chatId, ["chat_type"] = chatType, ["content"] = "{\"text\":\"synthetic\"}" }
     }
 }.ToJsonString();
 
@@ -263,6 +263,27 @@ await Test("concurrent same event emits once and not-whitelisted never emits", a
     box.Apply(s => s.FeishuWhitelist = "not-this-target");
     var rejected = await gateway.HandleWebhookAsync(Webhook("event-not-whitelisted"), null, null, null);
     Require(rejected.ResponseBody.Contains("not_whitelisted") && received == 1 && http.TokenCalls == 0, "whitelist rejection emitted or sent");
+});
+
+await Test("feishu group and private rosters are independent", async () =>
+{
+    using var temp = new TempDirectory();
+    var box = Settings();
+    var http = new FakeHttp();
+    using var gateway = new FeishuBotGateway(box, http, ids: new FeishuIdMap(Path.Combine(temp.Path, "map.json")), log: null, dedupStore: new FeishuWebhookDedupStore());
+    var received = 0;
+    gateway.MessageReceived += _ => Interlocked.Increment(ref received);
+    // #133：两路名单各判各的，群用 FeishuWhitelist、私聊用 FeishuWhitelistPrivates。
+    box.Apply(s => { s.FeishuWhitelist = "chat-synthetic"; s.FeishuWhitelistPrivates = "user-synthetic"; });
+    var grouped = await gateway.HandleWebhookAsync(Webhook("event-group-split"), null, null, null);
+    Require(grouped.StatusCode == 200 && received == 1, "group roster must allow the group chat");
+    var direct = await gateway.HandleWebhookAsync(Webhook("event-private-split", "p2p", "chat-private"), null, null, null);
+    Require(direct.StatusCode == 200 && received == 2, "private roster must allow the private chat");
+    box.Apply(s => s.FeishuWhitelistPrivates = "not-this-target");
+    var rejected = await gateway.HandleWebhookAsync(Webhook("event-private-rejected", "p2p", "chat-private"), null, null, null);
+    Require(rejected.ResponseBody.Contains("not_whitelisted") && received == 2, "private roster must be judged on its own entry");
+    var stillGrouped = await gateway.HandleWebhookAsync(Webhook("event-group-still"), null, null, null);
+    Require(stillGrouped.StatusCode == 200 && received == 3, "group roster must not be affected by the private roster");
 });
 
 await Test("numeric whitelist allocation failure returns zero safely and never emits", async () =>

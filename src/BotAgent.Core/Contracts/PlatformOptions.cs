@@ -50,8 +50,10 @@ public class PlatformOptions
     /// <summary>飞书事件签名 Encrypt Key。运行时凭据，不进入配置 JSON。</summary>
     [JsonIgnore]
     public string FeishuEncryptKey { get; set; } = string.Empty;
-    /// <summary>飞书通道白名单；空名单拒绝。</summary>
+    /// <summary>飞书群聊白名单；空 = 全拦（原语义不变）。</summary>
     public string FeishuWhitelist { get; set; } = string.Empty;
+    /// <summary>飞书私聊白名单。空 = 跟随群名单：旧部署只有一个名单，#133 迁移按这个口径读。</summary>
+    public string FeishuWhitelistPrivates { get; set; } = string.Empty;
     public string FeishuApiBase { get; set; } = string.Empty;
 
     // ---------- 本地测试通道 ----------
@@ -105,6 +107,7 @@ public class PlatformOptions
         target.FeishuVerificationToken = FeishuVerificationToken;
         target.FeishuEncryptKey = FeishuEncryptKey;
         target.FeishuWhitelist = FeishuWhitelist;
+        target.FeishuWhitelistPrivates = FeishuWhitelistPrivates;
         target.FeishuApiBase = FeishuApiBase;
         target.LocalChannelIds = LocalChannelIds;
         target.PrivateChatEnabled = PrivateChatEnabled;

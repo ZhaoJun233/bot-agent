@@ -156,6 +156,7 @@ internal static class PanelLegacyScalarFields
             FeishuAppId = PanelLegacyFieldEdits.LegacyField(body, "feishuAppId", node => node.GetValue<string>().Trim()),
             FeishuEnabled = PanelLegacyFieldEdits.LegacyField(body, "feishuEnabled", node => node.GetValue<bool>()),
             FeishuWhitelist = PanelLegacyFieldEdits.LegacyField(body, "feishuWhitelist", node => node.GetValue<string>().Trim()),
+            FeishuWhitelistPrivates = PanelLegacyFieldEdits.LegacyField(body, "feishuWhitelistPrivates", node => node.GetValue<string>().Trim()),
             LocalChannelIds = PanelLegacyFieldEdits.LegacyField(body, "localChannelIds", node => node.GetValue<string>() ?? string.Empty),
             MessageWhitelist = PanelLegacyFieldEdits.LegacyField(body, "messageWhitelist", node => node.GetValue<string>() ?? string.Empty),
             OfficialAppId = PanelLegacyFieldEdits.LegacyField(body, "officialAppId", node => node.GetValue<string>().Trim()),

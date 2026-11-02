@@ -429,7 +429,10 @@ public static class Program
             && !Baseline.AllowsSql("src/BotAgent.Platforms/Persistence/PlatformDedupStore.cs"));
         Check("棘轮不高于 R3 开始数值", Baseline.MaxFileLines <= 1765 && Baseline.BotAgentHostLines <= 243
             && Baseline.BotAgentHostFields <= 10 && Baseline.BotAgentHostMethods <= 10 && Baseline.LongestMethodLines <= 30
-            && Baseline.LongestMethodAnywhere <= 198 && Baseline.SqlLiteralTotal <= 137 && Baseline.FileIoTotal <= 62
+            && Baseline.LongestMethodAnywhere <= 198
+            // #133 v11 配置字段号上限迁移：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省），
+            // 两处 SQL 都在 AppDatabase.cs（R2 的迁移位置）里，不属于「SQL 散出去」。
+            && Baseline.SqlLiteralTotal <= 138 && Baseline.FileIoTotal <= 62
             && Baseline.ClockReads <= 3 && Baseline.HttpClientNews <= 4 && Baseline.PanelAgentCalls == 0
             && Baseline.ConcreteIoNews == 0 && Baseline.SettingsAssignments == 0 && Baseline.PanelSqlLiterals == 0
             && Baseline.PanelFileIo == 0 && Baseline.PanelClockReads == 0 && Baseline.PanelExemptFileIo <= 15

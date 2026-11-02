@@ -286,6 +286,7 @@ public static class BotConfig
     [nameof(AppSettings.FeishuAppId)] = new[] { "BOTAGENT_FEISHU_APP_ID", "QQCHAT_FEISHU_APP_ID" },
     [nameof(AppSettings.FeishuVerificationToken)] = new[] { "BOTAGENT_FEISHU_VERIFICATION_TOKEN", "QQCHAT_FEISHU_VERIFICATION_TOKEN" },
     [nameof(AppSettings.FeishuWhitelist)] = new[] { "BOTAGENT_FEISHU_WHITELIST", "QQCHAT_FEISHU_WHITELIST" },
+    [nameof(AppSettings.FeishuWhitelistPrivates)] = new[] { "QQCHAT_FEISHU_WHITELIST_PRIVATES" },
     [nameof(AppSettings.FeishuApiBase)] = new[] { "BOTAGENT_FEISHU_API_BASE", "QQCHAT_FEISHU_API_BASE" },
     [nameof(AppSettings.LinkPreviewTimeoutSeconds)] = new[] { "QQCHAT_LINK_PREVIEW_TIMEOUT" },
     [nameof(AppSettings.LinkPreviewMax)] = new[] { "QQCHAT_LINK_PREVIEW_MAX" },
@@ -481,6 +482,7 @@ public static class BotConfig
     s.FeishuAppId = Str("BOTAGENT_FEISHU_APP_ID", "QQCHAT_FEISHU_APP_ID") ?? s.FeishuAppId;
     s.FeishuVerificationToken = Str("BOTAGENT_FEISHU_VERIFICATION_TOKEN", "QQCHAT_FEISHU_VERIFICATION_TOKEN") ?? s.FeishuVerificationToken;
     s.FeishuWhitelist = Str("BOTAGENT_FEISHU_WHITELIST", "QQCHAT_FEISHU_WHITELIST") ?? s.FeishuWhitelist;
+    s.FeishuWhitelistPrivates = Str("QQCHAT_FEISHU_WHITELIST_PRIVATES") ?? s.FeishuWhitelistPrivates;
     s.FeishuApiBase = Str("BOTAGENT_FEISHU_API_BASE", "QQCHAT_FEISHU_API_BASE") ?? s.FeishuApiBase;
         s.LinkPreviewTimeoutSeconds = Int("QQCHAT_LINK_PREVIEW_TIMEOUT") ?? s.LinkPreviewTimeoutSeconds;
         s.LinkPreviewMax = Int("QQCHAT_LINK_PREVIEW_MAX") ?? s.LinkPreviewMax;

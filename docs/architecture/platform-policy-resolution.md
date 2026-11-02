@@ -79,3 +79,24 @@
 | 基线合成与标量同步 | `src/BotAgent.Core/Contracts/PlatformSwitchSettings.cs`、`src/BotAgent.Headless/Adapters/Persistence/PlatformScalarSync.cs` |
 | 面板读侧视图与显示标签 | `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs`（`PolicyViews`）、`src/web/src/features/configuration/PlatformPolicyEditor.vue` |
 | 启动横幅 | `src/BotAgent.Headless/Services/Ops/BootReport.cs` |
+
+## 7. 飞书群名单与私聊名单（#133）
+
+飞书通道原来只有一个标量名单，群与私聊共用；现在拆成两路，**各自判定**：
+
+| 位置 | 群 | 私聊 |
+| --- | --- | --- |
+| 配置字段 | `FeishuWhitelist`（57） | `FeishuWhitelistPrivates`（147） |
+| 环境变量 | `BOTAGENT_FEISHU_WHITELIST` / `QQCHAT_FEISHU_WHITELIST` | `QQCHAT_FEISHU_WHITELIST_PRIVATES` |
+| 旧面板标量 | `feishuWhitelist` | `feishuWhitelistPrivates` |
+| 判定来源 | `ScalarListRules(...).Group` / Baseline `GroupWhitelist` | `ScalarListRules(...).Private` / Baseline `PrivateWhitelist` |
+
+**迁移口径：私聊名单留空 = 跟随群名单。** 旧部署只有一个名单，升级后群与私聊都用它；
+要表达「私聊全拦」仍然用策略条目的 `ListRule.Explicit("")`（见第 3 节），所以不损失表达力。
+这条规则只写在 `PlatformSwitchSettings.FeishuPrivateList` / `FeishuPrivateField` 两处，
+Baseline（合成策略）与 `ScalarListRules`（保存时同步策略条目）都走它们，改口径只改这两处。
+
+字段号**只增不改**：`FeishuWhitelistPrivates = 147`，超过 `configuration_field_modes` 原来的
+`field_id <= 142` 约束，所以库版本 `user_version` 10 → 11：旧库由 `AppDatabase` 的 v11 步骤
+整表重建（SQLite 改不了 CHECK），新库直接按新约束建。契约 Revision 没有 bump —— wire 只是多一个
+可选字段，旧客户端忽略未知字段即可。

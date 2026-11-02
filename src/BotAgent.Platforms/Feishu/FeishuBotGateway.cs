@@ -612,7 +612,13 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
         var policy = (settings.PlatformPolicies ?? new List<PlatformPolicySettings>())
             .FirstOrDefault(p => p is not null && string.Equals(PlatformId.Normalize(p.PlatformId), PlatformId.Feishu, StringComparison.OrdinalIgnoreCase));
         var policyWl = isGroup ? policy?.GroupWhitelist : policy?.PrivateWhitelist;
-        var wl = !string.IsNullOrWhiteSpace(policyWl) ? policyWl : settings.FeishuWhitelist;
+        // 没有显式策略条目时回落到标量名单：群用 FeishuWhitelist，私聊用 FeishuWhitelistPrivates，
+        // 私聊空 = 跟随群（旧部署只有一个名单，#133 迁移口径）。
+        var wl = !string.IsNullOrWhiteSpace(policyWl)
+            ? policyWl
+            : isGroup || string.IsNullOrWhiteSpace(settings.FeishuWhitelistPrivates)
+                ? settings.FeishuWhitelist
+                : settings.FeishuWhitelistPrivates;
         return MatchesWhitelist(settings, isGroup, target, wl);
     }
 

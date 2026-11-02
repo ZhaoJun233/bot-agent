@@ -98,7 +98,7 @@ public static class AppDatabase
                     DefaultTimeout = 30
                 }.ToString();
                 using var conn = Open();
-                if (SchemaVersion() > 10) throw new InvalidOperationException("database_schema_newer");
+                if (SchemaVersion() > 11) throw new InvalidOperationException("database_schema_newer");
                 ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
@@ -258,7 +258,7 @@ public static class AppDatabase
               codec_revision TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS configuration_field_modes(
-              field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 142),
+              field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 147),
               user_mode INTEGER NOT NULL CHECK(user_mode BETWEEN 0 AND 2)
             );
             CREATE TABLE IF NOT EXISTS configuration_operations(
@@ -691,7 +691,7 @@ public static class AppDatabase
     /// </summary>
     private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
     {
-        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10)) throw new ArgumentException("invalid_legacy_schema");
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11)) throw new ArgumentException("invalid_legacy_schema");
         Exec(connection, $"PRAGMA user_version = {version};");
     }
 
@@ -704,6 +704,14 @@ public static class AppDatabase
         command.CommandText = "SELECT COUNT(1) FROM pragma_table_info($table) WHERE name=$column AND ($pk=0 OR pk>0)";
         command.Parameters.AddWithValue("$table", table); command.Parameters.AddWithValue("$column", column);
         command.Parameters.AddWithValue("$pk", primaryKeyOnly ? 1 : 0);
+        return Convert.ToInt64(command.ExecuteScalar()) > 0;
+    }
+
+    private static bool HasLegacyTable(SqliteConnection connection, string table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=$table";
+        command.Parameters.AddWithValue("$table", table);
         return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
@@ -827,6 +835,27 @@ public static class AppDatabase
             if (!HasLegacyColumn(conn, "model_providers", "options", false))
                 Write(conn2 => Exec(conn2, "ALTER TABLE model_providers ADD COLUMN options TEXT;"));
             Write(conn2 => SetLegacySchemaVersion(conn2, 10));
+        }
+
+        // v11：飞书私聊名单成为独立配置字段（#133，字段号 147），configuration_field_modes 的
+        // field_id 上限从 142 放宽到 147。SQLite 改不了 CHECK，只能整表重建（旧库才有这张表）。
+        if (version < 11)
+        {
+            if (HasLegacyTable(conn, "configuration_field_modes"))
+            {
+                Write(conn2 => Exec(conn2, """
+                    -- v11 widen configuration field id bound
+                    CREATE TABLE configuration_field_modes_v11(
+                      field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 147),
+                      user_mode INTEGER NOT NULL CHECK(user_mode BETWEEN 0 AND 2)
+                    );
+                    INSERT INTO configuration_field_modes_v11(field_id,user_mode)
+                      SELECT field_id,user_mode FROM configuration_field_modes;
+                    DROP TABLE configuration_field_modes;
+                    ALTER TABLE configuration_field_modes_v11 RENAME TO configuration_field_modes;
+                    """));
+            }
+            Write(conn2 => SetLegacySchemaVersion(conn2, 11));
         }
     }
 

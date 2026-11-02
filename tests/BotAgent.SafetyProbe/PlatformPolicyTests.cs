@@ -1,5 +1,6 @@
 using System.Threading;
 using BotAgent.Domain.Platforms;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Ports;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
@@ -218,7 +219,35 @@ public static partial class Program
             && projectedRosters.Single(p => p.PlatformId == PlatformId.QqOfficial).GroupWhitelist == "synthetic-group"
             && projectedRosters.Single(p => p.PlatformId == PlatformId.QqOfficial).PrivateWhitelist == "synthetic-user"
             && projectedRosters.Single(p => p.PlatformId == PlatformId.Feishu).GroupWhitelist == "synthetic-feishu"
+            // #133：旧的单一飞书名单在投影里同时服务群与私聊（迁移口径），不会在往返中丢私聊。
+            && projectedRosters.Single(p => p.PlatformId == PlatformId.Feishu).PrivateWhitelist == "synthetic-feishu"
             && projectedRosters.Single(p => p.PlatformId == PlatformId.Local).GroupWhitelist == "101");
+
+        // #133：飞书群 / 私聊名单拆成两路。只配旧 FeishuWhitelist 时两边都用它；
+        // 一旦配了 FeishuWhitelistPrivates，私聊就不再跟随群名单。
+        var feishuDriver = new PolicyTarget.Instance(new DriverKey(PlatformId.Feishu, AccountScope.Default, "feishu-main"));
+        var singleRoster = new AppSettings
+        {
+            FeishuWhitelist = "synthetic-feishu",
+            DeclaredPlatformDrivers = [new DriverKey(PlatformId.Feishu, AccountScope.Default, "feishu-main")],
+        };
+        var splitRoster = new AppSettings
+        {
+            FeishuWhitelist = "synthetic-feishu",
+            FeishuWhitelistPrivates = "synthetic-private",
+            DeclaredPlatformDrivers = [new DriverKey(PlatformId.Feishu, AccountScope.Default, "feishu-main")],
+        };
+        var singleRules = PlatformSwitchSettings.ResolvePolicyRules(singleRoster, feishuDriver, default);
+        var splitRules = PlatformSwitchSettings.ResolvePolicyRules(splitRoster, feishuDriver, default);
+        var (scalarGroup, scalarPrivate) = PlatformSwitchSettings.ScalarListRules(PlatformId.Feishu, splitRoster);
+        Check("legacy single feishu roster keeps serving group and private chats",
+            singleRules.GroupWhitelist.TryGetExplicitValue(out var singleGroup) && singleGroup == "synthetic-feishu"
+            && singleRules.PrivateWhitelist.TryGetExplicitValue(out var singlePrivate) && singlePrivate == "synthetic-feishu");
+        Check("split feishu rosters resolve per lane and scalar rules follow",
+            splitRules.GroupWhitelist.TryGetExplicitValue(out var splitGroup) && splitGroup == "synthetic-feishu"
+            && splitRules.PrivateWhitelist.TryGetExplicitValue(out var splitPrivate) && splitPrivate == "synthetic-private"
+            && scalarGroup.TryGetExplicitValue(out var scalarGroupText) && scalarGroupText == "synthetic-feishu"
+            && scalarPrivate.TryGetExplicitValue(out var scalarPrivateText) && scalarPrivateText == "synthetic-private");
 
         var projected = PlatformSwitchSettings.EditablePolicies(noPolicies);
         noPolicies.PlatformPolicies = projected;

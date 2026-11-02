@@ -147,5 +147,7 @@ public enum ConfigurationFieldId
     RegisteredPlugins = 143,
     RegisteredProviders = 144,
     AllowedSecretEdits = 145,
-    EnableNaturalAgent = 146
+    EnableNaturalAgent = 146,
+    /// <summary>飞书私聊名单（#133）：与群名单拆开。编号只增不改，历史 configuration_* 行仍可解码。</summary>
+    FeishuWhitelistPrivates = 147
 }
