@@ -860,6 +860,23 @@ public static class Program
             notInCi.Count == 0,
             notInCi.Count == 0 ? null : "ci.yml 没点名：" + string.Join("、", notInCi));
 
+        // ①b 整个 harness 注册的场景必须与 CI 矩阵一一对应（#113）：新场景只在本地跑过、CI 里没点名，
+        // 等于门禁悄悄少了一块；反向也查 —— 矩阵里留着已删除的 id 会让那组场景跑到「零场景」护栏上。
+        var registeredScenarios = System.Text.RegularExpressions.Regex.Matches(harness, "Scenario\\(\"(s\\d+)\"")
+            .Select(match => match.Groups[1].Value).Distinct(StringComparer.Ordinal)
+            .OrderBy(tag => tag, StringComparer.Ordinal).ToList();
+        var matrixScenarios = System.Text.RegularExpressions.Regex.Matches(ci, "scenarios:\\s*\"([^\"]+)\"")
+            .SelectMany(match => match.Groups[1].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.Ordinal).OrderBy(tag => tag, StringComparer.Ordinal).ToList();
+        var scenariosMissingFromCi = registeredScenarios.Except(matrixScenarios, StringComparer.Ordinal).ToList();
+        var scenariosWithoutHarness = matrixScenarios.Except(registeredScenarios, StringComparer.Ordinal).ToList();
+        Check($"harness 注册的 {registeredScenarios.Count} 个集成场景与 ci.yml 矩阵完全一致（新增场景必须同步矩阵）",
+            registeredScenarios.Count > 0 && scenariosMissingFromCi.Count == 0 && scenariosWithoutHarness.Count == 0,
+            registeredScenarios.Count == 0 ? "Program.cs 里找不到 Scenario(\"sNN\") 注册"
+                : scenariosMissingFromCi.Count > 0 ? "ci.yml 没点名：" + string.Join("、", scenariosMissingFromCi)
+                : scenariosWithoutHarness.Count > 0 ? "矩阵里有未注册场景：" + string.Join("、", scenariosWithoutHarness)
+                : null);
+
         // ② 性能基线必须是“随代码提交的守护值”，不能运行时现算。
         var baselinePath = Path.Combine(index.Root, "tests", "fixtures", "pipeline", "baseline.json");
         var baselineText = File.Exists(baselinePath) ? File.ReadAllText(baselinePath) : string.Empty;

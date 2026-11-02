@@ -57,6 +57,10 @@
   （`ProviderRouteBoundary`，拒绝原因码与日志一致，只对未启用供应商放行试连）；
   旧面板 `POST /api/settings` 支持可选的 `expectedVersion`（携带时做 CAS，冲突 409，响应多一个
   `legacyVerification` 标记）；`//` 辅助模型通道缺密钥时不再静默返回，日志与聊天通道同口径。
+- CI 质量门禁（#113）：9 项必需检查与实际 job 名逐字对齐、写明「失败与跳过」纪律并登记已知不稳定性；
+  集成矩阵补上此前漏跑的 S61/S62，ArchitectureProbe 新增断言「harness 注册的场景 == ci.yml 矩阵」
+  （双向、负向实测会红）；CI 改用规范名 `BOTAGENT_IT_ONLY`。清单见
+  [CI 质量门禁](docs/operations/ci-quality-gates.md)。
 - 平台策略（#104）：面板改的标量（开关、白名单文本、本地通道）会同步进策略条目，
   旧面板与新 ZBA 面板两条保存路径都生效。
 - 平台策略的实例目标与名单文本（#129）：空 instanceId 的实例目标就是内置驱动的身份

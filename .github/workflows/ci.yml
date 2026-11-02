@@ -240,9 +240,11 @@ jobs:
           - name: "Media & Tools (S18-S31)"
             scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31"
           # ⚠ 别改这个 name：分支保护的必需检查是按「Synthetic integration test (<name>)」命名的，
-          # 改名等于让必需检查永远缺失、PR 永远合不了。s56–s59（#126 的核心不变量）**故意**留在这组里。
+          # 改名等于让必需检查永远缺失、PR 永远合不了。s56–s59（#126 的核心不变量）与 s60–s62
+          # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
+          # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -265,5 +267,6 @@ jobs:
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
       - name: Run synthetic integration suite
         env:
-          QQCHAT_IT_ONLY: ${{ matrix.scenarios }}
+          # 规范名优先（N1）：harness 仍兼容旧 QQCHAT_IT_ONLY，但新配置一律写 BOTAGENT_*。
+          BOTAGENT_IT_ONLY: ${{ matrix.scenarios }}
         run: dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
