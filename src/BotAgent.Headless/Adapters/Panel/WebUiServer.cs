@@ -61,7 +61,7 @@ namespace BotAgent.Adapters.Panel;
 /// </summary>
 public sealed partial class WebUiServer : IDisposable
 {
-    private static readonly JsonSerializerOptions Json = new()
+    internal static readonly JsonSerializerOptions Json = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,

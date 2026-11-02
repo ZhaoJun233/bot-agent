@@ -43,6 +43,10 @@
   插件 TFM 白名单同步放宽。
 - 构建基线收敛到 `Directory.Build.props`（#123）：LangVersion / Nullable / ImplicitUsings /
   Deterministic / NuGet 审计，并由探针强制「只接受探针解释得了的属性」。
+- 面板设置边界（#109）：`WebUiServer.Settings.cs`（1127 行）按职责拆成 8 个文件——HTTP 薄层、
+  新保存请求校验、旧面板整批意图、标量输入、字段读取原语、结构化策略装配、已移除字段拒绝、回读投影；
+  旧面板与 ZBA 两条保存路径、整批拒绝原子性、结构化策略独立装配与 secret 归属保持不变。
+  文件地图与「加一个字段要改哪两处」见 [面板设置职责边界](docs/architecture/panel-settings-boundaries.md)。
 - 模型配置（#103）：凭据来源改为**请求级**材料，面板里改 API Key 或换供应商后不再进入安全静默，
   下一次请求即打到新端点。
 - 平台策略（#104）：面板改的标量（开关、白名单文本、本地通道）会同步进策略条目，
