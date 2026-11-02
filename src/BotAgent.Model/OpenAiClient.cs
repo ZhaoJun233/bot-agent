@@ -371,11 +371,28 @@ public class OpenAiClient : IModelClient
         string? baseUrlOverride,
         string? apiKeyOverride)
     {
-        // 显式覆盖用于测试/指定上游时保持原语义，不把它误当注册表 Provider。
-        if (_providerFailover is null || !string.IsNullOrWhiteSpace(baseUrlOverride) || !string.IsNullOrWhiteSpace(apiKeyOverride))
+        // 没有注册表可路由（老装配）时保持原语义：覆盖给什么就用什么。
+        if (_providerFailover is null)
         {
             return await CompleteChatCoreAsync(model, systemPrompt, messages, maxTokens, temperature,
                 reasoningEffort, ct, baseUrlOverride, apiKeyOverride).ConfigureAwait(false);
+        }
+
+        // 显式上游：只有 baseUrl 与 apiKey **成对**给出才算「整对指定上游」——这是唯一允许完全绕开
+        // 注册表与熔断器的路径（测试替身 / 特殊网关），语义与 #132 之前一致。
+        if (HasExplicitUpstream(baseUrlOverride, apiKeyOverride))
+        {
+            return await CompleteChatCoreAsync(model, systemPrompt, messages, maxTokens, temperature,
+                reasoningEffort, ct, baseUrlOverride, apiKeyOverride).ConfigureAwait(false);
+        }
+
+        // 只给一半是 // 任务最常见的专用上游配法（只改地址，密钥沿用聊天那把）。它不属于注册表里的
+        // 任何 Provider，以前会直接绕开执行器（坏端点按调用次数硬超时、不受断路器约束）。#134 起把它
+        // 包成一个单候选的辅助上游，交给同一个熔断器记账——语义不变，可见性与快速失败与聊天一致。
+        if (!string.IsNullOrWhiteSpace(baseUrlOverride) || !string.IsNullOrWhiteSpace(apiKeyOverride))
+        {
+            return await CompleteAuxiliaryAsync(model, systemPrompt, messages, maxTokens, temperature,
+                reasoningEffort, baseUrlOverride, apiKeyOverride, ct).ConfigureAwait(false);
         }
 
         var result = await _providerFailover.RunAsync(async (candidate, token) =>
@@ -395,8 +412,60 @@ public class OpenAiClient : IModelClient
                 : ProviderCallResult<string>.Success(response);
         }, ct).ConfigureAwait(false);
 
-        return result.Succeeded ? result.Value : null;
+        if (!result.Succeeded)
+        {
+            FileLog.Warn("Agent",
+                $"辅助模型调用不可用，进入安全静默（reason={result.ReasonCode}，hops={result.FallbackHops}）");
+            return null;
+        }
+
+        return result.Value;
     }
+
+    /// <summary>成对给出 baseUrl 与 apiKey 才允许完全绕开注册表（测试/特殊上游）；只给一半不算。</summary>
+    private static bool HasExplicitUpstream(string? baseUrlOverride, string? apiKeyOverride)
+        => !string.IsNullOrWhiteSpace(baseUrlOverride) && !string.IsNullOrWhiteSpace(apiKeyOverride);
+
+    /// <summary>// 任务的专用上游（只给了一半覆盖）：合成一个单候选路由，走同一个熔断执行器。</summary>
+    /// <remarks>它没有注册表 Id，熔断状态不落库（进程重启清零）；这是「配置派生身份」的已知取舍。</remarks>
+    private async Task<string?> CompleteAuxiliaryAsync(
+        string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
+        int maxTokens, double temperature, string? reasoningEffort,
+        string? baseUrlOverride, string? apiKeyOverride, CancellationToken ct)
+    {
+        var route = new ModelProviderRoute(
+            ProviderFailoverRunner.AuxiliaryProviderId,
+            string.IsNullOrWhiteSpace(baseUrlOverride) ? _settings.BaseUrl : baseUrlOverride,
+            model,
+            string.IsNullOrWhiteSpace(apiKeyOverride) ? _settings.ApiKey : apiKeyOverride);
+
+        // 缺密钥不是端点故障：不进熔断器计数，但与聊天同一错误码与同一句话。
+        if (route.Protocol != ModelProtocol.Ollama && string.IsNullOrWhiteSpace(route.ApiKey))
+        {
+            FileLog.Warn("Agent", "辅助模型调用不可用，进入安全静默（reason=provider_secret_unavailable）");
+            return null;
+        }
+
+        var result = await _providerFailover!.RunAuxiliaryAsync(async token =>
+        {
+            var response = await CompleteChatCoreAsync(
+                model, systemPrompt, messages, maxTokens, temperature,
+                reasoningEffort, token, route.BaseUrl, route.ApiKey, route).ConfigureAwait(false);
+            return response is null
+                ? ProviderCallResult<string>.Failure("chat_completion_failed", hardFailure: true)
+                : ProviderCallResult<string>.Success(response);
+        }, ct).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            FileLog.Warn("Agent",
+                $"辅助模型调用不可用，进入安全静默（reason={result.ReasonCode}，hops={result.FallbackHops}）");
+            return null;
+        }
+
+        return result.Value;
+    }
+
     private async Task<string?> CompleteChatCoreAsync(
         string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
         int maxTokens, double temperature, string? reasoningEffort, CancellationToken ct,

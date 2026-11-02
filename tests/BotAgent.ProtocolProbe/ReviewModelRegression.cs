@@ -16,6 +16,7 @@ internal static class ReviewModelRegression
         await SoftFailureRecoveryAsync(check);
         await ProbeOwnershipAsync(check);
         await PersonaRoutesAsync(check);
+        await AuxRoutingAsync(check);
     }
 
     private static async Task ImageDeadlineAsync(Action<bool, string> check)
@@ -263,6 +264,101 @@ internal static class ReviewModelRegression
         }
     }
 
+
+    /// <summary>
+    /// #134：// 任务（辅助通道）与聊天必须走同一次路由解析与同一个熔断器。
+    /// 只有 baseUrl + apiKey **成对**给出时才允许完全绕开注册表（测试/特殊上游）。
+    /// </summary>
+    private static async Task AuxRoutingAsync(Action<bool, string> check)
+    {
+        var route = new ModelProviderRoute("synthetic-aux", "https://example.com/v1", "example-route-model", "synthetic-key");
+        var hosts = new List<string>();
+        var ok = false;
+        var http = new FakeHttp((request, _) =>
+        {
+            hosts.Add(request.RequestUri?.Host ?? "");
+            if (ok)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"Synthetic aux reply\"}}]}")
+                });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("{\"error\":{\"message\":\"synthetic\"}}")
+            });
+        });
+        var options = new ModelOptions { ApiKey = "synthetic-chat-key", BaseUrl = "https://example.com/v1", Model = "example-model" };
+        var images = new ImageDownloader(http) { AllowPrivateHosts = false };
+        var transport = new ModelTransport(() => options, http, http, images, http.Timeout);
+
+        var warnings = new List<string>();
+        var originalWarn = BotAgent.Services.ModelLogging.WarnHandler;
+        BotAgent.Services.ModelLogging.WarnHandler = (tag, message) => warnings.Add($"[{tag}] {message}");
+        try
+        {
+            var resolverCalls = 0;
+            var runner = new ProviderFailoverRunner([new ProviderCandidate(route.ProviderId, 0)],
+                clock: () => DateTimeOffset.UnixEpoch, failureThreshold: 1);
+            var client = new OpenAiClient(() => options, http, http, images, transport, runner,
+                providerRouteResolver: _ => { resolverCalls++; return route; });
+
+            // ① 只给一半覆盖（只改地址、密钥沿用聊天）：语义不变——仍打配置的那个上游，绝不悄悄换成注册表端点。
+            var partial = await client.CompleteChatAsync("synthetic-model", "synthetic system",
+                [("user", "synthetic prompt")], 64, 0.0,
+                baseUrlOverride: "https://override.example/v1", apiKeyOverride: null);
+            check(partial is null && resolverCalls == 0 && hosts.Count == 1 && hosts[0] == "override.example",
+                "B35 partial override still calls the configured upstream and never falls back to the registry route");
+
+            // ② 这次失败被同一个熔断器记为硬故障（阈值 1）：下一次必须快速失败、不再发请求。
+            warnings.Clear();
+            var afterOpen = await client.CompleteChatAsync("synthetic-model", "synthetic system",
+                [("user", "synthetic prompt")], 64, 0.0,
+                baseUrlOverride: "https://override.example/v1", apiKeyOverride: null);
+            check(afterOpen is null && hosts.Count == 1 && resolverCalls == 0,
+                "B35 aux upstream fast-fails through the shared breaker without another request");
+            check(warnings.Any(line => line.Contains("provider_circuit_open", StringComparison.Ordinal)
+                    && line.Contains("辅助模型调用不可用", StringComparison.Ordinal)),
+                "B35 aux breaker failure is logged with the same silent-failure wording as chat");
+
+            // ③ 成对给出 baseUrl + apiKey 是唯一允许完全绕开注册表的路径（测试替身 / 特殊网关）。
+            ok = true;
+            hosts.Clear();
+            var paired = await client.CompleteChatAsync("synthetic-model", "synthetic system",
+                [("user", "synthetic prompt")], 64, 0.0,
+                baseUrlOverride: "https://override.example/v1", apiKeyOverride: "synthetic-override-key");
+            check(paired == "Synthetic aux reply" && resolverCalls == 0 && hosts.Count == 1 && hosts[0] == "override.example",
+                "B35 paired override upstream bypasses the registry exactly as before");
+
+            // ④ 没有覆盖时仍走注册表路由与 failover（正是聊天通道那条路）。
+            hosts.Clear();
+            var resolved = await client.CompleteChatAsync("synthetic-model", "synthetic system",
+                [("user", "synthetic prompt")], 64, 0.0);
+            check(resolved == "Synthetic aux reply" && resolverCalls == 1 && hosts.Count == 1 && hosts[0] == "example.com",
+                "B35 aux channel without overrides resolves through the registered route");
+
+            // ⑤ 只给一半但聊天也没有密钥：与聊天同一错误码，且根本不发请求。
+            ok = false;
+            hosts.Clear();
+            warnings.Clear();
+            var blankOptions = new ModelOptions { ApiKey = "", BaseUrl = "https://example.com/v1", Model = "example-model" };
+            var blankRunner = new ProviderFailoverRunner([new ProviderCandidate(route.ProviderId, 0)],
+                clock: () => DateTimeOffset.UnixEpoch, failureThreshold: 1);
+            var blankClient = new OpenAiClient(() => blankOptions, http, http, images, transport, blankRunner,
+                providerRouteResolver: _ => route);
+            var blank = await blankClient.CompleteChatAsync("synthetic-model", "synthetic system",
+                [("user", "synthetic prompt")], 64, 0.0,
+                baseUrlOverride: "https://override.example/v1", apiKeyOverride: null);
+            check(blank is null && hosts.Count == 0
+                    && warnings.Any(line => line.Contains("provider_secret_unavailable", StringComparison.Ordinal)),
+                "B35 partial override without any usable key reports provider_secret_unavailable and sends nothing");
+        }
+        finally
+        {
+            BotAgent.Services.ModelLogging.WarnHandler = originalWarn;
+        }
+    }
     private sealed class StallingBody : Stream
     {
         internal CancellationToken Token { get; private set; }

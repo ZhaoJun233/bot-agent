@@ -1,4 +1,4 @@
-# 模型配置的生效路径（#103 / #128 / #132）
+# 模型配置的生效路径（#103 / #128 / #132 / #134）
 
 回答一个问题：**在面板里改一个模型配置，什么时候立刻生效，什么时候必须重启？**
 这份文件是那次 P1 故障（「改了模型配置但实际调用还是旧的」）的结论沉淀，
@@ -109,16 +109,25 @@
 
 ---
 
-## 4. 两条模型通道（已知分叉）
+## 4. 两条模型通道（#134 起共用同一个熔断执行器）
 
-| 通道 | 走不走供应商注册表 | 说明 |
+| 通道 / 情形 | 路由来源 | 熔断 |
 | --- | --- | --- |
-| 聊天回复（含辅助调用） | 走 | 受 failover/熔断约束 |
-| 服务器 `//` Agent | 显式 override 时绕过 | `ServerAgentRunner` 传自己的 baseUrl/key |
+| 聊天回复 | 注册表候选表，`ProviderFailoverRunner.RunAsync` | 有，状态落库 |
+| `//` 任务 · 没有任何覆盖 | 同一个注册表，同一条 `RunAsync` | 有，状态落库 |
+| `//` 任务 · 只给一半覆盖（只改地址或只改密钥） | 单候选辅助上游，`RunAuxiliaryAsync`，合成 id `agent-server` | 有，状态**不落库** |
+| `//` 任务 · baseUrl + apiKey 成对 | 直接调用，不查注册表 | 无（唯一豁免） |
 
-因此凭据不可用时可能表现为「普通聊天哑了、`//` 任务还能用」。这是**已知分叉**；
-#132 只统一了「失败必须可见」（同错误码、同级别日志、都过同一条硬边界），
-把两条通道真正并成一条会改变 failover 行为，仍属独立议题（见 #103 报告的 S3）。
+- 只给一半覆盖为什么不并进注册表：`tests/BotAgent.IntegrationHarness/AgentServerKeyScenario.cs`（S37）钉住
+  「只改地址、密钥沿用聊天那把」这个语义；并进注册表会让 `QQCHAT_AGENT_SERVER_URL` 指向的自定义上游失效、
+  请求悄悄跳到注册表端点，属可见回归。改成「单候选辅助上游」既保语义，又让坏端点按熔断快速失败、
+  不再按调用次数硬超时（`src/BotAgent.Model/OpenAiClient.cs` 的 `CompleteAuxiliaryAsync`）。
+- 失败语义两条通道一致：`provider_circuit_open` / `provider_timeout` / `provider_exception` /
+  `provider_secret_unavailable` / `chat_completion_failed`，日志同一句「…进入安全静默（reason=…，hops=…）」。
+- 成对覆盖是唯一允许完全绕开注册表与熔断器的路径（测试替身 / 特殊网关），判定在 `HasExplicitUpstream`；
+  `tests/BotAgent.ProtocolProbe/ReviewModelRegression.cs` 的 B35 断言钉住这几条语义。
+- 合成身份不落库的取舍：`ModelProviderStore.SaveCircuit` 只 UPDATE 已注册行（未知 id 会抛异常），
+  所以 `agent-server` 的熔断状态在进程重启后清零 —— 这是「配置派生身份」的已知代价，不是遗漏。
 
 ---
 
@@ -133,5 +142,8 @@
 7. 不要把断路器状态放进候选表一起换 —— 那等于让改配置顺手清掉熔断。
 8. 改 `ProviderRouteBoundary` 等于同时改「运行期身份」与「面板发现」，回归要同时跑
    `BOTAGENT_IT_ONLY=s21`（运行期）与面板里的供应商测连；探针 `ProviderRoutingBoundaryTests` 会拦判定表漂移。
+9. 改 `//` 任务的 override 语义（`CompleteChatWithProviderFailoverAsync` / `HasExplicitUpstream`）必须跑
+   `BOTAGENT_IT_ONLY=s37` 与 `dotnet tests/BotAgent.ProtocolProbe/...dll`：S37 钉「只改地址、密钥沿用聊天」，
+   B35 钉「一半覆盖经熔断器、成对覆盖才绕开」。
 9. 辅助通道的静默日志不要删：`tests/BotAgent.ProtocolProbe` 的 B23 用 `ModelLogging.WarnHandler` 捕获它，
    删掉会红（这正是「任务哑了、日志干净」的回归护栏）。

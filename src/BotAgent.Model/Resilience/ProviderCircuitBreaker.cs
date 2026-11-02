@@ -255,8 +255,14 @@ public sealed class ProviderFailoverRunner
     private readonly TimeSpan? _cooldown;
     private readonly Action<ProviderCircuitSnapshot>? _onSnapshotChanged;
 
+    /// <summary>// 任务专用上游在熔断台账里的合成身份；它不是注册表 Provider。</summary>
+    public const string AuxiliaryProviderId = "agent-server";
+
     /// <summary>volatile：热重建直接换整份候选表，读侧不加锁。</summary>
     private volatile CandidateSet _set = null!;
+
+    private readonly object _auxiliaryGate = new();
+    private ProviderCircuitBreaker? _auxiliaryBreaker;
 
     public ProviderFailoverRunner(
         IEnumerable<ProviderCandidate> providers,
@@ -347,6 +353,75 @@ public sealed class ProviderFailoverRunner
     {
         var set = _set;
         return set.Providers.Select(p => set.Breakers[p.Id].Snapshot()).ToArray();
+    }
+
+    /// <summary>
+    /// // 任务的专用上游（只给了 baseUrl / apiKey 一半覆盖）：单候选，但用的是同一个熔断器实现。
+    /// 这样坏端点不会按调用次数硬超时，而是像注册表 Provider 一样被快速失败。
+    /// 状态不落库：它是配置派生的合成身份，进程重启清零是可接受且已记录的取舍（#134）。
+    /// </summary>
+    public async Task<ProviderRunResult<T>> RunAuxiliaryAsync<T>(
+        Func<CancellationToken, Task<ProviderCallResult<T>>> call,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        var breaker = AuxiliaryBreaker();
+        if (!breaker.TryEnter(out _, out var admission))
+        {
+            return new ProviderRunResult<T>(false, default, AuxiliaryProviderId, 0, "provider_circuit_open", true);
+        }
+
+        try
+        {
+            ProviderCallResult<T> result;
+            try
+            {
+                result = await call(ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                Publish(breaker.RecordHardFailure(admission));
+                return new ProviderRunResult<T>(false, default, AuxiliaryProviderId, 1, "provider_timeout", true);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                Publish(breaker.RecordHardFailure(admission));
+                return new ProviderRunResult<T>(false, default, AuxiliaryProviderId, 1, "provider_exception", true);
+            }
+
+            if (result.Succeeded)
+            {
+                Publish(breaker.RecordSuccess(admission));
+                return new ProviderRunResult<T>(true, result.Value, AuxiliaryProviderId, 0, "ok", false);
+            }
+
+            if (result.HardFailure)
+            {
+                Publish(breaker.RecordHardFailure(admission));
+            }
+
+            return new ProviderRunResult<T>(false, default, AuxiliaryProviderId, 1,
+                result.ReasonCode ?? "provider_failure", true);
+        }
+        finally
+        {
+            if (breaker.ReleaseProbe(admission!) is { } released) Publish(released);
+        }
+    }
+
+    private ProviderCircuitBreaker AuxiliaryBreaker()
+    {
+        var breaker = _auxiliaryBreaker;
+        if (breaker is not null) return breaker;
+        lock (_auxiliaryGate)
+        {
+            return _auxiliaryBreaker ??= new ProviderCircuitBreaker(AuxiliaryProviderId, _failureThreshold, _cooldown, _clock);
+        }
     }
 
     public async Task<ProviderRunResult<T>> RunAsync<T>(

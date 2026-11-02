@@ -67,6 +67,11 @@
   （`ProviderRouteBoundary`，拒绝原因码与日志一致，只对未启用供应商放行试连）；
   旧面板 `POST /api/settings` 支持可选的 `expectedVersion`（携带时做 CAS，冲突 409，响应多一个
   `legacyVerification` 标记）；`//` 辅助模型通道缺密钥时不再静默返回，日志与聊天通道同口径。
+- `//` 任务的两条模型通道（#134）：专用上游只给一半覆盖（只改地址或只改密钥）时不再绕开熔断器——
+  现在包成单候选辅助上游，用与聊天相同的 `ProviderFailoverRunner` 记账，坏端点按熔断快速失败、
+  错误码与日志同口径；`baseUrl` + `apiKey` 成对给出仍是唯一允许完全绕开的路径（测试替身 / 特殊网关）。
+  合成身份 `agent-server` 的熔断状态不落库（重启清零），取舍见
+  [模型配置的生效路径](docs/architecture/model-configuration-apply-path.md) §4；回归 `S37` 与 ProtocolProbe B35。
 - CI 质量门禁（#113）：9 项必需检查与实际 job 名逐字对齐、写明「失败与跳过」纪律并登记已知不稳定性；
   集成矩阵补上此前漏跑的 S61/S62，ArchitectureProbe 新增断言「harness 注册的场景 == ci.yml 矩阵」
   （双向、负向实测会红）；CI 改用规范名 `BOTAGENT_IT_ONLY`。清单见
