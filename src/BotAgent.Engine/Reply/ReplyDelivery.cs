@@ -1,301 +1,87 @@
 using BotAgent.Services.Plugins;
-using BotAgent.Services.Voice;
+using BotAgent.Services.Evaluation;
 using BotAgent.Engine.Runtime;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Ports;
+using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ops;
 using BotAgent.Domain.Platforms;
-using BotAgent.Domain.Qq;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Stickers;
 using BotAgent.Services.Agent;
-using BotAgent.Services.Platforms;
+using BotAgent.Services.Conversations;
+using BotAgent.Services.Links;
+using BotAgent.Services.Music;
+using BotAgent.Services.Net;
+using BotAgent.Services.OneBot;
+using BotAgent.Services.Panel;
 using BotAgent.Services.Ports;
+using BotAgent.Services.Ops;
+using BotAgent.Services.Participation;
+using BotAgent.Services.Permissions;
+using BotAgent.Services.Poke;
+using BotAgent.Services.Platforms;
 using BotAgent.Services.Qq;
+using BotAgent.Services.Resilience;
+using BotAgent.Services.Stickers;
+using BotAgent.Services.Voice;
+using System.Collections.Concurrent;
+using System.Text;
 
 namespace BotAgent.Services.Reply;
 
-public sealed partial class ReplyPipeline
+/// <summary>
+/// 一轮回复的**投递**（#106 第 6 步）：把已经想好的话说出去，并如实记账。
+/// <para>
+/// 这一段管三个不变量（搬出来一条都没改语义）：
+/// ① **语音与文字去重** —— 语音已经把那句话说完了就不再发同一句文字（按去掉标点后是否同一句判断，
+///    不靠"含几个数字"这类猜测）；模型明确 both:true 才两个都发；文字里有链接时强制补发。
+/// ② **引用只挂第一条** —— 分句发送时引用挂第一段（图与戳不带引用）。
+/// ③ **戳一戳要过三道门** —— 号码在当前上下文里出现过（防编造）→ 心情门 → 频率门 + 能力闸门。
+/// </para>
+/// <para>
+/// 边界：这里**不判断该不该回**（策略层的事），也**不生成内容**（模型与决策动作的事）。
+/// 它只负责"发出去"和"把发出去的事实记进上下文、参与状态机、运行日志"。
+/// 失败必须可见：发不出去就记失败节点，不静默当成功。
+/// </para>
+/// </summary>
+internal sealed class ReplyDelivery(
+    ReplyHooks hooks,
+    ConversationRegistry registry,
+    IPanelNotifier ui,
+    IQqMessageSender plain,
+    IQqChatSource source,
+    StickerService stickers,
+    IVoiceUseCase voice,
+    PokeUseCase poke,
+    IMoodRepository mood,
+    ApprovalUseCase approvals,
+    ParticipationUseCase participation,
+    TurnTraceStore traces,
+    IProtocolRiskBackoff? riskBackoff,
+    Func<string, bool> allowsFeature)
 {
-    /// <summary>
-    /// 后台真去搜一次，把结果留给下一轮（并在允许时叫醒模型）。
-    /// 为什么要冷却：搜索是一次真实的模型调用 + 几秒等待；群里连问几个问题就排队了。
-    /// </summary>
-    private void QueueWebSearchAsync(BotConversation conversation, string query, AppSettings snapshot, EffectivePlatformPolicy platformPolicy)
-    {
-        var key = conversation.SourceKey;
-        if (!QueuedResearchAllowed(snapshot, platformPolicy, "web.search")) return;
-        if (!_research.TryBeginSearch(key, snapshot.WebSearchCooldownSeconds, out var searchWhy))
-        {
-            _hooks.Log($"[Search] 这次不搜（{searchWhy}）：{query}");
-            return;
-        }
-
-        _hooks.Log($"[Search] 模型想搜「{query}」");
-        QueueBackground("web-search:" + key + ":" + query, "web-search:" + key + ":" + query, async ct =>
-        {
-            if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.search")) return;
-            try
-            {
-                var result = await _research.SearchAsync(key, query, ct);
-                if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.search")) return;
-                if (result is not null && !result.HasContent)
-                {
-                    _hooks.Log($"[Search] 没搜到「{query}」：{result.Error}");
-                    // P1 观测：模型点名的工具没拿到东西 → 记一次失败（只降级不升级）
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                }
-
-                // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
-                RequestReply(conversation, null);
-            }
-            catch (OperationCanceledException)
-            {
-                // 停机/超时取消：不再把结果当成失败去降级。
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Search] 搜「{query}」失败: {ex.Message}");
-                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-            }
-        });
-    }
-    /// <summary>后台读一个网页的正文（模型填 read 时），留给下一轮。</summary>
-    private void QueuePageReadAsync(BotConversation conversation, string url, AppSettings snapshot, EffectivePlatformPolicy platformPolicy)
-    {
-        var key = conversation.SourceKey;
-        if (!QueuedResearchAllowed(snapshot, platformPolicy, "web.read")) return;
-        _hooks.Log($"[Search] 模型想读页面 {TextRules.Shorten(url, 80)}");
-        QueueBackground("web-read:" + key + ":" + url, "web-read:" + key + ":" + url, async ct =>
-        {
-            if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.read")) return;
-            try
-            {
-                var text = await _research.ReadPageAsync(key, url, ct);
-                if (ct.IsCancellationRequested || !QueuedResearchAllowed(snapshot, platformPolicy, "web.read")) return;
-                if (text is null)
-                {
-                    // P1 观测：读页面失败（工具失败 → 只降级）
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                }
-
-                RequestReply(conversation, null);
-            }
-            catch (OperationCanceledException)
-            {
-                // 停机/超时取消：不再把结果当成失败去降级。
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Search] 读页面失败: {ex.Message}");
-                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-            }
-        });
-    }
-    private bool QueuedResearchAllowed(AppSettings snapshot, EffectivePlatformPolicy platformPolicy, string toolId)
-        => _replyTools.Allows(snapshot, platformPolicy, toolId)
-            && _replyTools.Allows(_settings, platformPolicy, toolId);
-
-
-    /// <summary>
-    /// 第 4 步的**动作**那一半：搜索 / 读页 / 听歌 / 分享歌（都是两轮动作，后台去跑、下一轮再开口）
-    /// 加上表情包候选的校验（不在库里、没过审、频率门都要挡掉）。
-    /// 每个动作都要过服务端能力闸门（P3：模型输出不构成授权）；返回这一轮真正要发的表情包（可能为 null）。
-    /// </summary>
-    private async Task<StickerRecord?> QueueTurnActionsAsync(
-         BotConversation conversation,
-         AppSettings snapshot,
-         Domain.Permissions.ChatCapabilitySet caps,
-         EffectivePlatformPolicy platformPolicy,
-         CompletionResult result,
-        bool directAddress)
-    {
-        await Task.CompletedTask;
-        if (_riskBackoff?.IsActive(conversation.SourceKey) == true)
-        {
-            _hooks.Log($"协议端风控退避中，暂停语音、表情包、音乐和主动动作（会话={Channels.Describe(conversation.SourceKey)}）");
-            return null;
-        }
-
-        // 表情包：模型可以只发图不说话，也可以“文字 + 图”。
-        // 校验一下 id（模型偶发会编造/多空格），拿不到就把这次当成纯文字。
-        StickerRecord? sticker = null;
-        // 联网搜索（search / read）：后台去查，拿到结果后再给它一次开口的机会。
-        // 这两个是“两轮动作”—— 模型这轮照常接话（reply 可以写“我去查查”），下一轮拿着事实说。
-        // search 优先于 read：模型一般只会填一个。
-        if (platformPolicy.Feature("websearch", snapshot.EnableWebSearch).Enabled && AllowsFeature(PluginGate.WebSearchCapability) && _research.IsReady && result.Search is { Length: > 0 } wantedQuery)
-        {
-            // P3：联网是“真出网”，必须过服务端能力闸门（模型输出不构成授权）；策略用本轮快照
-            if (_approvals.AllowCapability(conversation, "web.search", wantedQuery, out _, pinned: caps))
-            {
-                QueueWebSearchAsync(conversation, wantedQuery, snapshot, platformPolicy);
-            }
-        }
-        else if (platformPolicy.Feature("websearch", snapshot.EnableWebSearch).Enabled && AllowsFeature(PluginGate.WebSearchCapability) && _research.IsReady && result.Read is { Length: > 0 } pageUrl)
-        {
-            if (_approvals.AllowCapability(conversation, "web.read", pageUrl, out _, pinned: caps))
-            {
-                QueuePageReadAsync(conversation, pageUrl, snapshot, platformPolicy);
-            }
-        }
-
-        // 模型想听一首歌（listen 字段）：后台去搜、去听，听完再给它一次开口的机会。
-        // 这是群里说“去听一下 XXX”的唯一入口 —— 不靠正则猜句子，交给模型自己决定。
-        // P3（V3 §9.2）：听歌是“真出网”（去外部音乐服务搜歌 + 拉音频），必须过能力闸门 ——
-        // 不能因为它是“老入口”就绕过场景白名单与预算。
-        if (platformPolicy.Feature("music", snapshot.EnableMusic).Enabled && AllowsFeature(PluginGate.MusicCapability) && result.Listen is { Length: > 0 } wantedSong && _music is not null
-            && _approvals.AllowCapability(conversation, "music.listen", wantedSong, out _, pinned: caps))
-        {
-            var key = conversation.SourceKey;
-            if (_music.TryBeginListen(key, snapshot.MusicListenCooldownSeconds, out var listenWhy))
-            {
-                _hooks.Log($"[Music] 模型想听「{wantedSong}」");
-                QueueBackground("music-listen:" + key + ":" + wantedSong, "music-listen:" + key + ":" + wantedSong, async ct =>
-                {
-                    if (!QueuedMusicStillAllowed(platformPolicy, "听歌")) return;
-                    var note = await _music.ListenAsync(key, wantedSong, "群友", ct);
-                    if (ct.IsCancellationRequested) return;
-                    if (string.IsNullOrWhiteSpace(note))
-                    {
-                        // P1 观测：模型点名的“听歌”没做成 → 工具失败
-                        _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                        return;
-                    }
-
-                    RequestReply(conversation, null);
-                });
-            }
-            else
-            {
-                _hooks.Log($"[Music] 「{wantedSong}」还在冷却中（{listenWhy}）");
-            }
-        }
-
-        // 模型想把某首歌分享给群里 → 搜到就发一张网易云卡片，顺手“听”一遍（下一轮它就能聊这首歌）。
-        // P3（V3 §9.2）：分享歌曲 = 往当前会话发额外消息，必须过同一条闸门（未配场景时行为不变）。
-        if (platformPolicy.Feature("music", snapshot.EnableMusic).Enabled && AllowsFeature(PluginGate.MusicCapability) && result.ShareSong is { Length: > 0 } songToShare && _music is not null
-            && _approvals.AllowCapability(conversation, "music.share", songToShare, out _, pinned: caps))
-        {
-            var key = conversation.SourceKey;
-            var (shareIsGroup, shareTargetId) = conversation.Target;
-            QueueBackground("music-share:" + key + ":" + songToShare, "music-share:" + key + ":" + songToShare, async ct =>
-            {
-                if (!QueuedMusicStillAllowed(platformPolicy, "分享")) return;
-                var shared = await _music.ShareAsync(songToShare, shareIsGroup, shareTargetId, ct);
-                if (!shared)
-                {
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                    return;
-                }
-
-                // 卡片发出去了，接着真去听一遍：下一轮发言时它就“听过这首歌”。
-                // 第二个副作用开始前再复核一次：排队/分享期间插件可能被关、会话可能已停机。
-                if (!QueuedMusicStillAllowed(platformPolicy, "分享后听歌")) return;
-                _ = await _music.ListenAsync(key, songToShare, "（自己分享的）", ct);
-            });
-        }
-
-        if (platformPolicy.Feature("stickers", snapshot.EnableStickers).Enabled && AllowsFeature(PluginGate.StickersCapability) && result.StickerId is { } sid && !_vibes.IsSober(conversation.SourceKey)
-            && _approvals.AllowCapability(conversation, "sticker.send", null, out _, pinned: caps))
-        {
-            sticker = _stickers.Store.Find(sid);
-            if (sticker is null)
-            {
-                _hooks.Log($"模型挑的表情包 #{sid} 不在库里，已忽略（只发文字）");
-            }
-            else if (sticker.IsSticker != true)
-            {
-                // 还没通过“是不是表情包”审核的图不当表情包用：
-                // 宁可这一轮不发，也不要把聊天截图/广告发出去
-                _hooks.Log($"这张 #{sid} 还没通过“是不是表情包”审核，本轮不发");
-                sticker = null;
-            }
-            else if (!AllowSticker(conversation, sticker.Id, out var stickerWhy))
-            {
-                // 频率门：库小的时候模型会每句都挂同一张（群里直接开愤：
-                // “你别老是发这个表情包了”）。表情包是调味品，不是主食。
-                _hooks.Log($"这次不发表情包（{stickerWhy}）: #{sticker.Id} {StickerText.Describe(sticker)}");
-                sticker = null;
-            }
-        }
-        return sticker;
-    }
-
-    /// <summary>
-    /// 后台作业真正开始前的通用实时复核：入队时检查只决定“是否值得排队”，
-    /// 排队期间插件、平台功能或来源租约都可能被关闭；这些作业不能在关闭后继续发起外部 I/O。
-    /// </summary>
-    private bool QueuedInboundCapabilityAllowed(
-        string capability,
-        string feature,
-        bool fallbackEnabled,
-        EffectivePlatformPolicy turnPolicy,
-        string phase)
-    {
-        if (!AllowsFeature(capability))
-        {
-            _hooks.Log($"[媒体] 后台{phase}已取消（插件已关闭）");
-            return false;
-        }
-
-        if (PlatformSourceExecution.Current is { IsCurrent: false })
-        {
-            _hooks.Log($"[媒体] 后台{phase}已取消（来源已退休）");
-            return false;
-        }
-
-        var policy = _platformPolicies.Resolve(turnPolicy.Context);
-        var enabled = policy.Registered && policy.Connected && policy.Enabled && policy.ChatEnabled
-            && policy.Feature(feature, fallbackEnabled).Enabled;
-        if (!enabled)
-        {
-            _hooks.Log($"[媒体] 后台{phase}已取消（平台或功能已关闭）");
-        }
-
-        return enabled;
-    }
-
-    /// <summary>
-    /// 后台音乐作业开始（以及串起第二个副作用）之前的实时复核：
-    /// 插件、功能、平台与会话都必须仍然有效，排队期间被关掉的作业不能再发起新的出网/发送。
-    /// </summary>
-    private bool QueuedMusicStillAllowed(EffectivePlatformPolicy turnPolicy, string phase)
-    {
-        if (!AllowsFeature(PluginGate.MusicCapability) || _music is null)
-        {
-            _hooks.Log($"[Music] 后台{phase}已取消（插件或服务已关闭）");
-            return false;
-        }
-
-        // 用本轮的真实平台上下文重新解析：不能用 channel-only 猜测，
-        // 新配置下 channel 没有实例身份，会被判成 source_context_required。
-        if (PlatformSourceExecution.Current is { IsCurrent: false })
-        {
-            _hooks.Log($"[Music] 后台{phase}已取消（来源已退休）");
-            return false;
-        }
-
-        var policy = _platformPolicies.Resolve(turnPolicy.Context);
-        var enabled = policy.Registered && policy.Connected && policy.Enabled && policy.ChatEnabled
-            && policy.Feature("music", _settings.EnableMusic).Enabled;
-        if (!enabled)
-        {
-            _hooks.Log($"[Music] 后台{phase}已取消（平台或功能已关闭）");
-        }
-
-        return enabled;
-    }
+    private readonly ReplyHooks _hooks = hooks;
+    private readonly ConversationRegistry _registry = registry;
+    private readonly IPanelNotifier _ui = ui;
+    private readonly IQqMessageSender _plain = plain;
+    private readonly IQqChatSource _source = source;
+    private readonly StickerService _stickers = stickers;
+    private readonly IVoiceUseCase _voice = voice;
+    private readonly PokeUseCase _poke = poke;
+    private readonly IMoodRepository _mood = mood;
+    private readonly ApprovalUseCase _approvals = approvals;
+    private readonly ParticipationUseCase _participation = participation;
+    private readonly TurnTraceStore _traces = traces;
+    private readonly IProtocolRiskBackoff? _riskBackoff = riskBackoff;
+    private readonly Func<string, bool> _allowsFeature = allowsFeature;
 
     /// <summary>
     /// 语音那条路（第 4 步之一）：过技术性限制（开关 / 字数上限 / 同会话频率下限 / 能力闸门）→ 拼 /speak URL
     /// → 逐段交给协议端发。哪段没发出去就把它记下来当文字补（内容不能丢）。
     /// 「该不该发语音」**不由这里判断** —— 那是模型的事（管理员 2026-09-21 明确过）。
     /// </summary>
-    private async Task<(bool VoiceSent, List<string> VoiceFailed)> TrySendVoiceAsync(
+    public async Task<(bool VoiceSent, List<string> VoiceFailed)> TryVoiceAsync(
          BotConversation conversation,
          AppSettings snapshot,
          Domain.Permissions.ChatCapabilitySet caps,
@@ -327,7 +113,7 @@ public sealed partial class ReplyPipeline
             // 现在只把气氛（vibeHint）递给模型看，由它自己权衡。
             // 代码侧只留“技术性”限制：开关、字数上限（云端/协议端真有上限）、同会话频率下限（防刷屏）。
             var maxChars = Math.Clamp(snapshot.VoiceMaxChars, 10, 300);
-            if (!platformPolicy.Feature("voice", snapshot.EnableVoice).Enabled || !AllowsFeature(PluginGate.VoiceCapability) || _voice is null)
+            if (!platformPolicy.Feature("voice", snapshot.EnableVoice).Enabled || !_allowsFeature(PluginGate.VoiceCapability) || _voice is null)
             {
                 voiceSkipWhy = "语音消息开关是关的";
             }
@@ -407,7 +193,7 @@ public sealed partial class ReplyPipeline
     /// 戳一戳要过三道门（号码出现过 / 心情 / 频率 + 能力闸门）。
     /// 拆出来只为了可读性：这里的一行都没改语义 —— 位置、顺序、日志措辞都是原来那句。
     /// </summary>
-    private async Task SendTurnAsync(
+    public async Task SendAsync(
          BotConversation conversation,
          IReadOnlyList<ChatMessage> context,
          long? triggerMessageId,
@@ -527,7 +313,7 @@ public sealed partial class ReplyPipeline
         }
 
         var pokeSent = pokeTarget is long pokeUserId &&
-            await TrySendPokeAsync(conversation, context, caps, platformPolicy, isGroup, targetId, pokeUserId);
+            await TryPokeAsync(conversation, context, caps, platformPolicy, isGroup, targetId, pokeUserId);
 
         if (sent || pokeSent)
         {
@@ -599,7 +385,7 @@ public sealed partial class ReplyPipeline
     }
 
     /// <summary>戳一戳发送与前置闸门裁决：仅在目标出现于当前上下文且心情/能力闸门放行时发出。</summary>
-    private async Task<bool> TrySendPokeAsync(
+    public async Task<bool> TryPokeAsync(
          BotConversation conversation,
          IReadOnlyList<ChatMessage> context,
          Domain.Permissions.ChatCapabilitySet caps,
@@ -644,20 +430,6 @@ public sealed partial class ReplyPipeline
     }
 
     /// <summary>
-    /// 代码侧唯一的语音硬护栏（秒）——**只是防炸**，不是“该不该发语音”的判断。
-    /// 2026-09-21 管理员说“判别逻辑不自然”✗：以前这里按「语音积极性」算 15~180 秒的硬门，
-    /// 模型兴致上来想用语音，却被代码按回去 ✗，而且它自己看不见这个拦截（只被告知“有硬约束”）。
-    /// 现在：**节奏归模型**（提示词把积极性、上次语音的事实都给它），代码只挡同一会话几秒内连发两条。
-    /// </summary>
-    private const int VoiceBreakerSeconds = 8;
-    /// <summary>面板上「语音积极性」对应给模型的**建议节奏**（秒）——只进提示词，不再拦人。</summary>
-    /// <summary>
-    /// 同一个会话两次发语音的最小间隔（秒）：**跟着面板的「语音积极性」缩放**。
-    /// 为什么要跟着动：写死 45 秒时，“积极性拉到 100”其实一点也积极不起来（该发还是被拦）。
-    /// 口径与提示词共用（<see cref="VoiceCadence.IntervalSeconds"/>）—— 模型看到的数字与真正拦住它的数字是同一个。
-    /// </summary>
-    private int VoiceSuggestIntervalSeconds => VoiceCadence.IntervalSeconds(_settings.VoiceEagerness);
-    /// <summary>
     /// 语音频率门。为什么要它：
     ///   • 语音在群里是“稀罕事”，几秒内连发就是刷屏（和表情包同一个道理）；
     ///   • 合成+转码是串行的，连发会排队卡住后面的消息。
@@ -666,7 +438,7 @@ public sealed partial class ReplyPipeline
     private bool AllowVoice(BotConversation conversation, out string reason)
         => _voice.Allow(conversation.SourceKey, out reason);
     /// <summary>表情包频率门（实现见 StickerService.Allow）：同一会话冷却内、同一张 10 分钟内都不发。</summary>
-    private bool AllowSticker(BotConversation conversation, string stickerId, out string reason)
+    public bool AllowSticker(BotConversation conversation, string stickerId, out string reason)
         => _stickers.Allow(conversation.SourceKey, stickerId, out reason);
     /// <summary>发一张表情包（实现见 StickerService.SendAsync：读盘 → base64 → image 段，发出去才记账）。</summary>
     private Task<bool> SendStickerAsync(bool isGroup, long targetId, StickerRecord sticker, long? replyTo, string sourceKey)

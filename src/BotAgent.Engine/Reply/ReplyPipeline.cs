@@ -57,6 +57,20 @@ public sealed partial class ReplyPipeline
     private readonly VibeTracker _vibes;
     private readonly MemberRoleUseCase _roles;
     private readonly OwnMessageLedger _ownLedger;
+    /// <summary>投递：语音/文字去重、引用挂载、分句发送与记账（图/戳一并在这里发）。</summary>
+    private readonly ReplyDelivery _delivery;
+
+    /// <summary>决策动作：当场结算（表情包/戳目标）与后台登记（查资料/读页面/听歌/分享）。</summary>
+    private readonly ReplyTurnActions _actions;
+
+    /// <summary>入站最前面的几道闸（平台/通道/白名单/自回显/去重/审批/旁白）。</summary>
+    private readonly ReplyInboundGates _inboundGates;
+    /// <summary>媒体类入站（表情包/音乐/链接/首群补历史）的后台登记与产出。</summary>
+    private readonly ReplyInboundMedia _inboundMedia;
+    /// <summary>轮次上下文构建（这一轮模型能看见什么）。</summary>
+    private readonly ReplyTurnContext _turnContext;
+    /// <summary>引用识别与回复目标裁决（本轮在回谁 / 引的是哪条）。</summary>
+    private readonly ReplyQuoteContext _quotes;
     private readonly IAgentCommandService _agentCmds;
     /// <summary>发消息（分句/节奏/记账）：聊天、agent 回话、审批回执都走它。</summary>
     private readonly IQqMessageSender _plain;
@@ -145,7 +159,22 @@ public sealed partial class ReplyPipeline
         _inboundDedup = inboundDedup;
         _plugins = plugins;
         _background = background;
+        _quotes = new ReplyQuoteContext(ownLedger, () => box.Current.NormalizedUin, research, hooks.Log);
+        _inboundGates = new ReplyInboundGates(
+            box, source, _platformPolicies, whitelist, approvals, participation, inboundDedup, hooks,
+            (key, message) => LogThrottled(key, message));
+        _inboundMedia = new ReplyInboundMedia(
+            box, hooks, _platformPolicies, AllowsFeature, stickers, music, links, QueueBackground,
+            conversation => RequestReply(conversation, null), EnsureGroupContext);
+        _turnContext = new ReplyTurnContext(
+            profiles, vibes, stickers, roles, poke, mood, music, research, _inboundMedia, hooks,
+            AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking));
         _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady);
+        _delivery = new ReplyDelivery(
+            hooks, registry, ui, plain, source, stickers, voice, poke, mood, approvals, participation, traces, riskBackoff, AllowsFeature);
+        _actions = new ReplyTurnActions(
+            box, hooks, _replyTools, research, music, stickers, vibes, approvals, participation, _platformPolicies,
+            _delivery, riskBackoff, AllowsFeature, QueueBackground, conversation => RequestReply(conversation, null));
         _turnLoop = new AgentTurnLoop(brain, traces, _replyTools);
         _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log, plugins, _platformPolicies, hooks.IsDisposed);
 
@@ -231,152 +260,9 @@ public sealed partial class ReplyPipeline
     private long _lastGenerationMs;
     /// <summary>日志节流：同一来源的“忽略”类日志最多每分钟一条（否则忙群里会刷爆）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _noisyLogAt = new();
-    /// <summary>
-    /// 把群友消息**开头 / 结尾**的括号旁白转成标注（`〔旁白：笑〕`），
-    /// 返回（是否整条都是旁白、标注后的文本）。
-    ///
-    /// 口径来自群里真实消息（管理员反馈后我拉了 700 多条带括号的群消息看过）：
-    ///   • “（雨哗啦啦）”            整条都是旁白 → `〔旁白：雨哗啦啦〕`（只接收，不触发回复）；
-    ///   • “行（端在桌上）”          尾巴上的旁白 → `行〔旁白：端在桌上〕`；
-    ///   • “（放在地上）来吧，猫猫，”  开头的旁白   → `〔旁白：放在地上〕来吧，猫猫，`；
-    ///   • 中间位置的括号**不碰**（“（2026）年的计划”里的括号是正文，群样本里也没这种旁白）。
-    ///
-    /// 管理员 2026-09-14 追加的口径（§25）：**不要单纯忽略，也要接收，但要特别注明** ——
-    /// 旁白不再被丢掉，而是标成 `〔旁白：…〕` 一起进聊天记录与模型上下文：模型能拿它理解现场
-    /// （“端到桌上”“抱着猫”这类动作本来就是语境），但一眼就知道那不是“他说的话”。
-    ///
-    /// 三个例外——机器人自己的内容标记（[图片] / [表情:斜眼笑] / [动画表情:…] / [语音]…）
-    /// 是“对方发了啥”的记录，不是旁白：一律保留（把它们一起标注就等于把群友发表情/图片的记录抹了，踩过）。
-    /// 私聊 / 带图 / @ 机器人的消息完全不动（宁可多回也不装死）。
-    /// </summary>
-    private static (bool AsideOnly, string Text) AnnotateBracketAsides(QqChatMessage msg)
-    {
-        var text = msg.Text?.Trim() ?? string.Empty;
-        if (!msg.IsGroup || msg.MentionedSelf || msg.ImageUrls is { Count: > 0 } || text.Length == 0)
-        {
-            return (false, text);
-        }
-
-        // 开头的旁白（可能连着几段）→ 依次标在正文前面
-        var leading = new StringBuilder();
-        var rest = text;
-        while (TextRules.TryTakeLeadingBracket(rest, out var afterLead, out var inner))
-        {
-            leading.Append(MessageMarkers.AsAside(inner));
-            rest = afterLead;
-        }
-
-        // 结尾的旁白（可能连着几段）→ 先倒着收，再按原顺序接到正文后面
-        var trailing = new List<string>();
-        while (TextRules.TryTakeTrailingBracket(rest, out var afterTail, out var inner))
-        {
-            trailing.Add(MessageMarkers.AsAside(inner));
-            rest = afterTail;
-        }
-
-        if (leading.Length == 0 && trailing.Count == 0)
-        {
-            return (false, text);   // 本来就没有旁白（如单一个“？”）→ 当普通消息
-        }
-
-        rest = rest.Trim();
-        if (rest.Length == 0 || TextRules.IsOnlyDecoration(rest))
-        {
-            // 剥完只剩标点/表情（如“（真的）？”）→ 整条就是旁白，标好的旁白就是全文
-            trailing.Reverse();
-            return (true, leading + string.Concat(trailing));
-        }
-
-        trailing.Reverse();
-        return (false, leading + rest + string.Concat(trailing));
-    }
-    /// <summary>
-    /// 认出“这条消息引用回复的是哪一条”，返回（那个人叫什么、原话、上下文里到底找到没有、是不是机器人自己说的）。
-    /// 查找顺序（先免费的后花钱的）：
-    ///   ① 会话上下文里按 id 找 —— 绝大多数引用都是刚发过的消息，这里命中；
-    ///   ② 机器人自己发出去的消息表（从发送响应里拿到 id，见 RememberOwnMessage；现在会落盘，重启不清）；
-    ///   ③ 协议端在 reply 段里自带的摘要文本（有就用；段里还带了被引用者的 QQ 时，谁说的也当场就知道）。
-    /// 都找不到时不编内容，只标一句“更早的一条”（随后由 EnrichQuotedFromProtocolAsync 事后补齐原文）。
-    ///
-    /// <para>2026-09-19 修“引用机器人发的消息被吞”：IsSelf 以前只看内存表，部署重启（每次部署都会重启）
-    /// 后表是空的 —— 群里“引用机器人上一句再说话”就不算直接对它说，于是整条被静默丢掉。</para>
-    /// </summary>
-    private (string Name, string Text, bool Hit, bool IsSelf) ResolveQuotedMessage(BotConversation conversation, QqChatMessage msg)
-    {
-        // 落盘的那份要在**查询之前**就绪：它是懒加载的，而重启后第一件事往往就是“有人引用了上一句”，
-        // 那时候机器人还没发过任何消息（只在发送时加载的话，这里就会永远查不到 —— 2026-09-19 差点踩到）。
-        _ownLedger.EnsureLoaded();
-        var botUin = _settings.NormalizedUin;
-        var quotedFromProtocol = msg.ReplyToSenderId is long quotedSender
-                                 && !string.IsNullOrWhiteSpace(botUin)
-                                 && quotedSender.ToString() == botUin;
-
-        if (msg.ReplyToMessageId is long quotedId)
-        {
-            var messages = conversation.Messages;
-            for (var i = messages.Count - 1; i >= 0; i--)
-            {
-                if (messages[i].QqMessageId != quotedId)
-                {
-                    continue;
-                }
-
-                var quoted = messages[i];
-                var self = quoted.Role == MessageRole.Self;
-                // 自己说的那一条：对模型来说“你”才是有意义的称呼
-                var name = self
-                    ? "你"
-                    : (string.IsNullOrWhiteSpace(quoted.SenderName) ? "某人" : quoted.SenderName!);
-                return (name, quoted.Text ?? string.Empty, true, self);
-            }
-
-            if (_ownLedger.TryGet(conversation.SourceKey, quotedId, out var mine))
-            {
-                return ("你", mine.Text, true, true);
-            }
-        }
-
-        if (msg.ReplyToPreviewText is { Length: > 0 } preview)
-        {
-            return quotedFromProtocol ? ("你", preview, true, true) : ("某人", preview, true, false);
-        }
-
-        return (quotedFromProtocol ? "你" : string.Empty, string.Empty, false, quotedFromProtocol);
-    }
-    /// <summary>
-    /// 把“引用回复”拼成给模型看的标注：`[回复 老王「你昨天说的那个 bug」]`。
-    /// 为什么要把原话也带上：群聊里一句“我也是”全靠引用的那条才能懂 —— 上下文里虽然也有那条，
-    /// 但位置可能隔着好几十条，模型不一定会自己去对（而且对不上就会编）。
-    /// 引的是机器人自己那句就用“你”（模型才分得清是跟它说话）。
-    /// </summary>
-    private static string BuildReplyAnnotation(string name, string quotedText)
-    {
-        name = MessageMarkers.EscapeExternalControlTags(name);
-        if (string.IsNullOrEmpty(name) && string.IsNullOrWhiteSpace(quotedText))
-        {
-            return "[回复一条更早的消息（我这边已经看不到原文了）]";
-        }
-        var text = (quotedText ?? string.Empty).Replace('\n', ' ').Trim();
-        // 引用的那条自己可能也是回复（“[回复 你「…」] xxx”）：嵌套引号只会变成噪音，剥一层
-        if (text.StartsWith("[回复", StringComparison.Ordinal))
-        {
-            var close = text.IndexOf(']');
-            if (close > 0)
-            {
-                text = text[(close + 1)..].Trim();
-            }
-        }
-
-        text = MessageMarkers.EscapeExternalControlTags(text);
-        if (text.Length == 0)
-        {
-            return $"[回复 {name}（引用的内容我这边取不到）]";
-        }
-        return $"[回复 {name}「{TextRules.Shorten(text, 40)}」]";
-    }
     public void HandleInbound(QqChatMessage msg)
     {
-        var pre = HandleInboundControl(msg with { Text = MessageMarkers.EscapeExternalControlTags(msg.Text) });
+        var pre = _inboundGates.Inspect(msg with { Text = MessageMarkers.EscapeExternalControlTags(msg.Text) });
         if (pre is null)
         {
             return;   // 被总开关 / 白名单 / 自回显 / 审批命令挡下（或已消费）
@@ -403,15 +289,15 @@ public sealed partial class ReplyPipeline
         // 引用回复：把“在回哪条”标进正文。
         // 以前 reply 段被直接丢掉 → 模型只看到一句“我也是，哈哈”，不知道在回什么，
         // 也认不出“他在回机器人自己上一句”（管理员反馈：识别不了引用回复消息 —— handoff-4 §27）。
-        // 2026-09-19：引自己那句的判定不再只看内存表（重启就清空）—— 见 ResolveQuotedMessage 的 IsSelf。
+        // 2026-09-19：引自己那句的判定不再只看内存表（重启就清空）—— 见 ReplyQuoteContext.Resolve 的 IsSelf。
         var quotedIsSelf = false;
         var quotedResolved = true;
         if (msg.ReplyToMessageId is not null || msg.ReplyToPreviewText is { Length: > 0 })
         {
-            var (quotedName, quotedText, hit, isSelf) = ResolveQuotedMessage(conversation, msg);
+            var (quotedName, quotedText, hit, isSelf) = _quotes.Resolve(conversation, msg);
             quotedIsSelf = isSelf;
             quotedResolved = hit;
-            var annot = BuildReplyAnnotation(quotedName, quotedText);
+            var annot = ReplyAnnotations.BuildReplyAnnotation(quotedName, quotedText);
             if (annot.Length > 0 && !msg.Text.StartsWith(annot, StringComparison.Ordinal))
             {
                 // 正文可能是一个空格（只点“回复”不写字）：先 Trim，不然会拼出个尾巴空格
@@ -510,7 +396,7 @@ public sealed partial class ReplyPipeline
             (msg.ImageUrls is { Count: > 0 } ? $" [+{msg.ImageUrls.Count}图]" : string.Empty));
 
         // 媒体类入站（表情包入库 / 音乐分享 / 链接预览）+ 首次群消息补历史：都不阻塞接收线程
-        var musicShares = HandleInboundMedia(conversation, msg);
+        var musicShares = _inboundMedia.Register(conversation, msg);
 
         if (!asideOnly && musicShares is not { Count: > 0 })
         {
@@ -525,290 +411,9 @@ public sealed partial class ReplyPipeline
             RequestReply(conversation, msg.MessageId > 0 ? msg.MessageId : null, directInWindow: appended.DirectToBot);
         }
     }
-    /// <summary>
-    /// 入站最前面那几道闸：通道总开关 → 白名单 → 自回显 → 审批命令（同意/拒绝 编号）→ 括号旁白标注。
-    /// 返回 null = 这条消息到此为止（已忽略或已消费）；否则返回标注后的消息与是不是纯旁白。
-    /// 「只观测」的参与事件在这几道闸里照旧要喂（拦下也是 Silent，不改任何判定）。
-    /// </summary>
-    private InboundHead? HandleInboundControl(QqChatMessage msg)
-    {
-        var channel = msg.Channel;
-        var source = PlatformSourceExecution.Current;
-        if (_source is IPlatformSourceRouter && (source is null || !source.IsCurrent)) return null;
-        var platformPolicy = source is null ? _platformPolicies.ResolveForChannel(channel)
-            : _platformPolicies.Resolve(source.Context);
-        if (!platformPolicy.Registered || !platformPolicy.Connected)
-        {
-            LogThrottled("unknown-channel:" + channel, $"忽略未注册或未连接的平台通道: {channel}");
-            return null;
-        }
 
-        var channelEnabled = platformPolicy.Enabled && platformPolicy.ChatEnabled;
-        if (!channelEnabled)
-        {
-            var reason = platformPolicy.Enabled ? "聊天已静音；chat_disabled" : "平台已停用；platform_disabled";
-            LogThrottled("chanoff:" + Channels.ChannelOf(msg.Channel), $"忽略（{Channels.Display(msg.Channel)}{reason}）");
-            // P1（只观测）：这是“收到了但被服务端拦下” → 对状态机是 Silent 事件（**不改判定**）
-            _participation.Observe(
-                Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId),
-                Services.Participation.ParticipationEvent.Silent);
-            return null;
-        }
-
-        if (!(source is null ? _whitelist.AllowsMessage(msg) : _whitelist.AllowsMessage(source.Context, msg)))
-        {
-            // 忙群里这类日志会把日志文件和面板刷爆 → 同一来源每分钟最多一条
-            var label = msg.IsGroup ? "群 " + msg.GroupId : "私聊 " + msg.UserId;
-            // 把“用哪份名单、那份的状态”一并印出来：
-            // 实际踩过——“官方通道永远不回”但日志只有一句“不在白名单”，看不出是名单选错了还是填了真实号。
-            var tag = Channels.Tag(msg.Channel);
-            var gateNow = _whitelist.Describe();
-            var listState = Channels.IsOfficial(msg.Channel)
-                ? (msg.IsGroup ? $"官方群名单{gateNow.OfficialGroups}" : $"官方私聊名单{gateNow.OfficialPrivates}")
-                : Channels.IsLocal(msg.Channel)
-                    ? $"本地名单{gateNow.Local}"
-                    : (msg.IsGroup ? "私域群名单" : "私域私聊名单");
-            LogThrottled("ignore:" + label, $"忽略（不在白名单）: [{tag}] {label}（{listState}）");
-            // P1（只观测）：不在白名单 = 不参与这个话题 → Silent（同样不改判定）
-            _participation.Observe(
-                Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId),
-                Services.Participation.ParticipationEvent.Silent);
-            return null;
-        }
-
-        // 机器人自己发的消息不入库（协议端可能回显）
-        if (_hooks.SelfId() != 0 && msg.UserId == _hooks.SelfId())
-        {
-            return null;
-        }
-
-        // P3 审批（V3 §9.4，**默认关**）：群主/管理员（或面板点名的人）在**原会话**里回复
-        // Shared native dedup follows exact instance policy and whitelist authorization, never precedes it.
-        if (source is not null)
-        {
-            if (msg.Envelope is not { } envelope || envelope.Origin != source.Origin || !source.IsCurrent) return null;
-            if (_inboundDedup is null) { _hooks.Log("dedup_store_unavailable"); return null; }
-            var reference = envelope.Message.Ref;
-            var identity = reference.Conversation;
-            var fields = new[] { identity.PlatformId, identity.AccountScope,
-                ((int)identity.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                identity.NativeTargetId, identity.ThreadId ?? string.Empty, reference.NativeMessageId };
-            var key = "platform-message:v1:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(fields))));
-            try
-            {
-                if (!_inboundDedup.TryRegister(new[] { key }, EngineClock.Now, TimeSpan.FromMinutes(10))) return null;
-            }
-            catch (Exception)
-            {
-                _hooks.Log("dedup_storage_unavailable");
-                return null;
-            }
-        }
-
-        // P3 审批（V3 §9.4，**默认关**）：群主/管理员（或面板点名的人）在**原会话**里回复
-        // 「同意 编号」/「拒绝 编号」才算数 —— 身份、会话、有效期、一次性、策略版本全在服务端核。
-        // 注意：解析不出“动词 + 编号”这种形状的消息**不拦截**，照旧走普通聊天链路。
-        if (_settings.EnableApprovals && _approvals.HandleCommand(msg))
-        {
-            return null;
-        }
-
-        // 括号旁白：**标注**（`〔旁白：…〕`）而不是忽略 —— 管理员口径（2026-09-14）：
-        // “不要单纯忽略，也要接收，但需要特别注明”。
-        // 纯旁白（“（笑）”“（放在地上）来吧”里的括号段）会进聊天记录与上下文，但**不单独触发回复**
-        // （旁白不是对谁说的话，不然“（笑）”就会把机器人拽出来接话 —— §20 的原始问题）；
-        // 正文 + 旁白混着的照常触发（正文才是那句话）。
-        var asideOnly = false;
-        if (_settings.IgnoreBracketMessages)
-        {
-            var (isAsideOnly, annotated) = AnnotateBracketAsides(msg);
-            asideOnly = isAsideOnly;
-
-            if (annotated.Length > 0 && annotated != msg.Text)
-            {
-                msg = msg with { Text = annotated };   // 落库与上下文都用标注后的文本
-            }
-
-            if (asideOnly)
-            {
-                // 同一个人一分钟最多记一条：不然旁白刷屏时日志也跟着刷
-                LogThrottled("bracket:" + msg.UserId,
-                    $"旁白（只接收、不触发回复）: {msg.SenderName}({msg.UserId}): {TextRules.Shorten(msg.Text, 30)}");
-            }
-        }
-
-        return new InboundHead(asideOnly, msg);
-    }
-
-    /// <summary>
-    /// 媒体类入站（第 2 步的一部分）：群友发的图自动收进表情包库（后台下载）、音乐分享去查歌词与波形、
-    /// 链接去取标题摘要、首个群消息补一次历史上下文。返回识别到的音乐分享（真的有歌时这一轮**先不回复**）。
-    /// 一律 fire-and-forget：网关是在接收循环里同步调我们的，这里绝不能等。
-    /// </summary>
-    private IReadOnlyList<MusicShare>? HandleInboundMedia(BotConversation conversation, QqChatMessage msg)
-    {
-        var policy = PlatformSourceExecution.Current is { } source
-            ? _platformPolicies.Resolve(source.Context) : _platformPolicies.ResolveForChannel(msg.Channel);
-        var stickersEnabled = policy.Feature("stickers", _settings.EnableStickers).Enabled && AllowsFeature(PluginGate.StickersCapability);
-        var musicEnabled = policy.Feature("music", _settings.EnableMusic).Enabled && AllowsFeature(PluginGate.MusicCapability);
-        var linksEnabled = policy.Feature("linkpreview", _settings.EnableLinkPreview).Enabled && AllowsFeature(PluginGate.WebSearchCapability);
-
-        // 表情包：群友发的图自动收进库（后台下载，不阻塞接收线程）
-        if (stickersEnabled && _settings.StickerLibraryMax > 0 && msg.IsGroup && msg.ImageUrls is { Count: > 0 })
-        {
-            var urls = msg.ImageUrls.ToList();
-            var uid = msg.UserId.ToString();
-            var group = msg.GroupId;
-            var mid = msg.MessageId;
-            QueueBackground("stickers:" + mid, "stickers:" + mid, async _ =>
-            {
-                if (!QueuedInboundCapabilityAllowed(PluginGate.StickersCapability, "stickers",
-                        _settings.EnableStickers, policy, "表情包收集"))
-                {
-                    return;
-                }
-
-                await _stickers.CollectAsync(urls, uid, group, mid,
-                    () => QueuedInboundCapabilityAllowed(PluginGate.StickersCapability, "stickers",
-                        _settings.EnableStickers, policy, "表情包下载"));
-            });
-        }
-
-        // 听音乐：识别到分享就后台去查歌词 + 下一份低码率音频分析波形。
-        // 有歌的时候**先不回复** —— 等分析结果回来再让模型开口，否则它只能对着一个歌名瞎聊。
-        var musicShares = musicEnabled ? msg.MusicShares : null;
-        if (musicShares is { Count: > 0 })
-        {
-            QueueBackground("music-inbound:" + conversation.SourceKey, "music-inbound:" + conversation.SourceKey, _ =>
-                HandleMusicAsync(conversation, msg.SenderName, musicShares.ToList(), policy));
-        }
-
-        // 链接：群里发的 URL（包括分享卡片里那个）真去打开看一眼，取回标题/摘要。
-        // 有音乐分享时跳过 —— 音乐那条路自己会处理链接，不必看两遍。
-        var linkUrls = musicShares is { Count: > 0 } || _links is null || !linksEnabled
-            ? []
-            : LinkExtractor.Extract(msg.Text, Math.Clamp(_settings.LinkPreviewMax, 0, 5));
-        if (linkUrls.Count > 0)
-        {
-            var key = conversation.SourceKey;
-            var urls = linkUrls.ToList();
-            var previewId = "link-preview:" + key + ":" + Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(string.Join("\n", urls))));
-            var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            // 先登记等待句柄，再入队：队列可能在派发后立刻执行并清掉这个键。
-            _linkTasks[key] = pending.Task;
-            var accepted = QueueBackground(previewId, previewId, async ct =>
-            {
-                try
-                {
-                    if (!QueuedInboundCapabilityAllowed(PluginGate.WebSearchCapability, "linkpreview",
-                            _settings.EnableLinkPreview, policy, "链接预览"))
-                    {
-                        return;
-                    }
-
-                    var note = await _links!.DescribeAsync(urls, ct);
-                    if (ct.IsCancellationRequested) return;
-
-                    // 预览期间插件可能被关：已经发出的请求无法撤回，但结果不能再留到下一轮。
-                    if (!QueuedInboundCapabilityAllowed(PluginGate.WebSearchCapability, "linkpreview",
-                            _settings.EnableLinkPreview, policy, "链接预览"))
-                    {
-                        return;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(note))
-                    {
-                        _linkNotes[key] = note!;
-                        _hooks.Log($"[Link] 已看过 {urls.Count} 个链接：{string.Join("、", urls.Select(u => u.Length > 48 ? u[..48] + "…" : u))}");
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // 停机/超时取消：不再把链接预览当成失败刷日志。
-                }
-                catch (Exception ex)
-                {
-                    _hooks.Log($"[Link] 预览失败: {ex.Message}");
-                }
-                finally
-                {
-                    _linkTasks.TryRemove(key, out _);
-                    pending.TrySetResult();
-                }
-            });
-            if (!accepted)
-            {
-                pending.TrySetResult();
-            }
-        }
-
-        // 首个群消息时补历史上下文（没有会话列表可点，只能在这里补）
-        if (msg.IsGroup)
-        {
-            EnsureGroupContext(conversation, msg.GroupId);
-        }
-
-        return musicShares;
-    }
-
-    /// <summary>
-    /// 听音乐：拿歌词 + 低码率音频做波形分析，把实测到的事实留给下一轮回复。
-    /// 分析完成后单独触发一次发言机会 —— 这样模型是“听完再说”，而不是先瞎猜一遍再补课。
-    /// </summary>
-    private async Task HandleMusicAsync(BotConversation conversation, string sender, List<MusicShare> shares,
-        EffectivePlatformPolicy turnPolicy)
-    {
-        if (!_music.IsReady)
-        {
-            return;
-        }
-
-        var heard = false;
-        foreach (var share in shares)
-        {
-            // 多首分享是多次外部调用：每次真正开始前都复核，不能只在作业入口看一次。
-            if (!QueuedInboundCapabilityAllowed(PluginGate.MusicCapability, "music",
-                    _settings.EnableMusic, turnPolicy, "听歌"))
-            {
-                return;
-            }
-
-            try
-            {
-                var note = await _music.DescribeShareAsync(share, sender);
-                if (string.IsNullOrWhiteSpace(note))
-                {
-                    continue;
-                }
-
-                // 一次发好几首时合并，别让后一首盖掉前一首
-                _music.AddNote(conversation.SourceKey, note!);
-                heard = true;
-                _hooks.Log($"[Music] 已听过：{share.Describe()}");
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Music] 处理失败（{share.Describe()}）: {ex.Message}");
-            }
-        }
-
-        if (heard && QueuedInboundCapabilityAllowed(PluginGate.MusicCapability, "music",
-                _settings.EnableMusic, turnPolicy, "听歌后回复"))
-        {
-            RequestReply(conversation, null); // 没有触发消息 → 不引用（沿用 replyTo 那套规则）
-        }
-    }
-    /// <summary>每个会话正在跑的链接预览（回复前短暂等一下：快站点能当轮就用上）。</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task> _linkTasks = new();
-    /// <summary>每个会话最近一次“链接里写了啥”的描述，交给下一轮回复用（用掉就清）。</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _linkNotes = new();
     /// <summary>每个会话最近一次“有人撤回消息”的时间（冷却：连着撤几条时不要每条都评论）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _lastRecallAt = new();
-    /// <summary>每个会话最近一次撤回事件的描述，交给下一轮回复用（用掉就清）。</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _recallNotes = new();
     /// <summary>同会话两次“评论撤回”的最小间隔（秒）。</summary>
     private const int RecallCommentCooldownSeconds = 90;
     /// <summary>
@@ -880,7 +485,7 @@ public sealed partial class ReplyPipeline
                 return;
             }
 
-            _recallNotes[key] = $"（刚有人撤回了一条消息：{sender}。上下文里那条已标成 [已撤回]。）";
+            _turnContext.RememberRecall(key, $"（刚有人撤回了一条消息：{sender}。上下文里那条已标成 [已撤回]。）");
             _registry.Touch(conversation);
 
             RequestReply(conversation, null);
@@ -1096,7 +701,7 @@ public sealed partial class ReplyPipeline
             return;
         }
 
-        var turn = await BuildTurnInputsAsync(conversation, snapshot, caps, triggerMessageId, platformPolicy, proactive);
+        var turn = await _turnContext.BuildAsync(conversation, snapshot, caps, platformPolicy, proactive);
         if (turn is null)
         {
             return;
@@ -1203,7 +808,7 @@ public sealed partial class ReplyPipeline
             }
         }
 
-        var sticker = await QueueTurnActionsAsync(conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, result, directAddress);
+        var sticker = await _actions.QueueTurnActions(conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, result, directAddress);
 
         var reply = (result.Reply ?? string.Empty).Trim();
 
@@ -1241,7 +846,7 @@ public sealed partial class ReplyPipeline
             return;   // 这一轮已经到此为止（开了待批单 / 问了问题 / 就是不说）
         }
 
-        var (targetStopped, replyTo) = ResolveReplyTarget(conversation, result, turn, triggerMessageId, reply, directAddress, elapsed);
+        var (targetStopped, replyTo) = _quotes.ResolveTarget(conversation, result, turn, triggerMessageId, reply, directAddress, elapsed);
         if (targetStopped)
         {
             return;
@@ -1249,232 +854,14 @@ public sealed partial class ReplyPipeline
 
         var (isGroup, targetId) = conversation.Target;
 
-        var (voiceSent, voiceFailed) = await TrySendVoiceAsync(
+        var (voiceSent, voiceFailed) = await _delivery.TryVoiceAsync(
             conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, voiceParts, voiceText, isGroup, targetId, result, directAddress);
 
-        await SendTurnAsync(
+        await _delivery.SendAsync(
             conversation, turn.Context, triggerMessageId, turn.Caps, turn.PlatformPolicy, isGroup, targetId, replyTo,
             reply, voiceText, voiceParts, voiceFailed, voiceSent, sticker, pokeTarget, elapsed, result, directAddress);
     }
 
-    /// <summary>
-    /// 第 3 步里「回谁」那一半：复读守卫（与上一条自己的话完全相同就沉默）加上引用目标裁决。
-    /// 判定本身在纯函数 <see cref="ReplyTargetRules" /> 里（线上修过三次的规则，要能脱离端到端场景测）；
-    /// 这里只负责把事实凑齐、把改了主意的那几种情况说给人听。
-    /// 返回 Stopped=true 表示这一轮不说话了。
-    /// </summary>
-    private (bool Stopped, long? ReplyTo) ResolveReplyTarget(
-        BotConversation conversation,
-        CompletionResult result,
-        TurnInputs turn,
-        long? triggerMessageId,
-        string reply,
-        bool directAddress,
-        double elapsed)
-    {
-        // 复读守卫：模型偶尔会把上下文里自己上一条发言一字不差地再说一遍 ——
-        // 群里实测过单字“悼”连发 6 条：第一条件来自上游截断，之后模型读到自己那条“悼”，
-        // 就把它当成“可以接的梗”反复发。一模一样的话紧接着再来一遍，对群里就是刷屏。
-        if (reply.Length > 0 && EchoGuard.IsRepeatingOwnLastMessage(conversation.Messages, reply))
-        {
-            _hooks.Log($"检测到复读（与上一条自己的发言完全相同）→ 沉默（{elapsed:F0}ms）: {TextRules.Shorten(reply, 40)}");
-            _research.KeepNote(conversation.SourceKey, turn.SearchText, "复读守卫");
-            return (true, null);
-        }
-
-        // 回复引用目标怎么定（两件事一起决定，别只看排队时记录的那个 id）：
-        //   ① **模型自己指认的最准**：提示词里最近几条别人的消息都带了 (#id)，
-        //      它在 JSON 里用 replyTo 说明“我在回哪条”。这是唯一能从根上对上号的办法 ——
-        //      启发式只能猜“最新那条”或“排队时的触发”，都猜不准（线上两度因此看起来回错人）。
-        //      采信条件：它必须在本次上下文里（防模型报个不存在的编号）。
-        //   ② 没指认时：只有“触发消息还是最新诉求”才拿它当引用目标；如果触发已经过去
-        //      （后面有人插话，比如模型慢了几秒），就**不引用** —— 以前这里会抽“上下文里最新那条
-        //      别人发的消息”当目标，于是“正文回答 A、引用挂到 B”，群里看到的就是“回复错人”。
-        //   ③ 紧挨着回就不引用：目标后面没有别的新消息时，引用是多余的（保留原有手感）。
-        var messages = conversation.Messages;
-        var lastSelfIndex = EchoGuard.LastSelfMessageIndex(messages);
-        var triggerIndex = EchoGuard.IndexOfMessage(messages, triggerMessageId);
-
-        // 「本轮触发是在复读 / 模仿」时（有人原样重复了别人的话，包括学机器人说话），
-        // 说话对象是**复读的那条**，不是被复读的原文。线上实测（handoff-4 §23）：群友 c 复读了
-        // 机器人那句，机器人回“别学我说话！”，模型却把引用指到了上一条别人的消息上 ——
-        // 它把“素材”当成了“对象”（§22 修的是启发式，治不了这一类）。
-        // 提示词里已经把 replyTo 的语义写死，这里再兜一道：这种轮次里模型的指认只要不在触发那条上就不引用。
-        var triggerWasEcho = triggerIndex >= 0 && EchoGuard.IsEchoOfEarlierMessage(messages, triggerIndex);
-
-        // 引用目标的判定抽在 Services/Decision/ReplyTarget.cs（纯函数，能被确定性测；口径见那里的注释）。
-        // 这里只负责把**事实**凑出来：模型指认了谁、那条能不能用、触发是谁、点名了没、是不是复读轮。
-        // 抽出来的原因：这条规则线上修过三次，而“群里看到它回错人”这类问题必须能脱离端到端场景被反复验证。
-        var replyTargetFacts = new Domain.Conversation.ReplyTargetFacts(
-            Chosen: result.ReplyToMessageId,
-            // 采信条件：在本次上下文里、未撤回、且是**别人发的**（自己引自己没意义）
-            ChosenUsable: result.ReplyToMessageId is long chosenProbe &&
-                turn.Context.Any(m => m.QqMessageId == chosenProbe && !m.Recalled && m.Role == MessageRole.Peer),
-            ChosenIndex: EchoGuard.IndexOfMessage(messages, result.ReplyToMessageId),
-            MessageCount: messages.Count,
-            TriggerMessageId: triggerMessageId,
-            TriggerIndex: triggerIndex,
-            // 触发那条被撤回了就不能再引用（与 ChosenUsable 的 !Recalled 同口径，V3 §8.3）
-            TriggerUsable: triggerIndex >= 0 && !messages[triggerIndex].Recalled,
-            LastSelfIndex: lastSelfIndex,
-            DirectAddress: directAddress,
-            TriggerWasEcho: triggerWasEcho);
-
-        var replyTargetDecision = Domain.Conversation.ReplyTargetRules.Resolve(replyTargetFacts);
-        var replyTo = replyTargetDecision.Target;
-
-        // 只把“改了主意”的那几种情况说给人听（与改造前的日志口径一致）
-        switch (replyTargetDecision.ReasonCode)
-        {
-            case "direct_address_priority":
-                _hooks.Log($"模型想引 #{result.ReplyToMessageId}，但这一轮是 #{triggerMessageId} 在跟机器人说话 → 改引触发那条（点名优先）");
-                break;
-            case "echo_ignored":
-                _hooks.Log($"不引用（本轮触发是复读/模仿，模型却指认了 #{result.ReplyToMessageId}）—— 宁可不引，也不把引用挂到被复读的原文上");
-                break;
-            case "trigger_stale":
-                _hooks.Log("不引用（触发消息已经过去了、后面有人插话）—— 宁可不引，也不把正文挂到别人头上");
-                break;
-            case "trigger_recalled":
-                _hooks.Log("不引用（触发那条已经被撤回了，群里看不到它）");
-                break;
-        }
-
-        return (false, replyTo);
-    }
-
-    /// <summary>
-    /// 第 1 步：**取上下文**（以及提示词要用的素材）—— 会话窗口、参与者档案、表情包候选、群成员身份、
-    /// 上一轮气氛、心情、刚听过的歌、刚撤回的消息、刚查到的资料、链接预览。
-    /// 只读不写：这里不下任何判断（判断在第 3 步），也不发任何东西。
-    /// </summary>
-    private async Task<TurnInputs?> BuildTurnInputsAsync(
-        BotConversation conversation,
-        AppSettings snapshot,
-        Domain.Permissions.ChatCapabilitySet caps,
-        long? triggerMessageId,
-        EffectivePlatformPolicy platformPolicy,
-         bool proactive)
-    {
-        var context = conversation.TakeLast(snapshot.MaxContextMessages);
-        if (context.Count == 0)
-        {
-            return null;   // 上下文空 = 没什么可回的（与改造前一致：直接结束这一轮）
-        }
-
-        // 当前上下文最早一条：档案只取比它更早的（按单调序号精确判定，避免时间戳秒级精度误判）
-        var contextOldestSeq = context[0].Seq;
-        var contextOldestUnix = context[0].Timestamp.ToUnixTimeSeconds();
-        var (isGroupScope, scopeGroupId) = conversation.Target;
-
-        // 收集最近 40 条上下文里出现过的发送者 QQ → 读取各自在**本会话**的人物档案（角色卡片）
-        var profiles = new List<string>();
-        var profileChars = 0;
-        var recentSenders = AllowsFeature(PluginGate.ProfilesCapability)
-            ? context
-                .TakeLast(40)
-                .Where(m => m.Role == MessageRole.Peer && m.SenderId.HasValue)
-                .Select(m => m.SenderId!.Value)
-                .Distinct()
-                .Take(Math.Max(0, snapshot.ProfileLookupCount))
-                .ToList()
-            : new List<long>();
-
-        foreach (var uid in recentSenders)
-        {
-            var summary = _profiles.GetProfileSummary(
-                uid.ToString(),
-                isGroupScope ? scopeGroupId : 0,
-                snapshot.ProfileSummaryLines,
-                contextOldestSeq,
-                contextOldestUnix);
-
-            if (string.IsNullOrWhiteSpace(summary))
-            {
-                continue; // 本会话没有更早的历史 → 不占提示词预算
-            }
-
-            if (profileChars + summary.Length > snapshot.MaxProfileChars)
-            {
-                break; // 超出预算：后面的（发言更早的）丢弃
-            }
-
-            profiles.Add(summary);
-            profileChars += summary.Length;
-        }
-
-        var started = EngineClock.LocalDateTime;
-        SetThinking(conversation, true);
-
-        // 表情包候选：拿最近的对话文字当检索词，从库里挑几张给模型选。
-        // 先挑后发 —— 库可能有上千张，全塞进提示词既贵又不准。
-        // 气氛“沉”（有人低落/在吵架）时不给候选：给了它就容易挑一张发出去，与气氛不搭。
-        var stickerChoices = new List<StickerChoice>();
-        if (platformPolicy.Feature("stickers", snapshot.EnableStickers).Enabled && AllowsFeature(PluginGate.StickersCapability) && snapshot.StickerLibraryMax > 0 && snapshot.StickerCandidates > 0 &&
-            !_vibes.IsSober(conversation.SourceKey))
-        {
-            var query = string.Join(" ", context.TakeLast(8).Select(m => m.Text));
-            stickerChoices = _stickers
-                .Store
-                .PickCandidates(query, snapshot.StickerCandidates, -1, conversation.SourceKey)
-                .Select(s => new StickerChoice(s.Id, StickerText.Describe(s)))
-                .ToList();
-        }
-
-        // 群成员身份（群主 / 管理员 / 群头衔）：只在“有值得说的人”时才给，不占 token。
-        // 上限 14 人：再多人就只是个名字列表，既没用又费 token。
-        // 先等一下“刚触发的身份查询”：查询就十几毫秒，等它一下，免得第一次说话那轮看不到头衔。
-        if (isGroupScope)
-        {
-            await _roles.WaitForPendingAsync(scopeGroupId, TimeSpan.FromMilliseconds(700));
-        }
-
-        var roleCount = 0;
-        var groupRoles = isGroupScope ? _roles.DescribeForPrompt(scopeGroupId, 14, out roleCount) : null;
-
-        // 上一次读到的气氛（有 TTL）：给模型当底色，让它接得上
-        var vibeHint = AllowsFeature(PluginGate.VibesCapability) ? _vibes.Hint(conversation.SourceKey) : string.Empty;
-        var previousVibe = AllowsFeature(PluginGate.VibesCapability) ? _vibes.Current(conversation.SourceKey) : "中性";
-
-        _hooks.Log($"请求模型…（{conversation.Name}，上下文 {context.Count} 条，档案 {profiles.Count} 份/{profileChars} 字" +
-                (roleCount > 0 ? $"，身份 {roleCount} 人" : string.Empty) +
-                (previousVibe.Length > 0 ? $"，上轮气氛 {previousVibe}" : string.Empty) +
-                (proactive ? "，主动开口" : string.Empty) +
-                (stickerChoices.Count > 0 ? $"，表情包候选 {stickerChoices.Count} 张" : string.Empty) + "）");
-
-        // 最近被戳过（10 分钟内）才给模型“可以戳回去”的指令，平时不浪费 token
-        var pokeContext = platformPolicy.Feature("poke", snapshot.EnablePoke).Enabled && AllowsFeature(PluginGate.PokeCapability) &&
-            _poke.RecentlyPoked(conversation.SourceKey, TimeSpan.FromMinutes(10), EngineClock.Now);
-
-        // 心情（被戳次数客观 + 模型主观写的）：影响还戳不戳回去、话多话少。
-        // 只在“刚被戳过”或“模型写过心情”时给，平常不浪费 token。
-        var moodNow = EngineClock.Now;
-        var moodText = pokeContext || _mood.CurrentText(moodNow) is not null ? _mood.Describe(moodNow) : null;
-
-        // 刚“听过”的歌：把歌词与波形实测交给模型，用完就清（避免以后每轮都背上它）
-        var musicText = AllowsFeature(PluginGate.MusicCapability) ? _music.TakeNote(conversation.SourceKey) : null;
-
-        // 刚有人撤回了消息：把这件事告诉模型（但不告诉它撤回了什么）——用完就清
-        var recallText = _recallNotes.TryRemove(conversation.SourceKey, out var pendingRecall) ? pendingRecall : null;
-
-        // 刚上网查到的资料 / 读到的页面正文：交给模型，用完就清
-        var searchText = AllowsFeature(PluginGate.WebSearchCapability) ? _research.TakeNote(conversation.SourceKey) : null;
-
-        // 链接预览：给快站点 2.5 秒的机会当轮用上；太慢就先不等（完成后留给下一轮）
-        if (_linkTasks.TryGetValue(conversation.SourceKey, out var linkTask))
-        {
-            await Task.WhenAny(linkTask, EngineClock.Delay(TimeSpan.FromMilliseconds(2500)));
-        }
-
-        var linkText = _linkNotes.TryRemove(conversation.SourceKey, out var pendingLink) ? pendingLink : null;
-
-        return new TurnInputs(
-            Started: started, Snapshot: snapshot, Caps: caps, PlatformPolicy: platformPolicy, Context: context, Profiles: profiles,
-            ProfileChars: profileChars, StickerChoices: stickerChoices, RoleCount: roleCount,
-            GroupRoles: groupRoles, VibeHint: vibeHint, PreviousVibe: previousVibe, PokeContext: pokeContext,
-            MoodText: moodText, MusicText: musicText, RecallText: recallText, SearchText: searchText,
-            LinkText: linkText);
-    }
 
     /// <summary>
     /// 第 4 步里**不需要真的发东西**的那几条出口：开待批单（action=tool）、开待答问题（action=ask）、
@@ -1592,7 +979,7 @@ public sealed partial class ReplyPipeline
                         body = body[(close + 1)..].Trim();
                     }
 
-                    var annot = BuildReplyAnnotation(isSelf ? "你" : "某人", text);
+                    var annot = ReplyAnnotations.BuildReplyAnnotation(isSelf ? "你" : "某人", text);
                     rewritten = conversation.RewriteText(appended, body.Length > 0 ? annot + " " + body : annot);
                 }
 
@@ -1640,11 +1027,6 @@ public sealed partial class ReplyPipeline
     }
     private readonly object _quoteEnrichLock = new();
 }
-
-/// <summary>入站最前面那几道闸的产物：标注后的消息 + 是不是纯旁白（null = 这条消息到此为止）。</summary>
-public sealed record InboundHead(bool AsideOnly, QqChatMessage Message);
-
-/// <summary>媒体类入站的产物：这一轮识别到的音乐分享（有歌时先不回复，等分析结果）。</summary>
 
 /// <summary>
 /// 回复主链要用到的宿主能力（由 BotAgentHost 提供实现）。

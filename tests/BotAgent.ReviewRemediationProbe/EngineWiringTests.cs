@@ -101,10 +101,13 @@ internal static class EngineWiringTests
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
         var caps = ChatCapabilitySet.FromSwitches(false, false, true, false, true, null);
-        var send = typeof(ReplyPipeline).GetMethod("TrySendVoiceAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        // #106：投递已从 ReplyPipeline 搬到 internal 的 ReplyDelivery。按"取组件实例 + 调它的公开方法"反射，
+        // 不新增 InternalsVisibleTo、也不把组件改成 public（沿用这个文件原来的约定）。
+        var delivery = Component(pipeline, "_delivery");
+        var send = delivery.GetType().GetMethod("TryVoiceAsync", BindingFlags.Instance | BindingFlags.Public)!;
         async Task InvokeAsync(EffectivePlatformPolicy policy)
         {
-            var task = (Task<(bool, List<string>)>)send.Invoke(pipeline, new object[]
+            var task = (Task<(bool, List<string>)>)send.Invoke(delivery, new object[]
             {
                 conversation, settings, caps, policy, new List<string> { "synthetic" }, "synthetic",
                 true, 10001L, new CompletionResult(null, null, null), false,
@@ -234,9 +237,9 @@ internal static class EngineWiringTests
         });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var handle = typeof(ReplyPipeline).GetMethod("HandleInboundMedia",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        handle.Invoke(pipeline, new object[] { conversation, msg });
+        var media = Component(pipeline, "_inboundMedia");
+        var handle = media.GetType().GetMethod("Register", BindingFlags.Instance | BindingFlags.Public)!;
+        handle.Invoke(media, new object[] { conversation, msg });
 
         var mode = revoked ? "revoked" : "positive";
         check(background.Snapshot().Queued == 1, $"{mode} {kind} inbound media is queued behind the blocker");
@@ -319,9 +322,9 @@ internal static class EngineWiringTests
         });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var handle = typeof(ReplyPipeline).GetMethod("HandleInboundMedia",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        handle.Invoke(pipeline, new object[] { conversation, msg });
+        var media = Component(pipeline, "_inboundMedia");
+        var handle = media.GetType().GetMethod("Register", BindingFlags.Instance | BindingFlags.Public)!;
+        handle.Invoke(media, new object[] { conversation, msg });
 
         var mode = revoked ? "revoked" : "positive";
         check(background.Snapshot().Queued == 1, $"{mode} sticker batch is queued behind the blocker");
@@ -511,8 +514,9 @@ internal static class EngineWiringTests
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
         var caps = ChatCapabilitySet.FromSwitches(false, true, true, false, true, null);
-        var queueActions = typeof(ReplyPipeline).GetMethod("QueueTurnActionsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        async Task InvokeAsync() => await (Task)queueActions.Invoke(pipeline, new object[]
+        var actionComponent = Component(pipeline, "_actions");
+        var queueActions = actionComponent.GetType().GetMethod("QueueTurnActions", BindingFlags.Instance | BindingFlags.Public)!;
+        async Task InvokeAsync() => await (Task)queueActions.Invoke(actionComponent, new object[]
         {
             conversation, settings, caps, EnabledPolicy(),
             new CompletionResult(null, null, null, Listen: "synthetic"), false,
@@ -562,7 +566,8 @@ internal static class EngineWiringTests
             platformPolicies: new FixedPolicyResolver(EnabledPolicy()), plugins: gate, background: background);
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
-        var queueSearch = typeof(ReplyPipeline).GetMethod("QueueWebSearchAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var searchComponent = Component(pipeline, "_actions");
+        var queueSearch = searchComponent.GetType().GetMethod("QueueWebSearch", BindingFlags.Instance | BindingFlags.Public)!;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var blocker = background.EnqueueAsync("blocker", "blocker", async _ =>
@@ -572,7 +577,7 @@ internal static class EngineWiringTests
         });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        queueSearch.Invoke(pipeline, new object[] { conversation, "synthetic-query", settings, EnabledPolicy() });
+        queueSearch.Invoke(searchComponent, new object[] { conversation, "synthetic-query", settings, EnabledPolicy() });
         check(research.Calls == 0 && background.Snapshot().Queued == 1,
             "web search is admitted through the bounded queue, not started inline");
 
@@ -700,6 +705,10 @@ internal static class EngineWiringTests
             await background.StopAsync();
         }
     }
+
+    /// <summary>#106：取 ReplyPipeline 构造函数里装配好的职责组件（字段私有，按名字反射）。</summary>
+    private static object Component(ReplyPipeline pipeline, string field)
+        => typeof(ReplyPipeline).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(pipeline)!;
 
     private static ReplyPipeline NewBarePipeline(BackgroundEvaluatorQueue background, IQqChatSource source)
     {

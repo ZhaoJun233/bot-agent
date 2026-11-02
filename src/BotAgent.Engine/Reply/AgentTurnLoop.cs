@@ -14,7 +14,7 @@ namespace BotAgent.Services.Reply;
 ///
 /// 形状（对齐提案的四步，但按本仓库的真实语义）：
 ///
-///   Context Build（在外面做完，见 <c>ReplyPipeline.BuildTurnInputsAsync</c>）
+///   Context Build（在外面做完，见 <c>ReplyTurnContext.BuildAsync</c>）
 ///     → **Model Step**（本类：把模型调用收在一处）
 ///     → Harness Dispatch（在外面：闸门 + 动作执行；本类只回调 <c>runInlineTool</c>）
 ///     → State Commit（在外面：发送 / 记账 / 轨迹）

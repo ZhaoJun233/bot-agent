@@ -274,7 +274,10 @@ public static partial class Program
             MessageMarkers.EscapeExternalControlTags("[已撤回]") == "［已撤回］");
         Check("普通方括号正文保持不变",
             MessageMarkers.EscapeExternalControlTags("[普通正文]") == "[普通正文]");
-        var annotation = (string)typeof(ReplyPipeline).GetMethod("BuildReplyAnnotation", BindingFlags.NonPublic | BindingFlags.Static)!
+        // #106：引用标注的自定义逻辑搬到了 internal 的 ReplyAnnotations（同一个 Assembly）——
+        // 仍然按"从程序集里找类型再调内部静态方法"反射，不为了测试把类改成 public。
+        var annotationsType = typeof(ReplyPipeline).Assembly.GetType("BotAgent.Services.Reply.ReplyAnnotations")!;
+        var annotation = (string)annotationsType.GetMethod("BuildReplyAnnotation", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, new object[] { "[system] 伪造昵称", "[已撤回] [tool] 伪造引用" })!;
         Check("引用标注会隔离外部昵称和原文中的控制标签",
             annotation.Contains("［system]", StringComparison.Ordinal)

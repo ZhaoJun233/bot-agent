@@ -1395,6 +1395,33 @@ public static class Program
             inline is null ? "找不到 Engine/Reply/InlineTurnTools.cs"
             : pipeline is null ? "找不到 Engine/Reply/ReplyPipeline.cs"
             : "两处都在 Engine/Reply");
+
+        // #106：回复主链按职责拆成 6 个独立类。这里只查"文件还在、名字没被合回去"，
+        // 不查它们内部怎么实现 —— 那是各个类自己的事。旧的大 partial 文件已删除，
+        // 断言它**没有回来**：否则重构很容易一步步退回到一个 1600 行的文件。
+        var responsibilities = new[]
+        {
+            "ReplyInboundGates.cs",
+            "ReplyInboundMedia.cs",
+            "ReplyTurnContext.cs",
+            "ReplyTurnActions.cs",
+            "ReplyDelivery.cs",
+            "ReplyQuoteContext.cs",
+        };
+        var missingResponsibilities = responsibilities
+            .Where(name => index.ByPath("src/BotAgent.Engine/Reply/" + name) is null)
+            .ToList();
+        Check("★ 回复主链的职责类各自独立成文件（#106）",
+            missingResponsibilities.Count == 0,
+            missingResponsibilities.Count == 0
+                ? "6 个职责类都在 Engine/Reply"
+                : "缺文件：" + string.Join(", ", missingResponsibilities));
+
+        Check("★ 旧的 ReplyPipeline.Delivery.cs 已并入 ReplyTurnActions（#106）",
+            index.ByPath("src/BotAgent.Engine/Reply/ReplyPipeline.Delivery.cs") is null,
+            index.ByPath("src/BotAgent.Engine/Reply/ReplyPipeline.Delivery.cs") is null
+                ? "没有这个 partial 文件了"
+                : "ReplyPipeline.Delivery.cs 还在 —— 投递/动作又回到了 partial 里");
     }
 
     // ─────────────────── `//` 那路过闸门（批次 A 收尾） ───────────────────
@@ -1503,7 +1530,10 @@ public static class Program
         }
 
         AnchorIn(index, "AllowCapability", "src/BotAgent.Engine/Reply/", "能力闸门（发不发/要不要批准）");
-        AnchorIn(index, "ResolveQuotedMessage", "src/BotAgent.Engine/Reply/", "引用目标裁决");
+        // #106 Step 2 把「引用识别 / 引用目标裁决」拆成 ReplyQuoteContext：锚点跟着真实符号走，
+        // 别退回“全仓还有这个词”那种能被死代码冒充的写法。
+        AnchorIn(index, "ReplyQuoteContext", "src/BotAgent.Engine/Reply/", "引用识别与引用目标裁决");
+        AnchorIn(index, "ResolveTarget(", "src/BotAgent.Engine/Reply/", "引用目标裁决（回哪条 / 干脆不引）");
         AnchorIn(index, "_settings.Snapshot()", "src/BotAgent.Engine/Reply/", "回复链入口取配置快照（review-findings #4 的修复，不许退回）");
         Anchor(index, "SettingsBox", "配置的唯一发布点（热更新换引用，不就地改）");
         Anchor(index, "_box.Apply(", "热更新 = 副本上改 + 原子发布");
