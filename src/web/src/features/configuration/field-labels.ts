@@ -155,3 +155,21 @@ export const fieldLabels: Record<string, string> = {
 export function fieldLabel(key: string): string {
   return fieldLabels[key] ?? key
 }
+
+/**
+ * 字段的附加说明：只写「有前提条件、不满足时静默无效」的那些字段。
+ *
+ * 背景（#131）：`agentServerDocker` / `panelDeployEnabled` 这两个开关都靠容器里的 docker socket 干活，
+ * 而 compose 默认不挂载它 —— 开关能打开、能保存、回读也是开的，但什么都不会发生。
+ * 面板没有单独的提示列，这些说明渲染在字段名下面（`ConfigurationPage.vue` 的 `.cell-sub`）。
+ */
+export const fieldHints: Record<string, string> = {
+  agentServerDocker:
+    '需要部署方把 docker socket 挂进容器（compose 默认不挂载，见 SECURITY.md）。未挂载时本开关不生效：服务器 agent 的工具表与提示词里都不会出现 docker。',
+  panelDeployEnabled:
+    '一键部署要靠容器里的 docker socket 驱动 helper 容器重建镜像；compose 默认不挂载该 socket 时，这个开关同样无法完成部署。',
+}
+
+export function fieldHint(key: string): string | undefined {
+  return fieldHints[key]
+}

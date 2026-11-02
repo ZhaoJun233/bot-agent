@@ -89,6 +89,8 @@ public sealed partial class AppSettings
     /// 打开后：面板能上传/拉取 `app.tar.gz`，并驱动宿主 docker 重建镜像 + 替换自己（容器自我更新）。
     /// 为什么默认关 + 单独一个开关：它等于把“重装机器人”的按钮放到网页上；
     /// 虽然面板本来就有口令门，但这种事应该是个显式决定。
+    /// ⚠ 它靠容器里的 docker socket 驱动 helper 容器（#131）：compose 默认不挂载该 socket 时，
+    /// 这个开关即使打开也无法完成部署，`GET /api/deploy` 会如实回读镜像/产物状态。
     /// </summary>
     public bool PanelDeployEnabled { get; set; }
 
@@ -100,8 +102,9 @@ public sealed partial class AppSettings
     /// 打开后它能 `docker ps / logs / exec / run -v /:/host …`，也能直接读写 /host/qqchat（部署目录）。
     ///
     /// 这是**高权限**开关（docker.sock ≈ root）：关着的时候它的工具表里没有 docker、提示词也不提这两条路径。
-    /// 但 socket 与 /host/qqchat 是**常挂载**的（compose 的挂载不能运行时改）——
-    /// 所以这个开关是“告诉 agent 能不能用 + 管理员确认过风险”，不是硬隔离。默认关。
+    /// 但 socket 与 /host/qqchat **默认不挂载**（compose 的挂载不能运行时改；#131 之前这里写的是
+    /// “常挂载”，与 compose 实际行为不符）。所以这个开关只是“告诉 agent 能不能用 + 管理员确认过风险”，
+    /// 不是硬隔离：容器里没有 docker 时开关打开也不生效（工具表里不会出现 docker）。默认关。
     /// </summary>
     public bool AgentServerDocker { get; set; }
 

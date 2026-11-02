@@ -73,7 +73,11 @@ public static partial class Program
             ["QQCHAT_AGENT_SERVER_MODEL"] = "custom-agent-model",
             // 管理员手写了 docker —— 但开关没开，照样不给用（两把锁）
             ["QQCHAT_AGENT_SERVER_TOOLS"] = "bash,read,docker",
-            ["QQCHAT_AGENT_PROGRESS"] = "0"
+            ["QQCHAT_AGENT_PROGRESS"] = "0",
+            // 显式声明 docker 在哪：容器里没有 socket 时 docker 工具会被摘掉（#131），
+            // 本场景要测「开关打开后能用」，所以用 DOCKER_HOST 把可用性这一维固定下来；
+            // 真去 `docker ps` 会因为环境里没有 docker CLI 而失败 —— 既有的断言只看我们自己记录的那行日志。
+            ["DOCKER_HOST"] = "unix:///var/run/docker.sock"
             // QQCHAT_AGENT_SERVER_DOCKER 故意不设 = 默认关
         });
 
@@ -144,6 +148,15 @@ public static partial class Program
         Check("★ 面板回读里这个开关是开着的（保存真的生效，不是只写了个字段）",
             runtime["agentServerDocker"]?.GetValue<bool>() == true,
             runtime["agentServerDocker"]?.ToJsonString() ?? "(没有这个字段)");
+
+        // #131：开关之外还有一道事实检查 —— 状态面要能区分「开关开着」与「容器里真有 docker」。
+        var (statusCode, statusBody) = await PanelGetAsync($"{panel}/api/agent/status");
+        var statusRoot = (JsonNode.Parse(statusBody) as JsonObject) ?? new JsonObject();
+        Check("★ 状态面把「开关打开」与「容器里真有 docker」分成两个字段回读（#131）",
+            statusCode == 200
+            && statusRoot["serverDocker"]?.GetValue<bool>() == true
+            && statusRoot["serverDockerAvailable"]?.GetValue<bool>() == true,
+            $"HTTP {statusCode}；{statusRoot.ToJsonString()}");
 
         await Task.Delay(400);
         await SendAndWaitAsync("//这次真的看看容器", 19002);

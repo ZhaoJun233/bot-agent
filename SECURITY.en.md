@@ -37,4 +37,9 @@ This is a personally maintained project. There is **no response-time or fix-time
 - Keep the database file mode 600 on Unix, and treat backups the same.
 - Never bake `.env`, the database, or logs into an image or a public snapshot.
 - Take a snapshot before upgrading, per [docs/operations/rollback-playbook.md](docs/operations/rollback-playbook.md).
+- The container does **not** mount the docker socket by default (compose only mounts `./data`, see issue #131),
+  so the `//` docker capability and one-click deploy are unavailable; the host reports this honestly
+  (docker never appears in the agent tool list, and the status payload marks it unavailable).
+  Enabling them requires explicitly mounting `/var/run/docker.sock`, which is equivalent to handing
+  host root to processes inside the container (see threat-model item 1) — decide deliberately.
 - Enable only plugins from sources you trust.

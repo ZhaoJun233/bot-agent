@@ -38,7 +38,7 @@ import {
 } from './draft'
 import { errorName } from '../../shared/friendly'
 import { restartNoticeMessage } from './receipt-notice'
-import { fieldLabel } from './field-labels'
+import { fieldHint, fieldLabel } from './field-labels'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
 import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
@@ -1295,6 +1295,7 @@ defineExpose({
                     <label v-if="canWrite && isEditable(item.field)" class="config-label" :for="`${editorId}-config-input-${active}-${item.key}`">{{ fieldLabel(item.key) }}</label>
                     <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
+                    <span v-if="fieldHint(item.key)" class="cell-sub">{{ fieldHint(item.key) }}</span>
                     <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
                   </td>
                   <td class="config-value setting-editor" role="cell">

@@ -10,6 +10,7 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Qq;
 using BotAgent.Services;
+using BotAgent.Services.Agent;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Platforms;
 using System.Net;
@@ -40,6 +41,7 @@ public static class Program
             MultiTenantIsolationTests(root);
             QuotaManagementTests();
             MultiPlatformBotAgentTests(root);
+            DockerCapabilityTests();
             Console.WriteLine($"通过 {_passed}，失败 0");
             return 0;
         }
@@ -62,6 +64,36 @@ public static class Program
                 // 测试目录清理失败不应覆盖真正的断言结果。
             }
         }
+    }
+
+    /// <summary>
+    /// docker 能力的可用性判定与工具白名单（#131 方案 B）。
+    ///
+    /// 背景：compose 默认不挂载 docker socket，所以「面板允许 Docker」打开后工具表里仍有 docker、
+    /// 提示词还诱导模型去用，每次调用都注定失败。修法是开关之外再加一道事实检查：
+    ///   • <see cref="DockerAvailability.Detect" /> 是纯函数，这里直接测三种输入；
+    ///   • <see cref="ServerAgentRunner.ResolveAllowedTools" /> 必须两把锁同时开才保留 docker。
+    /// 不碰真实文件系统与 docker（CI / 开发机环境不同）。
+    /// </summary>
+    private static void DockerCapabilityTests()
+    {
+        Check(!DockerAvailability.Detect(null, isWindows: false, _ => false),
+            "没有 DOCKER_HOST 且 socket 不存在时判定为不可用");
+        Check(DockerAvailability.Detect("unix:///var/run/docker.sock", isWindows: false, _ => false),
+            "显式 DOCKER_HOST 即视为可用（部署方声明了 docker 在哪）");
+        Check(DockerAvailability.Detect(null, isWindows: false, path => path == DockerAvailability.DefaultUnixSocket),
+            "Unix 上探测的是 /var/run/docker.sock");
+        Check(DockerAvailability.Detect(null, isWindows: true, path => path == DockerAvailability.DefaultWindowsPipe),
+            "Windows 上探测的是命名管道 docker_engine");
+
+        var open = new AppSettings { AgentServerTools = "bash,read,docker", AgentServerDocker = true };
+        Check(!ServerAgentRunner.ResolveAllowedTools(open, dockerAvailable: false).Contains("docker")
+              && ServerAgentRunner.ResolveAllowedTools(open, dockerAvailable: true).Contains("docker"),
+            "开关打开时，docker 只在容器里真有 docker 时才进工具表");
+
+        var closed = new AppSettings { AgentServerTools = "bash,read,docker", AgentServerDocker = false };
+        Check(!ServerAgentRunner.ResolveAllowedTools(closed, dockerAvailable: true).Contains("docker"),
+            "开关关着时，有 docker 也不进工具表（第二把锁）");
     }
 
     private static void SettingsExistenceTests()

@@ -81,15 +81,16 @@ services:
     pids_limit: 512
     depends_on:
       - napcat
-    # ── “透过 docker 操作服务器”的挂载（管理员 2026-09-18 要的能力）──
+    # ── “透过 docker 操作服务器”的挂载（管理员 2026-09-18 要的能力；#131 起**默认关闭**）──
     # ④ docker.sock：agent 能用 `docker ps / logs / exec / run -v /:/host …` 看和改服务器
     # ⑤ /opt/qqchat → /host/qqchat：直接就能读写部署目录（不用 pull 镜像、不用 socket）
-    # ⚠️ 这两个挂载是**常挂**的（compose 的挂载不能在运行时改）；
-    #    面板上的「允许 agent 用 docker 操作服务器」开关决定 agent **会不会去用**它们
-    #    —— 关着的时候它的工具表里没有 docker，提示词也不提这两条路径。
-    # ⚠ 下面这两个挂载当前**没有生效**，是 #121 验收时发现的：本服务块里原本有两个 `volumes:` 键，
-    #   YAML 用后者覆盖前者，因此 docker.sock 与 /opt/qqchat 从来没真正挂上，现代 docker compose
-    #   还会把整份文件判成非法（duplicate key）。要给 agent 这条特权，得先决定安全边界（见 issue）。
+    # ⚠ 这两个挂载**当前刻意不启用**，#121 验收时发现本服务块里有两个 `volumes:` 键，
+    #   YAML 用后者覆盖前者 → docker.sock 与 /opt/qqchat 从来没真正挂上，现代 docker compose
+    #   还会把整份文件判成非法（duplicate key）。#131 选定「保持禁用 + 如实提示」，与线上实际行为一致。
+    # 要启用：取消下面三行注释，并**删掉本服务块后面那个 `volumes:` 键**（只保留一个），再重建容器。
+    #   注意 docker.sock 等价于把宿主 root 交给容器里的进程（见 SECURITY.md 威胁模型第 1 条）。
+    # 未挂载时宿主如实提示：agent 工具表与提示词里没有 docker、`/api/agent/status` 回读
+    #   serverDockerAvailable=false、启动日志印「docker 能力=不可用」。
     # volumes:
     #   - /var/run/docker.sock:/var/run/docker.sock
     #   - /opt/qqchat:/host/qqchat

@@ -40,4 +40,8 @@
 - 数据库文件权限 600（Unix），备份文件同等对待；
 - 不把 `.env`、数据库、日志纳入镜像或公开快照；
 - 升级前按 [docs/operations/rollback-playbook.md](docs/operations/rollback-playbook.md) 做快照；
+- 容器默认**不挂载** docker socket（compose 的 `volumes` 只有 `./data`，#131）：`//` 的 docker 能力与
+  面板一键部署因此不可用，宿主会如实回读这一点（工具表里不出现 docker、状态面标出不可用）。
+  要启用必须由部署方显式挂载 `/var/run/docker.sock` —— 那等于把宿主 root 交给容器里的进程
+  （见本文威胁模型第 1 条），请自行评估后再打开对应开关。
 - 只启用来源可信的插件。

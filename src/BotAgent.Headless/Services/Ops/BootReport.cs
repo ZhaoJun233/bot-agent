@@ -1,3 +1,4 @@
+using BotAgent.Services.Agent;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Stickers;
 
@@ -52,6 +53,9 @@ public sealed class BootReport
             $"官方白名单=群{gateState.OfficialGroups}/私聊{gateState.OfficialPrivates}, " +
             // 实例级策略也印：它们会让账户级判定整条关闭，不印出来就只剩「莫名全拦」（#129 S3）
             $"实例策略={gateState.Instances}, " +
+            // docker 能力也印：容器里没挂 socket 时这个开关打开也没用（#131）；不印的话
+            // 「允许 Docker」看着像已经生效。
+            $"docker 能力={(DockerAvailability.IsAvailable ? "可用" : "不可用（容器里没有 docker socket；compose 默认不挂载，见 SECURITY.md）")}, " +
             // 总开关状态也印：2026-09-21 线上出现过“某条通道的总开关被关掉 → 一条都不回 →
             // 日志里只有一行很容易被淹没的“忽略（…通道的总开关是关的）”，查了半天 ✗。
             $"对话总开关=私域{(privateSwitches.Enabled && privateSwitches.ChatEnabled ? "开" : "关")}/官方{(officialSwitches.Enabled && officialSwitches.ChatEnabled ? "开" : "关")}, " +

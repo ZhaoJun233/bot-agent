@@ -77,6 +77,10 @@
 - 集成 harness 的两类偶发失败：S12 写死 `18085` 被别的进程占成临时端口导致面板没起来（#105）、
   S26 假模型服务端口被占导致整轮 harness 崩溃（#104 S2 期间）。
 - B24 探针的子进程清理改成有界等待，修掉 Linux CI 上的偶发假红（#105）。
+- 「允许 Docker」与「面板一键部署」以前假装可用：compose 的 `qqchat` 块里有两个 `volumes:` 键，
+  严格解析器整份文件报错、宽容解析器只取后者，所以 docker socket 从来没挂上（#131）。现在容器里
+  没有 docker 时（默认如此）`//` 的工具表与提示词都不出现 docker，`GET /api/agent/status` 会额外
+  回读 `serverDockerAvailable`，启动日志与 `SECURITY.md` 写明要部署方显式挂载 socket 才能启用。
 - 文档死链归零；README 配置参考重写成「compose 层 / 宿主层 / 面板与库」三层模型（#125），
   删掉不存在的 `/playground.html` 与「宿主自动生成证书」两处过期声明。
 - 一条空 instanceId 的策略条目能把整条平台通道锁死，而面板既看不出原因也改不掉（#129）；

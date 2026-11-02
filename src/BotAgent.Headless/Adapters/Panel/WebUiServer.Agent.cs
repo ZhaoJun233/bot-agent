@@ -195,6 +195,9 @@ public sealed partial class WebUiServer
             ["naturalAgent"] = _settings.EnableNaturalAgent,
             ["serverTools"] = _settings.AgentServerTools,
             ["serverDocker"] = _settings.AgentServerDocker,
+            // 开关的**实际效果**：容器里没有 docker socket 时（compose 默认如此，#131），
+            // 即使开关是开的，工具表里也不会有 docker —— 面板据此提示「开了但不生效」。
+            ["serverDockerAvailable"] = DockerAvailability.IsAvailable,
             ["serverWorkdir"] = _settings.AgentServerWorkDir,
             ["serverKeyConfigured"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKey),
             ["serverKeySource"] = !string.IsNullOrWhiteSpace(_settings.AgentServerApiKeyOverride)

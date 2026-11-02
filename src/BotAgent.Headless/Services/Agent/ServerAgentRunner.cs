@@ -93,11 +93,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         }
 
         var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
-        var allowed = ParseTools(_settings.AgentServerTools);
-        if (!_settings.AgentServerDocker)
-        {
-            allowed.Remove("docker");
-        }
+        var allowed = ResolveAllowedTools(_settings, DockerAvailability.IsAvailable);
 
         if (!allowed.Contains(tool))
         {
@@ -121,14 +117,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     {
         var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
         var maxSteps = Math.Clamp(_settings.AgentServerMaxSteps, 1, 30);
-        var allowed = ParseTools(_settings.AgentServerTools);
-
-        // docker 是高权限能力（docker.sock ≈ root）：只在面板那个开关打开时才能用。
-        // 两把锁：就算管理员在“工具”里写了 docker，开关没开也不给用。
-        if (!_settings.AgentServerDocker)
-        {
-            allowed.Remove("docker");
-        }
+        // docker 是高权限能力（docker.sock ≈ root）：两把锁同时开才进白名单。
+        // ② “容器里真的有 docker”—— compose 默认不挂载 socket（#131）。
+        var allowed = ResolveAllowedTools(_settings, DockerAvailability.IsAvailable);
         var qqAllowed = QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions);
 
         // 批次 A 第 2 步的收尾：**可选**过统一闸门（默认关 = 与今天逐字一致，见 AppSettings.AgentServerUseGate）。
@@ -507,6 +498,25 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         "• final 用聊天的口吻说，像接着刚才的话往下聊：先说结论，必要的数字/路径照实给，别写成报告、别分级标题；\n" +
         "• 一般 1~4 句就够；结果很长时挑重点说，剩下的一句话概括；\n" +
         "• 没做成就直说卡在哪、要对方补什么。";
+
+    /// <summary>
+    /// `//` 这条路的工具白名单（#131）：docker 要**两把锁同时开**才留 ——
+    /// 面板开关 <see cref="AppSettings.AgentServerDocker" /> 打开，且这个容器里真的有 docker。
+    ///
+    /// 为什么加第二把：compose 默认不挂载 docker socket（见 SECURITY.md「部署方的最低要求」与 issue #131）；
+    /// 以前只看开关，于是开关一打开提示词里就列出 docker，模型照着去用，每次都注定失败。
+    /// 白名单与系统提示同源（<c>BuildSystemPrompt</c> 只描述 <c>allowed</c> 里的工具），摘掉就够。
+    /// </summary>
+    public static HashSet<string> ResolveAllowedTools(AppSettings settings, bool dockerAvailable)
+    {
+        var allowed = ParseTools(settings.AgentServerTools);
+        if (!settings.AgentServerDocker || !dockerAvailable)
+        {
+            allowed.Remove("docker");
+        }
+
+        return allowed;
+    }
 
     private static HashSet<string> ParseTools(string raw)
     {
