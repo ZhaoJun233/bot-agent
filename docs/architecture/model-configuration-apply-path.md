@@ -1,4 +1,4 @@
-# 模型配置的生效路径（#103）
+# 模型配置的生效路径（#103 / #128）
 
 回答一个问题：**在面板里改一个模型配置，什么时候立刻生效，什么时候必须重启？**
 这份文件是那次 P1 故障（「改了模型配置但实际调用还是旧的」）的结论沉淀，
@@ -9,17 +9,18 @@
 ## 1. 三段链路
 
 ```
-面板/ZBA 提交  →  持久化（一个事务）  →  回读投影  →  运行期每请求解析路由
-                  settings +              ProviderConfigurationView   TryBuildCurrentProviderRoute
-                  model_providers +       （applyState 来自比对）     + ResolveProviderSecret*
-                  secrets
+面板/ZBA 提交  →  持久化（一个事务）  →  回读投影 + 候选表热替换  →  运行期每请求解析路由
+                  settings +              ProviderConfigurationView     TryBuildCurrentProviderRoute
+                  model_providers +       + ModelProviderRegistry       + ResolveProviderSecret*
+                  secrets                 （#128：整体换候选表）
 ```
 
 | 段 | 代码位置 | 说明 |
 | --- | --- | --- |
 | 持久化 | `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | 同一个事务写 settings JSON、`model_providers` 行与 `secrets` 行；密钥正文只进 `secrets` |
-| 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`SettingsStore.cs:695`） | `applyState` 由「库里这一行 vs 启动时捕获的那一行」比对得出 |
-| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.cs:976` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
+| 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`SettingsStore.cs:695`） | 供应商级字段一律热应用（#128）：`applyState` 不再比对启动快照，`running` 只用于展示此刻生效的显示值 |
+| 候选表 | `CompositionRoot.InspectModelProjection`（`CompositionRoot.cs:1005`）+ `ModelProviderRegistry.Replace`（`Host/ModelProviderRegistry.cs`）+ `ProviderFailoverRunner.ReplaceCandidates`（`src/BotAgent.Model/Resilience/ProviderCircuitBreaker.cs:298`） | 保存配置时读一次新候选表并**整体替换**（#128）；执行器只造一次，熔断器按供应商 id 复用 |
+| 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.cs:1066` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
 | 发送 | `src/BotAgent.Model/OpenAiClient.cs:278` `SendThroughProvidersAsync` | 拿不到路由就 `provider_secret_unavailable`，按设计**不降级到旧配置** |
 
 关键点：**没有「已建好的模型客户端」这层缓存**。路由是每次请求现拼的
@@ -34,7 +35,7 @@
 | Base URL、模型名（含 primary 的标量覆盖） | **请求级 · 热** | 只是拼 URL 与请求体 |
 | 采样参数、思考档位、快速回复档位 | **请求级 · 热** | 请求体字段 |
 | 协议（`ModelProtocol`）、`Options` | 装配级 · 需重启 | 决定编解码与传输形态，重建成本高且易踩在途请求 |
-| 供应商集合、顺序（`Priority`）、启用位 | 装配级 · 需重启 | failover 候选表是启动快照 |
+| 供应商集合、顺序（`Priority`）、启用位、显示名 | **请求级 · 热**（#128） | 候选表整体热替换；熔断状态不在表里，按 id 复用 |
 
 判定的落点：
 
@@ -46,6 +47,29 @@
 > `env:QQCHAT_API_KEY` 变成 `secret:apiKey`，运行期比对不相等 → 路由被拒 → **所有模型调用安全静默**，
 > 机器人一个字都不回。表现是「保存成功了、回读也是新值，但就是没反应」。
 > 更糟的是当时有测试把这段静默当成期望行为断言，等于把 bug 固化成规范。
+### 2.1 候选表为什么现在能热换（#128）
+
+以前的死胡同：启动时把库里的供应商行抄进 `capturedProviders`，**全进程只有那一次**。
+面板再改只会让 `InspectModelProjection` 报 `RestartRequired`，而运行期
+`TryBuildCurrentProviderRoute` 又拿 `desired` 去跟这份启动快照比，不等就返回 null →
+路由解析拒绝 → `provider_secret_unavailable` → 安全静默。于是「保存成功、回执说要重启、
+机器人不回复」，而且**根本没有重建入口**（首版不提供远程重启按钮）。
+
+现在这条路是通的：
+
+1. `ModelProviderRegistry`（`src/BotAgent.Headless/Host/ModelProviderRegistry.cs`）持有
+   `volatile IReadOnlyList<PersistedModelProvider> Captured` 与唯一一次挂上的 `ProviderFailoverRunner`；
+2. `InspectModelProjection` 每次保存先在一个只读事务里读出 `desired`、为每行预解析路由，
+   提交后调 `Replace(desired, candidates)`：**先** `ReplaceCandidates` **再**换 `Captured`；
+3. `ReplaceCandidates` 复用同名断路器（冷却中的供应商不会因为改配置被放出来），
+   只为增删的 id 增删断路器 —— 熔断历史仍在库里，不随候选表一起丢；
+4. 换失败（非法候选表）只记 `FileLog.Warn` 并如实报 `RestartRequired`，旧表继续服务。
+
+不变式（改这里必须守住）：
+
+- 执行器只造一次，候选表只能经 `Replace` 换；不允许第二处抄快照；
+- 先换候选表再换 `Captured`：回读投影绝不能看到「新行 + 旧候选表」；
+- 供应商 id 相同的断路器必须复用；只有 id 消失时才丢弃。
 
 ---
 
@@ -83,3 +107,5 @@
 3. 回归至少要有三阶段：**保存 → 回读 → 重启后**（`tests/BotAgent.IntegrationHarness/ModelConfigScenario.cs`）。
 4. 不要写「保存后必须重启才能用」这类断言，除非那一步确实是装配级。
 5. 面板改动必跑 `cd src/web && npm run typecheck && npm run test:unit`。
+6. 动候选表（增删供应商 / 调优先级 / 启停）回归 `BOTAGENT_IT_ONLY=s61`：它钉住「不重启就换路由」与「删除后回到 primary」。
+7. 不要把断路器状态放进候选表一起换 —— 那等于让改配置顺手清掉熔断。

@@ -705,17 +705,16 @@ public sealed partial class SettingsStore : ISettingsRepository
         return desired.Select(provider =>
         {
             var running = captured.FirstOrDefault(candidate => candidate.Id == provider.Id);
-            // SecretKeyRef 不在「需重启」判定里：密钥是请求级材料，换来源（env ↔ 库）运行期就能生效（#103）。
-            var changed = running is null || running.IsEnabled != provider.IsEnabled || running.Priority != provider.Priority
-                || running.BaseUrl != provider.BaseUrl || running.ModelName != provider.ModelName
-                || running.Protocol != provider.Protocol || running.Options != provider.Options;
-            var apply = changed ? ApplyState.RestartRequired : ApplyState.NotStarted;
+            // 供应商级字段现在全部热应用（#128）：保存后模型投影步会重建路由与候选表，
+            // 运行期立即采用，所以这里不再把"与启动快照不一致"报成需重启。
+            // running 只用于展示"此刻正在生效"的显示值（名字/地址），不参与需重启判定。
+            var apply = ApplyState.NotStarted;
             var binding = ModelProviderStore.ClassifyCredentialBinding(provider.SecretKeyRef);
             ReadField<string> Field(string requested, string display, int bit, bool name)
             {
                 var explicitField = modes.TryGetValue(provider.Id, out var bits) && (bits & bit) != 0;
                 var rule = new FieldDescriptor(ConfigurationFieldId.RegisteredProviders,
-                    name ? FieldEffect.Hot : FieldEffect.Restart, name, kind == ConfigurationReadKind.Editable,
+                    FieldEffect.Hot, name, kind == ConfigurationReadKind.Editable,
                     binding == CredentialBindingState.Unclassified);
                 var visibility = kind == ConfigurationReadKind.Overview ? FieldVisibility.Hidden
                     : name ? FieldVisibility.NameEditable : FieldVisibility.Editable;

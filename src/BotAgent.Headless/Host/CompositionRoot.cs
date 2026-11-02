@@ -134,13 +134,22 @@ internal static class CompositionRoot
     /// 阶段二：按依赖顺序把服务接起来。
     /// 顺序：协议端（必要时两条 → 聚合器）→ 模型客户端 → 仓储 → host 用例 → 面板。
     /// </summary>
+    /// <summary>
+    /// 装配前置：固定时钟绑定并声明平台目录。必须落在任何组件读时间/平台之前，
+    /// 所以集中成 Build 的最前面一行，避免以后有人在中间插入组件时把顺序打乱。
+    /// </summary>
+    private static void InitializeAssemblyPrerequisites(AppSettings settings)
+    {
+            BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+            BotAgent.Adapters.Time.ClockBindings.InitializeEngine();
+            BotAgent.Adapters.Time.ClockBindings.InitializeModel();
+            BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
+            DeclarePlatformCatalog(settings);
+    }
+
     public static AppGraph Build(AppSettings settings, BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization = null)
     {
-        BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
-        BotAgent.Adapters.Time.ClockBindings.InitializeEngine();
-        BotAgent.Adapters.Time.ClockBindings.InitializeModel();
-        BotAgent.Adapters.Time.ClockBindings.InitializeStorage();
-        DeclarePlatformCatalog(settings);
+        InitializeAssemblyPrerequisites(settings);
         // 配置的唯一发布点：所有组件都从它读"当前生效的那一份"。
         // 面板热更新换的是它背后的实例（不是就地改共享对象），这样在途的那一轮不会读到半新半旧的配置
         // （review-findings #4）。见 SettingsBox。
@@ -155,7 +164,9 @@ internal static class CompositionRoot
         // 启动时同步 primary 的地址与模型名，但不覆盖已有熔断状态。
         var providerStore = new ModelProviderStore();
         var authorization = new SettingsHotReload.ConfigurationRequestAuthorization();
-        IReadOnlyList<PersistedModelProvider> capturedProviders = Array.Empty<PersistedModelProvider>();
+        // 当前"装配事实"（#128）：启动时载入一次，之后每次保存配置由模型投影步骤整体替换。
+        // 路由解析、回读投影与托管能力描述都从这里读 —— 全进程只有这一份，不再各自抄启动快照。
+        var modelRegistry = new ModelProviderRegistry(Array.Empty<PersistedModelProvider>());
         var ui = new PanelNotifier();
         var quotas = new TenantQuotaStore();
         var pluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), ui.EmitLog, quotas);
@@ -163,7 +174,7 @@ internal static class CompositionRoot
         {
             var providers = ModelProviderStore.LoadAllInTransaction(connection);
             return new RegisteredConfigurationView(pluginRuntime.ReadConfiguration(connection),
-                SettingsStore.ProjectRegisteredProviderViews(connection, providers, capturedProviders, kind),
+                SettingsStore.ProjectRegisteredProviderViews(connection, providers, modelRegistry.Captured, kind),
                 // 已登记凭据只投影“存在/可用”，正文永不离开密钥库。
                 SettingsStore.ProjectModelCredentials(connection, providers));
         }
@@ -183,7 +194,7 @@ internal static class CompositionRoot
             next.RuntimePlatformPolicyExplicitFields = initialized.RuntimePlatformPolicyExplicitFields;
             next.RuntimePlatformPolicyBaselineSources = initialized.RuntimePlatformPolicyBaselineSources;
         });
-        capturedProviders = providerStore.LoadAll().ToArray();
+        modelRegistry.Initialize(providerStore.LoadAll().ToArray());
 
         // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
         var riskBackoff = new ProtocolRiskBackoff(msg => FileLog.Write("OneBot", msg));
@@ -197,7 +208,7 @@ internal static class CompositionRoot
         var ttsBreaker = new ToolCircuitBreaker("tts");
         var searchBreaker = new ToolCircuitBreaker("search");
         var (brain, store, profiles, stickers, voice, music, links, research) =
-            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, capturedProviders, ttsBreaker, searchBreaker);
+            BuildModelAndMediaLayer(settings, settingsBox, source, secrets, providerStore, modelRegistry, ttsBreaker, searchBreaker);
 
         // ---------------- 用例层：谁依赖谁，只在这里看得到 ----------------
         // 共享状态先建：登录号 / 收摊标记 / 事件聚合 / 白名单闸门（其余组件都要问它们）
@@ -317,7 +328,7 @@ internal static class CompositionRoot
         settingsHotReload.BindConfiguration(configuration, authorization, settingsStore.LoadCommittedRuntimeSnapshot,
             (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(configuration, caller, key, intent, mood),
             healthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
-            version => InspectModelProjection(version, capturedProviders));
+            version => InspectModelProjection(version, modelRegistry, settingsBox, secrets));
         var circuitStatusProvider = BuildCircuitStatusProvider(brain, ttsBreaker, searchBreaker, riskBackoff);
         var web = BuildWebUiServer(settings, settingsBox, gateway, source, agent, loginQr,
             settingsHotReload, ui, stickers, mood, voice, music, research, registry, profiles, secrets, settingsStore, identity, scheduler,
@@ -326,7 +337,7 @@ internal static class CompositionRoot
             circuitStatusProvider, background, plugins);
 
         var management = BuildManagedCapabilityBinding(configuration, authorization, driverOperations, settingsBox,
-            platformPolicies, settings, feishu, platformRegistry, capturedProviders, managedAuthorization,
+            platformPolicies, settings, feishu, platformRegistry, () => modelRegistry.Captured, managedAuthorization,
             plugins: pluginRuntime.Describe);
         var zba = BuildZba(settingsBox, settingsHotReload, management, sessions, agentCmds, approvals,
             plugins, registry, web, BotConfig.HadStoredSettingsAtLoad, pluginRuntime, backups);
@@ -443,7 +454,7 @@ internal static class CompositionRoot
         AppSettings settings,
         FeishuBotGateway? feishu,
         IPlatformRegistry platformRegistry,
-        IReadOnlyList<PersistedModelProvider> capturedProviders,
+        Func<IReadOnlyList<PersistedModelProvider>> capturedProviders,
         BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization,
         Func<ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor>>? plugins = null)
     {
@@ -467,7 +478,7 @@ internal static class CompositionRoot
             () => settingsBox.Current.DeclaredPlatformDrivers,
             key => platformPolicies.Resolve(new(key.PlatformId, key.AccountScope, key.InstanceId)).Enabled,
             key => DriverCredentialConfigured(key, settingsBox.Current), DriverReady,
-            () => ManagedProviderDescriptors(capturedProviders, settingsBox.Current),
+            () => ManagedProviderDescriptors(capturedProviders(), settingsBox.Current),
             async (command, ct) =>
             {
                 // Explicit administrator tests use current metadata, including newly saved disabled providers.
@@ -853,7 +864,7 @@ internal static class CompositionRoot
     private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
         VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
         BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
-            IReadOnlyList<PersistedModelProvider> persistedProviders, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
+            ModelProviderRegistry modelRegistry, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
     {
         var allowPrivateOutbound = EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
         // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒。
@@ -875,6 +886,7 @@ internal static class CompositionRoot
             settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout(),
             TimeSpan.FromSeconds(60));
 
+        var persistedProviders = modelRegistry.Captured;
         var providerRoutes = persistedProviders
             .Select(p => TryBuildProviderRoute(p, settings, secrets))
             .Where(route => route is not null)
@@ -895,12 +907,16 @@ internal static class CompositionRoot
                 }
             });
 
-                var brain = new OpenAiClient(settingsBox, modelAuxHttp, modelChatHttp, imageDownloader, transport,
+        // 注册表热重建（#128）：执行器实例只造一次，候选表由模型投影步骤整体换掉；
+        // 上面这份 providerRoutes 只是"没有解析器时的兜底"，真正每次请求用的路由由下面这个解析器现取。
+        modelRegistry.Attach(providerRunner);
+
+        var brain = new OpenAiClient(settingsBox, modelAuxHttp, modelChatHttp, imageDownloader, transport,
             providerRunner,
             providerRoutes,
             providerId =>
             {
-                var provider = persistedProviders.FirstOrDefault(p =>
+                var provider = modelRegistry.Captured.FirstOrDefault(p =>
                     string.Equals(p.Id, providerId, StringComparison.Ordinal));
                 return provider is null ? null : TryBuildCurrentProviderRoute(provider, settingsBox.Current);
             },
@@ -975,21 +991,46 @@ internal static class CompositionRoot
         return (brain, store, profiles, stickers, voice, music, links, research);
     }
 
-    private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, IReadOnlyList<PersistedModelProvider> captured)
+    /// <summary>
+    /// 模型投影步：把库里刚提交的供应商行**真的装配进运行期**，不再只是"检查一下然后报要重启"（#128）。
+    ///
+    /// 做法：同一事务里读 desired → 逐条重建路由 → 换掉故障转移候选表与注册表快照。
+    /// 为什么现在可以全热：路由（地址/模型名/协议/选项/密钥引用）由 <see cref="BuildProviderRoute"/> 每次现拼，
+    /// 传输层按路由逐请求取端点，进程里没有任何按供应商缓存的长生命周期对象（#103 已把密钥降为请求级）。
+    /// 因此旧的重启条件（启用位 / 优先级 / 协议 / 选项 / 非 primary 的地址与模型名）全部变成可热应用。
+    ///
+    /// 失败口径：重建抛出（例如库读不出来）时**保留旧候选表与旧快照**，如实回 <c>RestartRequired</c>，
+    /// 而不是假装已应用 —— 面板据此提示"模型调用要重启后才生效"。
+    /// </summary>
+    private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, ModelProviderRegistry registry,
+        SettingsBox settingsBox, ISecretsRepository secrets)
     {
         using var connection = AppDatabase.Open();
         using var transaction = connection.BeginTransaction(deferred: true);
         if (ConfigurationBridge.ReadConfigurationVersion(connection) != expected)
             throw new InvalidOperationException("configuration_superseded");
-        var desired = ModelProviderStore.LoadAllInTransaction(connection).ToDictionary(provider => provider.Id, StringComparer.Ordinal);
-        // 凭据来源切换（env:QQCHAT_API_KEY ↔ secret:apiKey）不算装配级变化：密钥是请求级材料，
-        // 每次发请求现取，换来源不需要重建客户端。把它当重启条件会让「第一次在面板填 Key」静默哑火半天（#103）。
-        var restart = desired.Count != captured.Count || captured.Any(provider => !desired.TryGetValue(provider.Id, out var current)
-            || current.IsEnabled != provider.IsEnabled || current.Priority != provider.Priority
-            || current.Protocol != provider.Protocol || current.Options != provider.Options
-            || provider.Id != "primary" && (current.BaseUrl != provider.BaseUrl || current.ModelName != provider.ModelName));
+        var desired = ModelProviderStore.LoadAllInTransaction(connection).ToArray();
+        var current = settingsBox.Current;
+        // 路由在事务内按同一份事实重建：任何一条建不出来（凭据来源未分类等）只说明它暂时不可路由，
+        // 与启动装配口径一致 —— 它仍在候选表里，只是解析器会拒绝，故障转移到下一个供应商。
+        var routes = desired
+            .Select(provider => TryBuildProviderRoute(provider, current, secrets))
+            .Where(route => route is not null)
+            .Cast<ModelProviderRoute>()
+            .ToArray();
         transaction.Commit();
-        return new(ApplyStep.ModelProjection, restart ? ApplyState.RestartRequired : ApplyState.Applied, restart ? "restart_required" : null);
+        try
+        {
+            registry.Replace(desired, desired.Select(provider => new ProviderCandidate(provider.Id, provider.Priority, provider.IsEnabled)));
+        }
+        catch (Exception ex)
+        {
+            FileLog.Warn("Model", $"Provider 注册表热重建失败，保留旧路由：{ex.GetType().Name}");
+            return new(ApplyStep.ModelProjection, ApplyState.RestartRequired, "restart_required");
+        }
+        // 路由表只用于诊断/兜底（真正的请求路由由解析器现取）；这里记一行让"重建成功"可观测。
+        FileLog.Write("Model", $"provider_registry_rebuilt providers={desired.Length} routes={routes.Length}");
+        return new(ApplyStep.ModelProjection, ApplyState.Applied, null);
     }
 
     private static ModelProviderRoute? TryBuildProviderRoute(

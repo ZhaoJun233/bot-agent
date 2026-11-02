@@ -183,11 +183,10 @@ public sealed class SettingsHotReload
     {
         if (secrets.Any(edit => edit.Kind != SecretEditKind.Keep && edit.Slot is WritableSecretSlot.FeishuAppSecret
             or WritableSecretSlot.FeishuEncryptKey or WritableSecretSlot.FeishuVerificationToken)) return true;
-        // 显示名与凭据来源都不再要求重启：站点名只影响回读投影，密钥是请求级材料（#103）。
-        // 仍要求重启的是「装配级」差异：非 primary 供应商（注册表是启动快照），以及 primary 的启用位/优先级。
-        if (patch.Registered is { } registered && (!registered.Plugins.IsEmpty || registered.Providers.Any(edit =>
-            edit.Key.Value != "primary"
-            || edit.Changes.Priority.Kind != EditKind.Keep || edit.Changes.Enabled.Kind != EditKind.Keep))) return true;
+        // 供应商（含非 primary）的启用位/优先级/地址/模型名/协议/选项/密钥来源现在都能热应用：
+        // 模型投影步会重建路由与故障转移候选表，不必重启（#128）。
+        // 仍需重启的只剩插件登记（插件目录与加载上下文是启动期装配）。
+        if (patch.Registered is { } registered && !registered.Plugins.IsEmpty) return true;
         var node = System.Text.Json.JsonSerializer.SerializeToNode(patch)!.AsObject();
         foreach (var partition in node.Where(pair => pair.Key != nameof(ConfigurationPatch.Registered)))
         {

@@ -242,9 +242,21 @@ public sealed record ProviderCandidate(string Id, int Priority, bool Enabled = t
 /// </summary>
 public sealed class ProviderFailoverRunner
 {
-    private readonly IReadOnlyList<ProviderCandidate> _providers;
-    private readonly Dictionary<string, ProviderCircuitBreaker> _breakers;
+    /// <summary>
+    /// 一次装配好的候选与熔断器。运行期热替换时整体换掉，读侧在一次调用内始终看同一份（#128）。
+    /// 之所以合成一个不可变记录：候选顺序与熔断器必须同进同退，否则会出现「新候选配旧熔断器」的半新状态。
+    /// </summary>
+    private sealed record CandidateSet(
+        IReadOnlyList<ProviderCandidate> Providers,
+        IReadOnlyDictionary<string, ProviderCircuitBreaker> Breakers);
+
+    private readonly Func<DateTimeOffset>? _clock;
+    private readonly int _failureThreshold;
+    private readonly TimeSpan? _cooldown;
     private readonly Action<ProviderCircuitSnapshot>? _onSnapshotChanged;
+
+    /// <summary>volatile：热重建直接换整份候选表，读侧不加锁。</summary>
+    private volatile CandidateSet _set = null!;
 
     public ProviderFailoverRunner(
         IEnumerable<ProviderCandidate> providers,
@@ -254,36 +266,69 @@ public sealed class ProviderFailoverRunner
         IEnumerable<ProviderCircuitSnapshot>? initialSnapshots = null,
         Action<ProviderCircuitSnapshot>? onSnapshotChanged = null)
     {
-        _providers = providers
-            .Where(p => p is not null)
-            .OrderBy(p => p.Priority)
-            .ThenBy(p => p.Id, StringComparer.Ordinal)
-            .ToArray();
-
-        if (_providers.Count == 0)
-        {
-            throw new ArgumentException("At least one provider is required.", nameof(providers));
-        }
-
-        if (_providers.Select(p => p.Id).Distinct(StringComparer.Ordinal).Count() != _providers.Count)
-        {
-            throw new ArgumentException("Provider ids must be unique.", nameof(providers));
-        }
-
+        _clock = clock;
+        _failureThreshold = failureThreshold;
+        _cooldown = cooldown;
         _onSnapshotChanged = onSnapshotChanged;
-        _breakers = _providers.ToDictionary(
+        var normalized = Normalize(providers);
+        var breakers = normalized.ToDictionary(
             p => p.Id,
             p => new ProviderCircuitBreaker(p.Id, failureThreshold, cooldown, clock),
             StringComparer.Ordinal);
 
         foreach (var snapshot in initialSnapshots ?? Array.Empty<ProviderCircuitSnapshot>())
         {
-            if (_breakers.TryGetValue(snapshot.ProviderId, out var breaker))
+            if (breakers.TryGetValue(snapshot.ProviderId, out var breaker))
             {
                 // half-open 探测锁不会跨进程恢复；Restore 会主动清掉 ProbeInFlight。
                 breaker.Restore(snapshot);
             }
         }
+
+        _set = new CandidateSet(normalized, breakers);
+    }
+
+    /// <summary>
+    /// 运行期替换候选集合与顺序（#128：面板改了供应商的启用/优先级/地址/协议后不必重启进程）。
+    /// 三条不变量：
+    /// ① 同名供应商复用原来的熔断器 —— 正在冷却的不会因为改配置被放出来；
+    /// ② 只为新增/删除的 id 增删熔断器，已删除供应商的历史状态仍留在库里（不清表）；
+    /// ③ 非法输入直接抛，调用方保持旧候选表（宁可继续用旧路由，也不进入"没有可用供应商"）。
+    /// </summary>
+    public void ReplaceCandidates(IEnumerable<ProviderCandidate> providers)
+    {
+        var normalized = Normalize(providers);
+        var current = _set;
+        var breakers = new Dictionary<string, ProviderCircuitBreaker>(normalized.Length, StringComparer.Ordinal);
+        foreach (var provider in normalized)
+        {
+            breakers[provider.Id] = current.Breakers.TryGetValue(provider.Id, out var existing)
+                ? existing
+                : new ProviderCircuitBreaker(provider.Id, _failureThreshold, _cooldown, _clock);
+        }
+
+        _set = new CandidateSet(normalized, breakers);
+    }
+
+    private static ProviderCandidate[] Normalize(IEnumerable<ProviderCandidate> providers)
+    {
+        var normalized = (providers ?? throw new ArgumentNullException(nameof(providers)))
+            .Where(p => p is not null)
+            .OrderBy(p => p.Priority)
+            .ThenBy(p => p.Id, StringComparer.Ordinal)
+            .ToArray();
+
+        if (normalized.Length == 0)
+        {
+            throw new ArgumentException("At least one provider is required.", nameof(providers));
+        }
+
+        if (normalized.Select(p => p.Id).Distinct(StringComparer.Ordinal).Count() != normalized.Length)
+        {
+            throw new ArgumentException("Provider ids must be unique.", nameof(providers));
+        }
+
+        return normalized;
     }
 
     private void Publish(ProviderCircuitSnapshot snapshot)
@@ -299,21 +344,27 @@ public sealed class ProviderFailoverRunner
     }
 
     public IReadOnlyList<ProviderCircuitSnapshot> Snapshots()
-        => _providers.Select(p => _breakers[p.Id].Snapshot()).ToArray();
+    {
+        var set = _set;
+        return set.Providers.Select(p => set.Breakers[p.Id].Snapshot()).ToArray();
+    }
 
     public async Task<ProviderRunResult<T>> RunAsync<T>(
         Func<ProviderCandidate, CancellationToken, Task<ProviderCallResult<T>>> call,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(call);
+        // 一次失败转移全程用同一份候选表：中途被热重建换掉也只会从下一次调用开始生效，
+        // 否则可能对同一个 provider 取到两份不同的熔断器。
+        var candidates = _set;
         var fallbackHops = 0;
         var attempted = false;
         string? lastReason = null;
 
-        foreach (var provider in _providers)
+        foreach (var provider in candidates.Providers)
         {
             ct.ThrowIfCancellationRequested();
-            var breaker = _breakers[provider.Id];
+            var breaker = candidates.Breakers[provider.Id];
             if (!provider.Enabled || !breaker.TryEnter(out _, out var admission))
             {
                 continue;
