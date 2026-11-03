@@ -86,6 +86,55 @@ export interface ZbaEventPage {
   generatedAt: string
 }
 
+/**
+ * 轨迹节点的形状：只有种类/状态/耗时/工具号/原因码与计数，**不含任何会话内容**。
+ */
+export interface ZbaTraceNode {
+  kind: string
+  status: string
+  durationMs: number
+  toolId?: string | null
+  reasonCode?: string | null
+  count?: number | null
+}
+
+/**
+ * 单轮轨迹的只读摘要。
+ *
+ * 缓存用量是三态：`cachedPromptTokens` 缺失/null 或 `cacheUsageUnknown` 为 true，
+ * 都表示供应商没报缓存用量 —— 面板必须显示「未知」而不是 0 命中。
+ */
+export interface ZbaTraceSummary {
+  runId: string
+  outcome: string
+  startedAt: string
+  totalMs: number
+  promptTokens: number
+  completionTokens: number
+  fallbackHops: number
+  /** null/缺失 = 供应商没报，不能当成 0 命中。 */
+  cachedPromptTokens?: number | null
+  cacheWriteTokens?: number | null
+  cacheUsageUnknown: boolean
+  nodes: ZbaTraceNode[]
+}
+
+/** 进程级缓存用量合计：未知轮数独立一列，不能并进 0 命中。 */
+export interface ZbaTraceCacheUsage {
+  doneTurns: number
+  activeTurns: number
+  capacity: number
+  cachedPromptTokens: number
+  cacheWriteTokens: number
+  cacheUnknownTurns: number
+}
+
+/** 轨迹页数据：最近若干轮的形状 + 进程级合计。 */
+export interface ZbaTracePage {
+  items: ZbaTraceSummary[]
+  cache: ZbaTraceCacheUsage
+}
+
 export interface ZbaSessionSummary {
   id: string
   name: string
@@ -380,6 +429,8 @@ export interface ZbaProviderOptions {
   azureApiVersion?: string
   anthropicVersion?: string
   timeoutSeconds?: number | null
+  /** 开启后 OpenAI 兼容通道带 prompt_cache_key，Anthropic 通道用 cache_control。 */
+  promptCache?: boolean
 }
 
 export interface ZbaRegisteredConfigurationView {
@@ -1210,6 +1261,20 @@ export class ZbaClient {
   }
 
   /**
+   * 读取最近若干轮的轨迹形状与进程级缓存用量。
+   *
+   * 只读端点 `GET /zba/v1/traces?limit=N`：后端刻意不接受会话过滤参数，
+   * 返回里也没有会话 key、消息正文或工具载荷 —— 页面只展示形状。
+   */
+  async listTraces(limit = 20): Promise<ZbaTracePage> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const response = await this.fetchJson(`/traces?${params.toString()}`, { method: 'GET' }, 'required')
+    if (!response.ok) throw this.errorFrom(response)
+    if (isTracePage(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
+  /**
    * 只读地确认当前 Bearer 是否具备 admin 角色：
 
    * GET /tasks/{id}/result 是 admin 路由；admin 对不存在的 id 得到 404 task_not_found，
@@ -1533,6 +1598,54 @@ function isEventPage(value: unknown): value is ZbaEventPage {
     && typeof value.generatedAt === 'string'
 }
 
+/** 缓存用量字段可能整段省略（ZbaJson 的 WhenWritingNull），也可能显式 null：都按「没报」处理。 */
+function isOptionalTokenCount(value: unknown): boolean {
+  return value === undefined || value === null || (isInteger(value) && value >= 0)
+}
+
+function isTraceNode(value: unknown): value is ZbaTraceNode {
+  return isRecord(value)
+    && typeof value.kind === 'string'
+    && typeof value.status === 'string'
+    && isInteger(value.durationMs) && value.durationMs >= 0
+    && isOptionalString(value.toolId)
+    && isOptionalString(value.reasonCode)
+    && (value.count === undefined || value.count === null || isInteger(value.count))
+}
+
+function isTraceSummary(value: unknown): value is ZbaTraceSummary {
+  return isRecord(value)
+    && typeof value.runId === 'string' && value.runId.length > 0
+    && typeof value.outcome === 'string'
+    && typeof value.startedAt === 'string'
+    && isInteger(value.totalMs) && value.totalMs >= 0
+    && isInteger(value.promptTokens) && value.promptTokens >= 0
+    && isInteger(value.completionTokens) && value.completionTokens >= 0
+    && isInteger(value.fallbackHops) && value.fallbackHops >= 0
+    && isOptionalTokenCount(value.cachedPromptTokens)
+    && isOptionalTokenCount(value.cacheWriteTokens)
+    && typeof value.cacheUsageUnknown === 'boolean'
+    && Array.isArray(value.nodes)
+    && value.nodes.every(isTraceNode)
+}
+
+function isTraceCacheUsage(value: unknown): value is ZbaTraceCacheUsage {
+  return isRecord(value)
+    && isInteger(value.doneTurns) && value.doneTurns >= 0
+    && isInteger(value.activeTurns) && value.activeTurns >= 0
+    && isInteger(value.capacity) && value.capacity >= 0
+    && isOptionalTokenCount(value.cachedPromptTokens)
+    && isOptionalTokenCount(value.cacheWriteTokens)
+    && isInteger(value.cacheUnknownTurns) && value.cacheUnknownTurns >= 0
+}
+
+function isTracePage(value: unknown): value is ZbaTracePage {
+  return isRecord(value)
+    && Array.isArray(value.items)
+    && value.items.every(isTraceSummary)
+    && isTraceCacheUsage(value.cache)
+}
+
 function isTaskCancelResult(value: unknown): value is ZbaTaskCancelResult {
   return isRecord(value)
     && typeof value.state === 'number'
@@ -1690,6 +1803,7 @@ function isProviderOptions(value: unknown): value is ZbaProviderOptions {
     && (value.azureApiVersion === undefined || typeof value.azureApiVersion === 'string')
     && (value.anthropicVersion === undefined || typeof value.anthropicVersion === 'string')
     && (value.timeoutSeconds === undefined || value.timeoutSeconds === null || (isInteger(value.timeoutSeconds) && value.timeoutSeconds > 0))
+    && (value.promptCache === undefined || typeof value.promptCache === 'boolean')
 }
 
 function isRegisteredView(value: unknown): value is ZbaRegisteredConfigurationView {

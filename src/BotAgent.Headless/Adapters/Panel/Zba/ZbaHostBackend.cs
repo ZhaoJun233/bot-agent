@@ -38,6 +38,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     private readonly ZbaTaskRegistry _tasks;
     private readonly Action<string>? _log;
     private readonly BotAgent.Services.Ops.DatabaseBackupService? _backups;
+    private readonly BotAgent.Services.Ops.TurnTraceStore? _traces;
     private int _disposed;
 
     internal ZbaHostBackend(
@@ -61,7 +62,8 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         BotAgent.Model.ProviderModelDiscovery? discovery = null,
         BotAgent.Services.Conversations.ConversationRegistry? quotaRegistry = null,
         TenantQuotaStore? quotaStore = null,
-        BotAgent.Services.Ops.DatabaseBackupService? backups = null)
+        BotAgent.Services.Ops.DatabaseBackupService? backups = null,
+        BotAgent.Services.Ops.TurnTraceStore? traces = null)
     {
         _box = box;
         _hotReload = hotReload;
@@ -82,6 +84,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _quotaRegistry = quotaRegistry;
         _quotaStore = quotaStore;
         _backups = backups;
+        _traces = traces;
         // 执行与状态在 Engine 的任务运行时（ADR-0002）；registry 只做通道适配（幂等/回执/事件/结果投影）。
         // 台账（#116）在这里注入：运行时只管写，SQLite 细节留在 Adapters/Persistence。
         var ledger = new AgentTaskLedgerStore();
@@ -96,6 +99,48 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     }
 
     internal ZbaTaskRegistry Tasks => _tasks;
+
+    /// <summary>
+    /// 只读轨迹投影：只出形状（轮次/耗时/token/命中/未知轮数），**不带会话 key 与正文**。
+    /// 单轮缓存用量为 null 时保持 null，由面板显示"未知"，不要折成 0。
+    /// </summary>
+    public ValueTask<ZbaTracePage> ListTracesAsync(
+        ConfigurationCaller caller, int limit, CancellationToken ct = default)
+    {
+        var traces = _traces;
+        if (traces is null)
+            throw new ZbaBackendException(503, "traces_unavailable", "轨迹存储不可用。");
+
+        var bounded = Math.Clamp(limit, 1, 200);
+        var items = traces.Recent(bounded)
+            .Select(trace => new ZbaTraceSummary(
+                trace.RunId,
+                trace.Outcome,
+                trace.StartedAt,
+                trace.TotalMs,
+                trace.PromptTokens,
+                trace.CompletionTokens,
+                trace.FallbackHops,
+                trace.CachedPromptTokens,
+                trace.CacheWriteTokens,
+                trace.CacheUsageUnknown,
+                trace.Nodes.Select(node => new ZbaTraceNode(
+                    node.Kind.ToString(),
+                    node.Status,
+                    node.DurationMs,
+                    node.ToolId,
+                    node.ReasonCode,
+                    node.Count)).ToArray()))
+            .ToArray();
+        var cache = new ZbaTraceCacheUsage(
+            traces.DoneCount,
+            traces.ActiveCount,
+            BotAgent.Services.Ops.TurnTraceStore.Capacity,
+            traces.CachedPromptTokensTotal,
+            traces.CacheWriteTokensTotal,
+            traces.CacheUnknownTurnsTotal);
+        return ValueTask.FromResult(new ZbaTracePage(items, cache));
+    }
 
     public ValueTask<ZbaHealth> GetHealthAsync(CancellationToken ct = default)
     {

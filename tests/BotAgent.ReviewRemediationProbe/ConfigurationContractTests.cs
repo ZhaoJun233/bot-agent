@@ -1093,7 +1093,7 @@ internal static class ConfigurationContractTests
             ("--configuration-provider-routing", "CFG_CHILD provider-routing passed=25 failed=0"),
             ("--configuration-provider-refs", "CFG_CHILD provider-refs passed=35 failed=0"),
             ("--configuration-primary-facts", "CFG_CHILD primary-facts passed=20 failed=0"),
-            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=67 failed=0"),
+            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=68 failed=0"),
             ("--configuration-provider-writer-fence", "CFG_CHILD provider-writer-fence passed=11 failed=0"),
             ("--configuration-mood-persistence", "CFG_CHILD mood-persistence passed=22 failed=0"),
             ("--configuration-platform-policies", "CFG_CHILD platform-policies passed=72 failed=0"),
@@ -3420,7 +3420,8 @@ internal static class ConfigurationContractTests
                 Operations = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations") });
             ProviderEdit Edit(string id = "synthetic-secondary", FieldEdit<string> name = default, FieldEdit<string> url = default,
                 FieldEdit<string> model = default, FieldEdit<bool> enabled = default, FieldEdit<int> priority = default,
-                CredentialBindingEdit? binding = null) => new(new(id), new(name, priority, url, model, enabled, binding ?? CredentialBindingEdit.KeepExisting(), default, default));
+                CredentialBindingEdit? binding = null, FieldEdit<ModelProtocolOptions> options = default)
+                => new(new(id), new(name, priority, url, model, enabled, binding ?? CredentialBindingEdit.KeepExisting(), default, options));
             ConfigurationSaveRequest Request(params ProviderEdit[] edits) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(null, null, null, null, null, null, null,
                     new(ImmutableArray<PluginEnabledEdit>.Empty, edits.ToImmutableArray(), ImmutableArray<PolicyEdit>.Empty)), ImmutableArray<SecretEdit>.Empty);
@@ -3454,6 +3455,15 @@ internal static class ConfigurationContractTests
             var primary = read.View.Registered.Providers.Single(x => x.Key.Value == "primary");
             Check(ReferenceEquals(primary.ModelName, read.View.Model.Model) && ReferenceEquals(primary.BaseUrl, read.View.Model.ModelBaseUrl),
                 "primary_uses_canonical_read_fields");
+            // #138 ①：PromptCache 必须经「写库前冻结 → 持久化 → 回读」三轮都不丢，否则开关能打开却存不住。
+            var cacheVersion = Version();
+            Check((await store.SaveAsync(caller, Request(Edit(options: FieldEdit<ModelProtocolOptions>.Set(
+                    new ModelProtocolOptions(AzureDeployment: "synthetic-deployment", PromptCache: true)))))).Code
+                == ConfigurationResultCode.Ok && Version() == cacheVersion + 1
+                && providers.Find("synthetic-secondary")!.Options is { PromptCache: true, AzureDeployment: "synthetic-deployment" }
+                && (await store.ReadAsync(caller, ConfigurationReadKind.Editable)).View!.Registered.Providers
+                    .Single(x => x.Key.Value == "synthetic-secondary").Options?.PromptCache == true,
+                "prompt_cache_option_survives_freeze_persist_and_readback");
             var serialized = JsonSerializer.Serialize(read);
             Check(!serialized.Contains("synthetic-database-key", StringComparison.Ordinal)
                 && !serialized.Contains("synthetic-live-primary-key", StringComparison.Ordinal)
@@ -4050,7 +4060,7 @@ internal static class ConfigurationContractTests
     {
         internal List<string> Paths { get; } = new();
         public Task<BuiltRequest> BuildAsync(IReadOnlyList<ChatMessage> window, string systemContent, IReadOnlyCollection<long> quotableIds,
-            CancellationToken ct, BotAgent.Domain.Reply.SamplingProfile? sampling = null)
+            CancellationToken ct, BotAgent.Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
             => Task.FromResult(new BuiltRequest(new JsonObject { ["model"] = "synthetic-model" }, 0, new List<long>()));
         public Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct)
             => throw new InvalidOperationException("synthetic_unexpected_unrouted_send");

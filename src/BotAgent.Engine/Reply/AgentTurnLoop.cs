@@ -121,7 +121,9 @@ public sealed class AgentTurnLoop
                 enableToolRequest: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.FixedToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.FixedToolId),
                 // 自然对话驱动 agent：只有本轮够资格（开关开 + 白名单 + 在跟机器人说话）才会带上这段说明
                 toolList: string.Concat(_tools.Render(turn.Snapshot, turn.PlatformPolicy, caps), agentHint),
-                sampling: sampling);
+                sampling: sampling,
+                // 缓存作用域 = 本会话 key（只以哈希进请求体，是否真正发出由协议与开关决定）
+                promptCacheScope: conversationKey);
 
             // Charge each known completion before later tool/model/cancellation exits; aggregate remains reporting-only.
             recordCompletedStep?.Invoke(result);

@@ -26,7 +26,7 @@ internal static class ResponsesProtocol
                 input.Add(new JsonObject { ["type"] = "function_call", ["call_id"] = call["id"]?.DeepClone(), ["name"] = call["function"]?["name"]?.DeepClone(), ["arguments"] = call["function"]?["arguments"]?.DeepClone() });
         }
         var result = new JsonObject { ["input"] = input, ["stream"] = false };
-        ProtocolJson.Copy(chat, result, "model", "temperature", "top_p", "parallel_tool_calls");
+        ProtocolJson.Copy(chat, result, "model", "temperature", "top_p", "parallel_tool_calls", "prompt_cache_key");
         if ((chat["max_completion_tokens"] ?? chat["max_tokens"]) is { } max) result["max_output_tokens"] = max.DeepClone();
         if (chat["response_format"] is JsonObject format)
         {

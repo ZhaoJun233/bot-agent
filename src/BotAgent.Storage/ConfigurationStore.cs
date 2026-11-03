@@ -1400,7 +1400,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         var azureVersion = Text(options.AzureApiVersion, 64) ?? "2024-10-21";
         var anthropicVersion = Text(options.AnthropicVersion, 64) ?? "2023-06-01";
         var timeout = options.TimeoutSeconds is { } seconds ? Math.Clamp(seconds, 1, 300) : (int?)null;
-        return new(deployment, azureVersion, anthropicVersion, timeout);
+        // 保留式构造：新增字段（如 PromptCache）不能被位置构造重置成默认值。
+        return options with { AzureDeployment = deployment, AzureApiVersion = azureVersion, AnthropicVersion = anthropicVersion, TimeoutSeconds = timeout };
     }
 
     private static void ValidateUrl(string text)

@@ -16,6 +16,22 @@
 
 ### 变更
 
+- 输入缓存的最后两块（#138）：
+  - **供应商缓存控制参数（默认关）**：`ModelProtocolOptions.PromptCache`，随供应商配置持久化（面板供应商编辑器里是一个复选框）。
+    打开后 openai-compatible / responses / azure 通道在请求顶层带 `prompt_cache_key`，值是**稳定键的 SHA-256 前 32 位 hex**
+    （由会话 key 派生，原始 key 不出模型层）；anthropic 通道**不发**顶层字段，改在 system 块与最后一条消息的最后一个
+    content block 上挂 `cache_control: {"type":"ephemeral"}`；gemini / ollama 两种都不发。**关着时请求体与改动前逐字节一致**
+    （探针比较序列化字符串，不是「字段值为假」）。payload 里只放规范字段，由 `ModelProtocolAdapter` 按路由收口，
+    不给 20+ 参数的 `IModelClient.CompleteAsync` 加通道特判。
+  - **面板轨迹页**：新增**只读** ZBA 出口 `GET /zba/v1/traces`（Read、`traces.list`），返回最近若干轮轨迹的**形状**
+    （结局 / 耗时 / token / 节点列表）与缓存用量合计（完成轮、活跃轮、容量、命中量、写入量、**未知轮数**）；
+    刻意不返回会话 key 与消息正文。前端新增只读轨迹视图，**未知轮数单独显示**，不与「命中 0」混算；
+    缓存用量未知时 `cachedPromptTokens` / `cacheWriteTokens` 整个字段省略（`WhenWritingNull`），前端把缺失显示成「未知」。
+  - **真实命中证据：仍未取得**。本轮把部署链路两跳网关的源码读完了（字段会不会被改写），结论是**宿主发的
+    `prompt_cache_key` 最多是建议值**：入口网关会在 provider 需要时覆盖/在能力不支持时整段删除、上游 400 点名该字段后
+    还会永久剥离；命中口径本身也是网关归一化后的 `usage.prompt_tokens_details.cached_tokens`。工作区与部署机没有可直接
+    使用的模型凭据（部署机凭据需号主明确授权），所以如实记为「未取得真实证据」，验证配方写在
+    `docs/architecture/prompt-cache.md` §6.2（冷/热两打 + 改一个字作对照，排除网关常量回填的假命中）。
 - 任务级前置审批与票据防伪（#137）：审批接到**真实高风险执行点** —— 任务声明了 `bash` / `write` / `docker`
   且审批总开关打开时，受理阶段就停在 `WaitingApproval`，**执行器一次都不会被调用**（批之前零副作用）；批准后
   `Resume` 从同一条记录继续（不重发、不新建），结果仍回原会话。待批单在 `GET /zba/v1/approvals` 里以
@@ -51,8 +67,8 @@
   而不是 0，v13 之前的旧行读出来同样算「未知」。`/metrics` 增三个归档口径 gauge
   （`botagent_trace_archive_cached_prompt_tokens` / `…_cache_write_tokens` / `…_cache_unknown_turns`），
   `/api/dashboard` 的 `traces` 增三个字段。迁移只前向（v13 库用旧二进制会被 `database_schema_newer` 拒绝），
-  老库升级有独立用例（ReviewRemediationProbe 的 `--database-legacy-cache`）。面板前端目前**还没有轨迹页**，
-  这三个数只在 /metrics 与 /api/dashboard 可见；缓存控制参数与真实命中证据同样还没做，三件一起记在 #138。详见 `docs/architecture/prompt-cache.md` §5.1。
+  老库升级有独立用例（ReviewRemediationProbe 的 `--database-legacy-cache`）。面板轨迹页、供应商缓存控制参数与真实命中证据
+  在 #138 里收口（见本段上方的 Unreleased 条目；真实证据仍未取得）。详见 `docs/architecture/prompt-cache.md` §5.1 / §6。
 - Agent Runtime 部署 / 验证 / 回滚文档（#119）：`docs/operations/agent-runtime-deployment.md` 写清 schema 11→12
   的自动迁移与**只前向**边界、ZBA 任务端的验证命令（含"重启后旧任务按哪张表收口、不重做"）、
   回滚的停写前置与两种形态（只换二进制 / 连库一起退回），以及只写形状与计数的运维观测点；

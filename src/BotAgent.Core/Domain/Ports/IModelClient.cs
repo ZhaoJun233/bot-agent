@@ -58,7 +58,10 @@ public interface IModelClient
     // 为什么从外面传进来而不是在客户端里现算：策略快照属于本轮（V3 §5.3），
     // 客户端只该"说了什么"，不该自己决定"哪些工具能用"。
     string? toolList = null,
-    SamplingProfile? sampling = null);
+    SamplingProfile? sampling = null,
+
+    // 提示词缓存作用域（会话 key）：只以哈希形式进请求体；null = 不加缓存键（开关见 ModelProtocolOptions.PromptCache）。
+    string? promptCacheScope = null);
 
     /// <summary>一次"问一句、要一段文字"的调用（服务器 agent 的工具循环用它）。</summary>
     Task<string?> CompleteChatAsync(

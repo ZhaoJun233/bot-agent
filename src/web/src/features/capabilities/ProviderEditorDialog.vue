@@ -59,6 +59,8 @@ const commit = useConfigurationCommit({
 })
 const { phase, pendingKey, error: commitError, notice, locked } = commit
 const protocol = computed(() => providerProtocols.find((item) => item.id === draft.protocol))
+/** 缓存控制参数只对 OpenAI 兼容与 Anthropic 协议有意义；其它协议不显示开关。 */
+const promptCacheProtocol = computed(() => draft.protocol === 'openai-chat' || draft.protocol === 'openai-responses' || draft.protocol === 'azure-openai' || draft.protocol === 'anthropic-messages')
 const readOnly = (field: 'name' | 'baseUrl' | 'modelName'): boolean => exists.value && editableText(baseline.value?.[field]) === null
 const credentialLabels: Record<number, string> = { 0: '未配置', 1: '共用主模型凭据', 2: '独立凭据已绑定', 3: '旧凭据需人工核对' }
 // 模型发现是只读的辅助能力：失败时保留输入框，让用户手动填写。
@@ -249,6 +251,10 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
           <label>Azure API 版本<input v-model="draft.azureApiVersion" data-testid="provider-azure-version" required></label>
         </div>
         <label v-if="draft.protocol === 'anthropic-messages'">Anthropic API 版本<input v-model="draft.anthropicVersion" data-testid="provider-anthropic-version" required></label>
+        <template v-if="promptCacheProtocol">
+          <label class="check-label"><input v-model="draft.promptCache" data-testid="provider-prompt-cache" type="checkbox">发送供应商缓存控制参数</label>
+          <p class="field-hint" data-testid="provider-prompt-cache-hint">默认关；开启后 OpenAI 兼容通道（含 Azure）会带 prompt_cache_key，Anthropic 通道会用 cache_control，其它协议不发缓存参数。</p>
+        </template>
         <section class="credential-section" aria-labelledby="provider-credential-heading">
           <h3 id="provider-credential-heading">凭据</h3>
           <p class="field-hint" data-testid="provider-credential-status">{{ exists ? credentialLabels[baseline?.credential ?? 0] : '新提供商尚未配置凭据' }}。不会读取或显示已有密钥。</p>

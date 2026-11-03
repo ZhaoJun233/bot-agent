@@ -40,7 +40,8 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
         BotAgent.Model.ProviderModelDiscovery? discovery = null,
         TenantQuotaStore? quotas = null,
-        BotAgent.Services.Ops.DatabaseBackupService? backups = null)
+        BotAgent.Services.Ops.DatabaseBackupService? backups = null,
+        BotAgent.Services.Ops.TurnTraceStore? traces = null)
     {
         var options = FromEnvironment();
         var version = typeof(ZbaRuntime).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
@@ -74,7 +75,8 @@ internal sealed class ZbaRuntime : IAsyncDisposable
             discovery,
             registry,
             quotas ?? new TenantQuotaStore(),
-            backups);
+            backups,
+            traces);
         var endpoint = new ZbaEndpoint(backend, options, now, version, instanceId,
             message => FileLog.Write("Zba", message));
         return new ZbaRuntime(endpoint, backend);

@@ -304,4 +304,52 @@ describe('ZbaClient', () => {
       .resolves.toMatchObject({ code: 5 })
   })
 
+  it('listTraces 只读端点带 Bearer 与 limit，接受省略 null 字段的回包', async () => {
+    const { fetchImpl, calls } = fakeFetch(jsonResponse({
+      items: [{
+        runId: 't12',
+        outcome: 'replied',
+        startedAt: '2026-11-03T10:00:00+08:00',
+        totalMs: 1234,
+        promptTokens: 1200,
+        completionTokens: 88,
+        fallbackHops: 0,
+        cachedPromptTokens: 1024,
+        // cacheWriteTokens 缺失：ZbaJson 把 null 整段省略，缺失同样按「未知」处理。
+        cacheUsageUnknown: false,
+        nodes: [{ kind: 'Model', status: 'ok', durationMs: 900 }]
+      }],
+      cache: { doneTurns: 37, activeTurns: 1, capacity: 50, cachedPromptTokens: 12345, cacheWriteTokens: 0, cacheUnknownTurns: 4 }
+    }))
+    const client = new ZbaClient({ baseUrl: 'http://z.example/zba/v1/', token: 'secret-token', fetchImpl })
+
+    const page = await client.listTraces(20)
+
+    expect(calls[0]?.url).toBe('http://z.example/zba/v1/traces?limit=20')
+    expect(calls[0]?.init.method).toBe('GET')
+    expect(new Headers(calls[0]?.init.headers).get('Authorization')).toBe('Bearer secret-token')
+    expect(page.cache.cacheUnknownTurns).toBe(4)
+    expect(page.items[0]?.cacheWriteTokens).toBeUndefined()
+  })
+
+  it('listTraces 拒绝缺少未知轮数或缓存用量非数字的畸形回包', async () => {
+    const badCache = fakeFetch(jsonResponse({
+      items: [],
+      cache: { doneTurns: 0, activeTurns: 0, capacity: 50, cachedPromptTokens: 0, cacheWriteTokens: 0 }
+    }))
+    await expect(new ZbaClient({ token: 'x', fetchImpl: badCache.fetchImpl }).listTraces())
+      .rejects.toMatchObject({ code: 'invalid_json' })
+
+    const badItem = fakeFetch(jsonResponse({
+      items: [{
+        runId: 't12', outcome: 'replied', startedAt: '2026-11-03T10:00:00+08:00',
+        totalMs: 1, promptTokens: 1, completionTokens: 1, fallbackHops: 0,
+        cachedPromptTokens: 'many', cacheUsageUnknown: false, nodes: []
+      }],
+      cache: { doneTurns: 1, activeTurns: 0, capacity: 50, cachedPromptTokens: 0, cacheWriteTokens: 0, cacheUnknownTurns: 1 }
+    }))
+    await expect(new ZbaClient({ token: 'x', fetchImpl: badItem.fetchImpl }).listTraces())
+      .rejects.toMatchObject({ code: 'invalid_json' })
+  })
+
 })

@@ -584,6 +584,24 @@ public static partial class Program
         Check("★ 关闭审批开关后不再产生待批单", approvalRestore.Code == 200,
             approvalRestore.Code + " " + approvalRestore.Body);
 
+        // #138：轨迹只读出口。只验形状与隐私边界，不断言具体条数（进程内台账容量有限、时序也不保证）。
+        var traces = await ZbaAsync(http, "GET", root + "/traces?limit=5", readToken);
+        var traceBody = traces.Body ?? string.Empty;
+        Check("★ 轨迹只读出口可查且只回形状", traces.Status == 200
+            && JsonNode.Parse(traceBody) is JsonObject tracePage
+            && tracePage["items"] is JsonArray
+            && tracePage["cache"] is JsonObject cacheUsage
+            && cacheUsage["doneTurns"] is not null
+            && cacheUsage["capacity"] is not null
+            && cacheUsage["cacheUnknownTurns"] is not null,
+            traces.Status + " " + traceBody[..Math.Min(200, traceBody.Length)]);
+        Check("★ 轨迹出口不暴露会话标识与正文",
+            traces.Status == 200
+            && (panelSessionId is null || !traceBody.Contains(panelSessionId, StringComparison.Ordinal))
+            && !traceBody.Contains("conversationKey", StringComparison.Ordinal)
+            && !traceBody.Contains("\"content\"", StringComparison.Ordinal),
+            "trace payload leaked session scope");
+
 
         // 失败任务：mock 命中标记直接 400，让真宿主拿到确定性的 agent 失败。
         agentAi.FailChatMarker = "synthetic zba failure";

@@ -1,4 +1,4 @@
-import type { ZbaFieldEdit, ZbaProviderConfigurationView, ZbaProviderNameEdit, ZbaReadField, ZbaSecretEdit } from '../../api/zba'
+import type { ZbaFieldEdit, ZbaProviderConfigurationView, ZbaProviderNameEdit, ZbaProviderOptions, ZbaReadField, ZbaSecretEdit } from '../../api/zba'
 import { endpointError, isProviderProtocol, protocolFromWire, protocolToWire, type ProviderProtocol } from './provider-protocols'
 
 export interface ProviderDraft {
@@ -11,6 +11,8 @@ export interface ProviderDraft {
   azureDeployment: string
   azureApiVersion: string
   anthropicVersion: string
+  /** 是否让通道发送供应商缓存控制参数；默认关。 */
+  promptCache: boolean
   credentialMode: 'keep' | 'primary' | 'none' | 'independent'
   /** 独立凭据键（非机密）：服务端用它把新密钥绑定到这条路由。 */
   credentialKey: string
@@ -37,6 +39,7 @@ export function providerDraft(provider?: ZbaProviderConfigurationView): Provider
     azureDeployment: provider?.options?.azureDeployment ?? '',
     azureApiVersion: provider?.options?.azureApiVersion ?? '2024-10-21',
     anthropicVersion: provider?.options?.anthropicVersion ?? '2023-06-01',
+    promptCache: provider?.options?.promptCache ?? false,
     credentialMode: 'keep',
     credentialKey: provider?.credentialKey ?? '',
     credentialSecret: ''
@@ -71,14 +74,18 @@ export function providerEdit(key: string, draft: ProviderDraft, provider?: ZbaPr
     return !provider || raw.trim() !== editableText(field) ? { kind: 1, value: raw.trim() } : keep()
   }
   const field = (value: unknown, previous: unknown): ZbaFieldEdit => remove || (provider && value === previous) ? keep() : { kind: 1, value }
-  const options = {
+  const options: ZbaProviderOptions = {
     ...provider?.options,
     azureDeployment: draft.azureDeployment.trim() || null,
     azureApiVersion: draft.azureApiVersion.trim(),
     anthropicVersion: draft.anthropicVersion.trim()
   }
+  // promptCache 默认关：未勾选且原本没有该字段时整段省略，提交内容与加开关之前逐字一致。
+  if (draft.promptCache) options.promptCache = true
+  else if (provider?.options?.promptCache === true) options.promptCache = false
+  else if (!provider?.options || !('promptCache' in provider.options)) delete options.promptCache
   const before = providerDraft(provider)
-  const optionsChanged = draft.azureDeployment !== before.azureDeployment || draft.azureApiVersion !== before.azureApiVersion || draft.anthropicVersion !== before.anthropicVersion
+  const optionsChanged = draft.azureDeployment !== before.azureDeployment || draft.azureApiVersion !== before.azureApiVersion || draft.anthropicVersion !== before.anthropicVersion || draft.promptCache !== before.promptCache
   // kind 3 = 先按 credentialKey 绑定独立凭据，再由 secrets 里的同名 key 送出新密钥。
   const credential = (): { kind: 0 | 1 | 2 | 3; key?: string } => {
     if (remove || draft.credentialMode === 'keep') return { kind: 0 }

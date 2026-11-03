@@ -5,6 +5,7 @@ import OverviewPage from './features/overview/OverviewPage.vue'
 import ConfigurationPage from './features/configuration/ConfigurationPage.vue'
 import CapabilitiesPage from './features/capabilities/CapabilitiesPage.vue'
 import TasksPage from './features/tasks/TasksPage.vue'
+import TracesPage from './features/traces/TracesPage.vue'
 import AppIcon from './shared/ui/AppIcon.vue'
 import BrandMark from './shared/ui/BrandMark.vue'
 import ThemeToggle from './shared/ui/ThemeToggle.vue'
@@ -31,7 +32,7 @@ const adminError = ref<UiError | null>(null)
 const loading = ref(false)
 const connecting = ref(false)
 const lastSuccessAt = ref<string | null>(null)
-const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks'>('overview')
+const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks' | 'traces'>('overview')
 const configurationPage = ref<InstanceType<typeof ConfigurationPage> | null>(null)
 // 配置页首次进入后保持挂载（v-show），草稿因此跨页保留；锁定/换令牌时才卸载。
 const configurationMounted = ref(false)
@@ -41,11 +42,14 @@ const capabilitiesMounted = ref(false)
 const tasksPage = ref<InstanceType<typeof TasksPage> | null>(null)
 // 任务页同样常驻：提交记录与幂等键要能跨视图存活。
 const tasksMounted = ref(false)
+const tracesPage = ref<InstanceType<typeof TracesPage> | null>(null)
+// 轨迹页同样首次进入后常驻（v-show）：再次进入只需重读。
+const tracesMounted = ref(false)
 const sessionNotice = ref<string | null>(null)
 const configDraftCount = computed(() => configurationPage.value?.draftCount ?? 0)
 const abilityDraftCount = computed(() => capabilitiesPage.value?.configurationDraftCount ?? 0)
 
-type GuideIcon = 'overview' | 'capabilities' | 'config' | 'tasks'
+type GuideIcon = 'overview' | 'capabilities' | 'config' | 'tasks' | 'traces'
 /** 每个页面顶部的「这一页是干什么的」：一句话用途 + 两三条怎么用。 */
 const pageGuides: Record<typeof view.value, { title: string; icon: GuideIcon; summary: string; tips: string[] }> = {
   overview: {
@@ -71,6 +75,12 @@ const pageGuides: Record<typeof view.value, { title: string; icon: GuideIcon; su
     icon: 'tasks',
     summary: '提交后台 Agent 任务、查看进度结果，并处理等待人工审批的请求。',
     tips: ['填写来源与提示词后提交；同一幂等键重复提交不会重复执行。', '待审批列表里逐条批准或拒绝。', '点开任务可查看结果摘要，运行中的任务可以取消。']
+  },
+  traces: {
+    title: '轨迹与缓存',
+    icon: 'traces',
+    summary: '最近若干轮的耗时、token 与提示缓存用量；只读，不含任何会话内容。',
+    tips: ['汇总里的「未知轮数」单独统计供应商没报缓存用量的轮次，不等同于 0 命中。', '明细里没有缓存用量显示「未知」，真正 0 命中才显示 0。', '这里只展示形状：没有会话 key、消息正文或工具载荷。']
   }
 }
 const currentGuide = computed(() => pageGuides[view.value])
@@ -97,6 +107,7 @@ function clearSession(): void {
   // Clear sensitive UI now; minimal receipt keys survive in the identity-scoped registry.
   capabilitiesMounted.value = false
   tasksMounted.value = false
+  tracesMounted.value = false
   sessionGeneration += 1
   token.value = ''
   mode.value = 'read'
@@ -241,6 +252,10 @@ async function refresh(): Promise<void> {
     await tasksPage.value?.reload()
     return
   }
+  if (view.value === 'traces') {
+    await tracesPage.value?.reload()
+    return
+  }
   await load()
 }
 
@@ -307,6 +322,21 @@ async function openTasks(event?: MouseEvent): Promise<void> {
   if (!firstVisit) await tasksPage.value?.reload()
 }
 
+async function openTraces(event?: MouseEvent): Promise<void> {
+  if (view.value === 'configuration') {
+    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
+    if (!allowed) return
+  }
+  if (view.value === 'traces') return
+  capabilitiesPage.value?.discardSecretsOnLeave()
+  const firstVisit = !tracesMounted.value
+  tracesMounted.value = true
+  view.value = 'traces'
+  await nextTick()
+  // 首次进入由 onMounted 读取；再次进入只重读最近若干轮。
+  if (!firstVisit) await tracesPage.value?.reload()
+}
+
 /** 欢迎页快捷卡片：走与侧栏相同的切页路径（含未保存保护与首次挂载）。 */
 async function navigateFromOverview(target: 'capabilities' | 'configuration' | 'tasks', event: MouseEvent): Promise<void> {
   if (target === 'capabilities') await openCapabilities(event)
@@ -322,6 +352,7 @@ async function lock(event?: MouseEvent): Promise<void> {
   configurationMounted.value = false
   capabilitiesMounted.value = false
   tasksMounted.value = false
+  tracesMounted.value = false
   connectSequence += 1
   clearSession()
   loadSequence += 1
@@ -508,6 +539,17 @@ onMounted(load)
             <AppIcon name="tasks" />
             <span class="side-nav-text"><span>Agent 任务</span></span>
           </button>
+          <button
+            type="button"
+            class="side-nav-item"
+            :class="{ active: view === 'traces' }"
+            :aria-current="view === 'traces' ? 'page' : undefined"
+            data-testid="nav-traces"
+            @click="openTraces($event)"
+          >
+            <AppIcon name="traces" />
+            <span class="side-nav-text"><span>轨迹与缓存</span></span>
+          </button>
         </nav>
 
         <div class="sidebar-note">
@@ -602,6 +644,13 @@ onMounted(load)
             :active="view === 'tasks'"
             @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
+          />
+          <TracesPage
+            v-if="tracesMounted"
+            v-show="view === 'traces'"
+            ref="tracesPage"
+            :client="client"
+            :active="view === 'traces'"
           />
           <ConfigurationPage
             :active="view === 'configuration'"

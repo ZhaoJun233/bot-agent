@@ -946,7 +946,7 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
         {
             Calls++;
             _searchTexts.Add(searchText);
@@ -2208,7 +2208,7 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
             => Task.FromResult(new CompletionResult(null, null, null));
 
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
@@ -2242,7 +2242,7 @@ public static partial class Program
         public FakeModelTransport(bool emptyChoices = false) => _emptyChoices = emptyChoices;
 
         public Task<BuiltRequest> BuildAsync(IReadOnlyList<ChatMessage> window, string systemContent,
-            IReadOnlyCollection<long> quotableIds, CancellationToken ct, Domain.Reply.SamplingProfile? sampling = null)
+            IReadOnlyCollection<long> quotableIds, CancellationToken ct, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
             => Task.FromResult(new BuiltRequest(new JsonObject { ["model"] = "probe" }, 0, new List<long>()));
 
         public Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct)

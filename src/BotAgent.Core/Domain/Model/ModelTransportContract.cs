@@ -36,4 +36,8 @@ public sealed record ModelProtocolOptions(
     string? AzureDeployment = null,
     string AzureApiVersion = "2024-10-21",
     string AnthropicVersion = "2023-06-01",
-    int? TimeoutSeconds = null);
+    int? TimeoutSeconds = null,
+    // 供应商提示词缓存（默认关）：开启后 OpenAI 兼容协议（OpenAiChat / OpenAiResponses / AzureOpenAi）在请求体带
+    // prompt_cache_key，AnthropicMessages 在 content block 上带 cache_control:{"type":"ephemeral"}；
+    // Gemini / Ollama 不支持，保持原样。关着时线上请求体与改动前逐字一致。
+    bool PromptCache = false);

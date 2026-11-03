@@ -272,6 +272,17 @@ internal static partial class ZbaOpenApi
             ("reasonCode", NullableString())),
         ["ZbaEventPage"] = Object(("items", Array(Ref("ZbaEvent"))), ("nextSequence", Integer()),
             ("resyncRequired", Boolean()), ("generatedAt", String())),
+        ["ZbaTraceNode"] = Object(("kind", String()), ("status", String()), ("durationMs", Integer()),
+            ("toolId", NullableString()), ("reasonCode", NullableString()), ("count", NullableInteger())),
+        ["ZbaTraceSummary"] = Object(("runId", String()), ("outcome", String()), ("startedAt", String()),
+            ("totalMs", Integer()), ("promptTokens", Integer()), ("completionTokens", Integer()),
+            ("fallbackHops", Integer()), ("cachedPromptTokens", NullableInteger()),
+            ("cacheWriteTokens", NullableInteger()), ("cacheUsageUnknown", Boolean()),
+            ("nodes", Array(Ref("ZbaTraceNode")))),
+        ["ZbaTraceCacheUsage"] = Object(("doneTurns", Integer()), ("activeTurns", Integer()),
+            ("capacity", Integer()), ("cachedPromptTokens", Integer()), ("cacheWriteTokens", Integer()),
+            ("cacheUnknownTurns", Integer())),
+        ["ZbaTracePage"] = Object(("items", Array(Ref("ZbaTraceSummary"))), ("cache", Ref("ZbaTraceCacheUsage"))),
         // 插件市场：manifest 是宿主的强类型契约，这里只表达形状（additionalProperties 允许其内部字段演进）。
         ["PluginManifest"] = new JsonObject
         {

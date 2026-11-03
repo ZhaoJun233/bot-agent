@@ -4,7 +4,7 @@ namespace BotAgent.Model.Protocols;
 
 internal static class AnthropicProtocol
 {
-    internal static JsonObject Request(JsonObject chat)
+    internal static JsonObject Request(JsonObject chat, bool promptCache = false)
     {
         var messages = new JsonArray(); var system = new JsonArray();
         foreach (var m in ProtocolJson.Array(chat["messages"]).OfType<JsonObject>())
@@ -30,6 +30,12 @@ internal static class AnthropicProtocol
                 foreach (var part in parts) ((JsonArray)last["content"]!).Add(part?.DeepClone());
             else messages.Add(new JsonObject { ["role"] = mappedRole, ["content"] = parts });
         }
+        // 缓存断点只打两个：system 末尾 + 最后一条消息的最后一个 content 块（Anthropic 上限 4 个，留余量给将来的工具缓存）。
+        if (promptCache)
+        {
+            Ephemeral(system.Count > 0 ? system[^1] : null);
+            if (messages.Count > 0 && messages[^1]?["content"] is JsonArray lastContent && lastContent.Count > 0) Ephemeral(lastContent[^1]);
+        }
         var result = new JsonObject { ["messages"] = messages, ["max_tokens"] = chat["max_tokens"]?.DeepClone() ?? JsonValue.Create(2048), ["stream"] = false };
         if (system.Count > 0) result["system"] = system;
         ProtocolJson.Copy(chat, result, "model");
@@ -41,6 +47,11 @@ internal static class AnthropicProtocol
         if (chat["tool_choice"] is JsonObject choice) result["tool_choice"] = new JsonObject { ["type"] = "tool", ["name"] = choice["function"]?["name"]?.DeepClone() };
         else if (chat["tool_choice"] is { } mode) result["tool_choice"] = new JsonObject { ["type"] = ProtocolJson.Text(mode) == "required" ? "any" : ProtocolJson.Text(mode) };
         return result;
+    }
+    /// <summary>在 content block 上标记一个短暂缓存断点（Anthropic 只认这个形状）。</summary>
+    private static void Ephemeral(JsonNode? block)
+    {
+        if (block is JsonObject part) part["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
     }
     internal static JsonObject Response(JsonObject root)
     {

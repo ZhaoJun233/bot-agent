@@ -14,9 +14,10 @@ namespace BotAgent.Domain.Ports;
 public interface IModelTransport
 {
     /// <summary>组装这一次的请求体（把上下文窗口、系统提示词、可引用消息与图片都算进去）。</summary>
+    /// <param name="promptCacheScope">提示词缓存作用域（会话 key）：只以哈希形式进请求体；null = 不加缓存键。</param>
     Task<BuiltRequest> BuildAsync(
         IReadOnlyList<ChatMessage> window, string systemContent, IReadOnlyCollection<long> quotableIds, CancellationToken ct,
-        Reply.SamplingProfile? sampling = null);
+        Reply.SamplingProfile? sampling = null, string? promptCacheScope = null);
 
     /// <summary>把请求发出去（含三条兜底重试）；返回拿到的 JSON 与"是不是去掉图片后重试成功的"。</summary>
     Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct);

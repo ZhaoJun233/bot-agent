@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using BotAgent.Model.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -75,7 +76,7 @@ public class ModelTransport : IModelTransport
     /// </summary>
     public async Task<BuiltRequest> BuildAsync(
         IReadOnlyList<ChatMessage> window, string systemContent, IReadOnlyCollection<long> quotableIds, CancellationToken ct,
-        Domain.Reply.SamplingProfile? sampling = null)
+        Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
     {
         var messages = new JsonArray();
         messages.Add(new JsonObject { ["role"] = "system", ["content"] = systemContent });
@@ -208,8 +209,19 @@ public class ModelTransport : IModelTransport
             }
         }
 
+        // 提示词缓存的稳定键：只把作用域（会话 key）的 SHA-256 前 128 位写进请求体，原始会话 key 不出模型层；
+        // 是否真的发出去由 ModelProtocolAdapter 按「协议 + ModelProtocolOptions.PromptCache」收口。
+        if (!string.IsNullOrEmpty(promptCacheScope))
+        {
+            payload["prompt_cache_key"] = PromptCacheKey(promptCacheScope);
+        }
+
         return new BuiltRequest(payload, attachedImages, attachedImageIds);
     }
+
+    /// <summary>缓存作用域 → 稳定的 32 位小写十六进制键（带域前缀，避免跨用途撞哈希）。</summary>
+    private static string PromptCacheKey(string scope)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("prompt-cache:v1:" + scope)))[..32].ToLowerInvariant();
 
     /// <summary>
     /// 检测模型是否支持自定义 temperature 与 top_p 超参数（推理模型如 o1/o3/reasoner 不支持自定义采样参数）。

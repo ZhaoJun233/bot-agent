@@ -21,11 +21,16 @@ public static class ModelProtocolAdapter
             throw new ModelFault("model_credential_missing");
         var body = (JsonObject)payload.DeepClone();
         if (body["model"] is null) body["model"] = route.ModelName;
+        // 提示词缓存按协议收口：只有声明支持的协议且配置开关打开时才让 prompt_cache_key 上线。
+        // Anthropic 对未知顶层字段会报错（改走 content block 的 cache_control），Gemini / Ollama 保持原样。
+        var promptCache = route.Options?.PromptCache == true;
+        var promptCacheKeySupported = route.Protocol is ModelProtocol.OpenAiChat or ModelProtocol.OpenAiResponses or ModelProtocol.AzureOpenAi;
+        if (!promptCache || !promptCacheKeySupported) body.Remove("prompt_cache_key");
         var url = ProtocolEndpoint.Build(route, ProtocolJson.Text(body["model"]), stream);
         body = route.Protocol switch
         {
             ModelProtocol.OpenAiResponses => ResponsesProtocol.Request(body),
-            ModelProtocol.AnthropicMessages => AnthropicProtocol.Request(body),
+            ModelProtocol.AnthropicMessages => AnthropicProtocol.Request(body, promptCache),
             ModelProtocol.GeminiGenerateContent => GeminiProtocol.Request(body),
             ModelProtocol.Ollama => OllamaProtocol.Request(body),
             _ => body

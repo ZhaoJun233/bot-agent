@@ -192,4 +192,17 @@ describe('provider editor safe configuration lifecycle', () => {
     wrapper.unmount(); mounted.splice(mounted.indexOf(wrapper), 1); await flushPromises()
     expect(document.activeElement).toBe(trigger)
   })
+  it('shows the prompt cache switch only for protocols that send cache controls', async () => {
+    const { wrapper } = mountEditor(); await flushPromises()
+    expect(wrapper.find('[data-testid="provider-prompt-cache"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="provider-prompt-cache-hint"]').text()).toContain('prompt_cache_key')
+    for (const protocol of ['gemini-generate-content', 'ollama'] as const) {
+      await wrapper.get('[data-testid="provider-protocol"]').setValue(protocol)
+      expect(wrapper.find('[data-testid="provider-prompt-cache"]').exists()).toBe(false)
+    }
+    for (const protocol of ['openai-chat', 'openai-responses', 'azure-openai', 'anthropic-messages'] as const) {
+      await wrapper.get('[data-testid="provider-protocol"]').setValue(protocol)
+      expect(wrapper.find('[data-testid="provider-prompt-cache"]').exists()).toBe(true)
+    }
+  })
 })

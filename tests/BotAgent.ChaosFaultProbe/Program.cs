@@ -540,7 +540,7 @@ private sealed class SyntheticHttpFetcher : IHttpFetcher
         public Task<BuiltRequest> BuildAsync(
             IReadOnlyList<BotAgent.Domain.Conversation.ChatMessage> _, string __,
             IReadOnlyCollection<long> ___, CancellationToken ____,
-            BotAgent.Domain.Reply.SamplingProfile? _____ = null) =>
+            BotAgent.Domain.Reply.SamplingProfile? _____ = null, string? ______ = null) =>
             Task.FromResult(new BuiltRequest(new JsonObject(), 0, new List<long>()));
 
         public Task<SendOutcome> SendAsync(

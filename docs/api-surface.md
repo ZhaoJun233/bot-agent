@@ -21,42 +21,43 @@
 | 方法 | 路径 | 作用域 | operationId | 用途 |
 | :--- | :--- | :--- | :--- | :--- |
 | `GET` | `/zba/v1/health` | Read · **匿名** | `health` | 存活探针：进程是否起来、契约是否已加载。**唯一不需要令牌的 ZBA 端点** |
-| `GET` | `/zba/v1/meta` | Read · **匿名** | `meta` | 契约版本号与支持的能力清单（前端用它校验 `EXPECTED_CONTRACT`） |
-| `GET` | `/zba/v1/openapi.json` | Read · **匿名** | `openapi` | 本服务**运行时生成**的 OpenAPI 3.1 文档 —— 逐端点手册的权威来源就是它 |
-| `GET` | `/zba/v1/quotas` | Read · **匿名** | `quotas.list` | 读已登记 SourceKey 的每日 Token 配额上限与已用量 |
-| `POST` | `/zba/v1/quotas/save` | Admin · **匿名** | `quotas.save` | 保存单个配额上限（CAS 期望版本 + 幂等键 + 持久化回执） |
-| `POST` | `/zba/v1/quotas/find` | Admin · **匿名** | `quotas.find` | 按幂等键对账一次配额保存的最终状态 |
-| `GET` | `/zba/v1/status` | Read · **匿名** | `status` | 安全的总体与分组件状态（不含正文、不含密钥） |
-| `GET` | `/zba/v1/sessions` | Read · **匿名** | `sessions.list` | 按工作区 SourceKey 列出服务器 Agent 会话（脱敏形状） |
-| `POST` | `/zba/v1/sessions/ensure` | Admin · **匿名** | `sessions.ensure` | 确保当前服务器 Agent 会话存在（幂等） |
-| `GET` | `/zba/v1/capabilities` | Read · **匿名** | `capabilities.list` | 已登记的驱动、插件、模型供应商及其**真实**运行状态 |
-| `POST` | `/zba/v1/capabilities/inspect` | Read · **匿名** | `capabilities.inspect` | 按稳定能力键查看单个能力的详情 |
-| `POST` | `/zba/v1/capabilities/validate` | Admin · **匿名** | `capabilities.validate` | 只校验不落盘：验证一份能力配置是否合法 |
-| `POST` | `/zba/v1/capabilities/execute` | Admin · **匿名** | `capabilities.execute` | 执行一个受支持的管理动作（写路径，受 scope 与幂等键约束） |
-| `POST` | `/zba/v1/capabilities/query` | Read · **匿名** | `capabilities.query` | 按操作键查询一次管理动作的状态 |
-| `POST` | `/zba/v1/capabilities/cancel` | Admin · **匿名** | `capabilities.cancel` | 请求取消一个管理动作（不承诺远端已停止） |
-| `POST` | `/zba/v1/configuration/read` | Read · **匿名** | `configuration.read` | 读一份**已脱敏**的配置快照（秘密槽位只回形状） |
-| `POST` | `/zba/v1/configuration/save` | Admin · **匿名** | `configuration.save` | 批量保存：必须带期望版本 + 幂等键，冲突即失败 |
-| `POST` | `/zba/v1/configuration/find` | Admin · **匿名** | `configuration.find` | 按幂等键对账一次配置保存的最终状态 |
-| `GET` | `/zba/v1/tasks` | Read · **匿名** | `tasks.list` | 列出 Agent 任务摘要（不含正文） |
-| `POST` | `/zba/v1/tasks` | Admin · **匿名** | `tasks.submit` | 提交一个 Agent 任务（必须带幂等键） |
-| `POST` | `/zba/v1/tasks/find` | Admin · **匿名** | `tasks.find` | 按幂等键查提交回执 |
-| `GET` | `/zba/v1/tasks/{id}` | Read · **匿名** | `tasks.get` | 读单个任务的运行中或终态 |
-| `GET` | `/zba/v1/tasks/{id}/result` | Admin · **匿名** | `tasks.result` | 读面板任务的有界结果摘要 |
-| `POST` | `/zba/v1/tasks/{id}/cancel` | Admin · **匿名** | `tasks.cancel` | 请求取消任务（不声称远端已成功） |
-| `GET` | `/zba/v1/approvals` | Read · **匿名** | `approvals.list` | 列出待审批请求（摘要已脱敏） |
-| `POST` | `/zba/v1/approvals/{id}/decide` | Admin · **匿名** | `approvals.decide` | 批准或拒绝一条待审批请求（高权限写路径） |
-| `GET` | `/zba/v1/events` | Read · **匿名** | `events.read` | 按序号读取有序事件；断档时必须 resync |
-| `GET` | `/zba/v1/plugins/catalog` | Read · **匿名** | `plugins.catalog` | 浏览已配置的插件市场目录 |
-| `GET` | `/zba/v1/plugins/installed` | Read · **匿名** | `plugins.installed` | 列出已安装插件包与其真实状态 |
-| `POST` | `/zba/v1/plugins/sources/resolve` | Admin · **匿名** | `plugins.sources.resolve` | 把一个**固定版本**的公开 GitHub release 解析成插件清单 |
-| `POST` | `/zba/v1/plugins/install` | Admin · **匿名** | `plugins.install` | 暂存一次插件安装（**重启后生效**） |
-| `POST` | `/zba/v1/plugins/update` | Admin · **匿名** | `plugins.update` | 暂存一次插件更新（**重启后生效**） |
-| `POST` | `/zba/v1/plugins/{id}/uninstall` | Admin · **匿名** | `plugins.uninstall` | 暂存一次插件卸载（**重启后生效**） |
-| `GET` | `/zba/v1/plugins/operations/{key}` | Read · **匿名** | `plugins.operations.get` | 按幂等键读一次暂存的插件操作 |
-| `GET` | `/zba/v1/plugins/{id}/settings` | Read · **匿名** | `plugins.settings.read` | 读插件声明的设置项（**不回显秘密值**） |
-| `PUT` | `/zba/v1/plugins/{id}/settings` | Admin · **匿名** | `plugins.settings.save` | 按期望修订号保存插件设置 |
-| `GET` | `/zba/v1/providers/{key}/models` | Read · **匿名** | `providers.models` | 发现某个已保存供应商路由的上游模型列表 |
+| `GET` | `/zba/v1/meta` | Read · 需令牌 | `meta` | 契约版本号与支持的能力清单（前端用它校验 `EXPECTED_CONTRACT`） |
+| `GET` | `/zba/v1/openapi.json` | Read · 需令牌 | `openapi` | 本服务**运行时生成**的 OpenAPI 3.1 文档 —— 逐端点手册的权威来源就是它 |
+| `GET` | `/zba/v1/quotas` | Read · 需令牌 | `quotas.list` | 读已登记 SourceKey 的每日 Token 配额上限与已用量 |
+| `POST` | `/zba/v1/quotas/save` | Admin · 需令牌 | `quotas.save` | 保存单个配额上限（CAS 期望版本 + 幂等键 + 持久化回执） |
+| `POST` | `/zba/v1/quotas/find` | Admin · 需令牌 | `quotas.find` | 按幂等键对账一次配额保存的最终状态 |
+| `GET` | `/zba/v1/status` | Read · 需令牌 | `status` | 安全的总体与分组件状态（不含正文、不含密钥） |
+| `GET` | `/zba/v1/sessions` | Read · 需令牌 | `sessions.list` | 按工作区 SourceKey 列出服务器 Agent 会话（脱敏形状） |
+| `POST` | `/zba/v1/sessions/ensure` | Admin · 需令牌 | `sessions.ensure` | 确保当前服务器 Agent 会话存在（幂等） |
+| `GET` | `/zba/v1/capabilities` | Read · 需令牌 | `capabilities.list` | 已登记的驱动、插件、模型供应商及其**真实**运行状态 |
+| `POST` | `/zba/v1/capabilities/inspect` | Read · 需令牌 | `capabilities.inspect` | 按稳定能力键查看单个能力的详情 |
+| `POST` | `/zba/v1/capabilities/validate` | Admin · 需令牌 | `capabilities.validate` | 只校验不落盘：验证一份能力配置是否合法 |
+| `POST` | `/zba/v1/capabilities/execute` | Admin · 需令牌 | `capabilities.execute` | 执行一个受支持的管理动作（写路径，受 scope 与幂等键约束） |
+| `POST` | `/zba/v1/capabilities/query` | Read · 需令牌 | `capabilities.query` | 按操作键查询一次管理动作的状态 |
+| `POST` | `/zba/v1/capabilities/cancel` | Admin · 需令牌 | `capabilities.cancel` | 请求取消一个管理动作（不承诺远端已停止） |
+| `POST` | `/zba/v1/configuration/read` | Read · 需令牌 | `configuration.read` | 读一份**已脱敏**的配置快照（秘密槽位只回形状） |
+| `POST` | `/zba/v1/configuration/save` | Admin · 需令牌 | `configuration.save` | 批量保存：必须带期望版本 + 幂等键，冲突即失败 |
+| `POST` | `/zba/v1/configuration/find` | Admin · 需令牌 | `configuration.find` | 按幂等键对账一次配置保存的最终状态 |
+| `GET` | `/zba/v1/tasks` | Read · 需令牌 | `tasks.list` | 列出 Agent 任务摘要（不含正文） |
+| `POST` | `/zba/v1/tasks` | Admin · 需令牌 | `tasks.submit` | 提交一个 Agent 任务（必须带幂等键） |
+| `POST` | `/zba/v1/tasks/find` | Admin · 需令牌 | `tasks.find` | 按幂等键查提交回执 |
+| `GET` | `/zba/v1/tasks/{id}` | Read · 需令牌 | `tasks.get` | 读单个任务的运行中或终态 |
+| `GET` | `/zba/v1/tasks/{id}/result` | Admin · 需令牌 | `tasks.result` | 读面板任务的有界结果摘要 |
+| `POST` | `/zba/v1/tasks/{id}/cancel` | Admin · 需令牌 | `tasks.cancel` | 请求取消任务（不声称远端已成功） |
+| `GET` | `/zba/v1/approvals` | Read · 需令牌 | `approvals.list` | 列出待审批请求（摘要已脱敏） |
+| `POST` | `/zba/v1/approvals/{id}/decide` | Admin · 需令牌 | `approvals.decide` | 批准或拒绝一条待审批请求（高权限写路径） |
+| `GET` | `/zba/v1/events` | Read · 需令牌 | `events.read` | 按序号读取有序事件；断档时必须 resync |
+| `GET` | `/zba/v1/traces` | Read · 需令牌 | `traces.list` | 最近若干轮轨迹的**形状**（条数 / token / 耗时 / 未知轮数）与缓存用量合计；**不含会话 key 与消息正文** |
+| `GET` | `/zba/v1/plugins/catalog` | Read · 需令牌 | `plugins.catalog` | 浏览已配置的插件市场目录 |
+| `GET` | `/zba/v1/plugins/installed` | Read · 需令牌 | `plugins.installed` | 列出已安装插件包与其真实状态 |
+| `POST` | `/zba/v1/plugins/sources/resolve` | Admin · 需令牌 | `plugins.sources.resolve` | 把一个**固定版本**的公开 GitHub release 解析成插件清单 |
+| `POST` | `/zba/v1/plugins/install` | Admin · 需令牌 | `plugins.install` | 暂存一次插件安装（**重启后生效**） |
+| `POST` | `/zba/v1/plugins/update` | Admin · 需令牌 | `plugins.update` | 暂存一次插件更新（**重启后生效**） |
+| `POST` | `/zba/v1/plugins/{id}/uninstall` | Admin · 需令牌 | `plugins.uninstall` | 暂存一次插件卸载（**重启后生效**） |
+| `GET` | `/zba/v1/plugins/operations/{key}` | Read · 需令牌 | `plugins.operations.get` | 按幂等键读一次暂存的插件操作 |
+| `GET` | `/zba/v1/plugins/{id}/settings` | Read · 需令牌 | `plugins.settings.read` | 读插件声明的设置项（**不回显秘密值**） |
+| `PUT` | `/zba/v1/plugins/{id}/settings` | Admin · 需令牌 | `plugins.settings.save` | 按期望修订号保存插件设置 |
+| `GET` | `/zba/v1/providers/{key}/models` | Read · 需令牌 | `providers.models` | 发现某个已保存供应商路由的上游模型列表 |
 
 **断言**：`tests/BotAgent.ZbaProbe/Program.cs` 校验 OpenAPI 文档与上表的路由表一致 ——
 每条声明路由都出现在文档里、文档里没有多余路径、operationId 唯一、405/410/422 语义正确。

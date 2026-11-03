@@ -122,20 +122,56 @@ BotAgentHost -> ReplyPipeline -> SourceScheduling -> ReplyTurnContext.BuildAsync
 | ollama | 无 | 无 | 永远未知 |
 | 流式解码 | 同上各自字段 | 同上 | 解码器已顺手归一化；但普通聊天当前不走流式，**没有端到端用例** |
 
-明确没有做的事：没有按通道开关缓存控制参数、没有设置最小可缓存长度、没有做 TTL 探测。这些参数一旦发出去就属于「改上游行为」，需要真实通道实测。
+### 6.1 供应商缓存控制参数（#138，默认关）
 
-**真实命中证据也还没有**：上面这些字段只在 Mock 与合成轨迹里验证过。要拿真实证据，得在有凭据的通道上做冷/热对比并确认网关透传；本工作区没有可用模型凭据（部署机上的凭据要号主明确授权才能在合成测试里用），所以这一块如实记为「未验证」，不编造命中率。
+现在可以按通道打开缓存控制，但**默认全关**：关着的时候请求体与 #135 之后**逐字节一致**（探针断言的是序列化字节相等，不是「字段值为假」）。
 
-面板也还没有轨迹页：数据面齐了，但 `src/web` 里没有视图。剩余三件（缓存控制参数、真实证据、轨迹页）记在 issue [#138](https://github.com/ZhaoJun233/bot-agent/issues/138)。
+| 通道 | 打开后发什么 | 为什么 |
+| --- | --- | --- |
+| openai-compatible / responses / azure | 顶层 `prompt_cache_key`，值是**稳定键的 SHA-256 前 32 位小写 hex**，由调用方给的 scope（会话 key）派生 | 原始会话 key 不出模型层；同一会话每一轮键相同，跨会话不同 |
+| anthropic | **不发**顶层字段（Anthropic 拒绝未知顶层字段），改在 system 块与最后一条消息的最后一个 content block 上挂 `cache_control: {"type":"ephemeral"}` | 这是 Anthropic 协议里真实的断点标记，不是自定义扩展 |
+| gemini / ollama | 两种都不发 | 两个协议没有等价字段，发了只是噪声 |
+
+开关落在 `ModelProtocolOptions.PromptCache`（默认 `false`，随供应商配置持久化）。payload 里只放**规范字段**，由 `ModelProtocolAdapter.CreateRequest` 按路由决定发不发 —— 这样不必给 20+ 参数的 `IModelClient.CompleteAsync` 增加通道特判。
+
+### 6.2 真实通道证据：拿到的是「链路会怎么处理」，不是命中数（#138）
+
+本轮把部署链路的两跳按源码读完了（handler 入口 → 上游 provider 池），能确定**字段会不会被改写**，不能确定**上游到底命中多少**：
+
+- **第一跳（自建网关，Go）**：`prompt_cache_key` 在请求结构体里有显式字段（不是被结构体解码丢掉的未知字段），转发时确实写回上游 body。但它会**改写**这个键：客户端没给、而 provider 需要时由网关按会话自己派生；客户端给了也可能被网关的键覆盖；provider 能力表不支持时直接从报文里删掉；上游以 400 明确点名该字段时，网关会把它标记为「此 provider 不支持」并**此后永久剥离**、重发一次不带它的请求。Responses 通道同理。
+- **第二跳（可选 cli-proxy 层）**：配置 `support-prompt-cache-key` **默认关**。关着时不动请求；开着时**保留客户端已给的键**，没有才自己派生。另有一条搜索路由会显式删除 `prompt_cache_key` / `prompt_cache_retention`。
+- **命中口径也是网关归一化的**：`usage.prompt_tokens_details.cached_tokens` 是网关把各家字段（DeepSeek 的 `prompt_cache_hit_tokens`、Moonshot 的 `cached_tokens`、Anthropic 的 cache_read 等）统一后的结果；网关自己还有 Anthropic 缓存断点与亲和路由。所以宿主观测到的「命中」不必然等于上游原生命中。
+
+结论：**宿主发的键最多是建议值**。要拿到真实命中证据，必须「中间层不覆盖 + 上游真支持 + 前缀真稳定」三件事同时成立，并且用网关归一化后的口径读数。
+
+**本轮没有做真实冷/热对比**：工作区与部署机都没有可直接使用的模型凭据（部署机凭据要号主明确授权才能用于合成测试），所以如实记为「未取得真实命中证据」，不编造数字。可复现的验证配方（拿到一枚只读凭据即可执行）：
+
+1. 同一前缀（同 system + 同一段历史）连打两次，`temperature=0`、`max_tokens` 固定，中间不换模型/provider；
+2. 读第二次的 `usage.prompt_tokens_details.cached_tokens`（或通道原生字段）与首 token 延迟，和第一次比；
+3. 再打第三次、把前缀改一个字（例如改 system 里一句），确认命中归零 —— 这一步排除「网关常量回填」的假命中；
+4. 每次只改一个变量（先开关缓存控制、再换 provider、再改前缀长度），记录最小可缓存长度与 TTL（同前缀间隔 5 分钟 / 1 小时各打一次）；
+5. 结论只写「命中 token / 首 token 延迟 / 是否透传」，不写任何正文。
+
+### 6.3 面板轨迹页（#138）
+
+数据面新增一个**只读**的 ZBA 出口 `GET /zba/v1/traces`（scope Read，operationId `traces.list`）：返回最近若干轮的轨迹**形状**（runId / 结局 / 耗时 / token 数 / 缓存未知标记 / 节点列表）与缓存用量合计（完成轮、活跃轮、容量、命中量、写入量、**未知轮数**）。
+
+刻意**不返回会话 key、不返回消息正文** —— 轨迹页只回答「多少条 / 多少 token / 多少未知」。未知轮数与「命中 0」在响应里是两个不同的东西：响应里缓存用量未知时 `cachedPromptTokens` / `cacheWriteTokens` 整个字段省略（由序列化层的 `WhenWritingNull` 决定），前端必须把「字段缺失」显示成「未知」，不能当 0 参与计算。`/api/dashboard.traces` 仍在，是给旧脚本的兼容出口；面板走 ZBA。
 
 ## 7. 怎么复核
 
 ```bash
+# 轨迹只读出口（形状、缓存三态、鉴权与参数校验）
+dotnet tests/BotAgent.ZbaProbe/bin/Release/net10.0/BotAgent.ZbaProbe.dll   # M. turn traces 一节
+
 # 提示词分层与措辞边界
 dotnet tests/BotAgent.SafetyProbe/bin/Release/net10.0/BotAgent.SafetyProbe.dll
 
 # 三态统计的解析与汇总
 dotnet tests/BotAgent.ProductionSpecProbe/bin/Release/net10.0/BotAgent.ProductionSpecProbe.dll
+
+# 缓存控制参数（默认关逐字一致 / 打开后的字段形状）
+dotnet tests/BotAgent.ProtocolProbe/bin/Release/net10.0/BotAgent.ProtocolProbe.dll   # PromptCacheChecks
 
 # 真实主链路（系统提示仍然只有一份、联网段仍可关闭）
 BOTAGENT_IT_ONLY=s9  dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
@@ -152,9 +188,9 @@ dotnet tests/BotAgent.ReviewRemediationProbe/bin/Release/net10.0/BotAgent.Review
 
 ## 8. 已知限制（诚实清单）
 
-1. **没有真实供应商的命中证据**。合成桩只能证明请求前缀稳定、统计字段读得对；对方是否真的缓存、缓存多久、最小长度多少，只能在真实通道上实测，本轮没做。
+1. **没有真实供应商的命中证据**。合成桩只能证明请求前缀稳定、统计字段读得对；对方是否真的缓存、缓存多久、最小长度多少，只能在真实通道上实测，本轮没做（链路静态判定见 6.2）。
 2. **历史前缀仍会失效**：`(#id)` 窗口、滑窗左移、工具清单变化（第 4 节）。历史时间戳渲染已在 #135 改成绝对时间（`src/BotAgent.Model/ChatHistoryTime.cs`），跨午夜不再整段作废。
-3. **面板前端还没有轨迹页**。数据面已经有了（`trace_archive` v13 三列 + `/metrics` 三个 gauge + `/api/dashboard.traces`），但 `src/web` 里没有任何轨迹/缓存视图（旧 `trace.js` 随 S6 删除）。要「在面板上看」得先有轨迹页，属未排期的前端工作。
+3. **缓存控制参数是否在真实链路上有效，仍未被证明**：开关只负责「把字段发出去」，中间网关可以覆盖或剥离它（6.2）。默认关就是为了不让这件事悄悄改变线上行为。
 4. **流式只做了归一化，没有端到端用例**：普通聊天不带 `stream`，所以这条路径目前只有解码器级别的覆盖。
 5. **「部分未知」的轮次**：同一轮多次模型调用里只要有一次没报缓存统计，这一轮就标记 `CacheUsageUnknown`；已累加的值是「已知部分之和」，不是完整值。
 6. **不做前缀冻结**：滑窗是语义上的取舍（最近的对话更重要），本轮不为了缓存去改上下文选择策略。
@@ -165,3 +201,5 @@ dotnet tests/BotAgent.ReviewRemediationProbe/bin/Release/net10.0/BotAgent.Review
 - 动 `ModelTransport`：历史渲染同时影响 `(#id)` 与时间戳，改完必须跑 s19 / s25 / s12。
 - 动用量解析：`ModelJson.ReadUsage` 的调用方仍在，别把三态改成两态（`ProtocolProbe` 有一条「缺失仍是 0/0」的老断言，那是给旧口径用的）。
 - 不要用「未知填 0」让图好看，更不要在文档里写「命中率 X%」而不同时给未知轮数。
+- 动 `ModelProtocolAdapter` / `AnthropicProtocol`：先跑缓存控制探针（默认关必须逐字节一致、打开后形状正确），再看 6.2，别把「发出去」当成「上游会命中」。
+- 动轨迹出口：`ZbaProbe` 的 `M. turn traces` 断言行形状集合与 `limit` 校验；改字段名会直接红。

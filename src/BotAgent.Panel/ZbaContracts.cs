@@ -292,6 +292,49 @@ public sealed record ZbaEventPage(
     bool ResyncRequired,
     DateTimeOffset GeneratedAt);
 
+/// <summary>
+/// 一轮的节点形状：只有种类/状态/耗时/工具号/原因码与计数，**不含任何会话内容**。
+/// </summary>
+public sealed record ZbaTraceNode(
+    string Kind,
+    string Status,
+    int DurationMs,
+    string? ToolId = null,
+    string? ReasonCode = null,
+    int? Count = null);
+
+/// <summary>
+/// 一轮轨迹的只读投影。刻意**不暴露会话 key 与消息正文**：轨迹页只回答"这轮多久、多少 token、命中多少"。
+/// 缓存用量是三态：<c>CachedPromptTokens</c> 为 null 或 <c>CacheUsageUnknown</c> 为 true 表示供应商没报，
+/// 面板必须把"未知"与"0 命中"分开显示。
+/// </summary>
+public sealed record ZbaTraceSummary(
+    string RunId,
+    string Outcome,
+    DateTimeOffset StartedAt,
+    int TotalMs,
+    int PromptTokens,
+    int CompletionTokens,
+    int FallbackHops,
+    int? CachedPromptTokens,
+    int? CacheWriteTokens,
+    bool CacheUsageUnknown,
+    IReadOnlyList<ZbaTraceNode> Nodes);
+
+/// <summary>进程级缓存用量合计：未知轮数是独立一列，不能并进 0 命中。</summary>
+public sealed record ZbaTraceCacheUsage(
+    int DoneTurns,
+    int ActiveTurns,
+    int Capacity,
+    long CachedPromptTokens,
+    long CacheWriteTokens,
+    long CacheUnknownTurns);
+
+/// <summary>轨迹页数据：最近若干轮的形状 + 进程级合计。</summary>
+public sealed record ZbaTracePage(
+    IReadOnlyList<ZbaTraceSummary> Items,
+    ZbaTraceCacheUsage Cache);
+
 public sealed record ZbaError(string Code, string Message, string? Reason = null, int? BackendCode = null);
 
 public sealed record ZbaErrorBody(ZbaError Error);
@@ -388,6 +431,10 @@ public interface IZbaBackend
 
     ValueTask<ZbaEventPage> ReadEventsAsync(
         ConfigurationCaller caller, long after, int limit, CancellationToken ct = default);
+
+    /// <summary>只读轨迹：最近若干轮的形状与缓存用量合计（不含会话内容）。</summary>
+    ValueTask<ZbaTracePage> ListTracesAsync(ConfigurationCaller caller, int limit, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "traces_unavailable", "Turn traces are unavailable.");
 
     ValueTask<ZbaPluginCatalog> ListPluginCatalogAsync(
         ConfigurationCaller caller, string? query, string? category, CancellationToken ct = default);

@@ -760,6 +760,23 @@ public static class Program
                 ? "没有从 PanelRoutes.cs 解析出任何路由（正则是不是过期了？）"
                 : missingPaths.Count == 0 ? null : "文档缺：" + string.Join("、", missingPaths));
 
+        // ZBA 是**新**面板契约（37+ 条）：它也有运行时 OpenAPI，但文档地图这一页同样要跟得上。
+        // 只查「声明了却没写进 docs/api-surface.md」，不禁止文档多写。
+        var zbaRouteFile = Path.Combine(index.Root, "src/BotAgent.Panel/ZbaRoutes.cs");
+        var zbaText = File.Exists(zbaRouteFile) ? File.ReadAllText(zbaRouteFile) : string.Empty;
+        var zbaPaths = Regex
+            .Matches(zbaText, @"new\(\s*""[A-Z]+"",\s*""(?<path>/zba/[^""]*)""")
+            .Select(m => m.Groups["path"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+        var missingZbaPaths = zbaPaths.Where(p => !surface.Contains(p, StringComparison.Ordinal)).ToList();
+        Check($"ZbaRoutes.cs 声明的 {zbaPaths.Count} 条路径全部出现在 docs/api-surface.md",
+            missingZbaPaths.Count == 0 && zbaPaths.Count > 0,
+            zbaPaths.Count == 0
+                ? "没有从 ZbaRoutes.cs 解析出任何路由（正则是不是过期了？）"
+                : missingZbaPaths.Count == 0 ? null : "文档缺：" + string.Join("、", missingZbaPaths));
+
         // README 里写的每个 UPPER_SNAKE 键都得有出处：要么被宿主真的读，要么在 compose 里被替换。
         // 只写文档不读的键（例如早期的 TLS 证书路径）正是 #125 要清掉的那类死键。
         var readmeFiles = new[] { "README.md", "README.en.md" }

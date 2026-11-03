@@ -15,6 +15,8 @@ export interface ProviderOptions {
   azureDeployment?: string
   azureApiVersion?: string
   anthropicVersion?: string
+  /** 开启后 OpenAI 兼容通道带 prompt_cache_key，Anthropic 通道用 cache_control。 */
+  promptCache?: boolean
 }
 
 export const providerPresets: ReadonlyArray<{ id: string; label: string; protocol: ProviderProtocol }> = [

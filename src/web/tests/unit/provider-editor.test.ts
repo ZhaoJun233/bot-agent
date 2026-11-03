@@ -61,4 +61,24 @@ describe('provider transport editor', () => {
     expect(endpointError('https://example.com/v1')).toBeNull()
     expect(endpointError('http://localhost:11434')).toBeNull()
   })
+  it('omits promptCache unless enabled so the legacy payload stays byte-identical', () => {
+    const provider = syntheticProvider()
+    const draft = providerDraft(provider)
+    expect(draft.promptCache).toBe(false)
+    expect(providerDraft(syntheticProvider({ options: { promptCache: true } })).promptCache).toBe(true)
+    // 未勾选：options 保持 Keep，不会凭空写入 promptCache: false。
+    expect(providerEdit(provider.key, draft, provider).changes.options).toEqual({ kind: 0 })
+    // 其它选项变化时不夹带 promptCache。
+    draft.azureApiVersion = '2024-10-22'
+    expect(providerEdit(provider.key, draft, provider).changes.options)
+      .toEqual({ kind: 1, value: { azureDeployment: null, azureApiVersion: '2024-10-22', anthropicVersion: '2023-06-01' } })
+    // 勾选后显式发送 true。
+    draft.promptCache = true
+    expect(providerEdit(provider.key, draft, provider).changes.options)
+      .toEqual({ kind: 1, value: { azureDeployment: null, azureApiVersion: '2024-10-22', anthropicVersion: '2023-06-01', promptCache: true } })
+    // 已开启的提供商取消勾选要显式写 false。
+    const enabled = syntheticProvider({ options: { promptCache: true } })
+    expect(providerEdit(enabled.key, { ...providerDraft(enabled), promptCache: false }, enabled).changes.options)
+      .toEqual({ kind: 1, value: { azureDeployment: null, azureApiVersion: '2024-10-21', anthropicVersion: '2023-06-01', promptCache: false } })
+  })
 })

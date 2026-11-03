@@ -56,7 +56,7 @@ internal static class Program
         await RunAsync("I. HttpListener adapter smoke", () => HttpListenerSmokeAsync(backend));
         await RunAsync("J. sessions", () => SessionChecksAsync());
         await RunAsync("K. plugin marketplace / provider discovery", () => PluginChecksAsync());
-        await RunAsync("L. quota management contract", () => QuotaChecksAsync());
+        await RunAsync("M. turn traces", () => TraceChecksAsync(backend, endpoint));        await RunAsync("L. quota management contract", () => QuotaChecksAsync());
 
         Console.WriteLine();
         Console.WriteLine($"passed={_passed} failed={_failed} skipped={_skipped}");
@@ -291,6 +291,7 @@ internal static class Program
         "meta" or "openapi" or "status" or "capabilities.list" or "tasks.list" or "approvals.list"
             => Req("GET", route.Template, token: AdminToken),
         "events.read" => Req("GET", route.Template, token: AdminToken, query: "?after=0&limit=10"),
+        "traces.list" => Req("GET", route.Template, token: AdminToken, query: "?limit=5"),
         "capabilities.inspect" => Req("POST", route.Template, InspectJson("synthetic-1"), AdminToken),
         "capabilities.validate" => Req("POST", route.Template, ValidationJson("zba-1.0"), AdminToken),
         "capabilities.execute" => Req("POST", route.Template, ExecuteJson("zba-1.0"), AdminToken),
@@ -962,6 +963,63 @@ internal static class Program
             400, "duplicate_query_parameter");
     }
 
+    // ───────────────────────── M. turn traces (#138) ─────────────────────────
+
+    private static async Task TraceChecksAsync(SyntheticZbaBackend backend, ZbaEndpoint endpoint)
+    {
+        var page = await endpoint.ProcessAsync(Req("GET", "/zba/v1/traces", token: ReadToken, query: "?limit=7"));
+        CheckStatus("traces 200", page, 200);
+        Check("traces parses limit", backend.LastTraceLimit == 7, $"limit={backend.LastTraceLimit}");
+
+        var body = BodyJson(page);
+        Check("traces page exposes items and cache",
+            body.TryGetProperty("items", out _) && body.TryGetProperty("cache", out _), "missing items/cache");
+
+        var items = body.GetProperty("items");
+        Check("traces items present", items.GetArrayLength() == 1, $"count={items.GetArrayLength()}");
+        var item = items[0];
+        var itemNames = item.EnumerateObject().Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        // 未知缓存用量必须整字段省略（WhenWritingNull），绝不能写成 0：前端据此区分「未知」与「零命中」。
+        Check("traces item exposes shape fields only",
+            itemNames.SequenceEqual(new[]
+            {
+                "cacheUsageUnknown", "completionTokens", "fallbackHops", "nodes", "outcome",
+                "promptTokens", "runId", "startedAt", "totalMs"
+            }, StringComparer.Ordinal),
+            string.Join(",", itemNames));
+        Check("traces item keeps unknown cache usage absent rather than zero",
+            item.GetProperty("cacheUsageUnknown").GetBoolean()
+            && !item.TryGetProperty("cachedPromptTokens", out _)
+            && !item.TryGetProperty("cacheWriteTokens", out _),
+            "unknown cache usage must not be serialized");
+
+        var nodeNames = item.GetProperty("nodes")[0].EnumerateObject().Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        Check("traces node exposes shape fields only",
+            nodeNames.SequenceEqual(new[] { "durationMs", "kind", "status" }, StringComparer.Ordinal),
+            string.Join(",", nodeNames));
+
+        var cache = body.GetProperty("cache");
+        var cacheNames = cache.EnumerateObject().Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        Check("traces cache exposes totals only",
+            cacheNames.SequenceEqual(new[]
+            {
+                "activeTurns", "cacheUnknownTurns", "cacheWriteTokens", "cachedPromptTokens", "capacity", "doneTurns"
+            }, StringComparer.Ordinal),
+            string.Join(",", cacheNames));
+
+        CheckStatus("traces needs authentication",
+            await endpoint.ProcessAsync(Req("GET", "/zba/v1/traces")), 401);
+        CheckStatus("traces invalid limit 400",
+            await endpoint.ProcessAsync(Req("GET", "/zba/v1/traces", token: ReadToken, query: "?limit=0")),
+            400, "invalid_limit");
+        CheckStatus("traces rejects conversation filter 400",
+            await endpoint.ProcessAsync(Req("GET", "/zba/v1/traces", token: ReadToken, query: "?conversationKey=synthetic")),
+            400, "unknown_query_parameter");
+    }
+
     // ───────────────────────── I. HttpListener smoke ─────────────────────────
 
     private static async Task HttpListenerSmokeAsync(SyntheticZbaBackend backend)
@@ -1315,6 +1373,23 @@ internal sealed partial class SyntheticZbaBackend : IZbaBackend
         return ValueTask.FromResult(new ZbaEventPage(
             ImmutableArray.Create(new ZbaEvent(after + 1, "task.state", Program.FixedNow, "task-1", "running", "8", null)),
             after + 1, true, Program.FixedNow));
+    }
+
+    public int LastTraceLimit { get; private set; }
+
+    public ValueTask<ZbaTracePage> ListTracesAsync(
+        ConfigurationCaller caller, int limit, CancellationToken ct = default)
+    {
+        LastTraceLimit = limit;
+        var nodes = new[] { new ZbaTraceNode("Model", "ok", 900) };
+        var items = new[]
+        {
+            new ZbaTraceSummary(
+                "trace-synthetic-1", "replied", Program.FixedNow, 1200, 500, 40, 0,
+                CachedPromptTokens: null, CacheWriteTokens: null, CacheUsageUnknown: true, Nodes: nodes)
+        };
+        return ValueTask.FromResult(new ZbaTracePage(
+            items, new ZbaTraceCacheUsage(37, 1, 50, 12345, 0, 4)));
     }
 
     private static ManagedDescriptor Descriptor(string instanceId)

@@ -143,7 +143,8 @@ public class OpenAiClient : IModelClient
 
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
         IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false,
-        bool enableAsk = false, bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null)
+        bool enableAsk = false, bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null,
+        string? promptCacheScope = null)
     {
         if (_providerFailover is null && string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
@@ -214,7 +215,7 @@ public class OpenAiClient : IModelClient
             FilterActionNarration: _settings.FilterActionNarration,
             ToolList: toolList));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
-        var built = await _transport.BuildAsync(window, systemContent, quotableIds, ct, sampling: sampling);
+        var built = await _transport.BuildAsync(window, systemContent, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
 
         // 上游偶尔会回 200 但**没有 choices**。实测三种情形：
         //   a) 慢的 `-high` 模型“思考”把预算吃光（17:55-18:01 连报 21 次）
