@@ -16,6 +16,13 @@
 
 ### 新增
 
+- 审批与执行隔离加固（#117）：面板决策拿不到原始平台源租约时**失败关闭**（`source_unavailable`，
+  以前会 `Enter(null)` 后照批），群命令与面板两条路在**执行前**再核一次租约（决策≠执行）；
+  `approval.decided` 事件的 `state` 如实区分 `approved`/`rejected`/`expired`/`stale_policy`/
+  `not_an_approver`/`unknown_request`/`source_retired`/`source_unavailable`（以前一律写 `rejected`）；
+  补「已批准但过了有效期再消费同样失败」用例。**已知缺口**：审批尚未接到真实高风险工具
+  （`//` 的 bash/read/write/docker 仍走 `ToolPolicy`），因为那需要「执行器挂起 + 批准后恢复同一轮」，
+  单独立条目跟进。口径见 `docs/architecture/approval-and-isolation.md`。
 - 插件市场与自定义模型提供商端到端落地：宿主侧注册表 + 面板安装/启停/凭据录入。
 - 自然对话驱动 agent（`//` 指令保留），含停止/进度归一匹配与日志脱敏。
 - Web 控制台：能力管理收敛、任务提交与审批事件恢复、插件中心、Token 配额插件与主题、

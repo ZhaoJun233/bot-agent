@@ -1636,6 +1636,20 @@ public static partial class Program
         Check("审批单摘要也写明了“无真实副作用”",
             ApprovalFlow.FixedToolSummary.Contains("无真实副作用"), ApprovalFlow.FixedToolSummary);
 
+        // ── ⑥b #117：批准不是永久的 —— 过了有效期再消费同样失败（票据不会因为“批过”而复活） ──
+        // 以前只测了「Pending 过期」，这里补上「Already Approved 过期」这条：过期判定发生在
+        // 决策之后，与谁批的、批得多早无关。
+        var lateStore = new ApprovalStore();
+        lateStore.Create("req-late", "web.read", null, "group:10001", "user:me",
+            new[] { "user:me" }, t0, ttlSeconds: 60);
+        var lateApproved = lateStore.Decide("req-late", "user:me", "group:10001", true, t0);
+        Check("★ #117 有效期内批准成功（对照组）",
+            lateApproved.Ok && lateApproved.Status == ApprovalStatus.Approved, lateApproved.Describe());
+        var afterTtl = lateStore.Consume("req-late", "group:10001", t0.AddSeconds(61));
+        Check("★ #117 批准后过了有效期再消费 → 失败且不给票据（超时=拒绝，批过也不复活）",
+            !afterTtl.Outcome.Ok && afterTtl.Ticket is null && afterTtl.Outcome.ReasonCode == "expired",
+            afterTtl.Outcome.Describe());
+
         // ── ⑦ 接线：纯逻辑绿 ≠ 接上了链路 ──
         var approvalType = typeof(ApprovalUseCase);
         var storeField = approvalType

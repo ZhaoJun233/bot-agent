@@ -1423,6 +1423,10 @@ public static class Program
         Anchor(index, "/api/approvals/decide", "面板审批写路径（高权限：前置 fail-closed）");
         Anchor(index, "PanelDecide", "面板决策复用同一份校验（ApprovalFlow.Handle）");
         Anchor(index, "panel_token_required", "未配面板令牌 → 面板审批不可用（fail-closed）");
+        // #117：面板不是会话 —— 拿不到原始租约时必须失败关闭（旧实现 Enter(null) 后照批）；
+        // 并且决策与执行之间要再核一次租约，不能只信决策那一刻的快照。
+        Anchor(index, "source_unavailable", "#117 面板决策无原始租约 → 失败关闭");
+        Anchor(index, "执行前平台源已换代", "#117 执行前复核平台源租约（决策≠执行）");
 
         // 前置校验必须长在**写路径自己**身上：只在 UI 拦 = 等于没拦（接口还能被直接打）。
         var approvals = index.ByPath("src/BotAgent.Headless/Adapters/Panel/WebUiServer.Approvals.cs");

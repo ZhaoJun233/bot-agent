@@ -206,7 +206,10 @@ public sealed class ApprovalUseCase
             if (actualKey is null || actualKey != request?.ConversationKey) return true;
             conversationKey = actualKey;
         }
-        using var sourceScope = PlatformSourceExecution.Enter(originalSource ?? incomingSource);
+        // #117：从入口到执行之间平台源可能换代（重连会换 lifetime）。把真正要用的那一代抓成局部变量，
+        // 执行前再核一次 IsCurrent —— 不能只靠入口那一次快照。
+        var executingSource = originalSource ?? incomingSource;
+        using var sourceScope = PlatformSourceExecution.Enter(executingSource);
 
         var result = ApprovalFlow.Handle(
             _approvals,
@@ -253,6 +256,12 @@ public sealed class ApprovalUseCase
                 return true;
             }
 
+            if (executingSource is { IsCurrent: false })
+            {
+                _hooks.Log($"[审批] 执行前平台源已换代（租约失效）→ 不执行：{Channels.Describe(conversationKey)}");
+                return true;
+            }
+
             RunFixedDemoTool(msg, conversationKey, parsed.RequestId, result.Reply);
             return true;
         }
@@ -293,7 +302,10 @@ public sealed class ApprovalUseCase
         }
 
         _sources.TryGetValue(requestId, out var originalSource);
-        if (originalSource is { IsCurrent: false }) return (false, "source_retired");
+        // #117：面板不是会话 —— 没有原始租约时**不能**用 Enter(null) 假装“没有来源约束”，
+        // 直接失败关闭（与群里那条路“租约换代即不动作”是同一条规则）。
+        if (originalSource is null) return (false, "source_unavailable");
+        if (originalSource.IsCurrent is false) return (false, "source_retired");
         using var sourceScope = PlatformSourceExecution.Enter(originalSource);
         var conversationKey = request.ConversationKey;
         var result = ApprovalFlow.Handle(
@@ -329,6 +341,13 @@ public sealed class ApprovalUseCase
             {
                 _hooks.Log($"[审批] 面板批准后闸门拒绝执行（{gate.ReasonCode}）→ 不执行：{Channels.Describe(conversationKey)}");
                 return (false, gate.ReasonCode);
+            }
+
+            // #117：决策与执行之间平台源可能换代 —— 执行前再核一次，不靠决策时的快照。
+            if (originalSource.IsCurrent is false)
+            {
+                _hooks.Log($"[审批] 面板执行前平台源已换代（租约失效）→ 不执行：{Channels.Describe(conversationKey)}");
+                return (false, "source_retired");
             }
 
             RunFixedDemoToolFor(conversationKey, requestId, result.Reply);

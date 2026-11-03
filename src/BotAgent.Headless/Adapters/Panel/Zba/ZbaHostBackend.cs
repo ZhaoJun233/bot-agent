@@ -390,8 +390,21 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         if (_approvals is null) throw new ZbaBackendException(503, "approvals_unavailable", "审批组件不可用。");
         if (!_box.Current.EnableApprovals) throw new ZbaBackendException(403, "approvals_disabled", "人工审批总开关是关的。");
         var (ok, reason) = _approvals.PanelDecide(requestId, approve);
-        _events.Append("approval.decided", null, ok ? (approve ? "approved" : "rejected") : "rejected",
-            null, reason, _now());
+        // #117：事件里的 state 如实反映失败原因（以前无论 expired / 越权 / 租约失效 / 未知编号
+        // 一律写成 "rejected"，事后翻事件流分不出“被人拒绝”和“根本没等到人”）。
+        var state = ok
+            ? (approve ? "approved" : "rejected")
+            : reason switch
+            {
+                "expired" => "expired",
+                "stale_policy" => "stale_policy",
+                "not_an_approver" => "not_an_approver",
+                "unknown_request" => "unknown_request",
+                "source_retired" => "source_retired",
+                "source_unavailable" => "source_unavailable",
+                _ => "rejected"
+            };
+        _events.Append("approval.decided", null, state, null, reason, _now());
         if (!ok) _events.AppendError("approval", reason, _now());
         return ValueTask.FromResult(new ZbaApprovalDecisionResult(ok, approve ? "approve" : "reject", reason));
     }
