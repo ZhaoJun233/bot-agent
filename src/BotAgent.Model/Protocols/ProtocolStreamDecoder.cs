@@ -38,14 +38,14 @@ internal sealed class ProtocolStreamDecoder(ModelProtocol protocol)
                 if (ProtocolJson.Text(root["type"]) == "response.completed") finish = Finish();
                 if (ProtocolJson.Text(root["type"]) == "response.incomplete") finish = "length";
                 if (root["response"]?["usage"] is JsonObject responseUsage)
-                    usage = ProtocolJson.Usage(responseUsage, "input_tokens", "output_tokens");
+                    usage = ProtocolJson.Usage(responseUsage, "input_tokens", "output_tokens", "input_tokens_details.cached_tokens");
                 break;
             case ModelProtocol.AnthropicMessages:
                 Anthropic(root, delta);
                 if (root["delta"]?["stop_reason"] is { } reason)
                     finish = ProtocolJson.Text(reason) switch { "max_tokens" => "length", "tool_use" => "tool_calls", _ => "stop" };
                 if ((root["usage"] ?? root["message"]?["usage"]) is JsonObject messageUsage)
-                    usage = ProtocolJson.Usage(messageUsage, "input_tokens", "output_tokens");
+                    usage = ProtocolJson.Usage(messageUsage, "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens");
                 break;
             case ModelProtocol.GeminiGenerateContent:
             case ModelProtocol.Ollama:

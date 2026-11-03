@@ -31,6 +31,9 @@ public sealed class TurnTraceStore
     private long _completedTotal;
     private long _promptTokensTotal;
     private long _completionTokensTotal;
+    private long _cachedPromptTokensTotal;
+    private long _cacheWriteTokensTotal;
+    private long _cacheUnknownTurns;
 
     public TurnTraceStore(Func<DateTimeOffset>? clock = null, ITraceArchive? archive = null)
     {
@@ -51,7 +54,18 @@ public sealed class TurnTraceStore
     }
 
     /// <summary>为当前轮记录 token 用量与故障转移跳数（可在一轮中多次调用累加）。</summary>
-    public void RecordTokens(string conversationKey, int promptTokens, int completionTokens, int fallbackHops = 0)
+    /// <param name="cachedPromptTokens">
+    /// 本次调用**命中供应商缓存**的输入 token 数；<c>null</c> = 上游没提供这个字段（未知，不是 0）。
+    /// 未知时只给这一轮打「有未知」标记，**不累加**到总数（#98）。
+    /// </param>
+    /// <param name="cacheWriteTokens">本次调用写进供应商缓存的 token 数；<c>null</c> = 上游没提供。</param>
+    public void RecordTokens(
+        string conversationKey,
+        int promptTokens,
+        int completionTokens,
+        int fallbackHops = 0,
+        int? cachedPromptTokens = null,
+        int? cacheWriteTokens = null)
     {
         lock (_gate)
         {
@@ -60,6 +74,19 @@ public sealed class TurnTraceStore
                 turn.PromptTokens += Math.Max(0, promptTokens);
                 turn.CompletionTokens += Math.Max(0, completionTokens);
                 turn.FallbackHops = Math.Max(turn.FallbackHops, Math.Max(0, fallbackHops));
+                if (cachedPromptTokens is { } cached)
+                {
+                    turn.CachedPromptTokens = (turn.CachedPromptTokens ?? 0) + Math.Max(0, cached);
+                }
+                else
+                {
+                    turn.CacheUsageUnknown = true;
+                }
+
+                if (cacheWriteTokens is { } written)
+                {
+                    turn.CacheWriteTokens = (turn.CacheWriteTokens ?? 0) + Math.Max(0, written);
+                }
             }
         }
     }
@@ -109,11 +136,20 @@ public sealed class TurnTraceStore
                 turn.Nodes.ToArray(),
                 pt,
                 ct,
-                hops);
+                hops,
+                turn.CachedPromptTokens,
+                turn.CacheWriteTokens,
+                turn.CacheUsageUnknown);
 
             _completedTotal++;
             _promptTokensTotal += pt;
             _completionTokensTotal += ct;
+            _cachedPromptTokensTotal += turn.CachedPromptTokens ?? 0;
+            _cacheWriteTokensTotal += turn.CacheWriteTokens ?? 0;
+            if (turn.CacheUsageUnknown)
+            {
+                _cacheUnknownTurns++;
+            }
             _done.Add(trace);
             if (_done.Count > Capacity)
             {
@@ -189,6 +225,45 @@ public sealed class TurnTraceStore
         }
     }
 
+    /// <summary>
+    /// 进程启动以来累计**命中供应商缓存**的输入 Tokens（#98）。
+    /// 只累加上游真的报了数的那些轮 —— 分母见 <see cref="CacheUnknownTurnsTotal" />，别把未知当 0。
+    /// </summary>
+    public long CachedPromptTokensTotal
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cachedPromptTokensTotal;
+            }
+        }
+    }
+
+    /// <summary>进程启动以来累计**写进**供应商缓存的输入 Tokens（#98；只有部分上游提供）。</summary>
+    public long CacheWriteTokensTotal
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cacheWriteTokensTotal;
+            }
+        }
+    }
+
+    /// <summary>进程启动以来「缓存统计未知」的已完成轮数（#98 的三态分母：未知 ≠ 0 命中）。</summary>
+    public long CacheUnknownTurnsTotal
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _cacheUnknownTurns;
+            }
+        }
+    }
+
     public int DoneCount
     {
         get
@@ -236,5 +311,14 @@ public sealed class TurnTraceStore
         public int CompletionTokens { get; set; }
 
         public int FallbackHops { get; set; }
+
+        /// <summary>本轮已知的缓存命中量；null = 一次都没上报（未知）。</summary>
+        public int? CachedPromptTokens { get; set; }
+
+        /// <summary>本轮已知的缓存写入量；null = 一次都没上报（未知）。</summary>
+        public int? CacheWriteTokens { get; set; }
+
+        /// <summary>本轮至少有一次调用没报缓存统计（部分未知时也置真）。</summary>
+        public bool CacheUsageUnknown { get; set; }
     }
 }

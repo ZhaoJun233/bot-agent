@@ -25,10 +25,14 @@ public static partial class Program
             var disabled = PromptBuilder.Build(request);
             var enabled = PromptBuilder.Build(request with { EnableWebSearch = true });
             var start = enabled.IndexOf("\n\n[联网搜索]", StringComparison.Ordinal);
-            var search = start < 0 ? string.Empty : enabled[start..];
+            // #98 起提示词分成「稳定前缀 + 动态尾巴」两段，搜索段不再一路延伸到结尾 ——
+            // 它的长度 = 两版之间的长度差（开关只影响这一段，别的字一个都不动）。
+            var delta = enabled.Length - disabled.Length;
+            var search = start < 0 || delta <= 0 ? string.Empty : enabled.Substring(start, delta);
 
             Check("关闭搜索不注入搜索说明", !disabled.Contains("[联网搜索]", StringComparison.Ordinal));
-            Check("搜索开关只追加对应段落，不改关闭时的既有提示", start >= 0 && enabled[..start] == disabled);
+            Check("搜索开关只追加对应段落，不改关闭时的既有提示",
+                start >= 0 && delta > 0 && enabled.Remove(start, delta) == disabled);
             // 300 → 340（#97）：新增「查到旧资料就说清是旧的，事件发生时间≠你检索的时间」一句；
             // 真正的总预算仍是 S9 场景的系统提示 < 4000 字软线。
             Check("搜索说明不超过 340 字，保留 S9 总预算", search.Length > 0 && search.Length <= 340,

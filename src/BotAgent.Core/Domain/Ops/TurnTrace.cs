@@ -59,4 +59,7 @@ public sealed record TurnTrace(
     IReadOnlyList<TurnNode> Nodes,
     int PromptTokens = 0,
     int CompletionTokens = 0,
-    int FallbackHops = 0);
+    int FallbackHops = 0,
+    int? CachedPromptTokens = null,
+    int? CacheWriteTokens = null,
+    bool CacheUsageUnknown = false);

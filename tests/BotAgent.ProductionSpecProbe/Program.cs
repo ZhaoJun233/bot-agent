@@ -193,6 +193,41 @@ public static class Program
         Check(counters.PromptTokensTotal == 100 && counters.CompletionTokensTotal == 40,
             "进程内 token 累计指标可观察");
 
+        // #98：缓存用量是三态（null = 上游没给，0 = 明确没命中）。几种上游形状都要读得出来，
+        // 而且缺字段必须是「未知」—— 落成 0 会让「不支持/没透传」看起来像「一次都没命中」。
+        var openAiCache = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(
+            "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":768}}}");
+        Check(openAiCache.PromptTokens == 1000 && openAiCache.CachedPromptTokens == 768 && openAiCache.CacheWriteTokens is null,
+            "OpenAI 形状的缓存命中量可读取，缺失的写入量记为未知");
+        var deepSeekCache = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(
+            "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_cache_hit_tokens\":640}}");
+        Check(deepSeekCache.CachedPromptTokens == 640,
+            "DeepSeek 形状的 prompt_cache_hit_tokens 可读取");
+        var anthropicCache = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(
+            "{\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":20,\"cache_read_input_tokens\":400,\"cache_creation_input_tokens\":120}}");
+        Check(anthropicCache.CachedPromptTokens == 400 && anthropicCache.CacheWriteTokens == 120,
+            "Anthropic 形状的缓存读取与写入都可读取");
+        var noCacheUsage = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(usageJson);
+        Check(noCacheUsage.CachedPromptTokens is null && noCacheUsage.CacheWriteTokens is null,
+            "上游没给缓存字段时记为未知而不是 0");
+
+        counters.Begin("synthetic:tenant-c");
+        counters.RecordTokens("synthetic:tenant-c", 900, 30, cachedPromptTokens: 512, cacheWriteTokens: 64);
+        var cachedTrace = counters.Complete("synthetic:tenant-c", "done");
+        Check(cachedTrace is not null && cachedTrace.CachedPromptTokens == 512 && cachedTrace.CacheWriteTokens == 64 && !cachedTrace.CacheUsageUnknown,
+            "缓存命中与写入量进入轨迹，且不标未知");
+        Check(counters.CachedPromptTokensTotal == 512 && counters.CacheWriteTokensTotal == 64,
+            "进程内缓存累计指标可观察");
+
+        // 前面 tenant-a 那次没给缓存字段，所以未知轮数此时至少是 1；这里只比较增量，不钉死绝对值。
+        var unknownBefore = counters.CacheUnknownTurnsTotal;
+        counters.Begin("synthetic:tenant-d");
+        counters.RecordTokens("synthetic:tenant-d", 700, 20);
+        var unknownCacheTrace = counters.Complete("synthetic:tenant-d", "done");
+        Check(unknownCacheTrace is not null && unknownCacheTrace.CachedPromptTokens is null && unknownCacheTrace.CacheUsageUnknown
+            && counters.CachedPromptTokensTotal == 512 && counters.CacheUnknownTurnsTotal == unknownBefore + 1,
+            "没报缓存统计的轮次记为未知，不累加进命中总量");
+
         var trace = new TurnTrace(
             "synthetic-trace-1",
             "synthetic:tenant-a",

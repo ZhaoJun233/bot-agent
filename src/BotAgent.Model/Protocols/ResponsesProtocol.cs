@@ -54,6 +54,6 @@ internal static class ResponsesProtocol
         }
         if (output.Count == 0) return new JsonObject { ["choices"] = new JsonArray() };
         var usage = root["usage"] as JsonObject;
-        return ProtocolJson.Envelope(text.ToString(), calls, usage is null ? null : ProtocolJson.Usage(usage, "input_tokens", "output_tokens"), ProtocolJson.Text(root["status"]) == "incomplete" ? "length" : null);
+        return ProtocolJson.Envelope(text.ToString(), calls, usage is null ? null : ProtocolJson.Usage(usage, "input_tokens", "output_tokens", "input_tokens_details.cached_tokens"), ProtocolJson.Text(root["status"]) == "incomplete" ? "length" : null);
     }
 }

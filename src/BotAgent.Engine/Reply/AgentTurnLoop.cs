@@ -80,6 +80,8 @@ public sealed class AgentTurnLoop
         var totalPromptTokens = 0;
         var totalCompletionTokens = 0;
         var maxFallbackHops = 0;
+        int? totalCachedPromptTokens = null;
+        int? totalCacheWriteTokens = null;
         string? declaredIntent = null;
         CompletionResult result;
 
@@ -126,7 +128,24 @@ public sealed class AgentTurnLoop
             totalPromptTokens += result.PromptTokens;
             totalCompletionTokens += result.CompletionTokens;
             maxFallbackHops = Math.Max(maxFallbackHops, result.FallbackHops);
-            _traces?.RecordTokens(conversationKey, result.PromptTokens, result.CompletionTokens, result.FallbackHops);
+            // 缓存用量在步进循环里可能只有部分步上报（甚至都不报）：已知的累加，未知的保持 null —— 不拿 0 顶替（#98）。
+            if (result.CachedPromptTokens is { } cachedStep)
+            {
+                totalCachedPromptTokens = (totalCachedPromptTokens ?? 0) + Math.Max(0, cachedStep);
+            }
+
+            if (result.CacheWriteTokens is { } writtenStep)
+            {
+                totalCacheWriteTokens = (totalCacheWriteTokens ?? 0) + Math.Max(0, writtenStep);
+            }
+
+            _traces?.RecordTokens(
+                conversationKey,
+                result.PromptTokens,
+                result.CompletionTokens,
+                result.FallbackHops,
+                result.CachedPromptTokens,
+                result.CacheWriteTokens);
 
             _traces?.Node(conversationKey, TurnNodeKind.Model, "ok", reasonCode: sampling.Intent.ToString().ToLowerInvariant(), count: used);
 
@@ -159,6 +178,8 @@ public sealed class AgentTurnLoop
         var aggregatedResult = result with
         {
             PromptTokens = totalPromptTokens,
+            CachedPromptTokens = totalCachedPromptTokens,
+            CacheWriteTokens = totalCacheWriteTokens,
             CompletionTokens = totalCompletionTokens,
             FallbackHops = maxFallbackHops
         };

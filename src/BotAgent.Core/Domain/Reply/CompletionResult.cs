@@ -65,6 +65,15 @@ public readonly record struct CompletionResult(int? Suitability, string? Reply, 
     /// <summary>本轮 Provider 故障转移跳数（0 为主通道直出）。</summary>
     int FallbackHops = 0,
 
+    /// <summary>
+    /// 本轮输入里**命中供应商缓存**的 token 数（#98）。null = 上游没提供这个统计（未知，不是 0）；
+    /// 0 = 上游明确说没命中；正数 = 实际命中量。
+    /// </summary>
+    int? CachedPromptTokens = null,
+
+    /// <summary>本轮输入里**写进**供应商缓存的 token 数（#98）；null = 上游没提供这个统计。</summary>
+    int? CacheWriteTokens = null,
+
     /// <summary>action=agent 时模型托付的任务（已清洗）；只交给服务端 agent 闸门，不是正文。</summary>
     string? AgentTask = null,
 

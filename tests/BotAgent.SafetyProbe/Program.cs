@@ -79,6 +79,7 @@ public static partial class Program
         ToolPromptTests();
         SearchPromptBudgetTests();
         TemporalAwarenessPromptTests();
+        PromptCacheStabilityTests();
         PanelApprovalTests();
         TurnLoopTests();
         LocalChannelTests();

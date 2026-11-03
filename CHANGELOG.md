@@ -103,6 +103,13 @@
 - OneBot 网关职责拆分（#108）：报文解析、入站事件、动作通道、发送动作与只读查询独立成内部组件；
   门面保留连接生命周期与公开接口，协议、超时、取消及普通消息到达顺序保持不变。
   职责对照与风险见 [边界说明](docs/architecture/onebot-gateway-boundaries.md)。
+- 模型输入缓存（#98）：系统提示改成「稳定前缀 + 动态尾巴」两段拼装 —— `[现在的时间]` 与逐轮
+  变化的发言意愿值移到末尾，写作规则 / 人设 / 动作契约 / 工具清单因此跨轮逐字可复用；
+  token 用量把「已缓存输入」与「缓存写入」补成**三态**（`null` = 上游没提供、`0` = 明确没命中），
+  `/metrics` 新增 `botagent_prompt_cached_tokens_total`、`botagent_prompt_cache_write_tokens_total`
+  与 `botagent_prompt_cache_unknown_total`（未知轮数单独报，绝不把未知当 0）。历史时间戳渲染、
+  `(#id)` 窗口与滑窗仍会让历史前缀失效，清楚写在
+  [模型输入缓存](docs/architecture/prompt-cache.md) 的「还会破坏前缀的四件事」里。
 
 ### 修复
 

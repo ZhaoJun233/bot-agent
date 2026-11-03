@@ -53,6 +53,6 @@ internal static class AnthropicProtocol
         }
         if (content.Count == 0) return new JsonObject { ["choices"] = new JsonArray() };
         var usage = root["usage"] as JsonObject;
-        return ProtocolJson.Envelope(text.ToString(), calls, usage is null ? null : ProtocolJson.Usage(usage, "input_tokens", "output_tokens"), ProtocolJson.Text(root["stop_reason"]) == "max_tokens" ? "length" : null);
+        return ProtocolJson.Envelope(text.ToString(), calls, usage is null ? null : ProtocolJson.Usage(usage, "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"), ProtocolJson.Text(root["stop_reason"]) == "max_tokens" ? "length" : null);
     }
 }

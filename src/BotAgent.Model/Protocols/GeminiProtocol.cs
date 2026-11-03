@@ -94,6 +94,6 @@ internal static class GeminiProtocol
             }
         }
         var usage = root["usageMetadata"] as JsonObject;
-        return ProtocolJson.Envelope(text.ToString(), calls, usage is null ? null : ProtocolJson.Usage(usage, "promptTokenCount", "candidatesTokenCount"), ProtocolJson.Text(candidate?["finishReason"]) == "MAX_TOKENS" ? "length" : null);
+        return ProtocolJson.Envelope(text.ToString(), calls, usage is null ? null : ProtocolJson.Usage(usage, "promptTokenCount", "candidatesTokenCount", "cachedContentTokenCount"), ProtocolJson.Text(candidate?["finishReason"]) == "MAX_TOKENS" ? "length" : null);
     }
 }

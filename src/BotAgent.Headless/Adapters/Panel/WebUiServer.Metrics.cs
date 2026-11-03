@@ -42,7 +42,16 @@ public sealed partial class WebUiServer
             .Append("botagent_prompt_tokens_total ").AppendLine((_traces?.PromptTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
             .AppendLine("# HELP botagent_completion_tokens_total Cumulative completion tokens produced since process start.")
             .AppendLine("# TYPE botagent_completion_tokens_total counter")
-            .Append("botagent_completion_tokens_total ").AppendLine((_traces?.CompletionTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture));
+            .Append("botagent_completion_tokens_total ").AppendLine((_traces?.CompletionTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_prompt_cached_tokens_total Cumulative prompt tokens served from the provider cache since process start. Turns whose provider reported no cache usage are not counted as zero (#98).")
+            .AppendLine("# TYPE botagent_prompt_cached_tokens_total counter")
+            .Append("botagent_prompt_cached_tokens_total ").AppendLine((_traces?.CachedPromptTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_prompt_cache_write_tokens_total Cumulative prompt tokens written into the provider cache since process start (only reported by some providers).")
+            .AppendLine("# TYPE botagent_prompt_cache_write_tokens_total counter")
+            .Append("botagent_prompt_cache_write_tokens_total ").AppendLine((_traces?.CacheWriteTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_prompt_cache_unknown_total Completed turns whose provider did not report cache usage (denominator for the cached ratio).")
+            .AppendLine("# TYPE botagent_prompt_cache_unknown_total counter")
+            .Append("botagent_prompt_cache_unknown_total ").AppendLine((_traces?.CacheUnknownTurnsTotal ?? 0).ToString(CultureInfo.InvariantCulture));
 
         var circuits = _circuitStatusProvider?.Invoke();
         if (circuits is { Count: > 0 })

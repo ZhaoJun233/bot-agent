@@ -235,6 +235,42 @@ public static partial class Program
             $"引用 id = {QuotedMessageId(sends.Count >= 2 ? sends[1] : null)}");
         Check("4 条活跃消息都送进了模型（由模型自主决定是否发言）", openAi.Requests.Count == 4, $"实际 {openAi.Requests.Count} 次");
 
+        // #98：输入缓存前缀在**真实链路**上的证据。S1 这四轮走的是同一条主链路、同一份配置，
+        // 所以系统提示的「稳定前缀」必须逐字相同；第一个分叉只能落在动态尾巴里
+        // （动态段第一句是发言意愿，见 PromptBuilder.BuildSuitabilityInstruction）。
+        if (openAi.Requests.Count >= 2)
+        {
+            var previousPrompt = SystemText(openAi.Requests[0]);
+            var currentPrompt = SystemText(openAi.Requests[1]);
+            var commonPrefix = 0;
+            while (commonPrefix < previousPrompt.Length
+                   && commonPrefix < currentPrompt.Length
+                   && previousPrompt[commonPrefix] == currentPrompt[commonPrefix])
+            {
+                commonPrefix++;
+            }
+
+            var dynamicStart = new[] { "你非常健谈主动", "你比较健谈", "你较为克制", "你极少主动发言" }
+                .Select(marker => currentPrompt.IndexOf(marker, StringComparison.Ordinal))
+                .Where(index => index >= 0)
+                .DefaultIfEmpty(-1)
+                .Min();
+            Check("★ 连续两轮请求的系统提示只在动态尾巴上分叉（输入缓存前缀稳定）",
+                dynamicStart > 0 && commonPrefix >= dynamicStart - 1,
+                $"共同前缀 {commonPrefix} 字，动态尾巴起点 {dynamicStart} 字，上轮 {previousPrompt.Length} 字 / 本轮 {currentPrompt.Length} 字");
+            // 只报数（不进断言）：这条数字是 #98「缓存前缀占比」的可复核口径。
+            Console.WriteLine($"      · 输入缓存前缀：稳定约 {Math.Max(0, dynamicStart - 1)} 字 / 系统提示共 {currentPrompt.Length} 字");
+
+            var toolsBefore = ToolSection(previousPrompt);
+            var toolsNow = ToolSection(currentPrompt);
+            if (toolsBefore.Length > 0 && toolsNow.Length > 0)
+            {
+                Check("★ 连续两轮请求的可用工具清单逐字一致且顺序不变",
+                    string.Equals(toolsBefore, toolsNow, StringComparison.Ordinal),
+                    $"上轮 {toolsBefore.Length} 字 / 本轮 {toolsNow.Length} 字");
+            }
+        }
+
         // ---- 提示词断言 ----
         var first = openAi.Requests.FirstOrDefault();
         var last = openAi.Requests.LastOrDefault();
@@ -2310,6 +2346,19 @@ public static partial class Program
         => request["messages"]?.AsArray()
                .FirstOrDefault(m => m?["role"]?.GetValue<string>() == "system")?["content"]?.GetValue<string>()
            ?? string.Empty;
+
+    /// <summary>[可用工具] 那一段（到下一个空行分段为止）；没有就返回空串。</summary>
+    private static string ToolSection(string system)
+    {
+        var start = system.IndexOf("[可用工具]", StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return string.Empty;
+        }
+
+        var end = system.IndexOf("\n\n[", start + 1, StringComparison.Ordinal);
+        return end > start ? system[start..end] : system[start..];
+    }
 
     private static List<string> UserTexts(JsonObject request)
         => request["messages"]?.AsArray()

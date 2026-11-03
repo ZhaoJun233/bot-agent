@@ -230,7 +230,11 @@ public class OpenAiClient : IModelClient
         }
 
         var (json, textOnlyRetry, fallbackHops) = outcome.Value;
-        var (promptTokens, completionTokens) = ModelJson.ReadUsage(json);
+        var usage = ModelJson.ReadUsageDetail(json);
+        var promptTokens = usage.PromptTokens;
+        var completionTokens = usage.CompletionTokens;
+        var cachedPromptTokens = usage.CachedPromptTokens;
+        var cacheWriteTokens = usage.CacheWriteTokens;
 
         using var doc = JsonDocument.Parse(json);
 
@@ -239,7 +243,8 @@ public class OpenAiClient : IModelClient
             Services.FileLog.Write("Agent",
                 $"model_empty_choices images={built.AttachedImages}");
             return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true,
-                PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops);
+                PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops,
+                CachedPromptTokens: cachedPromptTokens, CacheWriteTokens: cacheWriteTokens);
         }
 
         if (textOnlyRetry)
@@ -266,14 +271,17 @@ public class OpenAiClient : IModelClient
             {
                 PromptTokens = promptTokens,
                 CompletionTokens = completionTokens,
-                FallbackHops = fallbackHops
+                FallbackHops = fallbackHops,
+                CachedPromptTokens = cachedPromptTokens,
+                CacheWriteTokens = cacheWriteTokens
             };
         }
 
         // 有 choices 但里面没有 message.content：同样按沉默处理，不招异常
         Services.FileLog.Write("Agent", "model_content_missing");
         return new CompletionResult(null, null, null, ReasonCode: "upstream_empty", Malformed: true, UpstreamEmpty: true,
-            PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops);
+            PromptTokens: promptTokens, CompletionTokens: completionTokens, FallbackHops: fallbackHops,
+            CachedPromptTokens: cachedPromptTokens, CacheWriteTokens: cacheWriteTokens);
     }
     private async Task<SendOutcome?> SendThroughProvidersAsync(BuiltRequest built, CancellationToken ct)
     {
