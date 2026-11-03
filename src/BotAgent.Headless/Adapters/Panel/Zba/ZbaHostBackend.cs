@@ -86,8 +86,12 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         // 台账（#116）在这里注入：运行时只管写，SQLite 细节留在 Adapters/Persistence。
         var ledger = new AgentTaskLedgerStore();
         ledger.Prune(0);
+        // #137：任务级前置审批闸门。审批总开关关掉时它返回 null，不会凭空多出待批任务。
+        var approvalGate = new TaskApprovalGate(now, () => _box.Current.EnableApprovals);
         _tasks = new ZbaTaskRegistry(sessions,
-            new AgentTaskRuntime(new AgentTaskExecutor(agent), now, log: log, ledger: ledger, bootSeq: ledger.BootSeq),
+            new AgentTaskRuntime(
+                new AgentTaskExecutor(agent), now, log: log, ledger: ledger, bootSeq: ledger.BootSeq,
+                approvalGate: approvalGate),
             now, serverEnabled, events, taskReceipts, instanceId, log);
     }
 
@@ -370,16 +374,35 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         ConfigurationCaller caller, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (_approvals is null) return ValueTask.FromResult<IReadOnlyList<ZbaApprovalSummary>>(Array.Empty<ZbaApprovalSummary>());
-        var items = _approvals.PendingApprovals()
-            .Select(request => new ZbaApprovalSummary(
-                request.RequestId,
-                request.ToolId,
-                request.Summary,
-                _dto.Mask(request.ConversationKey),
-                request.ExpiresAt,
-                request.PolicyVersion))
-            .ToArray();
+        List<ZbaApprovalSummary> items = [];
+        var policyVersion = _approvals?.Capabilities.Policy.PolicyVersion ?? 0;
+        if (_approvals is not null)
+        {
+            foreach (var request in _approvals.PendingApprovals())
+            {
+                items.Add(new ZbaApprovalSummary(
+                    request.RequestId,
+                    request.ToolId,
+                    request.Summary,
+                    _dto.Mask(request.ConversationKey),
+                    request.ExpiresAt,
+                    request.PolicyVersion));
+            }
+        }
+
+        // #137：任务级待批单也在同一个列表里 —— 调用方不需要知道“这次是 QQ 会话审批还是任务审批”。
+        // 会话一栏用 task:<id> 标明它不属于任何聊天会话（不脱敏：里面只有任务号）。
+        foreach (var (taskId, approval) in _tasks.PendingApprovals())
+        {
+            items.Add(new ZbaApprovalSummary(
+                approval.RequestId,
+                approval.ToolId,
+                approval.Summary,
+                $"task:{taskId}",
+                approval.ExpiresAt,
+                policyVersion));
+        }
+
         return ValueTask.FromResult<IReadOnlyList<ZbaApprovalSummary>>(items);
     }
 
@@ -390,6 +413,29 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         if (_approvals is null) throw new ZbaBackendException(503, "approvals_unavailable", "审批组件不可用。");
         if (!_box.Current.EnableApprovals) throw new ZbaBackendException(403, "approvals_disabled", "人工审批总开关是关的。");
         var (ok, reason) = _approvals.PanelDecide(requestId, approve);
+        if (!ok && reason == "unknown_request")
+        {
+            // #137：任务级待批单不在 ApprovalUseCase 的租约表里（任务没有 QQ 平台来源，
+            // PanelDecide 只会报 source_unavailable/unknown_request），落到任务运行时自己的入口。
+            switch (_tasks.DecideApproval(requestId, approve))
+            {
+                case AgentTaskApprovalDecision.Approved:
+                    (ok, reason) = (true, "approved");
+                    break;
+                case AgentTaskApprovalDecision.Rejected:
+                    (ok, reason) = (true, "rejected");
+                    break;
+                case AgentTaskApprovalDecision.Expired:
+                    (ok, reason) = (false, "approval_expired");
+                    break;
+                case AgentTaskApprovalDecision.NotPending:
+                    (ok, reason) = (false, "approval_not_pending");
+                    break;
+                case AgentTaskApprovalDecision.Disposed:
+                    (ok, reason) = (false, "disposed");
+                    break;
+            }
+        }
         // #117：事件里的 state 如实反映失败原因（以前无论 expired / 越权 / 租约失效 / 未知编号
         // 一律写成 "rejected"，事后翻事件流分不出“被人拒绝”和“根本没等到人”）。
         var state = ok
@@ -400,6 +446,9 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
                 "stale_policy" => "stale_policy",
                 "not_an_approver" => "not_an_approver",
                 "unknown_request" => "unknown_request",
+                "approval_not_pending" => "approval_not_pending",
+                "approval_expired" => "approval_expired",
+                "disposed" => "disposed",
                 "source_retired" => "source_retired",
                 "source_unavailable" => "source_unavailable",
                 _ => "rejected"

@@ -112,6 +112,12 @@ public static class ToolGate
             {
                 return new ToolDecision(false, "approval_conversation_mismatch");
             }
+
+            // #137：票据必须由台账消费时签发（带 HMAC）；手搓的结构体过不了验签，一律不放行。
+            if (!ApprovalTicketSigner.Verify(ticket))
+            {
+                return new ToolDecision(false, "approval_ticket_unverified");
+            }
         }
 
         return new ToolDecision(true, "allowed");

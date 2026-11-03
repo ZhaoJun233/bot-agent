@@ -53,6 +53,14 @@ public static class Program
         await RunAsync("AgentTaskLedger: restart recovery never re-runs and unknown is the honest state", AgentTaskLedgerTests.RecoveryTests);
         await RunAsync("AgentTaskLedger: every state change is written to the ledger", AgentTaskLedgerTests.TransitionPersistenceTests);
         await RunAsync("AgentTaskLedger: a failing ledger never changes task outcome", AgentTaskLedgerTests.LedgerFailureIsolationTests);
+        await RunAsync("AgentTaskApproval: waiting approval never runs the executor", AgentTaskApprovalTests.WaitingApprovalNeverRunsTests);
+        await RunAsync("AgentTaskApproval: approve resumes once and only once", AgentTaskApprovalTests.ApproveRunsTests);
+        await RunAsync("AgentTaskApproval: reject cancels without ever running", AgentTaskApprovalTests.RejectTests);
+        await RunAsync("AgentTaskApproval: expiry collapses with approval_expired", AgentTaskApprovalTests.ExpireTests);
+        await RunAsync("AgentTaskApproval: cancel while waiting collapses immediately", AgentTaskApprovalTests.CancelWaitingTests);
+        await RunAsync("AgentTaskApproval: restart collapses waiting with approval_lost_on_restart", AgentTaskApprovalTests.RestartCollapsesWaitingTests);
+        await RunAsync("AgentTaskApproval: gate off keeps legacy behaviour", AgentTaskApprovalTests.GateOffTests);
+        await RunAsync("AgentTaskApproval: no tool scope never waits", AgentTaskApprovalTests.NoScopeNeverWaitsTests);
         await RunAsync("ToolVisibility: unknown ids fail closed and switches gate tools", ToolVisibilityTests.SwitchesAndUnknownIdsAsync);
         await RunAsync("ToolVisibility: web tools wait for web readiness", ToolVisibilityTests.WebReadyGateAsync);
         await RunAsync("ToolVisibility: stopped lease revokes every tool", ToolVisibilityTests.StoppedLeaseRevokesEverythingAsync);

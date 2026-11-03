@@ -5,14 +5,15 @@ namespace BotAgent.IntegrationHarness;
 
 /// <summary>
 /// S65：任务台账跨重启（#116）。上一进程遗留的非终态任务，重启后必须收口成可解释的终态，
-/// 并且绝不能被重做：Queued/WaitingApproval → Cancelled(cancelled_before_dispatch)，
+/// 并且绝不能被重做：Queued → Cancelled(cancelled_before_dispatch)，
+/// WaitingApproval → Cancelled(approval_lost_on_restart)（#137：待批单只活在进程内，重启即失效），
 /// Running/CancelRequested → Unknown(restart_state_unknown)。
 /// </summary>
 public static partial class Program
 {
     private static async Task RunTaskRecoveryScenarioAsync()
     {
-        Section("S65 任务台账跨重启（Queued→Cancelled / Running→Unknown / 不重做）");
+        Section("S65 任务台账跨重启（Queued/WaitingApproval→Cancelled / Running→Unknown / 不重做）");
 
         const string adminToken = "synthetic-s65-admin";
         const string readToken = "synthetic-s65-read";
@@ -23,6 +24,7 @@ public static partial class Program
         var ws2 = FreePort(13081);
         const string runningId = "zt-s65-running";
         const string queuedId = "zt-s65-queued";
+        const string waitingId = "zt-s65-waiting";
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
@@ -57,13 +59,13 @@ public static partial class Program
         var dbPath = Path.Combine(dataDir, "data", "botagent.db");
         Check("S65 首次启动建出库文件", File.Exists(dbPath), dbPath);
 
-        // 直接注入两条"上一个进程留下"的行：一条 Running、一条 Queued。
+        // 直接注入三条"上一个进程留下"的行：Running / Queued / WaitingApproval（#137 待批）。
         var seededAt = DateTimeOffset.UtcNow.AddMinutes(-5).ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz");
         var seededUpdated = DateTimeOffset.UtcNow.AddMinutes(-4).ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz");
         var seeded = 0;
         string? seedError = null;
         // 进程刚被杀掉时文件句柄可能还没放，写库偶发 disk I/O error → 有界重试。
-        for (var attempt = 0; attempt < 10 && seeded != 2; attempt++)
+        for (var attempt = 0; attempt < 10 && seeded != 3; attempt++)
         {
             seeded = 0;
             try
@@ -86,7 +88,7 @@ public static partial class Program
                     VALUES ($id, $state, $error, $source, $session, $target, $created, $updated,
                             0, 0, 0, 0, 0, 0);
                     """;
-                foreach (var (id, state) in new[] { (runningId, 1), (queuedId, 0) })
+                foreach (var (id, state) in new[] { (runningId, 1), (queuedId, 0), (waitingId, 2) })
                 {
                     cmd.Parameters.Clear();
                     cmd.Parameters.AddWithValue("$id", id);
@@ -108,7 +110,7 @@ public static partial class Program
             }
         }
 
-        Check("S65 能写入上一进程遗留的任务行", seeded == 2, "rows=" + seeded + (seedError is null ? "" : " err=" + seedError));
+        Check("S65 能写入上一进程遗留的任务行", seeded == 3, "rows=" + seeded + (seedError is null ? "" : " err=" + seedError));
 
         using (var bot = StartBot(Env(panel2, ws2)))
         {
@@ -132,6 +134,14 @@ public static partial class Program
                 && queuedNode?["errorCode"]?.GetValue<string>() == "cancelled_before_dispatch",
                 queued.Status + " " + queued.Body);
 
+            var waiting = await ZbaAsync(http, "GET", root + "/tasks/" + waitingId, adminToken);
+            var waitingNode = JsonNode.Parse(waiting.Body) as JsonObject;
+            Check("S65 重启前等待审批的任务恢复成 Cancelled 且写明审批已丢失",
+                waiting.Status == 200
+                && waitingNode?["state"]?.GetValue<int>() == 6
+                && waitingNode?["errorCode"]?.GetValue<string>() == "approval_lost_on_restart",
+                waiting.Status + " " + waiting.Body);
+
             var list = await ZbaAsync(http, "GET", root + "/tasks?limit=50", adminToken);
             var listNode = JsonNode.Parse(list.Body) as JsonObject;
             var ids = listNode?["items"]?.AsArray()
@@ -139,7 +149,7 @@ public static partial class Program
                 .Where(id => id is not null)
                 .ToArray() ?? Array.Empty<string?>();
             Check("S65 恢复的任务出现在任务列表里",
-                list.Status == 200 && ids.Contains(runningId) && ids.Contains(queuedId),
+                list.Status == 200 && ids.Contains(runningId) && ids.Contains(queuedId) && ids.Contains(waitingId),
                 list.Status + " ids=" + string.Join(",", ids));
 
             // 不重做：再查一次状态不变（若被重放会重新排队/运行，甚至 409）。

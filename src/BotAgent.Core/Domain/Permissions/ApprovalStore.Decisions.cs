@@ -141,7 +141,8 @@ public sealed partial class ApprovalStore
                 consumed.RequestId,
                 consumed.ToolId,
                 consumed.ConversationKey,
-                now);
+                now,
+                ApprovalTicketSigner.Sign(consumed.RequestId, consumed.ToolId, consumed.ConversationKey, now));
 
             return (new ApprovalOutcome(true, ApprovalStatus.Approved, "consumed", consumed), ticket);
         }

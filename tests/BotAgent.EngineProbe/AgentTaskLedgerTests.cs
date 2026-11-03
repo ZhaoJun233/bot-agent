@@ -47,6 +47,9 @@ internal static class AgentTaskLedgerTests
         var waitingApproval = runtime.Get("t-waiting-approval");
         Require(waitingApproval is not null && waitingApproval.State == AgentTaskState.Cancelled,
             "等待审批的历史任务还没派发，应恢复成 Cancelled。");
+        // #137：单子随进程消失，重启后不可能接着批 —— 原因码必须和“从没派发”区分开。
+        Require(waitingApproval!.ErrorCode == "approval_lost_on_restart",
+            $"等待审批的重启收口原因码必须是 approval_lost_on_restart，实际 {waitingApproval.ErrorCode}。");
 
         Require(runtime.Get("t-succeeded")?.State == AgentTaskState.Succeeded, "终态历史任务必须原样保留。");
 
@@ -135,7 +138,7 @@ internal static class AgentTaskLedgerTests
     }
 
     /// <summary>内存台账：记录每次写入，供断言"该写的时候写了没有"。</summary>
-    private sealed class MemoryLedger : IAgentTaskLedger
+    internal sealed class MemoryLedger : IAgentTaskLedger
     {
         private readonly object _gate = new();
         private readonly List<AgentTaskLedgerEntry> _rows = new();

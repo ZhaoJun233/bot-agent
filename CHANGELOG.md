@@ -16,6 +16,17 @@
 
 ### 变更
 
+- 任务级前置审批与票据防伪（#137）：审批接到**真实高风险执行点** —— 任务声明了 `bash` / `write` / `docker`
+  且审批总开关打开时，受理阶段就停在 `WaitingApproval`，**执行器一次都不会被调用**（批之前零副作用）；批准后
+  `Resume` 从同一条记录继续（不重发、不新建），结果仍回原会话。待批单在 `GET /zba/v1/approvals` 里以
+  `session = task:<任务号>` 出现，用既有的 `POST /zba/v1/approvals/{id}/decide` 批准或拒绝，**不新增端点、
+  不改 OpenAPI 契约**。粒度是**任务级不是工具级**（声明了就用，哪怕最后没用到也要先批），这是刻意取舍：
+  工具级挂起要把执行器循环变成可持久化状态并跨重启恢复。五个新原因码：`approval_rejected` / `approval_expired`
+  （有效期 120 秒，`Get` / `List` / 决策时都会先扫）/ `approval_cancelled` / `approval_lost_on_restart`
+  （待批单不落库，台账表结构一个字节没动）/ `approval_ticket_unverified`。票据加 HMAC 验签
+  （`ApprovalTicket.Signature` + `ApprovalTicketSigner`，密钥随进程生成 ⇒ 重启后旧票自动失效），手搓的同结构票据
+  不再能过闸门。边界与守护测试见 `docs/architecture/approval-and-isolation.md` 与
+  `docs/architecture/agent-task-runtime.md` §7。
 - 工具可见性收口与任务级工具作用域（#136）：
   - `//` 那条路的白名单改成**单入口** `src/BotAgent.Engine/Tools/ServerToolAccess.cs`
     （服务器工具 / QQ 动作 / MCP 作用域一处算），`ServerAgentRunner` 的两处调用与系统提示同源；
@@ -52,7 +63,7 @@
   `not_an_approver`/`unknown_request`/`source_retired`/`source_unavailable`（以前一律写 `rejected`）；
   补「已批准但过了有效期再消费同样失败」用例。**已知缺口**：审批尚未接到真实高风险工具
   （`//` 的 bash/read/write/docker 仍走 `ToolPolicy`），因为那需要「执行器挂起 + 批准后恢复同一轮」，
-  单独立条目跟进。口径见 `docs/architecture/approval-and-isolation.md`。
+  **已由 #137 以任务级前置审批落地**（见上）。口径见 `docs/architecture/approval-and-isolation.md`。
 - 插件市场与自定义模型提供商端到端落地：宿主侧注册表 + 面板安装/启停/凭据录入。
 - 自然对话驱动 agent（`//` 指令保留），含停止/进度归一匹配与日志脱敏。
 - Web 控制台：能力管理收敛、任务提交与审批事件恢复、插件中心、Token 配额插件与主题、

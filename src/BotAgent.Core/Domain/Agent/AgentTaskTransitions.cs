@@ -17,7 +17,9 @@ public static class AgentTaskTransitions
     private static readonly AgentTaskState[] QueuedTargets =
     [
         AgentTaskState.Running, AgentTaskState.CancelRequested,
-        AgentTaskState.Cancelled, AgentTaskState.TimedOut
+        AgentTaskState.Cancelled, AgentTaskState.TimedOut,
+        // #137：高风险任务在派发前停在待批；批准后 WaitingApproval → Running。
+        AgentTaskState.WaitingApproval
     ];
 
     private static readonly AgentTaskState[] RunningTargets =

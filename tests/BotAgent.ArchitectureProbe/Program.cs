@@ -1648,6 +1648,34 @@ public static class Program
             && runtimeSource.Contains("cancelled_before_dispatch", StringComparison.Ordinal)
             && runtimeSource.Contains("LoadRecent(", StringComparison.Ordinal),
             "运行时有写入点与恢复收口（恢复只读台账并收口，不重放执行）");
+
+        // #137：审批必须接到真实高风险执行点，票据必须防伪 —— 这三点靠肉眼 review 太不可靠。
+        var gateFile = index.ByPath("src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs");
+        var signerFile = index.ByPath("src/BotAgent.Core/Domain/Permissions/ApprovalTicketSigner.cs");
+        var toolGateFile = index.ByPath("src/BotAgent.Core/Domain/Permissions/ToolGate.cs");
+        var gateSource = gateFile?.NoComments ?? string.Empty;
+        var ticketSource = toolGateFile?.NoComments ?? string.Empty;
+        Check("★ 任务级审批闸门在 Headless、票据验签在 Core（#137）",
+            gateFile is not null
+            && signerFile is not null
+            && gateFile.NoComments.Contains("IAgentTaskApprovalGate", StringComparison.Ordinal)
+            && gateSource.Contains("\"bash\"", StringComparison.Ordinal)
+            && gateSource.Contains("\"write\"", StringComparison.Ordinal)
+            && gateSource.Contains("\"docker\"", StringComparison.Ordinal)
+            && signerFile.NoComments.Contains("HMACSHA256", StringComparison.Ordinal),
+            gateFile is null ? "缺 TaskApprovalGate.cs"
+            : signerFile is null ? "缺 ApprovalTicketSigner.cs"
+            : "闸门在 Headless，验签在 Core");
+
+        Check("★ 待批的四个收口语义与验签失败码都写死在运行时/闸门里（#137）",
+            runtimeSource.Contains("WaitingApproval", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_lost_on_restart", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_expired", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_rejected", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_cancelled", StringComparison.Ordinal)
+            && ticketSource.Contains("approval_ticket_unverified", StringComparison.Ordinal)
+            && ticketSource.Contains("ApprovalTicketSigner.Verify", StringComparison.Ordinal),
+            "挂起 / 批准 / 拒绝 / 超期 / 取消 / 重启六条路都有明确原因码，手搓票据过不了闸门");
     }
 
     /// <summary>从源码文本里读一个 enum 的「成员 → 显式数值」。解析不到就返回空表（由调用方判红）。</summary>

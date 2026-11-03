@@ -26,6 +26,7 @@ public static partial class Program
         using var agentAi = new MockOpenAi(agentAiPort);
         agentAi.Start();
         agentAi.AddRule("synthetic zba task", """{"final":"合成任务完成。"}""");
+        agentAi.AddRule("synthetic zba approval path", """{"final":"合成审批任务完成。"}""");
         agentAi.AddRule("synthetic zba panel result", """{"final":"合成任务完成。"}""");
         agentAi.AddRule("synthetic zba capacity", """{"final":"容量任务完成。"}""");
         agentAi.AddRule("synthetic zba long result",
@@ -500,6 +501,89 @@ public static partial class Program
             && longSummary.Length == 4000,
             longResult.Status + " chars=" + longNode?["summaryChars"]?.GetValue<int>()
             + " truncated=" + longNode?["summaryTruncated"]?.GetValue<bool>());
+
+        // ── #137：任务级前置审批（声明高风险工具的任务在派发前就停住，批准前一次都不执行） ──
+        // 审批总开关默认关；只有打开后 TaskApprovalGate 才会产生待批单。
+        var approvalSwitch = await PanelPostJsonAsync(
+            $"http://127.0.0.1:{panelPort}/api/settings", """{"enableApprovals":true}""");
+        Check("★ 面板能打开人工审批（任务级审批的前置开关）", approvalSwitch.Code == 200,
+            approvalSwitch.Code + " " + approvalSwitch.Body);
+
+        var modelBeforeApproval = agentAi.Requests.Count;
+        var riskySubmit = await ZbaAsync(http, "POST", root + "/tasks", adminToken,
+            "{\"sourceKey\":\"panel:workspace\",\"sessionId\":\"" + panelSessionId
+            + "\",\"prompt\":\"synthetic zba approval path\",\"target\":\"server\",\"timeoutSeconds\":60,"
+            + "\"toolScope\":[\"bash\"]}",
+            idempotencyKey: "synthetic-zba-approval-bash-1");
+        var riskyNode = JsonNode.Parse(riskySubmit.Body) as JsonObject;
+        var riskyTaskId = riskyNode?["id"]?.GetValue<string>();
+        Check("★ 声明高风险工具的任务受理即停在等待审批（state=2，不排队执行）",
+            riskySubmit.Status == 200 && riskyNode?["state"]?.GetValue<int>() == 2 && riskyTaskId is { Length: > 0 },
+            riskySubmit.Status + " " + riskySubmit.Body);
+
+        await Task.Delay(600);
+        var riskyHeld = await ZbaAsync(http, "GET", root + "/tasks/" + riskyTaskId, readToken);
+        var riskyHeldNode = JsonNode.Parse(riskyHeld.Body) as JsonObject;
+        Check("★ 未批准前零副作用：任务仍是等待审批，且模型一次请求都没收到",
+            riskyHeldNode?["state"]?.GetValue<int>() == 2 && agentAi.Requests.Count == modelBeforeApproval,
+            "state=" + riskyHeldNode?["state"]?.GetValue<int>() + " model=" + modelBeforeApproval
+            + "->" + agentAi.Requests.Count);
+
+        var approvalList = await ZbaAsync(http, "GET", root + "/approvals", readToken);
+        var approvalItems = (JsonNode.Parse(approvalList.Body) as JsonArray) ?? new JsonArray();
+        var approvalForTask = approvalItems.OfType<JsonObject>()
+            .FirstOrDefault(item => item["session"]?.GetValue<string>() == "task:" + riskyTaskId);
+        var approvalId = approvalForTask?["id"]?.GetValue<string>();
+        Check("★ 待批任务出现在同一个审批列表里（会话一栏写成 task:<id>）",
+            approvalList.Status == 200 && approvalId is { Length: > 0 }
+            && approvalForTask?["toolId"]?.GetValue<string>() == "bash",
+            approvalList.Status + " " + approvalList.Body);
+
+        var approveRisky = await ZbaAsync(http, "POST", root + "/approvals/" + (approvalId ?? "missing") + "/decide",
+            adminToken, """{"approve":true}""");
+        Check("★ 批准任务级待批单被闸门接受（回执 approve）",
+            approveRisky.Status == 200 && approveRisky.Body.Contains("\"decision\":\"approve\"", StringComparison.Ordinal),
+            approveRisky.Status + " " + approveRisky.Body);
+
+        var riskyDone = await WaitForTaskStateAsync(http, root, readToken, riskyTaskId!, 3, 60);
+        Check("★ 批准后从同一个待批点继续跑完（不重发、不新建任务）",
+            riskyDone is not null && riskyDone["state"]?.GetValue<int>() == 3,
+            riskyDone?.ToJsonString() ?? "timeout");
+
+        var riskyResult = await ZbaAsync(http, "GET", root + "/tasks/" + riskyTaskId + "/result", adminToken);
+        var riskyResultNode = JsonNode.Parse(riskyResult.Body) as JsonObject;
+        Check("★ 批准后跑完的结果仍然回到原会话（panel: 来源可查摘要）",
+            riskyResult.Status == 200
+            && riskyResultNode?["available"]?.GetValue<bool>() == true
+            && riskyResultNode?["summary"]?.GetValue<string>() == "合成审批任务完成。",
+            riskyResult.Status + " " + riskyResult.Body);
+
+        var rejectSubmit = await ZbaAsync(http, "POST", root + "/tasks", adminToken,
+            "{\"sourceKey\":\"panel:workspace\",\"sessionId\":\"" + panelSessionId
+            + "\",\"prompt\":\"synthetic zba approval path\",\"target\":\"server\",\"timeoutSeconds\":60,"
+            + "\"toolScope\":[\"bash\"]}",
+            idempotencyKey: "synthetic-zba-approval-bash-2");
+        var rejectTaskId = (JsonNode.Parse(rejectSubmit.Body) as JsonObject)?["id"]?.GetValue<string>();
+        var rejectList = await ZbaAsync(http, "GET", root + "/approvals", readToken);
+        var rejectApprovalId = ((JsonNode.Parse(rejectList.Body) as JsonArray) ?? new JsonArray())
+            .OfType<JsonObject>()
+            .FirstOrDefault(item => item["session"]?.GetValue<string>() == "task:" + rejectTaskId)?["id"]?.GetValue<string>();
+        var rejectDecision = await ZbaAsync(http, "POST",
+            root + "/approvals/" + (rejectApprovalId ?? "missing") + "/decide",
+            adminToken, """{"approve":false}""");
+        var rejected = await WaitForTaskStateAsync(http, root, readToken, rejectTaskId!, 6, 30);
+        Check("★ 拒绝后待批任务收口成 Cancelled 且原因码是 approval_rejected",
+            rejectDecision.Status == 200 && rejected is not null
+            && rejected["state"]?.GetValue<int>() == 6
+            && rejected["errorCode"]?.GetValue<string>() == "approval_rejected",
+            rejectDecision.Status + " " + (rejected?.ToJsonString() ?? "timeout"));
+
+        // 复原开关：后面的审批空态/缺字段用例仍按“没有待批单”跑。
+        var approvalRestore = await PanelPostJsonAsync(
+            $"http://127.0.0.1:{panelPort}/api/settings", """{"enableApprovals":false}""");
+        Check("★ 关闭审批开关后不再产生待批单", approvalRestore.Code == 200,
+            approvalRestore.Code + " " + approvalRestore.Body);
+
 
         // 失败任务：mock 命中标记直接 400，让真宿主拿到确定性的 agent 失败。
         agentAi.FailChatMarker = "synthetic zba failure";

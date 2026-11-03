@@ -50,7 +50,7 @@ Domain 的硬规则（ArchitectureProbe 钉着）：单文件 ≤300 行、类�
 | --- | --- | --- |
 | `Queued` | 已受理、未开始 | Runtime |
 | `Running` | 执行器已启动 | Runtime |
-| `WaitingApproval` | 等人工审批（#117 才有人写） | #117 |
+| `WaitingApproval` | 等人工审批（#137 起有真实写入方） | #137 |
 | `CancelRequested` | 取消已受理、执行器未停 | Runtime（Cancel） |
 | `Succeeded` / `Failed` | 终态 | Runtime |
 | `Cancelled` | 终态：用户取消 | Runtime |
@@ -62,7 +62,7 @@ ZBA 面板契约（`ZbaContracts.cs:185-195`）**保持 8 个值不变**：`Time
 ### 2.3 转移表
 
 ```
-Queued          -> Running | CancelRequested | Cancelled | TimedOut
+Queued          -> Running | CancelRequested | Cancelled | TimedOut | WaitingApproval
 Running         -> Succeeded | Failed | Cancelled | TimedOut | CancelRequested | WaitingApproval | Unknown
 WaitingApproval -> Running | Cancelled | Failed | TimedOut
 CancelRequested -> Cancelled | Succeeded | Failed | TimedOut | Unknown
@@ -73,7 +73,8 @@ Succeeded | Failed | Cancelled | TimedOut | Unknown -> （无，终态）
 - **终态不可覆盖**（原来靠 `Finish` 里一句 `if (Terminal(record.State)) return;`，现在是表的一部分）。
 - `CancelRequested -> Succeeded/Failed` 允许：取消是**请求**不是事实，执行器可能在取消生效前已经干完；这时如实上报完成，不冒报「取消成功」。
 - `Queued -> TimedOut` 允许：超时从受理开始算，包含排队时间。
-- `WaitingApproval` 本轮只有转移规则，没有生产者（#117 接）。
+- `WaitingApproval` 的生产者是任务级前置审批（#137）：受理时声明了 `bash` / `write` / `docker` 且审批总开关打开就停在这里，
+  不用 `Resume` 手动推进（工具级的执行器挂起与恢复仍不在范围里）。
 - `Running | CancelRequested -> Unknown` 是 **#116 的恢复策略**：进程重启时已派发但结果不明的任务，
   本地不能证明远端副作用被取消，也绝不重做，只能记「无法判定」（决策与对账细节见 ADR-0003）。
 

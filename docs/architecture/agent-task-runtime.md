@@ -1,4 +1,4 @@
-# 任务与执行状态：AgentTaskRuntime
+# 任务与执行状态：AgentTaskRuntime（#114 / #116 / #137）
 
 面向「一个任务从受理到终态」的统一状态模型与运行时。决策与取舍见
 [ADR-0002](../decisions/0002-agent-task-runtime.md)；本文只写**当前的实现事实**：谁负责什么、
@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | 0 | Queued | 已受理、等待执行 |
 | 1 | Running | 执行器已开始 |
-| 2 | WaitingApproval | 等待审批（#117 的预留位，当前没有写入方） |
+| 2 | WaitingApproval | 等待审批（#137 起有真实写入方：`TaskApprovalGate` 在派发前命中高风险工具就停在这里） |
 | 3 | Succeeded | 成功终态 |
 | 4 | Failed | 失败终态（带 errorCode） |
 | 5 | CancelRequested | 已收到取消请求，执行器尚未停下 |
@@ -37,7 +37,7 @@
 
 | 从 | 允许去往 |
 | --- | --- |
-| Queued | Running / CancelRequested / Cancelled / TimedOut |
+| Queued | Running / CancelRequested / Cancelled / TimedOut / **WaitingApproval**（#137） |
 | Running | Succeeded / Failed / Cancelled / TimedOut / CancelRequested / WaitingApproval / Unknown |
 | WaitingApproval | Running / Cancelled / Failed / TimedOut |
 | CancelRequested | Cancelled / Succeeded / Failed / TimedOut / Unknown |
@@ -121,7 +121,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | 库里状态 | 恢复后 | 原因码 |
 | --- | --- | --- |
 | Queued | Cancelled | `cancelled_before_dispatch` |
-| WaitingApproval | Cancelled | `cancelled_before_dispatch` |
+| WaitingApproval | Cancelled | `approval_lost_on_restart`（#137：待批单只活在进程内，重启即失效，不假装还能批） |
 | Running | Unknown | `restart_state_unknown` |
 | CancelRequested | Unknown | `restart_state_unknown` |
 
@@ -140,19 +140,35 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | 台账 | 保留 200 条 / 活跃 4 的对外上限，淘汰时 `Forget` |
 | 结果投影 | 仅 `panel:` 来源的成功任务给摘要，其余 `reason=scope_not_allowed`；`TimedOut` 折成 `Failed` + `timeout` |
 | 工具作用域 | 提交体可带可选 `toolScope`（#136）：透传进 `AgentTaskRequest.ToolScope`，**执行前**与配置白名单取交集（只能收窄）；作用域也算进幂等哈希 —— 同一提示词、不同作用域是两件事 |
+| 前置审批（#137） | 受理时先过 `IAgentTaskApprovalGate`：声明了 bash/write/docker 的任务**不排执行**，直接落 `WaitingApproval` 并进待批列表；批准后 `Resume` 从同一条记录继续跑（`alreadyRunning: true`，不重发不新建），拒绝/超期/取消分别收口成 `approval_rejected` / `approval_expired` / `approval_cancelled` |
 | 取消 | `Cancel` 映射 `Requested → (state, true, "cancel_requested")`、`TooLate → (state, false, "too_late")`、`NotFound → 404 task_not_found` |
 
 面板直跑（`POST /api/agent`）与 `//` 命令**没有**接进运行时，这是 ADR-0002 的明确取舍：
 聊天与 fire-and-forget 链路的行为本轮一点不改，先把唯一对外暴露任务语义的通道迁过来。
 
-## 7. 守护它的测试
+## 7. 任务级前置审批（#137）
+
+| 问题 | 答案 |
+| --- | --- |
+| 谁判定要批 | `src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs`：高危工具名表 `bash` / `write` / `docker`（不区分大小写）、审批总开关必须开、任务必须声明了非空 `toolScope` |
+| 批之前跑不跑 | 不跑。受理线程只建记录并落 `WaitingApproval`，**不排 `Task.Run`**；引擎用例断言 150ms 后执行器调用次数为 0 |
+| 批了怎么继续 | `AgentTaskRuntime.Resume`：同一条记录 `WaitingApproval → Running`，`RunAsync(task, alreadyRunning: true)`（跳过首次状态推进），结果仍按原任务投影 |
+| 谁来决定 | `DecideApproval(requestId, approve, now)`，ZBA 通过 `POST /zba/v1/approvals/{id}/decide` 触发；待批单在 `GET /zba/v1/approvals` 里以 `session = task:<任务号>` 出现 |
+| 超期怎么办 | `SweepApprovals`（`Get` / `List` / `DecideApproval` 时都会先扫）把 `ApprovalExpiresAt <= now` 的收口成 `Cancelled` + `approval_expired`；有效期取 `ApprovalFlow.TtlSeconds`（120 秒） |
+| 取消怎么办 | `Cancel` 命中 `WaitingApproval` 时收口成 `Cancelled` + `approval_cancelled`（此前这条边根本不存在） |
+| 重启怎么办 | `Restore()` 把库里的 `WaitingApproval` 收口成 `Cancelled` + `approval_lost_on_restart` —— 待批单不落库，重启后没有任何可批的对象 |
+| 为什么不落库 | 审批字段（`ApprovalRequestId` / `ApprovalToolId` / `ApprovalSummary` / `ApprovalExpiresAt`）只在快照里，台账表结构一个字节没动（`agent_tasks` 仍是 v13 的 14 列） |
+| 票据防伪 | 见 [审批与执行隔离](approval-and-isolation.md) §4：`ApprovalTicket.Signature` + HMAC 验签 |
+
+## 7.1 守护它的测试
 
 | 测试 | 钉住什么 |
 | --- | --- |
+| `EngineProbe` 的 `AgentTaskApprovalTests` 8 例（#137） | 待批时不调用执行器（零副作用）、批准才跑、拒绝/超期/取消/重启四个原因码、审批关或没声明作用域就照旧直跑 |
 | `EngineProbe` 的 7 条 `AgentTaskRuntime: …` | 转移表全矩阵与终态无出边、非法转移抛异常、成功/清洗/截断/未声明采集不存正文、取消（含二次取消 TooLate 与未知 NotFound）、超时与取消区分且 `CancellationRequested=false`、`agent_failed`/`agent_rejected`、并发上限与重复 id、`Forget` 只删终态 |
 | `ZbaProbe` 303 条 | 通道语义没变：幂等重放、回执、事件、结果可见性、取消 |
 | 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为；S54 还断言「声明了 `toolScope` 的任务把系统提示里的工具清单收窄」（#136）；S55 断言「重启后旧任务可查且不停在排队/运行中」 |
-| 集成 S65 | 任务台账跨重启：Queued→Cancelled、Running→Unknown、出现在列表里、不会被重做 |
+| 集成 S65 | 任务台账跨重启：Queued→Cancelled、WaitingApproval→Cancelled(`approval_lost_on_restart`, #137)、Running→Unknown、出现在列表里、不会被重做 |
 | `ProductionSpecProbe` 台账 8 条 | v12 版本（#135 起断言 v13）、建表、无正文列、字段往返保真、同 id 覆盖、`BootSeq` 递增、`Prune` 只留最近 N、清理 |
 | `ArchitectureProbe` | 分层与文件头注释约定（Core 不引 Engine、Engine 只引 Core） |
 
@@ -162,8 +178,9 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 
 - **重启后不重做**：台账能让记录活过重启，但代价是「可能做过副作用的执行」只能标 `Unknown`，
   没有任何自动续跑（见 §5 的恢复表与 ADR-0003 §2.4）。
-- **没有审批接线**：`WaitingApproval` 仍然只是预留状态、没有写入方（#117 只做了审批链路的隔离与可追溯，
-  把审批接到真实高风险执行点需要执行器挂起与恢复，见 #137；口径见 [审批与执行隔离](approval-and-isolation.md)）。
+- **审批是任务级、不是工具级**（#137）：任务声明了高风险工具就整条先批 —— 粒度粗是刻意取舍（工具级挂起要
+  把执行器循环变成可持久化状态并跨重启恢复）；没有多级审批、不做跨重启恢复待批（重启即 `approval_lost_on_restart`）。
+  口径见 [审批与执行隔离](approval-and-isolation.md)。
 - **没有远程重启**：`RestartRequired` 语义仍属配置链路，本层不提供重启按钮。
 - **不暴露到 OpenAPI**：运行时是内部构件，唯一对外契约仍由 ZBA 路由与 `ZbaOpenApi` 定义。
 - **超时折成 Failed 是本轮唯一可观察的行为变化**：以前 ZBA 超时会把取消也算成 `Cancelled`，

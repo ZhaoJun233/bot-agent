@@ -76,6 +76,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
         var hash = RequestHash(submission, target);
         string taskId;
         DateTimeOffset acceptedAt;
+        var acceptedState = AgentTaskState.Queued;
         lock (_gate)
         {
             if (_disposed) throw new ZbaBackendException(503, "zba_stopping", "服务正在停止。");
@@ -159,11 +160,14 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
             // 回执已落盘后再淘汰最旧终态记录：上限仍为 200 条，回执保留用于 expired/record_evicted。
             PruneLocked();
 
-            _log?.Invoke($"[Zba] task={taskId} state=queued target={target}");
-            _events.Append("task.updated", taskId, "queued", null, null, now);
+            // #137：声明了高危工具的任务直接进 waiting_approval（执行器还没被调用）。
+            acceptedState = accepted.Task.State;
+            var acceptedWire = WireState(acceptedState);
+            _log?.Invoke($"[Zba] task={taskId} state={acceptedWire} target={target}");
+            _events.Append("task.updated", taskId, acceptedWire, null, accepted.Task.ApprovalToolId, now);
         }
 
-        return new ZbaTaskAccepted(taskId, ZbaTaskState.Queued, acceptedAt);
+        return new ZbaTaskAccepted(taskId, ToZba(acceptedState), acceptedAt);
     }
 
     internal ZbaTaskPage List(int limit, string? cursor)
@@ -241,6 +245,31 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
             return new ZbaTaskCancelResult(state, false, "too_late");
         return new ZbaTaskCancelResult(state, true, "cancel_requested");
     }
+
+    /// <summary>待批任务（#137）：给 <c>GET /zba/v1/approvals</c> 追加的条目。</summary>
+    internal IReadOnlyList<(string TaskId, AgentTaskApprovalRequest Approval)> PendingApprovals()
+    {
+        List<(string, AgentTaskApprovalRequest)> pending = [];
+        var (_, total) = _runtime.Counts();
+        if (total == 0) return pending;
+        var snapshots = _runtime.List(0, total, out _);
+        foreach (var task in snapshots)
+        {
+            if (task.State != AgentTaskState.WaitingApproval) continue;
+            if (task.ApprovalRequestId is null || task.ApprovalExpiresAt is null) continue;
+            pending.Add((task.Id, new AgentTaskApprovalRequest(
+                task.ApprovalRequestId,
+                task.ApprovalToolId ?? "task",
+                task.ApprovalSummary ?? string.Empty,
+                task.ApprovalExpiresAt.Value)));
+        }
+
+        return pending;
+    }
+
+    /// <summary>一次任务级审批决策（#137）：批准 → 恢复执行；拒绝/过期 → 收口成 Cancelled。</summary>
+    internal AgentTaskApprovalDecision DecideApproval(string requestId, bool approve)
+        => _runtime.DecideApproval(requestId, approve, _now());
 
     internal (int Total, int Active) Counts()
     {

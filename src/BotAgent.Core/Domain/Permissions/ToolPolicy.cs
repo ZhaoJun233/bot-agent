@@ -96,4 +96,10 @@ public readonly record struct ApprovalTicket(
     string RequestId,
     string ToolId,
     string ConversationKey,
-    DateTimeOffset GrantedAt);
+    DateTimeOffset GrantedAt,
+
+    /// <summary>
+    /// 签发凭证（#137）：由 <see cref="ApprovalStore.Consume" /> 用进程内随机密钥做 HMAC。
+    /// 手搓的票据没有这个字段就过不了 <see cref="ToolGate" /> 的验签 —— 见 <see cref="ApprovalTicketSigner" />。
+    /// </summary>
+    string Signature = "");

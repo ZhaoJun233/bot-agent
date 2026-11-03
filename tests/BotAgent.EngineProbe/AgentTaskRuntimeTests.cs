@@ -36,8 +36,12 @@ internal static class AgentTaskRuntimeTests
 
         var expected = new Dictionary<AgentTaskState, AgentTaskState[]>
         {
+            // #137：派发前的审批闸门命中也是一种从 Queued 出发的合法转移。
             [AgentTaskState.Queued] =
-                [AgentTaskState.Running, AgentTaskState.CancelRequested, AgentTaskState.Cancelled, AgentTaskState.TimedOut],
+            [
+                AgentTaskState.Running, AgentTaskState.CancelRequested, AgentTaskState.Cancelled,
+                AgentTaskState.TimedOut, AgentTaskState.WaitingApproval
+            ],
             [AgentTaskState.Running] =
             [
                 AgentTaskState.Succeeded, AgentTaskState.Failed, AgentTaskState.Cancelled,

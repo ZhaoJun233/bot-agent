@@ -1188,6 +1188,22 @@ public static partial class Program
 
     // ───────────────── P3：Fail-Closed 工具权限（V3 §9.5） ─────────────────
 
+    /// <summary>
+    /// #137：票据只能由审批台账**真签发**（签名密钥在 Core 内部，手搓的票过不了闸门）。
+    /// 探针要测「有票 → 放行」，就得像真实链路一样走 Create → Decide → Consume。
+    /// </summary>
+    private static ApprovalTicket IssueTicket(
+        string toolId, string conversationKey, DateTimeOffset now, string requestId = "req-probe-ticket")
+    {
+        var store = new ApprovalStore();
+        store.Create(requestId, toolId, "合成审批单", conversationKey, "user:me", new[] { "admin:1" }, now);
+        var decided = store.Decide(requestId, "admin:1", conversationKey, approve: true, now);
+        if (!decided.Ok) throw new InvalidOperationException("合成票据失败：" + decided.ReasonCode);
+        var (outcome, ticket) = store.Consume(requestId, conversationKey, now);
+        if (!outcome.Ok || ticket is null) throw new InvalidOperationException("合成票据失败：" + outcome.ReasonCode);
+        return ticket.Value;
+    }
+
     private static ToolRegistry BuildRegistry() => new ToolRegistry()
         .Register(new ToolDescriptor("chat.reply", ToolCategory.ConversationRead, "回复当前会话"))
         .Register(new ToolDescriptor("web.search", ToolCategory.WebRead, "联网搜索"))
@@ -1258,10 +1274,20 @@ public static partial class Program
         Check("想发到别的会话 → 拒绝（cross_conversation）",
             !crossTarget.Allow && crossTarget.ReasonCode == "cross_conversation", crossTarget.Describe());
 
+        // #137：票据必须是台账签发的（手搓结构相同的票在下面单独负向断言里被拒）。
+        var signedTicket = IssueTicket("voice.speak", "group:10001", DateTimeOffset.UnixEpoch);
         var sameTarget = ToolGate.Evaluate(registry, social,
             new ToolRequest("voice.speak", "group:10001", TargetConversationKey: "group:10001"),
-            new ApprovalTicket("req-3", "voice.speak", "group:10001", DateTimeOffset.UnixEpoch));
+            signedTicket);
         Check("发到当前会话 + 有票据 → 允许（审批可放开这一类）", sameTarget.Allow, sameTarget.Describe());
+
+        // #137 验收 ③：结构一模一样、但没经过台账签发的票据过不了闸门。
+        var forgedTicket = new ApprovalTicket("req-3", "voice.speak", "group:10001", DateTimeOffset.UnixEpoch);
+        var forged = ToolGate.Evaluate(registry, social,
+            new ToolRequest("voice.speak", "group:10001", TargetConversationKey: "group:10001"),
+            forgedTicket);
+        Check("★★ 手搓票据（结构相同、无签名）→ 拒绝（approval_ticket_unverified）",
+            !forged.Allow && forged.ReasonCode == "approval_ticket_unverified", forged.Describe());
 
         // 需要审批的类别：没票据 → approval_required；票据换了工具/会话 → 不认
         var noTicket = ToolGate.Evaluate(registry, social, new ToolRequest("voice.speak", "group:10001"));
@@ -1462,7 +1488,7 @@ public static partial class Program
         var demoWithTicket = ToolGate.Evaluate(
             ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
             new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"),
-            new ApprovalTicket("req-demo", ApprovalFlow.FixedToolId, "group:10001", t0));
+            IssueTicket(ApprovalFlow.FixedToolId, "group:10001", t0, "req-demo"));
         Check("审批开：拿到匹配票据 → 允许执行",
             demoWithTicket.Allow, demoWithTicket.Describe());
 
@@ -1846,7 +1872,7 @@ public static partial class Program
             var approved = ToolGate.Evaluate(
                 ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
                 new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"),
-                new ApprovalTicket("T1", ApprovalFlow.FixedToolId, "group:10001", t0));
+                IssueTicket(ApprovalFlow.FixedToolId, "group:10001", t0, "T1"));
             Check($"[{preset}] 固定假工具：批过之后要能执行（不能 approval_cannot_grant）",
                 approved.Allow, approved.Describe());
         }

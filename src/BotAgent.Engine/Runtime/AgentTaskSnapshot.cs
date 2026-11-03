@@ -22,6 +22,12 @@ public sealed record AgentTaskSnapshot
     public string? ResultSummary { get; init; }
     public bool ResultTruncated { get; init; }
     public int ResultChars { get; init; }
+
+    // #137：待批信息（只有 WaitingApproval 期间有值）；通道用它回答“在等哪一张单子”。
+    public string? ApprovalRequestId { get; init; }
+    public string? ApprovalToolId { get; init; }
+    public string? ApprovalSummary { get; init; }
+    public DateTimeOffset? ApprovalExpiresAt { get; init; }
 }
 
 /// <summary>提交被拒绝的原因（通道自己翻译成 HTTP 状态码与错误码）。</summary>

@@ -1,4 +1,4 @@
-# 审批与执行隔离（#117）
+# 审批与执行隔离（#117 / #137）
 
 这一页写清三件事：**谁需要人批**、**批了之后是什么在保证「没批就真的不执行」**、以及**事后能查到什么**。
 它不是 API 手册 —— 面板与 ZBA 的端点形状见 `docs/api-surface.md`。
@@ -9,10 +9,11 @@
 | --- | --- | --- |
 | 聊天轮里的高风险工具（搜索 / 点歌 / 语音 / 表情 / 戳一戳） | **不**走审批 | 走能力闸门 `ToolGate`（策略 `ToolPolicy`），由配置开关注销；它们不算「任意代码执行」 |
 | 聊天轮里的「模型点名工具」 | 走审批，但只认服务端固定工具 | `ApprovalFlow.FixedToolId`（`demo.echo`，**无真实副作用**的假工具）——模型点名别的工具连单都开不出来 |
-| `//` 命令里的服务器 agent 工具（bash / read / write / docker …） | **不**走审批 | 由 `ServerToolGate` 的 `ToolPolicy`（默认关 + 显式放行集）管；`HighRiskExceptions` 是唯一的例外通道 |
+| `//` 命令里的服务器 agent 工具（bash / read / write / docker …） | 走**任务级前置审批**（#137）：任务声明了高风险工具就在派发前停住 | 由 `ServerToolGate` 的 `ToolPolicy`（默认关 + 显式放行集）管；`HighRiskExceptions` 是唯一的例外通道 |
+| ZBA / 面板提交的**任务**（`POST /zba/v1/tasks`，`toolScope` 里声明 bash / write / docker） | 走**任务级前置审批**（#137） | 闸门 `TaskApprovalGate` 在派发前判定：批准之前执行器**一次都不会被调用**（零副作用），批准后从同一张单继续跑完 |
 
-> ⚠ **已知缺口（本轮如实记录）**：审批还没有接到真实高风险执行点上。要做到那一步，需要让执行器在「需要批准」时**挂起并在批准后恢复同一轮**（`//` 链路的 `ServerAgentRunner` 循环里暂停），属 Runtime 扩展，已单独立条目跟进。
-> 因此本条目的「审批前无副作用」只对固定假工具成立 —— 假工具本来就没有副作用，所以这条验收仍然是**未满足**状态。
+> **#137 落地的是任务级、不是工具级**：粒度是粗的 —— 任务只要**声明**了高风险工具，整条任务都要先批（哪怕最后一步都没用上 bash）。
+> 这是刻意的 fail-closed 取舍：工具级挂起要把 `ServerAgentRunner` 循环里的消息、步数、当前调用与租约都变成可持久化状态并跨重启恢复，成本远超本轮；任务级闸门天然可持久化（任务只有一行台账），且「批准前零副作用」是结构性的，不依赖执行器内部写对没写对。取舍见 `docs/architecture/agent-task-runtime.md` §7。
 
 ## 2. 判定顺序（唯一入口）
 
@@ -24,6 +25,8 @@
 4. **不是名单内的人、也不是 owner/admin** → 不动作；
 5. 已经决定过 → 不动作（拒绝是终局，批准也只消费一次）；
 6. 批准 → **一次性消费票据**；重复消费拿不到票据。
+
+**任务级待批单走的是另一条决策入口**（`AgentTaskRuntime.DecideApproval`）：任务没有 QQ 平台来源租约，`ApprovalUseCase.PanelDecide` 只会报 `unknown_request`，所以 `ZbaHostBackend.DecideApprovalAsync` 转而问任务运行时；判定（过期先扫、已决定不再动）由任务运行时自己的状态机保证，见 `docs/architecture/agent-task-runtime.md` §7。
 
 有效期默认 120 秒、上限 900 秒（`ApprovalStore.DefaultTtlSeconds` / `MaxTtlSeconds`）。**批准不会延长有效期**：过期判定发生在消费时，与谁批的、批得多早无关；这条在 #117 补了专门用例（SafetyProbe「批准后过了有效期再消费 → 失败且不给票据」）。
 
@@ -51,13 +54,13 @@
 
 ### 还没堵上的缝
 
-`ApprovalTicket` 是公开 record（`src/BotAgent.Core/Domain/Permissions/ToolPolicy.cs`），`ToolGate` 只校验 tool + 会话，不验「这张票是不是 `Consume` 真签发的」。所以在同一进程里手搓一张票就能过闸门 —— 目前**没有实际提权路径**（生产只有 `ApprovalUseCase` 一家发票，两条入口都走 `ApprovalFlow.Handle`），但这是「靠没人这么写」而不是「结构上不可能」。已在遗留条目里跟进（票据加 nonce / 验签）。
+**#137 已补上：票据验签。** `ApprovalTicket` 增第 5 个字段 `Signature`，`ApprovalStore.Consume` 签发时用 `ApprovalTicketSigner.Sign(requestId, toolId, conversationKey, grantedAt)`（进程内随机 32 字节密钥 + HMACSHA256 + `CryptographicOperations.FixedTimeEquals`），`ToolGate.Evaluate` 在 tool / 会话校验之后**多验一道签**，失败返回 `approval_ticket_unverified`。密钥随进程生成 ⇒ 重启后旧票全失效（票据本来就只在同一轮里活着）。检查顺序刻意保留 tool/conv 在前，所以既有的 `approval_tool_mismatch` / `approval_conversation_mismatch` 断言不变。负向用例：SafetyProbe「手搓票据（结构相同、无签名）→ 拒绝」。
 
 ## 5. 事后能查到什么
 
 | 证据 | 位置 | 内容 |
 | --- | --- | --- |
-| 待批列表 | 面板 `GET /api/approvals`、ZBA `GET /zba/v1/approvals` | 只列 **Pending**：编号 / 工具 / 已脱敏摘要 / 脱敏后的会话 key / 剩余秒数 |
+| 待批列表 | 面板 `GET /api/approvals`、ZBA `GET /zba/v1/approvals` | 只列 **Pending**：编号 / 工具 / 已脱敏摘要 / 脱敏后的会话 key / 剩余秒数。#137 起**同一个列表里还有任务级待批单**，会话一栏写成 `task:<任务号>`（不属于任何聊天会话，故不脱敏） |
 | 事件流 | `ZbaEventBuffer` 的 `approval.decided` | #117 起 `state` 如实反映结果：`approved` / `rejected` / `expired` / `stale_policy` / `not_an_approver` / `unknown_request` / `source_retired` / `source_unavailable`（以前无论哪种失败都写 `rejected`，事后分不出「被人拒绝」和「根本没等到人」）；`reasonCode` 同时带上 |
 | 审计 | `SecurityAuditLog` 的 `approval_decision` | 操作者、会话、`{requestId, action, reason, shouldExecute}`、当时的策略版本 |
 | 轨迹节点 | `TurnTraceStore` 的 `Gate` 节点 | 决策后执行前那道闸门放行还是拒绝、原因码 |
@@ -73,6 +76,9 @@
 | 面板决策 / 执行前复核租约在代码里（#117 新增） | `tests/BotAgent.ArchitectureProbe/Program.cs` 的 `PanelApprovalChecks` |
 | 平台源换代时审批不执行 | `tests/BotAgent.ReviewRemediationProbe/PlatformLifecycleTests.cs` |
 | 面板/ZBA 端点的前置校验与错误码 | `tests/BotAgent.ZbaProbe/Program.cs`、`tests/BotAgent.IntegrationHarness/ZbaScenario.cs` |
+| 手搓票据被拒（#137 新增） | `tests/BotAgent.SafetyProbe/Program.cs`：`★★ 手搓票据（结构相同、无签名）→ 拒绝（approval_ticket_unverified）` |
+| 任务级待批：不批不跑 / 批了才跑 / 拒了收口 / 超期收口 / 重启收口 | `tests/BotAgent.EngineProbe/AgentTaskApprovalTests.cs`（8 例） |
+| 任务级审批真链路（提交→state=2→ZBA 批准→跑完并回原会话、拒绝路径） | `tests/BotAgent.IntegrationHarness/ZbaScenario.cs`（S54） |
 
 ## 7. 改这里的检查单
 
@@ -80,4 +86,6 @@
 2. 改判定顺序 → 同步 `ApprovalFlow.Handle` 的注释、SafetyProbe 的六条断言、这一页的第 2 节。
 3. 加事件 state → 同步 `ZbaHostBackend.DecideApprovalAsync` 的映射、前端 `TasksPage.vue` 的展示与这一页第 5 节。
 4. 动租约 → 两条入口（群 / 面板）与执行前复核必须一起改；只改一处等于留一条绕过路径。
-5. 不要把审批状态写进任务状态 `WaitingApproval` —— 那个值今天没有写入方（只有定义与投影），接它属于 follow-up，见 `docs/architecture/agent-task-runtime.md`。
+5. 任务级待批的判定在 `src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs`（高危工具名表 + 审批总开关），
+   执行侧的挂起/恢复在 `AgentTaskRuntime`（`Resume` / `Reject` / `DecideApproval` / `SweepApprovals`）。
+   改任一处都要同步 S54 用例与这一页。

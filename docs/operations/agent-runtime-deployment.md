@@ -1,4 +1,4 @@
-# Agent Runtime 部署、验证与回滚（#119）
+# Agent Runtime 部署、验证与回滚（#119 / #137）
 
 适用于按 #114 / #116 引入的 **Agent Runtime**（任务状态机 + 任务台账）。目标：一个没参与开发的人，照着这一页能把
 Runtime 上线、确认它真的在工作、并在出问题时把它撤掉或回退到旧二进制。
@@ -70,7 +70,8 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 
 要点：
 
-- **status 是整数**（0/1/2/3/4/6/7），不是字符串；`2 = WaitingApproval` 目前没有写入方（见 #137）。
+- **status 是整数**（0/1/2/3/4/6/7），不是字符串；`2 = WaitingApproval`（#137 起：任务声明了 `bash` / `write` / `docker`
+  且审批总开关打开时，受理即停在这个状态，**执行器一次都不会被调用**）。
 - 终态之后再次 `POST /zba/v1/tasks/{id}/cancel` 会被拒绝（不能把已经完成的任务改成取消）。
 - `GET /zba/v1/tasks/{id}/result` 只对 `panel:` 源的成功任务返回有界摘要（≤4000 字，已清洗控制字符），其余源返回空/受限。
 - 超时：`timeoutSeconds` 会被钳到 **10–900** 秒；超时终态是 `Failed` + `errorCode=timeout`（#114 起的唯一可观察行为变化，见 [ADR-0002](../decisions/0002-agent-task-runtime.md)）。
@@ -81,12 +82,52 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 
 | 重启前状态 | 重启后 | 原因码 |
 | --- | --- | --- |
-| `Queued` / `WaitingApproval`（从未开始） | `Cancelled` | `cancelled_before_dispatch` |
+| `Queued`（从未开始） | `Cancelled` | `cancelled_before_dispatch` |
+| `WaitingApproval`（等审批，见 #137） | `Cancelled` | `approval_lost_on_restart` —— 待批单只活在进程内，重启后没有可批的对象，不假装还能批 |
 | `Running` / `CancelRequested`（可能已在远端产生副作用） | `Unknown` | `restart_state_unknown` |
 | 终态（`Succeeded` / `Failed` / `Cancelled` / `Unknown`） | 保持不变 | — |
 
 自查：提交一个长任务 → 重启宿主 → `GET /zba/v1/tasks/{id}` 应返回 **200**（不是 404），且状态落到上表；
 `GET /zba/v1/tasks/{id}/result` 对 `Unknown` 不返回正文。
+
+### 2.4 审批闭环（#137）
+
+只有「任务声明了高风险工具 + 审批总开关打开」时才需要走这一段；其余任务照旧直跑。
+
+`@sh
+# 1) 打开审批总开关（面板设置；关着时任务根本不会停在等待审批）
+curl -sS -X POST "$PANEL/api/settings" -H "Content-Type: application/json" \
+  -d '{"enableApprovals":true}'
+
+# 2) 提交一个声明了高风险工具的任务 → 期望 state=2（WaitingApproval），且模型侧一次调用都没有
+curl -sS -X POST "$BASE/zba/v1/tasks" \
+  -H "Authorization: Bearer $ZBA_TOKEN" -H "Content-Type: application/json" \
+  -d '{"sourceKey":"panel:deploy-check","sessionId":"deploy-check","prompt":"synthetic: 审批闭环","target":"server","timeoutSeconds":60,"toolScope":["bash"],"idempotencyKey":"zj-approval-1"}'
+
+# 3) 待批单会出现在审批列表里，session 是 task:<任务号>
+curl -sS "$BASE/zba/v1/approvals" -H "Authorization: Bearer $ZBA_TOKEN"
+
+# 4) 批准 → 任务从同一条记录继续（不重发、不新建），跑完后结果回原会话
+curl -sS -X POST "$BASE/zba/v1/approvals/<requestId>/decide" \
+  -H "Authorization: Bearer $ZBA_TOKEN" -H "Content-Type: application/json" -d '{"approve":true}'
+`@
+
+自查要点：
+
+| 看什么 | 期望 |
+| --- | --- |
+| 批之前 | `state=2`；等待 ≥1 秒后仍是 2，且模型请求计数不变（**零副作用**，执行器一次都没被调用） |
+| 待批单 | `GET /zba/v1/approvals` 里 `toolId=bash`、`session=task:<任务号>`、`expiresAt` ≈ 提交时刻 +120 秒 |
+| 批准 | 回执 `decision=approve`；任务随后跑到 `succeeded(3)`；`GET /tasks/{id}/result` 对 `panel:` 源返回摘要 |
+| 拒绝 | 终态 `cancelled(6)` + `errorCode=approval_rejected` |
+| 超期 | 不决策、等过 `expiresAt` 后再查 → `cancelled(6)` + `errorCode=approval_expired`（`Get` / `List` / 决策三处都会先扫） |
+| 取消 | 待批时 `POST /tasks/{id}/cancel` → `cancelled(6)` + `errorCode=approval_cancelled`（此前这条边不存在） |
+| 重启 | 待批中重启宿主 → `cancelled(6)` + `errorCode=approval_lost_on_restart`（待批单不落库，没有可批的对象） |
+| 手工造票 | 自己拼一张结构相同的 `ApprovalTicket` 过闸门 → 拒绝，原因码 `approval_ticket_unverified`（票据带进程内 HMAC 签名，重启后旧票自动失效） |
+
+**已知粒度**：审批是**任务级不是工具级** —— 声明了 `bash` 就整条先批，哪怕最后一步都没用到 bash。
+这是刻意的 fail-closed 取舍；没有多级审批，也不做跨重启恢复待批。细节见
+[Agent Runtime §7](../architecture/agent-task-runtime.md) 与 [审批与执行隔离](../architecture/approval-and-isolation.md)。
 
 ---
 
@@ -99,6 +140,7 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 | schema 版本 | 只前向：11 → 12 自动迁移，**没有 down migration** | 回退到 11 只能靠**恢复升级前的库快照** |
 | 旧二进制读新库 | #119 时代的二进制闸是 `> 12`，遇到 v13 库直接拒绝启动；同一代二进制读 `= 12` 的库能启动但**不认识** `agent_tasks` | 回滚前必须先恢复快照（库回到旧版本）再退二进制；表里的数据不会丢 |
 | 已写入的台账行 | 只增不减（除启动 Prune 到 256 行） | 回滚不清理；若要彻底复原，用快照覆盖 |
+| 待批单（#137） | **不落库**：`agent_tasks` 表结构一个字节没动，审批字段只在内存快照里 | 回滚期间停在 `WaitingApproval` 的任务，旧二进制会收口成 `Cancelled` + `cancelled_before_dispatch`（新二进制是 `approval_lost_on_restart`）—— 两者都是「不执行」，只是原因码不同 |
 | 任务结果摘要 | 只存 `panel:` 源、≤4000 字、不落正文到日志 | 回滚后无法从事件流重建正文（本来就不保存） |
 
 ### 3.2 回滚顺序（与 [回滚预案](rollback-playbook.md) 一致）
@@ -144,7 +186,8 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 - [ ] `agent_tasks` 表存在（`SELECT COUNT(*)` 能跑通）；
 - [ ] `/healthz` 200 且 `version` 正确；`/zba/v1/tasks` 200（或按预期 503）；
 - [ ] 提交一个合成任务并看到 `queued → running → 终态`；`cancel` 在终态后被拒绝；
-- [ ] 重启一次，确认旧任务按上表收口、不重做；
+- [ ] 重启一次，确认旧任务按上表收口、不重做（含待批任务 → `approval_lost_on_restart`）；
+- [ ] 走一遍 §2.4 的审批闭环：批之前模型零调用 → 批准后跑完 → 拒绝/超期各留一个原因码；跑完把 `enableApprovals` 复原成上线前取值；
 - [ ] 回滚预案的停写与恢复步骤在本次变更中被重新走过一遍（至少演练一次）。
 
 ---
