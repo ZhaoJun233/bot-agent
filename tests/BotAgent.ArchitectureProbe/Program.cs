@@ -434,8 +434,9 @@ public static class Program
             && Baseline.LongestMethodAnywhere <= 198
             // #133 v11 配置字段号上限迁移：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省），
             // #116 v12 任务台账：138 → 141（agent_tasks DDL + 迁移分支；DAO 的查询/写入在 Adapters/Persistence）。
+            // #135 v13 轨迹归档缓存用量：141 → 145（trace_archive DDL 抽成独立方法 + 三条 ALTER 补列）。
             // 这些都落在 R2 允许的位置，不属于「SQL 散出去」。
-            && Baseline.SqlLiteralTotal <= 141 && Baseline.FileIoTotal <= 62
+            && Baseline.SqlLiteralTotal <= 145 && Baseline.FileIoTotal <= 62
             && Baseline.ClockReads <= 3 && Baseline.HttpClientNews <= 4 && Baseline.PanelAgentCalls == 0
             && Baseline.ConcreteIoNews == 0 && Baseline.SettingsAssignments == 0 && Baseline.PanelSqlLiterals == 0
             && Baseline.PanelFileIo == 0 && Baseline.PanelClockReads == 0 && Baseline.PanelExemptFileIo <= 15

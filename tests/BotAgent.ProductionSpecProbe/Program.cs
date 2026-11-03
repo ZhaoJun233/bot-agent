@@ -276,6 +276,61 @@ public static class Program
         Check(restartedTokensView.Count == 2 && restartedTokensView.PromptTokens == 250 && restartedTokensView.CompletionTokens == 80,
             "重新构造归档适配器后仍能读取持久化 Token 统计");
 
+        // #135：缓存用量三态落在 trace_archive 上 —— 有字段的、没给的、v13 之前的旧行都对。
+        var archivedCachedTrace = new TurnTrace(
+            "synthetic-trace-3",
+            "synthetic:tenant-c",
+            DateTimeOffset.UtcNow,
+            "slow",
+            3100,
+            new[]
+            {
+                new TurnNode(TurnNodeKind.Model, "ok", 3100, ReasonCode: "slow_turn")
+            },
+            PromptTokens: 900,
+            CompletionTokens: 30,
+            CachedPromptTokens: 512,
+            CacheWriteTokens: 64);
+
+        archive.Append(archivedCachedTrace);
+        var cachedView = archive.Snapshot();
+        Check(cachedView.CachedPromptTokens == 512 && cachedView.CacheWriteTokens == 64,
+            "归档带上缓存命中与写入量（#135）");
+
+        var uncachedTrace = new TurnTrace(
+            "synthetic-trace-4",
+            "synthetic:tenant-c",
+            DateTimeOffset.UtcNow,
+            "slow",
+            2200,
+            new[]
+            {
+                new TurnNode(TurnNodeKind.Model, "ok", 2200, ReasonCode: "slow_turn")
+            },
+            PromptTokens: 400,
+            CompletionTokens: 10);
+
+        archive.Append(uncachedTrace);
+        var unknownView = archive.Snapshot();
+        Check(unknownView.CachedPromptTokens == 512 && unknownView.CacheUnknownTurns >= 2,
+            "上游没给缓存字段的轮次记未知，不并进命中量");
+
+        // 直接写一行 v12 形状的旧轨迹（三列走默认值）：读出来必须是"未知"，不能当成 0。
+        AppDatabase.Write(conn => AppDatabase.Exec(conn, """
+            INSERT INTO trace_archive
+              (trace_id, tenant_id, status_code, reason_code, total_ms, stage_timings_json,
+               prompt_tokens, completion_tokens, fallback_hops)
+            VALUES ('synthetic-trace-legacy', 'synthetic:tenant-d', 504, 'slow_turn', 4000, '[]', 100, 0, 0);
+            """));
+        var legacyView = archive.Snapshot();
+        Check(legacyView.CachedPromptTokens == 512 && legacyView.CacheUnknownTurns >= 3,
+            "v13 之前的旧行按未知计，不当成 0 命中");
+
+        var archiveColumns = AppDatabase.Query("PRAGMA table_info(trace_archive);", r => r.GetString(1));
+        Check(archiveColumns.Contains("cached_prompt_tokens") && archiveColumns.Contains("cache_write_tokens")
+            && archiveColumns.Contains("cache_usage_unknown"),
+            "trace_archive 有三列缓存用量（v13）");
+
         var circuitSnapshot = new CircuitStatusSnapshot("model", "primary", "closed");
         Check(circuitSnapshot.Type == "model" && circuitSnapshot.Id == "primary" && circuitSnapshot.State == "closed",
             "熔断器快照结构规范且不泄露敏感凭据");
@@ -897,7 +952,7 @@ public static class Program
     /// </summary>
     private static void AgentTaskLedgerTests()
     {
-        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 12, "库版本应为 v12（任务台账）");
+        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 13, "库版本应为 v13（轨迹归档缓存用量）");
         Check(AppDatabase.Scalar<long>(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_tasks'") == 1,
             "v12 必须建出 agent_tasks 表");

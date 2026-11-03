@@ -24,6 +24,13 @@
 
 ### 新增
 
+- 缓存用量落库与观测（#135 其二）：慢轨迹归档 `trace_archive` 升到 schema **v13**，加三列
+  `cached_prompt_tokens` / `cache_write_tokens`（可空）与 `cache_usage_unknown`；上游没报缓存字段时写 NULL
+  而不是 0，v13 之前的旧行读出来同样算「未知」。`/metrics` 增三个归档口径 gauge
+  （`botagent_trace_archive_cached_prompt_tokens` / `…_cache_write_tokens` / `…_cache_unknown_turns`），
+  `/api/dashboard` 的 `traces` 增三个字段。迁移只前向（v13 库用旧二进制会被 `database_schema_newer` 拒绝），
+  老库升级有独立用例（ReviewRemediationProbe 的 `--database-legacy-cache`）。面板前端目前**还没有轨迹页**，
+  这三个数只在 /metrics 与 /api/dashboard 可见；缓存控制参数与真实命中证据同样还没做，三件一起记在 #138。详见 `docs/architecture/prompt-cache.md` §5.1。
 - Agent Runtime 部署 / 验证 / 回滚文档（#119）：`docs/operations/agent-runtime-deployment.md` 写清 schema 11→12
   的自动迁移与**只前向**边界、ZBA 任务端的验证命令（含"重启后旧任务按哪张表收口、不重做"）、
   回滚的停写前置与两种形态（只换二进制 / 连库一起退回），以及只写形状与计数的运维观测点；

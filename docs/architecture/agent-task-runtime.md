@@ -152,7 +152,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | `ZbaProbe` 303 条 | 通道语义没变：幂等重放、回执、事件、结果可见性、取消 |
 | 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为；S55 现在断言「重启后旧任务可查且不停在排队/运行中」 |
 | 集成 S65 | 任务台账跨重启：Queued→Cancelled、Running→Unknown、出现在列表里、不会被重做 |
-| `ProductionSpecProbe` 台账 8 条 | v12 版本、建表、无正文列、字段往返保真、同 id 覆盖、`BootSeq` 递增、`Prune` 只留最近 N、清理 |
+| `ProductionSpecProbe` 台账 8 条 | v12 版本（#135 起断言 v13）、建表、无正文列、字段往返保真、同 id 覆盖、`BootSeq` 递增、`Prune` 只留最近 N、清理 |
 | `ArchitectureProbe` | 分层与文件头注释约定（Core 不引 Engine、Engine 只引 Core） |
 
 改状态模型时先改本表与 ADR-0002，再改代码；改通道投影时必须同时看 ZbaProbe 与 S54/S55。

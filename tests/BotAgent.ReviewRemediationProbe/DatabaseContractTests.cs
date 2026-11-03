@@ -16,6 +16,7 @@ internal static class DatabaseContractTests
     {
         if (args.Length == 2 && args[0] == "--database-reopen")
             return Task.FromResult<int?>(ReopenChild(args[1]));
+        if (args.Length == 1 && args[0] == "--database-legacy-cache") return Task.FromResult<int?>(LegacyCacheChild());
         if (args.Length != 1 || args[0] != "--database-future") return Task.FromResult<int?>(null);
         var root = Path.Combine(Path.GetTempPath(), "botagent-c2-future-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -27,7 +28,7 @@ internal static class DatabaseContractTests
             using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
             {
                 conn.Open();
-                HostDatabase.Exec(conn, "PRAGMA user_version = 13; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
+                HostDatabase.Exec(conn, "PRAGMA user_version = 14; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
             }
             var hash = SHA256.HashData(File.ReadAllBytes(path));
             ClockBindings.InitializeStorage();
@@ -67,7 +68,7 @@ internal static class DatabaseContractTests
         {
             HostDatabase.Initialize();
             if (!StorageDatabase.IsReady || HostDatabase.GetMeta("synthetic:c2-backup") != "snapshot-value"
-                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 12) return 1;
+                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 13) return 1;
             Console.WriteLine("C2_CHILD restore passed=3 failed=0");
             return 0;
         }
@@ -99,6 +100,79 @@ internal static class DatabaseContractTests
         check(rejected && timer.Elapsed < TimeSpan.FromSeconds(2), "cross-facade nested write rejects without waiting for SQLite");
         check(StorageDatabase.GetMeta("synthetic:c2-outer") == "committed", "handled nesting rejection preserves the outer transaction");
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// v12 → v13 的真实老库升级（#135）：老库的 trace_archive 没有缓存三列，且已经有一行旧数据。
+    /// 升级后必须补列、版本号到 13，旧行读出来是"未知"（NULL），不能被当成 0 命中。
+    /// 单独一个子进程：<see cref="StorageDatabase" /> 一个进程只能绑定一个库。
+    /// </summary>
+    public static Task LegacyCacheUpgradeAsync(Action<bool, string> check)
+        => RunChildAsync("--database-legacy-cache", null, "passed=4 failed=0", check,
+            "v12 legacy database gains the cache columns without touching old rows");
+
+    private static int LegacyCacheChild()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "botagent-c2-legacy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var passed = 0;
+        void Check(bool ok, string label) { if (!ok) throw new InvalidOperationException(label); passed++; }
+        try
+        {
+            ClockBindings.InitializeStorage();
+            var path = Path.Combine(root, "legacy.db");
+            using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+            {
+                conn.Open();
+                HostDatabase.Exec(conn, """
+                    CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                    CREATE TABLE trace_archive(
+                      trace_id TEXT PRIMARY KEY,
+                      tenant_id TEXT NOT NULL,
+                      status_code TEXT NOT NULL,
+                      reason_code TEXT,
+                      total_ms INTEGER NOT NULL,
+                      stage_timings_json TEXT NOT NULL,
+                      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                      completion_tokens INTEGER NOT NULL DEFAULT 0,
+                      fallback_hops INTEGER NOT NULL DEFAULT 0,
+                      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    INSERT INTO trace_archive
+                      (trace_id, tenant_id, status_code, reason_code, total_ms, stage_timings_json,
+                       prompt_tokens, completion_tokens, fallback_hops)
+                    VALUES ('synthetic-legacy-trace', 'synthetic:tenant', 504, 'slow_turn', 4000, '[]', 100, 0, 0);
+                    PRAGMA user_version = 12;
+                    """);
+            }
+
+            StorageDatabase.Initialize(path);
+            Check(StorageDatabase.Scalar<long>("PRAGMA user_version") == 13, "legacy v12 database upgrades to v13");
+
+            var columns = StorageDatabase.Query("PRAGMA table_info(trace_archive);", r => r.GetString(1));
+            Check(columns.Contains("cached_prompt_tokens") && columns.Contains("cache_write_tokens")
+                && columns.Contains("cache_usage_unknown"), "cache usage columns added to the existing table");
+
+            var rows = StorageDatabase.Query(
+                "SELECT cached_prompt_tokens IS NULL, cache_write_tokens IS NULL, cache_usage_unknown FROM trace_archive WHERE trace_id='synthetic-legacy-trace';",
+                r => (Null: r.GetBoolean(0), WriteNull: r.GetBoolean(1), Unknown: r.GetInt32(2)));
+            Check(rows.Count == 1 && rows[0].Null && rows[0].WriteNull && rows[0].Unknown == 0,
+                "old rows keep NULL cache usage and are not reported as zero hits");
+            Check(StorageDatabase.IsReady && StorageDatabase.GetMeta("agent_tasks_boot_seq") is null,
+                "upgrade leaves the rest of the database in its normal state");
+            Console.WriteLine($"C2_CHILD legacy passed={passed} failed=0");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"C2_CHILD legacy passed={passed} failed=1 type={ex.GetType().Name}");
+            return 1;
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteOwnedRoot(root, "botagent-c2-legacy-");
+        }
     }
 
     public static Task FutureSchemaAsync(Action<bool, string> check)

@@ -78,6 +78,10 @@ public sealed partial class WebUiServer
                     ["recent"] = _traces.DoneCount,
                     ["active"] = _traces.ActiveCount,
                     ["capacity"] = TurnTraceStore.Capacity,
+                    // #135：输入缓存用量。null = 上游没提供（未知），**不是 0**；未知轮数单独给。
+                    ["cachedPromptTokens"] = _traces.CachedPromptTokensTotal,
+                    ["cacheWriteTokens"] = _traces.CacheWriteTokensTotal,
+                    ["cacheUnknownTurns"] = _traces.CacheUnknownTurnsTotal,
                 },
             ["plugins"] = new JsonObject
             {

@@ -86,7 +86,7 @@ DAO 放 `src/BotAgent.Headless/Adapters/Persistence/`，因为 ArchitectureProbe
 | 台账写入失败不影响任务结果 | `EngineProbe` 的 `LedgerFailureIsolationTests` |
 | 状态推进都落库（往返保真） | `ProductionSpecProbe` 的 8 条台账用例 |
 | 台账不含 prompt / 正文列 | `ProductionSpecProbe`「agent_tasks 无 prompt/result/summary 列」 |
-| schema 版本号与契约同步 | `DatabaseContractTests`（v12）、`ConfigurationContractTests`（物理 schema 12）、`ArchitectureProbe` 的 `SqlLiteralTotal` 141 |
+| schema 版本号与契约同步 | `DatabaseContractTests`（v12；#135 起是 v13）、`ConfigurationContractTests`（物理 schema 12；#135 起 13）、`ArchitectureProbe` 的 `SqlLiteralTotal` 141（#135 起 145） |
 
 ## 4. 分步实施与验证
 

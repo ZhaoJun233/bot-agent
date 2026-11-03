@@ -15,10 +15,10 @@ Runtime 上线、确认它真的在工作、并在出问题时把它撤掉或回
 | 项 | 值 |
 | --- | --- |
 | 旧版本 | `PRAGMA user_version = 11` |
-| 新版本 | `PRAGMA user_version = 12` |
+| 新版本 | `PRAGMA user_version = 13`（#119 交付时是 12；#135 加了轨迹归档的缓存三列后变成 13） |
 | 新增表 | `agent_tasks`（一行一个任务，**只存形状与计数**，不落提示词/模型输出/结果正文） |
 | 新增索引 | `idx_agent_tasks_updated(updated_at)` |
-| 版本闸 | 宿主启动时读 `user_version`：**大于 12 直接拒绝启动**（防止旧二进制读到新库后写坏） |
+| 版本闸 | 宿主启动时读 `user_version`：**大于 13 直接拒绝启动**（防止旧二进制读到新库后写坏） |
 
 升级是**自动**的：新二进制首次启动时 `AppDatabase` 会把版本推到 12 并建表，不需要手工执行 SQL。
 但**升级前必须先按 [回滚预案](rollback-playbook.md) 第 1 节备好快照** —— 这一步是回滚的前置条件。
@@ -97,7 +97,7 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 | 项 | 事实 | 回滚限制 |
 | --- | --- | --- |
 | schema 版本 | 只前向：11 → 12 自动迁移，**没有 down migration** | 回退到 11 只能靠**恢复升级前的库快照** |
-| 旧二进制读新库 | `user_version > 12` 会拒绝启动（版本闸）；`= 12` 时旧二进制能启动，但**不认识** `agent_tasks` | 旧二进制会忽略 `agent_tasks`，任务历史在回滚后不可见（表仍在，不丢数据） |
+| 旧二进制读新库 | #119 时代的二进制闸是 `> 12`，遇到 v13 库直接拒绝启动；同一代二进制读 `= 12` 的库能启动但**不认识** `agent_tasks` | 回滚前必须先恢复快照（库回到旧版本）再退二进制；表里的数据不会丢 |
 | 已写入的台账行 | 只增不减（除启动 Prune 到 256 行） | 回滚不清理；若要彻底复原，用快照覆盖 |
 | 任务结果摘要 | 只存 `panel:` 源、≤4000 字、不落正文到日志 | 回滚后无法从事件流重建正文（本来就不保存） |
 
@@ -109,12 +109,12 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 4. **恢复库**（仅在需要真的退回 v11 时）：用升级前快照覆盖 `data/botagent.db`，并删掉同目录的 `botagent.db-wal` / `-shm`。
 5. **起进程并验证**：`/healthz` 200、`/readyz` 语义正常、面板能打开、`/zba/v1/tasks` 按旧行为返回。
 
-> ⚠ 只换二进制、不恢复库，是**最常见也最安全**的回滚形态（旧二进制读 v12 库没问题）；
+> ⚠ 只换二进制、不恢复库，只在**库版本没被新版本推进**时成立（同一 schema 版本内）。schema 已经 +1 之后，旧二进制会被版本闸拒绝启动 —— 先恢复快照再退二进制。
 > 只有当你必须让库也退回 v11（例如新版本写入了旧版本解释不了的数据）时，才做第 4 步。
 
 ### 3.3 回滚后要确认的三件事
 
-- `PRAGMA user_version` 是否如预期（退回形态应是 11；只换二进制则仍是 12）；
+- `PRAGMA user_version` 是否如预期（退回形态应回到回滚点的版本；只换二进制则仍是原版本）；
 - `agent_tasks` 的行数没有变化（只换二进制时）；
 - 重启后的恢复日志**不再出现**（旧二进制没有这个功能）是正常的，不是故障。
 
@@ -140,7 +140,7 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 
 - [ ] 升级前快照已就位（`VACUUM INTO`，可被 `sqlite3` 打开），并记下 `user_version=11`；
 - [ ] 旧二进制 / 旧镜像 tag 已保留（`qqchat-agent:prev` 之类）；
-- [ ] 新版本启动日志里没有 schema 版本闸报错；`PRAGMA user_version` = 12；
+- [ ] 新版本启动日志里没有 schema 版本闸报错；`PRAGMA user_version` = 13；
 - [ ] `agent_tasks` 表存在（`SELECT COUNT(*)` 能跑通）；
 - [ ] `/healthz` 200 且 `version` 正确；`/zba/v1/tasks` 200（或按预期 503）；
 - [ ] 提交一个合成任务并看到 `queued → running → 终态`；`cancel` 在终态后被拒绝；

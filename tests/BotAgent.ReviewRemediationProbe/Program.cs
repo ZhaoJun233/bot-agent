@@ -63,6 +63,7 @@ internal static class Program
             await RunAsync("Storage binding and typed import", () => StorageMigrationTests.BindingAndImportAsync(Check));
             await RunAsync("nested database write", () => DatabaseContractTests.NestedWriteAsync(Check));
             await RunAsync("future database schema", () => DatabaseContractTests.FutureSchemaAsync(Check));
+            await RunAsync("legacy cache columns upgrade", () => DatabaseContractTests.LegacyCacheUpgradeAsync(Check));
             await RunAsync("database backup path", () => DatabaseContractTests.BackupPathAsync(Check));
             await RunAsync("database atomicity", () => DatabaseContractTests.AtomicityAsync(Check));
             await RunAsync("database restore", () => DatabaseContractTests.RestoreAsync(Check));

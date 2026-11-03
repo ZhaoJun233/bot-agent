@@ -98,7 +98,7 @@ public static class AppDatabase
                     DefaultTimeout = 30
                 }.ToString();
                 using var conn = Open();
-                if (SchemaVersion() > 12) throw new InvalidOperationException("database_schema_newer");
+                if (SchemaVersion() > 13) throw new InvalidOperationException("database_schema_newer");
                 ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
@@ -399,8 +399,9 @@ public static class AppDatabase
         // 建表整块在 CreateSchema、「跑过中间版本」的逐版补列在 ApplyMigrations ——
         // 这一层只剩"先建表、再按 user_version 补齐"这两句顺序话（顺序是语义：补列要在建表之后）。
         CreateSchema(conn);
-        // 任务台账（v12 起）：新库在这里建好，老库由 ApplyMigrations 补 —— DDL 只有一份。
+        // 任务台账（v12 起）与轨迹归档（v13 起带缓存三列）：新库在这里建好，老库由 ApplyMigrations 补 —— DDL 只有一份。
         CreateAgentTaskLedger(conn);
+        CreateTraceArchive(conn);
 
         var version = SchemaVersion();
         ApplyMigrations(conn, version);
@@ -576,20 +577,6 @@ public static class AppDatabase
               conversation_key TEXT NOT NULL, native_message_id TEXT NOT NULL, text TEXT NOT NULL,
               at_unix INTEGER NOT NULL, PRIMARY KEY (conversation_key, native_message_id));
             CREATE TABLE IF NOT EXISTS feishu_webhook_dedup(event_key TEXT PRIMARY KEY, seen_unix INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS trace_archive(
-              trace_id TEXT PRIMARY KEY,
-              tenant_id TEXT NOT NULL,
-              status_code TEXT NOT NULL,
-              reason_code TEXT,
-              total_ms INTEGER NOT NULL,
-              stage_timings_json TEXT NOT NULL,
-              prompt_tokens INTEGER NOT NULL DEFAULT 0,
-              completion_tokens INTEGER NOT NULL DEFAULT 0,
-              fallback_hops INTEGER NOT NULL DEFAULT 0,
-              created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_trace_archive_time
-              ON trace_archive(created_at, status_code);
             CREATE TABLE IF NOT EXISTS security_audit_log(
               id             INTEGER PRIMARY KEY AUTOINCREMENT,
               event_type     TEXT NOT NULL,
@@ -690,6 +677,34 @@ public static class AppDatabase
     /// 任务台账（#116）：一份任务一行，只存形状与计数 —— 提示词、回答正文、工具参数都不进这张表。
     /// 单独成方法是为了让"新库建表"和"老库迁移"共用同一份 DDL，避免两处各抄一遍后漂移。
     /// </summary>
+    /// <summary>
+    /// 慢/异常轨迹归档（v13 起带缓存用量三列）。单独一个方法而不是塞进 CreateSchema：
+    /// 那段 DDL 已经是全 src 最长的方法，再加字段会顶破 ArchitectureProbe 的方法长度线。
+    /// </summary>
+    private static void CreateTraceArchive(SqliteConnection conn)
+    {
+        Exec(conn, """
+            CREATE TABLE IF NOT EXISTS trace_archive(
+              trace_id TEXT PRIMARY KEY,
+              tenant_id TEXT NOT NULL,
+              status_code TEXT NOT NULL,
+              reason_code TEXT,
+              total_ms INTEGER NOT NULL,
+              stage_timings_json TEXT NOT NULL,
+              prompt_tokens INTEGER NOT NULL DEFAULT 0,
+              completion_tokens INTEGER NOT NULL DEFAULT 0,
+              fallback_hops INTEGER NOT NULL DEFAULT 0,
+              -- v13（#135）：输入缓存用量三态。可空 = 上游没提供（未知），0 = 明确没命中。
+              cached_prompt_tokens INTEGER,
+              cache_write_tokens INTEGER,
+              cache_usage_unknown INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_trace_archive_time
+              ON trace_archive(created_at, status_code);
+            """);
+    }
+
     private static void CreateAgentTaskLedger(SqliteConnection conn)
     {
         Exec(conn, """
@@ -721,14 +736,14 @@ public static class AppDatabase
     /// </summary>
     private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
     {
-        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12)) throw new ArgumentException("invalid_legacy_schema");
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12 or 13)) throw new ArgumentException("invalid_legacy_schema");
         Exec(connection, $"PRAGMA user_version = {version};");
     }
 
     private static bool HasLegacyColumn(SqliteConnection connection, string table, string column, bool primaryKeyOnly)
     {
         // v10 加入 model_providers：列内省复用这一条语句，别再复制一份 SELECT pragma_table_info。
-        if (table is not ("conversations" or "member_messages" or "member_roles" or "stickers" or "member_summaries" or "model_providers"))
+        if (table is not ("conversations" or "member_messages" or "member_roles" or "stickers" or "member_summaries" or "model_providers" or "trace_archive"))
             throw new ArgumentException("invalid_legacy_table");
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(1) FROM pragma_table_info($table) WHERE name=$column AND ($pk=0 OR pk>0)";
@@ -894,6 +909,30 @@ public static class AppDatabase
         {
             Write(CreateAgentTaskLedger);
             Write(conn2 => SetLegacySchemaVersion(conn2, 12));
+        }
+
+        // v13：慢轨迹归档补三列缓存用量（#135）。旧行留在原处，两列缓存用量读出来就是 null（未知），
+        // 不会把「不知道」写成 0。ALTER 只加列，不动既有行的既有值。
+        if (version < 13)
+        {
+            Write(conn2 =>
+            {
+                if (!HasLegacyColumn(conn2, "trace_archive", "cached_prompt_tokens", primaryKeyOnly: false))
+                {
+                    Exec(conn2, "ALTER TABLE trace_archive ADD COLUMN cached_prompt_tokens INTEGER;");
+                }
+
+                if (!HasLegacyColumn(conn2, "trace_archive", "cache_write_tokens", primaryKeyOnly: false))
+                {
+                    Exec(conn2, "ALTER TABLE trace_archive ADD COLUMN cache_write_tokens INTEGER;");
+                }
+
+                if (!HasLegacyColumn(conn2, "trace_archive", "cache_usage_unknown", primaryKeyOnly: false))
+                {
+                    Exec(conn2, "ALTER TABLE trace_archive ADD COLUMN cache_usage_unknown INTEGER NOT NULL DEFAULT 0;");
+                }
+            });
+            Write(conn2 => SetLegacySchemaVersion(conn2, 13));
         }
     }
 

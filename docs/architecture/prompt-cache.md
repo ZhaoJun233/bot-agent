@@ -81,7 +81,7 @@ BotAgentHost -> ReplyPipeline -> SourceScheduling -> ReplyTurnContext.BuildAsync
 - Gemini：`usage.cachedContentTokenCount`
 - 本仓协议适配器**归一化后**的形状：`prompt_tokens_details.cached_tokens` / `cache_write_tokens`（`ProtocolJson.Usage` 只在源字段真的存在时才写这两项，所以「缺」到下游仍然是「缺」）
 
-传播链：`CompletionResult.CachedPromptTokens` / `CacheWriteTokens`（可空）→ `AgentTurnLoop` 在步进循环里逐轮累加 → `TurnTraceStore.RecordTokens` → `TurnTrace.CachedPromptTokens` / `CacheWriteTokens` / `CacheUsageUnknown` → `/metrics`。
+传播链：`CompletionResult.CachedPromptTokens` / `CacheWriteTokens`（可空）→ `AgentTurnLoop` 在步进循环里逐轮累加 → `TurnTraceStore.RecordTokens` → `TurnTrace.CachedPromptTokens` / `CacheWriteTokens` / `CacheUsageUnknown` → 两个出口：`/metrics`（进程内累计）与慢轨迹归档（落库，见下）。
 
 `/metrics` 上的三个新指标（注释里写明口径）：
 
@@ -92,6 +92,23 @@ BotAgentHost -> ReplyPipeline -> SourceScheduling -> ReplyTurnContext.BuildAsync
 | `botagent_prompt_cache_unknown_total` | 缓存统计未知的已完成轮数 —— **分母**，不能假装是 0 命中 |
 
 「命中占比」的诚实算法：分子只用已知轮次的命中量，分母只用同一批已知轮次的输入量，并把未知轮数单独报出来。把未知当 0 会让「供应商不支持」看起来像「一次都没命中」，这正是 #98 要区分的三种情况。
+
+### 5.1 落库（v13，#135）
+
+慢/异常轨迹归档 `trace_archive` 从 schema **v13** 起多了三列：`cached_prompt_tokens`、`cache_write_tokens`（都可空）、`cache_usage_unknown`（NOT NULL DEFAULT 0）。写入点是 `src/BotAgent.Headless/Adapters/Persistence/TraceArchiveStore.cs`：
+
+- 上游报了缓存字段 → 写数值、`cache_usage_unknown = 0`；
+- 上游没报 → 两列写 NULL、`cache_usage_unknown = 1`；
+- **v13 之前归档的旧行**三列都是默认值（NULL / NULL / 0），读取时按 `cached_prompt_tokens IS NULL || cache_usage_unknown != 0` 判为未知 —— 旧行不会被误算成「命中 0」。
+
+汇总出口两处：
+
+| 出口 | 字段 | 语义 |
+| --- | --- | --- |
+| `GET /metrics` | `botagent_trace_archive_cached_prompt_tokens` / `…_cache_write_tokens` / `…_cache_unknown_turns` | 近 7 天归档的汇总；无任何已知行时命中量取 0（配合 unknown 分母读） |
+| `GET /api/dashboard` | `traces.cachedPromptTokens` / `cacheWriteTokens` / `cacheUnknownTurns` | 进程内台账；`null` 表示这一进程还没有一轮带缓存统计 |
+
+迁移是**只前向**的：v13 的库用旧二进制会因 `database_schema_newer` 拒绝启动（回滚要先恢复快照再退二进制，见 `docs/operations/rollback-playbook.md`）。升级路径有独立用例：`tests/BotAgent.ReviewRemediationProbe` 的 `--database-legacy-cache` 子进程造一个 v12 老库（里面已经有一行旧轨迹），断言补列成功、版本到 13、旧行仍然是「未知」。
 
 ## 6. 各通道能看到什么
 
@@ -105,7 +122,11 @@ BotAgentHost -> ReplyPipeline -> SourceScheduling -> ReplyTurnContext.BuildAsync
 | ollama | 无 | 无 | 永远未知 |
 | 流式解码 | 同上各自字段 | 同上 | 解码器已顺手归一化；但普通聊天当前不走流式，**没有端到端用例** |
 
-明确没有做的事：没有按通道开关缓存控制参数、没有设置最小可缓存长度、没有做 TTL 探测。这些参数一旦发出去就属于「改上游行为」，需要真实通道实测，留给后续条目。
+明确没有做的事：没有按通道开关缓存控制参数、没有设置最小可缓存长度、没有做 TTL 探测。这些参数一旦发出去就属于「改上游行为」，需要真实通道实测。
+
+**真实命中证据也还没有**：上面这些字段只在 Mock 与合成轨迹里验证过。要拿真实证据，得在有凭据的通道上做冷/热对比并确认网关透传；本工作区没有可用模型凭据（部署机上的凭据要号主明确授权才能在合成测试里用），所以这一块如实记为「未验证」，不编造命中率。
+
+面板也还没有轨迹页：数据面齐了，但 `src/web` 里没有视图。剩余三件（缓存控制参数、真实证据、轨迹页）记在 issue [#138](https://github.com/ZhaoJun233/bot-agent/issues/138)。
 
 ## 7. 怎么复核
 
@@ -123,11 +144,17 @@ BOTAGENT_IT_ONLY=s26 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.
 
 观测侧只需要看 `/metrics` 里那三行：命中量、写入量、未知轮数。**没有未知轮数就别算占比**。
 
+老库升级（v12 → v13）单独一条：
+
+```bash
+dotnet tests/BotAgent.ReviewRemediationProbe/bin/Release/net10.0/BotAgent.ReviewRemediationProbe.dll --database-legacy-cache
+```
+
 ## 8. 已知限制（诚实清单）
 
 1. **没有真实供应商的命中证据**。合成桩只能证明请求前缀稳定、统计字段读得对；对方是否真的缓存、缓存多久、最小长度多少，只能在真实通道上实测，本轮没做。
-2. **历史前缀仍会失效**：时间戳渲染、`(#id)` 窗口、滑窗左移、工具清单变化（第 4 节）。最大的一次性收益（时间戳）没做。
-3. **缓存字段不落库、不进面板**。`TurnTrace` 只活在内存台账里，`trace_archive` 表没有这两列 —— 加列要 bump schema，风险与收益不匹配，本轮不做。
+2. **历史前缀仍会失效**：`(#id)` 窗口、滑窗左移、工具清单变化（第 4 节）。历史时间戳渲染已在 #135 改成绝对时间（`src/BotAgent.Model/ChatHistoryTime.cs`），跨午夜不再整段作废。
+3. **面板前端还没有轨迹页**。数据面已经有了（`trace_archive` v13 三列 + `/metrics` 三个 gauge + `/api/dashboard.traces`），但 `src/web` 里没有任何轨迹/缓存视图（旧 `trace.js` 随 S6 删除）。要「在面板上看」得先有轨迹页，属未排期的前端工作。
 4. **流式只做了归一化，没有端到端用例**：普通聊天不带 `stream`，所以这条路径目前只有解码器级别的覆盖。
 5. **「部分未知」的轮次**：同一轮多次模型调用里只要有一次没报缓存统计，这一轮就标记 `CacheUsageUnknown`；已累加的值是「已知部分之和」，不是完整值。
 6. **不做前缀冻结**：滑窗是语义上的取舍（最近的对话更重要），本轮不为了缓存去改上下文选择策略。

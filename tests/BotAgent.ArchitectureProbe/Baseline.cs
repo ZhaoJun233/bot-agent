@@ -175,8 +175,9 @@ internal static class Baseline
     /// PromptTemplate 版本快照与出厂回滚（MaiBot 启发）：127 → 137（Prompt DDL 与版本切换激活）。
     /// v11 配置字段号上限迁移（#133）：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省）。
     /// v12 任务台账（#116）：138 → 141（agent_tasks 建表语句 + 迁移分支；DAO 三条语句在 Adapters/Persistence）。
+    /// v13 轨迹归档缓存用量（#135）：141 → 145（trace_archive DDL 从 CreateSchema 抽成独立方法 + 三条 ALTER 补列）。
     /// </summary>
-    public const int SqlLiteralTotal = 141;
+    public const int SqlLiteralTotal = 145;
 
     // ── R3：直接文件 IO 只允许出现在 Adapters/** 与下列具名例外 ──
     public const string FileIoAllowedPrefix = "src/BotAgent.Headless/Adapters/";
