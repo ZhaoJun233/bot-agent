@@ -72,10 +72,12 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
             task = new TaskRecord(request, _now());
             _records[request.Id] = task;
             _order.Insert(0, request.Id);
+            // 在锁内启动：DisposeAsync 也拿这把锁，它看到的处理项一定有 Work 可等。
+            // Task.Run 只排队不阻塞；RunAsync 的第一件事就是抢同一把锁，不会与这里并发。
+            task.Work = Task.Run(() => RunAsync(task));
             accepted = Project(task);
         }
 
-        task.Work = Task.Run(() => RunAsync(task));
         _log?.Invoke($"[Task] id={request.Id} state=queued source={request.SourceKey}");
         return AgentTaskSubmitResult.AcceptedTask(accepted);
     }
@@ -178,6 +180,8 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         try
         {
             MoveTo(task, AgentTaskState.Running, null);
+            // 停止过程中被排进来的任务：MoveTo 会静默丢弃，这里直接不执行（不把活儿带进停机）。
+            lock (_gate) { if (_disposed) return; }
             if (task.CancellationRequested) cancelSource.Cancel();
 
             var executionTask = _executor.ExecuteAsync(task.Request, linked.Token);

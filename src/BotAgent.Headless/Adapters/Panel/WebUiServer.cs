@@ -119,6 +119,9 @@ public sealed partial class WebUiServer : IDisposable
     private readonly IJargonRepository _jargons;
     private readonly Domain.Plugins.IPluginRegistry? _plugins;
     private readonly BackgroundEvaluatorQueue? _background;
+
+    // #115：MCP 工具快照（只读投影用；没有 MCP 时为 null）。
+    private readonly BotAgent.Services.Mcp.McpToolUseCase? _mcp;
     private readonly DateTimeOffset _startedAt = Clock.Now;
     private readonly CancellationTokenSource _cts = new();
 
@@ -175,7 +178,8 @@ public sealed partial class WebUiServer : IDisposable
          PlatformPolicyResolver? platformPolicies = null,
         IJargonRepository? jargons = null,
         Domain.Plugins.IPluginRegistry? plugins = null,
-        BackgroundEvaluatorQueue? background = null)
+        BackgroundEvaluatorQueue? background = null,
+        BotAgent.Services.Mcp.McpToolUseCase? mcp = null)
     {
         _port = port;
         _box = box;
@@ -221,6 +225,7 @@ public sealed partial class WebUiServer : IDisposable
         _platformPolicies = platformPolicies;
         _plugins = plugins;
         _background = background;
+        _mcp = mcp;
         // 启动时把密钥库里那份 TTS 密钥重新写给 tts 容器（容器可能刚被重建、
         // 或者上次写文件前我们就重启了）——否则面板里存着 key，语音却发不出去。
         WriteTtsConfToHost();

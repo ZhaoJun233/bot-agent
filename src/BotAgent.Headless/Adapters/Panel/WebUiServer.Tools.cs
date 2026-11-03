@@ -73,6 +73,8 @@ public sealed partial class WebUiServer
             // 会话级权限元数据（批次 B）：只有计数，没有 key。
             ["sessionPolicy"] = BuildSessionPolicyPayload(chatPolicy),
             ["tools"] = tools,
+            // #115：统一查询面（内建 + MCP 同表）。additive —— count 仍只算内建 26，MCP 单列。
+            ["inventory"] = BuildInventoryPayload(directory),
         };
     }
 
@@ -92,6 +94,43 @@ public sealed partial class WebUiServer
             scenario: s.ScenarioPreset,
             approvalsEnabled: s.EnableApprovals,
             questionsEnabled: s.EnableQuestions);
+    }
+
+    /// <summary>
+    /// #115 统一查询面：内建三族（10/10/6）与当前 MCP 快照放进同一张表**只读投影**。
+    /// count 仍只算内建（探针钉住的 26），MCP 单列 —— 否则「发现到一个 MCP 服务器」
+    /// 看起来会像「内建能力目录多了一条」。判定仍走 ToolVisibility / ToolGate，这里不参与放行。
+    /// </summary>
+    private JsonObject BuildInventoryPayload(ToolDirectory directory)
+    {
+        var inventory = ToolInventory.Create(directory, _mcp?.Tools);
+        var entries = new JsonArray();
+        foreach (var spec in inventory.Entries)
+        {
+            entries.Add(new JsonObject
+            {
+                ["id"] = spec.Id,
+                ["origin"] = spec.Origin.ToString(),
+                ["category"] = spec.Category.ToString(),
+                ["summary"] = spec.Summary,
+            });
+        }
+
+        var mcpIds = new JsonArray();
+        foreach (var spec in inventory.McpSpecs)
+        {
+            mcpIds.Add(spec.Id);
+        }
+
+        return new JsonObject
+        {
+            ["builtin"] = inventory.BuiltinCount,
+            ["mcp"] = inventory.McpCount,
+            ["total"] = inventory.Count,
+            ["duplicates"] = ToJsonArray(inventory.Duplicates),
+            ["mcpTools"] = mcpIds,
+            ["entries"] = entries,
+        };
     }
 
     private static JsonArray ToJsonArray(IReadOnlyList<string> items)

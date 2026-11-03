@@ -163,6 +163,20 @@ public static partial class Program
         Check("执行者登记 = 4 家", (root["executors"] as JsonArray)?.Count == 4,
             (root["executors"] as JsonArray)?.ToJsonString() ?? "(没有 executors)");
 
+        // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 26 —— MCP 单列，
+        // 否则“发现到一个 MCP 服务器”看起来会像“内建能力目录多了一条”。
+        var inventory = root["inventory"] as JsonObject;
+        var inventoryEntries = inventory?["entries"] as JsonArray;
+        Check("★ /api/tools 带统一查询面（内建 26 + MCP 分列，无重名）",
+            inventory is not null
+            && inventory["builtin"]?.GetValue<int>() == 26
+            && inventory["mcp"]?.GetValue<int>() == 0
+            && inventory["total"]?.GetValue<int>() == 26
+            && (inventory["duplicates"] as JsonArray)?.Count == 0
+            && inventoryEntries?.Count == 26
+            && inventoryEntries.All(entry => entry?["origin"]?.GetValue<string>() == "Builtin"),
+            inventory?.ToJsonString() ?? "(没有 inventory)");
+
         JsonObject? Find(string id) => tools.FirstOrDefault(n => n?["id"]?.GetValue<string>() == id) as JsonObject;
 
         Check("qq.like 在目录里（SendMessage / 安全档 / 非聊天族不在这页复述放行口径）",

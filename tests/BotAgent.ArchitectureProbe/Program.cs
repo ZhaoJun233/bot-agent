@@ -121,6 +121,7 @@ public static class Program
         RatchetChecks(index);
         LayoutChecks(index);
         ToolDirectoryChecks(index);
+        ToolRegistryChecks(index);
         AuditAndTraceChecks(index);
         PanelApprovalChecks(index);
         TurnLoopChecks(index);
@@ -1247,6 +1248,61 @@ public static class Program
     }
 
     // ─────────────────── 统一工具目录（通用 Agent 平台 · 批次 A） ───────────────────
+
+// ────────────────── 统一工具注册表（#115）──────────────────
+
+    /// <summary>
+    /// #115 的四条支点：可见性判定**只有一处**、聊天声明**全部元数据化**、
+    /// MCP 作为**追加来源**进统一查询面、面板投影与内建计数**分列**（否则“发现到一个 MCP 服务器”
+    /// 会看起来像“内建能力目录多了一条”，而 10/10/6 是被钉死的基线）。
+    /// </summary>
+    private static void ToolRegistryChecks(SourceIndex index)
+    {
+        Section("统一工具注册表 · 可见性单入口、元数据化、MCP 追加来源（#115）");
+
+        var visibility = index.ByPath("src/BotAgent.Engine/Tools/ToolVisibility.cs");
+        Check("可见性判定只有一处（Engine/Tools/ToolVisibility.cs）",
+            visibility is not null
+            && visibility.NoComments.Contains("class ToolVisibility", StringComparison.Ordinal)
+            && visibility.NoComments.Contains("PlatformSourceExecution.Current", StringComparison.Ordinal),
+            visibility is null ? "找不到 ToolVisibility.cs" : "单入口在 Engine/Tools");
+
+        // 兼容壳不许自己再读开关：否则“单一入口”会被悄悄长出第二条判定。
+        var shell = index.ByPath("src/BotAgent.Engine/Reply/ReplyToolAvailability.cs");
+        var shellReadsSwitches = shell is not null
+            && new[] { "EnableWebSearch", "EnableMusic", "EnableVoice", "EnableStickers", "EnablePoke" }
+                .Any(token => shell.NoComments.Contains(token, StringComparison.Ordinal));
+        Check("聊天兼容壳 ReplyToolAvailability 不再自己读开关（判定全委托）",
+            shell is not null && !shellReadsSwitches,
+            shell is null ? "找不到 ReplyToolAvailability.cs" : (shellReadsSwitches ? "壳里又出现了开关读取" : "没有开关读取"));
+
+        // 元数据化：声明侧只留 FeatureKey，判定侧只有一张开关表。
+        var featureKeys = Regex.Matches(
+                index.ByPath("src/BotAgent.Core/Domain/Tools/ChatToolSpecs.cs")?.NoComments ?? string.Empty,
+                "FeatureKey:\\s*ToolFeature\\.")
+            .Count;
+        var switches = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolSwitches.cs");
+        Check("每个聊天工具声明都带 FeatureKey（10 条，名字只在 ToolFeature 里出现一次）",
+            featureKeys == 10 && switches is not null
+            && switches.NoComments.Contains("_ => false", StringComparison.Ordinal),
+            $"带 FeatureKey 的声明 = {featureKeys}（期望 10）；开关表 = {(switches is null ? "缺" : "在")}");
+
+        var inventory = index.ByPath("src/BotAgent.Engine/Tools/ToolInventory.cs");
+        Check("MCP 以追加来源进统一查询面（ToolOrigin.Mcp，不改内建 26 条）",
+            inventory is not null
+            && inventory.NoComments.Contains("ToolOrigin.Mcp", StringComparison.Ordinal)
+            && inventory.NoComments.Contains("ToolDirectory.Builtin", StringComparison.Ordinal),
+            inventory is null ? "找不到 Engine/Tools/ToolInventory.cs" : "查询面在 Engine/Tools");
+
+        // 面板：内建计数与 MCP 必须分列（count 仍是目录条数）。
+        var panel = index.ByPath("src/BotAgent.Headless/Adapters/Panel/WebUiServer.Tools.cs");
+        var split = panel is not null
+            && panel.NoComments.Contains("ToolInventory.Create", StringComparison.Ordinal)
+            && panel.NoComments.Contains("inventory", StringComparison.Ordinal);
+        Check("面板工具页把内建计数与 MCP 分列（count 不变 + inventory 块）",
+            split && panel!.NoComments.Contains("directory.Specs.Count", StringComparison.Ordinal),
+            panel is null ? "找不到 WebUiServer.Tools.cs" : (split ? "count 与 inventory 分列" : "投影未接上"));
+    }
 
     private static void ToolDirectoryChecks(SourceIndex index)
     {

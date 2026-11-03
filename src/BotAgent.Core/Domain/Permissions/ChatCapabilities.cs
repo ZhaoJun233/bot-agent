@@ -50,35 +50,19 @@ public sealed class ChatCapabilitySet
         bool approvalsEnabled = false,
         bool questionsEnabled = false)
     {
-        bool SwitchAllows(string id) => id switch
-        {
-            "chat.reply" => true,
-            "web.search" or "web.read" => enableWebSearch,
-            "music.listen" or "music.share" => enableMusic,
-            "voice.speak" => enableVoice,
-            "sticker.send" => enableStickers,
-            "poke.send" => enablePoke,
-            _ => false,   // 不认识的能力名：一律不开（Fail-Closed）
-        };
+        // #115：id→开关 的表只留一份（ToolSpec.FeatureKey + ToolSwitches），这里不再抄第二份。
+        var switches = new Domain.Tools.ToolSwitchState(
+            enableWebSearch, enableMusic, enableVoice, enableStickers, enablePoke,
+            Approvals: approvalsEnabled, Questions: questionsEnabled);
+        bool SwitchAllows(string id)
+            => Domain.Tools.ChatToolSpecs.Find(id) is { } spec && Domain.Tools.ToolSwitches.Enabled(spec, switches);
 
         var token = (scenario ?? string.Empty).Trim().ToLowerInvariant();
         if (token.Length == 0)
         {
+            // 审批假工具与「提问」也由各自的 FeatureKey（approval / question）决定是否入名单：
+            // 开关关时它们不在 allowed 里，开了才进 —— 与改造前两条 if 逐字等价（#115 收进元数据）。
             var allowed = DefaultRegistry.Ids.Where(SwitchAllows).ToHashSet(StringComparer.Ordinal);
-            if (approvalsEnabled)
-            {
-                // 开了审批：把**唯一的固定假工具**放进白名单，并且**只有它**必须批过才执行。
-                // 其余能力照旧（voice/sticker/poke 不因打开审批而多一道门槛）—— 这条是刻意的：
-                // 审批开关默认关，打开它应该只是“多一条可演示的审批闭环”，而不是改写既有能力。
-                allowed.Add(ApprovalFlow.FixedToolId);
-            }
-
-            if (questionsEnabled)
-            {
-                // 允许提问：把「提问」这一个动作放进白名单。它**不需要审批**（不是执行动作），
-                // 但仍然要过闸门 —— “往当前会话发额外消息”这件事走的是同一条判定路径。
-                allowed.Add(ApprovalFlow.QuestionToolId);
-            }
 
             return new ChatCapabilitySet(
                 DefaultRegistry,

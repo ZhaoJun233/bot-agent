@@ -29,6 +29,11 @@
 - 核心不变量回归（#126）：S56 每会话 FIFO / S57 静默短路在发送前 / S58 引用只挂第一条 /
   S59 语音与文字不重复播报，四个场景进 CI 矩阵；`PipelineEval` 新增确定性决策链性能基线
   （`tests/fixtures/pipeline/baseline.json`，口径见 `docs/baseline/pipeline-performance-baseline.md`）。
+- 统一工具注册表（#115）：`ToolSpec` 增加开关名与来源元数据（10 条聊天声明不再各写一份 id→开关表），
+  可见性判定收敛到 `ToolVisibility` 单入口（`ReplyToolAvailability` 降为兼容壳）；
+  新增 `ToolInventory` 统一查询面，MCP 作为**追加来源**进同一张表而不改内建 26 条计数，
+  面板 `GET /api/tools` 新增 `inventory` 块（内建 / MCP / 重名分列）。口径见
+  `docs/architecture/tool-registry.md`。
 - 运维基线（#121）：日志按天轮转并保留 7 天（单文件 10 MiB 或跨天滚动、旧档 gzip，
   规则抽成 `LogRotation` 并有 10 条探针用例）；库与热备产物一律 `600`；宿主启动 10 分钟后自动每日热备
   （保留 3 份、同一天不重复、同一时刻只跑一个，结果写 `meta` 表），面板新增 `GET/POST /api/backup`；

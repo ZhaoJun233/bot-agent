@@ -3,6 +3,42 @@ using BotAgent.Domain.Permissions;
 namespace BotAgent.Domain.Tools;
 
 /// <summary>
+/// 这个工具**从哪来**（#115）：内建目录（<see cref="Domain.Tools.ChatToolSpecs" /> /
+/// <c>ServerToolSpecs</c> / <c>QqToolSpecs</c>）还是运行时发现的外部 MCP 工具。
+///
+/// 为什么要显式标：统一的查询面（<c>Services/Tools/ToolInventory.cs</c>）要把两批工具放进同一张表，
+/// 而“内建计数 10/10/6”是探针钉住的契约 —— 标了来路，才能在同一张表里既回答“总共有哪些工具”，
+/// 又不让“MCP 发现成功”混成“内建登记多了一个”。
+/// </summary>
+public enum ToolOrigin
+{
+    /// <summary>编译期就在代码里声明的内建工具。</summary>
+    Builtin = 0,
+
+    /// <summary>运行时从 MCP 服务器发现的外部工具（描述是不可信数据）。</summary>
+    Mcp = 1,
+}
+
+/// <summary>
+/// 工具与**面板开关键**的绑定名（#115 之前这张表在 <c>ChatCapabilitySet.FromSwitches</c> 与
+/// <c>ReplyToolAvailability.Allows</c> 里各写了一遍，改一个键要改两处、漏一处就静默错）。
+///
+/// 空字符串 = 不绑开关（例如 <c>chat.reply</c> 这种“默认行为”类工具，它永远可用，但不出现在清单里）。
+/// 不认识的名字一律按**关**处理（Fail-Closed 与两条老路径一致）。
+/// </summary>
+public static class ToolFeature
+{
+    public const string WebSearch = "websearch";
+    public const string Music = "music";
+    public const string Voice = "voice";
+    public const string Stickers = "stickers";
+    public const string Poke = "poke";
+    public const string Approval = "approval";
+    public const string Question = "question";
+    public const string Text = "text";
+}
+
+/// <summary>
 /// 配置留空时这个工具的默认状态（general-agent-platform-plan.md §10.2 坑 4 的显式化）。
 ///
 /// 为什么要有它：两条 Agent 路径的“空值约定”**故意相反** ——
@@ -59,4 +95,13 @@ public sealed record ToolSpec(
     /// 它不是可选能力，而且 V3 §5.3 那条兼容红线要求“开关全关时提示词与改造前逐字一致”，
     /// 让它在清单里占一行就等于那一段永远都在。
     /// </summary>
-    bool PromptVisible = true) : ToolDescriptor(Id, Category, Summary, ReadOnly);
+    bool PromptVisible = true,
+
+    /// <summary>
+    /// 绑定的面板开关名（见 <see cref="ToolFeature" />）。空 = 不绑开关（“默认行为”类工具，永远可用）；
+    /// 不认识的名字按关处理（Fail-Closed）。
+    /// </summary>
+    string FeatureKey = "",
+
+    /// <summary>来路：内建声明还是运行时发现的 MCP 工具（统一查询面据此分组/计数）。</summary>
+    ToolOrigin Origin = ToolOrigin.Builtin) : ToolDescriptor(Id, Category, Summary, ReadOnly);

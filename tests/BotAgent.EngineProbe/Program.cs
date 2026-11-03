@@ -50,6 +50,13 @@ public static class Program
         await RunAsync("AgentTaskRuntime: failures map to agent_failed / agent_rejected", AgentTaskRuntimeTests.FailureTests);
         await RunAsync("AgentTaskRuntime: capacity and duplicate id are rejected", AgentTaskRuntimeTests.CapacityTests);
         await RunAsync("AgentTaskRuntime: forget only removes terminal records", AgentTaskRuntimeTests.ForgetTests);
+        await RunAsync("ToolVisibility: unknown ids fail closed and switches gate tools", ToolVisibilityTests.SwitchesAndUnknownIdsAsync);
+        await RunAsync("ToolVisibility: web tools wait for web readiness", ToolVisibilityTests.WebReadyGateAsync);
+        await RunAsync("ToolVisibility: stopped lease revokes every tool", ToolVisibilityTests.StoppedLeaseRevokesEverythingAsync);
+        await RunAsync("ToolVisibility: approval and question map to the text capability", ToolVisibilityTests.ApprovalAndQuestionCountAsTextAsync);
+        await RunAsync("ToolVisibility: platform policy can close text", ToolVisibilityTests.PlatformPolicyCanCloseTextAsync);
+        await RunAsync("ToolVisibility: live resolver wins over stale snapshot", ToolVisibilityTests.LiveResolverBeatsStaleSnapshotAsync);
+        await RunAsync("ToolInventory: MCP is appended without changing the builtin catalog", ToolVisibilityTests.InventoryAppendsMcpWithoutChangingBuiltinAsync);
 
         Console.WriteLine();
         Console.WriteLine($"Passed {_passed}; failed {_failed}");

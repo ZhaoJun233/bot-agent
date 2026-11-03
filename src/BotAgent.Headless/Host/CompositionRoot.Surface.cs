@@ -194,7 +194,8 @@ internal static partial class CompositionRoot
         PlatformPolicyResolver platformPolicies,
         Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> circuitStatusProvider,
         BackgroundEvaluatorQueue background,
-        Domain.Plugins.IPluginRegistry? plugins = null)
+        Domain.Plugins.IPluginRegistry? plugins = null,
+        BotAgent.Services.Mcp.McpToolUseCase? mcp = null)
     {
         // 面板自己的两条出网（模型列表探测 20s / 自建网易云登录 15s）
         var panelHttp = new HttpFetcher(TimeSpan.FromSeconds(20), msg => FileLog.Write("Net", msg), "panel-models");
@@ -232,7 +233,8 @@ internal static partial class CompositionRoot
             feishuGateway: feishu,
             platformPolicies: platformPolicies,
             plugins: plugins,
-            background: background);
+            background: background,
+            mcp: mcp);
     }
 
     /// <summary>
@@ -264,7 +266,7 @@ internal static partial class CompositionRoot
             a.HotReload, a.Ui, a.Stickers, a.Mood, a.Voice, a.Music, a.Research, a.Registry, a.Profiles,
             a.Secrets, a.SettingsStore, a.Identity, a.Scheduler, a.Reply, a.Participation, a.AgentCmds, a.Quotas,
             a.HealthReports, a.Backups, a.SessionPolicies, a.Traces, a.HostFacts, a.Audit, a.Approvals, a.Local,
-            a.Official, a.Feishu, a.PlatformRegistry, a.PlatformPolicies, a.CircuitStatus, a.Background, a.Plugins);
+            a.Official, a.Feishu, a.PlatformRegistry, a.PlatformPolicies, a.CircuitStatus, a.Background, a.Plugins, a.Mcp.UseCase);
 
         a.Management = BuildManagedCapabilityBinding(a.Configuration, a.Authorization, a.DriverOperations, a.Box,
             a.PlatformPolicies, a.Settings, a.Feishu, a.PlatformRegistry, () => a.ModelRegistry.Captured,
