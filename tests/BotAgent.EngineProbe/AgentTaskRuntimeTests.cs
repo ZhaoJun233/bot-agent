@@ -41,12 +41,14 @@ internal static class AgentTaskRuntimeTests
             [AgentTaskState.Running] =
             [
                 AgentTaskState.Succeeded, AgentTaskState.Failed, AgentTaskState.Cancelled,
-                AgentTaskState.TimedOut, AgentTaskState.CancelRequested, AgentTaskState.WaitingApproval
+                AgentTaskState.TimedOut, AgentTaskState.CancelRequested, AgentTaskState.WaitingApproval,
+                AgentTaskState.Unknown
             ],
             [AgentTaskState.WaitingApproval] =
                 [AgentTaskState.Running, AgentTaskState.Cancelled, AgentTaskState.Failed, AgentTaskState.TimedOut],
             [AgentTaskState.CancelRequested] =
-                [AgentTaskState.Cancelled, AgentTaskState.Succeeded, AgentTaskState.Failed, AgentTaskState.TimedOut]
+                [AgentTaskState.Cancelled, AgentTaskState.Succeeded, AgentTaskState.Failed,
+                    AgentTaskState.TimedOut, AgentTaskState.Unknown]
         };
         foreach (var (from, targets) in expected)
         {

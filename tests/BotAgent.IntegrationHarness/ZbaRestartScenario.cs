@@ -128,9 +128,17 @@ public static partial class Program
                 && findNode?["acceptedAt"] is not null,
                 find.Status + " " + find.Body);
 
+            // #116：任务台账落库后，重启前受理的任务重启后仍可查（以前是 404）。
+            // 关键不变量不是"查得到"而是"绝不看起来还在跑"：非终态必须收口成 Unknown/Cancelled。
             var staleGet = await ZbaAsync(http, "GET", root + "/tasks/" + restartTaskId, readToken);
-            Check("S55 重启后旧任务不可查询（404）", staleGet.Status == 404,
-                staleGet.Status + " " + staleGet.Body);
+            var staleNode = JsonNode.Parse(staleGet.Body) as JsonObject;
+            var staleState = staleNode?["state"]?.GetValue<int>() ?? -1;
+            // 3=Succeeded 4=Failed 6=Cancelled 7=Unknown（见 ZbaTaskState）；0=Queued 1=Running 2=WaitingApproval 都不允许。
+            Check("S55 重启后旧任务仍可查询且不停在排队/运行中",
+                staleGet.Status == 200
+                && staleNode?["id"]?.GetValue<string>() == restartTaskId
+                && staleState is 3 or 4 or 6 or 7,
+                staleGet.Status + " state=" + staleState + " " + staleGet.Body);
 
             var replayAfterRestart = await ZbaAsync(http, "POST", root + "/tasks", adminToken,
                 restartSubmitBody, idempotencyKey: "synthetic-zba-restart-receipt-1");

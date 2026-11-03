@@ -83,8 +83,11 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _quotaStore = quotaStore;
         _backups = backups;
         // 执行与状态在 Engine 的任务运行时（ADR-0002）；registry 只做通道适配（幂等/回执/事件/结果投影）。
+        // 台账（#116）在这里注入：运行时只管写，SQLite 细节留在 Adapters/Persistence。
+        var ledger = new AgentTaskLedgerStore();
+        ledger.Prune(0);
         _tasks = new ZbaTaskRegistry(sessions,
-            new AgentTaskRuntime(new AgentTaskExecutor(agent), now, log: log),
+            new AgentTaskRuntime(new AgentTaskExecutor(agent), now, log: log, ledger: ledger, bootSeq: ledger.BootSeq),
             now, serverEnabled, events, taskReceipts, instanceId, log);
     }
 

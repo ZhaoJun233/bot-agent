@@ -148,9 +148,10 @@ internal static class ConfigurationContractTests
                     command.CommandText = "SELECT COUNT(*) FROM meta WHERE key='configuration_schema'";
                     Check(Convert.ToInt64(command.ExecuteScalar()) == 0, "module marker rolled back");
                     command.CommandText = "PRAGMA user_version";
-                    // v10/v11 (provider protocol/options、配置字段号上限) migrate before the configuration module is written,
-                    // so the committed physical revision is 11 even when module creation faults; module state is what must roll back.
-                    Check(Convert.ToInt64(command.ExecuteScalar()) == 11, "physical revision advanced only by the migration");
+                    // v10/v11/v12 (provider protocol/options、配置字段号上限、任务台账) migrate before the configuration
+                    // module is written, so the committed physical revision is 12 even when module creation faults;
+                    // module state is what must roll back.
+                    Check(Convert.ToInt64(command.ExecuteScalar()) == 12, "physical revision advanced only by the migration");
                     StorageDatabase.Exec(connection, "DROP TRIGGER synthetic_module_fault;");
                 }
                 StorageDatabase.Initialize(path);
@@ -990,7 +991,7 @@ internal static class ConfigurationContractTests
             var denied = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(denied.Code == ConfigurationResultCode.Forbidden && denied.View is null
                 && (await store.SaveAsync(caller, Request())).Code == ConfigurationResultCode.Forbidden, "trusted authorization denies forged flags");
-            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 11,
+            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 12,
                 "real adapter uses the sole bound Storage database");
             Console.WriteLine($"CFG_CHILD host passed={passed} failed=0");
             return 0;
@@ -4671,7 +4672,7 @@ internal static class ConfigurationContractTests
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant)));
             check("configuration activation rejects another participant", Throws<InvalidOperationException>(() =>
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant())));
-            check("configuration module migration preserves physical schema 11", AppDatabase.Scalar<long>("PRAGMA user_version") == 11
+            check("configuration module migration preserves physical schema 12", AppDatabase.Scalar<long>("PRAGMA user_version") == 12
                 && AppDatabase.GetMeta("configuration_schema") == "1");
             // #129 S3：空 instanceId 不是「野目标」，它本身就是内置驱动的身份
             // （qq.private / qq.official / local 三个驱动的 InstanceId 就是空串），所以冻结时原样保留；

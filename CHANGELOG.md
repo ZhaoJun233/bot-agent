@@ -29,6 +29,12 @@
 - 核心不变量回归（#126）：S56 每会话 FIFO / S57 静默短路在发送前 / S58 引用只挂第一条 /
   S59 语音与文字不重复播报，四个场景进 CI 矩阵；`PipelineEval` 新增确定性决策链性能基线
   （`tests/fixtures/pipeline/baseline.json`，口径见 `docs/baseline/pipeline-performance-baseline.md`）。
+- 任务台账与重启恢复（#116）：schema 11 → 12 新增 `agent_tasks` 表（只存形状与计数，不落提示词与正文），
+  运行时在受理/变更/终态处写台账，启动时读最近 200 行但**绝不重做**：`Queued`/`WaitingApproval`
+  收口为 `Cancelled(cancelled_before_dispatch)`，`Running`/`CancelRequested` 收口为
+  `Unknown(restart_state_unknown)`；ZBA `GET /tasks/{id}` 重启后可查（以前是 404），
+  合成场景 S65 覆盖四条不变量。决策见 `docs/decisions/0003-agent-task-persistence.md`，
+  实现事实见 `docs/architecture/agent-task-runtime.md`。
 - 统一工具注册表（#115）：`ToolSpec` 增加开关名与来源元数据（10 条聊天声明不再各写一份 id→开关表），
   可见性判定收敛到 `ToolVisibility` 单入口（`ReplyToolAvailability` 降为兼容壳）；
   新增 `ToolInventory` 统一查询面，MCP 作为**追加来源**进同一张表而不改内建 26 条计数，

@@ -98,7 +98,7 @@ public static class AppDatabase
                     DefaultTimeout = 30
                 }.ToString();
                 using var conn = Open();
-                if (SchemaVersion() > 11) throw new InvalidOperationException("database_schema_newer");
+                if (SchemaVersion() > 12) throw new InvalidOperationException("database_schema_newer");
                 ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
@@ -399,6 +399,8 @@ public static class AppDatabase
         // 建表整块在 CreateSchema、「跑过中间版本」的逐版补列在 ApplyMigrations ——
         // 这一层只剩"先建表、再按 user_version 补齐"这两句顺序话（顺序是语义：补列要在建表之后）。
         CreateSchema(conn);
+        // 任务台账（v12 起）：新库在这里建好，老库由 ApplyMigrations 补 —— DDL 只有一份。
+        CreateAgentTaskLedger(conn);
 
         var version = SchemaVersion();
         ApplyMigrations(conn, version);
@@ -685,13 +687,41 @@ public static class AppDatabase
             """);
 
     /// <summary>
+    /// 任务台账（#116）：一份任务一行，只存形状与计数 —— 提示词、回答正文、工具参数都不进这张表。
+    /// 单独成方法是为了让"新库建表"和"老库迁移"共用同一份 DDL，避免两处各抄一遍后漂移。
+    /// </summary>
+    private static void CreateAgentTaskLedger(SqliteConnection conn)
+    {
+        Exec(conn, """
+            CREATE TABLE IF NOT EXISTS agent_tasks(
+              id               TEXT PRIMARY KEY,
+              state            INTEGER NOT NULL,
+              error_code       TEXT NOT NULL DEFAULT '',
+              source_key       TEXT NOT NULL DEFAULT '',
+              session_id       TEXT NOT NULL DEFAULT '',
+              target           TEXT NOT NULL DEFAULT '',
+              created_at       TEXT NOT NULL DEFAULT '',
+              updated_at       TEXT NOT NULL DEFAULT '',
+              duration_ms      INTEGER NOT NULL DEFAULT 0,
+              tool_calls       INTEGER NOT NULL DEFAULT 0,
+              cancel_requested INTEGER NOT NULL DEFAULT 0,
+              result_chars     INTEGER NOT NULL DEFAULT 0,
+              result_truncated INTEGER NOT NULL DEFAULT 0,
+              boot_seq         INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_updated ON agent_tasks(updated_at);
+            """);
+    }
+
+    /// <summary>
     /// 按 <c>PRAGMA user_version</c> 逐版补列：v1 基线、v2 会话 next_seq、v3 成员消息主键补 group_id、
     /// v4 成员身份补 title_checked。每一步都自带"是不是已经有了"的内省，重复执行只是空转。
     /// ⚠ 这里动的是**迁移语义**：改任何一步都要单独一次带库快照的改动（别顺手优化）。
     /// </summary>
     private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
     {
-        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11)) throw new ArgumentException("invalid_legacy_schema");
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12)) throw new ArgumentException("invalid_legacy_schema");
         Exec(connection, $"PRAGMA user_version = {version};");
     }
 
@@ -856,6 +886,14 @@ public static class AppDatabase
                     """));
             }
             Write(conn2 => SetLegacySchemaVersion(conn2, 11));
+        }
+
+        // v12：任务台账 agent_tasks（#116）。只加表，不动既有列 —— 迁移是**只前向**的：
+        // 新库一建就有这张表，跑过旧版的库在这里补建并打版本号。
+        if (version < 12)
+        {
+            Write(CreateAgentTaskLedger);
+            Write(conn2 => SetLegacySchemaVersion(conn2, 12));
         }
     }
 

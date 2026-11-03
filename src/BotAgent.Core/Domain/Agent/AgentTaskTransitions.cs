@@ -23,7 +23,10 @@ public static class AgentTaskTransitions
     private static readonly AgentTaskState[] RunningTargets =
     [
         AgentTaskState.Succeeded, AgentTaskState.Failed, AgentTaskState.Cancelled,
-        AgentTaskState.TimedOut, AgentTaskState.CancelRequested, AgentTaskState.WaitingApproval
+        AgentTaskState.TimedOut, AgentTaskState.CancelRequested, AgentTaskState.WaitingApproval,
+        // #116：重启对账用 —— 已派发但进程没了，本地无法证明远端副作用被取消（也不重做），
+        // 只能如实记「无法判定」。见 docs/decisions/0002-agent-task-runtime.md §2.3。
+        AgentTaskState.Unknown
     ];
 
     private static readonly AgentTaskState[] WaitingApprovalTargets =
@@ -35,7 +38,9 @@ public static class AgentTaskTransitions
     private static readonly AgentTaskState[] CancelRequestedTargets =
     [
         AgentTaskState.Cancelled, AgentTaskState.Succeeded,
-        AgentTaskState.Failed, AgentTaskState.TimedOut
+        AgentTaskState.Failed, AgentTaskState.TimedOut,
+        // 取消请求已发出、进程却先没了：取消是否生效同样无法证明 → Unknown（#116）。
+        AgentTaskState.Unknown
     ];
 
     private static readonly AgentTaskState[] NoTargets = [];

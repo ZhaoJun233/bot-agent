@@ -29,6 +29,11 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
     private readonly int _maxActive;
     private readonly int _maxResultChars;
     private readonly Action<string>? _log;
+    private readonly IAgentTaskLedger? _ledger;
+    private readonly long _bootSeq;
+
+    /// <summary>启动时最多恢复多少条历史任务（与通道台账上限一致）。</summary>
+    private const int MaxRestore = 200;
 
     private readonly object _gate = new();
     private readonly Dictionary<string, TaskRecord> _records = new(StringComparer.Ordinal);
@@ -44,13 +49,18 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         Func<DateTimeOffset> now,
         int maxActive = DefaultMaxActive,
         int maxResultChars = DefaultMaxResultChars,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        IAgentTaskLedger? ledger = null,
+        long bootSeq = 0)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _now = now ?? throw new ArgumentNullException(nameof(now));
         _maxActive = maxActive > 0 ? maxActive : throw new ArgumentOutOfRangeException(nameof(maxActive));
         _maxResultChars = maxResultChars > 0 ? maxResultChars : throw new ArgumentOutOfRangeException(nameof(maxResultChars));
         _log = log;
+        _ledger = ledger;
+        _bootSeq = bootSeq;
+        if (_ledger is not null) Restore();
     }
 
     /// <summary>
@@ -79,6 +89,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         }
 
         _log?.Invoke($"[Task] id={request.Id} state=queued source={request.SourceKey}");
+        Persist(accepted);
         return AgentTaskSubmitResult.AcceptedTask(accepted);
     }
 
@@ -146,6 +157,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         if (snapshot is not null)
         {
             _log?.Invoke($"[Task] id={id} state=cancel_requested");
+            Persist(snapshot);
             Changed?.Invoke(snapshot);
         }
 
@@ -231,6 +243,97 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 把一次状态变化写进台账。<b>写失败只记日志</b>：任务成败由执行结果决定，不能被存储问题改写。
+    /// 放在锁外调用（SQLite 写入有 I/O 成本，不该占着状态机的锁）。
+    /// </summary>
+    private void Persist(AgentTaskSnapshot snapshot)
+    {
+        if (_ledger is null) return;
+        try
+        {
+            _ledger.Save(AgentTaskLedgerEntry.From(snapshot, _bootSeq));
+        }
+        catch (Exception exception)
+        {
+            _log?.Invoke($"[Task] 台账写入失败（任务状态不受影响）：{exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 启动对账（#116 / ADR-0003）：把上一次进程留下的行读回来，<b>非终态一律收口成终态，绝不重做</b>。
+    ///
+    ///   • Queued / WaitingApproval —— 还没交给执行器就被打断，本地能证明没有副作用 ⇒ <c>Cancelled</c>（cancelled_before_dispatch）；
+    ///   • Running / CancelRequested —— 已经交出去了，本地说不清远端做到哪一步 ⇒ <c>Unknown</c>（restart_state_unknown）。
+    ///
+    /// 为什么不用 Failed：Failed 暗示"我们知道它失败了"，而这里只知道"不知道"。Unknown 是唯一不撒谎的结论。
+    /// </summary>
+    private void Restore()
+    {
+        IReadOnlyList<AgentTaskLedgerEntry> rows;
+        try
+        {
+            rows = _ledger!.LoadRecent(MaxRestore);
+        }
+        catch (Exception exception)
+        {
+            _log?.Invoke($"[Task] 台账读取失败，按空台账启动：{exception.Message}");
+            return;
+        }
+
+        if (rows.Count == 0) return;
+        var recovered = 0;
+        var unknown = 0;
+        foreach (var row in rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Id)) continue;
+            if (_records.ContainsKey(row.Id)) continue;
+            if (!_order.Contains(row.Id)) _order.Add(row.Id);
+
+            var state = row.State;
+            var errorCode = row.ErrorCode;
+            var updatedAt = row.UpdatedAt;
+            if (!AgentTaskTransitions.IsTerminal(state))
+            {
+                var dispatched = state is AgentTaskState.Running or AgentTaskState.CancelRequested;
+                state = dispatched ? AgentTaskState.Unknown : AgentTaskState.Cancelled;
+                errorCode = dispatched ? "restart_state_unknown" : "cancelled_before_dispatch";
+                updatedAt = _now();
+                if (dispatched) unknown++;
+            }
+
+            var task = new TaskRecord(
+                new AgentTaskRequest
+                {
+                    Id = row.Id,
+                    // 正文不落库，也没有重做路径：恢复出来的记录只用于查询与追溯。
+                    Prompt = string.Empty,
+                    SourceKey = row.SourceKey,
+                    SessionId = row.SessionId,
+                    Target = row.Target,
+                    CaptureResult = false
+                },
+                row.CreatedAt)
+            {
+                State = state,
+                ErrorCode = errorCode,
+                UpdatedAt = updatedAt,
+                DurationMs = row.DurationMs,
+                ToolCalls = row.ToolCalls,
+                CancellationRequested = row.CancellationRequested || state is AgentTaskState.Cancelled or AgentTaskState.CancelRequested,
+                ResultChars = row.ResultChars,
+                ResultTruncated = row.ResultTruncated
+            };
+            _records[row.Id] = task;
+            recovered++;
+
+            // 收口结果立刻回写：否则下一次重启又会把同一行当成"非终态"重算一遍。
+            if (state != row.State) Persist(Project(task));
+        }
+
+        _log?.Invoke($"[Task] 恢复 {recovered} 条历史任务（其中 {unknown} 条按 Unknown 收口，不重做）");
+    }
+
     private static void TryCancel(CancellationTokenSource source)
     {
         try { source.Cancel(); }
@@ -284,6 +387,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         }
 
         _log?.Invoke($"[Task] id={task.Request.Id} state={snapshot!.State.ToString().ToLowerInvariant()}");
+        Persist(snapshot);
         Changed?.Invoke(snapshot);
     }
 
@@ -302,6 +406,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         }
 
         _log?.Invoke($"[Task] id={task.Request.Id} state={state.ToString().ToLowerInvariant()}");
+        Persist(snapshot);
         Changed?.Invoke(snapshot);
     }
 

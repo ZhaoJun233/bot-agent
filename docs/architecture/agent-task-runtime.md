@@ -38,9 +38,9 @@
 | 从 | 允许去往 |
 | --- | --- |
 | Queued | Running / CancelRequested / Cancelled / TimedOut |
-| Running | Succeeded / Failed / Cancelled / TimedOut / CancelRequested / WaitingApproval |
+| Running | Succeeded / Failed / Cancelled / TimedOut / CancelRequested / WaitingApproval / Unknown |
 | WaitingApproval | Running / Cancelled / Failed / TimedOut |
-| CancelRequested | Cancelled / Succeeded / Failed / TimedOut |
+| CancelRequested | Cancelled / Succeeded / Failed / TimedOut / Unknown |
 | 五个终态 | 无出边 |
 
 两条容易写错、这里明确固化的规则：
@@ -64,6 +64,8 @@
 | Core | `Domain/Ports/IAgentTaskExecutor.cs` | 执行端口（一个 `ExecuteAsync`） |
 | Engine | `Runtime/AgentTaskRuntime.cs` | 排队、并发上限、取消、超时、终态、变更事件 |
 | Engine | `Runtime/AgentTaskSnapshot.cs` | 对外快照与提交/取消结果类型 |
+| Engine | `Runtime/AgentTaskLedger.cs` | 台账端口（`Save` / `LoadRecent` / `Prune`）与行结构 |
+| Headless | `Adapters/Persistence/AgentTaskLedgerStore.cs` | 台账的 SQLite 实现（`agent_tasks` 表，只存形状与计数） |
 | Headless | `Adapters/Agent/AgentTaskExecutor.cs` | 把任务转给现有的 `AgentCommandService.RunPanelAgentDirectAsync` |
 | Headless | `Adapters/Panel/Zba/ZbaTaskRegistry.cs` | ZBA 通道适配器：幂等键、回执、事件流、结果投影、台账淘汰 |
 
@@ -76,7 +78,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 1. 通道调 `Submit(AgentTaskRequest)`。运行时在锁内判定：已停止 → `Disposed`；id 重复 →
    `DuplicateId`；活跃数已达上限 → `CapacityExceeded`。被拒时**不建记录**，返回
    `AgentTaskSubmitResult.Rejected`。
-2. 受理后状态是 `Queued`，快照立刻可查；执行在 `Task.Run` 里进行，提交线程不等。
+2. 受理后状态是 `Queued`，快照立刻可查，并写一行台账（`Persist` 在锁外）；执行在 `Task.Run` 里进行，提交线程不等。
 3. 执行体进入 `Running`，为任务建两个令牌源：`cancelSource`（外部取消）与
    `timeoutSource`（硬截止），二者连成 `linked` 交给执行器。
 4. 执行器任务与超时延迟赛跑：
@@ -106,6 +108,26 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 - **台账淘汰在通道**：运行时按 id 保存记录，通道判断某条已终态且超出保留量后调 `Forget(id)`；
   运行中的记录 `Forget` 返回 false，绝不会被删。
 
+### 台账与重启恢复（#116）
+
+状态每变一次就写一行 `agent_tasks`（`INSERT OR REPLACE`，幂等），写入点全在运行时里，
+所以任何通道都自动获得持久化。三条硬约束见
+[ADR-0003](../decisions/0003-agent-task-persistence.md)：
+
+- 只存形状与计数，**不存提示词、正文、工具参数**；
+- 写失败只记日志，不影响任务结果（`LedgerFailureIsolationTests` 钉住）；
+- 启动时读最近 200 行，只处理非终态，**绝不重做**：
+
+| 库里状态 | 恢复后 | 原因码 |
+| --- | --- | --- |
+| Queued | Cancelled | `cancelled_before_dispatch` |
+| WaitingApproval | Cancelled | `cancelled_before_dispatch` |
+| Running | Unknown | `restart_state_unknown` |
+| CancelRequested | Unknown | `restart_state_unknown` |
+
+恢复出来的记录没有提示词（`Prompt` 为空、`CaptureResult=false`），恢复后状态若与库里的
+不同会立刻回写一次。运行期只读内存，库里的行是给「重启后」和「事后追溯」看的。
+
 ## 6. 已经接上的通道：ZBA `/tasks`
 
 `ZbaTaskRegistry` 现在只做适配，不再自己执行、也不自己存状态：
@@ -128,15 +150,17 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | --- | --- |
 | `EngineProbe` 的 7 条 `AgentTaskRuntime: …` | 转移表全矩阵与终态无出边、非法转移抛异常、成功/清洗/截断/未声明采集不存正文、取消（含二次取消 TooLate 与未知 NotFound）、超时与取消区分且 `CancellationRequested=false`、`agent_failed`/`agent_rejected`、并发上限与重复 id、`Forget` 只删终态 |
 | `ZbaProbe` 303 条 | 通道语义没变：幂等重放、回执、事件、结果可见性、取消 |
-| 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为 |
+| 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为；S55 现在断言「重启后旧任务可查且不停在排队/运行中」 |
+| 集成 S65 | 任务台账跨重启：Queued→Cancelled、Running→Unknown、出现在列表里、不会被重做 |
+| `ProductionSpecProbe` 台账 8 条 | v12 版本、建表、无正文列、字段往返保真、同 id 覆盖、`BootSeq` 递增、`Prune` 只留最近 N、清理 |
 | `ArchitectureProbe` | 分层与文件头注释约定（Core 不引 Engine、Engine 只引 Core） |
 
 改状态模型时先改本表与 ADR-0002，再改代码；改通道投影时必须同时看 ZbaProbe 与 S54/S55。
 
 ## 8. 已知边界
 
-- **不落库**：运行时全在内存，进程重启后任务记录消失（面板会看到「未知/已过期」）。
-  持久化与重启恢复是 #116。
+- **重启后不重做**：台账能让记录活过重启，但代价是「可能做过副作用的执行」只能标 `Unknown`，
+  没有任何自动续跑（见 §5 的恢复表与 ADR-0003 §2.4）。
 - **没有审批**：`WaitingApproval` 只是预留状态，没有写入方；审批与执行隔离是 #117。
 - **没有远程重启**：`RestartRequired` 语义仍属配置链路，本层不提供重启按钮。
 - **不暴露到 OpenAPI**：运行时是内部构件，唯一对外契约仍由 ZBA 路由与 `ZbaOpenApi` 定义。

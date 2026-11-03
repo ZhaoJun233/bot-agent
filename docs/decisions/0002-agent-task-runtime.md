@@ -63,9 +63,9 @@ ZBA 面板契约（`ZbaContracts.cs:185-195`）**保持 8 个值不变**：`Time
 
 ```
 Queued          -> Running | CancelRequested | Cancelled | TimedOut
-Running         -> Succeeded | Failed | Cancelled | TimedOut | CancelRequested | WaitingApproval
+Running         -> Succeeded | Failed | Cancelled | TimedOut | CancelRequested | WaitingApproval | Unknown
 WaitingApproval -> Running | Cancelled | Failed | TimedOut
-CancelRequested -> Cancelled | Succeeded | Failed | TimedOut
+CancelRequested -> Cancelled | Succeeded | Failed | TimedOut | Unknown
 Succeeded | Failed | Cancelled | TimedOut | Unknown -> （无，终态）
 ```
 
@@ -74,6 +74,8 @@ Succeeded | Failed | Cancelled | TimedOut | Unknown -> （无，终态）
 - `CancelRequested -> Succeeded/Failed` 允许：取消是**请求**不是事实，执行器可能在取消生效前已经干完；这时如实上报完成，不冒报「取消成功」。
 - `Queued -> TimedOut` 允许：超时从受理开始算，包含排队时间。
 - `WaitingApproval` 本轮只有转移规则，没有生产者（#117 接）。
+- `Running | CancelRequested -> Unknown` 是 **#116 的恢复策略**：进程重启时已派发但结果不明的任务，
+  本地不能证明远端副作用被取消，也绝不重做，只能记「无法判定」（决策与对账细节见 ADR-0003）。
 
 ### 2.4 双超时语义
 

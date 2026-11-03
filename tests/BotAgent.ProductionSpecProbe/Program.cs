@@ -41,6 +41,7 @@ public static class Program
             MultiTenantIsolationTests(root);
             QuotaManagementTests();
             MultiPlatformBotAgentTests(root);
+            AgentTaskLedgerTests();
             DockerCapabilityTests();
             Console.WriteLine($"通过 {_passed}，失败 0");
             return 0;
@@ -888,6 +889,89 @@ public static class Program
             => SendAsync(new HttpRequestMessage(HttpMethod.Get, url), ct);
         public Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default)
             => SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = content }, ct);
+    }
+
+    /// <summary>
+    /// 任务台账（#116）：v12 的表形状、写读往返、幂等覆盖、上限清理与启动序号。
+    /// 这里只验"库这一层"；恢复策略本身在 EngineProbe 的 AgentTaskLedgerTests 里。
+    /// </summary>
+    private static void AgentTaskLedgerTests()
+    {
+        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 12, "库版本应为 v12（任务台账）");
+        Check(AppDatabase.Scalar<long>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_tasks'") == 1,
+            "v12 必须建出 agent_tasks 表");
+
+        var columns = AppDatabase.Query("SELECT name FROM pragma_table_info('agent_tasks')",
+            reader => AppDatabase.Str(reader, "name") ?? string.Empty);
+        Check(!columns.Any(name => name.Contains("prompt", StringComparison.OrdinalIgnoreCase)
+                                   || name.Contains("result_text", StringComparison.OrdinalIgnoreCase)
+                                   || name.Contains("summary", StringComparison.OrdinalIgnoreCase)),
+            "任务台账不许有提示词/正文列（只存形状与计数）");
+
+        var store = new AgentTaskLedgerStore();
+        var created = new DateTimeOffset(2026, 11, 3, 9, 0, 0, TimeSpan.Zero);
+        var entry = new BotAgent.Engine.Runtime.AgentTaskLedgerEntry
+        {
+            Id = "synthetic-task-1",
+            State = BotAgent.Domain.Agent.AgentTaskState.Succeeded,
+            ErrorCode = null,
+            SourceKey = "panel:synthetic",
+            SessionId = "synthetic-session",
+            Target = "server",
+            CreatedAt = created,
+            UpdatedAt = created.AddSeconds(12),
+            DurationMs = 12345,
+            ToolCalls = 3,
+            CancellationRequested = false,
+            ResultChars = 640,
+            ResultTruncated = true,
+            BootSeq = store.BootSeq
+        };
+        store.Save(entry);
+        var loaded = store.LoadRecent(10).FirstOrDefault(row => row.Id == "synthetic-task-1");
+        Check(loaded.Id == "synthetic-task-1"
+              && loaded.State == BotAgent.Domain.Agent.AgentTaskState.Succeeded
+              && loaded.ErrorCode is null
+              && loaded.SourceKey == "panel:synthetic"
+              && loaded.SessionId == "synthetic-session"
+              && loaded.Target == "server"
+              && loaded.DurationMs == 12345
+              && loaded.ToolCalls == 3
+              && !loaded.CancellationRequested
+              && loaded.ResultChars == 640
+              && loaded.ResultTruncated
+              && loaded.BootSeq == store.BootSeq
+              && loaded.CreatedAt.ToUnixTimeSeconds() == created.ToUnixTimeSeconds()
+              && loaded.UpdatedAt.ToUnixTimeSeconds() == created.AddSeconds(12).ToUnixTimeSeconds(),
+            "任务台账写入后能按字段读回（时间戳精确到秒）");
+
+        store.Save(entry with { State = BotAgent.Domain.Agent.AgentTaskState.Unknown, ErrorCode = "restart_state_unknown" });
+        var overwritten = store.LoadRecent(10).Where(row => row.Id == "synthetic-task-1").ToArray();
+        Check(overwritten.Length == 1
+              && overwritten[0].State == BotAgent.Domain.Agent.AgentTaskState.Unknown
+              && overwritten[0].ErrorCode == "restart_state_unknown",
+            "同 id 重写是覆盖（状态每变一次写一次，必须幂等）");
+
+        var second = new AgentTaskLedgerStore();
+        Check(second.BootSeq == store.BootSeq + 1, "每次启动的台账序号必须递增（重启对账靠它）");
+
+        for (var index = 0; index < 6; index++)
+        {
+            store.Save(entry with
+            {
+                Id = "synthetic-task-prune-" + index,
+                UpdatedAt = created.AddMinutes(index + 1)
+            });
+        }
+
+        var removed = store.Prune(3);
+        Check(removed == 4, $"Prune(3) 应删掉 4 条（7 条里留最新 3 条），实际 {removed}");
+        var kept = store.LoadRecent(10);
+        Check(kept.Count == 3 && kept.All(row => row.Id.StartsWith("synthetic-task-prune-", StringComparison.Ordinal)),
+            "Prune 之后只剩最新的三条清理样例");
+
+        AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM agent_tasks WHERE id LIKE 'synthetic-task-%';"));
     }
 
     private static int _passed;

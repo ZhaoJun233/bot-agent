@@ -50,6 +50,9 @@ public static class Program
         await RunAsync("AgentTaskRuntime: failures map to agent_failed / agent_rejected", AgentTaskRuntimeTests.FailureTests);
         await RunAsync("AgentTaskRuntime: capacity and duplicate id are rejected", AgentTaskRuntimeTests.CapacityTests);
         await RunAsync("AgentTaskRuntime: forget only removes terminal records", AgentTaskRuntimeTests.ForgetTests);
+        await RunAsync("AgentTaskLedger: restart recovery never re-runs and unknown is the honest state", AgentTaskLedgerTests.RecoveryTests);
+        await RunAsync("AgentTaskLedger: every state change is written to the ledger", AgentTaskLedgerTests.TransitionPersistenceTests);
+        await RunAsync("AgentTaskLedger: a failing ledger never changes task outcome", AgentTaskLedgerTests.LedgerFailureIsolationTests);
         await RunAsync("ToolVisibility: unknown ids fail closed and switches gate tools", ToolVisibilityTests.SwitchesAndUnknownIdsAsync);
         await RunAsync("ToolVisibility: web tools wait for web readiness", ToolVisibilityTests.WebReadyGateAsync);
         await RunAsync("ToolVisibility: stopped lease revokes every tool", ToolVisibilityTests.StoppedLeaseRevokesEverythingAsync);

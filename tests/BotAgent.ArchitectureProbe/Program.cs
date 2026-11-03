@@ -433,8 +433,9 @@ public static class Program
             && Baseline.BotAgentHostFields <= 10 && Baseline.BotAgentHostMethods <= 10 && Baseline.LongestMethodLines <= 30
             && Baseline.LongestMethodAnywhere <= 198
             // #133 v11 配置字段号上限迁移：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省），
-            // 两处 SQL 都在 AppDatabase.cs（R2 的迁移位置）里，不属于「SQL 散出去」。
-            && Baseline.SqlLiteralTotal <= 138 && Baseline.FileIoTotal <= 62
+            // #116 v12 任务台账：138 → 141（agent_tasks DDL + 迁移分支；DAO 的查询/写入在 Adapters/Persistence）。
+            // 这些都落在 R2 允许的位置，不属于「SQL 散出去」。
+            && Baseline.SqlLiteralTotal <= 141 && Baseline.FileIoTotal <= 62
             && Baseline.ClockReads <= 3 && Baseline.HttpClientNews <= 4 && Baseline.PanelAgentCalls == 0
             && Baseline.ConcreteIoNews == 0 && Baseline.SettingsAssignments == 0 && Baseline.PanelSqlLiterals == 0
             && Baseline.PanelFileIo == 0 && Baseline.PanelClockReads == 0 && Baseline.PanelExemptFileIo <= 15
@@ -1599,11 +1600,29 @@ public static class Program
             "适配器只做幂等/回执/事件/投影/淘汰");
 
         var adr = Path.Combine(index.Root, "docs/decisions/0002-agent-task-runtime.md");
+        var adrPersistence = Path.Combine(index.Root, "docs/decisions/0003-agent-task-persistence.md");
         var doc = Path.Combine(index.Root, "docs/architecture/agent-task-runtime.md");
-        Check("★ ADR-0002 与实现说明都在仓库里",
-            File.Exists(adr) && File.Exists(doc),
-            (File.Exists(adr) ? "ADR 在" : "缺 ADR")
+        Check("★ ADR-0002 / ADR-0003 与实现说明都在仓库里",
+            File.Exists(adr) && File.Exists(adrPersistence) && File.Exists(doc),
+            (File.Exists(adr) ? "ADR-0002 在" : "缺 ADR-0002")
+            + (File.Exists(adrPersistence) ? "；ADR-0003 在" : "；缺 ADR-0003")
             + (File.Exists(doc) ? "；实现说明在" : "；缺实现说明"));
+
+        // #116：持久化的三个硬边界 —— 台账端口、写入点/恢复点、DAO 在不写 SQL 的层之外。
+        var ledgerPort = Path.Combine(index.Root, "src/BotAgent.Engine/Runtime/AgentTaskLedger.cs");
+        var ledgerDao = Path.Combine(index.Root, "src/BotAgent.Headless/Adapters/Persistence/AgentTaskLedgerStore.cs");
+        Check("★ 任务台账端口与 SQLite 实现都在",
+            File.Exists(ledgerPort) && File.Exists(ledgerDao),
+            (File.Exists(ledgerPort) ? "端口在" : "缺端口") + (File.Exists(ledgerDao) ? "；DAO 在" : "；缺 DAO"));
+
+        var runtimeSource = runtimeFile?.NoComments ?? string.Empty;
+        Check("★ 运行时既写台账也能按台账恢复（Persist / Restore 都在，且恢复不重做）",
+            runtimeSource.Contains("Persist(", StringComparison.Ordinal)
+            && runtimeSource.Contains("Restore(", StringComparison.Ordinal)
+            && runtimeSource.Contains("restart_state_unknown", StringComparison.Ordinal)
+            && runtimeSource.Contains("cancelled_before_dispatch", StringComparison.Ordinal)
+            && runtimeSource.Contains("LoadRecent(", StringComparison.Ordinal),
+            "运行时有写入点与恢复收口（恢复只读台账并收口，不重放执行）");
     }
 
     /// <summary>从源码文本里读一个 enum 的「成员 → 显式数值」。解析不到就返回空表（由调用方判红）。</summary>
