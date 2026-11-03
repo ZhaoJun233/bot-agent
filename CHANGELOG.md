@@ -16,6 +16,17 @@
 
 ### 变更
 
+- 工具可见性收口与任务级工具作用域（#136）：
+  - `//` 那条路的白名单改成**单入口** `src/BotAgent.Engine/Tools/ServerToolAccess.cs`
+    （服务器工具 / QQ 动作 / MCP 作用域一处算），`ServerAgentRunner` 的两处调用与系统提示同源；
+    `ServerAgentRunner.ResolveAllowedTools` 保留旧签名，实现委托过去（探针不用改）；
+  - 新增 `src/BotAgent.Core/Domain/Tools/ToolScope.cs`：**只能收窄**（与配置白名单取交集）、
+    未知名字静默忽略、未声明 = 不限；
+  - `AgentTaskRequest` 增可选 `ToolScope`，ZBA 任务提交可带 `toolScope`（可选字段，缺省行为不变），
+    执行前收窄服务器工具与 QQ 动作、按工具全名过滤 MCP；**作用域也进幂等哈希**（同提示词不同作用域是两件事）；
+  - MCP 段的 `PromptText(scope)` 只列作用域里的工具（列了却调不了等于骗模型）；
+  - 聊天那路**不列 MCP** 是刻意的：聊天管道没有 MCP 执行能力，`ToolInventory` 只负责回答“一共有哪些”。
+    边界与守护测试见 `docs/architecture/tool-registry.md` §6。
 - 历史消息时间渲染改成绝对形式（#135 其一）：原来「当天 `HH:mm`、跨天 `MM-dd HH:mm`」，
   跨午夜时**每一条今天的消息都会换写法**，模型输入里整段历史前缀作废（上游缓存按 token 前缀命中）。
   现在历史行一律 `MM-dd HH:mm`（`src/BotAgent.Model/ChatHistoryTime.cs`），渲染结果只取决于消息本身；

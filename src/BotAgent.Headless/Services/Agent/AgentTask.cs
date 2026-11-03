@@ -43,6 +43,12 @@ public sealed class AgentTask
 
     public string? Tools { get; set; }
 
+    /// <summary>
+    /// 任务级工具作用域（#136）：null / 空 = 沿用配置白名单。
+    /// 只由通道（ZBA 提交）填，执行前与配置白名单取交集（<c>ToolScope.Restrict</c>）—— 只能收窄。
+    /// </summary>
+    public IReadOnlyList<string>? ToolScope { get; set; }
+
     public int TimeoutSeconds { get; set; }
 
     /// <summary>配置里那个模型名在这台设备上不存在时，记下原值（历史字段）。</summary>

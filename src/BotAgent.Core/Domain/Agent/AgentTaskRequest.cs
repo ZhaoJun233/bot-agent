@@ -26,4 +26,10 @@ public sealed record AgentTaskRequest
 
     /// <summary>是否采集结果正文（只有通道说可以时才存，且仍有长度上限）。</summary>
     public bool CaptureResult { get; init; }
+
+    /// <summary>
+    /// 工具作用域（#136）：null / 空 = 沿用配置白名单；非空 = 这次只允许这些工具。
+    /// 运行时只透传，判定在<strong>执行前</strong>按“与配置白名单取交集”落地（作用域只能收窄，不能扩权）。
+    /// </summary>
+    public IReadOnlyList<string>? ToolScope { get; init; }
 }

@@ -143,7 +143,9 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
                 Prompt = submission.Prompt,
                 Target = target,
                 Timeout = TimeSpan.FromSeconds(submission.TimeoutSeconds),
-                CaptureResult = submission.SourceKey.StartsWith("panel:", StringComparison.Ordinal)
+                CaptureResult = submission.SourceKey.StartsWith("panel:", StringComparison.Ordinal),
+                // 任务级工具作用域（#136）：只透传，收窄发生在执行前（ToolScope.Restrict）。
+                ToolScope = submission.ToolScope
             });
             if (!accepted.Accepted || accepted.Task is null)
             {
@@ -330,6 +332,8 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
         var bytes = Encoding.UTF8.GetBytes(
             submission.SourceKey + "\n" + submission.SessionId + "\n" + target + "\n"
             + submission.TimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n"
+            // 作用域也算请求的一部分：同一个提示词、不同作用域是两件事，幂等键不能当同一份。
+            + string.Join(",", submission.ToolScope ?? Array.Empty<string>()) + "\n"
             + submission.Prompt);
         try
         {

@@ -255,6 +255,15 @@ internal static class Program
         Check("openapi operation keys are string codecs",
             schemas.GetProperty("ConfigurationOperationKey").GetProperty("type").GetString() == "string"
             && schemas.GetProperty("ManagedOperationKey").GetProperty("type").GetString() == "string");
+        var taskSubmission = schemas.GetProperty("ZbaTaskSubmission");
+        var taskRequired = taskSubmission.GetProperty("required").EnumerateArray()
+            .Select(item => item.GetString()).ToArray();
+        Check("openapi advertises optional task tool scope (#136)",
+            taskSubmission.GetProperty("properties").TryGetProperty("toolScope", out var toolScopeSchema)
+            && toolScopeSchema.GetProperty("type").GetString() == "array"
+            && !taskRequired.Contains("toolScope"),
+            string.Join(",", taskRequired));
+
         Check("openapi declares session schemas",
             schemas.TryGetProperty("ZbaSessionPage", out _)
             && schemas.TryGetProperty("ZbaSessionSummary", out _)

@@ -139,6 +139,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | 事件流 | `Changed` → `task.updated`；失败终态再补一条 `error` |
 | 台账 | 保留 200 条 / 活跃 4 的对外上限，淘汰时 `Forget` |
 | 结果投影 | 仅 `panel:` 来源的成功任务给摘要，其余 `reason=scope_not_allowed`；`TimedOut` 折成 `Failed` + `timeout` |
+| 工具作用域 | 提交体可带可选 `toolScope`（#136）：透传进 `AgentTaskRequest.ToolScope`，**执行前**与配置白名单取交集（只能收窄）；作用域也算进幂等哈希 —— 同一提示词、不同作用域是两件事 |
 | 取消 | `Cancel` 映射 `Requested → (state, true, "cancel_requested")`、`TooLate → (state, false, "too_late")`、`NotFound → 404 task_not_found` |
 
 面板直跑（`POST /api/agent`）与 `//` 命令**没有**接进运行时，这是 ADR-0002 的明确取舍：
@@ -150,7 +151,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | --- | --- |
 | `EngineProbe` 的 7 条 `AgentTaskRuntime: …` | 转移表全矩阵与终态无出边、非法转移抛异常、成功/清洗/截断/未声明采集不存正文、取消（含二次取消 TooLate 与未知 NotFound）、超时与取消区分且 `CancellationRequested=false`、`agent_failed`/`agent_rejected`、并发上限与重复 id、`Forget` 只删终态 |
 | `ZbaProbe` 303 条 | 通道语义没变：幂等重放、回执、事件、结果可见性、取消 |
-| 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为；S55 现在断言「重启后旧任务可查且不停在排队/运行中」 |
+| 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为；S54 还断言「声明了 `toolScope` 的任务把系统提示里的工具清单收窄」（#136）；S55 断言「重启后旧任务可查且不停在排队/运行中」 |
 | 集成 S65 | 任务台账跨重启：Queued→Cancelled、Running→Unknown、出现在列表里、不会被重做 |
 | `ProductionSpecProbe` 台账 8 条 | v12 版本（#135 起断言 v13）、建表、无正文列、字段往返保真、同 id 覆盖、`BootSeq` 递增、`Prune` 只留最近 N、清理 |
 | `ArchitectureProbe` | 分层与文件头注释约定（Core 不引 Engine、Engine 只引 Core） |

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Tools;
 using BotAgent.Services.Mcp;
 using BotAgent.Services.Tools;
 
@@ -93,7 +94,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         }
 
         var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
-        var allowed = ResolveAllowedTools(_settings, DockerAvailability.IsAvailable);
+        // #136：白名单只从单入口算一次（与 RunAsync 同一份口径）。
+        var access = ServerToolAccess.Resolve(_settings, DockerAvailability.IsAvailable);
+        var allowed = access.Tools;
 
         if (!allowed.Contains(tool))
         {
@@ -106,7 +109,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             call.Arguments?["command"]?.GetValue<string>(), null, call.Arguments ?? new JsonObject());
 
         var output = await RunToolAsync(tool, step, workDir, allowed,
-            QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions), qqHost: null,
+            access.QqActions, qqHost: null,
             conversationKey: string.Empty, callIndex: call.CallIndex, ct);
 
         return BotAgent.Domain.Tools.ToolOutcome.Success(output, $"服务器工具 {tool}");
@@ -119,8 +122,10 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var maxSteps = Math.Clamp(_settings.AgentServerMaxSteps, 1, 30);
         // docker 是高权限能力（docker.sock ≈ root）：两把锁同时开才进白名单。
         // ② “容器里真的有 docker”—— compose 默认不挂载 socket（#131）。
-        var allowed = ResolveAllowedTools(_settings, DockerAvailability.IsAvailable);
-        var qqAllowed = QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions);
+        // 工具可见性单入口（#136）：作用域只能收窄（与配置白名单取交集），未知名字静默忽略。
+        var access = ServerToolAccess.Resolve(_settings, DockerAvailability.IsAvailable, task.ToolScope);
+        var allowed = access.Tools;
+        var qqAllowed = access.QqActions;
 
         // 批次 A 第 2 步的收尾：**可选**过统一闸门（默认关 = 与今天逐字一致，见 AppSettings.AgentServerUseGate）。
         // 开着的判定口径 = 本次允许的工具白名单；高风险那几只由服务端显式点名（ServerToolGate）。
@@ -136,7 +141,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var prohibitedQqActions = new List<string>();
         var failedQqActions = new List<string>();
 
-        await RefreshMcpAsync(ct); var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost) + (task.Natural ? NaturalTone : string.Empty);
+        await RefreshMcpAsync(ct);
+        var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost, access.Scope) + (task.Natural ? NaturalTone : string.Empty);
 
         // 会话上下文：**默认不带**（每条 // 指令单独对待）——
         // 管理员 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
@@ -231,7 +237,13 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 try
                 {
                     // MCP 不经过静态 ServerToolGate（那边只认识内建 6 个工具）；授权/预算/Schema 在 McpToolUseCase 里另过一次。
-                    if (_mcp?.IsMcpTool(name) == true)
+                    // #136：任务声明了工具作用域时，作用域里的 MCP 名字才允许执行（提示词也只列这些，两边同源）。
+                    if (_mcp?.IsMcpTool(name) == true && !access.AllowsMcp(name))
+                    {
+                        output = $"工具 {name} 不在这次任务的工具作用域里，不能调用。"
+                                 + "用作用域里允许的工具，或者直接给 final 说明你查到了什么。";
+                    }
+                    else if (_mcp?.IsMcpTool(name) == true)
                         output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, task.SourceKey, step - 1, ct);
                     else if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
                     {
@@ -400,10 +412,11 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         }
     }
 
-    private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost)
+    private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost,
+        ToolScope? scope = null)
     {
         var list = new List<string>();
-        if (_mcp?.PromptText() is { Length: > 0 } mcpText)
+        if (_mcp?.PromptText(scope) is { Length: > 0 } mcpText)
         {
             list.Add(mcpText + "\n调用 MCP 时 tool 写完整名，参数直接放在同一 JSON 对象里。");
         }
@@ -508,39 +521,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     /// 白名单与系统提示同源（<c>BuildSystemPrompt</c> 只描述 <c>allowed</c> 里的工具），摘掉就够。
     /// </summary>
     public static HashSet<string> ResolveAllowedTools(AppSettings settings, bool dockerAvailable)
-    {
-        var allowed = ParseTools(settings.AgentServerTools);
-        if (!settings.AgentServerDocker || !dockerAvailable)
-        {
-            allowed.Remove("docker");
-        }
-
-        return allowed;
-    }
-
-    private static HashSet<string> ParseTools(string raw)
-    {
-        // 批次 D：工具名单来自**统一目录**（Services/Tools/ServerToolSpecs）——这里不再是第二个内联数组。
-        // “留空 = 全开”这条口径**照旧**（它是既有行为，见 QqActionCatalog 注释里那句“故意不一样”）。
-        var all = ServerToolSpecs.Names;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return new HashSet<string>(all, StringComparer.Ordinal);
-        }
-
-        var set = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var piece in raw.Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var name = piece.Trim().ToLowerInvariant();
-            var canonical = all.FirstOrDefault(t => t.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (canonical is not null)
-            {
-                set.Add(canonical);
-            }
-        }
-
-        return set;
-    }
+        // #136：实现搬到 <see cref="ServerToolAccess.ConfiguredTools" />（同一条路的单入口），
+        // 这里保留旧签名只为既有探针不用改。
+        => ServerToolAccess.ConfiguredTools(settings, dockerAvailable);
 
     /// <summary>模型这一轮给出的东西（原样留着——qq 工具要读 user_id/times 这些自定义字段）。</summary>
     private readonly record struct StepCall(string? Tool, string? Arg, string? Command, string? Final, JsonObject Raw);

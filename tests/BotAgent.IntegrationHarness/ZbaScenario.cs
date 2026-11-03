@@ -463,6 +463,26 @@ public static partial class Program
             && groupResultNode?["reasonCode"]?.GetValue<string>() == "scope_not_allowed",
             groupResult.Status + " " + groupResult.Body);
 
+        // #136 任务级工具作用域：声明只允许 read 时，系统提示里的工具清单也只能出现 read。
+        var scopedSubmit = await ZbaAsync(http, "POST", root + "/tasks", adminToken,
+            "{\"sourceKey\":\"panel:workspace\",\"sessionId\":\"" + panelSessionId
+            + "\",\"prompt\":\"synthetic zba scoped tools\",\"target\":\"server\",\"timeoutSeconds\":60,"
+            + "\"toolScope\":[\"read\"]}",
+            idempotencyKey: "synthetic-zba-scoped-tools-1");
+        var scopedTaskId = (JsonNode.Parse(scopedSubmit.Body) as JsonObject)?["id"]?.GetValue<string>();
+        Check("★ 声明工具作用域的任务可以提交", scopedSubmit.Status == 200 && scopedTaskId is { Length: > 0 },
+            scopedSubmit.Status + " " + scopedSubmit.Body);
+
+        var scopedDone = await WaitForTaskStateAsync(http, root, readToken, scopedTaskId!, 3, 60);
+        var scopedPrompt = LastSystemPrompt(agentAi);
+        var scopedHasRead = scopedPrompt.Contains("read：", StringComparison.Ordinal);
+        var scopedHasBash = scopedPrompt.Contains("bash：", StringComparison.Ordinal)
+            || scopedPrompt.Contains("bash=", StringComparison.Ordinal);
+        Check("★ 任务级工具作用域收窄系统提示里的工具清单",
+            scopedDone is not null && scopedDone["state"]?.GetValue<int>() == 3 && scopedHasRead && !scopedHasBash,
+            "state=" + (scopedDone?["state"]?.GetValue<int>().ToString() ?? "timeout")
+            + " promptHasRead=" + scopedHasRead + " promptHasBash=" + scopedHasBash);
+
         var longSubmit = await ZbaAsync(http, "POST", root + "/tasks", adminToken,
             "{\"sourceKey\":\"panel:workspace\",\"sessionId\":\"" + panelSessionId
             + "\",\"prompt\":\"synthetic zba long result\",\"target\":\"server\",\"timeoutSeconds\":60}",
@@ -899,5 +919,20 @@ public static partial class Program
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         using var response = await http.SendAsync(request);
         return ((int)response.StatusCode, await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>最近一次模型请求里的 system 消息（#136：用来核对工具清单）。</summary>
+    private static string LastSystemPrompt(MockOpenAi ai)
+    {
+        for (var i = ai.Requests.Count - 1; i >= 0; i--)
+        {
+            if (ai.Requests[i]["messages"] is JsonArray messages && messages.Count > 0
+                && messages[0]?["content"]?.GetValue<string>() is { Length: > 0 } system)
+            {
+                return system;
+            }
+        }
+
+        return string.Empty;
     }
 }

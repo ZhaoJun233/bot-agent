@@ -1360,11 +1360,14 @@ public static class Program
         // // 那路的工具名单：批次 D 起**来自统一目录**（ParseTools 不再内联数组）——
         // 少一个 = “能执行却没登记”，多一个 = “登记了却没人执行”，两种都在这一条上暴露。
         var declared = NamesIn(index, "src/BotAgent.Engine/Tools/ServerToolSpecs.cs", "new\\(\"([a-z]+)\",\\s*ToolCategory\\.");
+        // #136：解析与“留空=全开”的口径搬进单入口 ServerToolAccess，runner 只消费它。
+        var access = index.ByPath("src/BotAgent.Engine/Tools/ServerToolAccess.cs");
         var runner = index.ByPath("src/BotAgent.Headless/Services/Agent/ServerAgentRunner.cs");
         var usesDirectory = runner is not null
-            && runner.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal)
-            && runner.NoComments.Contains("ServerToolSpecs.All", StringComparison.Ordinal);
-        Check($"// 的工具名单来自统一目录（目录 {declared.Count} 个；不再内联数组）",
+            && runner.NoComments.Contains("ServerToolAccess.Resolve", StringComparison.Ordinal)
+            && (access?.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal) == true
+                || runner.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal));
+        Check($"// 的工具名单来自统一目录（目录 {declared.Count} 个；单入口 ServerToolAccess）",
             declared.Count == 6 && declared.Distinct(StringComparer.Ordinal).Count() == 6 && usesDirectory,
             runner is null ? "找不到 Services/Agent/ServerAgentRunner.cs" : $"读目录 = {usesDirectory}");
 

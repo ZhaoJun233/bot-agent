@@ -1,4 +1,4 @@
-# 工具注册表：声明、查询面与可见性判定（#115）
+# 工具注册表：声明、查询面与可见性判定（#115 / #136）
 
 这一页回答四个问题：系统里**有哪些工具**、它们**从哪来**、**谁能让它不可见**、**谁真正执行**。
 改工具相关代码前先读这一页，尤其是「两张名字表」与「Fail-Closed 方向」两节 —— 那里各踩过一次坑。
@@ -10,7 +10,9 @@
 | 声明 | `src/BotAgent.Core/Domain/Tools/ToolSpec.cs` | 一行 = 一个工具：id / 类别 / 摘要 / 参数说明 / 默认策略 / 是否进提示词 / **开关名（FeatureKey）** / 来源（Origin） | 不判定、不执行 |
 | 内建目录 | `src/BotAgent.Engine/Tools/ToolDirectory.cs` | 三族静态清单：聊天 10 + QQ 动作 10 + 服务器 6 = **26**（计数被探针钉住） | 不装 MCP（MCP 是运行时发现的外部来源） |
 | 统一查询面 | `src/BotAgent.Engine/Tools/ToolInventory.cs` | 内建 + 当前 MCP 快照放进**同一张只读表**，回答“有哪些、来自哪里、有没有重名” | 不参与任何放行判定 |
-| 可见性判定 | `src/BotAgent.Engine/Tools/ToolVisibility.cs` | **唯一**回答“这个工具现在能不能给模型用”的地方 | 不做预算/审批（那是 `ToolGate.Evaluate`） |
+| 可见性判定（聊天） | `src/BotAgent.Engine/Tools/ToolVisibility.cs` | **唯一**回答“这个工具现在能不能给模型用”的地方 | 不做预算/审批（那是 `ToolGate.Evaluate`） |
+| 可见性判定（`//`） | `src/BotAgent.Engine/Tools/ServerToolAccess.cs` | **唯一**回答“这次任务能用哪些服务器工具 / QQ 动作 / MCP 工具”：配置白名单 + 任务级作用域收窄 | 不判审批、不读环境（docker 是否可用由宿主探测后传进来） |
+| 任务级作用域 | `src/BotAgent.Core/Domain/Tools/ToolScope.cs` | 纯函数：未声明 = 不限；声明了就与白名单**取交集**，未知名字静默忽略 | 不读配置、不读时钟、不查目录 |
 
 执行者登记（`IToolExecutor` / `ToolExecutorRegistry`）仍是“登记 ≠ 执行”：聊天两族登记时标 `LegacyPath: true`，
 真正执行在 `ReplyPipeline` 的 if/else 里。`ToolInventory` 只投影 `Executor` 字段，不改执行路径。
@@ -66,12 +68,22 @@ inventory.duplicates / mcpTools / entries[{id,origin,category,summary}]
 | MCP 追加不改内建 26、投影字段、撞名报告 | 同上 `InventoryAppendsMcpWithoutChangingBuiltinAsync` |
 | 可见性单入口、兼容壳不含开关读取、10 条 FeatureKey、查询面与面板分列 | `tests/BotAgent.ArchitectureProbe/Program.cs` 的 `ToolRegistryChecks` |
 | `/api/tools` 的 `inventory` 块（内建 26 / MCP 0 / 无重名） | `tests/BotAgent.IntegrationHarness/PanelToolsScenario.cs`（s46） |
+| 作用域三条安全性质（只收窄 / 未知忽略 / 未声明=不限）、`//` 单入口把 qq 动作一起收窄、docker 两把锁 | `tests/BotAgent.EngineProbe/ToolScopeTests.cs` |
+| 声明了 `toolScope` 的任务真的把系统提示里的工具清单收窄（端到端，合成 mock 模型） | `tests/BotAgent.IntegrationHarness/ZbaScenario.cs`（s54） |
 
-## 6. 已知边界（#115 没做的）
+## 6. 已知边界
 
-- **MCP 仍未进聊天提示词的可见清单**：`PromptVisible: false` 是刻意保持的现状，合并 MCP 与聊天可见性要另开条目；
-- **`//` 那一路没并入 `ToolVisibility`**：它走 `ServerToolGate` / `QqActionCatalog.ParseAllowed`，与聊天那路的规则至今是两套；
-- **没有任务级 ToolScope**：`AgentTaskRequest` 没有工具作用域字段，跨任务收窄工具面要等后续条目；
+#136 收掉了三项，各自留下一条真实的边界：
+
+- **MCP 与聊天可见性是“两个答案”，不是“一个合并答案”**：聊天那路**根本不能执行 MCP 工具**
+  （`McpToolUseCase` 只在 `//` 的服务器 agent 路径里接线），所以聊天提示词里列 MCP 等于骗模型。
+  现在的口径是：`ToolInventory` 回答“系统一共有哪些工具（内建 + MCP）”，
+  而**每个执行上下文只列它真能调的**（`//` 的 MCP 段按作用域过滤，见 `PromptText(scope)`）。
+- **`//` 与聊天仍是两条判定链**：`//` 现在有单入口 `ServerToolAccess`（白名单 + 作用域一处算），
+  但它不复用 `ToolVisibility` —— 聊天那路的输入是“开关 + 平台策略快照 + 来源租约”，
+  `//` 那路是“面板白名单 + 作用域”，两者语义不同，硬合会把审批/租约的概念塞进没有会话现场的任务里。
+- **任务级 ToolScope 只能收窄，且只从 ZBA 提交进得来**：`//` 的指令、面板直跑都还是沿用配置白名单；
+  作用域也不落库（台账只存形状，见 ADR-0003）。
 - **执行期还有内联复判**（发送前、动作前），那些不是可见性，是副作用前的最后一道保险，不动。
 
 ## 7. 改这里时的检查单
@@ -80,4 +92,5 @@ inventory.duplicates / mcpTools / entries[{id,origin,category,summary}]
 2. 新增一个开关 → `ToolFeature` + `ToolSwitchState` + `ToolSwitches.Enabled` + `AppSettings` 字段，四处同改；
 3. 改判定 → 只改 `ToolVisibility`，并同步 EngineProbe 的六条用例；
 4. 改面板投影 → 保持 `count` = 内建条数，MCP 只进 `inventory`；
-5. 跑 `dotnet tests/BotAgent.ArchitectureProbe`、EngineProbe、`BOTAGENT_IT_ONLY=s46`。
+5. 新增或修改“这次任务能用什么” → 只改 `ServerToolAccess`（`//`）或 `ToolVisibility`（聊天），别在 runner 里另算一遍；
+6. 跑 `dotnet tests/BotAgent.ArchitectureProbe`、EngineProbe、`BOTAGENT_IT_ONLY=s46`、`BOTAGENT_IT_ONLY=s54`。

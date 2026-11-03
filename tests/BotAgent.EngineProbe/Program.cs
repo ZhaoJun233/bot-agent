@@ -60,6 +60,11 @@ public static class Program
         await RunAsync("ToolVisibility: platform policy can close text", ToolVisibilityTests.PlatformPolicyCanCloseTextAsync);
         await RunAsync("ToolVisibility: live resolver wins over stale snapshot", ToolVisibilityTests.LiveResolverBeatsStaleSnapshotAsync);
         await RunAsync("ToolInventory: MCP is appended without changing the builtin catalog", ToolVisibilityTests.InventoryAppendsMcpWithoutChangingBuiltinAsync);
+        await RunAsync("ToolScope: declaration can only narrow, unknown names are ignored", ToolScopeTests.ScopeSemanticsAsync);
+        await RunAsync("ToolScope: restrict intersects the configured allowlist", ToolScopeTests.ScopeOnlyNarrowsAsync);
+        await RunAsync("ToolScope: server tool access narrows tools and qq actions together", ToolScopeTests.ServerToolAccessNarrowsAsync);
+        await RunAsync("ToolScope: server tool allowlist keeps the docker two-lock rule", ToolScopeTests.ServerToolAccessKeepsDockerTwoLocksAsync);
+        await RunAsync("ToolScope: MCP tools are filtered by qualified name", ToolScopeTests.McpScopeFiltersByNameAsync);
 
         Console.WriteLine();
         Console.WriteLine($"Passed {_passed}; failed {_failed}");

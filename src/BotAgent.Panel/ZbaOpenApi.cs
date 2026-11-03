@@ -241,7 +241,9 @@ internal static partial class ZbaOpenApi
         ["ZbaTaskSubmission"] = RequiredObject(
             new[] { "sourceKey", "sessionId", "prompt", "target", "timeoutSeconds" },
             ("sourceKey", String()), ("sessionId", String()), ("prompt", String()),
-            ("target", String()), ("timeoutSeconds", Integer())),
+            ("target", String()), ("timeoutSeconds", Integer()),
+            // #136：可选的任务级工具作用域（只能收窄）；刻意不进 required，缺省行为不变。
+            ("toolScope", Array(String()))),
         ["ZbaTaskAccepted"] = Object(("id", String()), ("state", Integer()), ("acceptedAt", String())),
         ["ZbaTaskSummary"] = Object(("id", String()), ("state", Integer()), ("target", String()),
             ("sessionId", String()), ("createdAt", String()), ("updatedAt", String()),

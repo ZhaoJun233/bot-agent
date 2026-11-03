@@ -199,7 +199,8 @@ public sealed record ZbaTaskSubmission(
     [property: JsonRequired] string SessionId,
     [property: JsonRequired] string Prompt,
     [property: JsonRequired] string Target,
-    [property: JsonRequired] int TimeoutSeconds)
+    [property: JsonRequired] int TimeoutSeconds,
+    string[]? ToolScope = null)
 {
     public override string ToString() => "ZbaTaskSubmission";
 }

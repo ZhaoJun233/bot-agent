@@ -268,7 +268,8 @@ public sealed partial class AgentCommandService : IAgentCommandService
     }
 
     /// <summary>面板“试一条”用的：直接在容器里跑一次服务器内置 agent（不经过 QQ、不经过外部设备）。</summary>
-    public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds, CancellationToken ct = default)
+    public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds, CancellationToken ct = default,
+        IReadOnlyList<string>? toolScope = null)
     {
         var task = new AgentTask
         {
@@ -276,6 +277,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
             SourceKey = "panel:test",
             Prompt = prompt,
             Session = "qqchat-panel",
+            ToolScope = toolScope,
             // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
             QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
         };
@@ -293,7 +295,8 @@ public sealed partial class AgentCommandService : IAgentCommandService
 
     /// <summary>面板工作台用的持久化单次执行入口：把运行流水写回指定 Agent 会话。</summary>
     public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt,
-        int timeoutSeconds, string target, CancellationToken ct = default)
+        int timeoutSeconds, string target, CancellationToken ct = default,
+        IReadOnlyList<string>? toolScope = null)
     {
         if (!target.Equals("server", StringComparison.OrdinalIgnoreCase)
             && !target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
@@ -310,7 +313,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
         var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, null);
         try
         {
-            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct);
+            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope);
             _agentSessions.FinishRun(sourceKey, session.Id, runId, task.Ok, task.DurationMs, task.ToolCalls,
                 task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             return task;
