@@ -188,7 +188,7 @@ docker compose logs -f napcat
 
 启用后与私域通道**完全隔离**：会话 key 带 `official:` 前缀，白名单各自独立。
 
-接口面的完整地图见 [`docs/api-surface.md`](docs/api-surface.md)。
+接口面的完整地图见 [`docs/api-surface.md`](docs/api-surface.md)；本轮治理的实际结果、诚实未证明清单与下一步顺序见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ---
 

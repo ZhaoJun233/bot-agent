@@ -188,7 +188,7 @@ The official channel's switch and credentials are also host-layer variables (App
 
 Once enabled it is **fully isolated** from the private channel: conversation keys carry an `official:` prefix and whitelists are independent.
 
-The full interface map is in [`docs/api-surface.md`](docs/api-surface.md).
+The full interface map is in [`docs/api-surface.md`](docs/api-surface.md); what this round actually delivered, what is still unproven, and what comes next are in [`docs/roadmap.md`](docs/roadmap.md).
 
 ---
 
