@@ -161,8 +161,13 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 
 - **重启后不重做**：台账能让记录活过重启，但代价是「可能做过副作用的执行」只能标 `Unknown`，
   没有任何自动续跑（见 §5 的恢复表与 ADR-0003 §2.4）。
-- **没有审批**：`WaitingApproval` 只是预留状态，没有写入方；审批与执行隔离是 #117。
+- **没有审批接线**：`WaitingApproval` 仍然只是预留状态、没有写入方（#117 只做了审批链路的隔离与可追溯，
+  把审批接到真实高风险执行点需要执行器挂起与恢复，见 #137；口径见 [审批与执行隔离](approval-and-isolation.md)）。
 - **没有远程重启**：`RestartRequired` 语义仍属配置链路，本层不提供重启按钮。
 - **不暴露到 OpenAPI**：运行时是内部构件，唯一对外契约仍由 ZBA 路由与 `ZbaOpenApi` 定义。
 - **超时折成 Failed 是本轮唯一可观察的行为变化**：以前 ZBA 超时会把取消也算成 `Cancelled`，
   现在带 `errorCode=timeout` 的 `Failed`；客户端如果按状态枚举分支，需要认这个原因码。
+
+## 9. 部署、验证与回滚
+
+- 上线步骤、验收命令与不可逆边界：[Agent Runtime 部署、验证与回滚](../operations/agent-runtime-deployment.md)

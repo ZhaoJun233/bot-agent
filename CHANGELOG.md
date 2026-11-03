@@ -16,6 +16,10 @@
 
 ### 新增
 
+- Agent Runtime 部署 / 验证 / 回滚文档（#119）：`docs/operations/agent-runtime-deployment.md` 写清 schema 11→12
+  的自动迁移与**只前向**边界、ZBA 任务端的验证命令（含"重启后旧任务按哪张表收口、不重做"）、
+  回滚的停写前置与两种形态（只换二进制 / 连库一起退回），以及只写形状与计数的运维观测点；
+  `rollback-playbook.md` 与 `agent-task-runtime.md` 都链过去，ArchitectureProbe 钉住"三节 + 不可逆边界 + 观测点"没有丢。
 - 审批与执行隔离加固（#117）：面板决策拿不到原始平台源租约时**失败关闭**（`source_unavailable`，
   以前会 `Enter(null)` 后照批），群命令与面板两条路在**执行前**再核一次租约（决策≠执行）；
   `approval.decided` 事件的 `state` 如实区分 `approved`/`rejected`/`expired`/`stale_policy`/

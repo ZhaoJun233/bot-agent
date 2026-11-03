@@ -1606,11 +1606,28 @@ public static class Program
         var adr = Path.Combine(index.Root, "docs/decisions/0002-agent-task-runtime.md");
         var adrPersistence = Path.Combine(index.Root, "docs/decisions/0003-agent-task-persistence.md");
         var doc = Path.Combine(index.Root, "docs/architecture/agent-task-runtime.md");
+        var deployDoc = Path.Combine(index.Root, "docs/operations/agent-runtime-deployment.md");
         Check("★ ADR-0002 / ADR-0003 与实现说明都在仓库里",
             File.Exists(adr) && File.Exists(adrPersistence) && File.Exists(doc),
             (File.Exists(adr) ? "ADR-0002 在" : "缺 ADR-0002")
             + (File.Exists(adrPersistence) ? "；ADR-0003 在" : "；缺 ADR-0003")
             + (File.Exists(doc) ? "；实现说明在" : "；缺实现说明"));
+
+        // #119：部署 / 验证 / 回滚三件事必须写下来，而且必须写到可以照做（三节 + 不可逆边界 + 观测点）。
+        var deployText = File.Exists(deployDoc)
+            ? File.ReadAllText(deployDoc, System.Text.Encoding.UTF8)
+            : string.Empty;
+        Check("★ Runtime 的部署 / 验证 / 回滚文档在，且三部分与不可逆边界都写了（#119）",
+            deployText.Length > 0
+            && deployText.Contains("## 1. 部署", StringComparison.Ordinal)
+            && deployText.Contains("## 2. 验证", StringComparison.Ordinal)
+            && deployText.Contains("## 3. 回滚", StringComparison.Ordinal)
+            && deployText.Contains("不可逆边界", StringComparison.Ordinal)
+            && deployText.Contains("运维观测点", StringComparison.Ordinal)
+            && deployText.Contains("PRAGMA user_version", StringComparison.Ordinal),
+            deployText.Length == 0
+                ? "缺 docs/operations/agent-runtime-deployment.md"
+                : "三节 + 不可逆边界 + 观测点 + schema 版本口径都在");
 
         // #116：持久化的三个硬边界 —— 台账端口、写入点/恢复点、DAO 在不写 SQL 的层之外。
         var ledgerPort = Path.Combine(index.Root, "src/BotAgent.Engine/Runtime/AgentTaskLedger.cs");
