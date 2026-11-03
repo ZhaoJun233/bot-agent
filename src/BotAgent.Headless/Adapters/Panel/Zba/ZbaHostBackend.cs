@@ -1,12 +1,14 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using BotAgent.Adapters.Agent;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Agent;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Management;
 using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Ports;
+using BotAgent.Engine.Runtime;
 using BotAgent.Panel;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
@@ -80,7 +82,10 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _quotaRegistry = quotaRegistry;
         _quotaStore = quotaStore;
         _backups = backups;
-        _tasks = new ZbaTaskRegistry(sessions, agent, now, serverEnabled, events, taskReceipts, instanceId, log);
+        // 执行与状态在 Engine 的任务运行时（ADR-0002）；registry 只做通道适配（幂等/回执/事件/结果投影）。
+        _tasks = new ZbaTaskRegistry(sessions,
+            new AgentTaskRuntime(new AgentTaskExecutor(agent), now, log: log),
+            now, serverEnabled, events, taskReceipts, instanceId, log);
     }
 
     internal ZbaTaskRegistry Tasks => _tasks;

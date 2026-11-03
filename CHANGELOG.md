@@ -47,6 +47,7 @@
   数字与字符串两种写法；矩阵 `docs/testing/protocol-tool-plugin-regression.md` 把协议收发、
   排队并发、Agent 工具、插件生命周期、异常恢复逐条对到现有场景与探针。
 
+- 任务与执行状态（#114）：新增 `AgentTaskState` 九状态与显式转移表（Core）、`AgentTaskRuntime`（Engine：并发上限、取消、硬超时、终态不可覆盖、变更事件、正文清洗与截断），ZBA `/tasks` 转为通道适配器（幂等键、回执、事件流、结果投影仍归通道）；取消与超时是两条路径，超时对外投影为 `Failed` + `errorCode=timeout`；聊天轮、`//` 与面板直跑不迁入。设计见 [ADR-0002](docs/decisions/0002-agent-task-runtime.md)，实现说明见 [任务与执行状态](docs/architecture/agent-task-runtime.md)。
 ### 变更
 
 - 装配根拆分（#110）：`src/BotAgent.Headless/Host/CompositionRoot.cs`（1223 行）按能力域拆成 8 个 `partial`

@@ -124,6 +124,7 @@ public static class Program
         AuditAndTraceChecks(index);
         PanelApprovalChecks(index);
         TurnLoopChecks(index);
+        TaskRuntimeChecks(index);
         LocalChannelChecks(index);
         ServerGateChecks(index);
         RedLineChecks(index);
@@ -1473,6 +1474,95 @@ public static class Program
     }
 
     // ─────────────────── 第三条通道（通用 Agent 平台 · 批次 F） ───────────────────
+
+    // ─────────────────────── 任务与执行状态（#114 / ADR-0002） ───────────────────────
+
+    /// <summary>
+    /// 任务运行时的架构护栏（#114）：状态数值与 ZBA 契约锁定、分层不许倒置、
+    /// 适配器不许把执行搬回来。数值改一位面板就会收到错的状态，靠肉眼 review 不可靠。
+    /// </summary>
+    private static void TaskRuntimeChecks(SourceIndex index)
+    {
+        Section("任务与执行状态（#114）");
+
+        var stateFile = index.ByPath("src/BotAgent.Core/Domain/Agent/AgentTaskState.cs");
+        var transitionsFile = index.ByPath("src/BotAgent.Core/Domain/Agent/AgentTaskTransitions.cs");
+        var runtimeFile = index.ByPath("src/BotAgent.Engine/Runtime/AgentTaskRuntime.cs");
+        var adapterFile = index.ByPath("src/BotAgent.Headless/Adapters/Panel/Zba/ZbaTaskRegistry.cs");
+        var contractFile = index.ByPath("src/BotAgent.Panel/ZbaContracts.cs");
+        Check("★ 任务状态在 Core、运行在 Engine、通道适配器在 Headless",
+            stateFile is not null && transitionsFile is not null && runtimeFile is not null
+            && adapterFile is not null && contractFile is not null,
+            stateFile is null ? "缺 Domain/Agent/AgentTaskState.cs"
+            : transitionsFile is null ? "缺 AgentTaskTransitions.cs"
+            : runtimeFile is null ? "缺 Engine/Runtime/AgentTaskRuntime.cs"
+            : adapterFile is null ? "缺 ZbaTaskRegistry.cs"
+            : contractFile is null ? "缺 Panel/ZbaContracts.cs"
+            : "五个文件都在");
+
+        var runtimeStates = EnumValues(stateFile?.NoComments ?? string.Empty, "AgentTaskState");
+        var contractStates = EnumValues(contractFile?.NoComments ?? string.Empty, "ZbaTaskState");
+        var mismatched = contractStates
+            .Where(pair => !runtimeStates.TryGetValue(pair.Key, out var value) || value != pair.Value)
+            .Select(pair => pair.Key)
+            .ToList();
+        Check("★ AgentTaskState 前八项数值与 ZBA 契约逐一对齐（改数值等于改对外契约）",
+            runtimeStates.Count == 9
+            && contractStates.Count == 8
+            && !contractStates.ContainsKey("TimedOut")
+            && runtimeStates.TryGetValue("TimedOut", out var timedOut) && timedOut == 8
+            && mismatched.Count == 0,
+            $"运行时 {runtimeStates.Count} 项 / 契约 {contractStates.Count} 项"
+            + (mismatched.Count == 0 ? string.Empty : "；不一致：" + string.Join("、", mismatched)));
+
+        var terminalBody = Regex.Match(
+            transitionsFile?.NoComments ?? string.Empty, @"Terminal\s*=\s*\[(?<body>[^\]]*)\]");
+        var terminalNames = new[] { "Succeeded", "Failed", "Cancelled", "TimedOut", "Unknown" };
+        Check("★ 五个终态由一份数组定义，IsTerminal 与转移表共用",
+            terminalBody.Success
+            && terminalNames.All(name => terminalBody.Groups["body"].Value.Contains(name, StringComparison.Ordinal))
+            && (transitionsFile?.NoComments.Contains("public static bool IsTerminal", StringComparison.Ordinal) ?? false)
+            && (transitionsFile?.NoComments.Contains("public static AgentTaskState EnsureTransition", StringComparison.Ordinal) ?? false),
+            terminalBody.Success ? "终态数组存在" : "找不到 Terminal 数组");
+
+        Check("★ 运行时的时间一律注入，不自己读时钟（Domain 更不许读）",
+            runtimeFile is not null
+            && runtimeFile.NoComments.Contains("Func<DateTimeOffset> now", StringComparison.Ordinal)
+            && !runtimeFile.NoComments.Contains("DateTimeOffset.Now", StringComparison.Ordinal)
+            && !runtimeFile.NoComments.Contains("DateTime.UtcNow", StringComparison.Ordinal)
+            && !(stateFile?.NoComments.Contains("DateTime", StringComparison.Ordinal) ?? true)
+            && !(transitionsFile?.NoComments.Contains("DateTime", StringComparison.Ordinal) ?? true),
+            "now 来自构造函数参数");
+
+        Check("★ ZBA 适配器不再自己执行任务（Task.Run / 取消源已收敛到运行时）",
+            adapterFile is not null
+            && adapterFile.NoComments.Contains("AgentTaskRuntime", StringComparison.Ordinal)
+            && adapterFile.NoComments.Contains("Forget(", StringComparison.Ordinal)
+            && !adapterFile.NoComments.Contains("Task.Run(", StringComparison.Ordinal)
+            && !adapterFile.NoComments.Contains("new CancellationTokenSource", StringComparison.Ordinal),
+            "适配器只做幂等/回执/事件/投影/淘汰");
+
+        var adr = Path.Combine(index.Root, "docs/decisions/0002-agent-task-runtime.md");
+        var doc = Path.Combine(index.Root, "docs/architecture/agent-task-runtime.md");
+        Check("★ ADR-0002 与实现说明都在仓库里",
+            File.Exists(adr) && File.Exists(doc),
+            (File.Exists(adr) ? "ADR 在" : "缺 ADR")
+            + (File.Exists(doc) ? "；实现说明在" : "；缺实现说明"));
+    }
+
+    /// <summary>从源码文本里读一个 enum 的「成员 → 显式数值」。解析不到就返回空表（由调用方判红）。</summary>
+    private static Dictionary<string, int> EnumValues(string source, string name)
+    {
+        var values = new Dictionary<string, int>(StringComparer.Ordinal);
+        var block = Regex.Match(source, @"enum\s+" + Regex.Escape(name) + @"\s*\{(?<body>[^}]*)\}");
+        if (!block.Success) return values;
+        foreach (Match item in Regex.Matches(block.Groups["body"].Value, @"(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>-?\d+)"))
+        {
+            values[item.Groups["name"].Value] = int.Parse(item.Groups["value"].Value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return values;
+    }
 
     private static void LocalChannelChecks(SourceIndex index)
     {

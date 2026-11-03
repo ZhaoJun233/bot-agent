@@ -43,6 +43,14 @@ public static class Program
         await RunAsync("Queue: stop reports unconfirmed in-flight work as abandoned", QueueStopUnconfirmedTests);
         await RunAsync("Queue: stop is idempotent", QueueIdempotentStopTests);
 
+        await RunAsync("AgentTaskRuntime: state transition table is explicit and terminal states are final", AgentTaskRuntimeTests.TransitionTableTests);
+        await RunAsync("AgentTaskRuntime: success captures cleaned and bounded result", AgentTaskRuntimeTests.ResultCaptureTests);
+        await RunAsync("AgentTaskRuntime: cancel is a request and terminal state wins", AgentTaskRuntimeTests.CancelTests);
+        await RunAsync("AgentTaskRuntime: timeout is distinct from cancellation", AgentTaskRuntimeTests.TimeoutTests);
+        await RunAsync("AgentTaskRuntime: failures map to agent_failed / agent_rejected", AgentTaskRuntimeTests.FailureTests);
+        await RunAsync("AgentTaskRuntime: capacity and duplicate id are rejected", AgentTaskRuntimeTests.CapacityTests);
+        await RunAsync("AgentTaskRuntime: forget only removes terminal records", AgentTaskRuntimeTests.ForgetTests);
+
         Console.WriteLine();
         Console.WriteLine($"Passed {_passed}; failed {_failed}");
         return _failed == 0 ? 0 : 1;
