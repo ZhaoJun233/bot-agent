@@ -91,6 +91,33 @@ public static partial class Program
             Check("时间块搬家不改字（基准措辞与 #97 一致）",
                 first.Contains("这是本机配置时区，也是唯一的时间基准。", StringComparison.Ordinal) &&
                 first.Contains("知识截止时间", StringComparison.Ordinal));
+
+            // ⑧ #135：历史消息的时间渲染只取决于消息本身 —— 跨午夜也不许改写法。
+            // 这一条是「前缀稳不稳定」的另一半：提示词分好层了，历史行自己每跨一天变一次样，
+            // 前面的历史照样全部作废。做法是**把时钟拨过午夜再渲染一次**，两次必须逐字相同
+            // （渲染实现只要重新开始读 Clock，这条就会红）。
+            var messageAt = new DateTimeOffset(2026, 9, 26, 23, 50, 0, TimeSpan.Zero);
+            var justBeforeMidnight = new MutablePromptClock(new DateTimeOffset(2026, 9, 26, 23, 59, 0, TimeSpan.FromHours(8)));
+            Clock.Use(justBeforeMidnight);
+            var renderedBefore = ChatHistoryTime.Render(messageAt);
+            var justAfterMidnight = new MutablePromptClock(new DateTimeOffset(2026, 9, 27, 0, 1, 0, TimeSpan.FromHours(8)));
+            Clock.Use(justAfterMidnight);
+            var renderedAfter = ChatHistoryTime.Render(messageAt);
+            Clock.Use(clock);
+            Check("★ #135 历史时间渲染与“现在几点”无关（跨午夜后同一条消息逐字相同）",
+                renderedBefore == renderedAfter,
+                $"23:59 → {renderedBefore} / 00:01 → {renderedAfter}");
+
+            Check("★ #135 历史时间是绝对形式（月-日 时:分），不再按“今天”省略日期",
+                renderedBefore == messageAt.ToLocalTime().ToString("MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture)
+                && renderedBefore.Contains('-', StringComparison.Ordinal)
+                && renderedBefore.Contains(':', StringComparison.Ordinal),
+                renderedBefore);
+
+            // 相对信息没有丢：它由时间块承担（模型仍知道“现在是什么时候”）。
+            Check("★ #135 相对时间信息没丢：提示词末尾仍有 [现在的时间] 与绝对日期",
+                first.Contains("[现在的时间]", StringComparison.Ordinal)
+                && first.Contains("2026-09-26 12:00", StringComparison.Ordinal));
         }
         finally
         {

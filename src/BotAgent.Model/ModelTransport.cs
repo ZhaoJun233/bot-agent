@@ -429,12 +429,15 @@ public class ModelTransport : IModelTransport
     /// <summary>时间短格式：当天 HH:mm，跨天 MM-dd HH:mm。</summary>
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 
-    /// <summary>时间短格式：当天 HH:mm，跨天 MM-dd HH:mm。</summary>
-    private static string FormatTime(DateTimeOffset time)
-    {
-        var local = time.ToLocalTime();
-        return local.Date == Clock.LocalDateTime.Date
-            ? local.ToString("HH:mm")
-            : local.ToString("MM-dd HH:mm");
-    }
+    /// <summary>
+    /// 历史消息的时间渲染：**永远**是绝对形式 MM-dd HH:mm（#135）。
+    ///
+    /// 原来「当天 HH:mm、跨天 MM-dd HH:mm」：跨午夜时**每一条今天的消息**都会换一种写法，
+    /// 模型输入里整段历史前缀就变了，上游缓存当天积累的命中全部作废。历史内容的渲染
+    /// 必须只取决于消息本身，不能取决于「现在几点」。
+    ///
+    /// 代价是历史行里不再隐含「这是今天」：这条信息由 [现在的时间] 那一段承担
+    /// （它本来就是唯一的时间基准，见 docs/architecture/temporal-awareness.md）。
+    /// </summary>
+    private static string FormatTime(DateTimeOffset time) => ChatHistoryTime.Render(time);
 }

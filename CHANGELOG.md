@@ -14,6 +14,14 @@
 
 当前 `<Version>` 为 **1.3.0**（开发中，尚未打 tag）。
 
+### 变更
+
+- 历史消息时间渲染改成绝对形式（#135 其一）：原来「当天 `HH:mm`、跨天 `MM-dd HH:mm`」，
+  跨午夜时**每一条今天的消息都会换写法**，模型输入里整段历史前缀作废（上游缓存按 token 前缀命中）。
+  现在历史行一律 `MM-dd HH:mm`（`src/BotAgent.Model/ChatHistoryTime.cs`），渲染结果只取决于消息本身；
+  「今天是哪天/现在几点」仍由提示词末尾的 `[现在的时间]` 承担。守护：SafetyProbe 三条 `★ #135` 断言
+  （把时钟拨过午夜再渲染，两次必须逐字相同）。
+
 ### 新增
 
 - Agent Runtime 部署 / 验证 / 回滚文档（#119）：`docs/operations/agent-runtime-deployment.md` 写清 schema 11→12

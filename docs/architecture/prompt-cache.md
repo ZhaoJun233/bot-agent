@@ -49,11 +49,16 @@ BotAgentHost -> ReplyPipeline -> SourceScheduling -> ReplyTurnContext.BuildAsync
 
 要点：**时间仍然注入、仍然只有一个基准**（见 `docs/architecture/temporal-awareness.md`），只是位置后移，措辞没动。
 
-## 4. 还会破坏前缀的四件事（未做）
+## 4. 还会破坏前缀的三件事（未做）
 
 这些是调查里确认存在的，按收益从大到小：
 
-1. **历史时间戳渲染**（`src/BotAgent.Headless/Adapters/Model/ModelTransport.cs:433-439`）。今天发的消息渲染成 `HH:mm`，更早的渲染成 `MM-dd HH:mm` —— 跨午夜时，**每一条今天的消息都会变一遍**，整段历史前缀作废。这是单点最大的一次性收益，但会改到「模型看到的时间」这件事本身，属于要单独评审的语义改动，本轮没动。
+0. ~~**历史时间戳渲染**~~ —— **#135 已修**。原来是「今天 `HH:mm`、更早 `MM-dd HH:mm`」：跨午夜时
+   **每一条今天的消息都会换一种写法**，整段历史前缀作废。现在历史行一律走绝对形式 `MM-dd HH:mm`
+   （`src/BotAgent.Model/ChatHistoryTime.cs`，由 `src/BotAgent.Model/ModelTransport.cs` 的 `FormatTime` 调用）：
+   渲染结果**只取决于消息本身**，与「现在几点」无关；「今天是哪天/现在几点」由提示词末尾的
+   `[现在的时间]` 一段承担（`docs/architecture/temporal-awareness.md`）。守护测试：
+   `tests/BotAgent.SafetyProbe/PromptCacheStabilityTests.cs` 的两条 `★ #135` 断言。
 2. **`(#id)` 只加在最近 16 条**（`ModelTransport.cs:106-109`，配合 `OpenAiClient` 的 `TakeLast(16)`）。窗口滑动时第 17 条前后的渲染标记会变一次。
 3. **历史滑窗左移**：`ReplyTurnContext.BuildAsync` 与 `OpenAiClient` 各有一处同义裁剪（阈值分别来自面板字段与默认值，取小者）。窗口满了之后每轮丢最旧一条，前缀结构必然变。要改需要「前缀冻结」策略，风险最高。
 4. **`[可用工具]` 随集合内容变**：顺序稳定，但策略开关、平台源、待审批状态一改，清单内容就变。这是语义要求，不做优化。
