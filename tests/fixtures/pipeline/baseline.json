@@ -1,0 +1,13 @@
+{
+  "$comment": "确定性管线决策链的性能基线（#126）。改这个文件等于改守护阈值：只允许在看过一次本机实测值后手工更新，不要为了让 CI 过而调大。",
+  "workload": "tests/fixtures/pipeline/{on-demand,research,social}.json 三个夹具全量样例，按原顺序连续扫 sweepsPerRound 遍算一轮",
+  "scope": "只量确定性决策链（解析/判定/组装），不包含真实模型调用、网络与磁盘",
+  "recordedAt": "2026-11-01",
+  "environment": "Windows 11 / .NET 10.0.1 / Release / x64（本机三次实测 P50 65–77ms、P95 75–115ms）",
+  "warmupRounds": 2,
+  "measuredRounds": 15,
+  "sweepsPerRound": 200,
+  "p50Ms": 80,
+  "p95Ms": 130,
+  "maxMultiplier": 3
+}

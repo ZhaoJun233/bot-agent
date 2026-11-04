@@ -1,16 +1,17 @@
 using System.Net;
 using System.Net.WebSockets;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Conversation;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Conversations;
+using BotAgent.Services.Evaluation;
 using BotAgent.Services.Music;
 using BotAgent.Services.NapCat;
 using BotAgent.Services.Net;
@@ -28,6 +29,7 @@ using BotAgent.Services.Platforms;
 using BotAgent.Services.Voice;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Ports;
+using BotAgent.Panel;
 using BotAgent.Services.Ports;
 
 namespace BotAgent.Adapters.Panel;
@@ -35,8 +37,8 @@ namespace BotAgent.Adapters.Panel;
 /// <summary>
 /// Web 面板 + 健康检查服务（复用 in-box HttpListener，不引入 ASP.NET，保持镜像体积）。
 ///
-///   面板      GET  /                       会话列表 / 聊天气泡 / 设置（自带 Web 面板）
-///   静态      GET  /app.css  /app.js
+///   面板      旧内置页面已移除（S6）：前端只有 src/web 的 Vue 面板，由 Caddy 以 /web/ 提供；
+///             宿主只留 API 与健康检查，GET / 不再返回页面。
 ///   健康      GET  /healthz               存活（docker HEALTHCHECK）
 ///             GET  /readyz                就绪（已连协议端）
 ///             GET  /status                状态 JSON（兼容原接口）
@@ -59,7 +61,7 @@ namespace BotAgent.Adapters.Panel;
 /// </summary>
 public sealed partial class WebUiServer : IDisposable
 {
-    private static readonly JsonSerializerOptions Json = new()
+    internal static readonly JsonSerializerOptions Json = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
@@ -116,6 +118,10 @@ public sealed partial class WebUiServer : IDisposable
     private readonly ITenantQuotaLedger _quotas;
     private readonly IJargonRepository _jargons;
     private readonly Domain.Plugins.IPluginRegistry? _plugins;
+    private readonly BackgroundEvaluatorQueue? _background;
+
+    // #115：MCP 工具快照（只读投影用；没有 MCP 时为 null）。
+    private readonly BotAgent.Services.Mcp.McpToolUseCase? _mcp;
     private readonly DateTimeOffset _startedAt = Clock.Now;
     private readonly CancellationTokenSource _cts = new();
 
@@ -126,6 +132,10 @@ public sealed partial class WebUiServer : IDisposable
     private Task? _loop;
     private int _convBroadcastPending;
     private long _convBroadcastVersion;
+    private ZbaEndpoint? _zba;
+
+    /// <summary>由组合根在管理面建好后挂上；ZBA 自带 Bearer 认证，不复用旧面板的 Cookie 会话。</summary>
+    public void AttachZba(ZbaEndpoint endpoint) => _zba = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
 
     public WebUiServer(
         int port,
@@ -153,11 +163,11 @@ public sealed partial class WebUiServer : IDisposable
         ParticipationUseCase participation,
         AgentCommandService agentCmds,
         ITenantQuotaLedger quotas,
-         AgentBridgeServer? agentBridge = null,
         HealthReportService? healthReports = null,
         SessionPolicyLedger? sessionPolicies = null,
         TurnTraceStore? traces = null,
         IHostFacts? hostFacts = null,
+        BotAgent.Services.Ops.DatabaseBackupService? backups = null,
          IAuditChain? audit = null,
         ApprovalUseCase? approvals = null,
         LocalChannelSource? localChannel = null,
@@ -167,7 +177,9 @@ public sealed partial class WebUiServer : IDisposable
         Platforms.Feishu.FeishuBotGateway? feishuGateway = null,
          PlatformPolicyResolver? platformPolicies = null,
         IJargonRepository? jargons = null,
-        Domain.Plugins.IPluginRegistry? plugins = null)
+        Domain.Plugins.IPluginRegistry? plugins = null,
+        BackgroundEvaluatorQueue? background = null,
+        BotAgent.Services.Mcp.McpToolUseCase? mcp = null)
     {
         _port = port;
         _box = box;
@@ -197,13 +209,13 @@ public sealed partial class WebUiServer : IDisposable
         _agentCmds = agentCmds;
         _quotas = quotas;
         _jargons = jargons ?? new JargonStore();
-         _agentBridge = agentBridge;
         _healthReports = healthReports;
         _sessionPolicies = sessionPolicies;
         _traces = traces;
         _traceArchive = traces?.Archive;
         _auditChain = audit;
         _hostFacts = hostFacts;
+        _backups = backups;
         _approvals = approvals;
         _localChannel = localChannel;
         _onRestart = onRestart;
@@ -212,12 +224,14 @@ public sealed partial class WebUiServer : IDisposable
         _feishuGateway = feishuGateway;
         _platformPolicies = platformPolicies;
         _plugins = plugins;
+        _background = background;
+        _mcp = mcp;
         // 启动时把密钥库里那份 TTS 密钥重新写给 tts 容器（容器可能刚被重建、
         // 或者上次写文件前我们就重启了）——否则面板里存着 key，语音却发不出去。
         WriteTtsConfToHost();
         _bind = !_panelPassword.IsConfigured
             ? "127.0.0.1"
-            : Environment.GetEnvironmentVariable("QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
+            : EnvironmentAliases.Get("BOTAGENT_HEALTH_BIND", "QQCHAT_HEALTH_BIND")?.Trim() is { Length: > 0 } custom
                 ? custom
                 : "+";
     }
@@ -227,9 +241,6 @@ public sealed partial class WebUiServer : IDisposable
     private readonly IHttpFetcher _modelProbeHttp;
 
     private readonly IHttpFetcher _neteaseHttp;
-
-    /// <summary>本机 Agent 桥（没启用时为 null）。</summary>
-    private readonly AgentBridgeServer? _agentBridge;
 
     /// <summary>服务器健康日报（管理员 2026-09-18：定时私聊推送；不经过外部设备 agent）。</summary>
     private readonly HealthReportService? _healthReports;
@@ -244,6 +255,7 @@ public sealed partial class WebUiServer : IDisposable
 
     /// <summary>宿主事实（批次 J 的仪表盘要内存上限与负载）：只读端口，测试环境里可以是 null。</summary>
     private readonly IHostFacts? _hostFacts;
+    private readonly BotAgent.Services.Ops.DatabaseBackupService? _backups;
 
     /// <summary>审批用例（批次 I 的面板审批卡）：测试环境里可以是 null（那时端点报 available=false）。</summary>
     private readonly ApprovalUseCase? _approvals;
@@ -269,6 +281,8 @@ public sealed partial class WebUiServer : IDisposable
 
     public void Start()
     {
+        // A listener must never open before the unique configuration coordinator is bound.
+        _ = _settingsHotReload.ConfigurationAuthorization;
 
         // 订阅面板事件（订阅写法一字未改：事件本体本来就在 PanelNotifier 上，以前只是 BotAgentHost 转发了一层）
         _ui.MessageAdded += OnMessageAdded;
@@ -283,8 +297,10 @@ public sealed partial class WebUiServer : IDisposable
 
         if (!_panelPassword.IsConfigured)
         {
-            FileLog.Warn("Web",
-                $"[安全警告] 当前面板未设置密码，已自动启用免密模式并强制限制绑定 127.0.0.1:{_port}（仅限本机访问）。如需开放公网，请在设置中配置面板密码（至少 8 位）。");
+            var tokenConfigured = !string.IsNullOrWhiteSpace(_settings.PanelToken);
+            FileLog.Warn("Web", tokenConfigured
+                ? $"当前面板未设置密码；已配置面板令牌，API 将要求 X-Panel-Token，绑定限制为 127.0.0.1:{_port}。"
+                : $"[安全警告] 当前面板未设置密码，已自动启用免密模式并强制限制绑定 127.0.0.1:{_port}（仅限本机访问）。如需开放公网，请在设置中配置面板密码（至少 8 位）。");
         }
 
         var candidates = _bind == "+" && !OperatingSystem.IsWindows()
@@ -348,6 +364,28 @@ public sealed partial class WebUiServer : IDisposable
             var path = context.Request.Url?.AbsolutePath ?? "/";
             var method = context.Request.HttpMethod;
 
+            // ZBA 是独立的 Bearer 边界：不走旧面板的 Cookie/同源判定，也不继承旧面板的免密回环规则。
+            if (_zba is not null && path.StartsWith("/zba/", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await ZbaHttpListenerAdapter.HandleAsync(context, _zba, _zba.MaxBodyBytes, _cts.Token);
+                }
+                finally
+                {
+                    try
+                    {
+                        context.Response.Close();
+                    }
+                    catch
+                    {
+                        // 客户端已断开
+                    }
+                }
+
+                return;
+            }
+
             var isFeishuWebhook = path.Equals("/api/webhooks/feishu", StringComparison.OrdinalIgnoreCase);
             var publicPath = isFeishuWebhook ||
                 path.Equals("/healthz", StringComparison.OrdinalIgnoreCase) ||
@@ -355,10 +393,7 @@ public sealed partial class WebUiServer : IDisposable
                 path.Equals("/metrics", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/status", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
-                path.Equals("/agent-bridge", StringComparison.OrdinalIgnoreCase) ||
-                (method == "GET" && (path == "/" || path == "/app.css" || path == "/app.js" ||
-                    path == "/trace.css" || path == "/trace.js" || path == "/dash.js" || path == "/favicon.ico" ||
-                    path.Equals("/playground", StringComparison.OrdinalIgnoreCase) || path.Equals("/playground.html", StringComparison.OrdinalIgnoreCase)));
+                (method == "GET" && path == "/favicon.ico");
             if (!publicPath && !(path.Equals("/api/auth/change-password", StringComparison.OrdinalIgnoreCase) && HasPendingSession(context)))
             {
                 if (!IsAuthorized(context))
@@ -420,7 +455,10 @@ public sealed partial class WebUiServer : IDisposable
 
     private bool IsAuthorized(HttpListenerContext context)
     {
-        if (!_panelPassword.IsConfigured) return true;
+        // 免密只对“既没密码、也没配置令牌”的本机面板成立。
+        // 配了令牌而没配密码时必须校验令牌，否则隧道把远端请求转成回环后就能绕过令牌（Issue #78）。
+        if (!_panelPassword.IsConfigured)
+            return string.IsNullOrWhiteSpace(_settings.PanelToken) || IsLegacyAuthorized(context);
         var now = Clock.Now;
         if (IsLegacyAuthorized(context)) return true;
         return TryGetValidPanelSession(context, now) && !_panelPassword.MustChange;
@@ -457,19 +495,78 @@ public sealed partial class WebUiServer : IDisposable
             return true;
         }
 
-        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || uri.UserInfo.Length != 0)
         {
             return false;
         }
 
-        var requestHost = context.Request.Url?.Host ?? string.Empty;
-        if (string.Equals(uri.Host, requestHost, StringComparison.OrdinalIgnoreCase))
+        var request = context.Request.Url;
+        if (request is null || string.IsNullOrWhiteSpace(request.Host))
+        {
+            return false;
+        }
+
+        // A TLS-terminating reverse proxy is the only caller allowed to describe the
+        // browser-facing scheme; trusting this header from a public peer would let any
+        // client choose its own origin.  The panel is reachable through Caddy on the
+        // same host, where the source address is loopback.
+        var scheme = request.Scheme;
+        var forwarded = context.Request.Headers["X-Forwarded-Proto"]?.Trim();
+        if (context.Request.IsLocal &&
+            (string.Equals(forwarded, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(forwarded, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            scheme = forwarded!;
+        }
+
+        if (!string.Equals(uri.Scheme, scheme, StringComparison.OrdinalIgnoreCase) ||
+            !SameHost(uri, request))
+        {
+            return false;
+        }
+
+        // HttpListener reports its own listening port when the Host header has no
+        // port.  Behind Caddy that is the internal port, while the browser's origin
+        // is the public default port for the forwarded scheme.
+        var hostHeader = context.Request.Headers["Host"];
+        var port = HostHeaderHasPort(hostHeader) || string.IsNullOrWhiteSpace(hostHeader)
+            ? request.Port
+            : DefaultPort(scheme);
+
+        return uri.Port == port;
+    }
+
+    private static int DefaultPort(string scheme) =>
+        string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ? 443 : 80;
+
+    private static bool HostHeaderHasPort(string? host)
+    {
+        host = host?.Trim();
+        if (string.IsNullOrEmpty(host))
+        {
+            return false;
+        }
+
+        if (host[0] == '[')
+        {
+            var end = host.IndexOf(']');
+            return end > 0 && end + 1 < host.Length && host[end + 1] == ':';
+        }
+
+        var colon = host.IndexOf(':');
+        return colon > 0 && colon == host.LastIndexOf(':') && colon + 1 < host.Length;
+    }
+
+    private static bool SameHost(Uri origin, Uri request)
+    {
+        if (string.Equals(origin.IdnHost.TrimEnd('.'), request.IdnHost.TrimEnd('.'), StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        // localhost 与 127.0.0.1 视为同一台机器的两种写法
-        return uri.IsLoopback && requestHost is "localhost" or "127.0.0.1" or "::1";
+        // localhost, 127.0.0.1 and [::1] are the same machine for a loopback panel,
+        // but that alias never weakens the port or scheme checks above.
+        return origin.IsLoopback && request.IsLoopback;
     }
 
     /// <summary>QQ 登录二维码信息（面板内扫码）。</summary>
@@ -571,41 +668,6 @@ public sealed partial class WebUiServer : IDisposable
         await WriteJsonAsync(r.Context, 200, new JsonObject { ["aiMode"] = _settings.AiModeEnabled });
     }
 
-    /// <summary>断开某台设备（面板里踢掉；本机那边会自动重连，所以也是"重连"按钮）。</summary>
-    private async Task HandleAgentDisconnectAsync(PanelRequest r)
-    {
-        var body = await ReadJsonAsync(r.Context);
-        var device = body?["device"]?.GetValue<string>();
-        var ok = _agentBridge is not null && await _agentBridge.DisconnectAsync(device);
-        await WriteJsonAsync(r.Context, 200, new JsonObject { ["ok"] = ok });
-    }
-
-    /// <summary>设备上 pi 里的会话（面板"从 pi 导入"用）。</summary>
-    private async Task HandlePiSessionsAsync(PanelRequest r)
-    {
-        var device = r.Context.Request.QueryString["device"];
-        if (_agentBridge is not null && _agentBridge.Connected)
-        {
-            await _agentBridge.RequestPiSessionsAsync(device ?? string.Empty);
-            for (var i = 0; i < 10; i++)
-            {
-                await Clock.Delay(500);
-                if (_agentBridge.DevicePiSessions(device).Count > 0)
-                {
-                    break;
-                }
-            }
-        }
-
-        var list = _agentBridge is null ? new List<JsonObject>() : _agentBridge.DevicePiSessions(device);
-        await WriteJsonAsync(r.Context, 200, new JsonObject
-        {
-            ["device"] = device,
-            ["connected"] = _agentBridge?.Connected ?? false,
-            ["sessions"] = new JsonArray(list.Select(x => (JsonNode)_dto.PiSession(x)).ToArray())
-        });
-    }
-
     // ══════════════ SSE ══════════════
 
     private async Task HandleSseAsync(HttpListenerContext context, CancellationToken ct)
@@ -617,10 +679,11 @@ public sealed partial class WebUiServer : IDisposable
         response.Headers["X-Accel-Buffering"] = "no";
         response.SendChunked = true;
 
-        var client = new SseClient(response.OutputStream);
-        lock (_clientsGate)
+        SseClient client;
+        lock (_loginGate)
         {
-            _clients.Add(client);
+            client = new SseClient(response.OutputStream, SseAuthorization(context), _loginGate);
+            lock (_clientsGate) _clients.Add(client);
         }
 
         try
@@ -629,10 +692,11 @@ public sealed partial class WebUiServer : IDisposable
             await client.SendAsync("state", BuildState().ToJsonString(Json));
 
             // 心跳，避免代理/浏览器掐断空闲连接
-            while (!ct.IsCancellationRequested)
+            var ticks = 0;
+            while (!ct.IsCancellationRequested && client.IsAuthorized)
             {
-                await Task.Delay(15000, ct);
-                await client.SendCommentAsync("ping");
+                await Task.Delay(1000, ct);
+                if (++ticks % 15 == 0) await client.SendCommentAsync("ping");
             }
         }
         catch
@@ -645,6 +709,7 @@ public sealed partial class WebUiServer : IDisposable
             {
                 _clients.Remove(client);
             }
+            client.Dispose();
 
             try
             {
@@ -676,6 +741,7 @@ public sealed partial class WebUiServer : IDisposable
                     {
                         _clients.Remove(client);
                     }
+                    client.Dispose();
                 }
             }, TaskScheduler.Default);
         }
@@ -769,38 +835,6 @@ public sealed partial class WebUiServer : IDisposable
            (value.Equals("1", StringComparison.Ordinal) ||
             value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
             value.Equals("yes", StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>读取嵌入的静态资源（wwwroot/*，LogicalName = web/文件名）。</summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> AssetCache = new(StringComparer.OrdinalIgnoreCase);
-
-    private static async Task WriteAssetAsync(HttpListenerContext context, string fileName, string contentType)
-    {
-        // 静态文件提供协商缓存与高性能内存缓存
-        context.Response.Headers["Cache-Control"] = "no-cache, must-revalidate";
-
-        if (!AssetCache.TryGetValue(fileName, out var bytes))
-        {
-            var assembly = Assembly.GetExecutingAssembly();
-            var resource = assembly.GetManifestResourceNames()
-                .FirstOrDefault(n => n.EndsWith("." + fileName, StringComparison.OrdinalIgnoreCase) ||
-                                     n.Equals("web/" + fileName, StringComparison.OrdinalIgnoreCase));
-
-            if (resource is null)
-            {
-                var message = Encoding.UTF8.GetBytes($"asset not found: {fileName}");
-                await WriteBytesAsync(context, 404, "text/plain; charset=utf-8", message);
-                return;
-            }
-
-            await using var stream = assembly.GetManifestResourceStream(resource)!;
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer);
-            bytes = buffer.ToArray();
-            AssetCache[fileName] = bytes;
-        }
-
-        await WriteBytesAsync(context, 200, contentType, bytes);
-    }
 
     private static async Task WriteJsonAsync(HttpListenerContext context, int status, JsonNode payload)
         => await WriteBytesAsync(context, status, "application/json; charset=utf-8",
@@ -898,46 +932,4 @@ public sealed partial class WebUiServer : IDisposable
         _ = _loop;
     }
 
-    /// <summary>一个 SSE 订阅者。</summary>
-    private sealed class SseClient : IDisposable
-    {
-        private readonly Stream _stream;
-        private readonly SemaphoreSlim _lock = new(1, 1);
-
-        public SseClient(Stream stream) => _stream = stream;
-
-        public async Task SendAsync(string @event, string data)
-            => await WriteRawAsync($"event: {@event}\ndata: {data}\n\n");
-
-        public async Task SendCommentAsync(string comment) => await WriteRawAsync($": {comment}\n\n");
-
-        private async Task WriteRawAsync(string payload)
-        {
-            var bytes = Encoding.UTF8.GetBytes(payload);
-            await _lock.WaitAsync();
-            try
-            {
-                await _stream.WriteAsync(bytes);
-                await _stream.FlushAsync();
-            }
-            finally
-            {
-                _lock.Release();
-            }
-        }
-
-        public void Dispose()
-        {
-            try
-            {
-                _stream.Dispose();
-            }
-            catch
-            {
-                // 忽略
-            }
-
-            _lock.Dispose();
-        }
-    }
 }

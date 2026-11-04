@@ -1,0 +1,38 @@
+using System.Text.Json.Nodes;
+using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Model;
+
+namespace BotAgent.Domain.Ports;
+
+/// <summary>
+/// 模型出网的**传输层**端口（由 <c>Adapters/Model/ModelTransport</c> 实现，见 §5.1）。
+///
+/// 它管的是"怎么把请求发出去、发不通怎么办"：请求体组装（含多模态图片）、鉴权头、
+/// 三条兜底重试（空 choices 重试一次；带图两轮都空 → 去掉图片再试一次）。
+/// 客户端（<c>OpenAiClient</c>）只管"说什么"与"回来的怎么判"—— 两件事不再缠在一起。
+/// </summary>
+public interface IModelTransport
+{
+    /// <summary>组装这一次的请求体（把上下文窗口、系统提示词、可引用消息与图片都算进去）。</summary>
+    /// <param name="promptCacheScope">提示词缓存作用域（会话 key）：只以哈希形式进请求体；null = 不加缓存键。</param>
+    Task<BuiltRequest> BuildAsync(
+        IReadOnlyList<ChatMessage> window, string systemContent, IReadOnlyCollection<long> quotableIds, CancellationToken ct,
+        Reply.SamplingProfile? sampling = null, string? promptCacheScope = null);
+
+    /// <summary>把请求发出去（含三条兜底重试）；返回拿到的 JSON 与"是不是去掉图片后重试成功的"。</summary>
+    Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct);
+
+    // 默认实现保持旧传输实现/测试替身兼容；支持缓存的传输显式保留边界到协议序列化。
+    Task<SendOutcome> SendAsync(BuiltRequest request, ModelProviderRoute? provider, CancellationToken ct)
+        => provider is null
+            ? SendAsync(request.Payload, request.AttachedImages, request.AttachedImageIds, ct)
+            : SendAsync(request.Payload, request.AttachedImages, request.AttachedImageIds, provider, ct);
+
+    /// <summary>
+    /// 使用一次性 Provider 路由覆盖发送。旧实现默认回退到原有配置，保持测试替身和历史调用方兼容。
+    /// </summary>
+    Task<SendOutcome> SendAsync(
+        JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds,
+        ModelProviderRoute provider, CancellationToken ct)
+        => SendAsync(payload, attachedImages, attachedImageIds, ct);
+}

@@ -57,6 +57,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板与协议端分开启动：只等 botWsPort 会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 联网搜索配置生效（开关 + 搜索源 + 结果数）",
@@ -105,6 +107,20 @@ public static partial class Program
         Check("★ 搜索的“自主判断”写清了必须搜 / 不用搜两类（时效性一律搜）",
             afterSearch is not null && afterSearch.Contains("什么时候必须搜") &&
             afterSearch.Contains("什么时候不用搜") && afterSearch.Contains("带上时间信息"),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[联网搜索]"));
+
+        Check("★ 提示词声明了唯一时间基准（跨时区/跨日不拿用户说法当基准）",
+            afterSearch is not null && afterSearch.Contains("唯一的时间基准") &&
+            afterSearch.Contains("他报的时间也只是他说的"),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[现在的时间]"));
+        Check("★ 模型被告知知识截止未知、不能凭旧印象否认新事实",
+            afterSearch is not null && afterSearch.Contains("知识截止时间") &&
+            afterSearch.Contains("不确定是哪天") && afterSearch.Contains("还没更新") &&
+            !afterSearch.Contains("截至 20", StringComparison.Ordinal),
+            afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[现在的时间]"));
+        Check("★ 联网时区分事件发生时间与检索时间（旧资料不说成新消息）",
+            afterSearch is not null && afterSearch.Contains("事件发生时间") &&
+            afterSearch.Contains("你检索的时间"),
             afterSearch is null ? "(没等到请求)" : SectionOf(afterSearch, "[联网搜索]"));
 
         var sends = await WaitForSendsAsync(protocol, 1, TimeSpan.FromSeconds(40));
@@ -175,6 +191,8 @@ public static partial class Program
         // ---- 3c) 带着“刚查到的资料”那一轮不受发言适合度门槛限制 ----
         // 线上症状（管理员反馈“有时查完不输出”）：模型回来汇报那一轮自评偏低（它只是回来报答案，
         // 不是在“插嘴”），被门槛静默掉 → 资料白白浪费，群里只看到“我去查一下”。
+        // 用同一群的未点名消息验证门槛与资料隔离：私聊已经是 DirectToBot，
+        // 不能再把私聊低分沉默当作群聊门槛的预期。
         using (var thResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
                    new StringContent("""{"suitabilityThreshold":50}""", Encoding.UTF8, "application/json"), cts.Token))
         {
@@ -187,22 +205,32 @@ public static partial class Program
         var mark4 = protocol.ActionsReceived.Count;
         openAi.EnqueueReply("""{"suitability": 90, "reply": "我查一下这个。", "search": "查一下门槛测试"}""");
         openAi.EnqueueReply("""{"suitability": 5, "reply": "查到了：门槛测试事实QWE。"}""");
-        await protocol.SendPrivateMessageAsync(friendId, "小美", "帮我查个东西", 9607, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, friendId, "小美", "帮我查个东西", 9607, mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(
-            () => PrivateSendsSince(protocol, mark4).Any(a => MessageText(a).Contains("门槛测试事实QWE")),
+            () => GroupSendsSince(protocol, mark4).Any(a => MessageText(a).Contains("门槛测试事实QWE")),
             TimeSpan.FromSeconds(60));
         Check("★ 带着资料的那一轮即便自评只有 5 分，也照样把答案说出来（以前会被静默掉）",
-            PrivateSendsSince(protocol, mark4).Any(a => MessageText(a).Contains("门槛测试事实QWE")),
-            string.Join(" | ", PrivateSendsSince(protocol, mark4).Select(MessageText)));
+            GroupSendsSince(protocol, mark4).Any(a => MessageText(a).Contains("门槛测试事实QWE")),
+            string.Join(" | ", GroupSendsSince(protocol, mark4).Select(MessageText)));
 
         // 反向：门槛并没被整体废掉 —— 没带资料的普通轮，低分依旧沉默
         var mark5 = protocol.ActionsReceived.Count;
         openAi.EnqueueReply("""{"suitability": 5, "reply": "这句我不该说。"}""");
-        await protocol.SendPrivateMessageAsync(friendId, "小美", "随便说点什么", 9608, ct: cts.Token);
+        var ordinaryRequestIndex = openAi.Requests.Count;
+        await protocol.SendGroupMessageAsync(groupId, friendId, "小美", "随便说点什么", 9608, mentionBot: false, ct: cts.Token);
+        await WaitUntilAsync(() => openAi.Requests.Count > ordinaryRequestIndex, TimeSpan.FromSeconds(10));
         await Task.Delay(6000);
-        Check("★ 普通轮（没带资料）低于门槛时依旧保持沉默",
-            !PrivateSendsSince(protocol, mark5).Any(a => MessageText(a).Contains("我不该说")),
-            string.Join(" | ", PrivateSendsSince(protocol, mark5).Select(MessageText)));
+        Check("★ 普通未点名群聊确实调用模型（不是未执行的假沉默）", openAi.Requests.Count > ordinaryRequestIndex);
+        Check("★ 同群下一普通轮低于门槛仍沉默（资料标记不泄漏）",
+            !GroupSendsSince(protocol, mark5).Any(),
+            string.Join(" | ", GroupSendsSince(protocol, mark5).Select(MessageText)));
+
+        var privateDirectMark = protocol.ActionsReceived.Count;
+        openAi.EnqueueReply("""{"suitability": 5, "reply": "私聊低分直答标记"}""");
+        await protocol.SendPrivateMessageAsync(friendId, "小美", "一对一正常问话，不查资料", 9630, ct: cts.Token);
+        await WaitUntilAsync(() => PrivateSendsSince(protocol, privateDirectMark).Any(a => MessageText(a).Contains("私聊低分直答标记")), TimeSpan.FromSeconds(10));
+        Check("★ 同门槛下私聊正常直答（与群聊门槛隔离）",
+            PrivateSendsSince(protocol, privateDirectMark).Any(a => MessageText(a).Contains("私聊低分直答标记")));
 
         // ---- 3d) 资料这一轮没说出来 → 留给下一轮（一次搜索不白费）----
         openAi.GroundingAnswer = "独特答案：第三个测试事实『留着下轮事实RTY』。";
@@ -300,6 +328,9 @@ public static partial class Program
         var afterOff = offIdx >= 0 ? openAi.DescribeRequest(offIdx) : null;
         Check("★ 关掉联网后仍然有 [现在的时间]（时间不是靠搜来的）",
             afterOff is not null && afterOff.Contains("[现在的时间]") && !afterOff.Contains("[联网搜索]"),
+            afterOff is null ? "(没等到请求)" : SectionOf(afterOff, "[现在的时间]"));
+        Check("★ 关掉联网后时效边界仍在（知识截止未知 / 不否认新事实）",
+            afterOff is not null && afterOff.Contains("知识截止时间") && afterOff.Contains("还没更新"),
             afterOff is null ? "(没等到请求)" : SectionOf(afterOff, "[现在的时间]"));
 
         // ---- 6c) 面板日志页的历史：/api/logs 能拿到之前的行（以前一刷新页面就空白）----

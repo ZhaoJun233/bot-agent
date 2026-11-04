@@ -1,3 +1,4 @@
+using BotAgent.Services.Agent;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Stickers;
 
@@ -35,14 +36,7 @@ public sealed class BootReport
         var privateSwitches = Platforms.PlatformSwitchSettings.Read(_settings, Domain.Platforms.PlatformId.QqPrivate, Domain.Platforms.AccountScope.Legacy);
         var officialSwitches = Platforms.PlatformSwitchSettings.Read(_settings, Domain.Platforms.PlatformId.QqOfficial, Domain.Platforms.AccountScope.Legacy);
 
-        // 白名单严格模式提示：空名单 = 全部忽略，容器里很容易踩
-        if (gateState.BothPrivateListsEmpty)
-        {
-            FileLog.Warn("Agent",
-                "群聊与私聊白名单都是空的 → 严格模式下将忽略所有消息。若要接收，请设 " +
-                "QQCHAT_WHITELIST_GROUPS / QQCHAT_WHITELIST_PRIVATES（或旧的 QQCHAT_WHITELIST），" +
-                "填具体群号/QQ 号，或写 '*'。");
-        }
+        // QQ 空名单表示全收；显式平台拒绝规则仍由策略闸门执行。
 
         FileLog.Write("Agent",
             $"已启动。AI={( _settings.AiModeEnabled ? "开" : "关")}, " +
@@ -50,6 +44,11 @@ public sealed class BootReport
             $"私聊白名单={gateState.Privates}{(gateState.PrivatesFromLegacy ? "（用旧的共用名单）" : "")}, " +
             // 官方那条的名单状态也得印：否则“官方通道被拦”时完全看不出到底是名单空了、还是填了不对的号
             $"官方白名单=群{gateState.OfficialGroups}/私聊{gateState.OfficialPrivates}, " +
+            // 实例级策略也印：它们会让账户级判定整条关闭，不印出来就只剩「莫名全拦」（#129 S3）
+            $"实例策略={gateState.Instances}, " +
+            // docker 能力也印：容器里没挂 socket 时这个开关打开也没用（#131）；不印的话
+            // 「允许 Docker」看着像已经生效。
+            $"docker 能力={(DockerAvailability.IsAvailable ? "可用" : "不可用（容器里没有 docker socket；compose 默认不挂载，见 SECURITY.md）")}, " +
             // 总开关状态也印：2026-09-21 线上出现过“某条通道的总开关被关掉 → 一条都不回 →
             // 日志里只有一行很容易被淹没的“忽略（…通道的总开关是关的）”，查了半天 ✗。
             $"对话总开关=私域{(privateSwitches.Enabled && privateSwitches.ChatEnabled ? "开" : "关")}/官方{(officialSwitches.Enabled && officialSwitches.ChatEnabled ? "开" : "关")}, " +

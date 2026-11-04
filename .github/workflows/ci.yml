@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [dev, main]
+    branches: [dev, main, Zhaodev]
+    # 发版 tag 也要跑：verify 里的版本一致性断言就是在这里对 tag 生效（#122）
+    tags: ['v*']
   pull_request:
-    branches: [dev, main]
+    branches: [dev, main, Zhaodev]
   workflow_dispatch:
 
 permissions:
@@ -24,10 +26,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install .NET 8
+      - name: Install .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
+          # NuGet 缓存（#123）：22 次 restore 每次从零拉会让 verify 逼近 20 分钟上限。
+          # 依赖指纹取全部 csproj —— 任何一个工程加包都会让缓存失效重建。
+          cache: true
+          cache-dependency-path: '**/*.csproj'
       - name: Install Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -36,41 +42,81 @@ jobs:
         uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
         with:
           python-version: '3.12'
-      - name: Restore core and probes (high/critical NuGet audit gate)
+      - name: Restore the whole solution (high/critical NuGet audit gate)
+        # 一条 restore 覆盖 BotAgent.slnx 里的全部工程（#123 把 slnx 补到 30 个工程，
+        # 不再靠手写 22 行 restore 追着磁盘跑）。
         # Core restore audits all dependencies; NU1903/NU1904 are errors, not advisory scanner output.
+        run: dotnet restore BotAgent.slnx
+      - name: Build core and harness (Release)
         run: |
-          dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
-          dotnet restore tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj
-          dotnet restore tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj
-          dotnet restore tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj
-          dotnet restore tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj
-          dotnet restore tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj
-          dotnet restore tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj
-          dotnet restore tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj
-          dotnet restore tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj
-          dotnet restore tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj
-          dotnet restore tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj
-          dotnet restore tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj
-          dotnet restore tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj
-          dotnet restore tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj
-          dotnet restore tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj
-      - name: Build core (Release)
-        run: dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
+          dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
+          dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
+      - name: Version single source and tag consistency
+        # #122：版本号只能有一个真源（Directory.Build.props），且发版 tag 必须与它一致。
+        # 用编译出来的程序集反查 --version，等于同时验证"代码里没有偷偷写死版本"。
+        shell: bash
+        run: |
+          set -euo pipefail
+          props_version="$(sed -n 's#.*<Version>\([^<]*\)</Version>.*#\1#p' Directory.Build.props | head -1)"
+          echo "Directory.Build.props <Version> = ${props_version:-<missing>}"
+          if [ -z "${props_version:-}" ]; then
+            echo "::error::Directory.Build.props 里没有 <Version>"
+            exit 1
+          fi
+          offenders="$(grep -rl --include='*.csproj' '<Version>' . || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::这些 csproj 又各自写了 <Version>（会压过唯一真源）：$offenders"
+            exit 1
+          fi
+          cli_version="$(dotnet src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll --version | awk '{print $2}')"
+          echo "程序集版本（--version）= ${cli_version}"
+          if [ "$cli_version" != "$props_version" ]; then
+            echo "::error::程序集版本 ${cli_version} 与 props ${props_version} 不一致"
+            exit 1
+          fi
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              tag_version="${GITHUB_REF#refs/tags/}"
+              tag_version="${tag_version#v}"
+              if [ "$tag_version" != "$props_version" ]; then
+                echo "::error::tag ${GITHUB_REF} 与 props ${props_version} 不一致（发版要先把 <Version> 改成 tag 的版本）"
+                exit 1
+              fi
+              echo "tag 与版本号一致：${tag_version}"
+              ;;
+            *) echo "非 tag 构建，跳过 tag 一致性检查（${GITHUB_REF}）" ;;
+          esac
+      - name: Dependency snapshot (top-level and transitive)
+        # #122：不引 packages.lock.json；把一次完整的依赖图留成 artifact，
+        # 就能回答"当时依赖是什么"，也不会和 CI 的 restore 流程打架。
+        run: |
+          mkdir -p artifacts
+          dotnet list BotAgent.slnx package --include-transitive > artifacts/dependencies.txt
+          wc -l artifacts/dependencies.txt
+      - name: Upload dependency snapshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-snapshot
+          path: artifacts/dependencies.txt
+          retention-days: 30
+          if-no-files-found: error
       - name: Architecture and safety probes
         run: |
           dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release --no-restore
-      - name: Participation and device bridge probes
+      - name: Participation, engine and server-files probes
         run: |
           dotnet run --project tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj -c Release --no-restore
-          dotnet run --project tests/BotAgent.BridgeProbe/BotAgent.BridgeProbe.csproj -c Release --no-restore
-          python -m unittest discover -s tests/BotAgent.BridgeProbe -p "test_*.py"
-      - name: Synthetic persistence, resilience and frontend probes
+          # EngineProbe（插件闸门 + 后台评测队列）此前从未进 CI —— #123 的"探针必须在 CI 出现"断言靠这条兜住
+          dotnet run --project tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj -c Release --no-restore
+          python tests/BotAgent.ServerFilesProbe/test_server_files.py
+      - name: Synthetic persistence and resilience probes
         run: |
           dotnet run --project tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj -c Release --no-restore
-          node tests/BotAgent.FrontendProbe/probe.mjs
+          # S6：旧面板（src/BotAgent.Headless/wwwroot）已删除，FrontendProbe 随之退役；
+          # 面板前端由 src/web 的 Vue 工程覆盖（web / e2e 两个 job）。
       - name: Deterministic pipeline evaluation
         run: |
           dotnet run --project tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj -c Release --no-restore
@@ -82,6 +128,103 @@ jobs:
           dotnet run --project tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release --no-restore
+      - name: Provider protocol, plugin and snapshot probes
+        run: |
+          dotnet run --project tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj -c Release --no-restore
+
+  web:
+    name: Web build and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src/web
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and component tests
+        run: npm run test:unit
+      - name: Build static assets
+        run: npm run build
+
+  # playwright.config.ts 的 chromium / firefox / webkit 跑同一套用例、同一套断言。
+  # 三个引擎拆成独立 job：一是真并行（塞一个 job 串行跑会撞 20 分钟超时），
+  # 二是缺引擎时只有对应 job 红，不会被误读成"矩阵整体挂了"。
+  e2e:
+    name: Browser end-to-end (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            engine: chromium
+          - browser: firefox
+            engine: firefox
+          - browser: webkit
+            engine: webkit
+          - browser: chromium-rate-limit
+            engine: chromium
+    defaults:
+      run:
+        working-directory: src/web
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install .NET 10
+        # Playwright e2e starts the real Headless host, which the web config builds from source.
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Install Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build static assets
+        run: npm run build
+      - name: Build Headless host for end-to-end tests
+        working-directory: .
+        run: dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps ${{ matrix.engine }}
+      - name: Browser end-to-end tests
+        run: npx playwright test --project=${{ matrix.browser }}
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-playwright-${{ matrix.browser }}
+          path: |
+            src/web/test-results
+            src/web/playwright-report
+          retention-days: 7
 
   integration:
     name: Synthetic integration test (${{ matrix.name }})
@@ -96,17 +239,23 @@ jobs:
             scenarios: "s1,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17"
           - name: "Media & Tools (S18-S31)"
             scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31"
-          - name: "Governance & Multi-Platform (S32-S51)"
-            scenarios: "s32,s33,s34,s35,s36,s37,s38,s39,s40,s41,s43,s44,s45,s46,s47,s48,s49,s50,s51"
+          # ⚠ 别改这个 name：分支保护的必需检查是按「Synthetic integration test (<name>)」命名的，
+          # 改名等于让必需检查永远缺失、PR 永远合不了。s56–s59（#126 的核心不变量）与 s60–s62
+          # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
+          # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
+          - name: "Governance & Multi-Platform (S32-S55)"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install .NET 8
+      - name: Install .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
       - name: Restore core and harness (high/critical NuGet audit gate)
         # Both projects independently audit all dependencies; NU1903/NU1904 fail their restores.
         run: |
@@ -118,5 +267,6 @@ jobs:
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
       - name: Run synthetic integration suite
         env:
-          QQCHAT_IT_ONLY: ${{ matrix.scenarios }}
-        run: dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+          # 规范名优先（N1）：harness 仍兼容旧 QQCHAT_IT_ONLY，但新配置一律写 BOTAGENT_*。
+          BOTAGENT_IT_ONLY: ${{ matrix.scenarios }}
+        run: dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll

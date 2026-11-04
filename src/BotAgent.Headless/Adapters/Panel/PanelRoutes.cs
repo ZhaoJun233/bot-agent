@@ -72,19 +72,18 @@ public sealed partial class WebUiServer
 
     private IReadOnlyList<PanelRoute> Routes => _routes ??= BuildRoutes();
 
+    /// <summary>
+    /// 旧 <c>/api/*</c> 面已冻结（#125）：它不是前端契约，前端只用 ZBA（<c>/zba/v1/*</c>）。
+    /// 这里的既有行只随功能下线一起删，<b>不扩能力、不改语义</b>；要加接口请加到 <c>ZbaRoutes.cs</c>。
+    /// 每条路径都必须出现在 <c>docs/api-surface.md</c> 的表里，否则 ArchitectureProbe 的
+    /// 「接口面与配置面文档覆盖」会红 —— 加行要同步改文档，删行也要同步删文档。
+    /// </summary>
     private IReadOnlyList<PanelRoute> BuildRoutes() => new PanelRoute[]
     {
         // ─────────── 静态资源 ───────────
-        new("*", PanelMatch.ExactFile, "", (r) => WriteAssetAsync(r.Context, "index.html", "text/html; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/playground", (r) => WriteAssetAsync(r.Context, "playground.html", "text/html; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/playground.html", (r) => WriteAssetAsync(r.Context, "playground.html", "text/html; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/app.css", (r) => WriteAssetAsync(r.Context, "app.css", "text/css; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/app.js", (r) => WriteAssetAsync(r.Context, "app.js", "application/javascript; charset=utf-8")),
-        // 追踪页（批次 H）：只读页面的脚本与样式 —— 与 app.js/app.css 同一套路（嵌进程序集，不引 CDN）
-        new("*", PanelMatch.ExactFile, "/trace.js", (r) => WriteAssetAsync(r.Context, "trace.js", "application/javascript; charset=utf-8")),
-        new("*", PanelMatch.ExactFile, "/trace.css", (r) => WriteAssetAsync(r.Context, "trace.css", "text/css; charset=utf-8")),
-        // 仪表盘（批次 J）：与追踪页同一套路（同一份样式文件，脚本各一份）
-        new("*", PanelMatch.ExactFile, "/dash.js", (r) => WriteAssetAsync(r.Context, "dash.js", "application/javascript; charset=utf-8")),
+        // 旧面板（wwwroot/index.html + app.js 等）已随 S6 删除：面板前端只有 src/web 的 Vue 面板，
+        // 由 Caddy 从 /var/www/botagent-web 以 /web/ 前缀提供。宿主不再内置任何页面，
+        // 这里只保留 favicon 的空响应（浏览器会无条件请求它）。
         new("*", PanelMatch.ExactFile, "/favicon.ico", (r) => WriteBytesAsync(r.Context, 204, "image/x-icon", Array.Empty<byte>())),
 
         new("GET", PanelMatch.Exact, "/api/auth/status", (r) => HandleAuthStatusAsync(r.Context)),
@@ -92,7 +91,12 @@ public sealed partial class WebUiServer
         new("POST", PanelMatch.Exact, "/api/auth/change-password", (r) => HandleAuthChangeAsync(r.Context)),
 
         // ─────────── 健康检查 ───────────
-        new("GET", PanelMatch.Exact, "/healthz", (r) => WriteJsonAsync(r.Context, 200, new JsonObject { ["status"] = "ok" })),
+        // 版本来自 Directory.Build.props 的单一 <Version>（#122）：运维不进容器翻文件就能回答"跑的是哪一版"
+        new("GET", PanelMatch.Exact, "/healthz", (r) => WriteJsonAsync(r.Context, 200, new JsonObject
+        {
+            ["status"] = "ok",
+            ["version"] = typeof(WebUiServer).Assembly.GetName().Version?.ToString(3) ?? "0.0.0"
+        })),
         new("GET", PanelMatch.Exact, "/readyz", (r) =>
         {
             var ready = _gateway.IsConnected;
@@ -134,20 +138,16 @@ new("GET", PanelMatch.Exact, "/metrics", (r) => WriteMetricsAsync(r.Context)),
             ? HandleHealthReportAsync(r.Context)
             : WriteJsonAsync(r.Context, 200, BuildHealthReportPayload())),
 
-        // ─────────── 本机 Agent 桥（handoff-4 §31） ───────────
-        // 桥是本机那个进程主动连过来的（本机在 NAT 后面，只能它出站）；这里把 WS 接住。
-        // 注意：**这个端口能让人在管理员电脑上执行命令** —— 所以：没配令牌就直接拒绝。
-        new("*", PanelMatch.Exact, "/agent-bridge", (r) => HandleAgentBridgeAsync(r.Context)),
+        // ─────────── 每日热备（#121）：GET 看现状，POST 立刻备一份 ───────────
+        new("*", PanelMatch.Exact, "/api/backup", (r) => r.Method == "POST"
+            ? HandleBackupAsync(r.Context)
+            : WriteJsonAsync(r.Context, 200, BuildBackupPayload())),
+
+        // ─────────── 服务器内置 Agent（cfg-0.3.3；本机桥/下载/握手入口已移除） ───────────
         new("GET", PanelMatch.Exact, "/api/agent/status", (r) => WriteJsonAsync(r.Context, 200, BuildAgentStatusPayload())),
         new("POST", PanelMatch.Exact, "/api/agent/test", (r) => HandleAgentTestAsync(r.Context)),
         new("*", PanelMatch.Exact, "/api/agent/models", (r) => HandleAgentModelsAsync(r.Context, r.Method)),
-        new("GET", PanelMatch.Exact, "/api/agent/setup", (r) => HandleAgentSetupAsync(r.Context)),
-        new("*", PanelMatch.Exact, "/api/agent/disconnect", HandleAgentDisconnectAsync),
         new("*", PanelMatch.Exact, "/api/agent/sessions", (r) => HandleAgentSessionsAsync(r.Context, r.Method)),
-        new("GET", PanelMatch.Exact, "/api/agent/pi-sessions", HandlePiSessionsAsync),
-        new("GET", PanelMatch.Exact, "/agent-bridge-script", (r) => WriteEmbeddedAgentScriptAsync(r.Context, "pi-bridge.py")),
-        // 服务器文件操作脚本（sftp 包装；同样从仓库 tools/ 内嵌）—— 给外部 pi agent 用
-        new("GET", PanelMatch.Exact, "/agent-sftp-script", (r) => WriteEmbeddedAgentScriptAsync(r.Context, "server-files.py")),
 
         // ─────────── 参与状态（工程 V3 · P1，**只读**）───────────
         // 为什么只读：状态机目前**只观测不拦截**，面板不该也不能改它 —— 改的是上面的参数。

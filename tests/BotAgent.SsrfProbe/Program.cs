@@ -173,7 +173,8 @@ try
         Check(read.Text is not null && read.Error is null && pages.Urls.Count == 4 && models.Urls.Count == 0,
             "untrusted page reads use dedicated page transport");
         var modelResult = await search.SearchAsync("synthetic query", default);
-        Check(modelResult.Answer == "synthetic answer" && models.Urls.Single().Host == "localhost" && models.Authorization.Single() == "Bearer synthetic-key",
+        Check(modelResult is not null && modelResult.Answer == "synthetic answer"
+                && models.Urls.Single().Host == "localhost" && models.Authorization.Single() == "Bearer synthetic-key",
             "trusted configured internal model search remains available");
         Check(pages.Authorization.All(auth => auth is null), "page hops do not forward model authorization");
         var deniedPages = new SyntheticHttp(_ => SyntheticHttp.Redirect("http://127.0.0.1/private"));
@@ -203,7 +204,12 @@ try
     await Test("production composition/pinning contracts", () =>
     {
         var root = FindRoot();
-        var composition = File.ReadAllText(Path.Combine(root, "src/BotAgent.Headless/Host/CompositionRoot.cs"));
+        // 装配根按能力域拆成多个 partial 文件（#110），这里拼起来看全部构造点：
+        // 意图不变 —— 不可信出口必须关自动重定向并拒私网，可信配置出口保持原样。
+        var composition = string.Join("\n", Directory
+            .EnumerateFiles(Path.Combine(root, "src/BotAgent.Headless/Host"), "CompositionRoot*.cs")
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(File.ReadAllText));
         var fetcher = File.ReadAllText(Path.Combine(root, "src/BotAgent.Headless/Adapters/Net/HttpFetcher.cs"));
         foreach (var name in new[] { "imageHttp", "linkHttp", "researchPageHttp" })
         {

@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
+
 namespace BotAgent.Services;
 
 /// <summary>
@@ -16,7 +19,7 @@ namespace BotAgent.Services;
 ///   ② 写入统一走 <see cref="Apply" /> / <see cref="ApplyPersisted" />（禁止就地改共享配置）；
 ///   ③ 拿在手里的 <see cref="AppSettings" /> 是**某一版**，别跨轮长期持有它（要长期持有就持这个箱子）。
 /// </summary>
-public sealed class SettingsBox
+public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox, ISettingsBox
 {
     /// <summary>发布串行化：两个人同时保存时，后一个不能把前一个的修改盖掉（各自都从最新版 fork）。</summary>
     private readonly object _gate = new();
@@ -28,6 +31,8 @@ public sealed class SettingsBox
 
     /// <summary>当前生效的那一份（换引用是原子的；每次访问都取最新的）。</summary>
     public AppSettings Current => Volatile.Read(ref _current);
+
+    BotAgent.Platforms.PlatformOptions BotAgent.Platforms.IPlatformSettingsAccessor.Current => Current;
 
     /// <summary>
     /// 在副本上改 → 原子发布（仅运行时，不落盘）。持久化保存必须走 ApplyPersisted。
@@ -58,6 +63,55 @@ public sealed class SettingsBox
             Interlocked.Exchange(ref _current, next);
             published?.Invoke(next);
             return next;
+        }
+    }
+
+    /// <summary>
+    /// A structured commit is evaluated and published under the existing writer lock.
+    /// Rejections, replay and uncertain commits must not exchange the runtime snapshot.
+    /// Application failure retains the committed fact; this method does not persist a ledger.
+    /// </summary>
+    public ConfigurationSaveResult ApplyConfiguration(
+        Func<AppSettings, (AppSettings Snapshot, ConfigurationSaveResult Result)> persist,
+        Func<AppSettings, ConfigurationSaveResult, ConfigurationSaveResult>? published = null)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        return ApplyConfiguration(current =>
+        {
+            var (next, result) = persist(current);
+            return (next, result, true);
+        }, published);
+    }
+
+    /// <summary>The trusted Host must acquire its durable publish claim before allowing Exchange.</summary>
+    internal ConfigurationSaveResult ApplyConfiguration(
+        Func<AppSettings, (AppSettings Snapshot, ConfigurationSaveResult Result, bool PublishAllowed)> persist,
+        Func<AppSettings, ConfigurationSaveResult, ConfigurationSaveResult>? published = null)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        lock (_gate)
+        {
+            var (next, result, publishAllowed) = persist(Current.Snapshot());
+            if (result.Code != ConfigurationResultCode.Ok || result.Replayed ||
+                result.Receipt is not { Decision: ConfigurationDecision.Changed,
+                    CommitState: CommitState.Committed } receipt)
+                return result;
+
+            if (!publishAllowed) return result;
+
+            ArgumentNullException.ThrowIfNull(next);
+            Interlocked.Exchange(ref _current, next);
+            try
+            {
+                return published?.Invoke(next, result) ?? result;
+            }
+            catch (Exception)
+            {
+                var steps = receipt.Steps.IsDefault ? ImmutableArray<ApplyStepReport>.Empty : receipt.Steps;
+                if (!steps.Any(step => step.Step == ApplyStep.PublishSnapshot))
+                    steps = steps.Add(new ApplyStepReport(ApplyStep.PublishSnapshot, ApplyState.Applied, null));
+                return result with { Receipt = receipt with { ApplyState = ApplyState.Failed, Steps = steps } };
+            }
         }
     }
 }

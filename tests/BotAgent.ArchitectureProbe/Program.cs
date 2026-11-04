@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -18,9 +19,34 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        _passed = 0;
+        _failed = 0;
+        Tightenable.Clear();
+        try { return Run(args); }
+        catch (InvalidOperationException ex)
+        {
+            Console.WriteLine("架构护栏拒绝继续：" + ex.Message);
+            return 1;
+        }
+        catch (IOException)
+        {
+            Console.WriteLine("架构护栏拒绝继续：source_read_failed");
+            return 1;
+        }
+    }
+
+    private static int Run(string[] args)
+    {
         var index = SourceIndex.Load();
         Console.WriteLine($"源码根：{index.Root}");
         Console.WriteLine($"源文件：{index.Files.Count} 个 / {index.TotalLines} 行");
+
+        if (args.SequenceEqual(new[] { "--self-test" }))
+        {
+            ScannerContractTests(index);
+            Console.WriteLine($"扫描器契约自检：通过 {_passed}，失败 {_failed}（不是仓库架构验收）");
+            return _failed == 0 ? 0 : 1;
+        }
 
         if (args.Contains("--print"))
         {
@@ -83,13 +109,23 @@ public static class Program
             return 0;
         }
 
+        ScannerContractTests(index);
+        ProjectChecks(index);
+        RepositoryGovernanceChecks(index);
+        DocumentationChecks(index);
+        SurfaceDocumentationChecks(index);
+        DockerfileChecks(index);
+        ReleaseGovernanceChecks(index);
+        CoreInvariantAndBaselineChecks(index);
         SelfTests(index);
         RatchetChecks(index);
         LayoutChecks(index);
         ToolDirectoryChecks(index);
+        ToolRegistryChecks(index);
         AuditAndTraceChecks(index);
         PanelApprovalChecks(index);
         TurnLoopChecks(index);
+        TaskRuntimeChecks(index);
         LocalChannelChecks(index);
         ServerGateChecks(index);
         RedLineChecks(index);
@@ -112,6 +148,301 @@ public static class Program
 
     // ─────────────────────────── 自检：扫描器本身不能骗人 ───────────────────────────
 
+    private static readonly string[] FixtureProjects =
+        { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel", "BotAgent.Headless" };
+
+    private static void ScannerContractTests(SourceIndex index)
+    {
+        Section("R3 扫描器契约自检（独立合成源码，不运行机器人）");
+        Check("真实迁出领域能按仓库路径定位", index.ByPath("src/BotAgent.Core/Domain/Tools/ToolSpec.cs") is not null);
+        var root = Path.Combine(Path.GetTempPath(), "botagent-r3-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var complete = CreateFixture(root, "complete");
+            Directory.CreateDirectory(Path.Combine(complete, "src/BotAgent.Core/obj"));
+            File.WriteAllText(Path.Combine(complete, "src/BotAgent.Core/obj/Ignored.cs"), "class Ignored { }");
+            Directory.CreateDirectory(Path.Combine(complete, "src/BotAgent.Core/bin"));
+            File.WriteAllText(Path.Combine(complete, "src/BotAgent.Core/bin/Ignored.cs"), "class Ignored { }");
+            var snapshot = LoadFixture(complete);
+            Check("八个业务工程全部扫描且排除 bin/obj", snapshot.Files.Count == 8);
+            Check("同名源文件保留工程身份，不做模糊回退",
+                snapshot.ByPath("src/BotAgent.Core/Domain/Rules.cs") is not null
+                && snapshot.ByPath("src/BotAgent.Model/Domain/Rules.cs") is not null
+                && snapshot.ByPath("Domain/Rules.cs") is null);
+
+            var aliasRoot = CreateFixture(root, "storage-alias");
+            File.WriteAllText(Path.Combine(aliasRoot, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Storage/BotAgent.Storage.csproj\" Aliases=\"StorageModule\" /></ItemGroup></Project>");
+            Check("唯一 Host Storage 别名仍扫描真实引用与全部源码", LoadFixture(aliasRoot).Files.Count == 8);
+            foreach (var alias in new[] { "global", "global,StorageModule", "StorageModule,Other", "Other", "storageModule" })
+                FixtureMustFail(root, "alias-" + alias.Replace(',', '-'), p => File.WriteAllText(
+                    Path.Combine(p, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
+                    $"<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Storage/BotAgent.Storage.csproj\" Aliases=\"{alias}\" /></ItemGroup></Project>"),
+                    "未知或多个 Storage 别名必须拒绝: " + alias);
+            FixtureMustFail(root, "alias-other-edge", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Model/BotAgent.Model.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Core/BotAgent.Core.csproj\" Aliases=\"StorageModule\" /></ItemGroup></Project>"),
+                "其它引用不能借用 Storage 别名例外");
+            FixtureMustFail(root, "alias-extra-metadata", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Storage/BotAgent.Storage.csproj\" Aliases=\"StorageModule\" ReferenceOutputAssembly=\"false\" /></ItemGroup></Project>"),
+                "正确别名不豁免其它元数据");
+            FixtureMustFail(root, "alias-child", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Storage/BotAgent.Storage.csproj\"><Aliases>StorageModule</Aliases></ProjectReference></ItemGroup></Project>"),
+                "子节点元数据仍拒绝");
+            FixtureMustFail(root, "alias-condition", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Headless/BotAgent.Headless.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup Condition=\"'$(Configuration)' == 'Debug'\"><ProjectReference Include=\"../BotAgent.Storage/BotAgent.Storage.csproj\" Aliases=\"StorageModule\" /></ItemGroup></Project>"),
+                "正确别名不豁免条件引用");
+
+            FixtureMustFail(root, "missing", p => File.Delete(Path.Combine(p, "src/BotAgent.Storage/BotAgent.Storage.csproj")),
+                "缺必需工程必须失败");
+            FixtureMustFail(root, "empty", p => File.Delete(Path.Combine(p, "src/BotAgent.Core/Domain/Rules.cs")),
+                "空模块 / 空领域扫描必须失败");
+            FixtureMustFail(root, "comments", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Model/Domain/Rules.cs"), "// no source\n"),
+                "只有注释的模块不能冒充非空实现");
+            FixtureMustFail(root, "direction", p => WriteFixtureProject(p, "BotAgent.Core", "BotAgent.Storage"),
+                "Core 反向引用必须失败");
+            FixtureMustFail(root, "sibling", p => WriteFixtureProject(p, "BotAgent.Platforms", "BotAgent.Model"),
+                "Platforms 引用 Model 必须失败");
+            FixtureMustFail(root, "dangling", p => WriteFixtureProject(p, "BotAgent.Model", "BotAgent.Missing"),
+                "悬空项目引用必须失败");
+            FixtureMustFail(root, "condition", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Model/BotAgent.Model.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup Condition=\"'$(Configuration)' == 'Debug'\"><ProjectReference Include=\"../BotAgent.Core/BotAgent.Core.csproj\" /></ItemGroup></Project>"),
+                "不能解释的条件引用不得静默漏检");
+            FixtureMustFail(root, "cycle", p =>
+            {
+                WriteFixtureProject(p, "BotAgent.Core", "BotAgent.Model");
+                WriteFixtureProject(p, "BotAgent.Model", "BotAgent.Core");
+            }, "项目引用环必须失败");
+            FixtureMustFail(root, "solution", p => File.WriteAllText(Path.Combine(p, "BotAgent.slnx"),
+                "<Solution><Project Path=\"src/BotAgent.Missing/BotAgent.Missing.csproj\" /></Solution>"),
+                "解决方案悬空或漏列业务工程必须失败");
+            FixtureMustFail(root, "domain-missing", p => File.Move(Path.Combine(p, "src/BotAgent.Core/Domain/Rules.cs"),
+                Path.Combine(p, "src/BotAgent.Core/Rules.cs")), "Core 有其它源码也不能掩盖领域扫描为空");
+            FixtureMustFail(root, "compile-override", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Model/BotAgent.Model.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><Compile Include=\"../external.cs\" /></ItemGroup></Project>"),
+                "未解释的显式编译输入不能绕过扫描");
+            // 仓库根允许**声明式**的构建基线（#123 的 Directory.Build.props），但只限探针认得的那组属性：
+            // 任何解释不了的东西都必须让扫描器停下来，否则"这个工程为什么这样编译"就藏进了没人读的文件里。
+            FixtureMustFail(root, "props-unknown", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"),
+                "<Project><PropertyGroup><Synthetic>1</Synthetic></PropertyGroup></Project>"),
+                "构建基线里的未知属性必须失败");
+            FixtureMustFail(root, "props-condition", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"),
+                "<Project><PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\"><Nullable>enable</Nullable></PropertyGroup></Project>"),
+                "构建基线里的条件分支必须失败");
+            FixtureMustFail(root, "props-import", p => File.WriteAllText(Path.Combine(p, "Directory.Build.props"),
+                "<Project><Import Project=\"synthetic.props\" /></Project>"),
+                "构建基线里的 Import 必须失败");
+            FixtureMustFail(root, "props-nested", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Core/Directory.Build.props"),
+                "<Project><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>"),
+                "子目录里的继承构建设置必须失败");
+            FixtureMustFail(root, "unknown", p =>
+            {
+                Directory.CreateDirectory(Path.Combine(p, "src/BotAgent.Unknown"));
+                WriteFixtureProject(p, "BotAgent.Unknown", null);
+            }, "未登记业务工程不能被悄悄忽略");
+            FixtureMustFail(root, "metadata", p => File.WriteAllText(Path.Combine(p, "src/BotAgent.Model/BotAgent.Model.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../BotAgent.Core/BotAgent.Core.csproj\" ReferenceOutputAssembly=\"false\" /></ItemGroup></Project>"),
+                "未解释的引用元数据必须失败");
+
+            var ioRoot = CreateFixture(root, "domain-io");
+            File.WriteAllText(Path.Combine(ioRoot, "src/BotAgent.Core/RootIo.cs"),
+                "namespace Synthetic;\nclass RootIo\n{\n string sql = \"SELECT * FROM synthetic\";\n void Read() { File.ReadAllText(\"synthetic.txt\"); }\n}\n");
+            CheckProbeRejects(LoadFixture(ioRoot), LayoutChecks, "Core 根目录新增 IO 也被真实领域断言拦截", "没有直接文件 IO");
+
+            Check("循环检查独立识别引用环", SourceIndex.ReferenceErrors(new[]
+            {
+                new SourceProject("BotAgent.Core", "src/BotAgent.Core/BotAgent.Core.csproj", new[] { "src/BotAgent.Model/BotAgent.Model.csproj" }, 1),
+                new SourceProject("BotAgent.Model", "src/BotAgent.Model/BotAgent.Model.csproj", new[] { "src/BotAgent.Core/BotAgent.Core.csproj" }, 1),
+            }).Contains("project_reference_cycle"));
+
+            var missing = Path.Combine(root, "no-repository");
+            Directory.CreateDirectory(missing);
+            var rejected = false;
+            try { LoadFixture(missing); }
+            catch (InvalidOperationException) { rejected = true; }
+            Check("显式源码根无效时不得退回真实仓库假绿", rejected);
+            MetricsContractTests();
+            ConfigurationSqlOwnershipTests();
+            var storage = SourceFile.FromText("src/BotAgent.Storage/EpisodeStore.cs", "public class EpisodeStore { }");
+            const string facadeCode = "extern alias StorageModule; public class EpisodeStore : StorageModule::BotAgent.Adapters.Persistence.EpisodeStore { }";
+            Check("C2 facade实际引用存在且没有SQL/IO", IsStorageFacade(SourceFile.FromText("fixture", facadeCode), storage, "EpisodeStore"));
+            Check("C2不能以缺实现或空字符串伪造接入", !IsStorageFacade(SourceFile.FromText("fixture", facadeCode), null, "EpisodeStore")
+                && !IsStorageFacade(SourceFile.FromText("fixture", "class Fake { string x = \"StorageModule::BotAgent.Adapters.Persistence.EpisodeStore\"; }"), storage, "EpisodeStore"));
+            Check("C2 facade残留SQL必须拒绝", !IsStorageFacade(SourceFile.FromText("fixture", facadeCode.Replace("{ }", "{ string sql = \"SELECT * FROM synthetic\"; }")), storage, "EpisodeStore"));
+            Check("C2 facade残留IO必须拒绝", !IsStorageFacade(SourceFile.FromText("fixture", facadeCode.Replace("{ }", "{ void Save() => File.WriteAllText(\"synthetic\", \"data\"); }")), storage, "EpisodeStore"));
+        }
+        finally
+        {
+            // root 由本方法的新 UUID 创建；只清理本次合成源码，不碰仓库或其他临时目录。
+            var full = Path.GetFullPath(root);
+            var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!full.StartsWith(temp, StringComparison.OrdinalIgnoreCase)
+                || !Path.GetFileName(full).StartsWith("botagent-r3-", StringComparison.Ordinal))
+                throw new InvalidOperationException("unsafe_fixture_cleanup");
+            Directory.Delete(full, recursive: true);
+        }
+    }
+
+    private static string CreateFixture(string parent, string name)
+    {
+        var root = Path.Combine(parent, name);
+        foreach (var project in FixtureProjects)
+        {
+            var folder = Path.Combine(root, "src", project, "Domain");
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "Rules.cs"), "namespace Synthetic;\npublic class Rules\n{\n    public int Value() => 1;\n}\n");
+            WriteFixtureProject(root, project, project == "BotAgent.Core" ? null : "BotAgent.Core");
+        }
+        File.WriteAllText(Path.Combine(root, "BotAgent.slnx"), "<Solution>" + string.Concat(FixtureProjects.Select(p =>
+            $"<Project Path=\"src/{p}/{p}.csproj\" />")) + "</Solution>");
+        return root;
+    }
+
+    private static void WriteFixtureProject(string root, string project, string? reference)
+        => File.WriteAllText(Path.Combine(root, "src", project, project + ".csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>"
+            + (reference is null ? "" : $"<ItemGroup><ProjectReference Include=\"../{reference}/{reference}.csproj\" /></ItemGroup>") + "</Project>");
+
+    private static SourceIndex LoadFixture(string root)
+    {
+        var oldCanonical = Environment.GetEnvironmentVariable("BOTAGENT_SRC_ROOT");
+        var oldLegacy = Environment.GetEnvironmentVariable("QQCHAT_SRC_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("BOTAGENT_SRC_ROOT", root);
+            Environment.SetEnvironmentVariable("QQCHAT_SRC_ROOT", root);
+            return SourceIndex.Load();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BOTAGENT_SRC_ROOT", oldCanonical);
+            Environment.SetEnvironmentVariable("QQCHAT_SRC_ROOT", oldLegacy);
+        }
+    }
+
+    private static void FixtureMustFail(string parent, string name, Action<string> mutate, string label)
+    {
+        var root = CreateFixture(parent, name);
+        mutate(root);
+        var rejected = false;
+        try { LoadFixture(root); }
+        catch (InvalidOperationException) { rejected = true; }
+        Check(label, rejected);
+    }
+
+    private static void CheckProbeRejects(SourceIndex index, Action<SourceIndex> probe, string label, string failedLabel)
+    {
+        var (passed, failed) = (_passed, _failed);
+        var output = Console.Out;
+        using var capture = new StringWriter();
+        var rejected = false;
+        try
+        {
+            Console.SetOut(capture);
+            probe(index);
+            rejected = _failed > failed && capture.ToString().Split('\n').Any(line => line.Contains("✗") && line.Contains(failedLabel));
+        }
+        finally { Console.SetOut(output); (_passed, _failed) = (passed, failed); }
+        Check(label, rejected);
+    }
+
+    private static void ConfigurationSqlOwnershipTests()
+    {
+        Check("C3 SQL registration contains only two exact owned paths",
+            Baseline.ConfigurationSqlPaths.Count == 2
+            && Baseline.AllowsSql("src/BotAgent.Storage/ConfigurationStore.cs")
+            && Baseline.AllowsSql("src/BotAgent.Storage/ConfigurationStorageBridge.cs"));
+        foreach (var path in new[]
+        {
+            "src/BotAgent.Core/Domain/Configuration/ConfigurationStore.cs",
+            "src/BotAgent.Panel/ConfigurationStorageBridge.cs",
+            "src/BotAgent.Storage/OtherConfigurationStore.cs",
+            "src/BotAgent.Headless/Services/ConfigurationStore.cs",
+            "src/BotAgent.Model/ConfigurationStorageBridge.cs",
+        })
+        {
+            var fixture = new SourceIndex
+            {
+                Root = "synthetic",
+                Files = new[] { SourceFile.FromText(path,
+                    "namespace Synthetic;\npublic class Synthetic\n{\n"
+                    + "    private string query = \"SELECT 1\";\n"
+                    + "    public int Value()\n    {\n        return 1;\n    }\n}\n") },
+            };
+            var tightenCount = Tightenable.Count;
+            try
+            {
+                CheckProbeRejects(fixture, RatchetChecks,
+                    "C3 SQL exact ownership rejects " + path, "R2：SQL");
+            }
+            finally { Tightenable.RemoveRange(tightenCount, Tightenable.Count - tightenCount); }
+        }
+    }
+
+    private static void MetricsContractTests()
+    {
+        var lexical = SourceFile.FromText("src/BotAgent.Core/Domain/Synthetic.cs",
+            "class Synthetic { string sql = \"SELECT * FROM synthetic\"; void M() { File.ReadAllText(\"synthetic.txt\"); var now = DateTimeOffset.UtcNow; var client = new HttpClient(); _settings.Value = 1; } }\n"
+            + "// \"SELECT * FROM ignored\" File.ReadAllText( DateTimeOffset.Now new HttpClient() _settings.X = 1;\n");
+        Check("旧计数口径：SQL / IO / 时钟 / 出网 / 配置赋值，注释不算",
+            Metrics.CountSqlLiterals(lexical) == 1 && Metrics.CountDirectFileIo(lexical) == 1
+            && Metrics.CountClockReads(lexical) == 1 && Metrics.CountHttpClientNew(lexical) == 1
+            && Metrics.CountSettingsAssignments(lexical) == 1);
+        var targetNew = SourceFile.FromText("src/BotAgent.Headless/Services/Synthetic.cs",
+            "class Synthetic { private readonly ConversationStore _store = new(); HttpClient client = new(); }\n");
+        Check("目标类型 new 仍计入具体 IO 与 HttpClient", Metrics.CountConcreteIoNew(targetNew) == 1 && Metrics.CountHttpClientNew(targetNew) == 1);
+        var literals = SourceFile.FromText("src/BotAgent.Core/Domain/Literals.cs",
+            "class Literals { string a = @\"{ literal }\"; string b = \"\"\"{ raw }\"\"\"; string c = $\"{new object()}\"; char d = '}'; }\n");
+        var braces = Metrics.BraceBalance(literals);
+        Check("字符串 / 原生 / 插值 / 字符保持视图对齐与花括号配平",
+            literals.Raw.Length == literals.NoComments.Length && literals.Raw.Length == literals.CodeOnly.Length && braces.Open == braces.Close);
+
+        SourceFile Part(string project, string ns, string name, int fields)
+            => SourceFile.FromText($"src/{project}/Domain/{name}.cs", $"namespace {ns};\npublic partial class Rule\n{{\n"
+                + string.Concat(Enumerable.Range(0, fields).Select(i => $" private int _field{i};\n")) + " public void Run() { }\n}\n");
+        var a = Part("BotAgent.Core", "Synthetic.A", "First", 6);
+        var b = Part("BotAgent.Core", "Synthetic.A", "Second", 5);
+        var otherNs = Part("BotAgent.Core", "Synthetic.B", "Other", 1);
+        var otherProject = Part("BotAgent.Model", "Synthetic.A", "Other", 1);
+        CodeBlock Rule(SourceFile f) => Metrics.Blocks(f).Single(t => t.Kind == BlockKind.Type && t.Name == "Rule");
+        Check("partial 同工程同命名空间合并，跨工程 / 命名空间分开",
+            Metrics.TypeKey(a, Rule(a)) == Metrics.TypeKey(b, Rule(b))
+            && Metrics.TypeKey(a, Rule(a)) != Metrics.TypeKey(otherNs, Rule(otherNs))
+            && Metrics.TypeKey(a, Rule(a)) != Metrics.TypeKey(otherProject, Rule(otherProject)));
+        var partialIndex = new SourceIndex { Root = "(synthetic)", Files = new[] { a, b } };
+        CheckProbeRejects(partialIndex, LayoutChecks, "拆 partial 文件仍被真实字段总量断言拦截", "单类型字段");
+        var nested = SourceFile.FromText("src/BotAgent.Core/Domain/Nested.cs",
+            "namespace Synthetic.A { class Outer { partial class Rule { private int _first; } } }\n"
+            + "namespace Synthetic.B { class Outer { partial class Rule { private int _second; } } }\n");
+        var rules = Metrics.Blocks(nested).Where(t => t.Kind == BlockKind.Type && t.Name == "Rule").ToList();
+        Check("同文件嵌套同名类型按位置计数，命名空间身份不混淆", rules.Count == 2
+            && rules.All(t => Metrics.TypeSurface(nested, t).Fields == 1)
+            && Metrics.TypeKey(nested, rules[0]) != Metrics.TypeKey(nested, rules[1]));
+        var generic = SourceFile.FromText("src/BotAgent.Core/Domain/Generic.cs",
+            "namespace Synthetic; partial class Rule<T> { } partial class Rule<T,U> { }\n");
+        var genericRules = Metrics.Blocks(generic).Where(t => t.Kind == BlockKind.Type).ToList();
+        Check("泛型元数不同的 partial 不误合并", genericRules.Count == 2
+            && Metrics.TypeKey(generic, genericRules[0]) != Metrics.TypeKey(generic, genericRules[1]));
+        Check("逐文件持久化迁移映射成立，但新文件和平台自写库不获整目录豁免",
+            Baseline.AllowsSql("src/BotAgent.Storage/ConversationStore.cs")
+            && Baseline.AllowsFileIo("src/BotAgent.Platforms/Common/OfficialIdMap.cs")
+            && !Baseline.AllowsSql("src/BotAgent.Storage/Unregistered.cs")
+            && !Baseline.AllowsFileIo("src/BotAgent.Storage/Unregistered.cs")
+            && !Baseline.AllowsSql("src/BotAgent.Platforms/Persistence/PlatformDedupStore.cs"));
+        Check("棘轮不高于 R3 开始数值", Baseline.MaxFileLines <= 1765 && Baseline.BotAgentHostLines <= 243
+            && Baseline.BotAgentHostFields <= 10 && Baseline.BotAgentHostMethods <= 10 && Baseline.LongestMethodLines <= 30
+            && Baseline.LongestMethodAnywhere <= 198
+            // #133 v11 配置字段号上限迁移：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省），
+            // #116 v12 任务台账：138 → 141（agent_tasks DDL + 迁移分支；DAO 的查询/写入在 Adapters/Persistence）。
+            // #135 v13 轨迹归档缓存用量：141 → 145（trace_archive DDL 抽成独立方法 + 三条 ALTER 补列）。
+            // 这些都落在 R2 允许的位置，不属于「SQL 散出去」。
+            && Baseline.SqlLiteralTotal <= 145 && Baseline.FileIoTotal <= 62
+            && Baseline.ClockReads <= 3 && Baseline.HttpClientNews <= 4 && Baseline.PanelAgentCalls == 0
+            && Baseline.ConcreteIoNews == 0 && Baseline.SettingsAssignments == 0 && Baseline.PanelSqlLiterals == 0
+            && Baseline.PanelFileIo == 0 && Baseline.PanelClockReads == 0 && Baseline.PanelExemptFileIo <= 15
+            && Baseline.DomainFileTargetLines <= 300 && Baseline.DomainTypeMaxFields <= 10 && Baseline.DomainTypeMaxMethods <= 25);
+    }
+
     private static void SelfTests(SourceIndex index)
     {
         Section("自检（扫描器口径）");
@@ -131,7 +462,7 @@ public static class Program
         Check("花括号配对能认出长方法（最长成员块 > 50 行）", longest.Block!.Lines > 50,
             $"最长 = {longest.Block.Name} @ {longest.File.RelativePath} {longest.Block.Lines} 行");
 
-        var botAgent = index.ByPath("Services/BotAgentHost.cs");
+        var botAgent = index.ByPath("src/BotAgent.Headless/Services/BotAgentHost.cs");
         Check("能定位到 Services/BotAgentHost.cs", botAgent is not null,
             botAgent is null ? "文件不存在（是不是挪走了？挪走请同步 Baseline）" : null);
 
@@ -143,6 +474,553 @@ public static class Program
         Check("每个文件的花括号在去字符串视图里配平", unbalanced.Count == 0,
             unbalanced.Count == 0 ? null : string.Join("、", unbalanced));
     }
+
+    private static void ProjectChecks(SourceIndex index)
+    {
+        Section("实际业务工程与引用声明（不是宿主行为验收）");
+        Check("当前必需工程全部存在且有实际源码", Baseline.RequiredProjects.All(name => index.Projects.Any(p => p.Name == name && p.FileCount > 0)));
+        Check("源码扫描不为空、Core 领域扫描不为空", index.Files.Count > 0 && index.In("src/BotAgent.Core/Domain").Any());
+        var errors = SourceIndex.ReferenceErrors(index.Projects);
+        Check("直接项目引用方向合法、无悬空引用及引用环", errors.Count == 0, string.Join("、", errors));
+        foreach (var project in index.Projects)
+            Console.WriteLine($"  {project.Name}：{project.FileCount} 源文件；直接引用 {string.Join(",", project.References)}");
+        var legacy = index.In("src/BotAgent.Headless").ToList();
+        Console.WriteLine($"  旧 Headless 范围诊断：SQL={legacy.Sum(Metrics.CountSqlLiterals)} IO={legacy.Sum(Metrics.CountDirectFileIo)} 时钟={legacy.Sum(Metrics.CountClockReads)} HttpClient={legacy.Sum(Metrics.CountHttpClientNew)}（不代替全工程判定）");
+        var host = index.Projects.Single(p => p.Name == "BotAgent.Headless");
+        Check("Wave3 落位：Headless 直接引用 BotAgent.Engine",
+            host.References.Contains("src/BotAgent.Engine/BotAgent.Engine.csproj", StringComparer.OrdinalIgnoreCase));
+        Check("Wave5 落位：Headless 直接引用 BotAgent.Panel",
+            host.References.Contains("src/BotAgent.Panel/BotAgent.Panel.csproj", StringComparer.OrdinalIgnoreCase));
+        var panel = index.Projects.SingleOrDefault(p => p.Name == "BotAgent.Panel");
+        Check("Wave5 落位：BotAgent.Panel 只直接引用 Core",
+            panel is not null && panel.References.Count == 1
+            && panel.References[0].Equals("src/BotAgent.Core/BotAgent.Core.csproj", StringComparison.OrdinalIgnoreCase),
+            panel is null ? "Panel 工程缺失" : string.Join(",", panel.References));
+        foreach (var name in new[] { "BotAgent.Storage", "BotAgent.Model", "BotAgent.Engine" })
+            if (!host.References.Contains($"src/{name}/{name}.csproj", StringComparer.OrdinalIgnoreCase))
+                Console.WriteLine($"  未接入登记：Headless 未直接引用 {name}（不据此宣告对应波次准出）");
+    }
+
+    // ─────────────────── 仓库治理与构建基线（#123） ───────────────────
+
+    /// <summary>
+    /// 防的是「加了工程但没人跑」「加了探针但 CI 里没有」这类静默漂移。
+    /// 口径：只读仓库文件（slnx / ci.yml / Directory.Build.props / .github），不联网、不执行 CI。
+    /// </summary>
+    private static void RepositoryGovernanceChecks(SourceIndex index)
+    {
+        Section("仓库治理与构建基线（slnx 收口 / 探针必须进 CI / 治理文件齐备）");
+
+        var projectsOnDisk = Directory
+            .EnumerateFiles(Path.Combine(index.Root, "tests"), "*.csproj", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(index.Root, "src"), "*.csproj", SearchOption.AllDirectories))
+            .Select(p => Path.GetRelativePath(index.Root, p).Replace('\\', '/'))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+
+        var slnxPath = Path.Combine(index.Root, "BotAgent.slnx");
+        var slnx = File.Exists(slnxPath) ? File.ReadAllText(slnxPath) : string.Empty;
+        var inSlnx = Regex.Matches(slnx, "<Project\\s+Path=\"([^\"]+)\"")
+            .Select(m => m.Groups[1].Value.Replace('\\', '/'))
+            .ToList();
+        var missingFromSlnx = projectsOnDisk.Where(p => !inSlnx.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var staleInSlnx = inSlnx.Where(p => !projectsOnDisk.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        Check($"BotAgent.slnx 覆盖磁盘上全部 {projectsOnDisk.Count} 个工程（无遗漏、无悬空）",
+            missingFromSlnx.Count == 0 && staleInSlnx.Count == 0,
+            missingFromSlnx.Count == 0 && staleInSlnx.Count == 0
+                ? $"slnx 声明 {inSlnx.Count} 个"
+                : "缺：" + string.Join("、", missingFromSlnx) + "；悬空：" + string.Join("、", staleInSlnx));
+
+        // 「探针必须在 CI 出现」：tests/ 下每个带 csproj 的工程都要在 ci.yml 里被点名。
+        var ciPath = Path.Combine(index.Root, ".github/workflows/ci.yml");
+        var ci = File.Exists(ciPath) ? File.ReadAllText(ciPath) : string.Empty;
+        var probeProjects = projectsOnDisk.Where(p => p.StartsWith("tests/", StringComparison.Ordinal)).ToList();
+        var notInCi = probeProjects.Where(p => !ci.Contains(p, StringComparison.Ordinal)).ToList();
+        Check($"tests/ 下 {probeProjects.Count} 个探针工程全部出现在 ci.yml",
+            notInCi.Count == 0,
+            notInCi.Count == 0 ? null : "未进 CI：" + string.Join("、", notInCi));
+
+        var serverFiles = File.Exists(Path.Combine(index.Root, "tests/BotAgent.ServerFilesProbe/test_server_files.py"));
+        Check("python 探针 test_server_files.py 也出现在 ci.yml",
+            !serverFiles || ci.Contains("tests/BotAgent.ServerFilesProbe/test_server_files.py", StringComparison.Ordinal),
+            serverFiles ? null : "找不到 test_server_files.py（探针是不是被删了？）");
+
+        var propsPath = Path.Combine(index.Root, "Directory.Build.props");
+        var props = File.Exists(propsPath) ? File.ReadAllText(propsPath) : string.Empty;
+        Check("Directory.Build.props 存在并承载构建基线（Nullable/ImplicitUsings/NU1903 门）",
+            props.Length > 0
+            && props.Contains("<Nullable>enable</Nullable>", StringComparison.Ordinal)
+            && props.Contains("<ImplicitUsings>enable</ImplicitUsings>", StringComparison.Ordinal)
+            && props.Contains("NU1903", StringComparison.Ordinal),
+            File.Exists(propsPath) ? null : "找不到 Directory.Build.props");
+
+        var globalJson = Path.Combine(index.Root, "global.json");
+        Check("global.json 钉住 SDK（避免 CI 与开发机 SDK 漂移）",
+            File.Exists(globalJson)
+            && File.ReadAllText(globalJson).Contains("\"sdk\"", StringComparison.Ordinal),
+            File.Exists(globalJson) ? null : "找不到 global.json");
+
+        var governance = new (string Path, string Label)[]
+        {
+            (".github/CODEOWNERS", "CODEOWNERS"),
+            (".github/PULL_REQUEST_TEMPLATE.md", "PR 模板"),
+            (".github/ISSUE_TEMPLATE/bug.md", "Bug issue 模板"),
+            (".github/ISSUE_TEMPLATE/feature.md", "Feature issue 模板"),
+            ("CONTRIBUTING.md", "CONTRIBUTING.md"),
+            ("CONTRIBUTING.en.md", "CONTRIBUTING.en.md"),
+            ("SECURITY.md", "SECURITY.md"),
+            ("SECURITY.en.md", "SECURITY.en.md"),
+        };
+        var missing = governance
+            .Where(g => !File.Exists(Path.Combine(index.Root, g.Path)))
+            .Select(g => g.Label)
+            .ToList();
+        Check("治理文件齐备（" + string.Join(" / ", governance.Select(g => g.Label)) + "）",
+            missing.Count == 0, missing.Count == 0 ? null : "缺：" + string.Join("、", missing));
+
+        // PR 模板必须留着「重构前后 harness 对比」这一格 —— 那是 #106–#110 的行为等价证据位，
+        // 删掉它等于把重构验收的证据要求悄悄取消。
+        var prTemplate = Path.Combine(index.Root, ".github/PULL_REQUEST_TEMPLATE.md");
+        Check("PR 模板保留「重构前后 harness 场景对比」证据位",
+            File.Exists(prTemplate)
+            && File.ReadAllText(prTemplate).Contains("重构前后 harness 场景对比", StringComparison.Ordinal),
+            File.Exists(prTemplate) ? null : "找不到 PR 模板");
+    }
+
+// ─────────────────── 文档一致性与链接完整性（#124） ───────────────────
+
+    /// <summary>
+    /// 防的是「文档里的链接指向已经删掉的文件」——docs/engineering/ 整个目录被删过一次，
+    /// 引用它的 AGENTS.md 与探针注释就全成了死链，而没有任何东西会因此变红。
+    /// 口径：只读 git 跟踪的 *.md（用 git ls-files，避免把 publish/ 里那堆快照也算进来），
+    /// 只校验仓库内相对链接；http(s)、#锚点、mailto 不校验。
+    /// </summary>
+    private static void DocumentationChecks(SourceIndex index)
+    {
+        Section("文档一致性与链接完整性（内链存在 / 中英成对）");
+
+        var markdownFiles = TrackedMarkdownFiles(index.Root);
+        if (markdownFiles.Count == 0)
+        {
+            Check("能找到受版本控制的 markdown 文档", false, "git ls-files '*.md' 没有输出");
+            return;
+        }
+
+        var broken = new List<string>();
+        var checkedLinks = 0;
+        foreach (var relative in markdownFiles)
+        {
+            var text = File.ReadAllText(Path.Combine(index.Root, relative));
+            foreach (var target in LocalLinkTargets(text))
+            {
+                checkedLinks++;
+                var baseDirectory = Path.GetDirectoryName(Path.Combine(index.Root, relative)) ?? index.Root;
+                var resolved = Path.GetFullPath(Path.Combine(baseDirectory, target));
+                if (!File.Exists(resolved) && !Directory.Exists(resolved))
+                {
+                    broken.Add(relative + " → " + target);
+                }
+            }
+        }
+
+        Check($"受版本控制的 {markdownFiles.Count} 篇文档里 {checkedLinks} 条仓库内链接全部指向存在的文件",
+            broken.Count == 0,
+            broken.Count == 0 ? null : "断链：" + string.Join("、", broken.OrderBy(x => x, StringComparer.Ordinal)));
+
+        // 中英成对：这些文档对外是同一份内容的两版，缺一版等于其中一半读者没有入口。
+        var pairs = new (string Chinese, string English)[]
+        {
+            ("README.md", "README.en.md"),
+            ("AGENTS.md", "AGENTS.en.md"),
+            ("CONTRIBUTING.md", "CONTRIBUTING.en.md"),
+            ("SECURITY.md", "SECURITY.en.md"),
+        };
+        var unpaired = pairs.Where(p => !markdownFiles.Contains(p.Chinese, StringComparer.Ordinal)
+            || !markdownFiles.Contains(p.English, StringComparer.Ordinal)).ToList();
+        Check($"四对中英文档成对（{string.Join(" / ", pairs.Select(p => p.Chinese + "+" + p.English))}）",
+            unpaired.Count == 0,
+            unpaired.Count == 0 ? null : "不成对：" + string.Join("、", unpaired.Select(p => p.Chinese + "/" + p.English)));
+    }
+
+    /// <summary>git 跟踪的 markdown 文档（相对仓库、正斜杠、按路径排序）。读不到 git 时回退到受控目录扫描。</summary>
+    private static List<string> TrackedMarkdownFiles(string root)
+    {
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo("git")
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            start.ArgumentList.Add("ls-files");
+            start.ArgumentList.Add("*.md");
+            // 连未跟踪但未被忽略的也算：新建的文档在提交前就应该被校验，
+            // 否则「写完到提交之间」这段正好是死链最容易溜进来的窗口。
+            start.ArgumentList.Add("--cached");
+            start.ArgumentList.Add("--others");
+            start.ArgumentList.Add("--exclude-standard");
+            using var process = System.Diagnostics.Process.Start(start);
+            if (process is null) return FallbackMarkdownFiles(root);
+            var output = process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(TimeSpan.FromSeconds(30));
+            var listed = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim().Replace('\\', '/'))
+                .Where(line => line.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(line => line, StringComparer.Ordinal)
+                .ToList();
+            return listed.Count == 0 ? FallbackMarkdownFiles(root) : listed;
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
+        {
+            return FallbackMarkdownFiles(root);
+        }
+    }
+
+    private static List<string> FallbackMarkdownFiles(string root)
+    {
+        var roots = new[] { "docs", "src", "tests", "examples", ".github" };
+        var found = new List<string>();
+        var direct = new[] { "README.md", "README.en.md", "AGENTS.md", "AGENTS.en.md", "CONTRIBUTING.md", "CONTRIBUTING.en.md", "SECURITY.md", "SECURITY.en.md" };
+        foreach (var name in direct)
+        {
+            if (File.Exists(Path.Combine(root, name))) found.Add(name);
+        }
+
+        foreach (var folder in roots)
+        {
+            var directory = Path.Combine(root, folder);
+            if (!Directory.Exists(directory)) continue;
+            foreach (var path in Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                if (relative.StartsWith("bin/", StringComparison.Ordinal) || relative.Contains("/bin/", StringComparison.Ordinal)
+                    || relative.Contains("/obj/", StringComparison.Ordinal) || relative.Contains("/node_modules/", StringComparison.Ordinal)) continue;
+                found.Add(relative);
+            }
+        }
+
+        return found.Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>提取 <c>](…)</c> 里的仓库内相对路径；跳过 http(s)、mailto、纯锚点与绝对路径。</summary>
+    private static IEnumerable<string> LocalLinkTargets(string markdown)
+    {
+        foreach (Match match in Regex.Matches(markdown, "\\]\\(([^)]*)\\)"))
+        {
+            var raw = match.Groups[1].Value.Trim();
+            if (raw.Length == 0) continue;
+            // 去掉可选标题：](path "title")
+            var space = raw.IndexOf(' ');
+            var target = space >= 0 ? raw[..space] : raw;
+            target = target.Trim('<', '>', '"', '\'');
+            if (target.Length == 0) continue;
+            if (target.StartsWith('#') || target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (target.Contains("://", StringComparison.Ordinal)) continue;
+            if (Path.IsPathRooted(target)) continue;
+            var hash = target.IndexOf('#');
+            if (hash >= 0) target = target[..hash];
+            if (target.Length == 0) continue;
+            yield return target;
+        }
+    }
+
+    // ─────────────────── 接口面与配置面文档覆盖（#125） ───────────────────
+
+    /// <summary>
+    /// 防的是「路由加了一条、文档表里没有」和「README 写了某个环境变量、代码里根本不读」这两类静默漂移。
+    /// 口径：① PanelRoutes.cs 里每条 <c>new(method, match, path, …)</c> 的 path 都要出现在 docs/api-surface.md；
+    ///      ② README 两版里出现的每个 UPPER_SNAKE 键，必须要么在 src/**/*.cs 里被当成环境变量名读，要么在 docker-compose.yml 里出现。
+    /// 只查「覆盖」不查「禁止新增」：文档多写几行不算错，漏写才红。
+    /// </summary>
+    private static void SurfaceDocumentationChecks(SourceIndex index)
+    {
+        Section("接口面与配置面文档覆盖（PanelRoutes → api-surface.md / README 键 → src 或 compose）");
+
+        var surfacePath = Path.Combine(index.Root, "docs/api-surface.md");
+        var surface = File.Exists(surfacePath) ? File.ReadAllText(surfacePath) : string.Empty;
+
+        var routeFile = Path.Combine(index.Root, "src/BotAgent.Headless/Adapters/Panel/PanelRoutes.cs");
+        var routeText = File.Exists(routeFile) ? File.ReadAllText(routeFile) : string.Empty;
+        var declaredPaths = Regex
+            .Matches(routeText, "new\\(\\s*\"(?<method>[^\"]*)\",\\s*PanelMatch\\.(?<match>[A-Za-z]+),\\s*\"(?<path>[^\"]*)\"")
+            .Select(m => m.Groups["path"].Value)
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+
+        var missingPaths = declaredPaths.Where(p => !surface.Contains(p, StringComparison.Ordinal)).ToList();
+        Check($"PanelRoutes.cs 声明的 {declaredPaths.Count} 条路径全部出现在 docs/api-surface.md",
+            missingPaths.Count == 0 && declaredPaths.Count > 0,
+            declaredPaths.Count == 0
+                ? "没有从 PanelRoutes.cs 解析出任何路由（正则是不是过期了？）"
+                : missingPaths.Count == 0 ? null : "文档缺：" + string.Join("、", missingPaths));
+
+        // ZBA 是**新**面板契约（37+ 条）：它也有运行时 OpenAPI，但文档地图这一页同样要跟得上。
+        // 只查「声明了却没写进 docs/api-surface.md」，不禁止文档多写。
+        var zbaRouteFile = Path.Combine(index.Root, "src/BotAgent.Panel/ZbaRoutes.cs");
+        var zbaText = File.Exists(zbaRouteFile) ? File.ReadAllText(zbaRouteFile) : string.Empty;
+        var zbaPaths = Regex
+            .Matches(zbaText, @"new\(\s*""[A-Z]+"",\s*""(?<path>/zba/[^""]*)""")
+            .Select(m => m.Groups["path"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+        var missingZbaPaths = zbaPaths.Where(p => !surface.Contains(p, StringComparison.Ordinal)).ToList();
+        Check($"ZbaRoutes.cs 声明的 {zbaPaths.Count} 条路径全部出现在 docs/api-surface.md",
+            missingZbaPaths.Count == 0 && zbaPaths.Count > 0,
+            zbaPaths.Count == 0
+                ? "没有从 ZbaRoutes.cs 解析出任何路由（正则是不是过期了？）"
+                : missingZbaPaths.Count == 0 ? null : "文档缺：" + string.Join("、", missingZbaPaths));
+
+        // README 里写的每个 UPPER_SNAKE 键都得有出处：要么被宿主真的读，要么在 compose 里被替换。
+        // 只写文档不读的键（例如早期的 TLS 证书路径）正是 #125 要清掉的那类死键。
+        var readmeFiles = new[] { "README.md", "README.en.md" }
+            .Select(name => Path.Combine(index.Root, name))
+            .Where(File.Exists)
+            .ToList();
+        if (readmeFiles.Count == 0)
+        {
+            Check("能找到 README 配置参考", false, "README.md / README.en.md 都不存在");
+            return;
+        }
+
+        var composePath = Path.Combine(index.Root, "docker-compose.yml");
+        var compose = File.Exists(composePath) ? File.ReadAllText(composePath) : string.Empty;
+        var sourceText = string.Concat(index.Files.Select(f => f.Raw));
+
+        var documentedKeys = readmeFiles
+            .SelectMany(file => Regex.Matches(File.ReadAllText(file), "[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+").Select(m => m.Value))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        var unbackedKeys = documentedKeys
+            .Where(key => !sourceText.Contains("\"" + key + "\"", StringComparison.Ordinal)
+                && !compose.Contains(key, StringComparison.Ordinal))
+            .ToList();
+        Check($"README 里记录的 {documentedKeys.Count} 个环境变量键都能在 src 或 docker-compose.yml 里找到出处",
+            unbackedKeys.Count == 0,
+            unbackedKeys.Count == 0 ? null : "无出处的键：" + string.Join("、", unbackedKeys));
+    }
+
+    private static void DockerfileChecks(SourceIndex index)
+    {
+        Section("源码镜像闭包（Dockerfile 的 COPY 必须覆盖真实传递项目引用）");
+
+        var path = Path.Combine(index.Root, "src/BotAgent.Headless/Dockerfile");
+        if (!File.Exists(path))
+        {
+            Check("源码 Dockerfile 存在", false, path);
+            return;
+        }
+
+        var dockerfile = File.ReadAllText(path);
+        var projects = index.Projects.ToDictionary(p => p.RelativePath, StringComparer.OrdinalIgnoreCase);
+        var required = new SortedSet<string>(StringComparer.Ordinal);
+        void Visit(SourceProject project)
+        {
+            if (!required.Add(project.Name))
+            {
+                return;
+            }
+
+            foreach (var reference in project.References)
+            {
+                if (projects.TryGetValue(reference, out var dependency))
+                {
+                    Visit(dependency);
+                }
+            }
+        }
+
+        Visit(index.Projects.Single(p => p.Name == "BotAgent.Headless"));
+        var missingSources = required.Where(name => !Regex.IsMatch(dockerfile,
+            $@"^COPY\s+src/{Regex.Escape(name)}/\s+src/{Regex.Escape(name)}/\s*$", RegexOptions.Multiline)).ToList();
+        var missingProjects = required.Where(name => !Regex.IsMatch(dockerfile,
+            $@"^COPY\s+src/{Regex.Escape(name)}/{Regex.Escape(name)}\.csproj\s+src/{Regex.Escape(name)}/\s*$",
+            RegexOptions.Multiline)).ToList();
+
+        Check($"Headless 的传递源码闭包 {required.Count} 个工程都进入 Dockerfile",
+            missingSources.Count == 0 && missingProjects.Count == 0,
+            string.Join("、", missingSources.Select(x => x + "/").Concat(missingProjects.Select(x => x + ".csproj"))));
+    }
+
+    // ───────────────────────────── 核心不变量与管线性能基线（#126） ─────────────────────────────
+
+    /// <summary>
+    /// 口径：四条核心不变量（FIFO / 静默短路 / 引用只挂第一条 / 语音文字去重）必须**各有显式场景**，
+    /// 且这些场景必须真的在 CI 里被执行（写进 ci.yml 的矩阵，不是只存在于 Program.cs）。
+    /// 另外管线性能基线文件必须在，字段必须齐 —— 缺了它就是“没有守护值”，属于失败关闭。
+    /// </summary>
+    private static void CoreInvariantAndBaselineChecks(SourceIndex index)
+    {
+        Section("核心不变量场景与管线性能基线（#126）");
+
+        var harnessPath = Path.Combine(index.Root, "tests", "BotAgent.IntegrationHarness", "Program.cs");
+        var harness = File.Exists(harnessPath) ? File.ReadAllText(harnessPath) : string.Empty;
+        var ciPath = Path.Combine(index.Root, ".github", "workflows", "ci.yml");
+        var ci = File.Exists(ciPath) ? File.ReadAllText(ciPath) : string.Empty;
+
+        // ① 四条不变量各自的场景 tag（s56 起，新增场景按顺序往上排）。
+        var invariants = new (string Tag, string Name)[]
+        {
+            ("s56", "每会话 FIFO（回复按到达顺序串行）"),
+            ("s57", "静默短路在发送前（复读守卫：生成了也不发）"),
+            ("s58", "引用只挂第一条（多段回复）"),
+            ("s59", "语音与文字不重复播报同一句")
+        };
+        var missing = invariants.Where(i => !harness.Contains("\"" + i.Tag + "\"", StringComparison.Ordinal)).Select(i => i.Tag).ToList();
+        Check($"四条核心不变量各有显式 harness 场景（{string.Join(" / ", invariants.Select(i => i.Tag + " " + i.Name))}）",
+            missing.Count == 0,
+            missing.Count == 0 ? null : "缺场景：" + string.Join("、", missing));
+
+        var notInCi = invariants.Where(i => !ci.Contains(i.Tag + ",", StringComparison.Ordinal) && !ci.Contains(i.Tag + "\"", StringComparison.Ordinal)).Select(i => i.Tag).ToList();
+        Check("四条不变量场景都进了 ci.yml 的集成矩阵（不会被悄悄排除出 CI）",
+            notInCi.Count == 0,
+            notInCi.Count == 0 ? null : "ci.yml 没点名：" + string.Join("、", notInCi));
+
+        // ①b 整个 harness 注册的场景必须与 CI 矩阵一一对应（#113）：新场景只在本地跑过、CI 里没点名，
+        // 等于门禁悄悄少了一块；反向也查 —— 矩阵里留着已删除的 id 会让那组场景跑到「零场景」护栏上。
+        var registeredScenarios = System.Text.RegularExpressions.Regex.Matches(harness, "Scenario\\(\"(s\\d+)\"")
+            .Select(match => match.Groups[1].Value).Distinct(StringComparer.Ordinal)
+            .OrderBy(tag => tag, StringComparer.Ordinal).ToList();
+        var matrixScenarios = System.Text.RegularExpressions.Regex.Matches(ci, "scenarios:\\s*\"([^\"]+)\"")
+            .SelectMany(match => match.Groups[1].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.Ordinal).OrderBy(tag => tag, StringComparer.Ordinal).ToList();
+        var scenariosMissingFromCi = registeredScenarios.Except(matrixScenarios, StringComparer.Ordinal).ToList();
+        var scenariosWithoutHarness = matrixScenarios.Except(registeredScenarios, StringComparer.Ordinal).ToList();
+        Check($"harness 注册的 {registeredScenarios.Count} 个集成场景与 ci.yml 矩阵完全一致（新增场景必须同步矩阵）",
+            registeredScenarios.Count > 0 && scenariosMissingFromCi.Count == 0 && scenariosWithoutHarness.Count == 0,
+            registeredScenarios.Count == 0 ? "Program.cs 里找不到 Scenario(\"sNN\") 注册"
+                : scenariosMissingFromCi.Count > 0 ? "ci.yml 没点名：" + string.Join("、", scenariosMissingFromCi)
+                : scenariosWithoutHarness.Count > 0 ? "矩阵里有未注册场景：" + string.Join("、", scenariosWithoutHarness)
+                : null);
+
+        // ② 性能基线必须是“随代码提交的守护值”，不能运行时现算。
+        var baselinePath = Path.Combine(index.Root, "tests", "fixtures", "pipeline", "baseline.json");
+        var baselineText = File.Exists(baselinePath) ? File.ReadAllText(baselinePath) : string.Empty;
+        var required = new[] { "p50Ms", "p95Ms", "maxMultiplier", "warmupRounds", "measuredRounds", "sweepsPerRound", "recordedAt", "environment" };
+        var missingFields = required.Where(f => !baselineText.Contains("\"" + f + "\"", StringComparison.Ordinal)).ToList();
+        Check("管线性能基线 tests/fixtures/pipeline/baseline.json 存在且字段齐全",
+            baselineText.Length > 0 && missingFields.Count == 0,
+            baselineText.Length == 0 ? "文件不存在" : (missingFields.Count == 0 ? null : "缺字段：" + string.Join("、", missingFields)));
+
+        Check("PipelineEval 在 ci.yml 里被执行（基线不只在本地生效）",
+            ci.Contains("BotAgent.PipelineEval", StringComparison.Ordinal),
+            ci.Contains("BotAgent.PipelineEval", StringComparison.Ordinal) ? null : "ci.yml 里找不到 PipelineEval");
+    }
+
+    private static void ReleaseGovernanceChecks(SourceIndex index)
+    {
+        Section("发布与版本治理（版本单一真源 / CHANGELOG / dependabot / 镜像 digest）");
+
+        // 快照目录与构建产物里的副本不算仓库内容：publish/ 是发布脚本的临时快照，bin/obj 是产物。
+        static bool Excluded(string path)
+        {
+            var separator = Path.DirectorySeparatorChar;
+            foreach (var name in new[] { "bin", "obj", "publish", "node_modules", ".git", "dist" })
+            {
+                var marker = separator + name + separator;
+                if (path.Contains(marker, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
+        }
+
+        // ① 全仓只有一个 <Version>：csproj 自己写会悄悄压过 Directory.Build.props，等于又回到多个真源
+        var csprojWithVersion = Directory.EnumerateFiles(index.Root, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !Excluded(path))
+            .Where(path => File.ReadAllText(path).Contains("<Version>", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(index.Root, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var propsPath = Path.Combine(index.Root, "Directory.Build.props");
+        var propsText = File.Exists(propsPath) ? File.ReadAllText(propsPath) : string.Empty;
+        var declared = Regex.Match(propsText, "<Version>\\s*([0-9]+\\.[0-9]+\\.[0-9]+)\\s*</Version>");
+        var versionSingle = csprojWithVersion.Count == 0 && declared.Success;
+        Check("全仓只有一个 <Version>，且写在 Directory.Build.props 里（形如 x.y.z）",
+            versionSingle,
+            versionSingle
+                ? null
+                : csprojWithVersion.Count > 0
+                    ? "这些 csproj 还各自写着 <Version>：" + string.Join("、", csprojWithVersion)
+                    : "Directory.Build.props 里没有形如 1.2.3 的 <Version>");
+        if (declared.Success) Console.WriteLine($"  版本：{declared.Groups[1].Value}（来自 Directory.Build.props）");
+
+        // ①b 展示层也不许写死版本：横幅曾经硬编码 1.1.0，于是真源改了它还是旧的
+        var hardcodedBanner = Directory.EnumerateFiles(Path.Combine(index.Root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !Excluded(path))
+            .Where(path => Regex.IsMatch(File.ReadAllText(path), "（Headless）\\s*[0-9]+\\.[0-9]+\\.[0-9]+"))
+            .Select(path => Path.GetRelativePath(index.Root, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        Check("启动横幅与版本输出都从程序集读版本（源码里没有写死的 x.y.z）",
+            hardcodedBanner.Count == 0,
+            hardcodedBanner.Count == 0 ? null : "这些文件写死了版本号：" + string.Join("、", hardcodedBanner));
+
+        // ② CHANGELOG：只要求存在 + 有 Unreleased 段（段内可以为空，发版后不该因此判红）
+        var changelogPath = Path.Combine(index.Root, "CHANGELOG.md");
+        var changelog = File.Exists(changelogPath) ? File.ReadAllText(changelogPath) : string.Empty;
+        var hasUnreleased = changelog.Contains("## [Unreleased]", StringComparison.Ordinal);
+        Check("CHANGELOG.md 存在且带 Unreleased 段",
+            hasUnreleased,
+            hasUnreleased ? null : File.Exists(changelogPath) ? "CHANGELOG.md 里没有 ## [Unreleased] 段" : "缺 CHANGELOG.md");
+
+        // ③ dependabot：三个生态都要有，否则"依赖升级"只覆盖一半
+        var dependabotPath = Path.Combine(index.Root, ".github", "dependabot.yml");
+        var dependabot = File.Exists(dependabotPath) ? File.ReadAllText(dependabotPath) : string.Empty;
+        var missingEcosystems = new[] { "nuget", "github-actions", "npm" }
+            .Where(name => !dependabot.Contains("package-ecosystem: " + name, StringComparison.Ordinal))
+            .ToList();
+        Check("dependabot 覆盖 nuget / github-actions / npm 三个生态",
+            missingEcosystems.Count == 0,
+            missingEcosystems.Count == 0 ? null : "缺生态：" + string.Join("、", missingEcosystems));
+
+        // ④ 所有 Dockerfile 的 FROM 都钉 digest：浮动 tag 会让"同一份代码"构建出不同镜像
+        var dockerfiles = Directory.EnumerateFiles(index.Root, "*Dockerfile*", SearchOption.AllDirectories)
+            .Where(path => !Excluded(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var floating = new List<string>();
+        foreach (var file in dockerfiles)
+        {
+            foreach (var line in File.ReadAllLines(file))
+            {
+                var trimmed = line.TrimStart();
+                if (!trimmed.StartsWith("FROM ", StringComparison.OrdinalIgnoreCase)) continue;
+                if (Regex.IsMatch(trimmed, "@sha256:[0-9a-f]{64}")) continue;
+                floating.Add(Path.GetRelativePath(index.Root, file).Replace(Path.DirectorySeparatorChar, '/') + " → " + trimmed);
+            }
+        }
+
+        var dockerfilesPinned = dockerfiles.Count > 0 && floating.Count == 0;
+        Check($"全部 {dockerfiles.Count} 个 Dockerfile 的 FROM 都钉了 digest",
+            dockerfilesPinned,
+            dockerfilesPinned ? null : dockerfiles.Count == 0 ? "一个 Dockerfile 都没找到" : string.Join("；", floating));
+
+        // ⑤ compose 里从外部拉取的镜像必须钉 digest；本地构建的 qqchat-* 没有远端 digest 可钉
+        var composePath = Path.Combine(index.Root, "docker-compose.yml");
+        var compose = File.Exists(composePath) ? File.ReadAllText(composePath) : string.Empty;
+        var externalImages = Regex.Matches(compose, "^\\s*image:\\s*(\\S+)\\s*$", RegexOptions.Multiline)
+            .Select(match => match.Groups[1].Value)
+            .Where(image => !image.StartsWith("qqchat-", StringComparison.Ordinal))
+            .ToList();
+        var unpinned = externalImages.Where(image => !Regex.IsMatch(image, "@sha256:[0-9a-f]{64}$")).ToList();
+        var composePinned = externalImages.Count > 0 && unpinned.Count == 0;
+        Check($"compose 里 {externalImages.Count} 个外部镜像全部钉了 digest",
+            composePinned,
+            composePinned ? null : externalImages.Count == 0 ? "没解析出任何外部镜像（正则是不是过期了？）" : "未钉：" + string.Join("、", unpinned));
+    }
+
+    private static IReadOnlyList<(string Path, int Count)> UseCaseIo(SourceIndex index)
+        => index.UseCaseFiles.Select(f => (Path: f.RelativePath, Count: Metrics.CountConcreteIoNew(f)))
+            .Where(x => x.Count > 0).OrderByDescending(x => x.Count).ThenBy(x => x.Path, StringComparer.Ordinal).ToList();
 
     // ─────────────────────────── 棘轮：只许更严 ───────────────────────────
 
@@ -182,23 +1060,33 @@ public static class Program
         // R2：SQL 只允许出现在 Adapters/Persistence/**
         var sqlFiles = index.PerFile("", Metrics.CountSqlLiterals);
         var sqlOutside = sqlFiles
-            .Where(x => !x.Path.StartsWith(Baseline.SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase))
+            .Where(x => !Baseline.AllowsSql(x.Path))
             .ToList();
-        Check($"R2：SQL 只出现在 {Baseline.SqlAllowedPrefix}**", sqlOutside.Count == 0,
+        Check($"R2：SQL 只出现在 {Baseline.SqlAllowedPrefix}** 或逐文件等价迁移位置", sqlOutside.Count == 0,
             sqlOutside.Count == 0 ? $"（{sqlFiles.Count} 个文件）" : string.Join("、", sqlOutside.Select(x => $"{x.Path}×{x.Count}")));
         Ratchet("SQL 字面量总数", sqlFiles.Sum(x => x.Count), Baseline.SqlLiteralTotal, "全 src");
 
         // R3：直接文件 IO 只允许出现在 Adapters/** 与具名例外里
         var ioFiles = index.PerFile("", Metrics.CountDirectFileIo);
         var ioOutside = ioFiles
-            .Where(x => !x.Path.StartsWith(Baseline.FileIoAllowedPrefix, StringComparison.OrdinalIgnoreCase)
-                        && !Baseline.FileIoAllowedFiles.ContainsKey(x.Path))
+            .Where(x => !Baseline.AllowsFileIo(x.Path))
             .ToList();
-        Check($"R3：直接文件 IO 只出现在 {Baseline.FileIoAllowedPrefix}** 与具名例外里", ioOutside.Count == 0,
+        Check($"R3：直接文件 IO 只出现在 {Baseline.FileIoAllowedPrefix}**、具名例外或逐文件等价迁移位置", ioOutside.Count == 0,
             ioOutside.Count == 0
                 ? $"（{ioFiles.Count} 个文件，其中例外 {Baseline.FileIoAllowedFiles.Count} 个）"
                 : string.Join("、", ioOutside.Select(x => $"{x.Path}×{x.Count}")));
         Ratchet("直接文件 IO 总处数", ioFiles.Sum(x => x.Count), Baseline.FileIoTotal, "全 src");
+
+        foreach (var name in new[] { "AppDatabase", "AgentImageStore", "AgentSessionStore", "AudioCache",
+            "ConversationStore", "EpisodeStore", "HostMetrics", "JargonStore", "LegacyJsonImporter",
+            "MemberProfileStore", "MemberRoleStore", "MoodStore", "MusicStore", "OwnMessageStore",
+            "PanelPasswordStore", "PromptTemplateStore", "SecretFiles", "SecretsStore", "StickerStore",
+            "TenantQuotaStore", "TtsConfFile" })
+        {
+            var facade = index.ByPath($"src/BotAgent.Headless/Adapters/Persistence/{name}.cs");
+            var implementation = index.ByPath($"src/BotAgent.Storage/{name}.cs");
+            Check($"C2：{name} 保留兼容入口但不再复制 SQL/文件 IO", IsStorageFacade(facade, implementation, name));
+        }
 
         // 读系统时间：只允许 IClock 的唯一实现那个文件（别处一律走 Clock / 注入的 IClock）
         var clockFiles = index.PerFile("", Metrics.CountClockReads);
@@ -234,7 +1122,7 @@ public static class Program
 
         Section("棘轮 · 边界（面板 / 用例层）");
 
-        var panel = index.ByPath("Adapters/Panel/WebUiServer.cs");
+        var panel = index.ByPath("src/BotAgent.Headless/Adapters/Panel/WebUiServer.cs");
         if (panel is not null)
         {
             Ratchet("面板直接调 _agent. 次数", Metrics.CountPanelAgentCalls(panel), Baseline.PanelAgentCalls, panel.RelativePath);
@@ -242,7 +1130,7 @@ public static class Program
 
         // R5：面板（除具名例外外）不许出现 SQL / 直接文件 IO / 直读系统时间 ——
         // 面板是"编排 + 映射"，数据存取与时间都得从别人那里问。
-        var panelFiles = index.In("Adapters/Panel").ToList();
+        var panelFiles = index.PanelFiles.ToList();
         var panelCore = panelFiles
             .Where(f => !Baseline.PanelExemptFiles.Contains(f.RelativePath, StringComparer.OrdinalIgnoreCase))
             .ToList();
@@ -261,16 +1149,17 @@ public static class Program
                 .Sum(Metrics.CountDirectFileIo),
             Baseline.PanelExemptFileIo, string.Join("、", Baseline.PanelExemptFiles));
 
-        var useCaseNews = index.PerFile("Services", Metrics.CountConcreteIoNew);
+        var useCaseNews = UseCaseIo(index);
         Ratchet("用例层 new 具体 IO 组件处数", useCaseNews.Sum(x => x.Count), Baseline.ConcreteIoNews,
             useCaseNews.Count == 0 ? "（已归零）" : string.Join("、", useCaseNews.Select(x => $"{x.Path}×{x.Count}")));
 
         // R9：依赖方向（§3.2 的 `db → service`）—— 硬规则：用例层不许认识适配层。
-        var servicesFiles = index.In("Services").ToList();
+        // Wave3 起用例层 = Engine（全部）+ Headless 的 Services/**，两边同口径。
+        var servicesFiles = index.UseCaseFiles.ToList();
         var crossLayerFiles = servicesFiles
             .Where(f => f.NoComments.Contains("BotAgent.Adapters", StringComparison.Ordinal))
             .ToList();
-        Check($"R9：Services/ 里没有对 BotAgent.Adapters 的引用（共 {servicesFiles.Count} 个文件）",
+        Check($"R9：用例层（Engine + Services）没有对 BotAgent.Adapters 的引用（共 {servicesFiles.Count} 个文件）",
             crossLayerFiles.Count == 0,
             crossLayerFiles.Count == 0 ? "用例层只吃端口" : string.Join("、", crossLayerFiles.Select(f => f.RelativePath)));
 
@@ -290,29 +1179,38 @@ public static class Program
 
     // ─────────────────────────── 目标布局（R1 / R6 / R7） ───────────────────────────
 
+    private static bool IsStorageFacade(SourceFile? facade, SourceFile? implementation, string name)
+        => facade is not null && implementation is not null
+            && facade.CodeOnly.Contains("StorageModule::BotAgent.Adapters.Persistence." + name, StringComparison.Ordinal)
+            && Metrics.CountSqlLiterals(facade) == 0 && Metrics.CountDirectFileIo(facade) == 0;
+
     private static void LayoutChecks(SourceIndex index)
     {
-        Section("目标布局 · Domain 必须零 IO（目录还不存在时按 0 违规通过）");
+        Section("目标布局 · Core / 各工程 Domain 必须非空且零 IO");
 
-        var domain = index.In("Domain").ToList();
-        Check($"Domain/ 文件数（当前 {domain.Count}）", true, null);
+        // Purity applies to the whole Core assembly (domain + contracts); size/surface rules
+        // apply only to actual Domain folders so configuration contracts are not mistaken for rules.
+        var core = index.Files.Where(f => f.ProjectName == "BotAgent.Core").ToList();
+        var domain = index.DomainFiles.ToList();
+        Check($"Core 文件数（当前 {core.Count}）", core.Count > 0, "不允许空扫描假绿");
+        Check($"各工程 Domain/ 文件数（当前 {domain.Count}）", domain.Count > 0, "不允许空扫描假绿");
 
-        Check("Domain/ 里没有 SQL 字面量", domain.All(f => Metrics.CountSqlLiterals(f) == 0),
-            string.Join("、", domain.Where(f => Metrics.CountSqlLiterals(f) > 0).Select(f => f.RelativePath)));
-        Check("Domain/ 里没有直接文件 IO", domain.All(f => Metrics.CountDirectFileIo(f) == 0),
-            string.Join("、", domain.Where(f => Metrics.CountDirectFileIo(f) > 0).Select(f => f.RelativePath)));
-        Check("Domain/ 里没有读系统时间", domain.All(f => Metrics.CountClockReads(f) == 0),
-            string.Join("、", domain.Where(f => Metrics.CountClockReads(f) > 0).Select(f => f.RelativePath)));
-        // 时间从外面给（显式 now 参数）：Domain 里连时钟入口都不许出现 ——
+        Check("Core 里没有 SQL 字面量", core.All(f => Metrics.CountSqlLiterals(f) == 0),
+            string.Join("、", core.Where(f => Metrics.CountSqlLiterals(f) > 0).Select(f => f.RelativePath)));
+        Check("Core 里没有直接文件 IO", core.All(f => Metrics.CountDirectFileIo(f) == 0),
+            string.Join("、", core.Where(f => Metrics.CountDirectFileIo(f) > 0).Select(f => f.RelativePath)));
+        Check("Core 里没有读系统时间", core.All(f => Metrics.CountClockReads(f) == 0),
+            string.Join("、", core.Where(f => Metrics.CountClockReads(f) > 0).Select(f => f.RelativePath)));
+        // 时间从外面给（显式 now 参数）：Core 里连时钟入口都不许出现 ——
         // 否则"纯规则可测"这条会慢慢退化成"读全局时钟"，假时钟测试就白做了。
-        Check("Domain/ 里不出现时钟入口（Clock.）",
-            domain.All(f => !Metrics.ContainsWord(f.NoComments, "Clock")),
-            string.Join("、", domain.Where(f => Metrics.ContainsWord(f.NoComments, "Clock")).Select(f => f.RelativePath)));
-        Check("Domain/ 里没有 HttpClient / Sqlite / 出网", domain.All(f => !Metrics.ContainsWord(f.NoComments, "HttpClient")
+        Check("Core 里不出现时钟入口（Clock.）",
+            core.All(f => !Metrics.ContainsWord(f.NoComments, "Clock")),
+            string.Join("、", core.Where(f => Metrics.ContainsWord(f.NoComments, "Clock")).Select(f => f.RelativePath)));
+        Check("Core 里没有 HttpClient / Sqlite / 出网", core.All(f => !Metrics.ContainsWord(f.NoComments, "HttpClient")
                 && !Metrics.ContainsWord(f.NoComments, "SqliteConnection")
                 && !f.NoComments.Contains("Microsoft.Data.Sqlite", StringComparison.Ordinal)
                 && !f.NoComments.Contains("System.Net.Http", StringComparison.Ordinal)),
-            string.Join("、", domain.Where(f => f.NoComments.Contains("HttpClient", StringComparison.Ordinal)
+            string.Join("、", core.Where(f => f.NoComments.Contains("HttpClient", StringComparison.Ordinal)
                 || f.NoComments.Contains("Sqlite", StringComparison.Ordinal)).Select(f => f.RelativePath)));
 
         var longestDomain = domain.Select(f => f.LineCount).DefaultIfEmpty(0).Max();
@@ -320,7 +1218,7 @@ public static class Program
             .Where(f => f.LineCount > Baseline.DomainFileTargetLines)
             .Select(f => $"{f.RelativePath}({f.LineCount})")
             .ToList();
-        Check($"R6：Domain/ 每个文件 ≤ {Baseline.DomainFileTargetLines} 行", overTarget.Count == 0,
+        Check($"R6：各工程 Domain/ 每个文件 ≤ {Baseline.DomainFileTargetLines} 行", overTarget.Count == 0,
             overTarget.Count == 0 ? $"最长 {longestDomain} 行" : $"超标：{string.Join("、", overTarget)}");
 
         var fatTypes = new List<string>();
@@ -329,7 +1227,7 @@ public static class Program
         {
             foreach (var type in Metrics.Blocks(file).Where(b => b.Kind == BlockKind.Type))
             {
-                var (fields, methods) = Metrics.TypeSurface(file, type.Name);
+                var (fields, methods) = Metrics.TypeSurface(file, type);
                 if (fields > Baseline.DomainTypeMaxFields || methods > Baseline.DomainTypeMaxMethods)
                 {
                     fatTypes.Add($"{file.RelativePath}:{type.Name}(字段{fields}/方法{methods})");
@@ -337,12 +1235,13 @@ public static class Program
 
                 // 一个类型被拆成多个 partial 文件时，单看一个文件会漏掉另一部分的字段 / 方法 ——
                 // 这里把同名 partial 的**各部分加起来**再判，免得"拆文件"变成绕过 R7 的口子。
-                if (Metrics.IsPartialType(file, type.Name))
+                if (Metrics.IsPartialType(file, type))
                 {
-                    if (!partialParts.TryGetValue(type.Name, out var parts))
+                    var key = Metrics.TypeKey(file, type);
+                    if (!partialParts.TryGetValue(key, out var parts))
                     {
                         parts = new List<(string File, int Fields, int Methods)>();
-                        partialParts[type.Name] = parts;
+                        partialParts[key] = parts;
                     }
 
                     parts.Add((file.RelativePath, fields, methods));
@@ -362,37 +1261,98 @@ public static class Program
             }
         }
 
-        Check($"Domain/ 单类型字段 ≤ {Baseline.DomainTypeMaxFields}、方法 ≤ {Baseline.DomainTypeMaxMethods}"
+        Check($"各工程 Domain/ 单类型字段 ≤ {Baseline.DomainTypeMaxFields}、方法 ≤ {Baseline.DomainTypeMaxMethods}"
               + $"（{merged.Count} 个 partial 类型已合并计数）",
             fatTypes.Count == 0, string.Join("、", fatTypes));
     }
 
     // ─────────────────── 统一工具目录（通用 Agent 平台 · 批次 A） ───────────────────
 
+// ────────────────── 统一工具注册表（#115）──────────────────
+
+    /// <summary>
+    /// #115 的四条支点：可见性判定**只有一处**、聊天声明**全部元数据化**、
+    /// MCP 作为**追加来源**进统一查询面、面板投影与内建计数**分列**（否则“发现到一个 MCP 服务器”
+    /// 会看起来像“内建能力目录多了一条”，而 10/10/6 是被钉死的基线）。
+    /// </summary>
+    private static void ToolRegistryChecks(SourceIndex index)
+    {
+        Section("统一工具注册表 · 可见性单入口、元数据化、MCP 追加来源（#115）");
+
+        var visibility = index.ByPath("src/BotAgent.Engine/Tools/ToolVisibility.cs");
+        Check("可见性判定只有一处（Engine/Tools/ToolVisibility.cs）",
+            visibility is not null
+            && visibility.NoComments.Contains("class ToolVisibility", StringComparison.Ordinal)
+            && visibility.NoComments.Contains("PlatformSourceExecution.Current", StringComparison.Ordinal),
+            visibility is null ? "找不到 ToolVisibility.cs" : "单入口在 Engine/Tools");
+
+        // 兼容壳不许自己再读开关：否则“单一入口”会被悄悄长出第二条判定。
+        var shell = index.ByPath("src/BotAgent.Engine/Reply/ReplyToolAvailability.cs");
+        var shellReadsSwitches = shell is not null
+            && new[] { "EnableWebSearch", "EnableMusic", "EnableVoice", "EnableStickers", "EnablePoke" }
+                .Any(token => shell.NoComments.Contains(token, StringComparison.Ordinal));
+        Check("聊天兼容壳 ReplyToolAvailability 不再自己读开关（判定全委托）",
+            shell is not null && !shellReadsSwitches,
+            shell is null ? "找不到 ReplyToolAvailability.cs" : (shellReadsSwitches ? "壳里又出现了开关读取" : "没有开关读取"));
+
+        // 元数据化：声明侧只留 FeatureKey，判定侧只有一张开关表。
+        var featureKeys = Regex.Matches(
+                index.ByPath("src/BotAgent.Core/Domain/Tools/ChatToolSpecs.cs")?.NoComments ?? string.Empty,
+                "FeatureKey:\\s*ToolFeature\\.")
+            .Count;
+        var switches = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolSwitches.cs");
+        Check("每个聊天工具声明都带 FeatureKey（10 条，名字只在 ToolFeature 里出现一次）",
+            featureKeys == 10 && switches is not null
+            && switches.NoComments.Contains("_ => false", StringComparison.Ordinal),
+            $"带 FeatureKey 的声明 = {featureKeys}（期望 10）；开关表 = {(switches is null ? "缺" : "在")}");
+
+        var inventory = index.ByPath("src/BotAgent.Engine/Tools/ToolInventory.cs");
+        Check("MCP 以追加来源进统一查询面（ToolOrigin.Mcp，不改内建 26 条）",
+            inventory is not null
+            && inventory.NoComments.Contains("ToolOrigin.Mcp", StringComparison.Ordinal)
+            && inventory.NoComments.Contains("ToolDirectory.Builtin", StringComparison.Ordinal),
+            inventory is null ? "找不到 Engine/Tools/ToolInventory.cs" : "查询面在 Engine/Tools");
+
+        // 面板：内建计数与 MCP 必须分列（count 仍是目录条数）。
+        var panel = index.ByPath("src/BotAgent.Headless/Adapters/Panel/WebUiServer.Tools.cs");
+        var split = panel is not null
+            && panel.NoComments.Contains("ToolInventory.Create", StringComparison.Ordinal)
+            && panel.NoComments.Contains("inventory", StringComparison.Ordinal);
+        Check("面板工具页把内建计数与 MCP 分列（count 不变 + inventory 块）",
+            split && panel!.NoComments.Contains("directory.Specs.Count", StringComparison.Ordinal),
+            panel is null ? "找不到 WebUiServer.Tools.cs" : (split ? "count 与 inventory 分列" : "投影未接上"));
+    }
+
     private static void ToolDirectoryChecks(SourceIndex index)
     {
-        Section("统一工具目录 · 声明在 Domain、执行者只在 Services/Tools（批次 A）");
+        Section("统一工具目录 · 声明在 Domain、执行者登记在 Engine/Tools（批次 A）");
 
         var executorFiles = index.Files
             .Where(f => f.NoComments.Contains("IToolExecutor", StringComparison.Ordinal))
             .Select(f => f.RelativePath)
             .ToList();
-        // 口径（2026-09-24 批次 A 收尾后）：接口与登记在 Services/Tools/**，
-        // **真实现**在各族的执行体文件里（Services/Agent/**）—— 两条都允许，但 **Domain/** 里一个词都不许有。
+        // 口径（Wave3 落位后）：接口与登记在 Engine/Tools/**；
+        // **真实现**留在宿主的执行体文件里（Headless/Services/Agent/**）—— 两条都允许，但 **Domain/** 里一个词都不许有。
         var stray = executorFiles
-            .Where(p => !p.StartsWith("Services/Tools/", StringComparison.Ordinal)
-                        && !p.StartsWith("Services/Agent/", StringComparison.Ordinal))
+            .Where(p => !p.StartsWith("src/BotAgent.Engine/Tools/", StringComparison.Ordinal)
+                        && !p.StartsWith("src/BotAgent.Headless/Services/Agent/", StringComparison.Ordinal))
             .ToList();
-        Check("IToolExecutor 相关代码只出现在 Services/Tools/** 或 Services/Agent/**（Domain 里不许出现）",
+        Check("IToolExecutor 相关代码只出现在 Engine/Tools/** 或 Headless/Services/Agent/**（Domain 里不许出现）",
             executorFiles.Count > 0 && stray.Count == 0,
             executorFiles.Count == 0 ? "一处都没解析到（执行者登记是不是被删了？）" : string.Join("、", stray));
+
+        var executorContract = index.ByPath("src/BotAgent.Engine/Tools/ToolExecutors.cs");
+        Check("IToolExecutor 契约落在 Engine/Tools/ToolExecutors.cs",
+            executorContract is not null
+            && executorContract.NoComments.Contains("interface IToolExecutor", StringComparison.Ordinal),
+            executorContract is null ? "找不到 Engine/Tools/ToolExecutors.cs" : "接口 + 登记表都在 Engine/Tools");
 
         // “真实现”必须是**类型声明**上真接了这个接口（不是靠注释声称）
         var realImplements = new List<string>();
         foreach (var (file, type) in new[]
                  {
-                     ("Services/Agent/ServerAgentRunner.cs", "ServerAgentRunner"),
-                     ("Services/Agent/QqActionTool.cs", "SessionQqActionHost"),
+                     ("src/BotAgent.Headless/Services/Agent/ServerAgentRunner.cs", "ServerAgentRunner"),
+                     ("src/BotAgent.Headless/Services/Agent/QqActionTool.cs", "SessionQqActionHost"),
                  })
         {
             var text = index.ByPath(file)?.NoComments ?? string.Empty;
@@ -405,7 +1365,7 @@ public static class Program
         Check("★ 两家真实现（// 的两族）在类型声明上真接了 IToolExecutor",
             realImplements.Count == 2, string.Join("、", realImplements));
 
-        var specFile = index.ByPath("Domain/Tools/ToolSpec.cs");
+        var specFile = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolSpec.cs");
         Check("工具声明落在 Domain/Tools/ToolSpec.cs",
             specFile is not null, specFile is null ? "找不到（挪走了请同步这条与文档）" : "在 Domain/Tools/ToolSpec.cs");
 
@@ -416,12 +1376,15 @@ public static class Program
 
         // // 那路的工具名单：批次 D 起**来自统一目录**（ParseTools 不再内联数组）——
         // 少一个 = “能执行却没登记”，多一个 = “登记了却没人执行”，两种都在这一条上暴露。
-        var declared = NamesIn(index, "Services/Tools/ServerToolSpecs.cs", "new\\(\"([a-z]+)\",\\s*ToolCategory\\.");
-        var runner = index.ByPath("Services/Agent/ServerAgentRunner.cs");
+        var declared = NamesIn(index, "src/BotAgent.Engine/Tools/ServerToolSpecs.cs", "new\\(\"([a-z]+)\",\\s*ToolCategory\\.");
+        // #136：解析与“留空=全开”的口径搬进单入口 ServerToolAccess，runner 只消费它。
+        var access = index.ByPath("src/BotAgent.Engine/Tools/ServerToolAccess.cs");
+        var runner = index.ByPath("src/BotAgent.Headless/Services/Agent/ServerAgentRunner.cs");
         var usesDirectory = runner is not null
-            && runner.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal)
-            && runner.NoComments.Contains("ServerToolSpecs.All", StringComparison.Ordinal);
-        Check($"// 的工具名单来自统一目录（目录 {declared.Count} 个；不再内联数组）",
+            && runner.NoComments.Contains("ServerToolAccess.Resolve", StringComparison.Ordinal)
+            && (access?.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal) == true
+                || runner.NoComments.Contains("ServerToolSpecs.Names", StringComparison.Ordinal));
+        Check($"// 的工具名单来自统一目录（目录 {declared.Count} 个；单入口 ServerToolAccess）",
             declared.Count == 6 && declared.Distinct(StringComparer.Ordinal).Count() == 6 && usesDirectory,
             runner is null ? "找不到 Services/Agent/ServerAgentRunner.cs" : $"读目录 = {usesDirectory}");
 
@@ -430,12 +1393,12 @@ public static class Program
         Anchor(index, "[可用工具]", "提示词里的工具清单段（批次 D）");
 
         // QQ 动作那条：目录（QqActionCatalog）是唯一真源 —— 投影必须由它推出来，不许手抄一份。
-        var qqProjection = index.ByPath("Services/Tools/QqToolSpecs.cs");
+        var qqProjection = index.ByPath("src/BotAgent.Engine/Tools/QqToolSpecs.cs");
         var isProjected = qqProjection is not null
             && qqProjection.NoComments.Contains("QqActionCatalog.All", StringComparison.Ordinal);
         Check("QQ 动作目录由 QqActionCatalog 投影而来（不是手抄的第二个清单）",
             isProjected,
-            qqProjection is null ? "找不到 Services/Tools/QqToolSpecs.cs"
+            qqProjection is null ? "找不到 Engine/Tools/QqToolSpecs.cs"
             : isProjected ? "投影自 QqActionCatalog.All" : "没看到 QqActionCatalog.All");
     }
 
@@ -481,9 +1444,13 @@ public static class Program
         Anchor(index, "/api/approvals/decide", "面板审批写路径（高权限：前置 fail-closed）");
         Anchor(index, "PanelDecide", "面板决策复用同一份校验（ApprovalFlow.Handle）");
         Anchor(index, "panel_token_required", "未配面板令牌 → 面板审批不可用（fail-closed）");
+        // #117：面板不是会话 —— 拿不到原始租约时必须失败关闭（旧实现 Enter(null) 后照批）；
+        // 并且决策与执行之间要再核一次租约，不能只信决策那一刻的快照。
+        Anchor(index, "source_unavailable", "#117 面板决策无原始租约 → 失败关闭");
+        Anchor(index, "执行前平台源已换代", "#117 执行前复核平台源租约（决策≠执行）");
 
         // 前置校验必须长在**写路径自己**身上：只在 UI 拦 = 等于没拦（接口还能被直接打）。
-        var approvals = index.ByPath("Adapters/Panel/WebUiServer.Approvals.cs");
+        var approvals = index.ByPath("src/BotAgent.Headless/Adapters/Panel/WebUiServer.Approvals.cs");
         Check("写路径自己带两道前置（审批开关 + 面板令牌）",
             approvals is not null
             && approvals.NoComments.Contains("approvals_disabled", StringComparison.Ordinal)
@@ -497,24 +1464,67 @@ public static class Program
     {
         Section("有限步进循环（批次 E）");
 
-        Anchor(index, "AgentTurnLoop", "有限步进循环骨架（模型调用 + 上限 + 不空转）");
-        Anchor(index, "InlineTurnTools", "当场做掉只读工具");
+        AnchorIn(index, "AgentTurnLoop", "src/BotAgent.Engine/Reply/", "有限步进循环骨架（模型调用 + 上限 + 不空转）");
+        AnchorIn(index, "InlineTurnTools", "src/BotAgent.Engine/Reply/", "当场做掉只读工具");
         Anchor(index, "MaxAgentSteps", "步数上限设置（默认 1 = 与改造前逐字一致）");
-        Anchor(index, "[循环] 当场搜索", "当场那条路的现场日志");
+        AnchorIn(index, "[循环] 当场搜索", "src/BotAgent.Engine/Reply/", "当场那条路的现场日志");
 
         // 默认值必须写在 AppSettings 里（§9.2：不许散在代码里）；上限必须在循环里被钳住。
-        var settings = index.ByPath("Services/AppSettings.cs");
+        // AppSettings 已拆成 Part1..Part5，这里按全部 partial 查（只认一条定义，防止默认值散落）。
+        var settingsParts = index.Files
+            .Where(f => f.ProjectName == "BotAgent.Core"
+                        && f.ProjectRelativePath.StartsWith("Contracts/AppSettings.", StringComparison.Ordinal))
+            .ToList();
+        var maxStepDefaults = settingsParts
+            .Where(f => Regex.IsMatch(f.NoComments, @"\bMaxAgentSteps\s*\{\s*get;\s*set;\s*\}\s*=\s*1\s*;"))
+            .ToList();
         Check("★ MaxAgentSteps 的默认值写在 AppSettings 且是 1",
-            settings is not null
-            && Regex.IsMatch(settings.NoComments, @"MaxAgentSteps\s*\{\s*get;\s*set;\s*\}\s*=\s*1\s*;"),
-            "默认值写在 AppSettings（= 1）");
+            settingsParts.Count > 0 && maxStepDefaults.Count == 1,
+            settingsParts.Count == 0 ? "找不到 Contracts/AppSettings.Part*.cs"
+            : maxStepDefaults.Count == 1 ? $"在 {maxStepDefaults[0].RelativePath}（= 1）"
+            : "默认值缺失或重复");
 
-        var loop = index.ByPath("Services/Reply/AgentTurnLoop.cs");
+        var loop = index.ByPath("src/BotAgent.Engine/Reply/AgentTurnLoop.cs");
         Check("★ 步数在循环里被钳到 1..3",
             loop is not null
             && loop.NoComments.Contains("Math.Clamp(maxSteps, MinSteps, MaxSteps)", StringComparison.Ordinal)
             && loop.NoComments.Contains("public const int MaxSteps = 3;", StringComparison.Ordinal),
             "钳位与上限常量都在 AgentTurnLoop 里");
+
+        var inline = index.ByPath("src/BotAgent.Engine/Reply/InlineTurnTools.cs");
+        var pipeline = index.ByPath("src/BotAgent.Engine/Reply/ReplyPipeline.cs");
+        Check("★ InlineTurnTools / ReplyPipeline 落在 Engine/Reply",
+            inline is not null && pipeline is not null,
+            inline is null ? "找不到 Engine/Reply/InlineTurnTools.cs"
+            : pipeline is null ? "找不到 Engine/Reply/ReplyPipeline.cs"
+            : "两处都在 Engine/Reply");
+
+        // #106：回复主链按职责拆成 6 个独立类。这里只查"文件还在、名字没被合回去"，
+        // 不查它们内部怎么实现 —— 那是各个类自己的事。旧的大 partial 文件已删除，
+        // 断言它**没有回来**：否则重构很容易一步步退回到一个 1600 行的文件。
+        var responsibilities = new[]
+        {
+            "ReplyInboundGates.cs",
+            "ReplyInboundMedia.cs",
+            "ReplyTurnContext.cs",
+            "ReplyTurnActions.cs",
+            "ReplyDelivery.cs",
+            "ReplyQuoteContext.cs",
+        };
+        var missingResponsibilities = responsibilities
+            .Where(name => index.ByPath("src/BotAgent.Engine/Reply/" + name) is null)
+            .ToList();
+        Check("★ 回复主链的职责类各自独立成文件（#106）",
+            missingResponsibilities.Count == 0,
+            missingResponsibilities.Count == 0
+                ? "6 个职责类都在 Engine/Reply"
+                : "缺文件：" + string.Join(", ", missingResponsibilities));
+
+        Check("★ 旧的 ReplyPipeline.Delivery.cs 已并入 ReplyTurnActions（#106）",
+            index.ByPath("src/BotAgent.Engine/Reply/ReplyPipeline.Delivery.cs") is null,
+            index.ByPath("src/BotAgent.Engine/Reply/ReplyPipeline.Delivery.cs") is null
+                ? "没有这个 partial 文件了"
+                : "ReplyPipeline.Delivery.cs 还在 —— 投递/动作又回到了 partial 里");
     }
 
     // ─────────────────── `//` 那路过闸门（批次 A 收尾） ───────────────────
@@ -528,7 +1538,7 @@ public static class Program
         Anchor(index, "AgentServerUseGate", "开关（默认关 = 与今天逐字一致）");
 
         // 例外只能按**工具名**点名：断言里不许出现“按类别放开”的写法（那就等于把 I3 拆了）。
-        var policy = index.ByPath("Domain/Permissions/ToolPolicy.cs");
+        var policy = index.ByPath("src/BotAgent.Core/Domain/Permissions/ToolPolicy.cs");
         var isNameSet = policy is not null
             && Regex.IsMatch(policy.NoComments, @"IReadOnlySet<string>\?\s+HighRiskExceptions");
         Check("★ 例外字段是**工具名集合**（不是类别集合）—— I3 不被这类改动削弱",
@@ -536,7 +1546,7 @@ public static class Program
             policy is null ? "找不到 ToolPolicy.cs" : isNameSet ? "IReadOnlySet<string> HighRiskExceptions" : "字段类型不对");
 
         // 闸门必须**在类别禁令处**才认这条例外（审批分支不许认）
-        var gate = index.ByPath("Domain/Permissions/ToolGate.cs");
+        var gate = index.ByPath("src/BotAgent.Core/Domain/Permissions/ToolGate.cs");
         var wiredAtCategoryBan = gate is not null
             && gate.NoComments.Contains("policy.HighRiskExceptions?.Contains(descriptor.Id)", StringComparison.Ordinal)
             && gate.NoComments.Contains("approval_cannot_grant", StringComparison.Ordinal);
@@ -546,6 +1556,158 @@ public static class Program
     }
 
     // ─────────────────── 第三条通道（通用 Agent 平台 · 批次 F） ───────────────────
+
+    // ─────────────────────── 任务与执行状态（#114 / ADR-0002） ───────────────────────
+
+    /// <summary>
+    /// 任务运行时的架构护栏（#114）：状态数值与 ZBA 契约锁定、分层不许倒置、
+    /// 适配器不许把执行搬回来。数值改一位面板就会收到错的状态，靠肉眼 review 不可靠。
+    /// </summary>
+    private static void TaskRuntimeChecks(SourceIndex index)
+    {
+        Section("任务与执行状态（#114）");
+
+        var stateFile = index.ByPath("src/BotAgent.Core/Domain/Agent/AgentTaskState.cs");
+        var transitionsFile = index.ByPath("src/BotAgent.Core/Domain/Agent/AgentTaskTransitions.cs");
+        var runtimeFile = index.ByPath("src/BotAgent.Engine/Runtime/AgentTaskRuntime.cs");
+        var adapterFile = index.ByPath("src/BotAgent.Headless/Adapters/Panel/Zba/ZbaTaskRegistry.cs");
+        var contractFile = index.ByPath("src/BotAgent.Panel/ZbaContracts.cs");
+        Check("★ 任务状态在 Core、运行在 Engine、通道适配器在 Headless",
+            stateFile is not null && transitionsFile is not null && runtimeFile is not null
+            && adapterFile is not null && contractFile is not null,
+            stateFile is null ? "缺 Domain/Agent/AgentTaskState.cs"
+            : transitionsFile is null ? "缺 AgentTaskTransitions.cs"
+            : runtimeFile is null ? "缺 Engine/Runtime/AgentTaskRuntime.cs"
+            : adapterFile is null ? "缺 ZbaTaskRegistry.cs"
+            : contractFile is null ? "缺 Panel/ZbaContracts.cs"
+            : "五个文件都在");
+
+        var runtimeStates = EnumValues(stateFile?.NoComments ?? string.Empty, "AgentTaskState");
+        var contractStates = EnumValues(contractFile?.NoComments ?? string.Empty, "ZbaTaskState");
+        var mismatched = contractStates
+            .Where(pair => !runtimeStates.TryGetValue(pair.Key, out var value) || value != pair.Value)
+            .Select(pair => pair.Key)
+            .ToList();
+        Check("★ AgentTaskState 前八项数值与 ZBA 契约逐一对齐（改数值等于改对外契约）",
+            runtimeStates.Count == 9
+            && contractStates.Count == 8
+            && !contractStates.ContainsKey("TimedOut")
+            && runtimeStates.TryGetValue("TimedOut", out var timedOut) && timedOut == 8
+            && mismatched.Count == 0,
+            $"运行时 {runtimeStates.Count} 项 / 契约 {contractStates.Count} 项"
+            + (mismatched.Count == 0 ? string.Empty : "；不一致：" + string.Join("、", mismatched)));
+
+        var terminalBody = Regex.Match(
+            transitionsFile?.NoComments ?? string.Empty, @"Terminal\s*=\s*\[(?<body>[^\]]*)\]");
+        var terminalNames = new[] { "Succeeded", "Failed", "Cancelled", "TimedOut", "Unknown" };
+        Check("★ 五个终态由一份数组定义，IsTerminal 与转移表共用",
+            terminalBody.Success
+            && terminalNames.All(name => terminalBody.Groups["body"].Value.Contains(name, StringComparison.Ordinal))
+            && (transitionsFile?.NoComments.Contains("public static bool IsTerminal", StringComparison.Ordinal) ?? false)
+            && (transitionsFile?.NoComments.Contains("public static AgentTaskState EnsureTransition", StringComparison.Ordinal) ?? false),
+            terminalBody.Success ? "终态数组存在" : "找不到 Terminal 数组");
+
+        Check("★ 运行时的时间一律注入，不自己读时钟（Domain 更不许读）",
+            runtimeFile is not null
+            && runtimeFile.NoComments.Contains("Func<DateTimeOffset> now", StringComparison.Ordinal)
+            && !runtimeFile.NoComments.Contains("DateTimeOffset.Now", StringComparison.Ordinal)
+            && !runtimeFile.NoComments.Contains("DateTime.UtcNow", StringComparison.Ordinal)
+            && !(stateFile?.NoComments.Contains("DateTime", StringComparison.Ordinal) ?? true)
+            && !(transitionsFile?.NoComments.Contains("DateTime", StringComparison.Ordinal) ?? true),
+            "now 来自构造函数参数");
+
+        Check("★ ZBA 适配器不再自己执行任务（Task.Run / 取消源已收敛到运行时）",
+            adapterFile is not null
+            && adapterFile.NoComments.Contains("AgentTaskRuntime", StringComparison.Ordinal)
+            && adapterFile.NoComments.Contains("Forget(", StringComparison.Ordinal)
+            && !adapterFile.NoComments.Contains("Task.Run(", StringComparison.Ordinal)
+            && !adapterFile.NoComments.Contains("new CancellationTokenSource", StringComparison.Ordinal),
+            "适配器只做幂等/回执/事件/投影/淘汰");
+
+        var adr = Path.Combine(index.Root, "docs/decisions/0002-agent-task-runtime.md");
+        var adrPersistence = Path.Combine(index.Root, "docs/decisions/0003-agent-task-persistence.md");
+        var doc = Path.Combine(index.Root, "docs/architecture/agent-task-runtime.md");
+        var deployDoc = Path.Combine(index.Root, "docs/operations/agent-runtime-deployment.md");
+        Check("★ ADR-0002 / ADR-0003 与实现说明都在仓库里",
+            File.Exists(adr) && File.Exists(adrPersistence) && File.Exists(doc),
+            (File.Exists(adr) ? "ADR-0002 在" : "缺 ADR-0002")
+            + (File.Exists(adrPersistence) ? "；ADR-0003 在" : "；缺 ADR-0003")
+            + (File.Exists(doc) ? "；实现说明在" : "；缺实现说明"));
+
+        // #119：部署 / 验证 / 回滚三件事必须写下来，而且必须写到可以照做（三节 + 不可逆边界 + 观测点）。
+        var deployText = File.Exists(deployDoc)
+            ? File.ReadAllText(deployDoc, System.Text.Encoding.UTF8)
+            : string.Empty;
+        Check("★ Runtime 的部署 / 验证 / 回滚文档在，且三部分与不可逆边界都写了（#119）",
+            deployText.Length > 0
+            && deployText.Contains("## 1. 部署", StringComparison.Ordinal)
+            && deployText.Contains("## 2. 验证", StringComparison.Ordinal)
+            && deployText.Contains("## 3. 回滚", StringComparison.Ordinal)
+            && deployText.Contains("不可逆边界", StringComparison.Ordinal)
+            && deployText.Contains("运维观测点", StringComparison.Ordinal)
+            && deployText.Contains("PRAGMA user_version", StringComparison.Ordinal),
+            deployText.Length == 0
+                ? "缺 docs/operations/agent-runtime-deployment.md"
+                : "三节 + 不可逆边界 + 观测点 + schema 版本口径都在");
+
+        // #116：持久化的三个硬边界 —— 台账端口、写入点/恢复点、DAO 在不写 SQL 的层之外。
+        var ledgerPort = Path.Combine(index.Root, "src/BotAgent.Engine/Runtime/AgentTaskLedger.cs");
+        var ledgerDao = Path.Combine(index.Root, "src/BotAgent.Headless/Adapters/Persistence/AgentTaskLedgerStore.cs");
+        Check("★ 任务台账端口与 SQLite 实现都在",
+            File.Exists(ledgerPort) && File.Exists(ledgerDao),
+            (File.Exists(ledgerPort) ? "端口在" : "缺端口") + (File.Exists(ledgerDao) ? "；DAO 在" : "；缺 DAO"));
+
+        var runtimeSource = runtimeFile?.NoComments ?? string.Empty;
+        Check("★ 运行时既写台账也能按台账恢复（Persist / Restore 都在，且恢复不重做）",
+            runtimeSource.Contains("Persist(", StringComparison.Ordinal)
+            && runtimeSource.Contains("Restore(", StringComparison.Ordinal)
+            && runtimeSource.Contains("restart_state_unknown", StringComparison.Ordinal)
+            && runtimeSource.Contains("cancelled_before_dispatch", StringComparison.Ordinal)
+            && runtimeSource.Contains("LoadRecent(", StringComparison.Ordinal),
+            "运行时有写入点与恢复收口（恢复只读台账并收口，不重放执行）");
+
+        // #137：审批必须接到真实高风险执行点，票据必须防伪 —— 这三点靠肉眼 review 太不可靠。
+        var gateFile = index.ByPath("src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs");
+        var signerFile = index.ByPath("src/BotAgent.Core/Domain/Permissions/ApprovalTicketSigner.cs");
+        var toolGateFile = index.ByPath("src/BotAgent.Core/Domain/Permissions/ToolGate.cs");
+        var gateSource = gateFile?.NoComments ?? string.Empty;
+        var ticketSource = toolGateFile?.NoComments ?? string.Empty;
+        Check("★ 任务级审批闸门在 Headless、票据验签在 Core（#137）",
+            gateFile is not null
+            && signerFile is not null
+            && gateFile.NoComments.Contains("IAgentTaskApprovalGate", StringComparison.Ordinal)
+            && gateSource.Contains("\"bash\"", StringComparison.Ordinal)
+            && gateSource.Contains("\"write\"", StringComparison.Ordinal)
+            && gateSource.Contains("\"docker\"", StringComparison.Ordinal)
+            && signerFile.NoComments.Contains("HMACSHA256", StringComparison.Ordinal),
+            gateFile is null ? "缺 TaskApprovalGate.cs"
+            : signerFile is null ? "缺 ApprovalTicketSigner.cs"
+            : "闸门在 Headless，验签在 Core");
+
+        Check("★ 待批的四个收口语义与验签失败码都写死在运行时/闸门里（#137）",
+            runtimeSource.Contains("WaitingApproval", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_lost_on_restart", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_expired", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_rejected", StringComparison.Ordinal)
+            && runtimeSource.Contains("approval_cancelled", StringComparison.Ordinal)
+            && ticketSource.Contains("approval_ticket_unverified", StringComparison.Ordinal)
+            && ticketSource.Contains("ApprovalTicketSigner.Verify", StringComparison.Ordinal),
+            "挂起 / 批准 / 拒绝 / 超期 / 取消 / 重启六条路都有明确原因码，手搓票据过不了闸门");
+    }
+
+    /// <summary>从源码文本里读一个 enum 的「成员 → 显式数值」。解析不到就返回空表（由调用方判红）。</summary>
+    private static Dictionary<string, int> EnumValues(string source, string name)
+    {
+        var values = new Dictionary<string, int>(StringComparer.Ordinal);
+        var block = Regex.Match(source, @"enum\s+" + Regex.Escape(name) + @"\s*\{(?<body>[^}]*)\}");
+        if (!block.Success) return values;
+        foreach (Match item in Regex.Matches(block.Groups["body"].Value, @"(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>-?\d+)"))
+        {
+            values[item.Groups["name"].Value] = int.Parse(item.Groups["value"].Value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return values;
+    }
 
     private static void LocalChannelChecks(SourceIndex index)
     {
@@ -582,15 +1744,15 @@ public static class Program
         Anchor(index, "/api/traces", "面板的轨迹只读端点（批次 H 的追踪页只读它）");
 
         // 审计必须真的接在发送缝上：规则写好但没人调 = 假绿（这个仓库踩过）。
-        var sender = index.ByPath("Services/Reply/PlainSender.cs");
+        var sender = index.ByPath("src/BotAgent.Engine/Reply/PlainSender.cs");
         var auditWired = sender is not null
             && sender.NoComments.Contains("ReplyAuditRules.Judge", StringComparison.Ordinal);
         Check("回复审计接在发送层（PlainSender 里真的调了 ReplyAuditRules.Judge）",
             auditWired,
-            sender is null ? "找不到 Services/Reply/PlainSender.cs" : auditWired ? "发送前后各一处调用" : "没看到调用点");
+            sender is null ? "找不到 Engine/Reply/PlainSender.cs" : auditWired ? "发送前后各一处调用" : "没看到调用点");
 
         // 轨迹记录**不许**出现承载正文的字段（§9.2 的“审计不写正文”；SafetyProbe 还有一条反射断言）。
-        var trace = index.ByPath("Domain/Ops/TurnTrace.cs");
+        var trace = index.ByPath("src/BotAgent.Core/Domain/Ops/TurnTrace.cs");
         var contentFields = trace is null
             ? new List<string> { "找不到 Domain/Ops/TurnTrace.cs" }
             : Regex.Matches(trace.NoComments, @"\bstring\??\s+\w*(Text|Content|Body|Message)\w*\b")
@@ -606,9 +1768,11 @@ public static class Program
         Anchor(index, "MaybeMask", "显示层脱敏入口（群名/昵称/QQ 号）");
         Anchor(index, "ChatLabel", "会话显示名（脱敏后的）");
         Anchor(index, "nameRaw", "面板改名要写真名（显示层脱敏、key 原样）");
-        Anchor(index, "_pendingReplies", "每会话一条 FIFO（同一会话严格按序）");
-        Anchor(index, "_replyGate", "全局并发闸门");
-        Anchor(index, "_inFlight", "在途回复计数（可观测）");
+        // 回复链的串行 / 快照 / 引用 / 能力闸门在 Wave3 整体搬进 Engine/Reply：
+        // 只查“全仓某处还有这个词”会让一份死代码冒充红线，所以这几条按目录钉住。
+        AnchorIn(index, "_pendingReplies", "src/BotAgent.Engine/Reply/", "每会话一条 FIFO（同一会话严格按序）");
+        AnchorIn(index, "_replyGate", "src/BotAgent.Engine/Reply/", "全局并发闸门");
+        AnchorIn(index, "_inFlight", "src/BotAgent.Engine/Reply/", "在途回复计数（可观测）");
 
         // 提示词注入点：这些段落一旦在重构里丢掉，模型行为会立刻变样（harness 里的字数软线是哨兵）。
         foreach (var anchor in new[]
@@ -620,9 +1784,12 @@ public static class Program
             Anchor(index, anchor, "提示词注入点");
         }
 
-        Anchor(index, "AllowCapability", "能力闸门（发不发/要不要批准）");
-        Anchor(index, "ResolveQuotedMessage", "引用目标裁决");
-        Anchor(index, "_settings.Snapshot()", "回复链入口取配置快照（review-findings #4 的修复，不许退回）");
+        AnchorIn(index, "AllowCapability", "src/BotAgent.Engine/Reply/", "能力闸门（发不发/要不要批准）");
+        // #106 Step 2 把「引用识别 / 引用目标裁决」拆成 ReplyQuoteContext：锚点跟着真实符号走，
+        // 别退回“全仓还有这个词”那种能被死代码冒充的写法。
+        AnchorIn(index, "ReplyQuoteContext", "src/BotAgent.Engine/Reply/", "引用识别与引用目标裁决");
+        AnchorIn(index, "ResolveTarget(", "src/BotAgent.Engine/Reply/", "引用目标裁决（回哪条 / 干脆不引）");
+        AnchorIn(index, "_settings.Snapshot()", "src/BotAgent.Engine/Reply/", "回复链入口取配置快照（review-findings #4 的修复，不许退回）");
         Anchor(index, "SettingsBox", "配置的唯一发布点（热更新换引用，不就地改）");
         Anchor(index, "_box.Apply(", "热更新 = 副本上改 + 原子发布");
         Anchor(index, "PatchSettings", "窄口热更新（已在别处持久化的运行时值，如登录态）");
@@ -632,6 +1799,14 @@ public static class Program
     {
         var hits = index.Files.Count(f => f.NoComments.Contains(anchor, StringComparison.Ordinal));
         Check($"锚点仍在：{anchor}（{why}）", hits > 0, hits > 0 ? $"命中 {hits} 个文件" : "一个都没有");
+    }
+
+    /// <summary>只在指定目录里找锚点：用于“已经搬进 Engine”的红线，防止别处的同名字样冒充。</summary>
+    private static void AnchorIn(SourceIndex index, string anchor, string folder, string why)
+    {
+        var hits = index.In(folder).Count(f => f.NoComments.Contains(anchor, StringComparison.Ordinal));
+        Check($"锚点仍在：{anchor}（{why}）", hits > 0,
+            hits > 0 ? $"命中 {hits} 个文件（{folder}）" : $"{folder} 里一个都没有");
     }
 
     // ─────────────────────────── 工具 ───────────────────────────
@@ -725,21 +1900,21 @@ public static class Program
 
         // 层方向（§3.2）：这行只是**打印实测值**，真正的判定在上面 R9 那条硬规则里
         // （2026-09-23 收口：Services 侧必须为 0；收口前是 16，见 architecture-optimization.md §13.9）。
-        var crossLayer = index.In("Services")
+        var crossLayer = index.UseCaseFiles
             .Where(f => f.NoComments.Contains("BotAgent.Adapters", StringComparison.Ordinal))
             .ToList();
-        Console.WriteLine($"Services -> Adapters 引用的文件数（诊断，未断言；目标见 §3.2） = {crossLayer.Count} / {index.In("Services").Count()}");
+        Console.WriteLine($"用例层（Engine + Services） -> Adapters 引用的文件数（诊断，未断言；目标见 §3.2） = {crossLayer.Count} / {index.UseCaseFiles.Count()}");
 
         Console.WriteLine($"读系统时间总处数      = {index.Files.Sum(Metrics.CountClockReads)}");
         Console.WriteLine($"new HttpClient 处数   = {index.Files.Sum(Metrics.CountHttpClientNew)}");
 
-        var panel = index.ByPath("Adapters/Panel/WebUiServer.cs");
+        var panel = index.ByPath("src/BotAgent.Headless/Adapters/Panel/WebUiServer.cs");
         if (panel is not null)
         {
             Console.WriteLine($"面板 _agent. 次数     = {Metrics.CountPanelAgentCalls(panel)}");
         }
 
-        var useCaseNews = index.PerFile("Services", Metrics.CountConcreteIoNew);
+        var useCaseNews = UseCaseIo(index);
         Console.WriteLine($"用例层 new 具体 IO    = {useCaseNews.Sum(x => x.Count)}");
         foreach (var (path, count) in useCaseNews)
         {
@@ -761,8 +1936,8 @@ public static class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("Domain/（目标：单文件 ≤ 300 行、单类型实例字段 ≤ 10 且方法 ≤ 25）:");
-        var domain = index.In("Domain").ToList();
+        Console.WriteLine("各工程 Domain/（目标：单文件 ≤ 300 行、单类型实例字段 ≤ 10 且方法 ≤ 25）:");
+        var domain = index.DomainFiles.ToList();
         foreach (var file in domain)
         {
             Console.WriteLine($"  {file.RelativePath}  {file.LineCount} 行");
@@ -778,9 +1953,9 @@ public static class Program
         // 拆到多个文件的 partial 类型：R7 按**合计**判，打印也要按合计给，不然数对不上（见 §13.8）。
         var partialGroups = domain
             .SelectMany(f => Metrics.Blocks(f)
-                .Where(b => b.Kind == BlockKind.Type && Metrics.IsPartialType(f, b.Name))
-                .Select(b => (File: f, Type: b.Name)))
-            .GroupBy(x => x.Type, StringComparer.Ordinal)
+                .Where(b => b.Kind == BlockKind.Type && Metrics.IsPartialType(f, b))
+                .Select(b => (File: f, Type: b, Key: Metrics.TypeKey(f, b))))
+            .GroupBy(x => x.Key, StringComparer.Ordinal)
             .Where(g => g.Count() > 1)
             .OrderBy(g => g.Key, StringComparer.Ordinal)
             .ToList();
@@ -788,7 +1963,7 @@ public static class Program
         foreach (var group in partialGroups)
         {
             var parts = group
-                .Select(x => (Name: System.IO.Path.GetFileName(x.File.RelativePath), Surface: Metrics.TypeSurface(x.File, x.Type)))
+                .Select(x => (Name: x.File.RelativePath, Surface: Metrics.TypeSurface(x.File, x.Type)))
                 .ToList();
             surfaces.Add(("partial " + group.Key, parts.Sum(x => x.Surface.Fields), parts.Sum(x => x.Surface.Methods)));
             Console.WriteLine($"  partial {group.Key}（{parts.Count} 个文件）：实例字段={parts.Sum(x => x.Surface.Fields)} 方法={parts.Sum(x => x.Surface.Methods)}"
@@ -798,9 +1973,9 @@ public static class Program
         var mergedNames = partialGroups.Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
         foreach (var file in domain)
         {
-            foreach (var type in Metrics.Blocks(file).Where(b => b.Kind == BlockKind.Type && !mergedNames.Contains(b.Name)))
+            foreach (var type in Metrics.Blocks(file).Where(b => b.Kind == BlockKind.Type && !mergedNames.Contains(Metrics.TypeKey(file, b))))
             {
-                var (fields, methods) = Metrics.TypeSurface(file, type.Name);
+                var (fields, methods) = Metrics.TypeSurface(file, type);
                 surfaces.Add(($"{file.RelativePath}:{type.Name}", fields, methods));
             }
         }

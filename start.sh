@@ -129,14 +129,14 @@ if ! command -v dotnet >/dev/null 2>&1; then
     if [ -n "$DOTNET_ROOT" ] && [ -x "$DOTNET_ROOT/dotnet" ]; then
         export PATH="$DOTNET_ROOT:$PATH"
     else
-        echo "[!] 错误: 未检测到 dotnet 命令，请确保已安装 .NET 8.0 SDK 并加入 PATH。"
-        echo "例如在 Ubuntu/Debian 上执行: sudo apt update && sudo apt install -y dotnet-sdk-8.0"
+        echo "[!] 错误: 未检测到 dotnet 命令，请确保已安装 .NET 10.0 SDK 并加入 PATH。"
+        echo "例如在 Ubuntu/Debian 上执行: sudo apt update && sudo apt install -y dotnet-sdk-10.0"
         exit 1
     fi
 fi
 
 PROJECT_FILE="$DIR/src/BotAgent.Headless/BotAgent.Headless.csproj"
-DLL_FILE="$DIR/src/BotAgent.Headless/bin/Release/net8.0/BotAgent.Headless.dll"
+DLL_FILE="$DIR/src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll"
 
 # 如果产物不存在，先编译
 if [ ! -f "$DLL_FILE" ]; then

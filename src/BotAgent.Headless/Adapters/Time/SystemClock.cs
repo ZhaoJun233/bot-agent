@@ -58,6 +58,8 @@ public static class Clock
     {
         ArgumentNullException.ThrowIfNull(clock);
         Interlocked.Exchange(ref _current, clock);
+        // Engine keeps its own entry so it never reads system time directly; follow the host's choice.
+        BotAgent.Engine.Runtime.EngineClock.Initialize(clock);
     }
 
     /// <summary>恢复系统时钟（测试收尾用）。</summary>

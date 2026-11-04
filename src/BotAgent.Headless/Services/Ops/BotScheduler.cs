@@ -1,4 +1,5 @@
 using BotAgent.Domain.Ports;
+using BotAgent.Domain.Qq;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Panel;
@@ -45,6 +46,7 @@ public sealed class BotScheduler
     private readonly SemaphoreSlim _summaryGate = new(1, 1);
     private long _summaryDoneCount;
     private long _summaryFailCount;
+    private readonly Func<string, bool>? _pluginAllows;
 
     public BotScheduler(
         SettingsBox box,
@@ -54,7 +56,8 @@ public sealed class BotScheduler
         ReplyPipeline reply,
         StickerService stickers,
         PanelNotifier ui,
-        BotSchedulerHooks hooks)
+        BotSchedulerHooks hooks,
+        Func<string, bool>? pluginAllows = null)
     {
         _box = box;
         _source = source;
@@ -64,6 +67,7 @@ public sealed class BotScheduler
         _stickers = stickers;
         _ui = ui;
         _hooks = hooks;
+        _pluginAllows = pluginAllows;
     }
 
     private AppSettings _settings => _box.Current;
@@ -105,9 +109,11 @@ public sealed class BotScheduler
     public void RebuildIfNeeded()
     {
         var idleSeconds = Math.Max(0, _settings.IdleFallbackSeconds);
-        var summaryEnabled = _settings.EnableProfileSummary;
+        var summaryEnabled = _settings.EnableProfileSummary
+            && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) ?? true);
         var summarySeconds = Math.Max(0, _settings.ProfileSummaryIntervalSeconds);
-        var stickersEnabled = _settings.EnableStickers && _settings.StickerLibraryMax > 0;
+        var stickersEnabled = _settings.EnableStickers && _settings.StickerLibraryMax > 0
+            && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.StickersCapability) ?? true);
 
         if (idleSeconds == _timerIdleSeconds &&
             summaryEnabled == _timerSummaryEnabled &&
@@ -157,7 +163,8 @@ public sealed class BotScheduler
     /// <summary>画像巡检：把够条件的成员交给模型写一句画像（单轮不并发，失败只记数）。</summary>
     private async Task RunProfileSummarizationAsync()
     {
-        if (!_settings.EnableProfileSummary || _hooks.IsDisposed())
+        if (!_settings.EnableProfileSummary || _hooks.IsDisposed()
+            || (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) == false))
         {
             return;
         }
@@ -173,7 +180,10 @@ public sealed class BotScheduler
 
             foreach (var c in candidates)
             {
-                if (_hooks.IsDisposed())
+                // 与贴图审核同一口径：每一项模型 I/O 前复核，停用/释放后不再开始下一项。
+                if (_hooks.IsDisposed()
+                    || !_settings.EnableProfileSummary
+                    || (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) == false))
                 {
                     break;
                 }
@@ -224,7 +234,11 @@ public sealed class BotScheduler
     /// </summary>
     public async Task CheckAccountOnlineAsync()
     {
-        if (_hooks.IsDisposed() || _source is not OneBotGateway gateway || !gateway.IsConnected)
+        // 装配点给的是 ChannelRouter（私域 + 可选官方/本地/飞书），账号在线探测只认私域那条 OneBot；
+        // 只看 _source 本身的话，路由之后永远探测不到 → 面板一直显示“未知”。
+        var gateway = _source as OneBotGateway
+            ?? (_source as IChannelRegistry)?.Get(Channels.Private) as OneBotGateway;
+        if (_hooks.IsDisposed() || gateway is null || !gateway.IsConnected)
         {
             return;
         }

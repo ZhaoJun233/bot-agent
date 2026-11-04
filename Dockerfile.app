@@ -1,7 +1,7 @@
 # Bot Agent（headless）—— **产物式**运行时镜像（不在服务器上编译）
 #
 # 与 `src/BotAgent.Headless/Dockerfile` 的区别：
-#   • 那个是多阶段构建：容器里拉 `dotnet/sdk:8.0`（约 800MB）**现场编译**源码 —— 适合
+#   • 那个是多阶段构建：容器里拉 `dotnet/sdk:10.0`（约 800MB）**现场编译**源码 —— 适合
 #     “clone 下来就能跑”的场景（别人自建、CI 里没预发布产物）。
 #   • 这个只装运行时，把**开发机上已经发布好的** `app.tar.gz` 解到 /app —— 适合小内存机器。
 #
@@ -15,7 +15,9 @@
 #
 # 构建（构建上下文里必须已有 `app.tar.gz`，`deploy-qqchat.py` 会生成并上传）：
 #   docker build -f Dockerfile.app -t qqchat-agent:latest .
-FROM mcr.microsoft.com/dotnet/runtime:8.0
+# digest 钉死（#122）：浮动 tag 会让"同一份代码"在不同日期构建出不同镜像。
+# 需要升级基线镜像时：docker buildx imagetools inspect mcr.microsoft.com/dotnet/runtime:10.0 取 digest 再改这里。
+FROM mcr.microsoft.com/dotnet/runtime:10.0@sha256:a3f9f81954b9c810af2ed18849716c8dc74a4707bd0907fdbd69be81554c0f30
 
 # ── docker CLI（可选能力：让容器里的 agent “透过 docker”看/改服务器）──
 # 为什么要它：要用 /var/run/docker.sock 就得有个客户端，而 mcr 的运行时镜像里什么都没有。

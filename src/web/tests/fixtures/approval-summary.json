@@ -1,0 +1,10 @@
+[
+  {
+    "id": "approval-synthetic-1",
+    "toolId": "tool.synthetic",
+    "summary": "合成审批",
+    "session": "synthetic-session",
+    "expiresAt": "2026-10-20T12:05:00+00:00",
+    "policyVersion": 3
+  }
+]

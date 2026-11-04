@@ -137,10 +137,14 @@ public static partial class Program
             TimeSpan.FromSeconds(25));
         Check("★ 被戳会回话（戳一戳事件不再被丢掉）", pokeReplied,
             $"机器人日志尾部：{Truncate(string.Join(" ｜ ", bot.OutputLines.TakeLast(6)), 300)}");
+        // 回复和回戳是两条独立动作：先等回复到达，不代表 group_poke 已经发完（Linux 上会慢半拍）。
+        var pokedBack = await WaitUntilAsync(
+            () => protocol.ActionsReceived.Any(a => a["action"]?.GetValue<string>() == "group_poke" &&
+                                                    a["params"]?["user_id"]?.GetValue<long>() == alice &&
+                                                    a["params"]?["group_id"]?.GetValue<long>() == groupId),
+            TimeSpan.FromSeconds(15));
         Check("★ 模型想戳回去时真的发出了 group_poke（带对方 QQ 号）",
-            protocol.ActionsReceived.Any(a => a["action"]?.GetValue<string>() == "group_poke" &&
-                                              a["params"]?["user_id"]?.GetValue<long>() == alice &&
-                                              a["params"]?["group_id"]?.GetValue<long>() == groupId),
+            pokedBack,
             string.Join(" | ", protocol.ActionsReceived.Select(a => a["action"]?.GetValue<string>()).Distinct()));
         var pokeLines = openAi.Requests.SelectMany(r => UserTexts(r)).Where(t => t.Contains("戳了")).ToList();
         Check("戳一戳会进上下文，模型看得到是谁戳的",

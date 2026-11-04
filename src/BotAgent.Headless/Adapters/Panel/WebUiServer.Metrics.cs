@@ -37,12 +37,31 @@ public sealed partial class WebUiServer
             .AppendLine("# HELP botagent_trace_archive_completion_tokens Archived completion token count.")
             .AppendLine("# TYPE botagent_trace_archive_completion_tokens gauge")
             .Append("botagent_trace_archive_completion_tokens ").AppendLine((summary?.CompletionTokens ?? 0).ToString(CultureInfo.InvariantCulture))
+            // #135：归档里能确定的缓存输入 token（未知 / 字段缺失的轮次不计入，也绝不当 0）。
+            .AppendLine("# HELP botagent_trace_archive_cached_prompt_tokens Archived cached prompt tokens where the upstream reported them.")
+            .AppendLine("# TYPE botagent_trace_archive_cached_prompt_tokens gauge")
+            .Append("botagent_trace_archive_cached_prompt_tokens ").AppendLine((summary?.CachedPromptTokens ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_trace_archive_cache_write_tokens Archived cache write tokens where the upstream reported them.")
+            .AppendLine("# TYPE botagent_trace_archive_cache_write_tokens gauge")
+            .Append("botagent_trace_archive_cache_write_tokens ").AppendLine((summary?.CacheWriteTokens ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_trace_archive_cache_unknown_turns Archived turns whose cache usage the upstream did not report.")
+            .AppendLine("# TYPE botagent_trace_archive_cache_unknown_turns gauge")
+            .Append("botagent_trace_archive_cache_unknown_turns ").AppendLine((summary?.CacheUnknownTurns ?? 0).ToString(CultureInfo.InvariantCulture))
             .AppendLine("# HELP botagent_prompt_tokens_total Cumulative prompt tokens consumed since process start.")
             .AppendLine("# TYPE botagent_prompt_tokens_total counter")
             .Append("botagent_prompt_tokens_total ").AppendLine((_traces?.PromptTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
             .AppendLine("# HELP botagent_completion_tokens_total Cumulative completion tokens produced since process start.")
             .AppendLine("# TYPE botagent_completion_tokens_total counter")
-            .Append("botagent_completion_tokens_total ").AppendLine((_traces?.CompletionTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture));
+            .Append("botagent_completion_tokens_total ").AppendLine((_traces?.CompletionTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_prompt_cached_tokens_total Cumulative prompt tokens served from the provider cache since process start. Turns whose provider reported no cache usage are not counted as zero (#98).")
+            .AppendLine("# TYPE botagent_prompt_cached_tokens_total counter")
+            .Append("botagent_prompt_cached_tokens_total ").AppendLine((_traces?.CachedPromptTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_prompt_cache_write_tokens_total Cumulative prompt tokens written into the provider cache since process start (only reported by some providers).")
+            .AppendLine("# TYPE botagent_prompt_cache_write_tokens_total counter")
+            .Append("botagent_prompt_cache_write_tokens_total ").AppendLine((_traces?.CacheWriteTokensTotal ?? 0).ToString(CultureInfo.InvariantCulture))
+            .AppendLine("# HELP botagent_prompt_cache_unknown_total Completed turns whose provider did not report cache usage (denominator for the cached ratio).")
+            .AppendLine("# TYPE botagent_prompt_cache_unknown_total counter")
+            .Append("botagent_prompt_cache_unknown_total ").AppendLine((_traces?.CacheUnknownTurnsTotal ?? 0).ToString(CultureInfo.InvariantCulture));
 
         var circuits = _circuitStatusProvider?.Invoke();
         if (circuits is { Count: > 0 })

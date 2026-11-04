@@ -19,6 +19,8 @@ public static class Program
 {
     public static async Task<int> Main()
     {
+        BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
+        BotAgent.Adapters.Time.ClockBindings.InitializeModel();
         var dataRoot = Path.Combine(Path.GetTempPath(), "botagent-chaos-fault-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", dataRoot);
         var passed = 0;
@@ -97,6 +99,61 @@ public static class Program
             Check(runner.Snapshots().Single(x => x.ProviderId == "primary").State == ProviderCircuitState.Closed,
                 "half-open 成功后状态恢复 closed", ref passed, ref failed, failures);
 
+            // ---- #128 候选表热替换：熔断状态要按 id 迁移，不能被改配置顺手清掉 ----
+            var registryRunner = new ProviderFailoverRunner(
+                new[]
+                {
+                    new ProviderCandidate("primary", 0),
+                    new ProviderCandidate("backup", 1),
+                },
+                clock.Now,
+                cooldown: TimeSpan.FromSeconds(120));
+            for (var i = 0; i < 3; i++)
+                await registryRunner.RunAsync<string>((provider, _) => Task.FromResult(
+                    provider.Id == "primary"
+                        ? ProviderCallResult<string>.Failure("synthetic_registry_503")
+                        : ProviderCallResult<string>.Success("synthetic-registry-backup")));
+            Check(registryRunner.Snapshots().Single(x => x.ProviderId == "primary").State == ProviderCircuitState.Open,
+                "候选表替换前 primary 处于 open", ref passed, ref failed, failures);
+
+            registryRunner.ReplaceCandidates(new[]
+            {
+                new ProviderCandidate("primary", 0),
+                new ProviderCandidate("backup", 1),
+                new ProviderCandidate("tertiary", 2),
+            });
+            var afterReplace = registryRunner.Snapshots();
+            Check(afterReplace.Single(x => x.ProviderId == "primary").State == ProviderCircuitState.Open,
+                "★ 候选表替换后熔断未过期的供应商仍然 open（按 id 复用熔断器）",
+                ref passed, ref failed, failures);
+            Check(afterReplace.Single(x => x.ProviderId == "tertiary").State == ProviderCircuitState.Closed,
+                "新增供应商拿到的是全新 closed 熔断器", ref passed, ref failed, failures);
+            var registryCalls = 0;
+            var routedAfterReplace = await registryRunner.RunAsync<string>((provider, _) =>
+            {
+                registryCalls++;
+                if (provider.Id == "primary")
+                    return Task.FromResult(ProviderCallResult<string>.Failure("synthetic_registry_503"));
+                return Task.FromResult(ProviderCallResult<string>.Success($"synthetic-{provider.Id}"));
+            });
+            Check(routedAfterReplace.ProviderId == "backup" && registryCalls == 1,
+                "★ 替换后仍跳过熔断的 primary，直接落到下一个候选",
+                ref passed, ref failed, failures);
+
+            registryRunner.ReplaceCandidates(new[] { new ProviderCandidate("backup", 1) });
+            Check(registryRunner.Snapshots().Count == 1 && registryRunner.Snapshots()[0].ProviderId == "backup",
+                "删除供应商只缩表，不动剩下的熔断器", ref passed, ref failed, failures);
+            var beforeRejected = registryRunner.Snapshots();
+            try
+            {
+                registryRunner.ReplaceCandidates(Array.Empty<ProviderCandidate>());
+                Check(false, "空候选表必须被拒绝", ref passed, ref failed, failures);
+            }
+            catch (ArgumentException)
+            {
+                Check(registryRunner.Snapshots().SequenceEqual(beforeRejected),
+                    "非法候选表被拒绝且旧表继续服务", ref passed, ref failed, failures);
+            }
             var timeoutRunner = new ProviderFailoverRunner(
                 new[] { new ProviderCandidate("timeout-provider", 0) },
                 clock.Now,
@@ -169,12 +226,12 @@ public static class Program
                 Model = "synthetic-model-v2"
             });
             var refreshed = providerStore.Find("primary");
-            Check(refreshed?.BaseUrl == "https://example.com/v2"
-                && refreshed.ModelName == "synthetic-model-v2"
+            Check(refreshed?.BaseUrl == "https://example.com/v1"
+                && refreshed.ModelName == "synthetic-model"
                 && refreshed.CircuitState == ProviderCircuitState.Open
                 && refreshed.ConsecutiveHardFailures == 3
                 && refreshed.CooldownUntil == cooldownBeforeRefresh,
-                "重复登记 Provider 只更新元数据且不重置熔断状态", ref passed, ref failed, failures);
+                "重复登记 Provider 不覆盖已有元数据与熔断状态", ref passed, ref failed, failures);
             var missingProviderError = false;
             try
             {
@@ -483,7 +540,7 @@ private sealed class SyntheticHttpFetcher : IHttpFetcher
         public Task<BuiltRequest> BuildAsync(
             IReadOnlyList<BotAgent.Domain.Conversation.ChatMessage> _, string __,
             IReadOnlyCollection<long> ___, CancellationToken ____,
-            BotAgent.Domain.Reply.SamplingProfile? _____ = null) =>
+            BotAgent.Domain.Reply.SamplingProfile? _____ = null, string? ______ = null) =>
             Task.FromResult(new BuiltRequest(new JsonObject(), 0, new List<long>()));
 
         public Task<SendOutcome> SendAsync(

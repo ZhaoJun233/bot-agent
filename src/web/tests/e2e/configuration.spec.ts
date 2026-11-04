@@ -1,0 +1,738 @@
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
+
+const READ_TOKEN = 'synthetic-web-read-token'
+const ADMIN_TOKEN = 'synthetic-web-admin-token'
+const CONFIG_HEADERS = { Authorization: `Bearer ${ADMIN_TOKEN}` }
+
+async function connect(page: Page, token: string): Promise<void> {
+  await page.getByTestId('token-input').fill(token)
+  await page.getByTestId('connect-button').click()
+}
+
+async function openConfiguration(page: Page): Promise<void> {
+  await page.goto('/')
+  await connect(page, ADMIN_TOKEN)
+  await expect(page.getByTestId('overview')).toBeVisible()
+  await page.getByTestId('nav-configuration').click()
+  await expect(page.getByTestId('configuration')).toBeVisible()
+  await expect(page.getByTestId('config-fields')).toBeVisible()
+  await page.getByTestId('config-enable-admin').click()
+  await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
+}
+
+async function readConfiguration(request: APIRequestContext): Promise<{
+  version: string
+  generation: string
+  view: { behavior: Record<string, { value?: unknown }> }
+}> {
+  const response = await request.post('/zba/v1/configuration/read', {
+    data: { kind: 1 },
+    headers: CONFIG_HEADERS
+  })
+  expect(response.ok()).toBeTruthy()
+  return response.json()
+}
+
+function operationKey(generation: string): string {
+  return `cfg1:${generation}:${Math.floor(Date.now() / 1000)}:${randomUUID().replace(/-/g, '')}`
+}
+
+async function externalSave(
+  request: APIRequestContext,
+  generation: string,
+  version: string,
+  changes: unknown
+): Promise<void> {
+  const response = await request.post('/zba/v1/configuration/save', {
+    data: {
+      contractRevision: 'cfg-0.3.3',
+      expectedVersion: version,
+      key: operationKey(generation),
+      changes,
+      secrets: []
+    },
+    headers: CONFIG_HEADERS
+  })
+  expect(response.status()).toBe(200)
+}
+
+/**
+ * 用例隔离：所有写配置的用例都共用同一个宿主进程。用例中途失败时，
+ * 用例末尾的 UI 恢复步骤不会执行，残留值会污染后续用例（以及其它浏览器 project）。
+ * 这里在首个用例前记下基线，每个用例结束后经 API 兜底恢复。
+ */
+let baselineGroupCooldown: unknown
+
+test.beforeEach(async ({ request }) => {
+  if (baselineGroupCooldown !== undefined) return
+  const current = await readConfiguration(request)
+  baselineGroupCooldown = current.view.behavior.privateCooldownSeconds?.value
+})
+
+test.afterEach(async ({ request }) => {
+  if (baselineGroupCooldown === undefined) return
+  const current = await readConfiguration(request)
+  if (current.view.behavior.privateCooldownSeconds?.value === baselineGroupCooldown) return
+  await externalSave(request, current.generation, current.version, {
+    behavior: { privateCooldownSeconds: { kind: 1, value: baselineGroupCooldown } }
+  })
+})
+
+test('基础配置只显示必要字段；模型与凭据位于能力设置，只读不发写请求', async ({ page }) => {
+  const writes: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'POST' && path.startsWith('/zba/v1/') && path !== '/zba/v1/configuration/read') {
+      writes.push(`${request.method()} ${path}`)
+    }
+  })
+
+  await page.goto('/')
+  await connect(page, READ_TOKEN)
+  await expect(page.getByTestId('overview')).toBeVisible()
+
+  await page.getByTestId('nav-configuration').click()
+  await expect(page.getByTestId('configuration')).toBeVisible()
+  await expect(page.getByTestId('config-mode-badge')).toHaveText('标准模式')
+  await expect(page.getByTestId('config-fields')).toBeVisible()
+  await expect(page.getByTestId('config-field-botPersona')).toBeVisible()
+  await expect(page.getByTestId('config-secrets')).toHaveCount(0)
+  await expect(page.getByTestId('config-nav-model')).toHaveCount(0)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByTestId('config-secrets').locator('li')).toHaveCount(1)
+
+  await page.getByTestId('config-nav-model').click()
+  await expect(page.getByTestId('config-field-model')).toBeVisible()
+
+  await page.getByTestId('config-nav-registered').click()
+  await expect(page.getByTestId('config-providers')).toBeVisible()
+  await page.getByTestId('ability-configuration-dialog-close').click()
+
+  await page.getByTestId('nav-overview').click()
+  await expect(page.getByTestId('overview')).toBeVisible()
+
+  expect(writes).toEqual([])
+})
+
+test('配置页：管理员令牌进入管理员模式后隐藏只读提示', async ({ page }) => {
+  await page.goto('/')
+  await connect(page, ADMIN_TOKEN)
+  await expect(page.getByTestId('overview')).toBeVisible()
+
+  await page.getByTestId('nav-configuration').click()
+  await expect(page.getByTestId('config-readonly')).toBeVisible()
+  await page.getByTestId('config-enable-admin').click()
+
+  await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
+  await expect(page.getByTestId('config-readonly')).toHaveCount(0)
+})
+
+test('配置页：管理员保存一个数字字段并回读，随后恢复', async ({ page, request }) => {
+  await openConfiguration(page)
+  const before = await readConfiguration(request)
+
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 1))
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-receipt')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+
+  const after = await readConfiguration(request)
+  expect(after.version).not.toBe(before.version)
+  expect(after.view.behavior.privateCooldownSeconds?.value).toBe(original + 1)
+
+  // 恢复原值，避免影响后续用例
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original))
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
+  const restored = await readConfiguration(request)
+  expect(restored.view.behavior.privateCooldownSeconds?.value).toBe(original)
+})
+
+test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新比较', async ({ page, request }) => {
+  await openConfiguration(page)
+  const before = await readConfiguration(request)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  await externalSave(request, before.generation, before.version, {
+    behavior: { privateCooldownSeconds: { kind: 1, value: original + 1 } }
+  })
+
+  const saveRequests: string[] = []
+  page.on('request', (req) => {
+    if (req.url().includes('/zba/v1/configuration/save')) saveRequests.push(req.url())
+  })
+
+  await page.getByTestId('config-nav-behavior').click()
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original + 2))
+  await page.getByTestId('config-save').click()
+
+  await expect(page.getByTestId('config-conflict')).toBeVisible({ timeout: 15_000 })
+  expect(saveRequests).toHaveLength(1)
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.getByTestId('config-reload-conflict').click()
+  await expect(page.getByTestId('config-validation')).toContainText('已读取最新快照', { timeout: 15_000 })
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText('与对方修改重叠')
+  await page.getByTestId('config-discard').click()
+
+  const latest = await readConfiguration(request)
+  await externalSave(request, latest.generation, latest.version, {
+    behavior: { privateCooldownSeconds: { kind: 1, value: original } }
+  })
+})
+
+test('配置页：保存响应丢失后先核对回执，不自动重发', async ({ page, request }) => {
+  test.setTimeout(60_000)
+  await openConfiguration(page)
+  const before = await readConfiguration(request)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const next = original + 5
+
+  await page.getByTestId('config-nav-behavior').click()
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(next))
+
+  const saveRequests: string[] = []
+  page.on('request', (req) => {
+    if (req.url().includes('/zba/v1/configuration/save')) saveRequests.push(req.url())
+  })
+  // 让请求真正到达服务端，但永不返回响应体。
+  await page.route('**/zba/v1/configuration/save', async (route) => {
+    await route.fetch()
+  })
+
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible({ timeout: 20_000 })
+  expect(saveRequests).toHaveLength(1)
+
+  await page.unroute('**/zba/v1/configuration/save')
+  await page.getByTestId('config-check-pending').click()
+  await expect(page.getByTestId('config-receipt')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+  expect(saveRequests).toHaveLength(1)
+
+  const saved = await readConfiguration(request)
+  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(next)
+
+  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original))
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
+})
+
+test('配置页：切到概览再回来，草稿与输入值保留', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 1))
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.getByTestId('nav-overview').click()
+  await expect(page.getByTestId('overview')).toBeVisible()
+  await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
+
+  await page.getByTestId('nav-configuration').click()
+  await expect(page.getByTestId('configuration')).toBeVisible()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds').locator('input')).toHaveValue(String(original + 1))
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.getByTestId('config-discard').click()
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+  await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
+})
+
+test('配置页：离开配置页会清空秘密替换输入，但保留普通字段草稿', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  const input = dialog.getByTestId('config-field-model').locator('input')
+  const original = await input.inputValue()
+  await input.fill(original + '-synthetic-draft')
+
+  const secretList = dialog.getByTestId('config-secrets')
+  await secretList.getByTestId('secret-replace').first().click()
+  await secretList.locator('input[type=password]').first().fill('sk-synthetic-leave-7c41')
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('2 项修改')
+
+  // Simulate application navigation while a modal is mounted; pointer navigation is intentionally covered.
+  await page.getByTestId('nav-overview').evaluate((element: HTMLElement) => element.click())
+  await expect(page.getByTestId('overview')).toBeVisible()
+  await expect(page.getByTestId('nav-ability-draft')).toHaveText('1')
+
+  await page.getByTestId('nav-capabilities').click()
+  await expect(dialog.getByTestId('config-field-model').locator('input')).toHaveValue(original + '-synthetic-draft')
+  await expect(dialog.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await dialog.getByTestId('config-discard').click()
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
+})
+
+test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ page }) => {
+  await openConfiguration(page)
+
+  const preventedClean = await page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+  expect(preventedClean).toBe(false)
+
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 1))
+
+  const preventedDirty = await page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+  expect(preventedDirty).toBe(true)
+
+  await page.getByTestId('config-discard').click()
+})
+
+test('配置页：安全锁立即回认证页，重连后普通草稿与秘密输入均清除', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 3))
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.getByTestId('lock').click()
+  await expect(page.getByTestId('config-leave-dialog')).toHaveCount(0)
+  await expect(page.getByTestId('token-input')).toHaveValue('')
+  await expect(page.getByTestId('auth-gate')).toBeVisible()
+
+  await connect(page, ADMIN_TOKEN)
+  await expect(page.getByTestId('overview')).toBeVisible()
+  await page.getByTestId('nav-configuration').click()
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+  await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
+  // 重连后默认是标准模式，字段以只读文本渲染；值必须回到未修改的宿主基线。
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText(String(original))
+
+  await page.getByTestId('config-enable-admin').click()
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  const model = dialog.getByTestId('config-field-model').locator('input')
+  const originalModel = await model.inputValue()
+  await model.fill(originalModel + '-synthetic-lock-draft')
+  await dialog.getByTestId('secret-replace').first().click()
+  await dialog.locator('input[type=password]').first().fill('synthetic-lock-secret')
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('2 项修改')
+  // 应用锁定即使在能力配置模态挂载时也必须立即清理会话。
+  await page.getByTestId('lock').evaluate((element: HTMLElement) => element.click())
+  await expect(page.getByTestId('auth-gate')).toBeVisible()
+  await expect(page.getByTestId('config-leave-dialog')).toHaveCount(0)
+  await expect(page.getByTestId('token-input')).toHaveValue('')
+  await expect(dialog).toHaveCount(0)
+  await connect(page, ADMIN_TOKEN)
+  await expect(page.getByTestId('overview')).toBeVisible()
+  await page.getByTestId('enable-admin').click()
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  await expect(model).toHaveValue(originalModel)
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
+  await expect(dialog.locator('input[type=password]')).toHaveCount(0)
+  await dialog.getByTestId('secret-replace').first().click()
+  await expect(dialog.locator('input[type=password]').first()).toHaveValue('')
+})
+
+for (const action of ['lock', 'downgrade'] as const) {
+  test(action === 'lock' ? '配置草稿跨页后安全锁立即清草稿且不提交' : '配置草稿跨页后可明确保存并退出管理员', async ({ page, request }) => {
+    await openConfiguration(page)
+    const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    const original = Number(await input.inputValue())
+    const next = original + 1
+    await input.fill(String(next))
+    const writes: string[] = []
+    page.on('request', req => { if (new URL(req.url()).pathname === '/zba/v1/configuration/save') writes.push(req.url()) })
+    await page.getByTestId('nav-overview').click()
+    await expect(page.getByTestId('configuration')).toBeHidden()
+    await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
+    await page.getByTestId(action === 'lock' ? 'lock' : 'disable-admin').click()
+    const confirmation = page.getByTestId('config-leave-dialog')
+    if (action === 'lock') {
+      await expect(page.getByTestId('auth-gate')).toBeVisible()
+      await expect(confirmation).toHaveCount(0)
+      await expect(page.getByTestId('token-input')).toHaveValue('')
+      expect(writes).toHaveLength(0)
+      await connect(page, ADMIN_TOKEN)
+      await expect(page.getByTestId('overview')).toBeVisible()
+      await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
+      await page.getByTestId('nav-configuration').click()
+      await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+      expect((await readConfiguration(request)).view.behavior.privateCooldownSeconds?.value).toBe(original)
+      return
+    }
+    await expect(confirmation).toBeVisible()
+    await expect(confirmation).not.toContainText('标准模式下不能保存')
+    await expect(page.getByTestId('config-leave-save')).toBeEnabled()
+    expect(writes).toHaveLength(0)
+    await page.getByTestId('config-leave-save').click()
+    {
+      await expect(confirmation).toHaveCount(0)
+      await expect(page.getByTestId('enable-admin')).toBeVisible()
+      await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
+    }
+    expect(writes).toHaveLength(1)
+    expect((await readConfiguration(request)).view.behavior.privateCooldownSeconds?.value).toBe(next)
+  })
+}
+
+test('配置页：安全锁清草稿但同身份重连保留未决原操作键', async ({ page }) => {
+  await openConfiguration(page)
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = await input.inputValue()
+  await input.fill(String(Number(original) + 1))
+  const submitted: string[] = []
+  const checked: string[] = []
+  await page.route('**/zba/v1/configuration/save', async route => {
+    submitted.push((route.request().postDataJSON() as { key: string }).key)
+    await route.abort('failed')
+  })
+  page.on('request', req => {
+    if (new URL(req.url()).pathname === '/zba/v1/configuration/find') {
+      checked.push((req.postDataJSON() as { key: string }).key)
+    }
+  })
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible({ timeout: 20_000 })
+  expect(submitted).toHaveLength(1)
+  await page.getByTestId('lock').click()
+  await expect(page.getByTestId('auth-gate')).toBeVisible()
+  await expect(page.getByTestId('config-leave-dialog')).toHaveCount(0)
+  await expect(page.getByTestId('token-input')).toHaveValue('')
+  await connect(page, ADMIN_TOKEN)
+  await expect(page.getByTestId('overview')).toBeVisible()
+  await page.getByTestId('nav-configuration').click()
+  await page.getByTestId('config-enable-admin').click()
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible()
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
+  await expect(input).toHaveValue(original)
+  await page.getByTestId('config-check-pending').click()
+  await expect(page.getByTestId('config-validation')).toContainText('没有找到这次提交的回执', { timeout: 15_000 })
+  expect(checked).toEqual(submitted)
+  expect(submitted).toHaveLength(1)
+})
+
+test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存', async ({ page, request }) => {
+  test.setTimeout(60_000)
+  await openConfiguration(page)
+  const before = await readConfiguration(request)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const next = original + 7
+
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await input.fill(String(next))
+
+  const keys: string[] = []
+  page.on('request', (req) => {
+    if (!req.url().includes('/zba/v1/configuration/save')) return
+    const body = req.postDataJSON() as { key?: string }
+    if (typeof body.key === 'string') keys.push(body.key)
+  })
+  // 请求根本到不了服务端：结果是“未知”，服务端没有回执。
+  await page.route('**/zba/v1/configuration/save', (route) => route.abort('failed'))
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible({ timeout: 20_000 })
+  expect(keys).toHaveLength(1)
+  await expect(input).toBeDisabled()
+  await expect(page.getByTestId('config-save')).toBeDisabled()
+  await expect(page.getByTestId('config-discard')).toBeDisabled()
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.unroute('**/zba/v1/configuration/save')
+  await page.getByTestId('config-check-pending').click()
+  await expect(page.getByTestId('config-validation')).toContainText('没有找到这次提交的回执', { timeout: 15_000 })
+  await expect(page.getByTestId('config-unconfirmed')).toHaveCount(0)
+  await expect(input).toBeEnabled()
+  await expect(input).toHaveValue(String(next))
+
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-receipt')).toBeVisible({ timeout: 15_000 })
+  expect(keys).toHaveLength(2)
+  expect(keys[0]).not.toBe(keys[1])
+
+  const saved = await readConfiguration(request)
+  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(next)
+
+  await input.fill(String(original))
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
+})
+
+test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 并保留草稿', async ({ browser, request }) => {
+  test.setTimeout(60_000)
+  const before = await readConfiguration(request)
+  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const contextA = await browser.newContext()
+  const contextB = await browser.newContext()
+  const pageA = await contextA.newPage()
+  const pageB = await contextB.newPage()
+  try {
+    await openConfiguration(pageA)
+    await openConfiguration(pageB)
+    await pageA.getByTestId('config-nav-behavior').click()
+    await pageB.getByTestId('config-nav-behavior').click()
+    const inputA = pageA.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    const inputB = pageB.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    await inputA.fill(String(original + 1))
+    await inputB.fill(String(original + 2))
+
+    await pageA.getByTestId('config-save').click()
+    await expect(pageA.getByTestId('config-receipt')).toBeVisible({ timeout: 15_000 })
+
+    await pageB.getByTestId('config-save').click()
+    await expect(pageB.getByTestId('config-conflict')).toBeVisible({ timeout: 15_000 })
+    await expect(pageB.getByTestId('config-save-bar')).toContainText('1 项修改')
+    await expect(inputB).toHaveValue(String(original + 2))
+
+    await inputA.fill(String(original))
+    await pageA.getByTestId('config-save').click()
+    await expect(pageA.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
+    const restored = await readConfiguration(request)
+    expect(restored.view.behavior.privateCooldownSeconds?.value).toBe(original)
+  } finally {
+    await contextA.close()
+    await contextB.close()
+    // 即使断言失败也把共享宿主恢复原值，避免污染后续用例。
+    const latest = await readConfiguration(request)
+    if (Number(latest.view.behavior.privateCooldownSeconds?.value) !== original) {
+      await externalSave(request, latest.generation, latest.version, {
+        behavior: { privateCooldownSeconds: { kind: 1, value: original } }
+      })
+    }
+  }
+})
+
+
+test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且不写回脱敏展示名', async ({ page, request }) => {
+  test.setTimeout(60_000)
+  const before = await request.post('/zba/v1/configuration/read', {
+    data: { kind: 1 },
+    headers: CONFIG_HEADERS
+  })
+  const initial = (await before.json()) as {
+    generation: string
+    version: string
+    view: { registered: { providers: { key: string; name: { visibility: number; nameRaw?: string; display: string } }[] } }
+  }
+  const provider = initial.view.registered.providers[0]!
+  // 真实宿主返回 visibility=2 + nameRaw；没有这个形态就没有"真名"可改，本用例不成立。
+  expect(provider.name.visibility).toBe(2)
+  const original = provider.name.nameRaw!
+  expect(original.length).toBeGreaterThan(0)
+  const renamed = `${original}-renamed`
+
+  await openConfiguration(page)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('config-nav-registered').click()
+  await expect(page.getByTestId('config-providers')).toBeVisible()
+
+  const nameInput = page.getByTestId(`config-provider-name-${provider.key}`)
+  await expect(nameInput).toHaveValue(original)
+  // 输入框里必须是真名，不是 "Pri***ry" 这种脱敏串。
+  expect(await nameInput.inputValue()).not.toBe(provider.name.display)
+
+  try {
+    await nameInput.fill(renamed)
+    const dialog = page.getByTestId('ability-configuration-dialog')
+    await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
+    await dialog.getByTestId('config-save').click()
+    await expect(dialog.getByTestId('config-receipt')).toBeVisible({ timeout: 20_000 })
+
+    const after = await request.post('/zba/v1/configuration/read', {
+      data: { kind: 1 },
+      headers: CONFIG_HEADERS
+    })
+    const readBack = (await after.json()) as typeof initial
+    expect(readBack.view.registered.providers[0]!.name.nameRaw).toBe(renamed)
+    // 展示串仍是脱敏形态：写进去的是真名，显示照旧脱敏。
+    expect(readBack.view.registered.providers[0]!.name.display).not.toBe(renamed)
+  } finally {
+    const latest = await request.post('/zba/v1/configuration/read', {
+      data: { kind: 1 },
+      headers: CONFIG_HEADERS
+    })
+    const current = (await latest.json()) as typeof initial
+    if (current.view.registered.providers[0]!.name.nameRaw !== original) {
+      await externalSave(request, current.generation, current.version, {
+        registered: {
+          plugins: [],
+          policies: [],
+          // ProviderMetadataPatch 是闭合记录：六个字段都得给，没改的用 Keep。
+          providers: [{
+            key: provider.key,
+            changes: {
+              nameRaw: { kind: 1, value: original },
+              priority: { kind: 0 },
+              baseUrl: { kind: 0 },
+              modelName: { kind: 0 },
+              enabled: { kind: 0 },
+              credential: { kind: 0 }
+            }
+          }]
+        }
+      })
+    }
+  }
+})
+
+test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const secrets = page.getByTestId('ability-configuration-dialog').getByTestId('config-secrets')
+  await secrets.getByTestId('secret-replace').first().click()
+  await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')
+  await expect(page.getByTestId('ability-configuration-dialog').getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  await page.route('**/zba/v1/configuration/read', (route) => route.fulfill({
+    status: 401,
+    contentType: 'application/json',
+    json: { error: { code: 'unauthorized', message: 'synthetic expired' } }
+  }))
+  await page.getByTestId('ability-configuration-dialog').getByTestId('config-reload').click()
+
+  await expect(page.getByTestId('auth-gate')).toBeVisible()
+  await expect(page.getByTestId('error-notice')).toContainText('unauthorized')
+  await expect(page.getByTestId('configuration')).toHaveCount(0)
+})
+
+test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作键供核对', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 1))
+
+  let submittedKey = ''
+  await page.route('**/zba/v1/configuration/save', async (route) => {
+    const body = route.request().postDataJSON() as { key: string; expectedVersion: string }
+    submittedKey = body.key
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      json: {
+        code: 12,
+        replayed: false,
+        currentVersion: body.expectedVersion,
+        errors: [],
+        receipt: {
+          key: body.key,
+          contractRevision: 'cfg-0.3.3',
+          decision: 0,
+          observedVersion: body.expectedVersion,
+          commitState: 2,
+          applyState: 5,
+          steps: [],
+          deviceKeyAssignments: []
+        }
+      }
+    })
+  })
+
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible()
+  await expect(page.getByTestId('config-check-pending')).toBeVisible()
+  await expect(input).toBeDisabled()
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  // 核对走真实宿主：合成操作键不存在，因此 NotFound 会让草稿重新可编辑。
+  await page.getByTestId('config-check-pending').click()
+  await expect(page.getByTestId('config-validation')).toContainText('没有找到这次提交的回执')
+  await expect(input).toBeEnabled()
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+  expect(submittedKey).not.toBe('')
+})
+
+test('配置页：成功码缺少回执时不清草稿也不显示已保存', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 1))
+
+  await page.route('**/zba/v1/configuration/save', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    json: { code: 0, replayed: false, currentVersion: '1', errors: [] }
+  }))
+  await page.getByTestId('config-save').click()
+
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible()
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+  await expect(page.getByTestId('config-save-bar')).not.toContainText('已保存')
+  await expect(input).toBeDisabled()
+})
+
+test('配置页：核对矛盾响应保留未知态，权威 NotFound 后才恢复编辑', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('config-nav-behavior').click()
+  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const original = Number(await input.inputValue())
+  await input.fill(String(original + 1))
+
+  let submittedKey = ''
+  await page.route('**/zba/v1/configuration/save', async (route) => {
+    const body = route.request().postDataJSON() as { key: string; expectedVersion: string }
+    submittedKey = body.key
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      json: {
+        code: 12,
+        replayed: false,
+        currentVersion: body.expectedVersion,
+        errors: [],
+        receipt: {
+          key: body.key,
+          contractRevision: 'cfg-0.3.3',
+          decision: 0,
+          observedVersion: body.expectedVersion,
+          commitState: 2,
+          applyState: 5,
+          steps: [],
+          deviceKeyAssignments: []
+        }
+      }
+    })
+  })
+
+  await page.getByTestId('config-save').click()
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible()
+  expect(submittedKey).not.toBe('')
+
+  // 503 上带 NotFound 业务体不是权威核对结果：必须保留未知态与操作键。
+  await page.route('**/zba/v1/configuration/find', (route) => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    json: { code: 14 }
+  }))
+  await page.getByTestId('config-check-pending').click()
+  await expect(page.getByTestId('config-validation')).toContainText('核对未完成')
+  await expect(page.getByTestId('config-unconfirmed')).toBeVisible()
+  await expect(input).toBeDisabled()
+  await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
+
+  // 撤掉故障注入后，同一操作键的权威 NotFound（HTTP 404）才结束未知态。
+  await page.unroute('**/zba/v1/configuration/find')
+  await page.getByTestId('config-check-pending').click()
+  await expect(page.getByTestId('config-validation')).toContainText('没有找到这次提交的回执')
+  await expect(input).toBeEnabled()
+})

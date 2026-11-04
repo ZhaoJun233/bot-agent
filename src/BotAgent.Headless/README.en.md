@@ -11,7 +11,7 @@ A **headless, pluggable multi-platform, container-deployable** universal chat ag
 Chat Platforms (QQ / Feishu / Local)  ←—Adapter Seam—  Bot Agent (Container)  ——→  Model API
 ```
 
-- **No UI, no Windows dependency**: `net8.0`, Docker image around 80MB (the runtime stage is based on `dotnet/runtime:8.0`)
+- **No UI, no Windows dependency**: `net10.0`, Docker image around 80MB (the runtime stage is based on `dotnet/runtime:10.0`)
 - **Runs as non-root**, keeps all data in the `/data` volume, and shuts down gracefully (SIGTERM / `docker stop`)
 - **Health checks built in**: `/healthz` (liveness), `/readyz` (is the protocol side connected), `/status` (runtime state as JSON)
 
@@ -54,7 +54,7 @@ Then send an `@bot hello` into a whitelisted group.
 
 ## Environment variables
 
-Configuration is either **changed in the panel** (stored in `data/qqchat.db`, see below) or supplied through environment variables — environment variables act as a seed **on first start only**. After that, anything changed in the panel wins (further changes to the environment variable have no effect, and the bot lists them at startup to remind you).
+Configuration is either **changed in the panel** (stored in `data/botagent.db`, or the legacy `data/qqchat.db` if it already exists; see below) or supplied through environment variables — environment variables act as a seed **on first start only**. After that, anything changed in the panel wins (further changes to the environment variable have no effect, and the bot lists them at startup to remind you).
 Variables with a `_FILE` suffix read their value from a file, which suits Docker secrets:
 
 ```yaml
@@ -152,8 +152,8 @@ secrets:
 > 1. **Centralized governance**: Web panel Settings features the "Platform Instance Policy" table, managing all platforms (QQ Private, QQ Official, Feishu, Local Channel) for master switches, chat toggles, independent group/private whitelists, and capability overrides with atomic synchronization.
 > 2. **Why Local Channel initially has 0 conversations**: Local Channel is a pure in-process / HTTP test channel with no external push connection. Conversations are **dynamically created upon the first injected message**.
 > 3. **How to operate on the panel**:
->    - **Method 1 (Interactive Playground, Recommended)**: In panel Settings under "Local Channel", click `🧪 Open Interactive Playground (Playground)` (or visit `/playground.html`). Select scenario group, trigger mode (@bot / quote / plain), enter text, and click "Inject Exercise ↵" to see real-time replies and the six-stage governance analysis.
->    - **Method 2 (Main Dashboard Management)**: Once injected, the conversation immediately appears with a purple `Local` badge in the main conversation list. Click the "Local" filter tab on the left sidebar to view messages, archives, and reply manually.
+>    - **Method 1 (panel "Platform Instance Policy → Local Channel")**: enable the local channel in the panel's platform-instance table and fill in the virtual group-ID roster, then inject the first message with Method 2 or 3 below. The old built-in "interactive playground" page (`/playground.html`) was removed together with the built-in frontend and no longer exists.
+>    - **Method 2 (Main Dashboard Management)**: Once the first message is injected, the conversation immediately appears with a purple `Local` badge in the main conversation list. Click the "Local" filter tab on the left sidebar to view messages, archives, and reply manually.
 >    - **Method 3 (HTTP API)**: Call `POST /api/local/message` with panel token: `{"id": 1, "text": "Hello", "sender": "Tester", "isGroup": true}`. Replies are recorded into the memory outbox (`/api/local`).
 > 4. **Preconditions (Fail-Closed)**: Empty whitelist returns `403 local_channel_disabled`; missing panel token returns `403 panel_token_required`.
 
@@ -167,7 +167,7 @@ secrets:
 
 | Path | Contents |
 | --- | --- |
-| `data/qqchat.db` | **SQLite database**: settings, conversations, messages (including the archive), member profiles and personas, mood, songs heard, sticker index, secrets. WAL mode, accompanied by `-wal` / `-shm` |
+| `data/botagent.db` (legacy `qqchat.db` falls back automatically) | **SQLite database**: settings, conversations, messages (including the archive), member profiles and personas, mood, songs heard, sticker index, secrets. WAL mode, accompanied by `-wal` / `-shm` |
 | `data/legacy-json/` | Archive of old JSON data (moved here after the automatic import on first start; **not deleted**) |
 | `data/feishu-ids-v2.json` | Feishu v2 native identity-to-alias map (persisted when new identities are bound); include in data backups, with no automatic legacy-alias migration |
 | `stickers/*.png` | **Sticker image data** (the index is in the database; binary data does not belong in there — backup, preview and cleanup all get awkward) |
@@ -175,7 +175,7 @@ secrets:
 
 > Why SQLite replaced "a pile of JSON": ① conversations / messages / profiles were spread across several files, a single crash could write only half of them, and cross-file transactions were impossible; ② messages are append-only, while JSON rewrote everything each time (noticeably slow at a few thousand entries); ③ the panel's "earlier messages in this group / one person's persona in one group / dig through the archive" could only be done by loading everything into memory and filtering, whereas in SQL it is one statement.
 >
-> Database backup: copy `data/qqchat.db` (together with `-wal` / `-shm`); when Feishu is enabled, retain and back up `data/feishu-ids-v2.json` too — restoring only the database is insufficient. To inspect settings with SQL, `json_extract(json,'$.AiDesire')` works.
+> Database backup: copy `data/botagent.db` or the legacy `data/qqchat.db` if it exists (together with `-wal` / `-shm`); when Feishu is enabled, retain and back up `data/feishu-ids-v2.json` too — restoring only the database is insufficient. To inspect settings with SQL, `json_extract(json,'$.AiDesire')` works.
 > Secrets (API keys entered in the panel) live in the `secrets` table, which is why **the database file mode is 600** (kept out of `settings`, so it never gets pasted out along with the configuration).
 
 JSON inside the database never escapes Chinese characters, so `sqlite3 ... "SELECT text FROM messages LIMIT 3"` is readable as-is.
@@ -552,17 +552,13 @@ Coverage: reverse / forward WebSocket handshake, login-number detection, group a
 staying silent when the model is silent, quoted replies (a quote is attached only when someone cut in; targets the model points at are validated; no wrong credit when repeating; **incoming quoted replies are recognised too**),
 sentence splitting without losing characters, parenthetical narration tagged as `〔旁白：…〕` without triggering a reply on its own, member profile reads and writes,
 prompt assembly (persona / profiles / the `{sender}{content--time}` format), conversation recovery after a restart, and the health endpoints.
-The harness dispatches S1, S3–S41 and S43–S51. S2 prompt assertions run inside S1; S42 (official channel) remains excluded from harness/CI regression, so official-channel end-to-end coverage is not claimed.
+The harness dispatches S1 and S3–S55. S2 prompt assertions run inside S1, S33 retired with the pi bridge, and S42 (official channel) is part of harness/CI synthetic regression (fake gateway and local mocks; no real Open Platform credentials).
 The historical 2026-09-24 snapshot was 728 pass / 1 soft warning line (system prompt < 4000 characters, measuring ~4364; **it is a sentinel, not a target, so don't move the threshold**), not this round's result or a fixed current assertion count.
 `QQCHAT_IT_ONLY=s19` runs one scenario. The harness project does not reference the bot project; build the bot separately after source changes.
 
 There are also several **sub-second probes** (synthetic scenarios, no production data or services; run after changing the corresponding part): `ArchitectureProbe` (architecture ratchet),
 `SafetyProbe` (mechanisms and multi-platform safety boundaries), `ParticipationProbe`, `PipelineEval` (isolated evaluation),
-`ProductionSpecProbe` (production specs & fallbacks), and [FrontendProbe](<../../tests/BotAgent.FrontendProbe/probe.mjs>) (panel static + runtime). S50 Feishu Webhook and S51 Daily Token Quota are also in the integration scenario list; counts come from local command output:
-
-```bash
-node tests/BotAgent.FrontendProbe/probe.mjs
-```
+`ProductionSpecProbe` (production specs & fallbacks). Panel UI checks live under `src/web`: run `npm run typecheck` and `npm run test:unit`, and use `npm run test:e2e` for browser regression. S50 Feishu Webhook and S51 Daily Token Quota are also in the integration scenario list; counts come from local command output.
 
 ---
 

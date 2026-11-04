@@ -67,14 +67,15 @@ grep -aE 'ERROR|Exception|Unhandled|Traceback' "$LOG" | tail -30 \
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
-node tests/BotAgent.FrontendProbe/probe.mjs                       # panel smoke test (no browser)
-QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net8.0/BotAgent.IntegrationHarness.dll
+# Panel UI lives in src/web (Vue); the legacy wwwroot/FrontendProbe retired with S6 — use web checks
+(cd src/web && npm run typecheck && npm run test:unit)
+QQCHAT_IT_ONLY=s36 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 # structural guardrails (read source only, no database, no process): baseline lives in ArchitectureProbe/Baseline.cs
 dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
-dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net8.0/BotAgent.ArchitectureProbe.dll
+dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.ArchitectureProbe.dll
 ```
 
 - The architecture guardrail is a **ratchet**: the thresholds in `Baseline.cs` may only be **lowered**, never raised (raising them = loosening a structural constraint).
-  When a number drops, use `--print` to get the new value and update the baseline. The plan and its batches live in `docs/engineering/architecture-optimization.md`.
+  When a number drops, use `--print` to get the new value and update the baseline. Threshold policy and governance rules live in `docs/architecture/large-file-policy.md`.
 - Deploying to the server / publishing the public snapshot / historical records (internal material outside the repository) are handled by scripts outside the repository; the workspace `AGENTS.md` has the details.
 - The public snapshot runs masking checks (domains, IPs, QQ numbers, nicknames, model names, keys): **commit first, publish second**.

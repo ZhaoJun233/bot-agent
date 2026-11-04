@@ -1,0 +1,8 @@
+import { afterEach, expect, it } from 'vitest'
+import { beginOperation, clearPendingOperations, getPendingOperation, markOperation, pendingOperations } from '../../src/shared/sync/pending-operations'
+import type { ZbaClient } from '../../src/api/zba'
+const client=(identity='synthetic-A',baseUrl='/zba/v1')=>({identityLabel:identity,baseUrl}) as ZbaClient
+afterEach(clearPendingOperations)
+it('restores original key with another instance of the same authorized identity',()=>{const a=client();beginOperation(a,{key:'synthetic-key',kind:'configuration',target:'provider:sample'});expect(getPendingOperation(client(),'configuration','provider:sample')?.key).toBe('synthetic-key');expect(pendingOperations(client('synthetic-B'))).toEqual([]);expect(pendingOperations(client('synthetic-A','/other'))).toEqual([])})
+it('late settlement propagates across unmount without retaining client or payload',()=>{const a=client();beginOperation(a,{key:'synthetic-key',kind:'quota',target:'source:sample',meta:{limit:120000}});markOperation(a,'synthetic-key','unknown');expect(()=>beginOperation(client(),{key:'new-key',kind:'quota',target:'source:sample'})).toThrow();markOperation(a,'synthetic-key','settled');expect(getPendingOperation(client(),'quota','source:sample')).toBeNull();expect(pendingOperations(client())[0]).not.toHaveProperty('client');expect(pendingOperations(client())[0]).not.toHaveProperty('token')})
+it('does not evict unresolved keys under pressure',()=>{const a=client();for(let i=0;i<32;i++)beginOperation(a,{key:'key-'+i,kind:'plugin',target:'plugin-'+i});expect(()=>beginOperation(a,{key:'overflow',kind:'plugin',target:'plugin-overflow'})).toThrow('pending_operation_capacity');expect(pendingOperations(a)).toHaveLength(32)})

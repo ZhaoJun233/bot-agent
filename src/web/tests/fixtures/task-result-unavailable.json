@@ -1,0 +1,9 @@
+{
+  "id": "task-synthetic-running",
+  "state": 1,
+  "updatedAt": "2026-10-20T12:00:00+00:00",
+  "available": false,
+  "reasonCode": "not_terminal",
+  "summaryTruncated": false,
+  "summaryChars": 0
+}

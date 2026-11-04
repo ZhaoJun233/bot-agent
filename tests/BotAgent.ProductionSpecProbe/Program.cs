@@ -10,6 +10,7 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Qq;
 using BotAgent.Services;
+using BotAgent.Services.Agent;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Platforms;
 using System.Net;
@@ -23,6 +24,7 @@ public static class Program
 {
     public static int Main()
     {
+        ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-production-spec-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
 
@@ -34,8 +36,13 @@ public static class Program
             AuditChainTests();
             TraceArchiveTests();
             OnlineBackupTests(root);
+            LogRotationTests(root);
+            BackupSingleFlightTests();
             MultiTenantIsolationTests(root);
+            QuotaManagementTests();
             MultiPlatformBotAgentTests(root);
+            AgentTaskLedgerTests();
+            DockerCapabilityTests();
             Console.WriteLine($"通过 {_passed}，失败 0");
             return 0;
         }
@@ -58,6 +65,36 @@ public static class Program
                 // 测试目录清理失败不应覆盖真正的断言结果。
             }
         }
+    }
+
+    /// <summary>
+    /// docker 能力的可用性判定与工具白名单（#131 方案 B）。
+    ///
+    /// 背景：compose 默认不挂载 docker socket，所以「面板允许 Docker」打开后工具表里仍有 docker、
+    /// 提示词还诱导模型去用，每次调用都注定失败。修法是开关之外再加一道事实检查：
+    ///   • <see cref="DockerAvailability.Detect" /> 是纯函数，这里直接测三种输入；
+    ///   • <see cref="ServerAgentRunner.ResolveAllowedTools" /> 必须两把锁同时开才保留 docker。
+    /// 不碰真实文件系统与 docker（CI / 开发机环境不同）。
+    /// </summary>
+    private static void DockerCapabilityTests()
+    {
+        Check(!DockerAvailability.Detect(null, isWindows: false, _ => false),
+            "没有 DOCKER_HOST 且 socket 不存在时判定为不可用");
+        Check(DockerAvailability.Detect("unix:///var/run/docker.sock", isWindows: false, _ => false),
+            "显式 DOCKER_HOST 即视为可用（部署方声明了 docker 在哪）");
+        Check(DockerAvailability.Detect(null, isWindows: false, path => path == DockerAvailability.DefaultUnixSocket),
+            "Unix 上探测的是 /var/run/docker.sock");
+        Check(DockerAvailability.Detect(null, isWindows: true, path => path == DockerAvailability.DefaultWindowsPipe),
+            "Windows 上探测的是命名管道 docker_engine");
+
+        var open = new AppSettings { AgentServerTools = "bash,read,docker", AgentServerDocker = true };
+        Check(!ServerAgentRunner.ResolveAllowedTools(open, dockerAvailable: false).Contains("docker")
+              && ServerAgentRunner.ResolveAllowedTools(open, dockerAvailable: true).Contains("docker"),
+            "开关打开时，docker 只在容器里真有 docker 时才进工具表");
+
+        var closed = new AppSettings { AgentServerTools = "bash,read,docker", AgentServerDocker = false };
+        Check(!ServerAgentRunner.ResolveAllowedTools(closed, dockerAvailable: true).Contains("docker"),
+            "开关关着时，有 docker 也不进工具表（第二把锁）");
     }
 
     private static void SettingsExistenceTests()
@@ -157,6 +194,41 @@ public static class Program
         Check(counters.PromptTokensTotal == 100 && counters.CompletionTokensTotal == 40,
             "进程内 token 累计指标可观察");
 
+        // #98：缓存用量是三态（null = 上游没给，0 = 明确没命中）。几种上游形状都要读得出来，
+        // 而且缺字段必须是「未知」—— 落成 0 会让「不支持/没透传」看起来像「一次都没命中」。
+        var openAiCache = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(
+            "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":768}}}");
+        Check(openAiCache.PromptTokens == 1000 && openAiCache.CachedPromptTokens == 768 && openAiCache.CacheWriteTokens is null,
+            "OpenAI 形状的缓存命中量可读取，缺失的写入量记为未知");
+        var deepSeekCache = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(
+            "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_cache_hit_tokens\":640}}");
+        Check(deepSeekCache.CachedPromptTokens == 640,
+            "DeepSeek 形状的 prompt_cache_hit_tokens 可读取");
+        var anthropicCache = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(
+            "{\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":20,\"cache_read_input_tokens\":400,\"cache_creation_input_tokens\":120}}");
+        Check(anthropicCache.CachedPromptTokens == 400 && anthropicCache.CacheWriteTokens == 120,
+            "Anthropic 形状的缓存读取与写入都可读取");
+        var noCacheUsage = BotAgent.Domain.Model.ModelJson.ReadUsageDetail(usageJson);
+        Check(noCacheUsage.CachedPromptTokens is null && noCacheUsage.CacheWriteTokens is null,
+            "上游没给缓存字段时记为未知而不是 0");
+
+        counters.Begin("synthetic:tenant-c");
+        counters.RecordTokens("synthetic:tenant-c", 900, 30, cachedPromptTokens: 512, cacheWriteTokens: 64);
+        var cachedTrace = counters.Complete("synthetic:tenant-c", "done");
+        Check(cachedTrace is not null && cachedTrace.CachedPromptTokens == 512 && cachedTrace.CacheWriteTokens == 64 && !cachedTrace.CacheUsageUnknown,
+            "缓存命中与写入量进入轨迹，且不标未知");
+        Check(counters.CachedPromptTokensTotal == 512 && counters.CacheWriteTokensTotal == 64,
+            "进程内缓存累计指标可观察");
+
+        // 前面 tenant-a 那次没给缓存字段，所以未知轮数此时至少是 1；这里只比较增量，不钉死绝对值。
+        var unknownBefore = counters.CacheUnknownTurnsTotal;
+        counters.Begin("synthetic:tenant-d");
+        counters.RecordTokens("synthetic:tenant-d", 700, 20);
+        var unknownCacheTrace = counters.Complete("synthetic:tenant-d", "done");
+        Check(unknownCacheTrace is not null && unknownCacheTrace.CachedPromptTokens is null && unknownCacheTrace.CacheUsageUnknown
+            && counters.CachedPromptTokensTotal == 512 && counters.CacheUnknownTurnsTotal == unknownBefore + 1,
+            "没报缓存统计的轮次记为未知，不累加进命中总量");
+
         var trace = new TurnTrace(
             "synthetic-trace-1",
             "synthetic:tenant-a",
@@ -204,6 +276,61 @@ public static class Program
         Check(restartedTokensView.Count == 2 && restartedTokensView.PromptTokens == 250 && restartedTokensView.CompletionTokens == 80,
             "重新构造归档适配器后仍能读取持久化 Token 统计");
 
+        // #135：缓存用量三态落在 trace_archive 上 —— 有字段的、没给的、v13 之前的旧行都对。
+        var archivedCachedTrace = new TurnTrace(
+            "synthetic-trace-3",
+            "synthetic:tenant-c",
+            DateTimeOffset.UtcNow,
+            "slow",
+            3100,
+            new[]
+            {
+                new TurnNode(TurnNodeKind.Model, "ok", 3100, ReasonCode: "slow_turn")
+            },
+            PromptTokens: 900,
+            CompletionTokens: 30,
+            CachedPromptTokens: 512,
+            CacheWriteTokens: 64);
+
+        archive.Append(archivedCachedTrace);
+        var cachedView = archive.Snapshot();
+        Check(cachedView.CachedPromptTokens == 512 && cachedView.CacheWriteTokens == 64,
+            "归档带上缓存命中与写入量（#135）");
+
+        var uncachedTrace = new TurnTrace(
+            "synthetic-trace-4",
+            "synthetic:tenant-c",
+            DateTimeOffset.UtcNow,
+            "slow",
+            2200,
+            new[]
+            {
+                new TurnNode(TurnNodeKind.Model, "ok", 2200, ReasonCode: "slow_turn")
+            },
+            PromptTokens: 400,
+            CompletionTokens: 10);
+
+        archive.Append(uncachedTrace);
+        var unknownView = archive.Snapshot();
+        Check(unknownView.CachedPromptTokens == 512 && unknownView.CacheUnknownTurns >= 2,
+            "上游没给缓存字段的轮次记未知，不并进命中量");
+
+        // 直接写一行 v12 形状的旧轨迹（三列走默认值）：读出来必须是"未知"，不能当成 0。
+        AppDatabase.Write(conn => AppDatabase.Exec(conn, """
+            INSERT INTO trace_archive
+              (trace_id, tenant_id, status_code, reason_code, total_ms, stage_timings_json,
+               prompt_tokens, completion_tokens, fallback_hops)
+            VALUES ('synthetic-trace-legacy', 'synthetic:tenant-d', 504, 'slow_turn', 4000, '[]', 100, 0, 0);
+            """));
+        var legacyView = archive.Snapshot();
+        Check(legacyView.CachedPromptTokens == 512 && legacyView.CacheUnknownTurns >= 3,
+            "v13 之前的旧行按未知计，不当成 0 命中");
+
+        var archiveColumns = AppDatabase.Query("PRAGMA table_info(trace_archive);", r => r.GetString(1));
+        Check(archiveColumns.Contains("cached_prompt_tokens") && archiveColumns.Contains("cache_write_tokens")
+            && archiveColumns.Contains("cache_usage_unknown"),
+            "trace_archive 有三列缓存用量（v13）");
+
         var circuitSnapshot = new CircuitStatusSnapshot("model", "primary", "closed");
         Check(circuitSnapshot.Type == "model" && circuitSnapshot.Id == "primary" && circuitSnapshot.State == "closed",
             "熔断器快照结构规范且不泄露敏感凭据");
@@ -231,6 +358,181 @@ public static class Program
         cmd.CommandText = "SELECT COUNT(1) FROM settings;";
         var count = Convert.ToInt32(cmd.ExecuteScalar());
         Check(count >= 1, "备份文件具备完整 SQLite 结构与数据一致性");
+
+        // 每日调度（#121）：定时器每小时醒一次，但「今天已经备过」时不能再备 —— 否则保留 3 份只剩 3 小时历史。
+        var calls = 0;
+        var nowMs = BotAgent.Adapters.Time.Clock.UtcNow.ToUnixTimeMilliseconds();
+        using var scheduler = new BotAgent.Services.Ops.DatabaseBackupService(
+            () => { calls++; return "synthetic.db"; },
+            () => nowMs,
+            () => null,
+            (_, _) => { });
+        var skipped = scheduler.RunNowAsync().GetAwaiter().GetResult();
+        Check(skipped.Ok && skipped.Path is null && calls == 0, "今天已经备过时每日调度不再重复备份");
+
+        var forced = scheduler.RunNowAsync(force: true).GetAwaiter().GetResult();
+        Check(forced.Ok && calls == 1 && forced.Path == "synthetic.db", "面板「立刻备一份」可以绕过当日去重");
+    }
+
+    private static void QuotaManagementTests()
+    {
+        const string tenant = "synthetic:quota-management";
+        const string scope = "synthetic:quota-admin";
+        var first = new TenantQuotaStore();
+        var second = new TenantQuotaStore();
+        first.RecordUsage(tenant, 60, 20);
+        var initial = first.ReadManagement(tenant);
+        var saved = first.SaveManagement(tenant, 70, initial.Revision, "quota-save-0001", scope);
+        Check(saved.Quota.UsedTotalTokens == 80 && saved.Quota.EnergySaving && saved.Revision == 1,
+            "quota save preserves usage and recomputes energy state");
+        second.RecordUsage(tenant, 1, 1);
+        Check(second.SaveManagement(tenant, 70, initial.Revision, "quota-save-0001", scope) == saved,
+            "quota exact retry returns durable committed receipt before stale CAS");
+        Check(second.FindManagement("quota-save-0001", scope) == saved
+            && second.FindManagement("quota-save-0001", "synthetic:another-admin") is null,
+            "quota receipt lookup survives store recreation and is caller scoped");
+        ExpectQuota("idempotency_conflict", () => first.SaveManagement(tenant, 71, initial.Revision, "quota-save-0001", scope));
+        second.SetDailyTokenLimit(tenant, 100);
+        ExpectQuota("quota_revision_conflict", () => first.SaveManagement(tenant, 90, saved.Revision, "quota-save-0002", scope));
+        Check(first.FindManagement("quota-save-0002", scope) is null && first.GetQuota(tenant).DailyTokenLimit == 100,
+            "quota conflict commits neither receipt nor limit");
+        var revision = first.ReadManagement(tenant).Revision;
+        Parallel.For(0, 32, i => new TenantQuotaStore().RecordUsage(tenant, 2, 1));
+        Check(first.ReadManagement(tenant).Revision == revision && first.GetQuota(tenant).UsedTotalTokens == 178,
+            "multiple quota store instances retain concurrent usage without changing limit revision");
+        Parallel.Invoke(
+            () => Parallel.For(0, 32, i => new TenantQuotaStore().RecordUsage(tenant, 2, 1)),
+            () => second.SaveManagement(tenant, 1000, revision, "quota-save-0003", scope));
+        var final = first.ReadManagement(tenant);
+        Check(final.Quota.UsedTotalTokens == 274 && final.Quota.DailyTokenLimit == 1000 && !final.Quota.EnergySaving,
+            "concurrent quota management and usage preserve both updates");
+        var auditCalls = 0;
+        var auditSaved = first.SaveManagement(tenant, 2000, final.Revision, "quota-audit-0001", scope,
+            (conn, before, after) => { Check(before.DailyTokenLimit == 1000 && after.DailyTokenLimit == 2000,
+                "quota audit sees accurate atomic before and after limits"); auditCalls++; });
+        second.SaveManagement(tenant, 2000, final.Revision, "quota-audit-0001", scope, (conn, before, after) => auditCalls++);
+        Check(auditCalls == 1, "quota exact replay does not append audit twice");
+        try { first.SaveManagement(tenant, 3000, auditSaved.Revision, "quota-audit-failure", scope,
+            (conn, before, after) => throw new InvalidOperationException("synthetic-audit-failure")); }
+        catch (InvalidOperationException ex) when (ex.Message == "synthetic-audit-failure") { }
+        Check(first.FindManagement("quota-audit-failure", scope) is null
+            && first.ReadManagement(tenant) == auditSaved, "quota audit failure atomically rolls back limit revision and receipt");
+        final = first.ReadManagement(tenant);
+        const string capacityScope = "synthetic:quota-capacity";
+        var capacityRevision = final.Revision;
+        for (var i = 0; i < TenantQuotaStore.MaximumReceiptsPerCaller; i++)
+            first.SaveManagement(tenant, 1000, capacityRevision++, "capacity-" + i, capacityScope);
+        ExpectQuota("quota_receipt_capacity", () => first.SaveManagement(tenant, 1001, capacityRevision, "capacity-over", capacityScope));
+        Check(second.FindManagement("capacity-0", capacityScope) is not null
+            && first.GetQuota(tenant).DailyTokenLimit == 1000,
+            "quota receipt capacity fails closed and preserves oldest receipt");
+        var replay = second.SaveManagement(tenant, 1000, final.Revision, "capacity-0", capacityScope);
+        Check(replay.Revision == final.Revision + 1, "quota replay remains available at receipt capacity");
+    }
+
+    private static void ExpectQuota(string code, Action operation)
+    {
+        try { operation(); }
+        catch (TenantQuotaManagementException ex) when (ex.Code == code) { Check(true, code); return; }
+        throw new InvalidOperationException("expected " + code);
+    }
+
+    /// <summary>
+    /// 日志轮转（#121 验收①）：写满/跨天才滚、旧档 gzip、超过 7 天的档被删。
+    /// 这里直接打 LogRotation 的纯文件操作，不必等线上真写满 10 MiB。
+    /// </summary>
+    private static void LogRotationTests(string root)
+    {
+        var logs = Path.Combine(root, "logs-rotation");
+        Directory.CreateDirectory(logs);
+        var active = Path.Combine(logs, LogRotation.ActiveFileName);
+        var today = DateOnly.FromDateTime(Clock.LocalDateTime);
+
+        Check(LogRotation.ShouldRoll(Clock.LocalDateTime, LogRotation.DefaultMaxBytes + 1, today, LogRotation.DefaultMaxBytes),
+            "写满 10 MiB 就该滚动");
+        Check(!LogRotation.ShouldRoll(Clock.LocalDateTime, 1024, today, LogRotation.DefaultMaxBytes),
+            "既没写满也没跨天时不滚动");
+        Check(LogRotation.ShouldRoll(Clock.LocalDateTime.AddDays(-1), 1024, today, LogRotation.DefaultMaxBytes),
+            "跨天就滚动（按天转，不按份数）");
+
+        File.WriteAllText(active, "2026-11-01 00:00:00.000 [Probe] 第一行" + Environment.NewLine);
+        var archived = LogRotation.Roll(logs, today);
+        Check(archived is not null && File.Exists(archived!) && archived!.EndsWith(".gz", StringComparison.Ordinal),
+            "滚动后旧档被 gzip");
+        Check(!File.Exists(active), "滚动后活跃文件被改名（下一条日志重新创建它）");
+        Check(ReadGzip(archived!) is { } archivedText && archivedText.Contains("第一行", StringComparison.Ordinal),
+            "旧档内容完整、能解压回来");
+
+        File.WriteAllText(active, "2026-11-01 00:00:01.000 [Probe] 第二行" + Environment.NewLine);
+        var second = LogRotation.Roll(logs, today);
+        Check(second is not null && !string.Equals(second, archived, StringComparison.Ordinal) && File.Exists(archived!),
+            "同一天第二次滚动不覆盖上一份");
+
+        var expired = Path.Combine(logs, "qqchat-2000-01-01.log.gz");
+        File.WriteAllText(expired, "expired");
+        File.SetLastWriteTimeUtc(expired, Clock.UtcNow.UtcDateTime.AddDays(-8));
+        var fresh = Path.Combine(logs, "qqchat-2000-01-02.log.gz");
+        File.WriteAllText(fresh, "fresh");
+        File.SetLastWriteTimeUtc(fresh, Clock.UtcNow.UtcDateTime.AddDays(-3));
+        File.WriteAllText(active, "2026-11-01 00:00:02.000 [Probe] 活着" + Environment.NewLine);
+        var removed = LogRotation.Sweep(logs, Clock.UtcNow, LogRotation.DefaultRetentionDays);
+        Check(removed >= 1 && !File.Exists(expired), "超过 7 天的旧档被删（日志含群聊正文，保留期是硬约束）");
+        Check(File.Exists(fresh), "7 天内的旧档保留");
+        Check(File.Exists(active), "清理不会误删活跃日志");
+    }
+
+    /// <summary>热备是单任务（#121 验收③）：两个入口同时点火也只跑一个，第二个排队。
+    /// 之所以重要：定时器 + 面板按钮 + 重启后的新实例会同时触发，VACUUM 抢写锁只会互相拖慢。</summary>
+    private static void BackupSingleFlightTests()
+    {
+        var running = 0;
+        var peak = 0;
+        var calls = 0;
+        using var scheduler = new DatabaseBackupService(
+            () =>
+            {
+                Interlocked.Increment(ref calls);
+                var current = Interlocked.Increment(ref running);
+                InterlockedMax(ref peak, current);
+                Thread.Sleep(120);
+                Interlocked.Decrement(ref running);
+                return "synthetic.db";
+            },
+            () => null,
+            () => null,
+            (_, _) => { });
+        var first = Task.Run(() => scheduler.RunNowAsync(force: true));
+        var second = Task.Run(() => scheduler.RunNowAsync(force: true));
+        Task.WaitAll(first, second);
+        Check(peak == 1 && calls == 2, "同一时刻只有一个热备任务在跑（并发调用被串行化）");
+        Check(first.Result.Ok && second.Result.Ok, "串行化后两次调用都成功");
+    }
+
+    private static string? ReadGzip(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var gzip = new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress);
+            using var reader = new StreamReader(gzip, Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int current;
+        while (value > (current = Volatile.Read(ref target)))
+        {
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+            {
+                return;
+            }
+        }
     }
 
     private static void MultiTenantIsolationTests(string root)
@@ -411,7 +713,7 @@ public static class Program
             FeishuVerificationToken = "feishu_verify_token",
             FeishuWhitelist = "oc_synthetic_chat"
         });
-        var fsGateway = new FeishuBotGateway(settingsBox, mockHttp);
+        var fsGateway = new FeishuBotGateway(settingsBox, mockHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var reg = new PlatformRegistry(new IPlatformAdapter[] { fsGateway }, new IPlatformMessenger[] { fsGateway });
         Check(reg.GetAdapter(PlatformId.Feishu) is not null && reg.GetMessenger(PlatformId.Feishu) is not null,
             "PlatformRegistry 能根据平台标识准确检索适配器与发送端");
@@ -470,7 +772,7 @@ public static class Program
             FeishuEncryptKey = "test_signing_key_456",
             FeishuWhitelist = "oc_synthetic_chat"
         });
-        var securedGateway = new FeishuBotGateway(boxWithSecret, mockHttp);
+        var securedGateway = new FeishuBotGateway(boxWithSecret, mockHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var unverifiedRes = securedGateway.HandleWebhookAsync("{\"type\":\"event_callback\"}", "bad_sig", "1700000000", "nonce1").GetAwaiter().GetResult();
         Check(!unverifiedRes.Handled && unverifiedRes.StatusCode == 401,
             "飞书配置加密签名密钥时伪造签名的事件请求直接返回 401");
@@ -548,7 +850,7 @@ public static class Program
             FeishuAppSecret = "sec_test",
             FeishuVerificationToken = "feishu_verify_token"
         });
-        var emptyWhitelistGateway = new FeishuBotGateway(emptyWhitelistBox, mockHttp);
+        var emptyWhitelistGateway = new FeishuBotGateway(emptyWhitelistBox, mockHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var deniedByEmptyWhitelist = emptyWhitelistGateway.HandleWebhookAsync(
             messageEvtJson.Replace("evt_test_001", "evt_empty_whitelist_002"), null, null, null).GetAwaiter().GetResult();
         Check(deniedByEmptyWhitelist.Handled && deniedByEmptyWhitelist.ResponseBody.Contains("not_whitelisted"),
@@ -568,7 +870,7 @@ public static class Program
                 Content = new StringContent("{\"code\":0}")
             }
         };
-        var failingGateway = new FeishuBotGateway(settingsBox, httpFailure);
+        var failingGateway = new FeishuBotGateway(settingsBox, httpFailure, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var failedDelivery = failingGateway.SendAsync(failingGateway.Context, new OutboundMessage(
             new ConversationId(PlatformId.Feishu, AccountScope.Default, ConversationKind.GroupChat, "oc_synthetic_chat"),
             "HTTP 状态失败测试")).GetAwaiter().GetResult();
@@ -576,7 +878,7 @@ public static class Program
         {
             TokenResponse = "{\"code\":0,\"tenant_access_token\":123,\"expire\":{}}"
         };
-        var malformedTokenGateway = new FeishuBotGateway(settingsBox, malformedTokenHttp);
+        var malformedTokenGateway = new FeishuBotGateway(settingsBox, malformedTokenHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var malformedTokenDelivery = malformedTokenGateway.SendAsync(
             malformedTokenGateway.Context,
             new OutboundMessage(
@@ -587,7 +889,7 @@ public static class Program
             "飞书 token 接口返回异常结构时按受控失败结果返回");
 
         var malformedTokenRootHttp = new MockProbeHttp { TokenResponse = "[]" };
-        var malformedTokenRootGateway = new FeishuBotGateway(settingsBox, malformedTokenRootHttp);
+        var malformedTokenRootGateway = new FeishuBotGateway(settingsBox, malformedTokenRootHttp, log: null, ids: null, dedupStore: new FeishuWebhookDedupStore());
         var malformedTokenRootDelivery = malformedTokenRootGateway.SendAsync(
             malformedTokenRootGateway.Context,
             new OutboundMessage(
@@ -642,6 +944,89 @@ public static class Program
             => SendAsync(new HttpRequestMessage(HttpMethod.Get, url), ct);
         public Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default)
             => SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = content }, ct);
+    }
+
+    /// <summary>
+    /// 任务台账（#116）：v12 的表形状、写读往返、幂等覆盖、上限清理与启动序号。
+    /// 这里只验"库这一层"；恢复策略本身在 EngineProbe 的 AgentTaskLedgerTests 里。
+    /// </summary>
+    private static void AgentTaskLedgerTests()
+    {
+        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 13, "库版本应为 v13（轨迹归档缓存用量）");
+        Check(AppDatabase.Scalar<long>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_tasks'") == 1,
+            "v12 必须建出 agent_tasks 表");
+
+        var columns = AppDatabase.Query("SELECT name FROM pragma_table_info('agent_tasks')",
+            reader => AppDatabase.Str(reader, "name") ?? string.Empty);
+        Check(!columns.Any(name => name.Contains("prompt", StringComparison.OrdinalIgnoreCase)
+                                   || name.Contains("result_text", StringComparison.OrdinalIgnoreCase)
+                                   || name.Contains("summary", StringComparison.OrdinalIgnoreCase)),
+            "任务台账不许有提示词/正文列（只存形状与计数）");
+
+        var store = new AgentTaskLedgerStore();
+        var created = new DateTimeOffset(2026, 11, 3, 9, 0, 0, TimeSpan.Zero);
+        var entry = new BotAgent.Engine.Runtime.AgentTaskLedgerEntry
+        {
+            Id = "synthetic-task-1",
+            State = BotAgent.Domain.Agent.AgentTaskState.Succeeded,
+            ErrorCode = null,
+            SourceKey = "panel:synthetic",
+            SessionId = "synthetic-session",
+            Target = "server",
+            CreatedAt = created,
+            UpdatedAt = created.AddSeconds(12),
+            DurationMs = 12345,
+            ToolCalls = 3,
+            CancellationRequested = false,
+            ResultChars = 640,
+            ResultTruncated = true,
+            BootSeq = store.BootSeq
+        };
+        store.Save(entry);
+        var loaded = store.LoadRecent(10).FirstOrDefault(row => row.Id == "synthetic-task-1");
+        Check(loaded.Id == "synthetic-task-1"
+              && loaded.State == BotAgent.Domain.Agent.AgentTaskState.Succeeded
+              && loaded.ErrorCode is null
+              && loaded.SourceKey == "panel:synthetic"
+              && loaded.SessionId == "synthetic-session"
+              && loaded.Target == "server"
+              && loaded.DurationMs == 12345
+              && loaded.ToolCalls == 3
+              && !loaded.CancellationRequested
+              && loaded.ResultChars == 640
+              && loaded.ResultTruncated
+              && loaded.BootSeq == store.BootSeq
+              && loaded.CreatedAt.ToUnixTimeSeconds() == created.ToUnixTimeSeconds()
+              && loaded.UpdatedAt.ToUnixTimeSeconds() == created.AddSeconds(12).ToUnixTimeSeconds(),
+            "任务台账写入后能按字段读回（时间戳精确到秒）");
+
+        store.Save(entry with { State = BotAgent.Domain.Agent.AgentTaskState.Unknown, ErrorCode = "restart_state_unknown" });
+        var overwritten = store.LoadRecent(10).Where(row => row.Id == "synthetic-task-1").ToArray();
+        Check(overwritten.Length == 1
+              && overwritten[0].State == BotAgent.Domain.Agent.AgentTaskState.Unknown
+              && overwritten[0].ErrorCode == "restart_state_unknown",
+            "同 id 重写是覆盖（状态每变一次写一次，必须幂等）");
+
+        var second = new AgentTaskLedgerStore();
+        Check(second.BootSeq == store.BootSeq + 1, "每次启动的台账序号必须递增（重启对账靠它）");
+
+        for (var index = 0; index < 6; index++)
+        {
+            store.Save(entry with
+            {
+                Id = "synthetic-task-prune-" + index,
+                UpdatedAt = created.AddMinutes(index + 1)
+            });
+        }
+
+        var removed = store.Prune(3);
+        Check(removed == 4, $"Prune(3) 应删掉 4 条（7 条里留最新 3 条），实际 {removed}");
+        var kept = store.LoadRecent(10);
+        Check(kept.Count == 3 && kept.All(row => row.Id.StartsWith("synthetic-task-prune-", StringComparison.Ordinal)),
+            "Prune 之后只剩最新的三条清理样例");
+
+        AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM agent_tasks WHERE id LIKE 'synthetic-task-%';"));
     }
 
     private static int _passed;

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
@@ -62,6 +63,8 @@ public static class Program
         }
 
         var cases = new List<CaseResult>();
+        // 性能基线要复用同一批样例：只解析一次，每轮重跑 RunCase（纯逻辑、无 IO、无网络）。
+        var samples = new List<(string Category, JsonObject Node)>();
         foreach (var file in new[] { "on-demand.json", "research.json", "social.json" })
         {
             var path = Path.Combine(fixtureDir, file);
@@ -82,19 +85,23 @@ public static class Program
                 var c = node as JsonObject ?? throw new InvalidOperationException("样例不是 JSON 对象");
                 var result = RunCase(category, c);
                 cases.Add(result);
+                samples.Add((category, c));
                 Console.WriteLine("  " + (result.Passed ? "✅ " : "✗  ") + result.Id + " · " + result.Title
                                   + (result.Passed ? string.Empty : "  → " + result.Detail));
             }
         }
 
         var metrics = Metrics.Compute(cases);
+        var perf = MeasurePipelinePerformance(repoRoot, samples);
         var isolation = new (string Name, string Value)[]
         {
             ("临时目录（= 本次运行数据目录）里新建的文件数", Directory.GetFileSystemEntries(tempDir).Length.ToString(CultureInfo.InvariantCulture)),
             ("是否使用真实密钥", "否（本工程不读任何密钥）"),
             ("是否连网", "否"),
             ("是否写运行数据目录", "否（QQCHAT_DATA_DIR 指向临时目录，且文件日志已关闭）"),
-            ("唯一落盘物", "docs/engineering/eval-results/{results.json,results.csv,summary.md}"),
+            // 产物落在本次运行的临时数据目录里（不是仓库里的 docs/engineering/eval-results ——
+            // 那个目录已随 04cb018 删除，旧文案是过期残留，见 #126）。
+            ("唯一落盘物", "临时数据目录下的 eval-results/{results.json,results.csv,summary.md}（可用 QQCHAT_EVAL_OUTPUT_DIR 改写）"),
         };
 
         var outputDir = Environment.GetEnvironmentVariable("QQCHAT_EVAL_OUTPUT_DIR") is { Length: > 0 } customOut
@@ -115,9 +122,177 @@ public static class Program
 
         Console.WriteLine();
         Console.WriteLine($"样例合计 {cases.Count}：通过 {cases.Count(c => c.Passed)}，失败 {cases.Count(c => !c.Passed)}");
-        Console.WriteLine("产物：docs/engineering/eval-results/{results.json,results.csv,summary.md}");
+        Console.WriteLine("产物：" + outputDir + "/{results.json,results.csv,summary.md}");
+
+        Console.WriteLine();
+        Console.WriteLine("管线性能基线（确定性决策链耗时，不含真实模型延迟）：");
+        Console.WriteLine("  " + perf.Display);
+
+        if (!perf.Passed)
+        {
+            // Fail-Closed：基线文件缺失或读不通时不能当成“0 个样例通过”了事，要单独标 2。
+            return perf.FailClosed ? 2 : 1;
+        }
 
         return cases.All(c => c.Passed) ? 0 : 1;
+    }
+
+    // ───────────────────────────── 管线性能基线（#126） ─────────────────────────────
+    //
+    // 口径：这里量的是**确定性决策链**的耗时（同一批夹具、同样的输入 → 同样的输出），
+    // 不是真实模型延迟，也不能拿来推断线上响应时间。它唯一的作用是**拦住性能回归**。
+    //
+    // 为什么“一轮 = 把全部样例连跑 N 遍”而不是“跑一遍”：
+    // 68 个样例跑一遍只有 0.5ms 左右，低于计时与 GC 噪声的量级，取百分位毫无意义；
+    // 也没有任何实现会比 0.5ms 快/慢出可判定的差别。把一个**轮**定义成若干遍扫描（默认 200 遍 ≈ 100ms），
+    // 采样才够粗、3 倍阈值才既拦得住真回归又不被抖动误伤。
+    //
+    // 为什么每轮都重新计时、最后对“轮”取百分位：
+    // 单轮采样少（默认 15 轮），P95 天然接近最大值 —— 这正是守护值该有的脾气：
+    // 长尾抖动不该被平均掉。
+    //
+    // 基线写在 tests/fixtures/pipeline/baseline.json，由人看过一次实测值后手工确认合入；
+    // 程序**不会**自动改写它（没有 --write-baseline 之类的开关），否则守护值就失去意义。
+
+    private sealed class PipelinePerformance
+    {
+        public bool Passed { get; init; }
+
+        public bool FailClosed { get; init; }
+
+        public string Display { get; init; } = string.Empty;
+    }
+
+    private static PipelinePerformance MeasurePipelinePerformance(
+        string repoRoot,
+        IReadOnlyList<(string Category, JsonObject Node)> samples)
+    {
+        var baselinePath = Path.Combine(repoRoot, "tests", "fixtures", "pipeline", "baseline.json");
+        if (!File.Exists(baselinePath))
+        {
+            return FailClosed("✗ 找不到性能基线 " + baselinePath + " → 失败关闭（基线随代码一起提交，不要在 CI 里现算）");
+        }
+
+        double baselineP50Ms, baselineP95Ms, maxMultiplier;
+        int warmupRounds, measuredRounds, sweepsPerRound;
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(baselinePath)) is not JsonObject doc)
+            {
+                throw new InvalidOperationException("baseline.json 不是 JSON 对象");
+            }
+
+            baselineP50Ms = PositiveDouble(doc, "p50Ms");
+            baselineP95Ms = PositiveDouble(doc, "p95Ms");
+            maxMultiplier = PositiveDouble(doc, "maxMultiplier");
+            warmupRounds = NonNegativeInt(doc, "warmupRounds");
+            measuredRounds = PositiveInt(doc, "measuredRounds");
+            sweepsPerRound = PositiveInt(doc, "sweepsPerRound");
+            if (measuredRounds < 5)
+            {
+                throw new InvalidOperationException("measuredRounds 至少 5 轮，否则 P95 没有意义");
+            }
+        }
+        catch (Exception ex)
+        {
+            return FailClosed("✗ 基线文件读不通（" + ex.Message + "）→ 失败关闭");
+        }
+
+        if (samples.Count == 0)
+        {
+            return FailClosed("✗ 没有样例可计时 → 失败关闭（夹具被清空时就该红）");
+        }
+
+        for (var i = 0; i < warmupRounds; i++)
+        {
+            RunRound(samples, sweepsPerRound);
+        }
+
+        var stopwatch = new Stopwatch();
+        var times = new List<double>(measuredRounds);
+        for (var i = 0; i < measuredRounds; i++)
+        {
+            stopwatch.Restart();
+            RunRound(samples, sweepsPerRound);
+            stopwatch.Stop();
+            times.Add(stopwatch.Elapsed.TotalMilliseconds);
+        }
+
+        var p50 = Percentile(times, 50);
+        var p95 = Percentile(times, 95);
+
+        // 允许 maxMultiplier 倍，另留 15ms 绝对余量（只为吸收 CI 上一次 GC / 调度抖动；
+        // 真回归是成倍的，15ms 拦不住它）。
+        var p50Limit = Math.Max(baselineP50Ms * maxMultiplier, baselineP50Ms + 15);
+        var p95Limit = Math.Max(baselineP95Ms * maxMultiplier, baselineP95Ms + 15);
+        var passed = p50 <= p50Limit && p95 <= p95Limit;
+
+        var display = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{(passed ? "✓" : "✗")} 本轮 P50 {p50:F1}ms（上限 {p50Limit:F1}）/ P95 {p95:F1}ms（上限 {p95Limit:F1}）"
+            + $" · 每轮 {sweepsPerRound} 遍 × {samples.Count} 个样例，采样 {measuredRounds} 轮（预热 {warmupRounds} 轮）"
+            + $" · 基线 P50 {baselineP50Ms:F1}ms / P95 {baselineP95Ms:F1}ms × {maxMultiplier:F1}");
+
+        return new PipelinePerformance { Passed = passed, FailClosed = false, Display = display };
+    }
+
+    private static PipelinePerformance FailClosed(string display) =>
+        new() { Passed = false, FailClosed = true, Display = display };
+
+    /// <summary>跑一轮：把全部样例按原顺序连扫 <paramref name="sweeps"/> 遍（RunCase 是纯函数，副作用只有返回值）。</summary>
+    private static void RunRound(IReadOnlyList<(string Category, JsonObject Node)> samples, int sweeps)
+    {
+        for (var sweep = 0; sweep < sweeps; sweep++)
+        {
+            foreach (var (category, node) in samples)
+            {
+                RunCase(category, node);
+            }
+        }
+    }
+
+    /// <summary>最近秩百分位（nearest-rank）：小样本下不会像线性插值那样给出不存在的值。</summary>
+    private static double Percentile(List<double> values, int percentile)
+    {
+        var sorted = values.OrderBy(v => v).ToList();
+        var rank = (int)Math.Ceiling(percentile / 100.0 * sorted.Count) - 1;
+        return sorted[Math.Clamp(rank, 0, sorted.Count - 1)];
+    }
+
+    private static double PositiveDouble(JsonObject doc, string key)
+    {
+        var value = doc[key]?.GetValue<double>()
+                    ?? throw new InvalidOperationException("缺少 " + key);
+        if (value <= 0 || double.IsNaN(value) || double.IsInfinity(value))
+        {
+            throw new InvalidOperationException(key + " 必须是正数");
+        }
+
+        return value;
+    }
+
+    private static int PositiveInt(JsonObject doc, string key)
+    {
+        var value = doc[key]?.GetValue<int>()
+                    ?? throw new InvalidOperationException("缺少 " + key);
+        if (value <= 0)
+        {
+            throw new InvalidOperationException(key + " 必须是正整数");
+        }
+
+        return value;
+    }
+
+    private static int NonNegativeInt(JsonObject doc, string key)
+    {
+        var value = doc[key]?.GetValue<int>()
+                    ?? throw new InvalidOperationException("缺少 " + key);
+        if (value < 0)
+        {
+            throw new InvalidOperationException(key + " 不能是负数");
+        }
+
+        return value;
     }
 
     // ───────────────────────────── 单条样例 ─────────────────────────────

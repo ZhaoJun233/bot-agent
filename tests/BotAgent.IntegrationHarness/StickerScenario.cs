@@ -57,6 +57,10 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 协议端和面板是**两个独立启动阶段**（Host/Program.cs）：只等 botWsPort 就在 Linux
+        // 容器里读过 /api/settings，会稳定拿到 Connection refused。这里按面板端口有界等待，
+        // 断言本身不放宽（仍要求 200 + 具体字段）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         // 先把生效的配置看清楚：这是全新数据目录，环境变量应当作为“种子”生效
         var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
@@ -193,7 +197,10 @@ public static partial class Program
         Check("巡检结束后张数仍然 ≤ 上限", CountStickers(dataDir) <= 3, $"当前 {CountStickers(dataDir)}");
 
         // ---- 7) 频率门：库里就几张时不能每句都挂同一张（群友直接开愤）----
-        openAi.EnqueueReply($$"""{"suitability": 99, "reply": "又一句", "sticker": "{{id1}}"}""");
+        // 2026-10-18（复审 F8）：这里不能用 FIFO 脚本队列 —— 前面的图片消息可能合并成更少的
+        // 模型请求，队列里会残留“沉默”脚本，把这一轮挤成空回复。改为按提示词匹配
+        // （MockOpenAi.AddRule 正是为这种“位置对齐太脆”的轮次准备的）。
+        openAi.AddRule("再来一句", $$"""{"suitability": 99, "reply": "又一句", "sticker": "{{id1}}"}""");
         var imagesBefore = protocol.ActionsReceived
             .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
             .SelectMany(ImageSegments)

@@ -102,7 +102,8 @@ public static partial class Program
             await bot.StopAsync();
         }
 
-        env["QQCHAT_WHITELIST"] = "30004";
+        // 配置在首轮已落盘（QQCHAT_* 只是首次部署的种子），重启时改环境变量不会生效；
+        // 这里经面板真保存一次，再验发送闸门。
         var bot2 = StartBot(env);
         try
         {
@@ -112,6 +113,11 @@ public static partial class Program
             var restored = await ReadConversationAsync();
             Check("S49 重启后历史消息仍在",
                 restored?["messageCount"]?.GetValue<int>() > 0);
+
+            var narrowed = await PanelPostJsonAsync(
+                $"http://127.0.0.1:{panelPort}/api/settings",
+                "{\"messageWhitelist\":\"30004\"}", panelToken);
+            Check("S49 白名单经面板保存生效", narrowed.Code == 200);
 
             var blocked = await PanelPostJsonAsync(
                 $"http://127.0.0.1:{panelPort}/api/conversations/{Uri.EscapeDataString(conversationKey)}/send",

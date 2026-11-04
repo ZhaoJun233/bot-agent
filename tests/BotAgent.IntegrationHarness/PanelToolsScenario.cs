@@ -61,6 +61,69 @@ public static partial class Program
                 ["newPassword"] = "synthetic-s46-changed-password"
             }.ToJsonString(), System.Text.Encoding.UTF8, "application/json"), cts.Token);
         Check("完成改密后获得正式面板会话", changed.IsSuccessStatusCode, $"HTTP {(int)changed.StatusCode}");
+
+        // ── 登录/改密的非法 JSON 形状必须映射成 400，不能因为索引异常留下 200 空响应 ──
+        using (var malformedClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        {
+            foreach (var malformedBody in new[] { "[]", "1", """{"password":12}""", """{"password":[]}""", """{"password":{}}""" })
+            {
+                using var response = await malformedClient.PostAsync($"{panel}/api/auth/login",
+                    new StringContent(malformedBody, System.Text.Encoding.UTF8, "text/plain"), cts.Token);
+                Check($"非法登录请求形状返回 400（{malformedBody}）", (int)response.StatusCode == 400,
+                    $"HTTP {(int)response.StatusCode}");
+            }
+        }
+
+        foreach (var malformedBody in new[] { "[]", """{"newPassword":12}""", """{"newPassword":[]}""" })
+        {
+            using var response = await sessionHttp.PostAsync($"{panel}/api/auth/change-password",
+                new StringContent(malformedBody, System.Text.Encoding.UTF8, "text/plain"), cts.Token);
+            Check($"非法改密请求形状返回 400（{malformedBody}）", (int)response.StatusCode == 400,
+                $"HTTP {(int)response.StatusCode}");
+        }
+
+        // 校验失败不能损坏原密码；成功登录仍应正常。
+        using (var validClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+        using (var validLogin = await validClient.PostAsync($"{panel}/api/auth/login",
+            new StringContent("{\"password\":\"synthetic-s46-changed-password\"}", System.Text.Encoding.UTF8, "application/json"), cts.Token))
+        {
+            Check("非法形状之后原密码仍可登录", validLogin.IsSuccessStatusCode, $"HTTP {(int)validLogin.StatusCode}");
+        }
+
+        // ── Origin 必须同时校验 scheme + host + effective port ──
+        var panelOrigin = $"http://127.0.0.1:{healthPort}";
+        var otherOriginPort = FreePort(healthPort + 1);
+        async Task<(int Code, string Body)> OriginPostAsync(string origin, string json, string? host = null, string? forwarded = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{panel}/api/settings");
+            request.Headers.TryAddWithoutValidation("Origin", origin);
+            if (host is not null) request.Headers.Host = host;
+            if (forwarded is not null) request.Headers.TryAddWithoutValidation("X-Forwarded-Proto", forwarded);
+            request.Content = new StringContent(json, System.Text.Encoding.UTF8, "text/plain");
+            using var response = await sessionHttp.SendAsync(request, cts.Token);
+            return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(cts.Token));
+        }
+        async Task<string> SavedCooldownAsync()
+        {
+            using var response = await sessionHttp.GetAsync($"{panel}/api/settings", cts.Token);
+            var root = JsonNode.Parse(await response.Content.ReadAsStringAsync(cts.Token)) as JsonObject;
+            return root?["runtime"]?["groupCooldownSeconds"]?.ToString() ?? "(missing)";
+        }
+
+        var (sameOriginCode, _) = await OriginPostAsync(panelOrigin, """{"groupCooldownSeconds":11}""");
+        Check("同源 Cookie 写请求仍成功", sameOriginCode == 200 && await SavedCooldownAsync() == "11",
+            $"HTTP {sameOriginCode} cooldown={await SavedCooldownAsync()}");
+        var (crossPortCode, _) = await OriginPostAsync($"http://127.0.0.1:{otherOriginPort}", """{"groupCooldownSeconds":22}""");
+        Check("★ 同主机异端口 Origin 被拒且不落盘", crossPortCode == 403 && await SavedCooldownAsync() == "11",
+            $"HTTP {crossPortCode} cooldown={await SavedCooldownAsync()}");
+        var (crossSchemeCode, _) = await OriginPostAsync($"https://127.0.0.1:{healthPort}", """{"groupCooldownSeconds":33}""");
+        Check("★ 同主机异协议 Origin 被拒且不落盘", crossSchemeCode == 403 && await SavedCooldownAsync() == "11",
+            $"HTTP {crossSchemeCode} cooldown={await SavedCooldownAsync()}");
+        var (proxyCode, _) = await OriginPostAsync("https://panel.example", """{"groupCooldownSeconds":44}""",
+            host: "panel.example", forwarded: "https");
+        Check("★ 可信回环反向代理的完整 Origin 仍可写", proxyCode == 200 && await SavedCooldownAsync() == "44",
+            $"HTTP {proxyCode} cooldown={await SavedCooldownAsync()}");
+
         var (anonymousCode, _) = await HttpGetAsync($"{panel}/api/tools");
         Check("未登录读取工具目录仍返回 401", anonymousCode == 401, $"HTTP {anonymousCode}");
 
@@ -99,6 +162,20 @@ public static partial class Program
 
         Check("执行者登记 = 4 家", (root["executors"] as JsonArray)?.Count == 4,
             (root["executors"] as JsonArray)?.ToJsonString() ?? "(没有 executors)");
+
+        // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 26 —— MCP 单列，
+        // 否则“发现到一个 MCP 服务器”看起来会像“内建能力目录多了一条”。
+        var inventory = root["inventory"] as JsonObject;
+        var inventoryEntries = inventory?["entries"] as JsonArray;
+        Check("★ /api/tools 带统一查询面（内建 26 + MCP 分列，无重名）",
+            inventory is not null
+            && inventory["builtin"]?.GetValue<int>() == 26
+            && inventory["mcp"]?.GetValue<int>() == 0
+            && inventory["total"]?.GetValue<int>() == 26
+            && (inventory["duplicates"] as JsonArray)?.Count == 0
+            && inventoryEntries?.Count == 26
+            && inventoryEntries.All(entry => entry?["origin"]?.GetValue<string>() == "Builtin"),
+            inventory?.ToJsonString() ?? "(没有 inventory)");
 
         JsonObject? Find(string id) => tools.FirstOrDefault(n => n?["id"]?.GetValue<string>() == id) as JsonObject;
 
@@ -187,12 +264,12 @@ public static partial class Program
             postCode == 404, $"HTTP {postCode}");
 
         var (healthCode, _) = await SessionGetAsync($"{panel}/healthz");
-        // 批次 H（追踪页）：新增的静态文件必须真的发得出来（否则页面白屏，而探针是静态检查看不出来）
-        var (traceJsCode, traceJsBody) = await SessionGetAsync($"{panel}/trace.js");
-        Check("★ 面板发得出 /trace.js（追踪页脚本，嵌进程序集）",
-            traceJsCode == 200 && traceJsBody.Contains("TracePage", StringComparison.Ordinal),
-            $"HTTP {traceJsCode} {traceJsBody[..Math.Min(80, traceJsBody.Length)]}");
-        var (traceCssCode, traceCssBody) = await SessionGetAsync($"{panel}/trace.css");
+        // S6：旧面板静态文件（/trace.js /trace.css /dash.js）已随 wwwroot 整体删除。
+        // 这里反向钉住"不再由宿主发页面/脚本"，数据面 /api/dashboard 与 /api/traces 才是要保的契约。
+        var (traceJsCode, _) = await SessionGetAsync($"{panel}/trace.js");
+        Check("★ 旧追踪页脚本已移除（S6）", traceJsCode == 404, $"HTTP {traceJsCode}");
+        var (traceCssCode, _) = await SessionGetAsync($"{panel}/trace.css");
+        Check("旧追踪页样式已移除（S6）", traceCssCode == 404, $"HTTP {traceCssCode}");
         var (dashCode, dashBody) = await SessionGetAsync($"{panel}/api/dashboard");
         var dashRoot = JsonNode.Parse(dashBody) as JsonObject ?? new JsonObject();
         Check("★ /api/dashboard 一屏给全（运行 / 延迟 / 内存 / 工具 / 权限 / 轨迹，全是只读汇总）",
@@ -202,11 +279,7 @@ public static partial class Program
             && (dashRoot["traces"] as JsonObject)?["capacity"]?.GetValue<int>() == 50,
             $"HTTP {dashCode} {dashBody[..Math.Min(160, dashBody.Length)]}");
         var (dashJsCode, _) = await SessionGetAsync($"{panel}/dash.js");
-        Check("面板发得出 /dash.js（仪表盘脚本）", dashJsCode == 200, $"HTTP {dashJsCode}");
-
-        Check("面板发得出 /trace.css（追踪页样式）",
-            traceCssCode == 200 && traceCssBody.Contains(".trace-body", StringComparison.Ordinal),
-            $"HTTP {traceCssCode} {traceCssBody[..Math.Min(80, traceCssBody.Length)]}");
+        Check("旧仪表盘脚本已移除（S6）", dashJsCode == 404, $"HTTP {dashJsCode}");
 
         // 批次 C：决策轨迹的只读数据面（形状检查；轨迹内容的语义由 SafetyProbe 的台账断言钉住）
         var (tracesCode, tracesBody) = await SessionGetAsync($"{panel}/api/traces");

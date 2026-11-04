@@ -76,6 +76,13 @@ public sealed partial class WebUiServer
         }
     }
 
+    /// <summary>
+    /// 水位（#121）：库与日志目录占多少、备份多久没跑、RSS 与 swap、进程启动时刻。
+    /// 读目录/进程是 IO 细节，交给 <see cref="PanelStatusFacts" />，面板只看到结论。
+    /// </summary>
+    private JsonObject OpsFacts() => PanelStatusFacts.Build(_backups, _hostFacts,
+        () => BotAgent.Adapters.Persistence.AppDatabase.FilePath, Clock.Now);
+
     private JsonObject BuildStatus() => new()
     {
         ["status"] = "running",
@@ -115,7 +122,8 @@ public sealed partial class WebUiServer
         ["profileSummaryFailures"] = _scheduler.SummaryFailCount,
         ["stickers"] = _stickers.Store.Count,
         ["stickersDescribed"] = _stickers.Store.DescribedCount,
-        ["stickersPending"] = _stickers.PendingDescribe
+        ["stickersPending"] = _stickers.PendingDescribe,
+        ["ops"] = OpsFacts()
     };
 
     private JsonObject BuildState() => new()
@@ -125,6 +133,48 @@ public sealed partial class WebUiServer
         ["conversations"] = new JsonArray(BuildConversations().Select(c => (JsonNode)c).ToArray()),
         ["serverTime"] = Clock.Now.ToUnixTimeMilliseconds()
     };
+
+    /// <summary>
+    /// GET /api/backup：每日热备的现状（最近一次 / 失败原因 / 是否过期 / 水位）。
+    /// 结论由 <see cref="PanelStatusFacts" /> 算 —— 面板、ZBA 组件、健康日报看的是同一份判断。
+    /// </summary>
+    private JsonObject BuildBackupPayload()
+    {
+        var status = PanelStatusFacts.BuildBackupComponent(_backups, Clock.Now);
+        return new JsonObject
+        {
+            ["ok"] = _backups is not null,
+            ["lastSuccessAt"] = _backups?.LastSuccessAt?.ToString("O"),
+            ["lastError"] = _backups?.LastError,
+            ["state"] = status?.State,
+            ["stale"] = status is { Available: false },
+            ["retained"] = DatabaseBackupService.MaxRetained,
+            ["ops"] = OpsFacts()
+        };
+    }
+
+    /// <summary>
+    /// POST /api/backup：立刻热备一份（升级前手动留个点；也是恢复演练的触发器）。
+    /// 与定时器走同一处 <see cref="DatabaseBackupService.RunNowAsync" />，成功/失败都落 meta。
+    /// </summary>
+    private async Task HandleBackupAsync(HttpListenerContext context)
+    {
+        if (_backups is null)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["ok"] = false, ["error"] = "热备服务未初始化" });
+            return;
+        }
+
+        var (ok, path, error) = await _backups.RunNowAsync(force: true);
+        await WriteJsonAsync(context, ok ? 200 : 502, new JsonObject
+        {
+            ["ok"] = ok,
+            ["path"] = path,
+            ["error"] = error,
+            ["lastSuccessAt"] = _backups.LastSuccessAt?.ToString("O"),
+            ["retained"] = DatabaseBackupService.MaxRetained
+        });
+    }
 
     /// <summary>
     /// GET /api/health-report：面板卡片要的一切（开关/时刻/收件人/下一次推送/上次结果）。
@@ -146,7 +196,8 @@ public sealed partial class WebUiServer
             ["lastSentAt"] = _healthReports?.LastSentAt?.ToString("O"),
             ["lastError"] = _healthReports?.LastError,
             ["sentCount"] = _healthReports?.SentCount ?? 0,
-            ["serverTime"] = HealthReportService.NowBeijing().ToString("O")
+            ["serverTime"] = HealthReportService.NowBeijing().ToString("O"),
+            ["ops"] = OpsFacts()
         };
     }
 

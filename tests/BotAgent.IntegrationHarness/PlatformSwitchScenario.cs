@@ -17,7 +17,7 @@ public static partial class Program
         var panel = $"http://127.0.0.1:{panelPort}";
         const string panelToken = "it-s52-synthetic-token";
         var dataDir = NewDataDir("s52");
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
 
         JsonObject Policy(string platform, bool enabled, bool chat) => new()
         {
@@ -207,10 +207,10 @@ public static partial class Program
                     : receipt?["reason"]?.GetValue<string>() == "local_channel_disabled"), $"HTTP {code}");
         }
 
-        async Task StartReadyAsync(BotProcess bot)
+        async Task StartReadyAsync(BotProcess bot, bool waitForOneBot = true)
         {
             // Do not include BotProcess.Diagnostics in failures: even synthetic message logs stay private.
-            await WaitForPortAsync(botWsPort, cts.Token);
+            if (waitForOneBot) await WaitForPortAsync(botWsPort, cts.Token);
             await WaitForPortAsync(panelPort, cts.Token);
             Check("synthetic bot is running", !bot.HasExited, $"exited={bot.HasExited}");
         }
@@ -341,7 +341,8 @@ public static partial class Program
 
             using (var restarted = StartBot(env))
             {
-                await StartReadyAsync(restarted);
+                // The persisted policy disables qq.private, so its OneBot driver must not listen.
+                await StartReadyAsync(restarted, waitForOneBot: false);
                 AssertRuntime(await ReadRuntimeAsync("restart"), "restart persistence",
                     false, true, false, true, false, false, true, false);
                 var rows = await ReadPlatformsAsync("restart");

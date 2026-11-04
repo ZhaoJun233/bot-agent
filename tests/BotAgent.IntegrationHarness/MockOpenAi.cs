@@ -11,14 +11,16 @@ namespace BotAgent.IntegrationHarness;
 /// </summary>
 public sealed class MockOpenAi : IDisposable
 {
-    private readonly HttpListener _listener = new();
+    private HttpListener _listener = new();
     private readonly List<JsonObject> _requests = new();
+    private readonly List<string?> _requestAuthorizations = new();
     private string? _lastAuthorization;
     private readonly object _gate = new();
     private readonly Queue<string> _scriptedReplies = new();
     private readonly Queue<string> _curationReplies = new();
     private readonly Queue<string> _stickerDescribeReplies = new();
-    private readonly int _port;
+    private int _port;
+    private readonly string _bind;
     private int _portraitRequests;
     private int _stickerDescribeRequests;
     private int _stickerCurateRequests;
@@ -27,7 +29,7 @@ public sealed class MockOpenAi : IDisposable
     public MockOpenAi(int port, string bind = "127.0.0.1")
     {
         _port = port;
-        _listener.Prefixes.Add($"http://{bind}:{port}/");
+        _bind = bind;
         BaseUrl = $"http://127.0.0.1:{_port}/v1";
     }
 
@@ -40,6 +42,10 @@ public sealed class MockOpenAi : IDisposable
     /// <summary>人为拖慢响应，用于可靠地测「触发消息与回复之间被插话」的引用行为。</summary>
     public int ResponseDelayMs { get; set; }
 
+    /// <summary>Optional synthetic usage for successful completions; zero keeps the existing wire response unchanged.</summary>
+    public int PromptTokens { get; set; }
+    public int CompletionTokens { get; set; }
+
     /// <summary>收到的请求体（已解析）。</summary>
     public IReadOnlyList<JsonObject> Requests
     {
@@ -48,6 +54,19 @@ public sealed class MockOpenAi : IDisposable
             lock (_gate)
             {
                 return _requests.ToArray();
+            }
+        }
+    }
+
+    /// <summary>与 Requests 一一对应的 Authorization 头（没带就是 null）。
+    /// 换密钥、换端点这类断言要按请求索引取，不能只看“最近一次”。</summary>
+    public IReadOnlyList<string?> RequestAuthorizations
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _requestAuthorizations.ToArray();
             }
         }
     }
@@ -70,6 +89,7 @@ public sealed class MockOpenAi : IDisposable
         lock (_gate)
         {
             _requests.Clear();
+            _requestAuthorizations.Clear();
         }
     }
 
@@ -255,7 +275,13 @@ public sealed class MockOpenAi : IDisposable
 
     public void Start()
     {
-        _listener.Start();
+        // 端口冲突不该让整轮 harness 崩掉：换空闲端口并把 BaseUrl 指向新端口。
+        var bound = SyntheticListener.Start(ref _listener, _bind, _port);
+        if (bound != _port)
+        {
+            _port = bound;
+            BaseUrl = $"http://127.0.0.1:{_port}/v1";
+        }
         _ = Task.Run(AcceptLoopAsync);
     }
 
@@ -279,6 +305,12 @@ public sealed class MockOpenAi : IDisposable
 
     private async Task HandleAsync(HttpListenerContext context)
     {
+        // 在请求**进入处理**时就锁定这次延迟，而不是等取完脚本回复再读全局值。
+        // 慢上游场景要先把 ResponseDelayMs 调成 9 秒、等第一条请求被记录后再调回 0；
+        // Linux 容器里线程池调度慢，原来“记录请求 → 读 ResponseDelayMs”之间可能已经过了 200ms，
+        // 第一条请求因此拿到 0 延迟、根本不会超时（2026-10-20 的 Linux 全量就是这样红的）。
+        var responseDelayMs = ResponseDelayMs;
+
         using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
         var body = await reader.ReadToEndAsync();
 
@@ -322,11 +354,26 @@ public sealed class MockOpenAi : IDisposable
             lock (_gate)
             {
                 _requests.Add(payload);
+                _requestAuthorizations.Add(string.IsNullOrWhiteSpace(authorization) ? null : authorization);
                 if (!string.IsNullOrWhiteSpace(authorization))
                 {
                     _lastAuthorization = authorization;
                 }
             }
+        }
+
+        // 测试注入：命中标记直接 400（不可重试），让真宿主的任务确定性地失败。
+        var failMarker = FailChatMarker;
+        if (failMarker is not null && body.Contains(failMarker, StringComparison.Ordinal))
+        {
+            var failBody = Encoding.UTF8.GetBytes(
+                "{\"error\":{\"code\":400,\"message\":\"synthetic marker failure\"}}");
+            context.Response.StatusCode = 400;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = failBody.Length;
+            await context.Response.OutputStream.WriteAsync(failBody);
+            context.Response.Close();
+            return;
         }
 
         // 上游（Gemini 等）会给“以模型发言结尾”的请求直接返回 400：
@@ -464,9 +511,9 @@ public sealed class MockOpenAi : IDisposable
 
         string content = TakeRuleReply(body) ?? TakeScriptedReply();
 
-        if (ResponseDelayMs > 0)
+        if (responseDelayMs > 0)
         {
-            await Task.Delay(ResponseDelayMs);
+            await Task.Delay(responseDelayMs);
         }
 
         await WriteCompletionAsync(context, payload, content);
@@ -474,6 +521,12 @@ public sealed class MockOpenAi : IDisposable
 
     /// <summary>接下来 N 次聊天请求直接回 503（模拟上游“No capacity”）。</summary>
     public int FailChatTimes { get; set; }
+
+    /// <summary>
+    /// 命中该标记的聊天请求直接回 400（不可重试），用于在真宿主链路制造确定的 agent 失败。
+    /// 只用于合成测试；命中后不消耗脚本回复。
+    /// </summary>
+    public string? FailChatMarker { get; set; }
 
     /// <summary>接下来 N 次聊天请求回 200 但**没有 choices**（实测：慢的 `-high` 模型“思考”把预算吃光时会这样）。</summary>
     public int EmptyChoicesTimes { get; set; }
@@ -562,7 +615,7 @@ public sealed class MockOpenAi : IDisposable
         }
     }
 
-    private static async Task WriteCompletionAsync(HttpListenerContext context, JsonObject? payload, string content)
+    private async Task WriteCompletionAsync(HttpListenerContext context, JsonObject? payload, string content)
     {
         var response = new JsonObject
         {
@@ -579,6 +632,14 @@ public sealed class MockOpenAi : IDisposable
                 }
             }
         };
+
+        if (PromptTokens != 0 || CompletionTokens != 0)
+            response["usage"] = new JsonObject
+            {
+                ["prompt_tokens"] = PromptTokens,
+                ["completion_tokens"] = CompletionTokens,
+                ["total_tokens"] = PromptTokens + CompletionTokens
+            };
 
         var bytes = Encoding.UTF8.GetBytes(response.ToJsonString());
         context.Response.StatusCode = 200;

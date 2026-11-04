@@ -32,7 +32,8 @@
 # 验证（不经过机器人，直接问服务）：
 #     curl -s http://127.0.0.1:5010/health
 #     curl -s -o /tmp/t.wav "http://127.0.0.1:5010/speak?text=%E4%BD%A0%E5%A5%BD&voice=zh_CN-huayan-medium&speed=1.0"
-FROM python:3.11-slim
+# digest 钉死（#122）：浮动 tag 会让"同一份代码"在不同日期构建出不同镜像。
+FROM python:3.11-slim@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
 
 # piper-tts 本体 + 中文音色的两套依赖：
 #   unicode-rbnf  ：把数字/日期读成中文（piper/phonemize_chinese.py 直接 import）

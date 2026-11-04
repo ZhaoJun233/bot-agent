@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.SafetyProbe;
 
@@ -91,7 +92,8 @@ public static partial class Program
             catch (OperationCanceledException) { cancelled = true; }
             Check("取消操作向上传播，不伪装成降级成功", cancelled);
 
-            var parse = typeof(ServerAgentRunner).GetMethod("ParseTools",
+            // #136：解析从 ServerAgentRunner 搬进了单入口 ServerToolAccess（同一份口径，runner 只消费它）。
+            var parse = typeof(ServerToolAccess).GetMethod("ParseTools",
                 System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
             Check("非空 none 名单不授予任何工具",
                 ((HashSet<string>)parse.Invoke(null, new object[] { "none" })!).Count == 0);

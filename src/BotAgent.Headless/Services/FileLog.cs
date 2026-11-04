@@ -12,6 +12,11 @@ namespace BotAgent.Services;
 ///   • 启动时用 <see cref="PreloadRecent" /> 从日志文件尾部回填一段 —— 这样**刷新页面 / 重启进程之后
 ///     日志页也不是空的**（以前日志只活在浏览器内存里：一刷新就“被清空”，管理员反馈过）。
 ///   • 通过 <see cref="LineWritten" /> 把同一份文本推给面板（SSE 实时流）。
+///
+/// 日志会按天滚动（<see cref="MaxLogBytes" /> 写满也滚动一次），旧档 gzip 后保留
+/// <see cref="RetentionDays" /> 天再删。保留期按**天**不按份数：日志里有群聊正文，
+/// 那是隐私约束（见 AGENTS.md 第 1 节），不是磁盘策略。滚动的实际文件操作在
+/// <see cref="LogRotation" /> 里 —— 抽出去是为了让探针能直接验（见 ProductionSpecProbe）。
 /// </summary>
 public static class FileLog
 {
@@ -20,12 +25,27 @@ public static class FileLog
     /// <summary>环形缓冲里最多的行数（面板首屏最多也就拉这么多）。</summary>
     public const int RecentCapacity = 600;
 
-    private static readonly Queue<(long Time, string Text)> Recent = new();
+    private static readonly Queue<(long Time, string Text, bool CanClassify)> Recent = new();
 
     /// <summary>一条新日志（文本含级别标签、不含时间戳；时间为本地时间毫秒）。面板用它做实时推送。</summary>
     public static event Action<long, string>? LineWritten;
 
-    private static string LogPath => Path.Combine(AppPaths.LogsDir, "qqchat.log");
+    private static string LogPath => Path.Combine(AppPaths.LogsDir, LogRotation.ActiveFileName);
+
+    /// <summary>单文件上限：写满就滚动一次（10 MiB 约十万行，够排障窗口）。</summary>
+    private const long MaxLogBytes = LogRotation.DefaultMaxBytes;
+
+    /// <summary>归档保留天数。按天不按份数：日志里有群聊正文（AGENTS.md 第 1 节），保留期是隐私约束。</summary>
+    private const int RetentionDays = LogRotation.DefaultRetentionDays;
+
+    /// <summary>当前 qqchat.log 已写字节（-1 = 还没探过）。</summary>
+    private static long _activeBytes = -1;
+
+    /// <summary>当前 qqchat.log 归属的本地日期（滚动按天）。</summary>
+    private static DateOnly _activeDay;
+
+    /// <summary>上次清理归档的日期（一天只扫一次目录）。</summary>
+    private static DateOnly? _sweptDay;
 
     /// <summary>当前日志文件路径（健康日报要报它的大小；文件可能不存在）。</summary>
     public static string LogFilePath => LogPath;
@@ -49,7 +69,7 @@ public static class FileLog
         lock (Gate)
         {
             var take = Math.Clamp(limit, 1, RecentCapacity);
-            return Recent.Count <= take ? Recent.ToArray() : Recent.Skip(Recent.Count - take).ToArray();
+            return Recent.TakeLast(take).Select(entry => (entry.Time, entry.Text)).ToArray();
         }
     }
 
@@ -93,7 +113,9 @@ public static class FileLog
                         continue;
                     }
 
-                    Recent.Enqueue(ParseLine(line));
+                    var parsed = ParseLine(line);
+                    // 持久文本可能含聊天换行伪造的独立前缀，不能再据此前缀分类。
+                    Recent.Enqueue((parsed.Time, parsed.Text, false));
                 }
 
                 TrimLocked();
@@ -145,7 +167,10 @@ public static class FileLog
                 lock (Gate)
                 {
                     Directory.CreateDirectory(AppPaths.LogsDir);
-                    File.AppendAllText(LogPath, line + Environment.NewLine, Encoding.UTF8);
+                    RollIfNeeded();
+                    var payload = line + Environment.NewLine;
+                    File.AppendAllText(LogPath, payload, Encoding.UTF8);
+                    _activeBytes += Encoding.UTF8.GetByteCount(payload);
                 }
             }
             catch
@@ -157,7 +182,7 @@ public static class FileLog
         // 3) 内存环形缓冲 + 面板实时推送（都放在文件写入之后：面板挂掉也拖不慢主流程）
         lock (Gate)
         {
-            Recent.Enqueue((now.ToUnixTimeMilliseconds(), text));
+            Recent.Enqueue((now.ToUnixTimeMilliseconds(), text, true));
             TrimLocked();
         }
 
@@ -169,6 +194,71 @@ public static class FileLog
         {
             // UI 推送失败不影响主流程
         }
+    }
+
+    /// <summary>
+    /// 该滚就滚、该清就清（只在写文件的 <see cref="Gate" /> 锁内调用，所以不必再锁）。
+    /// 具体怎么滚、怎么清在 <see cref="LogRotation" /> 里 —— 那里是纯文件操作，探针能直接验。
+    /// </summary>
+    private static void RollIfNeeded()
+    {
+        var today = DateOnly.FromDateTime(Clock.LocalDateTime);
+        if (_activeBytes < 0)
+        {
+            var info = new FileInfo(LogPath);
+            _activeBytes = info.Exists ? info.Length : 0;
+            _activeDay = info.Exists ? DateOnly.FromDateTime(info.LastWriteTime) : today;
+        }
+
+        if (_activeDay != today || _activeBytes >= MaxLogBytes)
+        {
+            Roll(today);
+        }
+
+        SweepIfNeeded(today);
+    }
+
+    /// <summary>把当前文件挪成归档并 gzip。失败也照样继续写日志（绝不因为滚动失败丢行）。</summary>
+    private static void Roll(DateOnly today)
+    {
+        // 先把状态推到“新的一天 / 0 字节”再动手：下面 catch 里的 Warn 会再进一次 WriteCore，
+        // 若状态还没更新，它会立刻再滚一次 —— 递归。
+        _activeBytes = 0;
+        _activeDay = today;
+        try
+        {
+            LogRotation.Roll(AppPaths.LogsDir, today);
+        }
+        catch (Exception exception)
+        {
+            Warn("Log", $"日志滚动失败（继续写同一个文件）：{exception.Message}");
+        }
+    }
+
+    /// <summary>清掉超过保留期的归档。一天只扫一次目录（写日志在热路径上，别每条都枚举）。</summary>
+    private static void SweepIfNeeded(DateOnly today)
+    {
+        if (_sweptDay == today)
+        {
+            return;
+        }
+
+        _sweptDay = today;
+        try
+        {
+            LogRotation.Sweep(AppPaths.LogsDir, Clock.Now, RetentionDays);
+        }
+        catch (Exception exception)
+        {
+            // 清理失败不影响写日志；下一天会再试。这里不能走 Warn —— 会再进 WriteCore。
+            Console.Error.WriteLine($"[Log] WARN 清理过期日志失败：{exception.Message}");
+        }
+    }
+
+    /// <summary>安全查看器快照：仅本进程完整写入的行可分类，磁盘回填只给隐藏占位。</summary>
+    public static IReadOnlyList<(long Time, string Text, bool CanClassify)> RecentRuntimeLines(int limit)
+    {
+        lock (Gate) return Recent.TakeLast(Math.Clamp(limit, 1, RecentCapacity)).ToArray();
     }
 
     private static void TrimLocked()

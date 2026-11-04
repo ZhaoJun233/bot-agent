@@ -1,0 +1,47 @@
+# 仓库目录责任人
+
+> 由 #123 引入。**唯一 owner 暂为仓库维护者**；团队扩大后再按目录细分。
+> GitHub 只在有写权限的人身上生效——这不是权限系统，只是"改到这里该找谁看"的路标。
+
+# 默认：所有路径
+*                                   @ZhaoJun233
+
+# 后端宿主与装配（启动顺序、退出、配置装配）
+/src/BotAgent.Headless/             @ZhaoJun233
+
+# 回复主链与引擎（会话内 FIFO、静默短路、引用挂载等不变量都在这里）
+/src/BotAgent.Engine/               @ZhaoJun233
+
+# 协议端（OneBot / 官方通道 / 飞书）
+/src/BotAgent.Platforms/            @ZhaoJun233
+
+# 存储与配置（事务边界、schema 迁移、配置修订号）
+/src/BotAgent.Storage/              @ZhaoJun233
+
+# 模型客户端
+/src/BotAgent.Model/                @ZhaoJun233
+
+# 新面板契约（ZBA 路由与 OpenAPI）
+/src/BotAgent.Panel/                @ZhaoJun233
+
+# 面板前端
+/src/web/                           @ZhaoJun233
+
+# 探针与集成场景（改断言等于改门禁，必须显式评审）
+/tests/                             @ZhaoJun233
+
+# CI、发布与容器
+/.github/                           @ZhaoJun233
+/docker-compose.yml                 @ZhaoJun233
+/Dockerfile.app                     @ZhaoJun233
+
+# 文档与治理（含本文件自己）
+/docs/                              @ZhaoJun233
+/AGENTS.md                          @ZhaoJun233
+/AGENTS.en.md                       @ZhaoJun233
+/README.md                          @ZhaoJun233
+/README.en.md                       @ZhaoJun233
+/CONTRIBUTING.md                    @ZhaoJun233
+/CONTRIBUTING.en.md                 @ZhaoJun233
+/SECURITY.md                        @ZhaoJun233
+/SECURITY.en.md                     @ZhaoJun233

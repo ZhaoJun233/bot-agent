@@ -15,8 +15,9 @@ namespace BotAgent.IntegrationHarness;
 /// </summary>
 public sealed class MockSearchHost : IDisposable
 {
-    private readonly HttpListener _listener = new();
-    private readonly int _port;
+    private HttpListener _listener = new();
+    private int _port;
+    private readonly string _bind;
     private int _searxHits;
     private int _wikiHits;
     private int _pageHits;
@@ -24,7 +25,7 @@ public sealed class MockSearchHost : IDisposable
     public MockSearchHost(int port, string bind = "127.0.0.1")
     {
         _port = port;
-        _listener.Prefixes.Add($"http://{bind}:{port}/");
+        _bind = bind;
     }
 
     public string BaseUrl => $"http://127.0.0.1:{_port}";
@@ -44,7 +45,8 @@ public sealed class MockSearchHost : IDisposable
 
     public void Start()
     {
-        _listener.Start();
+        // 同 MockOpenAi：端口被占就换空闲端口（BaseUrl 是从 _port 现算的）。
+        _port = SyntheticListener.Start(ref _listener, _bind, _port);
         _ = Task.Run(AcceptLoopAsync);
     }
 

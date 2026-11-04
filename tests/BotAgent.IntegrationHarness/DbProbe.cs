@@ -12,7 +12,14 @@ namespace BotAgent.IntegrationHarness;
 /// </summary>
 public static class DbProbe
 {
-    public static string DbPath(string dataDir) => Path.Combine(dataDir, "data", "qqchat.db");
+    public static string DbPath(string dataDir)
+    {
+        var data = Path.Combine(dataDir, "data");
+        var canonical = Path.Combine(data, "botagent.db");
+        if (File.Exists(canonical)) return canonical;
+        var legacy = Path.Combine(data, "qqchat.db");
+        return File.Exists(legacy) ? legacy : canonical;
+    }
 
     public static bool Exists(string dataDir) => File.Exists(DbPath(dataDir));
 

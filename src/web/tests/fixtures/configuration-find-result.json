@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "receipt": {
+    "key": "cfg1:0123456789abcdef0123456789abcdef:1760000000:fedcba9876543210fedcba9876543210",
+    "contractRevision": "cfg-0.3.3",
+    "decision": 0,
+    "observedVersion": "7",
+    "committedVersion": "8",
+    "commitState": 1,
+    "applyState": 1,
+    "steps": [
+      {
+        "step": 0,
+        "state": 1
+      }
+    ],
+    "deviceKeyAssignments": []
+  }
+}

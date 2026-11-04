@@ -103,7 +103,6 @@ public static partial class Program
         await Scenario("s30", RunCompanionScenarioAsync);
         await Scenario("s31", RunImageFetchScenarioAsync);
         await Scenario("s32", RunBurstScenarioAsync);
-        await Scenario("s33", RunAgentBridgeScenarioAsync);
         await Scenario("s34", RunServerAgentScenarioAsync);
         await Scenario("s35", RunHealthReportScenarioAsync);
         await Scenario("s36", RunPrivacySettingsScenarioAsync);
@@ -122,12 +121,20 @@ public static partial class Program
             await Scenario("s50", RunFeishuPlatformScenarioAsync);
             await Scenario("s51", RunQuotaPanelScenarioAsync);
             await Scenario("s52", RunPlatformSwitchScenarioAsync);
-        // s42（官方通道）**暂未接入回归**：2026-09-21 子代理写的这套端到端场景只跑到 7✓/9✗
-        // 而且**会挂死**（假网关推事件的时序 + 等待没上超时）。已确认的结论：官方出站（token→/gateway/bot→
-        // identify）与入站事件分发**都是通的**（机器人日志里能看到官方那条的“忽略（不在白名单）: 群 8000…”，
-        // 假网关也收到了 QQBot 头与 intents=1<<25）——不过那几条断言的状态时序没搭对。
-        // 修好超时与白名单重置后再挂回来；细节见 docs（§4.24 官方通道）。
-        // await Scenario("s42", RunOfficialChannelScenarioAsync);
+            await Scenario("s53", RunMcpServerScenarioAsync);
+            await Scenario("s54", RunZbaHostScenarioAsync);
+            await Scenario("s55", RunZbaEventRestartScenarioAsync);
+            await Scenario("s56", RunFifoInvariantScenarioAsync);
+            await Scenario("s57", RunSilenceShortCircuitInvariantScenarioAsync);
+            await Scenario("s58", RunQuoteFirstSegmentInvariantScenarioAsync);
+            await Scenario("s59", RunVoiceTextDedupInvariantScenarioAsync);
+            await Scenario("s60", RunBackupRestoreScenarioAsync);
+            await Scenario("s61", RunProviderRegistryScenarioAsync);
+            await Scenario("s62", RunLegacyVersionScenarioAsync);
+        await Scenario("s63", RunWhitelistHotReloadScenarioAsync);
+        await Scenario("s64", RunOneBotWireScenarioAsync);
+        await Scenario("s65", RunTaskRecoveryScenarioAsync);
+        await Scenario("s42", RunOfficialChannelScenarioAsync);
         }
         catch (Exception ex)
         {
@@ -228,6 +235,42 @@ public static partial class Program
             sends.Count >= 2 && QuotedMessageId(sends[1]) == 7003,
             $"引用 id = {QuotedMessageId(sends.Count >= 2 ? sends[1] : null)}");
         Check("4 条活跃消息都送进了模型（由模型自主决定是否发言）", openAi.Requests.Count == 4, $"实际 {openAi.Requests.Count} 次");
+
+        // #98：输入缓存前缀在**真实链路**上的证据。S1 这四轮走的是同一条主链路、同一份配置，
+        // 所以系统提示的「稳定前缀」必须逐字相同；第一个分叉只能落在动态尾巴里
+        // （动态段第一句是发言意愿，见 PromptBuilder.BuildSuitabilityInstruction）。
+        if (openAi.Requests.Count >= 2)
+        {
+            var previousPrompt = SystemText(openAi.Requests[0]);
+            var currentPrompt = SystemText(openAi.Requests[1]);
+            var commonPrefix = 0;
+            while (commonPrefix < previousPrompt.Length
+                   && commonPrefix < currentPrompt.Length
+                   && previousPrompt[commonPrefix] == currentPrompt[commonPrefix])
+            {
+                commonPrefix++;
+            }
+
+            var dynamicStart = new[] { "你非常健谈主动", "你比较健谈", "你较为克制", "你极少主动发言" }
+                .Select(marker => currentPrompt.IndexOf(marker, StringComparison.Ordinal))
+                .Where(index => index >= 0)
+                .DefaultIfEmpty(-1)
+                .Min();
+            Check("★ 连续两轮请求的系统提示只在动态尾巴上分叉（输入缓存前缀稳定）",
+                dynamicStart > 0 && commonPrefix >= dynamicStart - 1,
+                $"共同前缀 {commonPrefix} 字，动态尾巴起点 {dynamicStart} 字，上轮 {previousPrompt.Length} 字 / 本轮 {currentPrompt.Length} 字");
+            // 只报数（不进断言）：这条数字是 #98「缓存前缀占比」的可复核口径。
+            Console.WriteLine($"      · 输入缓存前缀：稳定约 {Math.Max(0, dynamicStart - 1)} 字 / 系统提示共 {currentPrompt.Length} 字");
+
+            var toolsBefore = ToolSection(previousPrompt);
+            var toolsNow = ToolSection(currentPrompt);
+            if (toolsBefore.Length > 0 && toolsNow.Length > 0)
+            {
+                Check("★ 连续两轮请求的可用工具清单逐字一致且顺序不变",
+                    string.Equals(toolsBefore, toolsNow, StringComparison.Ordinal),
+                    $"上轮 {toolsBefore.Length} 字 / 本轮 {toolsNow.Length} 字");
+            }
+        }
 
         // ---- 提示词断言 ----
         var first = openAi.Requests.FirstOrDefault();
@@ -391,8 +434,13 @@ public static partial class Program
         openAi.EnqueueReply("""{"suitability": 90, "reply": "超时那次的无效回复"}""");
         openAi.EnqueueReply("""{"suitability": 90, "reply": "慢也答上了"}""");
         await protocol.SendGroupMessageAsync(99999, 20006, "老王", "@机器人 慢慢想", 7010, mentionBot: true, ct: cts.Token);
-        // 第一次请求一落到假上游并且开始延迟后，再把后续延迟调回 0：模拟“第一次卡住、重试那下很快”（真上游换账号后常见）
-        await WaitUntilAsync(() => openAi.Requests.Count > reqsBeforeSlow, TimeSpan.FromSeconds(30));
+        // 等到**这一条**带“慢慢想”的请求真的进了假上游（MockOpenAi 在请求入口就锁定延迟），
+        // 再把后续延迟调回 0：模拟“第一次卡住、重试那下很快”（真上游换账号后常见）。
+        // 不能只等 Requests 计数：别的后台请求先到也会把计数顶上去，导致这条还没开始就被改成 0。
+        await WaitUntilAsync(
+            () => Enumerable.Range(0, openAi.Requests.Count).Skip(reqsBeforeSlow)
+                .Any(i => openAi.DescribeRequest(i).Contains("慢慢想", StringComparison.Ordinal)),
+            TimeSpan.FromSeconds(30));
         await Task.Delay(200);
         openAi.ResponseDelayMs = 0;
         await WaitUntilAsync(() => protocol.ActionsReceived
@@ -420,7 +468,8 @@ public static partial class Program
         Section("S3 白名单严格模式");
 
         const int openAiPort = 17802;
-        const int botWsPort = 13012;
+        // 固定端口会被本机其它程序的普通绑定/出站连接占掉（本项目踩过多次）→ 用 FreePort 兜底。
+        var botWsPort = FreePort(13012);
         var dataDir = NewDataDir("s3");
 
         using var openAi = new MockOpenAi(openAiPort);
@@ -541,7 +590,7 @@ public static partial class Program
         Section("S4 模型沉默时不发言");
 
         const int openAiPort = 17803;
-        const int botWsPort = 13013;
+        var botWsPort = FreePort(13013);
         var dataDir = NewDataDir("s4");
 
         using var openAi = new MockOpenAi(openAiPort);
@@ -714,6 +763,14 @@ public static partial class Program
             await WaitForPortAsync(healthPort, cts.Token, bot);
             var health = await HttpGetAsync($"http://127.0.0.1:{healthPort}/healthz");
             Check("/healthz 返回 200", health.Status == 200, health.Body);
+            // 版本必须能从运行时读到（#122）：值来自 Directory.Build.props 的单一 <Version>，
+            // 运维不进容器翻文件就能回答"跑的是哪一版"。这里只钉形状，具体数值由 CI 的版本一致性断言负责。
+            var healthVersion = ReadHealthVersion(health.Body);
+            Check("/healthz 回报形如 x.y.z 的版本号",
+                healthVersion is not null
+                && System.Text.RegularExpressions.Regex.IsMatch(healthVersion, @"^[0-9]+\.[0-9]+\.[0-9]+$")
+                && healthVersion != "0.0.0",
+                healthVersion ?? "(没有 version 字段)");
             var ready = await HttpGetAsync($"http://127.0.0.1:{healthPort}/readyz");
             Check("/readyz 已连接时返回 200", ready.Status == 200, ready.Body);
             var status = await PanelGetAsync($"http://127.0.0.1:{healthPort}/status");
@@ -1090,11 +1147,13 @@ public static partial class Program
 
             var headerChars = sys.Length;
             // 预算一路长上来：2500 → 3200（发言决策细则）→ 3400（replyTo 语义 + 底线）
-            // → 3500（〔旁白：…〕）→ 4000（现在的时间 + 搜索自主判断），实测 3749 字。
+            // → 3500（〔旁白：…〕）→ 4000（现在的时间 + 搜索自主判断）→ 4200（#97 时效边界：
+            // 知识截止未知 / 不否认新事实 / 用户说法未确认，+164 字，实测 4125）。
             // ⚠ 这是**提醒线**，不是目标：再加内容时先想想能不能删旧话 ——
             // 提示词越长越慢越贵（§23.3 C 的“生成 8~15s”里就有它一份）。
-            Check("系统提示没失控（< 4000 字，提醒线；真正要钉的是下面的“已折叠不重复”）",
-             headerChars < 4000, $"实际 {headerChars} 字");
+            // #98（缓存前缀与时延）会重新精简这一段，届时把线往下调。
+            Check("系统提示没失控（< 4200 字，提醒线；真正要钉的是下面的“已折叠不重复”）",
+             headerChars < 4200, $"实际 {headerChars} 字");
 
              // 批次 D：工具清单真的进了系统提示（按策略裁剪；没开的能力不出现）。
              Check("★ 提示词里带了工具清单 [可用工具]（批 D：让模型看见工具）",
@@ -1373,9 +1432,12 @@ public static partial class Program
     {
         Section("S12 群历史补录：留得住 + 看得见 + 面板可见");
 
-        const int openAiPort = 17811;
-        const int botWsPort = 13021;
-        const int panelPort = 18085;
+        // 端口一律走 FreePort：写死时会被别的进程的一条普通出站连接占成临时端口，
+        // 面板 HttpListener 绑不上（实测现象：「绑定 http://127.0.0.1:18085/ 失败：另一个程序正在使用此文件」，
+        // 随后 /api/* 全部连接被拒）。见 FreePort 的注释。
+        var openAiPort = FreePort(17811);
+        var botWsPort = FreePort(13021);
+        var panelPort = FreePort(18085);
         const string panelToken = "synthetic-s12-panel-token";
         const long groupId = 66663;
         var dataDir = NewDataDir("s12");
@@ -1411,6 +1473,9 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板在协议端之后才起（CompositionRoot 里 web.Start() 排在 Agent.Start() 之后）：
+        // 只等 ws 端口不足以说明 /api/* 可用，必须单独等面板端口。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001 };
 
@@ -1603,6 +1668,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -1682,6 +1749,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -1775,6 +1844,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        // 面板是独立启动阶段：只等协议端口会抢跑（Linux 容器里实测 Connection refused）。
+        await WaitForPortAsync(panelPort, cts.Token, bot);
 
         using var protocol = new MockProtocol { SelfId = 10001, AccountOnline = true };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -1922,8 +1993,8 @@ public static partial class Program
         var (s401, _) = await HttpGetAsync($"{panel}/api/qqlogin");
         Check("★ 二维码接口同样受面板令牌保护", s401 == 401, $"HTTP {s401}");
         var (bridgeStatus, bridgeBody) = await HttpGetAsync($"{panel}/agent-bridge?token=wrong");
-        Check("桥入口绕过面板口令门，但仍由桥自身拒绝错误令牌",
-            bridgeStatus == 401 && bridgeBody.Contains("bad token"), $"HTTP {bridgeStatus}");
+        Check("桥入口已随 cfg-0.3.3 移除（不再有独立认证例外）",
+            bridgeStatus == 401 && bridgeBody.Contains("unauthorized"), $"HTTP {bridgeStatus} {Truncate(bridgeBody, 120)}");
 
         // ---- 2) 二维码图片 ----
         var (svgStatus, svg) = await HttpGetAsync($"{panel}/api/qqlogin/qrcode.svg?token={panelToken}");
@@ -2014,7 +2085,7 @@ public static partial class Program
 
         foreach (var config in new[] { "Release", "Debug" })
         {
-            var candidate = Path.Combine(RepoRoot, "src", "BotAgent.Headless", "bin", config, "net8.0", "BotAgent.Headless.dll");
+            var candidate = Path.Combine(RepoRoot, "src", "BotAgent.Headless", "bin", config, "net10.0", "BotAgent.Headless.dll");
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -2060,11 +2131,14 @@ public static partial class Program
             StandardErrorEncoding = Encoding.UTF8
         };
 
-        // 不继承宿主机的 QQCHAT_* 配置，避免污染
+        // 不继承宿主机的 QQCHAT_* / BOTAGENT_MCP_* 配置，避免污染
+        //（MCP 那条必须一起清：别的场景如果继承了 BOTAGENT_MCP_SERVERS，会在启动时尝试连一个不存在的外部服务器）
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
             var key = entry.Key?.ToString();
-            if (key is not null && key.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase))
+            if (key is not null &&
+                (key.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase) ||
+                 key.StartsWith("BOTAGENT_MCP_", StringComparison.OrdinalIgnoreCase)))
             {
                 psi.Environment.Remove(key);
             }
@@ -2177,6 +2251,20 @@ public static partial class Program
         return null;
     }
 
+    // 从 /healthz 的 JSON 里取 version 字段；解析失败返回 null（不抛，避免把断言变成异常）
+    private static string? ReadHealthVersion(string body)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(body);
+            return document.RootElement.TryGetProperty("version", out var node) ? node.GetString() : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
     private static async Task<(int Status, string Body)> HttpGetAsync(string url, string? panelToken = null)
     {
         using var http = panelToken is null
@@ -2195,10 +2283,11 @@ public static partial class Program
 
     // ---------- 断言 ----------
 
-    /// <summary>是否应该跑某个场景（QQCHAT_IT_ONLY=s16 只跑该场景）。</summary>
+    /// <summary>是否应该跑某个场景（BOTAGENT_IT_ONLY=s16，旧名 QQCHAT_IT_ONLY 兼容）。</summary>
     private static bool ShouldRun(string tag)
     {
-        var only = Environment.GetEnvironmentVariable("QQCHAT_IT_ONLY");
+        var only = Environment.GetEnvironmentVariable("BOTAGENT_IT_ONLY")
+            ?? Environment.GetEnvironmentVariable("QQCHAT_IT_ONLY");
         if (string.IsNullOrWhiteSpace(only))
         {
             return true;
@@ -2258,6 +2347,19 @@ public static partial class Program
         => request["messages"]?.AsArray()
                .FirstOrDefault(m => m?["role"]?.GetValue<string>() == "system")?["content"]?.GetValue<string>()
            ?? string.Empty;
+
+    /// <summary>[可用工具] 那一段（到下一个空行分段为止）；没有就返回空串。</summary>
+    private static string ToolSection(string system)
+    {
+        var start = system.IndexOf("[可用工具]", StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return string.Empty;
+        }
+
+        var end = system.IndexOf("\n\n[", start + 1, StringComparison.Ordinal);
+        return end > start ? system[start..end] : system[start..];
+    }
 
     private static List<string> UserTexts(JsonObject request)
         => request["messages"]?.AsArray()

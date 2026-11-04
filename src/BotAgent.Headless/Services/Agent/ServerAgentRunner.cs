@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Tools;
+using BotAgent.Services.Mcp;
 using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Agent;
@@ -10,7 +12,7 @@ namespace BotAgent.Services.Agent;
 ///
 /// 为什么不用“在容器里再装一个 pi”：
 ///   • 镜像要加 Node + npm + pi（几百 MB），而容器里真正缺的是**干活的脑子**，不是那个 CLI；
-///   • pi 的价值在管理员本机的文件/工具链 —— 那是**本机桥**（AgentBridgeServer）的事；
+///   • pi 的价值在管理员本机的文件/工具链 —— 本机桥已于 cfg-0.3.3 移除，服务器路径不再依赖它；
 ///   • 容器里的 agent 要干的是“看日志、翻数据、查库存、跑健康检查”这类运维活：bash + 读写文件 + 抓 URL 就够。
 /// 所以这里是一个**原生 C# 的工具循环**：同一个模型、同一套白名单，只是执行地点在容器里。
 ///
@@ -26,6 +28,11 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
     private readonly SettingsBox _box;
     private readonly OpenAiClient _brain;
+    private readonly McpToolUseCase? _mcp;
+
+    /// <summary>已发现 MCP 工具名的副本，用于任务受理时冻结权限上限。</summary>
+    internal IReadOnlyList<string> GetTaskMcpToolNames()
+        => _mcp?.Tools.Select(tool => tool.QualifiedName).ToArray() ?? [];
     private readonly Action<string> _log;
 
     /// <summary>一轮里最多做几个 QQ 动作（防“给每个人都点一遍”——真去 QQ 里刷一圈比多跑几步麻烦得多）。</summary>
@@ -39,12 +46,14 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     /// </summary>
     private const int TaskMaxSeconds = 240;
 
-    public ServerAgentRunner(SettingsBox box, OpenAiClient brain, IHttpFetcher http, Action<string> log)
+    public ServerAgentRunner(SettingsBox box, OpenAiClient brain, IHttpFetcher http, Action<string> log,
+        McpToolUseCase? mcp = null)
     {
         _box = box;
         _brain = brain;
         _http = http;
         _log = log;
+        _mcp = mcp;
     }
 
     /// <summary>出网（服务器 agent 抓页面用）：socket 由装配点持有，见 <see cref="IHttpFetcher" />。</summary>
@@ -82,12 +91,16 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 "wrong_executor", "QQ 动作由会话宿主执行（要会话现场才能解析 sender/me/this）。");
         }
 
-        var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
-        var allowed = ParseTools(_settings.AgentServerTools);
-        if (!_settings.AgentServerDocker)
+        if (_mcp?.IsMcpTool(tool) == true)
         {
-            allowed.Remove("docker");
+            return BotAgent.Domain.Tools.ToolOutcome.Failure(
+                "no_conversation", "MCP 工具只能在 // 会话路径执行（需要会话 key 做审计与预算）。");
         }
+
+        var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
+        // #136：白名单只从单入口算一次（与 RunAsync 同一份口径）。
+        var access = ServerToolAccess.Resolve(_settings, DockerAvailability.IsAvailable);
+        var allowed = access.Tools;
 
         if (!allowed.Contains(tool))
         {
@@ -100,7 +113,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             call.Arguments?["command"]?.GetValue<string>(), null, call.Arguments ?? new JsonObject());
 
         var output = await RunToolAsync(tool, step, workDir, allowed,
-            QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions), qqHost: null, ct);
+            access.QqActions, qqHost: null,
+            conversationKey: string.Empty, callIndex: call.CallIndex, ct);
 
         return BotAgent.Domain.Tools.ToolOutcome.Success(output, $"服务器工具 {tool}");
     }
@@ -110,15 +124,12 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     {
         var workDir = string.IsNullOrWhiteSpace(_settings.AgentServerWorkDir) ? "/data" : _settings.AgentServerWorkDir.Trim();
         var maxSteps = Math.Clamp(_settings.AgentServerMaxSteps, 1, 30);
-        var allowed = ParseTools(_settings.AgentServerTools);
-
-        // docker 是高权限能力（docker.sock ≈ root）：只在面板那个开关打开时才能用。
-        // 两把锁：就算管理员在“工具”里写了 docker，开关没开也不给用。
-        if (!_settings.AgentServerDocker)
-        {
-            allowed.Remove("docker");
-        }
-        var qqAllowed = QqActionCatalog.ParseAllowed(_settings.AgentServerQqActions);
+        // docker 是高权限能力（docker.sock ≈ root）：两把锁同时开才进白名单。
+        // ② “容器里真的有 docker”—— compose 默认不挂载 socket（#131）。
+        // 工具可见性单入口（#136）：作用域只能收窄（与配置白名单取交集），未知名字静默忽略。
+        var access = ServerToolAccess.Resolve(_settings, DockerAvailability.IsAvailable, task.ToolScope);
+        var allowed = access.Tools;
+        var qqAllowed = access.QqActions;
 
         // 批次 A 第 2 步的收尾：**可选**过统一闸门（默认关 = 与今天逐字一致，见 AppSettings.AgentServerUseGate）。
         // 开着的判定口径 = 本次允许的工具白名单；高风险那几只由服务端显式点名（ServerToolGate）。
@@ -134,7 +145,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var prohibitedQqActions = new List<string>();
         var failedQqActions = new List<string>();
 
-        var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost);
+        await RefreshMcpAsync(ct);
+        var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost, access.Scope) + (task.Natural ? NaturalTone : string.Empty);
 
         // 会话上下文：**默认不带**（每条 // 指令单独对待）——
         // 管理员 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
@@ -188,7 +200,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 {
                     // 不是 JSON：先给一次机会，让它把话说进协议里（模型偶尔会拿散文答话，
                     // 而散文一旦被当成结论，工具就一次都不会调 —— 管理员会看到一份“凭空编的答案”）。
-                    if (nudged == 0 && allowed.Count > 0)
+                    if (nudged == 0 && (allowed.Count > 0 || _mcp is { ToolCount: > 0 }))
                     {
                         nudged++;
                         messages.Add(("assistant", raw.Trim()));
@@ -221,16 +233,23 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 }
 
                 var name = step0.Tool;
-                task.LastNote = DescribeTool(name, step0.Command, step0.Arg, step0.Raw);
+                task.LastNote = _mcp?.IsMcpTool(name) == true ? "MCP " + name : DescribeTool(name, step0.Command, step0.Arg, step0.Raw);
                 task.ToolCalls = step;
                 Progress?.Invoke(task);
 
                 string output;
                 try
                 {
-                    // 一轮里最多做 5 个 QQ 动作：模型偶尔会上头（“给每个人都点一遍”），
-                    // 真去 QQ 里刷一圈比多跑几步麻烦得多。
-                    if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
+                    // MCP 不经过静态 ServerToolGate（那边只认识内建 6 个工具）；授权/预算/Schema 在 McpToolUseCase 里另过一次。
+                    // #136：任务声明了工具作用域时，作用域里的 MCP 名字才允许执行（提示词也只列这些，两边同源）。
+                    if (_mcp?.IsMcpTool(name) == true && !access.AllowsMcp(name))
+                    {
+                        output = $"工具 {name} 不在这次任务的工具作用域里，不能调用。"
+                                 + "用作用域里允许的工具，或者直接给 final 说明你查到了什么。";
+                    }
+                    else if (_mcp?.IsMcpTool(name) == true)
+                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, task.SourceKey, step - 1, ct);
+                    else if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
                     {
                         output = $"这次已经做了 {MaxQqActionsPerTask} 个 QQ 动作，不再做了（要接着做请再发一条指令）。";
                     }
@@ -246,7 +265,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     }
                     else
                     {
-                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, ct);
+                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost,
+                            task.SourceKey, step - 1, ct);
                     }
                 }
                 catch (OperationCanceledException)
@@ -271,7 +291,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     }
                 }
 
-                _log($"[ServerAgent] 第 {step} 步 {task.LastNote} → {Shorten(output.Replace('\n', ' '), 110)}");
+                _log($"[ServerAgent] 第 {step} 步 {task.LastNote} → " + (_mcp?.IsMcpTool(name) == true ? "MCP（内容不回显）" : Shorten(output.Replace('\n', ' '), 110)));
 
                 messages.Add(("assistant", raw));
                 messages.Add(("user", $"工具输出（{name}）：\n{output}\n\n（继续：要么再调工具，要么给 final）"));
@@ -396,9 +416,14 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         }
     }
 
-    private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost)
+    private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost,
+        ToolScope? scope = null)
     {
         var list = new List<string>();
+        if (_mcp?.PromptText(scope) is { Length: > 0 } mcpText)
+        {
+            list.Add(mcpText + "\n调用 MCP 时 tool 写完整名，参数直接放在同一 JSON 对象里。");
+        }
         // 批次 D：先给出**统一目录**生成的清单（名字 + 一句话 + 参数），下面每条再写容器里的实情。
         list.Add("工具清单（服务端登记表，按面板开关裁剪）：" + string.Join("、", ServerToolSpecs.All
             .Where(s => allowed.Contains(s.Id))
@@ -446,7 +471,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
         return
             "你是运行在 QQ 机器人**服务器容器内部**的执行 agent。你的活儿是看日志、翻数据、查文件、跑健康检查这类运维/排查工作。\n" +
-            $"工作目录：{workDir}（机器人自己的数据目录是 /data：日志 /data/logs/qqchat.log、数据库 /data/data/qqchat.db）\n" +
+            $"工作目录：{workDir}（机器人自己的数据目录是 /data：日志 /data/logs/qqchat.log、数据库 /data/data/botagent.db；旧库 qqchat.db 仍兼容）\n" +
             $"可用工具：\n{tools}\n\n" +
             "每一轮**只输出一行 JSON**，两种形状之一：\n" +
             "  {\"thought\":\"我现在想干什么\",\"tool\":\"bash\",\"command\":\"ls -la /data\"}\n" +
@@ -484,29 +509,25 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             (_settings.AgentServerBaseUrl is { Length: > 0 } ? $"\n（你的模型接口：{_settings.AgentServerBaseUrl}，模型 {(_settings.AgentServerModel.Length > 0 ? _settings.AgentServerModel : _settings.Model)}）" : string.Empty);
     }
 
-    private static HashSet<string> ParseTools(string raw)
-    {
-        // 批次 D：工具名单来自**统一目录**（Services/Tools/ServerToolSpecs）——这里不再是第二个内联数组。
-        // “留空 = 全开”这条口径**照旧**（它是既有行为，见 QqActionCatalog 注释里那句“故意不一样”）。
-        var all = ServerToolSpecs.Names;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return new HashSet<string>(all, StringComparer.Ordinal);
-        }
+    /// <summary>自然对话派来的活：final 用聊天口吻说（像在群里接着刚才的话），不写报告体。</summary>
+    private const string NaturalTone =
+        "\n\n[这件活是群友在聊天里顺口托你的]\n" +
+        "• final 用聊天的口吻说，像接着刚才的话往下聊：先说结论，必要的数字/路径照实给，别写成报告、别分级标题；\n" +
+        "• 一般 1~4 句就够；结果很长时挑重点说，剩下的一句话概括；\n" +
+        "• 没做成就直说卡在哪、要对方补什么。";
 
-        var set = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var piece in raw.Split(new[] { ',', '，', ';', '；', ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var name = piece.Trim().ToLowerInvariant();
-            var canonical = all.FirstOrDefault(t => t.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (canonical is not null)
-            {
-                set.Add(canonical);
-            }
-        }
-
-        return set;
-    }
+    /// <summary>
+    /// `//` 这条路的工具白名单（#131）：docker 要**两把锁同时开**才留 ——
+    /// 面板开关 <see cref="AppSettings.AgentServerDocker" /> 打开，且这个容器里真的有 docker。
+    ///
+    /// 为什么加第二把：compose 默认不挂载 docker socket（见 SECURITY.md「部署方的最低要求」与 issue #131）；
+    /// 以前只看开关，于是开关一打开提示词里就列出 docker，模型照着去用，每次都注定失败。
+    /// 白名单与系统提示同源（<c>BuildSystemPrompt</c> 只描述 <c>allowed</c> 里的工具），摘掉就够。
+    /// </summary>
+    public static HashSet<string> ResolveAllowedTools(AppSettings settings, bool dockerAvailable)
+        // #136：实现搬到 <see cref="ServerToolAccess.ConfiguredTools" />（同一条路的单入口），
+        // 这里保留旧签名只为既有探针不用改。
+        => ServerToolAccess.ConfiguredTools(settings, dockerAvailable);
 
     /// <summary>模型这一轮给出的东西（原样留着——qq 工具要读 user_id/times 这些自定义字段）。</summary>
     private readonly record struct StepCall(string? Tool, string? Arg, string? Command, string? Final, JsonObject Raw);
@@ -551,8 +572,21 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     }
 
     private async Task<string> RunToolAsync(string tool, StepCall call, string workDir, HashSet<string> allowed,
-        HashSet<string> qqAllowed, IQqActionHost? qqHost, CancellationToken ct)
+        HashSet<string> qqAllowed, IQqActionHost? qqHost, string conversationKey, int callIndex,
+        CancellationToken ct)
     {
+        if (_mcp?.IsMcpTool(tool) == true)
+        {
+            if (string.IsNullOrWhiteSpace(conversationKey))
+            {
+                return "MCP 工具需要会话上下文（// 路径）";
+            }
+
+            var outcome = await _mcp.ExecuteAsync(conversationKey, tool, McpArguments(call.Raw), callIndex, ct);
+            return outcome.ModelText
+                   ?? (outcome.Ok ? "（MCP 工具已完成，没有文本输出）" : $"MCP 工具失败（{outcome.ReasonCode}）");
+        }
+
         var arg = call.Arg;
         var command = call.Command;
 
@@ -677,58 +711,57 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add(command);
 
-        using var process = new Process { StartInfo = psi };
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
+        var result = await BoundedShellProcess.RunAsync(psi, TimeSpan.FromSeconds(timeout), ct);
+        if (result.Failure is { } failure)
+        {
+            var truncation = result.Truncated ? "（此前输出已截断，未保留超出部分）" : string.Empty;
+            return (failure == "command_timeout"
+                ? $"命令超时（{timeout}s），已请求终止进程树。"
+                : $"命令失败（{failure}），已请求终止进程树。") + truncation;
+        }
+
+        var text = result.Stdout;
+        if (result.Stderr.Length > 0)
+            text += (text.Length > 0 ? "\n" : string.Empty) + "[stderr] " + result.Stderr;
+        text = text.Trim();
+        if (text.Length == 0) return $"(命令退出码 {result.ExitCode}，没有输出)";
+        var truncated = result.Truncated || text.Length > 4000;
+        var prefix = text.Length > 4000 ? text[..4000] : text;
+        return $"退出码 {result.ExitCode}\n" + prefix +
+            (truncated ? "\n（输出已截断；仅保留前 4000 字，超出部分未保存在内存中）" : string.Empty);
+    }
+
+    private async Task RefreshMcpAsync(CancellationToken ct)
+    {
+        if (_mcp is not { Enabled: true })
+        {
+            return;
+        }
 
         try
         {
-            process.Start();
+            await _mcp.RefreshAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            return $"起不了 bash：{ex.Message}";
+            _log($"[ServerAgent] MCP 发现失败（{ex.GetType().Name}）");
         }
+    }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeout));
-        try
+    /// <summary>MCP 参数只去掉协议信封字段；url/path/command 等同名字段可能是工具自己的参数，保留。</summary>
+    private static JsonObject McpArguments(JsonObject raw)
+    {
+        var args = (JsonObject)raw.DeepClone();
+        foreach (var key in new[] { "tool", "name", "thought", "final", "answer", "reply" })
         {
-            await process.WaitForExitAsync(cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // 已经退了
-            }
-
-            return $"命令超时（{timeout}s）已杀掉：{Truncate(command, 120, "…")}";
+            args.Remove(key);
         }
 
-        stdout.Append(await stdoutTask);
-        stderr.Append(await stderrTask);
-
-        var text = stdout.ToString();
-        if (stderr.Length > 0)
-        {
-            text += (text.Length > 0 ? "\n" : string.Empty) + "[stderr] " + stderr;
-        }
-
-        text = text.Trim();
-        if (text.Length == 0)
-        {
-            return $"(命令退出码 {process.ExitCode}，没有输出)";
-        }
-
-        return $"退出码 {process.ExitCode}\n" + Truncate(text, 4000, "（输出太长，只给了前 4000 字）");
+        return args;
     }
 
     private static string? Resolve(string? path, string workDir)

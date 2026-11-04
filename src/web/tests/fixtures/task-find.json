@@ -1,0 +1,15 @@
+{
+  "code": "found",
+  "instanceId": "zi-synthetic-0001",
+  "task": {
+    "id": "task-synthetic-done",
+    "state": 3,
+    "target": "server",
+    "sessionId": "synthetic-session",
+    "createdAt": "2026-10-20T11:59:00+00:00",
+    "updatedAt": "2026-10-20T12:00:00+00:00",
+    "durationMs": 1234,
+    "toolCalls": 2,
+    "cancellationRequested": false
+  }
+}
