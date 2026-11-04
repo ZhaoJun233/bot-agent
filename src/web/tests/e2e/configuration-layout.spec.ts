@@ -1,4 +1,36 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type Response } from '@playwright/test'
+
+async function expectHotApplied(page: Page, response: Response, enabled: boolean): Promise<void> {
+  expect(response.status()).toBe(200)
+  const saved = await response.json()
+  expect(saved.code).toBe(0)
+  expect(saved.errors).toEqual([])
+  expect(saved.receipt).toMatchObject({
+    commitState: 1, applyState: 1,
+    steps: expect.arrayContaining([{ step: 7, state: 1 }])
+  })
+  expect(saved.receipt.key).toBe(response.request().postDataJSON().key)
+  expect(saved.receipt.committedVersion).toBeTruthy()
+
+  // Query the durable receipt independently of the save response.
+  const headers = { Authorization: 'Bearer synthetic-web-admin-token' }
+  const found = await page.request.post('/zba/v1/configuration/find', {
+    headers, data: { key: saved.receipt.key }
+  })
+  expect(found.status()).toBe(200)
+  expect(await found.json()).toMatchObject({ code: 0, receipt: saved.receipt })
+
+  // Inspect the registry-backed runtime, not just the persisted switch value.
+  await expect.poll(async () => {
+    const runtime = await page.request.post('/zba/v1/capabilities/inspect', {
+      headers, data: { key: { kind: 'plugin', key: 'preset.feature.token-quota' } }
+    })
+    expect(runtime.status()).toBe(200)
+    const result = await runtime.json()
+    expect(result.code).toBe(0)
+    return result.descriptor?.runtimeState
+  }).toBe(enabled ? 4 : 2) // Running / Disabled; no host restart.
+}
 
 async function connect(page: Page): Promise<void> {
   await page.goto('/')
@@ -97,7 +129,7 @@ for (const width of [1850, 1024, 390]) {
   })
 }
 
-test('all preset plugin cards expose visible switches; quota toggle persists with a restart receipt', async ({ page }, testInfo) => {
+test('all preset plugin cards expose visible switches; quota toggle and restore hot-apply with durable receipts', async ({ page }, testInfo) => {
   await connect(page)
   await page.getByTestId('nav-capabilities').click()
   await page.getByTestId('cap-enable-admin').click()
@@ -117,10 +149,11 @@ test('all preset plugin cards expose visible switches; quota toggle persists wit
   try {
     const response = page.waitForResponse(r => new URL(r.url()).pathname === '/zba/v1/configuration/save')
     await toggle.setChecked(!original)
-    expect(await (await response).json()).toMatchObject({ code: 0, receipt: { commitState: 1, applyState: 3 } })
+    await expectHotApplied(page, await response, !original)
     await expect(toggle).toBeEnabled()
     await expect(toggle).toBeChecked({ checked: !original })
-    await expect(card).toContainText('需重启')
+    await expect(card).toContainText('已保存')
+    await expect(card).not.toContainText('需重启')
     await card.screenshot({ path: testInfo.outputPath('quota-card.png') })
     await card.getByRole('button', { name: '设置 Token 配额', exact: true }).click()
     const dialog = page.getByTestId('token-quota-dialog')
@@ -133,7 +166,9 @@ test('all preset plugin cards expose visible switches; quota toggle persists wit
     if ((await toggle.isChecked()) !== original) {
       const response = page.waitForResponse(r => new URL(r.url()).pathname === '/zba/v1/configuration/save')
       await toggle.setChecked(original)
-      expect((await response).ok()).toBe(true)
+      await expectHotApplied(page, await response, original)
+      await expect(card).toContainText('已保存')
+      await expect(card).not.toContainText('需重启')
       await expect(toggle).toBeEnabled()
       await expect(toggle).toBeChecked({ checked: original })
     }

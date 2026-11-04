@@ -1,7 +1,39 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page, type Response } from '@playwright/test'
 import { quota } from '../fixtures/quotas'
 const ADMIN = 'synthetic-web-admin-token'
 const READ = 'synthetic-web-read-token'
+
+async function expectHotApplied(page: Page, response: Response, enabled: boolean): Promise<void> {
+  expect(response.status()).toBe(200)
+  const saved = await response.json()
+  expect(saved.code).toBe(0)
+  expect(saved.errors).toEqual([])
+  expect(saved.receipt).toMatchObject({
+    commitState: 1, applyState: 1,
+    steps: expect.arrayContaining([{ step: 7, state: 1 }])
+  })
+  expect(saved.receipt.key).toBe(response.request().postDataJSON().key)
+  expect(saved.receipt.committedVersion).toBeTruthy()
+
+  // Query the durable receipt independently of the save response.
+  const headers = { Authorization: 'Bearer synthetic-web-admin-token' }
+  const found = await page.request.post('/zba/v1/configuration/find', {
+    headers, data: { key: saved.receipt.key }
+  })
+  expect(found.status()).toBe(200)
+  expect(await found.json()).toMatchObject({ code: 0, receipt: saved.receipt })
+
+  // Inspect the registry-backed runtime, not just the persisted switch value.
+  await expect.poll(async () => {
+    const runtime = await page.request.post('/zba/v1/capabilities/inspect', {
+      headers, data: { key: { kind: 'plugin', key: 'preset.feature.token-quota' } }
+    })
+    expect(runtime.status()).toBe(200)
+    const result = await runtime.json()
+    expect(result.code).toBe(0)
+    return result.descriptor?.runtimeState
+  }).toBe(enabled ? 4 : 2) // Running / Disabled; no host restart.
+}
 async function open(page: import('@playwright/test').Page, token: string) {
   await page.goto('/web/')
   await page.getByTestId('token-input').fill(token)
@@ -25,7 +57,7 @@ test('quota plugin: real host card, read-only list and keyboard focus under /web
   await expect(page.getByTestId('token-quota-dialog')).toHaveCount(0)
   await expect(trigger).toBeFocused()
 })
-test('quota plugin: persistent enablement uses configuration receipts and requires restart', async ({ page }) => {
+test('quota plugin: persistent enablement and restore hot-apply with durable receipts', async ({ page }) => {
   await open(page, ADMIN)
   await page.getByTestId('cap-enable-admin').click()
   await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
@@ -33,20 +65,29 @@ test('quota plugin: persistent enablement uses configuration receipts and requir
   const toggle = page.getByTestId('quota-plugin-toggle')
   await expect(toggle).toBeEnabled()
   const original = await toggle.innerText()
-  const save = page.waitForResponse(r => new URL(r.url()).pathname === '/zba/v1/configuration/save')
-  await toggle.click()
-  const response = await save
-  expect(response.status()).toBe(200)
-  expect(await response.json()).toMatchObject({ code: 0, receipt: { commitState: 1, applyState: 3 } })
-  await expect(page.getByTestId('quota-plugin-desired')).toContainText(original.includes('停用') ? '已保存设置：停用' : '已保存设置：启用')
-  await expect(toggle).toBeEnabled()
-  await expect(toggle).not.toHaveText(original)
-  // Restore this isolated host's setting so other browser projects start from the same desired state.
-  const restore = page.waitForResponse(r => new URL(r.url()).pathname === '/zba/v1/configuration/save')
-  await toggle.click()
-  expect((await restore).status()).toBe(200)
-  await expect(toggle).toHaveText(original)
-  await expect(toggle).toBeEnabled()
+  const originallyEnabled = original.includes('停用')
+  try {
+    const save = page.waitForResponse(r => new URL(r.url()).pathname === '/zba/v1/configuration/save')
+    await toggle.click()
+    await expectHotApplied(page, await save, !originallyEnabled)
+    await expect(page.getByTestId('quota-plugin-desired')).toContainText(originallyEnabled ? '已保存设置：停用' : '已保存设置：启用')
+    await expect(page.getByTestId('quota-plugin-switch')).toContainText(originallyEnabled ? '当前运行状态：已停用' : '当前运行状态：运行中')
+    await expect(page.getByTestId('quota-plugin-switch')).not.toContainText('需重启')
+    await expect(toggle).toBeEnabled()
+    await expect(toggle).not.toHaveText(original)
+  } finally {
+    // Restore this isolated host and verify both the durable receipt and runtime again.
+    if (await toggle.innerText() !== original) {
+      const restore = page.waitForResponse(r => new URL(r.url()).pathname === '/zba/v1/configuration/save')
+      await toggle.click()
+      await expectHotApplied(page, await restore, originallyEnabled)
+      await expect(page.getByTestId('quota-plugin-desired')).toContainText(originallyEnabled ? '已保存设置：启用' : '已保存设置：停用')
+      await expect(page.getByTestId('quota-plugin-switch')).toContainText(originallyEnabled ? '当前运行状态：运行中' : '当前运行状态：已停用')
+      await expect(page.getByTestId('quota-plugin-switch')).not.toContainText('需重启')
+      await expect(toggle).toHaveText(original)
+      await expect(toggle).toBeEnabled()
+    }
+  }
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('token-quota-dialog')).toHaveCount(0)
 })
