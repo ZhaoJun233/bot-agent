@@ -74,6 +74,10 @@ public sealed partial class AgentCommandService : IAgentCommandService
 
     private AppSettings _settings => _box.Current;
 
+    /// <summary>仅转交发现快照中的工具名，不在受理阶段触发 MCP 网络发现。</summary>
+    internal IReadOnlyList<string> GetTaskMcpToolNames()
+        => _serverAgent.GetTaskMcpToolNames();
+
     /// <summary>协议端（QQ 动作要用它）—— 只有 OneBot 这条路有。</summary>
     private IQqActions? Gateway => _actionGateway ?? _source as IQqActions;
 

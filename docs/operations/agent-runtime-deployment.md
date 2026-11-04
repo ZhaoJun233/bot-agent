@@ -92,7 +92,8 @@ curl -sS "$BASE/zba/v1/tasks/zj-deploy-check-1" -H "Authorization: Bearer $ZBA_T
 
 ### 2.4 审批闭环（#137）
 
-只有「任务声明了高风险工具 + 审批总开关打开」时才需要走这一段；其余任务照旧直跑。
+只有「任务有效工具作用域含高风险工具 + 审批总开关打开」时才需要走这一段。省略或空 `toolScope` 会继承配置白名单，并不代表无工具；显式只读作用域不包含高危工具时才可免审批。
+此处仅指 `POST /zba/v1/tasks`；普通 `//` 与旧 `POST /api/agent` 尚未接入任务级审批，仍走显式放行策略。
 
 `@sh
 # 1) 打开审批总开关（面板设置；关着时任务根本不会停在等待审批）
@@ -120,12 +121,12 @@ curl -sS -X POST "$BASE/zba/v1/approvals/<requestId>/decide" \
 | 待批单 | `GET /zba/v1/approvals` 里 `toolId=bash`、`session=task:<任务号>`、`expiresAt` ≈ 提交时刻 +120 秒 |
 | 批准 | 回执 `decision=approve`；任务随后跑到 `succeeded(3)`；`GET /tasks/{id}/result` 对 `panel:` 源返回摘要 |
 | 拒绝 | 终态 `cancelled(6)` + `errorCode=approval_rejected` |
-| 超期 | 不决策、等过 `expiresAt` 后再查 → `cancelled(6)` + `errorCode=approval_expired`（`Get` / `List` / 决策三处都会先扫） |
+| 超期 | 不决策、等过 `expiresAt` 后再查 → `cancelled(6)` + `errorCode=approval_expired`（`Get` / `List` / 决策 / `Counts` / `Submit` 都会先扫，无需先查列表才能释放容量） |
 | 取消 | 待批时 `POST /tasks/{id}/cancel` → `cancelled(6)` + `errorCode=approval_cancelled`（此前这条边不存在） |
 | 重启 | 待批中重启宿主 → `cancelled(6)` + `errorCode=approval_lost_on_restart`（待批单不落库，没有可批的对象） |
 | 手工造票 | 自己拼一张结构相同的 `ApprovalTicket` 过闸门 → 拒绝，原因码 `approval_ticket_unverified`（票据带进程内 HMAC 签名，重启后旧票自动失效） |
 
-**已知粒度**：审批是**任务级不是工具级** —— 声明了 `bash` 就整条先批，哪怕最后一步都没用到 bash。
+**已知粒度**：审批是**任务级不是工具级** —— 有效作用域包含 `bash` 就整条先批，哪怕最后一步都没用到 bash。
 这是刻意的 fail-closed 取舍；没有多级审批，也不做跨重启恢复待批。细节见
 [Agent Runtime §7](../architecture/agent-task-runtime.md) 与 [审批与执行隔离](../architecture/approval-and-isolation.md)。
 

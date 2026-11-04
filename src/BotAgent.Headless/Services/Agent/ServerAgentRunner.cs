@@ -29,6 +29,10 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     private readonly SettingsBox _box;
     private readonly OpenAiClient _brain;
     private readonly McpToolUseCase? _mcp;
+
+    /// <summary>已发现 MCP 工具名的副本，用于任务受理时冻结权限上限。</summary>
+    internal IReadOnlyList<string> GetTaskMcpToolNames()
+        => _mcp?.Tools.Select(tool => tool.QualifiedName).ToArray() ?? [];
     private readonly Action<string> _log;
 
     /// <summary>一轮里最多做几个 QQ 动作（防“给每个人都点一遍”——真去 QQ 里刷一圈比多跑几步麻烦得多）。</summary>

@@ -505,7 +505,7 @@ public static partial class Program
         // ── #137：任务级前置审批（声明高风险工具的任务在派发前就停住，批准前一次都不执行） ──
         // 审批总开关默认关；只有打开后 TaskApprovalGate 才会产生待批单。
         var approvalSwitch = await PanelPostJsonAsync(
-            $"http://127.0.0.1:{panelPort}/api/settings", """{"enableApprovals":true}""");
+            $"http://127.0.0.1:{panelPort}/api/settings", """{"enableApprovals":true,"agentServerTools":"bash,read"}""");
         Check("★ 面板能打开人工审批（任务级审批的前置开关）", approvalSwitch.Code == 200,
             approvalSwitch.Code + " " + approvalSwitch.Body);
 
@@ -578,9 +578,11 @@ public static partial class Program
             && rejected["errorCode"]?.GetValue<string>() == "approval_rejected",
             rejectDecision.Status + " " + (rejected?.ToJsonString() ?? "timeout"));
 
+        await VerifyInheritedApprovalScopesAsync(http, root, adminToken, readToken, panelSessionId!, agentAi);
+
         // 复原开关：后面的审批空态/缺字段用例仍按“没有待批单”跑。
         var approvalRestore = await PanelPostJsonAsync(
-            $"http://127.0.0.1:{panelPort}/api/settings", """{"enableApprovals":false}""");
+            $"http://127.0.0.1:{panelPort}/api/settings", """{"enableApprovals":false,"agentServerTools":""}""");
         Check("★ 关闭审批开关后不再产生待批单", approvalRestore.Code == 200,
             approvalRestore.Code + " " + approvalRestore.Body);
 

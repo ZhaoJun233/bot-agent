@@ -8,7 +8,7 @@ namespace BotAgent.Engine.Runtime;
 ///
 /// 边界（ADR-0002）：
 ///   • 只依赖 <see cref="IAgentTaskExecutor"/> 与 Core 的状态机，不认识 HTTP、数据库、ZBA 事件；
-///   • <b>不落库</b>（#116 才做持久化与重启恢复）；
+///   • 可选台账端口负责持久化；状态提交顺序也决定持久化与通知顺序；
 ///   • 不保存提示词；结果正文只在通道声明 <c>CaptureResult</c> 时按有界口径保存；
 ///   • 时间：状态时间戳走注入的 <c>now</c>（不直接读系统时间，R1 钉着）；超时计时用 <see cref="Task.Delay(TimeSpan, CancellationToken)"/>，
 ///     这是<b>真实计时器</b>而不是预算时钟 —— 预算时钟在测试里是"立刻返回"，会把超时测成 0 毫秒。
@@ -16,7 +16,7 @@ namespace BotAgent.Engine.Runtime;
 /// 状态推进只有一个入口（<c>MoveTo</c>/<c>Finish</c>），每次都要过
 /// <see cref="AgentTaskTransitions"/> —— 终态拒绝任何后续写入，取消是请求不是事实。
 /// </summary>
-public sealed class AgentTaskRuntime : IAsyncDisposable
+public sealed partial class AgentTaskRuntime : IAsyncDisposable
 {
     /// <summary>默认并发上限（与改写前的 ZBA 台账一致）。</summary>
     public const int DefaultMaxActive = 4;
@@ -42,7 +42,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
     private readonly List<string> _order = new();
     private bool _disposed;
 
-    /// <summary>状态变化通知（在锁外触发；订阅方自己保证线程安全）。</summary>
+    /// <summary>状态变化通知：持久化后按提交顺序在锁外触发；重入产生的变化排在当前通知之后。</summary>
     public event Action<AgentTaskSnapshot>? Changed;
 
     public AgentTaskRuntime(
@@ -75,38 +75,43 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(request);
         // #137：派发前的审批闸门。返回 null = 与改造前完全一致（立刻排队执行）。
         var approval = _approvalGate?.Create(request);
-        TaskRecord task;
         AgentTaskSnapshot accepted;
-        lock (_gate)
+        try
         {
-            if (_disposed) return AgentTaskSubmitResult.Rejected(AgentTaskRejection.Disposed);
-            if (_records.ContainsKey(request.Id)) return AgentTaskSubmitResult.Rejected(AgentTaskRejection.DuplicateId);
-            if (_records.Values.Count(entry => !AgentTaskTransitions.IsTerminal(entry.State)) >= _maxActive)
-                return AgentTaskSubmitResult.Rejected(AgentTaskRejection.CapacityExceeded);
+            lock (_gate)
+            {
+                if (_disposed) return AgentTaskSubmitResult.Rejected(AgentTaskRejection.Disposed);
+                // Expiry and admission share a critical section: reads are not required
+                // to reclaim slots, and callbacks cannot race admission between them.
+                SweepApprovalsLocked(_now());
+                if (_records.ContainsKey(request.Id)) return AgentTaskSubmitResult.Rejected(AgentTaskRejection.DuplicateId);
+                if (_records.Values.Count(entry => !AgentTaskTransitions.IsTerminal(entry.State)) >= _maxActive)
+                    return AgentTaskSubmitResult.Rejected(AgentTaskRejection.CapacityExceeded);
 
-            task = new TaskRecord(request, _now());
-            _records[request.Id] = task;
-            _order.Insert(0, request.Id);
-            if (approval is not null)
-            {
-                // #137：高风险任务停在待批 —— 执行器一次都不会被调用（批准前零副作用）。
-                task.Approval = approval;
-                task.State = AgentTaskState.WaitingApproval;
-                task.UpdatedAt = _now();
+                var task = new TaskRecord(request, _now());
+                _records[request.Id] = task;
+                _order.Insert(0, request.Id);
+                if (approval is not null)
+                {
+                    task.Approval = approval;
+                    task.State = AgentTaskState.WaitingApproval;
+                    task.UpdatedAt = _now();
+                }
+                accepted = Project(task);
+                QueuePublication(accepted, notify: false);
+                if (approval is null)
+                {
+                    // Dispose must see Work. The worker first acquires _gate, so its
+                    // first transition cannot overtake the acceptance publication.
+                    task.Work = Task.Run(() => RunAsync(task));
+                }
             }
-            else
-            {
-                // 在锁内启动：DisposeAsync 也拿这把锁，它看到的处理项一定有 Work 可等。
-                // Task.Run 只排队不阻塞；RunAsync 的第一件事就是抢同一把锁，不会与这里并发。
-                task.Work = Task.Run(() => RunAsync(task));
-            }
-            accepted = Project(task);
         }
+        finally { DrainPublications(); } // Also publish expiry on rejected admission.
 
         _log?.Invoke(approval is null
             ? $"[Task] id={request.Id} state=queued source={request.SourceKey}"
             : $"[Task] id={request.Id} state=waiting_approval approval={approval.RequestId} tool={approval.ToolId}");
-        Persist(accepted);
         return AgentTaskSubmitResult.AcceptedTask(accepted);
     }
 
@@ -140,10 +145,14 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
     /// <summary>（活跃, 总数）：活跃 = 未到终态的条数。</summary>
     public (int Active, int Total) Counts()
     {
+        (int Active, int Total) counts;
         lock (_gate)
         {
-            return (_records.Values.Count(entry => !AgentTaskTransitions.IsTerminal(entry.State)), _records.Count);
+            if (!_disposed) SweepApprovalsLocked(_now());
+            counts = (_records.Values.Count(entry => !AgentTaskTransitions.IsTerminal(entry.State)), _records.Count);
         }
+        DrainPublications();
+        return counts;
     }
 
     /// <summary>
@@ -178,6 +187,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
                 snapshot = Project(task);
             }
 
+            if (snapshot is not null) QueuePublication(snapshot);
             cancelSource = task.CancelSource;
         }
 
@@ -186,8 +196,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         if (snapshot is not null)
         {
             _log?.Invoke($"[Task] id={id} state={snapshot.State.ToString().ToLowerInvariant()}");
-            Persist(snapshot);
-            Changed?.Invoke(snapshot);
+            DrainPublications();
         }
 
         return AgentTaskCancelOutcome.Requested;
@@ -224,12 +233,12 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
             task.State = AgentTaskState.Running;
             task.UpdatedAt = _now();
             snapshot = Project(task);
+            QueuePublication(snapshot);
             task.Work = Task.Run(() => RunAsync(task, alreadyRunning: true));
         }
 
         _log?.Invoke($"[Task] id={id} state=running（审批通过，开始执行）");
-        Persist(snapshot);
-        Changed?.Invoke(snapshot);
+        DrainPublications();
         return AgentTaskApprovalDecision.Approved;
     }
 
@@ -249,11 +258,11 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
             task.ErrorCode = reasonCode;
             task.UpdatedAt = _now();
             snapshot = Project(task);
+            QueuePublication(snapshot);
         }
 
         _log?.Invoke($"[Task] id={id} state=cancelled reason={reasonCode}");
-        Persist(snapshot);
-        Changed?.Invoke(snapshot);
+        DrainPublications();
         return AgentTaskApprovalDecision.Rejected;
     }
 
@@ -285,31 +294,31 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
     /// <summary>把过了有效期的待批任务收口成 <c>Cancelled</c> + <c>approval_expired</c>（#137）。</summary>
     public int SweepApprovals(DateTimeOffset now)
     {
-        var expired = 0;
-        List<AgentTaskSnapshot> snapshots = [];
+        int expired;
         lock (_gate)
         {
             if (_disposed) return 0;
-            foreach (var task in _records.Values)
-            {
-                if (task.State != AgentTaskState.WaitingApproval) continue;
-                if (task.Approval is not { } approval || approval.ExpiresAt > now) continue;
-                if (!AgentTaskTransitions.CanTransition(task.State, AgentTaskState.Cancelled)) continue;
-                task.State = AgentTaskState.Cancelled;
-                task.ErrorCode = "approval_expired";
-                task.UpdatedAt = now;
-                snapshots.Add(Project(task));
-                expired++;
-            }
+            expired = SweepApprovalsLocked(now);
         }
+        DrainPublications();
+        return expired;
+    }
 
-        foreach (var snapshot in snapshots)
+    // Caller holds _gate; only state mutation and outbox enqueue happen here.
+    private int SweepApprovalsLocked(DateTimeOffset now)
+    {
+        var expired = 0;
+        foreach (var task in _records.Values)
         {
-            _log?.Invoke($"[Task] id={snapshot.Id} state=cancelled reason=approval_expired");
-            Persist(snapshot);
-            Changed?.Invoke(snapshot);
+            if (task.State != AgentTaskState.WaitingApproval) continue;
+            if (task.Approval is not { } approval || approval.ExpiresAt > now) continue;
+            if (!AgentTaskTransitions.CanTransition(task.State, AgentTaskState.Cancelled)) continue;
+            task.State = AgentTaskState.Cancelled;
+            task.ErrorCode = "approval_expired";
+            task.UpdatedAt = now;
+            QueuePublication(Project(task));
+            expired++;
         }
-
         return expired;
     }
 
@@ -329,7 +338,14 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
             // #137：审批通过后恢复的任务已经是 Running，不再走一次 Queued → Running。
             if (!alreadyRunning) MoveTo(task, AgentTaskState.Running, null);
             // 停止过程中被排进来的任务：MoveTo 会静默丢弃，这里直接不执行（不把活儿带进停机）。
-            lock (_gate) { if (_disposed) return; }
+            bool stopping;
+            lock (_gate) stopping = _disposed;
+            if (stopping)
+            {
+                lock (_gate) task.CancellationRequested = true;
+                Finish(task, new AgentTaskExecution { Ok = false });
+                return;
+            }
             if (task.CancellationRequested) cancelSource.Cancel();
 
             var executionTask = _executor.ExecuteAsync(task.Request, linked.Token);
@@ -340,8 +356,10 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
             if (first == timeoutTask)
             {
                 // 硬截止：状态先落终态，再取消令牌；执行器的迟到结果按"终态不可覆盖"丢弃。
-                lock (_gate) task.TimedOut = true;
-                MoveTo(task, AgentTaskState.TimedOut, "timeout");
+                var timedOut = !timeoutTask.IsCanceled;
+                lock (_gate) task.TimedOut = timedOut;
+                MoveTo(task, timedOut ? AgentTaskState.TimedOut : AgentTaskState.Cancelled,
+                    timedOut ? "timeout" : "cancelled");
                 try { cancelSource.Cancel(); }
                 catch (ObjectDisposedException) { }
                 ObserveLateFault(executionTask);
@@ -392,7 +410,7 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _log?.Invoke($"[Task] 台账写入失败（任务状态不受影响）：{exception.Message}");
+            LogPublicationFailure("台账写入失败", exception);
         }
     }
 
@@ -525,11 +543,11 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
             task.ErrorCode = errorCode;
             task.UpdatedAt = _now();
             snapshot = Project(task);
+            QueuePublication(snapshot);
         }
 
         _log?.Invoke($"[Task] id={task.Request.Id} state={snapshot!.State.ToString().ToLowerInvariant()}");
-        Persist(snapshot);
-        Changed?.Invoke(snapshot);
+        DrainPublications();
     }
 
     /// <summary>状态推进的唯一入口：非法转移静默丢弃（并发下别人可能先写了终态）。</summary>
@@ -538,17 +556,18 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         AgentTaskSnapshot? snapshot = null;
         lock (_gate)
         {
-            if (_disposed) return;
+            // Shutdown stops new dispatch, not terminal confirmation from in-flight work.
+            if (_disposed && !AgentTaskTransitions.IsTerminal(state)) return;
             if (!AgentTaskTransitions.CanTransition(task.State, state)) return;
             task.State = state;
             task.ErrorCode = errorCode;
             task.UpdatedAt = _now();
             snapshot = Project(task);
+            QueuePublication(snapshot);
         }
 
         _log?.Invoke($"[Task] id={task.Request.Id} state={state.ToString().ToLowerInvariant()}");
-        Persist(snapshot);
-        Changed?.Invoke(snapshot);
+        DrainPublications();
     }
 
     private static void ObserveLateFault(Task task)
@@ -580,29 +599,6 @@ public sealed class AgentTaskRuntime : IAsyncDisposable
         ApprovalExpiresAt = task.Approval?.ExpiresAt
     };
 
-    public async ValueTask DisposeAsync()
-    {
-        TaskRecord[] tasks;
-        lock (_gate)
-        {
-            if (_disposed) return;
-            _disposed = true;
-            tasks = _records.Values.ToArray();
-        }
-
-        foreach (var task in tasks)
-        {
-            try { task.CancelSource?.Cancel(); }
-            catch (ObjectDisposedException) { }
-            try { task.TimeoutSource?.Cancel(); }
-            catch (ObjectDisposedException) { }
-        }
-
-        var work = tasks.Where(task => task.Work is not null).Select(task => task.Work!).ToArray();
-        if (work.Length == 0) return;
-        try { await Task.WhenAll(work).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
-        catch { /* 停机收口有界：未完成的任务由进程退出兜底 */ }
-    }
 
     private sealed class TaskRecord(AgentTaskRequest request, DateTimeOffset createdAt)
     {

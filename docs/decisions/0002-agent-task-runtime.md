@@ -73,7 +73,7 @@ Succeeded | Failed | Cancelled | TimedOut | Unknown -> （无，终态）
 - **终态不可覆盖**（原来靠 `Finish` 里一句 `if (Terminal(record.State)) return;`，现在是表的一部分）。
 - `CancelRequested -> Succeeded/Failed` 允许：取消是**请求**不是事实，执行器可能在取消生效前已经干完；这时如实上报完成，不冒报「取消成功」。
 - `Queued -> TimedOut` 允许：超时从受理开始算，包含排队时间。
-- `WaitingApproval` 的生产者是任务级前置审批（#137）：受理时声明了 `bash` / `write` / `docker` 且审批总开关打开就停在这里，
+- `WaitingApproval` 的生产者是任务级前置审批（#137）：受理时有效工具作用域包含 `bash` / `write` / `docker` 且审批总开关打开就停在这里；省略或空作用域仍继承配置，
   不用 `Resume` 手动推进（工具级的执行器挂起与恢复仍不在范围里）。
 - `Running | CancelRequested -> Unknown` 是 **#116 的恢复策略**：进程重启时已派发但结果不明的任务，
   本地不能证明远端副作用被取消，也绝不重做，只能记「无法判定」（决策与对账细节见 ADR-0003）。

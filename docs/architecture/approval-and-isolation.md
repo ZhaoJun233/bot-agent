@@ -9,10 +9,10 @@
 | --- | --- | --- |
 | 聊天轮里的高风险工具（搜索 / 点歌 / 语音 / 表情 / 戳一戳） | **不**走审批 | 走能力闸门 `ToolGate`（策略 `ToolPolicy`），由配置开关注销；它们不算「任意代码执行」 |
 | 聊天轮里的「模型点名工具」 | 走审批，但只认服务端固定工具 | `ApprovalFlow.FixedToolId`（`demo.echo`，**无真实副作用**的假工具）——模型点名别的工具连单都开不出来 |
-| `//` 命令里的服务器 agent 工具（bash / read / write / docker …） | 走**任务级前置审批**（#137）：任务声明了高风险工具就在派发前停住 | 由 `ServerToolGate` 的 `ToolPolicy`（默认关 + 显式放行集）管；`HighRiskExceptions` 是唯一的例外通道 |
-| ZBA / 面板提交的**任务**（`POST /zba/v1/tasks`，`toolScope` 里声明 bash / write / docker） | 走**任务级前置审批**（#137） | 闸门 `TaskApprovalGate` 在派发前判定：批准之前执行器**一次都不会被调用**（零副作用），批准后从同一张单继续跑完 |
+| 普通 `//` 命令、旧 `POST /api/agent` 直跑的服务器 agent 工具 | **不**走任务级前置审批；尚未接入 `AgentTaskRuntime` | 仍由 `ServerToolGate` 的 `ToolPolicy`（默认关 + 显式放行集）管；`HighRiskExceptions` 是显式放行通道，不能把它描述成人工审批。迁移这些旧入口仍是独立工作 |
+| ZBA / 面板提交的**任务**（`POST /zba/v1/tasks`） | 审批开关开启且**有效工具作用域**含 bash / write / docker 时，走任务级前置审批 | `TaskApprovalGate` 按与执行器一致的配置白名单交集判定；省略或空 `toolScope` 是继承，不是无工具。批准之前执行器一次都不会被调用，批准后从同一张单继续 |
 
-> **#137 落地的是任务级、不是工具级**：粒度是粗的 —— 任务只要**声明**了高风险工具，整条任务都要先批（哪怕最后一步都没用上 bash）。
+> **#137 落地的是任务级、不是工具级**：粒度是粗的 —— 任务的**有效工具作用域只要包含**高风险工具，整条任务都要先批（哪怕最后一步都没用上 bash）。
 > 这是刻意的 fail-closed 取舍：工具级挂起要把 `ServerAgentRunner` 循环里的消息、步数、当前调用与租约都变成可持久化状态并跨重启恢复，成本远超本轮；任务级闸门天然可持久化（任务只有一行台账），且「批准前零副作用」是结构性的，不依赖执行器内部写对没写对。取舍见 `docs/architecture/agent-task-runtime.md` §7。
 
 ## 2. 判定顺序（唯一入口）
@@ -60,7 +60,7 @@
 
 | 证据 | 位置 | 内容 |
 | --- | --- | --- |
-| 待批列表 | 面板 `GET /api/approvals`、ZBA `GET /zba/v1/approvals` | 只列 **Pending**：编号 / 工具 / 已脱敏摘要 / 脱敏后的会话 key / 剩余秒数。#137 起**同一个列表里还有任务级待批单**，会话一栏写成 `task:<任务号>`（不属于任何聊天会话，故不脱敏） |
+| 待批列表 | ZBA `GET /zba/v1/approvals` | 合并聊天 Pending 与任务级待批单；任务会话写成 `task:<任务号>`（不属于聊天会话）。旧 `GET /api/approvals` 仅列聊天待批，不合并任务级待批单 |
 | 事件流 | `ZbaEventBuffer` 的 `approval.decided` | #117 起 `state` 如实反映结果：`approved` / `rejected` / `expired` / `stale_policy` / `not_an_approver` / `unknown_request` / `source_retired` / `source_unavailable`（以前无论哪种失败都写 `rejected`，事后分不出「被人拒绝」和「根本没等到人」）；`reasonCode` 同时带上 |
 | 审计 | `SecurityAuditLog` 的 `approval_decision` | 操作者、会话、`{requestId, action, reason, shouldExecute}`、当时的策略版本 |
 | 轨迹节点 | `TurnTraceStore` 的 `Gate` 节点 | 决策后执行前那道闸门放行还是拒绝、原因码 |
@@ -86,6 +86,6 @@
 2. 改判定顺序 → 同步 `ApprovalFlow.Handle` 的注释、SafetyProbe 的六条断言、这一页的第 2 节。
 3. 加事件 state → 同步 `ZbaHostBackend.DecideApprovalAsync` 的映射、前端 `TasksPage.vue` 的展示与这一页第 5 节。
 4. 动租约 → 两条入口（群 / 面板）与执行前复核必须一起改；只改一处等于留一条绕过路径。
-5. 任务级待批的判定在 `src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs`（高危工具名表 + 审批总开关），
+5. 任务级待批的判定在 `src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs`（有效作用域 + 配置白名单 + 高危工具名表 + 审批总开关），
    执行侧的挂起/恢复在 `AgentTaskRuntime`（`Resume` / `Reject` / `DecideApproval` / `SweepApprovals`）。
    改任一处都要同步 S54 用例与这一页。

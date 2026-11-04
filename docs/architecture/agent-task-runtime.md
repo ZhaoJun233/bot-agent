@@ -78,7 +78,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 1. 通道调 `Submit(AgentTaskRequest)`。运行时在锁内判定：已停止 → `Disposed`；id 重复 →
    `DuplicateId`；活跃数已达上限 → `CapacityExceeded`。被拒时**不建记录**，返回
    `AgentTaskSubmitResult.Rejected`。
-2. 受理后状态是 `Queued`，快照立刻可查，并写一行台账（`Persist` 在锁外）；执行在 `Task.Run` 里进行，提交线程不等。
+2. 受理后状态是 `Queued`，快照立刻可查，在状态锁内按推进顺序入队；单一排空者在锁外依次写台账并发出 `Changed`；执行在 `Task.Run` 里进行，提交线程不等。
 3. 执行体进入 `Running`，为任务建两个令牌源：`cancelSource`（外部取消）与
    `timeoutSource`（硬截止），二者连成 `linked` 交给执行器。
 4. 执行器任务与超时延迟赛跑：
@@ -110,8 +110,10 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 
 ### 台账与重启恢复（#116）
 
-状态每变一次就写一行 `agent_tasks`（`INSERT OR REPLACE`，幂等），写入点全在运行时里，
-所以任何通道都自动获得持久化。三条硬约束见
+状态每变一次，就在同一状态锁内把不可变快照排入队列。单一排空者在锁外依次写入
+`agent_tasks`（`INSERT OR REPLACE`）并发出 `Changed`；顺序由入队顺序保证，不能靠时间戳或 SQL 互斥推断。
+因此较早的 Queued / Running / CancelRequested 快照不会在较新的终态之后覆盖台账。写入点全在运行时里，
+所以任何通道都自动获得持久化。停机把待审批任务收口为 Cancelled，并等待已入队的发布排空；执行器停机等待仍有 2 秒上限。同步状态/取消回调内调用 Dispose 只发起停机、不等待自身回调；外部调用（包括重复调用）共同等待同一停机完成屏障。存储或通知失败只记录诊断，不改写任务结果，诊断回调自身失败也不会卡住后续发布。三条硬约束见
 [ADR-0003](../decisions/0003-agent-task-persistence.md)：
 
 - 只存形状与计数，**不存提示词、正文、工具参数**；
@@ -140,7 +142,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | 台账 | 保留 200 条 / 活跃 4 的对外上限，淘汰时 `Forget` |
 | 结果投影 | 仅 `panel:` 来源的成功任务给摘要，其余 `reason=scope_not_allowed`；`TimedOut` 折成 `Failed` + `timeout` |
 | 工具作用域 | 提交体可带可选 `toolScope`（#136）：透传进 `AgentTaskRequest.ToolScope`，**执行前**与配置白名单取交集（只能收窄）；作用域也算进幂等哈希 —— 同一提示词、不同作用域是两件事 |
-| 前置审批（#137） | 受理时先过 `IAgentTaskApprovalGate`：声明了 bash/write/docker 的任务**不排执行**，直接落 `WaitingApproval` 并进待批列表；批准后 `Resume` 从同一条记录继续跑（`alreadyRunning: true`，不重发不新建），拒绝/超期/取消分别收口成 `approval_rejected` / `approval_expired` / `approval_cancelled` |
+| 前置审批（#137） | 受理时先过 `IAgentTaskApprovalGate`：有效工具作用域包含 bash/write/docker 且审批开关开启的任务**不排执行**，直接落 `WaitingApproval` 并进待批列表；批准后 `Resume` 从同一条记录继续跑（`alreadyRunning: true`，不重发不新建），拒绝/超期/取消分别收口成 `approval_rejected` / `approval_expired` / `approval_cancelled` |
 | 取消 | `Cancel` 映射 `Requested → (state, true, "cancel_requested")`、`TooLate → (state, false, "too_late")`、`NotFound → 404 task_not_found` |
 
 面板直跑（`POST /api/agent`）与 `//` 命令**没有**接进运行时，这是 ADR-0002 的明确取舍：
@@ -150,11 +152,11 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 
 | 问题 | 答案 |
 | --- | --- |
-| 谁判定要批 | `src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs`：高危工具名表 `bash` / `write` / `docker`（不区分大小写）、审批总开关必须开、任务必须声明了非空 `toolScope` |
+| 谁判定要批 | `src/BotAgent.Headless/Adapters/Agent/TaskApprovalGate.cs`：按 `ServerToolAccess` 的有效作用域判定高危工具 `bash` / `write` / `docker`，审批总开关必须开；省略或空 `toolScope` 继承配置，显式只读作用域与配置取交集后无高危工具则不需审批 |
 | 批之前跑不跑 | 不跑。受理线程只建记录并落 `WaitingApproval`，**不排 `Task.Run`**；引擎用例断言 150ms 后执行器调用次数为 0 |
 | 批了怎么继续 | `AgentTaskRuntime.Resume`：同一条记录 `WaitingApproval → Running`，`RunAsync(task, alreadyRunning: true)`（跳过首次状态推进），结果仍按原任务投影 |
 | 谁来决定 | `DecideApproval(requestId, approve, now)`，ZBA 通过 `POST /zba/v1/approvals/{id}/decide` 触发；待批单在 `GET /zba/v1/approvals` 里以 `session = task:<任务号>` 出现 |
-| 超期怎么办 | `SweepApprovals`（`Get` / `List` / `DecideApproval` 时都会先扫）把 `ApprovalExpiresAt <= now` 的收口成 `Cancelled` + `approval_expired`；有效期取 `ApprovalFlow.TtlSeconds`（120 秒） |
+| 超期怎么办 | `SweepApprovals`（`Get` / `List` / `DecideApproval` / `Counts` / `Submit` 时都会先扫）把 `ApprovalExpiresAt <= now` 的收口成 `Cancelled` + `approval_expired`；有效期取 `ApprovalFlow.TtlSeconds`（120 秒） |
 | 取消怎么办 | `Cancel` 命中 `WaitingApproval` 时收口成 `Cancelled` + `approval_cancelled`（此前这条边根本不存在） |
 | 重启怎么办 | `Restore()` 把库里的 `WaitingApproval` 收口成 `Cancelled` + `approval_lost_on_restart` —— 待批单不落库，重启后没有任何可批的对象 |
 | 为什么不落库 | 审批字段（`ApprovalRequestId` / `ApprovalToolId` / `ApprovalSummary` / `ApprovalExpiresAt`）只在快照里，台账表结构一个字节没动（`agent_tasks` 仍是 v13 的 14 列） |
@@ -164,7 +166,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 
 | 测试 | 钉住什么 |
 | --- | --- |
-| `EngineProbe` 的 `AgentTaskApprovalTests` 8 例（#137） | 待批时不调用执行器（零副作用）、批准才跑、拒绝/超期/取消/重启四个原因码、审批关或没声明作用域就照旧直跑 |
+| `EngineProbe` 的 `AgentTaskApprovalTests` 8 例（#137） | 待批时不调用执行器（零副作用）、批准才跑、拒绝/超期/取消/重启四个原因码、审批关闭时照旧直跑（省略作用域是否继承高危工具由 Headless 闸门测试覆盖） |
 | `EngineProbe` 的 7 条 `AgentTaskRuntime: …` | 转移表全矩阵与终态无出边、非法转移抛异常、成功/清洗/截断/未声明采集不存正文、取消（含二次取消 TooLate 与未知 NotFound）、超时与取消区分且 `CancellationRequested=false`、`agent_failed`/`agent_rejected`、并发上限与重复 id、`Forget` 只删终态 |
 | `ZbaProbe` 303 条 | 通道语义没变：幂等重放、回执、事件、结果可见性、取消 |
 | 集成 S54 / S55 | 面板任务提交与 ZBA 面板后端的端到端行为；S54 还断言「声明了 `toolScope` 的任务把系统提示里的工具清单收窄」（#136）；S55 断言「重启后旧任务可查且不停在排队/运行中」 |
@@ -178,7 +180,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 
 - **重启后不重做**：台账能让记录活过重启，但代价是「可能做过副作用的执行」只能标 `Unknown`，
   没有任何自动续跑（见 §5 的恢复表与 ADR-0003 §2.4）。
-- **审批是任务级、不是工具级**（#137）：任务声明了高风险工具就整条先批 —— 粒度粗是刻意取舍（工具级挂起要
+- **审批是任务级、不是工具级**（#137）：任务有效作用域含高风险工具就整条先批 —— 粒度粗是刻意取舍（工具级挂起要
   把执行器循环变成可持久化状态并跨重启恢复）；没有多级审批、不做跨重启恢复待批（重启即 `approval_lost_on_restart`）。
   口径见 [审批与执行隔离](approval-and-isolation.md)。
 - **没有远程重启**：`RestartRequired` 语义仍属配置链路，本层不提供重启按钮。

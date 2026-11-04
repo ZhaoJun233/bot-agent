@@ -54,7 +54,11 @@ DAO 放 `src/BotAgent.Headless/Adapters/Persistence/`，因为 ArchitectureProbe
 
 ### 2.3 写入点是状态机自己，不是通道
 
-`AgentTaskRuntime` 在四个位置（都在锁外）调 `Persist`：Submit 受理后、Cancel 变更前、Finish 与 MoveTo 变更前。这样任何通道自动获得持久化，通道不需要知道台账存在。通道侧只多了一件事：构造时把 `bootSeq` 传给运行时。
+`AgentTaskRuntime` 在状态锁内完成状态推进并把不可变快照入队；单一排空者在锁外按入队顺序调用台账 `Save`，再发出对应 `Changed`。Submit、Resume、Cancel、Finish 与过期收口共享这一顺序，事件回调重入也只能把后续快照排到队尾。
+
+锁外写库不等于任由各调用者并发保存旧快照：SQL 互斥只能串行执行写入，不能恢复状态推进顺序；时间戳也可能相同。队列保证较早的非终态不会晚于终态落库。存储异常仍只记日志，不能改写执行结果。任何通道自动获得持久化，通道不需要知道台账存在，只在构造时提供 `bootSeq`。
+
+停机共享同一个完成屏障：待审批任务先收口并入队，执行器等待最多 2 秒，再等待已提交的台账发布完成。同步状态/取消回调内的 Dispose 仅发起停机并返回，避免等待自身调用栈；回调外的 Dispose（即使重复调用）仍等待完整屏障。
 
 ### 2.4 恢复策略：收口，不重做
 
@@ -63,7 +67,7 @@ DAO 放 `src/BotAgent.Headless/Adapters/Persistence/`，因为 ArchitectureProbe
 | 库里状态 | 恢复后 | 原因码 | 理由 |
 | --- | --- | --- | --- |
 | Queued | Cancelled | `cancelled_before_dispatch` | 从未开始执行，取消无副作用（`Queued` 的转移表没有 `Failed`，所以不能记失败） |
-| WaitingApproval | Cancelled | `cancelled_before_dispatch` | 同上；审批上下文已随进程消失 |
+| WaitingApproval | Cancelled | `approval_lost_on_restart` | 待批单只活在进程内，审批上下文已随进程消失 |
 | Running | Unknown | `restart_state_unknown` | 可能已产生副作用，本地无法证明，也不能重做 |
 | CancelRequested | Unknown | `restart_state_unknown` | 取消请求是否送达未知 |
 

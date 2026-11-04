@@ -25,6 +25,12 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--task-approval", StringComparer.Ordinal))
+        {
+            await RunAsync("task approval gate", () => TaskApprovalGateTests.RunAsync((name, ok, detail) => Check(ok, name)));
+            Console.WriteLine($"ReviewRemediationProbe task approval: {_passed} passed, {_failed} failed");
+            return _failed == 0 ? 0 : 1;
+        }
         if (await ModelMigrationTests.TryRunChildAsync(args) is { } modelChildExit) return modelChildExit;
         if (await PlatformLifecycleTests.TryRunChildAsync(args) is { } platformChildExit) return platformChildExit;
         if (await ManagedOperationContractTests.TryRunChildAsync(args) is { } managedOperationsExit) return managedOperationsExit;
@@ -42,6 +48,7 @@ internal static class Program
         try
         {
             AppDatabase.Initialize();
+            await RunAsync("task approval gate", () => TaskApprovalGateTests.RunAsync((name, ok, detail) => Check(ok, name)));
             await RunAsync("review agent/storage regressions", () => ReviewAgentStorageRegression.RunAsync(Check));
             await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
             await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));

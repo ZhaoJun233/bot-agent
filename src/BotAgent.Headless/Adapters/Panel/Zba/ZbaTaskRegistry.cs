@@ -35,6 +35,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
     private readonly ZbaTaskReceiptStore _receipts;
     private readonly string _instanceId;
     private readonly Action<string>? _log;
+    private readonly Func<AgentTaskRequest, AgentTaskRequest>? _prepare;
 
     private readonly object _gate = new();
 
@@ -54,7 +55,8 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
         ZbaEventBuffer events,
         ZbaTaskReceiptStore receipts,
         string instanceId,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Func<AgentTaskRequest, AgentTaskRequest>? prepare = null)
     {
         _sessions = sessions;
         _runtime = runtime;
@@ -64,6 +66,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
         _receipts = receipts;
         _instanceId = instanceId;
         _log = log;
+        _prepare = prepare;
         _runtime.Changed += OnRuntimeChanged;
     }
 
@@ -136,7 +139,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
             if (!_receipts.TryAdd(keyHash, taskId, _instanceId, now))
                 throw new ZbaBackendException(503, "receipt_store_unavailable", "任务回执不可用，本次提交未受理。");
 
-            var accepted = _runtime.Submit(new AgentTaskRequest
+            var request = new AgentTaskRequest
             {
                 Id = taskId,
                 SourceKey = submission.SourceKey,
@@ -145,9 +148,10 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
                 Target = target,
                 Timeout = TimeSpan.FromSeconds(submission.TimeoutSeconds),
                 CaptureResult = submission.SourceKey.StartsWith("panel:", StringComparison.Ordinal),
-                // 任务级工具作用域（#136）：只透传，收窄发生在执行前（ToolScope.Restrict）。
                 ToolScope = submission.ToolScope
-            });
+            };
+            // Pin the effective ceiling before the runtime gate and asynchronous dispatch.
+            var accepted = _runtime.Submit(_prepare?.Invoke(request) ?? request);
             if (!accepted.Accepted || accepted.Task is null)
             {
                 throw new InvalidOperationException(

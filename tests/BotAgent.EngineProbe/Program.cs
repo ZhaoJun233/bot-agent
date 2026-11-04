@@ -53,6 +53,19 @@ public static class Program
         await RunAsync("AgentTaskLedger: restart recovery never re-runs and unknown is the honest state", AgentTaskLedgerTests.RecoveryTests);
         await RunAsync("AgentTaskLedger: every state change is written to the ledger", AgentTaskLedgerTests.TransitionPersistenceTests);
         await RunAsync("AgentTaskLedger: a failing ledger never changes task outcome", AgentTaskLedgerTests.LedgerFailureIsolationTests);
+        await RunAsync("Task publication: blocked submit preserves success", AgentTaskPublicationTests.SubmitTests);
+        await RunAsync("Task publication: blocked resume preserves success", AgentTaskPublicationTests.ResumeTests);
+        await RunAsync("Task publication: cancellation cannot overwrite terminal", AgentTaskPublicationTests.CancelTests);
+        await RunAsync("Task publication: waiting cancellation stays durable", AgentTaskPublicationTests.WaitingCancelTests);
+        await RunAsync("Task publication: reentrant Changed stays ordered", AgentTaskPublicationTests.ReentrantChangedTests);
+        await RunAsync("AgentTaskLedger: publication failures cannot strand ordered delivery", AgentTaskPublicationTests.PublicationFailureTests);
+        await RunAsync("AgentTaskLedger: disposal waits for terminal publication", AgentTaskPublicationTests.DisposalWaitsForPublicationTests);
+        await RunAsync("AgentTaskLedger: cancellation callback can request disposal", () => AgentTaskPublicationTests.CancellationCallbackDisposalTests());
+        await RunAsync("AgentTaskLedger: cooperative shutdown is cancellation, not failure", () => AgentTaskPublicationTests.CancellationCallbackDisposalTests(cooperative: true));
+        await RunAsync("AgentTaskLedger: Running callback can request disposal", () => AgentTaskPublicationTests.CallbackDisposalTests(BotAgent.Domain.Agent.AgentTaskState.Running));
+        await RunAsync("AgentTaskLedger: terminal callback can request disposal", () => AgentTaskPublicationTests.CallbackDisposalTests(BotAgent.Domain.Agent.AgentTaskState.Succeeded));
+        await RunAsync("Task expiry: Counts sweeps without prior reads", AgentTaskPublicationTests.CountsWithoutReadTests);
+        await RunAsync("Task expiry: Submit frees four slots without prior reads", AgentTaskPublicationTests.SubmitWithoutReadTests);
         await RunAsync("AgentTaskApproval: waiting approval never runs the executor", AgentTaskApprovalTests.WaitingApprovalNeverRunsTests);
         await RunAsync("AgentTaskApproval: approve resumes once and only once", AgentTaskApprovalTests.ApproveRunsTests);
         await RunAsync("AgentTaskApproval: reject cancels without ever running", AgentTaskApprovalTests.RejectTests);
@@ -766,7 +779,7 @@ public static class Program
         catch (Exception ex)
         {
             _failed++;
-            Console.WriteLine($"FAIL {name}: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine($"FAIL {name}: {ex}");
         }
     }
 
