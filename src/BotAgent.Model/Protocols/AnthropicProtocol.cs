@@ -4,13 +4,41 @@ namespace BotAgent.Model.Protocols;
 
 internal static class AnthropicProtocol
 {
-    internal static JsonObject Request(JsonObject chat, bool promptCache = false)
+    internal static JsonObject Request(JsonObject chat, bool promptCache = false, int? stableSystemPrefixLength = null)
     {
         var messages = new JsonArray(); var system = new JsonArray();
+        var sawFirstSystem = false;
+        var stableBreakpoint = false;
+        var boundaryRejected = false;
         foreach (var m in ProtocolJson.Array(chat["messages"]).OfType<JsonObject>())
         {
             var role = ProtocolJson.Text(m["role"]); var parts = new JsonArray();
-            if (role is "system" or "developer") { foreach (var p in ProtocolJson.Parts(m["content"])) system.Add(p?.DeepClone()); continue; }
+            if (role is "system" or "developer")
+            {
+                var sourceParts = ProtocolJson.Parts(m["content"]);
+                // 只有「首条 system/developer 消息 + 缓存开启 + 传了边界」才尝试拆分稳定前缀；
+                // 其余 system 消息按原样追加（顺序不变），旧形状完全保留。
+                if (sawFirstSystem || stableSystemPrefixLength is null || !promptCache)
+                {
+                    foreach (var p in sourceParts) system.Add(p?.DeepClone());
+                    sawFirstSystem = true;
+                    continue;
+                }
+                sawFirstSystem = true;
+                if (TrySplitStableSystem(sourceParts, stableSystemPrefixLength.Value, out var stableBlock, out var dynamicBlock))
+                {
+                    system.Add(stableBlock);
+                    if (dynamicBlock is not null) system.Add(dynamicBlock);
+                    stableBreakpoint = true;
+                }
+                else
+                {
+                    // 边界非法或首 system 不是简单文本：fail closed，不拆分也不猜内容。
+                    boundaryRejected = true;
+                    foreach (var p in sourceParts) system.Add(p?.DeepClone());
+                }
+                continue;
+            }
             if (role == "tool") parts.Add(new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = m["tool_call_id"]?.DeepClone(), ["content"] = m["content"]?.DeepClone() });
             else foreach (var p in ProtocolJson.Parts(m["content"]).OfType<JsonObject>())
             {
@@ -30,8 +58,10 @@ internal static class AnthropicProtocol
                 foreach (var part in parts) ((JsonArray)last["content"]!).Add(part?.DeepClone());
             else messages.Add(new JsonObject { ["role"] = mappedRole, ["content"] = parts });
         }
-        // 缓存断点只打两个：system 末尾 + 最后一条消息的最后一个 content 块（Anthropic 上限 4 个，留余量给将来的工具缓存）。
-        if (promptCache)
+        // 缓存断点：有合法首 system 边界时只标稳定前缀块（动态 system 与最后一条消息都不标）；
+        // 无边界时退回旧形状（system 末尾 + 最后一条消息最后一个 content 块）；
+        // 传了边界却无法安全拆分时一个断点都不加（fail closed，不猜内容）。
+        if (promptCache && !boundaryRejected && !stableBreakpoint && stableSystemPrefixLength is null)
         {
             Ephemeral(system.Count > 0 ? system[^1] : null);
             if (messages.Count > 0 && messages[^1]?["content"] is JsonArray lastContent && lastContent.Count > 0) Ephemeral(lastContent[^1]);
@@ -53,6 +83,30 @@ internal static class AnthropicProtocol
     {
         if (block is JsonObject part) part["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
     }
+    /// <summary>
+    /// 只有首条 system/developer 消息是「简单文本」（恰好一个 text part，且只带 type/text）时才允许拆分。
+    /// 边界按 UTF-16 字符数计；&lt;=0 或大于文本长度视为非法，返回 false 让调用方 fail closed。
+    /// </summary>
+    private static bool TrySplitStableSystem(JsonArray parts, int boundary, out JsonObject stable, out JsonObject? dynamic)
+    {
+        stable = null!;
+        dynamic = null;
+        if (parts.Count != 1 || parts[0] is not JsonObject part) return false;
+        if (ProtocolJson.Text(part["type"]) != "text") return false;
+        if (part["text"] is not JsonValue textValue || !textValue.TryGetValue<string>(out var text)) return false;
+        // 带其它字段（例如已有 cache_control）就不是简单文本，拒绝猜测。
+        if (part.Count != 2) return false;
+        if (boundary <= 0 || boundary > text.Length) return false;
+        stable = new JsonObject
+        {
+            ["type"] = "text",
+            ["text"] = text[..boundary],
+            ["cache_control"] = new JsonObject { ["type"] = "ephemeral" }
+        };
+        if (boundary < text.Length) dynamic = new JsonObject { ["type"] = "text", ["text"] = text[boundary..] };
+        return true;
+    }
+
     internal static JsonObject Response(JsonObject root)
     {
         if (root["content"] is not JsonArray content) throw new ModelFault("model_malformed_response");

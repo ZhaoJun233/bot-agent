@@ -946,7 +946,7 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
         {
             Calls++;
             _searchTexts.Add(searchText);
@@ -2208,7 +2208,7 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
             => Task.FromResult(new CompletionResult(null, null, null));
 
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,

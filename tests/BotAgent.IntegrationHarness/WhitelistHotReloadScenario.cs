@@ -10,7 +10,7 @@ namespace BotAgent.IntegrationHarness;
 ///   ② 面板写入新的群聊名单后，群聊判定立刻换名单（旧单名单不再兜底）；
 ///   ③ 名单里重复/带空白/中文逗号混写时不重复处理、不误拦；
 ///   ④ 通配 * 全部放行；
-///   ⑤ 把群聊名单清空 ⇒ 回落到旧单名单（“清空”是“恢复回落”，不是“全拦”）；
+///   ⑤ 把群聊名单清空 ⇒ 全收（即使旧共用名单非空），私聊同理；
 ///   ⑥ 群聊与私聊两份名单各管各的，改一份不影响另一份。
 /// 全部为合成设置与合成端点，不接真实模型。
 /// </summary>
@@ -18,7 +18,7 @@ public static partial class Program
 {
     private static async Task RunWhitelistHotReloadScenarioAsync()
     {
-        Section("S63 白名单热生效（面板改名单不重启；通配/重复/清空回落/群私分开）");
+        Section("S63 白名单热生效（面板改名单不重启；通配/重复/清空全收/群私分开）");
 
         var openAiPort = FreePort(17870);
         var botWsPort = FreePort(13080);
@@ -91,9 +91,9 @@ public static partial class Program
             return code == 200;
         }
 
-        // ① 基线：新字段为空 ⇒ 回落到老的单名单。
-        Check("★ 新字段为空时回落到老单名单：名单内的群正常回复", await GroupAnsweredAsync(99999, 7301));
-        Check("★ 新字段为空时老单名单仍然生效：名单外的群被忽略", await GroupIgnoredAsync(88888, 7302));
+        // ① 首次启动时旧环境变量播种两份名单；之后空值不再继承。
+        Check("★ 首次启动旧单名单播种后：名单内的群正常回复", await GroupAnsweredAsync(99999, 7301));
+        Check("★ 首次启动旧单名单播种后：名单外的群被忽略", await GroupIgnoredAsync(88888, 7302));
 
         // ② 面板写入群聊名单：立刻生效，且不再回落到老名单。
         await SaveWhitelistAsync("""{"whitelistGroups":"88888"}""");
@@ -113,15 +113,23 @@ public static partial class Program
         Check("★ 群聊名单为 * 时任意群都放行（88888）", await GroupAnsweredAsync(88888, 7306));
         Check("★ 群聊名单为 * 时任意群都放行（99999）", await GroupAnsweredAsync(99999, 7307));
 
-        // ⑤ 清空群聊名单 ⇒ 回落老单名单（“清空”不等于“全拦”）。
+        // ⑤ 清空群聊名单 ⇒ 全收，忽略仍非空的共用名单。
         await SaveWhitelistAsync("""{"whitelistGroups":""}""");
-        Check("★★ 清空群聊名单后回落到老单名单：99999 正常回复", await GroupAnsweredAsync(99999, 7308));
-        Check("★★ 清空群聊名单后回落到老单名单：88888 被忽略", await GroupIgnoredAsync(88888, 7309));
+        Check("★★ 清空群聊名单后全部放行：99999 正常回复", await GroupAnsweredAsync(99999, 7308));
+        Check("★★ 清空群聊名单后全部放行：88888 正常回复", await GroupAnsweredAsync(88888, 7309));
 
         // ⑥ 群聊与私聊两份名单各管各的：改群名单不动私聊判定。
         await SaveWhitelistAsync("""{"whitelistGroups":"88888","whitelistPrivates":"77777"}""");
         Check("★ 私聊名单里的好友正常回复", await PrivateAnsweredAsync(77777, 7310));
         Check("★ 群聊名单里的群号不会把同号私聊放行", await PrivateIgnoredAsync(88888, 7311));
         Check("★ 私聊名单不影响群聊判定", await GroupAnsweredAsync(88888, 7312));
+
+        // ⑦ 清空私聊名单必须走完模型与协议发送，不仅是准入；群聊限制不变。
+        await SaveWhitelistAsync("""{"whitelistPrivates":" \t "}""");
+        var sent = protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_private_msg");
+        Check("★★ 清空私聊名单后任意好友进入回复流程", await PrivateAnsweredAsync(20003, 7313));
+        var reply = await protocol.WaitForActionAsync("send_private_msg", TimeSpan.FromSeconds(20), skip: sent);
+        Check("★★ 清空私聊名单后实际发送私聊回复", reply is not null);
+        Check("★ 清空私聊不改变群聊限制", await GroupIgnoredAsync(99999, 7314));
     }
 }

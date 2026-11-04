@@ -21,7 +21,8 @@ internal sealed class FakeHttp(Func<HttpRequestMessage, CancellationToken, Task<
 
 internal sealed class FakeClock : IClock
 {
-    public DateTimeOffset Now => DateTimeOffset.UnixEpoch;
+    public DateTimeOffset CurrentTime { get; set; } = DateTimeOffset.UnixEpoch;
+    public DateTimeOffset Now => CurrentTime;
     public DateTimeOffset UtcNow => Now;
     public DateTime LocalDateTime => Now.DateTime;
     public long TickCount => 0;

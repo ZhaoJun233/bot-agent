@@ -46,6 +46,7 @@ internal static class Program
         var endpoint = CreateEndpoint(backend, ConfiguredOptions());
 
         await RunAsync("A. routes / OpenAPI", () => RouteAndOpenApiChecksAsync(endpoint));
+        await RunAsync("Runtime logs API", () => RuntimeLogApiChecks.RunAsync((value, label) => Check(label, value)));
         await RunAsync("B. authentication / authorization", () => AuthChecksAsync(backend));
         await RunAsync("C. closed JSON", () => ClosedJsonChecksAsync(backend));
         await RunAsync("D. configuration", () => ConfigurationChecksAsync(backend, endpoint));
@@ -292,6 +293,7 @@ internal static class Program
             => Req("GET", route.Template, token: AdminToken),
         "events.read" => Req("GET", route.Template, token: AdminToken, query: "?after=0&limit=10"),
         "traces.list" => Req("GET", route.Template, token: AdminToken, query: "?limit=5"),
+        "logs.list" => Req("GET", route.Template, token: ReadToken, query: "?limit=5"),
         "capabilities.inspect" => Req("POST", route.Template, InspectJson("synthetic-1"), AdminToken),
         "capabilities.validate" => Req("POST", route.Template, ValidationJson("zba-1.0"), AdminToken),
         "capabilities.execute" => Req("POST", route.Template, ExecuteJson("zba-1.0"), AdminToken),

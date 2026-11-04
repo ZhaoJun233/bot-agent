@@ -72,13 +72,13 @@ function uninstall(): void {
         <h4>仅安装你信任的代码</h4><p>插件在宿主进程内运行，<strong>不是沙箱</strong>。权限是声明信息，不是隔离边界；插件可能访问宿主数据和网络。</p>
         <label v-if="!sameVersion && !pending" class="trust-check"><input v-model="trusted" type="checkbox" data-testid="marketplace-trust" :disabled="!props.canWrite || props.busy">我信任此来源，并已核对固定版本、SHA-256 与权限声明。</label>
       </section>
-      <p class="muted">外部插件默认停用。安装、更新或卸载需要重启后生效；此处不会自动重启。</p>
+      <p class="muted">外部插件默认停用。安装、更新或卸载会热应用，无需重启宿主。</p>
       <div class="catalog-actions">
         <button v-if="!sameVersion" type="button" class="primary" data-testid="marketplace-install" :disabled="!props.canWrite || props.busy || unresolved || pending || !trusted" @click="install">{{ props.busy ? '处理中…' : selected.installedVersion ? '暂存此版本更新' : '安装此固定版本' }}</button>
         <button v-if="selected.installedVersion || selected.pendingVersion" type="button" data-testid="marketplace-settings" :disabled="props.busy" @click="emit('settings', selected)">设置与启用</button>
         <button v-if="(selected.installedVersion || selected.pendingVersion) && !uninstallArmed" type="button" data-testid="marketplace-uninstall" :disabled="!props.canWrite || props.busy || unresolved || selected.pendingUninstall" @click="uninstallArmed = true">卸载…</button>
       </div>
-      <div v-if="uninstallArmed" class="trust-warning" role="alert" data-testid="marketplace-uninstall-confirmation"><p>确认暂存卸载？服务不会自动重启。重启后的状态以宿主为准。</p><button type="button" data-testid="marketplace-uninstall-confirm" :disabled="!props.canWrite || props.busy || unresolved || selected.pendingUninstall" @click="uninstall">确认卸载</button><button type="button" @click="uninstallArmed = false">取消</button></div>
+      <div v-if="uninstallArmed" class="trust-warning" role="alert" data-testid="marketplace-uninstall-confirmation"><p>确认卸载？新的调用将停止进入该插件，在途调用结束后卸载。</p><button type="button" data-testid="marketplace-uninstall-confirm" :disabled="!props.canWrite || props.busy || unresolved || selected.pendingUninstall" @click="uninstall">确认卸载</button><button type="button" @click="uninstallArmed = false">取消</button></div>
     </section>
   </div>
 </template>

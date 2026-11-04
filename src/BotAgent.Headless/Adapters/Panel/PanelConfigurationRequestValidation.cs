@@ -107,8 +107,10 @@ internal static class PanelConfigurationRequestValidation
             JsonSerializer.Deserialize<PolicyTarget>(node, ConfigurationJson); return;
         }
         if (node.ValueKind != JsonValueKind.Object) throw new JsonException();
-        // Reflection is confined to these declared Core DTO types, never a body-provided type or a settings setter.
-        if (type.Namespace != typeof(ConfigurationPatch).Namespace) throw new JsonException();
+        // Reflection is confined to declared configuration DTOs and the provider-options leaf DTO,
+        // never an arbitrary model type, body-provided type or settings setter.
+        if (type.Namespace != typeof(ConfigurationPatch).Namespace
+            && type != typeof(BotAgent.Domain.Model.ModelProtocolOptions)) throw new JsonException();
         var properties = type.GetProperties(BindingFlags.Instance | BindingFlags.Public).ToDictionary(
             property => JsonNamingPolicy.CamelCase.ConvertName(property.Name), StringComparer.Ordinal);
         foreach (var property in node.EnumerateObject())

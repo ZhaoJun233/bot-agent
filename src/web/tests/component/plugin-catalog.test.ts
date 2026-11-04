@@ -20,7 +20,7 @@ describe('marketplace catalog trust gate', () => {
     await wrapper.get('[data-testid="marketplace-trust"]').setValue(true)
     await wrapper.get('[data-testid="marketplace-install"]').trigger('click')
     expect(wrapper.emitted('install')).toEqual([[entry]])
-    expect(wrapper.text()).toContain('不会自动重启')
+    expect(wrapper.text()).toContain('热应用')
   })
   it('filters by search/category, clears trust for a different release, and handles empty results', async () => {
     const other: PluginCatalogEntry = { ...entry, id: 'other.plugin', name: '另一个插件', category: '消息', manifest: { ...syntheticManifest, id: 'other.plugin', sha256: 'b'.repeat(64) } }
@@ -46,7 +46,7 @@ describe('marketplace catalog trust gate', () => {
     await wrapper.get('[data-testid="marketplace-uninstall-confirm"]').trigger('click')
     expect(wrapper.emitted('uninstall')).toHaveLength(1)
     await wrapper.setProps({ entries: [{ ...entry, installedVersion: '1.0.0', pendingUninstall: true }] })
-    expect(wrapper.get('[data-testid="marketplace-package-state"]').text()).toContain('需重启')
+    expect(wrapper.get('[data-testid="marketplace-package-state"]').text()).toContain('等待热应用')
     expect(wrapper.find('[data-testid="marketplace-uninstall-confirm"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="marketplace-uninstall"]').attributes('disabled')).toBeDefined()
   })

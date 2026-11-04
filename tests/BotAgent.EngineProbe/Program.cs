@@ -22,7 +22,9 @@ public static class Program
     public static async Task<int> Main()
     {
         await RunAsync("Review engine B03/B04/B16/B22/B25", ReviewEngineRegression.Run);
+        await RunAsync("Private reply: addressing and model scope", PrivateReplyChecks.RunAsync);
         await RunAsync("Token quota: plugin admission, isolation, mentions and disabled accounting", TokenQuotaTests.Run);
+        await RunAsync("Plugins: hot replacement, drain, cancellation and lifecycle serialization", PluginHotReloadChecks.Run);
         await RunAsync("PluginGate: enabled capabilities and tools pass", PluginGateEnabledTests);
         await RunAsync("PluginGate: disabled/unregistered known capabilities fail closed", PluginGateDisabledTests);
         await RunAsync("PluginGate: unknown capabilities/tools are ungated", PluginGateUnknownTests);

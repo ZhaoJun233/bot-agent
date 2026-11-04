@@ -123,7 +123,7 @@ public sealed class AgentTurnLoop
                 toolList: string.Concat(_tools.Render(turn.Snapshot, turn.PlatformPolicy, caps), agentHint),
                 sampling: sampling,
                 // 缓存作用域 = 本会话 key（只以哈希进请求体，是否真正发出由协议与开关决定）
-                promptCacheScope: conversationKey);
+                promptCacheScope: conversationKey, isPrivateConversation: turn.IsPrivateConversation);
 
             // Charge each known completion before later tool/model/cancellation exits; aggregate remains reporting-only.
             recordCompletedStep?.Invoke(result);

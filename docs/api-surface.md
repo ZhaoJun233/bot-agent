@@ -48,13 +48,14 @@
 | `POST` | `/zba/v1/approvals/{id}/decide` | Admin · 需令牌 | `approvals.decide` | 批准或拒绝一条待审批请求（高权限写路径） |
 | `GET` | `/zba/v1/events` | Read · 需令牌 | `events.read` | 按序号读取有序事件；断档时必须 resync |
 | `GET` | `/zba/v1/traces` | Read · 需令牌 | `traces.list` | 最近若干轮轨迹的**形状**（条数 / token / 耗时 / 未知轮数）与缓存用量合计；**不含会话 key 与消息正文** |
+| `GET` | `/zba/v1/logs` | Read · 需令牌 | `logs.list` | 最近运行日志的**安全摘要**：固定组件名 + 固定摘要文案，未知行只给「已隐藏 + 原始字符数」；`limit` 1..600（默认 200），最新在前；**不含日志原文**（发言/成员/路径/URL/凭据均不出宿主） |
 | `GET` | `/zba/v1/plugins/catalog` | Read · 需令牌 | `plugins.catalog` | 浏览已配置的插件市场目录 |
 | `GET` | `/zba/v1/plugins/installed` | Read · 需令牌 | `plugins.installed` | 列出已安装插件包与其真实状态 |
 | `POST` | `/zba/v1/plugins/sources/resolve` | Admin · 需令牌 | `plugins.sources.resolve` | 把一个**固定版本**的公开 GitHub release 解析成插件清单 |
-| `POST` | `/zba/v1/plugins/install` | Admin · 需令牌 | `plugins.install` | 暂存一次插件安装（**重启后生效**） |
-| `POST` | `/zba/v1/plugins/update` | Admin · 需令牌 | `plugins.update` | 暂存一次插件更新（**重启后生效**） |
-| `POST` | `/zba/v1/plugins/{id}/uninstall` | Admin · 需令牌 | `plugins.uninstall` | 暂存一次插件卸载（**重启后生效**） |
-| `GET` | `/zba/v1/plugins/operations/{key}` | Read · 需令牌 | `plugins.operations.get` | 按幂等键读一次暂存的插件操作 |
+| `POST` | `/zba/v1/plugins/install` | Admin · 需令牌 | `plugins.install` | 暂存并热应用一次插件安装（失败时旧实例保持不变） |
+| `POST` | `/zba/v1/plugins/update` | Admin · 需令牌 | `plugins.update` | 暂存并热应用一次插件更新（失败时旧实例保持不变） |
+| `POST` | `/zba/v1/plugins/{id}/uninstall` | Admin · 需令牌 | `plugins.uninstall` | 暂存并热应用一次插件卸载（失败时旧实例保持不变） |
+| `GET` | `/zba/v1/plugins/operations/{key}` | Read · 需令牌 | `plugins.operations.get` | 按幂等键读一次插件操作回执（含 `status` 与 `restartRequired`） |
 | `GET` | `/zba/v1/plugins/{id}/settings` | Read · 需令牌 | `plugins.settings.read` | 读插件声明的设置项（**不回显秘密值**） |
 | `PUT` | `/zba/v1/plugins/{id}/settings` | Admin · 需令牌 | `plugins.settings.save` | 按期望修订号保存插件设置 |
 | `GET` | `/zba/v1/providers/{key}/models` | Read · 需令牌 | `providers.models` | 发现某个已保存供应商路由的上游模型列表 |

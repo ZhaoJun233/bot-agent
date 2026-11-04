@@ -27,4 +27,5 @@ public sealed record TurnInputs(
     string? MusicText,
     string? RecallText,
     string? SearchText,
-    string? LinkText);
+    string? LinkText,
+    bool IsPrivateConversation = false);

@@ -320,6 +320,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             ApplyScalar(platform.FeishuWhitelist, value => next.FeishuWhitelist = value);
             ApplyScalar(platform.FeishuWhitelistPrivates, value => next.FeishuWhitelistPrivates = value);
             ApplyScalar(platform.LocalChannelIds, value => next.LocalChannelIds = value);
+            // 共用字段的批量意图已在 FreezePatch 展开，值与来源元数据使用同一补丁。
             ApplyScalar(platform.MessageWhitelist, value => next.MessageWhitelist = value);
             ApplyScalar(platform.OfficialAppId, value => next.OfficialAppId = value);
             ApplyScalar(platform.OfficialChatEnabled, value => next.OfficialChatEnabled = value);
@@ -1002,6 +1003,15 @@ public sealed partial class SettingsStore : ISettingsRepository
                 ConfigurationBridge.WritePlatformPolicies(connection, imported.Entries,
                     imported.Entries.ToImmutableDictionary(entry => entry.Target, _ => 0));
                 fields.Add(ConfigurationFieldId.PlatformPolicies);
+            }
+            else
+            {
+                var entries = policies.Entries.ToDictionary(entry => entry.Target);
+                if (PlatformScalarSync.ReconcileEmptyQqLists(entries, policies.ExplicitFields, stored.User))
+                {
+                    ConfigurationBridge.WritePlatformPolicies(connection, entries.Values.ToImmutableArray(), policies.ExplicitFields);
+                    fields.Add(ConfigurationFieldId.PlatformPolicies);
+                }
             }
             // Legacy device rows remain in storage untouched; cfg-0.3.3 never reconciles or exposes them.
             _initializationFields = fields.ToImmutable();

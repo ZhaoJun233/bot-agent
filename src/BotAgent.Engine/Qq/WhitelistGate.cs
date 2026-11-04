@@ -13,7 +13,7 @@ namespace BotAgent.Services.Qq;
 /// 白名单闸门：这个群 / 这个人 / 这个会话 key 到底能不能收（V3 §4）。
 ///
 /// 三份名单**各用各的**，混用会出“看不懂的拦”：
-///   • 私域群 / 私聊：<c>WhitelistGroups</c> / <c>WhitelistPrivates</c>（留空回落到老的 <c>MessageWhitelist</c>）；
+///   • 私域群 / 私聊：<c>WhitelistGroups</c> / <c>WhitelistPrivates</c>（留空 = 全部接受，不继承旧共用名单）；
 ///   • 官方通道：<c>OfficialWhitelistGroups</c> / <c>OfficialWhitelistPrivates</c>，存的是**别名号**（8e15 起），
 ///     两份都留空 = **全部接受**（官方平台自身有准入与额度）—— 不能沿用“空 = 全拦”。
 ///
@@ -78,21 +78,17 @@ public sealed class WhitelistGate
     {
         // 整个构建过程只认一个配置版本：中途被热更新换掉引用时，不能拼出"新白名单 + 旧阈值"的半版名单。
         var settings = _box.Current;
-        var legacy = settings.MessageWhitelist;
         var qqPolicy = FindPolicy(settings, PlatformId.QqPrivate, AccountScope.Legacy);
         var offPolicy = FindPolicy(settings, PlatformId.QqOfficial, AccountScope.Legacy);
         var locPolicy = FindPolicy(settings, PlatformId.Local, AccountScope.Legacy);
 
-        var groupSource = !string.IsNullOrWhiteSpace(qqPolicy?.GroupWhitelist) ? qqPolicy.GroupWhitelist : settings.WhitelistGroups;
-        var privateSource = !string.IsNullOrWhiteSpace(qqPolicy?.PrivateWhitelist) ? qqPolicy.PrivateWhitelist : settings.WhitelistPrivates;
+        var groupSource = qqPolicy?.GroupWhitelist ?? settings.WhitelistGroups;
+        var privateSource = qqPolicy?.PrivateWhitelist ?? settings.WhitelistPrivates;
 
-        _groupsFromLegacy = string.IsNullOrWhiteSpace(groupSource);
-        _privatesFromLegacy = string.IsNullOrWhiteSpace(privateSource);
-
-        (_groups, _allGroups) = WhitelistPolicy.ParseWhitelist(
-            _groupsFromLegacy ? legacy : groupSource);
-        (_privates, _allPrivates) = WhitelistPolicy.ParseWhitelist(
-            _privatesFromLegacy ? legacy : privateSource);
+        _groupsFromLegacy = false;
+        _privatesFromLegacy = false;
+        (_groups, _allGroups) = WhitelistPolicy.ParseWhitelist(string.IsNullOrWhiteSpace(groupSource) ? "*" : groupSource);
+        (_privates, _allPrivates) = WhitelistPolicy.ParseWhitelist(string.IsNullOrWhiteSpace(privateSource) ? "*" : privateSource);
 
         // 官方通道：单独的名单；两份都留空 = 全部接受（官方平台自身有准入与额度）——
         // 不能沿用 ParseWhitelist 的“空 = 全拦”，否则没配名单时官方通道会直接死掉。

@@ -135,6 +135,20 @@ export interface ZbaTracePage {
   cache: ZbaTraceCacheUsage
 }
 
+/** 后端安全摘要，不含原始日志自由文本。 */
+export interface ZbaRuntimeLogEntry {
+  time: number
+  level: 'info' | 'warn' | 'error'
+  source: string
+  message: string
+  redacted: boolean
+}
+
+export interface ZbaRuntimeLogPage {
+  items: ZbaRuntimeLogEntry[]
+  capacity: number
+}
+
 export interface ZbaSessionSummary {
   id: string
   name: string
@@ -688,7 +702,7 @@ export interface ZbaInstalledPlugins {
 }
 
 export type ZbaPluginOperationKind = 'install' | 'update' | 'uninstall'
-export type ZbaPluginOperationStatus = 'staged' | 'restart_required' | 'failed'
+export type ZbaPluginOperationStatus = 'staged' | 'restart_required' | 'installed' | 'not_installed' | 'reload_required' | 'failed'
 
 export interface ZbaPluginOperation {
   id: string
@@ -1266,6 +1280,14 @@ export class ZbaClient {
    * 只读端点 `GET /zba/v1/traces?limit=N`：后端刻意不接受会话过滤参数，
    * 返回里也没有会话 key、消息正文或工具载荷 —— 页面只展示形状。
    */
+  async listRuntimeLogs(limit = 200): Promise<ZbaRuntimeLogPage> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const response = await this.fetchJson(`/logs?${params.toString()}`, { method: 'GET' }, 'required')
+    if (!response.ok) throw this.errorFrom(response)
+    if (isRuntimeLogPage(response.data)) return response.data
+    throw this.invalidResponse(response)
+  }
+
   async listTraces(limit = 20): Promise<ZbaTracePage> {
     const params = new URLSearchParams({ limit: String(limit) })
     const response = await this.fetchJson(`/traces?${params.toString()}`, { method: 'GET' }, 'required')
@@ -1644,6 +1666,18 @@ function isTracePage(value: unknown): value is ZbaTracePage {
     && Array.isArray(value.items)
     && value.items.every(isTraceSummary)
     && isTraceCacheUsage(value.cache)
+}
+
+function isRuntimeLogPage(value: unknown): value is ZbaRuntimeLogPage {
+  return isRecord(value) && value.capacity === 600
+    && Array.isArray(value.items) && value.items.length <= value.capacity
+    && value.items.every(item => isRecord(item)
+      && typeof item.time === 'number' && Number.isSafeInteger(item.time)
+      && item.time >= 0 && item.time <= 8.64e15
+      && (item.level === 'info' || item.level === 'warn' || item.level === 'error')
+      && typeof item.source === 'string' && item.source.length <= 64
+      && typeof item.message === 'string' && item.message.length <= 512
+      && typeof item.redacted === 'boolean')
 }
 
 function isTaskCancelResult(value: unknown): value is ZbaTaskCancelResult {
@@ -2157,7 +2191,7 @@ function isPluginOperation(value: unknown): value is ZbaPluginOperation {
     && typeof value.id === 'string' && value.id.length > 0
     && typeof value.pluginId === 'string' && value.pluginId.length > 0
     && (value.kind === 'install' || value.kind === 'update' || value.kind === 'uninstall')
-    && (value.status === 'staged' || value.status === 'restart_required' || value.status === 'failed')
+    && (value.status === 'staged' || value.status === 'restart_required' || value.status === 'installed' || value.status === 'not_installed' || value.status === 'reload_required' || value.status === 'failed')
     && typeof value.restartRequired === 'boolean'
     && (value.errorCode === undefined || typeof value.errorCode === 'string')
 }

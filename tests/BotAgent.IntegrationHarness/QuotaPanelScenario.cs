@@ -251,22 +251,26 @@ public static partial class Program
         }.ToJsonString();
         var disable = await ZbaAsync(http, "POST", zbaRoot + "/configuration/save", adminToken, disableJson);
         var disableNode = JsonNode.Parse(disable.Body);
-        Check("插件停用配置持久提交但明确需要重启", disable.Status == 200
+        Check("插件停用配置持久提交并立即热应用", disable.Status == 200
             && disableNode?["code"]?.GetValue<int>() == 0
             && disableNode?["receipt"]?["commitState"]?.GetValue<int>() == 1
-            && disableNode?["receipt"]?["applyState"]?.GetValue<int>() == 3,
+            && disableNode?["receipt"]?["applyState"]?.GetValue<int>() == 1,
             $"HTTP {disable.Status}; code={disableNode?["code"]}; error={disableNode?["error"]?["code"]}; fieldErrors={disableNode?["errors"]?.ToJsonString()}");
         var stagedPlugin = await ReadQuotaPluginAsync(http, zbaRoot, readToken, quotaPluginId);
-        Check("重启前 desired=false 与 runtime=Running 独立报告",
+        Check("重启前 desired=false 与 runtime=Stopped 一致",
             stagedPlugin?["desiredEnabled"]?.GetValue<bool>() == false
-            && stagedPlugin?["runtimeState"]?.GetValue<int>() == 4
-            && stagedPlugin?["errorCode"]?.GetValue<string>() == "plugin_restart_required");
+            && stagedPlugin?["runtimeState"]?.GetValue<int>() == 2
+            && stagedPlugin?["errorCode"] is null);
         requestsBefore = openAi.Requests.Count;
         sendsBefore = QuotaGroupSendCount(protocol, budgetGroupId);
-        await protocol.SendGroupMessageAsync(budgetGroupId, 20002, "群友A", "synthetic quota staged disable", 5105, ct: cts.Token);
-        await Task.Delay(1500, cts.Token);
-        Check("只保存停用尚未重启时配额准入仍有效", openAi.Requests.Count == requestsBefore
-            && QuotaGroupSendCount(protocol, budgetGroupId) == sendsBefore);
+        openAi.EnqueueReply("""{"suitability":99,"reply":"synthetic hot disabled response"}""");
+        await protocol.SendGroupMessageAsync(budgetGroupId, 20002, "群友A", "synthetic quota hot disable", 5105, ct: cts.Token);
+        Check("无需重启，停用后超额普通消息实际调用模型并回复",
+            await WaitUntilAsync(() => QuotaGroupSendCount(protocol, budgetGroupId) > sendsBefore, TimeSpan.FromSeconds(15))
+            && openAi.Requests.Count > requestsBefore);
+        var hotUsage = await WaitForQuotaItemAsync(http, zbaRoot, readToken, budgetTenant,
+            q => q["usedTokens"]?.GetValue<long>() == 150, cts.Token);
+        Check("热停用不停止独立用量记账", hotUsage?["usedTokens"]?.GetValue<long>() == 150);
 
         await bot.StopAsync();
 
@@ -295,7 +299,7 @@ public static partial class Program
         var restartedBudget = QuotaItem(restartList.Body, budgetTenant);
         Check("重启保留低限额、已用量与租户隔离", restartList.Status == 200
             && restartedBudget?["dailyTokenLimit"]?.GetValue<int>() == 1
-            && restartedBudget?["usedTokens"]?.GetValue<long>() == 100
+            && restartedBudget?["usedTokens"]?.GetValue<long>() == 150
             && restartedBudget?["energySaving"]?.GetValue<bool>() == true
             && QuotaItem(restartList.Body, tenant)?["usedTokens"]?.GetValue<long>() == 0);
         var restartFind = await ZbaAsync(http, "POST", zbaRoot + "/quotas/find", adminToken,
@@ -317,9 +321,9 @@ public static partial class Program
             await WaitUntilAsync(() => QuotaGroupSendCount(protocol2, budgetGroupId) > 0, TimeSpan.FromSeconds(15))
             && openAi.Requests.Count > requestsBefore);
         var disabledUsage = await WaitForQuotaItemAsync(http, zbaRoot, readToken, budgetTenant,
-            q => q["usedTokens"]?.GetValue<long>() == 150, cts.Token);
-        Check("插件停用不停止独立用量记账", disabledUsage?["usedPromptTokens"]?.GetValue<int>() == 120
-            && disabledUsage?["usedCompletionTokens"]?.GetValue<int>() == 30
+            q => q["usedTokens"]?.GetValue<long>() == 200, cts.Token);
+        Check("插件停用不停止独立用量记账", disabledUsage?["usedPromptTokens"]?.GetValue<int>() == 160
+            && disabledUsage?["usedCompletionTokens"]?.GetValue<int>() == 40
             && disabledUsage?["remainingTokens"]?.GetValue<int>() == 0
             && disabledUsage?["energySaving"]?.GetValue<bool>() == true);
 

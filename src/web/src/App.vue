@@ -6,6 +6,7 @@ import ConfigurationPage from './features/configuration/ConfigurationPage.vue'
 import CapabilitiesPage from './features/capabilities/CapabilitiesPage.vue'
 import TasksPage from './features/tasks/TasksPage.vue'
 import TracesPage from './features/traces/TracesPage.vue'
+import RuntimeLogsPage from './features/logs/RuntimeLogsPage.vue'
 import AppIcon from './shared/ui/AppIcon.vue'
 import BrandMark from './shared/ui/BrandMark.vue'
 import ThemeToggle from './shared/ui/ThemeToggle.vue'
@@ -32,7 +33,7 @@ const adminError = ref<UiError | null>(null)
 const loading = ref(false)
 const connecting = ref(false)
 const lastSuccessAt = ref<string | null>(null)
-const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks' | 'traces'>('overview')
+const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks' | 'traces' | 'logs'>('overview')
 const configurationPage = ref<InstanceType<typeof ConfigurationPage> | null>(null)
 // 配置页首次进入后保持挂载（v-show），草稿因此跨页保留；锁定/换令牌时才卸载。
 const configurationMounted = ref(false)
@@ -45,11 +46,13 @@ const tasksMounted = ref(false)
 const tracesPage = ref<InstanceType<typeof TracesPage> | null>(null)
 // 轨迹页同样首次进入后常驻（v-show）：再次进入只需重读。
 const tracesMounted = ref(false)
+const logsPage = ref<InstanceType<typeof RuntimeLogsPage> | null>(null)
+const logsMounted = ref(false)
 const sessionNotice = ref<string | null>(null)
 const configDraftCount = computed(() => configurationPage.value?.draftCount ?? 0)
 const abilityDraftCount = computed(() => capabilitiesPage.value?.configurationDraftCount ?? 0)
 
-type GuideIcon = 'overview' | 'capabilities' | 'config' | 'tasks' | 'traces'
+type GuideIcon = 'overview' | 'capabilities' | 'config' | 'tasks' | 'traces' | 'logs'
 /** 每个页面顶部的「这一页是干什么的」：一句话用途 + 两三条怎么用。 */
 const pageGuides: Record<typeof view.value, { title: string; icon: GuideIcon; summary: string; tips: string[] }> = {
   overview: {
@@ -75,6 +78,12 @@ const pageGuides: Record<typeof view.value, { title: string; icon: GuideIcon; su
     icon: 'tasks',
     summary: '提交后台 Agent 任务、查看进度结果，并处理等待人工审批的请求。',
     tips: ['填写来源与提示词后提交；同一幂等键重复提交不会重复执行。', '待审批列表里逐条批准或拒绝。', '点开任务可查看结果摘要，运行中的任务可以取消。']
+  },
+  logs: {
+    title: '运行日志',
+    icon: 'logs',
+    summary: '当前进程最近的运行事件与安全摘要，帮助定位告警和故障。',
+    tips: ['按级别、来源或关键词筛选已读取的记录。', '默认手动刷新；可开启每 5 秒刷新，切页或隐藏浏览器时暂停。', '后端不返回聊天正文、凭据或原始日志；未知内容仅显示隐藏占位。']
   },
   traces: {
     title: '轨迹与缓存',
@@ -108,6 +117,7 @@ function clearSession(): void {
   capabilitiesMounted.value = false
   tasksMounted.value = false
   tracesMounted.value = false
+  logsMounted.value = false
   sessionGeneration += 1
   token.value = ''
   mode.value = 'read'
@@ -256,6 +266,10 @@ async function refresh(): Promise<void> {
     await tracesPage.value?.reload()
     return
   }
+  if (view.value === 'logs') {
+    await logsPage.value?.reload()
+    return
+  }
   await load()
 }
 
@@ -337,6 +351,18 @@ async function openTraces(event?: MouseEvent): Promise<void> {
   if (!firstVisit) await tracesPage.value?.reload()
 }
 
+async function openLogs(event?: MouseEvent): Promise<void> {
+  if (view.value === 'configuration') {
+    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
+    if (!allowed) return
+  }
+  if (view.value === 'logs') return
+  capabilitiesPage.value?.discardSecretsOnLeave()
+  logsMounted.value = true
+  view.value = 'logs'
+  // 日志页在 active 变化时自行重读，避免同时发出两次请求。
+}
+
 /** 欢迎页快捷卡片：走与侧栏相同的切页路径（含未保存保护与首次挂载）。 */
 async function navigateFromOverview(target: 'capabilities' | 'configuration' | 'tasks', event: MouseEvent): Promise<void> {
   if (target === 'capabilities') await openCapabilities(event)
@@ -353,6 +379,7 @@ async function lock(event?: MouseEvent): Promise<void> {
   capabilitiesMounted.value = false
   tasksMounted.value = false
   tracesMounted.value = false
+  logsMounted.value = false
   connectSequence += 1
   clearSession()
   loadSequence += 1
@@ -550,6 +577,17 @@ onMounted(load)
             <AppIcon name="traces" />
             <span class="side-nav-text"><span>轨迹与缓存</span></span>
           </button>
+          <button
+            type="button"
+            class="side-nav-item"
+            :class="{ active: view === 'logs' }"
+            :aria-current="view === 'logs' ? 'page' : undefined"
+            data-testid="nav-logs"
+            @click="openLogs($event)"
+          >
+            <AppIcon name="logs" />
+            <span class="side-nav-text"><span>运行日志</span></span>
+          </button>
         </nav>
 
         <div class="sidebar-note">
@@ -651,6 +689,14 @@ onMounted(load)
             ref="tracesPage"
             :client="client"
             :active="view === 'traces'"
+          />
+          <RuntimeLogsPage
+            v-if="logsMounted"
+            v-show="view === 'logs'"
+            ref="logsPage"
+            :client="client"
+            :active="view === 'logs'"
+            @auth-expired="onAuthExpired"
           />
           <ConfigurationPage
             :active="view === 'configuration'"

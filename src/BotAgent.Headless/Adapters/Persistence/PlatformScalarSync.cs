@@ -24,6 +24,29 @@ internal static class PlatformScalarSync
     private const int GroupBit = 4;
     private const int PrivateBit = 8;
 
+    // 旧导入的规则不是用户显式覆盖：升级后应采用新的空名单语义。
+    internal static bool ReconcileEmptyQqLists(
+        Dictionary<PolicyTarget, PlatformPolicyEntry> entries,
+        ImmutableDictionary<PolicyTarget, int> modes, AppSettings settings)
+    {
+        var target = new PolicyTarget.AccountDefault(PlatformId.QqPrivate, AccountScope.Legacy);
+        if (!entries.TryGetValue(target, out var entry)) return false;
+        var bits = modes.GetValueOrDefault(target);
+        var rules = entry.Configuration;
+        var updated = rules with
+        {
+            GroupWhitelist = (bits & GroupBit) == 0 && string.IsNullOrWhiteSpace(settings.WhitelistGroups)
+                && rules.GroupWhitelist.Kind != ListRuleKind.AllowAll
+                ? ListRule.AllowAll() : rules.GroupWhitelist,
+            PrivateWhitelist = (bits & PrivateBit) == 0 && string.IsNullOrWhiteSpace(settings.WhitelistPrivates)
+                && rules.PrivateWhitelist.Kind != ListRuleKind.AllowAll
+                ? ListRule.AllowAll() : rules.PrivateWhitelist,
+        };
+        if (updated == rules) return false;
+        entries[target] = entry with { Configuration = updated };
+        return true;
+    }
+
     public static void Apply(
         Dictionary<PolicyTarget, PlatformPolicyEntry> entries,
         ImmutableDictionary<PolicyTarget, int>.Builder modes,
@@ -44,10 +67,12 @@ internal static class PlatformScalarSync
             SyncToggle(PlatformId.Local, AccountScope.Legacy, enabled, enabled);
         }
 
+        // 共用字段 Set 已在 FreezePatch 展开；Clear 不应改写任一侧的显式策略。
         if (scalars.WhitelistGroups.Kind != EditKind.Keep
-            || scalars.WhitelistPrivates.Kind != EditKind.Keep
-            || scalars.MessageWhitelist.Kind != EditKind.Keep)
-            SyncList(PlatformId.QqPrivate, AccountScope.Legacy);
+            || scalars.WhitelistPrivates.Kind != EditKind.Keep)
+            SyncList(PlatformId.QqPrivate, AccountScope.Legacy,
+                scalars.WhitelistGroups.Kind != EditKind.Keep,
+                scalars.WhitelistPrivates.Kind != EditKind.Keep);
         if (scalars.OfficialWhitelistGroups.Kind != EditKind.Keep
             || scalars.OfficialWhitelistPrivates.Kind != EditKind.Keep)
             SyncList(PlatformId.QqOfficial, AccountScope.Legacy);
@@ -84,16 +109,20 @@ internal static class PlatformScalarSync
             modes[target] = bits;
         }
 
-        void SyncList(string platform, string account)
+        void SyncList(string platform, string account, bool groupTouched = true, bool privateTouched = true)
         {
             var target = new PolicyTarget.AccountDefault(platform, account);
             var entry = EntryFor(target);
             var (group, direct) = PlatformSwitchSettings.ScalarListRules(platform, candidate);
             entries[target] = entry with
             {
-                Configuration = entry.Configuration with { GroupWhitelist = group, PrivateWhitelist = direct },
+                Configuration = entry.Configuration with
+                {
+                    GroupWhitelist = groupTouched ? group : entry.Configuration.GroupWhitelist,
+                    PrivateWhitelist = privateTouched ? direct : entry.Configuration.PrivateWhitelist,
+                },
             };
-            modes[target] = modes.GetValueOrDefault(target) | GroupBit | PrivateBit;
+            modes[target] = modes.GetValueOrDefault(target) | (groupTouched ? GroupBit : 0) | (privateTouched ? PrivateBit : 0);
         }
     }
 }

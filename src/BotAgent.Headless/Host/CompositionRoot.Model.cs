@@ -193,8 +193,8 @@ internal static partial class CompositionRoot
     /// 传输层按路由逐请求取端点，进程里没有任何按供应商缓存的长生命周期对象（#103 已把密钥降为请求级）。
     /// 因此旧的重启条件（启用位 / 优先级 / 协议 / 选项 / 非 primary 的地址与模型名）全部变成可热应用。
     ///
-    /// 失败口径：重建抛出（例如库读不出来）时**保留旧候选表与旧快照**，如实回 <c>RestartRequired</c>，
-    /// 而不是假装已应用 —— 面板据此提示"模型调用要重启后才生效"。
+    /// 失败口径：发布注册表失败时保留旧快照，如实回 <c>Failed</c>；不是一个可保证重启修复的限制。
+    /// desired 已提交但 runtime 未收敛，逐请求的快照/凭据边界仍可安全拒绝调用，不能承诺旧实例继续服务。
     /// </summary>
     private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, ModelProviderRegistry registry,
         SettingsBox settingsBox, ISecretsRepository secrets)
@@ -203,28 +203,28 @@ internal static partial class CompositionRoot
         using var transaction = connection.BeginTransaction(deferred: true);
         if (ConfigurationBridge.ReadConfigurationVersion(connection) != expected)
             throw new InvalidOperationException("configuration_superseded");
-        var desired = ModelProviderStore.LoadAllInTransaction(connection).ToArray();
-        var current = settingsBox.Current;
-        // 路由在事务内按同一份事实重建：任何一条建不出来（凭据来源未分类等）只说明它暂时不可路由，
-        // 与启动装配口径一致 —— 它仍在候选表里，只是解析器会拒绝，故障转移到下一个供应商。
-        var routes = desired
-            .Select(provider => TryBuildProviderRoute(provider, current, secrets))
-            .Where(route => route is not null)
-            .Cast<ModelProviderRoute>()
-            .ToArray();
-        transaction.Commit();
         try
         {
+            var desired = ModelProviderStore.LoadAllInTransaction(connection).ToArray();
+            var current = settingsBox.Current;
+            // 路由在事务内按同一份事实重建：任何一条建不出来（凭据来源未分类等）只说明它暂时不可路由，
+            // 与启动装配口径一致 —— 它仍在候选表里，只是解析器会拒绝，故障转移到下一个供应商。
+            var routes = desired
+                .Select(provider => TryBuildProviderRoute(provider, current, secrets))
+                .Where(route => route is not null)
+                .Cast<ModelProviderRoute>()
+                .ToArray();
+            transaction.Commit();
             registry.Replace(desired, desired.Select(provider => new ProviderCandidate(provider.Id, provider.Priority, provider.IsEnabled)));
+            // 路由表只用于诊断/兜底（真正的请求路由由解析器现取）；这里记一行让"重建成功"可观测。
+            FileLog.Write("Model", $"provider_registry_rebuilt providers={desired.Length} routes={routes.Length}");
+            return new(ApplyStep.ModelProjection, ApplyState.Applied, null);
         }
         catch (Exception ex)
         {
-            FileLog.Warn("Model", $"Provider 注册表热重建失败，保留旧路由：{ex.GetType().Name}");
-            return new(ApplyStep.ModelProjection, ApplyState.RestartRequired, "restart_required");
+            FileLog.Warn("Model", $"Provider 注册表热重建失败，保留旧快照；desired/runtime 不一致的请求仍会安全拒绝：{ex.GetType().Name}");
+            return new(ApplyStep.ModelProjection, ApplyState.Failed, "model_projection_rebuild_failed");
         }
-        // 路由表只用于诊断/兜底（真正的请求路由由解析器现取）；这里记一行让"重建成功"可观测。
-        FileLog.Write("Model", $"provider_registry_rebuilt providers={desired.Length} routes={routes.Length}");
-        return new(ApplyStep.ModelProjection, ApplyState.Applied, null);
     }
 
     private static ModelProviderRoute? TryBuildProviderRoute(

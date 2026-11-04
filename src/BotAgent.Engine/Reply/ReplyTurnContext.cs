@@ -205,6 +205,6 @@ internal sealed class ReplyTurnContext
             ProfileChars: profileChars, StickerChoices: stickerChoices, RoleCount: roleCount,
             GroupRoles: groupRoles, VibeHint: vibeHint, PreviousVibe: previousVibe, PokeContext: pokeContext,
             MoodText: moodText, MusicText: musicText, RecallText: recallText, SearchText: searchText,
-            LinkText: linkText);
+            LinkText: linkText, IsPrivateConversation: !isGroupScope);
     }
 }

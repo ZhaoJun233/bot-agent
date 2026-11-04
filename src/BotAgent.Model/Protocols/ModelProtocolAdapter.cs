@@ -12,7 +12,7 @@ namespace BotAgent.Model.Protocols;
 /// </summary>
 public static class ModelProtocolAdapter
 {
-    public static HttpRequestMessage CreateRequest(ModelProviderRoute route, JsonObject payload, bool stream = false)
+    public static HttpRequestMessage CreateRequest(ModelProviderRoute route, JsonObject payload, bool stream = false, int? stableSystemPrefixLength = null)
     {
         ArgumentNullException.ThrowIfNull(route);
         ArgumentNullException.ThrowIfNull(payload);
@@ -30,7 +30,7 @@ public static class ModelProtocolAdapter
         body = route.Protocol switch
         {
             ModelProtocol.OpenAiResponses => ResponsesProtocol.Request(body),
-            ModelProtocol.AnthropicMessages => AnthropicProtocol.Request(body, promptCache),
+            ModelProtocol.AnthropicMessages => AnthropicProtocol.Request(body, promptCache, stableSystemPrefixLength),
             ModelProtocol.GeminiGenerateContent => GeminiProtocol.Request(body),
             ModelProtocol.Ollama => OllamaProtocol.Request(body),
             _ => body

@@ -418,7 +418,7 @@ internal static partial class ReviewEngineRegression
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, SamplingProfile? sampling = null, string? promptCacheScope = null)
+            bool enableToolRequest = false, string? toolList = null, SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
         { Calls++; WebEnabled = enableWebSearch; Tools = toolList ?? ""; Media.Add((stickers?.Count ?? 0, pokeContext)); return Complete(ct); }
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
             int maxTokens, double temperature, CancellationToken ct = default, string? baseUrlOverride = null, string? apiKeyOverride = null) => Task.FromResult<string?>(null);

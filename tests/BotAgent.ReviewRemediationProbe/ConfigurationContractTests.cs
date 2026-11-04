@@ -1098,7 +1098,7 @@ internal static class ConfigurationContractTests
             ("--configuration-mood-persistence", "CFG_CHILD mood-persistence passed=22 failed=0"),
             ("--configuration-platform-policies", "CFG_CHILD platform-policies passed=72 failed=0"),
             ("--configuration-feishu-whitelist", "CFG_CHILD feishu-whitelist passed=16 failed=0"),
-            ("--configuration-platform-compatibility", "CFG_CHILD platform-compatibility passed=22 failed=0"),
+            ("--configuration-platform-compatibility", "CFG_CHILD platform-compatibility passed=58 failed=0"),
             ("--configuration-legacy-plan", "CFG_CHILD legacy-plan passed=14 failed=0"),
             ("--configuration-publish-permission", "CFG_CHILD publish-permission passed=14 failed=0"),
             ("--configuration-write-boundaries", "CFG_CHILD write-boundaries passed=27 failed=0"),
@@ -1707,12 +1707,6 @@ internal static class ConfigurationContractTests
                     new PolicyTarget.AccountDefault(platform, platform == "feishu" ? "default" : "legacy"), settings.DeclaredPlatformActions);
                 return (rule.Enabled == ToggleRule.Enabled, rule.ChatEnabled == ToggleRule.Enabled);
             }
-            (BotAgent.Domain.Configuration.ListRule Group, BotAgent.Domain.Configuration.ListRule Private) Lists(AppSettings settings, string platform)
-            {
-                var rule = BotAgent.Services.Platforms.PlatformSwitchSettings.ResolvePolicyRules(settings,
-                    new PolicyTarget.AccountDefault(platform, platform == "feishu" ? "default" : "legacy"), settings.DeclaredPlatformActions);
-                return (rule.GroupWhitelist, rule.PrivateWhitelist);
-            }
             string State() => JsonSerializer.Serialize(new { Json = AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1"),
                 Meta = AppDatabase.GetMeta("configuration_platform_policies"), Version = AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1"),
                 Operations = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations") });
@@ -1812,6 +1806,56 @@ internal static class ConfigurationContractTests
             await store.SaveLegacyAsync(caller, replayKey, patch, ImmutableArray<SecretEdit>.Empty); before = State();
             var replay = await store.SaveLegacyAsync(caller, replayKey, patch, ImmutableArray<SecretEdit>.Empty);
             Check(replay.Replayed && State() == before, "legacy_alias_replay_does_not_reapply_or_allocate_new_version");
+
+            // Exercise both admission paths: canonical expansion must update values and field modes together.
+            foreach (var useLegacy in new[] { true, false })
+            {
+                var profile = useLegacy ? "legacy" : "strict";
+                async Task SaveWhitelist(PlatformChanges platform)
+                {
+                    var changes = new ConfigurationPatch(null, null, null, platform, null, null, null, null);
+                    var receipt = useLegacy
+                        ? await store.SaveLegacyAsync(caller, Key(), changes, ImmutableArray<SecretEdit>.Empty)
+                        : await store.SaveAsync(caller, Strict(changes));
+                    Check(receipt.Code is ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges,
+                        profile + "_whitelist_save");
+                }
+                async Task CheckWhitelist(string groups, string privates)
+                {
+                    var editable = (await store.ReadAsync(caller, ConfigurationReadKind.Editable)).View!.Platform;
+                    var effective = Desired();
+                    Check(effective.WhitelistGroups == groups && effective.WhitelistPrivates == privates
+                        && editable.WhitelistGroups.TryGetEditableValue(out var requestedGroups) && requestedGroups == groups
+                        && editable.WhitelistPrivates.TryGetEditableValue(out var requestedPrivates) && requestedPrivates == privates,
+                        profile + "_whitelist_requested_and_effective_values");
+                    Check(editable.WhitelistGroups.UserMode == UserValueKind.Explicit
+                        && editable.WhitelistPrivates.UserMode == UserValueKind.Explicit
+                        && editable.WhitelistGroups.EffectiveSource == ConfigurationValueSource.UserConfiguration
+                        && editable.WhitelistPrivates.EffectiveSource == ConfigurationValueSource.UserConfiguration,
+                        profile + "_whitelist_explicit_user_source");
+                }
+
+                await SaveWhitelist(new() { WhitelistPrivates = FieldEdit<string>.Set("") });
+                var emptyPrivate = (await store.ReadAsync(caller, ConfigurationReadKind.Editable)).View!.Platform.WhitelistPrivates;
+                Check(emptyPrivate.TryGetEditableValue(out var emptyValue) && emptyValue == ""
+                    && emptyPrivate.UserMode == UserValueKind.Explicit, profile + "_private_starts_explicit_empty");
+                await SaveWhitelist(new() { MessageWhitelist = FieldEdit<string>.Set("10001") });
+                await CheckWhitelist("10001", "10001");
+
+                await SaveWhitelist(new() { MessageWhitelist = FieldEdit<string>.Set("20002"),
+                    WhitelistGroups = FieldEdit<string>.Set("30003"), WhitelistPrivates = FieldEdit<string>.Set("") });
+                await CheckWhitelist("30003", "");
+                await SaveWhitelist(new() { MessageWhitelist = FieldEdit<string>.Set("10001"),
+                    WhitelistGroups = FieldEdit<string>.Clear(), WhitelistPrivates = FieldEdit<string>.Set("30003") });
+                await CheckWhitelist("", "30003");
+                await SaveWhitelist(new() { MessageWhitelist = FieldEdit<string>.Set("20002"),
+                    WhitelistPrivates = FieldEdit<string>.Clear() });
+                await CheckWhitelist("20002", "");
+
+                await SaveWhitelist(new() { MessageWhitelist = FieldEdit<string>.Set("10001") });
+                await SaveWhitelist(new() { MessageWhitelist = FieldEdit<string>.Clear() });
+                await CheckWhitelist("10001", "10001");
+            }
             var final = Desired(); original = JsonSerializer.Serialize(final); before = State();
             _ = BotAgent.Services.Platforms.PlatformSwitchSettings.EditablePolicies(final);
             Check(State() == before && JsonSerializer.Serialize(final) == original, "post_save_compatibility_projection_is_still_pure");

@@ -164,7 +164,7 @@ onBeforeUnmount(() => { alive = false; ++sequence })
       <span v-if="!authorized" class="muted">管理员模式下可切换</span>
     </div>
     <p v-if="desired !== null" :data-testid="props.compact ? undefined : 'quota-plugin-desired'">
-      已保存设置：{{ desired ? '启用' : '停用' }}。<template v-if="!fieldSwitch && (!props.compact || !notice.includes('需重启'))">修改后需重启宿主生效，不会自动重启。</template>
+      已保存设置：{{ desired ? '启用' : '停用' }}。<template v-if="!fieldSwitch && (!props.compact || !notice.includes('需重启'))">保存后热应用，实际结果以应用回执为准。</template>
     </p>
     <p v-if="target !== null" class="notice warn" role="status">保留的启停意图：{{ target ? '启用' : '停用' }}。读取最新后请核对，再明确保存此意图。</p>
     <p v-if="loading" role="status">正在读取插件设置…</p>

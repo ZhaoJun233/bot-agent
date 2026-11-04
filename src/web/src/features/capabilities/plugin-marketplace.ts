@@ -24,7 +24,7 @@ export function catalogEntry(item: ZbaPluginCatalogItem): PluginCatalogEntry {
   const installedVersion = item.installedVersion ?? undefined
   // 卸载是暂存态而不是版本差异：状态串里出现 uninstall/remov 就按「待卸载」展示。
   const pendingUninstall = /uninstall|remov/.test(status)
-  const staged = status === 'staged' || status === 'restart_required' || status === 'pending'
+  const staged = status === 'staged' || status === 'restart_required' || status === 'reload_required' || status === 'pending'
   const pendingVersion = !pendingUninstall && staged && item.manifest.version !== installedVersion
     ? item.manifest.version
     : undefined
@@ -78,8 +78,8 @@ export interface PluginNotice {
 }
 
 /**
- * 回执措辞。status 只有 staged|restart_required|failed 三种终态：
- * 前两种是「已经写进去了」，failed 才是「没写成」，必须说清楚，否则用户会重复提交。
+ * 区分已热应用、已暂存、兼容宿主需重启以及失败。
+ * 热应用失败可能已保存配置或暂存包，不能宣称所有写入都已回滚。
  */
 export function pluginOperationNotice(operation: ZbaPluginOperation): PluginNotice {
   const what = operation.kind === 'install' ? '安装' : operation.kind === 'update' ? '更新' : '卸载'
@@ -90,7 +90,9 @@ export function pluginOperationNotice(operation: ZbaPluginOperation): PluginNoti
   if (operation.status === 'restart_required' || operation.restartRequired) {
     return { tone: 'warn', message: what + '已受理，重启 BotAgent 后生效。' }
   }
-  return { tone: 'ok', message: what + '已受理，将在服务端就绪后生效。' }
+  if (operation.status === 'reload_required' || operation.status === 'staged')
+    return { tone: 'warn', message: what + '已暂存，等待热重载；旧实例保持运行。' }
+  return { tone: 'ok', message: what + '已热应用，无需重启 BotAgent。' }
 }
 
 /**
@@ -100,6 +102,7 @@ export function pluginOperationNotice(operation: ZbaPluginOperation): PluginNoti
 export function pluginRecoveryNotice(cause: unknown): PluginNotice | null {
   if (!(cause instanceof ZbaRequestError)) return null
   // 只认冻结线点名的两个 code：409 也可能是版本冲突，那时旧键仍然有效。
+  if (cause.code === 'plugin_reload_failed') return { tone: 'warn', message: '变更已保存，但热重载失败，旧实例保持不变。请修正后重试。' }
   if (cause.code === 'plugin_operation_not_found') {
     return { tone: 'warn', message: '这个操作键还没有回执：服务端可能尚未受理。请稍后用同一操作键重新核对，不要换键重复提交。' }
   }

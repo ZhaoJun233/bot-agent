@@ -6,7 +6,7 @@
 
 数据快照：2026-11-03，公开快照 `Zhaodev` 顶端 `7930e02b9e06`（CI 9 项全绿）。
 治理总纲见 [#100](https://github.com/ZhaoJun233/bot-agent/issues/100)，阶段四的实现细节见
-[任务与执行状态](architecture/agent-task-runtime.md)、[工具注册表](architecture/tool-registry.md)、
+[任务与执行状态](architecture/agent-task-runtime.md)、[工具注册表](architecture/tool-registry.md)、[插件热重载](architecture/plugin-hot-reload.md)、
 [审批与执行隔离](architecture/approval-and-isolation.md)。
 
 ## 1. 复盘：四个阶段全部关闭

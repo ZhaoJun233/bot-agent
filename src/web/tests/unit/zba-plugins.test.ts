@@ -134,6 +134,13 @@ describe('ZbaClient 插件市场', () => {
     })
   })
 
+  it.each(['installed', 'not_installed', 'reload_required'])('accepts hot application status %s', async (status) => {
+    const { fetchImpl } = fakeFetch(jsonResponse({ ...operation, operation: { ...operation.operation, status, restartRequired: false } }))
+    const result = await new ZbaClient({ fetchImpl }).pluginOperation('hot-key')
+    expect(result.operation.status).toBe(status)
+    expect(result.operation.restartRequired).toBe(false)
+  })
+
   it('更新与卸载走各自的路径', async () => {
     const { fetchImpl, calls } = fakeFetch(jsonResponse(operation))
     const client = new ZbaClient({ baseUrl: '/zba/v1', fetchImpl })

@@ -262,7 +262,8 @@ internal static partial class CompositionRoot
         a.HotReload.BindConfiguration(a.Configuration, a.Authorization, a.SettingsStore.LoadCommittedRuntimeSnapshot,
             (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(a.Configuration, caller, key, intent, a.Mood),
             a.HealthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
-            version => InspectModelProjection(version, a.ModelRegistry, a.Box, a.Secrets));
+            version => InspectModelProjection(version, a.ModelRegistry, a.Box, a.Secrets),
+            () => a.PluginRuntime.ReloadAsync());
         a.CircuitStatus = BuildCircuitStatusProvider(a.Brain, a.TtsBreaker, a.SearchBreaker, a.RiskBackoff);
         a.Web = BuildWebUiServer(a.Settings, a.Box, a.Gateway, a.Source, a.Agent, a.LoginQr,
             a.HotReload, a.Ui, a.Stickers, a.Mood, a.Voice, a.Music, a.Research, a.Registry, a.Profiles,

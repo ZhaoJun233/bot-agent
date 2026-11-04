@@ -8,7 +8,7 @@ namespace BotAgent.Adapters.Plugins;
 /// Inject an IHttpFetcher with redirects disabled and private destinations rejected.
 /// Packages execute trusted .NET code in-process; this is not a security sandbox.
 /// </summary>
-public sealed class PluginPackageService
+public sealed partial class PluginPackageService
 {
     private readonly PluginPackageStore _store;
     private readonly IHttpFetcher _http;
@@ -114,8 +114,7 @@ public sealed class PluginPackageService
             await EnsureRevisionLockedAsync(expectedRevision, ct);
             var state = await _store.ReadAsync(id, ct);
             if (state.Active == null && state.Pending == null) throw new InvalidOperationException("Package is not installed.");
-            // 保留清单直到重启：否则“已暂存卸载”的包在面板里会整条消失，用户看不到待处理状态。
-            // 启动时的卸载分支不加载 Pending，只把它清掉，所以保留不改变生效语义。
+            // 保留清单直到运行时完成卸载，失败时仍可观察并重试待处理状态。
             var next = state with { PendingUninstall = true };
             await _store.SaveAsync(next, ct);
             Publish(next);
@@ -191,7 +190,7 @@ public sealed class PluginPackageService
             .OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
 
     private async Task<IBotPlugin> StartReleaseAsync(PluginPackageManifest manifest, PluginContext context,
-        CancellationToken ct, Func<PluginPackageManifest, string?>? resolveSettings = null)
+        CancellationToken ct, Func<PluginPackageManifest, string?>? resolveSettings = null, bool enabled = true)
     {
         var archive = _store.ArchivePath(manifest);
         if (new FileInfo(archive).Length > PluginPackageArchive.MaxArchiveBytes) throw new InvalidDataException("Archive too large.");
@@ -203,9 +202,14 @@ public sealed class PluginPackageService
             await PluginPackageArchive.ExtractAsync(bytes, manifest, runtime, ct);
             var config = Path.Combine(_store.PackageDirectory(manifest.Id), "config");
             Directory.CreateDirectory(config);
-            return await PluginPackageLoader.StartAsync(runtime, config, manifest, context, ct, resolveSettings?.Invoke(manifest));
+            return await PluginPackageLoader.StartAsync(runtime, config, manifest, context, ct,
+                enabled ? resolveSettings?.Invoke(manifest) : null, enabled);
         }
-        catch { Directory.Delete(runtime, recursive: true); throw; }
+        catch
+        {
+            try { if (Directory.Exists(runtime)) Directory.Delete(runtime, recursive: true); } catch { }
+            throw;
+        }
     }
 
     private async Task<byte[]> DownloadAsync(string url, CancellationToken ct)

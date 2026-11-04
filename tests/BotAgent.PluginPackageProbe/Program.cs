@@ -93,6 +93,7 @@ try
     await Service().LoadAtStartupAsync(context);
     var removed = (await Service().GetInstalledAsync()).Single(x => x.Id == "test.plugin");
     Check(removed.Active == null && removed.Previous != null && File.Exists(configFile), "uninstall preserves version and config");
+    await HotReloadChecks.RunAsync(Check);
     Console.WriteLine($"PASS plugin package probe: {checks} checks");
 }
 finally

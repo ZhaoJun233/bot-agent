@@ -22,6 +22,12 @@ public interface IModelTransport
     /// <summary>把请求发出去（含三条兜底重试）；返回拿到的 JSON 与"是不是去掉图片后重试成功的"。</summary>
     Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct);
 
+    // 默认实现保持旧传输实现/测试替身兼容；支持缓存的传输显式保留边界到协议序列化。
+    Task<SendOutcome> SendAsync(BuiltRequest request, ModelProviderRoute? provider, CancellationToken ct)
+        => provider is null
+            ? SendAsync(request.Payload, request.AttachedImages, request.AttachedImageIds, ct)
+            : SendAsync(request.Payload, request.AttachedImages, request.AttachedImageIds, provider, ct);
+
     /// <summary>
     /// 使用一次性 Provider 路由覆盖发送。旧实现默认回退到原有配置，保持测试替身和历史调用方兼容。
     /// </summary>

@@ -117,7 +117,7 @@ public static class PlatformSwitchSettings
                     InheritActionAllowlist = true,
                     GroupWhitelist = platform switch
                     {
-                        PlatformId.QqPrivate => !string.IsNullOrWhiteSpace(settings.WhitelistGroups) ? settings.WhitelistGroups : settings.MessageWhitelist,
+                        PlatformId.QqPrivate => settings.WhitelistGroups,
                         PlatformId.QqOfficial => settings.OfficialWhitelistGroups,
                         PlatformId.Feishu => settings.FeishuWhitelist,
                         PlatformId.Local => settings.LocalChannelIds,
@@ -125,7 +125,7 @@ public static class PlatformSwitchSettings
                     },
                     PrivateWhitelist = platform switch
                     {
-                        PlatformId.QqPrivate => !string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? settings.WhitelistPrivates : settings.MessageWhitelist,
+                        PlatformId.QqPrivate => settings.WhitelistPrivates,
                         PlatformId.QqOfficial => settings.OfficialWhitelistPrivates,
                         PlatformId.Feishu => FeishuPrivateList(settings),
                         _ => string.Empty,
@@ -354,14 +354,14 @@ public static class PlatformSwitchSettings
         };
         var groupField = platform switch
         {
-            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistGroups) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistGroups,
+            PlatformId.QqPrivate => ConfigurationFieldId.WhitelistGroups,
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistGroups,
             PlatformId.Feishu => ConfigurationFieldId.FeishuWhitelist,
             _ => ConfigurationFieldId.LocalChannelIds,
         };
         var privateField = platform switch
         {
-            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistPrivates,
+            PlatformId.QqPrivate => ConfigurationFieldId.WhitelistPrivates,
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistPrivates,
             PlatformId.Feishu => FeishuPrivateField(settings),
             _ => groupField,
@@ -389,28 +389,28 @@ public static class PlatformSwitchSettings
         ArgumentNullException.ThrowIfNull(settings);
         var groupField = platform switch
         {
-            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistGroups) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistGroups,
+            PlatformId.QqPrivate => ConfigurationFieldId.WhitelistGroups,
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistGroups,
             PlatformId.Feishu => ConfigurationFieldId.FeishuWhitelist,
             _ => ConfigurationFieldId.LocalChannelIds,
         };
         var privateField = platform switch
         {
-            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? ConfigurationFieldId.MessageWhitelist : ConfigurationFieldId.WhitelistPrivates,
+            PlatformId.QqPrivate => ConfigurationFieldId.WhitelistPrivates,
             PlatformId.QqOfficial => ConfigurationFieldId.OfficialWhitelistPrivates,
             PlatformId.Feishu => FeishuPrivateField(settings),
             _ => groupField,
         };
         var group = platform switch
         {
-            PlatformId.QqPrivate => ListRule.Explicit((groupField == ConfigurationFieldId.MessageWhitelist ? settings.MessageWhitelist : settings.WhitelistGroups) ?? string.Empty),
+            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistGroups) ? ListRule.AllowAll() : ListRule.Explicit(settings.WhitelistGroups),
             PlatformId.QqOfficial => string.IsNullOrWhiteSpace(settings.OfficialWhitelistGroups) ? ListRule.AllowAll() : ListRule.Explicit(settings.OfficialWhitelistGroups),
             PlatformId.Feishu => ListRule.Explicit(settings.FeishuWhitelist ?? string.Empty),
             _ => ListRule.Explicit(LocalNumbers(settings.LocalChannelIds)),
         };
         var direct = platform switch
         {
-            PlatformId.QqPrivate => ListRule.Explicit((privateField == ConfigurationFieldId.MessageWhitelist ? settings.MessageWhitelist : settings.WhitelistPrivates) ?? string.Empty),
+            PlatformId.QqPrivate => string.IsNullOrWhiteSpace(settings.WhitelistPrivates) ? ListRule.AllowAll() : ListRule.Explicit(settings.WhitelistPrivates),
             PlatformId.QqOfficial => string.IsNullOrWhiteSpace(settings.OfficialWhitelistPrivates) ? ListRule.AllowAll() : ListRule.Explicit(settings.OfficialWhitelistPrivates),
             PlatformId.Feishu => ListRule.Explicit(FeishuPrivateList(settings)),
             _ => group,

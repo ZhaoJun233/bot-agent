@@ -144,7 +144,7 @@ public class OpenAiClient : IModelClient
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
         IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false,
         bool enableAsk = false, bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null,
-        string? promptCacheScope = null)
+        string? promptCacheScope = null, bool isPrivateConversation = false)
     {
         if (_providerFailover is null && string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
@@ -186,7 +186,7 @@ public class OpenAiClient : IModelClient
 
         // 系统提示词整块在 PromptBuilder（纯字符串拼装，顺序即语义）；这里只负责"把素材交出去"。
         // 用具名实参：这条调用有 25 个参数，位置写法一旦排错就会把"开关"喂成"阈值"（编译过的错才会被抓到）。
-        var systemContent = PromptBuilder.Build(new PromptBuilder.PromptRequest(
+        var promptParts = PromptBuilder.BuildParts(new PromptBuilder.PromptRequest(
             SystemPrompt: SystemPrompt,
             BotIdentity: BotIdentity,
             Persona: BotPersona,
@@ -213,9 +213,10 @@ public class OpenAiClient : IModelClient
             EnableAsk: enableAsk,
             EnableToolRequest: enableToolRequest,
             FilterActionNarration: _settings.FilterActionNarration,
-            ToolList: toolList));
+            ToolList: toolList, IsPrivateConversation: isPrivateConversation));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
-        var built = await _transport.BuildAsync(window, systemContent, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
+        var built = await _transport.BuildAsync(window, promptParts.Text, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
+        built = built with { StableSystemPrefixLength = promptParts.Stable.Length };
 
         // 上游偶尔会回 200 但**没有 choices**。实测三种情形：
         //   a) 慢的 `-high` 模型“思考”把预算吃光（17:55-18:01 连报 21 次）
@@ -288,7 +289,7 @@ public class OpenAiClient : IModelClient
     {
         if (_providerFailover is null)
         {
-            return await _transport.SendAsync(built.Payload, built.AttachedImages, built.AttachedImageIds, ct)
+            return await _transport.SendAsync(built, provider: null, ct)
                 .ConfigureAwait(false);
         }
 
@@ -310,7 +311,7 @@ public class OpenAiClient : IModelClient
             try
             {
                 outcome = await _transport.SendAsync(
-                    built.Payload, built.AttachedImages, built.AttachedImageIds, effectiveRoute, token).ConfigureAwait(false);
+                    built, effectiveRoute, token).ConfigureAwait(false);
             }
             catch (ModelFault fault)
             {

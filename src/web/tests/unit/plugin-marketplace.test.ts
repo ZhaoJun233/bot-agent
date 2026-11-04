@@ -74,7 +74,7 @@ describe('operation receipts', () => {
   it('asks for a restart when the server flags one', () => {
     expect(pluginOperationNotice(operation({ status: 'restart_required', restartRequired: true })).message).toContain('重启')
     expect(pluginOperationNotice(operation({ kind: 'uninstall', status: 'restart_required', restartRequired: true })).message).toContain('卸载已受理')
-    expect(pluginOperationNotice(operation({ kind: 'update' })).message).toContain('更新已受理')
+    expect(pluginOperationNotice(operation({ kind: 'update' })).message).toContain('更新已暂存')
   })
   it('tells the caller to reconcile with the same key after a lookup miss', () => {
     expect(pluginRecoveryNotice(requestError(404, 'plugin_operation_not_found'))?.message).toContain('同一操作键')
@@ -87,6 +87,17 @@ describe('operation receipts', () => {
     expect(pluginKeyInvalidated(requestError(409, 'idempotency_conflict'))).toBe(true)
     expect(pluginKeyInvalidated(requestError(409, 'other_conflict'))).toBe(false)
     expect(pluginKeyInvalidated(requestError(404, 'plugin_operation_not_found'))).toBe(false)
+  })
+})
+
+describe('hot application receipts', () => {
+  it('distinguishes completed application from a pending candidate', () => {
+    expect(pluginOperationNotice(operation({ status: 'installed' })).message).toContain('热应用')
+    expect(pluginOperationNotice(operation({ kind: 'uninstall', status: 'not_installed' })).message).toContain('卸载')
+    expect(pluginOperationNotice(operation({ status: 'reload_required' })).message).toContain('暂存')
+  })
+  it('explains persisted state when candidate loading fails', () => {
+    expect(pluginRecoveryNotice(requestError(503, 'plugin_reload_failed'))?.message).toContain('旧实例')
   })
 })
 

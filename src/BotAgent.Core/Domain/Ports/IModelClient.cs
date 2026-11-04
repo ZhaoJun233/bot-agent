@@ -61,7 +61,7 @@ public interface IModelClient
     SamplingProfile? sampling = null,
 
     // 提示词缓存作用域（会话 key）：只以哈希形式进请求体；null = 不加缓存键（开关见 ModelProtocolOptions.PromptCache）。
-    string? promptCacheScope = null);
+    string? promptCacheScope = null, bool isPrivateConversation = false);
 
     /// <summary>一次"问一句、要一段文字"的调用（服务器 agent 的工具循环用它）。</summary>
     Task<string?> CompleteChatAsync(

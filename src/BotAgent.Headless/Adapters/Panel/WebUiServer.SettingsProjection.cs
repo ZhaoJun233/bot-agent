@@ -121,9 +121,9 @@ public sealed partial class WebUiServer
                 ["messageWhitelist"] = s.MessageWhitelist,
         ["whitelistGroups"] = s.WhitelistGroups,
         ["whitelistPrivates"] = s.WhitelistPrivates,
-        // 留空的那一边会回落到旧的共用名单 —— 面板要如实告知，不然管理员会以为新框填了没生效
-        ["whitelistGroupsFromLegacy"] = string.IsNullOrWhiteSpace(s.WhitelistGroups) && s.MessageWhitelist.Length > 0,
-        ["whitelistPrivatesFromLegacy"] = string.IsNullOrWhiteSpace(s.WhitelistPrivates) && s.MessageWhitelist.Length > 0,
+        // 保留旧响应字段，但空名单现在直接全收，不再隐式继承共用名单。
+        ["whitelistGroupsFromLegacy"] = false,
+        ["whitelistPrivatesFromLegacy"] = false,
                 ["aiDesire"] = s.AiDesire,
                 ["fastReply"] = s.FastReply,
                 ["fastModel"] = s.FastModel,

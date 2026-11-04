@@ -51,6 +51,7 @@ public sealed class SettingsHotReload
     private Action? _reapplyHealthReports;
     private Func<ConfigurationVersion, AppSettings, ApplyStepReport>? _projectTts;
     private Func<ConfigurationVersion, ApplyStepReport>? _modelProjectionState;
+    private Func<Task>? _reloadPlugins;
 
     internal sealed class ConfigurationRequestAuthorization
     {
@@ -95,7 +96,8 @@ public sealed class SettingsHotReload
         Func<ConfigurationVersion, AppSettings, ConfigurationPatch, ImmutableArray<ConfigurationModule.SecretMutation>, AppSettings> readCommittedSnapshot,
         Func<ConfigurationCaller, ConfigurationOperationKey, FieldEdit<string>, ConfigurationModule.LegacyActionResult> applyLegacyMood,
         Action reapplyHealthReports, Func<ConfigurationVersion, AppSettings, ApplyStepReport> projectTts,
-        Func<ConfigurationFieldId, FieldEffect> fieldEffect, Func<ConfigurationVersion, ApplyStepReport> modelProjectionState)
+        Func<ConfigurationFieldId, FieldEffect> fieldEffect, Func<ConfigurationVersion, ApplyStepReport> modelProjectionState,
+        Func<Task>? reloadPlugins = null)
     {
         ArgumentNullException.ThrowIfNull(store); ArgumentNullException.ThrowIfNull(authorization);
         ArgumentNullException.ThrowIfNull(readCommittedSnapshot); ArgumentNullException.ThrowIfNull(applyLegacyMood);
@@ -111,6 +113,7 @@ public sealed class SettingsHotReload
         }
         _configurationAuthorization = authorization; _readCommitted = readCommittedSnapshot; _applyLegacyMood = applyLegacyMood;
         _fieldEffect = fieldEffect; _modelProjectionState = modelProjectionState;
+        _reloadPlugins = reloadPlugins;
         _reapplyHealthReports = reapplyHealthReports; _projectTts = projectTts; _configuration = store;
     }
     internal ConfigurationRequestAuthorization ConfigurationAuthorization
@@ -172,6 +175,12 @@ public sealed class SettingsHotReload
     }
     private static ConfigurationSaveResult ConfigurationRejected(ConfigurationResultCode code)
         => new(code, false, null, default, ImmutableArray<FieldError>.Empty);
+    // Accept the classified rebuild failure without turning a durable failure into Unknown.
+    private static bool IsValidModelProjectionReport(ApplyStepReport report)
+        => report.Step == ApplyStep.ModelProjection
+            && (report.State is ApplyState.Applied or ApplyState.RestartRequired
+                || report.State == ApplyState.Failed && report.ErrorCode == "model_projection_rebuild_failed");
+
     private static bool FirstChanged(ConfigurationSaveResult result)
         => !result.Replayed && result.Code == ConfigurationResultCode.Ok
             && result.Receipt is { Decision: ConfigurationDecision.Changed, CommitState: CommitState.Committed };
@@ -185,8 +194,8 @@ public sealed class SettingsHotReload
             or WritableSecretSlot.FeishuEncryptKey or WritableSecretSlot.FeishuVerificationToken)) return true;
         // 供应商（含非 primary）的启用位/优先级/地址/模型名/协议/选项/密钥来源现在都能热应用：
         // 模型投影步会重建路由与故障转移候选表，不必重启（#128）。
-        // 仍需重启的只剩插件登记（插件目录与加载上下文是启动期装配）。
-        if (patch.Registered is { } registered && !registered.Plugins.IsEmpty) return true;
+        // Unbound compatibility hosts still defer plugins; the full host supplies hot projection.
+        if (_reloadPlugins is null && patch.Registered is { } registered && !registered.Plugins.IsEmpty) return true;
         var node = System.Text.Json.JsonSerializer.SerializeToNode(patch)!.AsObject();
         foreach (var partition in node.Where(pair => pair.Key != nameof(ConfigurationPatch.Registered)))
         {
@@ -204,7 +213,10 @@ public sealed class SettingsHotReload
     {
         var mutations = Enum.GetValues<WritableSecretSlot>().Select(slot => new ConfigurationModule.SecretMutation(slot,
             secrets.FirstOrDefault(edit => edit.Slot == slot)?.Kind ?? SecretEditKind.Keep)).ToImmutableArray();
-        return _box.ApplyConfiguration(previous =>
+        var hotPlugins = _reloadPlugins is not null && changes.Registered is { } edits && !edits.Plugins.IsEmpty;
+        var readyToReload = false;
+        var otherRestartRequired = false;
+        var result = _box.ApplyConfiguration(previous =>
         {
             var saved = persist();
             if (!saved.Replayed && saved.Code == ConfigurationResultCode.NoChanges
@@ -251,8 +263,7 @@ public sealed class SettingsHotReload
             try
             {
                 modelReport = _modelProjectionState!(saved.Receipt!.CommittedVersion!.Value);
-                if (modelReport.Step != ApplyStep.ModelProjection
-                    || modelReport.State is not (ApplyState.Applied or ApplyState.RestartRequired))
+                if (!IsValidModelProjectionReport(modelReport))
                     throw new InvalidOperationException("model_projection_state_invalid");
                 SyncBrainFields();
             }
@@ -265,8 +276,10 @@ public sealed class SettingsHotReload
                 { conversation.MaxMessages = next.MaxMessagesPerConversation; conversation.TrimToMax(); }
             })) return saved;
             if (!Run(ApplyStep.Schedulers, () => { _scheduler.RebuildIfNeeded(); _reapplyHealthReports!(); })) return saved;
+            otherRestartRequired = modelReport.State == ApplyState.RestartRequired || RequiresRestart(changes, secrets);
             foreach (var step in new[] { ApplyStep.TtsFileProjection, ApplyStep.RegisteredConfiguration })
             {
+                if (hotPlugins && step == ApplyStep.RegisteredConfiguration) continue;
                 var claim = ConfigurationBridge.TryStartApplyStep(_configuration!, caller, key, step);
                 saved = saved with { Code = claim.Result.Code, Receipt = claim.Result.Receipt ?? saved.Receipt };
                 if (!claim.CanRun) return saved;
@@ -283,8 +296,28 @@ public sealed class SettingsHotReload
             }
             applyMood?.Invoke();
             _ui.EmitLog("配置已更新"); _ui.NotifyConversationsChanged(); _ui.NotifyStateChanged();
+            readyToReload = hotPlugins;
             return saved;
         });
+        // Plugin code may call back into configuration. Never run it under SettingsBox._gate.
+        if (!readyToReload) return result;
+        var pluginClaim = ConfigurationBridge.TryStartApplyStep(_configuration!, caller, key, ApplyStep.RegisteredConfiguration);
+        if (!pluginClaim.CanRun)
+            return result with { Code = pluginClaim.Result.Code, Receipt = pluginClaim.Result.Receipt ?? result.Receipt };
+        ApplyStepReport pluginReport;
+        try
+        {
+            _reloadPlugins!().GetAwaiter().GetResult();
+            pluginReport = new(ApplyStep.RegisteredConfiguration,
+                otherRestartRequired ? ApplyState.RestartRequired : ApplyState.Applied,
+                otherRestartRequired ? "restart_required" : null);
+        }
+        catch (Exception)
+        {
+            pluginReport = new(ApplyStep.RegisteredConfiguration, ApplyState.Failed, "plugin_reload_failed");
+        }
+        var recorded = _configuration!.RecordApply(caller, key, ImmutableArray.Create(pluginReport));
+        return result with { Code = recorded.Code, Receipt = recorded.Receipt ?? result.Receipt };
     }
 
 

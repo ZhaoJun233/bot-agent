@@ -363,8 +363,9 @@ public static class BotConfig
     {
         s.BotPersona = Secret("QQCHAT_PERSONA") ?? s.BotPersona;
         s.MessageWhitelist = Str("QQCHAT_WHITELIST") ?? s.MessageWhitelist;
-        s.WhitelistGroups = Str("QQCHAT_WHITELIST_GROUPS") ?? s.WhitelistGroups;
-        s.WhitelistPrivates = Str("QQCHAT_WHITELIST_PRIVATES") ?? s.WhitelistPrivates;
+        // 旧共用名单只在首次部署播种；显式空环境变量也表示全收，不再运行时回落。
+        s.WhitelistGroups = Environment.GetEnvironmentVariable("QQCHAT_WHITELIST_GROUPS") ?? s.MessageWhitelist;
+        s.WhitelistPrivates = Environment.GetEnvironmentVariable("QQCHAT_WHITELIST_PRIVATES") ?? s.MessageWhitelist;
         s.AiDesire = Int("QQCHAT_AI_DESIRE") ?? s.AiDesire;
         s.SuitabilityThreshold = Int("QQCHAT_SUITABILITY_THRESHOLD") ?? s.SuitabilityThreshold;
         s.AdaptiveSamplingEnabled = Bool("QQCHAT_ADAPTIVE_SAMPLING") ?? s.AdaptiveSamplingEnabled;

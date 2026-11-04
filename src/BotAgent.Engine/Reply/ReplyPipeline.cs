@@ -319,7 +319,7 @@ public sealed partial class ReplyPipeline
             QqMessageId = msg.MessageId,
             ImageUrls = msg.ImageUrls,
             // 被点名 = @ 了机器人自己，或引用了机器人发的那条（引了自己的话也是“在跟你说话”）
-            DirectToBot = msg.MentionedSelf || quotedIsSelf,
+            DirectToBot = !msg.IsGroup || msg.MentionedSelf || quotedIsSelf,
             // 协议风控退避只认可明确 @；普通引用仍可参与正常对话，但不能绕过退避。
             MentionedBot = msg.MentionedSelf,
         };

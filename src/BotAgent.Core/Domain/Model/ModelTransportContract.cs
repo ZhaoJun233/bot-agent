@@ -3,7 +3,11 @@ using System.Text.Json.Nodes;
 namespace BotAgent.Domain.Model;
 
 /// <summary>一次请求的**组装结果**（请求体 + 这一轮真带了几张图）。</summary>
-public readonly record struct BuiltRequest(JsonObject Payload, int AttachedImages, List<long> AttachedImageIds);
+public readonly record struct BuiltRequest(JsonObject Payload, int AttachedImages, List<long> AttachedImageIds)
+{
+    /// <summary>首条 system 文本的稳定前缀 UTF-16 长度；null 表示未声明。不是 wire JSON 字段。</summary>
+    public int? StableSystemPrefixLength { get; init; }
+}
 
 /// <summary>一次发送的**结果**：拿到的 JSON，以及"是不是去掉图片后重试成功的"与故障转移跳数。</summary>
 public readonly record struct SendOutcome(string Json, bool TextOnlyRetry, int FallbackHops = 0);

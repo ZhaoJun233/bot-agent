@@ -8,7 +8,7 @@ internal static class TransportChecks
 {
     internal static async Task RunAsync(Action<bool, string> check, JsonObject payload, IReadOnlyDictionary<ModelProtocol, string> replies)
     {
-        var clock = new FakeClock();
+        var clock = PromptCacheChecks.ProbeClock;
         ModelClock.Initialize(clock);
         ModelLogging.WriteHandler = (_, _) => { };
         ModelLogging.WarnHandler = (_, _) => { };

@@ -14,6 +14,9 @@ public static class ZbaContract
     public const int MaxPageSize = 200;
     public const int MaxCapabilityPageSize = 100;
     public const int DefaultPageSize = 50;
+
+    /// <summary>运行日志页的环形缓冲上限，也是 logs 端点 <c>limit</c> 的上界。</summary>
+    public const int MaxLogEntries = 600;
 }
 
 public sealed record ZbaOptions
@@ -335,6 +338,24 @@ public sealed record ZbaTracePage(
     IReadOnlyList<ZbaTraceSummary> Items,
     ZbaTraceCacheUsage Cache);
 
+/// <summary>
+/// 一条运行日志的安全摘要。原文（发言、昵称、路径、URL、凭据）永不出现：
+/// <c>Source</c> 只取固定组件白名单，<c>Message</c> 只取固定摘要文案；
+/// 无法安全分类时 <c>Message</c> 仅为「已隐藏」占位（含原字符数）并置 <c>Redacted</c>。
+/// </summary>
+public sealed record ZbaLogEntry(
+    long Time,
+    string Level,
+    string Source,
+    string Message,
+    bool Redacted)
+{
+    public override string ToString() => "ZbaLogEntry";
+}
+
+/// <summary>日志页：<see cref="Capacity"/> 是环形缓冲上限，items 最新在前。</summary>
+public sealed record ZbaLogPage(IReadOnlyList<ZbaLogEntry> Items, int Capacity);
+
 public sealed record ZbaError(string Code, string Message, string? Reason = null, int? BackendCode = null);
 
 public sealed record ZbaErrorBody(ZbaError Error);
@@ -436,6 +457,11 @@ public interface IZbaBackend
     ValueTask<ZbaTracePage> ListTracesAsync(ConfigurationCaller caller, int limit, CancellationToken ct = default)
         => throw new ZbaBackendException(503, "traces_unavailable", "Turn traces are unavailable.");
 
+    /// <summary>只读运行日志：只返回安全摘要（固定组件名 + 固定摘要文案），不含日志原文。</summary>
+    ValueTask<ZbaLogPage> ListLogsAsync(
+        ConfigurationCaller caller, int limit, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "logs_unavailable", "Runtime logs are unavailable.");
+
     ValueTask<ZbaPluginCatalog> ListPluginCatalogAsync(
         ConfigurationCaller caller, string? query, string? category, CancellationToken ct = default);
 
@@ -467,6 +493,7 @@ public interface IZbaBackend
 
     ValueTask<ZbaProviderModels> ListProviderModelsAsync(
         ConfigurationCaller caller, string providerKey, CancellationToken ct = default);
+
 }
 
 internal static class ZbaCallers

@@ -35,6 +35,23 @@ public static partial class Program
                 VoiceEagerness: 50, EnableWebSearch: false, EnableAsk: false, EnableToolRequest: false,
                 ToolList: "\n\n[可用工具]\n- web.search\n- voice.speak");
             var first = PromptBuilder.Build(request);
+            var parts = PromptBuilder.BuildParts(request);
+            Check("显式边界保留原文本，Build 与稳定段加动态段逐字相同",
+                parts.Stable.Length > 0 && parts.Dynamic.Length > 0 && parts.Text == first
+                && parts.Stable + parts.Dynamic == first);
+            var changedDynamic = PromptBuilder.BuildParts(request with
+            {
+                MoodText = "合成心情", ProfilesText = "群友A：合成档案",
+                RecallText = "合成撤回", SearchText = "合成搜索资料",
+                LinkText = "合成链接摘要", EpisodesText = "合成记忆", JargonText = "合成黑话"
+            });
+            Check("动态记忆、时间与资料不污染声明的缓存前缀",
+                changedDynamic.Stable == parts.Stable && changedDynamic.Dynamic != parts.Dynamic);
+            var changedPersona = PromptBuilder.BuildParts(request with { Persona = "合成新角色" });
+            Check("人设变化确实使稳定前缀失效，不错误复用旧身份", changedPersona.Stable != parts.Stable);
+            var privateParts = PromptBuilder.BuildParts(request with { IsPrivateConversation = true });
+            Check("私聊和群聊指引仍有独立稳定前缀", privateParts.Stable != parts.Stable
+                && privateParts.Text == PromptBuilder.Build(request with { IsPrivateConversation = true }));
 
             // ① 时间块落在最末尾：它每轮都变，放在前缀里会让后面所有内容一起失效。
             var timeStart = first.IndexOf("\n\n[现在的时间]", StringComparison.Ordinal);

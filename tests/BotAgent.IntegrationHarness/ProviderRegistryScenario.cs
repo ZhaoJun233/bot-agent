@@ -161,7 +161,8 @@ public static partial class Program
             .Any(text => text.Contains("synthetic registry hot route"))), TimeSpan.FromSeconds(30));
         var secondaryIndex = Enumerable.Range(0, openAiB.Requests.Count).LastOrDefault(index => UserTexts(openAiB.Requests[index])
             .Any(text => text.Contains("synthetic registry hot route")), -1);
-        var secondaryModel = secondaryIndex >= 0 ? openAiB.Requests[secondaryIndex]["model"]?.GetValue<string>() : null;
+        var secondaryRequest = secondaryIndex >= 0 ? openAiB.Requests[secondaryIndex] : null;
+        var secondaryModel = secondaryRequest?["model"]?.GetValue<string>();
         var secondaryAuthorization = secondaryIndex >= 0 ? openAiB.RequestAuthorizations[secondaryIndex] : null;
         Check("★ 新增供应商不重启即接管路由（旧端点不再收请求）",
             usedSecondary && openAiA.Requests.Count == primaryRequestsBeforeSwitch,
@@ -170,6 +171,72 @@ public static partial class Program
             secondaryModel ?? "no model");
         Check("★ 新路由带上了主模型凭据（登记时选择复用 primary 凭据）",
             !string.IsNullOrEmpty(secondaryAuthorization), secondaryAuthorization is null ? "no authorization" : "header present");
+
+        // PromptCache is a live route option, not merely a persisted checkbox. Keep this
+        // same bot process and inspect the very next synthetic HTTP request after each save.
+        Check("PromptCache 默认关闭不添加缓存参数",
+            secondaryRequest is not null && !secondaryRequest.ContainsKey("prompt_cache_key"), "wire shape only");
+        var invalidOptions = new JsonArray(new JsonObject
+        {
+            ["key"] = "secondary", ["operation"] = 0,
+            ["changes"] = new JsonObject
+            {
+                ["options"] = new JsonObject
+                {
+                    ["kind"] = 1,
+                    ["value"] = new JsonObject
+                    {
+                        ["azureApiVersion"] = "2024-10-21", ["anthropicVersion"] = "2023-06-01",
+                        ["promptCache"] = true, ["syntheticUnknownOption"] = true
+                    }
+                }
+            }
+        });
+        var (invalidOptionsStatus, _) = await SaveRegisteredAsync(invalidOptions);
+        Check("Provider options reject unknown fields over HTTP", invalidOptionsStatus == 400,
+            $"HTTP {invalidOptionsStatus}");
+        foreach (var cacheEnabled in new[] { true, false })
+        {
+            var cacheChange = new JsonArray(new JsonObject
+            {
+                ["key"] = "secondary", ["operation"] = 0,
+                ["changes"] = new JsonObject
+                {
+                    ["options"] = new JsonObject
+                    {
+                        ["kind"] = 1,
+                        ["value"] = new JsonObject
+                        {
+                            ["azureApiVersion"] = "2024-10-21",
+                            ["anthropicVersion"] = "2023-06-01",
+                            ["promptCache"] = cacheEnabled
+                        }
+                    },
+                    ["credential"] = new JsonObject { ["kind"] = 0 }
+                }
+            });
+            var (cacheStatus, cacheNode) = await SaveRegisteredAsync(cacheChange);
+            var cacheSteps = (cacheNode?["receipt"]?["steps"] as JsonArray)?.OfType<JsonObject>()
+                ?? Enumerable.Empty<JsonObject>();
+            Check($"PromptCache={cacheEnabled} 保存后模型投影立即 Applied",
+                cacheStatus == 200 && cacheNode?["receipt"]?["commitState"]?.GetValue<int>() == 1
+                && cacheSteps.Any(step => step["step"]?.GetValue<int>() == 2 && step["state"]?.GetValue<int>() == 1),
+                $"HTTP {cacheStatus}; code={cacheNode?["code"]?.ToJsonString()}; error={cacheNode?["error"]?.ToJsonString()}");
+            openAiB.ClearRequests();
+            var marker = cacheEnabled ? "synthetic cache enabled next request" : "synthetic cache disabled next request";
+            openAiB.EnqueueReply("""{"suitability":90,"reply":"Synthetic cache option reply"}""");
+            await protocol.SendGroupMessageAsync(groupId, 20001, "群友A", marker,
+                cacheEnabled ? 61006 : 61007, mentionBot: true, ct: cts.Token);
+            var cacheRequestArrived = await WaitUntilAsync(() => openAiB.Requests.Any(request => UserTexts(request)
+                .Any(text => text.Contains(marker))), TimeSpan.FromSeconds(30));
+            var cacheRequest = openAiB.Requests.FirstOrDefault(request => UserTexts(request).Any(text => text.Contains(marker)));
+            var cacheKey = cacheRequest?["prompt_cache_key"]?.GetValue<string>();
+            Check($"PromptCache={cacheEnabled} 无重启改变下一条 HTTP 请求",
+                cacheRequestArrived && cacheRequest is not null
+                && (cacheEnabled ? !string.IsNullOrWhiteSpace(cacheKey) : !cacheRequest.ContainsKey("prompt_cache_key"))
+                && cacheRequest?["model"]?.GetValue<string>() == "model-from-secondary",
+                $"request observed={cacheRequestArrived}; cache parameter present={cacheKey is not null}");
+        }
 
         // ---- 4) 删掉它：候选表要能缩回去，下一个请求回到 primary ----
         var secondaryRequestsBeforeDelete = openAiB.Requests.Count;

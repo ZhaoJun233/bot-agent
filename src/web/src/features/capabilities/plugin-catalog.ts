@@ -29,8 +29,8 @@ export function safeGithubLink(raw?: string): string | null {
   } catch { return null }
 }
 export function pluginPackageStatus(entry: PluginCatalogEntry): string {
-  if (entry.pendingUninstall) return '待卸载 · 需重启'
-  if (entry.pendingVersion) return '已暂存 ' + entry.pendingVersion + ' · 需重启'
+  if (entry.pendingUninstall) return '待卸载 · 等待热应用'
+  if (entry.pendingVersion) return '已暂存 ' + entry.pendingVersion + ' · 等待热应用'
   if (entry.installedVersion) return '已安装 ' + entry.installedVersion
   return '未安装'
 }

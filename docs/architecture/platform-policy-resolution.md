@@ -48,8 +48,11 @@
 | `ListRule.Explicit("")` | kind=1 + 空串 | **全拦**（名单外所有都拦） | 显式空（全拦名单外所有） |
 | `ListRule.AllowAll()` | kind=2 | **全收**（不再看基线） | 全收（不限） |
 
-坑在于官方通道的**标量**留空是「全收」：`PlatformSwitchSettings.ScalarListRules` 对
-`qq.official` 的空文本返回 `AllowAll()`，而条目里的显式空串是「全拦」。两种「空」含义相反，
+QQ 私域的群聊/私聊白名单与官方通道的**标量**留空均是「全收」：`PlatformSwitchSettings.ScalarListRules` 对
+`qq.private`、`qq.official` 的空文本返回 `AllowAll()`，群聊与私聊独立，不再回落共用名单。
+旧共用字段的显式保存会批量设置两侧（单独提交的侧字段优先）。已有旧导入策略仅在对应侧标量为空、
+且该侧未显式编辑时协调为全收；显式策略拒绝、其他账号和实例覆盖保持原意。
+条目里的显式空串仍是「全拦」。两种「空」含义相反，
 所以读侧必须给可读标签（`SettingsStore.PolicyViews` 的 display 与面板 `policySummary`），
 不能都显示成空串或 `[policy]`。
 

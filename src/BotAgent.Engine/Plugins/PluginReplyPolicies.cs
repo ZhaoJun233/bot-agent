@@ -9,6 +9,8 @@ public sealed class PluginReplyPolicies(IPluginRegistry registry)
     {
         foreach (var plugin in registry.GetAll().Where(p => p.IsEnabled).OrderBy(p => p.Id, StringComparer.Ordinal))
         {
+            // Find returns a generation facade: an old snapshot cannot enter a retired
+            // instance, and SetEnabled is checked again when the invocation lease is taken.
             if (registry.Find(plugin.Id) is not IReplyPolicyPlugin policy) continue;
             try
             {

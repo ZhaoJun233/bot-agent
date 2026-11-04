@@ -12,7 +12,7 @@ namespace BotAgent.Adapters.Plugins;
 /// </summary>
 public sealed class PluginMarketService
 {
-    /// <summary>暂存态必须重启才生效；这里不提供任何热加载或自动重启。</summary>
+    /// <summary>仅未绑定热应用回调的兼容宿主使用此状态；完整宿主暂存后立即热应用。</summary>
     public const string StatusRestartRequired = "restart_required";
     public const string StatusFailed = "failed";
     public const string StatusInstalled = "installed";
@@ -21,7 +21,7 @@ public sealed class PluginMarketService
     public const string FallbackCategory = "未分类";
 
     public const string TrustNotice =
-        "插件在宿主进程内运行，不是沙箱：安装即执行第三方代码。请核对固定版本、SHA-256 与权限声明；安装后默认停用，需重启生效。";
+        "插件在宿主进程内运行，不是沙箱：安装即执行第三方代码。请核对固定版本、SHA-256 与权限声明；安装后默认停用，安装、更新与启停可热应用，无需重启宿主。";
 
     private readonly PluginPackageService _packages;
     private readonly PluginSettingsStore _settings;
@@ -30,11 +30,13 @@ public sealed class PluginMarketService
     private readonly PluginMarketOperations _operations;
     private readonly Func<IReadOnlyDictionary<string, bool>>? _desiredStates;
     private readonly Action<string>? _log;
+    private readonly Func<string?, CancellationToken, Task>? _reload;
 
     /// <param name="receiptPath">回执文件；缺省落在运行根的 plugins/operations.json（有界、原子写）。</param>
     public PluginMarketService(PluginPackageService packages, PluginSettingsStore settings,
         PluginCatalogSource catalog, Func<DateTimeOffset> now, string receiptPath,
-        Func<IReadOnlyDictionary<string, bool>>? desiredStates = null, Action<string>? log = null)
+        Func<IReadOnlyDictionary<string, bool>>? desiredStates = null, Action<string>? log = null,
+        Func<string?, CancellationToken, Task>? reload = null)
     {
         _packages = packages ?? throw new ArgumentNullException(nameof(packages));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -43,6 +45,7 @@ public sealed class PluginMarketService
         _receipts = _operations.Store(receiptPath, now, log);
         _desiredStates = desiredStates;
         _log = log;
+        _reload = reload;
     }
 
     /// <summary>目录 = 市场索引 ∩ 本机真实安装态。展示字段只有 manifest 与状态，不伪造名称/说明/分类。</summary>
@@ -166,10 +169,24 @@ public sealed class PluginMarketService
             string.IsNullOrWhiteSpace(caller) || caller.Length > 256 || caller.Any(char.IsControl))
             throw new ZbaBackendException(400, "invalid_plugin_operation", "插件操作键或调用方无效。");
         var operation = new ZbaPluginOperation("po-" + Hash(key)[..16], pluginId, kind,
-            StatusRestartRequired, true, null);
+            _reload is null ? StatusRestartRequired : kind == "uninstall" ? StatusNotInstalled : StatusInstalled,
+            _reload is null, null);
         return _operations.ExecuteAsync(_receipts, ReceiptKey(key),
             PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller), caller, operation,
-            () => RevisionAsync(CancellationToken.None), expectedRevision, stage, ct);
+            () => RevisionAsync(CancellationToken.None), expectedRevision, async () =>
+            {
+                await stage().ConfigureAwait(false);
+                // Once staging committed, a disconnected caller must not strand hot application.
+                if (_reload is not null)
+                {
+                    try { await _reload(pluginId, CancellationToken.None).ConfigureAwait(false); }
+                    catch (Exception)
+                    {
+                        throw new ZbaBackendException(503, "plugin_reload_failed",
+                            "变更已暂存，但热重载失败；旧实例保持不变，请修正后用新的操作键重试。");
+                    }
+                }
+            }, ct);
     }
 
     /// <summary>按幂等键核对回执：没有回执时明确 404，让前端继续用同一个键。</summary>
@@ -201,6 +218,15 @@ public sealed class PluginMarketService
             throw SettingsFailure(exception.Code);
         }
 
+        if (_reload is not null)
+        {
+            try { await _reload(pluginId, CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception)
+            {
+                throw new ZbaBackendException(503, "plugin_reload_failed",
+                    "设置已保存，但热重载失败；旧运行实例保持不变，请修正配置后重试。");
+            }
+        }
         var saved = _settings.ReadManifest(manifest);
         return Project(saved with { Revision = receipt.Revision });
     }
@@ -282,7 +308,7 @@ public sealed class PluginMarketService
         }
     }
 
-    private static ZbaPluginCatalogEntry Project(PluginPackageManifest manifest,
+    private ZbaPluginCatalogEntry Project(PluginPackageManifest manifest,
         IReadOnlyList<InstalledPluginPackage> installed, IReadOnlyDictionary<string, bool> desired)
     {
         var package = installed.FirstOrDefault(item => item.Id == manifest.Id);
@@ -290,11 +316,12 @@ public sealed class PluginMarketService
         var pending = package?.Pending;
         var uninstall = package?.PendingUninstall == true;
         var status = uninstall ? StatusPendingUninstall
-            : pending is not null ? StatusRestartRequired
+            : pending is not null ? _reload is null ? StatusRestartRequired : "reload_required"
             : active is not null ? StatusInstalled
             : StatusNotInstalled;
-        var enabled = desired.TryGetValue(manifest.Id, out var wanted) ? wanted : active is not null;
-        return new ZbaPluginCatalogEntry(manifest, active?.Version, enabled, status, pending is not null || uninstall);
+        var enabled = desired.TryGetValue(manifest.Id, out var wanted) && wanted;
+        return new ZbaPluginCatalogEntry(manifest, active?.Version, enabled, status,
+            _reload is null && (pending is not null || uninstall));
     }
 
     private static long ParseSettingsRevision(string revision)

@@ -286,6 +286,7 @@ try
     catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_not_installed") { checks++; }
 
     checks += await Program.RunReviewPluginRegressionAsync(root);
+    checks += await Program.RunHotReloadRegressionAsync(root);
     Console.WriteLine($"PASS plugin market probe: {checks} checks");
 }
 finally

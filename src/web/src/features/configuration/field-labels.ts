@@ -165,6 +165,9 @@ export function fieldLabel(key: string): string {
  * 面板没有单独的提示列，这些说明渲染在字段名下面（`ConfigurationPage.vue` 的 `.cell-sub`）。
  */
 export const fieldHints: Record<string, string> = {
+  whitelistGroups: '留空或 * 接收所有 QQ 群消息；填写群号则只接收名单内群。私聊名单独立生效。',
+  whitelistPrivates: '留空或 * 接收所有 QQ 私聊，不再继承共用名单；仍遵守平台聊天开关与安全策略。',
+  messageWhitelist: '兼容旧配置的批量设置入口。保存会同时设置群聊和私聊名单；之后两份名单各自生效。',
   agentServerDocker:
     '需要部署方把 docker socket 挂进容器（compose 默认不挂载，见 SECURITY.md）。未挂载时本开关不生效：服务器 agent 的工具表与提示词里都不会出现 docker。',
   panelDeployEnabled:

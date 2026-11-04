@@ -36,14 +36,7 @@ public sealed class BootReport
         var privateSwitches = Platforms.PlatformSwitchSettings.Read(_settings, Domain.Platforms.PlatformId.QqPrivate, Domain.Platforms.AccountScope.Legacy);
         var officialSwitches = Platforms.PlatformSwitchSettings.Read(_settings, Domain.Platforms.PlatformId.QqOfficial, Domain.Platforms.AccountScope.Legacy);
 
-        // 白名单严格模式提示：空名单 = 全部忽略，容器里很容易踩
-        if (gateState.BothPrivateListsEmpty)
-        {
-            FileLog.Warn("Agent",
-                "群聊与私聊白名单都是空的 → 严格模式下将忽略所有消息。若要接收，请设 " +
-                "QQCHAT_WHITELIST_GROUPS / QQCHAT_WHITELIST_PRIVATES（或旧的 QQCHAT_WHITELIST），" +
-                "填具体群号/QQ 号，或写 '*'。");
-        }
+        // QQ 空名单表示全收；显式平台拒绝规则仍由策略闸门执行。
 
         FileLog.Write("Agent",
             $"已启动。AI={( _settings.AiModeEnabled ? "开" : "关")}, " +

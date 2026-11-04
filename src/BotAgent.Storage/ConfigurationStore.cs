@@ -558,7 +558,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ImmutableArray<ApplyStepReport> reports)
     {
         var allowedErrors = new HashSet<string>(new[] { "apply_failed", "restart_required", "apply_unknown",
-            "storage_unavailable", "projection_unavailable", "configuration_superseded" }, StringComparer.Ordinal);
+            "storage_unavailable", "projection_unavailable", "configuration_superseded", "model_projection_rebuild_failed" }, StringComparer.Ordinal);
         if (!ValidKey(key) || reports.IsDefault || reports.Length > 8
             || reports.Any(r => r is null || !Enum.IsDefined(r.Step) || !Enum.IsDefined(r.State)
                 || (r.ErrorCode is not null && !allowedErrors.Contains(r.ErrorCode)))
@@ -1071,6 +1071,12 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             NeteaseBaseUrl = FreezeEdit(ConfigurationFieldId.NeteaseBaseUrl, musicSource.NeteaseBaseUrl, fields),
         };
         var platformSource = source.Platform ?? new PlatformChanges();
+        // Expand the compatibility alias before freezing so values, field modes and fingerprints agree.
+        // Explicit side edits win; clearing the shared field alone does not clear either side.
+        var groupEdit = platformSource.MessageWhitelist.Kind == EditKind.Set && platformSource.WhitelistGroups.Kind == EditKind.Keep
+            ? platformSource.MessageWhitelist : platformSource.WhitelistGroups;
+        var privateEdit = platformSource.MessageWhitelist.Kind == EditKind.Set && platformSource.WhitelistPrivates.Kind == EditKind.Keep
+            ? platformSource.MessageWhitelist : platformSource.WhitelistPrivates;
         var platform = new PlatformChanges
         {
             FeishuApiBase = FreezeEdit(ConfigurationFieldId.FeishuApiBase, platformSource.FeishuApiBase, fields),
@@ -1088,8 +1094,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             OfficialWhitelistPrivates = FreezeEdit(ConfigurationFieldId.OfficialWhitelistPrivates, platformSource.OfficialWhitelistPrivates, fields),
             PlatformPolicies = FreezePolicies(ConfigurationFieldId.PlatformPolicies, platformSource.PlatformPolicies, fields),
             PrivateChatEnabled = FreezeEdit(ConfigurationFieldId.PrivateChatEnabled, platformSource.PrivateChatEnabled, fields),
-            WhitelistGroups = FreezeEdit(ConfigurationFieldId.WhitelistGroups, platformSource.WhitelistGroups, fields),
-            WhitelistPrivates = FreezeEdit(ConfigurationFieldId.WhitelistPrivates, platformSource.WhitelistPrivates, fields),
+            WhitelistGroups = FreezeEdit(ConfigurationFieldId.WhitelistGroups, groupEdit, fields),
+            WhitelistPrivates = FreezeEdit(ConfigurationFieldId.WhitelistPrivates, privateEdit, fields),
         };
         var reportingSource = source.Reporting ?? new ReportingChanges();
         var reporting = new ReportingChanges

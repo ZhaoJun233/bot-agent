@@ -4,7 +4,7 @@
  * 纯装饰：相邻文本提供可读名称，因此固定 aria-hidden。
  */
 withDefaults(defineProps<{
-  name: 'overview' | 'capabilities' | 'config' | 'tasks' | 'traces' | 'refresh' | 'lock' | 'shield' | 'spark' | 'link' | 'bolt' | 'alert' | 'sun' | 'moon' | 'help' | 'arrow' | 'check'
+  name: 'overview' | 'capabilities' | 'config' | 'tasks' | 'traces' | 'logs' | 'refresh' | 'lock' | 'shield' | 'spark' | 'link' | 'bolt' | 'alert' | 'sun' | 'moon' | 'help' | 'arrow' | 'check'
   size?: number
 }>(), { size: 18 })
 </script>
@@ -49,6 +49,10 @@ withDefaults(defineProps<{
     </template>
     <template v-else-if="name === 'traces'">
       <path d="M3.5 12h3.2l2.3-5.6 3.4 11.2 2.7-7 1.9 3.4h3.5" />
+    </template>
+    <template v-else-if="name === 'logs'">
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M8 7h8M8 12h8M8 17h5" />
     </template>
     <template v-else-if="name === 'refresh'">
       <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6" />

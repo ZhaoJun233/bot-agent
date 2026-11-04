@@ -34,6 +34,7 @@ internal static class ZbaRoutes
         new("POST", "/zba/v1/approvals/{id}/decide", ZbaScope.Admin, false, "approvals.decide", "Approve or reject one pending request", "ZbaApprovalDecision", "ZbaApprovalDecisionResult"),
         new("GET", "/zba/v1/events", ZbaScope.Read, false, "events.read", "Read ordered events after a sequence or require resync", null, "ZbaEventPage"),
         new("GET", "/zba/v1/traces", ZbaScope.Read, false, "traces.list", "Read recent turn trace shapes and prompt cache usage", null, "ZbaTracePage"),
+        new("GET", "/zba/v1/logs", ZbaScope.Read, false, "logs.list", "Read safe runtime log summaries (redacted, bounded)", null, "ZbaLogPage"),
         new("GET", "/zba/v1/plugins/catalog", ZbaScope.Read, false, "plugins.catalog", "Browse the configured plugin marketplace catalog", null, "ZbaPluginCatalog"),
         new("GET", "/zba/v1/plugins/installed", ZbaScope.Read, false, "plugins.installed", "List installed plugin packages with real state", null, "ZbaInstalledPlugins"),
         new("POST", "/zba/v1/plugins/sources/resolve", ZbaScope.Admin, false, "plugins.sources.resolve", "Resolve one pinned public GitHub release into a manifest", "ZbaPluginSourceResolveRequest", "ZbaPluginSourceResolution"),
@@ -55,6 +56,7 @@ internal static class ZbaRoutes
         "tasks.list" => new[] { "limit", "cursor" },
         "events.read" => new[] { "after", "limit" },
         "traces.list" => new[] { "limit" },
+        "logs.list" => new[] { "limit" },
         "plugins.catalog" => new[] { "q", "category" },
         _ => Array.Empty<string>()
     };

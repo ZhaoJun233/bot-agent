@@ -25,7 +25,7 @@ public static class FileLog
     /// <summary>环形缓冲里最多的行数（面板首屏最多也就拉这么多）。</summary>
     public const int RecentCapacity = 600;
 
-    private static readonly Queue<(long Time, string Text)> Recent = new();
+    private static readonly Queue<(long Time, string Text, bool CanClassify)> Recent = new();
 
     /// <summary>一条新日志（文本含级别标签、不含时间戳；时间为本地时间毫秒）。面板用它做实时推送。</summary>
     public static event Action<long, string>? LineWritten;
@@ -69,7 +69,7 @@ public static class FileLog
         lock (Gate)
         {
             var take = Math.Clamp(limit, 1, RecentCapacity);
-            return Recent.Count <= take ? Recent.ToArray() : Recent.Skip(Recent.Count - take).ToArray();
+            return Recent.TakeLast(take).Select(entry => (entry.Time, entry.Text)).ToArray();
         }
     }
 
@@ -113,7 +113,9 @@ public static class FileLog
                         continue;
                     }
 
-                    Recent.Enqueue(ParseLine(line));
+                    var parsed = ParseLine(line);
+                    // 持久文本可能含聊天换行伪造的独立前缀，不能再据此前缀分类。
+                    Recent.Enqueue((parsed.Time, parsed.Text, false));
                 }
 
                 TrimLocked();
@@ -180,7 +182,7 @@ public static class FileLog
         // 3) 内存环形缓冲 + 面板实时推送（都放在文件写入之后：面板挂掉也拖不慢主流程）
         lock (Gate)
         {
-            Recent.Enqueue((now.ToUnixTimeMilliseconds(), text));
+            Recent.Enqueue((now.ToUnixTimeMilliseconds(), text, true));
             TrimLocked();
         }
 
@@ -251,6 +253,12 @@ public static class FileLog
             // 清理失败不影响写日志；下一天会再试。这里不能走 Warn —— 会再进 WriteCore。
             Console.Error.WriteLine($"[Log] WARN 清理过期日志失败：{exception.Message}");
         }
+    }
+
+    /// <summary>安全查看器快照：仅本进程完整写入的行可分类，磁盘回填只给隐藏占位。</summary>
+    public static IReadOnlyList<(long Time, string Text, bool CanClassify)> RecentRuntimeLines(int limit)
+    {
+        lock (Gate) return Recent.TakeLast(Math.Clamp(limit, 1, RecentCapacity)).ToArray();
     }
 
     private static void TrimLocked()

@@ -151,6 +151,9 @@ internal static partial class ZbaOpenApi
     private static JsonObject Schemas() => new()
     {
         ["ZbaErrorBody"] = Object(("error", Ref("ZbaError"))),
+        ["ZbaLogEntry"] = Object(("time", Integer()), ("level", String()), ("source", String()),
+            ("message", String()), ("redacted", Boolean())),
+        ["ZbaLogPage"] = Object(("items", Array(Ref("ZbaLogEntry"))), ("capacity", Integer())),
         ["ZbaError"] = Object(("code", String()), ("message", String()), ("reason", NullableString()), ("backendCode", Integer())),
         ["ZbaHealth"] = Object(("status", String()), ("ready", Boolean()), ("configured", Boolean()),
             ("contractVersion", String()), ("checkedAt", String())),

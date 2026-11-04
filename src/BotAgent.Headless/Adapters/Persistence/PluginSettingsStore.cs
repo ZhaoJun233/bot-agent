@@ -76,8 +76,21 @@ public sealed class PluginSettingsStore
         var schema = ReadSchema(manifest);
         var expected = new AppliedSnapshot(revision, SchemaHash(schema), manifest.Version);
         if (!Prepared.TryGetValue(manifest.Id, out var prepared) || prepared != expected) return false;
-        Applied[manifest.Id] = prepared;
-        return true;
+        var applied = false;
+        DatabaseOperation(() =>
+        {
+            using var connection = StorageDatabase.Open();
+            // Reserve the writer before checking: a concurrent save must not pass this acknowledgement.
+            using var transaction = connection.BeginTransaction(deferred: false);
+            var current = LoadState(connection, manifest.Id, schema);
+            if (Stamp(manifest, current) == expected)
+            {
+                Applied[manifest.Id] = prepared;
+                applied = true;
+            }
+            transaction.Commit();
+        });
+        return applied;
     }
 
     private static IReadOnlyList<PluginSettingDefinition> ReadSchema(PluginPackageManifest manifest)

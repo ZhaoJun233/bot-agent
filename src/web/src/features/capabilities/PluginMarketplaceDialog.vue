@@ -62,6 +62,7 @@ function describe(cause: unknown): UiError { return toUiError(cause) }
 function isUnknown(cause: unknown): boolean {
   // A response decoding failure after a write is not proof that it was rejected.
   if (cause instanceof ZbaNetworkError) return true
+  if (cause instanceof ZbaRequestError && cause.code === 'plugin_reload_failed') return false
   if (cause instanceof ZbaRequestError) return cause.status >= 500 || cause.status === 0 || cause.code === 'invalid_json'
   return true
 }
@@ -222,7 +223,7 @@ async function saveSettings(): Promise<void> {
     markOperation(client, key, 'settled')
     if (!ownsSettings(client, entry.id, epoch)) return
     settings.value = result; draft.value = createPluginSettingsDraft(result.schema, result.values)
-    settingsNotice.value = { tone: result.restartRequired ? 'warn' : 'ok', message: result.restartRequired ? '设置已保存，重启 BotAgent 后生效。' : '设置已保存。' }
+    settingsNotice.value = { tone: result.restartRequired ? 'warn' : 'ok', message: result.restartRequired ? '设置已保存，等待插件初始化应用；停用的插件会在启用时应用。' : '设置已保存并热应用。' }
     emit('changed')
   } catch (cause) {
     markOperation(client, key, isUnknown(cause) ? 'unknown' : 'settled')
@@ -268,7 +269,7 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); cancelDiscard(); alive = false;
     :active="props.active" :trigger="props.trigger" :fallback="props.fallback" @close="close">
     <template #eyebrow><span class="eyebrow">PLUGIN MARKETPLACE</span></template>
     <p class="muted">
-      外部插件默认停用，安装、更新、卸载与设置都需要重启后生效。清单里的下载地址只由服务端解析，浏览器不会访问它；
+      外部插件默认停用；安装、更新、卸载与设置支持热应用，无需重启宿主。清单里的下载地址只由服务端解析，浏览器不会访问它；
       此处也不会回显任何密钥原文。
     </p>
     <div v-if="!canWrite" class="notice" data-testid="marketplace-readonly">
@@ -343,7 +344,7 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); cancelDiscard(); alive = false;
         </button>
         <button type="button" data-testid="marketplace-settings-reload" :disabled="settingsBusy || settingsLoading" @click="reloadSettings">放弃草稿并重新载入</button>
       </div>
-      <p v-if="settings?.restartRequired" class="field-hint" data-testid="marketplace-settings-restart">当前设置标记为需重启；保存后请手动重启 BotAgent。</p>
+      <p v-if="settings?.restartRequired" class="field-hint" data-testid="marketplace-settings-restart">当前设置尚未应用；启用插件或修正后重新保存以热应用。</p>
     </section>
   </ManagementDialog>
 </template>

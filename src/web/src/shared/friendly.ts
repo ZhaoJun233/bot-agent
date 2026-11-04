@@ -65,6 +65,8 @@ const errorNames: Record<string, string> = {
   provider_secret_unavailable: '模型凭据不可用，本轮没有发起调用',
   provider_route_unavailable: '模型路由不可用，本轮没有发起调用',
   provider_restart_required: '模型供应商配置需要重启后生效',
+  plugin_reload_failed: '插件热重载失败，旧运行实例保持不变，请修正后重试',
+  plugin_reload_pending: '插件变更等待热应用',
   endpoint_authorization_required: '这个模型端点还没被授权',
   disabled_by_operator: '已被手动停用',
   rate_limited: '请求太频繁',

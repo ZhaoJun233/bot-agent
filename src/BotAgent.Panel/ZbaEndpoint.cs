@@ -34,7 +34,8 @@ public sealed partial class ZbaEndpoint
         "plugins.settings.read",
         "plugins.settings.save",
         "providers.models",
-        "traces.list"
+        "traces.list",
+        "logs.list",
     };
 
     public ZbaEndpoint(
@@ -118,6 +119,7 @@ public sealed partial class ZbaEndpoint
                 "approvals.decide" => await HandleApprovalDecideAsync(CreateCaller(principal!), match.Values["id"], request, requestId, ct).ConfigureAwait(false),
                 "events.read" => await HandleEventsAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "traces.list" => await HandleTracesAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
+                "logs.list" => await HandleLogsAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "plugins.catalog" => await HandlePluginCatalogAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "plugins.installed" => await HandlePluginInstalledAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
                 "plugins.sources.resolve" => await HandlePluginSourceResolveAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),

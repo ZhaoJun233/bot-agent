@@ -100,6 +100,8 @@ try
     // A second field set, then an explicit null that deletes only that secret row.
     var second = store.Save(manifest, 1, "idem-0003", Values(new() { ["optionalToken"] = "abc" }), "probe-caller");
     Check(second.Revision == 2, "second_save_revision");
+    Check(!store.MarkApplied(manifest, 1), "stale_prepared_generation_cannot_be_acknowledged");
+    Check(store.ReadManifest(manifest).RestartRequired, "newer_settings_remain_pending_after_stale_acknowledgement");
     Check(store.ReadManifest(manifest).ConfiguredSecrets.Count == 2, "two_secrets_configured");
     var third = store.Save(manifest, 2, "idem-0004", Values(new() { ["optionalToken"] = null }), "probe-caller");
     Check(third.Revision == 3, "delete_save_revision");

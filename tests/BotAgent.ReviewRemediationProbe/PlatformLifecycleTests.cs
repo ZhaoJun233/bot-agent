@@ -34,6 +34,7 @@ internal static class PlatformLifecycleTests
 {
     internal static async Task<int?> TryRunChildAsync(string[] args)
     {
+        if (await WhitelistMigrationTests.TryRunChildAsync(args) is int whitelistChild) return whitelistChild;
         if (args.Length != 1 || args[0] != "--platform-lifecycle") return null;
         var syntheticRoot = Path.Combine(Path.GetTempPath(), "botagent-platform-lifecycle-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", syntheticRoot);
@@ -63,6 +64,7 @@ internal static class PlatformLifecycleTests
 
     internal static async Task RunAsync(Action<bool, string> check)
     {
+        await WhitelistMigrationTests.RunAsync(check);
         var caseDistinctConversation = new ConversationId(PlatformId.QqPrivate, "LEGACY", ConversationKind.GroupChat, "10001");
         var caseDistinctKey = ConversationIdCodec.Encode(caseDistinctConversation);
         check(caseDistinctKey != "group:10001" && ConversationIdCodec.TryParse(caseDistinctKey, out var caseRoundTrip)
@@ -359,6 +361,15 @@ internal static class PlatformLifecycleTests
             "instance entry naming no declared driver still closes the channel (fail-closed preserved)");
         // #129 S5：官方通道的「空名单」在标量基线上是全收（AllowAll 规则），条目里的显式空串才是全拦。
         // 两条路径必须能被分辨，否则读回来都只是「空」，用户分不清自己选的是哪一种。
+        var qqBlank = PlatformSwitchSettings.ScalarListRules(PlatformId.QqPrivate,
+            new PlatformOptions { MessageWhitelist = "99999", WhitelistGroups = "", WhitelistPrivates = " \t " });
+        check(qqBlank.Group.Kind == ListRuleKind.AllowAll && qqBlank.Private.Kind == ListRuleKind.AllowAll,
+            "blank QQ group and private lists allow all without inheriting the legacy shared whitelist");
+        var qqList = PlatformSwitchSettings.ScalarListRules(PlatformId.QqPrivate,
+            new PlatformOptions { WhitelistGroups = "10001", WhitelistPrivates = "10002" });
+        check(qqList.Group.TryGetExplicitValue(out var qqGroups) && qqGroups == "10001"
+            && qqList.Private.TryGetExplicitValue(out var qqPrivates) && qqPrivates == "10002",
+            "nonblank QQ group and private lists remain independent explicit lists");
         var officialBlank = PlatformSwitchSettings.ScalarListRules(PlatformId.QqOfficial,
             new PlatformOptions { OfficialWhitelistGroups = "", OfficialWhitelistPrivates = "" });
         check(officialBlank.Group.Kind == ListRuleKind.AllowAll && officialBlank.Private.Kind == ListRuleKind.AllowAll,

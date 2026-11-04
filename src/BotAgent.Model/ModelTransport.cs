@@ -242,11 +242,19 @@ public class ModelTransport : IModelTransport
     public Task<SendOutcome> SendAsync(JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds, CancellationToken ct)
         => SendAsync(payload, attachedImages, attachedImageIds, provider: null, ct);
 
-    public async Task<SendOutcome> SendAsync(
+    public Task<SendOutcome> SendAsync(
         JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds,
         ModelProviderRoute? provider, CancellationToken ct)
+        => SendWithBoundaryAsync(payload, attachedImages, attachedImageIds, provider, ct, null);
+
+    public Task<SendOutcome> SendAsync(BuiltRequest request, ModelProviderRoute? provider, CancellationToken ct)
+        => SendWithBoundaryAsync(request.Payload, request.AttachedImages, request.AttachedImageIds, provider, ct, request.StableSystemPrefixLength);
+
+    private async Task<SendOutcome> SendWithBoundaryAsync(
+        JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds,
+        ModelProviderRoute? provider, CancellationToken ct, int? stableSystemPrefixLength)
     {
-        try { return await SendCoreAsync(payload, attachedImages, attachedImageIds, provider, ct); }
+        try { return await SendCoreAsync(payload, attachedImages, attachedImageIds, provider, ct, stableSystemPrefixLength); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (ModelFault) { throw; }
         catch (Exception ex) { throw new ModelFault(ModelFault.SafeCode(ex)); }
@@ -254,7 +262,7 @@ public class ModelTransport : IModelTransport
 
     private async Task<SendOutcome> SendCoreAsync(
         JsonObject payload, int attachedImages, IReadOnlyList<long> attachedImageIds,
-        ModelProviderRoute? provider, CancellationToken ct)
+        ModelProviderRoute? provider, CancellationToken ct, int? stableSystemPrefixLength)
     {
         ct.ThrowIfCancellationRequested();
         // Request-local copies preserve provider isolation and the caller's original payload.
@@ -271,7 +279,7 @@ public class ModelTransport : IModelTransport
             (HttpStatusCode Status, string Body) reply;
             try
             {
-                reply = await SendOnceAsync(_chatHttp, requestPayload, route, retryBudget?.Token ?? ct, _chatTimeout);
+                reply = await SendOnceAsync(_chatHttp, requestPayload, route, retryBudget?.Token ?? ct, _chatTimeout, stableSystemPrefixLength);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -316,7 +324,7 @@ public class ModelTransport : IModelTransport
         {
             FileLog.Write("Agent", "上游空 choices → 2 秒后重试一次");
             await Clock.Delay(TimeSpan.FromSeconds(2), ct);
-            var retry = await SendFallbackAsync(requestPayload, route, ct);
+            var retry = await SendFallbackAsync(requestPayload, route, ct, stableSystemPrefixLength);
             if ((int)retry.Status is >= 200 and < 300)
             {
                 ModelFault.ValidateEnvelope(retry.Body);
@@ -328,7 +336,7 @@ public class ModelTransport : IModelTransport
         var textOnlyRetry = false;
         if (!HasChoices(json) && attachedImages > 0)
         {
-            var plain = await SendFallbackAsync(StripImages(requestPayload), route, ct);
+            var plain = await SendFallbackAsync(StripImages(requestPayload), route, ct, stableSystemPrefixLength);
             if ((int)plain.Status is >= 200 and < 300)
             {
                 ModelFault.ValidateEnvelope(plain.Body);
@@ -346,10 +354,10 @@ public class ModelTransport : IModelTransport
 
     private static async Task<(HttpStatusCode Status, string Body)> SendOnceAsync(
         IModelHttpFetcher http, JsonObject payload, ModelProviderRoute route, CancellationToken ct,
-        TimeSpan? defaultTimeout = null)
+        TimeSpan? defaultTimeout = null, int? stableSystemPrefixLength = null)
     {
         using var budget = ProviderRequestBudget.Create(route, defaultTimeout ?? http.Timeout, ct);
-        using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload);
+        using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload, stableSystemPrefixLength: stableSystemPrefixLength);
         using var response = await http.SendAsync(request, budget.Token);
         var body = await response.Content.ReadAsStringAsync(budget.Token);
         budget.Token.ThrowIfCancellationRequested();
@@ -357,9 +365,9 @@ public class ModelTransport : IModelTransport
     }
 
     private async Task<(HttpStatusCode Status, string Body)> SendFallbackAsync(
-        JsonObject payload, ModelProviderRoute route, CancellationToken ct)
+        JsonObject payload, ModelProviderRoute route, CancellationToken ct, int? stableSystemPrefixLength)
     {
-        try { return await SendOnceAsync(_auxHttp, payload, route, ct, _auxiliaryTimeout); }
+        try { return await SendOnceAsync(_auxHttp, payload, route, ct, _auxiliaryTimeout, stableSystemPrefixLength); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new ModelFault("model_timeout"); }
         catch (HttpRequestException ex) when (ex is not ModelFault) { throw new ModelFault("model_network_error", ex.StatusCode); }
     }

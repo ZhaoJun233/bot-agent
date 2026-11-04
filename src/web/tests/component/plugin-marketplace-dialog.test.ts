@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import PluginMarketplaceDialog from '../../src/features/capabilities/PluginMarketplaceDialog.vue'
-import { ZbaClient, ZbaNetworkError, type ZbaPluginCatalog, type ZbaPluginOperation, type ZbaPluginSettings } from '../../src/api/zba'
+import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaPluginCatalog, type ZbaPluginOperation, type ZbaPluginSettings } from '../../src/api/zba'
 import { syntheticManifest, syntheticSettings } from '../fixtures/provider-marketplace'
 
 const mounted: Array<{ unmount: () => void }> = []
@@ -75,6 +75,17 @@ describe('plugin marketplace idempotency and trust gate', () => {
     expect(pluginOperation.mock.calls[0]?.[0]).toBe(key)
     expect(installPlugin).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="marketplace-recovery"]').exists()).toBe(false)
+  })
+
+  it('reports a known load failure without entering unknown-result recovery', async () => {
+    const installPlugin = vi.fn<ZbaClient['installPlugin']>(async () => { throw new ZbaRequestError(503, 'plugin_reload_failed', 'plugin_reload_failed') })
+    const { wrapper } = await mountDialog(clientWith({ installPlugin }))
+    await wrapper.get('[data-testid="marketplace-trust"]').setValue(true)
+    await wrapper.get('[data-testid="marketplace-install"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="marketplace-notice"]').text()).toContain('旧实例')
+    expect(wrapper.find('[data-testid="marketplace-recovery"]').exists()).toBe(false)
+    expect(installPlugin).toHaveBeenCalledTimes(1)
   })
 
   it('validates the data source locally and never fetches the URL', async () => {

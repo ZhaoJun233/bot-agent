@@ -3,6 +3,18 @@ using System.Text.Json.Nodes;
 using BotAgent.Domain.Model;
 using BotAgent.Model.Protocols;
 
+if (args.Contains("--live-cache", StringComparer.Ordinal))
+{
+    if (args.Length != 1)
+    {
+        Console.WriteLine("{\"status\":\"aborted\",\"code\":\"live_arguments_invalid\",\"requests\":0}");
+        Environment.ExitCode = 2;
+        return;
+    }
+    Environment.ExitCode = await LiveCacheChecks.RunAsync();
+    return;
+}
+
 var count = 0;
 await ReviewModelRegression.RunAsync(Check);
 await PromptCacheChecks.RunAsync(Check);
@@ -63,6 +75,8 @@ using (var source = new MemoryStream(Encoding.UTF8.GetBytes(streams[ModelProtoco
 await EndpointChecks.RunAsync(Check, payload);
 await StreamingChecks.RunAsync(Check);
 await TransportChecks.RunAsync(Check, payload, replies);
+await PrivateReplyPromptChecks.RunAsync(Check);
+await LiveCacheChecks.RunOfflineAsync(Check);
 await DiscoveryChecks.RunAsync(Check);
 await TimeoutChecks.RunAsync(Check, payload);
 Console.WriteLine($"PASS {count} synthetic protocol checks");
