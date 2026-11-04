@@ -7,7 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.33" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
