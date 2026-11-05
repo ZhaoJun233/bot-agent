@@ -294,6 +294,7 @@ internal static class Program
         "events.read" => Req("GET", route.Template, token: AdminToken, query: "?after=0&limit=10"),
         "traces.list" => Req("GET", route.Template, token: AdminToken, query: "?limit=5"),
         "logs.list" => Req("GET", route.Template, token: ReadToken, query: "?limit=5"),
+        "logs.feed" => Req("GET", route.Template, token: ReadToken),
         "capabilities.inspect" => Req("POST", route.Template, InspectJson("synthetic-1"), AdminToken),
         "capabilities.validate" => Req("POST", route.Template, ValidationJson("zba-1.0"), AdminToken),
         "capabilities.execute" => Req("POST", route.Template, ExecuteJson("zba-1.0"), AdminToken),

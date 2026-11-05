@@ -12,6 +12,7 @@ import {
 } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
+import { useModalIsolation } from '../../shared/ui/modal-isolation'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import {
@@ -37,7 +38,9 @@ import {
   type SecretDrafts
 } from './draft'
 import { errorName } from '../../shared/friendly'
-import { restartNoticeMessage } from './receipt-notice'
+import { receiptOutcome, restartNoticeMessage } from './receipt-notice'
+import { runtimeEffectPresentation } from './runtime-effects'
+import { policyDenials as findPolicyDenials } from './policy-presentation'
 import { fieldHint, fieldLabel } from './field-labels'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
@@ -123,6 +126,9 @@ const providerNames = ref<ProviderNameDrafts>({})
  * 保存时逐条 upsert，不整表替换（整表替换在 Legacy 档会被判 legacy_policy_needs_review）。
  */
 const policyDrafts = ref<PolicyDrafts>({})
+const policyDenials = computed(() => findPolicyDenials(policyDrafts.value, policyEntries((draftBase.value ?? snapshot.value)?.view)))
+const policyDenialsConfirmed = ref(false)
+watch(policyDrafts, () => { policyDenialsConfirmed.value = false })
 const policyRows = computed(() => policyEntries(snapshot.value?.view))
 const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
 /** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
@@ -161,12 +167,13 @@ watch(() => pendingOperations(props.client, 'configuration', operationTarget.val
   }
 }, { immediate: true })
 
-type LeaveReason = 'lock' | 'downgrade' | 'close'
+type LeaveReason = 'lock' | 'downgrade' | 'close' | 'navigate'
 const leavePrompt = ref<LeaveReason | null>(null)
 const leaveMessage = ref<string | null>(null)
 const leaveBusy = ref(false)
 const leaveSafeButton = ref<HTMLButtonElement | null>(null)
 const leaveDialog = ref<HTMLElement | null>(null)
+useModalIsolation(leaveDialog, () => leavePrompt.value !== null)
 /** 页面标题：触发器已经不在了时的安全落点（tabindex="-1"，不进 Tab 顺序）。 */
 const pageHeading = ref<HTMLElement | null>(null)
 let leaveResolve: ((allowed: boolean) => void) | null = null
@@ -226,6 +233,7 @@ const busy = computed(() => loading.value || phase.value === 'saving')
 /** 提交结果未知时冻结整批内容：既不能改草稿，也不能放弃核对入口。 */
 const unconfirmed = computed(() => phase.value === 'unconfirmed')
 const inputsLocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
+const canKeepOnLeave = computed(() => leavePrompt.value === 'navigate' && hasWritePermission.value && !inputsLocked.value && !leaveBusy.value)
 const saveBlocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict' || secretConfirmationBlocked.value)
 const hasDraft = computed(() => dirtyCount.value > 0)
 // 草稿全部清空后释放起草基线：下一次起草锚定当时的快照。
@@ -250,12 +258,17 @@ function expectedVersion(): string {
 
 const leaveTitle = computed(() => leavePrompt.value === 'close' ? '关闭前确认未保存修改' : leavePrompt.value === 'lock'
   ? '锁定前确认未保存修改'
+  : leavePrompt.value === 'navigate' ? '离开当前页面前需要确认'
   : '退出管理员模式前确认未保存修改')
 const leaveCopy = computed(() => leavePrompt.value === 'close' ? '关闭能力设置前，可以保存修改或明确放弃草稿。' : leavePrompt.value === 'lock'
   ? '锁定会结束当前会话并清除内存中的草稿与秘密输入。'
+  : leavePrompt.value === 'navigate'
+  ? canKeepOnLeave.value
+    ? '离开前，请保存、保留普通草稿或明确放弃未保存的修改；选择继续编辑会留在当前页面。'
+    : '离开前，请保存或明确放弃未保存的修改；选择继续编辑会留在当前页面。秘密输入仍按安全规则清理。'
   : '退出管理员模式后写入口关闭；草稿会保留，可以重新进入管理员模式后继续。')
-const leaveSaveLabel = computed(() => leavePrompt.value === 'close' ? '保存并关闭' : leavePrompt.value === 'lock' ? '保存并锁定' : '保存并退出管理员')
-const leaveDiscardLabel = computed(() => leavePrompt.value === 'close' ? '放弃并关闭' : leavePrompt.value === 'lock' ? '放弃并锁定' : '放弃并退出管理员')
+const leaveSaveLabel = computed(() => leavePrompt.value === 'close' ? '保存并关闭' : leavePrompt.value === 'lock' ? '保存并锁定' : leavePrompt.value === 'navigate' ? '保存并离开当前页面' : '保存并退出管理员')
+const leaveDiscardLabel = computed(() => leavePrompt.value === 'close' ? '放弃并关闭' : leavePrompt.value === 'lock' ? '放弃并锁定' : leavePrompt.value === 'navigate' ? '放弃并离开当前页面' : '放弃并退出管理员')
 
 const formatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
@@ -315,6 +328,31 @@ const saveCodeMessages: Record<number, string> = {
 }
 
 const restartNotice = computed(() => restartNoticeMessage(receipt.value))
+// A receipt describes one operation, not the current state of unrelated fields.
+const visibleRuntimeFields = computed(() => {
+  const view = snapshot.value?.view
+  if (!view) return []
+  return visibleSections.value.filter(section => section.key !== 'registered').flatMap(section =>
+    Object.entries(view[section.key as Exclude<SectionKey, 'registered'>])
+      .filter(([key]) => !ownedByPlugin(section.key, key)).map(([, field]) => field as ZbaReadField))
+})
+const currentRuntimeEffects = computed(() => {
+  const ids = new Set(visibleRuntimeFields.value.map(field => field.rule.id))
+  return snapshot.value?.runtimeEffects?.filter(effect => effect.field.object == null && ids.has(effect.field.field)) ?? []
+})
+const pendingRestarts = computed(() => currentRuntimeEffects.value.filter(effect => effect.state === 'restartRequired'))
+const currentRuntimeStatus = computed(() => {
+  if (currentRuntimeEffects.value.some(effect => effect.state === 'applyFailed')) return { label: '已保存，运行应用失败', tone: 'bad' }
+  if (pendingRestarts.value.length > 0) return { label: '已保存，仍需重启', tone: 'warn' }
+  if (visibleRuntimeFields.value.length === 0 || visibleRuntimeFields.value.some(field =>
+    !currentRuntimeEffects.value.some(effect => effect.field.field === field.rule.id && effect.state === 'current'))) {
+    return { label: '当前生效情况待确认', tone: 'warn' }
+  }
+  return { label: '当前已生效', tone: 'ok' }
+})
+const runtimeRestartNotice = computed(() => pendingRestarts.value.every(effect => effect.restartTarget === 'botAgent')
+  ? '当前仍有已保存配置等待重启 BotAgent 机器人服务；无关配置的保存不会清除这一状态。'
+  : '当前仍有已保存配置等待重启，具体服务待核对；不要依据某一次保存回执判断当前状态。')
 
 function applyLabel(value: number): string {
   return applyLabels[value] ?? `未知状态 ${value}`
@@ -705,6 +743,10 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   if (!request) return
   fieldErrors.value = localFieldErrors(request.errors)
   if (request.errors.length > 0) return
+  if (policyDenials.value.length > 0 && !policyDenialsConfirmed.value) {
+    validationMessage.value = '保存前请确认：下列空名单会拒绝对应范围的所有会话。'
+    return
+  }
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
     settleProviderNames(request.nameIntents)
     policyDrafts.value = {}
@@ -946,6 +988,12 @@ function closeLeave(allowed: boolean): void {
 
 function leaveStay(): void {
   closeLeave(false)
+}
+
+function leaveKeep(): void {
+  if (!canKeepOnLeave.value) return
+  discardSecretsOnLeave()
+  closeLeave(true)
 }
 
 function leaveDiscard(): void {
@@ -1213,12 +1261,14 @@ defineExpose({
           <strong>{{ fieldCount }}</strong>
         </div>
         <div>
-          <span>最近生效</span>
-          <span class="status-badge" :data-tone="applyTone(snapshot.latestApplyState)">
-            {{ applyLabel(snapshot.latestApplyState) }}
+          <span>当前运行状态</span>
+          <span class="status-badge" :data-tone="currentRuntimeStatus.tone" data-testid="config-runtime-summary">
+            {{ currentRuntimeStatus.label }}
           </span>
         </div>
       </section>
+
+      <p v-if="pendingRestarts.length > 0" class="inline-notice warn" data-testid="config-runtime-restart">{{ runtimeRestartNotice }}</p>
 
       <div class="config-body">
         <nav class="config-nav" aria-label="配置分区">
@@ -1279,6 +1329,7 @@ defineExpose({
                     </p>
                     <PlatformPolicyEditor
                       :entries="policyRows"
+                      :runtime-effects="snapshot.runtimeEffects"
                       :model-value="policyDrafts"
                       :locked="!canWrite || inputsLocked"
                       @update:model-value="policyDrafts = $event"
@@ -1359,8 +1410,8 @@ defineExpose({
                   </td>
                   <td class="setting-apply setting-meta" role="cell">
                     <span class="meta-label">生效</span>
-                    <span class="status-badge" :data-tone="applyTone(item.field.applyState)">
-                      {{ applyLabel(item.field.applyState) }}
+                    <span class="status-badge" :data-testid="`config-runtime-${fieldPath(active, item.key)}`" :data-tone="runtimeEffectPresentation(snapshot.runtimeEffects, item.field).tone">
+                      {{ runtimeEffectPresentation(snapshot.runtimeEffects, item.field).label }}
                     </span>
                   </td>
                   <td :id="`${editorId}-config-rule-${active}-${item.key}`" class="setting-rules setting-meta" role="cell">
@@ -1512,6 +1563,7 @@ defineExpose({
             持久化版本 {{ receipt.committedVersion ?? '—' }}
           </p>
         </div>
+        <p :data-tone="receiptOutcome(receipt).tone" data-testid="config-receipt-outcome"><strong>本次操作：{{ receiptOutcome(receipt).title }}</strong> · {{ receiptOutcome(receipt).detail }}</p>
         <dl class="receipt-grid">
           <div>
             <dt>操作键</dt>
@@ -1536,6 +1588,12 @@ defineExpose({
           {{ restartNotice }}
         </p>
       </section>
+
+      <div v-if="policyDenials.length > 0" class="inline-notice warn" data-testid="config-policy-denials">
+        <p>空名单会拒绝下列范围的所有会话；不会自动放行。</p>
+        <ul><li v-for="denial in policyDenials" :key="denial">{{ denial }}</li></ul>
+        <label><input v-model="policyDenialsConfirmed" type="checkbox" :disabled="inputsLocked" data-testid="config-policy-denials-confirm">我确认保存拒绝全部的规则</label>
+      </div>
 
       <div
         class="save-bar"
@@ -1596,6 +1654,9 @@ defineExpose({
               {{ leaveCopy }}
               当前有 <strong>{{ dirtyCount }}</strong> 项修改。
             </p>
+            <p v-if="canKeepOnLeave" class="inline-notice" data-testid="config-leave-keep-hint">
+              保留普通草稿不会提交保存；秘密替换输入及秘密修改意图（包括删除）会清空，返回后需重新填写。
+            </p>
             <p v-if="phase === 'saving'" class="inline-notice" data-testid="config-leave-saving">
               保存正在提交；请等本次结果返回后再保存、放弃或离开。
             </p>
@@ -1605,6 +1666,10 @@ defineExpose({
             <p v-else-if="!hasWritePermission && hasDraft" class="inline-notice">
               标准模式下不能保存；可以继续编辑，或明确放弃后再离开。
             </p>
+            <div v-if="policyDenials.length > 0" class="inline-notice warn">
+              <p>空名单将拒绝所有会话：{{ policyDenials.join("；") }}</p>
+              <label><input v-model="policyDenialsConfirmed" type="checkbox" :disabled="inputsLocked" data-testid="config-leave-denials-confirm">我确认保存拒绝全部的规则</label>
+            </div>
             <p v-if="leaveMessage" class="inline-notice bad" data-testid="config-leave-message">{{ leaveMessage }}</p>
             <div class="dialog-actions">
               <button
@@ -1615,6 +1680,14 @@ defineExpose({
                 @click="leaveStay"
               >
                 继续编辑
+              </button>
+              <button
+                v-if="canKeepOnLeave"
+                type="button"
+                data-testid="config-leave-keep"
+                @click="leaveKeep"
+              >
+                保留普通草稿并离开
               </button>
               <button
                 type="button"

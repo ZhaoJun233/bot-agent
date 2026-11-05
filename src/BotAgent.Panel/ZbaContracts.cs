@@ -462,6 +462,11 @@ public interface IZbaBackend
         ConfigurationCaller caller, int limit, CancellationToken ct = default)
         => throw new ZbaBackendException(503, "logs_unavailable", "Runtime logs are unavailable.");
 
+    /// <summary>Incremental safe runtime rows; separate from the generic state-event ring.</summary>
+    ValueTask<ZbaLogFeedPage> ReadLogFeedAsync(
+        ConfigurationCaller caller, ZbaLogFeedCursor? cursor, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "logs_unavailable", "Runtime logs are unavailable.");
+
     ValueTask<ZbaPluginCatalog> ListPluginCatalogAsync(
         ConfigurationCaller caller, string? query, string? category, CancellationToken ct = default);
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { restoreFocus } from './focus-restore'
+import { dialogFocusableElements, useModalIsolation } from './modal-isolation'
 
 const props = withDefaults(defineProps<{
   title: string
@@ -14,16 +15,15 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ close: [] }>()
 const root = ref<HTMLElement | null>(null)
 const heading = ref<HTMLElement | null>(null)
+useModalIsolation(root, () => props.active)
 
 function focusHeading(): void {
-  if (props.active) void nextTick(() => heading.value?.focus())
+  if (props.active) void nextTick(() => { if (props.active) heading.value?.focus() })
 }
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') { event.preventDefault(); emit('close'); return }
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); emit('close'); return }
   if (event.key !== 'Tab' || !root.value) return
-  const elements = Array.from(root.value.querySelectorAll<HTMLElement>(
-    'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]'
-  )).filter((element) => !element.closest('[hidden], [inert]'))
+  const elements = dialogFocusableElements(root.value)
   const first = elements[0]
   const last = elements[elements.length - 1]
   if (!first || !last) { event.preventDefault(); heading.value?.focus(); return }

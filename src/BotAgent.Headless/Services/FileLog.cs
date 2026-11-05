@@ -26,6 +26,7 @@ public static class FileLog
     public const int RecentCapacity = 600;
 
     private static readonly Queue<(long Time, string Text, bool CanClassify)> Recent = new();
+    private static readonly RuntimeLogFeedBuffer RuntimeFeed = new();
 
     /// <summary>一条新日志（文本含级别标签、不含时间戳；时间为本地时间毫秒）。面板用它做实时推送。</summary>
     public static event Action<long, string>? LineWritten;
@@ -116,6 +117,7 @@ public static class FileLog
                     var parsed = ParseLine(line);
                     // 持久文本可能含聊天换行伪造的独立前缀，不能再据此前缀分类。
                     Recent.Enqueue((parsed.Time, parsed.Text, false));
+                    RuntimeFeed.Append(parsed.Time, parsed.Text, canClassify: false);
                 }
 
                 TrimLocked();
@@ -183,6 +185,9 @@ public static class FileLog
         lock (Gate)
         {
             Recent.Enqueue((now.ToUnixTimeMilliseconds(), text, true));
+            // Separately supplied tags prove the prefix belongs to the logger, not free-form text.
+            var trustedTag = tag is not null && tag.IndexOfAny(['[', ']', '\r', '\n']) < 0;
+            RuntimeFeed.Append(now.ToUnixTimeMilliseconds(), text, trustedTag);
             TrimLocked();
         }
 
@@ -259,6 +264,12 @@ public static class FileLog
     public static IReadOnlyList<(long Time, string Text, bool CanClassify)> RecentRuntimeLines(int limit)
     {
         lock (Gate) return Recent.TakeLast(Math.Clamp(limit, 1, RecentCapacity)).ToArray();
+    }
+
+    /// <summary>Safe rows and cursor are captured atomically with the append sequence under Gate.</summary>
+    public static BotAgent.Panel.ZbaLogFeedPage ReadRuntimeFeed(BotAgent.Panel.ZbaLogFeedCursor? cursor)
+    {
+        lock (Gate) return RuntimeFeed.Read(cursor);
     }
 
     private static void TrimLocked()

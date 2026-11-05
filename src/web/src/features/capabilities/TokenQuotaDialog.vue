@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ZbaClient, ZbaRequestError, type ZbaQuota, type ZbaQuotaSaveRequest } from '../../api/zba'
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
+import { useDraftProtection } from '../../shared/ui/draft-protection'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { newNonce } from '../configuration/draft'
@@ -250,8 +251,8 @@ async function check(): Promise<void> {
     if (!auth(cause)) error.value = toUiError(cause)
   }
 }
-async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement | null): Promise<boolean> {
-  if (reason === 'lock') return true // The registry keeps quota and plugin operation keys independently.
+async function requestLeave(reason: 'lock' | 'downgrade' | 'navigate', _trigger?: HTMLElement | null): Promise<boolean> {
+  if (reason === 'lock' || reason === 'navigate') return true // The registry keeps quota and plugin operation keys independently.
   if (unsettled.value || pluginBusy.value) {
     validation.value = '提交结果尚未确认，请先核对原操作键。'
     return false
@@ -259,7 +260,8 @@ async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement
   if (dirty.value) { discard.value = 'close'; return false }
   return true
 }
-defineExpose({ requestLeave })
+useDraftProtection(() => dirty.value || unsettled.value)
+defineExpose({ requestLeave, draftCount: computed(() => dirty.value ? 1 : 0) })
 watch(recovery, (record, previous) => {
   if (record) {
     if (!pending.value) {
@@ -355,21 +357,21 @@ onBeforeUnmount(() => { alive = false; ++readSequence })
 </template>
 
 <style scoped>
-.eyebrow { color: var(--accent-deep); font-size: 11px; font-weight: 650; letter-spacing: .1em; }
-.muted { color: var(--text-muted); font-size: 12px; line-height: 1.7; margin: 6px 0; overflow-wrap: anywhere; }
-.notice { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; background: var(--surface-muted); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.eyebrow { color: var(--accent-deep); font-size: 0.75rem; font-weight: 650; letter-spacing: .1em; }
+.muted { color: var(--text-muted); font-size: 0.75rem; line-height: 1.7; margin: 6px 0; overflow-wrap: anywhere; }
+.notice { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; background: var(--surface-muted); font-size: 0.8125rem; line-height: 1.7; overflow-wrap: anywhere; }
 .notice p { margin: 0 0 8px; }.notice.warn { background: var(--warn-bg); color: var(--warn-text); }.notice.bad { background: var(--bad-bg); color: var(--bad-text); }
 .list-toolbar, .quota-source header, .quota-source footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-.list-toolbar { margin-top: 24px; }.list-toolbar h3 { font-size: 14px; margin: 0; }
+.list-toolbar { margin-top: 24px; }.list-toolbar h3 { font-size: 0.875rem; margin: 0; }
 .quota-list { list-style: none; padding: 0; display: grid; gap: 12px; }
 .quota-source { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 18px; background: var(--surface); }
-.quota-source h4, .quota-editor h3 { font-size: 14px; margin: 0; overflow-wrap: anywhere; }
-.quota-state { font-size: 11px; border-radius: 5px; padding: 3px 8px; color: var(--ok-text); background: var(--ok-bg); }.quota-state.depleted { color: var(--warn-text); background: var(--warn-bg); }
+.quota-source h4, .quota-editor h3 { font-size: 0.875rem; margin: 0; overflow-wrap: anywhere; }
+.quota-state { font-size: 0.75rem; border-radius: 5px; padding: 3px 8px; color: var(--ok-text); background: var(--ok-bg); }.quota-state.depleted { color: var(--warn-text); background: var(--warn-bg); }
 .quota-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0 10px; }
-.quota-metrics dt { color: var(--text-muted); font-size: 11px; }.quota-metrics dd { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 5px 0 0; overflow-wrap: anywhere; }
+.quota-metrics dt { color: var(--text-muted); font-size: 0.75rem; }.quota-metrics dd { font-size: 1.25rem; font-weight: 650; font-variant-numeric: tabular-nums; margin: 5px 0 0; overflow-wrap: anywhere; }
 .quota-source footer { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 12px; }
 .quota-editor { display: grid; gap: 10px; padding: 18px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-muted); margin-top: 20px; min-width: 0; }
-.quota-editor label { font-size: 12px; font-weight: 600; }.quota-editor input { min-width: 0; width: 100%; max-width: 280px; border-radius: 8px; min-height: 38px; }
+.quota-editor label { font-size: 0.75rem; font-weight: 600; }.quota-editor input { min-width: 0; width: 100%; max-width: 280px; border-radius: 8px; min-height: 38px; }
 .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }button { min-height: 36px; border-radius: 8px; }
-@media (max-width: 600px) { .quota-source, .quota-editor { padding: 14px; }.quota-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.quota-metrics > div:first-child { grid-column: 1 / -1; }.quota-metrics dd { font-size: 17px; }button, .quota-editor input { min-height: 44px; }.editor-actions > button { flex: 1 1 auto; } }
+@media (max-width: 600px) { .quota-source, .quota-editor { padding: 14px; }.quota-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.quota-metrics > div:first-child { grid-column: 1 / -1; }.quota-metrics dd { font-size: 1.0625rem; }button, .quota-editor input { min-height: 44px; }.editor-actions > button { flex: 1 1 auto; } }
 </style>

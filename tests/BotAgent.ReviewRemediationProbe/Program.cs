@@ -27,6 +27,8 @@ internal static class Program
     {
         if (args.Length == 1 && args[0] == ModelHotApplyFailureTests.ChildArgument)
             return await ModelHotApplyFailureTests.RunChildAsync();
+        if (args.Length == 1 && args[0] == ConfigurationRuntimeEffectsTests.ChildArgument)
+            return await ConfigurationRuntimeEffectsTests.RunChildAsync();
         if (args.Contains("--task-approval", StringComparer.Ordinal))
         {
             await RunAsync("task approval gate", () => TaskApprovalGateTests.RunAsync((name, ok, detail) => Check(ok, name)));
@@ -53,6 +55,7 @@ internal static class Program
             await RunAsync("task approval gate", () => TaskApprovalGateTests.RunAsync((name, ok, detail) => Check(ok, name)));
             await RunAsync("review agent/storage regressions", () => ReviewAgentStorageRegression.RunAsync(Check));
             await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
+            await RunAsync("configuration runtime effects", () => ConfigurationRuntimeEffectsTests.RunAsync(Check));
             await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));
             await RunAsync("managed operations", () => ManagedOperationContractTests.RunAsync(Check));
             await RunAsync("managed host capabilities", () => ManagedHostCapabilityTests.RunAsync(Check));
@@ -62,6 +65,7 @@ internal static class Program
             await RunAsync("naming compatibility", () => { NamingCompatibilityTests.RunAsync(Check); return Task.CompletedTask; });
             await RunAsync("engine wiring", () => EngineWiringTests.RunAsync(Check));
             await RunAsync("runtime log privacy projection", () => { RuntimeLogProjectionTests.Run(Check); RuntimeLogProjectionTests.RunFileLogPipeline(Check, root); return Task.CompletedTask; });
+            await RunAsync("runtime log ordered safe feed", () => { RuntimeLogFeedTests.Run(Check); return Task.CompletedTask; });
             await RunAsync("platform lifecycle", () => PlatformLifecycleTests.RunAsync(Check));
             await RunAsync("whitelist policy semantics", () => WhitelistPolicyTests.RunAsync(Check));
             await RunAsync("Model transport migration", () => ModelMigrationTests.RunAsync(Check));

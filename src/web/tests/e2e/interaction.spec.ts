@@ -220,6 +220,8 @@ test('未保存保护：旧保存迟到返回时不得替新离开框做决定',
   })
 
   await page.getByTestId('nav-overview').click()
+  await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
+  await page.getByTestId('config-leave-keep').click()
   await page.getByTestId('disable-admin').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-save').click()

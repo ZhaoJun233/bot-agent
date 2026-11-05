@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ZbaClient, ZbaRequestError, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../api/zba'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
+import { receiptOutcome } from '../configuration/receipt-notice'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 
@@ -46,7 +47,8 @@ export function useConfigurationCommit(options: {
   }
   function finish(value: ZbaConfigurationReceipt): void {
     receipt.value = value; pendingKey.value = null; phase.value = 'idle'
-    notice.value = value.decision === 1 ? '没有配置变更。' : value.applyState === 3 ? '已保存，需重启后生效。不会自动重启。' : '已保存；实际运行状态以服务端回执为准。'
+    const outcome = receiptOutcome(value)
+    notice.value = value.decision === 1 ? '没有配置变更；请查看当前生效情况。' : outcome.title + '。' + outcome.detail
   }
   async function save(generation: string, request: Omit<ZbaConfigurationSaveRequest, 'key'>): Promise<boolean> {
     if (!options.canWrite() || phase.value !== 'idle') return false

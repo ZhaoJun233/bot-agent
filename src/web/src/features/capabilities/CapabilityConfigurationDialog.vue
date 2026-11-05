@@ -17,7 +17,7 @@ async function close(): Promise<void> {
   if (await editor.value?.requestLeave('close') ?? true) emit('close')
 }
 defineExpose({
-  requestLeave: (reason: 'lock' | 'downgrade', trigger?: HTMLElement | null) => editor.value?.requestLeave(reason, trigger) ?? Promise.resolve(true),
+  requestLeave: (reason: 'lock' | 'downgrade' | 'navigate', trigger?: HTMLElement | null) => editor.value?.requestLeave(reason, trigger) ?? Promise.resolve(true),
   discardSecretsOnLeave: () => editor.value?.discardSecretsOnLeave(),
   endSession: () => editor.value?.endSession(),
   draftCount: computed(() => editor.value?.draftCount ?? 0)

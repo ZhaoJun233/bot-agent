@@ -35,7 +35,7 @@
 | `POST` | `/zba/v1/capabilities/execute` | Admin · 需令牌 | `capabilities.execute` | 执行一个受支持的管理动作（写路径，受 scope 与幂等键约束） |
 | `POST` | `/zba/v1/capabilities/query` | Read · 需令牌 | `capabilities.query` | 按操作键查询一次管理动作的状态 |
 | `POST` | `/zba/v1/capabilities/cancel` | Admin · 需令牌 | `capabilities.cancel` | 请求取消一个管理动作（不承诺远端已停止） |
-| `POST` | `/zba/v1/configuration/read` | Read · 需令牌 | `configuration.read` | 读一份**已脱敏**的配置快照（秘密槽位只回形状） |
+| `POST` | `/zba/v1/configuration/read` | Read · 需令牌 | `configuration.read` | 读一份**已脱敏**的配置快照（秘密槽位只回形状）；可选 `runtimeEffects` 独立说明字段当前的生效状态 |
 | `POST` | `/zba/v1/configuration/save` | Admin · 需令牌 | `configuration.save` | 批量保存：必须带期望版本 + 幂等键，冲突即失败 |
 | `POST` | `/zba/v1/configuration/find` | Admin · 需令牌 | `configuration.find` | 按幂等键对账一次配置保存的最终状态 |
 | `GET` | `/zba/v1/tasks` | Read · 需令牌 | `tasks.list` | 列出 Agent 任务摘要（不含正文） |
@@ -49,6 +49,7 @@
 | `GET` | `/zba/v1/events` | Read · 需令牌 | `events.read` | 按序号读取有序事件；断档时必须 resync |
 | `GET` | `/zba/v1/traces` | Read · 需令牌 | `traces.list` | 最近若干轮轨迹的**形状**（条数 / token / 耗时 / 未知轮数）与缓存用量合计；**不含会话 key 与消息正文** |
 | `GET` | `/zba/v1/logs` | Read · 需令牌 | `logs.list` | 最近运行日志的**安全摘要**：固定组件名 + 固定摘要文案，未知行只给「已隐藏 + 原始字符数」；`limit` 1..600（默认 200），最新在前；**不含日志原文**（发言/成员/路径/URL/凭据均不出宿主） |
+| `GET` | `/zba/v1/logs/feed` | Read · 需令牌 | `logs.feed` | 有序安全摘要增量；仅接受可选不透明 `cursor`，首次取最近 200 条、之后每批最多 200 条，旧到新；独立 600 条缓冲，重启/过期/超前游标明确重置；不含原文，`no-store` |
 | `GET` | `/zba/v1/plugins/catalog` | Read · 需令牌 | `plugins.catalog` | 浏览已配置的插件市场目录 |
 | `GET` | `/zba/v1/plugins/installed` | Read · 需令牌 | `plugins.installed` | 列出已安装插件包与其真实状态 |
 | `POST` | `/zba/v1/plugins/sources/resolve` | Admin · 需令牌 | `plugins.sources.resolve` | 把一个**固定版本**的公开 GitHub release 解析成插件清单 |
@@ -59,6 +60,8 @@
 | `GET` | `/zba/v1/plugins/{id}/settings` | Read · 需令牌 | `plugins.settings.read` | 读插件声明的设置项（**不回显秘密值**） |
 | `PUT` | `/zba/v1/plugins/{id}/settings` | Admin · 需令牌 | `plugins.settings.save` | 按期望修订号保存插件设置 |
 | `GET` | `/zba/v1/providers/{key}/models` | Read · 需令牌 | `providers.models` | 发现某个已保存供应商路由的上游模型列表 |
+
+**配置运行态元数据（#146）**：`configuration.read` 可选返回 `runtimeEffects` 数组；每项只有字段地址 `field`（含可选平台策略目标）、`state`（`current` / `restartRequired` / `applyFailed` / `unknown`）以及需重启时的 `restartTarget: "botAgent"`。不包含字段原值、密钥或异常正文，且只为该身份可见的字段提供状态。状态依据当前运行快照和已确认应用结果，不等同于最近一次保存回执；无关字段的成功保存不能清除待重启或应用失败状态。旧服务端缺失元数据、未来未知状态均显示待核对，不能推断为已生效。服务重启或配置改回运行值后，后续读取再确认状态。
 
 **断言**：`tests/BotAgent.ZbaProbe/Program.cs` 校验 OpenAPI 文档与上表的路由表一致 ——
 每条声明路由都出现在文档里、文档里没有多余路径、operationId 唯一、405/410/422 语义正确。

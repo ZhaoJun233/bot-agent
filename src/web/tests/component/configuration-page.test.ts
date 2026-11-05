@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ConfigurationPage from '../../src/features/configuration/ConfigurationPage.vue'
 import {
@@ -113,7 +113,199 @@ async function expectCleanProviderDraft(wrapper: ReturnType<typeof mountPage>, n
   await expect(leaving).resolves.toBe(true)
 }
 
+describe('ConfigurationPage runtime and explicit denial', () => {
+  it('a later successful receipt cannot clear unrelated server-reported restart debt', async () => {
+    const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    data.latestApplyState = 1
+    data.runtimeEffects = [{ field: { field: data.view!.behavior.botPersona!.rule.id, object: null }, state: 'restartRequired', restartTarget: 'botAgent' }]
+    const client = clientWith(data, { saveConfiguration: async () => ({ code: 0, replayed: false, receipt: { ...receipt, applyState: 1 }, currentVersion: '2', errors: [] }) })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'basic' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="config-runtime-restart"]').text()).toContain('BotAgent')
+    expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('需重启')
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic new draft')
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="config-receipt-outcome"]').text()).toContain('本次修改已应用')
+    expect(wrapper.get('[data-testid="config-runtime-restart"]').text()).toContain('BotAgent')
+  })
+  it('missing runtime metadata does not reuse latest successful apply state', async () => {
+    const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    data.latestApplyState = 1
+    delete data.runtimeEffects
+    const wrapper = mountPage({ client: clientWith(data), mode: 'read', scope: 'basic' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('当前生效情况待确认')
+  })
+  it('explicit denial requires confirmation and another draft edit resets it', async () => {
+    const calls: ZbaConfigurationSaveRequest[] = []
+    const client = clientWith(editableFixture, { saveConfiguration: async request => { calls.push(request); return { code: 0, replayed: false, receipt, currentVersion: '2', errors: [] } } })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'platform' })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-nav-platform"]').trigger('click')
+    const group = wrapper.get('[data-testid^="policy-group-"][data-testid$="-kind"]')
+    await group.setValue('3')
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    expect(calls).toHaveLength(0)
+    const confirm = wrapper.get('[data-testid="config-policy-denials-confirm"]')
+    await confirm.setValue(true)
+    await group.setValue('1')
+    expect((confirm.element as HTMLInputElement).checked).toBe(false)
+    await confirm.setValue(true)
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.changes.registered!.policies[0]!.configuration.groupWhitelist).toEqual({ kind: 1, value: '' })
+  })
+})
+
 describe('ConfigurationPage', () => {
+  it.each(['replace', 'delete'] as const)('F6 keeps ordinary drafts and clears the %s secret intent without saving', async secretMode => {
+    const save = vi.fn()
+    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(editableFixture, { saveConfiguration: save }) })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic retained model')
+    await wrapper.get('[data-testid="config-secrets"] [data-testid="secret-' + secretMode + '"]').trigger('click')
+    if (secretMode === 'replace') await wrapper.get('[data-testid="config-secrets"] input').setValue('synthetic-private-replacement')
+    expect(wrapper.vm.draftCount).toBe(2)
+    const leaving = wrapper.vm.requestLeave('navigate')
+    await flushPromises()
+    const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
+    const keep = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-keep"]')
+    expect(keep).not.toBeNull()
+    expect(keep!.textContent).toContain('保留普通草稿并离开')
+    expect(dialog.textContent).toContain('秘密替换输入')
+    expect(dialog.textContent).toContain('秘密修改意图')
+    expect(dialog.querySelector('[data-testid="config-leave-stay"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-leave-save"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-leave-discard"]')).not.toBeNull()
+    keep!.click()
+    await expect(leaving).resolves.toBe(true)
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="config-receipt"]').exists()).toBe(false)
+    expect(wrapper.vm.draftCount).toBe(1)
+    expect(wrapper.find('[data-testid="config-secrets"] input').exists()).toBe(false)
+    await wrapper.setProps({ active: false })
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="config-field-model"] input').element.value).toBe('Synthetic retained model')
+    expect(wrapper.vm.draftCount).toBe(1)
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it.each(['close', 'lock', 'downgrade'] as const)('F6 never offers keep for %s', async reason => {
+    const wrapper = mountPage({ mode: 'admin' })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic non-navigation draft')
+    const leaving = wrapper.vm.requestLeave(reason)
+    await flushPromises()
+    expect(document.querySelector('[data-testid="config-leave-keep"]')).toBeNull()
+    if (reason === 'lock') await expect(leaving).resolves.toBe(true)
+    else {
+      document.querySelector<HTMLButtonElement>('[data-testid="config-leave-stay"]')!.click()
+      await expect(leaving).resolves.toBe(false)
+    }
+  })
+
+  it.each(['saving', 'unknown'] as const)('F6 cannot keep while the save is %s', async state => {
+    type Result = Awaited<ReturnType<ZbaClient['saveConfiguration']>>
+    let finish!: (result: Result) => void
+    let request: ZbaConfigurationSaveRequest | undefined
+    const save = vi.fn((value: ZbaConfigurationSaveRequest): Promise<Result> => {
+      request = value
+      if (state === 'unknown') return Promise.reject(new ZbaNetworkError(new Error('Synthetic interrupted save')))
+      return new Promise(resolve => { finish = resolve })
+    })
+    const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic in-flight draft')
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    const leaving = wrapper.vm.requestLeave('navigate')
+    await flushPromises()
+    const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
+    expect(dialog).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-leave-keep"]')).toBeNull()
+    expect(dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')!.disabled).toBe(true)
+    expect(dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-discard"]')!.disabled).toBe(true)
+    expect(dialog.querySelector('[data-testid="config-leave-' + (state === 'saving' ? 'saving' : 'unconfirmed') + '"]')).not.toBeNull()
+    dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-stay"]')!.click()
+    await expect(leaving).resolves.toBe(false)
+    expect(save).toHaveBeenCalledTimes(1)
+    if (state === 'saving') {
+      if (!request) throw new Error('Synthetic save did not start')
+      finish({ code: 0, replayed: false, receipt: { ...receipt, key: request.key, observedVersion: request.expectedVersion }, currentVersion: '2', errors: [] })
+      await flushPromises()
+    }
+  })
+
+  it('F6 does not expose keep when write permission is disabled', async () => {
+    const wrapper = mountPage({ mode: 'admin' })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic read-only draft')
+    await wrapper.setProps({ writesEnabled: false })
+    const leaving = wrapper.vm.requestLeave('navigate')
+    await flushPromises()
+    const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
+    expect(dialog).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-leave-keep"]')).toBeNull()
+    dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-stay"]')!.click()
+    await expect(leaving).resolves.toBe(false)
+  })
+
+  it('ordinary dirty navigation asks before leaving and keeps the draft when staying', async () => {
+    const save = vi.fn()
+    const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
+    await flushPromises()
+    const input = wrapper.get<HTMLInputElement>('[data-testid="config-field-botPersona"] input')
+    await input.setValue('Synthetic unsaved navigation draft')
+    const leaving = wrapper.vm.requestLeave('navigate')
+    await flushPromises()
+    const dialog = document.querySelector<HTMLElement>('[data-testid="config-leave-dialog"]')
+    expect(dialog).not.toBeNull()
+    if (!dialog) throw new Error('Expected navigation confirmation for an ordinary draft')
+    const stay = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-stay"]')!
+    const saveButton = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-save"]')!
+    const discard = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-discard"]')!
+    expect(stay.textContent?.trim()).toBe('继续编辑')
+    expect(saveButton.textContent?.trim()).toBe('保存并离开当前页面')
+    expect(discard.textContent?.trim()).toBe('放弃并离开当前页面')
+    expect(saveButton.disabled).toBe(false)
+    expect(discard.disabled).toBe(false)
+    stay.click()
+    await expect(leaving).resolves.toBe(false)
+    await flushPromises()
+    expect(document.querySelector('[data-testid="config-leave-dialog"]')).toBeNull()
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.vm.draftCount).toBe(1)
+    expect(input.element.value).toBe('Synthetic unsaved navigation draft')
+  })
+
+  it('待核对时切页使用当前页面文案，继续编辑留在当前页面', async () => {
+    const save = vi.fn(async () => { throw new ZbaNetworkError(new Error('Synthetic save timeout')) })
+    const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic navigation draft')
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
+    const leaving = wrapper.vm.requestLeave('navigate')
+    await flushPromises()
+    const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
+    expect(dialog.querySelector('h2')?.textContent).toBe('离开当前页面前需要确认')
+    expect(dialog.querySelector('.dialog-copy')?.textContent).toContain('离开前，请保存或明确放弃未保存的修改；选择继续编辑会留在当前页面。秘密输入仍按安全规则清理。')
+    expect(dialog.querySelector('[data-testid="config-leave-save"]')?.textContent?.trim()).toBe('保存并离开当前页面')
+    expect(dialog.querySelector('[data-testid="config-leave-discard"]')?.textContent?.trim()).toBe('放弃并离开当前页面')
+    expect(dialog.textContent).not.toContain('退出管理员')
+    expect(dialog.textContent).not.toContain('草稿会保留')
+    dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-stay"]')!.click()
+    await expect(leaving).resolves.toBe(false)
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.draftCount).toBe(1)
+  })
+
   it.each([
     ['basic', 'lock'], ['basic', 'downgrade'], ['models', 'lock'], ['models', 'downgrade']
   ] as const)('隐藏的 %s 草稿只能通过明确的 %s 确认保存', async (scope, reason) => {
@@ -1135,9 +1327,18 @@ describe('ConfigurationPage', () => {
   })
 })
 
-  it('平台策略条目改动只提交改过的那一条，未改字段一律 Keep (#104)', async () => {
+  it('平台策略只提交改过的行，行内未改字段保留原始规则 (#104)', async () => {
     const calls: ZbaConfigurationSaveRequest[] = []
-    const client = clientWith(editableFixture, {
+    const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    const policy = data.view?.platform.platformPolicies.value?.[0]
+    if (!policy) throw new Error('Synthetic editable fixture must include a platform policy')
+    for (const field of [policy.enabled, policy.chatEnabled, policy.groupWhitelist, policy.privateWhitelist, policy.allowedActions, policy.features]) field.userMode = 2
+    policy.enabled.value = 1; policy.chatEnabled.value = 0
+    policy.groupWhitelist.value = { kind: 1, value: '10001' }
+    policy.privateWhitelist.value = { kind: 2, value: '' }
+    policy.allowedActions.value = { kind: 1, actions: ['like', 'poke'] }
+    policy.features.value = [{ feature: 0, enabled: true }]
+    const client = clientWith(data, {
       saveConfiguration: async (request) => {
         calls.push(request)
         return { code: 0, replayed: false, receipt, currentVersion: '2', errors: [] }
@@ -1150,9 +1351,8 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-nav-platform"]').trigger('click')
     const row = wrapper.get('[data-testid="config-policy-instance:sample-platform:sample-account:sample-instance"]')
     // 群名单从「显式 10001」改成「全收」：只有这一行该进请求体。
-    await row.get('[aria-label$="群名单模式"]').setValue('2')
-    // 夹具里的动作名是合成值，本地白名单不允许它原样提交：顺手改成合法动作。
-    await row.get('[aria-label$="动作名单"]').setValue('like')
+    await row.get('[data-testid^="policy-group-"][data-testid$="-kind"]').setValue('2')
+    // 未修改的动作保持原始规则，不为通过校验而重写其它意图。
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
 
     await wrapper.get('[data-testid="config-save"]').trigger('click')
@@ -1169,13 +1369,10 @@ describe('ConfigurationPage', () => {
       key: { platformId: 'sample-platform', accountScope: 'sample-account', instanceId: 'sample-instance' }
     })
     expect(edit.configuration.groupWhitelist).toEqual({ kind: 2 })
-    // 条目是整体替换的：没改的字段按**读回来的显式值**原样回填（幂等），
-    // 只有本来就是「跟随基线」的字段才留 0，不会被折叠成新的用户意图。
-    expect(edit.configuration.enabled).toBe(1)
-    expect(edit.configuration.chatEnabled).toBe(1)
-    expect(edit.configuration.privateWhitelist).toEqual({ kind: 1, value: '10002' })
-    expect(edit.configuration.allowedActions).toEqual({ kind: 1, actions: ['like'] })
-    expect(edit.configuration.features).toEqual([{ feature: 0, enabled: true }])
+    // 行内完整配置保留，明确字段与继承字段均不从 display 物化。
+    expect(edit.configuration).toEqual({ enabled: 1, chatEnabled: 0, groupWhitelist: { kind: 2 },
+      privateWhitelist: { kind: 2 }, allowedActions: { kind: 1, actions: ['like', 'poke'] },
+      features: [{ feature: 0, enabled: true }] })
     // 标量与既有意图不被顺带改写。
     expect(request.changes.behavior).toBeUndefined()
     expect(request.changes.registered?.providers ?? []).toEqual([])
@@ -1205,7 +1402,8 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     const panel = wrapper.get('[data-testid="config-receipt"]').text()
     expect(panel).toContain('已提交')
     expect(panel).toContain('需重启')
-    expect(panel).toContain('需要重启后完全生效')
+    expect(panel).toContain('需要重启机器人服务')
+    expect(panel).not.toContain('已保存且热更新')
     expect(panel).not.toContain('已生效')
   })
 

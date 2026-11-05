@@ -235,6 +235,8 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
   await page.getByTestId('nav-overview').click()
+  await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
+  await page.getByTestId('config-leave-keep').click()
   await expect(page.getByTestId('overview')).toBeVisible()
   await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
 
@@ -264,6 +266,8 @@ test('配置页：离开配置页会清空秘密替换输入，但保留普通�
 
   // Simulate application navigation while a modal is mounted; pointer navigation is intentionally covered.
   await page.getByTestId('nav-overview').evaluate((element: HTMLElement) => element.click())
+  await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
+  await page.getByTestId('config-leave-keep').click()
   await expect(page.getByTestId('overview')).toBeVisible()
   await expect(page.getByTestId('nav-ability-draft')).toHaveText('1')
 
@@ -360,6 +364,8 @@ for (const action of ['lock', 'downgrade'] as const) {
     const writes: string[] = []
     page.on('request', req => { if (new URL(req.url()).pathname === '/zba/v1/configuration/save') writes.push(req.url()) })
     await page.getByTestId('nav-overview').click()
+    await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
+    await page.getByTestId('config-leave-keep').click()
     await expect(page.getByTestId('configuration')).toBeHidden()
     await expect(page.getByTestId('nav-config-draft')).toHaveText('1')
     await page.getByTestId(action === 'lock' ? 'lock' : 'disable-admin').click()

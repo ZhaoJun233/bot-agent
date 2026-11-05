@@ -16,7 +16,11 @@
 export function isRestorable(element: HTMLElement | null | undefined): element is HTMLElement {
   if (!element || !element.isConnected) return false
   if (element === document.body || element === document.documentElement) return false
-  if (element instanceof HTMLButtonElement && element.disabled) return false
+  if (element.matches(':disabled') || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false
+  for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+    const style = getComputedStyle(ancestor)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+  }
   return true
 }
 

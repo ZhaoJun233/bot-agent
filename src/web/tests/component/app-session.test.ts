@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+// 在收集阶段加载 App，避免冷模块转换占用首例的执行预算。
+import App from '../../src/App.vue'
 
 /**
  * App 的会话归属（LIFE-04）。
@@ -100,7 +102,6 @@ afterEach(() => {
 })
 
 async function mountApp() {
-  const App = (await import('../../src/App.vue')).default
   const wrapper = mount(App, { attachTo: document.body })
   mounted.push(wrapper)
   await flushPromises()
@@ -175,4 +176,79 @@ it('events401 revokes the App session without waiting for a manual refresh', asy
   expect(vm.token).toBe('')
   expect(wrapper.find('[data-testid="connection-state"]').exists()).toBe(false)
   lease.release()
+})
+
+describe('Sidebar storage fallback (synthetic)', () => {
+  const railKey = 'botagent.sidebar.rail'
+
+  function railStorage(initial: string | null) {
+    const values = new Map<string, string>()
+    if (initial !== null) values.set(railKey, initial)
+    return {
+      get length() { return values.size },
+      clear: vi.fn(() => values.clear()),
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      key: vi.fn((index: number) => [...values.keys()][index] ?? null),
+      removeItem: vi.fn((key: string) => { values.delete(key) }),
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value) })
+    } satisfies Storage
+  }
+
+  async function mountConnectedSidebar() {
+    const wrapper = await mountApp()
+    await wrapper.get('[data-testid="token-input"]').setValue('synthetic-sidebar-read-token')
+    await wrapper.get('[data-testid="connect-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="overview"]').exists()).toBe(true)
+    return wrapper
+  }
+
+  afterEach(() => {
+    // Unmount before restoring the browser boundary, whichever cleanup hook runs first.
+    for (const wrapper of mounted.splice(0)) wrapper.unmount()
+    vi.unstubAllGlobals()
+  })
+
+  it('starts expanded when Storage.getItem throws', async () => {
+    const storage = railStorage('1')
+    storage.getItem.mockImplementation((key) => {
+      if (key === railKey) throw new Error('Synthetic storage read blocked')
+      return null
+    })
+    vi.stubGlobal('localStorage', storage)
+    const wrapper = await mountConnectedSidebar()
+    const toggle = wrapper.get('[data-testid="sidebar-rail-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-label')).toBe('收起侧栏')
+    expect(wrapper.find('.app-shell--rail').exists()).toBe(false)
+    expect(storage.getItem).toHaveBeenCalledWith(railKey)
+  })
+
+  it.each([
+    { stored: null, expanded: 'true', attempted: '1' },
+    { stored: '1', expanded: 'false', attempted: '0' }
+  ])('returns to expanded when Storage.setItem throws (stored=$stored)', async ({ stored, expanded, attempted }) => {
+    const storage = railStorage(stored)
+    storage.setItem.mockImplementation(() => { throw new Error('Synthetic storage write blocked') })
+    vi.stubGlobal('localStorage', storage)
+    const wrapper = await mountConnectedSidebar()
+    const toggle = wrapper.get('[data-testid="sidebar-rail-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe(expanded)
+    await toggle.trigger('click')
+    expect(storage.setItem).toHaveBeenCalledWith(railKey, attempted)
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-label')).toBe('收起侧栏')
+    expect(wrapper.find('.app-shell--rail').exists()).toBe(false)
+  })
+
+  it.each([undefined, null])('stays expanded when Storage is unavailable (%s)', async (storage) => {
+    vi.stubGlobal('localStorage', storage)
+    const wrapper = await mountConnectedSidebar()
+    const toggle = wrapper.get('[data-testid="sidebar-rail-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-label')).toBe('收起侧栏')
+    expect(wrapper.find('.app-shell--rail').exists()).toBe(false)
+  })
 })

@@ -165,20 +165,31 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
-  // 切回概览**不**弹确认框（草稿保留、秘密丢弃）；切到能力/任务时
-  // 才走同一个三选一守卫，所以这里必须用 nav-capabilities 触发。
+  // 脏配置导航先确认；普通草稿另有显式保留动作，原有保存/放弃/继续编辑仍保留。
   await page.getByTestId('nav-capabilities').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
 
   // 焦点进入对话框（安全动作优先），不是留在被遮住的背景按钮上。
   expect(await focused(page)).toBe('config-leave-stay')
 
-  // Tab 循环：连续 Tab 只在这三个按钮之间转，不会跑到背景页面。
-  for (let step = 0; step < 6; step += 1) {
+  // 四个已批准动作都须可键盘访问，两个完整循环也不能跳到背后侧边栏。
+  const actions = ['config-leave-stay', 'config-leave-keep', 'config-leave-save', 'config-leave-discard']
+  const visited = new Set<string>()
+  for (let step = 0; step < actions.length * 2; step += 1) {
     await page.keyboard.press('Tab')
     const id = await focused(page)
-    expect(['config-leave-stay', 'config-leave-save', 'config-leave-discard']).toContain(id)
+    expect(actions).toContain(id)
+    visited.add(id)
+    if ((step + 1) % actions.length === 0) {
+      expect(await focused(page)).toBe('config-leave-stay')
+    }
   }
+  expect([...visited].sort()).toEqual([...actions].sort())
+  expect(await focused(page)).toBe('config-leave-stay')
+  await page.keyboard.press('Shift+Tab')
+  expect(await focused(page)).toBe('config-leave-discard')
+  await page.keyboard.press('Tab')
+  expect(await focused(page)).toBe('config-leave-stay')
 
   // Esc = 继续编辑（安全动作），对话框关闭且草稿仍在。
   await page.keyboard.press('Escape')
@@ -419,6 +430,8 @@ test('键盘：离开框在保存提交期间仍能接住 Escape', async ({ page
   })
 
   await page.getByTestId('nav-overview').click()
+  await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
+  await page.getByTestId('config-leave-keep').click()
   await page.getByTestId('disable-admin').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-save').click()

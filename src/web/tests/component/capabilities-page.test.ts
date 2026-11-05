@@ -3,13 +3,15 @@ import { flushPromises, mount } from '@vue/test-utils'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
 import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
 import { providerSnapshot } from '../fixtures/provider-marketplace'
+import editableConfiguration from '../fixtures/configuration-read-editable-result.json'
 import { beginOperation, markOperation, clearPendingOperations, getPendingOperation } from '../../src/shared/sync/pending-operations'
 import {
   ZbaClient,
   ZbaNetworkError,
   ZbaRequestError,
   type ZbaManagedDescriptor,
-  type ZbaManagedPage
+  type ZbaManagedPage,
+  type ZbaConfigurationReadResult
 } from '../../src/api/zba'
 
 const mounted: Array<{ unmount: () => void }> = []
@@ -79,6 +81,46 @@ function mountPage(client = clientWith(), mode: 'read' | 'admin' = 'admin') {
 }
 
 describe('CapabilitiesPage', () => {
+  it('F6 forwards navigate into embedded models, keeps ordinary drafts, and clears secrets', async () => {
+    const save = vi.fn()
+    const client = clientWith({ readConfiguration: async () => structuredClone(editableConfiguration) as unknown as ZbaConfigurationReadResult, saveConfiguration: save })
+    const wrapper = mountPage(client, 'admin')
+    await flushPromises()
+    await wrapper.get('[data-testid="ability-settings-models"]').trigger('click')
+    await flushPromises()
+    const editor = document.querySelector('[data-testid="ability-configuration-dialog"]')!
+    const input = editor.querySelector<HTMLInputElement>('[data-testid="config-field-model"] input')!
+    input.value = 'Synthetic retained embedded model'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    editor.querySelector<HTMLButtonElement>('[data-testid="config-secrets"] [data-testid="secret-replace"]')!.click()
+    await flushPromises()
+    const secret = editor.querySelector<HTMLInputElement>('[data-testid="config-secrets"] input')!
+    secret.value = 'synthetic-embedded-private-replacement'
+    secret.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.vm.configurationDraftCount).toBe(2)
+    const leaving = wrapper.vm.requestLeave('navigate')
+    await flushPromises()
+    const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
+    expect(dialog.querySelector('h2')!.textContent).toContain('离开当前页面')
+    const keep = dialog.querySelector<HTMLButtonElement>('[data-testid="config-leave-keep"]')
+    expect(keep).not.toBeNull()
+    keep!.click()
+    await expect(leaving).resolves.toBe(true)
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.vm.configurationDraftCount).toBe(1)
+    expect(editor.querySelector('[data-testid="config-secrets"] input')).toBeNull()
+    await wrapper.setProps({ active: false })
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+    const returned = document.querySelector('[data-testid="ability-configuration-dialog"]')!
+    expect(returned.querySelector<HTMLInputElement>('[data-testid="config-field-model"] input')!.value).toBe('Synthetic retained embedded model')
+    expect(returned.querySelector('[data-testid="config-secrets"] input')).toBeNull()
+    expect(returned.querySelector('[data-testid="config-receipt"]')).toBeNull()
+    expect(save).not.toHaveBeenCalled()
+  })
+
   it('渲染能力卡片、运行时状态与支持矩阵', async () => {
     const wrapper = mountPage()
     await flushPromises()
@@ -872,7 +914,10 @@ describe('Capability card switch ownership', () => {
     let current = snapshot()
     const saveConfiguration = vi.fn(async (request: any) => {
       current = snapshot(false, '2')
-      return { code: 0, errors: [], receipt: { key: request.key, decision: 0, commitState: 1, applyState: 3 } }
+      return { code: 0, errors: [], replayed: false, currentVersion: "2", receipt: {
+        key: request.key, contractRevision: "cfg-0.3.3", decision: 0, observedVersion: "1", committedVersion: "2",
+        commitState: 1, applyState: 3, steps: [], deviceKeyAssignments: []
+      } } satisfies import("../../src/api/zba").ZbaConfigurationSaveResult
     })
     const wrapper = mountPage(clientWith({ readConfiguration: async () => current, listCapabilities: async () => quotaPage(), saveConfiguration }))
     await toggle(wrapper)
@@ -954,7 +999,11 @@ describe('Capability card switch ownership', () => {
     await toggle(wrapper)
     const reads = readConfiguration.mock.calls.length
     await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true })
-    resolve({ code: 0, receipt: { key: saveConfiguration.mock.calls[0]![0].key, decision: 0, commitState: 1, applyState: 3 } }); await flushPromises()
+    resolve({ code: 0, errors: [], replayed: false, currentVersion: "v2", receipt: {
+      key: saveConfiguration.mock.calls[0]![0].key, contractRevision: "cfg-0.3.3",
+      decision: 0, observedVersion: "v1", committedVersion: "v2", commitState: 1, applyState: 3,
+      steps: [], deviceKeyAssignments: []
+    } } satisfies import("../../src/api/zba").ZbaConfigurationSaveResult); await flushPromises()
     expect(readConfiguration).toHaveBeenCalledTimes(reads); expect(saveConfiguration).toHaveBeenCalledTimes(1)
     expect(wrapper.get(toggleId).attributes('disabled')).toBeDefined()
   })

@@ -149,6 +149,20 @@ export interface ZbaRuntimeLogPage {
   capacity: number
 }
 
+/** 只含安全日志投影；序号用十进制字符串，避免超过 JS 的安全整数。 */
+export interface ZbaRuntimeLogFeedEntry extends ZbaRuntimeLogEntry {
+  id: string
+  sequence: string
+}
+export interface ZbaRuntimeLogFeed {
+  items: ZbaRuntimeLogFeedEntry[]
+  cursor: string
+  hasMore: boolean
+  capacity: number
+  resetReason?: 'expired' | 'restart' | 'ahead' | null
+  omittedCount?: number
+}
+
 export interface ZbaSessionSummary {
   id: string
   name: string
@@ -470,6 +484,17 @@ export interface ZbaConfigurationView {
   registered: ZbaRegisteredConfigurationView
 }
 
+export interface ZbaFieldAddress {
+  field: number
+  object: { kind: 'policy'; target: ZbaPolicyTarget } | null
+}
+
+export interface ZbaConfigurationRuntimeEffect {
+  field: ZbaFieldAddress
+  state: 'current' | 'restartRequired' | 'applyFailed' | 'unknown'
+  restartTarget?: 'botAgent'
+}
+
 export interface ZbaConfigurationReadResult {
   code: ZbaConfigurationResultCode
   version: string
@@ -481,6 +506,7 @@ export interface ZbaConfigurationReadResult {
   secrets: ZbaSecretMetadata[]
   fields: ZbaFieldDescriptor[]
   latestApplyState: ZbaApplyState
+  runtimeEffects?: ZbaConfigurationRuntimeEffect[]
 }
 
 /** 0 = 概览投影（隐藏值），1 = 可编辑投影（带 value）。 */
@@ -537,6 +563,7 @@ export interface ZbaProviderNameEdit {
 /** 一条策略条目写入意图：目标 + 六个字段的完整配置（闭合记录）。 */
 export interface ZbaPolicyEdit {
   target: ZbaPolicyTarget
+  // Only changed policy rows are sent. Each row preserves all unchanged raw fields.
   configuration: ZbaPolicyConfiguration
 }
 
@@ -872,12 +899,13 @@ export class ZbaClient {
    * 读取配置快照。kind=1 返回可编辑投影（字段带 `value`），kind=0 只返回
    * 隐藏投影（字段不带值）。两者都只读；保存走 `/configuration/save`。
    */
-  readConfiguration(kind: ZbaConfigurationReadKind = 1): Promise<ZbaConfigurationReadResult> {
-    return this.request('/configuration/read', {
+  async readConfiguration(kind: ZbaConfigurationReadKind = 1): Promise<ZbaConfigurationReadResult> {
+    const result = await this.request('/configuration/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind })
     }, 'required', isConfigurationReadResult)
+    return { ...result, runtimeEffects: parseRuntimeEffects(result.runtimeEffects) }
   }
 
   listQuotas(): Promise<ZbaQuotaPage> {
@@ -1288,6 +1316,20 @@ export class ZbaClient {
     throw this.invalidResponse(response)
   }
 
+  async listRuntimeLogFeed(cursor?: string, signal?: AbortSignal): Promise<ZbaRuntimeLogFeed> {
+    const query = cursor === undefined ? '' : '?cursor=' + encodeURIComponent(cursor)
+    const response = await this.fetchJson('/logs/feed' + query, { method: 'GET', signal })
+    if (!response.ok) throw this.errorFrom(response)
+    const feed = response.data
+    if (!isRuntimeLogFeed(feed) || (feed.hasMore && feed.cursor === cursor)) throw this.invalidResponse(response)
+    return {
+      capacity: feed.capacity, cursor: feed.cursor, hasMore: feed.hasMore,
+      items: feed.items.map(({ id, sequence, time, level, source, message, redacted }) => ({ id, sequence, time, level, source, message, redacted })),
+      ...(feed.resetReason ? { resetReason: feed.resetReason } : {}),
+      ...(feed.omittedCount === undefined ? {} : { omittedCount: feed.omittedCount })
+    }
+  }
+
   async listTraces(limit = 20): Promise<ZbaTracePage> {
     const params = new URLSearchParams({ limit: String(limit) })
     const response = await this.fetchJson(`/traces?${params.toString()}`, { method: 'GET' }, 'required')
@@ -1352,6 +1394,16 @@ export class ZbaClient {
     }
 
     const controller = new AbortController()
+    const callerSignal = init.signal
+    if (callerSignal?.aborted) throw new ZbaNetworkError('aborted')
+    let cancelRequest: (() => void) | undefined
+    const cancelled = new Promise<never>((_, reject) => {
+      cancelRequest = () => {
+        controller.abort(callerSignal?.reason)
+        reject(new ZbaNetworkError('aborted'))
+      }
+      callerSignal?.addEventListener('abort', cancelRequest, { once: true })
+    })
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -1364,9 +1416,7 @@ export class ZbaClient {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         ...init,
         headers,
-        signal: init.signal
-          ? combineSignals(init.signal, controller.signal)
-          : controller.signal
+        signal: controller.signal
       })
       let text: string
       try {
@@ -1383,12 +1433,13 @@ export class ZbaClient {
     })()
 
     try {
-      return await Promise.race([work, deadline])
+      return await Promise.race([work, deadline, cancelled])
     } catch (error) {
       if (error instanceof ZbaNetworkError) throw error
       throw new ZbaNetworkError(error)
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+      if (cancelRequest) callerSignal?.removeEventListener('abort', cancelRequest)
       work.catch(() => undefined)
     }
   }
@@ -1668,16 +1719,45 @@ function isTracePage(value: unknown): value is ZbaTracePage {
     && isTraceCacheUsage(value.cache)
 }
 
+function isRuntimeLogFeed(value: unknown): value is ZbaRuntimeLogFeed {
+  if (!isRecord(value) || value.capacity !== 600 || !Array.isArray(value.items)
+    || value.items.length > 200 || typeof value.cursor !== 'string'
+    || value.cursor.length === 0 || value.cursor.length > 55 || typeof value.hasMore !== 'boolean'
+    || (value.hasMore && value.items.length === 0)
+    || (value.resetReason != null && !['expired', 'restart', 'ahead'].includes(String(value.resetReason)))
+    || (value.omittedCount !== undefined && (!Number.isSafeInteger(value.omittedCount) || Number(value.omittedCount) < 0))) return false
+  const ids = new Set<string>()
+  let epoch: string | undefined
+  let previous = 0n
+  return value.items.every(item => {
+    if (!isRuntimeLogEntry(item) || !isRecord(item) || typeof item.sequence !== 'string'
+      || !/^[1-9]\d{0,19}$/.test(item.sequence) || typeof item.id !== 'string'
+      || !/^[a-f0-9]{32}:[1-9]\d{0,19}$/.test(item.id)
+      || !item.id.endsWith(':' + item.sequence) || ids.has(item.id)) return false
+    const itemEpoch = item.id.slice(0, 32)
+    if (epoch !== undefined && epoch !== itemEpoch) return false
+    epoch = itemEpoch
+    const sequence = BigInt(item.sequence)
+    if (sequence <= previous) return false
+    previous = sequence
+    ids.add(item.id)
+    return true
+  })
+}
+
+function isRuntimeLogEntry(item: unknown): item is ZbaRuntimeLogEntry {
+  return isRecord(item)
+    && typeof item.time === 'number' && Number.isSafeInteger(item.time)
+    && item.time >= 0 && item.time <= 8.64e15
+    && (item.level === 'info' || item.level === 'warn' || item.level === 'error')
+    && typeof item.source === 'string' && item.source.length <= 64
+    && typeof item.message === 'string' && item.message.length <= 512
+    && typeof item.redacted === 'boolean'
+}
 function isRuntimeLogPage(value: unknown): value is ZbaRuntimeLogPage {
   return isRecord(value) && value.capacity === 600
     && Array.isArray(value.items) && value.items.length <= value.capacity
-    && value.items.every(item => isRecord(item)
-      && typeof item.time === 'number' && Number.isSafeInteger(item.time)
-      && item.time >= 0 && item.time <= 8.64e15
-      && (item.level === 'info' || item.level === 'warn' || item.level === 'error')
-      && typeof item.source === 'string' && item.source.length <= 64
-      && typeof item.message === 'string' && item.message.length <= 512
-      && typeof item.redacted === 'boolean')
+    && value.items.every(isRuntimeLogEntry)
 }
 
 function isTaskCancelResult(value: unknown): value is ZbaTaskCancelResult {
@@ -1876,6 +1956,32 @@ function isSecretMetadata(value: unknown): value is ZbaSecretMetadata {
     && isInteger(value.slot)
     && typeof value.configured === 'boolean'
     && isInteger(value.source)
+}
+
+/** 可选运行态元数据不能破坏旧服务端的读取；未知状态必须降级为未确认。 */
+function parseRuntimeEffects(value: unknown): ZbaConfigurationRuntimeEffect[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.flatMap(item => {
+    if (!isRecord(item) || !isRecord(item.field) || !isInteger(item.field.field)) return []
+    // ZbaJson omits null properties; absent object is the scalar address, normalized below.
+    const address = item.field.object
+    let object: ZbaFieldAddress['object'] = null
+    if (address != null) {
+      if (!isRecord(address) || address.kind !== 'policy' || !isRecord(address.target)) return []
+      const target = address.target
+      if (target.kind === 'accountDefault' && typeof target.platformId === 'string' && typeof target.accountScope === 'string') {
+        object = { kind: 'policy', target: { kind: 'accountDefault', platformId: target.platformId, accountScope: target.accountScope } }
+      } else if (target.kind === 'instance' && isRecord(target.key) && typeof target.key.platformId === 'string'
+        && typeof target.key.accountScope === 'string' && typeof target.key.instanceId === 'string') {
+        object = { kind: 'policy', target: { kind: 'instance', key: { platformId: target.key.platformId, accountScope: target.key.accountScope, instanceId: target.key.instanceId } } }
+      } else return []
+    }
+    const state: ZbaConfigurationRuntimeEffect['state'] = item.state === 'current' || item.state === 'restartRequired' || item.state === 'applyFailed'
+      ? item.state : 'unknown'
+    const field: ZbaFieldAddress = { field: item.field.field, object }
+    return [{ field, state, ...(state === 'restartRequired' && item.restartTarget === 'botAgent'
+      ? { restartTarget: 'botAgent' as const } : {}) }]
+  })
 }
 
 function isConfigurationReadResult(value: unknown): value is ZbaConfigurationReadResult {
@@ -2225,23 +2331,4 @@ function parseJson(text: string): unknown {
   } catch {
     return null
   }
-}
-
-function combineSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any([first, second])
-
-  const controller = new AbortController()
-  if (first.aborted || second.aborted) {
-    controller.abort()
-  } else {
-    // 任一方触发后把两边的监听都摘掉，长寿命 signal 上不留悬挂闭包。
-    const abort = (): void => {
-      first.removeEventListener('abort', abort)
-      second.removeEventListener('abort', abort)
-      controller.abort()
-    }
-    first.addEventListener('abort', abort, { once: true })
-    second.addEventListener('abort', abort, { once: true })
-  }
-  return controller.signal
 }

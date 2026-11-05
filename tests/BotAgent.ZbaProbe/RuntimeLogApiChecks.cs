@@ -85,16 +85,97 @@ internal static class RuntimeLogApiChecks
         foreach (var (name, type) in new[] { ("time", "integer"), ("level", "string"), ("source", "string"),
             ("message", "string"), ("redacted", "boolean") })
             check(entrySchema.GetProperty(name).GetProperty("type").GetString() == type, "OpenAPI log entry field " + name);
+        await CheckFeedAsync(check);
+    }
+
+    private static async Task CheckFeedAsync(Action<bool, string> check)
+    {
+        var backend = DispatchProxy.Create<IZbaBackend, LogBackendProxy>();
+        var probe = (LogBackendProxy)(object)backend;
+        var endpoint = Endpoint(backend);
+        foreach (var token in new string?[] { null, "synthetic-invalid" })
+        {
+            var unauthorized = await endpoint.ProcessAsync(Request(token, feed: true));
+            check(unauthorized.Status == 401, "feed requires valid bearer authorization on each poll");
+            NoStore(unauthorized, check);
+        }
+        check(probe.FeedCalls == 0, "unauthenticated feed never reaches backend");
+        var meta = Json(await endpoint.ProcessAsync(Request(ReadToken) with { Path = "/zba/v1/meta" }));
+        check(meta.GetProperty("features").EnumerateArray().Any(value => value.GetString() == "logs.feed"),
+            "meta advertises the incremental log feed operation");
+        var response = await endpoint.ProcessAsync(Request(ReadToken, feed: true));
+        var page = Json(response);
+        check(response.Status == 200 && probe.LastCursor is null, "feed initial request omits cursor");
+        NoStore(response, check);
+        var item = page.GetProperty("items")[0];
+        check(item.GetProperty("id").GetString() == LogBackendProxy.FeedEpoch.ToString("N") + ":1"
+            && item.GetProperty("sequence").GetString() == "1" && item.GetProperty("time").GetInt64() == 1000
+            && item.GetProperty("level").GetString() == "info" && item.GetProperty("source").GetString() == "runtime"
+            && item.GetProperty("message").GetString() == "已隐藏的日志内容（8 字符）" && item.GetProperty("redacted").GetBoolean(),
+            "feed freezes safe JSON fields with string sequence and stable ID");
+        check(page.GetProperty("capacity").GetInt32() == 600 && !page.GetProperty("hasMore").GetBoolean()
+            && !page.TryGetProperty("resetReason", out _) && !page.TryGetProperty("omittedCount", out _),
+            "normal feed omits reset metadata rather than guessing loss");
+        var cursorText = page.GetProperty("cursor").GetString()!;
+        var delta = await endpoint.ProcessAsync(Request(AdminToken, "cursor=" + Uri.EscapeDataString(cursorText), feed: true));
+        check(delta.Status == 200 && probe.LastCursor?.Sequence == 1, "admin can poll feed using unchanged cursor");
+        NoStore(delta, check);
+        var revoked = await endpoint.ProcessAsync(Request(null, "cursor=" + cursorText, feed: true));
+        check(revoked.Status == 401 && probe.FeedCalls == 2, "a previous authorized poll does not authorize later requests");
+        NoStore(revoked, check);
+
+        var invalidQueries = new[] { "cursor=", "cursor=invalid", "cursor=" + cursorText + "&cursor=" + cursorText,
+            "cursor=" + cursorText[..36] + "01", "cursor=" + cursorText[..36] + "-1",
+            "cursor=" + cursorText[..36] + "9223372036854775808", "cursor=" + new string('x', 56),
+            "cursor=" + Uri.EscapeDataString(cursorText + " "), "limit=200", "offset=0" };
+        var before = probe.FeedCalls;
+        foreach (var query in invalidQueries)
+        {
+            var invalid = await endpoint.ProcessAsync(Request(ReadToken, query, feed: true));
+            check(invalid.Status == 400, "feed rejects malformed, duplicate or unsupported query");
+            NoStore(invalid, check);
+        }
+        check(probe.FeedCalls == before, "invalid cursor cannot call backend");
+        var malformed = await endpoint.ProcessAsync(Request(ReadToken, "cursor=invalid", feed: true));
+        check(Code(malformed) == "invalid_log_cursor", "malformed cursor has stable safe error code");
+        var unavailable = await Endpoint(new SyntheticZbaBackend()).ProcessAsync(Request(ReadToken, feed: true));
+        check(unavailable.Status == 503 && Code(unavailable) == "logs_unavailable", "optional feed defaults to explicit unavailable");
+        NoStore(unavailable, check);
+
+        probe.FeedResponse = new ZbaLogFeedPage([new(LogBackendProxy.FeedEpoch.ToString("N") + ":451", "451", 1000,
+            "info", "runtime", "已隐藏的日志内容（8 字符）", true)],
+            new ZbaLogFeedCursor(LogBackendProxy.FeedEpoch, 451).ToString(), false, 600, "expired", 449);
+        var reset = Json(await endpoint.ProcessAsync(Request(ReadToken, "cursor=" + cursorText, feed: true)));
+        check(reset.GetProperty("resetReason").GetString() == "expired" && reset.GetProperty("omittedCount").GetInt64() == 449
+            && !reset.GetProperty("hasMore").GetBoolean(), "feed preserves explicit reset and exact omission metadata");
+        var route = endpoint.Routes.SingleOrDefault(route => route.Template == "/zba/v1/logs/feed" && route.Method == "GET");
+        check(route is not null && route.Scope == ZbaScope.Read && !route.Public && route.OperationId == "logs.feed"
+            && route.ResponseSchema == "ZbaLogFeedPage", "feed route is additive authenticated read-only JSON");
+        var openapi = Json(await endpoint.ProcessAsync(new ZbaRequest("GET", "/zba/v1/openapi.json", "",
+            new Dictionary<string, string> { ["Authorization"] = "Bearer " + ReadToken }, [], "synthetic-client")));
+        var operation = openapi.GetProperty("paths").GetProperty("/zba/v1/logs/feed").GetProperty("get");
+        check(operation.GetProperty("operationId").GetString() == "logs.feed", "OpenAPI exposes separate feed operation");
+        var parameter = operation.GetProperty("parameters").EnumerateArray().Single(value => value.GetProperty("name").GetString() == "cursor");
+        check(!parameter.GetProperty("required").GetBoolean() && parameter.GetProperty("schema").GetProperty("maxLength").GetInt32() == 55,
+            "OpenAPI declares optional bounded cursor and fixed server pagination");
+        var schema = openapi.GetProperty("components").GetProperty("schemas").GetProperty("ZbaLogFeedPage");
+        check(schema.GetProperty("properties").GetProperty("items").GetProperty("maxItems").GetInt32() == 200
+            && schema.GetProperty("properties").GetProperty("capacity").GetProperty("const").GetInt32() == 600,
+            "OpenAPI records page and ring bounds");
+        var entry = openapi.GetProperty("components").GetProperty("schemas").GetProperty("ZbaLogFeedEntry");
+        check(entry.GetProperty("properties").GetProperty("sequence").GetProperty("type").GetString() == "string"
+            && entry.GetProperty("properties").GetProperty("message").GetProperty("maxLength").GetInt32() == 512,
+            "OpenAPI preserves precise sequence strings and safe projection bounds");
     }
 
     private static ZbaEndpoint Endpoint(IZbaBackend backend) => new(backend,
         new ZbaOptions { ReadToken = ReadToken, AdminToken = AdminToken },
         () => DateTimeOffset.UnixEpoch, "synthetic", "synthetic-logs");
-    private static ZbaRequest Request(string? token, string query = "")
+    private static ZbaRequest Request(string? token, string query = "", bool feed = false)
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (token is not null) headers["Authorization"] = "Bearer " + token;
-        return new("GET", "/zba/v1/logs", query, headers, [], "203.0.113.10");
+        return new("GET", feed ? "/zba/v1/logs/feed" : "/zba/v1/logs", query, headers, [], "synthetic-client");
     }
     private static JsonElement Json(ZbaResponse response) => JsonDocument.Parse(response.Body).RootElement.Clone();
     private static string? Code(ZbaResponse response) => Json(response).GetProperty("error").GetProperty("code").GetString();
@@ -105,8 +186,20 @@ internal static class RuntimeLogApiChecks
     {
         public int Calls { get; private set; }
         public int LastLimit { get; private set; }
+        public static readonly Guid FeedEpoch = Guid.ParseExact("10001000100010001000100010001000", "N");
+        public int FeedCalls { get; private set; }
+        public ZbaLogFeedCursor? LastCursor { get; private set; }
+        public ZbaLogFeedPage FeedResponse { get; set; } = new(
+            [new(FeedEpoch.ToString("N") + ":1", "1", 1000, "info", "runtime", "已隐藏的日志内容（8 字符）", true)],
+            new ZbaLogFeedCursor(FeedEpoch, 1).ToString(), false, 600);
         protected override object? Invoke(MethodInfo? method, object?[]? arguments)
         {
+            if (method?.Name == nameof(IZbaBackend.ReadLogFeedAsync))
+            {
+                FeedCalls++;
+                LastCursor = (ZbaLogFeedCursor?)arguments![1];
+                return ValueTask.FromResult(FeedResponse);
+            }
             if (method?.Name != nameof(IZbaBackend.ListLogsAsync)) throw new InvalidOperationException("Unexpected synthetic backend operation");
             Calls++;
             LastLimit = (int)arguments![1]!;

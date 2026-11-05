@@ -83,19 +83,20 @@ function actionDraft(value: ZbaActionRuleValue | undefined): { kind: number; tex
 
 /** 从可编辑投影取一条条目的基线草稿。 */
 export function policyBaseline(entry: ZbaPlatformPolicyEntryView): PolicyRowDraft {
-  const group = listKind(entry.groupWhitelist.value)
-  const direct = listKind(entry.privateWhitelist.value)
-  const actions = actionDraft(entry.allowedActions.value)
+  // Inherited values are resolved previews, never stored overrides.
+  const group = listKind(entry.groupWhitelist.userMode === 2 ? entry.groupWhitelist.value : undefined)
+  const direct = listKind(entry.privateWhitelist.userMode === 2 ? entry.privateWhitelist.value : undefined)
+  const actions = actionDraft(entry.allowedActions.userMode === 2 ? entry.allowedActions.value : undefined)
   return {
-    enabled: entry.enabled.value ?? 0,
-    chatEnabled: entry.chatEnabled.value ?? 0,
-    groupKind: group.kind,
+    enabled: entry.enabled.userMode === 2 ? entry.enabled.value ?? 0 : 0,
+    chatEnabled: entry.chatEnabled.userMode === 2 ? entry.chatEnabled.value ?? 0 : 0,
+    groupKind: group.kind === 1 && !group.text.trim() ? 3 : group.kind,
     groupValue: group.text,
-    privateKind: direct.kind,
+    privateKind: direct.kind === 1 && !direct.text.trim() ? 3 : direct.kind,
     privateValue: direct.text,
     actionKind: actions.kind,
     actions: actions.text,
-    features: (entry.features.value ?? []).map((item) => ({ feature: item.feature, enabled: item.enabled }))
+    features: (entry.features.userMode === 2 ? entry.features.value ?? [] : []).map((item) => ({ feature: item.feature, enabled: item.enabled }))
   }
 }
 
@@ -141,14 +142,14 @@ export function splitActions(text: string): string[] {
 
 function listRule(kind: number, text: string): ZbaListRuleValue {
   if (kind === 2) return { kind: 2 } as ZbaListRuleValue
-  if (kind === 1) return { kind: 1, value: text }
+  if (kind === 1 || kind === 3) return { kind: 1, value: kind === 3 ? '' : text }
   return { kind: 0 } as ZbaListRuleValue
 }
 
 /**
  * 把草稿合并进 patch 的 `registered.policies`。
  *
- * 只发**改过的行**；其余行一个字节不动。动作名的合法性在这一层先挡一次，
+ * 只发**改过的行**；行内保持完整原始配置，绝不写入生效展示值。动作名的合法性在这一层先挡一次，
  * 免得整批保存被服务端的 `invalid_policy_actions` 拒掉。
  */
 export function applyPolicyEdits(
@@ -166,7 +167,8 @@ export function applyPolicyEdits(
       errors.push(`策略 ${key}：条目已不存在，请刷新后重试`)
       continue
     }
-    if (!policyDirty(row, policyBaseline(entry))) continue
+    const before = policyBaseline(entry)
+    if (!policyDirty(row, before)) continue
     const actions = splitActions(row.actions)
     if (row.actionKind === 0 && actions.length > 0) {
       errors.push(`策略 ${policyTitle(entry.target)}：跟随基线时不能保留动作名单`)

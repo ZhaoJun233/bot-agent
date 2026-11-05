@@ -223,6 +223,7 @@ public sealed class SettingsHotReload
                 && saved.Receipt is { Decision: ConfigurationDecision.NoChanges, CommitState: CommitState.NotCommitted })
                 applyMood?.Invoke();
             if (!FirstChanged(saved)) return (previous, saved, false);
+            _box.RuntimeEffects.BeginApply(projectTts);
             AppSettings next;
             try { next = _readCommitted!(saved.Receipt!.CommittedVersion!.Value, previous, changes, mutations); }
             catch (Exception) { return (previous, saved with { Code = ConfigurationResultCode.StorageUnavailable }, false); }
@@ -238,6 +239,7 @@ public sealed class SettingsHotReload
         {
             bool Report(ApplyStepReport report)
             {
+                if (report.Step != ApplyStep.TtsFileProjection || projectTts) _box.RuntimeEffects.Record(report);
                 var recorded = _configuration!.RecordApply(caller, key, ImmutableArray.Create(report));
                 saved = saved with { Code = recorded.Code, Receipt = recorded.Receipt ?? saved.Receipt };
                 return recorded.Code == ConfigurationResultCode.Ok;

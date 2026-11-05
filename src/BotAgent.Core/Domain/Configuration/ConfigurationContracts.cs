@@ -240,6 +240,8 @@ public sealed record ConfigurationReadResult(
     ImmutableArray<SecretMetadata> Secrets,
     ImmutableArray<FieldDescriptor> Fields, ApplyState LatestApplyState)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<ConfigurationRuntimeEffect>? RuntimeEffects { get; init; }
     public override string ToString() => "ConfigurationReadResult";
 }
 public sealed record ConfigurationView(

@@ -14,7 +14,7 @@ This repository is a privacy-filtered public mirror of a chat application. Never
 
 ## Local verification
 
-Run these commands at the repository root with .NET 10, Node.js 22.22.2+ (22.x; alternatively 24.15.0+ on 24.x or 26+), and Python 3.12. On Windows, use PowerShell 7 (`pwsh`) and check `$LASTEXITCODE` after every native command; stop the affected verification chain on failure. Do not inherit production configuration or credentials into synthetic runs: clear `BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `MINIMAX_*`, `TTS_*`, `HARNESS_*`, and `HEALTH_PORT` in an isolated verification process. Data-dependent standalone probes must use fresh synthetic temporary roots; the integration scenarios create their own roots, so do not supply a parent data-root alias that overrides them.
+Run these commands at the repository root with .NET 10, Node.js 22, and Python 3.12. On Windows, use PowerShell 7 (`pwsh`) and check `$LASTEXITCODE` after every native command; stop the affected verification chain on failure. Do not inherit production configuration or credentials into synthetic runs: clear `BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `MINIMAX_*`, `TTS_*`, `HARNESS_*`, and `HEALTH_PORT` in an isolated verification process. Data-dependent standalone probes must use fresh synthetic temporary roots; the integration scenarios create their own roots, so do not supply a parent data-root alias that overrides them.
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release

@@ -13,6 +13,11 @@ async function connect(page: import('@playwright/test').Page, token: string): Pr
 }
 
 test('插件市场：管理员能打开对话框并看到信任边界', async ({ page }) => {
+  // This UI contract must not depend on the public index responding within eight seconds.
+  await page.route('**/zba/v1/plugins/catalog', route => route.fulfill({ json: {
+    revision: 'synthetic-catalog-v1', source: 'https://github.com/example-owner/example-index',
+    trustNotice: '插件不是沙箱：请仅安装你信任的代码。', categories: [], plugins: []
+  } }))
   await connect(page, ADMIN)
   await page.getByTestId('cap-enable-admin').click()
   await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
@@ -30,6 +35,20 @@ test('插件市场：管理员能打开对话框并看到信任边界', async ({
   await expect(list.or(empty)).toBeVisible()
   await page.getByTestId('marketplace-close').click()
   await expect(dialog).toHaveCount(0)
+})
+
+test('插件市场：目录失败时显示错误并结束加载，保留管理对话框', async ({ page }) => {
+  await page.route('**/zba/v1/plugins/catalog', route => route.fulfill({
+    status: 503, json: { error: { code: 'service_unavailable', message: 'Synthetic catalogue unavailable' } }
+  }))
+  await connect(page, ADMIN)
+  await page.getByTestId('cap-enable-admin').click()
+  await page.getByTestId('cap-marketplace').click()
+  const dialog = page.getByTestId('marketplace')
+  await expect(dialog.getByRole('alert')).toBeVisible()
+  await expect(dialog.getByText('正在读取市场目录…', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByTestId('marketplace-source-input')).toBeVisible()
+  await expect(dialog.getByTestId('marketplace-close')).toBeEnabled()
 })
 
 test('插件市场：只读令牌打开时给出启用管理员的入口', async ({ page }) => {

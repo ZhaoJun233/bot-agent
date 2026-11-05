@@ -4,6 +4,7 @@ import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaInstalledPlugins, 
 import { beginOperation, getPendingOperation, markOperation, pendingOperations, type PendingOperation } from '../../shared/sync/pending-operations'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
+import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import DeclaredPluginSettings from './DeclaredPluginSettings.vue'
 import PluginCatalogBrowser from './PluginCatalogBrowser.vue'
@@ -54,7 +55,7 @@ let alive = true
 let settingsEpoch = 0
 let catalogEpoch = 0
 let sourceEpoch = 0
-const discardAction = ref<null | 'switch' | 'close' | 'leave'>(null)
+const discardAction = ref<null | 'switch' | 'close' | 'leave' | 'reload'>(null)
 let switchTarget: PluginCatalogEntry | null = null
 let leaveResolve: ((value: boolean) => void) | null = null
 
@@ -88,9 +89,10 @@ function confirmDiscard(): void {
   if (action === 'switch' && target) void selectSettings(target)
   else if (action === 'close') emit('close')
   else if (action === 'leave') { leaveResolve?.(true); leaveResolve = null }
+  else if (action === 'reload' && settingsEntry.value) void loadSettings(settingsEntry.value)
 }
-async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement | null): Promise<boolean> {
-  if (reason === 'lock') { cancelDiscard(); discardSecretsOnLeave(); return true }
+async function requestLeave(reason: 'lock' | 'downgrade' | 'navigate', _trigger?: HTMLElement | null): Promise<boolean> {
+  if (reason === 'lock' || reason === 'navigate') { cancelDiscard(); discardSecretsOnLeave(); return true }
   // Already-dispatched requests live in the shared registry; never delay authentication cleanup.
   if (!dirty.value || settingsPending.value) { discardSecretsOnLeave(); return true }
   cancelDiscard(); discardAction.value = 'leave'
@@ -101,7 +103,8 @@ function close(): void {
   if (dirty.value && !settingsPending.value) { discardAction.value = 'close'; return }
   discardSecretsOnLeave(); emit('close')
 }
-defineExpose({ requestLeave, discardSecretsOnLeave })
+useDraftProtection(() => dirty.value || settingsBlocked.value || busy.value)
+defineExpose({ requestLeave, discardSecretsOnLeave, draftCount: computed(() => dirty.value ? 1 : 0) })
 
 async function loadCatalog(showLoading = true): Promise<void> {
   if (!props.active) return
@@ -235,6 +238,7 @@ async function saveSettings(): Promise<void> {
 function reloadSettings(): void {
   const entry = settingsEntry.value
   if (!entry || settingsBusy.value || settingsLoading.value || !props.active) return
+  if (dirty.value && !settingsPending.value) { discardAction.value = 'reload'; return }
   discardSecretsOnLeave(); void loadSettings(entry)
 }
 function reconcileSettings(): void {
@@ -350,18 +354,18 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); cancelDiscard(); alive = false;
 </template>
 
 <style scoped>
-.eyebrow { color: var(--accent-deep); font-size: 11px; font-weight: 650; letter-spacing: .1em; }
-.muted, .field-hint { color: var(--text-muted); font-size: 13px; line-height: 1.7; }
-.notice { overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-block: 12px; background: var(--surface-muted); color: var(--text-muted); font-size: 13px; line-height: 1.65; }
+.eyebrow { color: var(--accent-deep); font-size: 0.75rem; font-weight: 650; letter-spacing: .1em; }
+.muted, .field-hint { color: var(--text-muted); font-size: 0.8125rem; line-height: 1.7; }
+.notice { overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-block: 12px; background: var(--surface-muted); color: var(--text-muted); font-size: 0.8125rem; line-height: 1.65; }
 .notice.warn { background: var(--warn-bg); color: var(--warn-text); border-color: var(--border-strong); }
 .notice.bad { background: var(--bad-bg); color: var(--bad-text); border-color: var(--border-strong); }
 .notice p { margin: 0 0 8px; }
 .source-panel, .settings-panel { border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 22px 0; display: grid; gap: 12px; min-width: 0; background: var(--surface); }
 .source-panel { background: var(--surface-muted); }
-.source-panel h3, .settings-panel h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; letter-spacing: -.01em; }
-.source-panel .field-hint { margin: 0; font-size: 12px; }
+.source-panel h3, .settings-panel h3 { margin: 0; font-size: 0.875rem; overflow-wrap: anywhere; letter-spacing: -.01em; }
+.source-panel .field-hint { margin: 0; font-size: 0.75rem; }
 .source-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
-.source-row .grow { flex: 1 1 260px; display: grid; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); min-width: 0; }
+.source-row .grow { flex: 1 1 260px; display: grid; gap: 6px; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); min-width: 0; }
 .source-row input { width: 100%; min-width: 0; min-height: 36px; border-radius: 8px; background: var(--surface); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 button { min-height: 36px; border-radius: 8px; }

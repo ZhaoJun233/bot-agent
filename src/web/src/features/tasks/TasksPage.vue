@@ -17,6 +17,7 @@ import {
 import { registerAppResources } from '../../shared/sync/app-resources'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { newNonce, nowSeconds } from '../configuration/draft'
 import {
   activePending,
@@ -543,6 +544,8 @@ const prompt = ref('')
 const sessionId = ref('')
 const sourceKey = ref('')
 const timeoutSeconds = ref(120)
+const hasDraft = computed(() => Boolean(prompt.value || sessionId.value || sourceKey.value) || timeoutSeconds.value !== 120)
+useDraftProtection(() => hasDraft.value || livePending.value !== null)
 let draftRevision = 0
 watch([prompt, sourceKey, sessionId, timeoutSeconds], () => { draftRevision += 1 }, { flush: 'sync' })
 const submitBlockedNote = ref<string | null>(null)

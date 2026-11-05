@@ -88,6 +88,7 @@ internal static partial class ZbaOpenApi
             });
         }
 
+        if (template == "/zba/v1/logs/feed") parameters.Add(LogFeedCursorParameter());
         return parameters;
     }
 
@@ -154,6 +155,8 @@ internal static partial class ZbaOpenApi
         ["ZbaLogEntry"] = Object(("time", Integer()), ("level", String()), ("source", String()),
             ("message", String()), ("redacted", Boolean())),
         ["ZbaLogPage"] = Object(("items", Array(Ref("ZbaLogEntry"))), ("capacity", Integer())),
+        ["ZbaLogFeedEntry"] = LogFeedEntrySchema(),
+        ["ZbaLogFeedPage"] = LogFeedPageSchema(),
         ["ZbaError"] = Object(("code", String()), ("message", String()), ("reason", NullableString()), ("backendCode", Integer())),
         ["ZbaHealth"] = Object(("status", String()), ("ready", Boolean()), ("configured", Boolean()),
             ("contractVersion", String()), ("checkedAt", String())),
