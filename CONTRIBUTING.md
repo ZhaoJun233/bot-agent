@@ -14,7 +14,7 @@
 
 ## 本地验证
 
-在仓库根目录执行，需要 .NET 10、Node.js 22、Python 3.12。Windows 上用 PowerShell 7（`pwsh`），每条原生命令之后都要检查 `$LASTEXITCODE`，失败就停掉整条验证链。**不要**把生产配置或凭据带进合成运行：在隔离的验证进程里清空 `BOTAGENT_*`、`QQCHAT_*`、`OPENAI_*`、`MINIMAX_*`、`TTS_*`、`HARNESS_*`、`HEALTH_PORT`。依赖数据的独立探针必须用全新的合成临时根目录；集成场景会自建根目录，所以不要给它传一个会覆盖掉它的父级数据根别名。
+在仓库根目录执行，需要 .NET 10、Node.js 22.22.2+（22.x；也支持 24.15.0+ 的 24.x 或 26+）、Python 3.12。Windows 上用 PowerShell 7（`pwsh`），每条原生命令之后都要检查 `$LASTEXITCODE`，失败就停掉整条验证链。**不要**把生产配置或凭据带进合成运行：在隔离的验证进程里清空 `BOTAGENT_*`、`QQCHAT_*`、`OPENAI_*`、`MINIMAX_*`、`TTS_*`、`HARNESS_*`、`HEALTH_PORT`。依赖数据的独立探针必须用全新的合成临时根目录；集成场景会自建根目录，所以不要给它传一个会覆盖掉它的父级数据根别名。
 
 ```sh
 dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
