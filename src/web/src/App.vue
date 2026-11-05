@@ -328,14 +328,18 @@ async function showOverview(event?: MouseEvent): Promise<void> {
   view.value = 'overview'
 }
 
-async function openCapabilities(event?: MouseEvent): Promise<void> {
-  if (view.value === 'capabilities' || !(await allowNavigation(event))) return
+async function openCapabilities(event?: MouseEvent, owner?: string): Promise<void> {
+  const session = sessionGeneration
+  if (view.value === 'capabilities' || !(await allowNavigation(event)) || session !== sessionGeneration) return
   const firstVisit = !capabilitiesMounted.value
   capabilitiesMounted.value = true
   view.value = 'capabilities'
   await nextTick()
   // 首次进入由 onMounted 读取；再次进入只重读目录，待核对的操作键保留。
   if (!firstVisit) await capabilitiesPage.value?.reload()
+  if (owner && view.value === 'capabilities' && session === sessionGeneration) {
+    capabilitiesPage.value?.openSettingsById(owner, navTrigger(event))
+  }
 }
 
 async function openTasks(event?: MouseEvent): Promise<void> {
@@ -735,7 +739,7 @@ onMounted(load)
             :client="client"
             :mode="mode"
             :writes-enabled="compatibility.writesEnabled"
-            @open-capabilities="openCapabilities()"
+            @open-capabilities="openCapabilities(undefined, $event)"
             @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
           />

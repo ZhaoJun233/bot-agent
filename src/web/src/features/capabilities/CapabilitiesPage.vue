@@ -23,9 +23,8 @@ import { useModalIsolation } from '../../shared/ui/modal-isolation'
 import BreakableId from '../../shared/ui/BreakableId.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
-import CapabilityConfigurationDialog from './CapabilityConfigurationDialog.vue'
+import CapabilitySettingsHost from './CapabilitySettingsHost.vue'
 import { configurationCapabilities, configurationFor, type CapabilityConfiguration } from './configuration-ownership'
-import TokenQuotaDialog from './TokenQuotaDialog.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
 import { protocolLabel } from './provider-protocols'
@@ -48,8 +47,9 @@ const emit = defineEmits<{
   'auth-expired': [error: UiError]
 }>()
 
-const kinds: Array<{ value: ZbaManagedKind | 'all'; label: string }> = [
+const kinds: Array<{ value: ZbaManagedKind | 'all' | 'system'; label: string }> = [
   { value: 'all', label: '全部' },
+  { value: 'system', label: '系统模块' },
   { value: 0, label: '平台驱动' },
   { value: 1, label: '插件' },
   { value: 2, label: '模型提供商' },
@@ -106,7 +106,7 @@ const context = ref<{ generation: string; contractRevision: string } | null>(nul
 const contextError = ref<UiError | null>(null)
 const items = ref<ZbaManagedDescriptor[]>([])
 const nextCursor = ref<string | null>(null)
-const kindFilter = ref<ZbaManagedKind | 'all'>('all')
+const kindFilter = ref<ZbaManagedKind | 'all' | 'system'>('all')
 const loading = ref(false)
 const error = ref<UiError | null>(null)
 const pageError = ref<UiError | null>(null)
@@ -195,46 +195,44 @@ const formatter = new Intl.DateTimeFormat('zh-CN', {
 
 // ── 插件设置弹窗 ───────────────────────────────────────────────
 const settingsTarget = ref<{ capability: CapabilityConfiguration; trigger: HTMLElement | null } | null>(null)
-const configurationDialog = ref<InstanceType<typeof CapabilityConfigurationDialog> | null>(null)
-const standaloneConfigurations = configurationCapabilities().filter(item => !item.pluginKey)
+const configurationDialog = ref<InstanceType<typeof CapabilitySettingsHost> | null>(null)
+const systemConfigurations = computed(() => configurationCapabilities().filter(item => !item.pluginKey))
+const visibleSystemConfigurations = computed(() => {
+  if (kindFilter.value !== 'all' && kindFilter.value !== 'system') return []
+  const query = search.value.trim().toLocaleLowerCase()
+  return systemConfigurations.value.filter(item => !query ||
+    [item.id, item.title, item.summary].some(value => value.toLocaleLowerCase().includes(query)))
+})
 function openCapabilityConfiguration(capability: CapabilityConfiguration, event?: MouseEvent): void {
-  if (settingsTarget.value || quotaTarget.value) return
-  settingsTrigger = eventTrigger(event)
-  settingsTarget.value = { capability, trigger: settingsTrigger }
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  settingsTarget.value = { capability, trigger: eventTrigger(event) }
 }
-let settingsTrigger: HTMLElement | null = null
-// Keep quota intents mounted across navigation; an unresolved key must survive hiding.
-const quotaTarget = ref<{ trigger: HTMLElement | null } | null>(null)
-
 function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | undefined {
   return descriptor.key.kind === 'plugin' ? settingsFor(descriptor.key.key) : undefined
 }
-
 function openSettings(descriptor: ZbaManagedDescriptor, event?: MouseEvent): void {
-  const spec = pluginSpec(descriptor)
-  if (!spec || pluginCards.value.some(card => cardClient(card) === props.client && card.busy)) return
-  if (spec.pluginKey === 'preset.feature.token-quota') {
-    quotaTarget.value ??= { trigger: eventTrigger(event) }
-    return
-  }
-  settingsTrigger = eventTrigger(event)
-  const capability = configurationFor(spec.pluginKey)
-  if (capability) openCapabilityConfiguration(capability, event)
+  if (descriptor.key.kind !== 'plugin' || pluginCards.value.some(card => cardClient(card) === props.client && card.busy)) return
+  openSettingsById(descriptor.key.key, eventTrigger(event))
 }
-
-function closeSettings(saved = true): void {
+function openSettingsById(id: string, trigger?: HTMLElement | null): void {
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  const descriptor = items.value.find(item => item.key.kind === 'plugin' && item.key.key === id)
+  const capability = configurationFor(id) ?? {
+    id, kind: 'plugin' as const, pluginKey: id, title: descriptor ? capabilityTitle(descriptor.displayName, descriptor.key) : id,
+    summary: '此插件声明的配置与凭据', sections: [], secrets: [], editor: { type: 'declared' as const }
+  }
+  settingsTarget.value = { capability, trigger: trigger ?? pageHeading.value }
+}
+function closeSettings(): void {
+  const trigger = settingsTarget.value?.trigger
   settingsTarget.value = null
-  const trigger = settingsTrigger
-  settingsTrigger = null
   void nextTick(() => restoreFocus(trigger, pageHeading.value))
-  // 保存过：重读目录，让卡片上的运行状态/开关跟上。
-  if (saved) void load(undefined, 'background')
+  void load(undefined, 'background')
 }
 
 // Provider editors remain mounted while hidden so an unconfirmed operation key survives navigation.
 const providerTarget = ref<{ key?: string; trigger: HTMLElement | null } | null>(null)
 const providerDialog = ref<InstanceType<typeof ProviderEditorDialog> | null>(null)
-const quotaDialog = ref<InstanceType<typeof TokenQuotaDialog> | null>(null)
 const marketplaceDialog = ref<InstanceType<typeof PluginMarketplaceDialog> | null>(null)
 const providerViews = ref<ZbaProviderConfigurationView[]>([])
 const configurationRecoveries = computed(() => pendingOperations(props.client, 'configuration').filter(item => item.state !== 'settled'))
@@ -259,23 +257,31 @@ async function checkConfigurationRecovery(record: PendingOperation): Promise<voi
   } finally { if (client === props.client) recoveryChecking.value = null }
 }
 function openProvider(key?: string, event?: MouseEvent): void {
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
   providerTarget.value = { key, trigger: eventTrigger(event) }
 }
 function providerView(item: ZbaManagedDescriptor): ZbaProviderConfigurationView | undefined {
   return item.key.kind === 'provider' ? providerViews.value.find((provider) => provider.key === item.key.key) : undefined
 }
 // ── 插件市场弹窗 ───────────────────────────────────────────────
-/** 只记住「一眼插件 id」，打开弹窗后自动滚到它的声明设置；弹窗是 v-if 挂载，
- *  所以清单目录只在用户打开市场时才读取，页面挂载不发任何插件请求。 */
+/** 记住要选中的插件包；市场只处理数据源与安装管理。
+ *  弹窗按需挂载，页面初始化不读取插件市场目录。 */
 const marketplaceTarget = ref<{ focusPluginId?: string; trigger: HTMLElement | null } | null>(null)
 function openMarketplace(focusPluginId?: string, event?: MouseEvent): void {
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
   marketplaceTarget.value = { focusPluginId, trigger: eventTrigger(event) }
+}
+function openMarketplaceSettings(pluginId: string): void {
+  // Marketplace emits only after its own operation/leave guard permits the hand-off.
+  const trigger = marketplaceTarget.value?.trigger
+  marketplaceTarget.value = null
+  void nextTick(() => openSettingsById(pluginId, trigger))
 }
 function closeMarketplace(): void {
   const trigger = marketplaceTarget.value?.trigger ?? null
   marketplaceTarget.value = null
   void nextTick(() => restoreFocus(trigger, pageHeading.value))
-  // 安装/卸载/设置都可能改变卡片的运行状态：关闭时后台重读一次目录。
+  // 安装/更新/卸载都可能改变卡片状态：关闭时后台重读一次目录。
   void load(undefined, 'background')
 }
 
@@ -376,6 +382,7 @@ const filterCount = computed(() => items.value.length)
 // Search only the loaded descriptors; pagination and server category filters retain their contracts.
 const search = ref('')
 const visibleItems = computed(() => {
+  if (kindFilter.value === 'system') return []
   const query = search.value.trim().toLocaleLowerCase()
   if (!query) return items.value
   return items.value.filter((item) => [
@@ -540,7 +547,7 @@ async function load(cursor?: string, mode: 'initial' | 'interactive' | 'backgrou
   await loadContext()
   try {
     const page = await props.client.listCapabilities({
-      kind: kindFilter.value === 'all' ? undefined : kindFilter.value,
+      kind: typeof kindFilter.value === 'number' ? kindFilter.value : undefined,
       limit: 100,
       cursor
     })
@@ -593,7 +600,7 @@ function attachScheduler(client: ZbaClient): void {
  * 筛选在加载期间禁用：之前是「点了没反应但按钮已经亮起」，
  * 迟到的响应还会覆盖列表，让标签与内容不一致。
  */
-function changeFilter(value: ZbaManagedKind | 'all'): void {
+function changeFilter(value: ZbaManagedKind | 'all' | 'system'): void {
   if (loading.value || kindFilter.value === value) return
   kindFilter.value = value
   void load()
@@ -1284,7 +1291,6 @@ function focusRecord(record: OperationRecord): void {
 function resetForSession(): void {
   ownership += 1
   providerTarget.value = null
-  quotaTarget.value = null
   settingsTarget.value = null
   providerViews.value = []
   switchSnapshot.value = null
@@ -1379,7 +1385,7 @@ function discardEditorSecrets(): void {
 async function requestEditorLeave(reason: 'lock' | 'downgrade' | 'navigate', trigger?: HTMLElement | null): Promise<boolean> {
   // Lock clears secrets immediately; receipt keys remain in the identity-scoped registry.
   if (reason === 'lock') { discardEditorSecrets(); return true }
-  for (const editor of [configurationDialog.value, providerDialog.value, quotaDialog.value, marketplaceDialog.value]) {
+  for (const editor of [configurationDialog.value, providerDialog.value, marketplaceDialog.value]) {
     if (editor && !(await editor.requestLeave(reason, trigger))) return false
   }
   discardEditorSecrets()
@@ -1387,11 +1393,11 @@ async function requestEditorLeave(reason: 'lock' | 'downgrade' | 'navigate', tri
 }
 defineExpose({
   reload: () => load(),
+  openSettingsById,
   requestLeave: requestEditorLeave,
   discardSecretsOnLeave: discardEditorSecrets,
   configurationDraftCount: computed(() => (configurationDialog.value?.draftCount ?? 0)
-    + (providerDialog.value?.draftCount ?? 0) + (marketplaceDialog.value?.draftCount ?? 0)
-    + (quotaDialog.value?.draftCount ?? 0)),
+    + (providerDialog.value?.draftCount ?? 0) + (marketplaceDialog.value?.draftCount ?? 0)),
   describe: () => ({ items: items.value.length, operations: operations.value.length })
 })
 </script>
@@ -1472,16 +1478,6 @@ defineExpose({
       </div>
     </div>
 
-    <section class="ability-settings" aria-labelledby="ability-settings-title" data-testid="ability-settings">
-      <h2 id="ability-settings-title">能力配置</h2>
-      <p>按功能管理运行参数与凭据。插件设置仍在对应插件卡片中，基础配置页只保留通用必需项。</p>
-      <div class="ability-settings-grid">
-        <button v-for="capability in standaloneConfigurations" :key="capability.id" type="button"
-          :data-testid="'ability-settings-' + capability.id" :disabled="settingsTarget !== null || quotaTarget !== null" @click="openCapabilityConfiguration(capability, $event)">
-          <strong>{{ capability.title }}</strong><span>{{ capability.summary }}</span>
-        </button>
-      </div>
-    </section>
     <ErrorNotice :error="contextError" title="读取配置代际失败" />
     <p v-if="contextError" class="inline-notice warn" data-testid="cap-context-error">
       没有配置代际就不能提交动作；能力目录仍可浏览。
@@ -1494,14 +1490,29 @@ defineExpose({
     <p v-if="abortedNotice" class="inline-notice warn" data-testid="cap-aborted" role="status">{{ abortedNotice }}</p>
 
     <p v-if="loading && items.length === 0" class="empty-state" data-testid="cap-loading">正在读取能力目录…</p>
-    <p v-else-if="!error && items.length === 0" class="empty-state" data-testid="cap-empty">没有已登记的能力。</p>
+    <p v-else-if="!error && items.length === 0 && visibleSystemConfigurations.length === 0" class="empty-state" data-testid="cap-empty">没有已登记的能力。</p>
 
-    <div v-else-if="search.trim() && visibleItems.length === 0" class="empty-state cap-search-empty" data-testid="cap-search-empty">
+    <div v-else-if="search.trim() && visibleItems.length === 0 && visibleSystemConfigurations.length === 0" class="empty-state cap-search-empty" data-testid="cap-search-empty">
       <strong>没有匹配的能力</strong>
       <p>尝试其他名称、标识或运行状态，或继续加载下一页。</p>
       <button type="button" class="tonal" @click="search = ''">清除搜索</button>
     </div>
     <div class="cap-grid">
+      <article v-for="capability in visibleSystemConfigurations" :key="capability.id" class="cap-card"
+        :data-testid="'cap-system-card-' + capability.id" :aria-labelledby="'cap-system-title-' + capability.id">
+        <header class="cap-card-head">
+          <div class="cap-title">
+            <p class="cap-kind">系统模块</p>
+            <h2 class="cap-name" :id="'cap-system-title-' + capability.id">{{ capability.title }}</h2>
+          </div>
+        </header>
+        <p class="cap-reason">{{ capability.summary }}</p>
+        <footer class="cap-card-foot">
+          <button type="button" class="tonal cap-settings" :data-testid="'ability-settings-' + capability.id"
+            :aria-label="'设置 ' + capability.title" :disabled="settingsTarget !== null"
+            @click="openCapabilityConfiguration(capability, $event)">设置</button>
+        </footer>
+      </article>
       <template v-for="card in cards" :key="card.id">
       <article v-for="item in [card.descriptor]" :key="keyIdentity(item.key)" v-show="cardVisible(card)"
         class="cap-card"
@@ -1526,7 +1537,7 @@ defineExpose({
           :client="props.client" :plugin-key="item.key.key" :compact="true" :configuration="currentCard(card.id)?.configuration"
           :title="capabilityTitle(item.displayName, item.key)" :runtime-state="item.runtimeState"
           :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active && cardClients.get(Number(card.id)) === props.client"
-          :blocked="!!quotaTarget || !!settingsTarget"
+          :blocked="!!settingsTarget"
           @busy="value => { const owner = currentCard(card.id); if (owner) owner.busy = value }"
           @pinned="value => { const owner = currentCard(card.id); if (owner) owner.pinned = value }"
           @saved="load(undefined, 'background')" @auth-expired="value => emit('auth-expired', value)" />
@@ -1581,7 +1592,7 @@ defineExpose({
         <footer class="cap-card-foot">
           <button v-if="item.key.kind === 'provider'" type="button" class="tonal cap-settings" :data-testid="'cap-provider-edit-' + keySlug(item.key)" :aria-label="'设置 ' + capabilityTitle(item.displayName, item.key)" @click="openProvider(item.key.key, $event)">设置</button>
           <button
-            v-if="pluginSpec(item)"
+            v-if="item.key.kind === 'plugin'"
             type="button"
             class="tonal cap-settings"
             :disabled="card.busy || (typeof card.id === 'number' && cardClients.get(card.id) !== props.client)"
@@ -1596,7 +1607,7 @@ defineExpose({
             type="button"
             class="link-button"
             :data-testid="'cap-marketplace-' + keySlug(item.key)"
-            :aria-label="'数据源与设置 ' + capabilityTitle(item.displayName, item.key)"
+            :aria-label="'数据源与安装 ' + capabilityTitle(item.displayName, item.key)"
             @click="openMarketplace(item.key.key, $event)"
           >
             市场
@@ -1759,6 +1770,7 @@ defineExpose({
       :trigger="marketplaceTarget.trigger"
       :fallback="pageHeading"
       @close="closeMarketplace"
+      @open-settings="openMarketplaceSettings"
       @changed="load(undefined, 'background')"
       @enable-admin="emit('enable-admin')"
       @auth-expired="(e) => emit('auth-expired', e)"
@@ -1766,19 +1778,17 @@ defineExpose({
 
     <ProviderEditorDialog v-if="providerTarget" ref="providerDialog" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
 
-    <TokenQuotaDialog v-if="quotaTarget" ref="quotaDialog" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled"
-      :features="props.features ?? []" :active="props.active" :trigger="quotaTarget.trigger" :fallback="pageHeading"
-      :runtime-state="items.find(item => item.key.kind === 'plugin' && item.key.key === 'preset.feature.token-quota')?.runtimeState"
-      @close="quotaTarget = null" @saved="load(undefined, 'background')" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
-
-    <CapabilityConfigurationDialog
+    <CapabilitySettingsHost
       v-if="settingsTarget" ref="configurationDialog"
       :key="settingsTarget.capability.id"
       :client="props.client"
       :mode="props.mode"
       :writes-enabled="props.writesEnabled"
+      :features="props.features ?? []"
+      :runtime-state="items.find(item => item.key.kind === 'plugin' && item.key.key === settingsTarget?.capability.pluginKey)?.runtimeState"
       :capability="settingsTarget.capability" :active="props.active" :trigger="settingsTarget.trigger" :fallback="pageHeading"
       @close="closeSettings()"
+      @saved="load(undefined, 'background')"
       @enable-admin="emit('enable-admin')"
       @auth-expired="(e) => emit('auth-expired', e)"
     />
@@ -1841,12 +1851,6 @@ defineExpose({
 </template>
 
 <style scoped>
-.ability-settings { margin: 20px 0; }
-.ability-settings h2 { font-size: 1.0625rem; margin-bottom: 6px; }
-.ability-settings p { color: var(--text-muted); font-size: 0.8125rem; line-height: 1.7; }
-.ability-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 10px; }
-.ability-settings-grid button { display: grid; text-align: left; gap: 6px; padding: 16px; border-color: var(--border); }
-.ability-settings-grid span { font-size: 0.75rem; color: var(--text-muted); line-height: 1.6; }
 .capabilities { min-width: 0; }
 .capabilities .page-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 0; }
 .page-heading > div:first-child { flex: 1 1 360px; min-width: 0; }

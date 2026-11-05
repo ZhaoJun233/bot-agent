@@ -46,7 +46,7 @@ import { configurationFieldErrors, localFieldErrors, providerErrorPath, type Con
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
 import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
-import { configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
+import { configurationCapabilities, configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -62,7 +62,7 @@ const domId = (key: string): string => editorId + '-' + key
 const emit = defineEmits<{
   'enable-admin': []
   'auth-expired': [error: UiError]
-  'open-capabilities': []
+  'open-capabilities': [owner?: string]
 }>()
 
 const sectionMeta = [
@@ -79,6 +79,7 @@ const sectionMeta = [
 /** 插件相关设置挪到「能力」页的插件卡片上；整个分区归插件的不再出现在导航里。 */
 const capability = computed(() => configurationFor(props.scope))
 const editorTitle = computed(() => props.scope === 'basic' ? '基础配置' : capability.value?.title ?? '能力配置')
+const ownerIndex = computed(() => configurationCapabilities())
 const visibleSections = computed(() => sectionMeta.filter(section => section.key === 'registered'
   ? capability.value?.providers === true
   : props.scope === 'basic' ? section.key === 'behavior' : capability.value?.sections.includes(section.key) === true))
@@ -1270,8 +1271,8 @@ defineExpose({
 
       <p v-if="pendingRestarts.length > 0" class="inline-notice warn" data-testid="config-runtime-restart">{{ runtimeRestartNotice }}</p>
 
-      <div class="config-body">
-        <nav class="config-nav" aria-label="配置分区">
+      <div class="config-body" :class="{ 'config-body--basic': scope === 'basic' }">
+        <nav v-if="scope !== 'basic'" class="config-nav" aria-label="配置分区">
           <button
             v-for="section in visibleSections"
             :key="section.key"
@@ -1638,6 +1639,19 @@ defineExpose({
         </div>
       </div>
 
+      <section v-if="scope === 'basic'" class="owner-index" aria-label="插件与系统设置入口" data-testid="config-owner-index">
+        <div>
+          <h2>按模块配置</h2>
+          <p class="muted">这里只保留全局行为。插件开关、参数和密钥统一在各自设置中管理。</p>
+        </div>
+        <div class="owner-links">
+          <button v-for="owner in ownerIndex" :key="owner.id" type="button" class="owner-link" :data-testid="`config-owner-${owner.id}`" @click="emit('open-capabilities', owner.id)">
+            <span>{{ owner.title }}</span>
+            <small>{{ owner.summary }}</small>
+          </button>
+        </div>
+      </section>
+
       <Teleport to="body">
         <div v-if="leavePrompt" class="dialog-backdrop" data-testid="config-leave-backdrop">
           <section
@@ -1732,6 +1746,12 @@ defineExpose({
 .settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border); }
 .settings-table tr:first-child { padding-top: 4px; }
 .settings-table tbody tr:hover td, .settings-table tbody tr.dirty td { background: transparent; }
+.config-body--basic { display: block; }
+.owner-index { display: grid; gap: 16px; border-top: 1px solid var(--border); padding-top: 24px; }
+.owner-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.owner-link { display: grid; gap: 6px; min-width: 0; text-align: left; white-space: normal; padding: 14px 16px; }
+.owner-link span { font-weight: 600; }
+.owner-link small { color: var(--text-muted); font-weight: 400; line-height: 1.5; }
 .settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent-deep); }
 .settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
 .settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }

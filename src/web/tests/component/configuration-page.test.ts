@@ -364,7 +364,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="configuration"]').exists()).toBe(true)
-    expect(wrapper.findAll('.config-nav-item')).toHaveLength(1)
+    expect(wrapper.findAll('.config-nav-item')).toHaveLength(0)
     expect(wrapper.find('[data-testid="config-nav-voice"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="config-nav-music"]').exists()).toBe(false)
     // moodTtlSeconds 归「氛围与心情」插件，配置页不再重复展示
@@ -374,6 +374,9 @@ describe('ConfigurationPage', () => {
     expect(wrapper.find('[data-testid="config-secrets"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('版本')
     expect(wrapper.find('[data-testid="config-readonly"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="config-owner-index"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="config-owner-models"]').trigger('click')
+    expect(wrapper.emitted('open-capabilities')).toEqual([['models']])
   })
 
   it('模型能力保留模型字段和已登记供应商编辑', async () => {

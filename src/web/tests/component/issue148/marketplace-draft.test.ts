@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import PluginMarketplaceDialog from '../../../src/features/capabilities/PluginMarketplaceDialog.vue'
+import DeclaredPluginSettingsDialog from '../../../src/features/capabilities/DeclaredPluginSettingsDialog.vue'
 import { ZbaClient } from '../../../src/api/zba'
 import { syntheticManifest } from '../../fixtures/provider-marketplace'
 
@@ -19,8 +19,8 @@ async function setup() {
     schema: [{ key: 'label', label: '显示名称', type: 'string' }, { key: 'accessKey', label: '访问密钥', type: 'secret' }],
     values: { label: '已保存' }, configuredSecrets: { accessKey: false }
   })
-  const wrapper = mount(PluginMarketplaceDialog, { attachTo: document.body,
-    props: { client, mode: 'admin', writesEnabled: true, active: true, focusPluginId: manifest.id } })
+  const wrapper = mount(DeclaredPluginSettingsDialog, { attachTo: document.body,
+    props: { client, mode: 'admin', writesEnabled: true, active: true, pluginId: manifest.id } })
   wrappers.push(wrapper); await flushPromises()
   return { wrapper, read }
 }
@@ -39,17 +39,17 @@ async function click(selector: string): Promise<void> {
   document.querySelector<HTMLButtonElement>(selector)!.click(); await flushPromises()
 }
 
-describe('issue148 marketplace draft lifetime', () => {
+describe('issue148 declared plugin draft lifetime', () => {
   it('requires explicit consent before a settings reload discards ordinary or secret draft', async () => {
     const { read } = await setup()
     await draft()
     await flushPromises(); const before = read.mock.calls.length
-    await click('[data-testid="marketplace-settings-reload"]')
+    await click('[data-testid="declared-plugin-settings-reload"]')
     expect(read).toHaveBeenCalledTimes(before)
     expect(document.querySelector<HTMLInputElement>('[data-testid="plugin-setting-label"]')!.value).toBe('草稿')
-    await click('[data-testid="marketplace-discard-cancel"]')
-    await click('[data-testid="marketplace-settings-reload"]')
-    await click('[data-testid="marketplace-discard-confirm"]')
+    await click('[data-testid="declared-plugin-settings-discard-cancel"]')
+    await click('[data-testid="declared-plugin-settings-reload"]')
+    await click('[data-testid="declared-plugin-settings-discard-confirm"]')
     expect(read).toHaveBeenCalledTimes(before + 1)
     expect(document.querySelector<HTMLInputElement>('[data-testid="plugin-setting-label"]')!.value).toBe('已保存')
     expect(document.querySelector('[data-testid="plugin-setting-accessKey"]')).toBeNull()

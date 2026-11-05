@@ -135,7 +135,7 @@ test('配置页：管理员保存一个数字字段并回读，随后恢复', as
   await openConfiguration(page)
   const before = await readConfiguration(request)
 
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
@@ -170,7 +170,7 @@ test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新
     if (req.url().includes('/zba/v1/configuration/save')) saveRequests.push(req.url())
   })
 
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original + 2))
   await page.getByTestId('config-save').click()
 
@@ -196,7 +196,7 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
   const original = Number(before.view.behavior.privateCooldownSeconds?.value)
   const next = original + 5
 
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(next))
 
   const saveRequests: string[] = []
@@ -228,7 +228,7 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
 
 test('配置页：切到概览再回来，草稿与输入值保留', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
@@ -290,7 +290,7 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
   })
   expect(preventedClean).toBe(false)
 
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
@@ -307,7 +307,7 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
 
 test('配置页：安全锁立即回认证页，重连后普通草稿与秘密输入均清除', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 3))
@@ -441,7 +441,7 @@ test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存',
   const original = Number(before.view.behavior.privateCooldownSeconds?.value)
   const next = original + 7
 
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   await input.fill(String(next))
 
@@ -492,8 +492,8 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
   try {
     await openConfiguration(pageA)
     await openConfiguration(pageB)
-    await pageA.getByTestId('config-nav-behavior').click()
-    await pageB.getByTestId('config-nav-behavior').click()
+    await expect(pageA.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
+    await expect(pageB.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
     const inputA = pageA.getByTestId('config-field-privateCooldownSeconds').locator('input')
     const inputB = pageB.getByTestId('config-field-privateCooldownSeconds').locator('input')
     await inputA.fill(String(original + 1))
@@ -622,7 +622,7 @@ test('能力配置：读取 401 会退回认证页并清掉秘密输入', async 
 
 test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作键供核对', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
@@ -669,7 +669,7 @@ test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作�
 
 test('配置页：成功码缺少回执时不清草稿也不显示已保存', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
@@ -689,7 +689,7 @@ test('配置页：成功码缺少回执时不清草稿也不显示已保存', as
 
 test('配置页：核对矛盾响应保留未知态，权威 NotFound 后才恢复编辑', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))

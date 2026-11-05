@@ -158,7 +158,7 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
   await expect(page.getByTestId('config-fields')).toBeVisible()
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
 
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
@@ -305,9 +305,7 @@ test('键盘：配置保存主线全程只用键盘完成', async ({ page }) => 
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 
-  // 定位到行为分区，再 Tab 到目标字段的输入框（行 testid 由 closest 提供）。
-  await tabTo(page, 'config-nav-behavior')
-  await page.keyboard.press('Enter')
+  // 基础配置只有一个分区；直接 Tab 到字段输入框（行 testid 由 closest 提供）。
   await tabToRow(page, 'config-field-privateCooldownSeconds')
 
   const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
@@ -414,7 +412,7 @@ test('键盘：离开框在保存提交期间仍能接住 Escape', async ({ page
   await expect(page.getByTestId('config-fields')).toBeVisible()
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
   const field = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
   await field.fill(String(Number(await field.inputValue()) + 1))
 
