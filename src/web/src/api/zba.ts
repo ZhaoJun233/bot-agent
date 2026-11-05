@@ -1,3 +1,5 @@
+import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
+
 export interface ZbaHealth {
   status: string
   ready: boolean
@@ -693,6 +695,7 @@ export interface ZbaPluginPackageManifest {
  */
 export interface ZbaPluginCatalogItem {
   manifest: ZbaPluginPackageManifest
+  metadata?: PluginPresentationMetadata
   installedVersion?: string | null
   enabled: boolean
   status: string
@@ -711,11 +714,13 @@ export interface ZbaPluginCatalogQuery {
 }
 
 export interface ZbaPluginCatalog {
+  metadataNotice?: string
   revision: string
   source: string
   trustNotice: string
   categories: string[]
   plugins: ZbaPluginCatalogItem[]
+  builtinPlugins?: ZbaBuiltinPlugin[]
 }
 
 export interface ZbaPluginSourceResolution {
@@ -726,6 +731,7 @@ export interface ZbaPluginSourceResolution {
 export interface ZbaInstalledPlugins {
   revision: string
   plugins: ZbaPluginCatalogItem[]
+  builtinPlugins?: ZbaBuiltinPlugin[]
 }
 
 export type ZbaPluginOperationKind = 'install' | 'update' | 'uninstall'
@@ -2265,17 +2271,20 @@ function isPluginCatalogItem(value: unknown): value is ZbaPluginCatalogItem {
     && (value.author === undefined || typeof value.author === 'string')
     && (value.tags === undefined || value.tags === null || isStringArray(value.tags))
     && (value.repository === undefined || typeof value.repository === 'string')
+    && (value.metadata === undefined || isPluginPresentation(value.metadata))
 }
 
 function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
   return isRecord(value)
     && typeof value.revision === 'string'
     && typeof value.source === 'string'
+    && (value.metadataNotice === undefined || typeof value.metadataNotice === 'string')
     && typeof value.trustNotice === 'string'
     && isStringArray(value.categories)
     && Array.isArray(value.plugins)
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
+    && isBuiltinPluginList(value.builtinPlugins)
 }
 
 function isPluginSourceResolution(value: unknown): value is ZbaPluginSourceResolution {
@@ -2290,6 +2299,7 @@ function isInstalledPlugins(value: unknown): value is ZbaInstalledPlugins {
     && Array.isArray(value.plugins)
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
+    && isBuiltinPluginList(value.builtinPlugins)
 }
 
 function isPluginOperation(value: unknown): value is ZbaPluginOperation {

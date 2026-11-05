@@ -8,7 +8,7 @@ import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import PluginCatalogBrowser from './PluginCatalogBrowser.vue'
 import { githubSourceError } from './plugin-manifest'
-import type { PluginCatalogEntry } from './plugin-catalog'
+import { pluginRuntime, type PackageCatalogEntry, type PluginCatalogEntry } from './plugin-catalog'
 import { mergePluginCatalog, pluginOperationKey, pluginOperationNotice, pluginRecoveryNotice, type PluginNotice } from './plugin-marketplace'
 
 const props = withDefaults(defineProps<{
@@ -36,7 +36,7 @@ const sourceEntries = ref<PluginCatalogEntry[]>([])
 const recoveringKey = ref('')
 const packagePending = computed(() => pendingOperations(props.client, 'plugin').filter(record => record.state !== 'settled'))
 const unresolvedIds = computed(() => pendingOperations(props.client).filter(record => record.state !== 'settled' && (record.kind === 'plugin' || record.kind === 'plugin-settings')).map(record => record.target))
-const entries = computed(() => mergePluginCatalog(catalog.value?.plugins ?? [], installed.value, sourceEntries.value))
+const entries = computed(() => mergePluginCatalog(catalog.value?.plugins ?? [], installed.value, sourceEntries.value, catalog.value?.builtinPlugins ?? []))
 const dirty = computed(() => Boolean(sourceUrl.value.trim()))
 let alive = true
 let catalogEpoch = 0
@@ -120,8 +120,8 @@ async function loadCatalog(showLoading = true): Promise<void> {
   } else showError(installedResult.reason)
   loading.value = false
 }
-async function runMutation(kind: ZbaPluginOperationKind, entry: PluginCatalogEntry, manifest = entry.manifest): Promise<void> {
-  if (!canWrite.value || busy.value || loading.value || unresolvedIds.value.includes(entry.id)) return
+async function runMutation(kind: ZbaPluginOperationKind, entry: PackageCatalogEntry, manifest = entry.manifest): Promise<void> {
+  if (!canWrite.value || busy.value || loading.value || pluginRuntime(entry) === 'python' || unresolvedIds.value.includes(entry.id)) return
   const client = props.client; const key = pluginOperationKey(kind, entry.id, manifest.version)
   try { beginOperation(client, { key, kind: 'plugin', target: entry.id, meta: { operation: kind, version: manifest.version } }) }
   catch (cause) { error.value = describe(cause); return }
@@ -200,7 +200,7 @@ onBeforeUnmount(() => { endSession(); alive = false })
     :active="props.active" :trigger="props.trigger" :fallback="props.fallback" @close="close">
     <template #eyebrow><span class="eyebrow">PLUGIN MARKETPLACE</span></template>
     <p class="muted">
-      外部插件默认停用；安装、更新、卸载与设置支持热应用，无需重启宿主。清单里的下载地址只由服务端解析，浏览器不会访问它；
+      内置能力无需安装；扩展包默认停用。安装、更新、卸载的生效状态以操作回执为准，可能等待热应用或需要重启宿主。清单下载地址仅由服务端解析；
       此处也不会回显任何密钥原文。
     </p>
     <div v-if="!canWrite" class="notice" data-testid="marketplace-readonly">
@@ -210,21 +210,7 @@ onBeforeUnmount(() => { endSession(); alive = false })
     <ErrorNotice v-if="error" :error="error" />
     <p v-if="notice" class="notice" :class="notice.tone" role="status" data-testid="marketplace-notice">{{ notice.message }}</p>
 
-    <section class="source-panel" aria-labelledby="marketplace-source-heading">
-      <h3 id="marketplace-source-heading">指定数据源</h3>
-      <p class="field-hint">支持公开 GitHub 仓库主页或 <code>/releases/tag/固定版本</code>；不接受任意下载地址、查询参数或凭据。</p>
-      <div class="source-row">
-        <label class="grow">数据源地址
-          <input v-model="sourceUrl" data-testid="marketplace-source-input" type="url" autocomplete="off" spellcheck="false"
-            placeholder="https://github.com/example-org/example-plugin" :disabled="sourceBusy">
-        </label>
-        <button type="button" class="tonal" data-testid="marketplace-source-resolve" :disabled="sourceBusy || !canWrite" @click="resolveSource">
-          {{ sourceBusy ? '解析中…' : '解析清单' }}
-        </button>
-      </div>
-      <p v-if="sourceError" class="notice bad" role="alert" data-testid="marketplace-source-error">{{ sourceError }}</p>
-    </section>
-
+    <p v-if="catalog?.metadataNotice" class="notice warn" role="status" data-testid="metadata-notice">{{ catalog.metadataNotice }}</p>
     <div v-for="pending in packagePending" :key="pending.key" class="notice warn" role="status" data-testid="marketplace-recovery">
       <p>{{ pending.target }} · {{ pending.meta.operation }}：{{ pending.state === 'in-flight' ? '正在提交' : '结果未知' }}，原操作键已保留。不要换键重复提交。</p>
       <code>{{ pending.key }}</code>
@@ -249,6 +235,21 @@ onBeforeUnmount(() => { endSession(); alive = false })
       @uninstall="(entry) => runMutation('uninstall', entry)"
       @settings="(entry) => openSettings(entry)"
     />
+
+    <details open class="source-panel" aria-labelledby="marketplace-source-heading">
+      <summary id="marketplace-source-heading">高级：从 GitHub 添加扩展包</summary>
+      <p class="field-hint">支持公开 GitHub 仓库主页或 <code>/releases/tag/固定版本</code>；不接受任意下载地址、查询参数或凭据。</p>
+      <div class="source-row">
+        <label class="grow">数据源地址
+          <input v-model="sourceUrl" data-testid="marketplace-source-input" type="url" autocomplete="off" spellcheck="false"
+            placeholder="https://github.com/example-org/example-plugin" :disabled="sourceBusy">
+        </label>
+        <button type="button" class="tonal" data-testid="marketplace-source-resolve" :disabled="sourceBusy || !canWrite" @click="resolveSource">
+          {{ sourceBusy ? '解析中…' : '解析清单' }}
+        </button>
+      </div>
+      <p v-if="sourceError" class="notice bad" role="alert" data-testid="marketplace-source-error">{{ sourceError }}</p>
+    </details>
 
   </ManagementDialog>
 </template>

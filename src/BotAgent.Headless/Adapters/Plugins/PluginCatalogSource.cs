@@ -56,6 +56,15 @@ public sealed class PluginCatalogSource
         return await ReadAsync(url, ct).ConfigureAwait(false);
     }
 
+    /// <summary>Optional presentation uses the same bounded public-HTTPS policy as the index.</summary>
+    internal Task<byte[]> ReadPresentationBytesAsync(string sourceUrl, CancellationToken ct)
+    {
+        if (!Uri.TryCreate(sourceUrl, UriKind.Absolute, out var source)
+            || source.Query.Length != 0 || source.Fragment.Length != 0)
+            throw new PluginCatalogException("plugin_catalog_source_invalid");
+        return FetchAsync(new Uri(source, "presentation.json").AbsoluteUri, ct);
+    }
+
     private async Task<byte[]> FetchAsync(string sourceUrl, CancellationToken ct)
     {
         if (!SafeUrl.TryValidate(sourceUrl, false, out var uri, out var reason)

@@ -8,7 +8,8 @@ import {
 } from '../../api/zba'
 import { newNonce, nowSeconds } from '../configuration/draft'
 import type { PluginSettingDefinition } from './plugin-manifest'
-import type { PluginCatalogEntry } from './plugin-catalog'
+import type { BuiltinCatalogEntry, PackageCatalogEntry, PluginCatalogEntry } from './plugin-catalog'
+import { isPluginPresentation, type ZbaBuiltinPlugin } from '../../api/plugin-presentation'
 import type { PluginSettingDraft, PluginSettingsDraft } from './declared-plugin-settings'
 
 /**
@@ -18,41 +19,49 @@ import type { PluginSettingDraft, PluginSettingsDraft } from './declared-plugin-
  * 才能真正对「结果未知时该复用哪个键」「404 与 409 分别怎么办」写单测。
  */
 
-/** 服务端目录条目 → 视图模型；展示元数据缺失时回落到 manifest.id。 */
-export function catalogEntry(item: ZbaPluginCatalogItem): PluginCatalogEntry {
+/** Missing metadata remains a usable legacy package, never a reviewed one. */
+export function catalogEntry(item: ZbaPluginCatalogItem): PackageCatalogEntry {
   const status = (item.status ?? '').toLowerCase()
   const installedVersion = item.installedVersion ?? undefined
-  // 卸载是暂存态而不是版本差异：状态串里出现 uninstall/remov 就按「待卸载」展示。
   const pendingUninstall = /uninstall|remov/.test(status)
-  const staged = status === 'staged' || status === 'restart_required' || status === 'reload_required' || status === 'pending'
-  const pendingVersion = !pendingUninstall && staged && item.manifest.version !== installedVersion
-    ? item.manifest.version
-    : undefined
-  const tags = (item.tags ?? []).filter((tag) => typeof tag === 'string' && tag.length > 0)
+  const staged = ['staged', 'restart_required', 'reload_required', 'pending'].includes(status)
+  const metadata = isPluginPresentation(item.metadata) && item.metadata.sourceKind !== 'builtin' && item.metadata.runtime !== 'builtin' ? item.metadata : undefined
   return {
-    id: item.manifest.id,
-    name: item.name?.trim() || item.manifest.id,
-    summary: item.summary?.trim() || '服务端未提供说明。',
-    category: item.category?.trim() || '未分类',
-    author: item.author?.trim() || undefined,
-    tags: tags.length > 0 ? tags : undefined,
-    repository: item.repository,
-    manifest: item.manifest,
-    installedVersion,
-    pendingVersion,
+    kind: 'package', id: item.manifest.id,
+    name: metadata?.name.trim() || item.name?.trim() || item.manifest.id,
+    summary: metadata?.summary.trim() || item.summary?.trim() || '服务端未提供说明。',
+    category: metadata?.category.trim() || item.category?.trim() || '未分类',
+    author: metadata?.author.trim() || item.author?.trim() || undefined,
+    tags: (metadata?.tags ?? item.tags ?? []).filter(tag => tag.trim()),
+    repository: metadata?.repository || item.repository, metadata,
+    manifest: item.manifest, installedVersion, enabled: item.enabled, status, restartRequired: item.restartRequired,
+    pendingVersion: !pendingUninstall && staged && item.manifest.version !== installedVersion ? item.manifest.version : undefined,
     pendingUninstall: pendingUninstall || undefined
   }
 }
 
-/** One row per plugin ID; the installed projection owns package state, not the index/source. */
-export function mergePluginCatalog(catalog: ZbaPluginCatalogItem[], installed: ZbaInstalledPlugins | null, sources: PluginCatalogEntry[]): PluginCatalogEntry[] {
+export function builtinCatalogEntry(item: ZbaBuiltinPlugin): BuiltinCatalogEntry {
+  return { kind: 'builtin', id: item.pluginId, version: item.version, enabled: item.enabled,
+    name: item.metadata.name, summary: item.metadata.summary, category: item.metadata.category,
+    author: item.metadata.author, repository: item.metadata.repository, tags: item.metadata.tags, metadata: item.metadata }
+}
+
+/** Registry entries win ID collisions; installed projection owns state, index owns discovery. */
+export function mergePluginCatalog(catalog: ZbaPluginCatalogItem[], installed: ZbaInstalledPlugins | null, sources: PluginCatalogEntry[], builtins: ZbaBuiltinPlugin[] = []): PluginCatalogEntry[] {
   const entries = new Map<string, PluginCatalogEntry>()
   for (const item of catalog) entries.set(item.manifest.id, catalogEntry(item))
-  for (const source of sources) entries.set(source.id, { ...entries.get(source.id), ...source })
+  // A resolved source replaces presentation too: never inherit another artifact's audit badge.
+  for (const source of sources) entries.set(source.id, source)
   for (const item of installed?.plugins ?? []) {
     const state = catalogEntry(item)
     const entry = entries.get(state.id) ?? state
-    entries.set(state.id, { ...entry, installedVersion: state.installedVersion, pendingVersion: state.pendingVersion, pendingUninstall: state.pendingUninstall })
+    entries.set(state.id, { ...entry, installedVersion: state.installedVersion, enabled: state.enabled,
+      pendingVersion: state.pendingVersion, pendingUninstall: state.pendingUninstall, restartRequired: state.restartRequired, status: state.status })
+  }
+  // An available installed snapshot is authoritative even when its built-in list is empty.
+  for (const item of installed?.builtinPlugins ?? builtins) {
+    const discovered = builtins.find(candidate => candidate.pluginId === item.pluginId && candidate.version === item.version)
+    entries.set(item.pluginId, builtinCatalogEntry({ ...item, metadata: discovered?.metadata ?? item.metadata }))
   }
   return [...entries.values()]
 }
@@ -92,7 +101,11 @@ export function pluginOperationNotice(operation: ZbaPluginOperation): PluginNoti
   }
   if (operation.status === 'reload_required' || operation.status === 'staged')
     return { tone: 'warn', message: what + '已暂存，等待热重载；旧实例保持运行。' }
-  return { tone: 'ok', message: what + '已热应用，无需重启 BotAgent。' }
+  if (operation.status === 'installed' && operation.kind !== 'uninstall')
+    return { tone: 'ok', message: what + '已热应用，无需重启 BotAgent。' }
+  if (operation.status === 'not_installed' && operation.kind === 'uninstall')
+    return { tone: 'ok', message: '卸载已完成，当前未安装。' }
+  return { tone: 'warn', message: what + '回执与目标状态不一致，请核对宿主状态；不能确认已完成。' }
 }
 
 /**

@@ -31,12 +31,15 @@ public sealed class PluginMarketService
     private readonly Func<IReadOnlyDictionary<string, bool>>? _desiredStates;
     private readonly Action<string>? _log;
     private readonly Func<string?, CancellationToken, Task>? _reload;
+    private readonly Func<IReadOnlyList<PluginInfo>>? _registrySnapshot;
+    private PluginPresentationCatalog _presentation = PluginPresentationCatalog.Unavailable();
 
     /// <param name="receiptPath">回执文件；缺省落在运行根的 plugins/operations.json（有界、原子写）。</param>
     public PluginMarketService(PluginPackageService packages, PluginSettingsStore settings,
         PluginCatalogSource catalog, Func<DateTimeOffset> now, string receiptPath,
         Func<IReadOnlyDictionary<string, bool>>? desiredStates = null, Action<string>? log = null,
-        Func<string?, CancellationToken, Task>? reload = null)
+        Func<string?, CancellationToken, Task>? reload = null,
+        Func<IReadOnlyList<PluginInfo>>? registrySnapshot = null)
     {
         _packages = packages ?? throw new ArgumentNullException(nameof(packages));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -46,49 +49,71 @@ public sealed class PluginMarketService
         _desiredStates = desiredStates;
         _log = log;
         _reload = reload;
+        _registrySnapshot = registrySnapshot;
     }
 
-    /// <summary>目录 = 市场索引 ∩ 本机真实安装态。展示字段只有 manifest 与状态，不伪造名称/说明/分类。</summary>
+    /// <summary>Package identity stays in the manifest; built-ins come only from the live host registry.</summary>
     public async Task<ZbaPluginCatalog> ReadCatalogAsync(string? query, string? category, CancellationToken ct)
     {
         var source = PluginCatalogSource.ConfiguredUrl();
+        var registered = _registrySnapshot?.Invoke() ?? [];
         IReadOnlyList<PluginPackageManifest> manifests;
-        try
+        var catalogUnavailable = false;
+        try { manifests = await _catalog.ReadAsync(source, ct).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is PluginCatalogException or HttpRequestException or IOException
+            || ex is OperationCanceledException && !ct.IsCancellationRequested)
         {
-            manifests = await _catalog.ReadAsync(source, ct).ConfigureAwait(false);
+            if (!registered.Any(p => p.IsPreset))
+                throw new ZbaBackendException(503, (ex as PluginCatalogException)?.Code ?? "plugin_catalog_unavailable",
+                    "插件市场目录暂时不可用。");
+            manifests = [];
+            catalogUnavailable = true;
         }
-        catch (PluginCatalogException exception)
-        {
-            throw new ZbaBackendException(503, exception.Code, "插件市场目录暂时不可用。");
-        }
-
+        var presentation = catalogUnavailable ? PluginPresentationCatalog.Unavailable()
+            : await PluginPresentationCatalog.ReadAsync(_catalog, source, ct).ConfigureAwait(false);
+        _presentation = presentation;
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var desired = DesiredStates();
-        var entries = manifests.Select(manifest => Project(manifest, installed, desired)).ToArray();
-        var term = query?.Trim();
-        var wanted = string.IsNullOrEmpty(term)
-            ? entries
-            : entries.Where(entry => entry.Manifest.Id.Contains(term, StringComparison.OrdinalIgnoreCase)).ToArray();
-        // 索引只有 manifest（契约明确禁止描述字段），所以分类只有一个回退值；分类过滤因此只放行“全部”。
-        var wantedCategory = category?.Trim();
-        var filtered = string.IsNullOrEmpty(wantedCategory) || wantedCategory is "all" or FallbackCategory
-            ? wanted
-            : Array.Empty<ZbaPluginCatalogEntry>();
-        var categories = entries.Length == 0 ? Array.Empty<string>() : new[] { FallbackCategory };
-        return new ZbaPluginCatalog(await RevisionAsync(ct).ConfigureAwait(false), source, TrustNotice, categories, filtered);
+        var entries = manifests.Select(manifest => Project(manifest, installed, desired) with
+            { Metadata = presentation.ForPackage(manifest) }).ToArray();
+        var builtins = presentation.ForBuiltins(registered);
+        var categories = entries.Select(e => e.Metadata?.Category ?? FallbackCategory)
+            .Concat(builtins.Select(b => b.Metadata.Category)).Distinct(StringComparer.Ordinal)
+            .OrderBy(c => c, StringComparer.Ordinal).ToArray();
+        return new ZbaPluginCatalog(await RevisionAsync(ct).ConfigureAwait(false), source, TrustNotice, categories,
+            entries.Where(e => Matches(e.Manifest.Id, e.Metadata, query, category)).ToArray())
+        {
+            BuiltinPlugins = builtins.Where(b => Matches(b.PluginId, b.Metadata, query, category)).ToArray(),
+            MetadataNotice = catalogUnavailable ? "市场目录暂不可用；仍可查看宿主实际注册的内置插件。" : presentation.Notice
+        };
     }
 
     public async Task<ZbaInstalledPlugins> ReadInstalledAsync(CancellationToken ct)
     {
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var desired = DesiredStates();
+        var presentation = _presentation;
         var entries = installed
             .Select(package => package.Active ?? package.Pending)
             .Where(manifest => manifest is not null)
-            .Select(manifest => Project(manifest!, installed, desired))
+            .Select(manifest => Project(manifest!, installed, desired) with { Metadata = presentation.ForPackage(manifest!) })
             .OrderBy(entry => entry.Manifest.Id, StringComparer.Ordinal)
             .ToArray();
-        return new ZbaInstalledPlugins(await RevisionAsync(ct).ConfigureAwait(false), entries);
+        // No remote dependency: even a first offline request exposes actual registered built-ins.
+        return new ZbaInstalledPlugins(await RevisionAsync(ct).ConfigureAwait(false), entries)
+            { BuiltinPlugins = presentation.ForBuiltins(_registrySnapshot?.Invoke() ?? []) };
+    }
+
+    private static bool Matches(string id, ZbaPluginMetadata? metadata, string? query, string? category)
+    {
+        var wantedCategory = category?.Trim();
+        if (!string.IsNullOrEmpty(wantedCategory) && wantedCategory != "all"
+            && wantedCategory != (metadata?.Category ?? FallbackCategory)) return false;
+        var term = query?.Trim();
+        if (string.IsNullOrEmpty(term)) return true;
+        var fields = new[] { id, metadata?.Name, metadata?.Summary, metadata?.Description, metadata?.Author }
+            .Concat(metadata?.Tags ?? []);
+        return fields.Any(value => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true);
     }
 
     /// <summary>

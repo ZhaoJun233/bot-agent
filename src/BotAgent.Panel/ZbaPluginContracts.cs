@@ -14,6 +14,7 @@ public sealed record ZbaPluginCatalogEntry(
     [property: JsonRequired] string Status,
     [property: JsonRequired] bool RestartRequired)
 {
+    public ZbaPluginMetadata? Metadata { get; init; }
     public override string ToString() => "ZbaPluginCatalogEntry";
 }
 
@@ -24,6 +25,8 @@ public sealed record ZbaPluginCatalog(
     [property: JsonRequired] IReadOnlyList<string> Categories,
     [property: JsonRequired] IReadOnlyList<ZbaPluginCatalogEntry> Plugins)
 {
+    public IReadOnlyList<ZbaBuiltinPlugin> BuiltinPlugins { get; init; } = [];
+    public string? MetadataNotice { get; init; }
     public override string ToString() => "ZbaPluginCatalog";
 }
 
@@ -31,8 +34,32 @@ public sealed record ZbaInstalledPlugins(
     [property: JsonRequired] string Revision,
     [property: JsonRequired] IReadOnlyList<ZbaPluginCatalogEntry> Plugins)
 {
+    public IReadOnlyList<ZbaBuiltinPlugin> BuiltinPlugins { get; init; } = [];
     public override string ToString() => "ZbaInstalledPlugins";
 }
+
+/// <summary>内置插件来自宿主注册表，不是可下载或安装的包。</summary>
+public sealed record ZbaBuiltinPlugin(string PluginId, string Version, bool Enabled, ZbaPluginMetadata Metadata);
+
+/// <summary>仅用于展示；来源、运行时与审核状态相互独立，不授予执行权限。</summary>
+public sealed record ZbaPluginMetadata(
+    [property: JsonRequired] string Name, [property: JsonRequired] string Summary,
+    [property: JsonRequired] string Description, [property: JsonRequired] string Category,
+    [property: JsonRequired] string Author, [property: JsonRequired] string Repository,
+    [property: JsonRequired] string License, [property: JsonRequired] string Usage,
+    [property: JsonRequired] string RiskNotice, [property: JsonRequired] string Configuration,
+    [property: JsonRequired] string Compatibility, [property: JsonRequired] string Changelog,
+    [property: JsonRequired] string Maintenance, [property: JsonRequired] string PermissionNotes,
+    [property: JsonRequired] IReadOnlyList<string> Tags, [property: JsonRequired] string Runtime,
+    [property: JsonRequired] string SourceKind, [property: JsonRequired] ZbaPluginReview Review);
+
+public sealed record ZbaPluginReview(
+    [property: JsonRequired] string Status, [property: JsonRequired] string Version,
+    [property: JsonRequired, JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Sha256,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reviewer = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReviewedAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceRevision = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Notes = null);
 
 /// <summary>只接受公开 GitHub 仓库或其固定 release tag；真正的解析在宿主侧完成。</summary>
 public sealed record ZbaPluginSourceResolveRequest([property: JsonRequired] string SourceUrl)

@@ -1427,7 +1427,7 @@ defineExpose({
           {{ props.mode === 'admin' ? '管理员模式' : '标准模式' }}
         </span>
         <button type="button" class="tonal" data-testid="cap-add-provider" @click="openProvider(undefined, $event)">添加提供商</button>
-        <button type="button" class="tonal" data-testid="cap-marketplace" @click="openMarketplace(undefined, $event)">数据源市场</button>
+        <button type="button" class="tonal" data-testid="cap-marketplace" @click="openMarketplace(undefined, $event)">插件市场</button>
         <button type="button" class="tonal" data-testid="cap-reload" :disabled="loading" @click="load()">
           {{ loading ? '读取中…' : '重新读取' }}
         </button>
@@ -1607,7 +1607,7 @@ defineExpose({
             type="button"
             class="link-button"
             :data-testid="'cap-marketplace-' + keySlug(item.key)"
-            :aria-label="'数据源与安装 ' + capabilityTitle(item.displayName, item.key)"
+            :aria-label="'市场说明与配置 ' + capabilityTitle(item.displayName, item.key)"
             @click="openMarketplace(item.key.key, $event)"
           >
             市场

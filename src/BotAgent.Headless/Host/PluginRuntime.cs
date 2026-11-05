@@ -53,7 +53,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     internal PluginCatalogSource Catalog { get; }
     internal PluginMarketService Market => _market ??= new PluginMarketService(Packages, Settings, Catalog,
         () => BotAgent.Adapters.Time.Clock.Now, Path.Combine(_root, "operations.json"), LoadDesiredStates, _log,
-        reload: ReloadAsync);
+        reload: ReloadAsync, registrySnapshot: () => Registry.GetAll().Where(p => _presetIds.Contains(p.Id)).ToArray());
     private PluginMarketService? _market;
     internal PluginManager Registry { get; }
     internal BotAgent.Adapters.Net.IHttpFetcher Http => _http;
