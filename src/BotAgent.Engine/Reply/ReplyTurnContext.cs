@@ -30,6 +30,7 @@ namespace BotAgent.Services.Reply;
 internal sealed class ReplyTurnContext
 {
     private readonly IProfileRepository _profiles;
+    private readonly Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? _memoryParticipant;
     private readonly VibeTracker _vibes;
     private readonly StickerService _stickers;
     private readonly MemberRoleUseCase _roles;
@@ -57,9 +58,11 @@ internal sealed class ReplyTurnContext
         ReplyInboundMedia media,
         ReplyHooks hooks,
         Func<string, bool> allowsFeature,
-        Action<BotConversation, bool> setThinking)
+        Action<BotConversation, bool> setThinking,
+        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null)
     {
         _profiles = profiles;
+        _memoryParticipant = memoryParticipant;
         _vibes = vibes;
         _stickers = stickers;
         _roles = roles;
@@ -117,12 +120,11 @@ internal sealed class ReplyTurnContext
 
         foreach (var uid in recentSenders)
         {
-            var summary = _profiles.GetProfileSummary(
-                uid.ToString(),
-                isGroupScope ? scopeGroupId : 0,
-                snapshot.ProfileSummaryLines,
-                contextOldestSeq,
-                contextOldestUnix);
+            var participant = PlatformSourceExecution.Current is { } source ? _memoryParticipant?.Invoke(source, uid) : null;
+            string ReadProfile(string profileKey) => _profiles.GetProfileSummary(profileKey,
+                isGroupScope ? scopeGroupId : 0, snapshot.ProfileSummaryLines, contextOldestSeq, contextOldestUnix);
+            var summary = UnifiedMemoryTurn.Current is { } memory
+                ? memory.ReadLegacyProfile(participant, ReadProfile) : ReadProfile(uid.ToString());
 
             if (string.IsNullOrWhiteSpace(summary))
             {
@@ -136,6 +138,13 @@ internal sealed class ReplyTurnContext
 
             profiles.Add(summary);
             profileChars += summary.Length;
+        }
+
+        var memoryPrompt = UnifiedMemoryTurn.Current?.ReadPrompt(string.Join(" ", context.TakeLast(3).Select(m => m.Text)));
+        if (!string.IsNullOrEmpty(memoryPrompt))
+        {
+            profiles.Add(memoryPrompt);
+            profileChars += memoryPrompt.Length;
         }
 
         var started = EngineClock.LocalDateTime;

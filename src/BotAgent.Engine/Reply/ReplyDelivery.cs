@@ -389,6 +389,14 @@ internal sealed partial class ReplyDelivery(
                 ? Services.Participation.ParticipationEvent.Replied
                 : Services.Participation.ParticipationEvent.Silent);
 
+        // Unsent memory-derived output must not survive in logs or the panel event stream.
+        if (BotAgent.Services.Memory.MemoryUseScope.HasMemory)
+        {
+            _hooks.Log($"[memory] outcome={(sent ? "replied" : "failed")} elapsedMs={elapsed:F0} sentSegments={sendReport.SentSegments.Count} textLength={reply.Length}");
+            return ChatDeliveryReport.FromAcknowledgements(sendReport, textReply is not null, voiceParts, voiceSent, voiceFailed,
+                extrasComplete: (sticker is null || sentImage) && (pokeTarget is null || pokeSent));
+        }
+
         // P2（结构化运行记录）：同一条终态也用统一字段写一行，便于核对「决策 → 实际发送」是否一致。
         _hooks.Log($"[决策] outcome={(sent ? "replied" : "failed")} action={result.Action}"
                 + $" reason={result.ReasonCode ?? "unknown"}: {conversation.Name}");

@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Collections.Concurrent;
 using BotAgent.Domain.Reply;
 using System.Net;
@@ -338,6 +339,9 @@ public sealed class ReverseWsTransport : IOneBotTransport
                 }
             }
 
+            var frame = new byte[offset + payload.Length];
+            header.AsSpan(0, offset).CopyTo(frame);
+            payload.CopyTo(frame, offset);
             while (true)
             {
                 // Do not hold the transport lock while pacing releases/reacquires the model scheduler.
@@ -346,8 +350,8 @@ public sealed class ReverseWsTransport : IOneBotTransport
                 try
                 {
                     if (isChatCommit && !ReplyCommitBoundary.TryBeforeSend()) continue;
-                    await _stream.WriteAsync(header.AsMemory(0, offset), ct);
-                    await _stream.WriteAsync(payload, ct);
+                    // Validate after queueing; commit the whole frame, never just its header.
+                    await MemoryUseScope.UseForDelivery(() => _stream.WriteAsync(frame.AsMemory(), ct));
                     await _stream.FlushAsync(ct);
                     return;
                 }

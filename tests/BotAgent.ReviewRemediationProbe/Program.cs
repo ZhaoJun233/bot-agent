@@ -29,6 +29,12 @@ internal static class Program
             return await ModelHotApplyFailureTests.RunChildAsync();
         if (args.Length == 1 && args[0] == ConfigurationRuntimeEffectsTests.ChildArgument)
             return await ConfigurationRuntimeEffectsTests.RunChildAsync();
+        if (args.Contains("--memory-scheduler", StringComparer.Ordinal))
+        {
+            await RunAsync("memory scheduler model boundary", () => MemorySchedulerTests.RunAsync(Check));
+            Console.WriteLine($"ReviewRemediationProbe memory scheduler: {_passed} passed, {_failed} failed");
+            return _failed == 0 ? 0 : 1;
+        }
         if (args.Contains("--task-approval", StringComparer.Ordinal))
         {
             await RunAsync("task approval gate", () => TaskApprovalGateTests.RunAsync((name, ok, detail) => Check(ok, name)));

@@ -145,22 +145,14 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var prohibitedQqActions = new List<string>();
         var failedQqActions = new List<string>();
 
-        await RefreshMcpAsync(ct);
+        var memoryPrompt = BotAgent.Services.Reply.UnifiedMemoryTurn.Current?.ReadPrompt(task.Prompt);
+        var memoryRestricted = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
+        if (!memoryRestricted) await RefreshMcpAsync(ct);
         var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost, access.Scope) + (task.Natural ? NaturalTone : string.Empty);
+        if (memoryRestricted) system += "\n" + memoryPrompt
+            + "\n本任务使用受控记忆，只能直接回答；不要调用任何工具、外发、写文件或产生持久化派生内容。";
 
-        // 会话上下文：**默认不带**（每条 // 指令单独对待）——
-        // 管理员 2026-09-18 实测：会话历史里堆着上几轮的指令原文（如“查看服务器状态”）时，
-        // 模型会把旧指令也答一遍，新指令的回复里混进旧内容（“1. 点赞动作… 2. 服务器状态…”。）。
-        // 想要“接着上一句聊”：面板里的开关，或单条写 //接着 …（两者都会把 task.UseHistory 置上）。
-        // 带历史时也先洗一遍：【工具步骤不进历史】—— 上一轮若是“查服务器状态”，那几个 bash 步骤（命令 + 输出）
-        // 会把模型带进“这是个运维会话”的模式里（同样实测过）。
-        var messages = new List<(string Role, string Text)>();
-        if (task.UseHistory && task.History is { Count: > 0 })
-        {
-            messages.AddRange(SeedHistory(task.History));
-        }
-
-        messages.Add(("user", task.Prompt));
+        var messages = BuildTurnMessages(task);
         var started = Clock.Now;
         var nudged = 0;
 
@@ -229,6 +221,12 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 {
                     messages.Add(("assistant", raw.Trim()));
                     task.Succeeded(AppendQqActionOutcomes(raw.Trim(), prohibitedQqActions, failedQqActions));
+                    return;
+                }
+
+                if (memoryRestricted)
+                {
+                    task.Fail("受控记忆任务不能调用外部工具；请另开不使用记忆的任务。");
                     return;
                 }
 
@@ -354,7 +352,16 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     }
 
 
-    ///
+    private static List<(string Role, string Text)> BuildTurnMessages(AgentTask task)
+    {
+        // Session history stays independent from ephemeral memory; keep only conversational turns.
+        var messages = new List<(string Role, string Text)>();
+        if (task.UseHistory && task.History is { Count: > 0 }) messages.AddRange(SeedHistory(task.History));
+        messages.Add(("user", task.Prompt));
+        return messages;
+    }
+
+    /// <summary>
     /// 为什么：工具步骤长这样 —— <c>{"tool":"bash","command":"uptime…"}</c> 与 <c>工具输出（bash）：…</c>。
     /// 它们对“这个会话在聊什么”几乎没贡献，却把模型带进“我正在跑命令”的模式：
     /// 管理员实测过一次 —— 上一轮查服务器状态留下的 8 条工具步骤，让模型对新的“给某某点赞”

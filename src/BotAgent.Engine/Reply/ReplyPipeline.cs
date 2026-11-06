@@ -12,6 +12,7 @@ using BotAgent.Services.Agent;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.Links;
 using BotAgent.Services.Music;
+using BotAgent.Services.Memory;
 using BotAgent.Services.Net;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Panel;
@@ -96,6 +97,9 @@ public sealed partial class ReplyPipeline
     /// <summary>当场做掉只读工具（批次 E）：判定与冷却与“留给下一轮”那条路完全一致。</summary>
     private readonly InlineTurnTools _inlineTools;
     private readonly ReplyToolAvailability _replyTools;
+    private readonly IUnifiedMemory? _unifiedMemory;
+    private readonly Func<QqChatMessage, bool>? _memoryCommand;
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<PlatformSourceLease, BotAgent.Domain.Messaging.PlatformInboundEnvelope> _memoryInbound = new();
 
     public ReplyPipeline(
         ISettingsBox box,
@@ -127,7 +131,10 @@ public sealed partial class ReplyPipeline
         IWebhookDedupStore? inboundDedup = null,
         PluginGate? plugins = null,
         BackgroundEvaluatorQueue? background = null,
-        PluginReplyPolicies? replyPolicies = null)
+        PluginReplyPolicies? replyPolicies = null,
+        IUnifiedMemory? unifiedMemory = null,
+        Func<QqChatMessage, bool>? memoryCommand = null,
+        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null)
     {
         _box = box;
         _source = source;
@@ -159,6 +166,8 @@ public sealed partial class ReplyPipeline
         _inboundDedup = inboundDedup;
         _plugins = plugins;
         _background = background;
+        _unifiedMemory = unifiedMemory;
+        _memoryCommand = memoryCommand;
         _quotes = new ReplyQuoteContext(ownLedger, () => box.Current.NormalizedUin, research, hooks.Log);
         _inboundGates = new ReplyInboundGates(
             box, source, _platformPolicies, whitelist, approvals, participation, inboundDedup, hooks,
@@ -168,7 +177,7 @@ public sealed partial class ReplyPipeline
             conversation => RequestReply(conversation, null), EnsureGroupContext);
         _turnContext = new ReplyTurnContext(
             profiles, vibes, stickers, roles, poke, mood, music, research, _inboundMedia, hooks,
-            AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking));
+            AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking), memoryParticipant);
         _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady);
         _delivery = new ReplyDelivery(
             hooks, registry, ui, plain, source, stickers, voice, poke, mood, approvals, participation, traces, riskBackoff, AllowsFeature,
@@ -222,9 +231,12 @@ public sealed partial class ReplyPipeline
             return false;
         }
 
+        var memoryUse = BotAgent.Services.Memory.MemoryUseScope.Capture();
         if (!_background.TryEnqueue(jobId, dedupKey, async ct =>
             {
                 using var sourceScope = PlatformSourceExecution.Enter(source);
+                using var memoryScope = BotAgent.Services.Memory.MemoryUseScope.Enter(memoryUse);
+                if (!BotAgent.Services.Memory.MemoryUseScope.CanUse) return;
                 if (_hooks.IsDisposed() || source is { IsCurrent: false } || ct.IsCancellationRequested) return;
                 using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, source?.Lifetime ?? default);
                 await work(lifetime.Token);
@@ -272,6 +284,13 @@ public sealed partial class ReplyPipeline
 
         var asideOnly = pre.AsideOnly;
         msg = pre.Message;
+
+        // Reserved explicit controls never enter chat history, profile extraction or Agent parsing.
+        if (asideOnly && msg.Text.TrimStart().StartsWith("//memory", StringComparison.Ordinal)) return;
+        if (_memoryCommand?.Invoke(msg) == true) return;
+        if (PlatformSourceExecution.Current is { } memorySource && msg.Envelope is { } envelope
+            && UnifiedMemoryTurn.AttestedContext(envelope) is not null)
+            _memoryInbound.GetValue(memorySource, _ => envelope);
 
         var conversation = _registry.GetOrCreate(msg);
         if (conversation is null)
@@ -377,14 +396,7 @@ public sealed partial class ReplyPipeline
         var isSelfSender = !string.IsNullOrWhiteSpace(botUin) && msg.UserId.ToString() == botUin;
         if (!isSelfSender)
         {
-            _profiles.Append(
-                msg.UserId.ToString(),
-                msg.SenderName,
-                msg.Text,
-                msg.Time,
-                msg.IsGroup ? conversation.Name : null,
-                msg.IsGroup ? msg.GroupId : 0,
-                appended.Seq);
+            AppendAttestedProfile(msg, conversation.Name, appended.Seq);
 
             // 群成员身份（群主/管理员/群头衔）：先记下消息事件里带的 role（零成本），
             // 缺头衔或太久没更新时再后台去问协议端（ get_group_member_info 才能拿到自定义头衔）。
@@ -579,7 +591,8 @@ public sealed partial class ReplyPipeline
                     var botUin = _settings.NormalizedUin;
                     foreach (var m in restored)
                     {
-                        if (m.SenderId is not long uid ||
+                        // Never relabel shared protocol history as source-attested profile input.
+                        if (_unifiedMemory is not null || m.SenderId is not long uid ||
                             (!string.IsNullOrWhiteSpace(botUin) && uid.ToString() == botUin))
                         {
                             continue;
@@ -673,6 +686,16 @@ public sealed partial class ReplyPipeline
         }
 
         TryProactiveSpeak();
+    }
+    private void AppendAttestedProfile(QqChatMessage message, string conversationName, long seq)
+    {
+        var context = UnifiedMemoryTurn.AttestedContext(message.Envelope);
+        var key = _unifiedMemory is null ? message.UserId.ToString()
+            : context?.Actor is { } actor
+                ? BotAgent.Domain.Memory.LegacyProfileScopeKey.TryCreate(context.Driver, actor, context.Conversation) : null;
+        if (key is null) return;
+        _profiles.Append(key, message.SenderName, message.Text, message.Time,
+            message.IsGroup ? conversationName : null, message.IsGroup ? message.GroupId : 0, seq);
     }
 
     /// <summary>

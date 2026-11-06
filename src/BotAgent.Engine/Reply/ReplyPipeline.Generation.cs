@@ -1,4 +1,5 @@
 using BotAgent.Services.Plugins;
+using BotAgent.Services.Memory;
 using BotAgent.Services.Evaluation;
 using BotAgent.Engine.Runtime;
 using BotAgent.Domain.Conversation;
@@ -32,6 +33,28 @@ namespace BotAgent.Services.Reply;
 
 public sealed partial class ReplyPipeline
 {
+    private UnifiedMemoryTurn? BeginMemoryTurn()
+    {
+        BotAgent.Domain.Messaging.PlatformInboundEnvelope? memoryEnvelope = null;
+        if (PlatformSourceExecution.Current is { } memorySource) _memoryInbound.TryGetValue(memorySource, out memoryEnvelope);
+        return _unifiedMemory is null ? null : UnifiedMemoryTurn.Begin(_unifiedMemory, memoryEnvelope);
+    }
+
+    private void ObserveModelFailure(BotConversation conversation, TurnInputs turn, Exception ex)
+    {
+        SetThinking(conversation, false);
+        // 连异常类型和第一帧调用堆栈一起记：只记 Message 时，“空引用”这种根本看不出在哪（踩过）
+        if (MemoryUseScope.HasMemory) _hooks.Log($"模型请求失败: {ex.GetType().Name}");
+        else _hooks.Log($"模型请求失败: {ex.GetType().Name} {ex.Message}" +
+                (ex.StackTrace is { Length: > 0 } stack
+                    ? "　@ " + stack.Split('\n').FirstOrDefault(l => l.Contains("BotAgentHost"))?.Trim()
+                    : string.Empty));
+        // P1 观测：模型这一路出事了（超时/连不上/上游 5xx）→ ModelTimeout（**只降级不升级**）。
+        // 注意与“模型选择沉默”分开：那是它主动不说话，这是它没能说上话。
+        _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ModelTimeout);
+        _research.KeepNote(conversation.SourceKey, turn.SearchText, "模型请求失败");
+    }
+
     private async Task GenerateReplyAsync(BotConversation conversation, long? triggerMessageId, bool proactive = false, CancellationToken ct = default, IPacedReplyAttempt? pacing = null)
     {
         var explicitPolicyRequest = pacing?.IsExplicit ?? (triggerMessageId is long mentionId &&
@@ -64,10 +87,16 @@ public sealed partial class ReplyPipeline
             return;
         }
 
+        using var memoryTurn = BeginMemoryTurn();
         var turn = await _turnContext.BuildAsync(conversation, snapshot, caps, platformPolicy, proactive, pacing);
         if (turn is null)
         {
             return;
+        }
+        if (MemoryUseScope.HasMemory)
+        {
+            caps = BotAgent.Domain.Permissions.ChatCapabilitySet.FromSwitches(false, false, false, false, false, null);
+            turn = turn with { Caps = caps, StickerChoices = new() };
         }
         _traces.Node(conversation.SourceKey, TurnNodeKind.Context, "ok", count: turn.Context.Count);
 
@@ -75,13 +104,13 @@ public sealed partial class ReplyPipeline
 
         // 自然对话驱动 agent（默认关）：够资格才在提示词里出现 action=agent 这条路（见 ReplyPipeline.NaturalAgent.cs）。
         var naturalTrigger = NaturalAgentTrigger(conversation, triggerMessageId, proactive, snapshot.EnableNaturalAgent && !textOnly, pacing?.IsExplicit);
-        var naturalAgent = naturalTrigger is not null;
+        var naturalAgent = !MemoryUseScope.HasMemory && naturalTrigger is not null;
 
         try
         {
             // 批次 E：模型步骤交给有限步进循环（默认 1 步 = 只调一次，与改造前逐字一致）。
             var outcome = await _turnLoop.RunAsync(
-                conversation.SourceKey, turn, caps, proactive, snapshot.MaxAgentSteps,
+                conversation.SourceKey, turn, caps, proactive, MemoryUseScope.HasMemory ? 1 : snapshot.MaxAgentSteps,
                 result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2, turn.PlatformPolicy, ct),
                 naturalAgent ? NaturalAgentPrompt.Hint : null, ct,
                 step => _usage?.RecordUsage(conversation.SourceKey, step.PromptTokens, step.CompletionTokens), pacing);
@@ -99,24 +128,17 @@ public sealed partial class ReplyPipeline
         }
         catch (Exception ex)
         {
-            SetThinking(conversation, false);
-            // 连异常类型和第一帧调用堆栈一起记：只记 Message 时，“空引用”这种根本看不出在哪（踩过）
-            _hooks.Log($"模型请求失败: {ex.GetType().Name} {ex.Message}" +
-                    (ex.StackTrace is { Length: > 0 } stack
-                        ? "　@ " + stack.Split('\n').FirstOrDefault(l => l.Contains("BotAgentHost"))?.Trim()
-                        : string.Empty));
-            // P1 观测：模型这一路出事了（超时/连不上/上游 5xx）→ ModelTimeout（**只降级不升级**）。
-            // 注意与“模型选择沉默”分开：那是它主动不说话，这是它没能说上话。
-            _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ModelTimeout);
-            _research.KeepNote(conversation.SourceKey, turn.SearchText, "模型请求失败");
+            ObserveModelFailure(conversation, turn, ex);
             return;
         }
 
+        // Model-supplied metadata may repeat a fact; keep diagnostics shape-only.
+        if (MemoryUseScope.HasMemory) result = result with { ReasonCode = "memory-restricted", ToolId = null };
         var elapsed = (EngineClock.LocalDateTime - turn.Started).TotalMilliseconds;
         Volatile.Write(ref _lastGenerationMs, (long)elapsed);
         SetThinking(conversation, false);
 
-        if (!textOnly && await TryDispatchNaturalAgentAsync(conversation, naturalTrigger, result, elapsed))
+        if (!textOnly && !MemoryUseScope.HasMemory && await TryDispatchNaturalAgentAsync(conversation, naturalTrigger, result, elapsed))
         {
             return;
         }
@@ -140,14 +162,14 @@ public sealed partial class ReplyPipeline
         var threshold = VibeRules.VibeAdjustedThreshold(vibe, baseThreshold, out var vibeReason);
         var soberMood = vibe is "低落" or "求助" or "吵架" or "生气" or "吐槽";
 
-        if (vibe != "中性" && result.VibeNote is { Length: > 0 })
+        if (!MemoryUseScope.HasMemory && vibe != "中性" && result.VibeNote is { Length: > 0 })
         {
             _hooks.Log($"[Vibe] {conversation.Name}：读到「{vibe}」——{result.VibeNote}" +
                     (vibeReason.Length > 0 ? $"（{vibeReason}）" : string.Empty));
         }
 
         // 不管这轮说不说话，读到的气氛都记下来：沉默也是一种回应，下一轮要接得上
-        if (AllowsFeature(PluginGate.VibesCapability))
+        if (!MemoryUseScope.HasMemory && AllowsFeature(PluginGate.VibesCapability))
             _vibes.Remember(conversation.SourceKey, vibe, result.VibeNote);
 
         if (result.Suitability is int score && score < threshold)
@@ -176,7 +198,7 @@ public sealed partial class ReplyPipeline
             }
         }
 
-        var sticker = textOnly ? null : await _actions.QueueTurnActions(
+        var sticker = textOnly || MemoryUseScope.HasMemory ? null : await _actions.QueueTurnActions(
             conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, result, directAddress);
 
         var reply = (result.Reply ?? string.Empty).Trim();
@@ -201,7 +223,7 @@ public sealed partial class ReplyPipeline
         }
 
         // 模型可以顺手写一句“我现在的心情”——存下来，下一轮提示词里带上（空/太长会被忽略）
-        if (_mood.SetText(result.Mood, EngineClock.Now))
+        if (!MemoryUseScope.HasMemory && _mood.SetText(result.Mood, EngineClock.Now))
         {
             _hooks.Log($"心情变成：{_mood.Describe(EngineClock.Now)}");
         }
@@ -254,7 +276,7 @@ public sealed partial class ReplyPipeline
     {
         // P3 审批触发点（V3 §9.4，**默认关**）：模型说“我想调工具”时，服务端**绝不上手执行**，
         // 只可能开一张待批单并公告到群里（模型输出不构成授权）。开不出单 → 照旧安全静默。
-        if (allowEffects && snapshot.EnableApprovals
+        if (allowEffects && !MemoryUseScope.HasMemory && snapshot.EnableApprovals
             && result.Action == Domain.Reply.ReplyAction.Tool
             && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0)
         {
@@ -269,7 +291,7 @@ public sealed partial class ReplyPipeline
         // P2 提问路径（V3 §8.1 的 action=ask，**默认关**）：模型想问就问，但**提问不是权限** ——
         // 服务端只是把问题包一层自己的文案（一次性编号 + 有效期）发到当前会话；
         // 谁答一声都算答完，回答也只是一条普通消息，不触发任何动作。
-        if (allowEffects && snapshot.EnableQuestions
+        if (allowEffects && !MemoryUseScope.HasMemory && snapshot.EnableQuestions
             && result.Action == Domain.Reply.ReplyAction.Ask
             && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0)
         {

@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
@@ -169,6 +170,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
     /// <summary>发文本。优先当**被动回复**（带上刚收到的 msg_id，能引用上下文），失败就退化成主动消息。</summary>
     public async Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return new SendResult(false);
         ct = operation.Token;
@@ -250,6 +252,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
     /// </summary>
     public async Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return false;
         ct = operation.Token;
@@ -281,6 +284,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
     /// <summary>发图片：同样是富媒体（file_type=1）+ <c>msg_type=7</c>。</summary>
     public async Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return false;
         ct = operation.Token;
@@ -933,7 +937,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
                 if (isChatCommit && !ReplyCommitBoundary.TryBeforeSend()) continue;
                 using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonBody(body) };
                 Auth(req, token);
-                using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+                using var resp = await MemoryUseScope.UseForDelivery(() => _http.SendAsync(req, ct)).ConfigureAwait(false);
                 var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 var status = (int)resp.StatusCode;
                 if (!tokenRetried && !resp.IsSuccessStatusCode

@@ -26,6 +26,10 @@
     <Project Path="tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj" />
     <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
     <Project Path="tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj" />
+    <Project Path="tests/BotAgent.MemoryCommandProbe/BotAgent.MemoryCommandProbe.csproj" />
+    <Project Path="tests/BotAgent.MemoryDeliveryProbe/BotAgent.MemoryDeliveryProbe.csproj" />
+    <Project Path="tests/BotAgent.MemoryTurnProbe/BotAgent.MemoryTurnProbe.csproj" />
+    <Project Path="tests/BotAgent.UnifiedMemoryProbe/BotAgent.UnifiedMemoryProbe.csproj" />
     <Project Path="tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj" />
     <Project Path="tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj" />
     <Project Path="tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj" />

@@ -72,6 +72,7 @@ public static partial class Program
                 }
             }
 
+            await Scenario("s153", RunUnifiedMemoryScenarioAsync);
             await Scenario("s1", RunReverseWsScenarioAsync);
             await Scenario("s3", RunWhitelistScenarioAsync);
             await Scenario("s4", RunSilenceScenarioAsync);

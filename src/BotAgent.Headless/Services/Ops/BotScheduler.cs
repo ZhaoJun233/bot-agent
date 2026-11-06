@@ -47,6 +47,7 @@ public sealed class BotScheduler
     private long _summaryDoneCount;
     private long _summaryFailCount;
     private readonly Func<string, bool>? _pluginAllows;
+    private readonly IUnifiedMemory? _unifiedMemory;
 
     public BotScheduler(
         SettingsBox box,
@@ -57,7 +58,8 @@ public sealed class BotScheduler
         StickerService stickers,
         PanelNotifier ui,
         BotSchedulerHooks hooks,
-        Func<string, bool>? pluginAllows = null)
+        Func<string, bool>? pluginAllows = null,
+        IUnifiedMemory? unifiedMemory = null)
     {
         _box = box;
         _source = source;
@@ -68,9 +70,16 @@ public sealed class BotScheduler
         _ui = ui;
         _hooks = hooks;
         _pluginAllows = pluginAllows;
+        _unifiedMemory = unifiedMemory;
     }
 
     private AppSettings _settings => _box.Current;
+
+    // The legacy background queue has no attested source or revocable use receipt.
+    // Scoped profile mode therefore keeps trusted fragments but disables this model path.
+    private bool ProfileSummarizationAllowed() => _unifiedMemory is null
+        && _settings.EnableProfileSummary && !_hooks.IsDisposed()
+        && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) ?? true);
 
     /// <summary>QQ 账号在线状态：null = 还不知道（协议端没答复过）。</summary>
     public bool? AccountOnline
@@ -109,8 +118,7 @@ public sealed class BotScheduler
     public void RebuildIfNeeded()
     {
         var idleSeconds = Math.Max(0, _settings.IdleFallbackSeconds);
-        var summaryEnabled = _settings.EnableProfileSummary
-            && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) ?? true);
+        var summaryEnabled = ProfileSummarizationAllowed();
         var summarySeconds = Math.Max(0, _settings.ProfileSummaryIntervalSeconds);
         var stickersEnabled = _settings.EnableStickers && _settings.StickerLibraryMax > 0
             && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.StickersCapability) ?? true);
@@ -163,8 +171,7 @@ public sealed class BotScheduler
     /// <summary>画像巡检：把够条件的成员交给模型写一句画像（单轮不并发，失败只记数）。</summary>
     private async Task RunProfileSummarizationAsync()
     {
-        if (!_settings.EnableProfileSummary || _hooks.IsDisposed()
-            || (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) == false))
+        if (!ProfileSummarizationAllowed())
         {
             return;
         }
@@ -181,9 +188,7 @@ public sealed class BotScheduler
             foreach (var c in candidates)
             {
                 // 与贴图审核同一口径：每一项模型 I/O 前复核，停用/释放后不再开始下一项。
-                if (_hooks.IsDisposed()
-                    || !_settings.EnableProfileSummary
-                    || (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) == false))
+                if (!ProfileSummarizationAllowed())
                 {
                     break;
                 }
@@ -191,6 +196,7 @@ public sealed class BotScheduler
                 await _summaryGate.WaitAsync();
                 try
                 {
+                    if (!ProfileSummarizationAllowed()) return;
                     var text = await _brain.SummarizePersonaAsync(
                         string.IsNullOrWhiteSpace(c.Name) ? $"QQ{c.Uid}" : c.Name,
                         c.ExistingSummary,
@@ -203,6 +209,7 @@ public sealed class BotScheduler
                         continue;
                     }
 
+                    if (!ProfileSummarizationAllowed()) return;
                     _profiles.ApplySummary(c.Uid, c.Scope, text, c.ThroughSeq, c.FoldedCount);
                     Interlocked.Increment(ref _summaryDoneCount);
                     _hooks.Log($"画像已生成：{c.Name}({c.Uid}) @ {c.Scope}（{c.NewMessages.Count} 条 → {text.Length} 字）");

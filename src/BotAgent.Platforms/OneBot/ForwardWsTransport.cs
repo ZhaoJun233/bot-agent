@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Net.WebSockets;
 using System.Text;
 
@@ -80,7 +81,7 @@ public sealed class ForwardWsTransport : IOneBotTransport
                    ",\"echo\":" + Json(echo) + "}";
         var bytes = Encoding.UTF8.GetBytes(json);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
-        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, linked.Token);
+        await MemoryUseScope.UseForDelivery(() => socket.SendAsync(bytes, WebSocketMessageType.Text, true, linked.Token));
     }
 
     private async Task RunWithReconnectAsync(CancellationToken ct)

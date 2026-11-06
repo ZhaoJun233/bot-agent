@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Net;
 using System.Security.Cryptography;
 using BotAgent.Model.Net;
@@ -358,7 +359,7 @@ public class ModelTransport : IModelTransport
     {
         using var budget = ProviderRequestBudget.Create(route, defaultTimeout ?? http.Timeout, ct);
         using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload, stableSystemPrefixLength: stableSystemPrefixLength);
-        using var response = await http.SendAsync(request, budget.Token);
+        using var response = await MemoryUseScope.Use(() => http.SendAsync(request, budget.Token));
         var body = await response.Content.ReadAsStringAsync(budget.Token);
         budget.Token.ThrowIfCancellationRequested();
         return (response.StatusCode, response.IsSuccessStatusCode ? Protocols.ModelProtocolAdapter.NormalizeResponse(route.Protocol, body) : body);

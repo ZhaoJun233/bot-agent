@@ -24,7 +24,7 @@ static class OneBotChecks
         using var transport = new FakeActionTransport();
         var client = Activator.CreateInstance(clientType, new object[]
         {
-            (Func<IOneBotTransport?>)(() => transport), lifetime, (Func<bool>)(() => false),
+            (Func<IOneBotTransport?>)(() => transport), lifetime, (Func<bool>)(() => false), new SyntheticSource(),
         })!;
         transport.OnSend = echo => clientType.GetMethod("Complete")!.Invoke(client, new object[] { echo, new JsonObject() });
         Task<JsonNode?> Send(string action) => (Task<JsonNode?>)clientType.GetMethod("SendAsync")!.Invoke(client, new object[] { action, "{}", CancellationToken.None })!;

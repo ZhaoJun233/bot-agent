@@ -68,7 +68,7 @@ public sealed class OneBotGateway : IQqChatSource, IPlatformHistorySource, IQqAc
         _box = box;
         _transportFactory = transportFactory;
         // 待决响应表与动作面各自成类：网关只留 IQqActions 的入口，动作语义在 OneBotActions。
-        _actionsClient = new OneBotActionClient(() => _transport, _operations, () => _disposed);
+        _actionsClient = new OneBotActionClient(() => _transport, _operations, () => _disposed, this);
         _actions = new OneBotActions(riskBackoff, _actionsClient, Log);
         _queries = new OneBotQueries(_actionsClient, () => _selfId, Log);
         // 入站事件面：报文解读与"要不要上报"的判定都在 OneBotInboundEvents，

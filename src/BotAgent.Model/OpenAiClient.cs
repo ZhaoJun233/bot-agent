@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using BotAgent.Domain.Configuration;
 using BotAgent.Model.Net;
 using System.Net;
@@ -543,7 +544,7 @@ public class OpenAiClient : IModelClient
             try
             {
                 using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload);
-                response = await _auxHttp.SendAsync(request, budget.Token).ConfigureAwait(false);
+                response = await MemoryUseScope.Use(() => _auxHttp.SendAsync(request, budget.Token)).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -705,7 +706,7 @@ public class OpenAiClient : IModelClient
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
 
-            using var response = await _auxHttp.SendAsync(request, ct).ConfigureAwait(false);
+            using var response = await MemoryUseScope.Use(() => _auxHttp.SendAsync(request, ct)).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return null;
@@ -732,7 +733,7 @@ public class OpenAiClient : IModelClient
             using var budget = ProviderRequestBudget.Create(route, _auxiliaryTimeout, token);
             using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, cloned);
 
-            using var response = await _auxHttp.SendAsync(request, budget.Token).ConfigureAwait(false);
+            using var response = await MemoryUseScope.Use(() => _auxHttp.SendAsync(request, budget.Token)).ConfigureAwait(false);
             var json = await response.Content.ReadAsStringAsync(budget.Token).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
             if (response.IsSuccessStatusCode) json = Protocols.ModelProtocolAdapter.NormalizeResponse(route.Protocol, json);

@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Collections.Concurrent;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.OneBot;
@@ -92,12 +93,14 @@ public sealed class LocalChannelSource : IQqChatSource, IDisposable
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default,
         long? replyToMessageId = null, bool directAddress = false)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return Task.FromResult(new SendResult(false));
         operation.Token.ThrowIfCancellationRequested();
         var key = Channels.Key(Channels.Local, isGroup, targetId);
         var id = Interlocked.Increment(ref _nextMessageId);
-        _outbox.Enqueue(new LocalMessage(id, key, text ?? string.Empty, Clock.Now));
+        if (!MemoryUseScope.TryDeliver(() => _outbox.Enqueue(new LocalMessage(id, key, text ?? string.Empty, Clock.Now))))
+            return Task.FromResult(new SendResult(false));
         while (_outbox.Count > OutboxCapacity)
         {
             _outbox.TryDequeue(out _);

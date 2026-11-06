@@ -134,6 +134,7 @@ jobs:
       - name: Synthetic review remediation probes
         run: |
           dotnet run --project tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj -c Release --no-restore -- --memory-scheduler
           dotnet run --project tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj -c Release --no-restore
@@ -141,6 +142,12 @@ jobs:
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release --no-restore
+      - name: Synthetic unified memory authorization and delivery probes
+        run: |
+          dotnet run --project tests/BotAgent.MemoryCommandProbe/BotAgent.MemoryCommandProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.MemoryDeliveryProbe/BotAgent.MemoryDeliveryProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.MemoryTurnProbe/BotAgent.MemoryTurnProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.UnifiedMemoryProbe/BotAgent.UnifiedMemoryProbe.csproj -c Release --no-restore
       - name: Provider protocol, plugin and snapshot probes
         run: |
           dotnet run --project tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj -c Release --no-restore
@@ -255,7 +262,7 @@ jobs:
           # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
           # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s153"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -148,7 +149,7 @@ public sealed class HttpTransport : IOneBotTransport
         {
             Content = new StringContent(paramsJson, Encoding.UTF8, "application/json")
         };
-        var response = await http.SendAsync(request, ct);
+        var response = await MemoryUseScope.UseForDelivery(() => http.SendAsync(request, ct));
         response.EnsureSuccessStatusCode();
         return response;
     }
