@@ -787,11 +787,13 @@ public static partial class Program
 
             await Task.Delay(1500); // 等落盘
 
-            // 校验人物档案（现在存在 SQLite 里）
-            var profileText = DbProbe.Text(dataDir, "SELECT text FROM member_messages WHERE uid = '30003' LIMIT 1");
-            Check("为发送者建立了人物档案", profileText is not null, profileText ?? "(库里没有 30003 的发言)");
+            // ADR-0004 §8.2(8)：实时档案使用来源摘要键，不能继续写入全局 scalar UID。
+            var profileKey = ReadAttestedProfileKey(dataDir, 0, "机器人帮我看个问题");
+            var profileText = DbProbe.Text(dataDir, "SELECT text FROM member_messages WHERE uid = $uid LIMIT 1", ("$uid", profileKey));
+            Check("为发送者建立了来源可证的实时档案", profileText == "机器人帮我看个问题", profileText ?? "(未找到实时发言)");
+            Check("不再向旧 scalar UID 写入实时档案", DbProbe.Count(dataDir, "SELECT COUNT(1) FROM member_messages WHERE uid = '30003'") == 0);
             var profileDump = DbProbe.Dump(dataDir,
-                "SELECT m.name, mm.text FROM members m LEFT JOIN member_messages mm ON mm.uid = m.uid WHERE m.uid = '30003'");
+                "SELECT m.name, mm.text FROM members m LEFT JOIN member_messages mm ON mm.uid = m.uid WHERE m.uid = $uid", ("$uid", profileKey));
             Check("档案内容可读（中文正常）", profileDump.Contains("小美") && profileDump.Contains("机器人帮我看个问题"), Truncate(profileDump, 300));
             Check("档案记下了昵称与发言", profileDump.Contains("小美") && profileDump.Contains("|"), Truncate(profileDump, 300));
 
@@ -1035,6 +1037,14 @@ public static partial class Program
         }
         await Task.Delay(3000);
 
+        var keyA = ReadAttestedProfileKey(dataDir, groupA, "A群机密暗号");
+        var keyB = ReadAttestedProfileKey(dataDir, groupB, "B群机密暗号");
+        Check("同一成员在不同群使用不同来源摘要键", keyA.Length > 0 && keyB.Length > 0 && keyA != keyB);
+        foreach (var group in new[] { groupA, groupB })
+            Check("两群普通直接文本回复均正常发送", protocol.ActionsReceived.Any(a =>
+                a["action"]?.GetValue<string>() == "send_group_msg"
+                && a["params"]?["group_id"]?.GetValue<long>() == group && MessageText(a).StartsWith("ok-", StringComparison.Ordinal)));
+
         // 取「在 B 群发出的最后一次请求」的提示词（按消息内容定位）
         var bRequests = openAi.Requests
             .Where(r => UserTexts(r).Any(u => u.Contains("B群")))
@@ -1055,120 +1065,99 @@ public static partial class Program
             var sysA = SystemText(lastA);
 
             Check("B 群提示词里带了档案段（本群更早的发言）", sysB.Contains("本群更早的发言"),
-                "参与者/档案段：" + ParticipantsSection(lastB));            Check("B 群档案含本群更早的消息", sysB.Contains("B群机密暗号"), Truncate(sysB, 600));
+                "参与者/档案段：" + ParticipantsSection(lastB));
+            Check("B 群档案含本群更早的消息", sysB.Contains("B群机密暗号"), Truncate(sysB, 600));
             Check("★ B 群提示词绝不包含 A 群的发言", !sysB.Contains("A群机密暗号"), "泄露了：" + Truncate(sysB, 600));
 
             Check("A 群提示词里带了档案段", sysA.Contains("本群更早的发言"), Truncate(sysA, 600));
+            Check("A 群档案含本群更早的消息", sysA.Contains("A群机密暗号"), Truncate(sysA, 600));
             Check("★ A 群提示词绝不包含 B 群的发言", !sysA.Contains("B群机密暗号"), "泄露了：" + Truncate(sysA, 600));
 
             Check("档案不再重复注入上下文里已有的消息",
                 !sysB.Contains("B群第11句闲聊"), Truncate(sysB, 400));
+            foreach (var request in new[] { lastA, lastB })
+                Check("消费本群档案的回合没有外部工具", !SystemText(request).Contains("[可用工具]")
+                    && request["tools"] is not JsonArray { Count: > 0 });
         }
 
         await bot.StopAsync();
     }
 
-    // ═══════════════════ S9：长期记忆 · 画像摘要 ═══════════════════
+    // ═══════════════════ S9：长期记忆 · 来源原文兼容 ═══════════════════
 
-    /// <summary>验证：堆积的历史发言会被模型压缩成画像，且后续请求注入的是“画像”而不是“一堆原文”。</summary>
+    /// <summary>旧摘要配置不再产生自动派生画像；有实时来源证明的原文仍采集并供直接文本回复消费。</summary>
     private static async Task RunProfileSummaryScenarioAsync()
     {
-        Section("S9 长期记忆：发言 → 画像 → 注入");
-
+        Section("S9 自动画像摘要保持关闭 / 来源实时档案持续采集");
         const int openAiPort = 17808;
         const int botWsPort = 13018;
-        const long groupId = 77771;
+        const long groupId = 66661;
         var dataDir = NewDataDir("s9");
-
-        using var openAi = new MockOpenAi(openAiPort);
-        openAi.Start();
-
-        // 前 N 条喂给聊天；中间穿插画像请求（mock 按“是否为画像提示词”自动分派）
-        for (var i = 0; i < 40; i++)
-        {
-            // 每条都不一样：连续两条一字不差会被“复读守卫”拦下（见 S10），
-            // 那会让本场景要验证的东西被静默掉
-            openAi.EnqueueReply($$"""{"suitability": 99, "reply": "ok-{{i + 1}}"}""");
-        }
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(4));
-        using var bot = StartBot(new Dictionary<string, string>
+        var env = new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = dataDir,
             ["QQCHAT_API_KEY"] = "sk-mock",
-            ["QQCHAT_BASE_URL"] = openAi.BaseUrl,
+            ["QQCHAT_BASE_URL"] = $"http://127.0.0.1:{openAiPort}/v1",
             ["QQCHAT_MODEL"] = "mock-model",
             ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket",
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
             ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_MAX_CONTEXT"] = "5",
-            ["QQCHAT_PROFILE_LINES"] = "20",
-            ["QQCHAT_PROFILE_CHARS"] = "100000",
+            ["QQCHAT_MAX_CONTEXT"] = "4",
+            ["QQCHAT_MAX_MEMBER_MESSAGES"] = "200",
+            // 故意启用旧配置并跨越阈值：ADR-0004 §8.2(8) 禁止未授权自动摘要。
             ["QQCHAT_PROFILE_SUMMARY"] = "1",
-            ["QQCHAT_PROFILE_SUMMARY_THRESHOLD"] = "8",
-            ["QQCHAT_PROFILE_SUMMARY_INTERVAL"] = "5", // 5 秒巡检一次，测试友好
-            ["QQCHAT_PROFILE_SUMMARY_CHARS"] = "80",
+            ["QQCHAT_PROFILE_SUMMARY_THRESHOLD"] = "5",
+            ["QQCHAT_PROFILE_SUMMARY_INTERVAL"] = "3",
             ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
-        });
-
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var openAi = new MockOpenAi(openAiPort);
+        openAi.Start();
+        openAi.EnqueueReply("{\"suitability\":99,\"reply\":\"第一轮正常回复\"}");
+        openAi.EnqueueReply("{\"suitability\":99,\"reply\":\"第二轮正常回复\"}");
+        using var bot = StartBot(env);
         await WaitForPortAsync(botWsPort, cts.Token, bot);
-
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
-        await protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(10));
-
-        // 12 条有信息量的历史（足够触发阈值 8）
+        await Task.Delay(1000, cts.Token);
         for (var i = 0; i < 12; i++)
         {
-            await protocol.SendGroupMessageAsync(groupId, 20002, "老王", $"老王的历史发言第{i}句", 8300 + i, mentionBot: true, ct: cts.Token);
+            await protocol.SendGroupMessageAsync(groupId, 20002, "记忆用户", $"第一轮画像原始发言{i}", 8900 + i, ct: cts.Token);
+            await Task.Delay(60, cts.Token);
         }
+        await protocol.SendGroupMessageAsync(groupId, 20002, "记忆用户", "机器人请看第一轮", 8915, mentionBot: true, ct: cts.Token);
+        await protocol.WaitForActionAsync("send_group_msg", TimeSpan.FromSeconds(12));
+        await Task.Delay(6000, cts.Token);
+        var profileKey = ReadAttestedProfileKey(dataDir, groupId, "第一轮画像原始发言0");
+        Check("第一轮实时档案保留十二条原文", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '第一轮画像原始发言%'", ("$uid", profileKey)) == 12);
+        CheckNoAutomaticProfileSummary(dataDir, openAi);
+        var first = openAi.Requests.LastOrDefault(x => UserTexts(x).Any(t => t.Contains("机器人请看第一轮")));
+        Check("普通回答确实消费同源更早的原文", first is not null && SystemText(first).Contains("第一轮画像原始发言0"));
+        Check("首轮系统提示仍在独立长度预算内", first is not null && SystemText(first).Length < 4200, $"system 长度={SystemText(first ?? new JsonObject()).Length}");
+        Check("消费画像的回答只允许直接文本", first is not null && !SystemText(first).Contains("[可用工具]")
+            && first["tools"] is not JsonArray { Count: > 0 });
 
-        // 等画像巡检落地（间隔 5 秒）
-        await Task.Delay(14000);
-
-        var profileDump2 = DbProbe.Dump(dataDir, "SELECT scope, text, through_seq FROM member_summaries WHERE uid = '20002'");
-        Check("库里已写入画像（Summaries）", profileDump2.Length > 0, Truncate(profileDump2, 400));
-        Check("画像记下了折叠到的序号 ThroughSeq", DbProbe.Count(dataDir, "SELECT COUNT(1) FROM member_summaries WHERE uid = '20002' AND through_seq <> 0") > 0, Truncate(profileDump2, 400));
-
-        // 再来一条新消息 → 请求里应带上“画像”字样，且不再重复成堆的已折叠原文
-        openAi.EnqueueReply("""{"suitability": 99, "reply": "收到"}""");
-        await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "新的问题来了", 8399, mentionBot: true, ct: cts.Token);
-        await Task.Delay(4000);
-
-        var last = openAi.Requests.LastOrDefault(r => UserTexts(r).Any(u => u.Contains("新的问题来了")));
-        Check("触发了新的模型请求", last is not null);
-
-        if (last is not null)
+        for (var i = 0; i < 12; i++)
         {
-            var sys = SystemText(last);
-            Check("★ 注入里出现了“画像”字段", sys.Contains("画像："), Truncate(sys, 700));
-
-            var headerChars = sys.Length;
-            // 预算一路长上来：2500 → 3200（发言决策细则）→ 3400（replyTo 语义 + 底线）
-            // → 3500（〔旁白：…〕）→ 4000（现在的时间 + 搜索自主判断）→ 4200（#97 时效边界：
-            // 知识截止未知 / 不否认新事实 / 用户说法未确认，+164 字，实测 4125）。
-            // ⚠ 这是**提醒线**，不是目标：再加内容时先想想能不能删旧话 ——
-            // 提示词越长越慢越贵（§23.3 C 的“生成 8~15s”里就有它一份）。
-            // #98（缓存前缀与时延）会重新精简这一段，届时把线往下调。
-            Check("系统提示没失控（< 4200 字，提醒线；真正要钉的是下面的“已折叠不重复”）",
-             headerChars < 4200, $"实际 {headerChars} 字");
-
-             // 批次 D：工具清单真的进了系统提示（按策略裁剪；没开的能力不出现）。
-             Check("★ 提示词里带了工具清单 [可用工具]（批 D：让模型看见工具）",
-                 sys.Contains("[可用工具]", StringComparison.Ordinal)
-                 && sys.Contains("web.search", StringComparison.Ordinal)
-                 && !sys.Contains("voice.speak", StringComparison.Ordinal),
-                 $"清单段 {sys.Split("[可用工具]").Length - 1} 处");
-
-            var foldedCount = sys.Split("老王的历史发言").Length - 1;
-            Check("已折叠的原文不再重复注入（最多只剩未折叠的尾部）", foldedCount <= 4,
-                $"提示词里出现了 {foldedCount} 条已折叠原文");
+            await protocol.SendGroupMessageAsync(groupId, 20002, "记忆用户", $"第二轮画像新发言{i}", 8920 + i, ct: cts.Token);
+            await Task.Delay(60, cts.Token);
         }
-
-        // 状态端点可观测
+        await protocol.SendGroupMessageAsync(groupId, 20002, "记忆用户", "机器人请看第二轮", 8935, mentionBot: true, ct: cts.Token);
+        await WaitUntilAsync(() => protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg") >= 2, TimeSpan.FromSeconds(12));
+        await Task.Delay(6000, cts.Token);
+        Check("再次跨越阈值仍持续保存十二条新原文", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '第二轮画像新发言%'", ("$uid", profileKey)) == 12);
+        var last = openAi.Requests.LastOrDefault(x => UserTexts(x).Any(t => t.Contains("机器人请看第二轮")));
+        Check("追加原文后系统提示仍在独立长度预算内", last is not null && SystemText(last).Length < 4200,
+            $"system 长度={SystemText(last ?? new JsonObject()).Length}");
+        Check("第二轮仍消费来源内原文且不暴露外部工具", last is not null && SystemText(last).Contains("第二轮画像新发言0")
+            && !SystemText(last).Contains("[可用工具]") && last["tools"] is not JsonArray { Count: > 0 });
+        Check("两轮普通文本回复均正常发送", protocol.ActionsReceived.Count(a => a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).Contains("正常回复")) == 2);
+        CheckNoAutomaticProfileSummary(dataDir, openAi);
         await bot.StopAsync();
     }
 
@@ -1307,8 +1296,8 @@ public static partial class Program
     // ═══════════════════ S11：重启后记忆不冻结 ═══════════════════
 
     /// <summary>
-    /// 回归：会话序号以前不落盘，重启后从头计数 → 小于画像里已记录的 ThroughSeq，
-    /// 于是该成员的新发言既不注入、也不参与摘要。
+    /// 回归：会话序号以前不落盘，重启后从头计数会让新发言与旧档案序号冲突。
+    /// 自动摘要现已停用，改以实时档案序号、会话 next_seq 和重启后注入作为正控。
     /// 本场景故意把会话上限调小，让“磁盘上的序号”与“重启后的计数”产生差距。
     /// </summary>
     private static async Task RunRestartMemoryScenarioAsync()
@@ -1368,8 +1357,14 @@ public static partial class Program
             await Task.Delay(1200);  // 等落盘
         }
 
-        var throughSeqBefore = ReadThroughSeq(dataDir, "20002");
-        Check("重启前已生成画像（ThroughSeq > 0）", throughSeqBefore > 0, $"ThroughSeq={throughSeqBefore}");
+        var profileKey = ReadAttestedProfileKey(dataDir, groupId, "重启前第0句");
+        var seqBefore = DbProbe.Count(dataDir, "SELECT COALESCE(MAX(seq), 0) FROM member_messages WHERE uid = $uid", ("$uid", profileKey));
+        var nextSeqBefore = DbProbe.Count(dataDir, "SELECT next_seq FROM conversations WHERE source_key = $key", ("$key", $"group:{groupId}"));
+        var retainedCount = DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE source_key = $key AND archived = 0", ("$key", $"group:{groupId}"));
+        Check("重启前实时档案保留全部三十条发言", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '%重启前第%'", ("$uid", profileKey)) == 30);
+        Check("落盘 next_seq 超过裁剪后消息数量", nextSeqBefore > retainedCount && nextSeqBefore >= seqBefore,
+            $"next_seq={nextSeqBefore}, max_profile_seq={seqBefore}, retained={retainedCount}");
 
         // ---- 重启：同一数据目录 ----
         using (var openAi2 = new MockOpenAi(openAiPort))
@@ -1396,12 +1391,19 @@ public static partial class Program
 
             await Task.Delay(9000);
 
-            var throughSeqAfter = ReadThroughSeq(dataDir, "20002");
-            Check("★ 重启后画像继续推进（记忆不冻结，C2 回归）",
-                throughSeqAfter > throughSeqBefore,
-                $"重启前 {throughSeqBefore} → 重启后 {throughSeqAfter}；" +
-                $"库中档案发言={DbProbe.TableCount(dataDir, "member_messages")}、消息={DbProbe.TableCount(dataDir, "messages")}；" +
-                $"bot2 日志：{string.Join(" | ", bot2.OutputLines.Where(l => l.Contains("Store") || l.Contains("失败")).TakeLast(3))}");
+            var restartedKey = ReadAttestedProfileKey(dataDir, groupId, "重启后第0句");
+            Check("重启后仍使用相同的完整来源键", restartedKey.Length > 0 && restartedKey == profileKey);
+            var firstNewSeq = DbProbe.Count(dataDir,
+                "SELECT COALESCE(MIN(seq), 0) FROM member_messages WHERE uid = $uid AND text LIKE '%重启后第%'", ("$uid", profileKey));
+            Check("★ 重启后新发言序号严格超过重启前档案（C2 回归）", firstNewSeq > seqBefore,
+                $"重启前最大 {seqBefore} → 重启后最小 {firstNewSeq}");
+            Check("重启后六条实时原文完整保存", DbProbe.Count(dataDir,
+                "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '%重启后第%'", ("$uid", profileKey)) == 6);
+            Check("重启前原文未被新序号覆盖", DbProbe.Count(dataDir,
+                "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '%重启前第%'", ("$uid", profileKey)) == 30);
+            CheckNoAutomaticProfileSummary(dataDir, openAi2);
+            Check("重启后普通直接回复正常发送", protocol2.ActionsReceived.Any(a =>
+                a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).StartsWith("ok-", StringComparison.Ordinal)));
 
             var prompt = openAi2.Requests.LastOrDefault();
             if (prompt is null)
@@ -1410,16 +1412,33 @@ public static partial class Program
             }
             else
             {
-                Check("重启后仍然注入档案", SystemText(prompt).Contains("老王"), Truncate(SystemText(prompt), 400));
+                Check("重启后仍然注入来源内更早的真实原文", SystemText(prompt).Contains("重启前第"), Truncate(SystemText(prompt), 400));
             }
 
             await bot2.StopAsync();
         }
     }
 
-    /// <summary>读某人画像折叠到的最大序号（库里查；没有则返回 0）。</summary>
-    private static long ReadThroughSeq(string dataDir, string uid)
-        => DbProbe.Count(dataDir, "SELECT COALESCE(MAX(through_seq), 0) FROM member_summaries WHERE uid = $uid", ("$uid", uid));
+    /// <summary>仅查询本场景合成消息；不把测试耦合到驱动自动分配的 ID 或摘要算法。</summary>
+    private static string ReadAttestedProfileKey(string dataDir, long groupId, string syntheticText)
+    {
+        var key = DbProbe.Text(dataDir,
+            "SELECT uid FROM member_messages WHERE group_id = $group AND (text = $text OR text = $mention) LIMIT 1",
+            ("$group", groupId), ("$text", syntheticText), ("$mention", "@10001 " + syntheticText)) ?? "";
+        Check("实时档案使用版本化来源摘要键", System.Text.RegularExpressions.Regex.IsMatch(key,
+            "^legacy-profile:v1:[0-9A-F]{64}$"), key.Length > 0 ? key : "(未找到合成消息)");
+        Check("合成消息只归入一个来源键", DbProbe.Count(dataDir,
+            "SELECT COUNT(DISTINCT uid) FROM member_messages WHERE group_id = $group AND (text = $text OR text = $mention)",
+            ("$group", groupId), ("$text", syntheticText), ("$mention", "@10001 " + syntheticText)) == 1);
+        return key;
+    }
+
+    private static void CheckNoAutomaticProfileSummary(string dataDir, MockOpenAi openAi)
+    {
+        Check("不调用无逐事实授权的自动画像摘要", openAi.PortraitRequests == 0,
+            $"画像摘要请求={openAi.PortraitRequests}");
+        Check("不持久化自动派生摘要或 ThroughSeq", DbProbe.TableCount(dataDir, "member_summaries") == 0);
+    }
 
     // ═══════════════════ S12：历史补录真的进得了模型 ═══════════════════
 
@@ -1510,7 +1529,7 @@ public static partial class Program
             DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%［system] 补录历史第0句%'") == 1
             && DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE text LIKE '%[system] 补录历史第0句%'") == 0);
 
-        // 2) 补录历史对模型可见（走档案路径 —— 因为窗口只有 5 条）
+        // 2) ADR-0004 §8.2(8)：缺乏可靠来源证明的补录历史不能借档案路径注入模型
         var last = openAi.Requests.LastOrDefault(r => UserTexts(r).Any(u => u.Contains("补录之后的提问")));
         if (last is null)
         {
@@ -1522,26 +1541,38 @@ public static partial class Program
 
             var sys = SystemText(last);
             var visible = Enumerable.Range(0, 8).Count(i => sys.Contains($"补录历史第{i}句"));
-            Check("★ 补录历史对模型可见（H3 回归）", visible > 0, $"提示词里出现 {visible} 条：{Truncate(sys, 500)}");
+            Check("未证实来源的历史不经系统档案注入", visible == 0, $"提示词里出现 {visible} 条：{Truncate(sys, 500)}");
 
-            // ★ 真正有区分度的那条：
-            // 补录历史在时间上更早，所以它的序号必须比现有消息更小。
-            // 旧实现给它们分配 ++_nextSeq（比现有消息更大），序号顺序与列表顺序相反，
-            // 导致“这条是否已在上下文窗口里”的判断失效 → 同一条消息既在 user 消息里、
-            // 又在 system 档案里被重复注入（白花 token，还让模型以为你说了两遍）。
+            // ProfilesText 为空时 PromptBuilder 会从当前窗口生成参与者速览，
+            // “最近说”允许引用最后一句；它不是持久化档案，不应被该去重负控误判。
+            // 只移除精确的合成用户/最新消息速览行，其余 system 内容仍完整参与检查。
             var users = UserTexts(last);
+            const string previewPattern = @"(?m)^老王：发言 [0-9]+ 次，最近说“@10001 补录之后的提问”\r?$";
+            var previews = System.Text.RegularExpressions.Regex.Matches(sys, previewPattern);
+            Check("当前窗口参与者速览只引用最后一句一次（不等于持久化档案）", previews.Count == 1);
+            var withoutWindowPreview = System.Text.RegularExpressions.Regex.Replace(sys, previewPattern, string.Empty);
             var duplicated = new[] { "触发补录的那条", "补录之后的提问" }
-                .Where(t => sys.Contains(t) && users.Any(u => u.Contains(t)))
+                .Where(t => withoutWindowPreview.Contains(t) && users.Any(u => u.Contains(t)))
                 .ToList();
 
-            Check("★ 上下文里已有的消息不再被档案重复注入（序号语义回归）",
+            Check("★ 上下文里的消息不会被持久化档案再次注入（序号语义回归）",
                 duplicated.Count == 0, $"重复注入：{string.Join(" | ", duplicated)}");
         }
 
-        // 3) 面板能看到群里的档案（以前只看得到私聊记录）
-        var (pStatus, pBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/profiles/20002", panelToken);
-        Check("成员档案接口可访问", pStatus == 200, $"HTTP {pStatus}");
-        Check("★ 面板能看到群聊里的档案（M1 回归）", pBody.Contains("补录历史第"), Truncate(pBody, 400));
+        // 3) 面板原聊天保持可见；实时档案继续采集，但绝不把补录历史伪装为可证来源。
+        var liveKey = ReadAttestedProfileKey(dataDir, groupId, "触发补录的那条");
+        Check("实时两条发言仍完整进入同源档案", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text IN ('@10001 触发补录的那条', '@10001 补录之后的提问')", ("$uid", liveKey)) == 2);
+        Check("历史补录不回填人物档案", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE text LIKE '%补录历史%'") == 0);
+        var (pStatus, pBody) = await HttpGetAsync($"http://127.0.0.1:{panelPort}/api/profiles/{liveKey}", panelToken);
+        Check("来源档案接口可访问", pStatus == 200, $"HTTP {pStatus}");
+        Check("面板来源档案显示实时发言且不混入补录历史", pBody.Contains("触发补录的那条")
+            && pBody.Contains("补录之后的提问") && !pBody.Contains("补录历史第"), Truncate(pBody, 400));
+        Check("历史序号严格早于触发补录的实时消息", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM messages h JOIN messages live ON live.source_key = h.source_key WHERE h.qq_message_id BETWEEN 70001 AND 70008 AND live.qq_message_id = 9400 AND h.seq < live.seq") == 8);
+        Check("补录后普通直接文本回复正常发送", protocol.ActionsReceived.Any(a =>
+            a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).StartsWith("ok-", StringComparison.Ordinal)));
 
         await bot.StopAsync();
     }
@@ -1708,12 +1739,12 @@ public static partial class Program
     /// 回归：定时器（画像巡检 / 静默兜底）以前只在 Start() 里创建一次，
     /// 于是面板里开「启用画像摘要」或改「巡检间隔」**永远不生效，得重启** ——
     /// 用起来就像“设置保存不了”。
-    /// 本场景：一开始关着画像，运行中通过 /api/settings 打开 → 必须真的跑起来。
+    /// 本场景：运行中打开旧摘要配置不得重新启用未经授权的派生摘要，但实时原文仍持续采集。
     /// 同时验证把会话上限改小会立即裁剪。
     /// </summary>
     private static async Task RunRuntimeSettingsScenarioAsync()
     {
-        Section("S15 面板改设置立即生效（定时器重建 + 立即裁剪）");
+        Section("S15 面板改设置立即生效（立即裁剪 + 自动摘要保持禁用）");
 
         const int openAiPort = 17814;
         const int botWsPort = 13024;
@@ -1763,7 +1794,10 @@ public static partial class Program
         }
 
         await Task.Delay(5000);
-        Check("初始关闭画像时不生成画像", ReadThroughSeq(dataDir, "20002") == 0, $"ThroughSeq={ReadThroughSeq(dataDir, "20002")}");
+        CheckNoAutomaticProfileSummary(dataDir, openAi);
+        var profileKey = ReadAttestedProfileKey(dataDir, groupId, "改设置前第0句");
+        Check("关闭自动摘要也持续采集三十条来源内原文", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '%改设置前第%'", ("$uid", profileKey)) == 30);
 
         var (s0, m0) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/conversations/group:{groupId}/messages?limit=999");
         var countBefore = s0 == 200 ? System.Text.RegularExpressions.Regex.Matches(m0, "\\\"role\\\":").Count : -1;
@@ -1786,7 +1820,7 @@ public static partial class Program
         var countAfterShrink = s1 == 200 ? System.Text.RegularExpressions.Regex.Matches(m1, "\\\"role\\\":").Count : -1;
         Check("★ 改小会话上限立即裁剪（不用等新消息）", countAfterShrink == 20, $"{countBefore} → {countAfterShrink}（期望 20）");
 
-        // 再发几条新消息 → 新开的画像定时器应该把它们折进画像
+        // 再跨越旧摘要阈值：配置热更新不得重新启用未经逐事实授权的自动派生摘要
         for (var i = 0; i < 8; i++)
         {
             await protocol.SendGroupMessageAsync(groupId, 20002, "老王", $"改设置后第{i}句", 9800 + i, mentionBot: true, ct: cts.Token);
@@ -1794,9 +1828,13 @@ public static partial class Program
 
         await Task.Delay(14000); // 定时器首次 3 秒、之后每 3 秒
 
-        var through = ReadThroughSeq(dataDir, "20002");
-        Check("★ 运行中开启的画像巡检真的跑起来了（定时器重建，回归）",
-            through > 0, $"ThroughSeq={through}（修复前永远是 0，要重启才行）");
+        CheckNoAutomaticProfileSummary(dataDir, openAi);
+        Check("配置热更新后八条新原文仍写入同源档案", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '%改设置后第%'", ("$uid", profileKey)) == 8);
+        Check("热更新不删除既有三十条来源档案", DbProbe.Count(dataDir,
+            "SELECT COUNT(1) FROM member_messages WHERE uid = $uid AND text LIKE '%改设置前第%'", ("$uid", profileKey)) == 30);
+        Check("热更新后普通直接回复仍正常发送", protocol.ActionsReceived.Any(a =>
+            a["action"]?.GetValue<string>() == "send_group_msg" && MessageText(a).StartsWith("ok-", StringComparison.Ordinal)));
 
         await bot.StopAsync();
     }

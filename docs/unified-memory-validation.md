@@ -104,7 +104,7 @@ BOTAGENT_IT_ONLY=s153 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10
 
 本节补充原候选的历史证据，不把上文旧二进制指纹冒充当前候选。公共基线为 `4bec023be0e884cf8594cbf3eccd0d0e2088ae2a`；在独立工作树上增量集成统一记忆，保留基线已有的平台拆分、回复节奏、取消语义和发送确认计数。
 
-- 完整 solution Release 构建成功（.NET 10），0 错误；现有 3 条编译警告未作为成功测试隐去。
+- 完整 solution Release 构建成功（.NET 10），0 错误；现有 4 条编译警告（合成探针中的一个未使用事件和三个未赋值字段）未作为成功测试隐去。
 - 最终串行矩阵共 **37 个原生命令，37 通过 / 0 失败**：4 组记忆探针、Architecture、7 组 Reply 节奏/调度/提示词探针，以及 Safety、Participation、Engine、ProductionSpec、ConcurrencyStress、ChaosFault、Configuration、PipelineEval、ReviewRemediation、ReverseTransport、DeadlineGate、FeishuRemediation、SettingsScope、Ssrf、Mcp、Zba、Protocol、PluginPackage、PluginSettings、Snapshot、PluginMarket；另含 legacy-schema、memory-scheduler、task-approval 特定入口及重新构建宿主的 s153。只用合成数据。
 - 首轮复跑误用旧 `net8.0` 产物路径，未执行有效探针；该运行失败记录保留，不计入测试通过。修正入口到 `net10.0` 后，第二轮为 35/37：GenerateReplyAsync 长度 199 超过既有阈值 198；旧反射夹具缺少 OneBotActionClient 新增来源参数。分别通过提取 BeginMemoryTurn 和向夹具传入 SyntheticSource 修复；没有提高架构阈值或让生产来源身份变成可选。随后重新构建并完整复跑上述 37 项。
 - 独立只读复核检查了原候选与公共基线间的回合收据、来源恢复、最终 I/O 闸门、取消及发送确认合并，未发现具体阻断项；此结论不是全仓安全审计或生产部署验收。
@@ -120,3 +120,23 @@ IntegrationHarness.dll: d3283e7e81aad31554e79e7c617cddc069166e2a3656844d1bcff81c
 ```
 
 本节记录的是推送前本地验证；不预先宣称远端 CI 已通过。发布仍须走独立快照、双重脱敏审计和普通快进推送，基线移动时停止而非覆盖。上文未覆盖范围与收回边界继续有效。
+
+## 9. 完整公开 CI 暴露的旧契约测试与修正
+
+首轮公开提交 `6c27a022ac993d8ca05781dda3307c0dc08dc244` 的[完整 CI](https://github.com/ZhaoJun233/bot-agent/actions/runs/42179689000)保留为原始反例：Core & Chat 有 14 条失败断言，Media & Tools 有 1 条；构建与合成探针、治理/多平台及前端全部检查通过。它不是“只有网络查询失败”，也不能用第 8 节的 37 条本机命令替代。
+
+多数失败断言仍要求旧 scalar uid 档案、无授权自动摘要或迁移画像直接注入模型，与已批准的 [ADR 0004](decisions/0004-unified-memory-authorization.md) §8.2.5 / §8.2.8 相反；S12 的上下文去重负控另行定位为当前窗口参与者速览的误判，未删除该负控。本轮只修订合成集成测试，不修改生产授权逻辑或架构阈值：
+
+- 实时档案用完整来源摘要键验证；保留同源原文收集、异源隔离、普通回复正控。
+- 开启旧摘要设置也不能恢复无撤销边界的自动摘要；记忆回合保持无工具，正常聊天/存储仍可用。
+- 保留实际双宿主重启，验证聊天序号与同源档案继续增长，而不是让已停用的自动摘要进度充当持久化证明。
+- 协议历史补录仍进入原始聊天/面板上下文，但不冒充实时档案、不通过 system 提示获得记忆授权。
+- S27 继续验证旧 JSON 迁移、旧文件留档、幂等、旧聊天上下文和正常回复；新增旧 scalar 画像不注入模型且迁移数据不被删除的成对断言。
+
+修订后的第一次定向复跑为 91 通过 / 28 失败，保留反例后查明合成夹具的三项假设错误：@ 消息存储原文带 `@10001 ` 前缀；上下文最小值是 10，原先 6 条种子未出窗口；数据库历史行含 `archived=1`，裁剪正控应数活动行而非要求删除历史。修正夹具后为 118 通过 / 1 失败。
+
+最后一条 S12 反例中的重复文本精确位于 `老王：发言 9 次，最近说“@10001 补录之后的提问”`，由 [PromptBuilder 的窗口兜底](../src/BotAgent.Model/Model/PromptBuilder.cs#L375-L386)及[最近发言格式](../src/BotAgent.Model/Model/PromptBuilder.cs#L540-L558)生成，不是持久化画像回退。断言新增该合法速览恰好一次的正控，只排除这个精确合成用户/最新消息的速览行，再对其余完整 system 内容执行原去重负控；历史序号先于实时消息、禁止补录画像的断言也保留。生产代码未变，未通过禁止正常窗口上下文来掩盖失败。
+
+最终定向复跑 **120 通过 / 0 失败**；完整本机 CI 分组 Core **205/0**、Media **319/0**、S153 **176/0**、Architecture **219/0**，四条原生命令均 exit 0。生产 `src`、Headless、Engine 指纹仍与第 8 节一致；测试程序集更新为 `8ac06160cd5459e9ce0546c5756e770bfe11bec7bc3af2a36879110a63e88763`。原始日志、分组退出码和候选指纹在工作区独立证据目录留存。
+
+首轮及定向红灯、完整合成提示词诊断和网络查询 EOF 证据均保留，不以改写历史隐藏。以上为本地证据，追加公开提交仍须通过完整远端 CI 与内外独立脱敏复检。
