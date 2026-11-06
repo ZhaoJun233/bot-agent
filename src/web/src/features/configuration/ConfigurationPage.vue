@@ -42,6 +42,7 @@ import { receiptOutcome, restartNoticeMessage } from './receipt-notice'
 import { runtimeEffectPresentation } from './runtime-effects'
 import { policyDenials as findPolicyDenials } from './policy-presentation'
 import { fieldHint, fieldLabel } from './field-labels'
+import { replyPacingNumericLimits } from './reply-pacing'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
 import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
@@ -442,8 +443,24 @@ function isFieldDirty(section: SectionKey, key: string, field: ZbaReadField): bo
   return isDirty(draft.value, fieldPath(section as ZbaPatchSectionLike, key), field)
 }
 
+const replyPacingActive = computed(() => {
+  const field = snapshot.value?.view?.behavior?.replyPacingEnabled
+  if (!field) return false
+  return field.visibility === 1
+    ? currentDraftRaw('behavior', 'replyPacingEnabled', field) === 'true'
+    : field.display === 'true'
+})
+
+function legacyDesireInactive(section: SectionKey, key: string): boolean {
+  return section === 'behavior' && key === 'aiDesire' && replyPacingActive.value
+}
+
+function fieldInputLocked(section: SectionKey, key: string): boolean {
+  return inputsLocked.value || legacyDesireInactive(section, key)
+}
+
 function onFieldInput(section: SectionKey, key: string, raw: string): void {
-  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
   const view = snapshot.value?.view
   if (!view) return
   const field = editableField(view, section as ZbaPatchSectionLike, key)
@@ -459,7 +476,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
 }
 
 function clearField(section: SectionKey, key: string): void {
-  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
   anchorDraft()
   draft.value = { ...draft.value, [fieldPath(section as ZbaPatchSectionLike, key)]: { kind: 'clear' } }
   phase.value = 'idle'
@@ -467,7 +484,7 @@ function clearField(section: SectionKey, key: string): void {
 }
 
 function resetField(section: SectionKey, key: string): void {
-  if (inputsLocked.value) return
+  if (fieldInputLocked(section, key)) return
   const next: DraftMap = { ...draft.value }
   delete next[fieldPath(section as ZbaPatchSectionLike, key)]
   draft.value = next
@@ -1348,6 +1365,7 @@ defineExpose({
                     <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
                     <span v-if="fieldHint(item.key)" class="cell-sub">{{ fieldHint(item.key) }}</span>
+                    <span v-if="legacyDesireInactive(active, item.key)" class="cell-sub" role="status">回复节奏已开启：旧版欲望值暂不生效，原值保留；关闭后恢复。</span>
                     <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
                   </td>
                   <td class="config-value setting-editor" role="cell">
@@ -1360,7 +1378,7 @@ defineExpose({
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
                         :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="inputsLocked"
+                        :disabled="fieldInputLocked(active, item.key)"
                         @change="onFieldInput(active, item.key, inputValue($event))"
                       >
                         <option value="true">是</option>
@@ -1371,11 +1389,14 @@ defineExpose({
                         :id="`${editorId}-config-input-${active}-${item.key}`"
                         class="config-input"
                         :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
+                        :min="active === 'behavior' ? replyPacingNumericLimits[item.key]?.min : undefined"
+                        :max="active === 'behavior' ? replyPacingNumericLimits[item.key]?.max : undefined"
+                        :step="active === 'behavior' && replyPacingNumericLimits[item.key] ? replyPacingNumericLimits[item.key]?.step ?? 1 : undefined"
                         :value="currentDraftRaw(active, item.key, item.field)"
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
                         :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="inputsLocked"
+                        :disabled="fieldInputLocked(active, item.key)"
                         @input="onFieldInput(active, item.key, inputValue($event))"
                       />
                       <span class="edit-actions">
@@ -1383,7 +1404,7 @@ defineExpose({
                           v-if="isFieldDirty(active, item.key, item.field)"
                           type="button"
                           class="link-button"
-                          :disabled="inputsLocked"
+                          :disabled="fieldInputLocked(active, item.key)"
                           @click="resetField(active, item.key)"
                         >
                           还原
@@ -1392,7 +1413,7 @@ defineExpose({
                           v-if="item.field.rule.canClear"
                           type="button"
                           class="link-button"
-                          :disabled="inputsLocked"
+                          :disabled="fieldInputLocked(active, item.key)"
                           @click="clearField(active, item.key)"
                         >
                           清除

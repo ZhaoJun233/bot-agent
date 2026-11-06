@@ -71,9 +71,11 @@ public sealed class AgentTurnLoop
         Func<CompletionResult, Task<string?>> runInlineTool,
         string? agentHint = null,
         CancellationToken ct = default,
-        Action<CompletionResult>? recordCompletedStep = null)
+        Action<CompletionResult>? recordCompletedStep = null,
+        IPacedReplyAttempt? pacing = null)
     {
-        var steps = Math.Clamp(maxSteps, MinSteps, MaxSteps);
+        var textOnly = pacing?.IsSoftDraft == true;
+        var steps = textOnly ? MinSteps : Math.Clamp(maxSteps, MinSteps, MaxSteps);
         var feed = turn.SearchText;
         var inline = 0;
         var used = 0;
@@ -102,25 +104,25 @@ public sealed class AgentTurnLoop
                 turn.Context,
                 turn.Profiles.Count > 0 ? string.Join("\n\n", turn.Profiles) : null,
                 ct: ct,
-                stickers: turn.StickerChoices.Count > 0 && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "sticker.send")
+                stickers: !textOnly && turn.StickerChoices.Count > 0 && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "sticker.send")
                     && caps.Policy.AllowedTools.Contains("sticker.send") ? turn.StickerChoices : null,
-                pokeContext: turn.PokeContext && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "poke.send")
+                pokeContext: !textOnly && turn.PokeContext && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "poke.send")
                     && caps.Policy.AllowedTools.Contains("poke.send"),
                 moodText: turn.MoodText,
                 musicText: turn.MusicText,
                 linkText: turn.LinkText,
                 recallText: turn.RecallText,
-                enableWebSearch: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "web.search") && caps.Policy.AllowedTools.Contains("web.search"),
+                enableWebSearch: !textOnly && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "web.search") && caps.Policy.AllowedTools.Contains("web.search"),
                 searchText: feed,
                 groupRolesText: turn.GroupRoles,
                 vibeHint: turn.VibeHint,
                 proactive: proactive,
-                enableListen: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "music.listen") && caps.Policy.AllowedTools.Contains("music.listen"),
-                enableVoice: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "voice.speak") && caps.Policy.AllowedTools.Contains("voice.speak"),
-                enableAsk: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.QuestionToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.QuestionToolId),
-                enableToolRequest: _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.FixedToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.FixedToolId),
+                enableListen: !textOnly && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "music.listen") && caps.Policy.AllowedTools.Contains("music.listen"),
+                enableVoice: !textOnly && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, "voice.speak") && caps.Policy.AllowedTools.Contains("voice.speak"),
+                enableAsk: !textOnly && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.QuestionToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.QuestionToolId),
+                enableToolRequest: !textOnly && _tools.Allows(turn.Snapshot, turn.PlatformPolicy, ApprovalFlow.FixedToolId) && caps.Policy.AllowedTools.Contains(ApprovalFlow.FixedToolId),
                 // 自然对话驱动 agent：只有本轮够资格（开关开 + 白名单 + 在跟机器人说话）才会带上这段说明
-                toolList: string.Concat(_tools.Render(turn.Snapshot, turn.PlatformPolicy, caps), agentHint),
+                toolList: textOnly ? string.Empty : string.Concat(_tools.Render(turn.Snapshot, turn.PlatformPolicy, caps), agentHint),
                 sampling: sampling,
                 // 缓存作用域 = 本会话 key（只以哈希进请求体，是否真正发出由协议与开关决定）
                 promptCacheScope: conversationKey, isPrivateConversation: turn.IsPrivateConversation);
@@ -158,6 +160,7 @@ public sealed class AgentTurnLoop
 
             ct.ThrowIfCancellationRequested();
             if (!_tools.IsCurrent) throw new OperationCanceledException("reply_source_retired", ct);
+            if (pacing is not null) await pacing.ValidateDraftAsync();
             if (used >= steps)
             {
                 break;

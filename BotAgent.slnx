@@ -10,6 +10,14 @@
     <Project Path="src/BotAgent.Storage/BotAgent.Storage.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/BotAgent.ConfigurationProbe/BotAgent.ConfigurationProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyDeliveryPacingProbe/BotAgent.ReplyDeliveryPacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyGenerationPacingProbe/BotAgent.ReplyGenerationPacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyPacingProbe/BotAgent.ReplyPacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyModeTransitionProbe/BotAgent.ReplyModeTransitionProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyPipelinePacingProbe/BotAgent.ReplyPipelinePacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyPromptProbe/BotAgent.ReplyPromptProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplySchedulerProbe/BotAgent.ReplySchedulerProbe.csproj" />
     <Project Path="tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj" />
     <Project Path="tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj" />
     <Project Path="tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj" />

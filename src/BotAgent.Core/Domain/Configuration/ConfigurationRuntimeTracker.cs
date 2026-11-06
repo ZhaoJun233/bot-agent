@@ -57,7 +57,7 @@ public sealed class ConfigurationRuntimeTracker
             // SyncBrainFields and the provider registry are separate from snapshot publication.
             ConfigurationFieldId.Model or ConfigurationFieldId.ModelBaseUrl
                 or ConfigurationFieldId.RegisteredProviders or ConfigurationFieldId.BotPersona
-                or ConfigurationFieldId.AiDesire or ConfigurationFieldId.SuitabilityThreshold
+                or ConfigurationFieldId.AiDesire or ConfigurationFieldId.ReplyPacingEnabled or ConfigurationFieldId.SuitabilityThreshold
                 or ConfigurationFieldId.MaxContextMessages => [ApplyStep.ModelProjection],
             ConfigurationFieldId.EnableStickers => [ApplyStep.RuntimePolicy, ApplyStep.Schedulers],
             ConfigurationFieldId.WhitelistGroups or ConfigurationFieldId.WhitelistPrivates

@@ -4,6 +4,7 @@ using BotAgent.Domain.Ports;
 using BotAgent.Domain.Stickers;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Qq;
+using BotAgent.Domain.Reply;
 
 namespace BotAgent.Services.Stickers;
 
@@ -479,6 +480,7 @@ public sealed class StickerService : IDisposable
         try
         {
             var bytes = await _store.ReadBytesAsync(sticker);
+            await ReplyCommitBoundary.BeforeSourceSendAsync(_source);
             var ok = await _source.SendImageAsync(isGroup, targetId, bytes, replyToMessageId: replyTo);
             if (ok)
             {
@@ -491,7 +493,7 @@ public sealed class StickerService : IDisposable
 
             return ok;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ReplyCommitBoundary.IsActive || ex is not OperationCanceledException)
         {
             _log($"表情包发送失败（#{sticker.Id}）：{ex.Message}");
             return false;

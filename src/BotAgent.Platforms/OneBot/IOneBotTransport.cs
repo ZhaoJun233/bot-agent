@@ -1,3 +1,5 @@
+using BotAgent.Domain.Reply;
+
 namespace BotAgent.Services.OneBot;
 
 /// <summary>
@@ -21,6 +23,13 @@ public interface IOneBotTransport : IDisposable
 
     /// <summary>发送一个动作。WS 实现会包成 {action,params,echo}，HTTP 实现 POST {base}/{action}。</summary>
     Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default);
+
+    /// <summary>Final user-visible emission; transports with preparation waits override this overload.</summary>
+    async Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct, bool isChatCommit)
+    {
+        if (isChatCommit) await ReplyCommitBoundary.BeforeSendAsync();
+        await SendActionAsync(action, paramsJson, echo, ct);
+    }
 
     void Stop();
 

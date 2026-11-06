@@ -10,7 +10,12 @@
  */
 export const fieldLabels: Record<string, string> = {
   // behavior
-  aiDesire: 'AI 对话欲望',
+  aiDesire: 'AI 对话欲望（旧版）',
+  replyPacingEnabled: '启用回复节奏',
+  groupInterjectionProbability: '群聊主动插话概率（%）',
+  groupInterjectionCooldownSeconds: '群聊主动插话冷却（秒）',
+  groupContinuationWaitSeconds: '群聊续话等待（秒）',
+  privateContinuationWaitSeconds: '私聊续话等待（秒）',
   aiModeEnabled: 'AI 对话模式',
   approvalApprovers: '审批人',
   botPersona: '机器人人设',
@@ -165,6 +170,12 @@ export function fieldLabel(key: string): string {
  * 面板没有单独的提示列，这些说明渲染在字段名下面（`ConfigurationPage.vue` 的 `.cell-sub`）。
  */
 export const fieldHints: Record<string, string> = {
+  aiDesire: '旧版回复策略的欲望值。回复节奏关闭时继续生效；开启后暂不生效，原值仍保留。',
+  replyPacingEnabled: '默认关闭，保留旧版回复策略。开启后用真实插话概率、发送后冷却和续话等待控制节奏；被 @、引用或点名的直接请求不受随机概率与主动插话冷却拦截。保存后生效。',
+  groupInterjectionProbability: '0–100 的整数百分比；20 表示每次符合条件的主动插话机会有 20% 概率。0 = 不主动插话，100 = 必定通过概率判断（仍受冷却等规则限制）。仅新节奏开启时生效。',
+  groupInterjectionCooldownSeconds: '0–3600 秒。从群内任一次完整机器人聊天回复的最后一段成功发送后开始计时，期间不主动插话；直接请求不受此冷却拦截。默认 30 秒，0 = 无冷却。',
+  groupContinuationWaitSeconds: '0–30 秒。群聊收到续话后重新等待，给对方把话说完的时间；直接请求也需要等续话结束。默认 3 秒，0 = 不等待。',
+  privateContinuationWaitSeconds: '0–30 秒。私聊收到续话后重新等待，合并连续短消息后再回复；支持小数，默认 1.5 秒，0 = 不等待。',
   whitelistGroups: '留空或 * 接收所有 QQ 群消息；填写群号则只接收名单内群。私聊名单独立生效。',
   whitelistPrivates: '留空或 * 接收所有 QQ 私聊，不再继承共用名单；仍遵守平台聊天开关与安全策略。',
   messageWhitelist: '兼容旧配置的批量设置入口。保存会同时设置群聊和私聊名单；之后两份名单各自生效。',

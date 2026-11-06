@@ -13,6 +13,8 @@ publish/
 
 # Local data
 *.log
+# Local synthetic configuration-probe databases (retain on disk, never source inputs).
+/.artifacts/pacing-config/
 
 # 运行时（NapCat 二进制/日志/会话数据）不纳入版本库。
 # ⚠ 必须锚定到仓库根：不锚定的话 `napcat/` 会连 `src/.../Services/NapCat/` 一起吞掉 ——

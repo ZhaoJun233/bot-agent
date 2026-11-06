@@ -32,6 +32,11 @@ public sealed class AgentView
 public sealed class BehaviorView
 {
     public required ReadField<int> AiDesire { get; init; }
+    public required ReadField<bool> ReplyPacingEnabled { get; init; }
+    public required ReadField<int> GroupInterjectionProbability { get; init; }
+    public required ReadField<int> GroupInterjectionCooldownSeconds { get; init; }
+    public required ReadField<int> GroupContinuationWaitSeconds { get; init; }
+    public required ReadField<double> PrivateContinuationWaitSeconds { get; init; }
     public required ReadField<bool> AiModeEnabled { get; init; }
     public required ReadField<string> ApprovalApprovers { get; init; }
     public required ReadField<string> BotPersona { get; init; }

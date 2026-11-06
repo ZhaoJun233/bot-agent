@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Reply;
 using BotAgent.Services.Platforms;
 using BotAgent.Services.Resilience;
 
@@ -53,7 +54,9 @@ internal sealed class OneBotActionClient
 
         try
         {
-            await transport.SendActionAsync(action, paramsJson, echo, ct);
+            var isChatCommit = action is "send_group_msg" or "send_private_msg" or "send_msg"
+                or "send_group_forward_msg" or "send_private_forward_msg" or "group_poke" or "friend_poke";
+            await transport.SendActionAsync(action, paramsJson, echo, ct, isChatCommit);
             var done = await Task.WhenAny(tcs.Task, Clock.Delay(TimeSpan.FromSeconds(10), ct));
             if (done != tcs.Task)
             {
@@ -67,13 +70,14 @@ internal sealed class OneBotActionClient
 
             return await tcs.Task;
         }
-        catch
+        catch (Exception ex)
         {
             lock (_gate)
             {
                 _pending.Remove(echo);
             }
 
+            if (ex is OperationCanceledException && ReplyCommitBoundary.IsActive) throw;
             return null;
         }
     }

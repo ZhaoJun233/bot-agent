@@ -8,18 +8,22 @@ public sealed partial class ReplyPipeline
     /// <summary>丢掉某会话的待回复项（删会话/改白名单时用）。在途那次不中斷，但不再补发后续。</summary>
     private void DropPending(string sourceKey)
     {
-        // One lock order: deferred → pending. Rotate weak epochs to reject old work but permit fresh same-object requests.
+        PacedReplyWork[] cancelled;
+        // Stop and queue migration share pacing → deferred → pending; cancellation stays outside all locks.
+        lock (_pacingSync)
         lock (_deferredGate)
         lock (_pendingGate)
         {
-            foreach (var flushing in _flushingDeferred.Values.Where(c => c.SourceKey == sourceKey)) RetireReplyEpoch(flushing);
-            if (_pendingConversations.TryGetValue(sourceKey, out var pending)) RetireReplyEpoch(pending);
-            if (_activeConversations.TryGetValue(sourceKey, out var active)) RetireReplyEpoch(active.Conversation);
+            // Local transition/worker handoffs may be between containers. Weak ownership, not queue membership, retires them.
+            foreach (var owner in _replyEpochs)
+                if (owner.Key.SourceKey == sourceKey) RetireReplyEpoch(owner.Key);
+            cancelled = RetirePacedPendingLocked(conversation => conversation.SourceKey == sourceKey);
             foreach (var key in _deferredTriggers.Keys.Where(key => key.Conversation == sourceKey).ToArray())
-                if (_deferredTriggers.TryRemove(key, out var deferred)) RetireReplyEpoch(deferred.Conversation);
+                _deferredTriggers.TryRemove(key, out _);
             _pendingReplies.TryRemove(sourceKey, out _);
             _pendingConversations.TryRemove(sourceKey, out _);
         }
+        foreach (var work in cancelled) work.Cancel();
     }
 
     // ══════════ 宿主（BotAgentHost）与面板要用的公开入口 ══════════
@@ -49,10 +53,14 @@ public sealed partial class ReplyPipeline
     /// <summary>恢复出来的会话：历史按"还没拉过"算（首次收到消息时才去拉群历史）。</summary>
     public void MarkHistoryPending(string sourceKey) => _historyRequested.TryAdd(sourceKey, 0);
 
+    /// <summary>Stop turn timers and in-flight paced work before the host disposes its dependencies.</summary>
+    public void Shutdown() => StopPacing();
+
     /// <summary>配置变更只影响新预约；旧代持有者和等待者全部排空后回收。</summary>
     public void ResizeGate(int permits)
     {
         _replyGate.Resize(permits);
+        RefreshPacingPolicy();
         _hooks.Log($"模型并发上限已改为 {permits}");
     }
 }

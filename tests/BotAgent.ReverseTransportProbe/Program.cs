@@ -11,10 +11,10 @@ void Check(string name, bool condition)
     Console.WriteLine($"{(condition ? "PASS" : "FAIL")} {name}");
     if (!condition) failures++;
 }
-async Task<bool> Closed(TcpClient client, TimeSpan timeout)
+async Task<bool> Closed(NetworkStream stream, TimeSpan timeout)
 {
     using var deadline = new CancellationTokenSource(timeout);
-    try { return await client.GetStream().ReadAsync(new byte[1], deadline.Token) == 0; }
+    try { return await stream.ReadAsync(new byte[1], deadline.Token) == 0; }
     catch (OperationCanceledException) { return false; }
     catch (IOException) { return true; }
 }
@@ -35,9 +35,12 @@ await transport.StartAsync();
 
 using var silent = new TcpClient();
 await silent.ConnectAsync(IPAddress.Loopback, port);
+var silentStream = silent.GetStream();
 using var partial = new TcpClient();
 await partial.ConnectAsync(IPAddress.Loopback, port);
-await partial.GetStream().WriteAsync(Encoding.ASCII.GetBytes("GET /synthetic HTTP/1.1\r\nUpgrade: websocket\r\n"));
+// Retain the connected stream: a concurrent read can observe reset before the next drip write.
+var partialStream = partial.GetStream();
+await partialStream.WriteAsync(Encoding.ASCII.GetBytes("GET /synthetic HTTP/1.1\r\nUpgrade: websocket\r\n"));
 using var dripCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(11));
 int dripWrites = 0;
 var drip = Task.Run(async () =>
@@ -46,7 +49,7 @@ var drip = Task.Run(async () =>
     {
         while (!dripCancellation.IsCancellationRequested)
         {
-            await partial.GetStream().WriteAsync(new byte[] { (byte)'X' }, dripCancellation.Token);
+            await partialStream.WriteAsync(new byte[] { (byte)'X' }, dripCancellation.Token);
             Interlocked.Increment(ref dripWrites);
             await Task.Delay(100, dripCancellation.Token);
         }
@@ -70,21 +73,23 @@ catch (Exception ex) when (ex is OperationCanceledException or WebSocketExceptio
     Check("valid later client is not blocked by pending handshakes", false);
 }
 
-Check("silent handshake has a finite deadline and closes socket", await Closed(silent, TimeSpan.FromSeconds(12)));
-Check("partial handshake has a finite deadline and closes socket", await Closed(partial, TimeSpan.FromSeconds(2)));
+Check("silent handshake has a finite deadline and closes socket", await Closed(silentStream, TimeSpan.FromSeconds(12)));
+Check("partial handshake has a finite deadline and closes socket", await Closed(partialStream, TimeSpan.FromSeconds(2)));
 dripCancellation.Cancel();
 await drip;
 Check("continuous header trickle cannot extend absolute deadline", dripWrites > 3 && transport.IsConnected);
 
 using var unauthorized = new TcpClient();
 await unauthorized.ConnectAsync(IPAddress.Loopback, port);
-await unauthorized.GetStream().WriteAsync(Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nUpgrade: websocket\r\nAuthorization: Bearer synthetic-invalid\r\nSec-WebSocket-Key: c3ludGhldGljLWtleS0xMg==\r\n\r\n"));
-Check("unauthorized upgrade closes without replacing active client", await Closed(unauthorized, TimeSpan.FromSeconds(2)) && transport.IsConnected);
+var unauthorizedStream = unauthorized.GetStream();
+await unauthorizedStream.WriteAsync(Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nUpgrade: websocket\r\nAuthorization: Bearer synthetic-invalid\r\nSec-WebSocket-Key: c3ludGhldGljLWtleS0xMg==\r\n\r\n"));
+Check("unauthorized upgrade closes without replacing active client", await Closed(unauthorizedStream, TimeSpan.FromSeconds(2)) && transport.IsConnected);
 
 using var oversized = new TcpClient();
 await oversized.ConnectAsync(IPAddress.Loopback, port);
-await oversized.GetStream().WriteAsync(Encoding.ASCII.GetBytes(new string('X', 16 * 1024 + 1)));
-Check("oversized headers close without replacing active client", await Closed(oversized, TimeSpan.FromSeconds(2)) && transport.IsConnected);
+var oversizedStream = oversized.GetStream();
+await oversizedStream.WriteAsync(Encoding.ASCII.GetBytes(new string('X', 16 * 1024 + 1)));
+Check("oversized headers close without replacing active client", await Closed(oversizedStream, TimeSpan.FromSeconds(2)) && transport.IsConnected);
 
 using var replacement = new ClientWebSocket();
 replacement.Options.SetRequestHeader("Authorization", "Bearer synthetic-token");
@@ -121,7 +126,8 @@ try
 
     using var overflow = new TcpClient();
     await overflow.ConnectAsync(IPAddress.Loopback, port);
-    Check("pending handshake count is bounded and active client survives", await Closed(overflow, TimeSpan.FromSeconds(2)) && transport.IsConnected);
+    var overflowStream = overflow.GetStream();
+    Check("pending handshake count is bounded and active client survives", await Closed(overflowStream, TimeSpan.FromSeconds(2)) && transport.IsConnected);
 }
 finally
 {
@@ -130,9 +136,10 @@ finally
 
 using var pendingAtStop = new TcpClient();
 await pendingAtStop.ConnectAsync(IPAddress.Loopback, port);
-await pendingAtStop.GetStream().WriteAsync(Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\n"));
+var pendingAtStopStream = pendingAtStop.GetStream();
+await pendingAtStopStream.WriteAsync(Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\n"));
 transport.Stop();
-Check("stop closes pending sockets promptly", await Closed(pendingAtStop, TimeSpan.FromSeconds(2)));
+Check("stop closes pending sockets promptly", await Closed(pendingAtStopStream, TimeSpan.FromSeconds(2)));
 Check("stop reports disconnected", !transport.IsConnected);
 await ReviewTransportRegression.RunAsync(Check);
 Console.WriteLine($"failures={failures}");

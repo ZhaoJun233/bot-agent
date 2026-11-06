@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using BotAgent.Domain.Reply;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -100,13 +101,16 @@ public sealed class ReverseWsTransport : IOneBotTransport
         if (Interlocked.Exchange(ref _disposed, 1) == 0) _cts.Dispose();
     }
 
-    public async Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default)
+    public Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct = default)
+        => SendActionAsync(action, paramsJson, echo, ct, isChatCommit: false);
+
+    public async Task SendActionAsync(string action, string paramsJson, string echo, CancellationToken ct, bool isChatCommit)
     {
         var connection = _connection ?? throw new InvalidOperationException("协议端尚未连接");
         var json = "{\"action\":" + Json(action) + ",\"params\":" + (paramsJson.Length == 0 ? "{}" : paramsJson) +
                    ",\"echo\":" + Json(echo) + "}";
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
-        await connection.SendTextAsync(json, linked.Token);
+        await connection.SendTextAsync(json, linked.Token, isChatCommit);
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -203,7 +207,7 @@ public sealed class ReverseWsTransport : IOneBotTransport
     private sealed class WsConnection
     {
         private const string Magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        private readonly NetworkStream _stream;
+        private readonly Stream _stream;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
 
         /// <summary>收到的完整文本（由 AcceptLoop 桥接到外层事件）。</summary>
@@ -211,7 +215,7 @@ public sealed class ReverseWsTransport : IOneBotTransport
 
         public bool IsOpen { get; private set; } = true;
 
-        private WsConnection(NetworkStream stream) => _stream = stream;
+        private WsConnection(Stream stream) => _stream = stream;
 
         public static async Task<WsConnection> AcceptAsync(TcpClient client, string? token, CancellationToken ct)
         {
@@ -307,7 +311,7 @@ public sealed class ReverseWsTransport : IOneBotTransport
             }
         }
 
-        public async Task SendTextAsync(string text, CancellationToken ct)
+        public async Task SendTextAsync(string text, CancellationToken ct, bool isChatCommit = false)
         {
             var payload = Encoding.UTF8.GetBytes(text);
             var header = new byte[10];
@@ -334,16 +338,23 @@ public sealed class ReverseWsTransport : IOneBotTransport
                 }
             }
 
-            await _writeLock.WaitAsync(ct);
-            try
+            while (true)
             {
-                await _stream.WriteAsync(header.AsMemory(0, offset), ct);
-                await _stream.WriteAsync(payload, ct);
-                await _stream.FlushAsync(ct);
-            }
-            finally
-            {
-                _writeLock.Release();
+                // Do not hold the transport lock while pacing releases/reacquires the model scheduler.
+                if (isChatCommit) await ReplyCommitBoundary.BeforePrepareAsync();
+                await _writeLock.WaitAsync(ct);
+                try
+                {
+                    if (isChatCommit && !ReplyCommitBoundary.TryBeforeSend()) continue;
+                    await _stream.WriteAsync(header.AsMemory(0, offset), ct);
+                    await _stream.WriteAsync(payload, ct);
+                    await _stream.FlushAsync(ct);
+                    return;
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
             }
         }
 

@@ -219,6 +219,11 @@ public sealed partial class SettingsStore : ISettingsRepository
         if (patch.Behavior is { } behavior)
         {
             ApplyScalar(behavior.AiDesire, value => next.AiDesire = value);
+            ApplyScalar(behavior.ReplyPacingEnabled, value => next.ReplyPacingEnabled = value);
+            ApplyScalar(behavior.GroupInterjectionProbability, value => next.GroupInterjectionProbability = value);
+            ApplyScalar(behavior.GroupInterjectionCooldownSeconds, value => next.GroupInterjectionCooldownSeconds = value);
+            ApplyScalar(behavior.GroupContinuationWaitSeconds, value => next.GroupContinuationWaitSeconds = value);
+            ApplyScalar(behavior.PrivateContinuationWaitSeconds, value => next.PrivateContinuationWaitSeconds = value);
             ApplyScalar(behavior.AiModeEnabled, value => next.AiModeEnabled = value);
             ApplyScalar(behavior.ApprovalApprovers, value => next.ApprovalApprovers = value);
             ApplyScalar(behavior.BotPersona, value => next.BotPersona = value);
@@ -463,6 +468,11 @@ public sealed partial class SettingsStore : ISettingsRepository
         => new()
         {
             AiDesire = fields.Field(ConfigurationFieldId.AiDesire, user.AiDesire, effective.AiDesire, nameof(AppSettings.AiDesire)),
+            ReplyPacingEnabled = fields.Field(ConfigurationFieldId.ReplyPacingEnabled, user.ReplyPacingEnabled, effective.ReplyPacingEnabled, nameof(AppSettings.ReplyPacingEnabled)),
+            GroupInterjectionProbability = fields.Field(ConfigurationFieldId.GroupInterjectionProbability, user.GroupInterjectionProbability, effective.GroupInterjectionProbability, nameof(AppSettings.GroupInterjectionProbability)),
+            GroupInterjectionCooldownSeconds = fields.Field(ConfigurationFieldId.GroupInterjectionCooldownSeconds, user.GroupInterjectionCooldownSeconds, effective.GroupInterjectionCooldownSeconds, nameof(AppSettings.GroupInterjectionCooldownSeconds)),
+            GroupContinuationWaitSeconds = fields.Field(ConfigurationFieldId.GroupContinuationWaitSeconds, user.GroupContinuationWaitSeconds, effective.GroupContinuationWaitSeconds, nameof(AppSettings.GroupContinuationWaitSeconds)),
+            PrivateContinuationWaitSeconds = fields.Field(ConfigurationFieldId.PrivateContinuationWaitSeconds, user.PrivateContinuationWaitSeconds, effective.PrivateContinuationWaitSeconds, nameof(AppSettings.PrivateContinuationWaitSeconds)),
             AiModeEnabled = fields.Field(ConfigurationFieldId.AiModeEnabled, user.AiModeEnabled, effective.AiModeEnabled, nameof(AppSettings.AiModeEnabled)),
             ApprovalApprovers = fields.Field(ConfigurationFieldId.ApprovalApprovers, user.ApprovalApprovers, effective.ApprovalApprovers, nameof(AppSettings.ApprovalApprovers)),
             BotPersona = fields.Field(ConfigurationFieldId.BotPersona, user.BotPersona, effective.BotPersona, nameof(AppSettings.BotPersona)),
@@ -1486,6 +1496,11 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Agent.PanelDeployEnabled.Rule,
                 view.Agent.PanelDeployUrl.Rule,
                 view.Behavior.AiDesire.Rule,
+                view.Behavior.ReplyPacingEnabled.Rule,
+                view.Behavior.GroupInterjectionProbability.Rule,
+                view.Behavior.GroupInterjectionCooldownSeconds.Rule,
+                view.Behavior.GroupContinuationWaitSeconds.Rule,
+                view.Behavior.PrivateContinuationWaitSeconds.Rule,
                 view.Behavior.AiModeEnabled.Rule,
                 view.Behavior.ApprovalApprovers.Rule,
                 view.Behavior.BotPersona.Rule,

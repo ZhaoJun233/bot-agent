@@ -952,7 +952,7 @@ public static class Program
     /// </summary>
     private static void AgentTaskLedgerTests()
     {
-        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 13, "库版本应为 v13（轨迹归档缓存用量）");
+        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 14, "库版本应为 v14（回复节奏配置字段）");
         Check(AppDatabase.Scalar<long>(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_tasks'") == 1,
             "v12 必须建出 agent_tasks 表");

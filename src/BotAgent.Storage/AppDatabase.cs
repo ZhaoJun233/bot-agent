@@ -98,7 +98,7 @@ public static class AppDatabase
                     DefaultTimeout = 30
                 }.ToString();
                 using var conn = Open();
-                if (SchemaVersion() > 13) throw new InvalidOperationException("database_schema_newer");
+                if (SchemaVersion() > 14) throw new InvalidOperationException("database_schema_newer");
                 ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
@@ -232,9 +232,7 @@ public static class AppDatabase
     /// <summary>Configuration uses an additive module revision, not a silent physical-schema upgrade.</summary>
     private static void ValidateConfigurationModule(SqliteConnection conn)
     {
-        using var exists = conn.CreateCommand();
-        exists.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'";
-        if (Convert.ToInt64(exists.ExecuteScalar()) == 0) return;
+        if (!HasLegacyTable(conn, "meta")) return;
         var value = GetMetaInTransaction(conn, "configuration_schema");
         if (value is null) return;
         if (!int.TryParse(value.ToString(), out var revision) || revision < 1)
@@ -258,7 +256,7 @@ public static class AppDatabase
               codec_revision TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS configuration_field_modes(
-              field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 147),
+              field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 152),
               user_mode INTEGER NOT NULL CHECK(user_mode BETWEEN 0 AND 2)
             );
             CREATE TABLE IF NOT EXISTS configuration_operations(
@@ -734,9 +732,25 @@ public static class AppDatabase
     /// v4 成员身份补 title_checked。每一步都自带"是不是已经有了"的内省，重复执行只是空转。
     /// ⚠ 这里动的是**迁移语义**：改任何一步都要单独一次带库快照的改动（别顺手优化）。
     /// </summary>
+    // SQLite CHECK changes require rebuilding the table while retaining every user mode.
+    private static void WidenConfigurationFieldModes(SqliteConnection connection, int maximumFieldId)
+    {
+        // Schema-owned integers only; called inside the migration write transaction.
+        Exec(connection, $"""
+            CREATE TABLE configuration_field_modes_upgrade(
+              field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND {maximumFieldId}),
+              user_mode INTEGER NOT NULL CHECK(user_mode BETWEEN 0 AND 2)
+            );
+            INSERT INTO configuration_field_modes_upgrade(field_id,user_mode)
+              SELECT field_id,user_mode FROM configuration_field_modes;
+            DROP TABLE configuration_field_modes;
+            ALTER TABLE configuration_field_modes_upgrade RENAME TO configuration_field_modes;
+            """);
+    }
+
     private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
     {
-        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12 or 13)) throw new ArgumentException("invalid_legacy_schema");
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12 or 13 or 14)) throw new ArgumentException("invalid_legacy_schema");
         Exec(connection, $"PRAGMA user_version = {version};");
     }
 
@@ -888,17 +902,7 @@ public static class AppDatabase
         {
             if (HasLegacyTable(conn, "configuration_field_modes"))
             {
-                Write(conn2 => Exec(conn2, """
-                    -- v11 widen configuration field id bound
-                    CREATE TABLE configuration_field_modes_v11(
-                      field_id INTEGER PRIMARY KEY CHECK(field_id BETWEEN 1 AND 147),
-                      user_mode INTEGER NOT NULL CHECK(user_mode BETWEEN 0 AND 2)
-                    );
-                    INSERT INTO configuration_field_modes_v11(field_id,user_mode)
-                      SELECT field_id,user_mode FROM configuration_field_modes;
-                    DROP TABLE configuration_field_modes;
-                    ALTER TABLE configuration_field_modes_v11 RENAME TO configuration_field_modes;
-                    """));
+                Write(conn2 => WidenConfigurationFieldModes(conn2, 147));
             }
             Write(conn2 => SetLegacySchemaVersion(conn2, 11));
         }
@@ -934,6 +938,15 @@ public static class AppDatabase
             });
             Write(conn2 => SetLegacySchemaVersion(conn2, 13));
         }
+
+        // v14: reply pacing adds configuration field IDs 148–152 (#151).
+        if (version < 14)
+            Write(conn2 =>
+            {
+                if (HasLegacyTable(conn2, "configuration_field_modes"))
+                    WidenConfigurationFieldModes(conn2, 152);
+                SetLegacySchemaVersion(conn2, 14);
+            });
     }
 
     /// <summary>

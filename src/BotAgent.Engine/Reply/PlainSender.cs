@@ -1,6 +1,7 @@
 using BotAgent.Engine.Runtime;
 using System.Text.Json;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Reply;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Messaging;
@@ -149,7 +150,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             }
 
             var shortReply = decision.Text;
-            var one = await _source.SendTextAsync(isGroup, targetId, shortReply, replyToMessageId: replyTo, directAddress: true);
+            var one = await SendTextAtCommitAsync(isGroup, targetId, shortReply, replyToMessageId: replyTo, directAddress: true, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, shortReply);
             _traces.Node(sourceKey, TurnNodeKind.Outbound, one.Ok ? "sent" : "failed", reasonCode: decision.ReasonCode, count: shortReply.Length);
             return one.Ok
@@ -158,7 +159,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         }
         if (!_settings.SplitReplies)
         {
-            var one = await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress);
+            var one = await SendTextAtCommitAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, reply);
             return one.Ok ? new CadenceSendReport(new[] { reply }) : new CadenceSendReport(Array.Empty<string>(), "send_failed");
         }
@@ -166,7 +167,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         var segments = TextRules.SplitSentences(reply);
         if (segments.Count <= 1)
         {
-            var one = await _source.SendTextAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress);
+            var one = await SendTextAtCommitAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, reply);
             return one.Ok ? new CadenceSendReport(new[] { reply }) : new CadenceSendReport(Array.Empty<string>(), "send_failed");
         }
@@ -177,11 +178,18 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         string? failure = null;
         for (var i = 0; i < segments.Count; i++)
         {
-            var sent = await _source.SendTextAsync(
-                isGroup,
-                targetId,
-                segments[i],
-                replyToMessageId: i == 0 ? replyTo : null, directAddress: directAddress);
+            SendResult sent;
+            try
+            {
+                sent = await SendTextAtCommitAsync(
+                    isGroup, targetId, segments[i],
+                    replyToMessageId: i == 0 ? replyTo : null, directAddress: directAddress, context: context, sourceKey: sourceKey);
+            }
+            catch (Exception) when (delivered.Count > 0 && ReplyCommitBoundary.IsActive)
+            {
+                failure = "commit_interrupted";
+                break;
+            }
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, sent, segments[i]);
 
             if (!sent.Ok)
@@ -246,7 +254,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         foreach (var segment in SplitForChat(text, Math.Clamp(_settings.AgentReplyMaxChars, 200, 3000)))
         {
             index++;
-            var result = await _source.SendTextAsync(isGroup, targetId, segment);
+            var result = await SendTextAtCommitAsync(isGroup, targetId, segment, sourceKey: conversation.SourceKey);
             _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, result.Ok ? "sent" : "failed", count: segment.Length);
             _log($"agent 回话 → {(isGroup ? "群" : "私聊")}{targetId}（第 {index} 段，{segment.Length} 字，{(result.Ok ? "已发出" : "发送失败")}）: {TextRules.Shorten(segment.Replace('\n', ' '), 60)}");
             if (!result.Ok) break; // No false Self entry; stop remaining segments after partial failure.
@@ -270,6 +278,30 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             _registry.Touch(conversation);
             _registry.Save();
         }
+    }
+
+    private async Task<SendResult> SendTextAtCommitAsync(bool isGroup, long targetId, string text, string sourceKey,
+        long? replyToMessageId = null, bool directAddress = false, PlatformContext? context = null)
+    {
+        using var validation = ReplyCommitBoundary.EnterValidation(() =>
+        {
+            // Guard waits must not leave a stale transport policy or retired source at commit.
+            if (PlatformSourceExecution.Current is { IsCurrent: false })
+                throw new OperationCanceledException("platform_source_retired");
+            context = PlatformSourceExecution.Current?.Context ?? context;
+            var policy = context is not null && _platformPolicies is not null
+                ? _platformPolicies.Resolve(context) : ResolveTargetPolicy(isGroup, targetId);
+            if (policy?.Feature("text", globallyEnabled: true) is { Enabled: false })
+                throw new OperationCanceledException("platform_text_unsupported");
+            if (_riskBackoff?.IsActive(sourceKey) == true)
+            {
+                var decision = _riskBackoff.EvaluateText(sourceKey, directAddress, text);
+                if (!decision.Allowed || !string.Equals(decision.Text, text, StringComparison.Ordinal))
+                    throw new OperationCanceledException("protocol_backoff_changed");
+            }
+        });
+        await ReplyCommitBoundary.BeforeSourceSendAsync(_source);
+        return await _source.SendTextAsync(isGroup, targetId, text, replyToMessageId: replyToMessageId, directAddress: directAddress);
     }
 
     private EffectivePlatformPolicy? ResolveTargetPolicy(bool isGroup, long targetId)
@@ -355,7 +387,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
                 _log("[审批] 回执没发出去（协议端拒绝或超时）");
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ReplyCommitBoundary.IsActive || ex is not OperationCanceledException)
         {
             _log("[审批] 回执发送异常: " + ex.Message);
         }

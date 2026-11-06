@@ -260,6 +260,7 @@ public sealed class SettingsHotReload
             {
                 _approvals.RebuildPolicy(); _participation.Rebuild(); _whitelist.Rebuild();
                 PruneNonWhitelisted(); _agentCmds.RebuildAgentUsers();
+                _reply.RefreshPacingPolicy();
             }, true)) return saved;
             ApplyStepReport modelReport;
             try
@@ -391,6 +392,7 @@ public sealed class SettingsHotReload
 
     private void RebuildRuntime()
     {
+        _reply.RefreshPacingPolicy();
         // 能力策略快照：改完设置立刻按新开关重建（正在处理的那一轮仍用旧快照，V3 §5.3）
         _approvals.RebuildPolicy();
 

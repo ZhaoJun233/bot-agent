@@ -24,6 +24,22 @@ function viewOf(payload: Json): Json {
 }
 
 describe('配置 read 运行时解码', () => {
+  it('accepts reply pacing field IDs 148–152 with boolean and fractional values', async () => {
+    const payload = clone()
+    const behavior = viewOf(payload).behavior as Record<string, Json>
+    const defaults = { replyPacingEnabled: false, groupInterjectionProbability: 20,
+      groupInterjectionCooldownSeconds: 30, groupContinuationWaitSeconds: 3, privateContinuationWaitSeconds: 1.5 }
+    for (const [offset, [key, value]] of Object.entries(defaults).entries()) {
+      behavior[key] = { ...behavior.botPersona, value, display: String(value),
+        rule: { ...(behavior.botPersona!.rule as Json), id: 148 + offset } }
+    }
+    const result = await clientReturning(payload).readConfiguration(1)
+    for (const [offset, [key, value]] of Object.entries(defaults).entries()) {
+      expect(result.view!.behavior[key]!.value).toBe(value)
+      expect(result.view!.behavior[key]!.rule.id).toBe(148 + offset)
+    }
+  })
+
   it('接受可编辑样例并把 kind 发到 read 端点', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = []
     const result = await clientReturning(editableFixture, calls).readConfiguration(1)
