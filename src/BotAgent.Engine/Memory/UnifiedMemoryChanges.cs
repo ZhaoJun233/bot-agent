@@ -18,7 +18,7 @@ internal static class UnifiedMemoryChanges
         var status = UnifiedMemoryPolicy.CheckRequest(context, request, source);
         if (status != UnifiedMemoryStatus.Success) return UnifiedMemoryChange.Deny(status);
         if (!state.Enabled) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Disabled);
-        if (state.Suppressions.Contains(new(context.Actor!, source))) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Suppressed);
+        if (IsSuppressed(state, context.Actor!, source)) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Suppressed);
         if (state.Entries.Length >= 10000) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidFact);
         var previous = state.Entries.FirstOrDefault(item => item.Subject == context.Actor && item.Source == source
             && item.Fact.Category == request.Fact.Category);
@@ -42,6 +42,7 @@ internal static class UnifiedMemoryChanges
                 && !confirmation.AcknowledgeGroupAudience)
             || (entry.Source.Conversation.Kind is not Domain.Conversation.ConversationKind.PrivateChat && !confirmation.AcknowledgeGroupAudience))
             return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidConfirmation);
+        if (IsSuppressed(state, entry.Subject, entry.Source)) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Suppressed);
         var confirmed = entry with { Confirmed = true, AllowSourceLocal = true, SharedTargets = entry.ProposedTargets, ConfirmationToken = Guid.Empty };
         return Replace(state, entry, confirmed);
     }
@@ -56,6 +57,7 @@ internal static class UnifiedMemoryChanges
         if (entry!.Version != version || version == int.MaxValue) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.StaleVersion);
         var status = UnifiedMemoryPolicy.CheckRequest(context, request, entry.Source);
         if (status != UnifiedMemoryStatus.Success) return UnifiedMemoryChange.Deny(status);
+        if (IsSuppressed(state, entry.Subject, entry.Source)) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Suppressed);
         // Old body and ALL prior grants disappear in the same durable commit. Never inherit consent.
         return Replace(state, entry, Candidate(id, version + 1, entry.Subject, entry.Source, request, now));
     }
@@ -96,6 +98,9 @@ internal static class UnifiedMemoryChanges
         if (entry is null) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.NotFound);
         return UnifiedMemoryPolicy.OwnerPrivate(context, entry) ? null : UnifiedMemoryChange.Deny(UnifiedMemoryStatus.NotOwnerPrivateChat);
     }
+
+    private static bool IsSuppressed(UnifiedMemoryState state, Domain.Messaging.ParticipantId subject, UnifiedMemoryScope source) =>
+        state.Suppressions.Contains(new(subject, source));
 
     private static UnifiedMemoryEntry Candidate(Guid id, int version, Domain.Messaging.ParticipantId subject,
         UnifiedMemoryScope source, UnifiedMemoryRequest request, DateTimeOffset now) =>

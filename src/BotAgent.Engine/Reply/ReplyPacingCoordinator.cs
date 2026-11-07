@@ -99,6 +99,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
     private readonly Dictionary<string, Conversation> _conversations = new(StringComparer.Ordinal);
     private readonly Dictionary<ReplyPacingReason, long> _counters = new();
     private long _nextId;
+    private int _activeCount;
     private bool _enabled = true;
     private bool _stopped;
 
@@ -453,21 +454,23 @@ public sealed class ReplyPacingCoordinator : IDisposable
         ReplyPacingTurn? predecessor, DateTime now, bool acceptedResult = false)
     {
         if (isExplicit) PreemptOrdinary(conversation, null);
-        if (isExplicit && conversation.Active.Count >= _capacity)
+        if (isExplicit && _activeCount >= _capacity)
         {
             var expendable = conversation.Active.FirstOrDefault(t => !t.State.Explicit && !t.State.Effects && !t.State.FirstSend);
             if (expendable != null) Finish(expendable, ReplyPacingReason.Preempted);
         }
-        if (conversation.Active.Count >= _capacity)
+        if (_activeCount >= _capacity)
         {
             if (!acceptedResult) conversation.LastOpportunity = null;
-            return Observation(null, ReplyPacingObservationKind.RejectedCapacity, ReplyPacingReason.Capacity);
+            return Observation(null, isExplicit ? ReplyPacingObservationKind.RejectedCapacity : ReplyPacingObservationKind.Terminal,
+                ReplyPacingReason.Capacity);
         }
         var state = new TurnState { Id = ++_nextId, Key = key, SpeakerId = speakerId, Sequence = sequence, QuietSequence = sequence,
             MessageId = messageId, Explicit = isExplicit, Group = isGroup, Proactive = proactive, Options = options,
             FirstInput = now, LastInput = now, Ticket = ticket, Predecessor = predecessor, AcceptedResult = acceptedResult };
         var turn = new ReplyPacingTurn(this, state);
         conversation.Active.Add(turn);
+        _activeCount++;
         if (!acceptedResult)
         {
             conversation.Latest[speakerId] = turn;
@@ -569,7 +572,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
         state.Reason = reason;
         if (state.Generation != null) Release(state.Generation);
         state.Generation = null;
-        GetConversation(state.Key).Active.Remove(turn);
+        if (GetConversation(state.Key).Active.Remove(turn)) _activeCount--;
         Count(reason);
     }
 
