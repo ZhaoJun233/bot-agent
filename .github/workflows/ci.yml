@@ -154,6 +154,10 @@ jobs:
           dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PythonWorkerProbe/BotAgent.PythonWorkerProbe.csproj -c Release --no-restore -- "$(command -v python)"
+          dotnet run --project tests/BotAgent.PythonCleanupProbe/BotAgent.PythonCleanupProbe.csproj -c Release --no-restore -- "$(command -v python)"
+          dotnet run --project tests/BotAgent.PythonAgentProbe/BotAgent.PythonAgentProbe.csproj -c Release --no-restore -- "$(command -v python)"
+          dotnet run --project tests/BotAgent.PythonMarketProbe/BotAgent.PythonMarketProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj -c Release --no-restore
 
   web:

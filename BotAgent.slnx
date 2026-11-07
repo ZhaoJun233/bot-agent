@@ -37,6 +37,10 @@
     <Project Path="tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj" />
     <Project Path="tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj" />
     <Project Path="tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonAgentProbe/BotAgent.PythonAgentProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonCleanupProbe/BotAgent.PythonCleanupProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonMarketProbe/BotAgent.PythonMarketProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonWorkerProbe/BotAgent.PythonWorkerProbe.csproj" />
     <Project Path="tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj" />
     <Project Path="tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj" />
     <Project Path="tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj" />

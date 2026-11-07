@@ -10,7 +10,7 @@ namespace BotAgent.Adapters.Plugins;
 /// 市场写路径的宿主侧收口：目录读取、来源解析、暂存安装/更新/卸载、回执与声明式设置。
 /// Panel 只做形状校验与状态码映射；下载、校验、落盘与事务都在这里完成。
 /// </summary>
-public sealed class PluginMarketService
+public sealed partial class PluginMarketService
 {
     /// <summary>仅未绑定热应用回调的兼容宿主使用此状态；完整宿主暂存后立即热应用。</summary>
     public const string StatusRestartRequired = "restart_required";
@@ -21,7 +21,8 @@ public sealed class PluginMarketService
     public const string FallbackCategory = "未分类";
 
     public const string TrustNotice =
-        "插件在宿主进程内运行，不是沙箱：安装即执行第三方代码。请核对固定版本、SHA-256 与权限声明；安装后默认停用，安装、更新与启停可热应用，无需重启宿主。";
+        "插件执行受信任的第三方代码：.NET 在宿主进程内运行，Python 在受生命周期管理的子进程内运行，两者都不是安全沙箱。请核对固定版本、SHA-256 与权限声明；安装后默认停用，Python 仅显式启用时运行包代码。";
+    private const string PythonCompatibilityNotice = "仅确认可信解释器版本可用；未运行包代码。初始化和工具发现将在显式启用时验证；仅支持 stdlib-only，进程不是安全沙箱。";
 
     private readonly PluginPackageService _packages;
     private readonly PluginSettingsStore _settings;
@@ -50,16 +51,25 @@ public sealed class PluginMarketService
         _log = log;
         _reload = reload;
         _registrySnapshot = registrySnapshot;
+        _imports = new PluginImportSnapshots(now);
+        _repositories = new PluginRepositorySource(catalog);
     }
 
     /// <summary>Package identity stays in the manifest; built-ins come only from the live host registry.</summary>
     public async Task<ZbaPluginCatalog> ReadCatalogAsync(string? query, string? category, CancellationToken ct)
     {
+        await _packages.Governance.RefreshAsync(ct).ConfigureAwait(false);
         var source = PluginCatalogSource.ConfiguredUrl();
         var registered = _registrySnapshot?.Invoke() ?? [];
         IReadOnlyList<PluginPackageManifest> manifests;
         var catalogUnavailable = false;
-        try { manifests = await _catalog.ReadAsync(source, ct).ConfigureAwait(false); }
+        var catalogPresentation = PluginPresentationCatalog.Unavailable();
+        try
+        {
+            var snapshot = await ReadCatalogSnapshotAsync(ct).ConfigureAwait(false);
+            manifests = snapshot.Manifests;
+            catalogPresentation = snapshot.Presentation;
+        }
         catch (Exception ex) when (ex is PluginCatalogException or HttpRequestException or IOException
             || ex is OperationCanceledException && !ct.IsCancellationRequested)
         {
@@ -69,13 +79,14 @@ public sealed class PluginMarketService
             manifests = [];
             catalogUnavailable = true;
         }
-        var presentation = catalogUnavailable ? PluginPresentationCatalog.Unavailable()
-            : await PluginPresentationCatalog.ReadAsync(_catalog, source, ct).ConfigureAwait(false);
+        var presentation = catalogPresentation;
+        var compatibility = await ReadCompatibilityAsync(manifests, ct).ConfigureAwait(false);
         _presentation = presentation;
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var desired = DesiredStates();
         var entries = manifests.Select(manifest => Project(manifest, installed, desired) with
-            { Metadata = presentation.ForPackage(manifest) }).ToArray();
+            { Metadata = presentation.ForPackage(manifest), IsCompatible = compatibility[manifest.Id + "@" + manifest.Version] is null,
+                CompatibilityMessage = compatibility[manifest.Id + "@" + manifest.Version] ?? (manifest.ApiVersion == 2 ? PythonCompatibilityNotice : null) }).ToArray();
         var builtins = presentation.ForBuiltins(registered);
         var categories = entries.Select(e => e.Metadata?.Category ?? FallbackCategory)
             .Concat(builtins.Select(b => b.Metadata.Category)).Distinct(StringComparer.Ordinal)
@@ -84,6 +95,7 @@ public sealed class PluginMarketService
             entries.Where(e => Matches(e.Manifest.Id, e.Metadata, query, category)).ToArray())
         {
             BuiltinPlugins = builtins.Where(b => Matches(b.PluginId, b.Metadata, query, category)).ToArray(),
+            GovernanceSource = _packages.Governance.Source,
             MetadataNotice = catalogUnavailable ? "市场目录暂不可用；仍可查看宿主实际注册的内置插件。" : presentation.Notice
         };
     }
@@ -93,15 +105,19 @@ public sealed class PluginMarketService
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var desired = DesiredStates();
         var presentation = _presentation;
+        var compatibility = await ReadCompatibilityAsync(installed.Select(p => p.Active ?? p.Pending)
+            .Where(m => m is not null).Cast<PluginPackageManifest>(), ct).ConfigureAwait(false);
         var entries = installed
             .Select(package => package.Active ?? package.Pending)
             .Where(manifest => manifest is not null)
-            .Select(manifest => Project(manifest!, installed, desired) with { Metadata = presentation.ForPackage(manifest!) })
+            .Select(manifest => Project(manifest!, installed, desired) with { Metadata = presentation.ForPackage(manifest!),
+                IsCompatible = compatibility[manifest!.Id + "@" + manifest.Version] is null,
+                CompatibilityMessage = compatibility[manifest.Id + "@" + manifest.Version] ?? (manifest.ApiVersion == 2 ? PythonCompatibilityNotice : null) })
             .OrderBy(entry => entry.Manifest.Id, StringComparer.Ordinal)
             .ToArray();
         // No remote dependency: even a first offline request exposes actual registered built-ins.
         return new ZbaInstalledPlugins(await RevisionAsync(ct).ConfigureAwait(false), entries)
-            { BuiltinPlugins = presentation.ForBuiltins(_registrySnapshot?.Invoke() ?? []) };
+            { BuiltinPlugins = presentation.ForBuiltins(_registrySnapshot?.Invoke() ?? []), GovernanceSource = _packages.Governance.Source };
     }
 
     private static bool Matches(string id, ZbaPluginMetadata? metadata, string? query, string? category)
@@ -156,39 +172,32 @@ public sealed class PluginMarketService
     }
 
     public Task<ZbaPluginOperationResult> InstallAsync(ZbaPluginMutationRequest request, string caller,
-        CancellationToken ct)
+        CancellationToken ct, Func<CancellationToken, Task>? persistDisabled = null)
     {
         PluginPackageValidation.Validate(request.Manifest);
+        request = request with { Manifest = CloneManifest(request.Manifest) };
         return MutateAsync(request.IdempotencyKey, request.Manifest.Id, "install", request.Manifest,
             request.TrustAcknowledged, caller, request.ExpectedRevision,
-            () => _packages.StageInstallAsync(request.Manifest, request.ExpectedRevision, ct), ct);
+            () => _packages.StageFreshInstallAsync(request.Manifest, request.ExpectedRevision,
+                persistDisabled ?? (_ => throw new ZbaBackendException(503, "plugin_disable_unavailable", "无法持久化停用状态，未安装。")), ct),
+            ct, () => ValidatePreviewAsync(request, caller, ct), request.PreviewId);
     }
 
-    public Task<ZbaPluginOperationResult> UpdateAsync(ZbaPluginMutationRequest request, string caller,
-        CancellationToken ct)
-    {
-        PluginPackageValidation.Validate(request.Manifest);
-        return MutateAsync(request.IdempotencyKey, request.Manifest.Id, "update", request.Manifest,
-            request.TrustAcknowledged, caller, request.ExpectedRevision,
-            () => _packages.StageUpdateAsync(request.Manifest, request.ExpectedRevision, ct), ct);
-    }
+    public Task<ZbaPluginOperationResult> UpdateAsync(ZbaPluginMutationRequest request, string caller, CancellationToken ct)
+        => LifecycleMutationAsync("update", request.IdempotencyKey, request.ExpectedRevision, request.Manifest.Id,
+            CloneManifest(request.Manifest), request.PreviewId, request.TrustAcknowledged, caller, ct);
 
     public Task<ZbaPluginOperationResult> UninstallAsync(string pluginId, ZbaPluginUninstallRequest request,
         string caller, CancellationToken ct)
     {
         PluginPackageValidation.ValidateId(pluginId);
-        return MutateAsync(request.IdempotencyKey, pluginId, "uninstall", null, false, caller,
-            request.ExpectedRevision, async () =>
-            {
-                try { await _packages.StageUninstallAsync(pluginId, request.ExpectedRevision, ct).ConfigureAwait(false); }
-                catch (InvalidOperationException)
-                { throw new ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装。"); }
-            }, ct);
+        return LifecycleMutationAsync("uninstall", request.IdempotencyKey, request.ExpectedRevision, pluginId, null,
+            request.PreviewId, request.TrustAcknowledged, caller, ct);
     }
 
     private Task<ZbaPluginOperationResult> MutateAsync(string key, string pluginId, string kind,
         PluginPackageManifest? manifest, bool trust, string caller, string expectedRevision, Func<Task> stage,
-        CancellationToken ct)
+        CancellationToken ct, Func<Task>? admit = null, string? previewId = null)
     {
         if (string.IsNullOrWhiteSpace(key) || key.Length > 128 || key.Any(char.IsControl) ||
             string.IsNullOrWhiteSpace(caller) || caller.Length > 256 || caller.Any(char.IsControl))
@@ -197,7 +206,8 @@ public sealed class PluginMarketService
             _reload is null ? StatusRestartRequired : kind == "uninstall" ? StatusNotInstalled : StatusInstalled,
             _reload is null, null);
         return _operations.ExecuteAsync(_receipts, ReceiptKey(key),
-            PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller), caller, operation,
+            previewId is null ? PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller)
+                : Hash(PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller) + ":" + previewId), caller, operation,
             () => RevisionAsync(CancellationToken.None), expectedRevision, async () =>
             {
                 await stage().ConfigureAwait(false);
@@ -211,7 +221,8 @@ public sealed class PluginMarketService
                             "变更已暂存，但热重载失败；旧实例保持不变，请修正后用新的操作键重试。");
                     }
                 }
-            }, ct);
+            }, ct, admit, () => _packages.InstalledSnapshot.FirstOrDefault(p => p.Id == pluginId) is { } state
+                ? PluginLifecycleManifest.PackageState(state) : null);
     }
 
     /// <summary>按幂等键核对回执：没有回执时明确 404，让前端继续用同一个键。</summary>
@@ -346,7 +357,10 @@ public sealed class PluginMarketService
             : StatusNotInstalled;
         var enabled = desired.TryGetValue(manifest.Id, out var wanted) && wanted;
         return new ZbaPluginCatalogEntry(manifest, active?.Version, enabled, status,
-            _reload is null && (pending is not null || uninstall));
+            _reload is null && (pending is not null || uninstall))
+            { PreviousManifest = package?.Previous, PendingManifest = package?.Pending,
+                Governance = _packages.Governance.Evaluate(manifest),
+                InstalledGovernance = (active ?? pending) is { } current ? _packages.Governance.Evaluate(current) : null };
     }
 
     private static long ParseSettingsRevision(string revision)

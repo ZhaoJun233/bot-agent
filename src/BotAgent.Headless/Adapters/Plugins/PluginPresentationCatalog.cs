@@ -29,11 +29,13 @@ internal sealed class PluginPresentationCatalog
     { _entries = entries; Notice = notice; }
 
     internal static PluginPresentationCatalog Unavailable() => new([], UnavailableNotice);
+    internal PluginPresentationCatalog Merge(PluginPresentationCatalog other)
+        => new(_entries.Concat(other._entries).ToArray(), Notice);
 
     internal static async Task<PluginPresentationCatalog> ReadAsync(PluginCatalogSource catalog, string source,
-        CancellationToken ct)
+        CancellationToken ct, bool githubOnly = false)
     {
-        try { return Parse(await catalog.ReadPresentationBytesAsync(source, ct).ConfigureAwait(false)); }
+        try { return Parse(await catalog.ReadPresentationBytesAsync(source, ct, githubOnly).ConfigureAwait(false)); }
         catch (Exception ex) when (ex is PluginCatalogException or HttpRequestException or IOException or InvalidDataException or JsonException
             || ex is OperationCanceledException && !ct.IsCancellationRequested)
         { return Unavailable(); }
@@ -66,8 +68,8 @@ internal sealed class PluginPresentationCatalog
         var entry = _entries.FirstOrDefault(e => e.Id == manifest.Id && e.Version == manifest.Version
             && string.Equals(e.PackageSha256, manifest.Sha256, StringComparison.OrdinalIgnoreCase)
             && e.Metadata.Runtime != "builtin");
-        // M1 installs only existing .NET manifests. Python display data cannot change that execution contract.
-        return entry?.Metadata.Runtime == "dotnet" ? BindReview(entry) : null;
+        // Display runtime must agree with the execution discriminator; metadata never grants execution.
+        return entry?.Metadata.Runtime == (manifest.ApiVersion == 2 ? "python" : "dotnet") ? BindReview(entry) : null;
     }
 
     internal IReadOnlyList<ZbaBuiltinPlugin> ForBuiltins(IReadOnlyList<PluginInfo> registered) => registered

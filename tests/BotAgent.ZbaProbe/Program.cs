@@ -207,6 +207,13 @@ internal static class Program
 
         var openApi = BodyJson(openApiResponse);
         ReviewPanelContractRegression.CheckOpenApi(openApi, (value, label) => Check(label, value));
+        const string discoveryBody = "{\"sourceUrl\":\"https://github.com/example/plugins\"}";
+        CheckStatus("M2 discovery admin route wired", await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/source/discover", discoveryBody, AdminToken)), 200);
+        CheckStatus("M2 discovery admin-only", await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/source/discover", discoveryBody, ReadToken)), 403);
+        const string previewBody = "{\"origin\":\"repository\",\"expectedRevision\":\"p0000000000000000\",\"discoveryId\":\"discovery-synthetic\",\"pluginId\":\"community.example.hello\",\"version\":\"1.0.0\"}";
+        var previewResponse = await endpoint.ProcessAsync(Req("POST", "/zba/v1/plugins/preview", previewBody, AdminToken));
+        CheckStatus("M2 preview route wired", previewResponse, 200);
+        Check("M2 preview returns disabled state", !BodyJson(previewResponse).GetProperty("enabledAfterInstall").GetBoolean());
         var declared = new HashSet<string>(StringComparer.Ordinal);
         foreach (var path in openApi.GetProperty("paths").EnumerateObject())
             foreach (var method in path.Value.EnumerateObject())
@@ -310,11 +317,14 @@ internal static class Program
         "sessions.list" => Req("GET", route.Template, token: AdminToken, query: "?sourceKey=panel%3Aworkspace"),
         "sessions.ensure" => Req("POST", route.Template, "{\"sourceKey\":\"panel:workspace\"}", AdminToken),
         "approvals.decide" => Req("POST", route.Template.Replace("{id}", "approval-ok"), "{\"approve\":true}", AdminToken),
+        "plugins.source.discover" => Req("POST", route.Template, "{\"sourceUrl\":\"https://github.com/example/plugins\"}", AdminToken),
+        "plugins.preview" => Req("POST", route.Template, "{\"origin\":\"repository\",\"expectedRevision\":\"p0000000000000000\",\"discoveryId\":\"synthetic\",\"pluginId\":\"probe.import\",\"version\":\"1.0.0\"}", AdminToken),
         "plugins.catalog" => Req("GET", route.Template, token: AdminToken),
         "plugins.installed" => Req("GET", route.Template, token: AdminToken),
         "plugins.sources.resolve" => Req("POST", route.Template,
             "{\"sourceUrl\":\"https://github.com/example-org/example-plugins/releases/tag/" + "community.example.hello-1.0.0\"}", AdminToken),
-        "plugins.install" or "plugins.update" => Req("POST", route.Template, PluginMutationJson(), AdminToken),
+        "plugins.lifecycle.preview" => Req("POST", route.Template, "{\"kind\":\"uninstall\",\"pluginId\":\"community.example.hello\",\"expectedRevision\":\"p0000000000000000\"}", AdminToken),
+        "plugins.install" or "plugins.update" or "plugins.rollback" => Req("POST", route.Template, PluginMutationJson(), AdminToken),
         "plugins.uninstall" => Req("POST", route.Template.Replace("{id}", "community.example.hello"),
             "{\"expectedRevision\":\"p0000000000000000\",\"idempotencyKey\":\"plugin:uninstall:route-smoke\"}", AdminToken),
         "plugins.operations.get" => Req("GET", route.Template.Replace("{key}", "plugin:install:route-smoke"), token: AdminToken),

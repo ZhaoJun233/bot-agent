@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Tools;
+using BotAgent.Domain.Mcp;
 using BotAgent.Services.Mcp;
 using BotAgent.Services.Tools;
 
@@ -33,6 +34,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
     /// <summary>已发现 MCP 工具名的副本，用于任务受理时冻结权限上限。</summary>
     internal IReadOnlyList<string> GetTaskMcpToolNames()
         => _mcp?.Tools.Select(tool => tool.QualifiedName).ToArray() ?? [];
+
+    internal IReadOnlyList<McpToolInfo> CaptureTaskPythonLeases(IEnumerable<string> names)
+        => _mcp?.CaptureLocalLeases(names) ?? [];
     private readonly Action<string> _log;
 
     /// <summary>一轮里最多做几个 QQ 动作（防“给每个人都点一遍”——真去 QQ 里刷一圈比多跑几步麻烦得多）。</summary>
@@ -148,7 +152,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         var memoryPrompt = BotAgent.Services.Reply.UnifiedMemoryTurn.Current?.ReadPrompt(task.Prompt);
         var memoryRestricted = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
         if (!memoryRestricted) await RefreshMcpAsync(ct);
-        var system = BuildSystemPrompt(workDir, allowed, qqAllowed, qqHost, access.Scope) + (task.Natural ? NaturalTone : string.Empty);
+        var system = BuildTaskSystemPrompt(task, access, workDir);
         if (memoryRestricted) system += "\n" + memoryPrompt
             + "\n本任务使用受控记忆，只能直接回答；不要调用任何工具、外发、写文件或产生持久化派生内容。";
 
@@ -246,7 +250,8 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                                  + "用作用域里允许的工具，或者直接给 final 说明你查到了什么。";
                     }
                     else if (_mcp?.IsMcpTool(name) == true)
-                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, task.SourceKey, step - 1, ct);
+                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, task.SourceKey, step - 1, ct,
+                            task.PythonToolLeases.FirstOrDefault(tool => tool.QualifiedName == name));
                     else if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
                     {
                         output = $"这次已经做了 {MaxQqActionsPerTask} 个 QQ 动作，不再做了（要接着做请再发一条指令）。";
@@ -316,6 +321,19 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 task.DurationMs = (long)(Clock.Now - started).TotalMilliseconds;
             }
         }
+    }
+
+    /// <summary>Build task instructions with only the local tool identities admitted before approval.</summary>
+    private string BuildTaskSystemPrompt(AgentTask task, ServerToolAccess access, string workDir)
+    {
+        // The model may see only local tools captured before approval, never freshly discovered authority.
+        var mcpNames = (_mcp?.Tools ?? []).Where(tool => access.AllowsMcp(tool.QualifiedName)
+            && (!tool.IsLocalProcess || task.PythonToolLeases.Contains(tool)))
+            .Select(tool => tool.QualifiedName).ToArray();
+        var mcpScope = ToolScope.FromIds(mcpNames.Length > 0 ? mcpNames : ["__deny_all_mcp__"]);
+        var system = BuildSystemPrompt(workDir, access.Tools, access.QqActions, task.QqHost, mcpScope) + (task.Natural ? NaturalTone : string.Empty);
+
+        return system;
     }
 
     private static bool IsProhibitedQqActionOutput(string output)
@@ -565,7 +583,10 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             return null;
         }
 
-        var tool = obj["tool"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? obj["name"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+        var tool = obj["tool"]?.GetValue<string>()?.Trim() ?? obj["name"]?.GetValue<string>()?.Trim();
+        // Dynamic names are case-sensitive identifiers; only legacy builtin commands normalize case.
+        if (tool is not null && !tool.StartsWith("mcp.", StringComparison.OrdinalIgnoreCase))
+            tool = tool.ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(tool))
         {
             var final = obj["final"]?.GetValue<string>() ?? obj["answer"]?.GetValue<string>() ?? obj["reply"]?.GetValue<string>();
@@ -580,7 +601,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
     private async Task<string> RunToolAsync(string tool, StepCall call, string workDir, HashSet<string> allowed,
         HashSet<string> qqAllowed, IQqActionHost? qqHost, string conversationKey, int callIndex,
-        CancellationToken ct)
+        CancellationToken ct, McpToolInfo? pythonLease = null)
     {
         if (_mcp?.IsMcpTool(tool) == true)
         {
@@ -589,7 +610,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 return "MCP 工具需要会话上下文（// 路径）";
             }
 
-            var outcome = await _mcp.ExecuteAsync(conversationKey, tool, McpArguments(call.Raw), callIndex, ct);
+            var outcome = pythonLease is null
+                ? await _mcp.ExecuteAsync(conversationKey, tool, McpArguments(call.Raw), callIndex, ct)
+                : await _mcp.ExecuteWithLeaseAsync(conversationKey, pythonLease, McpArguments(call.Raw), callIndex, ct);
             return outcome.ModelText
                    ?? (outcome.Ok ? "（MCP 工具已完成，没有文本输出）" : $"MCP 工具失败（{outcome.ReasonCode}）");
         }

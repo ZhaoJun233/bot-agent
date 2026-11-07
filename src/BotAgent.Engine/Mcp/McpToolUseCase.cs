@@ -143,11 +143,31 @@ public sealed class McpToolUseCase
     /// 执行一次 MCP 调用。入口/参数/schema/预算/授权全部重新判定；拒绝与结果都写形状审计。
     /// 调用者取消时原样抛出（远端可能已执行，由上层决定是否报告未知状态）。
     /// </summary>
-    public async Task<ToolOutcome> ExecuteAsync(string conversationKey, string toolId, JsonObject? arguments,
-        int callIndex, CancellationToken ct)
+    public IReadOnlyList<McpToolInfo> CaptureLocalLeases(IEnumerable<string> names)
     {
         var snapshot = Volatile.Read(ref _snapshot);
-        var decision = Check(conversationKey, toolId, callIndex);
+        return names.Distinct(StringComparer.Ordinal).Select(name => snapshot.Routes.GetValueOrDefault(name))
+            .Where(tool => tool is { IsLocalProcess: true } && _source.IsToolCurrent(tool)).Cast<McpToolInfo>().ToArray();
+    }
+
+    public Task<ToolOutcome> ExecuteAsync(string conversationKey, string toolId, JsonObject? arguments, int callIndex, CancellationToken ct)
+        => ExecuteCoreAsync(conversationKey, toolId, arguments, callIndex, null, ct);
+
+    public Task<ToolOutcome> ExecuteWithLeaseAsync(string conversationKey, McpToolInfo admittedLease,
+        JsonObject? arguments, int callIndex, CancellationToken ct)
+        => ExecuteCoreAsync(conversationKey, admittedLease.QualifiedName, arguments, callIndex, admittedLease, ct);
+
+    private async Task<ToolOutcome> ExecuteCoreAsync(string conversationKey, string toolId, JsonObject? arguments,
+        int callIndex, McpToolInfo? admittedLease, CancellationToken ct)
+    {
+        var snapshot = Volatile.Read(ref _snapshot);
+        if (snapshot.Routes.TryGetValue(toolId, out var local) && local.IsLocalProcess &&
+            (admittedLease is null || admittedLease.SourceGeneration != local.SourceGeneration || !_source.IsToolCurrent(admittedLease)))
+            return ToolOutcome.Failure("mcp_source_changed", "Python tool requires its admitted process generation.", "mcp_source_changed");
+        var policy = admittedLease is { IsLocalProcess: true }
+            ? snapshot.Policy with { HighRiskExceptions = new HashSet<string>(StringComparer.Ordinal) { toolId } } : snapshot.Policy;
+        var decision = !_source.Enabled ? new ToolDecision(false, "mcp_disabled") :
+            ToolGate.Evaluate(snapshot.Registry, policy, new ToolRequest(toolId, conversationKey, callIndex));
         if (!decision.Allow)
         {
             Audit(conversationKey, toolId, "blocked", decision.ReasonCode, 0, 0, false);
@@ -155,7 +175,7 @@ public sealed class McpToolUseCase
                 $"MCP 工具被拒绝（{decision.ReasonCode}），这次不执行。", decision.ReasonCode);
         }
 
-        if (!snapshot.Routes.TryGetValue(toolId, out var tool))
+        if (!snapshot.Routes.TryGetValue(toolId, out var tool) || !_source.IsToolCurrent(tool))
         {
             Audit(conversationKey, toolId, "blocked", "mcp_unknown_tool", 0, 0, false);
             return ToolOutcome.Failure("mcp_unknown_tool", "MCP 工具已经不在发现结果里，这次不执行。");
@@ -172,7 +192,7 @@ public sealed class McpToolUseCase
         McpCallResult result;
         try
         {
-            result = await _source.CallAsync(toolId, args, ct).ConfigureAwait(false);
+            result = await _source.CallWithLeaseAsync(tool, args, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -236,7 +256,7 @@ public sealed class McpToolUseCase
             allowed.Add(tool.QualifiedName);
             var spec = new ToolSpec(
                 tool.QualifiedName,
-                ToolCategory.RemoteAgent,
+                tool.IsLocalProcess ? ToolCategory.FileOrShell : ToolCategory.RemoteAgent,
                 string.IsNullOrWhiteSpace(tool.Description) ? "MCP 外部工具" : tool.Description,
                 ReadOnly: false,
                 Executor: "mcp.client",
@@ -259,7 +279,8 @@ public sealed class McpToolUseCase
             PolicyVersion: 1,
             ApprovalRequiredCategories: new HashSet<ToolCategory>(),
             ApprovalRequiredTools: new HashSet<string>(StringComparer.Ordinal),
-            HighRiskExceptions: allowed);
+            HighRiskExceptions: new HashSet<string>(routes.Values.Where(tool => !tool.IsLocalProcess)
+                .Select(tool => tool.QualifiedName), StringComparer.Ordinal));
 
         return new Snapshot(tools.ToImmutable(), routes, registry, policy, CountServers(routes));
     }

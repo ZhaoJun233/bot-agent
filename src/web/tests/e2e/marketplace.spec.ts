@@ -72,7 +72,7 @@ test('插件市场：卡片上的「市场」按钮带着该插件打开', async
 test('插件市场：指定数据源拒绝非 GitHub 地址且不发请求', async ({ page }) => {
   const calls: string[] = []
   page.on('request', (request) => {
-    if (request.url().includes('/plugins/sources/resolve')) calls.push(request.url())
+    if (request.url().includes('/plugins/sources/resolve') || request.url().includes('/plugins/source/discover')) calls.push(request.url())
   })
   await connect(page, ADMIN)
   await page.getByTestId('cap-enable-admin').click()

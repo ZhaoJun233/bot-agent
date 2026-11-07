@@ -1,12 +1,13 @@
 namespace BotAgent.Domain.Plugins;
 
 /// <summary>An approved, immutable release descriptor. Sha256 pins the complete ZIP bytes.</summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(PluginManifestJsonConverter))]
 public sealed record PluginPackageManifest(
-    string Id, string Version, string EntryAssembly, string EntryType,
+    string Id, string Version, string? EntryAssembly, string? EntryType,
     string Sha256, string DownloadUrl, int ApiVersion = 1,
-    string TargetFramework = PluginPackageManifest.CurrentTargetFramework, string? MinimumHostVersion = null,
+    string? TargetFramework = PluginPackageManifest.CurrentTargetFramework, string? MinimumHostVersion = null,
     IReadOnlyList<string>? Permissions = null, IReadOnlyList<PluginPackageDependency>? Dependencies = null,
-    IReadOnlyList<PluginSettingDefinition>? Settings = null)
+    IReadOnlyList<PluginSettingDefinition>? Settings = null, PluginPythonRuntime? Runtime = null)
 {
     /// <summary>宿主当前构建的目标框架，也是新清单的默认值。</summary>
     public const string CurrentTargetFramework = "net10.0";

@@ -14,7 +14,16 @@ public sealed record ZbaPluginCatalogEntry(
     [property: JsonRequired] string Status,
     [property: JsonRequired] bool RestartRequired)
 {
+    public bool IsCompatible { get; init; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? CompatibilityMessage { get; init; }
+    public ZbaPluginGovernance? Governance { get; init; }
+    public ZbaPluginGovernance? InstalledGovernance { get; init; }
     public ZbaPluginMetadata? Metadata { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public PluginPackageManifest? PreviousManifest { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public PluginPackageManifest? PendingManifest { get; init; }
     public override string ToString() => "ZbaPluginCatalogEntry";
 }
 
@@ -25,6 +34,7 @@ public sealed record ZbaPluginCatalog(
     [property: JsonRequired] IReadOnlyList<string> Categories,
     [property: JsonRequired] IReadOnlyList<ZbaPluginCatalogEntry> Plugins)
 {
+    public ZbaPluginGovernanceSource? GovernanceSource { get; init; }
     public IReadOnlyList<ZbaBuiltinPlugin> BuiltinPlugins { get; init; } = [];
     public string? MetadataNotice { get; init; }
     public override string ToString() => "ZbaPluginCatalog";
@@ -34,6 +44,7 @@ public sealed record ZbaInstalledPlugins(
     [property: JsonRequired] string Revision,
     [property: JsonRequired] IReadOnlyList<ZbaPluginCatalogEntry> Plugins)
 {
+    public ZbaPluginGovernanceSource? GovernanceSource { get; init; }
     public IReadOnlyList<ZbaBuiltinPlugin> BuiltinPlugins { get; init; } = [];
     public override string ToString() => "ZbaInstalledPlugins";
 }
@@ -80,6 +91,7 @@ public sealed record ZbaPluginMutationRequest(
     [property: JsonRequired] string IdempotencyKey,
     [property: JsonRequired] bool TrustAcknowledged)
 {
+    public string? PreviewId { get; init; }
     public override string ToString() => "ZbaPluginMutationRequest";
 }
 
@@ -87,6 +99,8 @@ public sealed record ZbaPluginUninstallRequest(
     [property: JsonRequired] string ExpectedRevision,
     [property: JsonRequired] string IdempotencyKey)
 {
+    public string? PreviewId { get; init; }
+    public bool TrustAcknowledged { get; init; }
     public override string ToString() => "ZbaPluginUninstallRequest";
 }
 

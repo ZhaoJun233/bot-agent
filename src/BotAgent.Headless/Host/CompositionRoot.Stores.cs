@@ -131,7 +131,7 @@ internal static partial class CompositionRoot
         // 决策轨迹（批次 C）：一轮一条、只有形状；回复链 / 发送层 / 能力闸门三处往上记节点。
         a.Traces = new TurnTraceStore(() => BotAgent.Adapters.Time.Clock.Now, new TraceArchiveStore());
         a.Audit = new AuditLogStore();
-        a.Mcp = McpConfiguration.Build(a.Secrets, a.Audit, msg => FileLog.Write("Mcp", msg));
+        a.Mcp = McpConfiguration.Build(a.Secrets, a.Audit, msg => FileLog.Write("Mcp", msg), a.PluginRuntime.Packages.PythonSources);
         a.Plain = new PlainSender(a.Box, a.Source, registry, a.Ui, ownLedger, a.Ui.EmitLog, a.Traces, a.Audit,
             a.RiskBackoff, a.PlatformPolicies, a.Brain);
 

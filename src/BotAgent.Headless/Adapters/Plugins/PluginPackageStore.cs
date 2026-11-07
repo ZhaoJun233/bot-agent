@@ -10,6 +10,31 @@ internal sealed class PluginPackageStore(string root)
     internal string ArchivePath(PluginPackageManifest manifest) => Path.Combine(PackageDirectory(manifest.Id),
         "releases", manifest.Version + "-" + manifest.Sha256.ToLowerInvariant() + ".zip");
 
+    internal bool HasArchive(PluginPackageManifest manifest) => File.Exists(ArchivePath(manifest));
+
+    internal async Task<byte[]> ReadArchiveAsync(PluginPackageManifest manifest, CancellationToken ct)
+    {
+        var path = ArchivePath(manifest);
+        if (!HasArchive(manifest) || new FileInfo(path).Length > PluginPackageArchive.MaxArchiveBytes)
+            throw new InvalidDataException("Cached archive is unavailable or too large.");
+        return await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+    }
+
+    // Staging is deliberately outside package-ID directories until the final admission guard succeeds.
+    internal async Task<string> StageArchiveAsync(string directory, byte[] bytes, CancellationToken ct)
+    {
+        var path = Path.Combine(directory, "archive.tmp");
+        await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
+        return path;
+    }
+
+    internal void CommitArchive(PluginPackageManifest manifest, string stagedArchive, bool overwrite)
+    {
+        var archive = ArchivePath(manifest);
+        Directory.CreateDirectory(Path.GetDirectoryName(archive)!);
+        File.Move(stagedArchive, archive, overwrite);
+    }
+
     internal async Task<InstalledPluginPackage> ReadAsync(string id, CancellationToken ct)
     {
         PluginPackageValidation.ValidateId(id);

@@ -65,7 +65,7 @@ internal static partial class ZbaOpenApi
                         ["description"] = "BOTAGENT_ZBA_TOKEN 为管理员；BOTAGENT_ZBA_READ_TOKEN 为只读。"
                     }
                 },
-                ["schemas"] = Schemas()
+                ["schemas"] = SchemasWithImports()
             }
         };
     }

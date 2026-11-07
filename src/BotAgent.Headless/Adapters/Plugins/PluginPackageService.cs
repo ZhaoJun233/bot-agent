@@ -6,13 +6,15 @@ namespace BotAgent.Adapters.Plugins;
 /// <summary>
 /// Singleton package lifecycle. Only approved manifests may reach StageInstallAsync.
 /// Inject an IHttpFetcher with redirects disabled and private destinations rejected.
-/// Packages execute trusted .NET code in-process; this is not a security sandbox.
+/// Packages execute trusted managed code in-process or Python in owned child processes; neither is a security sandbox.
 /// </summary>
 public sealed partial class PluginPackageService
 {
     private readonly PluginPackageStore _store;
     private readonly IHttpFetcher _http;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    public PluginGovernanceService Governance { get; }
+    public PluginPythonSources PythonSources { get; } = new();
     private bool _startupLoaded;
     private volatile IReadOnlyList<InstalledPluginPackage> _snapshot = Array.Empty<InstalledPluginPackage>();
 
@@ -20,6 +22,7 @@ public sealed partial class PluginPackageService
     {
         _store = new PluginPackageStore(rootDirectory);
         _http = http;
+        Governance = new PluginGovernanceService(_store.Root, _http);
         Directory.CreateDirectory(_store.Root);
     }
 
@@ -59,45 +62,9 @@ public sealed partial class PluginPackageService
     internal Task<InstalledPluginPackage> StageUpdateAsync(PluginPackageManifest manifest, string expectedRevision,
         CancellationToken ct) => StageInstallCoreAsync(manifest, expectedRevision, true, ct);
 
-    private async Task<InstalledPluginPackage> StageInstallCoreAsync(PluginPackageManifest manifest, string? expectedRevision,
-        bool requireInstalled, CancellationToken ct)
-    {
-        PluginPackageValidation.Validate(manifest);
-        await _gate.WaitAsync(ct);
-        var temporary = Path.Combine(_store.Root, ".stage-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            await EnsureRevisionLockedAsync(expectedRevision, ct);
-            var state = await _store.ReadAsync(manifest.Id, ct);
-            if (requireInstalled && state.Active is null && state.Pending is null)
-                throw new BotAgent.Panel.ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装，无法更新。");
-            foreach (var existing in new[] { state.Active, state.Previous, state.Pending })
-                if (existing?.Version == manifest.Version &&
-                    System.Text.Json.JsonSerializer.Serialize(existing, PluginPackageValidation.JsonOptions) !=
-                    System.Text.Json.JsonSerializer.Serialize(manifest, PluginPackageValidation.JsonOptions))
-                    throw new InvalidDataException("A fixed release version cannot be replaced.");
-            var bytes = await DownloadAsync(manifest.DownloadUrl, ct);
-            Directory.CreateDirectory(temporary);
-            await PluginPackageArchive.ExtractAsync(bytes, manifest, temporary, ct);
-            var archive = _store.ArchivePath(manifest);
-            Directory.CreateDirectory(Path.GetDirectoryName(archive)!);
-            if (!File.Exists(archive))
-            {
-                var stagedArchive = Path.Combine(temporary, "archive.tmp");
-                await File.WriteAllBytesAsync(stagedArchive, bytes, ct);
-                File.Move(stagedArchive, archive);
-            }
-            var next = state with { Pending = manifest, PendingUninstall = false };
-            await _store.SaveAsync(next, ct);
-            Publish(next);
-            return next;
-        }
-        finally
-        {
-            try { if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true); }
-            finally { _gate.Release(); }
-        }
-    }
+    internal Task<InstalledPluginPackage> StageFreshInstallAsync(PluginPackageManifest manifest, string expectedRevision,
+        Func<CancellationToken, Task> beforePublish, CancellationToken ct)
+        => StageInstallCoreAsync(manifest, expectedRevision, false, ct, beforePublish);
 
     public Task<InstalledPluginPackage> StageUninstallAsync(string id, CancellationToken ct = default)
         => StageUninstallCoreAsync(id, null, ct);
@@ -175,7 +142,11 @@ public sealed partial class PluginPackageService
                         }
                     }
                     if (plugin == null && state.Active != null) plugin = await StartReleaseAsync(state.Active, context, ct, resolveSettings);
-                    if (plugin != null) loaded.Add(plugin);
+                    if (plugin != null)
+                    {
+                        if (plugin is PluginPythonPackage python) python.Publish();
+                        loaded.Add(plugin);
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception) { failures.Add(new PluginPackageFailure(id, "package-load-failed")); }
@@ -192,9 +163,7 @@ public sealed partial class PluginPackageService
     private async Task<IBotPlugin> StartReleaseAsync(PluginPackageManifest manifest, PluginContext context,
         CancellationToken ct, Func<PluginPackageManifest, string?>? resolveSettings = null, bool enabled = true)
     {
-        var archive = _store.ArchivePath(manifest);
-        if (new FileInfo(archive).Length > PluginPackageArchive.MaxArchiveBytes) throw new InvalidDataException("Archive too large.");
-        var bytes = await File.ReadAllBytesAsync(archive, ct);
+        var bytes = await _store.ReadArchiveAsync(manifest, ct).ConfigureAwait(false);
         var runtime = Path.Combine(_store.Root, ".runtime-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(runtime);
         try
@@ -202,6 +171,9 @@ public sealed partial class PluginPackageService
             await PluginPackageArchive.ExtractAsync(bytes, manifest, runtime, ct);
             var config = Path.Combine(_store.PackageDirectory(manifest.Id), "config");
             Directory.CreateDirectory(config);
+            if (manifest.Runtime is not null)
+                return await PluginPythonPackage.StartAsync(manifest, runtime, PythonSources,
+                    enabled ? resolveSettings?.Invoke(manifest) : null, enabled, ct).ConfigureAwait(false);
             return await PluginPackageLoader.StartAsync(runtime, config, manifest, context, ct,
                 enabled ? resolveSettings?.Invoke(manifest) : null, enabled);
         }

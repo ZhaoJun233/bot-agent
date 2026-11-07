@@ -1,0 +1,352 @@
+{
+  "manifest": {
+    "Id": "community.example.python-echo",
+    "Version": "1.0.0",
+    "ApiVersion": 2,
+    "MinimumHostVersion": "1.0.0",
+    "Permissions": [],
+    "Dependencies": [],
+    "Settings": [],
+    "Sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "DownloadUrl": "https://github.com/example/market/releases/download/community.example.python-echo-1.0.0/community.example.python-echo-1.0.0.zip",
+    "Runtime": {
+      "Kind": "python",
+      "ProtocolVersion": 1,
+      "EntryPoint": "worker.py",
+      "MinimumPythonVersion": "3.11",
+      "DependencyMode": "stdlib-only",
+      "Tools": [
+        "echo"
+      ]
+    }
+  },
+  "runtimeCases": [
+    {
+      "name": "tools64",
+      "field": "Tools",
+      "value": [
+        "tool_0",
+        "tool_1",
+        "tool_2",
+        "tool_3",
+        "tool_4",
+        "tool_5",
+        "tool_6",
+        "tool_7",
+        "tool_8",
+        "tool_9",
+        "tool_10",
+        "tool_11",
+        "tool_12",
+        "tool_13",
+        "tool_14",
+        "tool_15",
+        "tool_16",
+        "tool_17",
+        "tool_18",
+        "tool_19",
+        "tool_20",
+        "tool_21",
+        "tool_22",
+        "tool_23",
+        "tool_24",
+        "tool_25",
+        "tool_26",
+        "tool_27",
+        "tool_28",
+        "tool_29",
+        "tool_30",
+        "tool_31",
+        "tool_32",
+        "tool_33",
+        "tool_34",
+        "tool_35",
+        "tool_36",
+        "tool_37",
+        "tool_38",
+        "tool_39",
+        "tool_40",
+        "tool_41",
+        "tool_42",
+        "tool_43",
+        "tool_44",
+        "tool_45",
+        "tool_46",
+        "tool_47",
+        "tool_48",
+        "tool_49",
+        "tool_50",
+        "tool_51",
+        "tool_52",
+        "tool_53",
+        "tool_54",
+        "tool_55",
+        "tool_56",
+        "tool_57",
+        "tool_58",
+        "tool_59",
+        "tool_60",
+        "tool_61",
+        "tool_62",
+        "tool_63"
+      ],
+      "accepted": true
+    },
+    {
+      "name": "tools65",
+      "field": "Tools",
+      "value": [
+        "tool_0",
+        "tool_1",
+        "tool_2",
+        "tool_3",
+        "tool_4",
+        "tool_5",
+        "tool_6",
+        "tool_7",
+        "tool_8",
+        "tool_9",
+        "tool_10",
+        "tool_11",
+        "tool_12",
+        "tool_13",
+        "tool_14",
+        "tool_15",
+        "tool_16",
+        "tool_17",
+        "tool_18",
+        "tool_19",
+        "tool_20",
+        "tool_21",
+        "tool_22",
+        "tool_23",
+        "tool_24",
+        "tool_25",
+        "tool_26",
+        "tool_27",
+        "tool_28",
+        "tool_29",
+        "tool_30",
+        "tool_31",
+        "tool_32",
+        "tool_33",
+        "tool_34",
+        "tool_35",
+        "tool_36",
+        "tool_37",
+        "tool_38",
+        "tool_39",
+        "tool_40",
+        "tool_41",
+        "tool_42",
+        "tool_43",
+        "tool_44",
+        "tool_45",
+        "tool_46",
+        "tool_47",
+        "tool_48",
+        "tool_49",
+        "tool_50",
+        "tool_51",
+        "tool_52",
+        "tool_53",
+        "tool_54",
+        "tool_55",
+        "tool_56",
+        "tool_57",
+        "tool_58",
+        "tool_59",
+        "tool_60",
+        "tool_61",
+        "tool_62",
+        "tool_63",
+        "tool_64"
+      ],
+      "accepted": false
+    },
+    {
+      "name": "toolsEmpty",
+      "field": "Tools",
+      "value": [],
+      "accepted": false
+    },
+    {
+      "name": "toolsDuplicate",
+      "field": "Tools",
+      "value": [
+        "echo",
+        "echo"
+      ],
+      "accepted": false
+    },
+    {
+      "name": "toolsCaseSensitive",
+      "field": "Tools",
+      "value": [
+        "echo",
+        "Echo"
+      ],
+      "accepted": true
+    },
+    {
+      "name": "name64",
+      "field": "Tools",
+      "value": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "accepted": true
+    },
+    {
+      "name": "name65",
+      "field": "Tools",
+      "value": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "accepted": false
+    },
+    {
+      "name": "nameDot",
+      "field": "Tools",
+      "value": [
+        "a.b"
+      ],
+      "accepted": false
+    },
+    {
+      "name": "nameUnicode",
+      "field": "Tools",
+      "value": [
+        "回声"
+      ],
+      "accepted": false
+    },
+    {
+      "name": "minor11",
+      "field": "MinimumPythonVersion",
+      "value": "3.11",
+      "accepted": true
+    },
+    {
+      "name": "minor99",
+      "field": "MinimumPythonVersion",
+      "value": "3.99",
+      "accepted": true
+    },
+    {
+      "name": "minor10",
+      "field": "MinimumPythonVersion",
+      "value": "3.10",
+      "accepted": false
+    },
+    {
+      "name": "major4",
+      "field": "MinimumPythonVersion",
+      "value": "4.11",
+      "accepted": false
+    },
+    {
+      "name": "minorLeadingZero",
+      "field": "MinimumPythonVersion",
+      "value": "3.011",
+      "accepted": false
+    },
+    {
+      "name": "minor100",
+      "field": "MinimumPythonVersion",
+      "value": "3.100",
+      "accepted": false
+    },
+    {
+      "name": "specifier",
+      "field": "MinimumPythonVersion",
+      "value": ">=3.11",
+      "accepted": false
+    },
+    {
+      "name": "entryNested",
+      "field": "EntryPoint",
+      "value": "lib/worker.py",
+      "accepted": true
+    },
+    {
+      "name": "entryTraversal",
+      "field": "EntryPoint",
+      "value": "../worker.py",
+      "accepted": false
+    },
+    {
+      "name": "entryBackslash",
+      "field": "EntryPoint",
+      "value": "lib\\worker.py",
+      "accepted": false
+    },
+    {
+      "name": "entryAbsolute",
+      "field": "EntryPoint",
+      "value": "/worker.py",
+      "accepted": false
+    },
+    {
+      "name": "entryDrive",
+      "field": "EntryPoint",
+      "value": "C:/worker.py",
+      "accepted": false
+    },
+    {
+      "name": "entry240",
+      "field": "EntryPoint",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.py",
+      "accepted": true
+    },
+    {
+      "name": "entry241",
+      "field": "EntryPoint",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.py",
+      "accepted": false
+    },
+    {
+      "name": "dependencyPip",
+      "field": "DependencyMode",
+      "value": "pip",
+      "accepted": false
+    },
+    {
+      "name": "protocol2",
+      "field": "ProtocolVersion",
+      "value": 2,
+      "accepted": false
+    },
+    {
+      "name": "kindManaged",
+      "field": "Kind",
+      "value": "dotnet",
+      "accepted": false
+    },
+    {
+      "name": "nameNewline",
+      "field": "Tools",
+      "value": [
+        "echo\n"
+      ],
+      "accepted": false
+    },
+    {
+      "name": "minorNewline",
+      "field": "MinimumPythonVersion",
+      "value": "3.11\n",
+      "accepted": false
+    },
+    {
+      "name": "entryReserved",
+      "field": "EntryPoint",
+      "value": "CON.py",
+      "accepted": false
+    },
+    {
+      "name": "entrySdk",
+      "field": "EntryPoint",
+      "value": "botagent_worker.py",
+      "accepted": false
+    }
+  ]
+}

@@ -39,13 +39,13 @@ public sealed class PluginOperationReceiptStore
     }
 
     /// <summary>Return false unless the candidate was durably written; callers must not stage without a reservation.</summary>
-    public bool TryAdd(string keyHash, ZbaPluginOperation operation, string revision, string caller, string? fingerprint = null)
+    public bool TryAdd(string keyHash, ZbaPluginOperation operation, string revision, string caller, string? fingerprint = null, string? packageState = null)
     {
         lock (_gate)
         {
             if (_unavailable) return false;
             var candidate = Prune(new List<StoredReceipt>(_receipts));
-            var receipt = new StoredReceipt(keyHash, operation, revision, caller, _now(), fingerprint);
+            var receipt = new StoredReceipt(keyHash, operation, revision, caller, _now(), fingerprint, packageState);
             var existing = candidate.FindIndex(item => item.KeyHash == keyHash);
             if (existing >= 0)
             {
@@ -78,6 +78,18 @@ public sealed class PluginOperationReceiptStore
             if (found?.Operation.ErrorCode == "plugin_operation_unknown")
                 throw new ZbaBackendException(503, "plugin_operation_unknown", "这个操作仍无法确认，请保留原操作键继续核对，不要发起新的变更。" );
             return found is null ? null : new ZbaPluginOperationResult(found.Operation, found.Revision);
+        }
+    }
+
+    // Read-only proof: newest same-plugin receipt supersedes older failures, including unknown reservations.
+    internal string? RecoveryProof(string id, string state, string caller, string? excludingKey = null)
+    {
+        lock (_gate)
+        {
+            if (_unavailable) return null;
+            var last = Prune(new List<StoredReceipt>(_receipts)).LastOrDefault(r => r.Operation.PluginId == id && r.KeyHash != excludingKey);
+            return last is { Operation: { Status: "failed", ErrorCode: "plugin_reload_failed" } } && last.Caller == caller && last.PackageState == state
+                ? last.KeyHash + ":" + last.PackageState : null;
         }
     }
 
@@ -115,6 +127,9 @@ public sealed class PluginOperationReceiptStore
                 var fingerprint = node?["fingerprint"]?.GetValue<string>();
                 if (fingerprint is not null && (fingerprint.Length != 64 || !fingerprint.All(Uri.IsHexDigit)))
                     throw new JsonException("Invalid intent fingerprint.");
+                var packageState = node?["packageState"]?.GetValue<string>();
+                if (packageState is not null && (packageState.Length != 64 || !packageState.All(Uri.IsHexDigit)))
+                    throw new JsonException("Invalid package state fingerprint.");
                 var recordedAtText = node?["recordedAt"]?.GetValue<string>();
                 var operationNode = node?["operation"];
                 if (string.IsNullOrWhiteSpace(keyHash) || string.IsNullOrWhiteSpace(revision)
@@ -126,7 +141,7 @@ public sealed class PluginOperationReceiptStore
                 if (operation is null || string.IsNullOrWhiteSpace(operation.Id) || string.IsNullOrWhiteSpace(operation.Kind))
                     throw new JsonException("Invalid receipt.");
                 if (loaded.Any(item => item.KeyHash == keyHash)) throw new JsonException("Duplicate receipt key.");
-                loaded.Add(new StoredReceipt(keyHash, operation, revision, caller ?? string.Empty, recordedAt, fingerprint));
+                loaded.Add(new StoredReceipt(keyHash, operation, revision, caller ?? string.Empty, recordedAt, fingerprint, packageState));
             }
 
             _receipts = Prune(loaded);
@@ -152,6 +167,7 @@ public sealed class PluginOperationReceiptStore
                 ["revision"] = receipt.Revision,
                 ["caller"] = receipt.Caller,
                 ["fingerprint"] = receipt.Fingerprint,
+                ["packageState"] = receipt.PackageState,
                 ["recordedAt"] = receipt.RecordedAt.ToString("O", CultureInfo.InvariantCulture)
             });
         }
@@ -169,5 +185,5 @@ public sealed class PluginOperationReceiptStore
     }
 
     private sealed record StoredReceipt(string KeyHash, ZbaPluginOperation Operation, string Revision,
-        string Caller, DateTimeOffset RecordedAt, string? Fingerprint);
+        string Caller, DateTimeOffset RecordedAt, string? Fingerprint, string? PackageState);
 }

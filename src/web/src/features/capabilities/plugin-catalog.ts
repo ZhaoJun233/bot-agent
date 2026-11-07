@@ -1,3 +1,4 @@
+import type { PluginGovernance } from '../../api/plugin-governance'
 import { hasMatchingReview, type PluginPresentationMetadata } from '../../api/plugin-presentation'
 import type { PluginPackageManifest } from './plugin-manifest'
 
@@ -19,8 +20,14 @@ interface CatalogPresentation {
   status?: string
 }
 export interface PackageCatalogEntry extends CatalogPresentation {
+  isCompatible?: boolean
+  compatibilityMessage?: string | null
+  governance?: PluginGovernance
+  installedGovernance?: PluginGovernance
   kind?: 'package'
   manifest: PluginPackageManifest
+  previousManifest?: PluginPackageManifest | null
+  pendingManifest?: PluginPackageManifest | null
 }
 export interface BuiltinCatalogEntry extends CatalogPresentation {
   kind: 'builtin'
@@ -41,7 +48,10 @@ export function pluginSource(entry: PluginCatalogEntry): string {
   return entry.kind === 'builtin' ? 'builtin' : entry.metadata?.sourceKind === 'official' ? 'official' : 'community'
 }
 export function pluginRuntime(entry: PluginCatalogEntry): string {
-  return entry.kind === 'builtin' ? 'builtin' : entry.metadata?.runtime === 'python' ? 'python' : 'dotnet'
+  return entry.kind === 'builtin' ? 'builtin' : entry.manifest.apiVersion === 2 && entry.manifest.runtime?.kind === 'python' ? 'python' : 'dotnet'
+}
+export function pluginAcquisitionUnavailable(entry: PluginCatalogEntry): boolean {
+  return entry.kind !== 'builtin' && (entry.isCompatible === false || (pluginRuntime(entry) === 'python' && entry.isCompatible !== true))
 }
 export function pluginReviewed(entry: PluginCatalogEntry): boolean {
   return entry.kind !== 'builtin' && hasMatchingReview(entry.metadata, entry.manifest.version, entry.manifest.sha256)

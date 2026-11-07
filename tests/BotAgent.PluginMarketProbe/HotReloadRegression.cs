@@ -58,10 +58,10 @@ internal partial class Program
             };
             Task<ZbaPluginOperationResult> Submit(PluginMarketService service, string expected, CancellationToken ct)
                 => verb == "uninstall"
-                    ? service.UninstallAsync(manifest.Id, new(expected, key), "synthetic-admin", ct)
+                    ? service.UninstallWithLifecyclePreviewAsync(manifest.Id, new(expected, key), "synthetic-admin", ct)
                     : verb == "update"
-                        ? service.UpdateAsync(new(manifest, expected, key, true), "synthetic-admin", ct)
-                        : service.InstallAsync(new(manifest, expected, key, true), "synthetic-admin", ct);
+                        ? service.UpdateWithLifecyclePreviewAsync(new(manifest, expected, key, true), "synthetic-admin", ct)
+                        : service.InstallWithJsonPreviewAsync(new(manifest, expected, key, true), "synthetic-admin", ct);
             using var callerCancellation = new CancellationTokenSource();
             var beforeCalls = callbackCalls;
             var beforeDownloads = http.Calls;
@@ -88,13 +88,18 @@ internal partial class Program
             Check(callbackCalls == beforeCalls + 1 && http.Calls == downloads &&
                 downloads == beforeDownloads + (verb == "uninstall" ? 0 : 1),
                 "hot_replay_no_callback_or_download_" + verb);
+            await LifecycleTestRequests.Settle(packages, manifest.Id);
         }
 
         // A reload failure is durable for every mutation, not a successful staged receipt.
         foreach (var verb in new[] { "install", "update", "uninstall" })
         {
             var failedManifest = ReviewManifest(bytes, "probe.hot.failure." + verb, "1.0.0", "probe.dll", "SyntheticEntry");
-            if (verb != "install") await packages.StageInstallAsync(failedManifest);
+            if (verb != "install")
+            {
+                await packages.StageInstallAsync(failedManifest);
+                await LifecycleTestRequests.Settle(packages, failedManifest.Id);
+            }
             if (verb == "update") failedManifest = failedManifest with { Version = "2.0.0" };
             var revision = (await market.ReadInstalledAsync(default)).Revision;
             var key = "hot-failure-" + verb;
@@ -106,10 +111,10 @@ internal partial class Program
             };
             Task<ZbaPluginOperationResult> Submit(PluginMarketService service, string expected, string operationKey)
                 => verb == "uninstall"
-                    ? service.UninstallAsync(failedManifest.Id, new(expected, operationKey), "synthetic-admin", default)
+                    ? service.UninstallWithLifecyclePreviewAsync(failedManifest.Id, new(expected, operationKey), "synthetic-admin", default)
                     : verb == "update"
-                        ? service.UpdateAsync(new(failedManifest, expected, operationKey, true), "synthetic-admin", default)
-                        : service.InstallAsync(new(failedManifest, expected, operationKey, true), "synthetic-admin", default);
+                        ? service.UpdateWithLifecyclePreviewAsync(new(failedManifest, expected, operationKey, true), "synthetic-admin", default)
+                        : service.InstallWithJsonPreviewAsync(new(failedManifest, expected, operationKey, true), "synthetic-admin", default);
             await Expect(() => Submit(market, revision, key), 503, "plugin_reload_failed");
             var failed = Market(freshPackages: true).FindOperation(key);
             Check(failed.Operation.Status == "failed" && failed.Operation.ErrorCode == "plugin_reload_failed" &&
@@ -123,9 +128,9 @@ internal partial class Program
             Check(calls == 1 && http.Calls == downloads, "hot_failed_replay_no_side_effects_" + verb);
             callback = (_, _) => { calls++; return Task.CompletedTask; };
             var currentRevision = (await market.ReadInstalledAsync(default)).Revision;
-            var recovered = await Submit(market, currentRevision, key + "-retry");
-            Check(!recovered.Operation.RestartRequired && recovered.Operation.ErrorCode is null && calls == 2,
-                "hot_failure_retry_new_key_succeeds_" + verb);
+            await Expect(() => market.UpdateAsync(new(failedManifest, currentRevision, key + "-retry", true),
+                "synthetic-admin", default), 409, "plugin_preview_required");
+            Check(calls == 1, "hot_failure_requires_explicit_recovery_" + verb);
             Check(Market(freshPackages: true).FindOperation(key) == failed, "hot_failure_original_receipt_unchanged_" + verb);
         }
 

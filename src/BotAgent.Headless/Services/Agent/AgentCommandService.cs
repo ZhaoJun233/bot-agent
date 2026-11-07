@@ -1,4 +1,5 @@
 using BotAgent.Domain.Agent;
+using BotAgent.Domain.Mcp;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
@@ -80,6 +81,9 @@ public sealed partial class AgentCommandService : IAgentCommandService
     /// <summary>仅转交发现快照中的工具名，不在受理阶段触发 MCP 网络发现。</summary>
     internal IReadOnlyList<string> GetTaskMcpToolNames()
         => _serverAgent.GetTaskMcpToolNames();
+
+    internal IReadOnlyList<McpToolInfo> CaptureTaskPythonLeases(IEnumerable<string> names)
+        => _serverAgent.CaptureTaskPythonLeases(names);
 
     /// <summary>协议端（QQ 动作要用它）—— 只有 OneBot 这条路有。</summary>
     private IQqActions? Gateway => _actionGateway ?? _source as IQqActions;
@@ -276,7 +280,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
 
     /// <summary>面板“试一条”用的：直接在容器里跑一次服务器内置 agent（不经过 QQ、不经过外部设备）。</summary>
     public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds, CancellationToken ct = default,
-        IReadOnlyList<string>? toolScope = null)
+        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null)
     {
         var task = new AgentTask
         {
@@ -285,6 +289,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
             Prompt = prompt,
             Session = "qqchat-panel",
             ToolScope = toolScope,
+            PythonToolLeases = Array.AsReadOnly((pythonToolLeases ?? []).ToArray()),
             // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
             QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
         };
@@ -303,7 +308,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
     /// <summary>面板工作台用的持久化单次执行入口：把运行流水写回指定 Agent 会话。</summary>
     public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt,
         int timeoutSeconds, string target, CancellationToken ct = default,
-        IReadOnlyList<string>? toolScope = null)
+        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null)
     {
         if (!target.Equals("server", StringComparison.OrdinalIgnoreCase)
             && !target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
@@ -320,7 +325,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
         var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, null);
         try
         {
-            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope);
+            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope, pythonToolLeases);
             _agentSessions.FinishRun(sourceKey, session.Id, runId, task.Ok, task.DurationMs, task.ToolCalls,
                 task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             return task;

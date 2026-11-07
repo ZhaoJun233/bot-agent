@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BotAgent.Headless/BotAgent.Headless.csproj" />
+    <None Include="worker.py" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/BotAgent.Mcp/PythonWorkerSdk/botagent_worker.py" Link="botagent_worker.py" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,8 @@
+import { hasValidPluginRuntime, type PythonPluginRuntime } from './plugin-runtime'
+import { isPluginGovernance, isPluginGovernanceSource, type PluginGovernance, type PluginGovernanceSource } from './plugin-governance'
+import { isPluginLifecyclePreview, matchesLifecycleSelection, type PluginLifecyclePreview, type PluginLifecyclePreviewRequest } from './plugin-lifecycle'
 import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
+import { isPluginInstallPreview, isPluginSourceDiscovery, type PluginInstallPreview, type PluginPreviewRequest, type PluginSourceDiscovery } from './plugin-import'
 
 export interface ZbaHealth {
   status: string
@@ -676,12 +680,13 @@ export interface ZbaPluginDependency {
 export interface ZbaPluginPackageManifest {
   id: string
   version: string
-  entryAssembly: string
-  entryType: string
+  entryAssembly?: string | null
+  entryType?: string | null
   sha256: string
   downloadUrl: string
   apiVersion: number
-  targetFramework: string
+  targetFramework?: string | null
+  runtime?: PythonPluginRuntime | null
   minimumHostVersion?: string | null
   permissions?: string[] | null
   dependencies?: ZbaPluginDependency[] | null
@@ -694,7 +699,13 @@ export interface ZbaPluginPackageManifest {
  * 校验类型，缺失时由页面回落到 manifest.id，而不是判成非法响应。
  */
 export interface ZbaPluginCatalogItem {
+  isCompatible?: boolean
+  compatibilityMessage?: string | null
+  governance?: PluginGovernance
+  installedGovernance?: PluginGovernance
   manifest: ZbaPluginPackageManifest
+  previousManifest?: ZbaPluginPackageManifest | null
+  pendingManifest?: ZbaPluginPackageManifest | null
   metadata?: PluginPresentationMetadata
   installedVersion?: string | null
   enabled: boolean
@@ -714,6 +725,7 @@ export interface ZbaPluginCatalogQuery {
 }
 
 export interface ZbaPluginCatalog {
+  governanceSource?: PluginGovernanceSource
   metadataNotice?: string
   revision: string
   source: string
@@ -729,12 +741,13 @@ export interface ZbaPluginSourceResolution {
 }
 
 export interface ZbaInstalledPlugins {
+  governanceSource?: PluginGovernanceSource
   revision: string
   plugins: ZbaPluginCatalogItem[]
   builtinPlugins?: ZbaBuiltinPlugin[]
 }
 
-export type ZbaPluginOperationKind = 'install' | 'update' | 'uninstall'
+export type ZbaPluginOperationKind = 'install' | 'update' | 'rollback' | 'uninstall'
 export type ZbaPluginOperationStatus = 'staged' | 'restart_required' | 'installed' | 'not_installed' | 'reload_required' | 'failed'
 
 export interface ZbaPluginOperation {
@@ -753,6 +766,8 @@ export interface ZbaPluginOperationResult {
 }
 
 export interface ZbaPluginInstallRequest {
+  /** New installs require a server-bound preview; optional only for construction compatibility. */
+  previewId?: string
   manifest: ZbaPluginPackageManifest
   expectedRevision: string
   idempotencyKey: string
@@ -761,6 +776,8 @@ export interface ZbaPluginInstallRequest {
 }
 
 export interface ZbaPluginUpdateRequest {
+  /** Optional for legacy receipt callers only; new mutations require a preview. */
+  previewId?: string
   manifest: ZbaPluginPackageManifest
   expectedRevision: string
   idempotencyKey: string
@@ -768,6 +785,8 @@ export interface ZbaPluginUpdateRequest {
 }
 
 export interface ZbaPluginUninstallRequest {
+  previewId?: string
+  trustAcknowledged?: true
   expectedRevision: string
   idempotencyKey: string
 }
@@ -972,6 +991,19 @@ export class ZbaClient {
     return response.data
   }
 
+  discoverPluginSource(sourceUrl: string): Promise<PluginSourceDiscovery> {
+    return this.request('/plugins/source/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceUrl }) }, 'required', isPluginSourceDiscovery)
+  }
+
+  previewPlugin(request: PluginPreviewRequest): Promise<PluginInstallPreview> {
+    return this.request('/plugins/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, 'required', (value): value is PluginInstallPreview => isPluginInstallPreview(value, isPluginPackageManifest))
+  }
+
+  previewPluginLifecycle(request: PluginLifecyclePreviewRequest): Promise<PluginLifecyclePreview> {
+    return this.request('/plugins/lifecycle/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) },
+      'required', (value): value is PluginLifecyclePreview => isPluginLifecyclePreview(value, isPluginPackageManifest) && matchesLifecycleSelection(value, request))
+  }
+
   /** 已安装/已暂存插件；与目录同一条目形状，单列出来供页面独立刷新。 */
   installedPlugins(): Promise<ZbaInstalledPlugins> {
     return this.request('/plugins/installed', { method: 'GET' }, 'required', isInstalledPlugins)
@@ -986,6 +1018,7 @@ export class ZbaClient {
    */
   installPlugin(request: ZbaPluginInstallRequest): Promise<ZbaPluginOperationResult> {
     return this.mutatePlugin('/plugins/install', {
+      previewId: request.previewId,
       manifest: request.manifest,
       expectedRevision: request.expectedRevision,
       idempotencyKey: request.idempotencyKey,
@@ -995,6 +1028,7 @@ export class ZbaClient {
 
   updatePlugin(request: ZbaPluginUpdateRequest): Promise<ZbaPluginOperationResult> {
     return this.mutatePlugin('/plugins/update', {
+      previewId: request.previewId,
       manifest: request.manifest,
       expectedRevision: request.expectedRevision,
       idempotencyKey: request.idempotencyKey,
@@ -1002,8 +1036,15 @@ export class ZbaClient {
     })
   }
 
+  rollbackPlugin(request: ZbaPluginUpdateRequest): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin('/plugins/rollback', { manifest: request.manifest, previewId: request.previewId,
+      expectedRevision: request.expectedRevision, idempotencyKey: request.idempotencyKey, trustAcknowledged: true })
+  }
+
   uninstallPlugin(id: string, request: ZbaPluginUninstallRequest): Promise<ZbaPluginOperationResult> {
     return this.mutatePlugin(`/plugins/${encodeURIComponent(id)}/uninstall`, {
+      previewId: request.previewId,
+      trustAcknowledged: request.trustAcknowledged,
       expectedRevision: request.expectedRevision,
       idempotencyKey: request.idempotencyKey
     })
@@ -2237,12 +2278,10 @@ function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManif
   if (!isRecord(value)
     || typeof value.id !== 'string' || value.id.length === 0
     || typeof value.version !== 'string' || value.version.length === 0
-    || typeof value.entryAssembly !== 'string'
-    || typeof value.entryType !== 'string'
+    || !hasValidPluginRuntime(value)
     || typeof value.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(value.sha256)
     || typeof value.downloadUrl !== 'string'
-    || !isInteger(value.apiVersion)
-    || typeof value.targetFramework !== 'string') return false
+    || !isInteger(value.apiVersion)) return false
   if (value.minimumHostVersion !== undefined && value.minimumHostVersion !== null && typeof value.minimumHostVersion !== 'string') return false
   if (value.permissions !== undefined && value.permissions !== null && !isStringArray(value.permissions)) return false
   if (value.dependencies !== undefined && value.dependencies !== null
@@ -2260,7 +2299,11 @@ function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManif
 
 function isPluginCatalogItem(value: unknown): value is ZbaPluginCatalogItem {
   return isRecord(value)
+    && (value.isCompatible === undefined || typeof value.isCompatible === 'boolean')
+    && (value.compatibilityMessage === undefined || value.compatibilityMessage === null || typeof value.compatibilityMessage === 'string')
     && isPluginPackageManifest(value.manifest)
+    && (value.previousManifest === undefined || value.previousManifest === null || (isPluginPackageManifest(value.previousManifest) && value.previousManifest.id === value.manifest.id))
+    && (value.pendingManifest === undefined || value.pendingManifest === null || (isPluginPackageManifest(value.pendingManifest) && value.pendingManifest.id === value.manifest.id))
     && (value.installedVersion === undefined || value.installedVersion === null || typeof value.installedVersion === 'string')
     && typeof value.enabled === 'boolean'
     && typeof value.status === 'string'
@@ -2272,6 +2315,8 @@ function isPluginCatalogItem(value: unknown): value is ZbaPluginCatalogItem {
     && (value.tags === undefined || value.tags === null || isStringArray(value.tags))
     && (value.repository === undefined || typeof value.repository === 'string')
     && (value.metadata === undefined || isPluginPresentation(value.metadata))
+    && (value.governance === undefined || isPluginGovernance(value.governance))
+    && (value.installedGovernance === undefined || isPluginGovernance(value.installedGovernance))
 }
 
 function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
@@ -2285,6 +2330,7 @@ function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
     && isBuiltinPluginList(value.builtinPlugins)
+    && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
 function isPluginSourceResolution(value: unknown): value is ZbaPluginSourceResolution {
@@ -2300,13 +2346,14 @@ function isInstalledPlugins(value: unknown): value is ZbaInstalledPlugins {
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
     && isBuiltinPluginList(value.builtinPlugins)
+    && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
 function isPluginOperation(value: unknown): value is ZbaPluginOperation {
   return isRecord(value)
     && typeof value.id === 'string' && value.id.length > 0
     && typeof value.pluginId === 'string' && value.pluginId.length > 0
-    && (value.kind === 'install' || value.kind === 'update' || value.kind === 'uninstall')
+    && (value.kind === 'install' || value.kind === 'update' || value.kind === 'rollback' || value.kind === 'uninstall')
     && (value.status === 'staged' || value.status === 'restart_required' || value.status === 'installed' || value.status === 'not_installed' || value.status === 'reload_required' || value.status === 'failed')
     && typeof value.restartRequired === 'boolean'
     && (value.errorCode === undefined || typeof value.errorCode === 'string')

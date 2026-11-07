@@ -1,3 +1,5 @@
+import { hasValidPluginRuntime, type PythonPluginRuntime } from '../../api/plugin-runtime'
+
 export const pluginSettingTypes = ['string', 'boolean', 'number', 'secret', 'select'] as const
 export type PluginSettingType = typeof pluginSettingTypes[number]
 export interface PluginSettingDefinition {
@@ -11,12 +13,13 @@ export interface PluginSettingDefinition {
 export interface PluginPackageManifest {
   id: string
   version: string
-  entryAssembly: string
-  entryType: string
+  entryAssembly?: string | null
+  entryType?: string | null
   sha256: string
   downloadUrl: string
   apiVersion: number
-  targetFramework: string
+  targetFramework?: string | null
+  runtime?: PythonPluginRuntime | null
   minimumHostVersion?: string | null
   permissions?: string[] | null
   dependencies?: Array<{ id: string; version: string }> | null
@@ -34,10 +37,9 @@ export function isPluginSettingDefinition(value: unknown): value is PluginSettin
 }
 export function isPluginManifest(value: unknown): value is PluginPackageManifest {
   return record(value) && typeof value.id === 'string' && typeof value.version === 'string'
-    && typeof value.entryAssembly === 'string' && typeof value.entryType === 'string'
+    && hasValidPluginRuntime(value)
     && typeof value.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(value.sha256)
     && typeof value.downloadUrl === 'string' && Number.isSafeInteger(value.apiVersion)
-    && typeof value.targetFramework === 'string'
     && (value.minimumHostVersion === undefined || value.minimumHostVersion === null || typeof value.minimumHostVersion === 'string')
     && (value.permissions === undefined || value.permissions === null || (Array.isArray(value.permissions) && value.permissions.every((item) => typeof item === 'string')))
     && (value.settings === undefined || value.settings === null || (Array.isArray(value.settings) && value.settings.every(isPluginSettingDefinition)

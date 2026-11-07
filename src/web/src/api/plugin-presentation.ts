@@ -58,7 +58,7 @@ export function isBuiltinPluginList(value: unknown): value is ZbaBuiltinPlugin[]
 }
 
 /** Check the written calendar date; Date.parse alone normalizes invalid days. */
-function isReviewTimestamp(value: string): boolean {
+export function isReviewTimestamp(value: string): boolean {
   // (?![\s\S]) requires the absolute end, including no final line terminator.
   const timestamp = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)(?![\s\S])/.exec(value)
   if (!timestamp) return false

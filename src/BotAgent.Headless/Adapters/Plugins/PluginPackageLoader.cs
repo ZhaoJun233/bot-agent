@@ -23,8 +23,8 @@ internal sealed class PluginPackageLoader(string directory) : AssemblyLoadContex
         var initializationAttempted = false;
         try
         {
-            var assembly = loader.LoadFromAssemblyPath(Path.Combine(directory, manifest.EntryAssembly));
-            var type = assembly.GetType(manifest.EntryType, throwOnError: true)!;
+            var assembly = loader.LoadFromAssemblyPath(Path.Combine(directory, manifest.EntryAssembly!));
+            var type = assembly.GetType(manifest.EntryType!, throwOnError: true)!;
             plugin = Activator.CreateInstance(type) as IBotPlugin ?? throw new InvalidDataException("Entry does not implement IBotPlugin.");
             if (plugin.Id != manifest.Id || plugin.Version != manifest.Version)
                 throw new InvalidDataException("Plugin identity differs from approved manifest.");

@@ -1029,7 +1029,7 @@ public static class Program
         var type = typeof(ServerAgentRunner).Assembly.GetType("BotAgent.Host.McpConfiguration", throwOnError: true)!;
         var method = type.GetMethod("Build", BindingFlags.Public | BindingFlags.Static)
                      ?? throw new InvalidOperationException("McpConfiguration.Build was not found");
-        return method.Invoke(null, new object?[] { secrets, audit, log })!;
+        return method.Invoke(null, new object?[] { secrets, audit, log, null })!;
     }
 
     private static McpToolUseCase UseCaseOf(object wiring)

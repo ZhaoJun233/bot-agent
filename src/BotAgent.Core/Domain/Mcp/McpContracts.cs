@@ -48,7 +48,7 @@ public sealed record McpToolInfo(
     string Description,
     string InputSchemaJson,
     string ServerId,
-    bool ReadOnlyHint);
+    bool ReadOnlyHint, bool IsLocalProcess = false, string? SourceGeneration = null);
 
 /// <summary>
 /// 一次 MCP 调用的结果。`ReasonCode` 是短码；`Content` 只给模型看，`AuditDetail` 只写形状
@@ -92,6 +92,10 @@ public interface IMcpToolSource
     /// 调用者取消 → 抛 <see cref="OperationCanceledException" />；本地超时 → 返回 `mcp_timeout`。
     /// </summary>
     Task<McpCallResult> CallAsync(string qualifiedName, JsonObject arguments, CancellationToken ct);
+
+    bool IsToolCurrent(McpToolInfo tool) => true;
+    Task<McpCallResult> CallWithLeaseAsync(McpToolInfo tool, JsonObject arguments, CancellationToken ct)
+        => CallAsync(tool.QualifiedName, arguments, ct);
 
     /// <summary>停机释放：取消在途调用、关闭会话（含 DELETE）、不无限等待。</summary>
     ValueTask DisposeAsync();

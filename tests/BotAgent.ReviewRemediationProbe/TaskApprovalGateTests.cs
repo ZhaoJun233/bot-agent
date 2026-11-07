@@ -109,9 +109,11 @@ internal static class TaskApprovalGateTests
     private static IAgentTaskApprovalGate CreateGate(Func<AppSettings> settings, bool enabled = true, bool dockerAvailable = true)
     {
         // Permit the pre-fix constructor so the regression is red on behavior, not compilation.
-        object?[] args = GateType.GetConstructors().Any(ctor => ctor.GetParameters().Length == 4)
+        var parameterCount = GateType.GetConstructors().Single().GetParameters().Length;
+        object?[] args = parameterCount >= 4
             ? [new Func<DateTimeOffset>(() => Now), new Func<bool>(() => enabled), settings, new Func<bool>(() => dockerAvailable)]
             : [new Func<DateTimeOffset>(() => Now), new Func<bool>(() => enabled)];
+        if (parameterCount == 5) args = [..args, null];
         return (IAgentTaskApprovalGate)Activator.CreateInstance(GateType, args)!;
     }
 }

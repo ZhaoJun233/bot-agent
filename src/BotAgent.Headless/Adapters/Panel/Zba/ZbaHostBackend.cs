@@ -91,7 +91,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         ledger.Prune(0);
         // #137：任务级前置审批闸门。审批总开关关掉时它返回 null，不会凭空多出待批任务。
         var approvalGate = new TaskApprovalGate(now, () => _box.Current.EnableApprovals,
-            () => _box.Current, () => DockerAvailability.IsAvailable);
+            () => _box.Current, () => DockerAvailability.IsAvailable, agent.CaptureTaskPythonLeases);
         _tasks = new ZbaTaskRegistry(sessions,
             new AgentTaskRuntime(
                 new AgentTaskExecutor(agent), now, log: log, ledger: ledger, bootSeq: ledger.BootSeq,

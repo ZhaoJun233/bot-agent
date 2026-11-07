@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PluginGovernanceNotice from './PluginGovernanceNotice.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaInstalledPlugins, type ZbaPluginCatalog, type ZbaPluginOperationKind } from '../../api/zba'
 import { beginOperation, markOperation, pendingOperations, type PendingOperation } from '../../shared/sync/pending-operations'
@@ -7,9 +8,15 @@ import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
 import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import PluginCatalogBrowser from './PluginCatalogBrowser.vue'
-import { githubSourceError } from './plugin-manifest'
-import { pluginRuntime, type PackageCatalogEntry, type PluginCatalogEntry } from './plugin-catalog'
-import { mergePluginCatalog, pluginOperationKey, pluginOperationNotice, pluginRecoveryNotice, type PluginNotice } from './plugin-marketplace'
+import PluginRepositoryImport from './PluginRepositoryImport.vue'
+import PluginInstallPreview from './PluginInstallPreview.vue'
+import PluginLifecyclePreview from './PluginLifecyclePreview.vue'
+import type { PluginPreviewSelection } from '../../api/plugin-import'
+import type { PluginLifecycleKind } from '../../api/plugin-lifecycle'
+import { usePluginLifecyclePreview } from './use-plugin-lifecycle-preview'
+import { usePluginPreview } from './use-plugin-preview'
+import { pluginAcquisitionUnavailable, type PackageCatalogEntry, type PluginCatalogEntry } from './plugin-catalog'
+import { assertPluginReceipt, catalogEntry, mergePluginCatalog, pluginOperationKey, pluginOperationNotice, pluginRecoveryNotice, type PluginNotice } from './plugin-marketplace'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -29,18 +36,52 @@ const loading = ref(false)
 const busy = ref(false)
 const error = ref<UiError | null>(null)
 const notice = ref<PluginNotice | null>(null)
-const sourceUrl = ref('')
-const sourceError = ref('')
-const sourceBusy = ref(false)
-const sourceEntries = ref<PluginCatalogEntry[]>([])
+const importDraft = ref(false)
+const importer = ref<InstanceType<typeof PluginRepositoryImport> | null>(null)
 const recoveringKey = ref('')
 const packagePending = computed(() => pendingOperations(props.client, 'plugin').filter(record => record.state !== 'settled'))
 const unresolvedIds = computed(() => pendingOperations(props.client).filter(record => record.state !== 'settled' && (record.kind === 'plugin' || record.kind === 'plugin-settings')).map(record => record.target))
-const entries = computed(() => mergePluginCatalog(catalog.value?.plugins ?? [], installed.value, sourceEntries.value, catalog.value?.builtinPlugins ?? []))
-const dirty = computed(() => Boolean(sourceUrl.value.trim()))
+const entries = computed(() => mergePluginCatalog(catalog.value?.plugins ?? [], installed.value, [], catalog.value?.builtinPlugins ?? []))
+const dirty = computed(() => importDraft.value)
+const installPreview = usePluginPreview({ client: () => props.client, revision: () => revision.value, canWrite: () => canWrite.value, active: () => props.active, blockedIds: () => unresolvedIds.value })
+const lifecyclePreview = usePluginLifecyclePreview({ client: () => props.client, installed: () => installed.value, revision: () => revision.value,
+  canWrite: () => canWrite.value && !busy.value && !recoveringKey.value, active: () => props.active, blockedIds: () => unresolvedIds.value })
+function invalidatePreviews(): void { installPreview.invalidate(); lifecyclePreview.invalidate() }
+const { preview, acknowledged, expired, canConfirm, loading: previewLoading, error: previewError } = installPreview
+function requestInstall(entry: PackageCatalogEntry): void {
+  if (pluginAcquisitionUnavailable(entry)) return
+  void requestCandidate({ origin: 'catalog', manifest: entry.manifest })
+}
+async function requestCandidate(selection: PluginPreviewSelection): Promise<void> {
+  invalidatePreviews()
+  const pluginId = selection.origin === 'repository' ? selection.pluginId : selection.manifest.id
+  if (installed.value?.plugins.some(item => item.manifest.id === pluginId)) {
+    const candidate = selection.origin === 'repository' ? { origin: selection.origin, discoveryId: selection.discoveryId, version: selection.version }
+      : { origin: selection.origin, manifest: selection.manifest }
+    await lifecyclePreview.request({ kind: 'update', pluginId, candidate })
+  } else await installPreview.request(selection)
+}
+function requestLifecycle(kind: Exclude<PluginLifecycleKind, 'update'>, entry: PackageCatalogEntry): void {
+  invalidatePreviews()
+  void lifecyclePreview.request({ kind, pluginId: entry.id })
+}
+function confirmLifecycle(): void {
+  if (busy.value) return
+  const confirmed = lifecyclePreview.consume()
+  if (!confirmed) return
+  const manifest = confirmed.targetManifest ?? confirmed.currentManifest
+  const entry = catalogEntry({ manifest, enabled: confirmed.enabled, status: confirmed.currentStatus, restartRequired: confirmed.restartRequired })
+  void runMutation(confirmed.kind, entry, manifest, confirmed.previewId)
+}
+function confirmPreview(): void {
+  if (busy.value) return
+  const confirmed = installPreview.consume()
+  if (!confirmed) return
+  const entry = catalogEntry({ name: confirmed.metadata?.name || confirmed.manifest.id, summary: '', category: '导入', enabled: false, status: 'available', restartRequired: false, manifest: confirmed.manifest, metadata: confirmed.metadata })
+  void runMutation('install', entry, confirmed.manifest, confirmed.previewId)
+}
 let alive = true
 let catalogEpoch = 0
-let sourceEpoch = 0
 const discardAction = ref<null | 'settings' | 'close' | 'leave'>(null)
 let settingsTarget: string | null = null
 let leavePromise: Promise<boolean> | null = null
@@ -66,14 +107,14 @@ function cancelDiscard(): void {
   leaveResolve?.(false); leaveResolve = null; leavePromise = null
 }
 function blockedLeave(): boolean {
-  if (!busy.value && !sourceBusy.value && !recoveringKey.value && !packagePending.value.length) return false
+  if (!busy.value && !recoveringKey.value && !packagePending.value.length) return false
   notice.value = { tone: 'warn', message: '插件操作尚未确认，请先核对原操作键，再离开插件市场。' }
   return true
 }
 function confirmDiscard(): void {
   if (blockedLeave()) return
   const action = discardAction.value; const target = settingsTarget
-  discardAction.value = null; settingsTarget = null; sourceUrl.value = ''
+  discardAction.value = null; settingsTarget = null; importer.value?.reset(); invalidatePreviews()
   if (action === 'settings' && target) emit('open-settings', target)
   else if (action === 'close') emit('close')
   else if (action === 'leave') { leaveResolve?.(true); leaveResolve = null; leavePromise = null }
@@ -90,11 +131,10 @@ function requestLeave(reason: 'lock' | 'downgrade' | 'navigate', _trigger?: HTML
 function close(): void {
   if (discardAction.value) { cancelDiscard(); return }
   if (dirty.value) { discardAction.value = 'close'; return }
-  emit('close')
+  invalidatePreviews(); emit('close')
 }
 function endSession(): void {
-  ++catalogEpoch; ++sourceEpoch; cancelDiscard()
-  sourceUrl.value = ''; sourceEntries.value = []; sourceBusy.value = false; sourceError.value = ''
+  ++catalogEpoch; cancelDiscard(); invalidatePreviews(); importer.value?.reset(); importDraft.value = false
   catalog.value = null; installed.value = null; revision.value = ''; loading.value = false
   busy.value = false; recoveringKey.value = ''; error.value = null; notice.value = null
 }
@@ -120,18 +160,22 @@ async function loadCatalog(showLoading = true): Promise<void> {
   } else showError(installedResult.reason)
   loading.value = false
 }
-async function runMutation(kind: ZbaPluginOperationKind, entry: PackageCatalogEntry, manifest = entry.manifest): Promise<void> {
-  if (!canWrite.value || busy.value || loading.value || pluginRuntime(entry) === 'python' || unresolvedIds.value.includes(entry.id)) return
+async function runMutation(kind: ZbaPluginOperationKind, entry: PackageCatalogEntry, manifest = entry.manifest, previewId?: string): Promise<void> {
+  if (!previewId) return
+  if (!canWrite.value || busy.value || loading.value || unresolvedIds.value.includes(entry.id)) return
   const client = props.client; const key = pluginOperationKey(kind, entry.id, manifest.version)
   try { beginOperation(client, { key, kind: 'plugin', target: entry.id, meta: { operation: kind, version: manifest.version } }) }
   catch (cause) { error.value = describe(cause); return }
   busy.value = true; error.value = null; notice.value = null
   try {
     const result = kind === 'uninstall'
-      ? await client.uninstallPlugin(entry.id, { expectedRevision: revision.value, idempotencyKey: key })
+      ? await client.uninstallPlugin(entry.id, { previewId, trustAcknowledged: true, expectedRevision: revision.value, idempotencyKey: key })
       : kind === 'update'
-        ? await client.updatePlugin({ manifest, expectedRevision: revision.value, idempotencyKey: key, trustAcknowledged: true })
-        : await client.installPlugin({ manifest, expectedRevision: revision.value, idempotencyKey: key, trustAcknowledged: true })
+        ? await client.updatePlugin({ manifest, previewId, expectedRevision: revision.value, idempotencyKey: key, trustAcknowledged: true })
+        : kind === 'rollback'
+          ? await client.rollbackPlugin({ manifest, previewId, expectedRevision: revision.value, idempotencyKey: key, trustAcknowledged: true })
+          : await client.installPlugin({ manifest, previewId, expectedRevision: revision.value, idempotencyKey: key, trustAcknowledged: true })
+    assertPluginReceipt(result.operation, entry.id, kind)
     markOperation(client, key, 'settled')
     if (!live(client)) return
     revision.value = result.revision; notice.value = pluginOperationNotice(result.operation)
@@ -148,7 +192,7 @@ async function checkRecovery(pending: PendingOperation): Promise<void> {
   const client = props.client; recoveringKey.value = pending.key
   try {
     const result = await client.pluginOperation(pending.key)
-    if (result.operation.pluginId !== pending.target || result.operation.kind !== pending.meta.operation) throw new ZbaRequestError(200, 'invalid_json', 'Operation receipt target mismatch')
+    assertPluginReceipt(result.operation, pending.target, pending.meta.operation)
     markOperation(client, pending.key, 'settled')
     if (!live(client)) return
     revision.value = result.revision; notice.value = pluginOperationNotice(result.operation)
@@ -160,22 +204,6 @@ async function checkRecovery(pending: PendingOperation): Promise<void> {
     if (!notice.value) showError(cause)
   } finally { if (alive && client === props.client) recoveringKey.value = '' }
 }
-async function resolveSource(): Promise<void> {
-  if (!canWrite.value || sourceBusy.value) return
-  const raw = sourceUrl.value.trim(); sourceError.value = ''; notice.value = null
-  if (!raw) { sourceError.value = '请填写数据源地址：GitHub 仓库主页或固定版本 Release。'; return }
-  const problem = githubSourceError(raw)
-  if (problem) { sourceError.value = problem; return }
-  sourceBusy.value = true; const client = props.client; const epoch = ++sourceEpoch
-  try {
-    const result = await client.resolvePluginSource(raw)
-    if (!live(client) || epoch !== sourceEpoch) return
-    const entry: PluginCatalogEntry = { id: result.manifest.id, name: result.manifest.id, summary: '来自指定数据源。安装状态以宿主读取为准。', category: '指定数据源', repository: raw.split('/releases/tag/')[0], manifest: result.manifest }
-    sourceEntries.value = [...sourceEntries.value.filter(item => item.id !== entry.id), entry]
-    notice.value = { tone: 'warn', message: result.trustNotice }
-  } catch (cause) { if (live(client) && epoch === sourceEpoch) showError(cause) }
-  finally { if (alive && client === props.client && epoch === sourceEpoch) sourceBusy.value = false }
-}
 function openSettings(entry: PluginCatalogEntry): void {
   if (!props.active || blockedLeave()) return
   if (dirty.value) { settingsTarget = entry.id; discardAction.value = 'settings'; return }
@@ -183,10 +211,10 @@ function openSettings(entry: PluginCatalogEntry): void {
 }
 watch(() => [props.mode, props.writesEnabled], () => {
   // Catalog reads are permission-independent; do not abandon them on admin enable.
-  ++sourceEpoch; sourceBusy.value = false
+  invalidatePreviews()
 }, { flush: 'sync' })
 watch(() => props.active, active => {
-  ++sourceEpoch; sourceBusy.value = false
+  invalidatePreviews()
   if (!active) { ++catalogEpoch; loading.value = false; cancelDiscard() }
   else void loadCatalog()
 }, { flush: 'sync' })
@@ -210,6 +238,7 @@ onBeforeUnmount(() => { endSession(); alive = false })
     <ErrorNotice v-if="error" :error="error" />
     <p v-if="notice" class="notice" :class="notice.tone" role="status" data-testid="marketplace-notice">{{ notice.message }}</p>
 
+    <PluginGovernanceNotice :source="catalog?.governanceSource ?? installed?.governanceSource" source-only />
     <p v-if="catalog?.metadataNotice" class="notice warn" role="status" data-testid="metadata-notice">{{ catalog.metadataNotice }}</p>
     <div v-for="pending in packagePending" :key="pending.key" class="notice warn" role="status" data-testid="marketplace-recovery">
       <p>{{ pending.target }} · {{ pending.meta.operation }}：{{ pending.state === 'in-flight' ? '正在提交' : '结果未知' }}，原操作键已保留。不要换键重复提交。</p>
@@ -219,7 +248,7 @@ onBeforeUnmount(() => { endSession(); alive = false })
       </button>
     </div>
     <div v-if="discardAction" class="notice warn" role="alert" data-testid="marketplace-discard-confirmation">
-      <p>当前数据源地址尚未处理。确认放弃并继续？</p>
+      <p>仓库地址或 JSON 导入草稿尚未处理。确认放弃并继续？</p>
       <button type="button" data-testid="marketplace-discard-confirm" @click="confirmDiscard">放弃草稿并继续</button>
       <button type="button" data-testid="marketplace-discard-cancel" @click="cancelDiscard">继续编辑</button>
     </div>
@@ -229,27 +258,24 @@ onBeforeUnmount(() => { endSession(); alive = false })
       :focus-plugin-id="props.focusPluginId"
       :can-write="canWrite"
       :unresolved-ids="unresolvedIds"
-      :busy="busy"
+      :busy="busy || previewLoading"
       :loading="loading"
-      @install="(entry) => runMutation(entry.installedVersion ? 'update' : 'install', entry)"
-      @uninstall="(entry) => runMutation('uninstall', entry)"
+      @install="requestInstall"
+      @selection-change="invalidatePreviews"
+      @uninstall="(entry) => requestLifecycle('uninstall', entry)"
+      @rollback="(entry) => requestLifecycle('rollback', entry)"
       @settings="(entry) => openSettings(entry)"
     />
 
-    <details open class="source-panel" aria-labelledby="marketplace-source-heading">
-      <summary id="marketplace-source-heading">高级：从 GitHub 添加扩展包</summary>
-      <p class="field-hint">支持公开 GitHub 仓库主页或 <code>/releases/tag/固定版本</code>；不接受任意下载地址、查询参数或凭据。</p>
-      <div class="source-row">
-        <label class="grow">数据源地址
-          <input v-model="sourceUrl" data-testid="marketplace-source-input" type="url" autocomplete="off" spellcheck="false"
-            placeholder="https://github.com/example-org/example-plugin" :disabled="sourceBusy">
-        </label>
-        <button type="button" class="tonal" data-testid="marketplace-source-resolve" :disabled="sourceBusy || !canWrite" @click="resolveSource">
-          {{ sourceBusy ? '解析中…' : '解析清单' }}
-        </button>
-      </div>
-      <p v-if="sourceError" class="notice bad" role="alert" data-testid="marketplace-source-error">{{ sourceError }}</p>
-    </details>
+    <p v-if="previewLoading" role="status">正在只读预览；尚未下载或安装插件…</p>
+    <p v-if="previewError" class="notice bad" role="alert" data-testid="preview-error">{{ previewError }}</p>
+    <PluginInstallPreview v-if="preview" :preview="preview" v-model:acknowledged="acknowledged" :can-confirm="canConfirm" :expired="expired" :busy="busy" @confirm="confirmPreview" @cancel="installPreview.invalidate" />
+    <p v-if="lifecyclePreview.loading.value" class="read-only" role="status">正在生成变更预览；尚未提交变更…</p>
+    <p v-if="lifecyclePreview.error.value" class="notice bad" role="alert" data-testid="lifecycle-error">{{ lifecyclePreview.error.value }}</p>
+    <PluginLifecyclePreview v-if="lifecyclePreview.preview.value" :preview="lifecyclePreview.preview.value" :acknowledged="lifecyclePreview.acknowledged.value"
+      :expired="lifecyclePreview.expired.value" :can-confirm="lifecyclePreview.canConfirm.value" @update:acknowledged="lifecyclePreview.acknowledged.value = $event"
+      @confirm="confirmLifecycle" @cancel="lifecyclePreview.invalidate" />
+    <PluginRepositoryImport ref="importer" :client="props.client" :can-write="canWrite" :active="props.active" :busy="busy || previewLoading" @preview="requestCandidate" @invalidate="invalidatePreviews" @draft-change="importDraft = $event" />
 
   </ManagementDialog>
 </template>

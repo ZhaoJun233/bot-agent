@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { pluginTargetLabel } from '../../api/plugin-runtime'
+import PluginGovernanceNotice from './PluginGovernanceNotice.vue'
 import { computed, ref, watch } from 'vue'
-import { filterPluginCatalog, pluginPackageStatus, pluginReviewLabel, pluginReviewed, pluginRuntime, pluginSourceLabel, pluginVersion, safeGithubLink, type PackageCatalogEntry, type PluginCatalogEntry } from './plugin-catalog'
+import { filterPluginCatalog, pluginAcquisitionUnavailable, pluginPackageStatus, pluginReviewLabel, pluginReviewed, pluginRuntime, pluginSourceLabel, pluginVersion, safeGithubLink, type PackageCatalogEntry, type PluginCatalogEntry } from './plugin-catalog'
 const props = defineProps<{
   entries: PluginCatalogEntry[]
   canWrite: boolean
@@ -12,7 +14,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   install: [entry: PackageCatalogEntry]
   uninstall: [entry: PackageCatalogEntry]
+  rollback: [entry: PackageCatalogEntry]
   settings: [entry: PluginCatalogEntry]
+  'selection-change': []
 }>()
 const search = ref('')
 const category = ref('all')
@@ -22,25 +26,30 @@ const review = ref('all')
 const state = ref('all')
 const selectedId = ref<string | null>(props.focusPluginId ?? null)
 watch(() => props.focusPluginId, id => { if (id) selectedId.value = id })
-const trusted = ref(false)
-const uninstallArmed = ref(false)
 const categories = computed(() => [...new Set(props.entries.map(entry => entry.category))].sort())
 const entries = computed(() => filterPluginCatalog(props.entries, search.value, category.value, { source: source.value, runtime: runtime.value, review: review.value, state: state.value }))
 const selected = computed(() => entries.value.find(entry => entry.id === selectedId.value) ?? entries.value[0])
 const repository = computed(() => safeGithubLink(selected.value?.repository))
-const pending = computed(() => Boolean(selected.value?.pendingVersion || selected.value?.pendingUninstall || selected.value?.restartRequired))
+const pending = computed(() => Boolean(selected.value?.pendingVersion || selected.value?.pendingUninstall || selected.value?.restartRequired || (selected.value?.kind !== 'builtin' && selected.value?.pendingManifest)))
+// Read-only eligibility only; the host must prove terminal failed-install state.
+const pendingInstall = computed(() => selected.value?.kind !== 'builtin' && !!selected.value?.pendingManifest
+  && !selected.value.installedVersion)
 const unresolved = computed(() => Boolean(selected.value && props.unresolvedIds?.includes(selected.value.id)))
 const sameVersion = computed(() => selected.value?.kind !== 'builtin' && selected.value?.installedVersion === selected.value?.manifest.version)
-const unsupported = computed(() => selected.value && pluginRuntime(selected.value) === 'python')
-watch(() => [selected.value?.id, selected.value?.manifest?.sha256, selected.value && pluginVersion(selected.value), pending.value, unresolved.value], () => { trusted.value = false; uninstallArmed.value = false })
+const revoked = computed(() => selected.value?.kind !== 'builtin' && selected.value?.governance?.blocked === true)
+const unsupported = computed(() => selected.value && pluginAcquisitionUnavailable(selected.value))
+watch(() => [selected.value?.id, selected.value?.manifest?.sha256, selected.value && pluginVersion(selected.value), pending.value, unresolved.value], () => { emit('selection-change') })
 function install(): void {
-  if (!selected.value || selected.value.kind === 'builtin' || !props.canWrite || props.busy || unresolved.value || pending.value || sameVersion.value || unsupported.value || !trusted.value) return
+  if (!selected.value || selected.value.kind === 'builtin' || !props.canWrite || props.busy || unresolved.value || pending.value || sameVersion.value || unsupported.value || revoked.value) return
   emit('install', selected.value)
 }
 function uninstall(): void {
-  if (!selected.value || selected.value.kind === 'builtin' || !props.canWrite || props.busy || unresolved.value || pending.value || !selected.value.installedVersion || !uninstallArmed.value) return
+  if (!selected.value || selected.value.kind === 'builtin' || !props.canWrite || props.busy || unresolved.value || (pending.value && !pendingInstall.value) || (!selected.value.installedVersion && !pendingInstall.value)) return
   emit('uninstall', selected.value)
-  uninstallArmed.value = false
+}
+function rollback(): void {
+  if (!selected.value || selected.value.kind === 'builtin' || (!selected.value.previousManifest && !selected.value.pendingManifest) || !props.canWrite || props.busy || unresolved.value || pendingInstall.value || (pending.value && !selected.value.pendingManifest)) return
+  emit('rollback', selected.value)
 }
 </script>
 
@@ -52,7 +61,7 @@ function uninstall(): void {
       <label class="catalog-search">搜索插件<input v-model="search" type="search" placeholder="中文名、功能、标签或插件 ID" data-testid="marketplace-search"></label>
       <label>分类<select v-model="category" data-testid="marketplace-category"><option value="all">全部分类</option><option v-for="item in categories" :key="item" :value="item">{{ item }}</option></select></label>
       <label>来源<select v-model="source" data-testid="catalog-source"><option value="all">全部来源</option><option value="builtin">内置能力</option><option value="package">可下载扩展</option><option value="official">官方发布</option><option value="community">社区来源</option></select></label>
-      <label>运行时<select v-model="runtime" data-testid="catalog-runtime"><option value="all">全部运行时</option><option value="builtin">内置</option><option value="dotnet">.NET</option><option value="python">Python（暂不支持运行）</option></select></label>
+      <label>运行时<select v-model="runtime" data-testid="catalog-runtime"><option value="all">全部运行时</option><option value="builtin">内置</option><option value="dotnet">.NET</option><option value="python">Python</option></select></label>
       <label>审核<select v-model="review" data-testid="catalog-review"><option value="all">全部审核状态</option><option value="reviewed">已审核此版本</option><option value="unreviewed">未单独审核</option></select></label>
       <label>状态<select v-model="state" data-testid="catalog-state"><option value="all">全部状态</option><option value="installed">已内置 / 已安装</option><option value="available">未安装</option><option value="enabled">已启用</option><option value="disabled">已停用</option><option value="pending">待应用</option></select></label>
     </div>
@@ -77,21 +86,30 @@ function uninstall(): void {
           <h4>功能介绍</h4><p>{{ selected.metadata?.description || selected.summary }}</p>
           <h4>如何使用</h4><p>{{ selected.metadata?.usage || '请查阅项目文档；目录暂未提供使用说明。' }}</p>
           <h4>配置说明</h4><p>{{ selected.metadata?.configuration || '未提供额外配置说明。' }}</p>
-          <h4>兼容要求</h4><p>{{ selected.metadata?.compatibility || (selected.kind === 'builtin' ? '与当前宿主版本一同提供。' : selected.manifest.targetFramework + ' · API v' + selected.manifest.apiVersion) }}</p>
+          <h4>兼容要求</h4><p>{{ selected.metadata?.compatibility || (selected.kind === 'builtin' ? '与当前宿主版本一同提供。' : pluginTargetLabel(selected.manifest) + ' · API v' + selected.manifest.apiVersion) }}</p>
           <h4>维护与更新</h4><p>{{ selected.metadata?.maintenance || '未提供维护说明。' }}</p><p>{{ selected.metadata?.changelog || '未提供更新记录。' }}</p>
         </section>
         <section class="catalog-risk" data-testid="marketplace-trust-warning"><h4>权限与风险</h4><p>{{ selected.metadata?.permissionNotes || '请在启用前核对功能权限与配置。' }}</p><p>{{ selected.metadata?.riskNotice || '来源标签不代表安全承诺，请自行核对代码和权限。' }}</p>
-          <template v-if="selected.kind !== 'builtin'"><p>扩展包会在宿主内执行代码，不是沙箱。官方来源、哈希校验或审核记录，都不等于安全隔离。</p><ul data-testid="marketplace-permissions"><li v-for="permission in selected.manifest.permissions ?? []" :key="permission">{{ permission }}</li><li v-if="!selected.manifest.permissions?.length">包未声明权限；不代表没有风险。</li></ul></template>
+          <template v-if="selected.kind !== 'builtin'"><p>{{ pluginRuntime(selected) === 'python' ? 'Python 扩展包以子进程执行代码，仍可访问宿主账号允许的资源；子进程不是安全沙箱。' : '扩展包会在宿主内执行代码，不是沙箱。' }}官方来源、哈希校验或审核记录，都不等于安全隔离。</p><ul data-testid="marketplace-permissions"><li v-for="permission in selected.manifest.permissions ?? []" :key="permission">{{ permission }}</li><li v-if="!selected.manifest.permissions?.length">包未声明权限；不代表没有风险。</li></ul></template>
           <p v-else>这是已注册的宿主内置能力，不下载 ZIP，也不通过包安装、更新或卸载接口管理。</p>
         </section>
         <template v-if="selected.kind !== 'builtin'">
-          <details class="artifact-details"><summary>包与审核详情</summary><dl><dt>SHA-256（包一致性）</dt><dd class="hash" data-testid="marketplace-sha256">{{ selected.manifest.sha256 }}</dd><dt>运行目标</dt><dd>{{ selected.manifest.targetFramework }} · API v{{ selected.manifest.apiVersion }}</dd><dt>最低宿主</dt><dd>{{ selected.manifest.minimumHostVersion || '未限制' }}</dd><dt>审核记录</dt><dd>{{ pluginReviewLabel(selected) }}</dd><template v-if="pluginReviewed(selected)"><dt>审核人 / 时间</dt><dd>{{ selected.metadata?.review.reviewer }} · {{ selected.metadata?.review.reviewedAt }}</dd><dt>源码版本</dt><dd class="hash">{{ selected.metadata?.review.sourceRevision }}</dd></template></dl></details>
-          <p v-if="unsupported" class="pending-copy" role="status">Python 运行时尚未开放；本阶段只能查看说明，不能安装运行。</p>
-          <p v-if="pending" class="pending-copy" role="status">已有变更待应用；{{ selected.restartRequired ? '需要重启宿主' : '等待宿主热应用' }}，完成前不能重复安装或卸载。</p>
+          <PluginGovernanceNotice :state="selected.governance" />
+          <PluginGovernanceNotice v-if="selected.installedVersion" :state="selected.installedGovernance" installed />
+          <details class="artifact-details"><summary>包与审核详情</summary><dl><dt>SHA-256（包一致性）</dt><dd class="hash" data-testid="marketplace-sha256">{{ selected.manifest.sha256 }}</dd><dt>运行目标</dt><dd>{{ pluginTargetLabel(selected.manifest) }} · API v{{ selected.manifest.apiVersion }}</dd><dt>最低宿主</dt><dd>{{ selected.manifest.minimumHostVersion || '未限制' }}</dd><dt>审核记录</dt><dd>{{ pluginReviewLabel(selected) }}</dd><template v-if="pluginReviewed(selected)"><dt>审核人 / 时间</dt><dd>{{ selected.metadata?.review.reviewer }} · {{ selected.metadata?.review.reviewedAt }}</dd><dt>源码版本</dt><dd class="hash">{{ selected.metadata?.review.sourceRevision }}</dd></template></dl></details>
+          <p v-if="unsupported" class="pending-copy" role="status" data-testid="runtime-readiness">{{ selected.compatibilityMessage || '宿主尚未确认运行时兼容与环境准备状态；当前不可安装。' }}</p>
+          <p v-else-if="pluginRuntime(selected) === 'python'" class="pending-copy" role="status" data-testid="runtime-readiness">{{ selected.compatibilityMessage || '解释器版本检查通过；包初始化与工具发现将在显式启用时执行。' }}</p>
+          <p v-if="pendingInstall" class="pending-copy" role="status">待处理候选尚未确认生效；可先预览检查是否允许移除。只有宿主证明上次安装已终止失败，才能确认清理。</p>
+          <p v-else-if="pending" class="pending-copy" role="status">已有变更待应用；{{ selected.restartRequired ? '需要重启宿主' : '等待宿主热应用' }}，完成前不能重复安装或卸载。</p>
           <p v-if="unresolved" class="pending-copy" role="status">上次请求结果尚未确认，请先核对操作状态；现在不能重复提交。</p>
-          <label v-if="!sameVersion && !unsupported" class="trust"><input v-model="trusted" type="checkbox" :disabled="!props.canWrite || props.busy || pending || unresolved" data-testid="marketplace-trust">我信任此来源，并接受在宿主内执行代码的权限风险</label>
-          <p class="read-only">操作结果以回执为准：等待热应用、已生效或需重启宿主会分别提示。</p><div class="catalog-actions"><button type="button" :disabled="!props.canWrite || props.busy || unresolved || pending || sameVersion || unsupported || !trusted" data-testid="marketplace-install" @click="install">{{ sameVersion ? '已是此版本' : selected.installedVersion ? '更新' : '安装' }}</button><button v-if="selected.installedVersion || pending" type="button" :disabled="props.busy || unresolved || pending" data-testid="marketplace-settings" @click="emit('settings', selected)">配置</button><button v-if="(selected.installedVersion || pending) && !uninstallArmed" type="button" :disabled="!props.canWrite || props.busy || unresolved || pending" data-testid="marketplace-uninstall" @click="uninstallArmed = true">卸载…</button></div>
-          <div v-if="uninstallArmed" class="uninstall-confirm"><p>卸载不会删除原有插件配置。应用方式以宿主回执为准。</p><button type="button" :disabled="!props.canWrite || props.busy || unresolved || pending" data-testid="marketplace-uninstall-confirm" @click="uninstall">确认卸载</button><button type="button" @click="uninstallArmed = false">取消</button></div>
+          <p class="read-only">升级、回退和卸载均先预览，核对差异并确认后才提交。等待热应用、已生效或需重启宿主均以回执为准。</p>
+          <div class="catalog-actions">
+            <button type="button" :disabled="!props.canWrite || props.busy || unresolved || pending || sameVersion || unsupported || revoked" :data-testid="selected.installedVersion ? 'marketplace-update' : 'marketplace-install'" @click="install">{{ sameVersion ? '已是此版本' : selected.installedVersion ? '预览升级' : '预览安装' }}</button>
+            <button v-if="selected.installedVersion || pending" type="button" :disabled="props.busy || unresolved || pending" data-testid="marketplace-settings" @click="emit('settings', selected)">配置</button>
+            <button v-if="selected.installedVersion" type="button" :disabled="!props.canWrite || props.busy || unresolved || (pending && !selected.pendingManifest) || pendingInstall || (!selected.previousManifest && !selected.pendingManifest)" data-testid="marketplace-rollback" @click="rollback">{{ selected.pendingManifest ? '预览恢复 / 回退' : '预览回退' }}</button>
+            <button v-if="selected.installedVersion || pending" type="button" :disabled="!props.canWrite || props.busy || unresolved || (pending && !pendingInstall)" data-testid="marketplace-uninstall" @click="uninstall">预览卸载</button>
+          </div>
+          <p v-if="selected.installedVersion && !selected.previousManifest && !selected.pendingManifest" class="read-only">没有已保存的上一版本，暂不可回退。</p>
         </template>
         <div v-else class="builtin-actions"><p>无需安装。启停与参数保存均由现有能力配置管理。</p><button type="button" data-testid="configure-builtin" :disabled="props.busy" @click="emit('settings', selected)">{{ props.canWrite ? '管理启用与配置' : '查看配置' }}</button></div>
         <p v-if="!props.canWrite" class="read-only">只读模式：可以浏览说明与配置，不能保存变更。</p>

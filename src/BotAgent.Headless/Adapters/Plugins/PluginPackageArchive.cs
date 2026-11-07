@@ -16,6 +16,7 @@ internal static class PluginPackageArchive
         using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
         if (zip.Entries.Count > 2048) throw new InvalidDataException("Too many package entries.");
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var exactFiles = new HashSet<string>(StringComparer.Ordinal);
         long declared = 0, actual = 0;
         foreach (var entry in zip.Entries)
         {
@@ -30,8 +31,15 @@ internal static class PluginPackageArchive
             declared = checked(declared + entry.Length);
             if (declared > MaxExpandedBytes || entry.Length > MaxArchiveBytes)
                 throw new InvalidDataException("Expanded package limit exceeded.");
+            if (manifest.ApiVersion == 2)
+            {
+                PluginPythonArchive.ValidatePath(name, unixType, directory);
+                if (declared > 32L * 1024 * 1024 || entry.Length > Math.Max(1L, entry.CompressedLength) * 200)
+                    throw new InvalidDataException("Python archive expansion or compression ratio exceeds limit.");
+            }
             var destination = Path.Combine(target, name);
             if (directory) { Directory.CreateDirectory(destination); continue; }
+            exactFiles.Add(name);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             await using var input = entry.Open();
             await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write);
@@ -46,8 +54,17 @@ internal static class PluginPackageArchive
                 await output.WriteAsync(buffer.AsMemory(0, count), ct);
             }
             if (entryActual != entry.Length) throw new InvalidDataException("Truncated package entry.");
+            await output.DisposeAsync().ConfigureAwait(false);
+            if (manifest.ApiVersion == 2 && name.EndsWith(".py", StringComparison.OrdinalIgnoreCase))
+            {
+                await using var source = entry.Open();
+                await PluginPythonArchive.ValidateSourceAsync(source, ct).ConfigureAwait(false);
+            }
         }
-        if (!File.Exists(Path.Combine(target, manifest.EntryAssembly)))
-            throw new InvalidDataException("Entry assembly missing.");
+        if (manifest.ApiVersion == 2 && (!exactFiles.Contains(manifest.Runtime!.EntryPoint) || !exactFiles.Contains("botagent_worker.py")))
+            throw new InvalidDataException("Python entry and SDK names must match exact archive paths.");
+        if (!File.Exists(Path.Combine(target, manifest.Runtime?.EntryPoint ?? manifest.EntryAssembly!)))
+            throw new InvalidDataException("Package entry missing.");
+
     }
 }

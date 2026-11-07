@@ -45,10 +45,10 @@ internal partial class Program
 
         // Hold the first download; submit same-key retry through another market facade.
         http.HoldNext();
-        var first = market.InstallAsync(request, "synthetic-admin", default);
+        var first = market.InstallWithJsonPreviewAsync(request, "synthetic-admin", default);
         await http.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Expect(() => Task.FromResult(market.FindOperation(request.IdempotencyKey)), "plugin_operation_unknown");
-        var second = Market().InstallAsync(request, "synthetic-admin", default);
+        var second = Market().InstallWithJsonPreviewAsync(request, "synthetic-admin", default);
         var divergent = Market().UpdateAsync(request, "synthetic-admin", default);
         http.Release.TrySetResult();
         var installed = await first;
@@ -58,36 +58,39 @@ internal partial class Program
         var restartedMarket = new PluginMarketService(
             new PluginPackageService(Path.Combine(root, "packages"), http), new PluginSettingsStore(),
             new PluginCatalogSource(http, _ => { }), () => now, receiptPath);
-        Check((await restartedMarket.InstallAsync(request with { ExpectedRevision = "stale" },
+        Check((await restartedMarket.InstallWithJsonPreviewAsync(request with { ExpectedRevision = "stale" },
             "synthetic-admin", default)) == installed, "B10_restart_exact_replay_before_CAS");
-        Check((await Market().InstallAsync(request with { Manifest = manifest with
+        Check((await Market().InstallWithJsonPreviewAsync(request with { Manifest = manifest with
             { Sha256 = manifest.Sha256.ToLowerInvariant(), Permissions = Array.Empty<string>(),
                 Dependencies = Array.Empty<PluginPackageDependency>() } }, "synthetic-admin", default)) == installed,
             "B10_normalized_manifest_replay");
         await Expect(() => market.UninstallAsync("probe.other", new(revision, request.IdempotencyKey),
             "synthetic-admin", default), "idempotency_conflict");
         await Expect(() => market.UpdateAsync(request, "synthetic-admin", default), "idempotency_conflict");
-        await Expect(() => market.InstallAsync(request with { Manifest = manifest with { Version = "2.0.0" } },
+        await Expect(() => market.InstallWithJsonPreviewAsync(request with { Manifest = manifest with { Version = "2.0.0" } },
             "synthetic-admin", default), "idempotency_conflict");
-        await Expect(() => market.InstallAsync(request with { Manifest = manifest with { EntryType = "DifferentEntry" } },
+        await Expect(() => market.InstallWithJsonPreviewAsync(request with { Manifest = manifest with { EntryType = "DifferentEntry" } },
             "synthetic-admin", default), "idempotency_conflict");
-        await Expect(() => market.InstallAsync(request with { TrustAcknowledged = false },
+        await Expect(() => market.InstallWithJsonPreviewAsync(request with { TrustAcknowledged = false },
             "synthetic-admin", default), "idempotency_conflict");
-        await Expect(() => market.InstallAsync(request, "other-synthetic-admin", default), "idempotency_conflict");
+        await Expect(() => market.InstallWithJsonPreviewAsync(request, "other-synthetic-admin", default), "idempotency_conflict");
         var receiptText = await File.ReadAllTextAsync(receiptPath);
         Check(!receiptText.Contains(manifest.DownloadUrl, StringComparison.Ordinal)
             && !receiptText.Contains(manifest.Sha256, StringComparison.Ordinal), "B10_receipt_has_no_manifest_body");
 
         // Two fresh operations share one expected revision. The stale loser cannot replace Pending.
+        await LifecycleTestRequests.Settle(packages, manifest.Id);
         revision = (await market.ReadInstalledAsync(default)).Revision;
         var next = manifest with { Version = "1.1.0" };
+        var updatePreview = await market.PreviewLifecycleAsync(new("update", next.Id, revision, new("json", Manifest: next)), "synthetic-admin");
+        var removePreview = await market.PreviewLifecycleAsync(new("uninstall", next.Id, revision), "synthetic-admin");
         http.HoldNext();
-        var winner = market.UpdateAsync(new(next, revision, "review-cas-winner", true), "synthetic-admin", default);
+        var winner = market.UpdateAsync(new(next, revision, "review-cas-winner", true) { PreviewId = updatePreview.PreviewId }, "synthetic-admin", default);
         await http.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var loser = Market().UninstallAsync(manifest.Id, new(revision, "review-cas-loser"), "synthetic-admin", default);
+        var loser = market.UninstallAsync(manifest.Id, new(revision, "review-cas-loser") { PreviewId = removePreview.PreviewId, TrustAcknowledged = true }, "synthetic-admin", default);
         http.Release.TrySetResult();
         await winner;
-        await Expect(() => loser, "plugin_revision_conflict");
+        await Expect(() => loser, "plugin_preview_refresh_required");
         Check(packages.InstalledSnapshot.Single().Pending?.Version == "1.1.0"
             && !packages.InstalledSnapshot.Single().PendingUninstall, "B09_loser_does_not_replace_pending");
 
@@ -136,15 +139,15 @@ internal partial class Program
         var cancelRevision = (await directMarket.ReadInstalledAsync(default)).Revision;
         using var cancelled = new CancellationTokenSource();
         http.HoldNext();
-        var cancelledRequest = new ZbaPluginMutationRequest(manifest with { Version = "3.0.0" },
+        var cancelledRequest = new ZbaPluginMutationRequest(manifest with { Id = "probe.cancel.reservation", Version = "3.0.0" },
             cancelRevision, "review-cancel-reservation", true);
-        var cancelledStage = directMarket.InstallAsync(cancelledRequest, "synthetic-admin", cancelled.Token);
+        var cancelledStage = directMarket.InstallWithJsonPreviewAsync(cancelledRequest, "synthetic-admin", cancelled.Token);
         await http.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         cancelled.Cancel();
         try { await cancelledStage; throw new InvalidOperationException("B10_cancel_not_observed"); }
         catch (OperationCanceledException) { checks++; }
         var callsAtCancellation = http.Calls;
-        await Expect(() => directMarket.InstallAsync(cancelledRequest, "synthetic-admin", default), "plugin_operation_unknown");
+        await Expect(() => directMarket.InstallWithJsonPreviewAsync(cancelledRequest, "synthetic-admin", default), "plugin_operation_unknown");
         await Expect(() => Task.FromResult(directMarket.FindOperation(cancelledRequest.IdempotencyKey)), "plugin_operation_unknown");
         Check(http.Calls == callsAtCancellation, "B10_uncertain_reservation_replay_never_restages");
 
@@ -176,7 +179,7 @@ internal partial class Program
             new PluginCatalogSource(http, _ => { }), () => now, Path.Combine(blockedParent, "operations.json"));
         var callsBeforeFailure = http.Calls;
         var beforeFailureRevision = (await market.ReadInstalledAsync(default)).Revision;
-        await Expect(() => blockedMarket.InstallAsync(new(manifest,
+        await Expect(() => blockedMarket.InstallWithJsonPreviewAsync(new(manifest with { Id = "probe.receipt.failure" },
             beforeFailureRevision, "review-receipt-failure", true),
             "synthetic-admin", default), "plugin_operation_unknown");
         Check(http.Calls == callsBeforeFailure, "B10_receipt_write_failure_prevents_stage");
@@ -227,7 +230,7 @@ internal partial class Program
 
     private static PluginPackageManifest ReviewManifest(byte[] bytes, string id, string version, string assembly, string type)
         => new(id, version, assembly, type, Convert.ToHexString(SHA256.HashData(bytes)),
-            "https://example.com/releases/download/" + id + "-" + version + "/package.zip");
+            "https://github.com/example/plugins/releases/download/" + id + "-" + version + "/package.zip");
 
     private sealed class ReviewNoServices : IServiceProvider
     {
@@ -253,6 +256,9 @@ internal partial class Program
         public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption option,
             CancellationToken ct = default)
         {
+            // Existing barrier/counts describe package downloads, not the independent governance source.
+            if (request.RequestUri?.AbsolutePath.EndsWith("/governance.json", StringComparison.Ordinal) == true)
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("") };
             Calls++;
             if (_hold)
             {

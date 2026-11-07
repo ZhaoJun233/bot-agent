@@ -473,11 +473,27 @@ public interface IZbaBackend
     ValueTask<ZbaInstalledPlugins> ListInstalledPluginsAsync(
         ConfigurationCaller caller, CancellationToken ct = default);
 
+    ValueTask<ZbaPluginDiscovery> DiscoverPluginSourceAsync(
+        ConfigurationCaller caller, string sourceUrl, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "plugin_marketplace_unavailable", "Plugin discovery is unavailable.");
+
+    ValueTask<ZbaPluginPreview> PreviewPluginAsync(
+        ConfigurationCaller caller, ZbaPluginPreviewRequest request, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "plugin_marketplace_unavailable", "Plugin preview is unavailable.");
+
     ValueTask<ZbaPluginSourceResolution> ResolvePluginSourceAsync(
         ConfigurationCaller caller, string sourceUrl, CancellationToken ct = default);
 
     ValueTask<ZbaPluginOperationResult> InstallPluginAsync(
         ConfigurationCaller caller, ZbaPluginMutationRequest request, CancellationToken ct = default);
+
+    ValueTask<ZbaPluginLifecyclePreview> PreviewPluginLifecycleAsync(
+        ConfigurationCaller caller, ZbaPluginLifecyclePreviewRequest request, CancellationToken cancellationToken)
+        => ValueTask.FromException<ZbaPluginLifecyclePreview>(new ZbaBackendException(503, "plugin_market_unavailable", "插件生命周期未就绪。"));
+
+    ValueTask<ZbaPluginOperationResult> RollbackPluginAsync(
+        ConfigurationCaller caller, ZbaPluginMutationRequest request, CancellationToken cancellationToken)
+        => ValueTask.FromException<ZbaPluginOperationResult>(new ZbaBackendException(503, "plugin_market_unavailable", "插件生命周期未就绪。"));
 
     ValueTask<ZbaPluginOperationResult> UpdatePluginAsync(
         ConfigurationCaller caller, ZbaPluginMutationRequest request, CancellationToken ct = default);

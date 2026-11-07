@@ -36,7 +36,7 @@ public sealed partial class ZbaEndpoint
     {
         var body = Body<ZbaPluginMutationRequest>(request);
         ZbaRules.ValidatePluginManifest(body.Manifest);
-        if (!body.TrustAcknowledged) throw new ZbaBadRequestException("trust_not_acknowledged");
+        if (!update && !body.TrustAcknowledged) throw new ZbaBadRequestException("trust_not_acknowledged");
         ZbaRules.ValidatePluginIdempotencyKey(body.IdempotencyKey);
         ZbaRules.ValidatePluginRevision(body.ExpectedRevision);
         var result = update

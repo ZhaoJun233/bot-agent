@@ -35,6 +35,19 @@ internal static class PresentationChecks
             var legacy = await market.ReadCatalogAsync(null, null, default);
             check(legacy.Plugins.Count == 1 && legacy.Plugins[0].Metadata is null && legacy.MetadataNotice is not null,
                 "missing sidecar preserves legacy catalog");
+            http.PythonRepository = http.Index;
+            var rejectedPython = await market.ReadCatalogAsync(null, null, default);
+            check(rejectedPython.Plugins.Count == 0 && rejectedPython.BuiltinPlugins.Count == 1,
+                "present malformed Python feed cannot authorize legacy community catalog");
+            var strictMarket = new PluginMarketService(packages, new PluginSettingsStore(), new PluginCatalogSource(http),
+                () => DateTimeOffset.UtcNow, Path.Combine(root, "strict-receipts.json"));
+            try
+            {
+                await strictMarket.ReadCatalogAsync(null, null, default);
+                check(false, "present malformed Python feed must be rejected");
+            }
+            catch (ZbaBackendException ex) { check(ex.Code == "invalid-python-repository", "exact malformed Python feed error"); }
+            http.PythonRepository = null;
             var doc = Document(manifest);
             http.Sidecar = Bytes(doc);
             var rich = await market.ReadCatalogAsync(null, null, default);
@@ -159,7 +172,8 @@ internal static class PresentationChecks
     }
     private sealed class PresentationHttp : IHttpFetcher
     {
-        internal byte[] Index = []; internal byte[]? Sidecar; internal bool Offline; internal int Requests;
+        internal byte[] Index = []; internal byte[]? Sidecar; internal byte[]? PythonRepository;
+        internal bool Offline; internal int Requests;
         public TimeSpan Timeout => TimeSpan.FromSeconds(10);
         public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption option, CancellationToken ct = default) => SendAsync(request, ct);
         public Task<HttpResponseMessage> GetAsync(string url, CancellationToken ct = default) => SendAsync(new(HttpMethod.Get, url), ct);
@@ -171,7 +185,14 @@ internal static class PresentationChecks
         {
             Requests++; ct.ThrowIfCancellationRequested();
             if (Offline) throw new HttpRequestException("synthetic offline");
-            var bytes = request.RequestUri!.AbsolutePath.EndsWith("presentation.json", StringComparison.Ordinal) ? Sidecar : Index;
+            // Optional documents are independent resources, not aliases for the legacy index.
+            var bytes = request.RequestUri!.Segments[^1] switch
+            {
+                "index.json" => Index,
+                "presentation.json" => Sidecar,
+                "python-repository.json" => PythonRepository,
+                _ => null
+            };
             return Task.FromResult(new HttpResponseMessage(bytes is null ? HttpStatusCode.NotFound : HttpStatusCode.OK)
                 { Content = new ByteArrayContent(bytes ?? []) });
         }

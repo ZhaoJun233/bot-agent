@@ -17,6 +17,13 @@ public sealed class PluginCatalogSource
     public const string DefaultUrl = "https://raw.githubusercontent.com/ZhaoJun233/bot-agent-plugins/main/index.json";
     private const int MaxIndexBytes = 2 * 1024 * 1024;
     private const int MaxPlugins = 1024;
+    internal Task<byte[]?> ReadPythonBytesAsync(string sourceUrl, string file, CancellationToken ct)
+    {
+        if (file is not ("python-repository.json" or "python-presentation.json")) throw new ArgumentException(nameof(file));
+        if (!Uri.TryCreate(sourceUrl, UriKind.Absolute, out var source) || source.Query.Length != 0 || source.Fragment.Length != 0)
+            throw new PluginCatalogException("plugin_catalog_source_invalid");
+        return ReadOptionalJsonAsync(new Uri(source, file).AbsoluteUri, ct);
+    }
 
     private static readonly JsonSerializerOptions IndexJson = new()
     {
@@ -57,21 +64,36 @@ public sealed class PluginCatalogSource
     }
 
     /// <summary>Optional presentation uses the same bounded public-HTTPS policy as the index.</summary>
-    internal Task<byte[]> ReadPresentationBytesAsync(string sourceUrl, CancellationToken ct)
+    internal Task<byte[]> ReadPresentationBytesAsync(string sourceUrl, CancellationToken ct, bool githubOnly = false)
     {
         if (!Uri.TryCreate(sourceUrl, UriKind.Absolute, out var source)
             || source.Query.Length != 0 || source.Fragment.Length != 0)
             throw new PluginCatalogException("plugin_catalog_source_invalid");
-        return FetchAsync(new Uri(source, "presentation.json").AbsoluteUri, ct);
+        return FetchAsync(new Uri(source, "presentation.json").AbsoluteUri, ct, githubOnly);
     }
 
-    private async Task<byte[]> FetchAsync(string sourceUrl, CancellationToken ct)
+    internal async Task<byte[]?> ReadOptionalJsonAsync(string sourceUrl, CancellationToken ct, bool githubOnly = false)
+        => await FetchCoreAsync(sourceUrl, true, ct, githubOnly).ConfigureAwait(false);
+
+    internal async Task<byte[]> FetchAsync(string sourceUrl, CancellationToken ct, bool githubOnly = false)
+        => await FetchCoreAsync(sourceUrl, false, ct, githubOnly).ConfigureAwait(false)
+            ?? throw new PluginCatalogException("plugin_catalog_unavailable");
+
+    private async Task<byte[]?> FetchCoreAsync(string sourceUrl, bool optional, CancellationToken ct, bool githubOnly)
     {
-        if (!SafeUrl.TryValidate(sourceUrl, false, out var uri, out var reason)
-            || uri.Scheme != Uri.UriSchemeHttps)
+        if (!SafeUrl.TryValidate(sourceUrl, false, out var uri, out var reason) || uri.Scheme != "https"
+            || (githubOnly && !IsApprovedMetadataUrl(sourceUrl)))
             throw new PluginCatalogException("plugin_catalog_source_invalid");
         using var response = await SafeUrl.SendFollowingRedirectsAsync(_http, uri,
-            target => new HttpRequestMessage(HttpMethod.Get, target), false, ct).ConfigureAwait(false);
+            target =>
+            {
+                if (target.Scheme != "https" || (githubOnly && !IsApprovedMetadataUrl(target.AbsoluteUri)))
+                    throw new PluginCatalogException("plugin_catalog_source_invalid");
+                var request = new HttpRequestMessage(HttpMethod.Get, target);
+                request.Headers.UserAgent.ParseAdd("BotAgent-PluginMarket/1");
+                return request;
+            }, false, ct).ConfigureAwait(false);
+        if (optional && response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
         if (!response.IsSuccessStatusCode)
         {
             _log?.Invoke("[Plugin] 市场索引读取失败：" + (int)response.StatusCode);
@@ -94,6 +116,11 @@ public sealed class PluginCatalogSource
         return buffer.ToArray();
     }
 
+    internal static bool IsApprovedMetadataUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+        uri.Port == 443 && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0 &&
+        uri.Host.ToLowerInvariant() is "github.com" or "raw.githubusercontent.com" or "api.github.com";
+
     public static IReadOnlyList<PluginPackageManifest> Parse(byte[] bytes)
     {
         IndexDocument? document;
@@ -113,7 +140,7 @@ public sealed class PluginCatalogSource
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var manifest in document.Plugins)
         {
-            try { PluginPackageValidation.Validate(manifest); }
+            try { if (manifest.ApiVersion != 1) throw new InvalidDataException("Legacy catalog is managed-only."); PluginPackageValidation.Validate(manifest); }
             catch (InvalidDataException) { throw new PluginCatalogException("plugin_catalog_malformed"); }
             if (!ids.Add(manifest.Id)) throw new PluginCatalogException("plugin_catalog_malformed");
         }

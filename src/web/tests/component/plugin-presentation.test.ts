@@ -5,6 +5,7 @@ import PluginCatalogBrowser from '../../src/features/capabilities/PluginCatalogB
 import PluginMarketplaceDialog from '../../src/features/capabilities/PluginMarketplaceDialog.vue'
 import { builtinCatalogEntry, catalogEntry } from '../../src/features/capabilities/plugin-marketplace'
 import type { PluginCatalogEntry } from '../../src/features/capabilities/plugin-catalog'
+import { pythonManifest } from '../fixtures/python-plugin'
 import { builtin, packageItem, presentation } from '../fixtures/plugin-presentation'
 const mounted: Array<{ unmount: () => void }> = []
 afterEach(() => { mounted.splice(0).forEach(wrapper => wrapper.unmount()) })
@@ -46,22 +47,28 @@ describe('Chinese unified marketplace presentation', () => {
     await wrapper.get('[data-testid="catalog-runtime"]').setValue('python')
     expect(wrapper.get('[data-testid="marketplace-empty"]').text()).toContain('没有匹配')
   })
-  it('separates official source from review and requires trust before package install', async () => {
+  it('separates official source from review and opens readonly install preview', async () => {
     const metadata = presentation({ repository: 'javascript:alert(1)', review: { ...presentation().review, sha256: 'c'.repeat(64) } })
     const wrapper = browser([catalogEntry(packageItem({ metadata }))])
     expect(wrapper.text()).toContain('官方发布')
     expect(wrapper.get('[data-testid="review-badge"]').text()).toBe('未审核')
     expect(wrapper.find('a').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-testid="marketplace-trust"]').setValue(true)
+    expect(wrapper.get('[data-testid="marketplace-install"]').text()).toBe('预览安装')
+    expect(wrapper.find('[data-testid="marketplace-trust"]').exists()).toBe(false)
     await wrapper.get('[data-testid="marketplace-install"]').trigger('click')
     expect(wrapper.emitted('install')).toHaveLength(1)
   })
-  it('renders descriptive strings as text and leaves future Python execution unavailable', async () => {
-    const wrapper = browser([catalogEntry(packageItem({ metadata: presentation({ name: '<img src=x onerror=alert(1)>', runtime: 'python' }) }))])
+  it('routes installed upgrades to readonly preview instead of a global trust acknowledgement', async () => {
+    const wrapper = browser([catalogEntry(packageItem({ installedVersion: '0.9.0' }))])
+    expect(wrapper.get('[data-testid="marketplace-update"]').text()).toBe('预览升级')
+    expect(wrapper.find('[data-testid="marketplace-trust"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="marketplace-update"]').trigger('click'); expect(wrapper.emitted('install')).toHaveLength(1)
+  })
+  it('renders descriptive strings as text and leaves unconfirmed Python execution unavailable', async () => {
+    const wrapper = browser([catalogEntry(packageItem({ manifest: pythonManifest, metadata: presentation({ name: '<img src=x onerror=alert(1)>', runtime: 'python' }) }))])
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>')
-    expect(wrapper.text()).toContain('Python 运行时尚未开放')
+    expect(wrapper.text()).toContain('宿主尚未确认运行时兼容与环境准备状态')
     expect(wrapper.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeDefined()
     expect(wrapper.find('[data-testid="marketplace-trust"]').exists()).toBe(false)
   })

@@ -191,6 +191,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         => _presetIds.Concat(Packages.InstalledSnapshot
                 .Where(package => package.Active is not null || package.Pending is not null)
                 .Select(package => package.Id))
+            .Concat(Packages.PreparedInstallId is { } id ? new[] { id } : Array.Empty<string>())
             .Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal);
 
     private bool DesiredEnabled(string id, IReadOnlyDictionary<string, bool> desired)

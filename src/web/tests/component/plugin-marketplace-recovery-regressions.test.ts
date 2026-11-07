@@ -1,3 +1,5 @@
+import { discovery, previewFor, marketDialogShell } from '../fixtures/plugin-import'
+import type { PluginPreviewRequest } from '../../src/api/plugin-import'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import Market from '../../src/features/capabilities/PluginMarketplaceDialog.vue'
@@ -20,12 +22,18 @@ function client(overrides: Partial<ZbaClient> = {}): ZbaClient {
     pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [item(A), item(B)] })),
     installedPlugins: vi.fn(async () => ({ revision: 'p1', plugins: [] })),
     pluginSettings: vi.fn(async id => state(id === A.id ? 'A-old' : 'B-old')),
+    previewPlugin: vi.fn(async (request: PluginPreviewRequest) => previewFor(request)),
     installPlugin: vi.fn(async () => receipt()), pluginOperation: vi.fn(async () => receipt()),
     ...overrides } as unknown as ZbaClient
 }
-async function market(c: ZbaClient) { const w = mount(Market, { props: { client: c, mode: 'admin', writesEnabled: true }, attachTo: document.body, global: { stubs: { teleport: true } } }); wrappers.push(w); await flushPromises(); return w }
+async function market(c: ZbaClient) { const w = mount(Market, { props: { client: c, mode: 'admin', writesEnabled: true }, attachTo: document.body, global: { stubs: { ManagementDialog: marketDialogShell } } }); wrappers.push(w); await flushPromises(); return w }
 type Wrapper = Awaited<ReturnType<typeof market>>
-async function install(w: Wrapper) { await w.get('[data-testid="marketplace-trust"]').setValue(true); await w.get('[data-testid="marketplace-install"]').trigger('click'); await flushPromises() }
+async function install(w: Wrapper) {
+  await w.get('[data-testid="marketplace-install"]').trigger('click'); await flushPromises()
+  expect(w.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+  await w.get('[data-testid="preview-acknowledge"]').setValue(true)
+  await w.get('[data-testid="preview-confirm"]').trigger('click'); await flushPromises()
+}
 async function settings(w: Wrapper, id = A.id) { await w.get('[data-testid="marketplace-item-' + id + '"]').trigger('click'); await w.get('[data-testid="marketplace-settings"]').trigger('click'); await flushPromises() }
 function caption(w: Wrapper) { return (w.get('[data-testid="plugin-setting-caption"]').element as HTMLInputElement).value }
 
@@ -33,7 +41,7 @@ describe('marketplace authorized findings regressions', () => {
   it.each([{ mode: 'admin' as const }, { writesEnabled: false }])('preserves a pending catalog read across permission change %j', async change => {
     const index = deferred<{ revision: string; source: string; trustNotice: string; categories: string[]; plugins: ZbaPluginCatalogItem[] }>()
     const c = client({ pluginCatalog: vi.fn(() => index.promise) })
-    const w = mount(Market, { props: { client: c, mode: 'read', writesEnabled: true, active: true }, attachTo: document.body, global: { stubs: { teleport: true } } })
+    const w = mount(Market, { props: { client: c, mode: 'read', writesEnabled: true, active: true }, attachTo: document.body, global: { stubs: { ManagementDialog: marketDialogShell } } })
     wrappers.push(w)
     await flushPromises()
     await w.setProps(change)
@@ -51,7 +59,9 @@ describe('marketplace authorized findings regressions', () => {
     const next = { ...c } as ZbaClient
     const second = await market(next)
     expect(second.find('[data-testid="marketplace-recovery"]').exists()).toBe(true)
-    await install(second)
+    expect(second.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeDefined()
+    await second.get('[data-testid="marketplace-install"]').trigger('click'); await flushPromises()
+    expect(second.find('[data-testid="preview-confirm"]').exists()).toBe(false)
     expect(c.installPlugin).toHaveBeenCalledTimes(1)
     await second.get('[data-testid="marketplace-recovery-check"]').trigger('click'); await flushPromises()
     expect(next.pluginOperation).toHaveBeenCalledWith(key)
@@ -76,12 +86,17 @@ describe('marketplace authorized findings regressions', () => {
   })
   it('unions installed-only packages and refreshes a resolved source with real management actions', async () => {
     let installed = false
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [] })), installedPlugins: vi.fn(async () => ({ revision: installed ? 'p2' : 'p1', plugins: installed ? [{ ...item(A), status: 'restart_required', restartRequired: true }] : [item(B, true)] })), resolvePluginSource: vi.fn(async () => ({ manifest: A, trustNotice: 'Synthetic only' })), installPlugin: vi.fn(async () => { installed = true; return receipt() }) })
+    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [] })), installedPlugins: vi.fn(async () => ({ revision: installed ? 'p2' : 'p1', plugins: installed ? [{ ...item(A), status: 'restart_required', restartRequired: true }] : [item(B, true)] })), discoverPluginSource: vi.fn(async () => discovery({ candidates: [{ pluginId: A.id, version: A.version }] })), installPlugin: vi.fn(async () => { installed = true; return receipt() }) })
     const w = await market(c)
     expect(w.find('[data-testid="marketplace-item-example.b"]').exists()).toBe(true)
     await w.get('[data-testid="marketplace-source-input"]').setValue('https://github.com/example-org/example-source/releases/tag/v1.0.0')
     await w.get('[data-testid="marketplace-source-resolve"]').trigger('click'); await flushPromises()
-    await w.get('[data-testid="marketplace-item-example.a"]').trigger('click'); await install(w)
+    expect(c.installPlugin).not.toHaveBeenCalled()
+    await w.get('[data-testid="source-preview"]').trigger('click'); await flushPromises()
+    expect(w.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+    await w.get('[data-testid="preview-acknowledge"]').setValue(true)
+    await w.get('[data-testid="preview-confirm"]').trigger('click'); await flushPromises()
+    await w.get('[data-testid="marketplace-item-example.a"]').trigger('click')
     expect(w.get('[data-testid="marketplace-package-state"]').text()).toContain('已暂存')
     expect(w.find('[data-testid="marketplace-settings"]').exists()).toBe(true)
     expect(w.find('[data-testid="marketplace-uninstall"]').exists()).toBe(true)
