@@ -107,7 +107,9 @@ function cancelDiscard(): void {
   leaveResolve?.(false); leaveResolve = null; leavePromise = null
 }
 function blockedLeave(): boolean {
-  if (!busy.value && !recoveringKey.value && !packagePending.value.length) return false
+  // Busy/recovery also spans the read-only refresh after a terminal receipt.
+  // Only unsettled writes need operation-key protection when leaving.
+  if (!packagePending.value.length) return false
   notice.value = { tone: 'warn', message: '插件操作尚未确认，请先核对原操作键，再离开插件市场。' }
   return true
 }
@@ -131,6 +133,7 @@ function requestLeave(reason: 'lock' | 'downgrade' | 'navigate', _trigger?: HTML
 function close(): void {
   if (discardAction.value) { cancelDiscard(); return }
   if (dirty.value) { discardAction.value = 'close'; return }
+  if (blockedLeave()) return
   invalidatePreviews(); emit('close')
 }
 function endSession(): void {
@@ -138,7 +141,7 @@ function endSession(): void {
   catalog.value = null; installed.value = null; revision.value = ''; loading.value = false
   busy.value = false; recoveringKey.value = ''; error.value = null; notice.value = null
 }
-useDraftProtection(() => dirty.value || packagePending.value.length > 0 || busy.value)
+useDraftProtection(() => dirty.value || packagePending.value.length > 0)
 defineExpose({ requestLeave, discardSecretsOnLeave, endSession, draftCount: computed(() => dirty.value ? 1 : 0) })
 
 async function loadCatalog(showLoading = true): Promise<void> {

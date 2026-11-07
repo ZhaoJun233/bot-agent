@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import type { PluginPreviewRequest } from '../../src/api/plugin-import'
 
 const ADMIN = 'synthetic-web-admin-token'
 const READ = 'synthetic-web-read-token'
@@ -83,3 +84,59 @@ test('插件市场：指定数据源拒绝非 GitHub 地址且不发请求', asy
   await expect(page.getByTestId('marketplace-source-error')).toBeVisible()
   expect(calls).toHaveLength(0)
 })
+
+for (const outcome of ['install', 'recovery'] as const) {
+  test('插件市场：' + outcome + ' 确认后目录刷新未完成也能确认放弃并关闭', async ({ page }) => {
+    let releaseRefresh!: () => void
+    const heldRefresh = new Promise<void>(resolve => { releaseRefresh = resolve })
+    let catalogReads = 0
+    const installKeys: string[] = []
+    const recoveryKeys: string[] = []
+    const syntheticManifest = { id: 'example.plugin', version: '1.0.0', entryAssembly: 'Example.Plugin.dll', entryType: 'Example.Plugin', sha256: 'a'.repeat(64), downloadUrl: 'https://example.com/fixture.zip', apiVersion: 1, targetFramework: 'net10.0', permissions: [], settings: [] }
+    const receipt = { revision: 'synthetic-p2', operation: { id: 'synthetic-operation', pluginId: syntheticManifest.id, kind: 'install', status: 'restart_required', restartRequired: true } }
+    await page.route('**/zba/v1/plugins/catalog', async route => {
+      if (++catalogReads > 1) await heldRefresh
+      await route.fulfill({ json: { revision: 'synthetic-p1', source: 'synthetic', trustNotice: 'Synthetic UI fixture only', categories: [], plugins: [{ manifest: syntheticManifest, enabled: false, status: 'available', restartRequired: false }] } })
+    })
+    await page.route('**/zba/v1/plugins/installed', route => route.fulfill({ json: { revision: 'synthetic-p1', plugins: [] } }))
+    await page.route('**/zba/v1/plugins/preview', route => {
+      const request: PluginPreviewRequest = route.request().postDataJSON()
+      return route.fulfill({ json: { previewId: 'synthetic-preview', expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: request.expectedRevision, manifest: syntheticManifest, source: { kind: request.origin }, enabledAfterInstall: false, canInstall: true, checks: [], trustNotice: 'Synthetic UI fixture only' } })
+    })
+    await page.route('**/zba/v1/plugins/install', async route => {
+      installKeys.push(route.request().postDataJSON().idempotencyKey)
+      if (outcome === 'recovery') await route.abort('failed')
+      else await route.fulfill({ json: receipt })
+    })
+    await page.route('**/zba/v1/plugins/operations/*', route => {
+      recoveryKeys.push(decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop()!))
+      return route.fulfill({ json: receipt })
+    })
+    try {
+      await connect(page, ADMIN)
+      await page.getByTestId('cap-enable-admin').click()
+      await page.getByTestId('cap-marketplace').click()
+      await page.getByTestId('marketplace-source-input').fill('https://github.com/example-org/draft')
+      await page.getByTestId('marketplace-install').click()
+      await page.getByTestId('preview-acknowledge').check()
+      await page.getByTestId('preview-confirm').click()
+      if (outcome === 'recovery') {
+        await expect(page.getByTestId('marketplace-recovery-check')).toBeEnabled()
+        await page.getByTestId('marketplace-recovery-check').click()
+        await expect(page.getByTestId('marketplace-recovery')).toHaveCount(0)
+      }
+      await expect.poll(() => catalogReads).toBe(2)
+      // The read is still held: closing must not depend on a catalog response or a timeout.
+      await page.getByTestId('marketplace-close').click()
+      await expect(page.getByTestId('marketplace-discard-confirm')).toBeVisible()
+      await page.getByTestId('marketplace-discard-confirm').click()
+      await expect(page.getByTestId('marketplace')).toHaveCount(0)
+      await expect(page.getByTestId('cap-marketplace')).toBeFocused()
+      expect(installKeys).toHaveLength(1)
+      expect(recoveryKeys).toEqual(outcome === 'recovery' ? installKeys : [])
+    } finally {
+      releaseRefresh()
+      await page.unrouteAll({ behavior: 'wait' })
+    }
+  })
+}
