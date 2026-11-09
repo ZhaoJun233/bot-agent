@@ -1,5 +1,15 @@
 import type { ZbaConfigurationReceipt } from '../../api/zba'
 
+const applyLabels: Record<number, string> = { 0: '未开始', 1: '已生效', 2: '部分生效', 3: '需重启', 4: '失败', 5: '未知' }
+const commitLabels: Record<number, string> = { 0: '未提交', 1: '已提交', 2: '提交结果未知' }
+const stepLabels: Record<number, string> = {
+  0: '发布快照', 1: '运行时策略', 2: '模型投影', 3: '并发门',
+  4: '上下文窗口', 5: '调度器', 6: 'TTS 文件投影', 7: '已登记配置'
+}
+export const configurationApplyLabel = (value: number): string => applyLabels[value] ?? '未知状态 ' + value
+export const configurationCommitLabel = (value: number): string => commitLabels[value] ?? '未知提交状态 ' + value
+export const configurationStepLabel = (value: number): string => stepLabels[value] ?? '步骤 ' + value
+
 /**
  * 「需重启」到底意味着什么，按**哪一步**需要重启分开说。
  *

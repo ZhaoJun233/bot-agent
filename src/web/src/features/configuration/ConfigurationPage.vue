@@ -38,7 +38,8 @@ import {
   type SecretDrafts
 } from './draft'
 import { errorName } from '../../shared/friendly'
-import { receiptOutcome, restartNoticeMessage } from './receipt-notice'
+import { receiptOutcome, restartNoticeMessage, configurationApplyLabel as applyLabel, configurationCommitLabel as commitStateLabel, configurationStepLabel } from './receipt-notice'
+import ConfigurationRecoveryLookup from './ConfigurationRecoveryLookup.vue'
 import { runtimeEffectPresentation } from './runtime-effects'
 import { policyDenials as findPolicyDenials } from './policy-presentation'
 import { fieldHint, fieldLabel } from './field-labels'
@@ -278,9 +279,6 @@ const formatter = new Intl.DateTimeFormat('zh-CN', {
   hour12: false
 })
 
-const applyLabels: Record<number, string> = {
-  0: '未开始', 1: '已生效', 2: '部分生效', 3: '需重启', 4: '失败', 5: '未知'
-}
 const applyTones: Record<number, string> = {
   0: 'neutral', 1: 'ok', 2: 'warn', 3: 'warn', 4: 'bad', 5: 'warn'
 }
@@ -302,13 +300,6 @@ const secretSourceLabels: Record<number, string> = {
 const secretSlotLabels: Record<number, string> = {
   0: '模型 API Key', 1: 'Agent 服务器密钥', 2: 'TTS API Key',
   3: '飞书 App Secret', 4: '飞书 Encrypt Key', 5: '飞书验证 Token'
-}
-const commitStateLabels: Record<number, string> = {
-  0: '未提交', 1: '已提交', 2: '提交结果未知'
-}
-const stepLabels: Record<number, string> = {
-  0: '发布快照', 1: '运行时策略', 2: '模型投影', 3: '并发门',
-  4: '上下文窗口', 5: '调度器', 6: 'TTS 文件投影', 7: '已登记配置'
 }
 const saveCodeMessages: Record<number, string> = {
   1: '当前令牌没有保存权限。',
@@ -356,10 +347,6 @@ const runtimeRestartNotice = computed(() => pendingRestarts.value.every(effect =
   ? '当前仍有已保存配置等待重启 BotAgent 机器人服务；无关配置的保存不会清除这一状态。'
   : '当前仍有已保存配置等待重启，具体服务待核对；不要依据某一次保存回执判断当前状态。')
 
-function applyLabel(value: number): string {
-  return applyLabels[value] ?? `未知状态 ${value}`
-}
-
 function applyTone(value: number): string {
   return applyTones[value] ?? 'warn'
 }
@@ -382,10 +369,6 @@ function secretSourceLabel(value: number): string {
 
 function secretSlotLabel(value: number): string {
   return secretSlotLabels[value] ?? `槽位 ${value}`
-}
-
-function commitStateLabel(value: number): string {
-  return commitStateLabels[value] ?? `未知提交状态 ${value}`
 }
 
 function formatRaw(value: unknown): string {
@@ -1254,6 +1237,14 @@ defineExpose({
       </button>
     </p>
 
+    <ConfigurationRecoveryLookup
+      v-if="props.scope === 'basic'"
+      :client="props.client"
+      :enabled="props.active && hasWritePermission"
+      :pending="busy || unconfirmed"
+      @auth-expired="emit('auth-expired', $event)"
+    />
+
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
     <ul v-if="fieldErrors.length > 0" :id="domId('config-field-errors')" class="field-errors" data-testid="config-field-errors" role="alert">
@@ -1602,7 +1593,7 @@ defineExpose({
         </dl>
         <ol v-if="receipt.steps.length > 0" class="receipt-steps" data-testid="config-receipt-steps">
           <li v-for="step in receipt.steps" :key="step.step">
-            {{ stepLabels[step.step] ?? `步骤 ${step.step}` }}：{{ applyLabel(step.state) }}
+            {{ configurationStepLabel(step.step) }}：{{ applyLabel(step.state) }}
             <span v-if="step.errorCode" class="cell-sub">{{ errorName(step.errorCode) ?? step.errorCode }}</span>
           </li>
         </ol>
