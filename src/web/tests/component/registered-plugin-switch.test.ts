@@ -39,11 +39,23 @@ describe('registered quota plugin switch', () => {
     const wrapper = editor(client); await flushPromises()
     await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([true])
-    await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true })
+    const key = vi.mocked(client.saveConfiguration).mock.calls[0]?.[0].key
+    expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    await wrapper.setProps({ active: false })
+    expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+    await wrapper.setProps({ active: true })
+    expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    for (const boundary of [{ mode: 'read' as const }, { writesEnabled: false }, { client: clientWith() }, { pluginKey: 'plugin-other' }]) {
+      await wrapper.setProps(boundary)
+      expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+      await wrapper.setProps({ mode: 'admin', writesEnabled: true, client, pluginKey })
+      expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    }
     await wrapper.get('[data-testid="quota-plugin-check"]').trigger('click'); await flushPromises()
     expect(client.saveConfiguration).toHaveBeenCalledTimes(1)
     expect(client.findConfiguration).toHaveBeenCalledWith(vi.mocked(client.saveConfiguration).mock.calls[0]?.[0].key)
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+    expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
   })
   it.each([{ mode: 'read' }, { writesEnabled: false }, { active: false }, { blocked: true }])('enforces mode and pending draft gates %#', async extra => {
     const client = clientWith(); const wrapper = editor(client, extra); await flushPromises()

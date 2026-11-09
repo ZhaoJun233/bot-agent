@@ -223,6 +223,9 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic in-flight draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
+    const visibleKey = wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]')
+    expect(visibleKey.element.value).toBe(request?.key)
+    expect(visibleKey.element.readOnly).toBe(true)
     const leaving = wrapper.vm.requestLeave('navigate')
     await flushPromises()
     const dialog = document.querySelector('[data-testid="config-leave-dialog"]')!
@@ -238,7 +241,28 @@ describe('ConfigurationPage', () => {
       if (!request) throw new Error('Synthetic save did not start')
       finish({ code: 0, replayed: false, receipt: { ...receipt, key: request.key, observedVersion: request.expectedVersion }, currentVersion: '2', errors: [] })
       await flushPromises()
+      expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
     }
+  })
+
+  it('shows the pending operation key only to its active authorized owner', async () => {
+    const save = vi.fn(async () => { throw new ZbaNetworkError() })
+    const client = clientWith(editableFixture, { saveConfiguration: save })
+    const wrapper = mountPage({ mode: 'admin', client })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic pending draft')
+    await wrapper.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    const key = wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value
+    for (const boundary of [{ active: false }, { mode: 'read' as const }, { writesEnabled: false }, { client: clientWith(editableFixture) }]) {
+      await wrapper.setProps(boundary)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+      await wrapper.setProps({ active: true, mode: 'admin', writesEnabled: true, client })
+      await flushPromises()
+      expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    }
+    expect(save).toHaveBeenCalledTimes(1)
   })
 
   it('F6 does not expose keep when write permission is disabled', async () => {

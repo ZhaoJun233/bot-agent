@@ -40,6 +40,7 @@ import {
 import { errorName } from '../../shared/friendly'
 import { receiptOutcome, restartNoticeMessage, configurationApplyLabel as applyLabel, configurationCommitLabel as commitStateLabel, configurationStepLabel } from './receipt-notice'
 import ConfigurationRecoveryLookup from './ConfigurationRecoveryLookup.vue'
+import ConfigurationOperationKey from './ConfigurationOperationKey.vue'
 import { runtimeEffectPresentation } from './runtime-effects'
 import { policyDenials as findPolicyDenials } from './policy-presentation'
 import { fieldHint, fieldLabel } from './field-labels'
@@ -1229,6 +1230,8 @@ defineExpose({
         {{ findBusy ? '核对中…' : '核对结果' }}
       </button>
     </p>
+
+    <ConfigurationOperationKey v-if="canWrite && pendingKey && registeredOperation?.key === pendingKey" :operation-key="pendingKey" />
 
     <p v-if="props.scope === 'basic'" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
       <span><strong>按能力管理其它设置</strong><br />模型、平台、Agent、报告与插件设置均在对应能力中管理，密钥也随能力配置。</span>

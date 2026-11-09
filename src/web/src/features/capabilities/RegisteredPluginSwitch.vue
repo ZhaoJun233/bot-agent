@@ -4,6 +4,7 @@ import { ZbaClient, ZbaRequestError, type ZbaConfigurationReadResult } from '../
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { buildPatch, fieldPath } from '../configuration/draft'
+import ConfigurationOperationKey from '../configuration/ConfigurationOperationKey.vue'
 import { settingsFor } from './plugin-settings'
 import { switchState } from './plugin-toggle'
 import { useConfigurationCommit } from './configuration-commit'
@@ -176,6 +177,7 @@ onBeforeUnmount(() => { alive = false; ++sequence })
     <button v-if="phase === 'conflict' || phase === 'reload-required' || reloadRequired || error || commitError" type="button"
       :data-testid="props.compact ? testId('reload-') : 'quota-plugin-reload'" :disabled="!sameOwner || !props.active || loading || (busy && phase !== 'reload-required')" @click="load">读取最新启停设置</button>
     <p v-if="busy" class="notice warn" role="status">启停提交尚未确认；操作键已保留，请核对原回执，不会重复提交。</p>
+    <ConfigurationOperationKey v-if="authorized && pendingKey" :operation-key="pendingKey" />
   </section>
 </template>
 

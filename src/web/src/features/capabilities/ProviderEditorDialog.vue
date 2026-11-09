@@ -6,6 +6,7 @@ import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
 import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { newNonce } from '../configuration/draft'
+import ConfigurationOperationKey from '../configuration/ConfigurationOperationKey.vue'
 import { useConfigurationCommit } from './configuration-commit'
 import { editableText, providerDraft, providerDraftErrors, providerEdit, providerSecrets } from './provider-draft'
 import { providerPresets, providerProtocols } from './provider-protocols'
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   'auth-expired': [error: UiError]
 }>()
 const createTargetPrefix = 'provider:create:'
+const ownerProviderKey = props.providerKey
 const recoveredCreate = props.providerKey === undefined
   ? pendingOperations(props.client, 'configuration').find(item => item.state !== 'settled' && item.target.startsWith(createTargetPrefix))
   : undefined
@@ -67,6 +69,9 @@ const commit = useConfigurationCommit({
   onAuth: (value) => emit('auth-expired', value)
 })
 const { phase, pendingKey, error: commitError, notice, locked } = commit
+const visibleOperationKey = computed(() => canWrite.value && props.providerKey === ownerProviderKey
+  ? pendingOperations(props.client, 'configuration', commitTarget.value).find(item => item.key === pendingKey.value && item.state !== 'settled')?.key
+  : undefined)
 const protocol = computed(() => providerProtocols.find((item) => item.id === draft.protocol))
 /** 缓存控制参数只对 OpenAI 兼容与 Anthropic 协议有意义；其它协议不显示开关。 */
 const promptCacheProtocol = computed(() => draft.protocol === 'openai-chat' || draft.protocol === 'openai-responses' || draft.protocol === 'azure-openai' || draft.protocol === 'anthropic-messages')
@@ -220,6 +225,7 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
       <p>结果未知。操作键已保留，不会自动重试或生成另一次写入。</p>
       <button type="button" data-testid="provider-check" :disabled="phase === 'checking' || !props.active" @click="check">{{ phase === 'checking' ? '正在核对…' : '核对提交结果' }}</button>
     </div>
+    <ConfigurationOperationKey v-if="visibleOperationKey" :operation-key="visibleOperationKey" />
     <div v-if="phase === 'conflict' || phase === 'reload-required'" class="notice warn" data-testid="provider-conflict">
       <p>请先读取最新配置；现有草稿不会被替换。</p>
       <button type="button" data-testid="provider-rebase" :disabled="loading" @click="rebase">读取最新，保留草稿</button>
