@@ -12,6 +12,57 @@ async function openTasks(page: import('@playwright/test').Page, token: string): 
   await expect(page.getByTestId('tasks')).toBeVisible()
 }
 
+for (const first of ['result', 'cancel'] as const) {
+  test('task cancellation stays single-flight when ' + first + ' responds first', async ({ page }) => {
+    const id = 'synthetic-cancel-flight'
+    let releaseCancel!: () => void
+    let releaseResult!: () => void
+    const cancelGate = new Promise<void>((resolve) => { releaseCancel = resolve })
+    const resultGate = new Promise<void>((resolve) => { releaseResult = resolve })
+    let cancelRequests = 0
+    let resultRequests = 0
+    const now = '2026-11-09T00:00:00Z'
+    await page.route('**/zba/v1/tasks?*', (route) => route.fulfill({ json: {
+      items: [{ id, state: 1, target: 'server', sessionId: 'synthetic-session', createdAt: now, updatedAt: now, cancellationRequested: false }],
+      nextCursor: null
+    } }))
+    await page.route('**/zba/v1/tasks/' + id + '/cancel', async (route) => {
+      cancelRequests += 1
+      await cancelGate
+      await route.fulfill({ json: { state: 5, cancellationRequested: true, outcome: 'requested' } })
+    })
+    await page.route('**/zba/v1/tasks/' + id + '/result', async (route) => {
+      resultRequests += 1
+      await resultGate
+      await route.fulfill({ json: { id, state: 1, updatedAt: now, available: false, reasonCode: 'not_completed',
+        summaryTruncated: false, summaryChars: 0 } })
+    })
+    await openTasks(page, ADMIN)
+    await page.getByTestId('task-enable-admin').click()
+    const cancel = page.getByTestId('task-cancel-' + id)
+    try {
+      await cancel.click()
+      await expect.poll(() => cancelRequests).toBe(1)
+      await page.getByTestId('task-result-' + id).click()
+      await expect.poll(() => resultRequests).toBe(1)
+      const response = page.waitForResponse((r) => r.url().endsWith('/' + id + '/' + first))
+      if (first === 'result') releaseResult()
+      else releaseCancel()
+      await response
+      if (first === 'result') await expect(page.getByTestId('task-result-unavailable')).toBeVisible()
+      else await expect(page.getByTestId('task-item-' + id)).toContainText('已请求')
+      await expect(cancel).toBeDisabled()
+      await cancel.dispatchEvent('click')
+      expect(cancelRequests).toBe(1)
+    } finally {
+      releaseCancel()
+      releaseResult()
+    }
+    await expect(cancel).toBeEnabled()
+    expect(cancelRequests).toBe(1)
+  })
+}
+
 test('任务页：真实宿主可读取任务与待审批', async ({ page }) => {
   await openTasks(page, READ)
   await expect(page.getByTestId('task-mode-badge')).toHaveText('标准模式')

@@ -69,6 +69,17 @@ function mountPage(client = clientWith(), mode: 'read' | 'admin' = 'admin') {
   return wrapper
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+const cancelReceipt = { state: 5, cancellationRequested: true, outcome: 'requested' }
+const readReceipt = { id: 't-1', state: 1, updatedAt: '2026-10-22T10:00:09Z', available: false, reasonCode: 'not_completed',
+  summaryTruncated: false, summaryChars: 0 }
+
 async function fill(wrapper: ReturnType<typeof mountPage>): Promise<void> {
   await wrapper.get('[data-testid="task-source-key"]').setValue('panel:synthetic')
   await wrapper.get('[data-testid="task-session-id"]').setValue('synthetic-session')
@@ -390,6 +401,89 @@ describe('TasksPage', () => {
     // 终态下不再说「未确认」，只记录请求过、以状态为准。
     expect(wrapper.text()).not.toContain('已请求（未确认）')
     expect(wrapper.text()).toContain('已请求（任务已结束，以状态为准）')
+  })
+
+  it('reading a result does not release an in-flight cancellation', async () => {
+    const cancellation = deferred<typeof cancelReceipt>()
+    let cancelCalls = 0
+    const wrapper = mountPage(clientWith({
+      cancelTask: () => { cancelCalls += 1; return cancellation.promise },
+      getTaskResult: async () => readReceipt
+    }))
+    await flushPromises()
+    try {
+      await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+      await wrapper.get('[data-testid="task-result-t-1"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="task-detail"]').exists()).toBe(true)
+      expect(wrapper.get('[data-testid="task-cancel-t-1"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+      expect(cancelCalls).toBe(1)
+    } finally {
+      cancellation.resolve(cancelReceipt)
+      await flushPromises()
+    }
+    expect(wrapper.get('[data-testid="task-cancel-t-1"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('a cancellation response does not release a pending result read', async () => {
+    const cancellation = deferred<typeof cancelReceipt>()
+    const reading = deferred<typeof readReceipt>()
+    const wrapper = mountPage(clientWith({ cancelTask: () => cancellation.promise, getTaskResult: () => reading.promise }))
+    await flushPromises()
+    try {
+      await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+      await wrapper.get('[data-testid="task-result-t-1"]').trigger('click')
+      cancellation.resolve(cancelReceipt)
+      await flushPromises()
+      expect(wrapper.get('[data-testid="task-cancel-t-1"]').attributes('disabled')).toBeDefined()
+    } finally {
+      cancellation.resolve(cancelReceipt)
+      reading.resolve(readReceipt)
+      await flushPromises()
+    }
+    expect(wrapper.get('[data-testid="task-cancel-t-1"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it.each([false, true])('old-client cancellation cannot unlock the new cancellation (failure=%s)', async (failure) => {
+    const old = deferred<typeof cancelReceipt>()
+    const current = deferred<typeof cancelReceipt>()
+    const wrapper = mountPage(clientWith({ cancelTask: () => old.promise }))
+    await flushPromises()
+    let currentCalls = 0
+    try {
+      await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+      await wrapper.setProps({ client: clientWith({ identityLabel: 'synthetic-new-owner',
+        cancelTask: () => { currentCalls += 1; return current.promise } }) })
+      await flushPromises()
+      await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+      if (failure) old.reject(new ZbaRequestError(401, 'unauthorized', 'synthetic old request'))
+      else old.resolve(cancelReceipt)
+      await flushPromises()
+      expect(wrapper.emitted('auth-expired')).toBeUndefined()
+      expect(wrapper.get('[data-testid="task-cancel-t-1"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+      expect(currentCalls).toBe(1)
+    } finally {
+      old.resolve(cancelReceipt)
+      current.resolve(cancelReceipt)
+      await flushPromises()
+    }
+    expect(wrapper.get('[data-testid="task-cancel-t-1"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('cancellation failure is separate from successfully read results', async () => {
+    const cancellation = deferred<typeof cancelReceipt>()
+    const wrapper = mountPage(clientWith({ cancelTask: () => cancellation.promise, getTaskResult: async () => readReceipt }))
+    await flushPromises()
+    await wrapper.get('[data-testid="task-cancel-t-1"]').trigger('click')
+    await wrapper.get('[data-testid="task-result-t-1"]').trigger('click')
+    await flushPromises()
+    cancellation.reject(new ZbaNetworkError('synthetic cancellation disconnect'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="task-cancel-feedback"]').text()).toContain('取消请求反馈')
+    expect(wrapper.get('[data-testid="task-detail"]').text()).not.toContain('读取结果失败')
+    expect(wrapper.find('[data-testid="task-result-unavailable"]').exists()).toBe(true)
   })
 
   // ── S3-09：审批失败补读队列并阻止反复提交 ───────────────────────

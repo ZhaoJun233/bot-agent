@@ -79,6 +79,9 @@ const lastLoadedAt = ref<string | null>(null)
 const detail = ref<ZbaTaskResult | null>(null)
 const detailError = ref<UiError | null>(null)
 const detailBusy = ref(false)
+const cancelBusy = ref(false)
+const cancelError = ref<UiError | null>(null)
+let cancelSequence = 0
 const approvals = ref<ApprovalRow[]>([])
 const approvalsLoaded = ref(false)
 const approvalError = ref<UiError | null>(null)
@@ -344,22 +347,21 @@ function reconcileCancelMarks(): void {
  * 任务是否结束以资源读取为准（S3-07）。
  */
 async function cancelTask(task: ZbaTaskSummary): Promise<void> {
-  // 单飞：上一次取消/详情请求还没回来时不再发第二个写请求。
-  if (detailBusy.value) return
+  // 取消和结果读取分别管理在途状态；任一未完成时不再发送取消。
+  if (cancelBusy.value || detailBusy.value) return
   if (!canWrite.value) {
-    detailError.value = { code: 'read_only', message: '当前不是管理员模式，不能请求取消。' }
+    cancelError.value = { code: 'read_only', message: '当前不是管理员模式，不能请求取消。' }
     return
   }
   const client = props.client
   const epoch = ownership
   if (!ownedBy(epoch, client)) {
-    detailError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次取消没有发送。' }
+    cancelError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次取消没有发送。' }
     return
   }
-  // 单飞：取消请求在途时不再发第二次（按钮同时按 detailBusy 禁用）。
-  if (detailBusy.value) return
-  detailBusy.value = true
-  detailError.value = null
+  const sequence = ++cancelSequence
+  cancelBusy.value = true
+  cancelError.value = null
   try {
     const result = await client.cancelTask(task.id)
     if (!ownedBy(epoch, client)) return
@@ -375,7 +377,7 @@ async function cancelTask(task: ZbaTaskSummary): Promise<void> {
       return next
     })
     if (result.outcome !== 'requested' && !result.cancellationRequested) {
-      detailError.value = {
+      cancelError.value = {
         code: 'cancel_' + result.outcome,
         message: '服务端没有登记这次取消（结果：' + result.outcome + '）；当前状态为 ' + stateLabel(result.state) + '。'
       }
@@ -385,10 +387,10 @@ async function cancelTask(task: ZbaTaskSummary): Promise<void> {
     // 迟到的旧身份回包不能锁掉新会话：先核对所有权，再决定要不要报认证失效。
     if (!ownedBy(epoch, client)) return
     if (reportAuthFailure(cause)) return
-    detailError.value = toUiError(cause)
+    cancelError.value = toUiError(cause)
   } finally {
-    // busy 是界面标记，不属于任何写意图：无论所有权如何都要释放，否则会卡住。
-    detailBusy.value = false
+    // 只释放本次取消；旧会话的回包不改变新会话的在途状态。
+    if (sequence === cancelSequence) cancelBusy.value = false
   }
 }
 
@@ -880,6 +882,9 @@ function syncSubmissionsWithRegistry(): void {
 
 function resetForSession(): void {
   ownership += 1
+  cancelSequence += 1
+  cancelBusy.value = false
+  cancelError.value = null
   // 旧 client 的读取结果一律作废：推进三条代数并释放 loading。
   loadSequence += 1
   approvalSequence += 1
@@ -1001,6 +1006,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   unmounted = true
   ownership += 1
+  cancelSequence += 1
+  cancelBusy.value = false
   // 只读序列同样要作废：在途的 listTasks/approvals/result 迟到时不得回填已清空的 refs
   // （LIFE-03）。推进代数后，它们的 finally 也不会再动下一代 loading。
   loadSequence += 1
@@ -1319,6 +1326,7 @@ defineExpose({
         </div>
         <p class="task-history-meta">当前已载入 {{ tasks.length }} 项 · 进行中 {{ activeTasks.length }}</p>
       </div>
+    <ErrorNotice :error="cancelError" title="取消请求反馈" data-testid="task-cancel-feedback" />
     <p v-if="loading && tasks.length === 0" class="empty-state" data-testid="task-loading">正在读取任务…</p>
     <p v-else-if="!error && tasks.length === 0" class="empty-state" data-testid="task-empty">还没有任务。</p>
     <div v-else class="task-list">
@@ -1354,7 +1362,7 @@ defineExpose({
             type="button"
             class="tonal"
             :data-testid="'task-cancel-' + task.id"
-            :disabled="!canWrite || detailBusy"
+            :disabled="!canWrite || cancelBusy || detailBusy"
             @click="cancelTask(task)"
           >
             请求取消
