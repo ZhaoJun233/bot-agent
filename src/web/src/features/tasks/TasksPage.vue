@@ -20,6 +20,8 @@ import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { newNonce, nowSeconds } from '../configuration/draft'
+import TaskRecoveryLookup from './TaskRecoveryLookup.vue'
+import { taskFindCodeLabels as findCodeLabels } from './task-find-labels'
 import {
   activePending,
   beginPending,
@@ -57,19 +59,6 @@ const stateTones: Record<number, string> = {
 }
 /** 终态：只有这三个不需要继续核对。 */
 const terminalStates: number[] = [3, 4, 6]
-
-/**
- * 核对结论的文案。
- *
- * `unknown` 写的是"查不到"，不是"没有执行"：台账是内存的，重启/淘汰都会让
- * 记录消失，所以查不到只能证明"现在查不到"。
- */
-const findCodeLabels: Record<ZbaTaskFindCode, string> = {
-  found: '已找到受理记录',
-  expired: '受理回执已过期（服务端曾受理，任务记录已被清理）',
-  accepted_unknown: '已受理但结果未知（另一实例受理）',
-  unknown: '查不到受理记录（这不等于任务没有执行）'
-}
 
 /** 审批队列的一行；stale 阻止重放旧决定，unknown 不推断是否生效。 */
 interface ApprovalRow extends ZbaApprovalSummary {
@@ -746,6 +735,13 @@ async function submit(): Promise<void> {
 }
 
 /** 用提交时的幂等键核对：不换键、不重提。 */
+function reconcileRecoveredSubmission(key: string, task: ZbaTaskSummary): void {
+  const pending = pendingByKey(key)
+  if (pending?.service === serviceLabel(props.client) && pending.identity === props.client.identityLabel) {
+    settlePending(pending.token, 'resolved', task.id)
+  }
+}
+
 async function findSubmission(record: SubmissionRecord): Promise<void> {
   if (record.busy) return
   if (!canWrite.value) {
@@ -1110,6 +1106,14 @@ defineExpose({
     <p v-else-if="!props.writesEnabled" class="inline-notice bad" data-testid="task-write-disabled">
       契约不兼容，写入口已禁用；本页只展示当前任务。
     </p>
+
+    <TaskRecoveryLookup
+      :client="props.client"
+      :enabled="props.active && props.mode === 'admin' && props.writesEnabled"
+      @found="reconcileRecoveredSubmission"
+      @open-task="openDetail"
+      @auth-expired="emit('auth-expired', $event)"
+    />
 
     <ErrorNotice :error="error" title="读取任务失败" />
     <ErrorNotice :error="pageError" title="加载下一页失败" />

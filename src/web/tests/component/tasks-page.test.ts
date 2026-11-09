@@ -76,6 +76,20 @@ async function fill(wrapper: ReturnType<typeof mountPage>): Promise<void> {
 }
 
 describe('TasksPage', () => {
+  it('manual lookup reconciles an unresolved submission belonging to this client', async () => {
+    const client = clientWith()
+    const pending = beginPending({ key: 'synthetic-recovery-key', sourceKey: 'panel:synthetic',
+      service: serviceLabel(client), identity: client.identityLabel })
+    leavePendingUnknown(pending.token)
+    const wrapper = mountPage(client)
+    await flushPromises()
+    await wrapper.get('[data-testid="task-recovery-key"]').setValue(pending.key)
+    await wrapper.get('[data-testid="task-recovery"] form').trigger('submit')
+    await flushPromises()
+    expect(pendingByKey(pending.key)).toMatchObject({ phase: 'resolved', taskId: 't-1' })
+    expect(wrapper.get('[data-testid="task-submission-state"]').text()).toContain('已受理')
+  })
+
   it('渲染任务列表与真实状态', async () => {
     const wrapper = mountPage()
     await flushPromises()
@@ -314,7 +328,7 @@ describe('TasksPage', () => {
       expect(state).toContain('结果未知')
       expect(state).not.toContain('没有产生任务')
       expect(wrapper.get('[data-testid="task-find-code"]').text()).toContain(
-        code === 'expired' ? '回执已过期' : '这不等于任务没有执行'
+        code === 'expired' ? '持有受理回执，任务记录已被清理' : '这不等于任务没有执行'
       )
     })
   }
