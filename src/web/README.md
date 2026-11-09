@@ -6,6 +6,8 @@ Bearer 接入、契约兼容检查、概览，以及 S2 的配置读取与整批
 
 ## 命令
 
+任务页支持[导出本次客户端任务统计](../../docs/operations/client-task-observation.md)，分别保留受理、重放、未知和测量缺口；不跨刷新保存，也不代表全服务任务总量。
+
 ```bash
 npm ci
 npm run typecheck

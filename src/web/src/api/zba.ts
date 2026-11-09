@@ -3,6 +3,7 @@ import { isPluginGovernance, isPluginGovernanceSource, type PluginGovernance, ty
 import { isPluginLifecyclePreview, matchesLifecycleSelection, type PluginLifecyclePreview, type PluginLifecyclePreviewRequest } from './plugin-lifecycle'
 import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
 import { isPluginInstallPreview, isPluginSourceDiscovery, type PluginInstallPreview, type PluginPreviewRequest, type PluginSourceDiscovery } from './plugin-import'
+import { TaskObservation, type TaskObservationSnapshot } from './task-observation'
 
 export interface ZbaHealth {
   status: string
@@ -880,6 +881,15 @@ interface ZbaResponse {
 
 type AuthMode = 'required' | 'none'
 
+/** Same conservative admission classification used by the task page and its observation. */
+export function classifyTaskSubmitFailure(cause: unknown): 'rejected' | 'unknown' {
+  if (!(cause instanceof ZbaRequestError)) return 'unknown'
+  if (cause.status >= 500 || (cause.status >= 200 && cause.status < 300)) return 'unknown'
+  if (['idempotency_unverifiable', 'invalid_json'].includes(cause.code)) return 'unknown'
+  if ([408, 409, 429].includes(cause.status)) return 'unknown'
+  return cause.status >= 400 && cause.status < 500 ? 'rejected' : 'unknown'
+}
+
 export class ZbaClient {
   readonly baseUrl: string
   /**
@@ -892,6 +902,15 @@ export class ZbaClient {
   private readonly token: string
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
+  private readonly taskObservation = new TaskObservation()
+
+  /** Safe current-client aggregate; never includes task ids, request keys, or credentials. */
+  getTaskObservation(): TaskObservationSnapshot { return this.taskObservation.snapshot() }
+
+  private observeTask(action: (observation: TaskObservation) => void): void {
+    try { action(this.taskObservation) }
+    catch { this.taskObservation.markFault() } // Measurement failure must not alter a task response.
+  }
 
   constructor(options: ZbaClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '/zba/v1').replace(/\/+$/, '')
@@ -1251,7 +1270,11 @@ export class ZbaClient {
     const response = await this.fetchJson(`/tasks${suffix}`, { method: 'GET' }, 'required')
     // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
     if (!response.ok) throw this.errorFrom(response)
-    if (isTaskPage(response.data)) return response.data
+    if (isTaskPage(response.data)) {
+      const page = response.data
+      this.observeTask(observation => { for (const task of page.items) observation.observe(task.id, task.state) })
+      return page
+    }
     throw this.invalidResponse(response)
   }
 
@@ -1260,15 +1283,23 @@ export class ZbaClient {
    * 结果未知时用它 /tasks/find 核对，而不是换键重提。
    */
   async submitTask(request: ZbaTaskSubmission, idempotencyKey: string): Promise<ZbaTaskAccepted> {
-    const response = await this.fetchJson('/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-      body: JSON.stringify(request)
-    }, 'required')
-    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
-    if (!response.ok) throw this.errorFrom(response)
-    if (isTaskAccepted(response.data)) return response.data
-    throw this.invalidResponse(response)
+    let attempt: number | null = null
+    this.observeTask(observation => { attempt = observation.begin(idempotencyKey) })
+    try {
+      const response = await this.fetchJson('/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(request)
+      }, 'required')
+      if (!response.ok) throw this.errorFrom(response)
+      if (!isTaskAccepted(response.data)) throw this.invalidResponse(response)
+      const accepted = response.data
+      this.observeTask(observation => observation.accepted(attempt, accepted.id, accepted.state))
+      return accepted
+    } catch (cause) {
+      this.observeTask(observation => observation.failed(attempt, classifyTaskSubmitFailure(cause)))
+      throw cause
+    }
   }
 
   /** 按幂等键核对提交结果：found / expired / accepted_unknown / unknown。 */
@@ -1280,15 +1311,29 @@ export class ZbaClient {
     }, 'required')
     // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
     if (!response.ok) throw this.errorFrom(response)
-    if (isTaskFindResult(response.data)) return response.data
+    if (isTaskFindResult(response.data)) {
+      const result = response.data
+      if (result.code === 'found' && result.task) {
+        const task = result.task
+        this.observeTask(observation => observation.found(key, task.id, task.state))
+      }
+      return result
+    }
     throw this.invalidResponse(response)
   }
 
   /** 单个任务当前状态；404 是可解释结果（任务不存在）。 */
   async getTask(id: string): Promise<ZbaTaskSummary | null> {
     const response = await this.fetchJson(`/tasks/${encodeURIComponent(id)}`, { method: 'GET' })
-    if (response.status === 200 && isTaskSummary(response.data)) return response.data
-    if (response.status === 404 && isTaskNotFound(response.data)) return null
+    if (response.status === 200 && isTaskSummary(response.data)) {
+      const task = response.data
+      this.observeTask(observation => observation.observe(task.id, task.state))
+      return task
+    }
+    if (response.status === 404 && isTaskNotFound(response.data)) {
+      this.observeTask(observation => observation.unavailable(id))
+      return null
+    }
     if (!response.ok) throw this.errorFrom(response)
     throw this.invalidResponse(response)
   }
