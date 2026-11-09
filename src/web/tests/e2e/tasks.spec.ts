@@ -3,6 +3,54 @@ import { expect, test } from '@playwright/test'
 const ADMIN = 'synthetic-web-admin-token'
 const READ = 'synthetic-web-read-token'
 
+test('leaving the task page keeps a pending decision unknown until manual recovery', async ({ page }) => {
+  const id = 'synthetic-decision-recovery'
+  const approval = { id, toolId: 'synthetic.tool', summary: 'synthetic safe summary',
+    session: 'synthetic-session', expiresAt: '2099-01-01T00:00:00Z', policyVersion: 1 }
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let reads = 0
+  const decisions: boolean[] = []
+  await page.route('**/zba/v1/approvals', (route) => {
+    reads += 1
+    return route.fulfill({ json: [approval] })
+  })
+  await page.route('**/zba/v1/approvals/' + id + '/decide', async (route) => {
+    decisions.push((route.request().postDataJSON() as { approve: boolean }).approve)
+    if (decisions.length === 1) {
+      await gate
+      await route.fulfill({ status: 503, json: { code: 'approvals_unavailable', message: 'synthetic' } })
+    } else {
+      await route.fulfill({ json: { ok: true, decision: 'reject', reasonCode: '' } })
+    }
+  })
+  await openTasks(page, ADMIN)
+  await page.getByTestId('task-enable-admin').click()
+  try {
+    await page.getByTestId('task-approve-0').click()
+    await expect.poll(() => decisions.length).toBe(1)
+    await page.getByTestId('nav-overview').click()
+    await expect(page.getByTestId('tasks')).toBeHidden()
+    await page.getByTestId('nav-tasks').click()
+    await expect(page.getByTestId('tasks')).toBeVisible()
+    const before = reads
+    const response = page.waitForResponse((r) => r.url().endsWith('/' + id + '/decide'))
+    release()
+    await response
+    await expect.poll(() => reads).toBeGreaterThan(before)
+    await expect(page.getByTestId('task-approval-stale-0')).toHaveText('结果未知')
+    await expect(page.getByTestId('task-approve-0')).toBeDisabled()
+    await expect(page.getByTestId('task-reject-0')).toBeDisabled()
+    expect(decisions).toEqual([true])
+    await page.getByTestId('task-reload').click()
+    await expect(page.getByTestId('task-approve-0')).toBeEnabled()
+    expect(decisions).toEqual([true])
+    await page.getByTestId('task-reject-0').click()
+    await expect(page.getByTestId('task-decision-notice')).toContainText('已提交决定')
+    expect(decisions).toEqual([true, false])
+  } finally { release() }
+})
+
 async function openTasks(page: import('@playwright/test').Page, token: string): Promise<void> {
   await page.goto('/')
   await page.getByTestId('token-input').fill(token)

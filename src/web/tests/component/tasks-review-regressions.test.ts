@@ -43,6 +43,76 @@ function mountPage(client: ZbaClient) {
   return wrapper
 }
 
+describe('Approval recovery after page or write access changes', () => {
+  for (const [label, leave, back] of [
+    ['page change', { active: false }, { active: true }],
+    ['mode change', { mode: 'read' }, { mode: 'admin' }],
+    ['write access change', { writesEnabled: false }, { writesEnabled: true }]
+  ] as const) {
+    for (const outcome of ['timeout', 'success'] as const) {
+      it(label + ' preserves an unknown decision after a late ' + outcome, async () => {
+        const gate = deferred<void>()
+        const decisions: boolean[] = []
+        const wrapper = mountPage(clientWith({
+          listApprovals: async () => [approval],
+          decideApproval: async (_id: string, approve: boolean) => {
+            decisions.push(approve)
+            await gate.promise
+            if (outcome === 'timeout') throw new ZbaNetworkError('timeout')
+            return { ok: true, decision: approve ? 'approve' : 'reject', reasonCode: '' }
+          }
+        }))
+        await flushPromises()
+        await wrapper.get('[data-testid="task-approve-0"]').trigger('click')
+        await wrapper.setProps(leave)
+        await wrapper.setProps(back)
+        // A reread while the decision is still pending cannot authorize another request.
+        await wrapper.get('[data-testid="task-reload"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.get('[data-testid="task-approve-0"]').attributes('disabled')).toBeDefined()
+        gate.resolve()
+        await flushPromises()
+        expect(decisions).toEqual([true])
+        expect(wrapper.get('[data-testid="task-approve-0"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.get('[data-testid="task-reject-0"]').attributes('disabled')).toBeDefined()
+        expect(wrapper.get('[data-testid="task-approval-stale-0"]').text()).toBe('结果未知')
+        expect(wrapper.find('[data-testid="task-decision-notice"]').exists()).toBe(false)
+        // Only a subsequent manual reread of a current Pending row permits a fresh decision.
+        await wrapper.get('[data-testid="task-reload"]').trigger('click')
+        await flushPromises()
+        expect(decisions).toEqual([true])
+        expect(wrapper.get('[data-testid="task-approve-0"]').attributes('disabled')).toBeUndefined()
+        await wrapper.get('[data-testid="task-reject-0"]').trigger('click')
+        await flushPromises()
+        expect(decisions).toEqual([true, false])
+      })
+    }
+  }
+
+  it('an absent row after leaving the page does not establish the decision outcome', async () => {
+    const gate = deferred<void>()
+    let present = true
+    let decisions = 0
+    const wrapper = mountPage(clientWith({
+      listApprovals: async () => present ? [approval] : [],
+      decideApproval: async () => { decisions += 1; await gate.promise; throw new ZbaNetworkError('timeout') }
+    }))
+    await flushPromises()
+    await wrapper.get('[data-testid="task-approve-0"]').trigger('click')
+    await wrapper.setProps({ active: false })
+    present = false
+    gate.resolve()
+    await flushPromises()
+    await wrapper.setProps({ active: true })
+    await wrapper.get('[data-testid="task-reload"]').trigger('click')
+    await flushPromises()
+    expect(decisions).toBe(1)
+    expect(wrapper.get('[data-testid="task-approval-stale-0"]').text()).toBe('结果未知')
+    expect(wrapper.get('[data-testid="task-approve-0"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="task-decision-notice"]').exists()).toBe(false)
+  })
+})
+
 describe('Tasks review counterexamples: desired behavior', () => {
   it('TASK-01: accepted old POST must not erase a newly edited prompt', async () => {
     const accepted = deferred<{ id: string; state: number; acceptedAt: string }>()

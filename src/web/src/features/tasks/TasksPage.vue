@@ -974,6 +974,10 @@ watch(() => props.client, (value) => {
 /** 离开视图、退出管理员、写能力失效都让在途写请求永久失效。 */
 function abandonInFlight(): void {
   ownership += 1
+  // 已发送的决定仍可能生效；旧回执不再属于当前页面时，保留待核对状态。
+  for (const id of approvalBusy.value) {
+    markStale(id, '页面或写入状态已变化，这次决定的结果未知；请重新读取队列后再决定。', true, true)
+  }
 }
 
 watch(() => props.active, (value) => { if (value === false) abandonInFlight() })
