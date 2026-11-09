@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import RegisteredPluginSwitch from '../../src/features/capabilities/RegisteredPluginSwitch.vue'
-import { ZbaClient, ZbaNetworkError, type ZbaConfigurationReceipt } from '../../src/api/zba'
+import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaConfigurationReceipt } from '../../src/api/zba'
 import { providerSnapshot } from '../fixtures/provider-marketplace'
 const pluginKey = 'preset.feature.token-quota'
 const mounted: Array<{ unmount: () => void }> = []
@@ -33,8 +33,8 @@ describe('registered quota plugin switch', () => {
     expect(wrapper.get('[data-testid="quota-plugin-desired"]').text()).toContain('停用')
     expect(wrapper.text()).toContain('需重启'); expect(wrapper.text()).toContain('运行中')
   })
-  it('keeps unknown intent across hiding and reconciles the original key without resend', async () => {
-    const client = clientWith({ saveConfiguration: vi.fn(async () => { throw new ZbaNetworkError() }),
+  it.each([0, 408, 409, 429])('keeps unknown intent across hiding and reconciles the original key without resend (%s)', async (status) => {
+    const client = clientWith({ saveConfiguration: vi.fn(async () => { throw status === 0 ? new ZbaNetworkError() : new ZbaRequestError(status, 'http_error', 'synthetic ambiguous response') }),
       findConfiguration: vi.fn<ZbaClient['findConfiguration']>(async key => ({ code: 0, receipt: receipt(key) })) })
     const wrapper = editor(client); await flushPromises()
     await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()

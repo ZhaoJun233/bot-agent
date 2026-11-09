@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import {
   ZbaClient,
-  ZbaNetworkError,
+  classifySubmissionFailure,
   ZbaRequestError,
   type ZbaConfigurationReceipt,
   type ZbaConfigurationReadResult,
@@ -827,18 +827,13 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
     }
   } catch (cause) {
     // Classify and record even after the editor was unmounted or the session was locked.
-    const uncertain = cause instanceof ZbaNetworkError || (cause instanceof ZbaRequestError
-      && (cause.status >= 500 || (cause.code === 'invalid_json' && cause.status >= 200 && cause.status < 300)))
+    const uncertain = classifySubmissionFailure(cause) === 'unknown'
     if (externallySettled(client, key, target)) return
     markOperation(client, key, uncertain ? 'unknown' : 'settled')
     if (revision !== sessionRevision || pendingKey.value !== key) return
     if (reportAuthFailure(cause)) return
-    // 传输失败，或服务端已回 2xx 但响应体无法解码：都不能证明“没提交”。
-    const outcomeUnknown = cause instanceof ZbaNetworkError
-      || (cause instanceof ZbaRequestError
-        && (cause.status >= 500
-          || (cause.code === 'invalid_json' && cause.status >= 200 && cause.status < 300)))
-    if (outcomeUnknown) {
+    // 传输中断、代理超时/冲突/限流或无法解码的响应，都不能证明“没提交”。
+    if (uncertain) {
       phase.value = 'unconfirmed'
       return
     }

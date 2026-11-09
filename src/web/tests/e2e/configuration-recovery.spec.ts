@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 
 const headers = { Authorization: 'Bearer synthetic-web-admin-token' }
 async function enterConfiguration(page: Page) {
@@ -29,7 +30,8 @@ async function restore(request: APIRequestContext, original: number) {
   expect(response.status()).toBe(200)
 }
 
-test('finds a saved configuration after refresh without replaying or clearing a new draft', async ({ page, request }, testInfo) => {
+for (const responseStatus of [0, 408, 409, 429]) {
+test('finds a saved configuration after refresh without replaying or clearing a new draft (HTTP ' + responseStatus + ')', async ({ page, request }, testInfo) => {
   const before = await read(request)
   const original = before.view.behavior.privateCooldownSeconds.value
   expect(Number.isFinite(original)).toBe(true)
@@ -42,8 +44,14 @@ test('finds a saved configuration after refresh without replaying or clearing a 
     savedKey = body.key
     const saved = await route.fetch()
     expect(saved.status()).toBe(200)
-    committedVersion = (await saved.json()).receipt.committedVersion
-    await route.abort('connectionreset')
+    const result = await saved.json()
+    expect(result.receipt.commitState).toBe(1)
+    committedVersion = result.receipt.committedVersion
+    const evidencePath = testInfo.outputPath('upstream-commit.json')
+    await writeFile(evidencePath, JSON.stringify({ upstreamStatus: saved.status(), commitState: result.receipt.commitState, committedVersion, downstreamStatus: responseStatus || 'connectionreset' }))
+    await testInfo.attach('upstream-commit', { path: evidencePath, contentType: 'application/json' })
+    if (responseStatus === 0) await route.abort('connectionreset')
+    else await route.fulfill({ status: responseStatus, contentType: 'application/json', body: JSON.stringify({ error: { code: 'http_error', message: 'synthetic proxy response' } }) })
   })
   try {
     await page.goto('/')
@@ -83,6 +91,7 @@ test('finds a saved configuration after refresh without replaying or clearing a 
     await restore(request, original)
   }
 })
+}
 
 test('looks up an absent receipt with the keyboard on a narrow viewport without saving', async ({ page, request }, testInfo) => {
   await page.setViewportSize({ width: 375, height: 900 })

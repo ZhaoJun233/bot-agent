@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ProviderEditorDialog from '../../src/features/capabilities/ProviderEditorDialog.vue'
-import { ZbaClient, ZbaNetworkError, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../src/api/zba'
+import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../src/api/zba'
 import { providerSnapshot, syntheticProvider } from '../fixtures/provider-marketplace'
 import { getPendingOperation } from '../../src/shared/sync/pending-operations'
 
@@ -60,9 +60,9 @@ describe('provider editor safe configuration lifecycle', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(saveConfiguration.mock.calls[1]?.[0]).toMatchObject({ expectedVersion: '2' })
   })
-  it('retains an unknown key across hidden navigation and checks without replay', async () => {
+  it.each([0, 408, 409, 429])('retains an unknown key across hidden navigation and checks without replay (%s)', async (status) => {
     const saved: string[] = []; const queried: string[] = []
-    const client = clientWith({ saveConfiguration: vi.fn(async (request) => { saved.push(request.key); throw new ZbaNetworkError() }), findConfiguration: vi.fn<ZbaClient['findConfiguration']>(async (key) => { queried.push(key); return { code: 0, receipt: receipt(key) } }) })
+    const client = clientWith({ saveConfiguration: vi.fn(async (request) => { saved.push(request.key); throw status === 0 ? new ZbaNetworkError() : new ZbaRequestError(status, 'http_error', 'synthetic ambiguous response') }), findConfiguration: vi.fn<ZbaClient['findConfiguration']>(async (key) => { queried.push(key); return { code: 0, receipt: receipt(key) } }) })
     const { wrapper } = mountEditor(client); await flushPromises()
     await wrapper.get('[data-testid="provider-priority"]').setValue('5'); await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.find('[data-testid="provider-unknown"]').exists()).toBe(true)

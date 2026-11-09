@@ -881,13 +881,18 @@ interface ZbaResponse {
 
 type AuthMode = 'required' | 'none'
 
-/** Same conservative admission classification used by the task page and its observation. */
-export function classifyTaskSubmitFailure(cause: unknown): 'rejected' | 'unknown' {
+/** A transport error may follow a commit; ambiguous responses require an original-key lookup. */
+export function classifySubmissionFailure(cause: unknown): 'rejected' | 'unknown' {
   if (!(cause instanceof ZbaRequestError)) return 'unknown'
   if (cause.status >= 500 || (cause.status >= 200 && cause.status < 300)) return 'unknown'
   if (['idempotency_unverifiable', 'invalid_json'].includes(cause.code)) return 'unknown'
   if ([408, 409, 429].includes(cause.status)) return 'unknown'
   return cause.status >= 400 && cause.status < 500 ? 'rejected' : 'unknown'
+}
+
+/** Preserve the task API while sharing its admission rules with configuration saves. */
+export function classifyTaskSubmitFailure(cause: unknown): 'rejected' | 'unknown' {
+  return classifySubmissionFailure(cause)
 }
 
 export class ZbaClient {

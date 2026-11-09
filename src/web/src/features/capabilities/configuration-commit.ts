@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ZbaClient, ZbaRequestError, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../api/zba'
+import { ZbaClient, ZbaRequestError, classifySubmissionFailure, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../api/zba'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 import { receiptOutcome } from '../configuration/receipt-notice'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
@@ -71,7 +71,7 @@ export function useConfigurationCommit(options: {
       if (result.code === 3) { phase.value = 'conflict'; notice.value = '版本已变化，草稿已保留。读取最新后核对差异，再明确保存。'; return false }
       phase.value = 'idle'; error.value = { code: 'save_' + result.code, message: '保存被拒绝。请检查字段；仍被引用的提供商不能删除。' }
     } catch (cause) {
-      const rejected = cause instanceof ZbaRequestError && cause.status >= 400 && cause.status < 500
+      const rejected = classifySubmissionFailure(cause) === 'rejected'
       if (terminal(client, key, originalTarget)) return false
       markOperation(client, key, rejected ? 'settled' : 'unknown')
       if (!owned(client, originalTarget) || (!rejected && terminal(client, key, originalTarget))) return false

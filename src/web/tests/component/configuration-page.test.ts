@@ -532,13 +532,13 @@ describe('ConfigurationPage', () => {
     expect(versions).toEqual(['1', '2'])
   })
 
-  it('HTTP 5xx 保存结果未知时保留原操作键并允许核对回执', async () => {
+  it.each([503, 408, 409, 429])('HTTP %s 保存结果未知时保留原操作键并允许核对回执', async (status) => {
     const keys: string[] = []
     const findKeys: string[] = []
     const client = clientWith(editableFixture, {
       saveConfiguration: async (request) => {
         keys.push(request.key)
-        throw new ZbaRequestError(503, 'http_error', '合成代理在上游提交后返回 503。')
+        throw new ZbaRequestError(status, 'http_error', '合成代理在上游提交后替换响应。')
       },
       findConfiguration: async (key) => {
         findKeys.push(key)
