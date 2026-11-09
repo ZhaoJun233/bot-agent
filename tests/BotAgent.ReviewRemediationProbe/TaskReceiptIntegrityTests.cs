@@ -108,7 +108,47 @@ internal static class TaskReceiptIntegrityTests
             check(!Add(locked) && File.ReadAllText(lockedPath) == Document(Entry()),
                 "read failure remains closed after file becomes writable");
             check(Find(Store(lockedPath, [])) is not null, "new instance recovers from read failure");
+            CheckMissingHistory(root, check);
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static void CheckMissingHistory(string root, Action<bool, string> check)
+    {
+        var path = Path.Combine(root, "lost.json");
+        check(Add(Store(path, [])), "first admission succeeds before history loss");
+        var preserved = File.ReadAllText(path);
+        File.Move(path, path + ".saved");
+        var lost = Store(path, []);
+        check(!Add(lost) && !File.Exists(path), "lost initialized history cannot become first install");
+        File.WriteAllText(path, preserved);
+        check(!Add(lost), "restoration does not reopen an unverified running instance");
+        check(Find(Store(path, []), "synthetic-new-key") is not null, "restarted instance verifies restored history");
+
+        var legacy = Path.Combine(root, "legacy.json");
+        File.WriteAllText(legacy, Document(Entry()));
+        check(Find(Store(legacy, [])) is not null, "legacy history loads before marker migration");
+        File.Move(legacy, legacy + ".saved");
+        check(!Add(Store(legacy, [])) && !File.Exists(legacy), "legacy history gains loss protection without a new task");
+
+        var blocked = Path.Combine(root, "marker-write-blocked.json");
+        Directory.CreateDirectory(blocked + ".initialized.tmp");
+        check(!Add(Store(blocked, [])), "marker persistence failure prevents admission");
+        check(!File.Exists(blocked) || JsonNode.Parse(File.ReadAllText(blocked))?["receipts"] is JsonArray { Count: 0 },
+            "marker failure never persists an accepted receipt");
+        Directory.Delete(blocked + ".initialized.tmp");
+        check(Add(Store(blocked, [])), "empty interrupted initialization can recover on restart");
+
+        foreach (var marker in new[] { "", "2", "not-json-synthetic-private-marker" })
+        {
+            var invalid = Path.Combine(root, "invalid-marker-" + Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(invalid, Document(Entry()));
+            File.WriteAllText(invalid + ".initialized", marker);
+            var logs = new List<string>();
+            check(!Add(Store(invalid, logs)) && File.ReadAllText(invalid) == Document(Entry()),
+                "invalid history marker cannot be overwritten");
+            check(logs.Count > 0 && logs.All(line => !line.Contains("synthetic-private-marker", StringComparison.Ordinal)),
+                "invalid marker diagnostic does not include contents");
+        }
     }
 }

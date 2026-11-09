@@ -755,6 +755,7 @@ public static partial class Program
 
         CheckEventRingOverflow();
         CheckSequenceWriteFailureDegrades();
+        await RunZbaReceiptLossScenarioAsync((panel, ws, data) => Env(panel, ws, data), cts.Token);
 
         async Task<int> ReadConfigVersionAsync(string root)
         {

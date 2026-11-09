@@ -17,6 +17,7 @@ internal sealed class ZbaTaskReceiptStore
     private static readonly TimeSpan Lifetime = TimeSpan.FromDays(7);
 
     private readonly string _path;
+    private readonly string _markerPath;
     private readonly Func<DateTimeOffset> _now;
     private readonly Action<string>? _log;
     private readonly object _gate = new();
@@ -24,10 +25,12 @@ internal sealed class ZbaTaskReceiptStore
     /// <summary>旧 → 新；写入时整体替换，失败时不提交候选列表。</summary>
     private List<ZbaTaskReceipt> _receipts = new();
     private bool _historyAvailable = true;
+    private bool _markerEstablished;
 
     internal ZbaTaskReceiptStore(string path, Func<DateTimeOffset> now, Action<string>? log)
     {
         _path = path;
+        _markerPath = path + ".initialized";
         _now = now;
         _log = log;
         Load();
@@ -47,6 +50,9 @@ internal sealed class ZbaTaskReceiptStore
         lock (_gate)
         {
             if (!_historyAvailable) return false;
+            // 新安装先落盘有效空历史，再写标记，最后才可写受理回执。
+            // 任一步中断都不会留下“任务已受理、却未建立丢失保护”的状态。
+            if (!_markerEstablished && (!SaveLocked(_receipts) || !WriteMarker())) return false;
             var candidate = PruneLocked(new List<ZbaTaskReceipt>(_receipts), out _);
             var receipt = new ZbaTaskReceipt(keyHash, taskId, instanceId, acceptedAt);
             var existing = candidate.FindIndex(item => item.KeyHash == keyHash);
@@ -83,8 +89,13 @@ internal sealed class ZbaTaskReceiptStore
 
     private void Load()
     {
+        if (!LoadMarker()) return;
         var outcome = ZbaEventSequenceStore.TryReadText(_path, out var text, out var failure);
-        if (outcome == ZbaEventSequenceStore.ReadOutcome.Missing) return;
+        if (outcome == ZbaEventSequenceStore.ReadOutcome.Missing)
+        {
+            if (_markerEstablished) MarkUnavailable("读取", "missing_initialized_history");
+            return;
+        }
         if (outcome != ZbaEventSequenceStore.ReadOutcome.Ok)
         {
             MarkUnavailable("读取", failure?.GetType().Name ?? "unknown");
@@ -121,6 +132,12 @@ internal sealed class ZbaTaskReceiptStore
             }
 
             _receipts = PruneLocked(loaded, out var pruned);
+            // 旧版本的有效回执在启动时补标记，不依赖下一次提交。
+            if (!_markerEstablished && !WriteMarker())
+            {
+                MarkUnavailable("初始化标记", "write_failed");
+                return;
+            }
             // 整个文档验证后才提交到内存；无效条目不能静默丢弃，否则旧键可能再次执行。
             // 启动时压缩磁盘中的过期条目。写失败只记日志，
             // 内存仍按过期处理，下一次成功写入会再次压缩。
@@ -131,6 +148,27 @@ internal sealed class ZbaTaskReceiptStore
         {
             MarkUnavailable("解析", exception.GetType().Name);
         }
+    }
+
+    private bool LoadMarker()
+    {
+        var outcome = ZbaEventSequenceStore.TryReadText(_markerPath, out var text, out var failure);
+        if (outcome == ZbaEventSequenceStore.ReadOutcome.Missing) return true;
+        if (outcome == ZbaEventSequenceStore.ReadOutcome.Ok && text == "1")
+        {
+            _markerEstablished = true;
+            return true;
+        }
+
+        MarkUnavailable("初始化标记", failure?.GetType().Name ?? "invalid_marker");
+        return false;
+    }
+
+    private bool WriteMarker()
+    {
+        _markerEstablished = ZbaEventSequenceStore.TryWriteTextAtomic(_markerPath, "1", _log,
+            exception => $"[Zba] 任务回执初始化标记写入失败（{exception.GetType().Name}）：本次提交不受理");
+        return _markerEstablished;
     }
 
     private void MarkUnavailable(string operation, string reason)
