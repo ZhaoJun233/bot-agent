@@ -19,6 +19,12 @@ npm run test:e2e                  # 先 build，再启动真实隔离 Headless +
 
 `test:e2e` 使用 `src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll`，在系统临时目录创建两个合成数据根：一台配置合成 ZBA 令牌，另一台**不配置** ZBA 令牌（验证真实 503 `zba_not_configured`）；模型地址指向 mock。不会读取真实数据。可用 `BOTAGENT_HEADLESS_DLL` 指向另一份 Release DLL。
 
+## TypeScript 与 Vue 工具链
+
+当前固定 TypeScript 5.9.3 与 vue-tsc 3.x。`npm run typecheck` 先检查实际安装的 TypeScript 版本和经典编译器入口，再运行完整的 `vue-tsc --noEmit`；`npm run build` 复用同一检查。安装成功不代表这组工具兼容，单独设置 `strict-peer-deps` 也不能替代编译器检查。
+
+Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vue-tsc 3.x 使用的编译器接口；后续应把 TypeScript 与 Vue 类型检查工具作为一次完整迁移处理。Vue 的原生编译器接入见[官方迁移工作](https://github.com/vuejs/language-tools/pull/6170)，目前涉及 TypeScript 7.1 与 Vue v4 预发布工具。迁移前保留当前固定版本；不能通过跳过 Vue 检查、放宽类型选项或只运行 Vite 构建来完成升级。
+
 ## 安全边界
 
 - Bearer 只保存在当前页面内存；锁定/刷新即丢失，不写 localStorage/sessionStorage/URL/日志。

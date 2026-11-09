@@ -61,3 +61,7 @@ updates:
       frontend:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # vue-tsc 3.x uses the classic compiler API; TypeScript 7 needs a separate Vue toolchain migration.
+      - dependency-name: typescript
+        versions: [">=7.0.0"]

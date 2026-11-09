@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "typecheck": "vue-tsc --noEmit",
+    "typecheck": "node scripts/check-typescript-compat.mjs && vue-tsc --noEmit",
     "test:unit": "vitest run",
     "test:e2e": "npm run build && playwright test"
   },
