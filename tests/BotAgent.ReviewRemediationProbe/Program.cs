@@ -51,6 +51,13 @@ internal static class Program
         if (await DatabaseContractTests.TryRunChildAsync(args) is { } databaseChildExit) return databaseChildExit;
         if (StorageMigrationTests.TryRunChild(args) is { } storageChildExit) return storageChildExit;
         if (ReviewAgentStorageRegression.TryRunChild(args) is { } agentStorageChildExit) return agentStorageChildExit;
+        if (args.Contains("--task-receipts", StringComparer.Ordinal))
+        {
+            await RunAsync("task receipt integrity", () => TaskReceiptIntegrityTests.RunAsync(Check));
+            Console.WriteLine($"TaskReceiptIntegrity: {_passed} passed, {_failed} failed");
+            return _failed == 0 ? 0 : 1;
+        }
+        await RunAsync("task receipt integrity", () => TaskReceiptIntegrityTests.RunAsync(Check));
         ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-review-remediation-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);

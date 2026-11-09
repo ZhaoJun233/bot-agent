@@ -7,7 +7,7 @@ namespace BotAgent.Adapters.Persistence;
 /// <summary>
 /// 提交回执：只保存幂等键哈希、任务 id、受理实例与时间，用于“POST 响应丢失 / 重启后”
 /// 证明提交曾被受理。有界（512 条 / 7 天）、原子替换；不保存 prompt、结果或任何正文。
-/// 读取失败按空回执继续（可用性优先），但绝不把损坏内容当成 found。
+/// 历史回执不可读或无效时，查询保持 unknown，禁止新受理覆盖未知历史；修复后重启再验证。
 /// 文件读写复用 <see cref="ZbaEventSequenceStore"/> 的持久化原语，不在这里直接碰文件系统。
 /// </summary>
 internal sealed class ZbaTaskReceiptStore
@@ -23,6 +23,7 @@ internal sealed class ZbaTaskReceiptStore
 
     /// <summary>旧 → 新；写入时整体替换，失败时不提交候选列表。</summary>
     private List<ZbaTaskReceipt> _receipts = new();
+    private bool _historyAvailable = true;
 
     internal ZbaTaskReceiptStore(string path, Func<DateTimeOffset> now, Action<string>? log)
     {
@@ -45,6 +46,7 @@ internal sealed class ZbaTaskReceiptStore
     {
         lock (_gate)
         {
+            if (!_historyAvailable) return false;
             var candidate = PruneLocked(new List<ZbaTaskReceipt>(_receipts), out _);
             var receipt = new ZbaTaskReceipt(keyHash, taskId, instanceId, acceptedAt);
             var existing = candidate.FindIndex(item => item.KeyHash == keyHash);
@@ -85,18 +87,21 @@ internal sealed class ZbaTaskReceiptStore
         if (outcome == ZbaEventSequenceStore.ReadOutcome.Missing) return;
         if (outcome != ZbaEventSequenceStore.ReadOutcome.Ok)
         {
-            _log?.Invoke($"[Zba] 任务回执读取失败（{failure?.GetType().Name ?? "unknown"}）：按空回执继续");
-            _receipts = new List<ZbaTaskReceipt>();
+            MarkUnavailable("读取", failure?.GetType().Name ?? "unknown");
             return;
         }
 
         try
         {
             var root = JsonNode.Parse(text);
-            if (root?["receipts"] is not JsonArray array) return;
-            var storedCount = array.Count;
+            if (root is not JsonObject document
+                || document["version"] is not JsonValue version
+                || !version.TryGetValue<int>(out var formatVersion) || formatVersion != 1
+                || document["receipts"] is not JsonArray array)
+                throw new JsonException("Invalid task receipt document");
 
             var loaded = new List<ZbaTaskReceipt>();
+            var keys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var node in array)
             {
                 var keyHash = node?["keyHash"]?.GetValue<string>();
@@ -106,25 +111,33 @@ internal sealed class ZbaTaskReceiptStore
                 if (string.IsNullOrWhiteSpace(keyHash) || string.IsNullOrWhiteSpace(taskId)
                     || string.IsNullOrWhiteSpace(instanceId)
                     || !DateTimeOffset.TryParse(acceptedAtText, CultureInfo.InvariantCulture,
-                        DateTimeStyles.RoundtripKind, out var acceptedAt))
+                        DateTimeStyles.RoundtripKind, out var acceptedAt)
+                    || !keys.Add(keyHash))
                 {
-                    continue;
+                    throw new JsonException("Invalid task receipt entry");
                 }
 
                 loaded.Add(new ZbaTaskReceipt(keyHash, taskId, instanceId, acceptedAt));
             }
 
             _receipts = PruneLocked(loaded, out var pruned);
-            // 启动时压缩磁盘：过期或无效条目不能只从内存消失。写失败只记日志，
+            // 整个文档验证后才提交到内存；无效条目不能静默丢弃，否则旧键可能再次执行。
+            // 启动时压缩磁盘中的过期条目。写失败只记日志，
             // 内存仍按过期处理，下一次成功写入会再次压缩。
-            if (pruned || _receipts.Count != storedCount) SaveLocked(_receipts);
+            if (pruned) SaveLocked(_receipts);
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException
             or FormatException or ArgumentException)
         {
-            _log?.Invoke($"[Zba] 任务回执解析失败（{exception.GetType().Name}）：按空回执继续");
-            _receipts = new List<ZbaTaskReceipt>();
+            MarkUnavailable("解析", exception.GetType().Name);
         }
+    }
+
+    private void MarkUnavailable(string operation, string reason)
+    {
+        _historyAvailable = false;
+        _receipts = new List<ZbaTaskReceipt>();
+        _log?.Invoke($"[Zba] 任务回执{operation}失败（{reason}）：拒绝新任务受理，修复回执后重启");
     }
 
     private bool SaveLocked(List<ZbaTaskReceipt> receipts)
