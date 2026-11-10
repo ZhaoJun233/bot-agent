@@ -161,7 +161,7 @@ The host reads prefixed names, **canonical `BOTAGENT_*` first, legacy `QQCHAT_*`
 | `BOTAGENT_QQ_ONEBOT_URL` | `QQCHAT_ONEBOT_URL` | protocol client WebSocket URL |
 | `BOTAGENT_QQ_ONEBOT_TOKEN` | `QQCHAT_ONEBOT_TOKEN` | protocol client auth token |
 | `BOTAGENT_QQ_UIN` | `QQCHAT_UIN` | bot account (auto-detected on connect when empty) |
-| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`, `HEALTH_PORT` | panel and health-probe port (**18245** native default, 8080 inside the image) |
+| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`, `HEALTH_PORT` | panel and health-probe port (**18245** for native and prebuilt-artifact images; 8080 for source images and compose) |
 | `BOTAGENT_HEALTH_BIND` | `QQCHAT_HEALTH_BIND` | bind address (`127.0.0.1` by default, loopback only) |
 | `BOTAGENT_PANEL_TOKEN` | `QQCHAT_PANEL_TOKEN` | panel API token |
 | — | `QQCHAT_PANEL_PASSWORD` | **initial** panel password: written to the database on first start, changed in the panel afterwards |

@@ -119,7 +119,7 @@ export function pluginOperationNotice(operation: ZbaPluginOperation): PluginNoti
 
 /**
  * 结果未知时的恢复指引：404 说明这个键还没有回执（继续用同一个键核对），
- * 409 说明这个键已经绑定了另一份变更（必须作废重来，绝不能换键重提同一份变更）。
+ * 409 无法核对原请求关联，仍保留原键，不能换键重复提交。
  */
 export function pluginRecoveryNotice(cause: unknown): PluginNotice | null {
   if (!(cause instanceof ZbaRequestError)) return null
@@ -131,14 +131,9 @@ export function pluginRecoveryNotice(cause: unknown): PluginNotice | null {
     return { tone: 'warn', message: '这个操作键还没有回执：服务端可能尚未受理。请稍后用同一操作键重新核对，不要换键重复提交。' }
   }
   if (cause.code === 'idempotency_conflict') {
-    return { tone: 'warn', message: '这个操作键已经用于另一份变更，已被服务端作废：请重新读取目录、确认内容后换一个操作键提交。' }
+    return { tone: 'warn', message: '原操作键的回执与请求关联无法核对，结果仍未知。请保留原操作键并人工核对，不要换键重复提交。' }
   }
   return null
-}
-
-/** 幂等键冲突后必须换键：调用方据此清掉保存的旧键。 */
-export function pluginKeyInvalidated(cause: unknown): boolean {
-  return cause instanceof ZbaRequestError && cause.code === 'idempotency_conflict'
 }
 
 /** 清单声明草稿 → wire 编辑：keep 不进请求，delete 不带值，其余带值。 */

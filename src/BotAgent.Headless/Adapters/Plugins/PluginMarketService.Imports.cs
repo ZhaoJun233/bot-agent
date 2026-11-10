@@ -124,15 +124,13 @@ public sealed partial class PluginMarketService
         var registered = _registrySnapshot?.Invoke() ?? [];
         var occupied = existing is { Active: not null } or { Pending: not null } or { PendingUninstall: true }
             || registered.Any(p => p.Id == manifest.Id);
-        var dependencies = (manifest.Dependencies ?? []).All(d =>
-            registered.Any(p => p.Id == d.Id && p.Version == d.Version) ||
-            installed.Any(p => p.Id == d.Id && p.Active?.Version == d.Version && p.Pending is null && !p.PendingUninstall));
+        var dependencies = PluginDependencyPolicy.AreSatisfied(manifest, installed, registered);
         return [
             GovernanceCheck(manifest),
             new("manifest", "passed", "固定身份、SHA-256、入口与声明形状有效；不代表实际包已核验。"),
             new("new_install", occupied ? "blocked" : "passed", occupied ? "此插件已安装或存在待处理状态；本入口只接受全新安装。" : "此 ID 当前没有已安装或待处理包。"),
             new("compatibility", PluginPackageValidation.IsCompatible(manifest) ? "passed" : "blocked", "检查 API、目标框架及最低宿主版本。"),
-            new("dependencies", dependencies ? "passed" : "blocked", dependencies ? "所需固定版本依赖已具备。" : "缺少依赖、版本不符或依赖有待处理变更。"),
+            new("dependencies", dependencies ? "passed" : "blocked", dependencies ? "同运行时的固定版本依赖已具备。" : "缺少依赖、版本或运行时不符，或依赖有待处理变更。"),
             new("artifact", "pending", "确认后才下载 ZIP 并核验 SHA-256、归档路径与入口；现在尚未核验。"),
             new("execution", "pending", "安装/加载仍可能执行第三方构造器等代码，不是沙箱。业务能力默认停用，配置后可另行启用。")
         ];

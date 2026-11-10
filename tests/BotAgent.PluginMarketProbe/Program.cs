@@ -297,6 +297,7 @@ try
     checks += await Program.RunReviewPluginRegressionAsync(root);
     checks += await Program.RunHotReloadRegressionAsync(root);
     checks += await Program.RunImportRegressionChecks(root);
+    checks += await Program.RunDependencyRuntimeChecks(root);
     checks += await Program.RunLifecycleAdmissionChecks(root);
     checks += await Program.RunLifecyclePreservationChecks(root);
     checks += await Program.RunLifecycleRecoveryChecks(root);

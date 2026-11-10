@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import PluginGovernanceNotice from './PluginGovernanceNotice.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaInstalledPlugins, type ZbaPluginCatalog, type ZbaPluginOperationKind } from '../../api/zba'
+import { ZbaClient, ZbaRequestError, type ZbaInstalledPlugins, type ZbaPluginCatalog, type ZbaPluginOperationKind } from '../../api/zba'
+import { isPluginWriteOutcomeUnknown as isUnknown } from './plugin-write-outcome'
 import { beginOperation, markOperation, pendingOperations, type PendingOperation } from '../../shared/sync/pending-operations'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
@@ -88,13 +89,6 @@ let leavePromise: Promise<boolean> | null = null
 let leaveResolve: ((value: boolean) => void) | null = null
 
 function describe(cause: unknown): UiError { return toUiError(cause) }
-function isUnknown(cause: unknown): boolean {
-  // A response decoding failure after a write is not proof that it was rejected.
-  if (cause instanceof ZbaNetworkError) return true
-  if (cause instanceof ZbaRequestError && cause.code === 'plugin_reload_failed') return false
-  if (cause instanceof ZbaRequestError) return cause.status >= 500 || cause.status === 0 || cause.code === 'invalid_json'
-  return true
-}
 function live(client: ZbaClient): boolean { return alive && props.active && client === props.client }
 function showError(cause: unknown): void {
   const value = describe(cause)
