@@ -1,17 +1,14 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
-using BotAgent.Adapters.Agent;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Agent;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Management;
 using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Ports;
-using BotAgent.Engine.Runtime;
 using BotAgent.Panel;
 using BotAgent.Services;
-using BotAgent.Services.Agent;
 using BotAgent.Services.Permissions;
 using BotAgent.Services.Settings;
 
@@ -46,16 +43,15 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         SettingsHotReload hotReload,
         IManagedCapabilities capabilities,
         IAgentSessionStore sessions,
-        AgentCommandService agent,
+        ZbaTaskRegistry tasks,
         ApprovalUseCase? approvals,
         IPluginRegistry? plugins,
         PanelDto dto,
         Func<bool> serverEnabled,
         Func<DateTimeOffset> now,
+        DateTimeOffset startedAt,
         string version,
         ZbaEventBuffer events,
-        ZbaTaskReceiptStore taskReceipts,
-        string instanceId,
         Action<string>? log = null,
         BotAgent.Adapters.Plugins.PluginMarketService? market = null,
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
@@ -74,7 +70,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _plugins = plugins;
         _dto = dto;
         _now = now;
-        _startedAt = now();
+        _startedAt = startedAt;
         _version = version;
         _events = events;
         _log = log;
@@ -85,19 +81,8 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _quotaStore = quotaStore;
         _backups = backups;
         _traces = traces;
-        // 执行与状态在 Engine 的任务运行时（ADR-0002）；registry 只做通道适配（幂等/回执/事件/结果投影）。
-        // 台账（#116）在这里注入：运行时只管写，SQLite 细节留在 Adapters/Persistence。
-        var ledger = new AgentTaskLedgerStore();
-        ledger.Prune(0);
-        // #137：任务级前置审批闸门。审批总开关关掉时它返回 null，不会凭空多出待批任务。
-        var approvalGate = new TaskApprovalGate(now, () => _box.Current.EnableApprovals,
-            () => _box.Current, () => DockerAvailability.IsAvailable, agent.CaptureTaskPythonLeases);
-        _tasks = new ZbaTaskRegistry(sessions,
-            new AgentTaskRuntime(
-                new AgentTaskExecutor(agent), now, log: log, ledger: ledger, bootSeq: ledger.BootSeq,
-                approvalGate: approvalGate),
-            now, serverEnabled, events, taskReceipts, instanceId, log,
-            request => approvalGate.Prepare(request, agent.GetTaskMcpToolNames()));
+        // 后端承接 registry 的释放责任，保持现有关闭链。
+        _tasks = tasks;
     }
 
     internal ZbaTaskRegistry Tasks => _tasks;
