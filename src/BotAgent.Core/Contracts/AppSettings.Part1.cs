@@ -124,12 +124,24 @@ public sealed partial class AppSettings : global::BotAgent.Platforms.PlatformOpt
         EmotionalTemperature,
         EmotionalTopP,
         DefaultTemperature,
-        DefaultTopP);
+        DefaultTopP,
+        ReplyPacingEnabled);
 
     // ---------- 行为 ----------
 
     /// <summary>AI 对话欲望（0-100：越高越主动参与群聊；默认 50）。</summary>
     public int AiDesire { get; set; } = 50;
+
+    /// <summary>新版回复节奏，默认关闭；关闭时保留并使用原有回复设置。</summary>
+    public bool ReplyPacingEnabled { get; set; } = false;
+    /// <summary>普通群聊插话的真实参与概率，单位百分比，范围 0–100；明确请求豁免。</summary>
+    public int GroupInterjectionProbability { get; set; } = 20;
+    /// <summary>群内任一次完整机器人聊天回复最后一段成功发完后的主动插话冷却秒数，范围 0–3600。</summary>
+    public int GroupInterjectionCooldownSeconds { get; set; } = 30;
+    /// <summary>同一成员群聊连续输入的安静等待秒数，范围 0–30。</summary>
+    public int GroupContinuationWaitSeconds { get; set; } = 3;
+    /// <summary>私聊连续输入的安静等待秒数，范围 0–30。</summary>
+    public double PrivateContinuationWaitSeconds { get; set; } = 1.5;
 
     /// <summary>发言适合度阈值（0-100）：模型评分低于此值则沉默，默认 10。</summary>
     public int SuitabilityThreshold { get; set; } = 10;

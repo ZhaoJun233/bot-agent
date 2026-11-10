@@ -15,7 +15,7 @@ async function connect(page: import('@playwright/test').Page, token: string): Pr
 test('能力页：真实宿主读取目录与支持矩阵', async ({ page }) => {
   await connect(page, READ)
   await expect(page.getByTestId('cap-count')).toContainText('已加载')
-  const cards = page.locator('.cap-card')
+  const cards = page.locator('[data-testid^="cap-item-"]')
   await expect(cards.first()).toBeVisible()
   const count = await cards.count()
   expect(count).toBeGreaterThan(3)

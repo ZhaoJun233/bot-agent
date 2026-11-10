@@ -71,7 +71,7 @@ internal static partial class CompositionRoot
                 SendPlainAsync: a.Plain.SendPlainAsync),
              actionGateway: a.Gateway,
              platformPolicies: a.PlatformPolicies,
-             pluginAllows: a.PluginGate.Allows);
+             pluginAllows: a.PluginGate.Allows, unifiedMemory: a.UnifiedMemory);
 
         a.Background = new BackgroundEvaluatorQueue(new BackgroundEvaluatorOptions
         {

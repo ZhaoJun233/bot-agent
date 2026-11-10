@@ -95,6 +95,8 @@ public sealed class InlineTurnTools
                 return null;
             }
 
+            await ReplyCommitBoundary.BeforeEffectAsync();
+            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.search")) return null;
             if (!_research.TryBeginSearch(conversation.SourceKey, snapshot.WebSearchCooldownSeconds, out var cooldownWhy))
             {
                 _log($"[循环] 当场搜索被冷却挡下（{cooldownWhy}）→ 不再多问一次");
@@ -139,6 +141,8 @@ public sealed class InlineTurnTools
             }
 
             _log($"[循环] 当场读页面 {TextRules.Shorten(url, 80)}");
+            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
+            await ReplyCommitBoundary.BeforeEffectAsync();
             if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
             using var readLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
             var text = await _research.ReadPageAsync(conversation.SourceKey, url, readLifetime.Token);

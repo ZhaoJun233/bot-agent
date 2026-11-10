@@ -219,6 +219,8 @@ internal static partial class CompositionRoot
         public OpenAiClient Brain { get; set; } = null!;
         public ConversationStore Store { get; set; } = null!;
         public MemberProfileStore Profiles { get; set; } = null!;
+        public IUnifiedMemory UnifiedMemory { get; set; } = null!;
+        public BotAgent.Services.Memory.UnifiedMemoryCommandService MemoryCommands { get; set; } = null!;
         public StickerService Stickers { get; set; } = null!;
         public VoiceUseCase Voice { get; set; } = null!;
         public MusicUseCase Music { get; set; } = null!;

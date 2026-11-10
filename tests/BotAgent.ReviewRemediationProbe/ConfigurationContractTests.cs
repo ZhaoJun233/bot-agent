@@ -138,7 +138,8 @@ internal static class ConfigurationContractTests
             {
                 var rejected = false;
                 try { StorageDatabase.Initialize(path); }
-                catch (SqliteException) { rejected = true; }
+                // SQLITE_CONSTRAINT_TRIGGER proves the injected module marker fault was reached.
+                catch (SqliteException ex) when (ex.SqliteExtendedErrorCode == 1811) { rejected = true; }
                 Check(rejected && !StorageDatabase.IsReady, "module initialization fault not ready");
                 using (var connection = OpenFixture(path))
                 {
@@ -148,10 +149,9 @@ internal static class ConfigurationContractTests
                     command.CommandText = "SELECT COUNT(*) FROM meta WHERE key='configuration_schema'";
                     Check(Convert.ToInt64(command.ExecuteScalar()) == 0, "module marker rolled back");
                     command.CommandText = "PRAGMA user_version";
-                    // v10/v11/v12/v13 (provider protocol/options、配置字段号上限、任务台账、轨迹归档缓存用量)
-                    // migrate before the configuration module is written, so the committed physical revision is 13 even
-                    // when module creation faults; module state is what must roll back.
-                    Check(Convert.ToInt64(command.ExecuteScalar()) == 13, "physical revision advanced only by the migration");
+                    // Physical migrations, including v14's #151 pacing field IDs, commit before
+                    // the configuration module is written. Module state must still roll back.
+                    Check(Convert.ToInt64(command.ExecuteScalar()) == 14, "physical revision advanced only by the migration");
                     StorageDatabase.Exec(connection, "DROP TRIGGER synthetic_module_fault;");
                 }
                 StorageDatabase.Initialize(path);
@@ -898,12 +898,12 @@ internal static class ConfigurationContractTests
                 empty.Key, empty.Changes, empty.Secrets);
             Check(noChanges.Code == ConfigurationResultCode.NoChanges && noChanges.CurrentVersion.Value == initialVersion
                 && providers.Find("primary")?.SecretKeyRef == "env:QQCHAT_API_KEY", "all Keep cannot rewrite empty primary binding");
-            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 136
-                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 136
+            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 141
+                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 141
                 && !read.Fields.Any(rule => rule.Id is ConfigurationFieldId.AgentDevices or ConfigurationFieldId.AgentMaxQueued
                     or ConfigurationFieldId.AgentModel or ConfigurationFieldId.AgentTarget or ConfigurationFieldId.AgentTimeoutSeconds
                     or ConfigurationFieldId.AgentTools or ConfigurationFieldId.AgentWorkDir or ConfigurationFieldId.EnableHostAgent),
-                "actual 136 typed projection and descriptors");
+                "actual 141 typed projection and descriptors");
             Check(read.View!.Behavior.BotPersona.Visibility == FieldVisibility.Hidden
                 && !read.View.Behavior.BotPersona.TryGetEditableValue(out _)
                 && !JsonSerializer.Serialize(read).Contains(initial.BotPersona, StringComparison.Ordinal), "Overview drops raw editable value");
@@ -991,7 +991,7 @@ internal static class ConfigurationContractTests
             var denied = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(denied.Code == ConfigurationResultCode.Forbidden && denied.View is null
                 && (await store.SaveAsync(caller, Request())).Code == ConfigurationResultCode.Forbidden, "trusted authorization denies forged flags");
-            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 13,
+            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 14,
                 "real adapter uses the sole bound Storage database");
             Console.WriteLine($"CFG_CHILD host passed={passed} failed=0");
             return 0;
@@ -1493,7 +1493,7 @@ internal static class ConfigurationContractTests
                 "real_settings_writes_retain_same_origin_gate");
             var initial = await Read();
             Check(initial.Status == 200 && initial.Body["code"]!.GetValue<int>() == 0
-                && initial.Body["fields"]!.AsArray().Count == 136 && initial.Body["version"] is JsonValue
+                && initial.Body["fields"]!.AsArray().Count == 141 && initial.Body["version"] is JsonValue
                 && initial.Body["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 10,
                 "actual_host_adopts_store_and_returns_versioned_editable_projection");
             http.DefaultRequestHeaders.Add("X-Panel-Token", "synthetic-http-panel-token");
@@ -4347,12 +4347,12 @@ internal static class ConfigurationContractTests
         void check(string name, bool condition) => report(condition, name);
         RegistryIsolation(check);
         var ids = Enum.GetValues<ConfigurationFieldId>();
-        check("configuration FieldIds are exactly 1..147",
-            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 147)));
+        check("configuration FieldIds are exactly 1..152",
+            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 152)));
         var partitions = new[] { typeof(AgentChanges), typeof(BehaviorChanges), typeof(ModelChanges),
             typeof(MusicChanges), typeof(PlatformChanges), typeof(ReportingChanges), typeof(VoiceChanges) };
-        check("configuration seven partitions cover all 136 direct fields",
-            partitions.Sum(t => t.GetProperties().Length) == 136);
+        check("configuration seven partitions cover all 141 direct fields",
+            partitions.Sum(t => t.GetProperties().Length) == 141);
         foreach (var type in partitions)
         {
             var view = type.Assembly.GetType(type.FullName!.Replace("Changes", "View"))!;
@@ -4485,8 +4485,8 @@ internal static class ConfigurationContractTests
         }
         var empty = Parse(new JsonObject());
         var scalar = Edits(empty).Where(x => x.Name is not ("AgentDevices" or "PlatformPolicies")).ToArray();
-        check("configuration legacy mapper exactly 135 scalar fields with missing Keep",
-            scalar.Length == 135 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
+        check("configuration legacy mapper exactly 140 scalar fields with missing Keep",
+            scalar.Length == 140 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
                 && Edits(empty).All(x => Kind(x.Edit) == EditKind.Keep));
         foreach (var field in scalar)
         {
@@ -4726,7 +4726,7 @@ internal static class ConfigurationContractTests
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant)));
             check("configuration activation rejects another participant", Throws<InvalidOperationException>(() =>
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant())));
-            check("configuration module migration preserves physical schema 13", AppDatabase.Scalar<long>("PRAGMA user_version") == 13
+            check("configuration module migration preserves physical schema 14", AppDatabase.Scalar<long>("PRAGMA user_version") == 14
                 && AppDatabase.GetMeta("configuration_schema") == "1");
             // #129 S3：空 instanceId 不是「野目标」，它本身就是内置驱动的身份
             // （qq.private / qq.official / local 三个驱动的 InstanceId 就是空串），所以冻结时原样保留；

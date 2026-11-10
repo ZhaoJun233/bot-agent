@@ -120,7 +120,12 @@ public readonly record struct PendingReply(
     long? TriggerMessageId,
     bool Proactive,
     bool MustPreserve,
-    BotAgent.Services.Qq.PlatformSourceLease? Source = null);
+    BotAgent.Services.Qq.PlatformSourceLease? Source = null,
+    PendingReplyIntent Intent = PendingReplyIntent.Ordinary);
+
+// Queue durability does not grant explicit admission. Accepted results also stay
+// separate from human input so mode changes cannot consume a human sequence.
+public enum PendingReplyIntent { Ordinary, Explicit, AcceptedResult }
 
 public enum PendingReplyOffer
 {

@@ -364,6 +364,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             }
             return ValueTask.FromResult(outcome);
         }
+        catch (PacingValueException ex)
+        {
+            return ValueTask.FromResult(new ConfigurationSaveResult(ConfigurationResultCode.ValidationFailed, false, null,
+                default, ImmutableArray.Create(new FieldError(new FieldAddress(ex.Field, null), ex.Code))));
+        }
         catch (Exception ex) when (ex is ArgumentException or JsonException or ObjectDisposedException or OverflowException)
         { return ValueTask.FromResult(Rejected(ConfigurationResultCode.ValidationFailed)); }
         finally { owned?.Dispose(); }
@@ -981,6 +986,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         var behavior = new BehaviorChanges
         {
             AiDesire = FreezeEdit(ConfigurationFieldId.AiDesire, behaviorSource.AiDesire, fields),
+            ReplyPacingEnabled = FreezeEdit(ConfigurationFieldId.ReplyPacingEnabled, behaviorSource.ReplyPacingEnabled, fields),
+            GroupInterjectionProbability = FreezeEdit(ConfigurationFieldId.GroupInterjectionProbability, behaviorSource.GroupInterjectionProbability, fields),
+            GroupInterjectionCooldownSeconds = FreezeEdit(ConfigurationFieldId.GroupInterjectionCooldownSeconds, behaviorSource.GroupInterjectionCooldownSeconds, fields),
+            GroupContinuationWaitSeconds = FreezeEdit(ConfigurationFieldId.GroupContinuationWaitSeconds, behaviorSource.GroupContinuationWaitSeconds, fields),
+            PrivateContinuationWaitSeconds = FreezeEdit(ConfigurationFieldId.PrivateContinuationWaitSeconds, behaviorSource.PrivateContinuationWaitSeconds, fields),
             AiModeEnabled = FreezeEdit(ConfigurationFieldId.AiModeEnabled, behaviorSource.AiModeEnabled, fields),
             ApprovalApprovers = FreezeEdit(ConfigurationFieldId.ApprovalApprovers, behaviorSource.ApprovalApprovers, fields),
             BotPersona = FreezeEdit(ConfigurationFieldId.BotPersona, behaviorSource.BotPersona, fields),
@@ -1126,6 +1136,12 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         return new(behavior, model, agent, platform, voice, music, reporting, registered);
     }
 
+    private sealed class PacingValueException(ConfigurationFieldId field, string code) : ArgumentException(code)
+    {
+        public ConfigurationFieldId Field { get; } = field;
+        public string Code { get; } = code;
+    }
+
     private static FieldEdit<T> FreezeEdit<T>(ConfigurationFieldId field, FieldEdit<T> edit,
         ImmutableArray<ConfigurationFieldId>.Builder fields)
     {
@@ -1139,6 +1155,13 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         }
         if (!edit.TryGetValue(out var value) || value is null) throw new ArgumentException("invalid_edit_value");
         var range = Range(field);
+        if (field is ConfigurationFieldId.GroupInterjectionProbability or ConfigurationFieldId.GroupInterjectionCooldownSeconds
+            or ConfigurationFieldId.GroupContinuationWaitSeconds or ConfigurationFieldId.PrivateContinuationWaitSeconds)
+        {
+            if (value is double seconds && !double.IsFinite(seconds)) throw new PacingValueException(field, "non_finite_number");
+            var pacingValue = value is int integer ? integer : Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            if (pacingValue < range.Min || pacingValue > range.Max) throw new PacingValueException(field, "out_of_range");
+        }
         if (value is int number && (number < range.Min || number > range.Max)) throw new ArgumentException("out_of_range");
         if (value is double fraction && (!double.IsFinite(fraction) || fraction < range.Min || fraction > range.Max))
             throw new ArgumentException("out_of_range");
@@ -1155,6 +1178,10 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.AgentServerMaxSteps => (1, 30),
         ConfigurationFieldId.AgentTimeoutSeconds => (30, 7200),
         ConfigurationFieldId.AiDesire => (0, 100),
+        ConfigurationFieldId.GroupInterjectionProbability => (0, 100),
+        ConfigurationFieldId.GroupInterjectionCooldownSeconds => (0, 3600),
+        ConfigurationFieldId.GroupContinuationWaitSeconds => (0, 30),
+        ConfigurationFieldId.PrivateContinuationWaitSeconds => (0, 30),
         ConfigurationFieldId.DefaultTemperature => (0.0, 2.0),
         ConfigurationFieldId.DefaultTopP => (0.0, 1.0),
         ConfigurationFieldId.EmotionalTemperature => (0.0, 2.0),
@@ -1450,6 +1477,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.PanelDeployEnabled, patch.Agent!.PanelDeployEnabled);
         Add(ConfigurationFieldId.PanelDeployUrl, patch.Agent!.PanelDeployUrl);
         Add(ConfigurationFieldId.AiDesire, patch.Behavior!.AiDesire);
+        Add(ConfigurationFieldId.ReplyPacingEnabled, patch.Behavior!.ReplyPacingEnabled);
+        Add(ConfigurationFieldId.GroupInterjectionProbability, patch.Behavior!.GroupInterjectionProbability);
+        Add(ConfigurationFieldId.GroupInterjectionCooldownSeconds, patch.Behavior!.GroupInterjectionCooldownSeconds);
+        Add(ConfigurationFieldId.GroupContinuationWaitSeconds, patch.Behavior!.GroupContinuationWaitSeconds);
+        Add(ConfigurationFieldId.PrivateContinuationWaitSeconds, patch.Behavior!.PrivateContinuationWaitSeconds);
         Add(ConfigurationFieldId.AiModeEnabled, patch.Behavior!.AiModeEnabled);
         Add(ConfigurationFieldId.ApprovalApprovers, patch.Behavior!.ApprovalApprovers);
         Add(ConfigurationFieldId.BotPersona, patch.Behavior!.BotPersona);

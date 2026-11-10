@@ -32,6 +32,11 @@ public sealed class AgentChanges
 public sealed class BehaviorChanges
 {
     public FieldEdit<int> AiDesire { get; init; }
+    public FieldEdit<bool> ReplyPacingEnabled { get; init; }
+    public FieldEdit<int> GroupInterjectionProbability { get; init; }
+    public FieldEdit<int> GroupInterjectionCooldownSeconds { get; init; }
+    public FieldEdit<int> GroupContinuationWaitSeconds { get; init; }
+    public FieldEdit<double> PrivateContinuationWaitSeconds { get; init; }
     public FieldEdit<bool> AiModeEnabled { get; init; }
     public FieldEdit<string> ApprovalApprovers { get; init; }
     public FieldEdit<string> BotPersona { get; init; }

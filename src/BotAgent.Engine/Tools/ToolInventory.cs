@@ -83,7 +83,7 @@ public sealed class ToolInventory
         if (summary.Length == 0) summary = "MCP 工具（无描述）";
         return new ToolSpec(
             info.QualifiedName,
-            ToolCategory.RemoteAgent,
+            info.IsLocalProcess ? ToolCategory.FileOrShell : ToolCategory.RemoteAgent,
             summary,
             info.ReadOnlyHint,
             "mcp",

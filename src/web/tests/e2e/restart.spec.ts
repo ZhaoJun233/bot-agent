@@ -108,7 +108,7 @@ async function openConfiguration(page: Page): Promise<void> {
   await expect(page.getByTestId('overview')).toBeVisible({ timeout: 15_000 })
   await page.getByTestId('nav-configuration').click()
   await expect(page.getByTestId('config-fields')).toBeVisible()
-  await page.getByTestId('config-nav-behavior').click()
+  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
 }
 
 test.describe.configure({ mode: 'serial' })

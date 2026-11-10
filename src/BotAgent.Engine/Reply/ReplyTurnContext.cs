@@ -30,6 +30,7 @@ namespace BotAgent.Services.Reply;
 internal sealed class ReplyTurnContext
 {
     private readonly IProfileRepository _profiles;
+    private readonly Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? _memoryParticipant;
     private readonly VibeTracker _vibes;
     private readonly StickerService _stickers;
     private readonly MemberRoleUseCase _roles;
@@ -57,9 +58,11 @@ internal sealed class ReplyTurnContext
         ReplyInboundMedia media,
         ReplyHooks hooks,
         Func<string, bool> allowsFeature,
-        Action<BotConversation, bool> setThinking)
+        Action<BotConversation, bool> setThinking,
+        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null)
     {
         _profiles = profiles;
+        _memoryParticipant = memoryParticipant;
         _vibes = vibes;
         _stickers = stickers;
         _roles = roles;
@@ -86,9 +89,12 @@ internal sealed class ReplyTurnContext
         AppSettings snapshot,
         Domain.Permissions.ChatCapabilitySet caps,
         EffectivePlatformPolicy platformPolicy,
-        bool proactive)
+        bool proactive,
+        IPacedReplyAttempt? pacing = null)
     {
-        var context = conversation.TakeLast(snapshot.MaxContextMessages);
+        var context = pacing is null
+            ? conversation.TakeLast(snapshot.MaxContextMessages)
+            : conversation.Messages.Where(m => m.Seq <= pacing.Sequence).TakeLast(snapshot.MaxContextMessages).ToList();
         if (context.Count == 0)
         {
             return null;   // 上下文空 = 没什么可回的（与改造前一致：直接结束这一轮）
@@ -114,12 +120,11 @@ internal sealed class ReplyTurnContext
 
         foreach (var uid in recentSenders)
         {
-            var summary = _profiles.GetProfileSummary(
-                uid.ToString(),
-                isGroupScope ? scopeGroupId : 0,
-                snapshot.ProfileSummaryLines,
-                contextOldestSeq,
-                contextOldestUnix);
+            var participant = PlatformSourceExecution.Current is { } source ? _memoryParticipant?.Invoke(source, uid) : null;
+            string ReadProfile(string profileKey) => _profiles.GetProfileSummary(profileKey,
+                isGroupScope ? scopeGroupId : 0, snapshot.ProfileSummaryLines, contextOldestSeq, contextOldestUnix);
+            var summary = UnifiedMemoryTurn.Current is { } memory
+                ? memory.ReadLegacyProfile(participant, ReadProfile) : ReadProfile(uid.ToString());
 
             if (string.IsNullOrWhiteSpace(summary))
             {
@@ -133,6 +138,13 @@ internal sealed class ReplyTurnContext
 
             profiles.Add(summary);
             profileChars += summary.Length;
+        }
+
+        var memoryPrompt = UnifiedMemoryTurn.Current?.ReadPrompt(string.Join(" ", context.TakeLast(3).Select(m => m.Text)));
+        if (!string.IsNullOrEmpty(memoryPrompt))
+        {
+            profiles.Add(memoryPrompt);
+            profileChars += memoryPrompt.Length;
         }
 
         var started = EngineClock.LocalDateTime;
@@ -184,13 +196,18 @@ internal sealed class ReplyTurnContext
         var moodText = pokeContext || _mood.CurrentText(moodNow) is not null ? _mood.Describe(moodNow) : null;
 
         // 刚“听过”的歌：把歌词与波形实测交给模型，用完就清（避免以后每轮都背上它）
-        var musicText = _allowsFeature(PluginGate.MusicCapability) ? _music.TakeNote(conversation.SourceKey) : null;
+        string? TakeNote(ReplyPacingPromptState.Note note, Func<string?> take) =>
+            pacing is null ? take() : pacing.PromptState.TakeOnce(note, take);
+        var musicText = TakeNote(ReplyPacingPromptState.Note.Music,
+            () => _allowsFeature(PluginGate.MusicCapability) ? _music.TakeNote(conversation.SourceKey) : null);
 
         // 刚有人撤回了消息：把这件事告诉模型（但不告诉它撤回了什么）——用完就清
-        var recallText = _recallNotes.TryRemove(conversation.SourceKey, out var pendingRecall) ? pendingRecall : null;
+        var recallText = TakeNote(ReplyPacingPromptState.Note.Recall,
+            () => _recallNotes.TryRemove(conversation.SourceKey, out var pendingRecall) ? pendingRecall : null);
 
         // 刚上网查到的资料 / 读到的页面正文：交给模型，用完就清
-        var searchText = _allowsFeature(PluginGate.WebSearchCapability) ? _research.TakeNote(conversation.SourceKey) : null;
+        var searchText = TakeNote(ReplyPacingPromptState.Note.Search,
+            () => _allowsFeature(PluginGate.WebSearchCapability) ? _research.TakeNote(conversation.SourceKey) : null);
 
         // 链接预览：给快站点 2.5 秒的机会当轮用上；太慢就先不等（完成后留给下一轮）
         if (_media.PendingLinkTask(conversation.SourceKey) is { } linkTask)
@@ -198,7 +215,7 @@ internal sealed class ReplyTurnContext
             await Task.WhenAny(linkTask, EngineClock.Delay(TimeSpan.FromMilliseconds(2500)));
         }
 
-        var linkText = _media.TakeLinkNote(conversation.SourceKey);
+        var linkText = TakeNote(ReplyPacingPromptState.Note.Link, () => _media.TakeLinkNote(conversation.SourceKey));
 
         return new TurnInputs(
             Started: started, Snapshot: snapshot, Caps: caps, PlatformPolicy: platformPolicy, Context: context, Profiles: profiles,

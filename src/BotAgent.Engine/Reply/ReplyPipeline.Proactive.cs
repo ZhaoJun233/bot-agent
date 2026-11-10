@@ -55,12 +55,14 @@ public sealed partial class ReplyPipeline
 
             var (isGroup, targetId) = conversation.Target;
             if (!(source is null ? _whitelist.AllowsKey(conversation.SourceKey)
-                    : _whitelist.AllowsSource(source.Context, isGroup, targetId)) || !AllowReply(conversation))
+                    : _whitelist.AllowsSource(source.Context, isGroup, targetId)) ||
+                (!_settings.ReplyPacingEnabled && !AllowReply(conversation)))
             {
                 continue;
             }
 
-            if (_lastProactive.TryGetValue(conversation.SourceKey, out var lastAt) && now - lastAt < cooldown)
+            if (!_settings.ReplyPacingEnabled &&
+                _lastProactive.TryGetValue(conversation.SourceKey, out var lastAt) && now - lastAt < cooldown)
             {
                 continue;
             }
@@ -89,6 +91,13 @@ public sealed partial class ReplyPipeline
             var burst = messages.Count(m => m.Role == MessageRole.Peer && now - m.Timestamp <= TimeSpan.FromMinutes(5)) >= ProactiveBurstMessages;
             if (!caringMoment && !burst)
             {
+                continue;
+            }
+
+            if (_settings.ReplyPacingEnabled)
+            {
+                // Same human context is one opportunity, even across repeated timer ticks.
+                RequestReply(conversation, null, proactive: true);
                 continue;
             }
 

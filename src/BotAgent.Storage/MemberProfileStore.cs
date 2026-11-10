@@ -1,4 +1,5 @@
 using System.Text;
+using BotAgent.Domain.Memory;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Profiles;
 using BotAgent.Services;
@@ -350,7 +351,7 @@ public class MemberProfileStore : IProfileRepository
                 return string.Empty;
             }
 
-            var header = $"{name}（QQ:{uid}）";
+            var header = LegacyProfileScopeKey.IsScopedKey(uid) ? (name == uid ? "成员" : name) : $"{name}（QQ:{uid}）";
             var sb = new StringBuilder();
 
             // 第一段：长期画像（人工设定覆盖优先，否则为模型压缩）

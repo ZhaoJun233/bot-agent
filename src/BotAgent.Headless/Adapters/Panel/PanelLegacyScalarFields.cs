@@ -38,6 +38,11 @@ internal static class PanelLegacyScalarFields
         => new()
         {
             AiDesire = PanelLegacyFieldEdits.LegacyField(body, "aiDesire", node => Math.Clamp(node.GetValue<int>(), 0, 100)),
+            ReplyPacingEnabled = PanelLegacyFieldEdits.LegacyField(body, "replyPacingEnabled", node => node.GetValue<bool>()),
+            GroupInterjectionProbability = PanelLegacyFieldEdits.LegacyField(body, "groupInterjectionProbability", node => node.GetValue<int>()),
+            GroupInterjectionCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "groupInterjectionCooldownSeconds", node => node.GetValue<int>()),
+            GroupContinuationWaitSeconds = PanelLegacyFieldEdits.LegacyField(body, "groupContinuationWaitSeconds", node => node.GetValue<int>()),
+            PrivateContinuationWaitSeconds = PanelLegacyFieldEdits.LegacyField(body, "privateContinuationWaitSeconds", node => node.GetValue<double>()),
             AiModeEnabled = PanelLegacyFieldEdits.LegacyField(body, "aiModeEnabled", node => node.GetValue<bool>()),
             ApprovalApprovers = PanelLegacyFieldEdits.LegacyField(body, "approvalApprovers", node => PanelLegacyFieldEdits.LegacyTruncate((node.GetValue<string>() ?? string.Empty).Trim(), 300)),
             BotPersona = PanelLegacyFieldEdits.LegacyField(body, "botPersona", node => node.GetValue<string>() ?? string.Empty),

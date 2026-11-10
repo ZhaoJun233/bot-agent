@@ -9,23 +9,25 @@
    ArchitectureProbe（`ReleaseGovernanceChecks`）与 CI 都会判红。
 2. **tag 即发布**：`vX.Y.Z` 必须与 `<Version>` 一致。CI 在 tag 构建上断言这件事，
    不一致就直接失败——所以「改版本号 → 打 tag」这个顺序不能反。
-3. **发布前留回滚点**：镜像 `qqchat-agent:prev` + 数据库快照（`VACUUM INTO`）。
+3. **部署前留回滚点**：镜像 `qqchat-agent:prev` + 数据库快照（`VACUUM INTO`）。
    详见 `docs/operations/rollback-playbook.md`，不要临时发明回滚方式。
+
+源码工作树与公开仓库分别记录提交。当前公开分支流程是：**源码提交 → 既有脱敏发布流程更新 dev → dev 到 main 的 PR → 公开提交上的版本 tag 与 Release**。`Zhaodev` 是历史分支，不再作为新版本发布入口。不能把私有源码分支或其 tag 直接推到公开仓库。
 
 ## 1. 发版步骤
 
 | # | 动作 | 检查点 |
 | --- | --- | --- |
-| 1 | 确认 `git status` 干净、目标提交已过 CI（9 项检查全绿） | `gh api repos/ZhaoJun233/bot-agent/commits/<sha>/check-runs` |
-| 2 | 改 `Directory.Build.props` 的 `<Version>` 为本次版本 | 形如 `1.3.0`，不带 `v`、不带后缀 |
-| 3 | 把 `CHANGELOG.md` 的 `[Unreleased]` 改成 `[X.Y.Z] - YYYY-MM-DD`，并新开一个空的 `[Unreleased]` | 段内按 Added / Changed / Fixed / Security 分组 |
-| 4 | 本地跑 `dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.ArchitectureProbe.dll` | 必须全绿（含版本单一真源、CHANGELOG、dependabot、镜像 digest 断言） |
-| 5 | 提交（提交信息写清版本与范围） | 不要夹带无关改动 |
-| 6 | `git tag vX.Y.Z && git push <远端> vX.Y.Z` | tag 推送会触发 CI（`on.push.tags: ['v*']`） |
-| 7 | 等 tag 构建的 `Build and synthetic probes` 绿 | 这一步就是在验证「tag 与 `<Version>` 一致、`--version` 与 props 一致」 |
-| 8 | 打 GitHub Release（正文可直接取 CHANGELOG 对应段） | `gh release create vX.Y.Z --notes-file ...` |
-| 9 | 同步公开快照：`python publish-qqchat.py --push --branch Zhaodev` | 脚本会做两道脱敏审计；**先 commit 再发布** |
-| 10 | 部署后用 `curl /healthz` 核对线上版本 | 返回 `{"status":"ok","version":"X.Y.Z"}`，与 tag 一致 |
+| 1 | 固定本次范围，完成实现；将 `Directory.Build.props` 的 `<Version>` 改为本次版本 | 形如 `1.4.0`，不带 `v`、不带后缀 |
+| 2 | 汇总 `CHANGELOG.md` 的 `[Unreleased]`，改成 `[X.Y.Z] - YYYY-MM-DD`，新开空的 `[Unreleased]` | 对外行为、依赖变化和范围限制写清；链接指向新版本 |
+| 3 | 构建当前候选并运行对应回归及 ArchitectureProbe | 探针由当前源码重建；保留原生命令退出码及版本、CHANGELOG、依赖检查结果 |
+| 4 | 提交源码，确认工作树干净，执行工作区的 `push-desensitized.py --branch dev` 流程 | 指定正确源码工作树；两道审计与发布后复核通过，记录源码和公开提交对应关系 |
+| 5 | 等公开 dev 对应提交的 9 项 CI 通过，提出 dev → main PR | 若 main 有新改动，先在候选中整合并重新验证；遵守审批和分支规则 |
+| 6 | PR 合入后核对公开 main 的内容、版本及 9 项 CI | 合并后的提交是发布依据，不能用合并前的检查代替 |
+| 7 | 在公开仓库克隆中给已验证的 main 提交创建 `vX.Y.Z` 并推送该 tag | tag 指向公开提交；已有同名 tag 不移动、不覆盖 |
+| 8 | 等该 tag 的 CI 通过，生成对应的 Linux x86_64 预构建产物和哈希清单 | tag、程序集版本、唯一版本源一致；服务器使用产物解压路线 |
+| 9 | 发布 GitHub Release，关联已有 tag、变更说明和产物 | 可用 `gh release create vX.Y.Z --verify-tag --notes-file ...`；正文不含内部运行材料 |
+| 10 | 留存回退点并部署，核对 `/healthz`、`/readyz`、版本、资源与关键路径 | 线上版本与 tag 一致；记录实际采用的前端、后端及产物指纹 |
 
 > `/healthz` 的版本来自程序集（`PanelRoutes` 所在程序集的 `AssemblyVersion`），
 > `--version` 走同一条来源：两者一致不是运气，是同一个真源。
@@ -95,7 +97,7 @@ CI 的 `verify` job 每次都会产出 `dependency-snapshot` artifact（`dotnet 
 - [ ] `git status` 干净，tag 指向预期提交
 - [ ] `Directory.Build.props` 的 `<Version>` == tag（去掉 `v`）
 - [ ] `CHANGELOG.md` 有本次版本段 + 新开的 `[Unreleased]`
-- [ ] 22 个探针全绿（至少 ArchitectureProbe / SafetyProbe / ReviewRemediationProbe）
+- [ ] 当前 CI 注册的全部探针通过（包括 ArchitectureProbe / SafetyProbe / ReviewRemediationProbe）
 - [ ] 集成 harness 全绿（`通过 N，失败 0`）
 - [ ] 前端 `npm run typecheck && npm run test:unit` 通过
 - [ ] 已留回滚点（`qqchat-agent:prev` + 数据库快照）

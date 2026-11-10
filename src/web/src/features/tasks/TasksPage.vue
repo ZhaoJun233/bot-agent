@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   ZbaClient,
   ZbaRequestError,
+  classifyTaskSubmitFailure,
   type ZbaApprovalSummary,
   type ZbaTaskFindCode,
   type ZbaTaskResult,
@@ -17,7 +18,10 @@ import {
 import { registerAppResources } from '../../shared/sync/app-resources'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { newNonce, nowSeconds } from '../configuration/draft'
+import TaskRecoveryLookup from './TaskRecoveryLookup.vue'
+import { taskFindCodeLabels as findCodeLabels } from './task-find-labels'
 import {
   activePending,
   beginPending,
@@ -56,19 +60,6 @@ const stateTones: Record<number, string> = {
 /** 终态：只有这三个不需要继续核对。 */
 const terminalStates: number[] = [3, 4, 6]
 
-/**
- * 核对结论的文案。
- *
- * `unknown` 写的是"查不到"，不是"没有执行"：台账是内存的，重启/淘汰都会让
- * 记录消失，所以查不到只能证明"现在查不到"。
- */
-const findCodeLabels: Record<ZbaTaskFindCode, string> = {
-  found: '已找到受理记录',
-  expired: '受理回执已过期（服务端曾受理，任务记录已被清理）',
-  accepted_unknown: '已受理但结果未知（另一实例受理）',
-  unknown: '查不到受理记录（这不等于任务没有执行）'
-}
-
 /** 审批队列的一行；stale 阻止重放旧决定，unknown 不推断是否生效。 */
 interface ApprovalRow extends ZbaApprovalSummary {
   stale: boolean
@@ -88,6 +79,9 @@ const lastLoadedAt = ref<string | null>(null)
 const detail = ref<ZbaTaskResult | null>(null)
 const detailError = ref<UiError | null>(null)
 const detailBusy = ref(false)
+const cancelBusy = ref(false)
+const cancelError = ref<UiError | null>(null)
+let cancelSequence = 0
 const approvals = ref<ApprovalRow[]>([])
 const approvalsLoaded = ref(false)
 const approvalError = ref<UiError | null>(null)
@@ -353,22 +347,21 @@ function reconcileCancelMarks(): void {
  * 任务是否结束以资源读取为准（S3-07）。
  */
 async function cancelTask(task: ZbaTaskSummary): Promise<void> {
-  // 单飞：上一次取消/详情请求还没回来时不再发第二个写请求。
-  if (detailBusy.value) return
+  // 取消和结果读取分别管理在途状态；任一未完成时不再发送取消。
+  if (cancelBusy.value || detailBusy.value) return
   if (!canWrite.value) {
-    detailError.value = { code: 'read_only', message: '当前不是管理员模式，不能请求取消。' }
+    cancelError.value = { code: 'read_only', message: '当前不是管理员模式，不能请求取消。' }
     return
   }
   const client = props.client
   const epoch = ownership
   if (!ownedBy(epoch, client)) {
-    detailError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次取消没有发送。' }
+    cancelError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次取消没有发送。' }
     return
   }
-  // 单飞：取消请求在途时不再发第二次（按钮同时按 detailBusy 禁用）。
-  if (detailBusy.value) return
-  detailBusy.value = true
-  detailError.value = null
+  const sequence = ++cancelSequence
+  cancelBusy.value = true
+  cancelError.value = null
   try {
     const result = await client.cancelTask(task.id)
     if (!ownedBy(epoch, client)) return
@@ -384,7 +377,7 @@ async function cancelTask(task: ZbaTaskSummary): Promise<void> {
       return next
     })
     if (result.outcome !== 'requested' && !result.cancellationRequested) {
-      detailError.value = {
+      cancelError.value = {
         code: 'cancel_' + result.outcome,
         message: '服务端没有登记这次取消（结果：' + result.outcome + '）；当前状态为 ' + stateLabel(result.state) + '。'
       }
@@ -394,10 +387,10 @@ async function cancelTask(task: ZbaTaskSummary): Promise<void> {
     // 迟到的旧身份回包不能锁掉新会话：先核对所有权，再决定要不要报认证失效。
     if (!ownedBy(epoch, client)) return
     if (reportAuthFailure(cause)) return
-    detailError.value = toUiError(cause)
+    cancelError.value = toUiError(cause)
   } finally {
-    // busy 是界面标记，不属于任何写意图：无论所有权如何都要释放，否则会卡住。
-    detailBusy.value = false
+    // 只释放本次取消；旧会话的回包不改变新会话的在途状态。
+    if (sequence === cancelSequence) cancelBusy.value = false
   }
 }
 
@@ -543,6 +536,8 @@ const prompt = ref('')
 const sessionId = ref('')
 const sourceKey = ref('')
 const timeoutSeconds = ref(120)
+const hasDraft = computed(() => Boolean(prompt.value || sessionId.value || sourceKey.value) || timeoutSeconds.value !== 120)
+useDraftProtection(() => hasDraft.value || livePending.value !== null)
 let draftRevision = 0
 watch([prompt, sourceKey, sessionId, timeoutSeconds], () => { draftRevision += 1 }, { flush: 'sync' })
 const submitBlockedNote = ref<string | null>(null)
@@ -621,21 +616,8 @@ function newRecordId(): string {
  * - `idempotency_unverifiable`（409）：持久回执证明这个键**曾经被受理**，
  *   只是已经无法核对——换键重提就是第二次执行。
  */
-const UNVERIFIABLE_CODES = new Set(['idempotency_unverifiable', 'invalid_json'])
-const AMBIGUOUS_STATUSES = new Set([408, 409, 429])
-
 function classifySubmitFailure(cause: unknown): SubmissionPhase {
-  if (cause instanceof ZbaRequestError) {
-    if (cause.status >= 500) return 'unknown'
-    if (cause.status >= 200 && cause.status < 300) return 'unknown'
-    if (UNVERIFIABLE_CODES.has(cause.code)) return 'unknown'
-    // 408 超时、409 冲突、429 限流都不能证明服务端没有建任务（可能是网关/重放层回的）。
-    if (AMBIGUOUS_STATUSES.has(cause.status)) return 'unknown'
-    if (cause.status >= 400 && cause.status < 500) return 'rejected'
-    return 'unknown'
-  }
-  // ZbaNetworkError（超时、连接重置）与任何其它异常：请求可能已到达服务端。
-  return 'unknown'
+  return classifyTaskSubmitFailure(cause)
 }
 
 async function submit(): Promise<void> {
@@ -755,6 +737,13 @@ async function submit(): Promise<void> {
 }
 
 /** 用提交时的幂等键核对：不换键、不重提。 */
+function reconcileRecoveredSubmission(key: string, task: ZbaTaskSummary): void {
+  const pending = pendingByKey(key)
+  if (pending?.service === serviceLabel(props.client) && pending.identity === props.client.identityLabel) {
+    settlePending(pending.token, 'resolved', task.id)
+  }
+}
+
 async function findSubmission(record: SubmissionRecord): Promise<void> {
   if (record.busy) return
   if (!canWrite.value) {
@@ -893,6 +882,9 @@ function syncSubmissionsWithRegistry(): void {
 
 function resetForSession(): void {
   ownership += 1
+  cancelSequence += 1
+  cancelBusy.value = false
+  cancelError.value = null
   // 旧 client 的读取结果一律作废：推进三条代数并释放 loading。
   loadSequence += 1
   approvalSequence += 1
@@ -982,6 +974,10 @@ watch(() => props.client, (value) => {
 /** 离开视图、退出管理员、写能力失效都让在途写请求永久失效。 */
 function abandonInFlight(): void {
   ownership += 1
+  // 已发送的决定仍可能生效；旧回执不再属于当前页面时，保留待核对状态。
+  for (const id of approvalBusy.value) {
+    markStale(id, '页面或写入状态已变化，这次决定的结果未知；请重新读取队列后再决定。', true, true)
+  }
 }
 
 watch(() => props.active, (value) => { if (value === false) abandonInFlight() })
@@ -1014,6 +1010,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   unmounted = true
   ownership += 1
+  cancelSequence += 1
+  cancelBusy.value = false
   // 只读序列同样要作废：在途的 listTasks/approvals/result 迟到时不得回填已清空的 refs
   // （LIFE-03）。推进代数后，它们的 finally 也不会再动下一代 loading。
   loadSequence += 1
@@ -1031,6 +1029,29 @@ onBeforeUnmount(() => {
   approvals.value = []
   detail.value = null
 })
+
+const observationExportError = ref(false)
+
+function exportTaskObservation(): void {
+  observationExportError.value = false
+  try {
+    const snapshot = props.client.getTaskObservation()
+    const blob = new Blob([JSON.stringify(snapshot, null, 2) + '\n'], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    try {
+      link.href = url
+      link.download = 'task-observation-' + snapshot.capturedAt.replace(/[:.]/g, '-') + '.json'
+      document.body.append(link)
+      link.click()
+    } finally {
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 0)
+    }
+  } catch {
+    observationExportError.value = true
+  }
+}
 
 defineExpose({
   reload: reloadAll,
@@ -1066,6 +1087,13 @@ defineExpose({
       </div>
     </header>
 
+    <details class="inline-notice" data-testid="task-observation">
+      <summary>本次任务统计</summary>
+      <p>仅统计本次连接发出的提交，刷新或切换身份后重新计数。未完成、无法核对和未测得的数据会单独注明。</p>
+      <button type="button" class="tonal" data-testid="task-observation-export" @click="exportTaskObservation">导出本次统计</button>
+      <p v-if="observationExportError" role="alert">统计文件未能导出，请重试。任务状态不受影响。</p>
+    </details>
+
     <p v-if="syncSnapshot.state === 'stale'" class="inline-notice warn" data-testid="task-sync-stale">
       事件同步没有追平（连续失败 {{ syncSnapshot.failures }} 次）；
       <template v-if="syncSnapshot.failedResource">
@@ -1089,6 +1117,14 @@ defineExpose({
     <p v-else-if="!props.writesEnabled" class="inline-notice bad" data-testid="task-write-disabled">
       契约不兼容，写入口已禁用；本页只展示当前任务。
     </p>
+
+    <TaskRecoveryLookup
+      :client="props.client"
+      :enabled="props.active && props.mode === 'admin' && props.writesEnabled"
+      @found="reconcileRecoveredSubmission"
+      @open-task="openDetail"
+      @auth-expired="emit('auth-expired', $event)"
+    />
 
     <ErrorNotice :error="error" title="读取任务失败" />
     <ErrorNotice :error="pageError" title="加载下一页失败" />
@@ -1294,6 +1330,7 @@ defineExpose({
         </div>
         <p class="task-history-meta">当前已载入 {{ tasks.length }} 项 · 进行中 {{ activeTasks.length }}</p>
       </div>
+    <ErrorNotice :error="cancelError" title="取消请求反馈" data-testid="task-cancel-feedback" />
     <p v-if="loading && tasks.length === 0" class="empty-state" data-testid="task-loading">正在读取任务…</p>
     <p v-else-if="!error && tasks.length === 0" class="empty-state" data-testid="task-empty">还没有任务。</p>
     <div v-else class="task-list">
@@ -1329,7 +1366,7 @@ defineExpose({
             type="button"
             class="tonal"
             :data-testid="'task-cancel-' + task.id"
-            :disabled="!canWrite || detailBusy"
+            :disabled="!canWrite || cancelBusy || detailBusy"
             @click="cancelTask(task)"
           >
             请求取消

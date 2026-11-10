@@ -82,13 +82,14 @@ internal static partial class CompositionRoot
             platformPolicies: a.PlatformPolicies,
             inboundDedup: a.InboundDedup,
             plugins: a.PluginGate,
-            background: a.Background, replyPolicies: new PluginReplyPolicies(a.Plugins));
+            background: a.Background, replyPolicies: new PluginReplyPolicies(a.Plugins),
+            unifiedMemory: a.UnifiedMemory, memoryCommand: a.MemoryCommands.TryHandle, memoryParticipant: MemoryParticipant);
         a.Poke.RequestReply = conversation => a.Reply.RequestReply(conversation, null);
 
         // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）
         a.Scheduler = new BotScheduler(a.Box, a.Source, a.Profiles, a.Brain, a.Reply, a.Stickers, a.Ui,
             new BotSchedulerHooks(Log: a.Ui.EmitLog, IsDisposed: () => a.Lifetime.IsDisposed),
-            a.PluginGate.Allows);
+            a.PluginGate.Allows, unifiedMemory: a.UnifiedMemory);
 
         // 配置热更新的扇出（面板保存设置 / 一键部署记住产物地址）：顺序在它内部，见 SettingsHotReload
         a.HotReload = new SettingsHotReload(a.Box, a.SettingsStore, a.Approvals, a.Participation, a.Whitelist,

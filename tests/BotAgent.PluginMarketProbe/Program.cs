@@ -17,7 +17,7 @@ Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", root);
 Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
 Environment.SetEnvironmentVariable("BOTAGENT_FILE_LOG", "0");
 Environment.SetEnvironmentVariable("QQCHAT_FILE_LOG", "0");
-Environment.SetEnvironmentVariable("BOTAGENT_PLUGIN_CATALOG_URL", "https://example.com/market/index.json");
+Environment.SetEnvironmentVariable("BOTAGENT_PLUGIN_CATALOG_URL", "https://raw.githubusercontent.com/example/market/main/index.json");
 
 var checks = 0;
 void Check(bool value, string label)
@@ -94,26 +94,26 @@ try
 
     // ── 索引解析 ──
     http.Text = Index(manifest);
-    var parsed = await catalog.ReadAsync("https://example.com/market/index.json", CancellationToken.None);
+    var parsed = await catalog.ReadAsync("https://raw.githubusercontent.com/example/market/main/index.json", CancellationToken.None);
     Check(parsed.Count == 1 && parsed[0].Id == manifest.Id, "catalog_parses_pascal_case_index");
     await ExpectCode(() => catalog.ReadAsync("http://example.com/market/index.json", CancellationToken.None),
         "plugin_catalog_source_invalid", "catalog_rejects_http");
     await ExpectCode(() => catalog.ReadAsync("https://127.0.0.1/market/index.json", CancellationToken.None),
         "plugin_catalog_source_invalid", "catalog_rejects_loopback");
     http.Text = "{\"SchemaVersion\":1,\"Plugins\":[],\"Extra\":1}";
-    await ExpectCode(() => catalog.ReadAsync("https://example.com/market/index.json", CancellationToken.None),
+    await ExpectCode(() => catalog.ReadAsync("https://raw.githubusercontent.com/example/market/main/index.json", CancellationToken.None),
         "plugin_catalog_malformed", "catalog_rejects_unknown_field");
     http.Text = "{\"SchemaVersion\":2,\"Plugins\":[]}";
-    await ExpectCode(() => catalog.ReadAsync("https://example.com/market/index.json", CancellationToken.None),
+    await ExpectCode(() => catalog.ReadAsync("https://raw.githubusercontent.com/example/market/main/index.json", CancellationToken.None),
         "plugin_catalog_malformed", "catalog_rejects_schema_version");
     http.Text = Index(manifest, manifest with { Version = "1.0.1" });
-    await ExpectCode(() => catalog.ReadAsync("https://example.com/market/index.json", CancellationToken.None),
+    await ExpectCode(() => catalog.ReadAsync("https://raw.githubusercontent.com/example/market/main/index.json", CancellationToken.None),
         "plugin_catalog_malformed", "catalog_rejects_duplicate_id");
     http.Text = Index(manifest with { Version = "latest" });
-    await ExpectCode(() => catalog.ReadAsync("https://example.com/market/index.json", CancellationToken.None),
+    await ExpectCode(() => catalog.ReadAsync("https://raw.githubusercontent.com/example/market/main/index.json", CancellationToken.None),
         "plugin_catalog_malformed", "catalog_rejects_floating_version");
     http.Status = HttpStatusCode.NotFound;
-    await ExpectCode(() => catalog.ReadAsync("https://example.com/market/index.json", CancellationToken.None),
+    await ExpectCode(() => catalog.ReadAsync("https://raw.githubusercontent.com/example/market/main/index.json", CancellationToken.None),
         "plugin_catalog_unavailable", "catalog_reports_unavailable");
     http.Status = HttpStatusCode.OK;
 
@@ -123,6 +123,14 @@ try
     Check(empty.Plugins.Count == 1 && empty.Plugins[0].Status == PluginMarketService.StatusNotInstalled,
         "catalog_entry_not_installed");
     Check(empty.TrustNotice.Contains("沙箱", StringComparison.Ordinal), "catalog_states_no_sandbox");
+    http.PythonRepository = Index(manifest);
+    try
+    {
+        await market.ReadCatalogAsync(null, null, CancellationToken.None);
+        throw new InvalidOperationException("present malformed optional Python feed must fail closed");
+    }
+    catch (ZbaBackendException ex) when (ex.Code == "invalid-python-repository") { checks++; }
+    http.PythonRepository = null;
     var filtered = await market.ReadCatalogAsync("nomatch", null, CancellationToken.None);
     Check(filtered.Plugins.Count == 0, "catalog_query_filters");
     var installedEmpty = await market.ReadInstalledAsync(CancellationToken.None);
@@ -132,11 +140,11 @@ try
     http.Bytes = package;
     http.Text = Index(manifest);
     var revision = (await market.ReadCatalogAsync(null, null, CancellationToken.None)).Revision;
-    var install = await market.InstallAsync(new ZbaPluginMutationRequest(manifest, revision, "plugin:install:probe-1", true),
+    var install = await market.InstallWithJsonPreviewAsync(new ZbaPluginMutationRequest(manifest, revision, "plugin:install:probe-1", true),
         "probe", CancellationToken.None);
     Check(install.Operation.Status == PluginMarketService.StatusRestartRequired
         && install.Operation.RestartRequired, "install_stages_restart_required");
-    var replay = await market.InstallAsync(new ZbaPluginMutationRequest(manifest, "stale", "plugin:install:probe-1", true),
+    var replay = await market.InstallWithJsonPreviewAsync(new ZbaPluginMutationRequest(manifest, "stale", "plugin:install:probe-1", true),
         "probe", CancellationToken.None);
     Check(replay.Operation.Id == install.Operation.Id && replay.Revision == install.Revision,
         "install_replay_returns_same_receipt_before_revision_check");
@@ -159,16 +167,16 @@ try
     // ── 代际冲突与失败回执 ──
     try
     {
-        await market.InstallAsync(new ZbaPluginMutationRequest(manifest, "stale-revision", "plugin:install:probe-2", true),
+        await market.InstallWithJsonPreviewAsync(new ZbaPluginMutationRequest(manifest, "stale-revision", "plugin:install:probe-2", true),
             "probe", CancellationToken.None);
         throw new InvalidOperationException("expected revision conflict");
     }
-    catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_revision_conflict") { checks++; }
+    catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_preview_refresh_required") { checks++; }
 
     http.Bytes = Zip("probe.dll", Encoding.UTF8.GetBytes("different"));
-    var badManifest = manifest with { Sha256 = new string('b', 64) };
+    var badManifest = manifest with { Id = "probe.hash.failure", Sha256 = new string('b', 64) };
     var currentRevision = (await market.ReadCatalogAsync(null, null, CancellationToken.None)).Revision;
-    var failed = await market.InstallAsync(new ZbaPluginMutationRequest(badManifest, currentRevision,
+    var failed = await market.InstallWithJsonPreviewAsync(new ZbaPluginMutationRequest(badManifest, currentRevision,
         "plugin:install:probe-3", true), "probe", CancellationToken.None);
     Check(failed.Operation.Status == PluginMarketService.StatusFailed
         && failed.Operation.ErrorCode == "plugin_package_invalid", "hash_mismatch_yields_failed_receipt");
@@ -269,8 +277,9 @@ try
     catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_source_not_found") { checks++; }
 
     // ── 卸载 ──
+    await LifecycleTestRequests.Settle(packages, manifest.Id);
     var uninstallRevision = (await market.ReadCatalogAsync(null, null, CancellationToken.None)).Revision;
-    var uninstall = await market.UninstallAsync(manifest.Id,
+    var uninstall = await market.UninstallWithLifecyclePreviewAsync(manifest.Id,
         new ZbaPluginUninstallRequest(uninstallRevision, "plugin:uninstall:probe-1"), "probe", CancellationToken.None);
     Check(uninstall.Operation.Kind == "uninstall" && uninstall.Operation.RestartRequired, "uninstall_stages_restart");
     var pendingRemoval = await market.ReadInstalledAsync(CancellationToken.None);
@@ -283,10 +292,19 @@ try
             CancellationToken.None);
         throw new InvalidOperationException("expected not installed");
     }
-    catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_not_installed") { checks++; }
+    catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_preview_required") { checks++; }
 
     checks += await Program.RunReviewPluginRegressionAsync(root);
     checks += await Program.RunHotReloadRegressionAsync(root);
+    checks += await Program.RunImportRegressionChecks(root);
+    checks += await Program.RunLifecycleAdmissionChecks(root);
+    checks += await Program.RunLifecyclePreservationChecks(root);
+    checks += await Program.RunLifecycleRecoveryChecks(root);
+    checks += await Program.RunLifecycleRuntimeChecks(root);
+    checks += await Program.RunLifecycleSourceChecks(root);
+    checks += await Program.RunLifecycleGateChecks(root);
+    checks += await Program.RunConfigurationInstallChecks(root);
+    checks += await Program.RunGovernanceRegressionChecks(root);
     Console.WriteLine($"PASS plugin market probe: {checks} checks");
 }
 finally
@@ -309,6 +327,7 @@ internal sealed class SyntheticMarketPlugin : IBotPlugin
 internal sealed class ScriptedHttp : IHttpFetcher
 {
     public string Text { get; set; } = string.Empty;
+    public string? PythonRepository { get; set; }
     public byte[] Bytes { get; set; } = Array.Empty<byte>();
     public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
     public int Calls { get; private set; }
@@ -321,6 +340,13 @@ internal sealed class ScriptedHttp : IHttpFetcher
         CancellationToken ct = default)
     {
         Calls++;
+        // Legacy-only fixtures have no optional Python documents: model HTTP 404, not index aliasing.
+        var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+        if (path.EndsWith("/python-repository.json", StringComparison.Ordinal))
+            return Task.FromResult(new HttpResponseMessage(PythonRepository is null ? HttpStatusCode.NotFound : Status)
+                { Content = new StringContent(PythonRepository ?? string.Empty) });
+        if (path.EndsWith("/python-presentation.json", StringComparison.Ordinal))
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         // 市场索引与包下载走同一个假客户端：按 URL 区分，绝不把 ZIP 当成索引解析。
         var isDownload = request.RequestUri?.AbsolutePath.Contains("/releases/download/", StringComparison.Ordinal) == true;
         var content = new ByteArrayContent(isDownload && Bytes.Length > 0 ? Bytes : Encoding.UTF8.GetBytes(Text));

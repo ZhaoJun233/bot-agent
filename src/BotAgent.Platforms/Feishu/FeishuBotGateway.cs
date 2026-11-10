@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
@@ -11,6 +12,7 @@ using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Platforms;
+using BotAgent.Domain.Reply;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Qq;
 using BotAgent.Services;
@@ -25,7 +27,7 @@ public sealed record FeishuOutboxItem(long MessageId, string SourceKey, string T
 /// <summary>
 /// 飞书平台网关与适配器（阶段 4：首个非 QQ 外部平台）。
 /// </summary>
-public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatformMessenger, IPlatformInboundChatSource, IFeishuTargetMap, IDisposable
+public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatformMessenger, IPlatformInboundChatSource, IFeishuTargetMap, IStagedReplyChatSource, IDisposable
 {
     private const int OutboxCapacity = 200;
     private const int SeenCapacity = 500;
@@ -446,6 +448,8 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
             return DeliveryResult.Rejected("bad_request");
         }
 
+        using var destination = MemoryUseScope.EnterDestination(
+            new(Context.PlatformId, Context.AccountScope, Context.InstanceId), message.Target);
         var expectedPlatform = PlatformId.Normalize(Context.PlatformId);
         if (string.IsNullOrWhiteSpace(context.PlatformId) || string.IsNullOrWhiteSpace(message.Target.PlatformId)
             || !string.Equals(PlatformId.Normalize(context.PlatformId), expectedPlatform, StringComparison.Ordinal)
@@ -541,7 +545,19 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
                 LastErrorCode = "platform_policy_rejected";
                 return DeliveryResult.Rejected(LastErrorCode);
             }
-            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            using var commitValidation = ReplyCommitBoundary.EnterValidation(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var live = _box.Current;
+                var switches = PlatformSwitchSettings.Read(live, Context.PlatformId, Context.AccountScope);
+                if (settings != Snapshot(live) || !Configured(live) ||
+                    (!live.RuntimePlatformPolicies.HasValue && (!switches.Enabled || !switches.ChatEnabled)) ||
+                    !IsAllowed(live, isGroup, rawTarget))
+                    throw new OperationCanceledException("reply_commit_rejected");
+            });
+            // The token gate is already released. Waiting for quiet here cannot hold it.
+            await ReplyCommitBoundary.BeforeSendAsync().ConfigureAwait(false);
+            using var resp = await MemoryUseScope.UseForDelivery(() => _http.SendAsync(req, ct)).ConfigureAwait(false);
             var respText = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             JsonNode? respNode = null;
             try { respNode = JsonNode.Parse(respText); } catch (JsonException) { }
@@ -571,6 +587,10 @@ public sealed class FeishuBotGateway : IQqChatSource, IPlatformAdapter, IPlatfor
             while (_outbox.Count > OutboxCapacity) _outbox.TryDequeue(out _);
             _log?.Invoke($"[飞书] 消息已投递（目标长度={rawTarget.Length}，长度={message.Text.Length}）");
             return DeliveryResult.Ok(mid);
+        }
+        catch (OperationCanceledException) when (ReplyCommitBoundary.IsActive)
+        {
+            throw; // Scheduler control flow is not a transient platform failure.
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

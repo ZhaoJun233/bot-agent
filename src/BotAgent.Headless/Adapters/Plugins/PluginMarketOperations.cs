@@ -25,13 +25,14 @@ internal sealed class PluginMarketOperations
 
     internal async Task<ZbaPluginOperationResult> ExecuteAsync(PluginOperationReceiptStore receipts, string keyHash,
         string fingerprint, string caller, ZbaPluginOperation operation, Func<Task<string>> revision,
-        string expectedRevision, Func<Task> stage, CancellationToken ct)
+        string expectedRevision, Func<Task> stage, CancellationToken ct, Func<Task>? admit = null, Func<string?>? packageState = null)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var replay = receipts.Find(keyHash, fingerprint, caller);
             if (replay is not null) return replay;
+            if (admit is not null) await admit().ConfigureAwait(false);
             var before = await revision().ConfigureAwait(false);
             if (before != expectedRevision)
                 throw new ZbaBackendException(409, "plugin_revision_conflict", "插件目录已变化，请重新读取后再提交。");
@@ -57,7 +58,7 @@ internal sealed class PluginMarketOperations
 
         void Persist(ZbaPluginOperation result, string currentRevision)
         {
-            if (!receipts.TryAdd(keyHash, result, currentRevision, caller, fingerprint))
+            if (!receipts.TryAdd(keyHash, result, currentRevision, caller, fingerprint, packageState?.Invoke()))
                 throw new ZbaBackendException(503, "plugin_operation_unknown", "操作回执暂时无法持久化，请核对操作状态，不要换键重试。");
         }
     }

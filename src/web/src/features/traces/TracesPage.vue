@@ -163,7 +163,7 @@ defineExpose({ reload })
           还没有轨迹记录。机器人完成一轮对话后，这里会显示耗时与 token 形状。
         </p>
 
-        <div v-else class="traces-table-wrap">
+        <div v-else class="traces-table-wrap" role="region" aria-label="轨迹与用量明细，可横向滚动" tabindex="0">
           <table class="traces-table">
             <thead>
               <tr>
@@ -214,18 +214,18 @@ defineExpose({ reload })
 .traces-panel { display: flex; flex-direction: column; gap: 16px; }
 .traces-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .traces-kpi { display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-muted); }
-.traces-kpi > span { font-size: 11px; color: var(--text-soft); }
-.traces-kpi > strong { font: 600 22px/1.2 var(--font-display); letter-spacing: -.4px; overflow-wrap: anywhere; }
-.traces-kpi > p { margin: 0; font-size: 11px; color: var(--text-muted); }
+.traces-kpi > span { font-size: 0.75rem; color: var(--text-soft); }
+.traces-kpi > strong { font: 600 1.375rem/1.2 var(--font-display); letter-spacing: -.4px; overflow-wrap: anywhere; }
+.traces-kpi > p { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
 .traces-kpi--unknown { border-color: color-mix(in srgb, var(--warn-text) 28%, var(--border)); background: var(--warn-bg); }
 .traces-kpi--unknown > span, .traces-kpi--unknown > p { color: var(--warn-text); }
 .traces-table-wrap { overflow-x: auto; }
-.traces-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.traces-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
 .traces-table th { padding: 0 14px 10px 0; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .traces-table td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .traces-table tbody tr:last-child td { border-bottom: 0; }
 .trace-unknown { color: var(--text-soft); }
-.traces-foot { margin: 0; color: var(--text-soft); font-size: 11px; line-height: 1.8; }
+.traces-foot { margin: 0; color: var(--text-soft); font-size: 0.75rem; line-height: 1.8; }
 @media (max-width: 900px) { .traces-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .traces-kpis { grid-template-columns: 1fr; } .traces-actions { width: 100%; justify-content: space-between; } }
 </style>

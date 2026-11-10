@@ -1,3 +1,5 @@
+using BotAgent.Domain.Mcp;
+
 namespace BotAgent.Domain.Agent;
 
 /// <summary>
@@ -32,4 +34,7 @@ public sealed record AgentTaskRequest
     /// 运行时只透传，判定在<strong>执行前</strong>按“与配置白名单取交集”落地（作用域只能收窄，不能扩权）。
     /// </summary>
     public IReadOnlyList<string>? ToolScope { get; init; }
+
+    /// <summary>Host-captured local process identities; absent on legacy tasks means no Python authority.</summary>
+    public IReadOnlyList<McpToolInfo> PythonToolLeases { get; init; } = [];
 }

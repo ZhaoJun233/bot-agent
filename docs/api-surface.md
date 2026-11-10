@@ -13,7 +13,7 @@
 
 ---
 
-## 一、ZBA 契约（37 条，`/zba/v1/*`）
+## 一、ZBA 契约（44 条，`/zba/v1/*`）
 
 鉴权：`Authorization: Bearer <ZBA 令牌>`。作用域两档 —— `Read`（只读）与 `Admin`（写）。
 **默认失败关闭**：宿主没有配置 ZBA 令牌时，除 `/zba/v1/health` 外全部返回 503。
@@ -35,7 +35,7 @@
 | `POST` | `/zba/v1/capabilities/execute` | Admin · 需令牌 | `capabilities.execute` | 执行一个受支持的管理动作（写路径，受 scope 与幂等键约束） |
 | `POST` | `/zba/v1/capabilities/query` | Read · 需令牌 | `capabilities.query` | 按操作键查询一次管理动作的状态 |
 | `POST` | `/zba/v1/capabilities/cancel` | Admin · 需令牌 | `capabilities.cancel` | 请求取消一个管理动作（不承诺远端已停止） |
-| `POST` | `/zba/v1/configuration/read` | Read · 需令牌 | `configuration.read` | 读一份**已脱敏**的配置快照（秘密槽位只回形状） |
+| `POST` | `/zba/v1/configuration/read` | Read · 需令牌 | `configuration.read` | 读一份**已脱敏**的配置快照（秘密槽位只回形状）；可选 `runtimeEffects` 独立说明字段当前的生效状态 |
 | `POST` | `/zba/v1/configuration/save` | Admin · 需令牌 | `configuration.save` | 批量保存：必须带期望版本 + 幂等键，冲突即失败 |
 | `POST` | `/zba/v1/configuration/find` | Admin · 需令牌 | `configuration.find` | 按幂等键对账一次配置保存的最终状态 |
 | `GET` | `/zba/v1/tasks` | Read · 需令牌 | `tasks.list` | 列出 Agent 任务摘要（不含正文） |
@@ -49,16 +49,27 @@
 | `GET` | `/zba/v1/events` | Read · 需令牌 | `events.read` | 按序号读取有序事件；断档时必须 resync |
 | `GET` | `/zba/v1/traces` | Read · 需令牌 | `traces.list` | 最近若干轮轨迹的**形状**（条数 / token / 耗时 / 未知轮数）与缓存用量合计；**不含会话 key 与消息正文** |
 | `GET` | `/zba/v1/logs` | Read · 需令牌 | `logs.list` | 最近运行日志的**安全摘要**：固定组件名 + 固定摘要文案，未知行只给「已隐藏 + 原始字符数」；`limit` 1..600（默认 200），最新在前；**不含日志原文**（发言/成员/路径/URL/凭据均不出宿主） |
+| `GET` | `/zba/v1/logs/feed` | Read · 需令牌 | `logs.feed` | 有序安全摘要增量；仅接受可选不透明 `cursor`，首次取最近 200 条、之后每批最多 200 条，旧到新；独立 600 条缓冲，重启/过期/超前游标明确重置；不含原文，`no-store` |
 | `GET` | `/zba/v1/plugins/catalog` | Read · 需令牌 | `plugins.catalog` | 浏览已配置的插件市场目录 |
 | `GET` | `/zba/v1/plugins/installed` | Read · 需令牌 | `plugins.installed` | 列出已安装插件包与其真实状态 |
 | `POST` | `/zba/v1/plugins/sources/resolve` | Admin · 需令牌 | `plugins.sources.resolve` | 把一个**固定版本**的公开 GitHub release 解析成插件清单 |
-| `POST` | `/zba/v1/plugins/install` | Admin · 需令牌 | `plugins.install` | 暂存并热应用一次插件安装（失败时旧实例保持不变） |
-| `POST` | `/zba/v1/plugins/update` | Admin · 需令牌 | `plugins.update` | 暂存并热应用一次插件更新（失败时旧实例保持不变） |
-| `POST` | `/zba/v1/plugins/{id}/uninstall` | Admin · 需令牌 | `plugins.uninstall` | 暂存并热应用一次插件卸载（失败时旧实例保持不变） |
+| `POST` | `/zba/v1/plugins/source/discover` | Admin · 需令牌 | `plugins.source.discover` | 只读解析 GitHub 不可变提交，列出插件与版本候选；不下载 ZIP、不安装 |
+| `POST` | `/zba/v1/plugins/preview` | Admin · 需令牌 | `plugins.preview` | 对仓库候选、市场条目或技术 JSON 只读预览；返回调用者绑定的短期 previewId，不写设置或回执、不下载或执行包 |
+| `POST` | `/zba/v1/plugins/install` | Admin · 需令牌 | `plugins.install` | 以必填 previewId 确认同一完整候选，通过配置协调器保持停用后暂存并热应用安装 |
+| `POST` | `/zba/v1/plugins/lifecycle/preview` | Admin · 需令牌 | `plugins.lifecycle.preview` | 只读预览升级、上一版本回滚或卸载的完整差异、配置保留与依赖影响；不下载或执行包 |
+| `POST` | `/zba/v1/plugins/update` | Admin · 需令牌 | `plugins.update` | 以必填 previewId 确认固定升级候选，保留配置、用户数据与启用意图 |
+| `POST` | `/zba/v1/plugins/rollback` | Admin · 需令牌 | `plugins.rollback` | 确认 Previous 回滚或有失败回执依据的 Active 恢复，核验缓存后复用热应用／待重启路径 |
+| `POST` | `/zba/v1/plugins/{id}/uninstall` | Admin · 需令牌 | `plugins.uninstall` | 以必填 previewId 确认依赖影响，保留配置与用户数据后暂存卸载 |
 | `GET` | `/zba/v1/plugins/operations/{key}` | Read · 需令牌 | `plugins.operations.get` | 按幂等键读一次插件操作回执（含 `status` 与 `restartRequired`） |
 | `GET` | `/zba/v1/plugins/{id}/settings` | Read · 需令牌 | `plugins.settings.read` | 读插件声明的设置项（**不回显秘密值**） |
 | `PUT` | `/zba/v1/plugins/{id}/settings` | Admin · 需令牌 | `plugins.settings.save` | 按期望修订号保存插件设置 |
 | `GET` | `/zba/v1/providers/{key}/models` | Read · 需令牌 | `providers.models` | 发现某个已保存供应商路由的上游模型列表 |
+
+**安全导入迁移（#152 M2）**：新增只读发现与预览仍要求 Admin 身份。`previewId` 绑定完整技术清单、来源快照、调用者与安装状态代际，有效期 10 分钟；来源、候选、依赖或代际变化须重新预览。首次确认在回执预留和 ZIP 下载前校验预览；已完成的同幂等键请求优先回放原回执。新安装在发布 Pending 状态前通过既有配置协调器清除残留启用意图，之后须另行启用。停用不是进程隔离：加载程序集、模块初始化、构造器或属性访问仍可能执行第三方代码，权限声明不构成沙箱。旧 `plugins/sources/resolve` 仅保留只读单候选兼容，不能绕过预览。M2 当时未迁移更新协议；当前 M3 候选补充如下。
+
+**生命周期迁移（#152 M3，本地候选）**：升级、回滚和卸载都先走 `plugins/lifecycle/preview`；新写请求必须带同一 `previewId` 与显式风险确认，已完成旧请求仍优先回放原回执。预览绑定调用者、完整新旧清单、来源、安装修订、设置修订及启用意图；所有技术字段差异、精确版本依赖和反向依赖都须核对。普通回滚只接受安装记录中的 Previous 与已保存 ZIP；已知失败升级留下 Active + Pending 时，可显式预览恢复到仍可用的 Active，但必须绑定对应调用者的终态失败回执与同一包状态。首次安装失败、仅有 Pending 而无 Active 时，也保留显式预览卸载入口；只能凭同一调用者、同一包状态的终态失败依据确认，并标明未生效安装候选。缺失、过期、未知或进行中的依据不能授权清理；不自动丢弃 Pending。确认时重新核验本地缓存完整性，不把任意旧版本或孤立目录当成可回滚候选，也不把包回滚称为用户数据回滚。配置、秘密引用、用户数据及启用意图不被生命周期操作重写；已保存配置与目标 schema 不兼容时在暂存前阻断，不自动清空或强制迁移。新增 `previousManifest` / `pendingManifest` 仅来自本地安装记录；生命周期预览另绑定并显示当时的 Pending。缺失时不能推断支持普通回滚或失败恢复。生效结果仍以原生回执、安装状态及 `restartRequired` 为准；不自动重启，未知结果必须核对原操作键。
+
+**配置运行态元数据（#146）**：`configuration.read` 可选返回 `runtimeEffects` 数组；每项只有字段地址 `field`（含可选平台策略目标）、`state`（`current` / `restartRequired` / `applyFailed` / `unknown`）以及需重启时的 `restartTarget: "botAgent"`。不包含字段原值、密钥或异常正文，且只为该身份可见的字段提供状态。状态依据当前运行快照和已确认应用结果，不等同于最近一次保存回执；无关字段的成功保存不能清除待重启或应用失败状态。旧服务端缺失元数据、未来未知状态均显示待核对，不能推断为已生效。服务重启或配置改回运行值后，后续读取再确认状态。
 
 **断言**：`tests/BotAgent.ZbaProbe/Program.cs` 校验 OpenAPI 文档与上表的路由表一致 ——
 每条声明路由都出现在文档里、文档里没有多余路径、operationId 唯一、405/410/422 语义正确。

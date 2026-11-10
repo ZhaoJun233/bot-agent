@@ -44,7 +44,8 @@ internal sealed partial class ZbaHostBackend
         ConfigurationCaller caller, ZbaPluginMutationRequest request, CancellationToken ct = default)
     {
         using var scope = Authorize(caller, ConfigurationAccess.SaveConfiguration);
-        return await Market.InstallAsync(request, CallerScope(caller), ct).ConfigureAwait(false);
+        return await Market.InstallAsync(request, CallerScope(caller), ct,
+            token => PersistInstallDisabledAsync(caller, request.Manifest.Id, token)).ConfigureAwait(false);
     }
 
     public async ValueTask<ZbaPluginOperationResult> UpdatePluginAsync(

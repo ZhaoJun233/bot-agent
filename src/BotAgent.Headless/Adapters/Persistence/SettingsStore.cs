@@ -219,6 +219,11 @@ public sealed partial class SettingsStore : ISettingsRepository
         if (patch.Behavior is { } behavior)
         {
             ApplyScalar(behavior.AiDesire, value => next.AiDesire = value);
+            ApplyScalar(behavior.ReplyPacingEnabled, value => next.ReplyPacingEnabled = value);
+            ApplyScalar(behavior.GroupInterjectionProbability, value => next.GroupInterjectionProbability = value);
+            ApplyScalar(behavior.GroupInterjectionCooldownSeconds, value => next.GroupInterjectionCooldownSeconds = value);
+            ApplyScalar(behavior.GroupContinuationWaitSeconds, value => next.GroupContinuationWaitSeconds = value);
+            ApplyScalar(behavior.PrivateContinuationWaitSeconds, value => next.PrivateContinuationWaitSeconds = value);
             ApplyScalar(behavior.AiModeEnabled, value => next.AiModeEnabled = value);
             ApplyScalar(behavior.ApprovalApprovers, value => next.ApprovalApprovers = value);
             ApplyScalar(behavior.BotPersona, value => next.BotPersona = value);
@@ -372,9 +377,9 @@ public sealed partial class SettingsStore : ISettingsRepository
         IReadOnlySet<string> legacyProperties, Func<ConfigurationFieldId, ConfigurationValueSource> actualSource,
         Func<ConfigurationFieldId, FieldEffect> effect,
         ImmutableArray<PlatformPolicyEntryView> requestedPolicies, ImmutableArray<PlatformPolicyEntryView> effectivePolicies,
-        RegisteredConfigurationView registered)
+        RegisteredConfigurationView registered, ConfigurationRuntimeEffectCollector? runtimeEffects = null)
     {
-        var fields = new ConfigurationReadFields(connection, kind, latestApply, legacyProperties, actualSource, effect);
+        var fields = new ConfigurationReadFields(connection, kind, latestApply, legacyProperties, actualSource, effect, runtimeEffects);
         return new ConfigurationView(ProjectBehaviorView(user, effective, fields), ProjectModelView(user, effective, fields),
             ProjectAgentView(user, effective, fields),
             ProjectPlatformView(user, effective, fields, requestedPolicies, effectivePolicies),
@@ -459,51 +464,15 @@ public sealed partial class SettingsStore : ISettingsRepository
         return next;
     }
 
-    private sealed class ConfigurationReadFields
-    {
-        private readonly Microsoft.Data.Sqlite.SqliteConnection _connection;
-        private readonly ConfigurationReadKind _kind;
-        private readonly ApplyState _latestApply;
-        private readonly IReadOnlySet<string> _legacyProperties;
-        private readonly Func<ConfigurationFieldId, ConfigurationValueSource> _actualSource;
-        private readonly Func<ConfigurationFieldId, FieldEffect> _effect;
-
-        internal ConfigurationReadFields(Microsoft.Data.Sqlite.SqliteConnection connection,
-            ConfigurationReadKind kind, ApplyState latestApply, IReadOnlySet<string> legacyProperties,
-            Func<ConfigurationFieldId, ConfigurationValueSource> actualSource, Func<ConfigurationFieldId, FieldEffect> effect)
-        {
-            _connection = connection; _kind = kind; _latestApply = latestApply;
-            _legacyProperties = legacyProperties; _actualSource = actualSource; _effect = effect;
-        }
-        internal ReadField<T> Field<T>(ConfigurationFieldId id, T requested, T actual, string oldProperty,
-            string? displayOverride = null)
-        {
-            var present = _legacyProperties.Contains(oldProperty);
-            var state = ConfigurationBridge.ReadFieldState(_connection, id, present);
-            var source = _actualSource(id);
-            if (source == ConfigurationValueSource.UserConfiguration && !state.Tracked)
-                source = present ? ConfigurationValueSource.LegacyCompatibility : ConfigurationValueSource.Default;
-            var visibility = _kind == ConfigurationReadKind.Editable ? FieldVisibility.Editable : FieldVisibility.Hidden;
-            var editable = visibility == FieldVisibility.Hidden ? default! : state.UserMode == UserValueKind.Explicit ? requested : actual;
-            var display = displayOverride ?? (actual switch
-            {
-                string text => BotAgent.Services.Agent.AgentMask.Shorten(text),
-                bool value => value ? "true" : "false",
-                IFormattable number => number.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
-                _ => "[configured]",
-            });
-            var rule = new FieldDescriptor(id, _effect(id), typeof(T) == typeof(string)
-                || id is ConfigurationFieldId.PlatformPolicies,
-                _kind == ConfigurationReadKind.Editable, present && !state.Tracked);
-            return ConfigurationBridge.ProjectField(visibility, display, rule, state.UserMode,
-                source, _latestApply, editable);
-        }
-    }
-
     private static BehaviorView ProjectBehaviorView(AppSettings user, AppSettings effective, ConfigurationReadFields fields)
         => new()
         {
             AiDesire = fields.Field(ConfigurationFieldId.AiDesire, user.AiDesire, effective.AiDesire, nameof(AppSettings.AiDesire)),
+            ReplyPacingEnabled = fields.Field(ConfigurationFieldId.ReplyPacingEnabled, user.ReplyPacingEnabled, effective.ReplyPacingEnabled, nameof(AppSettings.ReplyPacingEnabled)),
+            GroupInterjectionProbability = fields.Field(ConfigurationFieldId.GroupInterjectionProbability, user.GroupInterjectionProbability, effective.GroupInterjectionProbability, nameof(AppSettings.GroupInterjectionProbability)),
+            GroupInterjectionCooldownSeconds = fields.Field(ConfigurationFieldId.GroupInterjectionCooldownSeconds, user.GroupInterjectionCooldownSeconds, effective.GroupInterjectionCooldownSeconds, nameof(AppSettings.GroupInterjectionCooldownSeconds)),
+            GroupContinuationWaitSeconds = fields.Field(ConfigurationFieldId.GroupContinuationWaitSeconds, user.GroupContinuationWaitSeconds, effective.GroupContinuationWaitSeconds, nameof(AppSettings.GroupContinuationWaitSeconds)),
+            PrivateContinuationWaitSeconds = fields.Field(ConfigurationFieldId.PrivateContinuationWaitSeconds, user.PrivateContinuationWaitSeconds, effective.PrivateContinuationWaitSeconds, nameof(AppSettings.PrivateContinuationWaitSeconds)),
             AiModeEnabled = fields.Field(ConfigurationFieldId.AiModeEnabled, user.AiModeEnabled, effective.AiModeEnabled, nameof(AppSettings.AiModeEnabled)),
             ApprovalApprovers = fields.Field(ConfigurationFieldId.ApprovalApprovers, user.ApprovalApprovers, effective.ApprovalApprovers, nameof(AppSettings.ApprovalApprovers)),
             BotPersona = fields.Field(ConfigurationFieldId.BotPersona, user.BotPersona, effective.BotPersona, nameof(AppSettings.BotPersona)),
@@ -798,7 +767,7 @@ public sealed partial class SettingsStore : ISettingsRepository
     }
 
     private static ImmutableArray<PlatformPolicyEntryView> PolicyViews(AppSettings desired, AppSettings runtime,
-        ConfigurationReadKind kind, bool requested)
+        ConfigurationReadKind kind, bool requested, ConfigurationRuntimeEffectCollector? runtimeEffects = null)
     {
         var settings = requested ? desired : runtime;
         var entries = settings.RuntimePlatformPolicies ?? ImmutableArray<PlatformPolicyEntry>.Empty;
@@ -811,6 +780,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             var entry = entries.SingleOrDefault(item => item.Target == target);
             var resolved = PlatformSwitchSettings.ResolvePolicyRules(settings, target, PolicyActions(settings));
             var effective = PlatformSwitchSettings.ResolvePolicyRules(runtime, target, PolicyActions(runtime));
+            runtimeEffects?.ObservePolicy(target, resolved, effective);
             var sources = PlatformSwitchSettings.ResolvePolicySources(settings, target);
             var bits = settings.RuntimePlatformPolicyExplicitFields.GetValueOrDefault(target);
             ReadField<T> Field<T>(T ruleValue, T resolvedValue, T effectiveValue, bool inherit, int bit,
@@ -1481,50 +1451,7 @@ public sealed partial class SettingsStore : ISettingsRepository
         private static FieldError Error(ConfigurationFieldId id, string code, ConfigurationObjectAddress? target = null)
             => new(new(id, target), code);
 
-        internal override ConfigurationReadResult Read(Microsoft.Data.Sqlite.SqliteConnection connection,
-            ConfigurationCaller caller, ConfigurationReadKind kind, ConfigurationVersion version,
-            ConfigurationGeneration generation, long serverUnixSeconds, ApplyState latestApplyState)
-        {
-            var stored = ReadUserFacts(connection);
-            var secrets = SecretSources(connection, ImmutableArray<StorageConfiguration.SecretMutation>.Empty);
-            var effective = _runtime.Current.Snapshot();
-            if (ContainsEndpointUserInfo(stored.User.ModelBaseUrl) || ContainsEndpointUserInfo(stored.User.ModelBaseUrlOverride)
-                || ContainsEndpointUserInfo(effective.ModelBaseUrl) || ContainsEndpointUserInfo(effective.ModelBaseUrlOverride))
-                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, ConfigurationContract.Revision,
-                    serverUnixSeconds, null, secrets, ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
-            RegisteredConfigurationView registered;
-            try
-            {
-                ProjectPlatformPoliciesInTransaction(connection, stored.User);
-                if (!stored.User.RuntimePlatformPolicies.HasValue && (stored.User.PlatformPolicies?.Count ?? 0) != 0)
-                    throw new JsonException("platform_policy_legacy_needs_review");
-                stored.User.DeclaredPlatformDrivers = effective.DeclaredPlatformDrivers;
-                stored.User.DeclaredPlatformActions = effective.DeclaredPlatformActions;
-                if (PlatformSwitchSettings.ValidatePolicyEntries(stored.User.RuntimePlatformPolicies ?? ImmutableArray<PlatformPolicyEntry>.Empty,
-                    effective.DeclaredPlatformDrivers, effective.DeclaredPlatformActions).Length != 0)
-                    throw new JsonException("platform_policy_legacy_needs_review");
-                _ = ModelProviderStore.LoadFieldModesInTransaction(connection);
-                registered = _registeredRead(connection, kind);
-            }
-            catch (JsonException)
-            {
-                return new(ConfigurationResultCode.LegacyNeedsReview, version, generation, ConfigurationContract.Revision,
-                    serverUnixSeconds, null, secrets, ImmutableArray<FieldDescriptor>.Empty, latestApplyState);
-            }
-            var view = ProjectConfigurationView(connection, stored.User, effective, kind, latestApplyState,
-                stored.Properties, _effectiveSource, _effect,
-                PolicyViews(stored.User, effective, kind, true), PolicyViews(stored.User, effective, kind, false), registered);
-            view = view with
-            {
-                Registered = registered with
-                {
-                    Providers = registered.Providers.Select(provider => provider.Key.Value == "primary"
-                        ? provider with { ModelName = view.Model.Model, BaseUrl = view.Model.ModelBaseUrl } : provider).ToImmutableArray(),
-                },
-            };
-            return new(ConfigurationResultCode.Ok, version, generation, ConfigurationContract.Revision, serverUnixSeconds,
-                view, secrets, CollectFieldDescriptors(view), latestApplyState);
-        }
+
 
         internal override void AppendAudit(Microsoft.Data.Sqlite.SqliteConnection connection,
             ConfigurationReceipt receipt, ImmutableArray<ConfigurationFieldId> fields)
@@ -1569,6 +1496,11 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Agent.PanelDeployEnabled.Rule,
                 view.Agent.PanelDeployUrl.Rule,
                 view.Behavior.AiDesire.Rule,
+                view.Behavior.ReplyPacingEnabled.Rule,
+                view.Behavior.GroupInterjectionProbability.Rule,
+                view.Behavior.GroupInterjectionCooldownSeconds.Rule,
+                view.Behavior.GroupContinuationWaitSeconds.Rule,
+                view.Behavior.PrivateContinuationWaitSeconds.Rule,
                 view.Behavior.AiModeEnabled.Rule,
                 view.Behavior.ApprovalApprovers.Rule,
                 view.Behavior.BotPersona.Rule,

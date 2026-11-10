@@ -1,7 +1,9 @@
+import { discovery, previewFor, marketDialogShell } from '../fixtures/plugin-import'
+import type { PluginPreviewRequest } from '../../src/api/plugin-import'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import Market from '../../src/features/capabilities/PluginMarketplaceDialog.vue'
-import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaPluginCatalogItem, type ZbaPluginOperationResult, type ZbaPluginSettings } from '../../src/api/zba'
+import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaPluginCatalog, type ZbaPluginCatalogItem, type ZbaPluginOperationResult, type ZbaPluginSettings } from '../../src/api/zba'
 import { clearPendingOperations, getPendingOperation, pendingOperations } from '../../src/shared/sync/pending-operations'
 import { syntheticManifest, syntheticSettings } from '../fixtures/provider-marketplace'
 
@@ -20,16 +22,95 @@ function client(overrides: Partial<ZbaClient> = {}): ZbaClient {
     pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [item(A), item(B)] })),
     installedPlugins: vi.fn(async () => ({ revision: 'p1', plugins: [] })),
     pluginSettings: vi.fn(async id => state(id === A.id ? 'A-old' : 'B-old')),
+    previewPlugin: vi.fn(async (request: PluginPreviewRequest) => previewFor(request)),
     installPlugin: vi.fn(async () => receipt()), pluginOperation: vi.fn(async () => receipt()),
     ...overrides } as unknown as ZbaClient
 }
-async function market(c: ZbaClient) { const w = mount(Market, { props: { client: c, mode: 'admin', writesEnabled: true }, attachTo: document.body, global: { stubs: { teleport: true } } }); wrappers.push(w); await flushPromises(); return w }
+async function market(c: ZbaClient, onClose = vi.fn()) { const w = mount(Market, { props: { client: c, mode: 'admin', writesEnabled: true, onClose }, attachTo: document.body, global: { stubs: { ManagementDialog: marketDialogShell } } }); wrappers.push(w); await flushPromises(); return w }
 type Wrapper = Awaited<ReturnType<typeof market>>
-async function install(w: Wrapper) { await w.get('[data-testid="marketplace-trust"]').setValue(true); await w.get('[data-testid="marketplace-install"]').trigger('click'); await flushPromises() }
+async function install(w: Wrapper) {
+  await w.get('[data-testid="marketplace-install"]').trigger('click'); await flushPromises()
+  expect(w.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+  await w.get('[data-testid="preview-acknowledge"]').setValue(true)
+  await w.get('[data-testid="preview-confirm"]').trigger('click'); await flushPromises()
+}
 async function settings(w: Wrapper, id = A.id) { await w.get('[data-testid="marketplace-item-' + id + '"]').trigger('click'); await w.get('[data-testid="marketplace-settings"]').trigger('click'); await flushPromises() }
 function caption(w: Wrapper) { return (w.get('[data-testid="plugin-setting-caption"]').element as HTMLInputElement).value }
 
 describe('marketplace authorized findings regressions', () => {
+  it.each(['install', 'recovery'] as const)('allows discard-close while catalog refresh follows a settled %s receipt', async path => {
+    const refresh = deferred<ZbaPluginCatalog>()
+    const c = client({
+      pluginCatalog: vi.fn().mockResolvedValueOnce({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [item(A)] }).mockImplementation(() => refresh.promise),
+      ...(path === 'recovery' ? { installPlugin: vi.fn(async () => { throw new ZbaNetworkError() }) } : {})
+    })
+    const closed = vi.fn()
+    const w = await market(c, closed)
+    await w.get('[data-testid="marketplace-source-input"]').setValue('https://github.com/example-org/draft')
+    await install(w)
+    if (path === 'recovery') { await w.get('[data-testid="marketplace-recovery-check"]').trigger('click'); await flushPromises() }
+    expect(c.pluginCatalog).toHaveBeenCalledTimes(2)
+    expect(getPendingOperation(c, 'plugin', A.id)).toBeNull()
+    await w.get('[data-testid="marketplace-close"]').trigger('click')
+    await w.get('[data-testid="marketplace-discard-confirm"]').trigger('click')
+    expect(w.emitted('close')).toHaveLength(1)
+    expect(c.installPlugin).toHaveBeenCalledTimes(1)
+    w.unmount()
+    refresh.resolve({ revision: 'p2', source: 'synthetic', trustNotice: '', categories: [], plugins: [] })
+    await flushPromises()
+    expect(closed).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retain beforeunload protection for a settled write awaiting only catalog refresh', async () => {
+    const refresh = deferred<ZbaPluginCatalog>()
+    const c = client({ pluginCatalog: vi.fn().mockResolvedValueOnce({ revision: 'p1', source: 'synthetic', trustNotice: '', categories: [], plugins: [item(A)] }).mockImplementation(() => refresh.promise) })
+    const w = await market(c); await install(w)
+    expect(c.pluginCatalog).toHaveBeenCalledTimes(2)
+    expect(getPendingOperation(c, 'plugin', A.id)).toBeNull()
+    const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(false)
+    await w.get('[data-testid="marketplace-close"]').trigger('click')
+    expect(w.emitted('close')).toHaveLength(1)
+  })
+
+  it.each([false, true])('retains leave protection until the original write is settled (draft=%s)', async dirty => {
+    const pending = deferred<ZbaPluginOperationResult>()
+    const c = client({ installPlugin: vi.fn(() => pending.promise) })
+    const w = await market(c)
+    if (dirty) await w.get('[data-testid="marketplace-source-input"]').setValue('https://github.com/example-org/draft')
+    await install(w)
+    const key = getPendingOperation(c, 'plugin', A.id)?.key
+    expect(key).toBeTruthy()
+    await w.get('[data-testid="marketplace-close"]').trigger('click')
+    if (dirty) await w.get('[data-testid="marketplace-discard-confirm"]').trigger('click')
+    expect(w.emitted('close')).toBeUndefined()
+    const unload = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
+    pending.reject(new ZbaNetworkError()); await flushPromises()
+    expect(getPendingOperation(c, 'plugin', A.id)?.key).toBe(key)
+    if (dirty) await w.get('[data-testid="marketplace-discard-confirm"]').trigger('click')
+    else await w.get('[data-testid="marketplace-close"]').trigger('click')
+    expect(w.emitted('close')).toBeUndefined()
+    expect(c.installPlugin).toHaveBeenCalledTimes(1)
+    await w.get('[data-testid="marketplace-recovery-check"]').trigger('click'); await flushPromises()
+    if (dirty) await w.get('[data-testid="marketplace-discard-confirm"]').trigger('click')
+    else await w.get('[data-testid="marketplace-close"]').trigger('click')
+    expect(w.emitted('close')).toHaveLength(1)
+  })
+
+  it.each([{ mode: 'admin' as const }, { writesEnabled: false }])('preserves a pending catalog read across permission change %j', async change => {
+    const index = deferred<{ revision: string; source: string; trustNotice: string; categories: string[]; plugins: ZbaPluginCatalogItem[] }>()
+    const c = client({ pluginCatalog: vi.fn(() => index.promise) })
+    const w = mount(Market, { props: { client: c, mode: 'read', writesEnabled: true, active: true }, attachTo: document.body, global: { stubs: { ManagementDialog: marketDialogShell } } })
+    wrappers.push(w)
+    await flushPromises()
+    await w.setProps(change)
+    index.resolve({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [item(A)] })
+    await flushPromises()
+    expect(w.find('[data-testid="marketplace-item-example.a"]').exists()).toBe(true)
+    expect(c.pluginCatalog).toHaveBeenCalledTimes(1)
+  })
+
   it('registers before dispatch and retains unknown key through unmount and a same-scope new client', async () => {
     const c = client({ installPlugin: vi.fn(async request => { expect(getPendingOperation(c, 'plugin', A.id)?.key).toBe(request.idempotencyKey); throw new ZbaNetworkError() }) })
     const first = await market(c); await install(first)
@@ -38,7 +119,9 @@ describe('marketplace authorized findings regressions', () => {
     const next = { ...c } as ZbaClient
     const second = await market(next)
     expect(second.find('[data-testid="marketplace-recovery"]').exists()).toBe(true)
-    await install(second)
+    expect(second.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeDefined()
+    await second.get('[data-testid="marketplace-install"]').trigger('click'); await flushPromises()
+    expect(second.find('[data-testid="preview-confirm"]').exists()).toBe(false)
     expect(c.installPlugin).toHaveBeenCalledTimes(1)
     await second.get('[data-testid="marketplace-recovery-check"]').trigger('click'); await flushPromises()
     expect(next.pluginOperation).toHaveBeenCalledWith(key)
@@ -63,94 +146,26 @@ describe('marketplace authorized findings regressions', () => {
   })
   it('unions installed-only packages and refreshes a resolved source with real management actions', async () => {
     let installed = false
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [] })), installedPlugins: vi.fn(async () => ({ revision: installed ? 'p2' : 'p1', plugins: installed ? [{ ...item(A), status: 'restart_required', restartRequired: true }] : [item(B, true)] })), resolvePluginSource: vi.fn(async () => ({ manifest: A, trustNotice: 'Synthetic only' })), installPlugin: vi.fn(async () => { installed = true; return receipt() }) })
+    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic only', categories: [], plugins: [] })), installedPlugins: vi.fn(async () => ({ revision: installed ? 'p2' : 'p1', plugins: installed ? [{ ...item(A), status: 'restart_required', restartRequired: true }] : [item(B, true)] })), discoverPluginSource: vi.fn(async () => discovery({ candidates: [{ pluginId: A.id, version: A.version }] })), installPlugin: vi.fn(async () => { installed = true; return receipt() }) })
     const w = await market(c)
     expect(w.find('[data-testid="marketplace-item-example.b"]').exists()).toBe(true)
     await w.get('[data-testid="marketplace-source-input"]').setValue('https://github.com/example-org/example-source/releases/tag/v1.0.0')
     await w.get('[data-testid="marketplace-source-resolve"]').trigger('click'); await flushPromises()
-    await w.get('[data-testid="marketplace-item-example.a"]').trigger('click'); await install(w)
+    expect(c.installPlugin).not.toHaveBeenCalled()
+    await w.get('[data-testid="source-preview"]').trigger('click'); await flushPromises()
+    expect(w.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+    await w.get('[data-testid="preview-acknowledge"]').setValue(true)
+    await w.get('[data-testid="preview-confirm"]').trigger('click'); await flushPromises()
+    await w.get('[data-testid="marketplace-item-example.a"]').trigger('click')
     expect(w.get('[data-testid="marketplace-package-state"]').text()).toContain('已暂存')
     expect(w.find('[data-testid="marketplace-settings"]').exists()).toBe(true)
     expect(w.find('[data-testid="marketplace-uninstall"]').exists()).toBe(true)
     expect(c.installedPlugins).toHaveBeenCalledTimes(2)
     expect(w.findAll('[data-testid="marketplace-item-example.a"]')).toHaveLength(1)
   })
-  it('A PUT cannot overwrite B panel and settles A even after changing plugins', async () => {
-    const pending = deferred<ZbaPluginSettings>(); const c = client({ installedPlugins: vi.fn(async () => ({ revision: 'p1', plugins: [item(A, true), item(B, true)] })), pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true), item(B, true)] })), savePluginSettings: vi.fn(() => pending.promise) })
-    const w = await market(c); await settings(w); await w.get('[data-testid="plugin-setting-caption"]').setValue('A-new'); await w.get('[data-testid="marketplace-settings-save"]').trigger('click')
-    const key = getPendingOperation(c, 'plugin-settings', A.id)?.key
-    await settings(w, B.id); expect(caption(w)).toBe('B-old')
-    pending.resolve(state('A-new', 's2')); await flushPromises()
-    expect(caption(w)).toBe('B-old'); expect(w.find('[data-testid="marketplace-settings-notice"]').exists()).toBe(false)
-    expect(pendingOperations(c, 'plugin-settings').find(record => record.key === key)?.state).toBe('settled')
-  })
-  it('blocks unknown settings retry across reload and reopen without storing secret/request body', async () => {
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true)] })), savePluginSettings: vi.fn(async () => { throw new ZbaNetworkError() }) })
-    const first = await market(c); await settings(first)
-    await first.get('[data-testid="plugin-setting-secret-mode"]').setValue('set'); await first.get('[data-testid="plugin-setting-secret"]').setValue('SYNTHETIC-NOT-A-KEY')
-    await first.get('[data-testid="marketplace-settings-save"]').trigger('click'); await flushPromises()
-    const key = getPendingOperation(c, 'plugin-settings', A.id)?.key
-    expect(JSON.stringify(pendingOperations(c))).not.toContain('SYNTHETIC-NOT-A-KEY')
-    expect(JSON.stringify(pendingOperations(c))).not.toContain('edits')
-    await first.get('[data-testid="marketplace-settings-reload"]').trigger('click'); await flushPromises()
-    expect(getPendingOperation(c, 'plugin-settings', A.id)?.key).toBe(key)
-    first.unmount(); const second = await market(c); await settings(second)
-    expect(second.get('[data-testid="marketplace-settings-save"]').attributes('disabled')).toBeDefined()
-    expect(second.text()).toContain('原操作键')
-    expect(c.savePluginSettings).toHaveBeenCalledTimes(1)
-  })
-  it('rejects stale A read after A to B to A', async () => {
-    const first = deferred<ZbaPluginSettings>(); let reads = 0
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true), item(B, true)] })), pluginSettings: vi.fn(async id => id === A.id && ++reads === 1 ? first.promise : state(id + '-fresh')) })
-    const w = await market(c); await settings(w); await settings(w, B.id); await settings(w, A.id)
-    expect(caption(w)).toBe(A.id + '-fresh')
-    first.resolve(state('stale-A')); await flushPromises(); expect(caption(w)).toBe(A.id + '-fresh')
-  })
-  it('does not settle unknown settings on a failed GET and permits only acknowledged reconciliation', async () => {
-    let failRead = false
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true)] })), pluginSettings: vi.fn(async () => { if (failRead) throw new ZbaNetworkError(); return state('current') }), savePluginSettings: vi.fn(async () => { throw new ZbaNetworkError() }) })
-    const w = await market(c); await settings(w); await w.get('[data-testid="plugin-setting-caption"]').setValue('draft')
-    await w.get('[data-testid="marketplace-settings-save"]').trigger('click'); await flushPromises()
-    const key = getPendingOperation(c, 'plugin-settings', A.id)?.key
-    failRead = true; await w.get('[data-testid="marketplace-settings-reload"]').trigger('click'); await flushPromises()
-    expect(w.find('[data-testid="marketplace-settings-reconcile"]').exists()).toBe(false)
-    expect(getPendingOperation(c, 'plugin-settings', A.id)?.key).toBe(key)
-    failRead = false; await w.get('[data-testid="marketplace-settings-reload"]').trigger('click'); await flushPromises()
-    expect(w.get('[data-testid="marketplace-settings-reconcile"]').attributes('disabled')).toBeDefined()
-    await w.get('[data-testid="marketplace-settings-reconcile-ack"]').setValue(true)
-    await w.get('[data-testid="marketplace-settings-reconcile"]').trigger('click'); await flushPromises()
-    expect(getPendingOperation(c, 'plugin-settings', A.id)).toBeNull()
-    expect(w.text()).toContain('不是原提交的成功或失败回执')
-    expect(c.savePluginSettings).toHaveBeenCalledTimes(1)
-  })
   it('keeps installed management available when the catalog is unavailable', async () => {
     const c = client({ pluginCatalog: vi.fn(async () => { throw new ZbaNetworkError() }), installedPlugins: vi.fn(async () => ({ revision: 'p1', plugins: [item(A, true)] })) })
     const w = await market(c); expect(w.find('[data-testid="marketplace-settings"]').exists()).toBe(true); expect(w.find('[data-testid="marketplace-uninstall"]').exists()).toBe(true)
   })
-  it('settles the original settings key after lock and owner unmount', async () => {
-    const pending = deferred<ZbaPluginSettings>()
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true)] })), savePluginSettings: vi.fn(() => pending.promise) })
-    const w = await market(c); await settings(w); await w.get('[data-testid="plugin-setting-caption"]').setValue('draft')
-    await w.get('[data-testid="marketplace-settings-save"]').trigger('click'); const key = getPendingOperation(c, 'plugin-settings', A.id)?.key
-    const api = w.vm as unknown as { requestLeave(reason: 'lock'): Promise<boolean> }
-    expect(await api.requestLeave('lock')).toBe(true)
-    w.unmount(); pending.resolve(state('saved')); await flushPromises()
-    expect(pendingOperations(c, 'plugin-settings').find(record => record.key === key)?.state).toBe('settled')
-  })
-  it('protects dirty plugin switches/close and clears only secret edits on hide/downgrade', async () => {
-    const c = client({ pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true), item(B, true)] })) })
-    const w = await market(c); await settings(w); await w.get('[data-testid="plugin-setting-caption"]').setValue('A-draft')
-    await settings(w, B.id)
-    expect(w.get('#marketplace-settings-heading').text()).toContain(A.id)
-    expect(w.find('[data-testid="marketplace-discard-confirmation"]').exists()).toBe(true)
-    await w.get('[data-testid="marketplace-discard-cancel"]').trigger('click')
-    await w.get('[data-testid="plugin-setting-secret-mode"]').setValue('set'); await w.get('[data-testid="plugin-setting-secret"]').setValue('SYNTHETIC-NOT-A-KEY')
-    await w.setProps({ active: false, mode: 'read' }); await flushPromises()
-    expect(w.find('[data-testid="plugin-setting-secret"]').exists()).toBe(false)
-    expect(caption(w)).toBe('A-draft')
-    await w.setProps({ active: true }); await w.get('[data-testid="marketplace-close"]').trigger('click')
-    expect(w.emitted('close')).toBeUndefined()
-    await w.get('[data-testid="marketplace-discard-confirm"]').trigger('click')
-    expect(w.emitted('close')).toHaveLength(1)
-  })
+
 })

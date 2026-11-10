@@ -3,6 +3,54 @@ import { expect, test } from '@playwright/test'
 const ADMIN = 'synthetic-web-admin-token'
 const READ = 'synthetic-web-read-token'
 
+test('leaving the task page keeps a pending decision unknown until manual recovery', async ({ page }) => {
+  const id = 'synthetic-decision-recovery'
+  const approval = { id, toolId: 'synthetic.tool', summary: 'synthetic safe summary',
+    session: 'synthetic-session', expiresAt: '2099-01-01T00:00:00Z', policyVersion: 1 }
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let reads = 0
+  const decisions: boolean[] = []
+  await page.route('**/zba/v1/approvals', (route) => {
+    reads += 1
+    return route.fulfill({ json: [approval] })
+  })
+  await page.route('**/zba/v1/approvals/' + id + '/decide', async (route) => {
+    decisions.push((route.request().postDataJSON() as { approve: boolean }).approve)
+    if (decisions.length === 1) {
+      await gate
+      await route.fulfill({ status: 503, json: { code: 'approvals_unavailable', message: 'synthetic' } })
+    } else {
+      await route.fulfill({ json: { ok: true, decision: 'reject', reasonCode: '' } })
+    }
+  })
+  await openTasks(page, ADMIN)
+  await page.getByTestId('task-enable-admin').click()
+  try {
+    await page.getByTestId('task-approve-0').click()
+    await expect.poll(() => decisions.length).toBe(1)
+    await page.getByTestId('nav-overview').click()
+    await expect(page.getByTestId('tasks')).toBeHidden()
+    await page.getByTestId('nav-tasks').click()
+    await expect(page.getByTestId('tasks')).toBeVisible()
+    const before = reads
+    const response = page.waitForResponse((r) => r.url().endsWith('/' + id + '/decide'))
+    release()
+    await response
+    await expect.poll(() => reads).toBeGreaterThan(before)
+    await expect(page.getByTestId('task-approval-stale-0')).toHaveText('结果未知')
+    await expect(page.getByTestId('task-approve-0')).toBeDisabled()
+    await expect(page.getByTestId('task-reject-0')).toBeDisabled()
+    expect(decisions).toEqual([true])
+    await page.getByTestId('task-reload').click()
+    await expect(page.getByTestId('task-approve-0')).toBeEnabled()
+    expect(decisions).toEqual([true])
+    await page.getByTestId('task-reject-0').click()
+    await expect(page.getByTestId('task-decision-notice')).toContainText('已提交决定')
+    expect(decisions).toEqual([true, false])
+  } finally { release() }
+})
+
 async function openTasks(page: import('@playwright/test').Page, token: string): Promise<void> {
   await page.goto('/')
   await page.getByTestId('token-input').fill(token)
@@ -10,6 +58,57 @@ async function openTasks(page: import('@playwright/test').Page, token: string): 
   await expect(page.getByTestId('overview')).toBeVisible()
   await page.getByTestId('nav-tasks').click()
   await expect(page.getByTestId('tasks')).toBeVisible()
+}
+
+for (const first of ['result', 'cancel'] as const) {
+  test('task cancellation stays single-flight when ' + first + ' responds first', async ({ page }) => {
+    const id = 'synthetic-cancel-flight'
+    let releaseCancel!: () => void
+    let releaseResult!: () => void
+    const cancelGate = new Promise<void>((resolve) => { releaseCancel = resolve })
+    const resultGate = new Promise<void>((resolve) => { releaseResult = resolve })
+    let cancelRequests = 0
+    let resultRequests = 0
+    const now = '2026-11-09T00:00:00Z'
+    await page.route('**/zba/v1/tasks?*', (route) => route.fulfill({ json: {
+      items: [{ id, state: 1, target: 'server', sessionId: 'synthetic-session', createdAt: now, updatedAt: now, cancellationRequested: false }],
+      nextCursor: null
+    } }))
+    await page.route('**/zba/v1/tasks/' + id + '/cancel', async (route) => {
+      cancelRequests += 1
+      await cancelGate
+      await route.fulfill({ json: { state: 5, cancellationRequested: true, outcome: 'requested' } })
+    })
+    await page.route('**/zba/v1/tasks/' + id + '/result', async (route) => {
+      resultRequests += 1
+      await resultGate
+      await route.fulfill({ json: { id, state: 1, updatedAt: now, available: false, reasonCode: 'not_completed',
+        summaryTruncated: false, summaryChars: 0 } })
+    })
+    await openTasks(page, ADMIN)
+    await page.getByTestId('task-enable-admin').click()
+    const cancel = page.getByTestId('task-cancel-' + id)
+    try {
+      await cancel.click()
+      await expect.poll(() => cancelRequests).toBe(1)
+      await page.getByTestId('task-result-' + id).click()
+      await expect.poll(() => resultRequests).toBe(1)
+      const response = page.waitForResponse((r) => r.url().endsWith('/' + id + '/' + first))
+      if (first === 'result') releaseResult()
+      else releaseCancel()
+      await response
+      if (first === 'result') await expect(page.getByTestId('task-result-unavailable')).toBeVisible()
+      else await expect(page.getByTestId('task-item-' + id)).toContainText('已请求')
+      await expect(cancel).toBeDisabled()
+      await cancel.dispatchEvent('click')
+      expect(cancelRequests).toBe(1)
+    } finally {
+      releaseCancel()
+      releaseResult()
+    }
+    await expect(cancel).toBeEnabled()
+    expect(cancelRequests).toBe(1)
+  })
 }
 
 test('任务页：真实宿主可读取任务与待审批', async ({ page }) => {

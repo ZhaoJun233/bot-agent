@@ -9,7 +9,7 @@ namespace BotAgent.IntegrationHarness;
 ///   • 数据一条不少（会话、消息、档案、画像、心情、听过的歌、表情包、密钥都在库里）；
 ///   • 旧文件被**移到 legacy-json/ 留档**而不是删掉（导入逻辑万一有 bug，人工还能翻出来）；
 ///   • 重启不会重复导入（幂等），也不会把面板刚改的东西覆盖回去；
-///   • 导入后的数据**真的在起作用**（模型请求里能看到旧的画像/档案）。
+///   • 原始聊天上下文继续可用；未证明来源的旧画像保留但不自动取得模型用途授权。
 ///
 /// 为什么这条必须测：这是唯一一次“动用户已有数据”的操作 —— 迁丢了就再也回不来。
 /// </summary>
@@ -184,7 +184,7 @@ public static partial class Program
             !File.Exists(Path.Combine(dataSub, "settings.json")) &&
             !File.Exists(Path.Combine(dataSub, "conversations.json")));
 
-        // ---- 迁移后的数据真的在起作用：旧画像进了提示词 ----
+        // ---- 存储迁移不授予模型用途：保留聊天历史，不回退注入旧 scalar 画像（ADR 0004 §8.2.8）----
         openAi.ClearRequests();
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -196,11 +196,14 @@ public static partial class Program
         var prompt = await WaitForRequestAsync(openAi,
             r => r.Contains("迁移之后我再说一句") && r.Contains("{老王}"), TimeSpan.FromSeconds(40));
         var (profStatus, profBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/profiles/20002");
-        Check("★ 迁移过来的画像真的被注入提示词（不是只躺在库里）",
-            prompt is not null && prompt.Contains("后端开发"),
+        Check("★ 迁移的旧画像与旧档案不会因同 uid 自动取得模型用途授权",
+            prompt is not null && !prompt.Contains("后端开发") && !prompt.Contains("迁移前我说过一句很有用的话"),
             prompt is null
                 ? $"(没等到聊天请求)；面板接口({profStatus})：{Truncate(profBody, 200)}"
                 : $"参与人段：{ParticipantsSection(prompt)}；诊断：{string.Join(" | ", bot.OutputLines.Where(l => l.Contains("[Profiles]")).TakeLast(3))}");
+        Check("★ 拒绝旧画像注入不删除迁移的档案和画像",
+            DbProbe.Count(dataDir, "SELECT COUNT(1) FROM member_messages WHERE uid = '20002'") == 1 &&
+            (DbProbe.Text(dataDir, "SELECT text FROM member_summaries WHERE uid = '20002'") ?? string.Empty).Contains("后端开发"));
         Check("★ 迁移过来的历史上下文也在",
             prompt is not null && prompt.Contains("这是迁移前的一条老消息"));
 

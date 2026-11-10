@@ -53,10 +53,7 @@ public sealed class BotAgentHost : IDisposable
     /// <summary>戳一戳（状态 + 流程），见 <see cref="PokeUseCase" />。</summary>
     private readonly PokeUseCase _poke;
 
-    /// <summary>
-    /// 表情包运营（收图/说明/自巡检）：这里只用它的**收摊**（<see cref="StickerService.Dispose" />）。
-    /// 载入归装配点（建好即就位），运行期的收图/巡检归回复链与 <see cref="BotScheduler" />。
-    /// </summary>
+    /// <summary>表情包释放入口；载入归装配点，运行期收图/巡检归回复链与 <see cref="BotScheduler" />。</summary>
     private readonly StickerService _stickers;
 
     /// <summary>登录的 QQ 号（协议端上报优先，其次配置）—— 共享状态，见 <see cref="BotIdentity" />。</summary>
@@ -121,6 +118,7 @@ public sealed class BotAgentHost : IDisposable
         _source.Poked -= OnPoked;
         _source.MessageRecalled -= _reply.OnMessageRecalled;
         _scheduler.Stop();
+        _reply.Shutdown();
         _stickers.Dispose();
     }
 

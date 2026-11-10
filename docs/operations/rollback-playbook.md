@@ -41,22 +41,23 @@
 
 ## 3. 回滚顺序
 
-按"依赖从外到内"的顺序回退，每步都可独立验证：
+停止写入后，先确认升级前回滚点与旧候选配套，再按以下顺序恢复。升级后补做的快照只能保留故障现场，不能代替兼容旧候选的升级前快照：
 
 ```
 ① 停宿主（停写）
-② 恢复数据库（用快照覆盖）           → 验证：能打开、user_version 与备份一致
+② 在新数据根恢复升级前数据库快照     → 验证：能打开、user_version 与备份一致
 ③ 恢复运行时配置 / 飞书映射 / 插件目录 → 验证：JSON 可解析、插件清单数量一致
-④ 恢复二进制（旧构建产物或旧镜像 tag） → 验证：--version / --health 正常
+④ 准备旧二进制或旧镜像及恢复根挂载     → 验证：产物 / 镜像与回滚点的哈希一致
 ⑤ 起宿主                              → 验证：/healthz 200、/readyz 200（已连协议端）
-⑥ 观察                                → 验证：面板可登录、消息收发正常、无 ERROR 日志
+⑥ 观察                                → 验证：面板可登录、配置及脱敏任务状态符合回滚点
 ```
 
 要点：
 
 - **数据库先于二进制**。新版本可能已写入新列或新表，先回退二进制会让旧代码读到不认识的 schema（见 §5 的 `database_schema_newer`）。
 - **二进制回滚不等于 schema 回滚**。schema 迁移是**只前向**的，没有 down 迁移；回滚的实质是"用快照把库退回旧版本"。因此**快照是唯一回滚手段**。
-- **容器路线**：优先回退到 `prev` 镜像 tag，再按上面顺序恢复挂载的数据卷。
+- **容器路线**：先核对 `prev` 镜像 ID，恢复配套的数据、配置及插件后，才创建并启动挂载该恢复根的旧容器；不要让旧镜像先连接新版本数据。保留原数据根，新根不混入原库的 WAL / SHM。
+- 当前候选 schema 为 14，下面的 10 / 11 / 12 是历史演练记录。按目标候选的版本闸与数据语义判断兼容性，不手改 `user_version` 降级，也不只凭版本号相同宣称兼容。
 - 回滚后**不要**立刻删备份：确认稳定运行至少一个完整的观察窗口再清理。
 
 ---
@@ -69,7 +70,7 @@
 | --- | --- | --- |
 | D1 | 空数据目录启动宿主 | `/healthz` 200；`/readyz` 503（未连协议端，符合语义）；`/status` 返回 `{"error":"unauthorized","mustChangePassword":false}`；产出 `botagent.db` 4096 B + `-shm` 32 768 B + `-wal` 646 872 B + `plugins/` + `zba-event-sequence.boot` |
 | D2 | `VACUUM INTO` 快照 | 成功；源库 `user_version`=10、表 30 张（业务表 29 + 1 张 sqlite 内部表）；快照库同为 10/30；文件 274 432 B |
-| D3 | 人为把 `user_version` 改成比当时最新高 1（演练时是 11）后重启 | 宿主**拒绝启动**，日志首行 `Unhandled exception. System.InvalidOperationException: database_schema_newer`。⚠ #133 起最新 schema 就是 **11**，再复现这条要把版本改成 12 |
+| D3 | 人为把 `user_version` 改成比当时最新高 1（演练时是 11）后重启 | 宿主**拒绝启动**，日志首行 `Unhandled exception. System.InvalidOperationException: database_schema_newer`。这是历史隔离负例；复现时只在合成库使用目标候选支持版本的下一版本 |
 | D4 | 用 D2 快照覆盖后重启 | `/healthz` 200；`user_version` 回到 10、表数 30 —— **快照确实能回滚** |
 | D5 | 检查数据库文件权限 | `644` —— `AppDatabase` 自身不 chmod，只有 `SecretsStore` 会收紧 |
 
@@ -136,4 +137,4 @@
 - [.NET 10 升级回归验收报告](upgrade-acceptance-dotnet10.md) —— §4 是 S1–S5 跨版本演练的原始数据
 - [日志保留、每日热备与恢复演练](data-retention-and-backup.md) —— 备份在哪、保留多久、怎么验证能恢复
 - [分支模型与合并路径](../architecture/branching-and-merge-path.md) —— 回滚后如何重新发版
-- [Agent Runtime 部署、验证与回滚](agent-runtime-deployment.md) —— schema 11→12→13 的不可逆边界与回滚前停写条件（#119、#135）
+- [Agent Runtime 部署、验证与回滚](agent-runtime-deployment.md) —— 当前 schema 边界、兼容回滚点与停写条件

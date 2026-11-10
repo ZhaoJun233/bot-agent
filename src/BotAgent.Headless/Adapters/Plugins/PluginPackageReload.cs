@@ -42,12 +42,14 @@ public sealed partial class PluginPackageService
             candidate = await StartReleaseAsync(manifest, context, ct, resolveSettings, enabled).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             var next = !activeFallback && original.Pending is not null
-                ? original with { Previous = original.Active ?? original.Previous, Active = manifest, Pending = null }
+                ? original with { Previous = PluginLifecycleManifest.Fingerprint(original.Active) == PluginLifecycleManifest.Fingerprint(manifest)
+                    ? original.Previous : original.Active ?? original.Previous, Active = manifest, Pending = null }
                 : original;
             await _store.SaveAsync(next, ct).ConfigureAwait(false);
             saved = true;
             // Replace guarantees no exception after ownership transfer, even if old Shutdown fails.
             await registry.ReplaceAsync(candidate, enabled, ct).ConfigureAwait(false);
+            if (candidate is PluginPythonPackage python) python.Publish();
             candidate = null;
             saved = false;
             Publish(next);

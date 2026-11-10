@@ -1,5 +1,6 @@
 using System.Collections;
 using BotAgent.Domain.Agent;
+using BotAgent.Domain.Mcp;
 using BotAgent.Domain.Permissions;
 using BotAgent.Domain.Ports;
 using BotAgent.Services;
@@ -16,7 +17,8 @@ internal sealed class TaskApprovalGate(
     Func<DateTimeOffset> now,
     Func<bool> enabled,
     Func<AppSettings> settings,
-    Func<bool> dockerAvailable) : IAgentTaskApprovalGate
+    Func<bool> dockerAvailable,
+    Func<IEnumerable<string>, IReadOnlyList<McpToolInfo>>? capturePythonLeases = null) : IAgentTaskApprovalGate
 {
     private static readonly string[] HighRiskTools = ["bash", "write", "docker"];
 
@@ -31,16 +33,27 @@ internal sealed class TaskApprovalGate(
         var access = ServerToolAccess.Resolve(settings(), dockerAvailable(), request.ToolScope);
         var names = access.Tools.Concat((mcpToolNames ?? []).Where(access.AllowsMcp))
             .Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray();
-        return request with { ToolScope = new PinnedScope(names, FindRisk(access)) };
+        // Local code requires explicit names, never an inherited/unrestricted tool scope.
+        var candidates = names.Where(name => request.ToolScope?.Contains(name, StringComparer.Ordinal) == true);
+        var leases = (capturePythonLeases?.Invoke(candidates) ?? [])
+            .Where(tool => tool.IsLocalProcess && !string.IsNullOrEmpty(tool.SourceGeneration)
+                && names.Contains(tool.QualifiedName, StringComparer.Ordinal))
+            .ToArray();
+        return request with
+        {
+            ToolScope = new PinnedScope(names, FindRisk(access)),
+            PythonToolLeases = Array.AsReadOnly(leases),
+        };
     }
 
     public AgentTaskApprovalRequest? Create(AgentTaskRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (!enabled()) return null;
+        if (!enabled() && request.PythonToolLeases.Count == 0) return null;
         var risky = request.ToolScope is PinnedScope pinned
             ? pinned.Risk
             : FindRisk(ServerToolAccess.Resolve(settings(), dockerAvailable(), request.ToolScope));
+        risky ??= request.PythonToolLeases.FirstOrDefault()?.QualifiedName;
         return risky is null ? null : new AgentTaskApprovalRequest(
             ApprovalFlow.NewRequestId(Random.Shared.Next),
             risky,

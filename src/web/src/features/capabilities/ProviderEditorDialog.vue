@@ -3,8 +3,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ZbaClient, ZbaRequestError, type ZbaConfigurationReadResult, type ZbaProviderConfigurationView } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
+import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { newNonce } from '../configuration/draft'
+import ConfigurationOperationKey from '../configuration/ConfigurationOperationKey.vue'
 import { useConfigurationCommit } from './configuration-commit'
 import { editableText, providerDraft, providerDraftErrors, providerEdit, providerSecrets } from './provider-draft'
 import { providerPresets, providerProtocols } from './provider-protocols'
@@ -27,6 +29,7 @@ const emit = defineEmits<{
   'auth-expired': [error: UiError]
 }>()
 const createTargetPrefix = 'provider:create:'
+const ownerProviderKey = props.providerKey
 const recoveredCreate = props.providerKey === undefined
   ? pendingOperations(props.client, 'configuration').find(item => item.state !== 'settled' && item.target.startsWith(createTargetPrefix))
   : undefined
@@ -35,6 +38,14 @@ const commitTarget = computed(() => exists.value ? 'provider:' + key.value : cre
 const exists = ref(props.providerKey !== undefined)
 const snapshot = ref<ZbaConfigurationReadResult | null>(null)
 const baseline = ref<ZbaProviderConfigurationView | undefined>()
+const runtimeSummary = computed(() => {
+  switch (baseline.value?.runtimeApplyState) {
+    case 1: return '本次读取确认设置已应用；连接是否可用请测试已保存连接。'
+    case 3: return '设置需重启机器人服务后应用。请重启 BotAgent 服务，再重新读取确认。'
+    case 2: case 4: return '设置未全部应用成功，请检查应用结果并重新读取。'
+    default: return '当前生效情况尚未确认，请重新读取或检查应用结果。'
+  }
+})
 const draft = reactive(providerDraft())
 const loading = ref(false)
 const error = ref<UiError | null>(null)
@@ -58,6 +69,9 @@ const commit = useConfigurationCommit({
   onAuth: (value) => emit('auth-expired', value)
 })
 const { phase, pendingKey, error: commitError, notice, locked } = commit
+const visibleOperationKey = computed(() => canWrite.value && props.providerKey === ownerProviderKey
+  ? pendingOperations(props.client, 'configuration', commitTarget.value).find(item => item.key === pendingKey.value && item.state !== 'settled')?.key
+  : undefined)
 const protocol = computed(() => providerProtocols.find((item) => item.id === draft.protocol))
 /** 缓存控制参数只对 OpenAI 兼容与 Anthropic 协议有意义；其它协议不显示开关。 */
 const promptCacheProtocol = computed(() => draft.protocol === 'openai-chat' || draft.protocol === 'openai-responses' || draft.protocol === 'azure-openai' || draft.protocol === 'anthropic-messages')
@@ -158,18 +172,25 @@ async function save(remove = false): Promise<void> {
   if (success) await afterSave()
 }
 async function check(): Promise<void> { if (await commit.check()) await afterSave() }
+useDraftProtection(() => changed.value || pendingKey.value !== null || phase.value === 'saving')
+function discardAndClose(): void {
+  if (pendingKey.value || phase.value === 'saving' || phase.value === 'checking') return
+  discardSecretsOnLeave()
+  emit('close')
+}
 function requestClose(): void {
   if (pendingKey.value || phase.value === 'saving' || phase.value === 'checking') {
     validation.value = ['提交结果尚未确认，请先核对。离开此视图不会重复提交。']
     return
   }
-  if (changed.value && !discardArmed.value) { discardArmed.value = true; return }
+  // Repeated Escape, backdrop or close clicks never imply explicit discard consent.
+  if (changed.value) { discardArmed.value = true; return }
   emit('close')
 }
 function discardSecretsOnLeave(): void { draft.credentialSecret = '' }
-async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement | null): Promise<boolean> {
+async function requestLeave(reason: 'lock' | 'downgrade' | 'navigate', _trigger?: HTMLElement | null): Promise<boolean> {
   discardSecretsOnLeave()
-  if (reason === 'lock') return true // The shared registry, not the dialog, owns unresolved keys.
+  if (reason === 'lock' || reason === 'navigate') return true // The shared registry, not the dialog, owns unresolved keys.
   if (pendingKey.value || phase.value === 'saving' || phase.value === 'checking') {
     validation.value = ['提交結果尚未确认，请先核对原操作键。']
     return false
@@ -177,7 +198,7 @@ async function requestLeave(reason: 'lock' | 'downgrade', _trigger?: HTMLElement
   if (changed.value) { discardArmed.value = true; return false }
   return true
 }
-defineExpose({ requestLeave, discardSecretsOnLeave })
+defineExpose({ requestLeave, discardSecretsOnLeave, draftCount: computed(() => changed.value ? 1 : 0) })
 watch(() => [props.mode, props.writesEnabled, props.client], () => { discardSecretsOnLeave() }, { flush: 'sync' })
 watch(() => props.active, (active) => {
   if (!active) { discardSecretsOnLeave(); ++readSequence; loading.value = false }
@@ -204,6 +225,7 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
       <p>结果未知。操作键已保留，不会自动重试或生成另一次写入。</p>
       <button type="button" data-testid="provider-check" :disabled="phase === 'checking' || !props.active" @click="check">{{ phase === 'checking' ? '正在核对…' : '核对提交结果' }}</button>
     </div>
+    <ConfigurationOperationKey v-if="visibleOperationKey" :operation-key="visibleOperationKey" />
     <div v-if="phase === 'conflict' || phase === 'reload-required'" class="notice warn" data-testid="provider-conflict">
       <p>请先读取最新配置；现有草稿不会被替换。</p>
       <button type="button" data-testid="provider-rebase" :disabled="loading" @click="rebase">读取最新，保留草稿</button>
@@ -212,6 +234,10 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
       <strong>最新配置（请与草稿核对）</strong>
       <p>{{ baseline.name.display }} · {{ baseline.baseUrl.display }} · {{ baseline.modelName.display }}</p>
       <p>优先级 {{ baseline.priority }} · {{ baseline.desiredEnabled ? '启用' : '停用' }}</p>
+    </section>
+    <section v-if="baseline && !deleted" class="notice" data-testid="provider-saved-state" aria-label="提供商已保存设置与当前生效情况">
+      <p><strong>已保存设置：</strong>{{ baseline.desiredEnabled ? '启用' : '停用' }}；下方修改在保存前仅是草稿。</p>
+      <p><strong>当前生效情况：</strong>{{ runtimeSummary }}</p>
     </section>
     <form v-if="snapshot && !deleted" @submit.prevent="save()" @input="touch">
       <fieldset :disabled="!canWrite || locked || loading" class="editor-fields">
@@ -267,14 +293,15 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
             </select>
           </label>
           <div v-if="draft.credentialMode === 'independent'" class="editor-grid" data-testid="provider-independent-credential">
-            <label>凭据键（credentialKey）
+            <label>凭据名称
               <input v-model="draft.credentialKey" data-testid="provider-credential-key" placeholder="provider-example-key" maxlength="128" autocomplete="off" spellcheck="false">
             </label>
             <label>新密钥
               <input v-model="draft.credentialSecret" data-testid="provider-credential-secret" type="password" autocomplete="new-password" spellcheck="false" :placeholder="exists ? '留空表示沿用已绑定密钥' : '仅本次提交，不会回显'">
             </label>
           </div>
-          <p class="field-hint">密钥只在本次保存中发送一次，之后只显示“已绑定”，后台不会回传原文。</p>
+          <p class="field-hint">凭据名称用于关联已有密钥，不是密钥本身。新密钥只在本次保存中发送一次，后台不会回传原文。</p>
+          <details><summary>凭据技术字段</summary><code>credentialKey</code> 是服务端关联名称；请勿填写密钥原文。</details>
         </section>
         <label class="check-label"><input v-model="draft.enabled" data-testid="provider-enabled" type="checkbox" :disabled="!exists">启用此提供商</label>
         <p v-if="!exists" class="notice" data-testid="provider-create-disabled">新提供商先保存为停用。检查配置、测试连接后，再单独启用。</p>
@@ -297,33 +324,33 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
     </form>
     <div v-if="deleted" class="notice" data-testid="provider-deleted">提供商已删除。运行状态若标为需重启，请在合适的时间手动重启。</div>
     <div v-if="discardArmed" class="notice warn" role="alert" data-testid="provider-discard">
-      <p>有未保存的草稿，确定放弃并关闭？</p><button type="button" @click="emit('close')">放弃草稿</button><button type="button" @click="discardArmed = false">继续编辑</button>
+      <p>有未保存的草稿，确定放弃并关闭？</p><button type="button" @click="discardAndClose">放弃草稿</button><button type="button" @click="discardArmed = false">继续编辑</button>
     </div>
   </ManagementDialog>
 </template>
 
 <style scoped>
-.eyebrow { color: var(--accent-deep); font-size: 11px; font-weight: 650; letter-spacing: .1em; }
-.muted, .field-hint { color: var(--text-muted); font-size: 13px; line-height: 1.7; }
+.eyebrow { color: var(--accent-deep); font-size: 0.75rem; font-weight: 650; letter-spacing: .1em; }
+.muted, .field-hint { color: var(--text-muted); font-size: 0.8125rem; line-height: 1.7; }
 .editor-fields { display: grid; gap: 12px; border: 0; padding: 0; margin: 16px 0; min-width: 0; }
 .editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .model-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .model-row input { flex: 1 1 160px; }
 .model-row button { flex: 0 0 auto; white-space: nowrap; }
-.editor-fields label { display: grid; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text-muted); min-width: 0; }
+.editor-fields label { display: grid; gap: 7px; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); min-width: 0; }
 .editor-fields input:not([type=checkbox]), .editor-fields select { width: 100%; min-width: 0; min-height: 36px; border-radius: 8px; color: var(--text); }
 .editor-fields input[type=number] { max-width: 180px; }
 .editor-fields input[readonly] { color: var(--text-muted); background: var(--surface-muted); }
 .editor-fields .check-label { display: flex; flex-direction: row; align-items: center; gap: 10px; min-height: 36px; color: var(--text); }
 .check-label input { accent-color: var(--accent-deep); }
-.field-hint { margin: -6px 0 0; font-weight: 400; font-size: 12px; }
+.field-hint { margin: -6px 0 0; font-weight: 400; font-size: 0.75rem; }
 .credential-section { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 8px; padding: 14px; display: grid; gap: 12px; min-width: 0; }
-.credential-section h3 { margin: 0; font-size: 14px; color: var(--text); }
+.credential-section h3 { margin: 0; font-size: 0.875rem; color: var(--text); }
 .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid var(--border); padding-top: 18px; }
 button { min-height: 36px; border-radius: 8px; }
-.danger-zone { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 16px; font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+.danger-zone { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 16px; font-size: 0.75rem; line-height: 1.7; color: var(--text-muted); }
 .danger-zone > button, .danger-zone .notice button:first-of-type { color: var(--bad-text); }
-.notice { overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-block: 12px; background: var(--surface-muted); color: var(--text-muted); font-size: 13px; line-height: 1.65; }
+.notice { overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-block: 12px; background: var(--surface-muted); color: var(--text-muted); font-size: 0.8125rem; line-height: 1.65; }
 .notice.warn { background: var(--warn-bg); color: var(--warn-text); border-color: var(--border-strong); }.notice.bad { background: var(--bad-bg); color: var(--bad-text); border-color: var(--border-strong); }.notice p { margin: 0 0 8px; }
 @media (max-width: 767px) { .editor-grid { grid-template-columns: 1fr; }.editor-actions > button { flex: 1 1 auto; }.credential-section { padding: 14px; }button, .editor-fields input:not([type=checkbox]), .editor-fields select, .editor-fields .check-label { min-height: 44px; } }
 </style>

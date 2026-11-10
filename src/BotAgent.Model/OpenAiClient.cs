@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using BotAgent.Domain.Configuration;
 using BotAgent.Model.Net;
 using System.Net;
@@ -173,8 +174,11 @@ public class OpenAiClient : IModelClient
                   .Select(m => m.QqMessageId!.Value));
 
         // 结合 MaiBot 启发式氛围感知模型：计算连续发言疲劳阻尼与群聊活跃度动态意愿（可通过设置项关闭）
-        var effectiveDesire = AiDesire;
-        if (_settings.EnableAtmosphereDamping)
+        var replyPacingEnabled = sampling?.ReplyPacingEnabled == true;
+        // The admitted turn owns this flag: do not read mutable desire (or apply its
+        // atmosphere damping) in paced mode. The placeholder never enters the prompt.
+        var effectiveDesire = replyPacingEnabled ? 0 : AiDesire;
+        if (!replyPacingEnabled && _settings.EnableAtmosphereDamping)
         {
             var atmosphere = ChatAtmosphere.Analyze(window, Clock.Now);
             effectiveDesire = ChatAtmosphere.CalculateEffectiveDesire(
@@ -213,7 +217,8 @@ public class OpenAiClient : IModelClient
             EnableAsk: enableAsk,
             EnableToolRequest: enableToolRequest,
             FilterActionNarration: _settings.FilterActionNarration,
-            ToolList: toolList, IsPrivateConversation: isPrivateConversation));
+            ToolList: toolList, IsPrivateConversation: isPrivateConversation,
+            ReplyPacingEnabled: replyPacingEnabled));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
         var built = await _transport.BuildAsync(window, promptParts.Text, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
         built = built with { StableSystemPrefixLength = promptParts.Stable.Length };
@@ -539,7 +544,7 @@ public class OpenAiClient : IModelClient
             try
             {
                 using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, payload);
-                response = await _auxHttp.SendAsync(request, budget.Token).ConfigureAwait(false);
+                response = await MemoryUseScope.Use(() => _auxHttp.SendAsync(request, budget.Token)).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -701,7 +706,7 @@ public class OpenAiClient : IModelClient
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey.Trim());
 
-            using var response = await _auxHttp.SendAsync(request, ct).ConfigureAwait(false);
+            using var response = await MemoryUseScope.Use(() => _auxHttp.SendAsync(request, ct)).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return null;
@@ -728,7 +733,7 @@ public class OpenAiClient : IModelClient
             using var budget = ProviderRequestBudget.Create(route, _auxiliaryTimeout, token);
             using var request = Protocols.ModelProtocolAdapter.CreateRequest(route, cloned);
 
-            using var response = await _auxHttp.SendAsync(request, budget.Token).ConfigureAwait(false);
+            using var response = await MemoryUseScope.Use(() => _auxHttp.SendAsync(request, budget.Token)).ConfigureAwait(false);
             var json = await response.Content.ReadAsStringAsync(budget.Token).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
             if (response.IsSuccessStatusCode) json = Protocols.ModelProtocolAdapter.NormalizeResponse(route.Protocol, json);

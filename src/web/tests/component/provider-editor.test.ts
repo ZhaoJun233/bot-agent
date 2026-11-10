@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ProviderEditorDialog from '../../src/features/capabilities/ProviderEditorDialog.vue'
-import { ZbaClient, ZbaNetworkError, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../src/api/zba'
+import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../src/api/zba'
 import { providerSnapshot, syntheticProvider } from '../fixtures/provider-marketplace'
 import { getPendingOperation } from '../../src/shared/sync/pending-operations'
 
@@ -60,16 +60,27 @@ describe('provider editor safe configuration lifecycle', () => {
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(saveConfiguration.mock.calls[1]?.[0]).toMatchObject({ expectedVersion: '2' })
   })
-  it('retains an unknown key across hidden navigation and checks without replay', async () => {
+  it.each([0, 408, 409, 429])('retains an unknown key across hidden navigation and checks without replay (%s)', async (status) => {
     const saved: string[] = []; const queried: string[] = []
-    const client = clientWith({ saveConfiguration: vi.fn(async (request) => { saved.push(request.key); throw new ZbaNetworkError() }), findConfiguration: vi.fn<ZbaClient['findConfiguration']>(async (key) => { queried.push(key); return { code: 0, receipt: receipt(key) } }) })
+    const client = clientWith({ saveConfiguration: vi.fn(async (request) => { saved.push(request.key); throw status === 0 ? new ZbaNetworkError() : new ZbaRequestError(status, 'http_error', 'synthetic ambiguous response') }), findConfiguration: vi.fn<ZbaClient['findConfiguration']>(async (key) => { queried.push(key); return { code: 0, receipt: receipt(key) } }) })
     const { wrapper } = mountEditor(client); await flushPromises()
     await wrapper.get('[data-testid="provider-priority"]').setValue('5'); await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(wrapper.find('[data-testid="provider-unknown"]').exists()).toBe(true)
-    await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true }); await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(saved[0])
+    await wrapper.setProps({ active: false })
+    expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+    await wrapper.setProps({ active: true }); await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(saved[0])
+    for (const boundary of [{ mode: 'read' as const }, { writesEnabled: false }, { client: clientWith() }, { providerKey: 'provider-other' }]) {
+      await wrapper.setProps(boundary)
+      expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+      await wrapper.setProps({ mode: 'admin', writesEnabled: true, client, providerKey: 'provider-sample' })
+      expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(saved[0])
+    }
     await wrapper.get('[data-testid="provider-check"]').trigger('click'); await flushPromises()
     expect(saved).toHaveLength(1); expect(queried).toEqual(saved)
     expect(wrapper.find('[data-testid="provider-unknown"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
   })
   it.each([{ active: false }, { mode: 'read' as const }, { writesEnabled: false }])('clears ordinary secret input on authorization boundary %# without discarding nonsecret draft', async boundary => {
     const { wrapper } = mountEditor(); await flushPromises()

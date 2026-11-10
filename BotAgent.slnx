@@ -10,6 +10,14 @@
     <Project Path="src/BotAgent.Storage/BotAgent.Storage.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/BotAgent.ConfigurationProbe/BotAgent.ConfigurationProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyDeliveryPacingProbe/BotAgent.ReplyDeliveryPacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyGenerationPacingProbe/BotAgent.ReplyGenerationPacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyPacingProbe/BotAgent.ReplyPacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyModeTransitionProbe/BotAgent.ReplyModeTransitionProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyPipelinePacingProbe/BotAgent.ReplyPipelinePacingProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplyPromptProbe/BotAgent.ReplyPromptProbe.csproj" />
+    <Project Path="tests/BotAgent.ReplySchedulerProbe/BotAgent.ReplySchedulerProbe.csproj" />
     <Project Path="tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj" />
     <Project Path="tests/BotAgent.ChaosFaultProbe/BotAgent.ChaosFaultProbe.csproj" />
     <Project Path="tests/BotAgent.ConcurrencyStressProbe/BotAgent.ConcurrencyStressProbe.csproj" />
@@ -18,6 +26,10 @@
     <Project Path="tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj" />
     <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
     <Project Path="tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj" />
+    <Project Path="tests/BotAgent.MemoryCommandProbe/BotAgent.MemoryCommandProbe.csproj" />
+    <Project Path="tests/BotAgent.MemoryDeliveryProbe/BotAgent.MemoryDeliveryProbe.csproj" />
+    <Project Path="tests/BotAgent.MemoryTurnProbe/BotAgent.MemoryTurnProbe.csproj" />
+    <Project Path="tests/BotAgent.UnifiedMemoryProbe/BotAgent.UnifiedMemoryProbe.csproj" />
     <Project Path="tests/BotAgent.ParticipationProbe/BotAgent.ParticipationProbe.csproj" />
     <Project Path="tests/BotAgent.PipelineEval/BotAgent.PipelineEval.csproj" />
     <Project Path="tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj" />
@@ -25,6 +37,10 @@
     <Project Path="tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj" />
     <Project Path="tests/BotAgent.ProductionSpecProbe/BotAgent.ProductionSpecProbe.csproj" />
     <Project Path="tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonAgentProbe/BotAgent.PythonAgentProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonCleanupProbe/BotAgent.PythonCleanupProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonMarketProbe/BotAgent.PythonMarketProbe.csproj" />
+    <Project Path="tests/BotAgent.PythonWorkerProbe/BotAgent.PythonWorkerProbe.csproj" />
     <Project Path="tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj" />
     <Project Path="tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj" />
     <Project Path="tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj" />

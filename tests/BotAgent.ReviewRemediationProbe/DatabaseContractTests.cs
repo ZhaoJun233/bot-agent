@@ -28,7 +28,7 @@ internal static class DatabaseContractTests
             using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
             {
                 conn.Open();
-                HostDatabase.Exec(conn, "PRAGMA user_version = 14; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
+                HostDatabase.Exec(conn, "PRAGMA user_version = 15; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
             }
             var hash = SHA256.HashData(File.ReadAllBytes(path));
             ClockBindings.InitializeStorage();
@@ -68,7 +68,7 @@ internal static class DatabaseContractTests
         {
             HostDatabase.Initialize();
             if (!StorageDatabase.IsReady || HostDatabase.GetMeta("synthetic:c2-backup") != "snapshot-value"
-                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 13) return 1;
+                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 14) return 1;
             Console.WriteLine("C2_CHILD restore passed=3 failed=0");
             return 0;
         }
@@ -147,7 +147,7 @@ internal static class DatabaseContractTests
             }
 
             StorageDatabase.Initialize(path);
-            Check(StorageDatabase.Scalar<long>("PRAGMA user_version") == 13, "legacy v12 database upgrades to v13");
+            Check(StorageDatabase.Scalar<long>("PRAGMA user_version") == 14, "legacy v12 database upgrades through v13 to v14");
 
             var columns = StorageDatabase.Query("PRAGMA table_info(trace_archive);", r => r.GetString(1));
             Check(columns.Contains("cached_prompt_tokens") && columns.Contains("cache_write_tokens")

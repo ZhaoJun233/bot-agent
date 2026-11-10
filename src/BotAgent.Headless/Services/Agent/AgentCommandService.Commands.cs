@@ -431,6 +431,9 @@ public sealed partial class AgentCommandService
     private async Task RunOnServerAsync(BotConversation conversation, QqChatMessage msg, string payload,
         string? ack = null, bool natural = false)
     {
+        // A model-derived task is not fresh user consent and must not be persisted or delegated.
+        if (BotAgent.Services.Memory.MemoryUseScope.HasMemory) return;
+        using var memoryTurn = BotAgent.Services.Reply.UnifiedMemoryTurn.Begin(_unifiedMemory, msg.Envelope);
         var admission = ServerAgentAdmission.TryAcquire(conversation.SourceKey, _serverAgentBusy, _serverAgentCurrent);
         if (admission is null)
         {

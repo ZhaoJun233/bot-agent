@@ -47,8 +47,8 @@ public sealed record CadenceSendReport(IReadOnlyList<string> SentSegments, strin
     /// <summary>至少有段落发出去。</summary>
     public bool AnySent => SentSegments.Count > 0;
 
-    /// <summary>全部发出去（没有任何失败）。</summary>
-    public bool AllSent => FailureReasonCode is null;
+    /// <summary>非空回复全部发出去（没有任何失败）；空报告不算完成。</summary>
+    public bool AllSent => AnySent && FailureReasonCode is null;
 
     /// <summary>已发出的段落拼回一段文本（部分成功时写进会话历史的就是它）。</summary>
     public string Text => string.Join("\n", SentSegments);

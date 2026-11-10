@@ -28,6 +28,8 @@ public sealed partial class ZbaEndpoint
         "plugins.catalog",
         "plugins.installed",
         "plugins.install",
+        "plugins.source.discover", "plugins.preview", "plugins.lifecycle.preview",
+        "plugins.rollback",
         "plugins.update",
         "plugins.uninstall",
         "plugins.operations.get",
@@ -36,6 +38,7 @@ public sealed partial class ZbaEndpoint
         "providers.models",
         "traces.list",
         "logs.list",
+        "logs.feed",
     };
 
     public ZbaEndpoint(
@@ -120,10 +123,15 @@ public sealed partial class ZbaEndpoint
                 "events.read" => await HandleEventsAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "traces.list" => await HandleTracesAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "logs.list" => await HandleLogsAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
+                "logs.feed" => await HandleLogFeedAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "plugins.catalog" => await HandlePluginCatalogAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "plugins.installed" => await HandlePluginInstalledAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
                 "plugins.sources.resolve" => await HandlePluginSourceResolveAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "plugins.source.discover" => await HandlePluginSourceDiscoverAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "plugins.preview" => await HandlePluginPreviewAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
                 "plugins.install" => await HandlePluginMutationAsync(CreateCaller(principal!), request, requestId, ct, update: false).ConfigureAwait(false),
+                "plugins.lifecycle.preview" => await HandlePluginLifecyclePreviewAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "plugins.rollback" => await HandlePluginRollbackAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
                 "plugins.update" => await HandlePluginMutationAsync(CreateCaller(principal!), request, requestId, ct, update: true).ConfigureAwait(false),
                 "plugins.uninstall" => await HandlePluginUninstallAsync(CreateCaller(principal!), match.Values["id"], request, requestId, ct).ConfigureAwait(false),
                 "plugins.operations.get" => await HandlePluginOperationAsync(CreateCaller(principal!), match.Values["key"], requestId, ct).ConfigureAwait(false),

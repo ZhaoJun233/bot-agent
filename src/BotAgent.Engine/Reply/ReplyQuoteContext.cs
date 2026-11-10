@@ -102,7 +102,9 @@ internal sealed class ReplyQuoteContext
         // 就把它当成“可以接的梗”反复发。一模一样的话紧接着再来一遍，对群里就是刷屏。
         if (reply.Length > 0 && EchoGuard.IsRepeatingOwnLastMessage(conversation.Messages, reply))
         {
-            _log($"检测到复读（与上一条自己的发言完全相同）→ 沉默（{elapsed:F0}ms）: {TextRules.Shorten(reply, 40)}");
+            _log(BotAgent.Services.Memory.MemoryUseScope.HasMemory
+                ? $"检测到复读 → 沉默（{elapsed:F0}ms，textLength={reply.Length}）"
+                : $"检测到复读（与上一条自己的发言完全相同）→ 沉默（{elapsed:F0}ms）: {TextRules.Shorten(reply, 40)}");
             _research.KeepNote(conversation.SourceKey, turn.SearchText, "复读守卫");
             return (true, null);
         }

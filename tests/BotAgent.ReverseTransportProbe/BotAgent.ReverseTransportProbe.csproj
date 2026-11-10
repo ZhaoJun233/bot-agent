@@ -13,7 +13,7 @@
     <Compile Include="../../src/BotAgent.Platforms/OneBot/WsMessageBuffer.cs" Link="WsMessageBuffer.cs" />
     <Compile Include="../../src/BotAgent.Platforms/OneBot/ReverseWsFrameReader.cs" Link="ReverseWsFrameReader.cs" />
     <Compile Include="../../src/BotAgent.Platforms/Common/Clock.cs" Link="Clock.cs" />
-    <Compile Include="../../src/BotAgent.Core/Domain/Ports/IClock.cs" Link="IClock.cs" />
+    <ProjectReference Include="../../src/BotAgent.Core/BotAgent.Core.csproj" />
     <Using Include="BotAgent.Platforms" />
   </ItemGroup>
 </Project>

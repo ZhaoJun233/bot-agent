@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using BotAgent.Domain.Agent;
+using BotAgent.Domain.Mcp;
 using BotAgent.Services.Qq;
 
 namespace BotAgent.Services.Agent;
@@ -48,6 +49,7 @@ public sealed class AgentTask
     /// 只由通道（ZBA 提交）填，执行前与配置白名单取交集（<c>ToolScope.Restrict</c>）—— 只能收窄。
     /// </summary>
     public IReadOnlyList<string>? ToolScope { get; set; }
+    public IReadOnlyList<McpToolInfo> PythonToolLeases { get; init; } = [];
 
     public int TimeoutSeconds { get; set; }
 

@@ -56,7 +56,8 @@ public static class PromptBuilder
         bool FilterActionNarration = false,
         string? EpisodesText = null,
         string? JargonText = null,
-        bool IsPrivateConversation = false);
+        bool IsPrivateConversation = false,
+        bool ReplyPacingEnabled = false);
 
     /// <summary>把这一轮的系统提示词拼出来（纯字符串拼接，不发任何请求）。</summary>
     public readonly record struct PromptParts(string Stable, string Dynamic)
@@ -112,7 +113,7 @@ public static class PromptBuilder
 
         var suitabilityText = request.IsPrivateConversation && !request.Proactive
             ? BuildPrivateConversationInstruction()
-            : BuildSuitabilityInstruction(request.AiDesire, request.SuitabilityThreshold, dynamic);
+            : BuildSuitabilityInstruction(request.AiDesire, request.SuitabilityThreshold, dynamic, request.ReplyPacingEnabled);
         if (request.FilterActionNarration)
         {
             suitabilityText += "\n【语言形式禁令】严禁在 reply 中输出任何带括号的动作描写、心理活动或神态说明（如 (晃了晃耳朵)、（叹了口气）、*伸懒腰* 等），只输出真正说出口的口语！数学公式、函数参数、乘法星号、普通括号解释、代码和链接不是动作旁白，必须完整保留。";
@@ -491,7 +492,7 @@ public static class PromptBuilder
         "若确实应保持沉默，仍可显式 action=\"silent\"、reply 留空且不附带其他动作；不得用问候兜底掩盖无效或缺失的结构化输出。";
 
     /// <summary>按对话欲望生成“发言适合度”评分指令。</summary>
-    private static string BuildSuitabilityInstruction(int aiDesire, int threshold, StringBuilder dynamic)
+    private static string BuildSuitabilityInstruction(int aiDesire, int threshold, StringBuilder dynamic, bool replyPacingEnabled)
     {
         var desire = aiDesire switch
         {
@@ -527,7 +528,9 @@ public static class PromptBuilder
                "如果你决定沉默，reply 填空字符串（\"\"）。" +
                "注意：只要 reply 非空，程序就会把你的话发出去——所以不确定时宁可不发，reply 留空。";
         // #98：发言意愿偏置随气氛阻尼逐轮变化，属于动态尾巴（以前夹在规则中间，会把前缀劈成两半）。
-        dynamic.Append("\n" + desire);
+        // The scheduler owns participation in paced mode; only content suitability remains.
+        if (!replyPacingEnabled)
+            dynamic.Append("\n" + desire);
         return rules;
     }
 

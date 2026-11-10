@@ -255,6 +255,16 @@ public static partial class Program
                 && (JsonNode.Parse(corruptFind.Body) as JsonObject)?["code"]?.GetValue<string>() == "unknown",
                 corruptFind.Status + " " + corruptFind.Body);
 
+            var corruptReplay = await ZbaAsync(http, "POST", root + "/tasks", adminToken, restartSubmitBody,
+                idempotencyKey: "synthetic-zba-restart-receipt-1");
+            Check("S55 回执损坏时拒绝旧键再次执行",
+                corruptReplay.Status == 503
+                && (JsonNode.Parse(corruptReplay.Body) as JsonObject)?["error"]?["code"]?.GetValue<string>()
+                    == "receipt_store_unavailable",
+                corruptReplay.Status + " " + corruptReplay.Body);
+            Check("S55 被拒绝的重放保留损坏回执原文件",
+                await File.ReadAllTextAsync(receiptFile, cts.Token) == "not-json", receiptFile);
+
             var corrupted = await ZbaAsync(http, "GET", root + "/events?after=" + (cursor + 1), readToken);
             var corruptedNode = JsonNode.Parse(corrupted.Body) as JsonObject;
             Check("S55 序号文件损坏后旧游标要求 resync",
@@ -745,6 +755,7 @@ public static partial class Program
 
         CheckEventRingOverflow();
         CheckSequenceWriteFailureDegrades();
+        await RunZbaReceiptLossScenarioAsync((panel, ws, data) => Env(panel, ws, data), cts.Token);
 
         async Task<int> ReadConfigVersionAsync(string root)
         {

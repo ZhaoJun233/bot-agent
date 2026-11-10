@@ -8,6 +8,8 @@ import type {
   ZbaSecretEdit,
   ZbaSecretSlot
 } from '../../api/zba'
+import { replyPacingNumberError } from './reply-pacing'
+export { newNonce } from '../../shared/nonce'
 
 /** 一个字段的草稿：Set 保存用户输入的原始文本，Clear 表示显式清除。 */
 export interface DraftSet {
@@ -133,6 +135,11 @@ export function buildPatch(draft: DraftMap, view: ZbaConfigurationView): PatchBu
         const number = Number(edit.raw)
         if (edit.raw.trim() === '' || !Number.isFinite(number)) {
           errors.push(`${path}：需要数字`)
+          continue
+        }
+        const pacingError = section === 'behavior' ? replyPacingNumberError(key, number) : undefined
+        if (pacingError) {
+          errors.push(`${path}：${pacingError}`)
           continue
         }
         value = { kind: 1, value: number }
@@ -299,12 +306,6 @@ export function conflictingProviderNames(
 /** `cfg1:<generation>:<issuedUnixSeconds>:<nonce>`；generation/nonce 都是 32 位十六进制。 */
 export function createOperationKey(generation: string, issuedUnixSeconds: number, nonce: string): string {
   return `cfg1:${generation}:${issuedUnixSeconds}:${nonce}`
-}
-
-export function newNonce(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 export function nowSeconds(): number {

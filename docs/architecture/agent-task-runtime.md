@@ -4,6 +4,8 @@
 [ADR-0002](../decisions/0002-agent-task-runtime.md)；本文只写**当前的实现事实**：谁负责什么、
 一次提交会经历哪些状态、失败与取消怎么区分、哪些通道已经接上、看护它的测试在哪。
 
+操作与故障核对见 [任务提交、审批、取消与恢复](../operations/task-recovery-guide.md)，按 Web 任务、QQ 指令和聊天入口分别处理。
+
 ## 1. 为什么单独有一层
 
 在 #114 之前，本仓的「任务」不是一个一等公民：ZBA `/tasks` 有一套自己的内存台账，
@@ -145,7 +147,7 @@ Headless 才知道具体的 agent 命令服务——所以换通道不用动运�
 | 前置审批（#137） | 受理时先过 `IAgentTaskApprovalGate`：有效工具作用域包含 bash/write/docker 且审批开关开启的任务**不排执行**，直接落 `WaitingApproval` 并进待批列表；批准后 `Resume` 从同一条记录继续跑（`alreadyRunning: true`，不重发不新建），拒绝/超期/取消分别收口成 `approval_rejected` / `approval_expired` / `approval_cancelled` |
 | 取消 | `Cancel` 映射 `Requested → (state, true, "cancel_requested")`、`TooLate → (state, false, "too_late")`、`NotFound → 404 task_not_found` |
 
-面板直跑（`POST /api/agent`）与 `//` 命令**没有**接进运行时，这是 ADR-0002 的明确取舍：
+面板直跑（`POST /api/agent/test`）与 `//` 命令**没有**接进 Web ZBA 运行时，这是 ADR-0002 的明确取舍：
 聊天与 fire-and-forget 链路的行为本轮一点不改，先把唯一对外暴露任务语义的通道迁过来。
 
 ## 7. 任务级前置审批（#137）

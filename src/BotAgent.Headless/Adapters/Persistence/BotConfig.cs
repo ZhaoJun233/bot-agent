@@ -205,6 +205,11 @@ public static class BotConfig
     [nameof(AppSettings.WhitelistGroups)] = new[] { "QQCHAT_WHITELIST_GROUPS" },
     [nameof(AppSettings.WhitelistPrivates)] = new[] { "QQCHAT_WHITELIST_PRIVATES" },
             [nameof(AppSettings.AiDesire)] = new[] { "QQCHAT_AI_DESIRE" },
+            [nameof(AppSettings.ReplyPacingEnabled)] = new[] { "QQCHAT_REPLY_PACING" },
+            [nameof(AppSettings.GroupInterjectionProbability)] = new[] { "QQCHAT_GROUP_INTERJECTION_PROBABILITY" },
+            [nameof(AppSettings.GroupInterjectionCooldownSeconds)] = new[] { "QQCHAT_GROUP_INTERJECTION_COOLDOWN" },
+            [nameof(AppSettings.GroupContinuationWaitSeconds)] = new[] { "QQCHAT_GROUP_CONTINUATION_WAIT" },
+            [nameof(AppSettings.PrivateContinuationWaitSeconds)] = new[] { "QQCHAT_PRIVATE_CONTINUATION_WAIT" },
             [nameof(AppSettings.SuitabilityThreshold)] = new[] { "QQCHAT_SUITABILITY_THRESHOLD" },
             [nameof(AppSettings.AdaptiveSamplingEnabled)] = new[] { "QQCHAT_ADAPTIVE_SAMPLING" },
             [nameof(AppSettings.RationalTemperature)] = new[] { "QQCHAT_RATIONAL_TEMP" },
@@ -367,6 +372,11 @@ public static class BotConfig
         s.WhitelistGroups = Environment.GetEnvironmentVariable("QQCHAT_WHITELIST_GROUPS") ?? s.MessageWhitelist;
         s.WhitelistPrivates = Environment.GetEnvironmentVariable("QQCHAT_WHITELIST_PRIVATES") ?? s.MessageWhitelist;
         s.AiDesire = Int("QQCHAT_AI_DESIRE") ?? s.AiDesire;
+        s.ReplyPacingEnabled = Bool("QQCHAT_REPLY_PACING") ?? s.ReplyPacingEnabled;
+        s.GroupInterjectionProbability = (int)(PacingNumber("QQCHAT_GROUP_INTERJECTION_PROBABILITY", 100, integer: true) ?? s.GroupInterjectionProbability);
+        s.GroupInterjectionCooldownSeconds = (int)(PacingNumber("QQCHAT_GROUP_INTERJECTION_COOLDOWN", 3600, integer: true) ?? s.GroupInterjectionCooldownSeconds);
+        s.GroupContinuationWaitSeconds = (int)(PacingNumber("QQCHAT_GROUP_CONTINUATION_WAIT", 30, integer: true) ?? s.GroupContinuationWaitSeconds);
+        s.PrivateContinuationWaitSeconds = PacingNumber("QQCHAT_PRIVATE_CONTINUATION_WAIT", 30, integer: false) ?? s.PrivateContinuationWaitSeconds;
         s.SuitabilityThreshold = Int("QQCHAT_SUITABILITY_THRESHOLD") ?? s.SuitabilityThreshold;
         s.AdaptiveSamplingEnabled = Bool("QQCHAT_ADAPTIVE_SAMPLING") ?? s.AdaptiveSamplingEnabled;
         s.RationalTemperature = Dbl("QQCHAT_RATIONAL_TEMP") ?? s.RationalTemperature;
@@ -582,6 +592,11 @@ public static class BotConfig
         s.OneBotToken = s.OneBotToken.Trim();
         s.QuickLoginUin = s.QuickLoginUin.Trim();
         s.AiDesire = Math.Clamp(s.AiDesire, 0, 100);
+        s.GroupInterjectionProbability = Math.Clamp(s.GroupInterjectionProbability, 0, 100);
+        s.GroupInterjectionCooldownSeconds = Math.Clamp(s.GroupInterjectionCooldownSeconds, 0, 3600);
+        s.GroupContinuationWaitSeconds = Math.Clamp(s.GroupContinuationWaitSeconds, 0, 30);
+        s.PrivateContinuationWaitSeconds = double.IsFinite(s.PrivateContinuationWaitSeconds)
+            ? Math.Clamp(s.PrivateContinuationWaitSeconds, 0, 30) : 1.5;
         s.SuitabilityThreshold = Math.Clamp(s.SuitabilityThreshold, 0, 100);
         s.RationalTemperature = Math.Clamp(s.RationalTemperature, 0.0, 2.0);
         s.RationalTopP = Math.Clamp(s.RationalTopP, 0.0, 1.0);
@@ -749,6 +764,17 @@ public static class BotConfig
         }
 
         return Str(names);
+    }
+
+    private static double? PacingNumber(string name, double max, bool integer)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (double.TryParse(raw.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            && double.IsFinite(value) && value >= 0 && value <= max
+            && (!integer || value == Math.Truncate(value))) return value;
+        Console.Error.WriteLine($"[Config] {name} 超出有效范围或数值格式无效，已忽略");
+        return null;
     }
 
     private static int? Int(string name)

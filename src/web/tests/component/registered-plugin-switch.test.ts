@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import RegisteredPluginSwitch from '../../src/features/capabilities/RegisteredPluginSwitch.vue'
-import { ZbaClient, ZbaNetworkError, type ZbaConfigurationReceipt } from '../../src/api/zba'
+import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaConfigurationReceipt } from '../../src/api/zba'
 import { providerSnapshot } from '../fixtures/provider-marketplace'
 const pluginKey = 'preset.feature.token-quota'
 const mounted: Array<{ unmount: () => void }> = []
@@ -33,17 +33,29 @@ describe('registered quota plugin switch', () => {
     expect(wrapper.get('[data-testid="quota-plugin-desired"]').text()).toContain('停用')
     expect(wrapper.text()).toContain('需重启'); expect(wrapper.text()).toContain('运行中')
   })
-  it('keeps unknown intent across hiding and reconciles the original key without resend', async () => {
-    const client = clientWith({ saveConfiguration: vi.fn(async () => { throw new ZbaNetworkError() }),
+  it.each([0, 408, 409, 429])('keeps unknown intent across hiding and reconciles the original key without resend (%s)', async (status) => {
+    const client = clientWith({ saveConfiguration: vi.fn(async () => { throw status === 0 ? new ZbaNetworkError() : new ZbaRequestError(status, 'http_error', 'synthetic ambiguous response') }),
       findConfiguration: vi.fn<ZbaClient['findConfiguration']>(async key => ({ code: 0, receipt: receipt(key) })) })
     const wrapper = editor(client); await flushPromises()
     await wrapper.get('[data-testid="quota-plugin-toggle"]').trigger('click'); await flushPromises()
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([true])
-    await wrapper.setProps({ active: false }); await wrapper.setProps({ active: true })
+    const key = vi.mocked(client.saveConfiguration).mock.calls[0]?.[0].key
+    expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    await wrapper.setProps({ active: false })
+    expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+    await wrapper.setProps({ active: true })
+    expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    for (const boundary of [{ mode: 'read' as const }, { writesEnabled: false }, { client: clientWith() }, { pluginKey: 'plugin-other' }]) {
+      await wrapper.setProps(boundary)
+      expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
+      await wrapper.setProps({ mode: 'admin', writesEnabled: true, client, pluginKey })
+      expect(wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value).toBe(key)
+    }
     await wrapper.get('[data-testid="quota-plugin-check"]').trigger('click'); await flushPromises()
     expect(client.saveConfiguration).toHaveBeenCalledTimes(1)
     expect(client.findConfiguration).toHaveBeenCalledWith(vi.mocked(client.saveConfiguration).mock.calls[0]?.[0].key)
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+    expect(wrapper.find('[data-testid="configuration-operation-key"]').exists()).toBe(false)
   })
   it.each([{ mode: 'read' }, { writesEnabled: false }, { active: false }, { blocked: true }])('enforces mode and pending draft gates %#', async extra => {
     const client = clientWith(); const wrapper = editor(client, extra); await flushPromises()

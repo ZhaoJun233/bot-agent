@@ -1,5 +1,8 @@
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Reply;
 using BotAgent.Services.Platforms;
+using BotAgent.Services.Memory;
+using BotAgent.Services.Qq;
 using BotAgent.Services.Resilience;
 
 namespace BotAgent.Services.OneBot;
@@ -18,23 +21,47 @@ internal sealed class OneBotActionClient
     private readonly Func<IOneBotTransport?> _transport;
     private readonly PlatformOperationLifetime _operations;
     private readonly Func<bool> _disposed;
+    private readonly IQqChatSource _source;
 
     public OneBotActionClient(
         Func<IOneBotTransport?> transport,
         PlatformOperationLifetime operations,
-        Func<bool> disposed)
+        Func<bool> disposed,
+        IQqChatSource source)
     {
         _transport = transport;
         _operations = operations;
         _disposed = disposed;
+        _source = source;
     }
 
     /// <summary>
     /// 发一个动作并等回执（最多 10 秒）。返回 null 表示：没连接、已停止、超时、发送抛异常或取消 ——
     /// 调用方按"失败"处理即可（原来的语义就是这样，没有把不同失败拆开）。
     /// </summary>
+    private static (bool IsGroup, long Id)? MessageDestination(string action, string parameters)
+    {
+        // An unknown RawCall can disclose through arbitrary parameters. Fail closed;
+        // the normal no-memory protocol surface remains unchanged.
+        if (action is not ("send_group_msg" or "send_private_msg" or "send_msg"
+            or "send_group_forward_msg" or "send_private_forward_msg")) return null;
+        try
+        {
+            var json = JsonNode.Parse(parameters);
+            var isGroup = action.Contains("group", StringComparison.Ordinal)
+                || (action == "send_msg" && json?["message_type"]?.GetValue<string>() == "group");
+            var id = json?[isGroup ? "group_id" : "user_id"]?.GetValue<long>() ?? 0;
+            return id > 0 ? (isGroup, id) : null;
+        }
+        catch { return null; }
+    }
+
     public async Task<JsonNode?> SendAsync(string action, string paramsJson, CancellationToken ct)
     {
+        var target = MessageDestination(action, paramsJson);
+        if (MemoryUseScope.HasMemory && target is null) return null;
+        using var destination = target is { } value
+            ? MemoryUseScope.EnterLegacyDestination(_source, value.IsGroup, value.Id) : null;
         using var operation = _operations.TryEnter(ct);
         if (_disposed() || operation is null) return null;
         ct = operation.Token;
@@ -53,7 +80,9 @@ internal sealed class OneBotActionClient
 
         try
         {
-            await transport.SendActionAsync(action, paramsJson, echo, ct);
+            var isChatCommit = action is "send_group_msg" or "send_private_msg" or "send_msg"
+                or "send_group_forward_msg" or "send_private_forward_msg" or "group_poke" or "friend_poke";
+            await transport.SendActionAsync(action, paramsJson, echo, ct, isChatCommit);
             var done = await Task.WhenAny(tcs.Task, Clock.Delay(TimeSpan.FromSeconds(10), ct));
             if (done != tcs.Task)
             {
@@ -67,13 +96,14 @@ internal sealed class OneBotActionClient
 
             return await tcs.Task;
         }
-        catch
+        catch (Exception ex)
         {
             lock (_gate)
             {
                 _pending.Remove(echo);
             }
 
+            if (ex is OperationCanceledException && ReplyCommitBoundary.IsActive) throw;
             return null;
         }
     }

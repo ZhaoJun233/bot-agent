@@ -20,7 +20,7 @@ function field<T>(value: T) {
     visibility: 1,
     display: '',
     rule: { id: 0, effect: 0, canClear: true, editable: true, legacyNeedsReview: false },
-    userMode: 1,
+    userMode: 2,
     effectiveSource: 2,
     applyState: 1,
     value
@@ -79,7 +79,7 @@ describe('平台策略草稿', () => {
     expect(splitActions('   ')).toEqual([])
   })
 
-  it('只提交改过的行，并按服务端闭合记录序列化', () => {
+  it('只提交改过的行，未改字段保持完整原始规则', () => {
     const entries = [entry('qq.private'), entry('feishu')]
     const view = viewWith(entries)
     const baseline = policyBaseline(entries[0]!)
@@ -90,12 +90,10 @@ describe('平台策略草稿', () => {
     expect(patch.registered?.policies).toHaveLength(1)
     expect(patch.registered?.policies[0]!.target).toEqual(entries[0]!.target)
     expect(patch.registered?.policies[0]!.configuration).toEqual({
-      enabled: 1,
-      chatEnabled: 1,
+      enabled: 1, chatEnabled: 1,
       groupWhitelist: { kind: 2 },
       privateWhitelist: { kind: 1, value: '20002' },
-      allowedActions: { kind: 1, actions: ['like', 'poke'] },
-      features: [{ feature: 0, enabled: true }]
+      allowedActions: { kind: 1, actions: ['like', 'poke'] }, features: [{ feature: 0, enabled: true }]
     })
   })
 

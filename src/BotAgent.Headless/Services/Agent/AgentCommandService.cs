@@ -1,4 +1,5 @@
 using BotAgent.Domain.Agent;
+using BotAgent.Domain.Mcp;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
@@ -33,6 +34,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
     private readonly ConversationRegistry _registry;
     private readonly PanelNotifier _ui;
     private readonly IAgentSessionStore _agentSessions;
+    private readonly IUnifiedMemory? _unifiedMemory;
     private readonly ServerAgentRunner _serverAgent;
     private readonly IAgentImageStore _images;
     private readonly AgentHooks _hooks;
@@ -52,7 +54,8 @@ public sealed partial class AgentCommandService : IAgentCommandService
         AgentHooks hooks,
         IQqActions? actionGateway = null,
         PlatformPolicyResolver? platformPolicies = null,
-        Func<string, bool>? pluginAllows = null)
+        Func<string, bool>? pluginAllows = null,
+        IUnifiedMemory? unifiedMemory = null)
     {
         _box = box;
         _source = source;
@@ -60,6 +63,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
         _registry = registry;
         _ui = ui;
         _agentSessions = agentSessions;
+        _unifiedMemory = unifiedMemory;
         _serverAgent = serverAgent;
         _images = images;
         _hooks = hooks;
@@ -77,6 +81,9 @@ public sealed partial class AgentCommandService : IAgentCommandService
     /// <summary>仅转交发现快照中的工具名，不在受理阶段触发 MCP 网络发现。</summary>
     internal IReadOnlyList<string> GetTaskMcpToolNames()
         => _serverAgent.GetTaskMcpToolNames();
+
+    internal IReadOnlyList<McpToolInfo> CaptureTaskPythonLeases(IEnumerable<string> names)
+        => _serverAgent.CaptureTaskPythonLeases(names);
 
     /// <summary>协议端（QQ 动作要用它）—— 只有 OneBot 这条路有。</summary>
     private IQqActions? Gateway => _actionGateway ?? _source as IQqActions;
@@ -273,7 +280,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
 
     /// <summary>面板“试一条”用的：直接在容器里跑一次服务器内置 agent（不经过 QQ、不经过外部设备）。</summary>
     public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds, CancellationToken ct = default,
-        IReadOnlyList<string>? toolScope = null)
+        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null)
     {
         var task = new AgentTask
         {
@@ -282,6 +289,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
             Prompt = prompt,
             Session = "qqchat-panel",
             ToolScope = toolScope,
+            PythonToolLeases = Array.AsReadOnly((pythonToolLeases ?? []).ToArray()),
             // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
             QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
         };
@@ -300,7 +308,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
     /// <summary>面板工作台用的持久化单次执行入口：把运行流水写回指定 Agent 会话。</summary>
     public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt,
         int timeoutSeconds, string target, CancellationToken ct = default,
-        IReadOnlyList<string>? toolScope = null)
+        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null)
     {
         if (!target.Equals("server", StringComparison.OrdinalIgnoreCase)
             && !target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
@@ -317,7 +325,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
         var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, null);
         try
         {
-            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope);
+            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope, pythonToolLeases);
             _agentSessions.FinishRun(sourceKey, session.Id, runId, task.Ok, task.DurationMs, task.ToolCalls,
                 task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             return task;
@@ -655,10 +663,12 @@ public sealed partial class AgentCommandService : IAgentCommandService
     private async void OnAgentFinished(AgentTask task)
     {
         using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
+        var memoryDerived = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
         try
         {
             // 服务器内置后端：把这一轮的对话存回会话（下一轮同一会话能接上）
-            if (task.Conversation is { Count: > 0 } && task.SessionRef is { } session &&
+            if (!memoryDerived
+                && task.Conversation is { Count: > 0 } && task.SessionRef is { } session &&
                 session.Backend == "server")
             {
                 _agentSessions.AppendTurn(task.SourceKey, session.Id, task.Conversation);
@@ -670,7 +680,9 @@ public sealed partial class AgentCommandService : IAgentCommandService
             if (task.SessionRef is { } runSession && task.RunId is { Length: > 0 } runId)
             {
                 _agentSessions.FinishRun(task.SourceKey, runSession.Id, runId, task.Ok, task.DurationMs,
-                    task.ToolCalls, task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
+                    task.ToolCalls, memoryDerived
+                        ? "受控记忆任务：不持久化模型派生上下文。"
+                        : task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             }
 
             if (_source is ChannelRouter && (task.SourceLease is null || !task.SourceLease.IsCurrent)) return;
@@ -682,7 +694,9 @@ public sealed partial class AgentCommandService : IAgentCommandService
             var seconds = task.DurationMs > 0 ? task.DurationMs / 1000.0 : (Clock.Now - task.StartedAt).TotalSeconds;
             if (task.Ok)
             {
-                _hooks.Log($"agent 完成（{seconds:F0}s，{task.ToolCalls} 次工具调用）: {TextRules.Shorten(task.Text ?? string.Empty, 80)}");
+                _hooks.Log(memoryDerived
+                    ? $"agent 完成（{seconds:F0}s，{task.ToolCalls} 次工具调用；受控记忆结果不记正文）"
+                    : $"agent 完成（{seconds:F0}s，{task.ToolCalls} 次工具调用）: {TextRules.Shorten(task.Text ?? string.Empty, 80)}");
 
                 // agent 会翻日志/数据，结论里很可能带 QQ 号或群友昵称 —— 回群前过一遍脱敏开关
                 //（面板里的“列出会话时脱敏”默认是开的；关掉就原样发，管理员自己的选择）。
@@ -690,17 +704,17 @@ public sealed partial class AgentCommandService : IAgentCommandService
             }
             else
             {
-                _hooks.Log($"agent 失败（{seconds:F0}s）: {task.Error}");
+                _hooks.Log(memoryDerived ? $"agent 失败（{seconds:F0}s；受控记忆错误不记正文）" : $"agent 失败（{seconds:F0}s）: {task.Error}");
                 await _hooks.SendPlainAsync(conversation, $"❌ 服务器上跑失败了（{seconds:F0}s）：{TextRules.Shorten(task.Error ?? "未知错误", 300)}");
             }
 
             // 跑完再综结标题：拿最近的轮次（含刚刚这轮）给模型，综结出一个能认出“这个会话在干什么”的标题。
             // 放在回话之后（主人先看到结果），失败也不影响任何东西；手动改过名的会话不动。
-            await SummarizeSessionTitleAsync(task);
+            if (!memoryDerived) await SummarizeSessionTitleAsync(task);
         }
         catch (Exception ex)
         {
-            _hooks.Log("agent 结果回话失败: " + ex.Message);
+            _hooks.Log("agent 结果回话失败: " + (memoryDerived ? ex.GetType().Name : ex.Message));
         }
     }
 

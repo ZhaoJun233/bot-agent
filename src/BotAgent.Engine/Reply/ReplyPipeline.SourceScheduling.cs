@@ -2,6 +2,7 @@ using BotAgent.Engine.Runtime;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Ops;
 using BotAgent.Domain.Qq;
+using BotAgent.Domain.Reply;
 using BotAgent.Services.Qq;
 
 namespace BotAgent.Services.Reply;
@@ -50,6 +51,14 @@ public sealed partial class ReplyPipeline
             return;
         }
 
+        RefreshPacingPolicy();
+        if (_settings.ReplyPacingEnabled)
+        {
+            ObservePacedReply(conversation, triggerMessageId, proactive, directInWindow, epoch);
+            return;
+        }
+
+        var intent = LegacyReplyIntent(conversation, triggerMessageId, proactive, directInWindow);
         if (catchUp || AllowReply(conversation))
         {
             if (catchUp)
@@ -59,14 +68,22 @@ public sealed partial class ReplyPipeline
             }
 
             var mustPreserve = catchUp || directInWindow;
-            EnqueueReplyInEpoch(conversation, triggerMessageId, proactive, mustPreserve, epoch);
+            EnqueueReplyInEpoch(conversation, triggerMessageId, proactive, mustPreserve, epoch, intent);
             return;
         }
 
         // 被挡下：记一笔待补（窗口里出现过“直接跟你说话”的，优先拿它当补评估的触发）
         var key = conversation.SourceKey;
-        lock (_deferredGate)
+        LegacyReplyRequest? transfer = null;
+        lock (_pacingSync)
         {
+            if (_pacingEnabled)
+            {
+                if (intent == PendingReplyIntent.Explicit) transfer = new(new(conversation, source, epoch, _settings.Snapshot()),
+                    new(triggerMessageId, proactive, true, source, intent));
+            }
+            else lock (_deferredGate)
+            {
             if (!IsReplyEpochCurrent(conversation, epoch)) return;
             foreach (var retired in _deferredTriggers.Where(item => item.Value.Source is { IsCurrent: false }).Select(item => item.Key).ToArray())
                 _deferredTriggers.TryRemove(retired, out _);
@@ -86,7 +103,9 @@ public sealed partial class ReplyPipeline
                 var id = directInWindow || old.TriggerId == 0 ? (triggerMessageId ?? old.TriggerId) : old.TriggerId;
                 return new DeferredTrigger(id, direct, directInWindow || old.TriggerId == 0 ? source : old.Source, conversation, epoch);
             });
+            }
         }
+        if (transfer is not null) HandoffLegacyReply(transfer);
         _hooks.Log($"等这一轮说完再评估（被限流挡下的新消息已记下）: {conversation.Name}");
     }
     /// <summary>把一条待回复请求排入该会话的有界 FIFO 链，并唤醒调度器。</summary>
@@ -97,7 +116,8 @@ public sealed partial class ReplyPipeline
         bool mustPreserve = false)
         => EnqueueReplyInEpoch(conversation, triggerMessageId, proactive, mustPreserve, CaptureReplyEpoch(conversation));
 
-    private void EnqueueReplyInEpoch(BotConversation conversation, long? triggerMessageId, bool proactive, bool mustPreserve, object epoch)
+    private void EnqueueReplyInEpoch(BotConversation conversation, long? triggerMessageId, bool proactive, bool mustPreserve, object epoch,
+        PendingReplyIntent intent = PendingReplyIntent.Ordinary)
     {
         if (triggerMessageId is not null)
         {
@@ -106,13 +126,30 @@ public sealed partial class ReplyPipeline
 
         var source = PlatformSourceExecution.Current ?? (_source as IPlatformSourceRouter)?.CaptureForConversation(conversation.SourceKey);
         if (_source is IPlatformSourceRouter && (source is null || !source.IsCurrent)) return;
-        PendingReplyOffer offer;
-        lock (_pendingGate)
+        var pending = new PendingReply(triggerMessageId, proactive, mustPreserve, source, intent);
+        PendingReplyOffer offer = PendingReplyOffer.Accepted;
+        LegacyReplyRequest? transfer = null;
+        bool paced;
+        lock (_pacingSync)
         {
             if (!IsReplyEpochCurrent(conversation, epoch)) return;
-            _pendingConversations[conversation.SourceKey] = conversation;
-            var queue = _pendingReplies.GetOrAdd(conversation.SourceKey, _ => new TenantReplyQueue());
-            offer = queue.Enqueue(new PendingReply(triggerMessageId, proactive, mustPreserve, source), TenantReplyQueue.DefaultCapacity);
+            paced = _pacingEnabled;
+            if (paced)
+            {
+                if (pending.Intent != PendingReplyIntent.Ordinary)
+                    transfer = new(new(conversation, source, epoch, _settings.Snapshot()), pending);
+            }
+            else lock (_pendingGate)
+            {
+                _pendingConversations[conversation.SourceKey] = conversation;
+                var queue = _pendingReplies.GetOrAdd(conversation.SourceKey, _ => new TenantReplyQueue());
+                offer = queue.Enqueue(pending, TenantReplyQueue.DefaultCapacity);
+            }
+        }
+        if (paced)
+        {
+            if (transfer is not null) HandoffLegacyReply(transfer);
+            return;
         }
         if (offer == PendingReplyOffer.RejectedCapacity)
         {
@@ -144,10 +181,10 @@ public sealed partial class ReplyPipeline
 
                 foreach (var (key, queue) in _pendingReplies)
                 {
-                    if (!TryClaimPending(key, queue, out var conversation, out var pending)) continue;
+                    if (!TryClaimPending(key, queue, out var work)) continue;
 
                     fired = true;
-                    _ = RunReplyAsync(conversation, key, pending.TriggerMessageId, pending.Proactive, pending.Source);
+                    _ = RunReplyAsync(work!);
                 }
 
                 if (fired)
@@ -176,18 +213,22 @@ public sealed partial class ReplyPipeline
         }
     }
     // A scheduler enumeration may still hold an intentionally dropped queue; claim only its current membership.
-    private bool TryClaimPending(string key, TenantReplyQueue expectedQueue, out BotConversation conversation, out PendingReply pending)
+    private bool TryClaimPending(string key, TenantReplyQueue expectedQueue, out LegacyReplyWork? work)
     {
+        lock (_pacingSync)
         lock (_pendingGate)
         {
-            conversation = null!;
-            pending = default;
-            if (!_pendingReplies.TryGetValue(key, out var current) || !ReferenceEquals(current, expectedQueue)
-                || !_pendingConversations.TryGetValue(key, out conversation!) || _inFlight.ContainsKey(key)
+            work = null;
+            if (_pacingEnabled || !_pendingReplies.TryGetValue(key, out var current) || !ReferenceEquals(current, expectedQueue)
+                || !_pendingConversations.TryGetValue(key, out var conversation) || _inFlight.ContainsKey(key)
                 || current.IsEmpty || !_inFlight.TryAdd(key, 0)) return false;
-            if (current.TryDequeue(out pending))
+            if (current.TryDequeue(out var pending))
             {
-                _activeConversations[key] = (conversation, CaptureReplyEpoch(conversation));
+                var epoch = CaptureReplyEpoch(conversation);
+                _activeConversations[key] = (conversation, epoch);
+                var owner = new PacedReplyOwner(conversation, pending.Source, epoch, _settings.Snapshot());
+                work = new(this, new(owner, pending));
+                _legacyReplyWorks.Add(work);
                 return true;
             }
             _inFlight.TryRemove(key, out _);
@@ -214,9 +255,14 @@ public sealed partial class ReplyPipeline
         }
     }
     /// <summary>执行一次回复（受全局并发闸门限制）。</summary>
-    private async Task RunReplyAsync(BotConversation conversation, string sourceKey, long? triggerMessageId, bool proactive = false,
-        PlatformSourceLease? source = null)
+    private async Task RunReplyAsync(LegacyReplyWork work)
     {
+        var conversation = work.Request.Owner.Conversation;
+        var sourceKey = conversation.SourceKey;
+        var pending = work.Request.Pending;
+        var source = pending.Source;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(work.Cancellation.Token, source?.Lifetime ?? default);
+        var cancellation = lifetime.Token;
         using var sourceScope = PlatformSourceExecution.Enter(source);
         _traces.Begin(sourceKey);
 
@@ -224,11 +270,15 @@ public sealed partial class ReplyPipeline
         var gate = _replyGate.Reserve();
         try
         {
-            await gate.WaitAsync(source?.Lifetime ?? default);
-            if (_source is IPlatformSourceRouter && (source is null || !source.IsCurrent)) return;
+            work.Check();
+            await gate.WaitAsync(cancellation);
+            work.Check();
             conversation.HasPendingReply = false;
-            await GenerateReplyAsync(conversation, triggerMessageId, proactive, source?.Lifetime ?? default);
+            using var boundary = ReplyCommitBoundary.Enter(work);
+            await GenerateReplyAsync(conversation, pending.TriggerMessageId, pending.Proactive, cancellation);
         }
+        catch (ReplyPacingInterruptedException) { }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
             _hooks.Log("回复流程异常: " + ex.Message);
@@ -252,6 +302,7 @@ public sealed partial class ReplyPipeline
                 _inFlight.TryRemove(sourceKey, out _);
             }
 
+            FinishLegacyReply(work);
             _ = DrainReplyQueueAsync(); // 唤醒调度器处理该会话的后续项
         }
     }

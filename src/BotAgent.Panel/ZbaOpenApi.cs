@@ -65,7 +65,7 @@ internal static partial class ZbaOpenApi
                         ["description"] = "BOTAGENT_ZBA_TOKEN 为管理员；BOTAGENT_ZBA_READ_TOKEN 为只读。"
                     }
                 },
-                ["schemas"] = Schemas()
+                ["schemas"] = SchemasWithImports()
             }
         };
     }
@@ -88,6 +88,7 @@ internal static partial class ZbaOpenApi
             });
         }
 
+        if (template == "/zba/v1/logs/feed") parameters.Add(LogFeedCursorParameter());
         return parameters;
     }
 
@@ -154,6 +155,8 @@ internal static partial class ZbaOpenApi
         ["ZbaLogEntry"] = Object(("time", Integer()), ("level", String()), ("source", String()),
             ("message", String()), ("redacted", Boolean())),
         ["ZbaLogPage"] = Object(("items", Array(Ref("ZbaLogEntry"))), ("capacity", Integer())),
+        ["ZbaLogFeedEntry"] = LogFeedEntrySchema(),
+        ["ZbaLogFeedPage"] = LogFeedPageSchema(),
         ["ZbaError"] = Object(("code", String()), ("message", String()), ("reason", NullableString()), ("backendCode", Integer())),
         ["ZbaHealth"] = Object(("status", String()), ("ready", Boolean()), ("configured", Boolean()),
             ("contractVersion", String()), ("checkedAt", String())),
@@ -304,11 +307,16 @@ internal static partial class ZbaOpenApi
         ["ZbaPluginCatalogEntry"] = Object(("manifest", Ref("PluginManifest")),
             ("installedVersion", NullableString()), ("enabled", Boolean()), ("status", String()),
             ("restartRequired", Boolean()), ("name", NullableString()), ("summary", NullableString()),
-            ("category", NullableString())),
+            ("category", NullableString()), ("metadata", Ref("ZbaPluginMetadata"))),
         ["ZbaPluginCatalog"] = Object(("revision", String()), ("source", String()), ("trustNotice", String()),
-            ("categories", Array(String())), ("plugins", Array(Ref("ZbaPluginCatalogEntry")))),
+            ("categories", Array(String())), ("plugins", Array(Ref("ZbaPluginCatalogEntry"))),
+            ("builtinPlugins", Array(Ref("ZbaBuiltinPlugin"))), ("metadataNotice", NullableString())),
         ["ZbaInstalledPlugins"] = Object(("revision", String()),
-            ("plugins", Array(Ref("ZbaPluginCatalogEntry")))),
+            ("plugins", Array(Ref("ZbaPluginCatalogEntry"))), ("builtinPlugins", Array(Ref("ZbaBuiltinPlugin")))),
+        ["ZbaBuiltinPlugin"] = RequiredObject(["pluginId", "version", "enabled", "metadata"],
+            ("pluginId", String()), ("version", String()), ("enabled", Boolean()), ("metadata", Ref("ZbaPluginMetadata"))),
+        ["ZbaPluginMetadata"] = PluginMetadataSchema(),
+        ["ZbaPluginReview"] = PluginReviewSchema(),
         ["ZbaPluginSourceResolveRequest"] = RequiredObject(new[] { "sourceUrl" }, ("sourceUrl", String())),
         ["ZbaPluginSourceResolution"] = Object(("manifest", Ref("PluginManifest")), ("trustNotice", String())),
         ["ZbaPluginMutationRequest"] = RequiredObject(

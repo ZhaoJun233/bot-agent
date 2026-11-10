@@ -23,7 +23,7 @@ internal sealed class AgentTaskExecutor(AgentCommandService agent) : IAgentTaskE
         var seconds = Math.Clamp((int)Math.Ceiling(request.Timeout.TotalSeconds), MinSeconds, MaxSeconds);
         var task = await agent.RunPanelAgentDirectAsync(
             request.SourceKey, request.SessionId, request.Prompt, seconds, request.Target, ct,
-            request.ToolScope).ConfigureAwait(false);
+            request.ToolScope, request.PythonToolLeases).ConfigureAwait(false);
         return new AgentTaskExecution
         {
             Ok = task.Ok,

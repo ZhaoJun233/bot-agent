@@ -4,6 +4,7 @@ import { ZbaClient, ZbaRequestError, type ZbaConfigurationReadResult } from '../
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { buildPatch, fieldPath } from '../configuration/draft'
+import ConfigurationOperationKey from '../configuration/ConfigurationOperationKey.vue'
 import { settingsFor } from './plugin-settings'
 import { switchState } from './plugin-toggle'
 import { useConfigurationCommit } from './configuration-commit'
@@ -176,20 +177,21 @@ onBeforeUnmount(() => { alive = false; ++sequence })
     <button v-if="phase === 'conflict' || phase === 'reload-required' || reloadRequired || error || commitError" type="button"
       :data-testid="props.compact ? testId('reload-') : 'quota-plugin-reload'" :disabled="!sameOwner || !props.active || loading || (busy && phase !== 'reload-required')" @click="load">读取最新启停设置</button>
     <p v-if="busy" class="notice warn" role="status">启停提交尚未确认；操作键已保留，请核对原回执，不会重复提交。</p>
+    <ConfigurationOperationKey v-if="authorized && pendingKey" :operation-key="pendingKey" />
   </section>
 </template>
 
 <style scoped>
 .plugin-enforcement { margin-block: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
-.plugin-enforcement.compact { margin: 0; padding: 10px; background: var(--surface-muted); font-size: 12px; }
+.plugin-enforcement.compact { margin: 0; padding: 10px; background: var(--surface-muted); font-size: 0.75rem; }
 .plugin-enforcement h3 { margin-top: 0; }
 .plugin-enforcement p { margin-block: 8px; }
 .plugin-enforcement button { margin: 4px 8px 4px 0; }
 .plugin-switch-row, .plugin-switch-control, .plugin-switch-button { display: flex; align-items: center; gap: 10px; }
 .plugin-switch-row { flex-wrap: wrap; justify-content: space-between; }
 .plugin-switch-control { min-height: 32px; cursor: pointer; }
-.plugin-switch-control input { appearance: none; width: 34px; height: 20px; min-height: 20px; padding: 0; flex: none; margin: 0; border: 1px solid var(--border-strong); border-radius: 20px; background: var(--border-strong); cursor: pointer; }
-.plugin-switch-control input::before { content: ''; display: block; width: 14px; height: 14px; margin: 2px; border-radius: 50%; background: var(--surface); }
+.plugin-switch-control input { appearance: none; width: 38px; height: 24px; min-height: 24px; padding: 0; flex: none; margin: 0; border: 1px solid var(--border-strong); border-radius: 20px; background: var(--border-strong); cursor: pointer; }
+.plugin-switch-control input::before { content: ''; display: block; width: 18px; height: 18px; margin: 2px; border-radius: 50%; background: var(--surface); }
 .plugin-switch-control input:checked { background: var(--accent-deep); }
 .plugin-switch-control input:checked::before { transform: translateX(14px); }
 .plugin-switch-control input:disabled { opacity: .5; cursor: not-allowed; }
@@ -198,4 +200,5 @@ onBeforeUnmount(() => { alive = false; ++sequence })
 .plugin-switch-track span { display: block; width: 14px; height: 14px; margin: 3px; border-radius: 50%; background: var(--surface); }
 .plugin-switch-button[aria-checked="true"] .plugin-switch-track { background: var(--accent-deep); }
 .plugin-switch-button[aria-checked="true"] .plugin-switch-track span { transform: translateX(14px); }
+@media (max-width: 640px) { .plugin-switch-control { min-height: 44px; } }
 </style>

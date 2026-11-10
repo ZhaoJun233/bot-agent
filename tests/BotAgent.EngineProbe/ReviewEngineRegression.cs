@@ -268,11 +268,20 @@ internal static partial class ReviewEngineRegression
         pipeline.ForgetSession(conversation.SourceKey);
         var restored = Conversation();
         enqueue.Invoke(pipeline, new object?[] { restored, 10003L, false, true });
-        var rejectedClaim = new object?[] { restored.SourceKey, oldQueue, null, null };
-        Ensure(!(bool)claim.Invoke(pipeline, rejectedClaim)!, "B16 stale scheduler queue cannot claim recreated conversation");
-        var currentClaim = new object?[] { restored.SourceKey, queues[restored.SourceKey], null, null };
-        Ensure((bool)claim.Invoke(pipeline, currentClaim)! && ReferenceEquals(currentClaim[2], restored)
-            && ((PendingReply)currentClaim[3]!).TriggerMessageId == 10003, "B16 current claim owns C2 and its trigger");
+        var rejectedClaim = new object?[] { restored.SourceKey, oldQueue, null };
+        Ensure(!(bool)claim.Invoke(pipeline, rejectedClaim)! && rejectedClaim[2] is null,
+            "B16 stale scheduler queue cannot claim recreated conversation");
+        var currentClaim = new object?[] { restored.SourceKey, queues[restored.SourceKey], null };
+        Ensure((bool)claim.Invoke(pipeline, currentClaim)! && currentClaim[2] is not null,
+            "B16 current scheduler queue claims work");
+        // Claim now returns LegacyReplyWork; inspect its captured request rather than separate out parameters.
+        var claimedWork = currentClaim[2]!;
+        var claimedRequest = claimedWork.GetType().GetProperty("Request", flags)!.GetValue(claimedWork)!;
+        var claimedOwner = claimedRequest.GetType().GetProperty("Owner")!.GetValue(claimedRequest)!;
+        var claimedConversation = claimedOwner.GetType().GetProperty("Conversation")!.GetValue(claimedOwner);
+        var claimedPending = (PendingReply)claimedRequest.GetType().GetProperty("Pending")!.GetValue(claimedRequest)!;
+        Ensure(ReferenceEquals(claimedConversation, restored) && claimedPending.TriggerMessageId == 10003,
+            "B16 current claim owns C2 and its trigger");
 
         // Drop while in-flight: clear deferred, suppress already detached old followup, permit fresh C3.
         var deferredField = typeof(ReplyPipeline).GetField("_deferredTriggers", flags)!;
@@ -288,7 +297,7 @@ internal static partial class ReviewEngineRegression
             "B16 drop clears in-flight conversation deferred followups");
         typeof(ReplyPipeline).GetMethod("FlushDeferred", flags)!.Invoke(pipeline, new object?[] { restored });
         var enqueueEpoch = typeof(ReplyPipeline).GetMethod("EnqueueReplyInEpoch", flags)!;
-        enqueueEpoch.Invoke(pipeline, new object?[] { restored, 10004L, false, true, oldEpoch });
+        enqueueEpoch.Invoke(pipeline, new object?[] { restored, 10004L, false, true, oldEpoch, PendingReplyIntent.Ordinary });
         Ensure(queues.IsEmpty && conversations.IsEmpty, "B16 detached old-epoch deferred work cannot resurrect dropped C2");
         pipeline.RequestReply(restored, 10006L, catchUp: true, directInWindow: true);
         Ensure(queues[restored.SourceKey].TryDequeue(out var renewed) && renewed.TriggerMessageId == 10006,

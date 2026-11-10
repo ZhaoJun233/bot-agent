@@ -28,6 +28,18 @@ public sealed class PluginSettingsStore
     private sealed record AppliedSnapshot(long Revision, string SchemaHash, string Version);
     private sealed record Snapshot(State State, Dictionary<string, JsonElement> Values);
 
+    // Lifecycle uninstall binds opaque persisted metadata, not a possibly incompatible schema.
+    public string ReadPreservationStamp(string id)
+    {
+        string? raw = null;
+        DatabaseOperation(() =>
+        {
+            using var connection = StorageDatabase.Open();
+            raw = StorageDatabase.GetMetaInTransaction(connection, StateKey(id));
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw ?? "")));
+    }
+
     public PluginSettingsView ReadManifest(PluginPackageManifest manifest)
     {
         var schema = ReadSchema(manifest);
@@ -56,6 +68,10 @@ public sealed class PluginSettingsStore
             result = SaveInTransaction(connection, manifest, schema, expectedRevision, idempotencyKey, changes, callerScope)));
         return result!;
     }
+
+    /// <summary>Read-only lifecycle admission: no prepared/applied runtime state and no writes.</summary>
+    public long ValidatePreserved(PluginPackageManifest manifest)
+        => ReadSnapshot(manifest.Id, ReadSchema(manifest), allowMissing: false).State.Revision;
 
     public string ResolveRuntimeValues(PluginPackageManifest manifest) => ResolveRuntimeValues(manifest, out _);
 

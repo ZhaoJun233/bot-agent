@@ -1,3 +1,4 @@
+using BotAgent.Services.Memory;
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
@@ -6,6 +7,7 @@ using System.Text.Json.Nodes;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Qq;
 using BotAgent.Domain.Qq;
+using BotAgent.Domain.Reply;
 using BotAgent.Domain.Ports;
 using BotAgent.Platforms.Net;
 using BotAgent.Services.Platforms;
@@ -38,7 +40,7 @@ namespace BotAgent.Services.Official;
 /// 约定：这个类**只管收发**。白名单、限流、上下文、人设全在 BotAgentHost（与私域共用同一套逻辑），
 /// 这样两条通道的行为才一致。
 /// </summary>
-public sealed class OfficialBotGateway : IQqChatSource, IDisposable
+public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, IDisposable
 {
     /// <summary>小组件：群与单聊事件都在这一个位里（GROUP_AND_C2C_EVENT = 1 &lt;&lt; 25）。</summary>
     private const int IntentsGroupAndC2C = 1 << 25;
@@ -168,6 +170,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// <summary>发文本。优先当**被动回复**（带上刚收到的 msg_id，能引用上下文），失败就退化成主动消息。</summary>
     public async Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return new SendResult(false);
         ct = operation.Token;
@@ -249,6 +252,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// </summary>
     public async Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return false;
         ct = operation.Token;
@@ -280,6 +284,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
     /// <summary>发图片：同样是富媒体（file_type=1）+ <c>msg_type=7</c>。</summary>
     public async Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
     {
+        using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
         if (_disposed || operation is null) return false;
         ct = operation.Token;
@@ -833,7 +838,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         }
 
         var url = $"{ApiBase}/v2/{(isGroup ? "groups" : "users")}/{Uri.EscapeDataString(openId)}/messages";
-        var (ok, text, status) = await SendApiAsync(url, body, ct).ConfigureAwait(false);
+        var (ok, text, status) = await SendApiAsync(url, body, ct, isChatCommit: true).ConfigureAwait(false);
         if (!ok)
         {
             Log($"发消息失败 HTTP {status}：{Snippet(text, 300)}");
@@ -861,7 +866,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         }
 
         var url = $"{ApiBase}/v2/{(isGroup ? "groups" : "users")}/{Uri.EscapeDataString(openId)}/messages";
-        var (ok, text, status) = await SendApiAsync(url, body, ct).ConfigureAwait(false);
+        var (ok, text, status) = await SendApiAsync(url, body, ct, isChatCommit: true).ConfigureAwait(false);
         if (!ok)
         {
             Log($"发富媒体消息失败 HTTP {status}：{Snippet(text, 300)}");
@@ -914,35 +919,41 @@ public sealed class OfficialBotGateway : IQqChatSource, IDisposable
         return (fileInfo, null);
     }
 
-    private async Task<(bool Ok, string Text, int Status)> SendApiAsync(string url, JsonObject body, CancellationToken ct)
+    private async Task<(bool Ok, string Text, int Status)> SendApiAsync(
+        string url, JsonObject body, CancellationToken ct, bool isChatCommit = false)
     {
-        var token = await EnsureTokenAsync(false, ct).ConfigureAwait(false);
-        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
-        try
+        var refreshToken = false;
+        var tokenRetried = false;
+        while (true)
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonBody(body) };
-            Auth(req, token);
-
-            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-            var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            var status = (int)resp.StatusCode;
-
-            // token 过期（11244/11253 之类）就地刷一次再重试，免得整条消息丢掉
-            if (!resp.IsSuccessStatusCode && (text.Contains("11244", StringComparison.Ordinal) || text.Contains("11253", StringComparison.Ordinal)))
+            var token = await EnsureTokenAsync(refreshToken, ct).ConfigureAwait(false);
+            refreshToken = false;
+            // Readiness can release scheduler capacity; never hold the transport gate while waiting.
+            if (isChatCommit) await ReplyCommitBoundary.BeforePrepareAsync().ConfigureAwait(false);
+            await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                Log("token 被拒 → 刷一次 token 重试");
-                token = await EnsureTokenAsync(true, ct).ConfigureAwait(false);
-                using var retry = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonBody(body) };
-                Auth(retry, token);
-                using var resp2 = await _http.SendAsync(retry, ct).ConfigureAwait(false);
-                return (resp2.IsSuccessStatusCode, await resp2.Content.ReadAsStringAsync(ct).ConfigureAwait(false), (int)resp2.StatusCode);
+                // Recheck late input and policy synchronously after the last preparation await.
+                if (isChatCommit && !ReplyCommitBoundary.TryBeforeSend()) continue;
+                using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonBody(body) };
+                Auth(req, token);
+                using var resp = await MemoryUseScope.UseForDelivery(() => _http.SendAsync(req, ct)).ConfigureAwait(false);
+                var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var status = (int)resp.StatusCode;
+                if (!tokenRetried && !resp.IsSuccessStatusCode
+                    && (text.Contains("11244", StringComparison.Ordinal) || text.Contains("11253", StringComparison.Ordinal)))
+                {
+                    Log("token 被拒 → 刷一次 token 重试");
+                    tokenRetried = true;
+                    refreshToken = true;
+                    continue; // Release the gate before token refresh and another final commit check.
+                }
+                return (resp.IsSuccessStatusCode, text, status);
             }
-
-            return (resp.IsSuccessStatusCode, text, status);
-        }
-        finally
-        {
-            _sendGate.Release();
+            finally
+            {
+                _sendGate.Release();
+            }
         }
     }
 

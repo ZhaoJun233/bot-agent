@@ -115,27 +115,24 @@ public static class RuntimeLogProjection
             var (time, text, canClassify) = lines[index];
             if (string.IsNullOrWhiteSpace(text)) continue;
 
-            var (tag, rest) = canClassify ? SplitTag(text.Trim()) : (Tag: string.Empty, Remainder: text);
-            var knownSource = Sources.ContainsKey(tag);
-            var marker = knownSource ? LevelMarker(rest) : (Level: (string?)null, Length: 0);
-            if (marker.Level is not null) rest = rest[marker.Length..].TrimStart();
-            var source = Bound(ResolveSource(tag), MaxSourceLength);
-
-            if (knownSource && TryClassify(rest, out var message, out var level))
-            {
-                items.Add(new ZbaLogEntry(time, Prefer(marker.Level, level), source,
-                    Bound(message, MaxMessageLength), false));
-            }
-            else
-            {
-                var placeholder = "已隐藏的日志内容（" +
-                    rest.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + " 字符）";
-                items.Add(new ZbaLogEntry(time, marker.Level ?? "info", source,
-                    Bound(placeholder, MaxMessageLength), true));
-            }
+            items.Add(ProjectLine(time, text, canClassify));
         }
 
         return new ZbaLogPage(items, Capacity);
+    }
+
+    internal static ZbaLogEntry ProjectLine(long time, string text, bool canClassify)
+    {
+        var (tag, rest) = canClassify ? SplitTag(text.Trim()) : (Tag: string.Empty, Remainder: text);
+        var knownSource = Sources.ContainsKey(tag);
+        var marker = knownSource ? LevelMarker(rest) : (Level: (string?)null, Length: 0);
+        if (marker.Level is not null) rest = rest[marker.Length..].TrimStart();
+        var source = Bound(ResolveSource(tag), MaxSourceLength);
+        if (knownSource && TryClassify(rest, out var message, out var level))
+            return new ZbaLogEntry(time, Prefer(marker.Level, level), source, Bound(message, MaxMessageLength), false);
+        var placeholder = "已隐藏的日志内容（" +
+            rest.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + " 字符）";
+        return new ZbaLogEntry(time, marker.Level ?? "info", source, Bound(placeholder, MaxMessageLength), true);
     }
 
     private static (string Tag, string Remainder) SplitTag(string text)

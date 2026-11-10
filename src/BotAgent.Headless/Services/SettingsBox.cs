@@ -25,6 +25,7 @@ public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox, ISett
     private readonly object _gate = new();
 
     private AppSettings _current;
+    internal ConfigurationRuntimeTracker RuntimeEffects { get; } = new();
 
     public SettingsBox(AppSettings initial)
         => _current = initial ?? throw new ArgumentNullException(nameof(initial));

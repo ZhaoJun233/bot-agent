@@ -1,3 +1,10 @@
+import { hasValidPluginRuntime, type PythonPluginRuntime } from './plugin-runtime'
+import { isPluginGovernance, isPluginGovernanceSource, type PluginGovernance, type PluginGovernanceSource } from './plugin-governance'
+import { isPluginLifecyclePreview, matchesLifecycleSelection, type PluginLifecyclePreview, type PluginLifecyclePreviewRequest } from './plugin-lifecycle'
+import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
+import { isPluginInstallPreview, isPluginSourceDiscovery, type PluginInstallPreview, type PluginPreviewRequest, type PluginSourceDiscovery } from './plugin-import'
+import { TaskObservation, type TaskObservationSnapshot } from './task-observation'
+
 export interface ZbaHealth {
   status: string
   ready: boolean
@@ -147,6 +154,20 @@ export interface ZbaRuntimeLogEntry {
 export interface ZbaRuntimeLogPage {
   items: ZbaRuntimeLogEntry[]
   capacity: number
+}
+
+/** 只含安全日志投影；序号用十进制字符串，避免超过 JS 的安全整数。 */
+export interface ZbaRuntimeLogFeedEntry extends ZbaRuntimeLogEntry {
+  id: string
+  sequence: string
+}
+export interface ZbaRuntimeLogFeed {
+  items: ZbaRuntimeLogFeedEntry[]
+  cursor: string
+  hasMore: boolean
+  capacity: number
+  resetReason?: 'expired' | 'restart' | 'ahead' | null
+  omittedCount?: number
 }
 
 export interface ZbaSessionSummary {
@@ -470,6 +491,17 @@ export interface ZbaConfigurationView {
   registered: ZbaRegisteredConfigurationView
 }
 
+export interface ZbaFieldAddress {
+  field: number
+  object: { kind: 'policy'; target: ZbaPolicyTarget } | null
+}
+
+export interface ZbaConfigurationRuntimeEffect {
+  field: ZbaFieldAddress
+  state: 'current' | 'restartRequired' | 'applyFailed' | 'unknown'
+  restartTarget?: 'botAgent'
+}
+
 export interface ZbaConfigurationReadResult {
   code: ZbaConfigurationResultCode
   version: string
@@ -481,6 +513,7 @@ export interface ZbaConfigurationReadResult {
   secrets: ZbaSecretMetadata[]
   fields: ZbaFieldDescriptor[]
   latestApplyState: ZbaApplyState
+  runtimeEffects?: ZbaConfigurationRuntimeEffect[]
 }
 
 /** 0 = 概览投影（隐藏值），1 = 可编辑投影（带 value）。 */
@@ -537,6 +570,7 @@ export interface ZbaProviderNameEdit {
 /** 一条策略条目写入意图：目标 + 六个字段的完整配置（闭合记录）。 */
 export interface ZbaPolicyEdit {
   target: ZbaPolicyTarget
+  // Only changed policy rows are sent. Each row preserves all unchanged raw fields.
   configuration: ZbaPolicyConfiguration
 }
 
@@ -647,12 +681,13 @@ export interface ZbaPluginDependency {
 export interface ZbaPluginPackageManifest {
   id: string
   version: string
-  entryAssembly: string
-  entryType: string
+  entryAssembly?: string | null
+  entryType?: string | null
   sha256: string
   downloadUrl: string
   apiVersion: number
-  targetFramework: string
+  targetFramework?: string | null
+  runtime?: PythonPluginRuntime | null
   minimumHostVersion?: string | null
   permissions?: string[] | null
   dependencies?: ZbaPluginDependency[] | null
@@ -665,7 +700,14 @@ export interface ZbaPluginPackageManifest {
  * 校验类型，缺失时由页面回落到 manifest.id，而不是判成非法响应。
  */
 export interface ZbaPluginCatalogItem {
+  isCompatible?: boolean
+  compatibilityMessage?: string | null
+  governance?: PluginGovernance
+  installedGovernance?: PluginGovernance
   manifest: ZbaPluginPackageManifest
+  previousManifest?: ZbaPluginPackageManifest | null
+  pendingManifest?: ZbaPluginPackageManifest | null
+  metadata?: PluginPresentationMetadata
   installedVersion?: string | null
   enabled: boolean
   status: string
@@ -684,11 +726,14 @@ export interface ZbaPluginCatalogQuery {
 }
 
 export interface ZbaPluginCatalog {
+  governanceSource?: PluginGovernanceSource
+  metadataNotice?: string
   revision: string
   source: string
   trustNotice: string
   categories: string[]
   plugins: ZbaPluginCatalogItem[]
+  builtinPlugins?: ZbaBuiltinPlugin[]
 }
 
 export interface ZbaPluginSourceResolution {
@@ -697,11 +742,13 @@ export interface ZbaPluginSourceResolution {
 }
 
 export interface ZbaInstalledPlugins {
+  governanceSource?: PluginGovernanceSource
   revision: string
   plugins: ZbaPluginCatalogItem[]
+  builtinPlugins?: ZbaBuiltinPlugin[]
 }
 
-export type ZbaPluginOperationKind = 'install' | 'update' | 'uninstall'
+export type ZbaPluginOperationKind = 'install' | 'update' | 'rollback' | 'uninstall'
 export type ZbaPluginOperationStatus = 'staged' | 'restart_required' | 'installed' | 'not_installed' | 'reload_required' | 'failed'
 
 export interface ZbaPluginOperation {
@@ -720,6 +767,8 @@ export interface ZbaPluginOperationResult {
 }
 
 export interface ZbaPluginInstallRequest {
+  /** New installs require a server-bound preview; optional only for construction compatibility. */
+  previewId?: string
   manifest: ZbaPluginPackageManifest
   expectedRevision: string
   idempotencyKey: string
@@ -728,6 +777,8 @@ export interface ZbaPluginInstallRequest {
 }
 
 export interface ZbaPluginUpdateRequest {
+  /** Optional for legacy receipt callers only; new mutations require a preview. */
+  previewId?: string
   manifest: ZbaPluginPackageManifest
   expectedRevision: string
   idempotencyKey: string
@@ -735,6 +786,8 @@ export interface ZbaPluginUpdateRequest {
 }
 
 export interface ZbaPluginUninstallRequest {
+  previewId?: string
+  trustAcknowledged?: true
   expectedRevision: string
   idempotencyKey: string
 }
@@ -828,6 +881,20 @@ interface ZbaResponse {
 
 type AuthMode = 'required' | 'none'
 
+/** A transport error may follow a commit; ambiguous responses require an original-key lookup. */
+export function classifySubmissionFailure(cause: unknown): 'rejected' | 'unknown' {
+  if (!(cause instanceof ZbaRequestError)) return 'unknown'
+  if (cause.status >= 500 || (cause.status >= 200 && cause.status < 300)) return 'unknown'
+  if (['idempotency_unverifiable', 'invalid_json'].includes(cause.code)) return 'unknown'
+  if ([408, 409, 429].includes(cause.status)) return 'unknown'
+  return cause.status >= 400 && cause.status < 500 ? 'rejected' : 'unknown'
+}
+
+/** Preserve the task API while sharing its admission rules with configuration saves. */
+export function classifyTaskSubmitFailure(cause: unknown): 'rejected' | 'unknown' {
+  return classifySubmissionFailure(cause)
+}
+
 export class ZbaClient {
   readonly baseUrl: string
   /**
@@ -840,6 +907,15 @@ export class ZbaClient {
   private readonly token: string
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
+  private readonly taskObservation = new TaskObservation()
+
+  /** Safe current-client aggregate; never includes task ids, request keys, or credentials. */
+  getTaskObservation(): TaskObservationSnapshot { return this.taskObservation.snapshot() }
+
+  private observeTask(action: (observation: TaskObservation) => void): void {
+    try { action(this.taskObservation) }
+    catch { this.taskObservation.markFault() } // Measurement failure must not alter a task response.
+  }
 
   constructor(options: ZbaClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '/zba/v1').replace(/\/+$/, '')
@@ -872,12 +948,13 @@ export class ZbaClient {
    * 读取配置快照。kind=1 返回可编辑投影（字段带 `value`），kind=0 只返回
    * 隐藏投影（字段不带值）。两者都只读；保存走 `/configuration/save`。
    */
-  readConfiguration(kind: ZbaConfigurationReadKind = 1): Promise<ZbaConfigurationReadResult> {
-    return this.request('/configuration/read', {
+  async readConfiguration(kind: ZbaConfigurationReadKind = 1): Promise<ZbaConfigurationReadResult> {
+    const result = await this.request('/configuration/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind })
     }, 'required', isConfigurationReadResult)
+    return { ...result, runtimeEffects: parseRuntimeEffects(result.runtimeEffects) }
   }
 
   listQuotas(): Promise<ZbaQuotaPage> {
@@ -938,6 +1015,19 @@ export class ZbaClient {
     return response.data
   }
 
+  discoverPluginSource(sourceUrl: string): Promise<PluginSourceDiscovery> {
+    return this.request('/plugins/source/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceUrl }) }, 'required', isPluginSourceDiscovery)
+  }
+
+  previewPlugin(request: PluginPreviewRequest): Promise<PluginInstallPreview> {
+    return this.request('/plugins/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, 'required', (value): value is PluginInstallPreview => isPluginInstallPreview(value, isPluginPackageManifest))
+  }
+
+  previewPluginLifecycle(request: PluginLifecyclePreviewRequest): Promise<PluginLifecyclePreview> {
+    return this.request('/plugins/lifecycle/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) },
+      'required', (value): value is PluginLifecyclePreview => isPluginLifecyclePreview(value, isPluginPackageManifest) && matchesLifecycleSelection(value, request))
+  }
+
   /** 已安装/已暂存插件；与目录同一条目形状，单列出来供页面独立刷新。 */
   installedPlugins(): Promise<ZbaInstalledPlugins> {
     return this.request('/plugins/installed', { method: 'GET' }, 'required', isInstalledPlugins)
@@ -952,6 +1042,7 @@ export class ZbaClient {
    */
   installPlugin(request: ZbaPluginInstallRequest): Promise<ZbaPluginOperationResult> {
     return this.mutatePlugin('/plugins/install', {
+      previewId: request.previewId,
       manifest: request.manifest,
       expectedRevision: request.expectedRevision,
       idempotencyKey: request.idempotencyKey,
@@ -961,6 +1052,7 @@ export class ZbaClient {
 
   updatePlugin(request: ZbaPluginUpdateRequest): Promise<ZbaPluginOperationResult> {
     return this.mutatePlugin('/plugins/update', {
+      previewId: request.previewId,
       manifest: request.manifest,
       expectedRevision: request.expectedRevision,
       idempotencyKey: request.idempotencyKey,
@@ -968,8 +1060,15 @@ export class ZbaClient {
     })
   }
 
+  rollbackPlugin(request: ZbaPluginUpdateRequest): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin('/plugins/rollback', { manifest: request.manifest, previewId: request.previewId,
+      expectedRevision: request.expectedRevision, idempotencyKey: request.idempotencyKey, trustAcknowledged: true })
+  }
+
   uninstallPlugin(id: string, request: ZbaPluginUninstallRequest): Promise<ZbaPluginOperationResult> {
     return this.mutatePlugin(`/plugins/${encodeURIComponent(id)}/uninstall`, {
+      previewId: request.previewId,
+      trustAcknowledged: request.trustAcknowledged,
       expectedRevision: request.expectedRevision,
       idempotencyKey: request.idempotencyKey
     })
@@ -1176,7 +1275,11 @@ export class ZbaClient {
     const response = await this.fetchJson(`/tasks${suffix}`, { method: 'GET' }, 'required')
     // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
     if (!response.ok) throw this.errorFrom(response)
-    if (isTaskPage(response.data)) return response.data
+    if (isTaskPage(response.data)) {
+      const page = response.data
+      this.observeTask(observation => { for (const task of page.items) observation.observe(task.id, task.state) })
+      return page
+    }
     throw this.invalidResponse(response)
   }
 
@@ -1185,15 +1288,23 @@ export class ZbaClient {
    * 结果未知时用它 /tasks/find 核对，而不是换键重提。
    */
   async submitTask(request: ZbaTaskSubmission, idempotencyKey: string): Promise<ZbaTaskAccepted> {
-    const response = await this.fetchJson('/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-      body: JSON.stringify(request)
-    }, 'required')
-    // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
-    if (!response.ok) throw this.errorFrom(response)
-    if (isTaskAccepted(response.data)) return response.data
-    throw this.invalidResponse(response)
+    let attempt: number | null = null
+    this.observeTask(observation => { attempt = observation.begin(idempotencyKey) })
+    try {
+      const response = await this.fetchJson('/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(request)
+      }, 'required')
+      if (!response.ok) throw this.errorFrom(response)
+      if (!isTaskAccepted(response.data)) throw this.invalidResponse(response)
+      const accepted = response.data
+      this.observeTask(observation => observation.accepted(attempt, accepted.id, accepted.state))
+      return accepted
+    } catch (cause) {
+      this.observeTask(observation => observation.failed(attempt, classifyTaskSubmitFailure(cause)))
+      throw cause
+    }
   }
 
   /** 按幂等键核对提交结果：found / expired / accepted_unknown / unknown。 */
@@ -1205,15 +1316,29 @@ export class ZbaClient {
     }, 'required')
     // 先验 HTTP 状态再认成功体：5xx/4xx 的错误体即使长得像成功回包也不能算受理。
     if (!response.ok) throw this.errorFrom(response)
-    if (isTaskFindResult(response.data)) return response.data
+    if (isTaskFindResult(response.data)) {
+      const result = response.data
+      if (result.code === 'found' && result.task) {
+        const task = result.task
+        this.observeTask(observation => observation.found(key, task.id, task.state))
+      }
+      return result
+    }
     throw this.invalidResponse(response)
   }
 
   /** 单个任务当前状态；404 是可解释结果（任务不存在）。 */
   async getTask(id: string): Promise<ZbaTaskSummary | null> {
     const response = await this.fetchJson(`/tasks/${encodeURIComponent(id)}`, { method: 'GET' })
-    if (response.status === 200 && isTaskSummary(response.data)) return response.data
-    if (response.status === 404 && isTaskNotFound(response.data)) return null
+    if (response.status === 200 && isTaskSummary(response.data)) {
+      const task = response.data
+      this.observeTask(observation => observation.observe(task.id, task.state))
+      return task
+    }
+    if (response.status === 404 && isTaskNotFound(response.data)) {
+      this.observeTask(observation => observation.unavailable(id))
+      return null
+    }
     if (!response.ok) throw this.errorFrom(response)
     throw this.invalidResponse(response)
   }
@@ -1288,6 +1413,20 @@ export class ZbaClient {
     throw this.invalidResponse(response)
   }
 
+  async listRuntimeLogFeed(cursor?: string, signal?: AbortSignal): Promise<ZbaRuntimeLogFeed> {
+    const query = cursor === undefined ? '' : '?cursor=' + encodeURIComponent(cursor)
+    const response = await this.fetchJson('/logs/feed' + query, { method: 'GET', signal })
+    if (!response.ok) throw this.errorFrom(response)
+    const feed = response.data
+    if (!isRuntimeLogFeed(feed) || (feed.hasMore && feed.cursor === cursor)) throw this.invalidResponse(response)
+    return {
+      capacity: feed.capacity, cursor: feed.cursor, hasMore: feed.hasMore,
+      items: feed.items.map(({ id, sequence, time, level, source, message, redacted }) => ({ id, sequence, time, level, source, message, redacted })),
+      ...(feed.resetReason ? { resetReason: feed.resetReason } : {}),
+      ...(feed.omittedCount === undefined ? {} : { omittedCount: feed.omittedCount })
+    }
+  }
+
   async listTraces(limit = 20): Promise<ZbaTracePage> {
     const params = new URLSearchParams({ limit: String(limit) })
     const response = await this.fetchJson(`/traces?${params.toString()}`, { method: 'GET' }, 'required')
@@ -1352,6 +1491,16 @@ export class ZbaClient {
     }
 
     const controller = new AbortController()
+    const callerSignal = init.signal
+    if (callerSignal?.aborted) throw new ZbaNetworkError('aborted')
+    let cancelRequest: (() => void) | undefined
+    const cancelled = new Promise<never>((_, reject) => {
+      cancelRequest = () => {
+        controller.abort(callerSignal?.reason)
+        reject(new ZbaNetworkError('aborted'))
+      }
+      callerSignal?.addEventListener('abort', cancelRequest, { once: true })
+    })
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -1364,9 +1513,7 @@ export class ZbaClient {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         ...init,
         headers,
-        signal: init.signal
-          ? combineSignals(init.signal, controller.signal)
-          : controller.signal
+        signal: controller.signal
       })
       let text: string
       try {
@@ -1383,12 +1530,13 @@ export class ZbaClient {
     })()
 
     try {
-      return await Promise.race([work, deadline])
+      return await Promise.race([work, deadline, cancelled])
     } catch (error) {
       if (error instanceof ZbaNetworkError) throw error
       throw new ZbaNetworkError(error)
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+      if (cancelRequest) callerSignal?.removeEventListener('abort', cancelRequest)
       work.catch(() => undefined)
     }
   }
@@ -1668,16 +1816,45 @@ function isTracePage(value: unknown): value is ZbaTracePage {
     && isTraceCacheUsage(value.cache)
 }
 
+function isRuntimeLogFeed(value: unknown): value is ZbaRuntimeLogFeed {
+  if (!isRecord(value) || value.capacity !== 600 || !Array.isArray(value.items)
+    || value.items.length > 200 || typeof value.cursor !== 'string'
+    || value.cursor.length === 0 || value.cursor.length > 55 || typeof value.hasMore !== 'boolean'
+    || (value.hasMore && value.items.length === 0)
+    || (value.resetReason != null && !['expired', 'restart', 'ahead'].includes(String(value.resetReason)))
+    || (value.omittedCount !== undefined && (!Number.isSafeInteger(value.omittedCount) || Number(value.omittedCount) < 0))) return false
+  const ids = new Set<string>()
+  let epoch: string | undefined
+  let previous = 0n
+  return value.items.every(item => {
+    if (!isRuntimeLogEntry(item) || !isRecord(item) || typeof item.sequence !== 'string'
+      || !/^[1-9]\d{0,19}$/.test(item.sequence) || typeof item.id !== 'string'
+      || !/^[a-f0-9]{32}:[1-9]\d{0,19}$/.test(item.id)
+      || !item.id.endsWith(':' + item.sequence) || ids.has(item.id)) return false
+    const itemEpoch = item.id.slice(0, 32)
+    if (epoch !== undefined && epoch !== itemEpoch) return false
+    epoch = itemEpoch
+    const sequence = BigInt(item.sequence)
+    if (sequence <= previous) return false
+    previous = sequence
+    ids.add(item.id)
+    return true
+  })
+}
+
+function isRuntimeLogEntry(item: unknown): item is ZbaRuntimeLogEntry {
+  return isRecord(item)
+    && typeof item.time === 'number' && Number.isSafeInteger(item.time)
+    && item.time >= 0 && item.time <= 8.64e15
+    && (item.level === 'info' || item.level === 'warn' || item.level === 'error')
+    && typeof item.source === 'string' && item.source.length <= 64
+    && typeof item.message === 'string' && item.message.length <= 512
+    && typeof item.redacted === 'boolean'
+}
 function isRuntimeLogPage(value: unknown): value is ZbaRuntimeLogPage {
   return isRecord(value) && value.capacity === 600
     && Array.isArray(value.items) && value.items.length <= value.capacity
-    && value.items.every(item => isRecord(item)
-      && typeof item.time === 'number' && Number.isSafeInteger(item.time)
-      && item.time >= 0 && item.time <= 8.64e15
-      && (item.level === 'info' || item.level === 'warn' || item.level === 'error')
-      && typeof item.source === 'string' && item.source.length <= 64
-      && typeof item.message === 'string' && item.message.length <= 512
-      && typeof item.redacted === 'boolean')
+    && value.items.every(isRuntimeLogEntry)
 }
 
 function isTaskCancelResult(value: unknown): value is ZbaTaskCancelResult {
@@ -1876,6 +2053,32 @@ function isSecretMetadata(value: unknown): value is ZbaSecretMetadata {
     && isInteger(value.slot)
     && typeof value.configured === 'boolean'
     && isInteger(value.source)
+}
+
+/** 可选运行态元数据不能破坏旧服务端的读取；未知状态必须降级为未确认。 */
+function parseRuntimeEffects(value: unknown): ZbaConfigurationRuntimeEffect[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.flatMap(item => {
+    if (!isRecord(item) || !isRecord(item.field) || !isInteger(item.field.field)) return []
+    // ZbaJson omits null properties; absent object is the scalar address, normalized below.
+    const address = item.field.object
+    let object: ZbaFieldAddress['object'] = null
+    if (address != null) {
+      if (!isRecord(address) || address.kind !== 'policy' || !isRecord(address.target)) return []
+      const target = address.target
+      if (target.kind === 'accountDefault' && typeof target.platformId === 'string' && typeof target.accountScope === 'string') {
+        object = { kind: 'policy', target: { kind: 'accountDefault', platformId: target.platformId, accountScope: target.accountScope } }
+      } else if (target.kind === 'instance' && isRecord(target.key) && typeof target.key.platformId === 'string'
+        && typeof target.key.accountScope === 'string' && typeof target.key.instanceId === 'string') {
+        object = { kind: 'policy', target: { kind: 'instance', key: { platformId: target.key.platformId, accountScope: target.key.accountScope, instanceId: target.key.instanceId } } }
+      } else return []
+    }
+    const state: ZbaConfigurationRuntimeEffect['state'] = item.state === 'current' || item.state === 'restartRequired' || item.state === 'applyFailed'
+      ? item.state : 'unknown'
+    const field: ZbaFieldAddress = { field: item.field.field, object }
+    return [{ field, state, ...(state === 'restartRequired' && item.restartTarget === 'botAgent'
+      ? { restartTarget: 'botAgent' as const } : {}) }]
+  })
 }
 
 function isConfigurationReadResult(value: unknown): value is ZbaConfigurationReadResult {
@@ -2125,12 +2328,10 @@ function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManif
   if (!isRecord(value)
     || typeof value.id !== 'string' || value.id.length === 0
     || typeof value.version !== 'string' || value.version.length === 0
-    || typeof value.entryAssembly !== 'string'
-    || typeof value.entryType !== 'string'
+    || !hasValidPluginRuntime(value)
     || typeof value.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(value.sha256)
     || typeof value.downloadUrl !== 'string'
-    || !isInteger(value.apiVersion)
-    || typeof value.targetFramework !== 'string') return false
+    || !isInteger(value.apiVersion)) return false
   if (value.minimumHostVersion !== undefined && value.minimumHostVersion !== null && typeof value.minimumHostVersion !== 'string') return false
   if (value.permissions !== undefined && value.permissions !== null && !isStringArray(value.permissions)) return false
   if (value.dependencies !== undefined && value.dependencies !== null
@@ -2148,7 +2349,11 @@ function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManif
 
 function isPluginCatalogItem(value: unknown): value is ZbaPluginCatalogItem {
   return isRecord(value)
+    && (value.isCompatible === undefined || typeof value.isCompatible === 'boolean')
+    && (value.compatibilityMessage === undefined || value.compatibilityMessage === null || typeof value.compatibilityMessage === 'string')
     && isPluginPackageManifest(value.manifest)
+    && (value.previousManifest === undefined || value.previousManifest === null || (isPluginPackageManifest(value.previousManifest) && value.previousManifest.id === value.manifest.id))
+    && (value.pendingManifest === undefined || value.pendingManifest === null || (isPluginPackageManifest(value.pendingManifest) && value.pendingManifest.id === value.manifest.id))
     && (value.installedVersion === undefined || value.installedVersion === null || typeof value.installedVersion === 'string')
     && typeof value.enabled === 'boolean'
     && typeof value.status === 'string'
@@ -2159,17 +2364,23 @@ function isPluginCatalogItem(value: unknown): value is ZbaPluginCatalogItem {
     && (value.author === undefined || typeof value.author === 'string')
     && (value.tags === undefined || value.tags === null || isStringArray(value.tags))
     && (value.repository === undefined || typeof value.repository === 'string')
+    && (value.metadata === undefined || isPluginPresentation(value.metadata))
+    && (value.governance === undefined || isPluginGovernance(value.governance))
+    && (value.installedGovernance === undefined || isPluginGovernance(value.installedGovernance))
 }
 
 function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
   return isRecord(value)
     && typeof value.revision === 'string'
     && typeof value.source === 'string'
+    && (value.metadataNotice === undefined || typeof value.metadataNotice === 'string')
     && typeof value.trustNotice === 'string'
     && isStringArray(value.categories)
     && Array.isArray(value.plugins)
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
+    && isBuiltinPluginList(value.builtinPlugins)
+    && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
 function isPluginSourceResolution(value: unknown): value is ZbaPluginSourceResolution {
@@ -2184,13 +2395,15 @@ function isInstalledPlugins(value: unknown): value is ZbaInstalledPlugins {
     && Array.isArray(value.plugins)
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
+    && isBuiltinPluginList(value.builtinPlugins)
+    && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
 function isPluginOperation(value: unknown): value is ZbaPluginOperation {
   return isRecord(value)
     && typeof value.id === 'string' && value.id.length > 0
     && typeof value.pluginId === 'string' && value.pluginId.length > 0
-    && (value.kind === 'install' || value.kind === 'update' || value.kind === 'uninstall')
+    && (value.kind === 'install' || value.kind === 'update' || value.kind === 'rollback' || value.kind === 'uninstall')
     && (value.status === 'staged' || value.status === 'restart_required' || value.status === 'installed' || value.status === 'not_installed' || value.status === 'reload_required' || value.status === 'failed')
     && typeof value.restartRequired === 'boolean'
     && (value.errorCode === undefined || typeof value.errorCode === 'string')
@@ -2225,23 +2438,4 @@ function parseJson(text: string): unknown {
   } catch {
     return null
   }
-}
-
-function combineSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any([first, second])
-
-  const controller = new AbortController()
-  if (first.aborted || second.aborted) {
-    controller.abort()
-  } else {
-    // 任一方触发后把两边的监听都摘掉，长寿命 signal 上不留悬挂闭包。
-    const abort = (): void => {
-      first.removeEventListener('abort', abort)
-      second.removeEventListener('abort', abort)
-      controller.abort()
-    }
-    first.addEventListener('abort', abort, { once: true })
-    second.addEventListener('abort', abort, { once: true })
-  }
-  return controller.signal
 }

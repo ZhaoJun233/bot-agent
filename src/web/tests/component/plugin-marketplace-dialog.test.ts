@@ -3,6 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import PluginMarketplaceDialog from '../../src/features/capabilities/PluginMarketplaceDialog.vue'
 import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaPluginCatalog, type ZbaPluginOperation, type ZbaPluginSettings } from '../../src/api/zba'
 import { syntheticManifest, syntheticSettings } from '../fixtures/provider-marketplace'
+import { discovery, previewFor, marketDialogShell } from '../fixtures/plugin-import'
+import type { PluginPreviewRequest } from '../../src/api/plugin-import'
 
 const mounted: Array<{ unmount: () => void }> = []
 afterEach(() => { for (const wrapper of mounted.splice(0)) wrapper.unmount(); document.body.replaceChildren() })
@@ -26,7 +28,8 @@ function settings(): ZbaPluginSettings {
 function clientWith(overrides: Partial<ZbaClient> = {}): ZbaClient {
   return {
     pluginCatalog: vi.fn(async () => catalog()),
-    resolvePluginSource: vi.fn(async () => ({ manifest: syntheticManifest, trustNotice: '请核对 SHA-256。' })),
+    discoverPluginSource: vi.fn(),
+    previewPlugin: vi.fn(async (request: PluginPreviewRequest) => previewFor(request)),
     installPlugin: vi.fn(async () => ({ operation: operation(), revision: 'rev-2' })),
     pluginOperation: vi.fn(async () => ({ operation: operation(), revision: 'rev-2' })),
     pluginSettings: vi.fn(async () => settings()),
@@ -35,7 +38,7 @@ function clientWith(overrides: Partial<ZbaClient> = {}): ZbaClient {
 }
 async function mountDialog(client = clientWith()) {
   const trigger = document.createElement('button'); trigger.textContent = 'Open'; document.body.append(trigger); trigger.focus()
-  const wrapper = mount(PluginMarketplaceDialog, { props: { client, mode: 'admin', writesEnabled: true, trigger }, attachTo: document.body, global: { stubs: { teleport: true } } })
+  const wrapper = mount(PluginMarketplaceDialog, { props: { client, mode: 'admin', writesEnabled: true, trigger }, attachTo: document.body, global: { stubs: { ManagementDialog: marketDialogShell } } })
   mounted.push(wrapper)
   await flushPromises()
   return { wrapper, trigger }
@@ -47,13 +50,16 @@ describe('plugin marketplace idempotency and trust gate', () => {
     const { wrapper } = await mountDialog(clientWith({ installPlugin }))
     expect(wrapper.get('[data-testid="marketplace-version"]').text()).toBe(syntheticManifest.version)
     expect(wrapper.get('[data-testid="marketplace-sha256"]').text()).toBe(syntheticManifest.sha256)
-    expect(wrapper.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-testid="marketplace-trust"]').setValue(true)
     expect(wrapper.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-testid="marketplace-install"]').trigger('click')
     await flushPromises()
+    expect(installPlugin).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="preview-acknowledge"]').setValue(true)
+    await wrapper.get('[data-testid="preview-confirm"]').trigger('click')
+    await flushPromises()
     expect(installPlugin).toHaveBeenCalledTimes(1)
-    expect(installPlugin.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 'rev-1', trustAcknowledged: true })
+    expect(installPlugin.mock.calls[0]?.[0]).toMatchObject({ expectedRevision: 'rev-1', previewId: 'preview-example', manifest: syntheticManifest, trustAcknowledged: true })
     expect(installPlugin.mock.calls[0]?.[0].idempotencyKey).toMatch(/^plugin:install:/)
     expect(wrapper.get('[data-testid="marketplace-notice"]').text()).toContain('重启')
   })
@@ -62,8 +68,12 @@ describe('plugin marketplace idempotency and trust gate', () => {
     const installPlugin = vi.fn<ZbaClient['installPlugin']>(async () => { throw new ZbaNetworkError() })
     const pluginOperation = vi.fn<ZbaClient['pluginOperation']>(async () => ({ operation: operation({ status: 'staged', restartRequired: true }), revision: 'rev-2' }))
     const { wrapper } = await mountDialog(clientWith({ installPlugin, pluginOperation }))
-    await wrapper.get('[data-testid="marketplace-trust"]').setValue(true)
     await wrapper.get('[data-testid="marketplace-install"]').trigger('click')
+    await flushPromises()
+    expect(installPlugin).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="preview-acknowledge"]').setValue(true)
+    await wrapper.get('[data-testid="preview-confirm"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="marketplace-recovery"]').exists()).toBe(true)
     const key = installPlugin.mock.calls[0]?.[0].idempotencyKey
@@ -80,8 +90,12 @@ describe('plugin marketplace idempotency and trust gate', () => {
   it('reports a known load failure without entering unknown-result recovery', async () => {
     const installPlugin = vi.fn<ZbaClient['installPlugin']>(async () => { throw new ZbaRequestError(503, 'plugin_reload_failed', 'plugin_reload_failed') })
     const { wrapper } = await mountDialog(clientWith({ installPlugin }))
-    await wrapper.get('[data-testid="marketplace-trust"]').setValue(true)
     await wrapper.get('[data-testid="marketplace-install"]').trigger('click')
+    await flushPromises()
+    expect(installPlugin).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="preview-acknowledge"]').setValue(true)
+    await wrapper.get('[data-testid="preview-confirm"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="marketplace-notice"]').text()).toContain('旧实例')
     expect(wrapper.find('[data-testid="marketplace-recovery"]').exists()).toBe(false)
@@ -89,17 +103,18 @@ describe('plugin marketplace idempotency and trust gate', () => {
   })
 
   it('validates the data source locally and never fetches the URL', async () => {
-    const resolvePluginSource = vi.fn(async () => ({ manifest: syntheticManifest, trustNotice: '请核对 SHA-256。' }))
-    const { wrapper } = await mountDialog(clientWith({ resolvePluginSource }))
+    const discoverPluginSource = vi.fn(async () => discovery())
+    const { wrapper } = await mountDialog(clientWith({ discoverPluginSource }))
     await wrapper.get('[data-testid="marketplace-source-input"]').setValue('https://example.com/plugin.zip')
     await wrapper.get('[data-testid="marketplace-source-resolve"]').trigger('click')
     await flushPromises()
-    expect(resolvePluginSource).not.toHaveBeenCalled()
+    expect(discoverPluginSource).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="marketplace-source-error"]').text()).toContain('GitHub')
     await wrapper.get('[data-testid="marketplace-source-input"]').setValue('https://github.com/example-org/example-plugin/releases/tag/v1.0.0')
     await wrapper.get('[data-testid="marketplace-source-resolve"]').trigger('click')
     await flushPromises()
-    expect(resolvePluginSource).toHaveBeenCalledWith('https://github.com/example-org/example-plugin/releases/tag/v1.0.0')
-    expect(wrapper.get('[data-testid="marketplace-notice"]').text()).toContain('SHA-256')
+    expect(discoverPluginSource).toHaveBeenCalledWith('https://github.com/example-org/example-plugin/releases/tag/v1.0.0')
+    expect(wrapper.get('[data-testid="source-candidates"]').text()).toContain('已固定源码版本')
+    expect(wrapper.find('[data-testid="preview-confirm"]').exists()).toBe(false)
   })
 })

@@ -2,12 +2,12 @@
 
 简体中文 | [English](README.en.md)
 
-[![.NET](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-10.0-blue.svg)](https://dotnet.microsoft.com/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20(Ubuntu%20%7C%20Debian%20%7C%20CentOS%20%7C%20Arch)%20%7C%20Docker-green.svg)](#快速开始)
 [![Protocol](https://img.shields.io/badge/Protocol-OneBot%20v11%20%7C%20QQ%20Official%20%7C%20Feishu-purple.svg)](#系统架构)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
 
-Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊天平台 Agent 常驻服务。服务支持 QQ 私域（[NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11）、QQ 官方开放平台、飞书应用机器人（Feishu Bot）以及零外部依赖本地演练场通道，与 OpenAI 兼容格式的大语言模型（涵盖 DeepSeek、通义千问、OpenAI、本地 Ollama 等）进行交互，实现群聊、私聊与频道场景下的自主研判与拟人化回复，并内置轻量级 Web 管理控制台。
+Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊天平台 Agent 常驻服务。服务支持 QQ 私域（[NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11）、QQ 官方开放平台、飞书应用机器人（Feishu Bot）以及零外部依赖本地演练场通道，与 OpenAI 兼容格式的大语言模型（涵盖 DeepSeek、通义千问、OpenAI、本地 Ollama 等）进行交互，实现群聊、私聊与频道场景下的自主研判与拟人化回复，并配套独立部署的 Web 管理控制台。
 
 项目支持在标准 Linux 发行版（Ubuntu、Debian、CentOS、Arch 等）直接基于源码运行，无需强制依赖容器环境；同时保留了标准的 Docker Compose 容器化部署支持。
 
@@ -48,7 +48,11 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 
 ## 快速开始
 
-### 方式一：Linux 原生环境直接运行（推荐，免 Docker）
+首次部署先按 [Linux Docker 首次安装与配置](docs/operations/linux-docker-first-run.md) 完成产物构建、独立 Web 前端、配置保存和受控任务检查。这条路径已在隔离 Linux 环境验证安装、升级与停写恢复；原生环境和实际平台连接需分别验证。Headless 提供 API，页面由独立静态服务提供。
+
+提交结果不明、审批、取消或重启后，按 [任务恢复指南](docs/operations/task-recovery-guide.md) 核对原任务；新版本升级前先准备 [回滚点](docs/operations/rollback-playbook.md)。
+
+### 方式一：Linux 原生环境直接运行
 
 #### 1. 系统要求与环境准备
 - **操作系统**：标准 Linux 发行版（Ubuntu 20.04+、Debian 11+、CentOS 8+、Arch Linux 等）

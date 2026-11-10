@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import {
   ZbaClient,
-  ZbaNetworkError,
+  classifySubmissionFailure,
   ZbaRequestError,
   type ZbaConfigurationReceipt,
   type ZbaConfigurationReadResult,
@@ -12,6 +12,7 @@ import {
 } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
+import { useModalIsolation } from '../../shared/ui/modal-isolation'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import {
@@ -37,13 +38,18 @@ import {
   type SecretDrafts
 } from './draft'
 import { errorName } from '../../shared/friendly'
-import { restartNoticeMessage } from './receipt-notice'
+import { receiptOutcome, restartNoticeMessage, configurationApplyLabel as applyLabel, configurationCommitLabel as commitStateLabel, configurationStepLabel } from './receipt-notice'
+import ConfigurationRecoveryLookup from './ConfigurationRecoveryLookup.vue'
+import ConfigurationOperationKey from './ConfigurationOperationKey.vue'
+import { runtimeEffectPresentation } from './runtime-effects'
+import { policyDenials as findPolicyDenials } from './policy-presentation'
 import { fieldHint, fieldLabel } from './field-labels'
+import { replyPacingNumericLimits } from './reply-pacing'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
 import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
-import { configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
+import { configurationCapabilities, configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -59,7 +65,7 @@ const domId = (key: string): string => editorId + '-' + key
 const emit = defineEmits<{
   'enable-admin': []
   'auth-expired': [error: UiError]
-  'open-capabilities': []
+  'open-capabilities': [owner?: string]
 }>()
 
 const sectionMeta = [
@@ -76,6 +82,7 @@ const sectionMeta = [
 /** 插件相关设置挪到「能力」页的插件卡片上；整个分区归插件的不再出现在导航里。 */
 const capability = computed(() => configurationFor(props.scope))
 const editorTitle = computed(() => props.scope === 'basic' ? '基础配置' : capability.value?.title ?? '能力配置')
+const ownerIndex = computed(() => configurationCapabilities())
 const visibleSections = computed(() => sectionMeta.filter(section => section.key === 'registered'
   ? capability.value?.providers === true
   : props.scope === 'basic' ? section.key === 'behavior' : capability.value?.sections.includes(section.key) === true))
@@ -123,6 +130,9 @@ const providerNames = ref<ProviderNameDrafts>({})
  * 保存时逐条 upsert，不整表替换（整表替换在 Legacy 档会被判 legacy_policy_needs_review）。
  */
 const policyDrafts = ref<PolicyDrafts>({})
+const policyDenials = computed(() => findPolicyDenials(policyDrafts.value, policyEntries((draftBase.value ?? snapshot.value)?.view)))
+const policyDenialsConfirmed = ref(false)
+watch(policyDrafts, () => { policyDenialsConfirmed.value = false })
 const policyRows = computed(() => policyEntries(snapshot.value?.view))
 const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
 /** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
@@ -161,12 +171,13 @@ watch(() => pendingOperations(props.client, 'configuration', operationTarget.val
   }
 }, { immediate: true })
 
-type LeaveReason = 'lock' | 'downgrade' | 'close'
+type LeaveReason = 'lock' | 'downgrade' | 'close' | 'navigate'
 const leavePrompt = ref<LeaveReason | null>(null)
 const leaveMessage = ref<string | null>(null)
 const leaveBusy = ref(false)
 const leaveSafeButton = ref<HTMLButtonElement | null>(null)
 const leaveDialog = ref<HTMLElement | null>(null)
+useModalIsolation(leaveDialog, () => leavePrompt.value !== null)
 /** 页面标题：触发器已经不在了时的安全落点（tabindex="-1"，不进 Tab 顺序）。 */
 const pageHeading = ref<HTMLElement | null>(null)
 let leaveResolve: ((allowed: boolean) => void) | null = null
@@ -226,6 +237,7 @@ const busy = computed(() => loading.value || phase.value === 'saving')
 /** 提交结果未知时冻结整批内容：既不能改草稿，也不能放弃核对入口。 */
 const unconfirmed = computed(() => phase.value === 'unconfirmed')
 const inputsLocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
+const canKeepOnLeave = computed(() => leavePrompt.value === 'navigate' && hasWritePermission.value && !inputsLocked.value && !leaveBusy.value)
 const saveBlocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict' || secretConfirmationBlocked.value)
 const hasDraft = computed(() => dirtyCount.value > 0)
 // 草稿全部清空后释放起草基线：下一次起草锚定当时的快照。
@@ -250,12 +262,17 @@ function expectedVersion(): string {
 
 const leaveTitle = computed(() => leavePrompt.value === 'close' ? '关闭前确认未保存修改' : leavePrompt.value === 'lock'
   ? '锁定前确认未保存修改'
+  : leavePrompt.value === 'navigate' ? '离开当前页面前需要确认'
   : '退出管理员模式前确认未保存修改')
 const leaveCopy = computed(() => leavePrompt.value === 'close' ? '关闭能力设置前，可以保存修改或明确放弃草稿。' : leavePrompt.value === 'lock'
   ? '锁定会结束当前会话并清除内存中的草稿与秘密输入。'
+  : leavePrompt.value === 'navigate'
+  ? canKeepOnLeave.value
+    ? '离开前，请保存、保留普通草稿或明确放弃未保存的修改；选择继续编辑会留在当前页面。'
+    : '离开前，请保存或明确放弃未保存的修改；选择继续编辑会留在当前页面。秘密输入仍按安全规则清理。'
   : '退出管理员模式后写入口关闭；草稿会保留，可以重新进入管理员模式后继续。')
-const leaveSaveLabel = computed(() => leavePrompt.value === 'close' ? '保存并关闭' : leavePrompt.value === 'lock' ? '保存并锁定' : '保存并退出管理员')
-const leaveDiscardLabel = computed(() => leavePrompt.value === 'close' ? '放弃并关闭' : leavePrompt.value === 'lock' ? '放弃并锁定' : '放弃并退出管理员')
+const leaveSaveLabel = computed(() => leavePrompt.value === 'close' ? '保存并关闭' : leavePrompt.value === 'lock' ? '保存并锁定' : leavePrompt.value === 'navigate' ? '保存并离开当前页面' : '保存并退出管理员')
+const leaveDiscardLabel = computed(() => leavePrompt.value === 'close' ? '放弃并关闭' : leavePrompt.value === 'lock' ? '放弃并锁定' : leavePrompt.value === 'navigate' ? '放弃并离开当前页面' : '放弃并退出管理员')
 
 const formatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
@@ -263,9 +280,6 @@ const formatter = new Intl.DateTimeFormat('zh-CN', {
   hour12: false
 })
 
-const applyLabels: Record<number, string> = {
-  0: '未开始', 1: '已生效', 2: '部分生效', 3: '需重启', 4: '失败', 5: '未知'
-}
 const applyTones: Record<number, string> = {
   0: 'neutral', 1: 'ok', 2: 'warn', 3: 'warn', 4: 'bad', 5: 'warn'
 }
@@ -288,13 +302,6 @@ const secretSlotLabels: Record<number, string> = {
   0: '模型 API Key', 1: 'Agent 服务器密钥', 2: 'TTS API Key',
   3: '飞书 App Secret', 4: '飞书 Encrypt Key', 5: '飞书验证 Token'
 }
-const commitStateLabels: Record<number, string> = {
-  0: '未提交', 1: '已提交', 2: '提交结果未知'
-}
-const stepLabels: Record<number, string> = {
-  0: '发布快照', 1: '运行时策略', 2: '模型投影', 3: '并发门',
-  4: '上下文窗口', 5: '调度器', 6: 'TTS 文件投影', 7: '已登记配置'
-}
 const saveCodeMessages: Record<number, string> = {
   1: '当前令牌没有保存权限。',
   2: '服务端校验失败，请查看字段错误。',
@@ -315,10 +322,31 @@ const saveCodeMessages: Record<number, string> = {
 }
 
 const restartNotice = computed(() => restartNoticeMessage(receipt.value))
-
-function applyLabel(value: number): string {
-  return applyLabels[value] ?? `未知状态 ${value}`
-}
+// A receipt describes one operation, not the current state of unrelated fields.
+const visibleRuntimeFields = computed(() => {
+  const view = snapshot.value?.view
+  if (!view) return []
+  return visibleSections.value.filter(section => section.key !== 'registered').flatMap(section =>
+    Object.entries(view[section.key as Exclude<SectionKey, 'registered'>])
+      .filter(([key]) => !ownedByPlugin(section.key, key)).map(([, field]) => field as ZbaReadField))
+})
+const currentRuntimeEffects = computed(() => {
+  const ids = new Set(visibleRuntimeFields.value.map(field => field.rule.id))
+  return snapshot.value?.runtimeEffects?.filter(effect => effect.field.object == null && ids.has(effect.field.field)) ?? []
+})
+const pendingRestarts = computed(() => currentRuntimeEffects.value.filter(effect => effect.state === 'restartRequired'))
+const currentRuntimeStatus = computed(() => {
+  if (currentRuntimeEffects.value.some(effect => effect.state === 'applyFailed')) return { label: '已保存，运行应用失败', tone: 'bad' }
+  if (pendingRestarts.value.length > 0) return { label: '已保存，仍需重启', tone: 'warn' }
+  if (visibleRuntimeFields.value.length === 0 || visibleRuntimeFields.value.some(field =>
+    !currentRuntimeEffects.value.some(effect => effect.field.field === field.rule.id && effect.state === 'current'))) {
+    return { label: '当前生效情况待确认', tone: 'warn' }
+  }
+  return { label: '当前已生效', tone: 'ok' }
+})
+const runtimeRestartNotice = computed(() => pendingRestarts.value.every(effect => effect.restartTarget === 'botAgent')
+  ? '当前仍有已保存配置等待重启 BotAgent 机器人服务；无关配置的保存不会清除这一状态。'
+  : '当前仍有已保存配置等待重启，具体服务待核对；不要依据某一次保存回执判断当前状态。')
 
 function applyTone(value: number): string {
   return applyTones[value] ?? 'warn'
@@ -342,10 +370,6 @@ function secretSourceLabel(value: number): string {
 
 function secretSlotLabel(value: number): string {
   return secretSlotLabels[value] ?? `槽位 ${value}`
-}
-
-function commitStateLabel(value: number): string {
-  return commitStateLabels[value] ?? `未知提交状态 ${value}`
 }
 
 function formatRaw(value: unknown): string {
@@ -403,8 +427,24 @@ function isFieldDirty(section: SectionKey, key: string, field: ZbaReadField): bo
   return isDirty(draft.value, fieldPath(section as ZbaPatchSectionLike, key), field)
 }
 
+const replyPacingActive = computed(() => {
+  const field = snapshot.value?.view?.behavior?.replyPacingEnabled
+  if (!field) return false
+  return field.visibility === 1
+    ? currentDraftRaw('behavior', 'replyPacingEnabled', field) === 'true'
+    : field.display === 'true'
+})
+
+function legacyDesireInactive(section: SectionKey, key: string): boolean {
+  return section === 'behavior' && key === 'aiDesire' && replyPacingActive.value
+}
+
+function fieldInputLocked(section: SectionKey, key: string): boolean {
+  return inputsLocked.value || legacyDesireInactive(section, key)
+}
+
 function onFieldInput(section: SectionKey, key: string, raw: string): void {
-  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
   const view = snapshot.value?.view
   if (!view) return
   const field = editableField(view, section as ZbaPatchSectionLike, key)
@@ -420,7 +460,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
 }
 
 function clearField(section: SectionKey, key: string): void {
-  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
   anchorDraft()
   draft.value = { ...draft.value, [fieldPath(section as ZbaPatchSectionLike, key)]: { kind: 'clear' } }
   phase.value = 'idle'
@@ -428,7 +468,7 @@ function clearField(section: SectionKey, key: string): void {
 }
 
 function resetField(section: SectionKey, key: string): void {
-  if (inputsLocked.value) return
+  if (fieldInputLocked(section, key)) return
   const next: DraftMap = { ...draft.value }
   delete next[fieldPath(section as ZbaPatchSectionLike, key)]
   draft.value = next
@@ -705,6 +745,10 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   if (!request) return
   fieldErrors.value = localFieldErrors(request.errors)
   if (request.errors.length > 0) return
+  if (policyDenials.value.length > 0 && !policyDenialsConfirmed.value) {
+    validationMessage.value = '保存前请确认：下列空名单会拒绝对应范围的所有会话。'
+    return
+  }
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
     settleProviderNames(request.nameIntents)
     policyDrafts.value = {}
@@ -783,18 +827,13 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
     }
   } catch (cause) {
     // Classify and record even after the editor was unmounted or the session was locked.
-    const uncertain = cause instanceof ZbaNetworkError || (cause instanceof ZbaRequestError
-      && (cause.status >= 500 || (cause.code === 'invalid_json' && cause.status >= 200 && cause.status < 300)))
+    const uncertain = classifySubmissionFailure(cause) === 'unknown'
     if (externallySettled(client, key, target)) return
     markOperation(client, key, uncertain ? 'unknown' : 'settled')
     if (revision !== sessionRevision || pendingKey.value !== key) return
     if (reportAuthFailure(cause)) return
-    // 传输失败，或服务端已回 2xx 但响应体无法解码：都不能证明“没提交”。
-    const outcomeUnknown = cause instanceof ZbaNetworkError
-      || (cause instanceof ZbaRequestError
-        && (cause.status >= 500
-          || (cause.code === 'invalid_json' && cause.status >= 200 && cause.status < 300)))
-    if (outcomeUnknown) {
+    // 传输中断、代理超时/冲突/限流或无法解码的响应，都不能证明“没提交”。
+    if (uncertain) {
       phase.value = 'unconfirmed'
       return
     }
@@ -946,6 +985,12 @@ function closeLeave(allowed: boolean): void {
 
 function leaveStay(): void {
   closeLeave(false)
+}
+
+function leaveKeep(): void {
+  if (!canKeepOnLeave.value) return
+  discardSecretsOnLeave()
+  closeLeave(true)
 }
 
 function leaveDiscard(): void {
@@ -1181,12 +1226,22 @@ defineExpose({
       </button>
     </p>
 
+    <ConfigurationOperationKey v-if="canWrite && pendingKey && registeredOperation?.key === pendingKey" :operation-key="pendingKey" />
+
     <p v-if="props.scope === 'basic'" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
       <span><strong>按能力管理其它设置</strong><br />模型、平台、Agent、报告与插件设置均在对应能力中管理，密钥也随能力配置。</span>
       <button type="button" class="tonal inline-action" data-testid="config-open-capabilities" @click="emit('open-capabilities')">
         去能力页
       </button>
     </p>
+
+    <ConfigurationRecoveryLookup
+      v-if="props.scope === 'basic'"
+      :client="props.client"
+      :enabled="props.active && hasWritePermission"
+      :pending="busy || unconfirmed"
+      @auth-expired="emit('auth-expired', $event)"
+    />
 
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
@@ -1213,15 +1268,17 @@ defineExpose({
           <strong>{{ fieldCount }}</strong>
         </div>
         <div>
-          <span>最近生效</span>
-          <span class="status-badge" :data-tone="applyTone(snapshot.latestApplyState)">
-            {{ applyLabel(snapshot.latestApplyState) }}
+          <span>当前运行状态</span>
+          <span class="status-badge" :data-tone="currentRuntimeStatus.tone" data-testid="config-runtime-summary">
+            {{ currentRuntimeStatus.label }}
           </span>
         </div>
       </section>
 
-      <div class="config-body">
-        <nav class="config-nav" aria-label="配置分区">
+      <p v-if="pendingRestarts.length > 0" class="inline-notice warn" data-testid="config-runtime-restart">{{ runtimeRestartNotice }}</p>
+
+      <div class="config-body" :class="{ 'config-body--basic': scope === 'basic' }">
+        <nav v-if="scope !== 'basic'" class="config-nav" aria-label="配置分区">
           <button
             v-for="section in visibleSections"
             :key="section.key"
@@ -1279,6 +1336,7 @@ defineExpose({
                     </p>
                     <PlatformPolicyEditor
                       :entries="policyRows"
+                      :runtime-effects="snapshot.runtimeEffects"
                       :model-value="policyDrafts"
                       :locked="!canWrite || inputsLocked"
                       @update:model-value="policyDrafts = $event"
@@ -1296,6 +1354,7 @@ defineExpose({
                     <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
                     <span v-if="fieldHint(item.key)" class="cell-sub">{{ fieldHint(item.key) }}</span>
+                    <span v-if="legacyDesireInactive(active, item.key)" class="cell-sub" role="status">回复节奏已开启：旧版欲望值暂不生效，原值保留；关闭后恢复。</span>
                     <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
                   </td>
                   <td class="config-value setting-editor" role="cell">
@@ -1308,7 +1367,7 @@ defineExpose({
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
                         :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="inputsLocked"
+                        :disabled="fieldInputLocked(active, item.key)"
                         @change="onFieldInput(active, item.key, inputValue($event))"
                       >
                         <option value="true">是</option>
@@ -1319,11 +1378,14 @@ defineExpose({
                         :id="`${editorId}-config-input-${active}-${item.key}`"
                         class="config-input"
                         :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
+                        :min="active === 'behavior' ? replyPacingNumericLimits[item.key]?.min : undefined"
+                        :max="active === 'behavior' ? replyPacingNumericLimits[item.key]?.max : undefined"
+                        :step="active === 'behavior' && replyPacingNumericLimits[item.key] ? replyPacingNumericLimits[item.key]?.step ?? 1 : undefined"
                         :value="currentDraftRaw(active, item.key, item.field)"
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
                         :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="inputsLocked"
+                        :disabled="fieldInputLocked(active, item.key)"
                         @input="onFieldInput(active, item.key, inputValue($event))"
                       />
                       <span class="edit-actions">
@@ -1331,7 +1393,7 @@ defineExpose({
                           v-if="isFieldDirty(active, item.key, item.field)"
                           type="button"
                           class="link-button"
-                          :disabled="inputsLocked"
+                          :disabled="fieldInputLocked(active, item.key)"
                           @click="resetField(active, item.key)"
                         >
                           还原
@@ -1340,7 +1402,7 @@ defineExpose({
                           v-if="item.field.rule.canClear"
                           type="button"
                           class="link-button"
-                          :disabled="inputsLocked"
+                          :disabled="fieldInputLocked(active, item.key)"
                           @click="clearField(active, item.key)"
                         >
                           清除
@@ -1359,8 +1421,8 @@ defineExpose({
                   </td>
                   <td class="setting-apply setting-meta" role="cell">
                     <span class="meta-label">生效</span>
-                    <span class="status-badge" :data-tone="applyTone(item.field.applyState)">
-                      {{ applyLabel(item.field.applyState) }}
+                    <span class="status-badge" :data-testid="`config-runtime-${fieldPath(active, item.key)}`" :data-tone="runtimeEffectPresentation(snapshot.runtimeEffects, item.field).tone">
+                      {{ runtimeEffectPresentation(snapshot.runtimeEffects, item.field).label }}
                     </span>
                   </td>
                   <td :id="`${editorId}-config-rule-${active}-${item.key}`" class="setting-rules setting-meta" role="cell">
@@ -1512,6 +1574,7 @@ defineExpose({
             持久化版本 {{ receipt.committedVersion ?? '—' }}
           </p>
         </div>
+        <p :data-tone="receiptOutcome(receipt).tone" data-testid="config-receipt-outcome"><strong>本次操作：{{ receiptOutcome(receipt).title }}</strong> · {{ receiptOutcome(receipt).detail }}</p>
         <dl class="receipt-grid">
           <div>
             <dt>操作键</dt>
@@ -1528,7 +1591,7 @@ defineExpose({
         </dl>
         <ol v-if="receipt.steps.length > 0" class="receipt-steps" data-testid="config-receipt-steps">
           <li v-for="step in receipt.steps" :key="step.step">
-            {{ stepLabels[step.step] ?? `步骤 ${step.step}` }}：{{ applyLabel(step.state) }}
+            {{ configurationStepLabel(step.step) }}：{{ applyLabel(step.state) }}
             <span v-if="step.errorCode" class="cell-sub">{{ errorName(step.errorCode) ?? step.errorCode }}</span>
           </li>
         </ol>
@@ -1536,6 +1599,12 @@ defineExpose({
           {{ restartNotice }}
         </p>
       </section>
+
+      <div v-if="policyDenials.length > 0" class="inline-notice warn" data-testid="config-policy-denials">
+        <p>空名单会拒绝下列范围的所有会话；不会自动放行。</p>
+        <ul><li v-for="denial in policyDenials" :key="denial">{{ denial }}</li></ul>
+        <label><input v-model="policyDenialsConfirmed" type="checkbox" :disabled="inputsLocked" data-testid="config-policy-denials-confirm">我确认保存拒绝全部的规则</label>
+      </div>
 
       <div
         class="save-bar"
@@ -1580,6 +1649,19 @@ defineExpose({
         </div>
       </div>
 
+      <section v-if="scope === 'basic'" class="owner-index" aria-label="插件与系统设置入口" data-testid="config-owner-index">
+        <div>
+          <h2>按模块配置</h2>
+          <p class="muted">这里只保留全局行为。插件开关、参数和密钥统一在各自设置中管理。</p>
+        </div>
+        <div class="owner-links">
+          <button v-for="owner in ownerIndex" :key="owner.id" type="button" class="owner-link" :data-testid="`config-owner-${owner.id}`" @click="emit('open-capabilities', owner.id)">
+            <span>{{ owner.title }}</span>
+            <small>{{ owner.summary }}</small>
+          </button>
+        </div>
+      </section>
+
       <Teleport to="body">
         <div v-if="leavePrompt" class="dialog-backdrop" data-testid="config-leave-backdrop">
           <section
@@ -1596,6 +1678,9 @@ defineExpose({
               {{ leaveCopy }}
               当前有 <strong>{{ dirtyCount }}</strong> 项修改。
             </p>
+            <p v-if="canKeepOnLeave" class="inline-notice" data-testid="config-leave-keep-hint">
+              保留普通草稿不会提交保存；秘密替换输入及秘密修改意图（包括删除）会清空，返回后需重新填写。
+            </p>
             <p v-if="phase === 'saving'" class="inline-notice" data-testid="config-leave-saving">
               保存正在提交；请等本次结果返回后再保存、放弃或离开。
             </p>
@@ -1605,6 +1690,10 @@ defineExpose({
             <p v-else-if="!hasWritePermission && hasDraft" class="inline-notice">
               标准模式下不能保存；可以继续编辑，或明确放弃后再离开。
             </p>
+            <div v-if="policyDenials.length > 0" class="inline-notice warn">
+              <p>空名单将拒绝所有会话：{{ policyDenials.join("；") }}</p>
+              <label><input v-model="policyDenialsConfirmed" type="checkbox" :disabled="inputsLocked" data-testid="config-leave-denials-confirm">我确认保存拒绝全部的规则</label>
+            </div>
             <p v-if="leaveMessage" class="inline-notice bad" data-testid="config-leave-message">{{ leaveMessage }}</p>
             <div class="dialog-actions">
               <button
@@ -1615,6 +1704,14 @@ defineExpose({
                 @click="leaveStay"
               >
                 继续编辑
+              </button>
+              <button
+                v-if="canKeepOnLeave"
+                type="button"
+                data-testid="config-leave-keep"
+                @click="leaveKeep"
+              >
+                保留普通草稿并离开
               </button>
               <button
                 type="button"
@@ -1659,6 +1756,12 @@ defineExpose({
 .settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border); }
 .settings-table tr:first-child { padding-top: 4px; }
 .settings-table tbody tr:hover td, .settings-table tbody tr.dirty td { background: transparent; }
+.config-body--basic { display: block; }
+.owner-index { display: grid; gap: 16px; border-top: 1px solid var(--border); padding-top: 24px; }
+.owner-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.owner-link { display: grid; gap: 6px; min-width: 0; text-align: left; white-space: normal; padding: 14px 16px; }
+.owner-link span { font-weight: 600; }
+.owner-link small { color: var(--text-muted); font-weight: 400; line-height: 1.5; }
 .settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent-deep); }
 .settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
 .settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }

@@ -17,8 +17,8 @@
 
 | 段 | 代码位置 | 说明 |
 | --- | --- | --- |
-| 持久化 | `src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs` | 同一个事务写 settings JSON、`model_providers` 行与 `secrets` 行；密钥正文只进 `secrets` |
-| 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`SettingsStore.cs:695`） | 供应商级字段一律热应用（#128）：`applyState` 不再比对启动快照，`running` 只用于展示此刻生效的显示值 |
+| 持久化 | `src/BotAgent.Storage/ConfigurationStore.cs` | Read/Save/Find 由唯一配置事务协调者处理；同一事务写配置、秘密、版本、审计与回执；密钥正文不进回执 |
+| 回读 | `SettingsStore.ProjectRegisteredProviderViews`（`src/BotAgent.Headless/Adapters/Persistence/SettingsStore.cs`）与运行效果投影 | 供应商字段声明为热应用；显示值与实际运行状态分别投影，热应用声明不等于本次应用已成功 |
 | 候选表 | `CompositionRoot.InspectModelProjection`（`CompositionRoot.Model.cs:199`）+ `ModelProviderRegistry.Replace`（`Host/ModelProviderRegistry.cs`）+ `ProviderFailoverRunner.ReplaceCandidates`（`src/BotAgent.Model/Resilience/ProviderCircuitBreaker.cs:298`） | 保存配置时读一次新候选表并**整体替换**（#128）；执行器只造一次，熔断器按供应商 id 复用 |
 | 运行期 | `src/BotAgent.Headless/Host/CompositionRoot.Model.cs:289` `TryBuildCurrentProviderRoute` | **每次真正发请求前**打开数据库读一次 provider 行，现取密钥、现拼路由 |
 | 发现模型 | `CompositionRoot.TryBuildProviderTestRoute`（`CompositionRoot.Model.cs:258`） | 与运行期共用 `ProviderRouteBoundary`（#132）：面板能测通的端点，线上也一定接受；只多放行「未启用」这一条 |
@@ -35,14 +35,14 @@
 | API Key / 凭据来源（`env:QQCHAT_API_KEY` ↔ `secret:apiKey` ↔ `model:<key>`） | **请求级 · 热** | 密钥每请求现取；换来源不改变任何结构 |
 | Base URL、模型名（含 primary 的标量覆盖） | **请求级 · 热** | 只是拼 URL 与请求体 |
 | 采样参数、思考档位、快速回复档位 | **请求级 · 热** | 请求体字段 |
-| 协议（`ModelProtocol`）、`Options` | 装配级 · 需重启 | 决定编解码与传输形态，重建成本高且易踩在途请求 |
+| 协议（`ModelProtocol`）、`Options` | **候选表热重建** | 保存后模型投影步重建候选；运行请求仍核对当前行与已采用快照 |
 | 供应商集合、顺序（`Priority`）、启用位、显示名 | **请求级 · 热**（#128） | 候选表整体热替换；熔断状态不在表里，按 id 复用 |
 
 判定的落点：
 
-- `CompositionRoot.InspectModelProjection`（`CompositionRoot.Model.cs:199`）只把**装配级**差异算成 `RestartRequired`；
-- `SettingsStore.ProjectRegisteredProviderViews` 的 `changed` 用同一套口径（否则回读会自己报「需重启」）；
-- `SettingsHotReload.RequiresRestart`（`SettingsHotReload.cs:182`）不得为请求级字段返回 `true`。
+- `CompositionRoot.InspectModelProjection`（`src/BotAgent.Headless/Host/CompositionRoot.Model.cs`）核对已提交版本，读取供应商并调用 `registry.Replace`；重建成功报告 `Applied`，失败报告 `Failed + model_projection_rebuild_failed`；
+- `CompositionRoot.Surface.cs` 的 `HotReload.BindConfiguration` 把这一步接入实际保存链；
+- `SettingsHotReload.RequiresRestart`（`src/BotAgent.Headless/Services/Settings/SettingsHotReload.cs`）明确排除供应商启用、优先级、地址、模型、协议、选项与密钥来源；其他装配级字段仍遵循各自 FieldEffect。
 
 > **曾经的错误**：凭据来源被当成装配级。面板第一次填 API Key 时 `SecretKeyRef` 从
 > `env:QQCHAT_API_KEY` 变成 `secret:apiKey`，运行期比对不相等 → 路由被拒 → **所有模型调用安全静默**，
@@ -60,16 +60,16 @@
 
 1. `ModelProviderRegistry`（`src/BotAgent.Headless/Host/ModelProviderRegistry.cs`）持有
    `volatile IReadOnlyList<PersistedModelProvider> Captured` 与唯一一次挂上的 `ProviderFailoverRunner`；
-2. `InspectModelProjection` 每次保存先在一个只读事务里读出 `desired`、为每行预解析路由，
+2. `InspectModelProjection` 每次保存先在一个只读事务里核对期望版本并读出 `desired`，
    提交后调 `Replace(desired, candidates)`：**先** `ReplaceCandidates` **再**换 `Captured`；
 3. `ReplaceCandidates` 复用同名断路器（冷却中的供应商不会因为改配置被放出来），
    只为增删的 id 增删断路器 —— 熔断历史仍在库里，不随候选表一起丢；
-4. 换失败（非法候选表）只记 `FileLog.Warn` 并如实报 `RestartRequired`，旧表继续服务。
+4. 换失败时记录警告并报告 `Failed + model_projection_rebuild_failed`。旧候选快照保留，但库内已提交配置可能与之不同；请求边界可拒绝不一致的路由，不能承诺旧表继续回复，也不能承诺重启必然解决。
 
 不变式（改这里必须守住）：
 
 - 执行器只造一次，候选表只能经 `Replace` 换；不允许第二处抄快照；
-- 先换候选表再换 `Captured`：回读投影绝不能看到「新行 + 旧候选表」；
+- `Replace` 内先换执行器候选再换 `Captured`；配置提交与运行应用是两步，应用中或失败后允许出现已保存值与旧运行快照，必须用回执及运行效果说明当前状态；
 - 供应商 id 相同的断路器必须复用；只有 id 消失时才丢弃。
 
 ### 2.2 发现模型与真实调用共用同一条硬边界（#132）
@@ -101,13 +101,21 @@
     —— 以前这里直接 `return null`、一行日志都没有，表现为「任务哑了、日志干净」；
   - 错误码 `provider_secret_unavailable` / `provider_route_unavailable` / `endpoint_authorization_required`
     在前端 `src/web/src/shared/friendly.ts` 有中文文案；
-  - 保存回执的 `ModelProjection` 步骤如实报 `Applied` 或 `RestartRequired`；
-  - 前端「需重启」提示按步骤区分：**模型投影需重启时明确写「重启前机器人不会回复」**
-    （`src/web/src/features/configuration/receipt-notice.ts`）。
+  - 保存回执的 `ModelProjection` 步骤如实报 `Applied` 或 `Failed`；重建失败使用 `model_projection_rebuild_failed`，不能按已应用处理；
+  - 前端回执按步骤区分已提交、已应用、失败与未知；模型投影失败显示“已保存，运行应用失败；当前状态待核对”，并提供原键核对动作（`src/web/src/features/configuration/receipt-notice.ts` 与 `runtime-effects.ts`）。
 - 端点授权在**保存时**校验（`IsAuthorizedModelEndpoint`），运行期只需能解析出密钥 ——
   所以放宽运行期的凭据来源比较不会把流量引到未授权端点。
 
 ---
+
+### 3.1 首次配置与结果未知时怎样核对
+
+1. 打开独立部署前端的 `/web/`，以管理员身份进入能力设置中的模型配置；基础配置页不提供模型与秘密的第二套写入口。
+2. 只编辑所需供应商/模型/凭据字段并保存。分别查看配置版本、持久化回执和运行效果；“已保存”只证明提交，不单独证明后续请求已采用新路由。
+3. 应用成功后，在授权的测试场景确认后续请求使用期望路由；没有回复时结合连接状态、应用步骤与固定原因码核对，不通过读取群聊正文排查。
+4. 响应断开、应用失败或未知时，先保留原操作关联并使用“核对这次提交”。未知结论未解除前，不换键重存同一意图；普通配置回读不能替代原操作回执。
+5. `model_projection_rebuild_failed` 表示提交后重建失败：核对当前回执/运行状态，再由维护者处理具体原因；不能建议自动重复保存或把重启当成保证修复。
+6. 页面切换、锁定后同身份重连仍可核对内存中的原关联；整页刷新或关浏览器会丢失该页面关联，当前不承诺跨刷新自动恢复。原键已知时按对应身份查询，原键丢失时先人工核对，不能从普通回读推断原操作未执行。
 
 ## 4. 两条模型通道（#134 起共用同一个熔断执行器）
 
@@ -145,5 +153,5 @@
 9. 改 `//` 任务的 override 语义（`CompleteChatWithProviderFailoverAsync` / `HasExplicitUpstream`）必须跑
    `BOTAGENT_IT_ONLY=s37` 与 `dotnet tests/BotAgent.ProtocolProbe/...dll`：S37 钉「只改地址、密钥沿用聊天」，
    B35 钉「一半覆盖经熔断器、成对覆盖才绕开」。
-9. 辅助通道的静默日志不要删：`tests/BotAgent.ProtocolProbe` 的 B23 用 `ModelLogging.WarnHandler` 捕获它，
+10. 辅助通道的静默日志不要删：`tests/BotAgent.ProtocolProbe` 的 B23 用 `ModelLogging.WarnHandler` 捕获它，
    删掉会红（这正是「任务哑了、日志干净」的回归护栏）。

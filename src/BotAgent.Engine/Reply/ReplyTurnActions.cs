@@ -59,7 +59,7 @@ internal sealed class ReplyTurnActions(
     IProtocolRiskBackoff? riskBackoff,
     Func<string, bool> allowsFeature,
     Func<string, string, Func<CancellationToken, Task>, bool> queueBackground,
-    Action<BotConversation> requestReply)
+    Action<BotConversation, AppSettings> requestReply)
 {
     private readonly ISettingsBox _box = box;
     private readonly ReplyHooks _hooks = hooks;
@@ -75,7 +75,7 @@ internal sealed class ReplyTurnActions(
     private readonly IProtocolRiskBackoff? _riskBackoff = riskBackoff;
     private readonly Func<string, bool> _allowsFeature = allowsFeature;
     private readonly Func<string, string, Func<CancellationToken, Task>, bool> _queueBackground = queueBackground;
-    private readonly Action<BotConversation> _requestReply = requestReply;
+    private readonly Action<BotConversation, AppSettings> _requestReply = requestReply;
 
     private AppSettings _settings => _box.Current;
 
@@ -109,7 +109,7 @@ internal sealed class ReplyTurnActions(
                 }
 
                 // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
-                _requestReply(conversation);
+                _requestReply(conversation, snapshot);
             }
             catch (OperationCanceledException)
             {
@@ -141,7 +141,7 @@ internal sealed class ReplyTurnActions(
                     _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                 }
 
-                _requestReply(conversation);
+                _requestReply(conversation, snapshot);
             }
             catch (OperationCanceledException)
             {
@@ -190,6 +190,7 @@ internal sealed class ReplyTurnActions(
             // P3：联网是“真出网”，必须过服务端能力闸门（模型输出不构成授权）；策略用本轮快照
             if (_approvals.AllowCapability(conversation, "web.search", wantedQuery, out _, pinned: caps))
             {
+                await ReplyCommitBoundary.BeforeEffectAsync();
                 QueueWebSearch(conversation, wantedQuery, snapshot, platformPolicy);
             }
         }
@@ -197,6 +198,7 @@ internal sealed class ReplyTurnActions(
         {
             if (_approvals.AllowCapability(conversation, "web.read", pageUrl, out _, pinned: caps))
             {
+                await ReplyCommitBoundary.BeforeEffectAsync();
                 QueuePageRead(conversation, pageUrl, snapshot, platformPolicy);
             }
         }
@@ -209,6 +211,7 @@ internal sealed class ReplyTurnActions(
             && _approvals.AllowCapability(conversation, "music.listen", wantedSong, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
+            await ReplyCommitBoundary.BeforeEffectAsync();
             if (_music.TryBeginListen(key, snapshot.MusicListenCooldownSeconds, out var listenWhy))
             {
                 _hooks.Log($"[Music] 模型想听「{wantedSong}」");
@@ -224,7 +227,7 @@ internal sealed class ReplyTurnActions(
                         return;
                     }
 
-                    _requestReply(conversation);
+                    _requestReply(conversation, snapshot);
                 });
             }
             else
@@ -239,6 +242,7 @@ internal sealed class ReplyTurnActions(
             && _approvals.AllowCapability(conversation, "music.share", songToShare, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
+            await ReplyCommitBoundary.BeforeEffectAsync();
             var (shareIsGroup, shareTargetId) = conversation.Target;
             _queueBackground("music-share:" + key + ":" + songToShare, "music-share:" + key + ":" + songToShare, async ct =>
             {

@@ -35,7 +35,7 @@
     <!-- 版本单一真源（#122）：全仓只有这一处 <Version>，csproj 里再写会悄悄压过它。
          改这里 + 打 tag 才算发版；CI 在 tag 构建上断言 tag 与这里一致，
          运行时的 /healthz 回包与命令行版本参数都从程序集读这个值。 -->
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
   </PropertyGroup>
 
 </Project>

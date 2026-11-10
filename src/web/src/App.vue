@@ -35,6 +35,26 @@ const connecting = ref(false)
 const lastSuccessAt = ref<string | null>(null)
 const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks' | 'traces' | 'logs'>('overview')
 const configurationPage = ref<InstanceType<typeof ConfigurationPage> | null>(null)
+// 侧栏收起（仅宽屏生效）：偏好存在 localStorage；读写失败时退回展开，不影响其它功能。
+const RAIL_KEY = 'botagent.sidebar.rail'
+function readRail(): boolean {
+  try { return globalThis.localStorage?.getItem(RAIL_KEY) === '1' } catch { return false }
+}
+const rail = ref(readRail())
+function toggleRail() {
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) {
+      rail.value = false
+      return
+    }
+    const nextRail = !rail.value
+    storage.setItem(RAIL_KEY, nextRail ? '1' : '0')
+    rail.value = nextRail
+  } catch {
+    rail.value = false
+  }
+}
 // 配置页首次进入后保持挂载（v-show），草稿因此跨页保留；锁定/换令牌时才卸载。
 const configurationMounted = ref(false)
 const capabilitiesPage = ref<InstanceType<typeof CapabilitiesPage> | null>(null)
@@ -274,9 +294,8 @@ async function refresh(): Promise<void> {
 }
 
 /** 配置页首次进入时挂载；之后只切换显隐，草稿随组件保留。 */
-async function openConfiguration(): Promise<void> {
-  if (view.value === 'configuration') return
-  capabilitiesPage.value?.discardSecretsOnLeave()
+async function openConfiguration(event?: MouseEvent): Promise<void> {
+  if (view.value === 'configuration' || !(await allowNavigation(event))) return
   const firstVisit = !configurationMounted.value
   configurationMounted.value = true
   view.value = 'configuration'
@@ -298,34 +317,33 @@ function navTrigger(event?: MouseEvent): HTMLElement | null {
   return target instanceof HTMLElement ? target : null
 }
 
-/** 切回概览不销毁配置页，字段草稿保留；秘密输入在离开视图时丢弃。 */
-function showOverview(): void {
-  configurationPage.value?.discardSecretsOnLeave()
-  capabilitiesPage.value?.discardSecretsOnLeave()
+/** Navigation retains ordinary drafts. Every exit clears secret inputs through its owner. */
+async function allowNavigation(event?: MouseEvent): Promise<boolean> {
+  if (view.value === 'configuration') return await configurationPage.value?.requestLeave('navigate', navTrigger(event)) ?? true
+  if (view.value === 'capabilities') return await capabilitiesPage.value?.requestLeave('navigate', navTrigger(event)) ?? true
+  return true
+}
+async function showOverview(event?: MouseEvent): Promise<void> {
+  if (view.value === 'overview' || !(await allowNavigation(event))) return
   view.value = 'overview'
 }
 
-async function openCapabilities(event?: MouseEvent): Promise<void> {
-  if (view.value === 'configuration') {
-    // 配置页有草稿时先走同一个三选一，避免切页绕过未保存保护。
-    // 把点击的按钮传下去：WebKit 点按钮不给焦点，只靠 activeElement 还原不了。
-    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
-    if (!allowed) return
-  }
-  if (view.value === 'capabilities') return
+async function openCapabilities(event?: MouseEvent, owner?: string): Promise<void> {
+  const session = sessionGeneration
+  if (view.value === 'capabilities' || !(await allowNavigation(event)) || session !== sessionGeneration) return
   const firstVisit = !capabilitiesMounted.value
   capabilitiesMounted.value = true
   view.value = 'capabilities'
   await nextTick()
   // 首次进入由 onMounted 读取；再次进入只重读目录，待核对的操作键保留。
   if (!firstVisit) await capabilitiesPage.value?.reload()
+  if (owner && view.value === 'capabilities' && session === sessionGeneration) {
+    capabilitiesPage.value?.openSettingsById(owner, navTrigger(event))
+  }
 }
 
 async function openTasks(event?: MouseEvent): Promise<void> {
-  if (view.value === 'configuration') {
-    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
-    if (!allowed) return
-  }
+  if (!(await allowNavigation(event))) return
   if (view.value === 'tasks') return
   capabilitiesPage.value?.discardSecretsOnLeave()
   const firstVisit = !tasksMounted.value
@@ -337,10 +355,7 @@ async function openTasks(event?: MouseEvent): Promise<void> {
 }
 
 async function openTraces(event?: MouseEvent): Promise<void> {
-  if (view.value === 'configuration') {
-    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
-    if (!allowed) return
-  }
+  if (!(await allowNavigation(event))) return
   if (view.value === 'traces') return
   capabilitiesPage.value?.discardSecretsOnLeave()
   const firstVisit = !tracesMounted.value
@@ -352,10 +367,7 @@ async function openTraces(event?: MouseEvent): Promise<void> {
 }
 
 async function openLogs(event?: MouseEvent): Promise<void> {
-  if (view.value === 'configuration') {
-    const allowed = await configurationPage.value?.requestLeave('downgrade', navTrigger(event)) ?? true
-    if (!allowed) return
-  }
+  if (!(await allowNavigation(event))) return
   if (view.value === 'logs') return
   capabilitiesPage.value?.discardSecretsOnLeave()
   logsMounted.value = true
@@ -504,7 +516,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="app-shell" :class="connected ? 'app-shell--console' : 'app-shell--auth'">
+  <div class="app-shell" :class="[connected ? 'app-shell--console' : 'app-shell--auth', { 'app-shell--rail': connected && rail }]">
     <template v-if="connected">
       <aside class="sidebar">
         <div class="sidebar-brand">
@@ -513,6 +525,21 @@ onMounted(load)
             <strong>BotAgent</strong>
             <span>Agent Console</span>
           </div>
+          <button
+            type="button"
+            class="sidebar-rail-toggle"
+            data-testid="sidebar-rail-toggle"
+            :aria-label="rail ? '展开侧栏' : '收起侧栏'"
+            :title="rail ? '展开侧栏' : '收起侧栏'"
+            :aria-expanded="!rail"
+            @click="toggleRail"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+              <path :d="rail ? 'M13 10l2 2-2 2' : 'M16 10l-2 2 2 2'" />
+            </svg>
+          </button>
         </div>
 
         <nav class="side-nav" aria-label="主导航">
@@ -520,6 +547,7 @@ onMounted(load)
           <button
             type="button"
             class="side-nav-item"
+            :title="rail ? '系统概览' : undefined"
             :class="{ active: view === 'overview' }"
             :aria-current="view === 'overview' ? 'page' : undefined"
             data-testid="nav-overview"
@@ -531,6 +559,7 @@ onMounted(load)
           <button
             type="button"
             class="side-nav-item"
+            :title="rail ? '能力管理' : undefined"
             :class="{ active: view === 'capabilities' }"
             :aria-current="view === 'capabilities' ? 'page' : undefined"
             data-testid="nav-capabilities"
@@ -543,6 +572,7 @@ onMounted(load)
           <button
             type="button"
             class="side-nav-item"
+            :title="rail ? '基础配置' : undefined"
             :class="{ active: view === 'configuration' }"
             :aria-current="view === 'configuration' ? 'page' : undefined"
             data-testid="nav-configuration"
@@ -558,6 +588,7 @@ onMounted(load)
           <button
             type="button"
             class="side-nav-item"
+            :title="rail ? 'Agent 任务' : undefined"
             :class="{ active: view === 'tasks' }"
             :aria-current="view === 'tasks' ? 'page' : undefined"
             data-testid="nav-tasks"
@@ -569,6 +600,7 @@ onMounted(load)
           <button
             type="button"
             class="side-nav-item"
+            :title="rail ? '轨迹与缓存' : undefined"
             :class="{ active: view === 'traces' }"
             :aria-current="view === 'traces' ? 'page' : undefined"
             data-testid="nav-traces"
@@ -580,6 +612,7 @@ onMounted(load)
           <button
             type="button"
             class="side-nav-item"
+            :title="rail ? '运行日志' : undefined"
             :class="{ active: view === 'logs' }"
             :aria-current="view === 'logs' ? 'page' : undefined"
             data-testid="nav-logs"
@@ -706,7 +739,7 @@ onMounted(load)
             :client="client"
             :mode="mode"
             :writes-enabled="compatibility.writesEnabled"
-            @open-capabilities="openCapabilities()"
+            @open-capabilities="openCapabilities(undefined, $event)"
             @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
           />

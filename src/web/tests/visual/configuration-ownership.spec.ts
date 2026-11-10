@@ -18,7 +18,10 @@ for (const width of [1440, 768, 390, 320]) for (const theme of ['light', 'dark']
     fs.mkdirSync(out, { recursive: true })
     await page.screenshot({ path: path.join(out, width + '-' + theme + '-basic.png'), fullPage: true, animations: 'disabled' })
     await page.getByTestId('nav-capabilities').click()
-    await expect(page.getByTestId('ability-settings')).toBeVisible()
+    await expect(page.getByTestId('cap-system-card-models')).toBeVisible()
+    await expect(page.getByTestId('cap-filter-system')).toBeEnabled()
+    await expect(page.locator('[data-testid^="cap-item-"]').first()).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
     await page.screenshot({ path: path.join(out, width + '-' + theme + '-abilities.png'), fullPage: true, animations: 'disabled' })
     for (const id of ['models', 'agent', 'platform', 'reporting', 'conversation']) {
       await page.getByTestId('ability-settings-' + id).click()

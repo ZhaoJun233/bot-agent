@@ -30,6 +30,20 @@ using System.Text;
 
 namespace BotAgent.Services.Reply;
 
+/// <summary>Confirmed chat delivery only; images, pokes and partial replies never start a completion cooldown.</summary>
+public sealed record ChatDeliveryReport(bool AnyChatSent, bool CompleteChatReply)
+{
+    public static ChatDeliveryReport FromAcknowledgements(CadenceSendReport textReport, bool textIntended,
+        IReadOnlyList<string> voiceParts, bool voiceSent, IReadOnlyList<string> voiceFailed, bool extrasComplete = true)
+    {
+        var textSent = textReport.SentSegments.Any(part => !string.IsNullOrWhiteSpace(part));
+        var anyChatSent = textSent || (voiceSent && voiceParts.Any(part => !string.IsNullOrWhiteSpace(part)));
+        var completeVoice = voiceParts.Count == 0 || (voiceSent && voiceFailed.Count == 0);
+        var completeText = !textIntended || (textSent && textReport.AllSent);
+        return new ChatDeliveryReport(anyChatSent, anyChatSent && completeVoice && completeText && extrasComplete);
+    }
+}
+
 /// <summary>
 /// 一轮回复的**投递**（#106 第 6 步）：把已经想好的话说出去，并如实记账。
 /// <para>
@@ -45,7 +59,7 @@ namespace BotAgent.Services.Reply;
 /// 失败必须可见：发不出去就记失败节点，不静默当成功。
 /// </para>
 /// </summary>
-internal sealed class ReplyDelivery(
+internal sealed partial class ReplyDelivery(
     ReplyHooks hooks,
     ConversationRegistry registry,
     IPanelNotifier ui,
@@ -59,7 +73,9 @@ internal sealed class ReplyDelivery(
     ParticipationUseCase participation,
     TurnTraceStore traces,
     IProtocolRiskBackoff? riskBackoff,
-    Func<string, bool> allowsFeature)
+    Func<string, bool> allowsFeature,
+    ISettingsBox? settingsBox = null,
+    IPlatformPolicyResolver? platformPolicies = null)
 {
     private readonly ReplyHooks _hooks = hooks;
     private readonly ConversationRegistry _registry = registry;
@@ -75,6 +91,8 @@ internal sealed class ReplyDelivery(
     private readonly TurnTraceStore _traces = traces;
     private readonly IProtocolRiskBackoff? _riskBackoff = riskBackoff;
     private readonly Func<string, bool> _allowsFeature = allowsFeature;
+    private readonly ISettingsBox? _settingsBox = settingsBox;
+    private readonly IPlatformPolicyResolver? _platformPolicies = platformPolicies;
 
     /// <summary>
     /// 语音那条路（第 4 步之一）：过技术性限制（开关 / 字数上限 / 同会话频率下限 / 能力闸门）→ 拼 /speak URL
@@ -155,7 +173,19 @@ internal sealed class ReplyDelivery(
             for (var i = 0; i < voiceUrls.Count; i++)
             {
                 var part = i < voiceParts.Count ? voiceParts[i] : voiceText;
-                var ok = await _source.SendVoiceAsync(isGroup, targetId, voiceUrls[i]);
+                bool ok;
+                try
+                {
+                    using var validation = ReplyCommitBoundary.EnterValidation(() =>
+                        ValidateModality(conversation, snapshot, platformPolicy, "voice", PluginGate.VoiceCapability, "voice.speak"));
+                    await ReplyCommitBoundary.BeforeSourceSendAsync(_source);
+                    ok = await _source.SendVoiceAsync(isGroup, targetId, voiceUrls[i]);
+                }
+                catch (Exception) when (voiceSent && ReplyCommitBoundary.IsActive)
+                {
+                    voiceFailed.AddRange(voiceParts.Skip(i));
+                    break;
+                }
                 if (!ok)
                 {
                     if (part.Length > 0) voiceFailed.Add(part);
@@ -193,7 +223,7 @@ internal sealed class ReplyDelivery(
     /// 戳一戳要过三道门（号码出现过 / 心情 / 频率 + 能力闸门）。
     /// 拆出来只为了可读性：这里的一行都没改语义 —— 位置、顺序、日志措辞都是原来那句。
     /// </summary>
-    public async Task SendAsync(
+    public async Task<ChatDeliveryReport> SendAsync(
          BotConversation conversation,
          IReadOnlyList<ChatMessage> context,
          long? triggerMessageId,
@@ -277,7 +307,7 @@ internal sealed class ReplyDelivery(
             if (!decision.Allowed || decision.Text.Length == 0)
             {
                 _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, "blocked", reasonCode: "protocol_backoff");
-                return;
+                return new ChatDeliveryReport(voiceSent, false);
             }
             textReply = decision.Text;
             sticker = null;
@@ -290,10 +320,8 @@ internal sealed class ReplyDelivery(
         // 分句发送的**逐段**结果（issue #14）：前几段成功、后面失败时，
         // 只有真正发出去的段落才写进会话历史 —— 不能因为"整条返回 false"就把已发的当成没发。
         var effectiveReplyTo = platformPolicy.Feature("quote", true).Enabled ? replyTo : null;
-        var sendReport = textReply is not null
-            ? await _plain.SendWithCadenceAsync(conversation.SourceKey, isGroup, targetId, textReply, effectiveReplyTo,
-                _riskBackoff?.IsActive(conversation.SourceKey) == true ? sendDirect : directAddress)
-            : CadenceSendReport.None;
+        var sendReport = await SendTextAfterVoiceAsync(conversation, isGroup, targetId, textReply, effectiveReplyTo,
+            _riskBackoff?.IsActive(conversation.SourceKey) == true ? sendDirect : directAddress, voiceSent);
         var sentText = sendReport.AnySent;
         if (sentText)
         {
@@ -303,17 +331,10 @@ internal sealed class ReplyDelivery(
             textReply is null ? "silent" : sendReport.AllSent ? "sent" : sentText ? "partial" : "blocked",
             reasonCode: sendReport.FailureReasonCode, count: textReply?.Length);
 
-        var sentImage = false;
-        if (sticker is not null)
-        {
-            // 引用只给第一条消息，避免“文字 + 图”两条都带引用
-            sentImage = await SendStickerAsync(isGroup, targetId, sticker, textReply is not null ? null : replyTo, conversation.SourceKey);
-            sent = sent || sentImage;
-            if (sentImage) _stickers.Store.MarkUsed(sticker.Id);
-        }
-
-        var pokeSent = pokeTarget is long pokeUserId &&
-            await TryPokeAsync(conversation, context, caps, platformPolicy, isGroup, targetId, pokeUserId);
+        // 引用只给第一条消息，避免“文字 + 图”两条都带引用。
+        var (sentImage, pokeSent) = await SendExtrasAsync(conversation, context, caps, platformPolicy,
+            isGroup, targetId, textReply is not null ? null : replyTo, sticker, pokeTarget, sent);
+        sent |= sentImage;
 
         if (sent || pokeSent)
         {
@@ -368,6 +389,14 @@ internal sealed class ReplyDelivery(
                 ? Services.Participation.ParticipationEvent.Replied
                 : Services.Participation.ParticipationEvent.Silent);
 
+        // Unsent memory-derived output must not survive in logs or the panel event stream.
+        if (BotAgent.Services.Memory.MemoryUseScope.HasMemory)
+        {
+            _hooks.Log($"[memory] outcome={(sent ? "replied" : "failed")} elapsedMs={elapsed:F0} sentSegments={sendReport.SentSegments.Count} textLength={reply.Length}");
+            return ChatDeliveryReport.FromAcknowledgements(sendReport, textReply is not null, voiceParts, voiceSent, voiceFailed,
+                extrasComplete: (sticker is null || sentImage) && (pokeTarget is null || pokeSent));
+        }
+
         // P2（结构化运行记录）：同一条终态也用统一字段写一行，便于核对「决策 → 实际发送」是否一致。
         _hooks.Log($"[决策] outcome={(sent ? "replied" : "failed")} action={result.Action}"
                 + $" reason={result.ReasonCode ?? "unknown"}: {conversation.Name}");
@@ -382,6 +411,9 @@ internal sealed class ReplyDelivery(
             (pokeSent ? $"，戳了 {pokeTarget}" : string.Empty) +
             $"{quoteNote}）" +
             (reply.Length > 0 ? $": {reply}" : string.Empty));
+
+        return ChatDeliveryReport.FromAcknowledgements(sendReport, textReply is not null, voiceParts, voiceSent, voiceFailed,
+            extrasComplete: (sticker is null || sentImage) && (pokeTarget is null || pokeSent));
     }
 
     /// <summary>戳一戳发送与前置闸门裁决：仅在目标出现于当前上下文且心情/能力闸门放行时发出。</summary>
@@ -423,6 +455,9 @@ internal sealed class ReplyDelivery(
             _hooks.Log($"这次不戳 {pokeUserId}（能力闸门拒绝：{pokeCapWhy}）");
             return false;
         }
+        using var validation = ReplyCommitBoundary.EnterValidation(() =>
+            ValidateModality(conversation, null, platformPolicy, "poke", PluginGate.PokeCapability, "poke.send"));
+        await ReplyCommitBoundary.BeforeSourceSendAsync(_source);
         var sent = await _source.SendPokeAsync(isGroup, targetId, pokeUserId);
         if (sent) _poke.NotePokedBack(conversation.SourceKey, pokeUserId, EngineClock.Now);
         else _hooks.Log($"戳 {pokeUserId} 失败（协议端可能不支持戳一戳）");
