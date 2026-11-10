@@ -4,6 +4,8 @@ const ADMIN = 'synthetic-web-admin-token'
 const READ = 'synthetic-web-read-token'
 
 test('leaving the task page keeps a pending decision unknown until manual recovery', async ({ page }) => {
+  // Isolate navigation reads from event-driven background resyncs in this scenario.
+  await page.route('**/zba/v1/events*', route => route.abort('failed'))
   const id = 'synthetic-decision-recovery'
   const approval = { id, toolId: 'synthetic.tool', summary: 'synthetic safe summary',
     session: 'synthetic-session', expiresAt: '2099-01-01T00:00:00Z', policyVersion: 1 }
@@ -31,8 +33,12 @@ test('leaving the task page keeps a pending decision unknown until manual recove
     await expect.poll(() => decisions.length).toBe(1)
     await page.getByTestId('nav-overview').click()
     await expect(page.getByTestId('tasks')).toBeHidden()
+    const beforeNavigation = reads
     await page.getByTestId('nav-tasks').click()
     await expect(page.getByTestId('tasks')).toBeVisible()
+    // Observe the return-navigation approval read while the decision is still pending.
+    // Visibility alone does not wait for reloadAll to reach the approval read.
+    await expect.poll(() => reads).toBeGreaterThan(beforeNavigation)
     const before = reads
     const response = page.waitForResponse((r) => r.url().endsWith('/' + id + '/decide'))
     release()
