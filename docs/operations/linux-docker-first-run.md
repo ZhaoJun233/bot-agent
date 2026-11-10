@@ -4,7 +4,7 @@
 
 ## 1. 准备可核对的交付包
 
-交付包应含 `app.tar.gz`、仓库根的 `Dockerfile.app`、前端 `src/web/dist` 产物，以及源码提交、目标 RID 和文件 SHA256 清单。开发机需 .NET 10 SDK、Node.js 22 与 npm；服务器需 Docker、匹配产物的 .NET 运行时镜像，以及单独提供前端的 Caddy。服务器无需安装构建 SDK。
+交付包应含 `app.tar.gz`、仓库根的 `Dockerfile.app`、前端 `src/web/dist` 产物，以及源码提交、目标 RID 和文件 SHA256 清单。开发机需 .NET 10 SDK、Node.js 22.22.2+（22.x）、24.15.0+（24.x）或 26+ 与 npm；服务器需 Docker、匹配产物的 .NET 运行时镜像，以及单独提供前端的 Caddy。服务器无需安装构建 SDK。
 
 开发机在 PowerShell 7 构建，目录使用本次独有名称：
 
