@@ -165,7 +165,7 @@ docker compose logs -f napcat
 | `BOTAGENT_QQ_ONEBOT_URL` | `QQCHAT_ONEBOT_URL` | 协议端 WebSocket 地址 |
 | `BOTAGENT_QQ_ONEBOT_TOKEN` | `QQCHAT_ONEBOT_TOKEN` | 协议端鉴权令牌 |
 | `BOTAGENT_QQ_UIN` | `QQCHAT_UIN` | 机器人号（留空则连接后自动获取） |
-| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`、`HEALTH_PORT` | 面板与健康探针端口（原生默认 **18245**，容器镜像内默认 8080） |
+| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`、`HEALTH_PORT` | 面板与健康探针端口（原生及产物式镜像默认 **18245**，源码镜像和 compose 默认 8080） |
 | `BOTAGENT_HEALTH_BIND` | `QQCHAT_HEALTH_BIND` | 监听地址（默认 `127.0.0.1`，只绑回环） |
 | `BOTAGENT_PANEL_TOKEN` | `QQCHAT_PANEL_TOKEN` | 面板 API 令牌 |
 | — | `QQCHAT_PANEL_PASSWORD` | 面板口令的**初始值**：首次启动写入库，之后在面板里改 |

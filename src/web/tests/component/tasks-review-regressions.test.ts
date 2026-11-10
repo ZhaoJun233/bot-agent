@@ -1,3 +1,4 @@
+import { clearPendingDecisions } from '../../src/features/tasks/pending-decisions'
 import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { markRaw } from 'vue'
@@ -11,6 +12,7 @@ const mounted: Array<{ unmount(): void }> = []
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
   clearPending()
+  clearPendingDecisions()
 })
 function deferred<T>() {
   let resolve!: (value: T) => void

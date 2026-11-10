@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaPluginSettings } from '../../api/zba'
+import { ZbaClient, ZbaRequestError, type ZbaPluginSettings } from '../../api/zba'
+import { isPluginWriteOutcomeUnknown as isUnknown } from './plugin-write-outcome'
 import { beginOperation, getPendingOperation, markOperation } from '../../shared/sync/pending-operations'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
@@ -36,12 +37,6 @@ let leaveResolve: ((value: boolean) => void) | null = null
 let leavePromise: Promise<boolean> | null = null
 
 function describe(cause: unknown): UiError { return toUiError(cause) }
-function isUnknown(cause: unknown): boolean {
-  if (cause instanceof ZbaNetworkError) return true
-  if (cause instanceof ZbaRequestError && cause.code === 'plugin_reload_failed') return false
-  if (cause instanceof ZbaRequestError) return cause.status >= 500 || cause.status === 0 || cause.code === 'invalid_json'
-  return true
-}
 function live(client: ZbaClient): boolean { return alive && props.active && client === props.client }
 function ownsSettings(client: ZbaClient, id: string, epoch: number): boolean { return live(client) && pluginId.value === id && epoch === settingsEpoch }
 function showError(cause: unknown): void {

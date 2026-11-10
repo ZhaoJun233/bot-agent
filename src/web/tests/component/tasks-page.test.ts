@@ -1,3 +1,4 @@
+import { clearPendingDecisions } from '../../src/features/tasks/pending-decisions'
 import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import TasksPage from '../../src/features/tasks/TasksPage.vue'
@@ -15,6 +16,7 @@ const mounted: Array<{ unmount: () => void }> = []
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
   clearPending()
+  clearPendingDecisions()
 })
 
 const task = (overrides: Partial<ZbaTaskSummary> = {}): ZbaTaskSummary => ({

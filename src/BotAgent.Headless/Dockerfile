@@ -15,6 +15,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 WORKDIR /src
 
+# 还原和发布都读取仓库统一的版本与构建属性。
+COPY Directory.Build.props ./
+
 # 先拷宿主及完整传递项目引用的 csproj，缓存 NuGet 还原层
 COPY src/BotAgent.Core/BotAgent.Core.csproj src/BotAgent.Core/
 COPY src/BotAgent.Platforms/BotAgent.Platforms.csproj src/BotAgent.Platforms/
@@ -78,7 +81,8 @@ EXPOSE 8080 3001
 # 健康探测：bash 的 /dev/tcp 直连面板端口（零额外进程内存）。
 # 原来是 `dotnet BotAgent.Headless.dll --health`：每 30 秒冷启动一遍 .NET 运行时，
 # 在 1 核小机器上是白白浪费（改用产物式镜像 Dockerfile.app 的部署机尤其明显）。
+# 与 BotConfig 一致：首个 Int32 值优先，越界回退 18245；0 表示禁用。
 HEALTHCHECK --interval=60s --timeout=5s --start-period=15s --retries=3 \
-    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${QQCHAT_HEALTH_PORT:-8080} && printf 'GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' >&3 && head -n 1 <&3 | grep -q '200'"]
+    CMD ["bash", "-c", "port=18245; for name in BOTAGENT_HEALTH_PORT QQCHAT_HEALTH_PORT HEALTH_PORT; do raw=${!name}; if [[ $raw =~ ^[[:space:]]*([+-]?)([0-9]+)[[:space:]]*$ ]]; then sign=${BASH_REMATCH[1]}; digits=${BASH_REMATCH[2]}; while [[ $digits == 0* && ${#digits} -gt 1 ]]; do digits=${digits#0}; done; if (( ${#digits} > 10 )); then continue; fi; value=$((10#$digits)); if [[ $sign == - ]]; then value=$((-value)); fi; if (( value < -2147483648 || value > 2147483647 )); then continue; fi; if (( value >= 0 && value <= 65535 )); then port=$value; fi; break; fi; done; if (( port == 0 )); then exit 0; fi; exec 3<>/dev/tcp/127.0.0.1/$port && printf 'GET /healthz HTTP/1.0\nHost: 127.0.0.1:%s\n\n' \"$port\" >&3 && head -n 1 <&3 | grep -q '^HTTP/[0-9.]* 200 '"]
 
 ENTRYPOINT ["dotnet", "/app/BotAgent.Headless.dll"]

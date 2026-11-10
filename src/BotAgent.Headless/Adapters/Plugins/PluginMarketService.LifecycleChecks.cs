@@ -36,8 +36,8 @@ public sealed partial class PluginMarketService
             Check("host_compatibility", PluginPackageValidation.IsCompatible(target), "目标版本必须兼容宿主。");
             Check("fixed_release", new[] { current.Active, current.Previous }.All(m => m?.Version != target.Version ||
                 PluginLifecycleManifest.Fingerprint(m) == PluginLifecycleManifest.Fingerprint(target)), "同一固定版本不可替换为不同清单。");
-            Check("dependencies", (target.Dependencies ?? []).All(d => registered.Any(p => p.IsPreset && p.Id == d.Id && p.Version == d.Version) || installed.Any(p => p.Id == d.Id &&
-                !p.PendingUninstall && p.Pending is null && p.Active?.Version == d.Version)), "依赖必须已安装且精确匹配声明版本。");
+            Check("dependencies", PluginDependencyPolicy.AreSatisfied(target, installed, registered),
+                "依赖必须已安装、属于同一运行时且精确匹配声明版本。");
         }
         Check("reverse_dependencies", installed.Where(p => p.Id != current.Id)
             .SelectMany(p => new[] { p.Active, p.Pending }).Where(m => m is not null)

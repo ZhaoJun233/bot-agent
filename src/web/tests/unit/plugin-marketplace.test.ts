@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { ZbaRequestError, type ZbaPluginCatalogItem, type ZbaPluginOperation } from '../../src/api/zba'
 import {
   catalogEntry,
-  pluginKeyInvalidated,
   pluginOperationKey,
   pluginOperationNotice,
   pluginRecoveryNotice,
@@ -78,16 +77,12 @@ describe('operation receipts', () => {
   })
   it('tells the caller to reconcile with the same key after a lookup miss', () => {
     expect(pluginRecoveryNotice(requestError(404, 'plugin_operation_not_found'))?.message).toContain('同一操作键')
-    expect(pluginRecoveryNotice(requestError(409, 'idempotency_conflict'))?.message).toContain('换一个操作键')
+    expect(pluginRecoveryNotice(requestError(409, 'idempotency_conflict'))?.message).toContain('保留原操作键')
     // 只认冻结线点名的 code：其它 404/409 交给通用错误文案。
     expect(pluginRecoveryNotice(requestError(404, 'other_missing'))).toBeNull()
     expect(pluginRecoveryNotice(new Error('boom'))).toBeNull()
   })
-  it('only invalidates the stored key on a real idempotency conflict', () => {
-    expect(pluginKeyInvalidated(requestError(409, 'idempotency_conflict'))).toBe(true)
-    expect(pluginKeyInvalidated(requestError(409, 'other_conflict'))).toBe(false)
-    expect(pluginKeyInvalidated(requestError(404, 'plugin_operation_not_found'))).toBe(false)
-  })
+
 })
 
 describe('hot application receipts', () => {

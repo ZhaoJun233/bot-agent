@@ -22,6 +22,7 @@ import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { newNonce, nowSeconds } from '../configuration/draft'
 import TaskRecoveryLookup from './TaskRecoveryLookup.vue'
 import { taskFindCodeLabels as findCodeLabels } from './task-find-labels'
+import { beginDecision, forgetDecision, markDecision, pendingDecisions, type PendingDecision } from './pending-decisions'
 import {
   activePending,
   beginPending,
@@ -86,7 +87,8 @@ const approvals = ref<ApprovalRow[]>([])
 const approvalsLoaded = ref(false)
 const approvalError = ref<UiError | null>(null)
 const decisionError = ref<UiError | null>(null)
-const approvalBusy = ref<string[]>([])
+const decisionRecords = computed(() => pendingDecisions(props.client))
+const approvalBusy = computed(() => decisionRecords.value.filter(item => item.busy).map(item => item.id))
 const decisionNotice = ref<string | null>(null)
 const syncSnapshot = ref<SchedulerSnapshot>({
   state: 'idle', cursor: 0, resyncCount: 0, failures: 0, lastSyncedAt: null,
@@ -232,16 +234,14 @@ async function loadMore(): Promise<void> {
  * 过期/已决等明确终结保留只读痕迹；未知和临时拒绝也禁止重放旧意图。
  * 后者只有人工重新读取成功、确认仍 Pending 后才能发起一次新的人工决定。
  */
-const staleIds = new Set<string>()
-const unknownIds = new Set<string>()
-const retryableIds = new Set<string>()
-
 let approvalSequence = 0
 
 async function loadApprovals(allowFreshDecision = false): Promise<boolean> {
   if (unmounted) return true
   const sequence = ++approvalSequence
   const client = props.client
+  // Only a read started after the original POST settled can authorize a new decision.
+  const retryable = decisionRecords.value.filter(item => !item.busy && item.retryable)
   try {
     const fresh = await client.listApprovals()
     // 换令牌/换服务后旧读取晚到：整份丢弃，不能让旧身份的队列覆盖新快照。
@@ -252,11 +252,10 @@ async function loadApprovals(allowFreshDecision = false): Promise<boolean> {
     // 也可能因为策略变更又出现了）。刷新失败时下面的 catch 不清列表，显示旧数据。
     if (allowFreshDecision) {
       for (const item of fresh) {
-        if (!retryableIds.has(item.id) || approvalBusy.value.includes(item.id)
+        const record = retryable.find(record => record.id === item.id)
+        if (!record || !decisionRecords.value.includes(record) || record.busy
           || !(Date.parse(item.expiresAt) > Date.now())) continue
-        staleIds.delete(item.id)
-        unknownIds.delete(item.id)
-        retryableIds.delete(item.id)
+        forgetDecision(record)
         staleReasons.delete(item.id)
       }
     }
@@ -265,9 +264,7 @@ async function loadApprovals(allowFreshDecision = false): Promise<boolean> {
     approvals.value = [
       ...fresh.map((item) => ({
         ...item,
-        stale: staleIds.has(item.id),
-        unknown: unknownIds.has(item.id),
-        staleReason: staleIds.has(item.id) ? (previousReason(item.id) ?? '这次决定没有生效。') : null
+        ...decisionMark(item.id)
       })),
       ...carried.map((row) => ({
         ...row, stale: true,
@@ -286,8 +283,11 @@ async function loadApprovals(allowFreshDecision = false): Promise<boolean> {
 
 const staleReasons = new Map<string, string>()
 
-function previousReason(id: string): string | null {
-  return staleReasons.get(id) ?? null
+function decisionMark(id: string) {
+  const record = decisionRecords.value.find(item => item.id === id)
+  return { stale: record?.stale ?? false, unknown: record?.unknown ?? false,
+    staleReason: record?.stale ? (staleReasons.get(id) ?? (record.unknown
+      ? '这次决定的结果未知；请人工重新读取队列后再决定。' : '这次决定没有生效。')) : null }
 }
 
 let detailSequence = 0
@@ -431,8 +431,12 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
     decisionError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次审批没有发送。' }
     return
   }
-  if (approvalBusy.value.includes(approval.id)) return
-  approvalBusy.value = [...approvalBusy.value, approval.id]
+  if (decisionRecords.value.some(item => item.id === approval.id)) return
+  let record: PendingDecision
+  try { record = beginDecision(client, approval.id, approval.expiresAt) } catch {
+    decisionError.value = { code: 'pending_decision_capacity', message: '还有审批决定尚未核对，本次没有发送。请先核对待审批队列。' }
+    return
+  }
   decisionError.value = null
   decisionNotice.value = null
   try {
@@ -443,7 +447,7 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
         code: 'decide_' + result.reasonCode,
         message: '审批没有生效（' + result.reasonCode + '）：' + (result.decision || '服务端未接受这次决定') + '。'
       }
-      markStale(approval.id, decideReasonText(result.reasonCode), false, !isTerminalApprovalReason(result.reasonCode))
+      markStale(record, decideReasonText(result.reasonCode), false, !isTerminalApprovalReason(result.reasonCode))
       return
     }
     // 成功体必须与本地意图一致：错配不能显示成"已批准"。
@@ -453,10 +457,11 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
         code: 'decide_mismatch',
         message: '服务端回执与本次决定不一致（发送 ' + expected + '，回执 ' + result.decision + '），请重新读取队列确认。'
       }
-      markStale(approval.id, '回执与本次决定不一致，结果未知；请人工重新读取队列确认。', true, true)
+      markStale(record, '回执与本次决定不一致，结果未知；请人工重新读取队列确认。', true, true)
       return
     }
     approvals.value = approvals.value.filter((item) => item.id !== approval.id)
+    forgetDecision(record)
     decisionNotice.value = '已提交决定：' + (approve ? '批准' : '拒绝') + '。审批通过只表示同意执行，不代表工具已经成功。'
     scheduler.value?.kick()
   } catch (cause) {
@@ -473,10 +478,12 @@ async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
       ? '这次决定的结果未知；请人工重新读取队列，确认仍待审批后再作新决定。'
       : decideReasonText(reason)
     decisionError.value = { ...ui, message: ui.message + reasonText }
-    markStale(approval.id, reasonText, outcomeUnknown, outcomeUnknown || !isTerminalApprovalReason(reason ?? (cause instanceof ZbaRequestError ? cause.code : undefined)))
+    markStale(record, reasonText, outcomeUnknown, outcomeUnknown || !isTerminalApprovalReason(reason ?? (cause instanceof ZbaRequestError ? cause.code : undefined)))
   } finally {
+    if (!ownedBy(epoch, client)) markDecision(record, true, true)
+    // Settlement belongs to the request, including after its view has been unmounted.
+    record.busy = false
     if (!unmounted && client === props.client) {
-      approvalBusy.value = approvalBusy.value.filter((id) => id !== approval.id)
       // 自动补读只更新证据，不能替用户确认新的决定或重放 POST。
       await loadApprovals()
     }
@@ -487,16 +494,12 @@ function isTerminalApprovalReason(reason: string | undefined): boolean {
   return ['expired', 'approval_expired', 'already_decided', 'source_retired', 'unknown_request', 'approval_not_found'].includes(reason ?? '')
 }
 
-function markStale(id: string, reason: string, unknown = false, retryable = false): void {
+function markStale(record: PendingDecision, reason: string, unknown = false, retryable = false): void {
   // 在决定结束之前发出的 GET 不能充当该决定之后的 fresh Pending 证据。
   approvalSequence += 1
-  staleIds.add(id)
-  if (unknown) unknownIds.add(id)
-  else unknownIds.delete(id)
-  if (retryable) retryableIds.add(id)
-  else retryableIds.delete(id)
-  staleReasons.set(id, reason)
-  approvals.value = approvals.value.map((row) => (row.id === id
+  markDecision(record, unknown, retryable)
+  staleReasons.set(record.id, reason)
+  approvals.value = approvals.value.map((row) => (row.id === record.id
     ? { ...row, stale: true, unknown, staleReason: reason }
     : row))
 }
@@ -896,7 +899,6 @@ function resetForSession(): void {
   lastGoodTasks = []
   lastGoodCursor = null
   approvals.value = []
-  approvalBusy.value = []
   approvalsLoaded.value = false
   detail.value = null
   detailError.value = null
@@ -908,10 +910,7 @@ function resetForSession(): void {
   restartArmed.value = null
   cancelMarks.clear()
   // 旧会话的"未生效"标记属于旧身份，不能带进新会话。
-  staleIds.clear()
   staleReasons.clear()
-  unknownIds.clear()
-  retryableIds.clear()
   error.value = null
   pageError.value = null
   lastLoadedAt.value = null
@@ -966,6 +965,7 @@ function attachScheduler(client: ZbaClient): void {
 let boundClient = props.client
 watch(() => props.client, (value) => {
   if (value === boundClient) return
+  abandonInFlight()
   boundClient = value
   attachScheduler(value)
   resetForSession()
@@ -975,8 +975,8 @@ watch(() => props.client, (value) => {
 function abandonInFlight(): void {
   ownership += 1
   // 已发送的决定仍可能生效；旧回执不再属于当前页面时，保留待核对状态。
-  for (const id of approvalBusy.value) {
-    markStale(id, '页面或写入状态已变化，这次决定的结果未知；请重新读取队列后再决定。', true, true)
+  for (const record of pendingDecisions(boundClient).filter(item => item.busy)) {
+    markStale(record, '页面或写入状态已变化，这次决定的结果未知；请重新读取队列后再决定。', true, true)
   }
 }
 
@@ -999,6 +999,9 @@ async function reloadAll(): Promise<void> {
  * R1 的时序正是「新组件先挂载 → 旧请求后失败」，只有订阅登记处才能看到那一步。
  */
 watch(pendingEntries, () => { syncSubmissionsWithRegistry() })
+watch(decisionRecords, () => {
+  approvals.value = approvals.value.map(row => ({ ...row, ...decisionMark(row.id) }))
+}, { deep: true })
 
 onMounted(() => {
   attachScheduler(props.client)
@@ -1008,6 +1011,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  abandonInFlight()
   unmounted = true
   ownership += 1
   cancelSequence += 1

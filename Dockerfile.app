@@ -47,7 +47,8 @@ ENV DOTNET_EnableDiagnostics=0 \
 # 镜像里没有 curl，用 bash 的 /dev/tcp 直连面板端口探活：
 #   以前是 `dotnet BotAgent.Headless.dll --health` —— 每 30 秒把一个完整的 .NET 运行时冷启动一遍
 #   （~40MB RSS 尖峰）。部署机只有 1 核，健康探测不该比业务还贵；/dev/tcp 零额外内存。
+# 与 BotConfig 一致：首个 Int32 值优先，越界回退 18245；0 表示禁用。
 HEALTHCHECK --interval=60s --timeout=5s --start-period=25s --retries=3 \
-    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${QQCHAT_HEALTH_PORT:-8080} && printf 'GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' >&3 && head -n 1 <&3 | grep -q '200'"]
+    CMD ["bash", "-c", "port=18245; for name in BOTAGENT_HEALTH_PORT QQCHAT_HEALTH_PORT HEALTH_PORT; do raw=${!name}; if [[ $raw =~ ^[[:space:]]*([+-]?)([0-9]+)[[:space:]]*$ ]]; then sign=${BASH_REMATCH[1]}; digits=${BASH_REMATCH[2]}; while [[ $digits == 0* && ${#digits} -gt 1 ]]; do digits=${digits#0}; done; if (( ${#digits} > 10 )); then continue; fi; value=$((10#$digits)); if [[ $sign == - ]]; then value=$((-value)); fi; if (( value < -2147483648 || value > 2147483647 )); then continue; fi; if (( value >= 0 && value <= 65535 )); then port=$value; fi; break; fi; done; if (( port == 0 )); then exit 0; fi; exec 3<>/dev/tcp/127.0.0.1/$port && printf 'GET /healthz HTTP/1.0\nHost: 127.0.0.1:%s\n\n' \"$port\" >&3 && head -n 1 <&3 | grep -q '^HTTP/[0-9.]* 200 '"]
 
 ENTRYPOINT ["dotnet", "BotAgent.Headless.dll"]
