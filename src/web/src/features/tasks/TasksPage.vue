@@ -1,10 +1,11 @@
 <script setup lang="ts">
+/** 任务页编排：列表、提交、取消、恢复入口与共享生命周期。
+ * 审批队列与决定、任务详情的状态分别由专用 composable 持有。 */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   ZbaClient,
   ZbaRequestError,
   classifyTaskSubmitFailure,
-  type ZbaApprovalSummary,
   type ZbaTaskFindCode,
   type ZbaTaskState,
   type ZbaTaskSummary
@@ -22,7 +23,7 @@ import { newNonce, nowSeconds } from '../configuration/draft'
 import TaskRecoveryLookup from './TaskRecoveryLookup.vue'
 import { taskFindCodeLabels as findCodeLabels } from './task-find-labels'
 import { useTaskResult } from './use-task-result'
-import { beginDecision, forgetDecision, markDecision, pendingDecisions, type PendingDecision } from './pending-decisions'
+import { useTaskApprovals } from './use-task-approvals'
 import {
   activePending,
   beginPending,
@@ -61,13 +62,6 @@ const stateTones: Record<number, string> = {
 /** 终态：只有这三个不需要继续核对。 */
 const terminalStates: number[] = [3, 4, 6]
 
-/** 审批队列的一行；stale 阻止重放旧决定，unknown 不推断是否生效。 */
-interface ApprovalRow extends ZbaApprovalSummary {
-  stale: boolean
-  staleReason: string | null
-  unknown: boolean
-}
-
 const tasks = ref<ZbaTaskSummary[]>([])
 const nextCursor = ref<string | null>(null)
 // 展示列表可能因交互刷新临时撤下；回退基线只能来自成功读取。
@@ -84,13 +78,6 @@ const { detail, error: detailError, busy: detailBusy, open: openDetail, close: c
 const cancelBusy = ref(false)
 const cancelError = ref<UiError | null>(null)
 let cancelSequence = 0
-const approvals = ref<ApprovalRow[]>([])
-const approvalsLoaded = ref(false)
-const approvalError = ref<UiError | null>(null)
-const decisionError = ref<UiError | null>(null)
-const decisionRecords = computed(() => pendingDecisions(props.client))
-const approvalBusy = computed(() => decisionRecords.value.filter(item => item.busy).map(item => item.id))
-const decisionNotice = ref<string | null>(null)
 const syncSnapshot = ref<SchedulerSnapshot>({
   state: 'idle', cursor: 0, resyncCount: 0, failures: 0, lastSyncedAt: null,
   failedResource: null
@@ -114,7 +101,6 @@ const syncBadgeText = computed(() => {
 
 const canWrite = computed(() => props.mode === 'admin' && props.writesEnabled)
 const activeTasks = computed(() => tasks.value.filter((task) => !isTerminal(task.state)))
-const pendingApprovals = computed(() => approvals.value.filter((row) => !row.stale))
 
 /**
  * 页面所有权代数。卸载、离开视图、降级都会让在途写请求失效：
@@ -230,68 +216,6 @@ async function loadMore(): Promise<void> {
 }
 
 /**
- * 本次会话里决定失败过的审批。
- *
- * 过期/已决等明确终结保留只读痕迹；未知和临时拒绝也禁止重放旧意图。
- * 后者只有人工重新读取成功、确认仍 Pending 后才能发起一次新的人工决定。
- */
-let approvalSequence = 0
-
-async function loadApprovals(allowFreshDecision = false): Promise<boolean> {
-  if (unmounted) return true
-  const sequence = ++approvalSequence
-  const client = props.client
-  // Only a read started after the original POST settled can authorize a new decision.
-  const retryable = decisionRecords.value.filter(item => !item.busy && item.retryable)
-  try {
-    const fresh = await client.listApprovals()
-    // 换令牌/换服务后旧读取晚到：整份丢弃，不能让旧身份的队列覆盖新快照。
-    if (unmounted || sequence !== approvalSequence || client !== props.client) return true
-    approvalsLoaded.value = true
-    approvalError.value = null
-    // 以服务端队列为准；但决定失败过的行保留为只读痕迹（它可能已经不在队列里了，
-    // 也可能因为策略变更又出现了）。刷新失败时下面的 catch 不清列表，显示旧数据。
-    if (allowFreshDecision) {
-      for (const item of fresh) {
-        const record = retryable.find(record => record.id === item.id)
-        if (!record || !decisionRecords.value.includes(record) || record.busy
-          || !(Date.parse(item.expiresAt) > Date.now())) continue
-        forgetDecision(record)
-        staleReasons.delete(item.id)
-      }
-    }
-    const seen = new Set(fresh.map((item) => item.id))
-    const carried = approvals.value.filter((row) => row.stale && !seen.has(row.id))
-    approvals.value = [
-      ...fresh.map((item) => ({
-        ...item,
-        ...decisionMark(item.id)
-      })),
-      ...carried.map((row) => ({
-        ...row, stale: true,
-        staleReason: row.unknown ? '当前已不在待审批队列；这不证明这次决定是否生效。' : row.staleReason
-      }))
-    ]
-    return true
-  } catch (cause) {
-    if (unmounted || sequence !== approvalSequence || client !== props.client) return true
-    if (reportAuthFailure(cause)) return false
-    // 刷新失败显示旧数据：不清列表，只标记读取失败。
-    approvalError.value = toUiError(cause)
-    return false
-  }
-}
-
-const staleReasons = new Map<string, string>()
-
-function decisionMark(id: string) {
-  const record = decisionRecords.value.find(item => item.id === id)
-  return { stale: record?.stale ?? false, unknown: record?.unknown ?? false,
-    staleReason: record?.stale ? (staleReasons.get(id) ?? (record.unknown
-      ? '这次决定的结果未知；请人工重新读取队列后再决定。' : '这次决定没有生效。')) : null }
-}
-
-/**
  * 取消标记：取消是「请求」，不是「已取消」。
  *
  * 一旦我们确实请求过取消，这个标记对同一任务保持（服务端已进入终态也一样）：
@@ -362,116 +286,6 @@ async function cancelTask(task: ZbaTaskSummary): Promise<void> {
     // 只释放本次取消；旧会话的回包不改变新会话的在途状态。
     if (sequence === cancelSequence) cancelBusy.value = false
   }
-}
-
-/** 审批决定失败的安全语义：只解释 reasonCode，不猜工具为什么没执行。 */
-function decideReasonText(reason: string | undefined): string {
-  switch (reason) {
-    case 'expired': return '这条审批已经过期，队列已重新读取。'
-    case 'already_decided': return '这条审批已经被处理过，队列已重新读取。'
-    case 'policy_changed': return '审批策略已变化，请按新策略重新确认。'
-    case 'source_retired': return '发起这次审批的来源已下线。'
-    case 'not_an_approver': return '当前身份不是审批人。'
-    default: return reason ? '原因码：' + reason + '。' : '服务端未接受这次决定。'
-  }
-}
-
-/**
- * 审批决定。
- *
- * 批准/拒绝都绑定本次请求与参数：服务端返回 ok=false（过期、已被他人处理）
- * 或 4xx 时界面必须如实说明，并且**补读独立队列**——不能靠反复提交争取成功
- * （S3-09）。
- */
-async function decide(approval: ApprovalRow, approve: boolean): Promise<void> {
-  if (!canWrite.value) {
-    decisionError.value = { code: 'read_only', message: '当前不是管理员模式，不能审批。' }
-    return
-  }
-  if (approval.stale) {
-    decisionError.value = {
-      code: 'approval_stale',
-      message: '这条审批已经失效，请重新读取队列后再决定。'
-    }
-    return
-  }
-  const client = props.client
-  const epoch = ownership
-  if (!ownedBy(epoch, client)) {
-    decisionError.value = { code: 'aborted_client', message: '已经离开任务页或权限发生变化，这次审批没有发送。' }
-    return
-  }
-  if (decisionRecords.value.some(item => item.id === approval.id)) return
-  let record: PendingDecision
-  try { record = beginDecision(client, approval.id, approval.expiresAt) } catch {
-    decisionError.value = { code: 'pending_decision_capacity', message: '还有审批决定尚未核对，本次没有发送。请先核对待审批队列。' }
-    return
-  }
-  decisionError.value = null
-  decisionNotice.value = null
-  try {
-    const result = await client.decideApproval(approval.id, approve)
-    if (!ownedBy(epoch, client)) return
-    if (!result.ok) {
-      decisionError.value = {
-        code: 'decide_' + result.reasonCode,
-        message: '审批没有生效（' + result.reasonCode + '）：' + (result.decision || '服务端未接受这次决定') + '。'
-      }
-      markStale(record, decideReasonText(result.reasonCode), false, !isTerminalApprovalReason(result.reasonCode))
-      return
-    }
-    // 成功体必须与本地意图一致：错配不能显示成"已批准"。
-    const expected = approve ? 'approve' : 'reject'
-    if (result.decision !== expected) {
-      decisionError.value = {
-        code: 'decide_mismatch',
-        message: '服务端回执与本次决定不一致（发送 ' + expected + '，回执 ' + result.decision + '），请重新读取队列确认。'
-      }
-      markStale(record, '回执与本次决定不一致，结果未知；请人工重新读取队列确认。', true, true)
-      return
-    }
-    approvals.value = approvals.value.filter((item) => item.id !== approval.id)
-    forgetDecision(record)
-    decisionNotice.value = '已提交决定：' + (approve ? '批准' : '拒绝') + '。审批通过只表示同意执行，不代表工具已经成功。'
-    scheduler.value?.kick()
-  } catch (cause) {
-    // 同上：换了令牌/服务之后，旧决定请求的 401 不属于当前会话。
-    if (!ownedBy(epoch, client)) return
-    if (reportAuthFailure(cause)) return
-    const ui = toUiError(cause)
-    const reason = cause instanceof ZbaRequestError ? cause.reason : undefined
-    // 网络中断、5xx、2xx 回执读不懂：决定可能已经生效，不能写成"未接受"。
-    const outcomeUnknown = !(cause instanceof ZbaRequestError)
-      || cause.status >= 500 || (cause.status >= 200 && cause.status < 300)
-      || [408, 429].includes(cause.status)
-    const reasonText = outcomeUnknown
-      ? '这次决定的结果未知；请人工重新读取队列，确认仍待审批后再作新决定。'
-      : decideReasonText(reason)
-    decisionError.value = { ...ui, message: ui.message + reasonText }
-    markStale(record, reasonText, outcomeUnknown, outcomeUnknown || !isTerminalApprovalReason(reason ?? (cause instanceof ZbaRequestError ? cause.code : undefined)))
-  } finally {
-    if (!ownedBy(epoch, client)) markDecision(record, true, true)
-    // Settlement belongs to the request, including after its view has been unmounted.
-    record.busy = false
-    if (!unmounted && client === props.client) {
-      // 自动补读只更新证据，不能替用户确认新的决定或重放 POST。
-      await loadApprovals()
-    }
-  }
-}
-
-function isTerminalApprovalReason(reason: string | undefined): boolean {
-  return ['expired', 'approval_expired', 'already_decided', 'source_retired', 'unknown_request', 'approval_not_found'].includes(reason ?? '')
-}
-
-function markStale(record: PendingDecision, reason: string, unknown = false, retryable = false): void {
-  // 在决定结束之前发出的 GET 不能充当该决定之后的 fresh Pending 证据。
-  approvalSequence += 1
-  markDecision(record, unknown, retryable)
-  staleReasons.set(record.id, reason)
-  approvals.value = approvals.value.map((row) => (row.id === record.id
-    ? { ...row, stale: true, unknown, staleReason: reason }
-    : row))
 }
 
 /**
@@ -860,30 +674,23 @@ function resetForSession(): void {
   cancelError.value = null
   // 旧 client 的列表与审批读取作废；详情生命周期由 useTaskResult 管理。
   loadSequence += 1
-  approvalSequence += 1
   loading.value = false
   tasks.value = []
   nextCursor.value = null
   lastGoodTasks = []
   lastGoodCursor = null
-  approvals.value = []
-  approvalsLoaded.value = false
-  approvalError.value = null
-  decisionError.value = null
-  decisionNotice.value = null
+  approvals.reset()
   submissions.value = []
   submitBlockedNote.value = null
   restartArmed.value = null
   cancelMarks.clear()
-  // 旧会话的"未生效"标记属于旧身份，不能带进新会话。
-  staleReasons.clear()
   error.value = null
   pageError.value = null
   lastLoadedAt.value = null
   // 换身份/换服务后重新从登记处取一次：旧身份的记录取不到，也就不会外发。
   syncSubmissionsWithRegistry()
   void load()
-  void loadApprovals()
+  void approvals.read()
 }
 
 // ── 共享事件调度（S3-06） ─────────────────────────────────────────────
@@ -905,15 +712,7 @@ function attachScheduler(client: ZbaClient): void {
       if (!(await load(undefined, 'background'))) throw new Error('tasks_read_failed')
     }
   })
-  const offApprovals = shared.subscribe({
-    name: 'approvals',
-    matches: (event) => event.type === 'approval.decided'
-      || (event.type === 'task.updated' && event.state === 'waiting_approval'),
-    reload: async () => {
-      if (unmounted) return
-      if (!(await loadApprovals())) throw new Error('approvals_read_failed')
-    }
-  })
+  const offApprovals = shared.subscribe(approvals.subscription)
   // 计划 §9.3 第 240 行：resync 要覆盖 status、配置、任务、审批与受影响能力。
   // 这里接上另外三类只读探测的订阅；它们和任务/审批共用同一个 events 轮询。
   const offResources = registerAppResources(shared, client)
@@ -940,10 +739,7 @@ watch(() => props.client, (value) => {
 /** 离开视图、退出管理员、写能力失效都让在途写请求永久失效。 */
 function abandonInFlight(): void {
   ownership += 1
-  // 已发送的决定仍可能生效；旧回执不再属于当前页面时，保留待核对状态。
-  for (const record of pendingDecisions(boundClient).filter(item => item.busy)) {
-    markStale(record, '页面或写入状态已变化，这次决定的结果未知；请重新读取队列后再决定。', true, true)
-  }
+  approvals.abandon()
 }
 
 watch(() => props.active, (value) => { if (value === false) abandonInFlight() })
@@ -956,7 +752,7 @@ async function reloadAll(): Promise<void> {
   const epoch = ownership
   await load(undefined, 'interactive')
   if (unmounted || client !== props.client || epoch !== ownership) return
-  await loadApprovals(true)
+  await approvals.read('manual')
 }
 
 /**
@@ -965,15 +761,26 @@ async function reloadAll(): Promise<void> {
  * R1 的时序正是「新组件先挂载 → 旧请求后失败」，只有订阅登记处才能看到那一步。
  */
 watch(pendingEntries, () => { syncSubmissionsWithRegistry() })
-watch(decisionRecords, () => {
-  approvals.value = approvals.value.map(row => ({ ...row, ...decisionMark(row.id) }))
-}, { deep: true })
+// 保持登记观察顺序：属性 watcher 之后构造，挂载前只接线、不发请求。
+const approvals = useTaskApprovals({
+  context: () => ({
+    // 按字段读取，避免仅查询 client 的登记投影额外订阅权限变化。
+    get client() { return props.client },
+    get ownership() { return ownership },
+    get active() { return props.active },
+    get mode() { return props.mode },
+    get writesEnabled() { return props.writesEnabled }
+  }),
+  reportAuthFailure,
+  kick: () => scheduler.value?.kick()
+})
+const approvalView = approvals.view
 
 onMounted(() => {
   attachScheduler(props.client)
   syncSubmissionsWithRegistry()
   void load()
-  void loadApprovals()
+  void approvals.read()
 })
 
 onBeforeUnmount(() => {
@@ -985,7 +792,7 @@ onBeforeUnmount(() => {
   // 列表与审批序列同样要作废：迟到时不得回填已清空的 refs，详情由 useTaskResult 清理。
   // （LIFE-03）。推进代数后，它们的 finally 也不会再动下一代 loading。
   loadSequence += 1
-  approvalSequence += 1
+  approvals.dispose()
   loading.value = false
   detachScheduler?.()
   detachScheduler = null
@@ -994,7 +801,6 @@ onBeforeUnmount(() => {
   tasks.value = []
   lastGoodTasks = []
   lastGoodCursor = null
-  approvals.value = []
 })
 
 const observationExportError = ref(false)
@@ -1022,7 +828,7 @@ function exportTaskObservation(): void {
 
 defineExpose({
   reload: reloadAll,
-  describe: () => ({ tasks: tasks.value.length, approvals: approvals.value.length })
+  describe: () => ({ tasks: tasks.value.length, approvals: approvalView.value.rows.length })
 })
 </script>
 
@@ -1033,7 +839,7 @@ defineExpose({
         <p class="eyebrow">任务</p>
         <h1 id="tasks-title">Agent 任务与审批</h1>
         <p class="subtitle">
-          进行中 {{ activeTasks.length }} · 待审批 {{ pendingApprovals.length }}
+          进行中 {{ activeTasks.length }} · 待审批 {{ approvalView.pendingCount }}
           <template v-if="lastLoadedAt"> · 读取于 {{ formatTime(lastLoadedAt) }}</template>
         </p>
       </div>
@@ -1224,27 +1030,27 @@ defineExpose({
           <p class="section-eyebrow">人工确认</p>
           <div class="task-section-title">
             <h2 id="task-approvals-title">待审批</h2>
-            <span v-if="approvalsLoaded && !approvalError" class="status-badge" :data-tone="pendingApprovals.length ? 'warn' : 'neutral'">{{ pendingApprovals.length }} 项待处理</span>
+            <span v-if="approvalView.loaded && !approvalView.readError" class="status-badge" :data-tone="approvalView.pendingCount ? 'warn' : 'neutral'">{{ approvalView.pendingCount }} 项待处理</span>
           </div>
           <p class="config-guide">改文件、执行命令等风险操作会在此等待确认。批准后才继续，拒绝或过期不会执行。</p>
           <p class="field-hint">摘要已脱敏；每次决定都绑定审批 ID。</p>
         </div>
-        <ErrorNotice :error="approvalError" title="读取待审批失败" />
-        <ErrorNotice :error="decisionError" title="审批没有完成" />
-        <p v-if="decisionNotice" class="inline-notice" data-testid="task-decision-notice" role="status">{{ decisionNotice }}</p>
+        <ErrorNotice :error="approvalView.readError" title="读取待审批失败" />
+        <ErrorNotice :error="approvalView.decisionError" title="审批没有完成" />
+        <p v-if="approvalView.decisionNotice" class="inline-notice" data-testid="task-decision-notice" role="status">{{ approvalView.decisionNotice }}</p>
         <p
-          v-if="approvals.length === 0 && approvalsLoaded && !approvalError"
+          v-if="approvalView.rows.length === 0 && approvalView.loaded && !approvalView.readError"
           class="empty-state"
           data-testid="task-approvals-empty"
         >
           当前没有待审批请求。
         </p>
-        <p v-else-if="approvals.length === 0 && !approvalError" class="empty-state" data-testid="task-approvals-unknown">
+        <p v-else-if="approvalView.rows.length === 0 && !approvalView.readError" class="empty-state" data-testid="task-approvals-unknown">
           还没读到待审批队列。
         </p>
         <ul v-else class="task-approval-list">
           <li
-            v-for="(approval, index) in approvals"
+            v-for="(approval, index) in approvalView.rows"
             :key="approval.id"
             :data-testid="'task-approval-' + index"
             :class="{ 'task-approval-stale': approval.stale }"
@@ -1268,8 +1074,8 @@ defineExpose({
 
 
               :data-testid="'task-approve-' + index"
-              :disabled="!canWrite || approval.stale || approvalBusy.includes(approval.id)"
-              @click="decide(approval, true)"
+              :disabled="!canWrite || approval.stale || approvalView.busyIds.includes(approval.id)"
+              @click="approvals.decide(approval, true)"
             >
               批准
             </button>
@@ -1277,8 +1083,8 @@ defineExpose({
               type="button"
               class="tonal"
               :data-testid="'task-reject-' + index"
-              :disabled="!canWrite || approval.stale || approvalBusy.includes(approval.id)"
-              @click="decide(approval, false)"
+              :disabled="!canWrite || approval.stale || approvalView.busyIds.includes(approval.id)"
+              @click="approvals.decide(approval, false)"
             >
               拒绝
             </button>
