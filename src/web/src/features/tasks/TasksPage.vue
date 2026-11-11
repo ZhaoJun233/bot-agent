@@ -6,7 +6,6 @@ import {
   classifyTaskSubmitFailure,
   type ZbaApprovalSummary,
   type ZbaTaskFindCode,
-  type ZbaTaskResult,
   type ZbaTaskState,
   type ZbaTaskSummary
 } from '../../api/zba'
@@ -22,6 +21,7 @@ import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { newNonce, nowSeconds } from '../configuration/draft'
 import TaskRecoveryLookup from './TaskRecoveryLookup.vue'
 import { taskFindCodeLabels as findCodeLabels } from './task-find-labels'
+import { useTaskResult } from './use-task-result'
 import { beginDecision, forgetDecision, markDecision, pendingDecisions, type PendingDecision } from './pending-decisions'
 import {
   activePending,
@@ -77,9 +77,10 @@ const loading = ref(false)
 const error = ref<UiError | null>(null)
 const pageError = ref<UiError | null>(null)
 const lastLoadedAt = ref<string | null>(null)
-const detail = ref<ZbaTaskResult | null>(null)
-const detailError = ref<UiError | null>(null)
-const detailBusy = ref(false)
+const { detail, error: detailError, busy: detailBusy, open: openDetail, close: closeDetail } = useTaskResult({
+  client: () => props.client,
+  reportAuthFailure
+})
 const cancelBusy = ref(false)
 const cancelError = ref<UiError | null>(null)
 let cancelSequence = 0
@@ -288,37 +289,6 @@ function decisionMark(id: string) {
   return { stale: record?.stale ?? false, unknown: record?.unknown ?? false,
     staleReason: record?.stale ? (staleReasons.get(id) ?? (record.unknown
       ? '这次决定的结果未知；请人工重新读取队列后再决定。' : '这次决定没有生效。')) : null }
-}
-
-let detailSequence = 0
-
-/**
- * 读取结果详情。
- *
- * 不再用 detailBusy 互斥（那会让后点的任务被前一次的读取挡住）：改用代数，
- * 后一次点击作废前一次的迟到响应。
- */
-async function openDetail(task: ZbaTaskSummary): Promise<void> {
-  const sequence = ++detailSequence
-  const client = props.client
-  detailBusy.value = true
-  detailError.value = null
-  detail.value = null
-  try {
-    const result = await client.getTaskResult(task.id)
-    if (unmounted || sequence !== detailSequence || client !== props.client) return
-    if (result === null) {
-      detailError.value = { code: 'task_not_found', message: '任务不存在或已被清理。' }
-      return
-    }
-    detail.value = result
-  } catch (cause) {
-    if (sequence !== detailSequence || client !== props.client) return
-    if (reportAuthFailure(cause)) return
-    detailError.value = toUiError(cause)
-  } finally {
-    if (sequence === detailSequence) detailBusy.value = false
-  }
 }
 
 /**
@@ -888,20 +858,16 @@ function resetForSession(): void {
   cancelSequence += 1
   cancelBusy.value = false
   cancelError.value = null
-  // 旧 client 的读取结果一律作废：推进三条代数并释放 loading。
+  // 旧 client 的列表与审批读取作废；详情生命周期由 useTaskResult 管理。
   loadSequence += 1
   approvalSequence += 1
-  detailSequence += 1
   loading.value = false
-  detailBusy.value = false
   tasks.value = []
   nextCursor.value = null
   lastGoodTasks = []
   lastGoodCursor = null
   approvals.value = []
   approvalsLoaded.value = false
-  detail.value = null
-  detailError.value = null
   approvalError.value = null
   decisionError.value = null
   decisionNotice.value = null
@@ -1016,13 +982,11 @@ onBeforeUnmount(() => {
   ownership += 1
   cancelSequence += 1
   cancelBusy.value = false
-  // 只读序列同样要作废：在途的 listTasks/approvals/result 迟到时不得回填已清空的 refs
+  // 列表与审批序列同样要作废：迟到时不得回填已清空的 refs，详情由 useTaskResult 清理。
   // （LIFE-03）。推进代数后，它们的 finally 也不会再动下一代 loading。
   loadSequence += 1
   approvalSequence += 1
-  detailSequence += 1
   loading.value = false
-  detailBusy.value = false
   detachScheduler?.()
   detachScheduler = null
   // 未决提交的最小关联信息留在 pending-intent 里（内存），
@@ -1031,7 +995,6 @@ onBeforeUnmount(() => {
   lastGoodTasks = []
   lastGoodCursor = null
   approvals.value = []
-  detail.value = null
 })
 
 const observationExportError = ref(false)
@@ -1126,7 +1089,7 @@ defineExpose({
       :client="props.client"
       :enabled="props.active && props.mode === 'admin' && props.writesEnabled"
       @found="reconcileRecoveredSubmission"
-      @open-task="openDetail"
+      @open-task="openDetail($event.id)"
       @auth-expired="emit('auth-expired', $event)"
     />
 
@@ -1362,7 +1325,7 @@ defineExpose({
           <div v-if="task.cancellationRequested"><dt>取消</dt><dd>{{ isTerminal(task.state) ? '已请求（任务已结束，以状态为准）' : '已请求（未确认）' }}</dd></div>
         </dl>
         <div class="dialog-actions">
-          <button type="button" class="tonal" :data-testid="'task-result-' + task.id" @click="openDetail(task)">
+          <button type="button" class="tonal" :data-testid="'task-result-' + task.id" @click="openDetail(task.id)">
             查看结果
           </button>
           <button
@@ -1413,7 +1376,7 @@ defineExpose({
           <div v-if="detail.errorCode"><dt>错误</dt><dd class="cap-error-code">{{ detail.errorCode }}</dd></div>
         </dl>
       </template>
-      <button type="button" class="link-button" data-testid="task-detail-close" @click="detail = null; detailError = null">
+      <button type="button" class="link-button" data-testid="task-detail-close" @click="closeDetail">
         收起
       </button>
     </section>
