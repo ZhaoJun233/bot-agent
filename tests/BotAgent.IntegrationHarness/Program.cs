@@ -714,6 +714,8 @@ public static partial class Program
             joined);
         Check("段数不超过上限（4 段）", trickySends.Count is > 0 and <= 4, $"{trickySends.Count} 段");
 
+        await RunNaturalParagraphChecksAsync(openAi, protocol, cts.Token);
+
         await bot.StopAsync();
     }
 

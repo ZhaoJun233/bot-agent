@@ -64,6 +64,7 @@ public static partial class Program
         PortSubstituteTests();
         ReasoningEffortTests();
         PlainTextTests();
+        NaturalParagraphTests();
         ToolGateTests();
         ApprovalTests();
         ApprovalChainTests();
