@@ -1186,6 +1186,7 @@ public static partial class Program
         Check("URL 里不会插进换行（不会被分句切成两条消息）", !urlLine.Contains('\n'), urlLine);
 
         ActionNarrationTests();
+        BracketDeliveryTests();
     }
 
     // ───────────────── P3：Fail-Closed 工具权限（V3 §9.5） ─────────────────

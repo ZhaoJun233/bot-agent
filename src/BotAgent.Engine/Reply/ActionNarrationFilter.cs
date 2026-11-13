@@ -7,7 +7,7 @@ using BotAgent.Domain.Ports;
 namespace BotAgent.Services.Reply;
 
 /// <summary>发送前的一次受限语义复核：仅改写确认的动作旁白，保护正文中的公式/代码/链接；失败保留原文。</summary>
-public sealed class ActionNarrationFilter
+public sealed partial class ActionNarrationFilter
 {
     private const int MaxCandidates = 8;
     private const int MaxInputLength = 6000;

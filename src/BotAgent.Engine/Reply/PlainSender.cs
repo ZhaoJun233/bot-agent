@@ -127,12 +127,16 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         }
 
         var rawReply = reply;
-        if (_settings.FilterActionNarration && _actionNarrationFilter is not null)
+        if (_settings.FilterActionNarration)
         {
-            reply = await _actionNarrationFilter.FilterAsync(reply).ConfigureAwait(false);
-            // 改写也必须通过既有审计；新引入敏感形状时回退到已审计的原回复。
+            var filtered = ActionNarrationFilter.StripNaturalLanguageParentheses(reply);
+            reply = _actionNarrationFilter is not null && filtered.Length > 0
+                ? await _actionNarrationFilter.FilterAsync(filtered).ConfigureAwait(false)
+                : filtered;
+            // 改写失败或触发审计时，仅回退到已经删除括号的版本。
             if (ReplyAuditRules.Judge(reply, allowLocalPaths: false) != ReplyAuditVerdict.Allow)
-                reply = rawReply;
+                reply = filtered;
+            reply = ActionNarrationFilter.StripNaturalLanguageParentheses(reply);
         }
         if (ReplyDecisionRules.IsSilenceOnlyReply(reply))
             return new CadenceSendReport(Array.Empty<string>(), "silence_only_reply");

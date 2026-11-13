@@ -179,7 +179,7 @@ public static partial class Program
         var ledger = new BotAgent.Services.Conversations.OwnMessageLedger(new FakeOwnMessageRepository(), _ => { });
         var sender = new PlainSender(probe.Settings, source, registry, new BotAgent.Services.Panel.PanelNotifier(),
             ledger, _ => { }, new BotAgent.Services.Ops.TurnTraceStore(), model: probe.Client);
-        var report = sender.SendWithCadenceAsync(true, 10001, "（点头）结果：2exp(i·2kπ/5)", null).GetAwaiter().GetResult();
+        var report = sender.SendWithCadenceAsync(true, 10001, "*点头*结果：2exp(i·2kπ/5)", null).GetAwaiter().GetResult();
         Check("真实发送链语义过滤后数学完整到出箱", report.AnySent && report.Text == "结果：2exp(i·2kπ/5)" && source.Outbox.Count == 1 && probe.Calls == 1);
         probe.Settings.Apply(s => s.FilterActionNarration = false);
         report = sender.SendWithCadenceAsync(true, 10001, "（点头）正文。", null).GetAwaiter().GetResult();
@@ -188,19 +188,19 @@ public static partial class Program
         var noModel = new PlainSender(probe.Settings, source, registry, new BotAgent.Services.Panel.PanelNotifier(),
             ledger, _ => { }, new BotAgent.Services.Ops.TurnTraceStore());
         report = noModel.SendWithCadenceAsync(true, 10001, "（点头）2*3*4", null).GetAwaiter().GetResult();
-        Check("未装配辅助模型保留原文与公式", report.Text == "（点头）2*3*4");
+        Check("未装配辅助模型也删除括号并保留公式", report.Text == "2*3*4");
         report = noModel.SendWithCadenceAsync(true, 10001, "（点头）长*宽*高", null).GetAwaiter().GetResult();
-        Check("无模型路径的Markdown降级也保留CJK乘号", report.Text == "（点头）长*宽*高");
+        Check("无模型路径的Markdown降级也保留CJK乘号", report.Text == "长*宽*高");
         var mathProbe = new ActionFilterProbe(r => Select(r, [0]));
         var mathSender = new PlainSender(probe.Settings, source, registry, new BotAgent.Services.Panel.PanelNotifier(),
             ledger, _ => { }, new BotAgent.Services.Ops.TurnTraceStore(), model: mathProbe.Client);
-        report = mathSender.SendWithCadenceAsync(true, 10001, "（点头）长*宽*高", null).GetAwaiter().GetResult();
-        Check("真实语义发送路径保留CJK变量与乘号", report.Text == "长*宽*高" && mathProbe.Calls == 1 && mathProbe.LastInput!["candidates"]!.AsArray().Count == 1);
+        report = mathSender.SendWithCadenceAsync(true, 10001, "*点头*结果：长*宽*高", null).GetAwaiter().GetResult();
+        Check("真实语义发送路径保留CJK变量与乘号", report.Text == "结果：长*宽*高" && mathProbe.Calls == 1 && mathProbe.LastInput!["candidates"]!.AsArray().Count == 1);
         var unsafeRewrite = new ActionFilterProbe(r => Select(r, [0], "/opt/qqchat/data/example.txt"));
         var unsafeSender = new PlainSender(probe.Settings, source, registry, new BotAgent.Services.Panel.PanelNotifier(),
             ledger, _ => { }, new BotAgent.Services.Ops.TurnTraceStore(), model: unsafeRewrite.Client);
-        report = unsafeSender.SendWithCadenceAsync(true, 10001, "（点头）正文。", null).GetAwaiter().GetResult();
-        Check("改写新增DLP风险退回已审计原文", report.Text == "（点头）正文。");
+        report = unsafeSender.SendWithCadenceAsync(true, 10001, "（已删除说明）*点头*正文。", null).GetAwaiter().GetResult();
+        Check("改写新增DLP风险退回已清除括号的原文", report.Text == "点头正文。" && unsafeRewrite.Calls == 1);
         var blocked = sender.SendWithCadenceAsync(true, 10001, "（点头）/opt/qqchat/data/example.txt", null).GetAwaiter().GetResult();
         Check("原回复DLP拦截仍在辅助请求之前", !blocked.AnySent && probe.Calls == 1);
     }

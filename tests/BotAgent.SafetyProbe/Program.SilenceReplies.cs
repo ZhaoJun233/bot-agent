@@ -83,7 +83,7 @@ public static partial class Program
         {
             filterResult = new JsonObject { ["actionIds"] = new JsonArray(0), ["reply"] = replacement }.ToJsonString();
             var before = source.Outbox.Count;
-            var report = sender.SendWithCadenceAsync(true, 10001, "（点头）", null).GetAwaiter().GetResult();
+            var report = sender.SendWithCadenceAsync(true, 10001, "*点头*", null).GetAwaiter().GetResult();
             Check("真实发送入口：合法删空及改写为沉默均零发送", source.Outbox.Count == before && report.SentSegments.Count == 0);
         }
         Check("旁白检查仍每次只调用一次模型", calls == 3);
