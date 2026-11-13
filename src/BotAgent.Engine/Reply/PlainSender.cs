@@ -116,6 +116,8 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         // P4（V3 §10）：发送前把 Markdown 降级成 QQ 纯文本。
         // 批次 C 的回复审计：凭据形状、或（聊天这一路）本机/服务器路径形状 → **整条不发**。
         // 记的是原因码与字数，**不记正文** —— 审计本身不能变成新的隐私面。
+        if (ReplyDecisionRules.IsSilenceOnlyReply(reply))
+            return new CadenceSendReport(Array.Empty<string>(), "silence_only_reply");
         var audit = ReplyAuditRules.Judge(reply, allowLocalPaths: false);
         if (audit != ReplyAuditVerdict.Allow)
         {
@@ -132,6 +134,8 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             if (ReplyAuditRules.Judge(reply, allowLocalPaths: false) != ReplyAuditVerdict.Allow)
                 reply = rawReply;
         }
+        if (ReplyDecisionRules.IsSilenceOnlyReply(reply))
+            return new CadenceSendReport(Array.Empty<string>(), "silence_only_reply");
         reply = QqPlainText.Sanitize(reply);
         if (reply.Length == 0)
         {

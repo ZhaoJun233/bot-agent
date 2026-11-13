@@ -68,7 +68,11 @@ public static partial class Program
             var droppedToken = new ActionFilterProbe(_ => "{\"actionIds\":[0],\"reply\":\"任意改写\"}");
             Check("丢失数学保留标记时回退", droppedToken.Run("（点头）2exp(i·2kπ/5)") == "（点头）2exp(i·2kπ/5)");
             var pure = new ActionFilterProbe(r => Select(r, [0]));
-            Check("空改写不能把整条回复吞掉", pure.Run("（点头）") == "（点头）");
+            Check("确认整条仅有动作时允许删空", pure.Run("（点头）") == "");
+            var fullDelete = new ActionFilterProbe(r => Select(r, [0, 1]));
+            Check("多个动作全部确认后允许删空", fullDelete.Run("（点头）（微笑）") == "");
+            var partialDelete = new ActionFilterProbe(_ => "{\"actionIds\":[0],\"reply\":\"\"}");
+            Check("空结果不能丢失未选中的候选", partialDelete.Run("（点头）（普通解释）") == "（点头）（普通解释）");
             foreach (var input in new[] { "（点头）未闭合(foo", "（点头）`未闭合代码", "（点头）\uE010C0\uE011", string.Concat(Enumerable.Repeat("（点头）", 9)), new string('文', 6001) })
             {
                 var probe = new ActionFilterProbe(_ => throw new InvalidOperationException("No call expected"));

@@ -158,7 +158,7 @@ public static class ModelOutputParser
             //   • 显式写了非 reply 的动作（silent / ask / tool / 未知 / 超长 / 非字符串）：一律作废，
             //     免得“说了不说”却还发语音、分享歌曲或悄悄出网。
             var keepSideEffects = string.IsNullOrWhiteSpace(declared.Action)
-                ? verdict.ReasonCode != "silent_marker"
+                ? verdict.ReasonCode is not ("silent_marker" or "abstention_notice")
                 : verdict.Action == ReplyAction.Reply;
 
             return new ParsedModelOutput(

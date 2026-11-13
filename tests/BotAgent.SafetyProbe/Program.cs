@@ -61,6 +61,7 @@ public static partial class Program
         BotAgent.Adapters.Time.ClockBindings.InitializeModel();
         DecisionTests();
         ParserWiringTests();
+        SilenceReplyTests();
         PortSubstituteTests();
         ReasoningEffortTests();
         PlainTextTests();

@@ -76,6 +76,7 @@ public static partial class Program
             await Scenario("s1", RunReverseWsScenarioAsync);
             await Scenario("s3", RunWhitelistScenarioAsync);
             await Scenario("s4", RunSilenceScenarioAsync);
+            await Scenario("s4", RunSilencePlaceholderChecksAsync);
             await Scenario("s5", RunSplitReplyScenarioAsync);
             await Scenario("s6", RunForwardWsAndPersistenceScenarioAsync);
             await Scenario("s7", RunSuitabilityGateScenarioAsync);
