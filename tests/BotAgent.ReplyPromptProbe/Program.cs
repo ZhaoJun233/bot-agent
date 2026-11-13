@@ -15,6 +15,9 @@ ModelClock.Initialize(new FixedClock());
 var checks = 0;
 
 // Captured from the unchanged b80d7b2 model with this fixed clock, before adding pacing.
+// Retain these hashes: the silence repair may add only the explicit contract below.
+const string silenceContract = "\n沉默是零消息：决定不接话时输出 {\"action\":\"silent\",\"reply\":\"\"}，不附带任何动作。" +
+    "内部参与判断只在心里完成，不得写进 reply，不得用括号、旁白或解释为何不回复来代替沉默。正常回答、拒绝和引用仍写在 reply。";
 var golden = new[]
 {
     (0, 50, false, "5B34E629B38EDCF6453717ADA5396E734037B4FB664E5D44A8BD2BF273ACC7DA"),
@@ -28,7 +31,11 @@ var golden = new[]
 foreach (var (desire, threshold, isPrivate, expected) in golden)
 {
     var request = Request(desire, threshold, isPrivate);
-    Check(Hash(PromptBuilder.Build(request)) == expected, "legacy prompt golden");
+    var prompt = PromptBuilder.Build(request);
+    Check(prompt.Split(silenceContract, StringSplitOptions.None).Length == 2,
+        "zero-message silence contract appears exactly once");
+    Check(Hash(prompt.Replace(silenceContract, "", StringComparison.Ordinal)) == expected,
+        "legacy prompt golden except the explicit silence contract");
     Check(PromptBuilder.Build(request) == PromptBuilder.Build(request with { ReplyPacingEnabled = false }),
         "omitted pacing flag remains legacy");
 }
