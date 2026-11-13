@@ -92,6 +92,7 @@ public static partial class Program
             await Scenario("s17", RunLoginQrScenarioAsync);
             await Scenario("s18", RunStickerScenarioAsync);
             await Scenario("s19", RunReplyQuoteScenarioAsync);
+            await Scenario("s66", RunReplyQuoteBacklogScenarioAsync);
             await Scenario("s20", RunPokeScenarioAsync);
             await Scenario("s21", RunModelConfigScenarioAsync);
         await Scenario("s22", RunMusicScenarioAsync);

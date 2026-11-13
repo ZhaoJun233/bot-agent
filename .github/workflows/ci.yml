@@ -260,7 +260,7 @@ jobs:
           - name: "Core & Chat (S1-S17)"
             scenarios: "s1,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17"
           - name: "Media & Tools (S18-S31)"
-            scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31"
+            scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31,s66"
           # ⚠ 别改这个 name：分支保护的必需检查是按「Synthetic integration test (<name>)」命名的，
           # 改名等于让必需检查永远缺失、PR 永远合不了。s56–s59（#126 的核心不变量）与 s60–s62
           # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。

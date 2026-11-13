@@ -99,6 +99,8 @@ internal sealed class ReplyTurnContext
         {
             return null;   // 上下文空 = 没什么可回的（与改造前一致：直接结束这一轮）
         }
+        var latestPeerMessageId = context.LastOrDefault(m =>
+            m.Role == MessageRole.Peer && !m.Recalled && !MessageMarkers.IsAside(m.Text))?.QqMessageId;
 
         // 当前上下文最早一条：档案只取比它更早的（按单调序号精确判定，避免时间戳秒级精度误判）
         var contextOldestSeq = context[0].Seq;
@@ -222,6 +224,7 @@ internal sealed class ReplyTurnContext
             ProfileChars: profileChars, StickerChoices: stickerChoices, RoleCount: roleCount,
             GroupRoles: groupRoles, VibeHint: vibeHint, PreviousVibe: previousVibe, PokeContext: pokeContext,
             MoodText: moodText, MusicText: musicText, RecallText: recallText, SearchText: searchText,
-            LinkText: linkText, IsPrivateConversation: !isGroupScope);
+            LinkText: linkText, IsPrivateConversation: !isGroupScope,
+            LatestPeerMessageIdAtGeneration: latestPeerMessageId);
     }
 }

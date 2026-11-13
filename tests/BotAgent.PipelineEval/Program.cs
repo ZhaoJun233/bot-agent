@@ -677,7 +677,8 @@ public static class Program
             TriggerUsable: f["triggerUsable"]?.GetValue<bool>() ?? true,
             LastSelfIndex: f["lastSelfIndex"]?.GetValue<int>() ?? -1,
             DirectAddress: f["directAddress"]?.GetValue<bool>() ?? false,
-            TriggerWasEcho: f["triggerWasEcho"]?.GetValue<bool>() ?? false);
+            TriggerWasEcho: f["triggerWasEcho"]?.GetValue<bool>() ?? false,
+            TriggerWasCurrentAtGeneration: f["triggerWasCurrentAtGeneration"]?.GetValue<bool>() ?? false);
 
         var result = ReplyTargetRules.Resolve(facts);
         var detail = $"target={result.Target?.ToString(CultureInfo.InvariantCulture) ?? "(null)"} reason={result.ReasonCode}";

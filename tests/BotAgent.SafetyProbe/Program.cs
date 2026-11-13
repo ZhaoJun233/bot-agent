@@ -66,6 +66,7 @@ public static partial class Program
         ReasoningEffortTests();
         PlainTextTests();
         NaturalParagraphTests();
+        ReplyTargetSnapshotTests();
         ToolGateTests();
         ApprovalTests();
         ApprovalChainTests();
