@@ -4,6 +4,7 @@ import { isPluginLifecyclePreview, matchesLifecycleSelection, type PluginLifecyc
 import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
 import { isPluginInstallPreview, isPluginSourceDiscovery, type PluginInstallPreview, type PluginPreviewRequest, type PluginSourceDiscovery } from './plugin-import'
 import { TaskObservation, type TaskObservationSnapshot } from './task-observation'
+import { isMessagingSnapshot, type MessagingCapabilitySnapshot } from './messaging-capabilities'
 
 export interface ZbaHealth {
   status: string
@@ -318,6 +319,7 @@ export interface ZbaManagedPage {
 export interface ZbaManagedInspectResult {
   code: ZbaManagedResultCode
   descriptor?: ZbaManagedDescriptor
+  messaging?: MessagingCapabilitySnapshot | null
 }
 
 export interface ZbaManagedReceipt {
@@ -2185,6 +2187,7 @@ function isManagedInspectResult(value: unknown): value is ZbaManagedInspectResul
   return isRecord(value)
     && isInteger(value.code)
     && (value.descriptor === undefined || isManagedDescriptor(value.descriptor))
+    && (value.messaging === undefined || value.messaging === null || isMessagingSnapshot(value.messaging))
 }
 
 function isManagedReceipt(value: unknown): value is ZbaManagedReceipt {

@@ -116,8 +116,11 @@ public static partial class ApprovalFlow
 
     /// <summary>群里那条请求公告（**全部由服务端拼**：不含模型输出 / 网页内容 / 原始参数）。</summary>
     public static string BuildRequestAnnouncement(string requestId, int ttlSeconds = TtlSeconds)
+        => BuildRequestAnnouncement(requestId, ttlSeconds, allowGroupAdmins: true);
+
+    public static string BuildRequestAnnouncement(string requestId, int ttlSeconds, bool allowGroupAdmins)
         => $"【需要确认】{FixedToolSummary}｜编号 {requestId}"
-           + $"（群主/管理员回复「同意 {requestId}」或「拒绝 {requestId}」；"
+           + $"（{(allowGroupAdmins ? "群主/管理员" : "配置名单中的审批人")}回复「同意 {requestId}」或「拒绝 {requestId}」；"
            + $"{ttlSeconds} 秒内有效，过期作废，只能批一次）";
 
     /// <summary>

@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Qq;
+using BotAgent.Domain.Tools;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Platforms;
 using BotAgent.Services.Plugins;
@@ -17,6 +18,12 @@ public interface IQqActionHost
 {
     /// <summary>给系统提示词用的一行现场信息（群/私聊、机器人自己、发指令的人、本条消息 id）。</summary>
     string ContextLine { get; }
+
+    /// <summary>参数与能力说明所属平台；由宿主绑定，不从模型参数读取。</summary>
+    string ActionPlatform => PlatformId.QqPrivate;
+
+    /// <summary>Read-only prompt eligibility; execution must recheck the same policy.</summary>
+    bool CanUseAction(QqActionSpec spec) => QqActionCatalog.Supports(spec, ActionPlatform);
 
     /// <summary>真的去调协议端。返回给模型看的一句话结果（成功/失败原因）。</summary>
     Task<string> ExecuteAsync(QqActionSpec spec, JsonObject args, CancellationToken ct);
@@ -92,8 +99,7 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
                 "unknown_action", $"没有这个 QQ 动作：{actionName}（见目录里那几个）");
         }
 
-        var text = await ExecuteAsync(spec, call!.Arguments ?? new JsonObject(), ct);
-        return BotAgent.Domain.Tools.ToolOutcome.Success(text, "qq 动作 " + spec.Name);
+        return await ExecuteOutcomeAsync(spec, call!.Arguments ?? new JsonObject(), ct);
     }
 
     private EffectivePlatformPolicy? ResolveTargetPolicy()
@@ -118,68 +124,20 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
         return _platformPolicies.ResolveForChannel(channel);
     }
 
-    private static string? FeatureForAction(string action)
-        => action switch
-        {
-            "poke" => "poke",
-            "recall" => "recall",
-            _ => null,
-        };
+    private ToolOutcome? DenyReason(QqActionSpec spec, EffectivePlatformPolicy? policy)
+        => QqActionAuthorization.Denial(spec, policy, _pluginAllows, PlatformId.QqPrivate);
 
-    /// <summary>动作对应的插件能力；只有登记在 PluginGate 里的才受插件开关管理（recall 仍由平台策略管）。</summary>
-    private static string? PluginCapabilityForAction(string action)
-        => action == "poke" ? PluginGate.PokeCapability : null;
-
-    /// <summary>
-    /// 显式动作执行前的授权裁决：插件开关（fail closed）→ 平台/会话 → 平台能力 → 动作允许表。
-    /// 返回 null = 放行；否则是给模型看的一句拒绝原因。
-    /// </summary>
-    private string? DenyReason(QqActionSpec spec, EffectivePlatformPolicy? policy)
-    {
-        var featureName = FeatureForAction(spec.Name);
-        // 插件门禁与对话内动作共用同一个开关：显式动作也必须 fail closed。
-        // 未接线门禁时也不能默认放行（否则任何漏传 pluginAllows 的构造都会绕过面板开关）。
-        var pluginCapability = PluginCapabilityForAction(spec.Name);
-        if (pluginCapability is not null && (_pluginAllows is null || !_pluginAllows(pluginCapability)))
-        {
-            return _pluginAllows is null
-                ? $"❌ 动作 {spec.Name} 被插件门禁拒绝（门禁未接线）。"
-                : $"❌ 动作 {spec.Name} 被插件开关拒绝（对应插件已关闭）。";
-        }
-
-        if (policy is null)
-        {
-            return null;
-        }
-
-        if (policy.Context.PlatformId != PlatformId.QqPrivate)
-        {
-            return $"❌ 动作 {spec.Name} 被平台策略拒绝（QQ 动作仅支持私域 OneBot 会话）。";
-        }
-
-        if (!policy.Registered || !policy.Connected || !policy.Enabled || !policy.ChatEnabled)
-        {
-            return $"❌ 动作 {spec.Name} 被平台策略拒绝（平台未注册、未连接或聊天未启用）。";
-        }
-
-        if (featureName is not null)
-        {
-            var feature = policy.Feature(featureName);
-            if (!feature.Enabled)
-            {
-                return $"❌ 动作 {spec.Name} 被平台能力拒绝（{feature.ReasonCode}）。";
-            }
-        }
-
-        return policy.ActionAllowlistConfigured && !policy.CanUseAction(spec.Name)
-            ? $"❌ 动作 {spec.Name} 未被当前平台策略授权。"
-            : null;
-    }
+    public bool CanUseAction(QqActionSpec spec)
+        => (_sourceLease is null || _sourceLease.IsCurrent)
+            && QqActionCatalog.Supports(spec, PlatformId.QqPrivate) && DenyReason(spec, ResolveTargetPolicy()) is null;
 
     public async Task<string> ExecuteAsync(QqActionSpec spec, JsonObject args, CancellationToken ct)
+        => (await ExecuteOutcomeAsync(spec, args, ct)).ModelText ?? string.Empty;
+
+    private async Task<ToolOutcome> ExecuteOutcomeAsync(QqActionSpec spec, JsonObject args, CancellationToken ct)
     {
         using var sourceScope = PlatformSourceExecution.Enter(_sourceLease);
-        if (_sourceLease is { IsCurrent: false }) return "source_retired";
+        if (_sourceLease is { IsCurrent: false }) return ToolOutcome.Failure("source_retired", "来源已失效，本次动作未执行。");
         using var lifetime = _sourceLease is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, _sourceLease.Lifetime);
         ct = lifetime?.Token ?? ct;
         ct.ThrowIfCancellationRequested();
@@ -195,16 +153,15 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
                 var user = ResolveUser(Text(args, "user_id") ?? Text(args, "user") ?? Text(args, "target"), out var err);
                 if (user is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var times = (int)Math.Clamp(ResolveNumber(Text(args, "times") ?? Text(args, "count"), 1), 1, 20);
                 var ok = await _gateway.SendLikeAsync(user.Value, times, ct);
-                return ok
-                    ? $"✅ 给 {user} 点了 {times} 个赞"
-                    : $"❌ 点赞没成功（QQ 侧回绝：名片赞对“从未互动过的人”、以及关掉了“允许陌生人赞我”的人都会拦）。"
+                return ActionResult(ok, $"✅ 给 {user} 点了 {times} 个赞",
+                      $"❌ 点赞没成功（QQ 侧回绝：名片赞对“从未互动过的人”、以及关掉了“允许陌生人赞我”的人都会拦）。"
                       + "这次换个方式：poke（戳一戳）或 emoji_like（贴表情）不要求好友关系；"
-                      + "如果确实要点赞，可以让对方在手机 QQ 里打开“允许陌生人赞我”，或者先用手机手动赞他一次（之后就能点了）。";
+                      + "如果确实要点赞，可以让对方在手机 QQ 里打开“允许陌生人赞我”，或者先用手机手动赞他一次（之后就能点了）。");
             }
 
             case "poke":
@@ -212,11 +169,11 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
                 var user = ResolveUser(Text(args, "user_id") ?? Text(args, "user") ?? Text(args, "target"), out var err);
                 if (user is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var ok = await _gateway.SendPokeAsync(_isGroup, _targetId, user.Value, ct);
-                return ok ? $"✅ 戳了 {user} 一下" : "❌ 戳一戳没成功（协议端可能不支持这个动作）";
+                return ActionResult(ok, $"✅ 戳了 {user} 一下", "❌ 戳一戳没成功（协议端可能不支持这个动作）");
             }
 
             case "emoji_like":
@@ -224,12 +181,12 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
                 var mid = ResolveMessage(Text(args, "message_id") ?? Text(args, "message") ?? Text(args, "id"), out var err);
                 if (mid is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var emoji = Text(args, "emoji_id") ?? Text(args, "emoji") ?? "128077";
                 var ok = await _gateway.SetMessageEmojiLikeAsync(mid.Value, emoji, ct);
-                return ok ? $"✅ 给消息 {mid} 贴了表情回应（{emoji}）" : "❌ 表情回应没成功（协议端可能不支持，或消息太旧）";
+                return ActionResult(ok, $"✅ 给消息 {mid} 贴了表情回应（{emoji}）", "❌ 表情回应没成功（协议端可能不支持，或消息太旧）");
             }
 
             case "recall":
@@ -237,95 +194,95 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
                 var mid = ResolveMessage(Text(args, "message_id") ?? Text(args, "message") ?? Text(args, "id"), out var err);
                 if (mid is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var ok = await _gateway.DeleteMessageAsync(mid.Value, ct);
-                return ok ? $"✅ 撤回了消息 {mid}" : "❌ 撤回没成功（那条不是机器人发的，或者没管理权限 / 超过 2 分钟）";
+                return ActionResult(ok, $"✅ 撤回了消息 {mid}", "❌ 撤回没成功（那条不是机器人发的，或者没管理权限 / 超过 2 分钟）");
             }
 
             case "ban":
             {
                 if (!_isGroup)
                 {
-                    return "群里才能禁言（现在是私聊）。";
+                    return ToolOutcome.Failure("invalid_arguments", "群里才能禁言（现在是私聊）。");
                 }
 
                 var user = ResolveUser(Text(args, "user_id") ?? Text(args, "user") ?? Text(args, "target"), out var err);
                 if (user is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var seconds = (int)Math.Clamp(ResolveDuration(Text(args, "duration") ?? Text(args, "seconds") ?? Text(args, "time"), 600), 0, 30 * 24 * 3600);
                 var ok = await _gateway.SetGroupBanAsync(_targetId, user.Value, seconds, ct);
                 var what = seconds == 0 ? $"给 {user} 解除了禁言" : $"把 {user} 禁言了 {FormatDuration(seconds)}";
-                return ok ? $"✅ {what}" : $"❌ 禁言没成功（机器人得是管理员、且不能禁言群主/管理员）";
+                return ActionResult(ok, $"✅ {what}", "❌ 禁言没成功（机器人得是管理员、且不能禁言群主/管理员）");
             }
 
             case "kick":
             {
                 if (!_isGroup)
                 {
-                    return "踢人得在群里（现在是私聊）。";
+                    return ToolOutcome.Failure("invalid_arguments", "踢人得在群里（现在是私聊）。");
                 }
 
                 var user = ResolveUser(Text(args, "user_id") ?? Text(args, "user") ?? Text(args, "target"), out var err);
                 if (user is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var reject = ResolveBool(Text(args, "reject_add") ?? Text(args, "reject"), false);
                 var ok = await _gateway.SetGroupKickAsync(_targetId, user.Value, reject, ct);
-                return ok ? $"✅ 把 {user} 踢出群了{(reject ? "（并拒绝再加群）" : string.Empty)}" : "❌ 踢人没成功（机器人得是管理员）";
+                return ActionResult(ok, $"✅ 把 {user} 踢出群了{(reject ? "（并拒绝再加群）" : string.Empty)}", "❌ 踢人没成功（机器人得是管理员）");
             }
 
             case "card":
             {
                 if (!_isGroup)
                 {
-                    return "群名片只在群里有效（现在是私聊）。";
+                    return ToolOutcome.Failure("invalid_arguments", "群名片只在群里有效（现在是私聊）。");
                 }
 
                 var user = ResolveUser(Text(args, "user_id") ?? Text(args, "user") ?? Text(args, "target"), out var err);
                 if (user is null)
                 {
-                    return err!;
+                    return ToolOutcome.Failure("invalid_arguments", err!);
                 }
 
                 var card = Text(args, "card") ?? Text(args, "name") ?? Text(args, "text") ?? string.Empty;
                 var ok = await _gateway.SetGroupCardAsync(_targetId, user.Value, card, ct);
-                return ok ? $"✅ 把 {user} 的群名片改成「{card}」" : "❌ 改名片没成功（机器人得是管理员）";
+                return ActionResult(ok, $"✅ 把 {user} 的群名片改成「{card}」", "❌ 改名片没成功（机器人得是管理员）");
             }
 
             case "group_name":
             {
                 if (!_isGroup)
                 {
-                    return "改群名得在群里（现在是私聊）。";
+                    return ToolOutcome.Failure("invalid_arguments", "改群名得在群里（现在是私聊）。");
                 }
 
                 var name = Text(args, "name") ?? Text(args, "group_name") ?? Text(args, "text");
                 if (string.IsNullOrWhiteSpace(name))
                 {
-                    return "改群名要写 name。";
+                    return ToolOutcome.Failure("invalid_arguments", "改群名要写 name。");
                 }
 
                 var ok = await _gateway.SetGroupNameAsync(_targetId, name!, ct);
-                return ok ? $"✅ 群名改成「{name}」了" : "❌ 改群名没成功（得是群主/管理员）";
+                return ActionResult(ok, $"✅ 群名改成「{name}」了", "❌ 改群名没成功（得是群主/管理员）");
             }
 
             case "leave":
             {
                 if (!_isGroup)
                 {
-                    return "退群得在群里（现在是私聊）。";
+                    return ToolOutcome.Failure("invalid_arguments", "退群得在群里（现在是私聊）。");
                 }
 
                 var dismiss = ResolveBool(Text(args, "dismiss"), false);
                 var ok = await _gateway.SetGroupLeaveAsync(_targetId, dismiss, ct);
-                return ok ? "✅ 已经退群了（这条之后我就收不到这个群的消息了）" : "❌ 退群没成功（解散得是群主）";
+                return ActionResult(ok, "✅ 已经退群了（这条之后我就收不到这个群的消息了）", "❌ 退群没成功（解散得是群主）");
             }
 
             case "send":
@@ -333,23 +290,41 @@ public sealed class SessionQqActionHost : IQqActionHost, BotAgent.Services.Tools
                 var text = Text(args, "text") ?? Text(args, "message") ?? Text(args, "content");
                 if (string.IsNullOrWhiteSpace(text))
                 {
-                    return "发消息要写 text。";
+                    return ToolOutcome.Failure("invalid_arguments", "发消息要写 text。");
                 }
 
                 var raw = Text(args, "target_id") ?? Text(args, "target") ?? Text(args, "to");
                 var (isGroup, target) = ResolveTarget(raw, out var err2);
                 if (target <= 0)
                 {
-                    return err2!;
+                    return ToolOutcome.Failure("invalid_arguments", err2!);
                 }
 
                 var result = await _gateway.SendTextAsync(isGroup, target, text!, ct);
-                return result.Ok ? $"✅ 消息已发到{(isGroup ? $"群 {target}" : $"私聊 {target}")}" : "❌ 消息没发出去";
+                return SendOutcome(result, $"✅ 消息已发到{(isGroup ? $"群 {target}" : $"私聊 {target}")}");
             }
 
             default:
-                return $"不认识的动作 {spec.Name}";
+                return ToolOutcome.Failure("unknown_action", $"不认识的动作 {spec.Name}");
         }
+    }
+
+    private static ToolOutcome ActionResult(bool ok, string success, string failure)
+        => ok ? ToolOutcome.Success(success) : ToolOutcome.Failure("action_failed", failure);
+
+    internal static ToolOutcome SendOutcome(SendResult result, string success)
+    {
+        if (result.Delivery is not { } delivery) return ActionResult(result.Ok, success, "❌ 消息没发出去");
+        var audit = $"status={delivery.Status};reason={delivery.ReasonCode}";
+        return delivery.Status switch
+        {
+            DeliveryStatus.Success => ToolOutcome.Success(success, audit),
+            DeliveryStatus.Degraded => new(true, delivery.ReasonCode, success + $"（降级：{delivery.ReasonCode}）", audit),
+            DeliveryStatus.Unknown => ToolOutcome.Failure("delivery_unknown", "发送结果未确认；不要自动重试。", audit),
+            DeliveryStatus.PartialSuccess => ToolOutcome.Failure("delivery_partial", "仅部分消息确认发送，不能报告全部完成。", audit),
+            DeliveryStatus.Rejected => ToolOutcome.Failure("delivery_rejected", $"消息被拒绝（{delivery.ReasonCode}）。", audit),
+            _ => ToolOutcome.Failure("delivery_failed", $"消息未确认成功（{delivery.ReasonCode}）。", audit),
+        };
     }
 
     /// <summary>把 <c>sender</c>/<c>me</c> 翻成 QQ 号；纯数字直接用。</summary>

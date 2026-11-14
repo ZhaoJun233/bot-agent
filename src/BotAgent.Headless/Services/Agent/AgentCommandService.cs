@@ -384,9 +384,11 @@ public sealed partial class AgentCommandService : IAgentCommandService
     private IQqActionHost? BuildQqHost(BotConversation conversation, QqChatMessage msg)
     {
         var lease = PlatformSourceExecution.Current;
+        var (isGroup, targetId) = conversation.Target;
+        if (lease?.Context.PlatformId == BotAgent.Domain.Platforms.PlatformId.QqOfficial)
+            return new OfficialSessionQqActionHost(lease, isGroup, targetId, _platformPolicies, _pluginAllows);
         var actions = lease?.Source as IQqActions ?? (_source is ChannelRouter ? null : Gateway);
         if (actions is null || lease is { IsCurrent: false }) return null;
-        var (isGroup, targetId) = conversation.Target;
         return new SessionQqActionHost(actions, isGroup, targetId, msg.UserId, msg.MessageId, _hooks.SelfId(), _platformPolicies,
             Channels.ChannelOf(conversation.SourceKey), _pluginAllows);
     }

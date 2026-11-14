@@ -10,6 +10,7 @@ using BotAgent.Domain.Ports;
 using BotAgent.Panel;
 using BotAgent.Services;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Platforms;
 using BotAgent.Services.Settings;
 
 namespace BotAgent.Adapters.Panel.Zba;
@@ -23,6 +24,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     private readonly SettingsBox _box;
     private readonly SettingsHotReload _hotReload;
     private readonly IManagedCapabilities _capabilities;
+    private readonly IPlatformPolicyResolver? _platformPolicies;
     private readonly IAgentSessionStore _sessions;
     private readonly Func<bool> _serverEnabled;
     private readonly ApprovalUseCase? _approvals;
@@ -59,11 +61,13 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         BotAgent.Services.Conversations.ConversationRegistry? quotaRegistry = null,
         TenantQuotaStore? quotaStore = null,
         BotAgent.Services.Ops.DatabaseBackupService? backups = null,
-        BotAgent.Services.Ops.TurnTraceStore? traces = null)
+        BotAgent.Services.Ops.TurnTraceStore? traces = null,
+        IPlatformPolicyResolver? platformPolicies = null)
     {
         _box = box;
         _hotReload = hotReload;
         _capabilities = capabilities;
+        _platformPolicies = platformPolicies;
         _sessions = sessions;
         _serverEnabled = serverEnabled;
         _approvals = approvals;
@@ -254,9 +258,17 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         ConfigurationCaller caller, ManagedPageRequest request, CancellationToken ct = default)
         => _capabilities.ListAsync(caller, request, ct);
 
-    public ValueTask<ManagedInspectResult> InspectCapabilityAsync(
+    public async ValueTask<ManagedInspectResult> InspectCapabilityAsync(
         ConfigurationCaller caller, ManagedObjectKey key, CancellationToken ct = default)
-        => _capabilities.InspectAsync(caller, key, ct);
+    {
+        var result = await _capabilities.InspectAsync(caller, key, ct).ConfigureAwait(false);
+        if (result.Code != ManagedResultCode.Ok || result.Descriptor?.Key != key
+            || key is not ManagedObjectKey.Driver driver
+            || driver.Key.PlatformId != Domain.Platforms.PlatformId.QqOfficial) return result;
+        ct.ThrowIfCancellationRequested();
+        var policy = _platformPolicies?.Resolve(new(driver.Key.PlatformId, driver.Key.AccountScope, driver.Key.InstanceId));
+        return result with { Messaging = OfficialMessagingCapabilities.Project(policy, _now()) };
+    }
 
     public async ValueTask<ManagedValidationResult> ValidateCapabilityAsync(
         ConfigurationCaller caller, ZbaConfigurationValidationRequest request, CancellationToken ct = default)

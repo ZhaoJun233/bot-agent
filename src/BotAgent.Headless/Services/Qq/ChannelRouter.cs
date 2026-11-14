@@ -222,7 +222,8 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
             {
                 lease = Capture(source, native.Ref);
                 if (lease is null) return;
-                envelope = new(lease.Origin, native);
+                envelope = new(lease.Origin, native, legacy.IsReliableIdentity);
+                if (lease.Origin.Driver.PlatformId == PlatformId.QqOfficial && !envelope.IsReliableIdentity) return;
             }
             catch (ArgumentException) { _log?.Invoke("invalid_platform_envelope"); return; }
             var channel = Channels.Declared(source.Channel);
@@ -365,6 +366,9 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     public Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "music")?.SendMusicAsync(isGroup, targetId, platform, songId, title, ct) ?? UnsupportedBoolAsync());
 
+    public Task<SendResult> SendMusicWithReceiptAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
+        => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "music")?.SendMusicWithReceiptAsync(isGroup, targetId, platform, songId, title, ct) ?? UnsupportedSendAsync());
+
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId)?.SendTextAsync(isGroup, targetId, text, ct, replyToMessageId, directAddress) ?? UnsupportedSendAsync());
 
@@ -374,8 +378,14 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     public Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "voice")?.SendVoiceAsync(isGroup, targetId, audioUrl, ct) ?? UnsupportedBoolAsync());
 
+    public Task<SendResult> SendVoiceWithReceiptAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
+        => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "voice")?.SendVoiceWithReceiptAsync(isGroup, targetId, audioUrl, ct) ?? UnsupportedSendAsync());
+
     public Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "image")?.SendImageAsync(isGroup, targetId, data, ct, replyToMessageId) ?? UnsupportedBoolAsync());
+
+    public Task<SendResult> SendImageWithReceiptAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
+        => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "image")?.SendImageWithReceiptAsync(isGroup, targetId, data, ct, replyToMessageId) ?? UnsupportedSendAsync());
 
     public Task<bool> SendPokeAsync(bool isGroup, long targetId, long userId, CancellationToken ct = default)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "poke")?.SendPokeAsync(isGroup, targetId, userId, ct) ?? UnsupportedBoolAsync());

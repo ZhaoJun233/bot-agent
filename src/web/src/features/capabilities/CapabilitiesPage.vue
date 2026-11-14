@@ -24,6 +24,7 @@ import BreakableId from '../../shared/ui/BreakableId.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 import CapabilitySettingsHost from './CapabilitySettingsHost.vue'
+import OfficialMessagingDialog from './OfficialMessagingDialog.vue'
 import { configurationCapabilities, configurationFor, type CapabilityConfiguration } from './configuration-ownership'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
@@ -127,6 +128,13 @@ const confirmButton = ref<HTMLButtonElement | null>(null)
 const confirmCancelButton = ref<HTMLButtonElement | null>(null)
 /** 页面标题：触发器已经不在了时的安全落点（tabindex="-1"，不进 Tab 顺序）。 */
 const pageHeading = ref<HTMLElement | null>(null)
+const messagingTarget = ref<ZbaManagedObjectKey | null>(null)
+const messagingTrigger = ref<HTMLElement | null>(null)
+function openMessaging(item: ZbaManagedDescriptor, event: Event): void {
+  messagingTrigger.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  messagingTarget.value = item.key
+}
+watch(() => [props.client, props.active], () => { messagingTarget.value = null })
 /**
  * 打开确认框之前焦点落在哪个元素上（S4-M1）。
  *
@@ -1591,6 +1599,8 @@ defineExpose({
         </p>
         <footer class="cap-card-foot">
           <button v-if="item.key.kind === 'provider'" type="button" class="tonal cap-settings" :data-testid="'cap-provider-edit-' + keySlug(item.key)" :aria-label="'设置 ' + capabilityTitle(item.displayName, item.key)" @click="openProvider(item.key.key, $event)">设置</button>
+          <button v-if="item.key.kind === 'driver' && item.key.key.platformId === 'qq.official'" type="button" class="tonal"
+            :data-testid="'cap-messaging-' + keySlug(item.key)" @click="openMessaging(item, $event)">消息能力与限制</button>
           <button
             v-if="item.key.kind === 'plugin'"
             type="button"
@@ -1778,6 +1788,8 @@ defineExpose({
 
     <ProviderEditorDialog v-if="providerTarget" ref="providerDialog" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
 
+    <OfficialMessagingDialog v-if="messagingTarget" :client="props.client" :target="messagingTarget" :active="props.active"
+      :trigger="messagingTrigger" :fallback="pageHeading" @close="messagingTarget = null" @auth-expired="value => emit('auth-expired', value)" />
     <CapabilitySettingsHost
       v-if="settingsTarget" ref="configurationDialog"
       :key="settingsTarget.capability.id"

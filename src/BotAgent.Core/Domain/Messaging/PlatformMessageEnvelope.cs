@@ -35,8 +35,9 @@ public sealed record PlatformInboundEnvelope
 {
     public PlatformMessageOrigin Origin { get; }
     public InboundMessage Message { get; }
+    public bool IsReliableIdentity { get; }
 
-    public PlatformInboundEnvelope(PlatformMessageOrigin origin, InboundMessage message)
+    public PlatformInboundEnvelope(PlatformMessageOrigin origin, InboundMessage message, bool? isReliableIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(origin);
         ArgumentNullException.ThrowIfNull(message);
@@ -45,8 +46,12 @@ public sealed record PlatformInboundEnvelope
             || !origin.Matches(message.Sender.PlatformId, message.Sender.AccountScope))
             throw new ArgumentException("invalid_platform_envelope");
         Origin = origin;
-        Message = message with { ImageUrls = message.ImageUrls is null
-            ? null : Array.AsReadOnly(message.ImageUrls.ToArray()) };
+        IsReliableIdentity = isReliableIdentity ?? origin.Driver.PlatformId != PlatformId.QqOfficial;
+        Message = message with
+        {
+            ImageUrls = message.ImageUrls is null ? null : Array.AsReadOnly(message.ImageUrls.ToArray()),
+            VoiceAttachments = message.VoiceAttachments is null ? null : Array.AsReadOnly(message.VoiceAttachments.ToArray())
+        };
     }
 
     public override string ToString() => "PlatformInboundEnvelope";

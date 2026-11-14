@@ -1,4 +1,9 @@
 using System.Reflection;
+using BotAgent.Adapters.Official;
+using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Messaging;
+using BotAgent.Domain.Platforms;
+using BotAgent.Services.Qq;
 using BotAgent.Domain.Reply;
 using BotAgent.Platforms;
 using BotAgent.Services.Conversations;
@@ -15,6 +20,12 @@ void Check(string label, bool value)
     if (!value) throw new InvalidOperationException(label);
     passed++;
 }
+if (args is ["--content-only"])
+{
+    await ContentHistoryChecks.RunAsync(Check);
+    Console.WriteLine($"Reply content history probe: {passed} checks passed.");
+    return;
+}
 async Task Canceled(string label, Func<Task> action)
 {
     try { await action(); }
@@ -26,7 +37,17 @@ PlainSender Sender(SyntheticSource source, TestRiskBackoff? backoff = null) => n
 OfficialBotGateway Official(SyntheticHttp http) => new(new PlatformSettingsBox(new PlatformOptions
 {
     OfficialApiBase = "https://example.com", OfficialTokenUrl = "https://example.com/token",
-}), http, new SyntheticIds(), _ => { });
+    OfficialAppId = "synthetic-app",
+}), http, () => new SyntheticIds(), _ => { }, () =>
+{
+    var ledger = new OfficialDeliveryLedger(new PacingOfficialSnapshot(), "synthetic-app");
+    if (!ledger.AcceptTrigger(SyntheticIds.Trigger(), PlatformClock.Current.UtcNow).Allowed) throw new InvalidOperationException("synthetic trigger refused");
+    return ledger;
+});
+IDisposable OfficialSource(OfficialBotGateway gateway) => PlatformSourceExecution.Enter(new(new PacingOwner(), gateway,
+    new(new(PlatformId.QqOfficial, AccountScope.Legacy, "synthetic-driver"),
+        new MessageRef(new(PlatformId.QqOfficial, AccountScope.Legacy, ConversationKind.GroupChat, "10001"), "10002")),
+    CancellationToken.None, () => true));
 
 Check("empty cadence is not completed", !new CadenceSendReport(Array.Empty<string>()).AllSent);
 Check("none cadence is not completed", !CadenceSendReport.None.AllSent);
@@ -132,6 +153,7 @@ Check("off retains legacy cadence after risk change", (await Sender(legacyRiskSo
 var mediaHttp = new SyntheticHttp();
 using (var gateway = Official(mediaHttp))
 {
+    using var source = OfficialSource(gateway);
     var guard = new TestGuard();
     using (ReplyCommitBoundary.Enter(guard))
     {
@@ -145,6 +167,7 @@ using (var gateway = Official(mediaHttp))
 var staleHttp = new SyntheticHttp();
 using (var gateway = Official(staleHttp))
 {
+    using var source = OfficialSource(gateway);
     var allowed = true;
     staleHttp.AfterUpload = () => allowed = false;
     using (ReplyCommitBoundary.Enter(new TestGuard()))
@@ -156,6 +179,7 @@ using (var gateway = Official(staleHttp))
 var gateHttp = new SyntheticHttp();
 using (var gateway = Official(gateHttp))
 {
+    using var source = OfficialSource(gateway);
     var gate = (SemaphoreSlim)typeof(OfficialBotGateway).GetField("_sendGate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(gateway)!;
     await gate.WaitAsync();
     var prepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -174,6 +198,7 @@ using (var gateway = Official(gateHttp))
 var retryHttp = new SyntheticHttp { RejectFirstToken = true };
 using (var gateway = Official(retryHttp))
 {
+    using var source = OfficialSource(gateway);
     var guard = new TestGuard();
     using (ReplyCommitBoundary.Enter(guard))
     {
@@ -182,4 +207,6 @@ using (var gateway = Official(retryHttp))
     }
 }
 await OneBotChecks.Run(Check, Canceled);
+await OutcomeChecks.RunAsync(Check, source => Sender(source));
+await ContentHistoryChecks.RunAsync(Check);
 Console.WriteLine($"Reply delivery pacing probe: {passed} checks passed.");

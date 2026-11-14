@@ -51,7 +51,8 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
 
     public PlatformCapabilities Capabilities { get; }
 
-    public string? LastErrorCode { get; private set; }
+    private string? _lastErrorCode;
+    public string? LastErrorCode => _source.LastErrorCode ?? _lastErrorCode;
 
     public event Action<InboundMessage>? InboundReceived;
     public event Action<QqChatMessage, InboundMessage>? RichInboundReceived;
@@ -79,7 +80,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
             || !string.Equals(context.InstanceId, Context.InstanceId, StringComparison.Ordinal)
             || !string.Equals(message.Target.AccountScope, Context.AccountScope, StringComparison.Ordinal))
         {
-            LastErrorCode = "context_mismatch";
+            _lastErrorCode = "context_mismatch";
             return DeliveryResult.Rejected("context_mismatch");
         }
         if (message.Target.Kind is not (ConversationKind.GroupChat or ConversationKind.PrivateChat)
@@ -88,7 +89,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
 
         if (!long.TryParse(message.Target.NativeTargetId, out var targetId) || targetId <= 0)
         {
-            LastErrorCode = "invalid_target_id";
+            _lastErrorCode = "invalid_target_id";
             return DeliveryResult.Rejected("invalid_target_id");
         }
 
@@ -106,22 +107,31 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
             replyToId = parsedReply;
         }
 
+        DeliveryResult? deliveredMedia = null;
         if (deg.SendVoice && !string.IsNullOrWhiteSpace(message.VoiceUrl))
         {
-            var voiceOk = await _source.SendVoiceAsync(isGroup, targetId, message.VoiceUrl!, ct).ConfigureAwait(false);
-            if (voiceOk && string.IsNullOrWhiteSpace(message.Text))
+            var voice = await _source.SendVoiceWithReceiptAsync(isGroup, targetId, message.VoiceUrl!, ct).ConfigureAwait(false);
+            if (voice.Delivery is { } receipt)
             {
-                return DeliveryResult.Ok();
+                _lastErrorCode = receipt.IsSuccess ? null : receipt.ReasonCode;
+                if (!receipt.IsSuccess || string.IsNullOrWhiteSpace(message.Text)) return receipt;
+                deliveredMedia = receipt;
             }
+            else if (voice.Ok && string.IsNullOrWhiteSpace(message.Text)) return DeliveryResult.Ok();
         }
 
         if (deg.SendImage && message.ImageData is { Length: > 0 })
         {
-            var imgOk = await _source.SendImageAsync(isGroup, targetId, message.ImageData, ct, replyToId).ConfigureAwait(false);
-            if (imgOk && string.IsNullOrWhiteSpace(message.Text))
+            var image = await _source.SendImageWithReceiptAsync(isGroup, targetId, message.ImageData, ct, replyToId).ConfigureAwait(false);
+            if (image.Delivery is { } receipt)
             {
-                return DeliveryResult.Ok();
+                _lastErrorCode = receipt.IsSuccess ? null : receipt.ReasonCode;
+                if (!receipt.IsSuccess) return deliveredMedia is null ? receipt
+                    : new(DeliveryStatus.PartialSuccess, deliveredMedia.MessageId, receipt.ReasonCode);
+                if (string.IsNullOrWhiteSpace(message.Text)) return receipt;
+                deliveredMedia = receipt;
             }
+            else if (image.Ok && string.IsNullOrWhiteSpace(message.Text)) return DeliveryResult.Ok();
         }
 
         var textToSend = message.Text;
@@ -139,19 +149,23 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         if (!Capabilities.SupportsText) return DeliveryResult.Rejected("text_unsupported");
 
         var sendRes = await _source.SendTextAsync(isGroup, targetId, textToSend, ct, replyToId).ConfigureAwait(false);
-        if (!sendRes.Ok)
+        var delivery = sendRes.Delivery ?? (sendRes.Ok
+            ? DeliveryResult.Ok(sendRes.MessageId > 0 ? sendRes.MessageId.ToString(CultureInfo.InvariantCulture) : null)
+            : DeliveryResult.Transient("send_failed"));
+        if (!delivery.IsSuccess)
         {
-            LastErrorCode = "send_failed";
-            return DeliveryResult.Transient("send_failed");
+            _lastErrorCode = delivery.ReasonCode;
+            return deliveredMedia is null ? delivery
+                : new(DeliveryStatus.PartialSuccess, deliveredMedia.MessageId, delivery.ReasonCode);
         }
 
-        var msgIdStr = sendRes.MessageId > 0 ? sendRes.MessageId.ToString() : null;
+        _lastErrorCode = null;
         if (deg.IsDegraded)
         {
-            return DeliveryResult.Degraded(msgIdStr, string.Join(",", deg.ReasonCodes));
+            return DeliveryResult.Degraded(delivery.MessageId, string.Join(",", deg.ReasonCodes));
         }
 
-        return DeliveryResult.Ok(msgIdStr);
+        return delivery;
     }
 
     public async Task<(string? Text, string? SenderId)> GetQuotedMessageAsync(
@@ -185,6 +199,12 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
     {
         using var operation = _operations.TryEnter(CancellationToken.None);
         if (_disposed || operation is null || msg.MessageId <= 0 || msg.UserId <= 0 || (msg.IsGroup && msg.GroupId <= 0)) return;
+        if (PlatformId.Normalize(Context.PlatformId) == PlatformId.QqOfficial && msg.IsReliableIdentity != true)
+        {
+            _lastErrorCode = "identity_unverified";
+            return;
+        }
+        if (_lastErrorCode == "identity_unverified") _lastErrorCode = null;
         var kind = msg.IsGroup ? ConversationKind.GroupChat : ConversationKind.PrivateChat;
         var nativeTarget = (msg.IsGroup ? msg.GroupId : msg.UserId).ToString(CultureInfo.InvariantCulture);
         var convId = new ConversationId(Context.PlatformId, Context.AccountScope, kind, nativeTarget);
@@ -198,7 +218,11 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
             Timestamp: msg.Time,
             ReplyToMessageId: msg.ReplyToMessageId?.ToString(),
             IsMentioned: msg.MentionedSelf,
-            ImageUrls: msg.ImageUrls is null ? null : Array.AsReadOnly(msg.ImageUrls.ToArray()));
+            ImageUrls: msg.ImageUrls is null ? null : Array.AsReadOnly(msg.ImageUrls.ToArray()))
+        {
+            AllowsCommands = msg.AllowsCommands,
+            VoiceAttachments = msg.VoiceAttachments is null ? null : Array.AsReadOnly(msg.VoiceAttachments.ToArray())
+        };
         RichInboundReceived?.Invoke(msg, inbound);
         InboundReceived?.Invoke(inbound);
     }

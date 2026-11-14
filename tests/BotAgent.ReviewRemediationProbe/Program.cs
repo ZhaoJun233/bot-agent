@@ -65,6 +65,12 @@ internal static class Program
         try
         {
             AppDatabase.Initialize();
+            if (args.Contains("--engine-wiring", StringComparer.Ordinal))
+            {
+                await RunAsync("engine wiring", () => EngineWiringTests.RunAsync(Check));
+                Console.WriteLine($"EngineWiring: {_passed} passed, {_failed} failed");
+                return _failed == 0 ? 0 : 1;
+            }
             await RunAsync("task approval gate", () => TaskApprovalGateTests.RunAsync((name, ok, detail) => Check(ok, name)));
             await RunAsync("review agent/storage regressions", () => ReviewAgentStorageRegression.RunAsync(Check));
             await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));

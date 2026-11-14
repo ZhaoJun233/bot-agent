@@ -110,6 +110,8 @@ namespace BotAgent.Services.Music
         bool TryBeginListen(string sourceKey, int cooldownSeconds, out string reason);
         Task<string?> ListenAsync(string sourceKey, string song, string requester, CancellationToken ct = default);
         Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default);
+        async Task<BotAgent.Services.Qq.SendResult> ShareWithReceiptAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
+            => new(await ShareAsync(song, isGroup, targetId, ct).ConfigureAwait(false));
     }
 }
 

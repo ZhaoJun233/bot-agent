@@ -1,5 +1,5 @@
 using BotAgent.Services.Memory;
-using System.Collections.Concurrent;
+using BotAgent.Adapters.Official;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
@@ -11,6 +11,8 @@ using BotAgent.Domain.Reply;
 using BotAgent.Domain.Ports;
 using BotAgent.Platforms.Net;
 using BotAgent.Services.Platforms;
+using BotAgent.Domain.Messaging;
+using BotAgent.Domain.Platforms;
 
 namespace BotAgent.Services.Official;
 
@@ -40,16 +42,10 @@ namespace BotAgent.Services.Official;
 /// 约定：这个类**只管收发**。白名单、限流、上下文、人设全在 BotAgentHost（与私域共用同一套逻辑），
 /// 这样两条通道的行为才一致。
 /// </summary>
-public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, IDisposable
+public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, IDisposable
 {
     /// <summary>小组件：群与单聊事件都在这一个位里（GROUP_AND_C2C_EVENT = 1 &lt;&lt; 25）。</summary>
     private const int IntentsGroupAndC2C = 1 << 25;
-
-    /// <summary>
-    /// 被动回复的有效期。官方文档两处口径不一（群 5 分钟 / 单聊 60 分钟 vs 一律 5 分钟），
-    /// 这里取**保守值** —— 超窗口就发主动消息，宁可少一次引用也别整条发不出去。
-    /// </summary>
-    private static readonly TimeSpan PassiveWindow = TimeSpan.FromMinutes(5);
 
     /// <summary>音频/图片一次性上传的上限（官方软限制 20MB；超过会降级成“文件”，那就不是语音条了）。</summary>
     private const int MaxUploadBytes = 15 * 1024 * 1024;
@@ -59,7 +55,8 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
 
     private readonly IPlatformSettingsBox _box;
     private readonly Action<string> _log;
-    private readonly IOfficialIdMap _ids;
+    private readonly Lazy<IOfficialIdentityMap> _ids;
+    private readonly string _applicationId;
     private readonly BotAgent.Platforms.Net.IPlatformHttpFetcher _http;
 
     /// <summary>发送串行化：官方对单聊/群聊有 QPS 限制，机器人这边本来就一句一句发。</summary>
@@ -72,29 +69,20 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
     private string _sessionId = string.Empty;
     private volatile int _lastSeq = -1;
 
-    // ---- 去重：官方可能把同一条消息重复推过来 ----
-    private const int SeenCapacity = 200;
-    private readonly Queue<string> _seenOrder = new();
-    private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
-    private readonly object _seenGate = new();
-
-    /// <summary>会话（group_openid / user_openid）→ 最近一条入站消息的**原始** id（被动回复要原样回填）。</summary>
-    private readonly ConcurrentDictionary<string, (string RawId, DateTimeOffset At)> _lastInbound = new(StringComparer.Ordinal);
-
-    /// <summary>原始 msg_id → 已经用掉的 msg_seq（同一条消息多次回复必须递增，否则会被拒）。</summary>
-    private readonly ConcurrentDictionary<string, int> _msgSeq = new(StringComparer.Ordinal);
-
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private bool _disposed;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly PlatformOperationLifetime _operations = new();
 
-    public OfficialBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, IOfficialIdMap ids, Action<string> log)
+    public OfficialBotGateway(IPlatformSettingsBox box, BotAgent.Platforms.Net.IPlatformHttpFetcher http, Func<IOfficialIdentityMap> openIdentities,
+        Action<string> log, Func<OfficialDeliveryLedger> openDelivery)
     {
         _box = box;
         _log = log;
-        _ids = ids;
+        _applicationId = box.Current.OfficialAppId;
+        _ids = new(openIdentities);
+        _delivery = new(openDelivery);
         _http = http;
     }
 
@@ -114,8 +102,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
     /// <summary>拿到 token 且出现过 READY/RESUMED 才算在线（否则发消息只会得到 304018）。</summary>
     public bool IsConnected { get; private set; }
 
-    /// <summary>别名台账（面板/命令里把 openid 与数字号对上时用）。</summary>
-    public IOfficialIdMap Ids => _ids;
+    public string? LastErrorCode { get; private set; }
 
     /// <summary>起连接循环（不阻塞；断了自动退避重连）。</summary>
     public void Start()
@@ -135,6 +122,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_loop is { IsCompleted: false }) return;
+            if (!TryLoadIdentities() || !TryLoadDelivery()) return;
             _operations.Start();
             _cts?.Dispose();
             var lifetime = new CancellationTokenSource();
@@ -160,50 +148,34 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
             _cts?.Dispose();
             _cts = null;
             SetConnected(false);
-            _ids.Flush();
         }
         finally { _lifecycle.Release(); }
     }
 
     // ═══════════════════ 发送 ═══════════════════
 
-    /// <summary>发文本。优先当**被动回复**（带上刚收到的 msg_id，能引用上下文），失败就退化成主动消息。</summary>
-    public async Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
+    /// <summary>发文本。被动发送失败保留原结果，不自动改变发送模式。</summary>
+    public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
+        => SendContentAsync(isGroup, targetId, text, ContentChanges.None, ct, replyToMessageId);
+
+    private async Task<SendResult> SendContentAsync(bool isGroup, long targetId, string text, ContentChanges changes, CancellationToken ct, long? replyToMessageId = null)
     {
         using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
-        if (_disposed || operation is null) return new SendResult(false);
-        ct = operation.Token;
-        var openId = _ids.OriginalOf(targetId);
-        if (string.IsNullOrEmpty(openId))
-        {
-            Log($"发送失败：{targetId} 在别名表里没有对应 openid（是不是重启后表被清了？）");
-            return new SendResult(false);
-        }
-
-        var passive = TakePassiveRef(openId);
-        // ⚠ 官方平台会拒绝**未报备的链接**（回 304003 URL_NOT_ALLOWED）——而模型很爱在回复里塞链接，
-        // 结果是整条消息发不出去 ✗。这里把 http(s) 链接换成占位文本，至少把话说出去；
-        // 链接本身在私域那条路照旧正常（那边没这个限制）。
+        if (_disposed || operation is null) return RefusedDelivery("delivery_source_invalid");
+        // No verified application-domain grant is available to this adapter yet.
         var safeText = StripLinks(text);
-        var sent = await PostMessageAsync(isGroup, openId, body =>
+        if (!string.Equals(text, safeText, StringComparison.Ordinal)) changes |= ContentChanges.Link;
+        var (delivery, reason) = PrepareDelivery(isGroup, targetId, ContentDigest(0, Encoding.UTF8.GetBytes(safeText)), false, replyToMessageId);
+        if (delivery is null) return RefusedDelivery(reason);
+        delivery = delivery with { Changes = changes };
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(operation.Token, delivery.Source.Lifetime);
+        try
         {
-            body["msg_type"] = 0;
-            body["content"] = safeText;
-        }, passive, ct).ConfigureAwait(false);
-
-        if (!sent.Ok && passive is not null)
-        {
-            // 被动窗口过了 / 次数用尽 / 引用被拒 —— 退回主动消息，至少让话送到
-            Log("被动回复失败（超过窗口或次数用尽）→ 改用主动消息再发一次");
-            sent = await PostMessageAsync(isGroup, openId, body =>
-            {
-                body["msg_type"] = 0;
-                body["content"] = safeText;
-            }, null, ct).ConfigureAwait(false);
+            var sent = await PostMessageAsync(delivery, new JsonObject { ["msg_type"] = 0, ["content"] = safeText }, lifetime.Token).ConfigureAwait(false);
+            return sent.Ok && sent.Delivery is { IsSuccess: true } ? sent with { DeliveredText = safeText } : sent;
         }
-
-        return sent;
+        finally { EndDelivery(delivery); }
     }
 
     /// <summary>
@@ -224,84 +196,60 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
-    /// <summary>
-    /// <summary>
-    /// 「听音乐/点歌」在官方通道的降级实现。
-    ///
-    /// 官方平台**没有** OneBot 那种 music 卡片（可点开播放的）✗，而且链接必须**报备**（没报备报 304003 ✗，
-    /// 我们发送前还会主动剥链接）——所以这里既不能发卡片、也不能发链接。
-    /// 能做且真正有用的是：发一条**带歌名的文字**（让人能去网易云搜到它），
-    /// 而不是丢一个裸 id 或者什么都没发。返回 true 表示“已用降级形式发出”，
-    /// 上层就不会再去发那个（在官方通道会被剥掉的）链接了。
-    /// </summary>
+    /// <summary>兼容 bool 调用方；内部使用完整回执保留降级与未知状态。</summary>
     public async Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
+        => (await SendMusicWithReceiptAsync(isGroup, targetId, platform, songId, title, ct).ConfigureAwait(false)).Ok;
+
+    public Task<SendResult> SendMusicWithReceiptAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
     {
         var site = platform is "163" or "netease" or "" ? "网易云音乐" : platform;
         var name = string.IsNullOrWhiteSpace(title) ? $"（id {songId}）" : $"《{title}》";
         var text = $"🎵 {site}：{name}\n（官方通道发不了可点开的音乐卡片，去 {site} 搜一下就能听～）";
-        var sent = await SendTextAsync(isGroup, targetId, text, ct, directAddress: false).ConfigureAwait(false);
-        Log(sent.Ok
-            ? $"官方通道音乐已降级为文字：{name}（官方无卡片、链接需报备）"
-            : $"官方通道音乐降级文字也发送失败（messageId={sent.MessageId}）");
-        return sent.Ok;
+        return SendContentAsync(isGroup, targetId, text, ContentChanges.Music, ct);
     }
 
+    /// <summary>
     /// 发语音：官方平台没有 TTS，语音就是「富媒体 + <c>msg_type=7</c>」。
     /// 音频从 TTS 代理那里**按 silk 取**（官方要求腾讯 SILK v3；mp3 直传会报格式不支持），
     /// 再 base64 内联上传（自建 TTS 在内网，平台拉不到我们的 URL，所以走 file_data）。
     /// </summary>
     public async Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
+        => (await SendVoiceWithReceiptAsync(isGroup, targetId, audioUrl, ct).ConfigureAwait(false)).Ok;
+
+    public async Task<SendResult> SendVoiceWithReceiptAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
     {
         using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
-        if (_disposed || operation is null) return false;
-        ct = operation.Token;
-        var openId = _ids.OriginalOf(targetId);
-        if (string.IsNullOrEmpty(openId))
+        if (_disposed || operation is null) return RefusedDelivery("delivery_source_invalid");
+        if (!TryPrepareAudioUrl(audioUrl, out var url)) return RefusedDelivery("audio_url_invalid");
+        var (delivery, reason) = PrepareDelivery(isGroup, targetId, ContentDigest(3, Encoding.UTF8.GetBytes(audioUrl)), true);
+        if (delivery is null) return RefusedDelivery(reason);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(operation.Token, delivery.Source.Lifetime);
+        try
         {
-            Log($"发语音失败：{targetId} 没有对应 openid");
-            return false;
+            var (bytes, downloadReason) = await DownloadAudioAsync(url, lifetime.Token).ConfigureAwait(false);
+            if (bytes is null) return RefusedDelivery(downloadReason);
+            return await SendMediaAsync(delivery, 3, bytes, lifetime.Token).ConfigureAwait(false);
         }
-
-        var url = EnsureFormat(audioUrl, "silk");
-        var bytes = await DownloadAsync(url, ct).ConfigureAwait(false);
-        if (bytes is null || bytes.Length == 0)
-        {
-            Log($"语音取不到音频（{url}）→ 上层会退化成发文字");
-            return false;
-        }
-
-        var (fileInfo, error) = await UploadAsync(isGroup, openId, 3, bytes, "voice.silk", ct).ConfigureAwait(false);
-        if (fileInfo is null)
-        {
-            Log($"语音上传失败：{error}（官方对语音只认腾讯 SILK v3；若是格式类报错，检查 TTS 侧 silk 编码器）");
-            return false;
-        }
-
-        return await SendMediaAsync(isGroup, openId, fileInfo, ct).ConfigureAwait(false);
+        finally { EndDelivery(delivery); }
     }
 
-    /// <summary>发图片：同样是富媒体（file_type=1）+ <c>msg_type=7</c>。</summary>
     public async Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
+        => (await SendImageWithReceiptAsync(isGroup, targetId, data, ct, replyToMessageId).ConfigureAwait(false)).Ok;
+
+    public async Task<SendResult> SendImageWithReceiptAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
     {
         using var destination = MemoryUseScope.EnterLegacyDestination(this, isGroup, targetId);
         using var operation = _operations.TryEnter(ct);
-        if (_disposed || operation is null) return false;
-        ct = operation.Token;
-        var openId = _ids.OriginalOf(targetId);
-        if (string.IsNullOrEmpty(openId) || data.Length == 0)
-        {
-            return false;
-        }
-
-        var (fileInfo, error) = await UploadAsync(isGroup, openId, 1, data, "image.png", ct).ConfigureAwait(false);
-        if (fileInfo is null)
-        {
-            Log($"图片上传失败：{error}");
-            return false;
-        }
-
-        return await SendMediaAsync(isGroup, openId, fileInfo, ct).ConfigureAwait(false);
+        if (_disposed || operation is null) return RefusedDelivery("delivery_source_invalid");
+        if (data.Length == 0 || data.Length > MaxUploadBytes) return RefusedDelivery("media_size_invalid");
+        // Keep the digest and upload bytes identical even when a caller reuses its mutable buffer.
+        var bytes = data.ToArray();
+        var (delivery, reason) = PrepareDelivery(isGroup, targetId, ContentDigest(1, bytes), true, replyToMessageId);
+        if (delivery is null) return RefusedDelivery(reason);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(operation.Token, delivery.Source.Lifetime);
+        try { return await SendMediaAsync(delivery, 1, bytes, lifetime.Token).ConfigureAwait(false); }
+        finally { EndDelivery(delivery); }
     }
 
     /// <summary>
@@ -329,16 +277,24 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
                 await SessionAsync(ct).ConfigureAwait(false);
                 backoff = TimeSpan.FromSeconds(3); // 正常跑过一轮（说明连上了），下次别退避
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                Log($"连接异常（{backoff.TotalSeconds:F0}s 后重连）：{ex.Message}");
+                LastErrorCode = "connection_timeout";
+                Log($"ERROR official_connection reason={LastErrorCode} retry_seconds={backoff.TotalSeconds:F0}");
             }
-
-            SetConnected(false);
+            catch (Exception)
+            {
+                if (!_identityRetired) LastErrorCode = "connection_failed";
+                Log($"ERROR official_connection reason={LastErrorCode} retry_seconds={backoff.TotalSeconds:F0}");
+            }
+            finally
+            {
+                SetConnected(false);
+            }
 
             try
             {
@@ -443,9 +399,9 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
             {
                 return;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Log($"心跳发送失败（{ex.Message}）→ 让接收循环去重连");
+                Log("official_heartbeat reason=transport_failed");
                 try
                 {
                     ws.Abort(); // 主动 abort：接收循环会立刻退出，交给外层退避重连
@@ -481,7 +437,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
             switch (op)
             {
                 case 0: // dispatch
-                    HandleDispatch(Text(frame["t"]), frame["d"] as JsonObject, frame["d"]);
+                    await HandleDispatchAsync(Text(frame["t"]), frame["d"] as JsonObject, frame["d"], ct).ConfigureAwait(false);
                     break;
                 case 7: // 服务端要求重连（带 session 可以 resume）
                     Log("官方网关要求重连");
@@ -513,6 +469,13 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
 
     private void HandleDispatch(string? type, JsonObject? d, JsonNode? raw)
     {
+        if (!TryLoadIdentities()) return;
+        try { HandleIdentityDispatch(type, d, raw); }
+        catch (Exception error) when (IsIdentityFailure(error)) { RejectIdentity(error); }
+    }
+
+    private void HandleIdentityDispatch(string? type, JsonObject? d, JsonNode? raw)
+    {
         if (string.IsNullOrEmpty(type) || d is null)
         {
             return;
@@ -521,13 +484,19 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
         // 探针（2026-09-21）：官方通道“不回复、日志里也啥都没有”时，先要能分开两种情况：
         //   ① 平台根本没推 → 这行不出现；
         //   ② 推来了但被丢掉/解析炸了 → 这行出现，后面却没有“入站”行。
-        Log($"官方事件：{type}");
+        Log(type is "READY" or "RESUMED" or "GROUP_AT_MESSAGE_CREATE" or "GROUP_MESSAGE_CREATE"
+            or "C2C_MESSAGE_CREATE" or "GROUP_ADD_ROBOT" or "GROUP_DEL_ROBOT" or "GROUP_MEMBER_REMOVE"
+            or "FRIEND_ADD" or "FRIEND_DEL" or "GROUP_MSG_REJECT" or "GROUP_MSG_RECEIVE" or "C2C_MSG_REJECT" or "C2C_MSG_RECEIVE"
+            ? "官方事件：" + type : "official_event kind=other");
 
         switch (type)
         {
             case "READY":
+                InvalidateGroupSelf();
+                InvalidateMemberRoles();
+                InvalidateReferences();
                 SessionId = Text(d["session_id"]) ?? string.Empty;
-                Log($"官方机器人已上线（session {Mask(SessionId)}，别名表里已有 {_ids.Count} 个标识）");
+                Log($"official_ready identities={_ids.Value.Count}");
                 SetConnected(true);
                 return;
 
@@ -552,25 +521,40 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
                 return;
 
             case "GROUP_ADD_ROBOT":
-                // 被拉进群：记一句人话（之后这个群的消息才会推过来）
-                Log($"✅ 机器人被加进官方群 {_ids.AliasFor(Text(d["group_openid"]) ?? string.Empty)}"
-                    + (string.IsNullOrWhiteSpace(Text(d["op_member_openid"])) ? string.Empty : "（群主/管理员操作）"));
+                RelationshipChanged(true, false, d);
                 return;
 
             case "GROUP_DEL_ROBOT":
-                // ⚠ 被移出群：**平台从此不再推送这个群的任何事件**（@ 它也不会推、日志里一行都不会有）。
-                // 2026-09-21 线上卡了很久的“艾特了日志根本不显示”，根因就是这条事件：
-                // 18:06 机器人被移出群，之后所有 READY 之外再无任何群消息 ✗。所以这句要显眼。
-                Log($"⚠ 机器人被移出官方群 {_ids.AliasFor(Text(d["group_openid"]) ?? string.Empty)} —— "
-                    + "此后该群的任何消息都不会推过来（@ 也不推、日志里不会有行）。要恢复：把机器人重新加进群，"
-                    + "并在群设置里重新允许它获取群内消息。");
+                RelationshipChanged(true, true, d);
+                return;
+
+            case "FRIEND_ADD":
+                RelationshipChanged(false, false, d);
+                return;
+
+            case "FRIEND_DEL":
+                RelationshipChanged(false, true, d);
+                return;
+
+            case "GROUP_MSG_REJECT":
+            case "GROUP_MSG_RECEIVE":
+                NotificationChanged(true, d);
+                return;
+
+            case "C2C_MSG_REJECT":
+            case "C2C_MSG_RECEIVE":
+                NotificationChanged(false, d);
+                return;
+
+            case "GROUP_MEMBER_REMOVE":
+                RemoveMemberRole(d);
                 return;
 
             default:
                 // 其它事件（主动消息被拒/审核…）先只记一条，不影响对话
                 if (type.Contains("REJECT", StringComparison.Ordinal))
                 {
-                    Log($"官方事件 {type}：{Snippet(raw?.ToJsonString() ?? string.Empty, 160)}");
+                    Log("official_event reason=unhandled_rejection");
                 }
 
                 return;
@@ -579,166 +563,107 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
 
     private void RaiseGroupMessage(JsonObject d, bool fullMode = false)
     {
-        var rawId = Text(d["id"]);
-        var groupOpenId = Text(d["group_openid"]);
-        // 判重只问一次（IsDuplicate 会“记下来”，问两次会把正常消息误判成重复）
-        var duplicate = rawId is not null && IsDuplicate(rawId);
-        if (string.IsNullOrEmpty(rawId) || string.IsNullOrEmpty(groupOpenId) || duplicate)
+        var memberOpenId = ReadSenderId(d, "member_openid");
+        if (memberOpenId is null)
         {
-            Log($"官方群消息丢弃：id {(rawId is null ? "缺失" : "有")}、group_openid {(groupOpenId is null ? "缺失" : "有")}、重复 {duplicate}");
+            Log("官方入站拒绝 reason=identity_missing kind=group");
             return;
         }
 
-        var memberOpenId = Text((d["author"] as JsonObject)?["member_openid"]);
-        var groupAlias = _ids.AliasFor(groupOpenId);
-        var userAlias = _ids.AliasFor(string.IsNullOrEmpty(memberOpenId) ? groupOpenId : memberOpenId);
-
-        RememberInbound(groupOpenId, rawId);
+        var rawId = ReadIdentityId(d["id"]);
+        var groupOpenId = ReadIdentityId(d["group_openid"]);
+        var self = CurrentGroupSelf(groupOpenId);
+        if (RejectSelfSender(self, memberOpenId)) return;
+        var message = MessageIdentity(true, groupOpenId, rawId, OfficialMessageDirection.Inbound, OfficialReferenceFields.ReadMessageIndex(d));
+        var subject = new OfficialIdentityKey(new(_applicationId, OfficialIdentityKind.GroupMember, message.Scope.Conversation), memberOpenId);
+        var role = ObserveMemberRole(d, subject, fullMode);
+        var eventTime = RoleEventTime(d["timestamp"]);
+        if (!AcceptInboundDelivery(message, eventTime)) return;
+        var groupAlias = _ids.Value.AliasFor(TargetIdentity(true, groupOpenId));
+        var userAlias = _ids.Value.AliasFor(subject);
+        var messageAlias = _ids.Value.AliasFor(message);
+        var quote = ObserveReferences(message, messageAlias, d);
+        LastErrorCode = null;
         // 入站探针：走到这里说明平台推的、解析的、判重的都过了。
         // 之后若还是没有回复，问题就在上层（白名单/总开关/限流/模型），日志会有对应行。
-        Log($"官方入站：群 {_ids.AliasFor(groupOpenId)}，用户 {_ids.AliasFor(string.IsNullOrEmpty(memberOpenId) ? groupOpenId : memberOpenId)}"
-            + (fullMode ? $"（全量模式，@我={(!fullMode || MentionsSelf(d))}）" : string.Empty));
+        Log($"官方入站：群 {groupAlias}，用户 {userAlias}"
+            + (fullMode ? $"（全量模式，@我={MentionsSelf(d, self)}）" : string.Empty));
 
         // 是不是“冲它说的”：
         //   @ 事件 → 平台只会推 @ 它的，必然是 true；
-        //   全量模式 → 得自己看 mentions[].is_you（别人聊天也会来，绝不能一律 true）。
-        var mentioned = !fullMode || MentionsSelf(d);
+        //   全量模式 → 标识必须匹配本群已验证的机器人身份。
+        var mentioned = !fullMode || MentionsSelf(d, self);
         var content = Text(d["content"]) ?? string.Empty;
         if (fullMode && mentioned)
         {
-            content = StripLeadingMention(content);
+            content = StripLeadingSelfMention(content, self);
         }
+        var media = ReadInboundContent(d, content);
 
         MessageReceived?.Invoke(new QqChatMessage(
-            MessageId: _ids.AliasFor(rawId),
+            MessageId: messageAlias,
             IsGroup: true,
             UserId: userAlias,
             GroupId: groupAlias,
-            SenderName: DisplayName(memberOpenId),
-            Text: content,
-            Time: ParseTime(d["timestamp"]),
+            SenderName: DisplayName(d, userAlias),
+            Text: media.Text,
+            Time: eventTime!.Value,
             MentionedSelf: mentioned,
-            ImageUrls: Attachments(d),
-            Channel: Channels.Official));
+            ImageUrls: media.Images,
+            Channel: Channels.Official, ReplyToMessageId: quote.Alias, ReplyToPreviewText: quote.Preview)
+            { IsReliableIdentity = true, OfficialRole = role, AllowsCommands = media.AllowsCommands, VoiceAttachments = media.Voices });
     }
 
-    /// <summary>
-    /// 事件里有没有“提到机器人自己”（<c>mentions[].is_you == true</c>）。
-    /// 全量群消息靠它区分“点名找我”和“别人自己聊天”—— 两者的后续处理完全不一样。
-    /// </summary>
-    private static bool MentionsSelf(JsonObject d)
+    // 身份只能来自完整的字符串字段；拒绝发生在去重、别名分配和上层副作用之前。
+    private static string? ReadSenderId(JsonObject data, string field)
     {
-        if (d["mentions"] is not JsonArray arr)
-        {
-            return false;
-        }
-
-        foreach (var item in arr)
-        {
-            if (item is JsonObject o && o["is_you"]?.GetValue<bool>() == true)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// 剥掉正文开头的“@机器人”。全量模式下平台不会替我们剥（@ 事件才会），
-    /// 所以这里自己来：既处理 <c>&lt;@!id&gt;</c> 这种标记，也处理纯文本的 <c>@名字 </c>。
-    /// </summary>
-    private static string StripLeadingMention(string text)
-    {
-        var t = (text ?? string.Empty).TrimStart();
-        while (t.StartsWith("<@", StringComparison.Ordinal))
-        {
-            var end = t.IndexOf('>');
-            if (end < 0)
-            {
-                break;
-            }
-
-            t = t[(end + 1)..].TrimStart();
-        }
-
-        if (t.StartsWith('@'))
-        {
-            var space = t.IndexOf(' ');
-            if (space > 0 && space <= 40)
-            {
-                t = t[(space + 1)..].TrimStart();
-            }
-        }
-
-        return t;
-    }
-
-    /// <summary>
-    /// 取事件里的图片附件地址（<c>d.attachments[]</c>，<c>content_type</c> 以 image/ 开头的那些）。
-    /// 为什么要它：官方平台发图片时正文是空的/只有一句“发了一张图片”，真正的东西在 attachments 里；
-    /// 不解析的话机器人就是“看不见图”（私域那条早就支持了，这里要对齐）。
-    /// </summary>
-    private static IReadOnlyList<string>? Attachments(JsonObject d)
-    {
-        if (d["attachments"] is not JsonArray arr || arr.Count == 0)
+        if ((data["author"] as JsonObject)?[field] is not JsonValue node
+            || !node.TryGetValue<string>(out var id) || string.IsNullOrEmpty(id)
+            || id.Any(character => char.IsWhiteSpace(character) || char.IsControl(character)))
         {
             return null;
         }
-
-        var urls = new List<string>();
-        foreach (var node in arr)
-        {
-            if (node is not JsonObject item)
-            {
-                continue;
-            }
-
-            var type = Text(item["content_type"]) ?? string.Empty;
-            var url = Text(item["url"]);
-            if (url is not null && type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            {
-                urls.Add(url);
-            }
-        }
-
-        return urls.Count > 0 ? urls : null;
+        return id;
     }
 
     private void RaiseC2CMessage(JsonObject d)
     {
-        var rawId = Text(d["id"]);
-        var userOpenId = Text((d["author"] as JsonObject)?["user_openid"]);
-        if (string.IsNullOrEmpty(rawId) || string.IsNullOrEmpty(userOpenId) || IsDuplicate(rawId))
+        var userOpenId = ReadSenderId(d, "user_openid");
+        if (userOpenId is null)
         {
+            Log("官方入站拒绝 reason=identity_missing kind=c2c");
             return;
         }
 
-        RememberInbound(userOpenId, rawId);
-        Log($"官方入站：私聊 {_ids.AliasFor(string.IsNullOrEmpty(userOpenId) ? "?" : userOpenId)}");
+        var rawId = ReadIdentityId(d["id"]);
+        var message = MessageIdentity(false, userOpenId, rawId, OfficialMessageDirection.Inbound, OfficialReferenceFields.ReadMessageIndex(d));
+        var eventTime = RoleEventTime(d["timestamp"]);
+        if (!AcceptInboundDelivery(message, eventTime)) return;
+        var userAlias = _ids.Value.AliasFor(TargetIdentity(false, userOpenId));
+        var messageAlias = _ids.Value.AliasFor(message);
+        var quote = ObserveReferences(message, messageAlias, d);
+        LastErrorCode = null;
+        Log($"官方入站：私聊 {userAlias}");
+        var media = ReadInboundContent(d, Text(d["content"]) ?? string.Empty);
 
         MessageReceived?.Invoke(new QqChatMessage(
-            MessageId: _ids.AliasFor(rawId),
+            MessageId: messageAlias,
             IsGroup: false,
-            UserId: _ids.AliasFor(userOpenId),
+            UserId: userAlias,
             GroupId: 0,
-            SenderName: DisplayName(userOpenId),
-            Text: Text(d["content"]) ?? string.Empty,
-            Time: ParseTime(d["timestamp"]),
-            ImageUrls: Attachments(d),
+            SenderName: DisplayName(d, userAlias),
+            Text: media.Text,
+            Time: eventTime!.Value,
+            ImageUrls: media.Images,
             MentionedSelf: true, // 单聊本来就是一对一
-            Channel: Channels.Official));
+            Channel: Channels.Official, ReplyToMessageId: quote.Alias, ReplyToPreviewText: quote.Preview)
+            { IsReliableIdentity = true, AllowsCommands = media.AllowsCommands, VoiceAttachments = media.Voices });
     }
-
-    /// <summary>
-    /// 显示名：官方只给 openid（没有昵称），所以取它末尾四位当稳定后缀 ——
-    /// **不编造**昵称，也不把完整 openid 写进会话名（面板脱敏之外再加一道）。
-    /// </summary>
-    private static string DisplayName(string? openId)
-        => string.IsNullOrEmpty(openId) || openId.Length < 4 ? "官方用户" : "官方用户" + openId[^4..];
 
     private void SetConnected(bool connected)
     {
+        if (!connected) { InvalidateGroupSelf(); InvalidateMemberRoles(); InvalidateReferences(); }
+        if (connected && LastErrorCode is "connection_timeout" or "connection_failed") LastErrorCode = null;
         if (IsConnected == connected)
         {
             return;
@@ -760,6 +685,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
 
     private async Task<string> EnsureTokenAsync(bool force, CancellationToken ct)
     {
+        if (!ApplicationIsCurrent()) throw new InvalidOperationException("identity_source_changed");
         lock (_stateGate)
         {
             if (!force && !string.IsNullOrEmpty(_token) && Clock.Now < _tokenExpires)
@@ -775,20 +701,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
         };
 
         using var resp = await _http.PostAsync(TokenUrl, JsonBody(body), ct).ConfigureAwait(false);
-        var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        if (!resp.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException($"取 access_token 失败 HTTP {(int)resp.StatusCode}：{Snippet(text, 200)}");
-        }
-
-        var json = JsonNode.Parse(text);
-        var token = Text(json?["access_token"]);
-        if (string.IsNullOrEmpty(token))
-        {
-            throw new InvalidOperationException($"取 access_token 失败：{Snippet(text, 200)}");
-        }
-
-        var expires = AsInt(json?["expires_in"]) ?? 7200;
+        var (token, expires) = await ReadTokenAsync(resp, ct).ConfigureAwait(false);
         lock (_stateGate)
         {
             _token = token;
@@ -796,7 +709,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
             _tokenExpires = Clock.Now + TimeSpan.FromSeconds(Math.Max(60, expires - 300));
         }
 
-        Log($"access_token 已获取（约 {expires} 秒有效期，token {Mask(token)}）");
+        Log($"official_token acquired=1 expires_seconds={expires}");
         return token;
     }
 
@@ -809,152 +722,44 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
         var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"取网关地址失败 HTTP {(int)resp.StatusCode}：{Snippet(text, 200)}");
+            throw new InvalidOperationException($"official_gateway_http_rejected status={(int)resp.StatusCode}");
         }
 
         var url = Text(JsonNode.Parse(text)?["url"]);
         if (string.IsNullOrEmpty(url))
         {
-            throw new InvalidOperationException($"网关地址为空：{Snippet(text, 200)}");
+            throw new InvalidOperationException("official_gateway_url_unavailable");
         }
 
         return url;
     }
 
-    /// <summary>发消息（<c>msg_type</c> 由 <paramref name="fill"/> 填）。passive 非 null 时带 msg_id + msg_seq。</summary>
-    private async Task<SendResult> PostMessageAsync(
-        bool isGroup,
-        string openId,
-        Action<JsonObject> fill,
-        (string RawId, int Seq)? passive,
-        CancellationToken ct)
+    private async Task<SendResult> PostMessageAsync(DeliveryContext delivery, JsonObject body, CancellationToken ct)
     {
-        var body = new JsonObject();
-        fill(body);
-        if (passive is not null)
-        {
-            body["msg_id"] = passive.Value.RawId;
-            body["msg_seq"] = passive.Value.Seq;
-        }
-
-        var url = $"{ApiBase}/v2/{(isGroup ? "groups" : "users")}/{Uri.EscapeDataString(openId)}/messages";
-        var (ok, text, status) = await SendApiAsync(url, body, ct, isChatCommit: true).ConfigureAwait(false);
-        if (!ok)
-        {
-            Log($"发消息失败 HTTP {status}：{Snippet(text, 300)}");
-            return new SendResult(false);
-        }
-
-        var rawReplyId = Text(JsonNode.Parse(text)?["id"]);
-        return new SendResult(true, string.IsNullOrEmpty(rawReplyId) ? 0 : _ids.AliasFor(rawReplyId));
+        body["msg_id"] = delivery.Trigger.NativeId;
+        body["msg_seq"] = delivery.Sequence;
+        if (delivery.ReferenceIndex is not null) body["message_reference"] = new JsonObject { ["message_id"] = delivery.ReferenceIndex };
+        var url = $"{ApiBase}/v2/{(delivery.IsGroup ? "groups" : "users")}/{Uri.EscapeDataString(delivery.Target)}/messages";
+        var result = await SendApiAsync(url, () => JsonBody(body), delivery.IsGroup ? OfficialApiEndpoint.GroupMessage : OfficialApiEndpoint.DirectMessage,
+            delivery, OfficialDeliveryPhase.Message, ct, isChatCommit: true).ConfigureAwait(false);
+        var alias = long.TryParse(result.Delivery.MessageId, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+        return new SendResult(result.Delivery.IsSuccess, alias) { Delivery = result.Delivery };
     }
 
-    /// <summary>发一条富媒体消息（<c>msg_type=7</c> + <c>media.file_info</c>）。</summary>
-    private async Task<bool> SendMediaAsync(bool isGroup, string openId, string fileInfo, CancellationToken ct)
+    private async Task<SendResult> SendMediaAsync(DeliveryContext delivery, int fileType, byte[] data, CancellationToken ct)
     {
-        var passive = TakePassiveRef(openId);
-        var body = new JsonObject
+        if (data.Length == 0 || data.Length > MaxUploadBytes) return RefusedDelivery("media_size_invalid");
+        var url = $"{ApiBase}/v2/{(delivery.IsGroup ? "groups" : "users")}/{Uri.EscapeDataString(delivery.Target)}/files";
+        var result = await SendApiAsync(url, () => new OfficialMediaContent(fileType, data),
+            delivery.IsGroup ? OfficialApiEndpoint.GroupUpload : OfficialApiEndpoint.DirectUpload,
+            delivery, OfficialDeliveryPhase.Upload, ct).ConfigureAwait(false);
+        if (!result.Delivery.IsSuccess) return new(false) { Delivery = result.Delivery };
+        Log($"official_upload file_type={fileType} bytes={data.Length} ttl={result.Ttl?.ToString() ?? "unknown"}");
+        return await PostMessageAsync(delivery, new JsonObject
         {
-            ["msg_type"] = 7,
-            ["media"] = new JsonObject { ["file_info"] = fileInfo },
-        };
-
-        if (passive is not null)
-        {
-            body["msg_id"] = passive.Value.RawId;
-            body["msg_seq"] = passive.Value.Seq;
-        }
-
-        var url = $"{ApiBase}/v2/{(isGroup ? "groups" : "users")}/{Uri.EscapeDataString(openId)}/messages";
-        var (ok, text, status) = await SendApiAsync(url, body, ct, isChatCommit: true).ConfigureAwait(false);
-        if (!ok)
-        {
-            Log($"发富媒体消息失败 HTTP {status}：{Snippet(text, 300)}");
-        }
-
-        return ok;
-    }
-
-    /// <summary>
-    /// 上传富媒体（语音 3 / 图片 1），返回可直接塞进 <c>media.file_info</c> 的串。
-    /// 走 <c>file_data</c>（base64 内联）：我们的 TTS 在内网，官方平台拉不到那个 URL。
-    /// </summary>
-    private async Task<(string? FileInfo, string? Error)> UploadAsync(
-        bool isGroup,
-        string openId,
-        int fileType,
-        byte[] data,
-        string fileName,
-        CancellationToken ct)
-    {
-        if (data.Length > MaxUploadBytes)
-        {
-            return (null, $"文件 {data.Length} 字节超过上限 {MaxUploadBytes}（超了会被降级成普通文件，就不是语音条了）");
-        }
-
-        var body = new JsonObject
-        {
-            ["file_type"] = fileType,
-            ["file_data"] = Convert.ToBase64String(data),
-            ["srv_send_msg"] = false,
-        };
-
-        var url = $"{ApiBase}/v2/{(isGroup ? "groups" : "users")}/{Uri.EscapeDataString(openId)}/files";
-        var (ok, text, status) = await SendApiAsync(url, body, ct).ConfigureAwait(false);
-        if (!ok)
-        {
-            // 850019 / 40034002 = 富媒体格式不支持（语音最常见的原因：不是腾讯 SILK）
-            return (null, $"HTTP {status}：{Snippet(text, 300)}");
-        }
-
-        var json = JsonNode.Parse(text);
-        var fileInfo = Text(json?["file_info"]);
-        if (string.IsNullOrEmpty(fileInfo))
-        {
-            return (null, $"上传没回 file_info：{Snippet(text, 200)}");
-        }
-
-        var ttl = AsInt(json?["ttl"]);
-        Log($"富媒体已上传（{fileName}，file_type={fileType}，{data.Length} 字节，ttl={ttl?.ToString() ?? "?"}s）");
-        return (fileInfo, null);
-    }
-
-    private async Task<(bool Ok, string Text, int Status)> SendApiAsync(
-        string url, JsonObject body, CancellationToken ct, bool isChatCommit = false)
-    {
-        var refreshToken = false;
-        var tokenRetried = false;
-        while (true)
-        {
-            var token = await EnsureTokenAsync(refreshToken, ct).ConfigureAwait(false);
-            refreshToken = false;
-            // Readiness can release scheduler capacity; never hold the transport gate while waiting.
-            if (isChatCommit) await ReplyCommitBoundary.BeforePrepareAsync().ConfigureAwait(false);
-            await _sendGate.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                // Recheck late input and policy synchronously after the last preparation await.
-                if (isChatCommit && !ReplyCommitBoundary.TryBeforeSend()) continue;
-                using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonBody(body) };
-                Auth(req, token);
-                using var resp = await MemoryUseScope.UseForDelivery(() => _http.SendAsync(req, ct)).ConfigureAwait(false);
-                var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                var status = (int)resp.StatusCode;
-                if (!tokenRetried && !resp.IsSuccessStatusCode
-                    && (text.Contains("11244", StringComparison.Ordinal) || text.Contains("11253", StringComparison.Ordinal)))
-                {
-                    Log("token 被拒 → 刷一次 token 重试");
-                    tokenRetried = true;
-                    refreshToken = true;
-                    continue; // Release the gate before token refresh and another final commit check.
-                }
-                return (resp.IsSuccessStatusCode, text, status);
-            }
-            finally
-            {
-                _sendGate.Release();
-            }
-        }
+            ["msg_type"] = 7, ["media"] = new JsonObject { ["file_info"] = result.FileInfo },
+        }, ct).ConfigureAwait(false);
     }
 
     private static void Auth(HttpRequestMessage req, string token)
@@ -966,32 +771,6 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
 
     private static StringContent JsonBody(JsonObject body)
         => new(body.ToJsonString(), Encoding.UTF8, "application/json");
-
-    private async Task<byte[]?> DownloadAsync(string url, CancellationToken ct)
-    {
-        try
-        {
-            using var resp = await _http.GetAsync(url, ct).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode)
-            {
-                var detail = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                Log($"取音频失败 HTTP {(int)resp.StatusCode}：{Snippet(detail, 200)}");
-                return null;
-            }
-
-            var bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            return bytes.Length > MaxUploadBytes ? null : bytes;
-        }
-        catch (Exception ex)
-        {
-            Log($"取音频异常：{ex.Message}");
-            return null;
-        }
-    }
-
-    /// <summary>给 TTS 地址补一个 <c>format=</c>（已带就不动）——官方通道要 silk，别的调用方自己定。</summary>
-    private static string EnsureFormat(string url, string format)
-        => url.Contains("format=", StringComparison.OrdinalIgnoreCase) ? url : url + "&format=" + format;
 
     // ═══════════════════ WS 收发 ═══════════════════
 
@@ -1047,64 +826,10 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
 
     // ═══════════════════ 小工具 ═══════════════════
 
-    /// <summary>被动回复引用：窗口内返回（原始 msg_id, 递增 seq），否则 null（发主动消息）。</summary>
-    private (string RawId, int Seq)? TakePassiveRef(string openId)
-    {
-        if (!_lastInbound.TryGetValue(openId, out var last) || Clock.Now - last.At > PassiveWindow)
-        {
-            return null;
-        }
-
-        var seq = _msgSeq.AddOrUpdate(last.RawId, 1, (_, used) => used + 1);
-        return (last.RawId, seq);
-    }
-
-    private void RememberInbound(string openId, string rawMessageId)
-    {
-        _lastInbound[openId] = (rawMessageId, Clock.Now);
-        if (_lastInbound.Count > 500)
-        {
-            var cutoff = Clock.Now - TimeSpan.FromHours(2);
-            foreach (var (key, value) in _lastInbound)
-            {
-                if (value.At < cutoff)
-                {
-                    _lastInbound.TryRemove(key, out _);
-                }
-            }
-        }
-    }
-
-    /// <summary>官方会对同一条消息重复推送（尤其断线重连后）—— 去掉重复，别让模型答两遍。</summary>
-    private bool IsDuplicate(string rawMessageId)
-    {
-        lock (_seenGate)
-        {
-            if (!_seen.Add(rawMessageId))
-            {
-                return true;
-            }
-
-            _seenOrder.Enqueue(rawMessageId);
-            while (_seenOrder.Count > SeenCapacity)
-            {
-                _seen.Remove(_seenOrder.Dequeue());
-            }
-
-            return false;
-        }
-    }
-
     private string SessionId
     {
         get => _sessionId;
-        set
-        {
-            lock (_stateGate)
-            {
-                _sessionId = value;
-            }
-        }
+        set { lock (_stateGate) { _sessionId = value; } }
     }
 
     private static string? Text(JsonNode? node)
@@ -1138,15 +863,6 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
         return int.TryParse(text, out var value) ? value : null;
     }
 
-    private static DateTimeOffset ParseTime(JsonNode? node)
-        => DateTimeOffset.TryParse(Text(node), out var parsed) ? parsed : Clock.Now;
-
-    private static string Mask(string value)
-        => string.IsNullOrEmpty(value) ? "(空)" : value.Length <= 8 ? "***" : value[..4] + "***" + value[^2..];
-
-    private static string Snippet(string text, int max)
-        => string.IsNullOrEmpty(text) ? "(空)" : text.Length <= max ? text : text[..max] + "…";
-
     private void Log(string message) => _log(message);
 
     public void Dispose()
@@ -1161,6 +877,7 @@ public sealed class OfficialBotGateway : IQqChatSource, IStagedReplyChatSource, 
         _operations.Dispose();
         _cts?.Dispose();
         _sendGate.Dispose();
+        if (_delivery.IsValueCreated) _delivery.Value.Dispose();
         // 出网客户端由装配点持有并统一释放（见 HttpFetcher），这里只收自己的东西
     }
 }

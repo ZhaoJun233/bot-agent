@@ -10,6 +10,7 @@ using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Platforms;
 using BotAgent.Services.Settings;
 
 namespace BotAgent.Adapters.Panel.Zba;
@@ -43,7 +44,8 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         BotAgent.Model.ProviderModelDiscovery? discovery = null,
         TenantQuotaStore? quotas = null,
         BotAgent.Services.Ops.DatabaseBackupService? backups = null,
-        BotAgent.Services.Ops.TurnTraceStore? traces = null)
+        BotAgent.Services.Ops.TurnTraceStore? traces = null,
+        IPlatformPolicyResolver? platformPolicies = null)
     {
         var options = FromEnvironment();
         var version = typeof(ZbaRuntime).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
@@ -96,7 +98,8 @@ internal sealed class ZbaRuntime : IAsyncDisposable
             registry,
             quotaStore,
             backups,
-            traces);
+            traces,
+            platformPolicies);
         var endpoint = new ZbaEndpoint(backend, options, now, version, instanceId,
             message => FileLog.Write("Zba", message));
         return new ZbaRuntime(endpoint, backend);

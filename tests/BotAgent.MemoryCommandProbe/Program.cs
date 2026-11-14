@@ -27,6 +27,13 @@ internal static class Program
     {
         var f = new CommandFixture();
         var message = f.Message("//memory remember length brief");
+        var unreliable = message with { Envelope = new PlatformInboundEnvelope(message.Envelope!.Origin, message.Envelope.Message, false) };
+        using (PlatformSourceExecution.Enter(f.Lease(unreliable)))
+        {
+            Check(UnifiedMemoryCommandService.TryContext(unreliable) is null, "source trust does not promote unreliable identity");
+            Check(await f.Commands.HandleAsync(unreliable), "unreliable memory command consumed");
+            Check(f.Source.Sends.Count == 0 && f.Store.State.Entries.IsEmpty, "unreliable identity has no memory or reply effect");
+        }
         Check(!await f.Commands.HandleAsync(f.Message("ordinary synthetic message")), "ordinary message not consumed");
         Check(await f.Commands.HandleAsync(message), "unleased command consumed");
         Check(f.Source.Sends.Count == 0 && f.Store.State.Entries.IsEmpty, "unleased command produces no read/write/reply");

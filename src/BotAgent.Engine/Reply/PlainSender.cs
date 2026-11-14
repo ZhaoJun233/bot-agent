@@ -161,15 +161,13 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             var one = await SendTextAtCommitAsync(isGroup, targetId, shortReply, replyToMessageId: replyTo, directAddress: true, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, shortReply);
             _traces.Node(sourceKey, TurnNodeKind.Outbound, one.Ok ? "sent" : "failed", reasonCode: decision.ReasonCode, count: shortReply.Length);
-            return one.Ok
-                ? new CadenceSendReport(new[] { shortReply })
-                : new CadenceSendReport(Array.Empty<string>(), decision.ReasonCode);
+            return CadenceResult(shortReply, one, decision.ReasonCode);
         }
         if (!_settings.SplitReplies)
         {
             var one = await SendTextAtCommitAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, reply);
-            return one.Ok ? new CadenceSendReport(new[] { reply }) : new CadenceSendReport(Array.Empty<string>(), "send_failed");
+            return CadenceResult(reply, one, "send_failed");
         }
 
         var segments = TextRules.SplitSentences(reply);
@@ -177,13 +175,14 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         {
             var one = await SendTextAtCommitAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, reply);
-            return one.Ok ? new CadenceSendReport(new[] { reply }) : new CadenceSendReport(Array.Empty<string>(), "send_failed");
+            return CadenceResult(reply, one, "send_failed");
         }
 
         // 分句发送：**逐段记账**。以前只回一个 bool —— 前几段成功、后面失败时，
         // 调用方只看到 false，于是"实际发出去的段落"根本没写进会话历史（issue #14）。
         var delivered = new List<string>();
         string? failure = null;
+        DeliveryResult? delivery = null;
         for (var i = 0; i < segments.Count; i++)
         {
             SendResult sent;
@@ -199,15 +198,16 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
                 break;
             }
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, sent, segments[i]);
+            delivery = ReplyDeliveryResults.Merge(delivery, sent.Delivery);
 
-            if (!sent.Ok)
+            if (!ReplyDeliveryResults.Confirmed(sent))
             {
-                failure = "segment_failed";
+                failure = sent.Delivery?.ReasonCode ?? "segment_failed";
                 _log($"第 {i + 1}/{segments.Count} 段发送失败，停止后续分段（已发出 {delivered.Count} 段）");
                 break;
             }
 
-            delivered.Add(segments[i]);
+            delivered.Add(sent.DeliveredText ?? segments[i]);
 
             // 打字节奏：基础间隔 + 按字数估算的输入时间
             if (i < segments.Count - 1)
@@ -217,8 +217,14 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             }
         }
 
-        return new CadenceSendReport(delivered, failure);
+        return new CadenceSendReport(delivered, failure) { Delivery = delivery,
+            TextWasTransformed = delivered.Where((text, index) => text != segments[index]).Any() };
     }
+
+    private static CadenceSendReport CadenceResult(string text, SendResult result, string fallbackReason)
+        => new(ReplyDeliveryResults.Confirmed(result) ? new[] { result.DeliveredText ?? text } : Array.Empty<string>(),
+            ReplyDeliveryResults.Confirmed(result) ? null : result.Delivery?.ReasonCode ?? fallbackReason)
+            { Delivery = result.Delivery, TextWasTransformed = result.DeliveredText is not null && result.DeliveredText != text };
 
     /// <summary>发一条纯文本（agent 回话 / 审批公告专用：不走人设、不分句、不受群冷却限制）。</summary>
     public async Task SendPlainAsync(BotConversation conversation, string text)
@@ -263,9 +269,11 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         {
             index++;
             var result = await SendTextAtCommitAsync(isGroup, targetId, segment, sourceKey: conversation.SourceKey);
-            _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, result.Ok ? "sent" : "failed", count: segment.Length);
-            _log($"agent 回话 → {(isGroup ? "群" : "私聊")}{targetId}（第 {index} 段，{segment.Length} 字，{(result.Ok ? "已发出" : "发送失败")}）: {TextRules.Shorten(segment.Replace('\n', ' '), 60)}");
-            if (!result.Ok) break; // No false Self entry; stop remaining segments after partial failure.
+            var confirmed = ReplyDeliveryResults.Confirmed(result);
+            var deliveredText = result.DeliveredText ?? segment;
+            _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, confirmed ? "sent" : "failed", count: confirmed ? deliveredText.Length : 0);
+            _log($"agent_delivery segment={index} confirmed={confirmed} chars={(confirmed ? deliveredText.Length : 0)}");
+            if (!confirmed) break; // No false Self entry; stop remaining segments after partial failure.
             delivered = true;
             _ownLedger.Remember(conversation.SourceKey, result, segment);
 
@@ -273,7 +281,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             var appended = new ChatMessage
             {
                 Role = MessageRole.Self,
-                Text = segment,
+                Text = deliveredText,
                 Timestamp = EngineClock.Now,
                 QqMessageId = result.MessageId > 0 ? result.MessageId : null
             };
@@ -333,6 +341,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
     private void RememberOwnMessage(ConversationId? conversationScope, PlatformContext? context,
         bool isGroup, long targetId, SendResult sent, string text)
     {
+        if (!ReplyDeliveryResults.Confirmed(sent)) return;
         if (conversationScope is not null)
         {
             _ownLedger.Remember(conversationScope, sent, text);

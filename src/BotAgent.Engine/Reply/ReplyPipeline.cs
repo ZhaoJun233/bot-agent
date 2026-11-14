@@ -287,7 +287,7 @@ public sealed partial class ReplyPipeline
 
         // Reserved explicit controls never enter chat history, profile extraction or Agent parsing.
         if (asideOnly && msg.Text.TrimStart().StartsWith("//memory", StringComparison.Ordinal)) return;
-        if (_memoryCommand?.Invoke(msg) == true) return;
+        if (msg.AllowsCommands && _memoryCommand?.Invoke(msg) == true) return;
         if (PlatformSourceExecution.Current is { } memorySource && msg.Envelope is { } envelope
             && UnifiedMemoryTurn.AttestedContext(envelope) is not null)
             _memoryInbound.GetValue(memorySource, _ => envelope);
@@ -301,7 +301,7 @@ public sealed partial class ReplyPipeline
 
         // 本机 Agent 命令（// 开头）：**不进人设路线** —— 它不是一个“插个嘴”，是一个真任务；
         // 也不该被适合度阈值/群冷却/复读守卫那些限流卡住（它们都是为“聊天”设计的）。handoff-4 §31
-        if (!asideOnly && _agentCmds.TryParseCommand(msg.Text, out var agentPayload))
+        if (msg.AllowsCommands && !asideOnly && _agentCmds.TryParseCommand(msg.Text, out var agentPayload))
         {
                     _ = _agentCmds.RunCommandSafeAsync(conversation, msg, agentPayload);
             return;
@@ -402,7 +402,7 @@ public sealed partial class ReplyPipeline
             // 缺头衔或太久没更新时再后台去问协议端（ get_group_member_info 才能拿到自定义头衔）。
             if (msg.IsGroup && AllowsFeature(PluginGate.ProfilesCapability))
             {
-                _roles.Remember(msg);
+                _roles.Remember(msg, conversation.SourceKey);
             }
         }
 

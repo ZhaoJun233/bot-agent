@@ -5,6 +5,9 @@ using BotAgent.Domain.Stickers;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Qq;
 using BotAgent.Domain.Reply;
+using BotAgent.Domain.Qq;
+using BotAgent.Domain.Platforms;
+using BotAgent.Services.Reply;
 
 namespace BotAgent.Services.Stickers;
 
@@ -476,13 +479,19 @@ public sealed class StickerService : IDisposable
     /// <summary>发送一张表情包（读文件 → base64 → 协议端 image 段）。失败只记日志，不影响文字回复。
     /// 发出去才记账 —— 这条日志也是排查“为什么又发了”的唯一现场。</summary>
     public async Task<bool> SendAsync(bool isGroup, long targetId, StickerRecord sticker, long? replyTo, string sourceKey)
+        => (await SendWithReceiptAsync(isGroup, targetId, sticker, replyTo, sourceKey)).Ok;
+
+    public async Task<SendResult> SendWithReceiptAsync(bool isGroup, long targetId, StickerRecord sticker, long? replyTo, string sourceKey)
     {
+        var invoked = false;
+        var official = PlatformSourceExecution.Current?.Context.PlatformId == PlatformId.QqOfficial;
         try
         {
             var bytes = await _store.ReadBytesAsync(sticker);
             await ReplyCommitBoundary.BeforeSourceSendAsync(_source);
-            var ok = await _source.SendImageAsync(isGroup, targetId, bytes, replyToMessageId: replyTo);
-            if (ok)
+            invoked = true;
+            var receipt = await _source.SendImageWithReceiptAsync(isGroup, targetId, bytes, replyToMessageId: replyTo);
+            if (ReplyDeliveryResults.Confirmed(receipt))
             {
                 var sinceText = _lastSent.TryGetValue(sourceKey, out var prev)
                     ? $"（距上次发表情包 {(EngineClock.Now - prev.At).TotalSeconds:F0} 秒）"
@@ -491,12 +500,13 @@ public sealed class StickerService : IDisposable
                 _log($"已发表情包 #{sticker.Id}{sinceText}");
             }
 
-            return ok;
+            return receipt with { Ok = ReplyDeliveryResults.Confirmed(receipt) };
         }
         catch (Exception ex) when (!ReplyCommitBoundary.IsActive || ex is not OperationCanceledException)
         {
-            _log($"表情包发送失败（#{sticker.Id}）：{ex.Message}");
-            return false;
+            _log("[Sticker] delivery_failed reason=image_send_failed");
+            return new(false) { Delivery = !official ? null : invoked
+                ? DeliveryResult.Unknown("image_outcome_unknown") : DeliveryResult.Rejected("image_preparation_failed") };
         }
     }
 

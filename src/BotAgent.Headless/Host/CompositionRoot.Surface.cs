@@ -91,7 +91,7 @@ internal static partial class CompositionRoot
         BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
         WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime,
         DatabaseBackupService backups, Func<IReadOnlyList<PersistedModelProvider>> capturedProviders,
-        TurnTraceStore traces)
+        TurnTraceStore traces, PlatformPolicyResolver platformPolicies)
     {
         // 提供商发现复用测试通道的受限出网（同一条拒绝私网/禁跳转的策略），不另开 socket。
         var discovery = management.ProviderTransport is { } providerHttp
@@ -101,7 +101,7 @@ internal static partial class CompositionRoot
             registry, () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup,
             pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current, capturedProviders), discovery,
             backups: backups,
-            traces: traces);
+            traces: traces, platformPolicies: platformPolicies);
         web.AttachZba(runtime.Endpoint);
         return runtime;
     }
@@ -276,6 +276,6 @@ internal static partial class CompositionRoot
             managedAuthorization, plugins: a.PluginRuntime.Describe);
         a.Zba = BuildZba(a.Box, a.HotReload, a.Management, a.Sessions, a.AgentCmds, a.Approvals,
             a.Plugins, a.Registry, a.Web, BotConfig.HadStoredSettingsAtLoad, a.PluginRuntime, a.Backups,
-            () => a.ModelRegistry.Captured, a.Traces);
+            () => a.ModelRegistry.Captured, a.Traces, a.PlatformPolicies);
     }
 }

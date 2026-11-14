@@ -165,6 +165,17 @@ public static class Program
             Directory.CreateDirectory(Path.Combine(complete, "src/BotAgent.Core/bin"));
             File.WriteAllText(Path.Combine(complete, "src/BotAgent.Core/bin/Ignored.cs"), "class Ignored { }");
             var snapshot = LoadFixture(complete);
+            var tool = "tools/SyntheticTool/SyntheticTool.csproj";
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(complete, tool))!);
+            File.WriteAllText(Path.Combine(complete, tool), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            var allProjects = RepositoryProjectPaths(complete);
+            var withoutTool = allProjects.Where(path => path != tool).ToList();
+            var missingTool = SolutionCoverage(allProjects, withoutTool);
+            var staleTool = SolutionCoverage(withoutTool, allProjects);
+            var completeTools = SolutionCoverage(allProjects, allProjects);
+            Check("工具工程必须实际枚举，漏列时失败", missingTool.Missing.SequenceEqual(new[] { tool }) && missingTool.Stale.Count == 0);
+            Check("不存在的工具工程仍算悬空", staleTool.Missing.Count == 0 && staleTool.Stale.SequenceEqual(new[] { tool }));
+            Check("完整工具工程集合可以通过", completeTools.Missing.Count == 0 && completeTools.Stale.Count == 0);
             Check("八个业务工程全部扫描且排除 bin/obj", snapshot.Files.Count == 8);
             Check("同名源文件保留工程身份，不做模糊回退",
                 snapshot.ByPath("src/BotAgent.Core/Domain/Rules.cs") is not null
@@ -507,24 +518,29 @@ public static class Program
     /// 防的是「加了工程但没人跑」「加了探针但 CI 里没有」这类静默漂移。
     /// 口径：只读仓库文件（slnx / ci.yml / Directory.Build.props / .github），不联网、不执行 CI。
     /// </summary>
+    private static List<string> RepositoryProjectPaths(string root)
+        => new[] { "src", "tests", "tools" }
+            .Select(name => Path.Combine(root, name)).Where(Directory.Exists)
+            .SelectMany(directory => Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories))
+            .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal).ToList();
+
+    private static (List<string> Missing, List<string> Stale) SolutionCoverage(List<string> onDisk, List<string> inSolution)
+        => (onDisk.Where(path => !inSolution.Contains(path, StringComparer.OrdinalIgnoreCase)).ToList(),
+            inSolution.Where(path => !onDisk.Contains(path, StringComparer.OrdinalIgnoreCase)).ToList());
+
     private static void RepositoryGovernanceChecks(SourceIndex index)
     {
         Section("仓库治理与构建基线（slnx 收口 / 探针必须进 CI / 治理文件齐备）");
 
-        var projectsOnDisk = Directory
-            .EnumerateFiles(Path.Combine(index.Root, "tests"), "*.csproj", SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(Path.Combine(index.Root, "src"), "*.csproj", SearchOption.AllDirectories))
-            .Select(p => Path.GetRelativePath(index.Root, p).Replace('\\', '/'))
-            .OrderBy(p => p, StringComparer.Ordinal)
-            .ToList();
+        var projectsOnDisk = RepositoryProjectPaths(index.Root);
 
         var slnxPath = Path.Combine(index.Root, "BotAgent.slnx");
         var slnx = File.Exists(slnxPath) ? File.ReadAllText(slnxPath) : string.Empty;
         var inSlnx = Regex.Matches(slnx, "<Project\\s+Path=\"([^\"]+)\"")
             .Select(m => m.Groups[1].Value.Replace('\\', '/'))
             .ToList();
-        var missingFromSlnx = projectsOnDisk.Where(p => !inSlnx.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
-        var staleInSlnx = inSlnx.Where(p => !projectsOnDisk.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var (missingFromSlnx, staleInSlnx) = SolutionCoverage(projectsOnDisk, inSlnx);
         Check($"BotAgent.slnx 覆盖磁盘上全部 {projectsOnDisk.Count} 个工程（无遗漏、无悬空）",
             missingFromSlnx.Count == 0 && staleInSlnx.Count == 0,
             missingFromSlnx.Count == 0 && staleInSlnx.Count == 0

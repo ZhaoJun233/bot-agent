@@ -59,6 +59,18 @@ public static partial class Program
     {
         BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
         BotAgent.Adapters.Time.ClockBindings.InitializeModel();
+        if (Environment.GetEnvironmentVariable("BOTAGENT_SAFETY_ONLY") == "official-actions")
+        {
+            OfficialActionTests();
+            Console.WriteLine($"通过 {_passed}，失败 {_failed}");
+            return _failed == 0 ? 0 : 1;
+        }
+        if (Environment.GetEnvironmentVariable("BOTAGENT_SAFETY_ONLY") == "qq-outcomes")
+        {
+            QqActionOutcomeTests();
+            Console.WriteLine($"通过 {_passed}，失败 {_failed}");
+            return _failed == 0 ? 0 : 1;
+        }
         DecisionTests();
         ParserWiringTests();
         SilenceReplyTests();
@@ -75,7 +87,9 @@ public static partial class Program
         SessionPolicyTests();
         PlatformPolicyActionTests();
         ServerActionOutcomeTests();
+        QqActionOutcomeTests();
         NaturalAgentTests();
+        OfficialActionTests();
         ReplyAuditTests();
         MessageMarkerTests();
         TurnTraceTests();

@@ -117,7 +117,6 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             call.Arguments?["command"]?.GetValue<string>(), null, call.Arguments ?? new JsonObject());
 
         var output = await RunToolAsync(tool, step, workDir, allowed,
-            access.QqActions, qqHost: null,
             conversationKey: string.Empty, callIndex: call.CallIndex, ct);
 
         return BotAgent.Domain.Tools.ToolOutcome.Success(output, $"服务器工具 {tool}");
@@ -145,9 +144,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
             ? ServerToolGate.BuildPolicy(allowed)
             : null;
         var qqHost = task.QqHost;
-        var qqUsed = 0;
-        var prohibitedQqActions = new List<string>();
-        var failedQqActions = new List<string>();
+        var qqActions = new QqActionRunState();
 
         var memoryPrompt = BotAgent.Services.Reply.UnifiedMemoryTurn.Current?.ReadPrompt(task.Prompt);
         var memoryRestricted = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
@@ -206,7 +203,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     }
 
                     messages.Add(("assistant", raw.Trim()));
-                    task.Succeeded(AppendQqActionOutcomes(raw.Trim(), prohibitedQqActions, failedQqActions));
+                    task.Succeeded(qqActions.AppendTo(raw.Trim()));
                     return;
                 }
 
@@ -217,14 +214,14 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                     // 结论也要进对话：否则下一轮上下文里只剩下“用户问了什么 + 一堆工具输出”，
                     // 模型看不到自己上轮得出了什么（会话记忆缺一半，标题综结也拿不到结论）。
                     messages.Add(("assistant", step0.Final.Trim()));
-                    task.Succeeded(AppendQqActionOutcomes(step0.Final.Trim(), prohibitedQqActions, failedQqActions));
+                    task.Succeeded(qqActions.AppendTo(step0.Final.Trim()));
                     return;
                 }
 
                 if (step0.Tool is null)
                 {
                     messages.Add(("assistant", raw.Trim()));
-                    task.Succeeded(AppendQqActionOutcomes(raw.Trim(), prohibitedQqActions, failedQqActions));
+                    task.Succeeded(qqActions.AppendTo(raw.Trim()));
                     return;
                 }
 
@@ -240,6 +237,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 Progress?.Invoke(task);
 
                 string output;
+                ToolOutcome? qqOutcome = null;
                 try
                 {
                     // MCP 不经过静态 ServerToolGate（那边只认识内建 6 个工具）；授权/预算/Schema 在 McpToolUseCase 里另过一次。
@@ -250,11 +248,12 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                                  + "用作用域里允许的工具，或者直接给 final 说明你查到了什么。";
                     }
                     else if (_mcp?.IsMcpTool(name) == true)
-                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost, task.SourceKey, step - 1, ct,
+                        output = await RunToolAsync(name, step0, workDir, allowed, task.SourceKey, step - 1, ct,
                             task.PythonToolLeases.FirstOrDefault(tool => tool.QualifiedName == name));
-                    else if (name == "qq" && ++qqUsed > MaxQqActionsPerTask)
+                    else if (name == "qq" && ++qqActions.Count > MaxQqActionsPerTask)
                     {
                         output = $"这次已经做了 {MaxQqActionsPerTask} 个 QQ 动作，不再做了（要接着做请再发一条指令）。";
+                        qqOutcome = ToolOutcome.Failure("action_budget_exceeded", output);
                     }
                     // ⚠ 开关关着时 gatePolicy 是 null —— 那种情况**根本不该调 Check**：
                     // ToolGate 对 null 策略是 fail-closed 拒绝（no_policy），拿它表示“不判”会把每一步都拒掉（踩过）。
@@ -265,10 +264,18 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                         _log($"[ServerAgent] 闸门拒绝 {name}（{gateDenied.ReasonCode}）→ 不执行");
                         output = $"这一步被闸门拒绝了（{gateDenied.ReasonCode}）：这次不执行。"
                                  + "换个做法，或者直接给 final 说清楚你查到了什么。";
+                        if (name == "qq") qqOutcome = ToolOutcome.Failure("tool_denied", output, gateDenied.ReasonCode);
+                    }
+                    else if (name == "qq")
+                    {
+                        qqOutcome = qqActions.Uncertain
+                            ? ToolOutcome.Failure("previous_outcome_unknown", "前一个 QQ 动作结果未确认，本任务停止后续 QQ 动作；不要重试。")
+                            : await RunQqToolAsync(step0.Raw, allowed, qqAllowed, qqHost, step - 1, ct);
+                        output = qqOutcome.ModelText ?? qqOutcome.ReasonCode;
                     }
                     else
                     {
-                        output = await RunToolAsync(name, step0, workDir, allowed, qqAllowed, qqHost,
+                        output = await RunToolAsync(name, step0, workDir, allowed,
                             task.SourceKey, step - 1, ct);
                     }
                 }
@@ -278,23 +285,16 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 }
                 catch (Exception ex)
                 {
-                    output = $"工具执行出错：{ex.GetType().Name} {ex.Message}";
+                    if (name == "qq")
+                    {
+                        output = $"动作结果未确认（{ex.GetType().Name}）；不要自动重试。";
+                        qqOutcome = ToolOutcome.Failure("delivery_unknown", output);
+                    }
+                    else output = $"工具执行出错：{ex.GetType().Name} {ex.Message}";
                 }
 
-                if (name == "qq")
-                {
-                    if (IsProhibitedQqActionOutput(output))
-                    {
-                        prohibitedQqActions.Add(output.Trim());
-                    }
-                    else if (output.StartsWith("❌ ", StringComparison.Ordinal)
-                             || output.StartsWith("工具执行出错：", StringComparison.Ordinal))
-                    {
-                        failedQqActions.Add(output.Trim());
-                    }
-                }
-
-                _log($"[ServerAgent] 第 {step} 步 {task.LastNote} → " + (_mcp?.IsMcpTool(name) == true ? "MCP（内容不回显）" : Shorten(output.Replace('\n', ' '), 110)));
+                qqActions.Record(qqOutcome);
+                LogToolOutput(step, task.LastNote, name, output, qqOutcome);
 
                 messages.Add(("assistant", raw));
                 messages.Add(("user", $"工具输出（{name}）：\n{output}\n\n（继续：要么再调工具，要么给 final）"));
@@ -336,22 +336,33 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         return system;
     }
 
-    private static bool IsProhibitedQqActionOutput(string output)
-        => output.Contains("没开（本次允许：", StringComparison.Ordinal)
-           || output.Contains("未被当前平台策略授权", StringComparison.Ordinal)
-           || output.Contains("被平台策略拒绝", StringComparison.Ordinal)
-           || output.Contains("闸门拒绝", StringComparison.Ordinal)
-           || output.Contains("被平台能力拒绝", StringComparison.Ordinal)
-           || output.Contains("不再做了", StringComparison.Ordinal)
-           || output.StartsWith("qq 工具这次没有会话上下文", StringComparison.Ordinal)
-           || output.StartsWith("要指明对谁做", StringComparison.Ordinal)
-           || output.StartsWith("要指明是哪条消息", StringComparison.Ordinal)
-           || output.StartsWith("这次不知道", StringComparison.Ordinal)
-           || output.StartsWith("这里需要一个", StringComparison.Ordinal)
-           || output.Contains("不是一个 QQ 号", StringComparison.Ordinal)
-           || output.Contains("不是一个消息 id", StringComparison.Ordinal)
-           || output.Contains("不知道该发到哪儿", StringComparison.Ordinal)
-           || output.StartsWith("不认识的动作", StringComparison.Ordinal);
+    private static bool IsProhibitedQqActionOutcome(ToolOutcome outcome)
+        => outcome.ReasonCode is "action_not_allowed" or "tool_denied" or "plugin_denied"
+            or "platform_mismatch" or "platform_unavailable" or "capability_denied" or "source_retired"
+            or "invalid_arguments" or "unknown_action" or "context_missing" or "structured_executor_missing" or "platform_action_unsupported"
+            or "action_budget_exceeded" or "previous_outcome_unknown";
+
+    private sealed class QqActionRunState
+    {
+        private readonly List<string> _denials = [];
+        private readonly List<string> _failures = [];
+        public int Count { get; set; }
+        public bool Uncertain { get; private set; }
+        public void Record(ToolOutcome? outcome)
+        {
+            if (outcome is not { Ok: false }) return;
+            Uncertain |= outcome.ReasonCode == "delivery_unknown";
+            var entries = IsProhibitedQqActionOutcome(outcome) ? _denials : _failures;
+            entries.Add((outcome.ModelText ?? outcome.ReasonCode).Trim());
+        }
+        public string AppendTo(string final) => AppendQqActionOutcomes(final, _denials, _failures);
+    }
+
+    private void LogToolOutput(int step, string? note, string name, string output, ToolOutcome? qqOutcome)
+        => _log(qqOutcome is not null
+            ? $"[ServerAgent] 第 {step} 步 QQ ok={qqOutcome.Ok} reason={qqOutcome.ReasonCode}"
+            : $"[ServerAgent] 第 {step} 步 {note} → " + (_mcp?.IsMcpTool(name) == true
+                ? "MCP（内容不回显）" : Shorten(output.Replace('\n', ' '), 110)));
 
     private static string AppendQqActionOutcomes(string final, IReadOnlyCollection<string> denials,
         IReadOnlyCollection<string> failures)
@@ -441,17 +452,34 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         }
     }
 
+    private static string QqActionExample(IQqActionHost host)
+        => host.ActionPlatform == BotAgent.Domain.Platforms.PlatformId.QqOfficial
+            ? """{"tool":"qq","action":"send","text":"用户要求发送的文字"}"""
+            : """{"thought":"给发指令的人点十个赞","tool":"qq","action":"like","user_id":"sender","times":10}""";
+
+    private static string QqActionParameterNotes(IQqActionHost host)
+        => host.ActionPlatform == BotAgent.Domain.Platforms.PlatformId.QqOfficial
+            ? "\n  只使用上面列出的官方动作参数。当前会话和应用由宿主绑定；其他平台的 QQ 号、角色和 AppID 不能作为目标或权限。"
+              + "\n  消息结果未知时停止动作并如实报告，不自动重试。不要用 bash/docker 或另一个连接绕过动作宿主。"
+            : "\n  参数：user_id = 目标（写 \"sender\" 表示发指令的人、\"me\" 表示机器人自己、也可以直接写 QQ 号）；"
+              + "msg_id = 消息（写 \"this\" 表示本条）；times = 次数。"
+              + "\n  给某人点 N 个赞 = **一次** like + times=N（**不要**调 N 次）。"
+              + "\n  ⚠ 这些动作**不需要** bash/docker：别去 docker 里翻 NapCat、别去找 websocket 端口 ✗（2026-09-21 有一次就这样白翻了十几步）。";
+
     private string BuildSystemPrompt(string workDir, HashSet<string> allowed, HashSet<string> qqAllowed, IQqActionHost? qqHost,
         ToolScope? scope = null)
     {
         var list = new List<string>();
+        var supportedActions = qqAllowed.Where(name => QqActionCatalog.Find(name) is { } spec
+            && qqHost is not null && qqHost.CanUseAction(spec)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var qqOn = allowed.Contains("qq") && qqHost is not null && supportedActions.Count > 0;
         if (_mcp?.PromptText(scope) is { Length: > 0 } mcpText)
         {
             list.Add(mcpText + "\n调用 MCP 时 tool 写完整名，参数直接放在同一 JSON 对象里。");
         }
         // 批次 D：先给出**统一目录**生成的清单（名字 + 一句话 + 参数），下面每条再写容器里的实情。
         list.Add("工具清单（服务端登记表，按面板开关裁剪）：" + string.Join("、", ServerToolSpecs.All
-            .Where(s => allowed.Contains(s.Id))
+            .Where(s => allowed.Contains(s.Id) && (s.Id != "qq" || qqOn))
             .Select(s => s.Id + "=" + s.Summary)));
         if (allowed.Contains("bash"))
         {
@@ -483,13 +511,12 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 "     部署目录也直接挂进来了：/host/qqchat（宿主机的 /opt/qqchat，可读写）");
         }
 
-        var qqOn = allowed.Contains("qq") && qqHost is not null;
         if (qqOn)
         {
             list.Add(
-                "qq：真的去 QQ 里做一个小动作（NapCat 的接口动作，做完就真生效了）。用 action 指名动作 + 它的参数，例如：\n" +
-                "     {\"thought\":\"给他点个赞\",\"tool\":\"qq\",\"action\":\"like\",\"user_id\":\"sender\",\"times\":3}\n" +
-                $"  这次开着的动作：\n{QqActionCatalog.DescribeForPrompt(qqAllowed)}");
+                "qq：通过当前 QQ 动作宿主执行。用 action 指名动作和参数，例如：\n" +
+                QqActionExample(qqHost!) +
+                $"\n  这次开着的动作：\n{QqActionCatalog.DescribeForPrompt(supportedActions, qqHost!.ActionPlatform)}");
         }
 
         var tools = list.Count == 0 ? "（这次一个工具都没开，只能凭已知信息回答）" : string.Join("\n", list);
@@ -520,12 +547,9 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                   // 2026-09-21：以前只说了“要用 qq 工具”✗，没给**调用形状** —— 模型于是去 docker 里翻 NapCat ✗。
                   // 这里把形状、可用动作、参数写法写全，让它一步到位。
                   "\n• **qq 动作怎么写**（照抄这个形状，一步就到位）：" +
-                  "{\"thought\":\"给发指令的人点十个赞\",\"tool\":\"qq\",\"action\":\"like\",\"user_id\":\"sender\",\"times\":10}" +
-                  $"\n  可用 action：{QqActionCatalog.Summarize(qqAllowed)}" +
-                  "\n  参数：user_id = 目标（写 \"sender\" 表示发指令的人、\"me\" 表示机器人自己、也可以直接写 QQ 号）；" +
-                  "msg_id = 消息（写 \"this\" 表示本条）；times = 次数。" +
-                  "\n  给某人点 N 个赞 = **一次** like + times=N（**不要**调 N 次）。" +
-                  "\n  ⚠ 这些动作**不需要** bash/docker：别去 docker 里翻 NapCat、别去找 websocket 端口 ✗（2026-09-21 有一次就这样白翻了十几步）。" +
+                  QqActionExample(qqHost!) +
+                  $"\n  可用 action：{QqActionCatalog.Summarize(supportedActions)}" +
+                  QqActionParameterNotes(qqHost!) +
                   "\n" + qqHost!.ContextLine
                 : string.Empty) +
             // 面板里那份「Agent 附加提示词」（默认 = 隐私红线）：服务器这条路拼进系统提示词，
@@ -599,8 +623,24 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
         return new StepCall(tool, arg, command, finalText, obj);
     }
 
+    private static async Task<ToolOutcome> RunQqToolAsync(JsonObject arguments, HashSet<string> allowed,
+        HashSet<string> qqAllowed, IQqActionHost? host, int callIndex, CancellationToken ct)
+    {
+        if (!allowed.Contains("qq")) return ToolOutcome.Failure("tool_denied", "qq 工具本次未启用。");
+        if (host is null) return ToolOutcome.Failure("context_missing", "qq 工具这次没有会话上下文（不在 QQ 会话里跑），用不了。");
+        var asked = arguments["action"] is JsonValue value && value.TryGetValue<string>(out var name) ? name.Trim() : null;
+        var spec = QqActionCatalog.Find(asked);
+        if (spec is null) return ToolOutcome.Failure("unknown_action", $"不认识的动作（本次允许：{string.Join(", ", qqAllowed)}）");
+        if (!qqAllowed.Contains(spec.Name))
+            return ToolOutcome.Failure("action_not_allowed", $"动作 {spec.Name} 没开（本次允许：{string.Join(", ", qqAllowed)}）。"
+                + "如果确实要做，让管理员在面板「服务器 agent 的 QQ 动作」里把它写上。");
+        if (host is not IToolExecutor executor)
+            return ToolOutcome.Failure("structured_executor_missing", "动作宿主未接入结构化执行，本次动作未执行。");
+        return await executor.ExecuteAsync(new ToolCall("qq." + spec.Name, arguments, callIndex), ct);
+    }
+
     private async Task<string> RunToolAsync(string tool, StepCall call, string workDir, HashSet<string> allowed,
-        HashSet<string> qqAllowed, IQqActionHost? qqHost, string conversationKey, int callIndex,
+        string conversationKey, int callIndex,
         CancellationToken ct, McpToolInfo? pythonLease = null)
     {
         if (_mcp?.IsMcpTool(tool) == true)
@@ -683,31 +723,6 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 using var response = await _http.GetAsync(uri, ct);
                 var body = await response.Content.ReadAsStringAsync(ct);
                 return $"HTTP {(int)response.StatusCode}\n" + Truncate(body, 4000, "（正文太长，只给了前 4000 字）");
-            }
-
-            case "qq":
-            {
-                if (qqHost is null)
-                {
-                    return "qq 工具这次没有会话上下文（不在 QQ 会话里跑），用不了。";
-                }
-
-                var asked = call.Raw["action"]?.GetValue<string>()?.Trim();
-                var spec = QqActionCatalog.Find(asked);
-                if (spec is null)
-                {
-                    return $"不认识的动作「{asked}」（本次允许：{string.Join(", ", qqAllowed)}）";
-                }
-
-                if (!qqAllowed.Contains(spec.Name))
-                {
-                    return $"动作 {spec.Name} 没开（本次允许：{string.Join(", ", qqAllowed)}）。" +
-                           "如果确实要做，让管理员在面板「服务器 agent 的 QQ 动作」里把它写上。";
-                }
-
-                var to = call.Raw["user_id"]?.ToJsonString() ?? call.Raw["target"]?.ToJsonString() ?? string.Empty;
-                _log($"[ServerAgent] QQ 动作 {spec.Name}（允许：{string.Join(",", qqAllowed)}）目标={Shorten(to, 20)}");
-                return await qqHost.ExecuteAsync(spec, call.Raw, ct);
             }
 
             case "docker":

@@ -57,6 +57,7 @@ public sealed partial class ReplyPipeline
 
     private async Task GenerateReplyAsync(BotConversation conversation, long? triggerMessageId, bool proactive = false, CancellationToken ct = default, IPacedReplyAttempt? pacing = null)
     {
+        using var deliveryBinding = BindReplyDelivery(conversation, triggerMessageId, proactive);
         var explicitPolicyRequest = pacing?.IsExplicit ?? (triggerMessageId is long mentionId &&
             conversation.Messages.FirstOrDefault(m => m.QqMessageId == mentionId)?.MentionedBot == true);
         if (_riskBackoff?.IsActive(conversation.SourceKey) == true && !explicitPolicyRequest)
@@ -245,12 +246,12 @@ public sealed partial class ReplyPipeline
 
         var (isGroup, targetId) = conversation.Target;
 
-        var (voiceSent, voiceFailed) = await _delivery.TryVoiceAsync(
+        var voiceReport = await _delivery.TryVoiceAsync(
             conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, voiceParts, voiceText, isGroup, targetId, result, directAddress);
 
         var report = await _delivery.SendAsync(
             conversation, turn.Context, triggerMessageId, turn.Caps, turn.PlatformPolicy, isGroup, targetId, replyTo,
-            reply, voiceText, voiceParts, voiceFailed, voiceSent, sticker, pokeTarget, elapsed, result, directAddress);
+            reply, voiceText, voiceParts, voiceReport, sticker, pokeTarget, elapsed, result, directAddress);
         pacing?.RecordDelivery(report);
     }
 

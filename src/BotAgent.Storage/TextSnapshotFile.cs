@@ -13,6 +13,10 @@ public static class TextSnapshotFile
     private static readonly Encoding OutputEncoding = new UTF8Encoding(false);
     private static readonly object PublicationGate = new();
 
+    /// <summary>Exclusive writer ownership for a snapshot; caller creates the parent directory.</summary>
+    public static IDisposable AcquireExclusiveWriter(string path)
+        => OpenFile(Path.GetFullPath(path) + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
     public static string? Read(string path, long maxBytes = long.MaxValue)
     {
         using var input = OpenSnapshot(path, maxBytes);
@@ -97,8 +101,7 @@ public static class TextSnapshotFile
         FileStream input;
         try
         {
-            input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
-                BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            input = OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         }
         catch (FileNotFoundException) { return null; }
         catch (DirectoryNotFoundException) { return null; }
@@ -111,7 +114,10 @@ public static class TextSnapshotFile
     }
 
     private static FileStream CreateSnapshot(string temporary)
-        => new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, BufferSize,
+        => OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+
+    private static FileStream OpenFile(string path, FileMode mode, FileAccess access, FileShare share)
+        => new FileStream(path, mode, access, share, BufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
     private static void AppendBounded(MemoryStream bytes, byte[] buffer, int count, long maxBytes)

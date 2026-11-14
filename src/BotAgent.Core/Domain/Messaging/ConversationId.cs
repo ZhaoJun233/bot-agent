@@ -38,7 +38,12 @@ public sealed record InboundMessage(
     DateTimeOffset Timestamp,
     string? ReplyToMessageId = null,
     bool IsMentioned = false,
-    IReadOnlyList<string>? ImageUrls = null);
+    IReadOnlyList<string>? ImageUrls = null)
+{
+    public bool AllowsCommands { get; init; } = true;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<InboundVoiceAttachment>? VoiceAttachments { get; init; }
+}
 
 /// <summary>
 /// 归一化出站消息。

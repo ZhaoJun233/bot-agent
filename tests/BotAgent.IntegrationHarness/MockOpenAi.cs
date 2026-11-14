@@ -45,6 +45,7 @@ public sealed class MockOpenAi : IDisposable
     /// <summary>Optional synthetic usage for successful completions; zero keeps the existing wire response unchanged.</summary>
     public int PromptTokens { get; set; }
     public int CompletionTokens { get; set; }
+    public Func<JsonObject?, string?>? ReplySelector { get; set; }
 
     /// <summary>收到的请求体（已解析）。</summary>
     public IReadOnlyList<JsonObject> Requests
@@ -509,7 +510,7 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
-        string content = TakeRuleReply(body) ?? TakeScriptedReply();
+        string content = ReplySelector?.Invoke(payload) ?? TakeRuleReply(body) ?? TakeScriptedReply();
 
         if (responseDelayMs > 0)
         {

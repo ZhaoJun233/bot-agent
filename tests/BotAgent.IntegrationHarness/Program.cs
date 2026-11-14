@@ -138,6 +138,19 @@ public static partial class Program
         await Scenario("s64", RunOneBotWireScenarioAsync);
         await Scenario("s65", RunTaskRecoveryScenarioAsync);
         await Scenario("s42", RunOfficialChannelScenarioAsync);
+        await Scenario("s79", RunOfficialIdentityScenarioAsync);
+        await Scenario("s67", RunOfficialRuntimeIdentityScenarioAsync);
+        await Scenario("s68", RunOfficialMemberRoleScenarioAsync);
+        await Scenario("s69", RunOfficialDeliveryScenarioAsync);
+        await Scenario("s70", RunOfficialOutcomeScenarioAsync);
+        await Scenario("s71", RunOfficialReferenceScenarioAsync);
+        await Scenario("s72", RunOfficialRelationshipScenarioAsync);
+        await Scenario("s73", RunOfficialMessageDedupScenarioAsync);
+        await Scenario("s74", RunOfficialContentScenarioAsync);
+        await Scenario("s75", RunOfficialInboundMediaScenarioAsync);
+        await Scenario("s76", RunOfficialAgentSendScenarioAsync);
+        await Scenario("s77", RunOfficialAgentRecallScenarioAsync);
+        await Scenario("s78", RunOfficialPluginGateScenarioAsync);
         }
         catch (Exception ex)
         {

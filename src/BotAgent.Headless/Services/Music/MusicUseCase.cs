@@ -122,37 +122,37 @@ public sealed class MusicUseCase : IMusicUseCase
     public string? TakeNote(string sourceKey)
         => _notes.TryRemove(sourceKey, out var note) ? note : null;
 
-    /// <summary>
-    /// 搜歌 → 发一张网易云音乐卡片；协议端不认卡片就退化成发链接（绝不能什么都不发）。
-    /// 返回是否发出去了（卡片或链接）。
-    /// </summary>
+    /// <summary>兼容 bool 调用方；结构化回执由 ShareWithReceiptAsync 保留。</summary>
     public async Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
+        => (await ShareWithReceiptAsync(song, isGroup, targetId, ct)).Ok;
+
+    public async Task<SendResult> ShareWithReceiptAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
     {
         if (_music is null || targetId == 0 || !_source.IsConnected)
         {
-            return false;
+            return new(false);
         }
 
         var songId = await _music.ResolveSongIdByNameAsync(song, ct);
         if (string.IsNullOrWhiteSpace(songId))
         {
-            _log($"[Music] 想分享「{song}」但没搜到，不发卡片");
-            return false;
+            _log("music_share outcome=unavailable");
+            return new(false);
         }
 
-        var ok = await _source.SendMusicAsync(isGroup, targetId, "163", songId, title: song, ct: ct);
-        _log(ok ? $"[Music] 已分享卡片「{song}」(# {songId})" : $"[Music] 卡片发送失败，改用链接分享: {song}");
-
-        // 协议端不接卡片（NapCat 各版本对 music 段的接受程度不一样）时退化成发链接：
-        // QQ 客户端会把网易云链接自己渲染成卡片，效果差不多，但绝不能什么都不发
-        if (!ok)
+        var sent = await _source.SendMusicWithReceiptAsync(isGroup, targetId, "163", songId, title: song, ct: ct);
+        if (sent.Delivery is not null || sent.Ok)
         {
-            var link = $"https://music.163.com/song?id={songId}";
-            var sentLink = await _source.SendTextAsync(isGroup, targetId, link, ct);
-            _log(sentLink.Ok ? $"[Music] 已用链接分享：{link}" : $"[Music] 链接也发送失败：{link}");
-            return sentLink.Ok;
+            var confirmed = sent.Ok && sent.Delivery is not { IsSuccess: false };
+            _log($"music_share outcome={sent.Delivery?.Status.ToString().ToLowerInvariant() ?? (confirmed ? "success" : "failed")}");
+            return sent with { Ok = confirmed };
         }
 
-        return true;
+        // Only legacy boolean adapters retain their established link fallback.
+        var link = $"https://music.163.com/song?id={songId}";
+        var sentLink = await _source.SendTextAsync(isGroup, targetId, link, ct);
+        var linkConfirmed = sentLink.Ok && sentLink.Delivery is not { IsSuccess: false };
+        _log($"music_share fallback=link confirmed={linkConfirmed}");
+        return sentLink with { Ok = linkConfirmed };
     }
 }

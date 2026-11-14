@@ -138,6 +138,7 @@ jobs:
           dotnet run --project tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
@@ -159,6 +160,29 @@ jobs:
           dotnet run --project tests/BotAgent.PythonAgentProbe/BotAgent.PythonAgentProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.PythonMarketProbe/BotAgent.PythonMarketProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj -c Release --no-restore
+
+  official-windows-recovery:
+    name: Official delivery recovery on Windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Build official identity and delivery probe
+        run: dotnet build tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj -c Release
+      - name: Verify bounded exclusive ownership recovery
+        run: dotnet tests/BotAgent.OfficialIdentityProbe/bin/Release/net10.0/BotAgent.OfficialIdentityProbe.dll --windows-recovery-only
+      - name: Verify all nine process termination phases
+        run: dotnet tests/BotAgent.OfficialIdentityProbe/bin/Release/net10.0/BotAgent.OfficialIdentityProbe.dll --crash-only
 
   web:
     name: Web build and browser tests
@@ -266,7 +290,7 @@ jobs:
           # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
           # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s153"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s66,s67,s68,s69,s70,s71,s72,s73,s74,s75,s76,s77,s78,s79,s153"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

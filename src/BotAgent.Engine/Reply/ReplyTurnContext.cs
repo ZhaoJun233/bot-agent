@@ -176,7 +176,7 @@ internal sealed class ReplyTurnContext
         }
 
         var roleCount = 0;
-        var groupRoles = isGroupScope ? _roles.DescribeForPrompt(scopeGroupId, 14, out roleCount) : null;
+        var groupRoles = isGroupScope ? _roles.DescribeForPrompt(conversation.SourceKey, scopeGroupId, 14, out roleCount) : null;
 
         // 上一次读到的气氛（有 TTL）：给模型当底色，让它接得上
         var vibeHint = _allowsFeature(PluginGate.VibesCapability) ? _vibes.Hint(conversation.SourceKey) : string.Empty;

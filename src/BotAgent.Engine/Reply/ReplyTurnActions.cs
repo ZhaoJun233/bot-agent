@@ -247,8 +247,8 @@ internal sealed class ReplyTurnActions(
             _queueBackground("music-share:" + key + ":" + songToShare, "music-share:" + key + ":" + songToShare, async ct =>
             {
                 if (!MusicStillAllowed(platformPolicy, "分享")) return;
-                var shared = await _music.ShareAsync(songToShare, shareIsGroup, shareTargetId, ct);
-                if (!shared)
+                var shared = await _music.ShareWithReceiptAsync(songToShare, shareIsGroup, shareTargetId, ct);
+                if (!ReplyDeliveryResults.Confirmed(shared))
                 {
                     _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
                     return;

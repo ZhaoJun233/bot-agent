@@ -33,6 +33,8 @@ namespace BotAgent.Services.Reply;
 /// <summary>Confirmed chat delivery only; images, pokes and partial replies never start a completion cooldown.</summary>
 public sealed record ChatDeliveryReport(bool AnyChatSent, bool CompleteChatReply)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DeliveryResult? Delivery { get; init; }
     public static ChatDeliveryReport FromAcknowledgements(CadenceSendReport textReport, bool textIntended,
         IReadOnlyList<string> voiceParts, bool voiceSent, IReadOnlyList<string> voiceFailed, bool extrasComplete = true)
     {
@@ -40,7 +42,8 @@ public sealed record ChatDeliveryReport(bool AnyChatSent, bool CompleteChatReply
         var anyChatSent = textSent || (voiceSent && voiceParts.Any(part => !string.IsNullOrWhiteSpace(part)));
         var completeVoice = voiceParts.Count == 0 || (voiceSent && voiceFailed.Count == 0);
         var completeText = !textIntended || (textSent && textReport.AllSent);
-        return new ChatDeliveryReport(anyChatSent, anyChatSent && completeVoice && completeText && extrasComplete);
+        return new ChatDeliveryReport(anyChatSent, anyChatSent && completeVoice && completeText && extrasComplete)
+            { Delivery = textReport.Delivery };
     }
 }
 
@@ -99,7 +102,7 @@ internal sealed partial class ReplyDelivery(
     /// → 逐段交给协议端发。哪段没发出去就把它记下来当文字补（内容不能丢）。
     /// 「该不该发语音」**不由这里判断** —— 那是模型的事（管理员 2026-09-21 明确过）。
     /// </summary>
-    public async Task<(bool VoiceSent, List<string> VoiceFailed)> TryVoiceAsync(
+    public async Task<VoiceDeliveryReport> TryVoiceAsync(
          BotConversation conversation,
          AppSettings snapshot,
          Domain.Permissions.ChatCapabilitySet caps,
@@ -113,7 +116,7 @@ internal sealed partial class ReplyDelivery(
     {
         if (_riskBackoff?.IsActive(conversation.SourceKey) == true)
         {
-            return (false, new List<string>());
+            return new(Array.Empty<string>(), new List<string>());
         }
 
         // ───── 语音（模型填了 speak）─────
@@ -166,6 +169,8 @@ internal sealed partial class ReplyDelivery(
 
         var voiceSent = false;
         var voiceFailed = new List<string>();
+        var sentParts = new List<string>();
+        DeliveryResult? delivery = null;
         if (voiceUrls.Count > 0)
         {
             // 模型把话切成了几段 → 每段一条语音条（≤3 条）。
@@ -173,29 +178,37 @@ internal sealed partial class ReplyDelivery(
             for (var i = 0; i < voiceUrls.Count; i++)
             {
                 var part = i < voiceParts.Count ? voiceParts[i] : voiceText;
-                bool ok;
+                SendResult receipt;
                 try
                 {
                     using var validation = ReplyCommitBoundary.EnterValidation(() =>
                         ValidateModality(conversation, snapshot, platformPolicy, "voice", PluginGate.VoiceCapability, "voice.speak"));
                     await ReplyCommitBoundary.BeforeSourceSendAsync(_source);
-                    ok = await _source.SendVoiceAsync(isGroup, targetId, voiceUrls[i]);
+                    receipt = await _source.SendVoiceWithReceiptAsync(isGroup, targetId, voiceUrls[i]);
                 }
                 catch (Exception) when (voiceSent && ReplyCommitBoundary.IsActive)
                 {
                     voiceFailed.AddRange(voiceParts.Skip(i));
                     break;
                 }
-                if (!ok)
+                delivery = ReplyDeliveryResults.Merge(delivery, receipt.Delivery);
+                if (!ReplyDeliveryResults.Confirmed(receipt))
                 {
+                    if (ReplyDeliveryResults.StopsFurtherSending(receipt.Delivery))
+                    {
+                        voiceFailed.AddRange(voiceParts.Skip(i));
+                        _hooks.Log($"[Voice] delivery_stopped reason={receipt.Delivery!.ReasonCode} confirmed={sentParts.Count}");
+                        break;
+                    }
                     if (part.Length > 0) voiceFailed.Add(part);
                     _hooks.Log(voiceUrls.Count > 1
                         ? $"[Voice] 第 {i + 1}/{voiceUrls.Count} 段没发出去 → 这段改发文字"
-                        : "[Voice] 语音没发出去 → 改发文字（具体原因见上一行的 retcode/响应体）");
+                        : "[Voice] 语音未确认成功 → 改发文字");
                     continue;
                 }
 
                 voiceSent = true;
+                sentParts.Add(part);
                 _voice?.MarkSent(conversation.SourceKey);
                 // 把模型给的语气参数也记下来 —— 不然“它到底有没有按语境调情绪”没法验证
                 var tone = new List<string>();
@@ -214,7 +227,7 @@ internal sealed partial class ReplyDelivery(
             _hooks.Log($"[Voice] 模型想用语音说，但{voiceSkipWhy} → 改发文字");
         }
 
-        return (voiceSent, voiceFailed);
+        return new(sentParts, voiceFailed, delivery);
     }
 
     /// <summary>
@@ -235,27 +248,29 @@ internal sealed partial class ReplyDelivery(
         string reply,
         string voiceText,
         List<string> voiceParts,
-        List<string> voiceFailed,
-        bool voiceSent,
+        VoiceDeliveryReport voiceReport,
         StickerRecord? sticker,
         long? pokeTarget,
         double elapsed,
         CompletionResult result,
         bool directAddress)
     {
+        var voiceSent = voiceReport.VoiceSent;
+        var voiceFailed = voiceReport.FailedParts;
+        var confirmedVoiceText = string.Join(" ", voiceReport.SentParts);
         // 到底还发不发文字：
         //   • 语音发成功了、且 reply 就是那句话（或没写 reply）→ 不再重复发同一句；
         //   • 语音发成功了、但 reply 另写了内容 → 那是模型自己想补的话，照发；
         //   • 语音没发出去 → 至少把要说的话当文字发出去。
         var textReply = reply.Length > 0 ? reply : null;
-        if (voiceParts.Count > 0)
+        if (voiceParts.Count > 0 && !voiceReport.StopFurtherSending)
         {
             if (voiceSent)
             {
                 // 去重（2026-09-21 修）：以前只在**一字不差**时才吞掉文字 ✗ —— speak「好呀，那我们八点见」
                 // 配 reply「好呀八点见！」就会语音+文字把同一句发两遍 ✗。现在按“去标点后是否同一句 /
                 // 是否互相包含”判断。
-                var said = string.Join(" ", voiceParts.Where(p => !voiceFailed.Contains(p)));
+                var said = confirmedVoiceText;
                 if (textReply is not null && TextRules.SameSaid(textReply, said))
                 {
                     _hooks.Log($"[Voice] 语音与文字是同一句（{TextRules.Shorten(textReply, 24)}）→ 不再重复发文字");
@@ -299,7 +314,8 @@ internal sealed partial class ReplyDelivery(
             }
         }
 
-        if (_riskBackoff?.IsActive(conversation.SourceKey) == true)
+        if (voiceReport.StopFurtherSending) textReply = null;
+        if (_riskBackoff?.IsActive(conversation.SourceKey) == true && !voiceReport.StopFurtherSending)
         {
             var mentioned = triggerMessageId is long mentionId &&
                 conversation.Messages.FirstOrDefault(m => m.QqMessageId == mentionId)?.MentionedBot == true;
@@ -320,30 +336,35 @@ internal sealed partial class ReplyDelivery(
         // 分句发送的**逐段**结果（issue #14）：前几段成功、后面失败时，
         // 只有真正发出去的段落才写进会话历史 —— 不能因为"整条返回 false"就把已发的当成没发。
         var effectiveReplyTo = platformPolicy.Feature("quote", true).Enabled ? replyTo : null;
-        var sendReport = await SendTextAfterVoiceAsync(conversation, isGroup, targetId, textReply, effectiveReplyTo,
-            _riskBackoff?.IsActive(conversation.SourceKey) == true ? sendDirect : directAddress, voiceSent);
+        var sendReport = voiceReport.StopFurtherSending ? CadenceSendReport.None
+            : await SendTextAfterVoiceAsync(conversation, isGroup, targetId, textReply, effectiveReplyTo,
+                _riskBackoff?.IsActive(conversation.SourceKey) == true ? sendDirect : directAddress, voiceSent);
         var sentText = sendReport.AnySent;
         if (sentText)
         {
             sent = true;
         }
         _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound,
-            textReply is null ? "silent" : sendReport.AllSent ? "sent" : sentText ? "partial" : "blocked",
+            sendReport.Delivery?.Status == DeliveryStatus.Unknown ? "unknown"
+                : textReply is null ? "silent" : sendReport.AllSent ? "sent" : sentText ? "partial" : "blocked",
             reasonCode: sendReport.FailureReasonCode, count: textReply?.Length);
 
         // 引用只给第一条消息，避免“文字 + 图”两条都带引用。
-        var (sentImage, pokeSent) = await SendExtrasAsync(conversation, context, caps, platformPolicy,
-            isGroup, targetId, textReply is not null ? null : replyTo, sticker, pokeTarget, sent);
+        var (imageReceipt, pokeSent) = voiceReport.StopFurtherSending || ReplyDeliveryResults.StopsFurtherSending(sendReport.Delivery)
+            ? (new SendResult(false), false)
+            : await SendExtrasAsync(conversation, context, caps, platformPolicy,
+                isGroup, targetId, textReply is not null ? null : replyTo, sticker, pokeTarget, sent);
+        var sentImage = ReplyDeliveryResults.Confirmed(imageReceipt);
         sent |= sentImage;
 
         if (sent || pokeSent)
         {
-            // 文字那一段：全部发出 → 记原文（与改造前逐字一致）；部分成功 → 只记**实际发出**的段落。
+            // Preserve legacy formatting only when every segment was sent without a transport transformation.
             var recordedTextBody = sentText
-                ? sendReport.AllSent ? textReply! : sendReport.Text
+                ? sendReport.AllSent && !sendReport.TextWasTransformed ? textReply! : sendReport.Text
                 : null;
             var recordedText = voiceSent
-                ? recordedTextBody is not null ? $"{recordedTextBody}（同时用语音说：{voiceText}）" : $"[语音] {voiceText}"
+                ? recordedTextBody is not null ? $"{recordedTextBody}（同时用语音说：{confirmedVoiceText}）" : $"[语音] {confirmedVoiceText}"
                 : recordedTextBody is not null ? recordedTextBody
                 : sentImage ? "[表情包]"
                 : "[戳一戳]";
@@ -389,16 +410,28 @@ internal sealed partial class ReplyDelivery(
                 ? Services.Participation.ParticipationEvent.Replied
                 : Services.Participation.ParticipationEvent.Silent);
 
-        // Unsent memory-derived output must not survive in logs or the panel event stream.
-        if (BotAgent.Services.Memory.MemoryUseScope.HasMemory)
+        var extrasComplete = (sticker is null || sentImage) && (pokeTarget is null || pokeSent);
+        var allIntendedDelivered = extrasComplete && (textReply is null || sendReport.AllSent)
+            && (voiceParts.Count == 0 || voiceReport.SentParts.Count == voiceParts.Count);
+        var finalReport = ReplyDeliveryResults.Finish(
+            ChatDeliveryReport.FromAcknowledgements(sendReport, textReply is not null, voiceParts, voiceSent, voiceFailed, extrasComplete),
+            sent || pokeSent, allIntendedDelivered, voiceReport.Delivery, sendReport.Delivery, imageReceipt.Delivery);
+        var outcome = finalReport.Delivery?.Status switch
         {
-            _hooks.Log($"[memory] outcome={(sent ? "replied" : "failed")} elapsedMs={elapsed:F0} sentSegments={sendReport.SentSegments.Count} textLength={reply.Length}");
-            return ChatDeliveryReport.FromAcknowledgements(sendReport, textReply is not null, voiceParts, voiceSent, voiceFailed,
-                extrasComplete: (sticker is null || sentImage) && (pokeTarget is null || pokeSent));
+            DeliveryStatus.Unknown => "unknown", DeliveryStatus.PartialSuccess => "partial",
+            DeliveryStatus.Success or DeliveryStatus.Degraded => "replied", _ => "failed",
+        };
+        _hooks.Log($"[delivery] outcome={outcome} confirmed_text={sendReport.SentSegments.Count} confirmed_voice={voiceReport.SentParts.Count}"
+            + $" confirmed_image={(sentImage ? 1 : 0)} reason={finalReport.Delivery?.ReasonCode ?? "not_delivered"}");
+
+        // Unconfirmed official output and memory-derived output stay out of verbose result logs.
+        if (BotAgent.Services.Memory.MemoryUseScope.HasMemory || PlatformSourceExecution.Current?.Context.PlatformId == PlatformId.QqOfficial)
+        {
+            return finalReport;
         }
 
         // P2（结构化运行记录）：同一条终态也用统一字段写一行，便于核对「决策 → 实际发送」是否一致。
-        _hooks.Log($"[决策] outcome={(sent ? "replied" : "failed")} action={result.Action}"
+        _hooks.Log($"[决策] outcome={outcome} action={result.Action}"
                 + $" reason={result.ReasonCode ?? "unknown"}: {conversation.Name}");
 
         _hooks.Log(
@@ -406,14 +439,13 @@ internal sealed partial class ReplyDelivery(
             $"{(result.Suitability is int sc ? $"，自评 {sc}" : string.Empty)}" +
             (reply.Length > 0 ? $"，{reply.Length} 字" : string.Empty) +
             (sentText && !sendReport.AllSent ? $"，部分发出（{sendReport.SentSegments.Count}/{TextRules.SplitSentences(reply).Count} 段）" : string.Empty) +
-            (voiceSent ? $"，语音 {voiceText.Length} 字" : string.Empty) +
+            (voiceSent ? $"，语音 {confirmedVoiceText.Length} 字" : string.Empty) +
             (sticker is not null ? $"，表情包 #{sticker.Id}（{StickerText.Describe(sticker)}）" : string.Empty) +
             (pokeSent ? $"，戳了 {pokeTarget}" : string.Empty) +
             $"{quoteNote}）" +
             (reply.Length > 0 ? $": {reply}" : string.Empty));
 
-        return ChatDeliveryReport.FromAcknowledgements(sendReport, textReply is not null, voiceParts, voiceSent, voiceFailed,
-            extrasComplete: (sticker is null || sentImage) && (pokeTarget is null || pokeSent));
+        return finalReport;
     }
 
     /// <summary>戳一戳发送与前置闸门裁决：仅在目标出现于当前上下文且心情/能力闸门放行时发出。</summary>
@@ -476,6 +508,6 @@ internal sealed partial class ReplyDelivery(
     public bool AllowSticker(BotConversation conversation, string stickerId, out string reason)
         => _stickers.Allow(conversation.SourceKey, stickerId, out reason);
     /// <summary>发一张表情包（实现见 StickerService.SendAsync：读盘 → base64 → image 段，发出去才记账）。</summary>
-    private Task<bool> SendStickerAsync(bool isGroup, long targetId, StickerRecord sticker, long? replyTo, string sourceKey)
-        => _stickers.SendAsync(isGroup, targetId, sticker, replyTo, sourceKey);
+    private Task<SendResult> SendStickerAsync(bool isGroup, long targetId, StickerRecord sticker, long? replyTo, string sourceKey)
+        => _stickers.SendWithReceiptAsync(isGroup, targetId, sticker, replyTo, sourceKey);
 }

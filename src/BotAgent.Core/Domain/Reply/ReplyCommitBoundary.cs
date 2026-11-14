@@ -55,6 +55,12 @@ public static class ReplyCommitBoundary
 
     public static Task BeforeEffectAsync() => Current.Value?.BeforeEffectAsync() ?? Task.CompletedTask;
 
+    /// <summary>Rechecks live permissions without waiting or committing reply scheduling.</summary>
+    public static void ValidateCurrent()
+    {
+        if (Current.Value is not null) Validation.Value?.Invoke();
+    }
+
     /// <summary>Never waits while a transport lock is held. False asks the caller to release and prepare again.</summary>
     public static bool TryBeforeSend()
     {

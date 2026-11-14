@@ -12,6 +12,8 @@ internal static class AttestationChecks
         using var f = new Fixture();
         f.Remember();
         var envelope = f.Envelope();
+        var unreliable = new PlatformInboundEnvelope(envelope.Origin, envelope.Message, false);
+        Denied(f, unreliable, f.Lease(unreliable.Origin), "trusted source with explicitly unreliable identity");
         Denied(f, null, null, "no envelope and no lease");
         Denied(f, envelope, null, "envelope without transport lease");
         Denied(f, null, f.Lease(envelope.Origin), "lease without envelope");

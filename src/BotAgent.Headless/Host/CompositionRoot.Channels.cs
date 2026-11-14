@@ -6,6 +6,7 @@ using StorageSecrets = StorageModule::BotAgent.Adapters.Persistence.SecretsStore
 using ConfigurationModule = StorageModule::BotAgent.Storage;
 using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 using BotAgent.Adapters.Persistence;
+using BotAgent.Adapters.Official;
 using BotAgent.Adapters.Panel;
 using BotAgent.Adapters.Panel.Zba;
 using BotAgent.Adapters.Model;
@@ -143,10 +144,14 @@ internal static partial class CompositionRoot
             && !string.IsNullOrWhiteSpace(settings.OfficialAppId)
             && !string.IsNullOrWhiteSpace(settings.OfficialAppSecret))
         {
+            var officialApplicationId = settings.OfficialAppId;
             official = new OfficialBotGateway(settingsBox,
                 new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "official"),
-                new OfficialIdMap(Path.Combine(AppPaths.DataDir, "official-ids.json")),
-                msg => FileLog.Write("Official", msg));
+                () => new OfficialIdentityMap(Path.Combine(AppPaths.DataDir, "official-ids.json")),
+                msg => FileLog.Write("Official", msg),
+                () => new OfficialDeliveryLedger(new OfficialDeliverySnapshotFile(Path.Combine(AppPaths.DataDir, "official-delivery",
+                    Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(officialApplicationId))) + ".json")),
+                    officialApplicationId));
             sources.Add(official);
             FileLog.Write("Channel", $"官方通道已启用（appid={settings.OfficialAppId}，" +
                                    $"{(settings.OfficialSandbox ? "沙箱" : "正式")}环境，与私域通道隔离）");

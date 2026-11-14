@@ -186,6 +186,7 @@ public sealed class ApprovalUseCase
     /// </summary>
     public bool HandleCommand(QqChatMessage msg)
     {
+        if (!msg.AllowsCommands) return false;
         var command = ApprovalFlow.TryParseCommand(msg.Text);
         if (command is null)
         {
@@ -215,7 +216,7 @@ public sealed class ApprovalUseCase
             _approvals,
             parsed,
             requesterId: "user:" + msg.UserId,
-            requesterRole: msg.SenderRole,
+            requesterRole: Channels.IsOfficial(msg.Channel) ? null : msg.SenderRole,
             conversationKey: conversationKey,
             now: EngineClock.Now,
             currentPolicyVersion: Capabilities.Policy.PolicyVersion);
@@ -229,7 +230,7 @@ public sealed class ApprovalUseCase
 
         var who = _hooks.Mask("user:" + msg.UserId, conversationKey);
         _hooks.Log($"[审批] {parsed.Kind} {parsed.RequestId} by {who} → {result.ReasonCode}"
-                   + (result.ReasonCode == "not_an_approver" ? "（不是名单内的人，也不是群主/管理员）" : string.Empty)
+                   + (result.ReasonCode == "not_an_approver" ? "（没有本项目审批权限）" : string.Empty)
                    + $"：{Channels.Describe(conversationKey)}");
 
         if (_audit is not null && result.Handled)
@@ -504,7 +505,7 @@ public sealed class ApprovalUseCase
             conversationKey: conversation.SourceKey,
             requesterFingerprint: triggerMessageId is { } id ? "msg:" + id : "msg:unknown",
             configuredApprovers: Approvers(),
-            allowGroupAdmins: true,
+            allowGroupAdmins: !Channels.IsOfficial(Channels.ChannelOf(conversation.SourceKey)),
             isGroup: isGroup,
             now: EngineClock.Now,
             newRequestId: () => ApprovalFlow.NewRequestId(

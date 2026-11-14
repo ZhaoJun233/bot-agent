@@ -1,4 +1,5 @@
 using BotAgent.Adapters.Platforms;
+using BotAgent.Adapters.Official;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Management;
@@ -114,7 +115,7 @@ internal static class PlatformLifecycleTests
             InboundMessage? received = null;
             adapter.InboundReceived += message => received = message;
             source.Emit(new QqChatMessage(101, true, 20002, 10001, "synthetic", "synthetic", DateTimeOffset.UnixEpoch, true,
-                Channel: Channels.Official));
+                Channel: Channels.Official) { IsReliableIdentity = true });
             check(received?.Ref.Conversation.PlatformId == platform && received.Ref.Conversation.AccountScope == context.AccountScope,
                 "inbound identity comes from adapter not message body channel");
             received = null;
@@ -225,11 +226,23 @@ internal static class PlatformLifecycleTests
         check((await feishu.SendAsync(feishu.Context, new(nativeTarget, "synthetic"))).IsSuccess,
             "real Feishu restart reopens native messenger");
 
-        var officialIds = new OfficialIdMap(null, Channels.AliasBase, Channels.AliasBase + 1000, durable: false);
-        var officialTarget = officialIds.AliasFor("synthetic-openid");
-        using var official = new OfficialBotGateway(settingsBox, http, officialIds, _ => { });
-        check((await official.SendTextAsync(true, officialTarget, "synthetic")).Ok,
-            "real official API send uses injected HTTP and existing alias map");
+        var officialIds = new LifecycleOfficialIds();
+        var officialTarget = officialIds.AliasFor(new(new("synthetic-app", OfficialIdentityKind.Group), "synthetic-openid"));
+        var officialTrigger = new OfficialIdentityKey(new("synthetic-app", OfficialIdentityKind.Message,
+            new(PlatformId.QqOfficial, "synthetic-app", ConversationKind.GroupChat, "synthetic-openid"), OfficialMessageDirection.Inbound), "synthetic-inbound");
+        var officialMessage = officialIds.AliasFor(officialTrigger);
+        using var official = new OfficialBotGateway(settingsBox, http, () => officialIds, _ => { }, () =>
+        {
+            var ledger = new OfficialDeliveryLedger(new LifecycleSnapshot(), "synthetic-app");
+            if (!ledger.AcceptTrigger(officialTrigger, PlatformClock.Current.UtcNow).Allowed) throw new InvalidOperationException("synthetic trigger refused");
+            return ledger;
+        });
+        using (PlatformSourceExecution.Enter(new(new LifecycleOwner(), official,
+            new(new(PlatformId.QqOfficial, AccountScope.Legacy, "synthetic-driver"),
+                new MessageRef(new(PlatformId.QqOfficial, AccountScope.Legacy, ConversationKind.GroupChat, officialTarget.ToString()), officialMessage.ToString())),
+            CancellationToken.None, () => true)))
+            check((await official.SendTextAsync(true, officialTarget, "synthetic")).Ok,
+                "real official API send uses injected HTTP and existing alias map");
         var officialVoice = PlatformCapabilities.QqOfficial.EvaluateDegradation(wantsImage: false, wantsVoice: true, wantsQuote: false);
         var voiceSource = new SyntheticSource();
         var officialContext = new PlatformContext(PlatformId.QqOfficial, AccountScope.Legacy, "");
@@ -726,6 +739,16 @@ internal static class PlatformLifecycleTests
             return Task.CompletedTask;
         }
     }
+
+    private sealed class LifecycleSnapshot : IOfficialDeliverySnapshot
+    {
+        private string? _value;
+        public string? Load() => _value;
+        public void Commit(string snapshot) => _value = snapshot;
+        public void Dispose() { }
+    }
+    private sealed class LifecycleOwner : IPlatformSourceOwner
+    { public string? ConversationKey(QqChatMessage message, Func<string, bool> exists) => null; }
 
     private sealed class SyntheticDedupStore : IWebhookDedupStore
     {

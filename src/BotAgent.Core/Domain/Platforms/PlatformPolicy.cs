@@ -66,7 +66,7 @@ public sealed record EffectivePlatformPolicy(
             "recall" => Capabilities.SupportsRecall,
             "thread" => Capabilities.SupportsThread,
             "stickers" => Capabilities.SupportsStickers,
-            "music" => Capabilities.SupportsMusic,
+            "music" => Capabilities.SupportsMusic || Capabilities.SupportsMusicTextFallback && Capabilities.SupportsText,
             "poke" => Capabilities.SupportsPoke,
             "linkpreview" or "websearch" => Capabilities.SupportsText,
             _ => false,
@@ -91,7 +91,7 @@ public sealed record EffectivePlatformPolicy(
         var allowedByPolicy = FeatureOverrides is null || !FeatureOverrides.TryGetValue(normalized, out var featureOverride) || featureOverride;
         var featureEnabled = globallyEnabled && allowedByPolicy;
         return featureEnabled
-            ? new PlatformFeatureDecision(normalized, true, true, "enabled")
+            ? new PlatformFeatureDecision(normalized, true, true, normalized == "music" && !Capabilities.SupportsMusic ? "music_text_fallback" : "enabled")
             : new PlatformFeatureDecision(normalized, true, false, "feature_disabled");
     }
 

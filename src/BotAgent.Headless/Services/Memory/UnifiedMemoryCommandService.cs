@@ -65,7 +65,7 @@ public sealed class UnifiedMemoryCommandService
     {
         var envelope = message.Envelope;
         var lease = PlatformSourceExecution.Current;
-        if (envelope is null || lease is not { IsCurrent: true, Origin: not null }
+        if (envelope is not { IsReliableIdentity: true } || lease is not { IsCurrent: true, Origin: not null }
             || lease.Origin != envelope.Origin || envelope.Origin.Trigger != envelope.Message.Ref) return null;
         var origin = envelope.Origin;
         var conversation = envelope.Message.Ref.Conversation;

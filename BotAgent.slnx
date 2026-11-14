@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/tools/">
+    <Project Path="tools/BotAgent.OfficialIdentityMigration/BotAgent.OfficialIdentityMigration.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/BotAgent.Core/BotAgent.Core.csproj" />
     <Project Path="src/BotAgent.Engine/BotAgent.Engine.csproj" />
@@ -24,6 +27,7 @@
     <Project Path="tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj" />
     <Project Path="tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj" />
     <Project Path="tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj" />
+    <Project Path="tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj" />
     <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
     <Project Path="tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj" />
     <Project Path="tests/BotAgent.MemoryCommandProbe/BotAgent.MemoryCommandProbe.csproj" />

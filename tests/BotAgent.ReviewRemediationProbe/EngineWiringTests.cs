@@ -74,6 +74,7 @@ internal static class EngineWiringTests
             "runtime plugin enable opens the mapped read tool");
 
         await VoiceGateTests(check);
+        await VoiceRegistrationTests(check);
         ExplicitQqActionGateTests(check);
         await InboundMediaGateTests(check);
         await StickerBatchRevocationTests(check);
@@ -107,7 +108,8 @@ internal static class EngineWiringTests
         var send = delivery.GetType().GetMethod("TryVoiceAsync", BindingFlags.Instance | BindingFlags.Public)!;
         async Task InvokeAsync(EffectivePlatformPolicy policy)
         {
-            var task = (Task<(bool, List<string>)>)send.Invoke(delivery, new object[]
+            // 只等待真实投递完成，门禁断言检查构建/发送副作用；内部结果现在是 VoiceDeliveryReport。
+            var task = (Task)send.Invoke(delivery, new object[]
             {
                 conversation, settings, caps, policy, new List<string> { "synthetic" }, "synthetic",
                 true, 10001L, new CompletionResult(null, null, null), false,
@@ -125,6 +127,47 @@ internal static class EngineWiringTests
         });
         check(voice.Builds == 0 && source.VoiceCalls == 0,
             "platform voice disable still blocks delivery (boolean logic cannot be bypassed)");
+    }
+
+    private static async Task VoiceRegistrationTests(Action<bool, string> check)
+    {
+        foreach (var platform in new[] { PlatformId.QqPrivate, PlatformId.QqOfficial })
+        {
+            var settings = new AppSettings { EnableVoice = true };
+            var box = new SettingsBox(settings);
+            var source = new FakeSource();
+            var voice = new FakeVoice();
+            var plugins = new PluginManager(_ => { });
+            var policy = EnabledPolicy() with
+            {
+                Context = new PlatformContext(platform),
+                Capabilities = platform == PlatformId.QqOfficial ? PlatformCapabilities.QqOfficial : PlatformCapabilities.QqOneBot,
+            };
+            var approvals = new ApprovalUseCase(box,
+                new ApprovalHooks(_ => { }, (_, _) => "synthetic", (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
+                new SessionPolicyLedger(), new TurnTraceStore());
+            var pipeline = new ReplyPipeline(box, source, null!, null!, null!, null!, null!, approvals, null!,
+                null!, null!, null!, null!, null!, null!, null!, voice, null!, null!, null!, null!,
+                new ReplyHooks(_ => { }, () => 10001, () => false), new TurnTraceStore(),
+                plugins: new PluginGate(plugins), platformPolicies: new FixedPolicyResolver(policy));
+            var conversation = new BotConversation
+            { SourceKey = platform == PlatformId.QqOfficial ? "official:group:8000000000000001" : "group:10001", Name = "synthetic" };
+            var caps = ChatCapabilitySet.FromSwitches(false, false, true, false, true, null);
+            var delivery = Component(pipeline, "_delivery");
+            var method = delivery.GetType().GetMethod("TryVoiceAsync", BindingFlags.Instance | BindingFlags.Public)!;
+            Task InvokeAsync() => (Task)method.Invoke(delivery, new object[]
+            { conversation, settings, caps, policy, new List<string> { "synthetic" }, "synthetic",
+                true, 10001L, new CompletionResult(null, null, null), false })!;
+
+            await InvokeAsync();
+            check(voice.Builds == 0 && source.VoiceCalls == 0, platform + " unregistered voice plugin starts no build/send");
+            plugins.Register(new VoicePresetPlugin());
+            await InvokeAsync();
+            check(voice.Builds == 1 && source.VoiceCalls == 1, platform + " registered voice plugin reaches actual delivery");
+            plugins.SetEnabled("preset.feature.voice", false);
+            await InvokeAsync();
+            check(voice.Builds == 1 && source.VoiceCalls == 1, platform + " runtime disable blocks subsequent build/send");
+        }
     }
 
     // ── F2：显式 QQ 动作也走同一份插件门禁 ──

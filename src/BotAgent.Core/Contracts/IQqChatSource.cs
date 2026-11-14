@@ -1,5 +1,6 @@
 using BotAgent.Services.OneBot;
 using BotAgent.Domain.Qq;
+using BotAgent.Domain.Platforms;
 
 namespace BotAgent.Services.Qq;
 
@@ -34,6 +35,9 @@ public interface IQqChatSource
 
     bool IsConnected { get; }
 
+    /// <summary>Fixed, non-sensitive source failure code, if available.</summary>
+    string? LastErrorCode => null;
+
     /// <summary>
     /// 登记「这个会话属于哪条通道」——多通道聚合（<see cref="ChannelRouter"/>）时用，
     /// 单通道实现忽略即可（默认空实现）。上层从库里恢复会话后调一次，
@@ -53,6 +57,9 @@ public interface IQqChatSource
     Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
         => Task.FromResult(false);
 
+    async Task<SendResult> SendMusicWithReceiptAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
+        => new(await SendMusicAsync(isGroup, targetId, platform, songId, title, ct).ConfigureAwait(false));
+
     /// <summary>
     /// 向群聊/私聊发送纯文本。replyToMessageId 用于触发 QQ 的“回复”引用。
     /// 返回 <see cref="SendResult.Ok" />（发出去没有）+ <see cref="SendResult.MessageId" />：
@@ -60,6 +67,10 @@ public interface IQqChatSource
     /// 我们能认出“他在回你”，并把原话给模型看（以前 reply 段是被丢掉的）。
     /// </summary>
     Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false);
+
+    /// <summary>Recalls only a proven outgoing message in the captured current conversation.</summary>
+    Task<DeliveryResult> RecallOwnMessageAsync(bool isGroup, long targetId, long messageId, CancellationToken ct = default)
+        => Task.FromResult(DeliveryResult.Rejected("recall_unsupported"));
 
     /// <summary>
     /// 按消息 id 取回（纯文本、发送者 QQ）—— 引用原文**本地找不到**时的兜底（OneBot <c>get_msg</c>）。
@@ -79,6 +90,13 @@ public interface IQqChatSource
 
     /// <summary>发送一张图片（表情包）。data 为图片原始字节，协议端用 base64:// 形式接收。</summary>
     Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null);
+
+    /// <summary>Structured receipts when the platform exposes them; legacy implementations retain their bool result.</summary>
+    async Task<SendResult> SendVoiceWithReceiptAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
+        => new(await SendVoiceAsync(isGroup, targetId, audioUrl, ct).ConfigureAwait(false));
+
+    async Task<SendResult> SendImageWithReceiptAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
+        => new(await SendImageAsync(isGroup, targetId, data, ct, replyToMessageId).ConfigureAwait(false));
 
     /// <summary>
     /// 戳一戳某人（群聊走 group_poke，私聊走 friend_poke）。

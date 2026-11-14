@@ -35,7 +35,7 @@ public sealed class UnifiedMemoryTurn : IDisposable
     public static UnifiedMemoryContext? AttestedContext(PlatformInboundEnvelope? envelope)
     {
         var source = PlatformSourceExecution.Current;
-        if (source is not { IsCurrent: true } || envelope is null
+        if (source is not { IsCurrent: true } || envelope is not { IsReliableIdentity: true }
             || source.Origin != envelope.Origin || source.Origin.Trigger != envelope.Message.Ref
             || source.Origin.Driver != new DriverKey(source.Context.PlatformId, source.Context.AccountScope, source.Context.InstanceId)
             || envelope.Message.Sender.PlatformId != envelope.Message.Ref.Conversation.PlatformId

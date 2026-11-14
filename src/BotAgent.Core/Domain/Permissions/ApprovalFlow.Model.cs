@@ -103,6 +103,7 @@ public static partial class ApprovalFlow
             approverRoles: allowGroupAdmins && isGroup ? GroupApproverRoles : Array.Empty<string>(),
             policyVersion: policyVersion);
 
-        return new ApprovalCreateResult(true, "pending", BuildRequestAnnouncement(request.RequestId), request);
+        return new ApprovalCreateResult(true, "pending", BuildRequestAnnouncement(request.RequestId, TtlSeconds,
+            allowGroupAdmins: request.ApproverRoles is { Count: > 0 }), request);
     }
 }

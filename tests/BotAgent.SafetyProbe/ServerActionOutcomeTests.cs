@@ -26,14 +26,14 @@ public static partial class Program
             RunCase("成功不误报", "✅ 给 20002 点了 1 个赞",
                 "{\"final\":\"动作完成\"}", expectedSupplement: false);
             RunCase("执行失败不冒充策略拒绝", "❌ 点赞没成功（QQ 侧回绝）。",
-                "{\"final\":\"动作完成\"}", expectedSupplement: false);
+                "{\"final\":\"动作完成\"}", expectedSupplement: false, failed: true);
         }
         finally
         {
             FileLog.WriteToFile = oldLogSetting;
         }
 
-        static void RunCase(string name, string toolResult, string final, bool expectedSupplement)
+        static void RunCase(string name, string toolResult, string final, bool expectedSupplement, bool failed = false)
         {
             var replies = new Queue<string>(["{\"tool\":\"qq\",\"action\":\"like\",\"user_id\":\"sender\"}", final, final]);
             var fetcher = new FakeHttpFetcher
@@ -58,7 +58,10 @@ public static partial class Program
             var task = new AgentTask
             {
                 Id = "synthetic", SourceKey = "group:10001", Prompt = "synthetic request", Session = "synthetic",
-                QqHost = new SyntheticQqActionHost(toolResult)
+                QqHost = new SyntheticQqActionHost(expectedSupplement
+                    ? BotAgent.Domain.Tools.ToolOutcome.Failure("action_not_allowed", toolResult)
+                    : failed ? BotAgent.Domain.Tools.ToolOutcome.Failure("action_failed", toolResult)
+                    : BotAgent.Domain.Tools.ToolOutcome.Success(toolResult))
             };
             runner.RunAsync(task, CancellationToken.None).GetAwaiter().GetResult();
             var heading = "未执行的 QQ 动作：";
@@ -70,10 +73,15 @@ public static partial class Program
         }
     }
 
-    private sealed class SyntheticQqActionHost(string result) : IQqActionHost
+    private sealed class SyntheticQqActionHost(BotAgent.Domain.Tools.ToolOutcome result) : IQqActionHost, BotAgent.Services.Tools.IToolExecutor
     {
         public string ContextLine => "synthetic QQ context";
-        public Task<string> ExecuteAsync(QqActionSpec spec, System.Text.Json.Nodes.JsonObject args, CancellationToken ct)
+        public string Id => BotAgent.Services.Tools.QqToolSpecs.ExecutorActions;
+        public string Implementation => "synthetic";
+        public bool LegacyPath => false;
+        public Task<BotAgent.Domain.Tools.ToolOutcome> ExecuteAsync(BotAgent.Domain.Tools.ToolCall call, CancellationToken ct = default)
             => Task.FromResult(result);
+        public Task<string> ExecuteAsync(QqActionSpec spec, System.Text.Json.Nodes.JsonObject args, CancellationToken ct)
+            => Task.FromResult(result.ModelText!);
     }
 }

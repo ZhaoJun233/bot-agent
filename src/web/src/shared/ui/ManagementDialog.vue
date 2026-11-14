@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   trigger?: HTMLElement | null
   fallback?: HTMLElement | null
   wide?: boolean
+  drawer?: boolean
 }>(), { active: true, trigger: null, fallback: null, wide: false })
 const emit = defineEmits<{ close: [] }>()
 const root = ref<HTMLElement | null>(null)
@@ -43,7 +44,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-show="props.active" class="dialog-backdrop" :data-testid="props.testId" @click.self="emit('close')">
+    <div v-show="props.active" class="dialog-backdrop" :class="{ 'drawer-backdrop': props.drawer }" :data-testid="props.testId" @click.self="emit('close')">
       <section ref="root" class="dialog management-dialog" :class="{ 'management-dialog-wide': props.wide }"
         role="dialog" aria-modal="true" :aria-labelledby="props.titleId" @keydown="onKeydown">
         <header class="management-dialog-head">
@@ -59,6 +60,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .management-dialog { width: min(720px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; }
 .management-dialog-wide { width: min(1040px, 100%); }
+.drawer-backdrop { justify-content: flex-end; padding: 0; }
+.drawer-backdrop .management-dialog { width: min(640px, 100vw); height: 100dvh; max-height: 100dvh; border-radius: 20px 0 0 20px; }
 .management-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .management-dialog-head h2 { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 600px) {

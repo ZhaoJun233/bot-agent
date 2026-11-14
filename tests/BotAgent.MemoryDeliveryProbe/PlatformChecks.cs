@@ -3,6 +3,7 @@ using BotAgent.Adapters.Platforms.Feishu;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Conversation;
 using BotAgent.Adapters.Persistence;
+using BotAgent.Adapters.Official;
 using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Qq;
@@ -16,13 +17,14 @@ using BotAgent.Services.Qq;
 
 internal static partial class Probe
 {
-    private static DriverKey Driver(string platform) => new(platform, AccountScope.Default, "synthetic-driver");
+    private static DriverKey Driver(string platform) => new(platform, platform == PlatformId.QqOfficial ? AccountScope.Legacy : AccountScope.Default, "synthetic-driver");
     private static ConversationId Conversation(DriverKey driver, bool group, string id)
         => new(driver.PlatformId, driver.AccountScope, group ? ConversationKind.GroupChat : ConversationKind.PrivateChat, id);
 
-    private static IDisposable SourceLease(IQqChatSource source, DriverKey driver)
+    private static IDisposable SourceLease(IQqChatSource source, DriverKey driver, long? target = null, long? message = null)
         => PlatformSourceExecution.Enter(new PlatformSourceLease(new Owner(), source,
-            new PlatformMessageOrigin(driver), CancellationToken.None, () => true));
+            new PlatformMessageOrigin(driver, target is { } id && message is { } trigger
+                ? new MessageRef(Conversation(driver, true, id.ToString()), trigger.ToString()) : null), CancellationToken.None, () => true));
 
     private sealed class Owner : IPlatformSourceOwner
     {
@@ -77,7 +79,7 @@ internal static partial class Probe
             using var scope = MemoryUseScope.Begin();
             var receipt = new MemoryGate();
             MemoryUseScope.Register(receipt.TryUse);
-            var ids = new OfficialIdMap(null, Channels.AliasBase, Channels.AliasBase + 1000, durable: false);
+            var ids = new SyntheticOfficialIds();
             var target = ids.AliasFor("synthetic-openid");
             var http = new FakeHttp
             {
@@ -90,7 +92,7 @@ internal static partial class Probe
             using var gateway = Official(http, ids);
             var driver = Driver(PlatformId.QqOfficial);
             MemoryUseScope.RestrictDestination(driver, Conversation(driver, true, target.ToString()));
-            using var lease = SourceLease(gateway, driver);
+            using var lease = SourceLease(gateway, driver, target, ids.AliasFor(OfficialTrigger()));
             await IgnoreDenial(() => gateway.SendImageAsync(true, target, new byte[] { 1, 2, 3 }));
             Require(http.Sends == 1);
         });
@@ -99,7 +101,7 @@ internal static partial class Probe
             using var scope = MemoryUseScope.Begin();
             var receipt = new MemoryGate();
             MemoryUseScope.Register(receipt.TryUse);
-            var ids = new OfficialIdMap(null, Channels.AliasBase, Channels.AliasBase + 1000, durable: false);
+            var ids = new SyntheticOfficialIds();
             var target = ids.AliasFor("synthetic-openid");
             var http = new FakeHttp
             {
@@ -112,7 +114,7 @@ internal static partial class Probe
             using var gateway = Official(http, ids);
             var driver = Driver(PlatformId.QqOfficial);
             MemoryUseScope.RestrictDestination(driver, Conversation(driver, true, target.ToString()));
-            using var lease = SourceLease(gateway, driver);
+            using var lease = SourceLease(gateway, driver, target, ids.AliasFor(OfficialTrigger()));
             await IgnoreDenial(() => gateway.SendTextAsync(true, target, "synthetic-message"));
             Require(http.Sends == 1 && http.Posts == 2);
         });
@@ -121,7 +123,7 @@ internal static partial class Probe
             using var scope = MemoryUseScope.Begin();
             var receipt = new MemoryGate();
             MemoryUseScope.Register(receipt.TryUse);
-            var ids = new OfficialIdMap(null, Channels.AliasBase, Channels.AliasBase + 1000, durable: false);
+            var ids = new SyntheticOfficialIds();
             var target = ids.AliasFor("synthetic-openid");
             var started = Signal();
             var response = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -129,7 +131,7 @@ internal static partial class Probe
             using var gateway = Official(http, ids);
             var driver = Driver(PlatformId.QqOfficial);
             MemoryUseScope.RestrictDestination(driver, Conversation(driver, true, target.ToString()));
-            using var lease = SourceLease(gateway, driver);
+            using var lease = SourceLease(gateway, driver, target, ids.AliasFor(OfficialTrigger()));
             var first = gateway.SendTextAsync(true, target, "synthetic-first");
             await started.Task;
             var queued = gateway.SendTextAsync(true, target, "synthetic-queued");
@@ -166,7 +168,39 @@ internal static partial class Probe
         });
     }
 
-    private static OfficialBotGateway Official(FakeHttp http, OfficialIdMap ids)
-        => new(new PlatformSettingsBox(new PlatformOptions
-        { OfficialEnabled = true, OfficialAppId = "synthetic-app", OfficialAppSecret = "synthetic-secret" }), http, ids, _ => { });
+    private static OfficialIdentityKey OfficialTrigger() => new(new("synthetic-app", OfficialIdentityKind.Message,
+        new(PlatformId.QqOfficial, "synthetic-app", ConversationKind.GroupChat, "synthetic-openid"), OfficialMessageDirection.Inbound), "synthetic-inbound");
+    private static OfficialBotGateway Official(FakeHttp http, BotAgent.Domain.Ports.IOfficialIdentityMap ids)
+    {
+        ids.AliasFor(OfficialTrigger());
+        return new(new PlatformSettingsBox(new PlatformOptions
+        { OfficialEnabled = true, OfficialAppId = "synthetic-app", OfficialAppSecret = "synthetic-secret" }), http, () => ids, _ => { }, () =>
+        {
+            var ledger = new OfficialDeliveryLedger(new MemoryOfficialSnapshot(), "synthetic-app");
+            Require(ledger.AcceptTrigger(OfficialTrigger(), PlatformClock.Current.UtcNow).Allowed);
+            return ledger;
+        });
+    }
+}
+
+file sealed class MemoryOfficialSnapshot : IOfficialDeliverySnapshot
+{
+    private string? _value;
+    public string? Load() => _value;
+    public void Commit(string snapshot) => _value = snapshot;
+    public void Dispose() { }
+}
+
+file sealed class SyntheticOfficialIds : BotAgent.Domain.Ports.IOfficialIdentityMap
+{
+    private readonly Dictionary<OfficialIdentityKey, long> _aliases = new();
+    public int Count => _aliases.Count;
+    public long AliasFor(string target) => AliasFor(new OfficialIdentityKey(new("synthetic-app", OfficialIdentityKind.Group), target));
+    public long AliasFor(OfficialIdentityKey key)
+    {
+        if (!_aliases.TryGetValue(key, out var alias)) _aliases.Add(key, alias = Channels.AliasBase + Count + 1);
+        return alias;
+    }
+    public string? OriginalOf(long alias, OfficialIdentityScope scope)
+        => _aliases.FirstOrDefault(pair => pair.Value == alias && pair.Key.Scope == scope).Key?.NativeId;
 }
