@@ -70,6 +70,21 @@ public static partial class Program
         }
         finally { release.TrySetResult(); }
         tts.BeforeSpeak = null;
+        // A released TTS request is not a completed turn; earlier input is still a continuation.
+        var revokedComplete = false;
+        var revokedDeadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (DateTimeOffset.UtcNow < revokedDeadline)
+        {
+            var (status, body) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/traces?limit=5");
+            var traces = JsonNode.Parse(body);
+            if (status == 200 && traces?["count"]?.GetValue<int>() == 2 && traces?["active"]?.GetValue<int>() == 0)
+            {
+                revokedComplete = true;
+                break;
+            }
+            await Task.Delay(50, cts.Token);
+        }
+        Check(label + " revoked voice turn reaches terminal trace before independent control", revokedComplete);
         await PushAsync("S78_REVOKED", "s78-control");
         Check(label + " subsequent independent text completes", await WaitUntilAsync(() => Delivered("s78-control"), TimeSpan.FromSeconds(15)));
         Check(label + " revocation during TTS blocks official upload and voice send", official.Uploads.Count == 0

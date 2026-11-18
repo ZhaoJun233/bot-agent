@@ -460,7 +460,7 @@ function resetField(section: SectionKey, key: string): void {
 
 function resetAll(): void {
   // “提交结果未知”时先核对：丢弃草稿会同时丢掉唯一的回执查询入口。
-  if (unconfirmed.value) return
+  if (phase.value === 'saving' || unconfirmed.value) return
   draft.value = {}
   secretDrafts.value = {}
   secretReconfirm.value = {}
@@ -1607,7 +1607,7 @@ defineExpose({
             type="button"
             class="tonal"
             data-testid="config-discard"
-            :disabled="busy || dirtyCount === 0 || unconfirmed"
+            :disabled="phase === 'saving' || dirtyCount === 0 || unconfirmed"
             @click="resetAll"
           >
             放弃修改

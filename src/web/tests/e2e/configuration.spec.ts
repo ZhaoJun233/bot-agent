@@ -305,6 +305,56 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
   await page.getByTestId('config-discard').click()
 })
 
+test('read-only configuration refresh between pointer down and up does not swallow discard', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('ability-settings-models').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  const input = dialog.getByTestId('config-field-model').locator('input')
+  const original = await input.inputValue()
+  await input.fill(original + '-synthetic-discard')
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
+  const saves: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/zba/v1/configuration/save') saves.push(request.url())
+  })
+  let startRead!: () => void
+  let releaseRead!: () => void
+  const started = new Promise<void>(resolve => { startRead = resolve })
+  const release = new Promise<void>(resolve => { releaseRead = resolve })
+  const pendingReads: Array<Promise<void>> = []
+  await page.route('**/zba/v1/configuration/read', async route => {
+    let handleRead!: () => void
+    pendingReads.push(new Promise<void>(resolve => { handleRead = resolve }))
+    const response = await route.fetch()
+    startRead()
+    await release
+    await route.fulfill({ response })
+    handleRead()
+  })
+  const discard = dialog.getByTestId('config-discard')
+  await discard.scrollIntoViewIfNeeded()
+  const box = await discard.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.down()
+  try {
+    await dialog.getByTestId('config-reload').evaluate((element: HTMLElement) => element.click())
+    await started
+    await expect(input).toBeDisabled()
+    await page.mouse.up()
+    await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
+  } finally {
+    await page.mouse.up()
+    releaseRead()
+    await Promise.all(pendingReads)
+    await page.unroute('**/zba/v1/configuration/read')
+  }
+  await expect(input).toHaveValue(original)
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
+  expect(saves).toEqual([])
+})
+
 test('配置页：安全锁立即回认证页，重连后普通草稿与秘密输入均清除', async ({ page }) => {
   await openConfiguration(page)
   await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()

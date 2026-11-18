@@ -114,6 +114,36 @@ async function expectCleanProviderDraft(wrapper: ReturnType<typeof mountPage>, n
 }
 
 describe('ConfigurationPage runtime and explicit denial', () => {
+  it('a baseline reread cannot swallow an explicit discard or restore the discarded draft', async () => {
+    let release!: (snapshot: ZbaConfigurationReadResult) => void
+    let holdRead = false
+    let writes = 0
+    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(editableFixture, {
+      readConfiguration: () => holdRead
+        ? new Promise<ZbaConfigurationReadResult>(resolve => { release = resolve })
+        : Promise.resolve(editableFixture as unknown as ZbaConfigurationReadResult),
+      saveConfiguration: async () => { writes += 1; throw new Error('Discard must not write') }
+    }) })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic discarded model')
+    holdRead = true
+    const reread = (wrapper.vm as unknown as { reload: () => Promise<boolean> }).reload()
+    await flushPromises()
+    try {
+      const discard = wrapper.get<HTMLButtonElement>('[data-testid="config-discard"]').element
+      expect(discard.disabled).toBe(false)
+      discard.click()
+      await flushPromises()
+      expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
+      expect(writes).toBe(0)
+    } finally {
+      release(editableFixture as unknown as ZbaConfigurationReadResult)
+      await reread
+    }
+    await flushPromises()
+    expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
+  })
+
   it('a later successful receipt cannot clear unrelated server-reported restart debt', async () => {
     const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
     data.latestApplyState = 1
