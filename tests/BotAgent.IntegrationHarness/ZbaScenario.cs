@@ -44,8 +44,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_AGENT"] = "1",
             ["QQCHAT_AGENT_SERVER"] = "1",
@@ -203,7 +201,7 @@ public static partial class Program
             {
                 ["behavior"] = new JsonObject
                 {
-                    ["groupCooldownSeconds"] = new JsonObject { ["kind"] = 1, ["value"] = 1 }
+                    ["groupInterjectionCooldownSeconds"] = new JsonObject { ["kind"] = 1, ["value"] = 1 }
                 }
             },
             ["secrets"] = new JsonArray()
@@ -223,7 +221,7 @@ public static partial class Program
         var editable = await ZbaAsync(http, "POST", root + "/configuration/read", readToken, """{"kind":1}""");
         Check("★ ZBA 保存后读取到新值",
             editable.Status == 200
-            && (JsonNode.Parse(editable.Body) as JsonObject)?["view"]?["behavior"]?["groupCooldownSeconds"]?["value"]?.GetValue<int>() == 1,
+            && (JsonNode.Parse(editable.Body) as JsonObject)?["view"]?["behavior"]?["groupInterjectionCooldownSeconds"]?["value"]?.GetValue<int>() == 1,
             editable.Status.ToString());
 
         var nextVersion = appliedNode?["currentVersion"]?.GetValue<string>()
@@ -238,7 +236,7 @@ public static partial class Program
             {
                 ["behavior"] = new JsonObject
                 {
-                    ["groupCooldownSeconds"] = new JsonObject { ["kind"] = 1, ["value"] = 0 }
+                    ["groupInterjectionCooldownSeconds"] = new JsonObject { ["kind"] = 1, ["value"] = 0 }
                 }
             },
             ["secrets"] = new JsonArray()

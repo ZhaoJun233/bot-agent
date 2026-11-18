@@ -27,7 +27,7 @@ describe('配置 read 运行时解码', () => {
   it('accepts reply pacing field IDs 148–152 with boolean and fractional values', async () => {
     const payload = clone()
     const behavior = viewOf(payload).behavior as Record<string, Json>
-    const defaults = { replyPacingEnabled: false, groupInterjectionProbability: 20,
+    const defaults = { groupInterjectionProbability: 20,
       groupInterjectionCooldownSeconds: 30, groupContinuationWaitSeconds: 3, privateContinuationWaitSeconds: 1.5 }
     for (const [offset, [key, value]] of Object.entries(defaults).entries()) {
       behavior[key] = { ...behavior.botPersona, value, display: String(value),

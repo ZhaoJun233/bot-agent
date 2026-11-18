@@ -22,7 +22,7 @@ namespace BotAgent.Adapters.Persistence;
 ///
 /// 为什么整份存 JSON 而不是拆成几十个列：这份配置永远是“整份读、整份写”
 /// （面板一次提交整张表单），列化只会带来一版一版的 ALTER 与字段映射漂移；
-/// 它仍然在库里 —— 备份、查询（<c>json_extract(json,'$.AiDesire')</c>）、事务都成立。
+/// 它仍然在库里 —— 备份、结构化查询与事务都成立。
 /// 老版本的 <c>settings.json</c> 由 LegacyJsonImporter 导入后归档。
 /// </summary>
 public sealed partial class SettingsStore : ISettingsRepository
@@ -218,8 +218,6 @@ public sealed partial class SettingsStore : ISettingsRepository
         }
         if (patch.Behavior is { } behavior)
         {
-            ApplyScalar(behavior.AiDesire, value => next.AiDesire = value);
-            ApplyScalar(behavior.ReplyPacingEnabled, value => next.ReplyPacingEnabled = value);
             ApplyScalar(behavior.GroupInterjectionProbability, value => next.GroupInterjectionProbability = value);
             ApplyScalar(behavior.GroupInterjectionCooldownSeconds, value => next.GroupInterjectionCooldownSeconds = value);
             ApplyScalar(behavior.GroupContinuationWaitSeconds, value => next.GroupContinuationWaitSeconds = value);
@@ -228,9 +226,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             ApplyScalar(behavior.ApprovalApprovers, value => next.ApprovalApprovers = value);
             ApplyScalar(behavior.BotPersona, value => next.BotPersona = value);
             ApplyScalar(behavior.EnableApprovals, value => next.EnableApprovals = value);
-            ApplyScalar(behavior.EnableAtmosphereDamping, value => next.EnableAtmosphereDamping = value);
             ApplyScalar(behavior.EnableLinkPreview, value => next.EnableLinkPreview = value);
-            ApplyScalar(behavior.EnableParticipationGating, value => next.EnableParticipationGating = value);
             ApplyScalar(behavior.EnablePoke, value => next.EnablePoke = value);
             ApplyScalar(behavior.EnableProactive, value => next.EnableProactive = value);
             ApplyScalar(behavior.EnableProfileSummary, value => next.EnableProfileSummary = value);
@@ -238,8 +234,6 @@ public sealed partial class SettingsStore : ISettingsRepository
             ApplyScalar(behavior.EnableStickers, value => next.EnableStickers = value);
             ApplyScalar(behavior.EnableWebSearch, value => next.EnableWebSearch = value);
             ApplyScalar(behavior.FilterActionNarration, value => next.FilterActionNarration = value);
-            ApplyScalar(behavior.GroupCooldownSeconds, value => next.GroupCooldownSeconds = value);
-            ApplyScalar(behavior.IdleFallbackSeconds, value => next.IdleFallbackSeconds = value);
             ApplyScalar(behavior.IgnoreBracketMessages, value => next.IgnoreBracketMessages = value);
             ApplyScalar(behavior.LinkPreviewMax, value => next.LinkPreviewMax = value);
             ApplyScalar(behavior.LinkPreviewTimeoutSeconds, value => next.LinkPreviewTimeoutSeconds = value);
@@ -249,14 +243,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             ApplyScalar(behavior.MaxMessagesPerConversation, value => next.MaxMessagesPerConversation = value);
             ApplyScalar(behavior.MaxProfileChars, value => next.MaxProfileChars = value);
             ApplyScalar(behavior.MoodTtlSeconds, value => next.MoodTtlSeconds = value);
-            ApplyScalar(behavior.ParticipationCooldownSeconds, value => next.ParticipationCooldownSeconds = value);
-            ApplyScalar(behavior.ParticipationMaxActiveLifetimeSeconds, value => next.ParticipationMaxActiveLifetimeSeconds = value);
-            ApplyScalar(behavior.ParticipationMaxConsecutiveReplies, value => next.ParticipationMaxConsecutiveReplies = value);
-            ApplyScalar(behavior.ParticipationMaxExitingLifetimeSeconds, value => next.ParticipationMaxExitingLifetimeSeconds = value);
-            ApplyScalar(behavior.ParticipationProbingMaxReplies, value => next.ParticipationProbingMaxReplies = value);
             ApplyScalar(behavior.PokeCooldownSeconds, value => next.PokeCooldownSeconds = value);
-            ApplyScalar(behavior.PrivateCooldownSeconds, value => next.PrivateCooldownSeconds = value);
-            ApplyScalar(behavior.ProactiveCooldownSeconds, value => next.ProactiveCooldownSeconds = value);
             ApplyScalar(behavior.ProactiveQuietSeconds, value => next.ProactiveQuietSeconds = value);
             ApplyScalar(behavior.ProfileLookupCount, value => next.ProfileLookupCount = value);
             ApplyScalar(behavior.ProfileSummaryIntervalSeconds, value => next.ProfileSummaryIntervalSeconds = value);
@@ -467,8 +454,6 @@ public sealed partial class SettingsStore : ISettingsRepository
     private static BehaviorView ProjectBehaviorView(AppSettings user, AppSettings effective, ConfigurationReadFields fields)
         => new()
         {
-            AiDesire = fields.Field(ConfigurationFieldId.AiDesire, user.AiDesire, effective.AiDesire, nameof(AppSettings.AiDesire)),
-            ReplyPacingEnabled = fields.Field(ConfigurationFieldId.ReplyPacingEnabled, user.ReplyPacingEnabled, effective.ReplyPacingEnabled, nameof(AppSettings.ReplyPacingEnabled)),
             GroupInterjectionProbability = fields.Field(ConfigurationFieldId.GroupInterjectionProbability, user.GroupInterjectionProbability, effective.GroupInterjectionProbability, nameof(AppSettings.GroupInterjectionProbability)),
             GroupInterjectionCooldownSeconds = fields.Field(ConfigurationFieldId.GroupInterjectionCooldownSeconds, user.GroupInterjectionCooldownSeconds, effective.GroupInterjectionCooldownSeconds, nameof(AppSettings.GroupInterjectionCooldownSeconds)),
             GroupContinuationWaitSeconds = fields.Field(ConfigurationFieldId.GroupContinuationWaitSeconds, user.GroupContinuationWaitSeconds, effective.GroupContinuationWaitSeconds, nameof(AppSettings.GroupContinuationWaitSeconds)),
@@ -477,9 +462,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             ApprovalApprovers = fields.Field(ConfigurationFieldId.ApprovalApprovers, user.ApprovalApprovers, effective.ApprovalApprovers, nameof(AppSettings.ApprovalApprovers)),
             BotPersona = fields.Field(ConfigurationFieldId.BotPersona, user.BotPersona, effective.BotPersona, nameof(AppSettings.BotPersona)),
             EnableApprovals = fields.Field(ConfigurationFieldId.EnableApprovals, user.EnableApprovals, effective.EnableApprovals, nameof(AppSettings.EnableApprovals)),
-            EnableAtmosphereDamping = fields.Field(ConfigurationFieldId.EnableAtmosphereDamping, user.EnableAtmosphereDamping, effective.EnableAtmosphereDamping, nameof(AppSettings.EnableAtmosphereDamping)),
             EnableLinkPreview = fields.Field(ConfigurationFieldId.EnableLinkPreview, user.EnableLinkPreview, effective.EnableLinkPreview, nameof(AppSettings.EnableLinkPreview)),
-            EnableParticipationGating = fields.Field(ConfigurationFieldId.EnableParticipationGating, user.EnableParticipationGating, effective.EnableParticipationGating, nameof(AppSettings.EnableParticipationGating)),
             EnablePoke = fields.Field(ConfigurationFieldId.EnablePoke, user.EnablePoke, effective.EnablePoke, nameof(AppSettings.EnablePoke)),
             EnableProactive = fields.Field(ConfigurationFieldId.EnableProactive, user.EnableProactive, effective.EnableProactive, nameof(AppSettings.EnableProactive)),
             EnableProfileSummary = fields.Field(ConfigurationFieldId.EnableProfileSummary, user.EnableProfileSummary, effective.EnableProfileSummary, nameof(AppSettings.EnableProfileSummary)),
@@ -487,8 +470,6 @@ public sealed partial class SettingsStore : ISettingsRepository
             EnableStickers = fields.Field(ConfigurationFieldId.EnableStickers, user.EnableStickers, effective.EnableStickers, nameof(AppSettings.EnableStickers)),
             EnableWebSearch = fields.Field(ConfigurationFieldId.EnableWebSearch, user.EnableWebSearch, effective.EnableWebSearch, nameof(AppSettings.EnableWebSearch)),
             FilterActionNarration = fields.Field(ConfigurationFieldId.FilterActionNarration, user.FilterActionNarration, effective.FilterActionNarration, nameof(AppSettings.FilterActionNarration)),
-            GroupCooldownSeconds = fields.Field(ConfigurationFieldId.GroupCooldownSeconds, user.GroupCooldownSeconds, effective.GroupCooldownSeconds, nameof(AppSettings.GroupCooldownSeconds)),
-            IdleFallbackSeconds = fields.Field(ConfigurationFieldId.IdleFallbackSeconds, user.IdleFallbackSeconds, effective.IdleFallbackSeconds, nameof(AppSettings.IdleFallbackSeconds)),
             IgnoreBracketMessages = fields.Field(ConfigurationFieldId.IgnoreBracketMessages, user.IgnoreBracketMessages, effective.IgnoreBracketMessages, nameof(AppSettings.IgnoreBracketMessages)),
             LinkPreviewMax = fields.Field(ConfigurationFieldId.LinkPreviewMax, user.LinkPreviewMax, effective.LinkPreviewMax, nameof(AppSettings.LinkPreviewMax)),
             LinkPreviewTimeoutSeconds = fields.Field(ConfigurationFieldId.LinkPreviewTimeoutSeconds, user.LinkPreviewTimeoutSeconds, effective.LinkPreviewTimeoutSeconds, nameof(AppSettings.LinkPreviewTimeoutSeconds)),
@@ -498,14 +479,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             MaxMessagesPerConversation = fields.Field(ConfigurationFieldId.MaxMessagesPerConversation, user.MaxMessagesPerConversation, effective.MaxMessagesPerConversation, nameof(AppSettings.MaxMessagesPerConversation)),
             MaxProfileChars = fields.Field(ConfigurationFieldId.MaxProfileChars, user.MaxProfileChars, effective.MaxProfileChars, nameof(AppSettings.MaxProfileChars)),
             MoodTtlSeconds = fields.Field(ConfigurationFieldId.MoodTtlSeconds, user.MoodTtlSeconds, effective.MoodTtlSeconds, nameof(AppSettings.MoodTtlSeconds)),
-            ParticipationCooldownSeconds = fields.Field(ConfigurationFieldId.ParticipationCooldownSeconds, user.ParticipationCooldownSeconds, effective.ParticipationCooldownSeconds, nameof(AppSettings.ParticipationCooldownSeconds)),
-            ParticipationMaxActiveLifetimeSeconds = fields.Field(ConfigurationFieldId.ParticipationMaxActiveLifetimeSeconds, user.ParticipationMaxActiveLifetimeSeconds, effective.ParticipationMaxActiveLifetimeSeconds, nameof(AppSettings.ParticipationMaxActiveLifetimeSeconds)),
-            ParticipationMaxConsecutiveReplies = fields.Field(ConfigurationFieldId.ParticipationMaxConsecutiveReplies, user.ParticipationMaxConsecutiveReplies, effective.ParticipationMaxConsecutiveReplies, nameof(AppSettings.ParticipationMaxConsecutiveReplies)),
-            ParticipationMaxExitingLifetimeSeconds = fields.Field(ConfigurationFieldId.ParticipationMaxExitingLifetimeSeconds, user.ParticipationMaxExitingLifetimeSeconds, effective.ParticipationMaxExitingLifetimeSeconds, nameof(AppSettings.ParticipationMaxExitingLifetimeSeconds)),
-            ParticipationProbingMaxReplies = fields.Field(ConfigurationFieldId.ParticipationProbingMaxReplies, user.ParticipationProbingMaxReplies, effective.ParticipationProbingMaxReplies, nameof(AppSettings.ParticipationProbingMaxReplies)),
             PokeCooldownSeconds = fields.Field(ConfigurationFieldId.PokeCooldownSeconds, user.PokeCooldownSeconds, effective.PokeCooldownSeconds, nameof(AppSettings.PokeCooldownSeconds)),
-            PrivateCooldownSeconds = fields.Field(ConfigurationFieldId.PrivateCooldownSeconds, user.PrivateCooldownSeconds, effective.PrivateCooldownSeconds, nameof(AppSettings.PrivateCooldownSeconds)),
-            ProactiveCooldownSeconds = fields.Field(ConfigurationFieldId.ProactiveCooldownSeconds, user.ProactiveCooldownSeconds, effective.ProactiveCooldownSeconds, nameof(AppSettings.ProactiveCooldownSeconds)),
             ProactiveQuietSeconds = fields.Field(ConfigurationFieldId.ProactiveQuietSeconds, user.ProactiveQuietSeconds, effective.ProactiveQuietSeconds, nameof(AppSettings.ProactiveQuietSeconds)),
             ProfileLookupCount = fields.Field(ConfigurationFieldId.ProfileLookupCount, user.ProfileLookupCount, effective.ProfileLookupCount, nameof(AppSettings.ProfileLookupCount)),
             ProfileSummaryIntervalSeconds = fields.Field(ConfigurationFieldId.ProfileSummaryIntervalSeconds, user.ProfileSummaryIntervalSeconds, effective.ProfileSummaryIntervalSeconds, nameof(AppSettings.ProfileSummaryIntervalSeconds)),
@@ -1495,8 +1469,6 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Agent.EnableServerAgent.Rule,
                 view.Agent.PanelDeployEnabled.Rule,
                 view.Agent.PanelDeployUrl.Rule,
-                view.Behavior.AiDesire.Rule,
-                view.Behavior.ReplyPacingEnabled.Rule,
                 view.Behavior.GroupInterjectionProbability.Rule,
                 view.Behavior.GroupInterjectionCooldownSeconds.Rule,
                 view.Behavior.GroupContinuationWaitSeconds.Rule,
@@ -1505,9 +1477,7 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Behavior.ApprovalApprovers.Rule,
                 view.Behavior.BotPersona.Rule,
                 view.Behavior.EnableApprovals.Rule,
-                view.Behavior.EnableAtmosphereDamping.Rule,
                 view.Behavior.EnableLinkPreview.Rule,
-                view.Behavior.EnableParticipationGating.Rule,
                 view.Behavior.EnablePoke.Rule,
                 view.Behavior.EnableProactive.Rule,
                 view.Behavior.EnableProfileSummary.Rule,
@@ -1515,8 +1485,6 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Behavior.EnableStickers.Rule,
                 view.Behavior.EnableWebSearch.Rule,
                 view.Behavior.FilterActionNarration.Rule,
-                view.Behavior.GroupCooldownSeconds.Rule,
-                view.Behavior.IdleFallbackSeconds.Rule,
                 view.Behavior.IgnoreBracketMessages.Rule,
                 view.Behavior.LinkPreviewMax.Rule,
                 view.Behavior.LinkPreviewTimeoutSeconds.Rule,
@@ -1526,14 +1494,7 @@ public sealed partial class SettingsStore : ISettingsRepository
                 view.Behavior.MaxMessagesPerConversation.Rule,
                 view.Behavior.MaxProfileChars.Rule,
                 view.Behavior.MoodTtlSeconds.Rule,
-                view.Behavior.ParticipationCooldownSeconds.Rule,
-                view.Behavior.ParticipationMaxActiveLifetimeSeconds.Rule,
-                view.Behavior.ParticipationMaxConsecutiveReplies.Rule,
-                view.Behavior.ParticipationMaxExitingLifetimeSeconds.Rule,
-                view.Behavior.ParticipationProbingMaxReplies.Rule,
                 view.Behavior.PokeCooldownSeconds.Rule,
-                view.Behavior.PrivateCooldownSeconds.Rule,
-                view.Behavior.ProactiveCooldownSeconds.Rule,
                 view.Behavior.ProactiveQuietSeconds.Rule,
                 view.Behavior.ProfileLookupCount.Rule,
                 view.Behavior.ProfileSummaryIntervalSeconds.Rule,

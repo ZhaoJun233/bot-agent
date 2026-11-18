@@ -94,7 +94,9 @@ internal sealed class ReplyTurnContext
     {
         var context = pacing is null
             ? conversation.TakeLast(snapshot.MaxContextMessages)
-            : conversation.Messages.Where(m => m.Seq <= pacing.Sequence).TakeLast(snapshot.MaxContextMessages).ToList();
+            : conversation.Messages.Where(m => m.Seq <= pacing.Sequence || m.Role == MessageRole.Self
+                || (pacing.SpeakerId != 0 && m.SenderId != pacing.SpeakerId))
+                .TakeLast(snapshot.MaxContextMessages).ToList();
         if (context.Count == 0)
         {
             return null;   // 上下文空 = 没什么可回的（与改造前一致：直接结束这一轮）

@@ -46,7 +46,7 @@ internal static class ConfigurationRuntimeEffectsTests
             ClockBindings.InitializePlatforms();
             ClockBindings.InitializeStorage();
             AppDatabase.Initialize();
-            var initial = new AppSettings { AiDesire = 10, OfficialAppId = "10001",
+            var initial = new AppSettings { GroupInterjectionProbability = 10, OfficialAppId = "10001",
                 Model = "synthetic-model", ModelOverride = "synthetic-model",
                 ModelBaseUrl = "https://example.com/v1", ModelBaseUrlOverride = "https://example.com/v1" };
             new SettingsStore().Save(initial);
@@ -88,15 +88,15 @@ internal static class ConfigurationRuntimeEffectsTests
             var restart = State(pending, ConfigurationFieldId.OfficialAppId);
             Require(restart.State == ConfigurationRuntimeState.RestartRequired
                 && restart.RestartTarget == ConfigurationRestartTarget.BotAgent, "pending_restart");
-            var hot = await Save(new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(11) }, null, null, null, null, null, null, null));
+            var hot = await Save(new(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(11) }, null, null, null, null, null, null, null));
             Require(hot.Code == ConfigurationResultCode.Ok, "hot_save");
             foreach (var step in Enum.GetValues<ApplyStep>())
                 store.RecordApply(caller, hot.Receipt!.Key, ImmutableArray.Create(new ApplyStepReport(step, ApplyState.Applied, null)));
-            runtime.Apply(settings => settings.AiDesire = 11);
+            runtime.Apply(settings => settings.GroupInterjectionProbability = 11);
             var afterHot = await Read();
             Require(State(afterHot, ConfigurationFieldId.OfficialAppId).State == ConfigurationRuntimeState.RestartRequired,
                 "unrelated_hot_save_preserves_pending");
-            Require(State(afterHot, ConfigurationFieldId.AiDesire).State == ConfigurationRuntimeState.Current, "hot_current");
+            Require(State(afterHot, ConfigurationFieldId.GroupInterjectionProbability).State == ConfigurationRuntimeState.Current, "hot_current");
             var reverted = await Save(new(null, null, null,
                 new PlatformChanges { OfficialAppId = FieldEdit<string>.Set("10001") }, null, null, null, null));
             Require(reverted.Code == ConfigurationResultCode.Ok
@@ -180,7 +180,7 @@ internal static class ConfigurationRuntimeEffectsTests
             "restart_difference_survives_apply_ledger");
         Require(State(ConfigurationFieldId.Model, FieldEffect.Hot, false) == ConfigurationRuntimeState.Unknown,
             "different_snapshot_not_confirmed_by_old_success");
-        Require(State(ConfigurationFieldId.AiDesire, FieldEffect.Hot, false) == ConfigurationRuntimeState.Unknown,
+        Require(State(ConfigurationFieldId.GroupInterjectionProbability, FieldEffect.Hot, false) == ConfigurationRuntimeState.Unknown,
             "unconfirmed_hot_difference_unknown");
         var dependencies = new (ConfigurationFieldId Field, ApplyStep Step)[]
         {
@@ -190,14 +190,13 @@ internal static class ConfigurationRuntimeEffectsTests
             (ConfigurationFieldId.FeishuWhitelistPrivates, ApplyStep.RuntimePolicy),
             (ConfigurationFieldId.EnableApprovals, ApplyStep.RuntimePolicy),
             (ConfigurationFieldId.EnableWebSearch, ApplyStep.RuntimePolicy),
-            (ConfigurationFieldId.ParticipationCooldownSeconds, ApplyStep.RuntimePolicy),
+            (ConfigurationFieldId.GroupContinuationWaitSeconds, ApplyStep.PublishSnapshot),
             (ConfigurationFieldId.BotPersona, ApplyStep.ModelProjection),
             (ConfigurationFieldId.MaxContextMessages, ApplyStep.ModelProjection),
             (ConfigurationFieldId.MaxConcurrentReplies, ApplyStep.ConcurrencyGate),
             (ConfigurationFieldId.MaxMessagesPerConversation, ApplyStep.ContextWindow),
             (ConfigurationFieldId.ProfileSummaryIntervalSeconds, ApplyStep.Schedulers),
             (ConfigurationFieldId.HealthReportTime, ApplyStep.Schedulers),
-            (ConfigurationFieldId.IdleFallbackSeconds, ApplyStep.Schedulers),
             (ConfigurationFieldId.EnableProfileSummary, ApplyStep.Schedulers),
             (ConfigurationFieldId.StickerLibraryMax, ApplyStep.Schedulers),
         };

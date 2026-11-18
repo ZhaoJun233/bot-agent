@@ -27,8 +27,7 @@ public static partial class Program
         try
         {
             var request = new PromptBuilder.PromptRequest(
-                SystemPrompt: "合成系统提示", BotIdentity: "10001", Persona: "你是一只话不多的猫", AiDesire: 80,
-                Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+                SystemPrompt: "合成系统提示", BotIdentity: "10001", Persona: "你是一只话不多的猫", Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
                 Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
                 LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
                 SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
@@ -82,26 +81,28 @@ public static partial class Program
             Check("同一输入两次构建，稳定前缀逐字一致（工具顺序不抖）",
                 again[..again.IndexOf("\n\n[现在的时间]", StringComparison.Ordinal)] == stable);
 
-            // ⑤ 动态字段只影响尾巴：加了心情/气氛后，前缀一直到「发言意愿偏置」那一句都不变。
-            var withDynamic = PromptBuilder.Build(request with { MoodText = "有点困", VibeHint = "群里在聊加班" });
-            var desireAt = withDynamic.IndexOf("你非常健谈主动", StringComparison.Ordinal);
+            // Use the declared cache boundary; the retired desire sentence is no longer an anchor.
+            var dynamicParts = PromptBuilder.BuildParts(request with { MoodText = "有点困", VibeHint = "群里在聊加班" });
+            var withDynamic = dynamicParts.Text;
+            var stableBoundary = parts.Stable.Length;
             Check("动态字段不污染稳定前缀（心情/气氛只追加在叙述之后）",
-                desireAt > 0 && withDynamic[..desireAt] == first[..desireAt],
-                $"稳定边界 {desireAt} 字");
+                stableBoundary > 0 && dynamicParts.Stable == parts.Stable && withDynamic[..stableBoundary] == first[..stableBoundary],
+                $"稳定边界 {stableBoundary} 字");
             Check("★ 每轮会变的内容全部落在动态区（心情/气氛/资料/档案/撤回/身份/记忆/黑话）",
-                withDynamic.IndexOf("[你此刻的心情]", StringComparison.Ordinal) > desireAt &&
-                withDynamic.IndexOf("[你上一条消息时的感觉]", StringComparison.Ordinal) > desireAt &&
-                PromptBuilder.Build(request with { SearchText = "合成资料" }).IndexOf("[刚查到的资料]", StringComparison.Ordinal) > desireAt &&
-                PromptBuilder.Build(request with { ProfilesText = "群友A：合成档案" }).IndexOf("[会话参与者档案", StringComparison.Ordinal) > desireAt &&
-                PromptBuilder.Build(request with { RecallText = "群友A 撤回了一条" }).IndexOf("[有人撤回了消息]", StringComparison.Ordinal) > desireAt &&
-                PromptBuilder.Build(request with { GroupRolesText = "群友A 是群主" }).IndexOf("[本群身份]", StringComparison.Ordinal) > desireAt &&
-                PromptBuilder.Build(request with { PokeContext = true }).IndexOf("[戳一戳怎么回]", StringComparison.Ordinal) > desireAt);
+                withDynamic.IndexOf("[你此刻的心情]", StringComparison.Ordinal) >= stableBoundary &&
+                withDynamic.IndexOf("[你上一条消息时的感觉]", StringComparison.Ordinal) >= stableBoundary &&
+                PromptBuilder.Build(request with { SearchText = "合成资料" }).IndexOf("[刚查到的资料]", StringComparison.Ordinal) >= stableBoundary &&
+                PromptBuilder.Build(request with { ProfilesText = "群友A：合成档案" }).IndexOf("[会话参与者档案", StringComparison.Ordinal) >= stableBoundary &&
+                PromptBuilder.Build(request with { RecallText = "群友A 撤回了一条" }).IndexOf("[有人撤回了消息]", StringComparison.Ordinal) >= stableBoundary &&
+                PromptBuilder.Build(request with { GroupRolesText = "群友A 是群主" }).IndexOf("[本群身份]", StringComparison.Ordinal) >= stableBoundary &&
+                PromptBuilder.Build(request with { PokeContext = true }).IndexOf("[戳一戳怎么回]", StringComparison.Ordinal) >= stableBoundary);
 
             // ⑥ 开关类段落仍在前缀里（它们由配置决定，不随轮次变）：开/关要能正确反映到请求。
-            var withSearch = PromptBuilder.Build(request with { EnableWebSearch = true });
+            var searchParts = PromptBuilder.BuildParts(request with { EnableWebSearch = true });
+            var withSearch = searchParts.Text;
             var searchAt = withSearch.IndexOf("\n\n[联网搜索]", StringComparison.Ordinal);
             Check("配置开关段落进稳定前缀：打开联网就出现在尾巴之前，关闭时不出现",
-                searchAt > 0 && searchAt < withSearch.IndexOf("你非常健谈主动", StringComparison.Ordinal) &&
+                searchAt > 0 && searchAt < searchParts.Stable.Length && searchParts.Stable.Contains("[联网搜索]", StringComparison.Ordinal) &&
                 !first.Contains("[联网搜索]", StringComparison.Ordinal));
 
             // ⑦ 时间基准的措辞与 #97 一致（搬家不改字）。

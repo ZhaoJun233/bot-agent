@@ -19,7 +19,7 @@ public static partial class Program
         var botWsPort = FreePort(13089);
         using var images = new MockImageHost(FreePort(17889));
         images.Start();
-        using var openAi = new MockOpenAi(FreePort(17890)) { ResponseDelayMs = 3000 };
+        using var openAi = new MockOpenAi(FreePort(17890)) { ResponseDelayMs = 300 };
         openAi.Start();
         openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");
         openAi.EnqueueReply($$"""{"suitability": 99, "reply": "{{inferredReply}}"}""");
@@ -28,7 +28,7 @@ public static partial class Program
         using var bot = StartBot(InvariantEnv(NewDataDir("s66"), openAi.BaseUrl, botWsPort,
             ("QQCHAT_WHITELIST", $"{groupId},{recallGroupId}"),
             ("QQCHAT_LOG_FILE", "0"),
-            ("QQCHAT_REPLY_PACING", "0"),
+            ("QQCHAT_GROUP_CONTINUATION_WAIT", "1"),
             ("QQCHAT_PROFILE_SUMMARY", "0"),
             ("QQCHAT_STICKERS", "0"),
             ("QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS", "1")));
@@ -47,6 +47,8 @@ public static partial class Program
         await protocol.SendGroupSegmentsAsync(groupId, 20004, "群友B", mentionId,
             new JsonArray { new JsonObject { ["type"] = "at", ["data"] = new JsonObject { ["qq"] = "20006" } } },
             "[CQ:at,qq=20006]", cts.Token);
+        // B becomes ready first; C contributes context while its own quiet window is still open.
+        await Task.Delay(500, cts.Token);
         await protocol.SendGroupMessageAsync(groupId, 20006, "群友C", "另一个合成话题", latestId, ct: cts.Token);
         Check("all three queued generations complete",
             await WaitUntilAsync(() => protocol.ActionsReceived.Any(a => MessageText(a) == chosenReply),
@@ -90,10 +92,9 @@ public static partial class Program
         const long correctionId = 10114;
         const string recallReply = "这是一条合成的撤回边界回复。";
         var beforeRecall = openAi.Requests.Count;
-        openAi.ResponseDelayMs = 2000;
+        openAi.ResponseDelayMs = 300;
         openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");
         openAi.EnqueueReply($$"""{"suitability": 99, "reply": "{{recallReply}}"}""");
-        openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");
         openAi.EnqueueReply("""{"suitability": 0, "reply": ""}""");
         await protocol.SendGroupMessageAsync(recallGroupId, 20002, "群友A", "合成的静默触发", silentId, ct: cts.Token);
         Check("recall case starts a silent generation before the backlog",
@@ -101,6 +102,7 @@ public static partial class Program
             $"requestCount={openAi.Requests.Count}");
         openAi.ResponseDelayMs = 3000;
         await protocol.SendGroupMessageAsync(recallGroupId, 20004, "群友B", "合成的旧触发", staleId, ct: cts.Token);
+        await Task.Delay(500, cts.Token);
         await protocol.SendGroupMessageAsync(recallGroupId, 20006, "群友C", "合成的待撤回消息", recalledId, ct: cts.Token);
         Check("stale generation begins with a newer peer in its snapshot",
             await WaitUntilAsync(() => openAi.Requests.Count >= beforeRecall + 2, TimeSpan.FromSeconds(10)),
@@ -114,7 +116,7 @@ public static partial class Program
         await protocol.SendGroupMessageAsync(recallGroupId, 20006, "群友C", "合成的更正消息", correctionId, ct: cts.Token);
         await protocol.SendGroupRecallAsync(recallGroupId, 20006, recalledId, ct: cts.Token);
         Check("recall boundary generations complete",
-            await WaitUntilAsync(() => openAi.Requests.Count >= beforeRecall + 4 &&
+            await WaitUntilAsync(() => openAi.Requests.Count >= beforeRecall + 3 &&
                 protocol.ActionsReceived.Any(a => MessageText(a) == recallReply), TimeSpan.FromSeconds(15)),
             $"requestCount={openAi.Requests.Count}");
         var afterRecallRequest = openAi.Requests.ElementAtOrDefault(beforeRecall + 2);
@@ -125,6 +127,9 @@ public static partial class Program
             afterRecallTurns.Any(text => text.Contains("[已撤回]")) &&
             afterRecallTurns.Any(text => text.Contains($"(#{correctionId})")),
             $"recalledId={recalledId}, correctionId={correctionId}");
+        Check("same-speaker correction uses one queued opportunity rather than a legacy catch-up turn",
+            openAi.Requests.Count == beforeRecall + 3,
+            $"generationCount={openAi.Requests.Count - beforeRecall}");
         var recallSend = protocol.ActionsReceived.LastOrDefault(a => MessageText(a) == recallReply);
         Check("recall during generation cannot promote a stale trigger into a quote",
             recallSend is not null && QuotedMessageId(recallSend) is null,

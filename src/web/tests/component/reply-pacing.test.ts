@@ -4,39 +4,37 @@ import ConfigurationPage from '../../src/features/configuration/ConfigurationPag
 import type { ZbaClient, ZbaConfigurationReadResult, ZbaConfigurationSaveRequest } from '../../src/api/zba'
 import fixture from '../fixtures/configuration-read-editable-result.json'
 import { buildPatch } from '../../src/features/configuration/draft'
-import { replyPacingNumberError } from '../../src/features/configuration/reply-pacing'
-import { basicFields, fieldOwner } from '../../src/features/capabilities/configuration-ownership'
+import { replyPacingNumberError, retiredReplyFields } from '../../src/features/configuration/reply-pacing'
+import { basicFields, fieldOwner, ownsConfiguration } from '../../src/features/capabilities/configuration-ownership'
 
-const defaults = { replyPacingEnabled: false, groupInterjectionProbability: 20,
+const defaults = { groupInterjectionProbability: 20,
   groupInterjectionCooldownSeconds: 30, groupContinuationWaitSeconds: 3, privateContinuationWaitSeconds: 1.5 }
 function snapshot() {
   const result = structuredClone(fixture) as unknown as ZbaConfigurationReadResult
-  result.view!.behavior.aiDesire = { ...result.view!.behavior.botPersona!, visibility: 1,
-    value: 50, display: '50', rule: { ...result.view!.behavior.botPersona!.rule, id: 26, editable: true, canClear: true } }
-  let id = 148
+  let id = 149
   for (const [key, value] of Object.entries(defaults)) {
-    result.view!.behavior[key] = { ...result.view!.behavior.aiDesire!, visibility: 1,
-      value, display: String(value), rule: { ...result.view!.behavior.aiDesire!.rule, id: id++, editable: true } }
+    result.view!.behavior[key] = { ...result.view!.behavior.botPersona!, visibility: 1,
+      value, display: String(value), rule: { ...result.view!.behavior.botPersona!.rule, id: id++, editable: true } }
   }
   return result
 }
 const mounted: Array<{ unmount(): void }> = []
 afterEach(() => mounted.splice(0).forEach(wrapper => wrapper.unmount()))
 let identity = 0
-function page(data = snapshot(), save = vi.fn()) {
+function page(data = snapshot(), save = vi.fn(), scope = 'basic') {
   const client = { baseUrl: '/synthetic-pacing-' + ++identity, identityLabel: 'synthetic-pacing-' + identity,
     readConfiguration: async () => structuredClone(data), saveConfiguration: save } as unknown as ZbaClient
-  const wrapper = mount(ConfigurationPage, { props: { client, mode: 'admin', writesEnabled: true, scope: 'conversation' } })
+  const wrapper = mount(ConfigurationPage, { props: { client, mode: 'admin', writesEnabled: true, scope } })
   mounted.push(wrapper)
   return wrapper
 }
 
 describe('reply pacing configuration', () => {
-  it('keeps all five controls out of the seven basic fields', () => {
-    expect(basicFields.size).toBe(7)
+  it('owns exactly four pacing controls in basic configuration', () => {
+    expect(basicFields.size).toBe(9)
     for (const key of Object.keys(defaults)) {
-      expect(basicFields.has(key)).toBe(false)
-      expect(fieldOwner('behavior', key)).toBe('conversation')
+      expect(basicFields.has(key)).toBe(true)
+      expect(fieldOwner('behavior', key)).toBe('basic')
     }
   })
   it('accepts fractional private wait and rejects nonfinite, fractional integer fields and boundaries', () => {
@@ -51,29 +49,36 @@ describe('reply pacing configuration', () => {
       .toEqual({ patch: { behavior: { privateContinuationWaitSeconds: { kind: 1, value: 1.5 } } }, errors: [] })
     expect(buildPatch({ 'behavior.groupInterjectionProbability': { kind: 'set', raw: '101' } }, view).errors).toHaveLength(1)
   })
-  it('shows truthful defaults, fractional step and disables old desire without clearing its draft', async () => {
+  it('shows all pacing parameters without an inactive mode switch', async () => {
     const wrapper = page()
     await flushPromises()
-    const desire = wrapper.get<HTMLInputElement>('[data-testid="config-field-aiDesire"] input')
-    await desire.setValue('42')
-    const desireButtons = wrapper.findAll<HTMLButtonElement>('[data-testid="config-field-aiDesire"] .config-value button')
-    const resetDesire = desireButtons.find(button => button.text() === '还原')!
-    const clearDesire = desireButtons.find(button => button.text() === '清除')!
-    expect(clearDesire.element.disabled).toBe(false)
-    const toggle = wrapper.get('[data-testid="config-field-replyPacingEnabled"] select.config-input')
-    await toggle.setValue('true')
-    expect(desire.element.disabled).toBe(true)
-    expect(clearDesire.element.disabled).toBe(true)
-    expect(resetDesire.element.disabled).toBe(true)
-    expect(desire.element.value).toBe('42')
+    for (const [key, value] of Object.entries(defaults)) {
+      const input = wrapper.get<HTMLInputElement>(`[data-testid="config-field-${key}"] input`)
+      expect(input.element.value).toBe(String(value))
+      expect(input.element.disabled).toBe(false)
+    }
+    expect(wrapper.find('[data-testid="config-field-replyPacingEnabled"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="config-field-privateContinuationWaitSeconds"] input').attributes('step')).toBe('any')
-    expect(wrapper.get('[data-testid="config-field-privateContinuationWaitSeconds"]').text()).toContain('1.5')
-    expect(wrapper.text()).toContain('最后一段')
+    expect(wrapper.get('[data-testid="config-field-privateContinuationWaitSeconds"]').text()).toContain('支持小数')
+    expect(wrapper.get('[data-testid="config-field-groupInterjectionCooldownSeconds"]').text()).toContain('完整发送后计时')
     expect(wrapper.text()).toContain('当前生效')
-    await toggle.setValue('false')
-    expect(desire.element.disabled).toBe(false)
-    expect(clearDesire.element.disabled).toBe(false)
-    expect(desire.element.value).toBe('42')
+  })
+  it('does not expose or submit retired fields even in a stale server snapshot', async () => {
+    const data = snapshot()
+    for (const key of retiredReplyFields) data.view!.behavior[key] = { ...data.view!.behavior.groupInterjectionProbability! }
+    for (const scope of ['basic', 'conversation']) {
+      const wrapper = page(data, vi.fn(), scope)
+      await flushPromises()
+      for (const key of retiredReplyFields) {
+        expect(wrapper.find(`[data-testid="config-field-${key}"]`).exists()).toBe(false)
+        expect(ownsConfiguration(scope, 'behavior', key)).toBe(false)
+      }
+    }
+    for (const key of retiredReplyFields) {
+      const built = buildPatch({ [`behavior.${key}`]: { kind: 'set', raw: '0' } }, data.view!)
+      expect(built.errors).toHaveLength(1)
+      expect(built.patch).toEqual({})
+    }
   })
   it('preserves a fractional draft when server validation fails and maps the exact field', async () => {
     const save = vi.fn(async (_: ZbaConfigurationSaveRequest) => ({ code: 2, replayed: false, receipt: null,

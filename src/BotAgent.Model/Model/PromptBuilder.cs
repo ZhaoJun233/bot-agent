@@ -25,7 +25,6 @@ public static class PromptBuilder
         string SystemPrompt,
         string? BotIdentity,
         string? Persona,
-        int AiDesire,
         IReadOnlyList<ChatMessage> Window,
         IReadOnlyCollection<long> QuotableIds,
         string? ProfilesText,
@@ -56,8 +55,7 @@ public static class PromptBuilder
         bool FilterActionNarration = false,
         string? EpisodesText = null,
         string? JargonText = null,
-        bool IsPrivateConversation = false,
-        bool ReplyPacingEnabled = false);
+        bool IsPrivateConversation = false);
 
     /// <summary>把这一轮的系统提示词拼出来（纯字符串拼接，不发任何请求）。</summary>
     public readonly record struct PromptParts(string Stable, string Dynamic)
@@ -113,7 +111,7 @@ public static class PromptBuilder
 
         var suitabilityText = request.IsPrivateConversation && !request.Proactive
             ? BuildPrivateConversationInstruction()
-            : BuildSuitabilityInstruction(request.AiDesire, request.SuitabilityThreshold, dynamic, request.ReplyPacingEnabled);
+            : BuildSuitabilityInstruction(request.SuitabilityThreshold);
         if (request.FilterActionNarration)
         {
             suitabilityText += "\n【语言形式禁令】严禁在 reply 中输出带括号的自然语言内容（包括动作描写、心理活动、内部参与判断和普通补充说明），发送前会连同括号一并删除。只输出真正说出口的口语；不要输出 *伸懒腰* 等舞台旁白。代码、数学公式、函数参数和链接中的括号必须完整保留。";
@@ -493,17 +491,9 @@ public static class PromptBuilder
         "suitability 保留为 0-100 的结构字段，不用它判断群聊插话；intent 只能是 rational/emotional/balanced，intent/vibe 不要在 reply 里复述。" +
         "若确实应保持沉默，仍可显式 action=\"silent\"、reply 留空且不附带其他动作；不得用问候兜底掩盖无效或缺失的结构化输出。";
 
-    /// <summary>按对话欲望生成“发言适合度”评分指令。</summary>
-    private static string BuildSuitabilityInstruction(int aiDesire, int threshold, StringBuilder dynamic, bool replyPacingEnabled)
+    /// <summary>调度器已判定参与机会；模型只评估当前内容与气氛。</summary>
+    private static string BuildSuitabilityInstruction(int threshold)
     {
-        var desire = aiDesire switch
-        {
-            >= 80 => "你非常健谈主动：主动参与群聊话题、接话、活跃气氛，除非话题与你完全无关。",
-            >= 50 => "你比较健谈：话题与你相关、被提到或你感兴趣时积极发言，不强行插话。",
-            >= 20 => "你较为克制：主要在被呼叫或与你直接相关时发言，群友闲聊时保持沉默。",
-            _ => "你极少主动发言：仅在被明确 @ 或对方直接对你说话时回复。"
-        };
-
         // 这份提示词是“像个人”的核心：先说清怎么读情绪（读得准，话才接得住），
         // 再说清怎么分清理性与感性（决定说话的严谨度与灵动度），最后才是 JSON 格式。
         var rules = "\n\n[先读懂气氛再说话]\n" +
@@ -529,10 +519,6 @@ public static class PromptBuilder
                " 如果你决定发言（suitability 不低于 " + threshold + "），reply 必须填写实际内容；" +
                "如果你决定沉默，reply 填空字符串（\"\"）。" +
                "注意：只要 reply 非空，程序就会把你的话发出去——所以不确定时宁可不发，reply 留空。";
-        // #98：发言意愿偏置随气氛阻尼逐轮变化，属于动态尾巴（以前夹在规则中间，会把前缀劈成两半）。
-        // The scheduler owns participation in paced mode; only content suitability remains.
-        if (!replyPacingEnabled)
-            dynamic.Append("\n" + desire);
         return rules;
     }
 

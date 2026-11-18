@@ -19,15 +19,13 @@ public sealed partial class ReplyPipeline
     private sealed record PacedReplyOwner(BotConversation Conversation, PlatformSourceLease? Source,
         object Epoch, AppSettings Snapshot);
 
-    private sealed class PacedReplyWork(ReplyPacingTurn turn, PacedReplyOwner owner, PendingReplyIntent intent)
+    private sealed class PacedReplyWork(ReplyPacingTurn turn, PacedReplyOwner owner)
     {
         internal readonly ReplyPacingTurn Turn = turn;
-        internal readonly PendingReplyIntent Intent = intent;
         internal readonly PacedReplyOwner Owner = owner;
         internal readonly ReplyPacingPromptState PromptState = new();
         internal readonly CancellationTokenSource Cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             owner.Source?.Lifetime ?? default);
-        internal bool LegacyHandoff;
         internal PacedReplyAttempt? Attempt;
         internal void Cancel()
         {
@@ -71,16 +69,49 @@ public sealed partial class ReplyPipeline
         var message = triggerMessageId is long id
             ? messages.LastOrDefault(m => m.Role == MessageRole.Peer && m.QqMessageId == id)
             : messages.LastOrDefault(m => m.Role == MessageRole.Peer);
-        if (message?.SenderId is not long speakerId) return; // Never manufacture a human sequence for timer/recall work.
+        if (message is not null) ObservePacedInput(owner, message, proactive, directInWindow);
+    }
+
+    private void ObservePacedInput(PacedReplyOwner owner, ChatMessage message, bool proactive, bool directInWindow)
+    {
+        if (!IsPacedOwnerCurrent(owner) || message.SenderId is not long speakerId) return;
+        var conversation = owner.Conversation;
         PacedDispatch dispatch;
         lock (_pacingSync)
         {
             if (!_pacingEnabled || !IsPacedOwnerCurrent(owner)) return;
             var observation = proactive
                 ? _pacingCoordinator.ObserveProactive(conversation.SourceKey, message.Seq, PacingOptions(owner.Snapshot), owner)
-                : _pacingCoordinator.Observe(conversation.SourceKey, speakerId, message.Seq, message.QqMessageId,
+                : _pacingCoordinator.Observe(conversation.SourceKey, speakerId, message.Seq, message.QqMessageId is > 0 ? message.QqMessageId : null,
                     directInWindow || message.DirectToBot, conversation.Kind == ConversationKind.GroupChat,
                     PacingOptions(owner.Snapshot), owner);
+            dispatch = TrackPacedObservation(observation, owner);
+        }
+        DispatchPacedWork(dispatch);
+    }
+
+    private Action CaptureDeferredReply(BotConversation conversation, ChatMessage message)
+    {
+        var owner = CapturePacedOwner(conversation);
+        return () =>
+        {
+            using var sourceScope = PlatformSourceExecution.Enter(owner.Source);
+            RefreshPacingPolicy();
+            ObservePacedInput(owner, message, proactive: false, directInWindow: message.DirectToBot);
+        };
+    }
+
+    private void RequestNoticeReply(BotConversation conversation)
+    {
+        var owner = CapturePacedOwner(conversation);
+        RefreshPacingPolicy();
+        if (!IsPacedOwnerCurrent(owner)) return;
+        PacedDispatch dispatch;
+        lock (_pacingSync)
+        {
+            if (!_pacingEnabled || !IsPacedOwnerCurrent(owner)) return;
+            var observation = _pacingCoordinator.ObserveNotice(conversation.SourceKey, conversation.NextSeq,
+                conversation.Kind == ConversationKind.GroupChat, PacingOptions(owner.Snapshot), owner);
             dispatch = TrackPacedObservation(observation, owner);
         }
         DispatchPacedWork(dispatch);
@@ -106,19 +137,13 @@ public sealed partial class ReplyPipeline
         RefreshPacingPolicy();
         var owner = CapturePacedOwner(conversation, snapshot);
         if (!IsPacedOwnerCurrent(owner)) return;
-        if (!_settings.ReplyPacingEnabled)
-        {
-            using var sourceScope = PlatformSourceExecution.Enter(owner.Source);
-            EnqueueReplyInEpoch(conversation, null, false, true, owner.Epoch, PendingReplyIntent.AcceptedResult);
-            return;
-        }
         PacedDispatch dispatch;
         lock (_pacingSync)
         {
             if (!_pacingEnabled || !IsPacedOwnerCurrent(owner)) return;
             var observation = _pacingCoordinator.ObserveAcceptedResult(conversation.SourceKey, conversation.NextSeq,
                 conversation.Kind == ConversationKind.GroupChat, PacingOptions(snapshot), owner);
-            dispatch = TrackPacedObservation(observation, owner, PendingReplyIntent.AcceptedResult);
+            dispatch = TrackPacedObservation(observation, owner);
         }
         DispatchPacedWork(dispatch);
     }
@@ -126,8 +151,7 @@ public sealed partial class ReplyPipeline
     private sealed record PacedDispatch(PacedReplyWork? Created, PacedReplyWork[] Cancelled, PacedReplyOwner? Busy);
 
     // Called in the same ingress critical section as Observe: first-input ownership cannot be overtaken.
-    private PacedDispatch TrackPacedObservation(ReplyPacingObservation observation, PacedReplyOwner owner,
-        PendingReplyIntent intent = PendingReplyIntent.Explicit)
+    private PacedDispatch TrackPacedObservation(ReplyPacingObservation observation, PacedReplyOwner owner)
     {
         PacedReplyWork? created = null;
         PacedReplyWork[] cancelled;
@@ -139,7 +163,7 @@ public sealed partial class ReplyPipeline
                 // The first owner is immutable even when later inputs update the coordinator ticket.
                 if (_pacingEnabled && IsPacedOwnerCurrent(owner))
                 {
-                    created = new(turn, owner, intent);
+                    created = new(turn, owner);
                     _pacedWorks.Add(turn.Id, created);
                 }
                 else _pacingCoordinator.Reject(turn);
@@ -181,7 +205,7 @@ public sealed partial class ReplyPipeline
     {
         if (_hooks.IsDisposed() || !_settings.AiModeEnabled)
         {
-            DropPacedPending(); // Stop/revocation is not a legacy handoff.
+            DropPacedPending();
             lock (_pacingSync)
             {
                 _pacingCoordinator.Disable();
@@ -189,27 +213,12 @@ public sealed partial class ReplyPipeline
             }
             return;
         }
-        PacedReplyWork[] cancelled = [];
-        LegacyPacingTransition? legacyTransition = null;
         lock (_pacingSync)
         {
-            if (_pacingStopped || _pacingEnabled == _settings.ReplyPacingEnabled) return;
-            _pacingEnabled = _settings.ReplyPacingEnabled;
-            if (_pacingEnabled)
-            {
-                _pacingCoordinator.Enable();
-                legacyTransition = RetireLegacyForPacing();
-            }
-            else
-            {
-                var handoffs = _pacingCoordinator.Disable().Select(s => s.Turn.Id).ToHashSet();
-                foreach (var work in _pacedWorks.Values)
-                    if (handoffs.Contains(work.Turn.Id)) work.LegacyHandoff = true;
-                cancelled = _pacedWorks.Values.Where(w => w.Turn.IsTerminal).ToArray();
-            }
+            if (_pacingStopped || _pacingEnabled) return;
+            _pacingEnabled = true;
+            _pacingCoordinator.Enable();
         }
-        if (legacyTransition is not null) DispatchLegacyTransition(legacyTransition);
-        foreach (var work in cancelled) work.Cancel();
     }
 
     private void DropPacedPending(Func<BotConversation, bool>? predicate = null)
@@ -224,7 +233,6 @@ public sealed partial class ReplyPipeline
         var cancelled = _pacedWorks.Values.Where(w => predicate is null || predicate(w.Owner.Conversation)).ToArray();
         foreach (var work in cancelled)
         {
-            work.LegacyHandoff = false;
             RetireReplyEpoch(work.Owner.Conversation);
             _pacingCoordinator.Reject(work.Turn, ReplyPacingReason.Stopped);
         }
@@ -240,7 +248,6 @@ public sealed partial class ReplyPipeline
             _pacingEnabled = false;
             _pacingCoordinator.Stop();
             cancelled = _pacedWorks.Values.ToArray();
-            foreach (var work in cancelled) work.LegacyHandoff = false;
         }
         foreach (var work in cancelled) work.Cancel();
     }

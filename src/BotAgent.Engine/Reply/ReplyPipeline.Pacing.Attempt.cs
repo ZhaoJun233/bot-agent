@@ -16,6 +16,7 @@ public sealed partial class ReplyPipeline
         public AppSettings Snapshot => work.Owner.Snapshot;
         public bool IsExplicit => generation.IsExplicit;
         public bool IsSoftDraft => generation.DiscardableSoftDraft;
+        public long SpeakerId => generation.SpeakerId;
         public long Sequence => generation.Sequence;
         public ReplyPacingPromptState PromptState => work.PromptState;
         public Task ValidateDraftAsync() => AwaitBoundaryAsync(CommitKind.Validate);

@@ -7,12 +7,12 @@ public static partial class Program
     private static async Task RunOfficialDeliveryScenarioAsync()
     {
         Section("S69 fixed official reply credentials, segmented receipts and durable replay refusal");
-        foreach (var paced in new[] { false, true }) await RunOfficialDeliveryModeAsync(paced);
+        foreach (var formerMode in new[] { false, true }) await RunOfficialDeliveryCompatibilityAsync(formerMode);
     }
 
-    private static async Task RunOfficialDeliveryModeAsync(bool paced)
+    private static async Task RunOfficialDeliveryCompatibilityAsync(bool formerMode)
     {
-        var label = "S69 " + (paced ? "paced" : "legacy");
+        var label = "S69 retired-mode-" + (formerMode ? "enabled" : "disabled");
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         using var model = new MockOpenAi(FreePort(17872)) { ResponseDelayMs = 1800 };
         model.EnqueueReply("""{"suitability":100,"reply":"S69 first alpha segment。S69 first beta segment。"}""");
@@ -26,9 +26,9 @@ public static partial class Program
             ["QQCHAT_DATA_DIR"] = directory, ["QQCHAT_API_KEY"] = "sk-mock", ["QQCHAT_BASE_URL"] = model.BaseUrl,
             ["QQCHAT_MODEL"] = "mock-model", ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket",
             ["QQCHAT_ONEBOT_URL"] = $"http://127.0.0.1:{botPort}", ["QQCHAT_UIN"] = "10001", ["QQCHAT_WHITELIST"] = "66694",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0", ["QQCHAT_PRIVATE_COOLDOWN"] = "0", ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0", ["QQCHAT_WEB_SEARCH"] = "0", ["QQCHAT_ENABLE_VOICE"] = "0",
-            ["QQCHAT_SPLIT_REPLIES"] = "1", ["QQCHAT_SEGMENT_DELAY_MS"] = "0", ["QQCHAT_REPLY_PACING"] = paced ? "1" : "0",
+            // Either historical flag must leave the single scheduling policy in force.
+            ["QQCHAT_SPLIT_REPLIES"] = "1", ["QQCHAT_SEGMENT_DELAY_MS"] = "0", ["QQCHAT_REPLY_PACING"] = formerMode ? "1" : "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(), ["QQCHAT_HEALTH_BIND"] = "127.0.0.1", ["QQCHAT_OFFICIAL"] = "1",
             ["QQCHAT_OFFICIAL_APP_ID"] = "100000004", ["QQCHAT_OFFICIAL_APP_SECRET"] = "test-secret-not-real",
             ["QQCHAT_OFFICIAL_API_BASE"] = official.HttpBase, ["QQCHAT_OFFICIAL_TOKEN_URL"] = official.TokenUrl, ["QQCHAT_OFFICIAL_SANDBOX"] = "1",
@@ -50,23 +50,21 @@ public static partial class Program
         Check(label + " first generation entered model", await WaitUntilAsync(() => model.Requests.Count >= 1, TimeSpan.FromSeconds(15)));
         Check(label + " newer trigger arrives before the first send", official.Messages.Count == 0);
         await Push("s69-second", "s69-second");
-        var expectedCount = paced ? 2 : 4;
+        const int expectedCount = 2;
         Check(label + " selected generations deliver all segments", await WaitUntilAsync(() => official.Messages.Count >= expectedCount,
             TimeSpan.FromSeconds(25)));
         var bodies = official.Messages.Select(message => message["body"]!).ToArray();
         var first = bodies.Where(body => body["content"]?.GetValue<string>().Contains("S69 first") == true).ToArray();
         var second = bodies.Where(body => body["content"]?.GetValue<string>().Contains("S69 second") == true).ToArray();
         Check(label + " no unexpected send or reused generation", bodies.Length == expectedCount && model.Requests.Count == 2);
-        Check(label + " first generation follows scheduler decision", paced ? first.Length == 0
-            : first.Length == 2 && first.All(body => body["msg_id"]?.GetValue<string>() == "s69-first")
-                && first.Select(body => body["msg_seq"]!.GetValue<int>()).SequenceEqual(new[] { 1, 2 }));
+        Check(label + " superseded first generation never reaches transport", first.Length == 0);
         Check(label + " second generation uses selected trigger for every segment", second.Length == 2
             && second.All(body => body["msg_id"]?.GetValue<string>() == "s69-second")
             && second.Select(body => body["msg_seq"]!.GetValue<int>()).SequenceEqual(new[] { 1, 2 }));
         var ledgerPath = Directory.EnumerateFiles(Path.Combine(directory, "data", "official-delivery"), "*.json").Single();
         // Observe completion before opening the snapshot: a Windows reader can block its atomic replacement.
         Check(label + " host finishes selected deliveries", await WaitUntilAsync(() =>
-            bot.OutputLines.Count(line => line.Contains("[delivery] outcome=", StringComparison.Ordinal)) >= (paced ? 1 : 2),
+            bot.OutputLines.Count(line => line.Contains("[delivery] outcome=", StringComparison.Ordinal)) >= 1,
             TimeSpan.FromSeconds(5)));
         var operations = JsonNode.Parse(File.ReadAllText(ledgerPath))!["Operations"]!.AsObject();
         Check(label + " each HTTP send has a terminal durable receipt",

@@ -55,8 +55,7 @@ public static partial class Program
         }
         SilenceDeliveryTests();
         var request = new PromptBuilder.PromptRequest(
-            SystemPrompt: "合成系统提示", BotIdentity: null, Persona: null, AiDesire: 0,
-            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            SystemPrompt: "合成系统提示", BotIdentity: null, Persona: null, Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
             Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
             LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
             SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,

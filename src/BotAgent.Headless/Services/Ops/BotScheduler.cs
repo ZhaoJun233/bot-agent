@@ -22,6 +22,7 @@ namespace BotAgent.Services.Ops;
 /// </summary>
 public sealed class BotScheduler
 {
+    private const int ReplyMaintenanceSeconds = 60;
     private readonly SettingsBox _box;
     private readonly IQqChatSource _source;
     private readonly IProfileRepository _profiles;
@@ -117,7 +118,7 @@ public sealed class BotScheduler
     /// <summary>设置变了 → 只在**相关项真的变了**时才重建定时器（否则每次保存都会重置计时）。</summary>
     public void RebuildIfNeeded()
     {
-        var idleSeconds = Math.Max(0, _settings.IdleFallbackSeconds);
+        var idleSeconds = ReplyMaintenanceSeconds;
         var summaryEnabled = ProfileSummarizationAllowed();
         var summarySeconds = Math.Max(0, _settings.ProfileSummaryIntervalSeconds);
         var stickersEnabled = _settings.EnableStickers && _settings.StickerLibraryMax > 0
@@ -136,7 +137,7 @@ public sealed class BotScheduler
         _timerSummarySeconds = summarySeconds;
         _timerStickersEnabled = stickersEnabled;
 
-        // ---- 静默兜底 ----
+        // ---- 回复巡检；节奏等待由协调器自己的计时器负责 ----
         _idleTimer?.Dispose();
         _idleTimer = null;
         if (idleSeconds > 0 && !_hooks.IsDisposed())
@@ -164,7 +165,7 @@ public sealed class BotScheduler
         // ---- 表情包：补说明 + 自巡检（定时器归 StickerService 自己管）----
         _stickers.EnsureTimer(stickersEnabled);
 
-        _hooks.Log($"定时器已按新配置重建（静默兜底 {idleSeconds}s，画像巡检 {(summaryEnabled && summarySeconds > 0 ? summarySeconds + "s" : "关")}，" +
+        _hooks.Log($"定时器已按新配置重建（回复巡检 {idleSeconds}s，画像巡检 {(summaryEnabled && summarySeconds > 0 ? summarySeconds + "s" : "关")}，" +
                    $"表情包巡检 {(stickersEnabled && _settings.StickerCurateIntervalSeconds > 0 ? _settings.StickerCurateIntervalSeconds + "s" : "关")}）");
     }
 

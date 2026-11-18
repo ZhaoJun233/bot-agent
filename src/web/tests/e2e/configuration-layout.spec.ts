@@ -77,7 +77,7 @@ for (const width of [1850, 1024, 390]) {
     await page.getByTestId('nav-configuration').click()
     await page.getByTestId('config-enable-admin').click()
     await compactField(page.getByTestId('config-field-aiModeEnabled'), width > 600)
-    await compactField(page.getByTestId('config-field-privateCooldownSeconds'), width > 600)
+    await compactField(page.getByTestId('config-field-groupInterjectionCooldownSeconds'), width > 600)
     const persona = page.getByTestId('config-field-botPersona').locator('input')
     await expect(persona).toBeVisible()
     expect((await persona.boundingBox())!.width).toBeLessThanOrEqual(640)
@@ -87,7 +87,7 @@ for (const width of [1850, 1024, 390]) {
     for (const [trigger, field] of [
       ['ability-settings-models', 'fastReply'],
       ['ability-settings-agent', 'enableServerAgent'],
-      ['ability-settings-conversation', 'enableParticipationGating'],
+      ['ability-settings-conversation', 'enableProactive'],
       ['ability-settings-platform', 'officialEnabled'],
       ['ability-settings-reporting', 'healthReportEnabled'],
       ['cap-settings-plugin:preset.feature.voice', 'enableVoice'],
@@ -119,7 +119,7 @@ for (const width of [1850, 1024, 390]) {
       if (id === 'provider-editor') {
         const priority = dialog.getByTestId('provider-priority')
         await expect(priority).toBeVisible()
-        expect((await priority.boundingBox())!.width).toBeLessThanOrEqual(180)
+        expect(await priority.evaluate(element => (element as HTMLElement).offsetWidth)).toBeLessThanOrEqual(180)
       }
       await dialog.locator('.icon-close').click()
       await expect(dialog).toHaveCount(0)

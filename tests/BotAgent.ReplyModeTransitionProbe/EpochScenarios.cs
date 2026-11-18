@@ -22,10 +22,6 @@ internal static class EpochScenarios
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
         var captureEpoch = typeof(ReplyPipeline).GetMethod("CaptureReplyEpoch", flags)!;
         var epoch = captureEpoch.Invoke(f.Pipeline, [conversation])!;
-        var flushing = (Dictionary<object, BotConversation>)typeof(ReplyPipeline).GetField("_flushingDeferred", flags)!.GetValue(f.Pipeline)!;
-        var flushOwner = new object();
-        // Publish the same ownership marker as FlushDeferred, without scheduling nondeterministic threads.
-        flushing.Add(flushOwner, conversation);
         var hookField = typeof(ReplyPipeline).GetField("_hooks", flags)!;
         var hooks = (ReplyHooks)hookField.GetValue(f.Pipeline)!;
         var stopped = false;
@@ -37,12 +33,11 @@ internal static class EpochScenarios
         try
         {
             typeof(ReplyPipeline).GetMethod("RequestReplyInEpoch", flags)!.Invoke(f.Pipeline,
-                [conversation, (long?)1, false, true, true, epoch]);
+                [conversation, (long?)1, false, true, epoch]);
         }
         finally
         {
             hookField.SetValue(f.Pipeline, hooks);
-            flushing.Remove(flushOwner);
         }
         var epochRetired = !ReferenceEquals(epoch, captureEpoch.Invoke(f.Pipeline, [conversation]));
         var readmitted = f.PacedCount;

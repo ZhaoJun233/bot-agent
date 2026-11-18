@@ -31,8 +31,6 @@ public sealed class AgentView
 
 public sealed class BehaviorView
 {
-    public required ReadField<int> AiDesire { get; init; }
-    public required ReadField<bool> ReplyPacingEnabled { get; init; }
     public required ReadField<int> GroupInterjectionProbability { get; init; }
     public required ReadField<int> GroupInterjectionCooldownSeconds { get; init; }
     public required ReadField<int> GroupContinuationWaitSeconds { get; init; }
@@ -41,9 +39,7 @@ public sealed class BehaviorView
     public required ReadField<string> ApprovalApprovers { get; init; }
     public required ReadField<string> BotPersona { get; init; }
     public required ReadField<bool> EnableApprovals { get; init; }
-    public required ReadField<bool> EnableAtmosphereDamping { get; init; }
     public required ReadField<bool> EnableLinkPreview { get; init; }
-    public required ReadField<bool> EnableParticipationGating { get; init; }
     public required ReadField<bool> EnablePoke { get; init; }
     public required ReadField<bool> EnableProactive { get; init; }
     public required ReadField<bool> EnableProfileSummary { get; init; }
@@ -51,8 +47,6 @@ public sealed class BehaviorView
     public required ReadField<bool> EnableStickers { get; init; }
     public required ReadField<bool> EnableWebSearch { get; init; }
     public required ReadField<bool> FilterActionNarration { get; init; }
-    public required ReadField<int> GroupCooldownSeconds { get; init; }
-    public required ReadField<int> IdleFallbackSeconds { get; init; }
     public required ReadField<bool> IgnoreBracketMessages { get; init; }
     public required ReadField<int> LinkPreviewMax { get; init; }
     public required ReadField<int> LinkPreviewTimeoutSeconds { get; init; }
@@ -62,14 +56,7 @@ public sealed class BehaviorView
     public required ReadField<int> MaxMessagesPerConversation { get; init; }
     public required ReadField<int> MaxProfileChars { get; init; }
     public required ReadField<int> MoodTtlSeconds { get; init; }
-    public required ReadField<int> ParticipationCooldownSeconds { get; init; }
-    public required ReadField<int> ParticipationMaxActiveLifetimeSeconds { get; init; }
-    public required ReadField<int> ParticipationMaxConsecutiveReplies { get; init; }
-    public required ReadField<int> ParticipationMaxExitingLifetimeSeconds { get; init; }
-    public required ReadField<int> ParticipationProbingMaxReplies { get; init; }
     public required ReadField<int> PokeCooldownSeconds { get; init; }
-    public required ReadField<int> PrivateCooldownSeconds { get; init; }
-    public required ReadField<int> ProactiveCooldownSeconds { get; init; }
     public required ReadField<int> ProactiveQuietSeconds { get; init; }
     public required ReadField<int> ProfileLookupCount { get; init; }
     public required ReadField<int> ProfileSummaryIntervalSeconds { get; init; }

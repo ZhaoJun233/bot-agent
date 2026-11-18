@@ -49,7 +49,6 @@ public static partial class Program
                 ["QQCHAT_UIN"] = "10001",
                 ["QQCHAT_WHITELIST"] = "66741",
                 ["QQCHAT_AI_MODE"] = "1",
-                ["QQCHAT_IDLE_FALLBACK"] = "0",
                 ["QQCHAT_STICKERS"] = "0",
                 ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
             });
@@ -59,12 +58,12 @@ public static partial class Program
 
             // 先改一条行为配置当“恢复后还在不在”的标记：整库恢复最容易丢的就是这类面板写入的值。
             var (saveCode, saveBody) = await PanelPostJsonAsync(
-                $"http://127.0.0.1:{panelPort}/api/settings", "{\"groupCooldownSeconds\":7}");
+                $"http://127.0.0.1:{panelPort}/api/settings", "{\"groupInterjectionCooldownSeconds\":7}");
             Check("① 恢复演练前先在面板里改一条配置（拿它当恢复后的对照值）", saveCode == 200, saveBody);
 
             var (beforeCode, beforeBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
             Check("① 改动立刻可读（面板写入是真的落了库）",
-                beforeCode == 200 && ReadSetting(beforeBody, "groupCooldownSeconds") == "7",
+                beforeCode == 200 && ReadSetting(beforeBody, "groupInterjectionCooldownSeconds") == "7",
                 Clip(beforeBody, 200));
 
             // ── ② 当场热备 4 次：保留策略必须只剩 3 份 ──
@@ -141,7 +140,6 @@ public static partial class Program
                 ["QQCHAT_UIN"] = "10001",
                 ["QQCHAT_WHITELIST"] = "66741",
                 ["QQCHAT_AI_MODE"] = "1",
-                ["QQCHAT_IDLE_FALLBACK"] = "0",
                 ["QQCHAT_STICKERS"] = "0",
                 ["QQCHAT_HEALTH_PORT"] = restoredPanelPort.ToString()
             });
@@ -156,8 +154,8 @@ public static partial class Program
 
             var (restoredCode, restoredBody) = await PanelGetAsync($"http://127.0.0.1:{restoredPanelPort}/api/settings");
             Check("⑩ 恢复后数据真的还在：热备前改的配置读回来还是那个值",
-                restoredCode == 200 && ReadSetting(restoredBody, "groupCooldownSeconds") == "7",
-                $"HTTP {restoredCode} 值={ReadSetting(restoredBody, "groupCooldownSeconds") ?? "无"}");
+                restoredCode == 200 && ReadSetting(restoredBody, "groupInterjectionCooldownSeconds") == "7",
+                $"HTTP {restoredCode} 值={ReadSetting(restoredBody, "groupInterjectionCooldownSeconds") ?? "无"}");
         }
     }
 

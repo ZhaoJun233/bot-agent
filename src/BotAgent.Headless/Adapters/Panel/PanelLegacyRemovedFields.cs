@@ -24,6 +24,8 @@ internal static class PanelLegacyRemovedFields
     /// <summary>cfg-0.3.3 removed the host/device editor; any legacy key rejects the whole batch.</summary>
     internal static void RejectRemovedAgentFields(JsonObject body)
     {
+        if (body.Any(property => ReplyConfigurationFields.IsRetired(property.Key)))
+            throw new ArgumentException("reply_configuration_removed");
         foreach (var key in new[]
                  {
                      "agentDevices", "agentTarget", "agentTimeoutSeconds", "agentTools", "agentWorkDir",

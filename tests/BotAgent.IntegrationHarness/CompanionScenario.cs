@@ -16,8 +16,7 @@ namespace BotAgent.IntegrationHarness;
 ///   • 读到的气氛记下来，下一轮当底色（有 TTL）；
 ///   • 群里安静 + 有由头（情绪低落 或 刚聊得热）→ 允许主动开口，同会话还有冷却。
 ///
-/// ⚠ 测试要点：主动/静默兜底会自己产生模型请求，把脚本文案（FIFO）抢走 ——
-/// 所以情绪那几步必须先把 idleFallback 关成 0，等进入“主动”那一步再用面板打开。
+/// 巡检只观察尚未处理的机会，不能把已经沉默的消息重新激活。
 /// </summary>
 public static partial class Program
 {
@@ -45,15 +44,12 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
-            ["QQCHAT_IDLE_FALLBACK"] = "0",     // 情绪那几步要确定性：先关掉，免得抢脚本文案
             ["QQCHAT_PROACTIVE"] = "0",
             // 背景模型调用（画像总结 / 表情包巡检）也会去抢 mock 的脚本文案（FIFO），本场景不需要它们
             ["QQCHAT_PROFILE_SUMMARY"] = "0",
             ["QQCHAT_STICKERS"] = "0",
-            ["QQCHAT_AI_DESIRE"] = "50"
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
@@ -70,6 +66,7 @@ public static partial class Program
             using var resp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings",
                 new StringContent(json, Encoding.UTF8, "application/json"), cts.Token);
             await resp.Content.ReadAsStringAsync(cts.Token);
+            Check("合成场景配置保存成功", resp.IsSuccessStatusCode, $"status={(int)resp.StatusCode}");
             await Task.Delay(300);
         }
 
@@ -118,8 +115,8 @@ public static partial class Program
             bot.OutputLines.Any(l => l.Contains("适合度不足") && l.Contains("气氛 吵架")),
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("适合度不足")).TakeLast(2)));
 
-        // ---- 4) 主动开口：打开开关（安静 1 秒即算安静），没人叫它时自己说一句 ----
-        await PatchSettingsAsync("""{"enableProactive":true,"idleFallbackSeconds":2,"proactiveQuietSeconds":1,"proactiveCooldownSeconds":60}""");
+        // ---- 4) A previously considered opportunity cannot be replayed by proactive maintenance. ----
+        await PatchSettingsAsync("""{"enableProactive":true,"proactiveQuietSeconds":1,"groupInterjectionCooldownSeconds":60}""");
 
         // 先制造“由头”：一条情绪低落的消息（它的回复是沉默，不影响后面的主动轮）
         openAi.ClearRequests();
@@ -127,38 +124,39 @@ public static partial class Program
         await protocol.SendGroupMessageAsync(groupId, 30033, "小美", "还是有点难受", 9934, ct: cts.Token);
         await Task.Delay(1200);
 
-        // 接下来没人说话 → 等 tick 触发主动；此时脚本文案已空 → mock 回默认回复"默认回复"
+        var requestsAfterSilent = openAi.Requests.Count;
+        Check("新普通消息完成一次评估", requestsAfterSilent == 1, $"requests={requestsAfterSilent}");
+        // Cross the real 60-second maintenance interval without introducing new input.
         var mark4 = protocol.ActionsReceived.Count;
-        await WaitUntilAsync(() => bot.OutputLines.Any(l => l.Contains("[主动]")), TimeSpan.FromSeconds(40));
-        await Task.Delay(2000);
+        await Task.Delay(65000);
         var proactiveSends = protocol.ActionsReceived.Skip(mark4)
             .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
             .Select(MessageText).ToList();
-        Check("★ 没人叫它时，它自己开了一句（主动开口）",
-            proactiveSends.Any(t => t.Contains("默认回复")), string.Join(" | ", proactiveSends));
-        Check("★ 主动那轮的提示词里写明了“这次是你自己想说话”",
-            openAi.Requests.Select((_, i) => openAi.DescribeRequest(i)).Any(r => r.Contains("这次是你自己想说话")),
-            "已带上主动标记");
-        Check("★ 主动受了冷却约束：不会连发（只这一条）",
-            proactiveSends.Count(t => t.Contains("默认回复")) == 1, $"{proactiveSends.Count} 条");
+        Check("后台巡检不会重复评估已经沉默的机会", openAi.Requests.Count == requestsAfterSilent,
+            $"requestDelta={openAi.Requests.Count - requestsAfterSilent}");
+        Check("后台巡检不会重新发送已经沉默的机会", proactiveSends.Count == 0, $"sends={proactiveSends.Count}");
+        Check("普通机会不会被转换成主动请求", openAi.Requests.Select((_, i) => openAi.DescribeRequest(i))
+            .All(r => !r.Contains("[这次是你自己想说话]")), $"requests={openAi.Requests.Count}");
 
-        // ---- 5) 主动时它觉得没话说 → 就不说（不为刷存在感硬说）----
+        // ---- 5) New input may still choose silence. ----
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 20, "vibe": "中性", "vibeNote": "没什么可说的", "reply": ""}""");
         var mark5 = protocol.ActionsReceived.Count;
-        await Task.Delay(9000);
+        await protocol.SendGroupMessageAsync(groupId, 30033, "群友A", "合成的新话题", 9935, ct: cts.Token);
+        await WaitUntilAsync(() => openAi.Requests.Count == 1, TimeSpan.FromSeconds(20));
+        await Task.Delay(2000);
         var quietSends = protocol.ActionsReceived.Skip(mark5)
             .Where(a => a["action"]?.GetValue<string>() == "send_group_msg")
             .Select(MessageText).ToList();
-        Check("★ 主动时觉得没话说就保持安静（不为刷存在感硬开口）",
+        Check("新机会选择沉默时仍然不发送",
             quietSends.Count == 0, string.Join(" | ", quietSends));
 
-        // ---- 6) 面板能开关主动、也能读到这两项 −---
+        // ---- 6) The panel retains proactive enablement and quiet detection, with unified cooldown. ----
         await PatchSettingsAsync("""{"enableProactive":false}""");
         var (_, settings) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 面板能关掉主动开口，且能读到安静/冷却两个参数",
             settings.Contains("\"enableProactive\":false") && settings.Contains("\"proactiveQuietSeconds\":1") &&
-            settings.Contains("\"proactiveCooldownSeconds\":60"),
+            settings.Contains("\"groupInterjectionCooldownSeconds\":60") && !settings.Contains("\"proactiveCooldownSeconds\""),
             Snippet(settings, "enableProactive"));
 
         bot.Dispose();

@@ -60,9 +60,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_AGENT"] = "1",
@@ -208,8 +206,8 @@ public static partial class Program
         var secretFile = Path.Combine(dataDir, "official-secret-fixture.txt");
         File.WriteAllText(secretFile, fileSecret);
         File.WriteAllText(Path.Combine(dataPath, "settings.json"), """
-            {"AiDesire":17,"OfficialEnabled":true,"OfficialAppId":"10001",
-             "OfficialAppSecret":"JSN-IGNORED-r2-secret-48","IdleFallbackSeconds":0,
+            {"GroupInterjectionProbability":17,"OfficialEnabled":true,"OfficialAppId":"10001",
+             "OfficialAppSecret":"JSN-IGNORED-r2-secret-48","GroupContinuationWaitSeconds":0,
              "EnableStickers":false,"EnablePoke":false,"EnableVoice":false,"EnableMusic":false}
             """);
         // This minimal legacy row is created only in the new synthetic root, never a real database.
@@ -324,15 +322,15 @@ public static partial class Program
                         "status only; 面板前端改由 Caddy 的 /web/ 提供");
                     var attempts = new[]
                     {
-                        "{\"officialAppSecret\":\"" + submittedSecret + "\",\"aiDesire\":37}",
-                        "{\"officialAppSecret\":\"\",\"aiDesire\":37}",
-                        "{\"officialAppSecret\":null,\"aiDesire\":37}",
-                        "{\"officialAppSecret\":{},\"aiDesire\":37}",
-                        "{\"clearOfficialAppSecret\":true,\"aiDesire\":37}",
-                        "{\"clearOfficialAppSecret\":false,\"aiDesire\":37}",
-                        "{\"clearOfficialAppSecret\":null,\"aiDesire\":37}",
-                        "{\"OfficialAppSecret\":\"" + submittedSecret + "\",\"aiDesire\":37}",
-                        "{\"CLEAROFFICIALAPPSECRET\":true,\"aiDesire\":37}"
+                        "{\"officialAppSecret\":\"" + submittedSecret + "\",\"groupInterjectionProbability\":37}",
+                        "{\"officialAppSecret\":\"\",\"groupInterjectionProbability\":37}",
+                        "{\"officialAppSecret\":null,\"groupInterjectionProbability\":37}",
+                        "{\"officialAppSecret\":{},\"groupInterjectionProbability\":37}",
+                        "{\"clearOfficialAppSecret\":true,\"groupInterjectionProbability\":37}",
+                        "{\"clearOfficialAppSecret\":false,\"groupInterjectionProbability\":37}",
+                        "{\"clearOfficialAppSecret\":null,\"groupInterjectionProbability\":37}",
+                        "{\"OfficialAppSecret\":\"" + submittedSecret + "\",\"groupInterjectionProbability\":37}",
+                        "{\"CLEAROFFICIALAPPSECRET\":true,\"groupInterjectionProbability\":37}"
                     };
                     for (var i = 0; i < attempts.Length; i++)
                     {
@@ -345,17 +343,17 @@ public static partial class Program
                             "stored hashes and audit count equality only");
                         var (_, readback) = await PanelGetAsync(panel + "/api/settings", panelToken);
                         Check($"forbidden request {i}: no partial runtime publication",
-                            JsonNode.Parse(readback)?["runtime"]?["aiDesire"]?.GetValue<int>() == 17, "runtime value equality only");
+                            JsonNode.Parse(readback)?["runtime"]?["groupInterjectionProbability"]?.GetValue<int>() == 17, "runtime value equality only");
                     }
-                    var (saveCode, saveBody) = await PanelPostJsonAsync(panel + "/api/settings", "{\"aiDesire\":31}", panelToken);
-                    Check("ordinary settings still save", saveCode == 200 && JsonNode.Parse(saveBody)?["runtime"]?["aiDesire"]?.GetValue<int>() == 31);
+                    var (saveCode, saveBody) = await PanelPostJsonAsync(panel + "/api/settings", "{\"groupInterjectionProbability\":31}", panelToken);
+                    Check("ordinary settings still save", saveCode == 200 && JsonNode.Parse(saveBody)?["runtime"]?["groupInterjectionProbability"]?.GetValue<int>() == 31);
                     NoSecretEcho("ordinary POST", saveBody);
                 }
                 else
-                    Check(phase.Name + ": ordinary save survived restart", runtime?["aiDesire"]?.GetValue<int>() == 31);
+                    Check(phase.Name + ": ordinary save survived restart", runtime?["groupInterjectionProbability"]?.GetValue<int>() == 31);
                 if (expectedSecret.Length > 0)
                 {
-                    var (saveCode, saveBody) = await PanelPostJsonAsync(panel + "/api/settings", "{\"aiDesire\":31}", panelToken);
+                    var (saveCode, saveBody) = await PanelPostJsonAsync(panel + "/api/settings", "{\"groupInterjectionProbability\":31}", panelToken);
                     Check(phase.Name + ": ordinary save preserves environment-only credential state", saveCode == 200
                         && JsonNode.Parse(saveBody)?["runtime"]?["officialSecretConfigured"]?.GetValue<bool>() == true
                         && JsonNode.Parse(saveBody)?["runtime"]?["officialSecretSource"]?.GetValue<string>() == "env");

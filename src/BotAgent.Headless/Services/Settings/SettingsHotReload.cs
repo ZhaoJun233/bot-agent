@@ -467,7 +467,6 @@ public sealed class SettingsHotReload
     {
         _brain.BotIdentity = string.IsNullOrWhiteSpace(_settings.NormalizedUin) ? null : _settings.NormalizedUin;
         _brain.BotPersona = _settings.BotPersona;
-        _brain.AiDesire = _settings.AiDesire;
         _brain.SuitabilityThreshold = _settings.SuitabilityThreshold;
         _brain.MaxContextMessages = _settings.MaxContextMessages;
 

@@ -43,10 +43,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = $"{groupId},{friendId}",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_WEB_SEARCH"] = "1",
             // 假搜索后端与假网页都在 127.0.0.1 上：默认的 SSRF 防护会拦（生产行为不变）。
@@ -355,7 +352,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = "http://0.0.0.0:13041",
             ["QQCHAT_UIN"] = "10002",
             ["QQCHAT_WHITELIST"] = "*",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = ssrfPort.ToString(),
             ["QQCHAT_WEB_SEARCH"] = "1",
             ["QQCHAT_SEARCH_SOURCES"] = search.SearxSource,

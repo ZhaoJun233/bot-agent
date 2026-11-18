@@ -45,6 +45,11 @@ public static partial class Program
               "BotPersona": "我是迁移测试用的机器人",
               "MessageWhitelist": "{{groupId}}",
               "AiDesire": 77,
+              "ReplyPacingEnabled": false,
+              "GroupInterjectionProbability": 100,
+              "GroupInterjectionCooldownSeconds": 0,
+              "GroupContinuationWaitSeconds": 0,
+              "PrivateContinuationWaitSeconds": 1.5,
               "EnableMusic": true
             }
             """, Encoding.UTF8);
@@ -142,9 +147,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
         });
 
@@ -252,7 +255,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = "http://0.0.0.0:13043",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "18107"
         });
         await WaitForPortAsync(13043, cts.Token, bot2);
@@ -265,7 +267,8 @@ public static partial class Program
             $"活动消息 {DbProbe.Count(dataDir, "SELECT COUNT(1) FROM messages WHERE archived = 0")}（期望 4：迁移 2 + 新消息 1 + 机器人回复 1）");
         Check("★ 重启不覆盖配置（值不变，而且能用 SQL 直接查）",
             DbProbe.Text(dataDir, "SELECT json_extract(json, '$.BotPersona') FROM settings WHERE id = 1") == settingsPersonaBefore &&
-            DbProbe.Text(dataDir, "SELECT json_extract(json, '$.AiDesire') FROM settings WHERE id = 1") == "77",
+            DbProbe.Text(dataDir, "SELECT json_extract(json, '$.GroupInterjectionProbability') FROM settings WHERE id = 1") == "100" &&
+            DbProbe.Text(dataDir, "SELECT json_extract(json, '$.PrivateContinuationWaitSeconds') FROM settings WHERE id = 1") == "1.5",
             $"persona={DbProbe.Text(dataDir, "SELECT json_extract(json, '$.BotPersona') FROM settings WHERE id = 1")}");
         Check("★ 重启后台账不重复（3 条老记录仍各只有一行）",
             DbProbe.Count(dataDir, "SELECT COUNT(1) FROM own_messages WHERE message_id IN (7701, 7702, 7703)") == 3);

@@ -12,7 +12,7 @@ async function enterConfiguration(page: Page) {
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 }
-async function read(request: APIRequestContext): Promise<{ generation: string; version: string; view: { behavior: { privateCooldownSeconds: { value: number } } } }> {
+async function read(request: APIRequestContext): Promise<{ generation: string; version: string; view: { behavior: { groupInterjectionCooldownSeconds: { value: number } } } }> {
   const response = await request.post('/zba/v1/configuration/read', { headers, data: { kind: 1 } })
   expect(response.ok()).toBeTruthy()
   return response.json()
@@ -22,10 +22,10 @@ function originalKey(generation: string): string {
 }
 async function restore(request: APIRequestContext, original: number) {
   const current = await read(request)
-  if (current.view.behavior.privateCooldownSeconds.value === original) return
+  if (current.view.behavior.groupInterjectionCooldownSeconds.value === original) return
   const response = await request.post('/zba/v1/configuration/save', { headers, data: {
     contractRevision: 'cfg-0.3.3', expectedVersion: current.version, key: originalKey(current.generation),
-    changes: { behavior: { privateCooldownSeconds: { kind: 1, value: original } } }, secrets: []
+    changes: { behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: original } } }, secrets: []
   } })
   expect(response.status()).toBe(200)
 }
@@ -33,7 +33,7 @@ async function restore(request: APIRequestContext, original: number) {
 for (const responseStatus of [0, 408, 409, 429]) {
 test('finds a saved configuration after refresh without replaying or clearing a new draft (HTTP ' + responseStatus + ')', async ({ page, request }, testInfo) => {
   const before = await read(request)
-  const original = before.view.behavior.privateCooldownSeconds.value
+  const original = before.view.behavior.groupInterjectionCooldownSeconds.value
   expect(Number.isFinite(original)).toBe(true)
   let savedKey = ''
   let committedVersion = ''
@@ -56,7 +56,7 @@ test('finds a saved configuration after refresh without replaying or clearing a 
   try {
     await page.goto('/')
     await enterConfiguration(page)
-    await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original + 1))
+    await page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input').fill(String(original + 1))
     await page.getByTestId('config-save').click()
     await expect(page.getByTestId('config-unconfirmed')).toBeVisible()
     expect(savedKey).toMatch(/^cfg1:/)
@@ -72,7 +72,7 @@ test('finds a saved configuration after refresh without replaying or clearing a 
     await page.reload()
     await enterConfiguration(page)
     await expect(page.getByTestId('config-unconfirmed')).toHaveCount(0)
-    const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
     await input.fill(String(original + 2))
     await page.getByTestId('config-recovery').locator('summary').click()
     await page.getByTestId('config-recovery-key').fill(retainedKey)

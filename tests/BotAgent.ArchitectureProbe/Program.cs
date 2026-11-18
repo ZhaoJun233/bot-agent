@@ -1786,7 +1786,10 @@ public static class Program
         Anchor(index, "nameRaw", "面板改名要写真名（显示层脱敏、key 原样）");
         // 回复链的串行 / 快照 / 引用 / 能力闸门在 Wave3 整体搬进 Engine/Reply：
         // 只查“全仓某处还有这个词”会让一份死代码冒充红线，所以这几条按目录钉住。
-        AnchorIn(index, "_pendingReplies", "src/BotAgent.Engine/Reply/", "每会话一条 FIFO（同一会话严格按序）");
+        AnchorIn(index, "_pacedWorks", "src/BotAgent.Engine/Reply/", "统一回复调度保存受理轮次");
+        AnchorIn(index, "_pacingCoordinator", "src/BotAgent.Engine/Reply/", "统一回复调度负责续发与发送边界");
+        Check("旧回复队列没有第二条调度入口", !index.In("src/BotAgent.Engine/Reply/")
+            .Any(file => file.NoComments.Contains("_pendingReplies", StringComparison.Ordinal)));
         AnchorIn(index, "_replyGate", "src/BotAgent.Engine/Reply/", "全局并发闸门");
         AnchorIn(index, "_inFlight", "src/BotAgent.Engine/Reply/", "在途回复计数（可观测）");
 

@@ -212,7 +212,7 @@ public sealed class ParticipationStateMachine
                 // 被 @ 了却不理，在群里看着就是坏了（这条踩过，见 handoff §27）。
                 // 上限真正管的是**没人叫它的时候**：`OnIrrelevant` 在 Active 状态下到上限就退场、
                 // 冷却中也一律拒绝（那才是“话题尾部硬跟”的来源）。
-                // 显式触发之间的频率由全局回复冷却（GroupCooldownSeconds / PrivateCooldownSeconds）限速。
+                // ReplyPacingCoordinator owns explicit-request continuation and reply scheduling.
                 return Transition("mention_reply_cap", ParticipationState.Probing, now, allow: true, probing: true);
             }
 

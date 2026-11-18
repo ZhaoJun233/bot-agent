@@ -76,7 +76,7 @@ internal static class ManagedCapabilityContractTests
         {
             ClockBindings.InitializeStorage();
             AppDatabase.Initialize();
-            var baseline = new AppSettings { AiDesire = 10, ModelBaseUrl = "https://model.example.com/v1" };
+            var baseline = new AppSettings { GroupInterjectionProbability = 10, ModelBaseUrl = "https://model.example.com/v1" };
             new SettingsStore().Save(baseline);
             new ModelProviderStore().EnsurePrimary(baseline);
             var runtime = new SettingsBox(baseline);
@@ -92,7 +92,7 @@ internal static class ManagedCapabilityContractTests
             var header = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(header.Code == ConfigurationResultCode.Ok);
             ConfigurationPatch Patch(int value = 21) => new(new BehaviorChanges
-                { AiDesire = FieldEdit<int>.Set(value) }, null, null, null, null, null, null, null);
+                { GroupInterjectionProbability = FieldEdit<int>.Set(value) }, null, null, null, null, null, null, null);
             ConfigurationValidationRequest Request(ConfigurationPatch? patch = null) => new("cfg-0.3.3",
                 header.Version, patch ?? Patch(), ImmutableArray<SecretEdit>.Empty);
             var before = DatabaseFingerprint();
@@ -101,7 +101,7 @@ internal static class ManagedCapabilityContractTests
             {
                 var result = await StorageConfiguration.ConfigurationStorageBridge.ValidateAsync(store,
                     identity ?? caller, request, ct);
-                Check(DatabaseFingerprint() == before && runtime.Current.AiDesire == 10);
+                Check(DatabaseFingerprint() == before && runtime.Current.GroupInterjectionProbability == 10);
                 return result;
             }
             Check((await Validate(Request())).Code == ManagedResultCode.Ok);

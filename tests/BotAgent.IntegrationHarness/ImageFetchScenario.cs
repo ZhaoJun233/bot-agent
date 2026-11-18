@@ -46,9 +46,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",        // 只测识图那条路（表情包自己也下载，会干扰计数）
             ["QQCHAT_HEALTH_PORT"] = "0",
             // 假图片服务在 127.0.0.1（默认的 SSRF 防护会拦），测试里显式放开

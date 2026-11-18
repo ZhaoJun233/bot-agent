@@ -109,7 +109,8 @@ public sealed class PokeUseCase
             SenderId = poke.UserId,
             Text = text,
             Timestamp = poke.Time,
-            QqMessageId = 0
+            QqMessageId = 0,
+            DirectToBot = poke.IsSelfPoked
         };
         _hooks.RecordInbound(conversation, appended);
 

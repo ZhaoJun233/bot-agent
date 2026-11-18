@@ -80,9 +80,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = $"{privateGroup},{privateFriend}",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_WEB_SEARCH"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "1",   // 分句：用来验证同一条消息的多次回复 msg_seq 递增

@@ -10,7 +10,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Reply;
-using BotAgent.Domain.Atmosphere;
 using BotAgent.Services.Model;
 using BotAgent.Domain.Model;
 using BotAgent.Domain.Ports;
@@ -114,9 +113,6 @@ public class OpenAiClient : IModelClient
     /// <summary>模型人设档案（可选，请求时注入系统上下文）。</summary>
     public string? BotPersona { get; set; }
 
-    /// <summary>AI 对话欲望（0-100）：越高越倾向主动参与群聊发言。</summary>
-    public int AiDesire { get; set; } = 50;
-
     /// <summary>发言适合度阈值（0-100）：模型评出低于此值则不发言。**代码侧强制执行**。</summary>
     public int SuitabilityThreshold { get; set; } = 10;
 
@@ -173,28 +169,12 @@ public class OpenAiClient : IModelClient
                   .TakeLast(16)
                   .Select(m => m.QqMessageId!.Value));
 
-        // 结合 MaiBot 启发式氛围感知模型：计算连续发言疲劳阻尼与群聊活跃度动态意愿（可通过设置项关闭）
-        var replyPacingEnabled = sampling?.ReplyPacingEnabled == true;
-        // The admitted turn owns this flag: do not read mutable desire (or apply its
-        // atmosphere damping) in paced mode. The placeholder never enters the prompt.
-        var effectiveDesire = replyPacingEnabled ? 0 : AiDesire;
-        if (!replyPacingEnabled && _settings.EnableAtmosphereDamping)
-        {
-            var atmosphere = ChatAtmosphere.Analyze(window, Clock.Now);
-            effectiveDesire = ChatAtmosphere.CalculateEffectiveDesire(
-                AiDesire,
-                atmosphere.ConsecutiveBotReplies,
-                atmosphere.SecondsSinceLastBotReply,
-                atmosphere.Activity);
-        }
-
         // 系统提示词整块在 PromptBuilder（纯字符串拼装，顺序即语义）；这里只负责"把素材交出去"。
         // 用具名实参：这条调用有 25 个参数，位置写法一旦排错就会把"开关"喂成"阈值"（编译过的错才会被抓到）。
         var promptParts = PromptBuilder.BuildParts(new PromptBuilder.PromptRequest(
             SystemPrompt: SystemPrompt,
             BotIdentity: BotIdentity,
             Persona: BotPersona,
-            AiDesire: effectiveDesire,
             Window: window,
             QuotableIds: quotableIds,
             ProfilesText: profilesText,
@@ -217,8 +197,7 @@ public class OpenAiClient : IModelClient
             EnableAsk: enableAsk,
             EnableToolRequest: enableToolRequest,
             FilterActionNarration: _settings.FilterActionNarration,
-            ToolList: toolList, IsPrivateConversation: isPrivateConversation,
-            ReplyPacingEnabled: replyPacingEnabled));
+            ToolList: toolList, IsPrivateConversation: isPrivateConversation));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
         var built = await _transport.BuildAsync(window, promptParts.Text, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
         built = built with { StableSystemPrefixLength = promptParts.Stable.Length };

@@ -21,7 +21,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_PROTOCOL"] = "ReverseWebSocket",
             ["QQCHAT_ONEBOT_URL"] = $"http://127.0.0.1:{protocolPort}",
             ["QQCHAT_UIN"] = "10001", ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0", ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_FILTER_ACTION_NARRATION"] = "1", ["QQCHAT_HEALTH_PORT"] = "0"
         });
         await WaitForPortAsync(protocolPort, cts.Token, bot);

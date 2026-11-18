@@ -21,15 +21,23 @@ var count = 0;
 void Check(bool condition, string label) { if (!condition) throw new Exception(label); count++; }
 void Defaults(AppSettings settings)
 {
-    Check(!settings.ReplyPacingEnabled && settings.GroupInterjectionProbability == 20
+    Check(settings.GroupInterjectionProbability == 20
         && settings.GroupInterjectionCooldownSeconds == 30 && settings.GroupContinuationWaitSeconds == 3
-        && settings.PrivateContinuationWaitSeconds == 1.5, "backward compatible defaults");
+        && settings.PrivateContinuationWaitSeconds == 1.5, "single-policy defaults");
 }
 AppSettings Seed() => (AppSettings)typeof(BotConfig).GetMethod("CreateBehaviorSeed", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
 try
 {
     Defaults(new AppSettings());
-    Defaults(JsonSerializer.Deserialize<AppSettings>("{\"AiDesire\":42}")!);
+    Defaults(JsonSerializer.Deserialize<AppSettings>("{\"AiDesire\":42,\"ReplyPacingEnabled\":false,\"GroupCooldownSeconds\":0,\"EnableParticipationGating\":true}")!);
+    foreach (var field in Enum.GetValues<ConfigurationFieldId>().Where(ReplyConfigurationFields.IsRetired))
+    {
+        Check(typeof(AppSettings).GetProperty(field.ToString()) is null, "retired field is not an active setting");
+        Check(typeof(BehaviorChanges).GetProperty(field.ToString()) is null, "retired field is not writable");
+        Check(typeof(BehaviorView).GetProperty(field.ToString()) is null, "retired field has no read projection");
+    }
+    Defaults(Seed());
+    Environment.SetEnvironmentVariable(env[0], "false");
     Defaults(Seed());
     Environment.SetEnvironmentVariable(env[0], "true");
     Environment.SetEnvironmentVariable(env[1], "45");
@@ -37,7 +45,7 @@ try
     Environment.SetEnvironmentVariable(env[3], "4");
     Environment.SetEnvironmentVariable(env[4], "1.5");
     var seeded = Seed();
-    Check(seeded.ReplyPacingEnabled && seeded.GroupInterjectionProbability == 45 && seeded.GroupInterjectionCooldownSeconds == 60
+    Check(seeded.GroupInterjectionProbability == 45 && seeded.GroupInterjectionCooldownSeconds == 60
         && seeded.GroupContinuationWaitSeconds == 4 && seeded.PrivateContinuationWaitSeconds == 1.5, "environment seeds");
     foreach (var bad in new[] { "-1", "31", "NaN", "Infinity", "1,5", "invalid" })
     {
@@ -54,12 +62,12 @@ try
         }
     }
     foreach (var name in env) Environment.SetEnvironmentVariable(name, null);
-    var sampling = new AppSettings { ReplyPacingEnabled = true }.ToSamplingConfig();
-    Check(sampling.ReplyPacingEnabled, "sampling projection enables pacing");
-    Check(!new AppSettings().ToSamplingConfig().ReplyPacingEnabled, "legacy sampling remains default");
-    Check(ConfigurationRuntimeTracker.Resolve(ConfigurationFieldId.ReplyPacingEnabled, FieldEffect.Hot, true,
-        ImmutableDictionary<ApplyStep, ApplyState>.Empty.Add(ApplyStep.ModelProjection, ApplyState.Failed))
-        == ConfigurationRuntimeState.ApplyFailed, "pacing mode depends on successful model projection");
+    var sampling = new AppSettings().ToSamplingConfig();
+    Check(sampling.Enabled && typeof(BotAgent.Domain.Reply.AdaptiveSamplingConfig).GetProperty("ReplyPacingEnabled") is null,
+        "content sampling has no scheduling mode switch");
+    Check(ConfigurationRuntimeTracker.Resolve(ConfigurationFieldId.GroupInterjectionProbability, FieldEffect.Hot, true,
+        ImmutableDictionary<ApplyStep, ApplyState>.Empty.Add(ApplyStep.PublishSnapshot, ApplyState.Failed))
+        == ConfigurationRuntimeState.ApplyFailed, "pacing parameters require successful snapshot publication");
 
     ClockBindings.InitializeStorage();
     ClockBindings.InitializePlatforms();
@@ -85,11 +93,12 @@ try
         Check(AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_field_modes WHERE (field_id=26 AND user_mode=1) OR (field_id=147 AND user_mode=2)") == 2,
             "v13 migration retains existing field provenance");
     var settings = new SettingsStore();
-    var initial = new AppSettings { AiDesire = 42, Model = "synthetic-model", ModelOverride = "synthetic-model",
+    var initial = new AppSettings { Model = "synthetic-model", ModelOverride = "synthetic-model",
         ModelBaseUrl = "https://example.com", ModelBaseUrlOverride = "https://example.com", AgentDevices = "" };
     settings.Save(initial);
     AppDatabase.Write(connection => AppDatabase.Exec(connection,
-        "UPDATE settings SET json=json_remove(json,'$.ReplyPacingEnabled','$.GroupInterjectionProbability','$.GroupInterjectionCooldownSeconds','$.GroupContinuationWaitSeconds','$.PrivateContinuationWaitSeconds') WHERE id=1"));
+        "UPDATE settings SET json=json_set(json_remove(json,'$.GroupInterjectionProbability','$.GroupInterjectionCooldownSeconds','$.GroupContinuationWaitSeconds','$.PrivateContinuationWaitSeconds'),'$.ReplyPacingEnabled',json('false'),'$.AiDesire',42,'$.PrivateCooldownSeconds',0) WHERE id=1"));
+    Defaults(settings.Load());
     var providers = new ModelProviderStore();
     providers.EnsurePrimary(initial);
     var runtime = new SettingsBox(initial);
@@ -116,6 +125,7 @@ try
         .Invoke(facade, new object[] { caller, ConfigurationReadKind.Editable, CancellationToken.None })!;
     var read = await Read();
     Check(read.Code == ConfigurationResultCode.Ok, "synthetic facade read");
+    Check(read.Fields.All(field => !ReplyConfigurationFields.IsRetired(field.Id)), "read descriptors exclude all retired reply IDs");
     Check(read.View!.Behavior.PrivateContinuationWaitSeconds.EffectiveSource == ConfigurationValueSource.Default, "missing legacy property has default provenance");
     ConfigurationSaveRequest? lastRequest = null;
     ValueTask<ConfigurationSaveResult> Persist(ConfigurationSaveRequest request) => (ValueTask<ConfigurationSaveResult>)facade.GetType().GetMethod("SaveAsync")!
@@ -129,19 +139,20 @@ try
         lastRequest = request;
         return await Persist(request);
     }
-    var saved = await Save(new BehaviorChanges { ReplyPacingEnabled = FieldEdit<bool>.Set(true),
-        GroupInterjectionProbability = FieldEdit<int>.Set(45), GroupInterjectionCooldownSeconds = FieldEdit<int>.Set(60),
+    var saved = await Save(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(45), GroupInterjectionCooldownSeconds = FieldEdit<int>.Set(60),
         GroupContinuationWaitSeconds = FieldEdit<int>.Set(4), PrivateContinuationWaitSeconds = FieldEdit<double>.Set(2.5) });
-    Check(saved.Code == ConfigurationResultCode.Ok && saved.Receipt is not null, $"five field save commits: {saved.Code}; {string.Join(",", saved.Errors.Select(error => error.Address.Field + ":" + error.Code))}");
+    Check(saved.Code == ConfigurationResultCode.Ok && saved.Receipt is not null, $"four field save commits: {saved.Code}; {string.Join(",", saved.Errors.Select(error => error.Address.Field + ":" + error.Code))}");
     var replay = await Persist(lastRequest!);
     Check(replay.Replayed && replay.Receipt?.CommittedVersion == saved.Receipt?.CommittedVersion, "pacing save preserves idempotent receipt");
     var conflicting = lastRequest! with { Changes = new(new BehaviorChanges { PrivateContinuationWaitSeconds = FieldEdit<double>.Set(2.6) },
         null, null, null, null, null, null, null) };
     Check((await Persist(conflicting)).Code == ConfigurationResultCode.IdempotencyConflict, "fractional pacing participates in fingerprint");
     var reloaded = settings.Load();
-    Check(reloaded.ReplyPacingEnabled && reloaded.GroupInterjectionProbability == 45 && reloaded.GroupInterjectionCooldownSeconds == 60
-        && reloaded.GroupContinuationWaitSeconds == 4 && reloaded.PrivateContinuationWaitSeconds == 2.5 && reloaded.AiDesire == 42,
-        "round trip preserves fractions and old desire");
+    Check(reloaded.GroupInterjectionProbability == 45 && reloaded.GroupInterjectionCooldownSeconds == 60
+        && reloaded.GroupContinuationWaitSeconds == 4 && reloaded.PrivateContinuationWaitSeconds == 2.5,
+        "round trip preserves all four pacing values and fractions");
+    var serialized = JsonSerializer.SerializeToElement(reloaded);
+    Check(serialized.EnumerateObject().All(property => !ReplyConfigurationFields.IsRetired(property.Name)), "active serialization never reintroduces retired settings");
     var after = await Read();
     Check(after.View!.Behavior.PrivateContinuationWaitSeconds.EffectiveSource == ConfigurationValueSource.UserConfiguration,
         "save projection shows user source");
@@ -171,10 +182,11 @@ try
     foreach (var value in new[] { 0.0, 1.5, 30.0 })
         Check((await Save(new BehaviorChanges { PrivateContinuationWaitSeconds = FieldEdit<double>.Set(value) })).Code == ConfigurationResultCode.Ok,
             "private boundary or fraction accepted");
-    Check((await Save(new BehaviorChanges { ReplyPacingEnabled = FieldEdit<bool>.Set(false),
+    Check((await Save(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(20),
+        GroupInterjectionCooldownSeconds = FieldEdit<int>.Set(30), GroupContinuationWaitSeconds = FieldEdit<int>.Set(3),
         PrivateContinuationWaitSeconds = FieldEdit<double>.Set(1.5) })).Code == ConfigurationResultCode.Ok, "reset pacing fields");
     reloaded = settings.Load();
-    Check(!reloaded.ReplyPacingEnabled && reloaded.PrivateContinuationWaitSeconds == 1.5 && reloaded.AiDesire == 42, "reset defaults retains legacy desire");
+    Defaults(reloaded);
     Environment.SetEnvironmentVariable(env[4], "9.5");
     Check(BotConfig.Load().PrivateContinuationWaitSeconds == 1.5, "stored configuration wins over environment seed");
     Console.WriteLine($"PASS configuration pacing: {count} synthetic checks");

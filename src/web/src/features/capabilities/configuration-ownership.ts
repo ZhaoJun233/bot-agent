@@ -1,4 +1,5 @@
 import type { ZbaPatchSection, ZbaSecretSlot } from '../../api/zba'
+import { retiredReplyFields } from '../configuration/reply-pacing'
 import {
   fallbackOwnerOf, ownerOf, pluginRegistryRevision, pluginSettings, settingsFor,
   type RegisteredPluginSettingsSpec
@@ -13,7 +14,8 @@ export interface CapabilityConfiguration extends Omit<RegisteredPluginSettingsSp
 }
 
 export const basicFields = new Set([
-  'aiModeEnabled', 'botPersona', 'groupCooldownSeconds', 'privateCooldownSeconds',
+  'aiModeEnabled', 'botPersona', 'groupInterjectionProbability', 'groupInterjectionCooldownSeconds',
+  'groupContinuationWaitSeconds', 'privateContinuationWaitSeconds',
   'maxConcurrentReplies', 'maxContextMessages', 'maxMessagesPerConversation'
 ])
 
@@ -42,7 +44,7 @@ export function configurationFor(id: string): CapabilityConfiguration | undefine
   return spec ? capabilityFrom(spec) : undefined
 }
 
-/** Explicit ownership > the seven basic behavior fields > a system section fallback. */
+/** Explicit ownership > basic behavior fields > a system section fallback. */
 export function fieldOwner(section: string, key: string): string {
   const explicit = ownerOf(section, key)
   if (explicit) return explicit.pluginKey
@@ -56,5 +58,6 @@ export function secretOwner(slot: ZbaSecretSlot): string | undefined {
 }
 
 export function ownsConfiguration(scope: string, section: string, key: string): boolean {
+  if (section === 'behavior' && retiredReplyFields.has(key)) return false
   return fieldOwner(section, key) === scope
 }

@@ -76,6 +76,7 @@ public static class BotConfig
     }
     internal static FieldEffect ConfigurationEffect(ConfigurationFieldId field) => field switch
     {
+        _ when ReplyConfigurationFields.IsRetired(field) => FieldEffect.ReadOnly,
         ConfigurationFieldId.FeishuAppId or ConfigurationFieldId.FeishuApiBase
             or ConfigurationFieldId.OfficialAppId or ConfigurationFieldId.OfficialSandbox
             or ConfigurationFieldId.FeishuEnabled or ConfigurationFieldId.OfficialEnabled
@@ -204,8 +205,6 @@ public static class BotConfig
             [nameof(AppSettings.MessageWhitelist)] = new[] { "QQCHAT_WHITELIST" },
     [nameof(AppSettings.WhitelistGroups)] = new[] { "QQCHAT_WHITELIST_GROUPS" },
     [nameof(AppSettings.WhitelistPrivates)] = new[] { "QQCHAT_WHITELIST_PRIVATES" },
-            [nameof(AppSettings.AiDesire)] = new[] { "QQCHAT_AI_DESIRE" },
-            [nameof(AppSettings.ReplyPacingEnabled)] = new[] { "QQCHAT_REPLY_PACING" },
             [nameof(AppSettings.GroupInterjectionProbability)] = new[] { "QQCHAT_GROUP_INTERJECTION_PROBABILITY" },
             [nameof(AppSettings.GroupInterjectionCooldownSeconds)] = new[] { "QQCHAT_GROUP_INTERJECTION_COOLDOWN" },
             [nameof(AppSettings.GroupContinuationWaitSeconds)] = new[] { "QQCHAT_GROUP_CONTINUATION_WAIT" },
@@ -220,25 +219,13 @@ public static class BotConfig
             [nameof(AppSettings.DefaultTopP)] = new[] { "QQCHAT_DEFAULT_TOP_P" },
             [nameof(AppSettings.AiModeEnabled)] = new[] { "QQCHAT_AI_MODE" },
             [nameof(AppSettings.MaxTokens)] = new[] { "QQCHAT_MAX_TOKENS" },
-            [nameof(AppSettings.PrivateCooldownSeconds)] = new[] { "QQCHAT_PRIVATE_COOLDOWN" },
-            [nameof(AppSettings.GroupCooldownSeconds)] = new[] { "QQCHAT_GROUP_COOLDOWN" },
-    [nameof(AppSettings.IdleFallbackSeconds)] = new[] { "QQCHAT_IDLE_FALLBACK" },
-    // 参与状态机的上限（P1）。默认值 = 状态机自己的默认值；面板值压过 env，两处都会被服务端钳制。
-    [nameof(AppSettings.ParticipationMaxConsecutiveReplies)] = new[] { "QQCHAT_PARTICIPATION_MAX_REPLIES" },
-    [nameof(AppSettings.ParticipationCooldownSeconds)] = new[] { "QQCHAT_PARTICIPATION_COOLDOWN" },
-    [nameof(AppSettings.ParticipationProbingMaxReplies)] = new[] { "QQCHAT_PARTICIPATION_PROBING" },
-    [nameof(AppSettings.ParticipationMaxActiveLifetimeSeconds)] = new[] { "QQCHAT_PARTICIPATION_ACTIVE_LIFE" },
-    [nameof(AppSettings.ParticipationMaxExitingLifetimeSeconds)] = new[] { "QQCHAT_PARTICIPATION_EXITING_LIFE" },
-    // 参与闸门 / 允许提问（P1、P2）：都**默认关**，打开才会改变行为
-    [nameof(AppSettings.EnableParticipationGating)] = new[] { "QQCHAT_PARTICIPATION_GATING" },
+    // 提问能力仍需显式启用。
     [nameof(AppSettings.EnableQuestions)] = new[] { "QQCHAT_QUESTIONS" },
             [nameof(AppSettings.SplitReplies)] = new[] { "QQCHAT_SPLIT_REPLIES" },
       [nameof(AppSettings.EnableProactive)] = new[] { "QQCHAT_PROACTIVE" },
-      [nameof(AppSettings.ProactiveCooldownSeconds)] = new[] { "QQCHAT_PROACTIVE_COOLDOWN" },
       [nameof(AppSettings.ProactiveQuietSeconds)] = new[] { "QQCHAT_PROACTIVE_QUIET" },
       [nameof(AppSettings.IgnoreBracketMessages)] = new[] { "QQCHAT_IGNORE_BRACKETS" },
       [nameof(AppSettings.FilterActionNarration)] = new[] { "QQCHAT_FILTER_ACTION_NARRATION" },
-      [nameof(AppSettings.EnableAtmosphereDamping)] = new[] { "QQCHAT_ENABLE_ATMOSPHERE_DAMPING" },
             [nameof(AppSettings.SegmentDelayMs)] = new[] { "QQCHAT_SEGMENT_DELAY_MS" },
             [nameof(AppSettings.MaxContextMessages)] = new[] { "QQCHAT_MAX_CONTEXT" },
             [nameof(AppSettings.ProfileLookupCount)] = new[] { "QQCHAT_PROFILE_LOOKUP" },
@@ -371,8 +358,6 @@ public static class BotConfig
         // 旧共用名单只在首次部署播种；显式空环境变量也表示全收，不再运行时回落。
         s.WhitelistGroups = Environment.GetEnvironmentVariable("QQCHAT_WHITELIST_GROUPS") ?? s.MessageWhitelist;
         s.WhitelistPrivates = Environment.GetEnvironmentVariable("QQCHAT_WHITELIST_PRIVATES") ?? s.MessageWhitelist;
-        s.AiDesire = Int("QQCHAT_AI_DESIRE") ?? s.AiDesire;
-        s.ReplyPacingEnabled = Bool("QQCHAT_REPLY_PACING") ?? s.ReplyPacingEnabled;
         s.GroupInterjectionProbability = (int)(PacingNumber("QQCHAT_GROUP_INTERJECTION_PROBABILITY", 100, integer: true) ?? s.GroupInterjectionProbability);
         s.GroupInterjectionCooldownSeconds = (int)(PacingNumber("QQCHAT_GROUP_INTERJECTION_COOLDOWN", 3600, integer: true) ?? s.GroupInterjectionCooldownSeconds);
         s.GroupContinuationWaitSeconds = (int)(PacingNumber("QQCHAT_GROUP_CONTINUATION_WAIT", 30, integer: true) ?? s.GroupContinuationWaitSeconds);
@@ -387,23 +372,12 @@ public static class BotConfig
         s.DefaultTopP = Dbl("QQCHAT_DEFAULT_TOP_P") ?? s.DefaultTopP;
         s.AiModeEnabled = Bool("QQCHAT_AI_MODE") ?? s.AiModeEnabled;
         s.MaxTokens = Int("QQCHAT_MAX_TOKENS") ?? s.MaxTokens;
-        s.PrivateCooldownSeconds = Int("QQCHAT_PRIVATE_COOLDOWN") ?? s.PrivateCooldownSeconds;
-        s.GroupCooldownSeconds = Int("QQCHAT_GROUP_COOLDOWN") ?? s.GroupCooldownSeconds;
-    s.IdleFallbackSeconds = Int("QQCHAT_IDLE_FALLBACK") ?? s.IdleFallbackSeconds;
-    s.ParticipationMaxConsecutiveReplies = Int("QQCHAT_PARTICIPATION_MAX_REPLIES") ?? s.ParticipationMaxConsecutiveReplies;
-    s.ParticipationCooldownSeconds = Int("QQCHAT_PARTICIPATION_COOLDOWN") ?? s.ParticipationCooldownSeconds;
-    s.ParticipationProbingMaxReplies = Int("QQCHAT_PARTICIPATION_PROBING") ?? s.ParticipationProbingMaxReplies;
-    s.ParticipationMaxActiveLifetimeSeconds = Int("QQCHAT_PARTICIPATION_ACTIVE_LIFE") ?? s.ParticipationMaxActiveLifetimeSeconds;
-    s.ParticipationMaxExitingLifetimeSeconds = Int("QQCHAT_PARTICIPATION_EXITING_LIFE") ?? s.ParticipationMaxExitingLifetimeSeconds;
-    s.EnableParticipationGating = Bool("QQCHAT_PARTICIPATION_GATING") ?? s.EnableParticipationGating;
     s.EnableQuestions = Bool("QQCHAT_QUESTIONS") ?? s.EnableQuestions;
         s.SplitReplies = Bool("QQCHAT_SPLIT_REPLIES") ?? s.SplitReplies;
         s.EnableProactive = Bool("QQCHAT_PROACTIVE") ?? s.EnableProactive;
-        s.ProactiveCooldownSeconds = Int("QQCHAT_PROACTIVE_COOLDOWN") ?? s.ProactiveCooldownSeconds;
         s.ProactiveQuietSeconds = Int("QQCHAT_PROACTIVE_QUIET") ?? s.ProactiveQuietSeconds;
         s.IgnoreBracketMessages = Bool("QQCHAT_IGNORE_BRACKETS") ?? s.IgnoreBracketMessages;
         s.FilterActionNarration = Bool("QQCHAT_FILTER_ACTION_NARRATION") ?? s.FilterActionNarration;
-        s.EnableAtmosphereDamping = Bool("QQCHAT_ENABLE_ATMOSPHERE_DAMPING") ?? s.EnableAtmosphereDamping;
         s.SegmentDelayMs = Int("QQCHAT_SEGMENT_DELAY_MS") ?? s.SegmentDelayMs;
         s.MaxContextMessages = Int("QQCHAT_MAX_CONTEXT") ?? s.MaxContextMessages;
         s.ProfileLookupCount = Int("QQCHAT_PROFILE_LOOKUP") ?? s.ProfileLookupCount;
@@ -591,7 +565,6 @@ public static class BotConfig
         s.OneBotAddress = s.OneBotAddress.Trim();
         s.OneBotToken = s.OneBotToken.Trim();
         s.QuickLoginUin = s.QuickLoginUin.Trim();
-        s.AiDesire = Math.Clamp(s.AiDesire, 0, 100);
         s.GroupInterjectionProbability = Math.Clamp(s.GroupInterjectionProbability, 0, 100);
         s.GroupInterjectionCooldownSeconds = Math.Clamp(s.GroupInterjectionCooldownSeconds, 0, 3600);
         s.GroupContinuationWaitSeconds = Math.Clamp(s.GroupContinuationWaitSeconds, 0, 30);
@@ -604,13 +577,6 @@ public static class BotConfig
         s.EmotionalTopP = Math.Clamp(s.EmotionalTopP, 0.0, 1.0);
         s.DefaultTemperature = Math.Clamp(s.DefaultTemperature, 0.0, 2.0);
         s.DefaultTopP = Math.Clamp(s.DefaultTopP, 0.0, 1.0);
-        // 参与状态机的上限（P1）：env / 老配置里的值同样要钳 —— 这是服务端那道硬边界，
-        // 面板与 env 都只是“愿望”。（状态机内部还会再过一次 Clamped()，两层都不省。）
-        s.ParticipationMaxConsecutiveReplies = Math.Clamp(s.ParticipationMaxConsecutiveReplies, 1, 10);
-        s.ParticipationCooldownSeconds = Math.Clamp(s.ParticipationCooldownSeconds, 0, 600);
-        s.ParticipationProbingMaxReplies = Math.Clamp(s.ParticipationProbingMaxReplies, 1, 3);
-        s.ParticipationMaxActiveLifetimeSeconds = Math.Clamp(s.ParticipationMaxActiveLifetimeSeconds, 30, 3600);
-        s.ParticipationMaxExitingLifetimeSeconds = Math.Clamp(s.ParticipationMaxExitingLifetimeSeconds, 10, 3600);
         s.MaxTokens = s.MaxTokens > 0 ? s.MaxTokens : 2048;
         s.MaxContextMessages = Math.Clamp(s.MaxContextMessages, 10, 1000);
         s.ProfileLookupCount = Math.Clamp(s.ProfileLookupCount, 0, 50);

@@ -64,8 +64,8 @@ const ref = (section: ZbaPatchSection, key: string): PluginFieldRef => ({ sectio
 
 const presets: PluginSettingsSpec[] = [
   {
-    pluginKey: 'conversation', kind: 'system', title: '对话与参与策略',
-    summary: '主动回复、参与节奏、分句、消息过滤与审批', fallbackSections: ['behavior', 'music', 'voice']
+    pluginKey: 'conversation', kind: 'system', title: '对话功能',
+    summary: '主动开口、分句、消息过滤与审批', fallbackSections: ['behavior', 'music', 'voice']
   },
   {
     pluginKey: 'models', kind: 'system', title: '模型服务',
@@ -122,9 +122,8 @@ const presets: PluginSettingsSpec[] = [
   {
     pluginKey: 'preset.feature.vibes',
     title: '氛围与心情',
-    summary: '氛围阻尼与心情保留时长',
-    enableField: ref('behavior', 'enableAtmosphereDamping'),
-    fields: behavior('enableAtmosphereDamping', 'moodTtlSeconds')
+    summary: '心情保留时长',
+    fields: behavior('moodTtlSeconds')
   },
   {
     pluginKey: 'preset.feature.profiles',

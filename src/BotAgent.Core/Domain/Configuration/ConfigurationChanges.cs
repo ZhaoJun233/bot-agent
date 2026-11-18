@@ -31,8 +31,6 @@ public sealed class AgentChanges
 
 public sealed class BehaviorChanges
 {
-    public FieldEdit<int> AiDesire { get; init; }
-    public FieldEdit<bool> ReplyPacingEnabled { get; init; }
     public FieldEdit<int> GroupInterjectionProbability { get; init; }
     public FieldEdit<int> GroupInterjectionCooldownSeconds { get; init; }
     public FieldEdit<int> GroupContinuationWaitSeconds { get; init; }
@@ -41,9 +39,7 @@ public sealed class BehaviorChanges
     public FieldEdit<string> ApprovalApprovers { get; init; }
     public FieldEdit<string> BotPersona { get; init; }
     public FieldEdit<bool> EnableApprovals { get; init; }
-    public FieldEdit<bool> EnableAtmosphereDamping { get; init; }
     public FieldEdit<bool> EnableLinkPreview { get; init; }
-    public FieldEdit<bool> EnableParticipationGating { get; init; }
     public FieldEdit<bool> EnablePoke { get; init; }
     public FieldEdit<bool> EnableProactive { get; init; }
     public FieldEdit<bool> EnableProfileSummary { get; init; }
@@ -51,8 +47,6 @@ public sealed class BehaviorChanges
     public FieldEdit<bool> EnableStickers { get; init; }
     public FieldEdit<bool> EnableWebSearch { get; init; }
     public FieldEdit<bool> FilterActionNarration { get; init; }
-    public FieldEdit<int> GroupCooldownSeconds { get; init; }
-    public FieldEdit<int> IdleFallbackSeconds { get; init; }
     public FieldEdit<bool> IgnoreBracketMessages { get; init; }
     public FieldEdit<int> LinkPreviewMax { get; init; }
     public FieldEdit<int> LinkPreviewTimeoutSeconds { get; init; }
@@ -62,14 +56,7 @@ public sealed class BehaviorChanges
     public FieldEdit<int> MaxMessagesPerConversation { get; init; }
     public FieldEdit<int> MaxProfileChars { get; init; }
     public FieldEdit<int> MoodTtlSeconds { get; init; }
-    public FieldEdit<int> ParticipationCooldownSeconds { get; init; }
-    public FieldEdit<int> ParticipationMaxActiveLifetimeSeconds { get; init; }
-    public FieldEdit<int> ParticipationMaxConsecutiveReplies { get; init; }
-    public FieldEdit<int> ParticipationMaxExitingLifetimeSeconds { get; init; }
-    public FieldEdit<int> ParticipationProbingMaxReplies { get; init; }
     public FieldEdit<int> PokeCooldownSeconds { get; init; }
-    public FieldEdit<int> PrivateCooldownSeconds { get; init; }
-    public FieldEdit<int> ProactiveCooldownSeconds { get; init; }
     public FieldEdit<int> ProactiveQuietSeconds { get; init; }
     public FieldEdit<int> ProfileLookupCount { get; init; }
     public FieldEdit<int> ProfileSummaryIntervalSeconds { get; init; }

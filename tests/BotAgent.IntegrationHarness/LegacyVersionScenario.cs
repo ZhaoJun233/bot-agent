@@ -33,8 +33,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "66702",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
         });
         var panel = $"http://127.0.0.1:{panelPort}";
@@ -42,7 +40,7 @@ public static partial class Program
 
         // ① 不带版本：旧面板的正常保存路径不变，但回执必须标明「这次没有并发保护」。
         var (unversionedCode, unversionedBody) = await PanelPostJsonAsync($"{panel}/api/settings",
-            """{"groupCooldownSeconds":5}""");
+            """{"groupInterjectionCooldownSeconds":5}""");
         var unversioned = JsonNode.Parse(unversionedBody)?.AsObject() ?? new JsonObject();
         var firstVersion = unversioned["configurationResult"]?["currentVersion"]?.GetValue<string>();
         Check("不带版本的旧面板保存仍然成功", unversionedCode == 200 && firstVersion is not null,
@@ -52,7 +50,7 @@ public static partial class Program
             $"legacyVerification={unversioned["legacyVerification"]}");
 
         // ② 带匹配版本：与 ZBA 的 Strict 档同口径，正常提交并标 verified。
-        var pinnedRequest = new JsonObject { ["groupCooldownSeconds"] = 6, ["expectedVersion"] = firstVersion };
+        var pinnedRequest = new JsonObject { ["groupInterjectionCooldownSeconds"] = 6, ["expectedVersion"] = firstVersion };
         var (pinnedCode, pinnedBody) = await PanelPostJsonAsync($"{panel}/api/settings",
             pinnedRequest.ToJsonString());
         var pinned = JsonNode.Parse(pinnedBody)?.AsObject() ?? new JsonObject();
@@ -63,7 +61,7 @@ public static partial class Program
             $"HTTP {pinnedCode} version={pinnedVersion} legacyVerification={pinned["legacyVerification"]}");
 
         // ③ 复用旧版本（等价于两个客户端带同一版本并发）：必须 409，且不能覆盖已经落库的值。
-        var staleRequest = new JsonObject { ["groupCooldownSeconds"] = 7, ["expectedVersion"] = firstVersion };
+        var staleRequest = new JsonObject { ["groupInterjectionCooldownSeconds"] = 7, ["expectedVersion"] = firstVersion };
         var (staleCode, staleBody) = await PanelPostJsonAsync($"{panel}/api/settings",
             staleRequest.ToJsonString());
         var stale = JsonNode.Parse(staleBody)?.AsObject() ?? new JsonObject();
@@ -71,11 +69,11 @@ public static partial class Program
             $"HTTP {staleCode} body={staleBody}");
         var (_, afterBody) = await PanelGetAsync($"{panel}/api/settings");
         var afterRuntime = JsonNode.Parse(afterBody)?["runtime"];
-        Check("冲突的保存没有覆盖已落库的值", (int?)afterRuntime?["groupCooldownSeconds"] == 6,
-            $"groupCooldownSeconds={afterRuntime?["groupCooldownSeconds"]}");
+        Check("冲突的保存没有覆盖已落库的值", (int?)afterRuntime?["groupInterjectionCooldownSeconds"] == 6,
+            $"groupInterjectionCooldownSeconds={afterRuntime?["groupInterjectionCooldownSeconds"]}");
 
         // ④ 版本字段本身不合法时明确 400，而不是当成「没带版本」静默放行。
-        var invalidRequest = new JsonObject { ["groupCooldownSeconds"] = 8, ["expectedVersion"] = "abc" };
+        var invalidRequest = new JsonObject { ["groupInterjectionCooldownSeconds"] = 8, ["expectedVersion"] = "abc" };
         var (invalidCode, invalidBody) = await PanelPostJsonAsync($"{panel}/api/settings",
             invalidRequest.ToJsonString());
         Check("不合法的 expectedVersion 返回 400", invalidCode == 400

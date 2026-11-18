@@ -124,16 +124,10 @@ public sealed partial class AppSettings : global::BotAgent.Platforms.PlatformOpt
         EmotionalTemperature,
         EmotionalTopP,
         DefaultTemperature,
-        DefaultTopP,
-        ReplyPacingEnabled);
+        DefaultTopP);
 
     // ---------- 行为 ----------
 
-    /// <summary>AI 对话欲望（0-100：越高越主动参与群聊；默认 50）。</summary>
-    public int AiDesire { get; set; } = 50;
-
-    /// <summary>新版回复节奏，默认关闭；关闭时保留并使用原有回复设置。</summary>
-    public bool ReplyPacingEnabled { get; set; } = false;
     /// <summary>普通群聊插话的真实参与概率，单位百分比，范围 0–100；明确请求豁免。</summary>
     public int GroupInterjectionProbability { get; set; } = 20;
     /// <summary>群内任一次完整机器人聊天回复最后一段成功发完后的主动插话冷却秒数，范围 0–3600。</summary>
@@ -177,41 +171,6 @@ public sealed partial class AppSettings : global::BotAgent.Platforms.PlatformOpt
     public string ApprovalApprovers { get; set; } = string.Empty;
 
     /// <summary>
-    /// 参与状态机（V3 §7）的服务端上限。**默认值 = 状态机自己的默认值**，所以不填时行为与以前一致。
-    /// </summary>
-    /// <remarks>
-    /// 每一条都会被 <see cref="Services.Participation.ParticipationPolicy.Clamped" /> 再钳一次 ——
-    /// 面板里填多大都不会超过服务端硬上限（连续回复 ≤10、冷却 ≤600s、试探 ≤3 次、活性命 ≤3600s）。
-    ///
-    /// ⚠ 这一组参数**只喂观测日志**（gating 尚未打开）：状态机目前不改“发不发”的判定，
-    /// 调它不会改变群聊行为 —— 那是刻意的，见 docs/engineering/progress.md 的 P1 条目。
-    /// </remarks>
-    public int ParticipationMaxConsecutiveReplies { get; set; } = 3;
-
-    /// <summary>参与状态机：一次回复后的冷却秒数（服务端钳制 0..600；默认 20）。</summary>
-    public int ParticipationCooldownSeconds { get; set; } = 20;
-
-    /// <summary>参与状态机：试探阶段最多回几次（服务端钳制 1..3；默认 1）。</summary>
-    public int ParticipationProbingMaxReplies { get; set; } = 1;
-
-    /// <summary>参与状态机：活跃状态最长活多久（秒，服务端钳制 30..3600；默认 900）。</summary>
-    public int ParticipationMaxActiveLifetimeSeconds { get; set; } = 900;
-
-    /// <summary>参与状态机：退场状态挂多久（秒，服务端钳制 10..3600；默认 180）。</summary>
-    public int ParticipationMaxExitingLifetimeSeconds { get; set; } = 180;
-
-    /// <summary>
-    /// 参与闸门（V3 §7.3 / §7.4）：**默认关**。
-    /// </summary>
-    /// <remarks>
-    /// 关着 = 与改造前逐字一致：状态机只写观测日志，不影响“发不发”。
-    /// 打开之后，状态机说“这一轮不参与”（观望/退场/未确认/冷却中）就**不叫模型**，
-    /// 于是机器人会明显少说话 —— 这是**唯一**会真正改变群聊行为的新开关，所以刻意做成显式开关，
-    /// 而且只收不放（它说参与时也只是回到原来的判定链：自评阈值/白名单/冷却照旧）。
-    /// </remarks>
-    public bool EnableParticipationGating { get; set; }
-
-    /// <summary>
     /// 允许提问（V3 §8.1 的 <c>action=ask</c>）：**默认关**。
     /// </summary>
     /// <remarks>
@@ -229,27 +188,15 @@ public sealed partial class AppSettings : global::BotAgent.Platforms.PlatformOpt
 
     // ---------- 限流与节奏 ----------
 
-    /// <summary>私聊回复冷却（秒）。</summary>
-    public int PrivateCooldownSeconds { get; set; } = 3;
-
-    /// <summary>群聊回复冷却（秒）。</summary>
-    public int GroupCooldownSeconds { get; set; } = 8;
-
-    /// <summary>静默兜底：超过该秒数没有主动请求时，为待处理会话补一次请求。0=关闭。</summary>
-    public int IdleFallbackSeconds { get; set; } = 60;
-
     /// <summary>长回复按句末标点分句发送（更像真人打字）。</summary>
     public bool SplitReplies { get; set; } = true;
 
     /// <summary>
     /// 主动开口（陪伴感）：群里安静下来、又有人情绪低落或者刚聊得热闹时，它可能自己开一句。
-    /// 不是“定时发广告”：还受同会话冷却（<see cref="ProactiveCooldownSeconds" />）、
+    /// 不是“定时发广告”：还受同会话插话概率与发送完成后冷却、
     /// “最后一条不是自己说的”、“群聊限定”等多道限制，没由头就不出声。
     /// </summary>
     public bool EnableProactive { get; set; } = true;
-
-    /// <summary>同一会话两次主动开口的最小间隔（秒），防自说自话；默认半小时一句。</summary>
-    public int ProactiveCooldownSeconds { get; set; } = 1800;
 
     /// <summary>
     /// 群里要安静多久才算“安静下来”（秒）：没到这个时长就不主动插话（否则就是抢话）。
@@ -271,9 +218,6 @@ public sealed partial class AppSettings : global::BotAgent.Platforms.PlatformOpt
 
     /// <summary>禁止回复夹带动作/心理描写。发送前由模型仅删除或局部自然改写确认的动作旁白；数学公式、普通括号、代码和链接保持原文，判断失败则保留整条回复。</summary>
     public bool FilterActionNarration { get; set; }
-
-    /// <summary>启用群聊氛围感知与发言疲劳阻尼冷却（连续发言多次后自动衰减欲望，冷清/对线时克制，防止刷屏）。</summary>
-    public bool EnableAtmosphereDamping { get; set; } = true;
 
     /// <summary>分段发送时每段之间的时间基准（毫秒）。</summary>
     public int SegmentDelayMs { get; set; } = 700;

@@ -28,7 +28,6 @@ internal static class HostModelOptions
         FastThinkingCustomBudget = settings.FastThinkingCustomBudget,
         DefaultTemperature = settings.DefaultTemperature,
         DefaultTopP = settings.DefaultTopP,
-        EnableAtmosphereDamping = settings.EnableAtmosphereDamping,
         VoiceMaxChars = settings.VoiceMaxChars,
         VoiceEagerness = settings.VoiceEagerness,
         FilterActionNarration = settings.FilterActionNarration,

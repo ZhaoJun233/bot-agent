@@ -140,6 +140,8 @@ internal sealed class SyntheticSource : IQqChatSource, IStagedReplyChatSource
     public ConcurrentQueue<(long Target, string Text)> Sends { get; } = new();
     public Func<int, Task<SendResult>>? OnSend { get; set; }
     public Func<int, Task>? OnPrepare { get; set; }
+    public Func<long, CancellationToken, Task<(string? Text, long SenderId)>>? OnMessageInfo { get; set; }
+    public int MessageInfoCalls { get; private set; }
     public int Preparations { get; private set; }
     public event Action<QqChatMessage>? MessageReceived { add { } remove { } }
     public event Action<QqPokeEvent>? Poked { add { } remove { } }
@@ -159,6 +161,10 @@ internal sealed class SyntheticSource : IQqChatSource, IStagedReplyChatSource
     }
     public Task<(long Target, string Text)> NextSend() => _sent.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
     public Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null) => Task.FromResult(true);
-    public Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default) => Task.FromResult<(string?, long)>((null, 0));
+    public Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default)
+    {
+        MessageInfoCalls++;
+        return OnMessageInfo?.Invoke(messageId, ct) ?? Task.FromResult<(string?, long)>((null, 0));
+    }
     public Task<string?> GetGroupNameAsync(long groupId, CancellationToken ct = default) => Task.FromResult<string?>("synthetic");
 }

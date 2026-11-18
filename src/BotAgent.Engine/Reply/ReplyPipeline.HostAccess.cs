@@ -5,23 +5,18 @@ namespace BotAgent.Services.Reply;
 
 public sealed partial class ReplyPipeline
 {
-    /// <summary>丢掉某会话的待回复项（删会话/改白名单时用）。在途那次不中斷，但不再补发后续。</summary>
+    /// <summary>删会话/改白名单时退役已有回复与异步持有者；已经发生的外部发送不可撤销。</summary>
     private void DropPending(string sourceKey)
     {
         PacedReplyWork[] cancelled;
-        // Stop and queue migration share pacing → deferred → pending; cancellation stays outside all locks.
+        // Stop and admission share the epoch boundary; cancellation stays outside locks.
         lock (_pacingSync)
-        lock (_deferredGate)
         lock (_pendingGate)
         {
-            // Local transition/worker handoffs may be between containers. Weak ownership, not queue membership, retires them.
+            // Retire captured owners even when a worker is between admission and resource acquisition.
             foreach (var owner in _replyEpochs)
                 if (owner.Key.SourceKey == sourceKey) RetireReplyEpoch(owner.Key);
             cancelled = RetirePacedPendingLocked(conversation => conversation.SourceKey == sourceKey);
-            foreach (var key in _deferredTriggers.Keys.Where(key => key.Conversation == sourceKey).ToArray())
-                _deferredTriggers.TryRemove(key, out _);
-            _pendingReplies.TryRemove(sourceKey, out _);
-            _pendingConversations.TryRemove(sourceKey, out _);
         }
         foreach (var work in cancelled) work.Cancel();
     }
@@ -31,7 +26,10 @@ public sealed partial class ReplyPipeline
     /// <summary>面板/宿主读的在途与排队计数。</summary>
     public int InFlightReplies => _inFlight.Count;
 
-    public int QueuedReplies => _pendingReplies.Values.Sum(q => q.Count);
+    public int QueuedReplies
+    {
+        get { lock (_pacingSync) return _pacedWorks.Values.Count(work => !work.Turn.IsTerminal && work.Attempt is null); }
+    }
 
     public long LastGenerationMilliseconds => Interlocked.Read(ref _lastGenerationMs);
 
@@ -45,7 +43,6 @@ public sealed partial class ReplyPipeline
     /// <summary>会话被删 / 移出白名单：把它的**回复侧**痕迹一起清掉（冷却、历史标记、待回复队列）。</summary>
     public void ForgetSession(string sourceKey)
     {
-        _replyCooldown.TryRemove(sourceKey, out _);
         _historyRequested.TryRemove(sourceKey, out _);
         DropPending(sourceKey);
     }

@@ -155,12 +155,12 @@ public static class Program
 
         // 验证设置保存与审计记录处于同一事务
         var settings = new SettingsStore();
-        var initialSettings = new AppSettings { AiDesire = 42 };
+        var initialSettings = new AppSettings { GroupInterjectionProbability = 42 };
         var auditTxEvent = new AuditEvent("config_change", "synthetic-panel", "synthetic:tenant-a",
-            "{\"result\":\"applied\",\"fieldCount\":1,\"field\":\"AiDesire\"}", "2.1");
+            "{\"result\":\"applied\",\"fieldCount\":1,\"field\":\"GroupInterjectionProbability\"}", "2.1");
         settings.Save(initialSettings, auditTxEvent, audit);
         var loaded = settings.Load();
-        Check(loaded.AiDesire == 42, "配置写入生效");
+        Check(loaded.GroupInterjectionProbability == 42, "配置写入生效");
         var afterTxVerify = audit.Verify();
         Check(afterTxVerify.Valid && afterTxVerify.CheckedCount == 6, "设置与审计同事务落盘后校验完整");
 

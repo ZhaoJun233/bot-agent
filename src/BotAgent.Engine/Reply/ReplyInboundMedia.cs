@@ -1,3 +1,4 @@
+using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Qq;
 using BotAgent.Engine.Runtime;
@@ -35,7 +36,7 @@ internal sealed class ReplyInboundMedia
     private readonly IMusicUseCase _music;
     private readonly ILinkPreviewer? _links;
     private readonly Func<string, string, Func<CancellationToken, Task>, bool> _queueBackground;
-    private readonly Action<BotConversation> _requestReply;
+    private readonly Func<BotConversation, ChatMessage, Action> _captureReply;
     private readonly Action<BotConversation, long> _ensureGroupContext;
 
     /// <summary>每个会话正在跑的链接预览（回复前短暂等一下：快站点能当轮就用上）。</summary>
@@ -52,7 +53,7 @@ internal sealed class ReplyInboundMedia
         IMusicUseCase music,
         ILinkPreviewer? links,
         Func<string, string, Func<CancellationToken, Task>, bool> queueBackground,
-        Action<BotConversation> requestReply,
+        Func<BotConversation, ChatMessage, Action> captureReply,
         Action<BotConversation, long> ensureGroupContext)
     {
         _box = box;
@@ -63,7 +64,7 @@ internal sealed class ReplyInboundMedia
         _music = music;
         _links = links;
         _queueBackground = queueBackground;
-        _requestReply = requestReply;
+        _captureReply = captureReply;
         _ensureGroupContext = ensureGroupContext;
     }
 
@@ -82,7 +83,7 @@ internal sealed class ReplyInboundMedia
     /// 链接去取标题摘要、首个群消息补一次历史上下文。返回识别到的音乐分享（真的有歌时这一轮**先不回复**）。
     /// 一律 fire-and-forget：网关是在接收循环里同步调我们的，这里绝不能等。
     /// </summary>
-    public IReadOnlyList<MusicShare>? Register(BotConversation conversation, QqChatMessage msg)
+    public IReadOnlyList<MusicShare>? Register(BotConversation conversation, QqChatMessage msg, ChatMessage appended)
     {
         var policy = PlatformSourceExecution.Current is { } source
             ? _platformPolicies.Resolve(source.Context) : _platformPolicies.ResolveForChannel(msg.Channel);
@@ -116,8 +117,10 @@ internal sealed class ReplyInboundMedia
         var musicShares = musicEnabled ? msg.MusicShares : null;
         if (musicShares is { Count: > 0 })
         {
+            var requestReply = _captureReply(conversation, appended);
+            conversation.HasPendingReply = false; // Maintenance must not admit the input before listening finishes.
             _queueBackground("music-inbound:" + conversation.SourceKey, "music-inbound:" + conversation.SourceKey, _ =>
-                HandleMusicAsync(conversation, msg.SenderName, musicShares.ToList(), policy));
+                HandleMusicAsync(conversation, msg.SenderName, musicShares.ToList(), policy, requestReply));
         }
 
         // 链接：群里发的 URL（包括分享卡片里那个）真去打开看一眼，取回标题/摘要。
@@ -195,7 +198,7 @@ internal sealed class ReplyInboundMedia
     /// 分析完成后单独触发一次发言机会 —— 这样模型是“听完再说”，而不是先瞎猜一遍再补课。
     /// </summary>
     private async Task HandleMusicAsync(BotConversation conversation, string sender, List<MusicShare> shares,
-        EffectivePlatformPolicy turnPolicy)
+        EffectivePlatformPolicy turnPolicy, Action requestReply)
     {
         if (!_music.IsReady)
         {
@@ -234,7 +237,7 @@ internal sealed class ReplyInboundMedia
         if (heard && QueuedInboundCapabilityAllowed(PluginGate.MusicCapability, "music",
                 _settings.EnableMusic, turnPolicy, "听歌后回复"))
         {
-            _requestReply(conversation); // 没有触发消息 → 不引用（沿用 replyTo 那套规则）
+            requestReply(); // Retain the original input, source and epoch across the deferred analysis.
         }
     }
 

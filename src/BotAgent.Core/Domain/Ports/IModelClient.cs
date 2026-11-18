@@ -21,9 +21,6 @@ public interface IModelClient
     /// <summary>模型人设档案（可选，请求时注入系统上下文）。</summary>
     string? BotPersona { get; set; }
 
-    /// <summary>AI 对话欲望（0-100）：越高越倾向主动参与群聊发言。</summary>
-    int AiDesire { get; set; }
-
     /// <summary>发言适合度阈值（模型自评低于它就不发）。</summary>
     int SuitabilityThreshold { get; set; }
 

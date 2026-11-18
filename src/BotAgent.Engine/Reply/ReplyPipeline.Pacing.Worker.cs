@@ -39,6 +39,8 @@ public sealed partial class ReplyPipeline
                     _pacingCoordinator.TryBegin(work.Turn, out generation);
                 }
                 if (generation is null) continue; // Quiet/priority changed while waiting for a permit.
+                work.Owner.Conversation.HasPendingReply = false;
+                _traces.Begin(work.Owner.Conversation.SourceKey);
                 var attempt = new PacedReplyAttempt(this, work, generation, resources);
                 work.Attempt = attempt;
                 try
@@ -50,6 +52,7 @@ public sealed partial class ReplyPipeline
                 catch (ReplyPacingInterruptedException) { }
                 finally
                 {
+                    _traces.Complete(work.Owner.Conversation.SourceKey, "done");
                     attempt.ReleaseResources();
                     work.Attempt = null;
                 }
@@ -63,16 +66,11 @@ public sealed partial class ReplyPipeline
         finally
         {
             work.Attempt?.ReleaseResources();
-            bool handoff;
             lock (_pacingSync)
             {
                 _pacedWorks.Remove(work.Turn.Id);
-                handoff = work.LegacyHandoff && IsPacedOwnerCurrent(work.Owner);
                 if (!work.Turn.IsTerminal) _pacingCoordinator.Complete(work.Turn, false);
             }
-            // Only after all paced resources are released. Bypass RequestReply's opt-in intercept once.
-            if (handoff)
-                EnqueueReplyInEpoch(work.Owner.Conversation, _pacingCoordinator.Read(work.Turn).MessageId, false, true, work.Owner.Epoch, work.Intent);
             work.Cancellation.Dispose();
         }
     }
@@ -125,8 +123,6 @@ public sealed partial class ReplyPipeline
                 pipeline._activeConversations.TryRemove(key, out _);
                 pipeline._inFlight.TryRemove(key, out _);
             }
-            // Legacy queues may be waiting behind the same conversation during a mode transition.
-            _ = pipeline.DrainReplyQueueAsync();
         }
     }
 }

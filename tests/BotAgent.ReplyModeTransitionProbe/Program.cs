@@ -1,4 +1,5 @@
 using BotAgent.ReplyPipelinePacingProbe;
+using BotAgent.Services.Qq;
 
 namespace BotAgent.ReplyModeTransitionProbe;
 
@@ -8,23 +9,23 @@ internal static class Program
     {
         (string Name, Func<Task> Run)[] scenarios =
         [
-            ("enable discards a legacy ordinary draft", OrdinaryDraft),
-            ("rapid enable-disable cannot resurrect a retired draft", RapidToggle),
-            ("enable transfers an explicit generation once", ExplicitDraft),
-            ("enable preserves an already-started send", CommittedSend),
-            ("enable preserves an already-started effect", CommittedEffect),
-            ("enable retires an ordinary global-slot waiter", SlotWaiter),
-            ("enable removes queued ordinary requests", PendingOrdinary),
-            ("enable transfers queued explicit work through quiet", PendingExplicit),
-            ("ordinary deferred catch-up is not explicit", IntentScenarios.OrdinaryCatchUp),
-            ("null ordinary catch-up is not an accepted result", () => IntentScenarios.NullCatchUp(false)),
-            ("null proactive catch-up is not an accepted result", () => IntentScenarios.NullCatchUp(true)),
-            ("accepted background result survives mode round-trips", IntentScenarios.AcceptedResultRoundTrip),
+            ("parameter changes retain an ordinary generation", OrdinaryDraft),
+            ("rapid AI toggles cannot resurrect a retired draft", RapidToggle),
+            ("explicit work retains the admitted quiet snapshot", ExplicitDraft),
+            ("parameter changes preserve an already-started send", CommittedSend),
+            ("parameter changes preserve an already-started effect", CommittedEffect),
+            ("stop retires an ordinary global-slot waiter", () => Pending(true, false, true)),
+            ("stop removes queued ordinary requests", () => Pending(false, false, true)),
+            ("queued explicit work retains quiet after parameter updates", () => Pending(false, true, false)),
+            ("maintenance cannot replay a completed opportunity", IntentScenarios.DuplicateOpportunity),
+            ("null ordinary request is not an accepted result", () => IntentScenarios.NullOrdinary(false)),
+            ("null proactive request is not an accepted result", () => IntentScenarios.NullOrdinary(true)),
+            ("accepted background result survives parameter changes", IntentScenarios.AcceptedResult),
             ("null explicit request still observes human quiet", IntentScenarios.NullExplicit),
-            ("private input retains explicit intent on enable", IntentScenarios.PrivateExplicit),
+            ("private input retains explicit intent", IntentScenarios.PrivateExplicit),
             ("stopped deferred request cannot recapture a fresh epoch", EpochScenarios.StoppedDeferred),
-            ("stop fences concurrent queue-to-paced migration", StopTransferScenarios.QueueMigration),
-            ("stop retires a detached explicit handoff", StopTransferScenarios.DetachedHandoff),
+            ("stop fences concurrent admission", StopTransferScenarios.ConcurrentAdmission),
+            ("stop retires a detached paced dispatch", StopTransferScenarios.DetachedDispatch),
         ];
         var passed = 0;
         foreach (var (name, run) in scenarios)
@@ -32,14 +33,14 @@ internal static class Program
             try { await run(); passed++; Console.WriteLine($"PASS {name}"); }
             catch (Exception error) { Console.Error.WriteLine($"FAIL {name}: {error.Message}"); }
         }
-        Console.WriteLine($"Reply mode transition probe: {passed}/{scenarios.Length} passed.");
+        Console.WriteLine($"Single-policy lifecycle probe: {passed}/{scenarios.Length} passed.");
         return passed == scenarios.Length ? 0 : 1;
     }
 
-    private static Fixture Legacy() => new(settings => settings.ReplyPacingEnabled = false);
-    private static void Toggle(Fixture f, bool enabled)
+    private static void RefreshParameters(Fixture f)
     {
-        f.Settings.ReplyPacingEnabled = enabled;
+        f.Settings.GroupInterjectionProbability = 0;
+        f.Settings.GroupContinuationWaitSeconds = 10;
         f.Pipeline.RefreshPacingPolicy();
     }
     private static void Check(bool value, string message)
@@ -47,139 +48,136 @@ internal static class Program
         if (!value) throw new InvalidOperationException(message);
     }
     private static Task AdvanceRegistered(Fixture f, int milliseconds) => TransitionClock.AdvanceRegistered(f, milliseconds);
-
-    private static int PendingCount(Fixture f)
-    {
-        var field = f.Pipeline.GetType().GetField("_pendingReplies", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var queues = (System.Collections.Concurrent.ConcurrentDictionary<string, BotAgent.Services.Reply.TenantReplyQueue>)field.GetValue(f.Pipeline)!;
-        return queues.Values.Sum(queue => queue.Count);
-    }
     private static TaskCompletionSource Gate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static async Task OrdinaryDraft()
     {
-        await using var f = Legacy();
-        await f.Inbound("legacy-ordinary");
+        await using var f = new Fixture();
+        await f.Inbound("synthetic ordinary input");
+        await AdvanceRegistered(f, 3000);
         var call = await f.NextModel();
-        Toggle(f, true);
-        call.Reply("retired-draft");
-        await f.Idle();
-        Check(f.Source.Sends.IsEmpty, "pre-enable ordinary draft must not send");
-        Check(call.Cancellation.IsCancellationRequested, "pre-enable ordinary generation must be cancelled");
-        Check(f.Model.History.Count == 1, "ordinary work must not be replayed");
+        RefreshParameters(f);
+        Check(!call.Cancellation.IsCancellationRequested, "parameter edits cannot cancel an admitted generation");
+        call.Reply("synthetic admitted answer");
+        await f.Source.NextSend(); await f.Idle();
+        Check(f.Model.History.Count == 1 && f.Source.Sends.Count == 1, "admitted generation sends exactly once");
+        await f.Inbound("synthetic fresh ordinary input", target: 10003);
+        await f.Advance(12000); await f.Idle();
+        Check(f.Model.History.Count == 1, "new opportunities use the updated zero probability");
     }
 
     private static async Task RapidToggle()
     {
-        await using var f = Legacy();
-        await f.Inbound("legacy-fast-toggle");
+        await using var f = new Fixture();
+        await f.Inbound("synthetic old explicit input", direct: true);
+        await AdvanceRegistered(f, 3000);
         var call = await f.NextModel();
-        Toggle(f, true); Toggle(f, false); Toggle(f, true); Toggle(f, false);
-        call.Reply("retired-across-toggles");
-        await f.Idle();
-        Check(f.Source.Sends.IsEmpty && f.Model.History.Count == 1,
-            "retirement must survive rapid enable-disable cycles");
-        await f.Inbound("fresh-disabled-request", direct: true, target: 10003);
-        (await f.NextModel()).Reply("fresh-disabled-answer");
+        foreach (var enabled in new[] { false, true, false, true })
+        {
+            f.Settings.AiModeEnabled = enabled;
+            f.Pipeline.RefreshPacingPolicy();
+        }
+        call.Reply("synthetic retired answer"); await f.Idle();
+        Check(call.Cancellation.IsCancellationRequested && f.Source.Sends.IsEmpty && f.Model.History.Count == 1,
+            "AI toggles must not replay a retired explicit generation");
+        await f.Inbound("synthetic fresh explicit input", direct: true);
+        await AdvanceRegistered(f, 3000);
+        (await f.NextModel()).Reply("synthetic fresh answer");
         await f.Source.NextSend(); await f.Idle();
-        Check(f.Source.Sends.Count == 1, "fresh legacy admission must still work after disable");
+        Check(f.Source.Sends.Count == 1 && f.Model.History.Count == 2, "only fresh input is admitted after reenable");
     }
 
     private static async Task ExplicitDraft()
     {
-        await using var f = Legacy();
-        await f.Inbound("legacy-explicit", direct: true);
-        var old = await f.NextModel();
-        Toggle(f, true);
-        old.Reply("retired-explicit-draft");
-        Check(old.Cancellation.IsCancellationRequested, "explicit draft must retire before transfer");
-        await f.Until(() => f.PacedCount == 1 && f.ActiveCount == 0, "explicit handoff registered");
+        await using var f = new Fixture();
+        await f.Inbound("synthetic queued explicit", direct: true);
+        RefreshParameters(f);
         await AdvanceRegistered(f, 2999);
-        Check(f.Model.History.Count == 1 && f.Source.Sends.IsEmpty, "transfer must honor quiet");
+        Check(f.Model.History.Count == 0, "new settings cannot shorten an existing quiet window");
         await AdvanceRegistered(f, 1);
-        (await f.Model.Next()).Reply("transferred-answer");
+        var call = await f.Model.Next();
+        RefreshParameters(f);
+        call.Reply("synthetic explicit answer");
         await f.Source.NextSend(); await f.Idle();
-        Check(f.Model.History.Count == 2 && f.Source.Sends.Count == 1, "explicit transfer must occur once");
+        Check(f.Model.History.Count == 1 && f.Source.Sends.Count == 1, "explicit generation is never transferred or replayed");
     }
 
     private static async Task CommittedSend()
     {
-        await using var f = Legacy();
+        await using var f = new Fixture();
         var entered = Gate(); var release = Gate();
-        f.Source.OnSend = async _ => { entered.TrySetResult(); await release.Task; return new BotAgent.Services.Qq.SendResult(true); };
-        await f.Inbound("legacy-send", direct: true);
-        var call = await f.NextModel(); call.Reply("started-send");
+        f.Source.OnSend = async _ => { entered.TrySetResult(); await release.Task; return new SendResult(true); };
+        await f.Inbound("synthetic send input", direct: true);
+        await AdvanceRegistered(f, 3000);
+        var call = await f.NextModel(); call.Reply("synthetic started send");
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Toggle(f, true); Toggle(f, false); Toggle(f, true);
-            Check(!call.Cancellation.IsCancellationRequested, "started send must retain ownership");
+            RefreshParameters(f); f.Pipeline.ResizeGate(2);
+            Check(!call.Cancellation.IsCancellationRequested, "started send retains its lease across configuration updates");
         }
         finally { release.TrySetResult(); }
         await f.Idle();
-        Check(f.Source.Sends.Count == 1 && f.Model.History.Count == 1, "started send must not replay");
+        Check(f.Source.Sends.Count == 1 && f.Model.History.Count == 1, "started send completes only once");
     }
 
     private static async Task CommittedEffect()
     {
-        await using var f = new Fixture(settings => { settings.ReplyPacingEnabled = false; settings.EnableWebSearch = true; settings.MaxAgentSteps = 2; });
+        await using var f = new Fixture(s => { s.EnableWebSearch = true; s.MaxAgentSteps = 2; });
         var release = new TaskCompletionSource<BotAgent.Services.Net.WebSearchResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
         f.Research.OnSearch = _ => release.Task;
-        await f.Inbound("legacy-tool", direct: true);
-        var first = await f.NextModel(); first.Reply(null, "synthetic-query");
+        await f.Inbound("synthetic tool input", direct: true);
+        await AdvanceRegistered(f, 3000);
+        var first = await f.NextModel(); first.Reply(null, "synthetic query");
         await f.Research.NextSearch();
-        Toggle(f, true); Toggle(f, false); Toggle(f, true);
-        release.TrySetResult(ControlledResearch.Result());
-        var followup = await f.NextModel(); followup.Reply("tool-result");
+        RefreshParameters(f); release.TrySetResult(ControlledResearch.Result());
+        (await f.NextModel()).Reply("synthetic tool result");
         await f.Source.NextSend(); await f.Idle();
         Check(!first.Cancellation.IsCancellationRequested && f.ResearchCalls == 1,
             "started effect must finish exactly once");
-        Check(f.Model.History.Count == 2 && f.Source.Sends.Count == 1, "effect followup must not regenerate");
+        Check(f.Model.History.Count == 2 && f.Source.Sends.Count == 1, "effect followup is not regenerated");
     }
 
-    private static async Task SlotWaiter() => await Pending(anotherConversation: true, explicitRequest: false);
-    private static async Task PendingOrdinary() => await Pending(anotherConversation: false, explicitRequest: false);
-    private static async Task PendingExplicit() => await Pending(anotherConversation: false, explicitRequest: true);
-
-    private static async Task Pending(bool anotherConversation, bool explicitRequest)
+    private static async Task Pending(bool anotherConversation, bool explicitRequest, bool stop)
     {
-        await using var f = Legacy();
+        await using var f = new Fixture();
         var entered = Gate(); var release = Gate();
-        f.Source.OnSend = async _ => { entered.TrySetResult(); await release.Task; return new BotAgent.Services.Qq.SendResult(true); };
-        await f.Inbound("legacy-occupied", direct: true);
-        (await f.NextModel()).Reply("first-committed-answer");
+        f.Source.OnSend = async count =>
+        {
+            if (count == 1) { entered.TrySetResult(); await release.Task; }
+            return new SendResult(true);
+        };
+        await f.Inbound("synthetic occupied input", direct: true);
+        await AdvanceRegistered(f, 3000);
+        (await f.NextModel()).Reply("synthetic committed answer");
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         try
         {
-            await f.Inbound("legacy-pending", direct: explicitRequest, target: anotherConversation ? 10003 : 10001);
+            var target = anotherConversation ? 10003 : 10001;
+            var waiting = await f.Inbound("synthetic pending input", direct: explicitRequest, target: target);
             if (anotherConversation)
-                await f.Until(() => f.Pipeline.InFlightReplies == 2, "legacy waiter claimed");
-            else
-                Check(PendingCount(f) == 1, "same-conversation request must be queued");
-            Toggle(f, true);
+            {
+                await AdvanceRegistered(f, 3000);
+                Check(f.Model.History.Count == 1 && f.PacedCount == 2, "global-slot waiter remains owned without starting generation");
+            }
+            if (stop) f.Pipeline.ForgetSession(waiting.SourceKey);
+            else RefreshParameters(f);
         }
         finally { release.TrySetResult(); }
-        await f.Until(() => f.Model.History.Count > 1 || f.Pipeline.InFlightReplies == 0, "legacy retirement drains");
-        if (f.Model.History.Count > 1)
+        await f.Until(() => f.ActiveCount == 0, "committed emission drains");
+        if (stop)
         {
-            (await f.NextModel()).Reply("unexpected-legacy-followup");
-            await f.Idle();
-            throw new InvalidOperationException("pre-enable queue/waiter bypassed paced admission");
-        }
-        Check(f.Source.Sends.Count == 1, "only already-committed send may finish before quiet");
-        if (explicitRequest)
-        {
-            await AdvanceRegistered(f, 2999);
-            Check(f.Model.History.Count == 1, "queued explicit transfer must honor full quiet");
-            await AdvanceRegistered(f, 1);
-            (await f.Model.Next()).Reply("pending-explicit-answer");
-            await f.Source.NextSend(); await f.Source.NextSend(); await f.Idle();
-            Check(f.Model.History.Count == 2 && f.Source.Sends.Count == 2, "queued explicit request transfers once");
+            await f.Advance(10000); await f.Idle();
+            Check(f.Model.History.Count == 1 && f.Source.Sends.Count == 1, "stopped waiter produces no generation or send");
         }
         else
         {
-            await f.Advance(3000); await f.Idle();
-            Check(f.Model.History.Count == 1 && f.Source.Sends.Count == 1, "ordinary queue/waiter must be discarded");
+            await AdvanceRegistered(f, 2999);
+            Check(f.Model.History.Count == 1, "queued explicit request still honors its original quiet wait");
+            await AdvanceRegistered(f, 1);
+            (await f.NextModel()).Reply("synthetic pending explicit answer");
+            await f.Idle();
+            Check(f.Model.History.Count == 2 && f.Source.Sends.Count == 2, "queued explicit work completes once");
         }
     }
 }

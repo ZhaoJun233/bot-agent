@@ -12,8 +12,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("final send preflight rechecks freshness after await", FinalPreflight),
     ("committed effects retain draft and wait only same human", EffectQuiet),
     ("stop fences generation and subsequent ingress", Stop),
-    ("disable hands off explicit once and discards ordinary", Toggle),
-    ("disable preserves irreversible work without handoff", EffectToggle),
+    ("AI disable discards queued work without replay", Toggle),
+    ("parameter updates preserve irreversible work without replay", EffectParameterUpdate),
     ("revoked permission fences owned generation", PermissionRevocation),
     ("failed delivery does not start cooldown but success does", DeliveryCooldown)
 };
@@ -146,22 +146,26 @@ static async Task Toggle()
     await using var f = new ProbeHarness();
     var conversation = Group();
     f.Input(conversation); f.Input(conversation, direct: false, speaker: 10002); await f.SleepingAsync();
-    f.Toggle(false); await f.DrainedAsync();
-    Equal(1, f.Pipeline.Handoffs, "only explicit ownership transferred to legacy"); Equal(0, f.History.Count, "no paced generation after disable");
-    f.Toggle(false); Equal(1, f.Pipeline.Handoffs, "repeated disable cannot hand off twice");
-    f.Toggle(true); f.Input(conversation); await f.SleepingAsync();
-    await f.AtAsync(3000); var call = await f.NextAsync(); call.Send(); await call.DoneAsync(); await f.DrainedAsync();
-    Equal(1, f.Sends, "reenabled pacing creates fresh work"); Equal(1, f.Pipeline.Handoffs, "no duplicate handoff");
+    f.ToggleAi(false); await f.DrainedAsync();
+    Equal(0, f.History.Count, "no generation after AI disable");
+    f.ToggleAi(false); f.ToggleAi(true); await f.AtAsync(3000);
+    Equal(0, f.History.Count, "reenable cannot replay queued work");
+    f.Input(conversation); await f.SleepingAsync();
+    await f.AtAsync(6000); var call = await f.NextAsync(); call.Send(); await call.DoneAsync(); await f.DrainedAsync();
+    Equal(1, f.Sends, "reenabled AI creates only fresh work");
 }
 
-static async Task EffectToggle()
+static async Task EffectParameterUpdate()
 {
     await using var f = new ProbeHarness(); f.Settings.GroupContinuationWaitSeconds = 0;
     f.Input(Group(), direct: false); var call = await f.NextAsync(); call.EffectThenHold();
     await call.EffectReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
-    f.Toggle(false); call.Continue(); await call.DoneAsync(); await f.DrainedAsync();
+    var settings = f.Settings.Snapshot();
+    settings.GroupInterjectionProbability = 0;
+    settings.GroupContinuationWaitSeconds = 10;
+    f.Pipeline.ReplaceSettings(settings); call.Continue(); await call.DoneAsync(); await f.DrainedAsync();
     Equal(1, f.Effects, "accepted effect remains owned"); Equal(1, f.Sends, "irreversible result stays deliverable");
-    Equal(0, f.Pipeline.Handoffs, "irreversible work is not duplicated in legacy");
+    Equal(1, f.History.Count, "irreversible work is not regenerated after parameter changes");
 }
 
 static async Task PermissionRevocation()

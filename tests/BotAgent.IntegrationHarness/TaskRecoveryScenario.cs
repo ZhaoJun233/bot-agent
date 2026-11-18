@@ -39,8 +39,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{wsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_PANEL_TOKEN"] = SyntheticPanelToken,
             ["BOTAGENT_ZBA_TOKEN"] = adminToken,

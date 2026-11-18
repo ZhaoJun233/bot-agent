@@ -13,6 +13,7 @@ using BotAgent.Services.Model;
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 ModelClock.Initialize(new FixedClock());
 var checks = 0;
+using var baseline = args.Length == 1 ? new BaselinePrompt(args[0]) : null;
 
 // Captured from the unchanged b80d7b2 model with this fixed clock, before adding pacing.
 // Retain these hashes: the silence repair may add only the explicit contract below.
@@ -28,16 +29,32 @@ var golden = new[]
     (50, 101, false, "E9D57A68E1BFB7250B034D9DC9021BFE738883EE467997D98FE1F9C05C3229F5"),
     (0, 50, true, "EC6A602877B3146D5580F5ECF14C60E41F015AEBB4E3904DD7BBC7A7A13CB101")
 };
+// Captured from unchanged 66149bf3 with pacing enabled; the optional baseline run also
+// checks the older legacy hashes above, so these are not regenerated from the candidate.
+var pacedGolden = new Dictionary<(int Threshold, bool Private), string>
+{
+    [(50, false)] = "61BCF78286008D4475FAF1A998F40E747CD2C8106D1962F781DAA6F136E8601E",
+    [(-1, false)] = "B756341B98F007B6224DC6FFC050ABFE6474BA95E0FE5C5B4732AA14CE564B68",
+    [(101, false)] = "0185BD13CB6C8F5F3D2040623D918F55BE60236D64DF87645468DF6D89BB8B2F",
+    [(50, true)] = "1A9ABD24D5994DB9059763FB99F7957D0BF28068F7F30F7BAEB2568E93790045"
+};
 foreach (var (desire, threshold, isPrivate, expected) in golden)
 {
-    var request = Request(desire, threshold, isPrivate);
+    var request = Request(threshold, isPrivate);
     var prompt = PromptBuilder.Build(request);
     Check(prompt.Split(silenceContract, StringSplitOptions.None).Length == 2,
         "zero-message silence contract appears exactly once");
-    Check(Hash(prompt.Replace(silenceContract, "", StringComparison.Ordinal)) == expected,
-        "legacy prompt golden except the explicit silence contract");
-    Check(PromptBuilder.Build(request) == PromptBuilder.Build(request with { ReplyPacingEnabled = false }),
-        "omitted pacing flag remains legacy");
+    Check(Hash(prompt) == pacedGolden[(threshold, isPrivate)], "unchanged baseline paced prompt golden");
+    if (baseline is not null)
+    {
+        var legacy = baseline.Build(request, desire, pacing: false);
+        Check(Hash(legacy.Text.Replace(silenceContract, "", StringComparison.Ordinal)) == expected,
+            "preserved legacy golden validates the baseline independently");
+        var paced = baseline.Build(request, desire, pacing: true);
+        Check(prompt == paced.Text && PromptBuilder.BuildParts(request).Stable == paced.Stable,
+            "single-policy prompt equals the unchanged baseline paced prompt");
+        Console.WriteLine($"BASELINE_PACED_HASH threshold={threshold} private={isPrivate} hash={Hash(paced.Text)}");
+    }
 }
 
 var desireTexts = new[]
@@ -52,24 +69,23 @@ foreach (var threshold in new[] { 0, 50, 100 })
 foreach (var isPrivate in new[] { false, true })
 foreach (var proactive in new[] { false, true })
 {
-    var request = Request(desire, threshold, isPrivate) with
+    var request = Request(threshold, isPrivate) with
     {
         Proactive = proactive, VibeHint = "平静", MoodText = "合成心情",
         EnableWebSearch = true, EnableToolRequest = true, ToolList = "synthetic_tool",
         EnableAsk = true, EnableVoice = true, EnableListen = true
     };
-    var legacy = PromptBuilder.BuildParts(request);
-    var paced = PromptBuilder.BuildParts(request with { ReplyPacingEnabled = true });
-    var expected = legacy.Text;
+    var paced = PromptBuilder.BuildParts(request);
     foreach (var text in desireTexts)
     {
-        expected = expected.Replace("\n" + text, "", StringComparison.Ordinal);
-        Check(!paced.Text.Contains(text, StringComparison.Ordinal), "no legacy desire tier in paced prompt");
+        Check(!paced.Text.Contains(text, StringComparison.Ordinal), "no retired desire tier in the single-policy prompt");
     }
-    Check(paced.Text == expected, "only legacy desire sentence is removed; content and safety unchanged");
-    Check(paced.Stable == legacy.Stable, "pacing does not churn stable prompt cache prefix");
-    Check(paced.Text == PromptBuilder.Build(request with { AiDesire = 0, ReplyPacingEnabled = true }),
-        "paced prompt ignores every legacy desire value");
+    if (baseline is not null)
+    {
+        var expected = baseline.Build(request, desire, pacing: true);
+        Check(paced.Text == expected.Text, "content and safety equal the baseline paced prompt");
+        Check(paced.Stable == expected.Stable, "stable cache prefix equals the baseline paced prefix");
+    }
     if (!isPrivate || proactive)
         Check(paced.Text.Contains($"suitability 不低于 {threshold}", StringComparison.Ordinal), "suitability threshold retained");
 }
@@ -90,21 +106,20 @@ var samplingCases = new (string Text, bool Facts, string? Vibe, string? Declared
 foreach (var adaptive in new[] { false, true })
 foreach (var c in samplingCases)
 {
-    var legacy = SamplingPolicy.Resolve(c.Text, c.Facts, c.Vibe, c.Declared, config with { Enabled = adaptive });
-    var paced = SamplingPolicy.Resolve(c.Text, c.Facts, c.Vibe, c.Declared,
-        config with { Enabled = adaptive, ReplyPacingEnabled = true });
+    var profile = SamplingPolicy.Resolve(c.Text, c.Facts, c.Vibe, c.Declared, config with { Enabled = adaptive });
     var expected = adaptive ? c.Expected : new SamplingProfile(0.6, 0.7, CognitiveIntent.Balanced, "adaptive_disabled");
-    Check(legacy == expected, "legacy sampling numbers, intent and reason");
-    Check(paced.ReplyPacingEnabled, "every sampling branch carries the pacing snapshot");
-    Check(paced with { ReplyPacingEnabled = false } == legacy, "pacing does not change content sampling");
+    Check(profile == expected, "sampling numbers, intent and reason remain unchanged");
 }
+Check(typeof(AdaptiveSamplingConfig).GetProperty("ReplyPacingEnabled") is null
+    && typeof(SamplingProfile).GetProperty("ReplyPacingEnabled") is null
+    && typeof(PromptBuilder.PromptRequest).GetProperty("AiDesire") is null,
+    "content and sampling contracts no longer expose retired scheduler switches");
 
 // Capture assembly only: BuildAsync throws a dedicated sentinel, before any send or image I/O.
 var transport = new CaptureTransport();
 var options = new ModelOptions
 {
-    ModelBaseUrl = "https://example.com/v1", Model = "synthetic-model", ApiKey = "synthetic-key",
-    EnableAtmosphereDamping = false
+    ModelBaseUrl = "https://example.com/v1", Model = "synthetic-model", ApiKey = "synthetic-key"
 };
 var rejectHttp = new RejectHttp();
 var client = new OpenAiClient(() => options, rejectHttp, rejectHttp, new RejectImages(), transport)
@@ -116,33 +131,19 @@ var window = Enumerable.Range(0, 4).Select(i => new ChatMessage
     QqMessageId = i + 1, SenderId = 10001, SenderName = "Synthetic bot", Role = MessageRole.Self,
     Timestamp = ModelClock.Current.Now, Text = "Synthetic reply"
 }).ToArray();
-var admitted = SamplingPolicy.Resolve(null, false, null, null,
-    config with { Enabled = false, ReplyPacingEnabled = true });
-string? firstPaced = null;
-foreach (var desire in new[] { 0, 19, 20, 49, 50, 79, 80, 100 })
-foreach (var damping in new[] { false, true })
+var admitted = SamplingPolicy.Resolve(null, false, null, null, config with { Enabled = false });
+var firstPaced = await Capture(admitted);
+foreach (var temperature in new[] { 0.2, 0.9, 1.5 })
 {
-    client.AiDesire = desire;
-    options.EnableAtmosphereDamping = damping;
+    options.DefaultTemperature = temperature;
     var prompt = await Capture(admitted);
-    firstPaced ??= prompt;
-    Check(prompt == firstPaced, "hot legacy desire/damping cannot change an admitted turn prompt");
+    Check(prompt == firstPaced, "hot sampling settings do not mutate the admitted prompt");
     Check(transport.Sampling == admitted, "sampling snapshot reaches transport unchanged");
     Check(prompt.Contains("suitability 不低于 63", StringComparison.Ordinal), "client retains suitability gate");
     Check(prompt.Contains("平静", StringComparison.Ordinal), "client retains vibe content");
-    Check(desireTexts.All(text => !prompt.Contains(text, StringComparison.Ordinal)), "client forwards paced prompt flag");
+    Check(desireTexts.All(text => !prompt.Contains(text, StringComparison.Ordinal)), "client never emits retired desire instructions");
 }
-client.AiDesire = 90;
-options.EnableAtmosphereDamping = false;
-var unpaced = await Capture(null);
-Check(unpaced.Contains(desireTexts[3], StringComparison.Ordinal), "absent snapshot uses legacy desire");
-Check(await Capture(admitted with { ReplyPacingEnabled = false }) == unpaced, "turn snapshot false wins without global mode state");
-options.EnableAtmosphereDamping = true;
-var damped = await Capture(null);
-// Four recent self replies: 90 - 75 fatigue + 5 active atmosphere = 20.
-Check(damped.Contains(desireTexts[1], StringComparison.Ordinal), "legacy atmosphere damping is still applied");
-Check(damped != unpaced, "synthetic atmosphere exercises a real legacy desire band change");
-Check(await Capture(admitted) == firstPaced, "mode handoff does not mutate the admitted snapshot");
+Check(await Capture(null) == firstPaced, "absent sampling snapshot cannot restore legacy reply instructions");
 Console.WriteLine($"ReplyPromptProbe: {checks} checks passed (synthetic, no network or business data).");
 
 void Check(bool passed, string name)
@@ -166,8 +167,8 @@ async Task<string> Capture(SamplingProfile? sampling)
 
 static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
-static PromptBuilder.PromptRequest Request(int desire, int threshold = 50, bool isPrivate = false) => new(
-    SystemPrompt: "Synthetic prompt probe", BotIdentity: null, Persona: null, AiDesire: desire,
+static PromptBuilder.PromptRequest Request(int threshold = 50, bool isPrivate = false) => new(
+    SystemPrompt: "Synthetic prompt probe", BotIdentity: null, Persona: null,
     Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null, Stickers: null,
     PokeContext: false, Proactive: false, MoodText: null, MusicText: null, LinkText: null, RecallText: null,
     GroupRolesText: null, VibeHint: null, SearchText: null, SuitabilityThreshold: threshold,

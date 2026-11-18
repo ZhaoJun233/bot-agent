@@ -150,29 +150,28 @@ internal static partial class Scenarios
         await f.Until(() => f.ActiveCount == 0, "priority reply finishes");
     }
 
-    public static async Task ModeOff(Action<bool, string> check)
+    public static async Task AiOff(Action<bool, string> check)
     {
         await using (var ordinary = new Fixture())
         {
             await ordinary.Inbound("queued-ordinary");
             await ordinary.Until(() => ordinary.Clock.Pending > 0, "quiet wait");
-            ordinary.Settings.ReplyPacingEnabled = false;
+            ordinary.Settings.AiModeEnabled = false;
             ordinary.Pipeline.RefreshPacingPolicy();
             await ordinary.Advance(5000);
             await ordinary.Idle();
-            check(ordinary.Model.History.Count == 0 && ordinary.Source.Sends.Count == 0, "mode off discards ordinary queued work");
+            check(ordinary.Model.History.Count == 0 && ordinary.Source.Sends.Count == 0, "AI off discards ordinary queued work");
         }
         await using var explicitFixture = new Fixture();
         await explicitFixture.Inbound("queued-explicit", direct: true);
         await explicitFixture.Until(() => explicitFixture.Clock.Pending > 0, "explicit continuation wait");
-        explicitFixture.Settings.ReplyPacingEnabled = false;
+        explicitFixture.Settings.AiModeEnabled = false;
         explicitFixture.Pipeline.RefreshPacingPolicy();
-        var legacy = await explicitFixture.Model.Next();
-        legacy.Reply("legacy-once");
-        await explicitFixture.Source.NextSend();
         await explicitFixture.Idle();
+        explicitFixture.Settings.AiModeEnabled = true;
+        explicitFixture.Pipeline.RefreshPacingPolicy();
         await explicitFixture.Advance(30000);
-        check(explicitFixture.Model.History.Count == 1 && explicitFixture.Source.Sends.Count == 1, "mode off returns queued explicit work to legacy exactly once");
+        check(explicitFixture.Model.History.Count == 0 && explicitFixture.Source.Sends.Count == 0, "reenabling AI does not replay retired queued explicit work");
     }
 
     public static async Task FullAckCooldown(Action<bool, string> check)

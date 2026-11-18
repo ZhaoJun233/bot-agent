@@ -118,7 +118,6 @@ internal static partial class CompositionRoot
         {
             BotIdentity = string.IsNullOrWhiteSpace(settings.NormalizedUin) ? null : settings.NormalizedUin,
             BotPersona = settings.BotPersona,
-            AiDesire = settings.AiDesire,
             SuitabilityThreshold = settings.SuitabilityThreshold,
             MaxContextMessages = settings.MaxContextMessages // 漏了这行会让上下文窗口在面板修改后不同步
         };

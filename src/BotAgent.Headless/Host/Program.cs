@@ -283,12 +283,12 @@ public static class Program
               QQCHAT_WHITELIST         白名单：群号/QQ号，逗号或换行分隔；'*' 表示全部接收
               QQCHAT_PERSONA           机器人人设（_FILE 变体读文件）
               QQCHAT_AI_MODE           =0 只收消息不自动回复（默认 1）
-              QQCHAT_AI_DESIRE         对话欲望 0-100（默认 50）
               QQCHAT_SUITABILITY_THRESHOLD  发言适合度阈值 0-100（默认 10）
 
-              QQCHAT_PRIVATE_COOLDOWN  私聊冷却秒数（默认 3）
-              QQCHAT_GROUP_COOLDOWN    群聊冷却秒数（默认 8）
-              QQCHAT_IDLE_FALLBACK     静默兜底秒数，0=关闭（默认 60）
+              QQCHAT_GROUP_INTERJECTION_PROBABILITY  普通群聊插话概率 0-100（默认 20）
+              QQCHAT_GROUP_INTERJECTION_COOLDOWN     完整发送后的插话冷却秒数（默认 30）
+              QQCHAT_GROUP_CONTINUATION_WAIT         同一群友续发等待秒数（默认 3）
+              QQCHAT_PRIVATE_CONTINUATION_WAIT       私聊续发等待秒数（默认 1.5）
               QQCHAT_SPLIT_REPLIES     长回复分句发送（默认 1）
               QQCHAT_SEGMENT_DELAY_MS  分句之间的间隔毫秒（默认 700）
               QQCHAT_MAX_CONTEXT       最大上下文条数（默认 200）

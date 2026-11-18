@@ -8,6 +8,7 @@ public interface IPacedReplyAttempt
     AppSettings Snapshot { get; }
     bool IsExplicit { get; }
     bool IsSoftDraft { get; }
+    long SpeakerId { get; }
     long Sequence { get; }
     Task ValidateDraftAsync();
     void RecordDelivery(ChatDeliveryReport report);

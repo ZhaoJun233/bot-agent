@@ -44,7 +44,6 @@ public sealed class ModelOptions
 
     public double DefaultTopP { get; set; } = 0.85;
 
-    public bool EnableAtmosphereDamping { get; set; } = true;
 
     public int VoiceMaxChars { get; set; } = 100;
 

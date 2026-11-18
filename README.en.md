@@ -28,7 +28,7 @@ The project natively supports running directly from source code across standard 
 
 ### Intelligent Judgment and Natural Interaction
 - **Autonomous Speaking Opportunity Decisions**: The model evaluates the necessity of speaking based on conversation context and configured suitability thresholds, remaining silent when below the threshold; combined with rate-limiting cooldown algorithms to prevent spamming and mechanical interruptions.
-- **Atmosphere Awareness & Fatigue Damping**: Dynamically analyzes message velocity and room sentiment; applies non-linear desire damping after consecutive bot turns and enforces cooldown periods, reducing interruptions in quiet groups while practicing restraint during heated arguments.
+- **Atmosphere Awareness & Reply Pacing**: Uses room sentiment to assess suitable content; group interjection probability, cooldown after complete replies and same-speaker continuation windows control pacing while direct requests and private chats retain explicit-response admission.
 - **User Profiles & Long-Term Memory**: Constructs short-term conversation stacks and long-term user personas based on sender identifiers (with evidence-backed traceability and manual overrides), persisted to an embedded SQLite database.
 - **Action Narration Semantic Filtering**: Supports filtering stage-direction narration (e.g., bracketed actions) from model outputs, verified by a secondary semantic check while strictly preserving math formulas, code snippets, links, and genuine explanations.
 - **Multimodal Visual Perception**: Automatically downloads group images and passes them to multimodal vision models; features internal image byte caching and automatic URL re-signing for expiring temporary URLs.
@@ -174,7 +174,7 @@ The host reads prefixed names, **canonical `BOTAGENT_*` first, legacy `QQCHAT_*`
 
 After initialisation almost every runtime behaviour is changed in the Web panel; saving persists it, applies it live and needs **no restart**: persona and the AI switch, group/private whitelists, reply thresholds and cooldowns, splitting and delays, stickers and pokes, voice and TTS, search, platform instance policies, plugins and MCP, model providers.
 
-Those keys still exist as environment variables in old deployments (`QQCHAT_WHITELIST`, `QQCHAT_PERSONA`, `QQCHAT_GROUP_COOLDOWN`…); they are now only a **first-deployment seed**.
+Behavior environment variables (`QQCHAT_WHITELIST`, `QQCHAT_PERSONA`, `QQCHAT_GROUP_INTERJECTION_PROBABILITY`) are only a **first-deployment seed**. All replies use [reply pacing](docs/reply-pacing.md); legacy desire, cooldown and participation-gate settings are retired.
 
 ### QQ Official Open Platform (optional)
 

@@ -202,8 +202,8 @@ test('未保存保护：旧保存迟到返回时不得替新离开框做决定',
   await expect(page.getByTestId('config-fields')).toBeVisible()
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const field = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const field = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   await field.fill(String(Number(await field.inputValue()) + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 

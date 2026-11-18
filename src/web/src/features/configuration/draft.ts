@@ -8,7 +8,7 @@ import type {
   ZbaSecretEdit,
   ZbaSecretSlot
 } from '../../api/zba'
-import { replyPacingNumberError } from './reply-pacing'
+import { replyPacingNumberError, retiredReplyFields } from './reply-pacing'
 export { newNonce } from '../../shared/nonce'
 
 /** 一个字段的草稿：Set 保存用户输入的原始文本，Clear 表示显式清除。 */
@@ -116,6 +116,10 @@ export function buildPatch(draft: DraftMap, view: ZbaConfigurationView): PatchBu
       continue
     }
     const [section, key] = parts
+    if (section === 'behavior' && retiredReplyFields.has(key)) {
+      errors.push(`${path}：旧版回复配置已移除`)
+      continue
+    }
     const field = editableField(view, section, key)
     if (field === undefined) {
       errors.push(`${path}：字段不存在`)

@@ -107,19 +107,19 @@ public static partial class Program
         {
             using var response = await sessionHttp.GetAsync($"{panel}/api/settings", cts.Token);
             var root = JsonNode.Parse(await response.Content.ReadAsStringAsync(cts.Token)) as JsonObject;
-            return root?["runtime"]?["groupCooldownSeconds"]?.ToString() ?? "(missing)";
+            return root?["runtime"]?["groupInterjectionCooldownSeconds"]?.ToString() ?? "(missing)";
         }
 
-        var (sameOriginCode, _) = await OriginPostAsync(panelOrigin, """{"groupCooldownSeconds":11}""");
+        var (sameOriginCode, _) = await OriginPostAsync(panelOrigin, """{"groupInterjectionCooldownSeconds":11}""");
         Check("同源 Cookie 写请求仍成功", sameOriginCode == 200 && await SavedCooldownAsync() == "11",
             $"HTTP {sameOriginCode} cooldown={await SavedCooldownAsync()}");
-        var (crossPortCode, _) = await OriginPostAsync($"http://127.0.0.1:{otherOriginPort}", """{"groupCooldownSeconds":22}""");
+        var (crossPortCode, _) = await OriginPostAsync($"http://127.0.0.1:{otherOriginPort}", """{"groupInterjectionCooldownSeconds":22}""");
         Check("★ 同主机异端口 Origin 被拒且不落盘", crossPortCode == 403 && await SavedCooldownAsync() == "11",
             $"HTTP {crossPortCode} cooldown={await SavedCooldownAsync()}");
-        var (crossSchemeCode, _) = await OriginPostAsync($"https://127.0.0.1:{healthPort}", """{"groupCooldownSeconds":33}""");
+        var (crossSchemeCode, _) = await OriginPostAsync($"https://127.0.0.1:{healthPort}", """{"groupInterjectionCooldownSeconds":33}""");
         Check("★ 同主机异协议 Origin 被拒且不落盘", crossSchemeCode == 403 && await SavedCooldownAsync() == "11",
             $"HTTP {crossSchemeCode} cooldown={await SavedCooldownAsync()}");
-        var (proxyCode, _) = await OriginPostAsync("https://panel.example", """{"groupCooldownSeconds":44}""",
+        var (proxyCode, _) = await OriginPostAsync("https://panel.example", """{"groupInterjectionCooldownSeconds":44}""",
             host: "panel.example", forwarded: "https");
         Check("★ 可信回环反向代理的完整 Origin 仍可写", proxyCode == 200 && await SavedCooldownAsync() == "44",
             $"HTTP {proxyCode} cooldown={await SavedCooldownAsync()}");

@@ -282,7 +282,10 @@ internal static class EngineWiringTests
 
         var media = Component(pipeline, "_inboundMedia");
         var handle = media.GetType().GetMethod("Register", BindingFlags.Instance | BindingFlags.Public)!;
-        handle.Invoke(media, new object[] { conversation, msg });
+        var appended = new ChatMessage { Role = MessageRole.Peer, SenderId = msg.UserId,
+            QqMessageId = msg.MessageId, Text = msg.Text };
+        conversation.Append(appended);
+        handle.Invoke(media, new object[] { conversation, msg, appended });
 
         var mode = revoked ? "revoked" : "positive";
         check(background.Snapshot().Queued == 1, $"{mode} {kind} inbound media is queued behind the blocker");
@@ -367,7 +370,10 @@ internal static class EngineWiringTests
 
         var media = Component(pipeline, "_inboundMedia");
         var handle = media.GetType().GetMethod("Register", BindingFlags.Instance | BindingFlags.Public)!;
-        handle.Invoke(media, new object[] { conversation, msg });
+        var appended = new ChatMessage { Role = MessageRole.Peer, SenderId = msg.UserId,
+            QqMessageId = msg.MessageId, Text = msg.Text };
+        conversation.Append(appended);
+        handle.Invoke(media, new object[] { conversation, msg, appended });
 
         var mode = revoked ? "revoked" : "positive";
         check(background.Snapshot().Queued == 1, $"{mode} sticker batch is queued behind the blocker");
@@ -411,7 +417,6 @@ internal static class EngineWiringTests
             EnableStickers = true,
             StickerLibraryMax = 5,
             StickerCurateIntervalSeconds = 0,
-            IdleFallbackSeconds = 0,
             EnableProfileSummary = false,
             ProfileSummaryIntervalSeconds = 0,
         });
@@ -755,15 +760,10 @@ internal static class EngineWiringTests
 
     private static ReplyPipeline NewBarePipeline(BackgroundEvaluatorQueue background, IQqChatSource source)
     {
-        // 只构造队列/来源/钩子三项：私有方法本身不依赖其余子系统（引用取不到原文时提前返回）。
-        var pipeline = (ReplyPipeline)RuntimeHelpers.GetUninitializedObject(typeof(ReplyPipeline));
-        typeof(ReplyPipeline).GetField("_background", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(pipeline, background);
-        typeof(ReplyPipeline).GetField("_source", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(pipeline, source);
-        typeof(ReplyPipeline).GetField("_hooks", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(pipeline, new ReplyHooks(_ => { }, () => 10001, () => false));
-        return pipeline;
+        // Real construction initializes epoch ownership used by asynchronous quote enrichment.
+        return new ReplyPipeline(new SettingsBox(new AppSettings()), source, null!, null!, null!, null!, null!, null!, null!,
+            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
+            new ReplyHooks(_ => { }, () => 10001, () => false), new TurnTraceStore(), background: background);
     }
 
     private static BackgroundEvaluatorQueue NewQueue()

@@ -398,8 +398,7 @@ public static partial class Program
 
         // 提示词侧：这一段真的被拼进去了（PromptBuilder），且空串时一个字都不多。
         var withList = PromptBuilder.Build(new PromptBuilder.PromptRequest(
-            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, AiDesire: 0,
-            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
             Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
             LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
             SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
@@ -410,8 +409,7 @@ public static partial class Program
             && withList.Contains("web.search", StringComparison.Ordinal), "长度 " + withList.Length);
 
         var withoutList = PromptBuilder.Build(new PromptBuilder.PromptRequest(
-            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, AiDesire: 0,
-            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
             Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
             LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
             SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
@@ -953,7 +951,6 @@ public static partial class Program
 
         public string? BotIdentity { get; set; }
         public string? BotPersona { get; set; }
-        public int AiDesire { get; set; }
         public int SuitabilityThreshold { get; set; }
         public int MaxContextMessages { get; set; }
         public TimeSpan ChatTimeout => TimeSpan.FromSeconds(1);
@@ -1755,8 +1752,8 @@ public static partial class Program
         Check("没判过（纯旁白）：不拿“没判”当拒绝，照样放行",
             noDecision.Proceed && noDecision.ReasonCode == "not_evaluated", noDecision.Describe());
 
-        Check("★ 闸门开关的默认值是**关**（AppSettings 默认 = 与改造前逐字一致）",
-            !new BotAgent.Services.AppSettings().EnableParticipationGating, "默认 true 就是改线上行为");
+        Check("旧参与闸门配置已退役，新版调度是唯一参与入口",
+            typeof(BotAgent.Services.AppSettings).GetProperty("EnableParticipationGating") is null, "不应暴露旧版参与开关");
         Check("★ 提问开关的默认值是**关**",
             !new BotAgent.Services.AppSettings().EnableQuestions, "默认 true 就是改线上行为");
 
@@ -2217,7 +2214,6 @@ public static partial class Program
         public Func<CancellationToken, Task<string?>>? ChatCompletion { get; init; }
         public string? BotIdentity { get; set; }
         public string? BotPersona { get; set; }
-        public int AiDesire { get; set; }
         public int SuitabilityThreshold { get; set; }
         public int MaxContextMessages { get; set; }
         public TimeSpan ChatTimeout => TimeSpan.FromSeconds(1);

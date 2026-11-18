@@ -21,11 +21,11 @@ var tests = new (string Name, Action Run)[]
     ("A11 terminal paths release global slots exactly once", GlobalCapacityScenarios.RetirementReadmission),
     ("A11 refusal and preemption release global slots", GlobalCapacityScenarios.RefusalAndPreemption),
     ("A11 continuations reuse slots and send successors retain slots", GlobalCapacityScenarios.ContinuationAndSuccessor),
-    ("A11 disable handoff and stop preserve global accounting", GlobalCapacityScenarios.DisableAndStop),
+    ("A11 disable and stop preserve global accounting", GlobalCapacityScenarios.DisableAndStop),
     ("A11 accepted results and proactive work share global budget", GlobalCapacityScenarios.AcceptedAndProactiveShareBudget),
     ("A11 parallel admission and retirement stay globally bounded", GlobalCapacityScenarios.ParallelAdmission),
     ("A12 immutable option and source snapshots", Snapshots),
-    ("A13 disable transfers explicit ownership exactly once", DisableHandoff),
+    ("A13 disable retires unsent ownership without replay", DisablePending),
     ("A13 irreversible work keeps its policy snapshot", DisableIrreversible),
     ("A14 stop and dispose fence every callback", Stop),
     ("A14 simultaneous and out-of-order observations", ConcurrentIngress),
@@ -310,17 +310,18 @@ static void Snapshots()
     Equal(2L, gen.Sequence);
 }
 
-static void DisableHandoff()
+static void DisablePending()
 {
     using var h = new Harness();
     var normal = h.Observe(); var direct = h.Observe(speaker: 2, explicitRequest: true);
-    var hands = h.Pacing.Disable(); Equal(1, hands.Count); Same(direct, hands[0].Turn);
-    Check(normal.IsTerminal && direct.IsTerminal, "old owner terminal after handoff");
-    Equal(0, h.Pacing.Disable().Count); Check(!h.Pacing.TryBegin(direct, out _), "old pump fenced");
+    h.Pacing.Disable();
+    Check(normal.IsTerminal && direct.IsTerminal, "disable retires both ordinary and explicit unsent work");
+    Equal(ReplyPacingReason.Disabled, h.Pacing.GetReadiness(direct).Reason);
+    h.Pacing.Disable(); Check(!h.Pacing.TryBegin(direct, out _), "retired worker stays fenced");
     h.At(10); h.Pacing.Complete(direct, true);
-    h.Pacing.Enable(); Check(h.Observe(speaker: 3).IsTerminal, "legacy completion extends cooldown once");
+    h.Pacing.Enable(); Check(!h.Observe(speaker: 3).IsTerminal, "retired unsent completion cannot create cooldown");
     h.At(41); h.Pacing.Complete(direct, true);
-    Check(!h.Observe(speaker: 4).IsTerminal, "legacy handoff consumed once");
+    Check(!h.Observe(speaker: 4).IsTerminal, "duplicate retired completion remains inert");
 }
 
 static void DisableIrreversible()
@@ -330,7 +331,7 @@ static void DisableIrreversible()
         using var h = new Harness();
         var turn = h.Observe(explicitRequest: true); h.At(3); var gen = h.Begin(turn);
         if (sending) h.Pacing.TryCommitFirstSend(gen); else h.Pacing.TryCommitEffects(gen);
-        Equal(0, h.Pacing.Disable().Count); Check(!turn.IsTerminal, "irreversible work remains owned");
+        h.Pacing.Disable(); Check(!turn.IsTerminal, "irreversible work remains owned");
         Same(Harness.PolicySnapshot, gen.Options);
         if (!sending) Kind(h.Pacing.TryCommitFirstSend(gen), ReplyPacingDecisionKind.Ready);
         h.Pacing.Complete(turn, true); Check(turn.IsTerminal, "irreversible work can finish");
@@ -395,7 +396,7 @@ static void DisabledNormalEffects()
     h.Pacing.TryCommitEffects(gen); h.Pacing.EndAttempt(gen);
     var direct = h.Observe(speaker: 2, explicitRequest: true);
     h.At(6); var response = h.Begin(direct); h.Pacing.TryCommitFirstSend(response); h.Pacing.Complete(direct, true);
-    Equal(0, h.Pacing.Disable().Count);
+    h.Pacing.Disable();
     Kind(h.Pacing.TryCommitFirstSend(gen), ReplyPacingDecisionKind.Ready);
     Equal(1, h.Draws); // accepted effect result neither rerolls nor gets preempted by the explicit reply
 }
@@ -458,7 +459,9 @@ static void AcceptedResultLifecycle()
         h.Pacing.ObserveAcceptedResult(Harness.Group, 1, true, Harness.Policy()).Kind);
     h.Begin(first);
     Check(!h.Pacing.TryBegin(second, out _), "conversation permits one generation at a time");
-    Equal(2, h.Pacing.Disable().Count); Equal(0, h.Pacing.Disable().Count);
+    h.Pacing.Disable(); h.Pacing.Disable();
+    Check(first.IsTerminal && second.IsTerminal, "disable retires unsent accepted results without transfer");
+    Equal(0, h.Pacing.ActiveTurns(Harness.Group).Count);
     Equal(ReplyPacingObservationKind.Disabled,
         h.Pacing.ObserveAcceptedResult(Harness.Group, 1, true, Harness.Policy()).Kind);
     h.Pacing.Enable(); h.Pacing.Stop();

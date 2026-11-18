@@ -39,7 +39,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"ws://127.0.0.1:{protocolPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "*",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_PANEL_TOKEN"] = panelToken
         };

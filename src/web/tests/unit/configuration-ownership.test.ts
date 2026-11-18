@@ -43,9 +43,10 @@ describe('configuration UI ownership', () => {
 })
 
 describe('unified ownership metadata', () => {
-  it('keeps exactly the seven existing basic fields', () => {
+  it('keeps the shared behavior fields and four pacing parameters in basic configuration', () => {
     expect([...basicFields].sort()).toEqual([
-      'aiModeEnabled', 'botPersona', 'groupCooldownSeconds', 'privateCooldownSeconds',
+      'aiModeEnabled', 'botPersona', 'groupInterjectionProbability', 'groupInterjectionCooldownSeconds',
+      'groupContinuationWaitSeconds', 'privateContinuationWaitSeconds',
       'maxConcurrentReplies', 'maxContextMessages', 'maxMessagesPerConversation'
     ].sort())
     for (const key of basicFields) expect(fieldOwner('behavior', key)).toBe('basic')

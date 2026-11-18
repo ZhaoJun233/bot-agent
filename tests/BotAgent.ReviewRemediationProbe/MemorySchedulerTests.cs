@@ -88,7 +88,7 @@ internal static class MemorySchedulerTests
         {
             ApiKey = "sk-mock", Model = "synthetic-model", ModelBaseUrl = "https://example.com/v1",
             EnableProfileSummary = true, ProfileSummaryThreshold = 1, ProfileSummaryIntervalSeconds = 3600,
-            ProfileSummaryMaxChars = 160, EnableStickers = false, IdleFallbackSeconds = 0
+            ProfileSummaryMaxChars = 160, EnableStickers = false
         });
         internal readonly ProfileSpy Profiles = new();
         internal readonly HttpSpy Http = new();

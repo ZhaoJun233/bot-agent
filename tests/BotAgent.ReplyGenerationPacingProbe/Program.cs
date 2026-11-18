@@ -16,8 +16,8 @@ var cases = new (string Name, Func<Task> Run)[]
     ("stale draft interrupts before actions without losing usage", StaleDraft),
     ("quiet wait retains one completed result instead of rerunning", WaitForQuiet),
     ("turn notes are consumed once across retries including empty notes", RetainedNotes),
-    ("paced sampling mode is carried by the immutable turn settings", SnapshotMode),
-    ("legacy loop has no pacing validation and preserves tool steps", LegacyLoop),
+    ("sampling retains immutable turn settings across hot changes", SnapshotSampling),
+    ("standalone loop preserves bounded tool steps", StandaloneLoop),
     ("commit ambient scope is restored after nested operations", CommitScope),
     ("accepted natural task outlives reply generation without replay", NaturalTaskChecks.DetachedCompletion),
     ("accepted natural task retains independent source validation", NaturalTaskChecks.RetainedValidation)
@@ -111,28 +111,34 @@ static Task RetainedNotes()
     return Task.CompletedTask;
 }
 
-static async Task SnapshotMode()
+static async Task SnapshotSampling()
 {
-    foreach (var enabled in new[] { false, true })
+    foreach (var temperature in new[] { 0.2, 0.9 })
     {
         var fixture = new Fixture();
-        fixture.Settings.ReplyPacingEnabled = enabled;
-        await new AgentTurnLoop(fixture.Model).RunAsync("group:10001", fixture.Turn, fixture.Caps, false, 1,
-            _ => Task.FromResult<string?>(null), pacing: new Attempt(fixture.Settings));
+        fixture.Settings.DefaultTemperature = temperature;
+        fixture.Settings.DefaultTopP = 0.7;
+        var attempt = new Attempt(fixture.Settings.Snapshot());
+        var turn = fixture.Turn with { Snapshot = attempt.Snapshot };
+        fixture.Settings.DefaultTemperature = 1.5;
+        fixture.Settings.DefaultTopP = 0.95;
+        await new AgentTurnLoop(fixture.Model).RunAsync("group:10001", turn, fixture.Caps, false, 1,
+            _ => Task.FromResult<string?>(null), pacing: attempt);
         var profile = (SamplingProfile)fixture.Last["sampling"]!;
-        Ensure(profile.ReplyPacingEnabled == enabled, "sampling must carry the turn mode even with adaptive sampling disabled");
+        Ensure(profile.Temperature == temperature && profile.TopP == 0.7,
+            "sampling must use the admitted snapshot, not later hot settings");
     }
 }
 
-static async Task LegacyLoop()
+static async Task StandaloneLoop()
 {
     var fixture = new Fixture();
     var inline = 0;
     var outcome = await new AgentTurnLoop(fixture.Model).RunAsync("group:10001", fixture.Turn, fixture.Caps, false, 2,
         _ => { inline++; return Task.FromResult<string?>("Synthetic fact"); }, agentHint: "Synthetic task hint");
-    Ensure(outcome.Steps == 2 && inline == 1, "legacy max steps and callbacks are unchanged");
+    Ensure(outcome.Steps == 2 && inline == 1, "standalone max steps and callbacks are unchanged");
     Ensure(((string?)fixture.Last["toolList"])?.Contains("Synthetic task hint", StringComparison.Ordinal) == true,
-        "legacy model still receives its task hint");
+        "standalone model still receives its task hint");
 }
 
 static async Task CommitScope()
@@ -156,6 +162,7 @@ sealed class Attempt(AppSettings snapshot, bool soft = false, Func<Task>? valida
     public AppSettings Snapshot { get; } = snapshot;
     public bool IsExplicit => true;
     public bool IsSoftDraft => soft;
+    public long SpeakerId => 10002;
     public long Sequence => 1;
     public ReplyPacingPromptState PromptState { get; } = new();
     public int Validations { get; private set; }
@@ -176,7 +183,7 @@ sealed class Fixture
 {
     public AppSettings Settings { get; } = new()
     {
-        ReplyPacingEnabled = true, EnableWebSearch = true, EnableMusic = true,
+        EnableWebSearch = true, EnableMusic = true,
         EnableVoice = true, EnableStickers = true, EnablePoke = true, EnableApprovals = true,
         EnableQuestions = true, MaxAgentSteps = 3, AdaptiveSamplingEnabled = false
     };

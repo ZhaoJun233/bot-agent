@@ -51,7 +51,8 @@ internal static class GlobalCapacityScenarios
             if (commit != "draft")
             {
                 pacing.Reject(turn);
-                Check(pacing.Disable().Count == 0, "irreversible work must not be handed off");
+                pacing.Disable();
+                Check(!turn.IsTerminal, "disable retains irreversible ownership");
                 pacing.Enable();
                 ExpectFull(pacing, "irreversible-overflow");
             }
@@ -117,16 +118,18 @@ internal static class GlobalCapacityScenarios
     internal static void DisableAndStop()
     {
         using var pacing = new ReplyPacingCoordinator(() => DateTime.UnixEpoch, capacity: 2);
-        var explicitTurn = Create(pacing, "handoff");
+        var explicitTurn = Create(pacing, "disable-explicit");
         var ordinary = pacing.Observe("group:disable", 1, 1, null, false, true, Immediate).Turn!;
-        var handoff = pacing.Disable();
-        Check(handoff.Count == 1 && ReferenceEquals(handoff[0].Turn, explicitTurn), "only explicit work is handed off");
-        Check(ordinary.IsTerminal && pacing.Disable().Count == 0, "disable retires unsent work exactly once");
+        pacing.Disable();
+        Check(explicitTurn.IsTerminal && ordinary.IsTerminal, "disable retires all unsent ownership");
+        pacing.Disable();
+        Check(pacing.ActiveTurns("group:disable-explicit").Count == 0 && pacing.ActiveTurns("group:disable").Count == 0,
+            "repeated disable leaves no active ownership");
         pacing.Enable();
         var first = Create(pacing, "enabled-first");
         var second = Create(pacing, "enabled-second");
         pacing.Complete(explicitTurn, true);
-        ExpectFull(pacing, "handoff-completion-overflow");
+        ExpectFull(pacing, "retired-completion-overflow");
         pacing.Stop();
         Check(first.IsTerminal && second.IsTerminal, "stop retires remaining owners");
         pacing.Dispose();

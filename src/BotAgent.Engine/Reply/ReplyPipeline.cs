@@ -174,7 +174,7 @@ public sealed partial class ReplyPipeline
             (key, message) => LogThrottled(key, message));
         _inboundMedia = new ReplyInboundMedia(
             box, hooks, _platformPolicies, AllowsFeature, stickers, music, links, QueueBackground,
-            conversation => RequestReply(conversation, null), EnsureGroupContext);
+            CaptureDeferredReply, EnsureGroupContext);
         _turnContext = new ReplyTurnContext(
             profiles, vibes, stickers, roles, poke, mood, music, research, _inboundMedia, hooks,
             AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking), memoryParticipant);
@@ -249,27 +249,12 @@ public sealed partial class ReplyPipeline
         return true;
     }
 
-    /// <summary>最近一次主动请求时间（静默兜底判断用；跨线程原子访问）。</summary>
-    private DateTime LastActiveRequestTime
-    {
-        get => new(Volatile.Read(ref _lastActiveRequestTicks));
-        set => Volatile.Write(ref _lastActiveRequestTicks, value.Ticks);
-    }
-
     /// <summary>切换「AI 正在思考」并把状态推给面板（实现在 <see cref="IPanelNotifier.SetThinking" />）。</summary>
     private void SetThinking(BotConversation conversation, bool thinking) => _ui.SetThinking(conversation, thinking);
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _historyRequested = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _replyCooldown = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TenantReplyQueue> _pendingReplies = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BotConversation> _pendingConversations = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _inFlight = new();
     private readonly ResizableReplyGate _replyGate;
-    private int _replyWorkerRunning;
-    private long _lastActiveRequestTicks = DateTime.MinValue.Ticks; // 最近一次主动请求时间（原子读写）
-
-    /// <summary>每个会话最近一次“自己主动开口”的时间（用于主动发言的冷却）。</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _lastProactive = new();
     private long _lastGenerationMs;
     /// <summary>日志节流：同一来源的“忽略”类日志最多每分钟一条（否则忙群里会刷爆）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _noisyLogAt = new();
@@ -346,20 +331,10 @@ public sealed partial class ReplyPipeline
         };
         conversation.Append(appended);
 
-        // P1 观测锚点 + 闸门（V3 §7.3）：把「这条消息是什么性质」喂给状态机，
-        // 并（仅在面板打开闸门时）用它的结论决定**这一轮要不要参与**。
-        // 纯旁白不喂 —— 旁白不是对谁说的话（与 HasPendingReply 同一口径），也就没判过。
-        // 默认关时 gate.Proceed 恒为 true、原因码恒为 gating_off → 与改造前逐字一致（V3 §5.3）。
-        var gate = Services.Participation.ParticipationGate.Decide(
-            _settings.EnableParticipationGating,
-            asideOnly
-                ? null
-                : _participation.Observe(
-                    conversation.SourceKey,
-                    Services.Participation.ParticipationEvents.ClassifyInbound(msg.IsGroup, appended.DirectToBot)));
-
-        // 被闸门拦下就**不欠这次回复** —— 否则空闲兜底过一会儿又会补一次，等于没拦。
-        conversation.HasPendingReply = !asideOnly && gate.Proceed;
+        if (!asideOnly)
+            _participation.Observe(conversation.SourceKey,
+                Services.Participation.ParticipationEvents.ClassifyInbound(msg.IsGroup, appended.DirectToBot));
+        conversation.HasPendingReply = !asideOnly;
         _registry.Touch(conversation);
         _ui.NotifyMessageAdded(conversation.SourceKey, appended);
         _registry.Save();
@@ -377,20 +352,11 @@ public sealed partial class ReplyPipeline
         // 查到就把真实原文补写进这条消息。为什么是“事后补”而不是发之前查：网关是在接收循环里
         // 同步调我们的（GetAwaiter().GetResult()），在这里等协议端回包会死锁到超时。
         //
-        // ⚠ 排队必须放在闸门 return **之前**：否则“只引用了机器人旧消息、又没 @”的轮次会被闸门
-        // 按无关消息拦掉，补查永远没机会证明它其实是在跟机器人说话（V3 §7.3 / §8.3）。
         if (!quotedResolved && msg.ReplyToMessageId is long unresolvedId)
         {
-            EnrichQuotedFromProtocolAsync(conversation, appended, unresolvedId, msg.IsGroup, retriggerIfSelf: !gate.Proceed);
+            EnrichQuotedFromProtocolAsync(conversation, appended, unresolvedId, msg.IsGroup, retriggerIfSelf: !appended.DirectToBot);
         }
 
-        if (!gate.Proceed)
-        {
-            if (_settings.ReplyPacingEnabled && !asideOnly)
-                ObservePacedContinuation(conversation, appended);
-            _hooks.Log($"[参与] 闸门拦下这一轮（{gate.ReasonCode}，state={gate.State}）: {conversation.Name}");
-            return;
-        }
         // 人物档案（帮助模型认识群友/好友）
         var botUin = _settings.NormalizedUin;
         var isSelfSender = !string.IsNullOrWhiteSpace(botUin) && msg.UserId.ToString() == botUin;
@@ -412,7 +378,7 @@ public sealed partial class ReplyPipeline
             (msg.ImageUrls is { Count: > 0 } ? $" [+{msg.ImageUrls.Count}图]" : string.Empty));
 
         // 媒体类入站（表情包入库 / 音乐分享 / 链接预览）+ 首次群消息补历史：都不阻塞接收线程
-        var musicShares = _inboundMedia.Register(conversation, msg);
+        var musicShares = _inboundMedia.Register(conversation, msg, appended);
 
         if (!asideOnly && musicShares is not { Count: > 0 })
         {
@@ -423,7 +389,7 @@ public sealed partial class ReplyPipeline
                 _approvals.ResetBudget(conversation.SourceKey);
             }
 
-            // 被限流挡下也不丢：RequestReply 会记一笔，这一轮说完补一次评估（见该方法注释）
+            // Admission, continuation and completion cooldown are owned by the coordinator.
             RequestReply(conversation, msg.MessageId > 0 ? msg.MessageId : null, directInWindow: appended.DirectToBot);
         }
     }
@@ -504,7 +470,7 @@ public sealed partial class ReplyPipeline
             _turnContext.RememberRecall(key, $"（刚有人撤回了一条消息：{sender}。上下文里那条已标成 [已撤回]。）");
             _registry.Touch(conversation);
 
-            RequestReply(conversation, null);
+            RequestNoticeReply(conversation);
         }
         catch (Exception ex)
         {
@@ -631,30 +597,7 @@ public sealed partial class ReplyPipeline
 
         _hooks.Log(message);
     }
-    /// <summary>限流：私聊/群聊各自冷却，防止连发刷屏。</summary>
-    private bool AllowReply(BotConversation conversation)
-    {
-        var cooldown = conversation.Kind == ConversationKind.GroupChat
-            ? TimeSpan.FromSeconds(Math.Max(0, _settings.GroupCooldownSeconds))
-            : TimeSpan.FromSeconds(Math.Max(0, _settings.PrivateCooldownSeconds));
-
-        if (cooldown == TimeSpan.Zero)
-        {
-            return true;
-        }
-
-        var key = conversation.SourceKey;
-        var now = EngineClock.Now;
-        if (_replyCooldown.TryGetValue(key, out var last) && now - last < cooldown)
-        {
-            _hooks.Log($"冷却中（{(cooldown - (now - last)).TotalSeconds:F1}s 后放行）: {conversation.Name}");
-            return false;
-        }
-
-        _replyCooldown[key] = now;
-        return true;
-    }
-    /// <summary>静默兜底：超过 IdleFallbackSeconds 没有主动请求时，为待处理会话补一次请求。</summary>
+    /// <summary>巡检已有机会；重复观察不能重新抽签或绕过发送后冷却。</summary>
     public void IdleFallbackTick()
     {
         RefreshPacingPolicy();
@@ -666,11 +609,6 @@ public sealed partial class ReplyPipeline
         // 审批台账周期清理（V3 §9.4：台账要有界，10 分钟节流也在用例里）
         _approvals.PruneIfDue(EngineClock.Now);
 
-        if (EngineClock.LocalDateTime - LastActiveRequestTime < TimeSpan.FromSeconds(_settings.IdleFallbackSeconds))
-        {
-            return;
-        }
-
         foreach (var conversation in _registry.Snapshot())
         {
             if (!conversation.HasPendingReply)
@@ -679,10 +617,7 @@ public sealed partial class ReplyPipeline
             }
 
             conversation.HasPendingReply = false;
-            _hooks.Log($"静默兜底触发: {conversation.Name}");
-            if (_settings.ReplyPacingEnabled) RequestReply(conversation, null);
-            else if (_source is IPlatformSourceRouter) FlushDeferred(conversation);
-            else EnqueueReply(conversation, null);
+            RequestReply(conversation, null);
         }
 
         TryProactiveSpeak();
@@ -704,12 +639,12 @@ public sealed partial class ReplyPipeline
     /// 所以必须有容量、超时、取消与停机收口，不能再是 fire-and-forget。
     /// </summary>
     /// <param name="retriggerIfSelf">
-    /// 这条消息是被参与闸门拦下的（当时判成“无关消息”）：如果补查证明它引用的正是**机器人自己**说过的话，
-    /// 那就不是在聊闲天 —— 标记为直接对话并按闸门重判一次，必要时补一条回复请求（只补一次）。
+    /// 如果补查证明它引用机器人自己的话，将原机会提升为明确请求，不新建普通插话机会。
     /// </param>
     private void EnrichQuotedFromProtocolAsync(
         BotConversation conversation, ChatMessage appended, long quotedId, bool isGroup, bool retriggerIfSelf = false)
     {
+        var epoch = CaptureReplyEpoch(conversation);
         var jobId = "quote-enrich:" + conversation.SourceKey + ":" + appended.QqMessageId + ":" + quotedId;
         QueueBackground(jobId, jobId, async ct =>
         {
@@ -766,22 +701,11 @@ public sealed partial class ReplyPipeline
                     return;
                 }
 
-                // 原来这一轮已经被闸门按“无关消息”拦掉了；现在证据表明它在跟机器人说话 → 重判一次。
-                // 仍受全局回复冷却与参与策略约束（闸门只收不放，不会因为引用了旧消息就绕开限流）。
+                if (!IsReplyEpochCurrent(conversation, epoch)) return;
                 appended.DirectToBot = true;
-                var recheck = Services.Participation.ParticipationGate.Decide(
-                    _settings.EnableParticipationGating,
-                    _participation.Observe(
-                        conversation.SourceKey,
-                        Services.Participation.ParticipationEvents.ClassifyInbound(isGroup, directToBot: true)));
-                if (!recheck.Proceed)
-                {
-                    _hooks.Log($"[参与] 引用补查确认是在跟机器人说话，但闸门仍拦下（{recheck.ReasonCode}）: {conversation.Name}");
-                    return;
-                }
-
-                _hooks.Log($"[参与] 引用补查确认是在跟机器人说话 → 补一次参与评估（{recheck.ReasonCode}）: {conversation.Name}");
-                RequestReply(conversation, appended.QqMessageId, directInWindow: true);
+                _participation.Observe(conversation.SourceKey,
+                    Services.Participation.ParticipationEvents.ClassifyInbound(isGroup, directToBot: true));
+                RequestReplyInEpoch(conversation, appended.QqMessageId, false, true, epoch);
             }
             catch (OperationCanceledException)
             {

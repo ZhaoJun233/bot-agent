@@ -58,7 +58,7 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
 ## S2：配置读取、编辑与 UI 归属收敛
 
 - **基础配置与能力归属收敛**：
-  - 「基础配置」（配置页）仅展示 7 项关键通用参数白名单：`aiModeEnabled`（AI 对话开关）、`botPersona`（机器人人设）、`groupCooldownSeconds`（群聊冷却）、`privateCooldownSeconds`（私聊冷却）、`maxConcurrentReplies`（并发回复上限）、`maxContextMessages`（上下文条数）、`maxMessagesPerConversation`（会话保留条数）。
+  - 「基础配置」（配置页）仅展示 9 项关键通用参数：`aiModeEnabled`（AI 对话开关）、`botPersona`（机器人人设）、`groupInterjectionProbability`（普通群聊插话概率）、`groupInterjectionCooldownSeconds`（完整发送后的插话冷却）、`groupContinuationWaitSeconds`（群聊续发等待）、`privateContinuationWaitSeconds`（私聊续发等待）、`maxConcurrentReplies`（并发回复上限）、`maxContextMessages`（上下文条数）、`maxMessagesPerConversation`（会话保留条数）。
   - 其余配置项与密钥槽位全部收敛到「能力管理」中对应能力与插件卡片的专属 UI：
     - 对话与参与策略（`conversation`）：主动回复、参与节奏、分句、消息过滤与审批；
     - 模型服务（`models`）：主模型连接、模型选择、采样参数、API 凭据与已登记提供商名称；

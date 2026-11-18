@@ -427,24 +427,8 @@ function isFieldDirty(section: SectionKey, key: string, field: ZbaReadField): bo
   return isDirty(draft.value, fieldPath(section as ZbaPatchSectionLike, key), field)
 }
 
-const replyPacingActive = computed(() => {
-  const field = snapshot.value?.view?.behavior?.replyPacingEnabled
-  if (!field) return false
-  return field.visibility === 1
-    ? currentDraftRaw('behavior', 'replyPacingEnabled', field) === 'true'
-    : field.display === 'true'
-})
-
-function legacyDesireInactive(section: SectionKey, key: string): boolean {
-  return section === 'behavior' && key === 'aiDesire' && replyPacingActive.value
-}
-
-function fieldInputLocked(section: SectionKey, key: string): boolean {
-  return inputsLocked.value || legacyDesireInactive(section, key)
-}
-
 function onFieldInput(section: SectionKey, key: string, raw: string): void {
-  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
   const view = snapshot.value?.view
   if (!view) return
   const field = editableField(view, section as ZbaPatchSectionLike, key)
@@ -460,7 +444,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
 }
 
 function clearField(section: SectionKey, key: string): void {
-  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
   anchorDraft()
   draft.value = { ...draft.value, [fieldPath(section as ZbaPatchSectionLike, key)]: { kind: 'clear' } }
   phase.value = 'idle'
@@ -468,7 +452,7 @@ function clearField(section: SectionKey, key: string): void {
 }
 
 function resetField(section: SectionKey, key: string): void {
-  if (fieldInputLocked(section, key)) return
+  if (inputsLocked.value) return
   const next: DraftMap = { ...draft.value }
   delete next[fieldPath(section as ZbaPatchSectionLike, key)]
   draft.value = next
@@ -1354,7 +1338,6 @@ defineExpose({
                     <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
                     <span v-if="fieldHint(item.key)" class="cell-sub">{{ fieldHint(item.key) }}</span>
-                    <span v-if="legacyDesireInactive(active, item.key)" class="cell-sub" role="status">回复节奏已开启：旧版欲望值暂不生效，原值保留；关闭后恢复。</span>
                     <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
                   </td>
                   <td class="config-value setting-editor" role="cell">
@@ -1367,7 +1350,7 @@ defineExpose({
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
                         :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="fieldInputLocked(active, item.key)"
+                        :disabled="inputsLocked"
                         @change="onFieldInput(active, item.key, inputValue($event))"
                       >
                         <option value="true">是</option>
@@ -1385,7 +1368,7 @@ defineExpose({
                         :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                         :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
                         :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="fieldInputLocked(active, item.key)"
+                        :disabled="inputsLocked"
                         @input="onFieldInput(active, item.key, inputValue($event))"
                       />
                       <span class="edit-actions">
@@ -1393,7 +1376,7 @@ defineExpose({
                           v-if="isFieldDirty(active, item.key, item.field)"
                           type="button"
                           class="link-button"
-                          :disabled="fieldInputLocked(active, item.key)"
+                          :disabled="inputsLocked"
                           @click="resetField(active, item.key)"
                         >
                           还原
@@ -1402,7 +1385,7 @@ defineExpose({
                           v-if="item.field.rule.canClear"
                           type="button"
                           class="link-button"
-                          :disabled="fieldInputLocked(active, item.key)"
+                          :disabled="inputsLocked"
                           @click="clearField(active, item.key)"
                         >
                           清除
@@ -1765,8 +1748,8 @@ defineExpose({
 .settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent-deep); }
 .settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
 .settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }
-.setting-identity { flex: 0 0 200px; }
-.setting-editor { flex: 1 1 calc(100% - 220px); }
+.setting-identity { flex: 0 0 220px; }
+.setting-editor { flex: 1 1 calc(100% - 240px); }
 .settings-table .setting-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-muted); font-size: 12px; }
 .setting-meta .meta-label, .setting-meta .cell-sub { display: inline; margin: 0; }
 .setting-editor .config-input { max-width: 640px; }
