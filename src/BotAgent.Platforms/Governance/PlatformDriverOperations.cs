@@ -101,20 +101,36 @@ public sealed class PlatformDriverRegistration
                     _transition = ManagedRuntimeState.Stopping;
                 }
             }
-            if (command == DriverCommand.Stop) _lifetime.Cancel();
             try
             {
-                var operation = command switch
+                if (command == DriverCommand.Stop)
                 {
-                    DriverCommand.Start => _start,
-                    DriverCommand.Stop => _stop,
-                    _ => _test!,
-                };
-                if (command == DriverCommand.Stop && Adapter is QqChatSourcePlatformAdapter stoppingAdapter)
-                    await stoppingAdapter.StopAsync().ConfigureAwait(false);
-                await operation(ct).ConfigureAwait(false);
-                if (command == DriverCommand.Start && Adapter is QqChatSourcePlatformAdapter startingAdapter)
-                    await startingAdapter.StartAsync(ct).ConfigureAwait(false);
+                    var stopErrors = new List<Exception>();
+                    try { _lifetime.Cancel(); }
+                    catch (ObjectDisposedException) { }
+                    catch (Exception ex) { stopErrors.Add(ex); }
+
+                    if (Adapter is QqChatSourcePlatformAdapter stoppingAdapter)
+                    {
+                        try { await stoppingAdapter.StopAsync().ConfigureAwait(false); }
+                        catch (Exception ex) { stopErrors.Add(ex); }
+                    }
+
+                    try { await _stop(ct).ConfigureAwait(false); }
+                    catch (Exception ex) { stopErrors.Add(ex); }
+
+                    if (stopErrors.Count == 1)
+                        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(stopErrors[0]).Throw();
+                    if (stopErrors.Count > 1)
+                        throw new AggregateException("driver_stop_incomplete", stopErrors);
+                }
+                else
+                {
+                    var operation = command == DriverCommand.Start ? _start : _test!;
+                    await operation(ct).ConfigureAwait(false);
+                    if (command == DriverCommand.Start && Adapter is QqChatSourcePlatformAdapter startingAdapter)
+                        await startingAdapter.StartAsync(ct).ConfigureAwait(false);
+                }
                 lock (_gate)
                 {
                     if (command == DriverCommand.Start) _running = true;
@@ -172,8 +188,13 @@ public sealed class PlatformDriverRegistration
 public sealed class PlatformDriverOperations
 {
     private readonly IReadOnlyDictionary<DriverKey, PlatformDriverRegistration> _drivers;
+    private readonly Func<string, IPlatformDriverContribution?>? _contributionResolver;
+    private readonly Func<bool>? _isPluginRuntimeStarted;
 
-    public PlatformDriverOperations(IEnumerable<PlatformDriverRegistration> drivers)
+    public PlatformDriverOperations(
+        IEnumerable<PlatformDriverRegistration> drivers,
+        Func<string, IPlatformDriverContribution?>? contributionResolver = null,
+        Func<bool>? isPluginRuntimeStarted = null)
     {
         ArgumentNullException.ThrowIfNull(drivers);
         var registrations = new Dictionary<DriverKey, PlatformDriverRegistration>();
@@ -183,14 +204,36 @@ public sealed class PlatformDriverOperations
             if (!registrations.TryAdd(driver.Key, driver)) throw new ArgumentException("duplicate_platform_instance", nameof(drivers));
         }
         _drivers = registrations;
+        _contributionResolver = contributionResolver;
+        _isPluginRuntimeStarted = isPluginRuntimeStarted;
     }
 
     public IReadOnlyList<PlatformDriverRuntimeFact> RuntimeFacts => _drivers.Values.Select(driver => driver.RuntimeFact).ToArray();
     public PlatformDriverRegistration? TryGet(DriverKey key) => _drivers.GetValueOrDefault(key);
 
+    public bool HasContributionResolver => _contributionResolver is not null;
+
+    public bool ShouldEnforceContributions => _contributionResolver is not null && (_isPluginRuntimeStarted is null || _isPluginRuntimeStarted());
+
+    /// <summary>Resolves the adopted <c>system.platform-*</c> package contribution for a normalized platform id.</summary>
+    public IPlatformDriverContribution? ResolveContribution(string platformId)
+        => _contributionResolver?.Invoke(PlatformId.Normalize(platformId));
+
     public Task<PlatformDriverActionResult> DispatchAsync(DriverKey key, DriverCommand command, CancellationToken ct = default)
-        => _drivers.TryGetValue(key, out var driver) ? driver.DispatchAsync(command, ct)
-            : Task.FromResult(new PlatformDriverActionResult(ManagedResultCode.NotFound, ManagedOperationState.NotStarted, "driver_not_found"));
+    {
+        if (!_drivers.TryGetValue(key, out var driver))
+        {
+            return Task.FromResult(new PlatformDriverActionResult(ManagedResultCode.NotFound, ManagedOperationState.NotStarted, "driver_not_found"));
+        }
+
+        if (command == DriverCommand.Start && ShouldEnforceContributions && _contributionResolver!(key.PlatformId) is null)
+        {
+            return Task.FromResult(new PlatformDriverActionResult(
+                ManagedResultCode.Unknown, ManagedOperationState.Failed, "platform_driver_package_unavailable"));
+        }
+
+        return driver.DispatchAsync(command, ct);
+    }
 }
 
 /// <summary>Counts owned requests so a stopped driver cannot leave requests or callbacks running.</summary>
@@ -240,10 +283,22 @@ internal sealed class PlatformOperationLifetime : IDisposable
             source = _source;
             idle = _idle.Task;
         }
+        Exception? cancelError = null;
         try { source.Cancel(); }
         catch (ObjectDisposedException) { }
-        await idle.ConfigureAwait(false);
-        lock (_gate) _stopping = false;
+        catch (Exception ex) { cancelError = ex; }
+        try
+        {
+            await idle.ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate) _stopping = false;
+        }
+        if (cancelError is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cancelError).Throw();
+        }
     }
 
     public void Dispose()
@@ -251,7 +306,7 @@ internal sealed class PlatformOperationLifetime : IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            if (!_stopped || _active != 0) throw new InvalidOperationException("driver_cleanup_pending");
+            if (!_stopped || _stopping || _active != 0) throw new InvalidOperationException("driver_cleanup_pending");
             _disposed = true;
             _source.Dispose();
         }

@@ -22,23 +22,53 @@ internal static class PluginLifecycleManifest
     internal static string PackageState(InstalledPluginPackage package) => PluginPackageRevision.Hash(
         string.Join("|", package.Id, Fingerprint(package.Active), Fingerprint(package.Previous), Fingerprint(package.Pending), package.PendingUninstall));
 
-    private static JsonElement Fields(PluginPackageManifest m) => m.ApiVersion == 2 ? JsonSerializer.SerializeToElement(new
+    private static JsonElement Fields(PluginPackageManifest m)
+    {
+        var fields = LegacyFields(m);
+        if (m.SharedContracts is not { Count: > 0 } && m.Data is null && !m.Control && m.ToolApiVersion is null
+            && m.Configuration is null && m.Ui is null && m.Adoption is null && m.ExclusiveResources is not { Count: > 0 }) return fields;
+        var values = fields.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone());
+        if (m.SharedContracts is { Count: > 0 })
+            values["sharedContracts"] = JsonSerializer.SerializeToElement(m.SharedContracts
+                .OrderBy(c => c.Name, StringComparer.Ordinal).Select(c => c with { Sha256 = c.Sha256.ToLowerInvariant() }), Json);
+        if (m.Data is { } data) values["data"] = JsonSerializer.SerializeToElement(PluginDataValidation.Normalize(data), Json);
+        if (m.Control) values["control"] = JsonSerializer.SerializeToElement(true);
+        if (m.ToolApiVersion is { } tools) values["toolApiVersion"] = JsonSerializer.SerializeToElement(tools);
+        if (m.Configuration is { } configuration) values["configuration"] = JsonSerializer.SerializeToElement(configuration with
+            { Bindings = configuration.Bindings.OrderBy(binding => binding.Key, StringComparer.Ordinal).ToArray() }, Json);
+        if (m.Ui is { } ui) values["ui"] = JsonSerializer.SerializeToElement(PluginUiValidation.Normalize(ui), Json);
+        if (m.Adoption is { } adoption) values["adoption"] = JsonSerializer.SerializeToElement(adoption, Json);
+        if (m.ExclusiveResources is { Count: > 0 } exclusive)
+            values["exclusiveResources"] = JsonSerializer.SerializeToElement(exclusive.OrderBy(x => x, StringComparer.Ordinal).ToArray(), Json);
+        return JsonSerializer.SerializeToElement(values, Json);
+    }
+
+    private static JsonElement LegacyFields(PluginPackageManifest m) => m.ApiVersion == 2 ? JsonSerializer.SerializeToElement(new
     {
         m.Id, m.Version, m.ApiVersion, Sha256 = m.Sha256.ToLowerInvariant(),
         DownloadUrl = new Uri(m.DownloadUrl).AbsoluteUri, m.MinimumHostVersion, m.Runtime,
         Permissions = (m.Permissions ?? []).OrderBy(x => x, StringComparer.Ordinal),
         Dependencies = (m.Dependencies ?? []).OrderBy(x => x.Id, StringComparer.Ordinal),
-        Settings = (m.Settings ?? []).OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => new
-        { x.Key, x.Label, x.Type, x.DefaultValue, x.Required, Choices = x.Choices ?? [] })
+        Settings = SettingFields(m.Settings)
     }, Json) : JsonSerializer.SerializeToElement(new
     {
         m.Id, m.Version, m.ApiVersion, m.EntryAssembly, m.EntryType, Sha256 = m.Sha256.ToLowerInvariant(),
         DownloadUrl = new Uri(m.DownloadUrl).AbsoluteUri, m.TargetFramework, m.MinimumHostVersion,
         Permissions = (m.Permissions ?? []).OrderBy(x => x, StringComparer.Ordinal),
         Dependencies = (m.Dependencies ?? []).OrderBy(x => x.Id, StringComparer.Ordinal),
-        Settings = (m.Settings ?? []).OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => new
-        { x.Key, x.Label, x.Type, x.DefaultValue, x.Required, Choices = x.Choices ?? [] })
+        Settings = SettingFields(m.Settings)
     }, Json);
+
+    private static JsonElement[] SettingFields(IReadOnlyList<PluginSettingDefinition>? settings)
+        => (settings ?? []).OrderBy(field => field.Key, StringComparer.Ordinal).Select(field =>
+        {
+            var legacy = JsonSerializer.SerializeToElement(new
+                { field.Key, field.Label, field.Type, field.DefaultValue, field.Required, Choices = field.Choices ?? [] }, Json);
+            if (field.NumberConstraints is null) return legacy;
+            var values = legacy.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.Clone());
+            values["numberConstraints"] = JsonSerializer.SerializeToElement(field.NumberConstraints, Json);
+            return JsonSerializer.SerializeToElement(values, Json);
+        }).ToArray();
 
     internal static bool IsUpgrade(string current, string target)
     {

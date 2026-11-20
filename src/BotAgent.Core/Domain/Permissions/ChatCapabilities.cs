@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Domain.Permissions;
 
@@ -28,11 +29,13 @@ public sealed class ChatCapabilitySet
     public ToolRegistry Registry { get; }
 
     public ToolPolicy Policy { get; }
+    public ChatToolCatalog Catalog { get; }
 
-    private ChatCapabilitySet(ToolRegistry registry, ToolPolicy policy)
+    private ChatCapabilitySet(ToolRegistry registry, ToolPolicy policy, ChatToolCatalog catalog)
     {
         Registry = registry;
         Policy = policy;
+        Catalog = catalog;
     }
 
     /// <summary>场景名（空 = 跟随现有开关，即改造前的行为）。</summary>
@@ -48,24 +51,29 @@ public sealed class ChatCapabilitySet
         string? scenario,
         int policyVersion = 1,
         bool approvalsEnabled = false,
-        bool questionsEnabled = false)
+        bool questionsEnabled = false,
+        ChatToolCatalog? catalog = null)
     {
+        catalog ??= ChatToolCatalog.Builtin;
+        var registry = new ToolRegistry();
+        foreach (var spec in catalog.Specs) registry.Register(spec);
         // #115：id→开关 的表只留一份（ToolSpec.FeatureKey + ToolSwitches），这里不再抄第二份。
         var switches = new Domain.Tools.ToolSwitchState(
             enableWebSearch, enableMusic, enableVoice, enableStickers, enablePoke,
             Approvals: approvalsEnabled, Questions: questionsEnabled);
         bool SwitchAllows(string id)
-            => Domain.Tools.ChatToolSpecs.Find(id) is { } spec && Domain.Tools.ToolSwitches.Enabled(spec, switches);
+            => catalog.Find(id) is { } spec && !ToolDescriptor.AlwaysDenied(spec.Category)
+                && Domain.Tools.ToolSwitches.Enabled(spec, switches);
 
         var token = (scenario ?? string.Empty).Trim().ToLowerInvariant();
         if (token.Length == 0)
         {
             // 审批假工具与「提问」也由各自的 FeatureKey（approval / question）决定是否入名单：
             // 开关关时它们不在 allowed 里，开了才进 —— 与改造前两条 if 逐字等价（#115 收进元数据）。
-            var allowed = DefaultRegistry.Ids.Where(SwitchAllows).ToHashSet(StringComparer.Ordinal);
+            var allowed = registry.Ids.Where(SwitchAllows).ToHashSet(StringComparer.Ordinal);
 
             return new ChatCapabilitySet(
-                DefaultRegistry,
+                registry,
                 new ToolPolicy(
                     allowed,
                     MaxCallsPerRun: int.MaxValue,   // 沿用旧行为：一轮里可以同时触发多个动作
@@ -78,7 +86,7 @@ public sealed class ChatCapabilitySet
                     ApprovalRequiredCategories: new HashSet<ToolCategory>(),
                     ApprovalRequiredTools: approvalsEnabled
                         ? new HashSet<string>(StringComparer.Ordinal) { ApprovalFlow.FixedToolId }
-                        : null))
+                        : null), catalog)
             {
                 Scenario = string.Empty,
             };
@@ -116,7 +124,7 @@ public sealed class ChatCapabilitySet
             narrowed.Add(ApprovalFlow.QuestionToolId);
         }
 
-        return new ChatCapabilitySet(DefaultRegistry, preset with { AllowedTools = narrowed })
+        return new ChatCapabilitySet(registry, preset with { AllowedTools = narrowed }, catalog)
         {
             Scenario = token,
         };
@@ -150,5 +158,5 @@ public sealed class ChatCapabilitySet
     /// 面板上保存一次无关键（比如改了个阈值）不该把在途审批单弄失效。
     /// </summary>
     public string PolicyFingerprint
-        => "reg[" + string.Join(",", Registry.Ids.OrderBy(x => x, StringComparer.Ordinal)) + "] " + Policy.Fingerprint();
+        => "catalog[" + Catalog.Fingerprint + "] " + Policy.Fingerprint();
 }

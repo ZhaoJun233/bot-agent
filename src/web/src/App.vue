@@ -419,7 +419,7 @@ async function enableAdmin(): Promise<void> {
   const current = (): boolean => session === sessionGeneration && token.value === expectedToken
 
   try {
-    const isAdmin = await activeClient.checkAdmin()
+    const isAdmin = await activeClient.checkAdmin(meta.value?.features.includes('operations.find') === true)
     if (!current()) return
     // 探测期间 meta/health 可能已经刷新为不兼容；模式展示不能越过当前兼容性判定。
     if (!compatibility.value.writesEnabled) {
@@ -678,6 +678,7 @@ onMounted(load)
 
           <OverviewPage
             v-if="view === 'overview' && health && meta && status"
+            :client="client"
             :health="health"
             :meta="meta"
             :status="status"
@@ -692,6 +693,7 @@ onMounted(load)
             @enable-admin="enableAdmin"
             @disable-admin="disableAdmin"
             @navigate="navigateFromOverview"
+            @auth-expired="onAuthExpired"
           />
           <CapabilitiesPage
             v-if="capabilitiesMounted"

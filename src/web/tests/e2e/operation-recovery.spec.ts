@@ -1,0 +1,40 @@
+import { expect, test } from '@playwright/test'
+
+test.skip(process.env.BOTAGENT_WEB_TEST_RECOVERY !== '1', 'Requires the isolated control-only host fixture')
+
+for (const width of [1280, 375]) {
+  test('control-only operation evidence at width ' + width, async ({ page, request }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    const health = await (await request.get('/zba/v1/health')).json()
+    expect(health.ready).toBe(false)
+    const requests: string[] = []
+    page.on('request', request => { if (request.method() !== 'GET') requests.push(new URL(request.url()).pathname) })
+    await page.goto('/')
+    await page.getByTestId('token-input').fill('synthetic-web-admin-token')
+    await page.getByTestId('connect-button').click()
+    await expect(page.getByTestId('overview')).toBeVisible()
+    const lookup = page.getByTestId('operation-recovery')
+    await lookup.locator('summary').click()
+    await expect(lookup.getByLabel('插件 ID')).toBeDisabled()
+    await page.getByTestId('enable-admin').click()
+    await expect(page.getByTestId('mode-badge')).toHaveText('管理员模式')
+    await lookup.getByLabel('插件 ID').fill('preset.feature.token-quota')
+    await lookup.getByLabel('原操作标识').fill('synthetic-legacy-key')
+    await lookup.getByRole('button', { name: '查询记录' }).click()
+    await expect(lookup.getByRole('status')).toContainText('已提交')
+    await expect(lookup).toContainText('未记录当时的运行版本')
+    await expect(lookup).not.toContainText('synthetic-private-result')
+    await lookup.getByLabel('原操作标识').fill('synthetic-unknown-key')
+    await lookup.getByRole('button', { name: '查询记录' }).click()
+    await expect(lookup.getByRole('status')).toContainText('结果未知（Unknown）')
+    await expect(lookup).toContainText('避免重复提交')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await lookup.screenshot({ path: testInfo.outputPath('operation-recovery-' + width + '.png') })
+    await lookup.getByLabel('原操作标识').fill('synthetic-missing-key')
+    await lookup.getByRole('button', { name: '查询记录' }).click()
+    await expect(lookup.getByRole('status')).toContainText('这不能证明操作未执行')
+    expect(requests.length).toBeGreaterThanOrEqual(4)
+    expect(requests.every(path => path === '/zba/v1/operations/find')).toBe(true)
+    expect((await (await request.get('/zba/v1/health')).json()).ready).toBe(false)
+  })
+}

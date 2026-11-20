@@ -17,6 +17,10 @@ public static class TextSnapshotFile
     public static IDisposable AcquireExclusiveWriter(string path)
         => OpenFile(Path.GetFullPath(path) + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
+    /// <summary>Shared process ownership; excludes an offline writer until all holders exit.</summary>
+    public static IDisposable AcquireSharedReader(string path)
+        => OpenFile(Path.GetFullPath(path) + ".lock", FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
     public static string? Read(string path, long maxBytes = long.MaxValue)
     {
         using var input = OpenSnapshot(path, maxBytes);
@@ -136,9 +140,19 @@ public static class TextSnapshotFile
 
     private static void Publish(string temporary, string target)
     {
-        // Concurrent overwrite renames can race inside Win32 even with unique temporary files.
-        // Serialize only the short publication step, never the file writes or readers.
-        lock (PublicationGate) File.Move(temporary, target, overwrite: true);
+        // Replace preserves an open reader's snapshot when it grants delete sharing.
+        // A Windows overwrite move can instead deny access even with that sharing.
+        // Serialize the publication point; writes and readers remain independent.
+        lock (PublicationGate)
+        {
+            try { File.Replace(temporary, target, destinationBackupFileName: null); }
+            catch (FileNotFoundException)
+            {
+                // First publication only. If another process created the target,
+                // refuse the non-overwriting move rather than replacing its state.
+                File.Move(temporary, target);
+            }
+        }
     }
 
     private static void RemoveTemporary(string temporary)

@@ -142,9 +142,21 @@ internal static partial class ZbaRules
             throw new ZbaBadRequestException("invalid_manifest");
         if (string.IsNullOrWhiteSpace(manifest.Sha256) || !Sha256Pattern().IsMatch(manifest.Sha256))
             throw new ZbaBadRequestException("invalid_manifest");
-        if (string.IsNullOrWhiteSpace(manifest.EntryAssembly) || manifest.EntryAssembly.Length > 240
-            || string.IsNullOrWhiteSpace(manifest.EntryType) || manifest.EntryType.Length > 512)
+        if (manifest.ApiVersion == 2)
+        {
+            if (manifest.EntryAssembly is not null || manifest.EntryType is not null || manifest.Runtime is null)
+                throw new ZbaBadRequestException("invalid_manifest");
+        }
+        else if (manifest.ApiVersion == 1)
+        {
+            if (string.IsNullOrWhiteSpace(manifest.EntryAssembly) || manifest.EntryAssembly.Length > 240
+                || string.IsNullOrWhiteSpace(manifest.EntryType) || manifest.EntryType.Length > 512)
+                throw new ZbaBadRequestException("invalid_manifest");
+        }
+        else
+        {
             throw new ZbaBadRequestException("invalid_manifest");
+        }
         // 下载地址同样只认公开 HTTPS；真正的出站策略在宿主侧逐跳校验。
         if (string.IsNullOrWhiteSpace(manifest.DownloadUrl) || manifest.DownloadUrl.Length > 2048
             || !Uri.TryCreate(manifest.DownloadUrl, UriKind.Absolute, out var url)

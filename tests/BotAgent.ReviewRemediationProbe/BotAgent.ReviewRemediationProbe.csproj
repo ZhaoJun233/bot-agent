@@ -10,4 +10,17 @@
     <ProjectReference Include="..\..\src\BotAgent.Model\BotAgent.Model.csproj" Aliases="global,ModelModule" />
     <ProjectReference Include="..\..\src\BotAgent.Storage\BotAgent.Storage.csproj" Aliases="StorageModule" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj" />
+    <Compile Include="../shared/QuotaFixture.cs" Link="Fixtures/QuotaFixture.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../ResearchToolFixture.cs" Link="ResearchToolFixture.cs" />
+    <ProjectReference Include="../../packages/websearch/backend/BotAgent.Package.WebSearch.csproj" />
+    <ProjectReference Include="../../packages/stickers/backend/BotAgent.Package.Stickers.csproj" />
+    <ProjectReference Include="../../packages/profiles/backend/BotAgent.Package.Profiles.csproj" />
+    <ProjectReference Include="../../packages/music/backend/BotAgent.Package.Music.csproj" />
+    <ProjectReference Include="../../packages/voice/backend/BotAgent.Package.Voice.csproj" />
+    <ProjectReference Include="../../packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj" />
+  </ItemGroup>
 </Project>

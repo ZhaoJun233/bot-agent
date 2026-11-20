@@ -1,11 +1,7 @@
 import { ZbaNetworkError, ZbaRequestError } from '../../api/zba'
 
-export interface UiError {
-  code: string
-  message: string
-  status?: number
-  requestId?: string
-}
+import type { UiError } from '../../../../../contracts/ui'
+export type { UiError } from '../../../../../contracts/ui'
 
 /**
  * 把网络层错误归一成 UI 文案。

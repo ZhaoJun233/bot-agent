@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Token 配额</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main id="app" class="quota-root" role="region" aria-label="Token 配额管理">
+    <header class="quota-header">
+      <div>
+        <h2 id="quota-title">每日 Token 配额</h2>
+        <p id="quota-meta" class="muted">正在连接宿主安全桥…</p>
+      </div>
+      <div class="header-actions">
+        <button id="refresh-btn" type="button">刷新</button>
+        <button id="close-btn" type="button">关闭</button>
+      </div>
+    </header>
+    <div id="banner" class="banner" hidden role="alert"></div>
+    <section id="recovery-panel" class="card" hidden>
+      <h3>未决操作核对（按原操作键）</h3>
+      <div id="recovery-list"></div>
+    </section>
+    <section class="card">
+      <div id="quota-list" class="quota-list">加载中…</div>
+    </section>
+  </main>
+  <script defer src="./token-quota-runtime.js"></script>
+</body>
+</html>

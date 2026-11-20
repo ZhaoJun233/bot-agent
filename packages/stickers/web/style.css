@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, sans-serif; }
+body { margin: 0; padding: 14px; background: transparent; color: inherit; }
+.sticker-ui { display: grid; gap: 12px; }
+.sticker-ui__header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sticker-ui__header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.sticker-ui__controls { display: flex; align-items: center; gap: 8px; }
+.close-btn { border: 1px solid rgba(128,128,128,.45); border-radius: 6px; padding: 3px 10px; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; opacity: 0.8; }
+.status { margin: 0; font-size: 13px; opacity: 0.85; }
+.card { border: 1px solid rgba(128,128,128,.35); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.card h2 { margin: 0 0 6px; font-size: 13px; }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }

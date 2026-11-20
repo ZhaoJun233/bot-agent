@@ -10,8 +10,22 @@ using Microsoft.Data.Sqlite;
 namespace BotAgent.Storage;
 
 /// <summary>Trusted same-connection integration only; no public JSON, environment or secret-value escape hatch.</summary>
-internal static class ConfigurationStorageBridge
+internal static partial class ConfigurationStorageBridge
 {
+    private const string ReadSettingsSql = "SELECT json FROM settings WHERE id = 1";
+    private const string WriteSettingsSql = "INSERT INTO settings(id, json, updated_unix) VALUES(1, $json, $now) "
+        + "ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_unix = excluded.updated_unix";
+
+    internal static string? ReadSettingsJson(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = ReadSettingsSql;
+        return command.ExecuteScalar() as string;
+    }
+
+    internal static void WriteSettingsJson(SqliteConnection connection, string json, long now)
+        => AppDatabase.Exec(connection, WriteSettingsSql, ("$json", json), ("$now", now));
+
     private const string PlatformPoliciesMetaKey = "configuration_platform_policies";
     private static readonly JsonSerializerOptions PlatformPolicyCodec = new()
     {
@@ -152,6 +166,10 @@ internal static class ConfigurationStorageBridge
 
     internal static bool RequiresCoordinatedConfigurationWrites
         => ConfigurationStore.RequiresCoordinatedConfigurationWrites;
+
+    internal static PackageSettingsCommit<T> CommitPackageSettings<T>(string pluginId,
+        Func<SqliteConnection, PackageSettingsWrite<T>> persist)
+        => ConfigurationStore.CommitPackageSettings(pluginId, persist);
     internal static ConfigurationVersion ReadConfigurationVersion(SqliteConnection connection)
         => ConfigurationStore.Version(connection);
     private const string DeviceRowsSql = """
@@ -309,6 +327,14 @@ internal sealed record LegacyFindOutcome(ConfigurationFindResult ConfigurationRe
 
 internal abstract class ConfigurationStorageParticipant
 {
+    internal abstract void CoordinateWrite(Action write);
+    // Trusted scalar projection only; no package callbacks run while the commit gate is held.
+    internal virtual IReadOnlyDictionary<string, JsonElement> ReadBoundRuntime(string owner,
+        BotAgent.Domain.Plugins.PluginConfigurationDeclaration declaration)
+        => throw new InvalidOperationException("plugin_configuration_runtime_missing");
+    internal virtual void PublishBound(string owner, BotAgent.Domain.Plugins.PluginConfigurationDeclaration declaration,
+        IReadOnlyDictionary<string, JsonElement> values)
+        => throw new InvalidOperationException("plugin_configuration_runtime_missing");
     // Controlled activation only; DB facts, version and audit share the existing transaction.
     internal virtual bool Initialize(SqliteConnection connection, long serverUnixSeconds) => false;
     internal virtual void AppendInitializationAudit(SqliteConnection connection,

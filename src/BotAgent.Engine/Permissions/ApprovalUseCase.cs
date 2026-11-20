@@ -6,6 +6,7 @@ using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Qq;
 using System.Collections.Concurrent;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Permissions;
 
@@ -31,6 +32,8 @@ public sealed class ApprovalUseCase
     private readonly SessionPolicyLedger _sessionPolicies;
     private readonly TurnTraceStore _traces;
     private readonly IAuditChain? _audit;
+    private readonly Func<ChatToolCatalog> _catalog;
+    private readonly object _policySync = new();
 
     private readonly ApprovalStore _approvals = new();
     private readonly ConcurrentDictionary<string, PlatformSourceLease> _sources = new(StringComparer.Ordinal);
@@ -42,30 +45,21 @@ public sealed class ApprovalUseCase
 
     private DateTimeOffset _lastPrune = DateTimeOffset.MinValue;
 
-    public ApprovalUseCase(ISettingsBox box, ApprovalHooks hooks, SessionPolicyLedger sessionPolicies, TurnTraceStore traces, IAuditChain? audit = null)
+    public ApprovalUseCase(ISettingsBox box, ApprovalHooks hooks, SessionPolicyLedger sessionPolicies, TurnTraceStore traces,
+        IAuditChain? audit = null, Func<ChatToolCatalog>? catalog = null)
     {
         _box = box;
         _hooks = hooks;
         _sessionPolicies = sessionPolicies;
         _traces = traces;
         _audit = audit;
+        _catalog = catalog ?? (() => ChatToolCatalog.Builtin);
     }
 
     private AppSettings _settings => _box.Current;
 
-    /// <summary>当前策略快照（惰性建一次；之后只在设置变更时由 <see cref="RebuildPolicy" /> 换）。</summary>
-    public ChatCapabilitySet Capabilities
-    {
-        get
-        {
-            if (_capabilities is null)
-            {
-                RebuildPolicy();
-            }
-
-            return _capabilities!;
-        }
-    }
+    /// <summary>Refreshes settings and adopted generations together; unchanged content keeps the same version.</summary>
+    public ChatCapabilitySet Capabilities => RefreshPolicy();
 
     /// <summary>审批人名单（面板里点名的人；留空 = 只认群里的 owner/admin）。</summary>
     public HashSet<string> Approvers()
@@ -82,31 +76,43 @@ public sealed class ApprovalUseCase
     /// 设置变了 → 重建策略快照（在 <c>ApplyRuntimeSettings</c> 里调用）。
     /// 先按当前版本算一次，指纹变了才升版本再算一次 —— 版本只在**能力真的变了**时前进。
     /// </summary>
-    public void RebuildPolicy()
-    {
-        var candidate = Build();
-        if (_capabilityFingerprint.Length > 0 && candidate.PolicyFingerprint != _capabilityFingerprint)
-        {
-            _capabilityVersion++;
-            candidate = Build();
-            _hooks.Log($"[能力] 策略已变更 → 版本 v{_capabilityVersion}（{candidate.Describe()}）");
-        }
+    public void RebuildPolicy() => _ = RefreshPolicy();
 
-        _capabilityFingerprint = candidate.PolicyFingerprint;
-        _capabilities = candidate;
+    private ChatCapabilitySet RefreshPolicy()
+    {
+        var settings = _settings;
+        var catalog = _catalog();
+        ChatCapabilitySet candidate;
+        var changed = false;
+        lock (_policySync)
+        {
+            candidate = Build(settings, catalog);
+            if (_capabilities is not null && candidate.PolicyFingerprint == _capabilityFingerprint) return _capabilities;
+            if (_capabilityFingerprint.Length > 0)
+            {
+                _capabilityVersion++;
+                candidate = Build(settings, catalog);
+                changed = true;
+            }
+            _capabilityFingerprint = candidate.PolicyFingerprint;
+            _capabilities = candidate;
+        }
+        if (changed) _hooks.Log($"[能力] 策略已变更 → 版本 v{candidate.Policy.PolicyVersion}（{candidate.Describe()}）");
+        return candidate;
     }
 
-    private ChatCapabilitySet Build()
+    private ChatCapabilitySet Build(AppSettings settings, ChatToolCatalog catalog)
         => ChatCapabilitySet.FromSwitches(
-            enableWebSearch: _settings.EnableWebSearch,
-            enableMusic: _settings.EnableMusic,
-            enableVoice: _settings.EnableVoice,
-            enableStickers: _settings.EnableStickers,
-            enablePoke: _settings.EnablePoke,
-            scenario: _settings.ScenarioPreset,
+            enableWebSearch: settings.EnableWebSearch,
+            enableMusic: settings.EnableMusic,
+            enableVoice: settings.EnableVoice,
+            enableStickers: settings.EnableStickers,
+            enablePoke: settings.EnablePoke,
+            scenario: settings.ScenarioPreset,
             policyVersion: _capabilityVersion,
-            approvalsEnabled: _settings.EnableApprovals,
-            questionsEnabled: _settings.EnableQuestions);
+            approvalsEnabled: settings.EnableApprovals,
+            questionsEnabled: settings.EnableQuestions,
+            catalog: catalog);
 
     /// <summary>
     /// 判定一次聊天能力（V3 §9.2）：**默认关闭**、不在白名单就连协议端都不会被调用。

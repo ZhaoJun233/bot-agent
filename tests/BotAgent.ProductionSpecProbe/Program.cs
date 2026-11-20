@@ -1,3 +1,4 @@
+using BotAgent.TestFixtures;
 using BotAgent.Adapters.Net;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Adapters.Time;
@@ -22,16 +23,32 @@ namespace BotAgent.ProductionSpecProbe;
 
 public static class Program
 {
-    public static int Main()
+    public static int Main(string[] args)
     {
+        if (TokenUsageRecoveryChecks.TryRunChild(args) is int recoveryResult) return recoveryResult;
+        if (TokenUsagePersistenceChecks.TryRunChild(args) is int childResult) return childResult;
         ClockBindings.InitializePlatforms();
         var root = Path.Combine(Path.GetTempPath(), "botagent-production-spec-" + Guid.NewGuid().ToString("N"));
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", root);
 
         try
         {
+            if (args is ["--snapshot-publication"])
+            {
+                SnapshotPublicationChecks.RunAsync(root, Check).GetAwaiter().GetResult();
+                Console.WriteLine($"通过 {_passed}，失败 0");
+                return 0;
+            }
             AppDatabase.Initialize();
+            if (args is ["--package-transactions"])
+            {
+                PackageTransactionChecks.Run(Check);
+                OperationRecoveryChecks.Run(Check);
+                Console.WriteLine($"通过 {_passed}，失败 0");
+                return 0;
+            }
             SettingsExistenceTests();
+            SnapshotPublicationChecks.RunAsync(root, Check).GetAwaiter().GetResult();
             OfficialSecretReloadTests();
             AuditChainTests();
             TraceArchiveTests();
@@ -40,6 +57,9 @@ public static class Program
             BackupSingleFlightTests();
             MultiTenantIsolationTests(root);
             QuotaManagementTests();
+            PackageTransactionChecks.RunIsolated(Check);
+            TokenUsagePersistenceChecks.Run(Check);
+            TokenUsageRecoveryChecks.Run(Check);
             MultiPlatformBotAgentTests(root);
             AgentTaskLedgerTests();
             DockerCapabilityTests();
@@ -378,8 +398,8 @@ public static class Program
     {
         const string tenant = "synthetic:quota-management";
         const string scope = "synthetic:quota-admin";
-        var first = new TenantQuotaStore();
-        var second = new TenantQuotaStore();
+        var first = new QuotaFixture();
+        var second = new QuotaFixture();
         first.RecordUsage(tenant, 60, 20);
         var initial = first.ReadManagement(tenant);
         var saved = first.SaveManagement(tenant, 70, initial.Revision, "quota-save-0001", scope);
@@ -397,11 +417,11 @@ public static class Program
         Check(first.FindManagement("quota-save-0002", scope) is null && first.GetQuota(tenant).DailyTokenLimit == 100,
             "quota conflict commits neither receipt nor limit");
         var revision = first.ReadManagement(tenant).Revision;
-        Parallel.For(0, 32, i => new TenantQuotaStore().RecordUsage(tenant, 2, 1));
+        Parallel.For(0, 32, i => new QuotaFixture().RecordUsage(tenant, 2, 1));
         Check(first.ReadManagement(tenant).Revision == revision && first.GetQuota(tenant).UsedTotalTokens == 178,
             "multiple quota store instances retain concurrent usage without changing limit revision");
         Parallel.Invoke(
-            () => Parallel.For(0, 32, i => new TenantQuotaStore().RecordUsage(tenant, 2, 1)),
+            () => Parallel.For(0, 32, i => new QuotaFixture().RecordUsage(tenant, 2, 1)),
             () => second.SaveManagement(tenant, 1000, revision, "quota-save-0003", scope));
         var final = first.ReadManagement(tenant);
         Check(final.Quota.UsedTotalTokens == 274 && final.Quota.DailyTokenLimit == 1000 && !final.Quota.EnergySaving,
@@ -420,7 +440,7 @@ public static class Program
         final = first.ReadManagement(tenant);
         const string capacityScope = "synthetic:quota-capacity";
         var capacityRevision = final.Revision;
-        for (var i = 0; i < TenantQuotaStore.MaximumReceiptsPerCaller; i++)
+        for (var i = 0; i < QuotaFixture.MaximumReceiptsPerCaller; i++)
             first.SaveManagement(tenant, 1000, capacityRevision++, "capacity-" + i, capacityScope);
         ExpectQuota("quota_receipt_capacity", () => first.SaveManagement(tenant, 1001, capacityRevision, "capacity-over", capacityScope));
         Check(second.FindManagement("capacity-0", capacityScope) is not null
@@ -506,6 +526,40 @@ public static class Program
         Task.WaitAll(first, second);
         Check(peak == 1 && calls == 2, "同一时刻只有一个热备任务在跑（并发调用被串行化）");
         Check(first.Result.Ok && second.Result.Ok, "串行化后两次调用都成功");
+
+        // D0-BACKUP-LIFETIME-01 / 02：Dispose 必须等待在途热备完成，且释放后拒绝新热备
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var postDisposeCalls = 0;
+        var backupCompletedBeforeDisposeReturned = false;
+        var inFlight = 0;
+        var lifetimeScheduler = new DatabaseBackupService(
+            () =>
+            {
+                Interlocked.Increment(ref postDisposeCalls);
+                Interlocked.Exchange(ref inFlight, 1);
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(5));
+                Interlocked.Exchange(ref inFlight, 0);
+                return "synthetic-lifetime.db";
+            },
+            () => null,
+            () => null,
+            (_, _) => { });
+        var runningTask = lifetimeScheduler.RunNowAsync(force: true);
+        Check(entered.Wait(TimeSpan.FromSeconds(3)), "热备任务已进入执行态");
+        var disposeTask = Task.Run(() =>
+        {
+            lifetimeScheduler.Dispose();
+            backupCompletedBeforeDisposeReturned = Volatile.Read(ref inFlight) == 0 && !lifetimeScheduler.IsRunning;
+        });
+        Thread.Sleep(60);
+        Check(!disposeTask.IsCompleted, "D0-BACKUP-LIFETIME-01: 在途热备未结束前 Dispose 不提前返回");
+        release.Set();
+        Check(disposeTask.Wait(TimeSpan.FromSeconds(3)), "D0-BACKUP-LIFETIME-01: 在途热备结束后 Dispose 正常返回");
+        Check(backupCompletedBeforeDisposeReturned, "D0-BACKUP-LIFETIME-01: Dispose 返回时在途热备已彻底收口");
+        var afterDispose = lifetimeScheduler.RunNowAsync(force: true).GetAwaiter().GetResult();
+        Check(!afterDispose.Ok && postDisposeCalls == 1, "D0-BACKUP-LIFETIME-02: Dispose 后拒绝新的热备调用且不触发回调");
     }
 
     private static string? ReadGzip(string path)
@@ -538,7 +592,7 @@ public static class Program
     private static void MultiTenantIsolationTests(string root)
     {
         // 1. 租户配额台账隔离与节能静默测试
-        var quotas = new TenantQuotaStore();
+        var quotas = new QuotaFixture();
         var qA = quotas.GetQuota("synthetic:tenant-a");
         Check(qA.TenantId == "synthetic:tenant-a" && !qA.EnergySaving, "初始租户配额状态正常");
 
@@ -952,7 +1006,7 @@ public static class Program
     /// </summary>
     private static void AgentTaskLedgerTests()
     {
-        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 14, "库版本应为 v14（回复节奏配置字段）");
+        Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 15, "库版本应为 v15（独立用量计量）");
         Check(AppDatabase.Scalar<long>(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_tasks'") == 1,
             "v12 必须建出 agent_tasks 表");

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using BotAgent.Domain.Configuration;
 using System.Globalization;
 using BotAgent.Services;
+using BotAgent.Services.Net;
 using BotAgent.Adapters.Persistence;
 
 namespace BotAgent.Adapters.Persistence;
@@ -252,14 +253,14 @@ public static class BotConfig
     [nameof(AppSettings.MusicAudioToModelMaxKb)] = new[] { "QQCHAT_MUSIC_AUDIO_MAX_KB" },
     [nameof(AppSettings.MusicSources)] = new[] { "QQCHAT_MUSIC_SOURCES" },
     [nameof(AppSettings.NeteaseBaseUrl)] = new[] { "QQCHAT_NETEASE_BASE_URL" },
-    [nameof(AppSettings.EnableLinkPreview)] = new[] { "QQCHAT_LINK_PREVIEW" },
-    [nameof(AppSettings.EnableWebSearch)] = new[] { "QQCHAT_WEB_SEARCH" },
-    [nameof(AppSettings.WebSearchUseModelSearch)] = new[] { "QQCHAT_SEARCH_USE_MODEL" },
-    [nameof(AppSettings.WebSearchSources)] = new[] { "QQCHAT_SEARCH_SOURCES" },
-    [nameof(AppSettings.WebSearchMaxResults)] = new[] { "QQCHAT_SEARCH_MAX_RESULTS" },
-    [nameof(AppSettings.WebSearchCooldownSeconds)] = new[] { "QQCHAT_SEARCH_COOLDOWN" },
-    [nameof(AppSettings.WebSearchTimeoutSeconds)] = new[] { "QQCHAT_SEARCH_TIMEOUT" },
-    [nameof(AppSettings.WebSearchReadMaxChars)] = new[] { "QQCHAT_SEARCH_READ_CHARS" },
+    [nameof(AppSettings.EnableLinkPreview)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.EnableLinkPreview)].ToArray(),
+    [nameof(AppSettings.EnableWebSearch)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.EnableWebSearch)].ToArray(),
+    [nameof(AppSettings.WebSearchUseModelSearch)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.WebSearchUseModelSearch)].ToArray(),
+    [nameof(AppSettings.WebSearchSources)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.WebSearchSources)].ToArray(),
+    [nameof(AppSettings.WebSearchMaxResults)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.WebSearchMaxResults)].ToArray(),
+    [nameof(AppSettings.WebSearchCooldownSeconds)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.WebSearchCooldownSeconds)].ToArray(),
+    [nameof(AppSettings.WebSearchTimeoutSeconds)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.WebSearchTimeoutSeconds)].ToArray(),
+    [nameof(AppSettings.WebSearchReadMaxChars)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.WebSearchReadMaxChars)].ToArray(),
     [nameof(AppSettings.EnableVoice)] = new[] { "QQCHAT_ENABLE_VOICE" },    [nameof(AppSettings.VoiceName)] = new[] { "QQCHAT_VOICE" },
     [nameof(AppSettings.VoiceSpeed)] = new[] { "QQCHAT_VOICE_SPEED" },
         [nameof(AppSettings.VoicePitch)] = new[] { "QQCHAT_VOICE_PITCH" },
@@ -280,8 +281,8 @@ public static class BotConfig
     [nameof(AppSettings.FeishuWhitelist)] = new[] { "BOTAGENT_FEISHU_WHITELIST", "QQCHAT_FEISHU_WHITELIST" },
     [nameof(AppSettings.FeishuWhitelistPrivates)] = new[] { "QQCHAT_FEISHU_WHITELIST_PRIVATES" },
     [nameof(AppSettings.FeishuApiBase)] = new[] { "BOTAGENT_FEISHU_API_BASE", "QQCHAT_FEISHU_API_BASE" },
-    [nameof(AppSettings.LinkPreviewTimeoutSeconds)] = new[] { "QQCHAT_LINK_PREVIEW_TIMEOUT" },
-    [nameof(AppSettings.LinkPreviewMax)] = new[] { "QQCHAT_LINK_PREVIEW_MAX" },
+    [nameof(AppSettings.LinkPreviewTimeoutSeconds)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.LinkPreviewTimeoutSeconds)].ToArray(),
+    [nameof(AppSettings.LinkPreviewMax)] = ResearchSettings.EnvironmentAliases[nameof(AppSettings.LinkPreviewMax)].ToArray(),
     [nameof(AppSettings.MusicBitrate)] = new[] { "QQCHAT_MUSIC_BITRATE" },
     [nameof(AppSettings.MusicMaxDownloadMb)] = new[] { "QQCHAT_MUSIC_MAX_MB" },
     [nameof(AppSettings.MusicMaxAnalysisSeconds)] = new[] { "QQCHAT_MUSIC_ANALYSIS_SECONDS" },
@@ -404,8 +405,7 @@ public static class BotConfig
         s.MusicAudioToModelMaxKb = Int("QQCHAT_MUSIC_AUDIO_MAX_KB") ?? s.MusicAudioToModelMaxKb;
         s.MusicSources = Str("QQCHAT_MUSIC_SOURCES") ?? s.MusicSources;
         s.NeteaseBaseUrl = Str("QQCHAT_NETEASE_BASE_URL") ?? s.NeteaseBaseUrl;
-        s.EnableLinkPreview = Bool("QQCHAT_LINK_PREVIEW") ?? s.EnableLinkPreview;
-        s.EnableWebSearch = Bool("QQCHAT_WEB_SEARCH") ?? s.EnableWebSearch;
+        HostResearchOptions.SeedEnvironment(s);
         s.EnableAgentBridge = Bool("QQCHAT_AGENT") ?? s.EnableAgentBridge;
         s.AgentPrefix = Str("QQCHAT_AGENT_PREFIX") ?? s.AgentPrefix;
         s.AgentAllowedUsers = Str("QQCHAT_AGENT_USERS") ?? s.AgentAllowedUsers;
@@ -438,12 +438,6 @@ public static class BotConfig
         s.HealthReportEnabled = Bool("QQCHAT_HEALTH_REPORT") ?? s.HealthReportEnabled;
         s.HealthReportTime = Str("QQCHAT_HEALTH_REPORT_TIME") ?? s.HealthReportTime;
         s.HealthReportTargets = Str("QQCHAT_HEALTH_REPORT_TO") ?? s.HealthReportTargets;
-        s.WebSearchUseModelSearch = Bool("QQCHAT_SEARCH_USE_MODEL") ?? s.WebSearchUseModelSearch;
-        s.WebSearchSources = Str("QQCHAT_SEARCH_SOURCES") ?? s.WebSearchSources;
-        s.WebSearchMaxResults = Int("QQCHAT_SEARCH_MAX_RESULTS") ?? s.WebSearchMaxResults;
-        s.WebSearchCooldownSeconds = Int("QQCHAT_SEARCH_COOLDOWN") ?? s.WebSearchCooldownSeconds;
-        s.WebSearchTimeoutSeconds = Int("QQCHAT_SEARCH_TIMEOUT") ?? s.WebSearchTimeoutSeconds;
-        s.WebSearchReadMaxChars = Int("QQCHAT_SEARCH_READ_CHARS") ?? s.WebSearchReadMaxChars;
         s.EnableVoice = Bool("QQCHAT_ENABLE_VOICE") ?? s.EnableVoice;
         s.VoiceName = Str("QQCHAT_VOICE") ?? s.VoiceName;
         s.VoiceSpeed = Int("QQCHAT_VOICE_SPEED") ?? s.VoiceSpeed;
@@ -469,8 +463,6 @@ public static class BotConfig
     s.FeishuWhitelist = Str("BOTAGENT_FEISHU_WHITELIST", "QQCHAT_FEISHU_WHITELIST") ?? s.FeishuWhitelist;
     s.FeishuWhitelistPrivates = Str("QQCHAT_FEISHU_WHITELIST_PRIVATES") ?? s.FeishuWhitelistPrivates;
     s.FeishuApiBase = Str("BOTAGENT_FEISHU_API_BASE", "QQCHAT_FEISHU_API_BASE") ?? s.FeishuApiBase;
-        s.LinkPreviewTimeoutSeconds = Int("QQCHAT_LINK_PREVIEW_TIMEOUT") ?? s.LinkPreviewTimeoutSeconds;
-        s.LinkPreviewMax = Int("QQCHAT_LINK_PREVIEW_MAX") ?? s.LinkPreviewMax;
         s.MusicBitrate = Int("QQCHAT_MUSIC_BITRATE") ?? s.MusicBitrate;
         s.MusicMaxDownloadMb = Int("QQCHAT_MUSIC_MAX_MB") ?? s.MusicMaxDownloadMb;
         s.MusicMaxAnalysisSeconds = Int("QQCHAT_MUSIC_ANALYSIS_SECONDS") ?? s.MusicMaxAnalysisSeconds;

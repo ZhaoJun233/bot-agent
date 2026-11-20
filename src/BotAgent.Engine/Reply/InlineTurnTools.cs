@@ -11,6 +11,7 @@ using System.Text.Json.Nodes;
 using BotAgent.Services.Net;
 using BotAgent.Services.Participation;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Reply;
 
@@ -50,7 +51,7 @@ public sealed class InlineTurnTools
         _participation = participation;
         _log = log;
         _plugins = plugins;
-        _tools = new ReplyToolAvailability(plugins, policies, isDisposed, () => research.IsReady);
+        _tools = new ReplyToolAvailability(plugins, policies, isDisposed, () => research.IsReady, () => approvals.Capabilities.Catalog);
     }
 
     /// <summary>这一轮有没有"当场做工具"的可能（没开循环 / 没有搜索服务 / 插件禁用 = 没有）。</summary>
@@ -65,91 +66,39 @@ public sealed class InlineTurnTools
         BotConversation conversation, AppSettings snapshot, ChatCapabilitySet caps, CompletionResult result,
         EffectivePlatformPolicy? platformPolicy = null, CancellationToken ct = default)
     {
-        if (ct.IsCancellationRequested || !Enabled(snapshot) || !_tools.Allows(snapshot, platformPolicy, "web.search"))
+        if (ct.IsCancellationRequested || !Enabled(snapshot)) return null;
+        var search = !string.IsNullOrWhiteSpace(result.Search);
+        if (!search && string.IsNullOrWhiteSpace(result.Read)) return null;
+        var id = search ? "web.search" : "web.read";
+        var value = search ? result.Search! : result.Read!;
+        var call = new ToolCall(id, new JsonObject { [search ? "query" : "url"] = value });
+        var binding = caps.Catalog.FindBinding(id);
+        if (binding is null || !_tools.Allows(snapshot, platformPolicy, id, caps.Catalog)) return null;
+        var verdict = ToolArguments.Validate(binding.Definition, call.Arguments);
+        if (!verdict.Ok)
         {
-            return null;   // 没开循环 / 没有搜索服务：什么都不做（这一支就是"改造前"）
+            _log($"[循环] 工具参数不合契约（{verdict.ReasonCode}）→ 不执行");
+            return null;
         }
-
-        if (!string.IsNullOrWhiteSpace(result.Search))
+        if (!_approvals.AllowCapability(conversation, id, value, out _, pinned: caps)) return null;
+        if (!search) _log("[循环] 当场读页面");
+        await ReplyCommitBoundary.BeforeEffectAsync();
+        if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, id, caps.Catalog)) return null;
+        try
         {
-            if (_plugins?.AllowsTool("web.search") == false)
-            {
-                _log("[循环] 搜索插件已禁用 → 不执行");
-                return null;
-            }
-
-            var query = result.Search!;
-
-            // 批次 A 收尾（§9.3 第 4 格）：**参数契约的执行前校验**（只对已接入校验的工具严格）。
-            // 不合契约就不执行 —— fail-closed，且只记原因码不记正文。
-            var verdict = ToolArgs.Validate("web.search", new JsonObject { ["query"] = query });
-            if (!verdict.Ok)
-            {
-                _log($"[循环] 当场搜索的参数不合契约（{verdict.ReasonCode}）→ 不执行");
-                return null;
-            }
-
-            if (!_approvals.AllowCapability(conversation, "web.search", query, out var whySearch, pinned: caps))
-            {
-                _log($"[循环] 当场搜索被闸门拒绝（{whySearch}）→ 不再多问一次");
-                return null;
-            }
-
-            await ReplyCommitBoundary.BeforeEffectAsync();
-            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.search")) return null;
-            if (!_research.TryBeginSearch(conversation.SourceKey, snapshot.WebSearchCooldownSeconds, out var cooldownWhy))
-            {
-                _log($"[循环] 当场搜索被冷却挡下（{cooldownWhy}）→ 不再多问一次");
-                return null;
-            }
-
-            _log($"[循环] 当场搜索「{query}」（第一步就做掉，不再拖到下一轮）");
-            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.search")) return null;
-            using var searchLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
-            var found = await _research.SearchAsync(conversation.SourceKey, query, searchLifetime.Token);
-            if (searchLifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.search")) return null;
-            if (found is null || !found.HasContent)
-            {
-                _participation.Observe(conversation.SourceKey, ParticipationEvent.ToolFailure);
-                return null;   // 没搜到：不再多问一次（让它按"没查到"如实说）
-            }
-
-            return found.Describe();
+            if (search && !binding.GetContribution<IResearchUseCase>()
+                .TryBeginSearch(conversation.SourceKey, snapshot.WebSearchCooldownSeconds, out _)) return null;
+            if (search) _log("[循环] 当场搜索");
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
+            if (lifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, id, caps.Catalog)) return null;
+            var outcome = await binding.ExecuteAsync(conversation.SourceKey, call, lifetime.Token);
+            if (lifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, id, caps.Catalog)) return null;
+            if (search && !outcome.Ok) _participation.Observe(conversation.SourceKey, ParticipationEvent.ToolFailure);
+            return outcome.Ok ? outcome.ModelText : null;
         }
-
-        if (!string.IsNullOrWhiteSpace(result.Read))
+        catch (InvalidOperationException error) when (error.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable")
         {
-            if (_plugins?.AllowsTool("web.read") == false)
-            {
-                _log("[循环] 读页面插件已禁用 → 不执行");
-                return null;
-            }
-
-            var url = result.Read!;
-
-            var verdict = ToolArgs.Validate("web.read", new JsonObject { ["url"] = url });
-            if (!verdict.Ok)
-            {
-                _log($"[循环] 当场读页面的参数不合契约（{verdict.ReasonCode}）→ 不执行");
-                return null;
-            }
-
-            if (!_approvals.AllowCapability(conversation, "web.read", url, out var whyRead, pinned: caps))
-            {
-                _log($"[循环] 当场读页面被闸门拒绝（{whyRead}）→ 不再多问一次");
-                return null;
-            }
-
-            _log($"[循环] 当场读页面 {TextRules.Shorten(url, 80)}");
-            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
-            await ReplyCommitBoundary.BeforeEffectAsync();
-            if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
-            using var readLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
-            var text = await _research.ReadPageAsync(conversation.SourceKey, url, readLifetime.Token);
-            if (readLifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "web.read")) return null;
-            return string.IsNullOrWhiteSpace(text) ? null : "页面正文：\n" + text;
+            return null;
         }
-
-        return null;
     }
 }

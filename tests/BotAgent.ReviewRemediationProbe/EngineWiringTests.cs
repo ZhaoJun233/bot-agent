@@ -20,7 +20,6 @@ using BotAgent.Services.Ops;
 using BotAgent.Services.Permissions;
 using BotAgent.Services.Platforms;
 using BotAgent.Services.Plugins;
-using BotAgent.Services.Plugins.Presets;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Reply;
 using BotAgent.Services.Stickers;
@@ -45,13 +44,13 @@ internal static class EngineWiringTests
         var registry = new ConversationRegistry(null!, box, source, _ => true, _ => { });
 
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new MusicPresetPlugin());
-        plugins.Register(new VoicePresetPlugin());
-        plugins.Register(new StickersPresetPlugin());
-        plugins.Register(new PokePresetPlugin());
-        plugins.Register(new VibesPresetPlugin());
-        plugins.Register(new ProfilesPresetPlugin());
-        plugins.Register(new WebSearchPresetPlugin(), defaultEnabled: false);
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.music", "synthetic music", PluginCategory.Media));
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.voice", "synthetic voice", PluginCategory.Media));
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.stickers", "synthetic stickers"));
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.poke", "synthetic poke"));
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.vibes", "synthetic vibes"));
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.profiles", "synthetic profiles"));
+        plugins.Register(new SyntheticResearchRegistration(), defaultEnabled: false);
         var gate = new PluginGate(plugins);
 
         var pipeline = new ReplyPipeline(box, source, null!, null!, registry, null!, null!, null!, null!,
@@ -94,14 +93,14 @@ internal static class EngineWiringTests
         var source = new FakeSource();
         var voice = new FakeVoice();
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new VoicePresetPlugin(), defaultEnabled: false);
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.voice", "synthetic voice", PluginCategory.Media), defaultEnabled: false);
         var gate = new PluginGate(plugins);
         var pipeline = new ReplyPipeline(box, source, null!, null!, null!, null!, null!, null!, null!,
             null!, null!, null!, null!, null!, null!, null!, voice, null!, null!, null!, null!,
             new ReplyHooks(_ => { }, () => 10001, () => false), new TurnTraceStore(), plugins: gate);
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
-        var caps = ChatCapabilitySet.FromSwitches(false, false, true, false, true, null);
+        var caps = ResearchToolFixture.Capabilities(false, false, true, false, true, null);
         // #106：投递已从 ReplyPipeline 搬到 internal 的 ReplyDelivery。按"取组件实例 + 调它的公开方法"反射，
         // 不新增 InternalsVisibleTo、也不把组件改成 public（沿用这个文件原来的约定）。
         var delivery = Component(pipeline, "_delivery");
@@ -152,7 +151,7 @@ internal static class EngineWiringTests
                 plugins: new PluginGate(plugins), platformPolicies: new FixedPolicyResolver(policy));
             var conversation = new BotConversation
             { SourceKey = platform == PlatformId.QqOfficial ? "official:group:8000000000000001" : "group:10001", Name = "synthetic" };
-            var caps = ChatCapabilitySet.FromSwitches(false, false, true, false, true, null);
+            var caps = ResearchToolFixture.Capabilities(false, false, true, false, true, null);
             var delivery = Component(pipeline, "_delivery");
             var method = delivery.GetType().GetMethod("TryVoiceAsync", BindingFlags.Instance | BindingFlags.Public)!;
             Task InvokeAsync() => (Task)method.Invoke(delivery, new object[]
@@ -161,7 +160,7 @@ internal static class EngineWiringTests
 
             await InvokeAsync();
             check(voice.Builds == 0 && source.VoiceCalls == 0, platform + " unregistered voice plugin starts no build/send");
-            plugins.Register(new VoicePresetPlugin());
+            plugins.Register(new SyntheticPresetRegistration("preset.feature.voice", "synthetic voice", PluginCategory.Media));
             await InvokeAsync();
             check(voice.Builds == 1 && source.VoiceCalls == 1, platform + " registered voice plugin reaches actual delivery");
             plugins.SetEnabled("preset.feature.voice", false);
@@ -175,7 +174,7 @@ internal static class EngineWiringTests
     {
         var box = new SettingsBox(new AppSettings { EnablePoke = true, PrivateChatEnabled = true });
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new PokePresetPlugin(), defaultEnabled: false);
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.poke", "synthetic poke"), defaultEnabled: false);
         var gate = new PluginGate(plugins);
         var actions = new FakeActions();
         var registry = RegistryProxy.Create();
@@ -218,9 +217,9 @@ internal static class EngineWiringTests
         var box = new SettingsBox(settings);
         var source = new FakeSource();
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new StickersPresetPlugin());
-        plugins.Register(new MusicPresetPlugin());
-        plugins.Register(new WebSearchPresetPlugin(), defaultEnabled: false);
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.stickers", "synthetic stickers"));
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.music", "synthetic music", PluginCategory.Media));
+        plugins.Register(new SyntheticResearchRegistration(), defaultEnabled: false);
         plugins.SetEnabled("preset.feature.stickers", true);
         plugins.SetEnabled("preset.feature.music", true);
         plugins.SetEnabled("preset.feature.websearch", true);
@@ -231,6 +230,8 @@ internal static class EngineWiringTests
         var model = DispatchProxy.Create<IModelClient, CountingModelProxy>();
         var modelCalls = (CountingModelProxy)(object)model;
         using var stickers = new StickerService(null!, model, source, box, _ => { });
+        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
         var background = NewQueue();
 
         var pipeline = new ReplyPipeline(
@@ -334,12 +335,14 @@ internal static class EngineWiringTests
         var box = new SettingsBox(settings);
         var source = new FakeSource();
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new StickersPresetPlugin());
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.stickers", "synthetic stickers"));
         var gate = new PluginGate(plugins);
         var model = DispatchProxy.Create<IModelClient, CountingModelProxy>();
         var modelCalls = (CountingModelProxy)(object)model;
         modelCalls.HoldFirstDownload = true;
         using var stickers = new StickerService(null!, model, source, box, _ => { });
+        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
         var background = NewQueue();
 
         var pipeline = new ReplyPipeline(
@@ -422,25 +425,27 @@ internal static class EngineWiringTests
         });
         var source = new FakeSource();
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new StickersPresetPlugin());
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.stickers", "synthetic stickers"));
         var gate = new PluginGate(plugins);
         var repository = DispatchProxy.Create<IStickerRepository, TimerStickerRepositoryProxy>();
         var model = DispatchProxy.Create<IModelClient, TimerStickerModelProxy>();
         var counted = (TimerStickerModelProxy)(object)model;
         using var stickers = new StickerService(repository, model, source, settings, _ => { });
+        var stickerCoord = new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts());
+        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(), stickerCoord);
         var scheduler = new BotScheduler(settings, source, null!, null!, null!, stickers, null!,
             new BotSchedulerHooks(_ => { }, () => false), gate.Allows);
         try
         {
             scheduler.RebuildIfNeeded();
-            var timerField = typeof(StickerService).GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var timerField = typeof(BotAgent.Packages.Stickers.StickerCoordinator).GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)!;
             var mode = revoked ? "revoked" : "positive";
-            check(timerField.GetValue(stickers) is not null && stickers.PendingDescribe == 2,
+            check(timerField.GetValue(stickerCoord) is not null && stickers.PendingDescribe == 2,
                 $"{mode} sticker timer is armed with two pending rows");
 
             // 与真实 timer 回调同一实现；不等待 10 秒到点。
-            var tick = (Task)typeof(StickerService).GetMethod("TickAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(stickers, null)!;
+            var tick = (Task)typeof(BotAgent.Packages.Stickers.StickerCoordinator).GetMethod("TickAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(stickerCoord, null)!;
             await counted.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             check(counted.Calls == 1, $"{mode} sticker timer starts exactly one model call");
 
@@ -450,7 +455,7 @@ internal static class EngineWiringTests
                     "sticker plugin is enabled before timer revocation");
                 plugins.SetEnabled("preset.feature.stickers", false);
                 scheduler.RebuildIfNeeded();
-                check(!gate.Allows(PluginGate.StickersCapability) && timerField.GetValue(stickers) is null,
+                check(!gate.Allows(PluginGate.StickersCapability) && timerField.GetValue(stickerCoord) is null,
                     "disabling the sticker plugin disarms the timer");
             }
 
@@ -480,7 +485,7 @@ internal static class EngineWiringTests
     {
         var box = new SettingsBox(new AppSettings { EnableStickers = true, StickerLibraryMax = 10 });
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new StickersPresetPlugin(), defaultEnabled: !revoked);
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.stickers", "synthetic stickers"), defaultEnabled: !revoked);
         var gate = new PluginGate(plugins);
         var repository = DispatchProxy.Create<IStickerRepository, ManualStickerRepositoryProxy>();
         var model = DispatchProxy.Create<IModelClient, ManualStickerModelProxy>();
@@ -489,6 +494,8 @@ internal static class EngineWiringTests
         var countedSource = (ManualStickerSourceProxy)(object)source;
 
         using var stickers = new StickerService(repository, model, source, box, _ => { });
+        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
         stickers.PluginEnabled = () => gate.Allows(PluginGate.StickersCapability);
 
         var mode = revoked ? "revoked" : "positive";
@@ -514,7 +521,7 @@ internal static class EngineWiringTests
     {
         var box = new SettingsBox(new AppSettings { EnableStickers = true, StickerLibraryMax = 10 });
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new StickersPresetPlugin());
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.stickers", "synthetic stickers"));
         var gate = new PluginGate(plugins);
         var repository = DispatchProxy.Create<IStickerRepository, ManualStickerRepositoryProxy>();
         var model = DispatchProxy.Create<IModelClient, ManualStickerModelProxy>();
@@ -524,6 +531,8 @@ internal static class EngineWiringTests
         counted.HoldFirstDownload = true;
 
         using var stickers = new StickerService(repository, model, source, box, _ => { });
+        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
         stickers.PluginEnabled = () => gate.Allows(PluginGate.StickersCapability);
 
         var import = stickers.ImportFromAlbumAsync();
@@ -547,7 +556,7 @@ internal static class EngineWiringTests
         var box = new SettingsBox(settings);
         var source = new FakeSource();
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new MusicPresetPlugin());
+        plugins.Register(new SyntheticPresetRegistration("preset.feature.music", "synthetic music", PluginCategory.Media));
         var gate = new PluginGate(plugins);
         var music = new FakeMusic();
         var background = NewQueue();
@@ -561,7 +570,7 @@ internal static class EngineWiringTests
             platformPolicies: new FixedPolicyResolver(EnabledPolicy()), plugins: gate, background: background);
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
-        var caps = ChatCapabilitySet.FromSwitches(false, true, true, false, true, null);
+        var caps = ResearchToolFixture.Capabilities(false, true, true, false, true, null);
         var actionComponent = Component(pipeline, "_actions");
         var queueActions = actionComponent.GetType().GetMethod("QueueTurnActions", BindingFlags.Instance | BindingFlags.Public)!;
         async Task InvokeAsync() => await (Task)queueActions.Invoke(actionComponent, new object[]
@@ -604,7 +613,7 @@ internal static class EngineWiringTests
         var box = new SettingsBox(settings);
         var source = new FakeSource();
         var plugins = new PluginManager(_ => { });
-        plugins.Register(new WebSearchPresetPlugin());
+        plugins.Register(new SyntheticResearchRegistration());
         var gate = new PluginGate(plugins);
         var research = new FakeResearch();
         var background = NewQueue();
@@ -615,7 +624,8 @@ internal static class EngineWiringTests
 
         var conversation = new BotConversation { SourceKey = "group:10001", Name = "synthetic" };
         var searchComponent = Component(pipeline, "_actions");
-        var queueSearch = searchComponent.GetType().GetMethod("QueueWebSearch", BindingFlags.Instance | BindingFlags.Public)!;
+        var catalog = ResearchToolFixture.Create(research);
+        var queueSearch = searchComponent.GetType().GetMethod("QueueResearch", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var blocker = background.EnqueueAsync("blocker", "blocker", async _ =>
@@ -625,7 +635,9 @@ internal static class EngineWiringTests
         });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        queueSearch.Invoke(searchComponent, new object[] { conversation, "synthetic-query", settings, EnabledPolicy() });
+        queueSearch.Invoke(searchComponent, new object[] { conversation,
+            new BotAgent.Domain.Tools.ToolCall("web.search", new() { ["query"] = "synthetic-query" }),
+            catalog.FindBinding("web.search")!, settings, EnabledPolicy(), catalog });
         check(research.Calls == 0 && background.Snapshot().Queued == 1,
             "web search is admitted through the bounded queue, not started inline");
 

@@ -27,6 +27,9 @@ using BotAgent.Services.Stickers;
 using BotAgent.Services.Voice;
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json.Nodes;
+using BotAgent.Domain.Tools;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Reply;
 
@@ -79,85 +82,45 @@ internal sealed class ReplyTurnActions(
 
     private AppSettings _settings => _box.Current;
 
-    /// <summary>
-    /// 后台真去搜一次，把结果留给下一轮（并在允许时叫醒模型）。
-    /// 为什么要冷却：搜索是一次真实的模型调用 + 几秒等待；群里连问几个问题就排队了。
-    /// </summary>
-    public void QueueWebSearch(BotConversation conversation, string query, AppSettings snapshot, EffectivePlatformPolicy platformPolicy)
+    private void QueueResearch(BotConversation conversation, ToolCall call, IToolBinding binding,
+        AppSettings snapshot, EffectivePlatformPolicy platformPolicy, ChatToolCatalog catalog)
     {
         var key = conversation.SourceKey;
-        if (!ResearchStillAllowed(snapshot, platformPolicy, "web.search")) return;
-        if (!_research.TryBeginSearch(key, snapshot.WebSearchCooldownSeconds, out var searchWhy))
+        var search = call.ToolId == "web.search";
+        bool Allowed() => binding.IsReady && _replyTools.Allows(snapshot, platformPolicy, call.ToolId, catalog)
+            && _replyTools.Allows(_settings, platformPolicy, call.ToolId, catalog);
+        if (!Allowed()) return;
+        try
         {
-            _hooks.Log($"[Search] 这次不搜（{searchWhy}）：{query}");
+            if (search && !binding.GetContribution<IResearchUseCase>()
+                .TryBeginSearch(key, snapshot.WebSearchCooldownSeconds, out _)) return;
+        }
+        catch (InvalidOperationException error) when (error.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable")
+        {
             return;
         }
-
-        _hooks.Log($"[Search] 模型想搜「{query}」");
-        _queueBackground("web-search:" + key + ":" + query, "web-search:" + key + ":" + query, async ct =>
+        var value = call.Arguments[search ? "query" : "url"]!.GetValue<string>();
+        var job = (search ? "web-search:" : "web-read:") + key + ":" + value;
+        _queueBackground(job, job, async ct =>
         {
-            if (ct.IsCancellationRequested || !ResearchStillAllowed(snapshot, platformPolicy, "web.search")) return;
+            if (ct.IsCancellationRequested || !Allowed()) return;
             try
             {
-                var result = await _research.SearchAsync(key, query, ct);
-                if (ct.IsCancellationRequested || !ResearchStillAllowed(snapshot, platformPolicy, "web.search")) return;
-                if (result is not null && !result.HasContent)
-                {
-                    _hooks.Log($"[Search] 没搜到「{query}」：{result.Error}");
-                    // P1 观测：模型点名的工具没拿到东西 → 记一次失败（只降级不升级）
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                }
-
-                // 搜到了就给它一次开口机会（没搜到也给 —— 让它能如实说“没查到”）
+                var outcome = await binding.ExecuteAsync(key, call, ct);
+                if (ct.IsCancellationRequested || !Allowed()) return;
+                if (!outcome.Ok && (!search || outcome.ReasonCode != "research_unavailable"))
+                    _participation.Observe(key, ParticipationEvent.ToolFailure);
                 _requestReply(conversation, snapshot);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) { }
+            catch (InvalidOperationException error) when (error.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable") { }
+            catch (Exception error)
             {
-                // 停机/超时取消：不再把结果当成失败去降级。
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Search] 搜「{query}」失败: {ex.Message}");
-                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
+                _hooks.Log($"[Search] 工具执行失败: {error.GetType().Name}");
+                _participation.Observe(key, ParticipationEvent.ToolFailure);
             }
         });
     }
-    /// <summary>后台读一个网页的正文（模型填 read 时），留给下一轮。</summary>
-    public void QueuePageRead(BotConversation conversation, string url, AppSettings snapshot, EffectivePlatformPolicy platformPolicy)
-    {
-        var key = conversation.SourceKey;
-        if (!ResearchStillAllowed(snapshot, platformPolicy, "web.read")) return;
-        _hooks.Log($"[Search] 模型想读页面 {TextRules.Shorten(url, 80)}");
-        _queueBackground("web-read:" + key + ":" + url, "web-read:" + key + ":" + url, async ct =>
-        {
-            if (ct.IsCancellationRequested || !ResearchStillAllowed(snapshot, platformPolicy, "web.read")) return;
-            try
-            {
-                var text = await _research.ReadPageAsync(key, url, ct);
-                if (ct.IsCancellationRequested || !ResearchStillAllowed(snapshot, platformPolicy, "web.read")) return;
-                if (text is null)
-                {
-                    // P1 观测：读页面失败（工具失败 → 只降级）
-                    _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-                }
-
-                _requestReply(conversation, snapshot);
-            }
-            catch (OperationCanceledException)
-            {
-                // 停机/超时取消：不再把结果当成失败去降级。
-            }
-            catch (Exception ex)
-            {
-                _hooks.Log($"[Search] 读页面失败: {ex.Message}");
-                _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
-            }
-        });
-    }
-    private bool ResearchStillAllowed(AppSettings snapshot, EffectivePlatformPolicy platformPolicy, string toolId)
-        => _replyTools.Allows(snapshot, platformPolicy, toolId)
-            && _replyTools.Allows(_settings, platformPolicy, toolId);
-
 
     /// <summary>
     /// 第 4 步的**动作**那一半：搜索 / 读页 / 听歌 / 分享歌（都是两轮动作，后台去跑、下一轮再开口）
@@ -185,21 +148,19 @@ internal sealed class ReplyTurnActions(
         // 联网搜索（search / read）：后台去查，拿到结果后再给它一次开口的机会。
         // 这两个是“两轮动作”—— 模型这轮照常接话（reply 可以写“我去查查”），下一轮拿着事实说。
         // search 优先于 read：模型一般只会填一个。
-        if (platformPolicy.Feature("websearch", snapshot.EnableWebSearch).Enabled && _allowsFeature(PluginGate.WebSearchCapability) && _research.IsReady && result.Search is { Length: > 0 } wantedQuery)
+        var search = result.Search is { Length: > 0 };
+        var requested = search ? result.Search : result.Read;
+        if (requested is { Length: > 0 } && _research.IsReady)
         {
-            // P3：联网是“真出网”，必须过服务端能力闸门（模型输出不构成授权）；策略用本轮快照
-            if (_approvals.AllowCapability(conversation, "web.search", wantedQuery, out _, pinned: caps))
+            var id = search ? "web.search" : "web.read";
+            var call = new ToolCall(id, new JsonObject { [search ? "query" : "url"] = requested });
+            var binding = caps.Catalog.FindBinding(id);
+            if (binding is not null && _replyTools.Allows(snapshot, platformPolicy, id, caps.Catalog)
+                && ToolArguments.Validate(binding.Definition, call.Arguments).Ok
+                && _approvals.AllowCapability(conversation, id, requested, out _, pinned: caps))
             {
                 await ReplyCommitBoundary.BeforeEffectAsync();
-                QueueWebSearch(conversation, wantedQuery, snapshot, platformPolicy);
-            }
-        }
-        else if (platformPolicy.Feature("websearch", snapshot.EnableWebSearch).Enabled && _allowsFeature(PluginGate.WebSearchCapability) && _research.IsReady && result.Read is { Length: > 0 } pageUrl)
-        {
-            if (_approvals.AllowCapability(conversation, "web.read", pageUrl, out _, pinned: caps))
-            {
-                await ReplyCommitBoundary.BeforeEffectAsync();
-                QueuePageRead(conversation, pageUrl, snapshot, platformPolicy);
+                QueueResearch(conversation, call, binding, snapshot, platformPolicy, caps.Catalog);
             }
         }
 
@@ -218,7 +179,12 @@ internal sealed class ReplyTurnActions(
                 _queueBackground("music-listen:" + key + ":" + wantedSong, "music-listen:" + key + ":" + wantedSong, async ct =>
                 {
                     if (!MusicStillAllowed(platformPolicy, "听歌")) return;
-                    var note = await _music.ListenAsync(key, wantedSong, "群友", ct);
+                    string? note;
+                    try { note = await _music.ListenAsync(key, wantedSong, "群友", ct); }
+                    catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+                    {
+                        note = null;
+                    }
                     if (ct.IsCancellationRequested) return;
                     if (string.IsNullOrWhiteSpace(note))
                     {
@@ -247,7 +213,12 @@ internal sealed class ReplyTurnActions(
             _queueBackground("music-share:" + key + ":" + songToShare, "music-share:" + key + ":" + songToShare, async ct =>
             {
                 if (!MusicStillAllowed(platformPolicy, "分享")) return;
-                var shared = await _music.ShareWithReceiptAsync(songToShare, shareIsGroup, shareTargetId, ct);
+                SendResult shared;
+                try { shared = await _music.ShareWithReceiptAsync(songToShare, shareIsGroup, shareTargetId, ct); }
+                catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+                {
+                    shared = new(false);
+                }
                 if (!ReplyDeliveryResults.Confirmed(shared))
                 {
                     _participation.Observe(conversation.SourceKey, Services.Participation.ParticipationEvent.ToolFailure);
@@ -257,7 +228,8 @@ internal sealed class ReplyTurnActions(
                 // 卡片发出去了，接着真去听一遍：下一轮发言时它就“听过这首歌”。
                 // 第二个副作用开始前再复核一次：排队/分享期间插件可能被关、会话可能已停机。
                 if (!MusicStillAllowed(platformPolicy, "分享后听歌")) return;
-                _ = await _music.ListenAsync(key, songToShare, "（自己分享的）", ct);
+                try { _ = await _music.ListenAsync(key, songToShare, "（自己分享的）", ct); }
+                catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing") { }
             });
         }
 

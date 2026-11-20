@@ -35,8 +35,8 @@ public static class ToolVisibilityTests
     public static Task WebReadyGateAsync()
     {
         var settings = new AppSettings { EnableWebSearch = true };
-        var notReady = new ToolVisibility(webReady: () => false);
-        var ready = new ToolVisibility(webReady: () => true);
+        var notReady = new ToolVisibility(webReady: () => false, catalog: () => ResearchToolFixture.Catalog);
+        var ready = new ToolVisibility(webReady: () => true, catalog: () => ResearchToolFixture.Catalog);
 
         Check(!notReady.Allows(settings, null, "web.search"), "联网未就绪时搜索工具不可见（即使开关开着）");
         Check(ready.Allows(settings, null, "web.search"), "联网就绪且开关开着时搜索工具可见");
@@ -98,7 +98,7 @@ public static class ToolVisibilityTests
 
     public static Task InventoryAppendsMcpWithoutChangingBuiltinAsync()
     {
-        var builtin = ToolInventory.Builtin;
+        var builtin = ToolInventory.Create(ToolDirectory.FromCatalog(ResearchToolFixture.Catalog), null);
         Check(builtin.BuiltinCount == 26, "内建三族仍是 26 条（10/10/6）");
         Check(builtin.McpCount == 0 && builtin.Count == 26, "没有 MCP 时查询面就是内建目录");
         Check(builtin.Duplicates.Count == 0, "内建目录里不该有重名");
@@ -110,7 +110,7 @@ public static class ToolVisibilityTests
             InputSchemaJson: "{}",
             ServerId: "demo",
             ReadOnlyHint: true);
-        var inventory = ToolInventory.Create(BotAgent.Services.Tools.ToolDirectory.Builtin, new[] { tool });
+        var inventory = ToolInventory.Create(ToolDirectory.FromCatalog(ResearchToolFixture.Catalog), new[] { tool });
 
         Check(inventory.BuiltinCount == 26 && inventory.McpCount == 1 && inventory.Count == 27, "MCP 是追加来源，不改内建 26 条");
         Check(inventory.Entries[^1].Id == "demo.lookup", "MCP 条目排在最后且 id = QualifiedName");
@@ -120,7 +120,7 @@ public static class ToolVisibilityTests
         Check(spec.Parameters.Contains("MCP", StringComparison.Ordinal), "参数契约标注由服务器声明");
 
         var clash = new BotAgent.Domain.Mcp.McpToolInfo("web.search", "web.search", "撞名", "{}", "demo", false);
-        var withClash = ToolInventory.Create(BotAgent.Services.Tools.ToolDirectory.Builtin, new[] { clash });
+        var withClash = ToolInventory.Create(ToolDirectory.FromCatalog(ResearchToolFixture.Catalog), new[] { clash });
         Check(withClash.Duplicates.Contains("web.search"), "与内建撞名必须显式报告（不静默覆盖）");
         return Task.CompletedTask;
     }

@@ -1,0 +1,15 @@
+{
+  "id": "system.model-services",
+  "entryAssembly": "BotAgent.Package.ModelServices.dll",
+  "entryType": "BotAgent.Packages.ModelServices.ModelServicesPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.ModelServices.Contracts",
+      "owner": "system.model-services"
+    }
+  ]
+}

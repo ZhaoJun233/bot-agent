@@ -20,6 +20,7 @@ internal partial class Program
         internal int Calls;
         internal int Downloads;
         internal Action? Downloaded;
+        internal Func<CancellationToken, Task<HttpResponseMessage>>? GovernanceResponse;
         public Task<HttpResponseMessage> GetAsync(string url, CancellationToken ct)
         {
             Calls++;
@@ -27,8 +28,11 @@ internal partial class Program
                 url.EndsWith("/python-presentation.json", StringComparison.Ordinal))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
             if (url.EndsWith("governance.json", StringComparison.Ordinal))
+            {
+                if (GovernanceResponse is { } response) return response(ct);
                 return Task.FromResult(new HttpResponseMessage(Unavailable ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
                     { Content = new StringContent(Feed) });
+            }
             if (url.EndsWith(".zip", StringComparison.Ordinal))
             {
                 Downloads++; Downloaded?.Invoke();

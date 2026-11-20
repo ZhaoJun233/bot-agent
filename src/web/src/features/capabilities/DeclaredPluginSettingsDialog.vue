@@ -29,6 +29,7 @@ const settingsBlocked = computed(() => Boolean(settingsPending.value || getPendi
 const reviewedSettingsKey = ref('')
 const reconcileArmed = ref(false)
 const dirty = computed(() => pluginSettingsDirty(draft.value))
+const dialog = ref<InstanceType<typeof ManagementDialog> | null>(null)
 let alive = true
 let settingsEpoch = 0
 const discardAction = ref<null | 'switch' | 'close' | 'leave' | 'reload'>(null)
@@ -52,8 +53,11 @@ function applySettings(result: ZbaPluginSettings): void {
 }
 function discardSecretsOnLeave(): void { clearPluginSecretDrafts(settings.value?.schema ?? [], draft.value) }
 function cancelDiscard(): void {
+  const wasConfirming = discardAction.value !== null
   discardAction.value = null; switchTarget = null
   leaveResolve?.(false); leaveResolve = null; leavePromise = null
+  // Removing the focused confirmation button must keep keyboard events in this modal.
+  if (wasConfirming) dialog.value?.focus()
 }
 function confirmDiscard(): void {
   if (settingsBlocked.value) return
@@ -117,7 +121,11 @@ async function saveSettings(): Promise<void> {
   const id = pluginId.value; const current = settings.value
   if (!current || !canWrite.value || settingsBlocked.value || settingsLoading.value) return
   const problems = pluginSettingsErrors(current.schema, draft.value)
-  if (problems.length) { settingsNotice.value = { tone: 'bad', message: problems.join(' ') }; return }
+  if (problems.length) {
+    settingsNotice.value = { tone: 'bad', message: problems.join(' ') }
+    dialog.value?.focus()
+    return
+  }
   const edits = pluginSettingEdits(current.schema, draft.value)
   if (!edits.length) return
   const client = props.client; const key = pluginSettingsKey(id); const epoch = settingsEpoch
@@ -173,7 +181,7 @@ onBeforeUnmount(() => { endSession(); alive = false })
 </script>
 
 <template>
-  <ManagementDialog title="插件声明设置" title-id="declared-plugin-settings-title" test-id="declared-plugin-settings-dialog"
+  <ManagementDialog ref="dialog" title="插件声明设置" title-id="declared-plugin-settings-title" test-id="declared-plugin-settings-dialog"
     :active="props.active" :trigger="props.trigger" :fallback="props.fallback" @close="close">
     <template #eyebrow><span class="eyebrow">PLUGIN SETTINGS</span></template>
     <p class="muted">只显示插件声明的设置；密钥不回显，保存时仅提交本次变更。</p>
@@ -188,7 +196,8 @@ onBeforeUnmount(() => { endSession(); alive = false })
     <section class="settings-panel" aria-labelledby="declared-plugin-settings-heading">
       <h3 id="declared-plugin-settings-heading">插件声明的设置 · {{ pluginId }}</h3>
       <p v-if="settingsLoading" role="status">正在读取设置…</p>
-      <ErrorNotice v-if="settingsError" :error="settingsError" />
+      <ErrorNotice v-if="settingsError" :error="settingsError"
+        :title="settingsError.code === 'plugin_settings_application_failed' ? '设置已保存，应用未完成' : undefined" />
       <p v-if="settingsNotice" class="notice" :class="settingsNotice.tone" role="status" data-testid="declared-plugin-settings-notice">{{ settingsNotice.message }}</p>
       <div v-if="settingsPending" class="notice warn" role="status" data-testid="declared-plugin-settings-recovery">
         <p>{{ settingsPending.state === 'in-flight' ? '设置正在提交' : '设置保存结果未知' }}。原操作键：<code>{{ settingsPending.key }}</code>。不能换键重发原请求；重新读取只展示当前状态，不能证明原请求未执行。</p>

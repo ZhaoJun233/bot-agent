@@ -82,6 +82,8 @@ public static partial class Program
                 }
             }
 
+            await Scenario("s154", RunControlRecoveryScenarioAsync);
+            await Scenario("s155", RunControlStartupFailureScenarioAsync);
             await Scenario("s153", RunUnifiedMemoryScenarioAsync);
             await Scenario("s1", RunReverseWsScenarioAsync);
             await Scenario("s3", RunWhitelistScenarioAsync);
@@ -2252,6 +2254,7 @@ public static partial class Program
             {
                 using var client = new System.Net.Sockets.TcpClient();
                 await client.ConnectAsync("127.0.0.1", port, ct);
+                await WaitForControlPlaneBusinessReadyIfApplicableAsync(port, ct, bot);
                 return;
             }
             catch
@@ -2267,6 +2270,35 @@ public static partial class Program
         }
 
         throw new TimeoutException($"端口 {port} 未在预期时间内监听。输出:\n" + (bot?.Diagnostics() ?? "(无)"));
+    }
+
+    /// <summary>
+    /// 控制面优先监听时，/healthz 先返回 ready:false + managementReady:true，待 17 个随宿包采纳完成后变为 ready:true。
+    /// 若该端口是控制面 HTTP 端口，等待业务就绪再返回；非控制面端口（如 OneBot WS）立即放行。
+    /// </summary>
+    private static async Task WaitForControlPlaneBusinessReadyIfApplicableAsync(int port, CancellationToken ct, BotProcess? bot)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            if (bot is { HasExited: true }) return;
+            try
+            {
+                using var resp = await http.GetAsync($"http://127.0.0.1:{port}/healthz", ct);
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                if (!body.Contains("\"managementReady\":true", StringComparison.Ordinal)
+                    || !body.Contains("\"ready\":false", StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // 非 HTTP 端口（例如反向 WS 端口）或其他端点，直接返回。
+                return;
+            }
+            await Task.Delay(150, ct);
+        }
     }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)

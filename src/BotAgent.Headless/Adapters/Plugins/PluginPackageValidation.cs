@@ -22,11 +22,13 @@ public static class PluginPackageValidation
     public static void Validate(PluginPackageManifest manifest) => Validate(manifest, checkCompatibility: true);
 
     internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility)
+        => Validate(manifest, checkCompatibility, allowReserved: false);
+
+    internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility, bool allowReserved)
     {
         if (manifest is null) throw new InvalidDataException("Manifest missing.");
-        ValidateId(manifest.Id);
-        if (manifest.ApiVersion is not (1 or 2) || !Regex.IsMatch(manifest.Version ?? "",
-            @"^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$"))
+        ValidateId(manifest.Id, allowReserved);
+        if (manifest.ApiVersion is not (1 or 2) || !IsVersion(manifest.Version))
             throw new InvalidDataException("Unsupported API or non-fixed version.");
         if (!Regex.IsMatch(manifest.Sha256 ?? "", "^[0-9a-fA-F]{64}$"))
             throw new InvalidDataException("SHA256 required.");
@@ -38,7 +40,20 @@ public static class PluginPackageValidation
                 throw new InvalidDataException("Managed entry point required.");
         }
         else ValidatePython(manifest);
-        ValidateUrl(manifest.DownloadUrl);
+        if (manifest.ToolApiVersion is { } tools && (manifest.ApiVersion != 1
+            || tools != BotAgent.Services.Tools.IToolContribution.CurrentApiVersion))
+            throw new InvalidDataException("plugin_tools_invalid_declaration");
+        PluginSharedContractValidation.Validate(manifest);
+        if (PluginActivationWeb.Requested(manifest) && manifest.ApiVersion != 1)
+            throw new InvalidDataException("plugin_web_invalid_declaration");
+        if ((PluginActivationModel.Requested(manifest) || PluginActivationExecution.Requested(manifest)) && manifest.ApiVersion != 1)
+            throw new InvalidDataException("plugin_execution_invalid_declaration");
+        PluginDataValidation.Validate(manifest);
+        PluginUiValidation.Validate(manifest);
+        BotAgent.Domain.Configuration.LegacyPluginConfigurationFields.Validate(manifest);
+        if (!(allowReserved && IsReservedId(manifest.Id)
+            && manifest.DownloadUrl == $"host-distribution://{manifest.Id}/{manifest.Version}"))
+            ValidateUrl(manifest.DownloadUrl);
         if (checkCompatibility && !IsCompatible(manifest))
             throw new InvalidDataException("Incompatible host or framework.");
         if (manifest.Permissions?.Count > 64 || manifest.Dependencies?.Count > 64 || manifest.Settings?.Count > 128)
@@ -50,7 +65,7 @@ public static class PluginPackageValidation
         foreach (var dependency in manifest.Dependencies ?? [])
         {
             if (dependency is null) throw new InvalidDataException("Invalid fixed dependency.");
-            ValidateId(dependency.Id);
+            ValidateId(dependency.Id, allowReserved);
             if (dependency.Id == manifest.Id || !dependencyIds.Add(dependency.Id) ||
                 !Regex.IsMatch(dependency.Version ?? "", @"^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?$"))
                 throw new InvalidDataException("Invalid fixed dependency.");
@@ -59,6 +74,11 @@ public static class PluginPackageValidation
         foreach (var setting in manifest.Settings ?? [])
         {
             if (setting is null) throw new InvalidDataException("Invalid declarative setting.");
+            if (setting.NumberConstraints is not null)
+            {
+                try { PluginSettingValidation.ReadSchema([setting]); }
+                catch (PluginSettingsException) { throw new InvalidDataException("Invalid numeric setting declaration."); }
+            }
             var key = setting.Key ?? "";
             var label = setting.Label ?? "";
             if (!Regex.IsMatch(key, "^[a-zA-Z][a-zA-Z0-9_.-]{0,79}$") ||
@@ -98,11 +118,19 @@ public static class PluginPackageValidation
                 (System.Version.TryParse(manifest.MinimumHostVersion, out var minimum) &&
                  minimum <= typeof(PluginPackageValidation).Assembly.GetName().Version));
 
-    public static void ValidateId(string id)
+    internal static bool IsVersion(string? value) => Regex.IsMatch(value ?? "",
+        @"^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$");
+
+    public static bool IsReservedId(string? id)
+        => id is not null && (id.StartsWith("preset.", StringComparison.Ordinal) || id.StartsWith("system.", StringComparison.Ordinal));
+
+    public static void ValidateId(string id) => ValidateId(id, allowReserved: false);
+
+    internal static void ValidateId(string id, bool allowReserved)
     {
         var value = id ?? "";
         if (!Regex.IsMatch(value, "^[a-z][a-z0-9.-]{0,79}$") || value.Contains("..") || value.EndsWith('.') ||
-            value.StartsWith("preset.", StringComparison.Ordinal))
+            !allowReserved && IsReservedId(value))
             throw new InvalidDataException("Invalid or reserved package ID.");
         ValidateRelativePath(value);
     }

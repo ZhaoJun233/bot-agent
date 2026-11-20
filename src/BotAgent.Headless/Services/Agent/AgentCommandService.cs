@@ -7,6 +7,7 @@ using BotAgent.Domain.Platforms;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Panel;
+using BotAgent.Services.Plugins;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Platforms;
 using System.Text.Json.Nodes;
@@ -41,6 +42,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
     private readonly IQqActions? _actionGateway;
     private readonly PlatformPolicyResolver? _platformPolicies;
     private readonly Func<string, bool>? _pluginAllows;
+    private readonly PluginManager? _plugins;
 
     public AgentCommandService(
         SettingsBox box,
@@ -55,7 +57,8 @@ public sealed partial class AgentCommandService : IAgentCommandService
         IQqActions? actionGateway = null,
         PlatformPolicyResolver? platformPolicies = null,
         Func<string, bool>? pluginAllows = null,
-        IUnifiedMemory? unifiedMemory = null)
+        IUnifiedMemory? unifiedMemory = null,
+        PluginManager? plugins = null)
     {
         _box = box;
         _source = source;
@@ -70,10 +73,31 @@ public sealed partial class AgentCommandService : IAgentCommandService
         _actionGateway = actionGateway;
         _platformPolicies = platformPolicies;
         _pluginAllows = pluginAllows;
+        _plugins = plugins;
 
         // 进度/结果事件只服务这一块，订阅跟着搬过来（以前挂在 BotAgentHost 构造函数里）
         _serverAgent.Progress += OnAgentProgress;
         RebuildAgentUsers();
+    }
+
+    private IAgentRuntimeContribution? CurrentAgentRuntime
+        => _plugins is not null && _plugins.TryGetContribution<IAgentRuntimeContribution>("system.agent", out var runtime)
+            ? runtime
+            : null;
+
+    private bool EvaluateAgentAdmission(string channel, bool isOwner, bool isAllowedUser, bool isWebSession)
+    {
+        if (_plugins is null) return isAllowedUser || isWebSession;
+        var runtime = CurrentAgentRuntime;
+        if (runtime is null) return false;
+        try
+        {
+            return runtime.EvaluateAdmission(channel, isOwner, isAllowedUser, isWebSession).Allowed;
+        }
+        catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+        {
+            return false;
+        }
     }
 
     private AppSettings _settings => _box.Current;
@@ -297,6 +321,11 @@ public sealed partial class AgentCommandService : IAgentCommandService
         if (_serverAgent is null)
         {
             task.Fail("服务器内置 agent 没开（面板里打上）");
+            return task;
+        }
+        if (!EvaluateAgentAdmission("web", isOwner: true, isAllowedUser: true, isWebSession: true))
+        {
+            task.Fail("Agent 运行时插件（system.agent）未启用或不可用");
             return task;
         }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

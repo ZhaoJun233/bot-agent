@@ -17,16 +17,17 @@ public sealed class ReplyToolAvailability(
     PluginGate? plugins = null,
     IPlatformPolicyResolver? policies = null,
     Func<bool>? isDisposed = null,
-    Func<bool>? webReady = null)
+    Func<bool>? webReady = null,
+    Func<ChatToolCatalog>? catalog = null)
 {
-    private readonly ToolVisibility _visibility = new(plugins, policies, isDisposed, webReady);
+    private readonly ToolVisibility _visibility = new(plugins, policies, isDisposed, webReady, catalog);
 
     public bool IsCurrent => _visibility.IsCurrent;
 
     /// <summary>这一轮这个工具是否可见（判定逻辑见 <see cref="ToolVisibility.Allows" />）。</summary>
-    public bool Allows(AppSettings snapshot, EffectivePlatformPolicy? pinned, string toolId)
-        => _visibility.Allows(snapshot, pinned, toolId);
+    public bool Allows(AppSettings snapshot, EffectivePlatformPolicy? pinned, string toolId, ChatToolCatalog? pinnedTools = null)
+        => _visibility.Allows(snapshot, pinned, toolId, pinnedTools);
 
     public string Render(AppSettings snapshot, EffectivePlatformPolicy pinned, ChatCapabilitySet caps)
-        => ToolPromptText.Render(ChatToolSpecs.All.Where(spec => Allows(snapshot, pinned, spec.Id)).ToArray(), caps.Policy);
+        => ToolPromptText.Render(caps.Catalog.Specs.Where(spec => Allows(snapshot, pinned, spec.Id, caps.Catalog)).ToArray(), caps.Policy);
 }

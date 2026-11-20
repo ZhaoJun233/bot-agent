@@ -122,7 +122,7 @@ public sealed partial class PluginMarketService
     {
         var existing = installed.FirstOrDefault(p => p.Id == manifest.Id);
         var registered = _registrySnapshot?.Invoke() ?? [];
-        var occupied = existing is { Active: not null } or { Pending: not null } or { PendingUninstall: true }
+        var occupied = existing is { Active: not null } or { Pending: not null } or { PendingUninstall: true } or { MetadataFailure: not null }
             || registered.Any(p => p.Id == manifest.Id);
         var dependencies = PluginDependencyPolicy.AreSatisfied(manifest, installed, registered);
         return [

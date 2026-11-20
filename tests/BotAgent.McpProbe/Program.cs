@@ -658,10 +658,10 @@ public static class Program
         await StepAsync("B7 static directory unchanged", async () =>
         {
             var directory = ToolDirectory.Builtin;
-            Check(directory.Chat.Count == 10, $"chat tools remain 10 (got {directory.Chat.Count})");
+            Check(directory.Chat.Count == 8, $"static builtin chat tools remain 8 after websearch package extraction (got {directory.Chat.Count})");
             Check(directory.Qq.Count == 10, $"QQ actions remain 10 (got {directory.Qq.Count})");
             Check(directory.Server.Count == 6, $"server tools remain 6 (got {directory.Server.Count})");
-            Check(directory.Specs.Count == 26, $"total static tools remain 26 (got {directory.Specs.Count})");
+            Check(directory.Specs.Count == 24, $"total static builtin tools remain 24 (got {directory.Specs.Count})");
             Check(directory.IsHealthy, "static tool directory still passes its health check");
             Check(directory.Specs.All(spec => !spec.Id.StartsWith("mcp.", StringComparison.Ordinal)),
                 "no MCP tool is statically injected into the builtin directory");

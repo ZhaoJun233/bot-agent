@@ -24,7 +24,7 @@ public static class ToolPromptText
 
     /// <summary>聊天那一路：只列这次策略允许的工具（其余写了也不会执行）。</summary>
     public static string Render(ChatCapabilitySet capabilities)
-        => Render(ChatToolSpecs.All, capabilities.Policy);
+        => Render(capabilities.Catalog.Specs, capabilities.Policy);
 
     /// <summary>通用渲染（policy 决定“哪些露出来、哪些要批准”）。</summary>
     public static string Render(IReadOnlyList<ToolSpec> specs, ToolPolicy policy)

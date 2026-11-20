@@ -319,7 +319,7 @@ public static partial class Program
         }
 
         using var bot3 = StartBot(env);
-        await WaitForPortAsync(panelPort, cts.Token, bot3);
+        await WaitForBusinessReadyAsync(panelPort, cts.Token, bot3);
         var (_, persistedDepth) = await PanelGetAsync(settingsUrl);
         Check("重启后保留 xHigh 思考深度",
             JsonNode.Parse(persistedDepth)?["runtime"]?["thinkingBudget"]?.GetValue<string>() == "xhigh");

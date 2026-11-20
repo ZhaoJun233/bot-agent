@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Compatibility } from '../../api/compat'
-import type { ZbaHealth, ZbaMeta, ZbaStatus } from '../../api/zba'
+import type { ZbaClient, ZbaHealth, ZbaMeta, ZbaStatus } from '../../api/zba'
+import OperationRecoveryLookup from './OperationRecoveryLookup.vue'
 import AppIcon from '../../shared/ui/AppIcon.vue'
 import PageHeader from '../../shared/ui/PageHeader.vue'
 import StatusBadge from '../../shared/ui/StatusBadge.vue'
@@ -12,6 +13,7 @@ import { reasonLabel } from '../capabilities/reason-labels'
 import { componentTitle, errorName, kindName, relativeTime, stateName, uptime } from '../../shared/friendly'
 
 const props = defineProps<{
+  client?: ZbaClient
   health: ZbaHealth
   meta: ZbaMeta
   status: ZbaStatus
@@ -25,6 +27,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  'auth-expired': [error: UiError]
   refresh: []
   'enable-admin': []
   'disable-admin': []
@@ -184,6 +187,9 @@ function reasonText(code: string | undefined | null): string | null {
 
     <ErrorNotice :error="props.error" title="刷新失败" />
     <ErrorNotice :error="props.adminError" title="无法进入管理员模式" />
+    <OperationRecoveryLookup v-if="props.client && props.meta.features.includes('operations.find')"
+      :client="props.client" :enabled="props.mode === 'admin' && props.compatibility.compatible"
+      @auth-expired="emit('auth-expired', $event)" />
 
     <div class="ov-kpis">
       <article class="ov-card" :data-tone="heroTone">

@@ -10,6 +10,7 @@ using BotAgent.Services.Net;
 using BotAgent.Services.Permissions;
 using BotAgent.Services.Plugins;
 using BotAgent.Services.Poke;
+using BotAgent.Services.Profiles;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Stickers;
 
@@ -42,6 +43,9 @@ internal sealed class ReplyTurnContext
     private readonly ReplyHooks _hooks;
     private readonly Func<string, bool> _allowsFeature;
     private readonly Action<BotConversation, bool> _setThinking;
+    private readonly Func<IProfilesPolicyContribution?>? _profilesPolicy;
+    private readonly Func<IConversationContribution?>? _conversationPolicy;
+    private readonly Func<IReadOnlyList<ITurnContextContributor>>? _turnContextContributors;
 
     /// <summary>每个会话最近一次撤回事件的描述，交给下一轮回复用（用掉就清）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _recallNotes = new();
@@ -59,7 +63,10 @@ internal sealed class ReplyTurnContext
         ReplyHooks hooks,
         Func<string, bool> allowsFeature,
         Action<BotConversation, bool> setThinking,
-        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null)
+        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null,
+        Func<IProfilesPolicyContribution?>? profilesPolicy = null,
+        Func<IConversationContribution?>? conversationPolicy = null,
+        Func<IReadOnlyList<ITurnContextContributor>>? turnContextContributors = null)
     {
         _profiles = profiles;
         _memoryParticipant = memoryParticipant;
@@ -74,6 +81,9 @@ internal sealed class ReplyTurnContext
         _hooks = hooks;
         _allowsFeature = allowsFeature;
         _setThinking = setThinking;
+        _profilesPolicy = profilesPolicy;
+        _conversationPolicy = conversationPolicy;
+        _turnContextContributors = turnContextContributors;
     }
 
     /// <summary>记下“刚有人撤回了一条消息”，下一轮交给模型（取走即清）。</summary>
@@ -92,11 +102,20 @@ internal sealed class ReplyTurnContext
         bool proactive,
         IPacedReplyAttempt? pacing = null)
     {
+        int maxContext = snapshot.MaxContextMessages;
+        try
+        {
+            if (_conversationPolicy?.Invoke() is { } convPolicy)
+                maxContext = convPolicy.ComputeContextWindow(snapshot.MaxContextMessages, energySaving: false);
+        }
+        catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+        {
+        }
         var context = pacing is null
-            ? conversation.TakeLast(snapshot.MaxContextMessages)
+            ? conversation.TakeLast(maxContext)
             : conversation.Messages.Where(m => m.Seq <= pacing.Sequence || m.Role == MessageRole.Self
                 || (pacing.SpeakerId != 0 && m.SenderId != pacing.SpeakerId))
-                .TakeLast(snapshot.MaxContextMessages).ToList();
+                .TakeLast(maxContext).ToList();
         if (context.Count == 0)
         {
             return null;   // 上下文空 = 没什么可回的（与改造前一致：直接结束这一轮）
@@ -112,7 +131,23 @@ internal sealed class ReplyTurnContext
         // 收集最近 40 条上下文里出现过的发送者 QQ → 读取各自在**本会话**的人物档案（角色卡片）
         var profiles = new List<string>();
         var profileChars = 0;
-        var recentSenders = _allowsFeature(PluginGate.ProfilesCapability)
+        var allowProfiles = _allowsFeature(PluginGate.ProfilesCapability);
+        if (allowProfiles && _profilesPolicy is not null)
+        {
+            try
+            {
+                var profilePolicy = _profilesPolicy();
+                allowProfiles = profilePolicy is not null
+                    && profilePolicy.AllowsProfileInjection(
+                        featureEnabled: _allowsFeature(PluginGate.ProfilesCapability),
+                        hasAuthorizedScope: scopeGroupId > 0 || !string.IsNullOrWhiteSpace(conversation.SourceKey));
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+                allowProfiles = false;
+            }
+        }
+        var recentSenders = allowProfiles
             ? context
                 .TakeLast(40)
                 .Where(m => m.Role == MessageRole.Peer && m.SenderId.HasValue)
@@ -149,6 +184,26 @@ internal sealed class ReplyTurnContext
         {
             profiles.Add(memoryPrompt);
             profileChars += memoryPrompt.Length;
+        }
+
+        if (_conversationPolicy is not null && _turnContextContributors is not null)
+        {
+            try
+            {
+                var contributors = _turnContextContributors();
+                if (contributors.Count > 0 && _conversationPolicy() is { } convPolicy)
+                {
+                    foreach (var fragment in convPolicy.CollectContextFragments(conversation.SourceKey, contributors, EngineClock.Now))
+                    {
+                        var rendered = $"[{fragment.SectionTitle}]\n{fragment.Content}";
+                        profiles.Add(rendered);
+                        profileChars += rendered.Length;
+                    }
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+            }
         }
 
         var started = EngineClock.LocalDateTime;

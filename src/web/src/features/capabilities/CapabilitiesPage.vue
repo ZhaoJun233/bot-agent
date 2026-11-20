@@ -28,6 +28,7 @@ import OfficialMessagingDialog from './OfficialMessagingDialog.vue'
 import { configurationCapabilities, configurationFor, type CapabilityConfiguration } from './configuration-ownership'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
+import PluginUiFrame from './PluginUiFrame.vue'
 import { protocolLabel } from './provider-protocols'
 import { settingsFor, type PluginSettingsSpec } from './plugin-settings'
 import RegisteredPluginSwitch from './RegisteredPluginSwitch.vue'
@@ -212,7 +213,7 @@ const visibleSystemConfigurations = computed(() => {
     [item.id, item.title, item.summary].some(value => value.toLocaleLowerCase().includes(query)))
 })
 function openCapabilityConfiguration(capability: CapabilityConfiguration, event?: MouseEvent): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   settingsTarget.value = { capability, trigger: eventTrigger(event) }
 }
 function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | undefined {
@@ -223,7 +224,7 @@ function openSettings(descriptor: ZbaManagedDescriptor, event?: MouseEvent): voi
   openSettingsById(descriptor.key.key, eventTrigger(event))
 }
 function openSettingsById(id: string, trigger?: HTMLElement | null): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   const descriptor = items.value.find(item => item.key.kind === 'plugin' && item.key.key === id)
   const capability = configurationFor(id) ?? {
     id, kind: 'plugin' as const, pluginKey: id, title: descriptor ? capabilityTitle(descriptor.displayName, descriptor.key) : id,
@@ -242,6 +243,18 @@ function closeSettings(): void {
 const providerTarget = ref<{ key?: string; trigger: HTMLElement | null } | null>(null)
 const providerDialog = ref<InstanceType<typeof ProviderEditorDialog> | null>(null)
 const marketplaceDialog = ref<InstanceType<typeof PluginMarketplaceDialog> | null>(null)
+const pluginUiDialog = ref<InstanceType<typeof PluginUiFrame> | null>(null)
+const pluginUiTarget = ref<{ pluginId: string; trigger: HTMLElement | null } | null>(null)
+function openPluginUiById(pluginId: string, trigger?: HTMLElement | null): void {
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
+  pluginUiTarget.value = { pluginId, trigger: trigger ?? pageHeading.value }
+}
+function closePluginUi(): void {
+  const trigger = pluginUiTarget.value?.trigger ?? null
+  pluginUiTarget.value = null
+  void nextTick(() => restoreFocus(trigger, pageHeading.value))
+  void load(undefined, 'background')
+}
 const providerViews = ref<ZbaProviderConfigurationView[]>([])
 const configurationRecoveries = computed(() => pendingOperations(props.client, 'configuration').filter(item => item.state !== 'settled'))
 const recoveryChecking = ref<string | null>(null)
@@ -265,7 +278,7 @@ async function checkConfigurationRecovery(record: PendingOperation): Promise<voi
   } finally { if (client === props.client) recoveryChecking.value = null }
 }
 function openProvider(key?: string, event?: MouseEvent): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   providerTarget.value = { key, trigger: eventTrigger(event) }
 }
 function providerView(item: ZbaManagedDescriptor): ZbaProviderConfigurationView | undefined {
@@ -276,7 +289,7 @@ function providerView(item: ZbaManagedDescriptor): ZbaProviderConfigurationView 
  *  弹窗按需挂载，页面初始化不读取插件市场目录。 */
 const marketplaceTarget = ref<{ focusPluginId?: string; trigger: HTMLElement | null } | null>(null)
 function openMarketplace(focusPluginId?: string, event?: MouseEvent): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   marketplaceTarget.value = { focusPluginId, trigger: eventTrigger(event) }
 }
 function openMarketplaceSettings(pluginId: string): void {
@@ -284,6 +297,11 @@ function openMarketplaceSettings(pluginId: string): void {
   const trigger = marketplaceTarget.value?.trigger
   marketplaceTarget.value = null
   void nextTick(() => openSettingsById(pluginId, trigger))
+}
+function openMarketplacePluginUi(pluginId: string): void {
+  const trigger = marketplaceTarget.value?.trigger
+  marketplaceTarget.value = null
+  void nextTick(() => openPluginUiById(pluginId, trigger))
 }
 function closeMarketplace(): void {
   const trigger = marketplaceTarget.value?.trigger ?? null
@@ -1393,7 +1411,7 @@ function discardEditorSecrets(): void {
 async function requestEditorLeave(reason: 'lock' | 'downgrade' | 'navigate', trigger?: HTMLElement | null): Promise<boolean> {
   // Lock clears secrets immediately; receipt keys remain in the identity-scoped registry.
   if (reason === 'lock') { discardEditorSecrets(); return true }
-  for (const editor of [configurationDialog.value, providerDialog.value, marketplaceDialog.value]) {
+  for (const editor of [configurationDialog.value, providerDialog.value, marketplaceDialog.value, pluginUiDialog.value]) {
     if (editor && !(await editor.requestLeave(reason, trigger))) return false
   }
   discardEditorSecrets()
@@ -1781,8 +1799,24 @@ defineExpose({
       :fallback="pageHeading"
       @close="closeMarketplace"
       @open-settings="openMarketplaceSettings"
+      @open-ui="openMarketplacePluginUi"
       @changed="load(undefined, 'background')"
       @enable-admin="emit('enable-admin')"
+      @auth-expired="(e) => emit('auth-expired', e)"
+    />
+
+    <PluginUiFrame
+      v-if="pluginUiTarget" ref="pluginUiDialog"
+      :key="pluginUiTarget.pluginId"
+      :client="props.client"
+      :plugin-id="pluginUiTarget.pluginId"
+      :mode="props.mode"
+      :writes-enabled="props.writesEnabled"
+      :active="props.active"
+      :trigger="pluginUiTarget.trigger"
+      :fallback="pageHeading"
+      @close="closePluginUi"
+      @saved="load(undefined, 'background')"
       @auth-expired="(e) => emit('auth-expired', e)"
     />
 

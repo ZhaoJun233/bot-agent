@@ -15,8 +15,11 @@ internal partial class Program
         var bytes = ReviewZip("probe.dll", await File.ReadAllBytesAsync(assembly.Location));
         var http = new ReviewPackageHttp { Bytes = bytes };
         await using var fixture = new ConfigurationInstallFixture(Path.Combine(root, "configuration-install"), http);
-        var market = new PluginMarketService(fixture.Packages, new PluginSettingsStore(), new PluginCatalogSource(http),
+        PluginMarketService CreateMarket() => new(fixture.Packages, new PluginSettingsStore(), new PluginCatalogSource(http),
             () => DateTimeOffset.UnixEpoch, Path.Combine(root, "configuration-install-operations.json"));
+        await fixture.Reload(); // Complete default distribution adoption before taking an online-operation revision.
+        var baselineIds = (await fixture.Packages.GetInstalledAsync()).Select(p => p.Id).Order().ToArray();
+        var market = CreateMarket();
         async Task<ZbaPluginMutationRequest> Request(string id)
         {
             var manifest = ReviewManifest(bytes, id, "1.0.0", "probe.dll", typeof(ConfigurationStalePlugin).FullName!);
@@ -35,7 +38,9 @@ internal partial class Program
             try
             {
                 Check(fixture.Declared(request.Manifest.Id), "validated_install_id_visible_inside_callback");
-                Check((await fixture.Packages.GetInstalledAsync(ct)).Count == 0, "no_pending_or_id_directory_before_configuration");
+                Check((await fixture.Packages.GetInstalledAsync(ct)).Select(p => p.Id).Order().SequenceEqual(baselineIds)
+                    && !Directory.Exists(Path.Combine(root, "configuration-install", request.Manifest.Id)),
+                    "no_pending_or_id_directory_before_configuration");
                 entered.TrySetResult();
             }
             catch (Exception exception)
@@ -64,12 +69,13 @@ internal partial class Program
         var installedResult = await install.WaitAsync(TimeSpan.FromSeconds(10));
         Check(installedResult.Operation.Status != "failed", "configuration_callback_completed_successfully");
         await fixture.Reload();
-        Check(!fixture.Enabled(request.Manifest.Id) && fixture.Packages.InstalledSnapshot.Single().Active is not null,
+        Check(!fixture.Enabled(request.Manifest.Id) && fixture.Packages.InstalledSnapshot.Single(p => p.Id == request.Manifest.Id).Active is not null,
             "hot_apply_commits_disabled_package_without_initializing_synthetic_plugin");
-        var restart = new PluginPackageService(Path.Combine(root, "configuration-install"), http);
-        var loaded = await restart.LoadAtStartupAsync(new PluginContext(new ReviewNoServices()), isEnabled: fixture.Enabled);
-        Check(loaded.Failures.Count == 0 && loaded.Loaded.Count == 0 && !fixture.Enabled(request.Manifest.Id),
-            "restart_still_disabled_without_assembly_execution");
+        await fixture.Restart();
+        Check(fixture.Packages.InstalledSnapshot.Single(p => p.Id == request.Manifest.Id).Active is not null
+            && !fixture.Enabled(request.Manifest.Id) && fixture.PreparedDisabled(request.Manifest.Id),
+            "restart_still_disabled_without_plugin_initialization");
+        market = CreateMarket();
 
         var fresh = await Request("probe.install.fresh");
         await market.InstallAsync(fresh, "configuration-probe", default, async ct =>

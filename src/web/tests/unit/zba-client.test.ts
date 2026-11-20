@@ -106,6 +106,26 @@ describe('ZbaClient', () => {
       .resolves.toBe(false)
   })
 
+  it('checkAdmin can authorize from control recovery without a business task lookup', async () => {
+    const probe = fakeFetch(jsonResponse({ found: false, receipt: null, details: 'unavailable' }))
+    await expect(new ZbaClient({ token: 'admin', fetchImpl: probe.fetchImpl }).checkAdmin(true)).resolves.toBe(true)
+    expect(probe.calls).toHaveLength(1)
+    expect(probe.calls[0]?.url).toBe('/zba/v1/operations/find')
+    expect(probe.calls[0]?.init.method).toBe('POST')
+  })
+
+  it('checkAdmin preserves read-only authorization for the recovery probe', async () => {
+    const probe = fakeFetch(jsonResponse({ error: { code: 'forbidden', message: 'synthetic' } }, 403))
+    await expect(new ZbaClient({ token: 'read', fetchImpl: probe.fetchImpl }).checkAdmin(true)).resolves.toBe(false)
+    expect(probe.calls).toHaveLength(1)
+  })
+
+  it('checkAdmin rejects a false-success proxy response from recovery', async () => {
+    const probe = fakeFetch(new Response('<html>synthetic login</html>', { status: 200 }))
+    await expect(new ZbaClient({ token: 'admin', fetchImpl: probe.fetchImpl }).checkAdmin(true))
+      .rejects.toMatchObject({ code: 'invalid_json' })
+  })
+
   it('checkAdmin 不把代理/旧版本的其它 404 误判为 admin', async () => {
     const proxyMissing = fakeFetch(jsonResponse({
       error: { code: 'route_not_found', message: '路由不存在。' }

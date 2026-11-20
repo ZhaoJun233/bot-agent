@@ -25,6 +25,7 @@ public static class Program
         await RunAsync("Private reply: addressing and model scope", PrivateReplyChecks.RunAsync);
         await RunAsync("Token quota: plugin admission, isolation, mentions and disabled accounting", TokenQuotaTests.Run);
         await RunAsync("Plugins: hot replacement, drain, cancellation and lifecycle serialization", PluginHotReloadChecks.Run);
+        await RunAsync("Plugins: runtime dependency readiness, binding and transitive leases", PluginDependencyChecks.Run);
         await RunAsync("PluginGate: enabled capabilities and tools pass", PluginGateEnabledTests);
         await RunAsync("PluginGate: disabled/unregistered known capabilities fail closed", PluginGateDisabledTests);
         await RunAsync("PluginGate: unknown capabilities/tools are ungated", PluginGateUnknownTests);

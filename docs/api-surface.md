@@ -5,7 +5,7 @@
 
 | 面 | 权威来源 | 说明 |
 | :--- | :--- | :--- |
-| ZBA（新面板契约） | `GET /zba/v1/openapi.json` | 由 `src/BotAgent.Panel/ZbaOpenApi.cs` **运行时生成** OpenAPI 3.1；含 operationId / summary / tags / security / `x-zba-scope` / requestBody schema |
+| ZBA（新面板契约） | `GET /zba/v1/openapi.json` | 由 `src/BotAgent.Panel/ZbaOpenApi.cs` 根据端点构造时冻结的路由与 schema 目录**运行时生成** OpenAPI 3.1；含 operationId / summary / tags / security / `x-zba-scope` / requestBody schema |
 | 旧 `/api/*` | `src/BotAgent.Headless/Adapters/Panel/PanelRoutes.cs` | 表驱动、无 OpenAPI。**已冻结**，见下方声明 |
 
 前端只认 ZBA：`src/web/src` 里对旧 `/api/*` 的引用是 **0 处**。
@@ -13,7 +13,9 @@
 
 ---
 
-## 一、ZBA 契约（44 条，`/zba/v1/*`）
+## 一、ZBA 契约（50 条路由条目，`/zba/v1/*`）
+
+下表对应当前宿主的显式组合。三个配额端点与六个 schema 由 `contracts/quota/QuotaHttpContract.cs` 提供；通用 Panel 不隐式注册配额路由。路由、meta 能力、405 Allow 与 OpenAPI 使用同一冻结目录，见 [HTTP 契约注册](architecture/http-contract-registration.md)。D2 已落地运行期独立插件 UI 会话/资产交付（`/zba/v1/plugins/{id}/ui/...`）与多包组合事务（`/zba/v1/plugins/bundle/...`）；动态安装时注册任意新业务 HTTP 路由仍保留在后续阶段。
 
 鉴权：`Authorization: Bearer <ZBA 令牌>`。作用域两档 —— `Read`（只读）与 `Admin`（写）。
 **默认失败关闭**：宿主没有配置 ZBA 令牌时，除 `/zba/v1/health` 外全部返回 503。
@@ -26,6 +28,7 @@
 | `GET` | `/zba/v1/quotas` | Read · 需令牌 | `quotas.list` | 读已登记 SourceKey 的每日 Token 配额上限与已用量 |
 | `POST` | `/zba/v1/quotas/save` | Admin · 需令牌 | `quotas.save` | 保存单个配额上限（CAS 期望版本 + 幂等键 + 持久化回执） |
 | `POST` | `/zba/v1/quotas/find` | Admin · 需令牌 | `quotas.find` | 按幂等键对账一次配额保存的最终状态 |
+| `POST` | `/zba/v1/operations/find` | Admin · 需令牌 | `operations.find` | 按插件 owner 与原幂等键查询当前调用者的安全证据；业务未就绪仍可读，不执行或重放操作 |
 | `GET` | `/zba/v1/status` | Read · 需令牌 | `status` | 安全的总体与分组件状态（不含正文、不含密钥） |
 | `GET` | `/zba/v1/sessions` | Read · 需令牌 | `sessions.list` | 按工作区 SourceKey 列出服务器 Agent 会话（脱敏形状） |
 | `POST` | `/zba/v1/sessions/ensure` | Admin · 需令牌 | `sessions.ensure` | 确保当前服务器 Agent 会话存在（幂等） |
@@ -63,6 +66,11 @@
 | `GET` | `/zba/v1/plugins/operations/{key}` | Read · 需令牌 | `plugins.operations.get` | 按幂等键读一次插件操作回执（含 `status` 与 `restartRequired`） |
 | `GET` | `/zba/v1/plugins/{id}/settings` | Read · 需令牌 | `plugins.settings.read` | 读插件声明的设置项（**不回显秘密值**） |
 | `PUT` | `/zba/v1/plugins/{id}/settings` | Admin · 需令牌 | `plugins.settings.save` | 按期望修订号保存插件设置 |
+| `POST` | `/zba/v1/plugins/{id}/ui/sessions` | Read · 需令牌 | `plugins.ui.session.open` | 打开与当前插件代次绑定的受控运行界面会话并签发只读短效资产票据 |
+| `DELETE` | `/zba/v1/plugins/{id}/ui/sessions/{sessionId}` | Read · 需令牌 | `plugins.ui.session.close` | 关闭插件运行界面会话并释放代次租约 |
+| `GET` | `/zba/v1/plugins/{id}/ui/{sha256}/{ticket}/{*asset}` | Read · 票据或令牌 | `plugins.ui.asset` | 按发布 SHA-256 提供只读、摘要核验且带严格 CSP 的包内静态 UI 资源（缺失返回 404 `no-store`） |
+| `POST` | `/zba/v1/plugins/bundle/preview` | Admin · 需令牌 | `plugins.bundle.preview` | 只读预览多包精确依赖组合升级/切换的依赖闭包与反向依赖影响 |
+| `POST` | `/zba/v1/plugins/bundle/apply` | Admin · 需令牌 | `plugins.bundle.apply` | 以预览绑定与幂等键原子暂存并应用多包精确依赖组合 |
 | `GET` | `/zba/v1/providers/{key}/models` | Read · 需令牌 | `providers.models` | 发现某个已保存供应商路由的上游模型列表 |
 
 **安全导入迁移（#152 M2）**：新增只读发现与预览仍要求 Admin 身份。`previewId` 绑定完整技术清单、来源快照、调用者与安装状态代际，有效期 10 分钟；来源、候选、依赖或代际变化须重新预览。首次确认在回执预留和 ZIP 下载前校验预览；已完成的同幂等键请求优先回放原回执。新安装在发布 Pending 状态前通过既有配置协调器清除残留启用意图，之后须另行启用。停用不是进程隔离：加载程序集、模块初始化、构造器或属性访问仍可能执行第三方代码，权限声明不构成沙箱。旧 `plugins/sources/resolve` 仅保留只读单候选兼容，不能绕过预览。M2 当时未迁移更新协议；当前 M3 候选补充如下。

@@ -127,7 +127,8 @@ internal static partial class CompositionRoot
         };
 
     private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local, FeishuBotGateway? Feishu, IPlatformRegistry Registry, PlatformDriverOperations Operations) BuildChannelLayer(
-        AppSettings settings, SettingsBox settingsBox, ProtocolRiskBackoff riskBackoff, IWebhookDedupStore inboundDedup)
+        AppSettings settings, SettingsBox settingsBox, ProtocolRiskBackoff riskBackoff, IWebhookDedupStore inboundDedup,
+        PluginManager? plugins = null, Func<bool>? isPluginRuntimeStarted = null)
     {
         var gateway = new OneBotGateway(settingsBox, riskBackoff)
         {
@@ -254,7 +255,20 @@ internal static partial class CompositionRoot
             else if (ReferenceEquals(adapter, feishu))
                 registrations.Add(new(adapter, feishu!.StartAsync, feishu.StopAsync, initiallyRunning: false));
         }
-        var driverOperations = new PlatformDriverOperations(registrations);
+        var driverOperations = new PlatformDriverOperations(registrations, plugins is null ? null : platformId =>
+        {
+            var packageId = PlatformId.Normalize(platformId) switch
+            {
+                PlatformId.QqPrivate => "system.platform-qq-private",
+                PlatformId.QqOfficial => "system.platform-qq-official",
+                PlatformId.Feishu => "system.platform-feishu",
+                PlatformId.Local => "system.platform-local",
+                _ => null
+            };
+            return packageId is not null && plugins.TryGetContribution<IPlatformDriverContribution>(packageId, out var contribution)
+                ? contribution
+                : null;
+        }, isPluginRuntimeStarted);
         var source = new ChannelRouter(sources, platformRegistry, driverOperations, msg => FileLog.Write("Channel", msg),
             adapter => DriverIdentityMatches(settings, settingsBox.Current, adapter.Context.PlatformId));
         return (gateway, source, official, local, feishu, platformRegistry, driverOperations);
@@ -270,7 +284,7 @@ internal static partial class CompositionRoot
     {
         // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
         var (gateway, source, official, local, feishu, platformRegistry, driverOperations) =
-            BuildChannelLayer(a.Settings, a.Box, a.RiskBackoff, a.InboundDedup);
+            BuildChannelLayer(a.Settings, a.Box, a.RiskBackoff, a.InboundDedup, a.PluginRuntime.Registry, () => a.PluginRuntime.HasStarted);
         a.Gateway = gateway;
         a.Source = source;
         a.Official = official;

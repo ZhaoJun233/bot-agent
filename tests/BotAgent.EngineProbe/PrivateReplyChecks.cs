@@ -74,7 +74,7 @@ internal static class PrivateReplyChecks
             received.Add((bool)arguments![index]!);
             return Task.FromResult(new CompletionResult(100, "Synthetic reply", "{}"));
         });
-        var caps = ChatCapabilitySet.FromSwitches(true, false, false, false, false, null);
+        var caps = ResearchToolFixture.Capabilities(true, false, false, false, false, null);
         var platform = Policy();
         var settings = new AppSettings();
         var turn = new TurnInputs(DateTime.UnixEpoch, settings, caps, platform,

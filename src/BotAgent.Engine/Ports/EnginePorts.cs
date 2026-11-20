@@ -5,6 +5,10 @@ using BotAgent.Domain.Messaging;
 using BotAgent.Services.Music;
 using BotAgent.Services.OneBot;
 
+[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(BotAgent.Services.Net.IWebSearch))]
+[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(BotAgent.Services.Net.IResearchUseCase))]
+[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(BotAgent.Services.Links.ILinkPreviewer))]
+
 namespace BotAgent.Services.Panel
 {
     /// <summary>Panel-facing notifications emitted by Engine; the Host owns the transport.</summary>
@@ -41,15 +45,6 @@ namespace BotAgent.Services.Agent
     }
 }
 
-namespace BotAgent.Services.Links
-{
-    /// <summary>Link preview capability; network IO stays in the Host adapter.</summary>
-    public interface ILinkPreviewer
-    {
-        Task<string?> DescribeAsync(IReadOnlyList<string> urls, CancellationToken ct);
-    }
-}
-
 namespace BotAgent.Services.Voice
 {
     /// <summary>Voice synthesis capability; transport/secrets stay in the Host adapter.</summary>
@@ -75,15 +70,7 @@ namespace BotAgent.Services.Music
     }
 }
 
-namespace BotAgent.Services.Net
-{
-    /// <summary>Web research capability; HTTP and search backends stay in the Host adapter.</summary>
-    public interface IWebSearch
-    {
-        Task<WebSearchResult?> SearchAsync(string query, CancellationToken ct);
-        Task<(string? Text, string? Error)> ReadPageAsync(string url, CancellationToken ct);
-    }
-}
+
 
 namespace BotAgent.Services.Voice
 {
@@ -105,6 +92,7 @@ namespace BotAgent.Services.Music
     {
         bool IsReady { get; }
         Task<string?> DescribeShareAsync(MusicShare share, string sender);
+        Task<string?> DescribeShareAsync(MusicShare share, string sender, CancellationToken ct) => DescribeShareAsync(share, sender);
         void AddNote(string sourceKey, string note);
         string? TakeNote(string sourceKey);
         bool TryBeginListen(string sourceKey, int cooldownSeconds, out string reason);
@@ -112,20 +100,5 @@ namespace BotAgent.Services.Music
         Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default);
         async Task<BotAgent.Services.Qq.SendResult> ShareWithReceiptAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
             => new(await ShareAsync(song, isGroup, targetId, ct).ConfigureAwait(false));
-    }
-}
-
-namespace BotAgent.Services.Net
-{
-    /// <summary>Research orchestration use case owned by the Host until the capability migration lands.</summary>
-    public interface IResearchUseCase
-    {
-        bool IsReady { get; }
-        bool TryBeginSearch(string sourceKey, int cooldownSeconds, out string reason);
-        Task<WebSearchResult?> SearchAsync(string sourceKey, string query, CancellationToken ct = default);
-        Task<string?> ReadPageAsync(string sourceKey, string url, CancellationToken ct = default);
-        void AddNote(string sourceKey, string note);
-        void KeepNote(string sourceKey, string? note, string why);
-        string? TakeNote(string sourceKey);
     }
 }

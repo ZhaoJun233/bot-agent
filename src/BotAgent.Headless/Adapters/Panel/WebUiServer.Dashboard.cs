@@ -25,8 +25,8 @@ public sealed partial class WebUiServer
     private JsonObject BuildDashboardPayload()
     {
         var s = _box.Current;
-        var directory = ToolDirectory.Builtin;
         var chatPolicy = CurrentChatPolicy();
+        var directory = ToolDirectory.FromCatalog(chatPolicy.Catalog);
 
         var memory = new JsonObject
         {

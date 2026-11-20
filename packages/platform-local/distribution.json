@@ -1,0 +1,18 @@
+{
+  "id": "system.platform-local",
+  "entryAssembly": "BotAgent.Package.PlatformLocal.dll",
+  "entryType": "BotAgent.Packages.PlatformLocal.PlatformLocalPlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "exclusiveResources": [
+    "platform.connection.local"
+  ],
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Platforms.Contracts",
+      "owner": "system.platform-local"
+    }
+  ]
+}

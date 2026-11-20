@@ -5,10 +5,12 @@ namespace BotAgent.Panel;
 
 internal static partial class ZbaOpenApi
 {
-    internal static JsonObject Build()
+    internal static JsonObject Build(IReadOnlyList<ZbaRouteInfo> routes, JsonObject contributions)
     {
+        var schemas = BaseSchemas();
+        foreach (var (name, schema) in contributions) schemas.Add(name, schema?.DeepClone());
         var paths = new JsonObject();
-        foreach (var route in ZbaRoutes.All)
+        foreach (var route in routes)
         {
             var path = paths[route.Template] as JsonObject ?? new JsonObject();
             paths[route.Template] = path;
@@ -65,10 +67,12 @@ internal static partial class ZbaOpenApi
                         ["description"] = "BOTAGENT_ZBA_TOKEN 为管理员；BOTAGENT_ZBA_READ_TOKEN 为只读。"
                     }
                 },
-                ["schemas"] = SchemasWithImports()
+                ["schemas"] = schemas
             }
         };
     }
+
+    internal static JsonObject BaseSchemas() => SchemasWithImports();
 
     private static JsonArray Parameters(string template)
     {
@@ -316,9 +320,13 @@ internal static partial class ZbaOpenApi
             ("category", NullableString()), ("metadata", Ref("ZbaPluginMetadata"))),
         ["ZbaPluginCatalog"] = Object(("revision", String()), ("source", String()), ("trustNotice", String()),
             ("categories", Array(String())), ("plugins", Array(Ref("ZbaPluginCatalogEntry"))),
-            ("builtinPlugins", Array(Ref("ZbaBuiltinPlugin"))), ("metadataNotice", NullableString())),
+            ("builtinPlugins", Array(Ref("ZbaBuiltinPlugin"))), ("metadataNotice", NullableString()),
+            ("metadataFailures", Array(Ref("PluginPackageMetadataFailure")))),
         ["ZbaInstalledPlugins"] = Object(("revision", String()),
-            ("plugins", Array(Ref("ZbaPluginCatalogEntry"))), ("builtinPlugins", Array(Ref("ZbaBuiltinPlugin")))),
+            ("plugins", Array(Ref("ZbaPluginCatalogEntry"))), ("builtinPlugins", Array(Ref("ZbaBuiltinPlugin"))),
+            ("metadataFailures", Array(Ref("PluginPackageMetadataFailure")))),
+        ["PluginPackageMetadataFailure"] = RequiredObject(["id", "code", "fingerprint"],
+            ("id", String()), ("code", String()), ("fingerprint", String())),
         ["ZbaBuiltinPlugin"] = RequiredObject(["pluginId", "version", "enabled", "metadata"],
             ("pluginId", String()), ("version", String()), ("enabled", Boolean()), ("metadata", Ref("ZbaPluginMetadata"))),
         ["ZbaPluginMetadata"] = PluginMetadataSchema(),
@@ -346,17 +354,12 @@ internal static partial class ZbaOpenApi
             ("values", new JsonObject { ["type"] = "object", ["additionalProperties"] = String() }),
             ("configuredSecrets", new JsonObject { ["type"] = "object", ["additionalProperties"] = Boolean() }),
             ("restartRequired", Boolean())),
-        ["ZbaQuota"] = Object(("sourceKey", String()), ("displayName", String()), ("revision", String()),
-            ("dailyTokenLimit", Integer()), ("usedPromptTokens", Integer()), ("usedCompletionTokens", Integer()),
-            ("usedTokens", Integer()), ("remainingTokens", Integer()), ("resetDate", String()),
-            ("nextResetAt", String()), ("energySaving", Boolean()), ("minimumDailyTokenLimit", Integer()),
-            ("maximumDailyTokenLimit", Integer())),
-        ["ZbaQuotaPage"] = Object(("items", Array(Ref("ZbaQuota")))),
-        ["ZbaQuotaSaveRequest"] = RequiredObject(new[] { "sourceKey", "expectedRevision", "idempotencyKey", "dailyTokenLimit" },
-            ("sourceKey", String()), ("expectedRevision", String()), ("idempotencyKey", String()), ("dailyTokenLimit", Integer())),
-        ["ZbaQuotaSaveResult"] = Object(("quota", Ref("ZbaQuota"))),
-        ["ZbaQuotaFindRequest"] = RequiredObject(new[] { "idempotencyKey" }, ("idempotencyKey", String())),
-        ["ZbaQuotaFindResult"] = Object(("found", Boolean()), ("quota", Ref("ZbaQuota"))),
+        ["ZbaOperationFindRequest"] = RequiredObject(new[] { "owner", "idempotencyKey" }, ("owner", String()), ("idempotencyKey", String())),
+        ["ZbaOperationFindResult"] = RequiredObject(new[] { "found", "receipt", "details" }, ("found", Boolean()),
+            ("receipt", new JsonObject { ["anyOf"] = new JsonArray(Ref("OperationRecoveryReceipt"), new JsonObject { ["type"] = "null" }) }), ("details", String())),
+        ["OperationRecoveryReceipt"] = Object(("formatVersion", Integer()), ("owner", String()), ("scopeDigest", String()),
+            ("keyDigest", String()), ("requestDigest", String()), ("contract", String()), ("contractVersion", String()),
+            ("generation", NullableString()), ("state", String()), ("provenance", String())),
         ["ZbaProviderModels"] = Object(("models", Array(String())), ("errorCode", NullableString())),
         ["OpenApiDocument"] = new JsonObject { ["type"] = "object", ["additionalProperties"] = true }
     };

@@ -12,13 +12,52 @@ internal static class Baseline
         { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel", "BotAgent.Headless" };
     public static readonly IReadOnlyDictionary<string, string[]> AllowedProjectReferences = new Dictionary<string, string[]>
     {
-        ["BotAgent.Core"] = Array.Empty<string>(),
+        ["BotAgent.Core"] = new[]
+        {
+            "BotAgent.Plugin.Contracts", "BotAgent.Quota.Contracts", "BotAgent.Research.Contracts",
+            "BotAgent.Poke.Contracts", "BotAgent.Vibes.Contracts", "BotAgent.Stickers.Contracts",
+            "BotAgent.Music.Contracts", "BotAgent.Voice.Contracts", "BotAgent.Profiles.Contracts",
+            "BotAgent.HealthReporting.Contracts", "BotAgent.ModelServices.Contracts",
+            "BotAgent.Agent.Contracts", "BotAgent.Conversation.Contracts", "BotAgent.Platforms.Contracts",
+        },
+        ["BotAgent.Plugin.Contracts"] = Array.Empty<string>(),
+        ["BotAgent.Quota.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Research.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Poke.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Vibes.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Stickers.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Music.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Voice.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Profiles.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.HealthReporting.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.ModelServices.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Agent.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Conversation.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Platforms.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Storage"] = new[] { "BotAgent.Core" },
         ["BotAgent.Platforms"] = new[] { "BotAgent.Core" },
         ["BotAgent.Model"] = new[] { "BotAgent.Core" },
         ["BotAgent.Engine"] = new[] { "BotAgent.Core" },
         ["BotAgent.Mcp"] = new[] { "BotAgent.Core" },
         ["BotAgent.Panel"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.TokenQuota"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.WebSearch"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Poke"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Vibes"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Stickers"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Music"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Voice"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Profiles"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.HealthReporting"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.ModelServices"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Agent"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.McpTools"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Conversation"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.PlatformQqPrivate"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.PlatformQqOfficial"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.PlatformFeishu"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.PlatformLocal"] = new[] { "BotAgent.Core" },
+        ["BotAgent.PluginBundle"] = new[] { "BotAgent.Core" },
         ["BotAgent.Headless"] = new[] { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel" },
     };
 
@@ -49,7 +88,7 @@ internal static class Baseline
     /// 整体搬到 `src/BotAgent.Engine/Reply/`；全 src 最大文件回落到 SettingsStore（1740），
     /// 这格随实测下调 1765 → **1740**（仍然只许往下调）。
     /// </summary>
-    public const int MaxFileLines = 1740;
+    public const int MaxFileLines = 1643;
     public const string BotAgentHostPath = "src/BotAgent.Headless/Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。
@@ -57,7 +96,7 @@ internal static class Baseline
     /// 2026-09-23 R9 收口如实登记：242 → **243**（+1 = `using BotAgent.Domain.Ports;`，
     /// 它现在吃的是 <c>IModelClient</c> 而不是具体的 `OpenAiClient`）。DoD：≤ 400 ✅
     /// </summary>
-    public const int BotAgentHostLines = 243;                  // DoD：≤ 400 ✅
+    public const int BotAgentHostLines = 241;                  // DoD：≤ 400 ✅
     // ⚠ 2026-09-23 口径修正：字段类型里以前不许有括号，于是 `ConcurrentDictionary<string, (long A, DateTimeOffset B)>`
     //    这种**元组状态**在计数里凭空消失（本文件当时漏数 3 条）。修正后 HEAD 实测 96，本批（戳一戳用例）95。
     public const int BotAgentHostFields = 10;                  // 只数实例字段；DoD：≤ 10 ✅
@@ -138,7 +177,7 @@ internal static class Baseline
     /// 例外文件自己的文件 IO 处数（棘轮，只许往下调）：PanelDeploy 13 + 静态资源交付 1。
     /// Wave5 把发布状态的两次 <c>File.Exists</c> 合并成一次 <c>FileInfo</c>，腾出静态资源读取这一处。
     /// </summary>
-    public const int PanelExemptFileIo = 14;
+    public const int PanelExemptFileIo = 13;
 
     /// <summary>唯一允许持有配置实例的类（发布点）；别处都只持有 SettingsBox。</summary>
     public const string SettingsOwnerPath = "src/BotAgent.Headless/Services/SettingsBox.cs";
@@ -176,8 +215,9 @@ internal static class Baseline
     /// v11 配置字段号上限迁移（#133）：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省）。
     /// v12 任务台账（#116）：138 → 141（agent_tasks 建表语句 + 迁移分支；DAO 三条语句在 Adapters/Persistence）。
     /// v13 轨迹归档缓存用量（#135）：141 → 145（trace_archive DDL 从 CreateSchema 抽成独立方法 + 三条 ALTER 补列）。
+    /// P08 schema 归属：C# 两段拆为四个计入扫描的SQL资源（+2）；七处导入存在查询合为一处（-6），145 → 141。
     /// </summary>
-    public const int SqlLiteralTotal = 145;
+    public const int SqlLiteralTotal = 141;
 
     // ── R3：直接文件 IO 只允许出现在 Adapters/** 与下列具名例外 ──
     public const string FileIoAllowedPrefix = "src/BotAgent.Headless/Adapters/";
@@ -187,6 +227,7 @@ internal static class Baseline
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> FileIoAllowedFiles = new Dictionary<string, string>
     {
+        ["tools/BotAgent.PluginBundle/Program.cs"] = "发行打包工具：只读取明确的构建输入并写出 ZIP/索引，不进入宿主运行时依赖",
         ["src/BotAgent.Headless/Services/FileLog.cs"] = "日志本体：它就是「写文件」这件事，没有别的持有者",
         ["src/BotAgent.Headless/Services/AppPaths.cs"] = "发现运行根目录（要试着写一下才知道有没有权限）",
         ["src/BotAgent.Headless/Adapters/Panel/PanelDeploy.cs"] = "部署产物的状态文件（部署自己的事，见 §3.4 R3）",
@@ -202,15 +243,16 @@ internal static class Baseline
     /// HEAD 的 62 是未含 Wave1–4 迁移的基线，不能与工作树 61 当成同一 diff。
     /// S6：删除旧面板静态资源（wwwroot + PanelAssets 的 File.ReadAllBytes）→ 61 降为 60。
     /// </summary>
-    public const int FileIoTotal = 57;
+    public const int FileIoTotal = 56;
 
     // 逐文件迁移角色映射，不是新工程目录白名单。旧副本仍扫描、仍计入全局总数。
-    // 前 21 项原位于 Headless/Adapters/Persistence；OfficialIdMap 是已迁出的同一旧持久化类型。
+    // 持久层项原位于 Headless/Adapters/Persistence；已退役配额实现不再占用迁移例外。
     public static readonly IReadOnlyDictionary<string, string> MigratedPersistencePaths = new Dictionary<string, string>
     {
         ["src/BotAgent.Storage/AgentImageStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AgentImageStore.cs",
         ["src/BotAgent.Storage/AgentSessionStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AgentSessionStore.cs",
         ["src/BotAgent.Storage/AppDatabase.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AppDatabase.cs",
+        ["src/BotAgent.Storage/AuditLogStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AuditLogStore.cs",
         ["src/BotAgent.Storage/AudioCache.cs"] = "src/BotAgent.Headless/Adapters/Persistence/AudioCache.cs",
         ["src/BotAgent.Storage/ConversationStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/ConversationStore.cs",
         ["src/BotAgent.Storage/EpisodeStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/EpisodeStore.cs",
@@ -227,7 +269,6 @@ internal static class Baseline
         ["src/BotAgent.Storage/SecretFiles.cs"] = "src/BotAgent.Headless/Adapters/Persistence/SecretFiles.cs",
         ["src/BotAgent.Storage/SecretsStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/SecretsStore.cs",
         ["src/BotAgent.Storage/StickerStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/StickerStore.cs",
-        ["src/BotAgent.Storage/TenantQuotaStore.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TenantQuotaStore.cs",
         ["src/BotAgent.Storage/TtsConfFile.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TtsConfFile.cs",
         ["src/BotAgent.Storage/TextSnapshotFile.cs"] = "src/BotAgent.Headless/Adapters/Persistence/TextSnapshotFile.cs",
         ["src/BotAgent.Platforms/Common/OfficialIdMap.cs"] = "src/BotAgent.Headless/Adapters/Persistence/OfficialIdMap.cs",
@@ -240,8 +281,76 @@ internal static class Baseline
         ["src/BotAgent.Storage/ConfigurationStorageBridge.cs"] = "Private same-connection configuration field provenance projection",
     };
 
+    // Split from the quota ledger and AppDatabase; exact metering ownership, no directory exemption.
+    public static readonly IReadOnlyDictionary<string, string> TokenUsageSqlPaths = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["src/BotAgent.Storage/TokenUsageStore.cs"] = "Independent UTC token metering, available without quota state",
+    };
+
+    // Exact SQL inputs, scanned once at their source owner even when retained by Storage.
+    public static readonly IReadOnlyDictionary<string, string> SchemaSqlOwners = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["src/BotAgent.Storage/Schema/host.token-usage.14-15.up.sql"] = "src/BotAgent.Storage/BotAgent.Storage.csproj",
+        ["src/BotAgent.Storage/Schema/host.token-usage.14-15.down.sql"] = "src/BotAgent.Storage/BotAgent.Storage.csproj",
+        ["packages/token-quota/backend/Schema/preset.token-quota.14-15.up.sql"] = QuotaProject,
+        ["packages/token-quota/backend/Schema/preset.token-quota.14-15.down.sql"] = QuotaProject,
+    };
+
+    public const string QuotaProject = "packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj";
+    public const string PluginContractsProject = "contracts/plugin/BotAgent.Plugin.Contracts.csproj";
+    public const string QuotaContractsProject = "contracts/quota/BotAgent.Quota.Contracts.csproj";
+    public const string ResearchContractsProject = "contracts/research/BotAgent.Research.Contracts.csproj";
+    public const string BundleProject = "tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj";
+    public const string ResearchProject = "packages/websearch/backend/BotAgent.Package.WebSearch.csproj";
+
+    public static readonly IReadOnlyDictionary<string, string> RegisteredContractProjects = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [PluginContractsProject] = "BotAgent.Plugin.Contracts",
+        [QuotaContractsProject] = "BotAgent.Quota.Contracts",
+        [ResearchContractsProject] = "BotAgent.Research.Contracts",
+        ["contracts/poke/BotAgent.Poke.Contracts.csproj"] = "BotAgent.Poke.Contracts",
+        ["contracts/vibes/BotAgent.Vibes.Contracts.csproj"] = "BotAgent.Vibes.Contracts",
+        ["contracts/stickers/BotAgent.Stickers.Contracts.csproj"] = "BotAgent.Stickers.Contracts",
+        ["contracts/music/BotAgent.Music.Contracts.csproj"] = "BotAgent.Music.Contracts",
+        ["contracts/voice/BotAgent.Voice.Contracts.csproj"] = "BotAgent.Voice.Contracts",
+        ["contracts/profiles/BotAgent.Profiles.Contracts.csproj"] = "BotAgent.Profiles.Contracts",
+        ["contracts/healthreporting/BotAgent.HealthReporting.Contracts.csproj"] = "BotAgent.HealthReporting.Contracts",
+        ["contracts/modelservices/BotAgent.ModelServices.Contracts.csproj"] = "BotAgent.ModelServices.Contracts",
+        ["contracts/agent/BotAgent.Agent.Contracts.csproj"] = "BotAgent.Agent.Contracts",
+        ["contracts/conversation/BotAgent.Conversation.Contracts.csproj"] = "BotAgent.Conversation.Contracts",
+        ["contracts/platforms/BotAgent.Platforms.Contracts.csproj"] = "BotAgent.Platforms.Contracts",
+    };
+
+    public static readonly IReadOnlyDictionary<string, string> RegisteredPackageContracts = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [QuotaProject] = "BotAgent.Quota.Contracts",
+        [ResearchProject] = "BotAgent.Research.Contracts",
+        ["packages/poke/backend/BotAgent.Package.Poke.csproj"] = "BotAgent.Poke.Contracts",
+        ["packages/vibes/backend/BotAgent.Package.Vibes.csproj"] = "BotAgent.Vibes.Contracts",
+        ["packages/stickers/backend/BotAgent.Package.Stickers.csproj"] = "BotAgent.Stickers.Contracts",
+        ["packages/music/backend/BotAgent.Package.Music.csproj"] = "BotAgent.Music.Contracts",
+        ["packages/voice/backend/BotAgent.Package.Voice.csproj"] = "BotAgent.Voice.Contracts",
+        ["packages/profiles/backend/BotAgent.Package.Profiles.csproj"] = "BotAgent.Profiles.Contracts",
+        ["packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj"] = "BotAgent.HealthReporting.Contracts",
+        ["packages/model-services/backend/BotAgent.Package.ModelServices.csproj"] = "BotAgent.ModelServices.Contracts",
+        ["packages/agent/backend/BotAgent.Package.Agent.csproj"] = "BotAgent.Agent.Contracts",
+        ["packages/mcp-tools/backend/BotAgent.Package.McpTools.csproj"] = "BotAgent.Agent.Contracts",
+        ["packages/conversation/backend/BotAgent.Package.Conversation.csproj"] = "BotAgent.Conversation.Contracts",
+        ["packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csproj"] = "BotAgent.Platforms.Contracts",
+        ["packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj"] = "BotAgent.Platforms.Contracts",
+        ["packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj"] = "BotAgent.Platforms.Contracts",
+        ["packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj"] = "BotAgent.Platforms.Contracts",
+    };
+    public static readonly IReadOnlyDictionary<string, string> CompatibilitySourceLinks = new Dictionary<string, string>
+    {
+        [BundleProject] = "src/BotAgent.Headless/Adapters/Plugins/PluginPackageFiles.cs",
+    };
+
     public static bool AllowsSql(string path) => path.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase)
+        || path == "packages/token-quota/backend/QuotaLedger.cs"
         || ConfigurationSqlPaths.ContainsKey(path)
+        || TokenUsageSqlPaths.ContainsKey(path)
+        || SchemaSqlOwners.ContainsKey(path)
         || (MigratedPersistencePaths.TryGetValue(path, out var old) && old.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase));
 
     public static bool AllowsFileIo(string path) => path.StartsWith(FileIoAllowedPrefix, StringComparison.OrdinalIgnoreCase)

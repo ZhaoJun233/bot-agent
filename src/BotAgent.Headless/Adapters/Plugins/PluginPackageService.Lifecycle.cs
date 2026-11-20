@@ -27,6 +27,7 @@ public sealed partial class PluginPackageService
             {
                 if (target is null || target.Id != id) throw new InvalidDataException("Lifecycle target is missing.");
                 PluginPackageValidation.Validate(target);
+                _resources.EnsureApproved(target);
                 await Governance.RefreshAsync(ct).ConfigureAwait(false);
                 Governance.EnsureAllowed(target);
                 if (kind == "rollback")

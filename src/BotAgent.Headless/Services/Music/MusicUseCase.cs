@@ -1,158 +1,232 @@
 using System.Collections.Concurrent;
+using BotAgent.Services.Plugins;
 using BotAgent.Services.Qq;
 
 namespace BotAgent.Services.Music;
 
 /// <summary>
-/// 听歌 / 分享歌的用例（批次 4 从 <c>BotAgentHost</c> 抽出）：持有音乐服务与两份状态
-/// （每会话的"刚听过"冷却、每会话"攒下的听歌笔记"），把"去听一遍"这件事包成一个返回**笔记文本**的调用。
-///
-/// 边界：**编排仍留给回复流程** —— 谁来触发（模型填了 listen / shareSong）、要不要再过能力闸门、
-/// 听完要不要再给模型一次开口机会（<c>RequestReply</c>）、失败要不要记一次参与状态，
-/// 这些都属于"一次回复该怎么走"，留在了 BotAgentHost；这里只做"音乐这一件事"。
+/// 听歌 / 分享歌的宿主薄门面：冷却、一次性听歌笔记、面板自测、听歌与分享回执编排全部归
+/// <c>preset.feature.music</c> 独立包经 <see cref="IMusicRuntimeContribution" /> 拥有；缺包或禁用时 fail-closed。
 /// </summary>
 public sealed class MusicUseCase : IMusicUseCase
 {
+    public const string ProviderId = "preset.feature.music";
+
     private readonly MusicService? _music;
     private readonly IQqChatSource _source;
     private readonly Action<string> _log;
+    private readonly PluginManager? _plugins;
+    private readonly AsyncLocal<ReceiptCapture?> _receiptCapture = new();
+    private IMusicRuntimeContribution? _direct;
 
-    /// <summary>每个会话最近一次"去听歌"的时间（冷却：别一句接一句点歌）。</summary>
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastListen = new();
+    private sealed class ReceiptCapture { public SendResult? Last; }
 
-    /// <summary>每会话攒下的"听完的感觉"：下一轮生成时注入，然后取走（一次性）。</summary>
-    private readonly ConcurrentDictionary<string, string> _notes = new();
-
-    public MusicUseCase(MusicService? music, IQqChatSource source, Action<string> log)
+    public MusicUseCase(
+        MusicService? music,
+        IQqChatSource source,
+        Action<string> log,
+        PluginManager? plugins = null,
+        IMusicRuntimeContribution? direct = null)
     {
         _music = music;
         _source = source;
         _log = log;
+        _plugins = plugins;
+        _direct = direct;
     }
 
-    /// <summary>音乐服务就绪（面板自测 / 模型动作都要先看它）。</summary>
-    public bool IsReady => _music is not null;
+    /// <summary>仅供无插件宿主的独立单测注入包内真实运行时实现。</summary>
+    public void BindDirect(IMusicRuntimeContribution runtime) => _direct = runtime;
 
-    /// <summary>
-    /// 最近一次「面板自测听歌」测的是哪首（面板要拿它回报；没测过 / 这次没搜到 = null）。
-    /// 这份状态以前长在 BotAgentHost 上（面板 façade 的一部分），批次 5 跟着自测入口一起搬进来。
-    /// </summary>
-    public string? LastTestHeader { get; private set; }
+    /// <summary>供宿主装配层注册到插件服务容器，向 <c>preset.feature.music</c> 提供窄宿主端口。</summary>
+    public IMusicHostPorts CreateHostPorts() => new HostPorts(this);
 
-    /// <summary>
-    /// 面板自测：按歌名走一遍完整链路（搜歌 → 歌词 → 音源 → 波形 → 交给模型）。
-    /// 顺手记下"这次测的是哪首"并写一条日志 —— 面板要拿它回报，日志要能解释"点了按钮之后到底做了什么"。
-    /// </summary>
+    private static bool IsUnavailable(InvalidOperationException ex)
+        => ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing";
+
+    private IMusicRuntimeContribution? CurrentRuntime
+        => _direct ?? (_plugins is not null && _plugins.TryGetContribution<IMusicRuntimeContribution>(ProviderId, out var runtime)
+            ? runtime : null);
+
+    private IMusicPolicyContribution? CurrentPolicy
+        => _direct ?? (_plugins is not null && _plugins.TryGetContribution<IMusicPolicyContribution>(ProviderId, out var policy)
+            ? policy : null);
+
+    /// <summary>音乐插件是否可用（无插件宿主的独立单测放行；真实宿主按包就绪态 fail-closed）。</summary>
+    public bool IsPluginAvailable => _direct is not null || _plugins is null || _plugins.IsReady(ProviderId);
+
+    /// <summary>音乐服务就绪（宿主媒体依赖就绪且独立包已启用）。</summary>
+    public bool IsReady => _music is not null && (_direct is not null || (_plugins is not null && _plugins.IsReady(ProviderId)));
+
+    /// <summary>最近一次「面板自测听歌」测的是哪首（由独立包持有）。</summary>
+    public string? LastTestHeader
+    {
+        get
+        {
+            try { return CurrentRuntime?.LastTestHeader; }
+            catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return null; }
+        }
+    }
+
     public async Task<string?> TestByNameAsync(string song, CancellationToken ct)
     {
-        LastTestHeader = null;
-        if (_music is null)
-        {
-            return null;
-        }
-
-        var note = await _music.DescribeByNameAsync(song, "面板自测", ct);
-        LastTestHeader = song;
-        _log(note is null
-            ? $"[Music] 面板自测「{song}」：没搜到或没听到"
-            : $"[Music] 面板自测「{song}」完成");
-        return note;
+        if (CurrentRuntime is not { } runtime) return null;
+        try { return await runtime.TestByNameAsync(song, ct).ConfigureAwait(false); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return null; }
     }
 
-    /// <summary>群里有人分享了歌：按分享内容去听一遍（识别平台/歌名那步在 MusicService 里）。</summary>
     public Task<string?> DescribeShareAsync(MusicShare share, string sender)
-        => _music is null ? Task.FromResult<string?>(null) : _music.DescribeAsync(share, sender, CancellationToken.None);
+        => DescribeShareAsync(share, sender, CancellationToken.None);
 
-    /// <summary>
-    /// 冷却门（"去听歌"这一侧的频率限制）。返回 true 表示这次可以听（并**已经记上时间**）。
-    /// </summary>
+    public async Task<string?> DescribeShareAsync(MusicShare share, string sender, CancellationToken ct)
+    {
+        if (CurrentRuntime is not { } runtime) return null;
+        try
+        {
+            return await runtime.DescribeShareAsync(
+                share.Platform, share.SongId, share.Title, share.Artist, share.PageUrl, share.DirectAudioUrl, sender, ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return null; }
+    }
+
     public bool TryBeginListen(string sourceKey, int cooldownSeconds, out string reason)
     {
-        reason = string.Empty;
-        var now = Clock.Now;
-        var cooldown = TimeSpan.FromSeconds(Math.Max(0, cooldownSeconds));
-        if (_lastListen.TryGetValue(sourceKey, out var lastAt) && now - lastAt < cooldown)
+        var policy = CurrentPolicy;
+        if (policy is null)
         {
-            reason = $"「{Math.Round((now - lastAt).TotalSeconds)}s」前刚听过";
+            reason = "plugin_contribution_unavailable";
             return false;
         }
 
-        _lastListen[sourceKey] = now;
-        return true;
+        try { return policy.TryBeginListen(sourceKey, cooldownSeconds, Clock.Now, out reason); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex))
+        {
+            reason = "plugin_contribution_unavailable";
+            return false;
+        }
     }
 
-    /// <summary>
-    /// 去听一首歌（真实出网、可能几秒），听完把"听感"攒进这个会话的笔记里（下一轮注入）。
-    /// 返回听感文本；没搜到 / 没听到 / 出错 → null（调用方据此记一次工具失败）。
-    /// </summary>
     public async Task<string?> ListenAsync(string sourceKey, string song, string requester, CancellationToken ct = default)
     {
-        if (_music is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            var note = await _music.DescribeByNameAsync(song, requester, ct);
-            if (string.IsNullOrWhiteSpace(note))
-            {
-                _log($"[Music] 没搜到/没听到「{song}」");
-                return null;
-            }
-
-            AddNote(sourceKey, note!);
-            return note;
-        }
-        catch (Exception ex)
-        {
-            _log($"[Music] 听「{song}」失败: {ex.Message}");
-            return null;
-        }
+        if (CurrentRuntime is not { } runtime) return null;
+        try { return await runtime.ListenAsync(sourceKey, song, requester, ct).ConfigureAwait(false); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return null; }
     }
 
-    /// <summary>把一条听感追加到某个会话的笔记里（下一轮注入）。</summary>
     public void AddNote(string sourceKey, string note)
-        => _notes.AddOrUpdate(sourceKey, note, (_, old) => old + "\n\n" + note);
+    {
+        try { CurrentPolicy?.AddNote(sourceKey, note); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { }
+    }
 
-    /// <summary>这个会话有没有攒着笔记（分享的那条路用它决定要不要写）。</summary>
-    public bool HasNote(string sourceKey) => _notes.ContainsKey(sourceKey);
+    public bool HasNote(string sourceKey)
+    {
+        try { return CurrentPolicy?.HasNote(sourceKey) == true; }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return false; }
+    }
 
-    /// <summary>取走这个会话的笔记（一次性：注入过就不再重复注入）。</summary>
     public string? TakeNote(string sourceKey)
-        => _notes.TryRemove(sourceKey, out var note) ? note : null;
+    {
+        try { return CurrentPolicy?.TakeNote(sourceKey); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return null; }
+    }
 
-    /// <summary>兼容 bool 调用方；结构化回执由 ShareWithReceiptAsync 保留。</summary>
     public async Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
         => (await ShareWithReceiptAsync(song, isGroup, targetId, ct)).Ok;
 
     public async Task<SendResult> ShareWithReceiptAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
     {
-        if (_music is null || targetId == 0 || !_source.IsConnected)
+        var runtime = CurrentRuntime;
+        if (runtime is null)
         {
             return new(false);
         }
 
-        var songId = await _music.ResolveSongIdByNameAsync(song, ct);
-        if (string.IsNullOrWhiteSpace(songId))
+        var previous = _receiptCapture.Value;
+        var box = new ReceiptCapture();
+        _receiptCapture.Value = box;
+        try
         {
-            _log("music_share outcome=unavailable");
+            var outcome = await runtime.ShareWithReceiptAsync(song, isGroup, targetId, ct).ConfigureAwait(false);
+            if (box.Last is { } captured)
+            {
+                return captured with { Ok = outcome.Ok };
+            }
+
+            return new(outcome.Ok, outcome.MessageId);
+        }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex))
+        {
             return new(false);
         }
-
-        var sent = await _source.SendMusicWithReceiptAsync(isGroup, targetId, "163", songId, title: song, ct: ct);
-        if (sent.Delivery is not null || sent.Ok)
+        finally
         {
-            var confirmed = sent.Ok && sent.Delivery is not { IsSuccess: false };
-            _log($"music_share outcome={sent.Delivery?.Status.ToString().ToLowerInvariant() ?? (confirmed ? "success" : "failed")}");
-            return sent with { Ok = confirmed };
+            _receiptCapture.Value = previous;
+        }
+    }
+
+    private MusicSendOutcome CaptureSend(SendResult sent)
+    {
+        if (_receiptCapture.Value is { } box)
+        {
+            box.Last = sent;
         }
 
-        // Only legacy boolean adapters retain their established link fallback.
-        var link = $"https://music.163.com/song?id={songId}";
-        var sentLink = await _source.SendTextAsync(isGroup, targetId, link, ct);
-        var linkConfirmed = sentLink.Ok && sentLink.Delivery is not { IsSuccess: false };
-        _log($"music_share fallback=link confirmed={linkConfirmed}");
-        return sentLink with { Ok = linkConfirmed };
+        return new(
+            Ok: sent.Ok,
+            HasDeliveryReceipt: sent.Delivery is not null,
+            DeliverySucceeded: sent.Delivery?.IsSuccess == true,
+            DeliveryStatus: sent.Delivery?.Status.ToString(),
+            ErrorMessage: null,
+            PlatformMessageId: null,
+            MessageId: sent.MessageId,
+            ReceiptToken: null);
+    }
+
+    private sealed class HostPorts(MusicUseCase owner) : IMusicHostPorts
+    {
+        public bool IsMediaReady => owner._music is not null;
+
+        public bool IsSourceConnected => owner._source.IsConnected;
+
+        public Task<string?> DescribeByNameAsync(string keyword, string senderName, CancellationToken ct)
+            => owner._music is null
+                ? Task.FromResult<string?>(null)
+                : owner._music.DescribeByNameAsync(keyword, senderName, ct);
+
+        public Task<string?> DescribeShareAsync(
+            string platform,
+            string? songId,
+            string? title,
+            string? artist,
+            string? pageUrl,
+            string? directAudioUrl,
+            string senderName,
+            CancellationToken ct)
+            => owner._music is null
+                ? Task.FromResult<string?>(null)
+                : owner._music.DescribeAsync(
+                    new MusicShare(platform, songId, title, artist, pageUrl, directAudioUrl),
+                    senderName,
+                    ct);
+
+        public Task<string?> ResolveSongIdByNameAsync(string keyword, CancellationToken ct)
+            => owner._music is null
+                ? Task.FromResult<string?>(null)
+                : owner._music.ResolveSongIdByNameAsync(keyword, ct);
+
+        public async Task<MusicSendOutcome> SendMusicAsync(bool isGroup, long targetId, string songId, string title, CancellationToken ct)
+        {
+            var sent = await owner._source.SendMusicWithReceiptAsync(isGroup, targetId, "163", songId, title: title, ct: ct).ConfigureAwait(false);
+            return owner.CaptureSend(sent);
+        }
+
+        public async Task<MusicSendOutcome> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct)
+        {
+            var sent = await owner._source.SendTextAsync(isGroup, targetId, text, ct).ConfigureAwait(false);
+            return owner.CaptureSend(sent);
+        }
+
+        public void Log(string message) => owner._log(message);
     }
 }

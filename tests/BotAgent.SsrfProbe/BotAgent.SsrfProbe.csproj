@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../ResearchFixture.cs" Link="ResearchFixture.cs" />
+    <ProjectReference Include="../../packages/websearch/backend/BotAgent.Package.WebSearch.csproj" />
     <ProjectReference Include="..\..\src\BotAgent.Headless\BotAgent.Headless.csproj" />
     <ProjectReference Include="../../src/BotAgent.Storage/BotAgent.Storage.csproj" Aliases="StorageModule" />
     <Using Include="BotAgent.Adapters.Net" />

@@ -46,6 +46,7 @@ internal static class Program
         var endpoint = CreateEndpoint(backend, ConfiguredOptions());
 
         await RunAsync("A. routes / OpenAPI", () => RouteAndOpenApiChecksAsync(endpoint));
+        await RunAsync("Registered HTTP contracts", () => HttpContributionChecks.RunAsync((value, label) => Check(label, value)));
         await RunAsync("Runtime logs API", () => RuntimeLogApiChecks.RunAsync((value, label) => Check(label, value)));
         await RunAsync("B. authentication / authorization", () => AuthChecksAsync(backend));
         await RunAsync("C. closed JSON", () => ClosedJsonChecksAsync(backend));
@@ -292,6 +293,7 @@ internal static class Program
 
     private static ZbaRequest RouteSmokeRequest(ZbaRouteInfo route) => route.OperationId switch
     {
+        "operations.find" => Req("POST", route.Template, """{"owner":"synthetic.owner","idempotencyKey":"synthetic-operation-key"}""", AdminToken),
         "quotas.list" => Req("GET", route.Template, token: AdminToken),
         "quotas.save" => Req("POST", route.Template, "{\"sourceKey\":\"group:10001\",\"expectedRevision\":\"0\",\"idempotencyKey\":\"quota-route-smoke\",\"dailyTokenLimit\":70}", AdminToken),
         "quotas.find" => Req("POST", route.Template, "{\"idempotencyKey\":\"quota-route-smoke\"}", AdminToken),
@@ -331,6 +333,12 @@ internal static class Program
         "plugins.settings.read" => Req("GET", route.Template.Replace("{id}", "community.example.hello"), token: AdminToken),
         "plugins.settings.save" => Req("PUT", route.Template.Replace("{id}", "community.example.hello"),
             "{\"expectedRevision\":\"r1\",\"idempotencyKey\":\"plugin:settings:route-smoke\",\"edits\":[]}", AdminToken),
+        "plugins.ui.session.open" => Req("POST", route.Template.Replace("{id}", "community.example.hello"), null, AdminToken),
+        "plugins.ui.session.close" => Req("DELETE", route.Template.Replace("{id}", "community.example.hello").Replace("{sessionId}", "uis-smoke"), null, AdminToken),
+        "plugins.ui.asset" => Req("GET", "/zba/v1/plugins/community.example.hello/ui/" + new string('a', 64) + "/auth/web/index.html", token: AdminToken),
+        "plugins.bundle.preview" => Req("POST", route.Template, "{\"manifests\":[" + SampleManifestJson() + "]}", AdminToken),
+        "plugins.bundle.apply" => Req("POST", route.Template,
+            "{\"manifests\":[" + SampleManifestJson() + "],\"expectedRevision\":\"p0000000000000000\",\"idempotencyKey\":\"plugin:bundle:route-smoke\",\"trustAcknowledged\":true}", AdminToken),
         "providers.models" => Req("GET", route.Template.Replace("{key}", "synthetic-provider"), token: AdminToken),
         _ => throw new InvalidOperationException("unmapped synthetic route " + route.OperationId)
     };
@@ -762,6 +770,15 @@ internal static class Program
         => "{\"sourceKey\":\"synthetic-source\",\"sessionId\":\"synthetic-session\",\"prompt\":\"" + prompt
            + "\",\"target\":\"" + target + "\",\"timeoutSeconds\":" + timeoutSeconds + "}";
 
+    private static string SampleManifestJson(string manifestId = "community.example.hello")
+        => "{\"id\":\"" + manifestId + "\",\"version\":\"1.0.0\","
+           + "\"entryAssembly\":\"HelloPlugin.dll\",\"entryType\":\"Marketplace.Examples.HelloPlugin\","
+           + "\"sha256\":\"" + new string('a', 64) + "\","
+           + "\"downloadUrl\":\"https://github.com/example-org/example-plugins/releases/download/"
+           + manifestId + "-1.0.0/" + manifestId + "-1.0.0.zip\","
+           + "\"apiVersion\":1,\"targetFramework\":\"net10.0\",\"minimumHostVersion\":\"1.0.0\","
+           + "\"permissions\":[],\"dependencies\":[],\"settings\":[]}";
+
     /// <summary>合成安装请求：清单是固定版本 + 全 a 的 SHA-256，绝不指向真实仓库。</summary>
     private static string PluginMutationJson(
         string idempotencyKey = "plugin:install:route-smoke",
@@ -1140,8 +1157,12 @@ internal static class Program
 }
 
 /// <summary>确定性宿主实现：所有结果由合成 revision / key / id 决定，无外部 IO。</summary>
-internal sealed partial class SyntheticZbaBackend : IZbaBackend
+internal sealed partial class SyntheticZbaBackend : IZbaBackend, IZbaHttpContributions
 {
+    internal IReadOnlyList<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>>? CustomHttpContributions { get; init; }
+    public IReadOnlyList<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>> HttpContributions
+        => CustomHttpContributions ?? [QuotaHttpContract.Bind<ConfigurationCaller>(ListQuotasAsync, SaveQuotaAsync, FindQuotaAsync)];
+
     private readonly Dictionary<string, string> _idempotent = new(StringComparer.Ordinal);
     private int _nextTask;
 
@@ -1404,6 +1425,28 @@ internal sealed partial class SyntheticZbaBackend : IZbaBackend
         return ValueTask.FromResult(new ZbaTracePage(
             items, new ZbaTraceCacheUsage(37, 1, 50, 12345, 0, 4)));
     }
+
+    public ValueTask<ZbaPluginUiSession> OpenPluginUiSessionAsync(ConfigurationCaller caller, string pluginId, CancellationToken ct = default)
+        => ValueTask.FromResult(new ZbaPluginUiSession("uis-smoke", pluginId, "1.0.0", new string('a', 64), "gen-smoke", 1,
+            $"/zba/v1/plugins/{pluginId}/ui/{new string('a', 64)}/auth/web/index.html",
+            ["settings.read"], true, true, "cold", "dialog", pluginId, Program.FixedNow.AddMinutes(30)));
+
+    public ValueTask<ZbaPluginUiSessionClosed> ClosePluginUiSessionAsync(ConfigurationCaller caller, string pluginId, string sessionId, CancellationToken ct = default)
+        => ValueTask.FromResult(new ZbaPluginUiSessionClosed(sessionId, pluginId, true));
+
+    public ValueTask<ZbaPluginUiAssetResult> ReadPluginUiAssetAsync(string pluginId, string releaseSha, string ticket, string assetPath, bool authenticatedCaller, CancellationToken ct = default)
+        => ValueTask.FromResult(new ZbaPluginUiAssetResult(200, "text/html; charset=utf-8", System.Text.Encoding.UTF8.GetBytes("<!doctype html>"), null,
+            "default-src 'none'; script-src 'self'", "public, max-age=31536000, immutable"));
+
+    public ValueTask<ZbaPluginBundlePreview> PreviewPluginBundleAsync(ConfigurationCaller caller, ZbaPluginBundlePreviewRequest request, CancellationToken ct = default)
+        => ValueTask.FromResult(new ZbaPluginBundlePreview("bundle-smoke", Program.FixedNow.AddMinutes(10).ToString("O"),
+            "p0000000000000000", true, "cold", request.Manifests.Select(m => m.Id).ToArray(),
+            [new ZbaPluginPreviewCheck("bundle", "ok", "ok")]));
+
+    public ValueTask<ZbaPluginOperationResult> ApplyPluginBundleAsync(ConfigurationCaller caller, ZbaPluginBundleApplyRequest request, CancellationToken ct = default)
+        => ValueTask.FromResult(new ZbaPluginOperationResult(
+            new ZbaPluginOperation(request.IdempotencyKey, "bundle:" + request.Manifests[0].Id, "bundle", "restart_required", true, null),
+            "p0000000000000001"));
 
     private static ManagedDescriptor Descriptor(string instanceId)
         => new(

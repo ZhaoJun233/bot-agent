@@ -13,7 +13,9 @@ internal static class MusicReceiptChecks
         var http = DispatchProxy.Create<IHttpFetcher, SearchHttp>();
         var catalog = new NeteaseMusicClient(http, () => null, () => "https://example.com", logs.Add);
         var music = new MusicService(null!, catalog, null!, null!, () => new(), "", null!, logs.Add);
-        return new(music, source, logs.Add);
+        var useCase = new MusicUseCase(music, source, logs.Add);
+        useCase.BindDirect(new BotAgent.Packages.Music.MusicCoordinator(ports: useCase.CreateHostPorts()));
+        return useCase;
     }
     public static async Task RunAsync(Func<string, Func<Task>, Task> test)
     {

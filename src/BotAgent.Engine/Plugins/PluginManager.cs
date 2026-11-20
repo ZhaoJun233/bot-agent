@@ -3,7 +3,7 @@ using BotAgent.Domain.Plugins;
 namespace BotAgent.Services.Plugins;
 
 /// <summary>Owns plugin generations, lifecycle ordering and invocation leases.</summary>
-public sealed class PluginManager : IPluginRegistry
+public sealed partial class PluginManager : IPluginRegistry
 {
     // Never hold this lock while calling plugin code. Lifecycle operations may await a drain,
     // but lookups, dispatch and SetEnabled must remain available for the new generation.
@@ -46,6 +46,24 @@ public sealed class PluginManager : IPluginRegistry
         lock (_sync) return _plugins.TryGetValue(pluginId, out var entry) && entry.Enabled;
     }
 
+    public bool IsInitialized(string pluginId)
+    {
+        lock (_sync) return _plugins.TryGetValue(pluginId, out var entry) && entry.Initialized;
+    }
+
+    public bool IsRuntimePrepared(string pluginId)
+    {
+        lock (_sync) return _plugins.TryGetValue(pluginId, out var entry) && entry.RuntimePrepared;
+    }
+
+    /// <summary>For package-managed plugins, capability gating matches runtime readiness; legacy in-process registrations use Enabled.</summary>
+    public bool IsOperational(string pluginId)
+    {
+        lock (_sync)
+            return _plugins.TryGetValue(pluginId, out var entry)
+                && (entry.RuntimePrepared ? Ready(entry, new()) : entry.Enabled);
+    }
+
     public void SetEnabled(string pluginId, bool enabled)
     {
         lock (_sync)
@@ -59,11 +77,52 @@ public sealed class PluginManager : IPluginRegistry
     /// Ownership transfers at publication. Cancellation only applies before that point; after
     /// publication this waits for old calls and Shutdown, with shutdown failures logged only.
     /// </summary>
-    public async Task ReplaceAsync(IBotPlugin plugin, bool enabled, CancellationToken ct = default)
+    public Task ReplaceAsync(IBotPlugin plugin, bool enabled, CancellationToken ct = default)
+        => ReplaceCoreAsync(plugin, enabled, null, 1, ct);
+
+    public Task ReplaceAsync(IBotPlugin plugin, bool enabled, int apiVersion, CancellationToken ct = default)
+        => ReplaceCoreAsync(plugin, enabled, null, apiVersion, ct);
+
+    public Task ReplaceAsync(IBotPlugin plugin, bool enabled, DependencyLease dependencies, int apiVersion,
+        CancellationToken ct = default)
+        => ReplaceCoreAsync(plugin, enabled, dependencies, apiVersion, ct);
+
+    public Task<InvocationGate> ReplaceAndBindAsync(IBotPlugin plugin, bool enabled, int apiVersion,
+        DependencyLease? dependencies = null, CancellationToken ct = default)
+        => ReplaceCoreAsync(plugin, enabled, dependencies, apiVersion, ct);
+
+    /// <summary>Installs trusted adapter bindings before Ready can become observable. The gate remains closed until publication.</summary>
+    public Task<InvocationGate> ReplaceWithBindingsAsync(IBotPlugin plugin, bool enabled, int apiVersion,
+        Action<InvocationGate> bind, DependencyLease? dependencies = null, CancellationToken ct = default)
+        => ReplaceCoreAsync(plugin, enabled, dependencies, apiVersion, ct, bind);
+
+    private async Task<InvocationGate> ReplaceCoreAsync(IBotPlugin plugin, bool enabled, DependencyLease? dependencies, int apiVersion,
+        CancellationToken ct, Action<InvocationGate>? bind = null)
     {
-        var candidate = new Entry(this, plugin, enabled, initialized: true);
+        var twoPhaseActivation = enabled && plugin is IPluginTwoPhaseLifecycle { RequiresTwoPhaseActivation: true };
+        var candidate = new Entry(this, plugin, enabled, initialized: enabled && !twoPhaseActivation)
+        {
+            RuntimePrepared = true,
+            Starting = twoPhaseActivation
+        };
+        candidate.ApiVersion = apiVersion;
+        if (dependencies is not null)
+        {
+            if (!ReferenceEquals(dependencies.Owner, this) || dependencies.ConsumerId != candidate.Info.Id)
+                throw new InvalidOperationException("plugin_dependency_lease_owner");
+            if (dependencies.ApiVersion != apiVersion) throw new InvalidOperationException("plugin_dependency_unavailable");
+            candidate.Dependencies = dependencies.Bindings.ToArray();
+        }
         ThrowIfCallbackReentry();
-        await _lifecycle.WaitAsync(ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        if (enabled) PrepareTools(candidate);
+        bind?.Invoke(new InvocationGate(this, candidate));
+        // A provider may be draining this preparation lease while holding lifecycle ownership.
+        // Never wait behind it: the caller cleans the unpublished candidate under its lease,
+        // then releases it. A later reconciliation can prepare against the new generation.
+        if (dependencies is null) await _lifecycle.WaitAsync(ct).ConfigureAwait(false);
+        else if (!await _lifecycle.WaitAsync(0, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("plugin_dependency_busy");
         try
         {
             Entry? previous;
@@ -71,13 +130,73 @@ public sealed class PluginManager : IPluginRegistry
             {
                 ct.ThrowIfCancellationRequested();
                 ThrowIfStopped();
+                if (dependencies?.IsDisposed == true) throw new InvalidOperationException("plugin_dependency_lease_expired");
+                if ((enabled || plugin is IPluginControlSource) && !DependenciesReady(candidate))
+                    throw new InvalidOperationException("plugin_dependency_unavailable");
+                CheckToolConflicts(candidate);
                 _plugins.TryGetValue(candidate.Info.Id, out previous);
                 if (ReferenceEquals(previous?.Plugin, plugin))
                     throw new InvalidOperationException("plugin_same_generation");
                 previous?.Retire();
                 _plugins[candidate.Info.Id] = candidate;
             }
-            if (previous is not null) await ShutdownRetiredAsync(previous).ConfigureAwait(false);
+            var previousShutdownOk = previous is null || await ShutdownRetiredAsync(previous).ConfigureAwait(false);
+            if (twoPhaseActivation && plugin is IPluginTwoPhaseLifecycle twoPhase)
+            {
+                if (!previousShutdownOk)
+                {
+                    lock (_sync)
+                    {
+                        candidate.Starting = false;
+                        candidate.Initialized = false;
+                        candidate.Enabled = false;
+                        candidate.Tools = [];
+                        candidate.ToolTarget = null;
+                    }
+                    try
+                    {
+                        _callbackDepth.Value++;
+                        try { await plugin.ShutdownAsync(CancellationToken.None).ConfigureAwait(false); }
+                        finally { _callbackDepth.Value--; }
+                    }
+                    catch { }
+                    Log($"[Plugin] 跳过新代激活（旧代停止失败）: {candidate.Info.Id}");
+                }
+                else
+                {
+                    try
+                    {
+                        _callbackDepth.Value++;
+                        try { await twoPhase.ActivateAsync(CancellationToken.None).ConfigureAwait(false); }
+                        finally { _callbackDepth.Value--; }
+                        lock (_sync)
+                        {
+                            candidate.Initialized = true;
+                            candidate.Starting = false;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        lock (_sync)
+                        {
+                            candidate.Starting = false;
+                            candidate.Initialized = false;
+                            candidate.Enabled = false;
+                            candidate.Tools = [];
+                            candidate.ToolTarget = null;
+                        }
+                        try
+                        {
+                            _callbackDepth.Value++;
+                            try { await plugin.ShutdownAsync(CancellationToken.None).ConfigureAwait(false); }
+                            finally { _callbackDepth.Value--; }
+                        }
+                        catch { }
+                        Log($"[Plugin] 新代激活失败: {candidate.Info.Id}, {ex.GetType().Name}");
+                    }
+                }
+            }
+            return new InvocationGate(this, candidate);
         }
         finally { _lifecycle.Release(); }
     }
@@ -121,7 +240,7 @@ public sealed class PluginManager : IPluginRegistry
                 IBotPlugin plugin;
                 lock (_sync)
                 {
-                    if (!entry.Enabled || entry.Initialized) continue;
+                    if (entry.RuntimePrepared || !entry.Enabled || entry.Initialized) continue;
                     entry.Starting = true;
                     plugin = entry.Plugin!;
                 }
@@ -130,12 +249,13 @@ public sealed class PluginManager : IPluginRegistry
                     _callbackDepth.Value++;
                     try { await plugin.InitializeAsync(ct).ConfigureAwait(false); }
                     finally { _callbackDepth.Value--; }
-                    lock (_sync) entry.Initialized = true;
+                    PrepareTools(entry);
+                    lock (_sync) { CheckToolConflicts(entry); entry.Initialized = true; }
                     Log($"[Plugin] 插件初始化完成: {entry.Info.Name}");
                 }
                 catch (Exception ex)
                 {
-                    lock (_sync) entry.Enabled = false;
+                    lock (_sync) { entry.Enabled = false; entry.Tools = []; entry.ToolTarget = null; }
                     Log($"[Plugin] 插件初始化失败: {entry.Info.Name}, {ex.GetType().Name}");
                 }
                 finally { lock (_sync) entry.Starting = false; }
@@ -160,14 +280,16 @@ public sealed class PluginManager : IPluginRegistry
                 _plugins.Clear();
             }
             // Do not let a caller's timeout unload assemblies that still have executing code.
-            foreach (var entry in entries) await ShutdownRetiredAsync(entry).ConfigureAwait(false);
+            foreach (var entry in ShutdownOrder(entries)) await ShutdownRetiredAsync(entry).ConfigureAwait(false);
         }
         finally { _lifecycle.Release(); }
     }
 
-    private async Task ShutdownRetiredAsync(Entry entry)
+    private async Task<bool> ShutdownRetiredAsync(Entry entry)
     {
+        InvalidateUiSessions(entry);
         await entry.Drained.Task.ConfigureAwait(false);
+        var ok = true;
         try
         {
             if (entry.Plugin is { } plugin)
@@ -179,26 +301,32 @@ public sealed class PluginManager : IPluginRegistry
         }
         catch (Exception ex)
         {
+            ok = false;
             Log($"[Plugin] 插件停止异常: {entry.Info.Name}, {ex.GetType().Name}");
         }
         finally
         {
             // A stale Find facade may outlive the package. Do not let it root the old ALC.
-            lock (_sync) entry.Plugin = null;
+            lock (_sync) { entry.Plugin = null; entry.ToolTarget = null; }
         }
+        return ok;
     }
 
     private string? BlockReason(Entry entry, ReplyPolicyContext context)
     {
         IReplyPolicyPlugin policy;
+        Entry[] leases;
         lock (_sync)
         {
             // A lookup can race replacement. Lease the current generation rather than silently bypass its policy.
             if (entry.Retired && !_plugins.TryGetValue(entry.Info.Id, out entry!)) return null;
             if (!entry.Enabled || entry.Starting || entry.Plugin is not IReplyPolicyPlugin target)
                 return null;
+            if (entry.RuntimePrepared && !entry.Initialized) return "plugin_not_ready";
+            if (!DependenciesReady(entry)) return "plugin_dependency_unavailable";
             policy = target;
-            entry.InFlight++;
+            leases = DependencyClosure(entry.Dependencies).Append(entry).Distinct().ToArray();
+            foreach (var leased in leases) leased.InFlight++;
         }
         _callbackDepth.Value++;
         try { return policy.BlockReason(context); }
@@ -207,8 +335,7 @@ public sealed class PluginManager : IPluginRegistry
             lock (_sync)
             {
                 _callbackDepth.Value--;
-                entry.InFlight--;
-                if (entry.Retired && entry.InFlight == 0) entry.Drained.TrySetResult();
+                ReleaseLeases(leases);
             }
         }
     }
@@ -232,7 +359,7 @@ public sealed class PluginManager : IPluginRegistry
 
     // All mutable entry state is protected by _sync. Only the serialized lifecycle owner
     // invokes Initialize/Shutdown; dispatch holds a counted lease instead of that semaphore.
-    private sealed class Entry
+    internal sealed class Entry
     {
         public Entry(PluginManager owner, IBotPlugin plugin, bool enabled, bool initialized)
         {
@@ -250,7 +377,15 @@ public sealed class PluginManager : IPluginRegistry
         public IBotPlugin? Plugin { get; set; }
         public bool Enabled { get; set; }
         public bool Initialized { get; set; }
+        // Disabled business remains metadata-only; separately prepared control has its own admission gate.
+        public bool RuntimePrepared { get; init; }
         public bool Starting { get; set; }
+        public int ApiVersion { get; set; } = 1;
+        public Entry[] Dependencies { get; set; } = [];
+        public BotAgent.Services.Tools.ToolDefinition[] Tools { get; set; } = [];
+        public string ToolGeneration { get; set; } = string.Empty;
+        public BotAgent.Services.Tools.IToolContribution? ToolTarget { get; set; }
+        public string GenerationId { get; } = "gen-" + Guid.NewGuid().ToString("N")[..12];
         public bool Retired { get; private set; }
         public int InFlight { get; set; }
         public TaskCompletionSource Drained { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

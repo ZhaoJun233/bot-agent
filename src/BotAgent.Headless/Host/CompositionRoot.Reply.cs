@@ -50,12 +50,41 @@ internal static partial class CompositionRoot
     /// 顺序与以前 BotAgentHost.DeleteConversation 逐字一致（注册表内部那次 ConversationsChanged 仍然先发）。
     /// </summary>
     private static void BindConversationDeletion(ConversationRegistry registry, ReplyPipeline reply,
-        SettingsHotReload settingsHotReload, PanelNotifier ui)
+        SettingsHotReload settingsHotReload, PanelNotifier ui, PluginManager plugins)
     {
         registry.Deleted += conversation =>
         {
-            reply.ForgetSession(conversation.SourceKey);
-            settingsHotReload.ForgetSessionState(conversation.SourceKey);
+            static void SafeInvoke(Action action)
+            {
+                try { action(); }
+                catch { /* 单个清理回调（或并发停用的插件贡献）失败不影响其余台账回收。 */ }
+            }
+            var callbacks = new Action<string>[]
+            {
+                key => SafeInvoke(() => reply.ForgetSession(key)),
+                key => SafeInvoke(() => settingsHotReload.ForgetSessionState(key)),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Profiles.IProfilesPolicyContribution>("preset.feature.profiles", out var c)) c?.NotifyConversationDeleted(key); }),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Stickers.IStickerPolicyContribution>("preset.feature.stickers", out var c)) c?.ClearConversation(key); }),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Music.IMusicPolicyContribution>("preset.feature.music", out var c)) c?.ClearConversation(key); }),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Voice.IVoicePolicyContribution>("preset.feature.voice", out var c)) c?.ClearConversation(key); }),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Conversations.IVibesContribution>("preset.feature.vibes", out var c)) c?.ClearConversation(key); }),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Poke.IPokePolicy>("preset.feature.poke", out var c)) c?.ClearConversation(key); }),
+            };
+            var dispatched = false;
+            if (plugins.TryGetContribution<IConversationContribution>("system.conversation", out var conversationPlugin)
+                && conversationPlugin is not null)
+            {
+                try
+                {
+                    conversationPlugin.NotifySessionDeleted(conversation.SourceKey, callbacks);
+                    dispatched = true;
+                }
+                catch { }
+            }
+            if (!dispatched)
+            {
+                foreach (var callback in callbacks) callback(conversation.SourceKey);
+            }
             ui.EmitLog($"已删除会话 {conversation.Name}");
             ui.NotifyConversationsChanged();
         };
@@ -78,7 +107,7 @@ internal static partial class CompositionRoot
                 SelfId: () => a.Identity.SelfId,
                 IsDisposed: () => a.Lifetime.IsDisposed),
             a.Traces, a.RiskBackoff,
-            usage: a.Quotas,
+            usage: a.Usage,
             platformPolicies: a.PlatformPolicies,
             inboundDedup: a.InboundDedup,
             plugins: a.PluginGate,
@@ -89,14 +118,15 @@ internal static partial class CompositionRoot
         // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）
         a.Scheduler = new BotScheduler(a.Box, a.Source, a.Profiles, a.Brain, a.Reply, a.Stickers, a.Ui,
             new BotSchedulerHooks(Log: a.Ui.EmitLog, IsDisposed: () => a.Lifetime.IsDisposed),
-            a.PluginGate.Allows, unifiedMemory: a.UnifiedMemory);
+            a.PluginGate.Allows, unifiedMemory: a.UnifiedMemory, plugins: a.Plugins);
+        a.PluginServices.RegisterForPlugin<BotAgent.Services.Profiles.IProfilesHostPorts>("preset.feature.profiles", a.Scheduler.CreateProfilesHostPorts());
 
         // 配置热更新的扇出（面板保存设置 / 一键部署记住产物地址）：顺序在它内部，见 SettingsHotReload
         a.HotReload = new SettingsHotReload(a.Box, a.SettingsStore, a.Approvals, a.Participation, a.Whitelist,
             a.AgentCmds, a.Brain, a.Reply, a.Scheduler, a.Registry, a.Ui);
 
         // 会话被删 → 把它在各台账里的痕迹一起清掉，见 BindConversationDeletion
-        BindConversationDeletion(a.Registry, a.Reply, a.HotReload, a.Ui);
+        BindConversationDeletion(a.Registry, a.Reply, a.HotReload, a.Ui, a.Plugins);
 
         // 图片地址过期（QQ 的 rkey 有时效）时的重签通道：下载器 → 协议端 get_msg
         // （**只在这里接一次** —— 它与配置无关，不再是"每次保存设置都重接一遍"）

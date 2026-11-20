@@ -98,7 +98,7 @@ internal sealed class ReplyInboundMedia
             var uid = msg.UserId.ToString();
             var group = msg.GroupId;
             var mid = msg.MessageId;
-            _queueBackground("stickers:" + mid, "stickers:" + mid, async _ =>
+            _queueBackground("stickers:" + mid, "stickers:" + mid, async ct =>
             {
                 if (!QueuedInboundCapabilityAllowed(PluginGate.StickersCapability, "stickers",
                         _settings.EnableStickers, policy, "表情包收集"))
@@ -108,7 +108,7 @@ internal sealed class ReplyInboundMedia
 
                 await _stickers.CollectAsync(urls, uid, group, mid,
                     () => QueuedInboundCapabilityAllowed(PluginGate.StickersCapability, "stickers",
-                        _settings.EnableStickers, policy, "表情包下载"));
+                        _settings.EnableStickers, policy, "表情包下载"), ct);
             });
         }
 
@@ -119,8 +119,8 @@ internal sealed class ReplyInboundMedia
         {
             var requestReply = _captureReply(conversation, appended);
             conversation.HasPendingReply = false; // Maintenance must not admit the input before listening finishes.
-            _queueBackground("music-inbound:" + conversation.SourceKey, "music-inbound:" + conversation.SourceKey, _ =>
-                HandleMusicAsync(conversation, msg.SenderName, musicShares.ToList(), policy, requestReply));
+            _queueBackground("music-inbound:" + conversation.SourceKey, "music-inbound:" + conversation.SourceKey, ct =>
+                HandleMusicAsync(conversation, msg.SenderName, musicShares.ToList(), policy, requestReply, ct));
         }
 
         // 链接：群里发的 URL（包括分享卡片里那个）真去打开看一眼，取回标题/摘要。
@@ -198,7 +198,7 @@ internal sealed class ReplyInboundMedia
     /// 分析完成后单独触发一次发言机会 —— 这样模型是“听完再说”，而不是先瞎猜一遍再补课。
     /// </summary>
     private async Task HandleMusicAsync(BotConversation conversation, string sender, List<MusicShare> shares,
-        EffectivePlatformPolicy turnPolicy, Action requestReply)
+        EffectivePlatformPolicy turnPolicy, Action requestReply, CancellationToken ct)
     {
         if (!_music.IsReady)
         {
@@ -208,6 +208,7 @@ internal sealed class ReplyInboundMedia
         var heard = false;
         foreach (var share in shares)
         {
+            if (ct.IsCancellationRequested) return;
             // 多首分享是多次外部调用：每次真正开始前都复核，不能只在作业入口看一次。
             if (!QueuedInboundCapabilityAllowed(PluginGate.MusicCapability, "music",
                     _settings.EnableMusic, turnPolicy, "听歌"))
@@ -217,7 +218,7 @@ internal sealed class ReplyInboundMedia
 
             try
             {
-                var note = await _music.DescribeShareAsync(share, sender);
+                var note = await _music.DescribeShareAsync(share, sender, ct);
                 if (string.IsNullOrWhiteSpace(note))
                 {
                     continue;

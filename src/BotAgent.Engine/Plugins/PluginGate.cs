@@ -92,7 +92,8 @@ public sealed class PluginGate
             return true;
         }
 
-        return !CapabilityPlugins.TryGetValue(capability, out var pluginId) || _registry.IsEnabled(pluginId);
+        return !CapabilityPlugins.TryGetValue(capability, out var pluginId)
+            || (_registry is PluginManager manager ? manager.IsOperational(pluginId) : _registry.IsEnabled(pluginId));
     }
 
     /// <summary>
@@ -143,4 +144,14 @@ public sealed class PluginGate
 
         return false;
     }
+
+    /// <summary>按插件 ID 解析当前就绪代次的贡献契约；无插件管理器或插件未就绪时返回 null。</summary>
+    public T? GetContribution<T>(string pluginId) where T : class, IPluginContribution
+        => _registry is PluginManager manager && manager.TryGetContribution<T>(pluginId, out var contribution)
+            ? contribution
+            : null;
+
+    /// <summary>发现全部就绪代次中实现了 <typeparamref name="T"/> 的插件贡献。</summary>
+    public IReadOnlyList<T> GetContributions<T>() where T : class, IPluginContribution
+        => _registry is PluginManager manager ? manager.GetContributions<T>() : [];
 }

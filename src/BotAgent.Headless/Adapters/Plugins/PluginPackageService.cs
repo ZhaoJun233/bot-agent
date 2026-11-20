@@ -12,15 +12,25 @@ public sealed partial class PluginPackageService
 {
     private readonly PluginPackageStore _store;
     private readonly IHttpFetcher _http;
+    private readonly PluginResourceAuthorizations _resources;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _snapshotLock = new();
     public PluginGovernanceService Governance { get; }
     public PluginPythonSources PythonSources { get; } = new();
     private bool _startupLoaded;
     private volatile IReadOnlyList<InstalledPluginPackage> _snapshot = Array.Empty<InstalledPluginPackage>();
 
     public PluginPackageService(string rootDirectory, IHttpFetcher http)
+        : this(rootDirectory, http, TrustedPluginDistribution.Empty) { }
+
+    public PluginPackageService(string rootDirectory, IHttpFetcher http, TrustedPluginDistribution distribution)
+        : this(rootDirectory, http, distribution, distribution.Resources) { }
+
+    public PluginPackageService(string rootDirectory, IHttpFetcher http, TrustedPluginDistribution distribution,
+        PluginResourceAuthorizations resources)
     {
-        _store = new PluginPackageStore(rootDirectory);
+        _resources = resources ?? throw new ArgumentNullException(nameof(resources));
+        _store = new PluginPackageStore(rootDirectory, distribution);
         _http = http;
         Governance = new PluginGovernanceService(_store.Root, _http);
         Directory.CreateDirectory(_store.Root);
@@ -28,6 +38,9 @@ public sealed partial class PluginPackageService
 
     /// <summary>Last observed package state; refreshed by every lifecycle call. Never blocks.</summary>
     public IReadOnlyList<InstalledPluginPackage> InstalledSnapshot => _snapshot;
+
+    internal bool IsHostDistributionRelease(PluginPackageManifest manifest)
+        => _store.Distribution.IsApprovedRelease(manifest);
 
     public async Task<IReadOnlyList<InstalledPluginPackage>> GetInstalledAsync(CancellationToken ct = default)
     {
@@ -39,7 +52,7 @@ public sealed partial class PluginPackageService
     private async Task<IReadOnlyList<InstalledPluginPackage>> ReadInstalledLockedAsync(CancellationToken ct)
     {
         var result = new List<InstalledPluginPackage>();
-        foreach (var id in _store.Ids()) result.Add(await _store.ReadAsync(id, ct));
+        foreach (var id in _store.Ids()) result.Add(await _store.ReadDirectoryEntryAsync(id, ct));
         _snapshot = result.ToArray();
         return result;
     }
@@ -74,7 +87,7 @@ public sealed partial class PluginPackageService
 
     private async Task<InstalledPluginPackage> StageUninstallCoreAsync(string id, string? expectedRevision, CancellationToken ct)
     {
-        PluginPackageValidation.ValidateId(id);
+        _store.Distribution.ValidateId(id);
         await _gate.WaitAsync(ct);
         try
         {
@@ -104,6 +117,9 @@ public sealed partial class PluginPackageService
         {
             if (_startupLoaded) throw new InvalidOperationException("Package startup already performed.");
             _startupLoaded = true;
+            // This compatibility path has no registry to bind resource lifetimes. Even plain
+            // packages must not inherit undeclared capabilities from the ambient host context.
+            var restrictedContext = PluginActivationDataStore.Scope(context, null, null, null, null, new PluginActivationDependencies());
             var loaded = new List<IBotPlugin>();
             var failures = new List<PluginPackageFailure>();
             foreach (var id in _store.Ids().ToArray())
@@ -123,12 +139,17 @@ public sealed partial class PluginPackageService
                     if (state.Active == null && state.Pending == null) continue;
                     if (isEnabled?.Invoke(id) != true) continue;
                     if (isRegistered?.Invoke(id) == true) throw new InvalidDataException("Package ID already registered.");
+                    // This compatibility API returns raw initialized plugins, without a registry
+                    // to bind dependency generations. Dependency packages must use ApplyAsync.
+                    if (state.Active?.Dependencies is { Count: > 0 } || state.Pending?.Dependencies is { Count: > 0 }
+                        || PluginDataValidation.RequiresColdStart(state.Active) || PluginDataValidation.RequiresColdStart(state.Pending))
+                        throw new InvalidOperationException("plugin_dependency_registry_required");
                     IBotPlugin? plugin = null;
                     if (state.Pending != null)
                     {
                         try
                         {
-                            plugin = await StartReleaseAsync(state.Pending, context, ct, resolveSettings);
+                            plugin = await StartReleaseAsync(state.Pending, restrictedContext, ct, resolveSettings);
                             var activated = state with { Previous = state.Active ?? state.Previous,
                                 Active = state.Pending, Pending = null };
                             await _store.SaveAsync(activated, ct);
@@ -141,7 +162,7 @@ public sealed partial class PluginPackageService
                             failures.Add(new PluginPackageFailure(id, "pending-load-failed"));
                         }
                     }
-                    if (plugin == null && state.Active != null) plugin = await StartReleaseAsync(state.Active, context, ct, resolveSettings);
+                    if (plugin == null && state.Active != null) plugin = await StartReleaseAsync(state.Active, restrictedContext, ct, resolveSettings);
                     if (plugin != null)
                     {
                         if (plugin is PluginPythonPackage python) python.Publish();
@@ -157,13 +178,18 @@ public sealed partial class PluginPackageService
     }
 
     private void Publish(InstalledPluginPackage state)
-        => _snapshot = _snapshot.Where(item => item.Id != state.Id).Append(state)
-            .OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
+    {
+        lock (_snapshotLock)
+            _snapshot = _snapshot.Where(item => item.Id != state.Id).Append(state)
+                .OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
+    }
 
     private async Task<IBotPlugin> StartReleaseAsync(PluginPackageManifest manifest, PluginContext context,
-        CancellationToken ct, Func<PluginPackageManifest, string?>? resolveSettings = null, bool enabled = true)
+        CancellationToken ct, Func<PluginPackageManifest, string?>? resolveSettings = null, bool enabled = true, bool coldStart = false, PluginContext? controlContext = null)
     {
-        var bytes = await _store.ReadArchiveAsync(manifest, ct).ConfigureAwait(false);
+        var bytes = _stagedDistributionBytes.TryRemove(manifest.Id + ":" + manifest.Sha256, out var cached)
+            ? cached
+            : await _store.ReadArchiveAsync(manifest, ct).ConfigureAwait(false);
         var runtime = Path.Combine(_store.Root, ".runtime-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(runtime);
         try
@@ -175,7 +201,7 @@ public sealed partial class PluginPackageService
                 return await PluginPythonPackage.StartAsync(manifest, runtime, PythonSources,
                     enabled ? resolveSettings?.Invoke(manifest) : null, enabled, ct).ConfigureAwait(false);
             return await PluginPackageLoader.StartAsync(runtime, config, manifest, context, ct,
-                enabled ? resolveSettings?.Invoke(manifest) : null, enabled);
+                (enabled || manifest.Control) ? resolveSettings?.Invoke(manifest) : null, enabled, coldStart, controlContext);
         }
         catch
         {

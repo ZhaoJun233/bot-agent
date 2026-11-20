@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import TokenQuotaDialog from '../../src/features/capabilities/TokenQuotaDialog.vue'
+import PackageQuotaDialog from '../../../../packages/token-quota/frontend/TokenQuotaDialog.vue'
 import RegisteredPluginSwitch from '../../src/features/capabilities/RegisteredPluginSwitch.vue'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
 import { settingsFor } from '../../src/features/capabilities/plugin-settings'
@@ -27,6 +28,13 @@ async function change(wrapper: ReturnType<typeof editor>['wrapper'], value = '12
 }
 async function submit(wrapper: ReturnType<typeof editor>['wrapper']) { await wrapper.get('form').trigger('submit'); await flushPromises() }
 describe('quota dialog single-intent lifecycle', () => {
+  it('passes only quota methods to the package, without tokens or the full configuration client', async () => {
+    const client = clientWith(); const { wrapper } = editor(client); await flushPromises()
+    const scoped = wrapper.getComponent(PackageQuotaDialog).props('client')
+    expect(scoped).not.toBe(client)
+    expect(Object.keys(scoped).sort()).toEqual(['findQuota', 'listQuotas', 'saveQuota'])
+    expect(Object.isFrozen(scoped)).toBe(true)
+  })
   it('keeps an unknown plugin enablement intent mounted and blocks concurrent quota editing or close', async () => {
     const snapshot = providerSnapshot()
     snapshot.view!.registered.plugins = [{ key: 'preset.feature.token-quota', desiredEnabled: true }]

@@ -231,10 +231,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
                 if (task is not null) return new ZbaTaskFindResult("found", _instanceId, Summary(task), null, null);
             }
 
-            var receipt = _receipts.Find(ReceiptHash(idempotencyKey));
-            if (receipt is null) return new ZbaTaskFindResult("unknown", _instanceId, null, null, null);
-            var code = receipt.InstanceId == _instanceId ? "expired" : "accepted_unknown";
-            return new ZbaTaskFindResult(code, _instanceId, null, receipt.TaskId, receipt.AcceptedAt);
+            return _receipts.FindRecovery(idempotencyKey, _instanceId);
         }
     }
 
@@ -348,17 +345,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
     };
 
     private static string ReceiptHash(string idempotencyKey)
-    {
-        var bytes = Encoding.UTF8.GetBytes(idempotencyKey);
-        try
-        {
-            return Convert.ToHexString(SHA256.HashData(bytes));
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(bytes);
-        }
-    }
+        => ZbaTaskReceiptStore.HashKey(idempotencyKey);
 
     private static string RequestHash(ZbaTaskSubmission submission, string target)
     {

@@ -1,4 +1,17 @@
 import { readonly, ref as vueRef, shallowReactive, shallowReadonly, type Component } from 'vue'
+import { agentPresentation } from '../../../../../packages/agent/frontend/presentation'
+import { conversationPresentation } from '../../../../../packages/conversation/frontend/presentation'
+import { healthReportingPresentation } from '../../../../../packages/health-reporting/frontend/presentation'
+import { modelServicesPresentation } from '../../../../../packages/model-services/frontend/presentation'
+import { musicPresentation } from '../../../../../packages/music/frontend/presentation'
+import { platformPresentation } from '../../../../../packages/platform-qq-private/frontend/presentation'
+import { pokePresentation } from '../../../../../packages/poke/frontend/presentation'
+import { profilesPresentation } from '../../../../../packages/profiles/frontend/presentation'
+import { stickersPresentation } from '../../../../../packages/stickers/frontend/presentation'
+import { quotaPresentation } from '../../../../../packages/token-quota/frontend/presentation'
+import { vibesPresentation } from '../../../../../packages/vibes/frontend/presentation'
+import { voicePresentation } from '../../../../../packages/voice/frontend/presentation'
+import { researchPresentation } from '../../../../../packages/websearch/frontend/presentation'
 import type { ZbaConfigurationView, ZbaPatchSection, ZbaReadField, ZbaSecretSlot } from '../../api/zba'
 
 /**
@@ -8,10 +21,9 @@ import type { ZbaConfigurationView, ZbaPatchSection, ZbaReadField, ZbaSecretSlot
  * 插件相关的设置从配置页挪到能力页的插件卡片上，配置页不再重复展示。
  * 插件 ID 与 PluginGate.CapabilityPlugins 一致；字段键来自 cfg-0.3.3 字段表。
  *
- * 后续接入新插件（预留接口）：
- * - 后端：实现 IBotPlugin，并把 ID 加进 CompositionRoot 的 declaredPlugins，
- *   能力目录里才会出现这张卡片；它的配置字段需要先进 cfg 字段表。
- * - 前端：调用 {@link registerPlugin} 登记一份 {@link PluginSettingsSpec}。
+ * 普通包的声明式设置从获准清单读取，不需要宿主逐 ID 登记。
+ * 此处保留默认发行界面及旧 cfg 字段的过渡展示归属；复杂页面运行时交付由 D2 接入。
+ * - 前端展示：调用 {@link registerPlugin} 登记一份 {@link PluginSettingsSpec}。
  *   登记后卡片自动出现「启用」开关（enableField）与「设置」按钮，
  *   配置页会自动把这些字段过滤掉，不需要改任何页面代码。
  */
@@ -59,89 +71,23 @@ export interface RegisteredPluginSettingsSpec extends PluginSettingsSpec {
   secrets: ZbaSecretSlot[]
 }
 
-const behavior = (...keys: string[]): PluginFieldRef[] => keys.map((key) => ({ section: 'behavior', key }))
-const ref = (section: ZbaPatchSection, key: string): PluginFieldRef => ({ section, key })
-
 const presets: PluginSettingsSpec[] = [
+  conversationPresentation,
+  modelServicesPresentation,
+  agentPresentation,
+  platformPresentation,
+  healthReportingPresentation,
   {
-    pluginKey: 'conversation', kind: 'system', title: '对话功能',
-    summary: '主动开口、分句、消息过滤与审批', fallbackSections: ['behavior', 'music', 'voice']
-  },
-  {
-    pluginKey: 'models', kind: 'system', title: '模型服务',
-    summary: '主模型连接、模型选择、采样参数与 API 凭据', fallbackSections: ['model'], secrets: [0], providers: true
-  },
-  {
-    pluginKey: 'agent', kind: 'system', title: 'Agent 与工具',
-    summary: '任务执行、服务器连接、工具范围与 Agent 密钥', fallbackSections: ['agent'], secrets: [1]
-  },
-  {
-    pluginKey: 'platform', kind: 'system', title: '平台接入与访问策略',
-    summary: '私域、官方与飞书接入、白名单及飞书凭据', fallbackSections: ['platform'], secrets: [3, 4, 5]
-  },
-  {
-    pluginKey: 'reporting', kind: 'system', title: '健康报告',
-    summary: '报告开关、发送时间与接收范围', fallbackSections: ['reporting']
-  },
-  {
-    pluginKey: 'preset.feature.token-quota',
-    title: 'Token 配额',
-    summary: '按来源管理每日 Token 额度与用量；耗尽后进入节能模式',
+    ...quotaPresentation,
     editor: { type: 'component', load: () => import('./TokenQuotaDialog.vue') }
   },
-  {
-    pluginKey: 'preset.feature.music',
-    title: '点歌与音乐解析',
-    summary: '点歌开关、音源、下载与音频分析',
-    enableField: ref('music', 'enableMusic'),
-    sections: ['music']
-  },
-  {
-    pluginKey: 'preset.feature.voice',
-    title: '语音合成',
-    summary: 'TTS 服务、音色与语音参数',
-    enableField: ref('voice', 'enableVoice'),
-    sections: ['voice'],
-    secrets: [2]
-  },
-  {
-    pluginKey: 'preset.feature.stickers',
-    title: '表情包',
-    summary: '表情收录、候选与冷却',
-    enableField: ref('behavior', 'enableStickers'),
-    fields: behavior('enableStickers', 'stickerCandidates', 'stickerCooldownSeconds',
-      'stickerCurateIntervalSeconds', 'stickerLibraryMax')
-  },
-  {
-    pluginKey: 'preset.feature.poke',
-    title: '戳一戳',
-    summary: '开关与冷却',
-    enableField: ref('behavior', 'enablePoke'),
-    fields: behavior('enablePoke', 'pokeCooldownSeconds')
-  },
-  {
-    pluginKey: 'preset.feature.vibes',
-    title: '氛围与心情',
-    summary: '心情保留时长',
-    fields: behavior('moodTtlSeconds')
-  },
-  {
-    pluginKey: 'preset.feature.profiles',
-    title: '人物画像',
-    summary: '画像摘要、巡检与字数预算',
-    enableField: ref('behavior', 'enableProfileSummary'),
-    fields: behavior('enableProfileSummary', 'profileSummaryThreshold', 'profileSummaryIntervalSeconds',
-      'profileSummaryLines', 'profileSummaryMaxChars', 'maxProfileChars', 'profileLookupCount')
-  },
-  {
-    pluginKey: 'preset.feature.websearch',
-    title: '联网搜索与链接预览',
-    summary: '搜索源、结果条数、超时与链接预览',
-    enableField: ref('behavior', 'enableWebSearch'),
-    fields: behavior('enableWebSearch', 'webSearchUseModelSearch', 'webSearchSources', 'webSearchMaxResults',
-      'webSearchTimeoutSeconds', 'webSearchCooldownSeconds', 'enableLinkPreview', 'linkPreviewMax',
-      'linkPreviewTimeoutSeconds')
-  }
+  musicPresentation,
+  voicePresentation,
+  stickersPresentation,
+  pokePresentation,
+  vibesPresentation,
+  profilesPresentation,
+  researchPresentation
 ]
 
 /** 当前登记的插件与系统能力；保持数组接口，登记请走 registerPlugin。 */

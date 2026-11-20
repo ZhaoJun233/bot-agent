@@ -89,12 +89,12 @@ test('中文市场：远端目录离线仍可查看本机内置能力', async ({
   await expect(page.getByTestId('configure-builtin')).toBeEnabled()
 })
 
-test('中文市场：真实合成宿主注册表与 Wire 的八项内置可被客户端解析', async ({ page }) => {
+test('中文市场：真实合成宿主注册表与 Wire 的内置及系统能力包可被客户端解析', async ({ page }) => {
   await page.route('**/zba/v1/plugins/catalog', route => route.fulfill({
     status: 503, json: { error: { code: 'service_unavailable', message: 'Synthetic offline catalog' } }
   }))
   await openMarket(page)
-  await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(8)
+  await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(17)
   await page.getByTestId('marketplace-search').fill('preset.feature.token-quota')
   await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(1)
   await expect(page.getByTestId('marketplace-detail')).toContainText('Token 配额')

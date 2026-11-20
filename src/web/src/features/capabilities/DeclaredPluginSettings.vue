@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { PluginSettingDefinition } from './plugin-manifest'
 import type { PluginSettingDraft, PluginSettingsDraft } from './declared-plugin-settings'
+import { settingNumberHint } from '../../api/plugin-setting-numbers'
 const props = defineProps<{
   definitions: PluginSettingDefinition[]
   draft: PluginSettingsDraft
@@ -41,7 +42,13 @@ function mode(field: PluginSettingDefinition, event: Event): void {
         <select v-if="field.type === 'select'" :id="'plugin-setting-' + field.key" :data-testid="'plugin-setting-' + field.key" :value="props.draft[field.key]?.value ?? ''" @change="input(field, $event)">
           <option value="" disabled>请选择</option><option v-for="choice in field.choices ?? []" :key="choice" :value="choice">{{ choice }}</option>
         </select>
-        <input v-else :id="'plugin-setting-' + field.key" :type="field.type === 'number' ? 'number' : 'text'" :step="field.type === 'number' ? 'any' : undefined" :data-testid="'plugin-setting-' + field.key" :value="props.draft[field.key]?.value ?? ''" autocomplete="off" @input="input(field, $event)">
+        <input v-else :id="'plugin-setting-' + field.key" :type="field.type === 'number' ? 'number' : 'text'"
+          :step="field.type === 'number' ? (field.numberConstraints?.integer ? '1' : 'any') : undefined"
+          :min="field.type === 'number' ? field.numberConstraints?.minimum ?? undefined : undefined"
+          :max="field.type === 'number' ? field.numberConstraints?.maximum ?? undefined : undefined"
+          :aria-describedby="field.type === 'number' && field.numberConstraints ? 'plugin-number-help-' + field.key : undefined"
+          :data-testid="'plugin-setting-' + field.key" :value="props.draft[field.key]?.value ?? ''" autocomplete="off" @input="input(field, $event)">
+        <p v-if="field.type === 'number' && field.numberConstraints" :id="'plugin-number-help-' + field.key" class="field-help">{{ settingNumberHint(field.numberConstraints) }}</p>
       </template>
     </div>
     <p v-if="!props.definitions.length" class="field-help">此插件没有声明可编辑设置。</p>

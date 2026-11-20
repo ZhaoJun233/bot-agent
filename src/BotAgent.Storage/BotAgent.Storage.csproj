@@ -19,4 +19,13 @@
     <Using Include="BotAgent.Storage" />
     <Using Include="BotAgent.Adapters.Persistence" />
   </ItemGroup>
+
+  <!-- Fixed historical recovery inputs, also shipped by their owning package. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Schema/host.token-usage.14-15.up.sql" LogicalName="BotAgent.Schema.host.token-usage.14-15.up.sql" />
+    <EmbeddedResource Include="Schema/host.token-usage.14-15.down.sql" LogicalName="BotAgent.Schema.host.token-usage.14-15.down.sql" />
+    <EmbeddedResource Include="../../packages/token-quota/backend/Schema/preset.token-quota.14-15.up.sql" LogicalName="BotAgent.Schema.preset.token-quota.14-15.up.sql" />
+    <EmbeddedResource Include="../../packages/token-quota/backend/Schema/preset.token-quota.14-15.down.sql" LogicalName="BotAgent.Schema.preset.token-quota.14-15.down.sql" />
+  </ItemGroup>
+
 </Project>

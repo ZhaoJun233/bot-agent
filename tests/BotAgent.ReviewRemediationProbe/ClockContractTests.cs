@@ -16,7 +16,8 @@ using StorageClock = StorageModule::BotAgent.Storage.StorageClock;
 using ModelBreaker = ModelModule::BotAgent.Services.Resilience.ProviderCircuitBreaker;
 using ModelPrompt = ModelModule::BotAgent.Services.Model.PromptBuilder;
 using StorageDatabase = StorageModule::BotAgent.Adapters.Persistence.AppDatabase;
-using StorageQuota = StorageModule::BotAgent.Adapters.Persistence.TenantQuotaStore;
+using StorageQuota = BotAgent.TestFixtures.QuotaFixture;
+using StorageUsage = StorageModule::BotAgent.Adapters.Persistence.TokenUsageStore;
 using StorageSessions = StorageModule::BotAgent.Adapters.Persistence.AgentSessionStore;
 
 namespace BotAgent.ReviewRemediationProbe;
@@ -49,6 +50,10 @@ internal static class ClockContractTests
                     "clock_not_initialized", Check, "model consumer has no system fallback");
                 ExpectCode(() => new StorageQuota().GetQuota("synthetic"),
                     "clock_not_initialized", Check, "storage rejects before database access");
+                ExpectCode(() => new StorageUsage().GetUsage("synthetic"),
+                    "clock_not_initialized", Check, "usage read rejects before database access");
+                ExpectCode(() => new StorageUsage().RecordUsage("synthetic", 1, 1),
+                    "clock_not_initialized", Check, "usage write rejects before database access");
                 Check(!StorageDatabase.IsReady, "uninitialized storage consumer does not initialize database");
             }
             else

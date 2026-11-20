@@ -5,7 +5,9 @@ using System.Text.Json.Nodes;
 using BotAgent.Domain.Mcp;
 using BotAgent.Domain.Permissions;
 using BotAgent.Domain.Tools;
+using BotAgent.Services.Agent;
 using BotAgent.Services.Ops;
+using BotAgent.Services.Plugins;
 
 namespace BotAgent.Services.Mcp;
 
@@ -27,22 +29,31 @@ public sealed class McpToolUseCase
     private readonly IAuditChain? _audit;
     private readonly Action<string>? _log;
     private readonly int _maxCallsPerRun;
+    private readonly PluginManager? _plugins;
     private Snapshot _snapshot = Snapshot.Empty;
 
     public McpToolUseCase(IMcpToolSource source, IAuditChain? audit = null, Action<string>? log = null,
-        int maxCallsPerRun = DefaultMaxCallsPerRun)
+        int maxCallsPerRun = DefaultMaxCallsPerRun, PluginManager? plugins = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _audit = audit;
         _log = log;
         _maxCallsPerRun = Math.Clamp(maxCallsPerRun, 1, 32);
+        _plugins = plugins;
     }
 
-    /// <summary>配置层面是否启用（false 时不发生任何网络 I/O）。</summary>
-    public bool Enabled => _source.Enabled;
+    private IMcpToolsContribution? CurrentMcpTools
+        => _plugins is not null && _plugins.TryGetContribution<IMcpToolsContribution>("system.mcp-tools", out var contribution)
+            ? contribution
+            : null;
+
+    private bool PluginAvailable => _plugins is null || CurrentMcpTools is not null;
+
+    /// <summary>配置层面与系统包层面均启用（false 时不发生任何网络 I/O）。</summary>
+    public bool Enabled => _source.Enabled && PluginAvailable;
 
     /// <summary>最近一次成功发现的工具（只读快照）。</summary>
-    public IReadOnlyList<McpToolInfo> Tools => Volatile.Read(ref _snapshot).Tools;
+    public IReadOnlyList<McpToolInfo> Tools => PluginAvailable ? Volatile.Read(ref _snapshot).Tools : Array.Empty<McpToolInfo>();
 
     public int ToolCount => Tools.Count;
 
@@ -52,7 +63,7 @@ public sealed class McpToolUseCase
     /// </summary>
     public async Task<int> RefreshAsync(CancellationToken ct)
     {
-        if (!_source.Enabled)
+        if (!Enabled)
         {
             Volatile.Write(ref _snapshot, Snapshot.Empty);
             return 0;
@@ -91,6 +102,7 @@ public sealed class McpToolUseCase
     /// </summary>
     public string PromptText(ToolScope? scope = null)
     {
+        if (!PluginAvailable) return string.Empty;
         var snapshot = Volatile.Read(ref _snapshot);
         if (snapshot.Tools.Length == 0)
         {
@@ -125,7 +137,7 @@ public sealed class McpToolUseCase
     public ToolDecision Check(string conversationKey, string toolId, int callIndex)
     {
         var snapshot = Volatile.Read(ref _snapshot);
-        if (!_source.Enabled)
+        if (!Enabled)
         {
             return new ToolDecision(false, "mcp_disabled");
         }
@@ -145,6 +157,7 @@ public sealed class McpToolUseCase
     /// </summary>
     public IReadOnlyList<McpToolInfo> CaptureLocalLeases(IEnumerable<string> names)
     {
+        if (!PluginAvailable) return Array.Empty<McpToolInfo>();
         var snapshot = Volatile.Read(ref _snapshot);
         return names.Distinct(StringComparer.Ordinal).Select(name => snapshot.Routes.GetValueOrDefault(name))
             .Where(tool => tool is { IsLocalProcess: true } && _source.IsToolCurrent(tool)).Cast<McpToolInfo>().ToArray();
@@ -166,7 +179,7 @@ public sealed class McpToolUseCase
             return ToolOutcome.Failure("mcp_source_changed", "Python tool requires its admitted process generation.", "mcp_source_changed");
         var policy = admittedLease is { IsLocalProcess: true }
             ? snapshot.Policy with { HighRiskExceptions = new HashSet<string>(StringComparer.Ordinal) { toolId } } : snapshot.Policy;
-        var decision = !_source.Enabled ? new ToolDecision(false, "mcp_disabled") :
+        var decision = !Enabled ? new ToolDecision(false, "mcp_disabled") :
             ToolGate.Evaluate(snapshot.Registry, policy, new ToolRequest(toolId, conversationKey, callIndex));
         if (!decision.Allow)
         {
@@ -285,8 +298,27 @@ public sealed class McpToolUseCase
         return new Snapshot(tools.ToImmutable(), routes, registry, policy, CountServers(routes));
     }
 
-    private static int CountServers(Dictionary<string, McpToolInfo> routes)
-        => routes.Values.Select(tool => tool.ServerId).Distinct(StringComparer.Ordinal).Count();
+    private int CountServers(Dictionary<string, McpToolInfo> routes)
+    {
+        var remote = routes.Values.Where(t => !t.IsLocalProcess).Select(t => t.ServerId);
+        var local = routes.Values.Where(t => t.IsLocalProcess).Select(t => t.ServerId);
+        if (CurrentMcpTools is { } mcpTools)
+        {
+            try
+            {
+                var merged = mcpTools.MergeToolSources(remote, local);
+                if (merged.Length > 0)
+                {
+                    return merged.Length;
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+            }
+        }
+
+        return routes.Values.Select(tool => tool.ServerId).Distinct(StringComparer.Ordinal).Count();
+    }
 
     private static bool Valid(McpToolInfo tool)
         => !string.IsNullOrWhiteSpace(tool.Name)

@@ -1,0 +1,727 @@
+{
+  "schemaVersion": 1,
+  "baselines": {
+    "dotnet": {
+      "id": "probe.manifest.contract",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.Plugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "minimumHostVersion": "1.0.0",
+      "permissions": [
+        "data.read",
+        "message.send"
+      ],
+      "dependencies": [
+        {
+          "id": "probe.dependency",
+          "version": "1.0.0"
+        }
+      ],
+      "settings": [
+        {
+          "key": "mode",
+          "label": "Mode",
+          "type": "select",
+          "defaultValue": "basic",
+          "required": false,
+          "choices": [
+            "basic",
+            "advanced"
+          ]
+        }
+      ],
+      "control": false
+    },
+    "python": {
+      "id": "probe.manifest.contract",
+      "version": "1.0.0",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 2,
+      "minimumHostVersion": "1.0.0",
+      "permissions": [
+        "data.read",
+        "message.send"
+      ],
+      "dependencies": [
+        {
+          "id": "probe.dependency",
+          "version": "1.0.0"
+        }
+      ],
+      "settings": [
+        {
+          "key": "mode",
+          "label": "Mode",
+          "type": "select",
+          "defaultValue": "basic",
+          "required": false,
+          "choices": [
+            "basic",
+            "advanced"
+          ]
+        }
+      ],
+      "runtime": {
+        "kind": "python",
+        "protocolVersion": 1,
+        "entryPoint": "main.py",
+        "minimumPythonVersion": "3.11",
+        "dependencyMode": "stdlib-only",
+        "tools": [
+          "probe"
+        ]
+      }
+    },
+    "shared": {
+      "id": "probe.manifest.contract",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.Plugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "minimumHostVersion": "1.0.0",
+      "permissions": [
+        "data.read",
+        "message.send"
+      ],
+      "dependencies": [
+        {
+          "id": "probe.dependency",
+          "version": "1.0.0"
+        }
+      ],
+      "settings": [
+        {
+          "key": "mode",
+          "label": "Mode",
+          "type": "select",
+          "defaultValue": "basic",
+          "required": false,
+          "choices": [
+            "basic",
+            "advanced"
+          ]
+        }
+      ],
+      "sharedContracts": [
+        {
+          "name": "Synthetic.Contracts",
+          "version": "1.0.0.0",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "owner": "probe.manifest.contract"
+        }
+      ]
+    },
+    "data": {
+      "id": "probe.manifest.contract",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.Plugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "minimumHostVersion": "1.0.0",
+      "permissions": [
+        "data.read",
+        "message.send"
+      ],
+      "dependencies": [
+        {
+          "id": "probe.dependency",
+          "version": "1.0.0"
+        }
+      ],
+      "settings": [
+        {
+          "key": "mode",
+          "label": "Mode",
+          "type": "select",
+          "defaultValue": "basic",
+          "required": false,
+          "choices": [
+            "basic",
+            "advanced"
+          ]
+        }
+      ],
+      "data": {
+        "tables": [
+          "synthetic_owned"
+        ],
+        "statePrefixes": [
+          "synthetic:owned:"
+        ],
+        "usage": false,
+        "audit": false,
+        "receipt": {
+          "contract": "synthetic.operation",
+          "version": "1"
+        }
+      }
+    },
+    "tools": {
+      "id": "probe.manifest.contract",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.Plugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "minimumHostVersion": "1.0.0",
+      "permissions": [
+        "data.read",
+        "message.send"
+      ],
+      "dependencies": [
+        {
+          "id": "probe.dependency",
+          "version": "1.0.0"
+        }
+      ],
+      "settings": [
+        {
+          "key": "mode",
+          "label": "Mode",
+          "type": "select",
+          "defaultValue": "basic",
+          "required": false,
+          "choices": [
+            "basic",
+            "advanced"
+          ]
+        }
+      ],
+      "control": false,
+      "toolApiVersion": 1
+    },
+    "configuration": {
+      "id": "preset.feature.websearch",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.Plugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "settings": [
+        { "key": "webSearchSources", "label": "Sources", "type": "string", "defaultValue": "synthetic" },
+        { "key": "enableWebSearch", "label": "Search", "type": "boolean", "defaultValue": "true" }
+      ],
+      "configuration": {
+        "apiVersion": 1,
+        "bindings": [
+          { "key": "webSearchSources", "legacyFieldId": 138, "readOnly": false, "trim": false },
+          { "key": "enableWebSearch", "legacyFieldId": 49, "readOnly": false, "trim": false },
+          { "key": "webSearchReadMaxChars", "legacyFieldId": null, "readOnly": true, "trim": false }
+        ]
+      }
+    },
+    "bounded": {
+      "id": "probe.manifest.contract",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.Plugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "minimumHostVersion": "1.0.0",
+      "permissions": [
+        "data.read",
+        "message.send"
+      ],
+      "dependencies": [
+        {
+          "id": "probe.dependency",
+          "version": "1.0.0"
+        }
+      ],
+      "settings": [
+        {
+          "key": "limit",
+          "label": "Result limit",
+          "type": "number",
+          "defaultValue": "5",
+          "required": true,
+          "choices": [],
+          "numberConstraints": {
+            "minimum": 0,
+            "maximum": 10,
+            "integer": true
+          }
+        }
+      ],
+      "control": false
+    },
+    "ui": {
+      "id": "probe.manifest.ui",
+      "version": "1.0.0",
+      "entryAssembly": "plugin.dll",
+      "entryType": "Synthetic.UiPlugin",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "downloadUrl": "https://example.com/plugin-ui.zip",
+      "apiVersion": 1,
+      "targetFramework": "net10.0",
+      "minimumHostVersion": "1.0.0",
+      "permissions": [],
+      "dependencies": [],
+      "settings": [],
+      "control": false,
+      "adoption": "cold",
+      "exclusiveResources": [
+        "platform.connection"
+      ],
+      "ui": {
+        "contractVersion": 1,
+        "entry": "web/index.html",
+        "kind": "dialog",
+        "title": "Synthetic UI",
+        "allowedActions": [
+          "settings.read"
+        ],
+        "assets": [
+          {
+            "path": "web/index.html",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "contentType": "text/html; charset=utf-8"
+          }
+        ]
+      }
+    }
+  },
+  "cases": [
+    { "base": "configuration", "path": "configuration.apiVersion", "value": 2, "valid": false },
+    { "base": "configuration", "path": "configuration.bindings.0.key", "value": "model", "valid": false },
+    { "base": "configuration", "path": "configuration.bindings.0.legacyFieldId", "value": 139, "valid": false, "frontendValid": true },
+    { "base": "configuration", "path": "configuration.bindings.0.readOnly", "value": true, "valid": false },
+    { "base": "configuration", "path": "configuration.bindings.0.trim", "value": true, "valid": true },
+    { "base": "configuration", "path": "configuration.bindings.1.trim", "value": true, "valid": false },
+    { "base": "configuration", "path": "configuration.bindings.2.legacyFieldId", "value": 138, "valid": false },
+    { "base": "configuration", "path": "configuration.bindings.2.readOnly", "value": false, "valid": false },
+    { "base": "configuration", "path": "configuration.bindings.2.trim", "value": true, "valid": false },
+    {
+      "base": "dotnet",
+      "path": "id",
+      "value": "probe.manifest.other",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "version",
+      "value": "1.1.0",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "entryAssembly",
+      "value": "other.dll",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "entryType",
+      "value": "Synthetic.Other",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "sha256",
+      "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "downloadUrl",
+      "value": "https://example.com/other.zip",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "targetFramework",
+      "value": "net8.0",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "minimumHostVersion",
+      "value": "1.1.0",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "permissions",
+      "value": [
+        "data.read"
+      ],
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "dependencies.0.id",
+      "value": "probe.other",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "dependencies.0.version",
+      "value": "2.0.0",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "settings.0.key",
+      "value": "mode2",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "settings.0.label",
+      "value": "Other mode",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "settings.0.type",
+      "value": "string",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "settings.0.defaultValue",
+      "value": "advanced",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "settings.0.required",
+      "value": true,
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "settings.0.choices",
+      "value": [
+        "basic",
+        "advanced",
+        "third"
+      ],
+      "valid": true
+    },
+    {
+      "base": "python",
+      "path": "runtime.entryPoint",
+      "value": "other.py",
+      "valid": true
+    },
+    {
+      "base": "python",
+      "path": "runtime.minimumPythonVersion",
+      "value": "3.12",
+      "valid": true
+    },
+    {
+      "base": "python",
+      "path": "runtime.tools",
+      "value": [
+        "probe",
+        "second"
+      ],
+      "valid": true
+    },
+    {
+      "base": "python",
+      "path": "runtime.kind",
+      "value": "other",
+      "valid": false
+    },
+    {
+      "base": "python",
+      "path": "runtime.protocolVersion",
+      "value": 2,
+      "valid": false
+    },
+    {
+      "base": "python",
+      "path": "runtime.dependencyMode",
+      "value": "pip",
+      "valid": false
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.name",
+      "value": "Synthetic.OtherContracts",
+      "valid": true
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.version",
+      "value": "1.1.0.0",
+      "valid": true
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.sha256",
+      "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "valid": true
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.owner",
+      "value": "probe.dependency",
+      "valid": true
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.version",
+      "value": "1x0x0x0",
+      "valid": false
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.version",
+      "value": "1.0.0.65535",
+      "valid": false
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.name",
+      "value": "BotAgent.Core",
+      "valid": false
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.name",
+      "value": "plugin",
+      "valid": false
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.owner",
+      "value": "probe.undeclared",
+      "valid": false
+    },
+    {
+      "base": "data",
+      "path": "data.tables",
+      "value": [
+        "synthetic_other"
+      ],
+      "valid": true
+    },
+    {
+      "base": "data",
+      "path": "data.statePrefixes",
+      "value": [
+        "synthetic:changed:"
+      ],
+      "valid": true
+    },
+    {
+      "base": "data",
+      "path": "data.usage",
+      "value": true,
+      "valid": true
+    },
+    {
+      "base": "data",
+      "path": "data.audit",
+      "value": true,
+      "valid": true
+    },
+    {
+      "base": "data",
+      "path": "data.receipt.contract",
+      "value": "synthetic.changed",
+      "valid": true
+    },
+    {
+      "base": "data",
+      "path": "data.receipt.version",
+      "value": "2",
+      "valid": true
+    },
+    {
+      "base": "data",
+      "path": "data.tables",
+      "value": [
+        "token_usage"
+      ],
+      "valid": false
+    },
+    {
+      "base": "data",
+      "path": "data.tables",
+      "value": [
+        "sqlite_master"
+      ],
+      "valid": false
+    },
+    {
+      "base": "data",
+      "path": "data.tables",
+      "value": [
+        "meta"
+      ],
+      "valid": false
+    },
+    {
+      "base": "data",
+      "path": "data.tables",
+      "value": [
+        "synthetic_owned",
+        "synthetic_owned"
+      ],
+      "valid": false
+    },
+    {
+      "base": "data",
+      "path": "data.statePrefixes",
+      "value": [
+        "operation-recovery:"
+      ],
+      "valid": false
+    },
+    {
+      "base": "data",
+      "path": "data.receipt.version",
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "valid": false
+    },
+    {
+      "base": "dotnet",
+      "path": "control",
+      "value": true,
+      "valid": true
+    },
+    {
+      "base": "shared",
+      "path": "sharedContracts.0.name",
+      "value": "BotAgent.Plugin.Contracts",
+      "valid": false
+    },
+    {
+      "base": "dotnet",
+      "path": "permissions",
+      "value": [
+        "network.public-read"
+      ],
+      "valid": true
+    },
+    {
+      "base": "python",
+      "path": "permissions",
+      "value": [
+        "network.public-read"
+      ],
+      "valid": false
+    },
+    {
+      "base": "dotnet",
+      "path": "toolApiVersion",
+      "value": 1,
+      "valid": true
+    },
+    {
+      "base": "tools",
+      "path": "toolApiVersion",
+      "value": 2,
+      "valid": false
+    },
+    {
+      "base": "tools",
+      "path": "toolApiVersion",
+      "value": 0,
+      "valid": false
+    },
+    {
+      "base": "tools",
+      "path": "toolApiVersion",
+      "value": null,
+      "valid": true
+    },
+    {
+      "base": "bounded",
+      "path": "settings.0.numberConstraints.minimum",
+      "value": 1,
+      "valid": true
+    },
+    {
+      "base": "bounded",
+      "path": "settings.0.numberConstraints.maximum",
+      "value": 20,
+      "valid": true
+    },
+    {
+      "base": "bounded",
+      "path": "settings.0.numberConstraints.integer",
+      "value": false,
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "adoption",
+      "value": "cold",
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "adoption",
+      "value": "unknown",
+      "valid": false
+    },
+    {
+      "base": "dotnet",
+      "path": "exclusiveResources",
+      "value": [
+        "platform.connection.synthetic"
+      ],
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "ui",
+      "value": {
+        "contractVersion": 1,
+        "entry": "web/index.html",
+        "assets": [
+          {
+            "path": "web/index.html",
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "contentType": "text/html; charset=utf-8"
+          }
+        ],
+        "allowedActions": [
+          "dialog.close"
+        ],
+        "kind": "dialog",
+        "title": "Synthetic UI"
+      },
+      "valid": true
+    },
+    {
+      "base": "dotnet",
+      "path": "ui",
+      "value": {
+        "contractVersion": 99,
+        "entry": "web/index.html",
+        "assets": [
+          {
+            "path": "web/index.html",
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "contentType": "text/html; charset=utf-8"
+          }
+        ]
+      },
+      "valid": false
+    }
+  ]
+}

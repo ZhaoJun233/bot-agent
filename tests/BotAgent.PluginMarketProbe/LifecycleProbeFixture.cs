@@ -16,6 +16,7 @@ internal partial class Program
         internal readonly PluginMarketService Market;
         internal DateTimeOffset Now = DateTimeOffset.UnixEpoch.AddDays(20);
         internal Func<string?, CancellationToken, Task>? Reload;
+        internal bool CanReload = true;
         internal readonly PluginPackageManifest First;
         internal LifecycleFixture(string root, string id)
         {
@@ -25,7 +26,8 @@ internal partial class Program
             First = ReviewManifest(Http.Bytes, id, "1.0.0", "probe.dll", "SyntheticEntry");
             Market = new(Packages, Settings, new PluginCatalogSource(Http, _ => { }), () => Now,
                 Path.Combine(Root, "operations.json"), desiredStates: () => Desired,
-                reload: (pluginId, ct) => Reload is null ? LifecycleTestRequests.Settle(Packages, pluginId!) : Reload(pluginId, ct));
+                reload: (pluginId, ct) => Reload is null ? LifecycleTestRequests.Settle(Packages, pluginId!) : Reload(pluginId, ct),
+                canReload: () => CanReload);
         }
         internal async Task Start(PluginPackageManifest? manifest = null)
         { await Packages.StageInstallAsync(manifest ?? First); await LifecycleTestRequests.Settle(Packages, First.Id); }

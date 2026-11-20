@@ -162,22 +162,9 @@ internal sealed class ManagedCapabilityService : IManagedCapabilities, IAsyncDis
         return _store.FindManaged(caller, request.Key);
     }
 
-    public async ValueTask<ManagedOperationResult> QueryAsync(ConfigurationCaller caller, ManagedOperationKey key,
+    public ValueTask<ManagedOperationResult> QueryAsync(ConfigurationCaller caller, ManagedOperationKey key,
         CancellationToken ct = default)
-    {
-        if (!ConfigurationStore.ValidManagedCaller(caller)) return Result(ManagedResultCode.Forbidden);
-        if (!ConfigurationStore.ValidManagedKey(key)) return Result(ManagedResultCode.ValidationFailed);
-        try
-        {
-            var original = _store.PeekManaged(caller, key);
-            if (original is null) return Result(ManagedResultCode.Forbidden);
-            var allowed = await Authorize(caller, original.Target, ManagedPermission.Query, original.Action, ct);
-            return allowed is true ? _store.FindManaged(caller, key)
-                : Result(allowed is null ? ManagedResultCode.Unknown : ManagedResultCode.Forbidden);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception) { return Result(ManagedResultCode.StorageUnavailable); }
-    }
+        => _store.QueryManagedAsync(caller, key, _authorization, ct);
 
     public async ValueTask<ManagedCancellationResult> CancelAsync(ConfigurationCaller caller, ManagedOperationKey key,
         CancellationToken ct = default)

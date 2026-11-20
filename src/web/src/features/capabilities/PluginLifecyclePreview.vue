@@ -6,7 +6,7 @@ import { lifecycleManifest } from '../../api/plugin-lifecycle-diff'
 const props = defineProps<{ preview: PluginLifecyclePreview; acknowledged: boolean; expired: boolean; canConfirm: boolean }>()
 const emit = defineEmits<{ 'update:acknowledged': [value: boolean]; confirm: []; cancel: [] }>()
 const action = computed(() => ({ update: '升级', rollback: '回退', uninstall: '卸载' })[props.preview.kind])
-const names: Record<string, string> = { id: '插件 ID', version: '版本', sha256: 'SHA-256', downloadUrl: '下载地址', entryAssembly: '入口程序集', entryType: '入口类型', apiVersion: '插件 API', targetFramework: '目标框架', runtime: 'Python 运行时与工具声明', minimumHostVersion: '最低宿主版本', permissions: '权限', dependencies: '依赖（精确版本）', settings: '设置定义' }
+const names: Record<string, string> = { id: '插件 ID', version: '版本', sha256: 'SHA-256', downloadUrl: '下载地址', entryAssembly: '入口程序集', entryType: '入口类型', apiVersion: '插件 API', targetFramework: '目标框架', runtime: 'Python 运行时与工具声明', minimumHostVersion: '最低宿主版本', permissions: '权限', dependencies: '依赖（精确版本）', settings: '设置定义', control: '业务停用后保留管理能力', ui: '独立插件界面', adoption: '采用方式', exclusiveResources: '独占宿主资源', sharedContracts: '共享契约', data: '插件数据隔离', configuration: '配置绑定', toolApiVersion: '工具契约版本' }
 function pretty(value: string | null): string {
   if (value === null) return '（不存在）'
   try { const parsed: unknown = JSON.parse(value); return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2) } catch { return value }

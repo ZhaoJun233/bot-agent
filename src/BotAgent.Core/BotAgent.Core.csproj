@@ -7,6 +7,20 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../contracts/plugin/BotAgent.Plugin.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/quota/BotAgent.Quota.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/research/BotAgent.Research.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/poke/BotAgent.Poke.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/vibes/BotAgent.Vibes.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/stickers/BotAgent.Stickers.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/music/BotAgent.Music.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/voice/BotAgent.Voice.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/profiles/BotAgent.Profiles.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/healthreporting/BotAgent.HealthReporting.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/modelservices/BotAgent.ModelServices.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/agent/BotAgent.Agent.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/conversation/BotAgent.Conversation.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/platforms/BotAgent.Platforms.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
   </ItemGroup>

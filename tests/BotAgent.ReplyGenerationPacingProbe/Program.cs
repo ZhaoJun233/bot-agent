@@ -187,7 +187,7 @@ sealed class Fixture
         EnableVoice = true, EnableStickers = true, EnablePoke = true, EnableApprovals = true,
         EnableQuestions = true, MaxAgentSteps = 3, AdaptiveSamplingEnabled = false
     };
-    public ChatCapabilitySet Caps { get; } = ChatCapabilitySet.FromSwitches(true, true, true, true, true, null);
+    public ChatCapabilitySet Caps { get; } = ResearchToolFixture.Capabilities(true, true, true, true, true, null);
     public IModelClient Model { get; }
     public TurnInputs Turn { get; }
     public Dictionary<string, object?> Last { get; } = new();

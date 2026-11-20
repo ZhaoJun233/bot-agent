@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\src\BotAgent.Headless\BotAgent.Headless.csproj" />
     <ProjectReference Include="../../src/BotAgent.Storage/BotAgent.Storage.csproj" Aliases="StorageModule" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj" />
+    <Compile Include="../shared/QuotaFixture.cs" Link="Fixtures/QuotaFixture.cs" />
+  </ItemGroup>
 </Project>

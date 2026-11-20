@@ -1,6 +1,9 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using BotAgent.Panel;
 
 namespace BotAgent.Adapters.Persistence;
 
@@ -75,6 +78,21 @@ internal sealed class ZbaTaskReceiptStore
             if (pruned) SaveLocked(_receipts);
             return _receipts.FirstOrDefault(receipt => receipt.KeyHash == keyHash);
         }
+    }
+
+    internal ZbaTaskFindResult FindRecovery(string idempotencyKey, string instanceId)
+    {
+        var receipt = Find(HashKey(idempotencyKey));
+        if (receipt is null) return new("unknown", instanceId, null, null, null);
+        return new(receipt.InstanceId == instanceId ? "expired" : "accepted_unknown",
+            instanceId, null, receipt.TaskId, receipt.AcceptedAt);
+    }
+
+    internal static string HashKey(string idempotencyKey)
+    {
+        var bytes = Encoding.UTF8.GetBytes(idempotencyKey);
+        try { return Convert.ToHexString(SHA256.HashData(bytes)); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
     private List<ZbaTaskReceipt> PruneLocked(List<ZbaTaskReceipt> receipts, out bool changed)

@@ -66,12 +66,15 @@ internal sealed class Fixture : IAsyncDisposable
         var policy = new FixedPolicy();
         var plain = new PlainSender(box, Source, Registry, EmptyProxy.Create<IPanelNotifier>(), ledger, Logs.Enqueue, traces, platformPolicies: policy);
         var participation = new ParticipationUseCase(box, Logs.Enqueue);
+        var toolCatalog = ResearchToolFixture.Create(Research);
         var approvals = new ApprovalUseCase(box,
             new ApprovalHooks(Logs.Enqueue, (_, _) => "synthetic", (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
-            new SessionPolicyLedger(), traces);
+            new SessionPolicyLedger(), traces, catalog: () => toolCatalog);
         var poke = new PokeUseCase(box, new PokeHooks(() => 10001, (_, _) => true,
             Registry.GetOrCreate, (_, _) => { }, (_, _) => { }, Logs.Enqueue, _ => { }));
         _stickers = new StickerService(EmptyProxy.Create<IStickerRepository>(), Model.Client, Source, box, Logs.Enqueue);
+        _stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+            new BotAgent.Packages.Stickers.StickerCoordinator(_stickers.CreateHostPorts()));
         Pipeline = new ReplyPipeline(box, Source, Model.Client, profiles, Registry,
             EmptyProxy.Create<IPanelNotifier>(), new WhitelistGate(box, policy), approvals, participation, poke,
             new VibeTracker(), new MemberRoleUseCase(Source, EmptyProxy.Create<IMemberRoleRepository>(), Logs.Enqueue),

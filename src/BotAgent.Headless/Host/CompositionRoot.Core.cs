@@ -81,6 +81,12 @@ internal static partial class CompositionRoot
     /// </summary>
     private static void AssembleCore(Assembly a)
     {
+        AssembleControlCore(a);
+        AssembleBusinessCore(a);
+    }
+
+    private static void AssembleControlCore(Assembly a)
+    {
         var settings = a.Settings;
         // 配置的唯一发布点：所有组件都从它读"当前生效的那一份"。
         // 面板热更新换的是它背后的实例（不是就地改共享对象），这样在途的那一轮不会读到半新半旧的配置
@@ -100,8 +106,9 @@ internal static partial class CompositionRoot
         // 路由解析、回读投影与托管能力描述都从这里读 —— 全进程只有这一份，不再各自抄启动快照。
         a.ModelRegistry = new ModelProviderRegistry(Array.Empty<PersistedModelProvider>());
         a.Ui = new PanelNotifier();
-        a.Quotas = new TenantQuotaStore();
-        a.PluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), a.Ui.EmitLog, a.Quotas);
+        a.Usage = new TokenUsageStore();
+        a.PluginRuntime = new PluginRuntime(Path.Combine(AppPaths.DataDir, "plugins"), a.Ui.EmitLog);
+        a.Quotas = a.PluginRuntime.Registry.CreateControlEntryPoint<BotAgent.Domain.Ports.IQuotaOperations>("preset.feature.token-quota");
         // 注册表投影的读口：每次保存都重新读库（在同一个事务里），不缓存。
         a.ReadRegistered = (connection, kind) =>
         {
@@ -128,7 +135,10 @@ internal static partial class CompositionRoot
             next.RuntimePlatformPolicyBaselineSources = initialized.RuntimePlatformPolicyBaselineSources;
         });
         a.ModelRegistry.Initialize(a.ProviderStore.LoadAll().ToArray());
+    }
 
+    private static void AssembleBusinessCore(Assembly a)
+    {
         a.RiskBackoff = new ProtocolRiskBackoff(msg => FileLog.Write("OneBot", msg));
         a.InboundDedup = new FeishuWebhookDedupStore();
     }

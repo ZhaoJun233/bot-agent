@@ -17,6 +17,9 @@ public enum ToolOrigin
 
     /// <summary>运行时从 MCP 服务器发现的外部工具（描述是不可信数据）。</summary>
     Mcp = 1,
+
+    /// <summary>Declared and executed by one managed plugin generation.</summary>
+    Plugin = 2,
 }
 
 /// <summary>

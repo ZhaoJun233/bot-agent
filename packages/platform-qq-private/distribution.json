@@ -1,0 +1,18 @@
+{
+  "id": "system.platform-qq-private",
+  "entryAssembly": "BotAgent.Package.PlatformQqPrivate.dll",
+  "entryType": "BotAgent.Packages.PlatformQqPrivate.PlatformQqPrivatePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "exclusiveResources": [
+    "platform.connection.qq-private"
+  ],
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Platforms.Contracts",
+      "owner": "system.platform-local"
+    }
+  ]
+}

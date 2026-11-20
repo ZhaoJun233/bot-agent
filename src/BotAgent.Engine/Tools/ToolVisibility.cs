@@ -25,7 +25,8 @@ public sealed class ToolVisibility(
     PluginGate? plugins = null,
     IPlatformPolicyResolver? policies = null,
     Func<bool>? isDisposed = null,
-    Func<bool>? webReady = null)
+    Func<bool>? webReady = null,
+    Func<ChatToolCatalog>? catalog = null)
 {
     /// <summary>
     /// 这条租约现在还成立吗？false = 换代/停机后**所有**工具都不可见（不是逐个工具判断）。
@@ -33,11 +34,13 @@ public sealed class ToolVisibility(
     public bool IsCurrent => isDisposed?.Invoke() != true && PlatformSourceExecution.Current is not { IsCurrent: false };
 
     /// <summary>这个工具在这一轮、这个策略快照下是否可见（含插件门禁、面板开关、场景/平台策略）。</summary>
-    public bool Allows(AppSettings snapshot, EffectivePlatformPolicy? pinned, string toolId)
+    public bool Allows(AppSettings snapshot, EffectivePlatformPolicy? pinned, string toolId, ChatToolCatalog? pinnedTools = null)
     {
         if (!IsCurrent || plugins?.AllowsTool(toolId) == false) return false;
-        var spec = ChatToolSpecs.Find(toolId);
+        var tools = pinnedTools ?? catalog?.Invoke() ?? ChatToolCatalog.Builtin;
+        var spec = tools.Find(toolId);
         if (spec is null) return false;   // 没登记的工具一律不可见（Fail-Closed，与改造前一致）
+        if (tools.FindBinding(toolId) is { IsReady: false }) return false;
 
         var switches = new ToolSwitchState(
             snapshot.EnableWebSearch && webReady?.Invoke() != false,
@@ -65,5 +68,8 @@ public sealed class ToolVisibility(
 
     /// <summary>本轮可见工具按目录顺序（给提示词渲染用；不可见的不进清单）。</summary>
     public IReadOnlyList<ToolSpec> Visible(AppSettings snapshot, EffectivePlatformPolicy? pinned)
-        => ChatToolSpecs.All.Where(spec => spec.PromptVisible && Allows(snapshot, pinned, spec.Id)).ToArray();
+    {
+        var tools = catalog?.Invoke() ?? ChatToolCatalog.Builtin;
+        return tools.Specs.Where(spec => spec.PromptVisible && Allows(snapshot, pinned, spec.Id, tools)).ToArray();
+    }
 }

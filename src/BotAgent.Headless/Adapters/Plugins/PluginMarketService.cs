@@ -32,7 +32,10 @@ public sealed partial class PluginMarketService
     private readonly Func<IReadOnlyDictionary<string, bool>>? _desiredStates;
     private readonly Action<string>? _log;
     private readonly Func<string?, CancellationToken, Task>? _reload;
+    private readonly Func<bool>? _canReload;
+    private bool SupportsRuntimeReload => _reload is not null && (_canReload?.Invoke() ?? true);
     private readonly Func<IReadOnlyList<PluginInfo>>? _registrySnapshot;
+    internal PluginUiAssetService? UiAssets { get; set; }
     private PluginPresentationCatalog _presentation = PluginPresentationCatalog.Unavailable();
 
     /// <param name="receiptPath">回执文件；缺省落在运行根的 plugins/operations.json（有界、原子写）。</param>
@@ -40,7 +43,7 @@ public sealed partial class PluginMarketService
         PluginCatalogSource catalog, Func<DateTimeOffset> now, string receiptPath,
         Func<IReadOnlyDictionary<string, bool>>? desiredStates = null, Action<string>? log = null,
         Func<string?, CancellationToken, Task>? reload = null,
-        Func<IReadOnlyList<PluginInfo>>? registrySnapshot = null)
+        Func<IReadOnlyList<PluginInfo>>? registrySnapshot = null, Func<bool>? canReload = null)
     {
         _packages = packages ?? throw new ArgumentNullException(nameof(packages));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -50,6 +53,7 @@ public sealed partial class PluginMarketService
         _desiredStates = desiredStates;
         _log = log;
         _reload = reload;
+        _canReload = canReload;
         _registrySnapshot = registrySnapshot;
         _imports = new PluginImportSnapshots(now);
         _repositories = new PluginRepositorySource(catalog);
@@ -91,11 +95,12 @@ public sealed partial class PluginMarketService
         var categories = entries.Select(e => e.Metadata?.Category ?? FallbackCategory)
             .Concat(builtins.Select(b => b.Metadata.Category)).Distinct(StringComparer.Ordinal)
             .OrderBy(c => c, StringComparer.Ordinal).ToArray();
-        return new ZbaPluginCatalog(await RevisionAsync(ct).ConfigureAwait(false), source, TrustNotice, categories,
+        return new ZbaPluginCatalog(PluginPackageRevision.Of(installed), source, TrustNotice, categories,
             entries.Where(e => Matches(e.Manifest.Id, e.Metadata, query, category)).ToArray())
         {
             BuiltinPlugins = builtins.Where(b => Matches(b.PluginId, b.Metadata, query, category)).ToArray(),
             GovernanceSource = _packages.Governance.Source,
+            MetadataFailures = MetadataFailures(installed),
             MetadataNotice = catalogUnavailable ? "市场目录暂不可用；仍可查看宿主实际注册的内置插件。" : presentation.Notice
         };
     }
@@ -105,19 +110,23 @@ public sealed partial class PluginMarketService
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var desired = DesiredStates();
         var presentation = _presentation;
+        var registered = _registrySnapshot?.Invoke() ?? [];
         var compatibility = await ReadCompatibilityAsync(installed.Select(p => p.Active ?? p.Pending)
             .Where(m => m is not null).Cast<PluginPackageManifest>(), ct).ConfigureAwait(false);
         var entries = installed
             .Select(package => package.Active ?? package.Pending)
             .Where(manifest => manifest is not null)
-            .Select(manifest => Project(manifest!, installed, desired) with { Metadata = presentation.ForPackage(manifest!),
+            .Select(manifest => Project(manifest!, installed, desired) with
+                { Metadata = presentation.ForInstalledPackage(manifest!, registered.FirstOrDefault(p => p.Id == manifest!.Id),
+                    _packages.IsHostDistributionRelease(manifest!)),
                 IsCompatible = compatibility[manifest!.Id + "@" + manifest.Version] is null,
                 CompatibilityMessage = compatibility[manifest.Id + "@" + manifest.Version] ?? (manifest.ApiVersion == 2 ? PythonCompatibilityNotice : null) })
             .OrderBy(entry => entry.Manifest.Id, StringComparer.Ordinal)
             .ToArray();
-        // No remote dependency: even a first offline request exposes actual registered built-ins.
-        return new ZbaInstalledPlugins(await RevisionAsync(ct).ConfigureAwait(false), entries)
-            { BuiltinPlugins = presentation.ForBuiltins(_registrySnapshot?.Invoke() ?? []), GovernanceSource = _packages.Governance.Source };
+        // No remote dependency: even a first offline request exposes captured runtime presentation.
+        return new ZbaInstalledPlugins(PluginPackageRevision.Of(installed), entries)
+            { BuiltinPlugins = presentation.ForBuiltins(registered), GovernanceSource = _packages.Governance.Source,
+                MetadataFailures = MetadataFailures(installed) };
     }
 
     private static bool Matches(string id, ZbaPluginMetadata? metadata, string? query, string? category)
@@ -199,12 +208,13 @@ public sealed partial class PluginMarketService
         PluginPackageManifest? manifest, bool trust, string caller, string expectedRevision, Func<Task> stage,
         CancellationToken ct, Func<Task>? admit = null, string? previewId = null)
     {
-        if (string.IsNullOrWhiteSpace(key) || key.Length > 128 || key.Any(char.IsControl) ||
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 256 || key.Any(char.IsControl) ||
             string.IsNullOrWhiteSpace(caller) || caller.Length > 256 || caller.Any(char.IsControl))
             throw new ZbaBackendException(400, "invalid_plugin_operation", "插件操作键或调用方无效。");
+        var reload = CanReloadPackage(pluginId, manifest);
         var operation = new ZbaPluginOperation("po-" + Hash(key)[..16], pluginId, kind,
-            _reload is null ? StatusRestartRequired : kind == "uninstall" ? StatusNotInstalled : StatusInstalled,
-            _reload is null, null);
+            !reload ? StatusRestartRequired : kind == "uninstall" ? StatusNotInstalled : StatusInstalled,
+            !reload, null);
         return _operations.ExecuteAsync(_receipts, ReceiptKey(key),
             previewId is null ? PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller)
                 : Hash(PluginPackageRevision.Intent(kind, pluginId, manifest, trust, caller) + ":" + previewId), caller, operation,
@@ -212,9 +222,10 @@ public sealed partial class PluginMarketService
             {
                 await stage().ConfigureAwait(false);
                 // Once staging committed, a disconnected caller must not strand hot application.
-                if (_reload is not null)
+                if (reload)
                 {
-                    try { await _reload(pluginId, CancellationToken.None).ConfigureAwait(false); }
+                    try { await _reload!(pluginId, CancellationToken.None).ConfigureAwait(false); }
+                    catch (BotAgent.Services.Plugins.PluginRestartRequiredException) { throw; }
                     catch (Exception)
                     {
                         throw new ZbaBackendException(503, "plugin_reload_failed",
@@ -254,9 +265,15 @@ public sealed partial class PluginMarketService
             throw SettingsFailure(exception.Code);
         }
 
-        if (_reload is not null)
+        var reload = receipt.RestartRequired && CanReloadPackage(pluginId, manifest);
+        var reloadDeferred = false;
+        if (reload)
         {
-            try { await _reload(pluginId, CancellationToken.None).ConfigureAwait(false); }
+            try { await _reload!(pluginId, CancellationToken.None).ConfigureAwait(false); }
+            catch (BotAgent.Services.Plugins.PluginRestartRequiredException)
+            {
+                reloadDeferred = true;
+            }
             catch (Exception)
             {
                 throw new ZbaBackendException(503, "plugin_reload_failed",
@@ -264,7 +281,8 @@ public sealed partial class PluginMarketService
             }
         }
         var saved = _settings.ReadManifest(manifest);
-        return Project(saved with { Revision = receipt.Revision });
+        return Project(saved with { Revision = receipt.Revision,
+            RestartRequired = saved.RestartRequired || (receipt.RestartRequired && (!reload || reloadDeferred)) });
     }
 
     /// <summary>编辑 → JSON 变更集；secret 的 delete 用 null，其余按声明类型解析。</summary>
@@ -307,6 +325,8 @@ public sealed partial class PluginMarketService
         "plugin_settings_revision_conflict" => new ZbaBackendException(409, code, "设置已被修改，请重新读取后再提交。"),
         "plugin_settings_idempotency_conflict" => new ZbaBackendException(409, "idempotency_conflict", "这个操作键已经用于另一份变更。"),
         "plugin_settings_unavailable" => new ZbaBackendException(503, code, "设置存储暂时不可用。"),
+        "plugin_settings_application_failed" => new ZbaBackendException(503, code,
+            "设置已保存，但运行时应用失败；原回执保留，请重读当前设置核对，重放原键不会重新应用。"),
         _ => new ZbaBackendException(400, code, "设置无效。")
     };
 
@@ -328,6 +348,7 @@ public sealed partial class PluginMarketService
     {
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var package = installed.FirstOrDefault(item => item.Id == pluginId);
+        EnsureMetadataReadable(package);
         var manifest = package?.Active ?? package?.Pending;
         if (manifest is null) throw new ZbaBackendException(404, "plugin_not_installed", "这个插件还没有安装。");
         return manifest;
@@ -351,17 +372,23 @@ public sealed partial class PluginMarketService
         var active = package?.Active;
         var pending = package?.Pending;
         var uninstall = package?.PendingUninstall == true;
-        var status = uninstall ? StatusPendingUninstall
-            : pending is not null ? _reload is null ? StatusRestartRequired : "reload_required"
+        var reload = CanReloadPackage(manifest.Id, pending ?? active ?? manifest);
+        var status = package?.MetadataFailure is not null ? "metadata_unreadable" : uninstall ? StatusPendingUninstall
+            : pending is not null ? !reload ? StatusRestartRequired : "reload_required"
             : active is not null ? StatusInstalled
             : StatusNotInstalled;
         var enabled = desired.TryGetValue(manifest.Id, out var wanted) && wanted;
         return new ZbaPluginCatalogEntry(manifest, active?.Version, enabled, status,
-            _reload is null && (pending is not null || uninstall))
+            !reload && (pending is not null || uninstall))
             { PreviousManifest = package?.Previous, PendingManifest = package?.Pending,
                 Governance = _packages.Governance.Evaluate(manifest),
                 InstalledGovernance = (active ?? pending) is { } current ? _packages.Governance.Evaluate(current) : null };
     }
+
+    private bool CanReloadPackage(string id, PluginPackageManifest? manifest)
+        => SupportsRuntimeReload && !PluginPackageValidation.IsReservedId(id) && !PluginDataValidation.RequiresColdStart(manifest)
+            && !_packages.InstalledSnapshot.Any(p => p.Id == id && (PluginDataValidation.RequiresColdStart(p.Active)
+                || PluginDataValidation.RequiresColdStart(p.Pending)));
 
     private static long ParseSettingsRevision(string revision)
     {

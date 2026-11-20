@@ -38,6 +38,7 @@ public sealed class DatabaseBackupService : IDisposable
     private readonly Action<string> _log;
 
     private Timer? _timer;
+    private readonly object _lifecycleGate = new();
     private int _disposed;
     private int _firing;
 
@@ -118,13 +119,16 @@ public sealed class DatabaseBackupService : IDisposable
     /// <summary>起定时器（幂等：重复调用只重排一次）。</summary>
     public void Start()
     {
-        if (Volatile.Read(ref _disposed) == 1)
+        lock (_lifecycleGate)
         {
-            return;
-        }
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
 
-        _timer?.Dispose();
-        _timer = new Timer(_ => OnTimer(), null, InitialDelay, CheckInterval);
+            _timer?.Dispose();
+            _timer = new Timer(_ => OnTimer(), null, InitialDelay, CheckInterval);
+        }
     }
 
     /// <summary>
@@ -133,6 +137,11 @@ public sealed class DatabaseBackupService : IDisposable
     /// </summary>
     public async Task<(bool Ok, string? Path, string? Error)> RunNowAsync(bool force = false, CancellationToken ct = default)
     {
+        if (Volatile.Read(ref _disposed) == 1)
+        {
+            return (false, null, "备份服务已停止");
+        }
+
         return await Task.Run(() => RunOnce(force), ct).ConfigureAwait(false);
     }
 
@@ -150,6 +159,11 @@ public sealed class DatabaseBackupService : IDisposable
         // 保留 3 份就只剩 3 小时历史；单任务靠 _runGate 把并发调用排队，VACUUM 不必互相抢写锁。
         lock (_runGate)
         {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return (false, null, "备份服务已停止");
+            }
+
             if (!force && AlreadyBackedUpToday())
             {
                 return (true, null, null);
@@ -223,7 +237,18 @@ public sealed class DatabaseBackupService : IDisposable
             return;
         }
 
-        _timer?.Dispose();
-        _timer = null;
+        Timer? timer;
+        lock (_lifecycleGate)
+        {
+            timer = _timer;
+            _timer = null;
+        }
+
+        timer?.Dispose();
+
+        // D0-BACKUP-LIFETIME-01：等待当前在途热备释放 _runGate，确保 Dispose 返回后不再触碰已关闭的数据库。
+        lock (_runGate)
+        {
+        }
     }
 }

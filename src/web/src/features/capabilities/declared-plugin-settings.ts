@@ -1,4 +1,5 @@
 import type { PluginSettingDefinition } from './plugin-manifest'
+import { settingNumberHint, validSettingNumberText } from '../../api/plugin-setting-numbers'
 
 export interface PluginSettingDraft { kind: 'keep' | 'set' | 'delete'; value: string }
 export type PluginSettingsDraft = Record<string, PluginSettingDraft>
@@ -16,7 +17,11 @@ export function pluginSettingsErrors(definitions: PluginSettingDefinition[], dra
     if (!edit || edit.kind === 'keep') continue
     if (edit.kind === 'delete') { if (field.required) errors.push(field.label + ' 为必填项，不能清除。'); continue }
     if (field.required && !edit.value.trim()) errors.push(field.label + ' 不能为空。')
-    if (field.type === 'number' && (!edit.value.trim() || !Number.isFinite(Number(edit.value)))) errors.push(field.label + ' 必须是有限数值。')
+    if (field.type === 'number') {
+      if (!edit.value.trim() || !Number.isFinite(Number(edit.value))) errors.push(field.label + ' 必须是有限数值。')
+      else if (field.numberConstraints && !validSettingNumberText(edit.value, field.numberConstraints))
+        errors.push(field.label + ' 必须符合：' + settingNumberHint(field.numberConstraints) + '。')
+    }
     if (field.type === 'boolean' && edit.value !== 'true' && edit.value !== 'false') errors.push(field.label + ' 必须是开或关。')
     if (field.type === 'select' && !(field.choices ?? []).includes(edit.value)) errors.push(field.label + ' 必须从声明的选项中选择。')
     if (field.type === 'secret' && !edit.value) errors.push(field.label + ' 为空；保留已有密钥请选择保留。')

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BotAgent.Domain.Platforms;
+using BotAgent.Services.Net;
 
 namespace BotAgent.Services;
 
@@ -106,18 +107,22 @@ public sealed partial class AppSettings
     // ---------- 链接与分享卡片 ----------
 
     /// <summary>群里发的链接要不要真打开看一下（取标题/摘要）——给模型“看看里面写了什么”的根据。</summary>
-    public bool EnableLinkPreview { get; set; } = true;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "enableLinkPreview", 39)]
+    public bool EnableLinkPreview { get; set; } = ResearchSettings.Defaults.EnableLinkPreview;
 
     /// <summary>单个链接的抓取超时（秒）。慢站点不能拖住机器人。</summary>
-    public int LinkPreviewTimeoutSeconds { get; set; } = 5;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "linkPreviewTimeoutSeconds", 66)]
+    public int LinkPreviewTimeoutSeconds { get; set; } = ResearchSettings.Defaults.LinkPreviewTimeoutSeconds;
 
     /// <summary>一条消息里最多预览几个链接。</summary>
-    public int LinkPreviewMax { get; set; } = 3;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "linkPreviewMax", 65)]
+    public int LinkPreviewMax { get; set; } = ResearchSettings.Defaults.LinkPreviewMax;
 
     // ---------- 联网搜索（模型可以要求“去查一下”） ----------
 
     /// <summary>启用联网搜索：模型在 JSON 里填 search 字段时，机器人真去搜，拿到事实后再回。默认开。</summary>
-    public bool EnableWebSearch { get; set; } = true;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "enableWebSearch", 49)]
+    public bool EnableWebSearch { get; set; } = ResearchSettings.Defaults.EnableWebSearch;
 
     /// <summary>
     /// 优先用“模型自带搜索”（OpenAI 兼容网关背后的 Gemini 原生端点 + google_search 工具）。
@@ -125,7 +130,8 @@ public sealed partial class AppSettings
     /// 而模型订阅本来就能搜 —— 不额外要密钥、不爬虫、结果还带来源。
     /// 关掉就只用下面的搜索源模板。
     /// </summary>
-    public bool WebSearchUseModelSearch { get; set; } = true;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "webSearchUseModelSearch", 140)]
+    public bool WebSearchUseModelSearch { get; set; } = ResearchSettings.Defaults.WebSearchUseModelSearch;
 
     /// <summary>
     /// 搜索源模板（每行一条，name|url；{q} = 查询词，会做 URL 编码）。兜底用：
@@ -133,24 +139,28 @@ public sealed partial class AppSettings
     /// name 决定解析方式：searx* = SearxNG JSON；wiki* = MediaWiki JSON；其余当通用 HTML 抽链接。
     /// 默认给 Wikipedia（实测这台服务器上唯一能直接用的）。
     /// </summary>
-    public string WebSearchSources { get; set; } =
-        "wiki|https://zh.wikipedia.org/w/api.php?action=query&list=search&srsearch={q}&format=json&srlimit=5&utf8=1";
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "webSearchSources", 138)]
+    public string WebSearchSources { get; set; } = ResearchSettings.Defaults.WebSearchSources;
 
     /// <summary>每次给模型看几条搜索结果。</summary>
-    public int WebSearchMaxResults { get; set; } = 5;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "webSearchMaxResults", 137)]
+    public int WebSearchMaxResults { get; set; } = ResearchSettings.Defaults.WebSearchMaxResults;
 
     /// <summary>
     /// 同一个会话两次联网搜索的最小间隔（秒）；0 = 不限。
     /// 为什么要有它：一次搜索 = 一次真实模型调用 + 几秒等待，群里连问几个问题就排队了。
     /// 为什么做成设置项：不同部署的网络快慢、群多少差很多，写死 30 秒众口难调。
     /// </summary>
-    public int WebSearchCooldownSeconds { get; set; } = 30;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "webSearchCooldownSeconds", 136)]
+    public int WebSearchCooldownSeconds { get; set; } = ResearchSettings.Defaults.WebSearchCooldownSeconds;
 
     /// <summary>搜索/读页面的超时（秒）。</summary>
-    public int WebSearchTimeoutSeconds { get; set; } = 20;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "webSearchTimeoutSeconds", 139)]
+    public int WebSearchTimeoutSeconds { get; set; } = ResearchSettings.Defaults.WebSearchTimeoutSeconds;
 
     /// <summary>read 页面正文截断长度（字）。</summary>
-    public int WebSearchReadMaxChars { get; set; } = 1800;
+    [BotAgent.Domain.Configuration.LegacyPluginConfigurationField("preset.feature.websearch", "webSearchReadMaxChars")]
+    public int WebSearchReadMaxChars { get; set; } = ResearchSettings.Defaults.WebSearchReadMaxChars;
 
     // ---------- 听音乐（识别群里的音乐分享 + 网易云歌词 + 波形分析） ----------
 

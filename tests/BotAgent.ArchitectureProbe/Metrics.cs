@@ -39,7 +39,7 @@ internal static class Metrics
     /// <summary>直接文件 IO：File.… 与 FileStream 构造。</summary>
     private static readonly Regex FileIo = new(
         "\\bFile\\.(?:WriteAllText|WriteAllBytes|WriteAllLines|ReadAllText|ReadAllBytes|ReadAllLines|ReadLines"
-        + "|AppendAllText|AppendAllLines|Delete|Copy|Move|OpenRead|OpenWrite|Create|CreateText|Exists|Open)\\s*\\("
+        + "|AppendAllText|AppendAllLines|Delete|Copy|Move|Replace|OpenRead|OpenWrite|Create|CreateText|Exists|Open)\\s*\\("
         + "|\\bnew\\s+FileStream\\s*\\(",
         RegexOptions.Compiled);
 
@@ -90,7 +90,10 @@ internal static class Metrics
         return (open, close);
     }
 
-    public static int CountSqlLiterals(SourceFile f) => Sql.Matches(f.NoComments).Count;
+    // One resource is one SQL command input, like a multiline C# literal. Includes
+    // DROP-only resources; moving SQL outside C# must not make the count disappear.
+    public static int CountSqlLiterals(SourceFile f) => f.IsSqlResource
+        ? (string.IsNullOrWhiteSpace(f.Raw) ? 0 : 1) : Sql.Matches(f.NoComments).Count;
 
     public static int CountDirectFileIo(SourceFile f) => FileIo.Matches(f.NoComments).Count;
 

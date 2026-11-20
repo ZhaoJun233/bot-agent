@@ -116,6 +116,7 @@ try
     var uninstall = await market.UninstallAsync(package.Id, new(uninstallPreview.Revision, Guid.NewGuid().ToString("N")) { PreviewId = uninstallPreview.PreviewId, TrustAcknowledged = true }, "synthetic-admin", default);
     Check(uninstall.Operation.Status != "failed", "Python uninstall receipt");
     Check(!service.PythonSources.Enabled && (await service.GetInstalledAsync()).Single().Active is null, "uninstall removes Python source");
+    await RuntimeDependencyChecks.Run(root, package, fetch, Check);
     Console.WriteLine(JsonSerializer.Serialize(new { passed = count, failed = 0, synthetic = true }));
 }
 finally

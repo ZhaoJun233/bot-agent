@@ -1,0 +1,14 @@
+{
+  "id": "preset.feature.profiles",
+  "entryAssembly": "BotAgent.Package.Profiles.dll",
+  "entryType": "BotAgent.Packages.Profiles.ProfilesPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Profiles.Contracts",
+      "owner": "preset.feature.profiles"
+    }
+  ]
+}

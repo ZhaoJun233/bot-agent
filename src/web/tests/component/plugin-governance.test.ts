@@ -13,6 +13,13 @@ afterEach(() => { for (const wrapper of mounted.splice(0)) wrapper.unmount() })
 const revoked: PluginGovernance = { status: 'revoked', blocked: true, reason: '<img src=x onerror=alert(1)>', updatedAt: '2026-11-06T00:00:00Z', match: 'sha256' }
 
 describe('governance risk notices and acquisition guard', () => {
+  it('discloses approved control lifetime independently of business enablement', () => {
+    const preview = installPreview()
+    preview.manifest = { ...preview.manifest, control: true }
+    const wrapper = mount(PluginInstallPreview, { props: { preview, acknowledged: false, canConfirm: false, expired: false, busy: false } }); mounted.push(wrapper)
+    expect(wrapper.get('[data-testid="preview-control"]').text()).toContain('即使业务停用，管理接口仍可用')
+    expect(wrapper.get('[data-testid="preview-confirm"]').attributes('disabled')).toBeDefined()
+  })
   it('escapes advisory text and explicitly leaves installed remediation to the user', () => {
     const wrapper = mount(PluginGovernanceNotice, { props: { state: revoked, installed: true, showSource: true } }); mounted.push(wrapper)
     expect(wrapper.text()).toContain('禁止获取此包')

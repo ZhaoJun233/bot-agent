@@ -91,7 +91,7 @@ internal static partial class CompositionRoot
         BotAgent.Domain.Plugins.IPluginRegistry? plugins, ConversationRegistry registry,
         WebUiServer web, bool hadStoredConfigurationBeforeStartup, PluginRuntime pluginRuntime,
         DatabaseBackupService backups, Func<IReadOnlyList<PersistedModelProvider>> capturedProviders,
-        TurnTraceStore traces, PlatformPolicyResolver platformPolicies)
+        TurnTraceStore traces, PlatformPolicyResolver platformPolicies, ZbaControlPlane? controlPlane = null)
     {
         // 提供商发现复用测试通道的受限出网（同一条拒绝私网/禁跳转的策略），不另开 socket。
         var discovery = management.ProviderTransport is { } providerHttp
@@ -99,9 +99,10 @@ internal static partial class CompositionRoot
             : null;
         var runtime = ZbaRuntime.Create(box, hotReload, management.Capabilities, sessions, agent, approvals, plugins,
             registry, () => BotAgent.Adapters.Time.Clock.Now, hadStoredConfigurationBeforeStartup,
-            pluginRuntime.Market, providerKey => TryBuildProviderTestRoute(providerKey, box.Current, capturedProviders), discovery,
+            pluginRuntime.Market, providerKey => TryBuildProviderTestRouteWithPlugins(providerKey, box.Current, capturedProviders, pluginRuntime.Registry), discovery,
             backups: backups,
-            traces: traces, platformPolicies: platformPolicies);
+            traces: traces, platformPolicies: platformPolicies, controlPlane: controlPlane,
+            quotas: pluginRuntime.Registry.CreateControlEntryPoint<IQuotaOperations>("preset.feature.token-quota"));
         web.AttachZba(runtime.Endpoint);
         return runtime;
     }
@@ -121,10 +122,14 @@ internal static partial class CompositionRoot
         IPlatformRegistry platformRegistry,
         Func<IReadOnlyList<PersistedModelProvider>> capturedProviders,
         BotAgent.Domain.Management.IManagedAuthorization? managedAuthorization,
-        Func<ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor>>? plugins = null)
+        Func<ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor>>? plugins = null,
+        PluginManager? pluginManager = null,
+        Func<bool>? isPluginRuntimeStarted = null)
     {
         bool DriverReady(DriverKey key)
         {
+            if (driverOperations.ShouldEnforceContributions && driverOperations.ResolveContribution(key.PlatformId) is null)
+                return false;
             var adapter = platformRegistry.GetAdapter(new(key.PlatformId, key.AccountScope, key.InstanceId));
             if (adapter is null || !DriverIdentityMatches(settings, settingsBox.Current, key.PlatformId)) return false;
             return key.PlatformId switch
@@ -148,7 +153,8 @@ internal static partial class CompositionRoot
             {
                 // Explicit administrator tests use current metadata, including newly saved disabled providers.
                 // Chat/failover routes remain bound to the startup registry until a restart.
-                var route = TryBuildProviderTestRoute(command.Key.Value, settingsBox.Current, capturedProviders);
+                var activePlugins = isPluginRuntimeStarted is null || isPluginRuntimeStarted() ? pluginManager : null;
+                var route = TryBuildProviderTestRouteWithPlugins(command.Key.Value, settingsBox.Current, capturedProviders, activePlugins);
                 if (route is null) return new ConfigurationModule.ManagedDispatchResult(
                     BotAgent.Domain.Management.ManagedOperationState.Failed, "model_route_unavailable");
                 var result = await providerTester.TestAsync(route, ct).ConfigureAwait(false);
@@ -181,7 +187,7 @@ internal static partial class CompositionRoot
         ReplyPipeline reply,
         ParticipationUseCase participation,
         AgentCommandService agentCmds,
-        ITenantQuotaLedger quotas,
+        IQuotaOperations quotas,
         HealthReportService healthReports,
         DatabaseBackupService backups,
         SessionPolicyLedger sessionPolicies,
@@ -258,11 +264,12 @@ internal static partial class CompositionRoot
         a.HostFacts = new HostMetrics();
         a.HealthReports = new HealthReportService(a.Box, a.Registry, a.Reply, a.Identity, a.Scheduler, a.Voice,
             a.Gateway, new HttpFetcher(TimeSpan.FromSeconds(6), msg => FileLog.Write("Net", msg), "health"),
-            a.HostFacts, a.Backups);
+            a.HostFacts, a.Backups, plugins: a.Plugins);
+        a.PluginServices.RegisterForPlugin<IHealthReportHostPorts>("system.health-reporting", a.HealthReports.CreateHostPorts());
         a.HotReload.BindConfiguration(a.Configuration, a.Authorization, a.SettingsStore.LoadCommittedRuntimeSnapshot,
             (caller, key, intent) => ConfigurationBridge.ApplyLegacyMood(a.Configuration, caller, key, intent, a.Mood),
             a.HealthReports.Reapply, WebUiServer.ProjectTtsConfiguration, BotConfig.ConfigurationEffect,
-            version => InspectModelProjection(version, a.ModelRegistry, a.Box, a.Secrets),
+            version => InspectModelProjectionWithPlugins(version, a.ModelRegistry, a.Box, a.Secrets, a.PluginRuntime.HasStarted ? a.Plugins : null),
             () => a.PluginRuntime.ReloadAsync());
         a.CircuitStatus = BuildCircuitStatusProvider(a.Brain, a.TtsBreaker, a.SearchBreaker, a.RiskBackoff);
         a.Web = BuildWebUiServer(a.Settings, a.Box, a.Gateway, a.Source, a.Agent, a.LoginQr,
@@ -273,9 +280,10 @@ internal static partial class CompositionRoot
 
         a.Management = BuildManagedCapabilityBinding(a.Configuration, a.Authorization, a.DriverOperations, a.Box,
             a.PlatformPolicies, a.Settings, a.Feishu, a.PlatformRegistry, () => a.ModelRegistry.Captured,
-            managedAuthorization, plugins: a.PluginRuntime.Describe);
+            managedAuthorization, plugins: a.PluginRuntime.Describe, pluginManager: a.Plugins,
+            isPluginRuntimeStarted: () => a.PluginRuntime.HasStarted);
         a.Zba = BuildZba(a.Box, a.HotReload, a.Management, a.Sessions, a.AgentCmds, a.Approvals,
             a.Plugins, a.Registry, a.Web, BotConfig.HadStoredSettingsAtLoad, a.PluginRuntime, a.Backups,
-            () => a.ModelRegistry.Captured, a.Traces, a.PlatformPolicies);
+            () => a.ModelRegistry.Captured, a.Traces, a.PlatformPolicies, a.ControlPlane);
     }
 }

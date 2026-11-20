@@ -21,21 +21,22 @@ public sealed partial class WebUiServer
 {
     private JsonObject BuildToolsPayload()
     {
-        var directory = ToolDirectory.Builtin;
-
         var chatPolicy = CurrentChatPolicy();
+        var directory = ToolDirectory.FromCatalog(chatPolicy.Catalog);
 
         var tools = new JsonArray();
         foreach (var spec in directory.Specs)
         {
             // 只有聊天那一路有“策略快照”这个概念（// 那路的放行由它自己的开关决定，面板不在这页复述）。
-            var chatFamily = spec.Executor is ChatToolSpecs.ExecutorActions or ChatToolSpecs.ExecutorApproval;
+            var chatFamily = directory.Chat.Any(tool => tool.Id == spec.Id);
             tools.Add(new JsonObject
             {
                 ["id"] = spec.Id,
                 ["category"] = spec.Category.ToString(),
                 ["readOnly"] = spec.ReadOnly,
                 ["executor"] = spec.Executor,
+                ["origin"] = spec.Origin.ToString(),
+                ["providerId"] = chatPolicy.Catalog.FindBinding(spec.Id)?.ProviderId,
                 ["defaultPolicy"] = spec.Default.ToString(),
                 ["summary"] = spec.Summary,
                 ["parameters"] = spec.Parameters,
@@ -93,7 +94,8 @@ public sealed partial class WebUiServer
             enablePoke: s.EnablePoke,
             scenario: s.ScenarioPreset,
             approvalsEnabled: s.EnableApprovals,
-            questionsEnabled: s.EnableQuestions);
+            questionsEnabled: s.EnableQuestions,
+            catalog: (_plugins as Services.Plugins.PluginManager)?.GetToolCatalog());
     }
 
     /// <summary>
@@ -125,6 +127,8 @@ public sealed partial class WebUiServer
         return new JsonObject
         {
             ["builtin"] = inventory.BuiltinCount,
+            ["host"] = inventory.HostCount,
+            ["plugin"] = inventory.PluginCount,
             ["mcp"] = inventory.McpCount,
             ["total"] = inventory.Count,
             ["duplicates"] = ToJsonArray(inventory.Duplicates),

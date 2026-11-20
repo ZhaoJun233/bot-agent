@@ -54,8 +54,8 @@ public static partial class Program
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
-        // 面板与协议端分开启动：只等 botWsPort 会抢跑（Linux 容器里实测 Connection refused）。
-        await WaitForPortAsync(panelPort, cts.Token, bot);
+        // 管理面可先于业务就绪；后续断言需要实际搜索业务已经可用。
+        await WaitForBusinessReadyAsync(panelPort, cts.Token, bot);
 
         var (settingsStatus, settingsBody) = await PanelGetAsync($"http://127.0.0.1:{panelPort}/api/settings");
         Check("★ 联网搜索配置生效（开关 + 搜索源 + 结果数）",
@@ -271,6 +271,7 @@ public static partial class Program
             afterRead is null ? "(没等到带正文的请求)" : "已注入");
 
         // ---- 5) 面板自测入口 + SSRF 闸门 ----
+        await CheckResearchHttpCompatibilityAsync(http, panelPort, openAi, search, cts.Token);
         using var testResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/search/test",
             new StringContent(new JsonObject { ["query"] = "测试面板搜索" }.ToJsonString(), Encoding.UTF8, "application/json"), cts.Token);
         var testBody = await testResp.Content.ReadAsStringAsync(cts.Token);
@@ -358,7 +359,7 @@ public static partial class Program
             ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "0"
         });
 
-        await WaitForPortAsync(ssrfPort, cts.Token, ssrfBot);
+        await WaitForBusinessReadyAsync(ssrfPort, cts.Token, ssrfBot);
         using var ssrfPanelHttp = CreatePanelHttpClient(ssrfPort, 90);
         using (var ssrfBody = new StringContent(
                    new JsonObject { ["url"] = "http://napcat:3001/" }.ToJsonString(), Encoding.UTF8, "application/json"))

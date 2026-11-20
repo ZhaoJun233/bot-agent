@@ -34,6 +34,12 @@ try
     var oldJson = "[{\"id\":10004,\"text\":\"synthetic legacy JSON\",\"at\":\"1970-01-01T00:00:00Z\"}]";
     File.WriteAllText(Path.Combine(AppPaths.DataDir, "own-messages.json"), oldJson);
     AppDatabase.Initialize();
+    if (args.Contains("--configuration-startup", StringComparer.Ordinal))
+    {
+        PluginConfigurationWriterChecks.RunStartup(Check);
+        Console.WriteLine($"SettingsScopeProbe startup failures={failures}");
+        return failures == 0 ? 0 : 1;
+    }
     Check("host settings and platform interface share platform values in both directions", () =>
     {
         var settings = new AppSettings
@@ -441,6 +447,7 @@ try
         Require(store.LoadRecentScoped(200).Count == 2, "scoped pruning failed");
         Require(store.LoadRecent(200).Any(r => r.Id == 10001), "scoped pruning deleted retained legacy data");
     });
+    PluginConfigurationWriterChecks.Run(Check);
 }
 finally
 {

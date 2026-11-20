@@ -73,6 +73,7 @@ internal sealed record AppGraph(
     ZbaRuntime? Zba) : IAsyncDisposable
 {
     internal PluginManager Plugins => PluginRuntime.Registry;
+    internal bool OwnsPluginRuntime { get; init; } = true;
     private readonly object _disposeGate = new();
     private Task? _disposeTask;
     public ValueTask DisposeAsync()
@@ -82,6 +83,7 @@ internal sealed record AppGraph(
     private async Task DisposeCoreAsync()
     {
         var failures = new List<Exception>();
+        try { Web.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { await Background.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { if (Mcp is not null) await Mcp.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { if (Zba is not null) await Zba.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
@@ -90,7 +92,7 @@ internal sealed record AppGraph(
         try { await Management.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { Agent.Dispose(); } catch (Exception exception) { failures.Add(exception); }
-        try { await PluginRuntime.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
+        try { if (OwnsPluginRuntime) await PluginRuntime.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { (Source as IDisposable)?.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         if (failures.Count > 0) throw new AggregateException("host_shutdown_incomplete", failures);
     }
@@ -183,9 +185,10 @@ internal static partial class CompositionRoot
     /// 这里存的是**已经造好的实例**，不是延迟工厂：构造期的副作用（订阅 Changed、载入心情、注册平台目录）
     /// 仍然发生在 <see cref="Build"/> 返回之前，与拆分前完全一致。
     /// </summary>
-    private sealed class Assembly(AppSettings settings)
+    internal sealed class Assembly(AppSettings settings)
     {
         public AppSettings Settings { get; set; } = settings;
+        public ZbaControlPlane? ControlPlane { get; set; }
 
         // ① AssembleCore：配置发布点与全进程共用的无状态服务
         public SettingsBox Box { get; set; } = null!;
@@ -195,7 +198,8 @@ internal static partial class CompositionRoot
         public SettingsHotReload.ConfigurationRequestAuthorization Authorization { get; set; } = null!;
         public ModelProviderRegistry ModelRegistry { get; set; } = null!;
         public PanelNotifier Ui { get; set; } = null!;
-        public TenantQuotaStore Quotas { get; set; } = null!;
+        public IQuotaOperations Quotas { get; set; } = null!;
+        public ITokenUsageRecorder Usage { get; set; } = null!;
         public PluginRuntime PluginRuntime { get; set; } = null!;
         public Func<Microsoft.Data.Sqlite.SqliteConnection, ConfigurationReadKind, RegisteredConfigurationView> ReadRegistered { get; set; } = null!;
         public SettingsStore.ConfigurationParticipant Participant { get; set; } = null!;
@@ -224,8 +228,9 @@ internal static partial class CompositionRoot
         public StickerService Stickers { get; set; } = null!;
         public VoiceUseCase Voice { get; set; } = null!;
         public MusicUseCase Music { get; set; } = null!;
-        public LinkPreviewer Links { get; set; } = null!;
+        public ILinkPreviewer Links { get; set; } = null!;
         public ResearchUseCase Research { get; set; } = null!;
+        public ResearchPluginServices PluginServices { get; set; } = null!;
 
         // ④ AssembleStores：用例层共享状态与各域用例
         public BotIdentity Identity { get; set; } = null!;
@@ -282,6 +287,7 @@ internal static partial class CompositionRoot
             Require(ModelRegistry, "Core.ModelRegistry");
             Require(Ui, "Core.Ui");
             Require(Quotas, "Core.Quotas");
+            Require(Usage, "Core.Usage");
             Require(PluginRuntime, "Core.PluginRuntime");
             Require(ReadRegistered, "Core.ReadRegistered");
             Require(Participant, "Core.Participant");

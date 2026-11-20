@@ -177,8 +177,11 @@ public sealed partial class ReplyPipeline
             CaptureDeferredReply, EnsureGroupContext);
         _turnContext = new ReplyTurnContext(
             profiles, vibes, stickers, roles, poke, mood, music, research, _inboundMedia, hooks,
-            AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking), memoryParticipant);
-        _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady);
+            AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking), memoryParticipant,
+            profilesPolicy: () => _plugins?.GetContribution<BotAgent.Services.Profiles.IProfilesPolicyContribution>("preset.feature.profiles"),
+            conversationPolicy: () => _plugins?.GetContribution<IConversationContribution>("system.conversation"),
+            turnContextContributors: () => _plugins?.GetContributions<ITurnContextContributor>() ?? []);
+        _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady, () => approvals.Capabilities.Catalog);
         _delivery = new ReplyDelivery(
             hooks, registry, ui, plain, source, stickers, voice, poke, mood, approvals, participation, traces, riskBackoff, AllowsFeature,
             settingsBox: box, platformPolicies: _platformPolicies);

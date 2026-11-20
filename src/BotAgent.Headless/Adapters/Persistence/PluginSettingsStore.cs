@@ -11,19 +11,43 @@ using BotAgent.Adapters.Plugins;
 using Microsoft.Data.Sqlite;
 using StorageDatabase = StorageModule::BotAgent.Adapters.Persistence.AppDatabase;
 using StorageSecrets = StorageModule::BotAgent.Adapters.Persistence.SecretsStore;
+using ConfigurationStorage = StorageModule::BotAgent.Storage;
+using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
 
 namespace BotAgent.Adapters.Persistence;
 
 /// <summary>Restart-bound settings; one SQLite transaction owns overrides, scoped secrets and receipts.</summary>
-public sealed class PluginSettingsStore
+public sealed partial class PluginSettingsStore
 {
+    private readonly TrustedPluginDistribution _distribution;
+    public PluginSettingsStore() : this(TrustedPluginDistribution.Empty) { }
+    public PluginSettingsStore(TrustedPluginDistribution distribution)
+        => _distribution = distribution ?? throw new ArgumentNullException(nameof(distribution));
     private const int MaximumJsonLength = 1_048_576;
     private const string Corrupt = "plugin_settings_corrupt";
     private static readonly JsonSerializerOptions Json = new()
     { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, MaxDepth = 16 };
     private static readonly ConcurrentDictionary<string, AppliedSnapshot> Prepared = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, AppliedSnapshot> Applied = new(StringComparer.Ordinal);
-    private sealed record State(int Format, long Revision, string SchemaHash, Dictionary<string, JsonElement> Values);
+    private static string RuntimeKey(string id)
+    {
+        try { return StorageDatabase.FilePath + "|" + id; }
+        catch (InvalidOperationException) { return "uninitialized|" + id; }
+    }
+    internal static void ClearRuntimeState(string id)
+    {
+        var key = RuntimeKey(id);
+        Prepared.TryRemove(key, out _);
+        Applied.TryRemove(key, out _);
+    }
+    private sealed record State(int Format, long Revision, string SchemaHash, Dictionary<string, JsonElement> Values)
+    {
+        // Exact prior empty-schema bytes, retained only when adopting legacy configuration bindings.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? PreservedLegacyState { get; init; }
+        [JsonIgnore]
+        public bool IsPreservedProjection { get; init; }
+    }
     private sealed record SavedReceipt(string Fingerprint, PluginSettingsReceipt Result);
     private sealed record AppliedSnapshot(long Revision, string SchemaHash, string Version);
     private sealed record Snapshot(State State, Dictionary<string, JsonElement> Values);
@@ -40,9 +64,22 @@ public sealed class PluginSettingsStore
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw ?? "")));
     }
 
+    /// <summary>Update admission also binds the current and target legacy values at one global version.</summary>
+    public string ReadPreservationStamp(PluginPackageManifest current, PluginPackageManifest? target)
+    {
+        var declarations = new[] { current.Configuration, target?.Configuration }.OfType<PluginConfigurationDeclaration>()
+            .Select(declaration => declaration with { Bindings = declaration.Bindings.OrderBy(binding => binding.Key, StringComparer.Ordinal).ToArray() })
+            .ToArray();
+        if (declarations.Length == 0) return ReadPreservationStamp(current.Id);
+        ConfigurationStorage.BoundConfigurationPreservation? snapshot = null;
+        DatabaseOperation(() => snapshot = ConfigurationBridge.ReadBoundPreservation(current.Id, declarations));
+        return PluginPackageRevision.Hash(JsonSerializer.Serialize(snapshot, Json));
+    }
+
     public PluginSettingsView ReadManifest(PluginPackageManifest manifest)
     {
         var schema = ReadSchema(manifest);
+        if (manifest.Configuration is not null) return ReadBoundManifest(manifest, schema);
         var snapshot = ReadSnapshot(manifest.Id, schema, allowMissing: true);
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         var configured = new List<string>();
@@ -51,7 +88,7 @@ public sealed class PluginSettingsStore
             else if (snapshot.Values[field.Key].ValueKind == JsonValueKind.String) configured.Add(field.Key);
         var target = Stamp(manifest, snapshot.State);
         return new(snapshot.State.Revision, schema, new ReadOnlyDictionary<string, JsonElement>(values),
-            configured.AsReadOnly(), !Applied.TryGetValue(manifest.Id, out var applied) || applied != target);
+            configured.AsReadOnly(), !Applied.TryGetValue(RuntimeKey(manifest.Id), out var applied) || applied != target);
     }
 
     /// <summary>callerScope must be the authenticated principal, never a token or plugin-supplied identity.</summary>
@@ -59,19 +96,25 @@ public sealed class PluginSettingsStore
         JsonElement values, string callerScope)
     {
         var schema = ReadSchema(manifest);
-        if (expectedRevision < 0 || string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128 ||
+        if (expectedRevision < 0 || string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 256 ||
             idempotencyKey.Any(char.IsControl) || string.IsNullOrWhiteSpace(callerScope) || callerScope.Length > 256 ||
             callerScope.Any(char.IsControl)) throw new PluginSettingsException("plugin_settings_invalid_request");
         var changes = ReadChanges(values, schema);
+        if (manifest.Configuration is not null)
+            return SaveBound(manifest, schema, expectedRevision, idempotencyKey, changes, callerScope);
         PluginSettingsReceipt? result = null;
-        DatabaseOperation(() => StorageDatabase.Write(connection =>
-            result = SaveInTransaction(connection, manifest, schema, expectedRevision, idempotencyKey, changes, callerScope)));
+        DatabaseOperation(() =>
+        {
+            result = ConfigurationBridge.CommitPackageSettings(manifest.Id, connection =>
+                SaveInTransaction(connection, manifest, schema, expectedRevision, idempotencyKey, changes, callerScope)).Result;
+        });
         return result!;
     }
 
     /// <summary>Read-only lifecycle admission: no prepared/applied runtime state and no writes.</summary>
     public long ValidatePreserved(PluginPackageManifest manifest)
-        => ReadSnapshot(manifest.Id, ReadSchema(manifest), allowMissing: false).State.Revision;
+        => manifest.Configuration is not null ? ReadBoundManifest(manifest, ReadSchema(manifest)).Revision
+            : ReadSnapshot(manifest.Id, ReadSchema(manifest), allowMissing: false).State.Revision;
 
     public string ResolveRuntimeValues(PluginPackageManifest manifest) => ResolveRuntimeValues(manifest, out _);
 
@@ -79,9 +122,10 @@ public sealed class PluginSettingsStore
     public string ResolveRuntimeValues(PluginPackageManifest manifest, out long revision)
     {
         var schema = ReadSchema(manifest);
+        if (manifest.Configuration is not null) return ResolveBoundRuntimeValues(manifest, schema, out revision);
         var snapshot = ReadSnapshot(manifest.Id, schema, allowMissing: false);
         var json = JsonSerializer.Serialize(snapshot.Values, Json);
-        Prepared[manifest.Id] = Stamp(manifest, snapshot.State);
+        Prepared[RuntimeKey(manifest.Id)] = Stamp(manifest, snapshot.State);
         revision = snapshot.State.Revision;
         return json;
     }
@@ -90,29 +134,35 @@ public sealed class PluginSettingsStore
     public bool MarkApplied(PluginPackageManifest manifest, long revision)
     {
         var schema = ReadSchema(manifest);
+        if (manifest.Configuration is not null) return MarkBoundApplied(manifest, schema, revision);
         var expected = new AppliedSnapshot(revision, SchemaHash(schema), manifest.Version);
-        if (!Prepared.TryGetValue(manifest.Id, out var prepared) || prepared != expected) return false;
+        var key = RuntimeKey(manifest.Id);
+        if (!Prepared.TryGetValue(key, out var prepared) || prepared != expected) return false;
         var applied = false;
         DatabaseOperation(() =>
         {
-            using var connection = StorageDatabase.Open();
-            // Reserve the writer before checking: a concurrent save must not pass this acknowledgement.
-            using var transaction = connection.BeginTransaction(deferred: false);
-            var current = LoadState(connection, manifest.Id, schema);
-            if (Stamp(manifest, current) == expected)
+            StorageDatabase.Write(connection =>
             {
-                Applied[manifest.Id] = prepared;
-                applied = true;
-            }
-            transaction.Commit();
+                var current = LoadState(connection, manifest.Id, schema);
+                if (Stamp(manifest, current) == expected)
+                {
+                    Applied[key] = prepared;
+                    applied = true;
+                }
+            });
         });
         return applied;
     }
 
-    private static IReadOnlyList<PluginSettingDefinition> ReadSchema(PluginPackageManifest manifest)
+    private IReadOnlyList<PluginSettingDefinition> ReadSchema(PluginPackageManifest manifest)
     {
         if (manifest is null) throw new PluginSettingsException(PluginSettingsContract.InvalidSchema);
-        try { PluginPackageValidation.ValidateId(manifest.Id); }
+        try
+        {
+            BotAgent.Domain.Configuration.LegacyPluginConfigurationFields.Validate(manifest);
+            _distribution.ValidateId(manifest.Id);
+            if (manifest.Id.StartsWith("preset.", StringComparison.Ordinal)) _distribution.EnsureApproved(manifest);
+        }
         catch (InvalidDataException) { throw new PluginSettingsException(PluginSettingsContract.InvalidSchema); }
         return PluginSettingsContract.ReadSchema(manifest);
     }
@@ -132,7 +182,7 @@ public sealed class PluginSettingsStore
         return result!;
     }
 
-    private static PluginSettingsReceipt SaveInTransaction(SqliteConnection connection, PluginPackageManifest manifest,
+    private static ConfigurationStorage.PackageSettingsWrite<PluginSettingsReceipt> SaveInTransaction(SqliteConnection connection, PluginPackageManifest manifest,
         IReadOnlyList<PluginSettingDefinition> schema, long expectedRevision, string key,
         SortedDictionary<string, JsonElement> changes, string caller)
     {
@@ -154,8 +204,9 @@ public sealed class PluginSettingsStore
                     stored.Result.Revision > state.Revision || !stored.Result.RestartRequired ||
                     stored.Fingerprint?.Length != 64) throw new PluginSettingsException(Corrupt);
                 if (stored.Fingerprint != fingerprint) throw new PluginSettingsException("plugin_settings_idempotency_conflict");
-                return stored.Result;
+                return new(stored.Result, Replayed: true);
             }
+            if (state.IsPreservedProjection) throw new PluginSettingsException("plugin_settings_schema_mismatch");
             if (state.Revision != expectedRevision) throw new PluginSettingsException("plugin_settings_revision_conflict");
             if (state.Revision == long.MaxValue) throw new PluginSettingsException("plugin_settings_revision_exhausted");
             var overrides = new Dictionary<string, JsonElement>(state.Values, StringComparer.Ordinal);
@@ -180,7 +231,7 @@ public sealed class PluginSettingsStore
                 StorageSecrets.SaveNamedInTransaction(connection, SecretName(manifest.Id, field.Key), secrets[field.Key], now);
             StorageDatabase.SetMetaInTransaction(connection, StateKey(manifest.Id), metadata);
             StorageDatabase.SetMetaInTransaction(connection, receiptKey, JsonSerializer.Serialize(new SavedReceipt(fingerprint, receipt), Json));
-            return receipt;
+            return new(receipt, Replayed: false);
         }
         finally { CryptographicOperations.ZeroMemory(signingKey); }
     }
@@ -210,6 +261,13 @@ public sealed class PluginSettingsStore
         if (state.Format != 1 || state.Revision < 1 || state.Values is null || state.Values.Count > 128 || state.SchemaHash is null)
             throw new PluginSettingsException(Corrupt);
         // No implicit migration: preserve old overrides and secrets for operator review or rollback.
+        if (state.PreservedLegacyState is { } legacy)
+        {
+            if (schema.Count != 0) throw new PluginSettingsException("plugin_settings_schema_mismatch");
+            // Only authenticated original receipt replay may use this read-only historical
+            // projection. The caller still supplies its real, separately approved manifest.
+            return ReadPreservedEmptyState(legacy) with { IsPreservedProjection = true };
+        }
         if (state.SchemaHash != hash) throw new PluginSettingsException("plugin_settings_schema_mismatch");
         var fields = schema.ToDictionary(f => f.Key, StringComparer.Ordinal);
         foreach (var entry in state.Values)
@@ -218,6 +276,15 @@ public sealed class PluginSettingsStore
                 throw new PluginSettingsException(Corrupt);
             PluginSettingsContract.ValidateValue(field, entry.Value, allowMissing: false, Corrupt);
         }
+        return state;
+    }
+
+    private static State ReadPreservedEmptyState(string json)
+    {
+        var state = Deserialize<State>(json);
+        if (state.Format != 1 || state.Revision < 1 || state.SchemaHash != SchemaHash([])
+            || state.Values is not { Count: 0 } || state.PreservedLegacyState is not null)
+            throw new PluginSettingsException(Corrupt);
         return state;
     }
 
@@ -262,6 +329,11 @@ public sealed class PluginSettingsStore
 
     private static void RejectDuplicateKeys(JsonElement element)
     {
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray()) RejectDuplicateKeys(item);
+            return;
+        }
         if (element.ValueKind != JsonValueKind.Object) return;
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
@@ -296,6 +368,10 @@ public sealed class PluginSettingsStore
     {
         try { action(); }
         catch (SqliteException) { throw new PluginSettingsException("plugin_settings_unavailable"); }
+        catch (InvalidOperationException ex) when (ex.Message == "configuration_version_exhausted")
+        { throw new PluginSettingsException("plugin_settings_revision_exhausted"); }
+        catch (InvalidOperationException ex) when (ex.Message == "configuration_writer_required")
+        { throw new PluginSettingsException("plugin_settings_unavailable"); }
         catch (InvalidOperationException ex) when (ex.Message.StartsWith("database_", StringComparison.Ordinal))
         { throw new PluginSettingsException("plugin_settings_unavailable"); }
     }

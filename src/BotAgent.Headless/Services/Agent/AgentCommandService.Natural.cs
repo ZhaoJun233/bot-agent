@@ -24,7 +24,8 @@ public sealed partial class AgentCommandService
 
         var officialExplicit = Channels.IsOfficial(Channels.ChannelOf(conversation.SourceKey))
             && _hooks.IsOfficialUserAllowed(senderId);
-        return _agentAllowAll || (_agentUsers.Count > 0 && _agentUsers.Contains(senderId)) || officialExplicit;
+        var isAllowedUser = _agentAllowAll || (_agentUsers.Count > 0 && _agentUsers.Contains(senderId)) || officialExplicit;
+        return EvaluateAgentAdmission("qq", isOwner: false, isAllowedUser: isAllowedUser, isWebSession: false);
     }
 
     /// <summary>跑一件从对话里接来的活（异常只记日志）。</summary>

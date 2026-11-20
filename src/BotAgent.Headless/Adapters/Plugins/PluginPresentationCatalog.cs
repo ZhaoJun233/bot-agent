@@ -72,6 +72,22 @@ internal sealed class PluginPresentationCatalog
         return entry?.Metadata.Runtime == (manifest.ApiVersion == 2 ? "python" : "dotnet") ? BindReview(entry) : null;
     }
 
+    internal ZbaPluginMetadata? ForInstalledPackage(PluginPackageManifest manifest, PluginInfo? registered,
+        bool hostDistribution)
+    {
+        var metadata = ForPackage(manifest);
+        if (metadata is not null) return metadata;
+        // Captured registry text is available offline without invoking package code. A different
+        // version or a legacy preset cannot describe this installed release or grant review.
+        if (registered is null || registered.IsPreset || registered.Id != manifest.Id || registered.Version != manifest.Version
+            || !Text(registered.Name) || !Text(registered.Description)) return null;
+        return new(registered.Name, registered.Description, registered.Description, Category(registered), "", "", "未提供",
+            "通过插件支持的功能入口使用。", "请核对插件来源与权限；本机展示资料不代表独立安全审核。",
+            "查看插件设置中的实际可用配置。", "以当前包清单及兼容性检查为准。", "未提供。", "未提供。",
+            "实际权限以宿主授权与包清单为准。", [], manifest.ApiVersion == 2 ? "python" : "dotnet",
+            hostDistribution ? "official" : "community", new ZbaPluginReview("unreviewed", manifest.Version, manifest.Sha256));
+    }
+
     internal IReadOnlyList<ZbaBuiltinPlugin> ForBuiltins(IReadOnlyList<PluginInfo> registered) => registered
         .Where(p => p.IsPreset).OrderBy(p => p.Id, StringComparer.Ordinal)
         .Select(p => new ZbaBuiltinPlugin(p.Id, p.Version, p.IsEnabled, ForBuiltin(p))).ToArray();
@@ -128,16 +144,19 @@ internal sealed class PluginPresentationCatalog
     private static InvalidDataException Invalid() => new("Invalid plugin presentation sidecar.");
 
     private static ZbaPluginMetadata Fallback(PluginInfo plugin) => new(
-        plugin.Name, plugin.Description, plugin.Description, plugin.Category switch
-        {
-            PluginCategory.Channel => "通道", PluginCategory.Media => "音频与媒体",
-            PluginCategory.Management => "管理工具", _ => "功能扩展"
-        }, "Bot Agent Contributors", "https://github.com/ZhaoJun233/bot-agent", "MIT",
+        plugin.Name, plugin.Description, plugin.Description, Category(plugin),
+        "Bot Agent Contributors", "https://github.com/ZhaoJun233/bot-agent", "MIT",
         "通过宿主支持的功能入口使用；无需安装独立包。",
         "内置能力可能调用外部服务；随宿主发布不代表独立安全审核。",
         "在宿主插件配置中查看实际可用设置。", "兼容性随当前宿主版本。", "随宿主版本更新。",
         "随宿主维护", "实际权限由宿主配置与工具策略控制。", ["内置"], "builtin", "builtin",
         new ZbaPluginReview("unreviewed", plugin.Version, null));
+
+    private static string Category(PluginInfo plugin) => plugin.Category switch
+    {
+        PluginCategory.Channel => "通道", PluginCategory.Media => "音频与媒体",
+        PluginCategory.Management => "管理工具", _ => "功能扩展"
+    };
 
     private sealed record Document([property: JsonRequired] int SchemaVersion,
         [property: JsonRequired] IReadOnlyList<Entry> Entries);

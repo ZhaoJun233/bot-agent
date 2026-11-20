@@ -41,6 +41,10 @@ internal sealed class PluginMarketOperations
             Persist(uncertain, before);
             try { await stage().ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
+            catch (BotAgent.Services.Plugins.PluginRestartRequiredException)
+            {
+                operation = operation with { Status = PluginMarketService.StatusRestartRequired, RestartRequired = true, ErrorCode = null };
+            }
             catch (ZbaBackendException exception)
             {
                 Persist(uncertain with { ErrorCode = exception.Code }, await revision().ConfigureAwait(false));

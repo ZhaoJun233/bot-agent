@@ -67,6 +67,8 @@ static class OutcomeChecks
         {
             var source = new SyntheticSource { ImageResult = () => receipt };
             using var service = new StickerService(store, null!, source, new TestSettings(), _ => { });
+            service.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+                new BotAgent.Packages.Stickers.StickerCoordinator(service.CreateHostPorts()));
             var result = await service.SendWithReceiptAsync(true, 10001, item, null, "group:10001");
             var confirmed = receipt.Ok && receipt.Delivery!.IsSuccess;
             Check("image receipt preserves status and only confirmed image enters cooldown " + receipt.Delivery!.Status + receipt.Ok,
@@ -78,6 +80,8 @@ static class OutcomeChecks
             new(new(PlatformId.QqOfficial, AccountScope.Legacy, "synthetic-image-driver"), null), CancellationToken.None, () => true)))
         using (var service = new StickerService(store, null!, throwing, new TestSettings(), _ => { }))
         {
+            service.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
+                new BotAgent.Packages.Stickers.StickerCoordinator(service.CreateHostPorts()));
             Check("official post-call image exception remains unknown",
                 (await service.SendWithReceiptAsync(true, 10001, item, null, "official:group:10001")).Delivery?.Status == DeliveryStatus.Unknown);
             ((OutcomeStickerStore)(object)store).FailRead = true;

@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Ports;
+using BotAgent.Services.Net;
 using Microsoft.Data.Sqlite;
 
 namespace BotAgent.Storage;
@@ -344,7 +345,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             var callbackComplete = false;
             try
             {
-                AppDatabase.Write(conn =>
+                AppDatabase.RejectNestedWrite();
+                _participant.CoordinateWrite(() => AppDatabase.Write(conn =>
                 {
                     if (!Allowed(caller, ConfigurationAccess.SaveConfiguration)
                         || (owned.Secrets.Any(s => s.Kind != SecretEditKind.Keep)
@@ -352,7 +354,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                         outcome = Rejected(ConfigurationResultCode.Forbidden);
                     else outcome = SaveInTransaction(conn, caller, request, owned, profile, ct, mood, expectedLegacyVersion);
                     callbackComplete = true;
-                });
+                }));
             }
             catch (Exception)
             {
@@ -1156,7 +1158,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         return FieldEdit<T>.Set(value);
     }
 
-    private static (double Min, double Max) Range(ConfigurationFieldId field) => field switch
+    private static (double Min, double Max) Range(ConfigurationFieldId field)
+        => ResearchSettings.TryGetNumericRange(field.ToString(), out var researchRange) ? researchRange : field switch
     {
         ConfigurationFieldId.AgentMaxQueued => (1, 20),
         ConfigurationFieldId.AgentProgressSeconds => (0, 3600),
@@ -1172,8 +1175,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.DefaultTopP => (0.0, 1.0),
         ConfigurationFieldId.EmotionalTemperature => (0.0, 2.0),
         ConfigurationFieldId.EmotionalTopP => (0.0, 1.0),
-        ConfigurationFieldId.LinkPreviewMax => (0, 5),
-        ConfigurationFieldId.LinkPreviewTimeoutSeconds => (2, 30),
         ConfigurationFieldId.MaxAgentSteps => (1, 3),
         ConfigurationFieldId.MaxConcurrentReplies => (1, 16),
         ConfigurationFieldId.MaxContextMessages => (10, 1000),
@@ -1207,15 +1208,13 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.VoicePitch => (-12, 12),
         ConfigurationFieldId.VoiceSpeed => (50, 200),
         ConfigurationFieldId.VoiceVol => (0, 1000),
-        ConfigurationFieldId.WebSearchCooldownSeconds => (0, 86400),
-        ConfigurationFieldId.WebSearchMaxResults => (1, 10),
-        ConfigurationFieldId.WebSearchTimeoutSeconds => (5, 60),
         _ => (double.MinValue, double.MaxValue)
     };
 
     private static string NormalizeText(ConfigurationFieldId field, string text)
     {
         if (StrictUtf8.GetByteCount(text) > 32768) throw new ArgumentException("string_too_large");
+        if (ResearchSettings.TryNormalizeText(field.ToString(), text, out var researchText)) text = researchText;
         if (field is
             ConfigurationFieldId.AgentModel
             or ConfigurationFieldId.AgentPrefix
@@ -1255,8 +1254,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             or ConfigurationFieldId.TtsProvider
             or ConfigurationFieldId.TtsServiceUrl
             or ConfigurationFieldId.VoiceEmotion
-            or ConfigurationFieldId.VoiceName
-            or ConfigurationFieldId.WebSearchSources) text = text.Trim();
+            or ConfigurationFieldId.VoiceName) text = text.Trim();
         if (field is ConfigurationFieldId.AgentReasoningEffort or ConfigurationFieldId.ThinkingBudget
             or ConfigurationFieldId.FastThinkingBudget) text = text.ToLowerInvariant();
         if (field == ConfigurationFieldId.AgentReasoningEffort && text is "" or "default") text = "auto";
@@ -1574,8 +1572,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     }
 
     private static void PersistModes(SqliteConnection conn, OwnedIntent owned)
+        => PersistModes(conn, owned.Modes);
+
+    private static void PersistModes(SqliteConnection conn, IEnumerable<(ConfigurationFieldId Field, UserValueKind Mode)> modes)
     {
-        foreach (var (field, mode) in owned.Modes)
+        foreach (var (field, mode) in modes)
             AppDatabase.Exec(conn, "INSERT INTO configuration_field_modes(field_id,user_mode) VALUES($field,$mode) " +
                 "ON CONFLICT(field_id) DO UPDATE SET user_mode=excluded.user_mode", ("$field", (int)field), ("$mode", (int)mode));
     }

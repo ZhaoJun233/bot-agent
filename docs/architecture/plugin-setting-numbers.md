@@ -1,0 +1,15 @@
+# Declarative numeric setting constraints
+
+BotAgent.Plugin.Contracts owns PluginSettingNumberConstraints and the pure PluginSettingValidation rules and defaults. The existing six-parameter PluginSettingDefinition constructor remains unchanged; its optional NumberConstraints property is omitted when null. Core preserves the public PluginSettingsContract facade and forwards the previous PluginSettingsException identity. Independent owners can validate settings using the Plugin SDK without Core, Headless or a business implementation.
+
+The optional declaration contains minimum, maximum and integer. Bounds must be finite and ordered, and are inclusive. Integer values must be JSON integers within the exact JavaScript range from -9007199254740991 to 9007199254740991; decimal or exponent spelling is rejected for an integer field. Fields without constraints retain finite-number behavior, including fractions. Defaults use the same validation as submitted values. Unknown, duplicate or incorrectly typed numeric rules fail before approval rather than losing their constraints during normalization.
+
+ResearchSettings declares its five existing numeric ranges with integer=true. This does not change the nine legacy setting parsers, clamping rules, environment defaults or immediate legacy application. WebSearchReadMaxChars remains outside the nine editable fields. Generic package settings retain their current restart adoption and transaction, receipt and revision semantics.
+
+The complete numeric declaration participates in manifest normalization, package intent and lifecycle fingerprints, preview comparison, setting schema hashes and the ZBA schema DTO. The frontend checks the wire declaration before rendering, shows its range and integer hint, applies min/max/step and validates before dispatch. Absent and null constraints preserve the previous serialized setting and its hashes.
+
+A non-null constraint in Active, Previous or Pending requires state reader 10. The current envelope and PE compatibility metadata agree on 10. Real reader 9 rejects such a state before interpreting opaque execution data, and the original bytes remain unchanged. States without numeric constraints retain their previous minimum reader requirements.
+
+The original numeric probe was compiled against the preceding SDK before the implementation. Its unchanged DLL now passes all 39 checks. Additional binary-only SDK checks exercise exact integer text, nullable and default values, invalid schemas and ambiguous JSON. Runtime checks use the real package settings writer and saved reader 9. A separate local browser fixture imports the actual components and an SDK-exported schema; it validates rendering and dispatch only, and does not establish host authentication or P07 runtime adoption.
+
+This change provides the numeric schema needed by configuration contributions. Package-owned writable truth, live adoption, full runtime UI delivery and the remaining R2 matrix are still separate requirements. These unshipped SDK changes retain version 1.0.0 and do not authorize publication or production deployment.

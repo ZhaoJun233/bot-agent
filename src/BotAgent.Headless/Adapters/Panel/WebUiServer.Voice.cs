@@ -74,6 +74,11 @@ public sealed partial class WebUiServer
     /// <summary>/api/voice/clones：列出云端已复刻的音色（面板点一下就填进「音色」格）。</summary>
     private async Task HandleVoiceClonesAsync(HttpListenerContext context)
     {
+        if (!_voice.IsPluginAvailable)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["voices"] = new JsonArray(), ["error"] = "语音插件未启用或不可用" });
+            return;
+        }
         var voice = _voice.Client;
         if (voice is null)
         {
@@ -95,7 +100,7 @@ public sealed partial class WebUiServer
     /// POST /api/voice/clone：音色复刻（上传样本 → 建克隆）。
     /// 面板把选中的音频读成 base64 一起发上来：HttpListener 里解 multipart 纯属自找麻烦。
     /// 两种请求体都收：
-    ///   • 单段：<c>{"audioBase64":"…","fileName":"a.mp3","voiceId":"zhao_voice_01"}</c>
+    ///   • 单段：<c>{"audioBase64":"…","fileName":"a.mp3","voiceId":"example_voice_01"}</c>
     ///   • 多段（自动拼接）：<c>{"samples":[{"audioBase64":"…","fileName":"1.mp3"},…],"voiceId":"…"}</c>
     /// 多段是为了“手上只有 5 秒切片”的情况 —— 官方主样本要求 ≥ 10 秒，服务端把几段拼成一段再传。
     /// </summary>
@@ -104,6 +109,12 @@ public sealed partial class WebUiServer
         if (method != "POST")
         {
             await WriteJsonAsync(context, 405, new JsonObject { ["error"] = "用法：POST /api/voice/clone" });
+            return;
+        }
+
+        if (!_voice.IsPluginAvailable)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["ok"] = false, ["error"] = "语音插件未启用或不可用" });
             return;
         }
 
@@ -152,8 +163,7 @@ public sealed partial class WebUiServer
         var finalBytes = decoded[0].Data;
         if (decoded.Count > 1)
         {
-            var (merged, concatError, concatNote) = 
-                BotAgent.Services.Voice.VoiceService.ConcatSamples(decoded);
+            var (merged, concatError, concatNote) = _voice.ConcatSamples(decoded);
             if (concatError is not null || merged is null)
             {
                 FileLog.Write("Voice", "面板拼接样本失败：" + concatError);
@@ -194,6 +204,12 @@ public sealed partial class WebUiServer
             return;
         }
 
+        if (!_voice.IsPluginAvailable)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["ok"] = false, ["error"] = "语音插件未启用或不可用" });
+            return;
+        }
+
         var voice = _voice.Client;
         if (voice is null)
         {
@@ -230,6 +246,11 @@ public sealed partial class WebUiServer
     /// <summary>/api/voice/health：把 TTS 服务自己的 /health 透传给面板（活着吗、有哪些音色）。</summary>
     private async Task HandleVoiceHealthAsync(HttpListenerContext context)
     {
+        if (!_voice.IsPluginAvailable)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["ok"] = false, ["error"] = "语音插件未启用或不可用" });
+            return;
+        }
         var voice = _voice.Client;
         if (voice is null)
         {

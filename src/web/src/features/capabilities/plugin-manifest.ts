@@ -1,4 +1,9 @@
 import { hasValidPluginRuntime, type PythonPluginRuntime } from '../../api/plugin-runtime'
+import { hasValidSharedContracts, type PluginSharedContract } from '../../api/plugin-shared-contracts'
+import { hasValidPluginData, type PluginPackageData } from '../../api/plugin-data'
+import { hasValidSettingNumberConstraints, type PluginSettingNumberConstraints } from '../../api/plugin-setting-numbers'
+import { hasValidPluginConfiguration, type PluginConfigurationDeclaration } from '../../api/plugin-configuration'
+import { hasValidPluginUi, type PluginUiDeclaration } from '../../api/plugin-ui'
 
 export const pluginSettingTypes = ['string', 'boolean', 'number', 'secret', 'select'] as const
 export type PluginSettingType = typeof pluginSettingTypes[number]
@@ -9,6 +14,7 @@ export interface PluginSettingDefinition {
   defaultValue?: string | null
   required?: boolean
   choices?: string[] | null
+  numberConstraints?: PluginSettingNumberConstraints | null
 }
 export interface PluginPackageManifest {
   id: string
@@ -24,6 +30,14 @@ export interface PluginPackageManifest {
   permissions?: string[] | null
   dependencies?: Array<{ id: string; version: string }> | null
   settings?: PluginSettingDefinition[] | null
+  sharedContracts?: PluginSharedContract[] | null
+  data?: PluginPackageData | null
+  control?: boolean
+  toolApiVersion?: number | null
+  configuration?: PluginConfigurationDeclaration | null
+  ui?: PluginUiDeclaration | null
+  adoption?: 'cold' | 'online' | null
+  exclusiveResources?: string[] | null
 }
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -34,14 +48,22 @@ export function isPluginSettingDefinition(value: unknown): value is PluginSettin
     && (value.required === undefined || typeof value.required === 'boolean')
     && (value.defaultValue === undefined || value.defaultValue === null || typeof value.defaultValue === 'string')
     && (value.choices === undefined || value.choices === null || (Array.isArray(value.choices) && value.choices.every((item) => typeof item === 'string')))
+    && hasValidSettingNumberConstraints(value)
 }
 export function isPluginManifest(value: unknown): value is PluginPackageManifest {
-  return record(value) && typeof value.id === 'string' && typeof value.version === 'string'
+  return record(value) && typeof value.id === 'string' && value.id.trim().length > 0
+    && typeof value.version === 'string' && value.version.trim().length > 0
     && hasValidPluginRuntime(value)
+    && hasValidSharedContracts(value)
+    && hasValidPluginData(value)
+    && hasValidPluginConfiguration(value)
+    && hasValidPluginUi(value)
+    && (!('toolApiVersion' in value) || (value.apiVersion === 1 && (value.toolApiVersion == null || value.toolApiVersion === 1)))
     && typeof value.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(value.sha256)
     && typeof value.downloadUrl === 'string' && Number.isSafeInteger(value.apiVersion)
     && (value.minimumHostVersion === undefined || value.minimumHostVersion === null || typeof value.minimumHostVersion === 'string')
     && (value.permissions === undefined || value.permissions === null || (Array.isArray(value.permissions) && value.permissions.every((item) => typeof item === 'string')))
+    && (!Array.isArray(value.permissions) || !value.permissions.includes('network.public-read') || value.apiVersion === 1)
     && (value.settings === undefined || value.settings === null || (Array.isArray(value.settings) && value.settings.every(isPluginSettingDefinition)
       && new Set(value.settings.map((item) => item.key)).size === value.settings.length))
 }

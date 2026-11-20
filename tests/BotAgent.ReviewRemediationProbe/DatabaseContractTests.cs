@@ -28,7 +28,7 @@ internal static class DatabaseContractTests
             using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
             {
                 conn.Open();
-                HostDatabase.Exec(conn, "PRAGMA user_version = 15; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
+                HostDatabase.Exec(conn, "PRAGMA user_version = 16; CREATE TABLE synthetic_marker(id INTEGER PRIMARY KEY);");
             }
             var hash = SHA256.HashData(File.ReadAllBytes(path));
             ClockBindings.InitializeStorage();
@@ -56,11 +56,11 @@ internal static class DatabaseContractTests
 
     private static int ReopenChild(string restoreRoot)
     {
-        var full = Path.GetFullPath(restoreRoot);
+        var full = PhysicalFixturePath(restoreRoot);
         var parent = Path.GetDirectoryName(full)!;
         if (Path.GetFileName(full) != "c2-restore" || !System.Text.RegularExpressions.Regex.IsMatch(
             Path.GetFileName(parent), "^botagent-review-remediation-[0-9a-f]{32}$")
-            || !string.Equals(Path.GetDirectoryName(parent), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(Path.GetDirectoryName(parent), PhysicalFixturePath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
             return 1;
         Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", full);
         Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", full);
@@ -68,13 +68,18 @@ internal static class DatabaseContractTests
         {
             HostDatabase.Initialize();
             if (!StorageDatabase.IsReady || HostDatabase.GetMeta("synthetic:c2-backup") != "snapshot-value"
-                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 14) return 1;
+                || StorageDatabase.Scalar<long>("PRAGMA user_version") != 15) return 1;
             Console.WriteLine("C2_CHILD restore passed=3 failed=0");
             return 0;
         }
         catch (Exception ex) { Console.WriteLine("C2_CHILD restore failed=1 type=" + ex.GetType().Name); return 1; }
         finally { SqliteConnection.ClearAllPools(); }
     }
+
+    // Compare the actual temp directory, including OS volume aliases, before a child touches a backup.
+    internal static string PhysicalFixturePath(string path) => (string)typeof(StorageDatabase)
+        .GetMethod("ResolvePhysicalPath", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+        .Invoke(null, [path])!;
 
     public static Task SharedAsync(Action<bool, string> check)
     {
@@ -147,7 +152,7 @@ internal static class DatabaseContractTests
             }
 
             StorageDatabase.Initialize(path);
-            Check(StorageDatabase.Scalar<long>("PRAGMA user_version") == 14, "legacy v12 database upgrades through v13 to v14");
+            Check(StorageDatabase.Scalar<long>("PRAGMA user_version") == 15, "legacy v12 database upgrades through v13 and v14 to v15");
 
             var columns = StorageDatabase.Query("PRAGMA table_info(trace_archive);", r => r.GetString(1));
             Check(columns.Contains("cached_prompt_tokens") && columns.Contains("cache_write_tokens")

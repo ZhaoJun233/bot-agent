@@ -11,7 +11,7 @@ namespace BotAgent.ArchitectureProbe;
 /// 三类断言：棘轮（只许更严）、目标布局（Domain/Adapters 硬规则）、红线锚点（不许在重构里消失）。
 /// 口径：纯读源码，不连库、不起进程、不读数据目录、不发消息。加 <c>--print</c> 只打印实测值。
 /// </summary>
-public static class Program
+public static partial class Program
 {
     private static int _passed;
     private static int _failed;
@@ -40,6 +40,15 @@ public static class Program
         var index = SourceIndex.Load();
         Console.WriteLine($"源码根：{index.Root}");
         Console.WriteLine($"源文件：{index.Files.Count} 个 / {index.TotalLines} 行");
+
+        if (args.SequenceEqual(new[] { "--versions" }))
+        {
+            var versions = ReleaseVersions.Read(index.Root);
+            Console.WriteLine($"宿主版本：{versions.Host}；独立发行工程：{versions.Independent.Count}");
+            foreach (var release in versions.Independent)
+                Console.WriteLine($"{release.Kind} {release.Project} {release.Version}");
+            return 0;
+        }
 
         if (args.SequenceEqual(new[] { "--self-test" }))
         {
@@ -273,6 +282,9 @@ public static class Program
             catch (InvalidOperationException) { rejected = true; }
             Check("显式源码根无效时不得退回真实仓库假绿", rejected);
             MetricsContractTests();
+            ReleaseVersionTests(root);
+            PackageSourceTests(root);
+            SchemaSourceTests(root);
             ConfigurationSqlOwnershipTests();
             var storage = SourceFile.FromText("src/BotAgent.Storage/EpisodeStore.cs", "public class EpisodeStore { }");
             const string facadeCode = "extern alias StorageModule; public class EpisodeStore : StorageModule::BotAgent.Adapters.Persistence.EpisodeStore { }";
@@ -399,6 +411,9 @@ public static class Program
             Metrics.CountSqlLiterals(lexical) == 1 && Metrics.CountDirectFileIo(lexical) == 1
             && Metrics.CountClockReads(lexical) == 1 && Metrics.CountHttpClientNew(lexical) == 1
             && Metrics.CountSettingsAssignments(lexical) == 1);
+        var replacement = SourceFile.FromText("src/BotAgent.Storage/TextSnapshotFile.cs",
+            "class Synthetic { void M() { File.Replace(source, target, null); } }\n");
+        Check("原子替换保持直接文件 IO 计数", Metrics.CountDirectFileIo(replacement) == 1);
         var targetNew = SourceFile.FromText("src/BotAgent.Headless/Services/Synthetic.cs",
             "class Synthetic { private readonly ConversationStore _store = new(); HttpClient client = new(); }\n");
         Check("目标类型 new 仍计入具体 IO 与 HttpClient", Metrics.CountConcreteIoNew(targetNew) == 1 && Metrics.CountHttpClientNew(targetNew) == 1);
@@ -440,6 +455,13 @@ public static class Program
             && !Baseline.AllowsSql("src/BotAgent.Storage/Unregistered.cs")
             && !Baseline.AllowsFileIo("src/BotAgent.Storage/Unregistered.cs")
             && !Baseline.AllowsSql("src/BotAgent.Platforms/Persistence/PlatformDedupStore.cs"));
+        Check("独立计量与历史SQL按源文件登记，协调器不再获SQL例外",
+            Baseline.AllowsSql("src/BotAgent.Storage/TokenUsageStore.cs")
+            && !Baseline.AllowsSql("src/BotAgent.Storage/TokenUsageMigration.cs")
+            && Baseline.SchemaSqlOwners.Count == 4 && Baseline.SchemaSqlOwners.Keys.All(Baseline.AllowsSql)
+            && !Baseline.AllowsSql("packages/token-quota/backend/Schema/unregistered.sql")
+            && !Baseline.AllowsSql("src/BotAgent.Storage/TokenUsageOther.cs")
+            && !Baseline.AllowsFileIo("src/BotAgent.Storage/TokenUsageStore.cs"));
         Check("棘轮不高于 R3 开始数值", Baseline.MaxFileLines <= 1765 && Baseline.BotAgentHostLines <= 243
             && Baseline.BotAgentHostFields <= 10 && Baseline.BotAgentHostMethods <= 10 && Baseline.LongestMethodLines <= 30
             && Baseline.LongestMethodAnywhere <= 198
@@ -519,7 +541,7 @@ public static class Program
     /// 口径：只读仓库文件（slnx / ci.yml / Directory.Build.props / .github），不联网、不执行 CI。
     /// </summary>
     private static List<string> RepositoryProjectPaths(string root)
-        => new[] { "src", "tests", "tools" }
+        => new[] { "src", "tests", "tools", "packages", "contracts" }
             .Select(name => Path.Combine(root, name)).Where(Directory.Exists)
             .SelectMany(directory => Directory.EnumerateFiles(directory, "*.csproj", SearchOption.AllDirectories))
             .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
@@ -698,7 +720,7 @@ public static class Program
 
     private static List<string> FallbackMarkdownFiles(string root)
     {
-        var roots = new[] { "docs", "src", "tests", "examples", ".github" };
+        var roots = new[] { "docs", "src", "tests", "packages", "contracts", "examples", ".github" };
         var found = new List<string>();
         var direct = new[] { "README.md", "README.en.md", "AGENTS.md", "AGENTS.en.md", "CONTRIBUTING.md", "CONTRIBUTING.en.md", "SECURITY.md", "SECURITY.en.md" };
         foreach (var name in direct)
@@ -769,6 +791,16 @@ public static class Program
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
 
+        // Legacy panel bindings can take their literal path from a package-owned HTTP description.
+        var legacyContracts = string.Join(Environment.NewLine, index.Files
+            .Where(file => file.CodeOnly.Contains("PluginHttpDescription", StringComparison.Ordinal))
+            .Select(file => file.NoComments));
+        var contributedLegacyPaths = Regex.Matches(legacyContracts, @"new\(\s*""[A-Z]+"",\s*""(?<path>/api/[^""]*)""")
+            .Select(match => match.Groups["path"].Value).Distinct(StringComparer.Ordinal).ToArray();
+        Check("研究诊断路径由研究契约声明并由面板绑定", contributedLegacyPaths.Contains("/api/search/test")
+            && routeText.Contains("ResearchHttp.Description.Routes[0].Path", StringComparison.Ordinal));
+        declaredPaths = declaredPaths.Concat(contributedLegacyPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
         var missingPaths = declaredPaths.Where(p => !surface.Contains(p, StringComparison.Ordinal)).ToList();
         Check($"PanelRoutes.cs 声明的 {declaredPaths.Count} 条路径全部出现在 docs/api-surface.md",
             missingPaths.Count == 0 && declaredPaths.Count > 0,
@@ -778,8 +810,10 @@ public static class Program
 
         // ZBA 是**新**面板契约（37+ 条）：它也有运行时 OpenAPI，但文档地图这一页同样要跟得上。
         // 只查「声明了却没写进 docs/api-surface.md」，不禁止文档多写。
-        var zbaRouteFile = Path.Combine(index.Root, "src/BotAgent.Panel/ZbaRoutes.cs");
-        var zbaText = File.Exists(zbaRouteFile) ? File.ReadAllText(zbaRouteFile) : string.Empty;
+        var zbaText = string.Join(Environment.NewLine, index.Files
+            .Where(file => file.RelativePath == "src/BotAgent.Panel/ZbaRoutes.cs"
+                || file.CodeOnly.Contains("PluginHttpDescription", StringComparison.Ordinal))
+            .Select(file => file.NoComments));
         var zbaPaths = Regex
             .Matches(zbaText, @"new\(\s*""[A-Z]+"",\s*""(?<path>/zba/[^""]*)""")
             .Select(m => m.Groups["path"].Value)
@@ -787,10 +821,10 @@ public static class Program
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
         var missingZbaPaths = zbaPaths.Where(p => !surface.Contains(p, StringComparison.Ordinal)).ToList();
-        Check($"ZbaRoutes.cs 声明的 {zbaPaths.Count} 条路径全部出现在 docs/api-surface.md",
+        Check($"壳与包声明的 {zbaPaths.Count} 条路径全部出现在 docs/api-surface.md",
             missingZbaPaths.Count == 0 && zbaPaths.Count > 0,
             zbaPaths.Count == 0
-                ? "没有从 ZbaRoutes.cs 解析出任何路由（正则是不是过期了？）"
+                ? "没有从壳与包契约解析出任何路由（正则是不是过期了？）"
                 : missingZbaPaths.Count == 0 ? null : "文档缺：" + string.Join("、", missingZbaPaths));
 
         // README 里写的每个 UPPER_SNAKE 键都得有出处：要么被宿主真的读，要么在 compose 里被替换。
@@ -840,12 +874,12 @@ public static class Program
         var required = new SortedSet<string>(StringComparer.Ordinal);
         void Visit(SourceProject project)
         {
-            if (!required.Add(project.Name))
+            if (!required.Add(project.RelativePath))
             {
                 return;
             }
 
-            foreach (var reference in project.References)
+            foreach (var reference in project.References.Concat(project.BuildReferences ?? []))
             {
                 if (projects.TryGetValue(reference, out var dependency))
                 {
@@ -855,15 +889,55 @@ public static class Program
         }
 
         Visit(index.Projects.Single(p => p.Name == "BotAgent.Headless"));
-        var missingSources = required.Where(name => !Regex.IsMatch(dockerfile,
-            $@"^COPY\s+src/{Regex.Escape(name)}/\s+src/{Regex.Escape(name)}/\s*$", RegexOptions.Multiline)).ToList();
-        var missingProjects = required.Where(name => !Regex.IsMatch(dockerfile,
-            $@"^COPY\s+src/{Regex.Escape(name)}/{Regex.Escape(name)}\.csproj\s+src/{Regex.Escape(name)}/\s*$",
+        var sourceDirectories = required.Select(p => p[..(p.LastIndexOf('/') + 1)]).ToHashSet(StringComparer.Ordinal);
+        foreach (var link in Baseline.CompatibilitySourceLinks.Where(pair => required.Contains(pair.Key)))
+            if (!sourceDirectories.Any(directory => link.Value.StartsWith(directory, StringComparison.Ordinal)))
+                sourceDirectories.Add(link.Value[..(link.Value.LastIndexOf('/') + 1)]);
+        var missingSources = sourceDirectories.Where(directory => !Regex.IsMatch(dockerfile,
+            $@"^COPY\s+{Regex.Escape(directory)}\s+{Regex.Escape(directory)}\s*$", RegexOptions.Multiline)).ToList();
+        var missingProjects = required.Where(project => !Regex.IsMatch(dockerfile,
+            $@"^COPY\s+{Regex.Escape(project)}\s+{Regex.Escape(project[..(project.LastIndexOf('/') + 1)])}\s*$",
             RegexOptions.Multiline)).ToList();
 
         Check($"Headless 的传递源码闭包 {required.Count} 个工程都进入 Dockerfile",
             missingSources.Count == 0 && missingProjects.Count == 0,
-            string.Join("、", missingSources.Select(x => x + "/").Concat(missingProjects.Select(x => x + ".csproj"))));
+            string.Join("、", missingSources.Concat(missingProjects)));
+
+        var packagesDir = Path.Combine(index.Root, "packages");
+        var distributionTemplates = Directory.Exists(packagesDir)
+            ? Directory.EnumerateFiles(packagesDir, "distribution.json", SearchOption.AllDirectories)
+                .Select(file => Path.GetRelativePath(index.Root, file).Replace('\\', '/'))
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToList()
+            : [];
+        var missingDistributions = distributionTemplates.Where(template =>
+        {
+            var dir = template[..(template.LastIndexOf('/') + 1)];
+            return !Regex.IsMatch(dockerfile,
+                $@"^COPY\s+{Regex.Escape(template)}\s+{Regex.Escape(dir)}\s*$", RegexOptions.Multiline);
+        }).ToList();
+        Check($"全部 {distributionTemplates.Count} 个插件发行模板（distribution.json）均进入源码镜像",
+            distributionTemplates.Count > 0 && missingDistributions.Count == 0,
+            missingDistributions.Count == 0 ? null : "缺少 distribution.json COPY：" + string.Join("、", missingDistributions));
+
+        var missingWebDirs = new List<string>();
+        foreach (var template in distributionTemplates)
+        {
+            var fullTemplate = Path.Combine(index.Root, template);
+            if (!File.ReadAllText(fullTemplate).Contains("\"ui\"", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var webDir = template[..(template.LastIndexOf('/') + 1)] + "web/";
+            if (!Regex.IsMatch(dockerfile,
+                $@"^COPY\s+{Regex.Escape(webDir)}\s+{Regex.Escape(webDir)}\s*$", RegexOptions.Multiline))
+            {
+                missingWebDirs.Add(webDir);
+            }
+        }
+        Check("全部声明 ui 的插件包 web/ 目录均进入源码镜像",
+            missingWebDirs.Count == 0,
+            missingWebDirs.Count == 0 ? null : "缺少 web/ COPY：" + string.Join("、", missingWebDirs));
     }
 
     // ───────────────────────────── 核心不变量与管线性能基线（#126） ─────────────────────────────
@@ -948,25 +1022,9 @@ public static class Program
             return false;
         }
 
-        // ① 全仓只有一个 <Version>：csproj 自己写会悄悄压过 Directory.Build.props，等于又回到多个真源
-        var csprojWithVersion = Directory.EnumerateFiles(index.Root, "*.csproj", SearchOption.AllDirectories)
-            .Where(path => !Excluded(path))
-            .Where(path => File.ReadAllText(path).Contains("<Version>", StringComparison.Ordinal))
-            .Select(path => Path.GetRelativePath(index.Root, path).Replace(Path.DirectorySeparatorChar, '/'))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToList();
-        var propsPath = Path.Combine(index.Root, "Directory.Build.props");
-        var propsText = File.Exists(propsPath) ? File.ReadAllText(propsPath) : string.Empty;
-        var declared = Regex.Match(propsText, "<Version>\\s*([0-9]+\\.[0-9]+\\.[0-9]+)\\s*</Version>");
-        var versionSingle = csprojWithVersion.Count == 0 && declared.Success;
-        Check("全仓只有一个 <Version>，且写在 Directory.Build.props 里（形如 x.y.z）",
-            versionSingle,
-            versionSingle
-                ? null
-                : csprojWithVersion.Count > 0
-                    ? "这些 csproj 还各自写着 <Version>：" + string.Join("、", csprojWithVersion)
-                    : "Directory.Build.props 里没有形如 1.2.3 的 <Version>");
-        if (declared.Success) Console.WriteLine($"  版本：{declared.Groups[1].Value}（来自 Directory.Build.props）");
+        var versions = ReleaseVersions.Read(index.Root);
+        Check("宿主、明确登记的包与契约各有唯一版本，未登记覆盖被拒绝", true);
+        Console.WriteLine($"  宿主版本：{versions.Host}；独立发行工程：{versions.Independent.Count}");
 
         // ①b 展示层也不许写死版本：横幅曾经硬编码 1.1.0，于是真源改了它还是旧的
         var hardcodedBanner = Directory.EnumerateFiles(Path.Combine(index.Root, "src"), "*.cs", SearchOption.AllDirectories)
@@ -1097,12 +1155,16 @@ public static class Program
             "ConversationStore", "EpisodeStore", "HostMetrics", "JargonStore", "LegacyJsonImporter",
             "MemberProfileStore", "MemberRoleStore", "MoodStore", "MusicStore", "OwnMessageStore",
             "PanelPasswordStore", "PromptTemplateStore", "SecretFiles", "SecretsStore", "StickerStore",
-            "TenantQuotaStore", "TtsConfFile" })
+            "TtsConfFile" })
         {
             var facade = index.ByPath($"src/BotAgent.Headless/Adapters/Persistence/{name}.cs");
             var implementation = index.ByPath($"src/BotAgent.Storage/{name}.cs");
             Check($"C2：{name} 保留兼容入口但不再复制 SQL/文件 IO", IsStorageFacade(facade, implementation, name));
         }
+        Check("P08：旧配额持久层及策略实现已从宿主工程退役",
+            index.ByPath("src/BotAgent.Headless/Adapters/Persistence/TenantQuotaStore.cs") is null
+            && index.ByPath("src/BotAgent.Storage/TenantQuotaStore.cs") is null
+            && index.ByPath("src/BotAgent.Engine/Plugins/Presets/TokenQuotaPresetPlugin.cs") is null);
 
         // 读系统时间：只允许 IClock 的唯一实现那个文件（别处一律走 Clock / 注入的 IClock）
         var clockFiles = index.PerFile("", Metrics.CountClockReads);
@@ -1317,10 +1379,27 @@ public static class Program
                 "FeatureKey:\\s*ToolFeature\\.")
             .Count;
         var switches = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolSwitches.cs");
-        Check("每个聊天工具声明都带 FeatureKey（10 条，名字只在 ToolFeature 里出现一次）",
-            featureKeys == 10 && switches is not null
+        var researchTools = index.ByPath("packages/websearch/backend/ResearchTools.cs");
+        var researchKeys = Regex.Matches(researchTools?.NoComments ?? string.Empty, "FeatureKey:\\s*ToolFeature\\.").Count;
+        Check("聊天声明按实际所有者提供 FeatureKey（内建 8 / 研究包 2）",
+            featureKeys == 8 && researchKeys == 2 && switches is not null
             && switches.NoComments.Contains("_ => false", StringComparison.Ordinal),
-            $"带 FeatureKey 的声明 = {featureKeys}（期望 10）；开关表 = {(switches is null ? "缺" : "在")}");
+            $"带 FeatureKey 的声明 = {featureKeys}/{researchKeys}；开关表 = {(switches is null ? "缺" : "在")}");
+        var staticSpecs = index.ByPath("src/BotAgent.Core/Domain/Tools/ChatToolSpecs.cs")?.NoComments ?? string.Empty;
+        var staticArgs = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolArgs.cs")?.NoComments ?? string.Empty;
+        Check("Core 不再登记研究工具或复制研究参数规则",
+            !staticSpecs.Contains("web.search", StringComparison.Ordinal) && !staticSpecs.Contains("web.read", StringComparison.Ordinal)
+            && !staticArgs.Contains("web.search", StringComparison.Ordinal) && !staticArgs.Contains("web.read", StringComparison.Ordinal));
+        foreach (var path in new[] { "src/BotAgent.Engine/Reply/InlineTurnTools.cs", "src/BotAgent.Engine/Reply/ReplyTurnActions.cs" })
+        {
+            var text = index.ByPath(path)?.NoComments ?? string.Empty;
+            Check("研究聊天通过固定工具句柄执行：" + path,
+                text.Contains("binding.ExecuteAsync", StringComparison.Ordinal)
+                && text.Contains("caps.Catalog", StringComparison.Ordinal)
+                && !text.Contains("_research.SearchAsync", StringComparison.Ordinal)
+                && !text.Contains("_research.ReadPageAsync", StringComparison.Ordinal)
+                && !text.Contains("_research.TryBeginSearch", StringComparison.Ordinal));
+        }
 
         var inventory = index.ByPath("src/BotAgent.Engine/Tools/ToolInventory.cs");
         Check("MCP 以追加来源进统一查询面（ToolOrigin.Mcp，不改内建 26 条）",

@@ -443,7 +443,7 @@ public static class Program
     {
         var g = c["gate"] as JsonObject ?? throw new InvalidOperationException("gate 节缺失");
         var sw = g["switches"] as JsonObject ?? new JsonObject();
-        var set = ChatCapabilitySet.FromSwitches(
+        var set = ResearchToolFixture.Capabilities(
             enableWebSearch: sw["webSearch"]?.GetValue<bool>() ?? true,
             enableMusic: sw["music"]?.GetValue<bool>() ?? true,
             enableVoice: sw["voice"]?.GetValue<bool>() ?? true,

@@ -5,13 +5,13 @@ using BotAgent.Domain.Tools;
 namespace BotAgent.Services.Tools;
 
 /// <summary>
-/// **统一查询面**（#115）：把内建三族（聊天 10 / QQ 动作 10 / 服务器 6）与运行时发现的 MCP 工具
+/// **统一查询面**（#115）：把宿主与当前采用的插件目录和运行时发现的 MCP 工具
 /// 放进同一张只读表，回答“系统到底有哪些工具、这条来自哪里”。
 ///
 /// 三条边界，别越：
 ///   · **只读视图**：不参与任何判定（可见性在 <see cref="ToolVisibility" />，放行/审批在 ToolGate）；
-///   · **内建计数不变**：<see cref="Builtin" /> 的条数仍是被探针钉住的 26（10/10/6），
-///     MCP 是**追加**的另一个来源（<see cref="ToolOrigin.Mcp" />），不会让“发现成功”看起来像“内建多了一条”；
+///   · **目录与 MCP 分列**：BuiltinCount 保留原目录合计语义，HostCount/PluginCount 区分所有者；
+///     MCP 是**追加**的另一个来源（<see cref="ToolOrigin.Mcp" />），不会混入已采用目录的计数；
 ///   · **MCP 描述是不可信数据**：只投影成给人看的短摘要，参数契约以远端 schema 为准（执行前另行校验），
 ///     所以 <see cref="ToolSpec.Parameters" /> 对 MCP 固定写一句“由服务器声明”。
 ///
@@ -40,7 +40,7 @@ public sealed class ToolInventory
         Entries = builtin.Concat(mcp).ToArray();
     }
 
-    /// <summary>没有 MCP 时的目录（内建三族；条数=26）。</summary>
+    /// <summary>仅宿主声明的目录，不包含已采用插件或 MCP。</summary>
     public static ToolInventory Builtin { get; } = Create(ToolDirectory.Builtin, Array.Empty<McpToolInfo>());
 
     /// <summary>按当前目录 + 当前 MCP 快照投影一份（<paramref name="mcpTools" /> 为 null = 没有 MCP）。</summary>
@@ -51,7 +51,7 @@ public sealed class ToolInventory
         return new ToolInventory(directory.Specs, mcp);
     }
 
-    /// <summary>内建工具声明（顺序 = 聊天 / QQ 动作 / 服务器工具）。</summary>
+    /// <summary>宿主与已采用插件的声明合计，保留原 builtin 字段语义。</summary>
     public IReadOnlyList<ToolSpec> BuiltinSpecs { get; }
 
     /// <summary>MCP 工具投影（顺序 = 发现结果顺序）。</summary>
@@ -64,6 +64,10 @@ public sealed class ToolInventory
     public IReadOnlyList<string> Duplicates { get; }
 
     public int BuiltinCount => BuiltinSpecs.Count;
+
+    public int PluginCount => BuiltinSpecs.Count(spec => spec.Origin == ToolOrigin.Plugin);
+
+    public int HostCount => BuiltinCount - PluginCount;
 
     public int McpCount => McpSpecs.Count;
 

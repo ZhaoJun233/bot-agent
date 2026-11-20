@@ -211,7 +211,7 @@ new("GET", PanelMatch.Exact, "/metrics", (r) => WriteMetricsAsync(r.Context)),
         // 这里可以直接跑一遍把实测结果贴出来（排障与上线验收都用得上）。
         new("*", PanelMatch.Exact, "/api/music/test", (r) => HandleMusicTestAsync(r.Context, r.Method)),
         // 一键验证"联网搜索"（模型自带搜索 or 搜索源），把结果原样贴出来
-        new("*", PanelMatch.Exact, "/api/search/test", (r) => HandleSearchTestAsync(r.Context, r.Method)),
+        new("*", PanelMatch.Exact, ResearchHttp.Description.Routes[0].Path, (r) => HandleSearchTestAsync(r.Context, r.Method)),
 
         // ─────────── 语音（TTS 自测 / 音色复刻） ───────────
         // 只合成、不发群 —— 想验证"群里真能听到"得开开关让模型发，或者看 /api/voice/health。

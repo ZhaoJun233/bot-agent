@@ -1,0 +1,11 @@
+{
+  "id": "preset.feature.websearch",
+  "entryAssembly": "BotAgent.Package.WebSearch.dll",
+  "entryType": "BotAgent.Packages.WebSearch.ResearchControlPlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "control": true,
+  "toolApiVersion": 1,
+  "permissions": ["network.public-read", "model.grounded-text", "tools.execute"],
+  "sharedContracts": [{ "name": "BotAgent.Research.Contracts", "owner": "preset.feature.websearch" }]
+}

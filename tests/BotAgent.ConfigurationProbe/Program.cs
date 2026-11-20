@@ -88,7 +88,7 @@ try
         command.ExecuteNonQuery();
     }
     AppDatabase.Initialize();
-    Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 14, "fresh and legacy databases support reply pacing schema v14");
+    Check(AppDatabase.Scalar<long>("PRAGMA user_version") == 15, "fresh and legacy databases retain reply pacing fields in schema v15");
     if (legacySchema)
         Check(AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_field_modes WHERE (field_id=26 AND user_mode=1) OR (field_id=147 AND user_mode=2)") == 2,
             "v13 migration retains existing field provenance");

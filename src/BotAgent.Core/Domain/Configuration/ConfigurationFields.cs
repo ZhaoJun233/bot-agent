@@ -1,3 +1,5 @@
+using BotAgent.Services.Net;
+
 namespace BotAgent.Domain.Configuration;
 
 public enum ConfigurationFieldId
@@ -40,7 +42,7 @@ public enum ConfigurationFieldId
     EnableApprovals = 36,
     EnableAtmosphereDamping = 37, // reserved: legacy desire damping removed
     EnableHostAgent = 38,      // reserved: host switch removed
-    EnableLinkPreview = 39,
+    EnableLinkPreview = ResearchSettings.LegacyIds.EnableLinkPreview,
     EnableMusic = 40,
     EnableParticipationGating = 41, // reserved: pacing owns admission
     EnablePoke = 42,
@@ -50,7 +52,7 @@ public enum ConfigurationFieldId
     EnableServerAgent = 46,
     EnableStickers = 47,
     EnableVoice = 48,
-    EnableWebSearch = 49,
+    EnableWebSearch = ResearchSettings.LegacyIds.EnableWebSearch,
     FastModel = 50,
     FastReply = 51,
     FastThinkingBudget = 52,
@@ -66,8 +68,8 @@ public enum ConfigurationFieldId
     HealthReportTime = 62,
     IdleFallbackSeconds = 63, // reserved: internal scheduler maintenance
     IgnoreBracketMessages = 64,
-    LinkPreviewMax = 65,
-    LinkPreviewTimeoutSeconds = 66,
+    LinkPreviewMax = ResearchSettings.LegacyIds.LinkPreviewMax,
+    LinkPreviewTimeoutSeconds = ResearchSettings.LegacyIds.LinkPreviewTimeoutSeconds,
     LocalChannelIds = 67,
     MaxAgentSteps = 68,
     MaxConcurrentReplies = 69,
@@ -137,11 +139,11 @@ public enum ConfigurationFieldId
     VoicePitch = 133,
     VoiceSpeed = 134,
     VoiceVol = 135,
-    WebSearchCooldownSeconds = 136,
-    WebSearchMaxResults = 137,
-    WebSearchSources = 138,
-    WebSearchTimeoutSeconds = 139,
-    WebSearchUseModelSearch = 140,
+    WebSearchCooldownSeconds = ResearchSettings.LegacyIds.WebSearchCooldownSeconds,
+    WebSearchMaxResults = ResearchSettings.LegacyIds.WebSearchMaxResults,
+    WebSearchSources = ResearchSettings.LegacyIds.WebSearchSources,
+    WebSearchTimeoutSeconds = ResearchSettings.LegacyIds.WebSearchTimeoutSeconds,
+    WebSearchUseModelSearch = ResearchSettings.LegacyIds.WebSearchUseModelSearch,
     WhitelistGroups = 141,
     WhitelistPrivates = 142,
     RegisteredPlugins = 143,

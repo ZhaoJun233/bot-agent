@@ -10,4 +10,5 @@
   <ItemGroup>
     <ProjectReference Include="..\BotAgent.Core\BotAgent.Core.csproj" />
   </ItemGroup>
+
 </Project>

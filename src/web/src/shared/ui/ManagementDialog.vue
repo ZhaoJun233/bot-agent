@@ -21,6 +21,7 @@ useModalIsolation(root, () => props.active)
 function focusHeading(): void {
   if (props.active) void nextTick(() => { if (props.active) heading.value?.focus() })
 }
+defineExpose({ focus: focusHeading })
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); emit('close'); return }
   if (event.key !== 'Tab' || !root.value) return

@@ -2,20 +2,21 @@ using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Mcp;
 using BotAgent.Mcp;
+using BotAgent.Services.Plugins;
 
 namespace BotAgent.Adapters.Plugins;
 
 /// <summary>Only enabled package generations publish here; lifecycle owns their disposal.</summary>
 public sealed class PluginPythonSources : IMcpToolSource
 {
-    private sealed record Entry(PythonWorkerToolSource Source, string Owner);
+    private sealed record Entry(PythonWorkerToolSource Source, string Owner, PluginManager.InvocationGate? Invocation);
     private readonly ConcurrentDictionary<string, Entry> _sources = new(StringComparer.Ordinal);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask; // lifecycle owns workers
-    public bool Enabled => !_sources.IsEmpty;
+    public bool Enabled => _sources.Values.Any(entry => entry.Invocation?.IsReady != false);
     public McpConnectionState State => Enabled ? McpConnectionState.Ready : McpConnectionState.Disabled;
-    internal void Attach(string id, PythonWorkerToolSource source)
+    internal void Attach(string id, PythonWorkerToolSource source, PluginManager.InvocationGate? invocation = null)
     {
-        if (!_sources.TryAdd(id, new(source, Guid.NewGuid().ToString("N")))) throw new InvalidOperationException("Python generation already attached.");
+        if (!_sources.TryAdd(id, new(source, Guid.NewGuid().ToString("N"), invocation))) throw new InvalidOperationException("Python generation already attached.");
     }
     internal void Detach(string id, PythonWorkerToolSource source)
     {
@@ -27,6 +28,8 @@ public sealed class PluginPythonSources : IMcpToolSource
         var tools = new List<McpToolInfo>();
         foreach (var entry in _sources.Values)
         {
+            using var lease = entry.Invocation?.TryAcquire();
+            if (entry.Invocation is not null && lease is null) continue;
             var found = await entry.Source.DiscoverAsync(ct).ConfigureAwait(false);
             tools.AddRange(found.Select(tool => tool with { IsLocalProcess = true, SourceGeneration = entry.Owner + ":" + tool.SourceGeneration }));
         }
@@ -37,16 +40,18 @@ public sealed class PluginPythonSources : IMcpToolSource
         System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(id))).ToLowerInvariant()[..24];
     private Entry? Find(string name) => _sources.FirstOrDefault(pair => name.StartsWith("mcp." + SourceId(pair.Key) + ".", StringComparison.Ordinal)).Value;
     public bool IsToolCurrent(McpToolInfo tool) => Find(tool.QualifiedName) is { } entry &&
-        entry.Source.State == McpConnectionState.Ready && tool.SourceGeneration == Generation(entry);
-    public Task<McpCallResult> CallWithLeaseAsync(McpToolInfo tool, JsonObject arguments, CancellationToken ct)
+        entry.Invocation?.IsReady != false && entry.Source.State == McpConnectionState.Ready && tool.SourceGeneration == Generation(entry);
+    public async Task<McpCallResult> CallWithLeaseAsync(McpToolInfo tool, JsonObject arguments, CancellationToken ct)
     {
         var entry = Find(tool.QualifiedName);
         // Validate against the captured source, never a second lookup that could return a replacement.
         if (entry is null || entry.Source.State != McpConnectionState.Ready || tool.SourceGeneration != Generation(entry))
-            return Task.FromResult(new McpCallResult(false, "mcp_source_changed", null));
+            return new McpCallResult(false, "mcp_source_changed", null);
         if (!long.TryParse(tool.SourceGeneration?.Split(':').Last(), out var generation))
-            return Task.FromResult(new McpCallResult(false, "mcp_source_changed", null));
-        return entry.Source.CallWithGenerationAsync(tool.QualifiedName, arguments, generation, ct);
+            return new McpCallResult(false, "mcp_source_changed", null);
+        using var lease = entry.Invocation?.TryAcquire();
+        if (entry.Invocation is not null && lease is null) return new McpCallResult(false, "mcp_source_changed", null);
+        return await entry.Source.CallWithGenerationAsync(tool.QualifiedName, arguments, generation, ct).ConfigureAwait(false);
     }
     public Task<McpCallResult> CallAsync(string name, JsonObject arguments, CancellationToken ct)
         => Task.FromResult(new McpCallResult(false, "mcp_source_lease_required", null));

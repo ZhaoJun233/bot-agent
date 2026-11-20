@@ -95,9 +95,10 @@ public sealed partial class AgentCommandService
         // 为什么只认“私聊白名单”而不认群：群白名单是“这个群可以用命令”的意思太宽了 ——
         // 执行命令的权限必须落到**具体某个人**身上（官方白名单显式列出才算，空 = 全部接受不算 ✗）。
         var officialExplicit = Channels.IsOfficial(msg.Channel) && _hooks.IsOfficialUserAllowed(msg.UserId);
-        var allowed = _agentAllowAll
+        var isAllowedUser = _agentAllowAll
             || (_agentUsers.Count > 0 && _agentUsers.Contains(msg.UserId))
             || officialExplicit;
+        var allowed = EvaluateAgentAdmission("qq", isOwner: false, isAllowedUser: isAllowedUser, isWebSession: false);
         if (!allowed)
         {
             // 权限不够：日志必记，回话节流（每会话 60 秒一条）

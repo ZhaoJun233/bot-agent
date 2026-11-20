@@ -359,6 +359,11 @@ internal static class ManagedOperationContractTests
     }
     private sealed class Participant : StorageConfiguration.ConfigurationStorageParticipant
     {
+        private readonly object _writeGate = new();
+        internal override void CoordinateWrite(Action write)
+        {
+            lock (_writeGate) write();
+        }
         internal override bool Reauthorize(ConfigurationCaller caller, ConfigurationAccess required) => true;
         internal override ImmutableArray<SecretMetadata> SecretSources(SqliteConnection connection,
             ImmutableArray<StorageConfiguration.SecretMutation> proposed)

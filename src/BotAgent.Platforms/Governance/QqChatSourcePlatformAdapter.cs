@@ -15,7 +15,8 @@ namespace BotAgent.Adapters.Platforms;
 public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMessenger, IPlatformInboundChatSource, IPlatformSourceBinding, IDisposable
 {
     private readonly IQqChatSource _source;
-    private bool _disposed;
+    private int _disposed;
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
     private readonly PlatformOperationLifetime _operations = new();
     private readonly object _subscriptions = new();
     private bool _attached = true;
@@ -47,7 +48,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
 
     public string Tag { get; }
 
-    public bool IsConnected => !_disposed && _operations.IsActive && _source.IsConnected;
+    public bool IsConnected => !IsDisposed && _operations.IsActive && _source.IsConnected;
 
     public PlatformCapabilities Capabilities { get; }
 
@@ -69,7 +70,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
             return DeliveryResult.Rejected("bad_request");
         }
         using var operation = _operations.TryEnter(ct);
-        if (_disposed || operation is null) return DeliveryResult.Rejected("source_unavailable");
+        if (IsDisposed || operation is null) return DeliveryResult.Rejected("source_unavailable");
         ct = operation.Token;
         ct.ThrowIfCancellationRequested();
 
@@ -173,7 +174,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         CancellationToken ct = default)
     {
         using var operation = _operations.TryEnter(ct);
-        if (_disposed || operation is null || messageRef is null || !Capabilities.SupportsQuote)
+        if (IsDisposed || operation is null || messageRef is null || !Capabilities.SupportsQuote)
         {
             return (null, null);
         }
@@ -198,7 +199,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
     private void OnMessageReceived(QqChatMessage msg)
     {
         using var operation = _operations.TryEnter(CancellationToken.None);
-        if (_disposed || operation is null || msg.MessageId <= 0 || msg.UserId <= 0 || (msg.IsGroup && msg.GroupId <= 0)) return;
+        if (IsDisposed || operation is null || msg.MessageId <= 0 || msg.UserId <= 0 || (msg.IsGroup && msg.GroupId <= 0)) return;
         if (PlatformId.Normalize(Context.PlatformId) == PlatformId.QqOfficial && msg.IsReliableIdentity != true)
         {
             _lastErrorCode = "identity_unverified";
@@ -229,17 +230,18 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
 
     private void OnConnectionChanged(bool connected)
     {
-        if (!_disposed && _operations.IsActive) ConnectionChanged?.Invoke(connected);
+        using var lease = _operations.TryEnter(CancellationToken.None);
+        if (IsDisposed || lease is null) return;
+        ConnectionChanged?.Invoke(connected);
     }
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
         StopAsync().GetAwaiter().GetResult();
         _operations.Dispose();
     }
@@ -249,7 +251,7 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
         ct.ThrowIfCancellationRequested();
         lock (_subscriptions)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
             _operations.Start();
             if (!_attached)
             {

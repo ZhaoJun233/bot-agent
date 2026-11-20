@@ -28,14 +28,15 @@ internal static class ReviewPanelRegression
         var plan = typeof(WebUiServer).Assembly.GetType("BotAgent.Adapters.Panel.PanelDeploymentPlan")!;
         object Invoke(string name, params object[] args) => plan.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, args)!;
         var previous = "sha256:" + new string('a', 64);
-        var script = (string)Invoke("HelperScript", false, previous);
-        check((string)Invoke("BackupArguments", false) == "tag qqchat-agent:latest qqchat-agent:rollback-current",
+        var current = "sha256:" + new string('b', 64);
+        var script = (string)Invoke("HelperScript", false, previous, current, "/data/data/plugins");
+        check((string)Invoke("BackupArguments", false, current) == "tag " + current + " qqchat-agent:rollback-current",
             "rollback captures current separately without overwriting prev");
-        check(script.Contains("docker tag " + previous + " qqchat-agent:latest", StringComparison.Ordinal)
+        check(script.Contains("candidate_image=" + previous, StringComparison.Ordinal)
             && !script.Contains("docker tag qqchat-agent:prev", StringComparison.Ordinal), "rollback uses captured immutable selected image");
         check(script.Contains("up -d --no-deps qqchat", StringComparison.Ordinal) && script.Contains("exit $result", StringComparison.Ordinal),
             "helper affects bot only and preserves failing exit status");
-        check((string)Invoke("BackupArguments", true) == "tag qqchat-agent:latest qqchat-agent:prev", "ordinary deploy still keeps prev");
+        check((string)Invoke("BackupArguments", true, current) == "tag " + current + " qqchat-agent:prev", "ordinary deploy still keeps prev");
         check(!(bool)Invoke("IsImageId", "sha256:abc; injected"), "rollback image id rejects shell input");
     }
 

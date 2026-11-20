@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>表情包协同与安全库</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main id="app" class="sticker-ui">
+    <header class="sticker-ui__header">
+      <h1>表情包协同与安全库</h1>
+      <div class="sticker-ui__controls">
+        <span id="generation-badge" class="badge">等待宿主握手</span>
+        <button id="close-btn" type="button" class="close-btn">关闭</button>
+      </div>
+    </header>
+    <p id="status-line" class="status">只读包内 UI 资产已加载，不持有宿主令牌。</p>
+    <section class="card">
+      <h2>策略说明</h2>
+      <ul>
+        <li>仅允许 PNG / JPEG / GIF / WebP 合法文件头（魔数校验）。</li>
+        <li>单会话发送冷却 + 10 分钟同图防重复门控由 <code>preset.feature.stickers</code> 独立代际托管。</li>
+      </ul>
+    </section>
+  </main>
+  <script defer src="./stickers-runtime.js"></script>
+</body>
+</html>

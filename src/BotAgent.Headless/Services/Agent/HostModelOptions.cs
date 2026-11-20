@@ -11,7 +11,7 @@ internal static class HostModelOptions
         return () => Project(box.Current);
     }
 
-    private static BotAgent.Model.ModelOptions Project(AppSettings settings) => new()
+    internal static BotAgent.Model.ModelOptions Project(AppSettings settings) => new()
     {
         BaseUrl = settings.ModelBaseUrl,
         Model = settings.Model,

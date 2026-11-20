@@ -149,9 +149,9 @@ internal static class ConfigurationContractTests
                     command.CommandText = "SELECT COUNT(*) FROM meta WHERE key='configuration_schema'";
                     Check(Convert.ToInt64(command.ExecuteScalar()) == 0, "module marker rolled back");
                     command.CommandText = "PRAGMA user_version";
-                    // Physical migrations, including v14's #151 pacing field IDs, commit before
+                    // Physical migrations, including v15's independent metering, commit before
                     // the configuration module is written. Module state must still roll back.
-                    Check(Convert.ToInt64(command.ExecuteScalar()) == 14, "physical revision advanced only by the migration");
+                    Check(Convert.ToInt64(command.ExecuteScalar()) == 15, "physical revision advanced only by the migration");
                     StorageDatabase.Exec(connection, "DROP TRIGGER synthetic_module_fault;");
                 }
                 StorageDatabase.Initialize(path);
@@ -991,7 +991,7 @@ internal static class ConfigurationContractTests
             var denied = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(denied.Code == ConfigurationResultCode.Forbidden && denied.View is null
                 && (await store.SaveAsync(caller, Request())).Code == ConfigurationResultCode.Forbidden, "trusted authorization denies forged flags");
-            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 14,
+            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 15,
                 "real adapter uses the sole bound Storage database");
             Console.WriteLine($"CFG_CHILD host passed={passed} failed=0");
             return 0;
@@ -1014,11 +1014,11 @@ internal static class ConfigurationContractTests
 
     private static async Task<int?> RestartChildAsync(string[] args)
     {
-        var full = Path.GetFullPath(args[1]);
+        var full = DatabaseContractTests.PhysicalFixturePath(args[1]);
         var parent = Path.GetDirectoryName(full)!;
         if (Path.GetFileName(full) != "configuration-restore"
             || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(parent), "^botagent-review-remediation-[0-9a-f]{32}$")
-            || !string.Equals(Path.GetDirectoryName(parent), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(Path.GetDirectoryName(parent), DatabaseContractTests.PhysicalFixturePath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
             return 1;
         var passed = 0;
         void Check(bool condition, string label)
@@ -1449,7 +1449,13 @@ internal static class ConfigurationContractTests
                 for (var i = 0; i < 160; i++)
                 {
                     if (process.HasExited) throw new InvalidOperationException("synthetic_host_early_exit");
-                    try { using var response = await http.GetAsync("/healthz"); if (response.IsSuccessStatusCode) return; }
+                    try
+                    {
+                        using var response = await http.GetAsync("/zba/v1/health");
+                        if (response.IsSuccessStatusCode
+                            && JsonNode.Parse(await response.Content.ReadAsStringAsync())?["ready"]?.GetValue<bool>() == true)
+                            return;
+                    }
                     catch (HttpRequestException) { }
                     await Task.Delay(100);
                 }
@@ -4725,7 +4731,7 @@ internal static class ConfigurationContractTests
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant)));
             check("configuration activation rejects another participant", Throws<InvalidOperationException>(() =>
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant())));
-            check("configuration module migration preserves physical schema 14", AppDatabase.Scalar<long>("PRAGMA user_version") == 14
+            check("configuration module migration preserves physical schema 15", AppDatabase.Scalar<long>("PRAGMA user_version") == 15
                 && AppDatabase.GetMeta("configuration_schema") == "1");
             // #129 S3：空 instanceId 不是「野目标」，它本身就是内置驱动的身份
             // （qq.private / qq.official / local 三个驱动的 InstanceId 就是空串），所以冻结时原样保留；
@@ -5147,6 +5153,11 @@ internal static class ConfigurationContractTests
 
     private class SyntheticParticipant : StorageConfiguration.ConfigurationStorageParticipant
     {
+        private readonly object _writeGate = new();
+        internal override void CoordinateWrite(Action write)
+        {
+            lock (_writeGate) write();
+        }
         internal bool Allow = true;
         internal int Writes;
         internal ManualResetEventSlim? PrepareStarted;

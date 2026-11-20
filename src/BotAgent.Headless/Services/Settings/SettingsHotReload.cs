@@ -1,6 +1,7 @@
 extern alias StorageModule;
 
 using System.Collections.Immutable;
+using BotAgent.Services.Plugins;
 using BotAgent.Domain.Configuration;
 using ConfigurationModule = StorageModule::BotAgent.Storage;
 using ConfigurationBridge = StorageModule::BotAgent.Storage.ConfigurationStorageBridge;
@@ -108,7 +109,8 @@ public sealed class SettingsHotReload
             if (ReferenceEquals(_configuration, store) && ReferenceEquals(_configurationAuthorization, authorization)
                 && ReferenceEquals(_readCommitted, readCommittedSnapshot) && ReferenceEquals(_applyLegacyMood, applyLegacyMood)
                 && ReferenceEquals(_reapplyHealthReports, reapplyHealthReports) && ReferenceEquals(_projectTts, projectTts)
-                && ReferenceEquals(_fieldEffect, fieldEffect) && ReferenceEquals(_modelProjectionState, modelProjectionState)) return;
+                && ReferenceEquals(_fieldEffect, fieldEffect) && ReferenceEquals(_modelProjectionState, modelProjectionState)
+                && ReferenceEquals(_reloadPlugins, reloadPlugins)) return;
             throw new InvalidOperationException("configuration_already_bound");
         }
         _configurationAuthorization = authorization; _readCommitted = readCommittedSnapshot; _applyLegacyMood = applyLegacyMood;
@@ -311,9 +313,15 @@ public sealed class SettingsHotReload
         try
         {
             _reloadPlugins!().GetAwaiter().GetResult();
+            // 插件启用态变更后必须再刷新一次调度器与健康日报定时器，确保新代/停用态立即同步。
+            try { _scheduler.RebuildIfNeeded(); _reapplyHealthReports!(); } catch { }
             pluginReport = new(ApplyStep.RegisteredConfiguration,
                 otherRestartRequired ? ApplyState.RestartRequired : ApplyState.Applied,
                 otherRestartRequired ? "restart_required" : null);
+        }
+        catch (PluginRestartRequiredException)
+        {
+            pluginReport = new(ApplyStep.RegisteredConfiguration, ApplyState.RestartRequired, "restart_required");
         }
         catch (Exception)
         {

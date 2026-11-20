@@ -44,7 +44,7 @@ internal static partial class ReviewEngineRegression
         finally { EngineClock.Initialize(previousClock); }
     }
 
-    private static readonly ChatCapabilitySet Caps = ChatCapabilitySet.FromSwitches(true, true, true, true, true, null);
+    private static readonly ChatCapabilitySet Caps = ResearchToolFixture.Capabilities(true, true, true, true, true, null);
     private static EffectivePlatformPolicy Policy(bool web = true) => new(
         new PlatformContext(PlatformId.QqPrivate, AccountScope.Legacy), true, true, true, true,
         PlatformCapabilities.QqOneBot, new HashSet<string>(),
@@ -74,19 +74,21 @@ internal static partial class ReviewEngineRegression
     {
         var box = new Box(new AppSettings { EnableWebSearch = true, MaxAgentSteps = 2 });
         var research = new Research();
+        var catalog = ResearchToolFixture.Create(research);
+        var caps = ResearchToolFixture.Capabilities(true, true, true, true, true, null, catalog: catalog);
         var policy = new Policies(Policy(false));
         var approvals = new ApprovalUseCase(box,
             new ApprovalHooks(_ => { }, (text, _) => text, (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
-            new SessionPolicyLedger(), new TurnTraceStore());
+            new SessionPolicyLedger(), new TurnTraceStore(), catalog: () => catalog);
         var inline = new InlineTurnTools(research, approvals, new ParticipationUseCase(box, _ => { }), _ => { },
             null, policy, () => false);
         foreach (var result in new[] { new CompletionResult(null, null, null, Search: "synthetic query"),
             new CompletionResult(null, null, null, Read: "https://example.com/page") })
-            Ensure(await inline.RunAsync(Conversation(), box.Current, Caps, result, Policy(false)) is null,
+            Ensure(await inline.RunAsync(Conversation(), box.Current, caps, result, Policy(false)) is null,
                 "B04 platform opt-out must suppress inline search/read");
         Ensure(research.Calls == 0 && research.Cooldowns == 0, "B04 denied tools must not consume cooldown or IO");
         policy.Current = Policy();
-        Ensure(await inline.RunAsync(Conversation(), box.Current, Caps,
+        Ensure(await inline.RunAsync(Conversation(), box.Current, caps,
             new CompletionResult(null, null, null, Search: "synthetic query"), Policy()) is not null,
             "enabled inline search remains usable");
         Ensure(research.Calls == 1, "enabled search executed once");
@@ -94,7 +96,7 @@ internal static partial class ReviewEngineRegression
         // A synchronous callback retires policy immediately before IO. No timing-dependent sleep.
         var retiring = new InlineTurnTools(research, approvals, new ParticipationUseCase(box, _ => { }),
             _ => policy.Current = Policy(false), null, policy, () => false);
-        Ensure(await retiring.RunAsync(Conversation(), box.Current, Caps,
+        Ensure(await retiring.RunAsync(Conversation(), box.Current, caps,
             new CompletionResult(null, null, null, Read: "https://example.com/page"), Policy()) is null,
             "B04 execution must recheck after synchronous callbacks");
         Ensure(research.Calls == 1, "retired platform must not start page IO");
@@ -105,7 +107,7 @@ internal static partial class ReviewEngineRegression
             new PlatformMessageOrigin(new BotAgent.Domain.Configuration.DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, "synthetic")),
             lifetime.Token, () => true));
         lifetime.Cancel();
-        Ensure(await inline.RunAsync(Conversation(), box.Current, Caps,
+        Ensure(await inline.RunAsync(Conversation(), box.Current, caps,
             new CompletionResult(null, null, null, Read: "https://example.com/page"), Policy()) is null,
             "B04 retired source lease must suppress IO");
         Ensure(research.Calls == 1, "cancelled lease did not start IO");
@@ -173,7 +175,7 @@ internal static partial class ReviewEngineRegression
             StickerChoices = new List<StickerChoice> { new("synthetic-sticker", "synthetic description") },
             PokeContext = true,
         };
-        var noMediaCaps = ChatCapabilitySet.FromSwitches(true, true, true, false, false, null);
+        var noMediaCaps = ResearchToolFixture.Capabilities(true, true, true, false, false, null);
         foreach (var (caps, platform) in new[] { (noMediaCaps, allowed), (Caps, denied) })
         {
             var model = new Model();

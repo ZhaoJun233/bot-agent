@@ -1,10 +1,28 @@
+import { QuotaApi, type ZbaQuotaPage, type ZbaQuotaSaveRequest, type ZbaQuotaSaveResult, type ZbaQuotaFindResult } from '../../../../packages/token-quota/frontend/quotas'
+export type { ZbaQuota, ZbaQuotaPage, ZbaQuotaSaveRequest, ZbaQuotaSaveResult, ZbaQuotaFindResult } from '../../../../packages/token-quota/frontend/quotas'
 import { hasValidPluginRuntime, type PythonPluginRuntime } from './plugin-runtime'
+import { hasValidSharedContracts, type PluginSharedContract } from './plugin-shared-contracts'
+import { hasValidPluginData, type PluginPackageData } from './plugin-data'
+import { hasValidPluginConfiguration, type PluginConfigurationDeclaration } from './plugin-configuration'
+import {
+  hasValidPluginUi,
+  isPluginBundlePreview,
+  isPluginUiSession,
+  isPluginUiSessionClosed,
+  type PluginUiDeclaration,
+  type ZbaPluginBundlePreview,
+  type ZbaPluginUiSession,
+  type ZbaPluginUiSessionClosed,
+} from './plugin-ui'
+import { hasValidSettingNumberConstraints, type PluginSettingNumberConstraints } from './plugin-setting-numbers'
 import { isPluginGovernance, isPluginGovernanceSource, type PluginGovernance, type PluginGovernanceSource } from './plugin-governance'
 import { isPluginLifecyclePreview, matchesLifecycleSelection, type PluginLifecyclePreview, type PluginLifecyclePreviewRequest } from './plugin-lifecycle'
 import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
 import { isPluginInstallPreview, isPluginSourceDiscovery, type PluginInstallPreview, type PluginPreviewRequest, type PluginSourceDiscovery } from './plugin-import'
 import { TaskObservation, type TaskObservationSnapshot } from './task-observation'
 import { isMessagingSnapshot, type MessagingCapabilitySnapshot } from './messaging-capabilities'
+import { isPluginMetadataFailures, type PluginPackageMetadataFailure } from './plugin-metadata'
+import { isOperationFindResult, type OperationFindResult } from './operation-recovery'
 
 export interface ZbaHealth {
   status: string
@@ -673,6 +691,7 @@ export interface ZbaPluginSettingDefinition {
   defaultValue?: string | null
   required?: boolean
   choices?: string[] | null
+  numberConstraints?: PluginSettingNumberConstraints | null
 }
 
 export interface ZbaPluginDependency {
@@ -693,6 +712,14 @@ export interface ZbaPluginPackageManifest {
   minimumHostVersion?: string | null
   permissions?: string[] | null
   dependencies?: ZbaPluginDependency[] | null
+  sharedContracts?: PluginSharedContract[] | null
+  data?: PluginPackageData | null
+  control?: boolean
+  toolApiVersion?: number | null
+  configuration?: PluginConfigurationDeclaration | null
+  ui?: PluginUiDeclaration | null
+  adoption?: 'cold' | 'online' | null
+  exclusiveResources?: string[] | null
   settings?: ZbaPluginSettingDefinition[] | null
 }
 
@@ -728,6 +755,7 @@ export interface ZbaPluginCatalogQuery {
 }
 
 export interface ZbaPluginCatalog {
+  metadataFailures?: PluginPackageMetadataFailure[]
   governanceSource?: PluginGovernanceSource
   metadataNotice?: string
   revision: string
@@ -744,6 +772,7 @@ export interface ZbaPluginSourceResolution {
 }
 
 export interface ZbaInstalledPlugins {
+  metadataFailures?: PluginPackageMetadataFailure[]
   governanceSource?: PluginGovernanceSource
   revision: string
   plugins: ZbaPluginCatalogItem[]
@@ -816,31 +845,6 @@ export interface ZbaPluginSettingsSaveRequest {
   idempotencyKey: string
   edits: ZbaPluginSettingEdit[]
 }
-export interface ZbaQuota {
-  sourceKey: string
-  displayName: string
-  revision: string
-  dailyTokenLimit: number
-  usedPromptTokens: number
-  usedCompletionTokens: number
-  usedTokens: number
-  remainingTokens: number
-  resetDate: string
-  nextResetAt: string
-  energySaving: boolean
-  minimumDailyTokenLimit: number
-  maximumDailyTokenLimit: number
-}
-export interface ZbaQuotaPage { items: ZbaQuota[] }
-export interface ZbaQuotaSaveRequest {
-  sourceKey: string
-  expectedRevision: string
-  idempotencyKey: string
-  dailyTokenLimit: number
-}
-export interface ZbaQuotaSaveResult { quota: ZbaQuota }
-export type ZbaQuotaFindResult = { found: false; quota?: never } | { found: true; quota: ZbaQuota }
-
 export class ZbaRequestError extends Error {
   readonly status: number
   readonly code: string
@@ -959,22 +963,17 @@ export class ZbaClient {
     return { ...result, runtimeEffects: parseRuntimeEffects(result.runtimeEffects) }
   }
 
-  listQuotas(): Promise<ZbaQuotaPage> {
-    return this.request('/quotas', { method: 'GET' }, 'required', isQuotaPage)
-  }
+  private readonly quotaApi = new QuotaApi((path, init, validate) => this.request(path, init, 'required', validate))
+  listQuotas(): Promise<ZbaQuotaPage> { return this.quotaApi.listQuotas() }
+  saveQuota(request: ZbaQuotaSaveRequest): Promise<ZbaQuotaSaveResult> { return this.quotaApi.saveQuota(request) }
+  findQuota(idempotencyKey: string): Promise<ZbaQuotaFindResult> { return this.quotaApi.findQuota(idempotencyKey) }
 
-  /** One explicit CAS write; never replay automatically. */
-  saveQuota(request: ZbaQuotaSaveRequest): Promise<ZbaQuotaSaveResult> {
-    return this.request('/quotas/save', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request)
-    }, 'required', (value): value is ZbaQuotaSaveResult => isQuotaSaveResult(value)
-      && value.quota.sourceKey === request.sourceKey && value.quota.dailyTokenLimit === request.dailyTokenLimit)
-  }
-
-  findQuota(idempotencyKey: string): Promise<ZbaQuotaFindResult> {
-    return this.request('/quotas/find', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idempotencyKey })
-    }, 'required', isQuotaFindResult)
+  /** Safe evidence only; this lookup never executes or resubmits an operation. */
+  findOperation(owner: string, idempotencyKey: string): Promise<OperationFindResult> {
+    return this.request('/operations/find', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner, idempotencyKey })
+    }, 'required', (value): value is OperationFindResult => isOperationFindResult(value)
+      && (!value.found || value.receipt.owner === owner))
   }
 
   /** Discovery uses only the saved provider on the host, never a browser vendor request. */
@@ -1102,6 +1101,32 @@ export class ZbaClient {
     if (!response.ok) throw this.errorFrom(response)
     if (!isPluginSettings(response.data)) throw this.invalidResponse(response)
     return response.data
+  }
+
+  openPluginUiSession(id: string): Promise<ZbaPluginUiSession> {
+    return this.request(`/plugins/${encodeURIComponent(id)}/ui/sessions`, { method: 'POST' }, 'required', isPluginUiSession)
+  }
+
+  closePluginUiSession(id: string, sessionId: string): Promise<ZbaPluginUiSessionClosed> {
+    return this.request(`/plugins/${encodeURIComponent(id)}/ui/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }, 'required', isPluginUiSessionClosed)
+  }
+
+  previewPluginBundle(manifests: ZbaPluginPackageManifest[]): Promise<ZbaPluginBundlePreview> {
+    return this.request('/plugins/bundle/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manifests }),
+    }, 'required', isPluginBundlePreview)
+  }
+
+  applyPluginBundle(request: {
+    manifests: ZbaPluginPackageManifest[]
+    expectedRevision: string
+    idempotencyKey: string
+    trustAcknowledged: boolean
+    previewId?: string | null
+  }): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin('/plugins/bundle/apply', request)
   }
 
   /** 插件变更的共享发送路径：先验 HTTP 状态，再认回执形状。 */
@@ -1446,7 +1471,16 @@ export class ZbaClient {
    * 404 必须带 task_not_found 才算“路由可达且已授权”；代理误配/旧版本返回的
    * 其它 404 不能把只读令牌误显示为管理员。
    */
-  async checkAdmin(): Promise<boolean> {
+  async checkAdmin(useControlRecovery = false): Promise<boolean> {
+    if (useControlRecovery) {
+      try {
+        await this.findOperation('control.permission-check', 'control-permission-check')
+        return true
+      } catch (cause) {
+        if (cause instanceof ZbaRequestError && cause.status === 403) return false
+        throw cause
+      }
+    }
     const response = await this.fetchJson('/tasks/s1-permission-check/result', { method: 'GET' })
     if (response.status === 403) return false
 
@@ -1563,38 +1597,6 @@ export class ZbaClient {
     const requestId = response.headers.get('X-Request-Id') ?? undefined
     return new ZbaRequestError(response.status, code, message, reason, requestId)
   }
-}
-
-function isQuota(value: unknown): value is ZbaQuota {
-  if (!isRecord(value)) return false
-  for (const key of ['sourceKey', 'displayName', 'revision']) {
-    if (typeof value[key] !== 'string' || !value[key].trim()) return false
-  }
-  for (const key of ['dailyTokenLimit', 'usedPromptTokens', 'usedCompletionTokens', 'usedTokens',
-    'remainingTokens', 'minimumDailyTokenLimit', 'maximumDailyTokenLimit']) {
-    if (typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || value[key] < 0) return false
-  }
-  const minimum = value.minimumDailyTokenLimit as number
-  const maximum = value.maximumDailyTokenLimit as number
-  const limit = value.dailyTokenLimit as number
-  if (minimum > maximum || limit < minimum || limit > maximum || maximum > 2147483647) return false
-  if (typeof value.resetDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.resetDate)
-    || Number.isNaN(Date.parse(value.resetDate))
-    || new Date(value.resetDate).toISOString().slice(0, 10) !== value.resetDate) return false
-  return typeof value.energySaving === 'boolean' && typeof value.nextResetAt === 'string'
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.nextResetAt)
-    && Number.isFinite(Date.parse(value.nextResetAt))
-}
-function isQuotaPage(value: unknown): value is ZbaQuotaPage {
-  return isRecord(value) && Array.isArray(value.items) && value.items.every(isQuota)
-    && new Set(value.items.map((item) => item.sourceKey)).size === value.items.length
-}
-function isQuotaSaveResult(value: unknown): value is ZbaQuotaSaveResult {
-  return isRecord(value) && isQuota(value.quota)
-}
-function isQuotaFindResult(value: unknown): value is ZbaQuotaFindResult {
-  return isRecord(value) && (value.found === true ? isQuota(value.quota)
-    : value.found === false && value.quota === undefined)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2319,6 +2321,7 @@ function isPluginSettingDefinition(value: unknown): value is ZbaPluginSettingDef
     && (value.defaultValue === undefined || value.defaultValue === null || typeof value.defaultValue === 'string')
     && (value.required === undefined || typeof value.required === 'boolean')
     && (value.choices === undefined || value.choices === null || isStringArray(value.choices))
+    && hasValidSettingNumberConstraints(value)
 }
 
 function isPluginDependency(value: unknown): value is ZbaPluginDependency {
@@ -2332,6 +2335,10 @@ function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManif
     || typeof value.id !== 'string' || value.id.length === 0
     || typeof value.version !== 'string' || value.version.length === 0
     || !hasValidPluginRuntime(value)
+    || !hasValidSharedContracts(value)
+    || !hasValidPluginData(value)
+    || !hasValidPluginConfiguration(value)
+    || !hasValidPluginUi(value)
     || typeof value.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(value.sha256)
     || typeof value.downloadUrl !== 'string'
     || !isInteger(value.apiVersion)) return false
@@ -2383,6 +2390,7 @@ function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
     && isBuiltinPluginList(value.builtinPlugins)
+    && isPluginMetadataFailures(value.metadataFailures)
     && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
@@ -2399,6 +2407,7 @@ function isInstalledPlugins(value: unknown): value is ZbaInstalledPlugins {
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
     && isBuiltinPluginList(value.builtinPlugins)
+    && isPluginMetadataFailures(value.metadataFailures)
     && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 

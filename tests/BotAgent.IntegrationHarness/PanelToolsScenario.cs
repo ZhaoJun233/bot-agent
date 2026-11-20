@@ -42,7 +42,7 @@ public static partial class Program
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        await WaitForPortAsync(healthPort, cts.Token, bot);
+        await WaitForBusinessReadyAsync(healthPort, cts.Token, bot);
 
         var panel = $"http://127.0.0.1:{healthPort}";
 
@@ -160,7 +160,7 @@ public static partial class Program
             $"healthy={root["healthy"]} 缺执行者={root["missingExecutors"]} 孤儿={root["unusedExecutors"]}"
             + $" 缺例外={root["missingExceptions"]} 重名={root["duplicateIds"]}");
 
-        Check("执行者登记 = 4 家", (root["executors"] as JsonArray)?.Count == 4,
+        Check("执行者登记 = 5 家（含已采用研究包）", (root["executors"] as JsonArray)?.Count == 5,
             (root["executors"] as JsonArray)?.ToJsonString() ?? "(没有 executors)");
 
         // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 26 —— MCP 单列，
@@ -170,14 +170,25 @@ public static partial class Program
         Check("★ /api/tools 带统一查询面（内建 26 + MCP 分列，无重名）",
             inventory is not null
             && inventory["builtin"]?.GetValue<int>() == 26
+            && inventory["host"]?.GetValue<int>() == 24
+            && inventory["plugin"]?.GetValue<int>() == 2
             && inventory["mcp"]?.GetValue<int>() == 0
             && inventory["total"]?.GetValue<int>() == 26
             && (inventory["duplicates"] as JsonArray)?.Count == 0
             && inventoryEntries?.Count == 26
-            && inventoryEntries.All(entry => entry?["origin"]?.GetValue<string>() == "Builtin"),
+            && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Builtin") == 24
+            && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Plugin") == 2,
             inventory?.ToJsonString() ?? "(没有 inventory)");
 
         JsonObject? Find(string id) => tools.FirstOrDefault(n => n?["id"]?.GetValue<string>() == id) as JsonObject;
+
+        Check("研究工具来自同一个已采用插件执行者，不走聊天占位路径",
+            new[] { "web.search", "web.read" }.All(id => Find(id) is { } tool
+                && tool["origin"]?.GetValue<string>() == "Plugin"
+                && tool["providerId"]?.GetValue<string>() == "preset.feature.websearch"
+                && tool["executor"]?.GetValue<string>() == "research.actions")
+            && (root["executors"] as JsonArray)?.SingleOrDefault(item => item?["id"]?.GetValue<string>() == "research.actions")
+                ?["legacyPath"]?.GetValue<bool>() == false);
 
         Check("qq.like 在目录里（SendMessage / 安全档 / 非聊天族不在这页复述放行口径）",
             Find("qq.like") is { } like

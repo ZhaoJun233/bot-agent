@@ -291,7 +291,7 @@ public static partial class Program
                     ["QQCHAT_OFFICIAL_API_BASE"] = official.HttpBase, ["QQCHAT_OFFICIAL_TOKEN_URL"] = official.TokenUrl
                 });
                 await WaitForPortAsync(wsPort, cts.Token, bot);
-                await WaitForPortAsync(panelPort, cts.Token, bot);
+                await WaitForBusinessReadyAsync(panelPort, cts.Token, bot);
                 var (code, body) = await PanelGetAsync(panel + "/api/settings", panelToken);
                 var runtime = JsonNode.Parse(body)?["runtime"];
                 Check(phase.Name + ": environment-only status", code == 200

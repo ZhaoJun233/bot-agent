@@ -1,27 +1,23 @@
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.Agent;
-using BotAgent.Services.Qq;
+using BotAgent.Services.OneBot;
 using BotAgent.Services.Panel;
+using BotAgent.Services.Plugins;
+using BotAgent.Services.Profiles;
+using BotAgent.Services.Qq;
 using BotAgent.Services.Reply;
 using BotAgent.Services.Stickers;
-using BotAgent.Services.OneBot;
 
 namespace BotAgent.Services.Ops;
 
 /// <summary>
-/// 后台巡检（宿主自己的那几个定时器 + 两个探测）：静默兜底、画像巡检、QQ 账号在线探测。
-///
-/// 为什么单拎出来：这些全是"按配置定时做事"，与回复链、与面板都无关；它们的**状态**（上一次用的配置、
-/// 正在跑没有、账号在线没在线、画像成功/失败计数）以前散在 BotAgentHost 上，占了一堆字段。
-///
-/// 三条纪律：
-///   ① 定时器只在**配置真的变了**时重建（<see cref="RebuildIfNeeded" /> 里逐项比对，避免每次保存都重置计时）；
-///   ② 兜底/巡检都**不许并发叠着跑**（<c>Interlocked.Exchange</c> 占位，跑不完就跳过这一轮）；
-///   ③ 宿主已经在收摊（<c>IsDisposed</c>）时一律不启动新的一轮。
+/// 后台巡检（宿主只保留静默兜底与 QQ 账号在线探测；画像巡检定时器与执行归 <c>preset.feature.profiles</c>、
+/// 表情包巡检定时器与执行归 <c>preset.feature.stickers</c>）。
 /// </summary>
 public sealed class BotScheduler
 {
+    public const string ProfilesProviderId = "preset.feature.profiles";
     private const int ReplyMaintenanceSeconds = 60;
     private readonly SettingsBox _box;
     private readonly IQqChatSource _source;
@@ -33,9 +29,7 @@ public sealed class BotScheduler
     private readonly BotSchedulerHooks _hooks;
 
     private Timer? _idleTimer;
-    private Timer? _summaryTimer;
     private Timer? _healthTimer;
-    private int _summaryRunning;
     private int _healthRunning;
     private int _accountOnline = -1;
 
@@ -43,12 +37,13 @@ public sealed class BotScheduler
     private bool _timerSummaryEnabled;
     private int _timerSummarySeconds = -1;
     private bool _timerStickersEnabled;
+    private string? _timerProfilesGeneration;
+    private string? _timerStickersGeneration;
 
-    private readonly SemaphoreSlim _summaryGate = new(1, 1);
-    private long _summaryDoneCount;
-    private long _summaryFailCount;
     private readonly Func<string, bool>? _pluginAllows;
     private readonly IUnifiedMemory? _unifiedMemory;
+    private readonly PluginManager? _plugins;
+    private IProfilesRuntimeContribution? _directProfiles;
 
     public BotScheduler(
         SettingsBox box,
@@ -60,7 +55,9 @@ public sealed class BotScheduler
         PanelNotifier ui,
         BotSchedulerHooks hooks,
         Func<string, bool>? pluginAllows = null,
-        IUnifiedMemory? unifiedMemory = null)
+        IUnifiedMemory? unifiedMemory = null,
+        PluginManager? plugins = null,
+        IProfilesRuntimeContribution? directProfiles = null)
     {
         _box = box;
         _source = source;
@@ -72,24 +69,53 @@ public sealed class BotScheduler
         _hooks = hooks;
         _pluginAllows = pluginAllows;
         _unifiedMemory = unifiedMemory;
+        _plugins = plugins;
+        _directProfiles = directProfiles;
     }
 
     private AppSettings _settings => _box.Current;
+
+    /// <summary>仅供无插件宿主的独立单测注入包内画像运行时实现。</summary>
+    public void BindDirectProfiles(IProfilesRuntimeContribution runtime) => _directProfiles = runtime;
+
+    /// <summary>供宿主装配层注册到插件服务容器，向 <c>preset.feature.profiles</c> 提供窄宿主端口。</summary>
+    public IProfilesHostPorts CreateProfilesHostPorts() => new ProfilesHostPorts(this);
+
+    private static bool IsUnavailable(InvalidOperationException ex)
+        => ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing";
+
+    private IProfilesRuntimeContribution? CurrentProfilesRuntime
+        => _directProfiles ?? (_plugins is not null && _plugins.TryGetContribution<IProfilesRuntimeContribution>(ProfilesProviderId, out var runtime)
+            ? runtime : null);
 
     // The legacy background queue has no attested source or revocable use receipt.
     // Scoped profile mode therefore keeps trusted fragments but disables this model path.
     private bool ProfileSummarizationAllowed() => _unifiedMemory is null
         && _settings.EnableProfileSummary && !_hooks.IsDisposed()
-        && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.ProfilesCapability) ?? true);
+        && (_pluginAllows?.Invoke(PluginGate.ProfilesCapability) ?? true);
 
     /// <summary>QQ 账号在线状态：null = 还不知道（协议端没答复过）。</summary>
     public bool? AccountOnline
         => Volatile.Read(ref _accountOnline) is var v && v >= 0 ? v == 1 : null;
 
-    /// <summary>画像巡检：成功 / 失败累计（面板与健康日报要报）。</summary>
-    public long SummaryDoneCount => Interlocked.Read(ref _summaryDoneCount);
+    /// <summary>画像巡检：成功 / 失败累计（由 <c>preset.feature.profiles</c> 独立包持有）。</summary>
+    public long SummaryDoneCount
+    {
+        get
+        {
+            try { return CurrentProfilesRuntime?.SummaryDoneCount ?? 0; }
+            catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return 0; }
+        }
+    }
 
-    public long SummaryFailCount => Interlocked.Read(ref _summaryFailCount);
+    public long SummaryFailCount
+    {
+        get
+        {
+            try { return CurrentProfilesRuntime?.SummaryFailCount ?? 0; }
+            catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return 0; }
+        }
+    }
 
     /// <summary>连接断了 → 账号在线状态回到未知（重连后再探一次才知道）。</summary>
     public void ResetAccountState() => Interlocked.Exchange(ref _accountOnline, -1);
@@ -108,26 +134,30 @@ public sealed class BotScheduler
     public void Stop()
     {
         _idleTimer?.Dispose();
-        _summaryTimer?.Dispose();
         _healthTimer?.Dispose();
         _idleTimer = null;
-        _summaryTimer = null;
         _healthTimer = null;
+        try { CurrentProfilesRuntime?.StopSummaryTimer(); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { }
     }
 
-    /// <summary>设置变了 → 只在**相关项真的变了**时才重建定时器（否则每次保存都会重置计时）。</summary>
+    /// <summary>设置变了 → 只在相关项真的变了时才重建定时器（否则每次保存都会重置计时）。</summary>
     public void RebuildIfNeeded()
     {
         var idleSeconds = ReplyMaintenanceSeconds;
         var summaryEnabled = ProfileSummarizationAllowed();
         var summarySeconds = Math.Max(0, _settings.ProfileSummaryIntervalSeconds);
         var stickersEnabled = _settings.EnableStickers && _settings.StickerLibraryMax > 0
-            && (_pluginAllows?.Invoke(BotAgent.Services.Plugins.PluginGate.StickersCapability) ?? true);
+            && (_pluginAllows?.Invoke(PluginGate.StickersCapability) ?? true);
+        var profilesGeneration = _plugins?.GetGenerationId(ProfilesProviderId);
+        var stickersGeneration = _plugins?.GetGenerationId(StickerService.ProviderId);
 
         if (idleSeconds == _timerIdleSeconds &&
             summaryEnabled == _timerSummaryEnabled &&
             summarySeconds == _timerSummarySeconds &&
-            stickersEnabled == _timerStickersEnabled)
+            stickersEnabled == _timerStickersEnabled &&
+            string.Equals(profilesGeneration, _timerProfilesGeneration, StringComparison.Ordinal) &&
+            string.Equals(stickersGeneration, _timerStickersGeneration, StringComparison.Ordinal))
         {
             return;
         }
@@ -136,6 +166,8 @@ public sealed class BotScheduler
         _timerSummaryEnabled = summaryEnabled;
         _timerSummarySeconds = summarySeconds;
         _timerStickersEnabled = stickersEnabled;
+        _timerProfilesGeneration = profilesGeneration;
+        _timerStickersGeneration = stickersGeneration;
 
         // ---- 回复巡检；节奏等待由协调器自己的计时器负责 ----
         _idleTimer?.Dispose();
@@ -149,101 +181,22 @@ public sealed class BotScheduler
                 TimeSpan.FromSeconds(idleSeconds));
         }
 
-        // ---- 长期记忆：画像巡检 ----
-        _summaryTimer?.Dispose();
-        _summaryTimer = null;
-        if (summaryEnabled && summarySeconds > 0 && !_hooks.IsDisposed())
-        {
-            _summaryTimer = new Timer(
-                _ => _ = RunProfileSummarizationAsync(),
-                null,
-                // 首次很快跑一轮（刚打开就能看到效果），之后按配置间隔
-                TimeSpan.FromSeconds(Math.Min(5, summarySeconds)),
-                TimeSpan.FromSeconds(summarySeconds));
-        }
+        // ---- 长期记忆：画像巡检（定时器归 preset.feature.profiles 独立包管理）----
+        try { CurrentProfilesRuntime?.EnsureSummaryTimer(summaryEnabled, summarySeconds); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { }
 
-        // ---- 表情包：补说明 + 自巡检（定时器归 StickerService 自己管）----
+        // ---- 表情包：补说明 + 自巡检（定时器归 preset.feature.stickers 独立包管理）----
         _stickers.EnsureTimer(stickersEnabled);
 
         _hooks.Log($"定时器已按新配置重建（回复巡检 {idleSeconds}s，画像巡检 {(summaryEnabled && summarySeconds > 0 ? summarySeconds + "s" : "关")}，" +
                    $"表情包巡检 {(stickersEnabled && _settings.StickerCurateIntervalSeconds > 0 ? _settings.StickerCurateIntervalSeconds + "s" : "关")}）");
     }
 
-    /// <summary>画像巡检：把够条件的成员交给模型写一句画像（单轮不并发，失败只记数）。</summary>
-    private async Task RunProfileSummarizationAsync()
-    {
-        if (!ProfileSummarizationAllowed())
-        {
-            return;
-        }
-
-        if (Interlocked.Exchange(ref _summaryRunning, 1) == 1)
-        {
-            return; // 上一轮还没跑完
-        }
-
-        try
-        {
-            var candidates = _profiles.FindSummarizable(_settings.ProfileSummaryThreshold, maxCandidates: 20);
-
-            foreach (var c in candidates)
-            {
-                // 与贴图审核同一口径：每一项模型 I/O 前复核，停用/释放后不再开始下一项。
-                if (!ProfileSummarizationAllowed())
-                {
-                    break;
-                }
-
-                await _summaryGate.WaitAsync();
-                try
-                {
-                    if (!ProfileSummarizationAllowed()) return;
-                    var text = await _brain.SummarizePersonaAsync(
-                        string.IsNullOrWhiteSpace(c.Name) ? $"QQ{c.Uid}" : c.Name,
-                        c.ExistingSummary,
-                        c.NewMessages,
-                        _settings.ProfileSummaryMaxChars);
-
-                    if (string.IsNullOrWhiteSpace(text))
-                    {
-                        Interlocked.Increment(ref _summaryFailCount);
-                        continue;
-                    }
-
-                    if (!ProfileSummarizationAllowed()) return;
-                    _profiles.ApplySummary(c.Uid, c.Scope, text, c.ThroughSeq, c.FoldedCount);
-                    Interlocked.Increment(ref _summaryDoneCount);
-                    _hooks.Log($"画像已生成：{c.Name}({c.Uid}) @ {c.Scope}（{c.NewMessages.Count} 条 → {text.Length} 字）");
-                }
-                catch (Exception ex)
-                {
-                    Interlocked.Increment(ref _summaryFailCount);
-                    FileLog.Write("Profiles", $"画像摘要失败 {c.Uid}@{c.Scope}: {ex.Message}");
-                }
-                finally
-                {
-                    _summaryGate.Release();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            FileLog.Write("Profiles", "画像巡检异常: " + ex.Message);
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _summaryRunning, 0);
-        }
-    }
-
     /// <summary>
-    /// QQ 账号在线探测（协议端 <c>get_login_info</c> 那类动作）：掉线要**只报一次**，恢复也报一次。
-    /// 协议端没明确答复时不误报（保持原状态）；探测失败不打扰用户，下一轮自然重试。
+    /// QQ 账号在线探测（协议端 <c>get_login_info</c> 那类动作）：掉线要只报一次，恢复也报一次。
     /// </summary>
     public async Task CheckAccountOnlineAsync()
     {
-        // 装配点给的是 ChannelRouter（私域 + 可选官方/本地/飞书），账号在线探测只认私域那条 OneBot；
-        // 只看 _source 本身的话，路由之后永远探测不到 → 面板一直显示“未知”。
         var gateway = _source as OneBotGateway
             ?? (_source as IChannelRegistry)?.Get(Channels.Private) as OneBotGateway;
         if (_hooks.IsDisposed() || gateway is null || !gateway.IsConnected)
@@ -253,7 +206,7 @@ public sealed class BotScheduler
 
         if (Interlocked.Exchange(ref _healthRunning, 1) == 1)
         {
-            return; // 上一轮还没回来
+            return;
         }
 
         try
@@ -261,14 +214,14 @@ public sealed class BotScheduler
             var online = await gateway.GetAccountOnlineAsync();
             if (online is null)
             {
-                return; // 协议端没明确答复 → 不误报，保持原状态
+                return;
             }
 
             var next = online.Value ? 1 : 0;
             var previous = Interlocked.Exchange(ref _accountOnline, next);
             if (previous == next)
             {
-                return; // 状态未变，不刷日志
+                return;
             }
 
             if (next == 0)
@@ -291,6 +244,46 @@ public sealed class BotScheduler
         {
             Interlocked.Exchange(ref _healthRunning, 0);
         }
+    }
+
+    private sealed class ProfilesHostPorts(BotScheduler owner) : IProfilesHostPorts
+    {
+        public ProfileSummarySettingsSnapshot ReadSummarySettings()
+        {
+            var s = owner._settings;
+            return new(
+                EnableProfileSummary: s.EnableProfileSummary,
+                IntervalSeconds: Math.Max(0, s.ProfileSummaryIntervalSeconds),
+                Threshold: s.ProfileSummaryThreshold,
+                MaxChars: s.ProfileSummaryMaxChars,
+                LegacySummaryDisabled: owner._unifiedMemory is not null,
+                HostDisposed: owner._hooks.IsDisposed());
+        }
+
+        public bool IsProfilesFeatureAllowed()
+            => owner._pluginAllows?.Invoke(PluginGate.ProfilesCapability) ?? true;
+
+        public ProfileSummaryCandidateDto[] FindSummarizable(int threshold, int maxCandidates)
+            => owner._profiles.FindSummarizable(threshold, maxCandidates)
+                .Select(c => new ProfileSummaryCandidateDto(
+                    c.Uid,
+                    c.Name,
+                    c.Scope,
+                    c.ExistingSummary,
+                    c.NewMessages as string[] ?? c.NewMessages.ToArray(),
+                    c.ThroughSeq,
+                    c.FoldedCount))
+                .ToArray();
+
+        public Task<string?> SummarizePersonaAsync(string displayName, string existingSummary, string[] newMessages, int maxChars)
+            => owner._brain.SummarizePersonaAsync(displayName, existingSummary, newMessages, maxChars);
+
+        public void ApplySummary(string uid, string scope, string summary, long throughSeq, int foldedCount)
+            => owner._profiles.ApplySummary(uid, scope, summary, throughSeq, foldedCount);
+
+        public void Log(string message) => owner._hooks.Log(message);
+
+        public void LogInternal(string message) => FileLog.Write("Profiles", message);
     }
 }
 

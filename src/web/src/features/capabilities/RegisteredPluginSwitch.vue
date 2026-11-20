@@ -148,8 +148,7 @@ onBeforeUnmount(() => { alive = false; ++sequence })
   <section v-if="!props.compact || desired !== null || target !== null || busy || error || commitError"
     class="plugin-enforcement" :class="{ compact: props.compact }" :data-testid="props.compact ? testId('row-') : 'quota-plugin-switch'">
     <template v-if="!props.compact">
-      <h3>配额拦截插件</h3>
-      <p>当前运行状态：{{ runtime }}。停用只关闭超额拦截，仍继续记录用量。</p>
+      <slot name="description" :runtime="runtime"><p>当前运行状态：{{ runtime }}。</p></slot>
     </template>
     <div class="plugin-switch-row">
       <label v-if="props.compact" class="plugin-switch-control">
@@ -184,8 +183,8 @@ onBeforeUnmount(() => { alive = false; ++sequence })
 <style scoped>
 .plugin-enforcement { margin-block: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
 .plugin-enforcement.compact { margin: 0; padding: 10px; background: var(--surface-muted); font-size: 0.75rem; }
-.plugin-enforcement h3 { margin-top: 0; }
-.plugin-enforcement p { margin-block: 8px; }
+.plugin-enforcement h3, :slotted(h3) { margin-top: 0; }
+.plugin-enforcement p, :slotted(p) { margin-block: 8px; }
 .plugin-enforcement button { margin: 4px 8px 4px 0; }
 .plugin-switch-row, .plugin-switch-control, .plugin-switch-button { display: flex; align-items: center; gap: 10px; }
 .plugin-switch-row { flex-wrap: wrap; justify-content: space-between; }

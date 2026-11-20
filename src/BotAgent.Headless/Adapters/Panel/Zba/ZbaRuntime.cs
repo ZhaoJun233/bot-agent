@@ -27,6 +27,7 @@ internal sealed class ZbaRuntime : IAsyncDisposable
     }
 
     internal ZbaEndpoint Endpoint { get; }
+    internal IZbaBackend Backend => _backend;
 
     internal static ZbaRuntime Create(
         SettingsBox box,
@@ -42,28 +43,23 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         BotAgent.Adapters.Plugins.PluginMarketService? market = null,
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
         BotAgent.Model.ProviderModelDiscovery? discovery = null,
-        TenantQuotaStore? quotas = null,
+        IQuotaOperations? quotas = null,
         BotAgent.Services.Ops.DatabaseBackupService? backups = null,
         BotAgent.Services.Ops.TurnTraceStore? traces = null,
-        IPlatformPolicyResolver? platformPolicies = null)
+        IPlatformPolicyResolver? platformPolicies = null, ZbaControlPlane? controlPlane = null)
     {
-        var options = FromEnvironment();
-        var version = typeof(ZbaRuntime).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
-        // 每个进程一个实例标识：回执用它区分“本进程淘汰”与“上一进程受理”，meta 用它让客户端发现重启。
-        var instanceId = "zi-" + now().ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture)
-                         + "-" + Guid.NewGuid().ToString("N")[..8];
-        var events = new ZbaEventBuffer(new ZbaEventSequenceStore(
-            Path.Combine(AppPaths.DataDir, "zba-event-sequence"), now,
-            message => FileLog.Write("Zba", message)), hadStoredConfigurationBeforeStartup);
-        var taskReceipts = new ZbaTaskReceiptStore(
-            Path.Combine(AppPaths.DataDir, "zba-task-receipts.json"), now,
-            message => FileLog.Write("Zba", message));
+        var context = controlPlane?.Context ?? ZbaRuntimeContext.Create(now, hadStoredConfigurationBeforeStartup);
+        var options = context.Options;
+        var version = context.Version;
+        var instanceId = context.InstanceId;
+        var events = context.Events;
+        var taskReceipts = context.TaskReceipts;
         var dto = new PanelDto(box, registry);
         Func<bool> serverEnabled = () => box.Current.EnableServerAgent;
         Action<string> log = message => FileLog.Write("Zba", message);
-        var quotaStore = quotas ?? new TenantQuotaStore();
+        var quotaStore = quotas;
         // 保留原后端构造时序：参数先求值，再采样启动时间，最后启动任务台账。
-        var startedAt = now();
+        var startedAt = context.StartedAt;
         // 执行与状态在 Engine 的任务运行时（ADR-0002）；registry 只做通道适配（幂等/回执/事件/结果投影）。
         // 台账（#116）在这里注入：运行时只管写，SQLite 细节留在 Adapters/Persistence。
         var ledger = new AgentTaskLedgerStore();
@@ -100,32 +96,9 @@ internal sealed class ZbaRuntime : IAsyncDisposable
             backups,
             traces,
             platformPolicies);
-        var endpoint = new ZbaEndpoint(backend, options, now, version, instanceId,
+        var endpoint = controlPlane?.Endpoint ?? new ZbaEndpoint(backend, options, now, version, instanceId,
             message => FileLog.Write("Zba", message));
         return new ZbaRuntime(endpoint, backend);
-    }
-
-    private static ZbaOptions FromEnvironment()
-    {
-        var admin = Clean(EnvironmentAliases.Get("BOTAGENT_ZBA_TOKEN", "QQCHAT_ZBA_TOKEN"));
-        var read = Clean(EnvironmentAliases.Get("BOTAGENT_ZBA_READ_TOKEN", "QQCHAT_ZBA_READ_TOKEN"));
-        var allowLoopback = EnvironmentAliases.Get("BOTAGENT_ZBA_ALLOW_LOOPBACK", "QQCHAT_ZBA_ALLOW_LOOPBACK")
-            ?.Trim() is "1" or "true" or "TRUE" or "True";
-        FileLog.Write("Zba", admin is null && read is null && !allowLoopback
-            ? "[Zba] 未配置 bearer；管理端点 fail-closed（503），仅 /zba/v1/health 可读"
-            : "[Zba] v1 已挂载（bearer；写路径需要 admin）");
-        return new ZbaOptions
-        {
-            AdminToken = admin,
-            ReadToken = read,
-            AllowLoopbackWithoutToken = allowLoopback
-        };
-    }
-
-    private static string? Clean(string? value)
-    {
-        var trimmed = value?.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 
     public ValueTask DisposeAsync() => _backend.DisposeAsync();

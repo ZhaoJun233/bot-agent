@@ -276,6 +276,10 @@ internal static class Program
         var scheduler = new BotScheduler(box, source, null!, null!, reply, null!, null!, default);
         using var report = new HealthReportService(box, registry, reply, new BotIdentity(), scheduler,
             new VoiceUseCase(null, box, _ => { }), source, null!, new FakeHostFacts());
+        using var reportCoord = new BotAgent.Packages.HealthReporting.HealthReportCoordinator(
+            new BotAgent.Packages.HealthReporting.HealthReportingEngine(),
+            report.CreateHostPorts());
+        report.BindDirect(reportCoord);
         Check((await report.SendNowAsync("synthetic")).Ok && report.SentCount == 1,
             "first health report succeeds and increments lifetime count");
         box.Apply(s => s.PrivateChatEnabled = false);

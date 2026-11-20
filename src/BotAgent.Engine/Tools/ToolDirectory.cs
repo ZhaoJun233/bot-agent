@@ -62,6 +62,18 @@ public sealed class ToolDirectory
     public static ToolDirectory Builtin { get; } =
         new(ChatToolSpecs.All, QqToolSpecs.All, ServerToolSpecs.All, BuiltinToolExecutors.Create());
 
+    public static ToolDirectory FromCatalog(ChatToolCatalog catalog)
+    {
+        var executors = BuiltinToolExecutors.Create();
+        foreach (var group in catalog.Bindings.Values.GroupBy(binding => binding.Definition.Spec.Executor, StringComparer.Ordinal))
+        {
+            if (executors.TryGet(group.Key, out _) || group.Select(binding => binding.ProviderId).Distinct().Count() != 1)
+                throw new InvalidOperationException("plugin_tool_conflict");
+            executors.Register(new DeclaredExecutor(group.Key, group.First().ProviderId, LegacyPath: false));
+        }
+        return new(catalog.Specs, QqToolSpecs.All, ServerToolSpecs.All, executors);
+    }
+
     public IReadOnlyList<ToolSpec> Chat { get; }
 
     public IReadOnlyList<ToolSpec> Qq { get; }

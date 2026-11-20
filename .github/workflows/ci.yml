@@ -51,21 +51,17 @@ jobs:
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
-      - name: Version single source and tag consistency
-        # #122：版本号只能有一个真源（Directory.Build.props），且发版 tag 必须与它一致。
+      - name: Version ownership and host tag consistency
+        # 每个明确登记的包/契约各有一个版本真源；宿主仍使用 Directory.Build.props。
         # 用编译出来的程序集反查 --version，等于同时验证"代码里没有偷偷写死版本"。
         shell: bash
         run: |
           set -euo pipefail
+          dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore -- --versions
           props_version="$(sed -n 's#.*<Version>\([^<]*\)</Version>.*#\1#p' Directory.Build.props | head -1)"
           echo "Directory.Build.props <Version> = ${props_version:-<missing>}"
           if [ -z "${props_version:-}" ]; then
             echo "::error::Directory.Build.props 里没有 <Version>"
-            exit 1
-          fi
-          offenders="$(grep -rl --include='*.csproj' '<Version>' . || true)"
-          if [ -n "$offenders" ]; then
-            echo "::error::这些 csproj 又各自写了 <Version>（会压过唯一真源）：$offenders"
             exit 1
           fi
           cli_version="$(dotnet src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll --version | awk '{print $2}')"
@@ -140,6 +136,7 @@ jobs:
           dotnet run --project tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-build -- --configuration-startup
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release --no-restore
@@ -153,7 +150,12 @@ jobs:
         run: |
           dotnet run --project tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-build -- --deployment-preflight
           dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --default-bundle
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --d2-delivery-combo
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --d3-d5-acceptance
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --dynamic-configuration
           dotnet run --project tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.PythonWorkerProbe/BotAgent.PythonWorkerProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.PythonCleanupProbe/BotAgent.PythonCleanupProbe.csproj -c Release --no-restore -- "$(command -v python)"
@@ -210,6 +212,54 @@ jobs:
         run: npm run test:unit
       - name: Build static assets
         run: npm run build
+
+  quota-ui:
+    name: Independent quota UI build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/token-quota/frontend/package-lock.json
+      - name: Build with package and public UI contract only
+        run: |
+          mkdir -p "$RUNNER_TEMP/quota-ui/packages/token-quota" "$RUNNER_TEMP/quota-ui/contracts"
+          cp -R packages/token-quota/frontend "$RUNNER_TEMP/quota-ui/packages/token-quota/frontend"
+          cp -R contracts/ui "$RUNNER_TEMP/quota-ui/contracts/ui"
+          cd "$RUNNER_TEMP/quota-ui/packages/token-quota/frontend"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+  research-ui:
+    name: Independent research declaration build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: packages/websearch/frontend/package-lock.json
+      - name: Build owner declaration without host frontend inputs
+        run: |
+          mkdir -p "$RUNNER_TEMP/research-ui"
+          cp -R packages/websearch/frontend "$RUNNER_TEMP/research-ui/frontend"
+          cd "$RUNNER_TEMP/research-ui/frontend"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run typecheck
+          npm run build
 
   # playwright.config.ts 的 chromium / firefox / webkit 跑同一套用例、同一套断言。
   # 三个引擎拆成独立 job：一是真并行（塞一个 job 串行跑会撞 20 分钟超时），
@@ -284,13 +334,13 @@ jobs:
           - name: "Core & Chat (S1-S17)"
             scenarios: "s1,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17"
           - name: "Media & Tools (S18-S31)"
-            scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31,s66"
+            scenarios: "s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28,s29,s30,s31"
           # ⚠ 别改这个 name：分支保护的必需检查是按「Synthetic integration test (<name>)」命名的，
           # 改名等于让必需检查永远缺失、PR 永远合不了。s56–s59（#126 的核心不变量）与 s60–s62
           # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
           # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s66,s67,s68,s69,s70,s71,s72,s73,s74,s75,s76,s77,s78,s79,s153"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s66,s67,s68,s69,s70,s71,s72,s73,s74,s75,s76,s77,s78,s79,s153,s154,s155"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

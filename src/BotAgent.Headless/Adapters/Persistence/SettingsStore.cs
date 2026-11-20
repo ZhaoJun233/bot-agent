@@ -27,9 +27,6 @@ namespace BotAgent.Adapters.Persistence;
 /// </summary>
 public sealed partial class SettingsStore : ISettingsRepository
 {
-    private const string ReadSettingsSql = "SELECT json FROM settings WHERE id = 1";
-    private const string WriteSettingsSql = "INSERT INTO settings(id, json, updated_unix) VALUES(1, $json, $now) "
-        + "ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_unix = excluded.updated_unix";
     private static readonly JsonSerializerOptions UserJsonOptions = new()
     {
         WriteIndented = true,
@@ -46,7 +43,8 @@ public sealed partial class SettingsStore : ISettingsRepository
     {
         try
         {
-            return AppDatabase.Scalar<string>(ReadSettingsSql) is not null;
+            using var connection = AppDatabase.Open();
+            return ConfigurationBridge.ReadSettingsJson(connection) is not null;
         }
         catch (Exception)
         {
@@ -61,9 +59,7 @@ public sealed partial class SettingsStore : ISettingsRepository
         using var transaction = connection.BeginTransaction(deferred: true);
         try
         {
-            using var command = connection.CreateCommand();
-            command.CommandText = ReadSettingsSql;
-            var json = command.ExecuteScalar() as string;
+            var json = ConfigurationBridge.ReadSettingsJson(connection);
             settings = string.IsNullOrWhiteSpace(json) ? new AppSettings()
                 : JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
         }
@@ -396,9 +392,7 @@ public sealed partial class SettingsStore : ISettingsRepository
         using var transaction = connection.BeginTransaction(deferred: true);
         if (ConfigurationBridge.ReadConfigurationVersion(connection) != expected)
             throw new InvalidOperationException("configuration_superseded");
-        using var command = connection.CreateCommand();
-        command.CommandText = ReadSettingsSql;
-        var json = command.ExecuteScalar() as string ?? throw new JsonException("configuration_missing");
+        var json = ConfigurationBridge.ReadSettingsJson(connection) ?? throw new JsonException("configuration_missing");
         var user = JsonSerializer.Deserialize<AppSettings>(json) ?? throw new JsonException("configuration_missing");
         var properties = JsonNode.Parse(json)!.AsObject().Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
         var emptyRegistered = new RegisteredConfigurationView(ImmutableArray<PluginConfigurationView>.Empty,
@@ -721,9 +715,7 @@ public sealed partial class SettingsStore : ISettingsRepository
         var snapshot = ConfigurationBridge.LoadPlatformPolicies(connection);
         settings.RuntimePlatformPolicies = snapshot.Stored ? snapshot.Entries : null;
         settings.RuntimePlatformPolicyExplicitFields = snapshot.ExplicitFields;
-        using var command = connection.CreateCommand();
-        command.CommandText = ReadSettingsSql;
-        var json = command.ExecuteScalar() as string;
+        var json = ConfigurationBridge.ReadSettingsJson(connection);
         var properties = string.IsNullOrWhiteSpace(json) ? new JsonObject() : JsonNode.Parse(json)!.AsObject();
         var sources = ImmutableDictionary.CreateBuilder<ConfigurationFieldId, ConfigurationValueSource>();
         foreach (var id in new[] { ConfigurationFieldId.PrivateChatEnabled, ConfigurationFieldId.OfficialEnabled,
@@ -837,6 +829,14 @@ public sealed partial class SettingsStore : ISettingsRepository
 
         internal override bool Reauthorize(ConfigurationCaller caller, ConfigurationAccess required)
             => _authorization(caller, required);
+
+        internal override void CoordinateWrite(Action write) => _runtime.CoordinateConfigurationWrite(write);
+        internal override IReadOnlyDictionary<string, JsonElement> ReadBoundRuntime(string owner,
+            BotAgent.Domain.Plugins.PluginConfigurationDeclaration declaration)
+            => LegacyPluginConfigurationFields.Read(owner, declaration, _runtime.Current);
+        internal override void PublishBound(string owner, BotAgent.Domain.Plugins.PluginConfigurationDeclaration declaration,
+            IReadOnlyDictionary<string, JsonElement> values)
+            => _runtime.Apply(next => LegacyPluginConfigurationFields.ApplyValues(owner, declaration, next, values));
 
         private (bool Changed, ImmutableArray<PlatformPolicyEntry> Entries,
             ImmutableDictionary<PolicyTarget, int> ExplicitFields, ImmutableArray<FieldError> Errors,
@@ -999,8 +999,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             }
             foreach (var name in names) stored.Original.Remove(name);
             if (names.Length != 0)
-                AppDatabase.Exec(connection, WriteSettingsSql,
-                    ("$json", stored.Original.ToJsonString(UserJsonOptions)), ("$now", serverUnixSeconds));
+                ConfigurationBridge.WriteSettingsJson(connection, stored.Original.ToJsonString(UserJsonOptions), serverUnixSeconds);
             return marker is null || names.Length != 0;
         }
 
@@ -1130,7 +1129,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             return new(changed, ImmutableArray<FieldError>.Empty, ImmutableArray<DeviceKeyAssignment>.Empty, conn =>
             {
                 if (pluginsChanged) StorageConfiguration.PluginStore.SavePluginStatesInTransaction(conn, pluginStates);
-                AppDatabase.Exec(conn, WriteSettingsSql, ("$json", nextJson), ("$now", Clock.Now.ToUnixTimeSeconds()));
+                ConfigurationBridge.WriteSettingsJson(conn, nextJson, Clock.Now.ToUnixTimeSeconds());
                 foreach (var provider in metadataWrites) ModelProviderStore.UpsertMetadataInTransaction(conn, provider);
                 foreach (var providerId in providerDeletions) ModelProviderStore.DeleteInTransaction(conn, providerId);
                 if (modesChanged) ModelProviderStore.WriteFieldModesInTransaction(conn, fieldModes);
@@ -1434,9 +1433,7 @@ public sealed partial class SettingsStore : ISettingsRepository
         private static (AppSettings User, JsonObject Original, HashSet<string> Properties, bool HasStored) ReadUserFacts(
             Microsoft.Data.Sqlite.SqliteConnection connection)
         {
-            using var command = connection.CreateCommand();
-            command.CommandText = ReadSettingsSql;
-            var json = command.ExecuteScalar() as string;
+            var json = ConfigurationBridge.ReadSettingsJson(connection);
             var original = string.IsNullOrWhiteSpace(json) ? new JsonObject()
                 : JsonNode.Parse(json) as JsonObject ?? throw new JsonException("invalid_user_configuration");
             var user = string.IsNullOrWhiteSpace(json) ? new AppSettings()
@@ -1597,7 +1594,7 @@ public sealed partial class SettingsStore : ISettingsRepository
         if (auditEvent is not null && auditChain is not AuditLogStore)
             throw new InvalidOperationException("Settings audit requires the same SQLite transaction.");
         var json = JsonSerializer.Serialize(settings, UserJsonOptions);
-        AppDatabase.Exec(conn, WriteSettingsSql, ("$json", json), ("$now", Clock.Now.ToUnixTimeSeconds()));
+        ConfigurationBridge.WriteSettingsJson(conn, json, Clock.Now.ToUnixTimeSeconds());
 
         if (auditEvent is not null)
         {

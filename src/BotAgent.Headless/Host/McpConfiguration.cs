@@ -36,11 +36,16 @@ internal static class McpConfiguration
 {
     public static McpWiring Build(ISecretsRepository secrets, BotAgent.Services.Ops.IAuditChain? audit,
         Action<string> log, BotAgent.Adapters.Plugins.PluginPythonSources? packages = null)
+        => BuildWithPlugins(secrets, audit, log, packages, plugins: null);
+
+    public static McpWiring BuildWithPlugins(ISecretsRepository secrets, BotAgent.Services.Ops.IAuditChain? audit,
+        Action<string> log, BotAgent.Adapters.Plugins.PluginPythonSources? packages,
+        BotAgent.Services.Plugins.PluginManager? plugins)
     {
         IMcpToolSource Combine(IMcpToolSource source) => packages is null ? source : new BotAgent.Adapters.Plugins.CompositePackageToolSource(source, packages);
         if (!On(EnvironmentAliases.Get("BOTAGENT_MCP_ENABLED")))
         {
-            return new McpWiring(new McpToolUseCase(Combine(NullMcpToolSource.Instance), audit, log), null);
+            return new McpWiring(new McpToolUseCase(Combine(NullMcpToolSource.Instance), audit, log, plugins: plugins), null);
         }
 
         var allowPrivate = On(EnvironmentAliases.Get("BOTAGENT_MCP_ALLOW_PRIVATE"));
@@ -49,13 +54,13 @@ internal static class McpConfiguration
         if (servers.Count == 0)
         {
             log("[Mcp] 已启用但没有可用的服务器配置，MCP 保持关闭");
-            return new McpWiring(new McpToolUseCase(Combine(NullMcpToolSource.Instance), audit, log), null);
+            return new McpWiring(new McpToolUseCase(Combine(NullMcpToolSource.Instance), audit, log, plugins: plugins), null);
         }
 
         var http = new HttpFetcher(Timeout.InfiniteTimeSpan, log, "mcp",
             allowAutoRedirect: false, rejectPrivateDestinations: !allowPrivate);
         var source = new McpToolSource(servers, http.SharedClient, log);
-        return new McpWiring(new McpToolUseCase(Combine(source), audit, log), new McpRuntime(source, http));
+        return new McpWiring(new McpToolUseCase(Combine(source), audit, log, plugins: plugins), new McpRuntime(source, http));
     }
 
     private static List<McpServerOptions> Parse(string? raw, ISecretsRepository secrets, bool allowPrivate,

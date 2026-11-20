@@ -1,0 +1,15 @@
+{
+  "id": "system.health-reporting",
+  "entryAssembly": "BotAgent.Package.HealthReporting.dll",
+  "entryType": "BotAgent.Packages.HealthReporting.HealthReportingPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.HealthReporting.Contracts",
+      "owner": "system.health-reporting"
+    }
+  ]
+}

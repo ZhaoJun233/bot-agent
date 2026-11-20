@@ -29,6 +29,64 @@ async function settings(w: Wrapper, id = A.id) { await w.setProps({ pluginId: id
 function caption(w: Wrapper) { return (w.get('[data-testid="plugin-setting-caption"]').element as HTMLInputElement).value }
 
 describe('declared plugin settings authorized findings regressions', () => {
+  it('returns keyboard focus to the editor when an invalid save starts with browser focus on body', async () => {
+    const c = client({
+      pluginSettings: vi.fn(async () => ({ ...state('old'), schema: syntheticSettings.map(field =>
+        field.key === 'limit' ? { ...field, numberConstraints: { minimum: 0, maximum: 5, integer: true } } : field) })),
+      savePluginSettings: vi.fn()
+    })
+    const w = await declared(c)
+    const limit = w.get('[data-testid="plugin-setting-limit"]')
+    await limit.setValue('1.5')
+    ;(limit.element as HTMLElement).focus()
+    ;(limit.element as HTMLElement).blur()
+    expect(document.activeElement).toBe(document.body)
+    await w.get('[data-testid="declared-plugin-settings-save"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="declared-plugin-settings-notice"]').text()).toContain('整数')
+    expect(document.activeElement?.id).toBe('declared-plugin-settings-title')
+    expect(c.savePluginSettings).not.toHaveBeenCalled()
+  })
+  it('keeps keyboard focus in the editor after cancelling discard and protects the draft on the next Escape', async () => {
+    const c = client({ savePluginSettings: vi.fn() })
+    const w = await declared(c)
+    await w.get('[data-testid="plugin-setting-caption"]').setValue('unsaved-draft')
+    await w.get('[role="dialog"]').trigger('keydown', { key: 'Escape' })
+    const cancel = w.get('[data-testid="declared-plugin-settings-discard-cancel"]')
+    ;(cancel.element as HTMLElement).focus()
+    await cancel.trigger('click')
+    await flushPromises()
+    expect(caption(w)).toBe('unsaved-draft')
+    expect(document.activeElement?.id).toBe('declared-plugin-settings-title')
+    document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(w.find('[data-testid="declared-plugin-settings-discard-confirmation"]').exists()).toBe(true)
+    expect(w.emitted('close')).toBeUndefined()
+    expect(c.savePluginSettings).not.toHaveBeenCalled()
+  })
+  it('reports a committed application failure, settles its key and reloads the desired values without resending', async () => {
+    let committed = false
+    const c = client({
+      pluginSettings: vi.fn(async () => ({ ...state(committed ? 'saved-desired' : 'old', committed ? 's2' : 's1'), restartRequired: committed })),
+      savePluginSettings: vi.fn(async () => {
+        committed = true
+        throw new ZbaRequestError(503, 'plugin_settings_application_failed', 'synthetic')
+      })
+    })
+    const w = await declared(c)
+    await w.get('[data-testid="plugin-setting-caption"]').setValue('saved-desired')
+    await w.get('[data-testid="declared-plugin-settings-save"]').trigger('click')
+    await flushPromises()
+    expect(getPendingOperation(c, 'plugin-settings', A.id)).toBeNull()
+    expect(w.get('[data-testid="declared-plugin-settings-notice"]').text()).toContain('设置已保存')
+    expect(w.get('[data-testid="declared-plugin-settings-notice"]').text()).toContain('原键重放不会重新应用')
+    expect(w.get('[data-testid="error-notice"]').text()).toContain('应用未完成')
+    await w.get('[data-testid="declared-plugin-settings-reload"]').trigger('click')
+    await flushPromises()
+    expect(caption(w)).toBe('saved-desired')
+    expect(w.get('[data-testid="declared-plugin-settings-restart"]').text()).toContain('尚未应用')
+    expect(c.savePluginSettings).toHaveBeenCalledTimes(1)
+  })
   it('A PUT cannot overwrite B panel and settles A even after changing plugins', async () => {
     const pending = deferred<ZbaPluginSettings>(); const c = client({ installedPlugins: vi.fn(async () => ({ revision: 'p1', plugins: [item(A, true), item(B, true)] })), pluginCatalog: vi.fn(async () => ({ revision: 'p1', source: 'synthetic', trustNotice: 'Synthetic', categories: [], plugins: [item(A, true), item(B, true)] })), savePluginSettings: vi.fn(() => pending.promise) })
     const w = await declared(c); await settings(w); await w.get('[data-testid="plugin-setting-caption"]').setValue('A-new'); await w.get('[data-testid="declared-plugin-settings-save"]').trigger('click')

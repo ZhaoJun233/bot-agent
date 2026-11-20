@@ -1,0 +1,14 @@
+{
+  "id": "preset.feature.poke",
+  "entryAssembly": "BotAgent.Package.Poke.dll",
+  "entryType": "BotAgent.Packages.Poke.PokePackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Poke.Contracts",
+      "owner": "preset.feature.poke"
+    }
+  ]
+}

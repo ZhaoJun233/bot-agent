@@ -1,0 +1,14 @@
+{
+  "id": "preset.feature.voice",
+  "entryAssembly": "BotAgent.Package.Voice.dll",
+  "entryType": "BotAgent.Packages.Voice.VoicePackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Voice.Contracts",
+      "owner": "preset.feature.voice"
+    }
+  ]
+}

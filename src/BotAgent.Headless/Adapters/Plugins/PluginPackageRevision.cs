@@ -12,8 +12,12 @@ internal static class PluginPackageRevision
     {
         var builder = new StringBuilder();
         foreach (var package in installed.OrderBy(item => item.Id, StringComparer.Ordinal))
+        {
             builder.Append(package.Id).Append('@').Append(package.Active?.Version ?? "-").Append('/')
                 .Append(package.Pending?.Version ?? "-").Append('/').Append(package.PendingUninstall ? 'u' : '-').Append(';');
+            if (package.MetadataFailure is { } failure)
+                builder.Append('!').Append(failure.Code).Append(':').Append(failure.Fingerprint).Append(';');
+        }
         return "p" + Hash(builder.ToString())[..16].ToLowerInvariant();
     }
 
@@ -26,6 +30,14 @@ internal static class PluginPackageRevision
             DownloadUrl = new Uri(manifest.DownloadUrl).AbsoluteUri,
             Permissions = (manifest.Permissions ?? []).OrderBy(value => value, StringComparer.Ordinal).ToArray(),
             Dependencies = (manifest.Dependencies ?? []).OrderBy(value => value.Id, StringComparer.Ordinal).ToArray(),
+            SharedContracts = manifest.SharedContracts?.OrderBy(value => value.Name, StringComparer.Ordinal)
+                .Select(value => value with { Sha256 = value.Sha256.ToLowerInvariant() }).ToArray(),
+            Control = manifest.Control,
+            Data = manifest.Data is { } data ? PluginDataValidation.Normalize(data) : null,
+            Ui = manifest.Ui is { } ui ? PluginUiValidation.Normalize(ui) : null,
+            Adoption = manifest.Adoption,
+            ExclusiveResources = manifest.ExclusiveResources is { Count: > 0 } exclusive
+                ? exclusive.OrderBy(value => value, StringComparer.Ordinal).ToArray() : null,
             Settings = (manifest.Settings ?? []).OrderBy(value => value.Key, StringComparer.Ordinal).ToArray()
         };
         return Hash(JsonSerializer.Serialize(new { Format = 1, kind, id, Manifest = normalized, trust, caller }));
