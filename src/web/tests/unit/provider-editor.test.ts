@@ -12,10 +12,20 @@ describe('provider transport editor', () => {
     for (const preset of providerPresets) expect(providerProtocols.some((item) => item.id === preset.protocol)).toBe(true)
   })
   it('creates a disabled route even if a caller attempts to enable during creation', () => {
-    const draft = { ...providerDraft(), name: '示例', baseUrl: 'https://example.com/v1', modelName: 'model-example', enabled: true }
+    const draft = {
+      ...providerDraft(undefined, 'provider-new'),
+      name: '示例',
+      baseUrl: 'https://example.com/v1',
+      modelName: 'model-example',
+      credentialSecret: 'sk-synthetic-new',
+      enabled: true
+    }
     expect(providerDraftErrors(draft)).toEqual([])
     expect(providerEdit('provider-new', draft)).toMatchObject({ operation: 1, changes: {
-      nameRaw: { kind: 1, value: '示例' }, enabled: { kind: 1, value: false }, protocol: { kind: 1, value: 0 }, credential: { kind: 0 }
+      nameRaw: { kind: 1, value: '示例' },
+      enabled: { kind: 1, value: false },
+      protocol: { kind: 1, value: 0 },
+      credential: { kind: 3, key: 'key-provider-new' }
     } })
   })
   it('uses nameRaw/value rather than display and leaves unchanged fields Keep', () => {

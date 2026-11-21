@@ -30,19 +30,33 @@ describe('provider editor safe configuration lifecycle', () => {
     expect(wrapper.find('input[type="password"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('不会读取或显示已有密钥')
   })
-  it('saves a create disabled with CAS and leaves enablement for a separate update', async () => {
+  it('saves a create disabled with CAS, auto-derived credentialKey, and atomic independent API key', async () => {
     const requests: ZbaConfigurationSaveRequest[] = []
     const client = clientWith({ readConfiguration: vi.fn(async () => requests.length ? providerSnapshot([syntheticProvider({ key: requests[0]!.changes.registered!.providers[0]!.key })], '2') : providerSnapshot([])), saveConfiguration: vi.fn<ZbaClient['saveConfiguration']>(async (request) => { requests.push(request); return { code: 0, errors: [], replayed: false, currentVersion: '2', receipt: receipt(request.key) } }) })
     const { wrapper } = mountEditor(client, true); await flushPromises()
     await wrapper.get('[data-testid="provider-name"]').setValue('示例')
     await wrapper.get('[data-testid="provider-endpoint"]').setValue('https://example.com/v1')
     await wrapper.get('[data-testid="provider-model"]').setValue('free-text-model')
+    // 新建默认走独立 API Key，无需手写 credentialKey 即可一步保存
+    await wrapper.get('[data-testid="provider-credential-secret"]').setValue('sk-synthetic-create-key')
     expect(wrapper.get('[data-testid="provider-enabled"]').attributes('disabled')).toBeDefined()
     await wrapper.get('form').trigger('submit'); await flushPromises()
     expect(requests).toHaveLength(1)
-    expect(requests[0]).toMatchObject({ expectedVersion: '1', contractRevision: 'cfg-0.3.3', secrets: [] })
+    const providerKey = requests[0]!.changes.registered!.providers[0]!.key
+    expect(requests[0]).toMatchObject({
+      expectedVersion: '1',
+      contractRevision: 'cfg-0.3.3',
+      secrets: [{ kind: 1, value: 'sk-synthetic-create-key', credentialKey: 'key-' + providerKey }]
+    })
     expect(requests[0]!.key).toMatch(/^cfg1:/)
-    expect(requests[0]!.changes.registered!.providers[0]).toMatchObject({ operation: 1, changes: { enabled: { kind: 1, value: false }, modelName: { kind: 1, value: 'free-text-model' } } })
+    expect(requests[0]!.changes.registered!.providers[0]).toMatchObject({
+      operation: 1,
+      changes: {
+        enabled: { kind: 1, value: false },
+        modelName: { kind: 1, value: 'free-text-model' },
+        credential: { kind: 3, key: 'key-' + providerKey }
+      }
+    })
     expect(wrapper.get('[data-testid="provider-notice"]').text()).toContain('需重启')
   })
   it('preserves draft on conflict and requires a new baseline before explicit resubmit', async () => {
@@ -159,6 +173,7 @@ describe('provider editor safe configuration lifecycle', () => {
     await wrapper.get('[data-testid="provider-name"]').setValue('synthetic-create')
     await wrapper.get('[data-testid="provider-endpoint"]').setValue('https://example.com/v1')
     await wrapper.get('[data-testid="provider-model"]').setValue('synthetic-model')
+    await wrapper.get('[data-testid="provider-credential-secret"]').setValue('sk-synthetic-unknown')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     const request = vi.mocked(client.saveConfiguration).mock.calls[0]![0]
     const providerKey = request.changes.registered!.providers[0]!.key
@@ -181,6 +196,7 @@ describe('provider editor safe configuration lifecycle', () => {
     await wrapper.get('[data-testid="provider-name"]').setValue('synthetic-create')
     await wrapper.get('[data-testid="provider-endpoint"]').setValue('https://example.com/v1')
     await wrapper.get('[data-testid="provider-model"]').setValue('synthetic-model')
+    await wrapper.get('[data-testid="provider-credential-secret"]').setValue('sk-synthetic-unknown')
     await wrapper.get('form').trigger('submit'); await flushPromises()
     await wrapper.get('[data-testid="provider-priority"]').setValue('5')
     await wrapper.get('form').trigger('submit'); await flushPromises()
@@ -215,5 +231,75 @@ describe('provider editor safe configuration lifecycle', () => {
       await wrapper.get('[data-testid="provider-protocol"]').setValue(protocol)
       expect(wrapper.find('[data-testid="provider-prompt-cache"]').exists()).toBe(true)
     }
+  })
+
+  it('integrates Slot 0 API Key replace/delete and locks read-only fields for primary provider', async () => {
+    const requests: ZbaConfigurationSaveRequest[] = []
+    const primarySnap = providerSnapshot([syntheticProvider({ key: 'primary', priority: 0, desiredEnabled: true, credential: 1, credentialConfigured: true })])
+    const client = clientWith({
+      readConfiguration: vi.fn(async () => primarySnap),
+      saveConfiguration: vi.fn<ZbaClient['saveConfiguration']>(async (request) => {
+        requests.push(request)
+        return { code: 0, errors: [], replayed: false, currentVersion: '2', receipt: receipt(request.key) }
+      })
+    })
+    const wrapper = mount(ProviderEditorDialog, {
+      props: { client, mode: 'admin', writesEnabled: true, providerKey: 'primary' },
+      attachTo: document.body,
+      global: { stubs: { teleport: true } }
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="provider-priority"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="provider-enabled"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="provider-delete"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="provider-credential-badge"]').text()).toContain('主 Key · 环境变量')
+
+    // 1. 直接在 primary 抽屉内替换 Slot 0 主 API Key（纯密钥保存不发冗余 ProviderEdit）
+    await wrapper.get('[data-testid="provider-primary-secret-replace"]').trigger('click')
+    await wrapper.get('[data-testid="provider-credential-secret"]').setValue('sk-synthetic-primary-replace')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.changes).toEqual({})
+    expect(requests[0]!.secrets).toEqual([{ slot: 0, kind: 1, value: 'sk-synthetic-primary-replace' }])
+
+    // 2. 删除数据库中的 Slot 0 主 API Key
+    await wrapper.get('[data-testid="provider-primary-secret-delete"]').trigger('click')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(requests).toHaveLength(2)
+    expect(requests[1]!.changes).toEqual({})
+    expect(requests[1]!.secrets).toEqual([{ slot: 0, kind: 2 }])
+  })
+
+  it('surfaces backend field errors such as endpoint_authorization_required clearly', async () => {
+    const client = clientWith({
+      saveConfiguration: vi.fn<ZbaClient['saveConfiguration']>(async () => ({
+        code: 2,
+        errors: [{ address: { field: 144 }, code: 'endpoint_authorization_required' }],
+        replayed: false,
+        currentVersion: '1'
+      }))
+    })
+    const { wrapper } = mountEditor(client); await flushPromises()
+    await wrapper.get('[data-testid="provider-endpoint"]').setValue('https://new-gateway.example.com/v1')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('[data-testid="error-notice"]').text()).toContain('新增模型供应商')
+  })
+
+  it('clears secret input on 409 conflict rebase and prompts user to re-enter API Key', async () => {
+    let reads = 0
+    const client = clientWith({
+      readConfiguration: vi.fn(async () => providerSnapshot([syntheticProvider({ priority: ++reads > 1 ? 8 : 0 })], String(reads))),
+      saveConfiguration: vi.fn<ZbaClient['saveConfiguration']>(async () => ({ code: 3, errors: [], replayed: false, currentVersion: '2' }))
+    })
+    const { wrapper } = mountEditor(client); await flushPromises()
+    await wrapper.get('[data-testid="provider-credential-mode"]').setValue('independent')
+    await wrapper.get('[data-testid="provider-credential-key"]').setValue('synthetic-rebase-key')
+    await wrapper.get('[data-testid="provider-credential-secret"]').setValue('sk-synthetic-rebase')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    await wrapper.get('[data-testid="provider-rebase"]').trigger('click'); await flushPromises()
+    expect((wrapper.get('[data-testid="provider-credential-secret"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.get('[data-testid="provider-secret-reenter"]').text()).toContain('重新操作或输入 API Key')
   })
 })

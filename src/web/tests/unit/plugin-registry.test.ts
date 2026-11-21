@@ -113,7 +113,8 @@ describe('统一配置登记契约', () => {
     expect(settingsFor('ext.declared')).toMatchObject({ kind: 'plugin', editor: { type: 'declared' }, secrets: [] })
     expect(settingsFor('ext.fields')?.editor).toEqual({ type: 'fields' })
     expect(settingsFor('ext.explicit')?.editor).toEqual({ type: 'declared' })
-    expect(settingsFor('models')).toMatchObject({ kind: 'system', editor: { type: 'fields' }, secrets: [0], providers: true })
+    expect(settingsFor('models')).toMatchObject({ kind: 'system', editor: { type: 'fields' }, secrets: [], providers: false })
+    expect(settingsFor('model-providers')).toMatchObject({ kind: 'system', editor: { type: 'declared' }, secrets: [0] })
   })
 
   it('显式字段编辑器必须有可派生的编辑内容', () => {
@@ -167,7 +168,7 @@ describe('统一配置登记契约', () => {
 
   it('密钥所有权不允许跨登记或单登记重复，密钥也可派生字段编辑器', () => {
     expect(() => registerPlugin({ pluginKey: 'ext.secret-conflict', title: 'Secret', summary: '', secrets: [0] })).toThrow(/已归/)
-    withoutPreset('models')
+    withoutPreset('model-providers')
     expect(() => registerPlugin({ pluginKey: 'ext.secret-repeated', title: 'Secret', summary: '', secrets: [0, 0] })).toThrow(/重复/)
     register({ pluginKey: 'ext.secret', title: 'Secret', summary: '', secrets: [0] })
     expect(settingsFor('ext.secret')?.editor).toEqual({ type: 'fields' })

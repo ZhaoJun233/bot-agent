@@ -68,8 +68,7 @@ export const fieldLabels: Record<string, string> = {
   fastThinkingBudget: '快速思考预算',
   fastThinkingCustomBudget: '快速思考自定义预算',
   maxTokens: '单次输出上限',
-  model: '聊天模型',
-  modelBaseUrl: '模型接口地址',
+  // model & modelBaseUrl labels are owned by packages/model-services/frontend/presentation.ts
   rationalTemperature: '理性温度',
   rationalTopP: '理性 Top_P',
   thinkingBudget: '思考深度',

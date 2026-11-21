@@ -249,7 +249,7 @@ defineExpose({
             :writes-enabled="props.writesEnabled"
             @enable-admin="emit('enable-admin')"
             @auth-expired="emit('auth-expired', $event)"
-            @open-capabilities="owner => emit('open-domain', owner === 'models' ? 'providers' : (owner === 'platform' || owner?.startsWith('system.platform-')) ? 'platforms' : 'plugins', owner)"
+            @open-capabilities="owner => emit('open-domain', (owner === 'models' || owner === 'model-providers') ? 'providers' : (owner === 'platform' || owner?.startsWith('system.platform-')) ? 'platforms' : 'plugins', owner)"
           />
         </div>
         <div v-if="mountedTabs.conversation" v-show="currentTab === 'conversation'" data-testid="sysconfig-pane-conversation">

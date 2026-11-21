@@ -386,6 +386,7 @@ async function navigateTo(target: AppView, event?: MouseEvent, ownerId?: string)
     await nextTick()
     if (!first) await providersPage.value?.reload()
     if (ownerId === 'models') providersPage.value?.openRoutingSettings()
+    else if (ownerId === 'model-providers') providersPage.value?.openProviderByKey('primary')
     return
   }
   if (target === 'platforms') {

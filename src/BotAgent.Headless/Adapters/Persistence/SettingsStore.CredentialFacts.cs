@@ -22,7 +22,8 @@ public sealed partial class SettingsStore
         private static IReadOnlyDictionary<string, PrimaryCredentialFacts> ObserveRegisteredCredentialFacts(
             Microsoft.Data.Sqlite.SqliteConnection connection,
             ImmutableArray<StorageConfiguration.SecretMutation> proposedMutations,
-            IReadOnlyList<PersistedModelProvider> providers)
+            IReadOnlyList<PersistedModelProvider> providers,
+            RegisteredConfigurationChanges? registeredEdits = null)
         {
             var facts = new Dictionary<string, PrimaryCredentialFacts>(StringComparer.Ordinal);
             foreach (var mutation in proposedMutations)
@@ -34,16 +35,41 @@ public sealed partial class SettingsStore
                 facts[ModelCredentialStore.Name(key)] = new(true, configured,
                     configured && IsUsableKeyValue(mutation.NormalizedValue), CredentialSource.Database);
             }
-            foreach (var provider in providers)
+            void ObserveStored(ModelCredentialKey key)
             {
-                if (!ModelProviderStore.TryGetRegisteredCredentialKey(provider.SecretKeyRef, out var key)) continue;
                 var name = ModelCredentialStore.Name(key);
-                if (facts.ContainsKey(name)) continue;
+                if (facts.ContainsKey(name)) return;
                 var stored = ModelCredentialStore.LoadInTransaction(connection, key);
                 facts[name] = new(true, !string.IsNullOrWhiteSpace(stored), IsUsableKeyValue(stored), CredentialSource.Database);
             }
+            foreach (var provider in providers)
+            {
+                if (ModelProviderStore.TryGetRegisteredCredentialKey(provider.SecretKeyRef, out var key))
+                    ObserveStored(key);
+            }
+            foreach (var edit in registeredEdits?.Providers ?? ImmutableArray<ProviderEdit>.Empty)
+            {
+                if (edit.Operation != ProviderEditOperation.Delete
+                    && edit.Changes.Credential.Kind == CredentialBindingEditKind.UseRegisteredModelCredential
+                    && edit.Changes.Credential.TryGetRegisteredKey(out var key))
+                    ObserveStored(key);
+            }
             return facts;
         }
+
+        /// <summary>
+        /// 判定一个 <c>model:&lt;key&gt;</c> 引用在本次事务提交后是否存在且可用：
+        /// 优先以同批提交的 <paramref name="registeredFacts"/> 为准（支持“新建/绑定供应商 + 写入新独立密钥”一步原子保存），
+        /// 未在本次变更的凭据回落到库内已有行。
+        /// </summary>
+        private static bool HasProposedRegisteredCredential(
+            Microsoft.Data.Sqlite.SqliteConnection connection,
+            IReadOnlyDictionary<string, PrimaryCredentialFacts> registeredFacts,
+            string reference,
+            ModelCredentialKey key)
+            => registeredFacts.TryGetValue(reference, out var fact)
+                ? fact.Configured && fact.KeyUsable
+                : IsUsableKeyValue(ModelCredentialStore.LoadInTransaction(connection, key));
 
         /// <summary>与固定槽位同一套可用性口径：非空且不是被误粘进来的 URL。</summary>
         private static bool IsUsableKeyValue(string? value)

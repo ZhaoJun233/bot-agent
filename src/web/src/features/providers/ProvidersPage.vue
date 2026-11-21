@@ -25,6 +25,7 @@ import CapabilitySettingsHost from '../capabilities/CapabilitySettingsHost.vue'
 import ProviderEditorDialog from '../capabilities/ProviderEditorDialog.vue'
 import { configurationFor, type CapabilityConfiguration } from '../capabilities/configuration-ownership'
 import { buildDomainCatalog, keyIdentity, keySlug, runtimeLabel, runtimeTone, type ProviderCardModel } from '../capabilities/domain-catalog'
+import { providerCredentialSummary } from '../capabilities/provider-draft'
 import { protocolLabel } from '../capabilities/provider-protocols'
 import { supportedActions, useCapabilityOperations } from '../capabilities/use-capability-operations'
 
@@ -65,7 +66,8 @@ const routingDialog = ref<InstanceType<typeof CapabilitySettingsHost> | null>(nu
 
 const configurationRecoveries = computed(() =>
   pendingOperations(props.client, 'configuration')
-    .filter(item => item.state !== 'settled' && (item.target.startsWith('provider:') || item.target === 'models'))
+    .filter(item => item.state !== 'settled'
+      && (item.target.startsWith('provider:') || item.target === 'models' || item.target === 'config:models'))
 )
 const recoveryChecking = ref<string | null>(null)
 const recoveryNotice = ref('')
@@ -111,16 +113,10 @@ const ops = useCapabilityOperations({
   onAuthExpired: (ui) => emit('auth-expired', ui)
 })
 
-const credentialLabels: Record<number, string> = {
-  0: '未配置',
-  1: '共用主凭据',
-  2: '独立凭据',
-  3: '需人工核对'
-}
+const primarySecretSlot = computed(() => configSnapshot.value?.secrets?.find(item => item.slot === 0))
 
 function credentialText(item: ProviderCardModel): string {
-  if (item.configView) return credentialLabels[item.configView.credential] ?? '未知'
-  return item.descriptor.credentialConfigured ? '已配置' : '未配置'
+  return providerCredentialSummary(item.configView, primarySecretSlot.value, item.descriptor.credentialConfigured).label
 }
 
 function testActionFor(item: ProviderCardModel) {
@@ -316,6 +312,7 @@ onBeforeUnmount(() => {
 defineExpose({
   reload: () => load('interactive'),
   openRoutingSettings: () => openRoutingSettings(),
+  openProviderByKey: (key: string) => openProvider(key),
   requestLeave,
   discardSecretsOnLeave,
   draftCount: computed(() => (providerDialog.value?.draftCount ?? 0) + (routingDialog.value?.draftCount ?? 0))
@@ -329,7 +326,7 @@ defineExpose({
       eyebrow="MODEL PROVIDERS"
       title="模型供应商"
       title-id="providers-title"
-      description="统一管理模型供应商接入、协议与优先级、默认主/快模型路由及连接测试。"
+      description="按模型供应商独立管理 API 根地址、默认模型、API Key 与连接测试；右侧可统一调整全局路由与采样参数。"
     >
       <template #metadata>
         <span>共 <strong>{{ providers.length }}</strong> 个模型供应商 · 已启用 <strong>{{ enabledCount }}</strong></span>
@@ -346,7 +343,7 @@ defineExpose({
       </template>
       <button type="button" class="tonal" data-testid="providers-routing-settings" @click="openRoutingSettings($event)">
         <AppIcon name="sliders" :size="15" />
-        路由与默认模型
+        路由与采样参数
       </button>
       <button type="button" class="primary" data-testid="cap-add-provider" @click="openProvider(undefined, $event)">
         <AppIcon name="plus" :size="15" />
@@ -464,6 +461,7 @@ defineExpose({
           <div class="cap-title">
             <div class="title-row">
               <h2 class="cap-name">{{ item.title }}</h2>
+              <span v-if="item.key === 'primary'" class="domain-pill" data-domain="system">主供应商</span>
               <span v-if="item.configView" class="domain-pill" data-domain="provider">
                 {{ protocolLabel(item.configView.protocol) }}
               </span>
@@ -480,21 +478,22 @@ defineExpose({
 
         <dl class="provider-facts">
           <div>
+            <dt>API 地址</dt>
+            <dd class="mono" data-testid="provider-card-url">{{ item.configView?.baseUrl.display || '—' }}</dd>
+          </div>
+          <div>
             <dt>默认模型</dt>
             <dd class="mono">{{ item.configView?.modelName.display || '—' }}</dd>
           </div>
           <div>
-            <dt>优先级</dt>
-            <dd class="mono">{{ item.configView?.priority ?? '—' }}</dd>
+            <dt>API 凭据</dt>
+            <dd data-testid="provider-card-credential">{{ credentialText(item) }}</dd>
           </div>
           <div>
-            <dt>凭据</dt>
-            <dd>{{ credentialText(item) }}</dd>
-          </div>
-          <div>
-            <dt>配置状态</dt>
+            <dt>优先级 · 状态</dt>
             <dd>
-              {{ (item.configView?.desiredEnabled ?? item.descriptor.desiredEnabled) ? '已启用' : '已停用' }}
+              <span class="mono">#{{ item.configView?.priority ?? '—' }}</span>
+              <span>· {{ (item.configView?.desiredEnabled ?? item.descriptor.desiredEnabled) ? '已启用' : '已停用' }}</span>
               <StatusBadge v-if="item.configView?.runtimeApplyState === 3" tone="warn" label="需重启" />
             </dd>
           </div>

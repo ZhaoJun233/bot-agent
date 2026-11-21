@@ -7,13 +7,35 @@ import {
 } from '../../src/api/zba'
 import editableFixture from '../fixtures/configuration-read-editable-result.json'
 import { getPendingOperation } from '../../src/shared/sync/pending-operations'
+import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
 
 const mounted: Array<{ unmount: () => void }> = []
+const disposers: Array<() => void> = []
 let clientIdentity = 0
 
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
+  for (const dispose of disposers.splice(0)) dispose()
 })
+
+function registerSyntheticProviderScope(): string {
+  const key = 'synthetic-providers'
+  disposers.push(registerPlugin({
+    pluginKey: key,
+    kind: 'system',
+    title: '合成供应商编辑能力',
+    summary: '测试通用配置页供应商改名路径',
+    fields: [{ section: 'model', key: 'fastModel' }],
+    providers: true
+  }))
+  return key
+}
+
+function agentSecretFixture(): ZbaConfigurationReadResult {
+  const copy = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+  copy.secrets[1] = { slot: 1, configured: true, source: 1 }
+  return copy
+}
 
 function clientWith(
   result: unknown,
@@ -72,6 +94,13 @@ function providerSnapshot(nameRaw = 'Synthetic Provider A', version = '1'): ZbaC
   const provider = snapshot.view?.registered.providers[0]
   if (!provider) throw new Error('Synthetic fixture must include a provider')
   snapshot.version = version
+  if (snapshot.view?.model.model) {
+    snapshot.view.model.fastModel = {
+      ...structuredClone(snapshot.view.model.model),
+      value: 'sample-fast-model',
+      rule: { ...snapshot.view.model.model.rule, id: 50 }
+    }
+  }
   provider.name.visibility = 2
   provider.name.nameRaw = nameRaw
   delete provider.name.value
@@ -118,14 +147,14 @@ describe('ConfigurationPage runtime and explicit denial', () => {
     let release!: (snapshot: ZbaConfigurationReadResult) => void
     let holdRead = false
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(editableFixture, {
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(editableFixture, {
       readConfiguration: () => holdRead
         ? new Promise<ZbaConfigurationReadResult>(resolve => { release = resolve })
         : Promise.resolve(editableFixture as unknown as ZbaConfigurationReadResult),
       saveConfiguration: async () => { writes += 1; throw new Error('Discard must not write') }
     }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic discarded model')
+    await wrapper.get('[data-testid="config-field-agentPrompt"] textarea').setValue('Synthetic discarded prompt')
     holdRead = true
     const reread = (wrapper.vm as unknown as { reload: () => Promise<boolean> }).reload()
     await flushPromises()
@@ -193,9 +222,9 @@ describe('ConfigurationPage runtime and explicit denial', () => {
 describe('ConfigurationPage', () => {
   it.each(['replace', 'delete'] as const)('F6 keeps ordinary drafts and clears the %s secret intent without saving', async secretMode => {
     const save = vi.fn()
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(editableFixture, { saveConfiguration: save }) })
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(agentSecretFixture(), { saveConfiguration: save }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic retained model')
+    await wrapper.get('[data-testid="config-field-agentPrompt"] textarea').setValue('Synthetic retained prompt')
     await wrapper.get('[data-testid="config-secrets"] [data-testid="secret-' + secretMode + '"]').trigger('click')
     if (secretMode === 'replace') await wrapper.get('[data-testid="config-secrets"] input').setValue('synthetic-private-replacement')
     expect(wrapper.vm.draftCount).toBe(2)
@@ -220,7 +249,7 @@ describe('ConfigurationPage', () => {
     await wrapper.setProps({ active: false })
     await wrapper.setProps({ active: true })
     await flushPromises()
-    expect(wrapper.get<HTMLInputElement>('[data-testid="config-field-model"] input').element.value).toBe('Synthetic retained model')
+    expect(wrapper.get<HTMLTextAreaElement>('[data-testid="config-field-agentPrompt"] textarea').element.value).toBe('Synthetic retained prompt')
     expect(wrapper.vm.draftCount).toBe(1)
     expect(save).not.toHaveBeenCalled()
   })
@@ -361,14 +390,14 @@ describe('ConfigurationPage', () => {
   })
 
   it.each([
-    ['basic', 'lock'], ['basic', 'downgrade'], ['models', 'lock'], ['models', 'downgrade']
+    ['basic', 'lock'], ['basic', 'downgrade'], ['agent', 'lock'], ['agent', 'downgrade']
   ] as const)('隐藏的 %s 草稿只能通过明确的 %s 确认保存', async (scope, reason) => {
     const requests: ZbaConfigurationSaveRequest[] = []
     const wrapper = mountPage({ mode: 'admin', scope, client: clientWith(editableFixture, {
       saveConfiguration: async request => { requests.push(request); return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt } }
     }) })
     await flushPromises()
-    const key = scope === 'basic' ? 'botPersona' : 'model'
+    const key = scope === 'basic' ? 'botPersona' : 'agentPrompt'
     await wrapper.get('[data-testid="config-field-' + key + '"] input, [data-testid="config-field-' + key + '"] textarea').setValue('Synthetic retained draft')
     await wrapper.setProps({ active: false }); await flushPromises()
     // 隐藏普通保存入口（包括直接分派事件）不能绕过写保护。
@@ -392,7 +421,7 @@ describe('ConfigurationPage', () => {
     expect(requests).toHaveLength(0)
     saveButton.click(); await flushPromises()
     expect(requests).toHaveLength(1)
-    expect(requests[0]!.changes).toEqual({ [scope === 'basic' ? 'behavior' : 'model']: { [key]: { kind: 1, value: 'Synthetic retained draft' } } })
+    expect(requests[0]!.changes).toEqual({ [scope === 'basic' ? 'behavior' : 'agent']: { [key]: { kind: 1, value: 'Synthetic retained draft' } } })
     await expect(leaving).resolves.toBe(true)
   })
 
@@ -433,18 +462,17 @@ describe('ConfigurationPage', () => {
     expect(wrapper.emitted('open-capabilities')).toEqual([['models']])
   })
 
-  it('模型能力保留模型字段和已登记供应商编辑', async () => {
-    const wrapper = mountPage({ scope: 'models' })
+  it('模型路由能力仅展示路由与采样参数，不再混入主模型地址、密钥槽位或旧供应商表', async () => {
+    const withFastModel = providerSnapshot()
+    const wrapper = mountPage({ scope: 'models', client: clientWith(withFastModel) })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    expect(wrapper.get('[data-testid="config-field-model"]').text()).toContain('sample-model')
-
-    await wrapper.get('[data-testid="config-nav-registered"]').trigger('click')
-    expect(wrapper.find('[data-testid="config-plugins"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="config-open-capabilities"]').exists()).toBe(false)
-    expect(wrapper.findAll('[data-testid="config-providers"] tbody tr')).toHaveLength(1)
-    expect(wrapper.text()).toContain('provider-sample')
+    expect(wrapper.get('[data-testid="config-field-fastModel"]').text()).toContain('sample-fast-model')
+    expect(wrapper.find('[data-testid="config-field-model"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-field-modelBaseUrl"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-nav-registered"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-providers"]').exists()).toBe(false)
   })
 
   it('标准模式提供管理员入口，管理员模式隐藏只读提示', async () => {
@@ -747,11 +775,11 @@ describe('ConfigurationPage', () => {
   })
 
   it('离开配置视图会清空秘密替换输入，但保留普通字段草稿', async () => {
-    const wrapper = mountPage({ mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(agentSecretFixture()) })
     await flushPromises()
     const page = wrapper.vm as unknown as { discardSecretsOnLeave: () => void }
 
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('字段草稿')
+    await wrapper.get('[data-testid="config-field-agentPrompt"] textarea').setValue('字段草稿')
     await wrapper.get('[data-testid="config-secrets"] [data-testid="secret-replace"]').trigger('click')
     await wrapper.get('[data-testid="config-secrets"] input[type="password"]').setValue('sk-synthetic-leave-7c41')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
@@ -760,17 +788,17 @@ describe('ConfigurationPage', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="config-secrets"] input[type="password"]')).toHaveLength(0)
-    expect((wrapper.get('[data-testid="config-field-model"] input').element as HTMLTextAreaElement).value).toBe('字段草稿')
+    expect((wrapper.get('[data-testid="config-field-agentPrompt"] textarea').element as HTMLTextAreaElement).value).toBe('字段草稿')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
   it('未知结果时离开视图不清秘密输入，留给核对与重存', async () => {
-    const client = clientWith(editableFixture, {
+    const client = clientWith(agentSecretFixture(), {
       saveConfiguration: async () => {
         throw new ZbaNetworkError(new Error('offline'))
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'agent' })
     await flushPromises()
     const page = wrapper.vm as unknown as { discardSecretsOnLeave: () => void }
 
@@ -990,10 +1018,11 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const scope = registerSyntheticProviderScope()
+    const wrapper = mountPage({ client, mode: 'admin', scope })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('改过的人格')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('改过的人格')
     await renameProvider(wrapper, 'Synthetic Provider A2')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
 
@@ -1002,7 +1031,7 @@ describe('ConfigurationPage', () => {
 
     expect(saveRequests).toHaveLength(1)
     const request = saveRequests[0]!
-    expect(request.changes.model?.model).toEqual({ kind: 1, value: '改过的人格' })
+    expect(request.changes.model?.fastModel).toEqual({ kind: 1, value: '改过的人格' })
     expect(request.changes.registered?.providers).toHaveLength(1)
     const edit = request.changes.registered!.providers[0]!
     expect(edit.key).toBe('provider-sample')
@@ -1036,7 +1065,7 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1077,7 +1106,7 @@ describe('ConfigurationPage', () => {
         return { code: 0, receipt: { ...receipt, key, observedVersion: '1', committedVersion: '2' } }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1111,7 +1140,7 @@ describe('ConfigurationPage', () => {
         return { code: 14 }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1156,7 +1185,7 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1203,7 +1232,7 @@ describe('ConfigurationPage', () => {
       },
       findConfiguration: async () => ({ code: 0, receipt: confirmed })
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
     await renameProvider(wrapper, 'Synthetic converged B')
     current = providerSnapshot('Synthetic converged B', '2')
@@ -1211,7 +1240,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit 1')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('Synthetic ordinary edit 1')
     await saveDraft(wrapper)
     expect(requests[0]!.changes.registered?.providers ?? []).toHaveLength(0)
     if (completion === 'find') {
@@ -1227,7 +1256,7 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit 2')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('Synthetic ordinary edit 2')
     await saveDraft(wrapper)
     expect(requests).toHaveLength(2)
     expect(requests[1]!.changes.registered?.providers ?? []).toHaveLength(0)
@@ -1237,7 +1266,7 @@ describe('ConfigurationPage', () => {
   it.each(['lock', 'downgrade'] as const)('SR-NAME-02 同值草稿保存并 %s 无需空请求即可完成离开', async (reason) => {
     let current = providerSnapshot()
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => { writes += 1; throw new Error('No empty write expected') }
     }) })
@@ -1270,7 +1299,7 @@ describe('ConfigurationPage', () => {
   it('SR-NAME-02 纯同值草稿显式保存时就地结束，不发空请求也不伪造回执', async () => {
     let current = providerSnapshot()
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => { writes += 1; throw new Error('No empty write expected') }
     }) })
@@ -1292,7 +1321,7 @@ describe('ConfigurationPage', () => {
 
   it.each([3, 4, 12] as const)('SR-NAME-02 保存 code %s 不结束同值名称草稿', async (code) => {
     let current = providerSnapshot()
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => ({ code, replayed: false, currentVersion: '2', errors: [] })
     }) })
@@ -1302,7 +1331,7 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('Synthetic ordinary edit')
     await saveDraft(wrapper)
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
   })
@@ -1312,7 +1341,7 @@ describe('ConfigurationPage', () => {
     let release!: () => void
     const delayed = new Promise<void>((resolve) => { release = resolve })
     const requests: ZbaConfigurationSaveRequest[] = []
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async (request) => {
         requests.push(request)
@@ -1357,7 +1386,7 @@ describe('ConfigurationPage', () => {
         throw new Error('会话结束时不得再发写请求')
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1500,7 +1529,7 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
   })
 
   it('秘密槽位只给元数据：不回显值，也没有 QQ 官方 Secret 的写入口', async () => {
-    const wrapper = mountPage({ mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(agentSecretFixture()) })
     await flushPromises()
     const secrets = wrapper.get('[data-testid="config-secrets"]')
     expect(secrets.findAll('li')).toHaveLength(1)

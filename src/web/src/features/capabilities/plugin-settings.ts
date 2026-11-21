@@ -2,7 +2,7 @@ import { readonly, ref as vueRef, shallowReactive, shallowReadonly, type Compone
 import { agentPresentation } from '../../../../../packages/agent/frontend/presentation'
 import { conversationPresentation } from '../../../../../packages/conversation/frontend/presentation'
 import { healthReportingPresentation } from '../../../../../packages/health-reporting/frontend/presentation'
-import { modelServicesPresentation } from '../../../../../packages/model-services/frontend/presentation'
+import { modelProvidersPresentation, modelServicesPresentation } from '../../../../../packages/model-services/frontend/presentation'
 import { musicPresentation } from '../../../../../packages/music/frontend/presentation'
 import { platformFeishuPresentation } from '../../../../../packages/platform-feishu/frontend/presentation'
 import { platformLocalPresentation } from '../../../../../packages/platform-local/frontend/presentation'
@@ -109,6 +109,7 @@ const platformFallbackPresentation: PluginSettingsSpec = Object.freeze({
 const presets: PluginSettingsSpec[] = [
   conversationPresentation,
   modelServicesPresentation,
+  modelProvidersPresentation,
   agentPresentation,
   platformQqPrivatePresentation,
   platformQqOfficialPresentation,

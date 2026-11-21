@@ -77,7 +77,7 @@ describe('configuration findings desired behavior', () => {
       keys.push(request.key)
       throw new ZbaRequestError(503, 'synthetic_unknown', 'synthetic')
     }, findConfiguration: async key => { finds.push(key); return { code: 14 } } })
-    const first = mountPage(client, 'models')
+    const first = mountPage(client, 'agent')
     await flushPromises()
     await first.get('[data-testid="secret-replace"]').trigger('click')
     await first.get('[data-testid="config-secrets"] .secret-actions input').setValue('synthetic-secret')
@@ -86,16 +86,16 @@ describe('configuration findings desired behavior', () => {
     await expect(api.requestLeave('lock')).resolves.toBe(true)
     api.endSession()
     first.unmount()
-    const second = mountPage(client, 'models')
+    const second = mountPage(client, 'agent')
     await flushPromises()
     expect(second.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
     expect(second.find('[data-testid="config-secrets"] .secret-actions input').exists()).toBe(false)
-    expect(getPendingOperation(client, 'configuration', 'config:models')?.key).toBe(keys[0])
+    expect(getPendingOperation(client, 'configuration', 'config:agent')?.key).toBe(keys[0])
     await second.get('[data-testid="config-check-pending"]').trigger('click')
     await flushPromises()
     expect(finds).toEqual(keys)
     expect(keys).toHaveLength(1)
-    expect(getPendingOperation(client, 'configuration', 'config:models')).toBeNull()
+    expect(getPendingOperation(client, 'configuration', 'config:agent')).toBeNull()
   })
 
   it('late completion after unmount settles its original record and forces fresh baseline in a restored editor', async () => {
@@ -151,14 +151,19 @@ describe('configuration findings desired behavior', () => {
   })
 
   it.each(['replace', 'delete'] as const)('F09 secret %s requires explicit reconfirmation after an uncomparable conflict', async action => {
-    let current = snapshot()
+    const withAgentSecret = (version = '1') => {
+      const next = snapshot(version)
+      next.secrets[1] = { slot: 1, configured: true, source: 1 }
+      return next
+    }
+    let current = withAgentSecret('1')
     const requests: ZbaConfigurationSaveRequest[] = []
     const client = clientWith({ readConfiguration: async () => current, saveConfiguration: async r => { requests.push(r); return conflict() } })
-    const wrapper = mountPage(client, 'models')
+    const wrapper = mountPage(client, 'agent')
     await flushPromises()
     await wrapper.get('[data-testid="secret-' + action + '"]').trigger('click')
     if (action === 'replace') await wrapper.get('[data-testid="config-secrets"] .secret-actions input').setValue('synthetic-local-secret')
-    current = snapshot('2')
+    current = withAgentSecret('2')
     await save(wrapper)
     await wrapper.get('[data-testid="config-reload-conflict"]').trigger('click')
     await flushPromises()
@@ -168,7 +173,7 @@ describe('configuration findings desired behavior', () => {
     expect(wrapper.get('[data-testid="config-save"]').attributes('disabled')).toBeDefined()
     await save(wrapper)
     expect(requests).toHaveLength(1)
-    await wrapper.get('[data-testid="config-secret-reconfirm-0"]').setValue(true)
+    await wrapper.get('[data-testid="config-secret-reconfirm-1"]').setValue(true)
     if (action === 'replace') await wrapper.get('[data-testid="config-secrets"] .secret-actions input').setValue('synthetic-reentered-secret')
     await save(wrapper)
     expect(requests.map(r => r.expectedVersion)).toEqual(['1', '2'])

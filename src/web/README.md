@@ -69,7 +69,7 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
     - `内置 Agent 与工具`（`agent`）：任务执行、服务器连接、工具范围与 Agent 密钥；
     - `健康日报`（`reporting`）：报告开关、发送时间与接收范围；
     - `高级与系统包`（`system-packages`）：9 个 `system.*` 核心引擎包的只读版本与运行状态总览，支持按归属一键跳转至「模型供应商」「消息平台」或对应配置分区。
-  - **模型供应商**（`ProvidersPage.vue`）：集中管理模型供应商（主/备协议、默认模型、优先级、凭据与连接测试）、默认主/快模型路由设置（`models`）及 `system.model-services` 路由引擎状态。
+  - **模型供应商**（`ProvidersPage.vue` + `ProviderEditorDialog.vue`）：每张供应商卡片直接展示并编辑各自的 `API 根地址`、`默认模型` 与 `API 凭据`（`primary` 直接在编辑器内托管 `modelBaseUrl`、`model` 与 `Slot 0` 主模型 API Key，且锁定优先级/启用态/删除；其它供应商支持直接填写独立 API Key 并自动派生 `credentialKey` 单步原子保存、复用主供应商凭据或 Ollama 无密钥）；页头「路由与采样参数」（`models`）仅保留快模型、采样、超时等全局路由与生成参数，不再重复列出主模型 URL/默认模型/Slot 0 或旧注册表；同步展示 `system.model-services` 路由引擎状态。
   - **消息平台**（`PlatformsPage.vue` + `driver-registry.ts`）：集中管理 QQ 私域、QQ 官方开放平台、飞书与本地调试驱动卡片，覆盖连接启停与消息能力声明；4 个平台驱动包各自在 `packages/platform-*/frontend/presentation.ts` 独立声明归属字段、秘密槽位（仅飞书拥有槽位 3/4/5）、文案与策略切片，每张卡片的「接入与策略」直达该驱动专属配置抽屉，互不混入其它驱动字段、秘密或策略条目（仅当存在未归属字段/孤立策略时才按需展示 `platform` 兜底入口）。
   - **插件中心**（`PluginsPage.vue`）：聚焦 8 个内置对话功能插件（音乐、语音含 TTS 密钥、表情包、戳一戳、氛围、画像、搜索、Token 配额）与第三方扩展，卡片内置启停开关、参数设置、一键「打开界面」（如表情包、Token 配额沙箱界面，且深浅主题通过 `PluginUiFrame.vue` 实时同步）及「已安装 / 插件市场 / 仓库与导入」三栏切换（配额细节参见 [Token 配额文档](../../docs/token-quota-plugin.md)）。
   - 架构设计与映射细节见 [配置 UI 归属](../../docs/configuration-ui-ownership.md)。
@@ -105,8 +105,8 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
 
 ## S6：模型供应商定制、插件市场与仓库导入
 
-- 模型供应商：「模型供应商」页「新增模型供应商」打开 `ProviderEditorDialog.vue`，可新建/改协议（OpenAI Chat / Responses、Anthropic、Gemini、Azure、Ollama）、端点、模型名、优先级、凭据（沿用主模型 / 独立凭据 / 不配置）与启用开关。**新建一律先存为停用**，测试连接走「测试已保存连接」。
-- 凭据：独立凭据的键名与密文只在本次提交里出现；响应只回 `credentialKey` / `credentialConfigured` / `modelCredentials[{key,configured,keyUsable}]`，正文永不回显。
+- 模型供应商：「模型供应商」页「新增模型供应商」与卡片「编辑」均打开 `ProviderEditorDialog.vue`：`primary` 直接内联编辑 `modelBaseUrl`、`model` 与 `Slot 0` 主模型 API Key（保留来源提示、替换与删除，锁定优先级与启用态）；其它供应商可新建/改协议（OpenAI Chat / Responses、Anthropic、Gemini、Azure、Ollama）、端点、模型名、优先级、独立 API Key（默认自动派生 `key-<providerKey>`，可在「凭据键与复用」折叠区修改或复用已有键，一次提交即可原子写入凭据与供应商；亦可选共用主凭据或 Ollama 无密钥）与启用开关。**新建一律先存为停用**，测试连接走「测试已保存连接」。
+- 凭据：独立凭据与 Slot 0 的密文只在本次提交里出现，切页、锁定、降级或冲突重基时立即清除；响应只回 `credentialKey` / `credentialConfigured` / `modelCredentials[{key,configured,keyUsable}]` 与 `secrets[]` 元数据，正文永不回显。
 - 模型发现：「发现模型」调 `GET /providers/{key}/models`，结果进 datalist；服务端返回 `errorCode` 时退回手工输入，绝不因为发现失败而挡住保存。
 - 插件市场与导入：「插件中心」内置「已安装插件 / 插件市场 / 仓库与导入」三栏切换（`PluginMarketplaceWorkspace.vue` + `PluginCatalogBrowser` + `PluginRepositoryImport` + `DeclaredPluginSettings`）。清单声明的设置按类型渲染（string/boolean/number/select/secret），secret 只有 keep/set/delete 三态。
 - 幂等：安装/更新/卸载/保存设置各自持有一个稳定操作键；结果未知时**复用同一个键**通过 `GET /plugins/operations/{key}` 核对，只有服务端明确 `idempotency_conflict`(409) 才作废换键，`plugin_operation_not_found`(404) 表示该键尚无回执、继续用原键核对。

@@ -9,7 +9,7 @@ Web 控制台按领域将配置入口拆分到对应一级导航，不再将模�
 | 系统配置 → 内置 Agent 与工具 | Agent 执行与服务器参数、工具范围、Agent 密钥 |
 | 系统配置 → 健康日报 | 报告开关、发送时间和接收范围 |
 | 系统配置 → 高级与系统包 | 9 个 `system.*` 核心引擎包的只读版本与运行状态总览，支持一键跳转至所属领域页 |
-| 模型供应商 | 登记的模型供应商管理、默认主/快模型路由与采样参数、主模型 API Key 与独立供应商凭据、连通性测试及 `system.model-services` 路由引擎状态 |
+| 模型供应商 | 登记的模型供应商管理、各供应商内联 `API 根地址` / `默认模型` / `API Key`（`primary` 直接托管 `modelBaseUrl`、`model` 与 `Slot 0` 主模型密钥，通过 `model-providers` 归属声明防回落至全局抽屉；非主供应商默认自动生成 `credentialKey` 并支持单步原子保存独立密钥，亦支持共用主凭据或 Ollama 无密钥）、连通性测试、`路由与采样参数` 纯净抽屉（`scope="models"` 仅保留快模型、采样、超时等全局路由参数）及 `system.model-services` 路由引擎状态 |
 | 消息平台 → 对应驱动卡片「接入与策略」 | 4 个平台驱动包各自在 `packages/platform-*/frontend/presentation.ts` 独立声明归属字段、秘密槽位（仅飞书拥有槽位 3/4/5）、文案与策略切片：QQ 私域（`system.platform-qq-private`）、QQ 官方（`system.platform-qq-official`，保持 AppSecret 仅由环境变量提供）、飞书（`system.platform-feishu`）、本地调试（`system.platform-local`）；未归属特定驱动的未来字段与策略条目由宿主 `platform` 兜底承载 |
 | 插件中心 → 对应插件卡片 | 8 个内置对话功能插件（音乐、语音含 TTS 密钥、表情包、戳一戳、氛围、画像、搜索、Token 配额）与第三方扩展；支持卡片直达沙箱界面（如表情包、Token 配额）以及插件市场与仓库导入 |
 

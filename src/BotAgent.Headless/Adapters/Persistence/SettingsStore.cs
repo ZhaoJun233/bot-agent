@@ -1103,7 +1103,7 @@ public sealed partial class SettingsStore : ISettingsRepository
             {
                 if (profile == StorageConfiguration.ConfigurationStorageProfile.Strict)
                 {
-                    var registeredFacts = ObserveRegisteredCredentialFacts(connection, proposedMutations, providers);
+                    var registeredFacts = ObserveRegisteredCredentialFacts(connection, proposedMutations, providers, ownedIntent.Registered);
                     var plan = PrepareRegisteredProviders(connection, providers, ownedIntent.Registered, metadata,
                         _runtime.Current, credentialMutation, credential, registeredFacts);
                     if (plan.Errors.Length != 0)
@@ -1233,7 +1233,7 @@ public sealed partial class SettingsStore : ISettingsRepository
                         errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_required", address));
                     else if (createdRef.StartsWith(ModelProviderStore.RegisteredCredentialPrefix, StringComparison.Ordinal)
                         && ModelProviderStore.TryGetRegisteredCredentialKey(createdRef, out var createdKey)
-                        && string.IsNullOrWhiteSpace(ModelCredentialStore.LoadInTransaction(connection, createdKey)))
+                        && !HasProposedRegisteredCredential(connection, registeredFacts, createdRef, createdKey))
                         errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_required", address));
                     var created = new ModelProviderDefinition(edit.Key.Value,
                         createdChange.Priority.TryGetValue(out var createdPriority) ? createdPriority : 0,
@@ -1263,10 +1263,10 @@ public sealed partial class SettingsStore : ISettingsRepository
                     CredentialBindingEditKind.UseRegisteredModelCredential => RegisteredReference(change.Credential),
                     _ => original.SecretKeyRef,
                 };
-                // 绑定到已登记凭据时先验证存在性：引用合法但库里没有那一行，等于“需要先填密钥”。
+                // 绑定到已登记凭据时先验证存在性与可用性（含同批提交待写入的新独立凭据）。
                 if (nextRef is not null && nextRef.StartsWith(ModelProviderStore.RegisteredCredentialPrefix, StringComparison.Ordinal)
                     && ModelProviderStore.TryGetRegisteredCredentialKey(nextRef, out var referenced)
-                    && string.IsNullOrWhiteSpace(ModelCredentialStore.LoadInTransaction(connection, referenced)))
+                    && !HasProposedRegisteredCredential(connection, registeredFacts, nextRef, referenced))
                     errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "credential_required", address));
                 var next = original with
                 {
@@ -1297,7 +1297,8 @@ public sealed partial class SettingsStore : ISettingsRepository
                     errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_metadata_required", address));
                 else if (!TryModelEndpoint(provider.BaseUrl, out _))
                     errors.Add(Error(ConfigurationFieldId.RegisteredProviders, "provider_endpoint_invalid", address));
-                if (!provider.IsEnabled || provider.Id == "primary" && !_primaryRequiresCredential) continue;
+                if (!provider.IsEnabled || provider.Id == "primary" && !_primaryRequiresCredential
+                    || provider.Protocol == ModelProtocol.Ollama && provider.SecretKeyRef == ModelProviderStore.UnconfiguredModelCredentialReference) continue;
                 var credential = ResolveBindingFacts(provider.SecretKeyRef, facts, registeredFacts);
                 // model:<key> 是合法引用，但只有在库里真有那一行时才算“已知”；否则报 facts unknown 而不是误报缺密钥。
                 if (!credential.Known || !credential.Configured || !credential.KeyUsable)

@@ -29,12 +29,27 @@ for (const width of [1440, 768, 390, 320]) for (const theme of ['light', 'dark']
     {
       const dialog = page.getByTestId('ability-configuration-dialog')
       await expect(dialog.getByTestId('config-fields')).toBeVisible()
+      await expect(dialog.getByTestId('config-field-model')).toHaveCount(0)
+      await expect(dialog.getByTestId('config-field-modelBaseUrl')).toHaveCount(0)
+      await expect(dialog.getByTestId('config-secrets')).toHaveCount(0)
       const box = await dialog.getByRole('dialog').boundingBox()
       expect(box!.x).toBeGreaterThanOrEqual(0)
       expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1)
       expect(await dialog.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
       await page.screenshot({ path: path.join(out, width + '-' + theme + '-models-dialog.png'), animations: 'disabled' })
       await dialog.getByTestId('ability-configuration-dialog-close').click()
+      await expect(dialog).toHaveCount(0)
+    }
+    await page.getByTestId('cap-provider-edit-provider:primary').click()
+    {
+      const dialog = page.getByTestId('provider-editor')
+      await expect(dialog.getByTestId('provider-primary-secret')).toBeVisible()
+      const box = await dialog.getByRole('dialog').boundingBox()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1)
+      expect(await dialog.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+      await page.screenshot({ path: path.join(out, width + '-' + theme + '-provider-primary-dialog.png'), animations: 'disabled' })
+      await dialog.getByTestId('provider-editor-close').click()
       await expect(dialog).toHaveCount(0)
     }
 

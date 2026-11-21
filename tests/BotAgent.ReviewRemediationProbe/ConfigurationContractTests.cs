@@ -1093,7 +1093,7 @@ internal static class ConfigurationContractTests
             ("--configuration-provider-routing", "CFG_CHILD provider-routing passed=25 failed=0"),
             ("--configuration-provider-refs", "CFG_CHILD provider-refs passed=35 failed=0"),
             ("--configuration-primary-facts", "CFG_CHILD primary-facts passed=20 failed=0"),
-            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=68 failed=0"),
+            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=77 failed=0"),
             ("--configuration-provider-writer-fence", "CFG_CHILD provider-writer-fence passed=11 failed=0"),
             ("--configuration-mood-persistence", "CFG_CHILD mood-persistence passed=22 failed=0"),
             ("--configuration-platform-policies", "CFG_CHILD platform-policies passed=72 failed=0"),
@@ -3573,6 +3573,72 @@ internal static class ConfigurationContractTests
                     "enabled_credential_delete_whole_rejection");
                 Check((await store.SaveAsync(caller, Request(Edit(enabled: FieldEdit<bool>.Set(false))))).Code == ConfigurationResultCode.Ok,
                     "disable_after_credential_rejection");
+            }
+            // 同批原子保存：新建/更新供应商同时绑定并写入新独立凭据、拦截 URL 误粘、拦截同批绑定+删除、停用解绑+删密钥、Ollama 无密钥启用。
+            {
+                var atomicKey = new ModelCredentialKey("synthetic-atomic-key");
+                var rotatedKey = new ModelCredentialKey("synthetic-rotated-key");
+                var urlKey = new ModelCredentialKey("synthetic-url-key");
+                ProviderEdit CreateEdit(string id, ModelProtocol protocol, CredentialBindingEdit credential)
+                    => new(new(id), new(FieldEdit<string>.Set("Synthetic " + id), FieldEdit<int>.Set(5),
+                        FieldEdit<string>.Set("https://example.com/" + id), FieldEdit<string>.Set("synthetic-model"),
+                        FieldEdit<bool>.Set(false), credential, FieldEdit<ModelProtocol>.Set(protocol), default),
+                        ProviderEditOperation.Create);
+                ProviderEdit DeleteEdit(string id)
+                    => new(new(id), new(default, default, default, default, default, CredentialBindingEdit.KeepExisting(), default, default),
+                        ProviderEditOperation.Delete);
+                using var atomicInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("sk-synthetic-atomic-key"));
+                using var rotatedInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("sk-synthetic-rotated-key"));
+                using var urlInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("https://example.com/not-a-secret"));
+                var atomicCreate = Request(CreateEdit("synthetic-atomic", ModelProtocol.OpenAiChat,
+                    CredentialBindingEdit.UseRegisteredModelCredential(atomicKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Replace(atomicKey, atomicInput)) };
+                Check((await store.SaveAsync(caller, atomicCreate)).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic")?.SecretKeyRef == "model:synthetic-atomic-key"
+                    && new ModelCredentialStore().Load(atomicKey) == "sk-synthetic-atomic-key",
+                    "atomic_create_provider_with_new_independent_credential");
+                var atomicRotate = Request(Edit("synthetic-atomic", enabled: FieldEdit<bool>.Set(true),
+                    binding: CredentialBindingEdit.UseRegisteredModelCredential(rotatedKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Replace(rotatedKey, rotatedInput)) };
+                Check((await store.SaveAsync(caller, atomicRotate)).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic") is { IsEnabled: true, SecretKeyRef: "model:synthetic-rotated-key" }
+                    && new ModelCredentialStore().Load(rotatedKey) == "sk-synthetic-rotated-key",
+                    "atomic_update_enable_with_new_independent_credential");
+                before = State();
+                var bindAndDelete = Request(Edit("synthetic-atomic",
+                    binding: CredentialBindingEdit.UseRegisteredModelCredential(rotatedKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Delete(rotatedKey)) };
+                var bindAndDeleteResult = await store.SaveAsync(caller, bindAndDelete);
+                Check(bindAndDeleteResult.Code == ConfigurationResultCode.ValidationFailed
+                    && bindAndDeleteResult.Errors.Any(e => e.Code == "credential_required") && State() == before,
+                    "atomic_bind_and_delete_same_credential_rejected");
+                before = State();
+                var urlAsSecret = Request(CreateEdit("synthetic-url-secret", ModelProtocol.OpenAiChat,
+                    CredentialBindingEdit.UseRegisteredModelCredential(urlKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Replace(urlKey, urlInput)) };
+                var urlAsSecretResult = await store.SaveAsync(caller, urlAsSecret);
+                Check(urlAsSecretResult.Code == ConfigurationResultCode.ValidationFailed
+                    && urlAsSecretResult.Errors.Any(e => e.Code == "credential_required") && State() == before,
+                    "atomic_url_as_independent_credential_rejected");
+                var detachAndDelete = Request(Edit("synthetic-atomic", enabled: FieldEdit<bool>.Set(false),
+                    binding: CredentialBindingEdit.Unconfigured()))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Delete(rotatedKey)) };
+                Check((await store.SaveAsync(caller, detachAndDelete)).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic") is { IsEnabled: false, SecretKeyRef: "model:unconfigured" }
+                    && new ModelCredentialStore().Load(rotatedKey) is null,
+                    "atomic_detach_and_delete_independent_credential");
+                Check((await store.SaveAsync(caller, Request(DeleteEdit("synthetic-atomic"))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Delete(atomicKey)) })).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic") is null && new ModelCredentialStore().Load(atomicKey) is null,
+                    "atomic_delete_provider_and_unused_credential");
+                Check((await store.SaveAsync(caller, Request(CreateEdit("synthetic-ollama", ModelProtocol.Ollama,
+                    CredentialBindingEdit.Unconfigured())))).Code == ConfigurationResultCode.Ok,
+                    "create_ollama_without_credential");
+                Check((await store.SaveAsync(caller, Request(Edit("synthetic-ollama", enabled: FieldEdit<bool>.Set(true))))).Code
+                    == ConfigurationResultCode.Ok && providers.Find("synthetic-ollama") is { IsEnabled: true, Protocol: ModelProtocol.Ollama },
+                    "enable_ollama_without_credential");
+                Check((await store.SaveAsync(caller, Request(DeleteEdit("synthetic-ollama")))).Code == ConfigurationResultCode.Ok,
+                    "cleanup_ollama_provider");
             }
             Check((await store.SaveAsync(caller, Request(Edit("synthetic-legacy", name: FieldEdit<string>.Set("synthetic-legacy-retained"))))).Code
                 == ConfigurationResultCode.Ok && providers.Find("synthetic-legacy")!.SecretKeyRef == "synthetic-unknown-reference", "disabled_unclassified_keep_retained");

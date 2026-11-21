@@ -136,20 +136,34 @@ function createDomainClient(): ZbaClient {
 }
 
 describe('Domain-split pages (Providers / Platforms / Plugins / SystemConfiguration)', () => {
-  it('ProvidersPage displays model providers and system.model-services engine pill with unified wording', async () => {
+  it('ProvidersPage displays model providers, API URLs, live credential source, and pure routing drawer', async () => {
     const client = createDomainClient()
     const wrapper = mount(ProvidersPage, {
-      props: { client, mode: 'admin', writesEnabled: true, active: true }
+      props: { client, mode: 'admin', writesEnabled: true, active: true },
+      attachTo: document.body,
+      global: { stubs: { teleport: true } }
     })
     mounted.push(wrapper)
     await flushPromises()
     const text = wrapper.text()
     expect(text).toContain('模型供应商')
-    expect(text).toContain('路由与默认模型')
+    expect(text).toContain('路由与采样参数')
     expect(text).toContain('新增模型供应商')
     expect(text).toContain('Primary Model')
+    expect(text).toContain('主供应商')
+    expect(text).toContain('API 地址')
     expect(text).toContain('路由引擎')
     expect(text).toContain('v1.0.0')
+
+    // 打开路由与采样参数抽屉：不再混入 modelBaseUrl、model、秘密槽位 0 与旧供应商表
+    await wrapper.get('[data-testid="providers-routing-settings"]').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('[data-testid="ability-configuration-dialog"]')
+    expect(dialog.find('[data-testid="config-field-model"]').exists()).toBe(false)
+    expect(dialog.find('[data-testid="config-field-modelBaseUrl"]').exists()).toBe(false)
+    expect(dialog.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(dialog.find('[data-testid="config-nav-registered"]').exists()).toBe(false)
+    expect(dialog.find('[data-testid="config-providers"]').exists()).toBe(false)
   })
 
   it('PlatformsPage merges driver with system.platform-* and opens decoupled per-driver settings drawers', async () => {

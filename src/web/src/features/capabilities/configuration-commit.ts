@@ -1,7 +1,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ZbaClient, ZbaRequestError, classifySubmissionFailure, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest } from '../../api/zba'
+import { ZbaClient, ZbaRequestError, classifySubmissionFailure, type ZbaConfigurationReceipt, type ZbaConfigurationSaveRequest, type ZbaFieldError } from '../../api/zba'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 import { receiptOutcome } from '../configuration/receipt-notice'
+import { errorName } from '../../shared/friendly'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 
@@ -17,6 +18,7 @@ export function useConfigurationCommit(options: {
   const phase = ref<CommitPhase>('idle')
   const pendingKey = ref<string | null>(null)
   const error = ref<UiError | null>(null)
+  const fieldErrors = ref<string[]>([])
   const notice = ref('')
   const receipt = ref<ZbaConfigurationReceipt | null>(null)
   const locked = computed(() => phase.value !== 'idle')
@@ -45,8 +47,16 @@ export function useConfigurationCommit(options: {
   function verified(value: ZbaConfigurationReceipt | undefined, key: string): value is ZbaConfigurationReceipt {
     return value !== undefined && value.key === key && value.commitState !== 2 && (value.decision === 1 || value.commitState === 1)
   }
+  function describeFieldErrors(errors: readonly ZbaFieldError[]): string[] {
+    const messages: string[] = []
+    for (const item of errors) {
+      const friendly = errorName(item.code) ?? item.code
+      if (!messages.includes(friendly)) messages.push(friendly)
+    }
+    return messages
+  }
   function finish(value: ZbaConfigurationReceipt): void {
-    receipt.value = value; pendingKey.value = null; phase.value = 'idle'
+    receipt.value = value; pendingKey.value = null; phase.value = 'idle'; fieldErrors.value = []
     const outcome = receiptOutcome(value)
     notice.value = value.decision === 1 ? '没有配置变更；请查看当前生效情况。' : outcome.title + '。' + outcome.detail
   }
@@ -57,7 +67,7 @@ export function useConfigurationCommit(options: {
     try { beginOperation(client, { key, kind: 'configuration', target: originalTarget }) } catch {
       error.value = { code: 'pending_operation', message: '已有未确认提交或核对登记容量已满，不能另行保存。' }; return false
     }
-    pendingKey.value = key; phase.value = 'saving'; error.value = null; notice.value = ''
+    pendingKey.value = key; phase.value = 'saving'; error.value = null; fieldErrors.value = []; notice.value = ''
     try {
       const result = await client.saveConfiguration({ ...request, key })
       const confirmed = (result.code === 0 || result.code === 13) && verified(result.receipt, key)
@@ -69,7 +79,13 @@ export function useConfigurationCommit(options: {
       if (confirmed) { finish(result.receipt!); return true }
       pendingKey.value = null
       if (result.code === 3) { phase.value = 'conflict'; notice.value = '版本已变化，草稿已保留。读取最新后核对差异，再明确保存。'; return false }
-      phase.value = 'idle'; error.value = { code: 'save_' + result.code, message: '保存被拒绝。请检查字段；仍被引用的提供商不能删除。' }
+      const details = describeFieldErrors(result.errors ?? [])
+      fieldErrors.value = details
+      phase.value = 'idle'
+      error.value = {
+        code: result.errors?.[0]?.code ?? ('save_' + result.code),
+        message: details.length > 0 ? details.join('；') : '保存被拒绝。请检查字段；仍被引用的提供商不能删除。'
+      }
     } catch (cause) {
       const rejected = classifySubmissionFailure(cause) === 'rejected'
       if (terminal(client, key, originalTarget)) return false
@@ -108,5 +124,5 @@ export function useConfigurationCommit(options: {
     if (pendingKey.value) markOperation(options.client(), pendingKey.value, 'settled')
     pendingKey.value = null; phase.value = 'idle'; notice.value = '已读取最新配置，草稿仍保留；请核对后再保存。'
   }
-  return { phase, pendingKey, error, notice, receipt, locked, save, check, acknowledgeReload }
+  return { phase, pendingKey, error, fieldErrors, notice, receipt, locked, save, check, acknowledgeReload }
 }

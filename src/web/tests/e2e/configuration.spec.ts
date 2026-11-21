@@ -103,14 +103,21 @@ test('基础配置只显示必要字段；模型与凭据位于能力设置，�
   await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
   await expect(dialog).toBeVisible()
-  await expect(dialog.getByTestId('config-secrets').locator('li')).toHaveCount(1)
-
-  await page.getByTestId('config-nav-model').click()
-  await expect(page.getByTestId('config-field-model')).toBeVisible()
-
-  await page.getByTestId('config-nav-registered').click()
-  await expect(page.getByTestId('config-providers')).toBeVisible()
+  await expect(dialog.getByTestId('config-field-fastReply')).toBeVisible()
+  await expect(dialog.getByTestId('config-field-model')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-field-modelBaseUrl')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-secrets')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-nav-registered')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-providers')).toHaveCount(0)
   await page.getByTestId('ability-configuration-dialog-close').click()
+
+  await page.getByTestId('cap-provider-edit-provider:primary').click()
+  const providerDialog = page.getByTestId('provider-editor')
+  await expect(providerDialog).toBeVisible()
+  await expect(providerDialog.getByTestId('provider-readonly')).toBeVisible()
+  await expect(providerDialog.getByTestId('provider-endpoint')).toBeVisible()
+  await expect(providerDialog.getByTestId('provider-primary-secret')).toBeVisible()
+  await page.getByTestId('provider-editor-close').click()
 
   await page.getByTestId('nav-overview').click()
   await expect(page.getByTestId('overview')).toBeVisible()
@@ -252,10 +259,10 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 
 test('配置页：离开配置页会清空秘密替换输入，但保留普通字段草稿', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-providers').click()
-  await page.getByTestId('providers-routing-settings').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
-  const input = dialog.getByTestId('config-field-model').locator('input')
+  const input = dialog.getByTestId('config-field-voiceName').locator('input')
   const original = await input.inputValue()
   await input.fill(original + '-synthetic-draft')
 
@@ -269,10 +276,10 @@ test('配置页：离开配置页会清空秘密替换输入，但保留普通�
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-keep').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await expect(page.getByTestId('nav-providers-draft')).toHaveText('1')
+  await expect(page.getByTestId('nav-plugins-draft')).toHaveText('1')
 
-  await page.getByTestId('nav-providers').click()
-  await expect(dialog.getByTestId('config-field-model').locator('input')).toHaveValue(original + '-synthetic-draft')
+  await page.getByTestId('nav-plugins').click()
+  await expect(dialog.getByTestId('config-field-voiceName').locator('input')).toHaveValue(original + '-synthetic-draft')
   await expect(dialog.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
   await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
 
@@ -310,7 +317,7 @@ test('read-only configuration refresh between pointer down and up does not swall
   await page.getByTestId('nav-providers').click()
   await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
-  const input = dialog.getByTestId('config-field-model').locator('input')
+  const input = dialog.getByTestId('config-field-fastModel').locator('input')
   const original = await input.inputValue()
   await input.fill(original + '-synthetic-discard')
   await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -377,12 +384,12 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
   await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toContainText(String(original))
 
   await page.getByTestId('config-enable-admin').click()
-  await page.getByTestId('nav-providers').click()
-  await page.getByTestId('providers-routing-settings').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
-  const model = dialog.getByTestId('config-field-model').locator('input')
-  const originalModel = await model.inputValue()
-  await model.fill(originalModel + '-synthetic-lock-draft')
+  const voiceName = dialog.getByTestId('config-field-voiceName').locator('input')
+  const originalVoice = await voiceName.inputValue()
+  await voiceName.fill(originalVoice + '-synthetic-lock-draft')
   await dialog.getByTestId('secret-replace').first().click()
   await dialog.locator('input[type=password]').first().fill('synthetic-lock-secret')
   await expect(dialog.getByTestId('config-save-bar')).toContainText('2 项修改')
@@ -395,9 +402,9 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
   await connect(page, ADMIN_TOKEN)
   await expect(page.getByTestId('overview')).toBeVisible()
   await page.getByTestId('enable-admin').click()
-  await page.getByTestId('nav-providers').click()
-  await page.getByTestId('providers-routing-settings').click()
-  await expect(model).toHaveValue(originalModel)
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
+  await expect(voiceName).toHaveValue(originalVoice)
   await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
   await expect(dialog.locator('input[type=password]')).toHaveCount(0)
   await dialog.getByTestId('secret-replace').first().click()
@@ -596,21 +603,19 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 
   await openConfiguration(page)
   await page.getByTestId('nav-providers').click()
-  await page.getByTestId('providers-routing-settings').click()
-  await page.getByTestId('config-nav-registered').click()
-  await expect(page.getByTestId('config-providers')).toBeVisible()
+  await page.getByTestId(`cap-provider-edit-provider:${provider.key}`).click()
+  const editor = page.getByTestId('provider-editor')
+  await expect(editor).toBeVisible()
 
-  const nameInput = page.getByTestId(`config-provider-name-${provider.key}`)
+  const nameInput = editor.getByTestId('provider-name')
   await expect(nameInput).toHaveValue(original)
   // 输入框里必须是真名，不是 "Pri***ry" 这种脱敏串。
   expect(await nameInput.inputValue()).not.toBe(provider.name.display)
 
   try {
     await nameInput.fill(renamed)
-    const dialog = page.getByTestId('ability-configuration-dialog')
-    await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
-    await dialog.getByTestId('config-save').click()
-    await expect(dialog.getByTestId('config-receipt')).toBeVisible({ timeout: 20_000 })
+    await editor.getByTestId('provider-save').click()
+    await expect(editor.getByTestId('provider-notice')).toBeVisible({ timeout: 20_000 })
 
     const after = await request.post('/zba/v1/configuration/read', {
       data: { kind: 1 },
@@ -651,8 +656,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 
 test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-providers').click()
-  await page.getByTestId('providers-routing-settings').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
   const secrets = page.getByTestId('ability-configuration-dialog').getByTestId('config-secrets')
   await secrets.getByTestId('secret-replace').first().click()
   await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')

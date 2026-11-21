@@ -44,7 +44,13 @@ describe('configuration UI ownership', () => {
     expect(fieldOwner('platform', 'localChannelIds')).toBe('system.platform-local')
     expect(fieldOwner('platform', 'platformPolicies')).toBe('platform')
     expect(fieldOwner('platform', 'syntheticFuturePlatformField')).toBe('platform')
-    expect(fieldOwner('model', 'model')).toBe('models')
+    expect(fieldOwner('model', 'model')).toBe('model-providers')
+    expect(fieldOwner('model', 'modelBaseUrl')).toBe('model-providers')
+    expect(fieldOwner('model', 'fastModel')).toBe('models')
+    expect(fieldOwner('model', 'defaultTemperature')).toBe('models')
+    expect(ownsConfiguration('models', 'model', 'model')).toBe(false)
+    expect(ownsConfiguration('models', 'model', 'modelBaseUrl')).toBe(false)
+    expect(ownsConfiguration('models', 'model', 'fastReply')).toBe(true)
   })
 })
 
@@ -65,6 +71,7 @@ describe('unified ownership metadata', () => {
     expect(systems.map(spec => spec.id)).toEqual([
       'conversation',
       'models',
+      'model-providers',
       'agent',
       'system.platform-qq-private',
       'system.platform-qq-official',
@@ -75,10 +82,15 @@ describe('unified ownership metadata', () => {
     ])
     for (const spec of systems) {
       expect(spec.pluginKey).toBeUndefined()
-      expect(spec.editor).toEqual({ type: 'fields' })
+      expect(spec.editor).toEqual(spec.id === 'model-providers' ? { type: 'declared' } : { type: 'fields' })
       expect(settingsFor(spec.id)?.kind).toBe('system')
     }
-    expect(configurationFor('models')).toMatchObject({ secrets: [0], providers: true, sections: ['model'] })
+    expect(configurationFor('models')).toMatchObject({ secrets: [], providers: false, sections: ['model'] })
+    expect(configurationFor('model-providers')).toMatchObject({
+      secrets: [0],
+      editor: { type: 'declared' },
+      sections: ['model']
+    })
     expect(configurationFor('agent')?.secrets).toEqual([1])
     expect(configurationFor('preset.feature.voice')?.secrets).toEqual([2])
     expect(configurationFor('system.platform-feishu')).toMatchObject({ secrets: [3, 4, 5], policyPlatformId: 'feishu', sections: ['platform'] })
@@ -87,6 +99,7 @@ describe('unified ownership metadata', () => {
     expect(configurationFor('system.platform-local')).toMatchObject({ secrets: [], policyPlatformId: 'local', sections: ['platform'] })
     expect(configurationFor('platform')?.secrets).toEqual([])
     expect(configurationFor('reporting')?.secrets).toEqual([])
+    expect(secretOwner(0)).toBe('model-providers')
     expect(secretOwner(2)).toBe('preset.feature.voice')
     expect(secretOwner(3)).toBe('system.platform-feishu')
     expect(secretOwner(4)).toBe('system.platform-feishu')
