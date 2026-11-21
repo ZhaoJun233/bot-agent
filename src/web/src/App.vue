@@ -394,7 +394,9 @@ async function navigateTo(target: AppView, event?: MouseEvent, ownerId?: string)
     view.value = 'platforms'
     await nextTick()
     if (!first) await platformsPage.value?.reload()
-    if (ownerId === 'platform') platformsPage.value?.openPlatformSettings()
+    if (ownerId && view.value === 'platforms' && session === sessionGeneration) {
+      platformsPage.value?.openDriverSettingsById(ownerId, navTrigger(event))
+    }
     return
   }
   if (target === 'plugins') {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ZbaConfigurationRuntimeEffect, ZbaPlatformPolicyEntryView } from '../../api/zba'
+import type { PlatformPolicyCopy } from '../capabilities/plugin-settings'
 import { POLICY_ACTIONS, POLICY_FEATURES, policyBaseline, policyDirty, policyKey, policyTitle, splitActions, type PolicyDrafts, type PolicyRowDraft } from './policy-draft'
 import { actionLabels, overrideCount, policyScope } from './policy-presentation'
 import PolicyListControl from './PolicyListControl.vue'
@@ -10,6 +11,7 @@ const props = withDefaults(defineProps<{
   entries: ZbaPlatformPolicyEntryView[]
   effectiveEntries?: ZbaPlatformPolicyEntryView[]
   runtimeEffects?: ZbaConfigurationRuntimeEffect[]
+  policyCopy?: Readonly<PlatformPolicyCopy>
   modelValue: PolicyDrafts
   locked?: boolean
 }>(), { locked: false, effectiveEntries: () => [] })
@@ -105,6 +107,8 @@ function setAction(entry: ZbaPlatformPolicyEntryView, action: string, enabled: b
         </label>
         <PolicyListControl
           label="群聊接收范围"
+          :list-label="props.policyCopy?.groupListLabel"
+          :placeholder="props.policyCopy?.groupPlaceholder"
           :kind="row.draft.groupKind"
           :value="row.draft.groupValue"
           :stored="row.entry.groupWhitelist"
@@ -116,6 +120,8 @@ function setAction(entry: ZbaPlatformPolicyEntryView, action: string, enabled: b
         />
         <PolicyListControl
           label="私聊接收范围"
+          :list-label="props.policyCopy?.privateListLabel"
+          :placeholder="props.policyCopy?.privatePlaceholder"
           :kind="row.draft.privateKind"
           :value="row.draft.privateValue"
           :stored="row.entry.privateWhitelist"

@@ -102,6 +102,13 @@ for (const width of widths) {
       await expect(page.getByTestId('platforms-grid')).toBeVisible()
       await noOverflow(page)
       await shot(page, width + '-' + theme + '-05a-platforms')
+      await page.getByTestId('platform-policy-feishu').click()
+      await expect(page.getByTestId('ability-configuration-dialog').getByTestId('config-fields')).toBeVisible()
+      await dialogFits(page)
+      await noOverflow(page)
+      await shot(page, width + '-' + theme + '-05b-platform-feishu-dialog')
+      await page.getByTestId('ability-configuration-dialog-close').click()
+      await expect(page.getByRole('dialog')).toHaveCount(0)
 
       await page.getByTestId('nav-plugins').click()
       await expect(page.getByTestId('plugins-grid')).toBeVisible()

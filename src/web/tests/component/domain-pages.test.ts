@@ -14,10 +14,12 @@ import PluginsPage from '../../src/features/plugins/PluginsPage.vue'
 import SystemConfigurationPage from '../../src/features/configuration/SystemConfigurationPage.vue'
 import TracesPage from '../../src/features/traces/TracesPage.vue'
 import RuntimeLogsPage from '../../src/features/logs/RuntimeLogsPage.vue'
+import { beginOperation, clearPendingOperations } from '../../src/shared/sync/pending-operations'
 import configFixture from '../fixtures/configuration-read-editable-result.json'
 
 const mounted: ReturnType<typeof mount>[] = []
 afterEach(() => {
+  clearPendingOperations()
   mounted.splice(0).forEach(w => w.unmount())
 })
 
@@ -150,10 +152,99 @@ describe('Domain-split pages (Providers / Platforms / Plugins / SystemConfigurat
     expect(text).toContain('v1.0.0')
   })
 
-  it('PlatformsPage merges driver with system.platform-* without showing raw plugin noise', async () => {
-    const client = createDomainClient()
+  it('PlatformsPage merges driver with system.platform-* and opens decoupled per-driver settings drawers', async () => {
+    const fullConfig = structuredClone(configFixture) as unknown as ZbaConfigurationReadResult
+    const makeField = (id: number, value: unknown) => ({
+      visibility: 1 as const,
+      display: String(value),
+      value,
+      userMode: 2 as const,
+      effectiveSource: 1 as const,
+      applyState: 1 as const,
+      rule: { id, effect: 0 as const, canClear: true, editable: true, legacyNeedsReview: false }
+    })
+    Object.assign(fullConfig.view!.platform, {
+      feishuEnabled: makeField(56, false),
+      feishuAppId: makeField(55, 'cli_test'),
+      officialEnabled: makeField(91, false),
+      localChannelIds: makeField(67, ''),
+      privateChatEnabled: makeField(104, true)
+    })
+    const templatePolicy = fullConfig.view!.platform.platformPolicies.value![0]!
+    const qqPolicy = structuredClone(templatePolicy)
+    qqPolicy.target = { kind: 'instance', key: { platformId: 'qq.private', accountScope: 'legacy', instanceId: '' } }
+    const feishuPolicy = structuredClone(templatePolicy)
+    feishuPolicy.target = { kind: 'instance', key: { platformId: 'feishu', accountScope: 'default', instanceId: 'feishu-main' } }
+    fullConfig.view!.platform.platformPolicies.value = [qqPolicy, feishuPolicy]
+
+    const client = new ZbaClient({ token: 'synthetic-platform-token' })
+    vi.spyOn(client, 'listCapabilities').mockResolvedValue({
+      code: 0,
+      items: [
+        {
+          key: { kind: 'driver', key: { platformId: 'qq.private', accountScope: 'legacy', instanceId: '' } },
+          displayName: 'QQ Private',
+          runtimeState: 4,
+          desiredEnabled: true,
+          credentialConfigured: false,
+          descriptorRevision: '3B25BF2C',
+          actions: [{ action: 3, supported: true, reasonCode: '' }]
+        },
+        {
+          key: { kind: 'driver', key: { platformId: 'feishu', accountScope: 'default', instanceId: 'feishu-main' } },
+          displayName: 'Feishu',
+          runtimeState: 1,
+          desiredEnabled: false,
+          credentialConfigured: false,
+          descriptorRevision: '3B25BF2C',
+          actions: []
+        },
+        {
+          key: { kind: 'driver', key: { platformId: 'qq.official', accountScope: 'legacy', instanceId: '' } },
+          displayName: 'QQ Official',
+          runtimeState: 1,
+          desiredEnabled: false,
+          credentialConfigured: false,
+          descriptorRevision: '3B25BF2C',
+          actions: []
+        },
+        {
+          key: { kind: 'plugin', key: 'system.platform-qq-private' },
+          displayName: 'plugin',
+          runtimeState: 4,
+          desiredEnabled: true,
+          credentialConfigured: false,
+          descriptorRevision: '3B25BF2C',
+          actions: []
+        },
+        {
+          key: { kind: 'plugin', key: 'system.platform-feishu' },
+          displayName: 'plugin',
+          runtimeState: 4,
+          desiredEnabled: true,
+          credentialConfigured: false,
+          descriptorRevision: '3B25BF2C',
+          actions: []
+        }
+      ],
+      nextCursor: null,
+      descriptorRevision: '3B25BF2C'
+    })
+    vi.spyOn(client, 'installedPlugins').mockResolvedValue(sampleInstalled)
+    vi.spyOn(client, 'readConfiguration').mockResolvedValue(fullConfig)
+    vi.spyOn(client, 'listEvents').mockResolvedValue({
+      items: [],
+      nextSequence: 1,
+      resyncRequired: false,
+      generatedAt: '2026-11-20T00:00:00Z'
+    })
+
+    // Seed an unconfirmed driver configuration operation on local to verify recovery banner matching
+    beginOperation(client, { key: 'cfg1:synthetic-gen:1:synthetic-nonce', kind: 'configuration', target: 'config:system.platform-local' })
+
     const wrapper = mount(PlatformsPage, {
-      props: { client, mode: 'admin', writesEnabled: true, active: true }
+      props: { client, mode: 'admin', writesEnabled: true, active: true },
+      attachTo: document.body
     })
     mounted.push(wrapper)
     await flushPromises()
@@ -161,7 +252,42 @@ describe('Domain-split pages (Providers / Platforms / Plugins / SystemConfigurat
     expect(text).toContain('消息平台')
     expect(text).toContain('QQ 私域')
     expect(text).toContain('OneBot')
+    expect(text).toContain('legacy（默认实例）')
     expect(text).not.toContain('3B25BF2C')
+    // No global aggregate button in header when all platform configs belong to displayed drivers
+    expect(wrapper.find('[data-testid="platforms-open-settings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="platforms-open-fallback-settings"]').exists()).toBe(false)
+    // Only QQ Official declares messaging inspection
+    expect(wrapper.find('[data-testid="cap-messaging-driver:qq.official:legacy:"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="cap-messaging-driver:feishu:default:feishu-main"]').exists()).toBe(false)
+    // Recovery banner matches per-driver config target
+    expect(wrapper.get('[data-testid="platforms-recovery-banner"]').text()).toContain('本地调试通道')
+
+    // Click Feishu card -> only Feishu fields, secrets, and policies appear
+    await wrapper.get('[data-testid="platform-policy-feishu"]').trigger('click')
+    await flushPromises()
+    let dialog = document.body.querySelector('[data-testid="ability-configuration-dialog"]')!
+    expect(dialog).not.toBeNull()
+    expect(dialog.textContent).toContain('飞书机器人通道')
+    expect(dialog.querySelector('[data-testid="config-field-feishuEnabled"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-field-whitelistGroups"]')).toBeNull()
+    expect(dialog.querySelector('[data-testid="config-secrets"]')?.textContent).toContain('飞书 App Secret')
+    expect(dialog.querySelector('[data-testid="config-policy-instance:feishu:default:feishu-main"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-policy-instance:qq.private:legacy:"]')).toBeNull()
+    dialog.querySelector<HTMLButtonElement>('[data-testid="ability-configuration-dialog-close"]')!.click()
+    await flushPromises()
+
+    // Click QQ Private card -> only QQ Private fields & policies appear, no Feishu secrets
+    await wrapper.get('[data-testid="platform-policy-qq.private"]').trigger('click')
+    await flushPromises()
+    dialog = document.body.querySelector('[data-testid="ability-configuration-dialog"]')!
+    expect(dialog).not.toBeNull()
+    expect(dialog.textContent).toContain('QQ 私域通道')
+    expect(dialog.querySelector('[data-testid="config-field-whitelistGroups"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-field-feishuEnabled"]')).toBeNull()
+    expect(dialog.querySelector('[data-testid="config-secrets"]')).toBeNull()
+    expect(dialog.querySelector('[data-testid="config-policy-instance:qq.private:legacy:"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="config-policy-instance:feishu:default:feishu-main"]')).toBeNull()
   })
 
   it('PluginsPage strictly excludes system.*, eliminates dead noise, and offers direct UI entry for runtime UI plugins', async () => {
@@ -200,6 +326,8 @@ describe('Domain-split pages (Providers / Platforms / Plugins / SystemConfigurat
     expect(panel.text()).toContain('system.platform-qq-private')
     await panel.get('[data-testid="syspkg-jump-system.model-services"]').trigger('click')
     expect(wrapper.emitted('open-domain')?.[0]).toEqual(['providers'])
+    await panel.get('[data-testid="syspkg-jump-system.platform-qq-private"]').trigger('click')
+    expect(wrapper.emitted('open-domain')?.[1]).toEqual(['platforms', 'system.platform-qq-private'])
   })
 })
 

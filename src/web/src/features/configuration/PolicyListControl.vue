@@ -6,6 +6,8 @@ import { draftListSummary, policyDisplay, policySource, policyStored } from './p
 
 const props = defineProps<{
   label: string
+  listLabel?: string
+  placeholder?: string
   kind: number
   value: string
   stored: ZbaReadField<ZbaListRuleValue>
@@ -32,7 +34,7 @@ const id = useId()
       <option :value="3">拒绝所有人</option>
     </select>
     <label v-if="kind === 1" :for="id + '-list'" class="sub-label">
-      允许的{{ label.includes('群') ? '群号' : '用户号' }}（逗号或空格分隔）
+      {{ props.listLabel ?? `允许的${label.includes('群') ? '群号' : '用户号'}（逗号或空格分隔）` }}
     </label>
     <textarea
       v-if="kind === 1"
@@ -40,7 +42,7 @@ const id = useId()
       :value="value"
       rows="2"
       :data-testid="testid + '-value'"
-      placeholder="例如 10001"
+      :placeholder="props.placeholder ?? '例如 10001'"
       @input="emit('text', ($event.target as HTMLTextAreaElement).value)"
     />
     <div class="policy-summary-box">

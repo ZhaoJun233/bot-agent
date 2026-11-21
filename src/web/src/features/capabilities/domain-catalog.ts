@@ -17,6 +17,7 @@ import {
   SYSTEM_PACKAGE_META
 } from '../../shared/friendly'
 import type { AppIconName } from '../../shared/ui/AppIcon.vue'
+import { platformDriverMeta } from '../platforms/driver-registry'
 import { settingsFor } from './plugin-settings'
 
 export interface SystemPackageModel {
@@ -53,6 +54,8 @@ export interface PlatformChannelModel {
   title: string
   summary: string
   icon: AppIconName
+  configScope: string
+  supportsMessagingInspection: boolean
   descriptor: ZbaManagedDescriptor
   driverPackage: SystemPackageModel | null
   policy: ZbaPlatformPolicyEntryView | undefined
@@ -294,6 +297,7 @@ export function buildDomainCatalog(
     const key = descriptor.key as Extract<ZbaManagedDescriptor['key'], { kind: 'driver' }>
     const { platformId, accountScope, instanceId } = key.key
     const driverPackage = systemByPlatform.get(platformId) ?? null
+    const driverMeta = platformDriverMeta(platformId)
     const policy = policyViews.find(
       row => row.target.kind === 'instance'
         && row.target.key.platformId === platformId
@@ -309,9 +313,11 @@ export function buildDomainCatalog(
       accountScope,
       instanceId,
       identity: keyIdentity(descriptor.key),
-      title: platformName(platformId),
-      summary: driverPackage?.summary || '平台消息接入与运行时连接驱动',
-      icon: platformIcon(platformId),
+      title: driverMeta.title || platformName(platformId),
+      summary: driverPackage?.summary || driverMeta.summary,
+      icon: driverMeta.icon || platformIcon(platformId),
+      configScope: driverMeta.configScope,
+      supportsMessagingInspection: driverMeta.supportsMessagingInspection,
       descriptor,
       driverPackage,
       policy

@@ -48,15 +48,17 @@ import { fieldHint, fieldLabel } from './field-labels'
 import { replyPacingNumericLimits } from './reply-pacing'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
-import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
+import { applyPolicyEdits, filterPoliciesByPlatform, policyEntries, policyKey, type PolicyDrafts } from './policy-draft'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 import { configurationCapabilities, configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
+import { registeredSecretLabel } from '../capabilities/plugin-settings'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
   mode: 'read' | 'admin'
   writesEnabled: boolean
   scope?: string
+  policyPlatformId?: string
   active?: boolean
   embedded?: boolean
 }>(), { scope: 'basic', active: true, embedded: false })
@@ -131,12 +133,19 @@ const providerNames = ref<ProviderNameDrafts>({})
  * 条目是判定的真相，标量只是基线：只存改过的行（键 = policyKey(target)），
  * 保存时逐条 upsert，不整表替换（整表替换在 Legacy 档会被判 legacy_policy_needs_review）。
  */
+const effectivePolicyPlatformId = computed(() => props.policyPlatformId ?? capability.value?.policyPlatformId ?? null)
 const policyDrafts = ref<PolicyDrafts>({})
-const policyDenials = computed(() => findPolicyDenials(policyDrafts.value, policyEntries((draftBase.value ?? snapshot.value)?.view)))
+const policyDenials = computed(() => findPolicyDenials(
+  policyDrafts.value,
+  filterPoliciesByPlatform(policyEntries((draftBase.value ?? snapshot.value)?.view), effectivePolicyPlatformId.value)
+))
 const policyDenialsConfirmed = ref(false)
 watch(policyDrafts, () => { policyDenialsConfirmed.value = false })
-const policyRows = computed(() => policyEntries(snapshot.value?.view))
+const policyRows = computed(() => filterPoliciesByPlatform(policyEntries(snapshot.value?.view), effectivePolicyPlatformId.value))
 const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
+const showPolicySection = computed(() => active.value === 'platform'
+  && snapshot.value?.view?.platform?.platformPolicies !== undefined
+  && (effectivePolicyPlatformId.value !== null || ownsConfiguration(props.scope, 'platform', 'platformPolicies')))
 /** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
 const pendingNames = ref<ProviderNameDrafts>({})
 let findSequence = 0
@@ -173,7 +182,11 @@ const conflictCurrentVersion = ref<string | null>(null)
 const conflictKeys = ref<string[]>([])
 const pendingKey = ref<string | null>(null)
 const findBusy = ref(false)
-const operationTarget = computed(() => 'config:' + props.scope)
+const operationTarget = computed(() =>
+  props.scope === 'platform' && props.policyPlatformId
+    ? 'config:platform:' + props.policyPlatformId
+    : 'config:' + props.scope
+)
 const registeredOperation = computed(() => getPendingOperation(props.client, 'configuration', operationTarget.value))
 const restoredOperation = ref(false)
 let sessionRevision = 0
@@ -224,7 +237,9 @@ const counts = computed<Record<SectionKey, number>>(() => {
   const view = snapshot.value?.view
   if (!view) return result
   for (const key of ['behavior', 'model', 'agent', 'platform', 'voice', 'music', 'reporting'] as const) {
-    result[key] = Object.keys(view[key]).filter((field) => !ownedByPlugin(key, field)).length
+    result[key] = Object.keys(view[key]).filter(
+      (field) => !(key === 'platform' && field === 'platformPolicies') && !ownedByPlugin(key, field)
+    ).length
   }
   result.registered = capability.value?.providers ? view.registered.providers.length : 0
   return result
@@ -240,9 +255,15 @@ const activeFields = computed<Array<{ key: string; field: ZbaReadField }>>(() =>
   const view: ZbaConfigurationView | undefined = snapshot.value?.view
   if (!view || active.value === 'registered') return []
   const section = view[active.value] as Record<string, ZbaReadField>
-  return Object.entries(section)
-    .filter(([key]) => !ownedByPlugin(active.value, key))
+  const entries = Object.entries(section)
+    .filter(([key]) => !(active.value === 'platform' && key === 'platformPolicies') && !ownedByPlugin(active.value, key))
     .map(([key, field]) => ({ key, field }))
+  const order = capability.value?.fields
+    ?.filter(item => item.section === active.value)
+    .map(item => item.key)
+  if (!order || order.length === 0) return entries
+  const rank = new Map(order.map((key, index) => [key, index]))
+  return entries.sort((a, b) => (rank.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.key) ?? Number.MAX_SAFE_INTEGER))
 })
 
 const dirtyCount = computed(() =>
@@ -321,8 +342,7 @@ const secretSourceLabels: Record<number, string> = {
   0: '未配置', 1: '数据库', 2: '环境变量'
 }
 const secretSlotLabels: Record<number, string> = {
-  0: '模型 API Key', 1: 'Agent 服务器密钥', 2: 'TTS API Key',
-  3: '飞书 App Secret', 4: '飞书 Encrypt Key', 5: '飞书验证 Token'
+  0: '模型 API Key', 1: 'Agent 服务器密钥', 2: 'TTS API Key'
 }
 const saveCodeMessages: Record<number, string> = {
   1: '当前令牌没有保存权限。',
@@ -391,7 +411,7 @@ function secretSourceLabel(value: number): string {
 }
 
 function secretSlotLabel(value: number): string {
-  return secretSlotLabels[value] ?? `槽位 ${value}`
+  return registeredSecretLabel(value) ?? secretSlotLabels[value] ?? `槽位 ${value}`
 }
 
 function formatRaw(value: unknown): string {
@@ -701,7 +721,7 @@ async function reloadAfterConflict(): Promise<void> {
       const oldPolicies = new Map(policyEntries(base).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
       const newPolicies = new Map(policyEntries(next).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
       for (const key of Object.keys(policyDrafts.value)) {
-        const matchEntry = policyEntries(next).find(item => `${item.target.kind === 'instance' ? `${item.target.key.platformId}:${item.target.key.accountScope}:${item.target.key.instanceId}` : `${item.target.platformId}:${item.target.accountScope}`}` === key)
+        const matchEntry = policyEntries(next).find(item => policyKey(item.target) === key)
         const targetId = matchEntry ? JSON.stringify(matchEntry.target) : null
         if (targetId && oldPolicies.get(targetId) !== newPolicies.get(targetId)) {
           policyConflicts.push(`policy:${key}`)
@@ -1338,11 +1358,17 @@ defineExpose({
         >
           <div class="panel-heading">
             <h2 :id="`${editorId}-config-${active}-title`">{{ editorTitle }}</h2>
-            <p>{{ activeMeta.hint }} · {{ activeFields.length }} 个字段</p>
+            <p>
+              {{ activeMeta.hint }} · {{ activeFields.length }} 个字段
+              <template v-if="showPolicySection"> · {{ policyRows.length }} 条策略</template>
+            </p>
           </div>
           <p class="config-guide">{{ capability?.summary ?? '基础行为设置保存后对新消息生效；模型供应商、消息平台与插件参数请在对应一级页调整。' }}</p>
-          <p v-if="activeFields.length === 0" class="empty-state">该分区没有字段。</p>
-          <div v-else class="settings-container">
+          <p v-if="capability?.credentialHint" class="inline-notice" data-testid="config-credential-hint">
+            {{ capability.credentialHint }}
+          </p>
+          <p v-if="activeFields.length === 0 && !showPolicySection" class="empty-state">该分区没有字段。</p>
+          <div v-if="activeFields.length > 0" class="settings-container">
             <table class="settings-table" role="table" data-testid="config-fields">
               <caption class="sr-only">{{ activeMeta.label }}字段</caption>
               <thead class="sr-only">
@@ -1355,33 +1381,9 @@ defineExpose({
                 </tr>
               </thead>
               <tbody role="rowgroup">
-                <template v-for="item in activeFields" :key="item.key">
                 <tr
-                  v-if="active === 'platform' && item.key === 'platformPolicies'"
-                  role="row"
-                  class="policy-shell"
-                  data-testid="config-field-platformPolicies"
-                >
-                  <td colspan="5" role="cell" class="policy-cell">
-                    <div class="policy-heading">
-                      <strong class="config-label">{{ fieldLabel(item.key) }}</strong>
-                      <span class="config-key">{{ item.key }}</span>
-                      <span v-if="policyDirtyCount > 0" class="cell-sub">已修改 {{ policyDirtyCount }} 条</span>
-                    </div>
-                    <p class="cell-sub">
-                      共 {{ policyRows.length }} 条条目：条目里显式写过的字段优先于通用默认规则。
-                    </p>
-                    <PlatformPolicyEditor
-                      :entries="policyRows"
-                      :runtime-effects="snapshot.runtimeEffects"
-                      :model-value="policyDrafts"
-                      :locked="!canWrite || inputsLocked"
-                      @update:model-value="onPolicyDraftsUpdate"
-                    />
-                  </td>
-                </tr>
-                <tr
-                  v-else
+                  v-for="item in activeFields"
+                  :key="item.key"
                   role="row"
                   :class="{ dirty: isFieldDirty(active, item.key, item.field) }"
                   :data-testid="`config-field-${item.key}`"
@@ -1487,9 +1489,31 @@ defineExpose({
                     <span class="cell-sub">{{ item.field.visibility === 0 ? '仅概览' : '可读' }}</span>
                   </td>
                 </tr>
-                </template>
               </tbody>
             </table>
+          </div>
+          <div
+            v-if="showPolicySection"
+            class="policy-section"
+            :class="{ 'policy-section--divided': activeFields.length > 0 }"
+            data-testid="config-field-platformPolicies"
+          >
+            <div class="policy-heading">
+              <strong class="config-label">{{ fieldLabel('platformPolicies') }}</strong>
+              <span class="config-key">platformPolicies</span>
+              <span v-if="policyDirtyCount > 0" class="cell-sub">已修改 {{ policyDirtyCount }} 条</span>
+            </div>
+            <p class="cell-sub">
+              共 {{ policyRows.length }} 条条目：条目里显式写过的字段优先于通用默认规则。
+            </p>
+            <PlatformPolicyEditor
+              :entries="policyRows"
+              :runtime-effects="snapshot.runtimeEffects"
+              :policy-copy="capability?.policyCopy"
+              :model-value="policyDrafts"
+              :locked="!canWrite || inputsLocked"
+              @update:model-value="onPolicyDraftsUpdate"
+            />
           </div>
         </section>
 
@@ -1853,8 +1877,8 @@ defineExpose({
 .config-input { font-size: var(--text-base); min-height: 40px; padding-block: 6px; }
 .config-label { font-size: var(--text-base); font-weight: 600; }
 .config-key { font-size: var(--text-xs); margin-top: 3px; }
-.policy-shell { display: block; width: 100%; }
-.policy-cell { width: 100%; min-width: 0; }
+.policy-section { display: grid; gap: 10px; min-width: 0; }
+.policy-section--divided { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
 .policy-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 4px; }
 .policy-heading .config-key { margin: 0; }
 .edit-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }

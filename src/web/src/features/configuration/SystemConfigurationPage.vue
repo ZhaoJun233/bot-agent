@@ -131,9 +131,9 @@ function domainLabel(domain: 'provider' | 'platform' | 'system'): string {
   return '系统核心'
 }
 
-function jumpFromSystemPackage(pkg: { domain: 'provider' | 'platform' | 'system'; configScope?: string }): void {
+function jumpFromSystemPackage(pkg: { id: string; domain: 'provider' | 'platform' | 'system'; configScope?: string }): void {
   if (pkg.domain === 'provider') { emit('open-domain', 'providers'); return }
-  if (pkg.domain === 'platform') { emit('open-domain', 'platforms'); return }
+  if (pkg.domain === 'platform') { emit('open-domain', 'platforms', pkg.configScope ?? pkg.id); return }
   if (pkg.configScope === 'conversation' || pkg.configScope === 'agent' || pkg.configScope === 'reporting') {
     void selectTab(pkg.configScope)
   }
@@ -249,7 +249,7 @@ defineExpose({
             :writes-enabled="props.writesEnabled"
             @enable-admin="emit('enable-admin')"
             @auth-expired="emit('auth-expired', $event)"
-            @open-capabilities="owner => emit('open-domain', owner === 'models' ? 'providers' : owner === 'platform' ? 'platforms' : 'plugins', owner)"
+            @open-capabilities="owner => emit('open-domain', owner === 'models' ? 'providers' : (owner === 'platform' || owner?.startsWith('system.platform-')) ? 'platforms' : 'plugins', owner)"
           />
         </div>
         <div v-if="mountedTabs.conversation" v-show="currentTab === 'conversation'" data-testid="sysconfig-pane-conversation">

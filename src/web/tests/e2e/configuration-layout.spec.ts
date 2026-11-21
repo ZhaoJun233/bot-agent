@@ -121,11 +121,24 @@ for (const width of [1850, 1024, 390]) {
     }
 
     await page.getByTestId('nav-platforms').click()
-    await page.getByTestId('platforms-open-settings').click()
+    await expect(page.getByTestId('platforms-open-settings')).toHaveCount(0)
+    await page.getByTestId('platform-policy-qq.official').click()
     {
       const dialog = page.getByTestId('ability-configuration-dialog')
       await squareClose(dialog, width <= 640)
       await compactField(dialog.getByTestId('config-field-officialEnabled'), width > 600)
+      await expect(dialog.getByTestId('config-field-feishuEnabled')).toHaveCount(0)
+      await expect(dialog.getByTestId('config-secrets')).toHaveCount(0)
+      await dialog.locator('.icon-close').click()
+      await expect(dialog).toHaveCount(0)
+    }
+    await page.getByTestId('platform-policy-feishu').click()
+    {
+      const dialog = page.getByTestId('ability-configuration-dialog')
+      await squareClose(dialog, width <= 640)
+      await compactField(dialog.getByTestId('config-field-feishuEnabled'), width > 600)
+      await expect(dialog.getByTestId('config-field-officialEnabled')).toHaveCount(0)
+      await expect(dialog.getByTestId('config-secrets')).toBeVisible()
       await dialog.locator('.icon-close').click()
       await expect(dialog).toHaveCount(0)
     }

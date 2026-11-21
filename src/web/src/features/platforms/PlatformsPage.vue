@@ -23,7 +23,7 @@ import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import CapabilityOperationPanel from '../capabilities/CapabilityOperationPanel.vue'
 import CapabilitySettingsHost from '../capabilities/CapabilitySettingsHost.vue'
 import OfficialMessagingDialog from '../capabilities/OfficialMessagingDialog.vue'
-import { configurationFor, type CapabilityConfiguration } from '../capabilities/configuration-ownership'
+import { fieldOwner } from '../capabilities/configuration-ownership'
 import {
   buildDomainCatalog,
   keyIdentity,
@@ -40,6 +40,14 @@ import {
   unsupportedActions,
   useCapabilityOperations
 } from '../capabilities/use-capability-operations'
+import { policyEntries, policyEntryPlatformId } from '../configuration/policy-draft'
+import {
+  isPlatformConfigTarget,
+  platformDriverConfigByScope,
+  platformDriverConfigFor,
+  platformTargetLabel,
+  type PlatformSettingsTarget
+} from './driver-registry'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -67,7 +75,7 @@ const contextError = ref<UiError | null>(null)
 const loading = ref(false)
 const error = ref<UiError | null>(null)
 
-const settingsTarget = ref<{ capability: CapabilityConfiguration; trigger: HTMLElement | null } | null>(null)
+const settingsTarget = ref<{ target: PlatformSettingsTarget; trigger: HTMLElement | null } | null>(null)
 const settingsDialog = ref<InstanceType<typeof CapabilitySettingsHost> | null>(null)
 const messagingTarget = ref<ZbaManagedObjectKey | null>(null)
 const messagingTrigger = ref<HTMLElement | null>(null)
@@ -76,7 +84,7 @@ const detailTrigger = ref<HTMLElement | null>(null)
 
 const configurationRecoveries = computed(() =>
   pendingOperations(props.client, 'configuration')
-    .filter(item => item.state !== 'settled' && item.target === 'platform')
+    .filter(item => item.state !== 'settled' && isPlatformConfigTarget(item.target))
 )
 const recoveryChecking = ref<string | null>(null)
 const recoveryNotice = ref('')
@@ -87,6 +95,15 @@ let unmounted = false
 const catalog = computed(() => buildDomainCatalog(descriptors.value, configSnapshot.value, installedSnapshot.value))
 const platforms = computed(() => catalog.value.platforms)
 const runningCount = computed(() => platforms.value.filter(item => item.descriptor.runtimeState === 4).length)
+const hasUnassignedPlatformConfig = computed(() => {
+  const view = configSnapshot.value?.view
+  if (!view) return false
+  const unclaimedScalar = Object.keys(view.platform ?? {})
+    .some(key => key !== 'platformPolicies' && fieldOwner('platform', key) === 'platform')
+  if (unclaimedScalar) return true
+  const knownPlatforms = new Set(platforms.value.map(item => item.platformId))
+  return policyEntries(view).some(entry => !knownPlatforms.has(policyEntryPlatformId(entry.target)))
+})
 
 const ops = useCapabilityOperations({
   client: () => props.client,
@@ -118,11 +135,29 @@ function actionHint(channel: PlatformChannelModel): string | null {
   return reasons.length > 0 ? reasons.join('；') : null
 }
 
-function openPlatformSettings(event?: Event): void {
+function formatInstance(accountScope: string, instanceId: string): string {
+  const scope = accountScope.trim()
+  const instance = instanceId.trim()
+  if (!instance) return scope ? `${scope}（默认实例）` : '默认实例'
+  return scope ? `${scope} / ${instance}` : instance
+}
+
+function openDriverSettings(channel: PlatformChannelModel, event?: Event): void {
   if (settingsTarget.value) return
-  const capability = configurationFor('platform')
-  if (!capability) return
-  settingsTarget.value = { capability, trigger: eventTrigger(event) }
+  const target = platformDriverConfigFor(channel.platformId, channel.title)
+  if (!target) return
+  settingsTarget.value = { target, trigger: eventTrigger(event) }
+}
+
+function openDriverSettingsById(ownerId: string, trigger?: HTMLElement | null): void {
+  if (settingsTarget.value) return
+  const target = platformDriverConfigByScope(ownerId)
+  if (!target) return
+  settingsTarget.value = { target, trigger: trigger ?? pageHeading.value }
+}
+
+function openFallbackPlatformSettings(event?: Event): void {
+  openDriverSettingsById('platform', eventTrigger(event))
 }
 
 function closePlatformSettings(): void {
@@ -154,6 +189,12 @@ function closeDetail(): void {
   detailTarget.value = null
   detailTrigger.value = null
   void nextTick(() => restoreFocus(trigger, pageHeading.value))
+}
+
+function openDetailSettings(): void {
+  const target = detailTarget.value
+  closeDetail()
+  if (target) openDriverSettings(target)
 }
 
 async function checkConfigurationRecovery(record: PendingOperation): Promise<void> {
@@ -282,7 +323,8 @@ onBeforeUnmount(() => {
 
 defineExpose({
   reload: () => load('interactive'),
-  openPlatformSettings: () => openPlatformSettings(),
+  openDriverSettingsById,
+  openPlatformSettings: () => openDriverSettingsById('platform'),
   requestLeave,
   discardSecretsOnLeave,
   draftCount: computed(() => settingsDialog.value?.draftCount ?? 0)
@@ -296,14 +338,20 @@ defineExpose({
       eyebrow="PLATFORM DRIVERS"
       title="消息平台"
       title-id="platforms-title"
-      description="管理 QQ 私域、QQ 官方开放平台、飞书与本地调试等平台驱动的连接启停、接入凭据与访问策略。"
+      description="按驱动独立管理各消息平台通道的连接启停、接入凭据、白名单与实例访问策略。"
     >
       <template #metadata>
         <span>共 <strong>{{ platforms.length }}</strong> 条通道 · <strong>{{ runningCount }}</strong> 条运行中</span>
       </template>
-      <button type="button" class="primary" data-testid="platforms-open-settings" @click="openPlatformSettings($event)">
+      <button
+        v-if="hasUnassignedPlatformConfig"
+        type="button"
+        class="tonal"
+        data-testid="platforms-open-fallback-settings"
+        @click="openFallbackPlatformSettings($event)"
+      >
         <AppIcon name="sliders" :size="15" />
-        平台接入与访问策略
+        其它平台策略
       </button>
     </PageHeader>
 
@@ -319,8 +367,9 @@ defineExpose({
       契约不兼容，平台驱动控制与策略编辑已禁用。
     </UiBanner>
 
-    <UiBanner v-if="configurationRecoveries.length > 0" tone="warn" title="存在未确认的平台配置提交">
+    <UiBanner v-if="configurationRecoveries.length > 0" tone="warn" title="存在未确认的平台配置提交" test-id="platforms-recovery-banner">
       <p v-for="record in configurationRecoveries" :key="record.key" class="recovery-row">
+        <strong>{{ platformTargetLabel(record.target) }}</strong>
         <BreakableId :value="record.key" copyable />
         <button
           type="button"
@@ -372,10 +421,11 @@ defineExpose({
       v-else-if="!loading && platforms.length === 0"
       icon="platform"
       title="尚未声明消息平台驱动"
-      description="可以在「平台接入与访问策略」中配置 QQ 私域、QQ 官方或飞书通道。"
+      description="宿主尚未上报平台驱动实例；请检查驱动包状态后刷新。"
       test-id="platforms-empty"
     >
-      <button type="button" class="primary" @click="openPlatformSettings($event)">打开平台接入设置</button>
+      <button type="button" class="primary" @click="load('interactive')">刷新驱动列表</button>
+      <button v-if="hasUnassignedPlatformConfig" type="button" class="tonal" @click="openFallbackPlatformSettings($event)">查看兜底平台策略</button>
     </UiEmptyState>
 
     <div v-else class="platform-grid" data-testid="platforms-grid">
@@ -420,7 +470,7 @@ defineExpose({
           </div>
           <div>
             <dt>通道实例</dt>
-            <dd class="mono">{{ channel.accountScope }} / {{ channel.instanceId }}</dd>
+            <dd class="mono">{{ formatInstance(channel.accountScope, channel.instanceId) }}</dd>
           </div>
         </dl>
 
@@ -454,14 +504,14 @@ defineExpose({
             type="button"
             class="tonal"
             :data-testid="'platform-policy-' + channel.platformId"
-            @click="openPlatformSettings($event)"
+            @click="openDriverSettings(channel, $event)"
           >
             <AppIcon name="shield" :size="14" />
             接入与策略
           </button>
 
           <button
-            v-if="channel.platformId === 'qq.official'"
+            v-if="channel.supportsMessagingInspection"
             type="button"
             class="tonal"
             :data-testid="'cap-messaging-' + keySlug(channel.descriptor.key)"
@@ -495,7 +545,7 @@ defineExpose({
       <template #eyebrow><span class="eyebrow">PLATFORM DRIVER DETAIL</span></template>
       <dl class="detail-kv">
         <div><dt>平台标识</dt><dd class="mono"><BreakableId :value="detailTarget.platformId" copyable /></dd></div>
-        <div><dt>实例范围</dt><dd class="mono">{{ detailTarget.accountScope }} / {{ detailTarget.instanceId }}</dd></div>
+        <div><dt>实例范围</dt><dd class="mono">{{ formatInstance(detailTarget.accountScope, detailTarget.instanceId) }}</dd></div>
         <div><dt>运行状态</dt><dd><StatusBadge :tone="runtimeTone(detailTarget.descriptor.runtimeState)" :label="runtimeLabel(detailTarget.descriptor.runtimeState)" dot /></dd></div>
         <div><dt>凭据状态</dt><dd>{{ detailTarget.descriptor.credentialConfigured ? '已配置' : '未配置' }}</dd></div>
         <div v-if="detailTarget.driverPackage">
@@ -516,7 +566,7 @@ defineExpose({
         </div>
       </dl>
       <template #footer>
-        <button type="button" class="tonal" @click="closeDetail(); openPlatformSettings()">编辑接入与策略</button>
+        <button type="button" class="tonal" data-testid="platform-detail-open-settings" @click="openDetailSettings">编辑接入与策略</button>
         <button type="button" @click="closeDetail">关闭</button>
       </template>
     </ManagementDialog>
@@ -536,7 +586,9 @@ defineExpose({
       v-if="settingsTarget"
       ref="settingsDialog"
       :client="props.client"
-      :capability="settingsTarget.capability"
+      :capability="settingsTarget.target.capability"
+      :policy-platform-id="settingsTarget.target.policyPlatformId"
+      :dialog-title="settingsTarget.target.dialogTitle"
       :mode="props.mode"
       :writes-enabled="props.writesEnabled"
       :features="props.features"

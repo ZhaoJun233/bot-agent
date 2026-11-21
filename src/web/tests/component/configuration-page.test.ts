@@ -1511,4 +1511,93 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     }
     expect(wrapper.text()).not.toMatch(/officialAppSecret|官方 App ?Secret/i)
   })
+
+  it('按平台驱动解耦作用域：飞书仅展示飞书字段、飞书 3 槽位秘密与飞书策略，保存不触碰其它平台', async () => {
+    const calls: ZbaConfigurationSaveRequest[] = []
+    const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    const templatePolicy = data.view!.platform.platformPolicies.value![0]!
+    const makeField = (id: number, value: unknown) => ({
+      visibility: 1 as const,
+      display: String(value),
+      value,
+      userMode: 2 as const,
+      effectiveSource: 1 as const,
+      applyState: 1 as const,
+      rule: { id, effect: 0 as const, canClear: true, editable: true, legacyNeedsReview: false }
+    })
+    Object.assign(data.view!.platform, {
+      feishuEnabled: makeField(56, false),
+      feishuAppId: makeField(55, 'cli_synthetic'),
+      feishuApiBase: makeField(54, 'https://open.example.com'),
+      feishuWhitelist: makeField(57, 'oc_group_1'),
+      feishuWhitelistPrivates: makeField(147, ''),
+      officialEnabled: makeField(91, false),
+      officialAppId: makeField(89, 'official_1'),
+      localChannelIds: makeField(67, 'local-1'),
+      privateChatEnabled: makeField(104, true),
+      whitelistPrivates: makeField(142, ''),
+      messageWhitelist: makeField(74, '')
+    })
+    const feishuPolicy = structuredClone(templatePolicy)
+    feishuPolicy.target = { kind: 'instance', key: { platformId: 'feishu', accountScope: 'default', instanceId: 'feishu-main' } }
+    const qqPolicy = structuredClone(templatePolicy)
+    qqPolicy.target = { kind: 'accountDefault', platformId: 'qq.private', accountScope: 'legacy' }
+    data.view!.platform.platformPolicies.value = [qqPolicy, feishuPolicy]
+
+    const client = clientWith(data, {
+      saveConfiguration: async (request) => {
+        calls.push(request)
+        return { code: 0, replayed: false, receipt: committedReceipt(request, '2'), currentVersion: '2', errors: [] }
+      }
+    })
+
+    // 1. 飞书驱动作用域：仅见飞书 5 字段 + 飞书 3 个秘密 + 飞书策略条目
+    const feishu = mountPage({ client, mode: 'admin', scope: 'system.platform-feishu' })
+    await flushPromises()
+    expect(feishu.find('[data-testid="config-field-feishuEnabled"]').exists()).toBe(true)
+    expect(feishu.find('[data-testid="config-field-feishuAppId"]').exists()).toBe(true)
+    expect(feishu.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(false)
+    expect(feishu.find('[data-testid="config-field-officialEnabled"]').exists()).toBe(false)
+    expect(feishu.find('[data-testid="config-field-localChannelIds"]').exists()).toBe(false)
+    expect(feishu.find('[data-testid="config-policy-instance:feishu:default:feishu-main"]').exists()).toBe(true)
+    expect(feishu.find('[data-testid="config-policy-account:qq.private:legacy"]').exists()).toBe(false)
+    const secretsText = feishu.get('[data-testid="config-secrets"]').text()
+    expect(secretsText).toContain('飞书 App Secret')
+    expect(secretsText).toContain('飞书 Encrypt Key')
+    expect(secretsText).toContain('飞书验证 Token')
+    expect(feishu.findAll('[data-testid="config-secrets"] li')).toHaveLength(3)
+
+    // 修改飞书策略并保存，验证只提交飞书策略条目
+    const feishuRow = feishu.get('[data-testid="config-policy-instance:feishu:default:feishu-main"]')
+    await feishuRow.get('[data-testid="policy-group-instance:feishu:default:feishu-main-kind"]').setValue('2')
+    await feishu.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.changes.registered?.policies).toHaveLength(1)
+    expect(calls[0]!.changes.registered?.policies[0]!.target).toEqual(feishuPolicy.target)
+
+    // 2. QQ 官方作用域：展示环境变量密钥只读提示且不暴露任何秘密写框
+    const official = mountPage({ client, mode: 'admin', scope: 'system.platform-qq-official' })
+    await flushPromises()
+    expect(official.find('[data-testid="config-field-officialEnabled"]').exists()).toBe(true)
+    expect(official.find('[data-testid="config-field-feishuEnabled"]').exists()).toBe(false)
+    expect(official.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(official.get('[data-testid="config-credential-hint"]').text()).toContain('BOTAGENT_OFFICIAL_APP_SECRET')
+
+    // 3. QQ 私域作用域：仅展示私域字段与私域策略，无秘密框
+    const qqPrivate = mountPage({ client, mode: 'admin', scope: 'system.platform-qq-private' })
+    await flushPromises()
+    expect(qqPrivate.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(true)
+    expect(qqPrivate.find('[data-testid="config-field-feishuAppId"]').exists()).toBe(false)
+    expect(qqPrivate.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(qqPrivate.find('[data-testid="config-policy-account:qq.private:legacy"]').exists()).toBe(true)
+    expect(qqPrivate.find('[data-testid="config-policy-instance:feishu:default:feishu-main"]').exists()).toBe(false)
+
+    // 4. 本地调试作用域：仅展示 localChannelIds
+    const local = mountPage({ client, mode: 'admin', scope: 'system.platform-local' })
+    await flushPromises()
+    expect(local.find('[data-testid="config-field-localChannelIds"]').exists()).toBe(true)
+    expect(local.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(false)
+    expect(local.find('[data-testid="config-secrets"]').exists()).toBe(false)
+  })
 })

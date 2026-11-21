@@ -63,6 +63,18 @@ export function policyKey(target: ZbaPolicyTarget): string {
     : `instance:${target.key.platformId}:${target.key.accountScope}:${target.key.instanceId}`
 }
 
+export function policyEntryPlatformId(target: ZbaPolicyTarget): string {
+  return target.kind === 'accountDefault' ? target.platformId : target.key.platformId
+}
+
+export function filterPoliciesByPlatform(
+  entries: readonly ZbaPlatformPolicyEntryView[],
+  platformId: string | null | undefined
+): ZbaPlatformPolicyEntryView[] {
+  if (!platformId) return [...entries]
+  return entries.filter(entry => policyEntryPlatformId(entry.target) === platformId)
+}
+
 /** 一行条目的标题；实例目标必须写清楚 instanceId，否则和 account 默认看起来一样。 */
 export function policyTitle(target: ZbaPolicyTarget): string {
   const base = `${target.kind === 'accountDefault' ? target.platformId : target.key.platformId} · ${target.kind === 'accountDefault' ? target.accountScope : target.key.accountScope}`

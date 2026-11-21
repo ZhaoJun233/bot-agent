@@ -70,7 +70,7 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
     - `健康日报`（`reporting`）：报告开关、发送时间与接收范围；
     - `高级与系统包`（`system-packages`）：9 个 `system.*` 核心引擎包的只读版本与运行状态总览，支持按归属一键跳转至「模型供应商」「消息平台」或对应配置分区。
   - **模型供应商**（`ProvidersPage.vue`）：集中管理模型供应商（主/备协议、默认模型、优先级、凭据与连接测试）、默认主/快模型路由设置（`models`）及 `system.model-services` 路由引擎状态。
-  - **消息平台**（`PlatformsPage.vue`）：集中管理 QQ 私域、QQ 官方开放平台、飞书与本地通道驱动卡片，覆盖连接启停、接入凭据、访问策略（`platform`）与消息能力声明。
+  - **消息平台**（`PlatformsPage.vue` + `driver-registry.ts`）：集中管理 QQ 私域、QQ 官方开放平台、飞书与本地调试驱动卡片，覆盖连接启停与消息能力声明；4 个平台驱动包各自在 `packages/platform-*/frontend/presentation.ts` 独立声明归属字段、秘密槽位（仅飞书拥有槽位 3/4/5）、文案与策略切片，每张卡片的「接入与策略」直达该驱动专属配置抽屉，互不混入其它驱动字段、秘密或策略条目（仅当存在未归属字段/孤立策略时才按需展示 `platform` 兜底入口）。
   - **插件中心**（`PluginsPage.vue`）：聚焦 8 个内置对话功能插件（音乐、语音含 TTS 密钥、表情包、戳一戳、氛围、画像、搜索、Token 配额）与第三方扩展，卡片内置启停开关、参数设置、一键「打开界面」（如表情包、Token 配额沙箱界面，且深浅主题通过 `PluginUiFrame.vue` 实时同步）及「已安装 / 插件市场 / 仓库与导入」三栏切换（配额细节参见 [Token 配额文档](../../docs/token-quota-plugin.md)）。
   - 架构设计与映射细节见 [配置 UI 归属](../../docs/configuration-ui-ownership.md)。
 - **动态插件归属**：配置能力目录动态跟随插件注册表，支持模块加载后扩展插件的动态登记、撤销与重新配置，确保扩展插件配置即时可访问。

@@ -4,7 +4,10 @@ import { conversationPresentation } from '../../../../../packages/conversation/f
 import { healthReportingPresentation } from '../../../../../packages/health-reporting/frontend/presentation'
 import { modelServicesPresentation } from '../../../../../packages/model-services/frontend/presentation'
 import { musicPresentation } from '../../../../../packages/music/frontend/presentation'
-import { platformPresentation } from '../../../../../packages/platform-qq-private/frontend/presentation'
+import { platformFeishuPresentation } from '../../../../../packages/platform-feishu/frontend/presentation'
+import { platformLocalPresentation } from '../../../../../packages/platform-local/frontend/presentation'
+import { platformQqOfficialPresentation } from '../../../../../packages/platform-qq-official/frontend/presentation'
+import { platformQqPrivatePresentation } from '../../../../../packages/platform-qq-private/frontend/presentation'
 import { pokePresentation } from '../../../../../packages/poke/frontend/presentation'
 import { profilesPresentation } from '../../../../../packages/profiles/frontend/presentation'
 import { stickersPresentation } from '../../../../../packages/stickers/frontend/presentation'
@@ -18,7 +21,7 @@ import type { ZbaConfigurationView, ZbaPatchSection, ZbaReadField, ZbaSecretSlot
  * 插件 → 它所拥有的配置字段。
  *
  * 字段仍然存在原来的配置分区里（契约不变），这里只决定「在哪里编辑」：
- * 插件相关的设置从配置页挪到能力页的插件卡片上，配置页不再重复展示。
+ * 插件相关的设置从配置页挪到对应领域页的卡片上，配置页不再重复展示。
  * 插件 ID 与 PluginGate.CapabilityPlugins 一致；字段键来自 cfg-0.3.3 字段表。
  *
  * 普通包的声明式设置从获准清单读取，不需要宿主逐 ID 登记。
@@ -32,6 +35,13 @@ export interface PluginFieldRef {
   key: string
 }
 
+export interface PlatformPolicyCopy {
+  groupListLabel?: string
+  privateListLabel?: string
+  groupPlaceholder?: string
+  privatePlaceholder?: string
+}
+
 export type PluginConfigurationEditor =
   | { type: 'fields' }
   | { type: 'component'; load: () => Promise<{ default: Component }> }
@@ -42,11 +52,26 @@ export interface PluginSettingsSpec {
   kind?: 'plugin' | 'system'
   /** 省略时：有可编辑内容则使用字段编辑器，否则仅声明能力。 */
   editor?: PluginConfigurationEditor
-  secrets?: ZbaSecretSlot[]
+  secrets?: readonly ZbaSecretSlot[]
   /** 仅系统能力可声明；显式所有者和基础字段优先于分区兜底。 */
-  fallbackSections?: ZbaPatchSection[]
+  fallbackSections?: readonly ZbaPatchSection[]
   /** 复用现有供应商子编辑器。 */
   providers?: boolean
+  /** 平台驱动标识（如 `qq.private`、`qq.official`、`feishu`、`local`）。 */
+  platformId?: string
+  /** 该配置编辑器对应的 `platformPolicies` 切片目标平台 ID。 */
+  policyPlatformId?: string
+  /** 包声明的图标标识（供宿主领域卡片与导航解析）。 */
+  icon?: string
+  /** 凭据获取方式说明（如环境变量只读密钥提示），在配置抽屉顶部展示。 */
+  credentialHint?: string
+  /** 是否支持平台消息能力与限制检查弹窗。 */
+  supportsMessagingInspection?: boolean
+  /** 包自有的字段标签、提示、秘密槽位名称与策略输入文案。 */
+  fieldLabels?: Readonly<Record<string, string>>
+  fieldHints?: Readonly<Record<string, string>>
+  secretLabels?: Readonly<Record<number, string>>
+  policyCopy?: Readonly<PlatformPolicyCopy>
   /** 与后端插件 ID 一致，例如 `preset.feature.music`。 */
   pluginKey: string
   title: string
@@ -57,9 +82,9 @@ export interface PluginSettingsSpec {
    */
   enableField?: PluginFieldRef
   /** 整个分区都归这个插件（例如 voice / music）。 */
-  sections?: ZbaPatchSection[]
+  sections?: readonly ZbaPatchSection[]
   /** 分区里的个别字段。 */
-  fields?: PluginFieldRef[]
+  fields?: readonly PluginFieldRef[]
   /** 来源：内置预设或后续接入的扩展插件（仅用于展示）。 */
   source?: 'preset' | 'extension'
 }
@@ -68,14 +93,28 @@ export interface PluginSettingsSpec {
 export interface RegisteredPluginSettingsSpec extends PluginSettingsSpec {
   kind: 'plugin' | 'system'
   editor: PluginConfigurationEditor
-  secrets: ZbaSecretSlot[]
+  secrets: readonly ZbaSecretSlot[]
 }
+
+/** 宿主保留的平台分区兜底声明：仅承载未归属特定驱动的平台字段与策略条目。 */
+const platformFallbackPresentation: PluginSettingsSpec = Object.freeze({
+  pluginKey: 'platform',
+  kind: 'system' as const,
+  title: '其它平台接入与策略',
+  summary: '未归属特定驱动的平台通用字段与访问策略条目',
+  fallbackSections: ['platform' as const],
+  secrets: [] as const
+})
 
 const presets: PluginSettingsSpec[] = [
   conversationPresentation,
   modelServicesPresentation,
   agentPresentation,
-  platformPresentation,
+  platformQqPrivatePresentation,
+  platformQqOfficialPresentation,
+  platformFeishuPresentation,
+  platformLocalPresentation,
+  platformFallbackPresentation,
   healthReportingPresentation,
   {
     ...quotaPresentation,
@@ -120,7 +159,7 @@ function rebuildOwnership(): void {
 
 function defaultEditor(spec: PluginSettingsSpec): PluginConfigurationEditor {
   const hasFields = spec.enableField || spec.fields?.length || spec.sections?.length
-    || spec.fallbackSections?.length || spec.secrets?.length || spec.providers
+    || spec.fallbackSections?.length || spec.secrets?.length || spec.providers || Boolean(spec.policyPlatformId)
   return { type: hasFields ? 'fields' : 'declared' }
 }
 
@@ -133,7 +172,11 @@ function snapshotSpec(spec: PluginSettingsSpec): RegisteredPluginSettingsSpec {
     sections: spec.sections ? [...spec.sections] : undefined,
     fields: spec.fields?.map((field) => ({ ...field })),
     fallbackSections: spec.fallbackSections ? [...spec.fallbackSections] : undefined,
-    secrets: [...(spec.secrets ?? [])]
+    secrets: [...(spec.secrets ?? [])],
+    fieldLabels: spec.fieldLabels ? Object.freeze({ ...spec.fieldLabels }) : undefined,
+    fieldHints: spec.fieldHints ? Object.freeze({ ...spec.fieldHints }) : undefined,
+    secretLabels: spec.secretLabels ? Object.freeze({ ...spec.secretLabels }) : undefined,
+    policyCopy: spec.policyCopy ? Object.freeze({ ...spec.policyCopy }) : undefined
   }
   if (entry.enableField) Object.freeze(entry.enableField)
   for (const field of entry.fields ?? []) Object.freeze(field)
@@ -148,6 +191,11 @@ function validateSpec(spec: RegisteredPluginSettingsSpec): void {
   if (!spec.pluginKey.trim()) throw new Error('registerPlugin：pluginKey 不能为空')
   if (registry.some((item) => item.pluginKey === spec.pluginKey)) {
     throw new Error('registerPlugin：插件 ' + spec.pluginKey + ' 已经登记过')
+  }
+  if (spec.platformId !== undefined) {
+    if (!spec.platformId.trim()) throw new Error('registerPlugin：platformId 不能为空')
+    const owner = registry.find((item) => item.platformId === spec.platformId)
+    if (owner) throw new Error('registerPlugin：平台驱动 ' + spec.platformId + ' 已归 ' + owner.pluginKey)
   }
   if (spec.editor.type === 'fields' && defaultEditor(spec).type !== 'fields') {
     throw new Error('registerPlugin：fields 编辑器缺少可派生的字段、密钥或供应商配置')
@@ -245,4 +293,46 @@ export function resolvePluginFields(
 export function ownerOf(section: string, key: string): RegisteredPluginSettingsSpec | undefined {
   void pluginRegistryRevision.value
   return registry.find((spec) => owns(spec, { section: section as ZbaPatchSection, key }))
+}
+
+/** 按 platformId 查找已登记的平台驱动声明。 */
+export function driverSpecByPlatformId(platformId: string): RegisteredPluginSettingsSpec | undefined {
+  void pluginRegistryRevision.value
+  return registry.find((spec) => spec.platformId === platformId)
+}
+
+/** 当前已登记的所有平台驱动 ID 列表。 */
+export function registeredPlatformIds(): string[] {
+  void pluginRegistryRevision.value
+  return registry.flatMap((spec) => spec.platformId ? [spec.platformId] : [])
+}
+
+/** 从已登记包中查询字段中文标签（驱动包自有，不再由宿主硬编码）。 */
+export function registeredFieldLabel(key: string): string | undefined {
+  void pluginRegistryRevision.value
+  for (const spec of registry) {
+    const label = spec.fieldLabels?.[key]
+    if (label !== undefined) return label
+  }
+  return undefined
+}
+
+/** 从已登记包中查询字段附加说明。 */
+export function registeredFieldHint(key: string): string | undefined {
+  void pluginRegistryRevision.value
+  for (const spec of registry) {
+    const hint = spec.fieldHints?.[key]
+    if (hint !== undefined) return hint
+  }
+  return undefined
+}
+
+/** 从已登记包中查询秘密槽位名称（例如飞书 3/4/5 槽位归属 system.platform-feishu）。 */
+export function registeredSecretLabel(slot: number): string | undefined {
+  void pluginRegistryRevision.value
+  for (const spec of registry) {
+    const label = spec.secretLabels?.[slot]
+    if (label !== undefined) return label
+  }
+  return undefined
 }

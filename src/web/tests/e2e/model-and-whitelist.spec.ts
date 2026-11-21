@@ -27,13 +27,13 @@ async function openConfiguration(page: Page): Promise<void> {
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 }
 
-async function openCapability(page: Page, id: 'models' | 'platform', navKey: string) {
+async function openCapability(page: Page, id: 'models' | 'qq.private', navKey: string) {
   if (id === 'models') {
     await page.getByTestId('nav-providers').click()
     await page.getByTestId('providers-routing-settings').click()
   } else {
     await page.getByTestId('nav-platforms').click()
-    await page.getByTestId('platforms-open-settings').click()
+    await page.getByTestId(`platform-policy-${id}`).click()
   }
   const dialog = page.getByTestId('ability-configuration-dialog')
   await expect(dialog).toBeVisible()
@@ -94,7 +94,11 @@ test('能力设置：白名单通过面板保存并回读（真实宿主）', as
   const updated = '20002, 20003'
 
   await openConfiguration(page)
-  const dialog = await openCapability(page, 'platform', 'platform')
+  const dialog = await openCapability(page, 'qq.private', 'platform')
+  // 确认前端按驱动解耦：QQ 私域抽屉不混入飞书或 QQ 官方字段与飞书密钥
+  await expect(dialog.getByTestId('config-field-feishuEnabled')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-field-officialEnabled')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-secrets')).toHaveCount(0)
   const input = dialog.getByTestId('config-field-whitelistGroups').locator('input')
   await expect(input).toHaveValue(original)
 

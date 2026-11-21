@@ -7,8 +7,10 @@ import type {
 import {
   POLICY_ACTIONS,
   applyPolicyEdits,
+  filterPoliciesByPlatform,
   policyBaseline,
   policyDirty,
+  policyEntryPlatformId,
   policyKey,
   policyTitle,
   splitActions,
@@ -142,5 +144,21 @@ describe('平台策略草稿', () => {
     const errors = applyPolicyEdits({}, { 'account:qq.official:legacy': stale }, view)
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain('不存在')
+  })
+
+  it('filterPoliciesByPlatform 同时兼容 accountDefault 与 instance 目标切片', () => {
+    const feishuAccount = entry('feishu')
+    const feishuInstance = {
+      ...entry('feishu'),
+      target: { kind: 'instance' as const, key: { platformId: 'feishu', accountScope: 'default', instanceId: 'feishu-main' } }
+    }
+    const qqAccount = entry('qq.private')
+    const all = [qqAccount, feishuAccount, feishuInstance]
+
+    expect(policyEntryPlatformId(feishuInstance.target)).toBe('feishu')
+    expect(filterPoliciesByPlatform(all, 'feishu')).toEqual([feishuAccount, feishuInstance])
+    expect(filterPoliciesByPlatform(all, 'qq.private')).toEqual([qqAccount])
+    expect(filterPoliciesByPlatform(all, 'local')).toEqual([])
+    expect(filterPoliciesByPlatform(all, null)).toEqual(all)
   })
 })

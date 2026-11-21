@@ -1,4 +1,9 @@
-import { settingsFor } from '../features/capabilities/plugin-settings'
+import {
+  driverSpecByPlatformId,
+  registeredPlatformIds,
+  settingsFor
+} from '../features/capabilities/plugin-settings'
+import { platformQqPrivatePresentation } from '../../../../packages/platform-qq-private/frontend/presentation'
 import { platformQqOfficialPresentation } from '../../../../packages/platform-qq-official/frontend/presentation'
 import { platformFeishuPresentation } from '../../../../packages/platform-feishu/frontend/presentation'
 import { platformLocalPresentation } from '../../../../packages/platform-local/frontend/presentation'
@@ -11,13 +16,6 @@ import type { AppIconName } from './ui/AppIcon.vue'
  */
 
 const GENERIC_NAMES = new Set(['plugin', 'driver', 'provider', 'device', 'mcp', 'platform-driver', 'model-provider'])
-
-const platformNames: Record<string, string> = {
-  'qq.private': 'QQ 私域通道',
-  'qq.official': 'QQ 官方开放平台',
-  feishu: '飞书机器人通道',
-  local: '本地调试通道'
-}
 
 const providerNames: Record<string, string> = {
   primary: '主模型',
@@ -33,6 +31,25 @@ export interface SystemPackageDescriptorMeta {
   icon: AppIconName
 }
 
+function platformSystemPackageMeta(
+  spec: {
+    pluginKey: string
+    title: string
+    summary: string
+    platformId: string
+    icon: AppIconName
+  }
+): SystemPackageDescriptorMeta {
+  return {
+    title: spec.title,
+    summary: spec.summary,
+    domain: 'platform',
+    platformId: spec.platformId,
+    configScope: spec.pluginKey,
+    icon: spec.icon
+  }
+}
+
 export const SYSTEM_PACKAGE_META: Readonly<Record<string, SystemPackageDescriptorMeta>> = Object.freeze({
   'system.model-services': {
     title: '模型路由与服务引擎',
@@ -41,38 +58,10 @@ export const SYSTEM_PACKAGE_META: Readonly<Record<string, SystemPackageDescripto
     configScope: 'models',
     icon: 'provider'
   },
-  'system.platform-qq-private': {
-    title: 'QQ 私域协议端（OneBot）',
-    summary: 'OneBot WebSocket 接入、群/私聊事件与私域消息收发',
-    domain: 'platform',
-    platformId: 'qq.private',
-    configScope: 'platform',
-    icon: 'qq'
-  },
-  'system.platform-qq-official': {
-    title: platformQqOfficialPresentation.title,
-    summary: platformQqOfficialPresentation.summary,
-    domain: 'platform',
-    platformId: 'qq.official',
-    configScope: 'platform',
-    icon: 'qq'
-  },
-  'system.platform-feishu': {
-    title: platformFeishuPresentation.title,
-    summary: platformFeishuPresentation.summary,
-    domain: 'platform',
-    platformId: 'feishu',
-    configScope: 'platform',
-    icon: 'feishu'
-  },
-  'system.platform-local': {
-    title: platformLocalPresentation.title,
-    summary: platformLocalPresentation.summary,
-    domain: 'platform',
-    platformId: 'local',
-    configScope: 'platform',
-    icon: 'terminal'
-  },
+  'system.platform-qq-private': platformSystemPackageMeta(platformQqPrivatePresentation),
+  'system.platform-qq-official': platformSystemPackageMeta(platformQqOfficialPresentation),
+  'system.platform-feishu': platformSystemPackageMeta(platformFeishuPresentation),
+  'system.platform-local': platformSystemPackageMeta(platformLocalPresentation),
   'system.conversation': {
     title: '对话编排与上下文引擎',
     summary: '多轮对话编排、上下文窗口预算与回复节奏调度',
@@ -179,14 +168,12 @@ export function kindName(kind: string): string {
 }
 
 export function platformName(platformId: string): string {
-  return platformNames[platformId] ?? platformId
+  return driverSpecByPlatformId(platformId)?.title ?? platformId
 }
 
 export function platformIcon(platformId: string): AppIconName {
-  if (platformId === 'qq.private' || platformId === 'qq.official') return 'qq'
-  if (platformId === 'feishu') return 'feishu'
-  if (platformId === 'local') return 'terminal'
-  return 'platform'
+  const icon = driverSpecByPlatformId(platformId)?.icon
+  return (icon as AppIconName | undefined) ?? 'platform'
 }
 
 export function pluginName(key: string): string {
@@ -243,7 +230,7 @@ export function componentTitle(displayName: string, kind: string, id: string): s
   if (kind === 'plugin') return pluginName(rest)
   if (kind === 'provider') return providerName(rest)
   if (kind === 'driver') {
-    const platform = [...Object.keys(platformNames)].find((p) => rest === p || rest.startsWith(p + ':') || rest.startsWith(p + '/'))
+    const platform = registeredPlatformIds().find((p) => rest === p || rest.startsWith(p + ':') || rest.startsWith(p + '/'))
     if (platform) return platformName(platform)
   }
   return displayName || rest

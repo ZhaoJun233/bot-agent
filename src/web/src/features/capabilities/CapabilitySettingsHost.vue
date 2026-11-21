@@ -10,6 +10,7 @@ import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
 const props = defineProps<{
   client: ZbaClient; mode: 'read' | 'admin'; writesEnabled: boolean; active: boolean
   capability: CapabilityConfiguration; features: readonly string[]; runtimeState?: number
+  policyPlatformId?: string; dialogTitle?: string
   trigger?: HTMLElement | null; fallback?: HTMLElement | null
 }>()
 const emit = defineEmits<{ close: []; saved: []; 'enable-admin': []; 'auth-expired': [error: UiError] }>()
@@ -51,7 +52,7 @@ const editorProps = computed(() => {
   switch (props.capability.editor.type) {
     case 'declared': return { ...common, pluginId: props.capability.pluginKey ?? props.capability.id }
     case 'component': return { ...common, features: props.features, runtimeState: props.runtimeState }
-    default: return { ...common, capability: props.capability }
+    default: return { ...common, capability: props.capability, policyPlatformId: props.policyPlatformId, dialogTitle: props.dialogTitle }
   }
 })
 const editorEvents = computed((): Record<string, () => void> => {

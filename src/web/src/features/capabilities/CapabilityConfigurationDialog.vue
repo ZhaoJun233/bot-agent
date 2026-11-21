@@ -12,6 +12,8 @@ const props = defineProps<{
   writesEnabled: boolean
   active: boolean
   capability: CapabilityConfiguration
+  policyPlatformId?: string
+  dialogTitle?: string
   trigger?: HTMLElement | null
   fallback?: HTMLElement | null
 }>()
@@ -34,7 +36,7 @@ defineExpose({
 
 <template>
   <ManagementDialog
-    :title="props.capability.title"
+    :title="props.dialogTitle ?? props.capability.title"
     title-id="ability-configuration-title"
     test-id="ability-configuration-dialog"
     :active="props.active"
@@ -50,6 +52,7 @@ defineExpose({
       :mode="props.mode"
       :writes-enabled="props.writesEnabled"
       :scope="props.capability.id"
+      :policy-platform-id="props.policyPlatformId"
       :active="props.active"
       @enable-admin="emit('enable-admin')"
       @auth-expired="value => emit('auth-expired', value)"

@@ -1,3 +1,5 @@
+import { registeredFieldHint, registeredFieldLabel } from '../capabilities/plugin-settings'
+
 /**
  * 配置字段的人类可读标签。
  *
@@ -5,8 +7,8 @@
  * 逐项对照 cfg-0.3.3 的字段表（`src/BotAgent.Core/Domain/Configuration/ConfigurationViews.cs`）。
  * 不是服务端返回的 `display`——`display` 是脱敏后的展示值，不能当标签用。
  *
- * 未收录的字段回退为 wire 键；界面始终把 wire 键作为次要标识保留，
- * 这样标签文案变化不会让排障失去对应关系。
+ * 平台驱动等已解耦包的字段标签与提示由各自 `packages/<package>/frontend/presentation.ts` 声明，
+ * 在此按注册表优先查询；未收录的字段回退为 wire 键，界面始终把 wire 键作为次要标识保留。
  */
 export const fieldLabels: Record<string, string> = {
   // behavior
@@ -95,24 +97,8 @@ export const fieldLabels: Record<string, string> = {
   enableServerAgent: '启用服务器 Agent',
   panelDeployEnabled: '面板一键部署',
   panelDeployUrl: '部署产物地址',
-  // platform
-  feishuApiBase: '飞书 API 地址',
-  feishuAppId: '飞书 App ID',
-  feishuEnabled: '启用飞书通道',
-  feishuWhitelist: '飞书群白名单',
-  feishuWhitelistPrivates: '飞书私聊白名单',
-  localChannelIds: '本地通道 ID',
-  messageWhitelist: '共用白名单',
-  officialAppId: '官方 AppID',
-  officialChatEnabled: '官方对话开关',
-  officialEnabled: '启用官方通道',
-  officialSandbox: '官方沙箱环境',
-  officialWhitelistGroups: '官方群白名单',
-  officialWhitelistPrivates: '官方私聊白名单',
+  // platform (driver-specific labels are owned by packages/platform-*/frontend/presentation.ts)
   platformPolicies: '平台实例策略',
-  privateChatEnabled: '私聊总开关',
-  whitelistGroups: '群聊白名单',
-  whitelistPrivates: '私聊白名单',
   // voice
   enableVoice: '启用语音消息',
   ttsApiBase: '云端接口地址',
@@ -146,7 +132,7 @@ export const fieldLabels: Record<string, string> = {
 }
 
 export function fieldLabel(key: string): string {
-  return fieldLabels[key] ?? key
+  return registeredFieldLabel(key) ?? fieldLabels[key] ?? key
 }
 
 /**
@@ -161,9 +147,6 @@ export const fieldHints: Record<string, string> = {
   groupInterjectionCooldownSeconds: '完整发送后计时，明确请求不限。',
   groupContinuationWaitSeconds: '0–30。同一人续话后重新等待；0 为不等待。',
   privateContinuationWaitSeconds: '0–30。同一人续话后重新等待，支持小数；0 为不等待。',
-  whitelistGroups: '留空或 * 接收所有 QQ 群消息；填写群号则只接收名单内群。私聊名单独立生效。',
-  whitelistPrivates: '留空或 * 接收所有 QQ 私聊，不再继承共用名单；仍遵守平台聊天开关与安全策略。',
-  messageWhitelist: '兼容旧配置的批量设置入口。保存会同时设置群聊和私聊名单；之后两份名单各自生效。',
   agentServerDocker:
     '需要部署方把 docker socket 挂进容器（compose 默认不挂载，见 SECURITY.md）。未挂载时本开关不生效：服务器 agent 的工具表与提示词里都不会出现 docker。',
   panelDeployEnabled:
@@ -171,5 +154,5 @@ export const fieldHints: Record<string, string> = {
 }
 
 export function fieldHint(key: string): string | undefined {
-  return fieldHints[key]
+  return registeredFieldHint(key) ?? fieldHints[key]
 }
