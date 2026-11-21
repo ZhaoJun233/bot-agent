@@ -19,10 +19,10 @@ async function setup(page: Page, ready: boolean) {
   await page.getByTestId('token-input').fill('synthetic-web-admin-token')
   await page.getByTestId('connect-button').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('cap-enable-admin').click()
-  await page.getByTestId('cap-marketplace').click()
-  await expect(page.getByTestId('marketplace')).toBeVisible()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('plugins-enable-admin').click()
+  await page.getByTestId('plugins-tab-catalog').click()
+  await expect(page.getByTestId('marketplace-workspace')).toBeVisible()
   await page.getByTestId('catalog-runtime').selectOption('python')
   await page.locator('.catalog-list .catalog-entry').click()
   return writes
@@ -35,7 +35,7 @@ for (const width of [1040, 390]) {
       await expect(page.getByTestId('marketplace-trust-warning')).toContainText('子进程不是安全沙箱')
       await expect(page.getByTestId('marketplace-install')).toBeEnabled({ enabled: ready })
       if (!ready) {
-        await expect(page.getByTestId('marketplace')).toContainText('Python 解释器未配置；环境尚未准备完成')
+        await expect(page.getByTestId('marketplace-workspace')).toContainText('Python 解释器未配置；环境尚未准备完成')
       } else {
         await page.getByTestId('marketplace-install').click()
         await expect(page.getByTestId('plugin-install-preview')).toContainText('Python >=3.11、<4')

@@ -78,9 +78,30 @@ async function waitFor(url: string, timeoutMs: number): Promise<void> {
   throw new Error(`等待 ${url} 超时：${lastError}`)
 }
 
+async function waitForHealthReady(url: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let lastError = ''
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url)
+      if (response.ok) {
+        const body = await response.json() as { ready?: boolean; status?: string }
+        if (body.ready === true) return
+        lastError = `status=${body.status ?? 'unknown'} ready=${String(body.ready)}`
+      } else {
+        lastError = `HTTP ${response.status}`
+      }
+    } catch (error) {
+      lastError = String(error)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`等待 ${url} 就绪超时：${lastError}`)
+}
+
 async function startHost(): Promise<void> {
   host = spawn('dotnet', [headlessDll], { cwd: repoRoot, env: hostEnv(), stdio: 'ignore' })
-  await waitFor(`http://127.0.0.1:${HOST_PORT}/zba/v1/health`, 60_000)
+  await waitForHealthReady(`http://127.0.0.1:${HOST_PORT}/zba/v1/health`, 60_000)
 }
 
 async function killHost(): Promise<void> {

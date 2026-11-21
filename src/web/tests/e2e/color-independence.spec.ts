@@ -22,7 +22,7 @@ async function tonedWithoutText(page: Page): Promise<string[]> {
       .map((node) => (node as HTMLElement).outerHTML.slice(0, 160)))
 }
 
-test('颜色之外：四个页面里所有带语气色的徽标与提示都有可读文字（PNL-12）', async ({ page }) => {
+test('颜色之外：八个页面里所有带语气色的徽标与提示都有可读文字（PNL-12）', async ({ page }) => {
   await page.goto('/')
   await page.getByTestId('token-input').fill(ADMIN_TOKEN)
   await page.getByTestId('connect-button').click()
@@ -30,9 +30,13 @@ test('颜色之外：四个页面里所有带语气色的徽标与提示都有�
 
   const pages: Array<[string, string]> = [
     ['nav-overview', 'overview'],
-    ['nav-capabilities', 'capabilities'],
-    ['nav-configuration', 'configuration'],
-    ['nav-tasks', 'tasks']
+    ['nav-providers', 'providers-page'],
+    ['nav-platforms', 'platforms-page'],
+    ['nav-plugins', 'plugins-page'],
+    ['nav-configuration', 'system-configuration'],
+    ['nav-tasks', 'tasks'],
+    ['nav-traces', 'traces'],
+    ['nav-logs', 'runtime-logs-page']
   ]
   let checked = 0
   for (const [navId, viewId] of pages) {

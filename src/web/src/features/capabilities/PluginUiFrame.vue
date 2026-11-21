@@ -4,6 +4,7 @@ import { ZbaRequestError, type ZbaClient } from '../../api/zba'
 import { isSafePluginUiEntryUrl, type ZbaPluginUiSession } from '../../api/plugin-ui'
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import { useTheme } from '../../shared/ui/theme'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { createIframeBridgeController } from './plugin-ui-iframe-bridge'
 
@@ -17,13 +18,16 @@ const props = withDefaults(defineProps<{
   currentGenerationId?: string
   trigger?: HTMLElement | null
   fallback?: HTMLElement | null
-}>(), { active: true, theme: 'light', trigger: null, fallback: null })
+}>(), { active: true, theme: undefined, trigger: null, fallback: null })
 
 const emit = defineEmits<{
   close: []
   saved: []
   'auth-expired': [error: UiError]
 }>()
+
+const { theme: appTheme } = useTheme()
+const effectiveTheme = computed<'light' | 'dark'>(() => props.theme ?? appTheme.value)
 
 const loading = ref(true)
 const error = ref<UiError | null>(null)
@@ -109,8 +113,6 @@ function attachBridge() {
   const current = session.value
   const frame = iframeEl.value
   if (!current || !frame?.contentWindow) return
-  // Re-load of the same session means the iframe navigated away from its signed entry document:
-  // tear down the bridge immediately instead of re-attaching a fresh port to an unexpected document.
   if (bridgeAttachedForSessionId === current.sessionId) {
     teardownChannel()
     try { frame.src = 'about:blank' } catch { /* ignore */ }
@@ -130,7 +132,7 @@ function attachBridge() {
     mode: props.mode,
     writesEnabled: props.writesEnabled,
     active: props.active,
-    theme: props.theme,
+    theme: effectiveTheme.value,
     currentGenerationId: effectiveGeneration.value,
     onClose: () => emit('close'),
     onSaved: () => emit('saved'),
@@ -149,7 +151,7 @@ function attachBridge() {
   frame.contentWindow.postMessage(localController.initPayload(), '*', [channel.port2])
 }
 
-watch([() => props.mode, () => props.writesEnabled, () => props.theme, effectiveGeneration], () => {
+watch([() => props.mode, () => props.writesEnabled, effectiveTheme, effectiveGeneration], () => {
   if (!port1 || !controller) return
   port1.postMessage({ ...controller.initPayload(), type: 'zba.ui.state' })
 })
@@ -183,19 +185,20 @@ defineExpose({
     :active="active"
     :trigger="trigger"
     :fallback="fallback"
+    :wide="true"
     @close="emit('close')"
   >
     <div class="plugin-ui-frame-shell">
       <div v-if="error" class="plugin-ui-error-box">
         <ErrorNotice :error="error" />
-        <button type="button" data-testid="plugin-ui-retry" @click="openSession">重新建立界面会话</button>
+        <button type="button" class="tonal" data-testid="plugin-ui-retry" @click="openSession">重新建立界面会话</button>
       </div>
-      <p v-else-if="loading" class="muted">正在建立受控插件界面会话…</p>
+      <p v-else-if="loading" class="plugin-ui-loading">正在建立受控插件界面会话…</p>
       <template v-else-if="session">
-        <div v-if="generationStale" class="banner" role="alert">
+        <div v-if="generationStale" class="banner inline-notice bad" role="alert">
           插件已切换到新代次，当前旧界面已禁止写入；仍可按原操作键核对未决回执。
         </div>
-        <div v-else-if="!session.backendReady || !session.versionMatched" class="banner" role="alert">
+        <div v-else-if="!session.backendReady || !session.versionMatched" class="banner inline-notice warn" role="alert">
           {{ !session.versionMatched ? '前后端插件版本不匹配，已禁用写入。' : '后端插件未就绪，已禁用写入。' }}
         </div>
         <iframe
@@ -213,9 +216,28 @@ defineExpose({
 </template>
 
 <style scoped>
-.plugin-ui-frame-shell { display: flex; flex-direction: column; gap: 10px; min-height: 360px; }
-.plugin-ui-error-box { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.plugin-ui-iframe { width: 100%; min-height: 420px; border: 1px solid var(--border, #d0d7de); border-radius: 8px; background: transparent; }
-.banner { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--danger, #cf222e); color: var(--danger, #cf222e); font-size: 13px; }
-.muted { color: var(--muted, #656d76); font-size: 13px; }
+.plugin-ui-frame-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 380px;
+}
+.plugin-ui-error-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.plugin-ui-iframe {
+  width: 100%;
+  min-height: 460px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.plugin-ui-loading {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--text-sm);
+}
 </style>

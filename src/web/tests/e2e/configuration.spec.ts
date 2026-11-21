@@ -99,8 +99,8 @@ test('基础配置只显示必要字段；模型与凭据位于能力设置，�
   await expect(page.getByTestId('config-field-botPersona')).toBeVisible()
   await expect(page.getByTestId('config-secrets')).toHaveCount(0)
   await expect(page.getByTestId('config-nav-model')).toHaveCount(0)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
   await expect(dialog).toBeVisible()
   await expect(dialog.getByTestId('config-secrets').locator('li')).toHaveCount(1)
@@ -252,8 +252,8 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 
 test('配置页：离开配置页会清空秘密替换输入，但保留普通字段草稿', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
   const input = dialog.getByTestId('config-field-model').locator('input')
   const original = await input.inputValue()
@@ -269,9 +269,9 @@ test('配置页：离开配置页会清空秘密替换输入，但保留普通�
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-keep').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await expect(page.getByTestId('nav-ability-draft')).toHaveText('1')
+  await expect(page.getByTestId('nav-providers-draft')).toHaveText('1')
 
-  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('nav-providers').click()
   await expect(dialog.getByTestId('config-field-model').locator('input')).toHaveValue(original + '-synthetic-draft')
   await expect(dialog.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
   await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -307,8 +307,8 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
 
 test('read-only configuration refresh between pointer down and up does not swallow discard', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
   const input = dialog.getByTestId('config-field-model').locator('input')
   const original = await input.inputValue()
@@ -377,8 +377,8 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
   await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toContainText(String(original))
 
   await page.getByTestId('config-enable-admin').click()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
   const model = dialog.getByTestId('config-field-model').locator('input')
   const originalModel = await model.inputValue()
@@ -395,8 +395,8 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
   await connect(page, ADMIN_TOKEN)
   await expect(page.getByTestId('overview')).toBeVisible()
   await page.getByTestId('enable-admin').click()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   await expect(model).toHaveValue(originalModel)
   await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
   await expect(dialog.locator('input[type=password]')).toHaveCount(0)
@@ -595,8 +595,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
   const renamed = `${original}-renamed`
 
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   await page.getByTestId('config-nav-registered').click()
   await expect(page.getByTestId('config-providers')).toBeVisible()
 
@@ -651,8 +651,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 
 test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   const secrets = page.getByTestId('ability-configuration-dialog').getByTestId('config-secrets')
   await secrets.getByTestId('secret-replace').first().click()
   await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')

@@ -27,12 +27,18 @@ async function openConfiguration(page: Page): Promise<void> {
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 }
 
-async function openCapability(page: Page, id: string, navKey: string) {
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId(`ability-settings-${id}`).click()
+async function openCapability(page: Page, id: 'models' | 'platform', navKey: string) {
+  if (id === 'models') {
+    await page.getByTestId('nav-providers').click()
+    await page.getByTestId('providers-routing-settings').click()
+  } else {
+    await page.getByTestId('nav-platforms').click()
+    await page.getByTestId('platforms-open-settings').click()
+  }
   const dialog = page.getByTestId('ability-configuration-dialog')
   await expect(dialog).toBeVisible()
-  await dialog.getByTestId(`config-nav-${navKey}`).click()
+  const nav = dialog.getByTestId(`config-nav-${navKey}`)
+  if (await nav.count()) await nav.click()
   return dialog
 }
 

@@ -1,0 +1,424 @@
+/* Consolidated responsive rules, rail mode, reflow & reduced-motion guarantees */
+
+@media (max-width: 1200px) {
+  :root {
+    --sidebar-w: 204px;
+  }
+  .app-main {
+    padding: 24px 24px 40px;
+  }
+  .topbar {
+    padding-inline: 22px;
+  }
+  .ov-split {
+    grid-template-columns: 1fr;
+  }
+  .ov-side {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+  .ov-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ov-card:nth-child(2) {
+    border-right: 0;
+  }
+  .ov-card:nth-child(-n+2) {
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .ov-quick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell--console {
+    flex-direction: column;
+  }
+  .app-frame {
+    margin-left: 0;
+  }
+  .sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    flex: none;
+    overflow: visible;
+    padding: 12px 18px;
+    gap: 12px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-brand {
+    padding: 0;
+    border: 0;
+  }
+  .sidebar-brand .brand-text,
+  .side-nav-group,
+  .sidebar-note,
+  .sidebar-footer,
+  .sidebar-rail-toggle {
+    display: none;
+  }
+  .side-nav {
+    display: flex;
+    flex-wrap: wrap;
+    flex: 1;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .side-nav-item {
+    min-height: 38px;
+    padding: 7px 10px;
+    font-size: var(--text-sm);
+    gap: 6px;
+  }
+  .side-nav-item.active::before {
+    display: none;
+  }
+  .topbar {
+    position: static;
+    min-height: 50px;
+    padding: 8px 18px;
+  }
+  .app-main {
+    padding: 20px 18px 36px;
+  }
+  .config-body {
+    grid-template-columns: 1fr;
+  }
+  .config-nav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --control-h: 44px;
+    --control-sm: 44px;
+  }
+  html {
+    scroll-padding-block: 16px 150px;
+  }
+  button,
+  .topbar-actions > button,
+  .theme-toggle,
+  .page-help summary,
+  .id-copy {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .theme-toggle,
+  .page-help summary {
+    width: 44px;
+    height: 44px;
+  }
+  .sidebar {
+    display: block;
+    padding: 14px 14px 10px;
+  }
+  .sidebar-brand {
+    margin-bottom: 12px;
+  }
+  .sidebar-brand .brand-text {
+    display: block;
+  }
+  .sidebar-brand .brand-text span {
+    display: none;
+  }
+  .sidebar-brand .brand-badge {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+  }
+  /* 8 primary destinations form a symmetrical 4x2 touch grid on small phones */
+  .side-nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .side-nav-item {
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 2px;
+    min-height: 56px;
+    min-width: 0;
+    font-size: var(--text-xs);
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+    position: relative;
+  }
+  .nav-badge {
+    position: absolute;
+    right: 2px;
+    top: 2px;
+    font-size: var(--text-xs);
+  }
+  .topbar {
+    padding: 8px 14px;
+    gap: 6px;
+  }
+  .crumbs {
+    display: none;
+  }
+  .topbar-actions {
+    gap: 6px;
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .topbar-actions > .tonal {
+    padding-inline: 10px;
+    font-size: var(--text-xs);
+  }
+  .connection-chip {
+    padding-inline: 8px;
+    font-size: var(--text-xs);
+  }
+  .page-help-content {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    top: auto;
+    bottom: 16px;
+    width: auto;
+  }
+  .app-main {
+    padding: 20px 14px 36px;
+  }
+  .page-heading {
+    gap: 14px;
+    padding-bottom: 16px;
+  }
+  .page-heading h1 {
+    font-size: 1.375rem;
+  }
+  .heading-actions {
+    width: 100%;
+  }
+  .panel {
+    padding: 16px 14px;
+  }
+  .overview {
+    gap: 16px;
+  }
+  .ov-hero h1 {
+    font-size: 1.375rem;
+  }
+  .ov-head-actions {
+    width: 100%;
+  }
+  .ov-head-actions button {
+    flex: 1;
+  }
+  .ov-card {
+    padding: 16px 14px;
+  }
+  .ov-kpi-value {
+    font-size: 1.375rem;
+  }
+  .ov-kpi-value--compact {
+    font-size: 1.125rem;
+  }
+  .ov-side {
+    grid-template-columns: 1fr;
+  }
+  .ov-table th:first-child {
+    width: 64%;
+  }
+  .ov-table th:nth-child(3) {
+    width: 36%;
+  }
+  .component-mobile-detail {
+    display: grid;
+    gap: 3px;
+    margin-top: 5px;
+    color: var(--text-soft);
+    font-size: var(--text-xs);
+  }
+  .ov-table th:nth-child(2),
+  .ov-table td:nth-child(2),
+  .ov-table th:nth-child(4),
+  .ov-table td:nth-child(4),
+  .ov-table th:nth-child(5),
+  .ov-table td:nth-child(5) {
+    display: none;
+  }
+  .ov-table td,
+  .ov-table th {
+    padding: 11px 8px;
+  }
+  .ov-quick-head {
+    display: block;
+  }
+  .ov-quick-grid {
+    grid-template-columns: 1fr;
+  }
+  .config-summary {
+    grid-template-columns: 1fr;
+  }
+  .receipt-grid {
+    grid-template-columns: 1fr;
+  }
+  .save-bar {
+    padding: 12px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .save-bar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .save-bar-actions button {
+    flex: 1;
+    padding-inline: 8px;
+  }
+  .switch-field {
+    min-height: 44px;
+  }
+  .dialog-backdrop {
+    padding: 12px;
+  }
+  .dialog {
+    padding: 18px;
+    max-height: calc(100dvh - 24px);
+  }
+  .dialog-actions button {
+    flex: 1 1 auto;
+  }
+  .task-form {
+    grid-template-columns: 1fr;
+  }
+  .task-item-head,
+  .task-approval-head {
+    flex-wrap: wrap;
+  }
+  .task-detail-head,
+  .task-section-head {
+    align-items: flex-start;
+  }
+  .app-shell--auth {
+    padding: 64px 14px 32px;
+  }
+  .auth-card {
+    grid-template-columns: 1fr;
+    box-shadow: var(--shadow-1);
+  }
+  .auth-story {
+    padding: 22px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .auth-brand-head {
+    margin: 0;
+  }
+  .auth-story h2,
+  .auth-story > p,
+  .auth-points,
+  .auth-story-foot {
+    display: none;
+  }
+  .auth-entry {
+    padding: 26px 22px;
+  }
+  .auth-card-head {
+    margin-bottom: 20px;
+  }
+  .auth-main {
+    padding: 0;
+  }
+}
+
+/* Desktop collapsible rail mode */
+@media (min-width: 901px) {
+  .app-shell--rail {
+    --sidebar-w: var(--sidebar-rail);
+  }
+  .app-shell--rail .sidebar {
+    padding-inline: 8px;
+  }
+  .app-shell--rail .sidebar-brand {
+    flex-direction: column;
+    gap: 8px;
+    padding-inline: 0;
+  }
+  .app-shell--rail .sidebar-rail-toggle {
+    margin-left: 0;
+  }
+  .app-shell--rail .brand-text,
+  .app-shell--rail .side-nav-group,
+  .app-shell--rail .sidebar-note,
+  .app-shell--rail .sidebar-footer {
+    display: none;
+  }
+  .app-shell--rail .side-nav-item {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .app-shell--rail .side-nav-item.active::before {
+    left: -8px;
+  }
+  .app-shell--rail .side-nav-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .app-shell--rail .nav-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 16px;
+    padding: 0 3px;
+    font-size: 0.6875rem;
+    line-height: 16px;
+  }
+}
+
+/* Global reflow, hit-target, and reduced-motion guarantees */
+:where(.app-shell, .app-layout, .app-workspace, .app-main, .dialog, .panel) {
+  min-width: 0;
+}
+:where(.topbar-actions, .dialog-actions, .heading-actions) {
+  flex-wrap: wrap;
+}
+:where(h1, h2, h3, label, button, .notice, .inline-notice, .muted) {
+  overflow-wrap: anywhere;
+}
+:where(input, select, textarea) {
+  max-width: 100%;
+}
+:where(button, summary) {
+  min-width: 24px;
+  min-height: 24px;
+}
+.id-copy {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+summary {
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

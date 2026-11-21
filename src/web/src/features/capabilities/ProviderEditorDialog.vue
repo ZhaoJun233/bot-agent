@@ -209,10 +209,10 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
 </script>
 
 <template>
-  <ManagementDialog :title="exists ? '提供商设置' : '添加提供商'" title-id="provider-editor-title" test-id="provider-editor"
-    :active="props.active" :trigger="props.trigger" :fallback="props.fallback" @close="requestClose">
+  <ManagementDialog :title="exists ? '模型供应商设置' : '新增模型供应商'" title-id="provider-editor-title" test-id="provider-editor"
+    drawer :active="props.active" :trigger="props.trigger" :fallback="props.fallback" @close="requestClose">
     <template #eyebrow><span class="eyebrow">MODEL PROVIDER</span></template>
-    <p class="muted">协议决定调用方式；品牌预设只辅助选择。凭据不回显，保存与测试都由后端处理。</p>
+    <p class="muted">协议决定调用方式；品牌预设仅用于快速填入默认参数。凭据不回显，保存与测试均由后端执行。</p>
     <div v-if="!canWrite" class="notice" data-testid="provider-readonly">
       当前只读。<button v-if="props.mode !== 'admin'" type="button" @click="emit('enable-admin')">启用管理员操作</button>
     </div>
@@ -303,26 +303,26 @@ onBeforeUnmount(() => { discardSecretsOnLeave(); alive = false; ++readSequence }
           <p class="field-hint">凭据名称用于关联已有密钥，不是密钥本身。新密钥只在本次保存中发送一次，后台不会回传原文。</p>
           <details><summary>凭据技术字段</summary><code>credentialKey</code> 是服务端关联名称；请勿填写密钥原文。</details>
         </section>
-        <label class="check-label"><input v-model="draft.enabled" data-testid="provider-enabled" type="checkbox" :disabled="!exists">启用此提供商</label>
-        <p v-if="!exists" class="notice" data-testid="provider-create-disabled">新提供商先保存为停用。检查配置、测试连接后，再单独启用。</p>
+        <label class="check-label"><input v-model="draft.enabled" data-testid="provider-enabled" type="checkbox" :disabled="!exists">启用此模型供应商</label>
+        <p v-if="!exists" class="notice" data-testid="provider-create-disabled">新增的模型供应商将先保存为停用状态。核对配置并测试连接后，再启用即可。</p>
         <p class="field-hint">配置或路由变更可能需要重启；此处不会自动重启服务。</p>
       </fieldset>
       <div class="editor-actions">
         <button type="submit" class="primary" data-testid="provider-save" :disabled="!canWrite || locked || loading || (exists && !changed)">{{ phase === 'saving' ? '正在保存…' : exists ? '保存更改' : '保存为停用' }}</button>
-        <button v-if="exists" type="button" data-testid="provider-test-saved" :disabled="!canWrite || locked || loading || changed" @click="emit('test', key)">测试已保存连接</button>
+        <button v-if="exists" type="button" class="tonal" data-testid="provider-test-saved" :disabled="!canWrite || locked || loading || changed" @click="emit('test', key)">测试已保存连接</button>
         <button type="button" @click="requestClose">关闭</button>
       </div>
       <section v-if="exists" class="danger-zone">
-        <p>删除不可撤销。仍被模型配置或其他对象引用的提供商会被后端拒绝删除，请先解除引用。</p>
-        <button v-if="!deleteArmed" type="button" data-testid="provider-delete" :disabled="!canWrite || locked || loading" @click="deleteArmed = true">删除提供商…</button>
+        <p>删除不可撤销。仍被模型配置或其他对象引用的模型供应商会被后端拒绝删除，请先解除引用。</p>
+        <button v-if="!deleteArmed" type="button" class="danger-ghost" data-testid="provider-delete" :disabled="!canWrite || locked || loading" @click="deleteArmed = true">删除模型供应商…</button>
         <div v-else class="notice warn" role="alert">
-          <p>确认删除此提供商？不会自动修改引用或重启服务。</p>
-          <button type="button" data-testid="provider-delete-confirm" :disabled="!canWrite || locked || loading" @click="save(true)">确认删除</button>
+          <p>确认删除此模型供应商？不会自动修改引用或重启服务。</p>
+          <button type="button" class="danger" data-testid="provider-delete-confirm" :disabled="!canWrite || locked || loading" @click="save(true)">确认删除</button>
           <button type="button" @click="deleteArmed = false">取消</button>
         </div>
       </section>
     </form>
-    <div v-if="deleted" class="notice" data-testid="provider-deleted">提供商已删除。运行状态若标为需重启，请在合适的时间手动重启。</div>
+    <div v-if="deleted" class="notice" data-testid="provider-deleted">模型供应商已删除。运行状态若标为需重启，请在合适的时间手动重启。</div>
     <div v-if="discardArmed" class="notice warn" role="alert" data-testid="provider-discard">
       <p>有未保存的草稿，确定放弃并关闭？</p><button type="button" @click="discardAndClose">放弃草稿</button><button type="button" @click="discardArmed = false">继续编辑</button>
     </div>

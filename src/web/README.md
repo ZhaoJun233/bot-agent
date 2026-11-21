@@ -1,8 +1,13 @@
-# BotAgent Web（阶段 6 S1–S6）
+# BotAgent Web 管理控制台
 
-Bearer 接入、契约兼容检查、概览，以及 S2 的配置读取与整批编辑。仅使用 ZBA `zba-1.0`（`cfg-0.3.3`），不调用旧 `/api`，不读取聊天正文。
+基于 Vue 3 + TypeScript + Vite 构建的独立前端控制台，仅使用 ZBA `zba-1.0`（`cfg-0.3.3`），不调用旧 `/api`，不读取聊天正文。
 
-已覆盖能力管理（含插件设置弹窗与启用开关）、任务提交/审批/取消与事件恢复（events 轮询订阅，`resyncRequired` 时整份补读）。
+采用 **3 组 8 项领域化导航**：
+- **工作台**：`系统概览`
+- **接入与扩展**：`模型供应商`、`消息平台`、`插件中心`、`系统配置`
+- **运行与观测**：`Agent 任务`、`轨迹与缓存`、`运行日志`
+
+通过 `src/features/capabilities/domain-catalog.ts` 结合 `GET /zba/v1/plugins/installed` 元数据，将 17 个内置包及第三方扩展精准归类至对应领域，避免把模型引擎、平台驱动与系统核心包堆砌在单一插件列表里。
 
 ## 环境要求
 
@@ -55,18 +60,18 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
 - Windows 保留默认测试端口时，可运行 `BOTAGENT_WEB_TEST_PORT=18474 npm run test:e2e`，未配置令牌的预览自动使用下一个端口。默认仍为 4174/4175。
 - 视觉矩阵：`BOTAGENT_WEB_TEST_PORT=18474 npx playwright test --config playwright.visual.config.ts redesign.spec.ts`；覆盖 1440/1024/768/390/375/320、深浅主题、颜色对比度、页面溢出、弹窗边界、能力搜索、主题切换和锁定。`VISUAL_OUT` 可指定截图输出目录。
 
-## S2：配置读取、编辑与 UI 归属收敛
+## S2：系统配置与领域 UI 归属
 
-- **基础配置与能力归属收敛**：
-  - 「基础配置」（配置页）仅展示 9 项关键通用参数：`aiModeEnabled`（AI 对话开关）、`botPersona`（机器人人设）、`groupInterjectionProbability`（普通群聊插话概率）、`groupInterjectionCooldownSeconds`（完整发送后的插话冷却）、`groupContinuationWaitSeconds`（群聊续发等待）、`privateContinuationWaitSeconds`（私聊续发等待）、`maxConcurrentReplies`（并发回复上限）、`maxContextMessages`（上下文条数）、`maxMessagesPerConversation`（会话保留条数）。
-  - 其余配置项与密钥槽位全部收敛到「能力管理」中对应能力与插件卡片的专属 UI：
-    - 对话与参与策略（`conversation`）：主动回复、参与节奏、分句、消息过滤与审批；
-    - 模型服务（`models`）：主模型连接、模型选择、采样参数、API 凭据与已登记提供商名称；
-    - Agent 与工具（`agent`）：任务执行、服务器连接、工具范围与 Agent 密钥；
-    - 平台接入与访问策略（`platform`）：私域、官方与飞书接入、白名单及飞书凭据；
-    - 健康报告（`reporting`）：报告开关、发送时间与接收范围；
-    - 插件专属配置：音乐、语音（含 TTS 密钥）、表情包、戳一戳、氛围、画像、搜索等收敛至能力页各插件卡片；
-    - Token 配额插件（`preset.feature.token-quota`）：专属卡片与管理弹窗，支持每日额度、用量及持久启停（参见 [Token 配额文档](../../docs/token-quota-plugin.md)）。
+- **按领域拆分配置入口**：
+  - **系统配置**（五分区纵向工作台）：
+    - `基础行为与人设`（`basic`）：保留 9 项核心通用参数（`aiModeEnabled`、`botPersona`、群聊/私聊插话与续话节奏、并发上限、上下文与会话保留条数）；
+    - `对话编排`（`conversation`）：主动回复、参与节奏、分句、消息过滤与审批；
+    - `内置 Agent 与工具`（`agent`）：任务执行、服务器连接、工具范围与 Agent 密钥；
+    - `健康日报`（`reporting`）：报告开关、发送时间与接收范围；
+    - `高级与系统包`（`system-packages`）：9 个 `system.*` 核心引擎包的只读版本与运行状态总览，支持按归属一键跳转至「模型供应商」「消息平台」或对应配置分区。
+  - **模型供应商**（`ProvidersPage.vue`）：集中管理模型供应商（主/备协议、默认模型、优先级、凭据与连接测试）、默认主/快模型路由设置（`models`）及 `system.model-services` 路由引擎状态。
+  - **消息平台**（`PlatformsPage.vue`）：集中管理 QQ 私域、QQ 官方开放平台、飞书与本地通道驱动卡片，覆盖连接启停、接入凭据、访问策略（`platform`）与消息能力声明。
+  - **插件中心**（`PluginsPage.vue`）：聚焦 8 个内置对话功能插件（音乐、语音含 TTS 密钥、表情包、戳一戳、氛围、画像、搜索、Token 配额）与第三方扩展，卡片内置启停开关、参数设置、一键「打开界面」（如表情包、Token 配额沙箱界面，且深浅主题通过 `PluginUiFrame.vue` 实时同步）及「已安装 / 插件市场 / 仓库与导入」三栏切换（配额细节参见 [Token 配额文档](../../docs/token-quota-plugin.md)）。
   - 架构设计与映射细节见 [配置 UI 归属](../../docs/configuration-ui-ownership.md)。
 - **动态插件归属**：配置能力目录动态跟随插件注册表，支持模块加载后扩展插件的动态登记、撤销与重新配置，确保扩展插件配置即时可访问。
 - 读取：`POST /configuration/read`（kind=1 可编辑投影）；标准模式只读，管理员模式才能改字段与秘密槽位。
@@ -80,16 +85,16 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
 - 核对结果：找到回执=已提交；NotFound(14)=未落盘，可换新键重存；代际变化(6)/键过期(5) 无法核对时重读快照；其它错误继续保留未知态。
 - 状态配对：保存与核对都只在 HTTP 状态与业务码构成契约配对时采纳结果（NotFound 必须 404，UnknownCommit 必须 503）。HTTP 503 上带 `code 14` 这类矛盾响应会抛安全错误，页面保留操作键与未知态，不据此断言“没有落盘”。
 
-## S2-3：能力管理
+## S2-3：模型供应商、消息平台与插件管理动作
 
-- 目录：`GET /capabilities` 读已登记驱动/插件/供应商，渲染真实运行时状态、期望开关、凭据与描述符版本。
+- 目录：`GET /capabilities` 读已登记驱动/插件/供应商，联合 `GET /plugins/installed` 补充中文名称、说明与版本信息，由 `domain-catalog.ts` 分发至「模型供应商」「消息平台」「插件中心」与「系统配置 → 高级与系统包」；渲染真实运行时状态、期望开关、凭据与描述符版本。
 - 支持矩阵：只渲染后端 `actions[]`；不可用动作显示 `reasonCode`，前端不猜能力。
 - 描述符：`POST /capabilities/inspect`；NotFound(2) 是 404 的可解释结果。
-- 动作：`POST /capabilities/execute` 需 admin，提交前重新 inspect 取当前描述符版本；`mg1:` 操作键来自 `configuration/read` 的真实 generation。
+- 动作：`POST /capabilities/execute` 需 admin（公共状态机位于 `use-capability-operations.ts`），提交前重新 inspect 取当前描述符版本；`mg1:` 操作键来自 `configuration/read` 的真实 generation。
 - 回执：显示结果码与动作状态；无回执时写“结果未知，操作键已保留”，可 `/capabilities/query` 核对、`/capabilities/cancel` 请求取消（只显示服务端真实状态，不写“已取消”）。
 - 操作生命周期：每次动作是一条 `OperationRecord`（key / target / command / descriptorRevision / phase），回执只是它的一个字段。确认后确认框立即退场，结果未知时页面内的核对、取消、重试入口不会被遮罩挡住。
 - 未知结果：不生成替代键。「用同一操作键重试」复用原 key、原命令与原 `expectedDescriptorRevision`，由服务端按幂等回放原回执；只有上一次已到终态（已完成 / 失败 / 已取消）或换了目标动作才产生新键。
-- 跨视图：能力页与配置页一样常驻（`v-show`），待核对的操作键在切到概览/配置后仍然保留；锁定、401、换令牌会作废整个会话的操作键。
+- 跨视图：领域页与系统配置页均常驻（`v-show`），待核对的操作键与未保存草稿在切换视图后仍然保留；顶栏提供全局管理员模式切换，锁定、401、换令牌会作废整个会话的操作键。
 - 所有权：每个 await 之后、发出写请求之前校验 client / 视图 / 权限 / 是否卸载；**离开视图、退出管理员模式、写能力失效都会推进所有权代数**，所以切走再切回来也不会把离开前那次确认补发出去。
 - 预检失败：对“结果未知”的操作再次确认只做只读核对（目标还在、动作仍受支持）。预检失败**不否定**先前那次提交——记录仍是未知，键与面板都保留，用户可以稍后核对或再重发。
 - 未终态不可关闭：只有终态（已完成 / 失败 / 已取消）或服务端明确拒绝的记录才能关闭并删除；未知或运行中的记录面板会保留，避免把唯一还带着操作键的入口收起来。
@@ -98,22 +103,22 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
 - 分页：仅在后端给 `nextCursor` 时出现“加载下一页”；翻页失败按真实错误展示并保留已加载列表，不绕过、不硬编码全量拉取。游标是后端签发的 Base64URL（无填充）+ 签名的既有契约，签发侧与查询侧的长度/字符集已对齐（见 `src/BotAgent.Storage/ManagedCapabilityService.cs` 的 `WriteCursor`/`ReadCursor` 与 `src/BotAgent.Panel/ZbaQuery.cs` 的 `GetCursor`）。
 - 权限：read 令牌可浏览目录与矩阵，动作按钮禁用；execute 由服务端 403 兜底。
 
-## S6：插件市场与自定义提供商
+## S6：模型供应商定制、插件市场与仓库导入
 
-- 提供商：能力页「添加提供商」打开 `ProviderEditorDialog.vue`，可新建/改协议（OpenAI Chat / Responses、Anthropic、Gemini、Azure、Ollama）、端点、模型名、优先级、凭据（沿用主模型 / 独立凭据 / 不配置）与启用开关。**新建一律先存为停用**，测试连接走「测试已保存连接」。
+- 模型供应商：「模型供应商」页「新增模型供应商」打开 `ProviderEditorDialog.vue`，可新建/改协议（OpenAI Chat / Responses、Anthropic、Gemini、Azure、Ollama）、端点、模型名、优先级、凭据（沿用主模型 / 独立凭据 / 不配置）与启用开关。**新建一律先存为停用**，测试连接走「测试已保存连接」。
 - 凭据：独立凭据的键名与密文只在本次提交里出现；响应只回 `credentialKey` / `credentialConfigured` / `modelCredentials[{key,configured,keyUsable}]`，正文永不回显。
 - 模型发现：「发现模型」调 `GET /providers/{key}/models`，结果进 datalist；服务端返回 `errorCode` 时退回手工输入，绝不因为发现失败而挡住保存。
-- 市场：能力页「数据源市场」打开 `PluginMarketplaceDialog.vue`（`PluginCatalogBrowser` + `DeclaredPluginSettings`）。清单声明的设置按类型渲染（string/boolean/number/select/secret），secret 只有 keep/set/delete 三态。
+- 插件市场与导入：「插件中心」内置「已安装插件 / 插件市场 / 仓库与导入」三栏切换（`PluginMarketplaceWorkspace.vue` + `PluginCatalogBrowser` + `PluginRepositoryImport` + `DeclaredPluginSettings`）。清单声明的设置按类型渲染（string/boolean/number/select/secret），secret 只有 keep/set/delete 三态。
 - 幂等：安装/更新/卸载/保存设置各自持有一个稳定操作键；结果未知时**复用同一个键**通过 `GET /plugins/operations/{key}` 核对，只有服务端明确 `idempotency_conflict`(409) 才作废换键，`plugin_operation_not_found`(404) 表示该键尚无回执、继续用原键核对。
 - 信任：安装前必须勾选信任声明；ZIP SHA-256 只做完整性校验，权限是声明而非沙箱边界，UI 明说这一点。
 - 数据源：只接受公开 GitHub 仓库主页或 `/releases/tag/固定版本`（本地先校验，不合格不发请求）；清单与包一律由服务端解析下载，浏览器不直接访问 `downloadUrl`。
 
 ## 阶段范围
 
-- 已实现：认证门、health/meta/status、契约兼容、概览组件/错误/空态、只读/管理员模式切换、锁定、配置 UI 归属收敛（基础配置白名单聚焦通用项、能力配置归属至能力管理 UI 并支持动态扩展插件）、能力目录/描述符/支持矩阵/动作回执/分页（S2-3）、Token 配额插件集成与专属配额管理、插件设置与启用开关、任务提交/审批/取消/事件恢复、供应商自定义与插件市场（S6）、淡蓝主题与响应式设计系统、chromium/firefox/webkit E2E 矩阵。
+- 已实现：认证门、health/meta/status、契约兼容、概览组件下钻/错误/空态、顶栏全局只读/管理员模式切换、锁定、四域拆分（模型供应商 / 消息平台 / 插件中心 / 系统配置五分区）、模块化 CSS 样式分层与共享 UI 原语、插件沙箱 iframe 深浅主题实时同步、Token 配额与表情包卡片直达界面、插件市场与仓库导入分栏、任务提交/审批/取消/事件恢复、轨迹节点级明细抽屉、脱敏运行日志终端（含自动换行切换）、chromium/firefox/webkit 三浏览器 E2E 与六宽度双主题视觉矩阵。
 - 静态生产承载：线上由 Caddy 从静态目录托管 `dist/`（`/web/*`），与后端容器解耦，可独立发布与回退；发布后必须跑 `tools/verify-web-deploy.sh`——只验 `/web/` 返回 200 不够，资源 MIME/路径错了照样白屏。
-- E2E 除既有 spec 外，`tests/e2e/marketplace.spec.ts` 覆盖市场对话框的只读/管理员两种入口、卡片级「市场」跳转，以及非 GitHub 数据源不发请求。
-- 未实现：MCP 管理页；资源预算只有本地测量，未设门禁。
+- E2E 覆盖全量领域页、市场分栏、配置恢复、三浏览器兼容、无障碍（320px/200% 缩放与 WCAG 对比度/触控目标）及 `BOTAGENT_WEB_TEST_RECOVERY=1` 故障恢复路径。
+- 未实现：独立 MCP 管理页；资源预算只有本地测量，未设门禁。
 
 ## 契约（`zba-1.0` 增量）
 

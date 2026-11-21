@@ -17,7 +17,11 @@ import {
 } from '../../shared/sync/event-scheduler'
 import { registerAppResources } from '../../shared/sync/app-resources'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
+import AppIcon from '../../shared/ui/AppIcon.vue'
+import BreakableId from '../../shared/ui/BreakableId.vue'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import UiTabs, { type UiTabOption } from '../../shared/ui/UiTabs.vue'
+import { remainingTime } from '../../shared/friendly'
 import { useDraftProtection } from '../../shared/ui/draft-protection'
 import { newNonce, nowSeconds } from '../configuration/draft'
 import TaskRecoveryLookup from './TaskRecoveryLookup.vue'
@@ -71,10 +75,48 @@ const loading = ref(false)
 const error = ref<UiError | null>(null)
 const pageError = ref<UiError | null>(null)
 const lastLoadedAt = ref<string | null>(null)
-const { detail, error: detailError, busy: detailBusy, open: openDetail, close: closeDetail } = useTaskResult({
+const { detail, error: detailError, busy: detailBusy, open: openTaskDetail, close: closeTaskDetail } = useTaskResult({
   client: () => props.client,
   reportAuthFailure
 })
+const selectedTaskId = ref<string | null>(null)
+const historyFilter = ref<'all' | 'active' | 'done' | 'failed'>('all')
+
+function openDetail(id: string): void {
+  selectedTaskId.value = id
+  void openTaskDetail(id)
+}
+function closeDetail(): void {
+  selectedTaskId.value = null
+  closeTaskDetail()
+}
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && (detail.value || detailError.value || detailBusy.value)) {
+    closeDetail()
+  }
+}
+const historyFilterOptions = computed<UiTabOption<'all' | 'active' | 'done' | 'failed'>[]>(() => {
+  const activeCount = tasks.value.filter(t => !terminalStates.includes(t.state)).length
+  const doneCount = tasks.value.filter(t => t.state === 3).length
+  const failedCount = tasks.value.filter(t => t.state === 4 || t.state === 6).length
+  return [
+    { value: 'all', label: '全部', count: tasks.value.length },
+    { value: 'active', label: '进行中', count: activeCount },
+    { value: 'done', label: '已完成', count: doneCount },
+    { value: 'failed', label: '失败 / 终止', count: failedCount }
+  ]
+})
+const visibleTasks = computed(() => {
+  if (historyFilter.value === 'all') return tasks.value
+  if (historyFilter.value === 'active') return tasks.value.filter(t => !terminalStates.includes(t.state))
+  if (historyFilter.value === 'done') return tasks.value.filter(t => t.state === 3)
+  return tasks.value.filter(t => t.state === 4 || t.state === 6)
+})
+function formatDuration(ms: number | undefined): string {
+  if (ms === undefined || !Number.isFinite(ms)) return '—'
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  return `${(ms / 1000).toFixed(1)} s`
+}
 const cancelBusy = ref(false)
 const cancelError = ref<UiError | null>(null)
 let cancelSequence = 0
@@ -781,9 +823,11 @@ onMounted(() => {
   syncSubmissionsWithRegistry()
   void load()
   void approvals.read()
+  if (typeof document !== 'undefined') document.addEventListener('keydown', onWindowKeydown)
 })
 
 onBeforeUnmount(() => {
+  if (typeof document !== 'undefined') document.removeEventListener('keydown', onWindowKeydown)
   abandonInFlight()
   unmounted = true
   ownership += 1
@@ -836,10 +880,10 @@ defineExpose({
   <section class="tasks" data-testid="tasks">
     <header class="page-heading">
       <div>
-        <p class="eyebrow">任务</p>
+        <p class="eyebrow">AGENT TASKS</p>
         <h1 id="tasks-title">Agent 任务与审批</h1>
         <p class="subtitle">
-          进行中 {{ activeTasks.length }} · 待审批 {{ approvalView.pendingCount }}
+          进行中 <strong>{{ activeTasks.length }}</strong> · 待审批 <strong>{{ approvalView.pendingCount }}</strong>
           <template v-if="lastLoadedAt"> · 读取于 {{ formatTime(lastLoadedAt) }}</template>
         </p>
       </div>
@@ -855,17 +899,11 @@ defineExpose({
           {{ syncBadgeText }}
         </span>
         <button type="button" class="tonal" data-testid="task-reload" :disabled="loading" @click="reloadAll">
+          <AppIcon name="refresh" :size="15" />
           {{ loading ? '读取中…' : '重新读取' }}
         </button>
       </div>
     </header>
-
-    <details class="inline-notice" data-testid="task-observation">
-      <summary>本次任务统计</summary>
-      <p>仅统计本次连接发出的提交，刷新或切换身份后重新计数。未完成、无法核对和未测得的数据会单独注明。</p>
-      <button type="button" class="tonal" data-testid="task-observation-export" @click="exportTaskObservation">导出本次统计</button>
-      <p v-if="observationExportError" role="alert">统计文件未能导出，请重试。任务状态不受影响。</p>
-    </details>
 
     <p v-if="syncSnapshot.state === 'stale'" class="inline-notice warn" data-testid="task-sync-stale">
       事件同步没有追平（连续失败 {{ syncSnapshot.failures }} 次）；
@@ -891,14 +929,6 @@ defineExpose({
       契约不兼容，写入口已禁用；本页只展示当前任务。
     </p>
 
-    <TaskRecoveryLookup
-      :client="props.client"
-      :enabled="props.active && props.mode === 'admin' && props.writesEnabled"
-      @found="reconcileRecoveredSubmission"
-      @open-task="openDetail($event.id)"
-      @auth-expired="emit('auth-expired', $event)"
-    />
-
     <ErrorNotice :error="error" title="读取任务失败" />
     <ErrorNotice :error="pageError" title="加载下一页失败" />
 
@@ -907,36 +937,38 @@ defineExpose({
         <div class="panel-heading">
           <p class="section-eyebrow">任务编排</p>
           <h2 id="task-composer-title">提交任务</h2>
-          <p class="config-guide">把要交给后台 Agent 的工作写在这里，提交后在执行记录中跟进。与群里的 // 指令效果相同。</p>
+          <p class="config-guide">把要交给后台 Agent 的工作写在这里，与群内 <code>//</code> 指令一致。</p>
         </div>
-        <div class="task-form">
-          <label>
-            <span>会话来源</span>
-            <input v-model="sourceKey" data-testid="task-source-key" placeholder="panel:synthetic" :disabled="!canFillForm" />
-          </label>
-          <label>
-            <span>会话 ID</span>
-            <input v-model="sessionId" data-testid="task-session-id" placeholder="synthetic-session" aria-describedby="task-session-hint" :disabled="!canFillForm" />
-            <small id="task-session-hint" class="field-hint">服务端按来源分配，提交后回填。</small>
-          </label>
-          <label class="task-form-wide">
-            <span>任务内容</span>
-            <textarea v-model="prompt" rows="4" data-testid="task-prompt" placeholder="描述目标、必要的上下文和预期结果…" :disabled="!canFillForm" />
-          </label>
-          <label class="task-timeout-field">
-            <span>超时（秒）</span>
-            <input v-model.number="timeoutSeconds" type="number" min="10" max="900" data-testid="task-timeout" aria-describedby="task-timeout-hint" :disabled="!canFillForm" />
-            <small id="task-timeout-hint" class="field-hint">10–900 秒</small>
-          </label>
-        </div>
-        <div class="task-compose-footer">
-          <p class="task-submit-hint">幂等键在提交前生成并冻结。结果未知时请先核对，换键重提会再次执行。</p>
-          <div class="dialog-actions">
-            <button type="button" class="primary" data-testid="task-submit" :disabled="!canSubmit" @click="submit">
-              {{ unresolved ? '先核对上一次提交' : submissions.some((item) => item.busy) ? '提交中…' : '提交任务' }}
-            </button>
+        <form @submit.prevent="submit">
+          <div class="task-form">
+            <label>
+              <span>会话来源</span>
+              <input v-model="sourceKey" data-testid="task-source-key" placeholder="例如：panel:default" :disabled="!canFillForm" />
+            </label>
+            <label>
+              <span>会话 ID</span>
+              <input v-model="sessionId" data-testid="task-session-id" placeholder="留空自动分配或回填" aria-describedby="task-session-hint" :disabled="!canFillForm" />
+              <small id="task-session-hint" class="field-hint">提交时由服务端按来源绑定并回填会话 ID。</small>
+            </label>
+            <label class="task-form-wide">
+              <span>任务内容</span>
+              <textarea v-model="prompt" rows="4" data-testid="task-prompt" placeholder="描述目标、必要的上下文和预期结果…" :disabled="!canFillForm" />
+            </label>
+            <label class="task-timeout-field">
+              <span>超时（秒）</span>
+              <input v-model.number="timeoutSeconds" type="number" min="10" max="900" data-testid="task-timeout" aria-describedby="task-timeout-hint" :disabled="!canFillForm" />
+              <small id="task-timeout-hint" class="field-hint">10–900 秒</small>
+            </label>
           </div>
-        </div>
+          <div class="task-compose-footer">
+            <p class="task-submit-hint">幂等键在提交前冻结；结果未知时请先核对，换键重提会再次执行。</p>
+            <div class="dialog-actions">
+              <button type="submit" class="primary" data-testid="task-submit" :disabled="!canSubmit">
+                {{ unresolved ? '先核对上一次提交' : submissions.some((item) => item.busy) ? '提交中…' : '提交任务' }}
+              </button>
+            </div>
+          </div>
+        </form>
         <p v-if="capacityFull" class="inline-notice warn" data-testid="task-submit-capacity">
           {{ capacityNote }}
         </p>
@@ -1021,7 +1053,7 @@ defineExpose({
               我明白，按新任务重新提交
             </button>
           </div>
-          <p class="cap-op-key">幂等键 <code data-testid="task-idempotency-key">{{ submission.key }}</code></p>
+          <p class="cap-op-key">幂等键 <code data-testid="task-idempotency-key"><BreakableId :value="submission.key" copyable /></code></p>
         </div>
       </section>
 
@@ -1030,10 +1062,22 @@ defineExpose({
           <p class="section-eyebrow">人工确认</p>
           <div class="task-section-title">
             <h2 id="task-approvals-title">待审批</h2>
-            <span v-if="approvalView.loaded && !approvalView.readError" class="status-badge" :data-tone="approvalView.pendingCount ? 'warn' : 'neutral'">{{ approvalView.pendingCount }} 项待处理</span>
+            <div class="approval-head-tools">
+              <span v-if="approvalView.loaded && !approvalView.readError" class="status-badge" :data-tone="approvalView.pendingCount ? 'warn' : 'neutral'">
+                {{ approvalView.pendingCount }} 项待处理
+              </span>
+              <button
+                type="button"
+                class="ghost approval-reload-btn"
+                data-testid="task-approvals-reload"
+                @click="approvals.read('manual')"
+              >
+                <AppIcon name="refresh" :size="14" />
+                重新读取队列
+              </button>
+            </div>
           </div>
-          <p class="config-guide">改文件、执行命令等风险操作会在此等待确认。批准后才继续，拒绝或过期不会执行。</p>
-          <p class="field-hint">摘要已脱敏；每次决定都绑定审批 ID。</p>
+          <p class="config-guide">风险工具调用会在此等待确认。摘要已脱敏；每次决定均绑定审批 ID。</p>
         </div>
         <ErrorNotice :error="approvalView.readError" title="读取待审批失败" />
         <ErrorNotice :error="approvalView.decisionError" title="审批没有完成" />
@@ -1060,7 +1104,9 @@ defineExpose({
               <span v-if="approval.stale" class="status-badge" :data-tone="approval.unknown ? 'warn' : 'bad'" :data-testid="'task-approval-stale-' + index">
                 {{ approval.unknown ? '结果未知' : '未生效' }}
               </span>
-              <span v-else class="status-badge" data-tone="warn">{{ formatTime(approval.expiresAt) }} 过期</span>
+              <span v-else class="status-badge" data-tone="warn" :title="formatTime(approval.expiresAt) + ' 过期'">
+                {{ remainingTime(approval.expiresAt) }}
+              </span>
             </div>
             <p class="task-approval-summary">{{ approval.summary }}</p>
             <p class="task-approval-meta">
@@ -1071,28 +1117,25 @@ defineExpose({
               <button
                 type="button"
                 class="primary"
-
-
-              :data-testid="'task-approve-' + index"
-              :disabled="!canWrite || approval.stale || approvalView.busyIds.includes(approval.id)"
-              @click="approvals.decide(approval, true)"
-            >
-              批准
-            </button>
-            <button
-              type="button"
-              class="tonal"
-              :data-testid="'task-reject-' + index"
-              :disabled="!canWrite || approval.stale || approvalView.busyIds.includes(approval.id)"
-              @click="approvals.decide(approval, false)"
-            >
-              拒绝
-            </button>
-          </div>
-        </li>
-      </ul>
-    </section>
-
+                :data-testid="'task-approve-' + index"
+                :disabled="!canWrite || approval.stale || approvalView.busyIds.includes(approval.id)"
+                @click="approvals.decide(approval, true)"
+              >
+                批准
+              </button>
+              <button
+                type="button"
+                class="tonal"
+                :data-testid="'task-reject-' + index"
+                :disabled="!canWrite || approval.stale || approvalView.busyIds.includes(approval.id)"
+                @click="approvals.decide(approval, false)"
+              >
+                拒绝
+              </button>
+            </div>
+          </li>
+        </ul>
+      </section>
     </div>
 
     <section class="panel task-history" aria-labelledby="task-history-title">
@@ -1103,173 +1146,252 @@ defineExpose({
         </div>
         <p class="task-history-meta">当前已载入 {{ tasks.length }} 项 · 进行中 {{ activeTasks.length }}</p>
       </div>
-    <ErrorNotice :error="cancelError" title="取消请求反馈" data-testid="task-cancel-feedback" />
-    <p v-if="loading && tasks.length === 0" class="empty-state" data-testid="task-loading">正在读取任务…</p>
-    <p v-else-if="!error && tasks.length === 0" class="empty-state" data-testid="task-empty">还没有任务。</p>
-    <div v-else class="task-list">
-      <article
-        v-for="task in tasks"
-        :key="task.id"
-        class="task-item"
-        :data-testid="'task-item-' + task.id"
-      >
-        <header class="task-item-head">
-          <div>
-            <p class="cap-kind">{{ task.target }}</p>
-            <h3 class="task-id">{{ task.id }}</h3>
-            <p class="cap-key">会话 {{ task.sessionId }}</p>
-          </div>
-          <span class="status-badge" :data-tone="stateTone(task.state)" data-testid="task-state">
-            {{ stateLabel(task.state) }}
-          </span>
-        </header>
-        <dl class="cap-meta">
-          <div><dt>创建</dt><dd>{{ formatTime(task.createdAt) }}</dd></div>
-          <div><dt>更新</dt><dd>{{ formatTime(task.updatedAt) }}</dd></div>
-          <div v-if="task.toolCalls !== undefined"><dt>工具调用</dt><dd>{{ task.toolCalls }}</dd></div>
-          <div v-if="task.errorCode"><dt>错误</dt><dd class="cap-error-code">{{ task.errorCode }}</dd></div>
-          <div v-if="task.cancellationRequested"><dt>取消</dt><dd>{{ isTerminal(task.state) ? '已请求（任务已结束，以状态为准）' : '已请求（未确认）' }}</dd></div>
-        </dl>
-        <div class="dialog-actions">
-          <button type="button" class="tonal" :data-testid="'task-result-' + task.id" @click="openDetail(task.id)">
-            查看结果
-          </button>
-          <button
-            v-if="!isTerminal(task.state)"
-            type="button"
-            class="tonal"
-            :data-testid="'task-cancel-' + task.id"
-            :disabled="!canWrite || cancelBusy || detailBusy"
-            @click="cancelTask(task)"
-          >
-            请求取消
-          </button>
-        </div>
-      </article>
-    </div>
-
-    <div v-if="nextCursor" class="cap-more">
-      <button type="button" class="tonal" data-testid="task-load-more" :disabled="loading" @click="loadMore">
-        {{ loading ? '加载中…' : '加载下一页' }}
-      </button>
-    </div>
-
-    </section>
-
-    <section v-if="detail || detailError" class="panel task-detail" data-testid="task-detail" aria-labelledby="task-detail-title">
-      <div class="panel-heading">
-        <p class="section-eyebrow">执行输出</p>
-        <div class="task-section-title">
-          <h2 id="task-detail-title">任务结果</h2>
-          <span v-if="detail" class="status-badge" :data-tone="stateTone(detail.state)">{{ stateLabel(detail.state) }}</span>
-        </div>
-        <p v-if="detail" class="task-result-id">任务 {{ detail.id }}</p>
+      <div v-if="tasks.length > 0" class="task-history-filter">
+        <UiTabs
+          :model-value="historyFilter"
+          :options="historyFilterOptions"
+          variant="pills"
+          label="按状态筛选任务历史"
+          @update:model-value="historyFilter = $event as 'all' | 'active' | 'done' | 'failed'"
+        />
       </div>
-      <ErrorNotice :error="detailError" title="读取结果失败" />
-      <template v-if="detail">
-        <p v-if="!detail.available" class="inline-notice warn" data-testid="task-result-unavailable">
-          结果不可用{{ detail.reasonCode ? '（' + detail.reasonCode + '）' : '' }}；任务状态仍以列表为准。
-        </p>
-        <template v-else>
-          <p class="task-summary" data-testid="task-result-summary">{{ detail.summary }}</p>
-          <p v-if="detail.summaryTruncated" class="inline-notice" data-testid="task-result-truncated">
-            摘要已截断，共 {{ detail.summaryChars }} 字。
-          </p>
-        </template>
-        <dl class="cap-meta">
-          <div><dt>更新</dt><dd>{{ formatTime(detail.updatedAt) }}</dd></div>
-          <div v-if="detail.toolCalls !== undefined"><dt>工具调用</dt><dd>{{ detail.toolCalls }}</dd></div>
-          <div v-if="detail.errorCode"><dt>错误</dt><dd class="cap-error-code">{{ detail.errorCode }}</dd></div>
-        </dl>
-      </template>
-      <button type="button" class="link-button" data-testid="task-detail-close" @click="closeDetail">
-        收起
-      </button>
+
+      <ErrorNotice :error="cancelError" title="取消请求反馈" data-testid="task-cancel-feedback" />
+      <p v-if="loading && tasks.length === 0" class="empty-state" data-testid="task-loading">正在读取任务…</p>
+      <p v-else-if="!error && tasks.length === 0" class="empty-state" data-testid="task-empty">还没有任务。</p>
+      <p v-else-if="visibleTasks.length === 0" class="empty-state">当前状态筛选下没有匹配任务。</p>
+      <div v-else class="task-list">
+        <article
+          v-for="task in visibleTasks"
+          :key="task.id"
+          class="task-item"
+          :class="{ 'is-selected': selectedTaskId === task.id && Boolean(detail || detailError || detailBusy) }"
+          :data-testid="'task-item-' + task.id"
+        >
+          <header class="task-item-head">
+            <div>
+              <p class="cap-kind">{{ task.target }}</p>
+              <h3 class="task-id">{{ task.id }}</h3>
+              <p class="cap-key">会话 {{ task.sessionId }}</p>
+            </div>
+            <span class="status-badge" :data-tone="stateTone(task.state)" data-testid="task-state">
+              {{ stateLabel(task.state) }}
+            </span>
+          </header>
+          <dl class="cap-meta">
+            <div><dt>创建</dt><dd>{{ formatTime(task.createdAt) }}</dd></div>
+            <div><dt>更新</dt><dd>{{ formatTime(task.updatedAt) }}</dd></div>
+            <div v-if="task.durationMs !== undefined"><dt>耗时</dt><dd class="mono">{{ formatDuration(task.durationMs) }}</dd></div>
+            <div v-if="task.toolCalls !== undefined"><dt>工具调用</dt><dd>{{ task.toolCalls }}</dd></div>
+            <div v-if="task.errorCode"><dt>错误</dt><dd class="cap-error-code">{{ task.errorCode }}</dd></div>
+            <div v-if="task.cancellationRequested"><dt>取消</dt><dd>{{ isTerminal(task.state) ? '已请求（任务已结束，以状态为准）' : '已请求（未确认）' }}</dd></div>
+          </dl>
+          <div class="dialog-actions">
+            <button type="button" class="tonal" :data-testid="'task-result-' + task.id" @click="openDetail(task.id)">
+              查看结果
+            </button>
+            <button
+              v-if="!isTerminal(task.state)"
+              type="button"
+              class="tonal"
+              :data-testid="'task-cancel-' + task.id"
+              :disabled="!canWrite || cancelBusy || detailBusy"
+              @click="cancelTask(task)"
+            >
+              请求取消
+            </button>
+          </div>
+        </article>
+      </div>
+
+      <div v-if="nextCursor" class="cap-more">
+        <button type="button" class="tonal" data-testid="task-load-more" :disabled="loading" @click="loadMore">
+          {{ loading ? '加载中…' : '加载下一页' }}
+        </button>
+      </div>
     </section>
+
+    <div class="task-tools-grid">
+      <TaskRecoveryLookup
+        :client="props.client"
+        :enabled="props.active && props.mode === 'admin' && props.writesEnabled"
+        @found="reconcileRecoveredSubmission"
+        @open-task="openDetail($event.id)"
+        @auth-expired="emit('auth-expired', $event)"
+      />
+
+      <details class="inline-notice" data-testid="task-observation">
+        <summary>本次任务统计（诊断导出）</summary>
+        <p>仅统计本次连接发出的提交，刷新或切换身份后重新计数。未完成、无法核对和未测得的数据会单独注明。</p>
+        <button type="button" class="tonal" data-testid="task-observation-export" @click="exportTaskObservation">导出本次统计</button>
+        <p v-if="observationExportError" role="alert">统计文件未能导出，请重试。任务状态不受影响。</p>
+      </details>
+    </div>
+
+    <div
+      v-if="detail || detailError || detailBusy"
+      class="task-drawer-backdrop"
+      @click.self="closeDetail"
+    >
+      <section
+        v-if="detail || detailError"
+        class="panel task-detail task-drawer"
+        data-testid="task-detail"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="task-detail-title"
+      >
+        <div class="task-drawer-head">
+          <div>
+            <p class="section-eyebrow">执行输出</p>
+            <div class="task-section-title">
+              <h2 id="task-detail-title">任务结果</h2>
+              <span v-if="detail" class="status-badge" :data-tone="stateTone(detail.state)">{{ stateLabel(detail.state) }}</span>
+            </div>
+            <p v-if="detail" class="task-result-id">
+              任务 <BreakableId :value="detail.id" copyable copy-label="复制任务 ID" />
+            </p>
+            <p v-else-if="selectedTaskId" class="task-result-id">任务 {{ selectedTaskId }}</p>
+          </div>
+          <button type="button" class="icon-close" aria-label="关闭结果抽屉" @click="closeDetail">×</button>
+        </div>
+
+        <div class="task-drawer-body">
+          <ErrorNotice :error="detailError" title="读取结果失败" />
+          <template v-if="detail">
+            <p v-if="!detail.available" class="inline-notice warn" data-testid="task-result-unavailable">
+              结果不可用{{ detail.reasonCode ? '（' + detail.reasonCode + '）' : '' }}；任务状态仍以列表为准。
+            </p>
+            <template v-else>
+              <p class="task-summary" data-testid="task-result-summary">{{ detail.summary }}</p>
+              <p v-if="detail.summaryTruncated" class="inline-notice" data-testid="task-result-truncated">
+                摘要已截断，共 {{ detail.summaryChars }} 字。
+              </p>
+            </template>
+            <dl class="cap-meta">
+              <div><dt>更新</dt><dd>{{ formatTime(detail.updatedAt) }}</dd></div>
+              <div v-if="detail.durationMs !== undefined"><dt>耗时</dt><dd class="mono">{{ formatDuration(detail.durationMs) }}</dd></div>
+              <div v-if="detail.toolCalls !== undefined"><dt>工具调用</dt><dd>{{ detail.toolCalls }}</dd></div>
+              <div v-if="detail.errorCode"><dt>错误</dt><dd class="cap-error-code">{{ detail.errorCode }}</dd></div>
+            </dl>
+          </template>
+        </div>
+
+        <div class="task-drawer-foot">
+          <button type="button" class="tonal" data-testid="task-detail-close" @click="closeDetail">
+            收起
+          </button>
+        </div>
+      </section>
+      <section
+        v-else-if="detailBusy"
+        class="panel task-detail task-drawer"
+        data-testid="task-detail-loading"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="task-drawer-head">
+          <div>
+            <p class="section-eyebrow">执行输出</p>
+            <h2>正在读取任务结果…</h2>
+            <p v-if="selectedTaskId" class="task-result-id">任务 {{ selectedTaskId }}</p>
+          </div>
+          <button type="button" class="icon-close" aria-label="取消查看结果" @click="closeDetail">×</button>
+        </div>
+        <div class="task-drawer-body">
+          <p class="inline-notice">正在读取任务结果，请稍候…</p>
+        </div>
+      </section>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .tasks { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-.tasks .panel { min-width: 0; margin: 0; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: none; }
+.tasks .panel { min-width: 0; margin: 0; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-1); }
 .heading-actions { flex-wrap: wrap; }
 .task-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
-.tasks .task-composer { border-top: 2px solid var(--accent-deep); }
-.tasks .panel-heading { display: grid; gap: 8px; margin: 0 0 20px; }
-.tasks .panel-heading h2, .task-history-heading h2 { margin: 0; color: var(--text); font-size: 18px; font-weight: 650; letter-spacing: -.025em; line-height: 1.4; }
-.tasks .panel-heading p { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.65; }
-.tasks .section-eyebrow { margin: 0 0 4px; color: var(--text-soft); font-size: 11px; font-weight: 650; line-height: 1.4; letter-spacing: .08em; }
+.tasks .task-composer { border-top: 2px solid var(--accent-brand); }
+.tasks .panel-heading { display: grid; gap: 6px; margin: 0 0 18px; }
+.tasks .panel-heading h2, .task-history-heading h2 { margin: 0; color: var(--text); font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.02em; line-height: 1.35; }
+.tasks .panel-heading p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); line-height: 1.6; }
+.tasks .section-eyebrow { margin: 0 0 2px; color: var(--text-soft); font-size: var(--text-xs); font-weight: 650; line-height: 1.4; letter-spacing: 0.08em; }
 .task-section-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
-.task-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; margin: 0; }
-.task-form label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 13px; }
+.approval-head-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.approval-reload-btn { min-height: 30px; padding: 4px 10px; font-size: var(--text-xs); }
+.task-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.task-form label { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--text-sm); }
 .task-form label > span { color: var(--text); font-weight: 550; }
-.task-form input, .task-form textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 36px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; line-height: 1.5; }
-.task-form textarea { min-height: 126px; resize: vertical; }
+.task-form input, .task-form textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 36px; padding: 8px 10px; border: 1px solid var(--border-input); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: var(--text-base); line-height: 1.5; }
+.task-form textarea { min-height: 120px; resize: vertical; }
 .task-form input::placeholder, .task-form textarea::placeholder { color: var(--text-soft); }
 .task-form input:disabled, .task-form textarea:disabled { background: var(--surface-muted); color: var(--text-muted); cursor: not-allowed; }
 .task-form-wide { grid-column: 1 / -1; }
 .task-timeout-field { max-width: 180px; }
-.tasks .field-hint { color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.6; }
-.task-compose-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
-.task-submit-hint { flex: 1; max-width: 52ch; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+.tasks .field-hint { color: var(--text-muted); font-size: var(--text-xs); font-weight: 400; line-height: 1.55; }
+.task-compose-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+.task-submit-hint { flex: 1; max-width: 52ch; margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.65; }
 .tasks .dialog-actions { border-top: 0; padding-top: 0; display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 8px; margin: 0; }
 .task-compose-footer .dialog-actions { flex-shrink: 0; }
-.tasks button { min-height: 36px; border-radius: 8px; }
-.tasks button:focus-visible, .task-form input:focus-visible, .task-form textarea:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 3px; }
-.tasks .inline-notice { max-width: 100%; line-height: 1.7; overflow-wrap: anywhere; }
+.tasks .inline-notice { max-width: 100%; line-height: 1.65; overflow-wrap: anywhere; }
 .tasks .inline-notice button { white-space: normal; }
-.task-submission { display: grid; gap: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.task-submission { display: grid; gap: 10px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
 .task-submission > .inline-notice { margin: 0; }
-.task-submission .cap-op-key { margin: 0; color: var(--text-soft); font-size: 12px; overflow-wrap: anywhere; }
-.task-submission code { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.task-submission .cap-op-key { margin: 0; color: var(--text-soft); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.task-submission code { color: var(--text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .task-approval-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
-.task-approval-list li { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
+.task-approval-list li { display: grid; gap: 10px; min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-muted); }
 .task-approval-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
-.task-approval-head strong { min-width: 0; color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-.task-approval-head .status-badge { white-space: normal; }
-.task-approval-summary { margin: 0; color: var(--text); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
-.task-approval-meta { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.task-approval-list li.task-approval-stale { opacity: 1; border-style: dashed; }
+.task-approval-head strong { min-width: 0; color: var(--text); font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
+.task-approval-summary { margin: 0; color: var(--text); font-size: var(--text-base); line-height: 1.65; overflow-wrap: anywhere; }
+.task-approval-meta { margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.6; overflow-wrap: anywhere; }
+.task-approval-list li.task-approval-stale { border-style: dashed; }
 .task-approval-stale .task-approval-head strong { color: var(--text-muted); }
-.task-approval-list .dialog-actions { padding-top: 4px; }
-.tasks .empty-state { margin: 0; padding: 28px 16px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--surface-muted); color: var(--text-muted); text-align: center; font-size: 13px; line-height: 1.7; }
-.task-history-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
-.task-history-meta { margin: 0; color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-history-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+.task-history-meta { margin: 0; color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.task-history-filter { margin-bottom: 16px; }
 .task-list { display: grid; gap: 0; margin: 0; }
-.task-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 24px; min-width: 0; padding: 20px 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none; }
-.task-item:first-child { padding-top: 0; border-top: 0; }
-.task-item:last-child { padding-bottom: 0; }
+.task-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; min-width: 0; padding: 16px 10px; border: 0; border-top: 1px solid var(--border-subtle); border-radius: var(--radius); background: transparent; box-shadow: none; }
+.task-item:first-child { border-top: 0; }
 .task-item-head { display: flex; grid-column: 1 / -1; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
 .task-item-head > div { min-width: 0; }
-.task-item .cap-kind { margin: 0 0 5px; color: var(--text-soft); font-size: 11px; font-weight: 550; }
-.task-id { margin: 0; color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
-.task-item .cap-key { margin: 5px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.tasks .cap-meta { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 24px; min-width: 0; margin: 0; }
-.tasks .cap-meta > div { display: grid; gap: 4px; min-width: 0; }
-.tasks .cap-meta dt { color: var(--text-soft); font-size: 11px; }
-.tasks .cap-meta dd { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.tasks .cap-meta .cap-error-code { color: var(--bad-text); font-family: var(--font-mono, ui-monospace, monospace); }
+.task-item .cap-kind { margin: 0 0 4px; color: var(--text-soft); font-size: var(--text-xs); font-weight: 550; }
+.task-id { margin: 0; color: var(--text); font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.task-item .cap-key { margin: 4px 0 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.55; overflow-wrap: anywhere; }
+.tasks .cap-meta { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; min-width: 0; margin: 0; }
+.tasks .cap-meta > div { display: grid; gap: 3px; min-width: 0; }
+.tasks .cap-meta dt { color: var(--text-soft); font-size: var(--text-xs); }
+.tasks .cap-meta dd { margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.55; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tasks .cap-meta .cap-error-code { color: var(--bad-text); font-family: var(--font-mono); }
 .task-item > .dialog-actions { align-self: end; justify-content: flex-end; }
-.task-history .cap-more { margin: 20px 0 0; padding-top: 20px; border-top: 1px solid var(--border); text-align: center; }
-.tasks .task-detail { border-inline-start: 3px solid var(--accent-deep); }
-.task-detail .task-result-id { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; overflow-wrap: anywhere; }
-.task-summary { margin: 0 0 20px; padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); color: var(--text); font-size: 14px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-detail > .link-button { margin-top: 16px; }
+.task-history .cap-more { margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--border-subtle); text-align: center; }
+.task-tools-grid { display: grid; gap: 12px; }
+/* Right slide-over drawer kept inside component DOM for seamless focus and test queries */
+.task-drawer-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end; background: rgba(11, 20, 30, 0.48); animation: backdrop-in var(--duration) var(--ease); }
+.tasks .task-drawer { display: flex; flex-direction: column; width: min(620px, 100vw); height: 100dvh; max-height: 100dvh; padding: 0; border-radius: 18px 0 0 18px; border-right: 0; box-shadow: var(--shadow-2); animation: drawer-in var(--duration) var(--ease); }
+.task-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px 24px 14px; border-bottom: 1px solid var(--border-subtle); }
+.task-drawer-head .icon-close { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; font-size: 1.375rem; line-height: 1; }
+.task-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 24px; display: grid; align-content: start; gap: 16px; }
+.task-drawer-foot { display: flex; justify-content: flex-end; padding: 14px 24px; border-top: 1px solid var(--border-subtle); }
+.task-detail .task-result-id { margin: 6px 0 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-soft); overflow-wrap: anywhere; }
+.task-summary { margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-muted); color: var(--text); font-size: var(--text-base); line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (min-width: 1200px) { .task-workspace { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); } }
+@media (max-width: 1199px) { .task-approvals { order: -1; } }
 @media (max-width: 767px) {
   .tasks { gap: 16px; }
   .task-workspace { gap: 16px; }
-  .tasks .panel { padding: 18px; }
-  .task-compose-footer { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .tasks .panel { padding: 16px; }
+  .task-compose-footer { align-items: flex-start; flex-direction: column; gap: 12px; }
   .task-compose-footer .dialog-actions { width: 100%; }
-  .task-item { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .task-item { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .task-item > .dialog-actions { justify-content: flex-start; }
-  .tasks button, .task-form input { min-height: 44px; }
-  .task-form textarea { min-height: 140px; }
+  .task-drawer-head .icon-close { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+  .tasks .task-drawer { border-radius: 0; }
+  .task-form textarea { min-height: 132px; }
   .task-approval-head { flex-direction: column; }
 }
 @media (max-width: 479px) {
-  .task-form { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .task-form { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .task-timeout-field { max-width: none; }
   .task-compose-footer .primary { width: 100%; }
   .task-summary { padding: 14px; }

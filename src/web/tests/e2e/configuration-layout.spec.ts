@@ -41,11 +41,11 @@ async function connect(page: Page): Promise<void> {
 
 async function compactField(row: Locator, desktop: boolean): Promise<void> {
   await expect(row).toBeVisible()
-  const control = row.locator('input, select').first()
+  const control = row.locator('input, select, button[role="switch"]').first()
   await expect(control).toBeVisible()
   const geometry = await row.evaluate(element => {
     const identity = element.querySelector('.setting-identity')!.getBoundingClientRect()
-    const input = element.querySelector('input, select')!.getBoundingClientRect()
+    const input = element.querySelector('input, select, button[role="switch"]')!.getBoundingClientRect()
     return { height: element.getBoundingClientRect().height, gap: input.x - identity.right,
       inputHeight: input.height, inputWidth: input.width, identityWidth: identity.width }
   })
@@ -78,49 +78,82 @@ for (const width of [1850, 1024, 390]) {
     await page.getByTestId('config-enable-admin').click()
     await compactField(page.getByTestId('config-field-aiModeEnabled'), width > 600)
     await compactField(page.getByTestId('config-field-groupInterjectionCooldownSeconds'), width > 600)
-    const persona = page.getByTestId('config-field-botPersona').locator('input')
+    const persona = page.getByTestId('config-field-botPersona').locator('textarea')
     await expect(persona).toBeVisible()
     expect((await persona.boundingBox())!.width).toBeLessThanOrEqual(640)
     await page.screenshot({ path: testInfo.outputPath('basic-density.png'), fullPage: true })
 
-    await page.getByTestId('nav-capabilities').click()
+    // System configuration tabs (agent / conversation / reporting)
+    for (const [tab, paneId, field] of [
+      ['sysconfig-tab-agent', 'sysconfig-pane-agent', 'enableServerAgent'],
+      ['sysconfig-tab-conversation', 'sysconfig-pane-conversation', 'enableProactive'],
+      ['sysconfig-tab-reporting', 'sysconfig-pane-reporting', 'healthReportEnabled']
+    ] as const) {
+      await page.getByTestId(tab).click()
+      const row = page.getByTestId(paneId).getByTestId('config-field-' + field)
+      await compactField(row, width > 600)
+    }
+
+    // Domain drawers: Model Providers (routing + editor), Message Platforms (policy), Plugins (voice/music/poke/token-quota)
+    await page.getByTestId('nav-providers').click()
+    await page.getByTestId('providers-routing-settings').click()
+    {
+      const dialog = page.getByTestId('ability-configuration-dialog')
+      await squareClose(dialog, width <= 640)
+      const row = dialog.getByTestId('config-field-fastReply')
+      await compactField(row, width > 600)
+      await row.locator('input[role="switch"], button[role="switch"], select').first().focus()
+      await row.hover()
+      const backgrounds = await row.locator('td').evaluateAll(cells => cells.map(cell => getComputedStyle(cell).backgroundColor))
+      expect(backgrounds.every(color => color === 'rgba(0, 0, 0, 0)')).toBe(true)
+      await dialog.locator('.icon-close').click()
+      await expect(dialog).toHaveCount(0)
+    }
+    await page.getByTestId('cap-add-provider').click()
+    {
+      const dialog = page.getByTestId('provider-editor')
+      await squareClose(dialog, width <= 640)
+      const priority = dialog.getByTestId('provider-priority')
+      await expect(priority).toBeVisible()
+      expect(await priority.evaluate(element => (element as HTMLElement).offsetWidth)).toBeLessThanOrEqual(180)
+      await dialog.locator('.icon-close').click()
+      await expect(dialog).toHaveCount(0)
+    }
+
+    await page.getByTestId('nav-platforms').click()
+    await page.getByTestId('platforms-open-settings').click()
+    {
+      const dialog = page.getByTestId('ability-configuration-dialog')
+      await squareClose(dialog, width <= 640)
+      await compactField(dialog.getByTestId('config-field-officialEnabled'), width > 600)
+      await dialog.locator('.icon-close').click()
+      await expect(dialog).toHaveCount(0)
+    }
+
+    await page.getByTestId('nav-plugins').click()
     for (const [trigger, field] of [
-      ['ability-settings-models', 'fastReply'],
-      ['ability-settings-agent', 'enableServerAgent'],
-      ['ability-settings-conversation', 'enableProactive'],
-      ['ability-settings-platform', 'officialEnabled'],
-      ['ability-settings-reporting', 'healthReportEnabled'],
       ['cap-settings-plugin:preset.feature.voice', 'enableVoice'],
       ['cap-settings-plugin:preset.feature.music', 'enableMusic'],
       ['cap-settings-plugin:preset.feature.poke', 'enablePoke']
-    ]) {
-      await page.getByTestId(trigger!).click()
+    ] as const) {
+      await page.getByTestId(trigger).click()
       const dialog = page.getByTestId('ability-configuration-dialog')
       await squareClose(dialog, width <= 640)
       const row = dialog.getByTestId('config-field-' + field)
       await compactField(row, width > 600)
-      await row.locator('select').first().focus()
+      await row.locator('input[role="switch"], button[role="switch"], select').first().focus()
       await row.hover()
       const backgrounds = await row.locator('td').evaluateAll(cells => cells.map(cell => getComputedStyle(cell).backgroundColor))
       expect(backgrounds.every(color => color === 'rgba(0, 0, 0, 0)')).toBe(true)
-      await page.screenshot({ path: testInfo.outputPath(trigger!.replace(/[^a-z-]/gi, '-') + '.png') })
+      await page.screenshot({ path: testInfo.outputPath(trigger.replace(/[^a-z-]/gi, '-') + '.png') })
       if (field === 'enablePoke') await row.screenshot({ path: testInfo.outputPath('poke-field.png') })
       await dialog.locator('.icon-close').click()
       await expect(dialog).toHaveCount(0)
     }
-    for (const [trigger, id] of [
-      ['cap-settings-plugin:preset.feature.token-quota', 'token-quota-dialog'],
-      ['cap-add-provider', 'provider-editor'],
-      ['cap-marketplace', 'marketplace']
-    ]) {
-      await page.getByTestId(trigger!).click()
-      const dialog = page.getByTestId(id!)
+    await page.getByTestId('cap-settings-plugin:preset.feature.token-quota').click()
+    {
+      const dialog = page.getByTestId('token-quota-dialog')
       await squareClose(dialog, width <= 640)
-      if (id === 'provider-editor') {
-        const priority = dialog.getByTestId('provider-priority')
-        await expect(priority).toBeVisible()
-        expect(await priority.evaluate(element => (element as HTMLElement).offsetWidth)).toBeLessThanOrEqual(180)
-      }
       await dialog.locator('.icon-close').click()
       await expect(dialog).toHaveCount(0)
     }
@@ -131,8 +164,8 @@ for (const width of [1850, 1024, 390]) {
 
 test('all preset plugin cards expose visible switches; quota toggle and restore hot-apply with durable receipts', async ({ page }, testInfo) => {
   await connect(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('cap-enable-admin').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('plugins-enable-admin').click()
   for (const key of ['music', 'voice', 'stickers', 'poke', 'vibes', 'profiles', 'websearch', 'token-quota']) {
     const toggle = page.getByTestId('cap-switch-plugin:preset.feature.' + key)
     await expect(toggle).toBeVisible()

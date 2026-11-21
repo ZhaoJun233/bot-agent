@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AuthGate from './features/auth/AuthGate.vue'
 import OverviewPage from './features/overview/OverviewPage.vue'
-import ConfigurationPage from './features/configuration/ConfigurationPage.vue'
-import CapabilitiesPage from './features/capabilities/CapabilitiesPage.vue'
+import ProvidersPage from './features/providers/ProvidersPage.vue'
+import PlatformsPage from './features/platforms/PlatformsPage.vue'
+import PluginsPage from './features/plugins/PluginsPage.vue'
+import SystemConfigurationPage from './features/configuration/SystemConfigurationPage.vue'
 import TasksPage from './features/tasks/TasksPage.vue'
 import TracesPage from './features/traces/TracesPage.vue'
 import RuntimeLogsPage from './features/logs/RuntimeLogsPage.vue'
-import AppIcon from './shared/ui/AppIcon.vue'
+import AppIcon, { type AppIconName } from './shared/ui/AppIcon.vue'
 import BrandMark from './shared/ui/BrandMark.vue'
 import ThemeToggle from './shared/ui/ThemeToggle.vue'
 import { evaluateCompatibility } from './api/compat'
@@ -22,6 +24,16 @@ import { toUiError, type UiError } from './shared/ui/ui-error'
 import { acquireScheduler } from './shared/sync/event-scheduler'
 import { registerAppResources, resetAppResourceSignals } from './shared/sync/app-resources'
 
+export type AppView =
+  | 'overview'
+  | 'providers'
+  | 'platforms'
+  | 'plugins'
+  | 'configuration'
+  | 'tasks'
+  | 'traces'
+  | 'logs'
+
 const token = ref('')
 const mode = ref<'read' | 'admin'>('read')
 const health = ref<ZbaHealth | null>(null)
@@ -31,11 +43,12 @@ const error = ref<UiError | null>(null)
 const authError = ref<UiError | null>(null)
 const adminError = ref<UiError | null>(null)
 const loading = ref(false)
+const subviewBusy = ref(false)
 const connecting = ref(false)
+const adminPending = ref(false)
 const lastSuccessAt = ref<string | null>(null)
-const view = ref<'overview' | 'configuration' | 'capabilities' | 'tasks' | 'traces' | 'logs'>('overview')
-const configurationPage = ref<InstanceType<typeof ConfigurationPage> | null>(null)
-// 侧栏收起（仅宽屏生效）：偏好存在 localStorage；读写失败时退回展开，不影响其它功能。
+const view = ref<AppView>('overview')
+
 const RAIL_KEY = 'botagent.sidebar.rail'
 function readRail(): boolean {
   try { return globalThis.localStorage?.getItem(RAIL_KEY) === '1' } catch { return false }
@@ -55,70 +68,138 @@ function toggleRail() {
     rail.value = false
   }
 }
-// 配置页首次进入后保持挂载（v-show），草稿因此跨页保留；锁定/换令牌时才卸载。
+
+const helpDetails = ref<HTMLDetailsElement | null>(null)
+function closeHelpIfOutside(event: MouseEvent): void {
+  const el = helpDetails.value
+  if (!el || !el.open) return
+  if (event.target instanceof Node && !el.contains(event.target)) el.open = false
+}
+function closeHelpOnEscape(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && helpDetails.value?.open) helpDetails.value.open = false
+}
+
+// 首次进入后保持挂载（v-show），使草稿与待核对操作键在跨页切换时保留；锁定/换令牌时卸载。
+const providersPage = ref<InstanceType<typeof ProvidersPage> | null>(null)
+const providersMounted = ref(false)
+const platformsPage = ref<InstanceType<typeof PlatformsPage> | null>(null)
+const platformsMounted = ref(false)
+const pluginsPage = ref<InstanceType<typeof PluginsPage> | null>(null)
+const pluginsMounted = ref(false)
+const configurationPage = ref<InstanceType<typeof SystemConfigurationPage> | null>(null)
 const configurationMounted = ref(false)
-const capabilitiesPage = ref<InstanceType<typeof CapabilitiesPage> | null>(null)
-// 能力页同样首次进入后保持挂载（v-show）：待核对的操作键要能跨视图存活。
-const capabilitiesMounted = ref(false)
 const tasksPage = ref<InstanceType<typeof TasksPage> | null>(null)
-// 任务页同样常驻：提交记录与幂等键要能跨视图存活。
 const tasksMounted = ref(false)
 const tracesPage = ref<InstanceType<typeof TracesPage> | null>(null)
-// 轨迹页同样首次进入后常驻（v-show）：再次进入只需重读。
 const tracesMounted = ref(false)
 const logsPage = ref<InstanceType<typeof RuntimeLogsPage> | null>(null)
 const logsMounted = ref(false)
+
 const sessionNotice = ref<string | null>(null)
 const configDraftCount = computed(() => configurationPage.value?.draftCount ?? 0)
-const abilityDraftCount = computed(() => capabilitiesPage.value?.configurationDraftCount ?? 0)
+const providersDraftCount = computed(() => providersPage.value?.draftCount ?? 0)
+const platformsDraftCount = computed(() => platformsPage.value?.draftCount ?? 0)
+const pluginsDraftCount = computed(() => pluginsPage.value?.draftCount ?? 0)
+const totalDraftCount = computed(() =>
+  configDraftCount.value + providersDraftCount.value + platformsDraftCount.value + pluginsDraftCount.value
+)
 
-type GuideIcon = 'overview' | 'capabilities' | 'config' | 'tasks' | 'traces' | 'logs'
-/** 每个页面顶部的「这一页是干什么的」：一句话用途 + 两三条怎么用。 */
-const pageGuides: Record<typeof view.value, { title: string; icon: GuideIcon; summary: string; tips: string[] }> = {
+const pageGuides: Record<AppView, { title: string; group: string; icon: AppIconName; summary: string; tips: string[] }> = {
   overview: {
     title: '系统概览',
+    group: '工作台',
     icon: 'overview',
-    summary: '机器人此刻的整体健康度、各组件状态和最近的错误。',
-    tips: ['先看顶部问候卡：绿色代表一切正常，橙色或红色说明有组件需要处理。', '组件表里点不动的原因码已翻译成中文，悬停可看原始代码。', '要改东西，先点「进入管理员模式」。']
+    summary: '查看运行健康状态、组件在线情况与近期异常，点击任意异常项可直达对应页面排查。',
+    tips: [
+      '顶部状态栏展示总体健康结论与备份健康告警。',
+      '点击组件状态表中的条目可直接跳转至对应的模型供应商、消息平台或插件页面。',
+      '右上角顶栏支持在任意页面随时切入或退出管理员模式。'
+    ]
   },
-  capabilities: {
-    title: '插件与平台',
-    icon: 'capabilities',
-    summary: '按类别管理平台驱动、插件、模型提供商与 MCP：开关、启动停止和插件设置都在这里。',
-    tips: ['用上方标签按类别筛选。', '插件卡片上的开关决定功能是否生效，「⚙ 设置」打开该插件自己的参数。', '启动 / 停止等动作需要管理员模式，提交后会自动核对结果。']
+  providers: {
+    title: '模型供应商',
+    group: '接入与扩展',
+    icon: 'provider',
+    summary: '集中管理 OpenAI / Anthropic / Gemini 等模型供应商、默认主/快模型路由及连接测试。',
+    tips: [
+      '点击「新增模型供应商」通过品牌预设快速创建，默认保存为停用，测连通过后再启用。',
+      '点击「路由与默认模型」调整主模型、快速回复模型与全局凭据。',
+      '供应商改名提交真实名称（nameRaw），凭据只写不回显。'
+    ]
+  },
+  platforms: {
+    title: '消息平台',
+    group: '接入与扩展',
+    icon: 'platform',
+    summary: '管理 QQ 私域、QQ 官方开放平台、飞书与本地调试通道的驱动启停、接入凭据与访问策略。',
+    tips: [
+      '每张平台卡已整合驱动状态、运行启停与对应底层驱动包版本。',
+      '点击「接入与策略」编辑白名单/黑名单、动作规则与平台密钥。',
+      'QQ 官方开放平台提供专属「消息能力与限制」视图。'
+    ]
+  },
+  plugins: {
+    title: '插件中心',
+    group: '接入与扩展',
+    icon: 'plugin',
+    summary: '管理内置功能插件与第三方扩展的开关、参数、受控运行界面及市场安装/导入。',
+    tips: [
+      '使用顶部页签在「已安装插件」「插件市场」「仓库与导入」之间无缝切换。',
+      '声明了沙箱界面的插件（如 Token 配额、表情包）可直接从卡片点「打开界面」。',
+      '系统底层驱动包与模型引擎已归入对应专题页，不在此处混排。'
+    ]
   },
   configuration: {
-    title: '配置管理',
+    title: '系统配置',
+    group: '接入与扩展',
     icon: 'config',
-    summary: '机器人的回复风格、冷却、上下文与模型供应商等全局参数。',
-    tips: ['左侧选分区，右侧逐项修改；改动先进草稿，不会立刻生效。', '底部保存条显示修改条数，「检查」可先做校验再保存。', '插件自己的参数已移到「插件与平台」里的插件设置。']
+    summary: '管理机器人基础行为与人设、对话编排、内置 Agent 工具、健康日报与核心系统包状态。',
+    tips: [
+      '通过左侧分区切换基础行为、对话编排、Agent 与健康日报，改动先进入草稿。',
+      '底部保存条支持先「校验」再「保存」，字段错误会直接定位在对应输入框下方。',
+      '「高级与系统包」汇总展示全部 system.* 引擎包的版本与需重启状态。'
+    ]
   },
   tasks: {
     title: 'Agent 任务',
+    group: '运行与观测',
     icon: 'tasks',
-    summary: '提交后台 Agent 任务、查看进度结果，并处理等待人工审批的请求。',
-    tips: ['填写来源与提示词后提交；同一幂等键重复提交不会重复执行。', '待审批列表里逐条批准或拒绝。', '点开任务可查看结果摘要，运行中的任务可以取消。']
-  },
-  logs: {
-    title: '运行日志',
-    icon: 'logs',
-    summary: '当前进程最近的运行事件与安全摘要，帮助定位告警和故障。',
-    tips: ['按级别、来源或关键词筛选已读取的记录。', '默认手动刷新；可开启每 5 秒刷新，切页或隐藏浏览器时暂停。', '后端不返回聊天正文、凭据或原始日志；未知内容仅显示隐藏占位。']
+    summary: '提交后台 Agent 任务、处理待审批工具请求，并在右侧抽屉查看安全任务结果。',
+    tips: [
+      '待审批队列支持就地「重新读取队列」并显示剩余有效时间。',
+      '同一幂等键提交不会重复执行；点击「查看结果」从右侧抽屉浏览摘要。',
+      '低频的原操作键核对与诊断统计已收拢至页头工具入口。'
+    ]
   },
   traces: {
     title: '轨迹与缓存',
+    group: '运行与观测',
     icon: 'traces',
-    summary: '最近若干轮的耗时、token 与提示缓存用量；只读，不含任何会话内容。',
-    tips: ['汇总里的「未知轮数」单独统计供应商没报缓存用量的轮次，不等同于 0 命中。', '明细里没有缓存用量显示「未知」，真正 0 命中才显示 0。', '这里只展示形状：没有会话 key、消息正文或工具载荷。']
+    summary: '只读观测最近轮次的耗时、token 用量、缓存命中率与节点耗时明细（不含会话正文）。',
+    tips: [
+      '点击任意轮次可展开节点级耗时、工具与状态明细。',
+      '「未知」表示供应商未上报缓存用量，与真实 0 命中严格区分。',
+      '本页仅展示形状指标，不包含会话内容或工具载荷。'
+    ]
+  },
+  logs: {
+    title: '运行日志',
+    group: '运行与观测',
+    icon: 'logs',
+    summary: '实时查看后端脱敏后的运行事件摘要，按级别、来源或关键词快速排查告警。',
+    tips: [
+      '默认每秒自动拉取增量日志，切页或最小化窗口时自动暂停并中止在途请求。',
+      '支持一键级别筛选、自动换行切换与视口范围安全复制。',
+      '后端不返回聊天正文或凭据原文。'
+    ]
   }
 }
-const currentGuide = computed(() => pageGuides[view.value])
 
-// 每次连接/锁定都推进 sessionGeneration，使迟到的异步结果失效。
+const currentGuide = computed(() => pageGuides[view.value])
+const isRefreshing = computed(() => loading.value || subviewBusy.value)
+
 let sessionGeneration = 0
-// 连接尝试单独计数：旧连接不能清掉新连接的 busy，但会话失效时自己的 busy 必须释放。
 let connectSequence = 0
-// 刷新可能重叠；只有最后一次 load 可以写回状态和 loading。
 let loadSequence = 0
 
 const client = computed(() => new ZbaClient({ token: token.value }))
@@ -126,15 +207,18 @@ const compatibility = computed(() => evaluateCompatibility(meta.value, health.va
 const connected = computed(() => token.value.length > 0 && status.value !== null)
 const stale = computed(() => error.value !== null && status.value !== null)
 
-function clearSession(): void {
-  // 401/会话失效时没有交互机会：立即清除内存草稿与秘密输入，并在重新连接页说明。
-  if (configDraftCount.value + abilityDraftCount.value > 0) {
+function clearSession(noticeOverride?: string): void {
+  const hadDrafts = totalDraftCount.value > 0
+  if (noticeOverride) {
+    sessionNotice.value = noticeOverride
+  } else if (hadDrafts) {
     sessionNotice.value = '会话已结束，未保存的配置草稿与秘密输入已清除。'
   }
   configurationPage.value?.endSession()
+  providersMounted.value = false
+  platformsMounted.value = false
+  pluginsMounted.value = false
   configurationMounted.value = false
-  // Clear sensitive UI now; minimal receipt keys survive in the identity-scoped registry.
-  capabilitiesMounted.value = false
   tasksMounted.value = false
   tracesMounted.value = false
   logsMounted.value = false
@@ -146,12 +230,18 @@ function clearSession(): void {
   view.value = 'overview'
 }
 
-/** 配置链路的 401：管理会话已失效，统一锁门并清掉草稿与秘密输入。 */
 function onAuthExpired(ui: UiError): void {
   if (token.value.length === 0) return
-  clearSession()
+  if (ui.status === 403) {
+    // 403 表示当前身份缺少管理写/核对权限：安全降级为只读并清理秘密输入，不误踢出已连接的只读会话。
+    mode.value = 'read'
+    discardActiveSecrets()
+    adminError.value = ui
+    return
+  }
+  const hadDrafts = totalDraftCount.value > 0
+  clearSession(hadDrafts ? '会话已失效，未保存的配置草稿与秘密输入已清除。' : '管理会话已失效，请重新连接。')
   authError.value = ui
-  if (sessionNotice.value === null) sessionNotice.value = '管理会话已失效，请重新连接。'
 }
 
 function beginSession(value: string): number {
@@ -183,8 +273,6 @@ async function load(): Promise<void> {
     if (token.value.length === 0) return
 
     const nextMeta = await activeClient.meta()
-    // 与 reloadStatus 同一条规则：meta 落地后先复核归属，会话在两次 await 之间失效时
-    // 不该再向旧 client 发第二次读取（LIFE-04）。
     if (!current()) return
     const nextStatus = await activeClient.status()
     if (!current()) return
@@ -209,46 +297,27 @@ async function load(): Promise<void> {
   }
 }
 
-/**
- * 重读概览所需的两份资源（status + meta）。
- *
- * 这是共享调度器在 resync 时调用的「status」补读：它必须走**真实的概览读取**，
- * 而不是只更新一个信号量——否则计划要求的「resync 覆盖 status」在界面上是空的。
- *
- * 后台读取与手动读取走**同一套会话归属、错误呈现与 401 失效规则**（M1）：
- *
- * - 失败：保留旧数据（status 不清空），置 error → 概览显示 stale 横幅；
- * - 成功：清错误、刷新 lastSuccessAt；
- * - 401 / 未配置：与手动读取一样 clearSession() 并锁门，不留"已连接/管理员模式"的假象；
- * - 失败照常抛出：调度器据此不签"已追平"（R2）。
- */
 async function reloadStatus(): Promise<void> {
   const session = sessionGeneration
   const activeClient = client.value
   const current = (): boolean => session === sessionGeneration && activeClient === client.value
   try {
     const nextMeta = await activeClient.meta()
-    // meta 落地后先复核归属：会话在此期间失效时，不该再向旧 client 发第二次读取。
     if (!current()) return
     const nextStatus = await activeClient.status()
     if (!current()) return
     meta.value = nextMeta
     status.value = nextStatus
     lastSuccessAt.value = new Date().toISOString()
-    // 成功即恢复：清掉上一次后台失败留下的错误与 stale 横幅。
     error.value = null
     adminError.value = null
     if (mode.value === 'admin' && !compatibility.value.writesEnabled) mode.value = 'read'
   } catch (cause) {
     if (!current()) return
     const ui = toUiError(cause)
-    // 旧数据保留在屏幕上，但必须明确"它可能过期"。
     error.value = ui
     if (cause instanceof ZbaRequestError && (cause.status === 401 || cause.code === 'zba_not_configured')) {
-      // 后台也要锁门：认证已失效时不能继续显示已连接与管理员模式。
-      clearSession()
-      authError.value = ui
-      if (sessionNotice.value === null) sessionNotice.value = '管理会话已失效，请重新连接。'
+      onAuthExpired(ui)
     }
     throw cause
   }
@@ -263,171 +332,185 @@ async function connect(value: string): Promise<void> {
     await load()
     if (session === sessionGeneration && status.value === null) authError.value = error.value
   } finally {
-    // load() 在 401/503 时会 clearSession() 并推进 sessionGeneration；
-    // busy 的所有权属于这次连接尝试，不能因会话失效而永远卡住。
     if (attempt === connectSequence) connecting.value = false
   }
 }
 
 async function refresh(): Promise<void> {
-  if (view.value === 'configuration') {
-    await configurationPage.value?.reload()
-    return
-  }
-  if (view.value === 'capabilities') {
-    await capabilitiesPage.value?.reload()
-    return
-  }
-  if (view.value === 'tasks') {
-    await tasksPage.value?.reload()
-    return
-  }
-  if (view.value === 'traces') {
-    await tracesPage.value?.reload()
-    return
-  }
-  if (view.value === 'logs') {
-    await logsPage.value?.reload()
-    return
-  }
+  if (view.value === 'providers') { await providersPage.value?.reload(); return }
+  if (view.value === 'platforms') { await platformsPage.value?.reload(); return }
+  if (view.value === 'plugins') { await pluginsPage.value?.reload(); return }
+  if (view.value === 'configuration') { await configurationPage.value?.reload(); return }
+  if (view.value === 'tasks') { await tasksPage.value?.reload(); return }
+  if (view.value === 'traces') { await tracesPage.value?.reload(); return }
+  if (view.value === 'logs') { await logsPage.value?.reload(); return }
   await load()
 }
 
-/** 配置页首次进入时挂载；之后只切换显隐，草稿随组件保留。 */
-async function openConfiguration(event?: MouseEvent): Promise<void> {
-  if (view.value === 'configuration' || !(await allowNavigation(event))) return
-  const firstVisit = !configurationMounted.value
-  configurationMounted.value = true
-  view.value = 'configuration'
-  if (!firstVisit) {
-    await nextTick()
-    // 重读基线但不丢草稿：外部修改会在这里体现为新的脏值或重叠字段。
-    await configurationPage.value?.refreshOnEnter()
-  }
-}
-
-/**
- * 点击事件里的那个按钮。
- *
- * 三个引擎对"点按钮要不要给按钮焦点"并不一致（WebKit 不给），
- * 所以"关闭模态后把焦点还给触发器"不能只靠读 activeElement。
- */
 function navTrigger(event?: MouseEvent): HTMLElement | null {
   const target = event?.currentTarget
   return target instanceof HTMLElement ? target : null
 }
 
-/** Navigation retains ordinary drafts. Every exit clears secret inputs through its owner. */
 async function allowNavigation(event?: MouseEvent): Promise<boolean> {
-  if (view.value === 'configuration') return await configurationPage.value?.requestLeave('navigate', navTrigger(event)) ?? true
-  if (view.value === 'capabilities') return await capabilitiesPage.value?.requestLeave('navigate', navTrigger(event)) ?? true
+  const trigger = navTrigger(event)
+  if (view.value === 'configuration') return await configurationPage.value?.requestLeave('navigate', trigger) ?? true
+  if (view.value === 'providers') return await providersPage.value?.requestLeave('navigate', trigger) ?? true
+  if (view.value === 'platforms') return await platformsPage.value?.requestLeave('navigate', trigger) ?? true
+  if (view.value === 'plugins') return await pluginsPage.value?.requestLeave('navigate', trigger) ?? true
   return true
 }
-async function showOverview(event?: MouseEvent): Promise<void> {
-  if (view.value === 'overview' || !(await allowNavigation(event))) return
-  view.value = 'overview'
+
+function discardActiveSecrets(): void {
+  providersPage.value?.discardSecretsOnLeave()
+  platformsPage.value?.discardSecretsOnLeave()
+  pluginsPage.value?.discardSecretsOnLeave()
+  configurationPage.value?.discardSecretsOnLeave()
 }
 
-async function openCapabilities(event?: MouseEvent, owner?: string): Promise<void> {
+async function navigateTo(target: AppView, event?: MouseEvent, ownerId?: string): Promise<void> {
   const session = sessionGeneration
-  if (view.value === 'capabilities' || !(await allowNavigation(event)) || session !== sessionGeneration) return
-  const firstVisit = !capabilitiesMounted.value
-  capabilitiesMounted.value = true
-  view.value = 'capabilities'
-  await nextTick()
-  // 首次进入由 onMounted 读取；再次进入只重读目录，待核对的操作键保留。
-  if (!firstVisit) await capabilitiesPage.value?.reload()
-  if (owner && view.value === 'capabilities' && session === sessionGeneration) {
-    capabilitiesPage.value?.openSettingsById(owner, navTrigger(event))
+  if (view.value === target && !ownerId) return
+  if (!(await allowNavigation(event)) || session !== sessionGeneration) return
+  if (helpDetails.value) helpDetails.value.open = false
+  discardActiveSecrets()
+
+  if (target === 'overview') {
+    view.value = 'overview'
+    return
+  }
+  if (target === 'providers') {
+    const first = !providersMounted.value
+    providersMounted.value = true
+    view.value = 'providers'
+    await nextTick()
+    if (!first) await providersPage.value?.reload()
+    if (ownerId === 'models') providersPage.value?.openRoutingSettings()
+    return
+  }
+  if (target === 'platforms') {
+    const first = !platformsMounted.value
+    platformsMounted.value = true
+    view.value = 'platforms'
+    await nextTick()
+    if (!first) await platformsPage.value?.reload()
+    if (ownerId === 'platform') platformsPage.value?.openPlatformSettings()
+    return
+  }
+  if (target === 'plugins') {
+    const first = !pluginsMounted.value
+    pluginsMounted.value = true
+    view.value = 'plugins'
+    await nextTick()
+    if (!first) await pluginsPage.value?.reload()
+    if (ownerId && view.value === 'plugins' && session === sessionGeneration) {
+      pluginsPage.value?.openSettingsById(ownerId, navTrigger(event))
+    }
+    return
+  }
+  if (target === 'configuration') {
+    const first = !configurationMounted.value
+    configurationMounted.value = true
+    view.value = 'configuration'
+    await nextTick()
+    if (!first) await configurationPage.value?.refreshOnEnter()
+    return
+  }
+  if (target === 'tasks') {
+    const first = !tasksMounted.value
+    tasksMounted.value = true
+    view.value = 'tasks'
+    await nextTick()
+    if (!first) await tasksPage.value?.reload()
+    return
+  }
+  if (target === 'traces') {
+    const first = !tracesMounted.value
+    tracesMounted.value = true
+    view.value = 'traces'
+    await nextTick()
+    if (!first) await tracesPage.value?.reload()
+    return
+  }
+  if (target === 'logs') {
+    logsMounted.value = true
+    view.value = 'logs'
   }
 }
 
-async function openTasks(event?: MouseEvent): Promise<void> {
-  if (!(await allowNavigation(event))) return
-  if (view.value === 'tasks') return
-  capabilitiesPage.value?.discardSecretsOnLeave()
-  const firstVisit = !tasksMounted.value
-  tasksMounted.value = true
-  view.value = 'tasks'
-  await nextTick()
-  // 首次进入由 onMounted 读取；再次进入只重读，提交记录与幂等键保留。
-  if (!firstVisit) await tasksPage.value?.reload()
+async function openOwnerFromConfiguration(target: 'providers' | 'platforms' | 'plugins', owner?: string): Promise<void> {
+  await navigateTo(target, undefined, owner)
 }
 
-async function openTraces(event?: MouseEvent): Promise<void> {
-  if (!(await allowNavigation(event))) return
-  if (view.value === 'traces') return
-  capabilitiesPage.value?.discardSecretsOnLeave()
-  const firstVisit = !tracesMounted.value
-  tracesMounted.value = true
-  view.value = 'traces'
-  await nextTick()
-  // 首次进入由 onMounted 读取；再次进入只重读最近若干轮。
-  if (!firstVisit) await tracesPage.value?.reload()
-}
+// 兼容既有会话恢复单测与脚本调用的具名导航方法
+const showOverview = (event?: MouseEvent) => navigateTo('overview', event)
+const openProviders = (event?: MouseEvent) => navigateTo('providers', event)
+const openPlatforms = (event?: MouseEvent) => navigateTo('platforms', event)
+const openPlugins = (event?: MouseEvent, owner?: string) => navigateTo('plugins', event, owner)
+const openConfiguration = (event?: MouseEvent) => navigateTo('configuration', event)
+const openTasks = (event?: MouseEvent) => navigateTo('tasks', event)
+const openTraces = (event?: MouseEvent) => navigateTo('traces', event)
+const openLogs = (event?: MouseEvent) => navigateTo('logs', event)
 
-async function openLogs(event?: MouseEvent): Promise<void> {
-  if (!(await allowNavigation(event))) return
-  if (view.value === 'logs') return
-  capabilitiesPage.value?.discardSecretsOnLeave()
-  logsMounted.value = true
-  view.value = 'logs'
-  // 日志页在 active 变化时自行重读，避免同时发出两次请求。
-}
+defineExpose({
+  showOverview,
+  openProviders,
+  openPlatforms,
+  openPlugins,
+  openConfiguration,
+  openTasks,
+  openTraces,
+  openLogs,
+  lock
+})
 
-/** 欢迎页快捷卡片：走与侧栏相同的切页路径（含未保存保护与首次挂载）。 */
-async function navigateFromOverview(target: 'capabilities' | 'configuration' | 'tasks', event: MouseEvent): Promise<void> {
-  if (target === 'capabilities') await openCapabilities(event)
-  else if (target === 'configuration') await openConfiguration()
-  else await openTasks(event)
+async function navigateFromOverview(
+  target: AppView | 'capabilities',
+  event?: MouseEvent,
+  ownerId?: string
+): Promise<void> {
+  if (target === 'capabilities') { await navigateTo('plugins', event, ownerId); return }
+  await navigateTo(target, event, ownerId)
 }
 
 async function lock(event?: MouseEvent): Promise<void> {
-  const allowed = await configurationPage.value?.requestLeave('lock', navTrigger(event)) ?? true
-  if (!allowed) return
-  if (!(await capabilitiesPage.value?.requestLeave('lock', navTrigger(event)) ?? true)) return
-  configurationPage.value?.endSession()
-  configurationMounted.value = false
-  capabilitiesMounted.value = false
-  tasksMounted.value = false
-  tracesMounted.value = false
-  logsMounted.value = false
+  const trigger = navTrigger(event)
+  for (const page of [configurationPage.value, providersPage.value, platformsPage.value, pluginsPage.value]) {
+    if (page && !(await page.requestLeave('lock', trigger))) return
+  }
+  const hadDrafts = totalDraftCount.value > 0
   connectSequence += 1
-  clearSession()
   loadSequence += 1
   loading.value = false
+  subviewBusy.value = false
   connecting.value = false
   authError.value = null
   adminError.value = null
   error.value = null
   lastSuccessAt.value = null
+  clearSession(hadDrafts ? '会话已锁定，未保存的配置草稿与秘密输入已清除。' : undefined)
 }
 
 async function enableAdmin(): Promise<void> {
+  if (adminPending.value) return
   adminError.value = null
   if (!compatibility.value.writesEnabled) {
     adminError.value = { code: 'incompatible_contract', message: '契约不兼容，管理员入口已禁用。' }
     return
   }
-
-  // 探测期间可能锁定或换令牌；返回后必须仍属于同一会话才允许改 mode。
   const session = sessionGeneration
   const expectedToken = token.value
   const activeClient = client.value
   if (expectedToken.length === 0) return
-
   const current = (): boolean => session === sessionGeneration && token.value === expectedToken
 
+  adminPending.value = true
   try {
     const isAdmin = await activeClient.checkAdmin(meta.value?.features.includes('operations.find') === true)
     if (!current()) return
-    // 探测期间 meta/health 可能已经刷新为不兼容；模式展示不能越过当前兼容性判定。
     if (!compatibility.value.writesEnabled) {
       mode.value = 'read'
-      adminError.value = {
-        code: 'incompatible_contract',
-        message: '契约已变化，管理员入口已禁用。'
-      }
+      adminError.value = { code: 'incompatible_contract', message: '契约已变化，管理员入口已禁用。' }
       return
     }
     if (!isAdmin) {
@@ -441,24 +524,28 @@ async function enableAdmin(): Promise<void> {
     const ui = toUiError(cause)
     adminError.value = ui
     if (cause instanceof ZbaRequestError && cause.status === 401) {
-      clearSession()
-      authError.value = ui
+      onAuthExpired(ui)
     }
+  } finally {
+    if (current()) adminPending.value = false
   }
 }
 
-async function disableAdmin(): Promise<void> {
-  // 退出管理员模式后写入口关闭；有草稿时先让用户保存/继续编辑/明确放弃。
-  if (configDraftCount.value > 0) {
-    const allowed = await configurationPage.value?.requestLeave('downgrade') ?? true
-    if (!allowed) return
+async function disableAdmin(event?: MouseEvent): Promise<void> {
+  const trigger = navTrigger(event)
+  for (const page of [configurationPage.value, providersPage.value, platformsPage.value, pluginsPage.value]) {
+    if (page && !(await page.requestLeave('downgrade', trigger))) return
   }
-  if (!(await capabilitiesPage.value?.requestLeave('downgrade') ?? true)) return
   mode.value = 'read'
   adminError.value = null
 }
 
-// ── 会话级共享同步（计划 §9.3：五类资源一个调度器） ─────────────────
+function toggleAdminMode(event?: MouseEvent): void {
+  if (mode.value === 'admin') void disableAdmin(event)
+  else void enableAdmin()
+}
+
+// 会话级共享同步调度器
 const sessionScheduler = ref<ReturnType<typeof acquireScheduler> | null>(null)
 let detachSessionAuth: (() => void) | null = null
 
@@ -469,15 +556,13 @@ function attachSessionSync(activeClient: ZbaClient, enabled: boolean): void {
   sessionScheduler.value = null
   if (!enabled) return
   const shared = acquireScheduler(activeClient)
-  // status 走真实重读；配置与能力由 app-resources 自己探测。
   detachSessionAuth = shared.scheduler.onAuthFailure((cause) => {
     if (activeClient !== client.value || token.value.length === 0) return
     const ui = toUiError(cause)
     if (cause.status === 401) onAuthExpired(ui)
     else {
       mode.value = 'read'
-      capabilitiesPage.value?.discardSecretsOnLeave()
-      configurationPage.value?.discardSecretsOnLeave()
+      discardActiveSecrets()
       error.value = ui
       adminError.value = ui
     }
@@ -486,33 +571,29 @@ function attachSessionSync(activeClient: ZbaClient, enabled: boolean): void {
   sessionScheduler.value = shared
 }
 
-/**
- * 连接建立后挂上会话级同步，锁定/换令牌时释放。
- *
- * 只监听令牌：`client` 完全由令牌派生，多一个监听会在同一次刷新里二次
- * attach（先 release 再 acquire，游标被无谓清零）。
- *
- * 释放会 stop() 调度器并丢弃游标：旧身份的游标绝不带给下一个会话。
- * 任务页自己也 acquire 同一个 client 上的调度器（引用计数），所以两边共享一条
- * events 轮询链，不会各开一个定时器。
- */
 watch(() => token.value, () => {
-  // 令牌变化 = 新身份：资源快照与游标都属于旧身份。
-  // 这里**不推进** sessionGeneration：beginSession() 已经推进过，重复推进会
-  // 让紧随其后的 load() 全部判为过期（current() 失配），页面永远读不到东西。
-  // 在途读取的作废靠 reloadStatus() 自己的 (session, client) 双重比对。
   resetAppResourceSignals()
   attachSessionSync(client.value, token.value.length > 0)
 }, { immediate: true })
 
+onMounted(() => {
+  void load()
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', closeHelpIfOutside)
+    document.addEventListener('keydown', closeHelpOnEscape)
+  }
+})
+
 onBeforeUnmount(() => {
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('click', closeHelpIfOutside)
+    document.removeEventListener('keydown', closeHelpOnEscape)
+  }
   detachSessionAuth?.()
   detachSessionAuth = null
   sessionScheduler.value?.release()
   sessionScheduler.value = null
 })
-
-onMounted(load)
 </script>
 
 <template>
@@ -534,7 +615,7 @@ onMounted(load)
             :aria-expanded="!rail"
             @click="toggleRail"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <rect x="3" y="4" width="18" height="16" rx="2" />
               <path d="M9 4v16" />
               <path :d="rail ? 'M13 10l2 2-2 2' : 'M16 10l-2 2 2 2'" />
@@ -543,7 +624,7 @@ onMounted(load)
         </div>
 
         <nav class="side-nav" aria-label="主导航">
-          <p class="side-nav-group" aria-hidden="true">系统</p>
+          <p class="side-nav-group" aria-hidden="true">工作台</p>
           <button
             type="button"
             class="side-nav-item"
@@ -551,40 +632,67 @@ onMounted(load)
             :class="{ active: view === 'overview' }"
             :aria-current="view === 'overview' ? 'page' : undefined"
             data-testid="nav-overview"
-            @click="showOverview"
+            @click="navigateTo('overview', $event)"
           >
             <AppIcon name="overview" />
             <span class="side-nav-text"><span>系统概览</span></span>
           </button>
+
+          <p class="side-nav-group" aria-hidden="true">接入与扩展</p>
           <button
             type="button"
             class="side-nav-item"
-            :title="rail ? '能力管理' : undefined"
-            :class="{ active: view === 'capabilities' }"
-            :aria-current="view === 'capabilities' ? 'page' : undefined"
-            data-testid="nav-capabilities"
-            @click="openCapabilities($event)"
+            :title="rail ? '模型供应商' : undefined"
+            :class="{ active: view === 'providers' }"
+            :aria-current="view === 'providers' ? 'page' : undefined"
+            data-testid="nav-providers"
+            @click="navigateTo('providers', $event)"
           >
-            <AppIcon name="capabilities" />
-            <span class="side-nav-text"><span>能力管理</span></span>
-            <span v-if="abilityDraftCount > 0" class="nav-badge" data-testid="nav-ability-draft">{{ abilityDraftCount }}</span>
+            <AppIcon name="provider" />
+            <span class="side-nav-text"><span>模型供应商</span></span>
+            <span v-if="providersDraftCount > 0" class="nav-badge" data-testid="nav-providers-draft">{{ providersDraftCount }}</span>
           </button>
           <button
             type="button"
             class="side-nav-item"
-            :title="rail ? '基础配置' : undefined"
+            :title="rail ? '消息平台' : undefined"
+            :class="{ active: view === 'platforms' }"
+            :aria-current="view === 'platforms' ? 'page' : undefined"
+            data-testid="nav-platforms"
+            @click="navigateTo('platforms', $event)"
+          >
+            <AppIcon name="platform" />
+            <span class="side-nav-text"><span>消息平台</span></span>
+            <span v-if="platformsDraftCount > 0" class="nav-badge" data-testid="nav-platforms-draft">{{ platformsDraftCount }}</span>
+          </button>
+          <button
+            type="button"
+            class="side-nav-item"
+            :title="rail ? '插件中心' : undefined"
+            :class="{ active: view === 'plugins' }"
+            :aria-current="view === 'plugins' ? 'page' : undefined"
+            data-testid="nav-plugins"
+            @click="navigateTo('plugins', $event)"
+          >
+            <AppIcon name="plugin" />
+            <span class="side-nav-text"><span>插件中心</span></span>
+            <span v-if="pluginsDraftCount > 0" class="nav-badge" data-testid="nav-plugins-draft">{{ pluginsDraftCount }}</span>
+          </button>
+          <button
+            type="button"
+            class="side-nav-item"
+            :title="rail ? '系统配置' : undefined"
             :class="{ active: view === 'configuration' }"
             :aria-current="view === 'configuration' ? 'page' : undefined"
             data-testid="nav-configuration"
-            @click="openConfiguration"
+            @click="navigateTo('configuration', $event)"
           >
             <AppIcon name="config" />
-            <span class="side-nav-text"><span>基础配置</span></span>
-            <span v-if="configDraftCount > 0" class="nav-badge" data-testid="nav-config-draft">
-              {{ configDraftCount }}
-            </span>
+            <span class="side-nav-text"><span>系统配置</span></span>
+            <span v-if="configDraftCount > 0" class="nav-badge" data-testid="nav-config-draft">{{ configDraftCount }}</span>
           </button>
-          <p class="side-nav-group" aria-hidden="true">工作空间</p>
+
+          <p class="side-nav-group" aria-hidden="true">运行与观测</p>
           <button
             type="button"
             class="side-nav-item"
@@ -592,7 +700,7 @@ onMounted(load)
             :class="{ active: view === 'tasks' }"
             :aria-current="view === 'tasks' ? 'page' : undefined"
             data-testid="nav-tasks"
-            @click="openTasks($event)"
+            @click="navigateTo('tasks', $event)"
           >
             <AppIcon name="tasks" />
             <span class="side-nav-text"><span>Agent 任务</span></span>
@@ -604,7 +712,7 @@ onMounted(load)
             :class="{ active: view === 'traces' }"
             :aria-current="view === 'traces' ? 'page' : undefined"
             data-testid="nav-traces"
-            @click="openTraces($event)"
+            @click="navigateTo('traces', $event)"
           >
             <AppIcon name="traces" />
             <span class="side-nav-text"><span>轨迹与缓存</span></span>
@@ -616,7 +724,7 @@ onMounted(load)
             :class="{ active: view === 'logs' }"
             :aria-current="view === 'logs' ? 'page' : undefined"
             data-testid="nav-logs"
-            @click="openLogs($event)"
+            @click="navigateTo('logs', $event)"
           >
             <AppIcon name="logs" />
             <span class="side-nav-text"><span>运行日志</span></span>
@@ -625,25 +733,57 @@ onMounted(load)
 
         <div class="sidebar-note">
           <p class="sidebar-note-title">当前会话</p>
-          <p class="sidebar-note-state"><span class="dot" aria-hidden="true"></span>已连接{{ mode === 'admin' ? ' · 管理员' : '' }}</p>
-          <p class="sidebar-note-copy">令牌仅保存在此页面内存；锁定后需要重新输入。</p>
+          <p class="sidebar-note-state">
+            <span class="dot" :class="{ 'dot--warn': stale }" aria-hidden="true" />
+            {{ stale ? '已连接 · 待同步' : '已连接' }}{{ mode === 'admin' ? ' · 管理员' : ' · 只读' }}
+          </p>
+          <p class="sidebar-note-copy">令牌仅保留于当前页面内存；锁定或关闭页面即清除。</p>
         </div>
 
         <div class="sidebar-footer">
           <span>BotAgent</span>
-          <span>zba-1.0</span>
+          <span>{{ meta?.contractVersion || 'zba-1.0' }}</span>
         </div>
       </aside>
 
       <div class="app-frame">
         <header class="topbar">
           <div class="crumbs" aria-label="面包屑">
-            <span>工作台</span>
+            <span>{{ currentGuide.group }}</span>
             <span class="crumb-sep" aria-hidden="true">/</span>
             <strong>{{ currentGuide.title }}</strong>
           </div>
           <div class="topbar-actions">
-            <details :key="view" class="page-help" data-testid="page-guide">
+            <button
+              type="button"
+              class="admin-mode-btn"
+              :data-mode="mode"
+              data-testid="global-admin-toggle"
+              :disabled="adminPending || (mode !== 'admin' && !compatibility.writesEnabled)"
+              :title="mode === 'admin' ? '点击退出管理员模式，恢复标准只读' : '点击进入管理员模式以修改配置'"
+              @click="toggleAdminMode($event)"
+            >
+              <AppIcon name="shield" :size="14" />
+              {{ adminPending ? '校验权限…' : mode === 'admin' ? '管理员模式 · 退出' : '标准只读 · 切换管理' }}
+            </button>
+
+            <span class="connection-chip" :class="{ 'connection-chip--stale': stale }" data-testid="connection-state">
+              <span class="dot" :class="{ 'dot--warn': stale }" aria-hidden="true" />
+              {{ stale ? '同步过期' : '已连接' }}
+            </span>
+
+            <button
+              type="button"
+              class="tonal"
+              data-testid="header-refresh"
+              :disabled="isRefreshing"
+              @click="refresh"
+            >
+              <AppIcon name="refresh" :size="15" />
+              {{ isRefreshing ? '刷新中…' : '刷新' }}
+            </button>
+
+            <details ref="helpDetails" :key="view" class="page-help" data-testid="page-guide">
               <summary aria-label="本页说明" title="本页说明"><AppIcon name="help" :size="18" /></summary>
               <div class="page-help-content">
                 <strong>{{ currentGuide.title }}</strong>
@@ -651,30 +791,20 @@ onMounted(load)
                 <ul><li v-for="tip in currentGuide.tips" :key="tip">{{ tip }}</li></ul>
               </div>
             </details>
+
             <ThemeToggle />
-            <span class="connection-chip" data-testid="connection-state">
-              <span class="dot" aria-hidden="true"></span>
-              已连接
-            </span>
-            <button
-              v-if="view !== 'overview'"
-              type="button"
-              class="tonal"
-              data-testid="header-refresh"
-              :disabled="loading"
-              @click="refresh"
-            >
-              <AppIcon name="refresh" :size="16" />
-              刷新
-            </button>
+
             <button type="button" class="tonal" data-testid="lock" @click="lock($event)">
-              <AppIcon name="lock" :size="16" />
+              <AppIcon name="lock" :size="15" />
               锁定
             </button>
           </div>
         </header>
 
         <main class="app-main">
+          <p v-if="adminError && view !== 'overview'" class="inline-notice bad top-admin-err" role="alert" data-testid="global-admin-error">
+            {{ adminError.message }}
+          </p>
 
           <OverviewPage
             v-if="view === 'overview' && health && meta && status"
@@ -695,15 +825,54 @@ onMounted(load)
             @navigate="navigateFromOverview"
             @auth-expired="onAuthExpired"
           />
-          <CapabilitiesPage
-            v-if="capabilitiesMounted"
-            v-show="view === 'capabilities'"
-            ref="capabilitiesPage"
+          <ProvidersPage
+            v-if="providersMounted"
+            v-show="view === 'providers'"
+            ref="providersPage"
             :client="client"
             :mode="mode"
             :writes-enabled="compatibility.writesEnabled"
-            :active="view === 'capabilities'"
             :features="meta?.features ?? []"
+            :active="view === 'providers'"
+            @enable-admin="enableAdmin"
+            @auth-expired="onAuthExpired"
+            @busy="value => { if (view === 'providers') subviewBusy = value }"
+          />
+          <PlatformsPage
+            v-if="platformsMounted"
+            v-show="view === 'platforms'"
+            ref="platformsPage"
+            :client="client"
+            :mode="mode"
+            :writes-enabled="compatibility.writesEnabled"
+            :features="meta?.features ?? []"
+            :active="view === 'platforms'"
+            @enable-admin="enableAdmin"
+            @auth-expired="onAuthExpired"
+            @busy="value => { if (view === 'platforms') subviewBusy = value }"
+          />
+          <PluginsPage
+            v-if="pluginsMounted"
+            v-show="view === 'plugins'"
+            ref="pluginsPage"
+            :client="client"
+            :mode="mode"
+            :writes-enabled="compatibility.writesEnabled"
+            :features="meta?.features ?? []"
+            :active="view === 'plugins'"
+            @enable-admin="enableAdmin"
+            @auth-expired="onAuthExpired"
+            @busy="value => { if (view === 'plugins') subviewBusy = value }"
+          />
+          <SystemConfigurationPage
+            v-if="configurationMounted"
+            v-show="view === 'configuration'"
+            ref="configurationPage"
+            :active="view === 'configuration'"
+            :client="client"
+            :mode="mode"
+            :writes-enabled="compatibility.writesEnabled"
+            @open-domain="openOwnerFromConfiguration"
             @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
           />
@@ -724,6 +893,7 @@ onMounted(load)
             ref="tracesPage"
             :client="client"
             :active="view === 'traces'"
+            @auth-expired="onAuthExpired"
           />
           <RuntimeLogsPage
             v-if="logsMounted"
@@ -731,18 +901,6 @@ onMounted(load)
             ref="logsPage"
             :client="client"
             :active="view === 'logs'"
-            @auth-expired="onAuthExpired"
-          />
-          <ConfigurationPage
-            :active="view === 'configuration'"
-            v-if="configurationMounted"
-            v-show="view === 'configuration'"
-            ref="configurationPage"
-            :client="client"
-            :mode="mode"
-            :writes-enabled="compatibility.writesEnabled"
-            @open-capabilities="openCapabilities(undefined, $event)"
-            @enable-admin="enableAdmin"
             @auth-expired="onAuthExpired"
           />
         </main>
@@ -757,10 +915,17 @@ onMounted(load)
           :contract-version="health?.contractVersion ?? null"
           :error="authError"
           :notice="sessionNotice"
-          :busy="connecting || (loading && token.length === 0)"
+          :busy="connecting"
+          :probing="loading && token.length === 0 && !connecting"
           @connect="connect"
         />
       </main>
     </template>
   </div>
 </template>
+
+<style scoped>
+.top-admin-err {
+  margin-bottom: 16px;
+}
+</style>

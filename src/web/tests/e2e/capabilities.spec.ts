@@ -8,29 +8,36 @@ async function connect(page: import('@playwright/test').Page, token: string): Pr
   await page.getByTestId('token-input').fill(token)
   await page.getByTestId('connect-button').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  await expect(page.getByTestId('capabilities')).toBeVisible()
+  await page.getByTestId('nav-platforms').click()
+  await expect(page.getByTestId('platforms-page')).toBeVisible()
 }
 
 test('能力页：真实宿主读取目录与支持矩阵', async ({ page }) => {
   await connect(page, READ)
-  await expect(page.getByTestId('cap-count')).toContainText('已加载')
   const cards = page.locator('[data-testid^="cap-item-"]')
   await expect(cards.first()).toBeVisible()
   const count = await cards.count()
-  expect(count).toBeGreaterThan(3)
+  expect(count).toBeGreaterThanOrEqual(2)
   // 标准模式只读：动作按钮存在但禁用
   const action = page.locator('[data-testid^="cap-action-"]').first()
   if (await action.count()) {
     await expect(action).toBeDisabled()
   }
-  await expect(page.getByTestId('cap-readonly')).toBeVisible()
+  await expect(page.getByTestId('platforms-readonly')).toBeVisible()
+
+  // 插件中心只展示功能插件，不混入 system.* 引擎包
+  await page.getByTestId('nav-plugins').click()
+  await expect(page.getByTestId('plugins-page')).toBeVisible()
+  const pluginCards = page.locator('[data-testid="plugins-grid"] [data-testid^="cap-item-"]')
+  await expect(pluginCards.first()).toBeVisible()
+  expect(await pluginCards.count()).toBeGreaterThanOrEqual(8)
+  await expect(page.locator('[data-plugin-id^="system."]')).toHaveCount(0)
 })
 
 test('能力页：管理员可执行动作并看到真实回执', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   // 找一个真实可用的动作按钮
   const enabled = page.locator('[data-testid^="cap-action-"]:not([disabled])').first()
@@ -52,8 +59,8 @@ test('能力页：取消二次确认不会发出写请求', async ({ page }) => 
     }
   })
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
   const enabled = page.locator('[data-testid^="cap-action-"]:not([disabled])').first()
   await enabled.click()
   await page.getByTestId('cap-confirm-cancel').click()
@@ -61,7 +68,7 @@ test('能力页：取消二次确认不会发出写请求', async ({ page }) => 
   expect(writes).toHaveLength(0)
 })
 
-test('能力页：从配置页带草稿切到能力页会先询问', async ({ page }) => {
+test('能力页：从配置页带草稿切到消息平台会先询问', async ({ page }) => {
   await page.goto('/')
   await page.getByTestId('token-input').fill(ADMIN)
   await page.getByTestId('connect-button').click()
@@ -75,44 +82,38 @@ test('能力页：从配置页带草稿切到能力页会先询问', async ({ pa
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
-  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('nav-platforms').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-stay').click()
-  await expect(page.getByTestId('configuration')).toBeVisible()
-  await expect(page.getByTestId('capabilities')).toHaveCount(0)
+  await expect(page.getByTestId('system-configuration')).toBeVisible()
+  await expect(page.getByTestId('platforms-page')).toHaveCount(0)
 
   await page.getByTestId('config-discard').click()
-  await page.getByTestId('nav-capabilities').click()
-  await expect(page.getByTestId('capabilities')).toBeVisible()
+  await page.getByTestId('nav-platforms').click()
+  await expect(page.getByTestId('platforms-page')).toBeVisible()
 })
 
 test('能力页：真实宿主接受自己签发的游标，第二页能加载', async ({ page }) => {
-  await connect(page, READ)
-  await expect(page.getByTestId('cap-count')).toContainText('已加载 22 项')
-
-  // 只改请求参数，不伪造响应：游标仍然由真实宿主签发、真实宿主接收。
-  await page.route('**/zba/v1/capabilities?*', async (route) => {
-    const url = new URL(route.request().url())
-    url.searchParams.set('limit', '1')
-    await route.continue({ url: url.toString() })
-  })
-
-  await page.getByTestId('cap-reload').click()
-  await expect(page.getByTestId('cap-count')).toContainText('已加载 1 项')
-  await expect(page.getByTestId('cap-load-more')).toBeVisible()
+  const headers = { Authorization: `Bearer ${READ}` }
+  const first = await page.request.get('/zba/v1/capabilities?limit=1', { headers })
+  expect(first.status()).toBe(200)
+  const firstBody = (await first.json()) as { items: unknown[]; nextCursor?: string | null }
+  expect(firstBody.items).toHaveLength(1)
+  expect(firstBody.nextCursor).toBeTruthy()
 
   // 第二页：游标经过 URL 编码回传，宿主必须认它。
-  await page.getByTestId('cap-load-more').click()
-  await expect(page.getByTestId('cap-count')).toContainText('已加载 2 项')
-  await expect(page.getByTestId('cap-page-error')).toHaveCount(0)
+  const second = await page.request.get('/zba/v1/capabilities?limit=1&cursor=' + encodeURIComponent(firstBody.nextCursor!), { headers })
+  expect(second.status()).toBe(200)
+  const secondBody = (await second.json()) as { items: unknown[] }
+  expect(secondBody.items).toHaveLength(1)
 })
 
 // ── S23-R2 真实宿主恢复路径 ──────────────────────────────────────────────────
 
 test('能力页：真实宿主已受理但响应丢失后，核对入口可用且重试复用同一操作键', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   const attempts: Array<{ key: string; status: number; code: number; replayed: boolean }> = []
   // 前两次故意让浏览器断开（服务端已经真实受理）；第三次放行，验证重放回执。
@@ -156,8 +157,8 @@ test('能力页：真实宿主已受理但响应丢失后，核对入口可用�
 
 test('能力页：切走再回来仍能看到待核对操作键', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
   await page.route('**/zba/v1/capabilities/execute', async (route) => {
     await route.abort('connectionreset')
   })
@@ -169,8 +170,8 @@ test('能力页：切走再回来仍能看到待核对操作键', async ({ page 
 
   await page.getByTestId('nav-overview').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  await expect(page.getByTestId('capabilities')).toBeVisible()
+  await page.getByTestId('nav-platforms').click()
+  await expect(page.getByTestId('platforms-page')).toBeVisible()
 
   await expect(page.getByTestId('cap-op-key')).toHaveText(key ?? '')
   await expect(page.getByTestId('cap-result-query')).toBeVisible()
@@ -180,8 +181,8 @@ test('能力页：切走再回来仍能看到待核对操作键', async ({ page 
 
 test('能力页：离开视图再回来，在途确认不得补发', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
@@ -205,8 +206,8 @@ test('能力页：离开视图再回来，在途确认不得补发', async ({ pa
   // 切走再切回来：active 又变回 true，但这次确认必须已经永久失效。
   await page.getByTestId('nav-overview').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('nav-platforms').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   release()
   await page.waitForTimeout(2000)
@@ -215,8 +216,8 @@ test('能力页：离开视图再回来，在途确认不得补发', async ({ pa
 
 test('能力页：未知操作从卡片重开，预检失败后仍用同一个键重发', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   const action = page.locator('[data-testid^="cap-action-"]:not([disabled])').first()
   const actionId = (await action.getAttribute('data-testid')) ?? ''
@@ -254,8 +255,8 @@ test('能力页：未知操作从卡片重开，预检失败后仍用同一个�
 
 test('能力页：核对没有回执时未知操作仍保留操作键', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   await page.route('**/zba/v1/capabilities/execute', (route) => route.abort('connectionreset'))
   await page.locator('[data-testid^="cap-action-"]:not([disabled])').first().click()
@@ -291,8 +292,8 @@ test('能力页：核对没有回执时未知操作仍保留操作键', async ({
  */
 test('能力页：上一个动作在途时打开的新确认框仍可取消，且不发第二个写请求', async ({ page }) => {
   await connect(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   const actions = page.locator('[data-testid^="cap-action-"]:not([disabled])')
   expect(await actions.count()).toBeGreaterThan(1)
@@ -354,8 +355,8 @@ test('能力页：上一个动作在途时打开的新确认框仍可取消，�
 for (const mode of ['retry', 'card'] as const) {
   test(`能力页：未知操作同键重发被拒后仍保留旧键（${mode}）`, async ({ page }) => {
     await connect(page, ADMIN)
-    await page.getByTestId('cap-enable-admin').click()
-    await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+    await page.getByTestId('platforms-enable-admin').click()
+    await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
     const action = page.locator('[data-testid^="cap-action-"]:not([disabled])').first()
     const actionId = (await action.getAttribute('data-testid')) ?? ''

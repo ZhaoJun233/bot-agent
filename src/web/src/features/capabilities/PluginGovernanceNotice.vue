@@ -16,7 +16,7 @@ defineProps<{ state?: PluginGovernance; source?: PluginGovernanceSource; install
   </section>
 </template>
 <style scoped>
-.plugin-governance { border-left: 3px solid currentColor; padding: .35rem .7rem; margin-block: .5rem; font-size: .85rem; }
-.plugin-governance p { margin-block: .25rem; overflow-wrap: anywhere; }
-.plugin-governance--revoked { color: var(--color-danger, #a12626); }
+.plugin-governance { border-left: 3px solid currentColor; padding: 0.4rem 0.75rem; margin-block: 0.5rem; font-size: var(--text-sm); }
+.plugin-governance p { margin-block: 0.25rem; overflow-wrap: anywhere; }
+.plugin-governance--revoked { color: var(--bad-text); }
 </style>

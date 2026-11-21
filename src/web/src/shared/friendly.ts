@@ -1,4 +1,9 @@
 import { settingsFor } from '../features/capabilities/plugin-settings'
+import { platformQqOfficialPresentation } from '../../../../packages/platform-qq-official/frontend/presentation'
+import { platformFeishuPresentation } from '../../../../packages/platform-feishu/frontend/presentation'
+import { platformLocalPresentation } from '../../../../packages/platform-local/frontend/presentation'
+import { mcpToolsPresentation } from '../../../../packages/mcp-tools/frontend/presentation'
+import type { AppIconName } from './ui/AppIcon.vue'
 
 /**
  * 把后端的机器名翻译成人话。只影响显示：key、testid、请求体一律用原值。
@@ -9,9 +14,9 @@ const GENERIC_NAMES = new Set(['plugin', 'driver', 'provider', 'device', 'mcp', 
 
 const platformNames: Record<string, string> = {
   'qq.private': 'QQ 私域通道',
-  'qq.official': 'QQ 官方通道',
-  feishu: '飞书',
-  local: '本地调试'
+  'qq.official': 'QQ 官方开放平台',
+  feishu: '飞书机器人通道',
+  local: '本地调试通道'
 }
 
 const providerNames: Record<string, string> = {
@@ -19,15 +24,106 @@ const providerNames: Record<string, string> = {
   fast: '快速回复模型'
 }
 
+export interface SystemPackageDescriptorMeta {
+  title: string
+  summary: string
+  domain: 'provider' | 'platform' | 'system'
+  platformId?: string
+  configScope?: string
+  icon: AppIconName
+}
+
+export const SYSTEM_PACKAGE_META: Readonly<Record<string, SystemPackageDescriptorMeta>> = Object.freeze({
+  'system.model-services': {
+    title: '模型路由与服务引擎',
+    summary: '模型供应商注册、主/快模型路由、连接测试与凭据治理',
+    domain: 'provider',
+    configScope: 'models',
+    icon: 'provider'
+  },
+  'system.platform-qq-private': {
+    title: 'QQ 私域协议端（OneBot）',
+    summary: 'OneBot WebSocket 接入、群/私聊事件与私域消息收发',
+    domain: 'platform',
+    platformId: 'qq.private',
+    configScope: 'platform',
+    icon: 'qq'
+  },
+  'system.platform-qq-official': {
+    title: platformQqOfficialPresentation.title,
+    summary: platformQqOfficialPresentation.summary,
+    domain: 'platform',
+    platformId: 'qq.official',
+    configScope: 'platform',
+    icon: 'qq'
+  },
+  'system.platform-feishu': {
+    title: platformFeishuPresentation.title,
+    summary: platformFeishuPresentation.summary,
+    domain: 'platform',
+    platformId: 'feishu',
+    configScope: 'platform',
+    icon: 'feishu'
+  },
+  'system.platform-local': {
+    title: platformLocalPresentation.title,
+    summary: platformLocalPresentation.summary,
+    domain: 'platform',
+    platformId: 'local',
+    configScope: 'platform',
+    icon: 'terminal'
+  },
+  'system.conversation': {
+    title: '对话编排与上下文引擎',
+    summary: '多轮对话编排、上下文窗口预算与回复节奏调度',
+    domain: 'system',
+    configScope: 'conversation',
+    icon: 'config'
+  },
+  'system.agent': {
+    title: '内置 Agent 任务运行时',
+    summary: '后台 Agent 执行、审批策略与附加提示词治理',
+    domain: 'system',
+    configScope: 'agent',
+    icon: 'tasks'
+  },
+  'system.health-reporting': {
+    title: '每日健康日报',
+    summary: '运行指标汇总与定时健康日报推送',
+    domain: 'system',
+    configScope: 'reporting',
+    icon: 'traces'
+  },
+  'system.mcp-tools': {
+    title: mcpToolsPresentation.title,
+    summary: mcpToolsPresentation.summary,
+    domain: 'system',
+    configScope: 'agent',
+    icon: 'cpu'
+  }
+})
+
+const FEATURE_PLUGIN_ICONS: Readonly<Record<string, AppIconName>> = Object.freeze({
+  'preset.feature.music': 'music',
+  'preset.feature.voice': 'voice',
+  'preset.feature.stickers': 'sticker',
+  'preset.feature.poke': 'poke',
+  'preset.feature.profiles': 'profile',
+  'preset.feature.vibes': 'vibe',
+  'preset.feature.token-quota': 'quota',
+  'preset.feature.websearch': 'globe'
+})
+
 const kindNames: Record<string, string> = {
-  driver: '驱动',
+  driver: '消息平台',
   plugin: '插件',
-  provider: '模型',
+  provider: '模型供应商',
   device: '设备',
   mcp: 'MCP',
-  model: '模型',
-  platform: '平台',
-  backup: '备份'
+  model: '模型供应商',
+  platform: '消息平台',
+  backup: '备份',
+  system: '系统核心'
 }
 
 const stateNames: Record<string, string> = {
@@ -86,11 +182,37 @@ export function platformName(platformId: string): string {
   return platformNames[platformId] ?? platformId
 }
 
+export function platformIcon(platformId: string): AppIconName {
+  if (platformId === 'qq.private' || platformId === 'qq.official') return 'qq'
+  if (platformId === 'feishu') return 'feishu'
+  if (platformId === 'local') return 'terminal'
+  return 'platform'
+}
+
 export function pluginName(key: string): string {
+  const sys = SYSTEM_PACKAGE_META[key]
+  if (sys) return sys.title
   const spec = settingsFor(key)
   if (spec) return spec.title
   const tail = key.split('.').pop() ?? key
   return tail || key
+}
+
+export function pluginSummary(key: string): string {
+  const sys = SYSTEM_PACKAGE_META[key]
+  if (sys) return sys.summary
+  const spec = settingsFor(key)
+  if (spec) return spec.summary
+  return ''
+}
+
+export function pluginIcon(key: string, runtime?: string): AppIconName {
+  const sys = SYSTEM_PACKAGE_META[key]
+  if (sys) return sys.icon
+  const feature = FEATURE_PLUGIN_ICONS[key]
+  if (feature) return feature
+  if (runtime === 'python') return 'python'
+  return 'plugin'
 }
 
 export function providerName(key: string): string {
@@ -153,6 +275,18 @@ export function relativeTime(value: string | undefined | null, now: number = Dat
   if (diff < 86400) return Math.round(diff / 3600) + ' 小时前'
   if (diff < 86400 * 30) return Math.round(diff / 86400) + ' 天前'
   return new Date(value).toLocaleDateString('zh-CN')
+}
+
+/** 剩余倒计时（用于待审批项）：例如 "剩余 4 分钟" / "已过期"。 */
+export function remainingTime(value: string | undefined | null, now: number = Date.now()): string {
+  if (!value) return '—'
+  const target = new Date(value).getTime()
+  if (Number.isNaN(target)) return value
+  const diff = Math.round((target - now) / 1000)
+  if (diff <= 0) return '已过期'
+  if (diff < 60) return `剩余 ${diff} 秒`
+  if (diff < 3600) return `剩余 ${Math.ceil(diff / 60)} 分钟`
+  return `剩余 ${Math.floor(diff / 3600)} 小时 ${Math.ceil((diff % 3600) / 60)} 分钟`
 }
 
 /** 运行时长：2 天 3 小时 / 4 小时 12 分 / 8 分钟。 */

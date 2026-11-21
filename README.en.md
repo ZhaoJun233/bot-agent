@@ -7,7 +7,7 @@ English | [简体中文](README.md)
 [![Protocol](https://img.shields.io/badge/Protocol-OneBot%20v11%20%7C%20QQ%20Official%20%7C%20Feishu-purple.svg)](#system-architecture)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
 
-Bot Agent is a headless, high-performance, pluggable multi-chat-platform Agent daemon built for Linux environments. It supports QQ Private Chats ([NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11), QQ Official Open Platform, Feishu (Lark) applications, and a zero-dependency local playground channel. Interacting with OpenAI-compatible Large Language Models (including DeepSeek, Qwen, OpenAI, local Ollama, etc.), it delivers autonomous judgment and lifelike replies across group chats, direct messages (DMs), and channels, complete with a built-in lightweight Web management console.
+Bot Agent is a headless, high-performance, pluggable multi-chat-platform Agent daemon built for Linux environments. It supports QQ Private Chats ([NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11), QQ Official Open Platform, Feishu (Lark) applications, and a zero-dependency local playground channel. Interacting with OpenAI-compatible Large Language Models (including DeepSeek, Qwen, OpenAI, local Ollama, etc.), it delivers autonomous judgment and lifelike replies across group chats, direct messages (DMs), and channels, complete with a decoupled modern Web management console.
 
 The project natively supports running directly from source code across standard Linux distributions (Ubuntu, Debian, CentOS, Arch, etc.) without requiring a container environment, while preserving standard Docker Compose containerized deployment support.
 
@@ -40,9 +40,9 @@ The project natively supports running directly from source code across standard 
 - **Lifelike Typing Cadence**: Splits long replies at punctuation boundaries and sends them in batches simulating realistic typing delays.
 
 ### Multi-Platform Support & Instance Policies
-- **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. The Web Console's "Platform Access & Policies" under "Capabilities" is the single entry point for each platform's enable and chat switches, group/private whitelists, and feature overrides. Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
-- **Daily Token Quota Ledger**: Runs as the preset plugin `preset.feature.token-quota`, managing UTC daily budgets isolated by platform and conversation tenant (`SourceKey`). Supports tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted; supports hot tuning and persistence directly from the Capabilities page.
-- **Zero-Dependency Local Test Channel**: an in-process standalone channel (no external long connection). Register virtual group IDs in the panel under "Capabilities → Platform Access Policies → Local Channel", then inject test messages with `POST /api/local/message`; they traverse the full model decision pipeline and the six-stage governance timeline.
+- **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. "Platform Access & Policies" under the Web Console's **Message Platforms** page is the single entry point for each platform's enable and chat switches, group/private whitelists, and feature overrides. Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
+- **Daily Token Quota Ledger**: Runs as the preset plugin `preset.feature.token-quota`, managing UTC daily budgets isolated by platform and conversation tenant (`SourceKey`). Supports tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted; supports one-click sandbox UI launch, hot tuning, and persistence directly from the **Plugin Center** card.
+- **Zero-Dependency Local Test Channel**: an in-process standalone channel (no external long connection). Register virtual group IDs in the panel under **Message Platforms → Platform Access & Policies → Local Channel**, then inject test messages with `POST /api/local/message`; they traverse the full model decision pipeline and the six-stage governance timeline.
 
 ---
 
@@ -194,13 +194,16 @@ The full interface map is in [`docs/api-surface.md`](docs/api-surface.md); what 
 
 ## Web Management Console
 
-A high-performance modern Single-Page Application (SPA) built with Vue 3 and TypeScript, communicating with the core service via the ZBA protocol with decoupled static deployment:
+A modern Single-Page Application (SPA) built with Vue 3 and TypeScript, communicating with the core service via the ZBA protocol (`zba-1.0` / `cfg-0.3.3`) with decoupled static deployment (`/web/`):
 
-- **Consolidated Configuration & Capability Ownership**: The "Basic Configuration" page retains only 7 essential parameters (AI switch, persona, cooldowns, concurrency, context limits); model services, server agent, platform access policies, health reports, and plugin settings are neatly consolidated into corresponding cards and dialogs under "Capabilities", supporting dynamic extension registration.
-- **Security Boundaries & In-Memory Sessions**: Bearer tokens are kept strictly in browser memory, cleared upon reload or session lock; secret slots are never echoed back; all mutation paths are protected by CAS versioning, single-flight locks, and unconfirmed operation key reconciliations.
-- **Integrated Capability & Plugin Ecosystem**: Visually inspect drivers, plugins, model providers, and MCP; install, update, enable and disable plugins from the catalog with **hot application (no host restart; a failed reload keeps the old instance)**, configure custom OpenAI-compatible providers, test connectivity, and adjust Token Quotas.
-- **Dark/Light Theme & Accessibility**: Instant dark/light theme switching with system preference detection; full keyboard navigation support (focus ring trapping, Escape handling), high contrast, and responsive layout for mobile screens.
-- **Task Approvals & Real-Time Observability**: Submit and review background Agent tasks with interactive approval gates; observe component health and errors in real-time, with QR code display for easy login when protocol clients disconnect.
+- **Domain-Separated Information Architecture (3 Groups / 8 Views)**: Replaces the monolithic "Capabilities" card wall with dedicated workspaces across **Workspace** (`Overview`), **Access & Extensions** (`Model Providers`, `Message Platforms`, `Plugin Center`, `System Configuration`), and **Runtime & Observability** (`Agent Tasks`, `Traces & Cache`, `Runtime Logs`).
+  - **Model Providers**: Manage OpenAI-compatible, Anthropic, Gemini, Azure, and Ollama providers, default primary/fast model routing, connectivity tests, and routing engine status in one dedicated view.
+  - **Message Platforms**: Manage QQ Private, QQ Official Open Platform, Feishu, and Local channel drivers via dedicated status cards covering lifecycle controls, credentials, access policies, and messaging capabilities.
+  - **Plugin Center**: Focused exclusively on the 8 built-in feature plugins and third-party extensions, with toggle switches, parameter settings, one-click sandbox UI launch (Stickers, Token Quotas), and integrated **Installed / Marketplace / Repository Import** tabs — all supporting **hot application (no host restart; a failed reload keeps the old instance)**.
+  - **System Configuration**: Five-section vertical workspace (`Basic Behavior & Persona`, `Conversation Orchestration`, `Built-in Agent & Tools`, `Health Reporting`, and a read-only `Advanced & System Packages` table with quick jumps to each owning domain).
+- **Security Boundaries & In-Memory Sessions**: Bearer tokens are kept strictly in browser memory and cleared on reload or lock; sessions open in safe read-only mode with a persistent topbar Admin Mode toggle; secret slots are never echoed back; all writes are guarded by CAS versioning, single-flight locks, and original-key reconciliation.
+- **Dark/Light Theme, Sandbox Sync & Accessibility**: Modular design tokens drive instant dark/light switching synced automatically into runtime plugin sandbox iframes; verified for full keyboard navigation, WCAG contrast & target sizing, 320px / 200% zoom reflow, and a compact mobile navigation grid.
+- **Task Approvals & End-to-End Observability**: Submit and review background Agent tasks with interactive approval gates, inspect per-node trace breakdowns in a slide-over drawer, tail masked live runtime logs with wrap toggle, and drill directly from Overview component health rows into their owning management views.
 
 ---
 

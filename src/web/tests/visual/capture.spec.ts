@@ -30,7 +30,15 @@ for (const vp of VIEWPORTS) {
     await expect(page.getByTestId('mode-badge')).toHaveText('管理员模式')
     await shot(page, vp.name + '-02-overview')
 
-    for (const [id, label] of [['nav-capabilities', '03-capabilities'], ['nav-configuration', '04-configuration'], ['nav-tasks', '05-tasks']] as const) {
+    for (const [id, label] of [
+      ['nav-providers', '03-providers'],
+      ['nav-platforms', '04-platforms'],
+      ['nav-plugins', '05-plugins'],
+      ['nav-configuration', '06-configuration'],
+      ['nav-tasks', '07-tasks'],
+      ['nav-traces', '08-traces'],
+      ['nav-logs', '09-logs']
+    ] as const) {
       await page.getByTestId(id).click()
       await page.waitForLoadState('networkidle')
       await shot(page, vp.name + '-' + label)

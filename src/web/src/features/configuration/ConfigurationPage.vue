@@ -11,6 +11,7 @@ import {
   type ZbaReadField
 } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import UiSwitch from '../../shared/ui/UiSwitch.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { useModalIsolation } from '../../shared/ui/modal-isolation'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
@@ -57,7 +58,8 @@ const props = withDefaults(defineProps<{
   writesEnabled: boolean
   scope?: string
   active?: boolean
-}>(), { scope: 'basic', active: true })
+  embedded?: boolean
+}>(), { scope: 'basic', active: true, embedded: false })
 
 const editorId = useId()
 const domId = (key: string): string => editorId + '-' + key
@@ -139,6 +141,7 @@ const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
 const pendingNames = ref<ProviderNameDrafts>({})
 let findSequence = 0
 const phase = ref<SavePhase>('idle')
+const validating = ref(false)
 const saveError = ref<UiError | null>(null)
 const receipt = ref<ZbaConfigurationReceipt | null>(null)
 const fieldErrors = ref<ConfigurationFieldError[]>([])
@@ -146,6 +149,25 @@ const validationMessage = ref<string | null>(null)
 const invalidPaths = computed(() => new Set(fieldErrors.value.flatMap(item => item.path ? [item.path] : [])))
 function fieldInvalid(section: string, key: string): boolean {
   return invalidPaths.value.has(`${section}.${key}`)
+}
+function fieldErrorMessage(section: string, key: string): string | null {
+  const path = `${section}.${key}`
+  return fieldErrors.value.find(item => item.path === path)?.message ?? null
+}
+const MULTILINE_FIELDS = new Set(['botPersona', 'agentPrompt'])
+function isMultilineField(key: string): boolean {
+  return MULTILINE_FIELDS.has(key) || /prompt|persona/i.test(key)
+}
+function isFieldCleared(section: SectionKey, key: string): boolean {
+  return draft.value[fieldPath(section as ZbaPatchSectionLike, key)]?.kind === 'clear'
+}
+function scrollToFirstError(): void {
+  const first = fieldErrors.value.find(item => item.path)
+  if (!first?.path) return
+  const key = first.path.includes('.') ? first.path.split('.').slice(1).join('.') : first.path
+  const el = document.querySelector<HTMLElement>(`[data-testid="config-field-${key}"]`)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  el?.querySelector<HTMLElement>('input, textarea, select')?.focus()
 }
 const conflictCurrentVersion = ref<string | null>(null)
 const conflictKeys = ref<string[]>([])
@@ -233,7 +255,7 @@ const hasWritePermission = computed(() => props.mode === 'admin' && props.writes
 const canWrite = computed(() => props.active && hasWritePermission.value)
 // Only an explicit leave confirmation may save a retained draft while its editor is hidden.
 const canSaveOnLeave = computed(() => leavePrompt.value !== null && hasWritePermission.value)
-const busy = computed(() => loading.value || phase.value === 'saving')
+const busy = computed(() => loading.value || phase.value === 'saving' || validating.value)
 /** 提交结果未知时冻结整批内容：既不能改草稿，也不能放弃核对入口。 */
 const unconfirmed = computed(() => phase.value === 'unconfirmed')
 const inputsLocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
@@ -414,7 +436,17 @@ function fieldRule(rule: ZbaFieldDescriptor): string {
 }
 
 function inputValue(event: Event): string {
-  return (event.target as HTMLInputElement | HTMLSelectElement).value
+  return (event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value
+}
+
+function onPolicyDraftsUpdate(next: PolicyDrafts): void {
+  if (!canWrite.value || inputsLocked.value) return
+  anchorDraft()
+  policyDrafts.value = next
+  if (phase.value === 'saved' || phase.value === 'error') phase.value = 'idle'
+  validationMessage.value = null
+  saveError.value = null
+  fieldErrors.value = []
 }
 
 function currentDraftRaw(section: SectionKey, key: string, field: ZbaReadField): string {
@@ -664,9 +696,22 @@ async function reloadAfterConflict(): Promise<void> {
   secretReconfirm.value = reconfirm
   if (snapshot.value?.view) {
     const next = snapshot.value.view
+    const policyConflicts: string[] = []
+    if (base) {
+      const oldPolicies = new Map(policyEntries(base).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
+      const newPolicies = new Map(policyEntries(next).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
+      for (const key of Object.keys(policyDrafts.value)) {
+        const matchEntry = policyEntries(next).find(item => `${item.target.kind === 'instance' ? `${item.target.key.platformId}:${item.target.key.accountScope}:${item.target.key.instanceId}` : `${item.target.platformId}:${item.target.accountScope}`}` === key)
+        const targetId = matchEntry ? JSON.stringify(matchEntry.target) : null
+        if (targetId && oldPolicies.get(targetId) !== newPolicies.get(targetId)) {
+          policyConflicts.push(`policy:${key}`)
+        }
+      }
+    }
     conflictKeys.value = [
       ...conflictingPaths(draft.value, base, next),
-      ...conflictingProviderNames(providerNames.value, base, next).map((key) => `provider:${key}`)
+      ...conflictingProviderNames(providerNames.value, base, next).map((key) => `provider:${key}`),
+      ...policyConflicts
     ]
     // 用户已看到最新快照并逐项确认：从这里起草稿改基到新版本。
     draftBase.value = hasDraft.value ? snapshot.value : null
@@ -681,6 +726,7 @@ async function reloadAfterConflict(): Promise<void> {
 }
 
 async function validate(): Promise<void> {
+  if (validating.value || phase.value === 'saving') return
   const request = buildRequest()
   if (!request || !snapshot.value) return
   fieldErrors.value = localFieldErrors(request.errors)
@@ -688,7 +734,7 @@ async function validate(): Promise<void> {
     validationMessage.value = null
     return
   }
-  phase.value = 'saving'
+  validating.value = true
   saveError.value = null
   validationMessage.value = '校验中…'
   try {
@@ -700,18 +746,18 @@ async function validate(): Promise<void> {
     })
     if (result.code === 0) {
       validationMessage.value = '校验通过；保存时服务端还会再校验一次。'
-      phase.value = 'idle'
       return
     }
     fieldErrors.value = configurationFieldErrors(result.errors, snapshot.value?.view)
     validationMessage.value = result.code === 5
       ? '版本已变化，请先读取最新快照。'
       : `校验未通过（code ${result.code}）。`
-    phase.value = 'idle'
   } catch (cause) {
     if (reportAuthFailure(cause)) return
-    phase.value = 'error'
     saveError.value = toUiError(cause)
+    validationMessage.value = null
+  } finally {
+    validating.value = false
   }
 }
 
@@ -1150,12 +1196,17 @@ defineExpose({
 </script>
 
 <template>
-  <section class="configuration" :class="{ 'capability-editor': props.scope !== 'basic' }" data-testid="configuration" :aria-labelledby="domId('configuration-title')">
-    <header class="page-heading">
+  <section
+    class="configuration"
+    :class="{ 'capability-editor': props.scope !== 'basic' || props.embedded, 'embedded-editor': props.embedded }"
+    data-testid="configuration"
+    :aria-labelledby="domId('configuration-title')"
+  >
+    <header v-if="!props.embedded" class="page-heading">
       <div>
         <p class="eyebrow">系统管理 / 配置</p>
         <h1 :id="domId('configuration-title')" ref="pageHeading" tabindex="-1">{{ editorTitle }}</h1>
-        <p class="page-description">{{ capability?.summary ?? '只保留对话总开关、人设、冷却、上下文与并发等基础设置。其它设置在对应能力中管理。' }}</p>
+        <p class="page-description">{{ capability?.summary ?? '管理机器人基础行为、人设、冷却、上下文与并发参数。' }}</p>
         <p class="subtitle">
           版本 <strong>{{ snapshot?.version ?? '—' }}</strong>
           · 契约 {{ snapshot?.contractRevision ?? '—' }}
@@ -1212,20 +1263,12 @@ defineExpose({
 
     <ConfigurationOperationKey v-if="canWrite && pendingKey && registeredOperation?.key === pendingKey" :operation-key="pendingKey" />
 
-    <p v-if="props.scope === 'basic'" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
-      <span><strong>按能力管理其它设置</strong><br />模型、平台、Agent、报告与插件设置均在对应能力中管理，密钥也随能力配置。</span>
+    <p v-if="props.scope === 'basic' && !props.embedded" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
+      <span><strong>按专题管理其它设置</strong><br />模型供应商、消息平台与插件参数已分别独立至对应一级导航，密钥也随各自专题管理。</span>
       <button type="button" class="tonal inline-action" data-testid="config-open-capabilities" @click="emit('open-capabilities')">
-        去能力页
+        去插件中心
       </button>
     </p>
-
-    <ConfigurationRecoveryLookup
-      v-if="props.scope === 'basic'"
-      :client="props.client"
-      :enabled="props.active && hasWritePermission"
-      :pending="busy || unconfirmed"
-      @auth-expired="emit('auth-expired', $event)"
-    />
 
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
@@ -1238,7 +1281,7 @@ defineExpose({
     <p v-else-if="!snapshot" class="empty-state" data-testid="config-empty">还没有配置快照；请重新读取。</p>
 
     <template v-else>
-      <section class="config-summary" aria-label="配置摘要">
+      <section v-if="!props.embedded" class="config-summary" aria-label="配置摘要">
         <div>
           <span>版本</span>
           <strong>{{ snapshot.version }}</strong>
@@ -1259,10 +1302,20 @@ defineExpose({
         </div>
       </section>
 
+      <div v-if="props.embedded" class="embedded-meta-bar">
+        <span>版本 <strong>{{ snapshot.version }}</strong> · {{ fieldCount }} 项</span>
+        <span class="status-badge" :data-tone="currentRuntimeStatus.tone" data-testid="config-runtime-summary">
+          {{ currentRuntimeStatus.label }}
+        </span>
+        <button type="button" class="ghost embedded-reload" data-testid="config-reload-inline" :disabled="busy" @click="reload()">
+          {{ loading ? '读取中…' : '刷新快照' }}
+        </button>
+      </div>
+
       <p v-if="pendingRestarts.length > 0" class="inline-notice warn" data-testid="config-runtime-restart">{{ runtimeRestartNotice }}</p>
 
       <div class="config-body" :class="{ 'config-body--basic': scope === 'basic' }">
-        <nav v-if="scope !== 'basic'" class="config-nav" aria-label="配置分区">
+        <nav v-if="scope !== 'basic' && (!props.embedded || visibleSections.length > 1)" class="config-nav" aria-label="配置分区">
           <button
             v-for="section in visibleSections"
             :key="section.key"
@@ -1287,7 +1340,7 @@ defineExpose({
             <h2 :id="`${editorId}-config-${active}-title`">{{ editorTitle }}</h2>
             <p>{{ activeMeta.hint }} · {{ activeFields.length }} 个字段</p>
           </div>
-          <p class="config-guide">{{ capability?.summary ?? '基础设置保存后对新消息生效；具体能力的行为与接入参数请在能力页调整。' }}</p>
+          <p class="config-guide">{{ capability?.summary ?? '基础行为设置保存后对新消息生效；模型供应商、消息平台与插件参数请在对应一级页调整。' }}</p>
           <p v-if="activeFields.length === 0" class="empty-state">该分区没有字段。</p>
           <div v-else class="settings-container">
             <table class="settings-table" role="table" data-testid="config-fields">
@@ -1316,14 +1369,14 @@ defineExpose({
                       <span v-if="policyDirtyCount > 0" class="cell-sub">已修改 {{ policyDirtyCount }} 条</span>
                     </div>
                     <p class="cell-sub">
-                      共 {{ policyRows.length }} 条条目：条目里显式写过的字段压过上面的开关与白名单文本。
+                      共 {{ policyRows.length }} 条条目：条目里显式写过的字段优先于通用默认规则。
                     </p>
                     <PlatformPolicyEditor
                       :entries="policyRows"
                       :runtime-effects="snapshot.runtimeEffects"
                       :model-value="policyDrafts"
                       :locked="!canWrite || inputsLocked"
-                      @update:model-value="policyDrafts = $event"
+                      @update:model-value="onPolicyDraftsUpdate"
                     />
                   </td>
                 </tr>
@@ -1338,61 +1391,81 @@ defineExpose({
                     <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
                     <span v-if="fieldHint(item.key)" class="cell-sub">{{ fieldHint(item.key) }}</span>
-                    <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
+                    <span v-if="isFieldDirty(active, item.key, item.field)" class="dirty-pill">
+                      {{ isFieldCleared(active, item.key) ? '待清除' : '已修改' }}
+                    </span>
                   </td>
                   <td class="config-value setting-editor" role="cell">
                     <template v-if="canWrite && isEditable(item.field)">
-                      <select
-                        v-if="valueKind(item.field) === 'boolean'"
-                        :id="`${editorId}-config-input-${active}-${item.key}`"
-                        class="config-input"
-                        :value="currentDraftRaw(active, item.key, item.field)"
-                        :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
-                        :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
-                        :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="inputsLocked"
-                        @change="onFieldInput(active, item.key, inputValue($event))"
-                      >
-                        <option value="true">是</option>
-                        <option value="false">否</option>
-                      </select>
-                      <input
-                        v-else
-                        :id="`${editorId}-config-input-${active}-${item.key}`"
-                        class="config-input"
-                        :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
-                        :min="active === 'behavior' ? replyPacingNumericLimits[item.key]?.min : undefined"
-                        :max="active === 'behavior' ? replyPacingNumericLimits[item.key]?.max : undefined"
-                        :step="active === 'behavior' && replyPacingNumericLimits[item.key] ? replyPacingNumericLimits[item.key]?.step ?? 1 : undefined"
-                        :value="currentDraftRaw(active, item.key, item.field)"
-                        :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
-                        :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
-                        :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="inputsLocked"
-                        @input="onFieldInput(active, item.key, inputValue($event))"
-                      />
-                      <span class="edit-actions">
-                        <button
-                          v-if="isFieldDirty(active, item.key, item.field)"
-                          type="button"
-                          class="link-button"
+                      <div v-if="isFieldCleared(active, item.key)" class="cleared-state" :data-testid="`config-cleared-${item.key}`">
+                        <span>已标记清除（保存后将恢复默认值）</span>
+                        <button type="button" class="link-button" :disabled="inputsLocked" @click="resetField(active, item.key)">撤销清除</button>
+                      </div>
+                      <template v-else>
+                        <UiSwitch
+                          v-if="valueKind(item.field) === 'boolean'"
+                          :id="`${editorId}-config-input-${active}-${item.key}`"
+                          :model-value="currentDraftRaw(active, item.key, item.field) === 'true'"
+                          :label="currentDraftRaw(active, item.key, item.field) === 'true' ? '已开启' : '已关闭'"
+                          :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
                           :disabled="inputsLocked"
-                          @click="resetField(active, item.key)"
-                        >
-                          还原
-                        </button>
-                        <button
-                          v-if="item.field.rule.canClear"
-                          type="button"
-                          class="link-button"
+                          @update:model-value="value => onFieldInput(active, item.key, value ? 'true' : 'false')"
+                        />
+                        <div v-else-if="isMultilineField(item.key) && valueKind(item.field) === 'string'" class="multiline-wrap">
+                          <textarea
+                            :id="`${editorId}-config-input-${active}-${item.key}`"
+                            class="config-input config-textarea"
+                            rows="5"
+                            :value="currentDraftRaw(active, item.key, item.field)"
+                            :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                            :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
+                            :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
+                            :disabled="inputsLocked"
+                            @input="onFieldInput(active, item.key, inputValue($event))"
+                          />
+                          <span class="char-count mono">{{ currentDraftRaw(active, item.key, item.field).length }} 字符</span>
+                        </div>
+                        <input
+                          v-else
+                          :id="`${editorId}-config-input-${active}-${item.key}`"
+                          class="config-input"
+                          :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
+                          :min="active === 'behavior' ? replyPacingNumericLimits[item.key]?.min : undefined"
+                          :max="active === 'behavior' ? replyPacingNumericLimits[item.key]?.max : undefined"
+                          :step="active === 'behavior' && replyPacingNumericLimits[item.key] ? replyPacingNumericLimits[item.key]?.step ?? 1 : undefined"
+                          :value="currentDraftRaw(active, item.key, item.field)"
+                          :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                          :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
+                          :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
                           :disabled="inputsLocked"
-                          @click="clearField(active, item.key)"
-                        >
-                          清除
-                        </button>
-                      </span>
+                          @input="onFieldInput(active, item.key, inputValue($event))"
+                        />
+                        <span class="edit-actions">
+                          <button
+                            v-if="isFieldDirty(active, item.key, item.field)"
+                            type="button"
+                            class="link-button"
+                            :disabled="inputsLocked"
+                            @click="resetField(active, item.key)"
+                          >
+                            还原
+                          </button>
+                          <button
+                            v-if="item.field.rule.canClear"
+                            type="button"
+                            class="link-button"
+                            :disabled="inputsLocked"
+                            @click="clearField(active, item.key)"
+                          >
+                            清除
+                          </button>
+                        </span>
+                      </template>
                     </template>
                     <span v-else :title="valueTitle(item.field)">{{ formatValue(item.field) }}</span>
+                    <p v-if="fieldErrorMessage(active, item.key)" class="field-inline-error" role="alert">
+                      {{ fieldErrorMessage(active, item.key) }}
+                    </p>
                     <span v-if="conflictKeys.includes(`${active}.${item.key}`)" class="cell-sub conflict-flag">
                       与对方修改重叠
                     </span>
@@ -1591,23 +1664,28 @@ defineExpose({
 
       <div
         class="save-bar"
-        :class="{ 'save-bar--floating': hasDraft || busy || unconfirmed }"
+        :class="{ 'save-bar--floating': hasDraft || busy || unconfirmed || fieldErrors.length > 0 }"
         data-testid="config-save-bar"
       >
         <div class="save-bar-info">
           <strong>{{ dirtyCount }} 项修改</strong>
-          <span v-if="phase === 'saving'">保存中…</span>
+          <span v-if="validating">校验中…</span>
+          <span v-else-if="phase === 'saving'">保存中…</span>
           <span v-else-if="phase === 'saved'">已保存</span>
           <span v-else-if="phase === 'unconfirmed'">提交结果未知 · 待核对</span>
           <span v-else-if="phase === 'conflict'">版本冲突 · 待读取</span>
-          <span v-if="hasDraft" class="save-bar-hint">草稿仅在本页内存；刷新或关闭浏览器会先提示</span>
+          <span v-if="fieldErrors.length > 0" class="conflict-flag">
+            {{ fieldErrors.length }} 项校验错误
+            <button type="button" class="link-button" @click="scrollToFirstError">定位首个错误</button>
+          </span>
+          <span v-if="hasDraft" class="save-bar-hint">草稿仅保留于页面内存；离开或关闭前会提示</span>
         </div>
         <div class="save-bar-actions">
           <button
             type="button"
             class="tonal"
             data-testid="config-discard"
-            :disabled="phase === 'saving' || dirtyCount === 0 || unconfirmed"
+            :disabled="phase === 'saving' || validating || dirtyCount === 0 || unconfirmed"
             @click="resetAll"
           >
             放弃修改
@@ -1618,7 +1696,7 @@ defineExpose({
             :disabled="saveBlocked || dirtyCount === 0 || !canWrite"
             @click="validate"
           >
-            校验
+            {{ validating ? '校验中…' : '校验' }}
           </button>
           <button
             type="button"
@@ -1632,7 +1710,15 @@ defineExpose({
         </div>
       </div>
 
-      <section v-if="scope === 'basic'" class="owner-index" aria-label="插件与系统设置入口" data-testid="config-owner-index">
+      <ConfigurationRecoveryLookup
+        v-if="props.scope === 'basic'"
+        :client="props.client"
+        :enabled="props.active && hasWritePermission"
+        :pending="busy || unconfirmed"
+        @auth-expired="emit('auth-expired', $event)"
+      />
+
+      <section v-if="scope === 'basic' && !props.embedded" class="owner-index" aria-label="插件与系统设置入口" data-testid="config-owner-index">
         <div>
           <h2>按模块配置</h2>
           <p class="muted">这里只保留全局行为。插件开关、参数和密钥统一在各自设置中管理。</p>
@@ -1730,13 +1816,16 @@ defineExpose({
 .capability-editor .config-nav { display: flex; flex-wrap: wrap; position: static; gap: 8px; margin-bottom: 16px; }
 .capability-editor .config-nav-item { flex: 1 1 160px; }
 .capability-editor .config-summary { display: none; }
+.embedded-editor .page-heading { display: none; }
+.embedded-meta-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: var(--text-xs); color: var(--text-muted); }
+.embedded-reload { margin-left: auto; min-height: 30px; padding: 4px 10px; font-size: var(--text-xs); }
 .config-panel, .settings-container { min-width: 0; }
-.config-nav-copy { display: grid; gap: 5px; }
-.config-nav-copy small { font-size: 11px; color: var(--text-muted); }
+.config-nav-copy { display: grid; gap: 4px; }
+.config-nav-copy small { font-size: var(--text-xs); color: var(--text-muted); }
 .plugin-notice { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .settings-table, .provider-table { display: block; width: 100%; border: 0; }
 .settings-table tbody, .provider-table tbody { display: block; }
-.settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border-subtle); }
 .settings-table tr:first-child { padding-top: 4px; }
 .settings-table tbody tr:hover td, .settings-table tbody tr.dirty td { background: transparent; }
 .config-body--basic { display: block; }
@@ -1745,19 +1834,25 @@ defineExpose({
 .owner-link { display: grid; gap: 6px; min-width: 0; text-align: left; white-space: normal; padding: 14px 16px; }
 .owner-link span { font-weight: 600; }
 .owner-link small { color: var(--text-muted); font-weight: 400; line-height: 1.5; }
-.settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent-deep); }
+.settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 3px 0 var(--accent-brand); padding-left: 10px; border-radius: var(--radius-sm); }
 .settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
 .settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }
-.setting-identity { flex: 0 0 220px; }
+.setting-identity { flex: 0 0 218px; }
 .setting-editor { flex: 1 1 calc(100% - 240px); }
-.settings-table .setting-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-muted); font-size: 12px; }
+.settings-table .setting-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-muted); font-size: var(--text-xs); }
 .setting-meta .meta-label, .setting-meta .cell-sub { display: inline; margin: 0; }
 .setting-editor .config-input { max-width: 640px; }
 .setting-editor select.config-input, .setting-editor input[type="number"] { max-width: 220px; }
-.meta-label { display: block; color: var(--text-soft); font-size: 11px; margin-bottom: 5px; }
-.config-input { font-size: 14px; height: 40px; min-height: 40px; padding-block: 6px; }
-.config-label { font-size: 14px; font-weight: 600; }
-.config-key { font-size: 11px; margin-top: 3px; }
+.multiline-wrap { display: grid; gap: 4px; max-width: 640px; }
+.config-textarea { min-height: 7.5rem; height: auto; padding: 10px 12px; line-height: 1.6; }
+.char-count { font-size: var(--text-xs); color: var(--text-soft); justify-self: end; }
+.cleared-state { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); font-size: var(--text-sm); font-weight: 500; }
+.dirty-pill { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-deep); font-size: var(--text-xs); font-weight: 600; }
+.field-inline-error { margin: 6px 0 0; font-size: var(--text-xs); color: var(--bad-text); font-weight: 500; }
+.meta-label { display: block; color: var(--text-soft); font-size: var(--text-xs); margin-bottom: 4px; }
+.config-input { font-size: var(--text-base); min-height: 40px; padding-block: 6px; }
+.config-label { font-size: var(--text-base); font-weight: 600; }
+.config-key { font-size: var(--text-xs); margin-top: 3px; }
 .policy-shell { display: block; width: 100%; }
 .policy-cell { width: 100%; min-width: 0; }
 .policy-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 4px; }

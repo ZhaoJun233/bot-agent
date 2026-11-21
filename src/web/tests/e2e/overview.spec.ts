@@ -12,7 +12,7 @@ test('真实 Headless：只读令牌可加载概览，令牌只在内存', async
   await page.goto('/')
 
   await expect(page.getByTestId('auth-gate')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '连接 ZBA' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '连接 BotAgent' })).toBeVisible()
   await expect(page.getByTestId('not-configured')).toHaveCount(0)
 
   await connect(page, READ_TOKEN)

@@ -39,7 +39,7 @@ async function open(page: import('@playwright/test').Page, token: string) {
   await page.getByTestId('token-input').fill(token)
   await page.getByTestId('connect-button').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('nav-plugins').click()
   await expect(page.getByTestId('cap-item-plugin:preset.feature.token-quota')).toContainText('Token 配额')
 }
 test('quota plugin: real host card, read-only list and keyboard focus under /web', async ({ page }) => {
@@ -59,8 +59,8 @@ test('quota plugin: real host card, read-only list and keyboard focus under /web
 })
 test('quota plugin: persistent enablement and restore hot-apply with durable receipts', async ({ page }) => {
   await open(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('plugins-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
   await page.getByTestId('cap-settings-plugin:preset.feature.token-quota').click()
   const toggle = page.getByTestId('quota-plugin-toggle')
   await expect(toggle).toBeEnabled()
@@ -93,8 +93,8 @@ test('quota plugin: persistent enablement and restore hot-apply with durable rec
 })
 test('quota plugin: real host rejects synthetic unknown source without retry', async ({ page, request }) => {
   await open(page, ADMIN)
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('plugins-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
   // Only the visible source list is synthetic. The mutation and rejection come from the actual host.
   await page.route('**/zba/v1/quotas', route => route.fulfill({ json: { items: [quota({ sourceKey: 'panel:synthetic-quota-unknown' })] } }))
   await page.getByTestId('cap-settings-plugin:preset.feature.token-quota').click()

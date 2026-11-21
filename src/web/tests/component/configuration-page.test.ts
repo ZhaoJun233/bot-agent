@@ -153,7 +153,7 @@ describe('ConfigurationPage runtime and explicit denial', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="config-runtime-restart"]').text()).toContain('BotAgent')
     expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('需重启')
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic new draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic new draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="config-receipt-outcome"]').text()).toContain('本次修改已应用')
@@ -228,7 +228,7 @@ describe('ConfigurationPage', () => {
   it.each(['close', 'lock', 'downgrade'] as const)('F6 never offers keep for %s', async reason => {
     const wrapper = mountPage({ mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic non-navigation draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic non-navigation draft')
     const leaving = wrapper.vm.requestLeave(reason)
     await flushPromises()
     expect(document.querySelector('[data-testid="config-leave-keep"]')).toBeNull()
@@ -250,7 +250,7 @@ describe('ConfigurationPage', () => {
     })
     const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic in-flight draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic in-flight draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     const visibleKey = wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]')
@@ -280,7 +280,7 @@ describe('ConfigurationPage', () => {
     const client = clientWith(editableFixture, { saveConfiguration: save })
     const wrapper = mountPage({ mode: 'admin', client })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic pending draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic pending draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     const key = wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value
@@ -298,7 +298,7 @@ describe('ConfigurationPage', () => {
   it('F6 does not expose keep when write permission is disabled', async () => {
     const wrapper = mountPage({ mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic read-only draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic read-only draft')
     await wrapper.setProps({ writesEnabled: false })
     const leaving = wrapper.vm.requestLeave('navigate')
     await flushPromises()
@@ -313,7 +313,7 @@ describe('ConfigurationPage', () => {
     const save = vi.fn()
     const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
     await flushPromises()
-    const input = wrapper.get<HTMLInputElement>('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get<HTMLTextAreaElement>('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('Synthetic unsaved navigation draft')
     const leaving = wrapper.vm.requestLeave('navigate')
     await flushPromises()
@@ -341,7 +341,7 @@ describe('ConfigurationPage', () => {
     const save = vi.fn(async () => { throw new ZbaNetworkError(new Error('Synthetic save timeout')) })
     const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic navigation draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic navigation draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
@@ -369,7 +369,7 @@ describe('ConfigurationPage', () => {
     }) })
     await flushPromises()
     const key = scope === 'basic' ? 'botPersona' : 'model'
-    await wrapper.get('[data-testid="config-field-' + key + '"] input').setValue('Synthetic retained draft')
+    await wrapper.get('[data-testid="config-field-' + key + '"] input, [data-testid="config-field-' + key + '"] textarea').setValue('Synthetic retained draft')
     await wrapper.setProps({ active: false }); await flushPromises()
     // 隐藏普通保存入口（包括直接分派事件）不能绕过写保护。
     await wrapper.get('[data-testid="config-save"]').trigger('click')
@@ -402,7 +402,7 @@ describe('ConfigurationPage', () => {
       saveConfiguration: async () => { writes += 1; return { code: 0, errors: [], replayed: false, receipt, currentVersion: '2' } }
     }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic draft')
     await wrapper.setProps({ active: false })
     const leaving = wrapper.vm.requestLeave('downgrade'); await flushPromises()
     await wrapper.setProps(permission === 'mode' ? { mode: 'read' } : { writesEnabled: false })
@@ -485,7 +485,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('新人格')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
 
     await wrapper.get('[data-testid="config-save"]').trigger('click')
@@ -514,12 +514,12 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('冲突值')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('冲突值')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="config-conflict"]').exists()).toBe(true)
-    expect((wrapper.get('[data-testid="config-field-botPersona"] input').element as HTMLInputElement).value).toBe('冲突值')
+    expect((wrapper.get('[data-testid="config-field-botPersona"] textarea').element as HTMLTextAreaElement).value).toBe('冲突值')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
@@ -537,7 +537,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('我的人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('我的人格')
     // 对方在此期间保存了同一字段，本页因切页/补读重读到 version 2。
     const other = structuredClone(current)
     other.version = '2'
@@ -555,7 +555,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
     // 只报对方也改过的字段；用户草稿保留。
     expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('与对方修改重叠')
-    expect((wrapper.get('[data-testid="config-field-botPersona"] input').element as HTMLInputElement).value).toBe('我的人格')
+    expect((wrapper.get('[data-testid="config-field-botPersona"] textarea').element as HTMLTextAreaElement).value).toBe('我的人格')
 
     // 读取最新后改基：再次保存带新版本。
     await saveDraft(wrapper)
@@ -578,7 +578,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('合成 503 待核对')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('合成 503 待核对')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
@@ -610,7 +610,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('待核对')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('待核对')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
@@ -640,12 +640,12 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('未知结果')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('未知结果')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     expect(input.attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="config-save"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="config-discard"]').attributes('disabled')).toBeDefined()
@@ -683,7 +683,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('过期键')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -717,7 +717,7 @@ describe('ConfigurationPage', () => {
       requestLeave: (reason: 'lock' | 'downgrade') => Promise<boolean>
     }
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('未保存')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('未保存')
     const pending = page.requestLeave('downgrade')
     await flushPromises()
     const dialog = document.body.querySelector<HTMLElement>('[data-testid="config-leave-dialog"]')
@@ -760,7 +760,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="config-secrets"] input[type="password"]')).toHaveLength(0)
-    expect((wrapper.get('[data-testid="config-field-model"] input').element as HTMLInputElement).value).toBe('字段草稿')
+    expect((wrapper.get('[data-testid="config-field-model"] input').element as HTMLTextAreaElement).value).toBe('字段草稿')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
@@ -795,7 +795,7 @@ describe('ConfigurationPage', () => {
     window.dispatchEvent(clean)
     expect(clean.defaultPrevented).toBe(false)
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('脏草稿')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('脏草稿')
     const dirty = new Event('beforeunload', { cancelable: true })
     window.dispatchEvent(dirty)
     expect(dirty.defaultPrevented).toBe(true)
@@ -823,7 +823,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('未知提交')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -847,7 +847,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('缺少回执')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -884,7 +884,7 @@ describe('ConfigurationPage', () => {
       requestLeave: (reason: 'lock' | 'downgrade') => Promise<boolean>
     }
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('在途保存')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('在途保存')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
@@ -949,7 +949,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('核对矛盾')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -1449,7 +1449,7 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     })
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('新人格')
     await saveDraft(wrapper)
     return wrapper
   }
@@ -1488,7 +1488,7 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     })
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('新人格')
     await saveDraft(wrapper)
     const grid = wrapper.get('[data-testid="config-receipt"] .receipt-grid').text()
     expect(grid).toContain('部分生效')

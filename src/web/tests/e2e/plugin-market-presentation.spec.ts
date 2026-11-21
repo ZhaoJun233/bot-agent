@@ -54,9 +54,9 @@ async function openMarket(page: Page): Promise<void> {
   await page.getByTestId('token-input').fill('synthetic-web-admin-token')
   await page.getByTestId('connect-button').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('cap-marketplace').click()
-  await expect(page.getByTestId('marketplace')).toBeVisible()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('plugins-tab-catalog').click()
+  await expect(page.getByTestId('marketplace-workspace')).toBeVisible()
 }
 
 test('中文市场：九项统一展示、状态来自注册表、内置不走安装接口', async ({ page }, testInfo) => {
@@ -76,7 +76,7 @@ test('中文市场：九项统一展示、状态来自注册表、内置不走�
   await expect(page.getByTestId('marketplace-uninstall')).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('builtin-desktop.png'), fullPage: false })
   await page.getByTestId('configure-builtin').click()
-  await expect(page.getByTestId('marketplace')).toHaveCount(0)
+  await expect(page.getByTestId('ability-configuration-dialog')).toBeVisible()
   expect(writes).toEqual([])
 })
 
@@ -84,21 +84,27 @@ test('中文市场：远端目录离线仍可查看本机内置能力', async ({
   await mockMarket(page, true)
   await openMarket(page)
   await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(8)
-  await expect(page.getByTestId('marketplace').getByRole('alert')).toBeVisible()
+  await expect(page.getByTestId('marketplace-workspace').getByRole('alert')).toBeVisible()
   await expect(page.getByTestId('marketplace-detail')).toContainText('本机简略回退说明')
   await expect(page.getByTestId('configure-builtin')).toBeEnabled()
 })
 
-test('中文市场：真实合成宿主注册表与 Wire 的内置及系统能力包可被客户端解析', async ({ page }) => {
+test('中文市场：真实合成宿主市场只展示功能插件，系统核心包独立收纳在系统配置中', async ({ page }) => {
   await page.route('**/zba/v1/plugins/catalog', route => route.fulfill({
     status: 503, json: { error: { code: 'service_unavailable', message: 'Synthetic offline catalog' } }
   }))
   await openMarket(page)
-  await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(17)
+  // 插件市场过滤 9 个 system.* 引擎包，只展示 8 个内置功能插件
+  await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(8)
   await page.getByTestId('marketplace-search').fill('preset.feature.token-quota')
   await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(1)
   await expect(page.getByTestId('marketplace-detail')).toContainText('Token 配额')
   await expect(page.getByTestId('marketplace-install')).toHaveCount(0)
+
+  // 9 个 system.* 核心包完整收纳在「系统配置 -> 高级与系统包」中
+  await page.getByTestId('nav-configuration').click()
+  await page.getByTestId('sysconfig-tab-system-packages').click()
+  await expect(page.locator('[data-testid^="syspkg-row-system."]')).toHaveCount(9)
 })
 
 test('中文市场：移动端社区包保留未审核和执行风险提示', async ({ page }, testInfo) => {
