@@ -1,6 +1,6 @@
 # ADR-0005：记忆敏感度分级与工具流出面共存矩阵
 
-- 状态：Phase 3（v1.7）实施基线；不削弱 [ADR-0004](0004-unified-memory-authorization.md) 与 [GLOSSARY.md](../../GLOSSARY.md) 任何一条安全不变量。
+- 状态：Phase 3（v1.7）实施基线；不削弱 [ADR-0004](0004-unified-memory-authorization.md) 与 [GLOSSARY.md](../glossary.md) 任何一条安全不变量。
 - 关联：`MemoryTaintPolicy`、`MemoryUseScope`、`UnifiedMemoryTurn`、`ToolVisibility`、`InlineTurnTools`、`ReplyPipeline.Generation`、`ServerAgentRunner`。
 
 ## 1. 决策摘要

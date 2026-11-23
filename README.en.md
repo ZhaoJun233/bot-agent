@@ -7,213 +7,185 @@ English | [简体中文](README.md)
 [![Protocol](https://img.shields.io/badge/Protocol-OneBot%20v11%20%7C%20QQ%20Official%20%7C%20Feishu-purple.svg)](#system-architecture)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
 
-Bot Agent is a headless, high-performance, pluggable multi-chat-platform Agent daemon built for Linux environments. It supports QQ Private Chats ([NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11), QQ Official Open Platform, Feishu (Lark) applications, and a zero-dependency local playground channel. Interacting with OpenAI-compatible Large Language Models (including DeepSeek, Qwen, OpenAI, local Ollama, etc.), it delivers autonomous judgment and lifelike replies across group chats, direct messages (DMs), and channels, complete with a decoupled modern Web management console.
+Bot Agent is a headless, high-performance, pluggable multi-chat-platform Agent daemon built for Linux environments. It supports QQ Private Chats ([NapCat](https://github.com/NapNeko/NapCatQQ) / OneBot v11), QQ Official Open Platform, Feishu (Lark) applications (WebSocket & Webhook), a zero-dependency local playground channel, and an isolated Personal Workspace (`workspace:owner`). Interacting with OpenAI / Anthropic / Gemini compatible LLMs, it provides autonomous speaking judgment, governed memory, and lifelike replies across group chats, direct messages, and workspace sessions, paired with a standalone static Web Management Console.
 
-The project natively supports running directly from source code across standard Linux distributions (Ubuntu, Debian, CentOS, Arch, etc.) without requiring a container environment, while preserving standard Docker Compose containerized deployment support.
+The project supports running natively from source or artifacts on standard Linux distributions, orchestrating with Docker Compose, or deploying on memory-constrained (`1 GB` RAM) hosts via the artifact-only runtime image [`Dockerfile.app`](Dockerfile.app).
+
+---
+
+## Core Documentation Hub
+
+| Document | Summary |
+| :--- | :--- |
+| [Documentation Hub (`/docs`)](docs/index.en.md) | Unified entry point to business rules, database design, operations runbook, architecture specs, ADRs, and glossary |
+| [Core Business Rules & Domain Guide](docs/domain/core-business-rules.en.md) | Five-channel trust boundaries, 3-layer config & ConversationProfile resolution, reply pacing & silent short-circuit, memory taint matrix, Agent task state machine, scheduler/todo/identity-linking rules |
+| [Database Design](docs/storage/database-design.en.md) | SQLite WAL runtime settings, Schema v1–v15 evolution, ER diagram, all 31 physical business tables, Schema-v15 `meta` JSON ledgers, and on-disk layout |
+| [Operations & Incident Runbook](docs/operations/runbook.en.md) | Core observability metrics, privacy-safe masked log inspection rules, 12-scenario triage table, and dual-backup rollback flowchart |
+| [Engineering Standards & ADR Index](docs/decisions/engineering-standards-and-adr.en.md) | Repository layout, coding standards & `ArchitectureProbe` ratchets, Git & release pipeline, key technology trade-offs, and ADR 0001–0006 index |
+| [API Surface Map](docs/api-surface.md) | Complete legacy panel, ZBA v1, and package HTTP routes (enforced by `ArchitectureProbe` against `PanelRoutes.cs`) |
+| [Glossary](docs/glossary.md) | Canonical domain terminology, security invariants, and module naming conventions |
+| [Consolidated Open Questions](docs/open-questions.en.md) | Single centralized checklist of undecided thresholds, SLAs, and governance policies across all docs |
+| [Linux Docker First-Run Guide](docs/operations/linux-docker-first-run.md) | Prebuilt artifact workflow for 1 GB hosts, standalone Caddy frontend, and controlled acceptance |
 
 ---
 
 > [!CAUTION]
 > ### Account Safety and Risk Control Warning
 >
-> Due to strict risk control and anti-automation policies enforced by instant messaging platforms, and based on real ban experiences reported by project contributors, please take note of the following operating environment risks:
+> Due to strict anti-automation and risk-control policies enforced by instant messaging platforms, and based on real ban experiences reported by project contributors, note the following environment rules:
 >
-> 1. **Avoid Running on Mobile Devices or Volatile Networks**: Do NOT run the protocol client locally on Android phones, inside Termux terminals, or across cellular base station networks that switch frequently. High-frequency API invocations in such environments are easily flagged as abnormal clients by anti-abuse systems, leading to permanent bans or frequent account freezes.
-> 2. **Recommended Deployment Architecture**: Deploy the service in trusted remote data centers (cloud VPS / dedicated servers), on home mini-PCs with stable static/broadband IP addresses, or on dedicated devices running standard Linux (Ubuntu / Debian, etc.), keeping network egress clean and stable.
-> 3. **Isolate Production from Testing**: Never use your primary personal or work accounts as the bot endpoint. Use a dedicated auxiliary account during testing, or prioritize using the [QQ Official Open Platform Channel](#qq-official-open-platform-optional) for compliant and stable operations.
+> 1. **Avoid Mobile Devices or Volatile Networks**: Do NOT run the protocol client locally on Android phones, inside Termux terminals, or over switching cellular networks. High-frequency API calls on such egress paths are easily flagged, leading to permanent bans or frequent account freezes.
+> 2. **Recommended Deployment Architecture**: Deploy in trusted data centers (cloud VPS / dedicated servers), on home mini-PCs with stable broadband IP addresses, or on dedicated Linux devices with clean, stable network egress.
+> 3. **Isolate Production from Testing**: Never bind primary personal or work accounts as bot endpoints. Use dedicated test accounts or prioritize the [QQ Official Open Platform Channel](#qq-official-open-platform-optional) for compliant operation.
 
 ---
 
 ## Key Features
 
-### Intelligent Judgment and Natural Interaction
-- **Autonomous Speaking Opportunity Decisions**: The model evaluates the necessity of speaking based on conversation context and configured suitability thresholds, remaining silent when below the threshold; combined with rate-limiting cooldown algorithms to prevent spamming and mechanical interruptions.
-- **Atmosphere Awareness & Reply Pacing**: Uses room sentiment to assess suitable content; group interjection probability, cooldown after complete replies and same-speaker continuation windows control pacing while direct requests and private chats retain explicit-response admission.
-- **User Profiles & Long-Term Memory**: Constructs short-term conversation stacks and long-term user personas based on sender identifiers (with evidence-backed traceability and manual overrides), persisted to an embedded SQLite database.
-- **Action Narration Semantic Filtering**: Supports filtering stage-direction narration (e.g., bracketed actions) from model outputs, verified by a secondary semantic check while strictly preserving math formulas, code snippets, links, and genuine explanations.
-- **Multimodal Visual Perception**: Automatically downloads group images and passes them to multimodal vision models; features internal image byte caching and automatic URL re-signing for expiring temporary URLs.
-- **Deep Adaptation to Native Interactions**:
-  - **Poke Responses**: Detects bidirectional poke events, equipped with cooldown gates and autonomous poke-back logic.
-  - **Sticker Coordination & Security Guard**: Automatically ingests and reviews stickers, extracts semantic tags, and retrieves candidates by context; features built-in `StickerSafetyGuard` for path traversal prevention and binary magic-byte spoofing verification.
-  - **Precise Context Quoting**: Automatically resolves quote targets from received replies, crediting the original message when the model replies.
-  - **Audio Analysis & Topic Continuation**: When music cards are shared, fetches lyrics and analyzes waveform acoustic features (tempo, dynamics, loudness, and section structure), ensuring responses are grounded in objective facts.
-- **Lifelike Typing Cadence**: Splits long replies at punctuation boundaries and sends them in batches simulating realistic typing delays.
+### Intelligent Judgment & Natural Interaction
+- **Unified Reply Pacing**: [`Reply Pacing`](docs/reply-pacing.md) governs `GroupInterjectionProbability`, `GroupInterjectionCooldownSeconds`, group/DM quiet continuation windows, and `SuitabilityThreshold`. Explicit requests bypass group throttling while silent decisions short-circuit before outbound side effects.
+- **Tiered Memory & Scoped Knowledge Base**: [ADR-0004](docs/decisions/0004-unified-memory-authorization.md) and [ADR-0005](docs/decisions/0005-memory-tool-coexistence-taint-tiers.md) enforce per-fact, per-version, destination-bound user authorization and a fail-closed `MemorySensitivityTier` × `ToolEgressClass` matrix; includes isolated per-scope BM25 knowledge bases (`<= 256` docs / `<= 4096` chunks / `<= 1 MiB` per scope).
+- **Action Narration Filtering & Multimodal Perception**: Strips stage-direction narration while preserving math, code, and links; includes vision byte caching and expiring URL re-signing, bidirectional pokes, magic-byte-verified sticker vaults, precise reply quoting, music waveform/lyric analysis, lifelike sentence splitting, and cloud TTS voice bars without duplicate text broadcasts.
 
-### Multi-Platform Support & Instance Policies
-- **Unified Platform Policy Governance**: Supports QQ Private, QQ Official Open Platform, Feishu Bot, and Local channel. Each driver card on the Web Console's **Message Platforms** page opens its own decoupled **Access & Policies** drawer (isolated driver fields, secret slots, and per-platform policy entries, owned by each `packages/platform-*/frontend/presentation.ts`). Chat mute preserves connectivity; disabling a platform blocks chat. Credentials, connection state, whitelists, and the global AI switch remain independent safety gates.
-- **Daily Token Quota Ledger**: Runs as the preset plugin `preset.feature.token-quota`, managing UTC daily budgets isolated by platform and conversation tenant (`SourceKey`). Supports tenant filtering, real-time usage monitoring, and automatic power-saving silence when quotas are exhausted; supports one-click sandbox UI launch, hot tuning, and persistence directly from the **Plugin Center** card.
-- **Zero-Dependency Local Test Channel**: an in-process standalone channel (no external long connection). Register local channel IDs in the panel under **Message Platforms → Local Channel → Access & Policies**, then inject test messages with `POST /api/local/message`; they traverse the full model decision pipeline and the six-stage governance timeline.
+### Multi-Platform, Package Decoupling & Console Workspace
+- **22 Decoupled Feature & Platform Packages**: 4 platform drivers (QQ Private, QQ Official, Feishu, Local Playground), system capability packages (Model Services, Built-in Agent, MCP Tools, Conversation Orchestration, Health Reporting), and conversation packages (Token Quota, Web Search, Poke, Vibes, Stickers, Music, Voice, Profiles, Documents, Digest, Knowledge, Scheduler, Personal Todo), supporting hot reload/toggle with old-generation preservation on failure.
+- **Conversation Profiles & Cross-Platform RBAC / Approvals**: Per-conversation conversation/tool-tier overrides with live capability fingerprinting, cross-platform `WorkspaceRole` enforcement, human approval gates for non-read-only plugin tools, and opt-in cross-platform identity linking via 120s in-memory HMAC challenge ([ADR-0006](docs/decisions/0006-optional-cross-platform-identity-linking.md)).
+- **Personal Workspace & Sandboxed Plugin UIs**: Isolated Personal Workspace (`workspace:owner`) plus scheduler and personal-todo UIs rendered inside `origin === "null"` sandboxed iframes with synchronized dark/light themes and admin-mode checks.
 
 ---
 
 ## Quick Start
 
-### Method 1: Native Linux Execution (Recommended, No Docker Required)
+For first-time production Linux Docker setups, read [Linux Docker First-Run Guide](docs/operations/linux-docker-first-run.md). Before upgrading, always preserve dual rollback anchors per the [Rollback Playbook](docs/operations/rollback-playbook.md); check ambiguous task submissions via the [Task Recovery Guide](docs/operations/task-recovery-guide.md).
 
-#### 1. System Requirements & Environment Setup
-- **Operating System**: Standard Linux distribution (Ubuntu 20.04+, Debian 11+, CentOS 8+, Arch Linux, etc.)
-- **Runtime Dependencies**: .NET 10.0 SDK / Runtime, Git, curl, openssl
-- **OneBot Protocol Client**: [NapCat Linux Shell](https://github.com/NapNeko/NapCatQQ) (if using QQ Private Channel)
+### Prerequisites
 
-Install base dependencies on Debian / Ubuntu:
+| Component | Local Dev / Build Machine | Production Server Runtime | Purpose |
+| :--- | :--- | :--- | :--- |
+| .NET SDK / Runtime | **.NET 10.0 SDK** | Bundled in Docker image (or host .NET 10 Runtime) | Build & run `BotAgent.slnx` and `BotAgent.Headless` |
+| Node.js & npm | **Node.js `22.22.2+` / `24.15.0+` / `26+`** | Not required (static web server only) | Build & verify the `src/web` Vue 3 console |
+| Python | **Python 3.12+** | Local diagnostic/audit scripts only | Run `BotAgent.ServerFilesProbe`, `mask-cjk.py`, `push-desensitized.py` |
+| Container & Reverse Proxy | Docker (optional) | Docker Compose + Caddy / Nginx | Run containers and serve standalone `/web/` assets |
+| Protocol Client (optional) | — | [NapCat](https://github.com/NapNeko/NapCatQQ) (for QQ Private) | Provides OneBot v11 Forward/Reverse WS connection |
 
-```bash
-# Update package lists and install prerequisites
-sudo apt-get update
-sudo apt-get install -y dotnet-sdk-10.0 git curl openssl
-```
-
-#### 2. Obtain Source Code & Build
+### Method 1: Local Development & Source Debugging (Decoupled Frontend/Backend)
 
 ```bash
-# Clone the main repository (main branch)
-git clone -b main https://github.com/ZhaoJun233/bot-agent.git
-cd bot-agent
+# 1. Restore and build the full solution (includes NuGet high/critical audit gate)
+dotnet restore BotAgent.slnx
+dotnet build BotAgent.slnx -c Release
 
-# Generate and edit configuration file
+# 2. Copy and configure environment variables (local dev can enable loopback ZBA with BOTAGENT_ZBA_ALLOW_LOOPBACK=1)
 cp .env.example .env
-vim .env
+
+# 3. Start headless backend host (defaults to 127.0.0.1:18245; ships no embedded HTML)
+dotnet run --project src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
+
+# 4. In another terminal, launch frontend dev server (proxies /api and /zba to backend port)
+cd src/web
+npm ci
+npm run dev
 ```
 
-#### 3. Operations & Daemon Management
+To build only static production frontend assets, run `npm run build` inside `src/web`; files are emitted to `src/web/dist` for Caddy/Nginx hosting under `/web/` (see [`src/web/README.md`](src/web/README.md)).
 
-The project includes cross-distribution compatible control scripts:
-
-- **Start in background**:
-  ```bash
-  ./start.sh
-  ```
-- **Start in foreground (debug console output)**:
-  ```bash
-  ./start.sh -f
-  ```
-- **Check status and health probes**:
-  ```bash
-  ./status.sh
-  ```
-- **Safely stop service**:
-  ```bash
-  ./stop.sh
-  ```
-- **View live log output**:
-  ```bash
-  tail -f runtime/logs/bot-agent.log
-  ```
-
-Once the service starts: the health probe at `http://127.0.0.1:18245/healthz` returns `{"status":"ok","version":"x.y.z"}` (the version comes from the single source of truth, `Directory.Build.props`; port per the configuration reference below, 8080 inside the container image); **the host ships no pages at all** — `/` and `/web/` are served by the reverse proxy. See [`src/web/README.md`](src/web/README.md) for frontend deployment.
-
----
-
-### Method 2: Docker Compose Containerized Execution
-
-On hosts with Docker installed, you can use container orchestration:
+### Method 2: Native Linux Scripts (No Docker)
 
 ```bash
 cp .env.example .env
-vim .env
+# Edit .env with model keys and whitelists
 
-# Build and start services
-docker compose up -d
-
-# View protocol client login QR code
-docker compose logs -f napcat
+./start.sh        # Start in background (writes to runtime/logs/bot-agent.log)
+./start.sh -f     # Start in foreground for debugging
+./status.sh       # Inspect PID, /healthz, /readyz, and last 10 log lines
+./stop.sh         # Gracefully stop service
 ```
+
+Once started, `http://127.0.0.1:18245/healthz` returns `{"status":"ok","version":"x.y.z"}` sourced from `Directory.Build.props` (container images typically use port 8080).
+
+### Method 3: Docker Compose / Low-Memory Artifact Image Deployment
+
+- **Standard Compose Deployment** (includes NapCat and source build):
+  ```bash
+  cp .env.example .env
+  # Edit .env, then launch
+  docker compose up -d
+  docker compose logs -f napcat   # Scan QR code on first login
+  ```
+- **Recommended Artifact Route for 1 GB Hosts**: Publish `linux-x64` artifacts (`app.tar.gz`) on a dev/build machine and build the runtime image on the server via [`Dockerfile.app`](Dockerfile.app) so `dotnet publish` never exhausts swap on small hosts. Full steps are documented in [Linux Docker First-Run Guide](docs/operations/linux-docker-first-run.md).
 
 ---
 
 ## Configuration Reference
 
-Configuration is not "one `.env` file rules everything". It is **two environment-variable layers plus one source of truth**. Mixing them up is the most common cause of "I changed it but nothing happened".
+Configuration uses a **three-layer ownership model** (`compose .env` + `host environment` + `SQLite database`). Confusing these layers is the most common reason changes appear ignored.
 
-### The three layers
-
-| Layer | Location | Owner | When it takes effect |
+| Layer | Location | Owner | Precedence & Lifecycle |
 | :--- | :--- | :--- | :--- |
-| 1. compose layer | `.env` in the repo root | deployer | only feeds `${VAR}` substitution in `docker-compose.yml`; **never reaches the container by itself** |
-| 2. host layer (environment) | the container's `environment:` / process env | read once at startup | secrets and infrastructure: **always override**, restart to apply |
-| 3. source of truth (panel + SQLite) | `data/botagent.db` | owned by the panel after a save | behavioural settings: applied live and persisted |
+| 1. Compose layer | Root `.env` | Deployer | Only substitutes `${VAR}` in `docker-compose.yml`; **never reaches the container unless listed under `environment:`** |
+| 2. Host environment | Container `environment:` / process env | Read at startup | Canonical `BOTAGENT_*` wins over `QQCHAT_*` / `OPENAI_*` (with `{NAME}_FILE` secret support); **secrets are never written to `settings.json`**; infrastructure values always override |
+| 3. Database source of truth | `data/botagent.db` (& `data/settings.json`) | Console after save | Behavioral settings are seeded from env on first boot only; once saved in the panel (CAS + singleflight), database values take over |
 
-Three ownership rules (same origin as the class comment in `src/BotAgent.Core/Contracts/AppSettings.Part1.cs`):
+> [!WARNING]
+> Never overwrite a live deployment's `docker-compose.yml` with the repo default—doing so can wipe manual edits such as NapCat's `ACCOUNT` and force a fresh QR login. See [`.env.example`](.env.example) for the complete key template.
 
-1. **Secrets are read from the environment only** (`BOTAGENT_API_KEY` / `QQCHAT_API_KEY`, `BOTAGENT_QQ_ONEBOT_TOKEN`, `BOTAGENT_PANEL_TOKEN`, `BOTAGENT_AGENT_TOKEN`…). They are **never persisted**, so config files stay safe to back up or paste into a log.
-2. **Infrastructure** (model base URL, model name, protocol endpoint, listening port) is always overridden by the environment.
-3. **Behaviour** (persona, whitelists, thresholds, cooldowns, voice, search…) is owned solely by the panel and the database; environment variables are only a **seed for the first deployment**. Once the panel has saved a value, the same-named environment variable no longer applies — the startup log says "the following environment variables are overridden by the panel settings".
+### Core Host Environment Variables
 
-### Layer 1: compose (`.env`)
+| Canonical Key (Preferred) | Legacy Aliases | Default / Example | Scope & Behavior |
+| :--- | :--- | :--- | :--- |
+| `BOTAGENT_DATA_DIR` | `QQCHAT_DATA_DIR` | `./runtime` or `/data` | Single-bound runtime data root (`data/botagent.db`, logs, plugins) |
+| `BOTAGENT_API_KEY` | `QQCHAT_API_KEY`, `OPENAI_API_KEY` | Required (supports `_FILE`) | Primary model API key; never persisted into `settings.json` |
+| `BOTAGENT_BASE_URL` | `QQCHAT_BASE_URL`, `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Primary OpenAI-compatible model endpoint |
+| `BOTAGENT_MODEL` | `QQCHAT_MODEL`, `OPENAI_MODEL` | `gpt-4o-mini` | Primary model identifier |
+| `BOTAGENT_FAST_MODEL` / `BOTAGENT_FAST_REPLY` | `QQCHAT_FAST_MODEL` / `QQCHAT_FAST_REPLY` | Empty / `false` | Lightweight model override for interactive chat replies |
+| `BOTAGENT_QQ_ONEBOT_PROTOCOL` | `QQCHAT_ONEBOT_PROTOCOL` | `ForwardWebSocket` | OneBot mode: `ForwardWebSocket` / `ReverseWebSocket` |
+| `BOTAGENT_QQ_ONEBOT_URL` | `QQCHAT_ONEBOT_URL`, `QQCHAT_ONEBOT_ADDRESS` | `ws://127.0.0.1:3001` | OneBot WebSocket endpoint |
+| `BOTAGENT_QQ_ONEBOT_TOKEN` | `QQCHAT_ONEBOT_TOKEN` | Empty (supports `_FILE`) | OneBot authentication token |
+| `BOTAGENT_QQ_UIN` | `QQCHAT_UIN`, `QQCHAT_QUICK_LOGIN_UIN` | Empty | Bot QQ account (auto-detected after connect if empty) |
+| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`, `HEALTH_PORT` | `18245` native / `8080` container | HTTP port for panel API, ZBA, and `/healthz` (`0` = disabled) |
+| `BOTAGENT_HEALTH_BIND` | `QQCHAT_HEALTH_BIND` | `127.0.0.1` | Bind address (`+` for proxy bridge; forced loopback without auth) |
+| `BOTAGENT_PANEL_TOKEN` | `QQCHAT_PANEL_TOKEN` | Empty | Legacy `/api/*` panel token |
+| — | `QQCHAT_PANEL_PASSWORD` | Empty | Initial panel password seed on first boot (managed in panel afterward) |
+| `BOTAGENT_ZBA_TOKEN` | `QQCHAT_ZBA_TOKEN` | Empty | ZBA admin Bearer token (required for writes; management endpoints return `503` when unset) |
+| `BOTAGENT_ZBA_READ_TOKEN` | `QQCHAT_ZBA_READ_TOKEN` | Empty | ZBA read-only Bearer token (for read views & CLI checks) |
+| `BOTAGENT_ZBA_ALLOW_LOOPBACK` | `QQCHAT_ZBA_ALLOW_LOOPBACK` | `0` (off) | `1` allows tokenless loopback ZBA access (**local dev only**) |
+| `BOTAGENT_ZBA_URL` | — | `http://127.0.0.1:<port>/zba/v1` | Default base URL for ZBA read-only CLI commands (`--status`, etc.) |
+| `BOTAGENT_AGENT_TOKEN` | `QQCHAT_AGENT_TOKEN` | Empty (supports `_FILE`) | Built-in server Agent token |
+| `BOTAGENT_AGENT_SERVER_KEY` | `QQCHAT_AGENT_SERVER_KEY` | Empty (supports `_FILE`) | Dedicated model API key override for Agent sub-tasks |
+| `BOTAGENT_NAPCAT_WEBUI_URL` / `BOTAGENT_NAPCAT_WEBUI_TOKEN` | `QQCHAT_NAPCAT_WEBUI_*` | `http://127.0.0.1:6099` / Empty | Embedded NapCat QR login proxy URL & token |
+| `BOTAGENT_FEISHU` / `BOTAGENT_FEISHU_APP_ID` / `BOTAGENT_FEISHU_WHITELIST` | `QQCHAT_FEISHU*` | `0` / Empty | Feishu channel toggle, AppId, and initial whitelist seed |
+| `BOTAGENT_FEISHU_APP_SECRET` / `BOTAGENT_FEISHU_ENCRYPT_KEY` / `BOTAGENT_FEISHU_VERIFICATION_TOKEN` | `QQCHAT_FEISHU_*` | Empty (supports `_FILE`) | Feishu credentials & event encryption secrets (env-only) |
+| `BOTAGENT_VOICE_EMOTION` | `QQCHAT_VOICE_EMOTION` | — | Initial default emotion preset for cloud TTS |
+| `BOTAGENT_VERBOSE` / `BOTAGENT_LOG_FILE` | `QQCHAT_VERBOSE` / `QQCHAT_LOG_FILE` | `1` / `1` | Verbose logging and log-file persistence toggle (`0` = stdout only) |
+| `TZ` | — | Host local or `Asia/Shanghai` | Default runtime timezone |
 
-`.env` only serves the `${VAR}` placeholders in `docker-compose.yml`. Two traps:
+### QQ Official Open Platform (Optional)
 
-- **A new variable must also be declared in the compose `environment:` block**, otherwise the container never sees it.
-- Do not copy the repository `docker-compose.yml` over the deployment copy — the deployment one may carry hand edits (lose NapCat's `ACCOUNT` and you have to scan the QR code again).
-
-The key list lives in [`.env.example`](.env.example) (commented, the only maintained template). **Bare names without the `BOTAGENT_` / `QQCHAT_` prefix only work for compose substitution** — the host does not read them.
-
-### Layer 2: host (environment variables)
-
-The host reads prefixed names, **canonical `BOTAGENT_*` first, legacy `QQCHAT_*` as fallback** (`EnvironmentAliases.Get` falls through in order). The most common ones:
-
-| Canonical (wins) | Legacy aliases | Meaning |
-| :--- | :--- | :--- |
-| `BOTAGENT_API_KEY` | `QQCHAT_API_KEY`, `OPENAI_API_KEY` | model key (required, never persisted) |
-| `BOTAGENT_BASE_URL` | `QQCHAT_BASE_URL`, `OPENAI_BASE_URL` | model base URL |
-| `BOTAGENT_MODEL` | `QQCHAT_MODEL`, `OPENAI_MODEL` | model identifier |
-| `BOTAGENT_QQ_ONEBOT_PROTOCOL` | `QQCHAT_ONEBOT_PROTOCOL` | `ForwardWebSocket` / `ReverseWebSocket` |
-| `BOTAGENT_QQ_ONEBOT_URL` | `QQCHAT_ONEBOT_URL` | protocol client WebSocket URL |
-| `BOTAGENT_QQ_ONEBOT_TOKEN` | `QQCHAT_ONEBOT_TOKEN` | protocol client auth token |
-| `BOTAGENT_QQ_UIN` | `QQCHAT_UIN` | bot account (auto-detected on connect when empty) |
-| `BOTAGENT_HEALTH_PORT` | `QQCHAT_HEALTH_PORT`, `HEALTH_PORT` | panel and health-probe port (**18245** for native and prebuilt-artifact images; 8080 for source images and compose) |
-| `BOTAGENT_HEALTH_BIND` | `QQCHAT_HEALTH_BIND` | bind address (`127.0.0.1` by default, loopback only) |
-| `BOTAGENT_PANEL_TOKEN` | `QQCHAT_PANEL_TOKEN` | panel API token |
-| — | `QQCHAT_PANEL_PASSWORD` | **initial** panel password: written to the database on first start, changed in the panel afterwards |
-| `BOTAGENT_AGENT_TOKEN` | `QQCHAT_AGENT_TOKEN` | server agent token |
-| `BOTAGENT_NAPCAT_WEBUI_URL` | `QQCHAT_NAPCAT_WEBUI_URL` | NapCat WebUI URL (QR login in the panel) |
-
-> Panel authentication has exactly two forms — a password and a token. **There is no "disable authentication" switch.**
-
-### Layer 3: source of truth (panel + database)
-
-After initialisation almost every runtime behaviour is changed in the Web panel; saving persists it, applies it live and needs **no restart**: persona and the AI switch, group/private whitelists, reply thresholds and cooldowns, splitting and delays, stickers and pokes, voice and TTS, search, platform instance policies, plugins and MCP, model providers.
-
-Behavior environment variables (`QQCHAT_WHITELIST`, `QQCHAT_PERSONA`, `QQCHAT_GROUP_INTERJECTION_PROBABILITY`) are only a **first-deployment seed**. All replies use [reply pacing](docs/reply-pacing.md); legacy desire, cooldown and participation-gate settings are retired.
-
-### QQ Official Open Platform (optional)
-
-The official channel's switch and credentials are also host-layer variables (AppId only answers to `QQCHAT_OFFICIAL_APP_ID`, there is no `BOTAGENT_` alias):
+Fully isolated from private QQ (`official:` conversation key prefix, separate whitelists and `own_messages_scoped` ledger):
 
 | Key | Meaning |
 | :--- | :--- |
-| `BOTAGENT_OFFICIAL` / `QQCHAT_OFFICIAL` | `1` = enable the official channel |
-| `QQCHAT_OFFICIAL_APP_ID` | open-platform AppId |
-| `BOTAGENT_OFFICIAL_APP_SECRET` / `QQCHAT_OFFICIAL_APP_SECRET` | AppSecret (environment only, never echoed by the panel) |
-
-Once enabled it is **fully isolated** from the private channel: conversation keys carry an `official:` prefix and whitelists are independent.
-
-The full interface map is in [`docs/api-surface.md`](docs/api-surface.md); what this round actually delivered, what is still unproven, and what comes next are in [`docs/roadmap.md`](docs/roadmap.md).
+| `BOTAGENT_OFFICIAL` / `QQCHAT_OFFICIAL` | `1` = enable QQ Official channel |
+| `QQCHAT_OFFICIAL_APP_ID` | Official Open Platform AppId |
+| `BOTAGENT_OFFICIAL_APP_SECRET` / `QQCHAT_OFFICIAL_APP_SECRET` | Official AppSecret (env-only, never stored in DB or echoed by panel) |
 
 ---
 
 ## Web Management Console
 
-A modern Single-Page Application (SPA) built with Vue 3 and TypeScript, communicating with the core service via the ZBA protocol (`zba-1.0` / `cfg-0.3.3`) with decoupled static deployment (`/web/`):
+A standalone Vue 3 + TypeScript SPA communicating with `BotAgent.Headless` via ZBA (`zba-1.0`), served statically under `/web/`:
 
-- **Domain-Separated Information Architecture (3 Groups / 8 Views)**: Replaces the monolithic "Capabilities" card wall with dedicated workspaces across **Workspace** (`Overview`), **Access & Extensions** (`Model Providers`, `Message Platforms`, `Plugin Center`, `System Configuration`), and **Runtime & Observability** (`Agent Tasks`, `Traces & Cache`, `Runtime Logs`).
-  - **Model Providers**: Manage OpenAI-compatible, Anthropic, Gemini, Azure, and Ollama providers with each provider's API base URL, default model, and API key integrated directly into its provider card and editor (inline Slot 0 management for `primary`, one-step atomic independent credential save for secondary providers), paired with a dedicated Routing & Sampling Parameters drawer, connectivity tests, and routing engine status.
-  - **Message Platforms**: Manage QQ Private, QQ Official Open Platform, Feishu, and Local channel drivers via dedicated cards where each driver opens its own package-owned **Access & Policies** drawer (isolated fields, secrets, and per-platform policy slices) alongside lifecycle and messaging capability actions.
-  - **Plugin Center**: Focused exclusively on the 8 built-in feature plugins and third-party extensions, with toggle switches, parameter settings, one-click sandbox UI launch (Stickers, Token Quotas), and integrated **Installed / Marketplace / Repository Import** tabs — all supporting **hot application (no host restart; a failed reload keeps the old instance)**.
-  - **System Configuration**: Five-section vertical workspace (`Basic Behavior & Persona`, `Conversation Orchestration`, `Built-in Agent & Tools`, `Health Reporting`, and a read-only `Advanced & System Packages` table with quick jumps to each owning domain).
-- **Security Boundaries & In-Memory Sessions**: Bearer tokens are kept strictly in browser memory and cleared on reload or lock; sessions open in safe read-only mode with a persistent topbar Admin Mode toggle; secret slots are never echoed back; all writes are guarded by CAS versioning, single-flight locks, and original-key reconciliation.
-- **Dark/Light Theme, Sandbox Sync & Accessibility**: Modular design tokens drive instant dark/light switching synced automatically into runtime plugin sandbox iframes; verified for full keyboard navigation, WCAG contrast & target sizing, 320px / 200% zoom reflow, and a compact mobile navigation grid.
-- **Task Approvals & End-to-End Observability**: Submit and review background Agent tasks with interactive approval gates, inspect per-node trace breakdowns in a slide-over drawer, tail masked live runtime logs with wrap toggle, and drill directly from Overview component health rows into their owning management views.
+- **Domain-Separated Views**: **Overview**, **Personal Workspace (`workspace:owner`)**, **Model Providers** (per-provider API Base URL/Key integration, atomic secondary credential saves, routing & circuit breaker status), **Message Platforms** (4 driver cards with isolated Access & Policies drawers), **Plugin Center** (22 bundled + external packages with hot toggle, schema forms, and `origin === "null"` sandbox iframe UIs for Stickers, Token Quotas, Scheduler, and Personal Todos), **System Configuration** (General Behavior, Conversation Profiles, MCP Servers, Cross-Platform RBAC, Agent & Health Reporting), **Agent Tasks**, **Traces & Cache**, and **Runtime Logs**.
+- **In-Memory Security Boundaries**: Bearer tokens stay strictly in memory (cleared on reload/lock); writes enforce CAS versioning, `singleflight` locks, and operation/idempotency key recovery; light/dark theme tokens sync live into sandboxed iframes.
 
 ---
 
 ## SSL/TLS and Reverse Proxy
 
-The host itself **serves plain HTTP only** (`HttpListener`); it **does not terminate TLS and does not generate certificates**. HTTPS in production is the reverse proxy's job (Caddy / Nginx), which also serves the panel frontend under `/web/`.
+`BotAgent.Headless` listens over **plain HTTP only** (`HttpListener`) and never terminates TLS or reads certificate env vars. Terminate HTTPS in Caddy/Nginx while serving `/web/` static assets; never allow unauthenticated fallbacks or missing `/web/assets/*.js` paths to return login HTML with `HTTP 200` (causes CDN cache poisoning and blank pages).
 
-- **Local self-signed certificate**: `./tools/gencert.sh [domain] [IP]` uses openssl to write a 1095-day self-signed set into `runtime/certs/` (`.crt` / `.key` / `.pfx`) for the proxy or a debug client.
-- **Production certificates**: issue them with certbot or acme.sh and reference them from the proxy; certificate paths are **proxy configuration**, not host environment variables.
-- **Common misconception**: older docs mentioned two environment variables pointing at certificate paths — the host no longer reads them, and setting them has no effect.
+- **Local Self-Signed Certs**: `./tools/gencert.sh [domain] [IP]` writes a 1095-day cert bundle to `runtime/certs/`.
+- **Production Certs**: Provision with certbot / acme.sh / Cloudflare + Caddy at the proxy layer.
 
 ---
 
@@ -222,53 +194,67 @@ The host itself **serves plain HTTP only** (`HttpListener`); it **does not termi
 ```text
 +-------------------------+            OneBot v11            +----------------------------------+
 | OneBot Client (NapCat)  | <---- [Forward WS / WS] ----> | BotAgent.Headless (C# / .NET 10)  |
-+-------------------------+                                 |   +-- OneBot Gateway & Dispatch  |
-                                                            |   +-- Prompt Pipeline & Decision |
-+-------------------------+          Official Open API      |   +-- Profiles & SQLite Storage  |
-| QQ Official Platform    | <----------------------------> |   +-- Feishu Webhook Gateway     |
-+-------------------------+                                 |   +-- Local Playground Channel   |
-                                                            |   +-- Built-in Web Console       |
-+-------------------------+          Platform Webhook       |   +-- Platform Policy & Quota    |
-| Feishu (Lark) Platform  | <----------------------------> |   +-- Circuit Breaker & Queues   |
-+-------------------------+                                 +-----------------+----------------+
-                                                                              |
-                                                                              v OpenAI-Compatible API
++-------------------------+                                 |   +-- Multi-Platform Gateways      |
+                                                            |   +-- 3-Layer Config & Profiles    |
++-------------------------+          Official Open API      |   +-- Reply Pacing & Memory Matrix |
+| QQ Official Platform    | <----------------------------> |   +-- Agent Runtime / RBAC / Gates |
++-------------------------+                                 |   +-- Scheduler / Todos / BM25 KB  |
+                                                            |   +-- ZBA v1 & Local / Workspace   |
++-------------------------+        WS / Event Webhook       |   +-- 22 Bundled Packages          |
+| Feishu (Lark) Platform  | <----------------------------> +-----------------+----------------+
++-------------------------+                                                   |
+                                                                              v OpenAI / Anthropic / Gemini
                                                             +----------------------------------+
-                                                            | LLM (DeepSeek / OpenAI / Qwen)   |
+                                                            | LLMs & MCP External Tool Servers |
                                                             +----------------------------------+
 ```
 
 ---
 
-## Compatibility and Data Migration
+## Troubleshooting Local Startup & Builds
 
-- **Feishu Identity Mapping**: Runtime persistence maintains `data/feishu-ids-v2.json`, using a distinct ID range (`FeishuBase + 1e12` to `FeishuBase + 2e12`) separated from legacy 32-bit aliases. Back up this file alongside data when enabling Feishu. Legacy conversations are preserved but require reconfiguring native Feishu ID whitelists.
-- **OwnMessage Ledger Isolation**: Outgoing messages are partitioned by platform, account, conversation, and native message ID into `own_messages_scoped`. Legacy bare-numeric ID rows remain archived; older versions cannot read scoped entries backwards. Always create a full backup of `data/botagent.db` (legacy `data/qqchat.db` remains supported) prior to upgrading.
-- **Tool Call Hard Timeouts**: Hard timeouts enforce the maximum wait duration for the caller and send cancellation signals; they do not guarantee instantaneous termination of underlying external operations, which remain governed by host invocation policies.
+| Symptom / Error | Root Cause | Resolution |
+| :--- | :--- | :--- |
+| Exits on boot with `database_schema_newer` or `configuration_schema_newer` | `botagent.db` has a higher `PRAGMA user_version` / config revision than the binary supports | Never edit `PRAGMA user_version`; upgrade the binary or restore a compatible backup per the [Rollback Playbook](docs/operations/rollback-playbook.md) |
+| All `/zba/v1/*` calls return `503` (`/zba/v1/health` works) | `BOTAGENT_ZBA_TOKEN` is unset (fail-closed protection) | Configure `BOTAGENT_ZBA_TOKEN` (or `BOTAGENT_ZBA_ALLOW_LOOPBACK=1` for local dev only) |
+| `.env` whitelist / persona changes have no effect | Panel/DB already saved behavioral settings, or var missing from compose `environment:` | Update via Web Console (check startup log for panel-override notices); expose new vars in `docker-compose.yml` |
+| `IntegrationHarness` still executes stale host code | Building Harness alone does not rebuild `BotAgent.Headless` launched as child process | Explicitly run `dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release -t:Rebuild` first |
+| `dotnet build` fails with `NU1903` / `NU1904` | `Directory.Build.props` treats high/critical transitive NuGet advisories as build errors | Upgrade vulnerable package versions; never lower `NuGetAuditLevel` |
+| Standalone probe exits `-1073741502` or temp-path error | Restricted shell temp path or child process env issues | Build first (`dotnet build -c Release`), ensure writable clean `TEMP`/`TMP`, then run `dotnet <Probe>.dll` |
+| 1 GB server hangs or OOMs on source `Dockerfile` | In-container `dotnet publish` exhausts RAM + swap | Publish `app.tar.gz` locally and deploy with [`Dockerfile.app`](Dockerfile.app) |
+| Blank `/web/` page with `Unexpected token '<'` | Proxy/CDN served and cached HTML 200 for `/web/assets/*.js` | Return `404` (`no-cache`) for missing `/web/assets/*` and `303` + `Cache-Control: no-store` for unauthenticated redirects |
 
 ---
 
 ## Testing and Quality Assurance
 
-The project includes an end-to-end integration test suite and high-frequency safety constraint probes:
+> [!TIP]
+> Clear residual env vars (`BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `HARNESS_*`, `HEALTH_PORT`) before running synthetic probes/suites. Full integration scenario filtering flags and probe matrices are documented in [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) and [`docs/operations/ci-quality-gates.md`](docs/operations/ci-quality-gates.md).
 
 ```bash
-# Run automated unit tests and architectural probes
-dotnet test
+# 1. Rebuild Headless host before running IntegrationHarness
+dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release -t:Rebuild
 
-# Run synthetic integration test suite
-dotnet build tests/BotAgent.IntegrationHarness -c Release
+# 2. Run key architecture, safety, and ZBA probes
+dotnet build tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release
+dotnet tests/BotAgent.ArchitectureProbe/bin/Release/net10.0/BotAgent.ArchitectureProbe.dll
+dotnet build tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj -c Release
+dotnet tests/BotAgent.SafetyProbe/bin/Release/net10.0/BotAgent.SafetyProbe.dll
+dotnet build tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release
+dotnet tests/BotAgent.ZbaProbe/bin/Release/net10.0/BotAgent.ZbaProbe.dll
+
+# 3. Run full synthetic integration suite (s1-s165; filter options in CONTRIBUTING.en.md)
+dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release
 dotnet tests/BotAgent.IntegrationHarness/bin/Release/net10.0/BotAgent.IntegrationHarness.dll
 
-# Run frontend type checks, unit tests and browser regression (under src/web)
+# 4. Run frontend typecheck, unit tests, and Playwright E2E (under src/web)
+cd src/web
 npm run typecheck && npm run test:unit
-npm run test:e2e
+npm run test:e2e -- --project=chromium
 ```
-
-The test suite covers S1–S55 synthetic end-to-end scenarios (whitelists, silent decisions, sentence splitting, long-term memory & profiles, stickers & magic-byte validation, context quoting, hot model reconfiguration, speech synthesis, recall awareness, web search, QR login, Feishu channel isolation, multi-platform policies, daily token quota ledgers, and the official channel through a local fake gateway; S2 is covered inside S1, S33 retired with the pi bridge, and S42 uses local mocks/synthetic credentials only), as well as sub-second architectural ratchets (`ArchitectureProbe`), safety boundaries (`SafetyProbe`), and production specification probes (`ProductionSpecProbe`).
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). Third-party protocol clients (such as NapCat) are governed by their respective code licenses and platform policies.
+Licensed under the [MIT License](LICENSE). Third-party protocol clients (such as NapCat) remain governed by their own licenses and platform terms.

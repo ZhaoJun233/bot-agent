@@ -17,11 +17,14 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 
 | 文档 | 内容说明 |
 | :--- | :--- |
+| [文档总目录（`/docs`）](docs/index.md) | 业务规则、数据库设计、运维手册、架构边界、ADR 决策与术语表的统一文档入口 |
 | [核心业务规则与领域说明](docs/domain/core-business-rules.md) | 多平台入站信任边界、三层配置与会话 Profile 裁决、回复节奏与静默短路、记忆敏感度矩阵、Agent 任务状态机与调度/待办/身份绑定规则 |
 | [数据库设计文档](docs/storage/database-design.md) | SQLite WAL 运行参数、Schema v1–v15 演进、ER 关系图、31 张业务物理表结构、v15 隔离 `meta` JSON 账本与文件布局 |
 | [运维排障与应急手册](docs/operations/runbook.md) | 核心监控指标与隐私安全查日志规范、故障“现象 → 排查 → 解决”对照表、回滚预案决策流 |
 | [工程规范与 ADR 索引](docs/decisions/engineering-standards-and-adr.md) | 仓库目录拓扑、编码规范与 `ArchitectureProbe` 护栏、Git 协作/发版流程、技术选型依据与 ADR 0001–0006 索引 |
 | [接口地图](docs/api-surface.md) | 面板旧接口、ZBA v1 与内置/插件路由总表（与 `PanelRoutes.cs` 同步受护栏断言约束） |
+| [核心术语表](docs/glossary.md) | 领域术语、安全不变量与组件专有名词定义 |
+| [待确认项集中清单](docs/open-questions.md) | 跨业务、存储、运维与工程规范的待拍板事项统一追踪清单 |
 | [Linux Docker 首次安装与配置](docs/operations/linux-docker-first-run.md) | 低内存主机产物构建、独立 Caddy 前端与受控首次验收步序 |
 
 ---
@@ -123,6 +126,7 @@ cp .env.example .env
 | ② 宿主层（环境变量） | 容器 `environment:` / 进程环境 | 宿主启动时读取 | **密钥**（永不落盘 `settings`）与**基础设施**（模型端点/协议地址/监听端口）**始终覆盖**，改完需重启；支持 `{NAME}_FILE` 读取 Docker Secret 文件 |
 | ③ 数据库真源层 | `data/botagent.db`（兼 `data/settings.json`） | 面板保存后独占 | **行为类配置**（人设、白名单、阈值、节奏、开关…）首次部署以环境变量作种子，面板保存后即由库独占，之后改 `.env` 不生效（日志会打印已覆盖提醒） |
 
+> [!WARNING]
 > 严禁将仓库默认 `docker-compose.yml` 直接覆盖已有部署目录，否则可能丢失 `ACCOUNT` 等手工配置导致 NapCat 掉登录态需重新扫码。完整 200+ 键名模板见 [`.env.example`](.env.example)。
 
 ### 核心宿主环境变量说明表
@@ -226,6 +230,7 @@ cp .env.example .env
 
 ## 测试与质量验证
 
+> [!TIP]
 > 跑合成测试前请先清理污染环境（`BOTAGENT_*`、`QQCHAT_*`、`OPENAI_*`、`HARNESS_*`、`HEALTH_PORT` 等）。集成 Harness 与 40 个独立探针的完整说明及矩阵要求见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CI 质量门禁](docs/operations/ci-quality-gates.md)。
 
 ```bash
@@ -255,10 +260,3 @@ npm run test:e2e -- --project=chromium
 ## 开源协议
 
 本项目源码基于 [MIT License](LICENSE) 协议开源。使用的 OneBot 协议端（如 NapCat）请遵循其各自的代码许可与平台规范。
-
----
-
-## 待确认信息清单
-
-- [待确认: 本 README 更新内容同步至英文镜像文件 `README.en.md` 的排期，当前已保留所有英文链接与中英配对文件结构以通过 `ArchitectureProbe` 校验。]
-- [待确认: `start.sh` 内部早期回复欲望值与冷却时间等旧版兼容环境变量映射是否需在后续版本中随新版 `ReplyPacing` 环境变量命名一并刷新。]

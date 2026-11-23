@@ -1,6 +1,8 @@
 # 工程规范与架构决策记录（ADR）索引
 
-本文整理 Bot Agent 仓库的工程结构、编码规范与自动化门禁、Git 协作/发版流程、核心技术选型依据，以及全部架构决策记录（ADR）总览。
+简体中文 | [English](engineering-standards-and-adr.en.md)
+
+本文整理 Bot Agent 仓库的工程结构、编码规范与自动化门禁、Git 协作/发版流程、核心技术选型依据，以及全部架构决策记录（ADR）总览；文档总目录与集中待确认项分别见 [文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
 
 ---
 
@@ -35,11 +37,14 @@
 │   ├── BotAgent.IntegrationHarness/# 进程级端到端合成测试套件（S1–S165 矩阵）
 │   └── *Probe/                     # 38 个专项白盒探针（Safety/Zba/Mcp/Scheduler/ReviewRemediation 等）
 └── docs/
-    ├── domain/                     # 核心业务规则与领域说明
-    ├── storage/                    # 数据库表结构与持久化设计
-    ├── architecture/               # 模块边界、平台解析、插件 SDK 与契约文档
-    ├── decisions/                  # ADR 0001–0006 与本文档
-    ├── operations/                 # 部署、CI 门禁、恢复演练、回滚与运维手册
+    ├── index.md / index.en.md      # 统一文档中心总目录
+    ├── glossary.md                 # 全仓领域术语与安全不变量词汇表
+    ├── open-questions.md / .en.md  # 跨文档待确认项集中追踪清单
+    ├── domain/                     # 核心业务规则与领域说明（含 .en.md 镜像）
+    ├── storage/                    # 数据库表结构与持久化设计（含 .en.md 镜像）
+    ├── architecture/               # 模块边界、平台解析、前端设计系统与插件契约文档
+    ├── decisions/                  # ADR 0001–0006 与本文档（含 .en.md 镜像）
+    ├── operations/                 # 部署、CI 门禁、迁移、恢复演练、回滚与运维手册（含 .en.md 镜像）
     └── baseline/                   # 性能与回归验收基线报告
 ```
 
@@ -75,13 +80,13 @@
 
 ```mermaid
 flowchart LR
-    A["从 dev 切短命特性分支\nfeat/* · fix/* · docs/*"] --> B["编码 + 本地验证\n探针 / Harness / 前端单测 & E2E"]
-    B --> C["规范提交本地 commit\nConventional Commits"]
-    C --> D["运行公开脱敏发布脚本\npush-desensitized.py --branch dev"]
-    D --> E["公开 dev 跑满 9 项 CI\nBuild & Probes / Web / 4×E2E / 3×IT"]
-    E --> F["PR：dev → main\n评审合入（禁止强推 main）"]
-    F --> G["在已验证 main 提交打版本 Tag\nvX.Y.Z == Directory.Build.props"]
-    G --> H["Tag CI 产出 Linux x64 产物包\nRelease + 留存双份回滚点部署"]
+    A["从 dev 切短命特性分支<br/>feat/* · fix/* · docs/*"] --> B["编码 + 本地验证<br/>探针 / Harness / 前端单测 & E2E"]
+    B --> C["规范提交本地 commit<br/>Conventional Commits"]
+    C --> D["运行公开脱敏发布脚本<br/>push-desensitized.py --branch dev"]
+    D --> E["公开 dev 跑满 9 项 CI<br/>Build & Probes / Web / 4×E2E / 3×IT"]
+    E --> F["PR：dev → main<br/>评审合入（禁止强推 main）"]
+    F --> G["在已验证 main 提交打版本 Tag<br/>vX.Y.Z == Directory.Build.props"]
+    G --> H["Tag CI 产出 Linux x64 产物包<br/>Release + 留存双份回滚点部署"]
 ```
 
 - **提交规范**：遵循 Conventional Commits（`feat(scope): ...`、`fix(scope): ...`、`docs(scope): ...`），单提交聚焦单一问题。
@@ -118,10 +123,3 @@ flowchart LR
 
 1. 涉及跨模块数据流、状态机变更、持久化格式升级或安全模型调整时，必须在改动落入 `main` 前新建 `docs/decisions/000N-<slug>.md`。
 2. 至少包含：**状态与关联组件**、**背景与问题**、**决策摘要与不变量**、**不可破坏的语义（及守护它的探针/场景）**、**明确不做的事项**，并同步更新本索引表。
-
----
-
-## 待确认信息清单
-
-- [待确认: 当前 `BotAgent.ArchitectureProbe` 中方法长度棘轮（198 行）、`build/release-projects.json`（若未随公开仓检出）等内部护栏后续向 `v1.4+` / `v2.0` 演进时是否计划放宽或拆分大文件。]
-- [待确认: 插件市场外部包签名校验密钥的签发、吊销与第三方开发者准入评审流程规范。]

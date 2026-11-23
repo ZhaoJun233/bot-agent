@@ -1,6 +1,8 @@
 # 核心业务规则与领域说明
 
-本文基于当前代码实现提炼 Bot Agent 的核心业务规则、状态流转、安全隔离边界与异常处理逻辑；接口契约清单与低层模块拓扑另见 [接口地图](../api-surface.md) 与 `docs/architecture/` 下各专题文档。
+简体中文 | [English](core-business-rules.en.md)
+
+本文基于当前代码实现提炼 Bot Agent 的核心业务规则、状态流转、安全隔离边界与异常处理逻辑；接口契约清单与低层模块拓扑另见 [接口地图](../api-surface.md)、[文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
 
 ---
 
@@ -16,6 +18,7 @@
 | 本地调试通道 | 进程内直投 `POST /api/local/message` | `local:<通道ID>`（需在配置中登记） | 完整经过模型研判、配额与工具治理流水线；不经外部协议端，不赋予 `QqHost` 能力 |
 | 个人工作台 | 本人 Web 工作台专属会话 | 固定保留键 `workspace:owner` | 仅保存于 `meta['workspace:owner:messages:v1']`，严禁读写任何外部群聊/私聊消息；从 `DescribeAllSessions()` 与普通平台会话列表排除 |
 
+> [!IMPORTANT]
 > **关键不变量**：
 > - `IsReliableIdentity == false` 的来源绝对不能触发需要强身份认证的能力（如跨平台身份挑战、审批裁决、管理员提权）。
 > - `own_messages_scoped` 按 `(conversation_key, native_message_id)` 隔离存储机器人自己的消息，防止引用解析或撤回判定跨平台误命中；历史裸数字 `own_messages` 仅作存量保留，禁止从中反推作用域。
@@ -60,18 +63,18 @@ flowchart TD
     B -- "放行" --> C{"UTC 日 Token 配额充足?"}
     C -- "超额（节能模式）" --> Z
     C -- "充足" --> D{"显式请求 / @机器人 / 私聊?"}
-    D -- "否（普通群聊机会）" --> E{"GroupInterjectionProbability 抽签\n& 完整回复后冷却已过?"}
+    D -- "否（普通群聊机会）" --> E["GroupInterjectionProbability 抽签<br/>且完整回复后冷却已过?"]
     E -- "未命中 / 冷却中（连续期内终局）" --> Z
-    E -- "命中" --> F["进入续话静默等待\n（群聊默认 3s / 私聊默认 1.5s）"]
+    E -- "命中" --> F["进入续话静默等待<br/>（群聊默认 3s / 私聊默认 1.5s）"]
     D -- "是（高优直达路径）" --> F
-    F --> G["模型生成决策与回复\n（受 SuitabilityThreshold 约束，默认 10）"]
+    F --> G["模型生成决策与回复<br/>（受 SuitabilityThreshold 约束，默认 10）"]
     G --> H{"判定结果 == 静默 或 上下文已过期?"}
     H -- "是" --> I["发送前静默短路（不落发送动作，不触发冷却）"]
-    H -- "否" --> J["发送前最终复检\n（权限 / AI开关 / 来源生命周期 / 撤销锁）"]
+    H -- "否" --> J["发送前最终复检<br/>（权限 / AI开关 / 来源生命周期 / 撤销锁）"]
     J -- "复检失败" --> I
     J -- "通过" --> K{"开启语音 TTS 且有效?"}
     K -- "是" --> L["发送原生语音条（不重复发文字）"]
-    K -- "否" --> M["按句分句发送（SegmentDelayMs 节拍）\n引用仅挂第一段"]
+    K -- "否" --> M["按句分句发送（SegmentDelayMs 节拍）<br/>引用仅挂第一段"]
     L --> N["最终段确认成功后开始群插话冷却"]
     M --> N
 ```
@@ -117,31 +120,31 @@ flowchart TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Queued: "受理提交"
-    Queued --> WaitingApproval: "命中高风险/插件写工具前置闸门"
-    Queued --> Running: "派发执行器"
-    Queued --> CancelRequested: "排队期请求取消"
-    Queued --> Cancelled: "直接取消"
-    Queued --> TimedOut: "排队超时"
+    [*] --> Queued: 受理提交
+    Queued --> WaitingApproval: 命中高风险或插件写工具前置闸门
+    Queued --> Running: 派发执行器
+    Queued --> CancelRequested: 排队期请求取消
+    Queued --> Cancelled: 直接取消
+    Queued --> TimedOut: 排队超时
 
-    WaitingApproval --> Running: "审批通过（复检通过）"
-    WaitingApproval --> Failed: "审批拒绝 / 过期 / 复检失败"
-    WaitingApproval --> Cancelled: "等待期间用户取消"
-    WaitingApproval --> TimedOut: "等待超时"
+    WaitingApproval --> Running: 审批通过（复检通过）
+    WaitingApproval --> Failed: 审批拒绝 / 过期 / 复检失败
+    WaitingApproval --> Cancelled: 等待期间用户取消
+    WaitingApproval --> TimedOut: 等待超时
 
-    Running --> WaitingApproval: "运行期触发高风险审批"
-    Running --> CancelRequested: "收到取消请求"
-    Running --> Succeeded: "执行器成功完成"
-    Running --> Failed: "执行失败"
-    Running --> Cancelled: "取消生效"
-    Running --> TimedOut: "硬截止到点"
-    Running --> Unknown: "进程重启对账（禁止自动重放）"
+    Running --> WaitingApproval: 运行期触发高风险审批
+    Running --> CancelRequested: 收到取消请求
+    Running --> Succeeded: 执行器成功完成
+    Running --> Failed: 执行失败
+    Running --> Cancelled: 取消生效
+    Running --> TimedOut: 硬截止到点
+    Running --> Unknown: 进程重启对账（禁止自动重放）
 
-    CancelRequested --> Cancelled: "确认中止"
-    CancelRequested --> Succeeded: "取消生效前执行器已完成"
-    CancelRequested --> Failed: "取消期间执行出错"
-    CancelRequested --> TimedOut: "取消未结束即超时"
-    CancelRequested --> Unknown: "进程重启对账（去向不可证）"
+    CancelRequested --> Cancelled: 确认中止
+    CancelRequested --> Succeeded: 取消生效前执行器已完成
+    CancelRequested --> Failed: 取消期间执行出错
+    CancelRequested --> TimedOut: 取消未结束即超时
+    CancelRequested --> Unknown: 进程重启对账（去向不可证）
 ```
 
 - **5 个终态不可逆**：`Succeeded` (3)、`Failed` (4)、`Cancelled` (6)、`Unknown` (7)、`TimedOut` (8) 没有任何出边，迟到的执行回调不得覆盖终态。
@@ -166,27 +169,27 @@ stateDiagram-v2
 
 ```mermaid
 sequenceDiagram
-    participant Caller as "合法来源（私聊/群/工作台）"
-    participant JobStore as "ScheduledJobStore (SQLite meta)"
-    participant Runner as "ScheduledJobRunner"
-    participant Gate as "配额 / Profile / 审批 / Taint 闸门"
-    participant Target as "目标作用域或 AgentRuntime"
+    participant Caller as 合法来源（私聊 / 群 / 工作台）
+    participant JobStore as ScheduledJobStore (SQLite meta)
+    participant Runner as ScheduledJobRunner
+    participant Gate as 配额 / Profile / 审批 / Taint 闸门
+    participant Target as 目标作用域或 AgentRuntime
 
-    Caller->>JobStore: "创建/更新任务（minCron>=5m, <=32/scope, <=256/global, 幂等键）"
-    Note over JobStore: "单事务 CAS 校验并保存"
-    loop "定时轮询（单飞合并 TickGate）"
-        Runner->>JobStore: "单事务抢占到期槽位 + 推进 nextFireUnix（重启零重放）"
-        alt "超过 MissedWindowSeconds(900s)"
-            Runner-->>Target: "按策略执行 skip_and_notify / fire_once_15m / skip_silent"
-        else "正常到点"
-            Runner->>Gate: "先做准入判定与配额检查（workspace:owner 校验 CheckQuota）"
-            alt "CronDigest / CronTask"
-                Gate->>Gate: "校验 EnableAgentBridge / ConversationToolTier / task_waiting_approval"
+    Caller->>JobStore: 创建或更新任务（minCron >= 5m, <= 32/scope, <= 256/global, 幂等键）
+    Note over JobStore: 单事务 CAS 校验并保存
+    loop 定时轮询（单飞合并 TickGate）
+        Runner->>JobStore: 单事务抢占到期槽位并推进 nextFireUnix（重启零重放）
+        alt 超过 MissedWindowSeconds (900s)
+            Runner-->>Target: 按策略执行 skip_and_notify / fire_once_15m / skip_silent
+        else 正常到点
+            Runner->>Gate: 先做准入判定与配额检查（workspace:owner 校验 CheckQuota）
+            alt CronDigest / CronTask
+                Gate->>Gate: 校验 EnableAgentBridge / ConversationToolTier / task_waiting_approval
             end
-            alt "准入通过"
-                Gate->>Target: "解析正文并投递文本或派发 Agent 任务"
-            else "准入或配额拒绝"
-                Gate-->>JobStore: "记入运行账本 Skipped / Failed"
+            alt 准入通过
+                Gate->>Target: 解析正文并投递文本或派发 Agent 任务
+            else 准入或配额拒绝
+                Gate-->>JobStore: 记入运行账本 Skipped / Failed
             end
         end
     end
@@ -222,11 +225,3 @@ sequenceDiagram
 | 每日 Token 配额耗尽 | 某租户当日 UTC `used_prompt + used_completion >= daily_token_limit` | 自动切入节能静默，跳过自动聊天与主动触发 | [Token 配额说明](../token-quota-plugin.md) |
 | 模型主节点连续硬失败 | `model_providers.consecutive_hard_failures` 达阈值 | 状态切换至 `cooldown_until` 熔断冷却，路由自动热切次优先级供应商 | [模型配置应用路径](../architecture/model-configuration-apply-path.md) |
 | 未知或高危命令注入 | 外部转发/音乐/JSON卡片夹带指令；非只读插件未审批 | 卡片直接拦截指令解析；未审批插件工具在 `ChatCapabilitySet` 与执行前复检双层拦停 | `OneBotInboundParser.cs`, `ApprovalUseCase.cs` |
-
----
-
-## 待确认信息清单
-
-- [待确认: 模型供应商熔断器（`model_providers`）触发 `open` 的连续硬失败精确次数阈值与默认冷却时长（需按具体 `ModelRouter` 源码/运维基线确认是否对外暴露为可调配置）。]
-- [待确认: 飞书私聊或 QQ 官方通道在真实企业租户下若触发平台侧主动限流（HTTP 429）时的业务重试上限与人工告警通知规则。]
-- [待确认: 统一记忆管理员（`BOTAGENT_UNIFIED_MEMORY_ADMIN`）在多人协作场景下的密钥轮换或交接管理规范。]

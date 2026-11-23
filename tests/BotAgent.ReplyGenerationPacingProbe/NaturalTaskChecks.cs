@@ -20,6 +20,7 @@ internal static class NaturalTaskChecks
         Set("_hooks", new ReplyHooks(_ => { }, () => 10001, () => false));
         Set("_traces", new TurnTraceStore());
         Set("_agentCmds", port);
+        Set("_messageEnvelopes", new ConditionalWeakTable<ChatMessage, BotAgent.Domain.Messaging.PlatformInboundEnvelope>());
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var guard = new RetiringGuard();
         var owner = new object();

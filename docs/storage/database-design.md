@@ -1,6 +1,8 @@
 # 数据库设计文档
 
-Bot Agent 以嵌入式 **SQLite**（`Microsoft.Data.Sqlite`）为主存储，辅以少量与生命周期或隔离策略强绑定的本地文件。本文依据 `src/BotAgent.Storage/` 实际 DDL、迁移脚本与运行时存储守卫编写。
+简体中文 | [English](database-design.en.md)
+
+Bot Agent 以嵌入式 **SQLite**（`Microsoft.Data.Sqlite`）为主存储，辅以少量与生命周期或隔离策略强绑定的本地文件。本文依据 `src/BotAgent.Storage/` 实际 DDL、迁移脚本与运行时存储守卫编写；文档总目录与集中待确认项分别见 [文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
 
 ---
 
@@ -148,6 +150,7 @@ erDiagram
 
 ## 3. 物理表结构全量清单（31 张业务表）
 
+> [!NOTE]
 > `configuration_field_modes_upgrade` 仅在 v11/v14 升级事务内作为瞬态重建表存在，迁移完成后即被 `RENAME` 覆盖，不作为常驻表统计。
 
 ### 3.1 配置事务与设备状态模块（6 张表）
@@ -253,12 +256,5 @@ Phase 3–5 新增的高扩展功能在 **不递增 SQLite 物理版本号（维
     └── qqchat-YYYY-MM-DD.log.gz    # gzip 归档日志（默认保留 7 天）
 ```
 
+> [!TIP]
 > 扩展包私有持久化模型详见 [包数据存储规范](../architecture/package-data-store.md)；热备策略与日志轮转参数详见 [日志保留、每日热备与恢复演练](../operations/data-retention-and-backup.md)。
-
----
-
-## 待确认信息清单
-
-- [待确认: `trace_archive` 与 `security_audit_log` 两张只增表目前是否存在定期归档清理上限或按天裁剪周期（当前 DDL 与 `AppDatabase.cs` 未见自动 TTL 删除逻辑）。]
-- [待确认: 生产环境是否通过外部任务将 `data/backups/qqchat_daily_*.db` 及 `data/feishu-ids-v2.json` 同步至异地对象存储/备份盘，以及对应的备份保留期要求。]
-- [待确认: `data/settings.json` 与 SQLite `settings` 表在后续版本中是否计划完全下线 JSON 文件并单一收敛至数据库。]

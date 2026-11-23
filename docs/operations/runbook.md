@@ -1,7 +1,10 @@
 # 运维排障与应急手册（Runbook）
 
-本手册面向 Bot Agent 线上运行值守与故障应急处置，原则为：**先保护数据与隐私、恢复核心服务，再定位根因**。
+简体中文 | [English](runbook.en.md)
 
+本手册面向 Bot Agent 线上运行值守与故障应急处置，原则为：**先保护数据与隐私、恢复核心服务，再定位根因**。另可查阅 [文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
+
+> [!CAUTION]
 > **隐私安全红线（查阅生产日志必守）**：
 > 真实环境下日志与数据库包含群聊正文与成员隐私，**严禁直接 `tail -n 200 qqchat.log` 或无过滤执行 `docker logs`**。只允许通过关键字筛选错误并经仓库内置 [`tools/mask-cjk.py`](../../tools/mask-cjk.py) 遮蔽中文后再观察：
 > ```sh
@@ -57,12 +60,12 @@ flowchart TD
     A["发现线上严重故障，决定回滚"] --> B{"是否涉及 Schema 15 → 14 或 v1.4.0 17包回退?"}
     B -- "是（含 17↔22包 / Phase 3记忆）" --> C["硬性前置：确认同时拥有升级前 botagent.db 快照 与 data/plugins/ 备份"]
     B -- "否（同版本或仅用量表回退）" --> D["若仅回退 Schema 15→14，优先使用离线逆迁移工具保留最新计数"]
-    C --> E["第1步 停写：docker stop 宿主（等优雅退出落盘）\n停掉或断开协议端，确认无活跃写入"]
+    C --> E["第1步 停写：docker stop 宿主（等优雅退出落盘）<br/>停掉或断开协议端，确认无活跃写入"]
     D --> E
-    E --> F["第2步 恢复数据先于代码：\n覆盖 data/botagent.db（含权限 600）\n同步恢复 settings.json / feishu-ids-v2.json / data/plugins/\n清理混入的残留 -wal/-shm（勿把新库留给旧镜像）"]
-    F --> G["第3步 校验快照：\n核对 PRAGMA integrity_check = ok 及 user_version"]
-    G --> H["第4步 启动旧二进制/镜像：\n切回 qqchat-agent:prev 或旧产物目录"]
-    H --> I["第5步 验收观察：\n/healthz 200 -> /readyz 200 -> 控制台登录 & ZBA 脱敏态正常"]
+    E --> F["第2步 恢复数据先于代码：<br/>覆盖 data/botagent.db（含权限 600）<br/>同步恢复 settings.json / feishu-ids-v2.json / data/plugins/<br/>清理混入的残留 -wal/-shm（勿把新库留给旧镜像）"]
+    F --> G["第3步 校验快照：<br/>核对 PRAGMA integrity_check = ok 及 user_version"]
+    G --> H["第4步 启动旧二进制/镜像：<br/>切回 qqchat-agent:prev 或旧产物目录"]
+    H --> I["第5步 验收观察：<br/>/healthz 200 -> /readyz 200 -> 控制台登录 & ZBA 脱敏态正常"]
 ```
 
 ### 回滚红线提醒
@@ -81,11 +84,5 @@ flowchart TD
 - [查询先前操作的安全记录](operation-receipt-recovery.md)
 - [Token 用量离线逆迁移](token-usage-recovery.md)
 - [Agent Runtime 部署、验证与回滚](agent-runtime-deployment.md)
-
----
-
-## 待确认信息清单
-
-- [待确认: 生产环境具体的 RTO（恢复时间目标）与 RPO（恢复点目标）SLA 指标要求（当前默认仅保证每日 1 份本地 `VACUUM INTO` 热备，无连续 WAL 异地归档 PITR）。]
-- [待确认: 出现 `restarts` 飙升、`backup` 失败或协议断连时，除每日定时健康日报私聊外，是否还对接了外部即时告警通道（如 Uptime Kuma / Webhook / 邮件）。]
-- [待确认: 多人值守场景下的升级维护窗口审批人、通知群及回滚决策签字责任人分工。]
+- [Token 配额表后台迁移说明](token-quota-backend-migration.md)
+- [联网搜索插件后台迁移说明](websearch-backend-migration.md)
