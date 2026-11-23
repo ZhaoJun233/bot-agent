@@ -25,9 +25,11 @@ public sealed class ReplyToolAvailability(
     public bool IsCurrent => _visibility.IsCurrent;
 
     /// <summary>这一轮这个工具是否可见（判定逻辑见 <see cref="ToolVisibility.Allows" />）。</summary>
-    public bool Allows(AppSettings snapshot, EffectivePlatformPolicy? pinned, string toolId, ChatToolCatalog? pinnedTools = null)
-        => _visibility.Allows(snapshot, pinned, toolId, pinnedTools);
+    public bool Allows(AppSettings snapshot, EffectivePlatformPolicy? pinned, string toolId,
+        ChatToolCatalog? pinnedTools = null, EffectiveConversationSettings? conversation = null)
+        => _visibility.Allows(snapshot, pinned, toolId, pinnedTools, conversation);
 
-    public string Render(AppSettings snapshot, EffectivePlatformPolicy pinned, ChatCapabilitySet caps)
-        => ToolPromptText.Render(caps.Catalog.Specs.Where(spec => Allows(snapshot, pinned, spec.Id, caps.Catalog)).ToArray(), caps.Policy);
+    public string Render(AppSettings snapshot, EffectivePlatformPolicy pinned, ChatCapabilitySet caps,
+        EffectiveConversationSettings? conversation = null)
+        => ToolPromptText.Render(caps.Catalog.Specs.Where(spec => Allows(snapshot, pinned, spec.Id, caps.Catalog, conversation)).ToArray(), caps.Policy);
 }

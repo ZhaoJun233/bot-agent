@@ -464,6 +464,7 @@ defineExpose({
     <PluginUiFrame
       v-if="pluginUiTarget"
       ref="pluginUiDialog"
+      :key="pluginUiTarget.pluginId"
       :client="props.client"
       :plugin-id="pluginUiTarget.pluginId"
       :mode="props.mode"

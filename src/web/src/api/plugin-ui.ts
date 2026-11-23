@@ -90,6 +90,22 @@ export function isSafePluginUiEntryUrl(url: unknown, pluginId: string, releaseSh
   return isSafeRelativeWebPath(assetPath) && assetPath.toLowerCase().endsWith('.html')
 }
 
+function isAllowedPluginUiAction(pluginId: unknown, action: string): boolean {
+  if (action === 'dialog.close' || action === 'operations.list' || action === 'settings.read' || action === 'settings.save') {
+    return true
+  }
+  if (action === 'quotas.list' || action === 'quotas.save' || action === 'quotas.find') {
+    return pluginId === 'preset.feature.token-quota'
+  }
+  if (action === 'scheduler.list' || action === 'scheduler.save' || action === 'scheduler.delete' || action === 'scheduler.runs') {
+    return pluginId === 'preset.feature.scheduler'
+  }
+  if (action === 'todo.list' || action === 'todo.save' || action === 'todo.delete') {
+    return pluginId === 'preset.feature.personal-todo'
+  }
+  return false
+}
+
 export function hasValidPluginUi(manifest: Record<string, unknown>): boolean {
   if (manifest.adoption !== undefined && manifest.adoption !== null) {
     if (manifest.adoption !== 'cold' && manifest.adoption !== 'online') return false
@@ -129,7 +145,7 @@ export function hasValidPluginUi(manifest: Record<string, unknown>): boolean {
     const seenActions = new Set<string>()
     for (const action of ui.allowedActions) {
       if (typeof action !== 'string' || !TOKEN_PATTERN.test(action) || seenActions.has(action)) return false
-      if (action.startsWith('quotas.') && manifest.id !== 'preset.feature.token-quota') return false
+      if (!isAllowedPluginUiAction(manifest.id, action)) return false
       seenActions.add(action)
     }
   }

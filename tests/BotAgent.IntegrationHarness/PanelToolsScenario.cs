@@ -145,9 +145,9 @@ public static partial class Program
         var tools = root["tools"] as JsonArray ?? new JsonArray();
         Check("GET /api/tools 可读（只读端点）", code == 200 && root["count"] is not null, $"HTTP {code} {body[..Math.Min(80, body.Length)]}");
 
-        Check("★ 目录条数 = 26（聊天 10 / QQ 动作 10 / 服务器 6）",
-            root["count"]?.GetValue<int>() == 26 && tools.Count == 26
-            && root["chatCount"]?.GetValue<int>() == 10 && root["qqCount"]?.GetValue<int>() == 10
+        Check("★ 目录条数 = 32（聊天 16 / QQ 动作 10 / 服务器 6）",
+            root["count"]?.GetValue<int>() == 32 && tools.Count == 32
+            && root["chatCount"]?.GetValue<int>() == 16 && root["qqCount"]?.GetValue<int>() == 10
             && root["serverCount"]?.GetValue<int>() == 6,
             $"count={root["count"]} tools={tools.Count} chat={root["chatCount"]} qq={root["qqCount"]} server={root["serverCount"]}");
 
@@ -160,24 +160,24 @@ public static partial class Program
             $"healthy={root["healthy"]} 缺执行者={root["missingExecutors"]} 孤儿={root["unusedExecutors"]}"
             + $" 缺例外={root["missingExceptions"]} 重名={root["duplicateIds"]}");
 
-        Check("执行者登记 = 5 家（含已采用研究包）", (root["executors"] as JsonArray)?.Count == 5,
+        Check("执行者登记 = 8 家（含已采用研究、文档、纪要、知识库包）", (root["executors"] as JsonArray)?.Count == 8,
             (root["executors"] as JsonArray)?.ToJsonString() ?? "(没有 executors)");
 
-        // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 26 —— MCP 单列，
+        // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 32 —— MCP 单列，
         // 否则“发现到一个 MCP 服务器”看起来会像“内建能力目录多了一条”。
         var inventory = root["inventory"] as JsonObject;
         var inventoryEntries = inventory?["entries"] as JsonArray;
-        Check("★ /api/tools 带统一查询面（内建 26 + MCP 分列，无重名）",
+        Check("★ /api/tools 带统一查询面（内建 32 + MCP 分列，无重名）",
             inventory is not null
-            && inventory["builtin"]?.GetValue<int>() == 26
+            && inventory["builtin"]?.GetValue<int>() == 32
             && inventory["host"]?.GetValue<int>() == 24
-            && inventory["plugin"]?.GetValue<int>() == 2
+            && inventory["plugin"]?.GetValue<int>() == 8
             && inventory["mcp"]?.GetValue<int>() == 0
-            && inventory["total"]?.GetValue<int>() == 26
+            && inventory["total"]?.GetValue<int>() == 32
             && (inventory["duplicates"] as JsonArray)?.Count == 0
-            && inventoryEntries?.Count == 26
+            && inventoryEntries?.Count == 32
             && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Builtin") == 24
-            && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Plugin") == 2,
+            && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Plugin") == 8,
             inventory?.ToJsonString() ?? "(没有 inventory)");
 
         JsonObject? Find(string id) => tools.FirstOrDefault(n => n?["id"]?.GetValue<string>() == id) as JsonObject;
@@ -285,7 +285,7 @@ public static partial class Program
         var dashRoot = JsonNode.Parse(dashBody) as JsonObject ?? new JsonObject();
         Check("★ /api/dashboard 一屏给全（运行 / 延迟 / 内存 / 工具 / 权限 / 轨迹，全是只读汇总）",
             dashCode == 200 && dashRoot["uptimeSeconds"] is not null && dashRoot["latencyMs"] is not null
-            && (dashRoot["tools"] as JsonObject)?["total"]?.GetValue<int>() == 26
+            && (dashRoot["tools"] as JsonObject)?["total"]?.GetValue<int>() == 32
             && (dashRoot["memory"] as JsonObject)?["usedBytes"] is not null
             && (dashRoot["traces"] as JsonObject)?["capacity"]?.GetValue<int>() == 50,
             $"HTTP {dashCode} {dashBody[..Math.Min(160, dashBody.Length)]}");

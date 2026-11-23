@@ -1,0 +1,56 @@
+{
+  "id": "preset.feature.digest",
+  "entryAssembly": "BotAgent.Package.Digest.dll",
+  "entryType": "BotAgent.Packages.Digest.DigestPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "toolApiVersion": 1,
+  "permissions": [
+    "model.grounded-text",
+    "tools.execute"
+  ],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Digest.Contracts",
+      "owner": "preset.feature.digest"
+    }
+  ],
+  "settings": [
+    {
+      "key": "defaultMessageCount",
+      "label": "默认汇总消息条数",
+      "type": "number",
+      "defaultValue": "80",
+      "required": false,
+      "numberConstraints": {
+        "minimum": 10,
+        "maximum": 200,
+        "integer": true
+      }
+    },
+    {
+      "key": "maxLookbackHours",
+      "label": "最大回溯小时数",
+      "type": "number",
+      "defaultValue": "24",
+      "required": false,
+      "numberConstraints": {
+        "minimum": 1,
+        "maximum": 168,
+        "integer": true
+      }
+    },
+    {
+      "key": "cooldownSeconds",
+      "label": "同会话纪要冷却秒数",
+      "type": "number",
+      "defaultValue": "20",
+      "required": false,
+      "numberConstraints": {
+        "minimum": 5,
+        "maximum": 300,
+        "integer": true
+      }
+    }
+  ]
+}

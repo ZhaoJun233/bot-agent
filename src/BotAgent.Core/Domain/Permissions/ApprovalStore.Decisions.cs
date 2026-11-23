@@ -18,7 +18,8 @@ public sealed partial class ApprovalStore
         string conversationKey,
         bool approve,
         DateTimeOffset now,
-        string? approverRole = null)
+        string? approverRole = null,
+        bool isLiveApprover = false)
     {
         lock (_sync)
         {
@@ -44,7 +45,7 @@ public sealed partial class ApprovalStore
                 return new ApprovalOutcome(false, ApprovalStatus.Pending, "cross_conversation", request);
             }
 
-            if (!IsAuthorizedApprover(request, approver, approverRole))
+            if (!isLiveApprover && !IsAuthorizedApprover(request, approver, approverRole))
             {
                 // 普通群成员（既不在名单里、也不是 owner/admin）发“通过”不算审批
                 return new ApprovalOutcome(false, ApprovalStatus.Pending, "not_an_approver", request);

@@ -169,7 +169,7 @@ internal static class ReviewAgentStorageRegression
         try
         {
             var stop = typeof(AgentCommandService).GetMethod("TryHandleAgentSubCommandAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            await (Task<bool>)stop.Invoke(service, new object?[] { conversation, message, "stop", "server", null })!;
+            await (Task<bool>)stop.Invoke(service, new object?[] { conversation, message, "stop", "server", null, true })!;
             check(current[conversation.SourceKey].Cts.IsCancellationRequested && current[conversation.SourceKey].Task.CancelRequested,
                 "B20 stop reaches current cancellation while acknowledgement is blocked");
         }

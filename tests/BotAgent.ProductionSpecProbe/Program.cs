@@ -981,6 +981,14 @@ public static class Program
                 });
             }
 
+            if (request.RequestUri?.AbsolutePath.Contains("bot/v3/info", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"code\":0,\"bot\":{\"open_id\":\"ou_bot\"}}")
+                });
+            }
+
             return Task.FromResult(OnSend?.Invoke(request) ?? new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{\"code\":0,\"data\":{\"message_id\":\"om_test_out\"}}")

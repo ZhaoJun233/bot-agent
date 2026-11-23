@@ -42,6 +42,8 @@ import {
 } from '../capabilities/use-capability-operations'
 import { policyEntries, policyEntryPlatformId } from '../configuration/policy-draft'
 import {
+  formatAccountScopeLabel,
+  formatDriverCredentialStatus,
   isPlatformConfigTarget,
   platformDriverConfigByScope,
   platformDriverConfigFor,
@@ -136,15 +138,25 @@ function actionHint(channel: PlatformChannelModel): string | null {
 }
 
 function formatInstance(accountScope: string, instanceId: string): string {
+  const scope = formatAccountScopeLabel(accountScope)
+  const instance = instanceId.trim()
+  return instance ? `${scope} / ${instance}` : scope
+}
+
+function formatRawInstance(accountScope: string, instanceId: string): string {
   const scope = accountScope.trim()
   const instance = instanceId.trim()
-  if (!instance) return scope ? `${scope}（默认实例）` : '默认实例'
+  if (!instance) return scope || '—'
   return scope ? `${scope} / ${instance}` : instance
 }
 
 function openDriverSettings(channel: PlatformChannelModel, event?: Event): void {
   if (settingsTarget.value) return
-  const target = platformDriverConfigFor(channel.platformId, channel.title)
+  const target = platformDriverConfigFor(channel.platformId, channel.title, {
+    platformId: channel.platformId,
+    accountScope: channel.accountScope,
+    instanceId: channel.instanceId
+  })
   if (!target) return
   settingsTarget.value = { target, trigger: eventTrigger(event) }
 }
@@ -241,6 +253,7 @@ async function load(reason: 'interactive' | 'background' = 'interactive'): Promi
 
     if (capRes.status === 'fulfilled') {
       descriptors.value = capRes.value.items
+      error.value = null
     } else {
       const cause = capRes.reason
       if (cause instanceof ZbaRequestError && cause.status === 401) { emit('auth-expired', toUiError(cause)); return }
@@ -462,7 +475,7 @@ defineExpose({
           </div>
           <div>
             <dt>接入凭据</dt>
-            <dd>{{ channel.descriptor.credentialConfigured ? '已配置' : '未配置' }}</dd>
+            <dd>{{ formatDriverCredentialStatus(channel.credentialMode, channel.descriptor.credentialConfigured) }}</dd>
           </div>
           <div>
             <dt>访问策略</dt>
@@ -470,7 +483,7 @@ defineExpose({
           </div>
           <div>
             <dt>通道实例</dt>
-            <dd class="mono">{{ formatInstance(channel.accountScope, channel.instanceId) }}</dd>
+            <dd>{{ formatInstance(channel.accountScope, channel.instanceId) }}</dd>
           </div>
         </dl>
 
@@ -545,9 +558,11 @@ defineExpose({
       <template #eyebrow><span class="eyebrow">PLATFORM DRIVER DETAIL</span></template>
       <dl class="detail-kv">
         <div><dt>平台标识</dt><dd class="mono"><BreakableId :value="detailTarget.platformId" copyable /></dd></div>
-        <div><dt>实例范围</dt><dd class="mono">{{ formatInstance(detailTarget.accountScope, detailTarget.instanceId) }}</dd></div>
+        <div><dt>实例范围</dt><dd>{{ formatInstance(detailTarget.accountScope, detailTarget.instanceId) }}</dd></div>
+        <div><dt>原始实例标识</dt><dd class="mono"><BreakableId :value="formatRawInstance(detailTarget.accountScope, detailTarget.instanceId)" copyable /></dd></div>
         <div><dt>运行状态</dt><dd><StatusBadge :tone="runtimeTone(detailTarget.descriptor.runtimeState)" :label="runtimeLabel(detailTarget.descriptor.runtimeState)" dot /></dd></div>
-        <div><dt>凭据状态</dt><dd>{{ detailTarget.descriptor.credentialConfigured ? '已配置' : '未配置' }}</dd></div>
+        <div><dt>凭据状态</dt><dd>{{ formatDriverCredentialStatus(detailTarget.credentialMode, detailTarget.descriptor.credentialConfigured) }}</dd></div>
+        <div v-if="detailTarget.credentialHint"><dt>凭据说明</dt><dd>{{ detailTarget.credentialHint }}</dd></div>
         <div v-if="detailTarget.driverPackage">
           <dt>底层驱动包</dt>
           <dd class="mono">
@@ -588,6 +603,7 @@ defineExpose({
       :client="props.client"
       :capability="settingsTarget.target.capability"
       :policy-platform-id="settingsTarget.target.policyPlatformId"
+      :driver-key="settingsTarget.target.driverKey"
       :dialog-title="settingsTarget.target.dialogTitle"
       :mode="props.mode"
       :writes-enabled="props.writesEnabled"

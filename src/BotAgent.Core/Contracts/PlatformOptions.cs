@@ -85,6 +85,10 @@ public class PlatformOptions
     public ImmutableArray<DriverKey> DeclaredPlatformDrivers { get; set; } = ImmutableArray<DriverKey>.Empty;
     [JsonIgnore]
     public ImmutableArray<ActionId> DeclaredPlatformActions { get; set; } = ImmutableArray<ActionId>.Empty;
+    /// <summary>已提交并热发布的会话级可组合档案快照（存于 meta 表，Schema v15 零迁移）。</summary>
+    [JsonIgnore]
+    public ImmutableArray<ConversationProfile> RuntimeConversationProfiles { get; set; }
+        = ImmutableArray<ConversationProfile>.Empty;
 
     public void CopyPlatformPropertiesTo(PlatformOptions target)
     {
@@ -121,6 +125,7 @@ public class PlatformOptions
         target.RuntimePlatformPolicyBaselineSources = RuntimePlatformPolicyBaselineSources;
         target.DeclaredPlatformDrivers = DeclaredPlatformDrivers;
         target.DeclaredPlatformActions = DeclaredPlatformActions;
+        target.RuntimeConversationProfiles = RuntimeConversationProfiles;
     }
 }
 

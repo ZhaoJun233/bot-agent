@@ -34,6 +34,7 @@ import { settingsFor, type PluginSettingsSpec } from './plugin-settings'
 import RegisteredPluginSwitch from './RegisteredPluginSwitch.vue'
 import { reasonLabel } from './reason-labels'
 import { capabilityTitle } from '../../shared/friendly'
+import { formatAccountScopeLabel } from '../platforms/driver-registry'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -412,7 +413,7 @@ const visibleItems = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
   if (!query) return items.value
   return items.value.filter((item) => [
-    capabilityTitle(item.displayName, item.key), item.displayName, keyLabel(item.key),
+    capabilityTitle(item.displayName, item.key), item.displayName, keyLabel(item.key), rawKeyLabel(item.key),
     kindLabel(item.key.kind), runtimeLabel(item.runtimeState), item.errorCode ?? ''
   ].join(' ').toLocaleLowerCase().includes(query))
 })
@@ -445,7 +446,7 @@ function keyIdentity(key: ZbaManagedObjectKey): string {
   }
 }
 
-function keyLabel(key: ZbaManagedObjectKey): string {
+function rawKeyLabel(key: ZbaManagedObjectKey): string {
   switch (key.kind) {
     case 'driver':
       return key.key.instanceId
@@ -458,12 +459,25 @@ function keyLabel(key: ZbaManagedObjectKey): string {
   }
 }
 
+function keyLabel(key: ZbaManagedObjectKey): string {
+  switch (key.kind) {
+    case 'driver':
+      return key.key.instanceId
+        ? key.key.platformId + ' / ' + key.key.instanceId
+        : key.key.platformId + ' / ' + formatAccountScopeLabel(key.key.accountScope)
+    case 'device':
+      return key.key.deviceId
+    default:
+      return key.key
+  }
+}
+
 /**
  * DOM/测试用的稳定标识：带上 kind。标签本身不是主键——同名插件与供应商
  * 可以合法共存，只用标签会让两个卡片的 data-testid 撞在一起。
  */
 function keySlug(key: ZbaManagedObjectKey): string {
-  return key.kind + ':' + keyLabel(key)
+  return key.kind + ':' + rawKeyLabel(key)
 }
 
 function kindLabel(kind: ZbaManagedObjectKey['kind']): string {

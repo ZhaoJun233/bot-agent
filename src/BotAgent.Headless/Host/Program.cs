@@ -74,11 +74,11 @@ public static class Program
         // Authentication and recovery precede all business construction and validation.
         await using var control = CompositionRoot.BuildControl(settings, new ZbaCallerAuthorization());
         if (settings.HealthPort > 0) control.Server.Start();
-        await using var graph = await StartBusinessAsync(settings, control);
+        using var shutdown = new CancellationTokenSource();
+        await using var graph = await StartBusinessAsync(settings, control, shutdown.Token);
         if (graph is null && control.Server.ListeningOn is null) return 2;
 
         // ---------- 常驻运行 + 优雅退出 ----------
-        using var shutdown = new CancellationTokenSource();
 
         // 退出可能由多个来源同时触发（Ctrl+C、SIGTERM、ProcessExit），
         // 且 ProcessExit 会在 using 释放 CTS 之后才回调 —— 必须做幂等 + 容错，
@@ -128,7 +128,8 @@ public static class Program
         return 0;
     }
 
-    private static async Task<AppGraph?> StartBusinessAsync(AppSettings settings, CompositionRoot.ControlGraph control)
+    private static async Task<AppGraph?> StartBusinessAsync(
+        AppSettings settings, CompositionRoot.ControlGraph control, CancellationToken shutdownToken)
     {
         AppGraph? graph = null;
         try
@@ -148,7 +149,23 @@ public static class Program
             await graph.Management.StartAsync();
             graph.BootReport.Write();
             graph.HealthReports.Start();
+            graph.ScheduledJobs?.Start();
             graph.Backups.Start();
+            if (graph.McpUseCase is { Enabled: true } startupMcp)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                        refreshCts.CancelAfter(TimeSpan.FromSeconds(10));
+                        await startupMcp.RefreshAsync(refreshCts.Token).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                    }
+                });
+            }
             control.CompleteStartup(graph);
             return graph;
         }

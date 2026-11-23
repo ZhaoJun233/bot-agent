@@ -33,11 +33,11 @@ public class ImageDownloader : IImageDownloader
 
     private static readonly TimeSpan FailureBackoff = TimeSpan.FromMinutes(10);
 
-    /// <summary>
-    /// 图片地址过期（400）时去找协议端**重新签发**地址的回调：入参是消息 id，返回该消息里所有图片的当前地址。
-    /// 由 BotAgentHost 接上 `IQqChatSource.RefreshImageUrlsAsync`；没接上就只能认赔（这张图这轮看不到）。
-    /// </summary>
+    /// <summary>图片地址过期（400）时去找协议端**重新签发**地址的回调：入参是消息 id，返回该消息里所有图片的当前地址。</summary>
     public Func<long, CancellationToken, Task<IReadOnlyList<string>>>? RefreshUrls { get; set; }
+
+    /// <summary>受控平台私有媒体句柄解析器（如 <c>feishu-media://messageId/imageKey</c>），仅由宿主装配点绑定。</summary>
+    public Func<string, CancellationToken, Task<byte[]?>>? CustomSchemeResolver { get; set; }
 
     /// <summary>缓存命中数（测试用）。</summary>
     public int CacheHits { get; private set; }
@@ -186,6 +186,24 @@ public class ImageDownloader : IImageDownloader
         ct.ThrowIfCancellationRequested();
         try
         {
+            if (url.StartsWith("feishu-media://", StringComparison.OrdinalIgnoreCase))
+            {
+                if (CustomSchemeResolver is null)
+                    return new FetchOutcome(null, false, 0);
+                var customBytes = await CustomSchemeResolver(url, ct).ConfigureAwait(false);
+                if (customBytes is not { Length: > 0 } || customBytes.Length > MaxImageBytes)
+                    return new FetchOutcome(null, false, 0);
+                var customMime = DetectMime(customBytes);
+                var customExt = customMime switch
+                {
+                    "image/jpeg" => "jpg",
+                    "image/gif" => "gif",
+                    "image/webp" => "webp",
+                    _ => "png"
+                };
+                return new FetchOutcome((customBytes, customMime, customExt), false, 200);
+            }
+
             if (!SafeUrl.TryValidate(url, AllowPrivateHosts, out var uri, out _))
             {
                 Services.FileLog.Write("Vision", "image_target_rejected");

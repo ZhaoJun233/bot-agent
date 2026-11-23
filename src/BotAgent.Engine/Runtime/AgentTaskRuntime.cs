@@ -35,6 +35,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
 
     /// <summary>启动时最多恢复多少条历史任务（与通道台账上限一致）。</summary>
     private const int MaxRestore = 200;
+    private const int MaxRetainedRecords = 256;
 
     private readonly object _gate = new();
     private readonly Dictionary<string, TaskRecord> _records = new(StringComparer.Ordinal);
@@ -91,6 +92,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
                 var task = new TaskRecord(request, _now());
                 _records[request.Id] = task;
                 _order.Insert(0, request.Id);
+                EvictTerminalOverflowLocked();
                 if (approval is not null)
                 {
                     task.Approval = approval;
@@ -184,6 +186,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
                 task.State = AgentTaskState.Cancelled;
                 task.ErrorCode = "approval_cancelled";
                 task.UpdatedAt = _now();
+                ScrubPromptLocked(task);
                 snapshot = Project(task);
             }
 
@@ -257,6 +260,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
             task.State = AgentTaskState.Cancelled;
             task.ErrorCode = reasonCode;
             task.UpdatedAt = _now();
+            ScrubPromptLocked(task);
             snapshot = Project(task);
             QueuePublication(snapshot);
         }
@@ -266,6 +270,43 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
         return AgentTaskApprovalDecision.Rejected;
     }
 
+    /// <summary>一次审批决策前只读判断该 requestId 是否归属本运行时台账（含刚过期的任务单，不触发清理）。</summary>
+    public bool HasApproval(string requestId)
+    {
+        if (string.IsNullOrWhiteSpace(requestId)) return false;
+        lock (_gate)
+        {
+            foreach (var entry in _records.Values)
+            {
+                if (entry.Approval is { } a && string.Equals(a.RequestId, requestId, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>读一条待批中的运行时任务（用于聊天侧校验；自动推进已过期的条目）。</summary>
+    public bool TryGetPendingApproval(string requestId, DateTimeOffset now, out AgentTaskSnapshot? snapshot)
+    {
+        snapshot = null;
+        if (string.IsNullOrWhiteSpace(requestId)) return false;
+        SweepApprovals(now);
+        lock (_gate)
+        {
+            foreach (var entry in _records.Values)
+            {
+                if (entry.State == AgentTaskState.WaitingApproval
+                    && entry.Approval is { } a
+                    && string.Equals(a.RequestId, requestId, StringComparison.Ordinal))
+                {
+                    snapshot = Project(entry);
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     /// <summary>
     /// 一次审批决策（#137）：按审批编号找待批任务，批准 → <see cref="Resume" />，拒绝 → <see cref="Reject" />。
     /// 先扫一遍过期，免得把“早就过期”的单子当成“正在等待”。
@@ -273,21 +314,27 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
     public AgentTaskApprovalDecision DecideApproval(string requestId, bool approve, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
-        SweepApprovals(now);
         string? taskId = null;
+        var expiredOnDecision = false;
         lock (_gate)
         {
+            if (_disposed) return AgentTaskApprovalDecision.Disposed;
             foreach (var entry in _records.Values)
             {
                 if (entry.Approval is { } approval && string.Equals(approval.RequestId, requestId, StringComparison.Ordinal))
                 {
                     taskId = entry.Request.Id;
+                    expiredOnDecision = entry.State == AgentTaskState.WaitingApproval && approval.ExpiresAt <= now;
                     break;
                 }
             }
+
+            SweepApprovalsLocked(now);
         }
 
+        DrainPublications();
         if (taskId is null) return AgentTaskApprovalDecision.NotFound;
+        if (expiredOnDecision) return AgentTaskApprovalDecision.Expired;
         return approve ? Resume(taskId) : Reject(taskId, "approval_rejected");
     }
 
@@ -316,6 +363,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
             task.State = AgentTaskState.Cancelled;
             task.ErrorCode = "approval_expired";
             task.UpdatedAt = now;
+            ScrubPromptLocked(task);
             QueuePublication(Project(task));
             expired++;
         }
@@ -348,10 +396,12 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
             }
             if (task.CancellationRequested) cancelSource.Cancel();
 
-            var executionTask = _executor.ExecuteAsync(task.Request, linked.Token);
+            var dispatchRequest = task.Request;
+            lock (_gate) ScrubPromptLocked(task);
+            var executionTask = _executor.ExecuteAsync(dispatchRequest, linked.Token);
             // 延迟只挂在"超时"令牌上，不挂 linked：linked 在用户取消时也会立刻取消，
             // 若挂上去，取消会让延迟任务先完成、被下面误判成超时（取消变 TimedOut）。
-            var timeoutTask = Task.Delay(task.Request.Timeout, timeoutSource.Token);
+            var timeoutTask = Task.Delay(dispatchRequest.Timeout, timeoutSource.Token);
             var first = await Task.WhenAny(executionTask, timeoutTask).ConfigureAwait(false);
             if (first == timeoutTask)
             {
@@ -542,6 +592,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
             task.State = state;
             task.ErrorCode = errorCode;
             task.UpdatedAt = _now();
+            ScrubPromptLocked(task);
             snapshot = Project(task);
             QueuePublication(snapshot);
         }
@@ -562,6 +613,7 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
             task.State = state;
             task.ErrorCode = errorCode;
             task.UpdatedAt = _now();
+            if (AgentTaskTransitions.IsTerminal(state)) ScrubPromptLocked(task);
             snapshot = Project(task);
             QueuePublication(snapshot);
         }
@@ -600,9 +652,28 @@ public sealed partial class AgentTaskRuntime : IAsyncDisposable
     };
 
 
+    private static void ScrubPromptLocked(TaskRecord task)
+    {
+        if (!string.IsNullOrEmpty(task.Request.Prompt))
+            task.Request = task.Request with { Prompt = string.Empty };
+    }
+
+    private void EvictTerminalOverflowLocked()
+    {
+        for (var i = _order.Count - 1; i >= 0 && _records.Count > MaxRetainedRecords; i--)
+        {
+            var id = _order[i];
+            if (_records.TryGetValue(id, out var candidate) && AgentTaskTransitions.IsTerminal(candidate.State))
+            {
+                _records.Remove(id);
+                _order.RemoveAt(i);
+            }
+        }
+    }
+
     private sealed class TaskRecord(AgentTaskRequest request, DateTimeOffset createdAt)
     {
-        internal AgentTaskRequest Request { get; } = request;
+        internal AgentTaskRequest Request { get; set; } = request;
         internal AgentTaskState State { get; set; } = AgentTaskState.Queued;
 
         /// <summary>待批信息（#137）：只有 WaitingApproval 期间有值。</summary>

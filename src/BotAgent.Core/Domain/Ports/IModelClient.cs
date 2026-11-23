@@ -1,6 +1,7 @@
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Stickers;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Model;
 
 namespace BotAgent.Domain.Ports;
 
@@ -58,7 +59,8 @@ public interface IModelClient
     SamplingProfile? sampling = null,
 
     // 提示词缓存作用域（会话 key）：只以哈希形式进请求体；null = 不加缓存键（开关见 ModelProtocolOptions.PromptCache）。
-    string? promptCacheScope = null, bool isPrivateConversation = false);
+    string? promptCacheScope = null, bool isPrivateConversation = false,
+    ConversationPromptOverrides? promptOverrides = null);
 
     /// <summary>一次"问一句、要一段文字"的调用（服务器 agent 的工具循环用它）。</summary>
     Task<string?> CompleteChatAsync(

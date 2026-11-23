@@ -21,6 +21,11 @@
     <ProjectReference Include="../../contracts/agent/BotAgent.Agent.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
     <ProjectReference Include="../../contracts/conversation/BotAgent.Conversation.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
     <ProjectReference Include="../../contracts/platforms/BotAgent.Platforms.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/documents/BotAgent.Documents.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/digest/BotAgent.Digest.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/knowledge/BotAgent.Knowledge.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/scheduler/BotAgent.Scheduler.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
+    <ProjectReference Include="../../contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
   </ItemGroup>

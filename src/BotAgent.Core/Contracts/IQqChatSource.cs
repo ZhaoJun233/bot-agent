@@ -35,6 +35,9 @@ public interface IQqChatSource
 
     bool IsConnected { get; }
 
+    /// <summary>当前指定通道是否开启原生 Markdown / 卡片渲染（用于发送期保留结构化 Markdown 且跳过分句拆段）。</summary>
+    bool SupportsStructuredMarkdown(string channel) => false;
+
     /// <summary>Fixed, non-sensitive source failure code, if available.</summary>
     string? LastErrorCode => null;
 
@@ -132,4 +135,14 @@ public interface IQqChatSource
     /// </summary>
     Task<IReadOnlyList<string>> RefreshImageUrlsAsync(long messageId, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    /// <summary>脱出收包循环后解析入站语音载荷（优先返回协议端解码字节或受控下载 URL）。</summary>
+    Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundVoiceAsync(
+        BotAgent.Domain.Messaging.InboundVoiceAttachment voice, long messageId, CancellationToken ct = default)
+        => Task.FromResult<(byte[]?, string?, string)>((null, voice.WavUrl, "voice.wav"));
+
+    /// <summary>脱出收包循环后解析入站文件载荷（优先返回协议端字节或临时下载 URL）。</summary>
+    Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundFileAsync(
+        BotAgent.Domain.Messaging.InboundFileAttachment file, bool isGroup, long targetId, long messageId, CancellationToken ct = default)
+        => Task.FromResult<(byte[]?, string?, string)>((null, file.DownloadUrl, file.FileName));
 }

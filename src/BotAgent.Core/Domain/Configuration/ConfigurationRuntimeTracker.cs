@@ -70,6 +70,7 @@ public sealed class ConfigurationRuntimeTracker
                 or ConfigurationFieldId.EnableVoice or ConfigurationFieldId.EnablePoke
                 or ConfigurationFieldId.ScenarioPreset or ConfigurationFieldId.EnableApprovals
                 or ConfigurationFieldId.EnableQuestions => [ApplyStep.RuntimePolicy],
+            ConfigurationFieldId.ConversationProfiles => [ApplyStep.PublishSnapshot, ApplyStep.RuntimePolicy],
             ConfigurationFieldId.MaxConcurrentReplies => [ApplyStep.ConcurrencyGate],
             ConfigurationFieldId.MaxMessagesPerConversation => [ApplyStep.ContextWindow],
             ConfigurationFieldId.HealthReportEnabled or ConfigurationFieldId.HealthReportTargets

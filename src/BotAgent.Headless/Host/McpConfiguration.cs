@@ -1,18 +1,22 @@
+extern alias StorageModule;
+
 using System.Text.Json.Nodes;
+using StorageMcpStore = StorageModule::BotAgent.Storage.McpServerStore;
 using BotAgent.Adapters.Net;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Mcp;
 using BotAgent.Domain.Ports;
 using BotAgent.Mcp;
+using BotAgent.Panel;
 using BotAgent.Services.Mcp;
 using BotAgent.Services.Net;
 
 namespace BotAgent.Host;
 
 /// <summary>Wave4 的 MCP 运行体：客户端 + 它专用的出网实例（共用宿主 SSRF 连接策略）。</summary>
-internal sealed class McpRuntime(McpToolSource source, HttpFetcher http) : IAsyncDisposable
+internal sealed class McpRuntime(IAsyncDisposable source, HttpFetcher http) : IAsyncDisposable
 {
-    public McpToolSource Source { get; } = source;
+    public IAsyncDisposable Source { get; } = source;
 
     public async ValueTask DisposeAsync()
     {
@@ -22,6 +26,16 @@ internal sealed class McpRuntime(McpToolSource source, HttpFetcher http) : IAsyn
 }
 
 internal sealed record McpWiring(McpToolUseCase UseCase, McpRuntime? Runtime);
+
+internal sealed record McpManagedWiring(
+    McpToolUseCase UseCase,
+    McpRuntime Runtime,
+    ReloadableMcpToolSource Reloadable,
+    Func<bool> AllowPrivate,
+    Func<string, (bool Ok, string NormalizedUrl, string Reason)> ValidateEndpoint,
+    Func<IReadOnlyList<ZbaMcpServerView>> ListEnvServers,
+    Func<CancellationToken, Task<int>> ReloadAsync,
+    Func<string?, string, string?, int, CancellationToken, Task<McpProbeOutcome>> ProbeAsync);
 
 /// <summary>
 /// MCP 首版配置入口（Wave4 不接面板）：`BOTAGENT_MCP_ENABLED` + `BOTAGENT_MCP_SERVERS`。
@@ -58,9 +72,136 @@ internal static class McpConfiguration
         }
 
         var http = new HttpFetcher(Timeout.InfiniteTimeSpan, log, "mcp",
-            allowAutoRedirect: false, rejectPrivateDestinations: !allowPrivate);
+            allowAutoRedirect: false, rejectPrivateDestinations: !allowPrivate, rejectLinkLocalWhenPrivate: allowPrivate);
         var source = new McpToolSource(servers, http.SharedClient, log);
         return new McpWiring(new McpToolUseCase(Combine(source), audit, log, plugins: plugins), new McpRuntime(source, http));
+    }
+
+    public static McpManagedWiring BuildManaged(
+        ISecretsRepository secrets,
+        BotAgent.Services.Ops.IAuditChain? audit,
+        Action<string> log,
+        BotAgent.Adapters.Plugins.PluginPythonSources? packages,
+        BotAgent.Services.Plugins.PluginManager? plugins,
+        StorageMcpStore store)
+    {
+        var allowPrivate = On(EnvironmentAliases.Get("BOTAGENT_MCP_ALLOW_PRIVATE"));
+        var http = new HttpFetcher(Timeout.InfiniteTimeSpan, log, "mcp",
+            allowAutoRedirect: false, rejectPrivateDestinations: !allowPrivate, rejectLinkLocalWhenPrivate: allowPrivate);
+        var reloadGate = new SemaphoreSlim(1, 1);
+        (bool Ok, string NormalizedUrl, string Reason) ValidateUrl(string url)
+        {
+            if (!SafeUrl.TryValidate(url, allowPrivate, out var parsed, out var reason))
+                return (false, string.Empty, reason);
+            if (!string.IsNullOrEmpty(parsed.UserInfo))
+                return (false, string.Empty, "userinfo_not_allowed");
+            var host = parsed.DnsSafeHost.Trim('[', ']').TrimEnd('.');
+            if (System.Net.IPAddress.TryParse(host, out var ip) && OutboundAddressPolicy.IsLinkLocalOrMetadata(ip))
+                return (false, string.Empty, "link_local_metadata_blocked");
+            return (true, parsed.ToString(), "ok");
+        }
+
+        List<McpServerOptions> ReadEnvServers()
+            => On(EnvironmentAliases.Get("BOTAGENT_MCP_ENABLED"))
+                ? Parse(EnvironmentAliases.Get("BOTAGENT_MCP_SERVERS"), secrets, allowPrivate, log)
+                : new List<McpServerOptions>();
+
+        IMcpToolSource BuildEffectiveSource()
+        {
+            var envServers = ReadEnvServers();
+            var merged = new List<McpServerOptions>(envServers);
+            var envIds = envServers.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var consoleServer in store.LoadRuntimeServers(ValidateUrl))
+            {
+                if (merged.Count >= McpLimits.MaxServers) break;
+                if (envIds.Contains(consoleServer.Id)) continue;
+                merged.Add(consoleServer);
+            }
+            return merged.Count > 0 ? new McpToolSource(merged, http.SharedClient, log) : NullMcpToolSource.Instance;
+        }
+
+        var reloadable = new ReloadableMcpToolSource(BuildEffectiveSource());
+        IMcpToolSource combined = packages is null
+            ? reloadable
+            : new BotAgent.Adapters.Plugins.CompositePackageToolSource(reloadable, packages);
+        var useCase = new McpToolUseCase(combined, audit, log, plugins: plugins);
+        var runtime = new McpRuntime(reloadable, http);
+
+        IReadOnlyList<ZbaMcpServerView> ListEnvServers()
+        {
+            return ReadEnvServers().Select(s => new ZbaMcpServerView(
+                s.Id,
+                Enabled: true,
+                Source: "env",
+                ReadOnlyLocked: true,
+                Endpoint: s.Endpoint,
+                AllowedTools: s.AllowedTools.ToArray(),
+                ReadOnlyTools: (s.ReadOnlyTools ?? Array.Empty<string>()).ToArray(),
+                CallTimeoutSeconds: Math.Clamp((int)Math.Ceiling(s.CallTimeout.TotalSeconds), 1, 120),
+                MaxResultBytes: s.MaxResultBytes,
+                HasAuthToken: !string.IsNullOrWhiteSpace(s.Token))).ToArray();
+        }
+
+        async Task<int> ReloadAsync(CancellationToken ct)
+        {
+            await reloadGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var next = BuildEffectiveSource();
+                await reloadable.SwapAsync(next, ct).ConfigureAwait(false);
+                return await useCase.RefreshAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                reloadGate.Release();
+            }
+        }
+
+        async Task<McpProbeOutcome> ProbeAsync(string? id, string endpoint, string? authToken, int timeoutSeconds, CancellationToken ct)
+        {
+            var check = ValidateUrl(endpoint);
+            if (!check.Ok) return new McpProbeOutcome(false, check.Reason, Array.Empty<McpProbeToolCandidate>());
+
+            string? resolvedToken = null;
+            if (!string.IsNullOrWhiteSpace(authToken))
+            {
+                resolvedToken = authToken.Trim();
+            }
+            else if (!string.IsNullOrWhiteSpace(id))
+            {
+                var trimmedId = id.Trim();
+                var envIds = ReadEnvServers().Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!envIds.Contains(trimmedId))
+                {
+                    var saved = store.Load().Servers.FirstOrDefault(s => string.Equals(s.Id, trimmedId, StringComparison.Ordinal));
+                    if (saved is not null)
+                    {
+                        var savedCheck = ValidateUrl(saved.Endpoint);
+                        if (savedCheck.Ok && string.Equals(savedCheck.NormalizedUrl, check.NormalizedUrl, StringComparison.Ordinal))
+                            resolvedToken = store.LoadToken(trimmedId);
+                    }
+                }
+            }
+
+            var probeOpts = new McpServerOptions(
+                string.IsNullOrWhiteSpace(id) ? "probe" : id.Trim(),
+                check.NormalizedUrl,
+                resolvedToken,
+                Array.Empty<string>(),
+                TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 60)),
+                McpLimits.DefaultResultBytes);
+            return await ReloadableMcpToolSource.ProbeServerAsync(probeOpts, http.SharedClient, ct).ConfigureAwait(false);
+        }
+
+        return new McpManagedWiring(
+            useCase,
+            runtime,
+            reloadable,
+            () => allowPrivate,
+            ValidateUrl,
+            ListEnvServers,
+            ReloadAsync,
+            ProbeAsync);
     }
 
     private static List<McpServerOptions> Parse(string? raw, ISecretsRepository secrets, bool allowPrivate,
@@ -128,6 +269,7 @@ internal static class McpConfiguration
                 log($"[Mcp] 跳过服务器 {id}：allowedTools 为空（没有显式授权）");
                 continue;
             }
+            var readOnlyTools = Strings(item["readOnlyTools"]);
 
             var tokenName = Text(item["tokenSecret"]);
             string? token = null;
@@ -144,7 +286,7 @@ internal static class McpConfiguration
             var timeout = Int(item["callTimeoutSeconds"], McpLimits.DefaultCallTimeoutSeconds, 1, 120);
             var maxBytes = Int(item["maxResultBytes"], McpLimits.DefaultResultBytes, 1024, McpLimits.MaxResultBytes);
             result.Add(new McpServerOptions(id!, uri.ToString(), token, allowed,
-                TimeSpan.FromSeconds(timeout), maxBytes));
+                TimeSpan.FromSeconds(timeout), maxBytes, readOnlyTools));
             log($"[Mcp] 已登记服务器 {id}（allowedTools={allowed.Count}）");
         }
 

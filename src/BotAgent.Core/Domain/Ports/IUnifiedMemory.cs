@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Memory;
 using BotAgent.Domain.Messaging;
 
@@ -27,8 +28,14 @@ public interface IUnifiedMemory
     /// <summary>Validate and synchronously initiate an external operation under the invalidation lock. Never await/block in commit.</summary>
     bool TryUseReceipt(UnifiedMemoryReceipt receipt, UnifiedMemoryContext context, Action commit);
     bool IsLegacyProfileSuppressed(ParticipantId? subject, UnifiedMemoryScope source);
+    /// <summary>True when storage faulted or any suppression exists for the exact conversation scope.</summary>
+    bool IsConversationSuppressed(DriverKey driver, ConversationId conversation);
+    /// <summary>Metadata-only distinct conversation scopes carrying an active forget suppression marker.</summary>
+    ImmutableArray<UnifiedMemoryScope> GetSuppressedScopes();
     /// <summary>Gate an existing legacy profile injection, independent of Enabled. Null subject means a conservative scope-wide gate.</summary>
     UnifiedMemoryReceipt? AuthorizeLegacyProfile(UnifiedMemoryContext context, ParticipantId? subject = null);
+    /// <summary>Shape-only aggregate counters for administrator observability; never returns subjects, scopes, or fact text.</summary>
+    UnifiedMemoryGovernanceSummary GetGovernanceSummary();
 }
 
 /// <summary>

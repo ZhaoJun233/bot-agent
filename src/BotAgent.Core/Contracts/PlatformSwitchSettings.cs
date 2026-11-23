@@ -178,8 +178,7 @@ public static class PlatformSwitchSettings
             var features = ImmutableArray.CreateBuilder<FeatureOverride>();
             foreach (var feature in policy.FeatureOverrides ?? new())
             {
-                if (!Enum.TryParse<PlatformFeatureId>(feature.Key, true, out var id) || !Enum.IsDefined(id)
-                    || !string.Equals(id.ToString(), feature.Key, StringComparison.OrdinalIgnoreCase))
+                if (!TryParseFeatureId(feature.Key, out var id))
                     return ImportFailure("legacy_feature_needs_review");
                 features.Add(new FeatureOverride(id, feature.Value));
             }
@@ -196,6 +195,17 @@ public static class PlatformSwitchSettings
         var errors = ValidatePolicyEntries(imported, declaredDrivers, legacy.DeclaredPlatformActions);
         return errors.Length == 0 ? (ConfigurationResultCode.Ok, imported, errors)
             : (ConfigurationResultCode.LegacyNeedsReview, ImmutableArray<PlatformPolicyEntry>.Empty, errors);
+    }
+
+    private static bool TryParseFeatureId(string? raw, out PlatformFeatureId id)
+    {
+        if (string.Equals(raw?.Trim(), "personal_todo", StringComparison.OrdinalIgnoreCase))
+        {
+            id = PlatformFeatureId.PersonalTodo;
+            return true;
+        }
+        return Enum.TryParse(raw, true, out id) && Enum.IsDefined(id)
+            && string.Equals(id.ToString(), raw, StringComparison.OrdinalIgnoreCase);
     }
 
     public static ImmutableArray<FieldError> ValidatePolicyEntries(ImmutableArray<PlatformPolicyEntry> entries,

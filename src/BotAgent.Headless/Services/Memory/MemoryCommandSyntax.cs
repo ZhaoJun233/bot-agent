@@ -20,7 +20,13 @@ internal static class MemoryCommandSyntax
         [NotNullWhen(true)] out UnifiedMemoryRequest? request)
     {
         request = null;
-        if (words.Length < start + 2 || !TryFact(words[start], words[start + 1], out var fact)) return false;
+        if (words.Length < start + 2) return false;
+        var category = words[start];
+        if (category is "timezone" or "address" or "note")
+        {
+            return TryExtendedRequest(words, start, context, out request);
+        }
+        if (!TryFact(category, words[start + 1], out var fact)) return false;
         var targets = ImmutableArray.CreateBuilder<UnifiedMemoryScope>();
         if (words.Length > start + 2)
         {
@@ -31,6 +37,77 @@ internal static class MemoryCommandSyntax
                 targets.Add(target);
             }
         }
+        request = new(fact, targets.ToImmutable(), ExplicitSelfExpression: true);
+        return true;
+    }
+
+    private static bool TryExtendedRequest(string[] words, int start, UnifiedMemoryContext context,
+        [NotNullWhen(true)] out UnifiedMemoryRequest? request)
+    {
+        request = null;
+        var toIndex = words.Length;
+        var quoted = words[start + 1].StartsWith('"');
+        if (quoted)
+        {
+            var closeIdx = -1;
+            for (var j = start + 1; j < words.Length; j++)
+            {
+                if (words[j].EndsWith('"') && (j > start + 1 || words[j].Length >= 2))
+                {
+                    closeIdx = j;
+                    break;
+                }
+            }
+            if (closeIdx < 0) return false;
+            if (closeIdx < words.Length - 1)
+            {
+                if (words[closeIdx + 1] != "to" || closeIdx + 2 >= words.Length)
+                    return false;
+                toIndex = closeIdx + 1;
+            }
+        }
+        else
+        {
+            for (var i = start + 2; i < words.Length; i++)
+            {
+                if (words[i] == "to")
+                {
+                    if (i + 1 >= words.Length
+                        || !words.Skip(i + 1).All(token => token.StartsWith("scope:", StringComparison.Ordinal)))
+                        return false;
+                    toIndex = i;
+                    break;
+                }
+            }
+        }
+
+        var rawValue = string.Join(' ', words[(start + 1)..toIndex]).Trim();
+        if (rawValue.Length >= 2 && rawValue.StartsWith('"') && rawValue.EndsWith('"'))
+            rawValue = rawValue[1..^1].Trim();
+        if (string.IsNullOrWhiteSpace(rawValue)) return false;
+
+        var category = words[start];
+        UnifiedMemoryFact? fact = category switch
+        {
+            "timezone" => new(UnifiedMemoryFactCategory.Timezone, rawValue),
+            "address" => new(UnifiedMemoryFactCategory.PreferredAddress, rawValue),
+            "note" => new(UnifiedMemoryFactCategory.PersonalNote, rawValue),
+            _ => null
+        };
+        if (fact is null) return false;
+
+        var targets = ImmutableArray.CreateBuilder<UnifiedMemoryScope>();
+        if (toIndex < words.Length)
+        {
+            var count = words.Length - (toIndex + 1);
+            if (count < 1 || count > 8) return false;
+            foreach (var word in words.Skip(toIndex + 1))
+            {
+                if (!TryScope(word, context, out var target) || targets.Contains(target)) return false;
+                targets.Add(target);
+            }
+        }
+
         request = new(fact, targets.ToImmutable(), ExplicitSelfExpression: true);
         return true;
     }

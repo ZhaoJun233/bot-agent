@@ -7,6 +7,7 @@ export const platformQqPrivatePresentation = Object.freeze({
   icon: 'qq' as const,
   title: 'QQ 私域通道',
   summary: 'OneBot / NapCat 私域连接、私聊开关、群/私聊白名单与访问策略',
+  credentialMode: 'optional-env' as const,
   credentialHint: 'OneBot / NapCat 连接地址与访问令牌由部署环境变量提供；此处管理私域对话开关、白名单与实例策略。',
   fields: [
     { section: 'platform' as const, key: 'privateChatEnabled' },

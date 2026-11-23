@@ -19,6 +19,8 @@ internal static class Baseline
             "BotAgent.Music.Contracts", "BotAgent.Voice.Contracts", "BotAgent.Profiles.Contracts",
             "BotAgent.HealthReporting.Contracts", "BotAgent.ModelServices.Contracts",
             "BotAgent.Agent.Contracts", "BotAgent.Conversation.Contracts", "BotAgent.Platforms.Contracts",
+            "BotAgent.Documents.Contracts", "BotAgent.Digest.Contracts", "BotAgent.Knowledge.Contracts",
+            "BotAgent.Scheduler.Contracts", "BotAgent.PersonalTodo.Contracts",
         },
         ["BotAgent.Plugin.Contracts"] = Array.Empty<string>(),
         ["BotAgent.Quota.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
@@ -34,6 +36,11 @@ internal static class Baseline
         ["BotAgent.Agent.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Conversation.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Platforms.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Documents.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Digest.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Knowledge.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Scheduler.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.PersonalTodo.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Storage"] = new[] { "BotAgent.Core" },
         ["BotAgent.Platforms"] = new[] { "BotAgent.Core" },
         ["BotAgent.Model"] = new[] { "BotAgent.Core" },
@@ -57,6 +64,11 @@ internal static class Baseline
         ["BotAgent.Package.PlatformQqOfficial"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.PlatformFeishu"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.PlatformLocal"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Documents"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Digest"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Knowledge"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Scheduler"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.PersonalTodo"] = new[] { "BotAgent.Core" },
         ["BotAgent.PluginBundle"] = new[] { "BotAgent.Core" },
         ["BotAgent.Headless"] = new[] { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel" },
     };
@@ -319,6 +331,11 @@ internal static class Baseline
         ["contracts/agent/BotAgent.Agent.Contracts.csproj"] = "BotAgent.Agent.Contracts",
         ["contracts/conversation/BotAgent.Conversation.Contracts.csproj"] = "BotAgent.Conversation.Contracts",
         ["contracts/platforms/BotAgent.Platforms.Contracts.csproj"] = "BotAgent.Platforms.Contracts",
+        ["contracts/documents/BotAgent.Documents.Contracts.csproj"] = "BotAgent.Documents.Contracts",
+        ["contracts/digest/BotAgent.Digest.Contracts.csproj"] = "BotAgent.Digest.Contracts",
+        ["contracts/knowledge/BotAgent.Knowledge.Contracts.csproj"] = "BotAgent.Knowledge.Contracts",
+        ["contracts/scheduler/BotAgent.Scheduler.Contracts.csproj"] = "BotAgent.Scheduler.Contracts",
+        ["contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj"] = "BotAgent.PersonalTodo.Contracts",
     };
 
     public static readonly IReadOnlyDictionary<string, string> RegisteredPackageContracts = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -340,6 +357,11 @@ internal static class Baseline
         ["packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj"] = "BotAgent.Platforms.Contracts",
+        ["packages/documents/backend/BotAgent.Package.Documents.csproj"] = "BotAgent.Documents.Contracts",
+        ["packages/digest/backend/BotAgent.Package.Digest.csproj"] = "BotAgent.Digest.Contracts",
+        ["packages/knowledge/backend/BotAgent.Package.Knowledge.csproj"] = "BotAgent.Knowledge.Contracts",
+        ["packages/scheduler/backend/BotAgent.Package.Scheduler.csproj"] = "BotAgent.Scheduler.Contracts",
+        ["packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj"] = "BotAgent.PersonalTodo.Contracts",
     };
     public static readonly IReadOnlyDictionary<string, string> CompatibilitySourceLinks = new Dictionary<string, string>
     {

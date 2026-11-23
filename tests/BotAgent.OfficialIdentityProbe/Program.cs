@@ -65,6 +65,7 @@ if (args is ["--windows-recovery-only"])
 if (args is ["--messaging-capabilities-only"])
 {
     await MessagingCapabilityChecks.RunAsync(Test);
+    await Phase2OfficialChecks.RunAsync(Test, (FrozenClock)PlatformClock.Current);
     Console.WriteLine($"SUMMARY passed={passed} failed={failed}");
     return failed == 0 ? 0 : 1;
 }
@@ -388,6 +389,7 @@ await MusicReceiptChecks.RunAsync(Test);
 await DeliveryLedgerChecks.RunIndexedAsync(Test);
 await HostMediaChecks.RunAsync(Test);
 await MessagingCapabilityChecks.RunAsync(Test);
+await Phase2OfficialChecks.RunAsync(Test, (FrozenClock)PlatformClock.Current);
 Console.WriteLine($"SUMMARY passed={passed} failed={failed}");
 return failed == 0 ? 0 : 1;
 

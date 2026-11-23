@@ -7,6 +7,7 @@ import {
   type ZbaConfigurationReceipt,
   type ZbaConfigurationReadResult,
   type ZbaConfigurationView,
+  type ZbaDriverKey,
   type ZbaFieldDescriptor,
   type ZbaReadField
 } from '../../api/zba'
@@ -49,6 +50,15 @@ import { replyPacingNumericLimits } from './reply-pacing'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
 import { applyPolicyEdits, filterPoliciesByPlatform, policyEntries, policyKey, type PolicyDrafts } from './policy-draft'
+import ConversationProfileEditor from './ConversationProfileEditor.vue'
+import {
+  applyConversationProfileEdits,
+  conversationProfileId,
+  conversationProfileViews,
+  defaultDriverForPlatform,
+  filterProfilesByPlatform,
+  type ConversationProfileDrafts
+} from './conversation-profile-draft'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 import { configurationCapabilities, configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
 import { registeredSecretLabel } from '../capabilities/plugin-settings'
@@ -59,6 +69,7 @@ const props = withDefaults(defineProps<{
   writesEnabled: boolean
   scope?: string
   policyPlatformId?: string
+  driverKey?: ZbaDriverKey
   active?: boolean
   embedded?: boolean
 }>(), { scope: 'basic', active: true, embedded: false })
@@ -146,6 +157,24 @@ const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
 const showPolicySection = computed(() => active.value === 'platform'
   && snapshot.value?.view?.platform?.platformPolicies !== undefined
   && (effectivePolicyPlatformId.value !== null || ownsConfiguration(props.scope, 'platform', 'platformPolicies')))
+const conversationProfileDrafts = ref<ConversationProfileDrafts>({})
+const allConversationProfiles = computed(() => conversationProfileViews(snapshot.value?.view))
+const conversationProfileDriver = computed(() => props.driverKey ?? defaultDriverForPlatform(effectivePolicyPlatformId.value, policyRows.value))
+const conversationProfileRows = computed(() => filterProfilesByPlatform(allConversationProfiles.value, effectivePolicyPlatformId.value, props.driverKey))
+const conversationProfileDirtyCount = computed(() => Object.keys(conversationProfileDrafts.value).length)
+const showConversationProfileSection = computed(() => showPolicySection.value && effectivePolicyPlatformId.value !== null)
+const maxMessagesCeiling = computed(() => {
+  const value = snapshot.value?.view?.behavior?.maxMessagesPerConversation?.value
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+})
+const conversationProfileSummaryText = computed(() => {
+  const byPlatform = new Map<string, number>()
+  for (const item of allConversationProfiles.value) {
+    const id = item.key.driver.platformId
+    byPlatform.set(id, (byPlatform.get(id) ?? 0) + 1)
+  }
+  return Array.from(byPlatform.entries()).map(([id, count]) => `${id}（${count}）`).join('、')
+})
 /** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
 const pendingNames = ref<ProviderNameDrafts>({})
 let findSequence = 0
@@ -270,6 +299,7 @@ const dirtyCount = computed(() =>
   Object.keys(draft.value).length
   + Object.keys(providerNames.value).length
   + policyDirtyCount.value
+  + conversationProfileDirtyCount.value
   + Object.values(secretDrafts.value).filter((action) => action !== undefined && action.kind !== 'keep').length)
 
 const hasWritePermission = computed(() => props.mode === 'admin' && props.writesEnabled)
@@ -469,6 +499,16 @@ function onPolicyDraftsUpdate(next: PolicyDrafts): void {
   fieldErrors.value = []
 }
 
+function onConversationProfileDraftsUpdate(next: ConversationProfileDrafts): void {
+  if (!canWrite.value || inputsLocked.value) return
+  anchorDraft()
+  conversationProfileDrafts.value = next
+  if (phase.value === 'saved' || phase.value === 'error') phase.value = 'idle'
+  validationMessage.value = null
+  saveError.value = null
+  fieldErrors.value = []
+}
+
 function currentDraftRaw(section: SectionKey, key: string, field: ZbaReadField): string {
   return draftRaw(draft.value, fieldPath(section as ZbaPatchSectionLike, key), field)
 }
@@ -518,6 +558,7 @@ function resetAll(): void {
   secretReconfirm.value = {}
   providerNames.value = {}
   policyDrafts.value = {}
+  conversationProfileDrafts.value = {}
   fieldErrors.value = []
   validationMessage.value = null
   conflictCurrentVersion.value = null
@@ -570,9 +611,10 @@ function buildRequest(): {
   const patch = buildPatch(draft.value, view)
   const nameErrors = applyProviderNames(patch.patch, providerNames.value, view)
   const policyErrors = applyPolicyEdits(patch.patch, policyDrafts.value, view)
+  const profileErrors = applyConversationProfileEdits(patch.patch, conversationProfileDrafts.value, view)
   const secrets = buildSecrets(secretDrafts.value)
   if (secretConfirmationBlocked.value) secrets.errors.push('秘密值无法比较：请明确确认，并重新输入替换值。')
-  const errors = [...patch.errors, ...nameErrors, ...policyErrors, ...secrets.errors]
+  const errors = [...patch.errors, ...nameErrors, ...policyErrors, ...profileErrors, ...secrets.errors]
   // 意图与 patch 分开记账：同值名称不用写入，但本次成功仍应结束该意图。
   const nameIntents = { ...providerNames.value }
   return { changes: patch.patch, secrets: secrets.secrets, errors, nameIntents }
@@ -717,6 +759,7 @@ async function reloadAfterConflict(): Promise<void> {
   if (snapshot.value?.view) {
     const next = snapshot.value.view
     const policyConflicts: string[] = []
+    const profileConflicts: string[] = []
     if (base) {
       const oldPolicies = new Map(policyEntries(base).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
       const newPolicies = new Map(policyEntries(next).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
@@ -727,11 +770,19 @@ async function reloadAfterConflict(): Promise<void> {
           policyConflicts.push(`policy:${key}`)
         }
       }
+      const oldProfiles = new Map(conversationProfileViews(base).map(item => [conversationProfileId(item.key), JSON.stringify(item)]))
+      const newProfiles = new Map(conversationProfileViews(next).map(item => [conversationProfileId(item.key), JSON.stringify(item)]))
+      for (const id of Object.keys(conversationProfileDrafts.value)) {
+        if (oldProfiles.get(id) !== newProfiles.get(id)) {
+          profileConflicts.push(`profile:${id}`)
+        }
+      }
     }
     conflictKeys.value = [
       ...conflictingPaths(draft.value, base, next),
       ...conflictingProviderNames(providerNames.value, base, next).map((key) => `provider:${key}`),
-      ...policyConflicts
+      ...policyConflicts,
+      ...profileConflicts
     ]
     // 用户已看到最新快照并逐项确认：从这里起草稿改基到新版本。
     draftBase.value = hasDraft.value ? snapshot.value : null
@@ -802,6 +853,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
     settleProviderNames(request.nameIntents)
     policyDrafts.value = {}
+    conversationProfileDrafts.value = {}
     validationMessage.value = '没有需要保存的修改。'
     return 'unchanged'
   }
@@ -857,6 +909,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
       secretDrafts.value = {}
       secretReconfirm.value = {}
       policyDrafts.value = {}
+      conversationProfileDrafts.value = {}
       // SR-NAME-01：名称意图也必须在这里结束，否则保存条一直是"1 项修改"，
       // 切页会弹未保存确认，下一次无关保存还会把已确认的旧名字重发给新基线。
       settleProviderNames(request.nameIntents)
@@ -931,6 +984,7 @@ async function checkPending(): Promise<void> {
       secretDrafts.value = {}
       secretReconfirm.value = {}
       policyDrafts.value = {}
+      conversationProfileDrafts.value = {}
       // 核对确认本次操作已落盘，包括无需重复写入的同值名称。
       settleProviderNames(nameIntents)
       validationMessage.value = null
@@ -1167,6 +1221,7 @@ function endSession(): void {
   secretReconfirm.value = {}
   providerNames.value = {}
   policyDrafts.value = {}
+  conversationProfileDrafts.value = {}
   pendingKey.value = null
   pendingNames.value = {}
   phase.value = 'idle'
@@ -1361,12 +1416,36 @@ defineExpose({
             <p>
               {{ activeMeta.hint }} · {{ activeFields.length }} 个字段
               <template v-if="showPolicySection"> · {{ policyRows.length }} 条策略</template>
+              <template v-if="showConversationProfileSection"> · {{ conversationProfileRows.length }} 条会话档案</template>
             </p>
           </div>
           <p class="config-guide">{{ capability?.summary ?? '基础行为设置保存后对新消息生效；模型供应商、消息平台与插件参数请在对应一级页调整。' }}</p>
           <p v-if="capability?.credentialHint" class="inline-notice" data-testid="config-credential-hint">
             {{ capability.credentialHint }}
           </p>
+          <div
+            v-if="props.scope === 'conversation'"
+            class="inline-notice plugin-notice"
+            data-testid="conversation-profiles-summary"
+          >
+            <span>
+              <strong>按会话定制档案（{{ allConversationProfiles.length }} 条）</strong><br />
+              <template v-if="allConversationProfiles.length > 0">
+                已在 {{ conversationProfileSummaryText }} 配置按群 / 私聊覆写（人设、插话节奏、能力与工具档位，热更新免重启）。
+              </template>
+              <template v-else>
+                尚未配置按会话定制档案；目前所有会话默认继承全局与平台策略。可在对应平台的「接入与策略」抽屉里一键套用预设。
+              </template>
+            </span>
+            <button
+              type="button"
+              class="tonal inline-action"
+              data-testid="conversation-profiles-open-platforms"
+              @click="emit('open-capabilities', 'platforms')"
+            >
+              去消息平台管理
+            </button>
+          </div>
           <p v-if="activeFields.length === 0 && !showPolicySection" class="empty-state">该分区没有字段。</p>
           <div v-if="activeFields.length > 0" class="settings-container">
             <table class="settings-table" role="table" data-testid="config-fields">
@@ -1513,6 +1592,21 @@ defineExpose({
               :model-value="policyDrafts"
               :locked="!canWrite || inputsLocked"
               @update:model-value="onPolicyDraftsUpdate"
+            />
+          </div>
+          <div
+            v-if="showConversationProfileSection"
+            class="policy-section policy-section--divided"
+            data-testid="config-field-conversationProfiles"
+          >
+            <ConversationProfileEditor
+              :platform-id="effectivePolicyPlatformId!"
+              :driver="conversationProfileDriver"
+              :entries="conversationProfileRows"
+              :model-value="conversationProfileDrafts"
+              :locked="!canWrite || inputsLocked"
+              :max-messages-ceiling="maxMessagesCeiling"
+              @update:model-value="onConversationProfileDraftsUpdate"
             />
           </div>
         </section>

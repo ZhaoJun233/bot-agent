@@ -160,11 +160,13 @@ describe('buildDomainCatalog', () => {
     expect(catalog.modelServicesPackage?.id).toBe('system.model-services')
     expect(catalog.modelServicesPackage?.title).toBe('模型路由与服务引擎')
 
-    // 2. Message Platforms merged with driverPackage + policy
+    // 2. Message Platforms merged with driverPackage + policy + credential metadata
     expect(catalog.platforms).toHaveLength(1)
     expect(catalog.platforms[0]!.platformId).toBe('qq.private')
     expect(catalog.platforms[0]!.driverPackage?.id).toBe('system.platform-qq-private')
     expect(catalog.platforms[0]!.policy).toBeDefined()
+    expect(catalog.platforms[0]!.credentialMode).toBe('optional-env')
+    expect(catalog.platforms[0]!.credentialHint).toContain('环境变量')
 
     // 3. System packages: all 9 present with Chinese display titles
     expect(catalog.systemPackages).toHaveLength(9)

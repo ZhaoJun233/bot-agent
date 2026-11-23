@@ -65,5 +65,22 @@ internal static class CommandLifecycle
         await expiring.Run($"//memory edit {draft.FactId:N} {draft.Version} explanation step-by-step");
         var replacement = expiring.Store.State.Entries.Single();
         Check(await expiring.Run(Confirm(replacement, "private-only")) == MemoryCommandView.Done, "explicit edit refreshes expired draft and requires new token");
+
+        // P3.2 extended categories: timezone, address, personal note
+        var ext = new CommandFixture();
+        var groupNoteResp = await ext.Run("//memory remember note 周五架构评审", Group);
+        Check(groupNoteResp == MemoryCommandView.GroupOnly && ext.Store.State.Entries.IsEmpty, "group personal note command refused without draft");
+        var tzReply = await ext.Run("//memory remember timezone Asia/Shanghai");
+        Check(tzReply.Contains("//memory confirm"), "private timezone creates confirmation candidate");
+        var tzDraft = ext.Store.State.Entries.Single(e => e.Fact.Category == UnifiedMemoryFactCategory.Timezone);
+        Check(await ext.Run(Confirm(tzDraft, "private-only")) == MemoryCommandView.Done, "private timezone confirmed");
+        var addrReply = await ext.Run("//memory remember address 阿哲");
+        Check(addrReply.Contains("//memory confirm"), "private address creates confirmation candidate");
+        var noteReply = await ext.Run("//memory remember note 下周三下午架构评审");
+        Check(noteReply.Contains("//memory confirm"), "private note creates confirmation candidate");
+        var noteDraft = ext.Store.State.Entries.Single(e => e.Fact.Category == UnifiedMemoryFactCategory.PersonalNote);
+        Check(await ext.Run(Confirm(noteDraft, "private-only")) == MemoryCommandView.Done, "private personal note confirmed");
+        Check(ext.Memory.Read(Private, "下周三架构评审").Entries.Any(e => e.Fact.Category == UnifiedMemoryFactCategory.PersonalNote),
+            "confirmed personal note readable via command path in private chat");
     }
 }

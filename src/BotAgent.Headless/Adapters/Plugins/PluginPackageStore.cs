@@ -44,6 +44,21 @@ internal sealed partial class PluginPackageStore(string root, TrustedPluginDistr
             Encoding.UTF8.GetString(PluginStateEnvelope.Write(state)), ct).ConfigureAwait(false);
     }
 
+    internal void PruneUnreferencedArchives(InstalledPluginPackage state)
+    {
+        var releasesDir = new DirectoryInfo(Path.Combine(PackageDirectory(state.Id), "releases"));
+        if (!releasesDir.Exists) return;
+        var referenced = new[] { state.Active, state.Previous, state.Pending }
+            .Where(m => m is not null)
+            .Select(m => m!.Version + "-" + m.Sha256.ToLowerInvariant() + ".zip")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in releasesDir.EnumerateFiles("*.zip"))
+        {
+            if (referenced.Contains(file.Name)) continue;
+            try { file.Delete(); } catch { }
+        }
+    }
+
     internal IEnumerable<string> Ids() => Directory.EnumerateDirectories(Root)
         .Select(Path.GetFileName).Where(id => id != null && !id.StartsWith('.')).Select(id => id!);
 }

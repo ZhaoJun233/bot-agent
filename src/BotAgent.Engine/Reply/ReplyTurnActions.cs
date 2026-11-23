@@ -62,7 +62,8 @@ internal sealed class ReplyTurnActions(
     IProtocolRiskBackoff? riskBackoff,
     Func<string, bool> allowsFeature,
     Func<string, string, Func<CancellationToken, Task>, bool> queueBackground,
-    Action<BotConversation, AppSettings> requestReply)
+    Action<BotConversation, AppSettings> requestReply,
+    PluginToolNotes? toolNotes = null)
 {
     private readonly ISettingsBox _box = box;
     private readonly ReplyHooks _hooks = hooks;
@@ -79,16 +80,24 @@ internal sealed class ReplyTurnActions(
     private readonly Func<string, bool> _allowsFeature = allowsFeature;
     private readonly Func<string, string, Func<CancellationToken, Task>, bool> _queueBackground = queueBackground;
     private readonly Action<BotConversation, AppSettings> _requestReply = requestReply;
+    private readonly PluginToolNotes? _toolNotes = toolNotes;
 
     private AppSettings _settings => _box.Current;
 
     private void QueueResearch(BotConversation conversation, ToolCall call, IToolBinding binding,
-        AppSettings snapshot, EffectivePlatformPolicy platformPolicy, ChatToolCatalog catalog)
+        AppSettings snapshot, EffectivePlatformPolicy platformPolicy, ChatToolCatalog catalog,
+        EffectiveConversationSettings? conversationSettings)
     {
         var key = conversation.SourceKey;
         var search = call.ToolId == "web.search";
-        bool Allowed() => binding.IsReady && _replyTools.Allows(snapshot, platformPolicy, call.ToolId, catalog)
-            && _replyTools.Allows(_settings, platformPolicy, call.ToolId, catalog);
+        bool Allowed()
+        {
+            if (!binding.IsReady || !_replyTools.Allows(snapshot, platformPolicy, call.ToolId, catalog, conversationSettings))
+                return false;
+            var livePolicy = _platformPolicies is not null ? _platformPolicies.Resolve(platformPolicy.Context) : platformPolicy;
+            var liveConv = ConversationProfileResolver.Resolve(_settings, livePolicy, key);
+            return _replyTools.Allows(_settings, liveConv.EffectivePolicy, call.ToolId, catalog, liveConv);
+        }
         if (!Allowed()) return;
         try
         {
@@ -133,7 +142,8 @@ internal sealed class ReplyTurnActions(
          Domain.Permissions.ChatCapabilitySet caps,
          EffectivePlatformPolicy platformPolicy,
          CompletionResult result,
-        bool directAddress)
+        bool directAddress,
+        EffectiveConversationSettings? conversationSettings = null)
     {
         await Task.CompletedTask;
         if (_riskBackoff?.IsActive(conversation.SourceKey) == true)
@@ -141,6 +151,9 @@ internal sealed class ReplyTurnActions(
             _hooks.Log($"协议端风控退避中，暂停语音、表情包、音乐和主动动作（会话={Channels.Describe(conversation.SourceKey)}）");
             return null;
         }
+
+        var effective = conversationSettings ?? ConversationProfileResolver.Resolve(snapshot, platformPolicy, conversation.SourceKey);
+        var hasMemory = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
 
         // 表情包：模型可以只发图不说话，也可以“文字 + 图”。
         // 校验一下 id（模型偶发会编造/多空格），拿不到就把这次当成纯文字。
@@ -150,25 +163,29 @@ internal sealed class ReplyTurnActions(
         // search 优先于 read：模型一般只会填一个。
         var search = result.Search is { Length: > 0 };
         var requested = search ? result.Search : result.Read;
-        if (requested is { Length: > 0 } && _research.IsReady)
+        if (!hasMemory && requested is { Length: > 0 } && _research.IsReady)
         {
             var id = search ? "web.search" : "web.read";
             var call = new ToolCall(id, new JsonObject { [search ? "query" : "url"] = requested });
             var binding = caps.Catalog.FindBinding(id);
-            if (binding is not null && _replyTools.Allows(snapshot, platformPolicy, id, caps.Catalog)
+            if (binding is not null && _replyTools.Allows(snapshot, effective.EffectivePolicy, id, caps.Catalog, effective)
                 && ToolArguments.Validate(binding.Definition, call.Arguments).Ok
                 && _approvals.AllowCapability(conversation, id, requested, out _, pinned: caps))
             {
                 await ReplyCommitBoundary.BeforeEffectAsync();
-                QueueResearch(conversation, call, binding, snapshot, platformPolicy, caps.Catalog);
+                QueueResearch(conversation, call, binding, snapshot, effective.EffectivePolicy, caps.Catalog, effective);
             }
+        }
+        else if (!hasMemory && result.Call is { } inlineCall)
+        {
+            await TryQueuePluginCallAsync(conversation, inlineCall, snapshot, caps, effective);
         }
 
         // 模型想听一首歌（listen 字段）：后台去搜、去听，听完再给它一次开口的机会。
         // 这是群里说“去听一下 XXX”的唯一入口 —— 不靠正则猜句子，交给模型自己决定。
         // P3（V3 §9.2）：听歌是“真出网”（去外部音乐服务搜歌 + 拉音频），必须过能力闸门 ——
         // 不能因为它是“老入口”就绕过场景白名单与预算。
-        if (platformPolicy.Feature("music", snapshot.EnableMusic).Enabled && _allowsFeature(PluginGate.MusicCapability) && result.Listen is { Length: > 0 } wantedSong && _music is not null
+        if (!hasMemory && effective.FeatureEnabled("music") && _allowsFeature(PluginGate.MusicCapability) && result.Listen is { Length: > 0 } wantedSong && _music is not null
             && _approvals.AllowCapability(conversation, "music.listen", wantedSong, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
@@ -178,7 +195,7 @@ internal sealed class ReplyTurnActions(
                 _hooks.Log($"[Music] 模型想听「{wantedSong}」");
                 _queueBackground("music-listen:" + key + ":" + wantedSong, "music-listen:" + key + ":" + wantedSong, async ct =>
                 {
-                    if (!MusicStillAllowed(platformPolicy, "听歌")) return;
+                    if (!MusicStillAllowed(key, platformPolicy, "听歌")) return;
                     string? note;
                     try { note = await _music.ListenAsync(key, wantedSong, "群友", ct); }
                     catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
@@ -204,7 +221,7 @@ internal sealed class ReplyTurnActions(
 
         // 模型想把某首歌分享给群里 → 搜到就发一张网易云卡片，顺手“听”一遍（下一轮它就能聊这首歌）。
         // P3（V3 §9.2）：分享歌曲 = 往当前会话发额外消息，必须过同一条闸门（未配场景时行为不变）。
-        if (platformPolicy.Feature("music", snapshot.EnableMusic).Enabled && _allowsFeature(PluginGate.MusicCapability) && result.ShareSong is { Length: > 0 } songToShare && _music is not null
+        if (!hasMemory && effective.FeatureEnabled("music") && _allowsFeature(PluginGate.MusicCapability) && result.ShareSong is { Length: > 0 } songToShare && _music is not null
             && _approvals.AllowCapability(conversation, "music.share", songToShare, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
@@ -212,7 +229,7 @@ internal sealed class ReplyTurnActions(
             var (shareIsGroup, shareTargetId) = conversation.Target;
             _queueBackground("music-share:" + key + ":" + songToShare, "music-share:" + key + ":" + songToShare, async ct =>
             {
-                if (!MusicStillAllowed(platformPolicy, "分享")) return;
+                if (!MusicStillAllowed(key, platformPolicy, "分享")) return;
                 SendResult shared;
                 try { shared = await _music.ShareWithReceiptAsync(songToShare, shareIsGroup, shareTargetId, ct); }
                 catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
@@ -227,13 +244,13 @@ internal sealed class ReplyTurnActions(
 
                 // 卡片发出去了，接着真去听一遍：下一轮发言时它就“听过这首歌”。
                 // 第二个副作用开始前再复核一次：排队/分享期间插件可能被关、会话可能已停机。
-                if (!MusicStillAllowed(platformPolicy, "分享后听歌")) return;
+                if (!MusicStillAllowed(key, platformPolicy, "分享后听歌")) return;
                 try { _ = await _music.ListenAsync(key, songToShare, "（自己分享的）", ct); }
                 catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing") { }
             });
         }
 
-        if (platformPolicy.Feature("stickers", snapshot.EnableStickers).Enabled && _allowsFeature(PluginGate.StickersCapability) && result.StickerId is { } sid && !_vibes.IsSober(conversation.SourceKey)
+        if (effective.FeatureEnabled("stickers") && _allowsFeature(PluginGate.StickersCapability) && result.StickerId is { } sid && !_vibes.IsSober(conversation.SourceKey)
             && _approvals.AllowCapability(conversation, "sticker.send", null, out _, pinned: caps))
         {
             sticker = _stickers.Store.Find(sid);
@@ -263,7 +280,7 @@ internal sealed class ReplyTurnActions(
     /// 后台音乐作业开始（以及串起第二个副作用）之前的实时复核：
     /// 插件、功能、平台与会话都必须仍然有效，排队期间被关掉的作业不能再发起新的出网/发送。
     /// </summary>
-    private bool MusicStillAllowed(EffectivePlatformPolicy turnPolicy, string phase)
+    private bool MusicStillAllowed(string conversationKey, EffectivePlatformPolicy turnPolicy, string phase)
     {
         if (!_allowsFeature(PluginGate.MusicCapability) || _music is null)
         {
@@ -279,14 +296,70 @@ internal sealed class ReplyTurnActions(
             return false;
         }
 
-        var policy = _platformPolicies.Resolve(turnPolicy.Context);
+        var policy = _platformPolicies is not null ? _platformPolicies.Resolve(turnPolicy.Context) : turnPolicy;
+        var conv = ConversationProfileResolver.Resolve(_settings, policy, conversationKey);
         var enabled = policy.Registered && policy.Connected && policy.Enabled && policy.ChatEnabled
-            && policy.Feature("music", _settings.EnableMusic).Enabled;
+            && conv.FeatureEnabled("music");
         if (!enabled)
         {
             _hooks.Log($"[Music] 后台{phase}已取消（平台或功能已关闭）");
         }
 
         return enabled;
+    }
+
+    private async Task TryQueuePluginCallAsync(
+        BotConversation conversation, InlineToolCall inlineCall, AppSettings snapshot,
+        Domain.Permissions.ChatCapabilitySet caps, EffectiveConversationSettings effective)
+    {
+        var id = inlineCall.ToolId;
+        var binding = caps.Catalog.FindBinding(id);
+        if (binding is null || !binding.Definition.Spec.ReadOnly || binding.Definition.Spec.Origin is not (ToolOrigin.Plugin or ToolOrigin.Mcp))
+            return;
+        var args = new JsonObject();
+        foreach (var pair in inlineCall.Arguments)
+            args[pair.Key] = pair.Value;
+        var call = new ToolCall(id, args);
+        if (!_replyTools.Allows(snapshot, effective.EffectivePolicy, id, caps.Catalog, effective)
+            || (binding.Definition.Spec.Origin != ToolOrigin.Mcp && !ToolArguments.Validate(binding.Definition, call.Arguments).Ok)
+            || !_approvals.AllowCapability(conversation, id, id, out _, pinned: caps))
+            return;
+
+        await ReplyCommitBoundary.BeforeEffectAsync();
+        var key = conversation.SourceKey;
+        var turnPolicy = effective.EffectivePolicy;
+        bool Allowed()
+        {
+            if (!binding.IsReady || !_replyTools.Allows(snapshot, turnPolicy, id, caps.Catalog, effective))
+                return false;
+            var livePolicy = _platformPolicies is not null ? _platformPolicies.Resolve(turnPolicy.Context) : turnPolicy;
+            var liveConv = ConversationProfileResolver.Resolve(_settings, livePolicy, key);
+            return _replyTools.Allows(_settings, liveConv.EffectivePolicy, id, caps.Catalog, liveConv);
+        }
+        if (!Allowed()) return;
+        var job = $"plugin-tool:{id}:{key}";
+        _queueBackground(job, job, async ct =>
+        {
+            if (ct.IsCancellationRequested || !Allowed()) return;
+            try
+            {
+                var outcome = await binding.ExecuteAsync(key, call, ct);
+                if (ct.IsCancellationRequested || !Allowed()) return;
+                if (!outcome.Ok)
+                {
+                    _participation.Observe(key, ParticipationEvent.ToolFailure);
+                    return;
+                }
+                _toolNotes?.Store(key, id, outcome.ModelText);
+                _requestReply(conversation, snapshot);
+            }
+            catch (OperationCanceledException) { }
+            catch (InvalidOperationException error) when (error.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable") { }
+            catch (Exception error)
+            {
+                _hooks.Log($"[PluginTool] 只读工具执行失败 ({id}): {error.GetType().Name}");
+                _participation.Observe(key, ParticipationEvent.ToolFailure);
+            }
+        });
     }
 }

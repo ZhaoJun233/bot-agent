@@ -10,14 +10,24 @@ namespace BotAgent.Domain.Permissions;
 /// </summary>
 public static partial class ApprovalFlow
 {
-    /// <summary>批准并执行之后的回执（明确写清“无真实副作用”）。</summary>
+    /// <summary>批准并执行之后的回执（仅 demo.echo 标明“无真实副作用”，真实工具给出确认执行提示）。</summary>
     public static string BuildExecutedReply(string requestId)
-        => $"【演示】编号 {requestId} 已确认，执行了固定假工具 {FixedToolId}。"
-           + "它没有任何真实副作用 —— 不代表本系统具备 shell / 文件 / 进程控制能力。";
+        => BuildExecutedReply(requestId, FixedToolId);
+
+    public static string BuildExecutedReply(string requestId, string? toolId)
+        => string.Equals(toolId, FixedToolId, StringComparison.Ordinal)
+            ? $"【演示】编号 {requestId} 已确认，执行了固定假工具 {FixedToolId}。"
+              + "它没有任何真实副作用 —— 不代表本系统具备 shell / 文件 / 进程控制能力。"
+            : $"✅ 编号 {requestId} 已确认，正在执行工具 {toolId}…";
 
     /// <summary>拒绝之后的回执（不执行任何东西）。</summary>
     public static string BuildRejectedReply(string requestId)
-        => $"【演示】编号 {requestId} 已被拒绝，没有执行任何动作。";
+        => BuildRejectedReply(requestId, FixedToolId);
+
+    public static string BuildRejectedReply(string requestId, string? toolId)
+        => string.Equals(toolId, FixedToolId, StringComparison.Ordinal)
+            ? $"【演示】编号 {requestId} 已被拒绝，没有执行任何动作。"
+            : $"编号 {requestId}（工具 {toolId}）已被拒绝，未执行。";
 
     /// <summary>固定假工具的说明（也是审批单上的摘要）。</summary>
     public const string FixedToolSummary = "执行固定假工具 demo.echo（演示用，无真实副作用）";
@@ -33,7 +43,8 @@ public static partial class ApprovalFlow
         string? requesterRole,
         string conversationKey,
         DateTimeOffset now,
-        int currentPolicyVersion)
+        int currentPolicyVersion,
+        bool isLiveApprover = false)
     {
         if (store is null)
         {
@@ -46,16 +57,16 @@ public static partial class ApprovalFlow
 
         if (command.Kind == ApprovalCommandKind.Reject)
         {
-            var rejected = store.Decide(id, requesterId, conversationKey, approve: false, now, requesterRole);
+            var rejected = store.Decide(id, requesterId, conversationKey, approve: false, now, requesterRole, isLiveApprover);
             if (!rejected.Ok)
             {
                 return new ApprovalInboundResult(true, false, rejected.ReasonCode);
             }
 
-            return new ApprovalInboundResult(true, false, "rejected", BuildRejectedReply(id));
+            return new ApprovalInboundResult(true, false, "rejected", BuildRejectedReply(id, rejected.Request?.ToolId));
         }
 
-        var decided = store.Decide(id, requesterId, conversationKey, approve: true, now, requesterRole);
+        var decided = store.Decide(id, requesterId, conversationKey, approve: true, now, requesterRole, isLiveApprover);
         if (!decided.Ok)
         {
             // 伪造 / 过期 / 跨会话 / 已决定：都不执行，也不回话（只记一行结构化日志）
@@ -69,6 +80,6 @@ public static partial class ApprovalFlow
             return new ApprovalInboundResult(true, false, outcome.ReasonCode);
         }
 
-        return new ApprovalInboundResult(true, true, "approved", BuildExecutedReply(id), ticket);
+        return new ApprovalInboundResult(true, true, "approved", BuildExecutedReply(id, decided.Request?.ToolId), ticket);
     }
 }

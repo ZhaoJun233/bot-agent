@@ -110,6 +110,7 @@ public static partial class Program
         ProfileOverrideTests();
         StickerSafetyTests();
         PromptTemplateTests();
+        Phase4SafetyTests();
 
         Console.WriteLine();
         Console.WriteLine($"通过 {_passed}，失败 {_failed}");
@@ -960,7 +961,8 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false,
+            Domain.Model.ConversationPromptOverrides? promptOverrides = null)
         {
             Calls++;
             _searchTexts.Add(searchText);
@@ -2222,7 +2224,8 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false,
+            Domain.Model.ConversationPromptOverrides? promptOverrides = null)
             => Task.FromResult(new CompletionResult(null, null, null));
 
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,

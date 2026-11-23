@@ -213,7 +213,7 @@ internal static class PlatformLifecycleTests
         var requests = http.Requests;
         check(!(await feishu.SendAsync(feishu.Context with { InstanceId = "other" }, new(nativeTarget, "synthetic"))).IsSuccess
             && http.Requests == requests, "real Feishu instance mismatch produces no HTTP");
-        check(!(await feishu.SendAsync(feishu.Context, new(nativeTarget, "", ImageData: new byte[] { 1 }))).IsSuccess
+        check(!(await feishu.SendAsync(feishu.Context, new(nativeTarget, "", VoiceUrl: "https://tts.example.com/speak"))).IsSuccess
             && http.Requests == requests, "real Feishu unsupported media produces no HTTP");
         nativeSettings.FeishuEnabled = false;
         check(!(await feishu.SendAsync(feishu.Context, new(nativeTarget, "synthetic"))).IsSuccess

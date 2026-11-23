@@ -41,7 +41,7 @@ public class JargonStore : IJargonRepository
     public Task<IReadOnlyList<JargonEntry>> ListConfirmedForPromptAsync(string scope, int limit = 20)
     {
         var list = AppDatabase.Query(
-            EntryProjectionSql + "WHERE (scope = $s OR scope = 'global') AND status IN (1, 3) " +
+            EntryProjectionSql + "WHERE scope = $s AND status IN (1, 3) " +
             "ORDER BY hit_count DESC, updated_unix DESC LIMIT $lim",
             Map,
             ("$s", scope), ("$lim", Math.Clamp(limit, 1, 50)));

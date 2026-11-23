@@ -19,11 +19,13 @@ public sealed partial class ReplyPipeline
         }
 
         var trigger = conversation.Messages.FirstOrDefault(m => m.QqMessageId == id);
-        return trigger is { SenderId: long sender }
-            && (explicitRequest ?? (trigger.DirectToBot || !conversation.Target.IsGroup))
-            && _agentCmds.CanRunNatural(conversation, sender)
-            ? trigger
-            : null;
+        if (trigger is not { AllowsCommands: true, SenderId: long }
+            || !(explicitRequest ?? (trigger.DirectToBot || !conversation.Target.IsGroup)))
+        {
+            return null;
+        }
+        _messageEnvelopes.TryGetValue(trigger, out var envelope);
+        return _agentCmds.CanRunNatural(conversation, trigger, envelope) ? trigger : null;
     }
 
     /// <summary>
@@ -43,8 +45,9 @@ public sealed partial class ReplyPipeline
             _hooks.Log($"[自然 agent] 从对话里接了一件活（{elapsed:F0}ms）");
             _traces.Node(conversation.SourceKey, TurnNodeKind.Outbound, "agent", reasonCode: "natural_agent");
             // Accepted independent work keeps its source context, not this disposable reply generation.
+            _messageEnvelopes.TryGetValue(trigger, out var envelope);
             using (ReplyCommitBoundary.Enter(null))
-                _ = _agentCmds.RunNaturalSafeAsync(conversation, trigger, task, result.AgentAck);
+                _ = _agentCmds.RunNaturalSafeAsync(conversation, trigger, envelope, task, result.AgentAck);
             return true;
         }
 

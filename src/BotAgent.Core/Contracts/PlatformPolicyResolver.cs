@@ -113,7 +113,7 @@ public sealed class PlatformPolicyResolver : IPlatformPolicyResolver
             : ImmutableHashSet<string>.Empty;
         return new EffectivePlatformPolicy(context, snapshot is not null, snapshot?.Connected ?? false, enabled, chatEnabled,
             snapshot?.Capabilities ?? DefaultCapabilities(context.PlatformId), actions,
-            rules.Features.ToImmutableDictionary(feature => feature.Feature.ToString().ToLowerInvariant(),
+            rules.Features.ToImmutableDictionary(feature => EffectivePlatformPolicy.FeatureKey(feature.Feature),
                 feature => feature.Enabled, StringComparer.OrdinalIgnoreCase), reasons.ToImmutable())
         {
             ActionAllowlistConfigured = true,
@@ -207,7 +207,7 @@ public sealed class PlatformPolicyResolver : IPlatformPolicyResolver
             PlatformId.QqPrivate => PlatformCapabilities.QqOneBot,
             PlatformId.QqOfficial => PlatformCapabilities.QqOfficial,
             PlatformId.Local => PlatformCapabilities.Local,
-            PlatformId.Feishu => PlatformCapabilities.FeishuTextOnly,
+            PlatformId.Feishu => PlatformCapabilities.Feishu,
             _ => new PlatformCapabilities(SupportsText: false, SupportsDirect: false, SupportsGroup: false),
         };
 }

@@ -58,7 +58,9 @@ internal static partial class CompositionRoot
     private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
         VoiceUseCase Voice, MusicUseCase Music, ResearchPluginServices ResearchServices)
         BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
-            ModelProviderRegistry modelRegistry, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker, PluginManager plugins)
+            ModelProviderRegistry modelRegistry, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker sttBreaker, ToolCircuitBreaker searchBreaker,
+            PluginManager plugins, Func<IReadOnlyDictionary<string, System.Text.Json.JsonElement>?> readVoiceSettings,
+            FeishuBotGateway? feishu = null, Action<IDisposable>? registerTransport = null)
     {
         var allowPrivateOutbound = EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
         // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒。
@@ -76,6 +78,8 @@ internal static partial class CompositionRoot
 
         // 图片下载器与传输层（模型那条路的两个 IO 件）：都在这里造，客户端只拿端口。
         var imageDownloader = new ImageDownloader(imageHttp);
+        if (feishu is not null)
+            imageDownloader.CustomSchemeResolver = feishu.DownloadMediaUriAsync;
         var transport = new ModelTransport(
             settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout(),
             TimeSpan.FromSeconds(60));
@@ -134,11 +138,26 @@ internal static partial class CompositionRoot
         // 本机 Agent 桥已按方案退役：// 命令只走服务器内置 agent（ServerAgentRunner）。
         // 语音（TTS）：客户端、频率门、面板试听都在这个用例里（HttpClient 也只在这里造一个）
         var voiceHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "voice");
+        var sttHttp = new HttpFetcher(
+            TimeSpan.FromSeconds(45),
+            msg => FileLog.Write("Net", msg),
+            "stt",
+            allowAutoRedirect: false,
+            rejectPrivateDestinations: !allowPrivateOutbound);
+        var sttClient = new CloudSttClient(
+            sttHttp,
+            () => allowPrivateOutbound,
+            () => settingsBox.Current,
+            readVoiceSettings,
+            msg => FileLog.Write("Voice", msg),
+            sttBreaker,
+            resolveFallbackApiKey: () => ResolvePrimarySttFallbackKey(settingsBox.Current, modelRegistry, secrets));
         var voice = new VoiceUseCase(
             new VoiceService(voiceHttp, () => settingsBox.Current, secrets, msg => FileLog.Write("Voice", msg), ttsBreaker),
             settingsBox,
             msg => FileLog.Write("Voice", msg),
-            plugins);
+            plugins,
+            stt: sttClient);
 
         // 音乐（听歌/分享）与链接预览：各自的 HttpClient 在这里造，依赖顺着构造函数往下传。
         // 音乐数据放 data/music/：台账常驻，音频默认分析完就丢（只在 MusicKeepAudio 打开时才留在 audio/）。
@@ -178,6 +197,9 @@ internal static partial class CompositionRoot
         researchServices.RegisterForPlugin<IMusicHostPorts>("preset.feature.music", music.CreateHostPorts());
         researchServices.RegisterForPlugin<IVoiceHostPorts>("preset.feature.voice", voice.CreateHostPorts());
 
+
+        foreach (var fetcher in new IDisposable[] { modelAuxHttp, modelChatHttp, imageHttp, voiceHttp, sttHttp, mediaHttp })
+            registerTransport?.Invoke(fetcher);
 
         return (brain, store, profiles, stickers, voice, music, researchServices);
     }
@@ -411,6 +433,15 @@ internal static partial class CompositionRoot
         return new ModelProviderRoute(provider.Id, baseUrl.Trim(), model.Trim(), apiKey, provider.Protocol, provider.Options);
     }
 
+    private static string? ResolvePrimarySttFallbackKey(
+        AppSettings settings, ModelProviderRegistry registry, ISecretsRepository secrets)
+    {
+        var primary = registry.Captured.FirstOrDefault(p => string.Equals(p.Id, "primary", StringComparison.Ordinal))
+            ?? registry.Captured.OrderBy(p => p.Priority).FirstOrDefault(p => p.IsEnabled);
+        var resolved = primary is not null ? ResolveProviderSecret(primary.SecretKeyRef, settings, secrets) : null;
+        return !string.IsNullOrWhiteSpace(resolved) ? resolved : settings.ApiKey;
+    }
+
     private static string? ResolveProviderSecret(
         string secretRef, AppSettings settings, ISecretsRepository secrets)
     {
@@ -446,12 +477,14 @@ internal static partial class CompositionRoot
     private static Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> BuildCircuitStatusProvider(
         Domain.Ports.IModelClient brain,
         ToolCircuitBreaker ttsBreaker,
+        ToolCircuitBreaker sttBreaker,
         ToolCircuitBreaker searchBreaker,
         ProtocolRiskBackoff riskBackoff) => () =>
     {
         var list = new List<Domain.Ops.CircuitStatusSnapshot>();
         list.AddRange(brain.CircuitSnapshots);
         list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "tts", ttsBreaker.Snapshot().State.ToString().ToLowerInvariant()));
+        list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "stt", sttBreaker.Snapshot().State.ToString().ToLowerInvariant()));
         list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "search", searchBreaker.Snapshot().State.ToString().ToLowerInvariant()));
         list.Add(new Domain.Ops.CircuitStatusSnapshot("protocol", "onebot", riskBackoff.HasAnyActive() ? "open" : "closed"));
         return list;
@@ -460,17 +493,21 @@ internal static partial class CompositionRoot
     /// <summary>
     /// ③ 装配阶段三：模型客户端与媒体件（#110 第 2 步拆出）。
     ///
-    /// 先建两个工具熔断器（tts/search），再交给 <see cref="BuildModelAndMediaLayer"/> ——
-    /// 它们要在同一层里被装进 OpenAiClient，晚建就会让第一批调用没有熔断记账。
+    /// 先建工具熔断器（tts/stt/search），再交给 <see cref="BuildModelAndMediaLayer"/> ——
+    /// 它们要在同一层里被装进客户端，晚建就会让第一批调用没有熔断记账。
     /// </summary>
     private static void AssembleModel(Assembly a)
     {
         // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
         a.TtsBreaker = new ToolCircuitBreaker("tts");
+        a.SttBreaker = new ToolCircuitBreaker("stt");
         a.SearchBreaker = new ToolCircuitBreaker("search");
         var (brain, store, profiles, stickers, voice, music, researchServices) =
             BuildModelAndMediaLayer(a.Settings, a.Box, a.Source, a.Secrets, a.ProviderStore, a.ModelRegistry,
-                a.TtsBreaker, a.SearchBreaker, a.PluginRuntime.Registry);
+                a.TtsBreaker, a.SttBreaker, a.SearchBreaker, a.PluginRuntime.Registry,
+                () => a.PluginRuntime.TryReadEffectiveValues("preset.feature.voice"),
+                a.Feishu,
+                a.OwnedTransports.Add);
         a.Brain = brain;
         a.Store = store;
         a.Profiles = profiles;

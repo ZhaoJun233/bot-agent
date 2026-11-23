@@ -188,7 +188,8 @@ public static class ModelOutputParser
                     QuestionText: verdict.QuestionText,
                     Intent: declared.Intent,
                     AgentTask: verdict.AgentTask,
-                    AgentAck: verdict.AgentAck),
+                    AgentAck: verdict.AgentAck,
+                    Call: keepSideEffects ? declared.Call : null),
                 notices);
         }
         catch (JsonException)

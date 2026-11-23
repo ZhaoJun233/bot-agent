@@ -70,6 +70,18 @@ public sealed partial class ZbaEndpoint
 
     public int MaxBodyBytes => _options.MaxBodyBytes;
 
+    private const int WorkspaceSendMaxBodyBytes = 15 * 1024 * 1024;
+
+    public int MaxBodyBytesFor(string? method, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(method) || string.IsNullOrWhiteSpace(path))
+            return _options.MaxBodyBytes;
+        var match = ZbaRoutes.Match(method.ToUpperInvariant(), NormalizePath(path), Routes);
+        if (match is not null && string.Equals(match.Route.OperationId, "workspace.messages.send", StringComparison.Ordinal))
+            return Math.Max(_options.MaxBodyBytes, WorkspaceSendMaxBodyBytes);
+        return _options.MaxBodyBytes;
+    }
+
     public async ValueTask<ZbaResponse> ProcessAsync(ZbaRequest request, CancellationToken ct = default)
     {
         var requestId = "zr-" + Guid.NewGuid().ToString("N")[..16];
@@ -102,7 +114,7 @@ public sealed partial class ZbaEndpoint
             query.AllowOnly(ZbaRoutes.QueryNames(match.Route.OperationId));
             if (_http.Contains(match.Route.OperationId))
                 return Json(await _http.Invoke(match.Route.OperationId, CreateCaller(principal!),
-                    new ContributionBody(request, _options.MaxBodyBytes), ct).ConfigureAwait(false), requestId);
+                    new ContributionBody(request, MaxBodyBytesFor(method, path)), ct).ConfigureAwait(false), requestId);
             var response = match.Route.OperationId switch
             {
                 "health" => await HandleHealthAsync(requestId, ct).ConfigureAwait(false),
@@ -245,7 +257,7 @@ public sealed partial class ZbaEndpoint
             "bearer",
             new[] { "read", "admin" },
             Sse: false,
-            McpManagement: false,
+            McpManagement: _http.Contains("mcp.servers.list"),
             DockerManagement: false,
             _options.MaxBodyBytes,
             _instanceId,

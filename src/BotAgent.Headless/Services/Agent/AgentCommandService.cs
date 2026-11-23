@@ -1,15 +1,21 @@
 using BotAgent.Domain.Agent;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Mcp;
+using BotAgent.Domain.Messaging;
+using BotAgent.Domain.Permissions;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Platforms;
+using BotAgent.Engine.Runtime;
 using BotAgent.Services.Conversations;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Panel;
+using BotAgent.Services.Permissions;
 using BotAgent.Services.Plugins;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Platforms;
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace BotAgent.Services.Agent;
@@ -43,6 +49,11 @@ public sealed partial class AgentCommandService : IAgentCommandService
     private readonly PlatformPolicyResolver? _platformPolicies;
     private readonly Func<string, bool>? _pluginAllows;
     private readonly PluginManager? _plugins;
+    private readonly ChatTaskRuntimeBridge _chatBridge = new();
+    private AgentTaskRuntime? _taskRuntime;
+    private Func<AgentTaskRequest, AgentTaskRequest>? _prepareTask;
+    private IAccessRoleResolver? _accessRoles;
+    private Func<HashSet<string>>? _configuredApprovers;
 
     public AgentCommandService(
         SettingsBox box,
@@ -101,6 +112,274 @@ public sealed partial class AgentCommandService : IAgentCommandService
     }
 
     private AppSettings _settings => _box.Current;
+
+    /// <summary>只读快照：绑定共享的显式任务运行时与 RBAC 解析器，供聊天 // 与自然触发任务收敛入台账。</summary>
+    internal void BindTaskRuntime(
+        AgentTaskRuntime runtime,
+        Func<AgentTaskRequest, AgentTaskRequest> prepareTask,
+        IAccessRoleResolver? accessRoles = null,
+        Func<HashSet<string>>? configuredApprovers = null)
+    {
+        if (_taskRuntime is not null)
+        {
+            _taskRuntime.Changed -= OnTaskRuntimeChanged;
+        }
+
+        _taskRuntime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _prepareTask = prepareTask ?? throw new ArgumentNullException(nameof(prepareTask));
+        _accessRoles = accessRoles ?? _accessRoles;
+        _configuredApprovers = configuredApprovers ?? _configuredApprovers;
+        _taskRuntime.Changed += OnTaskRuntimeChanged;
+    }
+
+    internal void BindAccessRoles(IAccessRoleResolver accessRoles)
+        => _accessRoles = accessRoles ?? throw new ArgumentNullException(nameof(accessRoles));
+
+    internal bool IsChatTask(string taskId) => _chatBridge.TryGet(taskId, out _);
+
+    internal EffectiveConversationSettings? ResolveConversationSettings(string sourceKey, PlatformContext? context = null)
+    {
+        if (_platformPolicies is null || string.IsNullOrWhiteSpace(sourceKey)) return null;
+        EffectivePlatformPolicy policy;
+        if (context is not null)
+        {
+            policy = _platformPolicies.Resolve(context);
+        }
+        else if (ConversationIdCodec.TryParse(sourceKey, out var parsed))
+        {
+            var inst = ResolveDeclaredInstanceId(parsed.PlatformId, parsed.AccountScope);
+            policy = _platformPolicies.Resolve(new PlatformContext(parsed.PlatformId, parsed.AccountScope, inst));
+        }
+        else
+        {
+            var ch = Channels.ChannelOf(sourceKey);
+            var pid = PlatformId.Normalize(ch);
+            var scope = pid == PlatformId.Feishu ? AccountScope.Default : AccountScope.Legacy;
+            var inst = ResolveDeclaredInstanceId(pid, scope);
+            policy = !string.IsNullOrEmpty(inst)
+                ? _platformPolicies.Resolve(new PlatformContext(pid, scope, inst))
+                : _platformPolicies.ResolveForChannel(ch);
+        }
+        return ConversationProfileResolver.Resolve(_settings, policy, sourceKey);
+    }
+
+    private string ResolveDeclaredInstanceId(string platformId, string accountScope)
+    {
+        var declared = _settings.DeclaredPlatformDrivers;
+        if (declared.IsDefaultOrEmpty) return string.Empty;
+        DriverKey? match = null;
+        var count = 0;
+        var norm = PlatformId.Normalize(platformId);
+        foreach (var d in declared)
+        {
+            if (string.Equals(PlatformId.Normalize(d.PlatformId), norm, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(d.AccountScope, accountScope, StringComparison.OrdinalIgnoreCase))
+            {
+                match = d;
+                count++;
+            }
+        }
+        return count == 1 ? (match?.InstanceId ?? string.Empty) : string.Empty;
+    }
+
+    private (WorkspaceRole Role, bool IsExplicitRbac) ResolveSubjectRoleWithSource(
+        SubjectIdentity subject,
+        string conversationKey,
+        long numericUserId,
+        string? channel)
+    {
+        var officialExplicit = Channels.IsOfficial(channel) && _hooks.IsOfficialUserAllowed(numericUserId);
+        if (_accessRoles is not null)
+        {
+            var isExplicit = _accessRoles.TryResolveExplicitRole(subject, conversationKey, out var explicitRole);
+            if (isExplicit) return (explicitRole, true);
+            var role = _accessRoles.ResolveRole(subject, conversationKey, _settings.AgentAllowedUsers, officialExplicit);
+            return (role, false);
+        }
+
+        var legacyAllowed = _agentAllowAll || (_agentUsers.Count > 0 && _agentUsers.Contains(numericUserId)) || officialExplicit;
+        return (legacyAllowed ? WorkspaceRole.TrustedMember : WorkspaceRole.Member, false);
+    }
+
+    internal IReadOnlyList<string> GetSameScopeReadPluginToolIds(string sourceKey)
+        => _serverAgent.GetSameScopeReadPluginToolIds(sourceKey);
+
+    internal string[] BuildGeneralAssistantToolScope(string sourceKey)
+    {
+        var list = new List<string> { "fetch" };
+        list.AddRange(_serverAgent.GetTaskReadOnlyMcpToolNames());
+        list.AddRange(_serverAgent.GetSameScopeReadPluginToolIds(sourceKey));
+        list.Add("__general_assistant_only__");
+        return list.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    internal async Task<AgentTaskExecution> ExecuteChatTaskAsync(AgentTaskRequest request, CancellationToken ct)
+    {
+        if (!_chatBridge.TryGet(request.Id, out var entry))
+            throw new InvalidOperationException("chat_task_bridge_missing");
+        if (!entry.TryEnterExecutor())
+            throw new OperationCanceledException(ct);
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, entry.Admission.Token);
+        try
+        {
+            await entry.AckGate.Task.WaitAsync(linked.Token).ConfigureAwait(false);
+            using var sourceScope = PlatformSourceExecution.Enter(entry.Task.SourceLease);
+            using var memoryTurn = BotAgent.Services.Reply.UnifiedMemoryTurn.Begin(_unifiedMemory, entry.MemoryEnvelope);
+            await _serverAgent.RunAsync(entry.Task, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            entry.Task.CancelRequested = true;
+            entry.Task.Fail("已取消");
+        }
+        catch (Exception ex)
+        {
+            entry.Task.Fail("任务执行失败（" + ex.GetType().Name + "）");
+        }
+        finally
+        {
+            if (entry.TryFinishExecutor())
+            {
+                _chatBridge.TryRemove(request.Id, out _);
+                entry.Admission.Dispose();
+                OnAgentFinished(entry.Task);
+            }
+        }
+
+        return new AgentTaskExecution
+        {
+            Ok = entry.Task.Ok,
+            Text = null,
+            DurationMs = entry.Task.DurationMs,
+            ToolCalls = entry.Task.ToolCalls,
+            CancelRequested = entry.Task.CancelRequested || ct.IsCancellationRequested
+        };
+    }
+
+    private void OnTaskRuntimeChanged(AgentTaskSnapshot snapshot)
+    {
+        if (!AgentTaskTransitions.IsTerminal(snapshot.State)) return;
+        if (!_chatBridge.TryGet(snapshot.Id, out var entry)) return;
+        if (!entry.TryAbortBeforeStart()) return;
+
+        _chatBridge.TryRemove(snapshot.Id, out _);
+        entry.AckGate.TrySetResult();
+        var isTimeout = snapshot.State == AgentTaskState.TimedOut;
+        entry.Task.CancelRequested = !isTimeout && snapshot.ErrorCode is not ("approval_expired" or "approval_rejected");
+        var reasonText = snapshot.ErrorCode switch
+        {
+            "approval_expired" => "审批超时未处理，任务已取消",
+            "approval_rejected" => "审批已拒绝，任务未执行",
+            _ when isTimeout => "任务执行超时，已取消",
+            _ => "已取消"
+        };
+        entry.Task.Fail(reasonText);
+        entry.Admission.Dispose();
+        OnAgentFinished(entry.Task);
+    }
+
+    internal bool HasPendingRuntimeApprovalInConversation(QqChatMessage msg)
+    {
+        if (_taskRuntime is null) return false;
+        var parsed = ApprovalFlow.TryParseCommand(msg.Text);
+        if (parsed is null) return false;
+        if (!_chatBridge.TryGetApprovalOrigin(parsed.Value.RequestId, out var origin)) return false;
+        var source = PlatformSourceExecution.Current;
+        if (source is not null)
+        {
+            var resolved = source.Owner.ConversationKey(msg, candidate => string.Equals(candidate, origin.ConversationKey, StringComparison.Ordinal));
+            return string.Equals(resolved, origin.ConversationKey, StringComparison.Ordinal);
+        }
+        var key = Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        return string.Equals(key, origin.ConversationKey, StringComparison.Ordinal);
+    }
+
+    internal bool TryHandleRuntimeTaskApproval(QqChatMessage msg, ApprovalCommand cmd)
+    {
+        if (_taskRuntime is null) return false;
+        if (!_chatBridge.TryGetApprovalOrigin(cmd.RequestId, out var origin)) return false;
+        if (origin.SourceLease is { IsCurrent: false }) return true;
+
+        var incomingSource = PlatformSourceExecution.Current;
+        if (origin.SourceLease is not null && (incomingSource is null
+            || incomingSource.Origin.Driver != origin.SourceLease.Origin.Driver
+            || incomingSource.Lifetime != origin.SourceLease.Lifetime))
+        {
+            return true;
+        }
+
+        string? actualKey = origin.SourceLease is not null
+            ? origin.SourceLease.Owner.ConversationKey(msg, candidate => string.Equals(candidate, origin.ConversationKey, StringComparison.Ordinal))
+            : Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
+        if (!string.Equals(actualKey, origin.ConversationKey, StringComparison.Ordinal)) return true;
+
+        var subject = InboundSubjectIdentity.Resolve(msg, incomingSource?.Context);
+        WorkspaceRole explicitRole = default;
+        var hasExplicit = _accessRoles is not null
+            && _accessRoles.TryResolveExplicitRole(subject, origin.ConversationKey, out explicitRole);
+        var role = hasExplicit
+            ? explicitRole
+            : (_accessRoles?.ResolveRole(subject, origin.ConversationKey, null, isOfficialExplicitPrivateAllowed: false)
+                ?? WorkspaceRole.Member);
+        var isExplicitGuest = hasExplicit && explicitRole == WorkspaceRole.Guest;
+        var configured = _configuredApprovers?.Invoke() ?? ApprovalStore.NormalizeApprovers(_box.Current.ApprovalApprovers);
+        var requesterToken = "user:" + subject.NativeUserId;
+        var legacyToken = "user:" + msg.UserId.ToString(CultureInfo.InvariantCulture);
+        var explicitDemoted = hasExplicit && explicitRole < WorkspaceRole.GroupManager;
+        var isApprover = !isExplicitGuest
+            && (role is WorkspaceRole.GroupManager or WorkspaceRole.BotOwner
+                || configured.Contains(requesterToken)
+                || configured.Contains(legacyToken)
+                || (!explicitDemoted && !Channels.IsOfficial(msg.Channel) && origin.IsGroup
+                    && msg.SenderRole is { Length: > 0 } sr
+                    && ApprovalFlow.GroupApproverRoles.Contains(sr.Trim().ToLowerInvariant(), StringComparer.Ordinal)));
+
+        var conv = _registry.Find(origin.ConversationKey);
+        if (!isApprover)
+        {
+            _hooks.Log($"[审批] 后台任务 {cmd.RequestId} 拒绝非审批人操作（not_an_approver）：{Channels.Describe(origin.ConversationKey)}");
+            if (conv is not null)
+                _ = SendPlainSafeAsync(conv, origin.SourceLease, "你没有权限审批这个后台任务。");
+            return true;
+        }
+
+        var approve = cmd.Kind == ApprovalCommandKind.Approve;
+        var decision = _taskRuntime.DecideApproval(cmd.RequestId, approve, Clock.Now);
+        if (decision == AgentTaskApprovalDecision.Approved)
+        {
+            _chatBridge.TryRemoveApproval(cmd.RequestId);
+            _hooks.Log($"[审批] 后台任务 {cmd.RequestId} 已批准（by {AgentMask.Shorten(subject.NativeUserId)}）：{Channels.Describe(origin.ConversationKey)}");
+            if (conv is not null)
+                _ = SendPlainSafeAsync(conv, origin.SourceLease, $"✅ 已批准后台任务（编号 {cmd.RequestId}），开始执行。");
+            return true;
+        }
+
+        if (decision == AgentTaskApprovalDecision.Rejected)
+        {
+            _chatBridge.TryRemoveApproval(cmd.RequestId);
+            _hooks.Log($"[审批] 后台任务 {cmd.RequestId} 已拒绝（by {AgentMask.Shorten(subject.NativeUserId)}）：{Channels.Describe(origin.ConversationKey)}");
+            return true;
+        }
+
+        _hooks.Log($"[审批] 后台任务 {cmd.RequestId} 状态不可审批（{decision}）：{Channels.Describe(origin.ConversationKey)}");
+        if (conv is not null)
+            _ = SendPlainSafeAsync(conv, origin.SourceLease, $"审批单 {cmd.RequestId} 已过期或已处理，不能再操作。");
+        return true;
+    }
+
+    private async Task SendPlainSafeAsync(BotConversation conversation, PlatformSourceLease? lease, string text)
+    {
+        try
+        {
+            using var scope = PlatformSourceExecution.Enter(lease);
+            await _hooks.SendPlainAsync(conversation, text).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _hooks.Log($"[审批] 回执发送失败（{ex.GetType().Name}）");
+        }
+    }
 
     /// <summary>仅转交发现快照中的工具名，不在受理阶段触发 MCP 网络发现。</summary>
     internal IReadOnlyList<string> GetTaskMcpToolNames()
@@ -304,18 +583,28 @@ public sealed partial class AgentCommandService : IAgentCommandService
 
     /// <summary>面板“试一条”用的：直接在容器里跑一次服务器内置 agent（不经过 QQ、不经过外部设备）。</summary>
     public async Task<AgentTask> RunServerAgentDirectAsync(string prompt, int timeoutSeconds, CancellationToken ct = default,
-        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null)
+        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null, string? sourceKey = null,
+        bool allowQqHost = true)
     {
+        var effectiveSourceKey = string.IsNullOrWhiteSpace(sourceKey) ? "panel:test" : sourceKey.Trim();
+        var allowDirectQq = allowQqHost
+            && Gateway is not null
+            && !string.Equals(effectiveSourceKey, "workspace:owner", StringComparison.Ordinal)
+            && !effectiveSourceKey.StartsWith("feishu:", StringComparison.OrdinalIgnoreCase)
+            && !effectiveSourceKey.StartsWith("official:", StringComparison.OrdinalIgnoreCase)
+            && !effectiveSourceKey.StartsWith("local:", StringComparison.OrdinalIgnoreCase);
         var task = new AgentTask
         {
-            Id = $"p{Clock.Now.ToUnixTimeMilliseconds()}",
-            SourceKey = "panel:test",
+            Id = $"p{Clock.Now.ToUnixTimeMilliseconds()}-{Guid.NewGuid().ToString("N")[..6]}",
+            SourceKey = effectiveSourceKey,
             Prompt = prompt,
-            Session = "qqchat-panel",
+            Session = string.Equals(effectiveSourceKey, "workspace:owner", StringComparison.Ordinal) ? "workspace-owner" : "qqchat-panel",
             ToolScope = toolScope,
             PythonToolLeases = Array.AsReadOnly((pythonToolLeases ?? []).ToArray()),
-            // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了（写死 QQ 号仍可用）
-            QqHost = Gateway is null ? null : new SessionQqActionHost(Gateway, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
+            // 面板试跑：没有哪个群/哪个人，参数里的 sender/this 用不了；workspace:owner / 非 QQ 通道 / 计划任务严格禁用 QQ 动作宿。
+            QqHost = allowDirectQq
+                ? new SessionQqActionHost(Gateway!, true, 0, 0, 0, _hooks.SelfId(), _platformPolicies, Channels.Private, _pluginAllows)
+                : null
         };
 
         if (_serverAgent is null)
@@ -337,7 +626,8 @@ public sealed partial class AgentCommandService : IAgentCommandService
     /// <summary>面板工作台用的持久化单次执行入口：把运行流水写回指定 Agent 会话。</summary>
     public async Task<AgentTask> RunPanelAgentDirectAsync(string sourceKey, string sessionId, string prompt,
         int timeoutSeconds, string target, CancellationToken ct = default,
-        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null)
+        IReadOnlyList<string>? toolScope = null, IReadOnlyList<McpToolInfo>? pythonToolLeases = null,
+        bool allowQqHost = true)
     {
         if (!target.Equals("server", StringComparison.OrdinalIgnoreCase)
             && !target.Equals("服务器", StringComparison.OrdinalIgnoreCase))
@@ -354,7 +644,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
         var runId = _agentSessions.StartRun(sourceKey, session.Id, prompt, null);
         try
         {
-            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope, pythonToolLeases);
+            var task = await RunServerAgentDirectAsync(prompt, timeoutSeconds, ct, toolScope, pythonToolLeases, sourceKey, allowQqHost);
             _agentSessions.FinishRun(sourceKey, session.Id, runId, task.Ok, task.DurationMs, task.ToolCalls,
                 task.Ok ? (task.Text ?? string.Empty) : (task.Error ?? "失败"));
             return task;
@@ -436,6 +726,8 @@ public sealed partial class AgentCommandService : IAgentCommandService
         var total = 0;
         foreach (var (key, sessions) in _agentSessions.AllChats())
         {
+            if (string.Equals(key, "workspace:owner", StringComparison.Ordinal))
+                continue;
             var conv = _registry.Snapshot().FirstOrDefault(c => c.SourceKey == key);
             var shown = key.Equals("panel:workspace", StringComparison.Ordinal)
                 ? "面板工作区"
@@ -583,10 +875,12 @@ public sealed partial class AgentCommandService : IAgentCommandService
             $"（当前会话：{(current is null ? "还没有，发一句 //指令 会自动建" : $"「{MaybeMask(current.Name, sourceKey)}」 {current.Turns} 轮")}）";
     }
 
-    /// <summary>//sessions all：所有聊天的服务器会话总数与标题。</summary>
+    /// <summary>//sessions all：所有聊天的服务器会话总数与标题（严格排除本人 Web 工作台）。</summary>
     private string DescribeAllSessions()
     {
-        var chats = _agentSessions.AllChats();
+        var chats = _agentSessions.AllChats()
+            .Where(c => !string.Equals(c.SourceKey, BotAgent.Domain.Scheduler.SchedulerLimits.WorkspaceOwnerScopeKey, StringComparison.Ordinal))
+            .ToList();
         var total = chats.Sum(c => c.Sessions.Count);
         if (total == 0)
         {

@@ -1,6 +1,10 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using BotAgent.Domain.Memory;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.Agent;
+using BotAgent.Services.Memory;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Panel;
 using BotAgent.Services.Plugins;
@@ -39,10 +43,13 @@ public sealed class BotScheduler
     private bool _timerStickersEnabled;
     private string? _timerProfilesGeneration;
     private string? _timerStickersGeneration;
+    private bool _timerAttestedMode;
 
     private readonly Func<string, bool>? _pluginAllows;
     private readonly IUnifiedMemory? _unifiedMemory;
     private readonly PluginManager? _plugins;
+    private readonly Func<bool>? _allowAttestedSummary;
+    private readonly AttestedProfileProvenanceRegistry? _profileProvenance;
     private IProfilesRuntimeContribution? _directProfiles;
 
     public BotScheduler(
@@ -57,7 +64,9 @@ public sealed class BotScheduler
         Func<string, bool>? pluginAllows = null,
         IUnifiedMemory? unifiedMemory = null,
         PluginManager? plugins = null,
-        IProfilesRuntimeContribution? directProfiles = null)
+        IProfilesRuntimeContribution? directProfiles = null,
+        Func<bool>? allowAttestedSummary = null,
+        AttestedProfileProvenanceRegistry? profileProvenance = null)
     {
         _box = box;
         _source = source;
@@ -71,9 +80,15 @@ public sealed class BotScheduler
         _unifiedMemory = unifiedMemory;
         _plugins = plugins;
         _directProfiles = directProfiles;
+        _allowAttestedSummary = allowAttestedSummary;
+        _profileProvenance = profileProvenance;
     }
 
     private AppSettings _settings => _box.Current;
+
+    private bool AttestedSummaryMode => _unifiedMemory is not null
+        && _allowAttestedSummary?.Invoke() == true
+        && _profileProvenance is not null;
 
     /// <summary>仅供无插件宿主的独立单测注入包内画像运行时实现。</summary>
     public void BindDirectProfiles(IProfilesRuntimeContribution runtime) => _directProfiles = runtime;
@@ -89,8 +104,9 @@ public sealed class BotScheduler
             ? runtime : null);
 
     // The legacy background queue has no attested source or revocable use receipt.
-    // Scoped profile mode therefore keeps trusted fragments but disables this model path.
-    private bool ProfileSummarizationAllowed() => _unifiedMemory is null
+    // Scoped profile mode therefore keeps trusted fragments and only allows model summary
+    // when attested provenance + allowAttestedSummary toggle are both explicitly active.
+    private bool ProfileSummarizationAllowed() => (_unifiedMemory is null || AttestedSummaryMode)
         && _settings.EnableProfileSummary && !_hooks.IsDisposed()
         && (_pluginAllows?.Invoke(PluginGate.ProfilesCapability) ?? true);
 
@@ -151,11 +167,13 @@ public sealed class BotScheduler
             && (_pluginAllows?.Invoke(PluginGate.StickersCapability) ?? true);
         var profilesGeneration = _plugins?.GetGenerationId(ProfilesProviderId);
         var stickersGeneration = _plugins?.GetGenerationId(StickerService.ProviderId);
+        var attestedMode = AttestedSummaryMode;
 
         if (idleSeconds == _timerIdleSeconds &&
             summaryEnabled == _timerSummaryEnabled &&
             summarySeconds == _timerSummarySeconds &&
             stickersEnabled == _timerStickersEnabled &&
+            attestedMode == _timerAttestedMode &&
             string.Equals(profilesGeneration, _timerProfilesGeneration, StringComparison.Ordinal) &&
             string.Equals(stickersGeneration, _timerStickersGeneration, StringComparison.Ordinal))
         {
@@ -166,6 +184,7 @@ public sealed class BotScheduler
         _timerSummaryEnabled = summaryEnabled;
         _timerSummarySeconds = summarySeconds;
         _timerStickersEnabled = stickersEnabled;
+        _timerAttestedMode = attestedMode;
         _timerProfilesGeneration = profilesGeneration;
         _timerStickersGeneration = stickersGeneration;
 
@@ -248,6 +267,8 @@ public sealed class BotScheduler
 
     private sealed class ProfilesHostPorts(BotScheduler owner) : IProfilesHostPorts
     {
+        private readonly ConcurrentDictionary<string, (UnifiedMemoryReceipt Receipt, UnifiedMemoryContext Context, string[] Snippets)> _pendingReceipts = new(StringComparer.Ordinal);
+
         public ProfileSummarySettingsSnapshot ReadSummarySettings()
         {
             var s = owner._settings;
@@ -256,7 +277,7 @@ public sealed class BotScheduler
                 IntervalSeconds: Math.Max(0, s.ProfileSummaryIntervalSeconds),
                 Threshold: s.ProfileSummaryThreshold,
                 MaxChars: s.ProfileSummaryMaxChars,
-                LegacySummaryDisabled: owner._unifiedMemory is not null,
+                LegacySummaryDisabled: owner._unifiedMemory is not null && !owner.AttestedSummaryMode,
                 HostDisposed: owner._hooks.IsDisposed());
         }
 
@@ -264,7 +285,22 @@ public sealed class BotScheduler
             => owner._pluginAllows?.Invoke(PluginGate.ProfilesCapability) ?? true;
 
         public ProfileSummaryCandidateDto[] FindSummarizable(int threshold, int maxCandidates)
-            => owner._profiles.FindSummarizable(threshold, maxCandidates)
+        {
+            if (owner._unifiedMemory is not null && !owner.AttestedSummaryMode)
+                return [];
+            var raw = owner._profiles.FindSummarizable(threshold, maxCandidates, scopedKeysOnly: owner._unifiedMemory is not null);
+            IEnumerable<Domain.Profiles.SummaryCandidate> filtered = raw;
+            if (owner._unifiedMemory is not null)
+            {
+                filtered = raw.Where(c =>
+                {
+                    if (!LegacyProfileScopeKey.IsScopedKey(c.Uid)) return false;
+                    if (!owner._profileProvenance!.TryGet(c.Uid, out var prov)) return false;
+                    return !owner._unifiedMemory.IsLegacyProfileSuppressed(
+                        prov.Subject, new UnifiedMemoryScope(prov.Driver, prov.Conversation));
+                });
+            }
+            return filtered
                 .Select(c => new ProfileSummaryCandidateDto(
                     c.Uid,
                     c.Name,
@@ -274,12 +310,99 @@ public sealed class BotScheduler
                     c.ThroughSeq,
                     c.FoldedCount))
                 .ToArray();
+        }
 
         public Task<string?> SummarizePersonaAsync(string displayName, string existingSummary, string[] newMessages, int maxChars)
             => owner._brain.SummarizePersonaAsync(displayName, existingSummary, newMessages, maxChars);
 
+        public async Task<string?> SummarizeCandidateAsync(ProfileSummaryCandidateDto candidate, int maxChars)
+        {
+            var displayName = owner._unifiedMemory is not null
+                ? (string.IsNullOrWhiteSpace(candidate.Name) ? "成员" : candidate.Name)
+                : (string.IsNullOrWhiteSpace(candidate.Name) ? $"QQ{candidate.Uid}" : candidate.Name);
+            if (owner._unifiedMemory is null)
+                return await owner._brain.SummarizePersonaAsync(displayName, candidate.ExistingSummary, candidate.NewMessages, maxChars).ConfigureAwait(false);
+
+            if (!owner.AttestedSummaryMode || !LegacyProfileScopeKey.IsScopedKey(candidate.Uid)
+                || !owner._profileProvenance!.TryGet(candidate.Uid, out var prov))
+                return null;
+
+            var ctx = new UnifiedMemoryContext(prov.Subject, prov.Driver, prov.Conversation, IsReliableIdentity: true);
+            UnifiedMemoryReceipt? receipt;
+            try { receipt = owner._unifiedMemory.AuthorizeLegacyProfile(ctx, prov.Subject); }
+            catch { return null; }
+            if (receipt is null || !owner._unifiedMemory.ValidateReceipt(receipt, ctx))
+                return null;
+
+            if (_pendingReceipts.Count >= 256 && !_pendingReceipts.ContainsKey(candidate.Uid))
+            {
+                foreach (var staleKey in _pendingReceipts.Keys.Take(64).ToArray())
+                    _pendingReceipts.TryRemove(staleKey, out _);
+            }
+
+            _pendingReceipts[candidate.Uid] = (receipt, ctx, candidate.NewMessages ?? Array.Empty<string>());
+            using var memScope = MemoryUseScope.Begin();
+            MemoryUseScope.RestrictDestination(prov.Driver, prov.Conversation);
+            MemoryUseScope.Register(MemorySensitivityTier.LegacyProfile,
+                commit => owner.AttestedSummaryMode && owner._unifiedMemory.TryUseReceipt(receipt, ctx, commit));
+
+            string? result;
+            try
+            {
+                result = await MemoryUseScope.Use(() => owner._brain.SummarizePersonaAsync(
+                    displayName, candidate.ExistingSummary, candidate.NewMessages ?? Array.Empty<string>(), maxChars)).ConfigureAwait(false);
+            }
+            catch (MemoryUseInvalidatedException)
+            {
+                _pendingReceipts.TryRemove(candidate.Uid, out _);
+                return null;
+            }
+            catch
+            {
+                _pendingReceipts.TryRemove(candidate.Uid, out _);
+                throw;
+            }
+
+            if (!owner.AttestedSummaryMode || !owner._unifiedMemory.ValidateReceipt(receipt, ctx))
+            {
+                _pendingReceipts.TryRemove(candidate.Uid, out _);
+                return null;
+            }
+            return result;
+        }
+
         public void ApplySummary(string uid, string scope, string summary, long throughSeq, int foldedCount)
-            => owner._profiles.ApplySummary(uid, scope, summary, throughSeq, foldedCount);
+            => _ = TryApplySummary(uid, scope, summary, throughSeq, foldedCount);
+
+        public bool TryApplySummary(string uid, string scope, string summary, long throughSeq, int foldedCount)
+        {
+            if (owner._unifiedMemory is null)
+            {
+                owner._profiles.ApplySummary(uid, scope, summary, throughSeq, foldedCount);
+                return true;
+            }
+
+            if (!_pendingReceipts.TryRemove(uid, out var pending) || !owner.AttestedSummaryMode
+                || !LegacyProfileScopeKey.IsScopedKey(uid))
+                return false;
+
+            return owner._unifiedMemory.TryUseReceipt(pending.Receipt, pending.Context, () =>
+            {
+                owner._profiles.ApplySummary(uid, scope, summary, throughSeq, foldedCount);
+                owner._profiles.SetEvidence(uid, scope, BuildEvidenceJson(pending.Snippets, throughSeq));
+            });
+        }
+
+        private static string BuildEvidenceJson(string[] snippets, long throughSeq)
+        {
+            var items = snippets
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .TakeLast(3)
+                .Select(s => s.Trim())
+                .Select(s => s.Length <= 80 ? s : s[..80] + "…")
+                .ToArray();
+            return JsonSerializer.Serialize(new { throughSeq, evidence = items });
+        }
 
         public void Log(string message) => owner._hooks.Log(message);
 

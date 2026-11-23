@@ -43,6 +43,8 @@ public sealed record InboundMessage(
     public bool AllowsCommands { get; init; } = true;
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<InboundVoiceAttachment>? VoiceAttachments { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<InboundFileAttachment>? FileAttachments { get; init; }
 }
 
 /// <summary>

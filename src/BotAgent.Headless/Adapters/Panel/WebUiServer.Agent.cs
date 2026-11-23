@@ -101,6 +101,12 @@ public sealed partial class WebUiServer
                 return;
             }
 
+            if (string.Equals(key.Trim(), "workspace:owner", StringComparison.Ordinal))
+            {
+                await WriteJsonAsync(context, 403, new JsonObject { ["error"] = "workspace_scope_forbidden" });
+                return;
+            }
+
             await WriteJsonAsync(context, 200, new JsonObject
             {
                 ["key"] = key,
@@ -112,6 +118,11 @@ public sealed partial class WebUiServer
         var body = await ReadJsonAsync(context);
         var action = (body?["action"]?.GetValue<string>() ?? string.Empty).Trim().ToLowerInvariant();
         var chatKey = (body?["key"]?.GetValue<string>() ?? string.Empty).Trim();
+        if (string.Equals(chatKey, "workspace:owner", StringComparison.Ordinal))
+        {
+            await WriteJsonAsync(context, 403, new JsonObject { ["error"] = "workspace_scope_forbidden" });
+            return;
+        }
         var sessionId = body?["id"]?.GetValue<string>();
         var sessionName = body?["name"]?.GetValue<string>();
 

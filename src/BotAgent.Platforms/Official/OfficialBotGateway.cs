@@ -89,6 +89,8 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
     /// <summary>这条路是官方通道。</summary>
     public string Channel => Channels.Official;
 
+    public bool SupportsStructuredMarkdown(string channel) => EnableInteractiveMarkdown && !_markdownPermissionDenied;
+
     public event Action<QqChatMessage>? MessageReceived;
 
 #pragma warning disable CS0067
@@ -123,6 +125,10 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_loop is { IsCompleted: false }) return;
             if (!TryLoadIdentities() || !TryLoadDelivery()) return;
+            _extraIntentsDowngraded = false;
+            _markdownPermissionDenied = false;
+            _groupNamePermissionDenied = false;
+            SyncPluginSettingsGeneration();
             _operations.Start();
             _cts?.Dispose();
             var lifetime = new CancellationTokenSource();
@@ -166,6 +172,86 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
         // No verified application-domain grant is available to this adapter yet.
         var safeText = StripLinks(text);
         if (!string.Equals(text, safeText, StringComparison.Ordinal)) changes |= ContentChanges.Link;
+        JsonObject? memoryKeyboard = null;
+        var hasMemoryKeyboard = !isGroup && MemoryUseScope.IsCommandResponse
+            && BotAgent.Platforms.Common.MemoryPrivateCardHelper.TryBuildOfficialKeyboardJson(safeText, out memoryKeyboard);
+        JsonObject? approvalKeyboard = null;
+        var hasApprovalKeyboard = BotAgent.Domain.Permissions.ApprovalOutboundScope.IsSystemAnnouncement
+            && BotAgent.Platforms.Common.ApprovalCardHelper.TryBuildOfficialKeyboardJson(safeText, out approvalKeyboard);
+        var keyboardPayload = hasMemoryKeyboard ? memoryKeyboard : (hasApprovalKeyboard ? approvalKeyboard : null);
+        var attachKeyboard = (hasMemoryKeyboard || hasApprovalKeyboard) && !_keyboardPermissionDenied && keyboardPayload is not null;
+        var wantsMarkdown = ShouldSendOfficialMarkdown(safeText);
+        if (EnableInteractiveMarkdown && !_markdownPermissionDenied && (attachKeyboard || wantsMarkdown))
+        {
+            var mdSent = await TrySendOfficialMarkdownAsync(
+                isGroup, targetId, safeText, changes, operation.Token, replyToMessageId,
+                attachKeyboard ? keyboardPayload : null).ConfigureAwait(false);
+            if (mdSent.Ok && mdSent.Delivery is { IsSuccess: true })
+                return mdSent with { DeliveredText = safeText };
+
+            var mdReasonCode = mdSent.Delivery?.ReasonCode;
+            if (!IsMarkdownFallbackReason(mdReasonCode))
+                return mdSent;
+
+            if (attachKeyboard)
+            {
+                if (mdReasonCode == "permission_denied")
+                {
+                    _keyboardPermissionDenied = true;
+                    Log("official_keyboard downgraded=no_keyboard reason=permission_denied");
+                }
+                if (wantsMarkdown && !_markdownPermissionDenied)
+                {
+                    var noKbSent = await TrySendOfficialMarkdownAsync(
+                        isGroup, targetId, safeText, changes, operation.Token, replyToMessageId, keyboard: null).ConfigureAwait(false);
+                    if (noKbSent.Ok && noKbSent.Delivery is { IsSuccess: true })
+                        return noKbSent with { DeliveredText = safeText };
+                    mdReasonCode = noKbSent.Delivery?.ReasonCode;
+                    mdSent = noKbSent;
+                    if (!IsMarkdownFallbackReason(mdReasonCode))
+                        return mdSent;
+                }
+            }
+
+            if (mdReasonCode == "permission_denied" && (!attachKeyboard || wantsMarkdown))
+            {
+                _markdownPermissionDenied = true;
+                Log("official_markdown downgraded=plain reason=permission_denied");
+            }
+            else if (!attachKeyboard || !wantsMarkdown || mdReasonCode != "permission_denied")
+            {
+                Log($"official_markdown fallback=plain reason={mdReasonCode}");
+            }
+
+            var fallbackText = BotAgent.Domain.Rendering.QqPlainText.Sanitize(safeText);
+            if (string.IsNullOrWhiteSpace(fallbackText)) fallbackText = safeText;
+            var (fbDelivery, _) = PrepareDelivery(isGroup, targetId, ContentDigest(0, Encoding.UTF8.GetBytes(fallbackText)), false, replyToMessageId);
+            if (fbDelivery is null)
+                return mdSent;
+            fbDelivery = fbDelivery with { Changes = changes };
+            using var fbLifetime = CancellationTokenSource.CreateLinkedTokenSource(operation.Token, fbDelivery.Source.Lifetime);
+            try
+            {
+                var fbSent = await PostMessageAsync(
+                    fbDelivery,
+                    new JsonObject { ["msg_type"] = 0, ["content"] = fallbackText },
+                    fbLifetime.Token).ConfigureAwait(false);
+                return fbSent.Ok && fbSent.Delivery is { IsSuccess: true }
+                    ? fbSent with
+                    {
+                        DeliveredText = fallbackText,
+                        Delivery = fbSent.Delivery with
+                        {
+                            Status = BotAgent.Domain.Platforms.DeliveryStatus.Degraded,
+                            ReasonCode = "markdown_downgraded_to_text",
+                            DegradedFrom = "markdown"
+                        }
+                    }
+                    : fbSent;
+            }
+            finally { EndDelivery(fbDelivery); }
+        }
+
         var (delivery, reason) = PrepareDelivery(isGroup, targetId, ContentDigest(0, Encoding.UTF8.GetBytes(safeText)), false, replyToMessageId);
         if (delivery is null) return RefusedDelivery(reason);
         delivery = delivery with { Changes = changes };
@@ -256,7 +342,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
     /// 官方接口不提供群名 —— 返回 null（面板用别名号 + 通道标签展示，别编一个名字出来）。
     /// </summary>
     public Task<string?> GetGroupNameAsync(long groupId, CancellationToken ct = default)
-        => Task.FromResult<string?>(null);
+        => TryQueryOfficialGroupNameAsync(groupId, ct);
 
     /// <summary>
     /// 按消息 id 取回原文：官方平台**没有**这个接口（OneBot 的 <c>get_msg</c> 是私域那边独有的扩展）。
@@ -373,7 +459,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
             ["d"] = new JsonObject
             {
                 ["token"] = "QQBot " + token,
-                ["intents"] = IntentsGroupAndC2C,
+                ["intents"] = ComputeIdentifyIntents(),
                 ["shard"] = new JsonArray(0, 1),
                 ["properties"] = new JsonObject
                 {
@@ -437,7 +523,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
             switch (op)
             {
                 case 0: // dispatch
-                    await HandleDispatchAsync(Text(frame["t"]), frame["d"] as JsonObject, frame["d"], ct).ConfigureAwait(false);
+                    await HandleGatewayDispatchFrameAsync(frame, ct).ConfigureAwait(false);
                     break;
                 case 7: // 服务端要求重连（带 session 可以 resume）
                     Log("官方网关要求重连");
@@ -467,6 +553,20 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
         }
     }
 
+    private async Task HandleGatewayDispatchFrameAsync(JsonNode frame, CancellationToken ct)
+    {
+        var prevEventId = AmbientDispatchEventId.Value;
+        AmbientDispatchEventId.Value = Text(frame["id"]);
+        try
+        {
+            await HandleDispatchAsync(Text(frame["t"]), frame["d"] as JsonObject, frame["d"], ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            AmbientDispatchEventId.Value = prevEventId;
+        }
+    }
+
     private void HandleDispatch(string? type, JsonObject? d, JsonNode? raw)
     {
         if (!TryLoadIdentities()) return;
@@ -485,7 +585,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
         //   ① 平台根本没推 → 这行不出现；
         //   ② 推来了但被丢掉/解析炸了 → 这行出现，后面却没有“入站”行。
         Log(type is "READY" or "RESUMED" or "GROUP_AT_MESSAGE_CREATE" or "GROUP_MESSAGE_CREATE"
-            or "C2C_MESSAGE_CREATE" or "GROUP_ADD_ROBOT" or "GROUP_DEL_ROBOT" or "GROUP_MEMBER_REMOVE"
+            or "C2C_MESSAGE_CREATE" or "INTERACTION_CREATE" or "GROUP_ADD_ROBOT" or "GROUP_DEL_ROBOT" or "GROUP_MEMBER_REMOVE"
             or "FRIEND_ADD" or "FRIEND_DEL" or "GROUP_MSG_REJECT" or "GROUP_MSG_RECEIVE" or "C2C_MSG_REJECT" or "C2C_MSG_RECEIVE"
             ? "官方事件：" + type : "official_event kind=other");
 
@@ -518,6 +618,10 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
 
             case "C2C_MESSAGE_CREATE":
                 RaiseC2CMessage(d);
+                return;
+
+            case "INTERACTION_CREATE":
+                HandleInteractionCreate(d);
                 return;
 
             case "GROUP_ADD_ROBOT":
@@ -611,7 +715,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
             MentionedSelf: mentioned,
             ImageUrls: media.Images,
             Channel: Channels.Official, ReplyToMessageId: quote.Alias, ReplyToPreviewText: quote.Preview)
-            { IsReliableIdentity = true, OfficialRole = role, AllowsCommands = media.AllowsCommands, VoiceAttachments = media.Voices });
+            { IsReliableIdentity = true, OfficialRole = role, AllowsCommands = media.AllowsCommands, VoiceAttachments = media.Voices, FileAttachments = media.Files });
     }
 
     // 身份只能来自完整的字符串字段；拒绝发生在去重、别名分配和上层副作用之前。
@@ -657,7 +761,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
             ImageUrls: media.Images,
             MentionedSelf: true, // 单聊本来就是一对一
             Channel: Channels.Official, ReplyToMessageId: quote.Alias, ReplyToPreviewText: quote.Preview)
-            { IsReliableIdentity = true, AllowsCommands = media.AllowsCommands, VoiceAttachments = media.Voices });
+            { IsReliableIdentity = true, AllowsCommands = media.AllowsCommands, VoiceAttachments = media.Voices, FileAttachments = media.Files });
     }
 
     private void SetConnected(bool connected)
@@ -734,9 +838,40 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
         return url;
     }
 
+    private static bool IsMarkdownFallbackReason(string? reasonCode)
+        => reasonCode is "permission_denied" or "api_rejected" or "invalid_parameters" or "http_rejected";
+
+    private async Task<SendResult> TrySendOfficialMarkdownAsync(
+        bool isGroup,
+        long targetId,
+        string safeText,
+        ContentChanges changes,
+        CancellationToken opToken,
+        long? replyToMessageId,
+        JsonObject? keyboard)
+    {
+        var digestBytes = keyboard is null
+            ? Encoding.UTF8.GetBytes(safeText)
+            : Encoding.UTF8.GetBytes(safeText + "\n" + keyboard.ToJsonString());
+        var (mdDelivery, mdReason) = PrepareDelivery(isGroup, targetId, ContentDigest(2, digestBytes), false, replyToMessageId);
+        if (mdDelivery is null) return RefusedDelivery(mdReason);
+        mdDelivery = mdDelivery with { Changes = changes };
+        using var mdLifetime = CancellationTokenSource.CreateLinkedTokenSource(opToken, mdDelivery.Source.Lifetime);
+        try
+        {
+            var mdPayload = new JsonObject { ["msg_type"] = 2, ["markdown"] = new JsonObject { ["content"] = safeText } };
+            if (keyboard is not null) mdPayload["keyboard"] = keyboard;
+            return await PostMessageAsync(mdDelivery, mdPayload, mdLifetime.Token).ConfigureAwait(false);
+        }
+        finally { EndDelivery(mdDelivery); }
+    }
+
     private async Task<SendResult> PostMessageAsync(DeliveryContext delivery, JsonObject body, CancellationToken ct)
     {
-        body["msg_id"] = delivery.Trigger.NativeId;
+        if (TryGetInteractionReplyEvent(delivery.Trigger.NativeId, out var replyEventId))
+            body["event_id"] = replyEventId;
+        else
+            body["msg_id"] = delivery.Trigger.NativeId;
         body["msg_seq"] = delivery.Sequence;
         if (delivery.ReferenceIndex is not null) body["message_reference"] = new JsonObject { ["message_id"] = delivery.ReferenceIndex };
         var url = $"{ApiBase}/v2/{(delivery.IsGroup ? "groups" : "users")}/{Uri.EscapeDataString(delivery.Target)}/messages";
@@ -777,7 +912,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
     private static Task SendJsonAsync(ClientWebSocket ws, JsonObject payload, CancellationToken ct)
         => ws.SendAsync(Encoding.UTF8.GetBytes(payload.ToJsonString()), WebSocketMessageType.Text, true, ct);
 
-    private static async Task<JsonNode?> ReceiveJsonAsync(ClientWebSocket ws, CancellationToken ct)
+    private async Task<JsonNode?> ReceiveJsonAsync(ClientWebSocket ws, CancellationToken ct)
     {
         var buffer = new byte[16 * 1024];
         using var stream = new MemoryStream();
@@ -799,6 +934,7 @@ public sealed partial class OfficialBotGateway : IQqChatSource, IStagedReplyChat
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
+                ObserveWebSocketCloseCode((int?)result.CloseStatus);
                 return null;
             }
 

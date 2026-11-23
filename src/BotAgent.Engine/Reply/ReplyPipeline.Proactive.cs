@@ -23,13 +23,13 @@ public sealed partial class ReplyPipeline
     /// </summary>
     private void TryProactiveSpeak()
     {
-        if (!_settings.EnableProactive)
+        var settings = _settings;
+        if (!settings.AiModeEnabled)
         {
             return;
         }
 
         var now = EngineClock.Now;
-        var quiet = TimeSpan.FromSeconds(Math.Max(1, _settings.ProactiveQuietSeconds));
 
         foreach (var conversation in _registry.Snapshot())
         {
@@ -57,6 +57,21 @@ public sealed partial class ReplyPipeline
             {
                 continue;
             }
+
+            var platformPolicy = source is not null
+                ? _platformPolicies.Resolve(source.Context)
+                : _platformPolicies.ResolveForChannel(Channels.ChannelOf(conversation.SourceKey));
+            if (!platformPolicy.Registered || !platformPolicy.Connected || !platformPolicy.Enabled || !platformPolicy.ChatEnabled)
+            {
+                continue;
+            }
+
+            var conv = Services.Platforms.ConversationProfileResolver.Resolve(settings, platformPolicy, conversation.SourceKey);
+            if (!conv.ProactiveEnabled)
+            {
+                continue;
+            }
+            var quiet = TimeSpan.FromSeconds(Math.Max(1, conv.ProactiveQuietSeconds));
 
             var messages = conversation.Messages;
             if (messages.Count == 0)

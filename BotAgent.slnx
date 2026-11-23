@@ -14,6 +14,11 @@
     <Project Path="contracts/agent/BotAgent.Agent.Contracts.csproj" />
     <Project Path="contracts/conversation/BotAgent.Conversation.Contracts.csproj" />
     <Project Path="contracts/platforms/BotAgent.Platforms.Contracts.csproj" />
+    <Project Path="contracts/documents/BotAgent.Documents.Contracts.csproj" />
+    <Project Path="contracts/digest/BotAgent.Digest.Contracts.csproj" />
+    <Project Path="contracts/knowledge/BotAgent.Knowledge.Contracts.csproj" />
+    <Project Path="contracts/scheduler/BotAgent.Scheduler.Contracts.csproj" />
+    <Project Path="contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj" />
   </Folder>
   <Folder Name="/packages/">
     <Project Path="packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj" />
@@ -33,6 +38,11 @@
     <Project Path="packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj" />
     <Project Path="packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj" />
     <Project Path="packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj" />
+    <Project Path="packages/documents/backend/BotAgent.Package.Documents.csproj" />
+    <Project Path="packages/digest/backend/BotAgent.Package.Digest.csproj" />
+    <Project Path="packages/knowledge/backend/BotAgent.Package.Knowledge.csproj" />
+    <Project Path="packages/scheduler/backend/BotAgent.Package.Scheduler.csproj" />
+    <Project Path="packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj" />
@@ -84,6 +94,7 @@
     <Project Path="tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj" />
     <Project Path="tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj" />
     <Project Path="tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj" />
+    <Project Path="tests/BotAgent.SchedulerProbe/BotAgent.SchedulerProbe.csproj" />
     <Project Path="tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj" />
     <Project Path="tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj" />
     <Project Path="tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj" />

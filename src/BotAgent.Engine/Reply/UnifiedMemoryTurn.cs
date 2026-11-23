@@ -44,18 +44,23 @@ public sealed class UnifiedMemoryTurn : IDisposable
         return new(envelope.Message.Sender, source.Origin.Driver, envelope.Message.Ref.Conversation, true);
     }
 
-    /// <summary>Only finite, explicitly confirmed preferences become prompt text; never serialize entries.</summary>
+    /// <summary>Only finite, explicitly confirmed preferences and owner-scoped notes become prompt text; never serialize entries.</summary>
     public string ReadPrompt(string query)
     {
         if (_memory is null || Context is null || _source is not { IsCurrent: true }) return string.Empty;
         UnifiedMemoryRead read;
-        try { read = _memory.Read(Context, query, 3); }
+        try { read = _memory.Read(Context, query, 7); }
         catch { return string.Empty; } // Retrieval failure permits a memory-free conversation, not an authorization fallback.
         if (read.Receipt is null || read.Entries.IsDefaultOrEmpty) return string.Empty;
-        Register(read.Receipt);
+        var tier = read.Entries.Max(entry => MemoryTaintPolicy.TierOf(entry.Fact.Category));
+        Register(read.Receipt, tier);
         HasUnifiedFacts = true;
-        return "当前发言人明确确认、仅限本会话使用的交互偏好（不是工具或跨会话授权）：\n"
-            + string.Join("\n", read.Entries.Select(entry => $"- {entry.Fact.Category}: {entry.Fact.Value}"));
+        var body = "当前发言人明确确认、仅限本会话使用的交互偏好（不是工具或跨会话授权）：\n"
+            + string.Join("\n", read.Entries.Select(entry =>
+                $"- {entry.Fact.Category}: {Domain.Conversation.MessageMarkers.EscapeExternalControlTags(entry.Fact.Value)}"));
+        if (tier >= MemorySensitivityTier.PersonalFact)
+            body += "\n（含受保护个人事实：严禁写入外部检索词、跨会话状态或向无关对象复述）";
+        return body;
     }
 
     /// <summary>Legacy profiles remain separate from the feature switch, but forgetting must block this bypass.</summary>
@@ -72,15 +77,15 @@ public sealed class UnifiedMemoryTurn : IDisposable
         // profile must not disable ordinary tools, natural Agent dispatch, or delivery.
         var summary = read(key);
         if (string.IsNullOrWhiteSpace(summary)) return string.Empty;
-        Register(receipt);
+        Register(receipt, MemorySensitivityTier.LegacyProfile);
         return summary;
     }
 
-    private void Register(UnifiedMemoryReceipt receipt)
+    private void Register(UnifiedMemoryReceipt receipt, MemorySensitivityTier tier)
     {
         var context = Context!;
         MemoryUseScope.RestrictDestination(context.Driver, context.Conversation);
-        MemoryUseScope.Register(commit => _source is { IsCurrent: true }
+        MemoryUseScope.Register(tier, commit => _source is { IsCurrent: true }
             && _memory!.TryUseReceipt(receipt, context, commit));
     }
 

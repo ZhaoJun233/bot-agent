@@ -24,7 +24,8 @@ public static class PluginPackageValidation
     internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility)
         => Validate(manifest, checkCompatibility, allowReserved: false);
 
-    internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility, bool allowReserved)
+    internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility, bool allowReserved,
+        bool allowHistoricalHostContractDigest = false)
     {
         if (manifest is null) throw new InvalidDataException("Manifest missing.");
         ValidateId(manifest.Id, allowReserved);
@@ -43,7 +44,7 @@ public static class PluginPackageValidation
         if (manifest.ToolApiVersion is { } tools && (manifest.ApiVersion != 1
             || tools != BotAgent.Services.Tools.IToolContribution.CurrentApiVersion))
             throw new InvalidDataException("plugin_tools_invalid_declaration");
-        PluginSharedContractValidation.Validate(manifest);
+        PluginSharedContractValidation.Validate(manifest, allowHistoricalHostContractDigest);
         if (PluginActivationWeb.Requested(manifest) && manifest.ApiVersion != 1)
             throw new InvalidDataException("plugin_web_invalid_declaration");
         if ((PluginActivationModel.Requested(manifest) || PluginActivationExecution.Requested(manifest)) && manifest.ApiVersion != 1)

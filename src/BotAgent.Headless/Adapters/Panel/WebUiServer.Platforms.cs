@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using BotAgent.Services;
 using BotAgent.Services.Platforms;
 
 namespace BotAgent.Adapters.Panel;
@@ -11,7 +12,7 @@ public sealed partial class WebUiServer
     [
         (Domain.Platforms.PlatformId.QqPrivate, Domain.Platforms.AccountScope.Legacy, "QQ私域", "私域", Domain.Platforms.PlatformCapabilities.QqOneBot),
         (Domain.Platforms.PlatformId.QqOfficial, Domain.Platforms.AccountScope.Legacy, "QQ官方", "官方", Domain.Platforms.PlatformCapabilities.QqOfficial),
-        (Domain.Platforms.PlatformId.Feishu, Domain.Platforms.AccountScope.Default, "飞书", "飞书", Domain.Platforms.PlatformCapabilities.FeishuTextOnly),
+        (Domain.Platforms.PlatformId.Feishu, Domain.Platforms.AccountScope.Default, "飞书", "飞书", Domain.Platforms.PlatformCapabilities.Feishu),
         (Domain.Platforms.PlatformId.Local, Domain.Platforms.AccountScope.Legacy, "本地通道", "本地", Domain.Platforms.PlatformCapabilities.Local),
     ];
 
@@ -81,8 +82,7 @@ public sealed partial class WebUiServer
         }
 
         var feishuLoaded = _feishuGateway is not null;
-        var feishuEnabled = PlatformSwitchSettings.Read(settings, Domain.Platforms.PlatformId.Feishu,
-            Domain.Platforms.AccountScope.Default).Enabled;
+        var feishuEnabled = ResolveFeishuPolicyEnabled(settings);
         var feishuConfigured = _feishuGateway?.IsConfigured
             ?? (!string.IsNullOrWhiteSpace(_box.Current.FeishuAppId)
                 && !string.IsNullOrWhiteSpace(_box.Current.FeishuAppSecret)
@@ -107,6 +107,27 @@ public sealed partial class WebUiServer
         });
     }
 
+    private static bool ResolveFeishuPolicyEnabled(AppSettings settings)
+    {
+        if (settings.RuntimePlatformPolicies.HasValue)
+        {
+            var rules = PlatformSwitchSettings.ResolvePolicyRules(
+                settings,
+                new Domain.Configuration.PolicyTarget.Instance(
+                    new Domain.Configuration.DriverKey(
+                        Domain.Platforms.PlatformId.Feishu,
+                        Domain.Platforms.AccountScope.Default,
+                        "feishu-main")),
+                System.Collections.Immutable.ImmutableArray<Domain.Configuration.ActionId>.Empty);
+            return rules.Enabled == Domain.Configuration.ToggleRule.Enabled;
+        }
+
+        return PlatformSwitchSettings.Read(
+            settings,
+            Domain.Platforms.PlatformId.Feishu,
+            Domain.Platforms.AccountScope.Default).Enabled;
+    }
+
     private async Task HandleFeishuWebhookAsync(HttpListenerContext context)
     {
         if (_feishuGateway is null)
@@ -119,7 +140,8 @@ public sealed partial class WebUiServer
             return;
         }
 
-        if (!_box.Current.FeishuEnabled)
+        var feishuWebhookAllowed = ResolveFeishuPolicyEnabled(_box.Current);
+        if (!feishuWebhookAllowed)
         {
             await WriteJsonAsync(context, 403, new JsonObject
             {
@@ -150,8 +172,12 @@ public sealed partial class WebUiServer
 
         try
         {
-            var body = await ReadFeishuBodyAsync(context.Request.InputStream, context.Request.ContentEncoding, _cts.Token)
-                .ConfigureAwait(false);
+            var explicitCharset = !string.IsNullOrWhiteSpace(context.Request.ContentType)
+                && context.Request.ContentType.Contains("charset=", StringComparison.OrdinalIgnoreCase);
+            var body = await ReadFeishuBodyAsync(
+                context.Request.InputStream,
+                explicitCharset ? context.Request.ContentEncoding : System.Text.Encoding.UTF8,
+                _cts.Token).ConfigureAwait(false);
             if (body is null)
             {
                 await WriteJsonAsync(context, 413, new JsonObject

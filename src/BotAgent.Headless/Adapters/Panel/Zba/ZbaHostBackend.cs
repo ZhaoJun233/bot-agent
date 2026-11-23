@@ -5,6 +5,7 @@ using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Agent;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Management;
+using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Ports;
 using BotAgent.Panel;
@@ -22,7 +23,41 @@ namespace BotAgent.Adapters.Panel.Zba;
 internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContributions, IAsyncDisposable
 {
     public IReadOnlyList<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>> HttpContributions
-        => [QuotaHttpContract.Bind<ConfigurationCaller>(ListQuotasAsync, SaveQuotaAsync, FindQuotaAsync)];
+    {
+        get
+        {
+            var list = new List<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>>
+            {
+                QuotaHttpContract.Bind<ConfigurationCaller>(ListQuotasAsync, SaveQuotaAsync, FindQuotaAsync)
+            };
+            if (_mcpManaged is not null && _mcpStore is not null)
+            {
+                list.Add(McpHttpContract.Bind<ConfigurationCaller>(
+                    ListMcpServersAsync, SaveMcpServerAsync, DeleteMcpServerAsync, TestMcpServerAsync, ReloadMcpServersAsync));
+            }
+            if (_roleStore is not null && _roleResolver is not null)
+            {
+                list.Add(AccessRoleHttpContract.Bind<ConfigurationCaller>(ListAccessRolesAsync, SaveAccessRolesAsync));
+            }
+            if (_schedulerStore is not null)
+            {
+                list.Add(SchedulerHttpContract.Bind<ConfigurationCaller>(
+                    ListScheduledJobsAsync, SaveScheduledJobAsync, DeleteScheduledJobAsync, ListScheduledRunsAsync));
+            }
+            if (_todoStore is not null && _todoPorts is not null)
+            {
+                list.Add(PersonalTodoHttpContract.Bind<ConfigurationCaller>(
+                    ListPersonalTodosAsync, SavePersonalTodoAsync, DeletePersonalTodoAsync));
+            }
+            if (_workspace is not null)
+            {
+                list.Add(WorkspaceHttpContract.Bind<ConfigurationCaller>(
+                    ReadWorkspaceMessagesAsync, SendWorkspaceMessageAsync, ClearWorkspaceMessagesAsync,
+                    ReadWorkspaceIdentityAsync, ToggleWorkspaceIdentityAsync));
+            }
+            return list;
+        }
+    }
 
     private readonly SettingsBox _box;
     private readonly SettingsHotReload _hotReload;
@@ -41,6 +76,8 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
     private readonly Action<string>? _log;
     private readonly BotAgent.Services.Ops.DatabaseBackupService? _backups;
     private readonly BotAgent.Services.Ops.TurnTraceStore? _traces;
+    private readonly Func<(bool MarkdownEnabled, bool MarkdownPermissionDenied)>? _officialRuntimeState;
+    private readonly Func<(BotAgent.Domain.Memory.UnifiedMemoryGovernanceSummary Summary, bool AdminConfigured)>? _memoryGovernance;
     private int _disposed;
 
     internal ZbaHostBackend(
@@ -65,12 +102,16 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
         IQuotaOperations? quotaStore = null,
         BotAgent.Services.Ops.DatabaseBackupService? backups = null,
         BotAgent.Services.Ops.TurnTraceStore? traces = null,
-        IPlatformPolicyResolver? platformPolicies = null)
+        IPlatformPolicyResolver? platformPolicies = null,
+        Func<(bool MarkdownEnabled, bool MarkdownPermissionDenied)>? officialRuntimeState = null,
+        Func<(BotAgent.Domain.Memory.UnifiedMemoryGovernanceSummary Summary, bool AdminConfigured)>? memoryGovernance = null)
     {
         _box = box;
         _hotReload = hotReload;
         _capabilities = capabilities;
         _platformPolicies = platformPolicies;
+        _officialRuntimeState = officialRuntimeState;
+        _memoryGovernance = memoryGovernance;
         _sessions = sessions;
         _serverEnabled = serverEnabled;
         _approvals = approvals;
@@ -194,6 +235,26 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
         // 每日热备状态（#121）：过期/失败时面板顶部会亮红条 —— 这里给出结论，前端不自己算日期。
         if (PanelStatusFacts.BuildBackupComponent(_backups, now) is { } backupComponent) components.Add(backupComponent);
 
+        if (_memoryGovernance is not null)
+        {
+            try
+            {
+                if (_memoryGovernance.Invoke() is { } memoryGov)
+                {
+                    var s = memoryGov.Summary;
+                    var state = s.Faulted ? "faulted" : s.Enabled ? "enabled" : "disabled";
+                    var detail = $"confirmed={s.ConfirmedCount};pending={s.PendingCount};suppressed={s.SuppressionCount};admin={(memoryGov.AdminConfigured ? 1 : 0)};rev={s.Revision}";
+                    components.Add(new ZbaComponent("unified-memory", "governance", "统一记忆治理", state, !s.Faulted, detail, now));
+                }
+            }
+            catch (Exception exception)
+            {
+                _events.AppendError("unified-memory", exception.GetType().Name, now);
+                components.Add(new ZbaComponent("unified-memory", "governance", "统一记忆治理",
+                    "faulted", false, "governance_query_failed", now));
+            }
+        }
+
         var configuration = await ReadConfigurationQuietAsync(caller, ct).ConfigureAwait(false);
         var faulted = components.Any(component => component.State is "faulted" or "error");
         var ready = page.Code == ManagedResultCode.Ok && !faulted;
@@ -270,8 +331,15 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
             || driver.Key.PlatformId != Domain.Platforms.PlatformId.QqOfficial) return result;
         ct.ThrowIfCancellationRequested();
         var policy = _platformPolicies?.Resolve(new(driver.Key.PlatformId, driver.Key.AccountScope, driver.Key.InstanceId));
-        return result with { Messaging = OfficialMessagingCapabilities.Project(policy, _now()) };
+        var snapshot = _officialRuntimeState is { } readRuntime
+            ? ProjectOfficialWithRuntime(policy, _now(), readRuntime())
+            : OfficialMessagingCapabilities.Project(policy, _now());
+        return result with { Messaging = snapshot };
     }
+
+    private static MessagingCapabilitySnapshot ProjectOfficialWithRuntime(
+        EffectivePlatformPolicy? policy, DateTimeOffset observedAt, (bool MarkdownEnabled, bool MarkdownPermissionDenied) state)
+        => OfficialMessagingCapabilities.ProjectWithRuntime(policy, observedAt, state.MarkdownEnabled, state.MarkdownPermissionDenied);
 
     public async ValueTask<ManagedValidationResult> ValidateCapabilityAsync(
         ConfigurationCaller caller, ZbaConfigurationValidationRequest request, CancellationToken ct = default)
@@ -433,8 +501,12 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
     {
         ct.ThrowIfCancellationRequested();
         if (_approvals is null) throw new ZbaBackendException(503, "approvals_unavailable", "审批组件不可用。");
-        if (!_box.Current.EnableApprovals) throw new ZbaBackendException(403, "approvals_disabled", "人工审批总开关是关的。");
-        var (ok, reason) = _approvals.PanelDecide(requestId, approve);
+        var isTaskApproval = _tasks.HasApproval(requestId);
+        if (!_box.Current.EnableApprovals && !isTaskApproval)
+            throw new ZbaBackendException(403, "approvals_disabled", "人工审批总开关是关的。");
+        var (ok, reason) = _box.Current.EnableApprovals
+            ? _approvals.PanelDecide(requestId, approve)
+            : (false, "unknown_request");
         if (!ok && reason == "unknown_request")
         {
             // #137：任务级待批单不在 ApprovalUseCase 的租约表里（任务没有 QQ 平台来源，
@@ -528,8 +600,13 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
         var available = descriptor.RuntimeState == ManagedRuntimeState.Running
             || descriptor.Key is ManagedObjectKey.Provider && descriptor.CredentialConfigured && descriptor.DesiredEnabled != false;
         var reason = descriptor.ErrorCode;
-        if (reason is null && descriptor.CredentialConfigured == false
-            && descriptor.Key is not (ManagedObjectKey.Plugin or ManagedObjectKey.Mcp))
+        var credentialRequired = descriptor.Key switch
+        {
+            ManagedObjectKey.Driver driver => PlatformId.Normalize(driver.Key.PlatformId) is PlatformId.QqOfficial or PlatformId.Feishu,
+            ManagedObjectKey.Plugin or ManagedObjectKey.Mcp => false,
+            _ => true
+        };
+        if (reason is null && descriptor.CredentialConfigured == false && credentialRequired)
             reason = "credential_missing";
         return new ZbaComponent(id, kind, kind, descriptor.RuntimeState.ToString().ToLowerInvariant(),
             available, reason, now);
@@ -538,6 +615,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContribution
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _workspace?.Dispose();
         await _tasks.DisposeAsync().ConfigureAwait(false);
     }
 }

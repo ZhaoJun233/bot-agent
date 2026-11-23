@@ -100,7 +100,12 @@ const FEATURE_PLUGIN_ICONS: Readonly<Record<string, AppIconName>> = Object.freez
   'preset.feature.profiles': 'profile',
   'preset.feature.vibes': 'vibe',
   'preset.feature.token-quota': 'quota',
-  'preset.feature.websearch': 'globe'
+  'preset.feature.websearch': 'globe',
+  'preset.feature.documents': 'upload',
+  'preset.feature.digest': 'spark',
+  'preset.feature.knowledge': 'history',
+  'preset.feature.scheduler': 'bolt',
+  'preset.feature.personal-todo': 'check-circle'
 })
 
 const kindNames: Record<string, string> = {
@@ -112,7 +117,10 @@ const kindNames: Record<string, string> = {
   model: '模型供应商',
   platform: '消息平台',
   backup: '备份',
-  system: '系统核心'
+  system: '系统核心',
+  governance: '隐私治理',
+  task: '后台任务',
+  subsystem: '核心子系统'
 }
 
 const stateNames: Record<string, string> = {
@@ -120,6 +128,7 @@ const stateNames: Record<string, string> = {
   ready: '就绪',
   running: '运行中',
   active: '运行中',
+  enabled: '已启用',
   applied: '已生效',
   degraded: '部分降级',
   unhealthy: '出现故障',
@@ -162,7 +171,79 @@ const errorNames: Record<string, string> = {
   field_read_only: '该字段为只读（主供应商的优先级、启用状态与删除操作不可修改）',
   disabled_by_operator: '已被手动停用',
   rate_limited: '请求太频繁',
-  unauthorized: '令牌无效'
+  unauthorized: '令牌无效',
+  mcp_management_unavailable: '当前宿主未启用 MCP 管理运行时',
+  env_server_locked: '该 MCP 服务端由环境变量锁定为只读，无法在控制台覆盖或删除',
+  ssrf_endpoint_blocked: 'MCP 地址未通过安全校验（默认拒绝私网、回环及非 HTTP/HTTPS 地址）',
+  invalid_server_id: 'MCP 服务端标识格式无效（仅支持字母、数字、连字符与下划线，最长 32 位）',
+  allowed_tools_required: '至少需要显式勾选或填写一个允许调用的工具名（allowedTools 不能为空）',
+  invalid_tool_name: '工具名称包含控制字符或超过 64 字符限制',
+  too_many_tools: '单个 MCP 服务端声明的工具数量超过上限（最多 64 个）',
+  invalid_auth_token: 'Bearer Token 格式无效（仅允许可见 ASCII 字符，最长 4096 位；且不能同时勾选清除凭据）',
+  mcp_server_limit_exceeded: '控制台托管的 MCP 服务端数量已达上限',
+  mcp_servers_payload_too_large: 'MCP 服务端配置总大小超过 64 KB 上限',
+  mcp_timeout: '连接或探测 MCP 服务端超时',
+  mcp_unreachable: '无法连接到指定的 MCP 服务端地址',
+  mcp_probe_failed: 'MCP 服务端探测失败，请检查地址、协议或凭据',
+  probe_canceled: 'MCP 服务端探测已取消',
+  mcp_reload_failed: 'MCP 运行态热重载失败，配置已落盘但目录未刷新',
+  server_not_found: '指定的 MCP 服务端不存在或已被删除',
+  revision_conflict: '配置版本已变更，请刷新最新快照后重试',
+  idempotency_conflict: '幂等键与历史操作载荷冲突，请重新提交',
+  access_roles_unavailable: '当前宿主未启用跨平台角色权限存储',
+  invalid_access_role: '角色绑定记录格式无效或包含不支持的角色值',
+  invalid_access_role_platform: '不支持的平台标识（仅支持 qq.private / qq.official / feishu / local）',
+  invalid_access_role_instance: 'InstanceId 格式无效或超过长度限制',
+  invalid_access_role_token: '标识字段（用户 ID / AccountScope / 会话 Key）不能为空、空白或包含控制字符',
+  invalid_access_role_note: '备注包含控制字符或超过 80 字符上限',
+  duplicate_access_role: '存在重复的角色绑定键（同一平台、账号、实例、会话范围与用户只能绑定一条）',
+  group_manager_requires_group_scope: '群组管理员（GroupManager）必须绑定具体的群聊会话 Key（如 group:10001 或 feishu:group:oc_xxx）',
+  access_role_scope_platform_mismatch: '会话范围前缀与所选平台不一致',
+  access_roles_payload_too_large: '角色绑定配置总大小超过 64 KB 上限',
+  access_role_limit_exceeded: '角色绑定条目数量超过上限（最多 128 条）',
+  passive_trigger_required: 'QQ 官方通道受限于被动回复窗口，暂不支持无触发定时主动推送；建议使用飞书、QQ 私域或 Web 工作台',
+  private_conversation_only: '个人待办仅限本人工作台与可靠私聊访问（群聊严禁读取或操作）',
+  identity_linking_disabled: '跨平台本人身份关联当前默认关闭，请先开启该功能后再绑定',
+  challenge_invalid_or_expired: '挑战码无效、已过期（120 秒）或已被使用',
+  same_endpoint_forbidden: '不能在同一平台端点自我确认，请在另一端的可靠私聊中确认',
+  cron_interval_too_short: '周期任务最小间隔不能低于 5 分钟',
+  scheduler_scope_quota_exceeded: '当前会话活跃定时任务已达上限（32 条）',
+  scheduler_global_quota_exceeded: '全局活跃定时任务已达上限（256 条）',
+  attachment_too_large: '附件体积超过 10 MiB 上限或内容为空',
+  attachment_invalid_base64: '附件内容不是有效的 Base64 编码',
+  executable_rejected: '安全策略已拦截可执行文件或危险二进制附件',
+  zip_bomb_rejected: '压缩包解压体积或嵌套层级异常，已安全拦截',
+  file_too_large: '提取的文档内容体积超出上限',
+  scheduler_unavailable: '当前宿主未启用定时与提醒引擎',
+  scheduler_revision_conflict: '定时任务版本已变化，请刷新后再操作',
+  job_not_found: '指定的定时任务不存在或已被删除',
+  job_id_invalid: '定时任务编号格式无效',
+  invalid_timezone: '时区名称无效（请使用标准 IANA 时区，例如 Asia/Shanghai）',
+  scheduler_fire_time_in_past: '触发时间必须晚于当前时间',
+  cron_expr_invalid: 'Cron 表达式格式无效（需为合法的 5 段表达式）',
+  personal_todo_unavailable: '当前宿主未启用个人待办引擎',
+  todo_revision_conflict: '个人待办版本已变化，请刷新后再操作',
+  todo_not_found: '指定的个人待办不存在或已被删除',
+  todo_title_invalid: '待办标题不能为空、包含控制字符或超过长度限制',
+  todo_status_invalid: '待办状态值无效（仅支持 open / done / archived）',
+  todo_id_invalid: '个人待办编号格式无效',
+  idempotency_key_conflict: '幂等键与历史请求参数冲突，请重新提交',
+  invalid_idempotency_key: '幂等键格式无效',
+  workspace_unavailable: '当前宿主未启用个人工作台服务',
+  workspace_text_required: '请输入工作台消息内容或选择有效附件',
+  workspace_text_too_long: '工作台消息正文超过最大长度限制',
+  scope_payload_too_large: '当前会话知识库总大小已超出上限，请清理部分旧文档后再保存'
+}
+
+export function workspaceRoleLabel(role: number): string {
+  switch (role) {
+    case 0: return '访客（Guest · 仅聊天）'
+    case 1: return '普通成员（Member）'
+    case 2: return '受信任成员（TrustedMember）'
+    case 3: return '本群管理员（GroupManager）'
+    case 4: return '号主（BotOwner）'
+    default: return `未知角色 (${role})`
+  }
 }
 
 /** 名字是否只是一个类型占位词（后端没给真名）。 */

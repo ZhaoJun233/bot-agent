@@ -29,6 +29,71 @@ internal static class Program
             return await ModelHotApplyFailureTests.RunChildAsync();
         if (args.Length == 1 && args[0] == ConfigurationRuntimeEffectsTests.ChildArgument)
             return await ConfigurationRuntimeEffectsTests.RunChildAsync();
+        if (args.Length == 1 && args[0] == ConversationProfileTests.ChildArgument)
+            return await ConversationProfileTests.RunChildAsync();
+        if (args.Contains("--phase2-security", StringComparer.Ordinal))
+        {
+            ClockBindings.InitializePlatforms();
+            ClockBindings.InitializeEngine();
+            ClockBindings.InitializeModel();
+            ClockBindings.InitializeStorage();
+            await RunAsync("phase2 capabilities & security", () => Phase2CapabilitiesSecurityTests.RunAsync(Check));
+            Console.WriteLine($"Phase2Security: {_passed} passed, {_failed} failed");
+            return _failed == 0 ? 0 : 1;
+        }
+        if (args.Contains("--phase3", StringComparer.Ordinal))
+        {
+            ClockBindings.InitializePlatforms();
+            ClockBindings.InitializeEngine();
+            ClockBindings.InitializeModel();
+            ClockBindings.InitializeStorage();
+            var phase3Root = Path.Combine(Path.GetTempPath(), "botagent-p3-probe-" + Guid.NewGuid().ToString("N"));
+            Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", phase3Root);
+            Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", phase3Root);
+            try
+            {
+                AppDatabase.Initialize();
+                await RunAsync("phase3 memory & knowledge", () => Phase3MemoryKnowledgeTests.RunAsync(Check));
+                Console.WriteLine($"Phase3MemoryKnowledge: {_passed} passed, {_failed} failed");
+                return _failed == 0 ? 0 : 1;
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (Directory.Exists(phase3Root)) Directory.Delete(phase3Root, recursive: true);
+            }
+        }
+        if (args.Contains("--phase4", StringComparer.Ordinal))
+        {
+            var phase4Root = Path.Combine(Path.GetTempPath(), "botagent-p4-probe-" + Guid.NewGuid().ToString("N"));
+            Environment.SetEnvironmentVariable("BOTAGENT_DATA_DIR", phase4Root);
+            Environment.SetEnvironmentVariable("QQCHAT_DATA_DIR", phase4Root);
+            ClockBindings.InitializePlatforms();
+            ClockBindings.InitializeEngine();
+            ClockBindings.InitializeModel();
+            ClockBindings.InitializeStorage();
+            try
+            {
+                AppDatabase.Initialize();
+                await RunAsync("phase4 mcp & rbac storage", () => Phase4StorageChecks.RunInCurrentProcessAsync(Check));
+                Console.WriteLine($"Phase4Storage: {_passed} passed, {_failed} failed");
+                return _failed == 0 ? 0 : 1;
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (Directory.Exists(phase4Root)) Directory.Delete(phase4Root, recursive: true);
+            }
+        }
+        if (args.Contains("--conversation-profiles", StringComparer.Ordinal))
+        {
+            await RunAsync("conversation profiles", () => ConversationProfileTests.RunAsync(Check));
+            await RunAsync("phase2 capabilities & security", () => Phase2CapabilitiesSecurityTests.RunAsync(Check));
+            await RunAsync("phase3 memory & knowledge", () => Phase3MemoryKnowledgeTests.RunAsync(Check));
+            await RunAsync("phase4 mcp & rbac storage", () => Phase4StorageChecks.RunAsync(Check));
+            Console.WriteLine($"ConversationProfiles: {_passed} passed, {_failed} failed");
+            return _failed == 0 ? 0 : 1;
+        }
         if (args.Contains("--memory-scheduler", StringComparer.Ordinal))
         {
             await RunAsync("memory scheduler model boundary", () => MemorySchedulerTests.RunAsync(Check));
@@ -75,6 +140,10 @@ internal static class Program
             await RunAsync("review agent/storage regressions", () => ReviewAgentStorageRegression.RunAsync(Check));
             await RunAsync("configuration Core surface", () => ConfigurationContractTests.SurfaceAsync(Check));
             await RunAsync("configuration runtime effects", () => ConfigurationRuntimeEffectsTests.RunAsync(Check));
+            await RunAsync("conversation profiles", () => ConversationProfileTests.RunAsync(Check));
+            await RunAsync("phase2 capabilities & security", () => Phase2CapabilitiesSecurityTests.RunAsync(Check));
+            await RunAsync("phase3 memory & knowledge", () => Phase3MemoryKnowledgeTests.RunAsync(Check));
+            await RunAsync("phase4 mcp & rbac storage", () => Phase4StorageChecks.RunAsync(Check));
             await RunAsync("managed configuration validation", () => ManagedCapabilityContractTests.RunAsync(Check));
             await RunAsync("managed operations", () => ManagedOperationContractTests.RunAsync(Check));
             await RunAsync("managed host capabilities", () => ManagedHostCapabilityTests.RunAsync(Check));

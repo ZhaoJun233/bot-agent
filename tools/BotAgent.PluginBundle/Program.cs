@@ -11,6 +11,8 @@ using BotAgent.Adapters.Plugins;
 
 internal static class Program
 {
+    private const string ZeroSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+
     private static async Task Main(string[] args)
     {
         // Input pairs are trusted build inputs, never package-managed paths or downloaded declarations.
@@ -79,6 +81,9 @@ internal static class Program
             PluginUiDeclaration? packagedUi = null;
             if (manifest.Ui is { } uiTemplate)
             {
+                // Source distribution.json templates intentionally leave ui.assets[].sha256 blank or set to
+                // the all-zero placeholder (0000...0000) so template files stay deterministic across UI edits;
+                // PluginBundle always computes and enforces the authoritative SHA-256 from packaged bytes.
                 if (uiTemplate.ContractVersion != PluginUiDeclaration.CurrentContractVersion
                     || uiTemplate.Assets is null || uiTemplate.Assets.Count is 0 or > 64
                     || string.IsNullOrEmpty(uiTemplate.Entry) || !uiTemplate.Entry.StartsWith("web/", StringComparison.Ordinal)
@@ -95,6 +100,9 @@ internal static class Program
                         || asset.Path.Contains("..", StringComparison.Ordinal) || asset.Path.Contains('\\')
                         || files.ContainsKey(asset.Path))
                         throw new InvalidDataException("bundle_ui_asset_invalid");
+                    if (!string.IsNullOrEmpty(asset.Sha256)
+                        && !string.Equals(asset.Sha256, ZeroSha256, StringComparison.Ordinal))
+                        throw new InvalidDataException("bundle_ui_asset_template_hash_must_be_placeholder");
                     var ext = Path.GetExtension(asset.Path);
                     if (!allowedExtensionTypes.TryGetValue(ext, out var expectedType)
                         || !string.Equals(asset.ContentType, expectedType, StringComparison.Ordinal))
@@ -105,7 +113,11 @@ internal static class Program
                     if (uiTotal > 4L * 1024 * 1024) throw new InvalidDataException("bundle_ui_asset_limit_exceeded");
                     if (string.Equals(asset.Path, uiTemplate.Entry, StringComparison.Ordinal)) entryFound = true;
                     files.Add(asset.Path, assetBytes);
-                    uiAssets.Add(asset with { Sha256 = Hash(assetBytes) });
+                    var assetHash = Hash(assetBytes);
+                    if (!Regex.IsMatch(assetHash, "^[0-9a-f]{64}$")
+                        || string.Equals(assetHash, ZeroSha256, StringComparison.Ordinal))
+                        throw new InvalidDataException("bundle_ui_asset_hash_invalid");
+                    uiAssets.Add(asset with { Sha256 = assetHash });
                 }
                 if (!entryFound) throw new InvalidDataException("bundle_ui_entry_missing");
                 packagedUi = uiTemplate with { Assets = uiAssets.OrderBy(a => a.Path, StringComparer.Ordinal).ToArray() };
@@ -131,13 +143,21 @@ internal static class Program
             releases.Add(manifest);
             artifacts.Add(manifest.Sha256 + ".zip", bytes);
         }
-        // Verify all shared-contract owners exist in the compiled bundle and agree on exact identity.
+        // Verify all shared-contract owners exist in the compiled bundle and agree on exact identity,
+        // and forbid any all-zero placeholder SHA-256 across packaged releases, contracts, and UI assets.
         var releaseIds = releases.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
         var bundleContracts = new Dictionary<string, PluginSharedContract>(StringComparer.OrdinalIgnoreCase);
         foreach (var release in releases)
         {
+            if (string.Equals(release.Sha256, ZeroSha256, StringComparison.Ordinal))
+                throw new InvalidDataException("bundle_placeholder_hash_forbidden");
+            foreach (var asset in release.Ui?.Assets ?? [])
+                if (string.Equals(asset.Sha256, ZeroSha256, StringComparison.Ordinal))
+                    throw new InvalidDataException("bundle_placeholder_hash_forbidden");
             foreach (var contract in release.SharedContracts ?? [])
             {
+                if (string.Equals(contract.Sha256, ZeroSha256, StringComparison.Ordinal))
+                    throw new InvalidDataException("bundle_placeholder_hash_forbidden");
                 if (!releaseIds.Contains(contract.Owner))
                     throw new InvalidDataException("bundle_contract_owner_missing");
                 if (bundleContracts.TryGetValue(contract.Name, out var existing)

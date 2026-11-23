@@ -1,4 +1,8 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Ports;
 using System.Text.Json.Nodes;
 using BotAgent.Services.Music;
@@ -33,6 +37,9 @@ internal sealed class OneBotInboundEvents
     private readonly Action<QqPokeEvent> _poked;
     private readonly Action<QqRecallEvent> _messageRecalled;
     private readonly Action<string> _log;
+    private const long SyntheticNoticeIdFloor = 4_000_000_000_000L;
+    private static readonly TimeSpan FileNoticeDedupWindow = TimeSpan.FromSeconds(15);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _recentFileKeys = new(StringComparer.Ordinal);
 
     public OneBotInboundEvents(
         OneBotActionClient client,
@@ -115,6 +122,18 @@ internal sealed class OneBotInboundEvents
     /// </summary>
     private void HandleNoticeEvent(JsonNode root)
     {
+        try
+        {
+            HandleNoticeEventCore(root);
+        }
+        catch (Exception ex)
+        {
+            _log("处理通知事件出错: " + ex.Message);
+        }
+    }
+
+    private void HandleNoticeEventCore(JsonNode root)
+    {
         var noticeType = root["notice_type"]?.GetValue<string>();
         var subType = root["sub_type"]?.GetValue<string>();
 
@@ -123,6 +142,12 @@ internal sealed class OneBotInboundEvents
         if (noticeType is "group_recall" or "friend_recall")
         {
             HandleRecallEvent(root, noticeType == "group_recall");
+            return;
+        }
+
+        if (noticeType is "group_upload" or "offline_file")
+        {
+            HandleFileNoticeEvent(root, noticeType == "group_upload");
             return;
         }
 
@@ -172,7 +197,7 @@ internal sealed class OneBotInboundEvents
             userId,
             targetId,
             selfId != 0 && targetId == selfId,
-            DateTimeOffset.FromUnixTimeSeconds(time)));
+            SafeUnixTime(time)));
     }
 
     /// <summary>
@@ -197,7 +222,7 @@ internal sealed class OneBotInboundEvents
             OneBotInboundParser.ReadLong(root, "user_id"),
             OneBotInboundParser.ReadLong(root, "operator_id"),
             messageId,
-            DateTimeOffset.FromUnixTimeSeconds(time)));
+            SafeUnixTime(time)));
     }
 
     private async Task HandleMessageEventAsync(JsonNode root)
@@ -249,7 +274,9 @@ internal sealed class OneBotInboundEvents
         var forwards = await FetchForwardRecordsAsync(root["message"] as JsonArray, CancellationToken.None);
 
         var (text, mentioned, imageUrls, musicShares) =
-            OneBotInboundParser.ParseMessage(root["message"] as JsonArray, raw, selfId, forwards);
+            OneBotInboundParser.ParseMessage(root["message"] as JsonArray, raw, selfId, forwards, out var hasExternalCardOrForward);
+        var (voices, files) =
+            OneBotInboundParser.ParseMediaAttachments(root["message"] as JsonArray, raw);
         var (replyToId, replyPreview, replySenderId) =
             OneBotInboundParser.ParseReply(root["message"] as JsonArray, raw);
 
@@ -273,9 +300,26 @@ internal sealed class OneBotInboundEvents
         // 只有表情/图片等无文本且未提及本机、**也没有引用目标**时才不建会话。
         // （以前只看“正文是否为空”，于是“引用某条 + 正文为空”的消息被静默丢掉：
         //   机器人既没记下这条、也没标出它引用了什么 —— 管理员反馈“识别不了引用回复”的一个真原因）
-        if (string.IsNullOrWhiteSpace(text) && !mentioned && musicShares.Count == 0 && !hasReply)
+        if (string.IsNullOrWhiteSpace(text) && !mentioned && musicShares.Count == 0 && !hasReply
+            && voices.Count == 0 && files.Count == 0)
         {
             return;
+        }
+
+        if (files.Count > 0)
+        {
+            var allAlreadyHandledByNotice = true;
+            foreach (var file in files)
+            {
+                var dedupKey = BuildFileDedupKey(isGroup, groupId, userId, file.PlatformFileId ?? file.DownloadUrl ?? file.FileName);
+                if (!TryMarkRecentFile(dedupKey))
+                    allAlreadyHandledByNotice = false;
+            }
+            if (allAlreadyHandledByNotice && !mentioned && !hasReply && voices.Count == 0 && imageUrls.Count == 0
+                && text.Trim().StartsWith("[文件:", StringComparison.Ordinal))
+            {
+                return;
+            }
         }
 
         _messageReceived(new QqChatMessage(
@@ -285,7 +329,7 @@ internal sealed class OneBotInboundEvents
             groupId,
             senderName,
             text,
-            DateTimeOffset.FromUnixTimeSeconds(time),
+            SafeUnixTime(time),
             mentioned,
             imageUrls.Count > 0 ? imageUrls : null,
             musicShares.Count > 0 ? musicShares : null,
@@ -293,7 +337,100 @@ internal sealed class OneBotInboundEvents
             sender?.Title,
             replyToId,
             replyPreview,
-            replySenderId));
+            replySenderId)
+        {
+            AllowsCommands = voices.Count == 0 && files.Count == 0 && !hasExternalCardOrForward,
+            VoiceAttachments = voices.Count > 0 ? voices : null,
+            FileAttachments = files.Count > 0 ? files : null
+        });
+    }
+
+    private void HandleFileNoticeEvent(JsonNode root, bool isGroup)
+    {
+        var selfId = root["self_id"]?.GetValue<long>() ?? _selfId();
+        if (selfId == 0) selfId = _selfIdHint();
+
+        var userId = OneBotInboundParser.ReadLong(root, "user_id");
+        var groupId = isGroup ? OneBotInboundParser.ReadLong(root, "group_id") : 0;
+        if (userId <= 0 || (isGroup && groupId <= 0) || (selfId != 0 && userId == selfId))
+            return;
+
+        if (root["file"] is not JsonObject fileObj)
+            return;
+
+        var fileName = OneBotInboundParser.SafeDisplayFileName(OneBotInboundParser.FirstNonEmpty(
+            OneBotInboundParser.NodeAsText(fileObj["name"]),
+            "attachment.dat"));
+        var url = OneBotInboundParser.ValidHttpUrl(OneBotInboundParser.NodeAsText(fileObj["url"]));
+        var rawId = OneBotInboundParser.SanitizeOpaqueMediaRef(
+            OneBotInboundParser.FirstNonEmpty(
+                OneBotInboundParser.NodeAsText(fileObj["id"]),
+                OneBotInboundParser.NodeAsText(fileObj["file_id"])),
+            allowLeadingSlashId: isGroup);
+        var busid = OneBotInboundParser.ReadInt(fileObj["busid"]);
+        var encodedId = rawId is null ? null : (busid > 0 ? $"{busid}|{rawId}" : rawId);
+        if (url is null && encodedId is null)
+            return;
+
+        var dedupKey = BuildFileDedupKey(isGroup, groupId, userId, encodedId ?? url ?? fileName);
+        if (TryMarkRecentFile(dedupKey))
+            return;
+
+        var size = OneBotInboundParser.ReadLong(fileObj["size"]);
+        var time = root["time"]?.GetValue<long>() ?? Clock.Now.ToUnixTimeSeconds();
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"upload:{groupId}:{userId}:{time}:{encodedId ?? url ?? fileName}"));
+        var syntheticMessageId = SyntheticNoticeIdFloor + (long)(BitConverter.ToUInt64(digest, 0) & 0x0000_00FF_FFFF_FFFFUL);
+        var attachment = new InboundFileAttachment(fileName, url, encodedId, size > 0 ? size : null);
+
+        _messageReceived(new QqChatMessage(
+            syntheticMessageId,
+            isGroup,
+            userId,
+            groupId,
+            isGroup ? $"成员 {userId}" : userId.ToString(),
+            $"[文件:{fileName}]",
+            SafeUnixTime(time),
+            MentionedSelf: !isGroup)
+        {
+            AllowsCommands = false,
+            FileAttachments = [attachment]
+        });
+    }
+
+    private static string BuildFileDedupKey(bool isGroup, long groupId, long userId, string discriminator)
+    {
+        var clean = discriminator;
+        var pipe = clean.IndexOf('|');
+        if (pipe >= 0 && pipe < clean.Length - 1) clean = clean[(pipe + 1)..];
+        return $"{isGroup}:{groupId}:{userId}:{clean.Trim()}";
+    }
+
+    private bool TryMarkRecentFile(string key)
+    {
+        var now = Clock.UtcNow;
+        if (_recentFileKeys.Count > 128)
+        {
+            foreach (var pair in _recentFileKeys)
+            {
+                if (now - pair.Value > FileNoticeDedupWindow)
+                    _recentFileKeys.TryRemove(pair.Key, out _);
+            }
+        }
+
+        if (_recentFileKeys.TryGetValue(key, out var seen) && now - seen <= FileNoticeDedupWindow)
+            return true;
+
+        _recentFileKeys[key] = now;
+        return false;
+    }
+
+    private static DateTimeOffset SafeUnixTime(long raw)
+    {
+        if (raw <= 0) return Clock.Now;
+        var seconds = raw > 100_000_000_000L ? raw / 1000 : raw;
+        return seconds is >= -62135596800L and <= 253402300799L
+            ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+            : Clock.Now;
     }
 
     /// <summary>

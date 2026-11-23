@@ -41,6 +41,11 @@ COPY contracts/modelservices/BotAgent.ModelServices.Contracts.csproj contracts/m
 COPY contracts/agent/BotAgent.Agent.Contracts.csproj contracts/agent/
 COPY contracts/conversation/BotAgent.Conversation.Contracts.csproj contracts/conversation/
 COPY contracts/platforms/BotAgent.Platforms.Contracts.csproj contracts/platforms/
+COPY contracts/documents/BotAgent.Documents.Contracts.csproj contracts/documents/
+COPY contracts/digest/BotAgent.Digest.Contracts.csproj contracts/digest/
+COPY contracts/knowledge/BotAgent.Knowledge.Contracts.csproj contracts/knowledge/
+COPY contracts/scheduler/BotAgent.Scheduler.Contracts.csproj contracts/scheduler/
+COPY contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj contracts/personaltodo/
 COPY packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj packages/token-quota/backend/
 COPY packages/websearch/backend/BotAgent.Package.WebSearch.csproj packages/websearch/backend/
 COPY packages/poke/backend/BotAgent.Package.Poke.csproj packages/poke/backend/
@@ -58,6 +63,11 @@ COPY packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csp
 COPY packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj packages/platform-qq-official/backend/
 COPY packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj packages/platform-feishu/backend/
 COPY packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj packages/platform-local/backend/
+COPY packages/documents/backend/BotAgent.Package.Documents.csproj packages/documents/backend/
+COPY packages/digest/backend/BotAgent.Package.Digest.csproj packages/digest/backend/
+COPY packages/knowledge/backend/BotAgent.Package.Knowledge.csproj packages/knowledge/backend/
+COPY packages/scheduler/backend/BotAgent.Package.Scheduler.csproj packages/scheduler/backend/
+COPY packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj packages/personal-todo/backend/
 COPY tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj tools/BotAgent.PluginBundle/
 RUN dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
 
@@ -84,6 +94,11 @@ COPY contracts/modelservices/ contracts/modelservices/
 COPY contracts/agent/ contracts/agent/
 COPY contracts/conversation/ contracts/conversation/
 COPY contracts/platforms/ contracts/platforms/
+COPY contracts/documents/ contracts/documents/
+COPY contracts/digest/ contracts/digest/
+COPY contracts/knowledge/ contracts/knowledge/
+COPY contracts/scheduler/ contracts/scheduler/
+COPY contracts/personaltodo/ contracts/personaltodo/
 COPY packages/token-quota/backend/ packages/token-quota/backend/
 COPY packages/token-quota/web/ packages/token-quota/web/
 COPY packages/token-quota/distribution.json packages/token-quota/
@@ -120,6 +135,18 @@ COPY packages/platform-feishu/backend/ packages/platform-feishu/backend/
 COPY packages/platform-feishu/distribution.json packages/platform-feishu/
 COPY packages/platform-local/backend/ packages/platform-local/backend/
 COPY packages/platform-local/distribution.json packages/platform-local/
+COPY packages/documents/backend/ packages/documents/backend/
+COPY packages/documents/distribution.json packages/documents/
+COPY packages/digest/backend/ packages/digest/backend/
+COPY packages/digest/distribution.json packages/digest/
+COPY packages/knowledge/backend/ packages/knowledge/backend/
+COPY packages/knowledge/distribution.json packages/knowledge/
+COPY packages/scheduler/backend/ packages/scheduler/backend/
+COPY packages/scheduler/web/ packages/scheduler/web/
+COPY packages/scheduler/distribution.json packages/scheduler/
+COPY packages/personal-todo/backend/ packages/personal-todo/backend/
+COPY packages/personal-todo/web/ packages/personal-todo/web/
+COPY packages/personal-todo/distribution.json packages/personal-todo/
 COPY tools/BotAgent.PluginBundle/ tools/BotAgent.PluginBundle/
 
 # UseAppHost=false：镜像里直接用 dotnet 启动，免得多带一个 apphost 可执行文件

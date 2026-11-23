@@ -42,9 +42,18 @@ internal partial class Program
             await (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
             var registry = (PluginManager)runtimeType.GetProperty("Registry", hidden)!.GetValue(runtime)!;
             var tools = registry.GetTools();
-            Check(tools.Length == 2 && tools.All(tool => tool.ProviderId == researchId
-                && tool.Definition.Spec.Executor == "research.actions" && tool.Definition.Spec.Origin == ToolOrigin.Plugin),
-                "actual default package supplies both tools and their executor");
+            var researchTools = tools.Where(tool => tool.ProviderId == researchId).ToArray();
+            Check(tools.Length == 16
+                && researchTools.Length == 2
+                && researchTools.All(tool => tool.Definition.Spec.Executor == "research.actions" && tool.Definition.Spec.Origin == ToolOrigin.Plugin)
+                && tools.Any(tool => tool.ProviderId == "preset.feature.documents" && tool.Definition.Spec.Id == "doc.read" && tool.Definition.Spec.Executor == "documents.actions")
+                && tools.Any(tool => tool.ProviderId == "preset.feature.digest" && tool.Definition.Spec.Id == "chat.digest" && tool.Definition.Spec.Executor == "digest.actions")
+                && tools.Count(tool => tool.ProviderId == "preset.feature.knowledge" && tool.Definition.Spec.Executor == "knowledge.actions") == 4
+                && tools.Count(tool => tool.ProviderId == "preset.feature.scheduler" && tool.Definition.Spec.Executor == "scheduler.actions") == 4
+                && tools.Any(tool => tool.ProviderId == "preset.feature.scheduler" && tool.Definition.Spec.Id == "reminder.create")
+                && tools.Count(tool => tool.ProviderId == "preset.feature.personal-todo" && tool.Definition.Spec.Executor == "todo.actions") == 4
+                && tools.Any(tool => tool.ProviderId == "preset.feature.personal-todo" && tool.Definition.Spec.Id == "todo.complete"),
+                "actual default packages supply research, documents, digest, knowledge, scheduler, and personal-todo tools with isolated executors");
             Check(model.Calls == 0 && pages.Calls == 0, "tool discovery performs no model or page IO");
             var search = tools.Single(tool => tool.Definition.Spec.Id == "web.search");
             var read = tools.Single(tool => tool.Definition.Spec.Id == "web.read");
@@ -75,15 +84,18 @@ internal partial class Program
                 && page.AuditDetail!.StartsWith("chars=") && facade.TakeNote("synthetic:tools") is not null,
                 "package page tool uses bounded transport and preserves notes");
             registry.SetEnabled(researchId, false);
-            Check(registry.GetTools().Length == 0 && !search.IsReady, "disabled package has no visible tools");
+            Check(registry.GetTools().All(t => t.ProviderId != researchId) && registry.GetTools().Length == 14 && !search.IsReady,
+                "disabled package has no visible tools while sibling tool packages stay online");
             await Reject(() => search.ExecuteAsync("synthetic:tools", new("web.search", new() { ["query"] = "synthetic query" })),
                 "plugin_contribution_unavailable");
             registry.SetEnabled(researchId, true);
-            Check(registry.GetTools().Length == 2, "re-enabling the same initialized instance restores its declarations");
+            Check(registry.GetTools().Length == 16 && registry.GetTools().Count(t => t.ProviderId == researchId) == 2,
+                "re-enabling the same initialized instance restores its declarations");
             await registry.RemoveAsync(researchId);
-            Check(registry.GetTools().Length == 0 && !search.IsReady, "uninstall removes directory and closes captured bindings");
-            Check(AssemblyLoadContext.Default.Assemblies.All(assembly => assembly.GetName().Name != "BotAgent.Package.WebSearch"),
-                "tool use never loads research business into Default");
+            Check(registry.GetTools().All(t => t.ProviderId != researchId) && registry.GetTools().Length == 14 && !search.IsReady,
+                "uninstall removes directory and closes captured bindings");
+            Check(AssemblyLoadContext.Default.Assemblies.All(assembly => assembly.GetName().Name is not ("BotAgent.Package.WebSearch" or "BotAgent.Package.Documents" or "BotAgent.Package.Digest" or "BotAgent.Package.Knowledge" or "BotAgent.Package.Scheduler" or "BotAgent.Package.PersonalTodo")),
+                "tool use never loads package business into Default");
         }
         finally { flags.SetPluginEnabled(researchId, previousFlag); }
 

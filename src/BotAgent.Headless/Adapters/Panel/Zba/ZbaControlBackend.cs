@@ -14,8 +14,53 @@ namespace BotAgent.Adapters.Panel.Zba;
 /// <summary>Authenticated recovery remains available before and without a business backend.</summary>
 internal sealed partial class ZbaControlBackend : IZbaBackend, IZbaHttpContributions
 {
-    public IReadOnlyList<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>> HttpContributions
-        => [QuotaHttpContract.Bind<ConfigurationCaller>(ListQuotasAsync, SaveQuotaAsync, FindQuotaAsync)];
+    public IReadOnlyList<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>> HttpContributions =>
+    [
+        QuotaHttpContract.Bind<ConfigurationCaller>(ListQuotasAsync, SaveQuotaAsync, FindQuotaAsync),
+        McpHttpContract.Bind<ConfigurationCaller>(
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ListMcpServersAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "mcp_management_unavailable", "MCP 管理不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.SaveMcpServerAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "mcp_management_unavailable", "MCP 管理不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.DeleteMcpServerAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "mcp_management_unavailable", "MCP 管理不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.TestMcpServerAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "mcp_management_unavailable", "MCP 管理不可用。"),
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ReloadMcpServersAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "mcp_management_unavailable", "MCP 管理不可用。")),
+        AccessRoleHttpContract.Bind<ConfigurationCaller>(
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ListAccessRolesAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "access_roles_unavailable", "权限绑定管理不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.SaveAccessRolesAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "access_roles_unavailable", "权限绑定管理不可用。")),
+        SchedulerHttpContract.Bind<ConfigurationCaller>(
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ListScheduledJobsAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "scheduler_unavailable", "定时引擎不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.SaveScheduledJobAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "scheduler_unavailable", "定时引擎不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.DeleteScheduledJobAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "scheduler_unavailable", "定时引擎不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ListScheduledRunsAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "scheduler_unavailable", "定时引擎不可用。")),
+        PersonalTodoHttpContract.Bind<ConfigurationCaller>(
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ListPersonalTodosAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "personal_todo_unavailable", "个人待办不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.SavePersonalTodoAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "personal_todo_unavailable", "个人待办不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.DeletePersonalTodoAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "personal_todo_unavailable", "个人待办不可用。")),
+        WorkspaceHttpContract.Bind<ConfigurationCaller>(
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ReadWorkspaceMessagesAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "workspace_unavailable", "个人工作台不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.SendWorkspaceMessageAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "workspace_unavailable", "个人工作台不可用。"),
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ClearWorkspaceMessagesAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "workspace_unavailable", "个人工作台不可用。"),
+            (c, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ReadWorkspaceIdentityAsync(c, ct)
+                ?? throw new ZbaBackendException(503, "workspace_unavailable", "个人工作台不可用。"),
+            (c, req, ct) => (RequireBusiness(ct) as ZbaHostBackend)?.ToggleWorkspaceIdentityAsync(c, req, ct)
+                ?? throw new ZbaBackendException(503, "workspace_unavailable", "个人工作台不可用。"))
+    ];
 
     private readonly ConfigurationStore _configuration;
     private readonly SettingsHotReload.ConfigurationRequestAuthorization _authorization;

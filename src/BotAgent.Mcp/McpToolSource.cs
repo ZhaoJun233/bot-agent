@@ -20,7 +20,7 @@ namespace BotAgent.Mcp;
 /// 防止调用方绕过（纵深防御）。不创建 socket：<see cref="HttpClient" /> 由宿主从唯一出网点注入，
 /// 因而 SSRF 连接回调、DNS 固定与认证边界都沿用宿主那一套。
 /// </summary>
-public sealed class McpToolSource : IMcpToolSource
+public sealed class McpToolSource : IMcpToolSource, IAsyncDisposable
 {
     private const string ProtocolVersion = "2025-11-25";
     private const int MaxConcurrentCalls = 8;
@@ -35,6 +35,7 @@ public sealed class McpToolSource : IMcpToolSource
     private readonly Dictionary<string, ServerState> _states = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Route> _routes = new(StringComparer.Ordinal);
     private readonly object _routeGate = new();
+    private readonly string _generation = Guid.NewGuid().ToString("N");
     private int _disposed;
 
     public McpToolSource(IReadOnlyList<McpServerOptions> servers, HttpClient http, Action<string>? log = null)
@@ -49,6 +50,13 @@ public sealed class McpToolSource : IMcpToolSource
     }
 
     public bool Enabled => Volatile.Read(ref _disposed) == 0 && _servers.Count > 0;
+
+    public bool IsToolCurrent(McpToolInfo tool)
+        => tool is not null
+           && Volatile.Read(ref _disposed) == 0
+           && !tool.IsLocalProcess
+           && string.Equals(tool.SourceGeneration, _generation, StringComparison.Ordinal)
+           && _routes.ContainsKey(tool.QualifiedName);
 
     public McpConnectionState State
     {
@@ -417,13 +425,20 @@ public sealed class McpToolSource : IMcpToolSource
             return null;
         }
 
+        var readOnlyConfirmed = server.ReadOnlyTools is { Count: > 0 } declaredReadOnly
+            && declaredReadOnly.Any(item =>
+                string.Equals(item?.Trim(), tool.Name, StringComparison.Ordinal)
+                || string.Equals(item?.Trim(), qualified, StringComparison.Ordinal));
+
         return new McpToolInfo(
             tool.Name,
             qualified,
             description,
             schema,
             server.Id,
-            tool.ProtocolTool.Annotations?.ReadOnlyHint == true);
+            tool.ProtocolTool.Annotations?.ReadOnlyHint == true,
+            SourceGeneration: _generation,
+            ReadOnlyConfirmed: readOnlyConfirmed);
     }
 
     private static string Qualify(string serverId, string toolName, HashSet<string> claimed)
@@ -437,8 +452,8 @@ public sealed class McpToolSource : IMcpToolSource
             return candidate;
         }
 
-        // 清洗后重名：加一个稳定的短哈希，不改变远端原名。
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(toolName)))[..6].ToLowerInvariant();
+        // 清洗后重名：加一个稳定的短哈希（纳入 serverId 防跨 ID 大小写碰撞），不改变远端原名。
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(serverId + "\0" + toolName)))[..6].ToLowerInvariant();
         candidate = baseName + "." + hash;
         claimed.Add(candidate);
         return candidate;

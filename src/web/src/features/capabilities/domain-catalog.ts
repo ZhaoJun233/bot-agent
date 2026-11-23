@@ -18,7 +18,7 @@ import {
 } from '../../shared/friendly'
 import type { AppIconName } from '../../shared/ui/AppIcon.vue'
 import { platformDriverMeta } from '../platforms/driver-registry'
-import { settingsFor } from './plugin-settings'
+import { settingsFor, type DriverCredentialMode } from './plugin-settings'
 
 export interface SystemPackageModel {
   id: string
@@ -56,6 +56,8 @@ export interface PlatformChannelModel {
   icon: AppIconName
   configScope: string
   supportsMessagingInspection: boolean
+  credentialMode: DriverCredentialMode
+  credentialHint: string | null
   descriptor: ZbaManagedDescriptor
   driverPackage: SystemPackageModel | null
   policy: ZbaPlatformPolicyEntryView | undefined
@@ -318,6 +320,8 @@ export function buildDomainCatalog(
       icon: driverMeta.icon || platformIcon(platformId),
       configScope: driverMeta.configScope,
       supportsMessagingInspection: driverMeta.supportsMessagingInspection,
+      credentialMode: driverMeta.credentialMode,
+      credentialHint: driverMeta.credentialHint ?? null,
       descriptor,
       driverPackage,
       policy

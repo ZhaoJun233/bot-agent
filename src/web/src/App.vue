@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AuthGate from './features/auth/AuthGate.vue'
 import OverviewPage from './features/overview/OverviewPage.vue'
+import WorkspacePage from './features/workspace/WorkspacePage.vue'
 import ProvidersPage from './features/providers/ProvidersPage.vue'
 import PlatformsPage from './features/platforms/PlatformsPage.vue'
 import PluginsPage from './features/plugins/PluginsPage.vue'
@@ -26,6 +27,7 @@ import { registerAppResources, resetAppResourceSignals } from './shared/sync/app
 
 export type AppView =
   | 'overview'
+  | 'workspace'
   | 'providers'
   | 'platforms'
   | 'plugins'
@@ -94,14 +96,17 @@ const tracesPage = ref<InstanceType<typeof TracesPage> | null>(null)
 const tracesMounted = ref(false)
 const logsPage = ref<InstanceType<typeof RuntimeLogsPage> | null>(null)
 const logsMounted = ref(false)
+const workspacePage = ref<InstanceType<typeof WorkspacePage> | null>(null)
+const workspaceMounted = ref(false)
 
 const sessionNotice = ref<string | null>(null)
 const configDraftCount = computed(() => configurationPage.value?.draftCount ?? 0)
 const providersDraftCount = computed(() => providersPage.value?.draftCount ?? 0)
 const platformsDraftCount = computed(() => platformsPage.value?.draftCount ?? 0)
 const pluginsDraftCount = computed(() => pluginsPage.value?.draftCount ?? 0)
+const workspaceDraftCount = computed(() => workspacePage.value?.draftCount ?? 0)
 const totalDraftCount = computed(() =>
-  configDraftCount.value + providersDraftCount.value + platformsDraftCount.value + pluginsDraftCount.value
+  configDraftCount.value + providersDraftCount.value + platformsDraftCount.value + pluginsDraftCount.value + workspaceDraftCount.value
 )
 
 const pageGuides: Record<AppView, { title: string; group: string; icon: AppIconName; summary: string; tips: string[] }> = {
@@ -114,6 +119,17 @@ const pageGuides: Record<AppView, { title: string; group: string; icon: AppIconN
       '顶部状态栏展示总体健康结论与备份健康告警。',
       '点击组件状态表中的条目可直接跳转至对应的模型供应商、消息平台或插件页面。',
       '右上角顶栏支持在任意页面随时切入或退出管理员模式。'
+    ]
+  },
+  workspace: {
+    title: '个人工作台',
+    group: '工作台',
+    icon: 'spark',
+    summary: '本人专属工作台对话、受控文档问答、个人待办、定时提醒与跨平台身份绑定开关（与群聊物理隔离）。',
+    tips: [
+      '工作台仅读写 workspace:owner 本人专属会话，不访问或展示任何 QQ/飞书群聊正文。',
+      '带截止时间的个人待办会自动挂接一次性定时提醒，完成或删除时自动级联取消。',
+      '跨平台本人身份关联默认关闭；仅显式开启并双向确认后共享指定个人数据。'
     ]
   },
   providers: {
@@ -222,6 +238,7 @@ function clearSession(noticeOverride?: string): void {
   tasksMounted.value = false
   tracesMounted.value = false
   logsMounted.value = false
+  workspaceMounted.value = false
   sessionGeneration += 1
   token.value = ''
   mode.value = 'read'
@@ -344,6 +361,7 @@ async function refresh(): Promise<void> {
   if (view.value === 'tasks') { await tasksPage.value?.reload(); return }
   if (view.value === 'traces') { await tracesPage.value?.reload(); return }
   if (view.value === 'logs') { await logsPage.value?.reload(); return }
+  if (view.value === 'workspace') { await workspacePage.value?.reload(); return }
   await load()
 }
 
@@ -358,6 +376,7 @@ async function allowNavigation(event?: MouseEvent): Promise<boolean> {
   if (view.value === 'providers') return await providersPage.value?.requestLeave('navigate', trigger) ?? true
   if (view.value === 'platforms') return await platformsPage.value?.requestLeave('navigate', trigger) ?? true
   if (view.value === 'plugins') return await pluginsPage.value?.requestLeave('navigate', trigger) ?? true
+  if (view.value === 'workspace') return await workspacePage.value?.requestLeave('navigate', trigger) ?? true
   return true
 }
 
@@ -366,6 +385,7 @@ function discardActiveSecrets(): void {
   platformsPage.value?.discardSecretsOnLeave()
   pluginsPage.value?.discardSecretsOnLeave()
   configurationPage.value?.discardSecretsOnLeave()
+  workspacePage.value?.discardSecretsOnLeave()
 }
 
 async function navigateTo(target: AppView, event?: MouseEvent, ownerId?: string): Promise<void> {
@@ -438,6 +458,14 @@ async function navigateTo(target: AppView, event?: MouseEvent, ownerId?: string)
   if (target === 'logs') {
     logsMounted.value = true
     view.value = 'logs'
+    return
+  }
+  if (target === 'workspace') {
+    const first = !workspaceMounted.value
+    workspaceMounted.value = true
+    view.value = 'workspace'
+    await nextTick()
+    if (!first) await workspacePage.value?.reload()
   }
 }
 
@@ -454,9 +482,11 @@ const openConfiguration = (event?: MouseEvent) => navigateTo('configuration', ev
 const openTasks = (event?: MouseEvent) => navigateTo('tasks', event)
 const openTraces = (event?: MouseEvent) => navigateTo('traces', event)
 const openLogs = (event?: MouseEvent) => navigateTo('logs', event)
+const openWorkspace = (event?: MouseEvent) => navigateTo('workspace', event)
 
 defineExpose({
   showOverview,
+  openWorkspace,
   openProviders,
   openPlatforms,
   openPlugins,
@@ -478,7 +508,7 @@ async function navigateFromOverview(
 
 async function lock(event?: MouseEvent): Promise<void> {
   const trigger = navTrigger(event)
-  for (const page of [configurationPage.value, providersPage.value, platformsPage.value, pluginsPage.value]) {
+  for (const page of [configurationPage.value, providersPage.value, platformsPage.value, pluginsPage.value, workspacePage.value]) {
     if (page && !(await page.requestLeave('lock', trigger))) return
   }
   const hadDrafts = totalDraftCount.value > 0
@@ -536,7 +566,7 @@ async function enableAdmin(): Promise<void> {
 
 async function disableAdmin(event?: MouseEvent): Promise<void> {
   const trigger = navTrigger(event)
-  for (const page of [configurationPage.value, providersPage.value, platformsPage.value, pluginsPage.value]) {
+  for (const page of [configurationPage.value, providersPage.value, platformsPage.value, pluginsPage.value, workspacePage.value]) {
     if (page && !(await page.requestLeave('downgrade', trigger))) return
   }
   mode.value = 'read'
@@ -639,6 +669,18 @@ onBeforeUnmount(() => {
           >
             <AppIcon name="overview" />
             <span class="side-nav-text"><span>系统概览</span></span>
+          </button>
+          <button
+            type="button"
+            class="side-nav-item"
+            :title="rail ? '个人工作台' : undefined"
+            :class="{ active: view === 'workspace' }"
+            :aria-current="view === 'workspace' ? 'page' : undefined"
+            data-testid="nav-workspace"
+            @click="navigateTo('workspace', $event)"
+          >
+            <AppIcon name="spark" />
+            <span class="side-nav-text"><span>个人工作台</span></span>
           </button>
 
           <p class="side-nav-group" aria-hidden="true">接入与扩展</p>
@@ -905,6 +947,18 @@ onBeforeUnmount(() => {
             :client="client"
             :active="view === 'logs'"
             @auth-expired="onAuthExpired"
+          />
+          <WorkspacePage
+            v-if="workspaceMounted"
+            v-show="view === 'workspace'"
+            ref="workspacePage"
+            :client="client"
+            :mode="mode"
+            :writes-enabled="compatibility.writesEnabled"
+            :active="view === 'workspace'"
+            @enable-admin="enableAdmin"
+            @auth-expired="onAuthExpired"
+            @busy="value => { if (view === 'workspace') subviewBusy = value }"
           />
         </main>
       </div>

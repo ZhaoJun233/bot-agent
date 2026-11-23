@@ -59,6 +59,8 @@ internal static class Program
         await RunAsync("J. sessions", () => SessionChecksAsync());
         await RunAsync("K. plugin marketplace / provider discovery", () => PluginChecksAsync());
         await RunAsync("M. turn traces", () => TraceChecksAsync(backend, endpoint));        await RunAsync("L. quota management contract", () => QuotaChecksAsync());
+        await RunAsync("Phase 4 MCP & RBAC contracts", () => Phase4ZbaChecks.RunAsync((value, label) => Check(label, value)));
+        await RunAsync("Phase 5 Scheduler, Todo & Workspace contracts", () => Phase5ZbaChecks.RunAsync((value, label) => Check(label, value)));
 
         Console.WriteLine();
         Console.WriteLine($"passed={_passed} failed={_failed} skipped={_skipped}");
@@ -1399,11 +1401,19 @@ internal sealed partial class SyntheticZbaBackend : IZbaBackend, IZbaHttpContrib
             _ => new ZbaApprovalDecisionResult(true, approve ? "approved" : "rejected", "ok")
         });
 
+    public List<ZbaEvent> ExtraEvents { get; } = new();
+
     public ValueTask<ZbaEventPage> ReadEventsAsync(
         ConfigurationCaller caller, long after, int limit, CancellationToken ct = default)
     {
         LastAfter = after;
         LastEventLimit = limit;
+        if (ExtraEvents.Count > 0)
+        {
+            var filtered = ExtraEvents.Where(e => e.Sequence > after).Take(limit).ToImmutableArray();
+            var nextSeq = ExtraEvents[^1].Sequence;
+            return ValueTask.FromResult(new ZbaEventPage(filtered, nextSeq, false, Program.FixedNow));
+        }
         return ValueTask.FromResult(new ZbaEventPage(
             ImmutableArray.Create(new ZbaEvent(after + 1, "task.state", Program.FixedNow, "task-1", "running", "8", null)),
             after + 1, true, Program.FixedNow));

@@ -24,6 +24,10 @@ internal static class PluginSharedContractRegistry
     internal static bool IsHostContract(PluginSharedContract contract)
         => HostContracts.Value.TryGetValue(contract.Name, out var host) && Same(host, contract);
 
+    internal static bool IsKnownHostContractIdentity(PluginSharedContract contract)
+        => HostContracts.Value.TryGetValue(contract.Name, out var host)
+            && host.Name == contract.Name && host.Version == contract.Version && host.Owner == contract.Owner;
+
     internal static IReadOnlyDictionary<string, Assembly> Bind(string directory, PluginPackageManifest manifest)
     {
         var contracts = manifest.SharedContracts ?? [];

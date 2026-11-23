@@ -1,0 +1,55 @@
+{
+  "id": "preset.feature.knowledge",
+  "entryAssembly": "BotAgent.Package.Knowledge.dll",
+  "entryType": "BotAgent.Packages.Knowledge.KnowledgePackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "toolApiVersion": 1,
+  "permissions": [
+    "tools.execute"
+  ],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Knowledge.Contracts",
+      "owner": "preset.feature.knowledge"
+    }
+  ],
+  "settings": [
+    {
+      "key": "maxDocsPerScope",
+      "label": "单会话最大文档数（上限 256）",
+      "type": "number",
+      "defaultValue": "256",
+      "required": false,
+      "numberConstraints": {
+        "minimum": 16,
+        "maximum": 256,
+        "integer": true
+      }
+    },
+    {
+      "key": "maxChunkChars",
+      "label": "分块最大字符数",
+      "type": "number",
+      "defaultValue": "800",
+      "required": false,
+      "numberConstraints": {
+        "minimum": 200,
+        "maximum": 1600,
+        "integer": true
+      }
+    },
+    {
+      "key": "defaultTopK",
+      "label": "默认检索返回片段数",
+      "type": "number",
+      "defaultValue": "4",
+      "required": false,
+      "numberConstraints": {
+        "minimum": 1,
+        "maximum": 10,
+        "integer": true
+      }
+    }
+  ]
+}

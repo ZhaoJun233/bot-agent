@@ -92,11 +92,27 @@ function formatDate(value: string | undefined | null): string {
 
 function reasonText(code: string | undefined | null): string | null {
   if (!code) return null
+  if (code === 'governance_query_failed') return '统一记忆治理状态读取失败'
+  if (code.includes('confirmed=') && code.includes('pending=')) {
+    const parts = new Map<string, string>()
+    for (const item of code.split(';')) {
+      const idx = item.indexOf('=')
+      if (idx > 0) parts.set(item.slice(0, idx), item.slice(idx + 1))
+    }
+    const confirmed = Number(parts.get('confirmed') ?? '0')
+    const pending = Number(parts.get('pending') ?? '0')
+    const suppressed = Number(parts.get('suppressed') ?? '0')
+    if (Number.isFinite(confirmed) && Number.isFinite(pending) && Number.isFinite(suppressed)) {
+      return `已确认 ${confirmed} · 待确认 ${pending} · 抑制 ${suppressed}`
+    }
+  }
   const label = errorName(code) ?? reasonLabel(code)
   return label === code ? null : label
 }
 
 function targetForComponent(component: ZbaComponent): { target: OverviewNavTarget; ownerId?: string } | null {
+  if (component.kind === 'governance' || component.id === 'unified-memory') return { target: 'configuration' }
+  if (component.kind === 'task') return { target: 'tasks' }
   if (component.kind === 'provider' || component.kind === 'model') return { target: 'providers' }
   if (component.kind === 'driver' || component.kind === 'platform') return { target: 'platforms' }
   if (component.kind === 'backup') return { target: 'logs' }

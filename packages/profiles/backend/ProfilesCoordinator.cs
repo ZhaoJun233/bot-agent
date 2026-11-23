@@ -141,11 +141,7 @@ public sealed class ProfilesCoordinator : IProfilesRuntimeContribution, IDisposa
                     }
 
                     var current = _ports.ReadSummarySettings();
-                    var text = await _ports.SummarizePersonaAsync(
-                        string.IsNullOrWhiteSpace(c.Name) ? $"QQ{c.Uid}" : c.Name,
-                        c.ExistingSummary,
-                        c.NewMessages,
-                        current.MaxChars).ConfigureAwait(false);
+                    var text = await _ports.SummarizeCandidateAsync(c, current.MaxChars).ConfigureAwait(false);
 
                     if (string.IsNullOrWhiteSpace(text))
                     {
@@ -158,9 +154,10 @@ public sealed class ProfilesCoordinator : IProfilesRuntimeContribution, IDisposa
                         return;
                     }
 
-                    _ports.ApplySummary(c.Uid, c.Scope, text, c.ThroughSeq, c.FoldedCount);
+                    if (!_ports.TryApplySummary(c.Uid, c.Scope, text, c.ThroughSeq, c.FoldedCount))
+                        continue;
                     Interlocked.Increment(ref _summaryDoneCount);
-                    _ports.Log($"画像已生成：{c.Name}({c.Uid}) @ {c.Scope}（{c.NewMessages.Length} 条 → {text.Length} 字）");
+                    _ports.Log($"画像已生成：{MaskLogToken(c.Name)}({MaskLogToken(c.Uid)}) @ {MaskLogToken(c.Scope)}（{c.NewMessages.Length} 条 → {text.Length} 字）");
                 }
                 catch (ObjectDisposedException)
                 {
@@ -169,7 +166,7 @@ public sealed class ProfilesCoordinator : IProfilesRuntimeContribution, IDisposa
                 catch (Exception ex)
                 {
                     Interlocked.Increment(ref _summaryFailCount);
-                    _ports.LogInternal($"画像摘要失败 {c.Uid}@{c.Scope}: {ex.Message}");
+                    _ports.LogInternal($"画像摘要失败 {MaskLogToken(c.Uid)}@{MaskLogToken(c.Scope)}: {ex.Message}");
                 }
                 finally
                 {
@@ -209,5 +206,14 @@ public sealed class ProfilesCoordinator : IProfilesRuntimeContribution, IDisposa
         }
 
         StopSummaryTimer();
+    }
+
+    private static string MaskLogToken(string? value)
+    {
+        var s = value?.Trim() ?? string.Empty;
+        if (s.Length == 0) return "*";
+        if (s.Length <= 2) return s[0] + "*";
+        if (s.Length <= 6) return $"{s[0]}***{s[^1]}";
+        return $"{s[..3]}***{s[^2..]}";
     }
 }

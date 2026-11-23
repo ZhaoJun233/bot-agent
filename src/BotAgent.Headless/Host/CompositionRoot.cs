@@ -70,10 +70,14 @@ internal sealed record AppGraph(
     PlatformDriverOperations DriverOperations,
     ManagedCapabilityBinding Management,
     McpRuntime? Mcp,
-    ZbaRuntime? Zba) : IAsyncDisposable
+    ZbaRuntime? Zba,
+    BotAgent.Engine.Runtime.AgentTaskRuntime? TaskRuntime = null,
+    McpToolUseCase? McpUseCase = null,
+    BotAgent.Engine.Scheduler.ScheduledJobRunner? ScheduledJobs = null) : IAsyncDisposable
 {
     internal PluginManager Plugins => PluginRuntime.Registry;
     internal bool OwnsPluginRuntime { get; init; } = true;
+    internal IReadOnlyList<IDisposable> OwnedTransports { get; init; } = Array.Empty<IDisposable>();
     private readonly object _disposeGate = new();
     private Task? _disposeTask;
     public ValueTask DisposeAsync()
@@ -85,8 +89,9 @@ internal sealed record AppGraph(
         var failures = new List<Exception>();
         try { Web.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { await Background.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
-        try { if (Mcp is not null) await Mcp.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
+        try { if (ScheduledJobs is not null) await ScheduledJobs.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { if (Zba is not null) await Zba.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
+        try { if (TaskRuntime is not null) await TaskRuntime.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { HealthReports.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { Backups.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { await Management.StopAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
@@ -94,6 +99,11 @@ internal sealed record AppGraph(
         try { Agent.Dispose(); } catch (Exception exception) { failures.Add(exception); }
         try { if (OwnsPluginRuntime) await PluginRuntime.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
         try { (Source as IDisposable)?.Dispose(); } catch (Exception exception) { failures.Add(exception); }
+        try { if (Mcp is not null) await Mcp.DisposeAsync().ConfigureAwait(false); } catch (Exception exception) { failures.Add(exception); }
+        foreach (var transport in OwnedTransports)
+        {
+            try { transport.Dispose(); } catch (Exception exception) { failures.Add(exception); }
+        }
         if (failures.Count > 0) throw new AggregateException("host_shutdown_incomplete", failures);
     }
 }
@@ -189,6 +199,7 @@ internal static partial class CompositionRoot
     {
         public AppSettings Settings { get; set; } = settings;
         public ZbaControlPlane? ControlPlane { get; set; }
+        public List<IDisposable> OwnedTransports { get; } = [];
 
         // ① AssembleCore：配置发布点与全进程共用的无状态服务
         public SettingsBox Box { get; set; } = null!;
@@ -219,11 +230,13 @@ internal static partial class CompositionRoot
 
         // ③ AssembleModel：模型客户端与媒体件
         public ToolCircuitBreaker TtsBreaker { get; set; } = null!;
+        public ToolCircuitBreaker SttBreaker { get; set; } = null!;
         public ToolCircuitBreaker SearchBreaker { get; set; } = null!;
         public OpenAiClient Brain { get; set; } = null!;
         public ConversationStore Store { get; set; } = null!;
         public MemberProfileStore Profiles { get; set; } = null!;
         public IUnifiedMemory UnifiedMemory { get; set; } = null!;
+        public bool MemoryAdminConfigured { get; set; }
         public BotAgent.Services.Memory.UnifiedMemoryCommandService MemoryCommands { get; set; } = null!;
         public StickerService Stickers { get; set; } = null!;
         public VoiceUseCase Voice { get; set; } = null!;
@@ -242,6 +255,8 @@ internal static partial class CompositionRoot
         public ThrottledLog Throttled { get; set; } = null!;
         public TurnTraceStore Traces { get; set; } = null!;
         public AuditLogStore Audit { get; set; } = null!;
+        public StorageModule.BotAgent.Storage.McpServerStore McpStore { get; set; } = null!;
+        public McpManagedWiring? McpManaged { get; set; }
         public McpWiring Mcp { get; set; } = null!;
         public PlainSender Plain { get; set; } = null!;
         public VibeTracker Vibes { get; set; } = null!;
@@ -249,14 +264,35 @@ internal static partial class CompositionRoot
         public ParticipationUseCase Participation { get; set; } = null!;
         public PokeUseCase Poke { get; set; } = null!;
         public SessionPolicyLedger SessionPolicies { get; set; } = null!;
+        public StorageModule.BotAgent.Storage.AccessRoleStore AccessRoleStore { get; set; } = null!;
+        public AccessRoleResolver AccessRoles { get; set; } = null!;
         public ApprovalUseCase Approvals { get; set; } = null!;
 
         // ⑤ AssembleTools：插件门禁、agent 命令、后台评估队列
         public PluginManager Plugins { get; set; } = null!;
         public PluginGate PluginGate { get; set; } = null!;
+        public Services.Documents.DocumentHostPortsAdapter DocumentPorts { get; set; } = null!;
+        public Services.Knowledge.KnowledgeHostPortsAdapter KnowledgePorts { get; set; } = null!;
+        public Services.Knowledge.KnowledgeCommandService KnowledgeCommands { get; set; } = null!;
+        public StorageModule.BotAgent.Storage.IdentityLinkStore IdentityLinkStore { get; set; } = null!;
+        public BotAgent.Engine.Identity.IdentityLinkService IdentityLinks { get; set; } = null!;
+        public Services.Identity.IdentityCommandService IdentityCommands { get; set; } = null!;
+        public StorageModule.BotAgent.Storage.ScheduledJobStore ScheduledJobStore { get; set; } = null!;
+        public Services.Scheduler.SchedulerHostPortsAdapter SchedulerPorts { get; set; } = null!;
+        public Services.Scheduler.SchedulerCommandService SchedulerCommands { get; set; } = null!;
+        public StorageModule.BotAgent.Storage.PersonalTodoStore PersonalTodoStore { get; set; } = null!;
+        public Services.Todo.PersonalTodoHostPortsAdapter TodoPorts { get; set; } = null!;
+        public Services.Todo.PersonalTodoCommandService TodoCommands { get; set; } = null!;
+        public StorageModule.BotAgent.Storage.WorkspaceConversationStore WorkspaceStore { get; set; } = null!;
+        public BotAgent.Engine.Scheduler.ScheduledJobRunner? ScheduledJobs { get; set; }
+        public Action? NotifyWorkspaceAppended { get; set; }
+        public Services.Memory.ScopedCommunityMemoryService CommunityMemory { get; set; } = null!;
+        public Services.Profiles.AttestedProfileProvenanceRegistry ProfileProvenance { get; set; } = null!;
         public AgentSessionStore Sessions { get; set; } = null!;
         public ServerAgentRunner ServerAgent { get; set; } = null!;
         public AgentCommandService AgentCmds { get; set; } = null!;
+        public BotAgent.Engine.Runtime.AgentTaskRuntime? TaskRuntime { get; set; }
+        public Func<BotAgent.Domain.Agent.AgentTaskRequest, BotAgent.Domain.Agent.AgentTaskRequest>? TaskPrepare { get; set; }
         public BackgroundEvaluatorQueue Background { get; set; } = null!;
 
         // ⑥ AssembleReply：回复主链、调度、热更新扇出、宿主
@@ -300,6 +336,7 @@ internal static partial class CompositionRoot
             Require(DriverOperations, "Channels.DriverOperations");
             Require(PlatformPolicies, "Channels.PlatformPolicies");
             Require(TtsBreaker, "Model.TtsBreaker");
+            Require(SttBreaker, "Model.SttBreaker");
             Require(SearchBreaker, "Model.SearchBreaker");
             Require(Brain, "Model.Brain");
             Require(Store, "Model.Store");
@@ -325,6 +362,7 @@ internal static partial class CompositionRoot
             Require(Participation, "Stores.Participation");
             Require(Poke, "Stores.Poke");
             Require(SessionPolicies, "Stores.SessionPolicies");
+            Require(AccessRoles, "Stores.AccessRoles");
             Require(Approvals, "Stores.Approvals");
             Require(Plugins, "Tools.Plugins");
             Require(PluginGate, "Tools.PluginGate");
@@ -345,7 +383,10 @@ internal static partial class CompositionRoot
             Require(Web, "Surface.Web");
             Require(Management, "Surface.Management");
             return new AppGraph(Settings, Box, Source, Gateway, Official, Brain, Agent, BootReport, LoginQr,
-                HealthReports, Backups, Web, PluginRuntime, Background, DriverOperations, Management, Mcp.Runtime, Zba);
+                HealthReports, Backups, Web, PluginRuntime, Background, DriverOperations, Management, Mcp.Runtime, Zba, TaskRuntime, Mcp.UseCase, ScheduledJobs)
+            {
+                OwnedTransports = OwnedTransports.ToArray()
+            };
         }
 
         private static void Require(object? value, string member)

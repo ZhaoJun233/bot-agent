@@ -96,14 +96,20 @@ internal static partial class CompositionRoot
         var failures = new List<Exception>();
         try { a.Web?.Dispose(); } catch (Exception error) { failures.Add(error); }
         try { if (a.Background is not null) await a.Background.StopAsync(); } catch (Exception error) { failures.Add(error); }
-        try { if (a.Mcp?.Runtime is { } mcp) await mcp.DisposeAsync(); } catch (Exception error) { failures.Add(error); }
+        try { if (a.ScheduledJobs is not null) await a.ScheduledJobs.DisposeAsync(); } catch (Exception error) { failures.Add(error); }
         try { if (a.Zba is not null) await a.Zba.DisposeAsync(); } catch (Exception error) { failures.Add(error); }
+        try { if (a.TaskRuntime is not null) await a.TaskRuntime.DisposeAsync(); } catch (Exception error) { failures.Add(error); }
         try { a.HealthReports?.Dispose(); } catch (Exception error) { failures.Add(error); }
         try { a.Backups?.Dispose(); } catch (Exception error) { failures.Add(error); }
         try { if (a.Management is not null) await a.Management.StopAsync(); } catch (Exception error) { failures.Add(error); }
         try { if (a.Management is not null) await a.Management.DisposeAsync(); } catch (Exception error) { failures.Add(error); }
         try { a.Agent?.Dispose(); } catch (Exception error) { failures.Add(error); }
         try { (a.Source as IDisposable)?.Dispose(); } catch (Exception error) { failures.Add(error); }
+        try { if (a.Mcp?.Runtime is { } mcp) await mcp.DisposeAsync(); } catch (Exception error) { failures.Add(error); }
+        foreach (var transport in a.OwnedTransports)
+        {
+            try { transport.Dispose(); } catch (Exception error) { failures.Add(error); }
+        }
         if (failures.Count > 0) throw new AggregateException("business_cleanup_incomplete", failures);
     }
 }

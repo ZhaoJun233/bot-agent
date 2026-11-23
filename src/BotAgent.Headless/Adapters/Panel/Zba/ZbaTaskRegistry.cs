@@ -147,15 +147,20 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
                 Prompt = submission.Prompt,
                 Target = target,
                 Timeout = TimeSpan.FromSeconds(submission.TimeoutSeconds),
-                CaptureResult = submission.SourceKey.StartsWith("panel:", StringComparison.Ordinal),
+                CaptureResult = AllowsResultCapture(submission.SourceKey),
                 ToolScope = submission.ToolScope
             };
             // Pin the effective ceiling before the runtime gate and asynchronous dispatch.
             var accepted = _runtime.Submit(_prepare?.Invoke(request) ?? request);
             if (!accepted.Accepted || accepted.Task is null)
             {
-                throw new InvalidOperationException(
-                    "任务运行时拒绝了已通过通道校验的提交：" + accepted.Rejection);
+                _receipts.TryRemove(keyHash);
+                throw accepted.Rejection switch
+                {
+                    AgentTaskRejection.CapacityExceeded => new ZbaBackendException(429, "task_capacity_exceeded", "并发任务已达上限。"),
+                    AgentTaskRejection.Disposed => new ZbaBackendException(503, "zba_stopping", "服务正在停止。"),
+                    _ => new ZbaBackendException(409, "task_rejected", "任务运行时拒绝了本次提交。")
+                };
             }
 
             _idempotency[idempotencyKey] = taskId;
@@ -201,7 +206,7 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
         var available = state == ZbaTaskState.Succeeded && task.ResultSummary is not null;
         var reason = available ? null : state switch
         {
-            ZbaTaskState.Succeeded => task.SourceKey.StartsWith("panel:", StringComparison.Ordinal)
+            ZbaTaskState.Succeeded => AllowsResultCapture(task.SourceKey)
                 ? "no_summary"
                 : "scope_not_allowed",
             ZbaTaskState.Failed or ZbaTaskState.Cancelled or ZbaTaskState.Unknown => "not_succeeded",
@@ -267,6 +272,9 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
 
         return pending;
     }
+
+    /// <summary>查询某审批请求编号是否归属当前任务运行时台账（供 ZbaHostBackend 允许免总开关审批 Python 租约任务）。</summary>
+    internal bool HasApproval(string requestId) => _runtime.HasApproval(requestId);
 
     /// <summary>一次任务级审批决策（#137）：批准 → 恢复执行；拒绝/过期 → 收口成 Cancelled。</summary>
     internal AgentTaskApprovalDecision DecideApproval(string requestId, bool approve)
@@ -376,6 +384,11 @@ internal sealed class ZbaTaskRegistry : IAsyncDisposable
         _runtime.Changed -= OnRuntimeChanged;
         await _runtime.DisposeAsync().ConfigureAwait(false);
     }
+
+    private static bool AllowsResultCapture(string? sourceKey)
+        => !string.IsNullOrEmpty(sourceKey)
+            && (sourceKey.StartsWith("panel:", StringComparison.Ordinal)
+                || string.Equals(sourceKey, "workspace:owner", StringComparison.Ordinal));
 
     private sealed record TaskBinding(string IdempotencyKey, string Hash);
 }

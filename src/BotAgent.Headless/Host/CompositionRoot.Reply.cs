@@ -50,7 +50,14 @@ internal static partial class CompositionRoot
     /// 顺序与以前 BotAgentHost.DeleteConversation 逐字一致（注册表内部那次 ConversationsChanged 仍然先发）。
     /// </summary>
     private static void BindConversationDeletion(ConversationRegistry registry, ReplyPipeline reply,
-        SettingsHotReload settingsHotReload, PanelNotifier ui, PluginManager plugins)
+        SettingsHotReload settingsHotReload, PanelNotifier ui, PluginManager plugins,
+        Services.Documents.DocumentHostPortsAdapter? documentPorts = null,
+        Services.Knowledge.KnowledgeHostPortsAdapter? knowledgePorts = null,
+        Services.Memory.ScopedCommunityMemoryService? communityMemory = null,
+        Services.Profiles.AttestedProfileProvenanceRegistry? profileProvenance = null,
+        Services.Scheduler.IScheduledJobStore? scheduledJobStore = null,
+        BotAgent.Engine.Scheduler.ScheduledJobRunner? scheduledRunner = null,
+        Services.Todo.PersonalTodoHostPortsAdapter? todoPorts = null)
     {
         registry.Deleted += conversation =>
         {
@@ -63,6 +70,21 @@ internal static partial class CompositionRoot
             {
                 key => SafeInvoke(() => reply.ForgetSession(key)),
                 key => SafeInvoke(() => settingsHotReload.ForgetSessionState(key)),
+                key => SafeInvoke(() => documentPorts?.EvictConversation(key)),
+                key => SafeInvoke(() => knowledgePorts?.ClearConversation(key)),
+                key => SafeInvoke(() => todoPorts?.ClearConversation(key)),
+                key => SafeInvoke(() =>
+                {
+                    if (scheduledJobStore is not null)
+                    {
+                        scheduledJobStore.DisableByScope(key, BotAgent.Adapters.Time.Clock.UtcNow.ToUnixTimeSeconds());
+                        scheduledRunner?.NotifyScheduleChanged();
+                    }
+                }),
+                key => SafeInvoke(() => { if (communityMemory is not null) _ = communityMemory.PurgeSourceKeyAsync(key); }),
+                key => SafeInvoke(() => profileProvenance?.RemoveByConversation(key)),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Knowledge.IKnowledgeContribution>("preset.feature.knowledge", out var c)) c?.ClearConversation(key); }),
+                key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Digest.IDigestContribution>("preset.feature.digest", out var c)) c?.ClearConversation(key); }),
                 key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Profiles.IProfilesPolicyContribution>("preset.feature.profiles", out var c)) c?.NotifyConversationDeleted(key); }),
                 key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Stickers.IStickerPolicyContribution>("preset.feature.stickers", out var c)) c?.ClearConversation(key); }),
                 key => SafeInvoke(() => { if (plugins.TryGetContribution<BotAgent.Services.Music.IMusicPolicyContribution>("preset.feature.music", out var c)) c?.ClearConversation(key); }),
@@ -112,13 +134,37 @@ internal static partial class CompositionRoot
             inboundDedup: a.InboundDedup,
             plugins: a.PluginGate,
             background: a.Background, replyPolicies: new PluginReplyPolicies(a.Plugins),
-            unifiedMemory: a.UnifiedMemory, memoryCommand: a.MemoryCommands.TryHandle, memoryParticipant: MemoryParticipant);
+            unifiedMemory: a.UnifiedMemory, memoryCommand: a.MemoryCommands.TryHandle, memoryParticipant: MemoryParticipant,
+            inboundDocuments: a.DocumentPorts,
+            knowledgeCommand: a.KnowledgeCommands.TryHandle,
+            recordProfileProvenance: a.ProfileProvenance.Record,
+            observeCommunityInbound: (m, sk) =>
+            {
+                a.KnowledgePorts.ObserveSourceContext(m, sk);
+                a.TodoPorts.ObserveSourceContext(m, sk);
+                a.CommunityMemory.ObserveInbound(m, sk);
+            },
+            hostTurnContributors: [a.CommunityMemory],
+            accessRoles: a.AccessRoles,
+            schedulerCommand: a.SchedulerCommands.TryHandle,
+            todoCommand: a.TodoCommands.TryHandle,
+            identityCommand: a.IdentityCommands.TryHandle);
         a.Poke.RequestReply = conversation => a.Reply.RequestReply(conversation, null);
+        if (a.UnifiedMemory is not null)
+        {
+            a.UnifiedMemory.Invalidated += _ =>
+            {
+                foreach (var conv in a.Registry.Snapshot())
+                    a.Reply.ClearToolNotes(conv.SourceKey);
+            };
+        }
 
         // 后台巡检（静默兜底 / 画像巡检 / 表情包巡检 / 账号在线探测）
         a.Scheduler = new BotScheduler(a.Box, a.Source, a.Profiles, a.Brain, a.Reply, a.Stickers, a.Ui,
             new BotSchedulerHooks(Log: a.Ui.EmitLog, IsDisposed: () => a.Lifetime.IsDisposed),
-            a.PluginGate.Allows, unifiedMemory: a.UnifiedMemory, plugins: a.Plugins);
+            a.PluginGate.Allows, unifiedMemory: a.UnifiedMemory, plugins: a.Plugins,
+            allowAttestedSummary: () => ReadDeclaredBool(a.PluginRuntime.TryReadEffectiveValues("preset.feature.profiles"), "allowAttestedSummary"),
+            profileProvenance: a.ProfileProvenance);
         a.PluginServices.RegisterForPlugin<BotAgent.Services.Profiles.IProfilesHostPorts>("preset.feature.profiles", a.Scheduler.CreateProfilesHostPorts());
 
         // 配置热更新的扇出（面板保存设置 / 一键部署记住产物地址）：顺序在它内部，见 SettingsHotReload
@@ -126,7 +172,9 @@ internal static partial class CompositionRoot
             a.AgentCmds, a.Brain, a.Reply, a.Scheduler, a.Registry, a.Ui);
 
         // 会话被删 → 把它在各台账里的痕迹一起清掉，见 BindConversationDeletion
-        BindConversationDeletion(a.Registry, a.Reply, a.HotReload, a.Ui, a.Plugins);
+        BindConversationDeletion(a.Registry, a.Reply, a.HotReload, a.Ui, a.Plugins,
+            a.DocumentPorts, a.KnowledgePorts, a.CommunityMemory, a.ProfileProvenance,
+            a.ScheduledJobStore, a.ScheduledJobs, a.TodoPorts);
 
         // 图片地址过期（QQ 的 rkey 有时效）时的重签通道：下载器 → 协议端 get_msg
         // （**只在这里接一次** —— 它与配置无关，不再是"每次保存设置都重接一遍"）

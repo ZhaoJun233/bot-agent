@@ -64,7 +64,7 @@ internal static partial class CompositionRoot
         return (registry, ownLedger, mood, throttled);
     }
 
-    private static bool DriverCredentialConfigured(DriverKey key, AppSettings current)
+    private static bool DriverCredentialConfigured(DriverKey key, AppSettings current, bool feishuLongConnection = false)
     {
         if (key.PlatformId == PlatformId.Local) return false; // No credential is required; readiness is independent.
         if (key.PlatformId == PlatformId.QqPrivate) return !string.IsNullOrWhiteSpace(current.OneBotToken); // Optional token.
@@ -74,7 +74,7 @@ internal static partial class CompositionRoot
         using var transaction = connection.BeginTransaction(deferred: true);
         var metadata = ConfigurationSecretMetadata(connection, current, ImmutableArray<ConfigurationModule.SecretMutation>.Empty);
         var configured = metadata.Any(value => value.Slot == WritableSecretSlot.FeishuAppSecret && value.Configured)
-            && metadata.Any(value => value.Slot is WritableSecretSlot.FeishuEncryptKey or WritableSecretSlot.FeishuVerificationToken && value.Configured);
+            && (feishuLongConnection || metadata.Any(value => value.Slot is WritableSecretSlot.FeishuEncryptKey or WritableSecretSlot.FeishuVerificationToken && value.Configured));
         transaction.Commit();
         return configured;
     }
@@ -128,7 +128,10 @@ internal static partial class CompositionRoot
 
     private static (OneBotGateway Gateway, IQqChatSource Source, OfficialBotGateway? Official, LocalChannelSource? Local, FeishuBotGateway? Feishu, IPlatformRegistry Registry, PlatformDriverOperations Operations) BuildChannelLayer(
         AppSettings settings, SettingsBox settingsBox, ProtocolRiskBackoff riskBackoff, IWebhookDedupStore inboundDedup,
-        PluginManager? plugins = null, Func<bool>? isPluginRuntimeStarted = null)
+        PluginManager? plugins = null, Func<bool>? isPluginRuntimeStarted = null,
+        Func<IReadOnlyDictionary<string, System.Text.Json.JsonElement>?>? readFeishuSettings = null,
+        Func<IReadOnlyDictionary<string, System.Text.Json.JsonElement>?>? readOfficialSettings = null,
+        Action<IDisposable>? registerTransport = null)
     {
         var gateway = new OneBotGateway(settingsBox, riskBackoff)
         {
@@ -139,20 +142,27 @@ internal static partial class CompositionRoot
         OfficialBotGateway? official = null;
         LocalChannelSource? local = null;
         FeishuBotGateway? feishu = null;
-        var officialEnabled = PlatformSwitchSettings.Read(settings, PlatformId.QqOfficial, AccountScope.Legacy).Enabled;
-        var feishuEnabled = PlatformSwitchSettings.Read(settings, PlatformId.Feishu, AccountScope.Default).Enabled;
+        var officialEnabled = settings.RuntimePlatformPolicies.HasValue
+            ? PlatformSwitchSettings.ResolvePolicyRules(settings, new PolicyTarget.Instance(new DriverKey(PlatformId.QqOfficial, AccountScope.Legacy, string.Empty)), ImmutableArray<ActionId>.Empty).Enabled == ToggleRule.Enabled
+            : PlatformSwitchSettings.Read(settings, PlatformId.QqOfficial, AccountScope.Legacy).Enabled;
+        var feishuEnabled = settings.RuntimePlatformPolicies.HasValue
+            ? PlatformSwitchSettings.ResolvePolicyRules(settings, new PolicyTarget.Instance(new DriverKey(PlatformId.Feishu, AccountScope.Default, "feishu-main")), ImmutableArray<ActionId>.Empty).Enabled == ToggleRule.Enabled
+            : PlatformSwitchSettings.Read(settings, PlatformId.Feishu, AccountScope.Default).Enabled;
         if (officialEnabled
             && !string.IsNullOrWhiteSpace(settings.OfficialAppId)
             && !string.IsNullOrWhiteSpace(settings.OfficialAppSecret))
         {
             var officialApplicationId = settings.OfficialAppId;
+            var officialHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "official");
+            registerTransport?.Invoke(officialHttp);
             official = new OfficialBotGateway(settingsBox,
-                new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "official"),
+                officialHttp,
                 () => new OfficialIdentityMap(Path.Combine(AppPaths.DataDir, "official-ids.json")),
                 msg => FileLog.Write("Official", msg),
                 () => new OfficialDeliveryLedger(new OfficialDeliverySnapshotFile(Path.Combine(AppPaths.DataDir, "official-delivery",
                     Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(officialApplicationId))) + ".json")),
-                    officialApplicationId));
+                    officialApplicationId))
+                .BindPluginSettings(readOfficialSettings);
             sources.Add(official);
             FileLog.Write("Channel", $"官方通道已启用（appid={settings.OfficialAppId}，" +
                                    $"{(settings.OfficialSandbox ? "沙箱" : "正式")}环境，与私域通道隔离）");
@@ -184,15 +194,18 @@ internal static partial class CompositionRoot
         // 飞书通道（阶段 4）：默认关，开启且配置了 appid 才构造，禁用的平台零网络零凭据。
         if (feishuEnabled && !string.IsNullOrWhiteSpace(settings.FeishuAppId))
         {
+            var feishuHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "feishu");
+            registerTransport?.Invoke(feishuHttp);
             feishu = new FeishuBotGateway(
                 settingsBox,
-                new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "feishu"),
+                feishuHttp,
                 msg => FileLog.Write("Feishu", msg),
                 ids: new FeishuIdMap(Path.Combine(AppPaths.DataDir, "feishu-ids-v2.json")),
-                dedupStore: inboundDedup);
+                dedupStore: inboundDedup,
+                readPluginSettings: readFeishuSettings);
             sources.Add(feishu);
 
-            FileLog.Write("Channel", $"飞书通道已启用（appid={settings.FeishuAppId}，入口：POST /api/webhooks/feishu）");
+            FileLog.Write("Channel", $"飞书通道已启用（appid={settings.FeishuAppId}，mode={(feishu.IsLongConnectionMode ? "long_connection" : "webhook")}）");
         }
         else if (feishuEnabled)
         {
@@ -284,7 +297,16 @@ internal static partial class CompositionRoot
     {
         // ① 上行通道层（协议端 + 可选的官方通道 + 本地通道 + 飞书通道 + 平台注册表）：见 BuildChannelLayer
         var (gateway, source, official, local, feishu, platformRegistry, driverOperations) =
-            BuildChannelLayer(a.Settings, a.Box, a.RiskBackoff, a.InboundDedup, a.PluginRuntime.Registry, () => a.PluginRuntime.HasStarted);
+            BuildChannelLayer(
+                a.Settings,
+                a.Box,
+                a.RiskBackoff,
+                a.InboundDedup,
+                a.PluginRuntime.Registry,
+                () => a.PluginRuntime.HasStarted,
+                () => a.PluginRuntime.TryReadEffectiveValues("system.platform-feishu"),
+                () => a.PluginRuntime.TryReadEffectiveValues("system.platform-qq-official"),
+                a.OwnedTransports.Add);
         a.Gateway = gateway;
         a.Source = source;
         a.Official = official;

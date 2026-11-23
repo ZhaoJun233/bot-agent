@@ -78,7 +78,10 @@ public readonly record struct CompletionResult(int? Suitability, string? Reply, 
     string? AgentTask = null,
 
     /// <summary>action=agent 时模型想先回的一句应答（单行）；闸门放行后由服务端发出。</summary>
-    string? AgentAck = null);
+    string? AgentAck = null,
+
+    /// <summary>内联只读插件工具调用（如 doc.read / chat.digest）；仅经过服务端目录与闸门复核后执行。</summary>
+    InlineToolCall? Call = null);
 
 /// <summary>
 /// 解析器要"说给日志听"的一件事（<see cref="ModelOutputParser" /> 是纯函数，不自己写日志）。

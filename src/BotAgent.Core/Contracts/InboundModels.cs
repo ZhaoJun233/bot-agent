@@ -62,6 +62,7 @@ public sealed record QqChatMessage(
     /// <summary>Typed input eligibility, not a permission grant. Derived media text cannot issue commands.</summary>
     [JsonIgnore] public bool AllowsCommands { get; init; } = true;
     [JsonIgnore] public IReadOnlyList<InboundVoiceAttachment>? VoiceAttachments { get; init; }
+    [JsonIgnore] public IReadOnlyList<InboundFileAttachment>? FileAttachments { get; init; }
 }
 
 /// <summary>

@@ -56,7 +56,8 @@ public sealed record EffectivePlatformPolicy(
 
     public PlatformFeatureDecision Feature(string name, bool globallyEnabled = true)
     {
-        var normalized = (name ?? string.Empty).Trim().ToLowerInvariant();
+        var raw = (name ?? string.Empty).Trim().ToLowerInvariant();
+        var normalized = raw == "personaltodo" ? "personal_todo" : raw;
         var supported = normalized switch
         {
             "text" => Capabilities.SupportsText,
@@ -68,7 +69,7 @@ public sealed record EffectivePlatformPolicy(
             "stickers" => Capabilities.SupportsStickers,
             "music" => Capabilities.SupportsMusic || Capabilities.SupportsMusicTextFallback && Capabilities.SupportsText,
             "poke" => Capabilities.SupportsPoke,
-            "linkpreview" or "websearch" => Capabilities.SupportsText,
+            "linkpreview" or "websearch" or "documents" or "digest" or "knowledge" or "scheduler" or "personal_todo" or "episodes" or "jargon" => Capabilities.SupportsText,
             _ => false,
         };
 
@@ -97,6 +98,12 @@ public sealed record EffectivePlatformPolicy(
 
     public bool CanUseAction(string action)
         => !string.IsNullOrWhiteSpace(action) && AllowedActions.Contains(action.Trim());
+
+    public static string FeatureKey(Configuration.PlatformFeatureId feature) => feature switch
+    {
+        Configuration.PlatformFeatureId.PersonalTodo => "personal_todo",
+        _ => feature.ToString().ToLowerInvariant(),
+    };
 }
 
 

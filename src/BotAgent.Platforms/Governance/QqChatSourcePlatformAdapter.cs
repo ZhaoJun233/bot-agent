@@ -222,7 +222,8 @@ public sealed class QqChatSourcePlatformAdapter : IPlatformAdapter, IPlatformMes
             ImageUrls: msg.ImageUrls is null ? null : Array.AsReadOnly(msg.ImageUrls.ToArray()))
         {
             AllowsCommands = msg.AllowsCommands,
-            VoiceAttachments = msg.VoiceAttachments is null ? null : Array.AsReadOnly(msg.VoiceAttachments.ToArray())
+            VoiceAttachments = msg.VoiceAttachments is null ? null : Array.AsReadOnly(msg.VoiceAttachments.ToArray()),
+            FileAttachments = msg.FileAttachments is null ? null : Array.AsReadOnly(msg.FileAttachments.ToArray())
         };
         RichInboundReceived?.Invoke(msg, inbound);
         InboundReceived?.Invoke(inbound);

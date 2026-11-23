@@ -76,7 +76,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
     /// 返回逐段报告（issue #14）：调用方只把**真的发出去**的段落写进会话历史。
     /// </summary>
     public Task<CadenceSendReport> SendWithCadenceAsync(bool isGroup, long targetId, string reply, long? replyTo, bool directAddress = false)
-        => SendWithCadenceCoreAsync(null, isGroup, targetId, reply, replyTo, directAddress, null);
+        => SendWithCadenceCoreAsync(null, isGroup, targetId, reply, replyTo, directAddress, null, null);
 
     /// <summary>完整 sourceKey 仅用于记账，不改变现有策略、协议发送或 targetId 路由。</summary>
     public Task<CadenceSendReport> SendWithCadenceAsync(string sourceKey, bool isGroup, long targetId,
@@ -84,7 +84,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
     {
         if (!ConversationIdCodec.TryParse(sourceKey, out var conversation))
             return Task.FromResult(new CadenceSendReport(Array.Empty<string>(), "invalid_conversation_scope"));
-        return SendWithCadenceCoreAsync(null, isGroup, targetId, reply, replyTo, directAddress, conversation);
+        return SendWithCadenceCoreAsync(null, isGroup, targetId, reply, replyTo, directAddress, conversation, sourceKey);
     }
 
     /// <summary>
@@ -97,10 +97,10 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         string reply,
         long? replyTo,
         bool directAddress = false)
-        => SendWithCadenceCoreAsync(context, isGroup, targetId, reply, replyTo, directAddress, null);
+        => SendWithCadenceCoreAsync(context, isGroup, targetId, reply, replyTo, directAddress, null, null);
 
     private async Task<CadenceSendReport> SendWithCadenceCoreAsync(PlatformContext? context,
-        bool isGroup, long targetId, string reply, long? replyTo, bool directAddress, ConversationId? conversationScope)
+        bool isGroup, long targetId, string reply, long? replyTo, bool directAddress, ConversationId? conversationScope, string? rawSourceKey)
     {
         context = PlatformSourceExecution.Current?.Context ?? context;
         var policy = context is not null && _platformPolicies is not null
@@ -127,7 +127,15 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         }
 
         var rawReply = reply;
-        if (_settings.FilterActionNarration)
+        var resolvedSourceKey = rawSourceKey ?? BotAgent.Domain.Qq.Channels.Key(
+            BotAgent.Domain.Qq.Channels.IsAliasId(targetId) ? BotAgent.Domain.Qq.Channels.Official
+            : BotAgent.Domain.Qq.Channels.IsLocalId(targetId) ? BotAgent.Domain.Qq.Channels.Local
+            : BotAgent.Domain.Qq.Channels.IsFeishuId(targetId) ? BotAgent.Domain.Qq.Channels.Feishu
+            : BotAgent.Domain.Qq.Channels.Private, isGroup, targetId);
+        var filterActionNarration = policy is not null
+            ? BotAgent.Services.Platforms.ConversationProfileResolver.Resolve(_settings, policy, resolvedSourceKey).FilterActionNarration
+            : _settings.FilterActionNarration;
+        if (filterActionNarration)
         {
             var filtered = ActionNarrationFilter.StripNaturalLanguageParentheses(reply);
             reply = _actionNarrationFilter is not null && filtered.Length > 0
@@ -140,14 +148,28 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
         }
         if (ReplyDecisionRules.IsSilenceOnlyReply(reply))
             return new CadenceSendReport(Array.Empty<string>(), "silence_only_reply");
-        reply = QqPlainText.Sanitize(reply);
+        var targetChannel = BotAgent.Domain.Qq.Channels.IsAliasId(targetId) || string.Equals(context?.PlatformId, PlatformId.QqOfficial, StringComparison.OrdinalIgnoreCase)
+            ? BotAgent.Domain.Qq.Channels.Official
+            : BotAgent.Domain.Qq.Channels.IsLocalId(targetId) || string.Equals(context?.PlatformId, PlatformId.Local, StringComparison.OrdinalIgnoreCase)
+                ? BotAgent.Domain.Qq.Channels.Local
+                : BotAgent.Domain.Qq.Channels.IsFeishuId(targetId) || string.Equals(context?.PlatformId, PlatformId.Feishu, StringComparison.OrdinalIgnoreCase)
+                    ? BotAgent.Domain.Qq.Channels.Feishu
+                    : BotAgent.Domain.Qq.Channels.Private;
+        var hasStructuredMarkdown = reply.Contains("```", StringComparison.Ordinal)
+            || reply.Contains("\n| ", StringComparison.Ordinal)
+            || reply.StartsWith("# ", StringComparison.Ordinal)
+            || reply.StartsWith("## ", StringComparison.Ordinal)
+            || reply.StartsWith("### ", StringComparison.Ordinal);
+        var keepStructuredMarkdown = hasStructuredMarkdown
+            && (targetChannel == BotAgent.Domain.Qq.Channels.Feishu || _source.SupportsStructuredMarkdown(targetChannel));
+        reply = keepStructuredMarkdown ? reply.Trim() : QqPlainText.Sanitize(reply);
         if (reply.Length == 0)
         {
             _log($"清洗后没有可发内容（原文 {rawReply.Length} 字，全是 Markdown 装饰或动作旁白）→ 这一条不发");
             return new CadenceSendReport(Array.Empty<string>(), "sanitized_empty");
         }
 
-        var sourceKey = BotAgent.Domain.Qq.Channels.Key(BotAgent.Domain.Qq.Channels.IsAliasId(targetId) ? BotAgent.Domain.Qq.Channels.Official : BotAgent.Domain.Qq.Channels.IsLocalId(targetId) ? BotAgent.Domain.Qq.Channels.Local : BotAgent.Domain.Qq.Channels.IsFeishuId(targetId) ? BotAgent.Domain.Qq.Channels.Feishu : BotAgent.Domain.Qq.Channels.Private, isGroup, targetId);
+        var sourceKey = BotAgent.Domain.Qq.Channels.Key(targetChannel, isGroup, targetId);
         if (_riskBackoff?.IsActive(sourceKey) == true)
         {
             var decision = _riskBackoff.EvaluateText(sourceKey, directAddress, reply);
@@ -163,7 +185,7 @@ public sealed class PlainSender : IQqMessageSender, IConversationReplySender
             _traces.Node(sourceKey, TurnNodeKind.Outbound, one.Ok ? "sent" : "failed", reasonCode: decision.ReasonCode, count: shortReply.Length);
             return CadenceResult(shortReply, one, decision.ReasonCode);
         }
-        if (!_settings.SplitReplies)
+        if (!_settings.SplitReplies || keepStructuredMarkdown)
         {
             var one = await SendTextAtCommitAsync(isGroup, targetId, reply, replyToMessageId: replyTo, directAddress: directAddress, context: context, sourceKey: sourceKey);
             RememberOwnMessage(conversationScope, context ?? policy?.Context, isGroup, targetId, one, reply);

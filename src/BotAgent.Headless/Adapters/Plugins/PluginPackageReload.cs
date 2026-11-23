@@ -124,6 +124,8 @@ public sealed partial class PluginPackageService
             if (published is PluginPythonPackage python)
                 try { python.Publish(invocation); } catch { }
             Publish(next);
+            if (_pendingUpgradePrune.TryRemove(id, out _))
+                _store.PruneUnreferencedArchives(next);
             return manifest;
         }
         catch

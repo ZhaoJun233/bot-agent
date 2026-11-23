@@ -89,4 +89,19 @@ describe('PluginUiFrame lifecycle & iframe security', () => {
     expect(closePluginUiSession).toHaveBeenCalledWith('preset.feature.stickers', 'uis-frame-1')
     wrapper.unmount()
   })
+
+  it('does not falsely mark UI stale when EventScheduler emits initial sync', async () => {
+    const openPluginUiSession = vi.fn().mockResolvedValue(session())
+    const closePluginUiSession = vi.fn().mockResolvedValue({ sessionId: 'uis-frame-1', pluginId: 'preset.feature.stickers', closed: true })
+    const listEvents = vi.fn().mockResolvedValue({ events: [], latestSequence: 1, resyncRequired: false })
+    const client = { openPluginUiSession, closePluginUiSession, listEvents } as unknown as ZbaClient
+
+    const wrapper = mount(PluginUiFrame, {
+      props: { client, pluginId: 'preset.feature.stickers', mode: 'admin', writesEnabled: true, active: true },
+      global: { stubs: { Teleport: true } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('旧界面已禁止写入')
+    wrapper.unmount()
+  })
 })

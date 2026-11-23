@@ -86,6 +86,7 @@ public sealed partial class WebUiServer
     private ChatCapabilitySet CurrentChatPolicy()
     {
         var s = _box.Current;
+        var catalog = (_plugins as Services.Plugins.PluginManager)?.GetToolCatalog();
         return ChatCapabilitySet.FromSwitches(
             enableWebSearch: s.EnableWebSearch,
             enableMusic: s.EnableMusic,
@@ -95,7 +96,12 @@ public sealed partial class WebUiServer
             scenario: s.ScenarioPreset,
             approvalsEnabled: s.EnableApprovals,
             questionsEnabled: s.EnableQuestions,
-            catalog: (_plugins as Services.Plugins.PluginManager)?.GetToolCatalog());
+            catalog: catalog,
+            enableDocuments: catalog?.FindBinding("doc.read") is { IsReady: true },
+            enableDigest: catalog?.FindBinding("chat.digest") is { IsReady: true },
+            enableKnowledge: catalog?.FindBinding("kb.search") is { IsReady: true },
+            enableScheduler: catalog?.FindBinding("reminder.list") is { IsReady: true },
+            enablePersonalTodo: catalog?.FindBinding("todo.list") is { IsReady: true });
     }
 
     /// <summary>

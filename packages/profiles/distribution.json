@@ -10,5 +10,14 @@
       "name": "BotAgent.Profiles.Contracts",
       "owner": "preset.feature.profiles"
     }
+  ],
+  "settings": [
+    {
+      "key": "allowAttestedSummary",
+      "label": "允许对来源已鉴证的分域画像执行后台摘要（受撤回/遗忘约束）",
+      "type": "boolean",
+      "defaultValue": "false",
+      "required": false
+    }
   ]
 }

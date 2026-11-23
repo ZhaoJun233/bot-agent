@@ -49,7 +49,7 @@ public sealed class AgentTask
     /// 只由通道（ZBA 提交）填，执行前与配置白名单取交集（<c>ToolScope.Restrict</c>）—— 只能收窄。
     /// </summary>
     public IReadOnlyList<string>? ToolScope { get; set; }
-    public IReadOnlyList<McpToolInfo> PythonToolLeases { get; init; } = [];
+    public IReadOnlyList<McpToolInfo> PythonToolLeases { get; set; } = [];
 
     public int TimeoutSeconds { get; set; }
 

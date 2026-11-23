@@ -69,7 +69,8 @@ public sealed class HttpFetcher : IHttpFetcher, IDisposable
         Action<string>? log = null,
         string? name = null,
         bool allowAutoRedirect = true,
-        bool rejectPrivateDestinations = false)
+        bool rejectPrivateDestinations = false,
+        bool rejectLinkLocalWhenPrivate = false)
     {
         Timeout = timeout;
         var handler = new SocketsHttpHandler
@@ -77,10 +78,12 @@ public sealed class HttpFetcher : IHttpFetcher, IDisposable
             // 不可信目标必须由调用方逐跳校验，不能交给底层自动跳转。
             AllowAutoRedirect = allowAutoRedirect && !rejectPrivateDestinations
         };
-        if (rejectPrivateDestinations)
+        if (rejectPrivateDestinations || rejectLinkLocalWhenPrivate)
         {
             handler.UseProxy = false;
-            handler.ConnectCallback = ConnectPublicAsync;
+            handler.ConnectCallback = rejectPrivateDestinations
+                ? ConnectPublicAsync
+                : ConnectPrivateExceptLinkLocalAsync;
         }
 
         _client = new HttpClient(handler) { Timeout = timeout };
@@ -131,15 +134,25 @@ public sealed class HttpFetcher : IHttpFetcher, IDisposable
     public Task<HttpResponseMessage> PostAsync(string url, HttpContent content, CancellationToken ct = default)
         => _client.PostAsync(url, content, ct);
 
-    private static async ValueTask<Stream> ConnectPublicAsync(
+    private static ValueTask<Stream> ConnectPublicAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+        => ConnectFilteredAsync(context, blockAllPrivate: true, ct);
+
+    private static ValueTask<Stream> ConnectPrivateExceptLinkLocalAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+        => ConnectFilteredAsync(context, blockAllPrivate: false, ct);
+
+    private static async ValueTask<Stream> ConnectFilteredAsync(
         SocketsHttpConnectionContext context,
+        bool blockAllPrivate,
         CancellationToken ct)
     {
         var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, ct).ConfigureAwait(false);
         SocketException? lastFailure = null;
         foreach (var address in addresses)
         {
-            if (OutboundAddressPolicy.IsBlocked(address))
+            var blocked = blockAllPrivate
+                ? OutboundAddressPolicy.IsBlocked(address)
+                : OutboundAddressPolicy.IsLinkLocalOrMetadata(address);
+            if (blocked)
             {
                 continue;
             }
@@ -173,10 +186,12 @@ public sealed class HttpFetcher : IHttpFetcher, IDisposable
 
         if (lastFailure is not null)
         {
-            throw new HttpRequestException("无法连接允许的公网地址", lastFailure);
+            throw new HttpRequestException("无法连接允许的地址", lastFailure);
         }
 
-        throw new HttpRequestException("出站地址解析为禁止的私有或不可路由地址");
+        throw new HttpRequestException(blockAllPrivate
+            ? "出站地址解析为禁止的私有或不可路由地址"
+            : "出站地址解析为禁止的地址");
     }
 
     /// <summary>日志里只印 host + path（查询串里可能有 token / cookie）。</summary>

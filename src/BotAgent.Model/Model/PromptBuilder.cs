@@ -55,7 +55,10 @@ public static class PromptBuilder
         bool FilterActionNarration = false,
         string? EpisodesText = null,
         string? JargonText = null,
-        bool IsPrivateConversation = false);
+        bool IsPrivateConversation = false,
+        string? PlatformDisplayName = null,
+        string? PersonaAppend = null,
+        bool PlatformNeutral = false);
 
     /// <summary>把这一轮的系统提示词拼出来（纯字符串拼接，不发任何请求）。</summary>
     public readonly record struct PromptParts(string Stable, string Dynamic)
@@ -97,16 +100,25 @@ public static class PromptBuilder
         // 稳定段：系统提示原文、账号身份、人设、发言规则、动作契约、工具清单 —— 这些跨轮不变。
         var systemContent = stable;
         systemContent.Append(request.SystemPrompt);
+        var platformLabel = string.IsNullOrWhiteSpace(request.PlatformDisplayName)
+            ? "当前平台"
+            : request.PlatformDisplayName.Trim();
         if (!string.IsNullOrWhiteSpace(request.BotIdentity))
         {
-            systemContent.Append( $"\n你是登录账号 QQ：{request.BotIdentity} 的机器人（群聊中别人 @QQ{request.BotIdentity} 或喊你昵称就是在叫你）。");
+            if (request.PlatformNeutral)
+            {
+                systemContent.Append($"\n你是当前平台（{platformLabel}）上的机器人，标识：{request.BotIdentity}（群聊中别人 @你 或喊你昵称就是在叫你）。");
+            }
+            else
+            {
+                systemContent.Append($"\n你是登录账号 QQ：{request.BotIdentity} 的机器人（群聊中别人 @QQ{request.BotIdentity} 或喊你昵称就是在叫你）。");
+            }
         }
 
-
-
-        if (!string.IsNullOrWhiteSpace(request.Persona))
+        var effectivePersona = CombinePersona(request.Persona, request.PersonaAppend);
+        if (!string.IsNullOrWhiteSpace(effectivePersona))
         {
-            systemContent.Append( "\n\n[机器人人设档案]\n" + request.Persona.Trim());
+            systemContent.Append("\n\n[机器人人设档案]\n" + effectivePersona);
         }
 
         var suitabilityText = request.IsPrivateConversation && !request.Proactive
@@ -131,6 +143,10 @@ public static class PromptBuilder
         if (!string.IsNullOrWhiteSpace(request.ToolList))
         {
             systemContent.Append( request.ToolList);
+            if (HasInlinePluginTools(request.ToolList))
+            {
+                systemContent.Append("（调用只读扩展工具时，在 JSON 顶层加 \"call\":{\"tool\":\"工具名\",\"args\":{\"参数\":\"字符串\"}}。）\n");
+            }
         }
 
 
@@ -145,11 +161,17 @@ public static class PromptBuilder
         // replyTo 的语义必须写死 —— 模型很容易把“让我不爽的那条（素材）”当成“我在回哪条（对象）”：
         // 线上实测（handoff-4 §23）群友 c 复读了机器人那句话，机器人说的是“别学我说话！”，
         // 引用却挂在上一条别人的消息上 —— 群里看到的就是“回复错人”，§22 的启发式修不了这一类。
+        var platformLabel = string.IsNullOrWhiteSpace(request.PlatformDisplayName)
+            ? "当前平台"
+            : request.PlatformDisplayName.Trim();
         if (request.QuotableIds.Count > 0)
         {
+            var quoteDisplayHint = request.PlatformNeutral
+                ? "（平台会把它显示成“回复 某某”）"
+                : "（QQ 会把它显示成“回复 某某”）";
             systemContent.Append(
                 "\n\n[回复谁]\n上下文里形如 `{某某}{内容--时间} (#123456)` 的是最近几条**别人发的**消息，# 后面是消息编号。\n" +
-                "replyTo 只有一个含义：**你这句话是在跟谁说话 / 你在回应、反驳、回答哪一条**（QQ 会把它显示成“回复 某某”），" +
+                $"replyTo 只有一个含义：**你这句话是在跟谁说话 / 你在回应、反驳、回答哪一条**{quoteDisplayHint}，" +
                 "填那个人那条的编号：{\"suitability\": 80, \"reply\": \"…\", \"replyTo\": 123456}。\n" +
                 "它不是“你提到的素材 / 你吐槽的内容 / 这件事的出处”。最容易填错的就是这两种：\n" +
                 "  • 有人**复读、模仿**别人的话（包括学你说话）：你要跟的那个是**复读的人** → 填**他发的那条**，别填被复读的原文；\n" +
@@ -165,11 +187,15 @@ public static class PromptBuilder
 
         // 消息里的标记：表情包和戳一戳在上下文里都是带方括号/全角括号的“事件写法”，
         // 不解释的话模型会把“（戳一戳）某人 戳了你一下”当成别人真说过这句话。
+        var emojiOrigin = request.PlatformNeutral ? $"{platformLabel} 原生小表情" : "QQ 原生小表情";
+        var pokeMarkerHint = request.PlatformNeutral
+            ? (request.PokeContext ? "`（戳一戳）某某 戳了你一下` 表示某某在聊天里戳了你——那是动作不是文字。" : string.Empty)
+            : "`（戳一戳）某某 戳了你一下` 表示某某在 QQ 里戳了你——那是动作不是文字。";
         systemContent.Append(
             "\n\n[上下文里的标记]\n" +
-            "`[表情:微笑]`/`[动画表情:…]` 是对方发的 QQ 原生小表情（名字即它的含义），`[图片]`/`[语音]` 同理，" +
+            $"`[表情:微笑]`/`[动画表情:…]` 是对方发的 {emojiOrigin}（名字即它的含义），`[图片]`/`[语音]` 同理，" +
             "`[已撤回] xxx` 表示这句 xxx 发出后**被撤回了**：内容你看得到（你当时在场），但群里其他人已经看不到它了，" +
-            "`（戳一戳）某某 戳了你一下` 表示某某在 QQ 里戳了你——那是动作不是文字。" +
+            pokeMarkerHint +
             "`〔旁白：…〕` 是群友的**括号旁白**（动作 / 表情说明，例：`〔旁白：把猫抱过来〕`）：" +
             "你能看到它、也能拿它理解现场（“端到桌上”“抱着猫”这类动作本来就是语境），" +
             "但它**不是他说的话** —— 别当成一句话去接、别在回复里把括号里的字念出来。" +
@@ -353,13 +379,14 @@ public static class PromptBuilder
         // 被戳过才给的指令：戳回去是**可选**动作，看当下心情 —— 不必每次被戳都戳一次
         if (request.PokeContext)
         {
+            var idLabel = request.PlatformNeutral ? "用户 ID" : "QQ 号";
             dynamic.Append(
                 "\n\n[戳一戳怎么回]\n" +
                 "刚有人戳了你，按人设、上下文和心情回一句（或者只发个表情包）。" +
                 "回戳是可选动作，**不要每次被戳都回戳**：心情好/想玩可以偶尔戳回去，" +
                 "刚被同一个人或几个人连着戳过、心里烦的时候就不要回戳（回句话甚至不理都行）。" +
-                "决定回戳时，在 JSON 里加 poke 字段填对方的 QQ 号，例如：{\"suitability\": 85, \"reply\": \"…\", \"poke\": 123456}；" +
-                "只能戳上下文里出现过的人（戳你的那个人用他的 QQ 号），不要编造号码。" +
+                $"决定回戳时，在 JSON 里加 poke 字段填对方的 {idLabel}，例如：{{\"suitability\": 85, \"reply\": \"…\", \"poke\": 123456}}；" +
+                $"只能戳上下文里出现过的人（戳你的那个人用他的 {idLabel}），不要编造号码。" +
                 "另外可以用 mood 字段顺手写一句你现在的心情（≤ 12 字，如“被戳烦了”“心情不错”），会记到下一轮。");
         }
 
@@ -385,6 +412,15 @@ public static class PromptBuilder
             dynamic.Append( "\n\n[会话参与者档案（由他们的历史发言总结而来，回复时参考每个人是谁、说过什么）]\n" +
                              string.Join("\n\n", participants));
         }
+    }
+
+    private static string? CombinePersona(string? basePersona, string? append)
+    {
+        var primary = string.IsNullOrWhiteSpace(basePersona) ? null : basePersona.Trim();
+        var extra = string.IsNullOrWhiteSpace(append) ? null : append.Trim();
+        if (primary is null) return extra;
+        if (extra is null) return primary;
+        return primary + "\n" + extra;
     }
 
     private const string RecallMark = "[已撤回] ";
@@ -544,5 +580,43 @@ public static class PromptBuilder
         }
 
         return stats.Select(kv => $"{kv.Key}：发言 {kv.Value.Count} 次，最近说“{ModelOutputText.Truncate(kv.Value.Last, 50)}”").ToArray();
+    }
+
+    private static readonly HashSet<string> NonInlineCallToolIds = new(StringComparer.Ordinal)
+    {
+        "chat.reply", "web.search", "web.read", "music.listen", "music.share",
+        "voice.speak", "sticker.send", "poke.send", "demo.echo", "ask.question"
+    };
+
+    private static bool HasInlinePluginTools(string toolList)
+    {
+        foreach (var rawLine in toolList.Split('\n'))
+        {
+            var line = rawLine.TrimStart();
+            if (!line.StartsWith("• ", StringComparison.Ordinal)) continue;
+            var rest = line[2..];
+            var end = rest.IndexOfAny(['：', ':', ' ', '\r', '\t']);
+            var id = (end > 0 ? rest[..end] : rest).Trim();
+            if (id.Length > 0 && IsToolIdentifier(id) && !NonInlineCallToolIds.Contains(id))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsToolIdentifier(string token)
+    {
+        var hasDot = false;
+        foreach (var ch in token)
+        {
+            if (ch == '.')
+            {
+                hasDot = true;
+                continue;
+            }
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch is '-' or '_')
+                continue;
+            return false;
+        }
+        return hasDot;
     }
 }

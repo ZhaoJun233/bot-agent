@@ -1,3 +1,5 @@
+extern alias StorageModule;
+
 using BotAgent.Adapters.Agent;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Configuration;
@@ -46,7 +48,25 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         IQuotaOperations? quotas = null,
         BotAgent.Services.Ops.DatabaseBackupService? backups = null,
         BotAgent.Services.Ops.TurnTraceStore? traces = null,
-        IPlatformPolicyResolver? platformPolicies = null, ZbaControlPlane? controlPlane = null)
+        IPlatformPolicyResolver? platformPolicies = null, ZbaControlPlane? controlPlane = null,
+        Func<(bool MarkdownEnabled, bool MarkdownPermissionDenied)>? officialRuntimeState = null,
+        Func<(BotAgent.Domain.Memory.UnifiedMemoryGovernanceSummary Summary, bool AdminConfigured)>? memoryGovernance = null,
+        AgentTaskRuntime? sharedTaskRuntime = null,
+        Func<BotAgent.Domain.Agent.AgentTaskRequest, BotAgent.Domain.Agent.AgentTaskRequest>? sharedPrepare = null,
+        BotAgent.Host.McpManagedWiring? mcpManaged = null,
+        object? mcpStoreObj = null,
+        object? accessRoleStoreObj = null,
+        BotAgent.Services.Permissions.AccessRoleResolver? accessRoles = null,
+        object? scheduledJobStoreObj = null,
+        BotAgent.Engine.Scheduler.ScheduledJobRunner? scheduledRunner = null,
+        BotAgent.Services.Todo.PersonalTodoHostPortsAdapter? todoPorts = null,
+        object? todoStoreObj = null,
+        BotAgent.Domain.Identity.IIdentityLinkResolver? identityLinks = null,
+        object? workspaceStoreObj = null,
+        IModelClient? brain = null,
+        Action<Action>? registerWorkspaceNotifier = null,
+        Action<string>? onClearWorkspaceDocuments = null,
+        ITokenUsageRecorder? usage = null)
     {
         var context = controlPlane?.Context ?? ZbaRuntimeContext.Create(now, hadStoredConfigurationBeforeStartup);
         var options = context.Options;
@@ -62,17 +82,26 @@ internal sealed class ZbaRuntime : IAsyncDisposable
         var startedAt = context.StartedAt;
         // 执行与状态在 Engine 的任务运行时（ADR-0002）；registry 只做通道适配（幂等/回执/事件/结果投影）。
         // 台账（#116）在这里注入：运行时只管写，SQLite 细节留在 Adapters/Persistence。
-        var ledger = new AgentTaskLedgerStore();
-        ledger.Prune(0);
-        // #137：任务级前置审批闸门。审批总开关关掉时它返回 null，不会凭空多出待批任务。
-        var approvalGate = new TaskApprovalGate(now, () => box.Current.EnableApprovals,
-            () => box.Current, () => DockerAvailability.IsAvailable, agent.CaptureTaskPythonLeases);
-        var tasks = new ZbaTaskRegistry(sessions,
-            new AgentTaskRuntime(
+        AgentTaskRuntime runtime;
+        Func<BotAgent.Domain.Agent.AgentTaskRequest, BotAgent.Domain.Agent.AgentTaskRequest> prepare;
+        if (sharedTaskRuntime is not null && sharedPrepare is not null)
+        {
+            runtime = sharedTaskRuntime;
+            prepare = sharedPrepare;
+        }
+        else
+        {
+            var ledger = new AgentTaskLedgerStore();
+            ledger.Prune(0);
+            // #137：任务级前置审批闸门。审批总开关关掉时它返回 null，不会凭空多出待批任务。
+            var approvalGate = new TaskApprovalGate(now, () => box.Current.EnableApprovals,
+                () => box.Current, () => DockerAvailability.IsAvailable, agent.CaptureTaskPythonLeases);
+            runtime = new AgentTaskRuntime(
                 new AgentTaskExecutor(agent), now, log: log, ledger: ledger, bootSeq: ledger.BootSeq,
-                approvalGate: approvalGate),
-            now, serverEnabled, events, taskReceipts, instanceId, log,
-            request => approvalGate.Prepare(request, agent.GetTaskMcpToolNames()));
+                approvalGate: approvalGate);
+            prepare = request => approvalGate.Prepare(request, agent.GetTaskMcpToolNames());
+        }
+        var tasks = new ZbaTaskRegistry(sessions, runtime, now, serverEnabled, events, taskReceipts, instanceId, log, prepare);
         var backend = new ZbaHostBackend(
             box,
             hotReload,
@@ -95,7 +124,46 @@ internal sealed class ZbaRuntime : IAsyncDisposable
             quotaStore,
             backups,
             traces,
-            platformPolicies);
+            platformPolicies,
+            officialRuntimeState,
+            memoryGovernance);
+        if (mcpManaged is not null || accessRoleStoreObj is not null)
+        {
+            backend.AttachMcpAndRoles(
+                mcpManaged,
+                mcpStoreObj as StorageModule::BotAgent.Storage.McpServerStore,
+                accessRoleStoreObj as StorageModule::BotAgent.Storage.AccessRoleStore,
+                accessRoles);
+        }
+        var schedStore = scheduledJobStoreObj as BotAgent.Services.Scheduler.IScheduledJobStore;
+        var pTodoStore = todoStoreObj as BotAgent.Services.Todo.IPersonalTodoStore;
+        var wsStore = workspaceStoreObj as IWorkspaceConversationStore;
+        BotAgent.Services.Workspace.WorkspaceService? workspaceService = null;
+        if (wsStore is not null)
+        {
+            registerWorkspaceNotifier?.Invoke(() => events.Append("workspace.message.appended", null, null, null, null, now()));
+            workspaceService = new BotAgent.Services.Workspace.WorkspaceService(
+                wsStore,
+                brain,
+                plugins as BotAgent.Services.Plugins.PluginManager,
+                identityLinks,
+                submitTask: (key, prompt, scopeKey, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var session = sessions.FindCurrent(scopeKey, "server") ?? sessions.EnsureCurrent(scopeKey, "server");
+                    var accepted = tasks.Submit(new ZbaTaskSubmission(scopeKey, session.Id, prompt, "server", 120), key, out _);
+                    return ValueTask.FromResult<string?>(accepted.Id);
+                },
+                onAppended: _ => events.Append("workspace.message.appended", null, null, null, null, now()),
+                utcNow: () => now().ToUniversalTime(),
+                onClearDocuments: onClearWorkspaceDocuments,
+                isAiEnabled: () => box.Current.AiModeEnabled,
+                usage: usage);
+        }
+        if (schedStore is not null || pTodoStore is not null || workspaceService is not null)
+        {
+            backend.AttachPhase5(schedStore, scheduledRunner, todoPorts, pTodoStore, identityLinks, workspaceService);
+        }
         var endpoint = controlPlane?.Endpoint ?? new ZbaEndpoint(backend, options, now, version, instanceId,
             message => FileLog.Write("Zba", message));
         return new ZbaRuntime(endpoint, backend);

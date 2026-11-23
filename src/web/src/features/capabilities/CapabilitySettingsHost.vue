@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, defineComponent, h, ref } from 'vue'
-import type { ZbaClient } from '../../api/zba'
+import type { ZbaClient, ZbaDriverKey } from '../../api/zba'
 import type { UiError } from '../../shared/ui/ui-error'
 import type { CapabilityConfiguration } from './configuration-ownership'
 import CapabilityConfigurationDialog from './CapabilityConfigurationDialog.vue'
@@ -10,7 +10,7 @@ import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
 const props = defineProps<{
   client: ZbaClient; mode: 'read' | 'admin'; writesEnabled: boolean; active: boolean
   capability: CapabilityConfiguration; features: readonly string[]; runtimeState?: number
-  policyPlatformId?: string; dialogTitle?: string
+  policyPlatformId?: string; driverKey?: ZbaDriverKey; dialogTitle?: string
   trigger?: HTMLElement | null; fallback?: HTMLElement | null
 }>()
 const emit = defineEmits<{ close: []; saved: []; 'enable-admin': []; 'auth-expired': [error: UiError] }>()
@@ -52,14 +52,14 @@ const editorProps = computed(() => {
   switch (props.capability.editor.type) {
     case 'declared': return { ...common, pluginId: props.capability.pluginKey ?? props.capability.id }
     case 'component': return { ...common, features: props.features, runtimeState: props.runtimeState }
-    default: return { ...common, capability: props.capability, policyPlatformId: props.policyPlatformId, dialogTitle: props.dialogTitle }
+    default: return { ...common, capability: props.capability, policyPlatformId: props.policyPlatformId, driverKey: props.driverKey, dialogTitle: props.dialogTitle }
   }
 })
 const editorEvents = computed((): Record<string, () => void> => {
   const type = props.capability.editor.type
   if (type === 'declared') return { changed: () => emit('saved') }
   if (type === 'component') return { saved: () => emit('saved') }
-  return {}
+  return { saved: () => emit('saved') }
 })
 defineExpose({
   requestLeave: (reason: 'lock' | 'downgrade' | 'navigate', trigger?: HTMLElement | null) =>

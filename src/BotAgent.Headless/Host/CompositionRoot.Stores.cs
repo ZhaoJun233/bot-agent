@@ -83,7 +83,11 @@ internal static partial class CompositionRoot
         SessionPolicyLedger sessionPolicies,
         TurnTraceStore traces,
         AuditLogStore audit,
-        PluginManager plugins) =>
+        PluginManager plugins,
+        McpToolUseCase? mcp = null,
+        IAccessRoleResolver? accessRoles = null,
+        Func<string, PlatformContext?, EffectiveConversationSettings?>? resolveConversation = null,
+        Func<string, bool>? pluginAllowsTool = null) =>
         new(settingsBox, new ApprovalHooks(
             Log: ui.EmitLog,
             Mask: (text, key) => MaskingRules.Text(settingsBox.Current.AgentMaskSensitive, text,
@@ -99,7 +103,13 @@ internal static partial class CompositionRoot
             }),
             sessionPolicies,
             traces,
-            audit, plugins.GetToolCatalog);
+            audit,
+            mcp is null
+                ? plugins.GetToolCatalog
+                : () => new BotAgent.Services.Tools.ChatToolCatalog(plugins.GetTools().Concat(mcp.ChatToolBindings())),
+            accessRoles,
+            resolveConversation,
+            pluginAllowsTool);
 
     /// <summary>
     /// ④ 装配阶段四：用例层的共享状态与各域用例（#110 第 2 步拆出）。
@@ -138,7 +148,11 @@ internal static partial class CompositionRoot
         // 决策轨迹（批次 C）：一轮一条、只有形状；回复链 / 发送层 / 能力闸门三处往上记节点。
         a.Traces = new TurnTraceStore(() => BotAgent.Adapters.Time.Clock.Now, new TraceArchiveStore());
         a.Audit = new AuditLogStore();
-        a.Mcp = McpConfiguration.BuildWithPlugins(a.Secrets, a.Audit, msg => FileLog.Write("Mcp", msg), a.PluginRuntime.Packages.PythonSources, a.PluginRuntime.Registry);
+        a.McpStore = new ConfigurationModule.McpServerStore();
+        var mcpManaged = McpConfiguration.BuildManaged(
+            a.Secrets, a.Audit, msg => FileLog.Write("Mcp", msg), a.PluginRuntime.Packages.PythonSources, a.PluginRuntime.Registry, a.McpStore);
+        a.McpManaged = mcpManaged;
+        a.Mcp = new McpWiring(mcpManaged.UseCase, mcpManaged.Runtime);
         a.Plain = new PlainSender(a.Box, a.Source, registry, a.Ui, ownLedger, a.Ui.EmitLog, a.Traces, a.Audit,
             a.RiskBackoff, a.PlatformPolicies, a.Brain);
 
@@ -151,6 +165,15 @@ internal static partial class CompositionRoot
 
         // 会话级权限元数据（批次 B）：内存台账，只记录不改判定 —— 面板的“工具/权限”那页读它。
         a.SessionPolicies = new SessionPolicyLedger();
-        a.Approvals = BuildApprovalUseCase(a.Box, a.Ui, registry, a.Plain, a.SessionPolicies, a.Traces, a.Audit, a.PluginRuntime.Registry);
+        a.AccessRoleStore = new ConfigurationModule.AccessRoleStore();
+        a.AccessRoles = new AccessRoleResolver(a.AccessRoleStore.Load().Bindings);
+        a.Approvals = BuildApprovalUseCase(
+            a.Box, a.Ui, registry, a.Plain, a.SessionPolicies, a.Traces, a.Audit,
+            a.PluginRuntime.Registry, a.Mcp.UseCase, a.AccessRoles,
+            (key, ctx) => ConversationProfileResolver.Resolve(
+                a.Box.Current,
+                a.PlatformPolicies.Resolve(ctx ?? ResolveSourcePlatformContext(a.Box.Current, key)),
+                key),
+            toolId => a.PluginGate?.AllowsTool(toolId) ?? true);
     }
 }

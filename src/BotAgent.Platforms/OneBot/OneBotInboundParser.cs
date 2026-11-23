@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.Music;
 using BotAgent.Services.Qq;
@@ -163,11 +164,16 @@ internal static class OneBotInboundParser
     /// <summary>解析消息成纯文本；数组段（text/at/image…）或 raw_message（CQ 码）均支持。</summary>
     internal static (string Text, bool Mentioned, List<string> ImageUrls, List<MusicShare> MusicShares) ParseMessage(
         JsonArray? segments, string? rawMessage, long selfId, Dictionary<string, JsonNode?>? forwards = null)
+        => ParseMessage(segments, rawMessage, selfId, forwards, out _);
+
+    internal static (string Text, bool Mentioned, List<string> ImageUrls, List<MusicShare> MusicShares) ParseMessage(
+        JsonArray? segments, string? rawMessage, long selfId, Dictionary<string, JsonNode?>? forwards, out bool hasExternalCardOrForward)
     {
         var sb = new System.Text.StringBuilder();
         var mentioned = false;
         var imageUrls = new List<string>();
         var musicShares = new List<MusicShare>();
+        hasExternalCardOrForward = false;
 
         if (segments is not null && segments.Count > 0)
         {
@@ -237,6 +243,7 @@ internal static class OneBotInboundParser
                         break;
                     case "music":
                     case "json":
+                        hasExternalCardOrForward = true;
                         // 音乐分享：OneBot 的 music 段（带平台+id）或 QQ 客户端的新版 json 卡片。
                         // 这两种段以前直接被丢掉，机器人只见一个空消息 —— 现在把歌认出来。
                         // 不是音乐的其他分享卡片（新闻/小程序/链接）走下面的“分享卡片”分支。
@@ -271,6 +278,7 @@ internal static class OneBotInboundParser
                         break;
 
                     case "forward":
+                        hasExternalCardOrForward = true;
                         // 合并转发的聊天记录：内容在 get_forward_msg 里，展开成正文
                         var forwardId = data?["id"]?.GetValue<string>();
                         var record = forwardId is not null && forwards is not null && forwards.TryGetValue(forwardId, out var node)
@@ -300,7 +308,7 @@ internal static class OneBotInboundParser
 
         if (rawMessage is not null)
         {
-            var text = StripCqCode(rawMessage, selfId, out mentioned, forwards);
+            var text = StripCqCode(rawMessage, selfId, out mentioned, forwards, out hasExternalCardOrForward);
             var sharesFromRaw = new List<MusicShare>();
             if (MusicShareParser.TryParseText(rawMessage) is { } fromRaw)
             {
@@ -320,8 +328,12 @@ internal static class OneBotInboundParser
 
     /// <summary>把 CQ 码文本转成可读文本：[CQ:at,qq=123] 保留 @ 目标，图片/表情等替换为占位。</summary>
     internal static string StripCqCode(string raw, long selfId, out bool mentioned, Dictionary<string, JsonNode?>? forwards = null)
+        => StripCqCode(raw, selfId, out mentioned, forwards, out _);
+
+    internal static string StripCqCode(string raw, long selfId, out bool mentioned, Dictionary<string, JsonNode?>? forwards, out bool hasExternalCardOrForward)
     {
         mentioned = false;
+        hasExternalCardOrForward = false;
         var result = new System.Text.StringBuilder();
         int i = 0;
         while (i < raw.Length)
@@ -386,9 +398,11 @@ internal static class OneBotInboundParser
                         result.Append("[文件:").Append(FirstNonEmpty(GetArg(args, "name"), GetArg(args, "file"), "未命名")).Append(']');
                         break;
                     case "music":
+                        hasExternalCardOrForward = true;
                         result.Append("[音乐分享]");
                         break;
                     case "forward":
+                        hasExternalCardOrForward = true;
                         // CQ 码形式的合并转发：id 取出来就能查内容
                         var cqForwardId = GetArg(args, "id");
                         var cqRecord = cqForwardId.Length > 0 && forwards is not null && forwards.TryGetValue(cqForwardId, out var cqNode)
@@ -397,6 +411,7 @@ internal static class OneBotInboundParser
                         result.Append(' ').Append(cqRecord ?? "[合并转发的聊天记录，内容未能取回]");
                         break;
                     case "json":
+                        hasExternalCardOrForward = true;
                         result.Append("[分享卡片]");
                         break;
                 }
@@ -469,6 +484,121 @@ internal static class OneBotInboundParser
     /// <summary>日志里截短（动作失败原因可能很长）。</summary>
     internal static string Shorten(string text, int max)
         => text.Length <= max ? text : text[..max] + "…";
+
+    /// <summary>
+    /// 提取入站语音段（record）与文件段（file）句柄，不在收包循环做任何网络或磁盘 I/O。
+    /// </summary>
+    internal static (List<InboundVoiceAttachment> Voices, List<InboundFileAttachment> Files) ParseMediaAttachments(
+        JsonArray? segments,
+        string? rawMessage)
+    {
+        var voices = new List<InboundVoiceAttachment>();
+        var files = new List<InboundFileAttachment>();
+
+        if (segments is { Count: > 0 })
+        {
+            foreach (var seg in segments)
+            {
+                var type = seg?["type"]?.GetValue<string>();
+                var data = seg?["data"];
+                if (type == "record" && voices.Count < 4)
+                {
+                    var url = ValidHttpUrl(NodeAsText(data?["url"]));
+                    var fileRef = SanitizeOpaqueMediaRef(FirstNonEmpty(NodeAsText(data?["file"]), NodeAsText(data?["file_id"])), allowLeadingSlashId: false);
+                    var secs = ReadInt(data?["seconds"]);
+                    if (url is not null || fileRef is not null)
+                        voices.Add(new InboundVoiceAttachment(url, null, fileRef, secs > 0 ? secs : null));
+                }
+                else if (type == "file" && files.Count < 4)
+                {
+                    var rawName = FirstNonEmpty(NodeAsText(data?["name"]), NodeAsText(data?["file"]), "attachment.dat");
+                    var name = SafeDisplayFileName(rawName);
+                    var url = ValidHttpUrl(NodeAsText(data?["url"]));
+                    var fileId = SanitizeOpaqueMediaRef(FirstNonEmpty(NodeAsText(data?["file_id"]), NodeAsText(data?["file"])), allowLeadingSlashId: true);
+                    var size = ReadLong(data?["file_size"]);
+                    if (url is not null || fileId is not null)
+                        files.Add(new InboundFileAttachment(name, url, fileId, size > 0 ? size : null));
+                }
+            }
+
+            return (voices, files);
+        }
+
+        if (!string.IsNullOrEmpty(rawMessage))
+        {
+            int idx = 0;
+            while (idx < rawMessage.Length)
+            {
+                var start = rawMessage.IndexOf("[CQ:", idx, StringComparison.Ordinal);
+                if (start < 0) break;
+                var end = rawMessage.IndexOf(']', start);
+                if (end < 0) break;
+                var body = rawMessage.Substring(start + 4, end - start - 4);
+                var comma = body.IndexOf(',');
+                var cqType = comma < 0 ? body : body[..comma];
+                var args = comma < 0 ? string.Empty : body[(comma + 1)..];
+                if (cqType == "record" && voices.Count < 4)
+                {
+                    var url = ValidHttpUrl(GetArg(args, "url"));
+                    var fileRef = SanitizeOpaqueMediaRef(FirstNonEmpty(GetArg(args, "file"), GetArg(args, "file_id")), allowLeadingSlashId: false);
+                    var secs = int.TryParse(GetArg(args, "seconds"), out var s) && s > 0 ? s : (int?)null;
+                    if (url is not null || fileRef is not null)
+                        voices.Add(new InboundVoiceAttachment(url, null, fileRef, secs));
+                }
+                else if (cqType == "file" && files.Count < 4)
+                {
+                    var name = SafeDisplayFileName(FirstNonEmpty(GetArg(args, "name"), GetArg(args, "file"), "attachment.dat"));
+                    var url = ValidHttpUrl(GetArg(args, "url"));
+                    var fileId = SanitizeOpaqueMediaRef(FirstNonEmpty(GetArg(args, "file_id"), GetArg(args, "file")), allowLeadingSlashId: true);
+                    var size = long.TryParse(GetArg(args, "file_size"), out var sz) && sz > 0 ? sz : (long?)null;
+                    if (url is not null || fileId is not null)
+                        files.Add(new InboundFileAttachment(name, url, fileId, size));
+                }
+                idx = end + 1;
+            }
+        }
+
+        return (voices, files);
+    }
+
+    internal static string SafeDisplayFileName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "attachment.dat";
+        var normalized = raw.Replace('\\', '/').Trim();
+        var slash = normalized.LastIndexOf('/');
+        var leaf = slash >= 0 ? normalized[(slash + 1)..] : normalized;
+        return string.IsNullOrWhiteSpace(leaf) || leaf is "." or ".." ? "attachment.dat" : leaf;
+    }
+
+    /// <summary>
+    /// 拦截本地路径与路径穿越（防止协议端 get_file/get_record 读取宿主机或协议端容器本地配置文件）。
+    /// </summary>
+    internal static string? SanitizeOpaqueMediaRef(string? candidate, bool allowLeadingSlashId)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return null;
+        var trimmed = candidate.Trim();
+        if (trimmed.Length > 256 || trimmed.Contains("..", StringComparison.Ordinal))
+            return null;
+        foreach (var ch in trimmed)
+        {
+            if (char.IsControl(ch) || ch is '\\' or ':' or '?' or '#' or '*' or '"' or '<' or '>')
+                return null;
+        }
+        var check = allowLeadingSlashId && trimmed.StartsWith('/') ? trimmed[1..] : trimmed;
+        if (check.Length == 0 || check is "." or ".." || check.Contains('/'))
+            return null;
+        return trimmed;
+    }
+
+    internal static string? ValidHttpUrl(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return null;
+        var trimmed = candidate.Trim();
+        return trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : null;
+    }
 
     private static void Log(string message) => FileLog.Write("OneBot", message);
 }

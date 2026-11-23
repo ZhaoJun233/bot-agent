@@ -108,10 +108,10 @@ internal static class EngineWiringTests
         async Task InvokeAsync(EffectivePlatformPolicy policy)
         {
             // 只等待真实投递完成，门禁断言检查构建/发送副作用；内部结果现在是 VoiceDeliveryReport。
-            var task = (Task)send.Invoke(delivery, new object[]
+            var task = (Task)send.Invoke(delivery, new object?[]
             {
                 conversation, settings, caps, policy, new List<string> { "synthetic" }, "synthetic",
-                true, 10001L, new CompletionResult(null, null, null), false,
+                true, 10001L, new CompletionResult(null, null, null), false, null,
             })!;
             await task;
         }
@@ -154,9 +154,9 @@ internal static class EngineWiringTests
             var caps = ResearchToolFixture.Capabilities(false, false, true, false, true, null);
             var delivery = Component(pipeline, "_delivery");
             var method = delivery.GetType().GetMethod("TryVoiceAsync", BindingFlags.Instance | BindingFlags.Public)!;
-            Task InvokeAsync() => (Task)method.Invoke(delivery, new object[]
+            Task InvokeAsync() => (Task)method.Invoke(delivery, new object?[]
             { conversation, settings, caps, policy, new List<string> { "synthetic" }, "synthetic",
-                true, 10001L, new CompletionResult(null, null, null), false })!;
+                true, 10001L, new CompletionResult(null, null, null), false, null })!;
 
             await InvokeAsync();
             check(voice.Builds == 0 && source.VoiceCalls == 0, platform + " unregistered voice plugin starts no build/send");
@@ -573,10 +573,10 @@ internal static class EngineWiringTests
         var caps = ResearchToolFixture.Capabilities(false, true, true, false, true, null);
         var actionComponent = Component(pipeline, "_actions");
         var queueActions = actionComponent.GetType().GetMethod("QueueTurnActions", BindingFlags.Instance | BindingFlags.Public)!;
-        async Task InvokeAsync() => await (Task)queueActions.Invoke(actionComponent, new object[]
+        async Task InvokeAsync() => await (Task)queueActions.Invoke(actionComponent, new object?[]
         {
             conversation, settings, caps, EnabledPolicy(),
-            new CompletionResult(null, null, null, Listen: "synthetic"), false,
+            new CompletionResult(null, null, null, Listen: "synthetic"), false, null,
         })!;
 
         await InvokeAsync();
@@ -635,9 +635,9 @@ internal static class EngineWiringTests
         });
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        queueSearch.Invoke(searchComponent, new object[] { conversation,
+        queueSearch.Invoke(searchComponent, new object?[] { conversation,
             new BotAgent.Domain.Tools.ToolCall("web.search", new() { ["query"] = "synthetic-query" }),
-            catalog.FindBinding("web.search")!, settings, EnabledPolicy(), catalog });
+            catalog.FindBinding("web.search")!, settings, EnabledPolicy(), catalog, null });
         check(research.Calls == 0 && background.Snapshot().Queued == 1,
             "web search is admitted through the bounded queue, not started inline");
 

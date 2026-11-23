@@ -28,10 +28,18 @@ internal sealed class TaskApprovalGate(
     /// deny-all token is necessary because null, empty and whitespace-only scopes mean inherit.
     /// </summary>
     public AgentTaskRequest Prepare(AgentTaskRequest request, IEnumerable<string>? mcpToolNames = null)
+        => PrepareWithPluginTools(request, mcpToolNames, sameScopePluginToolIds: null);
+
+    public AgentTaskRequest PrepareWithPluginTools(
+        AgentTaskRequest request,
+        IEnumerable<string>? mcpToolNames = null,
+        IEnumerable<string>? sameScopePluginToolIds = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         var access = ServerToolAccess.Resolve(settings(), dockerAvailable(), request.ToolScope);
-        var names = access.Tools.Concat((mcpToolNames ?? []).Where(access.AllowsMcp))
+        var names = access.Tools
+            .Concat((mcpToolNames ?? []).Where(access.AllowsMcp))
+            .Concat((sameScopePluginToolIds ?? []).Where(access.AllowsMcp))
             .Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray();
         // Local code requires explicit names, never an inherited/unrestricted tool scope.
         var candidates = names.Where(name => request.ToolScope?.Contains(name, StringComparer.Ordinal) == true);

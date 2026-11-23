@@ -43,6 +43,10 @@ public sealed class ServerToolAccess
     /// <summary>某个 MCP 工具这次能不能用（作用域按工具全名卡；未声明 = 全放）。</summary>
     public bool AllowsMcp(string? qualifiedName) => Scope.Allows(qualifiedName);
 
+    /// <summary>收窄为不含任何内置工具（用于记忆污点下进入通用助理模式，保留作用域）。</summary>
+    public ServerToolAccess WithoutBuiltinTools()
+        => new(new HashSet<string>(StringComparer.OrdinalIgnoreCase), QqActions, Scope);
+
     /// <summary>
     /// 按配置 + 容器能力 + 可选任务作用域解析一次。
     /// <paramref name="dockerAvailable" /> 是“这个容器里真的有 docker”，由宿主侧探测后传进来（Engine 不碰环境）。

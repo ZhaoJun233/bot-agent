@@ -3,6 +3,7 @@ import { agentPresentation } from '../../../../../packages/agent/frontend/presen
 import { conversationPresentation } from '../../../../../packages/conversation/frontend/presentation'
 import { healthReportingPresentation } from '../../../../../packages/health-reporting/frontend/presentation'
 import { modelProvidersPresentation, modelServicesPresentation } from '../../../../../packages/model-services/frontend/presentation'
+import { mcpToolsPresentation } from '../../../../../packages/mcp-tools/frontend/presentation'
 import { musicPresentation } from '../../../../../packages/music/frontend/presentation'
 import { platformFeishuPresentation } from '../../../../../packages/platform-feishu/frontend/presentation'
 import { platformLocalPresentation } from '../../../../../packages/platform-local/frontend/presentation'
@@ -15,6 +16,11 @@ import { quotaPresentation } from '../../../../../packages/token-quota/frontend/
 import { vibesPresentation } from '../../../../../packages/vibes/frontend/presentation'
 import { voicePresentation } from '../../../../../packages/voice/frontend/presentation'
 import { researchPresentation } from '../../../../../packages/websearch/frontend/presentation'
+import { documentsPresentation } from '../../../../../packages/documents/frontend/presentation'
+import { digestPresentation } from '../../../../../packages/digest/frontend/presentation'
+import { knowledgePresentation } from '../../../../../packages/knowledge/frontend/presentation'
+import { schedulerPresentation } from '../../../../../packages/scheduler/frontend/presentation'
+import { personalTodoPresentation } from '../../../../../packages/personal-todo/frontend/presentation'
 import type { ZbaConfigurationView, ZbaPatchSection, ZbaReadField, ZbaSecretSlot } from '../../api/zba'
 
 /**
@@ -42,6 +48,8 @@ export interface PlatformPolicyCopy {
   privatePlaceholder?: string
 }
 
+export type DriverCredentialMode = 'none' | 'optional-env' | 'required-env' | 'required'
+
 export type PluginConfigurationEditor =
   | { type: 'fields' }
   | { type: 'component'; load: () => Promise<{ default: Component }> }
@@ -63,6 +71,8 @@ export interface PluginSettingsSpec {
   policyPlatformId?: string
   /** 包声明的图标标识（供宿主领域卡片与导航解析）。 */
   icon?: string
+  /** 平台驱动接入凭据模式（仅用于显示层状态语义，不改变底层 wire 布尔值）。 */
+  credentialMode?: DriverCredentialMode
   /** 凭据获取方式说明（如环境变量只读密钥提示），在配置抽屉顶部展示。 */
   credentialHint?: string
   /** 是否支持平台消息能力与限制检查弹窗。 */
@@ -111,6 +121,10 @@ const presets: PluginSettingsSpec[] = [
   modelServicesPresentation,
   modelProvidersPresentation,
   agentPresentation,
+  {
+    ...mcpToolsPresentation,
+    kind: 'system' as const
+  },
   platformQqPrivatePresentation,
   platformQqOfficialPresentation,
   platformFeishuPresentation,
@@ -127,7 +141,12 @@ const presets: PluginSettingsSpec[] = [
   pokePresentation,
   vibesPresentation,
   profilesPresentation,
-  researchPresentation
+  researchPresentation,
+  documentsPresentation,
+  digestPresentation,
+  knowledgePresentation,
+  schedulerPresentation,
+  personalTodoPresentation
 ]
 
 /** 当前登记的插件与系统能力；保持数组接口，登记请走 registerPlugin。 */
