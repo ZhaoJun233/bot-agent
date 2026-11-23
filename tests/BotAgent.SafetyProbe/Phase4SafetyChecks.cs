@@ -379,7 +379,7 @@ public static partial class Program
             var expRuntime = new AgentTaskRuntime(
                 new CountingTaskExecutor(),
                 () => clockTime,
-                approvalGate: new StaticTaskApprovalGate("py.danger", TimeSpan.FromSeconds(10)));
+                approvalGate: new StaticTaskApprovalGate("py.danger", TimeSpan.FromSeconds(10), () => clockTime));
             try
             {
                 var expSub = expRuntime.Submit(new AgentTaskRequest
@@ -451,12 +451,12 @@ public static partial class Program
         }
     }
 
-    private sealed class StaticTaskApprovalGate(string toolId, TimeSpan ttl) : IAgentTaskApprovalGate
+    private sealed class StaticTaskApprovalGate(string toolId, TimeSpan ttl, Func<DateTimeOffset>? clock = null) : IAgentTaskApprovalGate
     {
         public AgentTaskApprovalRequest? Create(AgentTaskRequest request)
         {
             if (request.ToolScope?.Contains(toolId, StringComparer.OrdinalIgnoreCase) == true && request.PythonToolLeases.Count > 0)
-                return new AgentTaskApprovalRequest("task-req-1", toolId, "run " + toolId, DateTimeOffset.UtcNow.Add(ttl));
+                return new AgentTaskApprovalRequest("task-req-1", toolId, "run " + toolId, (clock?.Invoke() ?? DateTimeOffset.UtcNow).Add(ttl));
             return null;
         }
     }
