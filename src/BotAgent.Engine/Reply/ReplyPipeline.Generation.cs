@@ -357,6 +357,10 @@ public sealed partial class ReplyPipeline
                     return true;
                 }
             }
+            else if (result.Action == Domain.Reply.ReplyAction.Tool)
+            {
+                await _approvals.OpenApprovalForTool(conversation, requestedToolId, triggerMessageId, caps);
+            }
         }
 
         // P2 提问路径（V3 §8.1 的 action=ask，**默认关**）：模型想问就问，但**提问不是权限** ——
