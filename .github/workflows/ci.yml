@@ -50,6 +50,7 @@ jobs:
           git init "$RUNNER_TEMP/bot-agent-plugins"
           git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
           git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
+          python3 -m pip install --quiet jsonschema referencing
           dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
           python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
           echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
@@ -265,6 +266,10 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: src/web/package-lock.json
+      - name: Install Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
       - name: Install dependencies
         run: npm ci
       - name: Build static assets
@@ -280,6 +285,7 @@ jobs:
           git init "$RUNNER_TEMP/bot-agent-plugins"
           git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
           git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
+          python3 -m pip install --quiet jsonschema referencing
           dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
           python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
           echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
@@ -348,6 +354,7 @@ jobs:
           git init "$RUNNER_TEMP/bot-agent-plugins"
           git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
           git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
+          python3 -m pip install --quiet jsonschema referencing
           dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
           python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
           echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
