@@ -86,7 +86,7 @@ test('runtime plugin UI: real token-quota iframe loads classic script, enforces 
   expect(htmlRes.headers()['cache-control']).toContain('immutable')
 
   const frame = page.frameLocator('[data-testid="plugin-ui-dialog"] iframe.plugin-ui-iframe')
-  await expect(frame.locator('#quota-meta')).toContainText('v1.0.0')
+  await expect(frame.locator('#quota-meta')).toContainText('v1.1.0')
   await expect(frame.locator('#quota-list')).toContainText('测试群A')
   await expect(frame.locator('#quota-list')).toContainText('已用 1234 / 限额 50000 · 修订 3')
 
@@ -121,7 +121,7 @@ test('runtime plugin UI: real stickers iframe completes zba.ui.init handshake an
 
   await expect(page.getByTestId('plugin-ui-dialog')).toBeVisible()
   const frame = page.frameLocator('[data-testid="plugin-ui-dialog"] iframe.plugin-ui-iframe')
-  await expect(frame.locator('#generation-badge')).toContainText('v1.0.0 · 代次')
+  await expect(frame.locator('#generation-badge')).toContainText('v1.1.0 · 代次')
   await expect(frame.locator('#status-line')).toContainText('活跃代际会话已建立')
 
   await frame.locator('#close-btn').click()

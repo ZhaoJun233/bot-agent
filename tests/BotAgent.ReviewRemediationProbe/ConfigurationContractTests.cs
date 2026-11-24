@@ -1387,6 +1387,24 @@ internal static class ConfigurationContractTests
         }
     }
 
+    private static (int ModelPort, int PanelPort, int BridgePort) ReserveConfigurationHttpPorts()
+    {
+        var reserved = new List<System.Net.Sockets.TcpListener>(3);
+        var ports = new List<int>(3);
+        try
+        {
+            for (var candidate = 19100 + Random.Shared.Next(0, 4000); candidate < 28999 && ports.Count < 3; candidate++)
+            {
+                var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, candidate);
+                try { listener.Start(); reserved.Add(listener); ports.Add(candidate); }
+                catch (System.Net.Sockets.SocketException) { listener.Stop(); }
+            }
+            if (ports.Count < 3) throw new InvalidOperationException("synthetic_free_ports_unavailable");
+            return (ports[0], ports[1], ports[2]);
+        }
+        finally { foreach (var listener in reserved) listener.Stop(); }
+    }
+
     private static async Task<int?> ConfigurationHttpChildAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-http-" + Guid.NewGuid().ToString("N"));
@@ -1405,12 +1423,7 @@ internal static class ConfigurationContractTests
             var repository = directory?.FullName ?? throw new InvalidOperationException("synthetic_repository_missing");
             var headless = Path.Combine(repository, "src", "BotAgent.Headless", "bin", "Release", "net10.0", "BotAgent.Headless.dll");
             var harness = Assembly.LoadFrom(Path.Combine(repository, "tests", "BotAgent.IntegrationHarness", "bin", "Release", "net10.0", "BotAgent.IntegrationHarness.dll"));
-            int Port()
-            {
-                using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-                listener.Start(); return ((IPEndPoint)listener.LocalEndpoint).Port;
-            }
-            var modelPort = Port(); var panelPort = Port(); var bridgePort = Port();
+            var (modelPort, panelPort, bridgePort) = ReserveConfigurationHttpPorts();
             var mockType = harness.GetType("BotAgent.IntegrationHarness.MockOpenAi", throwOnError: true)!;
             mock = (IDisposable)Activator.CreateInstance(mockType, new object[] { modelPort, "127.0.0.1" })!;
             mockType.GetMethod("Start")!.Invoke(mock, null);
@@ -1446,17 +1459,18 @@ internal static class ConfigurationContractTests
             {
                 process = Process.Start(start) ?? throw new InvalidOperationException("synthetic_host_start_failed");
                 stdout = process.StandardOutput.ReadToEndAsync(); stderr = process.StandardError.ReadToEndAsync();
-                for (var i = 0; i < 160; i++)
+                for (var i = 0; i < 300; i++)
                 {
                     if (process.HasExited) throw new InvalidOperationException("synthetic_host_early_exit");
                     try
                     {
-                        using var response = await http.GetAsync("/zba/v1/health");
+                        using var pollCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                        using var response = await http.GetAsync("/zba/v1/health", pollCts.Token);
                         if (response.IsSuccessStatusCode
-                            && JsonNode.Parse(await response.Content.ReadAsStringAsync())?["ready"]?.GetValue<bool>() == true)
+                            && JsonNode.Parse(await response.Content.ReadAsStringAsync(pollCts.Token))?["ready"]?.GetValue<bool>() == true)
                             return;
                     }
-                    catch (HttpRequestException) { }
+                    catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) { }
                     await Task.Delay(100);
                 }
                 throw new TimeoutException("synthetic_host_not_ready");
