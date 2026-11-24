@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { seedOperationRecovery } from './tests/fixtures/operation-recovery-host'
+import { seedOfficialPlugins } from './tests/fixtures/official-plugins-host'
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(webRoot, '../..')
@@ -24,6 +25,8 @@ const noTokenWsPort = 13077
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'botagent-web-s1-'))
 const noTokenDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'botagent-web-s1-no-token-'))
 if (process.env.BOTAGENT_WEB_TEST_RECOVERY === '1') seedOperationRecovery(dataDir)
+seedOfficialPlugins(dataDir)
+seedOfficialPlugins(noTokenDataDir)
 const inheritedEnv = Object.fromEntries(
   Object.entries(process.env).filter(([key, value]) =>
     value !== undefined && !/^(BOTAGENT|QQCHAT|OPENAI|MINIMAX|TTS|HARNESS)_/i.test(key))

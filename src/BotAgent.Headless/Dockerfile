@@ -46,14 +46,6 @@ COPY contracts/digest/BotAgent.Digest.Contracts.csproj contracts/digest/
 COPY contracts/knowledge/BotAgent.Knowledge.Contracts.csproj contracts/knowledge/
 COPY contracts/scheduler/BotAgent.Scheduler.Contracts.csproj contracts/scheduler/
 COPY contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj contracts/personaltodo/
-COPY packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj packages/token-quota/backend/
-COPY packages/websearch/backend/BotAgent.Package.WebSearch.csproj packages/websearch/backend/
-COPY packages/poke/backend/BotAgent.Package.Poke.csproj packages/poke/backend/
-COPY packages/vibes/backend/BotAgent.Package.Vibes.csproj packages/vibes/backend/
-COPY packages/stickers/backend/BotAgent.Package.Stickers.csproj packages/stickers/backend/
-COPY packages/music/backend/BotAgent.Package.Music.csproj packages/music/backend/
-COPY packages/voice/backend/BotAgent.Package.Voice.csproj packages/voice/backend/
-COPY packages/profiles/backend/BotAgent.Package.Profiles.csproj packages/profiles/backend/
 COPY packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj packages/health-reporting/backend/
 COPY packages/model-services/backend/BotAgent.Package.ModelServices.csproj packages/model-services/backend/
 COPY packages/agent/backend/BotAgent.Package.Agent.csproj packages/agent/backend/
@@ -63,11 +55,6 @@ COPY packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csp
 COPY packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj packages/platform-qq-official/backend/
 COPY packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj packages/platform-feishu/backend/
 COPY packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj packages/platform-local/backend/
-COPY packages/documents/backend/BotAgent.Package.Documents.csproj packages/documents/backend/
-COPY packages/digest/backend/BotAgent.Package.Digest.csproj packages/digest/backend/
-COPY packages/knowledge/backend/BotAgent.Package.Knowledge.csproj packages/knowledge/backend/
-COPY packages/scheduler/backend/BotAgent.Package.Scheduler.csproj packages/scheduler/backend/
-COPY packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj packages/personal-todo/backend/
 COPY tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj tools/BotAgent.PluginBundle/
 RUN dotnet restore src/BotAgent.Headless/BotAgent.Headless.csproj
 
@@ -99,24 +86,6 @@ COPY contracts/digest/ contracts/digest/
 COPY contracts/knowledge/ contracts/knowledge/
 COPY contracts/scheduler/ contracts/scheduler/
 COPY contracts/personaltodo/ contracts/personaltodo/
-COPY packages/token-quota/backend/ packages/token-quota/backend/
-COPY packages/token-quota/web/ packages/token-quota/web/
-COPY packages/token-quota/distribution.json packages/token-quota/
-COPY packages/websearch/backend/ packages/websearch/backend/
-COPY packages/websearch/distribution.json packages/websearch/
-COPY packages/poke/backend/ packages/poke/backend/
-COPY packages/poke/distribution.json packages/poke/
-COPY packages/vibes/backend/ packages/vibes/backend/
-COPY packages/vibes/distribution.json packages/vibes/
-COPY packages/stickers/backend/ packages/stickers/backend/
-COPY packages/stickers/web/ packages/stickers/web/
-COPY packages/stickers/distribution.json packages/stickers/
-COPY packages/music/backend/ packages/music/backend/
-COPY packages/music/distribution.json packages/music/
-COPY packages/voice/backend/ packages/voice/backend/
-COPY packages/voice/distribution.json packages/voice/
-COPY packages/profiles/backend/ packages/profiles/backend/
-COPY packages/profiles/distribution.json packages/profiles/
 COPY packages/health-reporting/backend/ packages/health-reporting/backend/
 COPY packages/health-reporting/distribution.json packages/health-reporting/
 COPY packages/model-services/backend/ packages/model-services/backend/
@@ -135,18 +104,6 @@ COPY packages/platform-feishu/backend/ packages/platform-feishu/backend/
 COPY packages/platform-feishu/distribution.json packages/platform-feishu/
 COPY packages/platform-local/backend/ packages/platform-local/backend/
 COPY packages/platform-local/distribution.json packages/platform-local/
-COPY packages/documents/backend/ packages/documents/backend/
-COPY packages/documents/distribution.json packages/documents/
-COPY packages/digest/backend/ packages/digest/backend/
-COPY packages/digest/distribution.json packages/digest/
-COPY packages/knowledge/backend/ packages/knowledge/backend/
-COPY packages/knowledge/distribution.json packages/knowledge/
-COPY packages/scheduler/backend/ packages/scheduler/backend/
-COPY packages/scheduler/web/ packages/scheduler/web/
-COPY packages/scheduler/distribution.json packages/scheduler/
-COPY packages/personal-todo/backend/ packages/personal-todo/backend/
-COPY packages/personal-todo/web/ packages/personal-todo/web/
-COPY packages/personal-todo/distribution.json packages/personal-todo/
 COPY tools/BotAgent.PluginBundle/ tools/BotAgent.PluginBundle/
 
 # UseAppHost=false：镜像里直接用 dotnet 启动，免得多带一个 apphost 可执行文件

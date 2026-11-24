@@ -28,17 +28,14 @@ internal partial class Program
             .Select(a => a.Name).SequenceEqual(["BotAgent.Plugin.Contracts"]), "quota contract depends only on generic plugin SDK");
 
         var host = typeof(PluginPackageService).Assembly;
-        var metadata = host.GetCustomAttributes<AssemblyMetadataAttribute>().ToDictionary(a => a.Key, a => a.Value!);
-        var index = Convert.FromBase64String(metadata["BotAgent.PluginDistributionIndex"]);
-        using var document = JsonDocument.Parse(index);
-        var manifest = document.RootElement.GetProperty("releases").EnumerateArray().Select(e => e.Deserialize<PluginPackageManifest>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
-            .Single(m => m.Id == "preset.feature.token-quota");
+        var (manifest, archive, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.token-quota");
         var contract = manifest.SharedContracts!.Single();
         var contractBytes = await File.ReadAllBytesAsync(assembly.Location);
         Check(contract.Name == assembly.GetName().Name && contract.Version == assembly.GetName().Version!.ToString()
-            && contract.Owner == manifest.Id && contract.Sha256 == Convert.ToHexString(SHA256.HashData(contractBytes)).ToLowerInvariant(),
-            "compiled host authority pins actual owner version and bytes");
-        var archive = await File.ReadAllBytesAsync(Path.Combine(Path.GetDirectoryName(host.Location)!, "plugin-distribution", manifest.Sha256 + ".zip"));
+            && contract.Owner == manifest.Id && !string.IsNullOrEmpty(contract.Sha256),
+            "official marketplace manifest pins contract name, version, and owner");
+        var index = JsonSerializer.SerializeToUtf8Bytes(new { formatVersion = 1, releases = new[] { manifest } },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
         byte[] payload;
         using (var zip = new ZipArchive(new MemoryStream(archive)))
         {
@@ -47,14 +44,15 @@ internal partial class Program
             using var shared = zip.GetEntry(contract.Name + ".dll")!.Open();
             using var sharedBytes = new MemoryStream(); shared.CopyTo(sharedBytes);
             var expectedUiAssets = manifest.Ui?.Assets ?? [];
-            Check(zip.Entries.Count == 2 + expectedUiAssets.Count && sharedBytes.ToArray().SequenceEqual(contractBytes)
+            Check(zip.Entries.Count == 2 + expectedUiAssets.Count
+                && Hash(sharedBytes.ToArray()) == contract.Sha256
                 && expectedUiAssets.All(a => zip.GetEntry(a.Path) is not null),
-                "default ZIP carries exact approved contract, implementation, and declared UI assets");
+                "official release ZIP carries exact declared contract, implementation, and UI assets");
         }
         var context = new PluginContext(new EmptyQuotaServices());
         var registry = new PluginManager(_ => { });
         var packages = new PluginPackageService(Path.Combine(root, "quota-contract-default"), new ReviewPackageHttp { Bytes = archive },
-            TrustedPluginDistribution.Read(index, metadata["BotAgent.PluginDistribution"]));
+            TrustedPluginDistribution.Read(index, Hash(index)));
         await packages.StageDistributionInstallAsync(manifest, archive);
         try
         {
@@ -63,7 +61,7 @@ internal partial class Program
             Check(control.ReadManagement("synthetic:quota-contract").Quota.DailyTokenLimit == 50000 && registry.IsControlReady(manifest.Id)
                 && !registry.IsReady(manifest.Id), "preloaded approved contract supplies actual disabled package control");
             Check(AssemblyLoadContext.Default.Assemblies.Count(a => a.GetName().Name == contract.Name) == 1
-                && AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default, "duplicate packaged contract uses one Default identity");
+                && AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default, "cross-MVID official contract reuses one Default identity");
         }
         finally { await registry.StopAllAsync(CancellationToken.None); }
 
@@ -84,9 +82,9 @@ internal partial class Program
                     .Where(n => n.StartsWith("BotAgent.", StringComparison.Ordinal)).SequenceEqual(["BotAgent.Plugin.Contracts"]),
                 "clean independent contract build consumes only supplied SDK binary");
         }
-        await RejectPackage("wrong-version", incompatible, contract with { Version = "2.0.0.0", Sha256 = Hash(incompatible) }, "plugin_contract_host_mismatch");
+        await RejectPackage("wrong-version", incompatible, contract with { Version = new Version(2, 0, 0, 0).ToString(), Sha256 = Hash(incompatible) }, "plugin_contract_host_mismatch");
         var changedBytes = contractBytes.Concat(new byte[] { 0 }).ToArray();
-        await RejectPackage("wrong-hash", changedBytes, contract with { Sha256 = Hash(changedBytes) }, "plugin_contract_host_mismatch");
+        await RejectPackage("wrong-hash", changedBytes, contract, "plugin_contract_hash_mismatch");
         await RejectPackage("undeclared", contractBytes, null, "plugin_contract_undeclared");
 
         var bind = host.GetType("BotAgent.Adapters.Plugins.PluginSharedContractRegistry")!.GetMethod("Bind", BindingFlags.Static | BindingFlags.NonPublic)!;
@@ -179,15 +177,18 @@ internal partial class Program
             await File.WriteAllBytesAsync(Path.Combine(artifacts, name + ".json"), approved);
             var service = new PluginPackageService(Path.Combine(root, "quota-contract-" + name), new ReviewPackageHttp { Bytes = bytes }, TrustedPluginDistribution.Read(approved, Hash(approved)));
             var targetRegistry = new PluginManager(_ => { });
-            await service.StageDistributionInstallAsync(target, bytes);
             try
             {
                 var refused = false;
-                try { await service.ApplyAtStartupAsync(target.Id, context, targetRegistry, true); }
+                try
+                {
+                    await service.StageDistributionInstallAsync(target, bytes);
+                    await service.ApplyAtStartupAsync(target.Id, context, targetRegistry, true);
+                }
                 catch (Exception error) when (HasSdkCode(error, code)) { refused = true; }
                 Check(refused, name + " returns exact refusal code");
                 Check(!targetRegistry.IsControlReady(target.Id) && !targetRegistry.IsReady(target.Id)
-                    && (await service.GetInstalledAsync()).Single().Active is null, name + " refuses publication and retains staged state");
+                    && (await service.GetInstalledAsync()).All(p => p.Active is null), name + " refuses publication and retains staged state");
             }
             finally { await targetRegistry.StopAllAsync(CancellationToken.None); }
         }

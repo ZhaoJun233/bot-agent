@@ -72,7 +72,7 @@ internal partial class Program
             Restore(stateKey, intact); AppDatabase.SetMeta(intentKey, "{broken marker");
             Reject(() => PreserveIntent(defaults), e => e is JsonException, "broken migration record is not silently recreated");
             Check(AppDatabase.GetMeta(intentKey) == "{broken marker", "invalid marker bytes preserved");
-            AppDatabase.SetMeta(stateKey, "{\"preset.feature.music\":true,\"preset.feature.voice\":false}");
+            AppDatabase.SetMeta(stateKey, "{\"system.health-reporting\":true,\"system.conversation\":false}");
             var runtimeType = typeof(BotAgent.Adapters.Plugins.PluginPackageService).Assembly.GetType("BotAgent.Host.PluginRuntime")!;
             const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
             await using (var runtime = (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
@@ -85,7 +85,7 @@ internal partial class Program
                 Check(descriptors.All(d => d.ErrorCode == "plugin_preset_intent_needs_review"),
                     "damaged marker stays observable without blocking control construction");
                 await (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
-                Check(registry.IsEnabled("preset.feature.music") && !registry.IsEnabled("preset.feature.voice")
+                Check(registry.IsEnabled("system.health-reporting") && !registry.IsEnabled("system.conversation")
                     && registry.GetAll().Count(p => p.IsEnabled) == 1, "damaged marker keeps explicit choices and disables absent choices");
                 descriptors = (System.Collections.Immutable.ImmutableArray<BotAgent.Domain.Management.ManagedDescriptor>)runtimeType
                     .GetMethod("Describe", hidden)!.Invoke(runtime, null)!;

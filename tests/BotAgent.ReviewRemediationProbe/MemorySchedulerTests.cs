@@ -13,6 +13,7 @@ using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Panel;
+using BotAgent.Services.Profiles;
 using BotAgent.Services.Stickers;
 
 namespace BotAgent.ReviewRemediationProbe;
@@ -21,8 +22,6 @@ internal static class MemorySchedulerTests
 {
     private const string Fragment = "M153_SCHEDULER_FRAGMENT";
     private const string Summary = "M153_SCHEDULER_SUMMARY";
-    private static readonly FieldInfo TimerField = typeof(BotAgent.Packages.Profiles.ProfilesCoordinator).GetField("_summaryTimer", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo GateField = typeof(BotAgent.Packages.Profiles.ProfilesCoordinator).GetField("_summaryGate", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     public static async Task RunAsync(Action<bool, string> check)
     {
@@ -31,7 +30,7 @@ internal static class MemorySchedulerTests
         using (var f = new Fixture(null))
         {
             f.Scheduler.RebuildIfNeeded();
-            check(TimerField.GetValue(f.ProfilesRuntime) is Timer, "unwired scheduler creates configured profile timer");
+            check(OfficialFeatureFactory.GetProfilesSummaryTimer(f.ProfilesRuntime) is Timer, "unwired scheduler creates configured profile timer");
             f.Scheduler.Stop(); // Execute deterministically below; no timer sleeps or races.
             await f.RunAsync();
             check(f.Profiles.FindCalls == 1, "unwired scheduler reads nonempty candidate");
@@ -46,7 +45,7 @@ internal static class MemorySchedulerTests
             var label = enabled ? "wired-enabled" : "wired-disabled";
             check(f.Memory!.Enabled == enabled && f.Box.Current.EnableProfileSummary, label + " retains enabled summary setting and exact core state");
             f.Scheduler.RebuildIfNeeded();
-            check(TimerField.GetValue(f.ProfilesRuntime) is null, label + " creates no profile timer");
+            check(OfficialFeatureFactory.GetProfilesSummaryTimer(f.ProfilesRuntime) is null, label + " creates no profile timer");
             await f.RunAsync();
             await f.RunAsync();
             check(f.Profiles.FindCalls == 0 && f.Profiles.OtherCalls == 0, label + " performs zero profile reads");
@@ -63,7 +62,7 @@ internal static class MemorySchedulerTests
         }
         using (var f = new Fixture(null))
         {
-            var gate = (SemaphoreSlim)GateField.GetValue(f.ProfilesRuntime)!;
+            var gate = OfficialFeatureFactory.GetProfilesSummaryGate(f.ProfilesRuntime);
             await gate.WaitAsync();
             var pending = f.RunAsync();
             check(f.Profiles.FindCalls == 1 && !pending.IsCompleted, "gate test actually reaches blocked await after candidate read");
@@ -93,7 +92,7 @@ internal static class MemorySchedulerTests
         internal readonly HttpSpy Http = new();
         internal readonly UnifiedMemory? Memory;
         internal readonly BotScheduler Scheduler;
-        internal readonly BotAgent.Packages.Profiles.ProfilesCoordinator ProfilesRuntime;
+        internal readonly IProfilesRuntimeContribution ProfilesRuntime;
         private readonly StickerService _stickers;
 
         internal Fixture(bool? memoryEnabled)
@@ -109,14 +108,12 @@ internal static class MemorySchedulerTests
             _stickers = new StickerService(null!, brain, null!, Box, _ => { });
             Scheduler = new BotScheduler(Box, null!, Profiles, brain, null!, _stickers, new PanelNotifier(),
                 new BotSchedulerHooks(_ => { }, () => false), _ => true, Memory);
-            ProfilesRuntime = new BotAgent.Packages.Profiles.ProfilesCoordinator(
-                new BotAgent.Packages.Profiles.ProfilesPolicyEngine(),
-                Scheduler.CreateProfilesHostPorts());
+            ProfilesRuntime = OfficialFeatureFactory.ProfilesCoordinator(Scheduler.CreateProfilesHostPorts());
             Scheduler.BindDirectProfiles(ProfilesRuntime);
         }
 
         internal Task RunAsync() => ProfilesRuntime.RunSummarySweepAsync();
-        public void Dispose() { Scheduler.Stop(); ProfilesRuntime.Dispose(); _stickers.EnsureTimer(false); }
+        public void Dispose() { Scheduler.Stop(); (ProfilesRuntime as IDisposable)?.Dispose(); _stickers.EnsureTimer(false); }
     }
 
     private sealed class ProfileSpy : IProfileRepository

@@ -24,8 +24,15 @@ public static class PluginPackageValidation
     internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility)
         => Validate(manifest, checkCompatibility, allowReserved: false);
 
+    internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility, bool allowReserved)
+        => Validate(manifest, checkCompatibility, allowReserved, allowHistoricalHostContractDigest: false, allowLegacyOfficialEnvelope: false);
+
     internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility, bool allowReserved,
-        bool allowHistoricalHostContractDigest = false)
+        bool allowHistoricalHostContractDigest)
+        => Validate(manifest, checkCompatibility, allowReserved, allowHistoricalHostContractDigest, allowLegacyOfficialEnvelope: false);
+
+    internal static void Validate(PluginPackageManifest manifest, bool checkCompatibility, bool allowReserved,
+        bool allowHistoricalHostContractDigest = false, bool allowLegacyOfficialEnvelope = false)
     {
         if (manifest is null) throw new InvalidDataException("Manifest missing.");
         ValidateId(manifest.Id, allowReserved);
@@ -54,7 +61,13 @@ public static class PluginPackageValidation
         BotAgent.Domain.Configuration.LegacyPluginConfigurationFields.Validate(manifest);
         if (!(allowReserved && IsReservedId(manifest.Id)
             && manifest.DownloadUrl == $"host-distribution://{manifest.Id}/{manifest.Version}"))
-            ValidateUrl(manifest.DownloadUrl);
+        {
+            if (!allowReserved && OfficialPresetPolicy.IsOfficialPresetId(manifest.Id))
+                OfficialPresetPolicy.ValidateOrigin(manifest, allowLegacyOfficialEnvelope);
+            if (!(allowLegacyOfficialEnvelope && OfficialPresetPolicy.IsOfficialPresetId(manifest.Id)
+                && manifest.DownloadUrl == OfficialPresetPolicy.LegacyHostDistributionUrl(manifest.Id, manifest.Version)))
+                ValidateUrl(manifest.DownloadUrl);
+        }
         if (checkCompatibility && !IsCompatible(manifest))
             throw new InvalidDataException("Incompatible host or framework.");
         if (manifest.Permissions?.Count > 64 || manifest.Dependencies?.Count > 64 || manifest.Settings?.Count > 128)
@@ -125,13 +138,16 @@ public static class PluginPackageValidation
     public static bool IsReservedId(string? id)
         => id is not null && (id.StartsWith("preset.", StringComparison.Ordinal) || id.StartsWith("system.", StringComparison.Ordinal));
 
+    public static bool IsSystemReservedId(string? id)
+        => id is not null && id.StartsWith("system.", StringComparison.Ordinal);
+
     public static void ValidateId(string id) => ValidateId(id, allowReserved: false);
 
     internal static void ValidateId(string id, bool allowReserved)
     {
         var value = id ?? "";
         if (!Regex.IsMatch(value, "^[a-z][a-z0-9.-]{0,79}$") || value.Contains("..") || value.EndsWith('.') ||
-            !allowReserved && IsReservedId(value))
+            (!allowReserved && IsReservedId(value) && !OfficialPresetPolicy.IsOfficialPresetId(value)))
             throw new InvalidDataException("Invalid or reserved package ID.");
         ValidateRelativePath(value);
     }

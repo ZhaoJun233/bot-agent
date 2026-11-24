@@ -67,8 +67,8 @@ static class OutcomeChecks
         {
             var source = new SyntheticSource { ImageResult = () => receipt };
             using var service = new StickerService(store, null!, source, new TestSettings(), _ => { });
-            service.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-                new BotAgent.Packages.Stickers.StickerCoordinator(service.CreateHostPorts()));
+            var policy = new SyntheticStickerPolicy();
+            service.BindDirect(policy, policy);
             var result = await service.SendWithReceiptAsync(true, 10001, item, null, "group:10001");
             var confirmed = receipt.Ok && receipt.Delivery!.IsSuccess;
             Check("image receipt preserves status and only confirmed image enters cooldown " + receipt.Delivery!.Status + receipt.Ok,
@@ -80,8 +80,8 @@ static class OutcomeChecks
             new(new(PlatformId.QqOfficial, AccountScope.Legacy, "synthetic-image-driver"), null), CancellationToken.None, () => true)))
         using (var service = new StickerService(store, null!, throwing, new TestSettings(), _ => { }))
         {
-            service.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-                new BotAgent.Packages.Stickers.StickerCoordinator(service.CreateHostPorts()));
+            var policy = new SyntheticStickerPolicy();
+            service.BindDirect(policy, policy);
             Check("official post-call image exception remains unknown",
                 (await service.SendWithReceiptAsync(true, 10001, item, null, "official:group:10001")).Delivery?.Status == DeliveryStatus.Unknown);
             ((OutcomeStickerStore)(object)store).FailRead = true;
@@ -90,6 +90,26 @@ static class OutcomeChecks
         }
         if (failures > 0) throw new InvalidOperationException("outcome checks failed=" + failures);
     }
+}
+
+public sealed class SyntheticStickerPolicy : IStickerPolicyContribution, IStickerRuntimeContribution
+{
+    private readonly HashSet<(string Source, string StickerId)> _sent = [];
+    public int PendingDescribe => 0;
+    public long DescribeDone => 0;
+    public bool CanOperate => false;
+    public bool Allow(string sourceKey, string stickerId, int cooldownSeconds, DateTimeOffset now, out string reason)
+    { reason = _sent.Contains((sourceKey, stickerId)) ? "cooldown" : ""; return !_sent.Contains((sourceKey, stickerId)); }
+    public string NoteSent(string sourceKey, string stickerId, DateTimeOffset now)
+    { _sent.Add((sourceKey, stickerId)); return ""; }
+    public bool TrySanitizeFilename(string? rawFilename, out string safeFilename) { safeFilename = rawFilename ?? ""; return !string.IsNullOrWhiteSpace(safeFilename); }
+    public StickerPayloadCheck ValidatePayload(byte[] bytes, long maxBytes) => new(true, "png", "image/png", "");
+    public void ClearConversation(string sourceKey) { }
+    public void EnsureTimer(bool enabled) { }
+    public void QueueDescribe(string id) { }
+    public Task CollectAsync(string[] urls, string fromUid, long fromGroup, long messageId, Func<bool>? canStartExternalIo, CancellationToken ct) => Task.CompletedTask;
+    public Task<string> CurateAsync(bool force, CancellationToken ct) => Task.FromResult("");
+    public Task<string> ImportFromAlbumAsync(int limit, CancellationToken ct) => Task.FromResult("");
 }
 
 public class OutcomeStickerStore : DispatchProxy

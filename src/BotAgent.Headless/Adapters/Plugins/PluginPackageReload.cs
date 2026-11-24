@@ -65,8 +65,8 @@ public sealed partial class PluginPackageService
 
             var manifest = activeFallback ? original.Active : original.Pending ?? original.Active;
             if (manifest is null) return null;
-            _store.Distribution.Validate(manifest);
-            _resources.EnsureApproved(manifest);
+            _store.Distribution.Validate(manifest, allowLegacyOfficialEnvelope: true);
+            _resources.EnsureApproved(manifest, allowLegacyOfficialEnvelope: true);
             if (registry.Find(id)?.IsPreset == true) throw new InvalidDataException("Package ID already registered.");
             if ((enabled || manifest.Control) && manifest.Dependencies is { Count: > 0 })
                 dependencies = registry.PrepareDependencies(id, manifest.Dependencies, manifest.ApiVersion);
@@ -82,7 +82,8 @@ public sealed partial class PluginPackageService
             controlModel = manifest.Control ? model?.ControlView() : null;
             controlExecution = manifest.Control ? execution?.ControlView() : null;
             controlConfiguration = manifest.Control ? configuration?.ControlView() : null;
-            var approvedHostDistribution = _store.Distribution.IsApprovedRelease(manifest);
+            var approvedHostDistribution = _store.Distribution.IsApprovedRelease(manifest)
+                || OfficialPresetPolicy.IsApprovedOfficialOrLegacyManifest(manifest);
             var controlContext = manifest.Control
                 ? PluginActivationDataStore.Scope(context, controlData, controlWeb, controlModel, controlExecution, controlResolution, controlConfiguration, manifest.Id, approvedHostDistribution)
                 : null;

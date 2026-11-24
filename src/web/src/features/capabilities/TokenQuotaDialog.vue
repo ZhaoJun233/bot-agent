@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import QuotaEditor from '../../../../../packages/token-quota/frontend/TokenQuotaDialog.vue'
-import { quotaPresentation } from '../../../../../packages/token-quota/frontend/presentation'
-import type { QuotaClient } from '../../../../../packages/token-quota/frontend/quotas'
+import QuotaEditor from '../../../../../contracts/ui/quotas/TokenQuotaDialog.vue'
+import { quotaPresentation } from '../../../../../contracts/ui/presentations/token-quota'
+import type { QuotaClient } from '../../../../../contracts/ui/quotas/quotas'
 import type { UiError } from '../../../../../contracts/ui'
 import type { ZbaClient } from '../../api/zba'
 import { createPluginUiBridge } from './plugin-ui-bridge'

@@ -46,15 +46,20 @@ public sealed class TrustedPluginDistribution
         return new(releases, digest) { Resources = new PluginResourceAuthorizations(index.Releases), Releases = index.Releases };
     }
 
-    internal void ValidateId(string id) => PluginPackageValidation.ValidateId(id, _ids.Contains(id));
+    internal void ValidateId(string id)
+        => PluginPackageValidation.ValidateId(id, _ids.Contains(id) || OfficialPresetPolicy.IsOfficialPresetId(id));
 
-    internal void Validate(PluginPackageManifest manifest, bool checkCompatibility = true)
+    internal void Validate(PluginPackageManifest manifest, bool checkCompatibility = true,
+        bool allowLegacyOfficialEnvelope = false)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        var reserved = PluginPackageValidation.IsReservedId(manifest.Id);
+        var inDistribution = _ids.Contains(manifest.Id);
+        var reservedOnly = PluginPackageValidation.IsReservedId(manifest.Id)
+            && !OfficialPresetPolicy.IsOfficialPresetId(manifest.Id);
+        var allowReserved = inDistribution || reservedOnly;
         PluginPackageValidation.Validate(manifest, checkCompatibility,
-            allowReserved: reserved);
-        if (reserved) EnsureApproved(manifest);
+            allowReserved: allowReserved, allowLegacyOfficialEnvelope: allowLegacyOfficialEnvelope);
+        if (allowReserved) EnsureApproved(manifest);
     }
 
     internal void EnsureApproved(PluginPackageManifest manifest)

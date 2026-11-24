@@ -1,5 +1,5 @@
-import { QuotaApi, type ZbaQuotaPage, type ZbaQuotaSaveRequest, type ZbaQuotaSaveResult, type ZbaQuotaFindResult } from '../../../../packages/token-quota/frontend/quotas'
-export type { ZbaQuota, ZbaQuotaPage, ZbaQuotaSaveRequest, ZbaQuotaSaveResult, ZbaQuotaFindResult } from '../../../../packages/token-quota/frontend/quotas'
+import { QuotaApi, type ZbaQuotaPage, type ZbaQuotaSaveRequest, type ZbaQuotaSaveResult, type ZbaQuotaFindResult } from '../../../../contracts/ui/quotas/quotas'
+export type { ZbaQuota, ZbaQuotaPage, ZbaQuotaSaveRequest, ZbaQuotaSaveResult, ZbaQuotaFindResult } from '../../../../contracts/ui/quotas/quotas'
 import { hasValidPluginRuntime, type PythonPluginRuntime } from './plugin-runtime'
 import { hasValidSharedContracts, type PluginSharedContract } from './plugin-shared-contracts'
 import { hasValidPluginData, type PluginPackageData } from './plugin-data'

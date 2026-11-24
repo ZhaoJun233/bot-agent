@@ -24,9 +24,6 @@ using BotAgent.Domain.Qq;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Tools;
 using BotAgent.Engine.Memory;
-using BotAgent.Packages.Documents;
-using BotAgent.Packages.Knowledge;
-using BotAgent.Packages.Profiles;
 using BotAgent.Platforms.Common;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
@@ -111,7 +108,7 @@ internal static class Phase3MemoryKnowledgeTests
         store.ClearScope(scopeB);
 
         // Plugin + HostPortsAdapter + attachment ingestion without external URLs
-        var docPlugin = new DocumentsPackagePlugin();
+        var docPlugin = OfficialFeatureFactory.DocumentsPlugin();
         var docHttp = new DummyHttp();
         var docAdapter = new DocumentHostPortsAdapter(docHttp, () => false, () => null, _ => { });
         await docPlugin.InitializeAsync(new PluginContext(new ServiceMap(
@@ -123,7 +120,7 @@ internal static class Phase3MemoryKnowledgeTests
 
         using var memory = CreateMemory(enabled: true);
         using var kbPorts = new KnowledgeHostPortsAdapter(store, () => null, _ => { }, docAdapter, manager, memory.Memory);
-        var kbPlugin = new KnowledgePackagePlugin();
+        var kbPlugin = OfficialFeatureFactory.KnowledgePlugin();
         await kbPlugin.InitializeAsync(new PluginContext(new ServiceMap(
             (typeof(IKnowledgeHostPorts), kbPorts),
             (typeof(Action<string>), (Action<string>)(_ => { })))), CancellationToken.None);
@@ -140,7 +137,7 @@ internal static class Phase3MemoryKnowledgeTests
         var docSaved = await kbPorts.SaveAttachmentAsync("group:66010", "notes.docx", "评审纪要", CancellationToken.None);
         check(docSaved.Ok && docSaved.Document is not null, "P3.4 knowledge ingests staged DOCX from same conversation");
 
-        var tools = (IToolContribution)kbPlugin.GetContribution(typeof(IToolContribution))!;
+        var tools = (IToolContribution)((IPluginContributionSource)kbPlugin).GetContribution(typeof(IToolContribution))!;
         var toolSearch = await tools.ExecuteAsync("group:66010", new("kb.search", new JsonObject { ["query"] = "分域知识库" }), CancellationToken.None);
         var toolOther = await tools.ExecuteAsync("group:66011", new("kb.search", new JsonObject { ["query"] = "分域知识库" }), CancellationToken.None);
         check(toolSearch.Ok && toolSearch.ModelText!.Contains("架构评审核心决议")
@@ -166,7 +163,7 @@ internal static class Phase3MemoryKnowledgeTests
 
         var manager = new PluginManager(_ => { });
         var research = new SpyResearchPlugin();
-        var kbPlugin = new KnowledgePackagePlugin();
+        var kbPlugin = OfficialFeatureFactory.KnowledgePlugin();
         await kbPlugin.InitializeAsync(new PluginContext(new ServiceMap((typeof(IKnowledgeHostPorts), kbPorts))), CancellationToken.None);
         await manager.ReplaceAsync(research, true);
         await manager.ReplaceAsync(kbPlugin, true);
@@ -306,7 +303,8 @@ internal static class Phase3MemoryKnowledgeTests
         var scheduler = new BotScheduler(box, null!, repo, brain, null!, stickers, new PanelNotifier(),
             new BotSchedulerHooks(_ => { }, () => false), _ => true, fixture.Memory,
             allowAttestedSummary: () => allowAttested, profileProvenance: provenance);
-        using var coord = new ProfilesCoordinator(new ProfilesPolicyEngine(), scheduler.CreateProfilesHostPorts());
+        var coord = OfficialFeatureFactory.ProfilesCoordinator(scheduler.CreateProfilesHostPorts());
+        try {
         scheduler.BindDirectProfiles(coord);
 
         var scopedUid = LegacyProfileScopeKey.TryCreate(
@@ -342,6 +340,7 @@ internal static class Phase3MemoryKnowledgeTests
 
         scheduler.Stop();
         stickers.EnsureTimer(false);
+        } finally { (coord as IDisposable)?.Dispose(); }
     }
 
     private static void RunPrivateInteractiveCardTests(Action<bool, string> check)
@@ -473,7 +472,7 @@ internal static class Phase3MemoryKnowledgeTests
         using (var cmdKbPorts = new KnowledgeHostPortsAdapter(ks, () => null, _ => { }))
         {
             var manager = new PluginManager(_ => { });
-            var kbPlugin = new KnowledgePackagePlugin();
+            var kbPlugin = OfficialFeatureFactory.KnowledgePlugin();
             await kbPlugin.InitializeAsync(new PluginContext(new ServiceMap((typeof(IKnowledgeHostPorts), cmdKbPorts))), CancellationToken.None);
             await manager.ReplaceAsync(kbPlugin, true);
             var gate = new PluginGate(manager);

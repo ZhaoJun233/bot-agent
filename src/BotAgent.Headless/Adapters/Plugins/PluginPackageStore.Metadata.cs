@@ -124,6 +124,7 @@ internal sealed partial class PluginPackageStore
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Invalid package metadata.");
         var execution = document.RootElement;
+        var verifiedEnvelope = false;
         if (PluginStateEnvelope.IsEnvelope(execution))
         {
             recovery = PluginStateEnvelope.Read(id, execution);
@@ -131,8 +132,9 @@ internal sealed partial class PluginPackageStore
                 throw new InvalidDataException("plugin_state_reader_incompatible");
             PluginStateEnvelope.VerifyExecution(recovery, execution);
             execution = execution.GetProperty("execution");
+            verifiedEnvelope = true;
         }
-        var state = ParseExecution(id, execution, manifest => Distribution.Validate(manifest));
+        var state = ParseExecution(id, execution, manifest => Distribution.Validate(manifest, allowLegacyOfficialEnvelope: verifiedEnvelope));
         if (recovery is not null) PluginStateEnvelope.VerifyProjection(recovery, state);
         return state;
     }

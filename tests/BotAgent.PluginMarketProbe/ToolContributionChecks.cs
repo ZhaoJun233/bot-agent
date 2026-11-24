@@ -25,19 +25,26 @@ internal partial class Program
         }
         const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
         const string researchId = "preset.feature.websearch";
+        string[] officialToolIds =
+        [
+            researchId, "preset.feature.documents", "preset.feature.digest",
+            "preset.feature.knowledge", "preset.feature.scheduler", "preset.feature.personal-todo"
+        ];
         var host = typeof(PluginPackageService).Assembly;
         var runtimeType = host.GetType("BotAgent.Host.PluginRuntime")!;
         var flags = new StorageModule::BotAgent.Storage.PluginStore();
-        var previousFlag = flags.LoadPluginStates().GetValueOrDefault(researchId, true);
+        var states = flags.LoadPluginStates();
+        var previousFlags = officialToolIds.ToDictionary(id => id, id => states.GetValueOrDefault(id, true));
         var model = new AdoptionModel(); var pages = new AdoptionPages();
         var services = (IServiceProvider)Activator.CreateInstance(host.GetType("BotAgent.Host.ResearchPluginServices")!,
             model, pages, new ToolCircuitBreaker("synthetic-tools"),
             (Func<ResearchOptions>)(() => new(true, true, "", 3, 30, 5, 2000, true, 5, 3)), Array.Empty<IDisposable>())!;
         try
         {
-            flags.SetPluginEnabled(researchId, true);
+            var toolNativeRoot = Path.Combine(root, "tool-native");
+            OfficialMarketplaceTestHelper.StageOfficialPackages(toolNativeRoot, officialToolIds, enableInStore: true);
             await using var runtime = (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
-                .Invoke([Path.Combine(root, "tool-native"), (Action<string>)(_ => { })]);
+                .Invoke([toolNativeRoot, (Action<string>)(_ => { })]);
             runtimeType.GetMethod("BindServices", hidden)!.Invoke(runtime, [services]);
             await (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
             var registry = (PluginManager)runtimeType.GetProperty("Registry", hidden)!.GetValue(runtime)!;
@@ -97,7 +104,10 @@ internal partial class Program
             Check(AssemblyLoadContext.Default.Assemblies.All(assembly => assembly.GetName().Name is not ("BotAgent.Package.WebSearch" or "BotAgent.Package.Documents" or "BotAgent.Package.Digest" or "BotAgent.Package.Knowledge" or "BotAgent.Package.Scheduler" or "BotAgent.Package.PersonalTodo")),
                 "tool use never loads package business into Default");
         }
-        finally { flags.SetPluginEnabled(researchId, previousFlag); }
+        finally
+        {
+            foreach (var pair in previousFlags) flags.SetPluginEnabled(pair.Key, pair.Value);
+        }
 
         var bytes = ReviewZip("tools.dll", await File.ReadAllBytesAsync(typeof(SyntheticToolPlugin).Assembly.Location));
         var manifest = ReviewManifest(bytes, "test.tools", "1.0.0", "tools.dll", nameof(SyntheticToolPlugin)) with { ToolApiVersion = 1 };

@@ -96,7 +96,7 @@ internal static class GroundedModelChecks
         var pageHttp = new SyntheticHttp(_ => new(HttpStatusCode.OK) { Content = new StringContent(
             """{"results":[{"title":"Synthetic fallback","url":"https://example.com/result","content":"Synthetic snippet"}]}""") });
         var settings = new AppSettings { WebSearchUseModelSearch = true, WebSearchSources = "searx|https://example.com/search?q={q}" };
-        var search = new WebSearchService(model, new WebPageTransport(pageHttp, () => false), ResearchFixture.Options(() => settings), _ => { });
+        var search = ResearchFactories.Search(model, new WebPageTransport(pageHttp, () => false), ResearchFixture.Options(() => settings), _ => { });
         var answer = await search.SearchAsync("synthetic question", default);
         check(answer?.Answer == "First\nSecond" && answer.Hits.Select(hit => hit.Title).SequenceEqual(new[] { "Example", "Other" }) &&
               answer.Hits.All(hit => hit.Url.Length == 0 && hit.Snippet.Length == 0) && pageHttp.Urls.Count == 0,
@@ -105,7 +105,7 @@ internal static class GroundedModelChecks
             "research owns the original search instruction");
         var failedModelHttp = new SyntheticHttp(_ => new(HttpStatusCode.Unauthorized) { Content = new StringContent("synthetic-secret-body") });
         var logs = new List<string>();
-        var fallback = await new WebSearchService(new GeminiGroundedTextModel(failedModelHttp, () => options),
+        var fallback = await ResearchFactories.Search(new GeminiGroundedTextModel(failedModelHttp, () => options),
             new WebPageTransport(pageHttp, () => false), ResearchFixture.Options(() => settings), logs.Add).SearchAsync("synthetic question", default);
         check(fallback?.Hits.Single().Title == "Synthetic fallback" && failedModelHttp.Urls.Count == 1 && pageHttp.Urls.Count == 1 &&
               pageHttp.Authorization.All(value => value is null) && logs.All(line => !line.Contains("synthetic-secret-body")),

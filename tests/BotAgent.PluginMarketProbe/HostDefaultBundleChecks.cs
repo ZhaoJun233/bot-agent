@@ -19,7 +19,7 @@ internal partial class Program
     {
         var checks = 0;
         void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException(label); checks++; }
-        const string id = "preset.feature.token-quota";
+        const string id = "system.health-reporting";
         const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
         var runtimeType = typeof(PluginPackageService).Assembly.GetType("BotAgent.Host.PluginRuntime")!;
         var directory = Path.Combine(root, "host-default-bundle");
@@ -37,44 +37,32 @@ internal partial class Program
             await using (var runtime = NewRuntime())
             {
                 var registry = Registry(runtime);
-                Check(registry.GetAll().All(p => p.Id != id), "quota has no legacy preset registration before package adoption");
+                Check(registry.GetAll().All(p => p.Id != id), "system bundle has no legacy registration before adoption");
                 await Start(runtime);
-                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == id);
-                Check(state.Active is { Control: true } && state.Pending is null
-                    && state.Active.DownloadUrl == "host-distribution://" + id + "/1.0.0", "host adopts actual default distribution ZIP");
-                Check(!registry.IsReady(id) && registry.IsControlReady(id) && !flags.LoadPluginStates()[id], "explicit disabled intent survives first adoption");
-                var control = registry.GetControlContribution<ITenantQuotaManagement>(id);
-                Check(control.ReadManagement("synthetic:host-bundle").Quota.DailyTokenLimit == 50000, "disabled package supplies management");
+                var installedAll = await Packages(runtime).GetInstalledAsync();
+                Check(installedAll.Count == 9
+                    && installedAll.All(p => p.Id.StartsWith("system.", StringComparison.Ordinal) && p.Active is not null),
+                    "bare host adopts ONLY the 9 system.* packages and 0 preset.feature.* packages");
+                var state = installedAll.Single(p => p.Id == id);
+                Check(state.Active is not null && state.Pending is null
+                    && state.Active.DownloadUrl == "host-distribution://" + id + "/1.0.0", "host adopts actual system distribution ZIP");
+                Check(!registry.IsReady(id) && !flags.LoadPluginStates()[id], "explicit disabled intent survives first system bundle adoption");
                 var market = (PluginMarketService)runtimeType.GetProperty("Market", hidden)!.GetValue(runtime)!;
                 var installed = await market.ReadInstalledAsync(default);
                 Check(installed.Plugins.Single(p => p.Manifest.Id == id).Metadata is
-                    { Name: "Token 配额", Runtime: "dotnet", SourceKind: "official", Review.Status: "unreviewed" }
-                    && installed.BuiltinPlugins.All(p => p.PluginId != id),
-                    "the actual disabled default package retains offline presentation as an unreviewed official package");
-                using var metadata = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(directory, id, "installed.json")));
-                Check(metadata.RootElement.GetProperty("minimumReaderVersion").GetInt32() == 12, "offline distribution source with packaged UI requires reader twelve");
+                    { Runtime: "dotnet", SourceKind: "official", Review.Status: "unreviewed" }
+                    && installed.BuiltinPlugins.Count == 0,
+                    "bare host exposes system packages with zero builtin feature plugins");
                 fingerprint = state.Active!.Sha256;
-                try
-                {
-                    new PluginSettingsStore().ReadManifest(state.Active);
-                    throw new InvalidOperationException("unapproved_settings_accepted");
-                }
-                catch (BotAgent.Domain.Plugins.PluginSettingsException) { checks++; }
-                var settings = (PluginSettingsStore)runtimeType.GetProperty("Settings", hidden)!.GetValue(runtime)!;
-                try
-                {
-                    settings.ReadManifest(state.Active with { Control = false });
-                    throw new InvalidOperationException("changed_settings_manifest_accepted");
-                }
-                catch (BotAgent.Domain.Plugins.PluginSettingsException) { checks++; }
-                Check(AssemblyLoadContext.Default.Assemblies.All(a => a.GetName().Name != "BotAgent.Package.TokenQuota"), "business implementation is not loaded into Default");
+                Check(AssemblyLoadContext.Default.Assemblies.All(a => !(a.GetName().Name ?? "").StartsWith("BotAgent.Package.", StringComparison.Ordinal)),
+                    "business/system package implementation is not loaded into Default");
                 await Packages(runtime).StageUninstallAsync(id);
             }
             await using (var runtime = NewRuntime())
             {
                 await Start(runtime);
                 var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == id);
-                Check(!Registry(runtime).IsControlReady(id) && state.Active is null && state.Previous?.Sha256 == fingerprint,
+                Check(!Registry(runtime).IsReady(id) && state.Active is null && state.Previous?.Sha256 == fingerprint,
                     "restart adopts explicit uninstall and preserves previous release");
             }
             var packageDirectory = Path.GetFullPath(Path.Combine(directory, id));
@@ -86,7 +74,7 @@ internal partial class Program
             await using (var runtime = NewRuntime())
             {
                 await Start(runtime);
-                Check(!Directory.Exists(packageDirectory) && !Registry(runtime).IsControlReady(id), "default bundle does not resurrect physically removed adopted package");
+                Check(!Directory.Exists(packageDirectory) && !Registry(runtime).IsReady(id), "default bundle does not resurrect physically removed adopted package");
             }
             if (OperatingSystem.IsWindows())
             {
@@ -127,9 +115,10 @@ internal partial class Program
             }
             var dependencies = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.ChangeExtension(typeof(PluginPackageService).Assembly.Location, ".deps.json")));
             Check(dependencies.RootElement.GetProperty("libraries").EnumerateObject().All(p =>
-                !p.Name.StartsWith("BotAgent.Package.TokenQuota/", StringComparison.Ordinal)
-                && !p.Name.StartsWith("BotAgent.PluginBundle/", StringComparison.Ordinal)), "host runtime dependencies exclude package and bundler");
+                !p.Name.StartsWith("BotAgent.Package.", StringComparison.Ordinal)
+                && !p.Name.StartsWith("BotAgent.PluginBundle/", StringComparison.Ordinal)), "host runtime dependencies exclude all packages and bundler");
             checks += await RunHostDistributionUpgradeChecks(root);
+            checks += await RunOfficialMarketplaceMigrationChecks(root);
         }
         finally { flags.SetPluginEnabled(id, enabled); }
         return checks;
@@ -139,8 +128,8 @@ internal partial class Program
     {
         var checks = 0;
         void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException("host_upgrade: " + label); checks++; }
-        const string quotaId = "preset.feature.token-quota";
-        const string stickersId = "preset.feature.stickers";
+        const string quotaId = "system.health-reporting";
+        const string stickersId = "system.conversation";
         const string zeroSha = "0000000000000000000000000000000000000000000000000000000000000000";
         const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
         var asm = typeof(PluginPackageService).Assembly;
@@ -188,10 +177,6 @@ internal partial class Program
                 var all = await Packages(runtime).GetInstalledAsync();
                 currentQuota = all.Single(p => p.Id == quotaId).Active!;
                 currentStickers = all.Single(p => p.Id == stickersId).Active!;
-                Check(currentQuota.Ui is { Assets.Count: > 0 } && currentQuota.Ui.Assets.All(a => a.Sha256 != zeroSha),
-                    "compiled token-quota bundle has real non-zero UI asset hashes");
-                Check(currentStickers.Ui is { Assets.Count: > 0 } && currentStickers.Ui.Assets.All(a => a.Sha256 != zeroSha),
-                    "compiled stickers bundle has real non-zero UI asset hashes");
                 Check(all.All(p => p.Active is null || p.Active.Sha256 != zeroSha),
                     "all compiled host releases have non-zero archive hashes");
             }
@@ -213,8 +198,8 @@ internal partial class Program
                 var stickers = all.Single(p => p.Id == stickersId);
                 Check(quota.MetadataFailure is null && quota.Active?.Sha256 == currentQuota.Sha256 && quota.Pending is null && quota.Previous is null,
                     "case A upgrades enabled host package cleanly without plugin_metadata_unreadable");
-                Check(Registry(runtime).IsReady(quotaId) && Registry(runtime).IsControlReady(quotaId) && flags.LoadPluginStates()[quotaId],
-                    "case A preserves enabled state and activates control+business plugin");
+                Check(Registry(runtime).IsReady(quotaId) && flags.LoadPluginStates()[quotaId],
+                    "case A preserves enabled state and activates system plugin");
                 Check(await File.ReadAllTextAsync(customConfigPath) == "preserved-user-config",
                     "case A preserves user config directory across upgrade");
                 Check(!File.Exists(Path.Combine(dirA, quotaId, "releases", $"{currentQuota.Version}-{oldQuotaSha}.zip"))
@@ -377,6 +362,164 @@ internal partial class Program
         {
             flags.SetPluginEnabled(quotaId, prevQuotaEnabled);
             flags.SetPluginEnabled(stickersId, prevStickersEnabled);
+        }
+        return checks;
+    }
+
+    private static async Task<int> RunOfficialMarketplaceMigrationChecks(string root)
+    {
+        var checks = 0;
+        void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException("official_migration: " + label); checks++; }
+        const string zeroSha = "0000000000000000000000000000000000000000000000000000000000000000";
+        const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+        var runtimeType = typeof(PluginPackageService).Assembly.GetType("BotAgent.Host.PluginRuntime")!;
+        var flags = new StorageModule::BotAgent.Storage.PluginStore();
+        var prevQuota = flags.LoadPluginStates().GetValueOrDefault("preset.feature.token-quota", true);
+        var prevStickers = flags.LoadPluginStates().GetValueOrDefault("preset.feature.stickers", true);
+        var prevWebsearch = flags.LoadPluginStates().GetValueOrDefault("preset.feature.websearch", true);
+        var prevMusic = flags.LoadPluginStates().GetValueOrDefault("preset.feature.music", true);
+
+        var (quotaManifest, quotaZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.token-quota");
+        var (stickersManifest, stickersZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.stickers");
+        var (searchManifest, searchZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.websearch");
+        var (musicManifest, musicZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.music");
+        Check(quotaManifest.Ui is { Assets.Count: > 0 } && quotaManifest.Ui.Assets.All(a => a.Sha256 != zeroSha),
+            "official token-quota release has real non-zero UI asset hashes");
+        Check(stickersManifest.Ui is { Assets.Count: > 0 } && stickersManifest.Ui.Assets.All(a => a.Sha256 != zeroSha),
+            "official stickers release has real non-zero UI asset hashes");
+
+        var stubHttp = OfficialMarketplaceTestHelper.CreateStubHttp(
+            (quotaManifest, quotaZip), (stickersManifest, stickersZip), (searchManifest, searchZip), (musicManifest, musicZip));
+        IAsyncDisposable NewRuntime(string dir) => (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
+            .Invoke([dir, (Action<string>)(_ => { })]);
+        PluginManager Registry(object runtime) => (PluginManager)runtimeType.GetProperty("Registry", hidden)!.GetValue(runtime)!;
+        PluginPackageService Packages(object runtime) => (PluginPackageService)runtimeType.GetProperty("Packages", hidden)!.GetValue(runtime)!;
+        Task Start(object runtime) => (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
+
+        try
+        {
+            var dirOfficial = Path.Combine(root, "official-marketplace-install");
+            flags.SetPluginEnabled("preset.feature.token-quota", false);
+            flags.SetPluginEnabled("preset.feature.stickers", true);
+            flags.SetPluginEnabled("preset.feature.websearch", true);
+            await using (var installHost = NewRuntime(dirOfficial))
+            {
+                var packages = Packages(installHost);
+                typeof(PluginPackageService).GetField("_http", hidden)!.SetValue(packages, stubHttp);
+                typeof(PluginGovernanceService).GetField("_source", hidden)!
+                    .SetValue(packages.Governance, new PluginCatalogSource(stubHttp));
+                await packages.StageInstallAsync(quotaManifest);
+                await packages.StageInstallAsync(stickersManifest);
+                await packages.StageInstallAsync(searchManifest);
+                BindResearchRuntime(installHost);
+                await Start(installHost);
+
+                var registry = Registry(installHost);
+                Check(!registry.IsReady("preset.feature.token-quota") && registry.IsControlReady("preset.feature.token-quota"),
+                    "official token-quota preserves explicit disabled intent while keeping control ready");
+                Check(registry.GetControlContribution<ITenantQuotaManagement>("preset.feature.token-quota")
+                    .ReadManagement("synthetic:official-quota").Quota.DailyTokenLimit == 50000,
+                    "official token-quota activates cross-MVID ITenantQuotaManagement control contract");
+                Check(registry.IsReady("preset.feature.stickers") && registry.IsReady("preset.feature.websearch"),
+                    "official stickers and websearch activate cleanly");
+                Check(AssemblyLoadContext.Default.Assemblies.All(a => a.GetName().Name != "BotAgent.Package.TokenQuota"
+                    && a.GetName().Name != "BotAgent.Package.WebSearch"),
+                    "official plugin implementations stay outside AssemblyLoadContext.Default");
+
+                var market = (PluginMarketService)runtimeType.GetProperty("Market", hidden)!.GetValue(installHost)!;
+                var installed = await market.ReadInstalledAsync(default);
+                Check(installed.Plugins.Single(p => p.Manifest.Id == "preset.feature.token-quota").Metadata is
+                    { Name: "Token 配额", Runtime: "dotnet", SourceKind: "official", Review.Status: "unreviewed" },
+                    "official token-quota retains official presentation metadata");
+                using var quotaMeta = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(dirOfficial, "preset.feature.token-quota", "installed.json")));
+                Check(quotaMeta.RootElement.GetProperty("minimumReaderVersion").GetInt32() == 12,
+                    "official token-quota UI package requires reader twelve");
+
+                try { new PluginSettingsStore().ReadManifest(quotaManifest); throw new InvalidOperationException("unapproved_settings_accepted"); }
+                catch (BotAgent.Domain.Plugins.PluginSettingsException) { checks++; }
+                var settings = (PluginSettingsStore)runtimeType.GetProperty("Settings", hidden)!.GetValue(installHost)!;
+                Check(settings.ReadManifest(searchManifest).Values.Count > 0, "runtime Settings approves official websearch configuration binding");
+                try { settings.ReadManifest(quotaManifest with { Control = false }); throw new InvalidOperationException("mutated_control_accepted"); }
+                catch (BotAgent.Domain.Plugins.PluginSettingsException) { checks++; }
+
+                var gatePackages = new PluginPackageService(Path.Combine(root, "official-origin-gate"), stubHttp);
+                foreach (var badUrl in new[]
+                {
+                    "https://github.com/attacker/repo/releases/download/preset.feature.music-1.1.0/preset.feature.music-1.1.0.zip",
+                    "https://example.com/preset.feature.music-1.1.0.zip"
+                })
+                {
+                    var rejected = false;
+                    try { PluginPackageValidation.Validate(musicManifest with { DownloadUrl = badUrl }); }
+                    catch (InvalidDataException) { rejected = true; }
+                    Check(rejected, "forged official release URL rejected at validation: " + badUrl);
+                }
+
+                var dataEscalated = musicManifest with
+                {
+                    Control = true,
+                    Data = new(["tenant_quotas"], ["quota:revision:", "quota:receipts:"], true, true, new("quota.management", "1"))
+                };
+                var webEscalated = musicManifest with { Permissions = [BotAgent.Plugins.Net.IWebPageTransport.Permission] };
+                foreach (var (escalated, expectedCode) in new[]
+                {
+                    (dataEscalated, "plugin_data_not_authorized"),
+                    (webEscalated, "plugin_web_not_authorized")
+                })
+                {
+                    var refused = false;
+                    try { await gatePackages.StageInstallAsync(escalated); }
+                    catch (InvalidOperationException ex) when (ex.Message == expectedCode) { refused = true; }
+                    Check(refused, "official music privilege escalation rejected with " + expectedCode);
+                }
+            }
+
+            var dirLegacy = Path.Combine(root, "official-legacy-upgrade");
+            flags.SetPluginEnabled("preset.feature.music", true);
+            var (legacyManifest, legacyMusicZip) = OfficialMarketplaceTestHelper.BuildLegacyHostDistributionMusicRelease(
+                Path.Combine(root, "legacy-music-build"), musicManifest);
+            OfficialMarketplaceTestHelper.StageInstalled(dirLegacy, legacyManifest, legacyMusicZip);
+            var compat = await PluginStateCompatibility.InspectAsync(dirLegacy, typeof(PluginPackageService).Assembly.Location);
+            Check(compat.Compatible && compat.Entries.Single(e => e.Id == "preset.feature.music").Code == "readable",
+                "historical 1.0.0 host-distribution:// official state remains preflight compatible");
+
+            await using (var runtime = NewRuntime(dirLegacy))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == "preset.feature.music");
+                Check(state.MetadataFailure is null && state.Active?.Version == "1.0.0" && Registry(runtime).IsReady("preset.feature.music"),
+                    "historical 1.0.0 host-distribution:// official package cold-starts from cached archive");
+
+                var packages = Packages(runtime);
+                typeof(PluginPackageService).GetField("_http", hidden)!.SetValue(packages, stubHttp);
+                typeof(PluginGovernanceService).GetField("_source", hidden)!
+                    .SetValue(packages.Governance, new PluginCatalogSource(stubHttp));
+                await packages.StageInstallAsync(musicManifest);
+            }
+            await using (var runtime = NewRuntime(dirLegacy))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == "preset.feature.music");
+                Check(state.Active?.Version == "1.1.0" && state.Previous?.Version == "1.0.0"
+                    && state.Active.DownloadUrl == OfficialMarketplaceTestHelper.ExpectedDownloadUrl("preset.feature.music", "1.1.0")
+                    && Registry(runtime).IsReady("preset.feature.music"),
+                    "historical 1.0.0 package upgrades cleanly to official 1.1.0 release");
+                await Packages(runtime).StageUninstallAsync("preset.feature.music");
+            }
+            await using (var runtime = NewRuntime(dirLegacy))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == "preset.feature.music");
+                Check(state.Active is null && !Registry(runtime).IsReady("preset.feature.music"),
+                    "upgraded official package uninstalls cleanly");
+            }
+        }
+        finally
+        {
+            flags.SetPluginEnabled("preset.feature.token-quota", prevQuota);
+            flags.SetPluginEnabled("preset.feature.stickers", prevStickers);
+            flags.SetPluginEnabled("preset.feature.websearch", prevWebsearch);
+            flags.SetPluginEnabled("preset.feature.music", prevMusic);
         }
         return checks;
     }

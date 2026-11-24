@@ -31,6 +31,9 @@ internal sealed class PluginRepositorySource(PluginCatalogSource catalog)
         var python = pythonBytes is null ? [] : PluginPythonRepository.Parse(pythonBytes);
         IReadOnlyList<PluginPackageManifest> manifests = managed.Concat(python).ToArray();
         if (managed.Any(m => python.Any(p => p.Id == m.Id))) throw Invalid();
+        if (!OfficialPresetPolicy.IsOfficialRepository(location.Owner, location.Repository)
+            && manifests.Any(m => OfficialPresetPolicy.IsOfficialPresetId(m.Id)))
+            throw Invalid();
         if (manifests.Count == 0) throw Invalid();
         var presentation = await PluginPresentationCatalog.ReadAsync(catalog, root + "index.json", ct, githubOnly: true).ConfigureAwait(false);
         var pythonPresentation = await catalog.ReadOptionalJsonAsync(root + "python-presentation.json", ct, githubOnly: true);

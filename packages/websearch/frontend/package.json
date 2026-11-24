@@ -1,8 +1,0 @@
-{
-  "name": "@botagent/websearch-ui",
-  "version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit", "build": "tsc" },
-  "devDependencies": { "typescript": "6.0.3" }
-}

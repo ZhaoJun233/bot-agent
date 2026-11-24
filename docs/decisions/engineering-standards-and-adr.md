@@ -10,13 +10,13 @@
 
 ```text
 .
-├── BotAgent.slnx                   # .NET 10 解决方案（Core/Engine/Platforms/Model/Storage/Mcp/Panel/Headless + 19 契约 + 22 包 + 40 测试工程）
+├── BotAgent.slnx                   # .NET 10 解决方案（Core/Engine/Platforms/Model/Storage/Mcp/Panel/Headless + 19 契约 + 9 系统包 + 40 测试工程）
 ├── Directory.Build.props           # 全仓唯一构建基线与宿主版本真源（Nullable/LangVersion/NuGetAudit/Version）
 ├── Dockerfile.app                  # 面向 1 GB 低内存主机的纯产物运行时镜像（解压 app.tar.gz）
 ├── docker-compose.yml              # 全容器编排模板（qqchat + napcat）
 ├── start.sh / stop.sh / status.sh  # Linux 原生运维控制脚本
-├── contracts/                      # 19 个插件与宿主解耦契约工程（纯 DTO/接口，无重度依赖）
-├── packages/                       # 22 个内置功能/平台驱动扩展包（后端 C# + 插件 Schema + 沙箱前端 JS/TS）
+├── contracts/                      # 19 个插件与宿主解耦契约工程（纯 DTO/接口）+ 共享前端呈现/配额声明
+├── packages/                       # 9 个宿主内置系统/平台驱动包（C# 后端 + distribution.json 模板；13 个功能插件已迁至官方市场）
 ├── src/
 │   ├── BotAgent.Core/              # 领域模型、纯状态机、策略/Profile 解析、契约与纯规则验证（不碰持久化/网络）
 │   ├── BotAgent.Engine/            # 对话编排、回复节奏调度器、审批用例、任务运行时与协调器
@@ -34,7 +34,7 @@
 │   └── gencert.sh                  # 本地调试用自签 TLS 证书生成脚本
 ├── tests/
 │   ├── BotAgent.ArchitectureProbe/ # 毫秒级结构/依赖/大文件/版本/CI/文档链接棘轮门禁
-│   ├── BotAgent.IntegrationHarness/# 进程级端到端合成测试套件（S1–S165 矩阵）
+│   ├── BotAgent.IntegrationHarness/# 进程级端到端合成测试套件（S1–S166 矩阵）
 │   └── *Probe/                     # 38 个专项白盒探针（Safety/Zba/Mcp/Scheduler/ReviewRemediation 等）
 └── docs/
     ├── index.md / index.en.md      # 统一文档中心总目录
@@ -107,7 +107,7 @@ flowchart LR
 | **后端运行时** | .NET 10 无界面模块化单体（`BotAgent.Headless`） | 编译期确定性、AOT/低 RSS 友好的服务模式，避免在 1 GB 服务器上运维微服务网格，同时用 `contracts/` + `src/` 工程引用维持清晰边界 |
 | **持久化存储** | SQLite（WAL） + Schema v15 隔离 `meta` JSON 账本 | 零外部数据库进程，单文件 `VACUUM INTO` 热备易回滚；Phase 3–5 扩展状态通过哈希分桶 JSON 写入 `meta` 并带 CAS/字节上限，避免高频物理改表阻碍低风险升级 |
 | **控制面板与协议** | Vue 3 独立静态 SPA（`/web/`）+ ZBA v1 Bearer HTTP 契约 | 宿主不再内嵌 HTML 减少二进制耦合；`/zba/v1/openapi.json` 由统一路由表生成保证契约单一真源；无令牌默认 `503` Fail-Closed |
-| **插件体系** | 19 契约 + 22 托管功能/平台包 + 沙箱 iframe（`origin === "null"`） | 平台驱动与对话功能通过契约接口解耦支持热插拔；插件扩展界面沙箱隔离宿主 DOM 与敏感令牌 |
+| **插件体系** | 19 契约 + 9 内置 `system.*` 包 + 13 官方市场功能插件 + 沙箱 iframe（`origin === "null"`） | 宿主只内置 `system.*` 核心与平台驱动；13 个 `preset.feature.*` 插件由 `ZhaoJun233/bot-agent-plugins` 按需分发并经 `OfficialPresetPolicy` 收口权限与兼容旧状态；扩展 UI 沙箱隔离宿主 DOM 与令牌 |
 | **容器发布形态** | 开发机发布 `app.tar.gz` + [`Dockerfile.app`](../../Dockerfile.app) | 规避 1 GB 机器运行 `dotnet publish` 挤爆 Swap 的线上事故，把构建资源消耗留在开发机/CI |
 
 ---

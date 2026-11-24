@@ -169,6 +169,7 @@ public static partial class Program
         await Scenario("s76", RunOfficialAgentSendScenarioAsync);
         await Scenario("s77", RunOfficialAgentRecallScenarioAsync);
         await Scenario("s78", RunOfficialPluginGateScenarioAsync);
+        await Scenario("s166", RunBareHostScenarioAsync);
         }
         catch (Exception ex)
         {
@@ -2169,8 +2170,14 @@ public static partial class Program
         return dir;
     }
 
-    private static BotProcess StartBot(Dictionary<string, string> env)
+    private static BotProcess StartBot(Dictionary<string, string> env, bool seedOfficialPlugins = true)
     {
+        if (seedOfficialPlugins)
+        {
+            var dataDir = env.GetValueOrDefault("BOTAGENT_DATA_DIR") ?? env.GetValueOrDefault("QQCHAT_DATA_DIR");
+            if (!string.IsNullOrWhiteSpace(dataDir))
+                OfficialPluginTestSeeder.SeedIfNeeded(dataDir);
+        }
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",

@@ -25,8 +25,9 @@ internal static class PluginSharedContractRegistry
         => HostContracts.Value.TryGetValue(contract.Name, out var host) && Same(host, contract);
 
     internal static bool IsKnownHostContractIdentity(PluginSharedContract contract)
-        => HostContracts.Value.TryGetValue(contract.Name, out var host)
-            && host.Name == contract.Name && host.Version == contract.Version && host.Owner == contract.Owner;
+        => (HostContracts.Value.TryGetValue(contract.Name, out var host)
+                && host.Name == contract.Name && host.Version == contract.Version && host.Owner == contract.Owner)
+            || OfficialPresetPolicy.IsOfficialContractIdentity(contract);
 
     internal static IReadOnlyDictionary<string, Assembly> Bind(string directory, PluginPackageManifest manifest)
     {
@@ -37,6 +38,9 @@ internal static class PluginSharedContractRegistry
         {
             if (HostContracts.Value.TryGetValue(contract.Name, out var host) && !Same(host, contract))
                 throw new InvalidOperationException("plugin_contract_host_mismatch");
+            if (OfficialPresetPolicy.IsOfficialContractName(contract.Name)
+                && !OfficialPresetPolicy.IsOfficialContractIdentity(contract))
+                throw new InvalidOperationException("plugin_contract_host_mismatch");
             var bytes = PluginSharedContractValidation.VerifyFile(directory, contract);
             VerifyReferences(bytes);
             verified.Add(contract.Name, bytes);
@@ -46,24 +50,44 @@ internal static class PluginSharedContractRegistry
             var preloaded = new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
             foreach (var contract in contracts)
             {
+                var officialOwned = OfficialPresetPolicy.IsOfficialContractName(contract.Name);
                 if (Bindings.TryGetValue(contract.Name, out var existing))
                 {
-                    if (!Same(existing.Contract, contract))
+                    if (officialOwned)
+                    {
+                        if (!SameOfficialIdentity(existing.Contract, contract))
+                            throw new InvalidOperationException("plugin_contract_restart_required");
+                    }
+                    else if (!Same(existing.Contract, contract))
                         throw new InvalidOperationException("plugin_contract_restart_required");
                 }
                 else
                 {
                     var hostOwned = HostContracts.Value.ContainsKey(contract.Name);
-                    if (contract.Owner != manifest.Id && !hostOwned)
+                    if (contract.Owner != manifest.Id && !hostOwned && !officialOwned)
                         throw new InvalidOperationException("plugin_contract_owner_unavailable");
                     var loaded = AssemblyLoadContext.Default.Assemblies.SingleOrDefault(a =>
                         string.Equals(a.GetName().Name, contract.Name, StringComparison.OrdinalIgnoreCase));
+                    if (loaded is null && officialOwned)
+                        loaded = TryLoadOfficialHostAssembly(contract.Name);
                     if (loaded is not null)
                     {
-                        if (!hostOwned || !MatchesHostAssembly(loaded, contract))
+                        if (hostOwned)
+                        {
+                            if (!MatchesHostAssembly(loaded, contract))
+                                throw new InvalidOperationException("plugin_contract_identity_conflict");
+                        }
+                        else if (officialOwned)
+                        {
+                            if (!MatchesOfficialHostAssembly(loaded, contract))
+                                throw new InvalidOperationException("plugin_contract_identity_conflict");
+                        }
+                        else
                             throw new InvalidOperationException("plugin_contract_identity_conflict");
                         preloaded.Add(contract.Name, loaded);
                     }
+                    else if (officialOwned)
+                        throw new InvalidOperationException("plugin_contract_identity_conflict");
                 }
             }
             var result = new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
@@ -94,7 +118,9 @@ internal static class PluginSharedContractRegistry
                     throw new FileLoadException("plugin_contract_reference_mismatch");
                 return assembly;
             }
-            if (Bindings.ContainsKey(requested.Name) || HostContracts.Value.ContainsKey(requested.Name))
+            if (Bindings.ContainsKey(requested.Name)
+                || HostContracts.Value.ContainsKey(requested.Name)
+                || OfficialPresetPolicy.IsOfficialContractName(requested.Name))
                 throw new FileLoadException("plugin_contract_undeclared");
             return null;
         }
@@ -103,6 +129,29 @@ internal static class PluginSharedContractRegistry
     private static bool Same(PluginSharedContract left, PluginSharedContract right)
         => left.Name == right.Name && left.Version == right.Version && left.Owner == right.Owner
             && left.Sha256.Equals(right.Sha256, StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameOfficialIdentity(PluginSharedContract left, PluginSharedContract right)
+        => string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+            && string.Equals(left.Version, right.Version, StringComparison.Ordinal)
+            && string.Equals(left.Owner, right.Owner, StringComparison.Ordinal);
+
+    private static Assembly? TryLoadOfficialHostAssembly(string contractName)
+    {
+        try { return AssemblyLoadContext.Default.LoadFromAssemblyName(new AssemblyName(contractName)); }
+        catch (FileNotFoundException) { return null; }
+        catch (FileLoadException) { return null; }
+    }
+
+    private static bool MatchesOfficialHostAssembly(Assembly assembly, PluginSharedContract contract)
+    {
+        var directory = Path.GetDirectoryName(typeof(HostPluginBundle).Assembly.Location)!;
+        var expected = Path.Combine(directory, contract.Name + ".dll");
+        var name = assembly.GetName();
+        return string.Equals(assembly.Location, expected,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+            && string.Equals(name.Name, contract.Name, StringComparison.Ordinal)
+            && string.Equals(name.Version?.ToString(), contract.Version, StringComparison.Ordinal);
+    }
 
     private static IReadOnlyDictionary<string, PluginSharedContract> ReadHostContracts()
     {

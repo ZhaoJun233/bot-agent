@@ -379,8 +379,8 @@ defineExpose({
       <UiEmptyState
         v-else-if="!loading && plugins.length === 0"
         icon="plugin"
-        title="暂无已安装的功能插件"
-        description="你可以切换到「插件市场」发现并安装新扩展，或从「仓库与导入」加载自定义包。"
+        title="当前未安装任何功能插件"
+        description="你可以前往「插件市场」按需浏览并安装官方或社区扩展，或从「仓库与导入」加载自定义包。"
         test-id="plugins-empty"
       >
         <button type="button" class="primary" @click="activeTab = 'catalog'">浏览插件市场</button>

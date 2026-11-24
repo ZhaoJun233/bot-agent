@@ -25,7 +25,7 @@ internal partial class Program
             throw new InvalidOperationException("expected_" + code);
         }
         var isolated = Path.Combine(root, "quota-independent");
-        var payload = await BuildQuotaPackage(isolated);
+        var payload = await BuildQuotaPackage(isolated, "1.0.0");
         checks += await RunQuotaLegacyDtoChecks(root);
         var contracts = typeof(ITenantQuotaManagement).Assembly;
         var contractBytes = await File.ReadAllBytesAsync(contracts.Location);
@@ -135,10 +135,10 @@ internal partial class Program
         while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "BotAgent.slnx"))) repo = repo.Parent;
         if (repo is null) throw new InvalidOperationException("quota_source_missing");
         Directory.CreateDirectory(directory);
-        var source = Path.Combine(repo.FullName, "packages/token-quota/backend");
+        var source = OfficialMarketplaceTestHelper.PluginBackendSourceDirectory("preset.feature.token-quota");
         foreach (var file in Directory.EnumerateFiles(source, "*.cs")) File.Copy(file, Path.Combine(directory, Path.GetFileName(file)));
         Directory.CreateDirectory(Path.Combine(directory, "Schema"));
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(source, "Schema"), "*.sql"))
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(repo.FullName, "src/BotAgent.Storage/Schema"), "preset.token-quota.14-15.*.sql"))
             File.Copy(file, Path.Combine(directory, "Schema", Path.GetFileName(file)));
         File.Copy(Path.Combine(source, "BotAgent.Package.TokenQuota.csproj"), Path.Combine(directory, "Quota.csproj"));
         if (version is not null)

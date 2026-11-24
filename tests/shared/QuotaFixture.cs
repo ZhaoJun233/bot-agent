@@ -1,8 +1,10 @@
 extern alias StorageModule;
 
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Runtime.Loader;
 using BotAgent.Domain.Ops;
 using BotAgent.Domain.Ports;
-using BotAgent.Packages.TokenQuota;
 using PackageDataStore = StorageModule::BotAgent.Adapters.Persistence.PackageDataStore;
 using PackageDataSession = StorageModule::BotAgent.Adapters.Persistence.PackageDataSession;
 using LegacyQuotaReceiptRecovery = StorageModule::BotAgent.Adapters.Persistence.LegacyQuotaReceiptRecovery;
@@ -11,16 +13,35 @@ using Microsoft.Data.Sqlite;
 
 namespace BotAgent.TestFixtures;
 
-/// <summary>Test-only access to the real package ledger and same-transaction legacy recovery scenarios.</summary>
+/// <summary>Test-only access to the official marketplace token-quota ledger and same-transaction legacy recovery scenarios.</summary>
 internal sealed class QuotaFixture : ITenantQuotaLedger, ITokenUsageRecorder, ITenantQuotaManagement
 {
+    private static readonly (AssemblyLoadContext Context, Assembly Assembly) Plugin = LoadPlugin();
+    private static readonly Type LedgerType = Plugin.Assembly.GetType("BotAgent.Packages.TokenQuota.QuotaLedger", throwOnError: true)!;
+    private static readonly MethodInfo SaveCoreMethod = LedgerType.GetMethod("SaveCore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo NormalizeTenantMethod = LedgerType.GetMethod("NormalizeTenant", BindingFlags.Static | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo LoadMethod = LedgerType.GetMethod("Load", BindingFlags.Static | BindingFlags.NonPublic)!;
+
     private readonly IPackageDataStore _data;
-    private readonly QuotaLedger _ledger;
-    public const int MaximumReceiptsPerCaller = QuotaLedger.MaximumReceiptsPerCaller;
+    private readonly ITenantQuotaManagement _ledger;
+    public const int MaximumReceiptsPerCaller = 4096;
+
     public QuotaFixture() : this(new PackageDataStore(["tenant_quotas"],
         ["quota:revision:", "quota:receipts:"], allowUsage: true, allowAudit: true,
         receipts: new(LegacyQuotaReceiptRecovery.Owner, "quota.management", "1", typeof(QuotaFixture).Module.ModuleVersionId.ToString("N")))) { }
-    public QuotaFixture(IPackageDataStore data) { _data = data; _ledger = new(data); }
+
+    public QuotaFixture(IPackageDataStore data)
+    {
+        _data = data;
+        _ledger = (ITenantQuotaManagement)Activator.CreateInstance(LedgerType, data)!;
+    }
+
+    private static (AssemblyLoadContext Context, Assembly Assembly) LoadPlugin()
+    {
+        var root = OfficialPluginsTestLocator.ResolveMarketplaceRoot(OfficialPluginsTestLocator.FindRepoRoot());
+        return OfficialPluginsTestLocator.LoadIsolatedPlugin(root, "token-quota", "BotAgent.Package.TokenQuota");
+    }
+
     public TenantQuotaSnapshot GetQuota(string tenantId) => _ledger.GetQuota(tenantId);
     public TenantQuotaManagementSnapshot ReadManagement(string tenantId) => _ledger.ReadManagement(tenantId);
     public TenantQuotaSnapshot SetDailyTokenLimit(string tenantId, int dailyTokenLimit) => _ledger.SetDailyTokenLimit(tenantId, dailyTokenLimit);
@@ -30,21 +51,36 @@ internal sealed class QuotaFixture : ITenantQuotaLedger, ITokenUsageRecorder, IT
         long expectedRevision, string idempotencyKey, string callerScope,
         Func<TenantQuotaSnapshot, TenantQuotaSnapshot, AuditEvent> audit)
         => _ledger.SaveManagementWithAudit(tenantId, dailyTokenLimit, expectedRevision, idempotencyKey, callerScope, audit);
+
     public TenantQuotaManagementSnapshot SaveManagement(string tenantId, int dailyTokenLimit,
         long expectedRevision, string idempotencyKey, string callerScope,
         Action<SqliteConnection, TenantQuotaSnapshot, TenantQuotaSnapshot>? audit = null)
-        => _ledger.SaveCore(tenantId, dailyTokenLimit, expectedRevision, idempotencyKey, callerScope,
-            audit is null ? null : (session, before, after) => ((PackageDataSession)session).Legacy(connection =>
-            { audit(connection, before, after); return true; }));
+    {
+        Action<IPackageDataSession, TenantQuotaSnapshot, TenantQuotaSnapshot>? callback = audit is null
+            ? null
+            : (session, before, after) => ((PackageDataSession)session).Legacy(connection => { audit(connection, before, after); return true; });
+        try
+        {
+            return (TenantQuotaManagementSnapshot)SaveCoreMethod.Invoke(_ledger,
+                [tenantId, dailyTokenLimit, expectedRevision, idempotencyKey, callerScope, callback])!;
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
+    }
+
     void ITenantQuotaLedger.RecordUsage(string tenantId, int promptTokens, int completionTokens) => RecordUsage(tenantId, promptTokens, completionTokens);
     void ITokenUsageRecorder.RecordUsage(string tenantId, int promptTokens, int completionTokens) => RecordUsage(tenantId, promptTokens, completionTokens);
+
     public TenantQuotaSnapshot RecordUsage(string tenantId, int promptTokens, int completionTokens)
     {
-        var tenant = QuotaLedger.NormalizeTenant(tenantId);
+        var tenant = (string)NormalizeTenantMethod.Invoke(null, [tenantId])!;
         return _data.Write(session =>
         {
             ((PackageDataSession)session).RecordLegacyUsage(tenant, promptTokens, completionTokens);
-            return QuotaLedger.Load(session, tenant);
+            return (TenantQuotaSnapshot)LoadMethod.Invoke(null, [session, tenant])!;
         });
     }
 }

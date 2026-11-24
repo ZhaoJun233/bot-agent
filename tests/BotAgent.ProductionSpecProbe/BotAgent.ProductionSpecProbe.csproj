@@ -12,7 +12,7 @@
     <ProjectReference Include="../../src/BotAgent.Storage/BotAgent.Storage.csproj" Aliases="StorageModule" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../../packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj" />
+    <Compile Include="../OfficialPluginsTestLocator.cs" Link="OfficialPluginsTestLocator.cs" />
     <Compile Include="../shared/QuotaFixture.cs" Link="Fixtures/QuotaFixture.cs" />
   </ItemGroup>
 </Project>

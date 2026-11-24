@@ -71,8 +71,9 @@ flowchart TD
 ### Rollback Redlines
 
 1. **Always restore data snapshots BEFORE starting old binaries**: Letting older binaries read newer databases or `data/plugins/` triggers `database_schema_newer` or `plugin_metadata_unreadable`.
-2. **Reverting between `v1.4.0` (`17` packages) and `22`-package builds requires restoring BOTH DB and `data/plugins/`**: Both share SQLite `user_version = 15`; reverting only the container image breaks package manifests and Phase 3 memory enums (`UnifiedMemoryFactCategory` 3..5).
-3. **Cross-host protocol migration**: Always shut down NapCat on the old host completely before starting NapCat on the new host.
+2. **Reverting between `v1.4.0` and current builds requires restoring BOTH DB and `data/plugins/`**: Both share SQLite `user_version = 15`; reverting only the container image breaks package manifests and Phase 3 memory enums (`UnifiedMemoryFactCategory` 3..5).
+3. **Fresh Install vs In-Place Upgrade Plugin Behavior**: The bare host ships only 9 `system.*` core & platform packages with **0 pre-installed `preset.feature.*` plugins** and **0 automatic startup downloads**—install needed features on demand via `/web/` Plugin Center from `ZhaoJun233/bot-agent-plugins` (`1.1.0+`). Existing instances upgraded in place keep cached `1.0.0` `host-distribution://` archives runnable and support smooth `1.0.0 -> 1.1.0` upgrade or uninstall via Plugin Center.
+4. **Cross-host protocol migration**: Always shut down NapCat on the old host completely before starting NapCat on the new host.
 
 ---
 

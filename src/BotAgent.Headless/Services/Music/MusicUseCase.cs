@@ -150,7 +150,8 @@ public sealed class MusicUseCase : IMusicUseCase
             var outcome = await runtime.ShareWithReceiptAsync(song, isGroup, targetId, ct).ConfigureAwait(false);
             if (box.Last is { } captured)
             {
-                return captured with { Ok = outcome.Ok };
+                var confirmed = outcome.Ok && (captured.Delivery is null || captured.Delivery.IsSuccess);
+                return captured with { Ok = confirmed };
             }
 
             return new(outcome.Ok, outcome.MessageId);

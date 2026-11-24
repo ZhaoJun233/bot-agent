@@ -8,6 +8,7 @@ using BotAgent.Domain.Ports;
 using BotAgent.Services;
 using BotAgent.Services.Net;
 using BotAgent.Services.Plugins;
+using System.Xml.Linq;
 
 internal partial class Program
 {
@@ -128,8 +129,12 @@ internal partial class Program
         File.Copy(typeof(IBotPlugin).Assembly.Location, Path.Combine(sdk, "BotAgent.Core.dll"));
         File.Copy(typeof(IPluginContribution).Assembly.Location, Path.Combine(sdk, "BotAgent.Plugin.Contracts.dll"));
         File.Copy(typeof(IResearchUseCase).Assembly.Location, Path.Combine(sdk, "BotAgent.Research.Contracts.dll"));
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(repo.FullName, "packages/websearch/backend")))
+        foreach (var file in Directory.EnumerateFiles(OfficialMarketplaceTestHelper.PluginBackendSourceDirectory("preset.feature.websearch")))
             if (Path.GetExtension(file) is ".cs" or ".csproj") File.Copy(file, Path.Combine(consumer, Path.GetFileName(file)));
+        var consumerProjectPath = Path.Combine(consumer, "BotAgent.Package.WebSearch.csproj");
+        var consumerProject = XDocument.Load(consumerProjectPath);
+        consumerProject.Descendants("Version").Single().Value = "1.0.0";
+        consumerProject.Save(consumerProjectPath);
         await File.WriteAllTextAsync(Path.Combine(provider, "Transport.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><AssemblyName>Synthetic.Research.Transport</AssemblyName><Version>1.0.0</Version></PropertyGroup><ItemGroup><Reference Include=\"BotAgent.Core\" HintPath=\"$(PluginSdkPath)/BotAgent.Core.dll\" Private=\"false\" /><Reference Include=\"BotAgent.Plugin.Contracts\" HintPath=\"$(PluginSdkPath)/BotAgent.Plugin.Contracts.dll\" Private=\"false\" /><Reference Include=\"BotAgent.Research.Contracts\" HintPath=\"$(PluginSdkPath)/BotAgent.Research.Contracts.dll\" Private=\"false\" /></ItemGroup></Project>");
         await File.WriteAllTextAsync(Path.Combine(provider, "TransportPlugin.cs"), """
             using BotAgent.Domain.Plugins;

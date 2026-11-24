@@ -29,16 +29,22 @@ internal partial class Program
         var host = typeof(PluginPackageService).Assembly;
         var type = host.GetType("BotAgent.Host.PluginRuntime")!;
         var flags = new StorageModule::BotAgent.Storage.PluginStore();
-        var previous = flags.LoadPluginStates().GetValueOrDefault(id, true);
         var model = new AdoptionModel(); var pages = new AdoptionPages();
         var services = (IServiceProvider)Activator.CreateInstance(host.GetType("BotAgent.Host.ResearchPluginServices")!,
             model, pages, new ToolCircuitBreaker("synthetic-chat"),
             (Func<ResearchOptions>)(() => new(true, true, "", 3, 30, 5, 2000, true, 5, 3)), Array.Empty<IDisposable>())!;
+        string[] toolFeatureIds =
+        [
+            "preset.feature.websearch", "preset.feature.documents", "preset.feature.digest",
+            "preset.feature.knowledge", "preset.feature.scheduler", "preset.feature.personal-todo"
+        ];
+        var savedFlags = flags.LoadPluginStates();
         try
         {
-            flags.SetPluginEnabled(id, true);
+            var cutoverDir = Path.Combine(root, "chat-tool-cutover");
+            OfficialMarketplaceTestHelper.StageOfficialPackages(cutoverDir, toolFeatureIds, enableInStore: true);
             await using var runtime = (IAsyncDisposable)type.GetConstructors(hidden).Single()
-                .Invoke([Path.Combine(root, "chat-tool-cutover"), (Action<string>)(_ => { })]);
+                .Invoke([cutoverDir, (Action<string>)(_ => { })]);
             type.GetMethod("BindServices", hidden)!.Invoke(runtime, [services]);
             await (Task)type.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
             var registry = (PluginManager)type.GetProperty("Registry", hidden)!.GetValue(runtime)!;
@@ -141,7 +147,11 @@ internal partial class Program
             Check(registry.IsReady(id) && registry.GetToolCatalog().Bindings.Count == 16,
                 "failed legacy collision preserves adopted research, documents, digest, and knowledge");
         }
-        finally { flags.SetPluginEnabled(id, previous); }
+        finally
+        {
+            foreach (var featureId in toolFeatureIds)
+                flags.SetPluginEnabled(featureId, savedFlags.GetValueOrDefault(featureId, true));
+        }
         return checks;
     }
 

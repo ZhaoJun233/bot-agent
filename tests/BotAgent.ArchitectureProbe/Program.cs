@@ -459,7 +459,7 @@ public static partial class Program
             Baseline.AllowsSql("src/BotAgent.Storage/TokenUsageStore.cs")
             && !Baseline.AllowsSql("src/BotAgent.Storage/TokenUsageMigration.cs")
             && Baseline.SchemaSqlOwners.Count == 4 && Baseline.SchemaSqlOwners.Keys.All(Baseline.AllowsSql)
-            && !Baseline.AllowsSql("packages/token-quota/backend/Schema/unregistered.sql")
+            && !Baseline.AllowsSql("src/BotAgent.Storage/Schema/unregistered.sql")
             && !Baseline.AllowsSql("src/BotAgent.Storage/TokenUsageOther.cs")
             && !Baseline.AllowsFileIo("src/BotAgent.Storage/TokenUsageStore.cs"));
         Check("棘轮不高于 R3 开始数值", Baseline.MaxFileLines <= 1765 && Baseline.BotAgentHostLines <= 243
@@ -1380,11 +1380,10 @@ public static partial class Program
             .Count;
         var switches = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolSwitches.cs");
         var researchTools = index.ByPath("packages/websearch/backend/ResearchTools.cs");
-        var researchKeys = Regex.Matches(researchTools?.NoComments ?? string.Empty, "FeatureKey:\\s*ToolFeature\\.").Count;
-        Check("聊天声明按实际所有者提供 FeatureKey（内建 8 / 研究包 2）",
-            featureKeys == 8 && researchKeys == 2 && switches is not null
+        Check("聊天声明按实际所有者提供 FeatureKey（内建 8，研究包已迁往插件市场）",
+            featureKeys == 8 && researchTools is null && switches is not null
             && switches.NoComments.Contains("_ => false", StringComparison.Ordinal),
-            $"带 FeatureKey 的声明 = {featureKeys}/{researchKeys}；开关表 = {(switches is null ? "缺" : "在")}");
+            $"带 FeatureKey 的声明 = {featureKeys}；researchTools = {(researchTools is null ? "已迁移" : "仍在主仓库")}；开关表 = {(switches is null ? "缺" : "在")}");
         var staticSpecs = index.ByPath("src/BotAgent.Core/Domain/Tools/ChatToolSpecs.cs")?.NoComments ?? string.Empty;
         var staticArgs = index.ByPath("src/BotAgent.Core/Domain/Tools/ToolArgs.cs")?.NoComments ?? string.Empty;
         Check("Core 不再登记研究工具或复制研究参数规则",

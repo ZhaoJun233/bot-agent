@@ -21,14 +21,6 @@
     <Project Path="contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj" />
   </Folder>
   <Folder Name="/packages/">
-    <Project Path="packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj" />
-    <Project Path="packages/websearch/backend/BotAgent.Package.WebSearch.csproj" />
-    <Project Path="packages/poke/backend/BotAgent.Package.Poke.csproj" />
-    <Project Path="packages/vibes/backend/BotAgent.Package.Vibes.csproj" />
-    <Project Path="packages/stickers/backend/BotAgent.Package.Stickers.csproj" />
-    <Project Path="packages/music/backend/BotAgent.Package.Music.csproj" />
-    <Project Path="packages/voice/backend/BotAgent.Package.Voice.csproj" />
-    <Project Path="packages/profiles/backend/BotAgent.Package.Profiles.csproj" />
     <Project Path="packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj" />
     <Project Path="packages/model-services/backend/BotAgent.Package.ModelServices.csproj" />
     <Project Path="packages/agent/backend/BotAgent.Package.Agent.csproj" />
@@ -38,11 +30,6 @@
     <Project Path="packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj" />
     <Project Path="packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj" />
     <Project Path="packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj" />
-    <Project Path="packages/documents/backend/BotAgent.Package.Documents.csproj" />
-    <Project Path="packages/digest/backend/BotAgent.Package.Digest.csproj" />
-    <Project Path="packages/knowledge/backend/BotAgent.Package.Knowledge.csproj" />
-    <Project Path="packages/scheduler/backend/BotAgent.Package.Scheduler.csproj" />
-    <Project Path="packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj" />

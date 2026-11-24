@@ -73,8 +73,8 @@ internal sealed class Fixture : IAsyncDisposable
         var poke = new PokeUseCase(box, new PokeHooks(() => 10001, (_, _) => true,
             Registry.GetOrCreate, (_, _) => { }, (_, _) => { }, Logs.Enqueue, _ => { }));
         _stickers = new StickerService(EmptyProxy.Create<IStickerRepository>(), Model.Client, Source, box, Logs.Enqueue);
-        _stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-            new BotAgent.Packages.Stickers.StickerCoordinator(_stickers.CreateHostPorts()));
+        var stickerDouble = new SyntheticStickerDouble();
+        _stickers.BindDirect(stickerDouble, stickerDouble);
         Pipeline = new ReplyPipeline(box, Source, Model.Client, profiles, Registry,
             EmptyProxy.Create<IPanelNotifier>(), new WhitelistGate(box, policy), approvals, participation, poke,
             new VibeTracker(), new MemberRoleUseCase(Source, EmptyProxy.Create<IMemberRoleRepository>(), Logs.Enqueue),
@@ -83,6 +83,24 @@ internal sealed class Fixture : IAsyncDisposable
             EmptyProxy.Create<IMoodRepository>(), new ReplyHooks(Logs.Enqueue, () => 10001, () => _disposed), traces,
             background: _background, platformPolicies: policy);
     }
+    private sealed class SyntheticStickerDouble : IStickerPolicyContribution, IStickerRuntimeContribution
+    {
+        public int PendingDescribe => 0;
+        public long DescribeDone => 0;
+        public bool CanOperate => false;
+        public bool Allow(string sourceKey, string stickerId, int cooldownSeconds, DateTimeOffset now, out string reason)
+        { reason = ""; return true; }
+        public string NoteSent(string sourceKey, string stickerId, DateTimeOffset now) => "";
+        public bool TrySanitizeFilename(string? rawFilename, out string safeFilename) { safeFilename = rawFilename ?? ""; return !string.IsNullOrWhiteSpace(safeFilename); }
+        public StickerPayloadCheck ValidatePayload(byte[] bytes, long maxBytes) => new(true, "png", "image/png", "");
+        public void ClearConversation(string sourceKey) { }
+        public void EnsureTimer(bool enabled) { }
+        public void QueueDescribe(string id) { }
+        public Task CollectAsync(string[] urls, string fromUid, long fromGroup, long messageId, Func<bool>? canStartExternalIo, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CurateAsync(bool force, CancellationToken ct) => Task.FromResult("");
+        public Task<string> ImportFromAlbumAsync(int limit, CancellationToken ct) => Task.FromResult("");
+    }
+
     public async Task<BotConversation> Inbound(string text, bool direct = false, long target = 10001, bool group = true,
         long speaker = 10002, long? replyTo = null)
     {

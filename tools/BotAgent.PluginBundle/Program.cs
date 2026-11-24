@@ -37,7 +37,7 @@ internal static class Program
         {
             var manifest = JsonSerializer.Deserialize<PluginPackageManifest>(await PluginPackageFiles.ReadRequiredAsync(args[i], 32768, default), options)
                 ?? throw new InvalidDataException("bundle_manifest_missing");
-            if (!Regex.IsMatch(manifest.Id ?? "", @"^(?:preset|system)[.][a-z][a-z0-9.-]{0,70}$")
+            if (!Regex.IsMatch(manifest.Id ?? "", @"^system[.][a-z][a-z0-9.-]{0,70}$")
                 || manifest.Id!.Contains("..", StringComparison.Ordinal) || manifest.Id.EndsWith('.')
                 || manifest.ApiVersion != 1 || manifest.EntryAssembly != Path.GetFileName(args[i + 1])
                 || manifest.Version is not null || manifest.Sha256 is not null || manifest.DownloadUrl is not null)
@@ -62,7 +62,7 @@ internal static class Program
                 if (!Regex.IsMatch(contract.Name ?? "", @"^[A-Za-z][A-Za-z0-9_.-]{0,119}$")
                     || contract.Name!.Contains("..", StringComparison.Ordinal)
                     || string.IsNullOrEmpty(contract.Owner)
-                    || !Regex.IsMatch(contract.Owner, @"^(?:preset|system)[.][a-z][a-z0-9.-]{0,70}$")
+                    || !Regex.IsMatch(contract.Owner, @"^system[.][a-z][a-z0-9.-]{0,70}$")
                     || contract.Version is not null || contract.Sha256 is not null
                     || contract.Name.Equals(typeof(IBotPlugin).Assembly.GetName().Name, StringComparison.OrdinalIgnoreCase)
                     || contract.Name.Equals(typeof(IPluginContribution).Assembly.GetName().Name, StringComparison.OrdinalIgnoreCase)

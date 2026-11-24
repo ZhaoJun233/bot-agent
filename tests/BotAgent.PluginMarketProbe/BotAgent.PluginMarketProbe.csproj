@@ -7,6 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../OfficialPluginsTestLocator.cs" Link="OfficialPluginsTestLocator.cs" />
     <Compile Include="../ResearchFixture.cs" Link="ResearchFixture.cs" />
     <Compile Include="../BotAgent.PluginPackageProbe/SharedContractFixture.cs" Link="SharedContractFixture.cs" />
     <ProjectReference Include="../../src/BotAgent.Headless/BotAgent.Headless.csproj" />

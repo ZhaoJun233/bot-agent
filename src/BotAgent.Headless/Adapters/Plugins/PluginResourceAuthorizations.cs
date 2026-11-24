@@ -37,17 +37,24 @@ public sealed class PluginResourceAuthorizations
         }
     }
 
-    internal void EnsureApproved(PluginPackageManifest manifest)
+    internal void EnsureApproved(PluginPackageManifest manifest, bool allowLegacyOfficialEnvelope = false)
     {
-        if (manifest.Configuration is not null && !_fingerprints.Contains(PluginLifecycleManifest.Fingerprint(manifest)))
+        if (_fingerprints.Contains(PluginLifecycleManifest.Fingerprint(manifest)))
+            return;
+        if (OfficialPresetPolicy.IsOfficialPresetId(manifest.Id))
+        {
+            OfficialPresetPolicy.EnsureResourcesAuthorized(manifest, allowLegacyOfficialEnvelope);
+            return;
+        }
+        if (manifest.Configuration is not null)
             throw new InvalidOperationException("plugin_configuration_not_authorized");
-        if (PluginActivationModel.Requested(manifest) && !_fingerprints.Contains(PluginLifecycleManifest.Fingerprint(manifest)))
+        if (PluginActivationModel.Requested(manifest))
             throw new InvalidOperationException("plugin_model_not_authorized");
-        if (PluginActivationExecution.Requested(manifest) && !_fingerprints.Contains(PluginLifecycleManifest.Fingerprint(manifest)))
+        if (PluginActivationExecution.Requested(manifest))
             throw new InvalidOperationException("plugin_tool_execution_not_authorized");
-        if (PluginActivationWeb.Requested(manifest) && !_fingerprints.Contains(PluginLifecycleManifest.Fingerprint(manifest)))
+        if (PluginActivationWeb.Requested(manifest))
             throw new InvalidOperationException("plugin_web_not_authorized");
-        if ((manifest.Data is not null || manifest.Control) && !_fingerprints.Contains(PluginLifecycleManifest.Fingerprint(manifest)))
+        if (manifest.Data is not null || manifest.Control)
             throw new InvalidOperationException("plugin_data_not_authorized");
     }
 }

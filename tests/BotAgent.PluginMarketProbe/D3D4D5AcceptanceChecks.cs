@@ -43,12 +43,23 @@ internal static partial class Program
         var repoRoot = FindRepoRoot();
         var srcHashBefore = repoRoot is not null ? HashDirectory(Path.Combine(repoRoot, "src")) : null;
 
-        // ── 1. All 17 Bundled Packages (P01..P08 + S01..S05) Isolation & Functionality ──
+        // ── 1. Bare host loads 9 system.* packages, then all 13 official 1.1.0 feature presets load cleanly ──
         var bundleDir = Path.Combine(parentRoot, "d3-d4-bundle-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(bundleDir);
         const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
         var runtimeType = typeof(PluginPackageService).Assembly.GetType("BotAgent.Host.PluginRuntime")!;
         var logs = new List<string>();
+        await using (var bareRuntime = (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
+            .Invoke([bundleDir, (Action<string>)(msg => logs.Add(msg))]))
+        {
+            var barePackages = (PluginPackageService)runtimeType.GetProperty("Packages", hidden)!.GetValue(bareRuntime)!;
+            await (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(bareRuntime, [CancellationToken.None])!;
+            var bareInstalled = await barePackages.GetInstalledAsync();
+            Check(bareInstalled.Count == 9 && bareInstalled.All(p => p.Id.StartsWith("system.", StringComparison.Ordinal)),
+                "bare host starts with ONLY the 9 system.* packages");
+        }
+
+        OfficialMarketplaceTestHelper.StageAllOfficialFeatures(bundleDir, enableInStore: true);
         await using (var runtime = (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
             .Invoke([bundleDir, (Action<string>)(msg => logs.Add(msg))]))
         {

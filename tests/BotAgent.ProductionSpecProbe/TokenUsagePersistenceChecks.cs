@@ -24,18 +24,16 @@ internal static class TokenUsagePersistenceChecks
     internal static void Run(Action<bool, string> check)
     {
         var host = typeof(Database).Assembly;
-        var package = typeof(BotAgent.Packages.TokenQuota.QuotaPlugin).Assembly;
         var resourcePrefix = "BotAgent.Schema.preset.token-quota.";
-        var packageScripts = package.GetManifestResourceNames().Where(n => n.StartsWith(resourcePrefix, StringComparison.Ordinal)).Order().ToArray();
-        check(packageScripts.Length == 2 && packageScripts.All(name =>
-        {
-            using var owned = package.GetManifestResourceStream(name)!;
-            using var retained = host.GetManifestResourceStream(name);
-            return retained is not null && SHA256.HashData(owned).SequenceEqual(SHA256.HashData(retained));
-        }), "package ships both historical migrations and host recovery retains identical bytes");
-        check(host.GetManifestResourceNames().Count(n => n.StartsWith("BotAgent.Schema.host.token-usage.", StringComparison.Ordinal)) == 2
-            && !package.GetManifestResourceNames().Any(n => n.StartsWith("BotAgent.Schema.host.", StringComparison.Ordinal)),
-            "generic metering schema belongs to Storage, outside quota package resources");
+        var quotaScripts = host.GetManifestResourceNames().Where(n => n.StartsWith(resourcePrefix, StringComparison.Ordinal)).Order().ToArray();
+        check(quotaScripts.SequenceEqual([resourcePrefix + "14-15.down.sql", resourcePrefix + "14-15.up.sql"])
+            && quotaScripts.All(name =>
+            {
+                using var retained = host.GetManifestResourceStream(name);
+                return retained is not null && retained.Length > 0;
+            }), "Storage embeds both historical token-quota recovery migrations");
+        check(host.GetManifestResourceNames().Count(n => n.StartsWith("BotAgent.Schema.host.token-usage.", StringComparison.Ordinal)) == 2,
+            "generic metering schema belongs to Storage");
         check(RunChild("--usage-migrate"), "legacy usage migrates once, preserves quota receipts and survives absent quota state");
         check(RunChild("--usage-migration-fault"), "partial DDL failure rolls back copied usage, removed columns and version marker");
     }

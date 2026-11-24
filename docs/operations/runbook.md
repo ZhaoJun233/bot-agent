@@ -71,8 +71,9 @@ flowchart TD
 ### 回滚红线提醒
 
 1. **永远“先恢复数据快照，再启动旧版本程序”**：新版本库或高版本 `data/plugins/` 被旧版代码读取会触发 `database_schema_newer` 或 `plugin_metadata_unreadable`。
-2. **`v1.4.0`（17 包）与当前候选（22 包）间回滚必须双份恢复**：两者 SQLite `user_version` 同为 `15`，若只退镜像不退 `data/plugins/` 与库，会引发现行包清单与 Phase 3 新增记忆枚举（`UnifiedMemoryFactCategory` 3..5）解析异常（`_faulted`）。
-3. **跨机器迁移协议端**：先完全停掉旧机的 NapCat，再启动新机 NapCat，防止同一账号互踢触发平台风控。
+2. **`v1.4.0` 与当前候选间回滚必须双份恢复**：两者 SQLite `user_version` 同为 `15`，若只退镜像不退 `data/plugins/` 与库，会引发现行包清单与 Phase 3 新增记忆枚举（`UnifiedMemoryFactCategory` 3..5）解析异常（`_faulted`）。
+3. **全新安装 vs 老实例升级的插件行为**：新宿主仅随包内置 9 个 `system.*` 系统与平台包，启动时**不预装**任何 `preset.feature.*` 插件、**不自动联网下载**，需按需前往控制台 `/web/`「插件中心」从官方市场 `ZhaoJun233/bot-agent-plugins`（`1.1.0+`）安装；已安装过 `1.0.0` 历史归档的老实例升级后，本地缓存包继续冷启动可用，并可在「插件中心」平滑升级至 `1.1.0` 或卸载。
+4. **跨机器迁移协议端**：先完全停掉旧机的 NapCat，再启动新机 NapCat，防止同一账号互踢触发平台风控。
 
 ---
 

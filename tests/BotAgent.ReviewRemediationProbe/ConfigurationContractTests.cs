@@ -1563,7 +1563,7 @@ internal static class ConfigurationContractTests
             var official = await Post("/api/settings", "{\"groupInterjectionProbability\":99,\"OFFICIALAPPSECRET\":null}");
             Check(official.Status == 400 && (await Read()).Body["version"]!.ToJsonString() == after.Body["version"]!.ToJsonString(),
                 "official_secret_presence_rejected_before_all_legacy_side_effects");
-            var plugin = after.Body["view"]!["registered"]!["plugins"]!.AsArray().First()!["key"]!.GetValue<string>();
+            var plugin = after.Body["view"]!["registered"]!["plugins"]!.AsArray().Single(row => row!["key"]!.GetValue<string>() == "system.health-reporting")!["key"]!.GetValue<string>();
             var missingEnabled = new JsonObject { ["registered"] = new JsonObject { ["plugins"] = new JsonArray(
                 new JsonObject { ["key"] = plugin }) } };
             Check((await Post("/api/settings?configuration=save", SaveBody(after.Body, Key(after.Body), missingEnabled))).Status == 400

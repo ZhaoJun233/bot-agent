@@ -43,7 +43,7 @@ Bot Agent 以嵌入式 **SQLite**（`Microsoft.Data.Sqlite`）为主存储，辅
 | v12 | 新增 `agent_tasks` 任务台账表（仅存形状与计数，不存正文） | `CreateAgentTaskLedger` + `idx_agent_tasks_updated` |
 | v13 | `trace_archive` 新增 `cached_prompt_tokens`、`cache_write_tokens`、`cache_usage_unknown` | 保留旧行 `NULL` 表示上游未知，区分真实 `0` 命中 |
 | v14 | 配置字段 ID 上限扩至 `152`（新版回复节奏参数 149–152） | 重建 `configuration_field_modes` 放宽 CHECK |
-| v15 | 计量与配额分权（[迁移脚本](../../src/BotAgent.Storage/Schema/host.token-usage.14-15.up.sql) + [配额脚本](../../packages/token-quota/backend/Schema/preset.token-quota.14-15.up.sql)）：宿主独占 `token_usage`，插件表 `tenant_quotas` 删除运行计数列 | 同事务迁移老计量列并重建，支持离线逆迁移（见 [Token 用量恢复](../operations/token-usage-recovery.md)） |
+| v15 | 计量与配额分权（[迁移脚本](../../src/BotAgent.Storage/Schema/host.token-usage.14-15.up.sql) + [配额脚本](../../src/BotAgent.Storage/Schema/preset.token-quota.14-15.up.sql)）：宿主独占 `token_usage`，插件表 `tenant_quotas` 删除运行计数列 | 同事务迁移老计量列并重建，支持离线逆迁移（见 [Token 用量恢复](../operations/token-usage-recovery.md)） |
 
 ---
 

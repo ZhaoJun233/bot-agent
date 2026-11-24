@@ -169,7 +169,10 @@ public sealed partial class PluginSettingsStore
         {
             BotAgent.Domain.Configuration.LegacyPluginConfigurationFields.Validate(manifest);
             _distribution.ValidateId(manifest.Id);
-            if (manifest.Id.StartsWith("preset.", StringComparison.Ordinal)) _distribution.EnsureApproved(manifest);
+            if (manifest.Id.StartsWith("preset.", StringComparison.Ordinal)
+                && !_distribution.IsApprovedRelease(manifest)
+                && (_distribution.Fingerprint == "none" || !OfficialPresetPolicy.IsApprovedOfficialOrLegacyManifest(manifest)))
+                throw new InvalidDataException("Unapproved preset settings manifest.");
         }
         catch (InvalidDataException) { throw new PluginSettingsException(PluginSettingsContract.InvalidSchema); }
         return PluginSettingsContract.ReadSchema(manifest);

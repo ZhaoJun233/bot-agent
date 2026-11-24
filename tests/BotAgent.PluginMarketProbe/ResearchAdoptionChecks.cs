@@ -51,6 +51,7 @@ internal partial class Program
         try
         {
             flags.SetPluginEnabled(id, true);
+            OfficialMarketplaceTestHelper.StageOfficialPackages(Path.Combine(root, "research-default"), [id]);
             await using (var runtime = Runtime("research-default"))
             {
                 var registry = Registry(runtime);
@@ -64,7 +65,7 @@ internal partial class Program
                 Check(model.Calls == 0 && pages.Calls == 0 && optionReads == 0, "actual default package initialization does no model, page or options work");
                 var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == id);
                 Check(state.Active is { Control: true } && state.Pending is null && state.Active.EntryAssembly == "BotAgent.Package.WebSearch.dll"
-                    && state.Active.DownloadUrl == "host-distribution://" + id + "/1.0.0", "host adopts the actual default research ZIP");
+                    && state.Active.DownloadUrl == OfficialMarketplaceTestHelper.ExpectedDownloadUrl(id, "1.1.0"), "host adopts the actual official research ZIP");
                 Check(state.Active!.Permissions is { } permissions && permissions.Order().SequenceEqual(new[] { "model.grounded-text", "network.public-read", "tools.execute" }), "default research declares its exact resource permissions");
                 Check(registry.GetAll().Count(p => p.Id == id) == 1 && facade.IsReady && registry.IsControlReady(id), "one research owner serves business and control");
                 using (var metadata = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(root, "research-default", id, "installed.json"))))
@@ -130,6 +131,8 @@ internal partial class Program
                 var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == id);
                 Check(state.Active is null && !Registry(runtime).IsControlReady(id), "default research respects explicit uninstall on restart");
             }
+            OfficialMarketplaceTestHelper.StageOfficialPackages(Path.Combine(root, "research-no-resources"),
+                ["preset.feature.websearch", "preset.feature.token-quota"]);
             await using (var runtime = Runtime("research-no-resources"))
             {
                 await Start(runtime);
@@ -141,6 +144,7 @@ internal partial class Program
             }
             flags.SetPluginEnabled(id, false);
             var coldCalls = (model.Calls, pages.Calls);
+            OfficialMarketplaceTestHelper.StageOfficialPackages(Path.Combine(root, "research-disabled"), [id]);
             await using (var runtime = Runtime("research-disabled"))
             {
                 Bind(runtime, Services()); await Start(runtime);
@@ -149,6 +153,7 @@ internal partial class Program
                 Check((await new ResearchUseCase(Registry(runtime)).TestSearchAsync("synthetic cold control", default)).HasContent, "cold disabled package diagnostics execute the packaged implementation");
             }
             flags.SetPluginEnabled(id, true);
+            OfficialMarketplaceTestHelper.StageOfficialPackages(Path.Combine(root, "research-drain"), [id]);
             await using (var runtime = Runtime("research-drain"))
             {
                 Bind(runtime, Services()); await Start(runtime);

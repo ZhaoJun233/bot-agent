@@ -9,6 +9,5 @@
     <ProjectReference Include="../../src/BotAgent.Platforms/BotAgent.Platforms.csproj" />
     <ProjectReference Include="../../src/BotAgent.Engine/BotAgent.Engine.csproj" />
     <ProjectReference Include="../../src/BotAgent.Headless/BotAgent.Headless.csproj" />
-    <ProjectReference Include="../../packages/music/backend/BotAgent.Package.Music.csproj" />
   </ItemGroup>
 </Project>

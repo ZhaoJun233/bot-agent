@@ -14,8 +14,38 @@ internal static class MusicReceiptChecks
         var catalog = new NeteaseMusicClient(http, () => null, () => "https://example.com", logs.Add);
         var music = new MusicService(null!, catalog, null!, null!, () => new(), "", null!, logs.Add);
         var useCase = new MusicUseCase(music, source, logs.Add);
-        useCase.BindDirect(new BotAgent.Packages.Music.MusicCoordinator(ports: useCase.CreateHostPorts()));
+        useCase.BindDirect(new SyntheticMusicContribution(useCase.CreateHostPorts()));
         return useCase;
+    }
+
+    private sealed class SyntheticMusicContribution(IMusicHostPorts ports) : IMusicRuntimeContribution
+    {
+        public string? LastTestHeader => null;
+        public Task<string?> TestByNameAsync(string song, CancellationToken ct) => Task.FromResult<string?>(null);
+        public Task<string?> DescribeShareAsync(string platform, string? songId, string? title, string? artist,
+            string? pageUrl, string? directAudioUrl, string sender, CancellationToken ct) => Task.FromResult<string?>(null);
+        public bool TryBeginListen(string sourceKey, int cooldownSeconds, DateTimeOffset now, out string reason)
+        { reason = ""; return true; }
+        public void AddNote(string sourceKey, string note) { }
+        public bool HasNote(string sourceKey) => false;
+        public string? TakeNote(string sourceKey) => null;
+        public bool TryRecordShare(string sourceKey, string songId, TimeSpan dedupWindow, DateTimeOffset now) => true;
+        public void ClearConversation(string sourceKey) { }
+        public Task<string?> ListenAsync(string sourceKey, string song, string requester, CancellationToken ct)
+            => Task.FromResult<string?>(null);
+        public async Task<MusicSendOutcome> ShareWithReceiptAsync(string song, bool isGroup, long targetId, CancellationToken ct)
+        {
+            var songId = await ports.ResolveSongIdByNameAsync(song, ct);
+            if (songId is null) return new(false, false, false, null, null, null);
+            var card = await ports.SendMusicAsync(isGroup, targetId, songId, song, ct);
+            if (card.HasDeliveryReceipt || card.Ok)
+            {
+                var confirmed = card.Ok && (!card.HasDeliveryReceipt || card.DeliverySucceeded);
+                return card with { Ok = confirmed };
+            }
+            var link = await ports.SendTextAsync(isGroup, targetId, $"https://music.163.com/song?id={songId}", ct);
+            return link with { Ok = link.Ok && (!link.HasDeliveryReceipt || link.DeliverySucceeded) };
+        }
     }
     public static async Task RunAsync(Func<string, Func<Task>, Task> test)
     {

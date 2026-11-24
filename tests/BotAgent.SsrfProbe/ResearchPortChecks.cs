@@ -3,7 +3,6 @@ using BotAgent.Adapters.Net;
 using BotAgent.Domain.Ports;
 using BotAgent.Plugins.Execution;
 using BotAgent.Services;
-using BotAgent.Services.Links;
 using BotAgent.Services.Net;
 using BotAgent.Services.Resilience;
 
@@ -18,7 +17,7 @@ internal static class ResearchPortChecks
         var http = new SyntheticHttp(_ => new(HttpStatusCode.OK) { Content = new StringContent(html) });
         var pages = new WebPageTransport(http, () => false);
         var model = new UnusedModel();
-        var search = new WebSearchService(model, pages, () => options, _ => { });
+        var search = ResearchFactories.Search(model, pages, () => options, _ => { });
         var first = await search.SearchAsync("synthetic", default);
         options = options with { WebSearchMaxResults = 2, WebSearchSources = "Synthetic|https://example.com/second?q={q}" };
         var second = await search.SearchAsync("synthetic", default);
@@ -33,7 +32,7 @@ internal static class ResearchPortChecks
         check(shortPage.Text is { Length: >= 300 and <= 301 } && longPage.Text is { Length: >= 500 and <= 501 },
             "narrow research options refresh page clipping without changing its existing bound");
 
-        var links = new LinkPreviewer(pages, () => options, _ => { });
+        var links = ResearchFactories.Links(pages, () => options, _ => { });
         var calls = http.Urls.Count;
         check(await links.PreviewAsync("https://example.com/link", default) is null && http.Urls.Count == calls,
             "disabled narrow link options perform no fetch");
@@ -53,7 +52,7 @@ internal static class ResearchPortChecks
             "actual host projection refreshes each current settings snapshot");
 
         var circuit = new DenyingExecution();
-        var denied = new WebSearchService(model, pages, () => options, _ => { }, circuit);
+        var denied = ResearchFactories.Search(model, pages, () => options, _ => { }, circuit);
         calls = http.Urls.Count;
         var deniedSearch = await denied.SearchAsync("synthetic", default);
         var deniedPage = await denied.ReadPageAsync("https://example.com/page", default);

@@ -47,14 +47,6 @@ internal static class Baseline
         ["BotAgent.Engine"] = new[] { "BotAgent.Core" },
         ["BotAgent.Mcp"] = new[] { "BotAgent.Core" },
         ["BotAgent.Panel"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.TokenQuota"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.WebSearch"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Poke"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Vibes"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Stickers"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Music"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Voice"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Profiles"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.HealthReporting"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.ModelServices"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.Agent"] = new[] { "BotAgent.Core" },
@@ -64,11 +56,6 @@ internal static class Baseline
         ["BotAgent.Package.PlatformQqOfficial"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.PlatformFeishu"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.PlatformLocal"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Documents"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Digest"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Knowledge"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.Scheduler"] = new[] { "BotAgent.Core" },
-        ["BotAgent.Package.PersonalTodo"] = new[] { "BotAgent.Core" },
         ["BotAgent.PluginBundle"] = new[] { "BotAgent.Core" },
         ["BotAgent.Headless"] = new[] { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel" },
     };
@@ -225,9 +212,9 @@ internal static class Baseline
     /// v11 配置字段号上限迁移（#133）：137 → 138（configuration_field_modes 宽表重建 + 表存在性内省）。
     /// v12 任务台账（#116）：138 → 141（agent_tasks 建表语句 + 迁移分支；DAO 三条语句在 Adapters/Persistence）。
     /// v13 轨迹归档缓存用量（#135）：141 → 145（trace_archive DDL 从 CreateSchema 抽成独立方法 + 三条 ALTER 补列）。
-    /// P08 schema 归属：C# 两段拆为四个计入扫描的SQL资源（+2）；七处导入存在查询合为一处（-6），145 → 141。
+    /// 功能插件迁出：TokenQuota 包外迁后全 src 实测 SQL 字面量从 141 降至 140。
     /// </summary>
-    public const int SqlLiteralTotal = 141;
+    public const int SqlLiteralTotal = 140;
 
     // ── R3：直接文件 IO 只允许出现在 Adapters/** 与下列具名例外 ──
     public const string FileIoAllowedPrefix = "src/BotAgent.Headless/Adapters/";
@@ -302,16 +289,16 @@ internal static class Baseline
     {
         ["src/BotAgent.Storage/Schema/host.token-usage.14-15.up.sql"] = "src/BotAgent.Storage/BotAgent.Storage.csproj",
         ["src/BotAgent.Storage/Schema/host.token-usage.14-15.down.sql"] = "src/BotAgent.Storage/BotAgent.Storage.csproj",
-        ["packages/token-quota/backend/Schema/preset.token-quota.14-15.up.sql"] = QuotaProject,
-        ["packages/token-quota/backend/Schema/preset.token-quota.14-15.down.sql"] = QuotaProject,
+        ["src/BotAgent.Storage/Schema/preset.token-quota.14-15.up.sql"] = "src/BotAgent.Storage/BotAgent.Storage.csproj",
+        ["src/BotAgent.Storage/Schema/preset.token-quota.14-15.down.sql"] = "src/BotAgent.Storage/BotAgent.Storage.csproj",
     };
 
-    public const string QuotaProject = "packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj";
+    public const string AgentProject = "packages/agent/backend/BotAgent.Package.Agent.csproj";
     public const string PluginContractsProject = "contracts/plugin/BotAgent.Plugin.Contracts.csproj";
     public const string QuotaContractsProject = "contracts/quota/BotAgent.Quota.Contracts.csproj";
     public const string ResearchContractsProject = "contracts/research/BotAgent.Research.Contracts.csproj";
     public const string BundleProject = "tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj";
-    public const string ResearchProject = "packages/websearch/backend/BotAgent.Package.WebSearch.csproj";
+    public const string ConversationProject = "packages/conversation/backend/BotAgent.Package.Conversation.csproj";
 
     public static readonly IReadOnlyDictionary<string, string> RegisteredContractProjects = new Dictionary<string, string>(StringComparer.Ordinal)
     {
@@ -338,28 +325,15 @@ internal static class Baseline
 
     public static readonly IReadOnlyDictionary<string, string> RegisteredPackageContracts = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        [QuotaProject] = "BotAgent.Quota.Contracts",
-        [ResearchProject] = "BotAgent.Research.Contracts",
-        ["packages/poke/backend/BotAgent.Package.Poke.csproj"] = "BotAgent.Poke.Contracts",
-        ["packages/vibes/backend/BotAgent.Package.Vibes.csproj"] = "BotAgent.Vibes.Contracts",
-        ["packages/stickers/backend/BotAgent.Package.Stickers.csproj"] = "BotAgent.Stickers.Contracts",
-        ["packages/music/backend/BotAgent.Package.Music.csproj"] = "BotAgent.Music.Contracts",
-        ["packages/voice/backend/BotAgent.Package.Voice.csproj"] = "BotAgent.Voice.Contracts",
-        ["packages/profiles/backend/BotAgent.Package.Profiles.csproj"] = "BotAgent.Profiles.Contracts",
         ["packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj"] = "BotAgent.HealthReporting.Contracts",
         ["packages/model-services/backend/BotAgent.Package.ModelServices.csproj"] = "BotAgent.ModelServices.Contracts",
-        ["packages/agent/backend/BotAgent.Package.Agent.csproj"] = "BotAgent.Agent.Contracts",
+        [AgentProject] = "BotAgent.Agent.Contracts",
         ["packages/mcp-tools/backend/BotAgent.Package.McpTools.csproj"] = "BotAgent.Agent.Contracts",
-        ["packages/conversation/backend/BotAgent.Package.Conversation.csproj"] = "BotAgent.Conversation.Contracts",
+        [ConversationProject] = "BotAgent.Conversation.Contracts",
         ["packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj"] = "BotAgent.Platforms.Contracts",
-        ["packages/documents/backend/BotAgent.Package.Documents.csproj"] = "BotAgent.Documents.Contracts",
-        ["packages/digest/backend/BotAgent.Package.Digest.csproj"] = "BotAgent.Digest.Contracts",
-        ["packages/knowledge/backend/BotAgent.Package.Knowledge.csproj"] = "BotAgent.Knowledge.Contracts",
-        ["packages/scheduler/backend/BotAgent.Package.Scheduler.csproj"] = "BotAgent.Scheduler.Contracts",
-        ["packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj"] = "BotAgent.PersonalTodo.Contracts",
     };
     public static readonly IReadOnlyDictionary<string, string> CompatibilitySourceLinks = new Dictionary<string, string>
     {
@@ -367,7 +341,6 @@ internal static class Baseline
     };
 
     public static bool AllowsSql(string path) => path.StartsWith(SqlAllowedPrefix, StringComparison.OrdinalIgnoreCase)
-        || path == "packages/token-quota/backend/QuotaLedger.cs"
         || ConfigurationSqlPaths.ContainsKey(path)
         || TokenUsageSqlPaths.ContainsKey(path)
         || SchemaSqlOwners.ContainsKey(path)

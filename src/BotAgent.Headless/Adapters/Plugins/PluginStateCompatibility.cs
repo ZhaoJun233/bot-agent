@@ -63,7 +63,8 @@ public static class PluginStateCompatibility
                 execution = execution.GetProperty("execution");
             }
             var state = PluginPackageStore.ParseExecution(id, execution, manifest =>
-                PluginPackageValidation.Validate(manifest, checkCompatibility: false, allowReserved: true));
+                PluginPackageValidation.Validate(manifest, checkCompatibility: false, allowReserved: true,
+                    allowLegacyOfficialEnvelope: true));
             if (recovery is not null) PluginStateEnvelope.VerifyProjection(recovery, state);
             else recovery = PluginStateEnvelope.Legacy(state, bytes);
             if (recovery.MinimumReaderVersion > candidateVersion)

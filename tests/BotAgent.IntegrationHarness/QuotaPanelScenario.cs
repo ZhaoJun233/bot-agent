@@ -342,7 +342,7 @@ public static partial class Program
             || !preservedPath.StartsWith(Path.GetFullPath(dataDir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("synthetic_path_escape");
         Directory.Move(packagePath, preservedPath);
-        using var bot3 = StartBot(env);
+        using var bot3 = StartBot(env, seedOfficialPlugins: false);
         await WaitForBusinessReadyAsync(panelPort, cts.Token, bot3);
         var absent = await ZbaAsync(http, "GET", zbaRoot + "/quotas", readToken);
         Check("physically absent quota package has no legacy management fallback", absent.Status == 503

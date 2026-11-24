@@ -25,6 +25,7 @@ internal static class PluginSharedContractValidation
                 || !Regex.IsMatch(contract.Sha256 ?? "", "^[a-fA-F0-9]{64}$")
                 || contract.Owner != manifest.Id && !(manifest.Dependencies ?? []).Any(d => d?.Id == contract.Owner)
                     && !PluginSharedContractRegistry.IsHostContract(contract)
+                    && !OfficialPresetPolicy.IsOfficialContractIdentity(contract)
                     && !(allowHistoricalHostContractDigest && PluginSharedContractRegistry.IsKnownHostContractIdentity(contract)))
                 throw new InvalidDataException("plugin_contract_declaration_invalid");
             PluginPackageValidation.ValidateRelativePath(contract.Name + ".dll");

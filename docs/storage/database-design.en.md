@@ -43,7 +43,7 @@ Startup throws `database_schema_newer` if `user_version > 15` and `configuration
 | v12 | Added shape/count-only `agent_tasks` ledger + `idx_agent_tasks_updated` | `CreateAgentTaskLedger` |
 | v13 | Added 3-state prompt cache columns (`cached_prompt_tokens`, `cache_write_tokens`, `cache_usage_unknown`) to `trace_archive` | Preserves `NULL` for unknown legacy usage vs zero hits |
 | v14 | Expanded config field cap to `152` (Reply Pacing fields 149–152) | Rebuilt `configuration_field_modes` |
-| v15 | Split host metering from plugin quotas ([host SQL](../../src/BotAgent.Storage/Schema/host.token-usage.14-15.up.sql) + [plugin SQL](../../packages/token-quota/backend/Schema/preset.token-quota.14-15.up.sql)): `token_usage` owned by host, usage columns dropped from `tenant_quotas` | Atomic transaction migration with offline reverse tool ([Token Usage Recovery](../operations/token-usage-recovery.md)) |
+| v15 | Split host metering from plugin quotas ([host SQL](../../src/BotAgent.Storage/Schema/host.token-usage.14-15.up.sql) + [plugin SQL](../../src/BotAgent.Storage/Schema/preset.token-quota.14-15.up.sql)): `token_usage` owned by host, usage columns dropped from `tenant_quotas` | Atomic transaction migration with offline reverse tool ([Token Usage Recovery](../operations/token-usage-recovery.md)) |
 
 ---
 

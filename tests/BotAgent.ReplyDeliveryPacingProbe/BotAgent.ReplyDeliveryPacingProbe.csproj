@@ -8,6 +8,5 @@
   <ItemGroup>
     <ProjectReference Include="../../src/BotAgent.Engine/BotAgent.Engine.csproj" />
     <ProjectReference Include="../../src/BotAgent.Platforms/BotAgent.Platforms.csproj" />
-    <ProjectReference Include="../../packages/stickers/backend/BotAgent.Package.Stickers.csproj" />
   </ItemGroup>
 </Project>

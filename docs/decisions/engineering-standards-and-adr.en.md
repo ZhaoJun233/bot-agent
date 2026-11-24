@@ -10,13 +10,13 @@ This document summarizes Bot Agent's repository layout, coding standards & autom
 
 ```text
 .
-├── BotAgent.slnx                   # .NET 10 solution (Core/Engine/Platforms/Model/Storage/Mcp/Panel/Headless + 19 contracts + 22 packages + 40 test projects)
+├── BotAgent.slnx                   # .NET 10 solution (Core/Engine/Platforms/Model/Storage/Mcp/Panel/Headless + 19 contracts + 9 system pkgs + 40 tests)
 ├── Directory.Build.props           # Single build baseline & host version source (Nullable/LangVersion/NuGetAudit/Version)
 ├── Dockerfile.app                  # Artifact-only runtime image for 1 GB hosts (extracts app.tar.gz)
 ├── docker-compose.yml              # Container orchestration template (qqchat + napcat)
 ├── start.sh / stop.sh / status.sh  # Native Linux control scripts
-├── contracts/                      # 19 host-plugin decoupling contract assemblies (pure DTOs/interfaces)
-├── packages/                       # 22 bundled feature & platform packages (C# backends + schemas + sandboxed JS/TS UI)
+├── contracts/                      # 19 host-plugin decoupling contract assemblies + shared UI presentation/quota assets
+├── packages/                       # 9 host-bundled system & platform driver packages (13 feature presets moved to official marketplace)
 ├── src/
 │   ├── BotAgent.Core/              # Domain models, pure state machines, policy/profile resolution (no I/O or network)
 │   ├── BotAgent.Engine/            # Chat orchestration, reply pacing, approval use cases, AgentTaskRuntime
@@ -34,7 +34,7 @@ This document summarizes Bot Agent's repository layout, coding standards & autom
 │   └── gencert.sh                  # Self-signed TLS cert generator for local reverse proxies
 ├── tests/
 │   ├── BotAgent.ArchitectureProbe/ # Sub-second dependency, ratchet, version, CI & doc-link gatekeeper
-│   ├── BotAgent.IntegrationHarness/# Process-level synthetic scenario runner (S1–S165)
+│   ├── BotAgent.IntegrationHarness/# Process-level synthetic scenario runner (S1–S166)
 │   └── *Probe/                     # 38 focused white-box probes (Safety/Zba/Mcp/Scheduler/ReviewRemediation, etc.)
 └── docs/
     ├── index.md / index.en.md      # Unified documentation hub
@@ -107,7 +107,7 @@ flowchart LR
 | **Backend Runtime** | .NET 10 Headless Modular Monolith (`BotAgent.Headless`) | Compile-time safety and low-RSS execution suitable for `1 GB` servers without microservice mesh overhead, keeping clean module boundaries via `contracts/` + `src/` |
 | **Persistence** | SQLite (WAL) + Schema-v15 Isolated `meta` JSON Ledgers | Zero external DB daemon; single-file `VACUUM INTO` hot backups simplify rollback; hashed `meta` buckets with CAS and size caps let Phase 3–5 evolve without risky table rewrites |
 | **Console & Control Plane** | Standalone Vue 3 SPA (`/web/`) + ZBA v1 Bearer API | Decouples frontend releases from host binary; OpenAPI generated directly from `PanelRoutes` ensures single source of truth; unset admin token fails closed with `503` |
-| **Plugin & Sandbox Model** | 19 Contracts + 22 Managed Packages + Sandboxed iframes | Contract-driven hot reload/toggle of platform & conversation capabilities; `origin === "null"` sandboxed iframes isolate plugin UIs from host DOM & Bearer tokens |
+| **Plugin & Sandbox Model** | 19 Contracts + 9 Bundled `system.*` Pkgs + 13 Marketplace Features + Sandboxed iframes | Host bundles only `system.*` core & platform drivers; `preset.feature.*` packages install on demand from `ZhaoJun233/bot-agent-plugins` under `OfficialPresetPolicy`; `origin === "null"` iframes isolate UIs & tokens |
 | **Container Packaging** | Prebuilt `app.tar.gz` + [`Dockerfile.app`](../../Dockerfile.app) | Eliminates `dotnet publish` swap exhaustion on `1 GB` production hosts by keeping build workloads on dev/CI machines |
 
 ---

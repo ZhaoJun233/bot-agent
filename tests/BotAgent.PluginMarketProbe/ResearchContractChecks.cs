@@ -52,14 +52,14 @@ internal partial class Program
         var host = typeof(PluginPackageService).Assembly;
         Check(typeof(IBotPlugin).Assembly.GetType(typeof(PluginSettingDefinition).FullName!) == typeof(PluginSettingDefinition),
             "Core forwards the original declarative setting identity to the generic SDK");
-        var metadata = host.GetCustomAttributes<AssemblyMetadataAttribute>().ToDictionary(a => a.Key, a => a.Value!);
-        var index = Convert.FromBase64String(metadata["BotAgent.PluginDistributionIndex"]);
-        using var document = JsonDocument.Parse(index);
-        var manifest = ReadResearchManifest(document);
+        var (manifest, archive, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.websearch");
         var contract = manifest.SharedContracts!.Single();
         var contractBytes = await File.ReadAllBytesAsync(assembly.Location);
-        Check(contract == ResearchContractDeclaration(contractBytes), "compiled host authority pins actual research owner version and bytes");
-        var archive = await File.ReadAllBytesAsync(Path.Combine(Path.GetDirectoryName(host.Location)!, "plugin-distribution", manifest.Sha256 + ".zip"));
+        Check(contract.Name == assembly.GetName().Name && contract.Version == assembly.GetName().Version!.ToString()
+            && contract.Owner == manifest.Id && !string.IsNullOrEmpty(contract.Sha256),
+            "official research manifest pins contract name, version, and owner");
+        var index = JsonSerializer.SerializeToUtf8Bytes(new { formatVersion = 1, releases = new[] { manifest } },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
         byte[] payload;
         using (var zip = new ZipArchive(new MemoryStream(archive)))
         {
@@ -67,7 +67,8 @@ internal partial class Program
             using var bytes = new MemoryStream(); entry.CopyTo(bytes); payload = bytes.ToArray();
             using var shared = zip.GetEntry(contract.Name + ".dll")!.Open();
             using var sharedBytes = new MemoryStream(); shared.CopyTo(sharedBytes);
-            Check(zip.Entries.Count == 2 && sharedBytes.ToArray().SequenceEqual(contractBytes), "default research ZIP carries exact approved contract and implementation");
+            Check(zip.Entries.Count == 2 && Hash(sharedBytes.ToArray()) == contract.Sha256,
+                "official research ZIP carries exact declared contract and implementation");
         }
         await ExercisePackage("default", archive, index, manifest);
         using (var pe = new PEReader(new MemoryStream(payload)))
@@ -97,9 +98,9 @@ internal partial class Program
                     .Where(n => n.StartsWith("BotAgent.", StringComparison.Ordinal)).SequenceEqual(["BotAgent.Plugin.Contracts"]),
                 "clean independent research contract build consumes only supplied plugin SDK binary");
         }
-        await RejectPackage("wrong-version", incompatible, contract with { Version = "2.0.0.0", Sha256 = Hash(incompatible) }, "plugin_contract_host_mismatch");
+        await RejectPackage("wrong-version", incompatible, contract with { Version = new Version(2, 0, 0, 0).ToString(), Sha256 = Hash(incompatible) }, "plugin_contract_host_mismatch");
         var changedBytes = contractBytes.Concat(new byte[] { 0 }).ToArray();
-        await RejectPackage("wrong-hash", changedBytes, contract with { Sha256 = Hash(changedBytes) }, "plugin_contract_host_mismatch");
+        await RejectPackage("wrong-hash", changedBytes, contract, "plugin_contract_hash_mismatch");
         await RejectPackage("undeclared", contractBytes, null, "plugin_contract_undeclared");
         var bind = host.GetType("BotAgent.Adapters.Plugins.PluginSharedContractRegistry")!.GetMethod("Bind", BindingFlags.Static | BindingFlags.NonPublic)!;
         try
@@ -161,12 +162,22 @@ internal partial class Program
             var statePath = Path.Combine(directory, reference.Id, "installed.json");
             var pending = await File.ReadAllBytesAsync(statePath);
             foreach (var invalid in new[] { contract with { Name = "Unapproved.Research.Contracts" }, contract with { Owner = "preset.foreign-owner" },
-                contract with { Sha256 = new string('0', 64) }, contract with { Version = "2.0.0.0" },
+                contract with { Version = "2.0.0.0" },
                 contract with { Name = "Unapproved.Ordinary.Contracts", Owner = "probe.undeclared" } })
             {
                 try { await service.StageInstallAsync(reference with { SharedContracts = [invalid] }); throw new Exception("unapproved_host_contract_reference_accepted"); }
                 catch (InvalidDataException error) when (error.Message == "plugin_contract_declaration_invalid") { checks++; }
             }
+            try
+            {
+                await service.StageInstallAsync(reference with
+                {
+                    Version = "1.0.1",
+                    SharedContracts = [contract with { Sha256 = new string('0', 64) }]
+                });
+                throw new Exception("tampered_official_contract_hash_accepted");
+            }
+            catch (InvalidDataException error) when (error.Message == "plugin_contract_hash_mismatch") { checks++; }
             Check((await File.ReadAllBytesAsync(statePath)).SequenceEqual(pending), "unapproved claims cannot modify staged state");
             var plain = reference with { SharedContracts = null };
             foreach (var state in new[] { new InstalledPluginPackage(reference.Id, Active: reference),
@@ -261,7 +272,7 @@ internal partial class Program
         async Task<byte[]> BuildCandidate()
         {
             var directory = Path.Combine(artifacts, "candidate"); Directory.CreateDirectory(directory);
-            var source = Path.Combine(repository.FullName, "packages/websearch/backend");
+            var source = OfficialMarketplaceTestHelper.PluginBackendSourceDirectory("preset.feature.websearch");
             foreach (var file in Directory.EnumerateFiles(source, "*.cs")) File.Copy(file, Path.Combine(directory, Path.GetFileName(file)));
             var project = XDocument.Load(Path.Combine(source, "BotAgent.Package.WebSearch.csproj"));
             project.Descendants("Version").Single().Value = "1.0.1";
@@ -289,14 +300,22 @@ internal partial class Program
                 await service.StageDistributionInstallAsync(manifest, archive);
                 await service.ApplyAtStartupAsync(manifest.Id, context, manager, true);
                 var previous = manager.GetContribution<IResearchUseCase>(manifest.Id); previous.AddNote("synthetic:retained", name);
-                await service.StageDistributionInstallAsync(target, bytes);
                 var statePath = Path.Combine(directory, target.Id, "installed.json");
-                var pending = await File.ReadAllBytesAsync(statePath);
-                try { await service.ApplyAtStartupAsync(target.Id, context, manager, true); throw new Exception("bad_research_contract_accepted"); }
+                var activeBytes = await File.ReadAllBytesAsync(statePath);
+                byte[]? pendingBytes = null;
+                try
+                {
+                    await service.StageDistributionInstallAsync(target, bytes);
+                    pendingBytes = await File.ReadAllBytesAsync(statePath);
+                    await service.ApplyAtStartupAsync(target.Id, context, manager, true);
+                    throw new Exception("bad_research_contract_accepted");
+                }
                 catch (Exception error) when (HasSdkCode(error, code)) { checks++; }
-                Check((await File.ReadAllBytesAsync(statePath)).SequenceEqual(pending) && manager.IsReady(target.Id)
-                    && previous.TakeNote("synthetic:retained") == name && (await service.GetInstalledAsync()).Single().Pending is not null,
-                    name + " cannot replace the prior live generation or change recoverable pending bytes");
+                Check((await File.ReadAllBytesAsync(statePath)).SequenceEqual(pendingBytes ?? activeBytes)
+                    && manager.IsReady(target.Id)
+                    && previous.TakeNote("synthetic:retained") == name
+                    && (pendingBytes is null || (await service.GetInstalledAsync()).Single().Pending is not null),
+                    name + " cannot replace the prior live generation or change recoverable state bytes");
             }
             finally { await manager.StopAllAsync(CancellationToken.None); }
         }

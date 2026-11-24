@@ -21,6 +21,8 @@ jobs:
     name: Build and synthetic probes
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      BOTAGENT_OFFICIAL_PLUGINS_DIR: ${{ runner.temp }}/bot-agent-plugins
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +44,19 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
+      - name: Check out official marketplace plugins for test fixtures
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ZhaoJun233/bot-agent-plugins
+          ref: 3c62467b49d39fa715d14250287df820004ad5ec
+          path: ${{ runner.temp }}/bot-agent-plugins
+          persist-credentials: false
+      - name: Build official marketplace plugins for test fixtures
+        working-directory: .
+        shell: bash
+        run: |
+          dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
+          python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
       - name: Restore the whole solution (high/critical NuGet audit gate)
         # 一条 restore 覆盖 BotAgent.slnx 里的全部工程（#123 把 slnx 补到 30 个工程，
         # 不再靠手写 22 行 restore 追着磁盘跑）。
@@ -214,54 +229,6 @@ jobs:
       - name: Build static assets
         run: npm run build
 
-  quota-ui:
-    name: Independent quota UI build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Node.js 22
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: packages/token-quota/frontend/package-lock.json
-      - name: Build with package and public UI contract only
-        run: |
-          mkdir -p "$RUNNER_TEMP/quota-ui/packages/token-quota" "$RUNNER_TEMP/quota-ui/contracts"
-          cp -R packages/token-quota/frontend "$RUNNER_TEMP/quota-ui/packages/token-quota/frontend"
-          cp -R contracts/ui "$RUNNER_TEMP/quota-ui/contracts/ui"
-          cd "$RUNNER_TEMP/quota-ui/packages/token-quota/frontend"
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run build
-
-  research-ui:
-    name: Independent research declaration build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Node.js 22
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: packages/websearch/frontend/package-lock.json
-      - name: Build owner declaration without host frontend inputs
-        run: |
-          mkdir -p "$RUNNER_TEMP/research-ui"
-          cp -R packages/websearch/frontend "$RUNNER_TEMP/research-ui/frontend"
-          cd "$RUNNER_TEMP/research-ui/frontend"
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run typecheck
-          npm run build
-
   # playwright.config.ts 的 chromium / firefox / webkit 跑同一套用例、同一套断言。
   # 三个引擎拆成独立 job：一是真并行（塞一个 job 串行跑会撞 20 分钟超时），
   # 二是缺引擎时只有对应 job 红，不会被误读成"矩阵整体挂了"。
@@ -269,6 +236,8 @@ jobs:
     name: Browser end-to-end (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      BOTAGENT_OFFICIAL_PLUGINS_DIR: ${{ runner.temp }}/bot-agent-plugins
     strategy:
       fail-fast: false
       matrix:
@@ -302,6 +271,13 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: src/web/package-lock.json
+      - name: Check out official marketplace plugins for test fixtures
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ZhaoJun233/bot-agent-plugins
+          ref: 3c62467b49d39fa715d14250287df820004ad5ec
+          path: ${{ runner.temp }}/bot-agent-plugins
+          persist-credentials: false
       - name: Install dependencies
         run: npm ci
       - name: Build static assets
@@ -309,6 +285,12 @@ jobs:
       - name: Build Headless host for end-to-end tests
         working-directory: .
         run: dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
+      - name: Build official marketplace plugins for test fixtures
+        working-directory: .
+        shell: bash
+        run: |
+          dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
+          python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
       - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.engine }}
       - name: Browser end-to-end tests
@@ -328,6 +310,8 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      BOTAGENT_OFFICIAL_PLUGINS_DIR: ${{ runner.temp }}/bot-agent-plugins
     strategy:
       fail-fast: false
       matrix:
@@ -341,7 +325,7 @@ jobs:
           # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
           # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s66,s67,s68,s69,s70,s71,s72,s73,s74,s75,s76,s77,s78,s79,s153,s154,s155,s156,s157,s162,s163,s164,s165"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s66,s67,s68,s69,s70,s71,s72,s73,s74,s75,s76,s77,s78,s79,s153,s154,s155,s156,s157,s162,s163,s164,s165,s166"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -353,6 +337,17 @@ jobs:
           dotnet-version: 10.0.x
           cache: true
           cache-dependency-path: '**/*.csproj'
+      - name: Install Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Check out official marketplace plugins for test fixtures
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ZhaoJun233/bot-agent-plugins
+          ref: 3c62467b49d39fa715d14250287df820004ad5ec
+          path: ${{ runner.temp }}/bot-agent-plugins
+          persist-credentials: false
       - name: Restore core and harness (high/critical NuGet audit gate)
         # Both projects independently audit all dependencies; NU1903/NU1904 fail their restores.
         run: |
@@ -362,6 +357,12 @@ jobs:
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
+      - name: Build official marketplace plugins for test fixtures
+        working-directory: .
+        shell: bash
+        run: |
+          dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
+          python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
       - name: Run synthetic integration suite
         env:
           # 规范名优先（N1）：harness 仍兼容旧 QQCHAT_IT_ONLY，但新配置一律写 BOTAGENT_*。

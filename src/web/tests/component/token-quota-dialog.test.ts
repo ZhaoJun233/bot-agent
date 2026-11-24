@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import TokenQuotaDialog from '../../src/features/capabilities/TokenQuotaDialog.vue'
-import PackageQuotaDialog from '../../../../packages/token-quota/frontend/TokenQuotaDialog.vue'
+import PackageQuotaDialog from '../../../../contracts/ui/quotas/TokenQuotaDialog.vue'
 import RegisteredPluginSwitch from '../../src/features/capabilities/RegisteredPluginSwitch.vue'
 import CapabilitiesPage from '../../src/features/capabilities/CapabilitiesPage.vue'
 import { settingsFor } from '../../src/features/capabilities/plugin-settings'

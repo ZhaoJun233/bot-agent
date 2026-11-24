@@ -213,7 +213,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private async Task ReconcileAsync(string? pluginId, bool startup, CancellationToken ct)
     {
         var desired = LoadDesiredStates();
-        foreach (var id in _presetIds.Where(id => pluginId is null || id == pluginId))
+        var toggleIds = _presetIds
+            .Concat(Registry.GetAll()
+                .Where(plugin => OfficialPresetPolicy.IsOfficialPresetId(plugin.Id))
+                .Select(plugin => plugin.Id))
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => pluginId is null || id == pluginId);
+        foreach (var id in toggleIds)
         {
             var wanted = DesiredEnabled(id, desired);
             // Never flip an uninitialized cold-start package to Enabled=true in-place (which would cause

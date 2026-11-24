@@ -35,6 +35,7 @@ internal partial class Program
         Check(previous, "synthetic default owner intent was captured before writer activation");
         try
         {
+            OfficialMarketplaceTestHelper.StageOfficialPackages(Path.Combine(root, "dynamic-default-reader"), [id]);
             store.Save(testManifest, store.ReadManifest(testManifest).Revision, "repair-application",
                 JsonSerializer.SerializeToElement(new { enableWebSearch = true, linkPreviewMax = 4 }), "synthetic-admin");
             await (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;

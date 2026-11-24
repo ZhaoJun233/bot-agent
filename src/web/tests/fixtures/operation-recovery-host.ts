@@ -11,7 +11,7 @@ export function seedOperationRecovery(dataDir: string): void {
   const hash = (value: string) => createHash('sha256').update(value).digest('hex').toUpperCase()
   const db = new DatabaseSync(path.join(dataDir, 'data/botagent.db'))
   try {
-    db.exec('CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    db.exec('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
     const put = db.prepare('INSERT INTO meta(key,value) VALUES(?,?)')
     const owner = 'preset.feature.token-quota', scope = hash('zba:admin')
     put.run('quota:receipts:' + scope, JSON.stringify({ [hash('synthetic-legacy-key')]: {

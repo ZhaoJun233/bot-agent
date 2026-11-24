@@ -18,6 +18,7 @@
 - **模块化设计系统与沙箱主题同步**：将前端样式拆分为 6 层（`tokens` / `reset` / `layout` / `components` / `responsive` / `base`），新增 `UiSwitch`（44×24px WCAG 2.2 达标）、`UiTabs`、`UiBanner`、`UiConfirmDialog`、`UiEmptyState` 与右侧抽屉详情；运行时插件沙箱 iframe（表情包、Token 配额等）自动同步宿主深浅主题，并支持从插件卡片一键「打开界面」。
 - **平台驱动「接入与策略」包级前端解耦**：将 QQ 私域、QQ 官方开放平台、飞书与本地调试 4 个驱动的标量字段、秘密槽位（飞书专属槽位 3/4/5）、字段标签/提示、凭据说明与策略输入文案全部下沉至各自 `packages/platform-*/frontend/presentation.ts`；「消息平台」页移除页头聚合按钮，每张驱动卡片的「接入与策略」直达该驱动专属配置抽屉，并按 `platformId` 切片展示与保存 `platformPolicies` 条目（系统配置页的 `system.platform-*` 跳转同步直达对应驱动抽屉）。
 - **模型供应商 API 地址与密钥集成**：将模型 `API 根地址`（`modelBaseUrl`）、`默认模型`（`model`）与 `API Key`（`Slot 0` 与独立凭据）全部收归对应模型供应商卡片与 `ProviderEditorDialog` 内联管理；`primary` 直接管理主模型地址、默认模型与 Slot 0 密钥并锁定优先级/启用态/删除，非主供应商默认采用独立 API Key 并自动派生 `credentialKey`（支持在折叠高级区自定义或复用已有键）；页头「路由与采样参数」（`scope="models"`）精简为纯路由与采样设置，移除重复的主模型 URL/密钥及旧注册表。
+- **13 项对话功能插件迁出宿主至官方市场**：将 13 个 `preset.feature.*` 功能插件（`digest`、`documents`、`knowledge`、`music`、`personal-todo`、`poke`、`profiles`、`scheduler`、`stickers`、`token-quota`、`vibes`、`voice`、`websearch`，首版 `1.1.0`）迁出主仓库并移交官方市场仓库 `ZhaoJun233/bot-agent-plugins` 独立发布；宿主内建发行包精简为 **9 个 `system.*` 核心与平台包**，新实例默认 0 预装功能插件且启动零自动下载，需在 `/web/`「插件中心」按需安装；新增 `OfficialPresetPolicy` 保持对既有 `1.0.0` `host-distribution://` 状态封套、历史配置与 `tenant_quotas` 账本的平滑兼容与升级/卸载，并将历史配额迁移 SQL（`preset.token-quota.14-15.{up,down}.sql`）迁入 `src/BotAgent.Storage/Schema/`，静态前端呈现注册与配额共享类型迁入 `contracts/ui/{presentations,quotas}/`。
 - **全站操作与观测打磨**：顶栏常驻全局管理员模式切换；系统配置提供多行文本域与字符计数；系统概览组件表支持按领域直达下钻；轨迹页新增节点级耗时明细抽屉；运行日志终端新增自动换行切换与同步状态提示。
 
 ### Fixed

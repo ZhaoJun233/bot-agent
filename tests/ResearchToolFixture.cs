@@ -1,28 +1,28 @@
 using BotAgent.Domain.Permissions;
 using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Tools;
-using BotAgent.Packages.WebSearch;
 using BotAgent.Services.Net;
 using BotAgent.Services.Tools;
 using System.Text.Json.Nodes;
 
-/// <summary>Isolated engine fixtures use the actual package declarations with their controlled research doubles.
+/// <summary>Isolated engine fixtures use deterministic research tool definitions with controlled doubles.
 /// PluginMarketProbe separately verifies the actual collectible executor and host adoption.</summary>
 internal static class ResearchToolFixture
 {
-    private static readonly ToolDefinition[] Definitions = DescribePackage();
+    private static readonly ToolDefinition[] Definitions =
+    [
+        new(new("web.search", ToolCategory.WebRead, "联网搜索", true, "research.actions",
+            "search（要联网查的问题，2~120 字）", ToolDefaultPolicy.FollowSwitch,
+            FeatureKey: ToolFeature.WebSearch, Origin: ToolOrigin.Plugin),
+            [new("query", Required: true, MinLength: 2, MaxLength: 120)]),
+        new(new("web.read", ToolCategory.WebRead, "读网页正文", true, "research.actions",
+            "read（要读的网页 URL）", ToolDefaultPolicy.FollowSwitch,
+            FeatureKey: ToolFeature.WebSearch, Origin: ToolOrigin.Plugin),
+            [new("url", Required: true, MinLength: 8, MaxLength: 2000)], HttpUrlField: "url")
+    ];
     public static ChatToolCatalog Catalog { get; } = Create();
     public static ChatToolCatalog Create(IResearchUseCase? research = null)
         => new(Definitions.Select(definition => new Binding(definition, research)));
-
-    private static ToolDefinition[] DescribePackage()
-    {
-        var assembly = typeof(ResearchPlugin).Assembly;
-        var coordinator = Activator.CreateInstance(assembly.GetType("BotAgent.Packages.WebSearch.ResearchCoordinator")!,
-            null, (Action<string>)(_ => { }), (Func<DateTimeOffset>)(() => DateTimeOffset.UnixEpoch))!;
-        var tools = (IToolContribution)Activator.CreateInstance(assembly.GetType("BotAgent.Packages.WebSearch.ResearchTools")!, coordinator)!;
-        return tools.DescribeTools();
-    }
 
     public static ChatCapabilitySet Capabilities(bool enableWebSearch, bool enableMusic, bool enableVoice,
         bool enableStickers, bool enablePoke, string? scenario, int policyVersion = 1,

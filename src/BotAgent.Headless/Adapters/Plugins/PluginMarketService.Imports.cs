@@ -159,7 +159,9 @@ public sealed partial class PluginMarketService
     }
 
     private static ZbaPluginMetadata? Community(ZbaPluginMetadata? metadata, PluginPackageManifest manifest)
-        => metadata is null ? null : metadata with { SourceKind = "community", Review = new("unreviewed", manifest.Version, manifest.Sha256.ToLowerInvariant()) };
+        => metadata is null ? null
+            : OfficialPresetPolicy.IsOfficialPresetId(manifest.Id) ? metadata
+            : metadata with { SourceKind = "community", Review = new("unreviewed", manifest.Version, manifest.Sha256.ToLowerInvariant()) };
     private static string ManifestFingerprint(PluginPackageManifest manifest)
         => PluginPackageRevision.Intent("preview", manifest.Id, manifest, false, "");
     private static PluginPackageManifest CloneManifest(PluginPackageManifest manifest)

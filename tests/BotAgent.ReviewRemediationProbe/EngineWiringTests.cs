@@ -230,8 +230,8 @@ internal static class EngineWiringTests
         var model = DispatchProxy.Create<IModelClient, CountingModelProxy>();
         var modelCalls = (CountingModelProxy)(object)model;
         using var stickers = new StickerService(null!, model, source, box, _ => { });
-        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
+        stickers.BindDirect(OfficialFeatureFactory.StickerPolicy(),
+            OfficialFeatureFactory.StickerCoordinator(stickers.CreateHostPorts()));
         var background = NewQueue();
 
         var pipeline = new ReplyPipeline(
@@ -341,8 +341,8 @@ internal static class EngineWiringTests
         var modelCalls = (CountingModelProxy)(object)model;
         modelCalls.HoldFirstDownload = true;
         using var stickers = new StickerService(null!, model, source, box, _ => { });
-        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
+        stickers.BindDirect(OfficialFeatureFactory.StickerPolicy(),
+            OfficialFeatureFactory.StickerCoordinator(stickers.CreateHostPorts()));
         var background = NewQueue();
 
         var pipeline = new ReplyPipeline(
@@ -431,21 +431,19 @@ internal static class EngineWiringTests
         var model = DispatchProxy.Create<IModelClient, TimerStickerModelProxy>();
         var counted = (TimerStickerModelProxy)(object)model;
         using var stickers = new StickerService(repository, model, source, settings, _ => { });
-        var stickerCoord = new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts());
-        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(), stickerCoord);
+        var stickerCoord = OfficialFeatureFactory.StickerCoordinator(stickers.CreateHostPorts());
+        stickers.BindDirect(OfficialFeatureFactory.StickerPolicy(), stickerCoord);
         var scheduler = new BotScheduler(settings, source, null!, null!, null!, stickers, null!,
             new BotSchedulerHooks(_ => { }, () => false), gate.Allows);
         try
         {
             scheduler.RebuildIfNeeded();
-            var timerField = typeof(BotAgent.Packages.Stickers.StickerCoordinator).GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)!;
             var mode = revoked ? "revoked" : "positive";
-            check(timerField.GetValue(stickerCoord) is not null && stickers.PendingDescribe == 2,
+            check(OfficialFeatureFactory.GetStickerTimer(stickerCoord) is not null && stickers.PendingDescribe == 2,
                 $"{mode} sticker timer is armed with two pending rows");
 
             // 与真实 timer 回调同一实现；不等待 10 秒到点。
-            var tick = (Task)typeof(BotAgent.Packages.Stickers.StickerCoordinator).GetMethod("TickAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(stickerCoord, null)!;
+            var tick = OfficialFeatureFactory.InvokeStickerTickAsync(stickerCoord);
             await counted.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             check(counted.Calls == 1, $"{mode} sticker timer starts exactly one model call");
 
@@ -455,7 +453,7 @@ internal static class EngineWiringTests
                     "sticker plugin is enabled before timer revocation");
                 plugins.SetEnabled("preset.feature.stickers", false);
                 scheduler.RebuildIfNeeded();
-                check(!gate.Allows(PluginGate.StickersCapability) && timerField.GetValue(stickerCoord) is null,
+                check(!gate.Allows(PluginGate.StickersCapability) && OfficialFeatureFactory.GetStickerTimer(stickerCoord) is null,
                     "disabling the sticker plugin disarms the timer");
             }
 
@@ -494,8 +492,8 @@ internal static class EngineWiringTests
         var countedSource = (ManualStickerSourceProxy)(object)source;
 
         using var stickers = new StickerService(repository, model, source, box, _ => { });
-        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
+        stickers.BindDirect(OfficialFeatureFactory.StickerPolicy(),
+            OfficialFeatureFactory.StickerCoordinator(stickers.CreateHostPorts()));
         stickers.PluginEnabled = () => gate.Allows(PluginGate.StickersCapability);
 
         var mode = revoked ? "revoked" : "positive";
@@ -531,8 +529,8 @@ internal static class EngineWiringTests
         counted.HoldFirstDownload = true;
 
         using var stickers = new StickerService(repository, model, source, box, _ => { });
-        stickers.BindDirect(new BotAgent.Packages.Stickers.StickerPolicyEngine(),
-            new BotAgent.Packages.Stickers.StickerCoordinator(stickers.CreateHostPorts()));
+        stickers.BindDirect(OfficialFeatureFactory.StickerPolicy(),
+            OfficialFeatureFactory.StickerCoordinator(stickers.CreateHostPorts()));
         stickers.PluginEnabled = () => gate.Allows(PluginGate.StickersCapability);
 
         var import = stickers.ImportFromAlbumAsync();

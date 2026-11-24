@@ -118,7 +118,7 @@ public sealed partial class PluginMarketService
             .Where(manifest => manifest is not null)
             .Select(manifest => Project(manifest!, installed, desired) with
                 { Metadata = presentation.ForInstalledPackage(manifest!, registered.FirstOrDefault(p => p.Id == manifest!.Id),
-                    _packages.IsHostDistributionRelease(manifest!)),
+                    _packages.IsHostDistributionRelease(manifest!) || OfficialPresetPolicy.IsApprovedOfficialOrLegacyManifest(manifest!)),
                 IsCompatible = compatibility[manifest!.Id + "@" + manifest.Version] is null,
                 CompatibilityMessage = compatibility[manifest.Id + "@" + manifest.Version] ?? (manifest.ApiVersion == 2 ? PythonCompatibilityNotice : null) })
             .OrderBy(entry => entry.Manifest.Id, StringComparer.Ordinal)
@@ -391,7 +391,7 @@ public sealed partial class PluginMarketService
     }
 
     private bool CanReloadPackage(string id, PluginPackageManifest? manifest)
-        => SupportsRuntimeReload && !PluginPackageValidation.IsReservedId(id) && !PluginDataValidation.RequiresColdStart(manifest)
+        => SupportsRuntimeReload && !PluginPackageValidation.IsSystemReservedId(id) && !PluginDataValidation.RequiresColdStart(manifest)
             && !_packages.InstalledSnapshot.Any(p => p.Id == id && (PluginDataValidation.RequiresColdStart(p.Active)
                 || PluginDataValidation.RequiresColdStart(p.Pending)));
 

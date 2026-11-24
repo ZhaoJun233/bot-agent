@@ -15,9 +15,6 @@ using BotAgent.Domain.Profiles;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Tools;
-using BotAgent.Packages.Digest;
-using BotAgent.Packages.Documents;
-using BotAgent.Packages.Voice;
 using BotAgent.Services;
 using BotAgent.Services.Agent;
 using BotAgent.Services.Conversations;
@@ -51,7 +48,7 @@ internal static class Phase2CapabilitiesSecurityTests
 
     private static async Task RunDocumentExtractorAndSecurityTestsAsync(Action<bool, string> check)
     {
-        var plugin = new DocumentsPackagePlugin();
+        var plugin = OfficialFeatureFactory.DocumentsPlugin();
         var http = new SyntheticDocHttp();
         var logs = new List<string>();
         var adapter = new DocumentHostPortsAdapter(http, () => false, () => null, logs.Add);
@@ -59,8 +56,8 @@ internal static class Phase2CapabilitiesSecurityTests
             (typeof(IDocumentHostPorts), adapter),
             (typeof(Action<string>), (Action<string>)logs.Add));
         await plugin.InitializeAsync(new PluginContext(services), CancellationToken.None);
-        var contrib = (IDocumentContribution)plugin.GetContribution(typeof(IDocumentContribution))!;
-        var tools = (IToolContribution)plugin.GetContribution(typeof(IToolContribution))!;
+        var contrib = (IDocumentContribution)((IPluginContributionSource)plugin).GetContribution(typeof(IDocumentContribution))!;
+        var tools = (IToolContribution)((IPluginContributionSource)plugin).GetContribution(typeof(IToolContribution))!;
 
         // 1. Plain/HTML, DOCX, XLSX, PPTX, PDF positive extraction
         var htmlRes = contrib.ExtractBytes("guide.html", Encoding.UTF8.GetBytes("<html><body><h1>部署手册</h1><script>evil()</script><p>第一步：配置环境变量</p></body></html>"));
@@ -161,13 +158,13 @@ internal static class Phase2CapabilitiesSecurityTests
         var capturedPrompts = new List<string>();
         var ports = new RealWindowDigestPorts(registry, box, capturedPrompts);
         var clock = new AdvanceableClock(now);
-        var plugin = new DigestPackagePlugin();
+        var plugin = OfficialFeatureFactory.DigestPlugin();
         await plugin.InitializeAsync(
             new PluginContext(new SinglePortProvider(
                 (typeof(IDigestHostPorts), ports),
                 (typeof(IClock), clock))),
             CancellationToken.None);
-        var tools = (IToolContribution)plugin.GetContribution(typeof(IToolContribution))!;
+        var tools = (IToolContribution)((IPluginContributionSource)plugin).GetContribution(typeof(IToolContribution))!;
 
         var res = await tools.ExecuteAsync("group:10001",
             new ToolCall("chat.digest", new JsonObject { ["count"] = "30", ["focus"] = "发版" }),
@@ -187,7 +184,7 @@ internal static class Phase2CapabilitiesSecurityTests
         check(!cooldownHit.Ok && cooldownHit.ReasonCode == "digest_cooldown",
             "digest: per-conversation cooldown blocks rapid repeated summarization");
 
-        var digestContrib = (IDigestContribution)plugin.GetContribution(typeof(IDigestContribution))!;
+        var digestContrib = (IDigestContribution)((IPluginContributionSource)plugin).GetContribution(typeof(IDigestContribution))!;
         digestContrib.ClearConversation("group:10001");
         convA.Append(new ChatMessage { Role = MessageRole.System, SenderName = "系统", SenderId = 0, Text = "SYSTEM_PROMPT_CANARY_44", Timestamp = now.AddMinutes(-1) });
         ports.ReturnNullOnce = true;
@@ -218,7 +215,7 @@ internal static class Phase2CapabilitiesSecurityTests
 
         var box = new SettingsBox(new AppSettings());
         var voiceUseCase = new VoiceUseCase(null, box, logs.Add, stt: stt);
-        var coord = new VoiceCoordinator(new VoicePolicyEngine(), voiceUseCase.CreateHostPorts());
+        var coord = OfficialFeatureFactory.VoiceCoordinator(voiceUseCase.CreateHostPorts());
         voiceUseCase.BindDirect(coord);
 
         var ok = await voiceUseCase.TranscribeAsync([1, 2, 3, 4], "clip.mp3", CancellationToken.None);
