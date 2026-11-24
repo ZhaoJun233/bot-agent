@@ -21,8 +21,6 @@ jobs:
     name: Build and synthetic probes
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      BOTAGENT_OFFICIAL_PLUGINS_DIR: ${{ runner.temp }}/bot-agent-plugins
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,19 +42,17 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - name: Check out official marketplace plugins for test fixtures
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ZhaoJun233/bot-agent-plugins
-          ref: 3c62467b49d39fa715d14250287df820004ad5ec
-          path: ${{ runner.temp }}/bot-agent-plugins
-          persist-credentials: false
       - name: Build official marketplace plugins for test fixtures
         working-directory: .
         shell: bash
         run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/bot-agent-plugins"
+          git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
+          git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
           dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
           python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
+          echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
       - name: Restore the whole solution (high/critical NuGet audit gate)
         # 一条 restore 覆盖 BotAgent.slnx 里的全部工程（#123 把 slnx 补到 30 个工程，
         # 不再靠手写 22 行 restore 追着磁盘跑）。
@@ -236,8 +232,6 @@ jobs:
     name: Browser end-to-end (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      BOTAGENT_OFFICIAL_PLUGINS_DIR: ${{ runner.temp }}/bot-agent-plugins
     strategy:
       fail-fast: false
       matrix:
@@ -271,13 +265,6 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: src/web/package-lock.json
-      - name: Check out official marketplace plugins for test fixtures
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ZhaoJun233/bot-agent-plugins
-          ref: 3c62467b49d39fa715d14250287df820004ad5ec
-          path: ${{ runner.temp }}/bot-agent-plugins
-          persist-credentials: false
       - name: Install dependencies
         run: npm ci
       - name: Build static assets
@@ -289,8 +276,13 @@ jobs:
         working-directory: .
         shell: bash
         run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/bot-agent-plugins"
+          git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
+          git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
           dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
           python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
+          echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
       - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.engine }}
       - name: Browser end-to-end tests
@@ -310,8 +302,6 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      BOTAGENT_OFFICIAL_PLUGINS_DIR: ${{ runner.temp }}/bot-agent-plugins
     strategy:
       fail-fast: false
       matrix:
@@ -341,13 +331,6 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - name: Check out official marketplace plugins for test fixtures
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ZhaoJun233/bot-agent-plugins
-          ref: 3c62467b49d39fa715d14250287df820004ad5ec
-          path: ${{ runner.temp }}/bot-agent-plugins
-          persist-credentials: false
       - name: Restore core and harness (high/critical NuGet audit gate)
         # Both projects independently audit all dependencies; NU1903/NU1904 fail their restores.
         run: |
@@ -361,8 +344,13 @@ jobs:
         working-directory: .
         shell: bash
         run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/bot-agent-plugins"
+          git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
+          git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
           dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
           python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
+          echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
       - name: Run synthetic integration suite
         env:
           # 规范名优先（N1）：harness 仍兼容旧 QQCHAT_IT_ONLY，但新配置一律写 BOTAGENT_*。
