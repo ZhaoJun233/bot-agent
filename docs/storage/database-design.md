@@ -246,7 +246,7 @@ Phase 3–5 新增的高扩展功能在 **不递增 SQLite 物理版本号（维
 │   ├── botagent.db-wal / -shm      # WAL 日志与共享内存文件
 │   ├── backups/
 │   │   └── qqchat_daily_*.db       # 每日 VACUUM INTO 热备快照（POSIX 600，自动保留最近 3 份）
-│   ├── settings.json               # 运行时设置引导/同步文件（与 settings 表协同，不含敏感 API Key）
+│   ├── settings.json               # 历史旧版一次性迁移遗留文件（仅由 LegacyJsonImporter 迁入后移至 legacy-json/，运行时不再写入）
 │   ├── feishu-ids-v2.json          # 飞书 v2 原生 ID ↔ 别名映射表（启用飞书时必须随主库备份）
 │   ├── plugins/                    # 扩展包清单、已安装包体与包隔离数据（见 package-data-store.md）
 │   └── zba-event-sequence.boot     # ZBA 事件环高水位与进程代际序号持久化文件
@@ -258,3 +258,13 @@ Phase 3–5 新增的高扩展功能在 **不递增 SQLite 物理版本号（维
 
 > [!TIP]
 > 扩展包私有持久化模型详见 [包数据存储规范](../architecture/package-data-store.md)；热备策略与日志轮转参数详见 [日志保留、每日热备与恢复演练](../operations/data-retention-and-backup.md)。
+
+---
+
+## 6. 数据保留、异地备份与旧配置退场策略
+
+1. **审计/轨迹表保留与清理边界**：
+   - `trace_archive` 已在每次 `TraceArchiveStore.Append` 写入时执行 **7 天滚动 TTL 自动清理**（每次最多清理 500 条过期行），无需额外外置裁剪任务。
+   - `security_audit_log` 为创世锚定的 SHA-256 哈希链（`AuditLogStore.Verify()`），**严格只增不自动原地删行**，避免破坏哈希连续性；长期归档仅允许在维护窗口通过全库离线快照留存。
+2. **异地备份同步与保留期限**：宿主每日产出 `data/backups/qqchat_daily_*.db`（本地保留 3 份、`600` 权限）；生产环境由宿主机外部定时任务（如 `rclone` / `rsync` / 对象存储 CLI）每日加密同步 `data/backups/qqchat_daily_*.db`、`data/feishu-ids-v2.json` 与 `data/plugins/` 至异地备份盘或对象存储，日常备份保留 **30 天**，重大升级前快照至少保留 **14 天**。
+3. **`data/settings.json` 退场路线**：SQLite `settings` 表（与 `configuration_*` 事务表）已成为**唯一运行时配置真源**（`SettingsStore.cs`）；`data/settings.json` 正式弃用，仅保留一次性旧部署导入入口（`LegacyJsonImporter` 导入后即归档至 `legacy-json/`），计划在 `v2.0` 正式移除旧 JSON 自动导入通道。

@@ -223,5 +223,13 @@ sequenceDiagram
 | 知识库载荷越界 | 单作用域总 JSON 超过 1 MiB（`AbsoluteMaxScopeBytes`） | 拒绝写入并返回错误码 `scope_payload_too_large` | `KnowledgeStore.cs` |
 | MCP 服务器配置越界 / SSRF | 配置 JSON 超 64 KiB 或端点指向内网保留段/非法协议 | 保存前拦截拒绝；Secret 单独落库 `secrets` 表且绝不回显 | `McpServerStore.cs` |
 | 每日 Token 配额耗尽 | 某租户当日 UTC `used_prompt + used_completion >= daily_token_limit` | 自动切入节能静默，跳过自动聊天与主动触发 | [Token 配额说明](../token-quota-plugin.md) |
-| 模型主节点连续硬失败 | `model_providers.consecutive_hard_failures` 达阈值 | 状态切换至 `cooldown_until` 熔断冷却，路由自动热切次优先级供应商 | [模型配置应用路径](../architecture/model-configuration-apply-path.md) |
+| 模型主节点连续硬失败 | `model_providers.consecutive_hard_failures` 达 `3` 次 | 状态切换至 `open` 并冷却 **`120` 秒**（`cooldown_until`），期满单次探测 `half_open`，路由热切次优先级供应商 | [模型配置应用路径](../architecture/model-configuration-apply-path.md) |
 | 未知或高危命令注入 | 外部转发/音乐/JSON卡片夹带指令；非只读插件未审批 | 卡片直接拦截指令解析；未审批插件工具在 `ChatCapabilitySet` 与执行前复检双层拦停 | `OneBotInboundParser.cs`, `ApprovalUseCase.cs` |
+
+---
+
+## 8. 已确认的容错、限流与治理基线
+
+1. **模型供应商熔断阈值与冷却窗口**：`ProviderCircuitBreaker` 与 `ProviderFailoverRunner` 默认固定为连续硬失败（5xx / 429 / 连接失败 / 超时）**`3` 次**触发 `open` 熔断，默认冷却 **`120` 秒**，冷却结束后仅放行单次 `half_open` 探测（进程重启清零 `ProbeInFlight`）；状态持久化于 `model_providers`。为防止误配造成级联故障，熔断阈值故意**不作为**控制台可调配置项暴露，运维通过控制台的「测试连接 / 启用停用 / 调整优先级」触发免重启路由热重建。
+2. **企业通道限流（HTTP 429）退避与告警规范**：飞书（返回 `feishu_rate_limited`，默认提示 5 秒）与 QQ 官方通道（HTTP `429` 或业务码 `40034100`，透传 `Retry-After`）在出站发送遇到限流时，统一执行 **Fail-Closed 零盲目自动重试**（`ReplyDeliveryResults.StopsFurtherSending` 立即中止分句后续段发送，防止重复投递或触发平台封禁）；同时记录脱敏日志并写入 `/zba/v1/events` 事件环，持续出现限流尖峰时由外部监控触发人工告警。
+3. **统一记忆管理员密钥交接与轮换**：`BOTAGENT_UNIFIED_MEMORY_ADMIN` 为宿主机注入的 JSON 身份绑定（包含精确键 `PlatformId`、`AccountScope`、`InstanceId`、`NativeUserId`），与普通 Agent 白名单完全隔离。运维人员交接或离职时须立即轮换，常规至少每 **90 天（每季度）** 复核一次；更新宿主密钥/环境变量并执行容器重建（`docker compose up -d`）生效，变更操作通过审计日志留痕。

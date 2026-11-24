@@ -2,36 +2,36 @@
 
 English | [简体中文](open-questions.md)
 
-This document centralizes every open policy question, unverified operational SLA, and governance rule across the core documentation set. Individual domain, storage, and operations docs no longer keep separate open-question sections; check off items below as decisions are finalized and record the outcome in the corresponding guide or a new ADR.
+This document centralizes every policy decision, operational SLA, and governance rule across the core documentation set. **All 12 checklist items have now been finalized, executed in code/scripts where applicable, and written back into their target specifications.**
 
 > [!NOTE]
-> The previously open item regarding synchronizing `README.md` changes into `README.en.md` and English documentation mirrors has been completed and closed in this release.
+> The previously open `README.en.md` synchronization item and all 12 items below are now resolved and closed.
 
 ---
 
 ## 1. Core Business Rules ([core-business-rules.en.md](domain/core-business-rules.en.md))
 
-- [ ] **Model Provider Circuit-Breaker Threshold & Cooldown**: Confirm the exact consecutive hard-failure count that trips `model_providers` into `open` state and the default cooldown duration, and decide whether these thresholds should become console-configurable settings.
-- [ ] **Enterprise Channel Rate-Limit (HTTP 429) Retry & Alert Policy**: Define retry caps and human-alert escalation rules when Feishu or QQ Official tenants hit platform-enforced throttling (`429`).
-- [ ] **Unified Memory Admin Key Rotation & Handover**: Define rotation intervals and team handover governance for `BOTAGENT_UNIFIED_MEMORY_ADMIN` in multi-operator environments.
+- [x] **Model Provider Circuit-Breaker Threshold & Cooldown**: **Confirmed** — `ProviderCircuitBreaker` / `ProviderFailoverRunner` defaults stay fixed at **`3`** consecutive hard failures and **`120s`** cooldown with single-probe `half_open`, intentionally omitted from console-editable settings.
+- [x] **Enterprise Channel Rate-Limit (HTTP 429) Retry & Alert Policy**: **Confirmed** — Outbound HTTP `429` on Feishu (`5s` default hint) and QQ Official (`40034100` / `Retry-After`) enforces Fail-Closed zero blind automatic retries via `ReplyDeliveryResults.StopsFurtherSending`, emitting masked logs and `/zba/v1/events` signals for external alerting.
+- [x] **Unified Memory Admin Key Rotation & Handover**: **Confirmed** — `BOTAGENT_UNIFIED_MEMORY_ADMIN` host JSON identity bindings are reviewed quarterly (**90 days**) and rotated immediately on handover/offboarding via container recreation with audit trail.
 
 ## 2. Database Design & Persistence ([database-design.en.md](storage/database-design.en.md))
 
-- [ ] **Retention / Pruning Policy for Append-Only Ledgers**: Confirm whether `trace_archive` and `security_audit_log` require scheduled pruning caps or daily TTL cleanup (currently `AppDatabase.cs` defines no automatic deletion).
-- [ ] **Off-Site Backup Sync & Retention Window**: Confirm whether external jobs replicate `data/backups/qqchat_daily_*.db` and `data/feishu-ids-v2.json` to off-site object storage and what retention period applies.
-- [ ] **Retirement Timeline for `data/settings.json`**: Confirm whether `data/settings.json` will be fully retired in favor of the SQLite `settings` table in a future version.
+- [x] **Retention / Pruning Policy for Append-Only Ledgers**: **Confirmed** — `trace_archive` already enforces an automatic **7-day rolling TTL** on every write (up to 500 rows/batch in `TraceArchiveStore.Append`); `security_audit_log` remains strictly append-only (no in-place deletion) to preserve SHA-256 chain integrity, archived only via offline DB snapshots.
+- [x] **Off-Site Backup Sync & Retention Window**: **Confirmed** — External encrypted daily host jobs replicate `data/backups/qqchat_daily_*.db`, `data/feishu-ids-v2.json`, and `data/plugins/` with **30-day** daily retention (**>= 14 days** for pre-upgrade snapshots).
+- [x] **Retirement Timeline for `data/settings.json`**: **Confirmed & Docs Corrected** — SQLite `settings` table is the sole runtime source of truth; `data/settings.json` is legacy import-only (archived to `legacy-json/` by `LegacyJsonImporter`) and scheduled for importer removal in **`v2.0`**.
 
 ## 3. Operations & Incident Response ([runbook.en.md](operations/runbook.en.md))
 
-- [ ] **Production RTO / RPO SLAs**: Confirm concrete Recovery Time Objective (RTO) and Recovery Point Objective (RPO) targets (currently defaults only guarantee one daily local `VACUUM INTO` hot backup without continuous off-site WAL PITR).
-- [ ] **External Real-Time Alerting Integration**: Confirm whether spikes in `restarts`, backup failures, or gateway disconnects integrate with external alerting channels (e.g., Uptime Kuma / Webhook / email) beyond the scheduled private health report.
-- [ ] **Maintenance Approval & Rollback Sign-Off Ownership**: Clarify on-call upgrade window approvers, notification channels, and rollback sign-off roles in multi-operator setups.
+- [x] **Production RTO / RPO SLAs**: **Confirmed** — Baseline SLAs set to **RPO <= 24h** (**RPO ~= 0** on planned upgrades via pre-upgrade snapshots), **RTO <= 30m** for container rollback, and **RTO <= 2h** for off-site host rebuild; continuous WAL PITR stays out of scope for 1 GB hosts.
+- [x] **External Real-Time Alerting Integration**: **Confirmed** — External pull-based probes monitor `/healthz` & `/readyz` (60s) and `/zba/v1/status` via `BOTAGENT_ZBA_READ_TOKEN` (5m), alerting via Webhook/email/DM on consecutive probe failures, `stale`/`faulted` backups, or `restarts >= 2` within 15 min.
+- [x] **Maintenance Approval & Rollback Sign-Off Ownership**: **Confirmed** — `BotOwner` approves maintenance windows, `dev -> main` PRs, and tags; on-call operators hold pre-authorized unilateral authority to trigger emergency rollback on health or integrity failure.
 
 ## 4. Engineering Standards & Plugin Governance ([engineering-standards-and-adr.en.md](decisions/engineering-standards-and-adr.en.md))
 
-- [ ] **Ratchet Evolution & Large-File Splitting Roadmap**: Confirm whether `BotAgent.ArchitectureProbe` method-length ratchets (`198` lines) and large-file baselines will be tightened or decomposed in future `v1.4+` / `v2.0` milestones.
-- [ ] **Community Package Signing & Review Governance**: Formalize key issuance, revocation, and third-party publisher review policies for external marketplace packages.
+- [x] **Ratchet Evolution & Large-File Splitting Roadmap**: **Confirmed & Executed** — Tightened `tests/BotAgent.ArchitectureProbe/Baseline.cs` (`MaxFileLines`: `1643 -> 1591`, `LongestMethodAnywhere`: `198 -> 193`) and updated `large-file-policy.md`; targeting `LongestMethodAnywhere <= 180` in `v2.x` via responsibility-first decomposition without cosmetic `partial` splits.
+- [x] **Community Package Signing & Review Governance**: **Confirmed** — Bundled packages check host-pinned SHA-256 (`HostPluginBundle`); external imports require manifest + SHA-256 checks, `TrustAcknowledged`, and maintainer security review with offline distribution keys rotated annually, plus sticky Fail-Closed revocation via `governance.json` in `PluginGovernanceService` (`409 plugin_governance_revoked`).
 
 ## 5. Local Dev & Startup Scripts ([README.en.md](../README.en.md))
 
-- [ ] **Legacy `start.sh` Env-Var Compatibility Cleanup**: Confirm when remaining legacy reply-desire/cooldown compatibility mappings inside `start.sh` should be retired in favor of `ReplyPacing` names.
+- [x] **Legacy `start.sh` Env-Var Compatibility Cleanup**: **Confirmed & Executed** — Updated [`start.sh`](../start.sh) to replace retired `AI_DESIRE` / `GROUP_COOLDOWN` / `PRIVATE_COOLDOWN` / `IDLE_FALLBACK` mappings with current `ReplyPacing` variables (`GROUP_INTERJECTION_PROBABILITY`, `GROUP_INTERJECTION_COOLDOWN`, `GROUP_CONTINUATION_WAIT`, `PRIVATE_CONTINUATION_WAIT`).

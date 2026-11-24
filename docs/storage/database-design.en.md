@@ -246,7 +246,7 @@ Phases 3–5 persist isolated state inside `meta` without incrementing `PRAGMA u
 │   ├── botagent.db-wal / -shm      # SQLite WAL & shared-memory files
 │   ├── backups/
 │   │   └── qqchat_daily_*.db       # Daily VACUUM INTO snapshots (POSIX 600, retains 3)
-│   ├── settings.json               # Runtime config sync file (never stores secret API keys)
+│   ├── settings.json               # Legacy import-only file (archived to legacy-json/ by LegacyJsonImporter; never written at runtime)
 │   ├── feishu-ids-v2.json          # Feishu native ID <-> alias map (back up with DB)
 │   ├── plugins/                    # Installed packages, releases, and isolated package data
 │   └── zba-event-sequence.boot     # Persistent ZBA event cursor & process boot sequence
@@ -258,3 +258,13 @@ Phases 3–5 persist isolated state inside `meta` without incrementing `PRAGMA u
 
 > [!TIP]
 > Package-private storage conventions are detailed in [Package Data Store](../architecture/package-data-store.md); backup and log-rotation policies are detailed in [Data Retention & Backup](../operations/data-retention-and-backup.md).
+
+---
+
+## 6. Retention, Off-Site Backup & Legacy Retirement Policy
+
+1. **Append-Only Ledger & Trace Pruning**:
+   - `trace_archive` enforces an automatic **7-day rolling TTL** on every `TraceArchiveStore.Append` write (deleting up to 500 expired rows per batch); no external pruning cron is needed.
+   - `security_audit_log` is a genesis-anchored SHA-256 hash chain (`AuditLogStore.Verify()`) and is **strictly append-only with zero automatic in-place row deletion** so chain continuity stays verifiable; long-term archiving relies on offline full-DB snapshots taken during maintenance windows.
+2. **Off-Site Backup Sync & Retention Window**: Host-level daily jobs (`rclone` / `rsync` / object-storage CLI) replicate local `VACUUM INTO` snapshots (`data/backups/qqchat_daily_*.db`), `data/feishu-ids-v2.json`, and `data/plugins/` to encrypted off-site storage with **30-day daily retention** (and **≥ 14-day retention** for pre-upgrade snapshots).
+3. **Retirement Timeline for `data/settings.json`**: The SQLite `settings` table (`SettingsStore.cs`) is already the sole runtime source of truth. `data/settings.json` is formally deprecated and kept solely for one-time legacy import (`LegacyJsonImporter`, which moves imported files into `legacy-json/`), scheduled for full importer removal in `v2.0`.

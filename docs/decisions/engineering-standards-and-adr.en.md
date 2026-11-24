@@ -65,12 +65,17 @@ Repository invariants are enforced on every build/CI run via [`Directory.Build.p
 | Gate | Rule Enforced | Reference |
 | :--- | :--- | :--- |
 | **Directed Acyclic Dependencies** | Strict one-way references (`BotAgent.Panel` and `BotAgent.Platforms` depend only on `Core`); legacy adapters must not re-duplicate SQL/file I/O | [ADR-0001](0001-composition-root-assembly-split.md) |
-| **Method-Length Ratchet** | Individual methods under `src/` cannot exceed the baseline ceiling (`<= 198` lines); complex logic must be decomposed cleanly | `BotAgent.ArchitectureProbe` |
+| **Method-Length Ratchet** | Individual methods under `src/` cannot exceed the baseline ceiling (`<= 193` lines; `MaxFileLines <= 1591`); complex branches must be decomposed cleanly | `BotAgent.ArchitectureProbe` |
 | **Large-File Governance** | Files > 1000 lines prohibit cosmetic mechanical splitting; changes require architectural boundary review | [Large File Policy](../architecture/large-file-policy.md) |
 | **Doc & Route Parity** | ① Zero broken relative links across tracked/new `.md` files; ② 4 required CN/EN root pairs (`README`, `AGENTS`, `CONTRIBUTING`, `SECURITY`); ③ 100% of `PanelRoutes.cs` + ZBA routes covered in [API Surface Map](../api-surface.md) | [API Surface Map](../api-surface.md) |
 | **Reproducible Container Digests** | External base images in Dockerfiles/Compose must pin `@sha256:` digests | [Release Checklist](../operations/release-checklist.md) |
 | **Frontend & Sandbox Hygiene** | Vue 3.5 + TypeScript 6 + Vite 8: `npm run typecheck && npm run test:unit` required; memory-only Bearer tokens; sandbox iframes support `origin === "null"` and clean up listeners | [`src/web/README.md`](../../src/web/README.md) |
 | **Privacy & Desensitization** | Synthetic-only test fixtures; public sync passes blacklist audit, category regex audit & post-push remote re-clone scan | [`CONTRIBUTING.en.md`](../../CONTRIBUTING.en.md) |
+
+### 2.3 Ratchet Roadmap & External Plugin Governance
+
+1. **Ratchet Evolution & Large-File Splitting Roadmap**: `Baseline.cs` enforces strictly downward-only ratchets and has been tightened to `MaxFileLines = 1591` (`ConfigurationStore.cs`) and `LongestMethodAnywhere = 193` (`ReplyDelivery.cs:SendAsync`), with a `v2.x` milestone target of `LongestMethodAnywhere <= 180`. Oversized files (`ConfigurationStore.cs`, `SettingsStore.cs`, `OpenAiClient.cs`, etc.) follow [Large File Policy](../architecture/large-file-policy.md) responsibility-first decomposition with `IntegrationHarness` parity evidence and no cosmetic `partial class` splits.
+2. **Community Package Signing & Review Governance**: Bundled packages verify host-pinned SHA-256 digests (`HostPluginBundle`); community/external imports require manifest + SHA-256 digest checks, explicit `TrustAcknowledged` opt-in, and least-privilege capability/egress review before catalog promotion (maintainers hold distribution keys offline and rotate annually). Compromised or malicious packages are revoked via `governance.json` (`status: "revoked"` by `(id, version, sha256)` or `sha256`), stickily retained and enforced Fail-Closed by `PluginGovernanceService` (`409 plugin_governance_revoked`).
 
 ---
 

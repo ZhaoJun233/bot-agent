@@ -96,11 +96,10 @@ internal static class Baseline
     /// 2026-09-24（批次 E 有限步进循环）：2328 → **2320** —— 上面登记的债**当场还了一部分**：
     /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `AgentTurnLoop.cs`，
     /// “当场做掉只读工具”搬进 `InlineTurnTools.cs`。
-    /// 2026-10-18 Wave3：回复主链（ReplyPipeline / AgentTurnLoop / InlineTurnTools / PlainSender）
-    /// 整体搬到 `src/BotAgent.Engine/Reply/`；全 src 最大文件回落到 SettingsStore（1740），
-    /// 这格随实测下调 1765 → **1740**（仍然只许往下调）。
+    /// 2026-11-24（Phase 5 收口后下调）：实测最大文件回落到 `src/BotAgent.Storage/ConfigurationStore.cs`（1591 行），
+    /// 棘轮随实测下调至 1591（只许往下调，不许往回抬）。
     /// </summary>
-    public const int MaxFileLines = 1643;
+    public const int MaxFileLines = 1591;
     public const string BotAgentHostPath = "src/BotAgent.Headless/Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。
@@ -117,12 +116,11 @@ internal static class Baseline
 
     /// <summary>
     /// **全 src** 最长方法（DoD §8.3：≤ 200 行）。只钉 BotAgentHost 是不够的 —— 那些大方法
-    /// 搬进用例层之后，护栏得跟着搬，否则"搬出去就不管了"。
-    /// 2026-09-23 批次 6 拆完，**已达成 DoD**：实测最长 195 行（WebUiServer.Settings 的
-    /// ApplyChannelAndAgentSettings），全 src 超过 200 行的成员块 **0 个**。基线按 DoD 钉死在 200。
+    /// 2026-11-24（Phase 5 收口后下调）：全 src 实测最长成员块已降至 193 行（`ReplyDelivery.cs:SendAsync`），
+    /// 基线随实测下调 198 → 193（仍按只降不升原则锁死，超出即拦截）。
     /// 诊断用 <c>--longest</c> 看当前最长的若干个（拆的时候从上往下走）。
     /// </summary>
-    public const int LongestMethodAnywhere = 198;
+    public const int LongestMethodAnywhere = 193;
 
     // ── 易变细节 ──
     /// <summary>

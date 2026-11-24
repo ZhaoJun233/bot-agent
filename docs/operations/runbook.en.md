@@ -62,7 +62,7 @@ flowchart TD
     B -- "No (same release or usage-only)" --> D["For Schema 15 to 14 only, prefer offline down-migration tool to keep latest counts"]
     C --> E["Step 1 Stop Writes: docker stop host cleanly<br/>Disconnect/stop gateway writes and verify idle"]
     D --> E
-    E --> F["Step 2 Restore Data BEFORE Code:<br/>Restore data/botagent.db (chmod 600)<br/>Restore settings.json / feishu-ids-v2.json / data/plugins/<br/>Remove stale -wal / -shm files"]
+    E --> F["Step 2 Restore Data BEFORE Code:<br/>Restore data/botagent.db (chmod 600)<br/>Restore feishu-ids-v2.json / data/plugins/ (settings.json only for legacy rollbacks)<br/>Remove stale -wal / -shm files"]
     F --> G["Step 3 Verify Snapshot:<br/>Check PRAGMA integrity_check = ok and user_version"]
     G --> H["Step 4 Start Previous Image / Binary:<br/>Switch to qqchat-agent:prev or previous artifact dir"]
     H --> I["Step 5 Smoke Verification:<br/>/healthz 200 -> /readyz 200 -> Web Console login & ZBA mask state OK"]
@@ -76,7 +76,20 @@ flowchart TD
 
 ---
 
-## 4. Related Operations Guides
+## 4. Production SLAs, External Alerting & On-Call Governance
+
+1. **Production RTO / RPO Targets**:
+   - **RPO <= 24 hours** under daily `VACUUM INTO` snapshots + off-site sync (**RPO ~= 0** for planned upgrades via mandatory pre-upgrade dual snapshots).
+   - **RTO <= 30 minutes** for container rollback (`qqchat-agent:prev` + local snapshot), and **<= 2 hours** for full host rebuild from off-site backups. Continuous WAL archiving (PITR) remains explicitly out of scope on 1 GB single-node hosts.
+2. **External Real-Time Alerting Integration**: External pull-based probes (such as Uptime Kuma or external cron checks) poll `/healthz` and `/readyz` every **60s** and `/zba/v1/status` (using `BOTAGENT_ZBA_READ_TOKEN`) every **5 min**, routing Webhook / email / owner DM alerts without embedding heavy agents into the runtime whenever:
+   - `/healthz` or `/readyz` fails (non-200) for **>= 2 consecutive checks**;
+   - `backup.status` reports `stale` or `faulted`; or
+   - `ops.process.restarts` increases by **>= 2 within 15 minutes**.
+3. **Maintenance Approval & Rollback Sign-Off Ownership**: `BotOwner` / release owner approves maintenance windows, `dev -> main` PR merges, and version tags; the on-call operator holds **pre-authorized unilateral authority to trigger emergency rollback** on `/healthz`, `/readyz`, or integrity check failure, posting pre-maintenance notices, deployment receipts, and rollback summaries to the private ops channel / owner DM.
+
+---
+
+## 5. Related Operations Guides
 
 - [Rollback Playbook & Drill Results](rollback-playbook.md)
 - [Data Retention, Daily Hot Backups & Recovery Drills](data-retention-and-backup.md)

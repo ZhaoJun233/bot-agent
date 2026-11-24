@@ -62,7 +62,7 @@ flowchart TD
     B -- "否（同版本或仅用量表回退）" --> D["若仅回退 Schema 15→14，优先使用离线逆迁移工具保留最新计数"]
     C --> E["第1步 停写：docker stop 宿主（等优雅退出落盘）<br/>停掉或断开协议端，确认无活跃写入"]
     D --> E
-    E --> F["第2步 恢复数据先于代码：<br/>覆盖 data/botagent.db（含权限 600）<br/>同步恢复 settings.json / feishu-ids-v2.json / data/plugins/<br/>清理混入的残留 -wal/-shm（勿把新库留给旧镜像）"]
+    E --> F["第2步 恢复数据先于代码：<br/>覆盖 data/botagent.db（含权限 600）<br/>同步恢复 feishu-ids-v2.json / data/plugins/（仅旧版库回退需 settings.json）<br/>清理混入的残留 -wal/-shm（勿把新库留给旧镜像）"]
     F --> G["第3步 校验快照：<br/>核对 PRAGMA integrity_check = ok 及 user_version"]
     G --> H["第4步 启动旧二进制/镜像：<br/>切回 qqchat-agent:prev 或旧产物目录"]
     H --> I["第5步 验收观察：<br/>/healthz 200 -> /readyz 200 -> 控制台登录 & ZBA 脱敏态正常"]
@@ -76,7 +76,20 @@ flowchart TD
 
 ---
 
-## 4. 关联专项手册
+## 4. 生产 SLA、外部告警与值守签字规范
+
+1. **生产 SLA（RTO / RPO）基线**：
+   - **RPO ≤ 24 小时**（依托每日本地 `VACUUM INTO` 热备与异地同步；计划内版本升级通过强制升级前双快照将 **RPO 控制在 ≈ 0**）。
+   - **RTO ≤ 30 分钟**（同机回退 `qqchat-agent:prev` 与本地快照恢复）；整机灾难从异地备份重建时 **RTO ≤ 2 小时**。1 GB 单节点继续明确不做连续 WAL 归档时间点恢复（PITR）。
+2. **外部即时告警通道集成**：采用**外置拉取探针**（如 Uptime Kuma 或外部定时探测脚本），每 **60 秒**探测一次 `/healthz` 与 `/readyz`，每 **5 分钟**携带只读令牌 `BOTAGENT_ZBA_READ_TOKEN` 轮询 `/zba/v1/status`；触发以下任一条件立即经 Webhook / 邮件 / 管理员私聊告警（与每日定时健康日报互补，不在宿主内塞入重型告警 Agent）：
+   - `/healthz` 或 `/readyz` 连续 **2 次及以上**返回非 `200`；
+   - `backup.status` 为 `stale` 或 `faulted`；
+   - `ops.process.restarts` 在 **15 分钟内增长 ≥ 2**（疑似 OOM/崩溃循环）。
+3. **值守升级与回滚签字分工**：`BotOwner`（发布负责人）审批维护窗口、`dev → main` PR 与版本 Tag 发布；值守运维人员在验证 `/healthz`、`/readyz` 或数据库完整性异常时，拥有**预先授权的紧急单方面回滚决策与执行权**（无需再等二次签批），升级前后须在专用运维通知通道/私聊同步发布回执与回滚结论。
+
+---
+
+## 5. 关联专项手册
 
 - [回滚预案与实测演练](rollback-playbook.md)
 - [日志保留、每日热备与恢复演练](data-retention-and-backup.md)
