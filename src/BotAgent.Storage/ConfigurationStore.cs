@@ -1289,23 +1289,31 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ImmutableArray<ConfigurationFieldId>.Builder fields)
     {
         if (source is null) return new(ImmutableArray<PluginEnabledEdit>.Empty,
-            ImmutableArray<ProviderEdit>.Empty, ImmutableArray<PolicyEdit>.Empty);
+            ImmutableArray<ProviderEdit>.Empty, ImmutableArray<PolicyEdit>.Empty,
+            ImmutableArray<ConversationProfileEdit>.Empty);
+        var rawProfiles = source.ConversationProfiles.IsDefault
+            ? ImmutableArray<ConversationProfileEdit>.Empty : source.ConversationProfiles;
         if (source.Plugins.IsDefault || source.Providers.IsDefault || source.Policies.IsDefault
-            || source.Plugins.Length > 128 || source.Providers.Length > 64 || source.Policies.Length > 32)
+            || source.Plugins.Length > 128 || source.Providers.Length > 64 || source.Policies.Length > 32
+            || rawProfiles.Length > ConversationProfileValidator.MaxProfiles)
             throw new ArgumentException("invalid_registered_configuration");
         var plugins = source.Plugins.Select(p => p is null ? throw new ArgumentException("invalid_plugin")
             : new PluginEnabledEdit(new(CheckKey(p.Key.Value)), p.Enabled)).OrderBy(p => p.Key.Value, StringComparer.Ordinal).ToImmutableArray();
         var providers = source.Providers.Select(p => FreezeProvider(p, fields)).OrderBy(p => p.Key.Value, StringComparer.Ordinal).ToImmutableArray();
         var policies = source.Policies.Select(p => p is null ? throw new ArgumentException("invalid_policy")
             : new PolicyEdit(FreezeTarget(p.Target), FreezePolicy(p.Configuration))).OrderBy(p => TargetOrder(p.Target), StringComparer.Ordinal).ToImmutableArray();
+        var conversationProfiles = rawProfiles.Select(ConversationProfileValidator.FreezeEdit)
+            .OrderBy(p => ConversationProfileValidator.KeyOrder(p.Key), StringComparer.Ordinal).ToImmutableArray();
         if (plugins.Select(p => p.Key).Distinct().Count() != plugins.Length
             || providers.Select(p => p.Key).Distinct().Count() != providers.Length
-            || policies.Select(p => p.Target).Distinct().Count() != policies.Length)
+            || policies.Select(p => p.Target).Distinct().Count() != policies.Length
+            || conversationProfiles.Select(p => p.Key).Distinct().Count() != conversationProfiles.Length)
             throw new ArgumentException("duplicate_registered_object");
         if (plugins.Length != 0) fields.Add(ConfigurationFieldId.RegisteredPlugins);
         if (providers.Length != 0) fields.Add(ConfigurationFieldId.RegisteredProviders);
         if (policies.Length != 0) fields.Add(ConfigurationFieldId.PlatformPolicies);
-        return new(plugins, providers, policies);
+        if (conversationProfiles.Length != 0) fields.Add(ConfigurationFieldId.ConversationProfiles);
+        return new(plugins, providers, policies, conversationProfiles);
     }
 
     private static ProviderEdit FreezeProvider(ProviderEdit provider, ImmutableArray<ConfigurationFieldId>.Builder fields)

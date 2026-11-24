@@ -1,5 +1,6 @@
 extern alias StorageModule;
 
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using BotAgent.Adapters.Net;
 using BotAgent.Adapters.Persistence;
@@ -30,6 +31,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly string _root;
     private readonly bool _presetIntentNeedsReview;
     private readonly HostPluginBundle _bundle;
+    private readonly ConcurrentDictionary<string, Func<IReadOnlyDictionary<string, System.Text.Json.JsonElement>, bool>> _liveSettingsConsumers = new(StringComparer.Ordinal);
     private IServiceProvider? _services;
 
     // Retained for existing host test/tool construction. No legacy ledger is registered or used.
@@ -74,7 +76,10 @@ internal sealed class PluginRuntime : IAsyncDisposable
         var market = new PluginMarketService(Packages, Settings, Catalog,
             () => BotAgent.Adapters.Time.Clock.Now, Path.Combine(_root, "operations.json"), LoadDesiredStates, _log,
             reload: ReloadAsync, registrySnapshot: Registry.GetAll,
-            canReload: () => RuntimeAdoptionEnabled);
+            canReload: () => RuntimeAdoptionEnabled)
+        {
+            TryApplyLiveSettings = TryApplyLiveSettings
+        };
         market.UiAssets = new PluginUiAssetService(Packages, Registry, () => BotAgent.Adapters.Time.Clock.Now);
         return market;
     }
@@ -82,6 +87,37 @@ internal sealed class PluginRuntime : IAsyncDisposable
     private readonly Lazy<PluginMarketService> _market;
     internal PluginManager Registry { get; }
     internal BotAgent.Adapters.Net.IHttpFetcher Http => _http;
+
+    /// <summary>注册实时设置消费者：保存后不重编程序集直接把最新声明参数推给宿主组件，并标记已应用。</summary>
+    internal void RegisterLiveSettingsConsumer(
+        string pluginId,
+        Func<IReadOnlyDictionary<string, System.Text.Json.JsonElement>, bool> consumer)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentNullException.ThrowIfNull(consumer);
+        _liveSettingsConsumers[pluginId] = consumer;
+    }
+
+    private bool TryApplyLiveSettings(string pluginId, PluginPackageManifest manifest)
+    {
+        if (!_liveSettingsConsumers.TryGetValue(pluginId, out var consumer)) return false;
+        IReadOnlyDictionary<string, System.Text.Json.JsonElement> values;
+        try { values = Settings.ReadEffectiveValues(manifest); }
+        catch { return false; }
+        if (!consumer(values)) return false;
+        _ = Settings.ResolveRuntimeValues(manifest, out var revision);
+        return Settings.MarkApplied(manifest, revision);
+    }
+
+    /// <summary>按插件 ID 实时读取当前生效清单的声明式设置快照（不存在或未安装返回 null）。</summary>
+    internal IReadOnlyDictionary<string, System.Text.Json.JsonElement>? TryReadEffectiveValues(string pluginId)
+    {
+        var manifest = Packages.InstalledSnapshot.FirstOrDefault(p => p.Id == pluginId)?.Active
+            ?? _bundle.Releases.FirstOrDefault(r => r.Id == pluginId);
+        if (manifest is null || manifest.Settings is not { Count: > 0 }) return null;
+        try { return Settings.ReadEffectiveValues(manifest); }
+        catch { return null; }
+    }
 
     internal void BindServices(IServiceProvider services)
     {
@@ -116,11 +152,13 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 : Registry.IsReady(id) ? ManagedRuntimeState.Running : ManagedRuntimeState.Faulted;
             var pending = package?.Pending is not null || package?.PendingUninstall == true
                 || enabled != (loaded?.IsEnabled ?? false);
-            var error = package?.MetadataFailure?.Code
+            var error = (_failures.TryGetValue(id, out var failure) && failure == "plugin_governance_revoked")
+                ? failure
+                : package?.MetadataFailure?.Code
                 ?? (_presetIntentNeedsReview && _presetIds.Contains(id) ? "plugin_preset_intent_needs_review"
-                    : _failures.TryGetValue(id, out var failure) ? failure
-                    : state == ManagedRuntimeState.Faulted ? "plugin_dependency_unavailable"
-                    : pending ? "plugin_reload_pending" : null);
+                    : failure
+                    ?? (state == ManagedRuntimeState.Faulted ? "plugin_dependency_unavailable"
+                        : pending ? "plugin_reload_pending" : null));
             return new ManagedDescriptor(new ManagedObjectKey.Plugin(new(id)), "plugin", enabled, state,
                 ImmutableArray.Create(new ActionCapability(ManagedAction.Start, false, "configuration_required"),
                     new ActionCapability(ManagedAction.Stop, false, "configuration_required")), true, error, "");
@@ -143,7 +181,7 @@ internal sealed class PluginRuntime : IAsyncDisposable
         _insideLifecycle.Value = true;
         try
         {
-            foreach (var failure in await _bundle.StageFirstUseAsync(_root, Packages, ct).ConfigureAwait(false))
+            foreach (var failure in await _bundle.StageFirstUseAsync(_root, Packages, ct, _log).ConfigureAwait(false))
                 _failures = _failures.SetItem(failure.Id, failure.Code);
             await Registry.StartAllAsync(ct).ConfigureAwait(false);
             await ReconcileAsync(null, startup: true, ct).ConfigureAwait(false);
@@ -196,7 +234,8 @@ internal sealed class PluginRuntime : IAsyncDisposable
             var id = package.Id;
             if (package.MetadataFailure is { } metadataFailure)
             {
-                _failures = _failures.SetItem(id, metadataFailure.Code);
+                if (!_failures.TryGetValue(id, out var existingFailure) || existingFailure != "plugin_governance_revoked")
+                    _failures = _failures.SetItem(id, metadataFailure.Code);
                 // A previously running generation retains its truthful runtime state. Do not attempt
                 // a reload from unreadable state or disrupt independent, readable packages.
                 if (pluginId == id) failed = true;
@@ -209,11 +248,17 @@ internal sealed class PluginRuntime : IAsyncDisposable
                 if (step.Cycle) throw new InvalidOperationException("plugin_dependency_cycle");
                 if (!package.PendingUninstall && (package.Pending is null || step.ActiveOnly) && package.Active is { } active
                     && loaded is not null && loaded.IsEnabled == enabled
-                    && (!enabled || Registry.IsReady(id)) && (!active.Control || Registry.IsControlReady(id))
-                    && (!(enabled || active.Control) || !Settings.ReadManifest(active).RestartRequired))
+                    && (!enabled || Registry.IsReady(id)) && (!active.Control || Registry.IsControlReady(id)))
                 {
-                    _failures = _failures.Remove(id);
-                    continue;
+                    var settingsPending = (enabled || active.Control) && Settings.ReadManifest(active).RestartRequired;
+                    var skipColdBroadcast = settingsPending
+                        && pluginId is null
+                        && string.Equals(active.Adoption, "cold", StringComparison.OrdinalIgnoreCase);
+                    if (!settingsPending || skipColdBroadcast)
+                    {
+                        _failures = _failures.Remove(id);
+                        continue;
+                    }
                 }
                 long? preparedRevision = null;
                 string? Resolve(PluginPackageManifest manifest)

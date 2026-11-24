@@ -87,6 +87,9 @@ public class MemberProfileStore : IProfileRepository
     /// 找出需要（重新）摘要的候选：某会话范围里，自上次摘要之后又积累了足够多的新发言。
     /// </summary>
     public List<SummaryCandidate> FindSummarizable(int minNewMessages, int maxCandidates)
+        => FindSummarizable(minNewMessages, maxCandidates, scopedKeysOnly: false);
+
+    public List<SummaryCandidate> FindSummarizable(int minNewMessages, int maxCandidates, bool scopedKeysOnly)
     {
         var result = new List<SummaryCandidate>();
         if (minNewMessages <= 0)
@@ -111,6 +114,7 @@ public class MemberProfileStore : IProfileRepository
                        ON s.uid = m.uid
                       AND s.scope = CASE WHEN m.group_id > 0 THEN 'group:' || m.group_id ELSE 'private' END
                 WHERE m.seq > COALESCE(s.through_seq, -9223372036854775808)
+                  AND ($scopedOnly = 0 OR m.uid LIKE 'legacy-profile:v1:%')
                 GROUP BY m.uid, m.group_id
                 -- 官方别名通道只推送 @ 消息；同一个有效门槛用于选择和后续批次检查。
                 HAVING COUNT(1) >= required_count
@@ -123,7 +127,8 @@ public class MemberProfileStore : IProfileRepository
                     RequiredCount: AppDatabase.Long(r, "required_count")),
                 ("$min", minNewMessages),
                 ("$minOfficial", Math.Max(3, minNewMessages / 5)),
-                ("$max", Math.Max(1, maxCandidates)));
+                ("$max", Math.Max(1, maxCandidates)),
+                ("$scopedOnly", scopedKeysOnly ? 1 : 0));
 
             foreach (var c in candidates)
             {

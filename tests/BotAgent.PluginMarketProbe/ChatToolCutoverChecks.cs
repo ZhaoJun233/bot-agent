@@ -58,9 +58,9 @@ internal partial class Program
             Check(ReferenceEquals(caps, approvals.Capabilities) && model.Calls == 0 && pages.Calls == 0,
                 "unchanged catalog keeps policy snapshot and discovery performs no IO");
             var directory = ToolDirectory.FromCatalog(caps.Catalog);
-            Check(directory.IsHealthy && directory.Specs.Count == 26 && directory.Chat.Count == 10
+            Check(directory.IsHealthy && directory.Specs.Count == 40 && directory.Chat.Count == 24
                 && directory.Executors.TryGet("research.actions", out var executor) && !executor.LegacyPath
-                && executor.Implementation == id, "directory reports one adopted research executor without LegacyPath");
+                && executor.Implementation == id, "directory reports adopted research, documents, digest, knowledge, scheduler, and personal-todo executors without LegacyPath");
             var facade = new ResearchUseCase(registry);
             var gate = new PluginGate(registry);
             var participation = new ParticipationUseCase(box, _ => { });
@@ -97,7 +97,7 @@ internal partial class Program
             var actions = constructor.Invoke(arguments);
             async Task Enqueue(ChatCapabilitySet snapshot, string key, CompletionResult result)
                 => await (Task)actionsType.GetMethod("QueueTurnActions")!.Invoke(actions,
-                    [new BotConversation { SourceKey = key }, settings, snapshot, policy, result, false])!;
+                    [new BotConversation { SourceKey = key }, settings, snapshot, policy, result, false, null])!;
             await Enqueue(caps, "group:10002", new(null, null, null, Search: "synthetic queued"));
             await Enqueue(caps, "group:10002", new(null, null, null, Search: "synthetic duplicate"));
             Check(jobs.Count == 1 && model.Calls == 1, "queue-time cooldown admits one job before any IO");
@@ -138,8 +138,8 @@ internal partial class Program
                 catch (InvalidOperationException error) when (error.Message == "plugin_tool_conflict") { checks++; continue; }
                 throw new InvalidOperationException("legacy tool or executor collision was published");
             }
-            Check(registry.IsReady(id) && registry.GetToolCatalog().Bindings.Count == 2,
-                "failed legacy collision preserves adopted research");
+            Check(registry.IsReady(id) && registry.GetToolCatalog().Bindings.Count == 16,
+                "failed legacy collision preserves adopted research, documents, digest, and knowledge");
         }
         finally { flags.SetPluginEnabled(id, previous); }
         return checks;

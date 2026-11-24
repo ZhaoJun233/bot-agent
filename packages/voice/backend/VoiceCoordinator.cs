@@ -79,4 +79,15 @@ public sealed class VoiceCoordinator : IVoiceRuntimeContribution
 
     public VoiceConcatOutcome ConcatSamples(VoiceSampleInput[] samples)
         => VoiceSampleConcatenator.Concat(samples);
+
+    public bool IsSttEnabled => _ports?.IsSttEnabled == true;
+
+    public async Task<VoiceTranscriptionOutcome> TranscribeAsync(byte[] audioData, string fileName, CancellationToken ct)
+    {
+        if (_ports is null || !_ports.IsSttEnabled)
+            return new(false, null, "stt_disabled");
+        if (audioData is not { Length: > 0 } || audioData.Length > 8 * 1024 * 1024)
+            return new(false, null, "audio_invalid_or_too_large");
+        return await _ports.TranscribeAsync(audioData, fileName, ct).ConfigureAwait(false);
+    }
 }

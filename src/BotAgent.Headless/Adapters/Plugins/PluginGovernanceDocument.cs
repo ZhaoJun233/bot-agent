@@ -30,7 +30,7 @@ internal sealed record PluginGovernanceDocument(int SchemaVersion, string Genera
         {
             Fields(item, "id", "version", "sha256", "status", "reason", "updatedAt");
             var id = Text(item, "id", 80);
-            PluginPackageValidation.ValidateId(id);
+            PluginPackageValidation.ValidateId(id, allowReserved: true);
             var version = Text(item, "version", 96);
             if (!Regex.IsMatch(version, @"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")) throw Invalid();
             var hash = Text(item, "sha256", 64);

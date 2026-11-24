@@ -20,6 +20,23 @@ internal static class UnifiedMemoryChanges
         if (!state.Enabled) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Disabled);
         if (IsSuppressed(state, context.Actor!, source)) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Suppressed);
         if (state.Entries.Length >= 10000) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidFact);
+        if (request.Fact.Category == UnifiedMemoryFactCategory.PersonalNote)
+        {
+            var notesForSubject = state.Entries.Count(item =>
+                item.Subject == context.Actor && item.Fact.Category == UnifiedMemoryFactCategory.PersonalNote);
+            var existingNote = state.Entries.FirstOrDefault(item =>
+                item.Subject == context.Actor && item.Source == source
+                && item.Fact.Category == UnifiedMemoryFactCategory.PersonalNote
+                && string.Equals(item.Fact.Value, request.Fact.Value, StringComparison.Ordinal));
+            if (existingNote is null && notesForSubject >= 64)
+                return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidFact);
+            if (existingNote?.Version == int.MaxValue)
+                return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.StaleVersion);
+            var noteEntry = Candidate(existingNote?.FactId ?? Guid.NewGuid(), (existingNote?.Version ?? 0) + 1,
+                context.Actor!, source, request, now);
+            return existingNote is null ? UnifiedMemoryChange.Accept(state with { Entries = state.Entries.Add(noteEntry) }, noteEntry)
+                : Replace(state, existingNote, noteEntry);
+        }
         var previous = state.Entries.FirstOrDefault(item => item.Subject == context.Actor && item.Source == source
             && item.Fact.Category == request.Fact.Category);
         if (previous?.Version == int.MaxValue) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.StaleVersion);
@@ -58,6 +75,25 @@ internal static class UnifiedMemoryChanges
         var status = UnifiedMemoryPolicy.CheckRequest(context, request, entry.Source);
         if (status != UnifiedMemoryStatus.Success) return UnifiedMemoryChange.Deny(status);
         if (IsSuppressed(state, entry.Subject, entry.Source)) return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.Suppressed);
+        if (request.Fact.Category == UnifiedMemoryFactCategory.PersonalNote)
+        {
+            var otherNotesCount = state.Entries.Count(item =>
+                item.FactId != id && item.Subject == entry.Subject
+                && item.Fact.Category == UnifiedMemoryFactCategory.PersonalNote);
+            if (otherNotesCount >= 64)
+                return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidFact);
+            if (state.Entries.Any(item =>
+                    item.FactId != id && item.Subject == entry.Subject && item.Source == entry.Source
+                    && item.Fact.Category == UnifiedMemoryFactCategory.PersonalNote
+                    && string.Equals(item.Fact.Value, request.Fact.Value, StringComparison.Ordinal)))
+                return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidFact);
+        }
+        else if (state.Entries.Any(item =>
+                     item.FactId != id && item.Subject == entry.Subject && item.Source == entry.Source
+                     && item.Fact.Category == request.Fact.Category))
+        {
+            return UnifiedMemoryChange.Deny(UnifiedMemoryStatus.InvalidFact);
+        }
         // Old body and ALL prior grants disappear in the same durable commit. Never inherit consent.
         return Replace(state, entry, Candidate(id, version + 1, entry.Subject, entry.Source, request, now));
     }

@@ -133,6 +133,7 @@ internal static partial class CompositionRoot
             next.RuntimePlatformPolicies = initialized.RuntimePlatformPolicies;
             next.RuntimePlatformPolicyExplicitFields = initialized.RuntimePlatformPolicyExplicitFields;
             next.RuntimePlatformPolicyBaselineSources = initialized.RuntimePlatformPolicyBaselineSources;
+            next.RuntimeConversationProfiles = initialized.RuntimeConversationProfiles;
         });
         a.ModelRegistry.Initialize(a.ProviderStore.LoadAll().ToArray());
     }

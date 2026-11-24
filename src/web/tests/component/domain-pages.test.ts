@@ -223,6 +223,15 @@ describe('Domain-split pages (Providers / Platforms / Plugins / SystemConfigurat
           actions: []
         },
         {
+          key: { kind: 'driver', key: { platformId: 'local', accountScope: 'legacy', instanceId: '' } },
+          displayName: 'Local',
+          runtimeState: 4,
+          desiredEnabled: true,
+          credentialConfigured: false,
+          descriptorRevision: '3B25BF2C',
+          actions: []
+        },
+        {
           key: { kind: 'plugin', key: 'system.platform-qq-private' },
           displayName: 'plugin',
           runtimeState: 4,
@@ -266,8 +275,26 @@ describe('Domain-split pages (Providers / Platforms / Plugins / SystemConfigurat
     expect(text).toContain('消息平台')
     expect(text).toContain('QQ 私域')
     expect(text).toContain('OneBot')
-    expect(text).toContain('legacy（默认实例）')
+    expect(text).toContain('默认账号')
+    expect(text).toContain('默认账号 / feishu-main')
+    expect(text).not.toContain('legacy（默认实例）')
     expect(text).not.toContain('3B25BF2C')
+    // Per-driver credential status semantics without mutating wire boolean
+    expect(wrapper.get('[data-testid="cap-item-driver:qq.private:legacy:"]').text()).toContain('可选（未设令牌）')
+    expect(wrapper.get('[data-testid="cap-item-driver:local:legacy:"]').text()).toContain('无需凭据')
+    expect(wrapper.get('[data-testid="cap-item-driver:qq.official:legacy:"]').text()).toContain('未配置（需环境变量）')
+    expect(wrapper.get('[data-testid="cap-item-driver:feishu:default:feishu-main"]').text()).toContain('未配置')
+    // Detail drawer preserves raw technical accountScope alongside friendly label and credentialHint
+    await wrapper.get('[data-testid="cap-inspect-driver:qq.private:legacy:"]').trigger('click')
+    await flushPromises()
+    const detail = document.body.querySelector('[data-testid="platform-detail-drawer"]')!
+    expect(detail).not.toBeNull()
+    expect(detail.textContent).toContain('默认账号')
+    expect(detail.textContent).toContain('legacy')
+    expect(detail.textContent).toContain('可选（未设令牌）')
+    expect(detail.textContent).toContain('OneBot / NapCat')
+    detail.querySelector<HTMLButtonElement>('[data-testid="platform-detail-drawer-close"]')!.click()
+    await flushPromises()
     // No global aggregate button in header when all platform configs belong to displayed drivers
     expect(wrapper.find('[data-testid="platforms-open-settings"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="platforms-open-fallback-settings"]').exists()).toBe(false)

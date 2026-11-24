@@ -5,6 +5,11 @@ using BotAgent.Domain.Plugins;
 
 namespace BotAgent.Adapters.Plugins;
 
+internal sealed record HostDistributionUpgradeCandidate(
+    InstalledPluginPackage State,
+    string OldSha256Prefix,
+    bool KeepUninstalled);
+
 internal sealed partial class PluginPackageStore
 {
     private const int MaximumMetadataBytes = PluginStateEnvelope.MaximumBytes;
@@ -17,6 +22,58 @@ internal sealed partial class PluginPackageStore
         Distribution.ValidateId(id);
         var bytes = await ReadMetadataBytesAsync(id, ct).ConfigureAwait(false);
         return ParseMetadata(id, bytes, out _);
+    }
+
+    /// <summary>
+    /// Structural verification of a reserved host-distribution envelope whose release digest is no longer
+    /// in the current host's approved index (e.g., after a host rebuild). Still enforces envelope format,
+    /// reader compatibility, execution SHA-256 integrity, projection matching, and host-distribution:// origin
+    /// across all non-null slots. Any tampering, corruption, future reader version, or third-party origin returns null.
+    /// </summary>
+    internal async Task<HostDistributionUpgradeCandidate?> TryReadUnapprovedHostDistributionAsync(
+        string id, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!PluginPackageValidation.IsReservedId(id)) return null;
+        try { Distribution.ValidateId(id); }
+        catch (InvalidDataException) { return null; }
+
+        try
+        {
+            var bytes = await ReadMetadataBytesAsync(id, ct).ConfigureAwait(false);
+            if (bytes is null || bytes.Length > MaximumMetadataBytes) return null;
+            ReadOnlyMemory<byte> json = bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf })
+                ? bytes.AsMemory(3) : bytes;
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+            var root = document.RootElement;
+            if (!PluginStateEnvelope.IsEnvelope(root)) return null;
+            var recovery = PluginStateEnvelope.Read(id, root);
+            if (recovery.MinimumReaderVersion > PluginStateEnvelope.ReaderVersion) return null;
+            PluginStateEnvelope.VerifyExecution(recovery, root);
+            var state = ParseExecution(id, root.GetProperty("execution"),
+                manifest => PluginPackageValidation.Validate(manifest, checkCompatibility: false, allowReserved: true,
+                    allowHistoricalHostContractDigest: true));
+            PluginStateEnvelope.VerifyProjection(recovery, state);
+            var slots = new[] { state.Active, state.Pending, state.Previous }
+                .Where(m => m is not null).Select(m => m!).ToArray();
+            if (slots.Length == 0 || slots.All(Distribution.IsApprovedRelease)) return null;
+            foreach (var slot in slots)
+            {
+                if (slot.Id != id
+                    || !string.Equals(slot.DownloadUrl, $"host-distribution://{id}/{slot.Version}", StringComparison.Ordinal))
+                    return null;
+            }
+            var keepUninstalled = state.PendingUninstall || (state.Active is null && state.Pending is null);
+            var primary = state.Active ?? state.Pending ?? state.Previous;
+            var oldShaPrefix = primary?.Sha256 is { Length: >= 8 } sha ? sha[..8].ToLowerInvariant() : "unknown";
+            return new(state, oldShaPrefix, keepUninstalled);
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidDataException
+            or IOException or UnauthorizedAccessException or InvalidOperationException or FormatException or KeyNotFoundException)
+        {
+            return null;
+        }
     }
 
     internal async Task<InstalledPluginPackage> ReadDirectoryEntryAsync(string id, CancellationToken ct)

@@ -156,5 +156,7 @@ public enum ConfigurationFieldId
     GroupInterjectionProbability = 149,
     GroupInterjectionCooldownSeconds = 150,
     GroupContinuationWaitSeconds = 151,
-    PrivateContinuationWaitSeconds = 152
+    PrivateContinuationWaitSeconds = 152,
+    /// <summary>会话级可组合档案（Phase 1，纯 registered 集合，不写 configuration_field_modes，保持 Schema v15）。</summary>
+    ConversationProfiles = 153
 }

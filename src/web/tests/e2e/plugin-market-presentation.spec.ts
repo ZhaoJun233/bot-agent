@@ -94,8 +94,8 @@ test('中文市场：真实合成宿主市场只展示功能插件，系统核�
     status: 503, json: { error: { code: 'service_unavailable', message: 'Synthetic offline catalog' } }
   }))
   await openMarket(page)
-  // 插件市场过滤 9 个 system.* 引擎包，只展示 8 个内置功能插件
-  await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(8)
+  // 插件市场过滤 9 个 system.* 引擎包，只展示 13 个内置功能插件
+  await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(13)
   await page.getByTestId('marketplace-search').fill('preset.feature.token-quota')
   await expect(page.locator('.catalog-list .catalog-entry')).toHaveCount(1)
   await expect(page.getByTestId('marketplace-detail')).toContainText('Token 配额')

@@ -1,7 +1,7 @@
 # 发布检查单（release checklist）
 
 适用对象：准备给 Bot Agent 打版本 tag、发布 GitHub Release、把代码同步到公开镜像的人。
-配套文档：`docs/operations/rollback-playbook.md`（回滚）、`docs/operations/upgrade-acceptance-dotnet10.md`（运行时升级验收）。
+配套文档：`docs/operations/rollback-playbook.md`（回滚）。
 
 ## 0. 三条纪律
 
@@ -100,5 +100,5 @@ CI 的 `verify` job 每次都会产出 `dependency-snapshot` artifact（`dotnet 
 - [ ] 当前 CI 注册的全部探针通过（包括 ArchitectureProbe / SafetyProbe / ReviewRemediationProbe）
 - [ ] 集成 harness 全绿（`通过 N，失败 0`）
 - [ ] 前端 `npm run typecheck && npm run test:unit` 通过
-- [ ] 已留回滚点（`qqchat-agent:prev` + 数据库快照）
+- [ ] 已留双份回滚点（`qqchat-agent:prev` + 升级前 `botagent.db` 快照 + `data/plugins/` 压缩包；`v1.4.0` 17 包 ↔ 22 包回滚时两者缺一不可）
 - [ ] 部署后 `curl /healthz` 的 version 与 tag 一致

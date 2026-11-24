@@ -46,6 +46,20 @@ public sealed partial class OfficialBotGateway
         }
     }
 
+    private OfficialMemberRoleEvidence? PeekMemberRole(OfficialIdentityKey subject)
+    {
+        var now = Clock.Now;
+        lock (_roleGate)
+        {
+            PruneMemberRoles(now);
+            return _memberRoles.TryGetValue(subject, out var entry)
+                && entry.Evidence is { } ev
+                && now < ev.ExpiresAt
+                ? ev
+                : null;
+        }
+    }
+
     // Retain a revoked entry long enough that a still-fresh old message cannot resurrect its former role.
     private void ReplaceMemberRole(OfficialIdentityKey subject, DateTimeOffset watermark, DateTimeOffset now,
         OfficialMemberRoleEvidence? evidence, CancellationTokenSource? revocation = null)

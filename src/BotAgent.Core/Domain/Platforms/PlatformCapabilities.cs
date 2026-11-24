@@ -64,6 +64,17 @@ public sealed record PlatformCapabilities(
         SupportsGroup: true,
         SupportsThread: true);
 
+    public static PlatformCapabilities Feishu { get; } = new(
+        SupportsText: true,
+        SupportsImage: true,
+        SupportsVoice: false,
+        SupportsQuote: true,
+        SupportsRecall: true,
+        SupportsDirect: true,
+        SupportsGroup: true,
+        SupportsThread: true,
+        SupportsStickers: true) { SupportsMusicTextFallback = true };
+
     /// <summary>
     /// 按能力矩阵评估本轮发送计划，不支持的能力生成稳定原因码降级，而不直接抛异常或丢弃整条回复。
     /// </summary>

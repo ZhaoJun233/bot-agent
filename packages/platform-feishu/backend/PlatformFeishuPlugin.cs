@@ -13,7 +13,7 @@ public sealed class PlatformFeishuPlugin : IBotPlugin, IPluginContributionSource
     public string Name => "飞书机器人通道";
     public string Version => typeof(PlatformFeishuPlugin).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+', 2)[0];
-    public string Description => "飞书开放平台 Webhook / 长连接接入、验签去重与文本引用降级（冷采用 + 两阶段激活）。";
+    public string Description => "飞书开放平台 Webhook / pbbp2 长连接接入、AES 解密、富媒体、话题回复与 Markdown 卡片（冷采用 + 两阶段激活）。";
     public PluginCategory Category => PluginCategory.Management;
     public bool RequiresTwoPhaseActivation => true;
 
@@ -46,7 +46,7 @@ public sealed class PlatformFeishuPlugin : IBotPlugin, IPluginContributionSource
     {
         public PlatformDriverDescriptor Descriptor { get; } = new(
             "feishu", "飞书", ExclusiveConnection: true,
-            SupportsText: true, SupportsImage: false, SupportsVoice: false, SupportsQuote: true);
+            SupportsText: true, SupportsImage: true, SupportsVoice: false, SupportsQuote: true);
         public bool RequiresExclusiveConnection => true;
         public bool AllowsTarget(string nativeTargetId, IReadOnlySet<string> allowlist)
             => !string.IsNullOrWhiteSpace(nativeTargetId) && allowlist is not null && allowlist.Contains(nativeTargetId.Trim());

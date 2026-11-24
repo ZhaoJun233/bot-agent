@@ -39,6 +39,7 @@ public static class Program
         await RunGroupAsync("A. real McpToolSource + synthetic server", GroupAAsync);
         await RunGroupAsync("B. engine governance", GroupBAsync);
         await RunGroupAsync("C. config/host wiring", GroupCAsync);
+        await RunGroupAsync("D. Phase 4 reloadable MCP & readOnlyTools", () => Phase4McpChecks.RunAsync((ok, name, _) => Check(ok, name)));
 
         Console.WriteLine();
         Console.WriteLine($"MCP PROBE: pass={_passed} fail={_failed}");

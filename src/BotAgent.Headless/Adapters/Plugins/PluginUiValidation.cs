@@ -6,6 +6,7 @@ namespace BotAgent.Adapters.Plugins;
 internal static class PluginUiValidation
 {
     internal const long MaxTotalUiBytes = 4 * 1024 * 1024;
+    private const string ZeroSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
     private static readonly Dictionary<string, string> AllowedExtensionContentTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         [".html"] = "text/html; charset=utf-8",
@@ -52,7 +53,8 @@ internal static class PluginUiValidation
             if (asset is null) throw new InvalidDataException("plugin_ui_invalid_declaration");
             ValidateAssetPath(asset.Path);
             if (!seen.Add(asset.Path)) throw new InvalidDataException("plugin_ui_duplicate_asset");
-            if (!Regex.IsMatch(asset.Sha256 ?? "", "^[0-9a-fA-F]{64}$"))
+            if (!Regex.IsMatch(asset.Sha256 ?? "", "^[0-9a-fA-F]{64}$")
+                || string.Equals(asset.Sha256, ZeroSha256, StringComparison.Ordinal))
                 throw new InvalidDataException("plugin_ui_asset_hash_invalid");
             var ext = Path.GetExtension(asset.Path);
             if (!AllowedExtensionContentTypes.TryGetValue(ext, out var expectedType)
@@ -70,12 +72,14 @@ internal static class PluginUiValidation
         }
     }
 
-    internal static bool IsActionAllowedForPlugin(string pluginId, string action)
+    internal static bool IsActionAllowedForPlugin(string pluginId, string action) => action switch
     {
-        if (action.StartsWith("quotas.", StringComparison.Ordinal))
-            return string.Equals(pluginId, "preset.feature.token-quota", StringComparison.Ordinal);
-        return true;
-    }
+        "dialog.close" or "operations.list" or "settings.read" or "settings.save" => true,
+        "quotas.list" or "quotas.save" or "quotas.find" => string.Equals(pluginId, "preset.feature.token-quota", StringComparison.Ordinal),
+        "scheduler.list" or "scheduler.save" or "scheduler.delete" or "scheduler.runs" => string.Equals(pluginId, "preset.feature.scheduler", StringComparison.Ordinal),
+        "todo.list" or "todo.save" or "todo.delete" => string.Equals(pluginId, "preset.feature.personal-todo", StringComparison.Ordinal),
+        _ => false,
+    };
 
     internal static PluginUiDeclaration Normalize(PluginUiDeclaration ui) => ui with
     {

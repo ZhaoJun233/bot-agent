@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BotAgent.Package.Documents</AssemblyName>
+    <Version>1.0.0</Version>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(PluginSdkPath)' == ''">
+    <ProjectReference Include="../../../src/BotAgent.Core/BotAgent.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(PluginSdkPath)' != ''">
+    <Reference Include="BotAgent.Core" HintPath="$(PluginSdkPath)/BotAgent.Core.dll" Private="false" />
+    <Reference Include="BotAgent.Plugin.Contracts" HintPath="$(PluginSdkPath)/BotAgent.Plugin.Contracts.dll" Private="false" />
+    <Reference Include="BotAgent.Documents.Contracts" HintPath="$(PluginSdkPath)/BotAgent.Documents.Contracts.dll" Private="false" />
+  </ItemGroup>
+</Project>

@@ -5,6 +5,7 @@ import { isSafePluginUiEntryUrl, type ZbaPluginUiSession } from '../../api/plugi
 import ManagementDialog from '../../shared/ui/ManagementDialog.vue'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
 import { useTheme } from '../../shared/ui/theme'
+import { acquireScheduler } from '../../shared/sync/event-scheduler'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { createIframeBridgeController } from './plugin-ui-iframe-bridge'
 
@@ -32,6 +33,7 @@ const effectiveTheme = computed<'light' | 'dark'>(() => props.theme ?? appTheme.
 const loading = ref(true)
 const error = ref<UiError | null>(null)
 const session = ref<ZbaPluginUiSession | null>(null)
+const staleByEvent = ref(false)
 const iframeEl = ref<HTMLIFrameElement | null>(null)
 let port1: MessagePort | null = null
 let controller: ReturnType<typeof createIframeBridgeController> | null = null
@@ -39,8 +41,12 @@ let sessionClient: ZbaClient | null = null
 let bridgeAttachedForSessionId: string | null = null
 let openEpoch = 0
 let unmounted = false
+let syncHandle: ReturnType<typeof acquireScheduler> | null = null
+let unsubSync: (() => void) | null = null
 
-const effectiveGeneration = computed(() => props.currentGenerationId || session.value?.generationId || '')
+const effectiveGeneration = computed(() =>
+  staleByEvent.value ? '__stale__' : (props.currentGenerationId || session.value?.generationId || '')
+)
 const generationStale = computed(() => Boolean(session.value && effectiveGeneration.value && effectiveGeneration.value !== session.value.generationId))
 
 function teardownChannel() {
@@ -94,6 +100,7 @@ async function openSession() {
     }
     session.value = opened
     sessionClient = client
+    staleByEvent.value = false
     bridgeAttachedForSessionId = null
   } catch (cause) {
     if (unmounted || epoch !== openEpoch || client !== props.client) return
@@ -156,17 +163,50 @@ watch([() => props.mode, () => props.writesEnabled, effectiveTheme, effectiveGen
   port1.postMessage({ ...controller.initPayload(), type: 'zba.ui.state' })
 })
 
+function attachEventWatch(): void {
+  unsubSync?.()
+  unsubSync = null
+  syncHandle?.release()
+  syncHandle = null
+  if (!props.active) return
+  const client = props.client as Partial<ZbaClient>
+  if (typeof client.listEvents !== 'function') return
+  syncHandle = acquireScheduler(props.client)
+  let matchedPluginChange = false
+  unsubSync = syncHandle.scheduler.subscribe({
+    name: `plugin-ui-${props.pluginId}`,
+    matches: (ev) => {
+      const hit = ev.type.startsWith('plugin.')
+        && ev.type !== 'plugin.ui.opened'
+        && (!ev.reasonCode || ev.reasonCode === props.pluginId)
+      if (hit) matchedPluginChange = true
+      return hit
+    },
+    reload: async () => {
+      if (!matchedPluginChange) return
+      matchedPluginChange = false
+      staleByEvent.value = true
+    },
+  })
+}
+
 watch([() => props.pluginId, () => props.client, () => props.active], () => {
+  attachEventWatch()
   void openSession()
 })
 
 onMounted(() => {
+  attachEventWatch()
   void openSession()
 })
 
 onBeforeUnmount(() => {
   unmounted = true
   ++openEpoch
+  unsubSync?.()
+  unsubSync = null
+  syncHandle?.release()
+  syncHandle = null
   teardownChannel()
   void closeServerSession()
 })

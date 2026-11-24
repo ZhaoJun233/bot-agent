@@ -89,6 +89,7 @@ public sealed partial class OfficialBotGateway
     {
         if (group is not null) { InvalidateRelationshipReferences(true, group); return; }
         lock (_referenceGate) _references.Clear();
+        ClearInteractionReplyEvents();
     }
 
     private void InvalidateRelationshipReferences(bool isGroup, string target)

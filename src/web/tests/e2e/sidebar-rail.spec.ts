@@ -68,7 +68,7 @@ test('rail toggle is hidden on narrow layouts', async ({ page }) => {
   await expect(logs).toHaveAccessibleName('运行日志')
   await expect(logs.locator('.side-nav-text')).toHaveCSS('position', 'static')
   await expect(page.locator('.side-nav')).toHaveCSS('display', 'grid')
-  // 390px 命中 max-width: 640px 的四列对称网格（8 个一级入口 = 4x2，无孤行）。
-  expect(await page.locator('.side-nav').evaluate((nav) => getComputedStyle(nav).gridTemplateColumns.split(/\s+/).length)).toBe(4)
+  // 390px 命中 max-width: 640px 的三列对称网格（9 个一级入口 = 3x3，无孤行）。
+  expect(await page.locator('.side-nav').evaluate((nav) => getComputedStyle(nav).gridTemplateColumns.split(/\s+/).length)).toBe(3)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })

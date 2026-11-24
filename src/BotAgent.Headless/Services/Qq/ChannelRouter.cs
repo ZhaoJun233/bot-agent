@@ -97,6 +97,9 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     /// <summary>至少一路在线（面板/健康检查用）。</summary>
     public bool IsConnected => _sources.Any(s => s.IsConnected);
 
+    public bool SupportsStructuredMarkdown(string channel)
+        => !string.IsNullOrWhiteSpace(channel) && _byChannel.TryGetValue(channel, out var src) && src.SupportsStructuredMarkdown(channel);
+
     // ---------- 通道台账（面板分块、命令过滤都靠它）----------
 
     public IReadOnlyList<IQqChatSource> Sources => _sources;
@@ -431,6 +434,17 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     public Task<IReadOnlyList<string>> RefreshImageUrlsAsync(long messageId, CancellationToken ct = default)
         => ResolveRead("image", messageId)?.RefreshImageUrlsAsync(messageId, ct)
             ?? Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundVoiceAsync(
+        InboundVoiceAttachment voice, long messageId, CancellationToken ct = default)
+        => ResolveRead("text", messageId)?.ResolveInboundVoiceAsync(voice, messageId, ct)
+            ?? Task.FromResult<(byte[]?, string?, string)>((null, voice.WavUrl, "voice.wav"));
+
+    public Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundFileAsync(
+        InboundFileAttachment file, bool isGroup, long targetId, long messageId, CancellationToken ct = default)
+        => (messageId > 0 ? ResolveRead("text", messageId) : Resolve(isGroup, targetId, "text"))
+            ?.ResolveInboundFileAsync(file, isGroup, targetId, messageId, ct)
+            ?? Task.FromResult<(byte[]?, string?, string)>((null, file.DownloadUrl, file.FileName));
 
     /// <summary>上层登记会话用（见 <see cref="RegisterKey"/>）。</summary>
     public void RegisterTarget(string channel, bool isGroup, long id)

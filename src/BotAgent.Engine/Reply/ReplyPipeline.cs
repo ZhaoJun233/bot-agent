@@ -97,9 +97,18 @@ public sealed partial class ReplyPipeline
     /// <summary>当场做掉只读工具（批次 E）：判定与冷却与“留给下一轮”那条路完全一致。</summary>
     private readonly InlineTurnTools _inlineTools;
     private readonly ReplyToolAvailability _replyTools;
+    private readonly PluginToolNotes _toolNotes;
     private readonly IUnifiedMemory? _unifiedMemory;
     private readonly Func<QqChatMessage, bool>? _memoryCommand;
+    private readonly Func<QqChatMessage, bool>? _knowledgeCommand;
+    private readonly Func<QqChatMessage, bool>? _schedulerCommand;
+    private readonly Func<QqChatMessage, bool>? _todoCommand;
+    private readonly Func<QqChatMessage, bool>? _identityCommand;
+    private readonly Action<string, BotAgent.Domain.Memory.UnifiedMemoryContext, string>? _recordProfileProvenance;
+    private readonly Action<QqChatMessage, string>? _observeCommunityInbound;
+    private readonly BotAgent.Domain.Ports.IAccessRoleResolver? _accessRoles;
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<PlatformSourceLease, BotAgent.Domain.Messaging.PlatformInboundEnvelope> _memoryInbound = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ChatMessage, BotAgent.Domain.Messaging.PlatformInboundEnvelope> _messageEnvelopes = new();
 
     public ReplyPipeline(
         ISettingsBox box,
@@ -134,7 +143,16 @@ public sealed partial class ReplyPipeline
         PluginReplyPolicies? replyPolicies = null,
         IUnifiedMemory? unifiedMemory = null,
         Func<QqChatMessage, bool>? memoryCommand = null,
-        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null)
+        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null,
+        Services.Documents.IInboundDocumentProcessor? inboundDocuments = null,
+        Func<QqChatMessage, bool>? knowledgeCommand = null,
+        Action<string, BotAgent.Domain.Memory.UnifiedMemoryContext, string>? recordProfileProvenance = null,
+        Action<QqChatMessage, string>? observeCommunityInbound = null,
+        IReadOnlyList<ITurnContextContributor>? hostTurnContributors = null,
+        BotAgent.Domain.Ports.IAccessRoleResolver? accessRoles = null,
+        Func<QqChatMessage, bool>? schedulerCommand = null,
+        Func<QqChatMessage, bool>? todoCommand = null,
+        Func<QqChatMessage, bool>? identityCommand = null)
     {
         _box = box;
         _source = source;
@@ -168,26 +186,38 @@ public sealed partial class ReplyPipeline
         _background = background;
         _unifiedMemory = unifiedMemory;
         _memoryCommand = memoryCommand;
+        _knowledgeCommand = knowledgeCommand;
+        _schedulerCommand = schedulerCommand;
+        _todoCommand = todoCommand;
+        _identityCommand = identityCommand;
+        _recordProfileProvenance = recordProfileProvenance;
+        _observeCommunityInbound = observeCommunityInbound;
+        _accessRoles = accessRoles;
+        var extraContributors = hostTurnContributors ?? Array.Empty<ITurnContextContributor>();
         _quotes = new ReplyQuoteContext(ownLedger, () => box.Current.NormalizedUin, research, hooks.Log);
         _inboundGates = new ReplyInboundGates(
             box, source, _platformPolicies, whitelist, approvals, participation, inboundDedup, hooks,
             (key, message) => LogThrottled(key, message));
         _inboundMedia = new ReplyInboundMedia(
             box, hooks, _platformPolicies, AllowsFeature, stickers, music, links, QueueBackground,
-            CaptureDeferredReply, EnsureGroupContext);
+            CaptureDeferredReply, EnsureGroupContext, source, voice, inboundDocuments,
+            (key, m) => _ui.NotifyMessageAdded(key, m), () => _registry.Save());
+        _toolNotes = new PluginToolNotes();
+        _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady, () => approvals.Capabilities.Catalog);
         _turnContext = new ReplyTurnContext(
             profiles, vibes, stickers, roles, poke, mood, music, research, _inboundMedia, hooks,
             AllowsFeature, (conversation, thinking) => SetThinking(conversation, thinking), memoryParticipant,
             profilesPolicy: () => _plugins?.GetContribution<BotAgent.Services.Profiles.IProfilesPolicyContribution>("preset.feature.profiles"),
             conversationPolicy: () => _plugins?.GetContribution<IConversationContribution>("system.conversation"),
-            turnContextContributors: () => _plugins?.GetContributions<ITurnContextContributor>() ?? []);
-        _replyTools = new ReplyToolAvailability(plugins, _platformPolicies, hooks.IsDisposed, () => research.IsReady, () => approvals.Capabilities.Catalog);
+            turnContextContributors: () => CombineContributors(_plugins?.GetContributions<ITurnContextContributor>(), extraContributors),
+            toolNotes: _toolNotes,
+            replyTools: _replyTools);
         _delivery = new ReplyDelivery(
             hooks, registry, ui, plain, source, stickers, voice, poke, mood, approvals, participation, traces, riskBackoff, AllowsFeature,
             settingsBox: box, platformPolicies: _platformPolicies);
         _actions = new ReplyTurnActions(
             box, hooks, _replyTools, research, music, stickers, vibes, approvals, participation, _platformPolicies,
-            _delivery, riskBackoff, AllowsFeature, QueueBackground, RequestAcceptedTaskReply);
+            _delivery, riskBackoff, AllowsFeature, QueueBackground, RequestAcceptedTaskReply, _toolNotes);
         _turnLoop = new AgentTurnLoop(brain, traces, _replyTools);
         _inlineTools = new InlineTurnTools(research, approvals, participation, hooks.Log, plugins, _platformPolicies, hooks.IsDisposed);
 
@@ -274,8 +304,14 @@ public sealed partial class ReplyPipeline
         msg = pre.Message;
 
         // Reserved explicit controls never enter chat history, profile extraction or Agent parsing.
-        if (asideOnly && msg.Text.TrimStart().StartsWith("//memory", StringComparison.Ordinal)) return;
-        if (msg.AllowsCommands && _memoryCommand?.Invoke(msg) == true) return;
+        var strippedCmd = StripLeadingAtMentions(msg.Text);
+        if (IsReservedMemoryOrKbCommand(strippedCmd, msg.Envelope?.Message.Text) && (asideOnly || !msg.AllowsCommands))
+            return;
+        if (msg.AllowsCommands && (_memoryCommand?.Invoke(msg) == true
+            || _knowledgeCommand?.Invoke(msg) == true
+            || _schedulerCommand?.Invoke(msg) == true
+            || _todoCommand?.Invoke(msg) == true
+            || _identityCommand?.Invoke(msg) == true)) return;
         if (PlatformSourceExecution.Current is { } memorySource && msg.Envelope is { } envelope
             && UnifiedMemoryTurn.AttestedContext(envelope) is not null)
             _memoryInbound.GetValue(memorySource, _ => envelope);
@@ -331,7 +367,9 @@ public sealed partial class ReplyPipeline
             DirectToBot = !msg.IsGroup || msg.MentionedSelf || quotedIsSelf,
             // 协议风控退避只认可明确 @；普通引用仍可参与正常对话，但不能绕过退避。
             MentionedBot = msg.MentionedSelf,
+            AllowsCommands = msg.AllowsCommands,
         };
+        if (msg.Envelope is { } rawEnvelope) _messageEnvelopes.AddOrUpdate(appended, rawEnvelope);
         conversation.Append(appended);
 
         if (!asideOnly)
@@ -365,7 +403,9 @@ public sealed partial class ReplyPipeline
         var isSelfSender = !string.IsNullOrWhiteSpace(botUin) && msg.UserId.ToString() == botUin;
         if (!isSelfSender)
         {
-            AppendAttestedProfile(msg, conversation.Name, appended.Seq);
+            AppendAttestedProfile(msg, conversation.Name, appended.Seq, conversation.SourceKey);
+            if (!asideOnly)
+                _observeCommunityInbound?.Invoke(msg, conversation.SourceKey);
 
             // 群成员身份（群主/管理员/群头衔）：先记下消息事件里带的 role（零成本），
             // 缺头衔或太久没更新时再后台去问协议端（ get_group_member_info 才能拿到自定义头衔）。
@@ -380,10 +420,10 @@ public sealed partial class ReplyPipeline
             $"{(msg.Text.Length > 80 ? msg.Text[..80] + "…" : msg.Text)}" +
             (msg.ImageUrls is { Count: > 0 } ? $" [+{msg.ImageUrls.Count}图]" : string.Empty));
 
-        // 媒体类入站（表情包入库 / 音乐分享 / 链接预览）+ 首次群消息补历史：都不阻塞接收线程
-        var musicShares = _inboundMedia.Register(conversation, msg, appended);
+        // 媒体类入站（表情包入库 / 音乐分享 / 语音 STT / 文档解析 / 链接预览）+ 首次群消息补历史：都不阻塞接收线程
+        var musicShares = _inboundMedia.RegisterWithHold(conversation, msg, appended, out var holdImmediateReply);
 
-        if (!asideOnly && musicShares is not { Count: > 0 })
+        if (!asideOnly && !holdImmediateReply && musicShares is not { Count: > 0 })
         {
             // 新的“人”发言 = 一次新的运行窗口：单次运行的工具体预算从 0 起算（V3 §9.2）。
             // 机器人自己发的消息不算（否则它每说一句就把自己这一轮的预算洗白了）。
@@ -625,13 +665,24 @@ public sealed partial class ReplyPipeline
 
         TryProactiveSpeak();
     }
-    private void AppendAttestedProfile(QqChatMessage message, string conversationName, long seq)
+    private static IReadOnlyList<ITurnContextContributor> CombineContributors(
+        IReadOnlyList<ITurnContextContributor>? pluginContributors,
+        IReadOnlyList<ITurnContextContributor> hostContributors)
+    {
+        if (hostContributors.Count == 0) return pluginContributors ?? Array.Empty<ITurnContextContributor>();
+        if (pluginContributors is null or { Count: 0 }) return hostContributors;
+        return pluginContributors.Concat(hostContributors).ToArray();
+    }
+
+    private void AppendAttestedProfile(QqChatMessage message, string conversationName, long seq, string sourceKey)
     {
         var context = UnifiedMemoryTurn.AttestedContext(message.Envelope);
         var key = _unifiedMemory is null ? message.UserId.ToString()
             : context?.Actor is { } actor
                 ? BotAgent.Domain.Memory.LegacyProfileScopeKey.TryCreate(context.Driver, actor, context.Conversation) : null;
         if (key is null) return;
+        if (_unifiedMemory is not null && context is not null)
+            _recordProfileProvenance?.Invoke(key, context, sourceKey);
         _profiles.Append(key, message.SenderName, message.Text, message.Time,
             message.IsGroup ? conversationName : null, message.IsGroup ? message.GroupId : 0, seq);
     }
@@ -720,6 +771,38 @@ public sealed partial class ReplyPipeline
             }
         });
     }
+    private static string StripLeadingAtMentions(string? rawText)
+    {
+        var text = (rawText ?? string.Empty).TrimStart();
+        while (text.StartsWith('@'))
+        {
+            var space = text.IndexOf(' ');
+            if (space <= 1 || space > 20) break;
+            var handle = text[1..space];
+            if (!handle.All(char.IsDigit) && handle != "全体成员") break;
+            text = text[(space + 1)..].TrimStart();
+        }
+        return text;
+    }
+
+    private static bool IsReservedMemoryOrKbCommand(string strippedText, string? envelopeText)
+    {
+        if (strippedText.StartsWith("//memory", StringComparison.OrdinalIgnoreCase)
+            || (envelopeText?.TrimStart().StartsWith("//memory", StringComparison.OrdinalIgnoreCase) == true))
+            return true;
+        return MatchesReservedPrefix(strippedText, "//kb")
+            || MatchesReservedPrefix(strippedText, "//remind")
+            || MatchesReservedPrefix(strippedText, "//todo")
+            || MatchesReservedPrefix(strippedText, "//identity");
+    }
+
+    private static bool MatchesReservedPrefix(string text, string prefix)
+        => text.Equals(prefix, StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith(prefix + "\n", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith(prefix + "\r", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith(prefix + "\t", StringComparison.OrdinalIgnoreCase);
+
     private readonly object _quoteEnrichLock = new();
 }
 

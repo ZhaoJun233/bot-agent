@@ -265,7 +265,10 @@ public sealed partial class PluginMarketService
             throw SettingsFailure(exception.Code);
         }
 
-        var reload = receipt.RestartRequired && CanReloadPackage(pluginId, manifest);
+        var liveApplied = receipt.RestartRequired
+            && TryApplyLiveSettings is not null
+            && TryApplyLiveSettings(pluginId, manifest);
+        var reload = receipt.RestartRequired && !liveApplied && CanReloadPackage(pluginId, manifest);
         var reloadDeferred = false;
         if (reload)
         {
@@ -282,8 +285,10 @@ public sealed partial class PluginMarketService
         }
         var saved = _settings.ReadManifest(manifest);
         return Project(saved with { Revision = receipt.Revision,
-            RestartRequired = saved.RestartRequired || (receipt.RestartRequired && (!reload || reloadDeferred)) });
+            RestartRequired = saved.RestartRequired || (receipt.RestartRequired && !liveApplied && (!reload || reloadDeferred)) });
     }
+
+    internal Func<string, PluginPackageManifest, bool>? TryApplyLiveSettings { get; set; }
 
     /// <summary>编辑 → JSON 变更集；secret 的 delete 用 null，其余按声明类型解析。</summary>
     private static JsonElement BuildChanges(IReadOnlyList<ZbaPluginSettingEdit> edits, PluginSettingsView current)

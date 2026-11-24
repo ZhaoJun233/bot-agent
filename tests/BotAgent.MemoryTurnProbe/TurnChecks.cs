@@ -15,6 +15,7 @@ internal static class TurnChecks
         EmptyLegacy();
         LegacyGetterInvalidation();
         Disposal();
+        TaintMatrixChecks();
     }
 
     private static void PromptAndDestination()
@@ -191,5 +192,57 @@ internal static class TurnChecks
         Probe.Check(!boundAllowed, "explicitly bound queued work retains revoked receipts after disposal");
         release.SetResult();
         Probe.Check(!await flowed, "async task inherits live receipt set rather than validity snapshot");
+    }
+
+    private static void TaintMatrixChecks()
+    {
+        using var f = new Fixture();
+        f.Memory.SetEnabled(true);
+        var tz = f.Memory.RequestRemember(Fixture.Private,
+            new(new(UnifiedMemoryFactCategory.Timezone, "Asia/Shanghai"), [], true)).Entry!;
+        f.Memory.Confirm(Fixture.Private, new(tz.FactId, tz.Version, tz.ConfirmationToken, true, false));
+        var dmEnv = f.Envelope(Fixture.Private);
+        using (var exec = f.Enter(dmEnv))
+        {
+            using var turn = UnifiedMemoryTurn.Begin(f.Memory, dmEnv);
+            Probe.Check(turn.ReadPrompt("time").Contains("Timezone: Asia/Shanghai"), "L1 timezone injected");
+            Probe.Check(MemoryUseScope.MaxTier == MemorySensitivityTier.StylePreference
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.LocalPresentation)
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.SameScopeRead)
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalSideEffect)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.GlobalStateWrite),
+                "L1 style preference allows web/kb read but blocks external side effects and global writes");
+        }
+
+        var note = f.Memory.RequestRemember(Fixture.Private,
+            new(new(UnifiedMemoryFactCategory.PersonalNote, "下周三架构评审"), [], true)).Entry!;
+        f.Memory.Confirm(Fixture.Private, new(note.FactId, note.Version, note.ConfirmationToken, true, false));
+        using (var exec = f.Enter(dmEnv))
+        {
+            using var turn = UnifiedMemoryTurn.Begin(f.Memory, dmEnv);
+            Probe.Check(turn.ReadPrompt("下周三架构评审").Contains("PersonalNote: 下周三架构评审"), "L2 note injected for relevant private query");
+            Probe.Check(MemoryUseScope.MaxTier == MemorySensitivityTier.PersonalFact
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.LocalPresentation)
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.SameScopeRead)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalSideEffect)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.GlobalStateWrite),
+                "L2 personal fact blocks external read egress (websearch) while allowing same-scope knowledge read");
+        }
+
+        var legacyEnv = f.Envelope(Fixture.Group);
+        using (var exec = f.Enter(legacyEnv))
+        {
+            using var turn = UnifiedMemoryTurn.Begin(f.Memory, legacyEnv);
+            Probe.Check(!string.IsNullOrEmpty(turn.ReadLegacyProfile(Fixture.Actor, _ => "legacy text")), "L3 legacy profile read");
+            Probe.Check(MemoryUseScope.MaxTier == MemorySensitivityTier.LegacyProfile
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.LocalPresentation)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.SameScopeRead)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalSideEffect)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.GlobalStateWrite),
+                "L3 legacy profile denies all five egress classes per ADR-0005");
+        }
     }
 }

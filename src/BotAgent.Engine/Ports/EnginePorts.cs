@@ -36,12 +36,20 @@ namespace BotAgent.Services.Agent
         /// </summary>
         bool CanRunNatural(BotConversation conversation, long senderId) => false;
 
+        /// <summary>按入站消息（含跨平台原生身份）判定能否触发自然对话 Agent。</summary>
+        bool CanRunNatural(BotConversation conversation, ChatMessage trigger, BotAgent.Domain.Messaging.PlatformInboundEnvelope? envelope = null)
+            => trigger.SenderId is long senderId && CanRunNatural(conversation, senderId);
+
         /// <summary>
         /// 把模型从自然对话里理解出的任务交给服务器 agent（ack = 模型想先说的那句接话）。
         /// 异常只记日志，不带崩回复流程。
         /// </summary>
         Task RunNaturalSafeAsync(BotConversation conversation, ChatMessage trigger, string task, string? ack)
             => Task.CompletedTask;
+
+        Task RunNaturalSafeAsync(BotConversation conversation, ChatMessage trigger,
+            BotAgent.Domain.Messaging.PlatformInboundEnvelope? envelope, string task, string? ack)
+            => RunNaturalSafeAsync(conversation, trigger, task, ack);
     }
 }
 
@@ -70,18 +78,37 @@ namespace BotAgent.Services.Music
     }
 }
 
-
-
 namespace BotAgent.Services.Voice
 {
-    /// <summary>Voice pacing/decision use case owned by the Host until the capability migration lands.</summary>
+    /// <summary>Voice pacing/decision &amp; STT use case owned by the Host.</summary>
     public interface IVoiceUseCase
     {
         int SuggestIntervalSeconds { get; }
+        int MaxSttDurationSeconds => 60;
         string? ClientVoiceName { get; }
+        bool IsSttEnabled => false;
         bool Allow(string sourceKey, out string reason);
         List<string> BuildSpeakUrls(IReadOnlyList<string> parts, string? emotion, double? speed, int? pitch);
         void MarkSent(string sourceKey);
+        Task<(string? Transcript, string ReasonCode)> TranscribeAsync(byte[] audioData, string fileName, CancellationToken ct = default)
+            => Task.FromResult<(string?, string)>((null, "stt_unavailable"));
+        Task<(string? Transcript, string ReasonCode)> TranscribeFromUrlAsync(string audioUrl, string fileName, CancellationToken ct = default)
+            => Task.FromResult<(string?, string)>((null, "stt_unavailable"));
+    }
+}
+
+namespace BotAgent.Services.Documents
+{
+    /// <summary>Inbound document staging and bounded auto-preview port owned by the Host.</summary>
+    public interface IInboundDocumentProcessor
+    {
+        bool IsAutoExtractEnabled => false;
+        Task<string?> ProcessInboundAsync(
+            string sourceKey,
+            InboundFileAttachment attachment,
+            byte[]? resolvedData,
+            string? resolvedUrl,
+            CancellationToken ct = default);
     }
 }
 

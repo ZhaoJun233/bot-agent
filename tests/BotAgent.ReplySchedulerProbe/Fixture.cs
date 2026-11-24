@@ -80,11 +80,12 @@ namespace BotAgent.Services.Reply
     }
     internal sealed class ProbePolicies
     {
-        public ProbePolicy Resolve(PlatformContext _) => new();
-        public ProbePolicy ResolveForChannel(string _) => new();
+        private static readonly EffectivePlatformPolicy Policy = new(
+            new PlatformContext(PlatformId.QqPrivate), true, true, true, true,
+            PlatformCapabilities.QqOneBot, new HashSet<string>(), new Dictionary<string, bool>(), Array.Empty<string>());
+        public EffectivePlatformPolicy Resolve(PlatformContext _) => Policy;
+        public EffectivePlatformPolicy ResolveForChannel(string _) => Policy;
     }
-    internal sealed class ProbePolicy
-    { public bool Registered => true; public bool Connected => true; public bool Enabled => true; public bool ChatEnabled => true; }
     internal sealed class ProbeHooks
     {
         public readonly ConcurrentQueue<string> Errors = new();

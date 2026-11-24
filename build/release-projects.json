@@ -58,6 +58,26 @@
       "kind": "contract"
     },
     {
+      "project": "contracts/documents/BotAgent.Documents.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/digest/BotAgent.Digest.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/knowledge/BotAgent.Knowledge.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/scheduler/BotAgent.Scheduler.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
       "project": "packages/token-quota/backend/BotAgent.Package.TokenQuota.csproj",
       "kind": "package"
     },
@@ -123,6 +143,26 @@
     },
     {
       "project": "packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/documents/backend/BotAgent.Package.Documents.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/digest/backend/BotAgent.Package.Digest.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/knowledge/backend/BotAgent.Package.Knowledge.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/scheduler/backend/BotAgent.Package.Scheduler.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj",
       "kind": "package"
     }
   ]

@@ -112,12 +112,15 @@ internal sealed partial class ReplyDelivery(
         bool isGroup,
         long targetId,
         CompletionResult result,
-        bool directAddress)
+        bool directAddress,
+        Services.Platforms.EffectiveConversationSettings? conversationSettings = null)
     {
         if (_riskBackoff?.IsActive(conversation.SourceKey) == true)
         {
             return new(Array.Empty<string>(), new List<string>());
         }
+
+        var effective = conversationSettings ?? Services.Platforms.ConversationProfileResolver.Resolve(snapshot, platformPolicy, conversation.SourceKey);
 
         // ───── 语音（模型填了 speak）─────
         // 怎么发：只把 TTS 的 /speak URL 交给协议端，让 NapCat 自己去下载 → 转 silk → 上传
@@ -133,8 +136,8 @@ internal sealed partial class ReplyDelivery(
             // “气氛沉（有人低落/在吵架）就一律不发语音”的硬拦，已删——那本来就是判断类的事，
             // 现在只把气氛（vibeHint）递给模型看，由它自己权衡。
             // 代码侧只留“技术性”限制：开关、字数上限（云端/协议端真有上限）、同会话频率下限（防刷屏）。
-            var maxChars = Math.Clamp(snapshot.VoiceMaxChars, 10, 300);
-            if (!platformPolicy.Feature("voice", snapshot.EnableVoice).Enabled || !_allowsFeature(PluginGate.VoiceCapability) || _voice is null)
+            var maxChars = effective.VoiceMaxChars;
+            if (!effective.FeatureEnabled("voice") || !_allowsFeature(PluginGate.VoiceCapability) || _voice is null)
             {
                 voiceSkipWhy = "语音消息开关是关的";
             }
@@ -210,16 +213,22 @@ internal sealed partial class ReplyDelivery(
                 voiceSent = true;
                 sentParts.Add(part);
                 _voice?.MarkSent(conversation.SourceKey);
-                // 把模型给的语气参数也记下来 —— 不然“它到底有没有按语境调情绪”没法验证
-                var tone = new List<string>();
-                if (!string.IsNullOrWhiteSpace(result.VoiceEmotion)) tone.Add("情绪 " + result.VoiceEmotion);
-                if (result.VoiceSpeed is double ms) tone.Add($"语速 {ms:0.##}");
-                if (result.VoicePitch is int mp) tone.Add($"音调 {mp:+#;-#;0}");
                 var voiceName = _voice?.ClientVoiceName ?? "默认";
-                _hooks.Log($"[Voice] 已发语音{(voiceUrls.Count > 1 ? $"（第 {i + 1}/{voiceUrls.Count} 段）" : string.Empty)}"
-                        + $"（{part.Length} 字，音色 {voiceName}"
-                        + (tone.Count > 0 ? "，模型定的 " + string.Join('/', tone) : "，模型未指定语气（用面板默认）")
-                        + $"）：{TextRules.Shorten(part, 40)}");
+                if (BotAgent.Services.Memory.MemoryUseScope.HasMemory || PlatformSourceExecution.Current?.Context.PlatformId == PlatformId.QqOfficial)
+                {
+                    _hooks.Log($"[Voice] 已发语音（{part.Length} 字，音色 {voiceName}，受控会话省略正文）");
+                }
+                else
+                {
+                    var tone = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(result.VoiceEmotion)) tone.Add("情绪 " + result.VoiceEmotion);
+                    if (result.VoiceSpeed is double ms) tone.Add($"语速 {ms:0.##}");
+                    if (result.VoicePitch is int mp) tone.Add($"音调 {mp:+#;-#;0}");
+                    _hooks.Log($"[Voice] 已发语音{(voiceUrls.Count > 1 ? $"（第 {i + 1}/{voiceUrls.Count} 段）" : string.Empty)}"
+                            + $"（{part.Length} 字，音色 {voiceName}"
+                            + (tone.Count > 0 ? "，模型定的 " + string.Join('/', tone) : "，模型未指定语气（用面板默认）")
+                            + $"）：{TextRules.Shorten(part, 40)}");
+                }
             }
         }
         else if (voiceSkipWhy is not null)
@@ -273,7 +282,7 @@ internal sealed partial class ReplyDelivery(
                 var said = confirmedVoiceText;
                 if (textReply is not null && TextRules.SameSaid(textReply, said))
                 {
-                    _hooks.Log($"[Voice] 语音与文字是同一句（{TextRules.Shorten(textReply, 24)}）→ 不再重复发文字");
+                    _hooks.Log(BotAgent.Services.Memory.MemoryUseScope.HasMemory ? "[Voice] 语音与文字是同一句 → 不再重复发文字" : $"[Voice] 语音与文字是同一句（{TextRules.Shorten(textReply, 24)}）→ 不再重复发文字");
                     textReply = null;
                 }
                 else if (textReply is not null && said.Length > 0)
@@ -458,7 +467,9 @@ internal sealed partial class ReplyDelivery(
         long targetId,
         long pokeUserId)
     {
-        var pokeFeature = platformPolicy.Feature("poke", globallyEnabled: true);
+        var pokeFeature = _settingsBox is not null
+            ? Services.Platforms.ConversationProfileResolver.Resolve(_settingsBox.Current, platformPolicy, conversation.SourceKey).Feature("poke")
+            : platformPolicy.Feature("poke", globallyEnabled: true);
         if (!pokeFeature.Enabled)
         {
             _hooks.Log($"这次不戳（平台策略拒绝：{pokeFeature.ReasonCode}）");

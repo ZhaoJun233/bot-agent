@@ -8,6 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/BotAgent.Core/BotAgent.Core.csproj" />
     <ProjectReference Include="../../src/BotAgent.Engine/BotAgent.Engine.csproj" />
-    <Compile Include="../../src/BotAgent.Headless/Services/Memory/*.cs" Link="Commands/%(Filename)%(Extension)" />
+    <Compile Include="../../src/BotAgent.Headless/Services/Memory/*.cs" Exclude="../../src/BotAgent.Headless/Services/Memory/ScopedCommunityMemoryService.cs" Link="Commands/%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

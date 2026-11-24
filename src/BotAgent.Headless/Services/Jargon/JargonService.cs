@@ -174,9 +174,27 @@ public sealed class JargonService
         sb.AppendLine("请自然理解并在契合语境时模仿群友使用以下黑话，避免机械生硬解释：");
         foreach (var item in confirmed)
         {
-            sb.AppendLine($"• {item.Phrase}：{item.Meaning}");
+            var phrase = SanitizePromptText(item.Phrase);
+            var meaning = SanitizePromptText(item.Meaning);
+            if (!string.IsNullOrEmpty(phrase) && !string.IsNullOrEmpty(meaning))
+                sb.AppendLine($"• {phrase}：{meaning}");
         }
 
         return sb.ToString().TrimEnd();
     }
+
+    public void ClearScope(string scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope)) return;
+        lock (_bufferGate)
+        {
+            _phraseCounters.TryRemove(scope, out _);
+            _lastExtractTime.TryRemove(scope, out _);
+        }
+    }
+
+    private static string SanitizePromptText(string? raw)
+        => BotAgent.Domain.Conversation.MessageMarkers
+            .EscapeExternalControlTags((raw ?? string.Empty).Replace('\r', ' ').Replace('\n', ' '))
+            .Trim();
 }

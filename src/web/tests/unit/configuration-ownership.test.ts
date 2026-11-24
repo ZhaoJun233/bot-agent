@@ -73,6 +73,7 @@ describe('unified ownership metadata', () => {
       'models',
       'model-providers',
       'agent',
+      'system.mcp-tools',
       'system.platform-qq-private',
       'system.platform-qq-official',
       'system.platform-feishu',
@@ -82,7 +83,9 @@ describe('unified ownership metadata', () => {
     ])
     for (const spec of systems) {
       expect(spec.pluginKey).toBeUndefined()
-      expect(spec.editor).toEqual(spec.id === 'model-providers' ? { type: 'declared' } : { type: 'fields' })
+      expect(spec.editor).toEqual(
+        spec.id === 'model-providers' || spec.id === 'system.mcp-tools' ? { type: 'declared' } : { type: 'fields' }
+      )
       expect(settingsFor(spec.id)?.kind).toBe('system')
     }
     expect(configurationFor('models')).toMatchObject({ secrets: [], providers: false, sections: ['model'] })

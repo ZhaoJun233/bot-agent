@@ -19,6 +19,8 @@ internal static class Baseline
             "BotAgent.Music.Contracts", "BotAgent.Voice.Contracts", "BotAgent.Profiles.Contracts",
             "BotAgent.HealthReporting.Contracts", "BotAgent.ModelServices.Contracts",
             "BotAgent.Agent.Contracts", "BotAgent.Conversation.Contracts", "BotAgent.Platforms.Contracts",
+            "BotAgent.Documents.Contracts", "BotAgent.Digest.Contracts", "BotAgent.Knowledge.Contracts",
+            "BotAgent.Scheduler.Contracts", "BotAgent.PersonalTodo.Contracts",
         },
         ["BotAgent.Plugin.Contracts"] = Array.Empty<string>(),
         ["BotAgent.Quota.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
@@ -34,6 +36,11 @@ internal static class Baseline
         ["BotAgent.Agent.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Conversation.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Platforms.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Documents.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Digest.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Knowledge.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.Scheduler.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
+        ["BotAgent.PersonalTodo.Contracts"] = new[] { "BotAgent.Plugin.Contracts" },
         ["BotAgent.Storage"] = new[] { "BotAgent.Core" },
         ["BotAgent.Platforms"] = new[] { "BotAgent.Core" },
         ["BotAgent.Model"] = new[] { "BotAgent.Core" },
@@ -57,6 +64,11 @@ internal static class Baseline
         ["BotAgent.Package.PlatformQqOfficial"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.PlatformFeishu"] = new[] { "BotAgent.Core" },
         ["BotAgent.Package.PlatformLocal"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Documents"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Digest"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Knowledge"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.Scheduler"] = new[] { "BotAgent.Core" },
+        ["BotAgent.Package.PersonalTodo"] = new[] { "BotAgent.Core" },
         ["BotAgent.PluginBundle"] = new[] { "BotAgent.Core" },
         ["BotAgent.Headless"] = new[] { "BotAgent.Core", "BotAgent.Storage", "BotAgent.Platforms", "BotAgent.Model", "BotAgent.Engine", "BotAgent.Mcp", "BotAgent.Panel" },
     };
@@ -84,11 +96,10 @@ internal static class Baseline
     /// 2026-09-24（批次 E 有限步进循环）：2328 → **2320** —— 上面登记的债**当场还了一部分**：
     /// 模型调用（20 行具名实参 + 轨迹埋点）搬进 `AgentTurnLoop.cs`，
     /// “当场做掉只读工具”搬进 `InlineTurnTools.cs`。
-    /// 2026-10-18 Wave3：回复主链（ReplyPipeline / AgentTurnLoop / InlineTurnTools / PlainSender）
-    /// 整体搬到 `src/BotAgent.Engine/Reply/`；全 src 最大文件回落到 SettingsStore（1740），
-    /// 这格随实测下调 1765 → **1740**（仍然只许往下调）。
+    /// 2026-11-24（Phase 5 收口后下调）：实测最大文件回落到 `src/BotAgent.Storage/ConfigurationStore.cs`（1591 行），
+    /// 棘轮随实测下调至 1591（只许往下调，不许往回抬）。
     /// </summary>
-    public const int MaxFileLines = 1643;
+    public const int MaxFileLines = 1591;
     public const string BotAgentHostPath = "src/BotAgent.Headless/Services/BotAgentHost.cs";
     // 2026-09-23 批次 5 第 3 步达成 DoD：面板直连组件 + 删掉 façade 转发之后，
     // 807 → 242 行 / 43 → 10 字段 / 48 → 10 方法（同时把"启动自述"搬去 Services/Ops/BootReport.cs）。
@@ -105,12 +116,11 @@ internal static class Baseline
 
     /// <summary>
     /// **全 src** 最长方法（DoD §8.3：≤ 200 行）。只钉 BotAgentHost 是不够的 —— 那些大方法
-    /// 搬进用例层之后，护栏得跟着搬，否则"搬出去就不管了"。
-    /// 2026-09-23 批次 6 拆完，**已达成 DoD**：实测最长 195 行（WebUiServer.Settings 的
-    /// ApplyChannelAndAgentSettings），全 src 超过 200 行的成员块 **0 个**。基线按 DoD 钉死在 200。
+    /// 2026-11-24（Phase 5 收口后下调）：全 src 实测最长成员块已降至 193 行（`ReplyDelivery.cs:SendAsync`），
+    /// 基线随实测下调 198 → 193（仍按只降不升原则锁死，超出即拦截）。
     /// 诊断用 <c>--longest</c> 看当前最长的若干个（拆的时候从上往下走）。
     /// </summary>
-    public const int LongestMethodAnywhere = 198;
+    public const int LongestMethodAnywhere = 193;
 
     // ── 易变细节 ──
     /// <summary>
@@ -319,6 +329,11 @@ internal static class Baseline
         ["contracts/agent/BotAgent.Agent.Contracts.csproj"] = "BotAgent.Agent.Contracts",
         ["contracts/conversation/BotAgent.Conversation.Contracts.csproj"] = "BotAgent.Conversation.Contracts",
         ["contracts/platforms/BotAgent.Platforms.Contracts.csproj"] = "BotAgent.Platforms.Contracts",
+        ["contracts/documents/BotAgent.Documents.Contracts.csproj"] = "BotAgent.Documents.Contracts",
+        ["contracts/digest/BotAgent.Digest.Contracts.csproj"] = "BotAgent.Digest.Contracts",
+        ["contracts/knowledge/BotAgent.Knowledge.Contracts.csproj"] = "BotAgent.Knowledge.Contracts",
+        ["contracts/scheduler/BotAgent.Scheduler.Contracts.csproj"] = "BotAgent.Scheduler.Contracts",
+        ["contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj"] = "BotAgent.PersonalTodo.Contracts",
     };
 
     public static readonly IReadOnlyDictionary<string, string> RegisteredPackageContracts = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -340,6 +355,11 @@ internal static class Baseline
         ["packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj"] = "BotAgent.Platforms.Contracts",
         ["packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj"] = "BotAgent.Platforms.Contracts",
+        ["packages/documents/backend/BotAgent.Package.Documents.csproj"] = "BotAgent.Documents.Contracts",
+        ["packages/digest/backend/BotAgent.Package.Digest.csproj"] = "BotAgent.Digest.Contracts",
+        ["packages/knowledge/backend/BotAgent.Package.Knowledge.csproj"] = "BotAgent.Knowledge.Contracts",
+        ["packages/scheduler/backend/BotAgent.Package.Scheduler.csproj"] = "BotAgent.Scheduler.Contracts",
+        ["packages/personal-todo/backend/BotAgent.Package.PersonalTodo.csproj"] = "BotAgent.PersonalTodo.Contracts",
     };
     public static readonly IReadOnlyDictionary<string, string> CompatibilitySourceLinks = new Dictionary<string, string>
     {

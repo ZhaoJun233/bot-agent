@@ -1,4 +1,7 @@
 using BotAgent.Domain.Agent;
+using BotAgent.Domain.Configuration;
+using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Ports;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.Conversations;
@@ -57,7 +60,10 @@ public sealed partial class AgentCommandService
 
         // 不派任务的子命令（//stop //status //help + //sessions 那些会话管理）整块挪进了
         // TryHandleAgentSubCommandAsync —— 它们只动台账，不该混在「派任务」的主线里。
-        if (await TryHandleAgentSubCommandAsync(conversation, msg, payload, want, named))
+        var subject = InboundSubjectIdentity.Resolve(msg, PlatformSourceExecution.Current?.Context);
+        var (role, isExplicitRbac) = ResolveSubjectRoleWithSource(subject, conversation.SourceKey, msg.UserId, msg.Channel);
+        var isOpsAuthorized = !isExplicitRbac || role == WorkspaceRole.BotOwner;
+        if (await TryHandleAgentSubCommandAsync(conversation, msg, payload, want, named, isOpsAuthorized))
         {
             return;
         }
@@ -77,7 +83,7 @@ public sealed partial class AgentCommandService
             return;
         }
 
-        await RunOnServerAsync(conversation, msg, payload);
+        await RunOnServerWithRoleAsync(conversation, msg, payload, isOpsAuthorized: isOpsAuthorized);
     }
 
     /// <summary>
@@ -88,23 +94,26 @@ public sealed partial class AgentCommandService
 
     private async Task<bool> AllowAgentCommandAsync(BotConversation conversation, QqChatMessage msg, string payload)
     {
-        var who = msg.UserId.ToString();
+        var who = msg.UserId > 0 ? msg.UserId.ToString() : (msg.Envelope?.Message.Sender.NativeUserId ?? "unknown");
         // 官方通道的“能用 agent 的人”额外认一种写法：把它加进**官方白名单·私聊**
         // （2026-09-21 管理员报的“官方白名单里的人用不了 // 指令”：那边发送者是别名号 8e15 起，
         //  而 AgentAllowedUsers 里填的是私域真号 ✗ → 永远匹配不上 ✗ 直接被拒）。
         // 为什么只认“私聊白名单”而不认群：群白名单是“这个群可以用命令”的意思太宽了 ——
         // 执行命令的权限必须落到**具体某个人**身上（官方白名单显式列出才算，空 = 全部接受不算 ✗）。
-        var officialExplicit = Channels.IsOfficial(msg.Channel) && _hooks.IsOfficialUserAllowed(msg.UserId);
-        var isAllowedUser = _agentAllowAll
-            || (_agentUsers.Count > 0 && _agentUsers.Contains(msg.UserId))
-            || officialExplicit;
-        var allowed = EvaluateAgentAdmission("qq", isOwner: false, isAllowedUser: isAllowedUser, isWebSession: false);
+        var subject = InboundSubjectIdentity.Resolve(msg, PlatformSourceExecution.Current?.Context);
+        var (role, isExplicitRbac) = ResolveSubjectRoleWithSource(subject, conversation.SourceKey, msg.UserId, msg.Channel);
+        var allowed = EvaluateAgentAdmission(
+            "qq",
+            isOwner: role == WorkspaceRole.BotOwner,
+            isAllowedUser: role >= WorkspaceRole.TrustedMember,
+            isWebSession: false);
         if (!allowed)
         {
-            // 权限不够：日志必记，回话节流（每会话 60 秒一条）
+            // 权限不够：日志必记，回话节流（每会话 60 秒一条）；绝不写原始 ID 与消息正文
+            var maskedWho = AgentMask.Shorten(who);
             _hooks.Log(Channels.IsOfficial(msg.Channel)
-                ? $"agent 命令被拒（{who} 不在 AgentAllowedUsers 里；官方通道要么把这个**别名号**填进 AgentAllowedUsers，要么把它加进「官方白名单·私聊」）: {TextRules.Shorten(payload, 40)}"
-                : $"agent 命令被拒（{who} 不在 AgentAllowedUsers 里）: {TextRules.Shorten(payload, 40)}");
+                ? $"agent 命令被拒（{maskedWho} 无权限；官方通道需加进「官方白名单·私聊」或配置 RBAC）：长度 {payload.Length}"
+                : $"agent 命令被拒（{maskedWho} 无权限）：长度 {payload.Length}");
             if (ShouldReplyDenied(conversation.SourceKey))
             {
                 await _hooks.SendPlainAsync(conversation, "这个功能只给白名单用户用～");
@@ -113,6 +122,7 @@ public sealed partial class AgentCommandService
             return false;
         }
 
+        _ = isExplicitRbac;
         return true;
     }
 
@@ -122,7 +132,7 @@ public sealed partial class AgentCommandService
     /// ⚠ 这些分支必须留在回复派发之前：它们是纯台账操作，不该被当成任务派给 agent。
     /// </summary>
     private async Task<bool> TryHandleAgentSubCommandAsync(
-        BotConversation conversation, QqChatMessage msg, string payload, string want, string? named)
+        BotConversation conversation, QqChatMessage msg, string payload, string want, string? named, bool isOpsAuthorized = true)
     {
         var head = payload.Split(' ', 2)[0].ToLowerInvariant();
         if (head is "stop" or "cancel" or "停止" or "取消" or "中断")
@@ -131,6 +141,7 @@ public sealed partial class AgentCommandService
             if (_serverAgentCurrent.TryGetValue(conversation.SourceKey, out var running))
             {
                 running.Task.CancelRequested = true;
+                _taskRuntime?.Cancel(running.Task.Id);
                 try
                 {
                     running.Cts.Cancel();
@@ -150,6 +161,11 @@ public sealed partial class AgentCommandService
 
         if (head is "status" or "状态")
         {
+            if (!isOpsAuthorized)
+            {
+                await _hooks.SendPlainAsync(conversation, "该运维查询仅限号主（BotOwner）操作。");
+                return true;
+            }
             var preferred = (_settings.AgentTarget ?? "auto").Trim();
             var serverOn = _settings.EnableServerAgent;
             var decision = ResolveRoute(want, named);
@@ -172,7 +188,7 @@ public sealed partial class AgentCommandService
 
 
         // 会话管理三块：查询（//sessions //runs）、改名（//rename）、增删切（//new //use //del //reset）
-        if (await TryHandleSessionQueryAsync(conversation, payload, head, want, named))
+        if (await TryHandleSessionQueryAsync(conversation, payload, head, want, named, isOpsAuthorized))
         {
             return true;
         }
@@ -192,7 +208,7 @@ public sealed partial class AgentCommandService
 
     /// <summary>会话查询：`//sessions`（含 `//sessions all`）、`//runs`（执行记录）。</summary>
     private async Task<bool> TryHandleSessionQueryAsync(
-        BotConversation conversation, string payload, string head, string want, string? named)
+        BotConversation conversation, string payload, string head, string want, string? named, bool isOpsAuthorized = true)
     {
         var rest = payload.Length > head.Length ? payload[(head.Length)..].Trim() : string.Empty;
 
@@ -201,6 +217,11 @@ public sealed partial class AgentCommandService
             // //sessions all = 所有聊天的总数与标题（“现在有多少个会话及其标题”）
             if (rest.Equals("all", StringComparison.OrdinalIgnoreCase) || rest is "全部" or "所有")
             {
+                if (!isOpsAuthorized)
+                {
+                    await _hooks.SendPlainAsync(conversation, "全局会话概览仅限号主（BotOwner）查询。");
+                    return true;
+                }
                 await _hooks.SendPlainAsync(conversation, DescribeAllSessions());
                 return true;
             }
@@ -429,12 +450,23 @@ public sealed partial class AgentCommandService
     /// 同一会话串行（忙的时候如实回一句），自备 CTS 是为了让 `//stop` 能把正在跑的 bash 也杀掉。
     /// </summary>
 
-    private async Task RunOnServerAsync(BotConversation conversation, QqChatMessage msg, string payload,
+    private Task RunOnServerAsync(BotConversation conversation, QqChatMessage msg, string payload,
         string? ack = null, bool natural = false)
+        => RunOnServerWithRoleAsync(conversation, msg, payload, ack, natural, isOpsAuthorized: true);
+
+    private async Task RunOnServerWithRoleAsync(BotConversation conversation, QqChatMessage msg, string payload,
+        string? ack = null, bool natural = false, bool isOpsAuthorized = false)
     {
         // A model-derived task is not fresh user consent and must not be persisted or delegated.
         if (BotAgent.Services.Memory.MemoryUseScope.HasMemory) return;
+        var convSettings = ResolveConversationSettings(conversation.SourceKey, PlatformSourceExecution.Current?.Context);
+        if (convSettings?.EffectiveToolTier == ConversationToolTier.ChatOnly)
+        {
+            await _hooks.SendPlainAsync(conversation, "当前会话工具档位为纯聊天（ChatOnly），未开放后台代理任务。");
+            return;
+        }
         using var memoryTurn = BotAgent.Services.Reply.UnifiedMemoryTurn.Begin(_unifiedMemory, msg.Envelope);
+        _taskRuntime?.SweepApprovals(Clock.Now);
         var admission = ServerAgentAdmission.TryAcquire(conversation.SourceKey, _serverAgentBusy, _serverAgentCurrent);
         if (admission is null)
         {
@@ -452,9 +484,13 @@ public sealed partial class AgentCommandService
             var useHistory = wantsContinue || _settings.AgentServerKeepContext;
             var serverSession = _agentSessions.EnsureCurrent(conversation.SourceKey, "server");
             var seededHistory = useHistory ? _agentSessions.History(conversation.SourceKey, serverSession.Id) : new List<(string, string)>();
+            var requireGeneralMode = !isOpsAuthorized || convSettings?.EffectiveToolTier == ConversationToolTier.ReadOnlyTools;
+            IReadOnlyList<string>? initialScope = requireGeneralMode
+                ? BuildGeneralAssistantToolScope(conversation.SourceKey)
+                : null;
             task = new AgentTask
             {
-                Id = $"s{Clock.Now.ToUnixTimeMilliseconds()}",
+                Id = $"s{Clock.Now.ToUnixTimeMilliseconds()}-{Guid.NewGuid().ToString("N")[..6]}",
                 SourceKey = conversation.SourceKey,
                 SourceLease = PlatformSourceExecution.Current,
                 Prompt = promptText,
@@ -463,20 +499,97 @@ public sealed partial class AgentCommandService
                 History = seededHistory,
                 UseHistory = useHistory,
                 QqHost = BuildQqHost(conversation, msg),
-                Natural = natural
+                Natural = natural,
+                ToolScope = initialScope
             };
             admission.Bind(task);
+
+            if (_taskRuntime is null)
+            {
+                task.RunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, promptText, null);
+                _hooks.Log($"[会话] 内置 agent 本轮历史 {seededHistory.Count} 条，指令长度 {promptText.Length}");
+                await _hooks.SendPlainAsync(conversation, natural
+                    ? (string.IsNullOrWhiteSpace(ack) ? "好，我去弄一下～" : ack.Trim())
+                    : $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
+                _ = Task.Run(() => RunAdmittedServerAsync(task, admission));
+                scheduled = true;
+                return;
+            }
+
+            var timeoutSeconds = Math.Clamp(_settings.AgentTimeoutSeconds > 0 ? _settings.AgentTimeoutSeconds : 300, 10, 900);
+            var runtimeReq = new AgentTaskRequest
+            {
+                Id = task.Id,
+                SourceKey = conversation.SourceKey,
+                SessionId = serverSession.Id,
+                Prompt = promptText,
+                Target = "server",
+                Timeout = TimeSpan.FromSeconds(timeoutSeconds),
+                CaptureResult = false,
+                ToolScope = initialScope
+            };
+            var prepared = _prepareTask is not null ? _prepareTask(runtimeReq) : runtimeReq;
+            task.ToolScope = prepared.ToolScope;
+            task.PythonToolLeases = prepared.PythonToolLeases;
+
+            var entry = new ChatTaskRuntimeBridge.Entry(task, admission, conversation, msg.Envelope, msg.IsGroup);
+            if (!_chatBridge.TryRegister(entry))
+            {
+                await _hooks.SendPlainAsync(conversation, "当前后台任务繁忙，请稍后再试。");
+                return;
+            }
+
             task.RunId = _agentSessions.StartRun(conversation.SourceKey, serverSession.Id, promptText, null);
-            _hooks.Log($"[会话] 内置 agent 本轮历史 {seededHistory.Count} 条，指令长度 {promptText.Length}");
-            await _hooks.SendPlainAsync(conversation, natural
-                ? (string.IsNullOrWhiteSpace(ack) ? "好，我去弄一下～" : ack.Trim())
-                : $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
-            _ = Task.Run(() => RunAdmittedServerAsync(task, admission));
+            var submit = _taskRuntime.Submit(prepared);
+            if (!submit.Accepted || submit.Task is null)
+            {
+                _chatBridge.TryRemoveExact(task.Id, entry);
+                entry.TryAbortBeforeStart();
+                task.Fail("未受理（" + submit.Rejection + "）");
+                await _hooks.SendPlainAsync(conversation, $"当前后台任务繁忙（{submit.Rejection}），请稍后再试。");
+                return;
+            }
+
             scheduled = true;
+            try
+            {
+                _hooks.Log($"[会话] 内置 agent 本轮历史 {seededHistory.Count} 条，指令长度 {promptText.Length}");
+                if (submit.Task.State == AgentTaskState.WaitingApproval && submit.Task.ApprovalRequestId is { Length: > 0 } reqId)
+                {
+                    entry.WasWaitingApproval = true;
+                    _chatBridge.TryRegisterApproval(entry, reqId, new(task.Id, conversation.SourceKey, task.SourceLease, msg.IsGroup));
+                    var allowGroupAdmins = msg.IsGroup && !Channels.IsOfficial(msg.Channel);
+                    var toolLabel = submit.Task.ApprovalToolId ?? "task";
+                    var announcement = $"【需要确认】后台任务（工具 {toolLabel}）｜编号 {reqId}"
+                        + $"（{(allowGroupAdmins ? "群主/管理员" : "配置名单中的审批人")}回复「同意 {reqId}」或「拒绝 {reqId}」；"
+                        + $"{ApprovalFlow.TtlSeconds} 秒内有效，过期作废，只能批一次）";
+                    using (ApprovalOutboundScope.EnterSystemAnnouncement())
+                    {
+                        await _hooks.SendPlainAsync(conversation, announcement);
+                    }
+                }
+                else
+                {
+                    await _hooks.SendPlainAsync(conversation, natural
+                        ? (string.IsNullOrWhiteSpace(ack) ? "好，我去弄一下～" : ack.Trim())
+                        : $"收到，我在服务器上跑一下（会话「{MaybeMask(serverSession.Name, conversation.SourceKey)}」）：{TextRules.Shorten(payload, 40)}");
+                }
+            }
+            catch
+            {
+                if (entry.WasWaitingApproval)
+                    _taskRuntime.Cancel(task.Id);
+                throw;
+            }
+            finally
+            {
+                entry.AckGate.TrySetResult();
+            }
         }
         catch (Exception ex)
         {
-            task?.Fail("任务启动失败（" + ex.GetType().Name + "）");
+            if (!scheduled)
+                task?.Fail("任务启动失败（" + ex.GetType().Name + "）");
             throw;
         }
         finally

@@ -8,7 +8,7 @@ namespace BotAgent.Adapters.Plugins;
 
 internal static class PluginSharedContractValidation
 {
-    internal static void Validate(PluginPackageManifest manifest)
+    internal static void Validate(PluginPackageManifest manifest, bool allowHistoricalHostContractDigest = false)
     {
         if (manifest.SharedContracts is null) return;
         if (manifest.ApiVersion != 1 || manifest.SharedContracts.Count > 32)
@@ -24,7 +24,8 @@ internal static class PluginSharedContractValidation
                 || version.Major > 65534 || version.Minor > 65534 || version.Build > 65534 || version.Revision > 65534
                 || !Regex.IsMatch(contract.Sha256 ?? "", "^[a-fA-F0-9]{64}$")
                 || contract.Owner != manifest.Id && !(manifest.Dependencies ?? []).Any(d => d?.Id == contract.Owner)
-                    && !PluginSharedContractRegistry.IsHostContract(contract))
+                    && !PluginSharedContractRegistry.IsHostContract(contract)
+                    && !(allowHistoricalHostContractDigest && PluginSharedContractRegistry.IsKnownHostContractIdentity(contract)))
                 throw new InvalidDataException("plugin_contract_declaration_invalid");
             PluginPackageValidation.ValidateRelativePath(contract.Name + ".dll");
             if (manifest.EntryAssembly!.Equals(contract.Name + ".dll", StringComparison.OrdinalIgnoreCase))

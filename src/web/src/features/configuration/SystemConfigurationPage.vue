@@ -9,6 +9,9 @@ import StatusBadge from '../../shared/ui/StatusBadge.vue'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
 import { buildDomainCatalog, runtimeLabel, runtimeTone } from '../capabilities/domain-catalog'
 import ConfigurationPage from './ConfigurationPage.vue'
+import UnifiedMemoryGovernanceCard from './UnifiedMemoryGovernanceCard.vue'
+import McpServersCard from './McpServersCard.vue'
+import AccessRolesCard from './AccessRolesCard.vue'
 
 type SystemTab = 'basic' | 'conversation' | 'agent' | 'reporting' | 'system-packages'
 
@@ -45,6 +48,9 @@ const basicRef = ref<InstanceType<typeof ConfigurationPage> | null>(null)
 const conversationRef = ref<InstanceType<typeof ConfigurationPage> | null>(null)
 const agentRef = ref<InstanceType<typeof ConfigurationPage> | null>(null)
 const reportingRef = ref<InstanceType<typeof ConfigurationPage> | null>(null)
+const umemGovRef = ref<InstanceType<typeof UnifiedMemoryGovernanceCard> | null>(null)
+const mcpServersRef = ref<InstanceType<typeof McpServersCard> | null>(null)
+const accessRolesRef = ref<InstanceType<typeof AccessRolesCard> | null>(null)
 
 const descriptors = ref<ZbaManagedDescriptor[]>([])
 const installedSnapshot = ref<ZbaInstalledPlugins | null>(null)
@@ -73,7 +79,9 @@ function allEditors(): Array<InstanceType<typeof ConfigurationPage>> {
 const tabDraftCounts = computed<Record<SystemTab, number>>(() => ({
   basic: basicRef.value?.draftCount ?? 0,
   conversation: conversationRef.value?.draftCount ?? 0,
-  agent: agentRef.value?.draftCount ?? 0,
+  agent: (agentRef.value?.draftCount ?? 0)
+    + (mcpServersRef.value?.hasUnsavedChanges() ? 1 : 0)
+    + (accessRolesRef.value?.hasUnsavedChanges() ? 1 : 0),
   reporting: reportingRef.value?.draftCount ?? 0,
   'system-packages': 0
 }))
@@ -85,17 +93,42 @@ const draftCount = computed(() =>
   + tabDraftCounts.value.reporting
 )
 
+async function confirmAgentCardLeave(reason: 'lock' | 'downgrade' | 'navigate'): Promise<boolean> {
+  if (reason === 'lock') return true
+  const hasMcp = mcpServersRef.value?.hasUnsavedChanges() === true
+  const hasRoles = accessRolesRef.value?.hasUnsavedChanges() === true
+  if (!hasMcp && !hasRoles) return true
+  if (reason === 'downgrade') {
+    mcpServersRef.value?.cancelForm()
+    accessRolesRef.value?.discardDraftsOnLeave()
+    return true
+  }
+  const ok = typeof window.confirm === 'function'
+    ? window.confirm('MCP 服务端或跨平台角色权限存在未保存草稿，确定放弃并离开当前页面？')
+    : true
+  if (ok) {
+    mcpServersRef.value?.cancelForm()
+    accessRolesRef.value?.discardDraftsOnLeave()
+  }
+  return ok
+}
+
 async function selectTab(next: SystemTab, event?: MouseEvent): Promise<void> {
   if (currentTab.value === next) return
   const trigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
   const activeEditor = editorFor(currentTab.value)
   if (activeEditor && !(await activeEditor.requestLeave('navigate', trigger))) return
+  if (currentTab.value === 'agent' && !(await confirmAgentCardLeave('navigate'))) return
   activeEditor?.discardSecretsOnLeave()
+  if (currentTab.value === 'agent') mcpServersRef.value?.discardSecretsOnLeave()
   currentTab.value = next
   if (next !== 'system-packages') {
     const first = !mountedTabs.value[next]
     mountedTabs.value[next] = true
-    if (!first) await editorFor(next)?.refreshOnEnter()
+    if (!first) {
+      await editorFor(next)?.refreshOnEnter()
+      if (next === 'conversation') void umemGovRef.value?.reload()
+    }
   } else if (descriptors.value.length === 0) {
     void loadSystemPackages()
   }
@@ -139,12 +172,28 @@ function jumpFromSystemPackage(pkg: { id: string; domain: 'provider' | 'platform
   }
 }
 
+function handleOpenCapabilities(owner?: string): void {
+  if (owner === 'platforms') { emit('open-domain', 'platforms'); return }
+  if (owner === 'models' || owner === 'model-providers') { emit('open-domain', 'providers', owner); return }
+  if (owner === 'platform' || owner?.startsWith('system.platform-')) { emit('open-domain', 'platforms', owner); return }
+  emit('open-domain', 'plugins', owner)
+}
+
 async function reload(): Promise<void> {
   if (currentTab.value === 'system-packages') {
     await loadSystemPackages()
     return
   }
   await editorFor(currentTab.value)?.reload()
+  if (currentTab.value === 'conversation') {
+    await umemGovRef.value?.reload()
+  }
+  if (currentTab.value === 'agent') {
+    await Promise.allSettled([
+      mcpServersRef.value?.reload(),
+      accessRolesRef.value?.reload()
+    ])
+  }
 }
 
 async function refreshOnEnter(): Promise<void> {
@@ -163,16 +212,20 @@ async function requestLeave(reason: 'lock' | 'downgrade' | 'navigate', trigger?:
   for (const editor of allEditors()) {
     if (!(await editor.requestLeave(reason, trigger))) return false
   }
+  if (!(await confirmAgentCardLeave(reason))) return false
   discardSecretsOnLeave()
   return true
 }
 
 function discardSecretsOnLeave(): void {
   for (const editor of allEditors()) editor.discardSecretsOnLeave()
+  mcpServersRef.value?.discardSecretsOnLeave()
 }
 
 function endSession(): void {
   for (const editor of allEditors()) editor.endSession()
+  mcpServersRef.value?.endSession()
+  accessRolesRef.value?.endSession()
   currentTab.value = 'basic'
   mountedTabs.value = { basic: true, conversation: false, agent: false, reporting: false }
   descriptors.value = []
@@ -249,10 +302,16 @@ defineExpose({
             :writes-enabled="props.writesEnabled"
             @enable-admin="emit('enable-admin')"
             @auth-expired="emit('auth-expired', $event)"
-            @open-capabilities="owner => emit('open-domain', (owner === 'models' || owner === 'model-providers') ? 'providers' : (owner === 'platform' || owner?.startsWith('system.platform-')) ? 'platforms' : 'plugins', owner)"
+            @open-capabilities="handleOpenCapabilities"
           />
         </div>
         <div v-if="mountedTabs.conversation" v-show="currentTab === 'conversation'" data-testid="sysconfig-pane-conversation">
+          <UnifiedMemoryGovernanceCard
+            ref="umemGovRef"
+            :client="props.client"
+            :active="props.active && currentTab === 'conversation'"
+            @auth-expired="emit('auth-expired', $event)"
+          />
           <ConfigurationPage
             ref="conversationRef"
             scope="conversation"
@@ -263,6 +322,7 @@ defineExpose({
             :writes-enabled="props.writesEnabled"
             @enable-admin="emit('enable-admin')"
             @auth-expired="emit('auth-expired', $event)"
+            @open-capabilities="handleOpenCapabilities"
           />
         </div>
         <div v-if="mountedTabs.agent" v-show="currentTab === 'agent'" data-testid="sysconfig-pane-agent">
@@ -274,6 +334,24 @@ defineExpose({
             :client="props.client"
             :mode="props.mode"
             :writes-enabled="props.writesEnabled"
+            @enable-admin="emit('enable-admin')"
+            @auth-expired="emit('auth-expired', $event)"
+          />
+          <McpServersCard
+            ref="mcpServersRef"
+            :client="props.client"
+            :mode="props.mode"
+            :writes-enabled="props.writesEnabled"
+            :active="props.active && currentTab === 'agent'"
+            @enable-admin="emit('enable-admin')"
+            @auth-expired="emit('auth-expired', $event)"
+          />
+          <AccessRolesCard
+            ref="accessRolesRef"
+            :client="props.client"
+            :mode="props.mode"
+            :writes-enabled="props.writesEnabled"
+            :active="props.active && currentTab === 'agent'"
             @enable-admin="emit('enable-admin')"
             @auth-expired="emit('auth-expired', $event)"
           />

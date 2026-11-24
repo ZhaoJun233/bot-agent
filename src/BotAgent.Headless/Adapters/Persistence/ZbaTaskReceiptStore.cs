@@ -69,6 +69,20 @@ internal sealed class ZbaTaskReceiptStore
         }
     }
 
+    internal bool TryRemove(string keyHash)
+    {
+        lock (_gate)
+        {
+            var idx = _receipts.FindIndex(item => item.KeyHash == keyHash);
+            if (idx < 0) return false;
+            var candidate = new List<ZbaTaskReceipt>(_receipts);
+            candidate.RemoveAt(idx);
+            if (!SaveLocked(candidate)) return false;
+            _receipts = candidate;
+            return true;
+        }
+    }
+
     internal ZbaTaskReceipt? Find(string keyHash)
     {
         lock (_gate)

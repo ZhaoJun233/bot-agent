@@ -44,8 +44,11 @@ public sealed partial class ReplyPipeline
     public void ForgetSession(string sourceKey)
     {
         _historyRequested.TryRemove(sourceKey, out _);
+        _toolNotes.Clear(sourceKey);
         DropPending(sourceKey);
     }
+
+    public void ClearToolNotes(string sourceKey) => _toolNotes.Clear(sourceKey);
 
     /// <summary>恢复出来的会话：历史按"还没拉过"算（首次收到消息时才去拉群历史）。</summary>
     public void MarkHistoryPending(string sourceKey) => _historyRequested.TryAdd(sourceKey, 0);

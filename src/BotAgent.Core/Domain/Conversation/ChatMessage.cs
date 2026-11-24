@@ -56,4 +56,7 @@ public sealed class ChatMessage
     /// 原始正文仍留在记录里（面板/日志是给运维看的），但**永远不会**再发给模型。
     /// </summary>
     public bool Recalled { get; set; }
+
+    /// <summary>外部转写/附件/卡片衍生消息置 false，禁止触发显式命令、审批与自然 Agent 派活。</summary>
+    public bool AllowsCommands { get; init; } = true;
 }

@@ -12,7 +12,9 @@ public static class ZbaHttpListenerAdapter
         CancellationToken ct)
     {
         var request = context.Request;
-        var body = await ReadBodyAsync(request, maxBodyBytes, ct).ConfigureAwait(false);
+        var effectiveMaxBodyBytes = Math.Max(maxBodyBytes,
+            endpoint.MaxBodyBytesFor(request.HttpMethod, request.Url?.AbsolutePath));
+        var body = await ReadBodyAsync(request, effectiveMaxBodyBytes, ct).ConfigureAwait(false);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string name in request.Headers)
         {
@@ -43,7 +45,7 @@ public static class ZbaHttpListenerAdapter
             }
         }
 
-        if (body.Length > maxBodyBytes) context.Response.KeepAlive = false;
+        if (body.Length > effectiveMaxBodyBytes) context.Response.KeepAlive = false;
         context.Response.ContentLength64 = response.Body.Length;
         if (response.Body.Length > 0)
             await context.Response.OutputStream.WriteAsync(response.Body, ct).ConfigureAwait(false);

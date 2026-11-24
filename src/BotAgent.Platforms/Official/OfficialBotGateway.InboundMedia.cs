@@ -6,34 +6,58 @@ namespace BotAgent.Services.Official;
 
 public sealed partial class OfficialBotGateway
 {
-    private sealed record InboundContent(string Text, IReadOnlyList<string>? Images,
-        IReadOnlyList<InboundVoiceAttachment>? Voices, bool AllowsCommands);
+    private sealed record InboundContent(
+        string Text,
+        IReadOnlyList<string>? Images,
+        IReadOnlyList<InboundVoiceAttachment>? Voices,
+        IReadOnlyList<InboundFileAttachment>? Files,
+        bool AllowsCommands);
 
     private static InboundContent ReadInboundContent(JsonObject data, string content)
     {
         var images = new List<string>();
         var voices = new List<InboundVoiceAttachment>();
+        var files = new List<InboundFileAttachment>();
         if (data["attachments"] is JsonArray attachments)
         {
             foreach (var item in attachments.Take(16).OfType<JsonObject>())
             {
                 var type = MediaText(item["content_type"], 80);
                 if (type?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true)
+                {
                     AddImage(item["url"]);
+                }
                 else if (string.Equals(type, "voice", StringComparison.OrdinalIgnoreCase) && voices.Count < 8)
-                    voices.Add(new(MediaUrl(item["voice_wav_url"]), MediaText(item["asr_refer_text"], 2000)));
+                {
+                    voices.Add(new(MediaUrl(item["voice_wav_url"]) ?? MediaUrl(item["url"]), MediaText(item["asr_refer_text"], 2000)));
+                }
+                else if (files.Count < 4
+                    && type?.StartsWith("video/", StringComparison.OrdinalIgnoreCase) != true
+                    && type?.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) != true)
+                {
+                    var fileUrl = MediaUrl(item["url"]);
+                    var fileName = MediaText(item["filename"], 200) ?? "attachment.dat";
+                    long? fileSize = item["size"] is JsonValue sv && sv.TryGetValue<long>(out var sz) && sz > 0 ? sz : null;
+                    if (fileUrl is not null)
+                        files.Add(new InboundFileAttachment(fileName, fileUrl, MediaText(item["id"], 128), fileSize, type));
+                }
             }
         }
         var card = data["ark_data"] as JsonObject;
         var isCard = data["ark_data"] is not null
             || data["message_type"] is JsonValue value && value.TryGetValue<int>(out var typeNumber) && typeNumber == 3;
-        var derived = voices.Count > 0 || isCard;
+        var derived = voices.Count > 0 || files.Count > 0 || isCard;
         if (derived)
         {
-            var body = new StringBuilder(isCard ? "[卡片消息（外部内容）]" : "[语音消息（外部内容）]");
+            var header = isCard ? "[卡片消息（外部内容）]"
+                : voices.Count > 0 ? "[语音消息（外部内容）]"
+                : "[文件消息（外部内容）]";
+            var body = new StringBuilder(header);
             Append("正文", BoundedMediaText(content, 16000));
             foreach (var voice in voices)
                 Append("平台参考转写", voice.Transcript ?? "暂无转写");
+            foreach (var file in files)
+                Append("文件附件", file.FileName);
             if (card is not null)
             {
                 Append("卡片类型", MediaText(card["ark_type"], 1000));
@@ -55,8 +79,12 @@ public sealed partial class OfficialBotGateway
                     body.Append('\n').Append(label).Append(": ").Append(text);
             }
         }
-        return new(content, images.Count == 0 ? null : images.AsReadOnly(),
-            voices.Count == 0 ? null : voices.AsReadOnly(), !derived);
+        return new(
+            content,
+            images.Count == 0 ? null : images.AsReadOnly(),
+            voices.Count == 0 ? null : voices.AsReadOnly(),
+            files.Count == 0 ? null : files.AsReadOnly(),
+            !derived);
 
         void AddImage(JsonNode? node)
         {

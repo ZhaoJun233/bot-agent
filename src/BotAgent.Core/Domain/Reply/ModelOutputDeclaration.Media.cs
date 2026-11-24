@@ -151,4 +151,66 @@ public readonly partial record struct ModelOutputDeclaration
 
         return (search, read);
     }
+
+    /// <summary>通用插件/MCP 工具调用声明（call / inlineCall，或 action=tool 附带的 arguments/args）：标量参数统一归一化为有界字符串。</summary>
+    private static InlineToolCall? ReadInlineCall(JsonElement root)
+    {
+        if (!root.TryGetProperty("call", out var node) && !root.TryGetProperty("inlineCall", out node))
+        {
+            if ((root.TryGetProperty("action", out var act) || root.TryGetProperty("动作", out act))
+                && act.ValueKind == JsonValueKind.String
+                && string.Equals(act.GetString()?.Trim(), "tool", StringComparison.OrdinalIgnoreCase)
+                && (root.TryGetProperty("args", out _) || root.TryGetProperty("arguments", out _)))
+            {
+                node = root;
+            }
+            else
+            {
+                return null;
+            }
+        }
+        if (node.ValueKind != JsonValueKind.Object) return null;
+
+        string? tool = null;
+        if ((node.TryGetProperty("tool", out var t) || node.TryGetProperty("id", out t)
+            || node.TryGetProperty("name", out t) || node.TryGetProperty("toolRequest", out t)
+            || node.TryGetProperty("tool_request", out t))
+            && t.ValueKind == JsonValueKind.String)
+            tool = t.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(tool) || tool.Length < 2 || tool.Length > BotAgent.Domain.Mcp.McpLimits.MaxToolNameLength) return null;
+        foreach (var ch in tool)
+        {
+            if (!((ch is >= 'a' and <= 'z') || (ch is >= 'A' and <= 'Z') || (ch is >= '0' and <= '9')
+                || ch is '.' or '_' or '-'))
+                return null;
+        }
+
+        var args = new Dictionary<string, string>(StringComparer.Ordinal);
+        if ((node.TryGetProperty("args", out var argObj) || node.TryGetProperty("arguments", out argObj))
+            && argObj.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in argObj.EnumerateObject())
+            {
+                if (args.Count >= 8 || string.IsNullOrWhiteSpace(prop.Name) || prop.Name.Length > 32)
+                    return null;
+                var val = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString(),
+                    JsonValueKind.Number => prop.Value.GetRawText(),
+                    JsonValueKind.True => "true",
+                    JsonValueKind.False => "false",
+                    JsonValueKind.Null => null,
+                    _ => "\0"
+                };
+                if (val == "\0") return null;
+                if (val is not null)
+                {
+                    if (val.Length > 500) return null;
+                    args[prop.Name] = val;
+                }
+            }
+        }
+
+        return new InlineToolCall(tool, args);
+    }
 }

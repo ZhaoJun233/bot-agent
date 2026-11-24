@@ -70,6 +70,12 @@ describe('平台策略草稿', () => {
   it('条目键与标题能区分账户默认目标和实例目标', () => {
     expect(policyKey({ kind: 'accountDefault', platformId: 'feishu', accountScope: 'default' }))
       .toBe('account:feishu:default')
+    expect(policyKey({ kind: 'accountDefault', platformId: 'qq.private', accountScope: 'legacy' }))
+      .toBe('account:qq.private:legacy')
+    expect(policyTitle({ kind: 'accountDefault', platformId: 'qq.private', accountScope: 'legacy' }))
+      .toBe('qq.private · 默认账号')
+    expect(policyTitle({ kind: 'accountDefault', platformId: 'feishu', accountScope: 'corp-a' }))
+      .toBe('feishu · corp-a')
     expect(policyTitle({ kind: 'instance', key: { platformId: 'qq.private', accountScope: 'legacy', instanceId: '' } }))
       .toContain('未命名')
     expect(policyTitle({ kind: 'instance', key: { platformId: 'qq.private', accountScope: 'legacy', instanceId: 'group:10001' } }))

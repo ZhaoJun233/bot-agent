@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Qq;
 using BotAgent.Services.Qq;
 
@@ -348,5 +349,112 @@ internal sealed class OneBotQueries
         // 用现成的 StripCqCode 转成 [图片]/@某人 这种可读写法。
         var body = OneBotInboundParser.StripCqCode(text.ToString(), _selfId(), out _).Trim();
         return (body.Length == 0 ? null : body, senderId);
+    }
+
+    private const int MaxBase64VoiceChars = (8 * 1024 * 1024 * 4 / 3) + 64;
+    private const int MaxBase64FileChars = (10 * 1024 * 1024 * 4 / 3) + 64;
+
+    public async Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundVoiceAsync(
+        InboundVoiceAttachment voice,
+        long messageId,
+        CancellationToken ct = default)
+    {
+        var safeRef = OneBotInboundParser.SanitizeOpaqueMediaRef(voice.PlatformAudioRef, allowLeadingSlashId: false);
+        if (safeRef is not null)
+        {
+            var payload = new JsonObject
+            {
+                ["file"] = safeRef,
+                ["out_format"] = "mp3"
+            }.ToJsonString();
+            var result = await _client.SendAsync("get_record", payload, ct).ConfigureAwait(false);
+            var (bytes, url) = ReadActionPayloadBytesOrUrl(result?["data"], MaxBase64VoiceChars);
+            if (bytes is not null || url is not null)
+                return (bytes, url ?? voice.WavUrl, "voice.mp3");
+
+            var fileReq = new JsonObject { ["file_id"] = safeRef }.ToJsonString();
+            var fallback = await _client.SendAsync("get_file", fileReq, ct).ConfigureAwait(false);
+            var (fbBytes, fbUrl) = ReadActionPayloadBytesOrUrl(fallback?["data"], MaxBase64VoiceChars);
+            if (fbBytes is not null || fbUrl is not null)
+                return (fbBytes, fbUrl ?? voice.WavUrl, "voice.mp3");
+        }
+
+        return (null, voice.WavUrl, "voice.wav");
+    }
+
+    public async Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundFileAsync(
+        InboundFileAttachment file,
+        bool isGroup,
+        long targetId,
+        long messageId,
+        CancellationToken ct = default)
+    {
+        var safeName = OneBotInboundParser.SafeDisplayFileName(file.FileName);
+        if (!string.IsNullOrWhiteSpace(file.DownloadUrl))
+            return (null, file.DownloadUrl, safeName);
+
+        if (string.IsNullOrWhiteSpace(file.PlatformFileId))
+            return (null, null, safeName);
+
+        var rawRef = file.PlatformFileId.Trim();
+        var busid = 0;
+        var candidateId = rawRef;
+        var sep = rawRef.IndexOf('|');
+        if (sep > 0 && int.TryParse(rawRef[..sep], out var parsedBus))
+        {
+            busid = parsedBus;
+            candidateId = rawRef[(sep + 1)..];
+        }
+
+        var fileId = OneBotInboundParser.SanitizeOpaqueMediaRef(candidateId, allowLeadingSlashId: isGroup);
+        if (fileId is null)
+            return (null, null, safeName);
+
+        if (isGroup && targetId > 0)
+        {
+            var req = new JsonObject { ["group_id"] = targetId, ["file_id"] = fileId };
+            if (busid > 0) req["busid"] = busid;
+            var res = await _client.SendAsync("get_group_file_url", req.ToJsonString(), ct).ConfigureAwait(false);
+            var (bytes, url) = ReadActionPayloadBytesOrUrl(res?["data"], MaxBase64FileChars);
+            if (bytes is not null || url is not null)
+                return (bytes, url, safeName);
+        }
+        else if (!isGroup && targetId > 0)
+        {
+            var req = new JsonObject { ["user_id"] = targetId, ["file_id"] = fileId };
+            var res = await _client.SendAsync("get_private_file_url", req.ToJsonString(), ct).ConfigureAwait(false);
+            var (bytes, url) = ReadActionPayloadBytesOrUrl(res?["data"], MaxBase64FileChars);
+            if (bytes is not null || url is not null)
+                return (bytes, url, safeName);
+        }
+
+        var flatFileId = OneBotInboundParser.SanitizeOpaqueMediaRef(fileId, allowLeadingSlashId: false);
+        if (flatFileId is null)
+            return (null, null, safeName);
+
+        var generic = await _client.SendAsync("get_file", new JsonObject { ["file_id"] = flatFileId }.ToJsonString(), ct).ConfigureAwait(false);
+        var (genBytes, genUrl) = ReadActionPayloadBytesOrUrl(generic?["data"], MaxBase64FileChars);
+        return (genBytes, genUrl, safeName);
+    }
+
+    private static (byte[]? Bytes, string? Url) ReadActionPayloadBytesOrUrl(JsonNode? data, int maxBase64Chars)
+    {
+        if (data is null) return (null, null);
+        var b64 = OneBotInboundParser.NodeAsText(data["base64"]);
+        if (!string.IsNullOrWhiteSpace(b64) && b64.Length <= maxBase64Chars)
+        {
+            try
+            {
+                var cleaned = b64.StartsWith("base64://", StringComparison.OrdinalIgnoreCase) ? b64[9..] : b64;
+                return (Convert.FromBase64String(cleaned.Trim()), null);
+            }
+            catch (FormatException)
+            {
+                // Fall through to URL if base64 is malformed.
+            }
+        }
+
+        var url = OneBotInboundParser.ValidHttpUrl(OneBotInboundParser.NodeAsText(data["url"]));
+        return (null, url);
     }
 }

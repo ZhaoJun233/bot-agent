@@ -117,12 +117,60 @@ internal static class SharedContractChecks
             await packages.ApplyAtStartupAsync(consumer.Id, context, registry, true);
             check(((IReplyPolicyPlugin)registry.Find(consumer.Id)!).BlockReason(new("synthetic", false, false)) == "usage:31:provider-1:consumer-2",
                 "same exact contract supports fresh bound generations");
+            VerifyHistoricalHostContractUpgradeValidation(check);
         }
         finally
         {
             await registry.StopAllAsync(CancellationToken.None);
             try { Directory.Delete(root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    private static void VerifyHistoricalHostContractUpgradeValidation(Action<bool, string> check)
+    {
+        var stalePlatformsContract = new PluginSharedContract(
+            "BotAgent.Platforms.Contracts", "1.0.0.0", new string('a', 64), "system.platform-local");
+        var publicConsumer = new PluginPackageManifest(
+            "test.platform.consumer", "1.0.0", "Consumer.dll", "Consumer",
+            new string('b', 64), "https://example.com/consumer.zip")
+        {
+            SharedContracts = [stalePlatformsContract]
+        };
+        var publicRejected = false;
+        try { PluginPackageValidation.Validate(publicConsumer); }
+        catch (InvalidDataException ex) when (ex.Message == "plugin_contract_declaration_invalid") { publicRejected = true; }
+        check(publicRejected, "public validation always rejects unowned stale host contract digest");
+
+        var validateInternal = typeof(PluginPackageValidation).GetMethod(
+            "Validate",
+            BindingFlags.Static | BindingFlags.NonPublic,
+            [typeof(PluginPackageManifest), typeof(bool), typeof(bool), typeof(bool)])
+            ?? throw new InvalidOperationException("Missing internal PluginPackageValidation.Validate overload.");
+
+        var platformConsumer = new PluginPackageManifest(
+            "system.platform-qq-private", "1.0.0", "BotAgent.Package.PlatformQqPrivate.dll",
+            "BotAgent.Packages.PlatformQqPrivate.PlatformQqPrivatePlugin",
+            new string('b', 64), "host-distribution://system.platform-qq-private/1.0.0")
+        {
+            SharedContracts = [stalePlatformsContract]
+        };
+
+        var strictRejected = false;
+        try { validateInternal.Invoke(null, [platformConsumer, false, true, false]); }
+        catch (TargetInvocationException ex) when (ex.InnerException is InvalidDataException ide && ide.Message == "plugin_contract_declaration_invalid") { strictRejected = true; }
+        check(strictRejected, "strict internal validation rejects stale host contract digest");
+
+        validateInternal.Invoke(null, [platformConsumer, false, true, true]);
+        check(true, "historical host upgrade validation accepts matching host contract identity with stale digest");
+
+        var wrongOwner = platformConsumer with
+        {
+            SharedContracts = [stalePlatformsContract with { Owner = "system.other" }]
+        };
+        var wrongOwnerRejected = false;
+        try { validateInternal.Invoke(null, [wrongOwner, false, true, true]); }
+        catch (TargetInvocationException ex) when (ex.InnerException is InvalidDataException ide && ide.Message == "plugin_contract_declaration_invalid") { wrongOwnerRejected = true; }
+        check(wrongOwnerRejected, "historical host upgrade validation rejects mismatched host contract owner");
     }
 
     private static byte[] Zip(params string[] files)

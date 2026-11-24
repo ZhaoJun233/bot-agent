@@ -4,7 +4,7 @@ using BotAgent.Services.Plugins;
 namespace BotAgent.Services.Voice;
 
 /// <summary>
-/// 语音（TTS）宿主薄门面：连发熔断、建议节奏、分段 URL 拼装、面板试听与样本拼接均归
+/// 语音（TTS + STT）宿主薄门面：连发熔断、建议节奏、分段 URL 拼装、面板试听、样本拼接与云端语音转写均归
 /// <c>preset.feature.voice</c> 独立包经 <see cref="IVoiceRuntimeContribution" /> 拥有；缺包或禁用时 fail-closed。
 /// </summary>
 public sealed class VoiceUseCase : IVoiceUseCase
@@ -16,6 +16,7 @@ public sealed class VoiceUseCase : IVoiceUseCase
     private readonly SettingsBox _box;
     private readonly Action<string> _log;
     private readonly PluginManager? _plugins;
+    private readonly CloudSttClient? _stt;
     private IVoiceRuntimeContribution? _direct;
 
     public VoiceUseCase(
@@ -23,13 +24,15 @@ public sealed class VoiceUseCase : IVoiceUseCase
         SettingsBox box,
         Action<string> log,
         PluginManager? plugins = null,
-        IVoiceRuntimeContribution? direct = null)
+        IVoiceRuntimeContribution? direct = null,
+        CloudSttClient? stt = null)
     {
         _voice = voice;
         _box = box;
         _log = log;
         _plugins = plugins;
         _direct = direct;
+        _stt = stt;
     }
 
     private AppSettings _settings => _box.Current;
@@ -56,6 +59,24 @@ public sealed class VoiceUseCase : IVoiceUseCase
 
     /// <summary>语音客户端（面板健康探测 / 音色克隆管理传输层；TTS 地址没配好时为 null）。</summary>
     public VoiceService? Client => _voice;
+
+    public bool IsSttEnabled
+    {
+        get
+        {
+            if (!IsPluginAvailable) return false;
+            try
+            {
+                return CurrentRuntime?.IsSttEnabled ?? (_stt?.IsEnabled == true);
+            }
+            catch (InvalidOperationException ex) when (IsUnavailable(ex))
+            {
+                return false;
+            }
+        }
+    }
+
+    public int MaxSttDurationSeconds => _stt?.MaxDurationSeconds ?? 60;
 
     /// <summary>面板上「语音积极性」对应给模型的建议节奏（秒）。</summary>
     public int SuggestIntervalSeconds
@@ -112,6 +133,47 @@ public sealed class VoiceUseCase : IVoiceUseCase
         catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return new List<string>(); }
     }
 
+    public async Task<(string? Transcript, string ReasonCode)> TranscribeAsync(
+        byte[] audioData,
+        string fileName,
+        CancellationToken ct = default)
+    {
+        if (!IsSttEnabled)
+            return (null, "stt_disabled");
+
+        var runtime = CurrentRuntime;
+        if (runtime is null)
+        {
+            if (_stt is null) return (null, "plugin_contribution_unavailable");
+            var direct = await _stt.TranscribeAsync(audioData, fileName, ct).ConfigureAwait(false);
+            return (direct.Transcript, direct.ReasonCode);
+        }
+
+        try
+        {
+            var outcome = await runtime.TranscribeAsync(audioData, fileName, ct).ConfigureAwait(false);
+            return (outcome.Transcript, outcome.ReasonCode);
+        }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex))
+        {
+            return (null, "plugin_contribution_unavailable");
+        }
+    }
+
+    public async Task<(string? Transcript, string ReasonCode)> TranscribeFromUrlAsync(
+        string audioUrl,
+        string fileName,
+        CancellationToken ct = default)
+    {
+        if (!IsSttEnabled || _stt is null)
+            return (null, "stt_disabled");
+
+        var (data, resolvedName, reason) = await _stt.DownloadAudioAsync(audioUrl, fileName, ct).ConfigureAwait(false);
+        if (data is null)
+            return (null, reason);
+        return await TranscribeAsync(data, resolvedName, ct).ConfigureAwait(false);
+    }
+
     public async Task<(byte[]? Data, string? Error)> TestAsync(
         string text,
         string? voiceOverride,
@@ -161,6 +223,8 @@ public sealed class VoiceUseCase : IVoiceUseCase
 
         public string? ClientVoiceName => owner._voice?.VoiceName;
 
+        public bool IsSttEnabled => owner._stt?.IsEnabled == true;
+
         public string? BuildSpeakUrl(string text, string? emotionOverride, int? speedOverride, int? pitchOverride)
             => owner._voice?.BuildSpeakUrl(text, emotionOverride: emotionOverride, speedOverride: speedOverride, pitchOverride: pitchOverride);
 
@@ -174,6 +238,11 @@ public sealed class VoiceUseCase : IVoiceUseCase
             var (data, error) = await owner._voice.SynthesizeAsync(text, voiceOverride, speedOverride, ct).ConfigureAwait(false);
             return new(data, error);
         }
+
+        public Task<VoiceTranscriptionOutcome> TranscribeAsync(byte[] audioData, string fileName, CancellationToken ct)
+            => owner._stt is null
+                ? Task.FromResult(new VoiceTranscriptionOutcome(false, null, "stt_unavailable"))
+                : owner._stt.TranscribeAsync(audioData, fileName, ct);
 
         public void Log(string message) => owner._log(message);
     }

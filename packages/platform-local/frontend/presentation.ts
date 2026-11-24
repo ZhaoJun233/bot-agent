@@ -7,6 +7,7 @@ export const platformLocalPresentation = Object.freeze({
   icon: 'terminal' as const,
   title: '本地调试通道',
   summary: '本地合成回归与面板调试通道（白名单为空默认关闭）',
+  credentialMode: 'none' as const,
   credentialHint: '本地调试通道无需外部接入凭据；配置本地通道 ID 后即可启用合成调试与回归验证。',
   fields: [
     { section: 'platform' as const, key: 'localChannelIds' }

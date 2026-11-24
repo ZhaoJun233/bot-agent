@@ -118,6 +118,14 @@ public sealed partial class PluginSettingsStore
 
     public string ResolveRuntimeValues(PluginPackageManifest manifest) => ResolveRuntimeValues(manifest, out _);
 
+    /// <summary>无副作用读取当前清单声明字段的有效值（含 secret 明文），供宿主端口按需实时读取，不改 Prepared/Applied 标记。</summary>
+    public IReadOnlyDictionary<string, JsonElement> ReadEffectiveValues(PluginPackageManifest manifest)
+    {
+        var schema = ReadSchema(manifest);
+        if (manifest.Configuration is not null) return ReadBoundManifest(manifest, schema).Values;
+        return ReadSnapshot(manifest.Id, schema, allowMissing: true).Values;
+    }
+
     /// <summary>Only this manifest's declared values are returned; call MarkApplied after successful initialization.</summary>
     public string ResolveRuntimeValues(PluginPackageManifest manifest, out long revision)
     {

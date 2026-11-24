@@ -8,6 +8,7 @@ export const platformQqOfficialPresentation = Object.freeze({
   supportsMessagingInspection: true,
   title: 'QQ 官方开放平台',
   summary: '官方 AppID、沙箱环境、群/私聊白名单与 OpenID 隔离通道策略',
+  credentialMode: 'required-env' as const,
   credentialHint: 'QQ 官方 AppSecret 仅从部署环境变量（BOTAGENT_OFFICIAL_APP_SECRET / QQCHAT_OFFICIAL_APP_SECRET）读取，Web 面板不接收也不回显该密钥。',
   fields: [
     { section: 'platform' as const, key: 'officialEnabled' },

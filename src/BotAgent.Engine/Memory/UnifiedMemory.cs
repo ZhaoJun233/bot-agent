@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Memory;
 using BotAgent.Domain.Messaging;
@@ -60,16 +61,38 @@ public sealed class UnifiedMemory : IUnifiedMemory
         }
     }
 
+    public UnifiedMemoryGovernanceSummary GetGovernanceSummary()
+    {
+        lock (_gate)
+        {
+            if (_faulted) return new(false, true, _state.Revision, 0, 0, _state.Suppressions.Length);
+            var now = _clock.GetUtcNow();
+            var confirmed = _state.Entries.Count(entry => entry.Confirmed);
+            var pending = _state.Entries.Count(entry =>
+                !entry.Confirmed && entry.ConfirmationToken != Guid.Empty && entry.ConfirmationExpiresAt > now);
+            return new(_state.Enabled, false, _state.Revision, confirmed, pending, _state.Suppressions.Length);
+        }
+    }
+
     public UnifiedMemoryRead Read(UnifiedMemoryContext context, string query, int limit = 3)
     {
         lock (_gate)
         {
-            if (_faulted || !_state.Enabled || !UnifiedMemoryPolicy.Reliable(context) || string.IsNullOrWhiteSpace(query)) return new([], null);
-            var entries = _state.Entries.Where(entry => UnifiedMemoryPolicy.CanRead(entry, context)
-                && UnifiedMemoryPolicy.Relevant(entry.Fact, query))
+            if (_faulted || !_state.Enabled || !UnifiedMemoryPolicy.Reliable(context) || string.IsNullOrWhiteSpace(query) || limit <= 0)
+                return new([], null);
+            var readable = _state.Entries.Where(entry => UnifiedMemoryPolicy.CanRead(entry, context)
+                && UnifiedMemoryPolicy.Relevant(entry.Fact, query)).ToArray();
+            var preferences = readable
+                .Where(entry => entry.Fact.Category != UnifiedMemoryFactCategory.PersonalNote)
                 .GroupBy(entry => entry.Fact.Category)
                 .Where(group => group.Select(entry => entry.Fact.Value).Distinct().Count() == 1)
-                .Select(group => group.First()).Take(Math.Clamp(limit, 0, 3)).ToImmutableArray();
+                .Select(group => group.First());
+            var notes = readable
+                .Where(entry => entry.Fact.Category == UnifiedMemoryFactCategory.PersonalNote)
+                .OrderByDescending(entry => UnifiedMemoryPolicy.NoteRelevanceScore(entry.Fact.Value, query))
+                .ThenBy(entry => entry.FactId)
+                .Take(2);
+            var entries = preferences.Concat(notes).Take(Math.Clamp(limit, 0, 7)).ToImmutableArray();
             if (entries.IsEmpty || !HasReceiptCapacity()) return new([], null);
             var receipt = new UnifiedMemoryReceipt(Guid.NewGuid());
             _receipts.Add(receipt.Token, new(_state.Revision, context, _clock.GetUtcNow().AddMinutes(10),
@@ -142,6 +165,25 @@ public sealed class UnifiedMemory : IUnifiedMemory
             return _faulted || subject is null || !UnifiedMemoryPolicy.ValidParticipant(subject)
                 || !UnifiedMemoryPolicy.ValidScope(source) || subject.PlatformId != source.Conversation.PlatformId
                 || subject.AccountScope != source.Conversation.AccountScope || _state.Suppressions.Contains(new(subject, source));
+        }
+    }
+
+    public bool IsConversationSuppressed(DriverKey driver, ConversationId conversation)
+    {
+        lock (_gate)
+        {
+            if (_faulted) return true;
+            var scope = new UnifiedMemoryScope(driver, conversation);
+            return _state.Suppressions.Any(marker => marker.Source == scope);
+        }
+    }
+
+    public ImmutableArray<UnifiedMemoryScope> GetSuppressedScopes()
+    {
+        lock (_gate)
+        {
+            if (_faulted) return [];
+            return _state.Suppressions.Select(marker => marker.Source).Distinct().ToImmutableArray();
         }
     }
 

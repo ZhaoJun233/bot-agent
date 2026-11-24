@@ -409,3 +409,45 @@ for (const mode of ['retry', 'card'] as const) {
     expect(keys[2]).toBe(keys[0])
   })
 }
+
+test('消息平台：真实宿主展示友好实例标签、三态凭据文案且状态接口不误报 credential_missing', async ({ page }) => {
+  await connect(page, READ)
+
+  const qqCard = page.getByTestId('cap-item-driver:qq.private:legacy:')
+  await expect(qqCard).toBeVisible()
+  await expect(qqCard).toContainText('默认账号')
+  await expect(qqCard).not.toContainText('legacy（默认实例）')
+  await expect(qqCard).toContainText('可选（未设令牌）')
+
+  const localCard = page.getByTestId('cap-item-driver:local:legacy:')
+  if (await localCard.count()) {
+    await expect(localCard).toContainText('默认账号')
+    await expect(localCard).toContainText('无需凭据')
+  }
+
+  // 详情抽屉同时展示友好范围、原始技术标识与凭据说明
+  await page.getByTestId('cap-inspect-driver:qq.private:legacy:').click()
+  const detail = page.getByTestId('platform-detail-drawer')
+  await expect(detail).toBeVisible()
+  await expect(detail).toContainText('默认账号')
+  await expect(detail).toContainText('legacy')
+  await expect(detail).toContainText('可选（未设令牌）')
+  await expect(detail).toContainText('环境变量')
+  await page.getByTestId('platform-detail-drawer-close').click()
+
+  // 后端 /zba/v1/status 不再对无令牌 qq.private / local 误报 credential_missing
+  const statusRes = await page.request.get('/zba/v1/status', {
+    headers: { Authorization: `Bearer ${READ}` }
+  })
+  expect(statusRes.status()).toBe(200)
+  const statusBody = (await statusRes.json()) as {
+    components: Array<{ id: string; reasonCode: string | null }>
+  }
+  const qqComponent = statusBody.components.find((c) => c.id === 'driver:qq.private/legacy/')
+  expect(qqComponent).toBeDefined()
+  expect(qqComponent?.reasonCode).not.toBe('credential_missing')
+  const localComponent = statusBody.components.find((c) => c.id === 'driver:local/legacy/')
+  if (localComponent) {
+    expect(localComponent.reasonCode).not.toBe('credential_missing')
+  }
+})

@@ -27,6 +27,37 @@ internal static class OfficialMessagingCapabilities
         ]);
     }
 
+    internal static MessagingCapabilitySnapshot ProjectWithRuntime(EffectivePlatformPolicy? policy,
+        DateTimeOffset observedAt, bool markdownEnabled, bool markdownPermissionDenied)
+    {
+        MessagingCapability Implemented(string id, string feature, string? action = null) => new(id,
+            MessagingImplementation.Implemented, PolicyCondition(policy, feature, action),
+            new(MessagingConditionState.Unknown, "application_grant_unverified"),
+            new(MessagingConditionState.Unknown, id == "recall" ? "own_message_proof_required" : "conversation_not_selected"),
+            new(MessagingConditionState.Unknown, "actor_not_selected"));
+        MessagingCapability Deferred(string id) => new(id, MessagingImplementation.Deferred,
+            new(MessagingConditionState.Unknown, "implementation_deferred"),
+            new(MessagingConditionState.Unknown, "application_grant_unverified"),
+            new(MessagingConditionState.Unknown, "conversation_not_selected"),
+            new(MessagingConditionState.Unknown, "actor_not_selected"));
+        return new(observedAt,
+        [
+            Implemented("text", "text"), Implemented("image", "image"), Implemented("voice", "voice"),
+            Implemented("quote", "quote"), Implemented("send", "text", "send"),
+            Implemented("recall", "recall", "recall"),
+            Deferred("role"), Deferred("bot_state"), Deferred("ban"), Deferred("kick"),
+            new("markdown",
+                MessagingImplementation.Implemented,
+                markdownEnabled ? PolicyCondition(policy, "text", "send") : new(MessagingConditionState.Blocked, "disabled_by_config"),
+                markdownPermissionDenied
+                    ? new(MessagingConditionState.Unavailable, "permission_denied")
+                    : new(MessagingConditionState.Unknown, "application_grant_unverified"),
+                new(MessagingConditionState.Unknown, "conversation_not_selected"),
+                new(MessagingConditionState.Unknown, "actor_not_selected")),
+            Deferred("keyboard"), Deferred("menu")
+        ]);
+    }
+
     private static MessagingCondition PolicyCondition(EffectivePlatformPolicy? policy, string feature, string? action)
     {
         if (policy is null || policy.Context.PlatformId != PlatformId.QqOfficial)

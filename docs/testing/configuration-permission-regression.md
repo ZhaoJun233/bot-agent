@@ -64,6 +64,5 @@ cd src/web && npx playwright test --project=chromium tests/e2e/model-and-whiteli
 ## 5. 相关
 
 - `docs/operations/ci-quality-gates.md`：9 项必需检查与不稳定登记表。
-- `docs/baseline/report-2026-10-31.md`：全量基线数字与时点。
 - `docs/architecture/platform-policy-resolution.md`：白名单/平台策略的判定顺序（改语义先读这页）。
 - `docs/architecture/model-configuration-apply-path.md`：模型配置从保存到发送的三段链路。

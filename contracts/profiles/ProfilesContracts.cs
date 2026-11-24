@@ -35,7 +35,16 @@ public interface IProfilesHostPorts
 
     Task<string?> SummarizePersonaAsync(string displayName, string existingSummary, string[] newMessages, int maxChars);
 
+    Task<string?> SummarizeCandidateAsync(ProfileSummaryCandidateDto candidate, int maxChars)
+        => SummarizePersonaAsync(string.IsNullOrWhiteSpace(candidate.Name) ? $"QQ{candidate.Uid}" : candidate.Name,
+            candidate.ExistingSummary, candidate.NewMessages, maxChars);
+
     void ApplySummary(string uid, string scope, string summary, long throughSeq, int foldedCount);
+    bool TryApplySummary(string uid, string scope, string summary, long throughSeq, int foldedCount)
+    {
+        ApplySummary(uid, scope, summary, throughSeq, foldedCount);
+        return true;
+    }
 
     void Log(string message);
 

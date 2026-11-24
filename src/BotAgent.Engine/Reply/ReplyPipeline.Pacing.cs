@@ -1,6 +1,7 @@
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Qq;
 using BotAgent.Engine.Runtime;
+using BotAgent.Services.Platforms;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Conversations;
 
@@ -17,7 +18,7 @@ public sealed partial class ReplyPipeline
     private bool _pacingStopped;
 
     private sealed record PacedReplyOwner(BotConversation Conversation, PlatformSourceLease? Source,
-        object Epoch, AppSettings Snapshot);
+        object Epoch, AppSettings Snapshot, EffectiveConversationSettings? ConversationSettings);
 
     private sealed class PacedReplyWork(ReplyPacingTurn turn, PacedReplyOwner owner)
     {
@@ -53,12 +54,33 @@ public sealed partial class ReplyPipeline
     }
 
     private PacedReplyOwner CapturePacedOwner(BotConversation conversation, AppSettings? snapshot = null, object? expectedEpoch = null)
-        => new(conversation, ResolveReplySource(conversation), expectedEpoch ?? CaptureReplyEpoch(conversation), snapshot ?? _settings.Snapshot());
+    {
+        var source = ResolveReplySource(conversation);
+        var snap = snapshot ?? _settings.Snapshot();
+        var policy = source is not null
+            ? _platformPolicies.Resolve(source.Context)
+            : _platformPolicies.ResolveForChannel(Channels.ChannelOf(conversation.SourceKey));
+        var conv = ConversationProfileResolver.Resolve(snap, policy, conversation.SourceKey);
+        return new(conversation, source, expectedEpoch ?? CaptureReplyEpoch(conversation), snap, conv);
+    }
 
-    private static ReplyPacingOptions PacingOptions(AppSettings snapshot) => new(
-        TimeSpan.FromSeconds(snapshot.GroupContinuationWaitSeconds),
-        TimeSpan.FromSeconds(snapshot.PrivateContinuationWaitSeconds),
-        snapshot.GroupInterjectionProbability, TimeSpan.FromSeconds(snapshot.GroupInterjectionCooldownSeconds));
+    private static ReplyPacingOptions PacingOptions(PacedReplyOwner owner)
+    {
+        if (owner.ConversationSettings is { } conv)
+        {
+            return new(
+                TimeSpan.FromSeconds(conv.Pacing.GroupContinuationWaitSeconds),
+                TimeSpan.FromSeconds(conv.Pacing.PrivateContinuationWaitSeconds),
+                conv.Pacing.GroupInterjectionProbability,
+                TimeSpan.FromSeconds(conv.Pacing.GroupInterjectionCooldownSeconds));
+        }
+        var snapshot = owner.Snapshot;
+        return new(
+            TimeSpan.FromSeconds(snapshot.GroupContinuationWaitSeconds),
+            TimeSpan.FromSeconds(snapshot.PrivateContinuationWaitSeconds),
+            snapshot.GroupInterjectionProbability,
+            TimeSpan.FromSeconds(snapshot.GroupInterjectionCooldownSeconds));
+    }
 
     private void ObservePacedReply(BotConversation conversation, long? triggerMessageId, bool proactive, bool directInWindow, object epoch)
     {
@@ -81,10 +103,10 @@ public sealed partial class ReplyPipeline
         {
             if (!_pacingEnabled || !IsPacedOwnerCurrent(owner)) return;
             var observation = proactive
-                ? _pacingCoordinator.ObserveProactive(conversation.SourceKey, message.Seq, PacingOptions(owner.Snapshot), owner)
+                ? _pacingCoordinator.ObserveProactive(conversation.SourceKey, message.Seq, PacingOptions(owner), owner)
                 : _pacingCoordinator.Observe(conversation.SourceKey, speakerId, message.Seq, message.QqMessageId is > 0 ? message.QqMessageId : null,
                     directInWindow || message.DirectToBot, conversation.Kind == ConversationKind.GroupChat,
-                    PacingOptions(owner.Snapshot), owner);
+                    PacingOptions(owner), owner);
             dispatch = TrackPacedObservation(observation, owner);
         }
         DispatchPacedWork(dispatch);
@@ -111,7 +133,7 @@ public sealed partial class ReplyPipeline
         {
             if (!_pacingEnabled || !IsPacedOwnerCurrent(owner)) return;
             var observation = _pacingCoordinator.ObserveNotice(conversation.SourceKey, conversation.NextSeq,
-                conversation.Kind == ConversationKind.GroupChat, PacingOptions(owner.Snapshot), owner);
+                conversation.Kind == ConversationKind.GroupChat, PacingOptions(owner), owner);
             dispatch = TrackPacedObservation(observation, owner);
         }
         DispatchPacedWork(dispatch);
@@ -142,7 +164,7 @@ public sealed partial class ReplyPipeline
         {
             if (!_pacingEnabled || !IsPacedOwnerCurrent(owner)) return;
             var observation = _pacingCoordinator.ObserveAcceptedResult(conversation.SourceKey, conversation.NextSeq,
-                conversation.Kind == ConversationKind.GroupChat, PacingOptions(snapshot), owner);
+                conversation.Kind == ConversationKind.GroupChat, PacingOptions(owner), owner);
             dispatch = TrackPacedObservation(observation, owner);
         }
         DispatchPacedWork(dispatch);

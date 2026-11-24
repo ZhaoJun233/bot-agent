@@ -1,3 +1,4 @@
+import type { ZbaDriverKey } from '../../api/zba'
 import type { AppIconName } from '../../shared/ui/AppIcon.vue'
 import { configurationFor, type CapabilityConfiguration } from '../capabilities/configuration-ownership'
 import {
@@ -5,6 +6,7 @@ import {
   pluginRegistryRevision,
   pluginSettings,
   settingsFor,
+  type DriverCredentialMode,
   type PlatformPolicyCopy
 } from '../capabilities/plugin-settings'
 
@@ -15,6 +17,7 @@ export interface ResolvedPlatformDriverMeta {
   summary: string
   icon: AppIconName
   supportsMessagingInspection: boolean
+  credentialMode: DriverCredentialMode
   credentialHint?: string
   policyCopy?: Readonly<PlatformPolicyCopy>
 }
@@ -22,6 +25,7 @@ export interface ResolvedPlatformDriverMeta {
 export interface PlatformSettingsTarget {
   capability: CapabilityConfiguration
   policyPlatformId?: string
+  driverKey?: ZbaDriverKey
   dialogTitle?: string
 }
 
@@ -44,7 +48,8 @@ export function platformDriverMeta(platformId: string): ResolvedPlatformDriverMe
       title: platformId,
       summary: '平台消息接入与运行时连接驱动',
       icon: 'platform',
-      supportsMessagingInspection: false
+      supportsMessagingInspection: false,
+      credentialMode: 'required'
     }
   }
   return {
@@ -54,20 +59,44 @@ export function platformDriverMeta(platformId: string): ResolvedPlatformDriverMe
     summary: spec.summary,
     icon: resolveIcon(spec.icon),
     supportsMessagingInspection: Boolean(spec.supportsMessagingInspection),
+    credentialMode: spec.credentialMode ?? 'required',
     credentialHint: spec.credentialHint,
     policyCopy: spec.policyCopy
   }
 }
 
+/** 仅用于显示层：把驱动凭据模式与底层布尔值格式化为清晰状态文案，不改写任何存储或请求键。 */
+export function formatDriverCredentialStatus(
+  mode: DriverCredentialMode,
+  configured: boolean
+): string {
+  if (mode === 'none') return '无需凭据'
+  if (mode === 'optional-env') return configured ? '已配置（环境变量）' : '可选（未设令牌）'
+  if (mode === 'required-env') return configured ? '已配置（环境变量）' : '未配置（需环境变量）'
+  return configured ? '已配置' : '未配置'
+}
+
+/** 仅用于显示层：把内置账号范围（legacy / default / 空）格式化为友好标签，不改写任何存储或请求键。 */
+export function formatAccountScopeLabel(scope: string): string {
+  const trimmed = scope.trim()
+  if (!trimmed || trimmed === 'legacy' || trimmed === 'default') return '默认账号'
+  return trimmed
+}
+
 /** 为指定平台驱动解析独立的配置弹窗目标；未登记的自定义驱动回退到 scoped platform 兜底作用域。 */
-export function platformDriverConfigFor(platformId: string, displayTitle?: string): PlatformSettingsTarget | null {
+export function platformDriverConfigFor(
+  platformId: string,
+  displayTitle?: string,
+  driverKey?: ZbaDriverKey
+): PlatformSettingsTarget | null {
   const spec = driverSpecByPlatformId(platformId)
   if (spec) {
     const capability = configurationFor(spec.pluginKey)
     if (capability) {
       return {
         capability,
-        policyPlatformId: capability.policyPlatformId ?? platformId
+        policyPlatformId: capability.policyPlatformId ?? platformId,
+        driverKey
       }
     }
   }
@@ -76,6 +105,7 @@ export function platformDriverConfigFor(platformId: string, displayTitle?: strin
   return {
     capability: fallback,
     policyPlatformId: platformId,
+    driverKey,
     dialogTitle: displayTitle ? `${displayTitle} · 接入与策略` : undefined
   }
 }

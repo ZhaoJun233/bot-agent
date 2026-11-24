@@ -3,6 +3,7 @@ using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Permissions;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Stickers;
+using BotAgent.Services.Platforms;
 
 namespace BotAgent.Services.Reply;
 
@@ -30,4 +31,5 @@ public sealed record TurnInputs(
     string? SearchText,
     string? LinkText,
     bool IsPrivateConversation = false,
-    long? LatestPeerMessageIdAtGeneration = null);
+    long? LatestPeerMessageIdAtGeneration = null,
+    EffectiveConversationSettings? ConversationSettings = null);

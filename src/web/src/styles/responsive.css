@@ -137,10 +137,10 @@
     height: 30px;
     border-radius: 8px;
   }
-  /* 8 primary destinations form a symmetrical 4x2 touch grid on small phones */
+  /* 9 primary destinations form a symmetrical 3x3 touch grid on small phones */
   .side-nav {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
   }
   .side-nav-item {

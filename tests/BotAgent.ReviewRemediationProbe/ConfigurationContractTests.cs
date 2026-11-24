@@ -1210,7 +1210,7 @@ internal static class ConfigurationContractTests
                 .. Directory.EnumerateFiles(Path.Combine(repository, "src/BotAgent.Headless/Host"), "CompositionRoot*.cs")
                     .Select(path => path.Substring(repository.Length + 1).Replace('\\', '/'))
                     .OrderBy(path => path, StringComparer.Ordinal),
-                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs", "docs/plans/agents/00-c3-c4-contract-candidate.md"
+                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs"
             ];
             var sourceFingerprints = sourceFiles.ToDictionary(value => value, value => Hash(BoundAsset(repository, value)), StringComparer.Ordinal);
             var bundle = Path.Combine(capture, "bundle");
@@ -4419,8 +4419,8 @@ internal static class ConfigurationContractTests
         void check(string name, bool condition) => report(condition, name);
         RegistryIsolation(check);
         var ids = Enum.GetValues<ConfigurationFieldId>();
-        check("configuration FieldIds are exactly 1..152",
-            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 152)));
+        check("configuration FieldIds are exactly 1..153",
+            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 153)));
         var partitions = new[] { typeof(AgentChanges), typeof(BehaviorChanges), typeof(ModelChanges),
             typeof(MusicChanges), typeof(PlatformChanges), typeof(ReportingChanges), typeof(VoiceChanges) };
         check("configuration seven partitions cover all 128 active fields",
@@ -5307,16 +5307,19 @@ internal static class ConfigurationContractTests
         {
             new JargonEntry { Scope = "synthetic:reuse", Phrase = "synthetic-one", Meaning = "synthetic-meaning", Status = JargonStatus.Confirmed },
             new JargonEntry { Scope = "synthetic:reuse", Phrase = "synthetic-two", Meaning = "synthetic-meaning", Status = JargonStatus.Pending },
+            new JargonEntry { Scope = "synthetic:reuse", Phrase = "synthetic-local-manual", Meaning = "synthetic-meaning", Status = JargonStatus.Manual },
             new JargonEntry { Scope = "global", Phrase = "synthetic-global", Meaning = "synthetic-meaning", Status = JargonStatus.Manual }
         }) await jargon.UpsertAsync(entry);
         report((await jargon.GetAsync("synthetic:reuse", "synthetic-one"))?.Status == JargonStatus.Confirmed,
             "configuration query reuse preserves Jargon exact lookup mapping");
-        report((await jargon.ListByScopeAsync("synthetic:reuse")).Count == 2
+        report((await jargon.ListByScopeAsync("synthetic:reuse")).Count == 3
             && (await jargon.ListByScopeAsync("synthetic:reuse", JargonStatus.Confirmed)).Count == 1,
             "configuration query reuse preserves Jargon scoped and status predicates");
-        report((await jargon.ListConfirmedForPromptAsync("synthetic:reuse")).Count == 2
+        var promptJargons = await jargon.ListConfirmedForPromptAsync("synthetic:reuse");
+        report(promptJargons.Count == 2
+            && promptJargons.All(j => j.Scope == "synthetic:reuse")
             && (await jargon.ListConfirmedForPromptAsync("synthetic:reuse", 1)).Count == 1,
-            "configuration query reuse preserves Jargon global union and limits");
+            "configuration query reuse preserves Jargon strict scope isolation and limits");
         var prompts = new PromptTemplateStore();
         var v1 = await prompts.SaveVersionAsync("synthetic-reuse-prompt", "synthetic-initial");
         var v2 = await prompts.SaveVersionAsync("synthetic-reuse-prompt", "synthetic-next");

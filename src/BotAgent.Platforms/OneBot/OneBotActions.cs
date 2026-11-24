@@ -49,8 +49,8 @@ internal sealed class OneBotActions
 
         var action = isGroup ? "send_group_msg" : "send_private_msg";
         var key = isGroup ? "group_id" : "user_id";
-        // 带"回复"引用原消息（触发 QQ 回复语句功能）
-        string messageJson = replyToMessageId is long rid
+        // 带"回复"引用原消息（跳过 4e12 以上的合成文件通知 ID，避免协议端报消息不存在并触发风控退避）
+        string messageJson = replyToMessageId is long rid && rid > 0 && rid < 4_000_000_000_000L
             ? $"[{{\"type\":\"reply\",\"data\":{{\"id\":{rid}}}}},{{\"type\":\"text\",\"data\":{{\"text\":{Json(text)}}}}}]"
             : Json(text);
         var result = await _client.SendAsync(action, $"{{\"{key}\":{targetId},\"message\":{messageJson}}}", ct);

@@ -29,7 +29,7 @@ internal static class PanelConfigurationRequestValidation
         var key = JsonSerializer.Deserialize<ConfigurationOperationKey>(root.GetProperty("key"), ConfigurationJson);
         var patchNode = JsonNode.Parse(root.GetProperty("changes").GetRawText())?.AsObject() ?? throw new JsonException();
         if (patchNode["registered"] is JsonObject registered)
-            foreach (var name in new[] { "plugins", "providers", "policies" })
+            foreach (var name in new[] { "plugins", "providers", "policies", "conversationProfiles" })
                 if (!registered.ContainsKey(name)) registered[name] = new JsonArray();
         using var normalized = JsonDocument.Parse(patchNode.ToJsonString());
         ValidateConfigurationShape(normalized.RootElement, typeof(ConfigurationPatch));
@@ -124,6 +124,7 @@ internal static class PanelConfigurationRequestValidation
         foreach (var parameter in constructor?.GetParameters() ?? Array.Empty<ParameterInfo>())
         {
             if (parameter.ParameterType.IsGenericType && parameter.ParameterType.GetGenericTypeDefinition() == typeof(FieldEdit<>)) continue;
+            if (parameter.HasDefaultValue && type.Name.StartsWith("Conversation", StringComparison.Ordinal)) continue;
             if (Nullable.GetUnderlyingType(parameter.ParameterType) is not null || new NullabilityInfoContext().Create(parameter).ReadState == NullabilityState.Nullable) continue;
             if (!node.TryGetProperty(JsonNamingPolicy.CamelCase.ConvertName(parameter.Name!), out _)) throw new JsonException();
         }

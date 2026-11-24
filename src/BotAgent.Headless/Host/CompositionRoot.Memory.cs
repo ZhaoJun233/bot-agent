@@ -22,6 +22,7 @@ internal static partial class CompositionRoot
         a.UnifiedMemory = new BotAgent.Engine.Memory.UnifiedMemory(persistence);
         // This separately configured governance identity never reuses Agent/tool authority.
         var administrator = ReadMemoryAdministrator();
+        a.MemoryAdminConfigured = administrator is not null;
         a.MemoryCommands = new UnifiedMemoryCommandService(a.Source, a.UnifiedMemory,
             context => administrator is not null && administrator.Matches(context));
     }

@@ -39,6 +39,11 @@ public static class ToolFeature
     public const string Approval = "approval";
     public const string Question = "question";
     public const string Text = "text";
+    public const string Documents = "documents";
+    public const string Digest = "digest";
+    public const string Knowledge = "knowledge";
+    public const string Scheduler = "scheduler";
+    public const string PersonalTodo = "personal_todo";
 }
 
 /// <summary>

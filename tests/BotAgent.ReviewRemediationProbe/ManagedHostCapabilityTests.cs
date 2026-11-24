@@ -121,6 +121,27 @@ internal static class ManagedHostCapabilityTests
             Check(official?.RuntimeState == ManagedRuntimeState.NotLoaded,
                 "declared but unconstructed qq.official driver is visible as NotLoaded");
 
+            var zbaBackendType = typeof(BotAgent.Adapters.Plugins.PluginPackageService).Assembly
+                .GetType("BotAgent.Adapters.Panel.Zba.ZbaHostBackend")!;
+            var mapComponent = zbaBackendType.GetMethod("Map", BindingFlags.NonPublic | BindingFlags.Static)!;
+            string? MapReason(ManagedDescriptor desc)
+            {
+                var component = mapComponent.Invoke(null, [desc, Clock.UtcNow])!;
+                return (string?)component.GetType().GetProperty("ReasonCode")!.GetValue(component);
+            }
+            var localDescriptor = page.Items.SingleOrDefault(item => item.Key == new ManagedObjectKey.Driver(
+                new DriverKey(PlatformId.Local, AccountScope.Legacy, string.Empty)));
+            var feishuDescriptor = page.Items.SingleOrDefault(item => item.Key is ManagedObjectKey.Driver d
+                && PlatformId.Normalize(d.Key.PlatformId) == PlatformId.Feishu);
+            Check(MapReason(initial) is null,
+                "ZBA status does not attribute credential_missing to tokenless qq.private driver");
+            Check(localDescriptor is not null && MapReason(localDescriptor) is null,
+                "ZBA status does not attribute credential_missing to credential-free local driver");
+            Check(official is not null && MapReason(official) == "credential_missing",
+                "ZBA status still reports credential_missing for unconfigured qq.official driver");
+            Check(feishuDescriptor is not null && MapReason(feishuDescriptor) == "credential_missing",
+                "ZBA status still reports credential_missing for unconfigured feishu driver");
+
             var inspected = await capabilities.InspectAsync(allowed, driver);
             Check(inspected.Code == ManagedResultCode.Ok && inspected.Descriptor is not null
                 && inspected.Descriptor.Key == driver, "authorized caller can inspect the qq.private driver");

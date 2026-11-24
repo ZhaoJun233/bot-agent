@@ -6,7 +6,9 @@ export const platformFeishuPresentation = Object.freeze({
   policyPlatformId: 'feishu',
   icon: 'feishu' as const,
   title: '飞书机器人通道',
-  summary: '飞书应用凭证、签名与加密校验、群/私聊白名单与文本降级策略',
+  summary: '飞书应用凭证、Webhook / WebSocket 长连接、AES 解密、富媒体与 Markdown 卡片策略',
+  credentialMode: 'required' as const,
+  credentialHint: '长连接模式仅需 App ID + App Secret；Webhook 模式需额外配置 Encrypt Key 或 Verification Token 之一。',
   fields: [
     { section: 'platform' as const, key: 'feishuEnabled' },
     { section: 'platform' as const, key: 'feishuAppId' },

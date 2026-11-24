@@ -30,9 +30,10 @@ internal sealed class HostPluginBundle(TrustedPluginDistribution distribution, s
         return PluginPackageFiles.ReadRequiredAsync(path, PluginPackageArchive.MaxArchiveBytes, ct);
     }
 
-    internal async Task<IReadOnlyList<PluginPackageFailure>> StageFirstUseAsync(string root, PluginPackageService packages, CancellationToken ct)
+    internal async Task<IReadOnlyList<PluginPackageFailure>> StageFirstUseAsync(
+        string root, PluginPackageService packages, CancellationToken ct, Action<string>? log = null)
     {
-        var installed = (await packages.GetInstalledAsync(ct)).ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var installed = (await packages.GetInstalledAsync(ct).ConfigureAwait(false)).ToDictionary(p => p.Id, StringComparer.Ordinal);
         var failures = new List<PluginPackageFailure>();
         var physicalRoot = StorageModule::BotAgent.Adapters.Persistence.AppDatabase.ResolvePhysicalPath(root);
         if (OperatingSystem.IsWindows()) physicalRoot = physicalRoot.ToUpperInvariant();
@@ -48,21 +49,37 @@ internal sealed class HostPluginBundle(TrustedPluginDistribution distribution, s
         {
             var key = keyByRelease[manifest.Id];
             var adopted = existingMeta.GetValueOrDefault(key);
-            if (adopted == "1") continue;
-            if (adopted is not null) { failures.Add(new(manifest.Id, "plugin_distribution_adoption_corrupt")); continue; }
-            // Even an uninstalled Previous is explicit user state. Never replace or resurrect it.
-            if (installed.TryGetValue(manifest.Id, out var previous))
+            if (adopted is not null and not "1")
             {
-                if (previous.MetadataFailure is null) keysToMark.Add((key, "1"));
+                failures.Add(new(manifest.Id, "plugin_distribution_adoption_corrupt"));
                 continue;
             }
-            try
+            var newShaPrefix = ShortDigest(manifest.Sha256);
+            if (!installed.TryGetValue(manifest.Id, out var existing))
             {
-                var archive = await ReadArchiveAsync(manifest, ct).ConfigureAwait(false);
-                toStage.Add((manifest, archive));
+                if (adopted == "1")
+                {
+                    log?.Invoke($"host_bundle pluginId={manifest.Id} oldShaPrefix=none newShaPrefix={newShaPrefix} action=skipped-absent");
+                    continue;
+                }
+                try
+                {
+                    var archive = await ReadArchiveAsync(manifest, ct).ConfigureAwait(false);
+                    toStage.Add((manifest, archive));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch { failures.Add(new(manifest.Id, "plugin_distribution_adoption_failed")); }
+                continue;
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { failures.Add(new(manifest.Id, "plugin_distribution_adoption_failed")); }
+            if (existing.MetadataFailure is null)
+            {
+                if (adopted is null) keysToMark.Add((key, "1"));
+                continue;
+            }
+            if (existing.MetadataFailure.Code != "plugin_metadata_unreadable") continue;
+            var (upgraded, failure) = await TryUpgradeExistingAsync(manifest, newShaPrefix, packages, log, ct).ConfigureAwait(false);
+            if (failure is not null) failures.Add(failure);
+            else if (upgraded && adopted is null) keysToMark.Add((key, "1"));
         }
         if (toStage.Count > 0)
         {
@@ -77,4 +94,33 @@ internal sealed class HostPluginBundle(TrustedPluginDistribution distribution, s
             StorageModule::BotAgent.Adapters.Persistence.AppDatabase.SetMetaBatch(keysToMark);
         return failures;
     }
+
+    private async Task<(bool Upgraded, PluginPackageFailure? Failure)> TryUpgradeExistingAsync(
+        PluginPackageManifest manifest, string newShaPrefix, PluginPackageService packages,
+        Action<string>? log, CancellationToken ct)
+    {
+        var candidate = await packages.TryReadUnapprovedHostDistributionAsync(manifest.Id, ct).ConfigureAwait(false);
+        if (candidate is null) return (false, null);
+        try
+        {
+            var archive = candidate.KeepUninstalled ? null : await ReadArchiveAsync(manifest, ct).ConfigureAwait(false);
+            await packages.StageHostDistributionUpgradeAsync(manifest, archive, candidate.KeepUninstalled, ct).ConfigureAwait(false);
+            var action = candidate.KeepUninstalled ? "kept-uninstalled" : "upgraded";
+            log?.Invoke($"host_bundle pluginId={manifest.Id} oldShaPrefix={candidate.OldSha256Prefix} newShaPrefix={newShaPrefix} action={action}");
+            return (true, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (BotAgent.Panel.ZbaBackendException ex) when (ex.Code == "plugin_governance_revoked")
+        {
+            log?.Invoke($"host_bundle pluginId={manifest.Id} oldShaPrefix={candidate.OldSha256Prefix} newShaPrefix={newShaPrefix} action=blocked-governance");
+            return (false, new(manifest.Id, ex.Code));
+        }
+        catch
+        {
+            return (false, new(manifest.Id, "plugin_distribution_upgrade_failed"));
+        }
+    }
+
+    private static string ShortDigest(string sha256)
+        => sha256.Length >= 8 ? sha256[..8].ToLowerInvariant() : sha256.ToLowerInvariant();
 }

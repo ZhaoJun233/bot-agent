@@ -11,7 +11,26 @@ public sealed record UnifiedMemoryContext(
 /// <summary>Exact destination, including platform, bot account, driver instance and optional thread.</summary>
 public sealed record UnifiedMemoryScope(DriverKey Driver, ConversationId Conversation);
 
-public enum UnifiedMemoryFactCategory { ReplyLanguage, ReplyLength, ExplanationStyle }
+public enum UnifiedMemoryFactCategory
+{
+    ReplyLanguage = 0,
+    ReplyLength = 1,
+    ExplanationStyle = 2,
+    Timezone = 3,
+    PreferredAddress = 4,
+    PersonalNote = 5
+}
+
+public sealed record UnifiedMemoryGovernanceSummary(
+    bool Enabled,
+    bool Faulted,
+    long Revision,
+    int ConfirmedCount,
+    int PendingCount,
+    int SuppressionCount)
+{
+    public override string ToString() => $"Enabled={Enabled},Faulted={Faulted},Rev={Revision}";
+}
 
 /// <summary>Conservative, finite preference vocabulary. No arbitrary text, names or inferred traits.</summary>
 public sealed record UnifiedMemoryFact(UnifiedMemoryFactCategory Category, string Value);

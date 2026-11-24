@@ -58,6 +58,7 @@
 - **二进制回滚不等于 schema 回滚**。普通启动只做前向迁移；schema 15 → 14 有单独的离线逆迁移命令。其他版本不能由此推断可逆；缺少已验证逆迁移时，需要组合维护窗口及共同恢复点，不能静默丢失增量。
 - **容器路线**：先核对 `prev` 镜像 ID，恢复配套的数据、配置及插件后，才创建并启动挂载该恢复根的旧容器；不要让旧镜像先连接新版本数据。保留原数据根，新根不混入原库的 WAL / SHM。
 - 当前候选 schema 为 15，下面的 10 / 11 / 12 是历史演练记录。按目标候选的版本闸与数据语义判断兼容性，不手改 `user_version` 降级，也不只凭版本号相同宣称兼容。
+- **`v1.4.0`（17 包）升至本候选（22 包 + Phase 1–5）专项回滚硬规则**：虽然 SQLite `user_version` 同为 15，但升级前**必须同时备份 `data/botagent.db` 与 `data/plugins/`**；若需回滚到 `qqchat-agent:prev`（`v1.4.0`），**必须同时恢复两份升级前快照**，绝不能只回退镜像而继续挂载已写入新包（第 18–22 包）清单或 Phase 3 记忆类别（`UnifiedMemoryFactCategory` 3..5）的新数据目录，否则旧版本会触发 `plugin_metadata_unreadable` 与记忆状态异常（`_faulted`）。
 - 回滚后**不要**立刻删备份：确认稳定运行至少一个完整的观察窗口再清理。
 
 ---
@@ -134,8 +135,6 @@
 
 ## 7. 相关文档
 
-- [基线报告](../baseline/report-2026-10-31.md) —— §4.4 是 D1–D5 演练的原始数据
-- [.NET 10 升级回归验收报告](upgrade-acceptance-dotnet10.md) —— §4 是 S1–S5 跨版本演练的原始数据
 - [日志保留、每日热备与恢复演练](data-retention-and-backup.md) —— 备份在哪、保留多久、怎么验证能恢复
 - [分支模型与合并路径](../architecture/branching-and-merge-path.md) —— 回滚后如何重新发版
 - [Agent Runtime 部署、验证与回滚](agent-runtime-deployment.md) —— 当前 schema 边界、兼容回滚点与停写条件

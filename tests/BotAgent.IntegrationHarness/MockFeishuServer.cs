@@ -24,7 +24,11 @@ public sealed class MockFeishuServer : IDisposable
 
     public string BaseUrl => $"http://127.0.0.1:{_port}";
 
+    public string? BotOpenId { get; set; }
+
     public IReadOnlyList<string> Messages => _messages.ToArray();
+
+    public void ClearSent() => _messages.Clear();
 
     public void Start()
     {
@@ -83,6 +87,15 @@ public sealed class MockFeishuServer : IDisposable
             {
                 var tokenResp = "{\"code\":0,\"tenant_access_token\":\"t-synthetic-feishu-token\",\"expire\":7200}";
                 await WriteAsync(context, 200, tokenResp);
+                return;
+            }
+
+            if (path.Contains("/bot/v3/info", StringComparison.OrdinalIgnoreCase))
+            {
+                var botResp = string.IsNullOrEmpty(BotOpenId)
+                    ? "{\"code\":0}"
+                    : $"{{\"code\":0,\"bot\":{{\"open_id\":\"{BotOpenId}\"}}}}";
+                await WriteAsync(context, 200, botResp);
                 return;
             }
 

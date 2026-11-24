@@ -30,7 +30,8 @@ public sealed record ToolPolicy(
     ///   · **只按工具名点名**，不是按类别 —— 列了 bash 不会连带放开 docker；
     ///   · **与审批无关**：它不改变 ApprovableCategories 的口径，票据仍然放不开高风险类别（I3 不变）。
     /// </summary>
-    IReadOnlySet<string>? HighRiskExceptions = null)
+    IReadOnlySet<string>? HighRiskExceptions = null,
+    IReadOnlySet<string>? ApprovableTools = null)
 {
     /// <summary>最低权限策略：一个能力都不开（配置解析失败 / 策略缺失时用它，V3 §9.2）。</summary>
     public static ToolPolicy DenyAll(int policyVersion = 1)
@@ -55,13 +56,11 @@ public sealed record ToolPolicy(
                ? declared.Contains(descriptor.Category)
                : descriptor.Category == ToolCategory.SendMessage);
 
-    /// <summary>审批可以放开这个类别吗（高风险档永远不行）。</summary>
+    /// <summary>审批可以放开这个类别或显式可审批非高危工具吗（高风险档永远不行）。</summary>
     public bool ApprovalCouldGrant(ToolDescriptor descriptor)
-        => descriptor.Category is not ToolCategory.FileOrShell
-            and not ToolCategory.RemoteAgent
-            and not ToolCategory.SettingsWrite
-            and not ToolCategory.OtherConversationRead
-            && (ApprovableCategories?.Contains(descriptor.Category) ?? false);
+        => !ToolDescriptor.AlwaysDenied(descriptor.Category)
+           && ((ApprovableCategories?.Contains(descriptor.Category) ?? false)
+               || (ApprovableTools?.Contains(descriptor.Id) ?? false));
 
     /// <summary>
     /// 策略的**稳定指纹**（用于“配置真的变了才换策略版本”）。
@@ -84,7 +83,8 @@ public sealed record ToolPolicy(
             + " needCat[" + JoinCats(ApprovalRequiredCategories) + "]"
             + " needTool[" + Join(ApprovalRequiredTools) + "]"
             // 例外必须进指纹：放开/收回某个高风险工具是**能力变化**，审批单该因此作废（与其它字段同一口径）
-            + " highRisk[" + Join(HighRiskExceptions) + "]";
+            + " highRisk[" + Join(HighRiskExceptions) + "]"
+            + (ApprovableTools is { Count: > 0 } ? " apprTool[" + Join(ApprovableTools) + "]" : string.Empty);
     }
 }
 

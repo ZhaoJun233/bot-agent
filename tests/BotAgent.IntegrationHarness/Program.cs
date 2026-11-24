@@ -84,6 +84,12 @@ public static partial class Program
 
             await Scenario("s154", RunControlRecoveryScenarioAsync);
             await Scenario("s155", RunControlStartupFailureScenarioAsync);
+            await Scenario("s156", RunConversationProfileScenarioAsync);
+            await Scenario("s157", RunPhase2CapabilitiesScenarioAsync);
+            await Scenario("s162", RunPhase3MemoryKnowledgeScenarioAsync);
+            await Scenario("s163", RunPhase4RuntimeApprovalMcpScenarioAsync);
+            await Scenario("s164", RunPhase5SchedulerTodoIdentityScenarioAsync);
+            await Scenario("s165", RunPhase5WorkspacePrivacyScenarioAsync);
             await Scenario("s153", RunUnifiedMemoryScenarioAsync);
             await Scenario("s1", RunReverseWsScenarioAsync);
             await Scenario("s3", RunWhitelistScenarioAsync);

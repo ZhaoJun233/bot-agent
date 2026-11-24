@@ -95,7 +95,7 @@
 
 | 指标 | 当前基线 | 断言上限 |
 | --- | --- | --- |
-| `MaxFileLines`（全 `src` 最大文件行数） | 1740 | ≤ 1765 |
+| `MaxFileLines`（全 `src` 最大文件行数） | 1591 | ≤ 1591 |
 | `DomainFileTargetLines`（领域层单文件目标行数） | — | ≤ 300 |
 
 规则：
@@ -129,5 +129,4 @@
 
 ## 8. 相关文档
 
-- [基线报告](../baseline/report-2026-10-31.md) —— §5 是棘轮现状的原始数据
 - `tests/BotAgent.ArchitectureProbe/Baseline.cs` —— 棘轮定义的唯一真源

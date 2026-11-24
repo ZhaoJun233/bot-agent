@@ -63,6 +63,8 @@ internal static partial class Program
                 "preset.feature.token-quota", "preset.feature.websearch", "preset.feature.poke",
                 "preset.feature.vibes", "preset.feature.stickers", "preset.feature.music",
                 "preset.feature.voice", "preset.feature.profiles",
+                "preset.feature.documents", "preset.feature.digest", "preset.feature.knowledge",
+                "preset.feature.scheduler", "preset.feature.personal-todo",
                 "system.health-reporting", "system.model-services", "system.agent",
                 "system.mcp-tools", "system.conversation",
                 "system.platform-qq-private", "system.platform-qq-official",

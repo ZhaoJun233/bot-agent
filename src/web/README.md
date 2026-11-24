@@ -56,7 +56,7 @@ Dependabot 暂不提出 TypeScript >=7 的升级。TypeScript 7.0.2 不提供 vu
 - 认证页：桌面浅色双栏（品牌信息 + 表单），390 收敛为顶部短头部；令牌输入仍为 `type=password`、`autocomplete=off`、只存内存。
 - 概览：390 侧栏折叠为顶栏，组件表收敛为「组件 / 状态」两列；不新增图表、请求或假数据；F8 的卡片式/粘性列留 S4。
 - 焦点环使用 `--accent-deep`；浅色为默认，可切换独立深色配色。外观偏好使用 `botagent-appearance` 存储，认证令牌仍只在内存。`prefers-reduced-motion` 下关闭过渡和入场动画；整页只请求同源资源。
-- 设计变量、布局与验证命令见 [设计系统](docs/design-system.md)。
+- 设计变量、布局与验证命令见 [设计系统](../../docs/architecture/web-design-system.md)。
 - Windows 保留默认测试端口时，可运行 `BOTAGENT_WEB_TEST_PORT=18474 npm run test:e2e`，未配置令牌的预览自动使用下一个端口。默认仍为 4174/4175。
 - 视觉矩阵：`BOTAGENT_WEB_TEST_PORT=18474 npx playwright test --config playwright.visual.config.ts redesign.spec.ts`；覆盖 1440/1024/768/390/375/320、深浅主题、颜色对比度、页面溢出、弹窗边界、能力搜索、主题切换和锁定。`VISUAL_OUT` 可指定截图输出目录。
 

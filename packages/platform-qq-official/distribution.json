@@ -14,5 +14,21 @@
       "name": "BotAgent.Platforms.Contracts",
       "owner": "system.platform-local"
     }
+  ],
+  "settings": [
+    {
+      "key": "enableInteractiveMarkdown",
+      "label": "启用开放平台原生 Markdown 与互动回调（需平台后台已开通对应权限）",
+      "type": "boolean",
+      "defaultValue": "false",
+      "required": false
+    },
+    {
+      "key": "subscribeMemberEvents",
+      "label": "启用扩展群资料查询与成员事件订阅（遇 4009/11253 自动静默降级）",
+      "type": "boolean",
+      "defaultValue": "false",
+      "required": false
+    }
   ]
 }

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>个人待办</title>
+</head>
+<body>
+  <main id="app" role="region" aria-label="个人待办">
+    <header>
+      <h2 id="title">个人专属待办</h2>
+      <div>
+        <button id="refresh-btn" type="button">刷新</button>
+        <button id="close-btn" type="button">关闭</button>
+      </div>
+    </header>
+    <p id="status-line">正在连接宿主安全桥…</p>
+    <div id="todo-list">加载中…</div>
+  </main>
+  <script defer src="./todo-runtime.js"></script>
+</body>
+</html>

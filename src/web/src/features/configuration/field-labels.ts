@@ -98,6 +98,7 @@ export const fieldLabels: Record<string, string> = {
   panelDeployUrl: '部署产物地址',
   // platform (driver-specific labels are owned by packages/platform-*/frontend/presentation.ts)
   platformPolicies: '平台实例策略',
+  conversationProfiles: '会话定制档案',
   // voice
   enableVoice: '启用语音消息',
   ttsApiBase: '云端接口地址',

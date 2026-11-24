@@ -18,11 +18,18 @@ public readonly record struct ToolSwitchState(
     bool Stickers,
     bool Poke,
     bool Approvals,
-    bool Questions)
+    bool Questions,
+    bool Documents = false,
+    bool Digest = false,
+    bool Knowledge = false,
+    bool Scheduler = false,
+    bool PersonalTodo = false)
 {
     /// <summary>从设置对象的常用开关取值构造（调用方决定 webReady 这类运行时门控）。</summary>
     public static ToolSwitchState From(bool webSearch, bool music, bool voice, bool stickers, bool poke,
-        bool approvals, bool questions) => new(webSearch, music, voice, stickers, poke, approvals, questions);
+        bool approvals, bool questions, bool documents = false, bool digest = false, bool knowledge = false,
+        bool scheduler = false, bool personalTodo = false)
+        => new(webSearch, music, voice, stickers, poke, approvals, questions, documents, digest, knowledge, scheduler, personalTodo);
 }
 
 /// <summary>
@@ -42,6 +49,11 @@ public static class ToolSwitches
         ToolFeature.Poke => state.Poke,
         ToolFeature.Approval => state.Approvals,
         ToolFeature.Question => state.Questions,
+        ToolFeature.Documents => state.Documents,
+        ToolFeature.Digest => state.Digest,
+        ToolFeature.Knowledge => state.Knowledge,
+        ToolFeature.Scheduler => state.Scheduler,
+        ToolFeature.PersonalTodo => state.PersonalTodo,
         ToolFeature.Text => true,
         _ => false,
     };
@@ -56,6 +68,11 @@ public static class ToolSwitches
         ToolFeature.Poke => state.Poke,
         ToolFeature.Approval => state.Approvals,
         ToolFeature.Question => state.Questions,
+        ToolFeature.Documents => state.Documents,
+        ToolFeature.Digest => state.Digest,
+        ToolFeature.Knowledge => state.Knowledge,
+        ToolFeature.Scheduler => state.Scheduler,
+        ToolFeature.PersonalTodo => state.PersonalTodo,
         ToolFeature.Text => true,
         _ => false,
     };

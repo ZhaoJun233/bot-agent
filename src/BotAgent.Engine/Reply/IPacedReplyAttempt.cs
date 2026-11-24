@@ -1,4 +1,5 @@
 using BotAgent.Engine.Runtime;
+using BotAgent.Services.Platforms;
 
 namespace BotAgent.Services.Reply;
 
@@ -6,6 +7,7 @@ namespace BotAgent.Services.Reply;
 public interface IPacedReplyAttempt
 {
     AppSettings Snapshot { get; }
+    EffectiveConversationSettings? ConversationSettings => null;
     bool IsExplicit { get; }
     bool IsSoftDraft { get; }
     long SpeakerId { get; }

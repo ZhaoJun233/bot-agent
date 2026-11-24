@@ -43,7 +43,8 @@ internal sealed class ControlPlaneHttpServer : IDisposable
         var path = context.Request.Url?.AbsolutePath ?? "/";
         if (path.StartsWith("/zba/", StringComparison.OrdinalIgnoreCase))
         {
-            try { await ZbaHttpListenerAdapter.HandleAsync(context, _endpoint, _endpoint.MaxBodyBytes, _shutdown.Token); }
+            var maxBodyBytes = _endpoint.MaxBodyBytesFor(context.Request.HttpMethod, path);
+            try { await ZbaHttpListenerAdapter.HandleAsync(context, _endpoint, maxBodyBytes, _shutdown.Token); }
             finally { context.Response.Close(); }
             return;
         }
