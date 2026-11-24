@@ -1,7 +1,7 @@
 # 发布检查单（release checklist）
 
 适用对象：准备给 Bot Agent 打版本 tag、发布 GitHub Release、把代码同步到公开镜像的人。
-配套文档：`docs/operations/rollback-playbook.md`（回滚）、`docs/operations/upgrade-acceptance-dotnet10.md`（运行时升级验收）。
+配套文档：`docs/operations/rollback-playbook.md`（回滚）。
 
 ## 0. 三条纪律
 

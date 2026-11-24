@@ -226,7 +226,15 @@ public sealed partial class AgentCommandService : IAgentCommandService
             await entry.AckGate.Task.WaitAsync(linked.Token).ConfigureAwait(false);
             using var sourceScope = PlatformSourceExecution.Enter(entry.Task.SourceLease);
             using var memoryTurn = BotAgent.Services.Reply.UnifiedMemoryTurn.Begin(_unifiedMemory, entry.MemoryEnvelope);
-            await _serverAgent.RunAsync(entry.Task, linked.Token).ConfigureAwait(false);
+            try
+            {
+                await _serverAgent.RunAsync(entry.Task, linked.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (BotAgent.Services.Memory.MemoryUseScope.HasMemory)
+                    entry.Task.MemoryDerived = true;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -988,7 +996,7 @@ public sealed partial class AgentCommandService : IAgentCommandService
     private async void OnAgentFinished(AgentTask task)
     {
         using var sourceScope = PlatformSourceExecution.Enter(task.SourceLease);
-        var memoryDerived = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
+        var memoryDerived = task.MemoryDerived || BotAgent.Services.Memory.MemoryUseScope.HasMemory;
         try
         {
             // 服务器内置后端：把这一轮的对话存回会话（下一轮同一会话能接上）

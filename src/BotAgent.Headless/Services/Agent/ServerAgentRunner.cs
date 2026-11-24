@@ -164,6 +164,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
 
         var memoryPrompt = BotAgent.Services.Reply.UnifiedMemoryTurn.Current?.ReadPrompt(task.Prompt);
         var memoryRestricted = BotAgent.Services.Memory.MemoryUseScope.HasMemory;
+        if (memoryRestricted) task.MemoryDerived = true;
         var allowSameScopePlugin = memoryRestricted
             && _sameScopePluginTool is not null
             && BotAgent.Services.Memory.MemoryUseScope.AllowsEgress(BotAgent.Domain.Memory.ToolEgressClass.SameScopeRead);
@@ -325,7 +326,7 @@ public sealed class ServerAgentRunner : BotAgent.Services.Tools.IToolExecutor
                 == BotAgent.Domain.Memory.ToolEgressClass.SameScopeRead;
         if (!isSameScope || !BotAgent.Services.Memory.MemoryUseScope.CanUse)
         {
-            task.Fail("受控记忆任务不能调用外部或未授权工具；请另开不使用记忆的任务。");
+            task.Fail("受控记忆任务不能调用外部工具或未授权工具；请另开不使用记忆的任务。");
             return false;
         }
 

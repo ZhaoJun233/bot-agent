@@ -393,7 +393,8 @@ internal sealed class OneBotInboundEvents
             MentionedSelf: !isGroup)
         {
             AllowsCommands = false,
-            FileAttachments = [attachment]
+            FileAttachments = [attachment],
+            IsPassiveNotice = isGroup
         });
     }
 

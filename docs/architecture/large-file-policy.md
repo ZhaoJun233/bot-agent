@@ -129,5 +129,4 @@
 
 ## 8. 相关文档
 
-- [基线报告](../baseline/report-2026-10-31.md) —— §5 是棘轮现状的原始数据
 - `tests/BotAgent.ArchitectureProbe/Baseline.cs` —— 棘轮定义的唯一真源

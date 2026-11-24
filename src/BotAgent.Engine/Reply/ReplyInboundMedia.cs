@@ -140,6 +140,9 @@ internal sealed class ReplyInboundMedia
         if (TryQueueVoiceStt(conversation, msg, appended, policy))
             holdImmediateReply = true;
 
+        if (msg.IsPassiveNotice)
+            holdImmediateReply = true;
+
         if (docsEnabled && TryQueueDocumentInbound(conversation, msg, appended, policy))
             holdImmediateReply = true;
 
@@ -337,7 +340,7 @@ internal sealed class ReplyInboundMedia
 
         if (shouldTriggerReply)
             conversation.HasPendingReply = false;
-        return true;
+        return shouldTriggerReply || msg.IsPassiveNotice;
     }
 
     private async Task HandleDocumentsAsync(

@@ -17,7 +17,6 @@ This directory centralizes Bot Agent's domain business rules, database design, o
 | **Consolidated Open Questions** | [open-questions.en.md](open-questions.en.md) | [open-questions.md](open-questions.md) | Single checklist tracking undecided operational SLAs, thresholds, and governance items across all docs |
 | **API Surface Map** | — | [api-surface.md](api-surface.md) | Complete legacy panel, ZBA v1, and package HTTP routes (enforced by `ArchitectureProbe`) |
 | **Glossary** | — | [glossary.md](glossary.md) | Domain terminology, security invariants, and module naming conventions |
-| **Roadmap & Delivery Status** | — | [roadmap.md](roadmap.md) | Delivered milestones, verification boundaries, and upcoming direction |
 
 ---
 

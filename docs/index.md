@@ -17,7 +17,6 @@
 | **待确认项集中清单** | [open-questions.md](open-questions.md) | [open-questions.en.md](open-questions.en.md) | 统一集中追踪全仓上下文中尚未明确的规则阈值、运维 SLA 与治理规范 |
 | **接口地图** | [api-surface.md](api-surface.md) | — | 面板旧接口、ZBA v1 契约与插件路由全表（受 `ArchitectureProbe` 自动覆盖断言校验） |
 | **核心术语表** | [glossary.md](glossary.md) | — | 核心领域词汇、安全不变量与模块命名约定 |
-| **版本演进路线与交付对照** | [roadmap.md](roadmap.md) | — | 已完成里程碑、验证边界与后续演进方向 |
 
 ---
 

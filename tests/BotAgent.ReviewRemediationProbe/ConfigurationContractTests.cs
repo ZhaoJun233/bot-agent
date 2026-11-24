@@ -1210,7 +1210,7 @@ internal static class ConfigurationContractTests
                 .. Directory.EnumerateFiles(Path.Combine(repository, "src/BotAgent.Headless/Host"), "CompositionRoot*.cs")
                     .Select(path => path.Substring(repository.Length + 1).Replace('\\', '/'))
                     .OrderBy(path => path, StringComparer.Ordinal),
-                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs", "docs/plans/agents/00-c3-c4-contract-candidate.md"
+                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs"
             ];
             var sourceFingerprints = sourceFiles.ToDictionary(value => value, value => Hash(BoundAsset(repository, value)), StringComparer.Ordinal);
             var bundle = Path.Combine(capture, "bundle");

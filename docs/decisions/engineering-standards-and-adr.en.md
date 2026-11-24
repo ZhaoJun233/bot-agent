@@ -45,7 +45,7 @@ This document summarizes Bot Agent's repository layout, coding standards & autom
     ├── architecture/               # Module boundaries, resolvers, web design system & plugin SDK
     ├── decisions/                  # ADR 0001–0006 & this index (with .en.md mirror)
     ├── operations/                 # Deployment, CI gates, migrations, recovery & runbook (with .en.md mirror)
-    └── baseline/                   # Performance & acceptance baselines
+    └── baseline/                   # Performance baselines
 ```
 
 ---

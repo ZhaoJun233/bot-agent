@@ -1,7 +1,7 @@
 # 大文件职责边界预审（`needs-design`，Phase 0 基线冻结）
 
 - 状态：设计预审已冻结（2026-11-21），**本文件不修改任何业务源码，仅冻结 Phase 1–5 演进期间的职责边界与拆出规则**。
-- 依据：[大文件治理标准](../architecture/large-file-policy.md)、[ArchitectureProbe 基线](../../tests/BotAgent.ArchitectureProbe/Baseline.cs)（`MaxFileLines = 1643`、`LongestMethodAnywhere = 198`）、[下一步改造计划 §5.3](../plans/product-reliability-next-step-2026-11.md#53-大文件作为设计候选按实际阻碍排序)。
+- 依据：[大文件治理标准](../architecture/large-file-policy.md)、[ArchitectureProbe 基线](../../tests/BotAgent.ArchitectureProbe/Baseline.cs)（`MaxFileLines = 1643`、`LongestMethodAnywhere = 198`）。
 - 编号说明：本文刻意不占用 `0005` / `0006` 编号，预留给后续 Phase 3（记忆-工具污点分级）与 Phase 5（可选本人跨端绑定）的正式 ADR。
 
 ---

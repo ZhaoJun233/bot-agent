@@ -107,6 +107,10 @@ public sealed class AgentTask
 
     public bool CancelRequested { get; set; }
 
+    /// <summary>本任务是否接触过受控记忆作用域；一旦置位，结束回调严禁持久化对话历史、Run 摘要或触发标题综结。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool MemoryDerived { get; set; }
+
     public void Succeeded(string text)
     {
         Done = true;
