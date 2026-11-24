@@ -26,16 +26,18 @@ const props = withDefaults(defineProps<{
   entries: ZbaConversationProfileView[]
   modelValue: ConversationProfileDrafts
   locked?: boolean
+  canWrite?: boolean | null
   maxMessagesCeiling?: number | null
-}>(), { locked: false, maxMessagesCeiling: null })
+}>(), { locked: false, canWrite: null, maxMessagesCeiling: null })
 
 const emit = defineEmits<{ 'update:modelValue': [value: ConversationProfileDrafts] }>()
 
 const newKeyInput = ref('')
 const newLabelInput = ref('')
 const addError = ref<string | null>(null)
+const writable = computed(() => props.canWrite ?? !props.locked)
 
-watch([() => props.locked, () => props.platformId], () => {
+watch([writable, () => props.platformId], () => {
   newKeyInput.value = ''
   newLabelInput.value = ''
   addError.value = null
@@ -185,13 +187,14 @@ function setFeature(row: DisplayRow, featureId: number, value: string): void {
       </p>
     </div>
 
-    <div v-if="!locked && driver" class="profile-add-bar" data-testid="conversation-profile-add">
+    <div v-if="writable && driver" class="profile-add-bar" data-testid="conversation-profile-add">
       <div class="profile-add-inputs">
         <label class="profile-field">
           <span>会话键（{{ hint.rule }}）</span>
           <input
             v-model="newKeyInput"
             type="text"
+            :disabled="locked"
             :placeholder="hint.placeholder"
             data-testid="conversation-profile-new-key"
           />
@@ -201,13 +204,14 @@ function setFeature(row: DisplayRow, featureId: number, value: string): void {
           <input
             v-model="newLabelInput"
             type="text"
+            :disabled="locked"
             placeholder="例如：项目协作群"
             data-testid="conversation-profile-new-label"
           />
         </label>
       </div>
       <div class="profile-add-actions">
-        <button type="button" class="tonal" data-testid="conversation-profile-add-blank" @click="addProfile()">
+        <button type="button" class="tonal" :disabled="locked" data-testid="conversation-profile-add-blank" @click="addProfile()">
           + 新增空白档案
         </button>
         <button
@@ -215,6 +219,7 @@ function setFeature(row: DisplayRow, featureId: number, value: string): void {
           :key="preset.id"
           type="button"
           class="preset-btn"
+          :disabled="locked"
           :title="preset.summary"
           :data-testid="'conversation-profile-add-preset-' + preset.id"
           @click="addProfile(preset)"
@@ -246,13 +251,14 @@ function setFeature(row: DisplayRow, featureId: number, value: string): void {
       </legend>
 
       <div class="profile-row-bar">
-        <div v-if="!row.isDeleted && !locked" class="preset-row">
+        <div v-if="!row.isDeleted && writable" class="preset-row">
           <span class="preset-label">一键预填：</span>
           <button
             v-for="preset in CONVERSATION_PROFILE_PRESETS"
             :key="preset.id"
             type="button"
             class="preset-btn"
+            :disabled="locked"
             :title="preset.summary"
             :data-testid="'conversation-profile-preset-' + preset.id + '-' + row.draft.key.conversationKey"
             @click="applyPresetToRow(row, preset)"

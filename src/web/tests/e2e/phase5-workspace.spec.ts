@@ -111,9 +111,15 @@ test('Phase 5: Workspace CRUD (todos, scheduler, identity), narrow 320px tabs, a
 
     // 3. Cross-platform identity toggle with inline confirmation & persistence check
     const idCheckbox = page.getByTestId('ws-identity-enabled')
+    await expect(idCheckbox).toBeEnabled()
     await idCheckbox.check()
+    await expect(idCheckbox).toBeChecked()
     await page.getByTestId('ws-identity-save').click()
-    await page.getByTestId('ws-identity-confirm-enable').click()
+    const [idToggleRes] = await Promise.all([
+      page.waitForResponse(r => r.url().includes('/zba/v1/workspace/identity/toggle') && r.request().method() === 'POST'),
+      page.getByTestId('ws-identity-confirm-enable').click(),
+    ])
+    expect(idToggleRes.ok()).toBe(true)
     await expect(page.getByTestId('ws-notice')).toContainText('已保存')
     const idCheckRes = await request.get('/zba/v1/workspace/identity', { headers: adminHeaders })
     expect(idCheckRes.ok()).toBe(true)

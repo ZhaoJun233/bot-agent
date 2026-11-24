@@ -115,18 +115,21 @@ let savedIdentitySnapshot: ZbaWorkspaceIdentityResponse = {
   workspaceCanonicalPersonId: null,
 }
 
+function isIdentityDirty(): boolean {
+  return confirmEnableIdentity.value
+    || identity.value.enabled !== savedIdentitySnapshot.enabled
+    || identity.value.shareTodos !== savedIdentitySnapshot.shareTodos
+    || identity.value.shareKnowledge !== savedIdentitySnapshot.shareKnowledge
+    || identity.value.sharePreferences !== savedIdentitySnapshot.sharePreferences
+    || (identity.value.workspaceCanonicalPersonId ?? null) !== (savedIdentitySnapshot.workspaceCanonicalPersonId ?? null)
+}
+
 const draftCount = computed(() => {
   let count = 0
   if (draftText.value.trim() || attachmentBase64.value) count++
   if (newTodoTitle.value.trim() || newTodoDue.value.trim()) count++
   if (newSchedText.value.trim() || newSchedWhen.value.trim()) count++
-  if (identity.value.enabled !== savedIdentitySnapshot.enabled
-    || identity.value.shareTodos !== savedIdentitySnapshot.shareTodos
-    || identity.value.shareKnowledge !== savedIdentitySnapshot.shareKnowledge
-    || identity.value.sharePreferences !== savedIdentitySnapshot.sharePreferences
-    || (identity.value.workspaceCanonicalPersonId ?? null) !== (savedIdentitySnapshot.workspaceCanonicalPersonId ?? null)) {
-    count++
-  }
+  if (isIdentityDirty()) count++
   return count
 })
 
@@ -220,9 +223,12 @@ async function loadAll(throwOnError = false): Promise<void> {
         if (unmounted || client !== props.client || currentSeq !== loadSeq) continue
         jobs.value = schedSnap.jobs
         jobsRevision.value = schedSnap.revision
+        const keepIdentityDraft = canWrite.value && isIdentityDirty()
         savedIdentitySnapshot = idSnap
-        identity.value = { ...idSnap, links: [...idSnap.links] }
         serverIdentityEnabled.value = idSnap.enabled
+        identity.value = keepIdentityDraft
+          ? { ...identity.value, links: [...idSnap.links] }
+          : { ...idSnap, links: [...idSnap.links] }
         tasks.value = taskPage.items
         approvals.value = approvalList
         if (canWrite.value && writableAtStart && todoSnap) {
@@ -557,17 +563,19 @@ async function saveIdentity(confirmedEnable = false): Promise<void> {
     confirmEnableIdentity.value = true
     return
   }
+  const nextEnabled = confirmedEnable ? true : identity.value.enabled
+  identity.value.enabled = nextEnabled
   confirmEnableIdentity.value = false
   mutating.value = true
   error.value = null
   try {
     const client = props.client
     const saved = await client.toggleWorkspaceIdentity({
-      enabled: identity.value.enabled,
-      shareTodos: identity.value.enabled ? identity.value.shareTodos : false,
-      shareKnowledge: identity.value.enabled ? identity.value.shareKnowledge : false,
-      sharePreferences: identity.value.enabled ? identity.value.sharePreferences : false,
-      workspaceCanonicalPersonId: identity.value.enabled ? (identity.value.workspaceCanonicalPersonId ?? null) : null,
+      enabled: nextEnabled,
+      shareTodos: nextEnabled ? identity.value.shareTodos : false,
+      shareKnowledge: nextEnabled ? identity.value.shareKnowledge : false,
+      sharePreferences: nextEnabled ? identity.value.sharePreferences : false,
+      workspaceCanonicalPersonId: nextEnabled ? (identity.value.workspaceCanonicalPersonId ?? null) : null,
     })
     if (unmounted || client !== props.client || !canWrite.value) return
     savedIdentitySnapshot = saved

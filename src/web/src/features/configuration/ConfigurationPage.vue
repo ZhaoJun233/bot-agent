@@ -1604,6 +1604,7 @@ defineExpose({
               :driver="conversationProfileDriver"
               :entries="conversationProfileRows"
               :model-value="conversationProfileDrafts"
+              :can-write="canWrite"
               :locked="!canWrite || inputsLocked"
               :max-messages-ceiling="maxMessagesCeiling"
               @update:model-value="onConversationProfileDraftsUpdate"
