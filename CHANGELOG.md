@@ -12,21 +12,35 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-25
+
+### Added
+
+- **Phases 1–5 核心能力演进**：完成对话画像（Conversation Profile）、飞书文档读取/群聊摘要/语音转文字（STT）、可撤销分层记忆与知识库授权、统一任务运行时（`AgentTaskRuntime`）/RBAC/审批隔离/MCP 工具治理，以及定时调度器、个人待办（Personal Todo）与个人工作区能力收敛。
+- **双语工程技术文档集中化**：将架构、核心业务规则（`core-business-rules`）、数据库设计（`database-design`）、运维手册（`runbook`）、工程规范与 ADR（`engineering-standards-and-adr`）集中沉淀至 `docs/` 并补齐英文镜像；集中待确认项清单（`docs/open-questions.md`）12/12 闭环。
+
 ### Changed
 
 - **Web 管理控制台领域化重构**：按「工作台 / 接入与扩展 / 运行与观测」重塑 3 组 8 项一级导航，独立拆分为 **模型供应商**、**消息平台**、**插件中心** 与五分区 **系统配置**（含 `system.*` 核心系统包只读总览表），不再将所有后端包平铺至单一能力卡片墙；统一模型配置术语为「模型供应商」。
 - **模块化设计系统与沙箱主题同步**：将前端样式拆分为 6 层（`tokens` / `reset` / `layout` / `components` / `responsive` / `base`），新增 `UiSwitch`（44×24px WCAG 2.2 达标）、`UiTabs`、`UiBanner`、`UiConfirmDialog`、`UiEmptyState` 与右侧抽屉详情；运行时插件沙箱 iframe（表情包、Token 配额等）自动同步宿主深浅主题，并支持从插件卡片一键「打开界面」。
 - **平台驱动「接入与策略」包级前端解耦**：将 QQ 私域、QQ 官方开放平台、飞书与本地调试 4 个驱动的标量字段、秘密槽位（飞书专属槽位 3/4/5）、字段标签/提示、凭据说明与策略输入文案全部下沉至各自 `packages/platform-*/frontend/presentation.ts`；「消息平台」页移除页头聚合按钮，每张驱动卡片的「接入与策略」直达该驱动专属配置抽屉，并按 `platformId` 切片展示与保存 `platformPolicies` 条目（系统配置页的 `system.platform-*` 跳转同步直达对应驱动抽屉）。
 - **模型供应商 API 地址与密钥集成**：将模型 `API 根地址`（`modelBaseUrl`）、`默认模型`（`model`）与 `API Key`（`Slot 0` 与独立凭据）全部收归对应模型供应商卡片与 `ProviderEditorDialog` 内联管理；`primary` 直接管理主模型地址、默认模型与 Slot 0 密钥并锁定优先级/启用态/删除，非主供应商默认采用独立 API Key 并自动派生 `credentialKey`（支持在折叠高级区自定义或复用已有键）；页头「路由与采样参数」（`scope="models"`）精简为纯路由与采样设置，移除重复的主模型 URL/密钥及旧注册表。
-- **13 项对话功能插件迁出宿主至官方市场**：将 13 个 `preset.feature.*` 功能插件（`digest`、`documents`、`knowledge`、`music`、`personal-todo`、`poke`、`profiles`、`scheduler`、`stickers`、`token-quota`、`vibes`、`voice`、`websearch`，首版 `1.1.0`）迁出主仓库并移交官方市场仓库 `ZhaoJun233/bot-agent-plugins` 独立发布；宿主内建发行包精简为 **9 个 `system.*` 核心与平台包**，新实例默认 0 预装功能插件且启动零自动下载，需在 `/web/`「插件中心」按需安装；新增 `OfficialPresetPolicy` 保持对既有 `1.0.0` `host-distribution://` 状态封套、历史配置与 `tenant_quotas` 账本的平滑兼容与升级/卸载，并将历史配额迁移 SQL（`preset.token-quota.14-15.{up,down}.sql`）迁入 `src/BotAgent.Storage/Schema/`，静态前端呈现注册与配额共享类型迁入 `contracts/ui/{presentations,quotas}/`。
+- **13 项对话功能插件迁出宿主至官方市场**：将 13 个 `preset.feature.*` 功能插件（`digest`、`documents`、`knowledge`、`music`、`personal-todo`、`poke`、`profiles`、`scheduler`、`stickers`、`token-quota`、`vibes`、`voice`、`websearch`，首版 `1.1.0`）迁出主仓库并移交官方市场仓库 `ZhaoJun233/bot-agent-plugins` 独立发布；宿主内建发行包精简为 **9 个 `system.*` 核心与平台包**（`19` 个 `contracts/*` 工程，`bundle_releases=9`），新实例默认 0 预装功能插件且启动零自动下载，需在 `/web/`「插件中心」按需安装；新增 `OfficialPresetPolicy` 保持对既有 `1.0.0` `host-distribution://` 状态封套、历史配置与 `tenant_quotas` 账本的平滑兼容与升级/卸载，并将历史配额迁移 SQL（`preset.token-quota.14-15.{up,down}.sql`）迁入 `src/BotAgent.Storage/Schema/`，静态前端呈现注册与配额共享类型迁入 `contracts/ui/{presentations,quotas}/`。
 - **全站操作与观测打磨**：顶栏常驻全局管理员模式切换；系统配置提供多行文本域与字符计数；系统概览组件表支持按领域直达下钻；轨迹页新增节点级耗时明细抽屉；运行日志终端新增自动换行切换与同步状态提示。
+- **运维脚本与前端工具链更新**：将 `start.sh` 中已退役的旧响应节奏变量迁移至 `ReplyPacing` 环境变量；更新前端测试工具链至 `@playwright/test 1.65.1`、`@vue/test-utils 2.6.0` 与 `vitest 5.1.1`（#173）。
 
 ### Fixed
 
 - 修复 `SettingsStore.PrepareRegisteredProviders` 在同一配置事务中校验新登记或更新的模型供应商时未先观测本次 `proposedMutations` 新写入的独立 `ModelCredentialKey` 导致单步新建/换键必报 `credential_required` 的问题，并对齐 `Ollama` 无密钥启用的校验规则；同步修复前端配置提交错误摘要未透传结构化 `result.errors`（如 `endpoint_authorization_required` / `credential_required`）的问题。
-
 - 修复平台访问策略编辑器在禁用规则（`actionKind` 1→0）时的校验死锁问题、嵌入配置页重复元信息渲染、「消息平台」未决提交恢复横幅 target 匹配遗漏及空 `instanceId` 卡片尾部悬空斜杠展示。
-- 修复右侧抽屉入场动画瞬时越过视口右边界、Firefox 品牌标识次像素高度偏差与 `restart.spec.ts` 等待宿主完全就绪竞态。
+- 修复右侧抽屉入场动画瞬时越过视口右边界、Firefox 品牌标识次像素高度偏差与 `restart.spec.ts` 等待宿主完全就绪竞态，以及 `ConversationProfileEditor` 与 `WorkspacePage` 在后台轮询重载期间覆盖用户草稿的竞态（`WebKit`）。
+- 修复禁止执行工具时未记录 `tool_not_fixed` 审计日志的问题；修正非 `@bot` 群聊文件消息静默吞没（区分被动 `group_upload` 与普通消息）以及 `UnifiedMemoryTurn` 受控记忆持久化的顺序边界。
+
+### Upgrade notes
+
+- **裸宿主与官方插件市场安装**：本版本宿主仅内置 `9` 个 `system.*` 核心与平台包及 `19` 个 `contracts/*` 工程（`bundle_releases=9`）；全新部署默认预装 `0` 个功能插件且启动阶段不会自动联网下载。需要 13 项功能插件时，请在 `/web/` 管理控制台「插件中心」从 `ZhaoJun233/bot-agent-plugins`（`1.1.0`）按需安装或升级；既有实例携带的 `1.0.0` `host-distribution://` 状态封套可直接升级至 `1.1.0` 或干净卸载。
+- **数据库与双份回滚快照**：物理 SQLite `user_version` 为 `15`（`preset.token-quota` `14–15` 迁移脚本保留于 `BotAgent.Storage/Schema/`）。从 `v1.4.0` 升级前请按 [发布检查单](docs/operations/release-checklist.md) 与 [回滚预案](docs/operations/rollback-playbook.md) 同时保留 `qqchat-agent:prev`、`data/botagent.db`（`VACUUM INTO`）与 `data/plugins/` 备份；`v1.4.0 ↔ v1.5.0` 间回退必须成对恢复两份数据快照。
+- **旧配置迁移提示**：`data/settings.json` 继续仅用于一次性旧配置导入（由 `LegacyJsonImporter` 导入后归档至 `legacy-json/`），计划于 `v2.0` 正式移除旧 JSON 导入通道。
 
 ## [1.4.0] - 2026-11-10
 
@@ -62,14 +76,6 @@
 - 统一记忆和回复节奏的启用仍由各自设置决定。固定示例包验证不代表完整市场确认；Python 进程生命周期管理不提供文件或网络隔离。
 - 实际使用观察暂缓。客户端统计、任务完成状态与合成回归不代表实际用途、费用或维护时间结论。
 
-## [1.3.0] - 2026-11-03
-
-.NET 10 LTS 升级与跨版本回滚验收、仓库治理与文档基线（#101–#125、#127）、模型配置与白名单两个「改了不生效」
-的端到端修复（#103/#104）、三条核心链路职责解耦与四条不变量回归（#106/#108/#112/#126）、Agent Runtime
-（任务生命周期与台账、统一工具注册表、任务级前置审批与票据验签、取消/超时/恢复、部署验证回滚文档，#114–#119）、
-输入缓存观测与控制参数、面板只读轨迹页（#98/#135/#138）。
-
-完整说明见 [v1.3.0 Release](https://github.com/ZhaoJun233/bot-agent/releases/tag/v1.3.0)。
-
-[Unreleased]: https://github.com/ZhaoJun233/bot-agent/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/ZhaoJun233/bot-agent/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/ZhaoJun233/bot-agent/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/ZhaoJun233/bot-agent/compare/v1.3.0...v1.4.0
