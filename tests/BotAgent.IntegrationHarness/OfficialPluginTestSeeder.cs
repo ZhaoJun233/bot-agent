@@ -33,6 +33,7 @@ internal static class OfficialPluginTestSeeder
         var pluginsDir = Path.Combine(dataSub, "plugins");
         Directory.CreateDirectory(pluginsDir);
 
+        var seededAny = false;
         foreach (var id in FeatureIds)
         {
             var packageDir = Path.Combine(pluginsDir, id);
@@ -89,7 +90,10 @@ internal static class OfficialPluginTestSeeder
                 writer.WriteEndObject();
             }
             File.WriteAllBytes(installedPath, ms.ToArray());
+            seededAny = true;
         }
+
+        if (!seededAny) return;
 
         // Seed default enabled state for the 13 official features if not already persisted.
         var canonicalDb = Path.Combine(dataSub, "botagent.db");

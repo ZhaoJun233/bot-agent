@@ -2235,6 +2235,16 @@ public static partial class Program
             return preferred;
         }
 
+        var start = preferred is >= 13000 and < 29900 ? preferred + 1 : 19000;
+        for (var offset = 0; offset < 4000; offset++)
+        {
+            var candidate = 13000 + ((start - 13000 + offset) % 16900);
+            if (candidate != preferred && CanBind(candidate))
+            {
+                return candidate;
+            }
+        }
+
         using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, 0);
         probe.ExclusiveAddressUse = true;
         probe.Start();
@@ -2265,8 +2275,14 @@ public static partial class Program
         {
             try
             {
-                using var client = new System.Net.Sockets.TcpClient();
-                await client.ConnectAsync("127.0.0.1", port, ct);
+                using (var client = new System.Net.Sockets.TcpClient())
+                {
+                    await client.ConnectAsync("127.0.0.1", port, ct);
+                    if (client.Client.LocalEndPoint is System.Net.IPEndPoint local && local.Port == port)
+                    {
+                        throw new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused);
+                    }
+                }
                 await WaitForControlPlaneBusinessReadyIfApplicableAsync(port, ct, bot);
                 return;
             }
@@ -2599,6 +2615,7 @@ public static partial class Program
                 if (!_process.HasExited)
                 {
                     _process.Kill(entireProcessTree: true);
+                    _process.WaitForExit(5000);
                 }
             }
             catch

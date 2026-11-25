@@ -12,9 +12,9 @@ public static partial class Program
     {
         Section("S49 面板会话管理 · 持久化 · 白名单发送闸门");
 
-        const int openAiPort = 17889;
-        const int protocolPort = 13109;
-        const int panelPort = 18161;
+        var openAiPort = FreePort(17889);
+        var protocolPort = FreePort(13109);
+        var panelPort = FreePort(18161);
         const long senderId = 30003;
         const string initialName = "合成会话名称";
         const string panelToken = "it-s49-token";
@@ -40,6 +40,7 @@ public static partial class Program
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "*",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
+            ["QQCHAT_HEALTH_BIND"] = "127.0.0.1",
             ["QQCHAT_PANEL_TOKEN"] = panelToken
         };
 
