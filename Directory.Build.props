@@ -35,7 +35,7 @@
     <!-- 宿主版本真源：只有 build/release-projects.json 精确登记的独立包/契约工程
          可以在各自 csproj 声明一个字面 Version；其余工程继承此值。
          CI 保留宿主 tag 与命令行程序集版本一致性；包发行不改变宿主版本。 -->
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
   </PropertyGroup>
 
 </Project>
