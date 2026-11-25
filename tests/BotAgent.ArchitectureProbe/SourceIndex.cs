@@ -24,18 +24,28 @@ internal sealed class SourceFile
     public required string[] CodeOnlyLines { get; init; }
 
     public int LineCount => Lines.Length;
+    public bool IsSqlResource => RelativePath.EndsWith(".sql", StringComparison.OrdinalIgnoreCase);
+    public string? OwnerProject { get; init; }
+    public string? OwnerDirectory { get; init; }
 
-    public string ProjectName => RelativePath.StartsWith("src/", StringComparison.Ordinal)
-        ? RelativePath.Split('/')[1] : "(fixture)";
-    public string ProjectRelativePath => RelativePath.StartsWith("src/", StringComparison.Ordinal)
-        ? string.Join("/", RelativePath.Split('/').Skip(2)) : RelativePath;
+    public string ProjectName => OwnerProject ?? (RelativePath.StartsWith("src/", StringComparison.Ordinal)
+        ? RelativePath.Split('/')[1] : "(fixture)");
+    public string ProjectRelativePath => OwnerDirectory is not null ? RelativePath[(OwnerDirectory.Length + 1)..]
+        : RelativePath.StartsWith("src/", StringComparison.Ordinal) ? string.Join("/", RelativePath.Split('/').Skip(2)) : RelativePath;
 
-    public static SourceFile FromText(string path, string raw)
+    public static SourceFile FromText(string path, string raw, string? project = null, string? directory = null)
     {
         CsharpText.Strip(raw, out var noComments, out var codeOnly);
+        if (path.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
+        {
+            // SQL resources are command inputs, not C#. Preserve their source for IO
+            // accounting and ownership, without inventing C# blocks from SQL syntax.
+            noComments = raw;
+            codeOnly = new string(raw.Select(c => c is '\r' or '\n' ? c : ' ').ToArray());
+        }
         return new SourceFile
         {
-            RelativePath = path, Raw = raw, Lines = SourceIndex.SplitLines(raw),
+            RelativePath = path, Raw = raw, Lines = SourceIndex.SplitLines(raw), OwnerProject = project, OwnerDirectory = directory,
             NoComments = noComments, CodeOnly = codeOnly, CodeOnlyLines = SourceIndex.SplitLines(codeOnly),
         };
     }
@@ -53,7 +63,8 @@ internal sealed class SourceFile
     }
 }
 
-internal sealed record SourceProject(string Name, string RelativePath, IReadOnlyList<string> References, int FileCount);
+internal sealed record SourceProject(string Name, string RelativePath, IReadOnlyList<string> References, int FileCount,
+    IReadOnlyList<string>? BuildReferences = null);
 
 /// <summary>所有实际业务工程的源码与直接项目声明快照；路径相对仓库，不做模糊别名或内容去重。</summary>
 internal sealed class SourceIndex
@@ -92,7 +103,9 @@ internal sealed class SourceIndex
         var root = ResolveRepositoryRoot();
         var src = Path.Combine(root, "src");
         if (!Directory.Exists(src)) throw Fault("source_root_missing");
-        var projectPaths = SourcePaths(src).Where(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        var roots = new[] { src, Path.Combine(root, "packages"), Path.Combine(root, "contracts"),
+            Path.Combine(root, "tools", "BotAgent.PluginBundle") }.Where(Directory.Exists);
+        var projectPaths = roots.SelectMany(SourcePaths).Where(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => p, StringComparer.Ordinal).ToList();
         var names = projectPaths.Select(p => Path.GetFileNameWithoutExtension(p)).ToHashSet(StringComparer.Ordinal);
         var missingProjects = Baseline.RequiredProjects.Where(name => !names.Contains(name)).ToList();
@@ -101,23 +114,32 @@ internal sealed class SourceIndex
         if (names.Count != projectPaths.Count) throw Fault("duplicate_project_identity");
         var files = new List<SourceFile>();
         var projects = new List<SourceProject>();
+        var linkedSources = new HashSet<string>(StringComparer.Ordinal);
+        var schemaInputs = new HashSet<(string Project, string Source)>();
         foreach (var projectPath in projectPaths)
         {
             var name = Path.GetFileNameWithoutExtension(projectPath);
             var relative = Relative(root, projectPath);
             if (!Baseline.AllowedProjectReferences.ContainsKey(name)) throw Fault("unregistered_project:" + name);
-            if (relative != $"src/{name}/{name}.csproj") throw Fault("project_layout_unsupported:" + name);
+            if (relative != $"src/{name}/{name}.csproj"
+                && !Baseline.RegisteredPackageContracts.ContainsKey(relative)
+                && !Baseline.RegisteredContractProjects.ContainsKey(relative)
+                && relative != Baseline.BundleProject) throw Fault("project_layout_unsupported:" + name);
             EnsureBuildBaselineIsDeclared(root);
             var xml = ReadXml(projectPath, relative);
+            ValidateSchemaResources(root, relative, xml, schemaInputs);
             if (xml.Descendants().Any(e => e.Name.LocalName == "Import"
-                || e.Name.LocalName == "Compile"
+                || (e.Name.LocalName == "Compile" && !AllowedCompatibilityLink(root, relative, e) && !AllowedGeneratedTrust(relative, e))
                 || (e.Name.LocalName == "EnableDefaultCompileItems" && e.Value.Trim() != "true")))
                 throw Fault("project_compile_or_import_unsupported:" + name);
+            if (xml.Descendants("Compile").Any(e => AllowedCompatibilityLink(root, relative, e))) linkedSources.Add(Baseline.CompatibilitySourceLinks[relative]);
             // 本探针不求值 MSBuild 条件/属性；不能把无法解释的引用当作不存在。
             var references = new List<string>();
+            var buildReferences = new List<string>();
             foreach (var reference in xml.Descendants().Where(e => e.Name.LocalName == "ProjectReference"))
             {
-                if (reference.AncestorsAndSelf().Any(e => e.Attributes().Any(a => a.Name.LocalName == "Condition")))
+                if (reference.AncestorsAndSelf().Any(e => e.Attributes().Any(a => a.Name.LocalName == "Condition"))
+                    && !AllowedSdkReference(relative, reference))
                     throw Fault("conditional_project_reference:" + name);
                 var include = reference.Attribute("Include")?.Value;
                 if (string.IsNullOrWhiteSpace(include) || include.IndexOfAny(new[] { '$', '*', '?', ';' }) >= 0)
@@ -130,18 +152,37 @@ internal sealed class SourceIndex
                 var storageAlias = name == "BotAgent.Headless"
                     && target == "src/BotAgent.Storage/BotAgent.Storage.csproj"
                     && reference.Attribute("Aliases")?.Value == "StorageModule";
+                var buildOnly = name == "BotAgent.Headless"
+                    && (target == Baseline.BundleProject || Baseline.RegisteredPackageContracts.ContainsKey(target))
+                    && reference.Attribute("ReferenceOutputAssembly")?.Value == "false"
+                    && reference.Attribute("Private")?.Value == "false";
+                var independentContract = (name == "BotAgent.Core" && Baseline.RegisteredContractProjects.ContainsKey(target))
+                    || (Baseline.RegisteredContractProjects.ContainsKey(relative) && relative != Baseline.PluginContractsProject && target == Baseline.PluginContractsProject);
                 if (reference.Elements().Any() || reference.Attributes().Any(a => a.Name != "Include"
-                    && !(storageAlias && a.Name == "Aliases")))
+                    && !(storageAlias && a.Name == "Aliases") && !(buildOnly && (a.Name == "ReferenceOutputAssembly" || a.Name == "Private"))
+                    && !(independentContract && a.Name == "GlobalPropertiesToRemove"
+                        && a.Value == "Version;AssemblyVersion;FileVersion;InformationalVersion")
+                    && !(buildOnly && a.Name == "GlobalPropertiesToRemove"
+                        && a.Value == "Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir")))
                     throw Fault("project_reference_metadata_unsupported:" + name);
-                references.Add(target);
+                (buildOnly ? buildReferences : references).Add(target);
             }
-            var projectFiles = SourcePaths(Path.GetDirectoryName(projectPath)!).Where(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            var projectFiles = SourcePaths(Path.GetDirectoryName(projectPath)!).Where(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || p.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(p => p, StringComparer.Ordinal)
-                .Select(p => SourceFile.FromText(Relative(root, p), File.ReadAllText(p))).ToList();
+                .Select(p => SourceFile.FromText(Relative(root, p), File.ReadAllText(p), name, Relative(root, Path.GetDirectoryName(projectPath)!))).ToList();
             if (!projectFiles.Any(f => Regex.IsMatch(f.CodeOnly, @"\b(class|struct|interface|record|enum)\s+\w")))
                 throw Fault("project_source_empty:" + name);
             files.AddRange(projectFiles);
-            projects.Add(new SourceProject(name, relative, references, projectFiles.Count));
+            projects.Add(new SourceProject(name, relative, references, projectFiles.Count, buildReferences));
+        }
+        foreach (var link in linkedSources)
+            if (!files.Any(f => f.RelativePath == link)) throw Fault("compatibility_source_not_scanned:" + link);
+        foreach (var (path, owner) in Baseline.SchemaSqlOwners)
+        {
+            if (!files.Any(f => f.RelativePath == path)) continue;
+            if (!schemaInputs.Contains((owner, path)) || !schemaInputs.Contains(("src/BotAgent.Storage/BotAgent.Storage.csproj", path)))
+                throw Fault("historical_schema_input_missing:" + path);
         }
         var index = new SourceIndex { Root = root, Files = files.OrderBy(f => f.RelativePath, StringComparer.Ordinal).ToList(), Projects = projects };
         if (!index.In("src/BotAgent.Core/Domain").Any(f => Regex.IsMatch(f.CodeOnly, @"\b(class|struct|interface|record|enum)\s+\w")))
@@ -154,12 +195,71 @@ internal sealed class SourceIndex
         return index;
     }
 
+    private static void ValidateSchemaResources(string root, string project, XDocument xml,
+        HashSet<(string Project, string Source)> inputs)
+    {
+        foreach (var resource in xml.Descendants("EmbeddedResource"))
+        {
+            var include = resource.Attribute("Include")?.Value;
+            if (resource.HasElements || resource.Attributes().Any(a => a.Name != "Include" && a.Name != "LogicalName")
+                || resource.AncestorsAndSelf().Any(e => e.Attributes().Any(a => a.Name.LocalName == "Condition"))
+                || string.IsNullOrWhiteSpace(include) || include.IndexOfAny(['$', '*', '?', ';']) >= 0)
+                throw Fault("schema_resource_unsupported:" + project);
+            var path = Relative(root, Path.GetFullPath(Path.Combine(root, Path.GetDirectoryName(project)!, include)));
+            if (!Baseline.SchemaSqlOwners.TryGetValue(path, out var owner)
+                || (project != owner && project != "src/BotAgent.Storage/BotAgent.Storage.csproj")
+                || resource.Attribute("LogicalName")?.Value != "BotAgent.Schema." + Path.GetFileName(path)
+                || !File.Exists(Path.Combine(root, path)) || !inputs.Add((project, path)))
+                throw Fault("schema_resource_owner_or_identity:" + project);
+        }
+    }
+
+    private static bool AllowedCompatibilityLink(string root, string project, XElement element)
+    {
+        if (!Baseline.CompatibilitySourceLinks.TryGetValue(project, out var expected) || element.HasElements
+            || element.Attributes().Any(a => a.Name != "Include" && a.Name != "Link")
+            || element.AncestorsAndSelf().Any(e => e.Attributes().Any(a => a.Name.LocalName == "Condition"))) return false;
+        var include = element.Attribute("Include")?.Value;
+        if (string.IsNullOrWhiteSpace(include) || include.IndexOfAny(['$', '*', '?', ';']) >= 0) return false;
+        var target = Path.GetFullPath(Path.Combine(root, Path.GetDirectoryName(project)!, include));
+        return Relative(root, target) == expected && File.Exists(target)
+            && element.Attribute("Link")?.Value == "Compatibility/" + Path.GetFileName(expected);
+    }
+
+    private static bool AllowedGeneratedTrust(string project, XElement element)
+        => project == "src/BotAgent.Headless/BotAgent.Headless.csproj" && !element.HasElements
+            && element.Attributes().Count() == 1 && element.Attribute("Include")?.Value == "$(IntermediateOutputPath)plugin-distribution/HostPluginBundle.g.cs"
+            && element.Parent?.Name == "ItemGroup" && element.Parent.Parent?.Name == "Target"
+            && element.Parent.Parent.Attribute("Name")?.Value == "BuildPluginDistribution";
+
+    private static bool AllowedSdkReference(string project, XElement reference)
+    {
+        // Each independent project has an explicit, complete public binary dependency set.
+        var isContract = Baseline.RegisteredContractProjects.ContainsKey(project) && project != Baseline.PluginContractsProject;
+        var isPackage = Baseline.RegisteredPackageContracts.TryGetValue(project, out var contractName);
+        if ((!isContract && !isPackage) || reference.Parent?.Name != "ItemGroup"
+            || reference.Parent.Attribute("Condition")?.Value != "'$(PluginSdkPath)' == ''"
+            || reference.Parent.Parent?.Name != "Project" || reference.Parent.Parent.Attributes().Any(a => a.Name == "Condition")) return false;
+        var binary = reference.Document!.Descendants("Reference").ToArray();
+        var names = isContract ? new[] { "BotAgent.Plugin.Contracts" }
+            : new[] { "BotAgent.Core", "BotAgent.Plugin.Contracts", contractName! };
+        return binary.Length == names.Length && names.All(name => binary.Count(item =>
+            !item.HasElements && item.Attributes().Count() == 3 && item.Attribute("Include")?.Value == name
+            && item.Attribute("HintPath")?.Value == "$(PluginSdkPath)/" + name + ".dll"
+            && item.Attribute("Private")?.Value == "false" && item.Parent?.Name == "ItemGroup"
+            && item.Parent.Attribute("Condition")?.Value == "'$(PluginSdkPath)' != ''") == 1);
+    }
+
     internal static IReadOnlyList<string> ReferenceErrors(IReadOnlyList<SourceProject> projects)
     {
         var errors = new List<string>();
         var byPath = projects.ToDictionary(p => p.RelativePath, StringComparer.OrdinalIgnoreCase);
         foreach (var project in projects)
         {
+            foreach (var path in project.BuildReferences ?? [])
+                if (project.Name != "BotAgent.Headless"
+                    || (path != Baseline.BundleProject && !Baseline.RegisteredPackageContracts.ContainsKey(path))
+                    || !byPath.ContainsKey(path)) errors.Add("forbidden_build_reference:" + project.Name);
             foreach (var path in project.References)
             {
                 if (!byPath.TryGetValue(path, out var target)) errors.Add("missing_reference:" + project.Name);
@@ -175,7 +275,7 @@ internal sealed class SourceIndex
             if (visiting.Contains(p.RelativePath)) return true;
             if (!visited.Add(p.RelativePath)) return false;
             visiting.Add(p.RelativePath);
-            foreach (var path in p.References)
+            foreach (var path in p.References.Concat(p.BuildReferences ?? []))
                 if (byPath.TryGetValue(path, out var next) && Cycle(next)) return true;
             visiting.Remove(p.RelativePath);
             return false;

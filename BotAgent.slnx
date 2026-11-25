@@ -1,4 +1,40 @@
 <Solution>
+  <Folder Name="/contracts/">
+    <Project Path="contracts/plugin/BotAgent.Plugin.Contracts.csproj" />
+    <Project Path="contracts/quota/BotAgent.Quota.Contracts.csproj" />
+    <Project Path="contracts/research/BotAgent.Research.Contracts.csproj" />
+    <Project Path="contracts/poke/BotAgent.Poke.Contracts.csproj" />
+    <Project Path="contracts/vibes/BotAgent.Vibes.Contracts.csproj" />
+    <Project Path="contracts/stickers/BotAgent.Stickers.Contracts.csproj" />
+    <Project Path="contracts/music/BotAgent.Music.Contracts.csproj" />
+    <Project Path="contracts/voice/BotAgent.Voice.Contracts.csproj" />
+    <Project Path="contracts/profiles/BotAgent.Profiles.Contracts.csproj" />
+    <Project Path="contracts/healthreporting/BotAgent.HealthReporting.Contracts.csproj" />
+    <Project Path="contracts/modelservices/BotAgent.ModelServices.Contracts.csproj" />
+    <Project Path="contracts/agent/BotAgent.Agent.Contracts.csproj" />
+    <Project Path="contracts/conversation/BotAgent.Conversation.Contracts.csproj" />
+    <Project Path="contracts/platforms/BotAgent.Platforms.Contracts.csproj" />
+    <Project Path="contracts/documents/BotAgent.Documents.Contracts.csproj" />
+    <Project Path="contracts/digest/BotAgent.Digest.Contracts.csproj" />
+    <Project Path="contracts/knowledge/BotAgent.Knowledge.Contracts.csproj" />
+    <Project Path="contracts/scheduler/BotAgent.Scheduler.Contracts.csproj" />
+    <Project Path="contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj" />
+  </Folder>
+  <Folder Name="/packages/">
+    <Project Path="packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj" />
+    <Project Path="packages/model-services/backend/BotAgent.Package.ModelServices.csproj" />
+    <Project Path="packages/agent/backend/BotAgent.Package.Agent.csproj" />
+    <Project Path="packages/mcp-tools/backend/BotAgent.Package.McpTools.csproj" />
+    <Project Path="packages/conversation/backend/BotAgent.Package.Conversation.csproj" />
+    <Project Path="packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csproj" />
+    <Project Path="packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj" />
+    <Project Path="packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj" />
+    <Project Path="packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj" />
+    <Project Path="tools/BotAgent.OfficialIdentityMigration/BotAgent.OfficialIdentityMigration.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/BotAgent.Core/BotAgent.Core.csproj" />
     <Project Path="src/BotAgent.Engine/BotAgent.Engine.csproj" />
@@ -24,6 +60,7 @@
     <Project Path="tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj" />
     <Project Path="tests/BotAgent.EngineProbe/BotAgent.EngineProbe.csproj" />
     <Project Path="tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj" />
+    <Project Path="tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj" />
     <Project Path="tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj" />
     <Project Path="tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj" />
     <Project Path="tests/BotAgent.MemoryCommandProbe/BotAgent.MemoryCommandProbe.csproj" />
@@ -44,6 +81,7 @@
     <Project Path="tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj" />
     <Project Path="tests/BotAgent.ReviewRemediationProbe/BotAgent.ReviewRemediationProbe.csproj" />
     <Project Path="tests/BotAgent.SafetyProbe/BotAgent.SafetyProbe.csproj" />
+    <Project Path="tests/BotAgent.SchedulerProbe/BotAgent.SchedulerProbe.csproj" />
     <Project Path="tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj" />
     <Project Path="tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj" />
     <Project Path="tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj" />

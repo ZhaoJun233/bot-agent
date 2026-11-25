@@ -1,3 +1,4 @@
+using BotAgent.Domain.Plugins;
 using System.Text.Json.Nodes;
 
 namespace BotAgent.Panel;
@@ -9,6 +10,7 @@ namespace BotAgent.Panel;
 public sealed partial class ZbaEndpoint
 {
     private readonly IZbaBackend _backend;
+    private readonly ZbaHttpCatalog _http;
     private readonly ZbaSecurity _security;
     private readonly ZbaOptions _options;
     private readonly Func<DateTimeOffset> _now;
@@ -19,7 +21,7 @@ public sealed partial class ZbaEndpoint
     /// <summary>本进程实际提供的能力；客户端据此判断新入口是否可用，不靠版本号猜。</summary>
     private static readonly string[] Features =
     {
-        "quotas.list", "quotas.save", "quotas.find",
+        "operations.find",
         "sessions.list",
         "sessions.ensure",
         "tasks.result",
@@ -35,6 +37,11 @@ public sealed partial class ZbaEndpoint
         "plugins.operations.get",
         "plugins.settings.read",
         "plugins.settings.save",
+        "plugins.ui.session.open",
+        "plugins.ui.session.close",
+        "plugins.ui.asset",
+        "plugins.bundle.preview",
+        "plugins.bundle.apply",
         "providers.models",
         "traces.list",
         "logs.list",
@@ -56,11 +63,24 @@ public sealed partial class ZbaEndpoint
         _instanceId = instanceId ?? throw new ArgumentNullException(nameof(instanceId));
         _log = log;
         _security = new ZbaSecurity(options, now);
+        _http = new((backend as IZbaHttpContributions)?.HttpContributions ?? [], Features);
     }
 
-    public IReadOnlyList<ZbaRouteInfo> Routes => ZbaRoutes.All;
+    public IReadOnlyList<ZbaRouteInfo> Routes => _http.Routes;
 
     public int MaxBodyBytes => _options.MaxBodyBytes;
+
+    private const int WorkspaceSendMaxBodyBytes = 15 * 1024 * 1024;
+
+    public int MaxBodyBytesFor(string? method, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(method) || string.IsNullOrWhiteSpace(path))
+            return _options.MaxBodyBytes;
+        var match = ZbaRoutes.Match(method.ToUpperInvariant(), NormalizePath(path), Routes);
+        if (match is not null && string.Equals(match.Route.OperationId, "workspace.messages.send", StringComparison.Ordinal))
+            return Math.Max(_options.MaxBodyBytes, WorkspaceSendMaxBodyBytes);
+        return _options.MaxBodyBytes;
+    }
 
     public async ValueTask<ZbaResponse> ProcessAsync(ZbaRequest request, CancellationToken ct = default)
     {
@@ -70,10 +90,10 @@ public sealed partial class ZbaEndpoint
         {
             var path = NormalizePath(request.Path);
             var method = request.Method.ToUpperInvariant();
-            match = ZbaRoutes.Match(method, path);
+            match = ZbaRoutes.Match(method, path, Routes);
             if (match is null)
             {
-                if (ZbaRoutes.HasPath(path)) return MethodNotAllowed(requestId, path);
+                if (ZbaRoutes.HasPath(path, Routes)) return MethodNotAllowed(requestId, path);
                 return Error(404, "not_found", "路径不存在。", requestId: requestId);
             }
 
@@ -92,14 +112,15 @@ public sealed partial class ZbaEndpoint
 
             var query = ZbaQuery.Parse(request.QueryString);
             query.AllowOnly(ZbaRoutes.QueryNames(match.Route.OperationId));
+            if (_http.Contains(match.Route.OperationId))
+                return Json(await _http.Invoke(match.Route.OperationId, CreateCaller(principal!),
+                    new ContributionBody(request, MaxBodyBytesFor(method, path)), ct).ConfigureAwait(false), requestId);
             var response = match.Route.OperationId switch
             {
                 "health" => await HandleHealthAsync(requestId, ct).ConfigureAwait(false),
                 "meta" => MetaResponse(requestId),
                 "openapi" => OpenApiResponse(requestId),
-                "quotas.list" => await HandleQuotaListAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
-                "quotas.save" => await HandleQuotaSaveAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
-                "quotas.find" => await HandleQuotaFindAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "operations.find" => await HandleOperationFindAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
                 "status" => await HandleStatusAsync(CreateCaller(principal!), requestId, ct).ConfigureAwait(false),
                 "sessions.list" => await HandleSessionsListAsync(CreateCaller(principal!), query, requestId, ct).ConfigureAwait(false),
                 "sessions.ensure" => await HandleSessionsEnsureAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
@@ -137,11 +158,20 @@ public sealed partial class ZbaEndpoint
                 "plugins.operations.get" => await HandlePluginOperationAsync(CreateCaller(principal!), match.Values["key"], requestId, ct).ConfigureAwait(false),
                 "plugins.settings.read" => await HandlePluginSettingsReadAsync(CreateCaller(principal!), match.Values["id"], requestId, ct).ConfigureAwait(false),
                 "plugins.settings.save" => await HandlePluginSettingsSaveAsync(CreateCaller(principal!), match.Values["id"], request, requestId, ct).ConfigureAwait(false),
+                "plugins.ui.session.open" => await HandlePluginUiSessionOpenAsync(CreateCaller(principal!), match.Values["id"], requestId, ct).ConfigureAwait(false),
+                "plugins.ui.session.close" => await HandlePluginUiSessionCloseAsync(CreateCaller(principal!), match.Values["id"], match.Values["sessionId"], requestId, ct).ConfigureAwait(false),
+                "plugins.ui.asset" => await HandlePluginUiAssetAsync(request, match.Values["id"], match.Values["sha256"], match.Values["ticket"], match.Values["asset"], requestId, ct).ConfigureAwait(false),
+                "plugins.bundle.preview" => await HandlePluginBundlePreviewAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
+                "plugins.bundle.apply" => await HandlePluginBundleApplyAsync(CreateCaller(principal!), request, requestId, ct).ConfigureAwait(false),
                 "providers.models" => await HandleProviderModelsAsync(CreateCaller(principal!), match.Values["key"], requestId, ct).ConfigureAwait(false),
                 _ => Error(404, "not_found", "路径不存在。", requestId: requestId)
             };
 
             return Attach(response, requestId);
+        }
+        catch (PluginHttpException error)
+        {
+            return Error(error.Status, error.Code, "请求无效。", requestId: requestId);
         }
         catch (ZbaBadRequestException error)
         {
@@ -179,7 +209,7 @@ public sealed partial class ZbaEndpoint
 
     private ZbaResponse MethodNotAllowed(string requestId, string path)
     {
-        var methods = ZbaRoutes.All
+        var methods = Routes
             .Where(route => route.Template == path || MatchesTemplate(route.Template, path))
             .Select(route => route.Method)
             .Distinct(StringComparer.Ordinal)
@@ -197,6 +227,19 @@ public sealed partial class ZbaEndpoint
     {
         var templateParts = template.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var pathParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var hasWildcard = templateParts.Length > 0
+            && templateParts[^1].StartsWith("{*", StringComparison.Ordinal)
+            && templateParts[^1].EndsWith('}');
+        if (hasWildcard)
+        {
+            if (pathParts.Length < templateParts.Length) return false;
+            for (var index = 0; index < templateParts.Length - 1; index++)
+            {
+                var expected = templateParts[index];
+                if (!expected.StartsWith('{') && !expected.Equals(pathParts[index], StringComparison.Ordinal)) return false;
+            }
+            return true;
+        }
         if (templateParts.Length != pathParts.Length) return false;
         for (var index = 0; index < templateParts.Length; index++)
         {
@@ -214,14 +257,14 @@ public sealed partial class ZbaEndpoint
             "bearer",
             new[] { "read", "admin" },
             Sse: false,
-            McpManagement: false,
+            McpManagement: _http.Contains("mcp.servers.list"),
             DockerManagement: false,
             _options.MaxBodyBytes,
             _instanceId,
-            Features), requestId);
+            Features.Concat(_http.Features).ToArray()), requestId);
 
     private ZbaResponse OpenApiResponse(string requestId)
-        => Json(ZbaOpenApi.Build(), requestId);
+        => Json(ZbaOpenApi.Build(Routes, _http.Schemas()), requestId);
 
     private async ValueTask<ZbaResponse> HandleHealthAsync(string requestId, CancellationToken ct)
     {
@@ -271,6 +314,11 @@ public sealed partial class ZbaEndpoint
             ["Cache-Control"] = "no-store",
             ["Vary"] = "Authorization"
         };
+
+    private sealed class ContributionBody(ZbaRequest request, int maxBytes) : PluginHttpBody
+    {
+        public override T Read<T>() => ZbaJson.Parse<T>(request.Body, maxBytes);
+    }
 
     private T Body<T>(ZbaRequest request) => ZbaJson.Parse<T>(request.Body, _options.MaxBodyBytes);
 

@@ -37,6 +37,7 @@ public sealed record ZbaPluginCatalog(
     public ZbaPluginGovernanceSource? GovernanceSource { get; init; }
     public IReadOnlyList<ZbaBuiltinPlugin> BuiltinPlugins { get; init; } = [];
     public string? MetadataNotice { get; init; }
+    public IReadOnlyList<PluginPackageMetadataFailure> MetadataFailures { get; init; } = [];
     public override string ToString() => "ZbaPluginCatalog";
 }
 
@@ -46,6 +47,7 @@ public sealed record ZbaInstalledPlugins(
 {
     public ZbaPluginGovernanceSource? GovernanceSource { get; init; }
     public IReadOnlyList<ZbaBuiltinPlugin> BuiltinPlugins { get; init; } = [];
+    public IReadOnlyList<PluginPackageMetadataFailure> MetadataFailures { get; init; } = [];
     public override string ToString() => "ZbaInstalledPlugins";
 }
 

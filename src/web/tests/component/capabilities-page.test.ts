@@ -81,16 +81,16 @@ function mountPage(client = clientWith(), mode: 'read' | 'admin' = 'admin') {
 }
 
 describe('CapabilitiesPage', () => {
-  it('F6 forwards navigate into embedded models, keeps ordinary drafts, and clears secrets', async () => {
+  it('F6 forwards navigate into embedded agent, keeps ordinary drafts, and clears secrets', async () => {
     const save = vi.fn()
     const client = clientWith({ readConfiguration: async () => structuredClone(editableConfiguration) as unknown as ZbaConfigurationReadResult, saveConfiguration: save })
     const wrapper = mountPage(client, 'admin')
     await flushPromises()
-    await wrapper.get('[data-testid="ability-settings-models"]').trigger('click')
+    await wrapper.get('[data-testid="ability-settings-agent"]').trigger('click')
     await flushPromises()
     const editor = document.querySelector('[data-testid="ability-configuration-dialog"]')!
-    const input = editor.querySelector<HTMLInputElement>('[data-testid="config-field-model"] input')!
-    input.value = 'Synthetic retained embedded model'
+    const input = editor.querySelector<HTMLTextAreaElement>('[data-testid="config-field-agentPrompt"] textarea')!
+    input.value = 'Synthetic retained embedded prompt'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     editor.querySelector<HTMLButtonElement>('[data-testid="config-secrets"] [data-testid="secret-replace"]')!.click()
     await flushPromises()
@@ -115,7 +115,7 @@ describe('CapabilitiesPage', () => {
     await wrapper.setProps({ active: true })
     await flushPromises()
     const returned = document.querySelector('[data-testid="ability-configuration-dialog"]')!
-    expect(returned.querySelector<HTMLInputElement>('[data-testid="config-field-model"] input')!.value).toBe('Synthetic retained embedded model')
+    expect(returned.querySelector<HTMLTextAreaElement>('[data-testid="config-field-agentPrompt"] textarea')!.value).toBe('Synthetic retained embedded prompt')
     expect(returned.querySelector('[data-testid="config-secrets"] input')).toBeNull()
     expect(returned.querySelector('[data-testid="config-receipt"]')).toBeNull()
     expect(save).not.toHaveBeenCalled()

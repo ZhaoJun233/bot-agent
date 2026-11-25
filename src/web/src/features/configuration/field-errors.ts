@@ -17,6 +17,15 @@ export function configurationFieldErrors(errors: ZbaFieldError[], view?: ZbaConf
       }
     }
     const objectRecord = typeof object === 'object' && object !== null ? object as Record<string, unknown> : null
+    if (address.field === 153 || objectRecord?.kind === 'conversationProfile' || objectRecord?.$type === 'conversationProfile') {
+      const profileKey = objectRecord?.key && typeof objectRecord.key === 'object'
+        ? objectRecord.key as { conversationKey?: unknown; driver?: { platformId?: unknown } }
+        : null
+      const convKey = typeof profileKey?.conversationKey === 'string' ? profileKey.conversationKey : null
+      const platform = typeof profileKey?.driver?.platformId === 'string' ? profileKey.driver.platformId : null
+      const suffix = convKey ? `（${platform ? `${platform} / ` : ''}${convKey}）` : ''
+      return { path: 'registered.conversationProfiles', message: `${fieldLabel('conversationProfiles')}${suffix}：${error.code}` }
+    }
     const key = typeof object === 'string' ? object : objectRecord?.key
     if (view && typeof key === 'string' && (!objectRecord || objectRecord.kind === 'provider' || objectRecord.$type === 'provider')) {
       const provider = view.registered.providers.find(provider => provider.key === key)

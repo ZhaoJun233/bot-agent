@@ -106,13 +106,14 @@ public sealed class PlatformPolicyResolver : IPlatformPolicyResolver
         else if (!snapshot.Connected) reasons.Add("platform_disconnected");
         if (!enabled) reasons.Add("platform_disabled");
         if (!chatEnabled) reasons.Add("chat_disabled");
-        // QQ management actions are implemented only by the private OneBot action host, not by text capability.
-        var actions = context.PlatformId == PlatformId.QqPrivate && enabled && chatEnabled && snapshot?.Connected == true
+        // Policy grants apply to both QQ hosts; each host separately checks its supported action catalog.
+        var actions = context.PlatformId is PlatformId.QqPrivate or PlatformId.QqOfficial
+            && enabled && chatEnabled && snapshot?.Connected == true
             ? rules.AllowedActions.Actions.Select(action => action.Value).ToImmutableHashSet(StringComparer.Ordinal)
             : ImmutableHashSet<string>.Empty;
         return new EffectivePlatformPolicy(context, snapshot is not null, snapshot?.Connected ?? false, enabled, chatEnabled,
             snapshot?.Capabilities ?? DefaultCapabilities(context.PlatformId), actions,
-            rules.Features.ToImmutableDictionary(feature => feature.Feature.ToString().ToLowerInvariant(),
+            rules.Features.ToImmutableDictionary(feature => EffectivePlatformPolicy.FeatureKey(feature.Feature),
                 feature => feature.Enabled, StringComparer.OrdinalIgnoreCase), reasons.ToImmutable())
         {
             ActionAllowlistConfigured = true,
@@ -206,7 +207,7 @@ public sealed class PlatformPolicyResolver : IPlatformPolicyResolver
             PlatformId.QqPrivate => PlatformCapabilities.QqOneBot,
             PlatformId.QqOfficial => PlatformCapabilities.QqOfficial,
             PlatformId.Local => PlatformCapabilities.Local,
-            PlatformId.Feishu => PlatformCapabilities.FeishuTextOnly,
+            PlatformId.Feishu => PlatformCapabilities.Feishu,
             _ => new PlatformCapabilities(SupportsText: false, SupportsDirect: false, SupportsGroup: false),
         };
 }

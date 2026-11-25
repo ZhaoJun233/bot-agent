@@ -1,0 +1,15 @@
+{
+  "id": "system.conversation",
+  "entryAssembly": "BotAgent.Package.Conversation.dll",
+  "entryType": "BotAgent.Packages.Conversation.ConversationPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Conversation.Contracts",
+      "owner": "system.conversation"
+    }
+  ]
+}

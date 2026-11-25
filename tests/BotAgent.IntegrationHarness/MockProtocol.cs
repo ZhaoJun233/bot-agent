@@ -45,11 +45,24 @@ public sealed class MockProtocol : IDisposable
     /// </summary>
     public HashSet<string> FailActions { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// 只让指定动作失败**一次**（下一次调用就正常）—— 用来验证“失败后重试/降级后真的能成”。
-    /// 例：S38 让 send_like 第一次被拒、第二次成，把「先看资料卡再点」那条梯子跑完。
-    /// </summary>
+    /// <summary>只让指定动作失败**一次**（下一次调用就正常）—— 用来验证“失败后重试/降级后真的能成”。</summary>
     public HashSet<string> FailActionsOnce { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>模拟 get_record / get_file 返回的内联二进制载荷（按 file / file_id 索引）。</summary>
+    public Dictionary<string, byte[]> FilePayloads { get; } = new(StringComparer.Ordinal);
+
+    private JsonObject BuildFilePayloadReply(JsonObject? prms)
+    {
+        var key = prms?["file"]?.GetValue<string>() ?? prms?["file_id"]?.GetValue<string>() ?? string.Empty;
+        lock (_gate)
+        {
+            if (FilePayloads.TryGetValue(key, out var bytes))
+            {
+                return new JsonObject { ["base64"] = Convert.ToBase64String(bytes) };
+            }
+        }
+        return new JsonObject();
+    }
 
     /// <summary>构建 get_forward_msg 的响应（未登记的 id 返回空 nodes）。</summary>
     private JsonObject BuildForwardRecord(string? id)
@@ -245,6 +258,7 @@ public sealed class MockProtocol : IDisposable
                 "get_forward_msg" => BuildForwardRecord(root["params"]?["id"]?.GetValue<string>()),
                 "send_group_msg" or "send_private_msg" => BuildSentReply(root["params"] as JsonObject),
                 "get_msg" => BuildQuotedMessage(root["params"] as JsonObject),
+                "get_record" or "get_file" or "get_group_file_url" or "get_private_file_url" => BuildFilePayloadReply(root["params"] as JsonObject),
                 _ => new JsonObject()
             };
 

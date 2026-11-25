@@ -32,10 +32,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = "http://0.0.0.0:" + botWsPort,
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "66741,66742,66743,66744",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         };
         foreach (var (key, value) in extra)

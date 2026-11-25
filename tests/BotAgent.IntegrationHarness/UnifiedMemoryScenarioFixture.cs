@@ -77,6 +77,7 @@ public static partial class Program
             // Do not consume QQCHAT_BOT_DLL: this scenario must execute this worktree's candidate.
             var dll = Path.GetFullPath(Path.Combine(RepoRoot, "src", "BotAgent.Headless", "bin", "Release", "net10.0", "BotAgent.Headless.dll"));
             if (!File.Exists(dll)) throw new FileNotFoundException("Build this worktree's Release Headless first.");
+            OfficialPluginTestSeeder.SeedIfNeeded(_dataDir);
             var psi = new ProcessStartInfo("dotnet")
             {
                 WorkingDirectory = _dataDir,
@@ -95,8 +96,8 @@ public static partial class Program
                     psi.Environment.Remove(key);
             foreach (var (key, value) in EnvironmentForMocks()) psi.Environment[key] = value;
             _bot = new BotProcess(psi);
-            await WaitForPortAsync(_wsPort, _stop.Token); // Never dump process/chat logs on failure.
-            await WaitForPortAsync(_healthPort, _stop.Token);
+            await WaitForPortAsync(_wsPort, _stop.Token, _bot); // Never dump process/chat logs on failure.
+            await WaitForPortAsync(_healthPort, _stop.Token, _bot);
             _protocol = new MockProtocol { SelfId = 10001 };
             await _protocol.ConnectReverseAsync($"ws://127.0.0.1:{_wsPort}", _stop.Token);
             var handshake = await _protocol.WaitForActionAsync("get_login_info", TimeSpan.FromSeconds(15)) is not null;
@@ -130,10 +131,7 @@ public static partial class Program
             ["BOTAGENT_FEISHU"] = "0",
             ["BOTAGENT_UNIFIED_MEMORY_ADMIN"] = new JsonObject { ["PlatformId"] = "qq.private", ["AccountScope"] = "legacy", ["InstanceId"] = "", ["NativeUserId"] = Owner.ToString() }.ToJsonString(),
             ["QQCHAT_WHITELIST"] = "10002,10003,10004,10005,10006",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_PROACTIVE"] = "0",
             ["QQCHAT_PROFILE_SUMMARY"] = "0",
             ["QQCHAT_STICKERS"] = "0",

@@ -1,6 +1,7 @@
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Stickers;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Model;
 
 namespace BotAgent.Domain.Ports;
 
@@ -20,9 +21,6 @@ public interface IModelClient
 
     /// <summary>模型人设档案（可选，请求时注入系统上下文）。</summary>
     string? BotPersona { get; set; }
-
-    /// <summary>AI 对话欲望（0-100）：越高越倾向主动参与群聊发言。</summary>
-    int AiDesire { get; set; }
 
     /// <summary>发言适合度阈值（模型自评低于它就不发）。</summary>
     int SuitabilityThreshold { get; set; }
@@ -61,7 +59,8 @@ public interface IModelClient
     SamplingProfile? sampling = null,
 
     // 提示词缓存作用域（会话 key）：只以哈希形式进请求体；null = 不加缓存键（开关见 ModelProtocolOptions.PromptCache）。
-    string? promptCacheScope = null, bool isPrivateConversation = false);
+    string? promptCacheScope = null, bool isPrivateConversation = false,
+    ConversationPromptOverrides? promptOverrides = null);
 
     /// <summary>一次"问一句、要一段文字"的调用（服务器 agent 的工具循环用它）。</summary>
     Task<string?> CompleteChatAsync(

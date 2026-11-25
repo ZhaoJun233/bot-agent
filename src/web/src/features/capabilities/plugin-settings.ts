@@ -1,17 +1,38 @@
 import { readonly, ref as vueRef, shallowReactive, shallowReadonly, type Component } from 'vue'
+import { agentPresentation } from '../../../../../packages/agent/frontend/presentation'
+import { conversationPresentation } from '../../../../../packages/conversation/frontend/presentation'
+import { healthReportingPresentation } from '../../../../../packages/health-reporting/frontend/presentation'
+import { modelProvidersPresentation, modelServicesPresentation } from '../../../../../packages/model-services/frontend/presentation'
+import { mcpToolsPresentation } from '../../../../../packages/mcp-tools/frontend/presentation'
+import { musicPresentation } from '../../../../../contracts/ui/presentations/music'
+import { platformFeishuPresentation } from '../../../../../packages/platform-feishu/frontend/presentation'
+import { platformLocalPresentation } from '../../../../../packages/platform-local/frontend/presentation'
+import { platformQqOfficialPresentation } from '../../../../../packages/platform-qq-official/frontend/presentation'
+import { platformQqPrivatePresentation } from '../../../../../packages/platform-qq-private/frontend/presentation'
+import { pokePresentation } from '../../../../../contracts/ui/presentations/poke'
+import { profilesPresentation } from '../../../../../contracts/ui/presentations/profiles'
+import { stickersPresentation } from '../../../../../contracts/ui/presentations/stickers'
+import { quotaPresentation } from '../../../../../contracts/ui/presentations/token-quota'
+import { vibesPresentation } from '../../../../../contracts/ui/presentations/vibes'
+import { voicePresentation } from '../../../../../contracts/ui/presentations/voice'
+import { researchPresentation } from '../../../../../contracts/ui/presentations/websearch'
+import { documentsPresentation } from '../../../../../contracts/ui/presentations/documents'
+import { digestPresentation } from '../../../../../contracts/ui/presentations/digest'
+import { knowledgePresentation } from '../../../../../contracts/ui/presentations/knowledge'
+import { schedulerPresentation } from '../../../../../contracts/ui/presentations/scheduler'
+import { personalTodoPresentation } from '../../../../../contracts/ui/presentations/personal-todo'
 import type { ZbaConfigurationView, ZbaPatchSection, ZbaReadField, ZbaSecretSlot } from '../../api/zba'
 
 /**
  * 插件 → 它所拥有的配置字段。
  *
  * 字段仍然存在原来的配置分区里（契约不变），这里只决定「在哪里编辑」：
- * 插件相关的设置从配置页挪到能力页的插件卡片上，配置页不再重复展示。
+ * 插件相关的设置从配置页挪到对应领域页的卡片上，配置页不再重复展示。
  * 插件 ID 与 PluginGate.CapabilityPlugins 一致；字段键来自 cfg-0.3.3 字段表。
  *
- * 后续接入新插件（预留接口）：
- * - 后端：实现 IBotPlugin，并把 ID 加进 CompositionRoot 的 declaredPlugins，
- *   能力目录里才会出现这张卡片；它的配置字段需要先进 cfg 字段表。
- * - 前端：调用 {@link registerPlugin} 登记一份 {@link PluginSettingsSpec}。
+ * 普通包的声明式设置从获准清单读取，不需要宿主逐 ID 登记。
+ * 此处保留默认发行界面及旧 cfg 字段的过渡展示归属；复杂页面运行时交付由 D2 接入。
+ * - 前端展示：调用 {@link registerPlugin} 登记一份 {@link PluginSettingsSpec}。
  *   登记后卡片自动出现「启用」开关（enableField）与「设置」按钮，
  *   配置页会自动把这些字段过滤掉，不需要改任何页面代码。
  */
@@ -19,6 +40,15 @@ export interface PluginFieldRef {
   section: ZbaPatchSection
   key: string
 }
+
+export interface PlatformPolicyCopy {
+  groupListLabel?: string
+  privateListLabel?: string
+  groupPlaceholder?: string
+  privatePlaceholder?: string
+}
+
+export type DriverCredentialMode = 'none' | 'optional-env' | 'required-env' | 'required'
 
 export type PluginConfigurationEditor =
   | { type: 'fields' }
@@ -30,11 +60,28 @@ export interface PluginSettingsSpec {
   kind?: 'plugin' | 'system'
   /** 省略时：有可编辑内容则使用字段编辑器，否则仅声明能力。 */
   editor?: PluginConfigurationEditor
-  secrets?: ZbaSecretSlot[]
+  secrets?: readonly ZbaSecretSlot[]
   /** 仅系统能力可声明；显式所有者和基础字段优先于分区兜底。 */
-  fallbackSections?: ZbaPatchSection[]
+  fallbackSections?: readonly ZbaPatchSection[]
   /** 复用现有供应商子编辑器。 */
   providers?: boolean
+  /** 平台驱动标识（如 `qq.private`、`qq.official`、`feishu`、`local`）。 */
+  platformId?: string
+  /** 该配置编辑器对应的 `platformPolicies` 切片目标平台 ID。 */
+  policyPlatformId?: string
+  /** 包声明的图标标识（供宿主领域卡片与导航解析）。 */
+  icon?: string
+  /** 平台驱动接入凭据模式（仅用于显示层状态语义，不改变底层 wire 布尔值）。 */
+  credentialMode?: DriverCredentialMode
+  /** 凭据获取方式说明（如环境变量只读密钥提示），在配置抽屉顶部展示。 */
+  credentialHint?: string
+  /** 是否支持平台消息能力与限制检查弹窗。 */
+  supportsMessagingInspection?: boolean
+  /** 包自有的字段标签、提示、秘密槽位名称与策略输入文案。 */
+  fieldLabels?: Readonly<Record<string, string>>
+  fieldHints?: Readonly<Record<string, string>>
+  secretLabels?: Readonly<Record<number, string>>
+  policyCopy?: Readonly<PlatformPolicyCopy>
   /** 与后端插件 ID 一致，例如 `preset.feature.music`。 */
   pluginKey: string
   title: string
@@ -45,9 +92,9 @@ export interface PluginSettingsSpec {
    */
   enableField?: PluginFieldRef
   /** 整个分区都归这个插件（例如 voice / music）。 */
-  sections?: ZbaPatchSection[]
+  sections?: readonly ZbaPatchSection[]
   /** 分区里的个别字段。 */
-  fields?: PluginFieldRef[]
+  fields?: readonly PluginFieldRef[]
   /** 来源：内置预设或后续接入的扩展插件（仅用于展示）。 */
   source?: 'preset' | 'extension'
 }
@@ -56,93 +103,50 @@ export interface PluginSettingsSpec {
 export interface RegisteredPluginSettingsSpec extends PluginSettingsSpec {
   kind: 'plugin' | 'system'
   editor: PluginConfigurationEditor
-  secrets: ZbaSecretSlot[]
+  secrets: readonly ZbaSecretSlot[]
 }
 
-const behavior = (...keys: string[]): PluginFieldRef[] => keys.map((key) => ({ section: 'behavior', key }))
-const ref = (section: ZbaPatchSection, key: string): PluginFieldRef => ({ section, key })
+/** 宿主保留的平台分区兜底声明：仅承载未归属特定驱动的平台字段与策略条目。 */
+const platformFallbackPresentation: PluginSettingsSpec = Object.freeze({
+  pluginKey: 'platform',
+  kind: 'system' as const,
+  title: '其它平台接入与策略',
+  summary: '未归属特定驱动的平台通用字段与访问策略条目',
+  fallbackSections: ['platform' as const],
+  secrets: [] as const
+})
 
 const presets: PluginSettingsSpec[] = [
+  conversationPresentation,
+  modelServicesPresentation,
+  modelProvidersPresentation,
+  agentPresentation,
   {
-    pluginKey: 'conversation', kind: 'system', title: '对话与参与策略',
-    summary: '主动回复、参与节奏、分句、消息过滤与审批', fallbackSections: ['behavior', 'music', 'voice']
+    ...mcpToolsPresentation,
+    kind: 'system' as const
   },
+  platformQqPrivatePresentation,
+  platformQqOfficialPresentation,
+  platformFeishuPresentation,
+  platformLocalPresentation,
+  platformFallbackPresentation,
+  healthReportingPresentation,
   {
-    pluginKey: 'models', kind: 'system', title: '模型服务',
-    summary: '主模型连接、模型选择、采样参数与 API 凭据', fallbackSections: ['model'], secrets: [0], providers: true
-  },
-  {
-    pluginKey: 'agent', kind: 'system', title: 'Agent 与工具',
-    summary: '任务执行、服务器连接、工具范围与 Agent 密钥', fallbackSections: ['agent'], secrets: [1]
-  },
-  {
-    pluginKey: 'platform', kind: 'system', title: '平台接入与访问策略',
-    summary: '私域、官方与飞书接入、白名单及飞书凭据', fallbackSections: ['platform'], secrets: [3, 4, 5]
-  },
-  {
-    pluginKey: 'reporting', kind: 'system', title: '健康报告',
-    summary: '报告开关、发送时间与接收范围', fallbackSections: ['reporting']
-  },
-  {
-    pluginKey: 'preset.feature.token-quota',
-    title: 'Token 配额',
-    summary: '按来源管理每日 Token 额度与用量；耗尽后进入节能模式',
+    ...quotaPresentation,
     editor: { type: 'component', load: () => import('./TokenQuotaDialog.vue') }
   },
-  {
-    pluginKey: 'preset.feature.music',
-    title: '点歌与音乐解析',
-    summary: '点歌开关、音源、下载与音频分析',
-    enableField: ref('music', 'enableMusic'),
-    sections: ['music']
-  },
-  {
-    pluginKey: 'preset.feature.voice',
-    title: '语音合成',
-    summary: 'TTS 服务、音色与语音参数',
-    enableField: ref('voice', 'enableVoice'),
-    sections: ['voice'],
-    secrets: [2]
-  },
-  {
-    pluginKey: 'preset.feature.stickers',
-    title: '表情包',
-    summary: '表情收录、候选与冷却',
-    enableField: ref('behavior', 'enableStickers'),
-    fields: behavior('enableStickers', 'stickerCandidates', 'stickerCooldownSeconds',
-      'stickerCurateIntervalSeconds', 'stickerLibraryMax')
-  },
-  {
-    pluginKey: 'preset.feature.poke',
-    title: '戳一戳',
-    summary: '开关与冷却',
-    enableField: ref('behavior', 'enablePoke'),
-    fields: behavior('enablePoke', 'pokeCooldownSeconds')
-  },
-  {
-    pluginKey: 'preset.feature.vibes',
-    title: '氛围与心情',
-    summary: '氛围阻尼与心情保留时长',
-    enableField: ref('behavior', 'enableAtmosphereDamping'),
-    fields: behavior('enableAtmosphereDamping', 'moodTtlSeconds')
-  },
-  {
-    pluginKey: 'preset.feature.profiles',
-    title: '人物画像',
-    summary: '画像摘要、巡检与字数预算',
-    enableField: ref('behavior', 'enableProfileSummary'),
-    fields: behavior('enableProfileSummary', 'profileSummaryThreshold', 'profileSummaryIntervalSeconds',
-      'profileSummaryLines', 'profileSummaryMaxChars', 'maxProfileChars', 'profileLookupCount')
-  },
-  {
-    pluginKey: 'preset.feature.websearch',
-    title: '联网搜索与链接预览',
-    summary: '搜索源、结果条数、超时与链接预览',
-    enableField: ref('behavior', 'enableWebSearch'),
-    fields: behavior('enableWebSearch', 'webSearchUseModelSearch', 'webSearchSources', 'webSearchMaxResults',
-      'webSearchTimeoutSeconds', 'webSearchCooldownSeconds', 'enableLinkPreview', 'linkPreviewMax',
-      'linkPreviewTimeoutSeconds')
-  }
+  musicPresentation,
+  voicePresentation,
+  stickersPresentation,
+  pokePresentation,
+  vibesPresentation,
+  profilesPresentation,
+  researchPresentation,
+  documentsPresentation,
+  digestPresentation,
+  knowledgePresentation,
+  schedulerPresentation,
+  personalTodoPresentation
 ]
 
 /** 当前登记的插件与系统能力；保持数组接口，登记请走 registerPlugin。 */
@@ -175,7 +179,7 @@ function rebuildOwnership(): void {
 
 function defaultEditor(spec: PluginSettingsSpec): PluginConfigurationEditor {
   const hasFields = spec.enableField || spec.fields?.length || spec.sections?.length
-    || spec.fallbackSections?.length || spec.secrets?.length || spec.providers
+    || spec.fallbackSections?.length || spec.secrets?.length || spec.providers || Boolean(spec.policyPlatformId)
   return { type: hasFields ? 'fields' : 'declared' }
 }
 
@@ -188,7 +192,11 @@ function snapshotSpec(spec: PluginSettingsSpec): RegisteredPluginSettingsSpec {
     sections: spec.sections ? [...spec.sections] : undefined,
     fields: spec.fields?.map((field) => ({ ...field })),
     fallbackSections: spec.fallbackSections ? [...spec.fallbackSections] : undefined,
-    secrets: [...(spec.secrets ?? [])]
+    secrets: [...(spec.secrets ?? [])],
+    fieldLabels: spec.fieldLabels ? Object.freeze({ ...spec.fieldLabels }) : undefined,
+    fieldHints: spec.fieldHints ? Object.freeze({ ...spec.fieldHints }) : undefined,
+    secretLabels: spec.secretLabels ? Object.freeze({ ...spec.secretLabels }) : undefined,
+    policyCopy: spec.policyCopy ? Object.freeze({ ...spec.policyCopy }) : undefined
   }
   if (entry.enableField) Object.freeze(entry.enableField)
   for (const field of entry.fields ?? []) Object.freeze(field)
@@ -203,6 +211,11 @@ function validateSpec(spec: RegisteredPluginSettingsSpec): void {
   if (!spec.pluginKey.trim()) throw new Error('registerPlugin：pluginKey 不能为空')
   if (registry.some((item) => item.pluginKey === spec.pluginKey)) {
     throw new Error('registerPlugin：插件 ' + spec.pluginKey + ' 已经登记过')
+  }
+  if (spec.platformId !== undefined) {
+    if (!spec.platformId.trim()) throw new Error('registerPlugin：platformId 不能为空')
+    const owner = registry.find((item) => item.platformId === spec.platformId)
+    if (owner) throw new Error('registerPlugin：平台驱动 ' + spec.platformId + ' 已归 ' + owner.pluginKey)
   }
   if (spec.editor.type === 'fields' && defaultEditor(spec).type !== 'fields') {
     throw new Error('registerPlugin：fields 编辑器缺少可派生的字段、密钥或供应商配置')
@@ -300,4 +313,46 @@ export function resolvePluginFields(
 export function ownerOf(section: string, key: string): RegisteredPluginSettingsSpec | undefined {
   void pluginRegistryRevision.value
   return registry.find((spec) => owns(spec, { section: section as ZbaPatchSection, key }))
+}
+
+/** 按 platformId 查找已登记的平台驱动声明。 */
+export function driverSpecByPlatformId(platformId: string): RegisteredPluginSettingsSpec | undefined {
+  void pluginRegistryRevision.value
+  return registry.find((spec) => spec.platformId === platformId)
+}
+
+/** 当前已登记的所有平台驱动 ID 列表。 */
+export function registeredPlatformIds(): string[] {
+  void pluginRegistryRevision.value
+  return registry.flatMap((spec) => spec.platformId ? [spec.platformId] : [])
+}
+
+/** 从已登记包中查询字段中文标签（驱动包自有，不再由宿主硬编码）。 */
+export function registeredFieldLabel(key: string): string | undefined {
+  void pluginRegistryRevision.value
+  for (const spec of registry) {
+    const label = spec.fieldLabels?.[key]
+    if (label !== undefined) return label
+  }
+  return undefined
+}
+
+/** 从已登记包中查询字段附加说明。 */
+export function registeredFieldHint(key: string): string | undefined {
+  void pluginRegistryRevision.value
+  for (const spec of registry) {
+    const hint = spec.fieldHints?.[key]
+    if (hint !== undefined) return hint
+  }
+  return undefined
+}
+
+/** 从已登记包中查询秘密槽位名称（例如飞书 3/4/5 槽位归属 system.platform-feishu）。 */
+export function registeredSecretLabel(slot: number): string | undefined {
+  void pluginRegistryRevision.value
+  for (const spec of registry) {
+    const label = spec.secretLabels?.[slot]
+    if (label !== undefined) return label
+  }
+  return undefined
 }

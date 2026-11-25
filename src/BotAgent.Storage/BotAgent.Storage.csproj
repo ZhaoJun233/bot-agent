@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.33" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.34" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,4 +19,13 @@
     <Using Include="BotAgent.Storage" />
     <Using Include="BotAgent.Adapters.Persistence" />
   </ItemGroup>
+
+  <!-- Fixed historical recovery inputs, also shipped by their owning package. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Schema/host.token-usage.14-15.up.sql" LogicalName="BotAgent.Schema.host.token-usage.14-15.up.sql" />
+    <EmbeddedResource Include="Schema/host.token-usage.14-15.down.sql" LogicalName="BotAgent.Schema.host.token-usage.14-15.down.sql" />
+    <EmbeddedResource Include="Schema/preset.token-quota.14-15.up.sql" LogicalName="BotAgent.Schema.preset.token-quota.14-15.up.sql" />
+    <EmbeddedResource Include="Schema/preset.token-quota.14-15.down.sql" LogicalName="BotAgent.Schema.preset.token-quota.14-15.down.sql" />
+  </ItemGroup>
+
 </Project>

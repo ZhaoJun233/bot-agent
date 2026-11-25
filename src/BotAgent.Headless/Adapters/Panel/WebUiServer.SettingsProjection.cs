@@ -71,23 +71,6 @@ public sealed partial class WebUiServer
                 : $"MINIMAX_API_BASE={settings.TtsApiBase}\nMINIMAX_MODEL={settings.TtsModel}\n");
     }
 
-    /// <summary>
-    /// 面板回显用的参与上限摘要（P1）。**走 Clamped()**：面板上看到的永远是“真正生效的那组数”，
-    /// 不是你在输入框里填的 —— 填 999 时这里会显示被钳到的 10，免得“我改了怎么没变化”这类误会。
-    /// </summary>
-    private static string DescribeParticipationPolicy(AppSettings s)
-    {
-        var p = new Services.Participation.ParticipationPolicy(
-            s.ParticipationMaxConsecutiveReplies,
-            s.ParticipationCooldownSeconds,
-            s.ParticipationProbingMaxReplies,
-            s.ParticipationMaxActiveLifetimeSeconds,
-            s.ParticipationMaxExitingLifetimeSeconds).Clamped();
-
-        return $"连续 ≤{p.MaxConsecutiveReplies} / 冷却 {p.CooldownSeconds}s / 试探 ≤{p.ProbingMaxReplies}"
-               + $" / 活性命 {p.MaxActiveLifetimeSeconds}s / 退场 {p.MaxExitingLifetimeSeconds}s";
-    }
-
 /// <summary>密钥掩码（只回显前 3 后 2，与其它密钥一致）。</summary>
     private static string MaskSecret(string? value)
     {
@@ -124,8 +107,6 @@ public sealed partial class WebUiServer
         // 保留旧响应字段，但空名单现在直接全收，不再隐式继承共用名单。
         ["whitelistGroupsFromLegacy"] = false,
         ["whitelistPrivatesFromLegacy"] = false,
-                ["aiDesire"] = s.AiDesire,
-                ["replyPacingEnabled"] = s.ReplyPacingEnabled,
                 ["groupInterjectionProbability"] = s.GroupInterjectionProbability,
                 ["groupInterjectionCooldownSeconds"] = s.GroupInterjectionCooldownSeconds,
                 ["groupContinuationWaitSeconds"] = s.GroupContinuationWaitSeconds,
@@ -149,16 +130,11 @@ public sealed partial class WebUiServer
         ["agentServerUseGate"] = s.AgentServerUseGate,
                 ["aiModeEnabled"] = s.AiModeEnabled,
                 ["maxTokens"] = s.MaxTokens,
-                ["groupCooldownSeconds"] = s.GroupCooldownSeconds,
-                ["privateCooldownSeconds"] = s.PrivateCooldownSeconds,
-                ["idleFallbackSeconds"] = s.IdleFallbackSeconds,
                 ["splitReplies"] = s.SplitReplies,
                 ["enableProactive"] = s.EnableProactive,
-                ["proactiveCooldownSeconds"] = s.ProactiveCooldownSeconds,
                 ["proactiveQuietSeconds"] = s.ProactiveQuietSeconds,
                 ["ignoreBracketMessages"] = s.IgnoreBracketMessages,
                 ["filterActionNarration"] = s.FilterActionNarration,
-                ["enableAtmosphereDamping"] = s.EnableAtmosphereDamping,
                 ["segmentDelayMs"] = s.SegmentDelayMs,
                 ["maxContextMessages"] = s.MaxContextMessages,
                 ["profileLookupCount"] = s.ProfileLookupCount,
@@ -246,17 +222,6 @@ public sealed partial class WebUiServer
                 s.EnableWebSearch, s.EnableMusic, s.EnableVoice, s.EnableStickers, s.EnablePoke,
                 s.ScenarioPreset, approvalsEnabled: true).Describe()
             : "(审批关闭：模型写的 action=tool 一律安全静默)",
-        // 参与状态机（P1）：参数可改，但**只影响观测日志**（gating 未打开）
-        ["participationMaxConsecutiveReplies"] = s.ParticipationMaxConsecutiveReplies,
-        ["participationCooldownSeconds"] = s.ParticipationCooldownSeconds,
-        ["participationProbingMaxReplies"] = s.ParticipationProbingMaxReplies,
-        ["participationMaxActiveLifetimeSeconds"] = s.ParticipationMaxActiveLifetimeSeconds,
-        ["participationMaxExitingLifetimeSeconds"] = s.ParticipationMaxExitingLifetimeSeconds,
-        ["participationPolicy"] = DescribeParticipationPolicy(s),
-        ["enableParticipationGating"] = s.EnableParticipationGating,
-        ["participationGating"] = s.EnableParticipationGating
-            ? "on（闸门开启：状态机说这一轮不参与就不叫模型 —— 只收不放）"
-            : "off（只观测：不改“发不发”的判定）",
         ["enableQuestions"] = s.EnableQuestions,
         ["questionTool"] = Domain.Permissions.ApprovalFlow.QuestionToolId,
         ["questionCapabilities"] = s.EnableQuestions

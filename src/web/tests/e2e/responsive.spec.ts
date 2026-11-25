@@ -46,11 +46,11 @@ for (const width of [390, 360]) {
     expect(table.scroll).toBeLessThanOrEqual(table.client + 1)
   })
 
-  test(`响应式 ${width}：侧栏折叠为顶栏，四个入口仍可点`, async ({ page }) => {
+  test(`响应式 ${width}：侧栏折叠为顶栏，八个入口仍可点`, async ({ page }) => {
     await page.setViewportSize({ width, height: 780 })
     await connect(page, READ_TOKEN)
 
-    for (const id of ['nav-overview', 'nav-capabilities', 'nav-configuration', 'nav-tasks']) {
+    for (const id of ['nav-overview', 'nav-providers', 'nav-platforms', 'nav-plugins', 'nav-configuration', 'nav-tasks', 'nav-traces', 'nav-logs']) {
       const box = await page.getByTestId(id).boundingBox()
       expect(box, id).not.toBeNull()
       expect(box!.width, id).toBeGreaterThan(40)
@@ -63,14 +63,18 @@ for (const width of [390, 360]) {
     expect(sidebar).toBe('static')
   })
 
-  test(`响应式 ${width}：四个页面都能打开，且整页都不横向溢出`, async ({ page }) => {
+  test(`响应式 ${width}：八个页面都能打开，且整页都不横向溢出`, async ({ page }) => {
     await page.setViewportSize({ width, height: 780 })
     await connect(page, READ_TOKEN)
 
     for (const [nav, pageId] of [
-      ['nav-capabilities', 'capabilities'],
-      ['nav-configuration', 'configuration'],
+      ['nav-providers', 'providers-page'],
+      ['nav-platforms', 'platforms-page'],
+      ['nav-plugins', 'plugins-page'],
+      ['nav-configuration', 'system-configuration'],
       ['nav-tasks', 'tasks'],
+      ['nav-traces', 'traces'],
+      ['nav-logs', 'runtime-logs-page'],
       ['nav-overview', 'overview']
     ] as const) {
       await page.getByTestId(nav).click()

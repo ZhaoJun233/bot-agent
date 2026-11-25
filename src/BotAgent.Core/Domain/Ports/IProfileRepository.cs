@@ -14,6 +14,10 @@ public interface IProfileRepository
     /// <summary>挑出“又攒够了新发言”的人（巡检用；最多 <paramref name="maxCandidates" /> 个）。</summary>
     List<SummaryCandidate> FindSummarizable(int minNewMessages, int maxCandidates);
 
+    /// <summary>挑出“又攒够了新发言”的人（可选仅限作用域复合 key）。</summary>
+    List<SummaryCandidate> FindSummarizable(int minNewMessages, int maxCandidates, bool scopedKeysOnly)
+        => FindSummarizable(minNewMessages, maxCandidates);
+
     /// <summary>把一条新摘要写回（并把已折叠的发言记为已归档）。</summary>
     void ApplySummary(string uid, string scope, string text, long throughSeq, int foldedCount);
 

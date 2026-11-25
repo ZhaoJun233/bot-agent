@@ -35,6 +35,13 @@ public sealed class SettingsBox : BotAgent.Platforms.IPlatformSettingsBox, ISett
 
     BotAgent.Platforms.PlatformOptions BotAgent.Platforms.IPlatformSettingsAccessor.Current => Current;
 
+    // Only trusted persistence participates here; package callbacks run outside this gate.
+    internal void CoordinateConfigurationWrite(Action write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        lock (_gate) write();
+    }
+
     /// <summary>
     /// 在副本上改 → 原子发布（仅运行时，不落盘）。持久化保存必须走 ApplyPersisted。
     /// Snapshot 同时复制嵌套的平台策略；返回刚发布的版本，不改变在途读取的旧版本。

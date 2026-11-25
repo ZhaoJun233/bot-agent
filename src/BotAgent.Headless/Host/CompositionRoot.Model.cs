@@ -56,9 +56,11 @@ internal static partial class CompositionRoot
     /// 语音、音乐与链接预览、联网研究。都是"拿到配置就能造出来"的件，与用例之间的接线无关（见 Build）。
     /// </summary>
     private static (OpenAiClient Brain, ConversationStore Store, MemberProfileStore Profiles, StickerService Stickers,
-        VoiceUseCase Voice, MusicUseCase Music, LinkPreviewer Links, ResearchUseCase Research)
+        VoiceUseCase Voice, MusicUseCase Music, ResearchPluginServices ResearchServices)
         BuildModelAndMediaLayer(AppSettings settings, SettingsBox settingsBox, IQqChatSource source, ISecretsRepository secrets, ModelProviderStore providerStore,
-            ModelProviderRegistry modelRegistry, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker searchBreaker)
+            ModelProviderRegistry modelRegistry, ToolCircuitBreaker ttsBreaker, ToolCircuitBreaker sttBreaker, ToolCircuitBreaker searchBreaker,
+            PluginManager plugins, Func<IReadOnlyDictionary<string, System.Text.Json.JsonElement>?> readVoiceSettings,
+            FeishuBotGateway? feishu = null, Action<IDisposable>? registerTransport = null)
     {
         var allowPrivateOutbound = EnvironmentAliases.Get("BOTAGENT_ALLOW_PRIVATE_IMAGE_HOSTS", "QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS") == "1";
         // 模型那条路的出网：辅助调用 60 秒、聊天按 QQCHAT_MODEL_TIMEOUT_SECONDS（默认 120）、图片下载 8 秒。
@@ -76,6 +78,8 @@ internal static partial class CompositionRoot
 
         // 图片下载器与传输层（模型那条路的两个 IO 件）：都在这里造，客户端只拿端口。
         var imageDownloader = new ImageDownloader(imageHttp);
+        if (feishu is not null)
+            imageDownloader.CustomSchemeResolver = feishu.DownloadMediaUriAsync;
         var transport = new ModelTransport(
             settingsBox, modelChatHttp, modelAuxHttp, imageDownloader, OpenAiClient.ModelTimeout(),
             TimeSpan.FromSeconds(60));
@@ -112,13 +116,12 @@ internal static partial class CompositionRoot
             {
                 var provider = modelRegistry.Captured.FirstOrDefault(p =>
                     string.Equals(p.Id, providerId, StringComparison.Ordinal));
-                return provider is null ? null : TryBuildCurrentProviderRoute(provider, settingsBox.Current);
+                return provider is null ? null : TryBuildCurrentProviderRouteWithPlugins(provider, settingsBox.Current, plugins);
             },
             auxiliaryTimeout: TimeSpan.FromSeconds(60))
         {
             BotIdentity = string.IsNullOrWhiteSpace(settings.NormalizedUin) ? null : settings.NormalizedUin,
             BotPersona = settings.BotPersona,
-            AiDesire = settings.AiDesire,
             SuitabilityThreshold = settings.SuitabilityThreshold,
             MaxContextMessages = settings.MaxContextMessages // 漏了这行会让上下文窗口在面板修改后不同步
         };
@@ -127,7 +130,7 @@ internal static partial class CompositionRoot
         var profiles = new MemberProfileStore();
 
         // 表情包运营（收图/说明/自巡检/频率门）：状态与定时器都在它自己身上，装配在这里、只装配一次
-        var stickers = new StickerService(new StickerStore(), brain, source, settingsBox, msg => FileLog.Write("Sticker", msg));
+        var stickers = new StickerService(new StickerStore(), brain, source, settingsBox, msg => FileLog.Write("Sticker", msg), plugins);
         // 表情包库建好即就位：巡检定时器（BotScheduler.RebuildIfNeeded → EnsureTimer）与面板首屏
         // 都要在**任何一轮回复之前**读到它。载入属启动顺序，所以放在装配点（§6.1）。
         stickers.Load(AppPaths.RuntimeRoot);
@@ -135,10 +138,26 @@ internal static partial class CompositionRoot
         // 本机 Agent 桥已按方案退役：// 命令只走服务器内置 agent（ServerAgentRunner）。
         // 语音（TTS）：客户端、频率门、面板试听都在这个用例里（HttpClient 也只在这里造一个）
         var voiceHttp = new HttpFetcher(TimeSpan.FromSeconds(30), msg => FileLog.Write("Net", msg), "voice");
+        var sttHttp = new HttpFetcher(
+            TimeSpan.FromSeconds(45),
+            msg => FileLog.Write("Net", msg),
+            "stt",
+            allowAutoRedirect: false,
+            rejectPrivateDestinations: !allowPrivateOutbound);
+        var sttClient = new CloudSttClient(
+            sttHttp,
+            () => allowPrivateOutbound,
+            () => settingsBox.Current,
+            readVoiceSettings,
+            msg => FileLog.Write("Voice", msg),
+            sttBreaker,
+            resolveFallbackApiKey: () => ResolvePrimarySttFallbackKey(settingsBox.Current, modelRegistry, secrets));
         var voice = new VoiceUseCase(
             new VoiceService(voiceHttp, () => settingsBox.Current, secrets, msg => FileLog.Write("Voice", msg), ttsBreaker),
             settingsBox,
-            msg => FileLog.Write("Voice", msg));
+            msg => FileLog.Write("Voice", msg),
+            plugins,
+            stt: sttClient);
 
         // 音乐（听歌/分享）与链接预览：各自的 HttpClient 在这里造，依赖顺着构造函数往下传。
         // 音乐数据放 data/music/：台账常驻，音频默认分析完就丢（只在 MusicKeepAudio 打开时才留在 audio/）。
@@ -160,15 +179,8 @@ internal static partial class CompositionRoot
                 musicStore, netease, audioResolver, brain, () => settingsBox.Current,
                 Path.Combine(AppPaths.DataDir, "music", "audio"), new AudioCache(), msg => FileLog.Write("Music", msg)),
             source,
-            msg => FileLog.Write("Music", msg));
-        var linkHttp = new HttpFetcher(
-            TimeSpan.FromSeconds(45),
-            msg => FileLog.Write("Net", msg),
-            "links",
-            allowAutoRedirect: false,
-            rejectPrivateDestinations: !allowPrivateOutbound);
-        var links = new LinkPreviewer(linkHttp, () => settingsBox.Current, msg => FileLog.Write("Links", msg));
-
+            msg => FileLog.Write("Music", msg),
+            plugins);
         // 联网研究（搜索 / 读页面）：它自己的 HttpClient 超时给宽松点（检索要等上游模型回话）
         var researchHttp = new HttpFetcher(TimeSpan.FromSeconds(60), msg => FileLog.Write("Net", msg), "search");
         var researchPageHttp = new HttpFetcher(
@@ -177,12 +189,19 @@ internal static partial class CompositionRoot
             "search-page",
             allowAutoRedirect: false,
             rejectPrivateDestinations: !allowPrivateOutbound);
-        var research = new ResearchUseCase(
-            new WebSearchService(researchHttp, () => settingsBox.Current, msg => FileLog.Write("Search", msg), searchBreaker, researchPageHttp),
-            msg => FileLog.Write("Search", msg));
+        var researchServices = new ResearchPluginServices(
+            new BotAgent.Model.GeminiGroundedTextModel(researchHttp, HostModelOptions.CreateAccessor(settingsBox)),
+            new WebPageTransport(researchPageHttp, () => allowPrivateOutbound),
+            searchBreaker, researchHttp, researchPageHttp);
+        researchServices.RegisterForPlugin<IStickerHostPorts>("preset.feature.stickers", stickers.CreateHostPorts());
+        researchServices.RegisterForPlugin<IMusicHostPorts>("preset.feature.music", music.CreateHostPorts());
+        researchServices.RegisterForPlugin<IVoiceHostPorts>("preset.feature.voice", voice.CreateHostPorts());
 
 
-        return (brain, store, profiles, stickers, voice, music, links, research);
+        foreach (var fetcher in new IDisposable[] { modelAuxHttp, modelChatHttp, imageHttp, voiceHttp, sttHttp, mediaHttp })
+            registerTransport?.Invoke(fetcher);
+
+        return (brain, store, profiles, stickers, voice, music, researchServices);
     }
 
     /// <summary>
@@ -198,6 +217,10 @@ internal static partial class CompositionRoot
     /// </summary>
     private static ApplyStepReport InspectModelProjection(ConfigurationVersion expected, ModelProviderRegistry registry,
         SettingsBox settingsBox, ISecretsRepository secrets)
+        => InspectModelProjectionWithPlugins(expected, registry, settingsBox, secrets, plugins: null);
+
+    private static ApplyStepReport InspectModelProjectionWithPlugins(ConfigurationVersion expected, ModelProviderRegistry registry,
+        SettingsBox settingsBox, ISecretsRepository secrets, PluginManager? plugins)
     {
         using var connection = AppDatabase.Open();
         using var transaction = connection.BeginTransaction(deferred: true);
@@ -210,7 +233,7 @@ internal static partial class CompositionRoot
             // 路由在事务内按同一份事实重建：任何一条建不出来（凭据来源未分类等）只说明它暂时不可路由，
             // 与启动装配口径一致 —— 它仍在候选表里，只是解析器会拒绝，故障转移到下一个供应商。
             var routes = desired
-                .Select(provider => TryBuildProviderRoute(provider, current, secrets))
+                .Select(provider => TryBuildProviderRouteWithPlugins(provider, current, secrets, plugins))
                 .Where(route => route is not null)
                 .Cast<ModelProviderRoute>()
                 .ToArray();
@@ -229,10 +252,14 @@ internal static partial class CompositionRoot
 
     private static ModelProviderRoute? TryBuildProviderRoute(
         PersistedModelProvider provider, AppSettings settings, ISecretsRepository secrets)
+        => TryBuildProviderRouteWithPlugins(provider, settings, secrets, plugins: null);
+
+    private static ModelProviderRoute? TryBuildProviderRouteWithPlugins(
+        PersistedModelProvider provider, AppSettings settings, ISecretsRepository secrets, PluginManager? plugins)
     {
         if (!provider.IsEnabled) return null;
         var apiKey = ResolveProviderSecret(provider.SecretKeyRef, settings, secrets);
-        return BuildProviderRoute(provider, settings, apiKey);
+        return BuildProviderRouteWithPlugins(provider, settings, apiKey, plugins);
     }
 
     /// <summary>
@@ -257,6 +284,10 @@ internal static partial class CompositionRoot
 
     private static ModelProviderRoute? TryBuildProviderTestRoute(string providerId, AppSettings current,
         Func<IReadOnlyList<PersistedModelProvider>> captured)
+        => TryBuildProviderTestRouteWithPlugins(providerId, current, captured, plugins: null);
+
+    private static ModelProviderRoute? TryBuildProviderTestRouteWithPlugins(string providerId, AppSettings current,
+        Func<IReadOnlyList<PersistedModelProvider>> captured, PluginManager? plugins)
     {
         try
         {
@@ -275,7 +306,7 @@ internal static partial class CompositionRoot
                 return null;
             }
             var key = ResolveProviderSecretInTransaction(provider.SecretKeyRef, current, connection);
-            var route = BuildProviderRoute(provider, current, key);
+            var route = BuildProviderRouteWithPlugins(provider, current, key, plugins);
             transaction.Commit();
             return route;
         }
@@ -287,6 +318,10 @@ internal static partial class CompositionRoot
     }
 
     private static ModelProviderRoute? TryBuildCurrentProviderRoute(PersistedModelProvider captured, AppSettings current)
+        => TryBuildCurrentProviderRouteWithPlugins(captured, current, plugins: null);
+
+    private static ModelProviderRoute? TryBuildCurrentProviderRouteWithPlugins(
+        PersistedModelProvider captured, AppSettings current, PluginManager? plugins)
     {
         if (!captured.IsEnabled || captured.Id.Trim() != captured.Id) return null;
         try
@@ -314,7 +349,7 @@ internal static partial class CompositionRoot
             if (binding == CredentialBindingState.Unclassified
                 || binding == CredentialBindingState.Unconfigured && desired.Protocol != ModelProtocol.Ollama) return null;
             var key = ResolveProviderSecretInTransaction(desired.SecretKeyRef, current, connection);
-            var route = BuildProviderRoute(captured, current, key);
+            var route = BuildProviderRouteWithPlugins(captured, current, key, plugins);
             transaction.Commit();
             return route;
         }
@@ -340,6 +375,10 @@ internal static partial class CompositionRoot
     }
 
     private static ModelProviderRoute? BuildProviderRoute(PersistedModelProvider provider, AppSettings settings, string? apiKey)
+        => BuildProviderRouteWithPlugins(provider, settings, apiKey, plugins: null);
+
+    private static ModelProviderRoute? BuildProviderRouteWithPlugins(
+        PersistedModelProvider provider, AppSettings settings, string? apiKey, PluginManager? plugins)
     {
         apiKey = apiKey?.Trim() ?? string.Empty;
         if (!Enum.IsDefined(provider.Protocol)
@@ -358,14 +397,49 @@ internal static partial class CompositionRoot
         var model = string.Equals(provider.Id, "primary", StringComparison.Ordinal)
             ? settings.Model
             : provider.ModelName;
-        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model)
-            || baseUrl.Length > 2048 || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var endpoint)
+        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
+        {
+            return null;
+        }
+
+        if (plugins is not null)
+        {
+            if (!plugins.TryGetContribution<BotAgent.Services.Model.IModelServicesContribution>("system.model-services", out var modelServices)
+                || modelServices is null)
+            {
+                return null;
+            }
+            try
+            {
+                if (!modelServices.IsEndpointAuthorized(baseUrl))
+                {
+                    return null;
+                }
+
+                var selected = modelServices.SelectRoute(provider.Id, model, settings.FastModel, fastReplyEnabled: false, timeoutSeconds: 120);
+                model = selected.ModelName;
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+                return null;
+            }
+        }
+        else if (baseUrl.Length > 2048 || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var endpoint)
             || endpoint.Scheme is not ("http" or "https") || endpoint.UserInfo.Length != 0)
         {
             return null;
         }
 
         return new ModelProviderRoute(provider.Id, baseUrl.Trim(), model.Trim(), apiKey, provider.Protocol, provider.Options);
+    }
+
+    private static string? ResolvePrimarySttFallbackKey(
+        AppSettings settings, ModelProviderRegistry registry, ISecretsRepository secrets)
+    {
+        var primary = registry.Captured.FirstOrDefault(p => string.Equals(p.Id, "primary", StringComparison.Ordinal))
+            ?? registry.Captured.OrderBy(p => p.Priority).FirstOrDefault(p => p.IsEnabled);
+        var resolved = primary is not null ? ResolveProviderSecret(primary.SecretKeyRef, settings, secrets) : null;
+        return !string.IsNullOrWhiteSpace(resolved) ? resolved : settings.ApiKey;
     }
 
     private static string? ResolveProviderSecret(
@@ -403,12 +477,14 @@ internal static partial class CompositionRoot
     private static Func<IReadOnlyList<Domain.Ops.CircuitStatusSnapshot>> BuildCircuitStatusProvider(
         Domain.Ports.IModelClient brain,
         ToolCircuitBreaker ttsBreaker,
+        ToolCircuitBreaker sttBreaker,
         ToolCircuitBreaker searchBreaker,
         ProtocolRiskBackoff riskBackoff) => () =>
     {
         var list = new List<Domain.Ops.CircuitStatusSnapshot>();
         list.AddRange(brain.CircuitSnapshots);
         list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "tts", ttsBreaker.Snapshot().State.ToString().ToLowerInvariant()));
+        list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "stt", sttBreaker.Snapshot().State.ToString().ToLowerInvariant()));
         list.Add(new Domain.Ops.CircuitStatusSnapshot("tool", "search", searchBreaker.Snapshot().State.ToString().ToLowerInvariant()));
         list.Add(new Domain.Ops.CircuitStatusSnapshot("protocol", "onebot", riskBackoff.HasAnyActive() ? "open" : "closed"));
         return list;
@@ -417,24 +493,30 @@ internal static partial class CompositionRoot
     /// <summary>
     /// ③ 装配阶段三：模型客户端与媒体件（#110 第 2 步拆出）。
     ///
-    /// 先建两个工具熔断器（tts/search），再交给 <see cref="BuildModelAndMediaLayer"/> ——
-    /// 它们要在同一层里被装进 OpenAiClient，晚建就会让第一批调用没有熔断记账。
+    /// 先建工具熔断器（tts/stt/search），再交给 <see cref="BuildModelAndMediaLayer"/> ——
+    /// 它们要在同一层里被装进客户端，晚建就会让第一批调用没有熔断记账。
     /// </summary>
     private static void AssembleModel(Assembly a)
     {
         // ② 模型与媒体层（模型客户端 / 表情包 / 桥 / 语音 / 音乐与链接 / 联网研究）：见 BuildModelAndMediaLayer
         a.TtsBreaker = new ToolCircuitBreaker("tts");
+        a.SttBreaker = new ToolCircuitBreaker("stt");
         a.SearchBreaker = new ToolCircuitBreaker("search");
-        var (brain, store, profiles, stickers, voice, music, links, research) =
+        var (brain, store, profiles, stickers, voice, music, researchServices) =
             BuildModelAndMediaLayer(a.Settings, a.Box, a.Source, a.Secrets, a.ProviderStore, a.ModelRegistry,
-                a.TtsBreaker, a.SearchBreaker);
+                a.TtsBreaker, a.SttBreaker, a.SearchBreaker, a.PluginRuntime.Registry,
+                () => a.PluginRuntime.TryReadEffectiveValues("preset.feature.voice"),
+                a.Feishu,
+                a.OwnedTransports.Add);
         a.Brain = brain;
         a.Store = store;
         a.Profiles = profiles;
         a.Stickers = stickers;
         a.Voice = voice;
         a.Music = music;
-        a.Links = links;
-        a.Research = research;
+        a.PluginServices = researchServices;
+        a.PluginRuntime.BindServices(researchServices);
+        a.Research = new ResearchUseCase(a.PluginRuntime.Registry);
+        a.Links = a.Research;
     }
 }

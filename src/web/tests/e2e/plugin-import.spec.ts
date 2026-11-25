@@ -12,15 +12,15 @@ function manifest(id = ALPHA, version = '1.0.0'): PluginPackageManifest {
     downloadUrl: SOURCE + '/releases/download/' + id + '-' + version + '/' + id + '-' + version + '.zip',
     apiVersion: 1, targetFramework: 'net8.0', permissions: [], dependencies: [], settings: [] }
 }
-async function openMarket(page: Page) {
+async function openMarket(page: Page, tab: 'catalog' | 'import' = 'import') {
   await page.goto('/')
   await page.getByTestId('token-input').fill('synthetic-web-admin-token')
   await page.getByTestId('connect-button').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('cap-enable-admin').click()
-  await page.getByTestId('cap-marketplace').click()
-  await expect(page.getByTestId('marketplace')).toBeVisible()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('plugins-enable-admin').click()
+  await page.getByTestId(tab === 'catalog' ? 'plugins-tab-catalog' : 'plugins-tab-import').click()
+  await expect(page.getByTestId('marketplace-workspace')).toBeVisible()
 }
 async function fakeImportServer(page: Page, blocked = false) {
   const previews: PluginPreviewRequest[] = []
@@ -122,7 +122,7 @@ test('安全导入：高级 JSON 遵守同一阻断规则且移动端不溢出',
   expect(calls.previews[0]?.origin).toBe('json')
   expect(calls.writes).toHaveLength(0)
   await page.getByTestId('plugin-install-preview').scrollIntoViewIfNeeded()
-  expect(await page.getByTestId('marketplace').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  expect(await page.getByTestId('marketplace-workspace').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('import-preview-mobile.png'), fullPage: false })
   await page.getByTestId('marketplace-json-input').fill('{}')
   await expect(page.getByTestId('plugin-install-preview')).toHaveCount(0)
@@ -133,7 +133,7 @@ test('安全导入：高级 JSON 遵守同一阻断规则且移动端不溢出',
 
 test('安全导入：市场条目只预览，未确认不发安装请求', async ({ page }) => {
   const calls = await fakeImportServer(page)
-  await openMarket(page)
+  await openMarket(page, 'catalog')
   await page.getByTestId('marketplace-install').click()
   await expect(page.getByTestId('plugin-install-preview')).toBeVisible()
   expect(calls.previews[0]).toMatchObject({ origin: 'catalog', manifest: manifest() })

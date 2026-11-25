@@ -115,7 +115,7 @@ public sealed partial class WebUiServer : IDisposable
     private readonly ReplyPipeline _reply;
     private readonly ParticipationUseCase _participation;
     private readonly AgentCommandService _agentCmds;
-    private readonly ITenantQuotaLedger _quotas;
+    private readonly IQuotaOperations _quotas;
     private readonly IJargonRepository _jargons;
     private readonly Domain.Plugins.IPluginRegistry? _plugins;
     private readonly BackgroundEvaluatorQueue? _background;
@@ -128,8 +128,9 @@ public sealed partial class WebUiServer : IDisposable
     private readonly object _clientsGate = new();
     private readonly List<SseClient> _clients = new();
 
-    private HttpListener? _listener;
-    private Task? _loop;
+    private PanelHttpListener? _transport;
+    private int _routesStarted;
+    private int _disposed;
     private int _convBroadcastPending;
     private long _convBroadcastVersion;
     private ZbaEndpoint? _zba;
@@ -162,7 +163,7 @@ public sealed partial class WebUiServer : IDisposable
         ReplyPipeline reply,
         ParticipationUseCase participation,
         AgentCommandService agentCmds,
-        ITenantQuotaLedger quotas,
+        IQuotaOperations quotas,
         HealthReportService? healthReports = null,
         SessionPolicyLedger? sessionPolicies = null,
         TurnTraceStore? traces = null,
@@ -277,12 +278,20 @@ public sealed partial class WebUiServer : IDisposable
     private readonly SemaphoreSlim _feishuWebhookSlots = new(16, 16);
 
     /// <summary>实际监听的前缀（启动失败为 null）。</summary>
-    public string? ListeningOn { get; private set; }
+    public string? ListeningOn => _transport?.ListeningOn;
 
     public void Start()
     {
+        StartRoutes();
+        _transport ??= new PanelHttpListener(_port, _bind, DispatchAsync, message => FileLog.Write("Web", message));
+        _transport.Start();
+    }
+
+    internal void StartRoutes()
+    {
         // A listener must never open before the unique configuration coordinator is bound.
         _ = _settingsHotReload.ConfigurationAuthorization;
+        if (Interlocked.Exchange(ref _routesStarted, 1) != 0) return;
 
         // 订阅面板事件（订阅写法一字未改：事件本体本来就在 PanelNotifier 上，以前只是 BotAgentHost 转发了一层）
         _ui.MessageAdded += OnMessageAdded;
@@ -303,61 +312,11 @@ public sealed partial class WebUiServer : IDisposable
                 : $"[安全警告] 当前面板未设置密码，已自动启用免密模式并强制限制绑定 127.0.0.1:{_port}（仅限本机访问）。如需开放公网，请在设置中配置面板密码（至少 8 位）。");
         }
 
-        var candidates = _bind == "+" && !OperatingSystem.IsWindows()
-            ? new[] { "+" }
-            : _bind == "+"
-                ? new[] { "+", "127.0.0.1" }
-                : new[] { _bind };
-
-        foreach (var bind in candidates)
-        {
-            var prefix = $"http://{bind}:{_port}/";
-            try
-            {
-                var listener = new HttpListener();
-                listener.Prefixes.Add(prefix);
-                listener.Start();
-                _listener = listener;
-                ListeningOn = prefix;
-                _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
-                FileLog.Write("Web", $"面板已监听 {prefix}（/ 、/healthz、/api/*）");
-                return;
-            }
-            catch (Exception ex)
-            {
-                FileLog.Write("Web", $"绑定 {prefix} 失败：{ex.Message}");
-            }
-        }
-
-        FileLog.Warn("Web",
-            $"面板无法启动（端口 {_port}）。可设 QQCHAT_HEALTH_BIND=127.0.0.1，或 QQCHAT_HEALTH_PORT=0 关闭。");
     }
 
     // ══════════════ HTTP ══════════════
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested && _listener is { IsListening: true })
-        {
-            HttpListenerContext context;
-            try
-            {
-                context = await _listener.GetContextAsync().WaitAsync(ct);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch
-            {
-                break;
-            }
-
-            _ = Task.Run(() => DispatchAsync(context));
-        }
-    }
-
-    private async Task DispatchAsync(HttpListenerContext context)
+    internal async Task DispatchAsync(HttpListenerContext context)
     {
         try
         {
@@ -901,6 +860,7 @@ public sealed partial class WebUiServer : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _ui.MessageAdded -= OnMessageAdded;
         _ui.ConversationsChanged -= OnConversationsChanged;
         _ui.StateChanged -= OnStateChanged;
@@ -920,8 +880,7 @@ public sealed partial class WebUiServer : IDisposable
 
         try
         {
-            _listener?.Stop();
-            _listener?.Close();
+            _transport?.Dispose();
         }
         catch
         {
@@ -929,7 +888,6 @@ public sealed partial class WebUiServer : IDisposable
         }
 
         _feishuWebhookSlots.Dispose();
-        _ = _loop;
     }
 
 }

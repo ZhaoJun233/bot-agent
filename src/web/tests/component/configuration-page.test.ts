@@ -7,13 +7,35 @@ import {
 } from '../../src/api/zba'
 import editableFixture from '../fixtures/configuration-read-editable-result.json'
 import { getPendingOperation } from '../../src/shared/sync/pending-operations'
+import { registerPlugin } from '../../src/features/capabilities/plugin-settings'
 
 const mounted: Array<{ unmount: () => void }> = []
+const disposers: Array<() => void> = []
 let clientIdentity = 0
 
 afterEach(() => {
   for (const wrapper of mounted.splice(0)) wrapper.unmount()
+  for (const dispose of disposers.splice(0)) dispose()
 })
+
+function registerSyntheticProviderScope(): string {
+  const key = 'synthetic-providers'
+  disposers.push(registerPlugin({
+    pluginKey: key,
+    kind: 'system',
+    title: '合成供应商编辑能力',
+    summary: '测试通用配置页供应商改名路径',
+    fields: [{ section: 'model', key: 'fastModel' }],
+    providers: true
+  }))
+  return key
+}
+
+function agentSecretFixture(): ZbaConfigurationReadResult {
+  const copy = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+  copy.secrets[1] = { slot: 1, configured: true, source: 1 }
+  return copy
+}
 
 function clientWith(
   result: unknown,
@@ -72,6 +94,13 @@ function providerSnapshot(nameRaw = 'Synthetic Provider A', version = '1'): ZbaC
   const provider = snapshot.view?.registered.providers[0]
   if (!provider) throw new Error('Synthetic fixture must include a provider')
   snapshot.version = version
+  if (snapshot.view?.model.model) {
+    snapshot.view.model.fastModel = {
+      ...structuredClone(snapshot.view.model.model),
+      value: 'sample-fast-model',
+      rule: { ...snapshot.view.model.model.rule, id: 50 }
+    }
+  }
   provider.name.visibility = 2
   provider.name.nameRaw = nameRaw
   delete provider.name.value
@@ -114,6 +143,36 @@ async function expectCleanProviderDraft(wrapper: ReturnType<typeof mountPage>, n
 }
 
 describe('ConfigurationPage runtime and explicit denial', () => {
+  it('a baseline reread cannot swallow an explicit discard or restore the discarded draft', async () => {
+    let release!: (snapshot: ZbaConfigurationReadResult) => void
+    let holdRead = false
+    let writes = 0
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(editableFixture, {
+      readConfiguration: () => holdRead
+        ? new Promise<ZbaConfigurationReadResult>(resolve => { release = resolve })
+        : Promise.resolve(editableFixture as unknown as ZbaConfigurationReadResult),
+      saveConfiguration: async () => { writes += 1; throw new Error('Discard must not write') }
+    }) })
+    await flushPromises()
+    await wrapper.get('[data-testid="config-field-agentPrompt"] textarea').setValue('Synthetic discarded prompt')
+    holdRead = true
+    const reread = (wrapper.vm as unknown as { reload: () => Promise<boolean> }).reload()
+    await flushPromises()
+    try {
+      const discard = wrapper.get<HTMLButtonElement>('[data-testid="config-discard"]').element
+      expect(discard.disabled).toBe(false)
+      discard.click()
+      await flushPromises()
+      expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
+      expect(writes).toBe(0)
+    } finally {
+      release(editableFixture as unknown as ZbaConfigurationReadResult)
+      await reread
+    }
+    await flushPromises()
+    expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('0 项修改')
+  })
+
   it('a later successful receipt cannot clear unrelated server-reported restart debt', async () => {
     const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
     data.latestApplyState = 1
@@ -123,7 +182,7 @@ describe('ConfigurationPage runtime and explicit denial', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="config-runtime-restart"]').text()).toContain('BotAgent')
     expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('需重启')
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic new draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic new draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="config-receipt-outcome"]').text()).toContain('本次修改已应用')
@@ -163,9 +222,9 @@ describe('ConfigurationPage runtime and explicit denial', () => {
 describe('ConfigurationPage', () => {
   it.each(['replace', 'delete'] as const)('F6 keeps ordinary drafts and clears the %s secret intent without saving', async secretMode => {
     const save = vi.fn()
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(editableFixture, { saveConfiguration: save }) })
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(agentSecretFixture(), { saveConfiguration: save }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic retained model')
+    await wrapper.get('[data-testid="config-field-agentPrompt"] textarea').setValue('Synthetic retained prompt')
     await wrapper.get('[data-testid="config-secrets"] [data-testid="secret-' + secretMode + '"]').trigger('click')
     if (secretMode === 'replace') await wrapper.get('[data-testid="config-secrets"] input').setValue('synthetic-private-replacement')
     expect(wrapper.vm.draftCount).toBe(2)
@@ -190,7 +249,7 @@ describe('ConfigurationPage', () => {
     await wrapper.setProps({ active: false })
     await wrapper.setProps({ active: true })
     await flushPromises()
-    expect(wrapper.get<HTMLInputElement>('[data-testid="config-field-model"] input').element.value).toBe('Synthetic retained model')
+    expect(wrapper.get<HTMLTextAreaElement>('[data-testid="config-field-agentPrompt"] textarea').element.value).toBe('Synthetic retained prompt')
     expect(wrapper.vm.draftCount).toBe(1)
     expect(save).not.toHaveBeenCalled()
   })
@@ -198,7 +257,7 @@ describe('ConfigurationPage', () => {
   it.each(['close', 'lock', 'downgrade'] as const)('F6 never offers keep for %s', async reason => {
     const wrapper = mountPage({ mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic non-navigation draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic non-navigation draft')
     const leaving = wrapper.vm.requestLeave(reason)
     await flushPromises()
     expect(document.querySelector('[data-testid="config-leave-keep"]')).toBeNull()
@@ -220,7 +279,7 @@ describe('ConfigurationPage', () => {
     })
     const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic in-flight draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic in-flight draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     const visibleKey = wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]')
@@ -250,7 +309,7 @@ describe('ConfigurationPage', () => {
     const client = clientWith(editableFixture, { saveConfiguration: save })
     const wrapper = mountPage({ mode: 'admin', client })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic pending draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic pending draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     const key = wrapper.get<HTMLInputElement>('[data-testid="configuration-operation-key"]').element.value
@@ -268,7 +327,7 @@ describe('ConfigurationPage', () => {
   it('F6 does not expose keep when write permission is disabled', async () => {
     const wrapper = mountPage({ mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic read-only draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic read-only draft')
     await wrapper.setProps({ writesEnabled: false })
     const leaving = wrapper.vm.requestLeave('navigate')
     await flushPromises()
@@ -283,7 +342,7 @@ describe('ConfigurationPage', () => {
     const save = vi.fn()
     const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
     await flushPromises()
-    const input = wrapper.get<HTMLInputElement>('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get<HTMLTextAreaElement>('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('Synthetic unsaved navigation draft')
     const leaving = wrapper.vm.requestLeave('navigate')
     await flushPromises()
@@ -311,7 +370,7 @@ describe('ConfigurationPage', () => {
     const save = vi.fn(async () => { throw new ZbaNetworkError(new Error('Synthetic save timeout')) })
     const wrapper = mountPage({ mode: 'admin', client: clientWith(editableFixture, { saveConfiguration: save }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic navigation draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic navigation draft')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
@@ -331,15 +390,15 @@ describe('ConfigurationPage', () => {
   })
 
   it.each([
-    ['basic', 'lock'], ['basic', 'downgrade'], ['models', 'lock'], ['models', 'downgrade']
+    ['basic', 'lock'], ['basic', 'downgrade'], ['agent', 'lock'], ['agent', 'downgrade']
   ] as const)('隐藏的 %s 草稿只能通过明确的 %s 确认保存', async (scope, reason) => {
     const requests: ZbaConfigurationSaveRequest[] = []
     const wrapper = mountPage({ mode: 'admin', scope, client: clientWith(editableFixture, {
       saveConfiguration: async request => { requests.push(request); return { code: 0, replayed: false, currentVersion: '2', errors: [], receipt } }
     }) })
     await flushPromises()
-    const key = scope === 'basic' ? 'botPersona' : 'model'
-    await wrapper.get('[data-testid="config-field-' + key + '"] input').setValue('Synthetic retained draft')
+    const key = scope === 'basic' ? 'botPersona' : 'agentPrompt'
+    await wrapper.get('[data-testid="config-field-' + key + '"] input, [data-testid="config-field-' + key + '"] textarea').setValue('Synthetic retained draft')
     await wrapper.setProps({ active: false }); await flushPromises()
     // 隐藏普通保存入口（包括直接分派事件）不能绕过写保护。
     await wrapper.get('[data-testid="config-save"]').trigger('click')
@@ -362,7 +421,7 @@ describe('ConfigurationPage', () => {
     expect(requests).toHaveLength(0)
     saveButton.click(); await flushPromises()
     expect(requests).toHaveLength(1)
-    expect(requests[0]!.changes).toEqual({ [scope === 'basic' ? 'behavior' : 'model']: { [key]: { kind: 1, value: 'Synthetic retained draft' } } })
+    expect(requests[0]!.changes).toEqual({ [scope === 'basic' ? 'behavior' : 'agent']: { [key]: { kind: 1, value: 'Synthetic retained draft' } } })
     await expect(leaving).resolves.toBe(true)
   })
 
@@ -372,7 +431,7 @@ describe('ConfigurationPage', () => {
       saveConfiguration: async () => { writes += 1; return { code: 0, errors: [], replayed: false, receipt, currentVersion: '2' } }
     }) })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('Synthetic draft')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('Synthetic draft')
     await wrapper.setProps({ active: false })
     const leaving = wrapper.vm.requestLeave('downgrade'); await flushPromises()
     await wrapper.setProps(permission === 'mode' ? { mode: 'read' } : { writesEnabled: false })
@@ -403,18 +462,17 @@ describe('ConfigurationPage', () => {
     expect(wrapper.emitted('open-capabilities')).toEqual([['models']])
   })
 
-  it('模型能力保留模型字段和已登记供应商编辑', async () => {
-    const wrapper = mountPage({ scope: 'models' })
+  it('模型路由能力仅展示路由与采样参数，不再混入主模型地址、密钥槽位或旧供应商表', async () => {
+    const withFastModel = providerSnapshot()
+    const wrapper = mountPage({ scope: 'models', client: clientWith(withFastModel) })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    expect(wrapper.get('[data-testid="config-field-model"]').text()).toContain('sample-model')
-
-    await wrapper.get('[data-testid="config-nav-registered"]').trigger('click')
-    expect(wrapper.find('[data-testid="config-plugins"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="config-open-capabilities"]').exists()).toBe(false)
-    expect(wrapper.findAll('[data-testid="config-providers"] tbody tr')).toHaveLength(1)
-    expect(wrapper.text()).toContain('provider-sample')
+    expect(wrapper.get('[data-testid="config-field-fastModel"]').text()).toContain('sample-fast-model')
+    expect(wrapper.find('[data-testid="config-field-model"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-field-modelBaseUrl"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-nav-registered"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="config-providers"]').exists()).toBe(false)
   })
 
   it('标准模式提供管理员入口，管理员模式隐藏只读提示', async () => {
@@ -455,7 +513,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('新人格')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
 
     await wrapper.get('[data-testid="config-save"]').trigger('click')
@@ -484,12 +542,12 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('冲突值')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('冲突值')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="config-conflict"]').exists()).toBe(true)
-    expect((wrapper.get('[data-testid="config-field-botPersona"] input').element as HTMLInputElement).value).toBe('冲突值')
+    expect((wrapper.get('[data-testid="config-field-botPersona"] textarea').element as HTMLTextAreaElement).value).toBe('冲突值')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
@@ -507,7 +565,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('我的人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('我的人格')
     // 对方在此期间保存了同一字段，本页因切页/补读重读到 version 2。
     const other = structuredClone(current)
     other.version = '2'
@@ -525,7 +583,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
     // 只报对方也改过的字段；用户草稿保留。
     expect(wrapper.get('[data-testid="config-field-botPersona"]').text()).toContain('与对方修改重叠')
-    expect((wrapper.get('[data-testid="config-field-botPersona"] input').element as HTMLInputElement).value).toBe('我的人格')
+    expect((wrapper.get('[data-testid="config-field-botPersona"] textarea').element as HTMLTextAreaElement).value).toBe('我的人格')
 
     // 读取最新后改基：再次保存带新版本。
     await saveDraft(wrapper)
@@ -548,7 +606,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('合成 503 待核对')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('合成 503 待核对')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
@@ -580,7 +638,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('待核对')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('待核对')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
@@ -610,12 +668,12 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('未知结果')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('未知结果')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="config-unconfirmed"]').exists()).toBe(true)
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     expect(input.attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="config-save"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="config-discard"]').attributes('disabled')).toBeDefined()
@@ -653,7 +711,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('过期键')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -687,7 +745,7 @@ describe('ConfigurationPage', () => {
       requestLeave: (reason: 'lock' | 'downgrade') => Promise<boolean>
     }
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('未保存')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('未保存')
     const pending = page.requestLeave('downgrade')
     await flushPromises()
     const dialog = document.body.querySelector<HTMLElement>('[data-testid="config-leave-dialog"]')
@@ -717,11 +775,11 @@ describe('ConfigurationPage', () => {
   })
 
   it('离开配置视图会清空秘密替换输入，但保留普通字段草稿', async () => {
-    const wrapper = mountPage({ mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(agentSecretFixture()) })
     await flushPromises()
     const page = wrapper.vm as unknown as { discardSecretsOnLeave: () => void }
 
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('字段草稿')
+    await wrapper.get('[data-testid="config-field-agentPrompt"] textarea').setValue('字段草稿')
     await wrapper.get('[data-testid="config-secrets"] [data-testid="secret-replace"]').trigger('click')
     await wrapper.get('[data-testid="config-secrets"] input[type="password"]').setValue('sk-synthetic-leave-7c41')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
@@ -730,17 +788,17 @@ describe('ConfigurationPage', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="config-secrets"] input[type="password"]')).toHaveLength(0)
-    expect((wrapper.get('[data-testid="config-field-model"] input').element as HTMLInputElement).value).toBe('字段草稿')
+    expect((wrapper.get('[data-testid="config-field-agentPrompt"] textarea').element as HTMLTextAreaElement).value).toBe('字段草稿')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
   })
 
   it('未知结果时离开视图不清秘密输入，留给核对与重存', async () => {
-    const client = clientWith(editableFixture, {
+    const client = clientWith(agentSecretFixture(), {
       saveConfiguration: async () => {
         throw new ZbaNetworkError(new Error('offline'))
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: 'agent' })
     await flushPromises()
     const page = wrapper.vm as unknown as { discardSecretsOnLeave: () => void }
 
@@ -765,7 +823,7 @@ describe('ConfigurationPage', () => {
     window.dispatchEvent(clean)
     expect(clean.defaultPrevented).toBe(false)
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('脏草稿')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('脏草稿')
     const dirty = new Event('beforeunload', { cancelable: true })
     window.dispatchEvent(dirty)
     expect(dirty.defaultPrevented).toBe(true)
@@ -793,7 +851,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('未知提交')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -817,7 +875,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('缺少回执')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -854,7 +912,7 @@ describe('ConfigurationPage', () => {
       requestLeave: (reason: 'lock' | 'downgrade') => Promise<boolean>
     }
 
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('在途保存')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('在途保存')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
 
@@ -919,7 +977,7 @@ describe('ConfigurationPage', () => {
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="config-field-botPersona"] input')
+    const input = wrapper.get('[data-testid="config-field-botPersona"] textarea')
     await input.setValue('核对矛盾')
     await wrapper.get('[data-testid="config-save"]').trigger('click')
     await flushPromises()
@@ -960,10 +1018,11 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const scope = registerSyntheticProviderScope()
+    const wrapper = mountPage({ client, mode: 'admin', scope })
     await flushPromises()
 
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('改过的人格')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('改过的人格')
     await renameProvider(wrapper, 'Synthetic Provider A2')
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
 
@@ -972,7 +1031,7 @@ describe('ConfigurationPage', () => {
 
     expect(saveRequests).toHaveLength(1)
     const request = saveRequests[0]!
-    expect(request.changes.model?.model).toEqual({ kind: 1, value: '改过的人格' })
+    expect(request.changes.model?.fastModel).toEqual({ kind: 1, value: '改过的人格' })
     expect(request.changes.registered?.providers).toHaveLength(1)
     const edit = request.changes.registered!.providers[0]!
     expect(edit.key).toBe('provider-sample')
@@ -1006,7 +1065,7 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1047,7 +1106,7 @@ describe('ConfigurationPage', () => {
         return { code: 0, receipt: { ...receipt, key, observedVersion: '1', committedVersion: '2' } }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1081,7 +1140,7 @@ describe('ConfigurationPage', () => {
         return { code: 14 }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1126,7 +1185,7 @@ describe('ConfigurationPage', () => {
         }
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1173,7 +1232,7 @@ describe('ConfigurationPage', () => {
       },
       findConfiguration: async () => ({ code: 0, receipt: confirmed })
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
     await renameProvider(wrapper, 'Synthetic converged B')
     current = providerSnapshot('Synthetic converged B', '2')
@@ -1181,7 +1240,7 @@ describe('ConfigurationPage', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('1 项修改')
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit 1')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('Synthetic ordinary edit 1')
     await saveDraft(wrapper)
     expect(requests[0]!.changes.registered?.providers ?? []).toHaveLength(0)
     if (completion === 'find') {
@@ -1197,7 +1256,7 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit 2')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('Synthetic ordinary edit 2')
     await saveDraft(wrapper)
     expect(requests).toHaveLength(2)
     expect(requests[1]!.changes.registered?.providers ?? []).toHaveLength(0)
@@ -1207,7 +1266,7 @@ describe('ConfigurationPage', () => {
   it.each(['lock', 'downgrade'] as const)('SR-NAME-02 同值草稿保存并 %s 无需空请求即可完成离开', async (reason) => {
     let current = providerSnapshot()
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => { writes += 1; throw new Error('No empty write expected') }
     }) })
@@ -1240,7 +1299,7 @@ describe('ConfigurationPage', () => {
   it('SR-NAME-02 纯同值草稿显式保存时就地结束，不发空请求也不伪造回执', async () => {
     let current = providerSnapshot()
     let writes = 0
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => { writes += 1; throw new Error('No empty write expected') }
     }) })
@@ -1262,7 +1321,7 @@ describe('ConfigurationPage', () => {
 
   it.each([3, 4, 12] as const)('SR-NAME-02 保存 code %s 不结束同值名称草稿', async (code) => {
     let current = providerSnapshot()
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async () => ({ code, replayed: false, currentVersion: '2', errors: [] })
     }) })
@@ -1272,7 +1331,7 @@ describe('ConfigurationPage', () => {
     await wrapper.get('[data-testid="config-reload"]').trigger('click')
     await flushPromises()
     await wrapper.get('[data-testid="config-nav-model"]').trigger('click')
-    await wrapper.get('[data-testid="config-field-model"] input').setValue('Synthetic ordinary edit')
+    await wrapper.get('[data-testid="config-field-fastModel"] input').setValue('Synthetic ordinary edit')
     await saveDraft(wrapper)
     expect(wrapper.get('[data-testid="config-save-bar"]').text()).toContain('2 项修改')
   })
@@ -1282,7 +1341,7 @@ describe('ConfigurationPage', () => {
     let release!: () => void
     const delayed = new Promise<void>((resolve) => { release = resolve })
     const requests: ZbaConfigurationSaveRequest[] = []
-    const wrapper = mountPage({ mode: 'admin', scope: 'models', client: clientWith(current, {
+    const wrapper = mountPage({ mode: 'admin', scope: registerSyntheticProviderScope(), client: clientWith(current, {
       readConfiguration: async () => current,
       saveConfiguration: async (request) => {
         requests.push(request)
@@ -1327,7 +1386,7 @@ describe('ConfigurationPage', () => {
         throw new Error('会话结束时不得再发写请求')
       }
     })
-    const wrapper = mountPage({ client, mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ client, mode: 'admin', scope: registerSyntheticProviderScope() })
     await flushPromises()
 
     await renameProvider(wrapper, 'Synthetic Provider A2')
@@ -1419,7 +1478,7 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     })
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('新人格')
     await saveDraft(wrapper)
     return wrapper
   }
@@ -1458,7 +1517,7 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
     })
     const wrapper = mountPage({ client, mode: 'admin' })
     await flushPromises()
-    await wrapper.get('[data-testid="config-field-botPersona"] input').setValue('新人格')
+    await wrapper.get('[data-testid="config-field-botPersona"] textarea').setValue('新人格')
     await saveDraft(wrapper)
     const grid = wrapper.get('[data-testid="config-receipt"] .receipt-grid').text()
     expect(grid).toContain('部分生效')
@@ -1470,7 +1529,7 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
   })
 
   it('秘密槽位只给元数据：不回显值，也没有 QQ 官方 Secret 的写入口', async () => {
-    const wrapper = mountPage({ mode: 'admin', scope: 'models' })
+    const wrapper = mountPage({ mode: 'admin', scope: 'agent', client: clientWith(agentSecretFixture()) })
     await flushPromises()
     const secrets = wrapper.get('[data-testid="config-secrets"]')
     expect(secrets.findAll('li')).toHaveLength(1)
@@ -1480,5 +1539,94 @@ describe('ConfigurationPage 生效状态与秘密边界（PNL-05 / PNL-10）', (
       expect((input.element as HTMLInputElement).value).toBe('')
     }
     expect(wrapper.text()).not.toMatch(/officialAppSecret|官方 App ?Secret/i)
+  })
+
+  it('按平台驱动解耦作用域：飞书仅展示飞书字段、飞书 3 槽位秘密与飞书策略，保存不触碰其它平台', async () => {
+    const calls: ZbaConfigurationSaveRequest[] = []
+    const data = structuredClone(editableFixture) as unknown as ZbaConfigurationReadResult
+    const templatePolicy = data.view!.platform.platformPolicies.value![0]!
+    const makeField = (id: number, value: unknown) => ({
+      visibility: 1 as const,
+      display: String(value),
+      value,
+      userMode: 2 as const,
+      effectiveSource: 1 as const,
+      applyState: 1 as const,
+      rule: { id, effect: 0 as const, canClear: true, editable: true, legacyNeedsReview: false }
+    })
+    Object.assign(data.view!.platform, {
+      feishuEnabled: makeField(56, false),
+      feishuAppId: makeField(55, 'cli_synthetic'),
+      feishuApiBase: makeField(54, 'https://open.example.com'),
+      feishuWhitelist: makeField(57, 'oc_group_1'),
+      feishuWhitelistPrivates: makeField(147, ''),
+      officialEnabled: makeField(91, false),
+      officialAppId: makeField(89, 'official_1'),
+      localChannelIds: makeField(67, 'local-1'),
+      privateChatEnabled: makeField(104, true),
+      whitelistPrivates: makeField(142, ''),
+      messageWhitelist: makeField(74, '')
+    })
+    const feishuPolicy = structuredClone(templatePolicy)
+    feishuPolicy.target = { kind: 'instance', key: { platformId: 'feishu', accountScope: 'default', instanceId: 'feishu-main' } }
+    const qqPolicy = structuredClone(templatePolicy)
+    qqPolicy.target = { kind: 'accountDefault', platformId: 'qq.private', accountScope: 'legacy' }
+    data.view!.platform.platformPolicies.value = [qqPolicy, feishuPolicy]
+
+    const client = clientWith(data, {
+      saveConfiguration: async (request) => {
+        calls.push(request)
+        return { code: 0, replayed: false, receipt: committedReceipt(request, '2'), currentVersion: '2', errors: [] }
+      }
+    })
+
+    // 1. 飞书驱动作用域：仅见飞书 5 字段 + 飞书 3 个秘密 + 飞书策略条目
+    const feishu = mountPage({ client, mode: 'admin', scope: 'system.platform-feishu' })
+    await flushPromises()
+    expect(feishu.find('[data-testid="config-field-feishuEnabled"]').exists()).toBe(true)
+    expect(feishu.find('[data-testid="config-field-feishuAppId"]').exists()).toBe(true)
+    expect(feishu.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(false)
+    expect(feishu.find('[data-testid="config-field-officialEnabled"]').exists()).toBe(false)
+    expect(feishu.find('[data-testid="config-field-localChannelIds"]').exists()).toBe(false)
+    expect(feishu.find('[data-testid="config-policy-instance:feishu:default:feishu-main"]').exists()).toBe(true)
+    expect(feishu.find('[data-testid="config-policy-account:qq.private:legacy"]').exists()).toBe(false)
+    const secretsText = feishu.get('[data-testid="config-secrets"]').text()
+    expect(secretsText).toContain('飞书 App Secret')
+    expect(secretsText).toContain('飞书 Encrypt Key')
+    expect(secretsText).toContain('飞书验证 Token')
+    expect(feishu.findAll('[data-testid="config-secrets"] li')).toHaveLength(3)
+
+    // 修改飞书策略并保存，验证只提交飞书策略条目
+    const feishuRow = feishu.get('[data-testid="config-policy-instance:feishu:default:feishu-main"]')
+    await feishuRow.get('[data-testid="policy-group-instance:feishu:default:feishu-main-kind"]').setValue('2')
+    await feishu.get('[data-testid="config-save"]').trigger('click')
+    await flushPromises()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.changes.registered?.policies).toHaveLength(1)
+    expect(calls[0]!.changes.registered?.policies[0]!.target).toEqual(feishuPolicy.target)
+
+    // 2. QQ 官方作用域：展示环境变量密钥只读提示且不暴露任何秘密写框
+    const official = mountPage({ client, mode: 'admin', scope: 'system.platform-qq-official' })
+    await flushPromises()
+    expect(official.find('[data-testid="config-field-officialEnabled"]').exists()).toBe(true)
+    expect(official.find('[data-testid="config-field-feishuEnabled"]').exists()).toBe(false)
+    expect(official.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(official.get('[data-testid="config-credential-hint"]').text()).toContain('BOTAGENT_OFFICIAL_APP_SECRET')
+
+    // 3. QQ 私域作用域：仅展示私域字段与私域策略，无秘密框
+    const qqPrivate = mountPage({ client, mode: 'admin', scope: 'system.platform-qq-private' })
+    await flushPromises()
+    expect(qqPrivate.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(true)
+    expect(qqPrivate.find('[data-testid="config-field-feishuAppId"]').exists()).toBe(false)
+    expect(qqPrivate.find('[data-testid="config-secrets"]').exists()).toBe(false)
+    expect(qqPrivate.find('[data-testid="config-policy-account:qq.private:legacy"]').exists()).toBe(true)
+    expect(qqPrivate.find('[data-testid="config-policy-instance:feishu:default:feishu-main"]').exists()).toBe(false)
+
+    // 4. 本地调试作用域：仅展示 localChannelIds
+    const local = mountPage({ client, mode: 'admin', scope: 'system.platform-local' })
+    await flushPromises()
+    expect(local.find('[data-testid="config-field-localChannelIds"]').exists()).toBe(true)
+    expect(local.find('[data-testid="config-field-whitelistGroups"]').exists()).toBe(false)
+    expect(local.find('[data-testid="config-secrets"]').exists()).toBe(false)
   })
 })

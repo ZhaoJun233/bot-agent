@@ -108,11 +108,11 @@ describe('OverviewPage', () => {
 
   it('快捷入口只发出 navigate 事件并带上目标页', async () => {
     const wrapper = mountPage()
-    for (const target of ['capabilities', 'configuration', 'tasks'] as const) {
+    for (const target of ['providers', 'platforms', 'plugins', 'logs'] as const) {
       await wrapper.find('[data-testid="quick-' + target + '"]').trigger('click')
     }
     const events = wrapper.emitted('navigate') ?? []
-    expect(events.map((e) => e[0])).toEqual(['capabilities', 'configuration', 'tasks'])
+    expect(events.map((e) => e[0])).toEqual(['providers', 'platforms', 'plugins', 'logs'])
   })
 
   it('备份组件异常时顶部出现红条，健康时不出现（#121）', () => {

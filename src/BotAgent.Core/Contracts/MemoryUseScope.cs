@@ -1,5 +1,6 @@
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Memory;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Messaging;
 using BotAgent.Services.OneBot;
@@ -19,7 +20,9 @@ public sealed class MemoryUseScope : IDisposable
     private readonly object _gate;
     private readonly List<Func<Action, bool>> _receipts = new();
     private readonly List<Destination> _destinations = new();
+    private MemorySensitivityTier _maxTier;
     private static readonly AsyncLocal<Destination?> Outbound = new();
+    private static readonly AsyncLocal<bool> CommandResponse = new();
     private sealed record Destination(DriverKey Driver, ConversationId Conversation);
     private bool _disposed;
 
@@ -51,15 +54,41 @@ public sealed class MemoryUseScope : IDisposable
 
     /// <summary>Register before providing facts to a model. The callback must invoke
     /// commit synchronously and exactly once if authorized, otherwise not at all.
-    /// Registering without a root scope is a wiring error, never an unguarded fallback.</summary>
-    public static void Register(Func<Action, bool> tryUse)
+    /// Registering without an explicit tier conservatively assumes LegacyProfile (L3).</summary>
+    public static void Register(Func<Action, bool> tryUse) => Register(MemorySensitivityTier.LegacyProfile, tryUse);
+
+    public static void Register(MemorySensitivityTier tier, Func<Action, bool> tryUse)
     {
+        if (tier <= MemorySensitivityTier.None || !Enum.IsDefined(tier))
+            throw new ArgumentOutOfRangeException(nameof(tier));
         ArgumentNullException.ThrowIfNull(tryUse);
         var scope = Ambient.Value ?? throw new InvalidOperationException("memory_use_scope_required");
-        lock (scope._gate) scope._receipts.Add(tryUse);
+        lock (scope._gate)
+        {
+            if (tier > scope._maxTier) scope._maxTier = tier;
+            scope._receipts.Add(tryUse);
+        }
     }
 
     public static bool CanUse => TryUse(static () => { });
+
+    public static MemorySensitivityTier MaxTier => Ambient.Value?.ReadMaxTier() ?? MemorySensitivityTier.None;
+
+    public static bool AllowsEgress(ToolEgressClass egress) => MemoryTaintPolicy.Allows(MaxTier, egress);
+
+    public static bool IsCommandResponse => CommandResponse.Value;
+
+    public static IDisposable EnterCommandResponse()
+    {
+        var previous = CommandResponse.Value;
+        CommandResponse.Value = true;
+        return new RestoreCommandResponse(previous);
+    }
+
+    private sealed class RestoreCommandResponse(bool previous) : IDisposable
+    {
+        public void Dispose() => CommandResponse.Value = previous;
+    }
 
     /// <summary>Atomically validate all receipts and initiate a synchronous commit.
     /// The commit may return a task through Use; it must not wait for external work.
@@ -149,6 +178,16 @@ public sealed class MemoryUseScope : IDisposable
     private bool HasReceipts()
     {
         lock (_gate) return _receipts.Count > 0 || _parent?.HasReceipts() == true;
+    }
+
+    private MemorySensitivityTier ReadMaxTier()
+    {
+        lock (_gate)
+        {
+            var local = _receipts.Count > 0 ? _maxTier : MemorySensitivityTier.None;
+            var inherited = _parent?.ReadMaxTier() ?? MemorySensitivityTier.None;
+            return local > inherited ? local : inherited;
+        }
     }
 
     private bool Allows(Destination? destination)

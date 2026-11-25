@@ -7,6 +7,7 @@ import type {
   ZbaPolicyEdit,
   ZbaPolicyTarget
 } from '../../api/zba'
+import { formatAccountScopeLabel } from '../platforms/driver-registry'
 
 /**
  * 平台策略条目的草稿。
@@ -42,7 +43,7 @@ export const POLICY_ACTIONS = [
   'like', 'poke', 'emoji_like', 'recall', 'ban', 'kick', 'card', 'group_name', 'leave', 'send'
 ] as const
 
-/** 11 个平台功能，顺序与 `PlatformFeatureId` 一致。 */
+/** 18 个平台功能，顺序与 `PlatformFeatureId` 一致。 */
 export const POLICY_FEATURES = [
   { id: 0, label: '文本' },
   { id: 1, label: '图片' },
@@ -54,7 +55,14 @@ export const POLICY_FEATURES = [
   { id: 7, label: '音乐' },
   { id: 8, label: '拍一拍' },
   { id: 9, label: '链接预览' },
-  { id: 10, label: '联网搜索' }
+  { id: 10, label: '联网搜索' },
+  { id: 11, label: '文档解析' },
+  { id: 12, label: '会话纪要' },
+  { id: 13, label: '轻量知识库' },
+  { id: 14, label: '情景记忆' },
+  { id: 15, label: '圈子黑话' },
+  { id: 16, label: '定时与提醒' },
+  { id: 17, label: '个人待办' }
 ] as const
 
 export function policyKey(target: ZbaPolicyTarget): string {
@@ -63,9 +71,23 @@ export function policyKey(target: ZbaPolicyTarget): string {
     : `instance:${target.key.platformId}:${target.key.accountScope}:${target.key.instanceId}`
 }
 
+export function policyEntryPlatformId(target: ZbaPolicyTarget): string {
+  return target.kind === 'accountDefault' ? target.platformId : target.key.platformId
+}
+
+export function filterPoliciesByPlatform(
+  entries: readonly ZbaPlatformPolicyEntryView[],
+  platformId: string | null | undefined
+): ZbaPlatformPolicyEntryView[] {
+  if (!platformId) return [...entries]
+  return entries.filter(entry => policyEntryPlatformId(entry.target) === platformId)
+}
+
 /** 一行条目的标题；实例目标必须写清楚 instanceId，否则和 account 默认看起来一样。 */
 export function policyTitle(target: ZbaPolicyTarget): string {
-  const base = `${target.kind === 'accountDefault' ? target.platformId : target.key.platformId} · ${target.kind === 'accountDefault' ? target.accountScope : target.key.accountScope}`
+  const platformId = target.kind === 'accountDefault' ? target.platformId : target.key.platformId
+  const scopeLabel = formatAccountScopeLabel(target.kind === 'accountDefault' ? target.accountScope : target.key.accountScope)
+  const base = `${platformId} · ${scopeLabel}`
   if (target.kind === 'accountDefault') return base
   const instance = target.key.instanceId.trim()
   return instance.length === 0 ? `${base} · 实例（未命名）` : `${base} · 实例 ${instance}`

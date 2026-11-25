@@ -158,22 +158,9 @@ public sealed class VoiceService : IVoiceSynthesis
             var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                var detail = System.Text.Encoding.UTF8.GetString(bytes);
-                try
-                {
-                    detail = JsonNode.Parse(detail)?["error"]?.GetValue<string>() ?? detail;
-                }
-                catch
-                {
-                }
-
-                if (detail.Length > 300)
-                {
-                    detail = detail[..300];
-                }
-
-                _log($"[Voice] TTS 合成失败 HTTP {(int)resp.StatusCode}：{detail}");
-                return (null, $"HTTP {(int)resp.StatusCode}：{detail}");
+                // D0-VOICE-ERROR-10：绝不把上游原始错误正文写进日志或返回调用方（避免泄露密钥/金丝雀/内部堆栈）。
+                _log($"[Voice] TTS 合成失败 HTTP {(int)resp.StatusCode}（body_bytes={bytes.Length}）");
+                return (null, $"HTTP {(int)resp.StatusCode}：上游语音服务返回错误");
             }
 
             if (bytes.Length < 44 || bytes[0] != 'R' || bytes[1] != 'I' || bytes[2] != 'F' || bytes[3] != 'F')
@@ -189,8 +176,8 @@ public sealed class VoiceService : IVoiceSynthesis
         }
         catch (Exception ex)
         {
-            _log($"[Voice] TTS 请求异常：{ex.Message}");
-            return (null, ex.Message);
+            _log($"[Voice] TTS 请求异常：{ex.GetType().Name}");
+            return (null, $"TTS 请求异常（{ex.GetType().Name}）");
         }
     }
     /// <summary>问一下 TTS 服务自己：活着吗、有哪些音色（面板用来校验地址与音色名）。</summary>
@@ -248,14 +235,18 @@ public sealed class VoiceService : IVoiceSynthesis
             var text = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                return (list, $"云端返回 HTTP {(int)resp.StatusCode}：{Shorten(text)}");
+                return (list, $"云端返回 HTTP {(int)resp.StatusCode}");
             }
 
-            var json = JsonNode.Parse(text);
-            var status = NodeInt(json?["base_resp"]?["status_code"]);
+            var json = TryParseJson(text);
+            if (json is null)
+            {
+                return (list, "云端返回格式异常");
+            }
+            var status = NodeInt(json["base_resp"]?["status_code"]);
             if (status != 0)
             {
-                return (list, $"云端报错 {status}：{NodeText(json?["base_resp"]?["status_msg"])}");
+                return (list, $"云端报错 status={status}");
             }
 
             foreach (var node in json?["voice_cloning"]?.AsArray() ?? new JsonArray())
@@ -271,7 +262,7 @@ public sealed class VoiceService : IVoiceSynthesis
         }
         catch (Exception ex)
         {
-            return (list, "列复刻音色失败：" + ex.Message);
+            return (list, $"列复刻音色失败（{ex.GetType().Name}）");
         }
     }
 
@@ -301,7 +292,7 @@ public sealed class VoiceService : IVoiceSynthesis
             !System.Text.RegularExpressions.Regex.IsMatch(wanted, "^[a-z][a-z0-9_-]{7,63}$"))
         {
             return (false, "音色 ID 要 **8~64 位、全小写、以字母开头**（只能用小写字母/数字/下划线/连字符），" +
-                           "例如 zhao_voice_01 —— 云端对不合规的 ID 只回一句笼统的 2013，很容易误判成“样本不合格”");
+                           "例如 example_voice_01 —— 云端对不合规的 ID 只回一句笼统的 2013，很容易误判成“样本不合格”");
         }
 
         if (audio.Length == 0)
@@ -336,16 +327,16 @@ public sealed class VoiceService : IVoiceSynthesis
             uploadReq.Headers.TryAddWithoutValidation("Authorization", "Bearer " + key);
             using var uploadResp = await _http.SendAsync(uploadReq, ct);
             var uploadText = await uploadResp.Content.ReadAsStringAsync(ct);
-            var uploadJson = JsonNode.Parse(uploadText);
+            var uploadJson = TryParseJson(uploadText);
             var fileId = NodeText(uploadJson?["file"]?["file_id"]);
             // 只记形状（不回显 raw_url 这种带签名的东西）：file_id 拿到没、上游有没有报 base_resp 错
             var uploadBase = NodeInt(uploadJson?["base_resp"]?["status_code"]);
             _log($"[Voice] 样本已上传：file_id={(fileId.Length > 0 ? "有" : "无")}（{fileId.Length} 位）" +
                  $"，upload base_resp={uploadBase}" +
                  ((fileId.Length > 0 && !fileId.All(char.IsDigit)) ? "，注意 file_id 不是纯数字" : string.Empty));
-            if (!uploadResp.IsSuccessStatusCode || string.IsNullOrWhiteSpace(fileId))
+            if (!uploadResp.IsSuccessStatusCode || uploadJson is null || string.IsNullOrWhiteSpace(fileId))
             {
-                return (false, $"上传样本失败（HTTP {(int)uploadResp.StatusCode}）：{Shorten(uploadText)}");
+                return (false, $"上传样本失败（HTTP {(int)uploadResp.StatusCode}，status={uploadBase}）");
             }
 
             // ② 建克隆
@@ -369,11 +360,10 @@ public sealed class VoiceService : IVoiceSynthesis
             cloneReq.Headers.TryAddWithoutValidation("Authorization", "Bearer " + key);
             using var cloneResp = await _http.SendAsync(cloneReq, ct);
             var cloneText = await cloneResp.Content.ReadAsStringAsync(ct);
-            var cloneJson = JsonNode.Parse(cloneText);
+            var cloneJson = TryParseJson(cloneText);
             var status = NodeInt(cloneJson?["base_resp"]?["status_code"]);
-            if (!cloneResp.IsSuccessStatusCode || status != 0)
+            if (!cloneResp.IsSuccessStatusCode || cloneJson is null || status != 0)
             {
-                var msg = NodeText(cloneJson?["base_resp"]?["status_msg"]);
                 var why = status switch
                 {
                     2013 => "（2013 = 参数/样本不合格：需 mp3/m4a/wav、**10 秒 ~ 5 分钟**、≤ 20MB、单人干净人声；voice_id 只能用字母/数字/下划线/连字符）",
@@ -382,14 +372,15 @@ public sealed class VoiceService : IVoiceSynthesis
                     2042 => "（账号没有音色复刻权限/额度）",
                     _ => string.Empty
                 };
-                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）：{(msg.Length > 0 ? msg : Shorten(cloneText))}{(why.Length > 0 ? " " + why : string.Empty)}");
+                return (false, $"克隆失败（HTTP {(int)cloneResp.StatusCode}，status {status}）{(why.Length > 0 ? " " + why : string.Empty)}");
             }
 
             _log($"[Voice] 音色复刻成功：{wanted}（样本 {audio.Length / 1024}KB）");
-            return (true, null);        }
+            return (true, null);
+        }
         catch (Exception ex)
         {
-            return (false, "复刻失败：" + ex.Message);
+            return (false, $"复刻失败（{ex.GetType().Name}）");
         }
     }
 
@@ -444,259 +435,7 @@ public sealed class VoiceService : IVoiceSynthesis
         return int.TryParse(text, out var parsed) ? parsed : fallback;
     }
 
-    // ---------- 把多段短样本拼成一段（面板「5 秒切片」那种情况） ----------
-    //
-    // 为什么需要：官方要求主样本 **≥ 10 秒**，而管理员手上的切片常常只有 5 秒左右 ✗。
-    // 与其让人先去装 ffmpeg，不如在服务端拼：
-    //   • WAV（PCM）：解析 fmt/data 两个块、首尾相接、重写头部 —— 无损，最稳；
-    //   • MP3：剥掉 ID3v2 头与 ID3v1 尾，再把音频帧拼起来 —— 同采样率/声道时解码器能正常接；
-    //   • m4a/aac、或混格式：这里**明确拒绝**（要做得好得把 ffmpeg 塞进镜像，为一次性动作不值）。
-    // 拼接处各加 300ms 静音：ASR/声学模型对“硬切”很敏感，留口气识别率明显好。
-
-    /// <summary>拼多段样本成一段。samples 顺序即拼接顺序。</summary>
-    public static (byte[]? Data, string? Error, string Note) ConcatSamples(IReadOnlyList<(byte[] Data, string Name)> samples)
-    {
-        if (samples.Count == 0)
-        {
-            return (null, "没有样本", string.Empty);
-        }
-
-        if (samples.Count == 1)
-        {
-            return (samples[0].Data, null, string.Empty);
-        }
-
-        var allWav = samples.All(s => IsWav(s.Data));
-        var allMp3 = samples.All(s => IsMp3(s.Data));
-        if (allWav)
-        {
-            return ConcatWav(samples);
-        }
-
-        if (allMp3)
-        {
-            return ConcatMp3(samples);
-        }
-
-        if (samples.Any(s => IsM4a(s.Data)) || samples.Any(s => !IsWav(s.Data) && !IsMp3(s.Data)))
-        {
-            return (null, "这些切片里有 mm4a/其它格式 —— 面板只能拼 **mp3 与 wav**（都是 mp3 或都是 wav）；" +
-                          "m4a 请先在本地导出成 mp3 再传（手机录音默认就是 m4a，很多播放器能直接转）", string.Empty);
-        }
-
-        return (null, "样本格式不一致：一部分是 wav、一部分是 mp3 —— 全部统一成同一种再传", string.Empty);
-    }
-
-    private static bool IsWav(byte[] d) => d.Length > 44 && d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F'
-                                           && d[8] == 'W' && d[9] == 'A' && d[10] == 'V' && d[11] == 'E';
-
-    private static bool IsMp3(byte[] d) => d.Length > 4
-                                           && ((d[0] == 'I' && d[1] == 'D' && d[2] == '3') || (d[0] == 0xFF && (d[1] & 0xE0) == 0xE0));
-
-    private static bool IsM4a(byte[] d) => d.Length > 12 && d[4] == 'f' && d[5] == 't' && d[6] == 'y' && d[7] == 'p';
-
-    private static (byte[]? Data, string? Error, string Note) ConcatWav(IReadOnlyList<(byte[] Data, string Name)> samples)
-    {
-        ushort channels = 0;
-        uint rate = 0;
-        ushort bits = 0;
-        var pcm = new List<byte[]>();
-
-        foreach (var (data, name) in samples)
-        {
-            var (ok, ch, rt, bt, chunk) = ReadWav(data);
-            if (!ok)
-            {
-                return (null, $"读不了这段 wav（{name}）—— 可能是非标准头部（手机导出/剪辑软件有时会写额外块）", string.Empty);
-            }
-
-            if (channels == 0)
-            {
-                (channels, rate, bits) = (ch, rt, bt);
-            }
-            else if (ch != channels || rt != rate || bt != bits)
-            {
-                return (null, $"这些 wav 的参数不一致（{name} 是 {rt}Hz/{ch}声道/{bt}bit，前面的是 {rate}Hz/{channels}声道/{bits}bit）—— " +
-                              "请先统一成同一采样率再拼", string.Empty);
-            }
-
-            pcm.Add(chunk);
-        }
-
-        // 拼：每段之间插 300ms 静音（16bit 采样：一帧 = channels * bits/8 字节）
-        var bytesPerFrame = Math.Max(1, channels * (bits / 8));
-        var gap = new byte[bytesPerFrame * (int)(rate * 0.3)];
-        var total = pcm.Sum(p => p.Length) + gap.Length * (pcm.Count - 1);
-        var outBuf = new byte[44 + total];
-        WriteWavHeader(outBuf, channels, rate, bits, total);
-        var pos = 44;
-        for (var i = 0; i < pcm.Count; i++)
-        {
-            if (i > 0)
-            {
-                Array.Copy(gap, 0, outBuf, pos, gap.Length);
-                pos += gap.Length;
-            }
-
-            Array.Copy(pcm[i], 0, outBuf, pos, pcm[i].Length);
-            pos += pcm[i].Length;
-        }
-
-        var seconds = total / (double)bytesPerFrame / rate;
-        return (outBuf, null, $"把 {samples.Count} 段 wav 拼成了一段（共 {seconds:F1} 秒，段间 300ms 静音）");
-    }
-
-    /// <summary>读一个 wav：只找 fmt 与 data 两个块（RIFF 里其它块一律跳过）。</summary>
-    private static (bool Ok, ushort Channels, uint Rate, ushort Bits, byte[] Pcm) ReadWav(byte[] d)
-    {
-        if (!IsWav(d))
-        {
-            return (false, 0, 0, 0, Array.Empty<byte>());
-        }
-
-        ushort channels = 0;
-        uint rate = 0;
-        ushort bits = 0;
-        var pos = 12;
-        while (pos + 8 <= d.Length)
-        {
-            var id = System.Text.Encoding.ASCII.GetString(d, pos, 4);
-            var size = BitConverter.ToInt32(d, pos + 4);
-            var body = pos + 8;
-            if (size < 0 || body + size > d.Length)
-            {
-                break;
-            }
-
-            if (id == "fmt ")
-            {
-                channels = BitConverter.ToUInt16(d, body + 2);
-                rate = BitConverter.ToUInt32(d, body + 4);
-                bits = BitConverter.ToUInt16(d, body + 14);
-            }
-            else if (id == "data")
-            {
-                var pcm = new byte[size];
-                Array.Copy(d, body, pcm, 0, size);
-                return channels > 0 && rate > 0 && bits > 0
-                    ? (true, channels, rate, bits, pcm)
-                    : (false, 0, 0, 0, Array.Empty<byte>());
-            }
-
-            pos = body + size + (size % 2); // 块长为奇数时补一字节对齐
-        }
-
-        return (false, 0, 0, 0, Array.Empty<byte>());
-    }
-
-    private static void WriteWavHeader(byte[] buf, ushort channels, uint rate, ushort bits, int dataLen)
-    {
-        var byteRate = rate * channels * (bits / 8u);
-        System.Text.Encoding.ASCII.GetBytes("RIFF").CopyTo(buf, 0);
-        BitConverter.GetBytes(36 + dataLen).CopyTo(buf, 4);
-        System.Text.Encoding.ASCII.GetBytes("WAVEfmt ").CopyTo(buf, 8);
-        BitConverter.GetBytes(16).CopyTo(buf, 16);
-        BitConverter.GetBytes((ushort)1).CopyTo(buf, 20); // PCM
-        BitConverter.GetBytes(channels).CopyTo(buf, 22);
-        BitConverter.GetBytes(rate).CopyTo(buf, 24);
-        BitConverter.GetBytes(byteRate).CopyTo(buf, 28);
-        BitConverter.GetBytes((ushort)(channels * (bits / 8))).CopyTo(buf, 32);
-        BitConverter.GetBytes(bits).CopyTo(buf, 34);
-        System.Text.Encoding.ASCII.GetBytes("data").CopyTo(buf, 36);
-        BitConverter.GetBytes(dataLen).CopyTo(buf, 40);
-    }
-
-    private static (byte[]? Data, string? Error, string Note) ConcatMp3(IReadOnlyList<(byte[] Data, string Name)> samples)
-    {
-        var parts = new List<byte[]>();
-        (int Rate, int Channels)? head = null;
-
-        foreach (var (data, name) in samples)
-        {
-            var frames = StripMp3Tags(data);
-            var info = ReadMp3FrameInfo(frames);
-            if (info is null)
-            {
-                return (null, $"这段 mp3 里没找到有效的音频帧（{name}）", string.Empty);
-            }
-
-            head ??= (info.Value.Rate, info.Value.Channels);
-            if (info.Value.Rate != head.Value.Rate || info.Value.Channels != head.Value.Channels)
-            {
-                return (null, $"这些 mp3 的采样率/声道不一致（{name} 是 {info.Value.Rate}Hz/{info.Value.Channels}声道）—— " +
-                              "不同码率可以，采样率/声道不同会在接缝处咔噃，请先统一", string.Empty);
-            }
-
-            parts.Add(frames);
-        }
-
-        var total = parts.Sum(p => p.Length);
-        var outBuf = new byte[total];
-        var pos = 0;
-        foreach (var p in parts)
-        {
-            Array.Copy(p, 0, outBuf, pos, p.Length);
-            pos += p.Length;
-        }
-
-        var approx = head is null ? 0 : total * 8.0 / 128000; // 按 128kbps 粗估（CBR 时很准）
-        return (outBuf, null, $"把 {samples.Count} 段 mp3 按帧拼成了一段（约 {approx:F0} 秒；要求同采样率/声道，码率可以不同）");
-    }
-
-    /// <summary>剥掉 ID3v2 头（开头）与 ID3v1 尾（最后 128 字节的 TAG 块）——它们夹在中间会让解码器吃苦头。</summary>
-    private static byte[] StripMp3Tags(byte[] d)
-    {
-        var start = 0;
-        if (d.Length > 10 && d[0] == 'I' && d[1] == 'D' && d[2] == '3')
-        {
-            // ID3v2 大小是 4 个“synchsafe”字节：每字节只用低 7 位
-            var size = ((d[6] & 0x7F) << 21) | ((d[7] & 0x7F) << 14) | ((d[8] & 0x7F) << 7) | (d[9] & 0x7F);
-            start = Math.Min(d.Length, 10 + size);
-        }
-
-        var end = d.Length;
-        if (end - start > 128 && d[end - 128] == 'T' && d[end - 127] == 'A' && d[end - 126] == 'G')
-        {
-            end -= 128;
-        }
-
-        // 从第一个看起来像帧同步的位置开始（前面可能还残留 APE/歌词块）
-        while (start + 1 < end && !(d[start] == 0xFF && (d[start + 1] & 0xE0) == 0xE0))
-        {
-            start++;
-        }
-
-        var outBuf = new byte[end - start];
-        Array.Copy(d, start, outBuf, 0, outBuf.Length);
-        return outBuf;
-    }
-
-    /// <summary>从第一帧头解析 mp3 参数（采样率索引 / 声道模式）。</summary>
-    private static (int Rate, int Channels)? ReadMp3FrameInfo(byte[] d)
-    {
-        for (var i = 0; i + 4 <= d.Length && i < 8096; i++)
-        {
-            if (d[i] != 0xFF || (d[i + 1] & 0xE0) != 0xE0)
-            {
-                continue;
-            }
-
-            var version = (d[i + 1] >> 3) & 0x03; // 3=MPEG1, 2=MPEG2, 0=MPEG2.5
-            var rateIdx = (d[i + 2] >> 2) & 0x03;
-            var channelMode = (d[i + 3] >> 6) & 0x03; // 3 = 单声道
-            if (rateIdx == 3 || version == 1)
-            {
-                continue; // 保留值，不是真帧
-            }
-
-            var table = version == 3
-                ? new[] { 44100, 48000, 32000 }
-                : version == 2 ? new[] { 22050, 24000, 16000 } : new[] { 11025, 12000, 8000 };
-            return (table[rateIdx], channelMode == 3 ? 1 : 2);
-        }
-
-        return null;
-    }
+    // 多段样本拼接（WAV / MP3）已迁入 preset.feature.voice 独立包（VoiceSampleConcatenator）。
 
     /// <summary>
     /// 删掉一个自己复刻的音色（<c>POST /v1/delete_voice</c>，voice_type=voice_cloning）。
@@ -734,12 +473,11 @@ public sealed class VoiceService : IVoiceSynthesis
 
             using var resp = await _http.SendAsync(req, ct);
             var text = await resp.Content.ReadAsStringAsync(ct);
-            var json = JsonNode.Parse(text);
+            var json = TryParseJson(text);
             var status = NodeInt(json?["base_resp"]?["status_code"]);
-            if (!resp.IsSuccessStatusCode || status != 0)
+            if (!resp.IsSuccessStatusCode || json is null || status != 0)
             {
-                var msg = NodeText(json?["base_resp"]?["status_msg"]);
-                return (false, $"删除失败（HTTP {(int)resp.StatusCode}，status {status}）：{(msg.Length > 0 ? msg : Shorten(text))}");
+                return (false, $"删除失败（HTTP {(int)resp.StatusCode}，status {status}）");
             }
 
             _log($"[Voice] 已删掉复刻音色：{wanted}");
@@ -747,14 +485,8 @@ public sealed class VoiceService : IVoiceSynthesis
         }
         catch (Exception ex)
         {
-            return (false, "删除失败：" + ex.Message);
+            return (false, $"删除失败（{ex.GetType().Name}）");
         }
-    }
-
-    private static string Shorten(string text)
-    {
-        var one = (text ?? string.Empty).Replace('\n', ' ').Trim();
-        return one.Length <= 200 ? one : one[..200] + "…";
     }
 
     public async Task<(bool Ok, JsonNode? Payload, string? Error)> HealthAsync(CancellationToken ct)
@@ -771,15 +503,23 @@ public sealed class VoiceService : IVoiceSynthesis
             var text = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                return (false, null, $"HTTP {(int)resp.StatusCode}：{(text.Length > 200 ? text[..200] : text)}");
+                return (false, null, $"HTTP {(int)resp.StatusCode}（body_bytes={text.Length}）");
             }
 
-            return (true, JsonNode.Parse(text), null);
+            var parsed = TryParseJson(text);
+            return parsed is not null ? (true, parsed, null) : (false, null, "TTS 健康接口返回非 JSON 响应");
         }
         catch (Exception ex)
         {
-            return (false, null, ex.Message);
+            return (false, null, $"TTS 健康检查异常（{ex.GetType().Name}）");
         }
+    }
+
+    private static JsonNode? TryParseJson(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        try { return JsonNode.Parse(text); }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 
     /// <summary>把设置里的地址规整成 "http://host:port"（无尾部斜杠）；不合法返回 null。</summary>

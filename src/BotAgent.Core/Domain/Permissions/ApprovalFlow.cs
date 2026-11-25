@@ -41,9 +41,9 @@ public static partial class ApprovalFlow
     /// <summary>审批人在群里的身份（够格的两种）。</summary>
     public static readonly string[] GroupApproverRoles = { "owner", "admin" };
 
-    /// <summary>同意 / 拒绝的动词（大小写不敏感；英文也收，方便测试与英文群）。</summary>
-    private static readonly string[] ApproveWords = { "同意", "通过", "批准", "approve", "yes" };
-    private static readonly string[] RejectWords = { "拒绝", "驳回", "reject", "no" };
+    /// <summary>同意 / 拒绝的动词（大小写不敏感；英文与官方按钮指令也收，方便测试与跨通道交互）。</summary>
+    private static readonly string[] ApproveWords = { "同意", "通过", "批准", "approve", "yes", "/approve" };
+    private static readonly string[] RejectWords = { "拒绝", "驳回", "reject", "no", "/deny", "/reject" };
 
     /// <summary>生成一个符合形状的编号（注入随机源 → 测试里可复现）。</summary>
     public static string NewRequestId(Func<int, int> pickIndex)
@@ -116,8 +116,11 @@ public static partial class ApprovalFlow
 
     /// <summary>群里那条请求公告（**全部由服务端拼**：不含模型输出 / 网页内容 / 原始参数）。</summary>
     public static string BuildRequestAnnouncement(string requestId, int ttlSeconds = TtlSeconds)
+        => BuildRequestAnnouncement(requestId, ttlSeconds, allowGroupAdmins: true);
+
+    public static string BuildRequestAnnouncement(string requestId, int ttlSeconds, bool allowGroupAdmins)
         => $"【需要确认】{FixedToolSummary}｜编号 {requestId}"
-           + $"（群主/管理员回复「同意 {requestId}」或「拒绝 {requestId}」；"
+           + $"（{(allowGroupAdmins ? "群主/管理员" : "配置名单中的审批人")}回复「同意 {requestId}」或「拒绝 {requestId}」；"
            + $"{ttlSeconds} 秒内有效，过期作废，只能批一次）";
 
     /// <summary>

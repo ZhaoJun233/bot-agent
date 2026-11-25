@@ -28,12 +28,12 @@ internal sealed class Fixture : IAsyncDisposable
 {
     public AppSettings Settings { get; } = new()
     {
-        AiModeEnabled = true, ReplyPacingEnabled = true, AiDesire = 100,
+        AiModeEnabled = true,
         GroupInterjectionProbability = 100, GroupInterjectionCooldownSeconds = 30,
         GroupContinuationWaitSeconds = 3, PrivateContinuationWaitSeconds = 1.5,
-        GroupCooldownSeconds = 0, PrivateCooldownSeconds = 0, MaxConcurrentReplies = 1,
+        MaxConcurrentReplies = 1,
         SplitReplies = true, SegmentDelayMs = 0, FilterActionNarration = false,
-        EnableParticipationGating = false, EnableWebSearch = false,
+        EnableWebSearch = false,
         EnableStickers = false, EnableMusic = false, EnableQuestions = false,
     };
     public ManualClock Clock { get; } = new();
@@ -41,6 +41,7 @@ internal sealed class Fixture : IAsyncDisposable
     public SyntheticSource Source { get; } = new();
     public ConversationRegistry Registry { get; }
     public ReplyPipeline Pipeline { get; }
+    public TurnTraceStore Traces { get; }
     public ConcurrentQueue<string> Logs { get; } = new();
     public ControlledResearch Research { get; } = new();
     public int ResearchCalls => Research.Calls;
@@ -61,16 +62,19 @@ internal sealed class Fixture : IAsyncDisposable
         var own = EmptyProxy.Create<IOwnMessageRepository>();
         ((EmptyProxy)(object)own).Handler = (method, _) => method.Name == "get_MaxEntries" ? 100 : EmptyProxy.Default(method.ReturnType);
         var ledger = new OwnMessageLedger(own, Logs.Enqueue);
-        var traces = new TurnTraceStore();
+        var traces = Traces = new TurnTraceStore(() => Clock.Now);
         var policy = new FixedPolicy();
         var plain = new PlainSender(box, Source, Registry, EmptyProxy.Create<IPanelNotifier>(), ledger, Logs.Enqueue, traces, platformPolicies: policy);
         var participation = new ParticipationUseCase(box, Logs.Enqueue);
+        var toolCatalog = ResearchToolFixture.Create(Research);
         var approvals = new ApprovalUseCase(box,
             new ApprovalHooks(Logs.Enqueue, (_, _) => "synthetic", (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
-            new SessionPolicyLedger(), traces);
+            new SessionPolicyLedger(), traces, catalog: () => toolCatalog);
         var poke = new PokeUseCase(box, new PokeHooks(() => 10001, (_, _) => true,
             Registry.GetOrCreate, (_, _) => { }, (_, _) => { }, Logs.Enqueue, _ => { }));
         _stickers = new StickerService(EmptyProxy.Create<IStickerRepository>(), Model.Client, Source, box, Logs.Enqueue);
+        var stickerDouble = new SyntheticStickerDouble();
+        _stickers.BindDirect(stickerDouble, stickerDouble);
         Pipeline = new ReplyPipeline(box, Source, Model.Client, profiles, Registry,
             EmptyProxy.Create<IPanelNotifier>(), new WhitelistGate(box, policy), approvals, participation, poke,
             new VibeTracker(), new MemberRoleUseCase(Source, EmptyProxy.Create<IMemberRoleRepository>(), Logs.Enqueue),
@@ -79,9 +83,29 @@ internal sealed class Fixture : IAsyncDisposable
             EmptyProxy.Create<IMoodRepository>(), new ReplyHooks(Logs.Enqueue, () => 10001, () => _disposed), traces,
             background: _background, platformPolicies: policy);
     }
-    public async Task<BotConversation> Inbound(string text, bool direct = false, long target = 10001, bool group = true, long speaker = 10002)
+    private sealed class SyntheticStickerDouble : IStickerPolicyContribution, IStickerRuntimeContribution
     {
-        var msg = new QqChatMessage(++_messageId, group, speaker, group ? target : 0, "synthetic", text, Clock.Now, direct);
+        public int PendingDescribe => 0;
+        public long DescribeDone => 0;
+        public bool CanOperate => false;
+        public bool Allow(string sourceKey, string stickerId, int cooldownSeconds, DateTimeOffset now, out string reason)
+        { reason = ""; return true; }
+        public string NoteSent(string sourceKey, string stickerId, DateTimeOffset now) => "";
+        public bool TrySanitizeFilename(string? rawFilename, out string safeFilename) { safeFilename = rawFilename ?? ""; return !string.IsNullOrWhiteSpace(safeFilename); }
+        public StickerPayloadCheck ValidatePayload(byte[] bytes, long maxBytes) => new(true, "png", "image/png", "");
+        public void ClearConversation(string sourceKey) { }
+        public void EnsureTimer(bool enabled) { }
+        public void QueueDescribe(string id) { }
+        public Task CollectAsync(string[] urls, string fromUid, long fromGroup, long messageId, Func<bool>? canStartExternalIo, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CurateAsync(bool force, CancellationToken ct) => Task.FromResult("");
+        public Task<string> ImportFromAlbumAsync(int limit, CancellationToken ct) => Task.FromResult("");
+    }
+
+    public async Task<BotConversation> Inbound(string text, bool direct = false, long target = 10001, bool group = true,
+        long speaker = 10002, long? replyTo = null)
+    {
+        var msg = new QqChatMessage(++_messageId, group, speaker, group ? target : 0, "synthetic", text, Clock.Now, direct,
+            ReplyToMessageId: replyTo);
         Pipeline.HandleInbound(msg);
         await Drain();
         return Registry.Find(group ? "group:" + target : "private:" + speaker)
@@ -131,6 +155,7 @@ internal sealed class Fixture : IAsyncDisposable
         return (int)value.GetType().GetProperty("Count")!.GetValue(value)!;
     }
     public Task Idle() => Until(() => ActiveCount == 0 && PacedCount == 0, "pipeline idle");
+    public Task BackgroundIdle() => Until(() => _background.Snapshot().Outstanding == 0, "background idle");
     private sealed class FixtureSettings(AppSettings settings) : ISettingsBox { public AppSettings Current => settings; }
     public async ValueTask DisposeAsync()
     {

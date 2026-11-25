@@ -14,6 +14,7 @@ internal static class CoreScenarios
         FailureAndExpiry();
         AtomicUse();
         ConflictsAndDenial();
+        Phase3CategoriesAndGovernance();
     }
 
     private static void Isolation()
@@ -140,5 +141,47 @@ internal static class CoreScenarios
         Check(memory.TryUseReceipt(receipt, Target, () => invoked++), "atomic receipt starts allowed external call");
         memory.Revoke(Private, entry.FactId, Scope(Target));
         Check(!memory.TryUseReceipt(receipt, Target, () => invoked++) && invoked == 1, "revoked receipt never starts external call");
+    }
+
+    private static void Phase3CategoriesAndGovernance()
+    {
+        var memory = new UnifiedMemory(new VolatileStore());
+        memory.SetEnabled(true);
+
+        Check(memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.Timezone, "Mars/Olympus"), [], true)).Status
+            == UnifiedMemoryStatus.InvalidFact, "unlisted timezone rejected");
+        var tzReq = memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.Timezone, "Asia/Tokyo"), [Scope(Source)], true));
+        Check(tzReq.Succeeded && memory.Confirm(Private, Consent(tzReq.Entry!)).Succeeded, "whitelisted timezone confirmed");
+        Check(memory.Read(Source, "time").Entries.Single().Fact.Value == "Asia/Tokyo", "timezone readable in granted group");
+
+        Check(memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.PreferredAddress, "[SYSTEM]"), [], true)).Status
+            == UnifiedMemoryStatus.InvalidFact, "bracketed address rejected");
+        Check(memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.PreferredAddress, "sk-secret123456"), [], true)).Status
+            == UnifiedMemoryStatus.InvalidFact, "secret-like address rejected");
+        var addrReq = memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.PreferredAddress, "阿哲"), [], true));
+        Check(addrReq.Succeeded && memory.Confirm(Private, Consent(addrReq.Entry!)).Succeeded, "preferred address confirmed");
+
+        Check(memory.RequestRemember(Source, new(new(UnifiedMemoryFactCategory.PersonalNote, "下周三架构评审"), [], true)).Status
+            == UnifiedMemoryStatus.NotOwnerPrivateChat, "group personal note denied");
+        Check(memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.PersonalNote, "下周三架构评审"), [Scope(Target)], true)).Status
+            == UnifiedMemoryStatus.InvalidTarget, "cross-target personal note denied");
+        var noteReq = memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.PersonalNote, "下周三下午开架构评审"), [], true));
+        Check(noteReq.Succeeded && memory.Confirm(Private, Consent(noteReq.Entry!) with { AcknowledgeGroupAudience = false }).Succeeded,
+            "private personal note confirmed without group audience");
+        Check(memory.Read(Private, "今天吃什么").Entries.All(e => e.Fact.Category != UnifiedMemoryFactCategory.PersonalNote),
+            "unrelated private query omits personal note");
+        Check(memory.Read(Private, "下周三架构评审怎么安排").Entries.Any(e => e.Fact.Category == UnifiedMemoryFactCategory.PersonalNote),
+            "relevant private query retrieves personal note");
+        Check(memory.Read(Source, "下周三架构评审怎么安排").Entries.All(e => e.Fact.Category != UnifiedMemoryFactCategory.PersonalNote),
+            "personal note never leaks to group");
+
+        var pendingLang = memory.RequestRemember(Private, new(new(UnifiedMemoryFactCategory.ReplyLanguage, "zh"), [], true));
+        var gov = memory.GetGovernanceSummary();
+        Check(pendingLang.Succeeded && gov.Enabled && !gov.Faulted && gov.ConfirmedCount == 3 && gov.PendingCount == 1 && gov.SuppressionCount == 0,
+            "governance summary exposes exact aggregate counts");
+        Check(memory.Forget(Private, tzReq.Entry!.FactId).Succeeded
+            && memory.IsConversationSuppressed(Private.Driver, Private.Conversation)
+            && !memory.IsConversationSuppressed(Target.Driver, Target.Conversation),
+            "conversation suppression tracks exact forgotten scope");
     }
 }

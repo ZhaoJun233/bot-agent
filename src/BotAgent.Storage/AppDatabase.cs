@@ -1,4 +1,8 @@
 using System.IO;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.Data.Sqlite;
 using BotAgent.Services;
 
@@ -30,6 +34,7 @@ public static class AppDatabase
     private static bool _ready;
     private static string _filePath = string.Empty;
     private static string _connectionString = string.Empty;
+    private static IDisposable? _processOwnership;
     /// <summary>meta 表里的键：宿主进程累计启动次数（#121 水位：容器重启次数 = 次数 - 1）。</summary>
     public const string StartupCountMetaKey = "startup_count";
 
@@ -73,7 +78,7 @@ public static class AppDatabase
     public static void Initialize(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
-        var fullPath = Path.GetFullPath(databasePath);
+        var fullPath = ResolvePhysicalPath(databasePath);
         RejectNestedWrite();
         lock (InitGate)
         lock (WriteGate)
@@ -90,6 +95,7 @@ public static class AppDatabase
             {
                 _filePath = fullPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+                _processOwnership = TextSnapshotFile.AcquireSharedReader(fullPath);
                 _connectionString = new SqliteConnectionStringBuilder
                 {
                     DataSource = fullPath,
@@ -98,7 +104,7 @@ public static class AppDatabase
                     DefaultTimeout = 30
                 }.ToString();
                 using var conn = Open();
-                if (SchemaVersion() > 14) throw new InvalidOperationException("database_schema_newer");
+                if (SchemaVersion() > 15) throw new InvalidOperationException("database_schema_newer");
                 ValidateConfigurationModule(conn);
                 Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
                 Migrate(conn);
@@ -108,6 +114,8 @@ public static class AppDatabase
             }
             catch
             {
+                _processOwnership?.Dispose();
+                _processOwnership = null;
                 _connectionString = string.Empty;
                 _filePath = string.Empty;
                 throw;
@@ -116,15 +124,114 @@ public static class AppDatabase
     }
 
     /// <summary>开一个连接（用 from 调用方 using 释放；池化，开销极小）。</summary>
-    public static SqliteConnection Open()
+    public static SqliteConnection Open() => Open(isolated: false);
+
+    internal static SqliteConnection OpenIsolated() => Open(isolated: true);
+
+    private static SqliteConnection Open(bool isolated)
     {
         if (string.IsNullOrEmpty(_connectionString)) throw new InvalidOperationException("database_not_initialized");
-        var conn = new SqliteConnection(_connectionString);
+        // A separate pool contains only guarded package sessions. Explicit Cache=Private keeps its
+        // connection-string key distinct from the legacy pool without changing SQLite cache behavior.
+        var connectionString = !isolated ? _connectionString
+            : new SqliteConnectionStringBuilder(_connectionString) { Cache = SqliteCacheMode.Private }.ToString();
+        var conn = new SqliteConnection(connectionString);
         conn.Open();
-        Exec(conn, "PRAGMA busy_timeout=30000;");   // 并发写：等一会儿而不是立刻抛 SQLITE_BUSY
-        Exec(conn, "PRAGMA foreign_keys=ON;");
+        Exec(conn, "PRAGMA busy_timeout=30000; PRAGMA foreign_keys=ON;");
         return conn;
     }
+
+    /// <summary>Offline inverse of schema 15. No host initialization or unrelated-table restore.</summary>
+    public static void RecoverTokenUsageToSchema14(string databasePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        var path = ResolvePhysicalPath(databasePath);
+        IDisposable ownership;
+        try { ownership = TextSnapshotFile.AcquireExclusiveWriter(path); }
+        catch (IOException error) { throw new InvalidOperationException("database_in_use", error); }
+        using (ownership)
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        { DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false, DefaultTimeout = 1 }.ToString()))
+        {
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+            try
+            {
+                TokenUsageMigration.Revert(connection);
+                transaction.Commit();
+            }
+            catch
+            {
+                try { transaction.Rollback(); } catch { /* Preserve the recovery failure. */ }
+                throw;
+            }
+        }
+    }
+
+    internal static string ResolvePhysicalPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        if (OperatingSystem.IsWindows()) return ResolveWindowsPhysicalPath(full);
+        for (var attempt = 0; attempt < 64; attempt++)
+        {
+            var current = Path.GetPathRoot(full)!;
+            var parts = full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+            for (var index = 0; index < parts.Length; index++)
+            {
+                var next = Path.Combine(current, parts[index]);
+                var dirInfo = new DirectoryInfo(next);
+                FileSystemInfo entry = index == parts.Length - 1 && !dirInfo.Exists
+                    ? new FileInfo(next) : dirInfo;
+                var resolved = entry.LinkTarget is null ? null : entry.ResolveLinkTarget(returnFinalTarget: true);
+                current = resolved is null ? next : resolved.FullName;
+            }
+            if (string.Equals(full, current, OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) return current;
+            full = current;
+        }
+        throw new IOException("database_path_link_cycle");
+    }
+
+    private static string ResolveWindowsPhysicalPath(string path)
+    {
+        var suffix = new Stack<string>();
+        while (true)
+        {
+            // Metadata-only handle; backup semantics permits directories. Resolve through the OS,
+            // including volume aliases that FileSystemInfo.LinkTarget does not report.
+            using var handle = CreateFile(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+            if (!handle.IsInvalid)
+            {
+                var buffer = new StringBuilder(1024);
+                var length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+                if (length >= buffer.Capacity)
+                {
+                    buffer = new StringBuilder(checked((int)length + 1));
+                    length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+                }
+                if (length == 0 || length >= buffer.Capacity)
+                    throw new IOException("database_path_resolution_failed", new Win32Exception(Marshal.GetLastWin32Error()));
+                var resolved = buffer.ToString();
+                if (resolved.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) resolved = @"\\" + resolved[8..];
+                else if (resolved.StartsWith(@"\\?\", StringComparison.Ordinal) && resolved.Length > 5 && resolved[5] == ':') resolved = resolved[4..];
+                while (suffix.TryPop(out var part)) resolved = Path.Combine(resolved, part);
+                return resolved;
+            }
+            var error = Marshal.GetLastWin32Error();
+            // Initialization may name a database or data directory that does not exist yet.
+            if (error is not (2 or 3) || Path.GetDirectoryName(path) is not { Length: > 0 } parent)
+                throw new IOException("database_path_resolution_failed", new Win32Exception(error));
+            suffix.Push(Path.GetFileName(path));
+            path = parent;
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security,
+        uint creation, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder path, uint size, uint flags);
 
     /// <summary>执行一条无返回的 SQL。</summary>
     public static void Exec(SqliteConnection conn, string sql, params (string Name, object? Value)[] args)
@@ -195,7 +302,11 @@ public static class AppDatabase
     private sealed class DuplicateWebhookException : Exception { }
 
     /// <summary>写事务（同步）：回调里做若干条写操作，异常整体回滚。</summary>
-    public static void Write(Action<SqliteConnection> action)
+    public static void Write(Action<SqliteConnection> action) => WriteCore(action, isolated: false);
+
+    internal static void WriteIsolated(Action<SqliteConnection> action) => WriteCore(action, isolated: true);
+
+    private static void WriteCore(Action<SqliteConnection> action, bool isolated)
     {
         ArgumentNullException.ThrowIfNull(action);
         RejectNestedWrite();
@@ -204,7 +315,7 @@ public static class AppDatabase
             WriteDepth.Value = 1;
             try
             {
-                using var conn = Open();
+                using var conn = Open(isolated);
                 using var tx = conn.BeginTransaction();
                 try
                 {
@@ -224,7 +335,7 @@ public static class AppDatabase
         }
     }
 
-    private static void RejectNestedWrite()
+    internal static void RejectNestedWrite()
     {
         if (WriteDepth.Value != 0) throw new InvalidOperationException("database_nested_write");
     }
@@ -338,6 +449,20 @@ public static class AppDatabase
     public static void SetMeta(string key, string value)
         => Write(conn => SetMetaInTransaction(conn, key, value));
 
+    public static Dictionary<string, string?> GetMetaBatch(IEnumerable<string> keys)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+        using var conn = Open();
+        foreach (var key in keys) result[key] = GetMetaInTransaction(conn, key);
+        return result;
+    }
+
+    public static void SetMetaBatch(IEnumerable<(string Key, string Value)> pairs)
+        => Write(conn =>
+        {
+            foreach (var (key, value) in pairs) SetMetaInTransaction(conn, key, value);
+        });
+
     internal static string? GetMetaInTransaction(SqliteConnection conn, string key)
     {
         using var command = conn.CreateCommand();
@@ -349,7 +474,7 @@ public static class AppDatabase
         => Exec(conn, SaveMetaSql, ("$k", key), ("$v", value));
 
     public static bool HasMeta(string key)
-        => Scalar<long>("SELECT COUNT(1) FROM meta WHERE key = $k", ("$k", key)) > 0;
+        => GetMeta(key) is not null;
 
     /// <summary>读取可空字符串/长整形的工具（各处读表都会用到）。</summary>
     public static string? Str(SqliteDataReader r, string name)
@@ -394,15 +519,15 @@ public static class AppDatabase
     /// </summary>
     private static void Migrate(SqliteConnection conn)
     {
+        var version = SchemaVersion();
         // 建表整块在 CreateSchema、「跑过中间版本」的逐版补列在 ApplyMigrations ——
         // 这一层只剩"先建表、再按 user_version 补齐"这两句顺序话（顺序是语义：补列要在建表之后）。
         CreateSchema(conn);
         // 任务台账（v12 起）与轨迹归档（v13 起带缓存三列）：新库在这里建好，老库由 ApplyMigrations 补 —— DDL 只有一份。
         CreateAgentTaskLedger(conn);
         CreateTraceArchive(conn);
-
-        var version = SchemaVersion();
         ApplyMigrations(conn, version);
+        if (version < 15) Write(TokenUsageMigration.Apply);
     }
 
     private static long SchemaVersion() => Scalar<long>("PRAGMA user_version");
@@ -660,15 +785,6 @@ public static class AppDatabase
               cooldown_until             TEXT,
               updated_at                 TEXT NOT NULL DEFAULT (datetime('now'))
             );
-            CREATE TABLE IF NOT EXISTS tenant_quotas(
-              tenant_id              TEXT PRIMARY KEY,
-              daily_token_limit      INTEGER NOT NULL DEFAULT 50000,
-              used_prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-              used_completion_tokens INTEGER NOT NULL DEFAULT 0,
-              reset_date             TEXT NOT NULL DEFAULT '',
-              energy_saving          INTEGER NOT NULL DEFAULT 0,
-              updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
-            );
             """);
 
     /// <summary>
@@ -748,9 +864,9 @@ public static class AppDatabase
             """);
     }
 
-    private static void SetLegacySchemaVersion(SqliteConnection connection, int version)
+    internal static void SetSchemaVersion(SqliteConnection connection, int version)
     {
-        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12 or 13 or 14)) throw new ArgumentException("invalid_legacy_schema");
+        if (version is not (1 or 2 or 3 or 4 or 6 or 7 or 9 or 10 or 11 or 12 or 13 or 14 or 15)) throw new ArgumentException("invalid_legacy_schema");
         Exec(connection, $"PRAGMA user_version = {version};");
     }
 
@@ -778,7 +894,7 @@ public static class AppDatabase
     {
         if (version < 1)
         {
-            Write(conn2 => SetLegacySchemaVersion(conn2, 1));
+            Write(conn2 => SetSchemaVersion(conn2, 1));
         }
 
         // v2：会话行补 next_seq（老库升级用；新库建表时已经有了）
@@ -790,7 +906,7 @@ public static class AppDatabase
                 Write(conn2 => Exec(conn2, "ALTER TABLE conversations ADD COLUMN next_seq INTEGER NOT NULL DEFAULT 0;"));
             }
 
-            Write(conn2 => SetLegacySchemaVersion(conn2, 2));
+            Write(conn2 => SetSchemaVersion(conn2, 2));
         }
 
         // v3：member_messages 的主键补上 group_id（旧版 A/B 群序号重叠会互相覆盖）
@@ -819,7 +935,7 @@ public static class AppDatabase
                 });
             }
 
-            Write(conn2 => SetLegacySchemaVersion(conn2, 3));
+            Write(conn2 => SetSchemaVersion(conn2, 3));
         }
 
         // v4：member_roles 补 title_checked（区分“只知道 role”与“头衔问过了”）。
@@ -833,17 +949,17 @@ public static class AppDatabase
                     "ALTER TABLE member_roles ADD COLUMN title_checked INTEGER NOT NULL DEFAULT 0;"));
             }
 
-            Write(conn2 => SetLegacySchemaVersion(conn2, 4));
+            Write(conn2 => SetSchemaVersion(conn2, 4));
         }
 
         // v6：Provider 注册表与熔断状态持久化；新库建表已完成，旧库在这里补齐版本标记。
         if (version < 6)
         {
             Write(CreateModelProviderTable);
-            Write(conn2 => SetLegacySchemaVersion(conn2, 6));
+            Write(conn2 => SetSchemaVersion(conn2, 6));
         }
 
-        // v7：多租户隔离与配额（stickers 补 scope_tenant_id、新增 tenant_quotas 表）
+        // v7：stickers 补 scope_tenant_id；tenant_quotas 的创建并入 v15 原子用量迁移。
         if (version < 7)
         {
             var hasScopeTenant = HasLegacyColumn(conn, "stickers", "scope_tenant_id", false);
@@ -853,19 +969,7 @@ public static class AppDatabase
                     "-- add scope_tenant_id\nALTER TABLE stickers ADD COLUMN scope_tenant_id TEXT NOT NULL DEFAULT 'global_approved';"));
             }
 
-            Write(conn2 => Exec(conn2, """
-                -- v7 tenant quotas
-                CREATE TABLE IF NOT EXISTS tenant_quotas(
-                    tenant_id              TEXT PRIMARY KEY,
-                    daily_token_limit      INTEGER NOT NULL DEFAULT 50000,
-                    used_prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-                    used_completion_tokens INTEGER NOT NULL DEFAULT 0,
-                    reset_date             TEXT NOT NULL DEFAULT '',
-                    energy_saving          INTEGER NOT NULL DEFAULT 0,
-                    updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                PRAGMA user_version = 7;
-                """));
+            Write(conn2 => SetSchemaVersion(conn2, 7));
         }
 
         // v8：飞书 Webhook event_id / nonce 去重持久化。
@@ -882,7 +986,7 @@ public static class AppDatabase
                     "ALTER TABLE member_summaries ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '';"));
             }
 
-            Write(conn2 => SetLegacySchemaVersion(conn2, 9));
+            Write(conn2 => SetSchemaVersion(conn2, 9));
         }
 
         // v10：Provider 协议（protocol）与协议附加项（options）。
@@ -893,7 +997,7 @@ public static class AppDatabase
                 Write(conn2 => Exec(conn2, "ALTER TABLE model_providers ADD COLUMN protocol INTEGER NOT NULL DEFAULT 0;"));
             if (!HasLegacyColumn(conn, "model_providers", "options", false))
                 Write(conn2 => Exec(conn2, "ALTER TABLE model_providers ADD COLUMN options TEXT;"));
-            Write(conn2 => SetLegacySchemaVersion(conn2, 10));
+            Write(conn2 => SetSchemaVersion(conn2, 10));
         }
 
         // v11：飞书私聊名单成为独立配置字段（#133，字段号 147），configuration_field_modes 的
@@ -904,7 +1008,7 @@ public static class AppDatabase
             {
                 Write(conn2 => WidenConfigurationFieldModes(conn2, 147));
             }
-            Write(conn2 => SetLegacySchemaVersion(conn2, 11));
+            Write(conn2 => SetSchemaVersion(conn2, 11));
         }
 
         // v12：任务台账 agent_tasks（#116）。只加表，不动既有列 —— 迁移是**只前向**的：
@@ -912,7 +1016,7 @@ public static class AppDatabase
         if (version < 12)
         {
             Write(CreateAgentTaskLedger);
-            Write(conn2 => SetLegacySchemaVersion(conn2, 12));
+            Write(conn2 => SetSchemaVersion(conn2, 12));
         }
 
         // v13：慢轨迹归档补三列缓存用量（#135）。旧行留在原处，两列缓存用量读出来就是 null（未知），
@@ -936,7 +1040,7 @@ public static class AppDatabase
                     Exec(conn2, "ALTER TABLE trace_archive ADD COLUMN cache_usage_unknown INTEGER NOT NULL DEFAULT 0;");
                 }
             });
-            Write(conn2 => SetLegacySchemaVersion(conn2, 13));
+            Write(conn2 => SetSchemaVersion(conn2, 13));
         }
 
         // v14: reply pacing adds configuration field IDs 148–152 (#151).
@@ -945,7 +1049,7 @@ public static class AppDatabase
             {
                 if (HasLegacyTable(conn2, "configuration_field_modes"))
                     WidenConfigurationFieldModes(conn2, 152);
-                SetLegacySchemaVersion(conn2, 14);
+                SetSchemaVersion(conn2, 14);
             });
     }
 

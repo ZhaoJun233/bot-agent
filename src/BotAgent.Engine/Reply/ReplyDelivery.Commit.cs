@@ -1,5 +1,6 @@
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Qq;
 using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Stickers;
@@ -26,11 +27,11 @@ internal sealed partial class ReplyDelivery
         }
     }
 
-    private async Task<(bool SentImage, bool PokeSent)> SendExtrasAsync(BotConversation conversation,
+    private async Task<(SendResult Image, bool PokeSent)> SendExtrasAsync(BotConversation conversation,
         IReadOnlyList<ChatMessage> context, ChatCapabilitySet caps, EffectivePlatformPolicy platformPolicy,
         bool isGroup, long targetId, long? replyTo, StickerRecord? sticker, long? pokeTarget, bool chatSent)
     {
-        var sentImage = false;
+        var image = new SendResult(false);
         var pokeSent = false;
         try
         {
@@ -38,17 +39,17 @@ internal sealed partial class ReplyDelivery
             {
                 using var validation = ReplyCommitBoundary.EnterValidation(() =>
                     ValidateModality(conversation, null, platformPolicy, "image", PluginGate.StickersCapability, "sticker.send"));
-                sentImage = await SendStickerAsync(isGroup, targetId, sticker, replyTo, conversation.SourceKey);
-                if (sentImage) _stickers.Store.MarkUsed(sticker.Id);
+                image = await SendStickerAsync(isGroup, targetId, sticker, replyTo, conversation.SourceKey);
+                if (ReplyDeliveryResults.Confirmed(image)) _stickers.Store.MarkUsed(sticker.Id);
             }
-            pokeSent = pokeTarget is long pokeUserId &&
+            pokeSent = !ReplyDeliveryResults.StopsFurtherSending(image.Delivery) && pokeTarget is long pokeUserId &&
                 await TryPokeAsync(conversation, context, caps, platformPolicy, isGroup, targetId, pokeUserId);
         }
-        catch (Exception) when ((chatSent || sentImage) && ReplyCommitBoundary.IsActive)
+        catch (Exception) when ((chatSent || ReplyDeliveryResults.Confirmed(image)) && ReplyCommitBoundary.IsActive)
         {
             // Preserve earlier acknowledgements without treating an interrupted reply as complete.
         }
-        return (sentImage, pokeSent);
+        return (image, pokeSent);
     }
 
     /// <summary>Keep modality-specific live checks active through transport preparation.</summary>
@@ -56,17 +57,28 @@ internal sealed partial class ReplyDelivery
         EffectivePlatformPolicy fallbackPolicy, string feature, string pluginFeature, string toolId)
     {
         var live = _settingsBox?.Current ?? fallbackSettings;
-        var enabled = feature switch
-        {
-            "voice" => live?.EnableVoice ?? true,
-            "image" => live?.EnableStickers ?? true,
-            "poke" => live?.EnablePoke ?? true,
-            _ => false,
-        };
         var policy = _platformPolicies?.Resolve(PlatformSourceExecution.Current?.Context ?? fallbackPolicy.Context) ?? fallbackPolicy;
+        bool featureAllowed;
+        Services.Platforms.EffectiveConversationSettings? conv = null;
+        if (live is not null)
+        {
+            conv = Services.Platforms.ConversationProfileResolver.Resolve(live, policy, conversation.SourceKey);
+            featureAllowed = feature switch
+            {
+                "voice" => conv.FeatureEnabled("voice"),
+                "image" => conv.FeatureEnabled("stickers") && conv.FeatureEnabled("image"),
+                "poke" => conv.FeatureEnabled("poke"),
+                _ => false,
+            };
+        }
+        else
+        {
+            featureAllowed = policy.Feature(feature, globallyEnabled: true).Enabled;
+        }
+        var liveCaps = live is not null && conv is not null ? _approvals.CapabilitiesFor(live, conv) : _approvals.Capabilities;
         if (_hooks.IsDisposed() || _riskBackoff?.IsActive(conversation.SourceKey) == true
-            || !policy.Feature(feature, enabled).Enabled || !_allowsFeature(pluginFeature)
-            || !_approvals.Capabilities.Check(toolId, conversation.SourceKey).Allow)
+            || !featureAllowed || !_allowsFeature(pluginFeature)
+            || !liveCaps.Check(toolId, conversation.SourceKey).Allow)
             throw new OperationCanceledException("reply_modality_disabled");
     }
 

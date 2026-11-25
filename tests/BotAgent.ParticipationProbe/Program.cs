@@ -288,9 +288,30 @@ public static class Program
         var policyMethod = useCaseType
             .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
             .FirstOrDefault(mm => mm.Name == "BuildPolicy");
-        Check("参与用例会从设置里拼参与上限（面板那 5 个参数真的被读）",
-            policyMethod is not null && policyMethod.ReturnType == typeof(ParticipationPolicy),
-            policyMethod?.ToString() ?? "(找不到 BuildPolicy)");
+        Check("只读参与台账没有从旧配置重建回复限制的方法",
+            policyMethod is null, policyMethod?.ToString());
+        Check("只读参与台账不持有回复配置快照",
+            useCaseFields.All(field => !typeof(BotAgent.Services.ISettingsBox).IsAssignableFrom(field.FieldType)
+                && field.FieldType != typeof(BotAgent.Services.AppSettings)));
+        var observer = new ParticipationUseCase(new BotAgent.Services.SettingsBox(new BotAgent.Services.AppSettings
+        {
+            GroupInterjectionProbability = 0, GroupInterjectionCooldownSeconds = 3600,
+            GroupContinuationWaitSeconds = 30, PrivateContinuationWaitSeconds = 30
+        }), _ => { });
+        var registryField = useCaseFields.Single(field => field.FieldType == typeof(ParticipationRegistry));
+        var observedRegistry = (ParticipationRegistry)registryField.GetValue(observer)!;
+        var fixedPolicy = new ParticipationPolicy();
+        Check("回复节奏参数不改变参与台账的固定诊断策略",
+            observedRegistry.Policy == fixedPolicy);
+        var observedMachine = observedRegistry.For("group:10001");
+        observedMachine.OnEvent(ParticipationEvent.Mentioned, t0, "synthetic");
+        observedMachine.OnEvent(ParticipationEvent.Replied, t0.AddSeconds(1));
+        var observedState = observedMachine.State;
+        var observedCount = observedMachine.ConsecutiveReplies;
+        observer.Rebuild();
+        Check("刷新固定观测策略保留会话状态和计数",
+            observedMachine.State == observedState && observedMachine.ConsecutiveReplies == observedCount
+                && observedRegistry.Policy == fixedPolicy);
     }
 
     private static int ClampCheck(ParticipationStateMachine machine, DateTimeOffset t0)

@@ -10,7 +10,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Conversation;
 using BotAgent.Domain.Reply;
-using BotAgent.Domain.Atmosphere;
 using BotAgent.Services.Model;
 using BotAgent.Domain.Model;
 using BotAgent.Domain.Ports;
@@ -114,9 +113,6 @@ public class OpenAiClient : IModelClient
     /// <summary>模型人设档案（可选，请求时注入系统上下文）。</summary>
     public string? BotPersona { get; set; }
 
-    /// <summary>AI 对话欲望（0-100）：越高越倾向主动参与群聊发言。</summary>
-    public int AiDesire { get; set; } = 50;
-
     /// <summary>发言适合度阈值（0-100）：模型评出低于此值则不发言。**代码侧强制执行**。</summary>
     public int SuitabilityThreshold { get; set; } = 10;
 
@@ -145,7 +141,8 @@ public class OpenAiClient : IModelClient
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
         IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false,
         bool enableAsk = false, bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null,
-        string? promptCacheScope = null, bool isPrivateConversation = false)
+        string? promptCacheScope = null, bool isPrivateConversation = false,
+        Domain.Model.ConversationPromptOverrides? promptOverrides = null)
     {
         if (_providerFailover is null && string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
@@ -159,8 +156,9 @@ public class OpenAiClient : IModelClient
         }
 
         // 统一在此处截断一次（以前 BotAgentHost 和本方法各截一次，重复且容易不一致）
-        var window = context.Count > MaxContextMessages
-            ? context.Skip(context.Count - MaxContextMessages).ToArray()
+        var effectiveMaxContext = Math.Clamp(promptOverrides?.MaxContextMessages ?? MaxContextMessages, 1, 200);
+        var window = context.Count > effectiveMaxContext
+            ? context.Skip(context.Count - effectiveMaxContext).ToArray()
             : context;
 
         // 可供模型指认的“最近几条别人的消息”：给它们附上 (#QQ消息id)，模型在 JSON 里用 replyTo 指明它在回哪一条。
@@ -173,28 +171,12 @@ public class OpenAiClient : IModelClient
                   .TakeLast(16)
                   .Select(m => m.QqMessageId!.Value));
 
-        // 结合 MaiBot 启发式氛围感知模型：计算连续发言疲劳阻尼与群聊活跃度动态意愿（可通过设置项关闭）
-        var replyPacingEnabled = sampling?.ReplyPacingEnabled == true;
-        // The admitted turn owns this flag: do not read mutable desire (or apply its
-        // atmosphere damping) in paced mode. The placeholder never enters the prompt.
-        var effectiveDesire = replyPacingEnabled ? 0 : AiDesire;
-        if (!replyPacingEnabled && _settings.EnableAtmosphereDamping)
-        {
-            var atmosphere = ChatAtmosphere.Analyze(window, Clock.Now);
-            effectiveDesire = ChatAtmosphere.CalculateEffectiveDesire(
-                AiDesire,
-                atmosphere.ConsecutiveBotReplies,
-                atmosphere.SecondsSinceLastBotReply,
-                atmosphere.Activity);
-        }
-
         // 系统提示词整块在 PromptBuilder（纯字符串拼装，顺序即语义）；这里只负责"把素材交出去"。
         // 用具名实参：这条调用有 25 个参数，位置写法一旦排错就会把"开关"喂成"阈值"（编译过的错才会被抓到）。
         var promptParts = PromptBuilder.BuildParts(new PromptBuilder.PromptRequest(
             SystemPrompt: SystemPrompt,
             BotIdentity: BotIdentity,
-            Persona: BotPersona,
-            AiDesire: effectiveDesire,
+            Persona: promptOverrides?.PersonaOverride ?? BotPersona,
             Window: window,
             QuotableIds: quotableIds,
             ProfilesText: profilesText,
@@ -208,17 +190,20 @@ public class OpenAiClient : IModelClient
             GroupRolesText: groupRolesText,
             VibeHint: vibeHint,
             SearchText: searchText,
-            SuitabilityThreshold: SuitabilityThreshold,
+            SuitabilityThreshold: promptOverrides?.SuitabilityThreshold ?? SuitabilityThreshold,
             EnableListen: enableListen,
             EnableVoice: enableVoice,
-            VoiceMaxChars: Math.Clamp(_settings.VoiceMaxChars, 10, 300),
-            VoiceEagerness: Math.Clamp(_settings.VoiceEagerness, 0, 100),
+            VoiceMaxChars: Math.Clamp(promptOverrides?.VoiceMaxChars ?? _settings.VoiceMaxChars, 10, 300),
+            VoiceEagerness: Math.Clamp(promptOverrides?.VoiceEagerness ?? _settings.VoiceEagerness, 0, 100),
             EnableWebSearch: enableWebSearch,
             EnableAsk: enableAsk,
             EnableToolRequest: enableToolRequest,
-            FilterActionNarration: _settings.FilterActionNarration,
-            ToolList: toolList, IsPrivateConversation: isPrivateConversation,
-            ReplyPacingEnabled: replyPacingEnabled));
+            FilterActionNarration: promptOverrides?.FilterActionNarration ?? _settings.FilterActionNarration,
+            ToolList: toolList,
+            IsPrivateConversation: isPrivateConversation,
+            PlatformDisplayName: promptOverrides?.PlatformDisplayName,
+            PersonaAppend: promptOverrides?.PersonaAppend,
+            PlatformNeutral: promptOverrides?.PlatformNeutral ?? false));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
         var built = await _transport.BuildAsync(window, promptParts.Text, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
         built = built with { StableSystemPrefixLength = promptParts.Stable.Length };
@@ -636,7 +621,7 @@ public class OpenAiClient : IModelClient
         try
         {
             var system =
-                "你在帮一个 QQ 群聊机器人整理表情包库。下面是库里的图，每行：id | 说明（含关键词）| 用过几次 | 多久前加入。\n" +
+                "你在帮一个群聊机器人整理表情包库。下面是库里的图，每行：id | 说明（含关键词）| 用过几次 | 多久前加入。\n" +
                 "挑出不值得留的：与群聊语境无关的（广告、聊天截图、二维码、纯文字通知、屏幕截图）、画质/内容不合适（低俗、恶心、涉政涉黄）、" +
                 "说明模糊且从未用过的、和已有的重复表达。标了“24h 内用过”的不要动。\n" +
                 $"最多删 {maxDelete} 张（也可以一张都不删）。只输出一行 JSON：" +
@@ -836,7 +821,7 @@ public class OpenAiClient : IModelClient
                     {
                         ["role"] = "system",
                         ["content"] =
-                            "你在给一个 QQ 群聊机器人的表情包库做入库审核。看图片内容，只输出一行 JSON：" +
+                            "你在给一个群聊机器人的表情包库做入库审核。看图片内容，只输出一行 JSON：" +
                             "{\"sticker\": true/false, \"desc\": \"一句话说明这张图的画面与用途，20 字以内\", \"tags\": [\"3-6 个情绪或使用场景关键词\"]}。\n" +
                             "sticker 只在它真是“可以用来说话的表情包/梗图”（人或角色+情绪、能当反应那张图用）时为 true；" +
                             "聊天截图、屏幕截图、纯文字图、广告、二维码、文档照片、随手拍的实物 —— 这些一律 false（会被丢掉）。\n" +
@@ -952,7 +937,7 @@ public class OpenAiClient : IModelClient
         try
         {
             var sb = new StringBuilder();
-            sb.Append("[会话标题] 你在给一段「主人（通过 QQ 使唤）× 编程 agent」的会话起标题。\n");
+            sb.Append("[会话标题] 你在给一段「主人（通过聊天使唤）× 编程 agent」的会话起标题。\n");
             sb.Append("标题要从这段会话的**整体内容**综结出来：它在干什么活、干成了什么 —— 主人看一眼就知道“哦是这个会话”。\n");
             sb.Append("要求：中文（除非全篇是英文术语）；8~16 个字；名词性短语；不要句号、不要引号、不要“会话/任务”这类废话前缀；\n");
             sb.Append("多轮时综结主线，别只照抄最新那一句命令。\n");
@@ -1046,7 +1031,7 @@ public class OpenAiClient : IModelClient
         }
 
         var sb = new StringBuilder();
-        sb.Append("你在为一个 QQ 群聊机器人维护“人物档案”（长期记忆）。\n");
+        sb.Append("你在为一个群聊机器人维护“人物档案”（长期记忆）。\n");
         sb.Append("把下面这些发言压缩成一段人物画像，供机器人以后认人用。\n");
         sb.Append("画像需覆盖：身份/职业线索、性格与说话风格、常聊的话题、与其他群友的关系、值得记住的事实。\n");
         sb.Append("要求：用第三人称陈述句；只保留稳定、有信息量的内容，忽略寒暄与一次性琐事；\n");
@@ -1223,7 +1208,7 @@ public class OpenAiClient : IModelClient
     }
 
     private const string SystemPrompt =
-        "你是运行在桌面 QQ 客户端里的聊天机器人「Bot Agent」。\n" +
+        "你是运行在聊天平台里的聊天机器人「Bot Agent」。\n" +
         "回复规则：\n" +
         "- 私聊与群聊中，先根据上下文判断当前对话是否与你相关（是否在对你说话、询问你、需要你参与）；" +
         "相关则自然简洁地回复；与你无关（例如群友之间与你无关的闲聊）则只输出空内容，不要回复。\n" +

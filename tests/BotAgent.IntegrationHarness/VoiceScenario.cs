@@ -46,10 +46,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = $"{groupId},{friendId},{friendId2}",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_ENABLE_VOICE"] = "1",
             ["QQCHAT_VOICE"] = "zh_CN-huayan-medium",
@@ -199,17 +196,17 @@ public static partial class Program
         using var badResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/voice/test",
             new StringContent(badVoice, Encoding.UTF8, "application/json"), cts.Token);
         var badBody = await badResp.Content.ReadAsStringAsync(cts.Token);
-        Check("★ 音色写错时把上游原话带给面板（音色不存在：…）",
-            !badResp.IsSuccessStatusCode && badBody.Contains("音色不存在"),
+        Check("★ 音色写错时返回受控 HTTP 404 且不透传上游原始错误体（D0-VOICE-ERROR-10）",
+            !badResp.IsSuccessStatusCode && badBody.Contains("HTTP 404") && !badBody.Contains("音色不存在"),
             $"HTTP {(int)badResp.StatusCode}：{badBody}");
 
-        // TTS 挂了：面板要如实报错（而不是给一段空音频）
+        // TTS 挂了：面板如实报错且不透传上游原始内部异常文本（D0-VOICE-ERROR-10）
         tts.Broken = true;
         using var brokenResp = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/voice/test",
             new StringContent(new JsonObject { ["text"] = "挂了" }.ToJsonString(), Encoding.UTF8, "application/json"), cts.Token);
         var brokenBody = await brokenResp.Content.ReadAsStringAsync(cts.Token);
-        Check("★ TTS 容器挂了时面板试听如实报错",
-            !brokenResp.IsSuccessStatusCode && brokenBody.Contains("piper 挂了"),
+        Check("★ TTS 容器挂了时面板试听如实报错且脱敏上游错误体（D0-VOICE-ERROR-10）",
+            !brokenResp.IsSuccessStatusCode && brokenBody.Contains("HTTP 500") && !brokenBody.Contains("piper 挂了"),
             $"HTTP {(int)brokenResp.StatusCode}：{brokenBody}");
         tts.Broken = false;
 

@@ -44,7 +44,7 @@ internal static partial class ReviewEngineRegression
         finally { EngineClock.Initialize(previousClock); }
     }
 
-    private static readonly ChatCapabilitySet Caps = ChatCapabilitySet.FromSwitches(true, true, true, true, true, null);
+    private static readonly ChatCapabilitySet Caps = ResearchToolFixture.Capabilities(true, true, true, true, true, null);
     private static EffectivePlatformPolicy Policy(bool web = true) => new(
         new PlatformContext(PlatformId.QqPrivate, AccountScope.Legacy), true, true, true, true,
         PlatformCapabilities.QqOneBot, new HashSet<string>(),
@@ -74,19 +74,21 @@ internal static partial class ReviewEngineRegression
     {
         var box = new Box(new AppSettings { EnableWebSearch = true, MaxAgentSteps = 2 });
         var research = new Research();
+        var catalog = ResearchToolFixture.Create(research);
+        var caps = ResearchToolFixture.Capabilities(true, true, true, true, true, null, catalog: catalog);
         var policy = new Policies(Policy(false));
         var approvals = new ApprovalUseCase(box,
             new ApprovalHooks(_ => { }, (text, _) => text, (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
-            new SessionPolicyLedger(), new TurnTraceStore());
+            new SessionPolicyLedger(), new TurnTraceStore(), catalog: () => catalog);
         var inline = new InlineTurnTools(research, approvals, new ParticipationUseCase(box, _ => { }), _ => { },
             null, policy, () => false);
         foreach (var result in new[] { new CompletionResult(null, null, null, Search: "synthetic query"),
             new CompletionResult(null, null, null, Read: "https://example.com/page") })
-            Ensure(await inline.RunAsync(Conversation(), box.Current, Caps, result, Policy(false)) is null,
+            Ensure(await inline.RunAsync(Conversation(), box.Current, caps, result, Policy(false)) is null,
                 "B04 platform opt-out must suppress inline search/read");
         Ensure(research.Calls == 0 && research.Cooldowns == 0, "B04 denied tools must not consume cooldown or IO");
         policy.Current = Policy();
-        Ensure(await inline.RunAsync(Conversation(), box.Current, Caps,
+        Ensure(await inline.RunAsync(Conversation(), box.Current, caps,
             new CompletionResult(null, null, null, Search: "synthetic query"), Policy()) is not null,
             "enabled inline search remains usable");
         Ensure(research.Calls == 1, "enabled search executed once");
@@ -94,7 +96,7 @@ internal static partial class ReviewEngineRegression
         // A synchronous callback retires policy immediately before IO. No timing-dependent sleep.
         var retiring = new InlineTurnTools(research, approvals, new ParticipationUseCase(box, _ => { }),
             _ => policy.Current = Policy(false), null, policy, () => false);
-        Ensure(await retiring.RunAsync(Conversation(), box.Current, Caps,
+        Ensure(await retiring.RunAsync(Conversation(), box.Current, caps,
             new CompletionResult(null, null, null, Read: "https://example.com/page"), Policy()) is null,
             "B04 execution must recheck after synchronous callbacks");
         Ensure(research.Calls == 1, "retired platform must not start page IO");
@@ -105,7 +107,7 @@ internal static partial class ReviewEngineRegression
             new PlatformMessageOrigin(new BotAgent.Domain.Configuration.DriverKey(PlatformId.QqPrivate, AccountScope.Legacy, "synthetic")),
             lifetime.Token, () => true));
         lifetime.Cancel();
-        Ensure(await inline.RunAsync(Conversation(), box.Current, Caps,
+        Ensure(await inline.RunAsync(Conversation(), box.Current, caps,
             new CompletionResult(null, null, null, Read: "https://example.com/page"), Policy()) is null,
             "B04 retired source lease must suppress IO");
         Ensure(research.Calls == 1, "cancelled lease did not start IO");
@@ -173,7 +175,7 @@ internal static partial class ReviewEngineRegression
             StickerChoices = new List<StickerChoice> { new("synthetic-sticker", "synthetic description") },
             PokeContext = true,
         };
-        var noMediaCaps = ChatCapabilitySet.FromSwitches(true, true, true, false, false, null);
+        var noMediaCaps = ResearchToolFixture.Capabilities(true, true, true, false, false, null);
         foreach (var (caps, platform) in new[] { (noMediaCaps, allowed), (Caps, denied) })
         {
             var model = new Model();
@@ -230,100 +232,51 @@ internal static partial class ReviewEngineRegression
     private static async Task QueueMembershipBoundary()
     {
         var box = new Box(new AppSettings { AiModeEnabled = true });
-        Action<string> onLog = _ => { };
-        var pipeline = new ReplyPipeline(box, new Source(), new Model(), null!, null!, null!, null!, null!, null!,
+        var policy = new Policies(Policy());
+        var pipeline = new ReplyPipeline(box, new Source(), new Model(), null!, null!, null!, new WhitelistGate(box, policy), null!, null!,
             null!, null!, null!, null!, null!, null!, null!, null!, null!, new Research(), null!, null!,
-            new ReplyHooks(message => onLog(message), () => 10001, () => false), new TurnTraceStore());
+            new ReplyHooks(_ => { }, () => 10001, () => false), new TurnTraceStore(), platformPolicies: policy);
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        typeof(ReplyPipeline).GetField("_replyWorkerRunning", flags)!.SetValue(pipeline, 1); // do not start real reply workers
-        var gate = typeof(ReplyPipeline).GetField("_pendingGate", flags)?.GetValue(pipeline);
-        Ensure(gate is not null, "B16 offer and cleanup must share membership lock");
-        var enqueue = typeof(ReplyPipeline).GetMethod("EnqueueReply", flags)!;
-        var cleanup = typeof(ReplyPipeline).GetMethod("CleanupPending", flags)!;
-        var queues = (ConcurrentDictionary<string, TenantReplyQueue>)typeof(ReplyPipeline).GetField("_pendingReplies", flags)!.GetValue(pipeline)!;
-        var conversations = (ConcurrentDictionary<string, BotConversation>)typeof(ReplyPipeline).GetField("_pendingConversations", flags)!.GetValue(pipeline)!;
-        var conversation = Conversation();
-        queues[conversation.SourceKey] = new TenantReplyQueue();
-        conversations[conversation.SourceKey] = conversation;
-        using var started = new ManualResetEventSlim();
-        Task producer;
-        lock (gate!)
-        {
-            producer = Task.Run(() => { started.Set(); enqueue.Invoke(pipeline, new object?[] { conversation, 10001L, false, true }); });
-            Ensure(started.Wait(TimeSpan.FromSeconds(2)), "producer reached membership test");
-            Ensure(!producer.Wait(TimeSpan.FromMilliseconds(50)), "B16 offer cannot race held cleanup membership lock");
-            cleanup.Invoke(pipeline, null); // retire old empty queue before waiting producer can offer
-        }
-        await producer.WaitAsync(TimeSpan.FromSeconds(2));
-        Ensure(queues.TryGetValue(conversation.SourceKey, out var queue) && queue.TryDequeue(out var pending)
-            && pending.TriggerMessageId == 10001 && conversations.ContainsKey(conversation.SourceKey),
-            "B16 accepted trigger remains reachable after empty retirement");
-        cleanup.Invoke(pipeline, null);
-        Ensure(queues.IsEmpty && conversations.IsEmpty, "B16 idle membership still cleans up instead of leaking queues");
-
-        // A captured Q1 must not dispatch its old trigger using recreated C2 membership.
-        enqueue.Invoke(pipeline, new object?[] { conversation, 10002L, false, true });
-        var oldQueue = queues[conversation.SourceKey];
-        var claim = typeof(ReplyPipeline).GetMethod("TryClaimPending", flags)!;
-        pipeline.ForgetSession(conversation.SourceKey);
-        var restored = Conversation();
-        enqueue.Invoke(pipeline, new object?[] { restored, 10003L, false, true });
-        var rejectedClaim = new object?[] { restored.SourceKey, oldQueue, null };
-        Ensure(!(bool)claim.Invoke(pipeline, rejectedClaim)! && rejectedClaim[2] is null,
-            "B16 stale scheduler queue cannot claim recreated conversation");
-        var currentClaim = new object?[] { restored.SourceKey, queues[restored.SourceKey], null };
-        Ensure((bool)claim.Invoke(pipeline, currentClaim)! && currentClaim[2] is not null,
-            "B16 current scheduler queue claims work");
-        // Claim now returns LegacyReplyWork; inspect its captured request rather than separate out parameters.
-        var claimedWork = currentClaim[2]!;
-        var claimedRequest = claimedWork.GetType().GetProperty("Request", flags)!.GetValue(claimedWork)!;
-        var claimedOwner = claimedRequest.GetType().GetProperty("Owner")!.GetValue(claimedRequest)!;
-        var claimedConversation = claimedOwner.GetType().GetProperty("Conversation")!.GetValue(claimedOwner);
-        var claimedPending = (PendingReply)claimedRequest.GetType().GetProperty("Pending")!.GetValue(claimedRequest)!;
-        Ensure(ReferenceEquals(claimedConversation, restored) && claimedPending.TriggerMessageId == 10003,
-            "B16 current claim owns C2 and its trigger");
-
-        // Drop while in-flight: clear deferred, suppress already detached old followup, permit fresh C3.
-        var deferredField = typeof(ReplyPipeline).GetField("_deferredTriggers", flags)!;
-        var deferredItems = deferredField.GetValue(pipeline)!;
-        var deferredType = typeof(ReplyPipeline).GetNestedType("DeferredTrigger", BindingFlags.NonPublic)!;
+        pipeline.RefreshPacingPolicy();
+        Ensure(typeof(ReplyPipeline).GetField("_pendingReplies", flags) is null
+            && typeof(ReplyPipeline).GetField("_deferredTriggers", flags) is null,
+            "B16 legacy queue and detached catch-up paths are absent");
+        var gate = typeof(ReplyPipeline).GetField("_pacingSync", flags)!.GetValue(pipeline)!;
         var captureEpoch = typeof(ReplyPipeline).GetMethod("CaptureReplyEpoch", flags)!;
-        var oldEpoch = captureEpoch.Invoke(pipeline, new object?[] { restored });
-        var deferred = Activator.CreateInstance(deferredType, new object?[] { 10004L, true, null, restored, oldEpoch });
-        var deferredKey = (restored.SourceKey, (BotAgent.Domain.Configuration.DriverKey?)null, default(CancellationToken));
-        deferredItems.GetType().GetMethod("TryAdd")!.Invoke(deferredItems, new object?[] { deferredKey, deferred });
-        pipeline.ForgetSession(restored.SourceKey);
-        Ensure((int)deferredItems.GetType().GetProperty("Count")!.GetValue(deferredItems)! == 0,
-            "B16 drop clears in-flight conversation deferred followups");
-        typeof(ReplyPipeline).GetMethod("FlushDeferred", flags)!.Invoke(pipeline, new object?[] { restored });
-        var enqueueEpoch = typeof(ReplyPipeline).GetMethod("EnqueueReplyInEpoch", flags)!;
-        enqueueEpoch.Invoke(pipeline, new object?[] { restored, 10004L, false, true, oldEpoch, PendingReplyIntent.Ordinary });
-        Ensure(queues.IsEmpty && conversations.IsEmpty, "B16 detached old-epoch deferred work cannot resurrect dropped C2");
-        pipeline.RequestReply(restored, 10006L, catchUp: true, directInWindow: true);
-        Ensure(queues[restored.SourceKey].TryDequeue(out var renewed) && renewed.TriggerMessageId == 10006,
-            "B16 fresh same-object inbound can reply after whitelist disable/reenable");
-        var flush = typeof(ReplyPipeline).GetMethod("FlushDeferred", flags)!;
-        object MakeDeferred(long id) => Activator.CreateInstance(deferredType,
-            new object?[] { id, true, null, restored, captureEpoch.Invoke(pipeline, new object?[] { restored }) })!;
-        deferredItems.GetType().GetMethod("TryAdd")!.Invoke(deferredItems, new object?[] { deferredKey, MakeDeferred(10007) });
-        flush.Invoke(pipeline, new object?[] { restored });
-        Ensure(queues[restored.SourceKey].TryDequeue(out var currentDeferred) && currentDeferred.TriggerMessageId == 10007,
-            "B16 old active completion may flush new same-object deferred epoch after reenabling");
-        // Detach then rotate inside the existing synchronous log callback, exactly before catch-up enqueue.
-        deferredItems.GetType().GetMethod("TryAdd")!.Invoke(deferredItems, new object?[] { deferredKey, MakeDeferred(10008) });
-        queues.Clear();
-        conversations.Clear();
-        ((ConcurrentDictionary<string, byte>)typeof(ReplyPipeline).GetField("_inFlight", flags)!.GetValue(pipeline)!).Clear();
-        var activeConversations = typeof(ReplyPipeline).GetField("_activeConversations", flags)!.GetValue(pipeline)!;
-        activeConversations.GetType().GetMethod("Clear")!.Invoke(activeConversations, null);
-        onLog = _ => pipeline.ForgetSession(restored.SourceKey);
-        flush.Invoke(pipeline, new object?[] { restored });
-        onLog = _ => { };
-        Ensure(queues.IsEmpty && conversations.IsEmpty, "B16 detached deferred cannot enqueue if Drop rotates epoch during callback");
-        var fresh = Conversation();
-        enqueue.Invoke(pipeline, new object?[] { fresh, 10005L, false, true });
-        Ensure(queues[fresh.SourceKey].TryDequeue(out var freshPending) && freshPending.TriggerMessageId == 10005,
-            "B16 new conversation identity may enqueue after old one retired");
+        var captureOwner = typeof(ReplyPipeline).GetMethod("CapturePacedOwner", flags)!;
+        var isCurrent = typeof(ReplyPipeline).GetMethod("IsPacedOwnerCurrent", flags)!;
+        var requestEpoch = typeof(ReplyPipeline).GetMethod("RequestReplyInEpoch", flags)!;
+        var track = typeof(ReplyPipeline).GetMethod("TrackPacedObservation", flags)!;
+        var dispatch = typeof(ReplyPipeline).GetMethod("DispatchPacedWork", flags)!;
+        var coordinator = (ReplyPacingCoordinator)typeof(ReplyPipeline).GetField("_pacingCoordinator", flags)!.GetValue(pipeline)!;
+        var conversation = Conversation();
+        var epoch = captureEpoch.Invoke(pipeline, [conversation])!;
+        var owner = captureOwner.Invoke(pipeline, [conversation, null, epoch])!;
+        object pending;
+        lock (gate)
+        {
+            var observation = coordinator.Observe(conversation.SourceKey, 10002, 1, 1, true, true, ReplyPacingOptions.Default, owner);
+            pending = track.Invoke(pipeline, [observation, owner])!;
+        }
+        Ensure(pipeline.QueuedReplies == 1 && (bool)isCurrent.Invoke(pipeline, [owner])!,
+            "B16 accepted work retains its conversation owner before dispatch");
+
+        pipeline.ForgetSession(conversation.SourceKey);
+        requestEpoch.Invoke(pipeline, [conversation, (long?)1, false, true, epoch]);
+        Ensure(!(bool)isCurrent.Invoke(pipeline, [owner])! && pipeline.QueuedReplies == 0,
+            "B16 old-epoch work cannot resurrect a dropped conversation");
+        dispatch.Invoke(pipeline, [pending]);
+        var works = typeof(ReplyPipeline).GetField("_pacedWorks", flags)!.GetValue(pipeline)!;
+        for (var i = 0; i < 100 && (int)works.GetType().GetProperty("Count")!.GetValue(works)! != 0; i++) await Task.Delay(1);
+        Ensure((int)works.GetType().GetProperty("Count")!.GetValue(works)! == 0 && pipeline.InFlightReplies == 0,
+            "B16 detached retired work cleans up without acquiring model resources");
+        var sameObjectOwner = captureOwner.Invoke(pipeline, [conversation, null, null])!;
+        Ensure((bool)isCurrent.Invoke(pipeline, [sameObjectOwner])!, "B16 fresh same-object owner remains eligible after Stop");
+        var restored = Conversation();
+        var restoredOwner = captureOwner.Invoke(pipeline, [restored, null, null])!;
+        Ensure((bool)isCurrent.Invoke(pipeline, [restoredOwner])! && !(bool)isCurrent.Invoke(pipeline, [owner])!,
+            "B16 recreated conversation cannot give old work a fresh owner");
+        pipeline.Shutdown();
 
     }
 
@@ -413,7 +366,6 @@ internal static partial class ReviewEngineRegression
     {
         public string? BotIdentity { get; set; }
         public string? BotPersona { get; set; }
-        public int AiDesire { get; set; }
         public int SuitabilityThreshold { get; set; }
         public int MaxContextMessages { get; set; }
         public TimeSpan ChatTimeout => TimeSpan.FromSeconds(1);
@@ -427,7 +379,8 @@ internal static partial class ReviewEngineRegression
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
+            bool enableToolRequest = false, string? toolList = null, SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false,
+            BotAgent.Domain.Model.ConversationPromptOverrides? promptOverrides = null)
         { Calls++; WebEnabled = enableWebSearch; Tools = toolList ?? ""; Media.Add((stickers?.Count ?? 0, pokeContext)); return Complete(ct); }
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,
             int maxTokens, double temperature, CancellationToken ct = default, string? baseUrlOverride = null, string? apiKeyOverride = null) => Task.FromResult<string?>(null);

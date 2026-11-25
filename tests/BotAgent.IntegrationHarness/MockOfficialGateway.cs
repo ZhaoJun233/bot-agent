@@ -54,6 +54,9 @@ public sealed class MockOfficialGateway : IDisposable
 
     public string AccessToken { get; set; } = "test-token-not-real";
 
+    /// <summary>明确配置才提供群内机器人身份；未配置模拟接口无授权。</summary>
+    public string? BotMemberOpenId { get; set; }
+
     /// <summary>取 token 了几次（验证“过期前刷新”用）。</summary>
     public int TokenRequests => _tokenRequests;
 
@@ -77,6 +80,10 @@ public sealed class MockOfficialGateway : IDisposable
 
     /// <summary>让接下来 N 次发消息失败（验证“被动失败退回主动消息”这类降级）。</summary>
     public int FailNextMessages { get; set; }
+
+    private readonly ConcurrentQueue<int> _messageStatuses = new();
+    public void EnqueueMessageStatus(int status) => _messageStatuses.Enqueue(status);
+    public Func<JsonObject?, int>? MessageStatusSelector { get; set; }
 
     /// <summary>socket 是否还连着（场景用它判断“真的重连了”）。</summary>
     public bool IsSocketOpen => _socket?.State == WebSocketState.Open;
@@ -337,14 +344,38 @@ public sealed class MockOfficialGateway : IDisposable
             return;
         }
 
-        if (path.Contains("/messages", StringComparison.Ordinal))
+        if (method == "GET" && path.EndsWith("/bot_state", StringComparison.Ordinal))
         {
-            _messages.Enqueue(new JsonObject
+            await WriteAsync(context, BotMemberOpenId is null ? 403 : 200, BotMemberOpenId is { } member
+                ? new JsonObject { ["member_openid"] = member }
+                : new JsonObject { ["code"] = 11253 }).ConfigureAwait(false);
+            return;
+        }
+
+        if (method == "DELETE" && path.Contains("/messages/", StringComparison.Ordinal))
+        {
+            context.Response.StatusCode = 200;
+            context.Response.ContentLength64 = 0;
+            context.Response.Close();
+            return;
+        }
+
+        if (method == "POST" && path.Contains("/messages", StringComparison.Ordinal))
+        {
+            var message = new JsonObject
             {
                 ["path"] = path,
                 ["body"] = parsed?.DeepClone(),
                 ["auth"] = context.Request.Headers["Authorization"] ?? string.Empty,
-            });
+            };
+            _messages.Enqueue(message);
+
+            var status = MessageStatusSelector?.Invoke(parsed) ?? (_messageStatuses.TryDequeue(out var queuedStatus) ? queuedStatus : 200);
+            if (status != 200)
+            {
+                await WriteAsync(context, status, new JsonObject { ["code"] = 999999 }).ConfigureAwait(false);
+                return;
+            }
 
             if (FailNextMessages > 0)
             {
@@ -354,6 +385,7 @@ public sealed class MockOfficialGateway : IDisposable
             }
 
             var id = "official_reply_" + Interlocked.Increment(ref _replySeq);
+            message["response_id"] = id;
             await WriteAsync(context, 200, new JsonObject
             {
                 ["id"] = id,

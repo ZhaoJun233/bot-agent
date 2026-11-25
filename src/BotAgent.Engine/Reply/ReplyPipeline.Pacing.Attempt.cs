@@ -14,8 +14,10 @@ public sealed partial class ReplyPipeline
         internal bool RetryLatest { get; private set; }
         internal bool CompleteChatReply { get; private set; }
         public AppSettings Snapshot => work.Owner.Snapshot;
+        public BotAgent.Services.Platforms.EffectiveConversationSettings? ConversationSettings => work.Owner.ConversationSettings;
         public bool IsExplicit => generation.IsExplicit;
         public bool IsSoftDraft => generation.DiscardableSoftDraft;
+        public long SpeakerId => generation.SpeakerId;
         public long Sequence => generation.Sequence;
         public ReplyPacingPromptState PromptState => work.PromptState;
         public Task ValidateDraftAsync() => AwaitBoundaryAsync(CommitKind.Validate);

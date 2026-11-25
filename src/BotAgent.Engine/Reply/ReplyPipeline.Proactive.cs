@@ -6,8 +6,7 @@ using BotAgent.Services.Qq;
 namespace BotAgent.Services.Reply;
 
 public sealed partial class ReplyPipeline
-{    /// <summary>主动开口前，群里需要安静多久（秒）。太短会显得坐不住。</summary>
-    private const int ProactiveQuietDefaultSeconds = 120;
+{
     /// <summary>“有人在住的话题”的判据：最近 5 分钟内至少这么多条群友发言。</summary>
     private const int ProactiveBurstMessages = 3;
     /// <summary>
@@ -18,20 +17,19 @@ public sealed partial class ReplyPipeline
     ///   • 群聊 + AI 开着 + 白名单内 + 没在冷却；
     ///   • 群里已经安静下来（≥ <see cref="AppSettings.ProactiveQuietSeconds" /> 秒没人说话）—— 不然就是抢话；
     ///   • 机器人上一条不是最最后一条（上一条是它说的，就不要再自说自话）；
-    ///   • 同一会话距上次主动 ≥ ProactiveCooldownSeconds；
+    ///   • 插话概率与完整发送后的冷却由统一调度器判定；
     ///   • 而且得有个“由头”：要么它上一轮读到有人情绪低落/在求助，要么群里刚刚聊得热（≥ 3 条/5 分钟）—— 接一句话题。
     /// 不满足就什么都不做（不出声也是陪伴）。
     /// </summary>
     private void TryProactiveSpeak()
     {
-        if (!_settings.EnableProactive)
+        var settings = _settings;
+        if (!settings.AiModeEnabled)
         {
             return;
         }
 
-        var cooldown = TimeSpan.FromSeconds(Math.Max(60, _settings.ProactiveCooldownSeconds));
         var now = EngineClock.Now;
-        var quiet = TimeSpan.FromSeconds(Math.Max(1, _settings.ProactiveQuietSeconds));
 
         foreach (var conversation in _registry.Snapshot())
         {
@@ -55,17 +53,25 @@ public sealed partial class ReplyPipeline
 
             var (isGroup, targetId) = conversation.Target;
             if (!(source is null ? _whitelist.AllowsKey(conversation.SourceKey)
-                    : _whitelist.AllowsSource(source.Context, isGroup, targetId)) ||
-                (!_settings.ReplyPacingEnabled && !AllowReply(conversation)))
+                    : _whitelist.AllowsSource(source.Context, isGroup, targetId)))
             {
                 continue;
             }
 
-            if (!_settings.ReplyPacingEnabled &&
-                _lastProactive.TryGetValue(conversation.SourceKey, out var lastAt) && now - lastAt < cooldown)
+            var platformPolicy = source is not null
+                ? _platformPolicies.Resolve(source.Context)
+                : _platformPolicies.ResolveForChannel(Channels.ChannelOf(conversation.SourceKey));
+            if (!platformPolicy.Registered || !platformPolicy.Connected || !platformPolicy.Enabled || !platformPolicy.ChatEnabled)
             {
                 continue;
             }
+
+            var conv = Services.Platforms.ConversationProfileResolver.Resolve(settings, platformPolicy, conversation.SourceKey);
+            if (!conv.ProactiveEnabled)
+            {
+                continue;
+            }
+            var quiet = TimeSpan.FromSeconds(Math.Max(1, conv.ProactiveQuietSeconds));
 
             var messages = conversation.Messages;
             if (messages.Count == 0)
@@ -94,18 +100,8 @@ public sealed partial class ReplyPipeline
                 continue;
             }
 
-            if (_settings.ReplyPacingEnabled)
-            {
-                // Same human context is one opportunity, even across repeated timer ticks.
-                RequestReply(conversation, null, proactive: true);
-                continue;
-            }
-
-            _lastProactive[conversation.SourceKey] = now;
-            _hooks.Log($"[主动] {conversation.Name}：安静 {(now - lastAt2).TotalMinutes:F0} 分钟" +
-                    (caringMoment ? $"、上轮气氛「{vibe}」" : "、刚聊得热") + " → 自己开一句");
-            EnqueueReply(conversation, null, proactive: true);
-            return;   // 一次 tick 只主动一个会话（避免同时到处说话）
+            // Same human context is one opportunity, even across repeated timer ticks.
+            RequestReply(conversation, null, proactive: true);
         }
     }
 }

@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Ports;
+using BotAgent.Services.Net;
 using Microsoft.Data.Sqlite;
 
 namespace BotAgent.Storage;
@@ -344,7 +345,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             var callbackComplete = false;
             try
             {
-                AppDatabase.Write(conn =>
+                AppDatabase.RejectNestedWrite();
+                _participant.CoordinateWrite(() => AppDatabase.Write(conn =>
                 {
                     if (!Allowed(caller, ConfigurationAccess.SaveConfiguration)
                         || (owned.Secrets.Any(s => s.Kind != SecretEditKind.Keep)
@@ -352,7 +354,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
                         outcome = Rejected(ConfigurationResultCode.Forbidden);
                     else outcome = SaveInTransaction(conn, caller, request, owned, profile, ct, mood, expectedLegacyVersion);
                     callbackComplete = true;
-                });
+                }));
             }
             catch (Exception)
             {
@@ -985,8 +987,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         var behaviorSource = source.Behavior ?? new BehaviorChanges();
         var behavior = new BehaviorChanges
         {
-            AiDesire = FreezeEdit(ConfigurationFieldId.AiDesire, behaviorSource.AiDesire, fields),
-            ReplyPacingEnabled = FreezeEdit(ConfigurationFieldId.ReplyPacingEnabled, behaviorSource.ReplyPacingEnabled, fields),
             GroupInterjectionProbability = FreezeEdit(ConfigurationFieldId.GroupInterjectionProbability, behaviorSource.GroupInterjectionProbability, fields),
             GroupInterjectionCooldownSeconds = FreezeEdit(ConfigurationFieldId.GroupInterjectionCooldownSeconds, behaviorSource.GroupInterjectionCooldownSeconds, fields),
             GroupContinuationWaitSeconds = FreezeEdit(ConfigurationFieldId.GroupContinuationWaitSeconds, behaviorSource.GroupContinuationWaitSeconds, fields),
@@ -995,9 +995,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             ApprovalApprovers = FreezeEdit(ConfigurationFieldId.ApprovalApprovers, behaviorSource.ApprovalApprovers, fields),
             BotPersona = FreezeEdit(ConfigurationFieldId.BotPersona, behaviorSource.BotPersona, fields),
             EnableApprovals = FreezeEdit(ConfigurationFieldId.EnableApprovals, behaviorSource.EnableApprovals, fields),
-            EnableAtmosphereDamping = FreezeEdit(ConfigurationFieldId.EnableAtmosphereDamping, behaviorSource.EnableAtmosphereDamping, fields),
             EnableLinkPreview = FreezeEdit(ConfigurationFieldId.EnableLinkPreview, behaviorSource.EnableLinkPreview, fields),
-            EnableParticipationGating = FreezeEdit(ConfigurationFieldId.EnableParticipationGating, behaviorSource.EnableParticipationGating, fields),
             EnablePoke = FreezeEdit(ConfigurationFieldId.EnablePoke, behaviorSource.EnablePoke, fields),
             EnableProactive = FreezeEdit(ConfigurationFieldId.EnableProactive, behaviorSource.EnableProactive, fields),
             EnableProfileSummary = FreezeEdit(ConfigurationFieldId.EnableProfileSummary, behaviorSource.EnableProfileSummary, fields),
@@ -1005,8 +1003,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             EnableStickers = FreezeEdit(ConfigurationFieldId.EnableStickers, behaviorSource.EnableStickers, fields),
             EnableWebSearch = FreezeEdit(ConfigurationFieldId.EnableWebSearch, behaviorSource.EnableWebSearch, fields),
             FilterActionNarration = FreezeEdit(ConfigurationFieldId.FilterActionNarration, behaviorSource.FilterActionNarration, fields),
-            GroupCooldownSeconds = FreezeEdit(ConfigurationFieldId.GroupCooldownSeconds, behaviorSource.GroupCooldownSeconds, fields),
-            IdleFallbackSeconds = FreezeEdit(ConfigurationFieldId.IdleFallbackSeconds, behaviorSource.IdleFallbackSeconds, fields),
             IgnoreBracketMessages = FreezeEdit(ConfigurationFieldId.IgnoreBracketMessages, behaviorSource.IgnoreBracketMessages, fields),
             LinkPreviewMax = FreezeEdit(ConfigurationFieldId.LinkPreviewMax, behaviorSource.LinkPreviewMax, fields),
             LinkPreviewTimeoutSeconds = FreezeEdit(ConfigurationFieldId.LinkPreviewTimeoutSeconds, behaviorSource.LinkPreviewTimeoutSeconds, fields),
@@ -1016,14 +1012,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             MaxMessagesPerConversation = FreezeEdit(ConfigurationFieldId.MaxMessagesPerConversation, behaviorSource.MaxMessagesPerConversation, fields),
             MaxProfileChars = FreezeEdit(ConfigurationFieldId.MaxProfileChars, behaviorSource.MaxProfileChars, fields),
             MoodTtlSeconds = FreezeEdit(ConfigurationFieldId.MoodTtlSeconds, behaviorSource.MoodTtlSeconds, fields),
-            ParticipationCooldownSeconds = FreezeEdit(ConfigurationFieldId.ParticipationCooldownSeconds, behaviorSource.ParticipationCooldownSeconds, fields),
-            ParticipationMaxActiveLifetimeSeconds = FreezeEdit(ConfigurationFieldId.ParticipationMaxActiveLifetimeSeconds, behaviorSource.ParticipationMaxActiveLifetimeSeconds, fields),
-            ParticipationMaxConsecutiveReplies = FreezeEdit(ConfigurationFieldId.ParticipationMaxConsecutiveReplies, behaviorSource.ParticipationMaxConsecutiveReplies, fields),
-            ParticipationMaxExitingLifetimeSeconds = FreezeEdit(ConfigurationFieldId.ParticipationMaxExitingLifetimeSeconds, behaviorSource.ParticipationMaxExitingLifetimeSeconds, fields),
-            ParticipationProbingMaxReplies = FreezeEdit(ConfigurationFieldId.ParticipationProbingMaxReplies, behaviorSource.ParticipationProbingMaxReplies, fields),
             PokeCooldownSeconds = FreezeEdit(ConfigurationFieldId.PokeCooldownSeconds, behaviorSource.PokeCooldownSeconds, fields),
-            PrivateCooldownSeconds = FreezeEdit(ConfigurationFieldId.PrivateCooldownSeconds, behaviorSource.PrivateCooldownSeconds, fields),
-            ProactiveCooldownSeconds = FreezeEdit(ConfigurationFieldId.ProactiveCooldownSeconds, behaviorSource.ProactiveCooldownSeconds, fields),
             ProactiveQuietSeconds = FreezeEdit(ConfigurationFieldId.ProactiveQuietSeconds, behaviorSource.ProactiveQuietSeconds, fields),
             ProfileLookupCount = FreezeEdit(ConfigurationFieldId.ProfileLookupCount, behaviorSource.ProfileLookupCount, fields),
             ProfileSummaryIntervalSeconds = FreezeEdit(ConfigurationFieldId.ProfileSummaryIntervalSeconds, behaviorSource.ProfileSummaryIntervalSeconds, fields),
@@ -1169,7 +1158,8 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         return FieldEdit<T>.Set(value);
     }
 
-    private static (double Min, double Max) Range(ConfigurationFieldId field) => field switch
+    private static (double Min, double Max) Range(ConfigurationFieldId field)
+        => ResearchSettings.TryGetNumericRange(field.ToString(), out var researchRange) ? researchRange : field switch
     {
         ConfigurationFieldId.AgentMaxQueued => (1, 20),
         ConfigurationFieldId.AgentProgressSeconds => (0, 3600),
@@ -1177,7 +1167,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.AgentServerCommandTimeoutSeconds => (5, 300),
         ConfigurationFieldId.AgentServerMaxSteps => (1, 30),
         ConfigurationFieldId.AgentTimeoutSeconds => (30, 7200),
-        ConfigurationFieldId.AiDesire => (0, 100),
         ConfigurationFieldId.GroupInterjectionProbability => (0, 100),
         ConfigurationFieldId.GroupInterjectionCooldownSeconds => (0, 3600),
         ConfigurationFieldId.GroupContinuationWaitSeconds => (0, 30),
@@ -1186,10 +1175,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.DefaultTopP => (0.0, 1.0),
         ConfigurationFieldId.EmotionalTemperature => (0.0, 2.0),
         ConfigurationFieldId.EmotionalTopP => (0.0, 1.0),
-        ConfigurationFieldId.GroupCooldownSeconds => (0, int.MaxValue),
-        ConfigurationFieldId.IdleFallbackSeconds => (0, int.MaxValue),
-        ConfigurationFieldId.LinkPreviewMax => (0, 5),
-        ConfigurationFieldId.LinkPreviewTimeoutSeconds => (2, 30),
         ConfigurationFieldId.MaxAgentSteps => (1, 3),
         ConfigurationFieldId.MaxConcurrentReplies => (1, 16),
         ConfigurationFieldId.MaxContextMessages => (10, 1000),
@@ -1203,14 +1188,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.MusicMaxAnalysisSeconds => (20, 600),
         ConfigurationFieldId.MusicMaxDownloadMb => (1, 64),
         ConfigurationFieldId.MusicNoteTtlDays => (1, 365),
-        ConfigurationFieldId.ParticipationCooldownSeconds => (0, 600),
-        ConfigurationFieldId.ParticipationMaxActiveLifetimeSeconds => (30, 3600),
-        ConfigurationFieldId.ParticipationMaxConsecutiveReplies => (1, 10),
-        ConfigurationFieldId.ParticipationMaxExitingLifetimeSeconds => (10, 3600),
-        ConfigurationFieldId.ParticipationProbingMaxReplies => (1, 3),
         ConfigurationFieldId.PokeCooldownSeconds => (0, 86400),
-        ConfigurationFieldId.PrivateCooldownSeconds => (0, int.MaxValue),
-        ConfigurationFieldId.ProactiveCooldownSeconds => (60, 86400),
         ConfigurationFieldId.ProactiveQuietSeconds => (1, 3600),
         ConfigurationFieldId.ProfileLookupCount => (0, 50),
         ConfigurationFieldId.ProfileSummaryIntervalSeconds => (0, 86400),
@@ -1230,15 +1208,13 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ConfigurationFieldId.VoicePitch => (-12, 12),
         ConfigurationFieldId.VoiceSpeed => (50, 200),
         ConfigurationFieldId.VoiceVol => (0, 1000),
-        ConfigurationFieldId.WebSearchCooldownSeconds => (0, 86400),
-        ConfigurationFieldId.WebSearchMaxResults => (1, 10),
-        ConfigurationFieldId.WebSearchTimeoutSeconds => (5, 60),
         _ => (double.MinValue, double.MaxValue)
     };
 
     private static string NormalizeText(ConfigurationFieldId field, string text)
     {
         if (StrictUtf8.GetByteCount(text) > 32768) throw new ArgumentException("string_too_large");
+        if (ResearchSettings.TryNormalizeText(field.ToString(), text, out var researchText)) text = researchText;
         if (field is
             ConfigurationFieldId.AgentModel
             or ConfigurationFieldId.AgentPrefix
@@ -1278,8 +1254,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
             or ConfigurationFieldId.TtsProvider
             or ConfigurationFieldId.TtsServiceUrl
             or ConfigurationFieldId.VoiceEmotion
-            or ConfigurationFieldId.VoiceName
-            or ConfigurationFieldId.WebSearchSources) text = text.Trim();
+            or ConfigurationFieldId.VoiceName) text = text.Trim();
         if (field is ConfigurationFieldId.AgentReasoningEffort or ConfigurationFieldId.ThinkingBudget
             or ConfigurationFieldId.FastThinkingBudget) text = text.ToLowerInvariant();
         if (field == ConfigurationFieldId.AgentReasoningEffort && text is "" or "default") text = "auto";
@@ -1314,23 +1289,31 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         ImmutableArray<ConfigurationFieldId>.Builder fields)
     {
         if (source is null) return new(ImmutableArray<PluginEnabledEdit>.Empty,
-            ImmutableArray<ProviderEdit>.Empty, ImmutableArray<PolicyEdit>.Empty);
+            ImmutableArray<ProviderEdit>.Empty, ImmutableArray<PolicyEdit>.Empty,
+            ImmutableArray<ConversationProfileEdit>.Empty);
+        var rawProfiles = source.ConversationProfiles.IsDefault
+            ? ImmutableArray<ConversationProfileEdit>.Empty : source.ConversationProfiles;
         if (source.Plugins.IsDefault || source.Providers.IsDefault || source.Policies.IsDefault
-            || source.Plugins.Length > 128 || source.Providers.Length > 64 || source.Policies.Length > 32)
+            || source.Plugins.Length > 128 || source.Providers.Length > 64 || source.Policies.Length > 32
+            || rawProfiles.Length > ConversationProfileValidator.MaxProfiles)
             throw new ArgumentException("invalid_registered_configuration");
         var plugins = source.Plugins.Select(p => p is null ? throw new ArgumentException("invalid_plugin")
             : new PluginEnabledEdit(new(CheckKey(p.Key.Value)), p.Enabled)).OrderBy(p => p.Key.Value, StringComparer.Ordinal).ToImmutableArray();
         var providers = source.Providers.Select(p => FreezeProvider(p, fields)).OrderBy(p => p.Key.Value, StringComparer.Ordinal).ToImmutableArray();
         var policies = source.Policies.Select(p => p is null ? throw new ArgumentException("invalid_policy")
             : new PolicyEdit(FreezeTarget(p.Target), FreezePolicy(p.Configuration))).OrderBy(p => TargetOrder(p.Target), StringComparer.Ordinal).ToImmutableArray();
+        var conversationProfiles = rawProfiles.Select(ConversationProfileValidator.FreezeEdit)
+            .OrderBy(p => ConversationProfileValidator.KeyOrder(p.Key), StringComparer.Ordinal).ToImmutableArray();
         if (plugins.Select(p => p.Key).Distinct().Count() != plugins.Length
             || providers.Select(p => p.Key).Distinct().Count() != providers.Length
-            || policies.Select(p => p.Target).Distinct().Count() != policies.Length)
+            || policies.Select(p => p.Target).Distinct().Count() != policies.Length
+            || conversationProfiles.Select(p => p.Key).Distinct().Count() != conversationProfiles.Length)
             throw new ArgumentException("duplicate_registered_object");
         if (plugins.Length != 0) fields.Add(ConfigurationFieldId.RegisteredPlugins);
         if (providers.Length != 0) fields.Add(ConfigurationFieldId.RegisteredProviders);
         if (policies.Length != 0) fields.Add(ConfigurationFieldId.PlatformPolicies);
-        return new(plugins, providers, policies);
+        if (conversationProfiles.Length != 0) fields.Add(ConfigurationFieldId.ConversationProfiles);
+        return new(plugins, providers, policies, conversationProfiles);
     }
 
     private static ProviderEdit FreezeProvider(ProviderEdit provider, ImmutableArray<ConfigurationFieldId>.Builder fields)
@@ -1476,8 +1459,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.EnableServerAgent, patch.Agent!.EnableServerAgent);
         Add(ConfigurationFieldId.PanelDeployEnabled, patch.Agent!.PanelDeployEnabled);
         Add(ConfigurationFieldId.PanelDeployUrl, patch.Agent!.PanelDeployUrl);
-        Add(ConfigurationFieldId.AiDesire, patch.Behavior!.AiDesire);
-        Add(ConfigurationFieldId.ReplyPacingEnabled, patch.Behavior!.ReplyPacingEnabled);
         Add(ConfigurationFieldId.GroupInterjectionProbability, patch.Behavior!.GroupInterjectionProbability);
         Add(ConfigurationFieldId.GroupInterjectionCooldownSeconds, patch.Behavior!.GroupInterjectionCooldownSeconds);
         Add(ConfigurationFieldId.GroupContinuationWaitSeconds, patch.Behavior!.GroupContinuationWaitSeconds);
@@ -1486,9 +1467,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.ApprovalApprovers, patch.Behavior!.ApprovalApprovers);
         Add(ConfigurationFieldId.BotPersona, patch.Behavior!.BotPersona);
         Add(ConfigurationFieldId.EnableApprovals, patch.Behavior!.EnableApprovals);
-        Add(ConfigurationFieldId.EnableAtmosphereDamping, patch.Behavior!.EnableAtmosphereDamping);
         Add(ConfigurationFieldId.EnableLinkPreview, patch.Behavior!.EnableLinkPreview);
-        Add(ConfigurationFieldId.EnableParticipationGating, patch.Behavior!.EnableParticipationGating);
         Add(ConfigurationFieldId.EnablePoke, patch.Behavior!.EnablePoke);
         Add(ConfigurationFieldId.EnableProactive, patch.Behavior!.EnableProactive);
         Add(ConfigurationFieldId.EnableProfileSummary, patch.Behavior!.EnableProfileSummary);
@@ -1496,8 +1475,6 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.EnableStickers, patch.Behavior!.EnableStickers);
         Add(ConfigurationFieldId.EnableWebSearch, patch.Behavior!.EnableWebSearch);
         Add(ConfigurationFieldId.FilterActionNarration, patch.Behavior!.FilterActionNarration);
-        Add(ConfigurationFieldId.GroupCooldownSeconds, patch.Behavior!.GroupCooldownSeconds);
-        Add(ConfigurationFieldId.IdleFallbackSeconds, patch.Behavior!.IdleFallbackSeconds);
         Add(ConfigurationFieldId.IgnoreBracketMessages, patch.Behavior!.IgnoreBracketMessages);
         Add(ConfigurationFieldId.LinkPreviewMax, patch.Behavior!.LinkPreviewMax);
         Add(ConfigurationFieldId.LinkPreviewTimeoutSeconds, patch.Behavior!.LinkPreviewTimeoutSeconds);
@@ -1507,14 +1484,7 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
         Add(ConfigurationFieldId.MaxMessagesPerConversation, patch.Behavior!.MaxMessagesPerConversation);
         Add(ConfigurationFieldId.MaxProfileChars, patch.Behavior!.MaxProfileChars);
         Add(ConfigurationFieldId.MoodTtlSeconds, patch.Behavior!.MoodTtlSeconds);
-        Add(ConfigurationFieldId.ParticipationCooldownSeconds, patch.Behavior!.ParticipationCooldownSeconds);
-        Add(ConfigurationFieldId.ParticipationMaxActiveLifetimeSeconds, patch.Behavior!.ParticipationMaxActiveLifetimeSeconds);
-        Add(ConfigurationFieldId.ParticipationMaxConsecutiveReplies, patch.Behavior!.ParticipationMaxConsecutiveReplies);
-        Add(ConfigurationFieldId.ParticipationMaxExitingLifetimeSeconds, patch.Behavior!.ParticipationMaxExitingLifetimeSeconds);
-        Add(ConfigurationFieldId.ParticipationProbingMaxReplies, patch.Behavior!.ParticipationProbingMaxReplies);
         Add(ConfigurationFieldId.PokeCooldownSeconds, patch.Behavior!.PokeCooldownSeconds);
-        Add(ConfigurationFieldId.PrivateCooldownSeconds, patch.Behavior!.PrivateCooldownSeconds);
-        Add(ConfigurationFieldId.ProactiveCooldownSeconds, patch.Behavior!.ProactiveCooldownSeconds);
         Add(ConfigurationFieldId.ProactiveQuietSeconds, patch.Behavior!.ProactiveQuietSeconds);
         Add(ConfigurationFieldId.ProfileLookupCount, patch.Behavior!.ProfileLookupCount);
         Add(ConfigurationFieldId.ProfileSummaryIntervalSeconds, patch.Behavior!.ProfileSummaryIntervalSeconds);
@@ -1610,8 +1580,11 @@ public sealed partial class ConfigurationStore : IConfigurationChanges
     }
 
     private static void PersistModes(SqliteConnection conn, OwnedIntent owned)
+        => PersistModes(conn, owned.Modes);
+
+    private static void PersistModes(SqliteConnection conn, IEnumerable<(ConfigurationFieldId Field, UserValueKind Mode)> modes)
     {
-        foreach (var (field, mode) in owned.Modes)
+        foreach (var (field, mode) in modes)
             AppDatabase.Exec(conn, "INSERT INTO configuration_field_modes(field_id,user_mode) VALUES($field,$mode) " +
                 "ON CONFLICT(field_id) DO UPDATE SET user_mode=excluded.user_mode", ("$field", (int)field), ("$mode", (int)mode));
     }

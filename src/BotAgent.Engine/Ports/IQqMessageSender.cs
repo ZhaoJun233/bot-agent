@@ -41,6 +41,9 @@ public interface IQqMessageSender
 /// </summary>
 public sealed record CadenceSendReport(IReadOnlyList<string> SentSegments, string? FailureReasonCode = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public BotAgent.Domain.Platforms.DeliveryResult? Delivery { get; init; }
+    public bool TextWasTransformed { get; init; }
     /// <summary>这一轮根本没有尝试发送（调用方占位用）。</summary>
     public static CadenceSendReport None { get; } = new(Array.Empty<string>(), "not_attempted");
 
@@ -48,7 +51,7 @@ public sealed record CadenceSendReport(IReadOnlyList<string> SentSegments, strin
     public bool AnySent => SentSegments.Count > 0;
 
     /// <summary>非空回复全部发出去（没有任何失败）；空报告不算完成。</summary>
-    public bool AllSent => AnySent && FailureReasonCode is null;
+    public bool AllSent => AnySent && FailureReasonCode is null && (Delivery?.IsSuccess ?? true);
 
     /// <summary>已发出的段落拼回一段文本（部分成功时写进会话历史的就是它）。</summary>
     public string Text => string.Join("\n", SentSegments);

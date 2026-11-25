@@ -23,18 +23,12 @@ public static class ChatToolSpecs
     /// <summary>审批/提问这条链的执行者（<c>Services/Permissions/ApprovalUseCase.cs</c>）。</summary>
     public const string ExecutorApproval = "chat.approval";
 
-    /// <summary>全部 10 条（顺序 = 面板与提示词里的顺序；与改造前一致）。</summary>
+    /// <summary>尚未迁移的内建声明；插件声明由采用目录提供。</summary>
     public static readonly IReadOnlyList<ToolSpec> All = new ToolSpec[]
     {
         new("chat.reply", ToolCategory.ConversationRead, "回复当前会话",
             ReadOnly: false, ExecutorActions, "reply（要说的话；留空 = 不发）", ToolDefaultPolicy.FollowSwitch,
             PromptVisible: false, FeatureKey: ToolFeature.Text),
-        new("web.search", ToolCategory.WebRead, "联网搜索",
-            ReadOnly: true, ExecutorActions, "search（要联网查的问题，2~120 字）", ToolDefaultPolicy.FollowSwitch,
-            FeatureKey: ToolFeature.WebSearch),
-        new("web.read", ToolCategory.WebRead, "读网页正文",
-            ReadOnly: true, ExecutorActions, "read（要读的网页 URL）", ToolDefaultPolicy.FollowSwitch,
-            FeatureKey: ToolFeature.WebSearch),
         new("music.listen", ToolCategory.WebRead, "去听一首歌（只读外部数据）",
             ReadOnly: true, ExecutorActions, "listen（歌名 / 歌手，2~60 字）", ToolDefaultPolicy.FollowSwitch,
             FeatureKey: ToolFeature.Music),

@@ -89,17 +89,19 @@ secrets:
 | --- | --- | --- |
 | `QQCHAT_WHITELIST` | empty | ⚠️ **Empty = strict mode, all messages ignored.** Put group / QQ numbers (comma- or newline-separated), or `*` to accept everything |
 | `QQCHAT_PERSONA` | empty | The bot's persona (personality / speaking style), injected into every request |
-| `QQCHAT_AI_DESIRE` | `50` | Conversational desire, 0-100; higher means it joins in more readily |
 | `QQCHAT_SUITABILITY_THRESHOLD` | `10` | Speaking-suitability threshold; below it the bot stays silent |
 | `QQCHAT_AI_MODE` | `1` | `0` = receive messages without replying (for debugging) |
 
 ### Reply pacing
 
+Reply pacing is the only chat scheduler. Saved panel settings take precedence over these first-deployment seeds; direct and private requests bypass group probability and completion cooldown.
+
 | Variable | Default | Description |
 | --- | --- | --- |
-| `QQCHAT_GROUP_COOLDOWN` | `8` | Minimum interval between replies in the same group (seconds) |
-| `QQCHAT_PRIVATE_COOLDOWN` | `3` | Minimum interval between replies in the same private chat (seconds) |
-| `QQCHAT_IDLE_FALLBACK` | `60` | Silent fallback: re-evaluate once after this many seconds without an explicit request; `0` disables it |
+| `QQCHAT_GROUP_INTERJECTION_PROBABILITY` | `20` | Ordinary group interjection probability, integer 0-100 |
+| `QQCHAT_GROUP_INTERJECTION_COOLDOWN` | `30` | Ordinary group cooldown after a complete reply is confirmed sent, integer 0-3600 seconds |
+| `QQCHAT_GROUP_CONTINUATION_WAIT` | `3` | Quiet wait after the same group member's last input, integer 0-30 seconds |
+| `QQCHAT_PRIVATE_CONTINUATION_WAIT` | `1.5` | Private continuation quiet wait, number 0-30 seconds |
 | `QQCHAT_SPLIT_REPLIES` | `1` | Split long replies on sentence boundaries (at most 4 parts, nothing lost; it will not split decimals / domain names / repeated punctuation / closing quotes) |
 | `QQCHAT_IGNORE_BRACKETS` | `0` | `1` = **tag** parenthetical narration in members' messages as `〔旁白：…〕` (this is tagging, not ignoring): a message that is entirely narration (「（笑）」→`〔旁白：笑〕`) still enters the chat log and the model context but **does not trigger a reply on its own** (the next real message carries it); with narration on both sides (「行（端在桌上）」→「行〔旁白：端在桌上〕」) the body is used as usual. Parentheses in the middle of a sentence and pure numbers such as 「（2026）」 are untouched; records of members posting emoji (`[表情:斜眼笑]` / `[图片]`) are not treated as narration; messages with images, an @-mention of the bot, and private chats are never touched |
 | `QQCHAT_SEGMENT_DELAY_MS` | `700` | Delay between split sentences |
@@ -260,7 +262,7 @@ A `/status` sample:
   "onebot": { "connected": true, "protocol": "ForwardWebSocket", "address": "ws://napcat:3001" },
   "account": { "uin": "10001", "selfId": 10001, "online": true },
   "login": { "qrAvailable": true, "napcatWebUi": "http://napcat:6099" },
-  "agent": { "enabled": true, "model": "deepseek-chat", "desire": 50, "personaConfigured": true },
+  "agent": { "enabled": true, "model": "deepseek-chat", "personaConfigured": true },
   "conversations": 7
 }
 ```
@@ -471,26 +473,17 @@ When the bot speaks in a group it knows "who calls the shots": the prompt gains 
   ordinary members do not occupy this block, and private chats never get it.
 - The prompt also tells the model what these roles mean (an admin can kick and recall — but **do not flatter rank and do not use it to push people around**).
 
-## Participation gate / human approval / questions / scenario presets (all off by default)
+## Human approval / questions / scenario presets (all off by default)
 
-All four switches live in the **panel** (no environment variables needed), and once on, the panel honestly echoes "what extra capability exists right now":
+These capabilities live in the **panel**, which shows their effective state:
 
 | Switch | Default | Once on |
 | --- | --- | --- |
-| Participation gate | off | When the state machine says "not this round" (observing / exiting / cooling down) the model is not called and nothing is said; **receive-only** — an @-mention is still answered as usual. The read-only endpoint `GET /api/participation` shows each conversation's state and reason (no message text) |
 | Allow questions | off | When the model writes `action=ask`, the server wraps a question with a **one-time code** and posts it to the group (code and expiry issued server-side); any single answer counts as answered, and it expires unusable; **asking grants no permissions whatsoever** |
 | Human approval | off | When the model "wants to call a tool" it first posts a **pending confirmation** (code / who may approve / expiry); only after the owner, an admin or someone named in the panel replies "同意 XXXX" does it execute — identity / conversation / expiry / one-time use / policy version are all checked server-side. It **only executes the fixed fake tool `demo.echo`** (one log line plus a demo explanation; no shell / file / process control) |
 | Scenario preset | empty | Set to one of `on-demand` / `research` / `social`: it only **tightens** the capability allowlist and the per-turn budget; an unrecognised name means the lowest permissions (fail-closed). Empty = exactly the existing switches (as before) |
 
-The participation gate additionally has environment variables (the other three are panel-only):
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `QQCHAT_PARTICIPATION_GATING` | `0` | `1` = turn the participation gate on |
-| `QQCHAT_PARTICIPATION_MAX_REPLIES` | `3` | Maximum consecutive lines while participating |
-| `QQCHAT_PARTICIPATION_COOLDOWN` | `20` | Cooldown after that maximum is reached (seconds) |
-| `QQCHAT_PARTICIPATION_PROBING` | `1` | How many probes are allowed while observing |
-| `QQCHAT_PARTICIPATION_ACTIVE_LIFE` / `QQCHAT_PARTICIPATION_EXITING_LIFE` | `900` / `180` | Upper bounds for the active / exiting phase (seconds) |
+All replies use [reply pacing](../../docs/reply-pacing.md). Legacy desire, cooldown, idle fallback and participation-gate controls are retired. `GET /api/participation` only exposes fixed-policy observation state and does not schedule replies. Old stored keys remain intact but inactive; submitting retired fields rejects the entire save.
 
 ## `//` tasks (server agent) and the daily health report
 
@@ -568,7 +561,7 @@ There are also several **sub-second probes** (synthetic scenarios, no production
 | --- | --- |
 | `/readyz` keeps returning 503 | Check `docker compose logs qqchat`: wrong address / token, or NapCat has no forward WS configured |
 | The log says "whitelist is empty → ignoring all messages" | `QQCHAT_WHITELIST` is unset. Fill in `*` or specific group numbers |
-| `/status` shows `connected:true` but the bot never speaks | The model left `reply` empty (this is by design, to avoid spamming). Raise `QQCHAT_AI_DESIRE`, or state clearly in the persona when it should join in |
+| `/status` shows `connected:true` but the bot never speaks | Check AI mode, access policy, ordinary group probability and completion cooldown. Direct requests bypass group pacing, but an empty model reply still sends no message |
 | The health-check port will not start | On Windows without administrator rights `+` cannot be bound: set `QQCHAT_HEALTH_BIND=127.0.0.1`, or `QQCHAT_HEALTH_PORT=0` to disable it |
 | Voice / files are not received | A known limitation of the Docker NapCat build (text and images are fine) |
 | Timestamps are 8 hours off | Set `TZ=Asia/Shanghai` and restart the container |

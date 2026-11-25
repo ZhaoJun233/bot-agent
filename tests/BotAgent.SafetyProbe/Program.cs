@@ -59,11 +59,26 @@ public static partial class Program
     {
         BotAgent.Adapters.Time.ClockBindings.InitializePlatforms();
         BotAgent.Adapters.Time.ClockBindings.InitializeModel();
+        if (Environment.GetEnvironmentVariable("BOTAGENT_SAFETY_ONLY") == "official-actions")
+        {
+            OfficialActionTests();
+            Console.WriteLine($"通过 {_passed}，失败 {_failed}");
+            return _failed == 0 ? 0 : 1;
+        }
+        if (Environment.GetEnvironmentVariable("BOTAGENT_SAFETY_ONLY") == "qq-outcomes")
+        {
+            QqActionOutcomeTests();
+            Console.WriteLine($"通过 {_passed}，失败 {_failed}");
+            return _failed == 0 ? 0 : 1;
+        }
         DecisionTests();
         ParserWiringTests();
+        SilenceReplyTests();
         PortSubstituteTests();
         ReasoningEffortTests();
         PlainTextTests();
+        NaturalParagraphTests();
+        ReplyTargetSnapshotTests();
         ToolGateTests();
         ApprovalTests();
         ApprovalChainTests();
@@ -72,7 +87,9 @@ public static partial class Program
         SessionPolicyTests();
         PlatformPolicyActionTests();
         ServerActionOutcomeTests();
+        QqActionOutcomeTests();
         NaturalAgentTests();
+        OfficialActionTests();
         ReplyAuditTests();
         MessageMarkerTests();
         TurnTraceTests();
@@ -93,6 +110,7 @@ public static partial class Program
         ProfileOverrideTests();
         StickerSafetyTests();
         PromptTemplateTests();
+        Phase4SafetyTests();
 
         Console.WriteLine();
         Console.WriteLine($"通过 {_passed}，失败 {_failed}");
@@ -105,7 +123,7 @@ public static partial class Program
     {
         Section("批次 A · 统一工具目录（声明 / 执行者 / 档位 / 高风险例外）");
 
-        var dir = ToolDirectory.Builtin;
+        var dir = ToolDirectory.FromCatalog(ResearchToolFixture.Catalog);
 
         Check("目录自检全绿（缺执行者 / 孤儿执行者 / 缺例外说明 / 重名 四张表都空）", dir.IsHealthy,
             $"缺执行者=[{string.Join(",", dir.MissingExecutors)}] 孤儿=[{string.Join(",", dir.UnusedExecutors)}]"
@@ -115,7 +133,7 @@ public static partial class Program
             dir.Chat.Count == 10 && dir.Qq.Count == 10 && dir.Server.Count == 6, $"合计 {dir.Specs.Count} 条");
 
         // 聊天那 10 条：目录与登记表必须是**同一批 id**（不许两处各写一遍而慢慢漂移）
-        var registryIds = ChatCapabilitySet.DefaultRegistry.Ids.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var registryIds = ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry.Ids.OrderBy(x => x, StringComparer.Ordinal).ToArray();
         var chatIds = dir.Chat.Select(s => s.Id).OrderBy(x => x, StringComparer.Ordinal).ToArray();
         Check("聊天族目录 = 聊天登记表（同一批 id）", registryIds.SequenceEqual(chatIds),
             "登记表[" + string.Join(",", registryIds) + "] 目录[" + string.Join(",", chatIds) + "]");
@@ -165,7 +183,7 @@ public static partial class Program
             dir.Chat.All(s => s.Default == ToolDefaultPolicy.FollowSwitch)
             && dir.Server.All(s => s.Default == ToolDefaultPolicy.AllOnWhenEmpty));
 
-        Check("执行者登记 = 4 家", dir.Executors.Count == 4,
+        Check("执行者登记 = 5 家（含独立研究包）", dir.Executors.Count == 5,
             string.Join("、", dir.Executors.All.Select(e => e.Id).OrderBy(x => x, StringComparer.Ordinal)));
     }
 
@@ -176,10 +194,10 @@ public static partial class Program
         Section("批次 B · 会话级权限元数据（戳 / 陈旧 / 重建 / 有界）");
 
         var now = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.FromHours(9));
-        var legacy = ChatCapabilitySet.FromSwitches(
+        var legacy = ResearchToolFixture.Capabilities(
             enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
             enablePoke: true, scenario: null);
-        var withVoice = ChatCapabilitySet.FromSwitches(
+        var withVoice = ResearchToolFixture.Capabilities(
             enableWebSearch: true, enableMusic: true, enableVoice: true, enableStickers: true,
             enablePoke: true, scenario: null);
 
@@ -345,13 +363,13 @@ public static partial class Program
     {
         Section("批次 D · 工具清单（按策略裁剪 / 需批准标记 / 空策略不注入）");
 
-        var quiet = ChatCapabilitySet.FromSwitches(
+        var quiet = ResearchToolFixture.Capabilities(
             enableWebSearch: false, enableMusic: false, enableVoice: false, enableStickers: false,
             enablePoke: false, scenario: null);
         Check("一个工具都没开 → **整段不注入**（与“开关全关时提示词逐字不变”同一条纪律）",
             ToolPromptText.Render(quiet).Length == 0, ToolPromptText.Render(quiet));
 
-        var normal = ChatCapabilitySet.FromSwitches(
+        var normal = ResearchToolFixture.Capabilities(
             enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
             enablePoke: true, scenario: null);
         var text = ToolPromptText.Render(normal);
@@ -366,7 +384,7 @@ public static partial class Program
         Check("标题就是锚点 [可用工具]", text.StartsWith("\n\n" + ToolPromptText.Header, StringComparison.Ordinal));
 
         Check("★ 需批准的工具带标记（审批开着时 demo.echo 要批）",
-            ToolPromptText.Render(ChatCapabilitySet.FromSwitches(
+            ToolPromptText.Render(ResearchToolFixture.Capabilities(
                 enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
                 enablePoke: true, scenario: null, approvalsEnabled: true))
                 .Contains("〔需批准〕", StringComparison.Ordinal));
@@ -381,8 +399,7 @@ public static partial class Program
 
         // 提示词侧：这一段真的被拼进去了（PromptBuilder），且空串时一个字都不多。
         var withList = PromptBuilder.Build(new PromptBuilder.PromptRequest(
-            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, AiDesire: 0,
-            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
             Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
             LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
             SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
@@ -393,8 +410,7 @@ public static partial class Program
             && withList.Contains("web.search", StringComparison.Ordinal), "长度 " + withList.Length);
 
         var withoutList = PromptBuilder.Build(new PromptBuilder.PromptRequest(
-            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, AiDesire: 0,
-            Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+            SystemPrompt: "（系统提示）", BotIdentity: null, Persona: null, Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
             Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
             LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
             SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,
@@ -675,12 +691,12 @@ public static partial class Program
     {
         Section("批次 A 收尾 · 执行者契约（真实现 / 登记占位 / 不做判定）");
 
-        var dir = ToolDirectory.Builtin;
-        Check("★ 目录自检仍然全绿（执行者四家、每条工具都有执行者）", dir.IsHealthy,
+        var dir = ToolDirectory.FromCatalog(ResearchToolFixture.Catalog);
+        Check("★ 目录自检仍然全绿（每条工具都有执行者）", dir.IsHealthy,
             string.Join(",", dir.MissingExecutors.Concat(dir.UnusedExecutors)));
 
-        Check("★ 四家执行者里：两家是真实现（LegacyPath=false）、两家是登记占位",
-            dir.Executors.All.Count(e => !e.LegacyPath) == 2
+        Check("★ 五家执行者里：三家已接执行、两家仍是登记占位",
+            dir.Executors.All.Count(e => !e.LegacyPath) == 3
             && dir.Executors.All.Count(e => e.LegacyPath) == 2,
             string.Join("、", dir.Executors.All.Select(e => e.Id + (e.LegacyPath ? "(占位)" : "(真)"))));
 
@@ -735,44 +751,44 @@ public static partial class Program
         Section("批次 A 收尾 · 参数契约（不认识的字段 / 缺必填 / 长度 / 协议）");
 
         Check("★ 有契约的工具认得出来（web.search / web.read）",
-            ToolArgs.HasContract("web.search") && ToolArgs.HasContract("web.read")
-            && !ToolArgs.HasContract("voice.speak"));
+            ResearchToolFixture.HasContract("web.search") && ResearchToolFixture.HasContract("web.read")
+            && !ResearchToolFixture.HasContract("voice.speak"));
 
         Check("★ 正常参数 → 放行",
-            ToolArgs.Validate("web.search", new JsonObject { ["query"] = "上海天气" }).Ok
-            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "https://example.com/a" }).Ok);
+            ResearchToolFixture.Validate("web.search", new JsonObject { ["query"] = "上海天气" }).Ok
+            && ResearchToolFixture.Validate("web.read", new JsonObject { ["url"] = "https://example.com/a" }).Ok);
 
         Check("★★ 缺必填 → missing_required（不拿空参数去执行）",
-            ToolArgs.Validate("web.search", new JsonObject()).ReasonCode == "missing_required"
-            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "  " }).ReasonCode == "missing_required");
+            ResearchToolFixture.Validate("web.search", new JsonObject()).ReasonCode == "missing_required"
+            && ResearchToolFixture.Validate("web.read", new JsonObject { ["url"] = "  " }).ReasonCode == "missing_required");
 
         Check("★★ 不认识的字段 → unknown_field（模型爱编字段名，宁可拒绝也不猜）",
-            ToolArgs.Validate("web.search", new JsonObject { ["keyword"] = "天气" }).ReasonCode == "unknown_field",
-            ToolArgs.Validate("web.search", new JsonObject { ["keyword"] = "天气" }).Detail ?? "");
+            ResearchToolFixture.Validate("web.search", new JsonObject { ["keyword"] = "天气" }).ReasonCode == "unknown_field",
+            ResearchToolFixture.Validate("web.search", new JsonObject { ["keyword"] = "天气" }).Detail ?? "");
 
         Check("★ 长度越界 → bad_length（契约里的 2~120 与 8~2000）",
-            ToolArgs.Validate("web.search", new JsonObject { ["query"] = "短" }).ReasonCode == "bad_length"
+            ResearchToolFixture.Validate("web.search", new JsonObject { ["query"] = "短" }).ReasonCode == "bad_length"
             // 注意：长度下限是 8（"http://a" 正好 8 个字符，是**边界内**）—— 用 7 个字符才越界
-            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "http://" }).ReasonCode == "bad_length");
+            && ResearchToolFixture.Validate("web.read", new JsonObject { ["url"] = "http://" }).ReasonCode == "bad_length");
 
         Check("★★ 只收 http(s)：file:// 之类一律 bad_scheme",
-            ToolArgs.Validate("web.read", new JsonObject { ["url"] = "file:///etc/passwd" }).ReasonCode == "bad_scheme"
-            && ToolArgs.Validate("web.read", new JsonObject { ["url"] = "ftp://example.com/a" }).ReasonCode == "bad_scheme");
+            ResearchToolFixture.Validate("web.read", new JsonObject { ["url"] = "file:///etc/passwd" }).ReasonCode == "bad_scheme"
+            && ResearchToolFixture.Validate("web.read", new JsonObject { ["url"] = "ftp://example.com/a" }).ReasonCode == "bad_scheme");
 
         Check("★ 没契约的工具照旧放行（`//` 那族保持宽松，符合 §11 第 3 条）",
-            ToolArgs.Validate("bash", new JsonObject { ["command"] = "ls" }).Ok
-            && ToolArgs.Validate(null, null).Ok);
+            ResearchToolFixture.Validate("bash", new JsonObject { ["command"] = "ls" }).Ok
+            && ResearchToolFixture.Validate(null, null).Ok);
 
         Check("★ 原因码稳定（探针与日志都按它们判）",
-            ToolArgs.Validate("web.search", new JsonObject()).ReasonCode == "missing_required"
-            && ToolArgs.Validate("web.search", new JsonObject { ["x"] = 1 }).ReasonCode == "unknown_field");
+            ResearchToolFixture.Validate("web.search", new JsonObject()).ReasonCode == "missing_required"
+            && ResearchToolFixture.Validate("web.search", new JsonObject { ["x"] = 1 }).ReasonCode == "unknown_field");
     }
 
     // ─────────────────── 闸门可达性（§9.2 那条护栏） ───────────────────
 
     /// <summary>
     /// §9.2 的“闸门可达性”：**每个会产生副作用的能力都必须能到达 `ToolGate`**。
-    /// 这条护栏的分母是**目录**（<see cref="ToolDirectory.Builtin" />），不是某一张表 ——
+    /// 这条护栏的分母是**目录**（<see cref="ToolDirectory.FromCatalog(ResearchToolFixture.Catalog)" />），不是某一张表 ——
     /// 所以它同时钉住两件事：
     ///   ① 目录里每条 spec 都落在某张**登记表**里（否则闸门连“未知工具”都判不出，只会 no_registry/unknown_tool）；
     ///   ② 高风险档（`AlwaysDenied`）的每条都**写了显式例外**（那是“另一条授权边界”的登记，不是豁免）。
@@ -781,8 +797,8 @@ public static partial class Program
     {
         Section("§9.2 · 闸门可达性（目录 → 登记表 → 闸门）");
 
-        var specs = ToolDirectory.Builtin.Specs;
-        var chatRegistry = ChatToolSpecs.DefaultRegistry;
+        var specs = ToolDirectory.FromCatalog(ResearchToolFixture.Catalog).Specs;
+        var chatRegistry = ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry;
         var serverRegistry = ServerToolSpecs.Registry;
 
         var unreachable = specs
@@ -831,7 +847,7 @@ public static partial class Program
             new AppSettings().MaxAgentSteps == 1, new AppSettings().MaxAgentSteps.ToString());
 
         var settings = new AppSettings { MaxAgentSteps = 2, EnableWebSearch = true };
-        var caps = ChatCapabilitySet.FromSwitches(
+        var caps = ResearchToolFixture.Capabilities(
             enableWebSearch: true, enableMusic: true, enableVoice: false, enableStickers: true,
             enablePoke: true, scenario: null);
 
@@ -936,7 +952,6 @@ public static partial class Program
 
         public string? BotIdentity { get; set; }
         public string? BotPersona { get; set; }
-        public int AiDesire { get; set; }
         public int SuitabilityThreshold { get; set; }
         public int MaxContextMessages { get; set; }
         public TimeSpan ChatTimeout => TimeSpan.FromSeconds(1);
@@ -946,7 +961,8 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false,
+            Domain.Model.ConversationPromptOverrides? promptOverrides = null)
         {
             Calls++;
             _searchTexts.Add(searchText);
@@ -1184,6 +1200,7 @@ public static partial class Program
         Check("URL 里不会插进换行（不会被分句切成两条消息）", !urlLine.Contains('\n'), urlLine);
 
         ActionNarrationTests();
+        BracketDeliveryTests();
     }
 
     // ───────────────── P3：Fail-Closed 工具权限（V3 §9.5） ─────────────────
@@ -1454,51 +1471,51 @@ public static partial class Program
         var t0 = new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.FromHours(9));
 
         // ── ① 兼容红线：场景留空 + 审批关 = 与改造前逐字一致 ──
-        var legacy = ChatCapabilitySet.FromSwitches(
+        var legacy = ResearchToolFixture.Capabilities(
             enableWebSearch: true, enableMusic: true, enableVoice: true,
             enableStickers: true, enablePoke: true, scenario: "", approvalsEnabled: false);
 
         var legacyVoice = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, legacy.Policy, new ToolRequest("voice.speak", "group:10001"));
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, legacy.Policy, new ToolRequest("voice.speak", "group:10001"));
         Check("场景留空 + 审批关：额外动作不需要审批（与改造前一致）",
             legacyVoice.Allow && legacyVoice.ReasonCode == "allowed", legacyVoice.Describe());
 
         var legacyFar = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, legacy.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, legacy.Policy,
             new ToolRequest("sticker.send", "group:10001", CallIndex: 1000));
         Check("场景留空 + 审批关：预算仍是无限的（第 1001 次调用照样允许）",
             legacyFar.Allow, legacyFar.Describe());
 
         var legacyDemo = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, legacy.Policy, new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"));
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, legacy.Policy, new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"));
         Check("场景留空 + 审批关：固定假工具根本不在白名单里（not_allowlisted）",
             !legacyDemo.Allow && legacyDemo.ReasonCode == "not_allowlisted", legacyDemo.Describe());
 
         // ── ② 打开审批：只有那个固定假工具要多一道票据 ──
-        var withApproval = ChatCapabilitySet.FromSwitches(
+        var withApproval = ResearchToolFixture.Capabilities(
             enableWebSearch: true, enableMusic: true, enableVoice: true,
             enableStickers: true, enablePoke: true, scenario: "", approvalsEnabled: true);
 
         var demoNoTicket = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withApproval.Policy,
             new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"));
         Check("审批开：固定假工具没有票据 → 拒绝（approval_required）",
             !demoNoTicket.Allow && demoNoTicket.ReasonCode == "approval_required", demoNoTicket.Describe());
 
         var demoWithTicket = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withApproval.Policy,
             new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"),
             IssueTicket(ApprovalFlow.FixedToolId, "group:10001", t0, "req-demo"));
         Check("审批开：拿到匹配票据 → 允许执行",
             demoWithTicket.Allow, demoWithTicket.Describe());
 
         var withApprovalVoice = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withApproval.Policy, new ToolRequest("voice.speak", "group:10001"));
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withApproval.Policy, new ToolRequest("voice.speak", "group:10001"));
         Check("审批开：既有额外动作**没有**被顺手加上门槛（voice.speak 仍免审批）",
             withApprovalVoice.Allow, withApprovalVoice.Describe());
 
         var wrongTicket = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withApproval.Policy,
             new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"),
             new ApprovalTicket("req-demo", "voice.speak", "group:10001", t0));
         Check("审批开：票据上的工具对不上 → 拒绝（approval_tool_mismatch）",
@@ -1506,7 +1523,7 @@ public static partial class Program
 
         // 指纹：同样的配置稳定、改了就该变
         Check("策略指纹：同配置稳定",
-            legacy.PolicyFingerprint == ChatCapabilitySet.FromSwitches(
+            legacy.PolicyFingerprint == ResearchToolFixture.Capabilities(
                 true, true, true, true, true, "", approvalsEnabled: false).PolicyFingerprint, "must equal");
         Check("策略指纹：开关/审批变化能被看出来（用于“只在真变了时换版本”）",
             legacy.PolicyFingerprint != withApproval.PolicyFingerprint, "must differ");
@@ -1651,7 +1668,7 @@ public static partial class Program
             !noStore.Handled && !noStore.ShouldExecute && noStore.ReasonCode == "no_store", noStore.ReasonCode);
 
         // ── ⑥ 诚实性：这个假工具到底能做什么 ──
-        var demoDescriptor = ChatCapabilitySet.DefaultRegistry.TryGet(ApprovalFlow.FixedToolId, out var desc);
+        var demoDescriptor = ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry.TryGet(ApprovalFlow.FixedToolId, out var desc);
         Check("固定假工具登记在表里，类别是“往当前会话发消息”、不是只读",
             demoDescriptor && desc!.Category == ToolCategory.SendMessage && !desc.ReadOnly,
             desc?.Category.ToString() ?? "(missing)");
@@ -1704,7 +1721,7 @@ public static partial class Program
             triggerMethod?.Name ?? "(找不到 OpenApprovalForTool)");
 
         var nearMiss = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withApproval.Policy,
             new ToolRequest("demo.echo2", "group:10001"),
             new ApprovalTicket("req-near", "demo.echo2", "group:10001", t0));
         Check("换个近似名字（demo.echo2）绕不过闸门（未登记 → unknown_tool）",
@@ -1737,8 +1754,8 @@ public static partial class Program
         Check("没判过（纯旁白）：不拿“没判”当拒绝，照样放行",
             noDecision.Proceed && noDecision.ReasonCode == "not_evaluated", noDecision.Describe());
 
-        Check("★ 闸门开关的默认值是**关**（AppSettings 默认 = 与改造前逐字一致）",
-            !new BotAgent.Services.AppSettings().EnableParticipationGating, "默认 true 就是改线上行为");
+        Check("旧参与闸门配置已退役，新版调度是唯一参与入口",
+            typeof(BotAgent.Services.AppSettings).GetProperty("EnableParticipationGating") is null, "不应暴露旧版参与开关");
         Check("★ 提问开关的默认值是**关**",
             !new BotAgent.Services.AppSettings().EnableQuestions, "默认 true 就是改线上行为");
 
@@ -1827,24 +1844,24 @@ public static partial class Program
             !lateAnswer.Ok && lateAnswer.ReasonCode == "expired", lateAnswer.Describe());
 
         // ── ⑤ 提问要过闸门；且提问**执行不了任何东西** ──
-        var noQuestions = ChatCapabilitySet.FromSwitches(
+        var noQuestions = ResearchToolFixture.Capabilities(
             true, true, true, true, true, scenario: "", approvalsEnabled: false, questionsEnabled: false);
         var askBlocked = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, noQuestions.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, noQuestions.Policy,
             new ToolRequest(ApprovalFlow.QuestionToolId, "group:10001"));
         Check("提问开关关着：ask.question 不在白名单（not_allowlisted）→ 走不到开单那一步",
             !askBlocked.Allow && askBlocked.ReasonCode == "not_allowlisted", askBlocked.Describe());
 
-        var withQuestions = ChatCapabilitySet.FromSwitches(
+        var withQuestions = ResearchToolFixture.Capabilities(
             true, true, true, true, true, scenario: "", approvalsEnabled: false, questionsEnabled: true);
         var askAllowed = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withQuestions.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withQuestions.Policy,
             new ToolRequest(ApprovalFlow.QuestionToolId, "group:10001"));
         Check("提问开关打开：ask.question 进白名单、且**不需要审批**（提问不是执行动作）",
             askAllowed.Allow && askAllowed.ReasonCode == "allowed", askAllowed.Describe());
 
         var askCross = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, withQuestions.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withQuestions.Policy,
             new ToolRequest(ApprovalFlow.QuestionToolId, "group:10001", TargetConversationKey: "group:20002"));
         Check("提问也只能问当前会话（想问到别的会话 → cross_conversation）",
             !askCross.Allow && askCross.ReasonCode == "cross_conversation", askCross.Describe());
@@ -1859,18 +1876,18 @@ public static partial class Program
         // 提问永远 approval_required（而且没有开票路径），on-demand/research 下批过了也执行不了。
         foreach (var preset in ScenarioPresets.All)
         {
-            var withAsk = ChatCapabilitySet.FromSwitches(
+            var withAsk = ResearchToolFixture.Capabilities(
                 true, true, true, true, true, scenario: preset, approvalsEnabled: false, questionsEnabled: true);
             var askDecision = ToolGate.Evaluate(
-                ChatCapabilitySet.DefaultRegistry, withAsk.Policy,
+                ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withAsk.Policy,
                 new ToolRequest(ApprovalFlow.QuestionToolId, "group:10001"));
             Check($"[{preset}] 提问是“往当前会话说一句”，不该被审批挡住",
                 askDecision.Allow, askDecision.Describe());
 
-            var withApproval = ChatCapabilitySet.FromSwitches(
+            var withApproval = ResearchToolFixture.Capabilities(
                 true, true, true, true, true, scenario: preset, approvalsEnabled: true, questionsEnabled: false);
             var approved = ToolGate.Evaluate(
-                ChatCapabilitySet.DefaultRegistry, withApproval.Policy,
+                ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, withApproval.Policy,
                 new ToolRequest(ApprovalFlow.FixedToolId, "group:10001"),
                 IssueTicket(ApprovalFlow.FixedToolId, "group:10001", t0, "T1"));
             Check($"[{preset}] 固定假工具：批过之后要能执行（不能 approval_cannot_grant）",
@@ -1879,14 +1896,14 @@ public static partial class Program
 
         // ── ⑦ 运行预算记账（V3 §9.2）：序号必须真的累加，第 3 次调用才会撞上 research 的 2 次预算 ──
         var budget = new ToolCallBudget();
-        var research = ChatCapabilitySet.FromSwitches(
+        var research = ResearchToolFixture.Capabilities(
             true, true, true, true, true, scenario: "research", approvalsEnabled: false, questionsEnabled: false);
         var key = "group:10001";
         budget.Reset(key);
         Check("预算记账：新一轮从 0 起算", budget.Peek(key) == 0, budget.Peek(key).ToString());
 
         var first = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, research.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, research.Policy,
             new ToolRequest("web.search", key, budget.Peek(key)));
         if (first.Allow)
         {
@@ -1894,7 +1911,7 @@ public static partial class Program
         }
 
         var second = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, research.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, research.Policy,
             new ToolRequest("web.read", key, budget.Peek(key)));
         if (second.Allow)
         {
@@ -1904,7 +1921,7 @@ public static partial class Program
         Check("前两次调用放行（callIndex 0/1）", first.Allow && second.Allow,
             $"{first.Describe()} | {second.Describe()}");
         var third = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, research.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, research.Policy,
             new ToolRequest("web.read", key, budget.Peek(key)));
         Check("★ 第 3 次（callIndex=2 ≥ 预算 2）→ budget_exhausted（多轮也不能绕过）",
             !third.Allow && third.ReasonCode == "budget_exhausted",
@@ -1912,7 +1929,7 @@ public static partial class Program
 
         budget.Reset(key);
         var afterReset = ToolGate.Evaluate(
-            ChatCapabilitySet.DefaultRegistry, research.Policy,
+            ResearchToolFixture.Capabilities(true, true, true, true, true, null).Registry, research.Policy,
             new ToolRequest("web.search", key, budget.Peek(key)));
         Check("新一轮用户消息 → 预算重来（callIndex 回到 0，放行）",
             afterReset.Allow, afterReset.Describe());
@@ -2199,7 +2216,6 @@ public static partial class Program
         public Func<CancellationToken, Task<string?>>? ChatCompletion { get; init; }
         public string? BotIdentity { get; set; }
         public string? BotPersona { get; set; }
-        public int AiDesire { get; set; }
         public int SuitabilityThreshold { get; set; }
         public int MaxContextMessages { get; set; }
         public TimeSpan ChatTimeout => TimeSpan.FromSeconds(1);
@@ -2208,7 +2224,8 @@ public static partial class Program
             string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false,
             bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null,
             string? groupRolesText = null, string? vibeHint = null, bool proactive = false, bool enableAsk = false,
-            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false)
+            bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null, string? promptCacheScope = null, bool isPrivateConversation = false,
+            Domain.Model.ConversationPromptOverrides? promptOverrides = null)
             => Task.FromResult(new CompletionResult(null, null, null));
 
         public Task<string?> CompleteChatAsync(string model, string systemPrompt, IReadOnlyList<(string Role, string Text)> messages,

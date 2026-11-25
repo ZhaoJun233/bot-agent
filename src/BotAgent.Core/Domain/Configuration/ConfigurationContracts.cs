@@ -165,6 +165,7 @@ public sealed record DeviceKeyAssignment(int InputOrdinal, DeviceKey Key)
 [JsonDerivedType(typeof(ConfigurationObjectAddress.Plugin), "plugin")]
 [JsonDerivedType(typeof(ConfigurationObjectAddress.Provider), "provider")]
 [JsonDerivedType(typeof(ConfigurationObjectAddress.Secret), "secret")]
+[JsonDerivedType(typeof(ConfigurationObjectAddress.ConversationProfile), "conversationProfile")]
 public abstract record ConfigurationObjectAddress
 {
     private ConfigurationObjectAddress() { }
@@ -187,6 +188,10 @@ public abstract record ConfigurationObjectAddress
     public sealed record Secret(WritableSecretSlot Slot) : ConfigurationObjectAddress
     {
         public override string ToString() => "Secret";
+    }
+    public sealed record ConversationProfile(ConversationProfileKey Key) : ConfigurationObjectAddress
+    {
+        public override string ToString() => "ConversationProfile";
     }
 }
 public sealed record FieldAddress(

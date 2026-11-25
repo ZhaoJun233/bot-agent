@@ -85,13 +85,11 @@ internal static class CacheBoundaryTransportChecks
         });
         var routedOptions = new ModelOptions
         {
-            ApiKey = "synthetic-key", BaseUrl = "https://primary.example.com/v1", Model = "synthetic-model",
-            EnableAtmosphereDamping = false
+            ApiKey = "synthetic-key", BaseUrl = "https://primary.example.com/v1", Model = "synthetic-model"
         };
         var plainOptions = new ModelOptions
         {
-            ApiKey = "synthetic-key", BaseUrl = "https://plain.example.com/v1", Model = "synthetic-model",
-            EnableAtmosphereDamping = false
+            ApiKey = "synthetic-key", BaseUrl = "https://plain.example.com/v1", Model = "synthetic-model"
         };
         var routedImages = new ImageDownloader(failoverHttp);
         var routedTransport = new ModelTransport(() => routedOptions, failoverHttp, failoverHttp, routedImages, failoverHttp.Timeout);

@@ -5,6 +5,10 @@ using BotAgent.Domain.Messaging;
 using BotAgent.Services.Music;
 using BotAgent.Services.OneBot;
 
+[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(BotAgent.Services.Net.IWebSearch))]
+[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(BotAgent.Services.Net.IResearchUseCase))]
+[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(BotAgent.Services.Links.ILinkPreviewer))]
+
 namespace BotAgent.Services.Panel
 {
     /// <summary>Panel-facing notifications emitted by Engine; the Host owns the transport.</summary>
@@ -32,21 +36,20 @@ namespace BotAgent.Services.Agent
         /// </summary>
         bool CanRunNatural(BotConversation conversation, long senderId) => false;
 
+        /// <summary>按入站消息（含跨平台原生身份）判定能否触发自然对话 Agent。</summary>
+        bool CanRunNatural(BotConversation conversation, ChatMessage trigger, BotAgent.Domain.Messaging.PlatformInboundEnvelope? envelope = null)
+            => trigger.SenderId is long senderId && CanRunNatural(conversation, senderId);
+
         /// <summary>
         /// 把模型从自然对话里理解出的任务交给服务器 agent（ack = 模型想先说的那句接话）。
         /// 异常只记日志，不带崩回复流程。
         /// </summary>
         Task RunNaturalSafeAsync(BotConversation conversation, ChatMessage trigger, string task, string? ack)
             => Task.CompletedTask;
-    }
-}
 
-namespace BotAgent.Services.Links
-{
-    /// <summary>Link preview capability; network IO stays in the Host adapter.</summary>
-    public interface ILinkPreviewer
-    {
-        Task<string?> DescribeAsync(IReadOnlyList<string> urls, CancellationToken ct);
+        Task RunNaturalSafeAsync(BotConversation conversation, ChatMessage trigger,
+            BotAgent.Domain.Messaging.PlatformInboundEnvelope? envelope, string task, string? ack)
+            => RunNaturalSafeAsync(conversation, trigger, task, ack);
     }
 }
 
@@ -75,26 +78,37 @@ namespace BotAgent.Services.Music
     }
 }
 
-namespace BotAgent.Services.Net
-{
-    /// <summary>Web research capability; HTTP and search backends stay in the Host adapter.</summary>
-    public interface IWebSearch
-    {
-        Task<WebSearchResult?> SearchAsync(string query, CancellationToken ct);
-        Task<(string? Text, string? Error)> ReadPageAsync(string url, CancellationToken ct);
-    }
-}
-
 namespace BotAgent.Services.Voice
 {
-    /// <summary>Voice pacing/decision use case owned by the Host until the capability migration lands.</summary>
+    /// <summary>Voice pacing/decision &amp; STT use case owned by the Host.</summary>
     public interface IVoiceUseCase
     {
         int SuggestIntervalSeconds { get; }
+        int MaxSttDurationSeconds => 60;
         string? ClientVoiceName { get; }
+        bool IsSttEnabled => false;
         bool Allow(string sourceKey, out string reason);
         List<string> BuildSpeakUrls(IReadOnlyList<string> parts, string? emotion, double? speed, int? pitch);
         void MarkSent(string sourceKey);
+        Task<(string? Transcript, string ReasonCode)> TranscribeAsync(byte[] audioData, string fileName, CancellationToken ct = default)
+            => Task.FromResult<(string?, string)>((null, "stt_unavailable"));
+        Task<(string? Transcript, string ReasonCode)> TranscribeFromUrlAsync(string audioUrl, string fileName, CancellationToken ct = default)
+            => Task.FromResult<(string?, string)>((null, "stt_unavailable"));
+    }
+}
+
+namespace BotAgent.Services.Documents
+{
+    /// <summary>Inbound document staging and bounded auto-preview port owned by the Host.</summary>
+    public interface IInboundDocumentProcessor
+    {
+        bool IsAutoExtractEnabled => false;
+        Task<string?> ProcessInboundAsync(
+            string sourceKey,
+            InboundFileAttachment attachment,
+            byte[]? resolvedData,
+            string? resolvedUrl,
+            CancellationToken ct = default);
     }
 }
 
@@ -105,25 +119,13 @@ namespace BotAgent.Services.Music
     {
         bool IsReady { get; }
         Task<string?> DescribeShareAsync(MusicShare share, string sender);
+        Task<string?> DescribeShareAsync(MusicShare share, string sender, CancellationToken ct) => DescribeShareAsync(share, sender);
         void AddNote(string sourceKey, string note);
         string? TakeNote(string sourceKey);
         bool TryBeginListen(string sourceKey, int cooldownSeconds, out string reason);
         Task<string?> ListenAsync(string sourceKey, string song, string requester, CancellationToken ct = default);
         Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default);
-    }
-}
-
-namespace BotAgent.Services.Net
-{
-    /// <summary>Research orchestration use case owned by the Host until the capability migration lands.</summary>
-    public interface IResearchUseCase
-    {
-        bool IsReady { get; }
-        bool TryBeginSearch(string sourceKey, int cooldownSeconds, out string reason);
-        Task<WebSearchResult?> SearchAsync(string sourceKey, string query, CancellationToken ct = default);
-        Task<string?> ReadPageAsync(string sourceKey, string url, CancellationToken ct = default);
-        void AddNote(string sourceKey, string note);
-        void KeepNote(string sourceKey, string? note, string why);
-        string? TakeNote(string sourceKey);
+        async Task<BotAgent.Services.Qq.SendResult> ShareWithReceiptAsync(string song, bool isGroup, long targetId, CancellationToken ct = default)
+            => new(await ShareAsync(song, isGroup, targetId, ct).ConfigureAwait(false));
     }
 }

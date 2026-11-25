@@ -94,7 +94,8 @@ public sealed class OwnMessageLedger
 
     public void Remember(ConversationId conversation, SendResult sent, string text)
     {
-        if (!sent.Ok || sent.MessageId <= 0 || string.IsNullOrWhiteSpace(text))
+        text = sent.DeliveredText ?? text;
+        if (!sent.Ok || sent.Delivery is { IsSuccess: false } || sent.MessageId <= 0 || string.IsNullOrWhiteSpace(text))
         {
             return;
         }

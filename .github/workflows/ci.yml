@@ -42,6 +42,18 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
+      - name: Build official marketplace plugins for test fixtures
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/bot-agent-plugins"
+          git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
+          git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
+          python3 -m pip install --quiet jsonschema referencing
+          dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
+          python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
+          echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
       - name: Restore the whole solution (high/critical NuGet audit gate)
         # 一条 restore 覆盖 BotAgent.slnx 里的全部工程（#123 把 slnx 补到 30 个工程，
         # 不再靠手写 22 行 restore 追着磁盘跑）。
@@ -51,21 +63,17 @@ jobs:
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
-      - name: Version single source and tag consistency
-        # #122：版本号只能有一个真源（Directory.Build.props），且发版 tag 必须与它一致。
+      - name: Version ownership and host tag consistency
+        # 每个明确登记的包/契约各有一个版本真源；宿主仍使用 Directory.Build.props。
         # 用编译出来的程序集反查 --version，等于同时验证"代码里没有偷偷写死版本"。
         shell: bash
         run: |
           set -euo pipefail
+          dotnet run --project tests/BotAgent.ArchitectureProbe/BotAgent.ArchitectureProbe.csproj -c Release --no-restore -- --versions
           props_version="$(sed -n 's#.*<Version>\([^<]*\)</Version>.*#\1#p' Directory.Build.props | head -1)"
           echo "Directory.Build.props <Version> = ${props_version:-<missing>}"
           if [ -z "${props_version:-}" ]; then
             echo "::error::Directory.Build.props 里没有 <Version>"
-            exit 1
-          fi
-          offenders="$(grep -rl --include='*.csproj' '<Version>' . || true)"
-          if [ -n "$offenders" ]; then
-            echo "::error::这些 csproj 又各自写了 <Version>（会压过唯一真源）：$offenders"
             exit 1
           fi
           cli_version="$(dotnet src/BotAgent.Headless/bin/Release/net10.0/BotAgent.Headless.dll --version | awk '{print $2}')"
@@ -138,7 +146,10 @@ jobs:
           dotnet run --project tests/BotAgent.ReverseTransportProbe/BotAgent.ReverseTransportProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.DeadlineGateProbe/BotAgent.DeadlineGateProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.FeishuRemediationProbe/BotAgent.FeishuRemediationProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.SettingsScopeProbe/BotAgent.SettingsScopeProbe.csproj -c Release --no-build -- --configuration-startup
+          dotnet run --project tests/BotAgent.SchedulerProbe/BotAgent.SchedulerProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.SsrfProbe/BotAgent.SsrfProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.McpProbe/BotAgent.McpProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.ZbaProbe/BotAgent.ZbaProbe.csproj -c Release --no-restore
@@ -152,13 +163,41 @@ jobs:
         run: |
           dotnet run --project tests/BotAgent.ProtocolProbe/BotAgent.ProtocolProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginPackageProbe/BotAgent.PluginPackageProbe.csproj -c Release --no-build -- --deployment-preflight
           dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-restore
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --default-bundle
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --d2-delivery-combo
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --d3-d5-acceptance
+          dotnet run --project tests/BotAgent.PluginMarketProbe/BotAgent.PluginMarketProbe.csproj -c Release --no-build -- --dynamic-configuration
           dotnet run --project tests/BotAgent.PluginSettingsProbe/BotAgent.PluginSettingsProbe.csproj -c Release --no-restore
           dotnet run --project tests/BotAgent.PythonWorkerProbe/BotAgent.PythonWorkerProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.PythonCleanupProbe/BotAgent.PythonCleanupProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.PythonAgentProbe/BotAgent.PythonAgentProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.PythonMarketProbe/BotAgent.PythonMarketProbe.csproj -c Release --no-restore -- "$(command -v python)"
           dotnet run --project tests/BotAgent.SnapshotProbe/BotAgent.SnapshotProbe.csproj -c Release --no-restore
+
+  official-windows-recovery:
+    name: Official delivery recovery on Windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Build official identity and delivery probe
+        run: dotnet build tests/BotAgent.OfficialIdentityProbe/BotAgent.OfficialIdentityProbe.csproj -c Release
+      - name: Verify bounded exclusive ownership recovery
+        run: dotnet tests/BotAgent.OfficialIdentityProbe/bin/Release/net10.0/BotAgent.OfficialIdentityProbe.dll --windows-recovery-only
+      - name: Verify all nine process termination phases
+        run: dotnet tests/BotAgent.OfficialIdentityProbe/bin/Release/net10.0/BotAgent.OfficialIdentityProbe.dll --crash-only
 
   web:
     name: Web build and browser tests
@@ -227,6 +266,10 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: src/web/package-lock.json
+      - name: Install Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
       - name: Install dependencies
         run: npm ci
       - name: Build static assets
@@ -234,6 +277,18 @@ jobs:
       - name: Build Headless host for end-to-end tests
         working-directory: .
         run: dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release
+      - name: Build official marketplace plugins for test fixtures
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/bot-agent-plugins"
+          git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
+          git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
+          python3 -m pip install --quiet jsonschema referencing
+          dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
+          python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
+          echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
       - name: Install Playwright browser
         run: npx playwright install --with-deps ${{ matrix.engine }}
       - name: Browser end-to-end tests
@@ -266,7 +321,7 @@ jobs:
           # （备份恢复 / 供应商热重建 / 旧入口版本校验）**故意**留在这组里，别再按名字里的范围理解。
           # 新增场景必须加进本矩阵：ArchitectureProbe 会断言「Program.cs 注册的场景 == 矩阵场景」。
           - name: "Governance & Multi-Platform (S32-S55)"
-            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s153"
+            scenarios: "s32,s34,s35,s36,s37,s38,s39,s40,s41,s42,s43,s44,s45,s46,s47,s48,s49,s50,s51,s52,s53,s54,s55,s56,s57,s58,s59,s60,s61,s62,s63,s64,s65,s66,s67,s68,s69,s70,s71,s72,s73,s74,s75,s76,s77,s78,s79,s153,s154,s155,s156,s157,s162,s163,s164,s165,s166"
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -278,6 +333,10 @@ jobs:
           dotnet-version: 10.0.x
           cache: true
           cache-dependency-path: '**/*.csproj'
+      - name: Install Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
       - name: Restore core and harness (high/critical NuGet audit gate)
         # Both projects independently audit all dependencies; NU1903/NU1904 fail their restores.
         run: |
@@ -287,6 +346,18 @@ jobs:
         run: |
           dotnet build src/BotAgent.Headless/BotAgent.Headless.csproj -c Release --no-restore
           dotnet build tests/BotAgent.IntegrationHarness/BotAgent.IntegrationHarness.csproj -c Release --no-restore
+      - name: Build official marketplace plugins for test fixtures
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/bot-agent-plugins"
+          git -C "$RUNNER_TEMP/bot-agent-plugins" fetch --depth 1 https://github.com/ZhaoJun233/bot-agent-plugins.git 3c62467b49d39fa715d14250287df820004ad5ec
+          git -C "$RUNNER_TEMP/bot-agent-plugins" checkout --detach FETCH_HEAD
+          python3 -m pip install --quiet jsonschema referencing
+          dotnet build "$RUNNER_TEMP/bot-agent-plugins/OfficialPlugins.slnx" -c Release
+          python3 "$RUNNER_TEMP/bot-agent-plugins/tools/build_official_releases.py" --output "$RUNNER_TEMP/bot-agent-plugins/artifacts/official-releases"
+          echo "BOTAGENT_OFFICIAL_PLUGINS_DIR=$RUNNER_TEMP/bot-agent-plugins" >> "$GITHUB_ENV"
       - name: Run synthetic integration suite
         env:
           # 规范名优先（N1）：harness 仍兼容旧 QQCHAT_IT_ONLY，但新配置一律写 BOTAGENT_*。

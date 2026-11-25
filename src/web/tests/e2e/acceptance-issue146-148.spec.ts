@@ -2,9 +2,14 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 
 const pages = [
-  ['overview', '概览', 'overview'], ['capabilities', '能力', 'capabilities'],
-  ['configuration', '配置', 'configuration'], ['tasks', '任务', 'tasks'],
-  ['traces', '诊断', 'traces'], ['logs', '运行日志', 'runtime-logs-page'],
+  ['overview', '概览', 'overview'],
+  ['providers', '模型供应商', 'providers-page'],
+  ['platforms', '消息平台', 'platforms-page'],
+  ['plugins', '插件中心', 'plugins-page'],
+  ['configuration', '系统配置', 'system-configuration'],
+  ['tasks', '任务', 'tasks'],
+  ['traces', '轨迹与缓存', 'traces'],
+  ['logs', '运行日志', 'runtime-logs-page'],
 ] as const
 
 async function connect(page: Page, theme: string, info: TestInfo): Promise<void> {
@@ -103,7 +108,7 @@ async function capture(page: Page, info: TestInfo, label: string) {
 
 for (const theme of ['light', 'dark']) {
   for (const width of [320, 390, 768, 1280]) {
-    test(`inventory ${theme} ${width}px: six main views`, async ({ page }, info) => {
+    test(`inventory ${theme} ${width}px: eight main views`, async ({ page }, info) => {
       await page.setViewportSize({ width, height: 900 })
       await connect(page, theme, info)
       await page.evaluate(value => { document.documentElement.dataset.theme = value }, theme)
@@ -116,7 +121,7 @@ for (const theme of ['light', 'dark']) {
       await page.getByTestId('config-enable-admin').click()
       await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
       await capture(page, info, `${theme}-${width}-configuration-admin`)
-      await page.getByTestId('nav-capabilities').click()
+      await page.getByTestId('nav-providers').click()
       await page.getByTestId('cap-add-provider').click()
       await expect(page.getByTestId('provider-editor')).toBeVisible()
       await capture(page, info, `${theme}-${width}-provider-dialog`)

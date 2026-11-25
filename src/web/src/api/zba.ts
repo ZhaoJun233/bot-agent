@@ -1,9 +1,68 @@
+import { QuotaApi, type ZbaQuotaPage, type ZbaQuotaSaveRequest, type ZbaQuotaSaveResult, type ZbaQuotaFindResult } from '../../../../contracts/ui/quotas/quotas'
+export type { ZbaQuota, ZbaQuotaPage, ZbaQuotaSaveRequest, ZbaQuotaSaveResult, ZbaQuotaFindResult } from '../../../../contracts/ui/quotas/quotas'
 import { hasValidPluginRuntime, type PythonPluginRuntime } from './plugin-runtime'
+import { hasValidSharedContracts, type PluginSharedContract } from './plugin-shared-contracts'
+import { hasValidPluginData, type PluginPackageData } from './plugin-data'
+import { hasValidPluginConfiguration, type PluginConfigurationDeclaration } from './plugin-configuration'
+import {
+  hasValidPluginUi,
+  isPluginBundlePreview,
+  isPluginUiSession,
+  isPluginUiSessionClosed,
+  type PluginUiDeclaration,
+  type ZbaPluginBundlePreview,
+  type ZbaPluginUiSession,
+  type ZbaPluginUiSessionClosed,
+} from './plugin-ui'
+import { hasValidSettingNumberConstraints, type PluginSettingNumberConstraints } from './plugin-setting-numbers'
 import { isPluginGovernance, isPluginGovernanceSource, type PluginGovernance, type PluginGovernanceSource } from './plugin-governance'
 import { isPluginLifecyclePreview, matchesLifecycleSelection, type PluginLifecyclePreview, type PluginLifecyclePreviewRequest } from './plugin-lifecycle'
 import { isBuiltinPluginList, isPluginPresentation, type PluginPresentationMetadata, type ZbaBuiltinPlugin } from './plugin-presentation'
+import {
+  isConversationProfileView,
+  parseConversationProfileAddress,
+  type ZbaConversationProfileEdit,
+  type ZbaConversationProfileKey,
+  type ZbaConversationProfileView
+} from './zba-profiles'
+
+export * from './zba-profiles'
+import {
+  isPersonalTodosResponse,
+  isPersonalTodoWriteResult,
+  isSchedulerJobsResponse,
+  isSchedulerRunsResponse,
+  isSchedulerWriteResult,
+  type ZbaPersonalTodoDeleteRequest,
+  type ZbaPersonalTodoSaveRequest,
+  type ZbaPersonalTodosResponse,
+  type ZbaPersonalTodoWriteResult,
+  type ZbaSchedulerDeleteRequest,
+  type ZbaSchedulerJobsResponse,
+  type ZbaSchedulerRunsRequest,
+  type ZbaSchedulerRunsResponse,
+  type ZbaSchedulerSaveRequest,
+  type ZbaSchedulerWriteResult
+} from './zba-scheduler'
+import {
+  isWorkspaceClearResult,
+  isWorkspaceIdentityResponse,
+  isWorkspaceMessagesResponse,
+  isWorkspaceSendResult,
+  type ZbaWorkspaceClearResult,
+  type ZbaWorkspaceIdentityResponse,
+  type ZbaWorkspaceIdentityToggleRequest,
+  type ZbaWorkspaceMessagesResponse,
+  type ZbaWorkspaceSendRequest,
+  type ZbaWorkspaceSendResult
+} from './zba-workspace'
+export * from './zba-scheduler'
+export * from './zba-workspace'
 import { isPluginInstallPreview, isPluginSourceDiscovery, type PluginInstallPreview, type PluginPreviewRequest, type PluginSourceDiscovery } from './plugin-import'
 import { TaskObservation, type TaskObservationSnapshot } from './task-observation'
+import { isMessagingSnapshot, type MessagingCapabilitySnapshot } from './messaging-capabilities'
+import { isPluginMetadataFailures, type PluginPackageMetadataFailure } from './plugin-metadata'
+import { isOperationFindResult, type OperationFindResult } from './operation-recovery'
 
 export interface ZbaHealth {
   status: string
@@ -318,6 +377,7 @@ export interface ZbaManagedPage {
 export interface ZbaManagedInspectResult {
   code: ZbaManagedResultCode
   descriptor?: ZbaManagedDescriptor
+  messaging?: MessagingCapabilitySnapshot | null
 }
 
 export interface ZbaManagedReceipt {
@@ -472,6 +532,7 @@ export interface ZbaRegisteredConfigurationView {
   plugins: ZbaPluginConfigurationView[]
   providers: ZbaProviderConfigurationView[]
   modelCredentials?: Array<{ key: string; configured: boolean; keyUsable: boolean }>
+  conversationProfiles?: ZbaConversationProfileView[]
 }
 
 /** `platform` 分区除通用字段外还带策略列表；其余分区只按字段名索引。 */
@@ -493,7 +554,10 @@ export interface ZbaConfigurationView {
 
 export interface ZbaFieldAddress {
   field: number
-  object: { kind: 'policy'; target: ZbaPolicyTarget } | null
+  object:
+    | { kind: 'policy'; target: ZbaPolicyTarget }
+    | { kind: 'conversationProfile'; key: ZbaConversationProfileKey }
+    | null
 }
 
 export interface ZbaConfigurationRuntimeEffect {
@@ -587,6 +651,7 @@ export interface ZbaRegisteredConfigurationPatch {
   plugins: unknown[]
   policies: ZbaPolicyEdit[]
   providers: ZbaProviderNameEdit[]
+  conversationProfiles?: ZbaConversationProfileEdit[]
 }
 
 export type ZbaConfigurationPatch =
@@ -671,6 +736,7 @@ export interface ZbaPluginSettingDefinition {
   defaultValue?: string | null
   required?: boolean
   choices?: string[] | null
+  numberConstraints?: PluginSettingNumberConstraints | null
 }
 
 export interface ZbaPluginDependency {
@@ -691,6 +757,14 @@ export interface ZbaPluginPackageManifest {
   minimumHostVersion?: string | null
   permissions?: string[] | null
   dependencies?: ZbaPluginDependency[] | null
+  sharedContracts?: PluginSharedContract[] | null
+  data?: PluginPackageData | null
+  control?: boolean
+  toolApiVersion?: number | null
+  configuration?: PluginConfigurationDeclaration | null
+  ui?: PluginUiDeclaration | null
+  adoption?: 'cold' | 'online' | null
+  exclusiveResources?: string[] | null
   settings?: ZbaPluginSettingDefinition[] | null
 }
 
@@ -726,6 +800,7 @@ export interface ZbaPluginCatalogQuery {
 }
 
 export interface ZbaPluginCatalog {
+  metadataFailures?: PluginPackageMetadataFailure[]
   governanceSource?: PluginGovernanceSource
   metadataNotice?: string
   revision: string
@@ -742,6 +817,7 @@ export interface ZbaPluginSourceResolution {
 }
 
 export interface ZbaInstalledPlugins {
+  metadataFailures?: PluginPackageMetadataFailure[]
   governanceSource?: PluginGovernanceSource
   revision: string
   plugins: ZbaPluginCatalogItem[]
@@ -814,30 +890,131 @@ export interface ZbaPluginSettingsSaveRequest {
   idempotencyKey: string
   edits: ZbaPluginSettingEdit[]
 }
-export interface ZbaQuota {
-  sourceKey: string
-  displayName: string
-  revision: string
-  dailyTokenLimit: number
-  usedPromptTokens: number
-  usedCompletionTokens: number
-  usedTokens: number
-  remainingTokens: number
-  resetDate: string
-  nextResetAt: string
-  energySaving: boolean
-  minimumDailyTokenLimit: number
-  maximumDailyTokenLimit: number
+
+export type WorkspaceRoleValue = 0 | 1 | 2 | 3 | 4
+
+export interface ZbaMcpServerView {
+  id: string
+  enabled: boolean
+  source: string
+  readOnlyLocked: boolean
+  endpoint: string
+  allowedTools: string[]
+  readOnlyTools: string[]
+  callTimeoutSeconds: number
+  maxResultBytes: number
+  hasAuthToken: boolean
 }
-export interface ZbaQuotaPage { items: ZbaQuota[] }
-export interface ZbaQuotaSaveRequest {
-  sourceKey: string
-  expectedRevision: string
+
+export interface ZbaMcpDiscoveredToolView {
+  name: string
+  qualifiedName: string
+  serverId: string
+  description: string
+  readOnlyHint: boolean
+  readOnlyConfirmed: boolean
+}
+
+export interface ZbaMcpServersResponse {
+  revision: number
+  allowPrivate: boolean
+  servers: ZbaMcpServerView[]
+  discoveredTools: ZbaMcpDiscoveredToolView[]
+}
+
+export interface ZbaMcpServerSaveRequest {
+  expectedRevision: number
   idempotencyKey: string
-  dailyTokenLimit: number
+  id: string
+  enabled: boolean
+  endpoint: string
+  allowedTools: string[]
+  readOnlyTools?: string[]
+  callTimeoutSeconds?: number
+  maxResultBytes?: number
+  authToken?: string | null
+  clearAuthToken?: boolean
 }
-export interface ZbaQuotaSaveResult { quota: ZbaQuota }
-export type ZbaQuotaFindResult = { found: false; quota?: never } | { found: true; quota: ZbaQuota }
+
+export interface ZbaMcpServerDeleteRequest {
+  expectedRevision: number
+  idempotencyKey: string
+  id: string
+}
+
+export interface ZbaMcpServerWriteResult {
+  ok: boolean
+  replayed: boolean
+  reasonCode?: string | null
+  snapshot: ZbaMcpServersResponse
+}
+
+export interface ZbaMcpServerTestRequest {
+  endpoint: string
+  id?: string | null
+  authToken?: string | null
+  callTimeoutSeconds?: number
+}
+
+export interface ZbaMcpProbeToolView {
+  name: string
+  description: string
+  readOnlyHint: boolean
+}
+
+export interface ZbaMcpServerTestResult {
+  ok: boolean
+  reasonCode: string
+  tools: ZbaMcpProbeToolView[]
+}
+
+export interface ZbaMcpReloadResult {
+  ok: boolean
+  toolCount: number
+  snapshot: ZbaMcpServersResponse
+}
+
+export interface ZbaAccessRoleItem {
+  platformId: string
+  accountScope: string
+  instanceId: string
+  scopeConversationKey?: string | null
+  scopeConversationKeyRaw?: string | null
+  nativeUserId: string
+  nativeUserIdRaw?: string | null
+  role: WorkspaceRoleValue
+  note?: string | null
+  noteRaw?: string | null
+}
+
+export interface ZbaAccessRolesResponse {
+  revision: number
+  masked: boolean
+  items: ZbaAccessRoleItem[]
+}
+
+export interface ZbaAccessRoleBindingInput {
+  platformId: string
+  accountScope: string
+  instanceId: string
+  scopeConversationKey?: string | null
+  nativeUserId: string
+  role: WorkspaceRoleValue
+  note?: string | null
+}
+
+export interface ZbaAccessRolesSaveRequest {
+  expectedRevision: number
+  idempotencyKey: string
+  bindings: ZbaAccessRoleBindingInput[]
+}
+
+export interface ZbaAccessRolesSaveResult {
+  ok: boolean
+  replayed: boolean
+  reasonCode?: string | null
+  snapshot: ZbaAccessRolesResponse
+}
 
 export class ZbaRequestError extends Error {
   readonly status: number
@@ -957,22 +1134,61 @@ export class ZbaClient {
     return { ...result, runtimeEffects: parseRuntimeEffects(result.runtimeEffects) }
   }
 
-  listQuotas(): Promise<ZbaQuotaPage> {
-    return this.request('/quotas', { method: 'GET' }, 'required', isQuotaPage)
+  private readonly quotaApi = new QuotaApi((path, init, validate) => this.request(path, init, 'required', validate))
+  listQuotas(): Promise<ZbaQuotaPage> { return this.quotaApi.listQuotas() }
+  saveQuota(request: ZbaQuotaSaveRequest): Promise<ZbaQuotaSaveResult> { return this.quotaApi.saveQuota(request) }
+  findQuota(idempotencyKey: string): Promise<ZbaQuotaFindResult> { return this.quotaApi.findQuota(idempotencyKey) }
+
+  listMcpServers(): Promise<ZbaMcpServersResponse> {
+    return this.request('/mcp/servers', { method: 'GET' }, 'required', isMcpServersResponse)
   }
 
-  /** One explicit CAS write; never replay automatically. */
-  saveQuota(request: ZbaQuotaSaveRequest): Promise<ZbaQuotaSaveResult> {
-    return this.request('/quotas/save', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request)
-    }, 'required', (value): value is ZbaQuotaSaveResult => isQuotaSaveResult(value)
-      && value.quota.sourceKey === request.sourceKey && value.quota.dailyTokenLimit === request.dailyTokenLimit)
+  saveMcpServer(request: ZbaMcpServerSaveRequest): Promise<ZbaMcpServerWriteResult> {
+    return this.request('/mcp/servers/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    }, 'required', isMcpServerWriteResult)
   }
 
-  findQuota(idempotencyKey: string): Promise<ZbaQuotaFindResult> {
-    return this.request('/quotas/find', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idempotencyKey })
-    }, 'required', isQuotaFindResult)
+  deleteMcpServer(request: ZbaMcpServerDeleteRequest): Promise<ZbaMcpServerWriteResult> {
+    return this.request('/mcp/servers/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    }, 'required', isMcpServerWriteResult)
+  }
+
+  testMcpServer(request: ZbaMcpServerTestRequest): Promise<ZbaMcpServerTestResult> {
+    return this.request('/mcp/servers/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    }, 'required', isMcpServerTestResult)
+  }
+
+  reloadMcpServers(): Promise<ZbaMcpReloadResult> {
+    return this.request('/mcp/reload', { method: 'POST' }, 'required', isMcpReloadResult)
+  }
+
+  listAccessRoles(): Promise<ZbaAccessRolesResponse> {
+    return this.request('/permissions/roles', { method: 'GET' }, 'required', isAccessRolesResponse)
+  }
+
+  saveAccessRoles(request: ZbaAccessRolesSaveRequest): Promise<ZbaAccessRolesSaveResult> {
+    return this.request('/permissions/roles/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    }, 'required', isAccessRolesSaveResult)
+  }
+
+  /** Safe evidence only; this lookup never executes or resubmits an operation. */
+  findOperation(owner: string, idempotencyKey: string): Promise<OperationFindResult> {
+    return this.request('/operations/find', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ owner, idempotencyKey })
+    }, 'required', (value): value is OperationFindResult => isOperationFindResult(value)
+      && (!value.found || value.receipt.owner === owner))
   }
 
   /** Discovery uses only the saved provider on the host, never a browser vendor request. */
@@ -1100,6 +1316,32 @@ export class ZbaClient {
     if (!response.ok) throw this.errorFrom(response)
     if (!isPluginSettings(response.data)) throw this.invalidResponse(response)
     return response.data
+  }
+
+  openPluginUiSession(id: string): Promise<ZbaPluginUiSession> {
+    return this.request(`/plugins/${encodeURIComponent(id)}/ui/sessions`, { method: 'POST' }, 'required', isPluginUiSession)
+  }
+
+  closePluginUiSession(id: string, sessionId: string): Promise<ZbaPluginUiSessionClosed> {
+    return this.request(`/plugins/${encodeURIComponent(id)}/ui/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }, 'required', isPluginUiSessionClosed)
+  }
+
+  previewPluginBundle(manifests: ZbaPluginPackageManifest[]): Promise<ZbaPluginBundlePreview> {
+    return this.request('/plugins/bundle/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manifests }),
+    }, 'required', isPluginBundlePreview)
+  }
+
+  applyPluginBundle(request: {
+    manifests: ZbaPluginPackageManifest[]
+    expectedRevision: string
+    idempotencyKey: string
+    trustAcknowledged: boolean
+    previewId?: string | null
+  }): Promise<ZbaPluginOperationResult> {
+    return this.mutatePlugin('/plugins/bundle/apply', request)
   }
 
   /** 插件变更的共享发送路径：先验 HTTP 状态，再认回执形状。 */
@@ -1435,6 +1677,70 @@ export class ZbaClient {
     throw this.invalidResponse(response)
   }
 
+  // ── Phase 5：定时提醒、个人待办与个人工作台 ────────────────────────────────────
+
+  listScheduledJobs(): Promise<ZbaSchedulerJobsResponse> {
+    return this.request('/scheduler/jobs', { method: 'GET' }, 'required', isSchedulerJobsResponse)
+  }
+
+  saveScheduledJob(req: ZbaSchedulerSaveRequest): Promise<ZbaSchedulerWriteResult> {
+    return this.request('/scheduler/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isSchedulerWriteResult)
+  }
+
+  deleteScheduledJob(req: ZbaSchedulerDeleteRequest): Promise<ZbaSchedulerWriteResult> {
+    return this.request('/scheduler/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isSchedulerWriteResult)
+  }
+
+  listScheduledRuns(req: ZbaSchedulerRunsRequest = {}): Promise<ZbaSchedulerRunsResponse> {
+    return this.request('/scheduler/runs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isSchedulerRunsResponse)
+  }
+
+  listPersonalTodos(): Promise<ZbaPersonalTodosResponse> {
+    return this.request('/todos', { method: 'GET' }, 'required', isPersonalTodosResponse)
+  }
+
+  savePersonalTodo(req: ZbaPersonalTodoSaveRequest): Promise<ZbaPersonalTodoWriteResult> {
+    return this.request('/todos/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isPersonalTodoWriteResult)
+  }
+
+  deletePersonalTodo(req: ZbaPersonalTodoDeleteRequest): Promise<ZbaPersonalTodoWriteResult> {
+    return this.request('/todos/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isPersonalTodoWriteResult)
+  }
+
+  readWorkspaceMessages(): Promise<ZbaWorkspaceMessagesResponse> {
+    return this.request('/workspace/messages', { method: 'GET' }, 'required', isWorkspaceMessagesResponse)
+  }
+
+  sendWorkspaceMessage(req: ZbaWorkspaceSendRequest): Promise<ZbaWorkspaceSendResult> {
+    return this.request('/workspace/messages/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isWorkspaceSendResult, 90_000)
+  }
+
+  clearWorkspaceMessages(): Promise<ZbaWorkspaceClearResult> {
+    return this.request('/workspace/messages/clear', { method: 'POST' }, 'required', isWorkspaceClearResult)
+  }
+
+  readWorkspaceIdentity(): Promise<ZbaWorkspaceIdentityResponse> {
+    return this.request('/workspace/identity', { method: 'GET' }, 'required', isWorkspaceIdentityResponse)
+  }
+
+  toggleWorkspaceIdentity(req: ZbaWorkspaceIdentityToggleRequest): Promise<ZbaWorkspaceIdentityResponse> {
+    return this.request('/workspace/identity/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req)
+    }, 'required', isWorkspaceIdentityResponse)
+  }
+
   /**
    * 只读地确认当前 Bearer 是否具备 admin 角色：
 
@@ -1444,7 +1750,16 @@ export class ZbaClient {
    * 404 必须带 task_not_found 才算“路由可达且已授权”；代理误配/旧版本返回的
    * 其它 404 不能把只读令牌误显示为管理员。
    */
-  async checkAdmin(): Promise<boolean> {
+  async checkAdmin(useControlRecovery = false): Promise<boolean> {
+    if (useControlRecovery) {
+      try {
+        await this.findOperation('control.permission-check', 'control-permission-check')
+        return true
+      } catch (cause) {
+        if (cause instanceof ZbaRequestError && cause.status === 403) return false
+        throw cause
+      }
+    }
     const response = await this.fetchJson('/tasks/s1-permission-check/result', { method: 'GET' })
     if (response.status === 403) return false
 
@@ -1463,9 +1778,10 @@ export class ZbaClient {
     path: string,
     init: RequestInit,
     auth: AuthMode,
-    decode: (value: unknown) => value is T
+    decode: (value: unknown) => value is T,
+    timeoutMs?: number
   ): Promise<T> {
-    const response = await this.fetchJson(path, init, auth)
+    const response = await this.fetchJson(path, init, auth, timeoutMs)
     if (!response.ok) throw this.errorFrom(response)
     if (!decode(response.data)) throw this.invalidResponse(response)
     return response.data
@@ -1482,7 +1798,8 @@ export class ZbaClient {
   private async fetchJson(
     path: string,
     init: RequestInit,
-    auth: AuthMode = 'required'
+    auth: AuthMode = 'required',
+    timeoutMs?: number
   ): Promise<ZbaResponse> {
     const headers = new Headers(init.headers)
     headers.set('Accept', 'application/json')
@@ -1502,11 +1819,12 @@ export class ZbaClient {
       callerSignal?.addEventListener('abort', cancelRequest, { once: true })
     })
     let timer: ReturnType<typeof setTimeout> | undefined
+    const effectiveTimeoutMs = timeoutMs ?? this.timeoutMs
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         controller.abort()
         reject(new ZbaNetworkError('timeout'))
-      }, this.timeoutMs)
+      }, effectiveTimeoutMs)
     })
 
     const work = (async (): Promise<ZbaResponse> => {
@@ -1561,38 +1879,6 @@ export class ZbaClient {
     const requestId = response.headers.get('X-Request-Id') ?? undefined
     return new ZbaRequestError(response.status, code, message, reason, requestId)
   }
-}
-
-function isQuota(value: unknown): value is ZbaQuota {
-  if (!isRecord(value)) return false
-  for (const key of ['sourceKey', 'displayName', 'revision']) {
-    if (typeof value[key] !== 'string' || !value[key].trim()) return false
-  }
-  for (const key of ['dailyTokenLimit', 'usedPromptTokens', 'usedCompletionTokens', 'usedTokens',
-    'remainingTokens', 'minimumDailyTokenLimit', 'maximumDailyTokenLimit']) {
-    if (typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || value[key] < 0) return false
-  }
-  const minimum = value.minimumDailyTokenLimit as number
-  const maximum = value.maximumDailyTokenLimit as number
-  const limit = value.dailyTokenLimit as number
-  if (minimum > maximum || limit < minimum || limit > maximum || maximum > 2147483647) return false
-  if (typeof value.resetDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.resetDate)
-    || Number.isNaN(Date.parse(value.resetDate))
-    || new Date(value.resetDate).toISOString().slice(0, 10) !== value.resetDate) return false
-  return typeof value.energySaving === 'boolean' && typeof value.nextResetAt === 'string'
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.nextResetAt)
-    && Number.isFinite(Date.parse(value.nextResetAt))
-}
-function isQuotaPage(value: unknown): value is ZbaQuotaPage {
-  return isRecord(value) && Array.isArray(value.items) && value.items.every(isQuota)
-    && new Set(value.items.map((item) => item.sourceKey)).size === value.items.length
-}
-function isQuotaSaveResult(value: unknown): value is ZbaQuotaSaveResult {
-  return isRecord(value) && isQuota(value.quota)
-}
-function isQuotaFindResult(value: unknown): value is ZbaQuotaFindResult {
-  return isRecord(value) && (value.found === true ? isQuota(value.quota)
-    : value.found === false && value.quota === undefined)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2037,7 +2323,8 @@ function isRegisteredView(value: unknown): value is ZbaRegisteredConfigurationVi
     && (provider.credentialConfigured === undefined || typeof provider.credentialConfigured === 'boolean'))
   const credentialsValid = value.modelCredentials === undefined || (Array.isArray(value.modelCredentials) && value.modelCredentials.every((item) =>
     isRecord(item) && typeof item.key === 'string' && typeof item.configured === 'boolean' && typeof item.keyUsable === 'boolean'))
-  return pluginsValid && providersValid && credentialsValid
+  const profilesValid = value.conversationProfiles === undefined || (Array.isArray(value.conversationProfiles) && value.conversationProfiles.every(isConversationProfileView))
+  return pluginsValid && providersValid && credentialsValid && profilesValid
 }
 
 function isConfigurationView(value: unknown): value is ZbaConfigurationView {
@@ -2064,14 +2351,20 @@ function parseRuntimeEffects(value: unknown): ZbaConfigurationRuntimeEffect[] | 
     const address = item.field.object
     let object: ZbaFieldAddress['object'] = null
     if (address != null) {
-      if (!isRecord(address) || address.kind !== 'policy' || !isRecord(address.target)) return []
-      const target = address.target
-      if (target.kind === 'accountDefault' && typeof target.platformId === 'string' && typeof target.accountScope === 'string') {
-        object = { kind: 'policy', target: { kind: 'accountDefault', platformId: target.platformId, accountScope: target.accountScope } }
-      } else if (target.kind === 'instance' && isRecord(target.key) && typeof target.key.platformId === 'string'
-        && typeof target.key.accountScope === 'string' && typeof target.key.instanceId === 'string') {
-        object = { kind: 'policy', target: { kind: 'instance', key: { platformId: target.key.platformId, accountScope: target.key.accountScope, instanceId: target.key.instanceId } } }
-      } else return []
+      if (!isRecord(address)) return []
+      const profileAddress = parseConversationProfileAddress(address)
+      if (profileAddress !== null) {
+        object = profileAddress
+      } else {
+        if (address.kind !== 'policy' || !isRecord(address.target)) return []
+        const target = address.target
+        if (target.kind === 'accountDefault' && typeof target.platformId === 'string' && typeof target.accountScope === 'string') {
+          object = { kind: 'policy', target: { kind: 'accountDefault', platformId: target.platformId, accountScope: target.accountScope } }
+        } else if (target.kind === 'instance' && isRecord(target.key) && typeof target.key.platformId === 'string'
+          && typeof target.key.accountScope === 'string' && typeof target.key.instanceId === 'string') {
+          object = { kind: 'policy', target: { kind: 'instance', key: { platformId: target.key.platformId, accountScope: target.key.accountScope, instanceId: target.key.instanceId } } }
+        } else return []
+      }
     }
     const state: ZbaConfigurationRuntimeEffect['state'] = item.state === 'current' || item.state === 'restartRequired' || item.state === 'applyFailed'
       ? item.state : 'unknown'
@@ -2185,6 +2478,7 @@ function isManagedInspectResult(value: unknown): value is ZbaManagedInspectResul
   return isRecord(value)
     && isInteger(value.code)
     && (value.descriptor === undefined || isManagedDescriptor(value.descriptor))
+    && (value.messaging === undefined || value.messaging === null || isMessagingSnapshot(value.messaging))
 }
 
 function isManagedReceipt(value: unknown): value is ZbaManagedReceipt {
@@ -2316,6 +2610,7 @@ function isPluginSettingDefinition(value: unknown): value is ZbaPluginSettingDef
     && (value.defaultValue === undefined || value.defaultValue === null || typeof value.defaultValue === 'string')
     && (value.required === undefined || typeof value.required === 'boolean')
     && (value.choices === undefined || value.choices === null || isStringArray(value.choices))
+    && hasValidSettingNumberConstraints(value)
 }
 
 function isPluginDependency(value: unknown): value is ZbaPluginDependency {
@@ -2329,6 +2624,10 @@ function isPluginPackageManifest(value: unknown): value is ZbaPluginPackageManif
     || typeof value.id !== 'string' || value.id.length === 0
     || typeof value.version !== 'string' || value.version.length === 0
     || !hasValidPluginRuntime(value)
+    || !hasValidSharedContracts(value)
+    || !hasValidPluginData(value)
+    || !hasValidPluginConfiguration(value)
+    || !hasValidPluginUi(value)
     || typeof value.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(value.sha256)
     || typeof value.downloadUrl !== 'string'
     || !isInteger(value.apiVersion)) return false
@@ -2380,6 +2679,7 @@ function isPluginCatalog(value: unknown): value is ZbaPluginCatalog {
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
     && isBuiltinPluginList(value.builtinPlugins)
+    && isPluginMetadataFailures(value.metadataFailures)
     && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
@@ -2396,6 +2696,7 @@ function isInstalledPlugins(value: unknown): value is ZbaInstalledPlugins {
     && value.plugins.length <= 5000
     && value.plugins.every(isPluginCatalogItem)
     && isBuiltinPluginList(value.builtinPlugins)
+    && isPluginMetadataFailures(value.metadataFailures)
     && (value.governanceSource === undefined || isPluginGovernanceSource(value.governanceSource))
 }
 
@@ -2429,6 +2730,108 @@ function isPluginSettings(value: unknown): value is ZbaPluginSettings {
     && isStringRecord(value.values)
     && isBooleanRecord(value.configuredSecrets)
     && typeof value.restartRequired === 'boolean'
+}
+
+function isOptionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string'
+}
+
+function isWorkspaceRoleValue(value: unknown): value is WorkspaceRoleValue {
+  return isInteger(value) && value >= 0 && value <= 4
+}
+
+function isMcpServerView(value: unknown): value is ZbaMcpServerView {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.enabled === 'boolean'
+    && typeof value.source === 'string'
+    && typeof value.readOnlyLocked === 'boolean'
+    && typeof value.endpoint === 'string'
+    && isStringArray(value.allowedTools)
+    && isStringArray(value.readOnlyTools)
+    && isInteger(value.callTimeoutSeconds)
+    && isInteger(value.maxResultBytes)
+    && typeof value.hasAuthToken === 'boolean'
+}
+
+function isMcpDiscoveredToolView(value: unknown): value is ZbaMcpDiscoveredToolView {
+  return isRecord(value)
+    && typeof value.name === 'string'
+    && typeof value.qualifiedName === 'string'
+    && typeof value.serverId === 'string'
+    && typeof value.description === 'string'
+    && typeof value.readOnlyHint === 'boolean'
+    && typeof value.readOnlyConfirmed === 'boolean'
+}
+
+function isMcpServersResponse(value: unknown): value is ZbaMcpServersResponse {
+  return isRecord(value)
+    && isInteger(value.revision)
+    && typeof value.allowPrivate === 'boolean'
+    && Array.isArray(value.servers)
+    && value.servers.every(isMcpServerView)
+    && Array.isArray(value.discoveredTools)
+    && value.discoveredTools.every(isMcpDiscoveredToolView)
+}
+
+function isMcpServerWriteResult(value: unknown): value is ZbaMcpServerWriteResult {
+  return isRecord(value)
+    && typeof value.ok === 'boolean'
+    && typeof value.replayed === 'boolean'
+    && isOptionalNullableString(value.reasonCode)
+    && isMcpServersResponse(value.snapshot)
+}
+
+function isMcpProbeToolView(value: unknown): value is ZbaMcpProbeToolView {
+  return isRecord(value)
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && typeof value.readOnlyHint === 'boolean'
+}
+
+function isMcpServerTestResult(value: unknown): value is ZbaMcpServerTestResult {
+  return isRecord(value)
+    && typeof value.ok === 'boolean'
+    && typeof value.reasonCode === 'string'
+    && Array.isArray(value.tools)
+    && value.tools.every(isMcpProbeToolView)
+}
+
+function isMcpReloadResult(value: unknown): value is ZbaMcpReloadResult {
+  return isRecord(value)
+    && typeof value.ok === 'boolean'
+    && isInteger(value.toolCount)
+    && isMcpServersResponse(value.snapshot)
+}
+
+function isAccessRoleItem(value: unknown): value is ZbaAccessRoleItem {
+  return isRecord(value)
+    && typeof value.platformId === 'string'
+    && typeof value.accountScope === 'string'
+    && typeof value.instanceId === 'string'
+    && isOptionalNullableString(value.scopeConversationKey)
+    && isOptionalNullableString(value.scopeConversationKeyRaw)
+    && typeof value.nativeUserId === 'string'
+    && isOptionalNullableString(value.nativeUserIdRaw)
+    && isWorkspaceRoleValue(value.role)
+    && isOptionalNullableString(value.note)
+    && isOptionalNullableString(value.noteRaw)
+}
+
+function isAccessRolesResponse(value: unknown): value is ZbaAccessRolesResponse {
+  return isRecord(value)
+    && isInteger(value.revision)
+    && typeof value.masked === 'boolean'
+    && Array.isArray(value.items)
+    && value.items.every(isAccessRoleItem)
+}
+
+function isAccessRolesSaveResult(value: unknown): value is ZbaAccessRolesSaveResult {
+  return isRecord(value)
+    && typeof value.ok === 'boolean'
+    && typeof value.replayed === 'boolean'
+    && isOptionalNullableString(value.reasonCode)
+    && isAccessRolesResponse(value.snapshot)
 }
 
 function parseJson(text: string): unknown {

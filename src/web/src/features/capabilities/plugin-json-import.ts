@@ -1,5 +1,6 @@
 import { isPluginManifest, type PluginPackageManifest } from './plugin-manifest'
-const manifestFields = new Set(['id', 'version', 'targetFramework', 'entryAssembly', 'entryType', 'apiVersion', 'downloadUrl', 'sha256', 'minimumHostVersion', 'permissions', 'settings', 'dependencies', 'runtime'])
+import { hasDuplicatePluginDeclarationKeys } from '../../api/plugin-setting-numbers'
+const manifestFields = new Set(['id', 'version', 'targetFramework', 'entryAssembly', 'entryType', 'apiVersion', 'downloadUrl', 'sha256', 'minimumHostVersion', 'permissions', 'settings', 'dependencies', 'runtime', 'sharedContracts', 'data', 'control', 'toolApiVersion', 'configuration', 'ui', 'adoption', 'exclusiveResources'])
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 function pascalObject(value: unknown, fields: string[]): Record<string, unknown> {
   if (!record(value)) throw new Error('技术清单对象格式无效。')
@@ -16,16 +17,39 @@ export function parsePluginJson(input: string): PluginPackageManifest {
   if (new TextEncoder().encode(input).length > 2 * 1024 * 1024) throw new Error('技术清单超过 2 MiB 限制。')
   let value: unknown
   try { value = JSON.parse(input) } catch { throw new Error('请输入有效的 JSON 技术清单。') }
+  if (hasDuplicatePluginDeclarationKeys(input)) throw new Error('设置声明含重复字段。')
   if (record(value) && 'Id' in value) {
     const mapped = pascalObject(value, [...manifestFields])
     if (mapped.runtime !== undefined) mapped.runtime = pascalObject(mapped.runtime, ['kind', 'protocolVersion', 'entryPoint', 'minimumPythonVersion', 'dependencyMode', 'tools'])
     if (Array.isArray(mapped.dependencies)) mapped.dependencies = mapped.dependencies.map(item => pascalObject(item, ['id', 'version']))
-    if (Array.isArray(mapped.settings)) mapped.settings = mapped.settings.map(item => pascalObject(item, ['key', 'label', 'type', 'defaultValue', 'required', 'choices']))
+    if (Array.isArray(mapped.sharedContracts)) mapped.sharedContracts = mapped.sharedContracts.map(item => pascalObject(item, ['name', 'version', 'sha256', 'owner']))
+    if (mapped.data !== undefined && mapped.data !== null) {
+      const data = pascalObject(mapped.data, ['tables', 'statePrefixes', 'usage', 'audit', 'receipt'])
+      if (data.receipt !== undefined && data.receipt !== null) data.receipt = pascalObject(data.receipt, ['contract', 'version'])
+      mapped.data = data
+    }
+    if (mapped.configuration !== undefined && mapped.configuration !== null) {
+      const configuration = pascalObject(mapped.configuration, ['apiVersion', 'bindings'])
+      if (Array.isArray(configuration.bindings)) configuration.bindings = configuration.bindings.map(item =>
+        pascalObject(item, ['key', 'legacyFieldId', 'readOnly', 'trim']))
+      mapped.configuration = configuration
+    }
+    if (mapped.ui !== undefined && mapped.ui !== null) {
+      const ui = pascalObject(mapped.ui, ['contractVersion', 'entry', 'assets', 'allowedActions', 'kind', 'title'])
+      if (Array.isArray(ui.assets)) ui.assets = ui.assets.map(item =>
+        pascalObject(item, ['path', 'sha256', 'contentType']))
+      mapped.ui = ui
+    }
+    if (Array.isArray(mapped.settings)) mapped.settings = mapped.settings.map(item => {
+      const field = pascalObject(item, ['key', 'label', 'type', 'defaultValue', 'required', 'choices', 'numberConstraints'])
+      if (field.numberConstraints != null) field.numberConstraints = pascalObject(field.numberConstraints, ['minimum', 'maximum', 'integer'])
+      return field
+    })
     value = mapped
   }
   if (record(value)) {
     const fields = value
-    if (fields.apiVersion === 2 && ['entryAssembly', 'entryType', 'targetFramework'].some(key => key in fields)) throw new Error('Python v2 清单不能包含 .NET 入口字段。')
+    if (fields.apiVersion === 2 && ['entryAssembly', 'entryType', 'targetFramework', 'ui'].some(key => key in fields)) throw new Error('Python v2 清单不能包含 .NET 入口或 UI 字段。')
     if (value.apiVersion !== 2 && 'runtime' in value) throw new Error('清单含非技术字段：.NET v1 清单不能指定 runtime。')
     value = { ...value, apiVersion: value.apiVersion === undefined ? 1 : value.apiVersion,
       ...(value.apiVersion === 2 ? {} : { targetFramework: value.targetFramework ?? 'net10.0' }) }

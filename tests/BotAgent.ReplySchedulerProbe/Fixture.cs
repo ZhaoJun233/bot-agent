@@ -32,30 +32,25 @@ namespace BotAgent.Services.Conversations { internal static class ProbeNamespace
 namespace BotAgent.Services.Reply
 {
     public sealed record ChatDeliveryReport(bool AnyChatSent, bool CompleteChatReply);
-    public enum PendingReplyIntent { Ordinary, Explicit, AcceptedResult }
     public sealed partial class ReplyPipeline
     {
-        // Legacy queues are excluded from this isolation fixture; real transitions have their own Engine-linked probe.
-        private sealed record LegacyPacingTransition;
-        private static LegacyPacingTransition RetireLegacyForPacing() => new();
-        private static void DispatchLegacyTransition(LegacyPacingTransition transition) { }
         private readonly object _source = new();
         private readonly ProbePermissions _whitelist = new();
         private readonly ProbePolicies _platformPolicies = new();
         private readonly ProbeHooks _hooks = new();
+        private readonly ProbeTraces _traces = new();
         private readonly ProbeSender _plain = new();
         private readonly object _pendingGate = new();
         private readonly ConcurrentDictionary<string, byte> _inFlight = new();
         private readonly ConcurrentDictionary<string, (BotConversation Conversation, object Epoch)> _activeConversations = new();
         private readonly ConcurrentDictionary<BotConversation, object> _epochs = new();
         private readonly ResizableReplyGate _replyGate = new(1);
-        private AppSettings _settings = new() { AiModeEnabled = true, ReplyPacingEnabled = true,
+        private AppSettings _settings = new() { AiModeEnabled = true,
             GroupInterjectionProbability = 100, GroupContinuationWaitSeconds = 3,
             PrivateContinuationWaitSeconds = 1.5, GroupInterjectionCooldownSeconds = 30 };
         public AppSettings Settings => _settings;
         public Func<BotConversation, CancellationToken, IPacedReplyAttempt, Task> Generate { get; set; }
             = (_, _, _) => Task.CompletedTask;
-        public int Handoffs;
         public int BusyNotices => _plain.Count;
         public int InFlight => _inFlight.Count;
         public int Works { get { lock (_pacingSync) return _pacedWorks.Count; } }
@@ -76,9 +71,6 @@ namespace BotAgent.Services.Reply
         private void RetireReplyEpoch(BotConversation conversation) => _epochs[conversation] = new object();
         private Task GenerateReplyAsync(BotConversation conversation, long? trigger, bool proactive, CancellationToken ct, IPacedReplyAttempt pacing)
             => Generate(conversation, ct, pacing);
-        private void EnqueueReplyInEpoch(BotConversation conversation, long? trigger, bool proactive, bool preserve, object epoch, PendingReplyIntent intent = PendingReplyIntent.Ordinary)
-        { if (IsReplyEpochCurrent(conversation, epoch)) Interlocked.Increment(ref Handoffs); }
-        private Task DrainReplyQueueAsync() => Task.CompletedTask;
     }
     internal sealed class ProbePermissions
     {
@@ -88,11 +80,12 @@ namespace BotAgent.Services.Reply
     }
     internal sealed class ProbePolicies
     {
-        public ProbePolicy Resolve(PlatformContext _) => new();
-        public ProbePolicy ResolveForChannel(string _) => new();
+        private static readonly EffectivePlatformPolicy Policy = new(
+            new PlatformContext(PlatformId.QqPrivate), true, true, true, true,
+            PlatformCapabilities.QqOneBot, new HashSet<string>(), new Dictionary<string, bool>(), Array.Empty<string>());
+        public EffectivePlatformPolicy Resolve(PlatformContext _) => Policy;
+        public EffectivePlatformPolicy ResolveForChannel(string _) => Policy;
     }
-    internal sealed class ProbePolicy
-    { public bool Registered => true; public bool Connected => true; public bool Enabled => true; public bool ChatEnabled => true; }
     internal sealed class ProbeHooks
     {
         public readonly ConcurrentQueue<string> Errors = new();
@@ -103,5 +96,10 @@ namespace BotAgent.Services.Reply
     {
         public int Count;
         public Task SendPlainAsync(BotConversation _, string text) { Interlocked.Increment(ref Count); return Task.CompletedTask; }
+    }
+    internal sealed class ProbeTraces
+    {
+        public void Begin(string _) { }
+        public void Complete(string _, string outcome) { }
     }
 }

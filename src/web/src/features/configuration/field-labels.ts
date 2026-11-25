@@ -1,3 +1,5 @@
+import { registeredFieldHint, registeredFieldLabel } from '../capabilities/plugin-settings'
+
 /**
  * 配置字段的人类可读标签。
  *
@@ -5,13 +7,11 @@
  * 逐项对照 cfg-0.3.3 的字段表（`src/BotAgent.Core/Domain/Configuration/ConfigurationViews.cs`）。
  * 不是服务端返回的 `display`——`display` 是脱敏后的展示值，不能当标签用。
  *
- * 未收录的字段回退为 wire 键；界面始终把 wire 键作为次要标识保留，
- * 这样标签文案变化不会让排障失去对应关系。
+ * 平台驱动等已解耦包的字段标签与提示由各自 `packages/<package>/frontend/presentation.ts` 声明，
+ * 在此按注册表优先查询；未收录的字段回退为 wire 键，界面始终把 wire 键作为次要标识保留。
  */
 export const fieldLabels: Record<string, string> = {
   // behavior
-  aiDesire: 'AI 对话欲望（旧版）',
-  replyPacingEnabled: '启用回复节奏',
   groupInterjectionProbability: '群聊主动插话概率（%）',
   groupInterjectionCooldownSeconds: '群聊主动插话冷却（秒）',
   groupContinuationWaitSeconds: '群聊续话等待（秒）',
@@ -20,9 +20,7 @@ export const fieldLabels: Record<string, string> = {
   approvalApprovers: '审批人',
   botPersona: '机器人人设',
   enableApprovals: '启用人工审批',
-  enableAtmosphereDamping: '氛围阻尼冷却',
   enableLinkPreview: '启用链接预览',
-  enableParticipationGating: '参与状态机',
   enablePoke: '启用戳一戳',
   enableProactive: '主动开口',
   enableProfileSummary: '启用画像摘要',
@@ -30,8 +28,6 @@ export const fieldLabels: Record<string, string> = {
   enableStickers: '启用表情包',
   enableWebSearch: '启用联网搜索',
   filterActionNarration: '过滤动作旁白',
-  groupCooldownSeconds: '群聊冷却（秒）',
-  idleFallbackSeconds: '静默兜底（秒）',
   ignoreBracketMessages: '忽略括号消息',
   linkPreviewMax: '每条最多预览',
   linkPreviewTimeoutSeconds: '抓取超时（秒）',
@@ -41,14 +37,7 @@ export const fieldLabels: Record<string, string> = {
   maxMessagesPerConversation: '会话保留条数',
   maxProfileChars: '档案字数预算',
   moodTtlSeconds: '心情保留（秒）',
-  participationCooldownSeconds: '回复后冷却（秒）',
-  participationMaxActiveLifetimeSeconds: '活跃状态寿命（秒）',
-  participationMaxConsecutiveReplies: '连续回复上限',
-  participationMaxExitingLifetimeSeconds: '退场状态寿命（秒）',
-  participationProbingMaxReplies: '试探回复上限',
   pokeCooldownSeconds: '戳一戳冷却（秒）',
-  privateCooldownSeconds: '私聊冷却（秒）',
-  proactiveCooldownSeconds: '主动开口间隔（秒）',
   proactiveQuietSeconds: '安静判定（秒）',
   profileLookupCount: '档案人数上限',
   profileSummaryIntervalSeconds: '画像巡检间隔（秒）',
@@ -79,8 +68,7 @@ export const fieldLabels: Record<string, string> = {
   fastThinkingBudget: '快速思考预算',
   fastThinkingCustomBudget: '快速思考自定义预算',
   maxTokens: '单次输出上限',
-  model: '聊天模型',
-  modelBaseUrl: '模型接口地址',
+  // model & modelBaseUrl labels are owned by packages/model-services/frontend/presentation.ts
   rationalTemperature: '理性温度',
   rationalTopP: '理性 Top_P',
   thinkingBudget: '思考深度',
@@ -108,24 +96,9 @@ export const fieldLabels: Record<string, string> = {
   enableServerAgent: '启用服务器 Agent',
   panelDeployEnabled: '面板一键部署',
   panelDeployUrl: '部署产物地址',
-  // platform
-  feishuApiBase: '飞书 API 地址',
-  feishuAppId: '飞书 App ID',
-  feishuEnabled: '启用飞书通道',
-  feishuWhitelist: '飞书群白名单',
-  feishuWhitelistPrivates: '飞书私聊白名单',
-  localChannelIds: '本地通道 ID',
-  messageWhitelist: '共用白名单',
-  officialAppId: '官方 AppID',
-  officialChatEnabled: '官方对话开关',
-  officialEnabled: '启用官方通道',
-  officialSandbox: '官方沙箱环境',
-  officialWhitelistGroups: '官方群白名单',
-  officialWhitelistPrivates: '官方私聊白名单',
+  // platform (driver-specific labels are owned by packages/platform-*/frontend/presentation.ts)
   platformPolicies: '平台实例策略',
-  privateChatEnabled: '私聊总开关',
-  whitelistGroups: '群聊白名单',
-  whitelistPrivates: '私聊白名单',
+  conversationProfiles: '会话定制档案',
   // voice
   enableVoice: '启用语音消息',
   ttsApiBase: '云端接口地址',
@@ -159,7 +132,7 @@ export const fieldLabels: Record<string, string> = {
 }
 
 export function fieldLabel(key: string): string {
-  return fieldLabels[key] ?? key
+  return registeredFieldLabel(key) ?? fieldLabels[key] ?? key
 }
 
 /**
@@ -170,15 +143,10 @@ export function fieldLabel(key: string): string {
  * 面板没有单独的提示列，这些说明渲染在字段名下面（`ConfigurationPage.vue` 的 `.cell-sub`）。
  */
 export const fieldHints: Record<string, string> = {
-  aiDesire: '旧版回复策略的欲望值。回复节奏关闭时继续生效；开启后暂不生效，原值仍保留。',
-  replyPacingEnabled: '默认关闭，保留旧版回复策略。开启后用真实插话概率、发送后冷却和续话等待控制节奏；被 @、引用或点名的直接请求不受随机概率与主动插话冷却拦截。保存后生效。',
-  groupInterjectionProbability: '0–100 的整数百分比；20 表示每次符合条件的主动插话机会有 20% 概率。0 = 不主动插话，100 = 必定通过概率判断（仍受冷却等规则限制）。仅新节奏开启时生效。',
-  groupInterjectionCooldownSeconds: '0–3600 秒。从群内任一次完整机器人聊天回复的最后一段成功发送后开始计时，期间不主动插话；直接请求不受此冷却拦截。默认 30 秒，0 = 无冷却。',
-  groupContinuationWaitSeconds: '0–30 秒。群聊收到续话后重新等待，给对方把话说完的时间；直接请求也需要等续话结束。默认 3 秒，0 = 不等待。',
-  privateContinuationWaitSeconds: '0–30 秒。私聊收到续话后重新等待，合并连续短消息后再回复；支持小数，默认 1.5 秒，0 = 不等待。',
-  whitelistGroups: '留空或 * 接收所有 QQ 群消息；填写群号则只接收名单内群。私聊名单独立生效。',
-  whitelistPrivates: '留空或 * 接收所有 QQ 私聊，不再继承共用名单；仍遵守平台聊天开关与安全策略。',
-  messageWhitelist: '兼容旧配置的批量设置入口。保存会同时设置群聊和私聊名单；之后两份名单各自生效。',
+  groupInterjectionProbability: '0–100。仅限制普通群聊插话，不限制明确请求。',
+  groupInterjectionCooldownSeconds: '完整发送后计时，明确请求不限。',
+  groupContinuationWaitSeconds: '0–30。同一人续话后重新等待；0 为不等待。',
+  privateContinuationWaitSeconds: '0–30。同一人续话后重新等待，支持小数；0 为不等待。',
   agentServerDocker:
     '需要部署方把 docker socket 挂进容器（compose 默认不挂载，见 SECURITY.md）。未挂载时本开关不生效：服务器 agent 的工具表与提示词里都不会出现 docker。',
   panelDeployEnabled:
@@ -186,5 +154,5 @@ export const fieldHints: Record<string, string> = {
 }
 
 export function fieldHint(key: string): string | undefined {
-  return fieldHints[key]
+  return registeredFieldHint(key) ?? fieldHints[key]
 }

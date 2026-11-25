@@ -5,56 +5,35 @@ namespace BotAgent.Services.Participation;
 
 /// <summary>
 /// 会话参与状态台账的用例层（V3 §7）：状态机被喂事件、把状态变化写进日志；
-/// **要不要回复默认仍由原有逻辑决定**（白名单 / 总开关 / 自评阈值 / @ 破例）——
-/// gating 默认关，这是 V3 §5.3 的兼容红线。只有打开 <c>EnableParticipationGating</c> 之后，
-/// 入站那条锚点的结论才会真的被用来拦（见 <see cref="ParticipationGate" />，只收不放）。
-///
-/// 上限一律走 <see cref="ParticipationPolicy.Clamped" />：设置里的值只是"愿望"（面板填 999 也只会被钳到上限）。
+/// 只记录观测，不参与回复调度；回复频率由 ReplyPacingCoordinator 决定。
 /// 观测是**旁路**：坏了也不能影响回复（见 <see cref="Observe" /> 的 catch）。
 /// </summary>
 public sealed class ParticipationUseCase
 {
-    private readonly ISettingsBox _box;
     private readonly Action<string> _log;
     private readonly ParticipationRegistry _registry = new(new ParticipationPolicy());
 
     public ParticipationUseCase(ISettingsBox box, Action<string> log)
     {
-        _box = box;
+        ArgumentNullException.ThrowIfNull(box);
         _log = log;
     }
-
-    private AppSettings _settings => _box.Current;
 
     /// <summary>台账里有多少个会话（日志与面板用）。</summary>
     public int Count => _registry.Count;
 
-    /// <summary>
-    /// 从设置里取参与状态机的上限（V3 §7.3：**上下限必须由服务端校验**）。
-    /// </summary>
-    private ParticipationPolicy BuildPolicy()
-        => new ParticipationPolicy(
-            MaxConsecutiveReplies: _settings.ParticipationMaxConsecutiveReplies,
-            CooldownSeconds: _settings.ParticipationCooldownSeconds,
-            ProbingMaxReplies: _settings.ParticipationProbingMaxReplies,
-            MaxActiveLifetimeSeconds: _settings.ParticipationMaxActiveLifetimeSeconds,
-            MaxExitingLifetimeSeconds: _settings.ParticipationMaxExitingLifetimeSeconds).Clamped();
-
-    /// <summary>设置变了 → 把新的上限发给台账（状态保留、只换上限；只影响后续处理）。</summary>
+    /// <summary>刷新只读台账的固定观测策略，不提供回复调度限制。</summary>
     public void Rebuild()
     {
-        var policy = BuildPolicy();
+        var policy = new ParticipationPolicy();
         _registry.UpdatePolicy(policy);
 
-        _log($"[参与] 策略已更新：连续 ≤{policy.MaxConsecutiveReplies} / 冷却 {policy.CooldownSeconds}s"
-             + $" / 试探 ≤{policy.ProbingMaxReplies} / 活性命 {policy.MaxActiveLifetimeSeconds}s"
-             + $"（台账 {_registry.Count} 个会话，本轮不改判定）");
+        _log($"[参与] 已刷新只读观测台账（{_registry.Count} 个会话，不参与回复调度）");
     }
 
     /// <summary>
     /// 喂给参与状态机一个事件并返回它的决策。
-    /// 调用方是否**使用**这个结论取决于闸门开关：入站锚点会用它拦（闸门打开时），
-    /// 其余锚点（工具失败 / 模型超时 / 回复终态）只是喂事件、顺便把结论交给闸门判定（默认关 = 放行）。
+    /// 结论只用于状态展示，不影响入站、工具或回复终态的调度。
     /// 只写结构化信息（状态 / 原因码 / 会话 key），不写任何正文；异常绝不影响回复。
     /// </summary>
     public ParticipationDecision Observe(string sourceKey, ParticipationEvent evt)

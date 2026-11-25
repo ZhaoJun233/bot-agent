@@ -2,7 +2,6 @@ using BotAgent.Domain.Ops;
 using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Ports;
 using BotAgent.Services.Plugins;
-using BotAgent.Services.Plugins.Presets;
 
 namespace BotAgent.EngineProbe;
 
@@ -15,7 +14,7 @@ internal static class TokenQuotaTests
         var policies = new PluginReplyPolicies(registry);
         var ordinary = new ReplyPolicyContext("group:10001", false, false);
         Ensure(policies.BlockReason(ordinary) is null, "absent policy must not limit replies");
-        registry.Register(new TokenQuotaPresetPlugin(ledger));
+        registry.Register(new QuotaPolicy(ledger));
         Ensure(policies.BlockReason(ordinary) is null, "below quota must allow replies");
         ledger.RecordUsage(ordinary.SourceKey, 70, 30);
         Ensure(policies.BlockReason(ordinary) == "quota_energy_saving", "threshold blocks ordinary reply");
@@ -23,12 +22,12 @@ internal static class TokenQuotaTests
         Ensure(policies.BlockReason(ordinary with { DirectMention = true }) is null, "direct mention bypasses quota");
         Ensure(policies.BlockReason(ordinary with { DirectMention = true, Proactive = true }) == "quota_energy_saving", "proactive cannot bypass using an old mention");
         Ensure(policies.BlockReason(ordinary with { SourceKey = "official:group:10001" }) is null, "source/channel isolation");
-        registry.SetEnabled(TokenQuotaPresetPlugin.PluginId, false);
+        registry.SetEnabled(QuotaPluginId, false);
         Ensure(policies.BlockReason(ordinary) is null, "disabled policy must allow replies");
         ITokenUsageRecorder recorder = ledger;
         recorder.RecordUsage(ordinary.SourceKey, 10, 5);
         Ensure(ledger.GetQuota(ordinary.SourceKey).UsedTotalTokens == 115, "disabled enforcement must not erase or pause accounting");
-        registry.SetEnabled(TokenQuotaPresetPlugin.PluginId, true);
+        registry.SetEnabled(QuotaPluginId, true);
         Ensure(policies.BlockReason(ordinary) == "quota_energy_saving", "re-enabled policy uses accumulated usage");
         ledger.SetDailyTokenLimit(ordinary.SourceKey, 200);
         Ensure(policies.BlockReason(ordinary) is null, "raising limit releases silence without resetting usage");
@@ -57,6 +56,22 @@ internal static class TokenQuotaTests
         public string Description => "Synthetic fault boundary";
         public PluginCategory Category => PluginCategory.Management;
         public string? BlockReason(ReplyPolicyContext context) => block();
+        public Task ShutdownAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private const string QuotaPluginId = "preset.feature.token-quota";
+
+    // In-memory meter fixture exercising host PluginReplyPolicies energy-saving & mention rules.
+    private sealed class QuotaPolicy(ITenantQuotaLedger ledger) : IReplyPolicyPlugin
+    {
+        public string Id => QuotaPluginId;
+        public string Name => "Synthetic quota meter";
+        public string Version => "1.0.0";
+        public string Description => "Package admission against a deterministic in-memory meter";
+        public PluginCategory Category => PluginCategory.Management;
+        public string? BlockReason(ReplyPolicyContext context)
+            => ledger.IsEnergySaving(context.SourceKey) && (context.Proactive || !context.DirectMention)
+                ? "quota_energy_saving" : null;
         public Task ShutdownAsync(CancellationToken ct) => Task.CompletedTask;
     }
 

@@ -38,9 +38,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
         };
 
@@ -321,7 +319,7 @@ public static partial class Program
         }
 
         using var bot3 = StartBot(env);
-        await WaitForPortAsync(panelPort, cts.Token, bot3);
+        await WaitForBusinessReadyAsync(panelPort, cts.Token, bot3);
         var (_, persistedDepth) = await PanelGetAsync(settingsUrl);
         Check("重启后保留 xHigh 思考深度",
             JsonNode.Parse(persistedDepth)?["runtime"]?["thinkingBudget"]?.GetValue<string>() == "xhigh");

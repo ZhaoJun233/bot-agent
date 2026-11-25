@@ -1,0 +1,172 @@
+/* BotAgent Console Design Tokens. All color tokens use 6-digit #hex for contrast-audit compatibility. */
+:root {
+  color-scheme: light;
+
+  /* Surfaces & Borders */
+  --bg: #f5f7fa;
+  --bg-soft: #eaeff5;
+  --surface: #ffffff;
+  --surface-muted: #f1f5f9;
+  --border: #dde4ed;
+  --border-subtle: #e6ecf3;
+  --border-strong: #64748b;
+  --border-input: #64748b;
+
+  /* Text Hierarchy (>= 4.5:1 on light surfaces) */
+  --text: #141c24;
+  --text-muted: #475569;
+  --text-soft: #526071;
+
+  /* Brand & Accent */
+  --primary: #1b6599;
+  --primary-hover: #155380;
+  --on-primary: #ffffff;
+  --accent: #e7f2fb;
+  --accent-strong: #d5e8f8;
+  --accent-deep: #185c8c;
+  --accent-brand: #2b85c2;
+  --accent-soft: #e7f2fb;
+  --accent-tint: #f2f8fd;
+  --on-accent: #15517c;
+
+  /* Semantic Status Pairs */
+  --ok-bg: #e7f7ee;
+  --ok-text: #0a6638;
+  --warn-bg: #fef6df;
+  --warn-text: #7c4d00;
+  --bad-bg: #fdeceb;
+  --bad-text: #b42318;
+  --danger: #b42318;
+  --neutral-bg: #edf1f6;
+  --neutral-text: #475569;
+
+  /* Domain Accents (Providers / Platforms / Plugins / System) */
+  --domain-provider-bg: #eef2ff;
+  --domain-provider-text: #3730a3;
+  --domain-platform-bg: #e6f6f8;
+  --domain-platform-text: #0f5f70;
+  --domain-plugin-bg: #e8f7f0;
+  --domain-plugin-text: #0f6346;
+  --domain-system-bg: #f1f5f9;
+  --domain-system-text: #475569;
+
+  /* Typography */
+  --font-body: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Bahnschrift", "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+  /* Type Scale (rem only — scales cleanly at 200% zoom) */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.5625rem;
+
+  /* Radii & Controls */
+  --radius-sm: 6px;
+  --radius: 9px;
+  --radius-lg: 13px;
+  --radius-xl: 18px;
+  --control-h: 36px;
+  --control-sm: 30px;
+  --control-lg: 44px;
+
+  /* Elevation & Motion */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-hover: 0 6px 18px rgba(15, 23, 42, 0.07), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --shadow-2: 0 20px 50px rgba(15, 23, 42, 0.16);
+  --duration-fast: 120ms;
+  --duration: 180ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* Layout Dimensions */
+  --content-max: 1420px;
+  --sidebar-w: 244px;
+  --sidebar-rail: 60px;
+
+  /* Runtime Log Terminal Palette */
+  --term-bg: #fafcff;
+  --term-head: #f1f5f9;
+  --term-border: #dde4ed;
+  --term-text: #141c24;
+  --term-muted: #526071;
+  --term-time: #256436;
+  --term-info: #185c8c;
+  --term-warn: #7c4d00;
+  --term-error: #b42318;
+  --term-error-text: #991f17;
+  --term-source: #5b3f96;
+  --term-user: #256e33;
+  --term-path: #185c8c;
+  --term-hover: #edf4fc;
+  --term-scroll: #c1ccd9;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0e1217;
+  --bg-soft: #141a22;
+  --surface: #161c24;
+  --surface-muted: #1e2631;
+  --border: #2a3442;
+  --border-subtle: #232c38;
+  --border-strong: #7d8b9e;
+  --border-input: #7d8b9e;
+
+  --text: #edf1f7;
+  --text-muted: #b7c2d0;
+  --text-soft: #9aa7b8;
+
+  --primary: #5fb0e5;
+  --primary-hover: #79c0ee;
+  --on-primary: #0b1824;
+  --accent: #162b3d;
+  --accent-strong: #1d3950;
+  --accent-deep: #8cc9f0;
+  --accent-brand: #5fb0e5;
+  --accent-soft: #162b3d;
+  --accent-tint: #142434;
+  --on-accent: #d2e9fa;
+
+  --ok-bg: #122d20;
+  --ok-text: #84dfa6;
+  --warn-bg: #31250c;
+  --warn-text: #f6cd6d;
+  --bad-bg: #391b1a;
+  --bad-text: #ffb1a7;
+  --danger: #ffb1a7;
+  --neutral-bg: #232b36;
+  --neutral-text: #c2cbd6;
+
+  --domain-provider-bg: #212442;
+  --domain-provider-text: #bcc7ff;
+  --domain-platform-bg: #122e36;
+  --domain-platform-text: #7fdce8;
+  --domain-plugin-bg: #132e25;
+  --domain-plugin-text: #80e2ba;
+  --domain-system-bg: #232b36;
+  --domain-system-text: #c2cbd6;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 20px 56px rgba(0, 0, 0, 0.58);
+
+  --term-bg: #0c1015;
+  --term-head: #141a22;
+  --term-border: #252f3d;
+  --term-text: #e6ecf4;
+  --term-muted: #9aa7b8;
+  --term-time: #89cc97;
+  --term-info: #78cef7;
+  --term-warn: #f6cd6d;
+  --term-error: #ff7b7b;
+  --term-error-text: #ffb5b5;
+  --term-source: #cfaeff;
+  --term-user: #8be067;
+  --term-path: #8cc9f0;
+  --term-hover: #18202b;
+  --term-scroll: #364152;
+}

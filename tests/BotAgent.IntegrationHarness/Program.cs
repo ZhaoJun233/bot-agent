@@ -47,6 +47,13 @@ public static partial class Program
             // 忽略
         }
 
+        if (args.Contains("--port-probe", StringComparer.Ordinal))
+        {
+            RunPortSelectionChecks();
+            Console.WriteLine($"Port probe passed={_passed} failed={_failed}");
+            return _failed == 0 ? 0 : 1;
+        }
+
         // 外部模式：只起 mock，不拉子进程。用于验证「真正跑在容器里的机器人」。
         if (args.Contains("--serve-external"))
         {
@@ -56,8 +63,10 @@ public static partial class Program
         Console.WriteLine($"仓库根目录: {RepoRoot}");
         Console.WriteLine($"机器人 DLL : {BotDll}");
         Console.WriteLine(new string('─', 70));
+        var matchedScenarios = 0;
         try
         {
+            RunPortSelectionChecks();
             // 可选：只跑指定场景，方便定点迭代。例：
             //   $env:QQCHAT_IT_ONLY='s16'; dotnet ...\BotAgent.IntegrationHarness.dll
             // 留空 = 全量。
@@ -68,14 +77,24 @@ public static partial class Program
             {
                 if (ShouldRun(tag))
                 {
+                    matchedScenarios++;
                     await run();
                 }
             }
 
+            await Scenario("s154", RunControlRecoveryScenarioAsync);
+            await Scenario("s155", RunControlStartupFailureScenarioAsync);
+            await Scenario("s156", RunConversationProfileScenarioAsync);
+            await Scenario("s157", RunPhase2CapabilitiesScenarioAsync);
+            await Scenario("s162", RunPhase3MemoryKnowledgeScenarioAsync);
+            await Scenario("s163", RunPhase4RuntimeApprovalMcpScenarioAsync);
+            await Scenario("s164", RunPhase5SchedulerTodoIdentityScenarioAsync);
+            await Scenario("s165", RunPhase5WorkspacePrivacyScenarioAsync);
             await Scenario("s153", RunUnifiedMemoryScenarioAsync);
             await Scenario("s1", RunReverseWsScenarioAsync);
             await Scenario("s3", RunWhitelistScenarioAsync);
             await Scenario("s4", RunSilenceScenarioAsync);
+            await Scenario("s4", RunSilencePlaceholderChecksAsync);
             await Scenario("s5", RunSplitReplyScenarioAsync);
             await Scenario("s6", RunForwardWsAndPersistenceScenarioAsync);
             await Scenario("s7", RunSuitabilityGateScenarioAsync);
@@ -91,6 +110,7 @@ public static partial class Program
             await Scenario("s17", RunLoginQrScenarioAsync);
             await Scenario("s18", RunStickerScenarioAsync);
             await Scenario("s19", RunReplyQuoteScenarioAsync);
+            await Scenario("s66", RunReplyQuoteBacklogScenarioAsync);
             await Scenario("s20", RunPokeScenarioAsync);
             await Scenario("s21", RunModelConfigScenarioAsync);
         await Scenario("s22", RunMusicScenarioAsync);
@@ -136,6 +156,20 @@ public static partial class Program
         await Scenario("s64", RunOneBotWireScenarioAsync);
         await Scenario("s65", RunTaskRecoveryScenarioAsync);
         await Scenario("s42", RunOfficialChannelScenarioAsync);
+        await Scenario("s79", RunOfficialIdentityScenarioAsync);
+        await Scenario("s67", RunOfficialRuntimeIdentityScenarioAsync);
+        await Scenario("s68", RunOfficialMemberRoleScenarioAsync);
+        await Scenario("s69", RunOfficialDeliveryScenarioAsync);
+        await Scenario("s70", RunOfficialOutcomeScenarioAsync);
+        await Scenario("s71", RunOfficialReferenceScenarioAsync);
+        await Scenario("s72", RunOfficialRelationshipScenarioAsync);
+        await Scenario("s73", RunOfficialMessageDedupScenarioAsync);
+        await Scenario("s74", RunOfficialContentScenarioAsync);
+        await Scenario("s75", RunOfficialInboundMediaScenarioAsync);
+        await Scenario("s76", RunOfficialAgentSendScenarioAsync);
+        await Scenario("s77", RunOfficialAgentRecallScenarioAsync);
+        await Scenario("s78", RunOfficialPluginGateScenarioAsync);
+        await Scenario("s166", RunBareHostScenarioAsync);
         }
         catch (Exception ex)
         {
@@ -144,7 +178,7 @@ public static partial class Program
 
         Console.WriteLine(new string('─', 70));
         Console.WriteLine($"通过 {_passed}，失败 {_failed}");
-        if (_failed == 0 && _passed == 0)
+        if (matchedScenarios == 0 || (_failed == 0 && _passed == 0))
         {
             Console.Error.WriteLine("失败：未匹配或未执行任何测试场景（零场景通过护栏）");
             return 1;
@@ -187,8 +221,6 @@ public static partial class Program
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999",
             ["QQCHAT_PERSONA"] = "你是群里的技术宅「阿宅」，说话简短带点吐槽。",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SEGMENT_DELAY_MS"] = "10",
             ["QQCHAT_HEALTH_PORT"] = "18011",
             ["QQCHAT_ALLOW_PRIVATE_IMAGE_HOSTS"] = "1",
@@ -239,7 +271,7 @@ public static partial class Program
 
         // #98：输入缓存前缀在**真实链路**上的证据。S1 这四轮走的是同一条主链路、同一份配置，
         // 所以系统提示的「稳定前缀」必须逐字相同；第一个分叉只能落在动态尾巴里
-        // （动态段第一句是发言意愿，见 PromptBuilder.BuildSuitabilityInstruction）。
+        // 本场景首个动态块是参与者档案；内容适合度规则属于稳定段。
         if (openAi.Requests.Count >= 2)
         {
             var previousPrompt = SystemText(openAi.Requests[0]);
@@ -252,11 +284,7 @@ public static partial class Program
                 commonPrefix++;
             }
 
-            var dynamicStart = new[] { "你非常健谈主动", "你比较健谈", "你较为克制", "你极少主动发言" }
-                .Select(marker => currentPrompt.IndexOf(marker, StringComparison.Ordinal))
-                .Where(index => index >= 0)
-                .DefaultIfEmpty(-1)
-                .Min();
+            var dynamicStart = currentPrompt.IndexOf("\n\n[会话参与者档案", StringComparison.Ordinal);
             Check("★ 连续两轮请求的系统提示只在动态尾巴上分叉（输入缓存前缀稳定）",
                 dynamicStart > 0 && commonPrefix >= dynamicStart - 1,
                 $"共同前缀 {commonPrefix} 字，动态尾巴起点 {dynamicStart} 字，上轮 {previousPrompt.Length} 字 / 本轮 {currentPrompt.Length} 字");
@@ -488,7 +516,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999", // 只允许 99999
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -538,8 +565,6 @@ public static partial class Program
             ["QQCHAT_WHITELIST_GROUPS"] = groupOnly.ToString(),
             ["QQCHAT_WHITELIST_PRIVATES"] = friendOnly.ToString(),
             // 故意不填旧的共用名单：验证新字段自己就够（不再需要回落）
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -609,8 +634,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0", // 关掉兜底，确保只测一次
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -654,7 +677,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "1",
             ["QQCHAT_SEGMENT_DELAY_MS"] = "10",
             ["QQCHAT_HEALTH_PORT"] = "0"
@@ -714,6 +736,8 @@ public static partial class Program
             joined);
         Check("段数不超过上限（4 段）", trickySends.Count is > 0 and <= 4, $"{trickySends.Count} 段");
 
+        await RunNaturalParagraphChecksAsync(openAi, protocol, cts.Token);
+
         await bot.StopAsync();
     }
 
@@ -746,7 +770,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"ws://127.0.0.1:{protocolPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "*", // 通配：接收全部
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_HEALTH_PORT"] = healthPort.ToString()
         };
 
@@ -931,9 +954,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SUITABILITY_THRESHOLD"] = "10",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -1007,11 +1028,9 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = $"{groupA},{groupB}",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_MAX_CONTEXT"] = "5",          // 上下文只留 5 条 → 更早的才进档案
             ["QQCHAT_PROFILE_LINES"] = "20",
             ["QQCHAT_PROFILE_CHARS"] = "100000",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -1103,21 +1122,24 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_MAX_CONTEXT"] = "4",
             ["QQCHAT_MAX_MEMBER_MESSAGES"] = "200",
             // 故意启用旧配置并跨越阈值：ADR-0004 §8.2(8) 禁止未授权自动摘要。
             ["QQCHAT_PROFILE_SUMMARY"] = "1",
             ["QQCHAT_PROFILE_SUMMARY_THRESHOLD"] = "5",
             ["QQCHAT_PROFILE_SUMMARY_INTERVAL"] = "3",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         };
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         using var openAi = new MockOpenAi(openAiPort);
         openAi.Start();
-        openAi.EnqueueReply("{\"suitability\":99,\"reply\":\"第一轮正常回复\"}");
-        openAi.EnqueueReply("{\"suitability\":99,\"reply\":\"第二轮正常回复\"}");
+        openAi.ReplySelector = request =>
+        {
+            var latest = request is null ? "" : UserTexts(request).LastOrDefault() ?? "";
+            var reply = latest.Contains("机器人请看第二轮", StringComparison.Ordinal) ? "第二轮正常回复"
+                : latest.Contains("机器人请看第一轮", StringComparison.Ordinal) ? "第一轮正常回复" : "";
+            return new JsonObject { ["suitability"] = 99, ["reply"] = reply }.ToJsonString();
+        };
         using var bot = StartBot(env);
         await WaitForPortAsync(botWsPort, cts.Token, bot);
         using var protocol = new MockProtocol { SelfId = 10001 };
@@ -1220,9 +1242,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0", // 避免分句干扰逐条断言
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -1319,12 +1339,10 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_MAX_MESSAGES"] = "20", // 故意很小：让序号超出恢复后的计数
             ["QQCHAT_PROFILE_SUMMARY"] = "1",
             ["QQCHAT_PROFILE_SUMMARY_THRESHOLD"] = "5",
             ["QQCHAT_PROFILE_SUMMARY_INTERVAL"] = "3",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         };
 
@@ -1374,7 +1392,7 @@ public static partial class Program
             {
                 // 每条都不一样：连续两条一字不差会被“复读守卫”拦下（见 S10），
             // 那会让本场景要验证的东西被静默掉
-            openAi2.EnqueueReply($$"""{"suitability": 99, "reply": "ok-{{i + 1}}"}""");
+            openAi2.EnqueueReply($$"""{"suitability": 99, "reply": "ok-restarted-{{i + 1}}"}""");
             }
 
             using var bot2 = StartBot(env);
@@ -1482,12 +1500,10 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_MAX_CONTEXT"] = "5",    // 窗口很小 → 补录历史不会出现在上下文里
             ["QQCHAT_PROFILE_LINES"] = "20",
             ["QQCHAT_PROFILE_CHARS"] = "100000",
             ["QQCHAT_PROFILE_SUMMARY"] = "0", // 关掉画像，纯看原文注入
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
             ["QQCHAT_PANEL_TOKEN"] = panelToken
         });
@@ -1623,11 +1639,9 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_PROFILE_LINES"] = "20",
             ["QQCHAT_PROFILE_CHARS"] = "100000",
             ["QQCHAT_PROFILE_SUMMARY"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = "0"
         });
 
@@ -1667,9 +1681,9 @@ public static partial class Program
     {
         Section("S14 并发上限热变更后会话不卡死");
 
-        const int openAiPort = 17813;
-        const int botWsPort = 13023;
-        const int panelPort = 18086;
+        var openAiPort = FreePort(17813);
+        var botWsPort = FreePort(13023);
+        var panelPort = FreePort(18086);
         const long groupId = 66665;
         var dataDir = NewDataDir("s14");
 
@@ -1693,9 +1707,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_CONCURRENCY"] = "1",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
         });
 
@@ -1709,7 +1721,8 @@ public static partial class Program
 
         // 第一条：模型要 2 秒才回 → 让它待在闸门里
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "闸门变更前的问题", 9600, mentionBot: true, ct: cts.Token);
-        await Task.Delay(600);
+        Check("首条请求进入真实模型后才变更并发上限", await WaitUntilAsync(() => openAi.Requests.Count > 0,
+            TimeSpan.FromSeconds(10)));
 
         // 变更并发上限（以前会 Dispose 掉正在被持有的闸门）
         using (var http = CreatePanelHttpClient(panelPort, 10))
@@ -1718,6 +1731,10 @@ public static partial class Program
             var res = await http.PostAsync($"http://127.0.0.1:{panelPort}/api/settings", payload, cts.Token);
             Check("并发上限变更成功", res.IsSuccessStatusCode, $"HTTP {(int)res.StatusCode}");
         }
+
+        Check("在途请求在并发热变更后完成首条发送", await WaitUntilAsync(() =>
+            protocol.ActionsReceived.Any(a => a["action"]?.GetValue<string>() == "send_group_msg"),
+            TimeSpan.FromSeconds(10)));
 
         // 第二条：如果会话被卡死，这条永远不会被处理
         await protocol.SendGroupMessageAsync(groupId, 20002, "老王", "闸门变更后的问题", 9601, mentionBot: true, ct: cts.Token);
@@ -1772,11 +1789,9 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_PROFILE_SUMMARY"] = "0",        // 一开始关着
             ["QQCHAT_PROFILE_SUMMARY_INTERVAL"] = "0",
             ["QQCHAT_MAX_MESSAGES"] = "200",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
         });
 
@@ -1877,8 +1892,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
         });
 
@@ -2157,8 +2170,14 @@ public static partial class Program
         return dir;
     }
 
-    private static BotProcess StartBot(Dictionary<string, string> env)
+    private static BotProcess StartBot(Dictionary<string, string> env, bool seedOfficialPlugins = true)
     {
+        if (seedOfficialPlugins)
+        {
+            var dataDir = env.GetValueOrDefault("BOTAGENT_DATA_DIR") ?? env.GetValueOrDefault("QQCHAT_DATA_DIR");
+            if (!string.IsNullOrWhiteSpace(dataDir))
+                OfficialPluginTestSeeder.SeedIfNeeded(dataDir);
+        }
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -2170,14 +2189,16 @@ public static partial class Program
             StandardErrorEncoding = Encoding.UTF8
         };
 
-        // 不继承宿主机的 QQCHAT_* / BOTAGENT_MCP_* 配置，避免污染
-        //（MCP 那条必须一起清：别的场景如果继承了 BOTAGENT_MCP_SERVERS，会在启动时尝试连一个不存在的外部服务器）
+        // Synthetic children own all service settings and never inherit live credentials/routes.
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
             var key = entry.Key?.ToString();
             if (key is not null &&
                 (key.StartsWith("QQCHAT_", StringComparison.OrdinalIgnoreCase) ||
-                 key.StartsWith("BOTAGENT_MCP_", StringComparison.OrdinalIgnoreCase)))
+                 key.StartsWith("BOTAGENT_", StringComparison.OrdinalIgnoreCase) ||
+                 key.StartsWith("OPENAI_", StringComparison.OrdinalIgnoreCase) ||
+                 key.StartsWith("MINIMAX_", StringComparison.OrdinalIgnoreCase) ||
+                 key.StartsWith("TTS_", StringComparison.OrdinalIgnoreCase)))
             {
                 psi.Environment.Remove(key);
             }
@@ -2188,6 +2209,10 @@ public static partial class Program
             env["QQCHAT_PANEL_PASSWORD"] = SyntheticPanelPassword;
         if (!env.ContainsKey("QQCHAT_PANEL_TOKEN"))
             env["QQCHAT_PANEL_TOKEN"] = SyntheticPanelToken;
+        env.TryAdd("QQCHAT_GROUP_INTERJECTION_PROBABILITY", "100");
+        env.TryAdd("QQCHAT_GROUP_INTERJECTION_COOLDOWN", "0");
+        env.TryAdd("QQCHAT_GROUP_CONTINUATION_WAIT", "0");
+        env.TryAdd("QQCHAT_PRIVATE_CONTINUATION_WAIT", "0");
 
         foreach (var (key, value) in env)
         {
@@ -2210,7 +2235,18 @@ public static partial class Program
             return preferred;
         }
 
+        var start = preferred is >= 13000 and < 29900 ? preferred + 1 : 19000;
+        for (var offset = 0; offset < 4000; offset++)
+        {
+            var candidate = 13000 + ((start - 13000 + offset) % 16900);
+            if (candidate != preferred && CanBind(candidate))
+            {
+                return candidate;
+            }
+        }
+
         using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, 0);
+        probe.ExclusiveAddressUse = true;
         probe.Start();
         var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();
@@ -2222,6 +2258,7 @@ public static partial class Program
         try
         {
             using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Any, port);
+            probe.ExclusiveAddressUse = true;
             probe.Start();
             probe.Stop();
             return true;
@@ -2238,8 +2275,15 @@ public static partial class Program
         {
             try
             {
-                using var client = new System.Net.Sockets.TcpClient();
-                await client.ConnectAsync("127.0.0.1", port, ct);
+                using (var client = new System.Net.Sockets.TcpClient())
+                {
+                    await client.ConnectAsync("127.0.0.1", port, ct);
+                    if (client.Client.LocalEndPoint is System.Net.IPEndPoint local && local.Port == port)
+                    {
+                        throw new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused);
+                    }
+                }
+                await WaitForControlPlaneBusinessReadyIfApplicableAsync(port, ct, bot);
                 return;
             }
             catch
@@ -2255,6 +2299,35 @@ public static partial class Program
         }
 
         throw new TimeoutException($"端口 {port} 未在预期时间内监听。输出:\n" + (bot?.Diagnostics() ?? "(无)"));
+    }
+
+    /// <summary>
+    /// 控制面优先监听时，/healthz 先返回 ready:false + managementReady:true，待 17 个随宿包采纳完成后变为 ready:true。
+    /// 若该端口是控制面 HTTP 端口，等待业务就绪再返回；非控制面端口（如 OneBot WS）立即放行。
+    /// </summary>
+    private static async Task WaitForControlPlaneBusinessReadyIfApplicableAsync(int port, CancellationToken ct, BotProcess? bot)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            if (bot is { HasExited: true }) return;
+            try
+            {
+                using var resp = await http.GetAsync($"http://127.0.0.1:{port}/healthz", ct);
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                if (!body.Contains("\"managementReady\":true", StringComparison.Ordinal)
+                    || !body.Contains("\"ready\":false", StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // 非 HTTP 端口（例如反向 WS 端口）或其他端点，直接返回。
+                return;
+            }
+            await Task.Delay(150, ct);
+        }
     }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
@@ -2542,6 +2615,7 @@ public static partial class Program
                 if (!_process.HasExited)
                 {
                     _process.Kill(entireProcessTree: true);
+                    _process.WaitForExit(5000);
                 }
             }
             catch

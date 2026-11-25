@@ -20,6 +20,7 @@ public sealed partial class PluginMarketService
         var installed = await _packages.GetInstalledAsync(ct).ConfigureAwait(false);
         var revision = PluginPackageRevision.Of(installed);
         if (revision != request.ExpectedRevision) throw PluginImportSnapshots.Refresh();
+        EnsureMetadataReadable(installed.FirstOrDefault(p => p.Id == request.PluginId));
         var current = installed.FirstOrDefault(p => p.Id == request.PluginId && (p.Active is not null || request.Kind == "uninstall" && p.Pending is not null))
             ?? throw new ZbaBackendException(404, "plugin_not_installed", "插件没有活动安装版本。");
         var recovery = request.Kind == "uninstall" && current.Active is null ? "failed-install" : request.Kind == "rollback" && current.Pending is not null && !current.PendingUninstall ? "failed-pending" : "none";

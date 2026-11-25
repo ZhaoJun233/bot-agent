@@ -12,7 +12,7 @@ test('真实 Headless：只读令牌可加载概览，令牌只在内存', async
   await page.goto('/')
 
   await expect(page.getByTestId('auth-gate')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '连接 ZBA' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '连接 BotAgent' })).toBeVisible()
   await expect(page.getByTestId('not-configured')).toHaveCount(0)
 
   await connect(page, READ_TOKEN)
@@ -76,8 +76,10 @@ test('只读令牌不能进入管理员模式，且不产生写请求', async ({
   await expect(page.getByTestId('enable-admin')).toBeEnabled()
 
   expect(zbaRequests.length).toBeGreaterThan(0)
-  expect(zbaRequests.some((request) => request.path === '/zba/v1/tasks/s1-permission-check/result')).toBe(true)
-  expect(zbaRequests.filter((request) => request.method !== 'GET')).toEqual([])
+  expect(zbaRequests.some((request) =>
+    request.path === '/zba/v1/tasks/s1-permission-check/result'
+    || request.path === '/zba/v1/operations/find')).toBe(true)
+  expect(zbaRequests.filter((request) => request.method !== 'GET' && request.path !== '/zba/v1/operations/find')).toEqual([])
 })
 
 test('管理员令牌可显式进入/退出管理员模式', async ({ page }) => {
@@ -101,9 +103,14 @@ test('锁定会使进行中的管理员探测失效，重连只读令牌仍为�
   let releaseProbe!: () => void
   const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve })
   let probeStarted = false
-  await page.route('**/zba/v1/tasks/s1-permission-check/result', async (route) => {
+  const probePattern = /\/zba\/v1\/(?:tasks\/s1-permission-check\/result|operations\/find)$/
+  await page.route(probePattern, async (route) => {
     probeStarted = true
     await probeGate
+    if (route.request().url().endsWith('/operations/find')) {
+      await route.continue()
+      return
+    }
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
@@ -118,7 +125,7 @@ test('锁定会使进行中的管理员探测失效，重连只读令牌仍为�
 
   releaseProbe()
   await pendingClick
-  await page.unroute('**/zba/v1/tasks/s1-permission-check/result')
+  await page.unroute(probePattern)
 
   await connect(page, READ_TOKEN)
   await expect(page.getByTestId('overview')).toBeVisible()
@@ -134,9 +141,14 @@ test('兼容性变化会使在途管理员探测失效，不进入管理员模�
   let releaseProbe!: () => void
   const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve })
   let probeStarted = false
-  await page.route('**/zba/v1/tasks/s1-permission-check/result', async (route) => {
+  const probePattern = /\/zba\/v1\/(?:tasks\/s1-permission-check\/result|operations\/find)$/
+  await page.route(probePattern, async (route) => {
     probeStarted = true
     await probeGate
+    if (route.request().url().endsWith('/operations/find')) {
+      await route.continue()
+      return
+    }
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
@@ -144,7 +156,7 @@ test('兼容性变化会使在途管理员探测失效，不进入管理员模�
     })
   })
 
-  const probeResponse = page.waitForResponse('**/zba/v1/tasks/s1-permission-check/result')
+  const probeResponse = page.waitForResponse((res) => probePattern.test(res.url()))
   await page.getByTestId('enable-admin').click()
   await expect.poll(() => probeStarted).toBe(true)
 

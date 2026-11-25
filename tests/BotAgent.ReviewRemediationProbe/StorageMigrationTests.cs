@@ -111,13 +111,17 @@ internal static class StorageMigrationTests
         foreach (var type in new[] { typeof(AgentImageStore), typeof(AgentSessionStore), typeof(AudioCache),
             typeof(ConversationStore), typeof(EpisodeStore), typeof(HostMetrics), typeof(JargonStore),
             typeof(MemberProfileStore), typeof(MemberRoleStore), typeof(MoodStore), typeof(MusicStore),
-            typeof(OwnMessageStore), typeof(PromptTemplateStore), typeof(SecretsStore), typeof(StickerStore), typeof(TenantQuotaStore) })
+            typeof(OwnMessageStore), typeof(PromptTemplateStore), typeof(SecretsStore), typeof(StickerStore) })
         {
             var methods = type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
                 .Where(m => m.DeclaringType != typeof(object)).ToArray();
             check(methods.Length > 0 && methods.All(m => m.DeclaringType!.Assembly.GetName().Name == "BotAgent.Storage"),
                 "host " + type.Name + " executes the actual Storage implementation");
         }
+        foreach (var assembly in new[] { typeof(OwnMessageStore).Assembly,
+            typeof(StorageOwnMessages).Assembly, typeof(BotAgent.Services.Plugins.PluginManager).Assembly })
+            check(assembly.GetTypes().All(t => t.Name is not ("TenantQuotaStore" or "TokenQuotaPresetPlugin" or "QuotaLedger" or "QuotaAdmission")),
+                "retired quota implementation is absent from shipped " + assembly.GetName().Name);
         return Task.CompletedTask;
     }
 

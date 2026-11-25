@@ -45,6 +45,7 @@ public sealed class MockOpenAi : IDisposable
     /// <summary>Optional synthetic usage for successful completions; zero keeps the existing wire response unchanged.</summary>
     public int PromptTokens { get; set; }
     public int CompletionTokens { get; set; }
+    public Func<JsonObject?, string?>? ReplySelector { get; set; }
 
     /// <summary>收到的请求体（已解析）。</summary>
     public IReadOnlyList<JsonObject> Requests
@@ -95,6 +96,11 @@ public sealed class MockOpenAi : IDisposable
 
     /// <summary>收到的 /v1/models 请求数（健康日报探“模型网关通不通”就靠它）。</summary>
     public int ModelListHits => Volatile.Read(ref _modelListHits);
+
+    private int _sttHits;
+    public int SttHits => Volatile.Read(ref _sttHits);
+    public string SttTranscript { get; set; } = "合成语音转写内容";
+    public string LastDigestUserPrompt { get; private set; } = string.Empty;
 
     /// <summary>收到的联网搜索（原生 generateContent）请求数。</summary>
     public int GroundingRequests
@@ -338,6 +344,18 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
+        if (path.EndsWith("/audio/transcriptions", StringComparison.OrdinalIgnoreCase))
+        {
+            Interlocked.Increment(ref _sttHits);
+            var sttBody = Encoding.UTF8.GetBytes(new JsonObject { ["text"] = SttTranscript }.ToJsonString());
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = sttBody.Length;
+            await context.Response.OutputStream.WriteAsync(sttBody);
+            context.Response.Close();
+            return;
+        }
+
         JsonObject? payload = null;
         try
         {
@@ -408,6 +426,19 @@ public sealed class MockOpenAi : IDisposable
             }
 
             await WriteCompletionAsync(context, payload, "老王：后端开发，常在群里问编译与部署报错；说话直接、爱用“哈”，与小李常互揭老底。");
+            return;
+        }
+
+        if (systemPrompt.Contains("纪要助手") || systemPrompt.Contains("会话纪要与行动项整理助手"))
+        {
+            var userContent = payload?["messages"]?.AsArray()
+                .LastOrDefault(m => m?["role"]?.GetValue<string>() == "user")?["content"]?.GetValue<string>() ?? "";
+            lock (_gate)
+            {
+                LastDigestUserPrompt = userContent;
+            }
+
+            await WriteCompletionAsync(context, payload, "• 群聊纪要结论：下周二开展全链路联调。");
             return;
         }
 
@@ -483,7 +514,7 @@ public sealed class MockOpenAi : IDisposable
 
         // 模拟“上游只对带图的请求回零候选”（上游网关 后端实测：某些图会让整个请求直接回
         // 200 + 零候选，同一 payload 重发多少次都空）—— 机器人应去掉图片再试一次，把这一轮救回来。
-        if (EmptyChoicesWhenImages && payload.ToJsonString().Contains("\"image_url\"", StringComparison.Ordinal))
+        if (EmptyChoicesWhenImages && payload?.ToJsonString().Contains("\"image_url\"", StringComparison.Ordinal) == true)
         {
             Interlocked.Increment(ref _emptyWithImages);
             var emptyImgBody = Encoding.UTF8.GetBytes("{\"choices\":[],\"usage\":{\"total_tokens\":1200}}");
@@ -509,7 +540,7 @@ public sealed class MockOpenAi : IDisposable
             return;
         }
 
-        string content = TakeRuleReply(body) ?? TakeScriptedReply();
+        string content = ReplySelector?.Invoke(payload) ?? TakeRuleReply(body) ?? TakeScriptedReply();
 
         if (responseDelayMs > 0)
         {

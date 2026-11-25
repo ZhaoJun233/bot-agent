@@ -40,9 +40,6 @@ public static partial class Program
             ["QQCHAT_UIN"] = "10001",
             // 只有老的单名单：没有新字段时它是回落来源。
             ["QQCHAT_WHITELIST"] = "99999",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
         });
         var panel = $"http://127.0.0.1:{panelPort}";

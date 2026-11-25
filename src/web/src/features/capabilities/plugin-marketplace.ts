@@ -61,6 +61,13 @@ export function mergePluginCatalog(catalog: ZbaPluginCatalogItem[], installed: Z
       pendingVersion: state.pendingVersion, pendingUninstall: state.pendingUninstall, restartRequired: state.restartRequired, status: state.status })
   }
   // An available installed snapshot is authoritative even when its built-in list is empty.
+  for (const failure of installed?.metadataFailures ?? []) {
+    const entry = entries.get(failure.id)
+    if (entry && entry.kind !== 'builtin') entries.set(failure.id, { ...entry,
+      status: 'metadata_unreadable', installedVersion: undefined, previousManifest: undefined,
+      pendingManifest: undefined, enabled: undefined, pendingVersion: undefined, pendingUninstall: undefined,
+      restartRequired: undefined })
+  }
   for (const item of installed?.builtinPlugins ?? builtins) {
     const discovered = builtins.find(candidate => candidate.pluginId === item.pluginId && candidate.version === item.version)
     entries.set(item.pluginId, builtinCatalogEntry({ ...item, metadata: discovered?.metadata ?? item.metadata }))
@@ -127,6 +134,7 @@ export function pluginRecoveryNotice(cause: unknown): PluginNotice | null {
   if (cause.code === 'plugin_preview_refresh_required') return { tone: 'warn', message: '来源、目录或预览已变化/过期；没有继续安装。请重新发现并预览，再确认风险。' }
   if (cause.code === 'plugin_operation_unknown' || cause.code === 'plugin_operation_in_progress') return { tone: 'warn', message: '操作结果仍未知：请保留原操作键继续核对，不要换键重复提交。' }
   if (cause.code === 'plugin_reload_failed') return { tone: 'warn', message: '变更已保存，但热重载失败，旧实例保持不变。请修正后重试。' }
+  if (cause.code === 'plugin_settings_application_failed') return { tone: 'warn', message: '设置已保存，但运行时应用失败。原回执保留；请重新读取当前设置核对待应用的值。原键重放不会重新应用，修正后可保存新的变更。' }
   if (cause.code === 'plugin_operation_not_found') {
     return { tone: 'warn', message: '这个操作键还没有回执：服务端可能尚未受理。请稍后用同一操作键重新核对，不要换键重复提交。' }
   }

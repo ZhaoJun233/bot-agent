@@ -16,6 +16,9 @@ public sealed record PlatformCapabilities(
     bool SupportsMusic = false,
     bool SupportsPoke = false)
 {
+    /// <summary>Text-only music sharing is available; this does not declare native music cards.</summary>
+    public bool SupportsMusicTextFallback { get; init; }
+
     public static PlatformCapabilities QqOneBot { get; } = new(
         SupportsText: true,
         SupportsImage: true,
@@ -36,10 +39,10 @@ public sealed record PlatformCapabilities(
         // 网关已实现这条链（OfficialBotGateway.SendVoiceAsync），能力表不能继续声明“不支持”。
         SupportsVoice: true,
         SupportsQuote: true,
-        SupportsRecall: false,
+        SupportsRecall: true, // Only proven own messages within the official two-minute window.
         SupportsDirect: true,
         SupportsGroup: true,
-        SupportsThread: false);
+        SupportsThread: false) { SupportsMusicTextFallback = true };
 
     public static PlatformCapabilities Local { get; } = new(
         SupportsText: true,
@@ -60,6 +63,17 @@ public sealed record PlatformCapabilities(
         SupportsDirect: true,
         SupportsGroup: true,
         SupportsThread: true);
+
+    public static PlatformCapabilities Feishu { get; } = new(
+        SupportsText: true,
+        SupportsImage: true,
+        SupportsVoice: false,
+        SupportsQuote: true,
+        SupportsRecall: true,
+        SupportsDirect: true,
+        SupportsGroup: true,
+        SupportsThread: true,
+        SupportsStickers: true) { SupportsMusicTextFallback = true };
 
     /// <summary>
     /// 按能力矩阵评估本轮发送计划，不支持的能力生成稳定原因码降级，而不直接抛异常或丢弃整条回复。

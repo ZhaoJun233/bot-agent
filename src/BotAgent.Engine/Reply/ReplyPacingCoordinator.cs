@@ -29,7 +29,7 @@ public enum ReplyPacingReason
 {
     Accepted, Continuation, QuietWindow, SoftDraft, RetryLatest, Busy, ExplicitPriority,
     ProbabilityRejected, Cooldown, DuplicateOpportunity, Capacity, Ineligible, Preempted,
-    Completed, NotSent, Disabled, LegacyHandoff, Stopped, StaleGeneration, SoftDraftOnly, AlreadySending
+    Completed, NotSent, Disabled, Stopped, StaleGeneration, SoftDraftOnly, AlreadySending
 }
 
 public readonly record struct ReplyPacingDecision(ReplyPacingDecisionKind Kind, TimeSpan Delay,
@@ -68,6 +68,7 @@ public sealed class ReplyPacingGeneration
     internal ReplyPacingSnapshot Snapshot { get; }
     public ReplyPacingTurn Turn => Snapshot.Turn;
     public long Version => Snapshot.Version;
+    public long SpeakerId => Snapshot.SpeakerId;
     public long Sequence => Snapshot.Sequence;
     public long? MessageId => Snapshot.MessageId;
     public long? TriggerMessageId => MessageId;
@@ -127,8 +128,8 @@ public sealed class ReplyPacingCoordinator : IDisposable
         internal long? MessageId;
         internal long Version = 1;
         internal object? Ticket;
-        internal bool Explicit, Group, Proactive, AcceptedResult, Admitted, SoftAttempted, RetryUsed, ImmediateRetry;
-        internal bool RequireQuiet, Effects, FirstSend, Terminal, HandedOff, Completed;
+        internal bool Explicit, Group, Proactive, Independent, Admitted, SoftAttempted, RetryUsed, ImmediateRetry;
+        internal bool RequireQuiet, Effects, FirstSend, Terminal, Completed;
         internal ReplyPacingReason Reason = ReplyPacingReason.Accepted;
         internal ReplyPacingGeneration? Generation;
         internal ReplyPacingTurn? Predecessor;
@@ -186,7 +187,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
             var prior = previous?.State;
             // Once effects start, preserve the accepted task; only its same-human quiet clock moves.
             foreach (var active in conversation.Active)
-                if (!active.State.AcceptedResult && active.State.SpeakerId == speakerId && active.State.Effects && !active.State.FirstSend)
+                if (!active.State.Independent && active.State.SpeakerId == speakerId && active.State.Effects && !active.State.FirstSend)
                     ExtendQuiet(active.State, sequence, now);
             if (prior is { Terminal: false, Effects: false, FirstSend: false })
             {
@@ -234,7 +235,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
             foreach (var active in conversation.Active)
             {
                 var state = active.State;
-                if (!state.AcceptedResult && !state.Proactive && state.SpeakerId == speakerId && state.Effects && !state.FirstSend)
+                if (!state.Independent && !state.Proactive && state.SpeakerId == speakerId && state.Effects && !state.FirstSend)
                 {
                     ExtendQuiet(state, sequence, now);
                     effects = active;
@@ -243,7 +244,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
             if (conversation.Latest.TryGetValue(speakerId, out var previous))
             {
                 var prior = previous.State;
-                if (!prior.AcceptedResult && !prior.Proactive && !prior.Effects && !prior.FirstSend &&
+                if (!prior.Independent && !prior.Proactive && !prior.Effects && !prior.FirstSend &&
                     (!prior.Terminal || now < prior.LastInput + QuietWait(prior)))
                 {
                     ExtendQuiet(prior, sequence, now);
@@ -278,7 +279,25 @@ public sealed class ReplyPacingCoordinator : IDisposable
         {
             if (_stopped || !_enabled) return Unavailable();
             return Create(GetConversation(key), key, 0, contextSequence, null, true, isGroup,
-                false, options, ticket, null, _utcNow(), acceptedResult: true);
+                false, options, ticket, null, _utcNow(), independent: true);
+        }
+    }
+
+    /// <summary>
+    /// A distinct protocol notice, not a replay of human input or an accepted tool result.
+    /// Callers deduplicate notices; ordinary group notices still obey probability and cooldown.
+    /// </summary>
+    public ReplyPacingObservation ObserveNotice(string key, long contextSequence, bool isGroup,
+        ReplyPacingOptions options, object? ticket = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
+        lock (_gate)
+        {
+            if (_stopped || !_enabled) return Unavailable();
+            return Create(GetConversation(key), key, 0, contextSequence, null, !isGroup, isGroup,
+                false, options, ticket, null, _utcNow(), independent: true);
         }
     }
 
@@ -395,9 +414,9 @@ public sealed class ReplyPacingCoordinator : IDisposable
         lock (_gate)
         {
             var state = State(turn);
-            if (state.Completed || (state.Terminal && !state.HandedOff)) return;
+            if (state.Completed || state.Terminal) return;
             state.Completed = true;
-            if (fullChatSend && state.Group && (state.FirstSend || state.HandedOff) && !_stopped)
+            if (fullChatSend && state.Group && state.FirstSend && !_stopped)
             {
                 var conversation = GetConversation(state.Key);
                 var until = _utcNow() + state.Options.GroupInterjectionCooldown;
@@ -416,23 +435,19 @@ public sealed class ReplyPacingCoordinator : IDisposable
         }
     }
 
-    /// <summary>Hands explicit unsent work to legacy once; old pumps become terminal. Irreversible work stays.</summary>
-    public IReadOnlyList<ReplyPacingSnapshot> Disable()
+    /// <summary>Retire unsent work without transfer or replay. Already committed work stays owned.</summary>
+    public void Disable()
     {
         lock (_gate)
         {
             _enabled = false;
-            var handoffs = new List<ReplyPacingSnapshot>();
             foreach (var conversation in _conversations.Values)
                 foreach (var turn in conversation.Active.ToArray())
                 {
                     var state = turn.State;
                     if (state.Effects || state.FirstSend) continue;
-                    state.HandedOff = state.Explicit;
-                    Finish(turn, state.Explicit ? ReplyPacingReason.LegacyHandoff : ReplyPacingReason.Disabled);
-                    if (state.HandedOff) handoffs.Add(Read(turn));
+                    Finish(turn, ReplyPacingReason.Disabled);
                 }
-            return handoffs;
         }
     }
 
@@ -451,7 +466,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
 
     private ReplyPacingObservation Create(Conversation conversation, string key, long speakerId, long sequence,
         long? messageId, bool isExplicit, bool isGroup, bool proactive, ReplyPacingOptions options, object? ticket,
-        ReplyPacingTurn? predecessor, DateTime now, bool acceptedResult = false)
+        ReplyPacingTurn? predecessor, DateTime now, bool independent = false)
     {
         if (isExplicit) PreemptOrdinary(conversation, null);
         if (isExplicit && _activeCount >= _capacity)
@@ -461,17 +476,17 @@ public sealed class ReplyPacingCoordinator : IDisposable
         }
         if (_activeCount >= _capacity)
         {
-            if (!acceptedResult) conversation.LastOpportunity = null;
+            if (!independent) conversation.LastOpportunity = null;
             return Observation(null, isExplicit ? ReplyPacingObservationKind.RejectedCapacity : ReplyPacingObservationKind.Terminal,
                 ReplyPacingReason.Capacity);
         }
         var state = new TurnState { Id = ++_nextId, Key = key, SpeakerId = speakerId, Sequence = sequence, QuietSequence = sequence,
             MessageId = messageId, Explicit = isExplicit, Group = isGroup, Proactive = proactive, Options = options,
-            FirstInput = now, LastInput = now, Ticket = ticket, Predecessor = predecessor, AcceptedResult = acceptedResult };
+            FirstInput = now, LastInput = now, Ticket = ticket, Predecessor = predecessor, Independent = independent };
         var turn = new ReplyPacingTurn(this, state);
         conversation.Active.Add(turn);
         _activeCount++;
-        if (!acceptedResult)
+        if (!independent)
         {
             conversation.Latest[speakerId] = turn;
             conversation.LastOpportunity = turn;
@@ -618,7 +633,7 @@ public sealed class ReplyPacingCoordinator : IDisposable
     }
     private static bool IsUnsentRefusal(TurnState state) => state.Terminal &&
         state.Reason is ReplyPacingReason.ProbabilityRejected or ReplyPacingReason.Cooldown;
-    private static TimeSpan QuietWait(TurnState state) => state.AcceptedResult ? TimeSpan.Zero :
+    private static TimeSpan QuietWait(TurnState state) => state.Independent ? TimeSpan.Zero :
         state.Group ? state.Options.GroupContinuationWait : state.Options.PrivateContinuationWait;
     private static bool IsQuiet(TurnState state, DateTime now) => now >= state.LastInput + QuietWait(state);
     private static TimeSpan RemainingQuiet(TurnState state, DateTime now) => IsQuiet(state, now) ? TimeSpan.Zero : state.LastInput + QuietWait(state) - now;

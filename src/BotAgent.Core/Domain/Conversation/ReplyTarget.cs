@@ -18,6 +18,7 @@ namespace BotAgent.Domain.Conversation;
 /// <param name="LastSelfIndex">窗口里机器人自己最后一条的下标（-1 = 它还没说过话）。</param>
 /// <param name="DirectAddress">本轮触发是在**跟机器人说话**（@ 了它 / 引用了它的话）。</param>
 /// <param name="TriggerWasEcho">本轮触发是在**复读/模仿**（含学机器人说话）。</param>
+/// <param name="TriggerWasCurrentAtGeneration">取本轮上下文时，触发消息是否仍是最新一条未撤回、非旁白的对方消息。</param>
 public readonly record struct ReplyTargetFacts(
     long? Chosen = null,
     bool ChosenUsable = false,
@@ -28,7 +29,8 @@ public readonly record struct ReplyTargetFacts(
     bool TriggerUsable = false,
     int LastSelfIndex = -1,
     bool DirectAddress = false,
-    bool TriggerWasEcho = false);
+    bool TriggerWasEcho = false,
+    bool TriggerWasCurrentAtGeneration = false);
 
 /// <summary>规则给出的结论：要引用哪条（null = 不引用），以及为什么。</summary>
 /// <param name="Target">最终要引用的消息编号；null = 这一轮不引用。</param>
@@ -52,7 +54,10 @@ public static class ReplyTargetRules
     /// <summary>按事实推出引用目标。纯函数：同样的事实永远给同样的结论。</summary>
     public static ReplyTargetResult Resolve(ReplyTargetFacts facts)
     {
-        var triggerIsCurrent = facts.TriggerIndex >= 0 && facts.TriggerIndex > facts.LastSelfIndex;
+        // 沉默不会产生 Self 消息，不能仅凭“在上次发言之后”认定旧触发仍是当前诉求。
+        // 取上下文时仍是最新诉求的轮次可以引用；生成期间的新插话不改变这个事实。
+        var triggerIsCurrent = facts.TriggerIndex >= 0 && facts.TriggerIndex > facts.LastSelfIndex
+            && (facts.DirectAddress || facts.TriggerWasCurrentAtGeneration);
 
         // 触发那条已经被撤回了：不能再把它当引用目标 —— 群里其他人根本看不到那条，
         // 引用上去就是“回复了一条不存在的话”（与模型指认那条的 !Recalled 校验口径一致，V3 §8.3）。

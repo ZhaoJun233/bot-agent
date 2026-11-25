@@ -31,10 +31,10 @@ async function openMarket(page: Page, admin = true) {
   await page.getByTestId('token-input').fill(admin ? ADMIN : READ)
   await page.getByTestId('connect-button').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await page.getByTestId('nav-capabilities').click()
-  if (admin) await page.getByTestId('cap-enable-admin').click()
-  await page.getByTestId('cap-marketplace').click()
-  await expect(page.getByTestId('marketplace')).toBeVisible()
+  await page.getByTestId('nav-plugins').click()
+  if (admin) await page.getByTestId('plugins-enable-admin').click()
+  await page.getByTestId('plugins-tab-catalog').click()
+  await expect(page.getByTestId('marketplace-workspace')).toBeVisible()
 }
 async function fakeLifecycleServer(page: Page, options: { blocked?: boolean; unknown?: boolean; restart?: boolean; failedPending?: boolean; failedInstall?: boolean } = {}) {
   const previews: PreviewRequest[] = []
@@ -179,7 +179,7 @@ test('生命周期：卸载依赖阻断，移动端显示保留内容且不能�
   await expect(page.getByTestId('lifecycle-confirm')).toBeDisabled()
   expect(calls.writes).toHaveLength(0)
   await page.getByTestId('lifecycle-preview').scrollIntoViewIfNeeded()
-  expect(await page.getByTestId('marketplace').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  expect(await page.getByTestId('marketplace-workspace').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: testInfo.outputPath('uninstall-blocked-mobile.png') })
 })
 
@@ -210,6 +210,7 @@ test('生命周期：已安装 ID 的 JSON 走升级预览，修改草稿作废�
   let installs = 0
   await page.route('**/zba/v1/plugins/install', route => { installs++; return route.abort() })
   await openMarket(page)
+  await page.getByTestId('plugins-tab-import').click()
   await page.getByText('高级：粘贴技术清单 JSON', { exact: true }).click()
   await page.getByTestId('marketplace-json-input').fill(JSON.stringify(NEXT))
   await page.getByTestId('json-preview').click()

@@ -451,6 +451,8 @@ await Test("preexisting synthetic dedup row remains a duplicate without consumin
     await Task.CompletedTask;
 });
 
+await Phase2FeishuChecks.RunAsync(Test, Require);
+
 SqliteConnection.ClearAllPools();
 return failures == 0 ? 0 : 1;
 

@@ -2,50 +2,45 @@ using BotAgent.Engine.Runtime;
 using BotAgent.Services.OneBot;
 using BotAgent.Domain.Conversation;
 using BotAgent.Services.Conversations;
+using BotAgent.Services.Plugins;
 using System.Collections.Concurrent;
 
 namespace BotAgent.Services.Poke;
 
 /// <summary>
-/// 戳一戳用例：**状态**（最近戳了机器人的人 / 最近主动戳过谁）+ **判定**（要不要回应、能不能戳回去）+ **流程**。
-///
-/// 分成两半看：
-///   • 进（别人戳我们）：记进上下文 → 同一人连续戳时冷却内只回一次 → 请求一次回复；
-///     别人互戳**只记上下文不插话**（群里互相戳得很多，每条都回就是刷屏）。
-///   • 出（模型想戳回去）：号码必须真的在本次上下文里出现过（防编造），再过心情门、频率门、能力闸门 ——
-///     这三道门在回复链里查，用 <see cref="IsRecentPoker" /> / <see cref="AllowPokeBack" /> / <see cref="NotePokedBack" />。
-///
-/// 宿主能力（会话、显示名、记账、请求回复、心情）从 <see cref="PokeHooks" /> 注入 —— 方向是「用例 → 宿主」，
-/// 所以这里不持有 BotAgentHost，也不认识它的内部状态。
+/// 戳一戳用例：宿主通道入口与会话桥接。核心冷却/最近戳人/反刷屏回戳策略由 <c>preset.feature.poke</c>
+/// 独立包经 <see cref="IPokePolicy" /> 贡献；缺包或禁用时 fail-closed，不产生行为。
 /// </summary>
 public sealed class PokeUseCase
 {
+    public const string ProviderId = "preset.feature.poke";
+
     private readonly ISettingsBox _box;
     private readonly PokeHooks _hooks;
+    private readonly PluginManager? _plugins;
+    private readonly IPokePolicy? _directPolicy;
 
-    /// <summary>最近一次“戳了机器人”的人（用来校验模型想戳回去的号码是否真的存在）。</summary>
-    private readonly ConcurrentDictionary<string, (long PokerId, DateTimeOffset At)> _lastPoke = new();
-
-    /// <summary>每个会话最近一次主动戳人（时间 + 戳的是谁）：用于频率门与“同一个人不反复戳”。</summary>
-    private readonly ConcurrentDictionary<string, (long TargetId, DateTimeOffset At)> _lastPokeSent = new();
-
-    /// <summary>
-    /// 请求一轮回复的入口：由**装配点**在建好回复主链之后接上 ——
-    /// 戳一戳要"请求一轮回复"，而主链本身又要用戳一戳的状态（<see cref="IsRecentPoker" /> 等），
-    /// 只有这一个方向需要延迟接线（其余能力都在 <see cref="PokeHooks" /> 里一次性给全）。
-    /// </summary>
     public Action<BotConversation>? RequestReply { get; set; }
 
     /// <summary>Plugin gate hook: disabled preset plugin must not process new poke events.</summary>
     public Func<bool>? PluginEnabled { get; set; }
 
-    public PokeUseCase(ISettingsBox box, PokeHooks hooks)
+    public PokeUseCase(ISettingsBox box, PokeHooks hooks, PluginManager? plugins = null, IPokePolicy? directPolicy = null)
     {
         _box = box;
         _hooks = hooks;
+        _plugins = plugins;
+        _directPolicy = directPolicy;
     }
 
     private AppSettings _settings => _box.Current;
+
+    private static bool IsUnavailable(InvalidOperationException ex)
+        => ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing";
+
+    private IPokePolicy? CurrentPolicy
+        => _directPolicy ?? (_plugins is not null && _plugins.TryGetContribution<IPokePolicy>(ProviderId, out var policy)
+            ? policy : null);
 
     /// <summary>收到戳一戳（在协议端线程上跑）：异常不许逃出去 —— 处理不了顶多是不回，不能带崩接收循环。</summary>
     public void OnPoked(QqPokeEvent poke)
@@ -53,7 +48,12 @@ public sealed class PokeUseCase
         if (PluginEnabled?.Invoke() == false) return;
         try
         {
+            if (CurrentPolicy is null) return;
             HandlePoke(poke);
+        }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex))
+        {
+            // 插件并发停用/重载：静默 fail-closed，不带崩协议端接收循环。
         }
         catch (Exception ex)
         {
@@ -61,15 +61,15 @@ public sealed class PokeUseCase
         }
     }
 
-    /// <summary>
-    /// 戳一戳怎么处理：
-    ///   • 戳了机器人 → 记进上下文（模型才看得到），并触发一次回复；同一个人连着戳时冷却内只回一次。
-    ///   • 别人互戳 → 只记进上下文，**不**主动插话。
-    /// 模型回答时可选地在 JSON 里给 poke 字段（对方 QQ 号）戳回去，安全阀在回复链里查（见本类开头）。
-    /// </summary>
     private void HandlePoke(QqPokeEvent poke)
     {
         if (!_settings.EnablePoke)
+        {
+            return;
+        }
+
+        var policy = CurrentPolicy;
+        if (policy is null)
         {
             return;
         }
@@ -109,7 +109,8 @@ public sealed class PokeUseCase
             SenderId = poke.UserId,
             Text = text,
             Timestamp = poke.Time,
-            QqMessageId = 0
+            QqMessageId = 0,
+            DirectToBot = poke.IsSelfPoked
         };
         _hooks.RecordInbound(conversation, appended);
 
@@ -122,65 +123,63 @@ public sealed class PokeUseCase
         }
 
         var now = EngineClock.Now;
-        var cooldown = TimeSpan.FromSeconds(Math.Max(0, _settings.PokeCooldownSeconds));
-        if (cooldown > TimeSpan.Zero &&
-            _lastPoke.TryGetValue(conversation.SourceKey, out var last) &&
-            last.PokerId == poke.UserId &&
-            now - last.At < cooldown)
+        var decision = policy.EvaluateInbound(conversation.SourceKey, poke.UserId, _settings.PokeCooldownSeconds, now);
+        if (!decision.ShouldReply)
         {
-            _hooks.Log($"同一个人的连续戳 → 这次不回应（{cooldown.TotalSeconds - (now - last.At).TotalSeconds:F0}s 后放行）: {conversation.Name}");
+            _hooks.Log($"同一个人的连续戳 → 这次不回应（{decision.RetryAfterSeconds:F0}s 后放行）: {conversation.Name}");
             return;
         }
 
-        _lastPoke[conversation.SourceKey] = (poke.UserId, now);
-        // 心情的客观来源：被戳的次数（越频繁越烦，也会随时间自己消）
-        _hooks.RecordPokeMood(now);
+        if (_plugins is null)
+        {
+            // 仅独立测试模式由宿主回调记账；运行期由 preset.feature.poke 通过 IPokeInteractionFactSink 通知。
+            _hooks.RecordPokeMood(now);
+        }
 
         // 戳一戳没有消息 id，引用目标交给模型自己用 replyTo 指认
         RequestReply?.Invoke(conversation);
     }
 
-    /// <summary>最近（<paramref name="within" /> 内）被戳过？—— 决定提示词里要不要给“可以戳回去”的指令。</summary>
     public bool RecentlyPoked(string sourceKey, TimeSpan within, DateTimeOffset now)
-        => _lastPoke.TryGetValue(sourceKey, out var last) && now - last.At < within;
-
-    /// <summary>这个号码是不是“刚戳过机器人的人”—— 模型想戳回去时，它也算“确实出现过”（防编造号码）。</summary>
-    public bool IsRecentPoker(string sourceKey, long userId)
-        => _lastPoke.TryGetValue(sourceKey, out var last) && last.PokerId == userId;
-
-    /// <summary>
-    /// 主动戳人的频率门：① 距上次戳人至少 <c>PokeCooldownSeconds</c>；
-    /// ② 同一个人 5 分钟内不反复戳（模型很容易顺着“你戳我我戳你”一直戳下去，群里看着就是刷屏）。
-    /// </summary>
-    public bool AllowPokeBack(string sourceKey, long targetId, out string reason)
     {
-        reason = string.Empty;
-        if (!_lastPokeSent.TryGetValue(sourceKey, out var last))
-        {
-            return true;
-        }
-
-        var since = EngineClock.Now - last.At;
-        var cooldown = TimeSpan.FromSeconds(Math.Max(0, _settings.PokeCooldownSeconds));
-        if (cooldown > TimeSpan.Zero && since < cooldown)
-        {
-            reason = $"距上次戳人才 {since.TotalSeconds:F0}s（下限 {cooldown.TotalSeconds:F0}s）";
-            return false;
-        }
-
-        // 同一个人不反复戳
-        if (last.TargetId == targetId && since < TimeSpan.FromMinutes(5))
-        {
-            reason = $"{since.TotalSeconds:F0}s 前刚戳过这个人";
-            return false;
-        }
-
-        return true;
+        try { return CurrentPolicy?.RecentlyPoked(sourceKey, within, now) == true; }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return false; }
     }
 
-    /// <summary>记下这次主动戳人（只有真发出去了才记 —— 协议端不支持时不该占掉冷却）。</summary>
+    public bool IsRecentPoker(string sourceKey, long userId)
+    {
+        try { return CurrentPolicy?.IsRecentPoker(sourceKey, userId) == true; }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { return false; }
+    }
+
+    public bool AllowPokeBack(string sourceKey, long targetId, out string reason)
+    {
+        var policy = CurrentPolicy;
+        if (policy is null)
+        {
+            reason = "plugin_contribution_unavailable";
+            return false;
+        }
+
+        try { return policy.AllowPokeBack(sourceKey, targetId, _settings.PokeCooldownSeconds, EngineClock.Now, out reason); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex))
+        {
+            reason = "plugin_contribution_unavailable";
+            return false;
+        }
+    }
+
     public void NotePokedBack(string sourceKey, long targetId, DateTimeOffset now)
-        => _lastPokeSent[sourceKey] = (targetId, now);
+    {
+        try { CurrentPolicy?.NotePokedBack(sourceKey, targetId, now); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { }
+    }
+
+    public void ClearConversation(string sourceKey)
+    {
+        try { CurrentPolicy?.ClearConversation(sourceKey); }
+        catch (InvalidOperationException ex) when (IsUnavailable(ex)) { }
+    }
 }
 
 /// <summary>

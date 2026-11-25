@@ -1,11 +1,17 @@
 using BotAgent.Engine.Runtime;
+using BotAgent.Domain.Messaging;
 using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Platforms;
+using BotAgent.Domain.Ports;
 using BotAgent.Domain.Ops;
 using BotAgent.Domain.Qq;
+using BotAgent.Domain.Tools;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
 using BotAgent.Services.Qq;
 using System.Collections.Concurrent;
+using System.Text.Json.Nodes;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Permissions;
 
@@ -31,10 +37,19 @@ public sealed class ApprovalUseCase
     private readonly SessionPolicyLedger _sessionPolicies;
     private readonly TurnTraceStore _traces;
     private readonly IAuditChain? _audit;
+    private readonly Func<ChatToolCatalog> _catalog;
+    private readonly IAccessRoleResolver? _accessRoles;
+    private readonly Func<string, PlatformContext?, Services.Platforms.EffectiveConversationSettings?>? _resolveConversation;
+    private readonly Func<string, bool>? _pluginAllowsTool;
+    private readonly object _policySync = new();
 
     private readonly ApprovalStore _approvals = new();
+    private readonly PendingToolInvocationStore _pendingTools = new();
     private readonly ConcurrentDictionary<string, PlatformSourceLease> _sources = new(StringComparer.Ordinal);
     private readonly ToolCallBudget _toolBudget = new();
+    private Func<QqChatMessage, bool>? _hasPendingRuntimeTaskApproval;
+    private Func<QqChatMessage, ApprovalCommand, bool>? _handleRuntimeTaskApproval;
+    private Action<DateTimeOffset>? _onPeriodicSweep;
 
     private ChatCapabilitySet? _capabilities;
     private int _capabilityVersion = 1;
@@ -42,29 +57,89 @@ public sealed class ApprovalUseCase
 
     private DateTimeOffset _lastPrune = DateTimeOffset.MinValue;
 
-    public ApprovalUseCase(ISettingsBox box, ApprovalHooks hooks, SessionPolicyLedger sessionPolicies, TurnTraceStore traces, IAuditChain? audit = null)
+    public ApprovalUseCase(ISettingsBox box, ApprovalHooks hooks, SessionPolicyLedger sessionPolicies, TurnTraceStore traces,
+        IAuditChain? audit = null, Func<ChatToolCatalog>? catalog = null, IAccessRoleResolver? accessRoles = null,
+        Func<string, PlatformContext?, Services.Platforms.EffectiveConversationSettings?>? resolveConversation = null,
+        Func<string, bool>? pluginAllowsTool = null)
     {
         _box = box;
         _hooks = hooks;
         _sessionPolicies = sessionPolicies;
         _traces = traces;
         _audit = audit;
+        _catalog = catalog ?? (() => ChatToolCatalog.Builtin);
+        _accessRoles = accessRoles;
+        _resolveConversation = resolveConversation;
+        _pluginAllowsTool = pluginAllowsTool;
     }
+
+    public void BindRuntimeTaskApprovals(
+        Func<QqChatMessage, bool> hasPending,
+        Func<QqChatMessage, ApprovalCommand, bool> handle)
+    {
+        _hasPendingRuntimeTaskApproval = hasPending ?? throw new ArgumentNullException(nameof(hasPending));
+        _handleRuntimeTaskApproval = handle ?? throw new ArgumentNullException(nameof(handle));
+    }
+
+    public void BindPeriodicSweep(Action<DateTimeOffset> sweep)
+        => _onPeriodicSweep = sweep ?? throw new ArgumentNullException(nameof(sweep));
+
+    public bool HasPendingRuntimeTaskApproval(QqChatMessage msg)
+        => _hasPendingRuntimeTaskApproval?.Invoke(msg) == true;
 
     private AppSettings _settings => _box.Current;
 
-    /// <summary>当前策略快照（惰性建一次；之后只在设置变更时由 <see cref="RebuildPolicy" /> 换）。</summary>
-    public ChatCapabilitySet Capabilities
-    {
-        get
-        {
-            if (_capabilities is null)
-            {
-                RebuildPolicy();
-            }
+    /// <summary>Refreshes settings and adopted generations together; unchanged content keeps the same version.</summary>
+    public ChatCapabilitySet Capabilities => RefreshPolicy();
 
-            return _capabilities!;
-        }
+    /// <summary>按会话档案有效开关投影本轮能力白名单，保留既有的版本号、场景预设、工具目录与永久禁止类别。</summary>
+    public ChatCapabilitySet CapabilitiesFor(AppSettings settings, Services.Platforms.EffectiveConversationSettings? conversation)
+    {
+        var baseline = RefreshPolicy();
+        if (conversation is null) return baseline;
+        var web = conversation.FeatureEnabled("websearch") && conversation.AllowsReadOnlyTools;
+        var music = conversation.FeatureEnabled("music");
+        var voice = conversation.FeatureEnabled("voice");
+        var stickers = conversation.FeatureEnabled("stickers");
+        var poke = conversation.FeatureEnabled("poke");
+        var approvals = settings.EnableApprovals && conversation.AllowsToolRequest;
+        var questions = settings.EnableQuestions && conversation.AllowsAsk;
+        var docsBaseline = baseline.Catalog.FindBinding("doc.read") is { IsReady: true };
+        var digestBaseline = baseline.Catalog.FindBinding("chat.digest") is { IsReady: true };
+        var knowledgeBaseline = baseline.Catalog.FindBinding("kb.search") is { IsReady: true };
+        var schedulerBaseline = baseline.Catalog.FindBinding("reminder.list") is { IsReady: true };
+        var todoBaseline = baseline.Catalog.FindBinding("todo.list") is { IsReady: true };
+        var docs = docsBaseline && conversation.FeatureEnabled("documents") && conversation.AllowsReadOnlyTools;
+        var digest = digestBaseline && conversation.FeatureEnabled("digest") && conversation.AllowsReadOnlyTools;
+        var knowledge = knowledgeBaseline && conversation.FeatureEnabled("knowledge") && conversation.AllowsReadOnlyTools;
+        var scheduler = schedulerBaseline && conversation.FeatureEnabled("scheduler") && conversation.AllowsReadOnlyTools;
+        var personalTodo = todoBaseline && conversation.FeatureEnabled("personal_todo") && conversation.AllowsReadOnlyTools;
+        var mcpReadBaseline = baseline.Catalog.Specs.Any(s => s.Origin == ToolOrigin.Mcp && s.ReadOnly);
+        var mcpRead = conversation.AllowsReadOnlyTools;
+        if (web == settings.EnableWebSearch && music == settings.EnableMusic && voice == settings.EnableVoice
+            && stickers == settings.EnableStickers && poke == settings.EnablePoke
+            && approvals == settings.EnableApprovals && questions == settings.EnableQuestions
+            && docs == docsBaseline && digest == digestBaseline && knowledge == knowledgeBaseline
+            && scheduler == schedulerBaseline && personalTodo == todoBaseline
+            && (mcpRead || !mcpReadBaseline))
+            return baseline;
+        return ChatCapabilitySet.FromSwitches(
+            enableWebSearch: web,
+            enableMusic: music,
+            enableVoice: voice,
+            enableStickers: stickers,
+            enablePoke: poke,
+            scenario: settings.ScenarioPreset,
+            policyVersion: baseline.Policy.PolicyVersion,
+            approvalsEnabled: approvals,
+            questionsEnabled: questions,
+            catalog: baseline.Catalog,
+            enableDocuments: docs,
+            enableDigest: digest,
+            enableKnowledge: knowledge,
+            enableExternalMcpRead: mcpRead,
+            enableScheduler: scheduler,
+            enablePersonalTodo: personalTodo);
     }
 
     /// <summary>审批人名单（面板里点名的人；留空 = 只认群里的 owner/admin）。</summary>
@@ -82,31 +157,59 @@ public sealed class ApprovalUseCase
     /// 设置变了 → 重建策略快照（在 <c>ApplyRuntimeSettings</c> 里调用）。
     /// 先按当前版本算一次，指纹变了才升版本再算一次 —— 版本只在**能力真的变了**时前进。
     /// </summary>
-    public void RebuildPolicy()
-    {
-        var candidate = Build();
-        if (_capabilityFingerprint.Length > 0 && candidate.PolicyFingerprint != _capabilityFingerprint)
-        {
-            _capabilityVersion++;
-            candidate = Build();
-            _hooks.Log($"[能力] 策略已变更 → 版本 v{_capabilityVersion}（{candidate.Describe()}）");
-        }
+    public void RebuildPolicy() => _ = RefreshPolicy();
 
-        _capabilityFingerprint = candidate.PolicyFingerprint;
-        _capabilities = candidate;
+    private ChatCapabilitySet RefreshPolicy()
+    {
+        var settings = _settings;
+        var catalog = _catalog();
+        ChatCapabilitySet candidate;
+        var changed = false;
+        lock (_policySync)
+        {
+            candidate = Build(settings, catalog);
+            var combinedFingerprint = candidate.PolicyFingerprint + BuildConversationProfilesFingerprint(settings);
+            if (_capabilities is not null && combinedFingerprint == _capabilityFingerprint) return _capabilities;
+            if (_capabilityFingerprint.Length > 0)
+            {
+                _capabilityVersion++;
+                candidate = Build(settings, catalog);
+                combinedFingerprint = candidate.PolicyFingerprint + BuildConversationProfilesFingerprint(settings);
+                changed = true;
+            }
+            _capabilityFingerprint = combinedFingerprint;
+            _capabilities = candidate;
+        }
+        if (changed) _hooks.Log($"[能力] 策略已变更 → 版本 v{candidate.Policy.PolicyVersion}（{candidate.Describe()}）");
+        return candidate;
     }
 
-    private ChatCapabilitySet Build()
+    private static string BuildConversationProfilesFingerprint(AppSettings settings)
+    {
+        var profiles = settings.RuntimeConversationProfiles;
+        if (profiles.IsDefaultOrEmpty) return string.Empty;
+        var json = System.Text.Json.JsonSerializer.Serialize(profiles);
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json));
+        return "|conv[" + Convert.ToHexStringLower(hash) + "]";
+    }
+
+    private ChatCapabilitySet Build(AppSettings settings, ChatToolCatalog catalog)
         => ChatCapabilitySet.FromSwitches(
-            enableWebSearch: _settings.EnableWebSearch,
-            enableMusic: _settings.EnableMusic,
-            enableVoice: _settings.EnableVoice,
-            enableStickers: _settings.EnableStickers,
-            enablePoke: _settings.EnablePoke,
-            scenario: _settings.ScenarioPreset,
+            enableWebSearch: settings.EnableWebSearch,
+            enableMusic: settings.EnableMusic,
+            enableVoice: settings.EnableVoice,
+            enableStickers: settings.EnableStickers,
+            enablePoke: settings.EnablePoke,
+            scenario: settings.ScenarioPreset,
             policyVersion: _capabilityVersion,
-            approvalsEnabled: _settings.EnableApprovals,
-            questionsEnabled: _settings.EnableQuestions);
+            approvalsEnabled: settings.EnableApprovals,
+            questionsEnabled: settings.EnableQuestions,
+            catalog: catalog,
+            enableDocuments: catalog.FindBinding("doc.read") is { IsReady: true },
+            enableDigest: catalog.FindBinding("chat.digest") is { IsReady: true },
+            enableKnowledge: catalog.FindBinding("kb.search") is { IsReady: true },
+            enableScheduler: catalog.FindBinding("reminder.list") is { IsReady: true },
+            enablePersonalTodo: catalog.FindBinding("todo.list") is { IsReady: true });
 
     /// <summary>
     /// 判定一次聊天能力（V3 §9.2）：**默认关闭**、不在白名单就连协议端都不会被调用。
@@ -186,6 +289,7 @@ public sealed class ApprovalUseCase
     /// </summary>
     public bool HandleCommand(QqChatMessage msg)
     {
+        if (!msg.AllowsCommands) return false;
         var command = ApprovalFlow.TryParseCommand(msg.Text);
         if (command is null)
         {
@@ -194,6 +298,12 @@ public sealed class ApprovalUseCase
 
         var conversationKey = Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId);
         var parsed = command.Value;
+        var currentRequest = _approvals.Get(parsed.RequestId, EngineClock.Now);
+        if (currentRequest is null && _handleRuntimeTaskApproval?.Invoke(msg, parsed) == true)
+        {
+            return true;
+        }
+
         _sources.TryGetValue(parsed.RequestId, out var originalSource);
         var incomingSource = PlatformSourceExecution.Current;
         if (originalSource is not null && (!originalSource.IsCurrent || incomingSource is null
@@ -201,9 +311,8 @@ public sealed class ApprovalUseCase
             return true;
         if (originalSource is not null)
         {
-            var request = _approvals.Get(parsed.RequestId, EngineClock.Now);
-            var actualKey = originalSource.Owner.ConversationKey(msg, candidate => candidate == request?.ConversationKey);
-            if (actualKey is null || actualKey != request?.ConversationKey) return true;
+            var actualKey = originalSource.Owner.ConversationKey(msg, candidate => candidate == currentRequest?.ConversationKey);
+            if (actualKey is null || actualKey != currentRequest?.ConversationKey) return true;
             conversationKey = actualKey;
         }
         // #117：从入口到执行之间平台源可能换代（重连会换 lifetime）。把真正要用的那一代抓成局部变量，
@@ -211,14 +320,59 @@ public sealed class ApprovalUseCase
         var executingSource = originalSource ?? incomingSource;
         using var sourceScope = PlatformSourceExecution.Enter(executingSource);
 
+        var requesterId = "user:" + msg.UserId;
+        var requesterRole = Channels.IsOfficial(msg.Channel) ? null : msg.SenderRole;
+        var isLiveApprover = false;
+        if (_accessRoles is not null && currentRequest is not null)
+        {
+            var subject = InboundSubjectIdentity.Resolve(msg, executingSource?.Context);
+            var nativeToken = "user:" + subject.NativeUserId;
+            if (_accessRoles.TryResolveExplicitRole(subject, conversationKey, out var explicitRole))
+            {
+                if (explicitRole == WorkspaceRole.Guest)
+                {
+                    requesterId = nativeToken;
+                    var guestWho = _hooks.Mask(requesterId, conversationKey);
+                    _hooks.Log($"[审批] {parsed.Kind} {parsed.RequestId} by {guestWho} → not_an_approver（Guest 显式降权拦截）：{Channels.Describe(conversationKey)}");
+                    _audit?.Append(new AuditEvent("approval_decision", guestWho, conversationKey,
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            requestId = parsed.RequestId,
+                            action = parsed.Kind.ToString().ToLowerInvariant(),
+                            reason = "not_an_approver",
+                            shouldExecute = false
+                        }),
+                        Capabilities.Policy.PolicyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    return true;
+                }
+
+                if (explicitRole is WorkspaceRole.GroupManager or WorkspaceRole.BotOwner)
+                {
+                    requesterId = nativeToken;
+                    isLiveApprover = true;
+                }
+                else
+                {
+                    // 显式 RBAC 降权为 Member / TrustedMember 时，禁止回退使用 QQ 协议端 SenderRole 放行审批。
+                    requesterId = nativeToken;
+                    requesterRole = null;
+                }
+            }
+            else if (currentRequest.Approvers.Contains(nativeToken))
+            {
+                requesterId = nativeToken;
+            }
+        }
+
         var result = ApprovalFlow.Handle(
             _approvals,
             parsed,
-            requesterId: "user:" + msg.UserId,
-            requesterRole: msg.SenderRole,
+            requesterId: requesterId,
+            requesterRole: requesterRole,
             conversationKey: conversationKey,
             now: EngineClock.Now,
-            currentPolicyVersion: Capabilities.Policy.PolicyVersion);
+            currentPolicyVersion: Capabilities.Policy.PolicyVersion,
+            isLiveApprover: isLiveApprover);
 
         if (!result.Handled)
         {
@@ -227,9 +381,9 @@ public sealed class ApprovalUseCase
             return false;
         }
 
-        var who = _hooks.Mask("user:" + msg.UserId, conversationKey);
+        var who = _hooks.Mask(requesterId, conversationKey);
         _hooks.Log($"[审批] {parsed.Kind} {parsed.RequestId} by {who} → {result.ReasonCode}"
-                   + (result.ReasonCode == "not_an_approver" ? "（不是名单内的人，也不是群主/管理员）" : string.Empty)
+                   + (result.ReasonCode == "not_an_approver" ? "（没有本项目审批权限）" : string.Empty)
                    + $"：{Channels.Describe(conversationKey)}");
 
         if (_audit is not null && result.Handled)
@@ -248,26 +402,52 @@ public sealed class ApprovalUseCase
         {
             // 执行前**再过一次闸门**（拿着票据）：闸门才是"能不能执行"的唯一判据。
             // 高风险类别在闸门里任何审批都放不开 —— 这一层不依赖审批流程写得对不对。
-            var gate = Capabilities.Check(ApprovalFlow.FixedToolId, conversationKey, ticket: ticket);
-            _hooks.Log($"[审批] 执行前闸门：{gate.Describe()}（{ApprovalFlow.FixedToolId}）");
+            var toolId = ticket.ToolId;
+            var liveCaps = ResolveLiveCapabilities(conversationKey, executingSource?.Context);
+            var gate = liveCaps.Check(toolId, conversationKey, ticket: ticket);
+            if (gate.Allow && !string.Equals(toolId, ApprovalFlow.FixedToolId, StringComparison.Ordinal)
+                && _pluginAllowsTool is not null && !_pluginAllowsTool(toolId))
+            {
+                gate = new ToolDecision(false, "plugin_disabled", "插件或工具已被禁用");
+            }
+            _hooks.Log($"[审批] 执行前闸门：{gate.Describe()}（{toolId}）");
             if (!gate.Allow)
             {
+                _pendingTools.Remove(parsed.RequestId);
                 _hooks.Log($"[审批] 闸门拒绝执行（{gate.ReasonCode}）→ 不执行：{Channels.Describe(conversationKey)}");
                 return true;
             }
 
             if (executingSource is { IsCurrent: false })
             {
+                _pendingTools.Remove(parsed.RequestId);
                 _hooks.Log($"[审批] 执行前平台源已换代（租约失效）→ 不执行：{Channels.Describe(conversationKey)}");
                 return true;
             }
 
-            RunFixedDemoTool(msg, conversationKey, parsed.RequestId, result.Reply);
+            if (string.Equals(toolId, ApprovalFlow.FixedToolId, StringComparison.Ordinal))
+            {
+                RunFixedDemoTool(msg, conversationKey, parsed.RequestId, result.Reply);
+                return true;
+            }
+
+            if (!_pendingTools.TryTake(parsed.RequestId, out var pending)
+                || !string.Equals(pending.ToolId, toolId, StringComparison.Ordinal)
+                || !string.Equals(pending.ConversationKey, conversationKey, StringComparison.Ordinal))
+            {
+                _hooks.Log($"[审批] 真实工具参数快照缺失或失配（{parsed.RequestId}）→ 拒绝执行");
+                if (result.Reply is { Length: > 0 })
+                    _ = _hooks.SendApprovalReplyAsync(msg, "⚠️ 审批对应的工具调用已失效，未执行。");
+                return true;
+            }
+
+            _ = ExecuteApprovedRealToolAsync(pending, conversationKey, executingSource, result.Reply, sendViaKey: false, msg: msg);
             return true;
         }
 
         if (result.Reply is { Length: > 0 } reply)
         {
+            if (parsed.Kind == ApprovalCommandKind.Reject) _pendingTools.Remove(parsed.RequestId);
             _ = _hooks.SendApprovalReplyAsync(msg, reply);
         }
 
@@ -334,11 +514,19 @@ public sealed class ApprovalUseCase
         if (result.ShouldExecute && result.Ticket is { } ticket)
         {
             // 执行前**再过一次闸门**（与群里那条路同一句）：闸门才是“能不能执行”的唯一判据。
-            var gate = Capabilities.Check(ApprovalFlow.FixedToolId, conversationKey, ticket: ticket);
+            var toolId = ticket.ToolId;
+            var liveCaps = ResolveLiveCapabilities(conversationKey, originalSource.Context);
+            var gate = liveCaps.Check(toolId, conversationKey, ticket: ticket);
+            if (gate.Allow && !string.Equals(toolId, ApprovalFlow.FixedToolId, StringComparison.Ordinal)
+                && _pluginAllowsTool is not null && !_pluginAllowsTool(toolId))
+            {
+                gate = new ToolDecision(false, "plugin_disabled", "插件或工具已被禁用");
+            }
             _traces.Node(conversationKey, TurnNodeKind.Gate, gate.Allow ? "allowed" : "denied",
-                toolId: ApprovalFlow.FixedToolId, reasonCode: gate.ReasonCode);
+                toolId: toolId, reasonCode: gate.ReasonCode);
             if (!gate.Allow)
             {
+                _pendingTools.Remove(requestId);
                 _hooks.Log($"[审批] 面板批准后闸门拒绝执行（{gate.ReasonCode}）→ 不执行：{Channels.Describe(conversationKey)}");
                 return (false, gate.ReasonCode);
             }
@@ -346,16 +534,32 @@ public sealed class ApprovalUseCase
             // #117：决策与执行之间平台源可能换代 —— 执行前再核一次，不靠决策时的快照。
             if (originalSource.IsCurrent is false)
             {
+                _pendingTools.Remove(requestId);
                 _hooks.Log($"[审批] 面板执行前平台源已换代（租约失效）→ 不执行：{Channels.Describe(conversationKey)}");
                 return (false, "source_retired");
             }
 
-            RunFixedDemoToolFor(conversationKey, requestId, result.Reply);
+            if (string.Equals(toolId, ApprovalFlow.FixedToolId, StringComparison.Ordinal))
+            {
+                RunFixedDemoToolFor(conversationKey, requestId, result.Reply);
+                return (true, result.ReasonCode);
+            }
+
+            if (!_pendingTools.TryTake(requestId, out var pending)
+                || !string.Equals(pending.ToolId, toolId, StringComparison.Ordinal)
+                || !string.Equals(pending.ConversationKey, conversationKey, StringComparison.Ordinal))
+            {
+                _hooks.Log($"[审批] 面板真实工具参数快照缺失（{requestId}）→ 拒绝执行");
+                return (false, "invocation_missing");
+            }
+
+            _ = ExecuteApprovedRealToolAsync(pending, conversationKey, originalSource, result.Reply, sendViaKey: true, msg: null);
             return (true, result.ReasonCode);
         }
 
         if (result.Handled && result.Reply is { Length: > 0 } reply)
         {
+            if (!approve) _pendingTools.Remove(requestId);
             _ = SendToKeyAsync(conversationKey, reply);
         }
 
@@ -498,13 +702,14 @@ public sealed class ApprovalUseCase
     {
         var (isGroup, _) = conversation.Target;
         var policyVersion = caps.Policy.PolicyVersion;
+        var approvers = Approvers();
         var created = ApprovalFlow.CreateForModelTool(
             _approvals,
             requestedToolId: toolId,
             conversationKey: conversation.SourceKey,
             requesterFingerprint: triggerMessageId is { } id ? "msg:" + id : "msg:unknown",
-            configuredApprovers: Approvers(),
-            allowGroupAdmins: true,
+            configuredApprovers: approvers,
+            allowGroupAdmins: !Channels.IsOfficial(Channels.ChannelOf(conversation.SourceKey)),
             isGroup: isGroup,
             now: EngineClock.Now,
             newRequestId: () => ApprovalFlow.NewRequestId(
@@ -529,10 +734,182 @@ public sealed class ApprovalUseCase
 
         if (created.Announcement is { Length: > 0 } announcement)
         {
-            await _hooks.SendPlainAsync(conversation, announcement);
+            using (ApprovalOutboundScope.EnterSystemAnnouncement())
+            {
+                await _hooks.SendPlainAsync(conversation, announcement);
+            }
         }
 
         return true;
+    }
+
+    /// <summary>为真实的非只读工具（如非只读远程 MCP / 需批准插件工具）冻结参数并开一张人机审批单。</summary>
+    public async Task<bool> OpenApprovalForRealToolAsync(
+        BotConversation conversation,
+        string? toolId,
+        IReadOnlyDictionary<string, JsonNode?>? arguments,
+        long? triggerMessageId,
+        ChatCapabilitySet caps)
+    {
+        if (string.IsNullOrWhiteSpace(toolId) || Services.Memory.MemoryUseScope.HasMemory)
+            return false;
+
+        var cleanId = toolId.Trim();
+        var binding = caps.Catalog.FindBinding(cleanId);
+        if (binding is null || !binding.IsReady || binding.Definition.Spec.ReadOnly
+            || ToolDescriptor.AlwaysDenied(binding.Definition.Spec.Category))
+        {
+            _hooks.Log($"[审批] 拒绝开单（工具不可用或不可审批：{cleanId}）：{conversation.Name}");
+            return false;
+        }
+
+        var spec = binding.Definition.Spec;
+        if (!caps.Policy.AllowedTools.Contains(cleanId)
+            || !caps.Policy.RequiresApproval(spec)
+            || !caps.Policy.ApprovalCouldGrant(spec))
+        {
+            _hooks.Log($"[审批] 策略禁止为工具开单（{cleanId}）：{conversation.Name}");
+            return false;
+        }
+
+        var frozen = new JsonObject();
+        if (arguments is not null)
+        {
+            foreach (var pair in arguments)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key)) continue;
+                frozen[pair.Key] = pair.Value?.DeepClone();
+            }
+        }
+
+        var safeSummary = PendingToolInvocationStore.BuildSanitizedSummary(cleanId, frozen);
+        var (isGroup, _) = conversation.Target;
+        var approvers = Approvers();
+        approvers.Add("panel:owner");
+
+        var requestId = ApprovalFlow.NewRequestId(
+            upper => System.Security.Cryptography.RandomNumberGenerator.GetInt32(upper));
+        var now = EngineClock.Now;
+        var expiresAt = now.AddSeconds(ApprovalFlow.TtlSeconds);
+        _pendingTools.Put(new PendingToolInvocation(
+            requestId, cleanId, conversation.SourceKey, frozen, safeSummary, expiresAt), now);
+        if (PlatformSourceExecution.Current is { } approvalSource)
+            _sources[requestId] = approvalSource;
+
+        var created = ApprovalFlow.CreateForTool(
+            _approvals,
+            toolId: cleanId,
+            safeSummary: safeSummary,
+            conversationKey: conversation.SourceKey,
+            requesterFingerprint: triggerMessageId is { } id ? "msg:" + id : "msg:unknown",
+            configuredApprovers: approvers,
+            allowGroupAdmins: !Channels.IsOfficial(Channels.ChannelOf(conversation.SourceKey)),
+            isGroup: isGroup,
+            now: now,
+            newRequestId: () => requestId,
+            policyVersion: caps.Policy.PolicyVersion);
+
+        if (!created.Created || created.Request is not { } approval)
+        {
+            _pendingTools.Remove(requestId);
+            _sources.TryRemove(requestId, out _);
+            _hooks.Log($"[审批] 真实工具没有开单（{created.ReasonCode}，{cleanId}）：{conversation.Name}");
+            return false;
+        }
+
+        _hooks.Log($"[审批] 新建真实工具待批单 {approval.RequestId}（{approval.ToolId}，v{caps.Policy.PolicyVersion}，{ApprovalFlow.TtlSeconds}s 有效）：{conversation.Name}");
+
+        if (created.Announcement is { Length: > 0 } announcement)
+        {
+            using (ApprovalOutboundScope.EnterSystemAnnouncement())
+            {
+                await _hooks.SendPlainAsync(conversation, announcement);
+            }
+        }
+
+        return true;
+    }
+
+    private async Task ExecuteApprovedRealToolAsync(
+        PendingToolInvocation pending,
+        string conversationKey,
+        PlatformSourceLease? executingSource,
+        string? approvalReceipt,
+        bool sendViaKey,
+        QqChatMessage? msg)
+    {
+        try
+        {
+            using var sourceScope = PlatformSourceExecution.Enter(executingSource);
+            if (approvalReceipt is { Length: > 0 })
+            {
+                if (sendViaKey) await SendToKeyAsync(conversationKey, approvalReceipt).ConfigureAwait(false);
+                else if (msg is not null) await _hooks.SendApprovalReplyAsync(msg, approvalReceipt).ConfigureAwait(false);
+            }
+
+            if (executingSource is { IsCurrent: false })
+            {
+                _hooks.Log($"[审批] 真实工具执行前平台源失效：{pending.ToolId}");
+                return;
+            }
+
+            var liveConv = _resolveConversation?.Invoke(conversationKey, executingSource?.Context);
+            var liveCaps = liveConv is not null ? CapabilitiesFor(_settings, liveConv) : Capabilities;
+            var binding = liveCaps.Catalog.FindBinding(pending.ToolId);
+            var convPolicyAllows = _settings.EnableApprovals
+                && liveConv is not { AllowsToolRequest: false }
+                && liveCaps.Policy.AllowedTools.Contains(pending.ToolId)
+                && binding is not null
+                && liveCaps.Policy.ApprovalCouldGrant(binding.Definition.Spec)
+                && (_pluginAllowsTool is null || _pluginAllowsTool(pending.ToolId));
+            if (binding is null || !binding.IsReady || binding.Definition.Spec.ReadOnly
+                || ToolDescriptor.AlwaysDenied(binding.Definition.Spec.Category)
+                || !convPolicyAllows)
+            {
+                _traces.Node(conversationKey, TurnNodeKind.ToolExec, "denied", toolId: pending.ToolId, reasonCode: "tool_unavailable");
+                var deniedMsg = $"⚠️ 已批准的工具 {pending.ToolId} 当前不可用，未执行。";
+                if (sendViaKey) await SendToKeyAsync(conversationKey, deniedMsg).ConfigureAwait(false);
+                else if (msg is not null) await _hooks.SendApprovalReplyAsync(msg, deniedMsg).ConfigureAwait(false);
+                return;
+            }
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(executingSource?.Lifetime ?? default);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+            var outcome = await binding.ExecuteAsync(conversationKey, new ToolCall(pending.ToolId, pending.FrozenArguments), cts.Token).ConfigureAwait(false);
+            _traces.Node(conversationKey, TurnNodeKind.ToolExec, outcome.Ok ? "ok" : "failed",
+                toolId: pending.ToolId, reasonCode: outcome.ReasonCode);
+            _hooks.Log($"[审批] 真实工具已执行 {pending.ToolId}（{pending.RequestId}） ok={outcome.Ok} reason={outcome.ReasonCode}");
+
+            var snippet = outcome.ModelText ?? string.Empty;
+            if (snippet.Length > 600) snippet = snippet[..600] + "…";
+            var masked = snippet.Length > 0 ? _hooks.Mask(snippet, conversationKey) : "完成";
+            var summaryText = outcome.Ok
+                ? $"✅ 工具 {pending.ToolId} 已执行：\n{masked}"
+                : $"❌ 工具 {pending.ToolId} 执行失败（{outcome.ReasonCode}）：{masked}";
+            if (sendViaKey) await SendToKeyAsync(conversationKey, summaryText).ConfigureAwait(false);
+            else if (msg is not null) await _hooks.SendApprovalReplyAsync(msg, summaryText).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _traces.Node(conversationKey, TurnNodeKind.ToolExec, "error", toolId: pending.ToolId, reasonCode: ex.GetType().Name);
+            _hooks.Log($"[审批] 真实工具执行异常（{pending.ToolId}）：{ex.GetType().Name}");
+            try
+            {
+                var errMsg = $"❌ 工具 {pending.ToolId} 执行异常（{ex.GetType().Name}）。";
+                if (sendViaKey) await SendToKeyAsync(conversationKey, errMsg).ConfigureAwait(false);
+                else if (msg is not null) await _hooks.SendApprovalReplyAsync(msg, errMsg).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private ChatCapabilitySet ResolveLiveCapabilities(string conversationKey, PlatformContext? context)
+    {
+        if (_resolveConversation is null) return Capabilities;
+        var liveConv = _resolveConversation(conversationKey, context);
+        return liveConv is not null ? CapabilitiesFor(_settings, liveConv) : Capabilities;
     }
 
     /// <summary>
@@ -541,6 +918,7 @@ public sealed class ApprovalUseCase
     /// </summary>
     public void PruneIfDue(DateTimeOffset now)
     {
+        _onPeriodicSweep?.Invoke(now);
         if (now - _lastPrune <= TimeSpan.FromMinutes(10))
         {
             return;
@@ -548,6 +926,7 @@ public sealed class ApprovalUseCase
 
         _lastPrune = now;
         var pruned = _approvals.Prune(now);
+        _pendingTools.Prune(now);
         foreach (var id in _sources.Keys)
             if (_approvals.Get(id, now) is null) _sources.TryRemove(id, out _);
         if (pruned > 0)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Domain.Permissions;
 
@@ -28,11 +29,13 @@ public sealed class ChatCapabilitySet
     public ToolRegistry Registry { get; }
 
     public ToolPolicy Policy { get; }
+    public ChatToolCatalog Catalog { get; }
 
-    private ChatCapabilitySet(ToolRegistry registry, ToolPolicy policy)
+    private ChatCapabilitySet(ToolRegistry registry, ToolPolicy policy, ChatToolCatalog catalog)
     {
         Registry = registry;
         Policy = policy;
+        Catalog = catalog;
     }
 
     /// <summary>场景名（空 = 跟随现有开关，即改造前的行为）。</summary>
@@ -48,24 +51,54 @@ public sealed class ChatCapabilitySet
         string? scenario,
         int policyVersion = 1,
         bool approvalsEnabled = false,
-        bool questionsEnabled = false)
+        bool questionsEnabled = false,
+        ChatToolCatalog? catalog = null,
+        bool enableDocuments = false,
+        bool enableDigest = false,
+        bool enableKnowledge = false,
+        bool enableExternalMcpRead = true,
+        bool enableScheduler = false,
+        bool enablePersonalTodo = false)
     {
+        catalog ??= ChatToolCatalog.Builtin;
+        var registry = new ToolRegistry();
+        foreach (var spec in catalog.Specs) registry.Register(spec);
         // #115：id→开关 的表只留一份（ToolSpec.FeatureKey + ToolSwitches），这里不再抄第二份。
         var switches = new Domain.Tools.ToolSwitchState(
             enableWebSearch, enableMusic, enableVoice, enableStickers, enablePoke,
-            Approvals: approvalsEnabled, Questions: questionsEnabled);
+            Approvals: approvalsEnabled, Questions: questionsEnabled,
+            Documents: enableDocuments, Digest: enableDigest, Knowledge: enableKnowledge,
+            Scheduler: enableScheduler, PersonalTodo: enablePersonalTodo);
         bool SwitchAllows(string id)
-            => Domain.Tools.ChatToolSpecs.Find(id) is { } spec && Domain.Tools.ToolSwitches.Enabled(spec, switches);
+            => catalog.Find(id) is { } spec && !ToolDescriptor.AlwaysDenied(spec.Category)
+                && Domain.Tools.ToolSwitches.Enabled(spec, switches)
+                && !(spec.Origin == Domain.Tools.ToolOrigin.Mcp && spec.ReadOnly && !enableExternalMcpRead)
+                && !(!spec.ReadOnly && spec.Origin == Domain.Tools.ToolOrigin.Plugin && !approvalsEnabled);
+
+        var realApprovableIds = catalog.Specs
+            .Where(s => !s.ReadOnly
+                && !ToolDescriptor.AlwaysDenied(s.Category)
+                && !string.Equals(s.Id, ApprovalFlow.FixedToolId, StringComparison.Ordinal)
+                && (s.FeatureKey == Domain.Tools.ToolFeature.Approval
+                    || (approvalsEnabled && SwitchAllows(s.Id) && s.FeatureKey is Domain.Tools.ToolFeature.Scheduler or Domain.Tools.ToolFeature.PersonalTodo)))
+            .Select(s => s.Id)
+            .ToArray();
 
         var token = (scenario ?? string.Empty).Trim().ToLowerInvariant();
         if (token.Length == 0)
         {
             // 审批假工具与「提问」也由各自的 FeatureKey（approval / question）决定是否入名单：
             // 开关关时它们不在 allowed 里，开了才进 —— 与改造前两条 if 逐字等价（#115 收进元数据）。
-            var allowed = DefaultRegistry.Ids.Where(SwitchAllows).ToHashSet(StringComparer.Ordinal);
+            var allowed = registry.Ids.Where(SwitchAllows).ToHashSet(StringComparer.Ordinal);
+            var requiredTools = approvalsEnabled
+                ? new HashSet<string>(realApprovableIds, StringComparer.Ordinal) { ApprovalFlow.FixedToolId }
+                : null;
+            var approvableTools = approvalsEnabled && realApprovableIds.Length > 0
+                ? new HashSet<string>(realApprovableIds, StringComparer.Ordinal)
+                : null;
 
             return new ChatCapabilitySet(
-                DefaultRegistry,
+                registry,
                 new ToolPolicy(
                     allowed,
                     MaxCallsPerRun: int.MaxValue,   // 沿用旧行为：一轮里可以同时触发多个动作
@@ -76,9 +109,8 @@ public sealed class ChatCapabilitySet
                     // **显式空集** = 明确“这个类别不需要审批” → 与改造前逐字一致（V3 §5.3 兼容红线）。
                     // 不写这个字段的话会落到 ToolPolicy 的默认口径（SendMessage 要审批），那就会改变既有行为。
                     ApprovalRequiredCategories: new HashSet<ToolCategory>(),
-                    ApprovalRequiredTools: approvalsEnabled
-                        ? new HashSet<string>(StringComparer.Ordinal) { ApprovalFlow.FixedToolId }
-                        : null))
+                    ApprovalRequiredTools: requiredTools,
+                    ApprovableTools: approvableTools), catalog)
             {
                 Scenario = string.Empty,
             };
@@ -87,6 +119,13 @@ public sealed class ChatCapabilitySet
         // 配了场景：预设白名单 ∩ 面板开关（预设不能把面板关掉的能力打开）
         var preset = ScenarioPresets.Resolve(token, policyVersion);
         var narrowed = preset.AllowedTools.Where(SwitchAllows).ToHashSet(StringComparer.Ordinal);
+        if (token is ScenarioPresets.Research or ScenarioPresets.Social && enableExternalMcpRead)
+        {
+            foreach (var spec in catalog.Specs.Where(s => s.Origin == Domain.Tools.ToolOrigin.Mcp && s.ReadOnly))
+            {
+                if (SwitchAllows(spec.Id)) narrowed.Add(spec.Id);
+            }
+        }
 
         // 审批要求**只按工具名**表达：预设里显式写空集，不然会落到 ToolPolicy 的默认口径
         // （“SendMessage 一律要审批”）—— 那样 ask.question 永远开不出票、social 里的
@@ -97,9 +136,20 @@ public sealed class ChatCapabilitySet
         if (approvalsEnabled)
         {
             narrowed.Add(ApprovalFlow.FixedToolId);
+            foreach (var id in realApprovableIds)
+            {
+                if (SwitchAllows(id)) narrowed.Add(id);
+            }
+            var presetRequired = new HashSet<string>(realApprovableIds.Where(SwitchAllows), StringComparer.Ordinal)
+            {
+                ApprovalFlow.FixedToolId,
+            };
+            var presetApprovable = realApprovableIds.Length > 0
+                ? new HashSet<string>(realApprovableIds.Where(SwitchAllows), StringComparer.Ordinal)
+                : null;
             preset = preset with
             {
-                ApprovalRequiredTools = new HashSet<string>(StringComparer.Ordinal) { ApprovalFlow.FixedToolId },
+                ApprovalRequiredTools = presetRequired,
                 // 批准要能真的放开它：固定假工具属 SendMessage，而 on-demand 的
                 // ApprovableCategories 是空集、research 只有 WebRead —— 不并进去就会出现
                 // “批过了仍然 approval_cannot_grant”，演示闭环在两种预设下走不通。
@@ -108,6 +158,7 @@ public sealed class ChatCapabilitySet
                 {
                     ToolCategory.SendMessage,
                 },
+                ApprovableTools = presetApprovable,
             };
         }
 
@@ -116,7 +167,7 @@ public sealed class ChatCapabilitySet
             narrowed.Add(ApprovalFlow.QuestionToolId);
         }
 
-        return new ChatCapabilitySet(DefaultRegistry, preset with { AllowedTools = narrowed })
+        return new ChatCapabilitySet(registry, preset with { AllowedTools = narrowed }, catalog)
         {
             Scenario = token,
         };
@@ -150,5 +201,5 @@ public sealed class ChatCapabilitySet
     /// 面板上保存一次无关键（比如改了个阈值）不该把在途审批单弄失效。
     /// </summary>
     public string PolicyFingerprint
-        => "reg[" + string.Join(",", Registry.Ids.OrderBy(x => x, StringComparer.Ordinal)) + "] " + Policy.Fingerprint();
+        => "catalog[" + Catalog.Fingerprint + "] " + Policy.Fingerprint();
 }

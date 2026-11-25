@@ -32,9 +32,9 @@
     <!-- 确定性构建：同样的输入产出同样的二进制，便于比对"重构前后行为等价" -->
     <Deterministic>true</Deterministic>
 
-    <!-- 版本单一真源（#122）：全仓只有这一处 <Version>，csproj 里再写会悄悄压过它。
-         改这里 + 打 tag 才算发版；CI 在 tag 构建上断言 tag 与这里一致，
-         运行时的 /healthz 回包与命令行版本参数都从程序集读这个值。 -->
+    <!-- 宿主版本真源：只有 build/release-projects.json 精确登记的独立包/契约工程
+         可以在各自 csproj 声明一个字面 Version；其余工程继承此值。
+         CI 保留宿主 tag 与命令行程序集版本一致性；包发行不改变宿主版本。 -->
     <Version>1.4.0</Version>
   </PropertyGroup>
 

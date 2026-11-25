@@ -11,16 +11,16 @@ namespace BotAgent.IntegrationHarness;
 ///   ① **被 @ → Mentioned**：日志里出现 `Observing → Probing（mentioned_probe`；
 ///   ② **无关的群消息 → IrrelevantMessage**：试探后下一条旁白 → `Probing → Exiting（probing_no_confirm`；
 ///   ③ **模型出事 → ModelTimeout**：上游连续 503 → `… → Exiting（model_timeout`（**只降级，不升级**）；
-///   ④ **面板改的上限真的到了状态机手里**：改完设置后日志里那行 `[参与] 策略已更新：连续 ≤N`。
+///   ④ 观测台账使用固定策略，不再提供第二套频率编辑；旧字段提交拒绝。
 ///
-/// 为什么全部靠**日志断言**：状态机只写结构化日志、不改“发不发”的判定（gating 默认关），
+/// 为什么使用**日志与只读接口断言**：状态机只写结构化日志、不改“发不发”的判定，
 /// 所以“接没接上”唯一的现场证据就是这些日志行。断言只看形状（状态/原因码/数字），不看任何正文。
 /// </summary>
 public static partial class Program
 {
     private static async Task RunParticipationAnchorScenarioAsync()
     {
-        Section("S44 参与状态机的观测锚点（@ / 旁白 / 模型超时 / 面板改上限）");
+        Section("S44 参与状态观测（@ / 旁白 / 模型超时 / 固定诊断策略）");
 
         var openAiPort = FreePort(17894);
         var botWsPort = FreePort(13098);
@@ -49,17 +49,13 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_ENABLE_POKE"] = "0",
             ["QQCHAT_ENABLE_VOICE"] = "0",
             ["QQCHAT_ENABLE_MUSIC"] = "0",
             ["QQCHAT_WEB_SEARCH"] = "0",
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
-            // 参与上限：用一组**非默认值**，这样“面板改了真的生效”才有证据
-            ["QQCHAT_PARTICIPATION_MAX_REPLIES"] = "5"
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
@@ -85,25 +81,31 @@ public static partial class Program
             Participated("→ Exiting（model_timeout") || Participated("→ Observing（model_timeout"),
             bot.OutputLines.LastOrDefault(l => l.Contains("model_timeout")) ?? "(没有 model_timeout 行)");
 
-        // ── ② 面板改上限：日志里必须能看到新的那组数 ──
+        // ── ② Retired participation controls reject atomically; pacing remains editable. ──
+        var (_, observationBody) = await PanelGetAsync($"{panel}/api/participation");
+        var observationPolicy = JsonNode.Parse(observationBody)?["policy"]?.GetValue<string>();
         var (saveCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
             """{"participationMaxConsecutiveReplies":6,"participationCooldownSeconds":30}""");
-        Check("面板保存参与上限成功", saveCode == 200, $"HTTP {saveCode}");
+        Check("旧参与上限已退役", saveCode == 400, $"HTTP {saveCode}");
+        var refreshStart = bot.OutputLines.Count;
+        var (pacingCode, _) = await PanelPostJsonAsync($"{panel}/api/settings", """{"groupContinuationWaitSeconds":1}""");
+        Check("新版节奏参数可以保存", pacingCode == 200, $"HTTP {pacingCode}");
 
-        await WaitUntilAsync(() => Participated("策略已更新"), TimeSpan.FromSeconds(20));
-        Check("★ 面板改的上限真的到了状态机手里（日志里是**钳制后**的那组数）",
-            Participated("策略已更新：连续 ≤6") && Participated("冷却 30s"),
-            bot.OutputLines.LastOrDefault(l => l.Contains("策略已更新")) ?? "(没有策略更新行)");
+        Check("配置热更新只刷新观测台账，不恢复旧调度限制",
+            await WaitUntilAsync(() => bot.OutputLines.Skip(refreshStart).Any(l =>
+                l.Contains("已刷新只读观测台账") && l.Contains("不参与回复调度")), TimeSpan.FromSeconds(20)));
+        var (_, refreshedBody) = await PanelGetAsync($"{panel}/api/participation");
+        Check("被拒绝的旧配置与新版节奏保存都不改变固定观测策略",
+            !string.IsNullOrWhiteSpace(observationPolicy) &&
+            JsonNode.Parse(refreshedBody)?["policy"]?.GetValue<string>() == observationPolicy);
 
         var (_, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(settingsBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
-        Check("★ 面板回显的参与上限也是钳制后的值（填什么就显示什么是骗人的）",
-            runtime["participationPolicy"]?.GetValue<string>() is { Length: > 0 } echo
-            && echo.Contains("连续 ≤6") && echo.Contains("冷却 30s"),
-            runtime["participationPolicy"]?.GetValue<string>() ?? "(没有这个字段)");
-        Check("面板明确写了 gating 是关的（只观测）",
-            runtime["participationGating"]?.GetValue<string>()?.Contains("只观测") == true,
-            runtime["participationGating"]?.GetValue<string>() ?? "(没有这个字段)");
+        Check("面板不再回显旧参与配置", !runtime.ContainsKey("participationMaxConsecutiveReplies")
+            && !runtime.ContainsKey("participationCooldownSeconds") && !runtime.ContainsKey("enableParticipationGating"),
+            "retiredKeysAbsent=true");
+        Check("面板回显新版续发等待", runtime["groupContinuationWaitSeconds"]?.GetValue<int>() == 1,
+            $"wait={runtime["groupContinuationWaitSeconds"]}");
 
         // ── ③ 被 @ → Mentioned；回复成功 → Active ──
         await protocol.SendGroupMessageAsync(groupId, memberId, "群友A", "帮我看看这个", 22002,
@@ -175,7 +177,7 @@ public static partial class Program
             && part["sessions"]!.AsArray()[0]!["counters"] is not null,
             part["sessions"]?.ToJsonString() ?? "(没有 sessions)");
         Check("★ 只读接口里带上了当前生效的上限与“只观测”的说明",
-            (part["policy"]?.GetValue<string>() ?? string.Empty).Contains("连续 ≤6")
+            (part["policy"]?.GetValue<string>() ?? string.Empty).Contains("连续 ≤3")
             && (part["gating"]?.GetValue<string>() ?? string.Empty).Contains("只观测"),
             part["policy"]?.GetValue<string>() ?? "(没有 policy)");
         Check("★ 会话 key 已按脱敏开关处理（不裸奔完整群号）",

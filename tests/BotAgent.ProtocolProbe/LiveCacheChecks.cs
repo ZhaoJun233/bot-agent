@@ -177,7 +177,7 @@ internal static class LiveCacheChecks
         var transport = new ModelTransport(() => options, noNetwork, noNetwork, new ImageDownloader(noNetwork), TimeSpan.FromSeconds(60));
         var window = new[] { new ChatMessage { Role = MessageRole.Peer, SenderId = 10001, Timestamp = SyntheticTime,
             Text = "Audit all synthetic incident tickets against the runbooks. Select the lowest-numbered ticket requiring immediate escalation. Reply with its ticket ID and one short reason, under 12 words, in the normal JSON reply field." } };
-        var baseRequest = new PromptBuilder.PromptRequest(SyntheticPolicy, null, null, 0, window, [], null, null, false, false,
+        var baseRequest = new PromptBuilder.PromptRequest(SyntheticPolicy, null, null, window, [], null, null, false, false,
             null, null, null, null, null, null, null, 0, false, false, 80, 0, false, false, false, IsPrivateConversation: true);
         var plan = new List<PreparedCall>();
         var fixedParts = PromptBuilder.BuildParts(baseRequest with { ProfilesText = "Synthetic operator A: triage shift alpha." });

@@ -51,7 +51,8 @@ public sealed class UnifiedMemoryCommandService
             // Compatibility aliases belong exclusively to the current router; memory retains the
             // full attested native identity, never the scalar fields of QqChatMessage.
             var target = router.CompatibilityTarget(ConversationIdCodec.Encode(context.Conversation));
-            await _source.SendTextAsync(target.IsGroup, target.Id, reply).ConfigureAwait(false);
+            using (MemoryUseScope.EnterCommandResponse())
+                await _source.SendTextAsync(target.IsGroup, target.Id, reply).ConfigureAwait(false);
         }
         catch
         {
@@ -65,7 +66,7 @@ public sealed class UnifiedMemoryCommandService
     {
         var envelope = message.Envelope;
         var lease = PlatformSourceExecution.Current;
-        if (envelope is null || lease is not { IsCurrent: true, Origin: not null }
+        if (envelope is not { IsReliableIdentity: true } || lease is not { IsCurrent: true, Origin: not null }
             || lease.Origin != envelope.Origin || envelope.Origin.Trigger != envelope.Message.Ref) return null;
         var origin = envelope.Origin;
         var conversation = envelope.Message.Ref.Conversation;

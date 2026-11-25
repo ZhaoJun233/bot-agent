@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using BotAgent.Services.Qq;
 using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
 
@@ -21,18 +20,15 @@ namespace BotAgent.Adapters.Persistence;
 ///
 /// 注意：这个表**只存标识与时间**，不存任何聊天内容。
 /// </summary>
-public sealed class OfficialIdMap : IOfficialIdMap
+public sealed partial class OfficialIdMap : IOfficialIdMap
 {
     private readonly string? _path;
     private readonly object _gate = new();
     private readonly Dictionary<string, long> _toAlias = new(StringComparer.Ordinal);
     private readonly Dictionary<long, string> _toOriginal = new();
-    private long _next;
-    private bool _dirty;
-    private DateTimeOffset _lastSave = DateTimeOffset.MinValue;
     private readonly long _aliasBase;
     private readonly long _aliasLimit;
-    private readonly bool _durable;
+    private readonly bool _strictAllocation;
     private readonly Func<string, bool>? _validateOriginal;
 
     public OfficialIdMap(string path)
@@ -41,25 +37,33 @@ public sealed class OfficialIdMap : IOfficialIdMap
     }
 
     /// <summary>
-    /// Reuse the bidirectional store for a separate platform range. Durable mode writes every
-    /// binding synchronously, validates restored candidates, and rejects collisions instead of probing.
+    /// Every disk-backed binding is persisted before return. The historical durable argument
+    /// selects strict hash allocation (used by Feishu), not whether disk errors may be ignored.
+    /// Official legacy mode preserves existing aliases and its original linear collision probing.
     /// A null path is an explicitly ephemeral map for offline probes only.
     /// </summary>
     public OfficialIdMap(string? path, long aliasBase, long aliasLimit, bool durable, Func<string, bool>? validateOriginal = null)
+        : this(path, aliasBase, aliasLimit, durable, validateOriginal, typedOfficial: false)
+    {
+    }
+
+    private OfficialIdMap(string? path, long aliasBase, long aliasLimit, bool durable,
+        Func<string, bool>? validateOriginal, bool typedOfficial)
     {
         _path = path;
         if (aliasBase <= 0 || aliasLimit <= aliasBase) throw new ArgumentOutOfRangeException(nameof(aliasBase));
         _aliasBase = aliasBase;
         _aliasLimit = aliasLimit;
-        _durable = durable;
+        _strictAllocation = durable;
         _validateOriginal = validateOriginal;
-        _next = aliasBase;
+        _typedOfficial = typedOfficial;
         Load();
     }
 
     /// <summary>拿 openid 的别名；没有就分配一个并落盘。</summary>
     public long AliasFor(string original)
     {
+        if (_typedOfficial) throw new InvalidOperationException("identity_type_required");
         if (string.IsNullOrWhiteSpace(original))
         {
             return 0;
@@ -126,141 +130,131 @@ public sealed class OfficialIdMap : IOfficialIdMap
     /// </summary>
     private long Allocate(string original)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(original));
-        var slot = _durable
-            ? (long)(System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(hash) % (ulong)(_aliasLimit - _aliasBase))
-            : BitConverter.ToUInt32(hash, 0) % 1_000_000_000_000L;
-        var candidate = _aliasBase + slot;
+        var candidate = CandidateFor(original);
         // Durable identities cannot depend on arrival order when a candidate collides.
-        if (_durable && _toOriginal.ContainsKey(candidate))
+        if (_strictAllocation && _toOriginal.ContainsKey(candidate))
             throw new InvalidOperationException("Identity alias collision; explicit recovery required.");
-        var guard = 0;
-        while (_toOriginal.ContainsKey(candidate) && guard++ < 1_000_000)
+        var first = candidate;
+        while (_toOriginal.ContainsKey(candidate))
         {
             candidate++;
             if (candidate >= _aliasLimit)
             {
                 candidate = _aliasBase; // 绕回去找
             }
+            if (candidate == first)
+                throw new InvalidOperationException("Identity alias range exhausted.");
         }
-
-        if (candidate >= _next)
-        {
-            _next = candidate + 1;
-        }
-
         return candidate;
+    }
+
+    private long CandidateFor(string original)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(original));
+        var range = _aliasLimit - _aliasBase;
+        var slot = _strictAllocation
+            ? (long)(System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(hash) % (ulong)range)
+            : System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(hash) % Math.Min(range, 1_000_000_000_000L);
+        return _aliasBase + slot;
     }
 
     private void Load()
     {
         if (_path is null) return;
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(_path); }
+        catch (FileNotFoundException) { return; }
+        catch (DirectoryNotFoundException) { return; }
+        // Only an absent file is a new map. Unreadable, malformed or ambiguous state is
+        // retained for explicit recovery; rebuilding it could reassign a persisted identity.
         try
         {
-            if (!File.Exists(_path))
-            {
-                return;
-            }
-
-            var json = JsonNode.Parse(File.ReadAllText(_path));
-            var entries = json?["map"]?.AsObject();
-            if (entries is null)
-            {
-                if (_durable) throw new InvalidDataException("Missing identity map.");
-                return;
-            }
-
-            foreach (var (original, node) in entries)
-            {
-                if (node is null)
-                {
-                    if (_durable) throw new InvalidDataException("Invalid identity map entry.");
-                    continue;
-                }
-
-                var alias = node.GetValue<long>();
-                if (_durable && (alias < _aliasBase || alias >= _aliasLimit || _toOriginal.ContainsKey(alias)
-                    || (_validateOriginal is not null && !_validateOriginal(original)) || alias != Allocate(original)))
-                    throw new InvalidDataException("Invalid or ambiguous identity alias.");
-                if (alias >= _aliasBase)
-                {
-                    _toAlias[original] = alias;
-                    _toOriginal[alias] = original;
-                }
-            }
-
-            if (_toOriginal.Count > 0)
-            {
-                _next = _toOriginal.Keys.Max() + 1;
-            }
+            // Keep the old reader's BOM support, but bind migration previews to original bytes.
+            using var reader = new StreamReader(new MemoryStream(bytes), new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
+            using var document = JsonDocument.Parse(reader.ReadToEnd());
+            ReadEntries(ValidateDocument(document.RootElement));
+            if (_typedOfficial) ReadOfficialIndex(document.RootElement);
+            _snapshotSha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
         }
-        catch (Exception) when (!_durable)
+        catch (Exception error) when (error is JsonException or DecoderFallbackException)
         {
-            // 表坏了不能拖垮启动：丢掉重建（别名会变，但会话 key 里的老别名仍能当普通号用）
-            _toAlias.Clear();
-            _toOriginal.Clear();
+            // Do not put raw identity text from parser errors into caller diagnostics.
+            throw new InvalidDataException("Invalid identity map document.");
         }
     }
+
+    private JsonElement ValidateDocument(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Invalid identity map document.");
+        var properties = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!properties.Add(property.Name) || property.Name is not ("note" or "aliasBase" or "map")
+                && !(_typedOfficial && property.Name == "officialIdentities"))
+                throw new InvalidDataException("Unsupported or ambiguous identity map document.");
+            if (property.Name == "aliasBase" && (property.Value.ValueKind != JsonValueKind.Number
+                || !property.Value.TryGetInt64(out var aliasBase) || aliasBase != _aliasBase))
+                throw new InvalidDataException("Identity map range mismatch.");
+        }
+        if (!root.TryGetProperty("map", out var entries) || entries.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Missing identity map.");
+        return entries;
+    }
+
+    private void ReadEntries(JsonElement entries)
+    {
+        foreach (var entry in entries.EnumerateObject())
+        {
+            var original = entry.Name;
+            if (string.IsNullOrWhiteSpace(original) || entry.Value.ValueKind != JsonValueKind.Number
+                || !entry.Value.TryGetInt64(out var alias) || alias < _aliasBase || alias >= _aliasLimit
+                || _toAlias.ContainsKey(original) || _toOriginal.ContainsKey(alias)
+                || (_validateOriginal is not null && !_validateOriginal(original))
+                || (_strictAllocation && alias != CandidateFor(original)))
+                throw new InvalidDataException("Invalid or ambiguous identity alias.");
+            _toAlias.Add(original, alias);
+            _toOriginal.Add(alias, original);
+        }
+    }
+
+    /// <summary>Compatibility hook: every successful allocation is already committed.</summary>
+    public void Flush() { }
 
     private void SaveLocked()
     {
-        // 落盘不必每次分配都写（openid 分配是偶发事件）；1 秒一次 + 进程退出时收尾即可
-        _dirty = true;
-        if (!_durable && Clock.Now - _lastSave < TimeSpan.FromSeconds(1))
+        if (_path is null) return;
+        var dir = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        var map = new JsonObject();
+        foreach (var (original, alias) in _toAlias) map[original] = alias;
+        var doc = new JsonObject
         {
-            return;
-        }
-
-        SaveNowLocked();
-    }
-
-    /// <summary>立即落盘（进程退出前调一次）。</summary>
-    public void Flush()
-    {
-        lock (_gate)
-        {
-            if (_dirty)
-            {
-                SaveNowLocked();
-            }
-        }
-    }
-
-    private void SaveNowLocked()
-    {
-        if (_path is null) { _dirty = false; return; }
+            ["note"] = _strictAllocation ? "平台稳定身份 → 别名号（只存标识，不存聊天内容）" : "官方通道 openid → 别名号（只存标识，不存聊天内容）",
+            ["aliasBase"] = _aliasBase,
+            ["map"] = map,
+        };
+        if (_typedOfficial) doc["officialIdentities"] = WriteOfficialIndex();
+        var text = doc.ToJsonString();
+        var tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            var dir = Path.GetDirectoryName(_path);
-            if (!string.IsNullOrEmpty(dir))
+            using (var output = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                Directory.CreateDirectory(dir);
+                using var writer = new StreamWriter(output, new UTF8Encoding(false), leaveOpen: true);
+                writer.Write(text);
+                writer.Flush();
+                output.Flush(flushToDisk: true);
             }
-
-            var map = new JsonObject();
-            foreach (var (original, alias) in _toAlias)
-            {
-                map[original] = alias;
-            }
-
-            var doc = new JsonObject
-            {
-                ["note"] = _durable ? "平台稳定身份 → 别名号（只存标识，不存聊天内容）" : "官方通道 openid → 别名号（只存标识，不存聊天内容）",
-                ["aliasBase"] = _aliasBase,
-                ["map"] = map,
-            };
-
-            var tmp = _path + ".tmp";
-            // 不传 options：JsonNode.ToJsonString() 用内置默认（自己 new 一个没带 TypeInfoResolver 的
-            // JsonSerializerOptions 会在首次使用时抛 read-only/resolver 错误 —— SettingsStore 那边就踩过）。
-            File.WriteAllText(tmp, doc.ToJsonString());
             File.Move(tmp, _path, overwrite: true);
-            _dirty = false;
-            _lastSave = Clock.Now;
+            _snapshotSha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
         }
-        catch (Exception) when (!_durable)
+        finally
         {
-            // 写不进去不影响运行（内存里那份还在），下次再试
+            // Cleanup must not change the observed publication result.
+            try { File.Delete(tmp); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 }

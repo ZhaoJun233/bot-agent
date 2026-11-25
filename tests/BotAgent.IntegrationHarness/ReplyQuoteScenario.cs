@@ -37,6 +37,7 @@ public static partial class Program
 
         const int openAiPort = 17822;   // 注意：18106–19065 被 Windows/Hyper-V 保留，别用
         const int botWsPort = 13030;
+        var panelPort = FreePort(18080);
         const long groupId = 66681;
 
         // 四个消息 id 分开写清楚：A 触发第一次请求，B 是第二次请求的“旧触发”，D 是上下文里最新那条
@@ -67,16 +68,28 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",   // 别分句，一条回复就是一次 send_group_msg
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_PROFILE_SUMMARY"] = "0", // 别让画像巡检占掉脚本回复
             ["QQCHAT_STICKERS"] = "0",        // 本场景只关心引用，关掉表情包避免干扰
-            ["QQCHAT_HEALTH_PORT"] = "0"
+            ["QQCHAT_HEALTH_PORT"] = panelPort.ToString()
         });
 
         await WaitForPortAsync(botWsPort, cts.Token, bot);
+        await WaitForPortAsync(panelPort, cts.Token, bot);
+
+        async Task WaitForQuoteIdleAsync()
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            do
+            {
+                var status = await PanelGetAsync($"http://127.0.0.1:{panelPort}/status");
+                if (status.Status == 200 && JsonNode.Parse(status.Body) is JsonObject snapshot &&
+                    snapshot["inFlightReplies"]?.GetValue<int>() == 0 && snapshot["queuedReplies"]?.GetValue<int>() == 0)
+                    return;
+                await Task.Delay(50, cts.Token);
+            } while (DateTime.UtcNow < deadline);
+            throw new TimeoutException("Synthetic quote scenario did not become idle");
+        }
 
         using var protocol = new MockProtocol { SelfId = 10001 };
         await protocol.ConnectReverseAsync($"ws://127.0.0.1:{botWsPort}", cts.Token);
@@ -84,7 +97,8 @@ public static partial class Program
 
         // A：第一次请求就地开始（此时上下文里只有 A）
         await protocol.SendGroupMessageAsync(groupId, 30001, "老王", "这个报错怎么修", msgA, ct: cts.Token);
-        await Task.Delay(300);
+        Check("首轮模型已开始，再送入积压消息",
+            await WaitUntilAsync(() => openAi.Requests.Count > 0, TimeSpan.FromSeconds(10)));
 
         // B/C/D：模型还在生成第一条回复，它们只能排队 —— 于是 B 成了“积压的旧触发”
         await protocol.SendGroupMessageAsync(groupId, 30002, "群友A", "域名要配dns解析的", msgB, ct: cts.Token);
@@ -361,9 +375,18 @@ public static partial class Program
         // 别人那条下一轮再说）。触发就是最后一条时按“紧接上一句不引用”的老规矩不挂引用。
         const long msgPing = 7401;   // 点名那条（@ 机器人）
         const long msgOther = 7402;  // 之后别人插的一句（模型更想接的那条）
-        openAi.EnqueueReply($$"""{"suitability": 80, "reply": "我在，什么事", "replyTo": {{msgOther}}}""");
-        openAi.EnqueueReply(silence);   // 后面那条插话如果也触发一轮，别把脚本吃空
+        await WaitForQuoteIdleAsync();
+        var pacingSave = await PanelPostJsonAsync($"http://127.0.0.1:{panelPort}/api/settings",
+            """{"groupContinuationWaitSeconds":1}""");
+        Check("点名优先场景使用已保存的续话等待", pacingSave.Code == 200, $"HTTP {pacingSave.Code}");
+        openAi.ClearScriptedReplies();
+        openAi.AddRule($"(#{msgPing})",
+            $$"""{"suitability": 80, "reply": "我在，什么事", "replyTo": {{msgOther}}}""", silence);
+        var beforePingRequests = openAi.Requests.Count;
+        openAi.ResponseDelayMs = 0;
         await protocol.SendGroupMessageAsync(groupId, 30016, "老王", "@10001 机器人你在吗", msgPing, mentionBot: true, ct: cts.Token);
+        // Keep the explicit opportunity waiting so both candidate targets enter its snapshot.
+        // The initial in-flight ordinary turn was exercised separately above.
         await Task.Delay(300);
         await protocol.SendGroupMessageAsync(groupId, 30017, "小李", "顺便说一句我换电脑了", msgOther, ct: cts.Token);
         await WaitUntilAsync(
@@ -379,6 +402,10 @@ public static partial class Program
         Check("★ 点名优先：人家在跟你说话时，引用挂给点名那条（不挂别人）",
             QuotedMessageId(afterPing) == msgPing,
             $"引用 id = {QuotedMessageId(afterPing)?.ToString() ?? "无"}，期望 {msgPing}");
+        Check("点名优先请求的上下文包含两个可用目标",
+            openAi.Requests.Skip(beforePingRequests).Any(request =>
+                UserTexts(request).Any(text => text.Contains($"(#{msgPing})")) &&
+                UserTexts(request).Any(text => text.Contains($"(#{msgOther})"))));
         Check("★ 改引的理由写进了日志（复盘能看出为什么改）",
             bot.OutputLines.Any(l => l.Contains("在跟机器人说话") && l.Contains("点名优先")),
             string.Join(" | ", bot.OutputLines.Where(l => l.Contains("点名优先")).TakeLast(2)));
@@ -433,7 +460,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
         });
         await WaitForPortAsync(botWsPort, cts.Token, bot2);
         using var protocol2 = new MockProtocol { SelfId = 10001 };
@@ -478,7 +504,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
         });
         await WaitForPortAsync(botWsPort, cts.Token, bot3);
         using var protocol3 = new MockProtocol { SelfId = 10001 };

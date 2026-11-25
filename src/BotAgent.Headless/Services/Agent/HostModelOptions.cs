@@ -11,7 +11,7 @@ internal static class HostModelOptions
         return () => Project(box.Current);
     }
 
-    private static BotAgent.Model.ModelOptions Project(AppSettings settings) => new()
+    internal static BotAgent.Model.ModelOptions Project(AppSettings settings) => new()
     {
         BaseUrl = settings.ModelBaseUrl,
         Model = settings.Model,
@@ -28,7 +28,6 @@ internal static class HostModelOptions
         FastThinkingCustomBudget = settings.FastThinkingCustomBudget,
         DefaultTemperature = settings.DefaultTemperature,
         DefaultTopP = settings.DefaultTopP,
-        EnableAtmosphereDamping = settings.EnableAtmosphereDamping,
         VoiceMaxChars = settings.VoiceMaxChars,
         VoiceEagerness = settings.VoiceEagerness,
         FilterActionNarration = settings.FilterActionNarration,

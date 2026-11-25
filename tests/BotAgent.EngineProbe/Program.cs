@@ -25,6 +25,7 @@ public static class Program
         await RunAsync("Private reply: addressing and model scope", PrivateReplyChecks.RunAsync);
         await RunAsync("Token quota: plugin admission, isolation, mentions and disabled accounting", TokenQuotaTests.Run);
         await RunAsync("Plugins: hot replacement, drain, cancellation and lifecycle serialization", PluginHotReloadChecks.Run);
+        await RunAsync("Plugins: runtime dependency readiness, binding and transitive leases", PluginDependencyChecks.Run);
         await RunAsync("PluginGate: enabled capabilities and tools pass", PluginGateEnabledTests);
         await RunAsync("PluginGate: disabled/unregistered known capabilities fail closed", PluginGateDisabledTests);
         await RunAsync("PluginGate: unknown capabilities/tools are ungated", PluginGateUnknownTests);
@@ -88,6 +89,7 @@ public static class Program
         await RunAsync("ToolScope: server tool access narrows tools and qq actions together", ToolScopeTests.ServerToolAccessNarrowsAsync);
         await RunAsync("ToolScope: server tool allowlist keeps the docker two-lock rule", ToolScopeTests.ServerToolAccessKeepsDockerTwoLocksAsync);
         await RunAsync("ToolScope: MCP tools are filtered by qualified name", ToolScopeTests.McpScopeFiltersByNameAsync);
+        await RunAsync("Phase4: RBAC precedence, group isolation, ChatOnly MCP gate & Guest downgrade", Phase4EngineChecks.RunAsync);
 
         Console.WriteLine();
         Console.WriteLine($"Passed {_passed}; failed {_failed}");
@@ -107,6 +109,9 @@ public static class Program
             "preset.feature.vibes",
             "preset.feature.profiles",
             "preset.feature.websearch",
+            "preset.feature.documents",
+            "preset.feature.digest",
+            "preset.feature.knowledge",
         };
 
         var gate = new PluginGate(new FakeRegistry(allPresets, allPresets));
@@ -118,6 +123,9 @@ public static class Program
         Check(gate.Allows("vibes"), "vibes should be enabled");
         Check(gate.Allows("profiles"), "profiles should be enabled");
         Check(gate.Allows("websearch"), "websearch should be enabled");
+        Check(gate.Allows("documents"), "documents should be enabled");
+        Check(gate.Allows("digest"), "digest should be enabled");
+        Check(gate.Allows("knowledge"), "knowledge should be enabled");
 
         Check(gate.AllowsTool("music.listen"), "music.* should follow the music plugin");
         Check(gate.AllowsTool("music.share"), "music.* should follow the music plugin");
@@ -126,6 +134,12 @@ public static class Program
         Check(gate.AllowsTool("poke.send"), "poke.* should follow the poke plugin");
         Check(gate.AllowsTool("web.search"), "web.search should follow the websearch plugin");
         Check(gate.AllowsTool("web.read"), "web.read should follow the websearch plugin");
+        Check(gate.AllowsTool("doc.read"), "doc.read should follow the documents plugin");
+        Check(gate.AllowsTool("chat.digest"), "chat.digest should follow the digest plugin");
+        Check(gate.AllowsTool("kb.search"), "kb.search should follow the knowledge plugin");
+        Check(gate.AllowsTool("kb.list"), "kb.list should follow the knowledge plugin");
+        Check(gate.AllowsTool("kb.save"), "kb.save should follow the knowledge plugin");
+        Check(gate.AllowsTool("kb.forget"), "kb.forget should follow the knowledge plugin");
 
         Check(
             gate.AllowsAnyTool(new[] { "music.listen", "voice.speak" }),

@@ -8,7 +8,7 @@ namespace BotAgent.Domain.Tools;
 /// 是交给执行者（<see cref="BotAgent.Services.Tools.IToolExecutor" />）的那一份。
 /// </summary>
 /// <param name="ToolId">工具名（必须能在登记表里找到，否则连执行者都不会看到它）。</param>
-/// <param name="Arguments">模型给的参数（原样；校验归 <see cref="ToolArgs" />，执行者不该自己发明规则）。</param>
+/// <param name="Arguments">模型给的参数（原样；校验归 <see cref="BotAgent.Services.Tools.ToolArguments" />，执行者不该自己发明规则）。</param>
 /// <param name="CallIndex">这一次运行里的第几次调用（预算记账用）。</param>
 public sealed record ToolCall(string ToolId, JsonObject Arguments, int CallIndex = 0);
 

@@ -139,7 +139,10 @@ internal sealed class ReplyInboundGates
         // P3 审批（V3 §9.4，**默认关**）：群主/管理员（或面板点名的人）在**原会话**里回复
         // 「同意 编号」/「拒绝 编号」才算数 —— 身份、会话、有效期、一次性、策略版本全在服务端核。
         // 注意：解析不出“动词 + 编号”这种形状的消息**不拦截**，照旧走普通聊天链路。
-        if (_box.Current.EnableApprovals && _approvals.HandleCommand(msg))
+        if (msg.AllowsCommands
+            && _approvals is not null
+            && (_box.Current.EnableApprovals || _approvals.HasPendingRuntimeTaskApproval(msg))
+            && _approvals.HandleCommand(msg))
         {
             return null;
         }

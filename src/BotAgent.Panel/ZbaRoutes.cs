@@ -9,9 +9,7 @@ internal static class ZbaRoutes
         new("GET", "/zba/v1/health", ZbaScope.Read, true, "health", "Liveness / configured state", null, "ZbaHealth"),
         new("GET", "/zba/v1/meta", ZbaScope.Read, false, "meta", "Contract version and supported features", null, "ZbaMeta"),
         new("GET", "/zba/v1/openapi.json", ZbaScope.Read, false, "openapi", "Actual OpenAPI document for this server", null, "OpenApiDocument"),
-        new("GET", "/zba/v1/quotas", ZbaScope.Read, false, "quotas.list", "Read registered source quota limits and usage", null, "ZbaQuotaPage"),
-        new("POST", "/zba/v1/quotas/save", ZbaScope.Admin, false, "quotas.save", "Save one limit with CAS and durable receipt", "ZbaQuotaSaveRequest", "ZbaQuotaSaveResult"),
-        new("POST", "/zba/v1/quotas/find", ZbaScope.Admin, false, "quotas.find", "Reconcile a quota save receipt", "ZbaQuotaFindRequest", "ZbaQuotaFindResult"),
+        new("POST", "/zba/v1/operations/find", ZbaScope.Admin, false, "operations.find", "Read safe historical operation evidence", "ZbaOperationFindRequest", "ZbaOperationFindResult"),
         new("GET", "/zba/v1/status", ZbaScope.Read, false, "status", "Safe overall and per-component status", null, "ZbaStatus"),
         new("GET", "/zba/v1/sessions", ZbaScope.Read, false, "sessions.list", "List server agent sessions for a workspace source", null, "ZbaSessionPage"),
         new("POST", "/zba/v1/sessions/ensure", ZbaScope.Admin, false, "sessions.ensure", "Ensure the current server agent session", "ZbaSessionEnsureRequest", "ZbaSessionEnsureResult"),
@@ -49,6 +47,11 @@ internal static class ZbaRoutes
         new("GET", "/zba/v1/plugins/operations/{key}", ZbaScope.Read, false, "plugins.operations.get", "Read one staged plugin operation by idempotency key", null, "ZbaPluginOperationResult"),
         new("GET", "/zba/v1/plugins/{id}/settings", ZbaScope.Read, false, "plugins.settings.read", "Read a plugin's declared settings without secret values", null, "ZbaPluginSettings"),
         new("PUT", "/zba/v1/plugins/{id}/settings", ZbaScope.Admin, false, "plugins.settings.save", "Save plugin settings with expected revision", "ZbaPluginSettingsSaveRequest", "ZbaPluginSettings"),
+        new("POST", "/zba/v1/plugins/{id}/ui/sessions", ZbaScope.Read, false, "plugins.ui.session.open", "Open a generation-bound read-only UI session and short-lived asset ticket", null, "ZbaPluginUiSession"),
+        new("DELETE", "/zba/v1/plugins/{id}/ui/sessions/{sessionId}", ZbaScope.Read, false, "plugins.ui.session.close", "Close a UI session and release its generation lease", null, "ZbaPluginUiSessionClosed"),
+        new("GET", "/zba/v1/plugins/{id}/ui/{sha256}/{ticket}/{*asset}", ZbaScope.Read, true, "plugins.ui.asset", "Serve a hash-verified read-only packaged UI asset with strict CSP", null, "ZbaPluginUiAsset"),
+        new("POST", "/zba/v1/plugins/bundle/preview", ZbaScope.Admin, false, "plugins.bundle.preview", "Preview an atomic multi-package dependency combo transition", "ZbaPluginBundlePreviewRequest", "ZbaPluginBundlePreview"),
+        new("POST", "/zba/v1/plugins/bundle/apply", ZbaScope.Admin, false, "plugins.bundle.apply", "Stage and apply a preview-bound multi-package dependency combo", "ZbaPluginBundleApplyRequest", "ZbaPluginOperationResult"),
         new("GET", "/zba/v1/providers/{key}/models", ZbaScope.Read, false, "providers.models", "Discover upstream models for a saved provider route", null, "ZbaProviderModels")
     };
 
@@ -67,9 +70,9 @@ internal static class ZbaRoutes
         _ => Array.Empty<string>()
     };
 
-    internal static ZbaRouteMatch? Match(string method, string path)
+    internal static ZbaRouteMatch? Match(string method, string path, IReadOnlyList<ZbaRouteInfo>? routes = null)
     {
-        foreach (var route in RouteTable)
+        foreach (var route in routes ?? RouteTable)
         {
             if (!route.Method.Equals(method, StringComparison.Ordinal)) continue;
             if (TryMatch(route, path, out var values)) return new ZbaRouteMatch(route, values);
@@ -78,8 +81,8 @@ internal static class ZbaRoutes
         return null;
     }
 
-    internal static bool HasPath(string path)
-        => RouteTable.Any(route => TryMatch(route, path, out _));
+    internal static bool HasPath(string path, IReadOnlyList<ZbaRouteInfo>? routes = null)
+        => (routes ?? RouteTable).Any(route => TryMatch(route, path, out _));
 
     /// <summary>
     /// 只有插件的幂等键需要更宽的字符集：前端生成的键形如
@@ -95,17 +98,31 @@ internal static class ZbaRoutes
         values = Empty;
         var templateParts = template.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var pathParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (templateParts.Length != pathParts.Length) return false;
+        var hasWildcard = templateParts.Length > 0 && templateParts[^1].StartsWith("{*", StringComparison.Ordinal) && templateParts[^1].EndsWith('}');
+        if (!hasWildcard && templateParts.Length != pathParts.Length) return false;
+        if (hasWildcard && pathParts.Length < templateParts.Length) return false;
 
         var captured = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var index = 0; index < templateParts.Length; index++)
         {
             var expected = templateParts[index];
+            if (hasWildcard && index == templateParts.Length - 1)
+            {
+                var name = expected[2..^1];
+                var tailSegments = new List<string>(pathParts.Length - index);
+                for (var t = index; t < pathParts.Length; t++)
+                {
+                    if (!TryDecodeSegment(pathParts[t], false, out var seg)) return false;
+                    tailSegments.Add(seg);
+                }
+                captured[name] = string.Join('/', tailSegments);
+                break;
+            }
             var actual = pathParts[index];
             if (expected.StartsWith('{') && expected.EndsWith('}'))
             {
                 var name = expected[1..^1];
-                if (!TryDecodeSegment(actual, allowExtended, out var decoded)) return false;
+                if (!TryDecodeSegment(actual, allowExtended || name == "ticket", out var decoded)) return false;
                 captured[name] = decoded;
             }
             else if (!expected.Equals(actual, StringComparison.Ordinal))

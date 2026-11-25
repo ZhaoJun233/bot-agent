@@ -49,12 +49,35 @@
     <ProjectReference Include="..\BotAgent.Mcp\BotAgent.Mcp.csproj" />
     <ProjectReference Include="..\BotAgent.Panel\BotAgent.Panel.csproj" />
     <ProjectReference Include="..\BotAgent.Storage\BotAgent.Storage.csproj" Aliases="StorageModule" />
+    <ProjectReference Include="../../tools/BotAgent.PluginBundle/BotAgent.PluginBundle.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/model-services/backend/BotAgent.Package.ModelServices.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/agent/backend/BotAgent.Package.Agent.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/mcp-tools/backend/BotAgent.Package.McpTools.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/conversation/backend/BotAgent.Package.Conversation.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
+    <ProjectReference Include="../../packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="Version;AssemblyVersion;FileVersion;InformationalVersion;RuntimeIdentifier;SelfContained;OutDir;OutputPath;PublishDir" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.33" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.34" />
     <PackageReference Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />
     <PackageReference Include="NLayer" Version="1.16.0" />
   </ItemGroup>
 
+  <Target Name="BuildPluginDistribution" BeforeTargets="BeforeCompile;GetCopyToOutputDirectoryItems;GetCopyToPublishDirectoryItems" DependsOnTargets="ResolveProjectReferences">
+    <Exec Command="dotnet &quot;$(MSBuildProjectDirectory)/../../tools/BotAgent.PluginBundle/bin/$(Configuration)/net10.0/BotAgent.PluginBundle.dll&quot; --output &quot;$(MSBuildProjectDirectory)/$(IntermediateOutputPath)plugin-distribution&quot; &quot;$(MSBuildProjectDirectory)/../../packages/health-reporting/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/health-reporting/backend/bin/$(Configuration)/net10.0/BotAgent.Package.HealthReporting.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/model-services/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/model-services/backend/bin/$(Configuration)/net10.0/BotAgent.Package.ModelServices.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/agent/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/agent/backend/bin/$(Configuration)/net10.0/BotAgent.Package.Agent.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/mcp-tools/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/mcp-tools/backend/bin/$(Configuration)/net10.0/BotAgent.Package.McpTools.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/conversation/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/conversation/backend/bin/$(Configuration)/net10.0/BotAgent.Package.Conversation.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-qq-private/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-qq-private/backend/bin/$(Configuration)/net10.0/BotAgent.Package.PlatformQqPrivate.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-qq-official/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-qq-official/backend/bin/$(Configuration)/net10.0/BotAgent.Package.PlatformQqOfficial.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-feishu/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-feishu/backend/bin/$(Configuration)/net10.0/BotAgent.Package.PlatformFeishu.dll&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-local/distribution.json&quot; &quot;$(MSBuildProjectDirectory)/../../packages/platform-local/backend/bin/$(Configuration)/net10.0/BotAgent.Package.PlatformLocal.dll&quot;" />
+    <ReadLinesFromFile File="$(IntermediateOutputPath)plugin-distribution/bundle-files.txt">
+      <Output TaskParameter="Lines" ItemName="_PluginBundleArtifacts" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)plugin-distribution/HostPluginBundle.g.cs" />
+      <FileWrites Include="$(IntermediateOutputPath)plugin-distribution/HostPluginBundle.g.cs" />
+      <FileWrites Include="$(IntermediateOutputPath)plugin-distribution/bundle-files.txt" />
+      <FileWrites Include="@(_PluginBundleArtifacts->'$(IntermediateOutputPath)plugin-distribution/%(Identity)')" />
+      <ContentWithTargetPath Include="@(_PluginBundleArtifacts->'$(IntermediateOutputPath)plugin-distribution/%(Identity)')" TargetPath="plugin-distribution/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -42,4 +42,23 @@ internal static class OutboundAddressPolicy
 
         return false;
     }
+
+    public static bool IsLinkLocalOrMetadata(IPAddress ip)
+    {
+        if (ip.IsIPv6LinkLocal || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any))
+            return true;
+        if (ip.IsIPv4MappedToIPv6)
+            return IsLinkLocalOrMetadata(ip.MapToIPv4());
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return (b[0] == 169 && b[1] == 254) || b[0] == 0 || b[0] >= 224;
+        }
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var b = ip.GetAddressBytes();
+            return b[0] == 0xff || (b[0] == 0 && !IPAddress.IsLoopback(ip));
+        }
+        return false;
+    }
 }

@@ -51,7 +51,7 @@ export function pluginRuntime(entry: PluginCatalogEntry): string {
   return entry.kind === 'builtin' ? 'builtin' : entry.manifest.apiVersion === 2 && entry.manifest.runtime?.kind === 'python' ? 'python' : 'dotnet'
 }
 export function pluginAcquisitionUnavailable(entry: PluginCatalogEntry): boolean {
-  return entry.kind !== 'builtin' && (entry.isCompatible === false || (pluginRuntime(entry) === 'python' && entry.isCompatible !== true))
+  return entry.kind !== 'builtin' && (entry.status === 'metadata_unreadable' || entry.isCompatible === false || (pluginRuntime(entry) === 'python' && entry.isCompatible !== true))
 }
 export function pluginReviewed(entry: PluginCatalogEntry): boolean {
   return entry.kind !== 'builtin' && hasMatchingReview(entry.metadata, entry.manifest.version, entry.manifest.sha256)
@@ -68,7 +68,7 @@ export function filterPluginCatalog(entries: PluginCatalogEntry[], search: strin
   const match = (filter: string | undefined, value: string) => !filter || filter === 'all' || filter === value
   return entries.filter(entry => {
     const source = filters.source === 'package' ? entry.kind !== 'builtin' : match(filters.source, pluginSource(entry))
-    const state = entry.pendingVersion || entry.pendingUninstall || entry.restartRequired ? 'pending'
+    const state = entry.status === 'metadata_unreadable' ? 'unreadable' : entry.pendingVersion || entry.pendingUninstall || entry.restartRequired ? 'pending'
       : entry.kind === 'builtin' || entry.installedVersion ? 'installed' : 'available'
     const stateMatches = filters.state === 'enabled' ? entry.enabled === true
       : filters.state === 'disabled' ? (entry.kind === 'builtin' || Boolean(entry.installedVersion)) && entry.enabled === false
@@ -91,6 +91,7 @@ export function safeGithubLink(raw?: string): string | null {
 }
 export function pluginPackageStatus(entry: PluginCatalogEntry): string {
   if (entry.kind === 'builtin') return entry.enabled ? '已内置 · 已启用' : '已内置 · 已停用'
+  if (entry.status === 'metadata_unreadable') return '安装记录不可读 · 请先恢复记录'
   const waiting = entry.restartRequired ? '需重启宿主' : '等待热应用'
   if (entry.pendingUninstall) return '待卸载 · ' + waiting
   if (entry.pendingVersion) return '已暂存 ' + entry.pendingVersion + ' · ' + waiting

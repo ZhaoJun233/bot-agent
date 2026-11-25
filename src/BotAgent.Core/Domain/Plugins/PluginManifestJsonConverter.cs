@@ -17,7 +17,7 @@ public sealed class PluginManifestJsonConverter : JsonConverter<PluginPackageMan
 
         T? Get<T>(string name, T? fallback = default) => fields.TryGetValue(name, out var value) ? value.Deserialize<T>(options) : fallback;
         var api = Get<int>("ApiVersion", 1);
-        var allowed = Common.Concat(api == 1 ? ["EntryAssembly", "EntryType", "TargetFramework"] : api == 2 ? ["Runtime"] : Array.Empty<string>());
+        var allowed = Common.Concat(api == 1 ? ["EntryAssembly", "EntryType", "TargetFramework", "SharedContracts", "Data", "Control", "ToolApiVersion", "Configuration", "Ui", "Adoption", "ExclusiveResources"] : api == 2 ? ["Runtime", "Adoption", "ExclusiveResources"] : Array.Empty<string>());
         var wireNames = allowed.Select(name => options.PropertyNamingPolicy?.ConvertName(name) ?? name).ToArray();
         if (api is not (1 or 2) || fields.Keys.Any(key => !wireNames.Contains(key,
             options.PropertyNameCaseInsensitive ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)))
@@ -27,7 +27,12 @@ public sealed class PluginManifestJsonConverter : JsonConverter<PluginPackageMan
             api == 1 ? Get<string>("TargetFramework", PluginPackageManifest.CurrentTargetFramework) : null,
             Get<string>("MinimumHostVersion"), Get<IReadOnlyList<string>>("Permissions"),
             Get<IReadOnlyList<PluginPackageDependency>>("Dependencies"), Get<IReadOnlyList<PluginSettingDefinition>>("Settings"),
-            Get<PluginPythonRuntime>("Runtime"));
+            Get<PluginPythonRuntime>("Runtime")) { SharedContracts = Get<IReadOnlyList<PluginSharedContract>>("SharedContracts"),
+                Data = Get<PluginPackageData>("Data"), Control = Get<bool>("Control"), ToolApiVersion = Get<int?>("ToolApiVersion"),
+                Configuration = Get<PluginConfigurationDeclaration>("Configuration"),
+                Ui = Get<PluginUiDeclaration>("Ui"),
+                Adoption = Get<string>("Adoption"),
+                ExclusiveResources = Get<IReadOnlyList<string>>("ExclusiveResources") };
     }
 
     public override void Write(Utf8JsonWriter writer, PluginPackageManifest value, JsonSerializerOptions options)
@@ -44,6 +49,15 @@ public sealed class PluginManifestJsonConverter : JsonConverter<PluginPackageMan
         if (value.ApiVersion == 1) Put("TargetFramework", value.TargetFramework);
         Put("MinimumHostVersion", value.MinimumHostVersion); Put("Permissions", value.Permissions);
         Put("Dependencies", value.Dependencies); Put("Settings", value.Settings);
+        // Omission preserves old package approval fingerprints and old-reader compatibility.
+        if (value.SharedContracts is { Count: > 0 }) Put("SharedContracts", value.SharedContracts);
+        if (value.Data is not null) Put("Data", value.Data);
+        if (value.Control) Put("Control", true);
+        if (value.ToolApiVersion is { } tools) Put("ToolApiVersion", tools);
+        if (value.Configuration is not null) Put("Configuration", value.Configuration);
+        if (value.Ui is not null) Put("Ui", value.Ui);
+        if (value.Adoption is not null) Put("Adoption", value.Adoption);
+        if (value.ExclusiveResources is { Count: > 0 }) Put("ExclusiveResources", value.ExclusiveResources);
         if (value.ApiVersion == 2) Put("Runtime", value.Runtime);
         writer.WriteEndObject();
     }

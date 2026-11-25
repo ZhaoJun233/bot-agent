@@ -40,6 +40,7 @@ public sealed class MockTtsHost : IDisposable
 
     /// <summary>打开后所有请求都返回 500（模拟 TTS 容器挂了）。</summary>
     public bool Broken { get; set; }
+    public Func<Task>? BeforeSpeak { get; set; }
 
     /// <summary>/health 被访问次数。</summary>
     public int HealthHits => Volatile.Read(ref _healthHits);
@@ -128,6 +129,7 @@ public sealed class MockTtsHost : IDisposable
                 {
                     _speakCalls.Add(new SpeakCall(text, voice, speed, format));
                 }
+                if (BeforeSpeak is { } beforeSpeak) await beforeSpeak();
 
                 if (Voices.Length > 0 && !Voices.Contains(voice))
                 {

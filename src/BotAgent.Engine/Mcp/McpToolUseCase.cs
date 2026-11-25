@@ -3,9 +3,15 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Mcp;
+using BotAgent.Domain.Memory;
 using BotAgent.Domain.Permissions;
+using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Tools;
+using BotAgent.Services.Agent;
+using BotAgent.Services.Memory;
 using BotAgent.Services.Ops;
+using BotAgent.Services.Plugins;
+using BotAgent.Services.Tools;
 
 namespace BotAgent.Services.Mcp;
 
@@ -27,22 +33,167 @@ public sealed class McpToolUseCase
     private readonly IAuditChain? _audit;
     private readonly Action<string>? _log;
     private readonly int _maxCallsPerRun;
+    private readonly PluginManager? _plugins;
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private long _refreshEpoch;
     private Snapshot _snapshot = Snapshot.Empty;
 
     public McpToolUseCase(IMcpToolSource source, IAuditChain? audit = null, Action<string>? log = null,
-        int maxCallsPerRun = DefaultMaxCallsPerRun)
+        int maxCallsPerRun = DefaultMaxCallsPerRun, PluginManager? plugins = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _audit = audit;
         _log = log;
         _maxCallsPerRun = Math.Clamp(maxCallsPerRun, 1, 32);
+        _plugins = plugins;
     }
 
-    /// <summary>配置层面是否启用（false 时不发生任何网络 I/O）。</summary>
-    public bool Enabled => _source.Enabled;
+    private IMcpToolsContribution? CurrentMcpTools
+        => _plugins is not null && _plugins.TryGetContribution<IMcpToolsContribution>("system.mcp-tools", out var contribution)
+            ? contribution
+            : null;
+
+    private bool PluginAvailable => _plugins is null || CurrentMcpTools is not null;
+
+    /// <summary>配置层面与系统包层面均启用（false 时不发生任何网络 I/O）。</summary>
+    public bool Enabled => _source.Enabled && PluginAvailable;
 
     /// <summary>最近一次成功发现的工具（只读快照）。</summary>
-    public IReadOnlyList<McpToolInfo> Tools => Volatile.Read(ref _snapshot).Tools;
+    public IReadOnlyList<McpToolInfo> Tools => PluginAvailable ? Volatile.Read(ref _snapshot).Tools : Array.Empty<McpToolInfo>();
+
+    /// <summary>
+    /// 把已发现的远端（非本地进程）MCP 工具投影成聊天目录 <see cref="IToolBinding"/>：
+    ///   • 仅暴露远程只读已确认（ReadOnlyConfirmed -> ReadOnly=true, FeatureKey=text）或需人工审批（ReadOnly=false, FeatureKey=approval）工具；
+    ///   • 本地进程（Python/stdio）工具永不进聊天目录，保持高危隔离。
+    /// </summary>
+    public IReadOnlyList<IToolBinding> ChatToolBindings()
+    {
+        if (!PluginAvailable) return Array.Empty<IToolBinding>();
+        var snapshot = Volatile.Read(ref _snapshot);
+        if (snapshot.Tools.Length == 0) return Array.Empty<IToolBinding>();
+        var list = new List<IToolBinding>();
+        foreach (var tool in snapshot.Tools)
+        {
+            if (tool.IsLocalProcess) continue;
+            list.Add(new McpChatToolBinding(this, tool));
+        }
+        return list;
+    }
+
+    internal async Task<ToolOutcome> ExecuteChatAsync(McpToolInfo tool, string conversationKey, JsonObject? arguments, CancellationToken ct)
+    {
+        if (!Enabled || !Volatile.Read(ref _snapshot).Routes.TryGetValue(tool.QualifiedName, out var current)
+            || !_source.IsToolCurrent(current)
+            || !string.Equals(current.ServerId, tool.ServerId, StringComparison.Ordinal)
+            || !string.Equals(current.SourceGeneration, tool.SourceGeneration, StringComparison.Ordinal)
+            || current.ReadOnlyConfirmed != tool.ReadOnlyConfirmed)
+        {
+            Audit(conversationKey, tool.QualifiedName, "blocked", "mcp_unavailable", 0, 0, false);
+            return ToolOutcome.Failure("mcp_unavailable", "MCP 工具当前不可用或已重载，这次不执行。", "mcp_unavailable");
+        }
+
+        if (MemoryUseScope.HasMemory)
+        {
+            if (!current.ReadOnlyConfirmed
+                || !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
+                || !MemoryUseScope.CanUse)
+            {
+                Audit(conversationKey, tool.QualifiedName, "blocked", "memory_tainted_blocked", 0, 0, false);
+                return ToolOutcome.Failure("memory_tainted_blocked", "受控记忆污点策略阻止执行该外部 MCP 工具。", "memory_tainted_blocked");
+            }
+        }
+
+        var args = CoerceChatArguments(current.InputSchemaJson, arguments);
+        if (!McpSchemaValidator.TryValidate(current.InputSchemaJson, args, out var schemaReason))
+        {
+            Audit(conversationKey, current.QualifiedName, "blocked", schemaReason, 0, 0, false);
+            return ToolOutcome.Failure(schemaReason, $"参数不符合 MCP 工具 schema（{schemaReason}），这次不执行。", schemaReason);
+        }
+
+        async Task<McpCallResult> CallCoreAsync()
+            => await _source.CallWithLeaseAsync(current, args, ct).ConfigureAwait(false);
+
+        McpCallResult result;
+        try
+        {
+            result = MemoryUseScope.HasMemory
+                ? await MemoryUseScope.Use(CallCoreAsync).ConfigureAwait(false)
+                : await CallCoreAsync().ConfigureAwait(false);
+        }
+        catch (MemoryUseInvalidatedException)
+        {
+            Audit(conversationKey, current.QualifiedName, "blocked", "memory_use_invalidated", 0, 0, false);
+            return ToolOutcome.Failure("memory_use_invalidated", "记忆作用域已失效，本次 MCP 调用已中止。", "memory_use_invalidated");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            Audit(conversationKey, current.QualifiedName, "canceled", "caller_canceled", 0, 0, true);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Audit(conversationKey, current.QualifiedName, "failed", "mcp_internal", 0, 0, true);
+            _log?.Invoke($"[Mcp] 聊天调用异常（{ex.GetType().Name}）");
+            return ToolOutcome.Failure("mcp_internal", "MCP 调用内部失败，本次结果未知，不要自动重试。", "mcp_internal");
+        }
+
+        Audit(conversationKey, current.QualifiedName, result.Ok ? "ok" : "failed", result.ReasonCode, result.SizeBytes, result.DurationMs,
+            result.UnknownOutcome);
+        if (result.Ok) return ToolOutcome.Success(result.Content ?? string.Empty, result.AuditDetail);
+
+        var text = string.IsNullOrWhiteSpace(result.Content)
+            ? (result.UnknownOutcome ? "MCP 调用结果未知（远端可能已经执行），不要自动重试。" : $"MCP 调用失败（{result.ReasonCode}）。")
+            : (result.UnknownOutcome ? result.Content + "\n（远端可能已经执行，结果未知；不要自动重试。）" : result.Content);
+        return ToolOutcome.Failure(result.ReasonCode, text, result.AuditDetail);
+    }
+
+    private static JsonObject CoerceChatArguments(string schemaJson, JsonObject? arguments)
+    {
+        var copy = (JsonObject)(arguments?.DeepClone() ?? new JsonObject());
+        if (copy.Count == 0) return copy;
+        JsonObject? props = null;
+        try { props = (JsonNode.Parse(schemaJson) as JsonObject)?["properties"] as JsonObject; }
+        catch { return copy; }
+        if (props is null) return copy;
+
+        foreach (var key in copy.Select(p => p.Key).ToArray())
+        {
+            if (copy[key] is not JsonValue jv || !jv.TryGetValue<string>(out var s)) continue;
+            var expectedType = (props[key] as JsonObject)?["type"] is JsonValue tv && tv.TryGetValue<string>(out var t) ? t : null;
+            if (expectedType == "integer" && long.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var iv))
+                copy[key] = JsonValue.Create(iv);
+            else if (expectedType == "number" && double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var dv) && double.IsFinite(dv))
+                copy[key] = JsonValue.Create(dv);
+            else if (expectedType == "boolean" && bool.TryParse(s, out var bv))
+                copy[key] = JsonValue.Create(bv);
+        }
+        return copy;
+    }
+
+    private sealed class McpChatToolBinding(McpToolUseCase useCase, McpToolInfo tool) : IToolBinding
+    {
+        public string ProviderId => "system.mcp-tools";
+        public string Generation => tool.SourceGeneration ?? tool.ServerId;
+        public bool IsReady => useCase.Enabled && useCase._source.IsToolCurrent(tool);
+        public ToolDefinition Definition { get; } = new(
+            new ToolSpec(
+                tool.QualifiedName,
+                ToolCategory.WebRead,
+                string.IsNullOrWhiteSpace(tool.Description) ? "MCP 外部工具" : tool.Description,
+                ReadOnly: tool.ReadOnlyConfirmed,
+                Executor: "mcp.client",
+                Parameters: Summary(tool.InputSchemaJson),
+                Default: ToolDefaultPolicy.FollowSwitch,
+                FeatureKey: tool.ReadOnlyConfirmed ? ToolFeature.Text : ToolFeature.Approval,
+                Origin: ToolOrigin.Mcp),
+            ImmutableArray<ArgField>.Empty);
+
+        public Task<ToolOutcome> ExecuteAsync(string sourceKey, ToolCall call, CancellationToken ct = default)
+            => useCase.ExecuteChatAsync(tool, sourceKey, call.Arguments, ct);
+
+        public T GetContribution<T>() where T : class, IPluginContribution
+            => throw new InvalidOperationException("plugin_contribution_missing");
+    }
 
     public int ToolCount => Tools.Count;
 
@@ -52,32 +203,45 @@ public sealed class McpToolUseCase
     /// </summary>
     public async Task<int> RefreshAsync(CancellationToken ct)
     {
-        if (!_source.Enabled)
-        {
-            Volatile.Write(ref _snapshot, Snapshot.Empty);
-            return 0;
-        }
-
-        IReadOnlyList<McpToolInfo> discovered;
+        await _refreshGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            discovered = await _source.DiscoverAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Volatile.Write(ref _snapshot, Snapshot.Empty);
-            _log?.Invoke($"[Mcp] 发现失败，工具快照已清空（{ex.GetType().Name}）");
-            return 0;
-        }
+            var epoch = Interlocked.Increment(ref _refreshEpoch);
+            if (!Enabled)
+            {
+                Volatile.Write(ref _snapshot, Snapshot.Empty);
+                return 0;
+            }
 
-        var next = Build(discovered);
-        Volatile.Write(ref _snapshot, next);
-        _log?.Invoke($"[Mcp] 工具快照：servers={next.ServerCount} tools={next.Tools.Length}");
-        return next.Tools.Length;
+            IReadOnlyList<McpToolInfo> discovered;
+            try
+            {
+                discovered = await _source.DiscoverAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (Volatile.Read(ref _refreshEpoch) == epoch)
+                    Volatile.Write(ref _snapshot, Snapshot.Empty);
+                _log?.Invoke($"[Mcp] 发现失败，工具快照已清空（{ex.GetType().Name}）");
+                return 0;
+            }
+
+            if (Volatile.Read(ref _refreshEpoch) != epoch)
+                return Volatile.Read(ref _snapshot).Tools.Length;
+
+            var next = Build(discovered);
+            Volatile.Write(ref _snapshot, next);
+            _log?.Invoke($"[Mcp] 工具快照：servers={next.ServerCount} tools={next.Tools.Length}");
+            return next.Tools.Length;
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
     }
 
     /// <summary>这个 id 是不是本用例发现并投影出来的 MCP 工具（不做授权判断）。</summary>
@@ -91,6 +255,7 @@ public sealed class McpToolUseCase
     /// </summary>
     public string PromptText(ToolScope? scope = null)
     {
+        if (!PluginAvailable) return string.Empty;
         var snapshot = Volatile.Read(ref _snapshot);
         if (snapshot.Tools.Length == 0)
         {
@@ -125,7 +290,7 @@ public sealed class McpToolUseCase
     public ToolDecision Check(string conversationKey, string toolId, int callIndex)
     {
         var snapshot = Volatile.Read(ref _snapshot);
-        if (!_source.Enabled)
+        if (!Enabled)
         {
             return new ToolDecision(false, "mcp_disabled");
         }
@@ -145,6 +310,7 @@ public sealed class McpToolUseCase
     /// </summary>
     public IReadOnlyList<McpToolInfo> CaptureLocalLeases(IEnumerable<string> names)
     {
+        if (!PluginAvailable) return Array.Empty<McpToolInfo>();
         var snapshot = Volatile.Read(ref _snapshot);
         return names.Distinct(StringComparer.Ordinal).Select(name => snapshot.Routes.GetValueOrDefault(name))
             .Where(tool => tool is { IsLocalProcess: true } && _source.IsToolCurrent(tool)).Cast<McpToolInfo>().ToArray();
@@ -166,7 +332,7 @@ public sealed class McpToolUseCase
             return ToolOutcome.Failure("mcp_source_changed", "Python tool requires its admitted process generation.", "mcp_source_changed");
         var policy = admittedLease is { IsLocalProcess: true }
             ? snapshot.Policy with { HighRiskExceptions = new HashSet<string>(StringComparer.Ordinal) { toolId } } : snapshot.Policy;
-        var decision = !_source.Enabled ? new ToolDecision(false, "mcp_disabled") :
+        var decision = !Enabled ? new ToolDecision(false, "mcp_disabled") :
             ToolGate.Evaluate(snapshot.Registry, policy, new ToolRequest(toolId, conversationKey, callIndex));
         if (!decision.Allow)
         {
@@ -285,8 +451,27 @@ public sealed class McpToolUseCase
         return new Snapshot(tools.ToImmutable(), routes, registry, policy, CountServers(routes));
     }
 
-    private static int CountServers(Dictionary<string, McpToolInfo> routes)
-        => routes.Values.Select(tool => tool.ServerId).Distinct(StringComparer.Ordinal).Count();
+    private int CountServers(Dictionary<string, McpToolInfo> routes)
+    {
+        var remote = routes.Values.Where(t => !t.IsLocalProcess).Select(t => t.ServerId);
+        var local = routes.Values.Where(t => t.IsLocalProcess).Select(t => t.ServerId);
+        if (CurrentMcpTools is { } mcpTools)
+        {
+            try
+            {
+                var merged = mcpTools.MergeToolSources(remote, local);
+                if (merged.Length > 0)
+                {
+                    return merged.Length;
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+            }
+        }
+
+        return routes.Values.Select(tool => tool.ServerId).Distinct(StringComparer.Ordinal).Count();
+    }
 
     private static bool Valid(McpToolInfo tool)
         => !string.IsNullOrWhiteSpace(tool.Name)

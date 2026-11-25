@@ -3,14 +3,14 @@ using System.Text;
 namespace BotAgent.Domain.Conversation;
 
 /// <summary>
-/// <see cref="TextRules" /> 的**分句**部分（纯函数、零 IO）：按句末标点切段、过短并段、最多四段。
+/// <see cref="TextRules" /> 的**分句**部分（纯函数、零 IO）：优先自然段，否则按句末标点切段，最多四段。
 /// 分开的理由：分句是全链路最容易出“标点错误分段”的地方（见 SplitSentences 的注释），
 /// 单独一个文件方便对着管理员反馈改；括号旁白与文本比对留在 TextRules.cs。
 /// </summary>
 public static partial class TextRules
 {
     /// <summary>
-    /// 按句末标点分句；过短的句子合并到相邻段，最多切 4 段（避免连发刷屏）。
+    /// 优先按显式换行分段；没有段落边界时按句末标点分句、合并短句，最多切 4 段。
     ///
     /// 这里踩过的坑（管理员反馈“对标点或小数错误分段”）：
     ///   • 半角 `.` 曾经无条件当句末 —— “3.14”“1.5 倍”“v1.2”“github.com” 全被拦腰切；
@@ -27,6 +27,20 @@ public static partial class TextRules
         const int SoftBreakLength = 60;   // 句内逗号处断行的长度下限
 
         var trimmed = text.Trim();
+        // 模型已经换行分段时，尊重它的边界，包括短段和没有句号的末段。
+        // 不能落入下方的短句/尾句合并，否则两段会重新变成一个气泡。
+        var paragraphs = trimmed.Replace("\r\n", "\n").Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (paragraphs.Length > 1)
+        {
+            if (paragraphs.Length <= MaxSegments)
+                return paragraphs.ToList();
+
+            var result = paragraphs.Take(MaxSegments - 1).ToList();
+            result.Add(string.Join("\n\n", paragraphs.Skip(MaxSegments - 1)));
+            return result;
+        }
+
         if (trimmed.Length <= MinSegmentLength * 2)
         {
             return new List<string> { trimmed };

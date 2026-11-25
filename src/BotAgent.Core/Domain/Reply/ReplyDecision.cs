@@ -220,10 +220,11 @@ public static partial class ReplyDecisionRules
                 return new DecisionVerdict(ReplyAction.Silent, false, "empty_reply", null, Malformed: true);
             }
 
-            if (IsExactSilentMarker(body))
+            if (IsSilenceOnlyReply(body))
             {
                 // 兼容标记：静默，且正文**绝不**外发（不是把 "[SILENT]" 发出去）
-                return new DecisionVerdict(ReplyAction.Silent, false, "silent_marker", null);
+                return new DecisionVerdict(ReplyAction.Silent, false,
+                    IsExactSilentMarker(body) ? "silent_marker" : "abstention_notice", null);
             }
 
             return new DecisionVerdict(ReplyAction.Reply, true, "legacy_text", body);
@@ -280,10 +281,11 @@ public static partial class ReplyDecisionRules
                     return new DecisionVerdict(ReplyAction.Reply, false, "empty_reply", null, Malformed: true);
                 }
 
-                if (IsExactSilentMarker(body))
+                if (IsSilenceOnlyReply(body))
                 {
                     // action=reply 但正文只有标记：仍然静默（标记不许发出去）
-                    return new DecisionVerdict(ReplyAction.Silent, false, "silent_marker", null);
+                    return new DecisionVerdict(ReplyAction.Silent, false,
+                        IsExactSilentMarker(body) ? "silent_marker" : "abstention_notice", null);
                 }
 
                 return new DecisionVerdict(

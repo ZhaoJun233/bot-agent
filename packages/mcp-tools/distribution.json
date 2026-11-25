@@ -1,0 +1,21 @@
+{
+  "id": "system.mcp-tools",
+  "entryAssembly": "BotAgent.Package.McpTools.dll",
+  "entryType": "BotAgent.Packages.McpTools.McpToolsPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "permissions": [],
+  "dependencies": [
+    {
+      "id": "system.agent",
+      "version": "1.0.0"
+    }
+  ],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Agent.Contracts",
+      "owner": "system.agent"
+    }
+  ]
+}

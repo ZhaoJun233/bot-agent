@@ -22,6 +22,7 @@ internal static partial class CompositionRoot
         a.UnifiedMemory = new BotAgent.Engine.Memory.UnifiedMemory(persistence);
         // This separately configured governance identity never reuses Agent/tool authority.
         var administrator = ReadMemoryAdministrator();
+        a.MemoryAdminConfigured = administrator is not null;
         a.MemoryCommands = new UnifiedMemoryCommandService(a.Source, a.UnifiedMemory,
             context => administrator is not null && administrator.Matches(context));
     }
@@ -63,11 +64,12 @@ internal static partial class CompositionRoot
         var driver = source.Origin.Driver;
         string? native = source.Source switch
         {
-            OfficialBotGateway official => official.Ids.OriginalOf(alias),
+            OfficialBotGateway official when source.Origin.Trigger is { } trigger => official.ResolveProfileSubject(alias, trigger.Conversation),
             FeishuBotGateway feishu => feishu.OriginalOf(alias),
             _ when driver.PlatformId == BotAgent.Domain.Platforms.PlatformId.QqPrivate => alias.ToString(CultureInfo.InvariantCulture),
             _ => null
         };
         return string.IsNullOrWhiteSpace(native) ? null : new ParticipantId(driver.PlatformId, driver.AccountScope, native);
     }
+
 }

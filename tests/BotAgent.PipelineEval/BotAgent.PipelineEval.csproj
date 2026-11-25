@@ -27,4 +27,7 @@
     <ProjectReference Include="../../src/BotAgent.Storage/BotAgent.Storage.csproj" Aliases="StorageModule" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../ResearchToolFixture.cs" Link="ResearchToolFixture.cs" />
+  </ItemGroup>
 </Project>

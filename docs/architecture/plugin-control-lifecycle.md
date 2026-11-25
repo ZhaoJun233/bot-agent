@@ -1,0 +1,13 @@
+# Approved package control lifecycle
+
+Control: true is a managed-package declaration included in the complete manifest approval, lifecycle diff and original-request digest. The host must approve the exact manifest even if it declares no data resources. Ordinary manifests retain their previous wire representation and fingerprints. Any Active, Previous or Pending control release requires metadata reader version 4; a lower advertised minimum is rejected.
+
+IPluginControlModule has separate prepare, contribution lookup and shutdown methods. Preparation receives separate data/dependency views, with admission closed until publication. Failed control preparation calls control shutdown; failed business initialization shuts business down and then control down. A disabled package prepares control only. InitializeAsync and ordinary contribution/data access retain their previous enablement rules.
+
+Host composition obtains a shared IPluginControlContribution through PluginManager.GetControlContribution<T>. The gate requires the exact current successfully prepared control generation, plus current Ready generations for every declared dependency. Its own business enablement does not affect this gate. Calls and data transactions lease the consumer and transitive providers until completion. Retirement rejects new calls, waits for entered calls, and shuts down business before control. Replacement never redirects old references.
+
+The data resource grant and receipt activation identity are shared by the two views; their admission gates are separate. Control's dependency resolver permits only exact declared business providers, which must remain Ready. This does not grant cross-package access to a disabled provider's control surface. Packages receive neither the private registry nor a global service locator. In-process managed assemblies are trusted executable code, not a sandbox.
+
+The quota package exposes separate business and control ledger instances over this shared storage capability. An approved disabled cold start can query quotas, save audited limits and find original receipts while generic metering remains independent. Default composition now loads the same-ID approved package, HTTP/DTO/UI sources have moved and the old implementation links have been retired. Schema ownership and D2 runtime adoption remain unfinished.
+
+Control packages are cold-adopted. The install preview explains management survival while business is disabled; lifecycle approval exposes the control flag. These checks do not prove full host physical package absence, Linux/Docker operation, whole-version downgrade, or D2 group recovery.

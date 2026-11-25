@@ -34,6 +34,12 @@ try
     var oldJson = "[{\"id\":10004,\"text\":\"synthetic legacy JSON\",\"at\":\"1970-01-01T00:00:00Z\"}]";
     File.WriteAllText(Path.Combine(AppPaths.DataDir, "own-messages.json"), oldJson);
     AppDatabase.Initialize();
+    if (args.Contains("--configuration-startup", StringComparer.Ordinal))
+    {
+        PluginConfigurationWriterChecks.RunStartup(Check);
+        Console.WriteLine($"SettingsScopeProbe startup failures={failures}");
+        return failures == 0 ? 0 : 1;
+    }
     Check("host settings and platform interface share platform values in both directions", () =>
     {
         var settings = new AppSettings
@@ -225,25 +231,25 @@ try
     Check("save failure propagates and rolls settings back", () =>
     {
         var store = new SettingsStore();
-        store.Save(new AppSettings { AiDesire = 17 });
+        store.Save(new AppSettings { GroupInterjectionProbability = 17 });
         var threw = false;
         try
         {
-            store.Save(new AppSettings { AiDesire = 29 },
+            store.Save(new AppSettings { GroupInterjectionProbability = 29 },
                 new AuditEvent("", "actor-test", "tenant-test", "synthetic", "2.1"), new AuditLogStore());
         }
         catch (ArgumentException) { threw = true; }
         Require(threw, "failed audit/save returned success");
-        Require(store.Load().AiDesire == 17, "failed transaction changed stored settings");
+        Require(store.Load().GroupInterjectionProbability == 17, "failed transaction changed stored settings");
     });
     Check("failed hot reload leaves runtime unpublished", () =>
     {
-        var original = new AppSettings { AiDesire = 17 };
+        var original = new AppSettings { GroupInterjectionProbability = 17 };
         var box = new SettingsBox(original);
         var repo = new ThrowingSettingsRepository();
         var reload = new SettingsHotReload(box, repo, null!, null!, null!, null!, null!, null!, null!, null!, null!);
         Exception? observed = null;
-        try { reload.ApplyRuntimeSettings(s => s.AiDesire = 29); }
+        try { reload.ApplyRuntimeSettings(s => s.GroupInterjectionProbability = 29); }
         catch (Exception ex) { observed = ex; }
         Require(ReferenceEquals(box.Current, original), "failed save published runtime snapshot");
         Require(observed is IOException && repo.Attempts == 1, "persistence must fail before runtime rebuild");
@@ -351,24 +357,24 @@ try
     Check("unsupported audit chain fails before any settings write", () =>
     {
         var store = new SettingsStore();
-        store.Save(new AppSettings { AiDesire = 17 });
+        store.Save(new AppSettings { GroupInterjectionProbability = 17 });
         var audit = new FakeAuditChain();
         foreach (var chain in new IAuditChain?[] { null, audit })
         {
             var rejected = false;
-            try { store.Save(new AppSettings { AiDesire = 29 }, Event("unsupported"), chain); }
+            try { store.Save(new AppSettings { GroupInterjectionProbability = 29 }, Event("unsupported"), chain); }
             catch (InvalidOperationException) { rejected = true; }
-            Require(rejected && store.Load().AiDesire == 17, "non-atomic audit was silently accepted");
+            Require(rejected && store.Load().GroupInterjectionProbability == 17, "non-atomic audit was silently accepted");
         }
         Require(audit.Appends == 0, "external audit side effect ran before transaction rejection");
     });
     Check("mutation failure has no persistence or publication side effects", () =>
     {
-        var original = new AppSettings { AiDesire = 17 };
+        var original = new AppSettings { GroupInterjectionProbability = 17 };
         var box = new SettingsBox(original);
         var persisted = false;
         var published = false;
-        try { box.ApplyPersisted(s => { s.AiDesire = 29; throw new ArgumentException("synthetic"); },
+        try { box.ApplyPersisted(s => { s.GroupInterjectionProbability = 29; throw new ArgumentException("synthetic"); },
             _ => persisted = true, _ => published = true); }
         catch (ArgumentException) { }
         Require(!persisted && !published && ReferenceEquals(box.Current, original), "failed mutation escaped staging");
@@ -376,7 +382,7 @@ try
     Check("concurrent settings writers persist publish and rebuild in one order", () =>
     {
         var store = new SettingsStore();
-        var box = new SettingsBox(new AppSettings { AiDesire = 0, MaxMessagesPerConversation = 100 });
+        var box = new SettingsBox(new AppSettings { GroupInterjectionProbability = 0, MaxMessagesPerConversation = 100 });
         var published = 0;
         using var start = new ManualResetEventSlim(false);
         var tasks = Enumerable.Range(0, 20).Select(i => Task.Run(() =>
@@ -384,30 +390,30 @@ try
             start.Wait();
             box.ApplyPersisted(s =>
             {
-                if (i % 2 == 0) s.AiDesire++;
+                if (i % 2 == 0) s.GroupInterjectionProbability++;
                 else s.MaxMessagesPerConversation++;
             }, store.Save, next =>
             {
                 var disk = store.Load();
                 Require(ReferenceEquals(box.Current, next), "a later writer raced runtime rebuild");
-                Require(disk.AiDesire == next.AiDesire && disk.MaxMessagesPerConversation == next.MaxMessagesPerConversation,
+                Require(disk.GroupInterjectionProbability == next.GroupInterjectionProbability && disk.MaxMessagesPerConversation == next.MaxMessagesPerConversation,
                     "disk version differs from published candidate");
                 published++;
             });
         })).ToArray();
         start.Set();
         Require(Task.WaitAll(tasks, TimeSpan.FromSeconds(15)), "settings writers timed out");
-        Require(published == 20 && box.Current.AiDesire == 10 && box.Current.MaxMessagesPerConversation == 110,
+        Require(published == 20 && box.Current.GroupInterjectionProbability == 10 && box.Current.MaxMessagesPerConversation == 110,
             "concurrent writers lost a sibling update");
     });
     Check("postcommit callback failure is visible but committed settings stay published", () =>
     {
         var store = new SettingsStore();
-        var box = new SettingsBox(new AppSettings { AiDesire = 17 });
+        var box = new SettingsBox(new AppSettings { GroupInterjectionProbability = 17 });
         var threw = false;
-        try { box.ApplyPersisted(s => s.AiDesire = 29, store.Save, _ => throw new IOException("synthetic rebuild failure")); }
+        try { box.ApplyPersisted(s => s.GroupInterjectionProbability = 29, store.Save, _ => throw new IOException("synthetic rebuild failure")); }
         catch (IOException) { threw = true; }
-        Require(threw && box.Current.AiDesire == 29 && store.Load().AiDesire == 29,
+        Require(threw && box.Current.GroupInterjectionProbability == 29 && store.Load().GroupInterjectionProbability == 29,
             "postcommit failure was hidden or falsely rolled back");
     });
     Check("ordinary audit and settings audit serialize without lock inversion or chain forks", () =>
@@ -424,13 +430,13 @@ try
         var settings = Task.Run(() =>
         {
             start.Wait();
-            for (var i = 0; i < 30; i++) store.Save(new AppSettings { AiDesire = i }, Event("settings-" + i), audit);
+            for (var i = 0; i < 30; i++) store.Save(new AppSettings { GroupInterjectionProbability = i }, Event("settings-" + i), audit);
         });
         start.Set();
         Require(Task.WaitAll(new[] { regular, settings }, TimeSpan.FromSeconds(15)), "audit writers timed out");
         var result = audit.Verify();
         Require(result.Valid && result.CheckedCount == before + 60, "concurrent audit chain forked or lost events");
-        Require(store.Load().AiDesire == 29, "settings audit did not commit its settings");
+        Require(store.Load().GroupInterjectionProbability == 29, "settings audit did not commit its settings");
     });
     Check("legacy scoped retention and pruning remain independent", () =>
     {
@@ -441,6 +447,7 @@ try
         Require(store.LoadRecentScoped(200).Count == 2, "scoped pruning failed");
         Require(store.LoadRecent(200).Any(r => r.Id == 10001), "scoped pruning deleted retained legacy data");
     });
+    PluginConfigurationWriterChecks.Run(Check);
 }
 finally
 {

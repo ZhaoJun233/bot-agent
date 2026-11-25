@@ -1,0 +1,526 @@
+extern alias StorageModule;
+
+using System.Collections.Immutable;
+using System.Reflection;
+using System.Runtime.Loader;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using BotAgent.Adapters.Persistence;
+using BotAgent.Adapters.Plugins;
+using BotAgent.Domain.Management;
+using BotAgent.Domain.Plugins;
+using BotAgent.Domain.Ports;
+using BotAgent.Services.Plugins;
+
+internal partial class Program
+{
+    internal static async Task<int> RunHostDefaultBundleChecks(string root)
+    {
+        var checks = 0;
+        void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException(label); checks++; }
+        const string id = "system.health-reporting";
+        const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+        var runtimeType = typeof(PluginPackageService).Assembly.GetType("BotAgent.Host.PluginRuntime")!;
+        var directory = Path.Combine(root, "host-default-bundle");
+        var flags = new StorageModule::BotAgent.Storage.PluginStore();
+        var enabled = flags.LoadPluginStates().GetValueOrDefault(id, true);
+        flags.SetPluginEnabled(id, false);
+        IAsyncDisposable NewRuntime(string? path = null) => (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
+            .Invoke([path ?? directory, (Action<string>)(_ => { })]);
+        PluginManager Registry(object runtime) => (PluginManager)runtimeType.GetProperty("Registry", hidden)!.GetValue(runtime)!;
+        PluginPackageService Packages(object runtime) => (PluginPackageService)runtimeType.GetProperty("Packages", hidden)!.GetValue(runtime)!;
+        Task Start(object runtime) => (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
+        try
+        {
+            string fingerprint;
+            await using (var runtime = NewRuntime())
+            {
+                var registry = Registry(runtime);
+                Check(registry.GetAll().All(p => p.Id != id), "system bundle has no legacy registration before adoption");
+                await Start(runtime);
+                var installedAll = await Packages(runtime).GetInstalledAsync();
+                Check(installedAll.Count == 9
+                    && installedAll.All(p => p.Id.StartsWith("system.", StringComparison.Ordinal) && p.Active is not null),
+                    "bare host adopts ONLY the 9 system.* packages and 0 preset.feature.* packages");
+                var state = installedAll.Single(p => p.Id == id);
+                Check(state.Active is not null && state.Pending is null
+                    && state.Active.DownloadUrl == "host-distribution://" + id + "/1.0.0", "host adopts actual system distribution ZIP");
+                Check(!registry.IsReady(id) && !flags.LoadPluginStates()[id], "explicit disabled intent survives first system bundle adoption");
+                var market = (PluginMarketService)runtimeType.GetProperty("Market", hidden)!.GetValue(runtime)!;
+                var installed = await market.ReadInstalledAsync(default);
+                Check(installed.Plugins.Single(p => p.Manifest.Id == id).Metadata is
+                    { Runtime: "dotnet", SourceKind: "official", Review.Status: "unreviewed" }
+                    && installed.BuiltinPlugins.Count == 0,
+                    "bare host exposes system packages with zero builtin feature plugins");
+                fingerprint = state.Active!.Sha256;
+                Check(AssemblyLoadContext.Default.Assemblies.All(a => !(a.GetName().Name ?? "").StartsWith("BotAgent.Package.", StringComparison.Ordinal)),
+                    "business/system package implementation is not loaded into Default");
+                await Packages(runtime).StageUninstallAsync(id);
+            }
+            await using (var runtime = NewRuntime())
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == id);
+                Check(!Registry(runtime).IsReady(id) && state.Active is null && state.Previous?.Sha256 == fingerprint,
+                    "restart adopts explicit uninstall and preserves previous release");
+            }
+            var packageDirectory = Path.GetFullPath(Path.Combine(directory, id));
+            var preserved = Path.GetFullPath(Path.Combine(root, "host-default-preserved"));
+            if (!packageDirectory.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || !preserved.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("synthetic_path_escape");
+            Directory.Move(packageDirectory, preserved);
+            await using (var runtime = NewRuntime())
+            {
+                await Start(runtime);
+                Check(!Directory.Exists(packageDirectory) && !Registry(runtime).IsReady(id), "default bundle does not resurrect physically removed adopted package");
+            }
+            if (OperatingSystem.IsWindows())
+            {
+                await using var runtime = NewRuntime(directory.ToUpperInvariant());
+                await Start(runtime);
+                Check(!Directory.Exists(packageDirectory), "path casing cannot resurrect a removed default package");
+            }
+            var alias = Path.Combine(root, "host-default-bundle-alias");
+            if (OperatingSystem.IsWindows())
+            {
+                var command = new System.Diagnostics.ProcessStartInfo("pwsh")
+                { UseShellExecute = false, CreateNoWindow = true, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden };
+                foreach (var arg in new[] { "-NoProfile", "-Command", "New-Item -ItemType Junction -Path '"
+                    + alias.Replace("'", "''") + "' -Target '" + directory.Replace("'", "''") + "' -ErrorAction Stop | Out-Null" })
+                    command.ArgumentList.Add(arg);
+                using var process = System.Diagnostics.Process.Start(command)!;
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                Check(process.ExitCode == 0, "synthetic directory junction created");
+            }
+            else Directory.CreateSymbolicLink(alias, directory);
+            try
+            {
+                await using var runtime = NewRuntime(alias);
+                await Start(runtime);
+                Check(!Directory.Exists(packageDirectory), "physical directory alias cannot resurrect a removed default package");
+            }
+            finally
+            {
+                var link = new DirectoryInfo(alias);
+                var resolve = typeof(StorageModule::BotAgent.Adapters.Persistence.AppDatabase)
+                    .GetMethod("ResolvePhysicalPath", BindingFlags.NonPublic | BindingFlags.Static)!;
+                var expected = (string)resolve.Invoke(null, [directory])!;
+                var actual = link.LinkTarget is null ? null : (string)resolve.Invoke(null, [link.ResolveLinkTarget(true)!.FullName])!;
+                if (!string.Equals(actual, expected,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    throw new InvalidOperationException("synthetic_alias_changed");
+                link.Delete();
+            }
+            var dependencies = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.ChangeExtension(typeof(PluginPackageService).Assembly.Location, ".deps.json")));
+            Check(dependencies.RootElement.GetProperty("libraries").EnumerateObject().All(p =>
+                !p.Name.StartsWith("BotAgent.Package.", StringComparison.Ordinal)
+                && !p.Name.StartsWith("BotAgent.PluginBundle/", StringComparison.Ordinal)), "host runtime dependencies exclude all packages and bundler");
+            checks += await RunHostDistributionUpgradeChecks(root);
+            checks += await RunOfficialMarketplaceMigrationChecks(root);
+        }
+        finally { flags.SetPluginEnabled(id, enabled); }
+        return checks;
+    }
+
+    private static async Task<int> RunHostDistributionUpgradeChecks(string root)
+    {
+        var checks = 0;
+        void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException("host_upgrade: " + label); checks++; }
+        const string quotaId = "system.health-reporting";
+        const string stickersId = "system.conversation";
+        const string zeroSha = "0000000000000000000000000000000000000000000000000000000000000000";
+        const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+        var asm = typeof(PluginPackageService).Assembly;
+        var runtimeType = asm.GetType("BotAgent.Host.PluginRuntime")!;
+        var envelopeType = asm.GetType("BotAgent.Adapters.Plugins.PluginStateEnvelope")!;
+        var writeEnvelope = envelopeType.GetMethod("Write", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var flags = new StorageModule::BotAgent.Storage.PluginStore();
+        var prevQuotaEnabled = flags.LoadPluginStates().GetValueOrDefault(quotaId, true);
+        var prevStickersEnabled = flags.LoadPluginStates().GetValueOrDefault(stickersId, true);
+
+        byte[] EncodeEnvelope(InstalledPluginPackage state) => (byte[])writeEnvelope.Invoke(null, [state])!;
+        IAsyncDisposable NewRuntime(string path, List<string> logs) => (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
+            .Invoke([path, (Action<string>)(line => logs.Add(line))]);
+        PluginManager Registry(object runtime) => (PluginManager)runtimeType.GetProperty("Registry", hidden)!.GetValue(runtime)!;
+        PluginPackageService Packages(object runtime) => (PluginPackageService)runtimeType.GetProperty("Packages", hidden)!.GetValue(runtime)!;
+        Task Start(object runtime) => (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
+        ImmutableArray<ManagedDescriptor> Describe(object runtime)
+            => (ImmutableArray<ManagedDescriptor>)runtimeType.GetMethod("Describe", hidden)!.Invoke(runtime, null)!;
+
+        string OldSha(string tag) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("synthetic-old-host-build:" + tag))).ToLowerInvariant();
+
+        void ReplaceWithOldRelease(string dir, PluginPackageManifest current, InstalledPluginPackage oldState, string oldSha)
+        {
+            var pkgDir = Path.Combine(dir, current.Id);
+            var releasesDir = Path.Combine(pkgDir, "releases");
+            Directory.CreateDirectory(releasesDir);
+            var currentZip = Path.Combine(releasesDir, $"{current.Version}-{current.Sha256.ToLowerInvariant()}.zip");
+            if (File.Exists(currentZip)) File.Delete(currentZip);
+            var oldZip = Path.Combine(releasesDir, $"{current.Version}-{oldSha}.zip");
+            File.WriteAllBytes(oldZip, "synthetic-old-archive-bytes"u8.ToArray());
+            File.WriteAllBytes(Path.Combine(pkgDir, "installed.json"), EncodeEnvelope(oldState));
+        }
+
+        try
+        {
+            // Case A: old build hash -> automatic upgrade preserves desiredEnabled, config, prunes old zip, verifies non-zero UI asset hashes.
+            var dirA = Path.Combine(root, "host-upgrade-case-a");
+            flags.SetPluginEnabled(quotaId, true);
+            flags.SetPluginEnabled(stickersId, false);
+            PluginPackageManifest currentQuota;
+            PluginPackageManifest currentStickers;
+            await using (var runtime = NewRuntime(dirA, []))
+            {
+                await Start(runtime);
+                var all = await Packages(runtime).GetInstalledAsync();
+                currentQuota = all.Single(p => p.Id == quotaId).Active!;
+                currentStickers = all.Single(p => p.Id == stickersId).Active!;
+                Check(all.All(p => p.Active is null || p.Active.Sha256 != zeroSha),
+                    "all compiled host releases have non-zero archive hashes");
+            }
+            var customConfigPath = Path.Combine(dirA, quotaId, "config", "synthetic-user.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(customConfigPath)!);
+            await File.WriteAllTextAsync(customConfigPath, "preserved-user-config");
+            var oldQuotaSha = OldSha("case-a-quota");
+            var oldStickersSha = OldSha("case-a-stickers");
+            ReplaceWithOldRelease(dirA, currentQuota,
+                new InstalledPluginPackage(quotaId) { Active = currentQuota with { Sha256 = oldQuotaSha } }, oldQuotaSha);
+            ReplaceWithOldRelease(dirA, currentStickers,
+                new InstalledPluginPackage(stickersId) { Active = currentStickers with { Sha256 = oldStickersSha } }, oldStickersSha);
+            var logsA = new List<string>();
+            await using (var runtime = NewRuntime(dirA, logsA))
+            {
+                await Start(runtime);
+                var all = await Packages(runtime).GetInstalledAsync();
+                var quota = all.Single(p => p.Id == quotaId);
+                var stickers = all.Single(p => p.Id == stickersId);
+                Check(quota.MetadataFailure is null && quota.Active?.Sha256 == currentQuota.Sha256 && quota.Pending is null && quota.Previous is null,
+                    "case A upgrades enabled host package cleanly without plugin_metadata_unreadable");
+                Check(Registry(runtime).IsReady(quotaId) && flags.LoadPluginStates()[quotaId],
+                    "case A preserves enabled state and activates system plugin");
+                Check(await File.ReadAllTextAsync(customConfigPath) == "preserved-user-config",
+                    "case A preserves user config directory across upgrade");
+                Check(!File.Exists(Path.Combine(dirA, quotaId, "releases", $"{currentQuota.Version}-{oldQuotaSha}.zip"))
+                    && File.Exists(Path.Combine(dirA, quotaId, "releases", $"{currentQuota.Version}-{currentQuota.Sha256.ToLowerInvariant()}.zip")),
+                    "case A prunes obsolete old archive after successful activation");
+                Check(stickers.MetadataFailure is null && stickers.Active?.Sha256 == currentStickers.Sha256
+                    && !Registry(runtime).IsReady(stickersId) && !flags.LoadPluginStates()[stickersId],
+                    "case A upgrades disabled host package while preserving disabled intent");
+                Check(logsA.Any(line => line.Contains($"pluginId={quotaId}", StringComparison.Ordinal)
+                    && line.Contains($"oldShaPrefix={oldQuotaSha[..8]}", StringComparison.Ordinal)
+                    && line.Contains("action=upgraded", StringComparison.Ordinal)),
+                    "case A emits sanitized upgrade log");
+            }
+
+            // Case B (supplemental): physical directory deletion emits action=skipped-absent and never resurrects.
+            var dirB = Path.Combine(root, "host-upgrade-case-b");
+            await using (var runtime = NewRuntime(dirB, [])) { await Start(runtime); }
+            Directory.Delete(Path.Combine(dirB, quotaId), recursive: true);
+            var logsB = new List<string>();
+            await using (var runtime = NewRuntime(dirB, logsB))
+            {
+                await Start(runtime);
+                Check(!Directory.Exists(Path.Combine(dirB, quotaId)) && !Registry(runtime).IsControlReady(quotaId),
+                    "case B physically removed package never resurrects");
+                Check(logsB.Any(line => line.Contains($"pluginId={quotaId}", StringComparison.Ordinal)
+                    && line.Contains("action=skipped-absent", StringComparison.Ordinal)),
+                    "case B emits sanitized skipped-absent log");
+            }
+
+            // Case C1 & C2: explicitly uninstalled (old Previous only, or PendingUninstall=true) stays uninstalled.
+            var dirC1 = Path.Combine(root, "host-upgrade-case-c1");
+            await using (var runtime = NewRuntime(dirC1, [])) { await Start(runtime); }
+            var oldC1Sha = OldSha("case-c1");
+            ReplaceWithOldRelease(dirC1, currentQuota,
+                new InstalledPluginPackage(quotaId) { Active = null, Pending = null, Previous = currentQuota with { Sha256 = oldC1Sha }, PendingUninstall = false },
+                oldC1Sha);
+            var logsC1 = new List<string>();
+            await using (var runtime = NewRuntime(dirC1, logsC1))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == quotaId);
+                Check(state.MetadataFailure is null && state.Active is null && state.Pending is null && state.Previous is null,
+                    "case C1 clears stale unapproved Previous without plugin_metadata_unreadable");
+                Check(!Registry(runtime).IsControlReady(quotaId) && !Registry(runtime).IsReady(quotaId),
+                    "case C1 keeps explicitly uninstalled package uninstalled");
+                Check(!File.Exists(Path.Combine(dirC1, quotaId, "releases", $"{currentQuota.Version}-{oldC1Sha}.zip")),
+                    "case C1 prunes stale archive of uninstalled package");
+                Check(logsC1.Any(line => line.Contains($"pluginId={quotaId}", StringComparison.Ordinal)
+                    && line.Contains("action=kept-uninstalled", StringComparison.Ordinal)),
+                    "case C1 emits kept-uninstalled log");
+            }
+            await using (var runtime = NewRuntime(dirC1, []))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == quotaId);
+                Check(state.MetadataFailure is null && state.Active is null && state.Pending is null && !Registry(runtime).IsControlReady(quotaId),
+                    "case C1 remains uninstalled on subsequent restart");
+            }
+
+            var dirC2 = Path.Combine(root, "host-upgrade-case-c2");
+            await using (var runtime = NewRuntime(dirC2, [])) { await Start(runtime); }
+            var oldC2Sha = OldSha("case-c2");
+            ReplaceWithOldRelease(dirC2, currentQuota,
+                new InstalledPluginPackage(quotaId) { Active = currentQuota with { Sha256 = oldC2Sha }, Pending = null, Previous = null, PendingUninstall = true },
+                oldC2Sha);
+            await using (var runtime = NewRuntime(dirC2, []))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == quotaId);
+                Check(state.MetadataFailure is null && state.Active is null && state.Pending is null && !state.PendingUninstall
+                    && !Registry(runtime).IsControlReady(quotaId),
+                    "case C2 honors PendingUninstall across host rebuild without resurrecting");
+            }
+
+            // Case D1 & D2: tampered executionSha256 and non-host DownloadUrl are refused and never overwritten.
+            var dirD1 = Path.Combine(root, "host-upgrade-case-d1");
+            await using (var runtime = NewRuntime(dirD1, [])) { await Start(runtime); }
+            var oldD1Sha = OldSha("case-d1");
+            var validOldBytes = EncodeEnvelope(new InstalledPluginPackage(quotaId) { Active = currentQuota with { Sha256 = oldD1Sha } });
+            var tamperedText = Encoding.UTF8.GetString(validOldBytes).Replace("\"pendingUninstall\": false", "\"pendingUninstall\":  false", StringComparison.Ordinal);
+            var tamperedBytes = Encoding.UTF8.GetBytes(tamperedText);
+            Check(!tamperedBytes.AsSpan().SequenceEqual(validOldBytes), "case D1 prepared tampered envelope bytes");
+            var installedPathD1 = Path.Combine(dirD1, quotaId, "installed.json");
+            await File.WriteAllBytesAsync(installedPathD1, tamperedBytes);
+            await using (var runtime = NewRuntime(dirD1, []))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == quotaId);
+                Check(state.MetadataFailure?.Code == "plugin_metadata_unreadable" && !Registry(runtime).IsControlReady(quotaId),
+                    "case D1 rejects tampered executionSha256 as plugin_metadata_unreadable");
+                Check((await File.ReadAllBytesAsync(installedPathD1)).AsSpan().SequenceEqual(tamperedBytes),
+                    "case D1 never overwrites tampered installed.json");
+            }
+
+            var dirD2 = Path.Combine(root, "host-upgrade-case-d2");
+            await using (var runtime = NewRuntime(dirD2, [])) { await Start(runtime); }
+            var oldD2Sha = OldSha("case-d2");
+            var thirdPartyBytes = EncodeEnvelope(new InstalledPluginPackage(quotaId)
+            {
+                Active = currentQuota with { Sha256 = oldD2Sha, DownloadUrl = "https://example.com/non-host.zip" }
+            });
+            var installedPathD2 = Path.Combine(dirD2, quotaId, "installed.json");
+            await File.WriteAllBytesAsync(installedPathD2, thirdPartyBytes);
+            await using (var runtime = NewRuntime(dirD2, []))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == quotaId);
+                Check(state.MetadataFailure?.Code == "plugin_metadata_unreadable" && !Registry(runtime).IsControlReady(quotaId),
+                    "case D2 refuses non-host-distribution DownloadUrl");
+                Check((await File.ReadAllBytesAsync(installedPathD2)).AsSpan().SequenceEqual(thirdPartyBytes),
+                    "case D2 leaves non-host installed.json untouched");
+            }
+
+            // Case E: .governance.json revoking target new host release blocks upgrade and leaves original state intact.
+            var dirE = Path.Combine(root, "host-upgrade-case-e");
+            await using (var runtime = NewRuntime(dirE, [])) { await Start(runtime); }
+            var oldESha = OldSha("case-e");
+            var oldEState = new InstalledPluginPackage(quotaId) { Active = currentQuota with { Sha256 = oldESha } };
+            ReplaceWithOldRelease(dirE, currentQuota, oldEState, oldESha);
+            var installedPathE = Path.Combine(dirE, quotaId, "installed.json");
+            var originalBytesE = await File.ReadAllBytesAsync(installedPathE);
+            var governanceJson = JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                generatedAt = "2026-11-21T00:00:00Z",
+                entries = new[]
+                {
+                    new
+                    {
+                        id = quotaId,
+                        version = currentQuota.Version,
+                        sha256 = currentQuota.Sha256.ToLowerInvariant(),
+                        status = "revoked",
+                        reason = "synthetic host release revocation check",
+                        updatedAt = "2026-11-21T00:00:00Z"
+                    }
+                }
+            });
+            await File.WriteAllTextAsync(Path.Combine(dirE, ".governance.json"), governanceJson);
+            var logsE = new List<string>();
+            await using (var runtime = NewRuntime(dirE, logsE))
+            {
+                await Start(runtime);
+                Check((await File.ReadAllBytesAsync(installedPathE)).AsSpan().SequenceEqual(originalBytesE),
+                    "case E governance revocation leaves original installed.json untouched");
+                Check(File.Exists(Path.Combine(dirE, quotaId, "releases", $"{currentQuota.Version}-{oldESha}.zip"))
+                    && !File.Exists(Path.Combine(dirE, quotaId, "releases", $"{currentQuota.Version}-{currentQuota.Sha256.ToLowerInvariant()}.zip")),
+                    "case E does not commit revoked archive or prune original archive");
+                Check(!Registry(runtime).IsControlReady(quotaId) && !Registry(runtime).IsReady(quotaId),
+                    "case E does not load revoked host package");
+                var desc = Describe(runtime).Single(d => d.Key == new ManagedObjectKey.Plugin(new(quotaId)));
+                Check(desc.ErrorCode == "plugin_governance_revoked",
+                    "case E surfaces plugin_governance_revoked in descriptor");
+                Check(logsE.Any(line => line.Contains($"pluginId={quotaId}", StringComparison.Ordinal)
+                    && line.Contains("action=blocked-governance", StringComparison.Ordinal)),
+                    "case E emits sanitized blocked-governance log");
+            }
+        }
+        finally
+        {
+            flags.SetPluginEnabled(quotaId, prevQuotaEnabled);
+            flags.SetPluginEnabled(stickersId, prevStickersEnabled);
+        }
+        return checks;
+    }
+
+    private static async Task<int> RunOfficialMarketplaceMigrationChecks(string root)
+    {
+        var checks = 0;
+        void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException("official_migration: " + label); checks++; }
+        const string zeroSha = "0000000000000000000000000000000000000000000000000000000000000000";
+        const BindingFlags hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+        var runtimeType = typeof(PluginPackageService).Assembly.GetType("BotAgent.Host.PluginRuntime")!;
+        var flags = new StorageModule::BotAgent.Storage.PluginStore();
+        var prevQuota = flags.LoadPluginStates().GetValueOrDefault("preset.feature.token-quota", true);
+        var prevStickers = flags.LoadPluginStates().GetValueOrDefault("preset.feature.stickers", true);
+        var prevWebsearch = flags.LoadPluginStates().GetValueOrDefault("preset.feature.websearch", true);
+        var prevMusic = flags.LoadPluginStates().GetValueOrDefault("preset.feature.music", true);
+
+        var (quotaManifest, quotaZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.token-quota");
+        var (stickersManifest, stickersZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.stickers");
+        var (searchManifest, searchZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.websearch");
+        var (musicManifest, musicZip, _) = OfficialMarketplaceTestHelper.ReadRelease("preset.feature.music");
+        Check(quotaManifest.Ui is { Assets.Count: > 0 } && quotaManifest.Ui.Assets.All(a => a.Sha256 != zeroSha),
+            "official token-quota release has real non-zero UI asset hashes");
+        Check(stickersManifest.Ui is { Assets.Count: > 0 } && stickersManifest.Ui.Assets.All(a => a.Sha256 != zeroSha),
+            "official stickers release has real non-zero UI asset hashes");
+
+        var stubHttp = OfficialMarketplaceTestHelper.CreateStubHttp(
+            (quotaManifest, quotaZip), (stickersManifest, stickersZip), (searchManifest, searchZip), (musicManifest, musicZip));
+        IAsyncDisposable NewRuntime(string dir) => (IAsyncDisposable)runtimeType.GetConstructors(hidden).Single()
+            .Invoke([dir, (Action<string>)(_ => { })]);
+        PluginManager Registry(object runtime) => (PluginManager)runtimeType.GetProperty("Registry", hidden)!.GetValue(runtime)!;
+        PluginPackageService Packages(object runtime) => (PluginPackageService)runtimeType.GetProperty("Packages", hidden)!.GetValue(runtime)!;
+        Task Start(object runtime) => (Task)runtimeType.GetMethod("StartAsync", hidden)!.Invoke(runtime, [CancellationToken.None])!;
+
+        try
+        {
+            var dirOfficial = Path.Combine(root, "official-marketplace-install");
+            flags.SetPluginEnabled("preset.feature.token-quota", false);
+            flags.SetPluginEnabled("preset.feature.stickers", true);
+            flags.SetPluginEnabled("preset.feature.websearch", true);
+            await using (var installHost = NewRuntime(dirOfficial))
+            {
+                var packages = Packages(installHost);
+                typeof(PluginPackageService).GetField("_http", hidden)!.SetValue(packages, stubHttp);
+                typeof(PluginGovernanceService).GetField("_source", hidden)!
+                    .SetValue(packages.Governance, new PluginCatalogSource(stubHttp));
+                await packages.StageInstallAsync(quotaManifest);
+                await packages.StageInstallAsync(stickersManifest);
+                await packages.StageInstallAsync(searchManifest);
+                BindResearchRuntime(installHost);
+                await Start(installHost);
+
+                var registry = Registry(installHost);
+                Check(!registry.IsReady("preset.feature.token-quota") && registry.IsControlReady("preset.feature.token-quota"),
+                    "official token-quota preserves explicit disabled intent while keeping control ready");
+                Check(registry.GetControlContribution<ITenantQuotaManagement>("preset.feature.token-quota")
+                    .ReadManagement("synthetic:official-quota").Quota.DailyTokenLimit == 50000,
+                    "official token-quota activates cross-MVID ITenantQuotaManagement control contract");
+                Check(registry.IsReady("preset.feature.stickers") && registry.IsReady("preset.feature.websearch"),
+                    "official stickers and websearch activate cleanly");
+                Check(AssemblyLoadContext.Default.Assemblies.All(a => a.GetName().Name != "BotAgent.Package.TokenQuota"
+                    && a.GetName().Name != "BotAgent.Package.WebSearch"),
+                    "official plugin implementations stay outside AssemblyLoadContext.Default");
+
+                var market = (PluginMarketService)runtimeType.GetProperty("Market", hidden)!.GetValue(installHost)!;
+                var installed = await market.ReadInstalledAsync(default);
+                Check(installed.Plugins.Single(p => p.Manifest.Id == "preset.feature.token-quota").Metadata is
+                    { Name: "Token 配额", Runtime: "dotnet", SourceKind: "official", Review.Status: "unreviewed" },
+                    "official token-quota retains official presentation metadata");
+                using var quotaMeta = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(dirOfficial, "preset.feature.token-quota", "installed.json")));
+                Check(quotaMeta.RootElement.GetProperty("minimumReaderVersion").GetInt32() == 12,
+                    "official token-quota UI package requires reader twelve");
+
+                try { new PluginSettingsStore().ReadManifest(quotaManifest); throw new InvalidOperationException("unapproved_settings_accepted"); }
+                catch (BotAgent.Domain.Plugins.PluginSettingsException) { checks++; }
+                var settings = (PluginSettingsStore)runtimeType.GetProperty("Settings", hidden)!.GetValue(installHost)!;
+                Check(settings.ReadManifest(searchManifest).Values.Count > 0, "runtime Settings approves official websearch configuration binding");
+                try { settings.ReadManifest(quotaManifest with { Control = false }); throw new InvalidOperationException("mutated_control_accepted"); }
+                catch (BotAgent.Domain.Plugins.PluginSettingsException) { checks++; }
+
+                var gatePackages = new PluginPackageService(Path.Combine(root, "official-origin-gate"), stubHttp);
+                foreach (var badUrl in new[]
+                {
+                    "https://github.com/attacker/repo/releases/download/preset.feature.music-1.1.0/preset.feature.music-1.1.0.zip",
+                    "https://example.com/preset.feature.music-1.1.0.zip"
+                })
+                {
+                    var rejected = false;
+                    try { PluginPackageValidation.Validate(musicManifest with { DownloadUrl = badUrl }); }
+                    catch (InvalidDataException) { rejected = true; }
+                    Check(rejected, "forged official release URL rejected at validation: " + badUrl);
+                }
+
+                var dataEscalated = musicManifest with
+                {
+                    Control = true,
+                    Data = new(["tenant_quotas"], ["quota:revision:", "quota:receipts:"], true, true, new("quota.management", "1"))
+                };
+                var webEscalated = musicManifest with { Permissions = [BotAgent.Plugins.Net.IWebPageTransport.Permission] };
+                foreach (var (escalated, expectedCode) in new[]
+                {
+                    (dataEscalated, "plugin_data_not_authorized"),
+                    (webEscalated, "plugin_web_not_authorized")
+                })
+                {
+                    var refused = false;
+                    try { await gatePackages.StageInstallAsync(escalated); }
+                    catch (InvalidOperationException ex) when (ex.Message == expectedCode) { refused = true; }
+                    Check(refused, "official music privilege escalation rejected with " + expectedCode);
+                }
+            }
+
+            var dirLegacy = Path.Combine(root, "official-legacy-upgrade");
+            flags.SetPluginEnabled("preset.feature.music", true);
+            var (legacyManifest, legacyMusicZip) = OfficialMarketplaceTestHelper.BuildLegacyHostDistributionMusicRelease(
+                Path.Combine(root, "legacy-music-build"), musicManifest);
+            OfficialMarketplaceTestHelper.StageInstalled(dirLegacy, legacyManifest, legacyMusicZip);
+            var compat = await PluginStateCompatibility.InspectAsync(dirLegacy, typeof(PluginPackageService).Assembly.Location);
+            Check(compat.Compatible && compat.Entries.Single(e => e.Id == "preset.feature.music").Code == "readable",
+                "historical 1.0.0 host-distribution:// official state remains preflight compatible");
+
+            await using (var runtime = NewRuntime(dirLegacy))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == "preset.feature.music");
+                Check(state.MetadataFailure is null && state.Active?.Version == "1.0.0" && Registry(runtime).IsReady("preset.feature.music"),
+                    "historical 1.0.0 host-distribution:// official package cold-starts from cached archive");
+
+                var packages = Packages(runtime);
+                typeof(PluginPackageService).GetField("_http", hidden)!.SetValue(packages, stubHttp);
+                typeof(PluginGovernanceService).GetField("_source", hidden)!
+                    .SetValue(packages.Governance, new PluginCatalogSource(stubHttp));
+                await packages.StageInstallAsync(musicManifest);
+            }
+            await using (var runtime = NewRuntime(dirLegacy))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == "preset.feature.music");
+                Check(state.Active?.Version == "1.1.0" && state.Previous?.Version == "1.0.0"
+                    && state.Active.DownloadUrl == OfficialMarketplaceTestHelper.ExpectedDownloadUrl("preset.feature.music", "1.1.0")
+                    && Registry(runtime).IsReady("preset.feature.music"),
+                    "historical 1.0.0 package upgrades cleanly to official 1.1.0 release");
+                await Packages(runtime).StageUninstallAsync("preset.feature.music");
+            }
+            await using (var runtime = NewRuntime(dirLegacy))
+            {
+                await Start(runtime);
+                var state = (await Packages(runtime).GetInstalledAsync()).Single(p => p.Id == "preset.feature.music");
+                Check(state.Active is null && !Registry(runtime).IsReady("preset.feature.music"),
+                    "upgraded official package uninstalls cleanly");
+            }
+        }
+        finally
+        {
+            flags.SetPluginEnabled("preset.feature.token-quota", prevQuota);
+            flags.SetPluginEnabled("preset.feature.stickers", prevStickers);
+            flags.SetPluginEnabled("preset.feature.websearch", prevWebsearch);
+            flags.SetPluginEnabled("preset.feature.music", prevMusic);
+        }
+        return checks;
+    }
+}

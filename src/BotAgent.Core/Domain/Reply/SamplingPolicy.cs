@@ -22,8 +22,7 @@ public readonly record struct SamplingProfile(
     double Temperature,
     double? TopP,
     CognitiveIntent Intent,
-    string Reason,
-    bool ReplyPacingEnabled = false)
+    string Reason)
 {
     /// <summary>单行摘要（不含用户正文）。</summary>
     public string Describe() => $"intent={Intent} temp={Temperature:F2} top_p={TopP?.ToString("F2") ?? "none"} ({Reason})";
@@ -39,8 +38,7 @@ public readonly record struct AdaptiveSamplingConfig(
     double EmotionalTemperature,
     double? EmotionalTopP,
     double DefaultTemperature,
-    double? DefaultTopP,
-    bool ReplyPacingEnabled = false);
+    double? DefaultTopP);
 
 /// <summary>
 /// 自适应采样与意图决策策略（纯领域类、零 I/O、无外部依赖）。
@@ -78,10 +76,7 @@ public static class SamplingPolicy
         string? declaredIntent,
         AdaptiveSamplingConfig config)
     {
-        // Participation is decided by the scheduler; carry its immutable mode through
-        // every sampling branch, including adaptive sampling being disabled.
-        return ResolveProfile(triggerText, hasSearchFacts, vibeHint, declaredIntent, config)
-            with { ReplyPacingEnabled = config.ReplyPacingEnabled };
+        return ResolveProfile(triggerText, hasSearchFacts, vibeHint, declaredIntent, config);
     }
 
     private static SamplingProfile ResolveProfile(

@@ -73,6 +73,11 @@ SILK_CMD = os.environ.get("SILK_ENCODER", "silk_v3_encoder")
 
 _SEM = threading.Semaphore(MAX_CONCURRENCY)
 _lock = threading.Lock()
+_cache_lock = threading.Lock()
+
+
+class SafeTtsError(RuntimeError):
+    """Sanitized local/status-code diagnostic safe to return to callers without leaking raw upstream bodies."""
 
 # 面板里给用户选的中文音色（MiniMax 系统音色；要更多就调 /v1/get_voice）
 MINIMAX_VOICES = [
@@ -94,66 +99,70 @@ def log(msg: str) -> None:
 # ── 面板写过来的密钥（机器人存自己的库，同时落一份文件给我们读）──
 # 为什么不用环境变量：改面板就得重建容器；读文件 + mtime 缓存 = 改完立即生效。
 CONF_PATH = os.environ.get("TTS_CONF", "/conf/tts.env")
-_conf_cache = {"mtime": 0.0, "values": {}}
+_conf_cache: tuple[float, dict[str, str]] = (0.0, {})
 
 
-def conf_values() -> dict:
-    """读 tts.env（不存在就空），mtime 变了才重读。"""
-    try:
-        st = os.stat(CONF_PATH)
-        if st.st_mtime == _conf_cache["mtime"]:
-            return _conf_cache["values"]
-        values = {}
-        with open(CONF_PATH, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                values[k.strip()] = v.strip()
-        _conf_cache["mtime"] = st.st_mtime
-        _conf_cache["values"] = values
-        if values:
-            log(f"读到了面板写来的 TTS 配置（{len(values)} 项，{CONF_PATH}）")
-        return values
-    except FileNotFoundError:
-        _conf_cache["mtime"] = 0.0
-        _conf_cache["values"] = {}
-        return {}
-    except Exception as exc:
-        log(f"读 {CONF_PATH} 失败（忽略，继续用环境变量）：{exc}")
-        return _conf_cache["values"]
+def conf_values() -> dict[str, str]:
+    """读 tts.env（不存在就空），mtime 变了才重读（线程安全原子切换快照）。"""
+    global _conf_cache
+    with _lock:
+        cached_mtime, cached_values = _conf_cache
+        try:
+            st = os.stat(CONF_PATH)
+            if st.st_mtime == cached_mtime:
+                return cached_values
+            values: dict[str, str] = {}
+            with open(CONF_PATH, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    values[k.strip()] = v.strip()
+            _conf_cache = (st.st_mtime, values)
+            if values:
+                log(f"读到了面板写来的 TTS 配置（{len(values)} 项，{CONF_PATH}）")
+            return values
+        except FileNotFoundError:
+            _conf_cache = (0.0, {})
+            return {}
+        except Exception as exc:
+            log(f"读 {CONF_PATH} 失败（忽略，继续用环境变量）：{type(exc).__name__}")
+            return cached_values
 
 
-def conf(name: str) -> str:
+def conf(name: str, snapshot: dict[str, str] | None = None) -> str:
     """面板写来的单项配置（空字符串不算，回落容器环境变量）。"""
-    return (conf_values().get(name) or "").strip()
+    src = conf_values() if snapshot is None else snapshot
+    return (src.get(name) or "").strip()
 
 
-def provider() -> str:
-    return (conf("TTS_PROVIDER") or PROVIDER).strip().lower()
+def provider(snapshot: dict[str, str] | None = None) -> str:
+    return (conf("TTS_PROVIDER", snapshot) or PROVIDER).strip().lower()
 
 
-def minimax_base() -> str:
-    return (conf("MINIMAX_API_BASE") or MINIMAX_BASE).rstrip("/")
+def minimax_base(snapshot: dict[str, str] | None = None) -> str:
+    return (conf("MINIMAX_API_BASE", snapshot) or MINIMAX_BASE).rstrip("/")
 
 
-def minimax_model() -> str:
-    return conf("MINIMAX_MODEL") or MINIMAX_MODEL
+def minimax_model(snapshot: dict[str, str] | None = None) -> str:
+    return conf("MINIMAX_MODEL", snapshot) or MINIMAX_MODEL
 
 
-def openai_base() -> str:
-    return (conf("OPENAI_TTS_BASE_URL") or OPENAI_BASE).rstrip("/")
+def openai_base(snapshot: dict[str, str] | None = None) -> str:
+    return (conf("OPENAI_TTS_BASE_URL", snapshot) or OPENAI_BASE).rstrip("/")
 
 
-def openai_model() -> str:
-    return conf("OPENAI_TTS_MODEL") or OPENAI_TTS_MODEL
+def openai_model(snapshot: dict[str, str] | None = None) -> str:
+    return conf("OPENAI_TTS_MODEL", snapshot) or OPENAI_MODEL or "gpt-4o-mini-tts"
 
 
-def api_key() -> str:
-    """密钥优先用面板写的那份（空值不算），否则回落环境变量。"""
-    from_conf = (conf_values().get("MINIMAX_API_KEY") or "").strip()
-    return from_conf or MINIMAX_KEY
+def api_key(for_provider: str | None = None, snapshot: dict[str, str] | None = None) -> str:
+    """按当前 provider 选择密钥（面板写来的优先，否则回落对应环境变量）。"""
+    active = (for_provider or provider(snapshot)).strip().lower()
+    if active == "openai":
+        return conf("OPENAI_TTS_API_KEY", snapshot) or conf("OPENAI_API_KEY", snapshot) or OPENAI_KEY
+    return conf("MINIMAX_API_KEY", snapshot) or MINIMAX_KEY
 
 
 def mask(secret: str) -> str:
@@ -171,40 +180,73 @@ def cache_path(key: str, fmt: str):
 def cache_get(key: str, fmt: str):
     if not CACHE_ENABLED:
         return None
-    path = cache_path(key, fmt)
-    if os.path.exists(path) and os.path.getsize(path) > 0:
+    try:
+        path = cache_path(key, fmt)
+        with open(path, "rb") as fh:
+            data = fh.read()
+        if not data:
+            return None
         try:
             os.utime(path, None)  # 摸一下，LRU 用访问时间
         except OSError:
             pass
-        with open(path, "rb") as fh:
-            return fh.read()
-    return None
+        return data
+    except OSError:
+        return None
 
 
 def cache_put(key: str, fmt: str, data: bytes) -> None:
     if not CACHE_ENABLED or not data:
         return
-    path = cache_path(key, fmt)
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as fh:
-        fh.write(data)
-    os.replace(tmp, path)
-    prune()
+    fd = -1
+    tmp: str | None = None
+    try:
+        path = cache_path(key, fmt)
+        fd, tmp = tempfile.mkstemp(prefix=".tts_", suffix=".tmp", dir=CACHE_DIR)
+        f = os.fdopen(fd, "wb")
+        fd = -1
+        with f:
+            f.write(data)
+        os.replace(tmp, path)
+        tmp = None
+        with _cache_lock:
+            prune()
+    except OSError as exc:
+        log(f"缓存写入失败（已忽略，仍返回音频）：{type(exc).__name__}")
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def prune() -> None:
-    """容量超过 CACHE_MAX_MB 就按访问时间删最老的（说话的句子重复率很高，这个缓存很划算）。"""
+    """容量超过 CACHE_MAX_MB 就按访问时间删最老的（绝不删除活跃中的 .tmp 写入文件）。"""
     try:
         files = []
         total = 0
+        now = time.time()
         for name in os.listdir(CACHE_DIR):
             p = os.path.join(CACHE_DIR, name)
             if not os.path.isfile(p):
                 continue
-            st = os.stat(p)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
             if name.endswith(".tmp"):
-                os.remove(p)
+                # 跳过正在写入的活跃临时文件；仅清理超过 10 分钟的孤立残留
+                if now - st.st_mtime > 600:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
                 continue
             files.append((st.st_atime, st.st_size, p))
             total += st.st_size
@@ -221,7 +263,7 @@ def prune() -> None:
             except OSError:
                 pass
     except Exception as exc:  # 缓存清理永远不该让请求失败
-        log(f"缓存清理失败（忽略）：{exc}")
+        log(f"缓存清理失败（忽略）：{type(exc).__name__}")
 
 
 # ─────────────────────────── 云端后端 ───────────────────────────
@@ -242,21 +284,22 @@ def http_bytes(url: str, payload: dict, headers: dict, timeout: float) -> bytes:
 
 
 def minimax_audio(text: str, voice: str, speed: float, fmt: str,
-                  voice_opts: dict | None = None) -> bytes:
+                  voice_opts: dict | None = None,
+                  snapshot: dict[str, str] | None = None) -> bytes:
     """MiniMax T2A v2：返回的音频在 data.audio 里，是 **hex**（不是 base64）。
 
     voice_opts 由调用方（do_GET）以局部变量形式传入，不再读全局状态，
     彻底消除多线程并发时的参数串音问题（Bug #2 修复）。
     """
-    key = api_key()
+    key = api_key("minimax", snapshot)
     if not key:
-        raise RuntimeError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 MINIMAX_API_KEY）")
+        raise SafeTtsError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 MINIMAX_API_KEY）")
 
     vo = voice_opts or {}
     # silk 要的是 16k 单声道 PCM，直接让云端吐 pcm，省掉一次重采样
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
     payload = {
-        "model": minimax_model(),
+        "model": minimax_model(snapshot),
         "text": text,
         "stream": False,
         "output_format": "hex",
@@ -274,7 +317,7 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str,
             "channel": 1,
         },
     }
-    url = f"{minimax_base()}/v1/t2a_v2"
+    url = f"{minimax_base(snapshot)}/v1/t2a_v2"
     if MINIMAX_GROUP_ID:
         url += "?GroupId=" + urllib.parse.quote(MINIMAX_GROUP_ID)
 
@@ -284,30 +327,33 @@ def minimax_audio(text: str, voice: str, speed: float, fmt: str,
     }, TIMEOUT)
 
     base = (data or {}).get("base_resp") or {}
-    if base.get("status_code") not in (0, None):
-        raise RuntimeError(f"MiniMax 报错 {base.get('status_code')}: {base.get('status_msg')}")
+    status_code = base.get("status_code")
+    if status_code not in (0, None):
+        code_text = str(status_code) if isinstance(status_code, int) else "unknown"
+        raise SafeTtsError(f"MiniMax 报错 status_code={code_text}")
 
     node = (data or {}).get("data") or {}
     audio_hex = node.get("audio")
     if not audio_hex:
-        raise RuntimeError("MiniMax 没返回音频（data.audio 为空）")
+        raise SafeTtsError("MiniMax 没返回音频（data.audio 为空）")
     return binascii.unhexlify(audio_hex)
 
 
-def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
+def openai_audio(text: str, voice: str, speed: float, fmt: str,
+                 snapshot: dict[str, str] | None = None) -> bytes:
     """OpenAI 兼容 /v1/audio/speech：直接返回二进制音频。"""
-    key = api_key()
+    key = api_key("openai", snapshot)
     if not key:
-        raise RuntimeError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 OPENAI_TTS_API_KEY）")
+        raise SafeTtsError("云端 TTS 还没配密钥：面板「语音消息」卡片里填一个（或给容器 OPENAI_TTS_API_KEY）")
     want = {"silk": "pcm", "wav": "wav", "mp3": "mp3", "pcm": "pcm"}[fmt]
     payload = {
-        "model": openai_model(),
+        "model": openai_model(snapshot),
         "input": text,
         "voice": voice or OPENAI_VOICE,
         "response_format": want,
         "speed": round(max(0.25, min(4.0, speed)), 2),
     }
-    return http_bytes(f"{openai_base()}/audio/speech", payload, {
+    return http_bytes(f"{openai_base(snapshot)}/audio/speech", payload, {
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json",
         "Accept": "application/octet-stream",
@@ -315,83 +361,100 @@ def openai_audio(text: str, voice: str, speed: float, fmt: str) -> bytes:
 
 
 def synth_raw(text: str, voice: str, speed: float, fmt: str,
-              voice_opts: dict | None = None) -> bytes:
-    if provider() == "openai":
-        return openai_audio(text, voice, speed, fmt)
-    return minimax_audio(text, voice, speed, fmt, voice_opts)
+              voice_opts: dict | None = None,
+              snapshot: dict[str, str] | None = None) -> bytes:
+    if provider(snapshot) == "openai":
+        return openai_audio(text, voice, speed, fmt, snapshot)
+    return minimax_audio(text, voice, speed, fmt, voice_opts, snapshot)
 
+
+def _close_fd(fd: int) -> None:
+    if fd >= 0:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def to_silk(pcm: bytes) -> bytes:
-    """PCM(16k/mono/s16le) → 腾讯 SILK v3。
-
-    官方通道发语音**只认**腾讯 SILK v3（mp3/wav 直传报 850019/40034002 ✗），所以这里必须真出 silk：
-
-    ① 原生 ``silk_v3_encoder``（有就用，最快）
-    ② 纯 Python 的 ``pilk``（pypi，不用编译 —— 官方通道靠它）
-
-    两个都没有就**明确报错**，绝不静默发坏音频。
-
-    Bug #1 修复：原代码硬编码 /tmp/_tts.pcm、/tmp/_tts.silk，ThreadingHTTPServer
-    并发时多线程共享同一临时文件，造成数据踩踏。现改用 tempfile.mkstemp 生成
-    进程内唯一路径，finally 块负责清理，彻底消除竞态。
-    """
+    """PCM(16k/mono/s16le) → 腾讯 SILK v3（严格关闭并清理所有 mkstemp fd 与临时文件）。"""
     exe = shutil.which(SILK_CMD)
     if exe:
-        fd_pcm, src = tempfile.mkstemp(suffix=".pcm", prefix="_tts_")
-        _, dst = tempfile.mkstemp(suffix=".silk", prefix="_tts_")
+        fd_pcm = -1
+        fd_dst = -1
+        src: str | None = None
+        dst: str | None = None
         try:
-            with os.fdopen(fd_pcm, "wb") as fh:
-                fh.write(pcm)
+            fd_pcm, src = tempfile.mkstemp(suffix=".pcm", prefix="_tts_")
+            fd_dst, dst = tempfile.mkstemp(suffix=".silk", prefix="_tts_")
+            _close_fd(fd_dst)
+            fd_dst = -1
+            f = os.fdopen(fd_pcm, "wb")
+            fd_pcm = -1
+            with f:
+                f.write(pcm)
             proc = subprocess.run([exe, src, dst, "-tencent", "-rate", "16000"],
                                   capture_output=True, timeout=60)
             if proc.returncode != 0 or not os.path.exists(dst):
-                raise RuntimeError("silk 编码失败: " + proc.stderr.decode("utf-8", "replace")[:200])
+                raise SafeTtsError(f"silk 编码失败 exit_code={proc.returncode}")
             with open(dst, "rb") as fh:
                 return fh.read()
         finally:
+            _close_fd(fd_pcm)
+            _close_fd(fd_dst)
             for p in (src, dst):
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
+                if p:
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
 
     try:
         import pilk  # type: ignore  # 纯 Python SILK v3 编码器（带 C 扩展：装的时候要编译器）
     except ImportError as exc:
-        raise RuntimeError(
+        raise SafeTtsError(
             "这台机器上没有 silk 编码器（官方通道发语音才需要它；NapCat 那条路用 mp3/wav 即可）。"
             f"想启用：pip install pilk，或用 SILK_ENCODER 指定 silk_v3_encoder（缺 {SILK_CMD})") from exc
 
-    fd_pcm, src = tempfile.mkstemp(suffix=".pcm", prefix="_tts_")
-    _, dst = tempfile.mkstemp(suffix=".silk", prefix="_tts_")
+    fd_pcm = -1
+    fd_dst = -1
+    src = None
+    dst = None
     try:
-        with os.fdopen(fd_pcm, "wb") as fh:
-            fh.write(pcm)
-        # pilk 的 encode 是 C 扩展（没有 Python 签名可探 ✗），只能直接试：
-        #   官方要 16k/单声道 → pcm_rate=16000；tencent=True 才写 #!SILK_V3 头（默认写的是普通 SILK）
+        fd_pcm, src = tempfile.mkstemp(suffix=".pcm", prefix="_tts_")
+        fd_dst, dst = tempfile.mkstemp(suffix=".silk", prefix="_tts_")
+        _close_fd(fd_dst)
+        fd_dst = -1
+        f = os.fdopen(fd_pcm, "wb")
+        fd_pcm = -1
+        with f:
+            f.write(pcm)
+
         def _pilk_call() -> None:
             try:
                 pilk.encode(src, dst, pcm_rate=16000, tencent=True)
             except TypeError:
-                pilk.encode(src, dst)          # 这版不接关键字参数就只能裸调（需要时再想办法）
+                pilk.encode(src, dst)
 
         try:
             _pilk_call()
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"pilk 编码 silk 失败（{type(exc).__name__}: {exc}）") from exc
+            raise SafeTtsError(f"pilk 编码 silk 失败（{type(exc).__name__}）") from exc
         if not os.path.exists(dst):
-            raise RuntimeError("pilk 没有产出 silk 文件")
+            raise SafeTtsError("pilk 没有产出 silk 文件")
         with open(dst, "rb") as fh:
             data = fh.read()
         log(f"silk 编码完成（pilk，{len(pcm)} → {len(data)} 字节）")
         return data
     finally:
+        _close_fd(fd_pcm)
+        _close_fd(fd_dst)
         for p in (src, dst):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
 
@@ -478,8 +541,12 @@ class Handler(BaseHTTPRequestHandler):
         # Bug #2 修复：不再写全局 VOICE_OPTS，改用请求本地的局部字典，并发安全。
         voice_opts = {"emotion": emotion, "pitch": pitch, "vol": vol}
 
+        # 单次请求只取一份一致的配置快照，避免并发改写 tts.env 时混用旧 provider 与新 key。
+        cfg = conf_values()
+        cur_provider = provider(cfg)
+        cur_model = openai_model(cfg) if cur_provider == "openai" else minimax_model(cfg)
         key = hashlib.sha256(
-            f"{PROVIDER}|{MINIMAX_MODEL if PROVIDER != 'openai' else OPENAI_MODEL}|{voice}|{speed}|{fmt}|{text}"
+            f"{cur_provider}|{cur_model}|{voice}|{speed}|{fmt}|{text}"
             f"|emo={emotion}|pi={pitch}|vo={vol}".encode("utf-8")).hexdigest()[:40]
 
         hit = cache_get(key, fmt)
@@ -490,19 +557,31 @@ class Handler(BaseHTTPRequestHandler):
         started = time.time()
         try:
             with _SEM:
-                raw = synth_raw(text, voice, speed, fmt, voice_opts)
+                raw = synth_raw(text, voice, speed, fmt, voice_opts, cfg)
                 if fmt == "silk":
                     raw = to_silk(raw)
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:300]
-            log(f"上游 HTTP {exc.code}：{detail}")
-            return self._json(502, {"error": f"云端 TTS 返回 {exc.code}", "detail": detail})
+            body_len = 0
+            try:
+                body_len = len(exc.read() or b"")
+            except Exception:
+                pass
+            finally:
+                try:
+                    exc.close()
+                except Exception:
+                    pass
+            log(f"上游 HTTP {exc.code}（body_bytes={body_len}）")
+            return self._json(502, {"error": f"云端 TTS 返回 HTTP {exc.code}"})
         except urllib.error.URLError as exc:
-            log(f"上游连不上：{exc.reason}")
-            return self._json(502, {"error": f"云端 TTS 连不上：{exc.reason}"})
-        except Exception as exc:
+            log(f"上游连不上（{type(exc.reason).__name__}）")
+            return self._json(502, {"error": "云端 TTS 连接失败"})
+        except SafeTtsError as exc:
             log(f"合成失败：{exc}")
-            return self._json(502, {"error": str(exc)[:300]})
+            return self._json(502, {"error": str(exc)})
+        except Exception as exc:
+            log(f"合成失败（{type(exc).__name__}）")
+            return self._json(502, {"error": "云端 TTS 合成失败"})
 
         if not raw:
             return self._json(502, {"error": "云端返回了空音频"})
@@ -530,9 +609,9 @@ def main() -> None:
         f"voice={DEFAULT_VOICE} key={mask(api_key())} "
         f"format={DEFAULT_FORMAT} 端口={PORT} 缓存={CACHE_DIR}({CACHE_MAX_MB}MB) "
         f"silk编码器={'有' if shutil.which(SILK_CMD) else '无'}")
-    if PROVIDER == "openai" and not OPENAI_KEY:
+    if provider() == "openai" and not api_key("openai"):
         log("警告：TTS_PROVIDER=openai 但 OPENAI_TTS_API_KEY 没配，/speak 会失败")
-    if provider() != "openai" and not api_key():
+    if provider() != "openai" and not api_key("minimax"):
         log("警告：还没配 TTS 密钥，/speak 会失败（面板「语音消息」里填，或给容器 MINIMAX_API_KEY）")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

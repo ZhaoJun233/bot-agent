@@ -4,12 +4,8 @@ using System.Text.Json.Nodes;
 namespace BotAgent.IntegrationHarness;
 
 /// <summary>
-/// S45 两个**默认关**的开关（V3 §7.3 闸门 / §8.1 提问）：证明“默认零变化”与“打开后确实生效”。
-///
-/// 这条场景刻意把两件事放在一起，因为它们共享同一个前提：**都是显式开关，默认不动线上行为**。
-///   ① 参与闸门：默认关 → 没点名的普通消息仍然照常回；
-///      面板打开（并把冷却拉长，让状态机的结论稳定）→ 同样的消息**不叫模型**（日志 `[参与] 闸门拦下`），
-///      而被 @ 时照样回（证明不是一刀切闭嘴）。
+/// S45 单一调度策略与提问能力的真实宿主接线。
+///   ① 普通插话概率为零时不叫模型；旧字段提交原子拒绝；被 @ 仍然回复。
 ///   ② 允许提问：默认关 → `action=ask` 安全静默；
 ///      打开后 → 群里出现服务端包好的【提问】（带一次性编号），有人应一声就记成“已被回答”，
 ///      再应一次不再算（一次性）。
@@ -20,7 +16,7 @@ public static partial class Program
 {
     private static async Task RunGateAndQuestionScenarioAsync()
     {
-        Section("S45 两个默认关的开关（参与闸门 / 允许提问）");
+        Section("S45 新版参与概率 / 允许提问");
 
         var openAiPort = FreePort(17895);
         var botWsPort = FreePort(13099);
@@ -35,7 +31,7 @@ public static partial class Program
         using var openAi = new MockOpenAi(openAiPort);
         openAi.Start();
 
-        // ① 闸门关着：没点名的普通消息 → 照常回
+        // Deterministic 100-percent fixture, then zero-percent ordinary admission.
         openAi.EnqueueReply("""{"suitability": 99, "reply": "闸门关着的时候我会接话"}""");
         // ② 闸门打开：那条消息**不该叫模型**，所以这里排的这一条会在后面被 @ 时用掉
         openAi.EnqueueReply("""{"suitability": 99, "reply": "被点名我才说这句"}""");
@@ -55,9 +51,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = groupId.ToString(),
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_ENABLE_POKE"] = "0",
             ["QQCHAT_ENABLE_VOICE"] = "0",
@@ -81,51 +75,53 @@ public static partial class Program
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .ToList();
 
-        bool GatedOut() => bot.OutputLines.Any(l => l.Contains("[参与] 闸门拦下"));
-
-        // ── ① 闸门默认关：没点名的普通消息也照常接话 ──
+        // ── ① 概率为 100：没点名的普通消息可接话 ──
         var before = Sent().Count;
         await protocol.SendGroupMessageAsync(groupId, memberId, "群友A", "大家今天在忙什么", 23001,
             mentionBot: false, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Count > before, TimeSpan.FromSeconds(40));
-        Check("★ 闸门默认关：没点名的普通消息仍然照常接话（与改造前一致）",
-            Sent().Count > before, string.Join(" | ", Sent().Skip(before)));
-        Check("默认关时不该出现“闸门拦下”这类日志",
-            !GatedOut(), bot.OutputLines.LastOrDefault(l => l.Contains("[参与]")) ?? "(没有 [参与] 行)");
+        Check("普通插话概率 100 时可以接话", Sent().Count > before, $"sendDelta={Sent().Count - before}");
+        var (initialCode, initialBody) = await PanelPostJsonAsync($"{panel}/api/settings?configuration=read", """{"kind":1}""");
+        var initial = JsonNode.Parse(initialBody)!.AsObject();
+        var initialVersion = initial["version"]?.GetValue<string>();
+        Check("结构化读取提供配置版本", initialCode == 200 && initialVersion is not null, $"status={initialCode}");
+        var (retiredCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
+            """{"enableParticipationGating":true,"groupInterjectionProbability":0}""");
+        var (_, rejectedBody) = await PanelGetAsync($"{panel}/api/settings");
+        var rejected = JsonNode.Parse(rejectedBody)!.AsObject();
+        var (_, rejectedVersionBody) = await PanelPostJsonAsync($"{panel}/api/settings?configuration=read", """{"kind":1}""");
+        var rejectedVersion = JsonNode.Parse(rejectedVersionBody)?["version"]?.GetValue<string>();
+        Check("旧配置拒绝整个保存且不推进版本", retiredCode == 400
+            && initialVersion is not null && rejectedVersion == initialVersion
+            && rejected["runtime"]?["groupInterjectionProbability"]?.GetValue<int>() == 100,
+            $"status={retiredCode}; versionUnchanged={rejectedVersion == initialVersion}");
 
-        // ── ② 打开闸门（顺便把冷却拉长，让状态机的结论稳定可判）──
+        // ── ② 关闭普通插话，不影响明确请求 ──
         var (onCode, _) = await PanelPostJsonAsync($"{panel}/api/settings",
-            """{"enableParticipationGating":true,"participationCooldownSeconds":600}""");
-        Check("面板能打开参与闸门", onCode == 200, $"HTTP {onCode}");
+            """{"groupInterjectionProbability":0,"groupInterjectionCooldownSeconds":600}""");
+        Check("面板能修改新版插话参数", onCode == 200, $"HTTP {onCode}");
 
         var (_, settingsBody) = await PanelGetAsync($"{panel}/api/settings");
         var runtime = (JsonNode.Parse(settingsBody) as JsonObject)?["runtime"] as JsonObject ?? new JsonObject();
-        Check("★ 面板回显：闸门是开着的（且写清“只收不放”）",
-            runtime["enableParticipationGating"]?.GetValue<bool>() == true
-            && (runtime["participationGating"]?.GetValue<string>() ?? string.Empty).Contains("闸门开启"),
-            runtime["participationGating"]?.GetValue<string>() ?? "(没有这个字段)");
+        Check("面板仅回显新版配置", runtime["groupInterjectionProbability"]?.GetValue<int>() == 0
+            && !runtime.ContainsKey("enableParticipationGating") && !runtime.ContainsKey("participationCooldownSeconds"),
+            $"probability={runtime["groupInterjectionProbability"]}");
 
-        // ── ③ 闸门开着：没点名的消息不再叫模型 ──
+        // ── ③ 零概率普通消息不叫模型、不发送 ──
         before = Sent().Count;
+        var requestsBefore = openAi.Requests.Count;
         await protocol.SendGroupMessageAsync(groupId, memberId, "群友B", "我这边也挺忙的", 23002,
             mentionBot: false, ct: cts.Token);
-        await WaitUntilAsync(GatedOut, TimeSpan.FromSeconds(40));
-        await Task.Delay(1200);   // 再等一会儿，确认它真的没发
-        Check("★ 闸门打开：没点名的消息被拦下（不叫模型、也不发）",
-            GatedOut() && Sent().Count == before,
-            $"sent+={Sent().Count - before}；" + (bot.OutputLines.LastOrDefault(l => l.Contains("[参与]")) ?? "(没有 [参与] 行)"));
-        Check("拦下的原因码是状态机给的（这里应是“冷却中”或“未参与”那类，不是含糊的沉默）",
-            bot.OutputLines.Any(l => l.Contains("[参与] 闸门拦下") &&
-                (l.Contains("cooldown") || l.Contains("not_addressed") || l.Contains("probing_no_confirm"))),
-            bot.OutputLines.LastOrDefault(l => l.Contains("闸门拦下")) ?? "(没有闸门行)");
+        await Task.Delay(1200);
+        Check("零概率普通消息没有模型调用或发送", Sent().Count == before && openAi.Requests.Count == requestsBefore,
+            $"sendDelta={Sent().Count - before}; requestDelta={openAi.Requests.Count - requestsBefore}");
 
-        // ── ④ 闸门开着：被 @ 时照样回（不是一刀切闭嘴）──
+        // ── ④ 被 @ 不受普通插话概率与冷却限制 ──
         before = Sent().Count;
         await protocol.SendGroupMessageAsync(groupId, memberId, "群友A", "还是问你吧", 23003,
             mentionBot: true, ct: cts.Token);
         await WaitUntilAsync(() => Sent().Count > before, TimeSpan.FromSeconds(40));
-        Check("★ 闸门打开后，被 @ 仍然照常回（闸门只收不放，不是把嘴封上）",
-            Sent().Count > before, string.Join(" | ", Sent().Skip(before)));
+        Check("零概率与冷却期间被 @ 仍然回复", Sent().Count > before, $"sendDelta={Sent().Count - before}");
 
         // ── ⑤ 提问默认关：模型想提问 → 安全静默（一个字都不发）──
         before = Sent().Count;
@@ -144,10 +140,8 @@ public static partial class Program
             $"promptChars={quietPrompt.Length}");
 
         // ── ⑥ 打开提问：群里出现服务端包好的提问（带一次性编号）──
-        // 顺便把连续回复上限抬高：这个场景为了稳定判冷却，把 participationCooldownSeconds 设成了 600，
-        // 而下面还要再被 @ 几次 —— 不抬上限就会撞上「到上限且还在休息窗口 → 拒绝」这条硬约束。
         var (qCode, _) = await PanelPostJsonAsync(
-            $"{panel}/api/settings", """{"enableQuestions":true,"participationMaxConsecutiveReplies":10}""");
+            $"{panel}/api/settings", """{"enableQuestions":true}""");
         Check("面板能打开“允许提问”", qCode == 200, $"HTTP {qCode}");
 
         before = Sent().Count;

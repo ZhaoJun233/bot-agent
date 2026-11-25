@@ -17,6 +17,9 @@ public enum ToolOrigin
 
     /// <summary>运行时从 MCP 服务器发现的外部工具（描述是不可信数据）。</summary>
     Mcp = 1,
+
+    /// <summary>Declared and executed by one managed plugin generation.</summary>
+    Plugin = 2,
 }
 
 /// <summary>
@@ -36,6 +39,11 @@ public static class ToolFeature
     public const string Approval = "approval";
     public const string Question = "question";
     public const string Text = "text";
+    public const string Documents = "documents";
+    public const string Digest = "digest";
+    public const string Knowledge = "knowledge";
+    public const string Scheduler = "scheduler";
+    public const string PersonalTodo = "personal_todo";
 }
 
 /// <summary>

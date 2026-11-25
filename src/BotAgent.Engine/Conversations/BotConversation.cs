@@ -357,9 +357,10 @@ public sealed class BotConversation
                 continue;
             }
 
+            var restoredRole = Enum.TryParse<MessageRole>(msg.Role, true, out var role) ? role : MessageRole.Peer;
             restored.Add(new ChatMessage
             {
-                Role = Enum.TryParse<MessageRole>(msg.Role, true, out var role) ? role : MessageRole.Peer,
+                Role = restoredRole,
                 SenderName = msg.SenderName,
                 SenderId = msg.SenderId,
                 Text = msg.Text,
@@ -367,7 +368,8 @@ public sealed class BotConversation
                 ImageUrls = msg.ImageUrls,
                 QqMessageId = msg.QqMessageId,
                 Recalled = msg.Recalled,
-                Seq = msg.Seq
+                Seq = msg.Seq,
+                AllowsCommands = restoredRole == MessageRole.Peer ? !IsUntrustedDerivedText(msg.Text) : true
             });
         }
 
@@ -418,6 +420,19 @@ public sealed class BotConversation
     public Func<(bool IsGroup, long Id)>? TargetResolver { get; set; }
 
     public (bool IsGroup, long Id) Target => TargetResolver?.Invoke() ?? BotAgent.Domain.Qq.Channels.Parse(SourceKey);
+
+    private static bool IsUntrustedDerivedText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var t = text.TrimStart();
+        return t.StartsWith("[语音", StringComparison.Ordinal)
+            || t.StartsWith("[文件", StringComparison.Ordinal)
+            || t.StartsWith("[卡片消息（外部内容）]", StringComparison.Ordinal)
+            || t.StartsWith("[分享卡片", StringComparison.Ordinal)
+            || t.StartsWith("[合并转发", StringComparison.Ordinal)
+            || t.Contains("[文件附件（外部不可信内容", StringComparison.Ordinal)
+            || t.Contains("[语音转写（外部不可信内容", StringComparison.Ordinal);
+    }
 
     private static string FirstChar(string name)
     {

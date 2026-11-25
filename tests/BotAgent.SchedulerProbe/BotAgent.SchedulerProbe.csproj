@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 5 Scheduler/Todo/Identity/Workspace 确定性探针：
+    纯合成输入 + 虚拟时钟 + 临时 SQLite（Schema v15 零迁移），不启动真机器人、不连网、不读真实会话。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>BotAgent.SchedulerProbe</AssemblyName>
+    <RootNamespace>BotAgent.SchedulerProbe</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BotAgent.Core\BotAgent.Core.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Engine\BotAgent.Engine.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Headless\BotAgent.Headless.csproj" />
+    <ProjectReference Include="..\..\contracts\scheduler\BotAgent.Scheduler.Contracts.csproj" />
+    <ProjectReference Include="..\..\contracts\personaltodo\BotAgent.PersonalTodo.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\BotAgent.Storage\BotAgent.Storage.csproj" Aliases="StorageModule" />
+  </ItemGroup>
+
+</Project>

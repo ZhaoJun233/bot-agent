@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace BotAgent.Storage;
 
-public sealed class PluginStore : IPluginStore
+public sealed partial class PluginStore : IPluginStore
 {
     private const string MetaKey = "plugins_state";
 
@@ -38,8 +38,10 @@ public sealed class PluginStore : IPluginStore
 
     // The caller owns the single configuration transaction; no nested writer or registration policy here.
     internal static IReadOnlyDictionary<string, bool> LoadPluginStatesInTransaction(SqliteConnection connection)
+        => ReadStates(AppDatabase.GetMetaInTransaction(connection, MetaKey));
+
+    private static IReadOnlyDictionary<string, bool> ReadStates(string? json)
     {
-        var json = AppDatabase.GetMetaInTransaction(connection, MetaKey);
         var states = ImmutableDictionary.CreateBuilder<string, bool>(StringComparer.Ordinal);
         if (json is null) return states.ToImmutable();
         try

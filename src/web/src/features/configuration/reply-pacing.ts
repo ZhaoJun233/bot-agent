@@ -1,4 +1,11 @@
-/** Reply pacing remains a behavior contract owned only by conversation settings. */
+/** Reply pacing is the only scheduling policy exposed by basic configuration. */
+export const retiredReplyFields = new Set([
+  'aiDesire', 'replyPacingEnabled', 'enableAtmosphereDamping', 'enableParticipationGating',
+  'groupCooldownSeconds', 'privateCooldownSeconds', 'idleFallbackSeconds', 'proactiveCooldownSeconds',
+  'participationCooldownSeconds', 'participationMaxActiveLifetimeSeconds', 'participationMaxConsecutiveReplies',
+  'participationMaxExitingLifetimeSeconds', 'participationProbingMaxReplies'
+])
+
 export const replyPacingNumericLimits: Record<string, { min: number; max: number; step?: number | 'any' }> = {
   groupInterjectionProbability: { min: 0, max: 100 },
   groupInterjectionCooldownSeconds: { min: 0, max: 3600 },

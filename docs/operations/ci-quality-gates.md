@@ -73,5 +73,4 @@ ArchitectureProbe 有断言兜底（`harness 注册的 N 个集成场景与 ci.y
 - `.github/workflows/ci.yml` —— 唯一真源。
 - `tests/BotAgent.ArchitectureProbe/Program.cs` —— 门禁自检（探针在 CI 出现 / 场景矩阵双向一致 / PipelineEval 被执行）。
 - `CONTRIBUTING.md` §本地验证 —— 提交前该跑什么。
-- `docs/baseline/report-2026-10-31.md` —— 验收基线数字。
 - #127（分支保护）、#113（本文件）、#111 / #112（回归测试体系）。

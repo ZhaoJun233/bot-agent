@@ -114,8 +114,8 @@ internal sealed class ReplyQuoteContext
         //      它在 JSON 里用 replyTo 说明“我在回哪条”。这是唯一能从根上对上号的办法 ——
         //      启发式只能猜“最新那条”或“排队时的触发”，都猜不准（线上两度因此看起来回错人）。
         //      采信条件：它必须在本次上下文里（防模型报个不存在的编号）。
-        //   ② 没指认时：只有“触发消息还是最新诉求”才拿它当引用目标；如果触发已经过去
-        //      （后面有人插话，比如模型慢了几秒），就**不引用** —— 以前这里会抽“上下文里最新那条
+        //   ② 没指认时：触发在取上下文时仍是最新诉求才用作兜底；生成期间的插话和撤回
+        //      不改变这个快照事实。取上下文时已积压的旧触发**不引用** —— 以前这里会抽“上下文里最新那条
         //      别人发的消息”当目标，于是“正文回答 A、引用挂到 B”，群里看到的就是“回复错人”。
         //   ③ 紧挨着回就不引用：目标后面没有别的新消息时，引用是多余的（保留原有手感）。
         var messages = conversation.Messages;
@@ -145,7 +145,9 @@ internal sealed class ReplyQuoteContext
             TriggerUsable: triggerIndex >= 0 && !messages[triggerIndex].Recalled,
             LastSelfIndex: lastSelfIndex,
             DirectAddress: directAddress,
-            TriggerWasEcho: triggerWasEcho);
+            TriggerWasEcho: triggerWasEcho,
+            TriggerWasCurrentAtGeneration: triggerMessageId is long currentTrigger &&
+                turn.LatestPeerMessageIdAtGeneration == currentTrigger);
 
         var replyTargetDecision = Domain.Conversation.ReplyTargetRules.Resolve(replyTargetFacts);
         var replyTo = replyTargetDecision.Target;

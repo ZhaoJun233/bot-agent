@@ -11,51 +11,6 @@ namespace BotAgent.Adapters.Persistence;
 
 public sealed partial class SettingsStore
 {
-    private sealed class ConfigurationReadFields
-    {
-        private readonly Microsoft.Data.Sqlite.SqliteConnection _connection;
-        private readonly ConfigurationReadKind _kind;
-        private readonly ApplyState _latestApply;
-        private readonly IReadOnlySet<string> _legacyProperties;
-        private readonly Func<ConfigurationFieldId, ConfigurationValueSource> _actualSource;
-        private readonly Func<ConfigurationFieldId, FieldEffect> _effect;
-        private readonly ConfigurationRuntimeEffectCollector? _runtimeEffects;
-
-        internal ConfigurationReadFields(Microsoft.Data.Sqlite.SqliteConnection connection,
-            ConfigurationReadKind kind, ApplyState latestApply, IReadOnlySet<string> legacyProperties,
-            Func<ConfigurationFieldId, ConfigurationValueSource> actualSource, Func<ConfigurationFieldId, FieldEffect> effect,
-            ConfigurationRuntimeEffectCollector? runtimeEffects)
-        {
-            _connection = connection; _kind = kind; _latestApply = latestApply;
-            _legacyProperties = legacyProperties; _actualSource = actualSource; _effect = effect; _runtimeEffects = runtimeEffects;
-        }
-        internal ReadField<T> Field<T>(ConfigurationFieldId id, T requested, T actual, string oldProperty,
-            string? displayOverride = null)
-        {
-            var present = _legacyProperties.Contains(oldProperty);
-            var state = ConfigurationBridge.ReadFieldState(_connection, id, present);
-            var source = _actualSource(id);
-            if (source == ConfigurationValueSource.UserConfiguration && !state.Tracked)
-                source = present ? ConfigurationValueSource.LegacyCompatibility : ConfigurationValueSource.Default;
-            var visibility = _kind == ConfigurationReadKind.Editable ? FieldVisibility.Editable : FieldVisibility.Hidden;
-            var editable = visibility == FieldVisibility.Hidden ? default! : state.UserMode == UserValueKind.Explicit ? requested : actual;
-            var display = displayOverride ?? (actual switch
-            {
-                string text => BotAgent.Services.Agent.AgentMask.Shorten(text),
-                bool value => value ? "true" : "false",
-                IFormattable number => number.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
-                _ => "[configured]",
-            });
-            var rule = new FieldDescriptor(id, _effect(id), typeof(T) == typeof(string)
-                || id is ConfigurationFieldId.PlatformPolicies,
-                _kind == ConfigurationReadKind.Editable, present && !state.Tracked);
-            _runtimeEffects?.Observe(id, rule.Effect,
-                state.Tracked || state.UserMode == UserValueKind.Explicit ? requested : actual, actual);
-            return ConfigurationBridge.ProjectField(visibility, display, rule, state.UserMode,
-                source, _latestApply, editable);
-        }
-    }
-
     internal sealed partial class ConfigurationParticipant
     {
         internal override ConfigurationReadResult Read(Microsoft.Data.Sqlite.SqliteConnection connection,
@@ -81,7 +36,13 @@ public sealed partial class SettingsStore
                     effective.DeclaredPlatformDrivers, effective.DeclaredPlatformActions).Length != 0)
                     throw new JsonException("platform_policy_legacy_needs_review");
                 _ = ModelProviderStore.LoadFieldModesInTransaction(connection);
+                stored.User.RuntimeConversationProfiles = StorageConfiguration.ConversationProfileStorageBridge.Load(connection);
                 registered = _registeredRead(connection, kind);
+                registered = registered with
+                {
+                    ConversationProfiles = ConversationProfileProjection.ProjectViews(
+                        stored.User.RuntimeConversationProfiles, kind, effective.AgentMaskSensitive),
+                };
             }
             catch (JsonException)
             {
@@ -94,6 +55,8 @@ public sealed partial class SettingsStore
                 stored.Properties, _effectiveSource, _effect,
                 requestedPolicies, PolicyViews(stored.User, effective, kind, false), registered, runtimeEffects);
             runtimeEffects.CompletePolicies();
+            ConversationProfileProjection.ObserveRuntimeEffects(
+                stored.User.RuntimeConversationProfiles, effective.RuntimeConversationProfiles, kind, runtimeEffects);
             view = view with
             {
                 Registered = registered with

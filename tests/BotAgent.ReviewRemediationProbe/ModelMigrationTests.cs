@@ -93,7 +93,7 @@ internal static class ModelMigrationTests
         }
     }
 
-    private static ModelOptions Options() => new() { BaseUrl = "https://example.com/v1", ApiKey = Marker, Model = "synthetic-main", FastModel = "synthetic-fast", EnableAtmosphereDamping = false };
+    private static ModelOptions Options() => new() { BaseUrl = "https://example.com/v1", ApiKey = Marker, Model = "synthetic-main", FastModel = "synthetic-fast" };
     private static ModelTransport Transport(ModelOptions options, ProbeFetcher fetcher) => new(() => options, fetcher, fetcher, new ModelImages(fetcher), fetcher.Timeout);
 
     private static async Task PayloadAsync(Action<bool, string> check)
@@ -139,7 +139,7 @@ internal static class ModelMigrationTests
         await transport.SendAsync(callerPayload, 0, Array.Empty<long>(), new ModelProviderRoute("synthetic-provider", "https://example.com/registered", "synthetic-routed", Marker), default);
         check(fetcher.Payloads.Last()["model"]!.GetValue<string>() == "synthetic-routed" && callerPayload["model"]!.GetValue<string>() == "synthetic-original", "registered route does not mutate another request");
         options.Model = "synthetic-main";
-        var hostClient = new BotAgent.Services.Agent.OpenAiClient(new SettingsBox(new AppSettings { ApiKey = Marker, Model = "synthetic-main", ModelBaseUrl = "https://example.com/v1", EnableAtmosphereDamping = false }), fetcher, fetcher, new ModelImages(fetcher), transport);
+        var hostClient = new BotAgent.Services.Agent.OpenAiClient(new SettingsBox(new AppSettings { ApiKey = Marker, Model = "synthetic-main", ModelBaseUrl = "https://example.com/v1" }), fetcher, fetcher, new ModelImages(fetcher), transport);
         var result = await hostClient.CompleteAsync(Window);
         check(result.Reply == "synthetic", "real Host facade sends and parses a synthetic request through Model");
         check(fetcher.AllDisposed, "every Model payload request and response is disposed");

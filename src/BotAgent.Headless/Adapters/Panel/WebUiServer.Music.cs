@@ -34,6 +34,12 @@ public sealed partial class WebUiServer
             return;
         }
 
+        if (!_music.IsPluginAvailable)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["error"] = "音乐插件未启用或不可用" });
+            return;
+        }
+
         var baseUrl = _settings.NeteaseBaseUrl.TrimEnd('/');
         var stamp = Clock.Now.ToUnixTimeMilliseconds();
 
@@ -144,6 +150,12 @@ public sealed partial class WebUiServer
             return;
         }
 
+        if (!_music.IsPluginAvailable)
+        {
+            await WriteJsonAsync(context, 503, new JsonObject { ["ok"] = false, ["error"] = "音乐插件未启用或不可用" });
+            return;
+        }
+
         JsonNode? body;
         try
         {
@@ -179,75 +191,4 @@ public sealed partial class WebUiServer
         }
     }
 
-    /// <summary>
-    /// /api/search/test：跑一次真实联网搜索（模型自带搜索优先，否则走搜索源模板）。
-    /// 为什么要这个入口：搜索能不能用跟“服务器 IP、代理支不支持工具”强相关，
-    /// 面板上当场跑一次，比在群里碰运气强。
-    /// </summary>
-    private async Task HandleSearchTestAsync(HttpListenerContext context, string method)
-    {
-        if (method != "POST")
-        {
-            await WriteJsonAsync(context, 405, new JsonObject { ["error"] = "method not allowed" });
-            return;
-        }
-
-        JsonNode? body;
-        try
-        {
-            body = await ReadJsonAsync(context);
-        }
-        catch (Exception)
-        {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "请求体不是合法 JSON" });
-            return;
-        }
-
-        var query = body?["query"]?.GetValue<string>()?.Trim();
-        var url = body?["url"]?.GetValue<string>()?.Trim();
-        if (string.IsNullOrWhiteSpace(query) && string.IsNullOrWhiteSpace(url))
-        {
-            await WriteJsonAsync(context, 400, new JsonObject { ["error"] = "请填 query（搜索词）或 url（要读的页面）" });
-            return;
-        }
-
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(url))
-            {
-                var (text, error) = await _research.TestReadPageAsync(url!, CancellationToken.None);
-                await WriteJsonAsync(context, 200, new JsonObject
-                {
-                    ["ok"] = text is not null,
-                    ["mode"] = "read",
-                    ["text"] = text,
-                    ["error"] = error
-                });
-                return;
-            }
-
-            var result = await _research.TestSearchAsync(query!, CancellationToken.None);
-            await WriteJsonAsync(context, 200, new JsonObject
-            {
-                ["ok"] = result.HasContent,
-                ["mode"] = "search",
-                ["provider"] = result.Provider,
-                ["answer"] = result.Answer,
-                ["hits"] = new JsonArray(result.Hits
-                    .Select(h => (JsonNode)new JsonObject
-                    {
-                        ["title"] = h.Title,
-                        ["url"] = h.Url,
-                        ["snippet"] = h.Snippet
-                    })
-                    .ToArray()),
-                ["note"] = result.Describe(),
-                ["error"] = result.Error
-            });
-        }
-        catch (Exception ex)
-        {
-            await WriteJsonAsync(context, 500, new JsonObject { ["error"] = ex.Message });
-        }
-    }
 }

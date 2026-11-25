@@ -42,7 +42,7 @@ public static partial class Program
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        await WaitForPortAsync(healthPort, cts.Token, bot);
+        await WaitForBusinessReadyAsync(healthPort, cts.Token, bot);
 
         var panel = $"http://127.0.0.1:{healthPort}";
 
@@ -107,19 +107,19 @@ public static partial class Program
         {
             using var response = await sessionHttp.GetAsync($"{panel}/api/settings", cts.Token);
             var root = JsonNode.Parse(await response.Content.ReadAsStringAsync(cts.Token)) as JsonObject;
-            return root?["runtime"]?["groupCooldownSeconds"]?.ToString() ?? "(missing)";
+            return root?["runtime"]?["groupInterjectionCooldownSeconds"]?.ToString() ?? "(missing)";
         }
 
-        var (sameOriginCode, _) = await OriginPostAsync(panelOrigin, """{"groupCooldownSeconds":11}""");
+        var (sameOriginCode, _) = await OriginPostAsync(panelOrigin, """{"groupInterjectionCooldownSeconds":11}""");
         Check("同源 Cookie 写请求仍成功", sameOriginCode == 200 && await SavedCooldownAsync() == "11",
             $"HTTP {sameOriginCode} cooldown={await SavedCooldownAsync()}");
-        var (crossPortCode, _) = await OriginPostAsync($"http://127.0.0.1:{otherOriginPort}", """{"groupCooldownSeconds":22}""");
+        var (crossPortCode, _) = await OriginPostAsync($"http://127.0.0.1:{otherOriginPort}", """{"groupInterjectionCooldownSeconds":22}""");
         Check("★ 同主机异端口 Origin 被拒且不落盘", crossPortCode == 403 && await SavedCooldownAsync() == "11",
             $"HTTP {crossPortCode} cooldown={await SavedCooldownAsync()}");
-        var (crossSchemeCode, _) = await OriginPostAsync($"https://127.0.0.1:{healthPort}", """{"groupCooldownSeconds":33}""");
+        var (crossSchemeCode, _) = await OriginPostAsync($"https://127.0.0.1:{healthPort}", """{"groupInterjectionCooldownSeconds":33}""");
         Check("★ 同主机异协议 Origin 被拒且不落盘", crossSchemeCode == 403 && await SavedCooldownAsync() == "11",
             $"HTTP {crossSchemeCode} cooldown={await SavedCooldownAsync()}");
-        var (proxyCode, _) = await OriginPostAsync("https://panel.example", """{"groupCooldownSeconds":44}""",
+        var (proxyCode, _) = await OriginPostAsync("https://panel.example", """{"groupInterjectionCooldownSeconds":44}""",
             host: "panel.example", forwarded: "https");
         Check("★ 可信回环反向代理的完整 Origin 仍可写", proxyCode == 200 && await SavedCooldownAsync() == "44",
             $"HTTP {proxyCode} cooldown={await SavedCooldownAsync()}");
@@ -145,9 +145,9 @@ public static partial class Program
         var tools = root["tools"] as JsonArray ?? new JsonArray();
         Check("GET /api/tools 可读（只读端点）", code == 200 && root["count"] is not null, $"HTTP {code} {body[..Math.Min(80, body.Length)]}");
 
-        Check("★ 目录条数 = 26（聊天 10 / QQ 动作 10 / 服务器 6）",
-            root["count"]?.GetValue<int>() == 26 && tools.Count == 26
-            && root["chatCount"]?.GetValue<int>() == 10 && root["qqCount"]?.GetValue<int>() == 10
+        Check("★ 目录条数 = 40（聊天 24 / QQ 动作 10 / 服务器 6）",
+            root["count"]?.GetValue<int>() == 40 && tools.Count == 40
+            && root["chatCount"]?.GetValue<int>() == 24 && root["qqCount"]?.GetValue<int>() == 10
             && root["serverCount"]?.GetValue<int>() == 6,
             $"count={root["count"]} tools={tools.Count} chat={root["chatCount"]} qq={root["qqCount"]} server={root["serverCount"]}");
 
@@ -160,24 +160,35 @@ public static partial class Program
             $"healthy={root["healthy"]} 缺执行者={root["missingExecutors"]} 孤儿={root["unusedExecutors"]}"
             + $" 缺例外={root["missingExceptions"]} 重名={root["duplicateIds"]}");
 
-        Check("执行者登记 = 4 家", (root["executors"] as JsonArray)?.Count == 4,
+        Check("执行者登记 = 10 家（含已采用研究、文档、纪要、知识库、定时、待办包）", (root["executors"] as JsonArray)?.Count == 10,
             (root["executors"] as JsonArray)?.ToJsonString() ?? "(没有 executors)");
 
-        // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 26 —— MCP 单列，
+        // #115：统一查询面（内建 + MCP 同表）。count 仍是内建 40 —— MCP 单列，
         // 否则“发现到一个 MCP 服务器”看起来会像“内建能力目录多了一条”。
         var inventory = root["inventory"] as JsonObject;
         var inventoryEntries = inventory?["entries"] as JsonArray;
-        Check("★ /api/tools 带统一查询面（内建 26 + MCP 分列，无重名）",
+        Check("★ /api/tools 带统一查询面（内建 40 + MCP 分列，无重名）",
             inventory is not null
-            && inventory["builtin"]?.GetValue<int>() == 26
+            && inventory["builtin"]?.GetValue<int>() == 40
+            && inventory["host"]?.GetValue<int>() == 24
+            && inventory["plugin"]?.GetValue<int>() == 16
             && inventory["mcp"]?.GetValue<int>() == 0
-            && inventory["total"]?.GetValue<int>() == 26
+            && inventory["total"]?.GetValue<int>() == 40
             && (inventory["duplicates"] as JsonArray)?.Count == 0
-            && inventoryEntries?.Count == 26
-            && inventoryEntries.All(entry => entry?["origin"]?.GetValue<string>() == "Builtin"),
+            && inventoryEntries?.Count == 40
+            && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Builtin") == 24
+            && inventoryEntries.Count(entry => entry?["origin"]?.GetValue<string>() == "Plugin") == 16,
             inventory?.ToJsonString() ?? "(没有 inventory)");
 
         JsonObject? Find(string id) => tools.FirstOrDefault(n => n?["id"]?.GetValue<string>() == id) as JsonObject;
+
+        Check("研究工具来自同一个已采用插件执行者，不走聊天占位路径",
+            new[] { "web.search", "web.read" }.All(id => Find(id) is { } tool
+                && tool["origin"]?.GetValue<string>() == "Plugin"
+                && tool["providerId"]?.GetValue<string>() == "preset.feature.websearch"
+                && tool["executor"]?.GetValue<string>() == "research.actions")
+            && (root["executors"] as JsonArray)?.SingleOrDefault(item => item?["id"]?.GetValue<string>() == "research.actions")
+                ?["legacyPath"]?.GetValue<bool>() == false);
 
         Check("qq.like 在目录里（SendMessage / 安全档 / 非聊天族不在这页复述放行口径）",
             Find("qq.like") is { } like
@@ -274,7 +285,7 @@ public static partial class Program
         var dashRoot = JsonNode.Parse(dashBody) as JsonObject ?? new JsonObject();
         Check("★ /api/dashboard 一屏给全（运行 / 延迟 / 内存 / 工具 / 权限 / 轨迹，全是只读汇总）",
             dashCode == 200 && dashRoot["uptimeSeconds"] is not null && dashRoot["latencyMs"] is not null
-            && (dashRoot["tools"] as JsonObject)?["total"]?.GetValue<int>() == 26
+            && (dashRoot["tools"] as JsonObject)?["total"]?.GetValue<int>() == 40
             && (dashRoot["memory"] as JsonObject)?["usedBytes"] is not null
             && (dashRoot["traces"] as JsonObject)?["capacity"]?.GetValue<int>() == 50,
             $"HTTP {dashCode} {dashBody[..Math.Min(160, dashBody.Length)]}");

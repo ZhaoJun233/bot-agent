@@ -67,15 +67,15 @@ let baselineGroupCooldown: unknown
 test.beforeEach(async ({ request }) => {
   if (baselineGroupCooldown !== undefined) return
   const current = await readConfiguration(request)
-  baselineGroupCooldown = current.view.behavior.privateCooldownSeconds?.value
+  baselineGroupCooldown = current.view.behavior.groupInterjectionCooldownSeconds?.value
 })
 
 test.afterEach(async ({ request }) => {
   if (baselineGroupCooldown === undefined) return
   const current = await readConfiguration(request)
-  if (current.view.behavior.privateCooldownSeconds?.value === baselineGroupCooldown) return
+  if (current.view.behavior.groupInterjectionCooldownSeconds?.value === baselineGroupCooldown) return
   await externalSave(request, current.generation, current.version, {
-    behavior: { privateCooldownSeconds: { kind: 1, value: baselineGroupCooldown } }
+    behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: baselineGroupCooldown } }
   })
 })
 
@@ -99,18 +99,25 @@ test('基础配置只显示必要字段；模型与凭据位于能力设置，�
   await expect(page.getByTestId('config-field-botPersona')).toBeVisible()
   await expect(page.getByTestId('config-secrets')).toHaveCount(0)
   await expect(page.getByTestId('config-nav-model')).toHaveCount(0)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
   await expect(dialog).toBeVisible()
-  await expect(dialog.getByTestId('config-secrets').locator('li')).toHaveCount(1)
-
-  await page.getByTestId('config-nav-model').click()
-  await expect(page.getByTestId('config-field-model')).toBeVisible()
-
-  await page.getByTestId('config-nav-registered').click()
-  await expect(page.getByTestId('config-providers')).toBeVisible()
+  await expect(dialog.getByTestId('config-field-fastReply')).toBeVisible()
+  await expect(dialog.getByTestId('config-field-model')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-field-modelBaseUrl')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-secrets')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-nav-registered')).toHaveCount(0)
+  await expect(dialog.getByTestId('config-providers')).toHaveCount(0)
   await page.getByTestId('ability-configuration-dialog-close').click()
+
+  await page.getByTestId('cap-provider-edit-provider:primary').click()
+  const providerDialog = page.getByTestId('provider-editor')
+  await expect(providerDialog).toBeVisible()
+  await expect(providerDialog.getByTestId('provider-readonly')).toBeVisible()
+  await expect(providerDialog.getByTestId('provider-endpoint')).toBeVisible()
+  await expect(providerDialog.getByTestId('provider-primary-secret')).toBeVisible()
+  await page.getByTestId('provider-editor-close').click()
 
   await page.getByTestId('nav-overview').click()
   await expect(page.getByTestId('overview')).toBeVisible()
@@ -135,8 +142,8 @@ test('配置页：管理员保存一个数字字段并回读，随后恢复', as
   await openConfiguration(page)
   const before = await readConfiguration(request)
 
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -147,22 +154,22 @@ test('配置页：管理员保存一个数字字段并回读，随后恢复', as
 
   const after = await readConfiguration(request)
   expect(after.version).not.toBe(before.version)
-  expect(after.view.behavior.privateCooldownSeconds?.value).toBe(original + 1)
+  expect(after.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original + 1)
 
   // 恢复原值，避免影响后续用例
-  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original))
+  await page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input').fill(String(original))
   await page.getByTestId('config-save').click()
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
   const restored = await readConfiguration(request)
-  expect(restored.view.behavior.privateCooldownSeconds?.value).toBe(original)
+  expect(restored.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original)
 })
 
 test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新比较', async ({ page, request }) => {
   await openConfiguration(page)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const original = Number(before.view.behavior.groupInterjectionCooldownSeconds?.value)
   await externalSave(request, before.generation, before.version, {
-    behavior: { privateCooldownSeconds: { kind: 1, value: original + 1 } }
+    behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: original + 1 } }
   })
 
   const saveRequests: string[] = []
@@ -170,8 +177,8 @@ test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新
     if (req.url().includes('/zba/v1/configuration/save')) saveRequests.push(req.url())
   })
 
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original + 2))
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  await page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input').fill(String(original + 2))
   await page.getByTestId('config-save').click()
 
   await expect(page.getByTestId('config-conflict')).toBeVisible({ timeout: 15_000 })
@@ -180,12 +187,12 @@ test('配置页：外部修改造成 409 冲突，草稿保留并可读取最新
 
   await page.getByTestId('config-reload-conflict').click()
   await expect(page.getByTestId('config-validation')).toContainText('已读取最新快照', { timeout: 15_000 })
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText('与对方修改重叠')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toContainText('与对方修改重叠')
   await page.getByTestId('config-discard').click()
 
   const latest = await readConfiguration(request)
   await externalSave(request, latest.generation, latest.version, {
-    behavior: { privateCooldownSeconds: { kind: 1, value: original } }
+    behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: original } }
   })
 })
 
@@ -193,11 +200,11 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
   test.setTimeout(60_000)
   await openConfiguration(page)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const original = Number(before.view.behavior.groupInterjectionCooldownSeconds?.value)
   const next = original + 5
 
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(next))
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  await page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input').fill(String(next))
 
   const saveRequests: string[] = []
   page.on('request', (req) => {
@@ -219,17 +226,17 @@ test('配置页：保存响应丢失后先核对回执，不自动重发', async
   expect(saveRequests).toHaveLength(1)
 
   const saved = await readConfiguration(request)
-  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(next)
+  expect(saved.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(next)
 
-  await page.getByTestId('config-field-privateCooldownSeconds').locator('input').fill(String(original))
+  await page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input').fill(String(original))
   await page.getByTestId('config-save').click()
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
 })
 
 test('配置页：切到概览再回来，草稿与输入值保留', async ({ page }) => {
   await openConfiguration(page)
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -242,7 +249,7 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 
   await page.getByTestId('nav-configuration').click()
   await expect(page.getByTestId('configuration')).toBeVisible()
-  await expect(page.getByTestId('config-field-privateCooldownSeconds').locator('input')).toHaveValue(String(original + 1))
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')).toHaveValue(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
   await page.getByTestId('config-discard').click()
@@ -252,10 +259,10 @@ test('配置页：切到概览再回来，草稿与输入值保留', async ({ pa
 
 test('配置页：离开配置页会清空秘密替换输入，但保留普通字段草稿', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
-  const input = dialog.getByTestId('config-field-model').locator('input')
+  const input = dialog.getByTestId('config-field-voiceName').locator('input')
   const original = await input.inputValue()
   await input.fill(original + '-synthetic-draft')
 
@@ -269,10 +276,10 @@ test('配置页：离开配置页会清空秘密替换输入，但保留普通�
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
   await page.getByTestId('config-leave-keep').click()
   await expect(page.getByTestId('overview')).toBeVisible()
-  await expect(page.getByTestId('nav-ability-draft')).toHaveText('1')
+  await expect(page.getByTestId('nav-plugins-draft')).toHaveText('1')
 
-  await page.getByTestId('nav-capabilities').click()
-  await expect(dialog.getByTestId('config-field-model').locator('input')).toHaveValue(original + '-synthetic-draft')
+  await page.getByTestId('nav-plugins').click()
+  await expect(dialog.getByTestId('config-field-voiceName').locator('input')).toHaveValue(original + '-synthetic-draft')
   await expect(dialog.getByTestId('config-secrets').locator('input[type=password]')).toHaveCount(0)
   await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
 
@@ -290,8 +297,8 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
   })
   expect(preventedClean).toBe(false)
 
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -305,10 +312,60 @@ test('配置页：有草稿时刷新会触发浏览器离开确认', async ({ pa
   await page.getByTestId('config-discard').click()
 })
 
+test('read-only configuration refresh between pointer down and up does not swallow discard', async ({ page }) => {
+  await openConfiguration(page)
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId('providers-routing-settings').click()
+  const dialog = page.getByTestId('ability-configuration-dialog')
+  const input = dialog.getByTestId('config-field-fastModel').locator('input')
+  const original = await input.inputValue()
+  await input.fill(original + '-synthetic-discard')
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
+  const saves: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/zba/v1/configuration/save') saves.push(request.url())
+  })
+  let startRead!: () => void
+  let releaseRead!: () => void
+  const started = new Promise<void>(resolve => { startRead = resolve })
+  const release = new Promise<void>(resolve => { releaseRead = resolve })
+  const pendingReads: Array<Promise<void>> = []
+  await page.route('**/zba/v1/configuration/read', async route => {
+    let handleRead!: () => void
+    pendingReads.push(new Promise<void>(resolve => { handleRead = resolve }))
+    const response = await route.fetch()
+    startRead()
+    await release
+    await route.fulfill({ response })
+    handleRead()
+  })
+  const discard = dialog.getByTestId('config-discard')
+  await discard.scrollIntoViewIfNeeded()
+  const box = await discard.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.down()
+  try {
+    await dialog.getByTestId('config-reload').evaluate((element: HTMLElement) => element.click())
+    await started
+    await expect(input).toBeDisabled()
+    await page.mouse.up()
+    await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
+  } finally {
+    await page.mouse.up()
+    releaseRead()
+    await Promise.all(pendingReads)
+    await page.unroute('**/zba/v1/configuration/read')
+  }
+  await expect(input).toHaveValue(original)
+  await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
+  expect(saves).toEqual([])
+})
+
 test('配置页：安全锁立即回认证页，重连后普通草稿与秘密输入均清除', async ({ page }) => {
   await openConfiguration(page)
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 3))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
@@ -324,15 +381,15 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
   await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
   // 重连后默认是标准模式，字段以只读文本渲染；值必须回到未修改的宿主基线。
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText(String(original))
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toContainText(String(original))
 
   await page.getByTestId('config-enable-admin').click()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
   const dialog = page.getByTestId('ability-configuration-dialog')
-  const model = dialog.getByTestId('config-field-model').locator('input')
-  const originalModel = await model.inputValue()
-  await model.fill(originalModel + '-synthetic-lock-draft')
+  const voiceName = dialog.getByTestId('config-field-voiceName').locator('input')
+  const originalVoice = await voiceName.inputValue()
+  await voiceName.fill(originalVoice + '-synthetic-lock-draft')
   await dialog.getByTestId('secret-replace').first().click()
   await dialog.locator('input[type=password]').first().fill('synthetic-lock-secret')
   await expect(dialog.getByTestId('config-save-bar')).toContainText('2 项修改')
@@ -345,9 +402,9 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
   await connect(page, ADMIN_TOKEN)
   await expect(page.getByTestId('overview')).toBeVisible()
   await page.getByTestId('enable-admin').click()
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
-  await expect(model).toHaveValue(originalModel)
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
+  await expect(voiceName).toHaveValue(originalVoice)
   await expect(dialog.getByTestId('config-save-bar')).toContainText('0 项修改')
   await expect(dialog.locator('input[type=password]')).toHaveCount(0)
   await dialog.getByTestId('secret-replace').first().click()
@@ -357,7 +414,7 @@ test('配置页：安全锁立即回认证页，重连后普通草稿与秘密�
 for (const action of ['lock', 'downgrade'] as const) {
   test(action === 'lock' ? '配置草稿跨页后安全锁立即清草稿且不提交' : '配置草稿跨页后可明确保存并退出管理员', async ({ page, request }) => {
     await openConfiguration(page)
-    const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
     const original = Number(await input.inputValue())
     const next = original + 1
     await input.fill(String(next))
@@ -380,7 +437,7 @@ for (const action of ['lock', 'downgrade'] as const) {
       await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
       await page.getByTestId('nav-configuration').click()
       await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
-      expect((await readConfiguration(request)).view.behavior.privateCooldownSeconds?.value).toBe(original)
+      expect((await readConfiguration(request)).view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original)
       return
     }
     await expect(confirmation).toBeVisible()
@@ -394,13 +451,13 @@ for (const action of ['lock', 'downgrade'] as const) {
       await expect(page.getByTestId('nav-config-draft')).toHaveCount(0)
     }
     expect(writes).toHaveLength(1)
-    expect((await readConfiguration(request)).view.behavior.privateCooldownSeconds?.value).toBe(next)
+    expect((await readConfiguration(request)).view.behavior.groupInterjectionCooldownSeconds?.value).toBe(next)
   })
 }
 
 test('配置页：安全锁清草稿但同身份重连保留未决原操作键', async ({ page }) => {
   await openConfiguration(page)
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = await input.inputValue()
   await input.fill(String(Number(original) + 1))
   const submitted: string[] = []
@@ -438,11 +495,11 @@ test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存',
   test.setTimeout(60_000)
   await openConfiguration(page)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const original = Number(before.view.behavior.groupInterjectionCooldownSeconds?.value)
   const next = original + 7
 
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   await input.fill(String(next))
 
   const keys: string[] = []
@@ -474,7 +531,7 @@ test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存',
   expect(keys[0]).not.toBe(keys[1])
 
   const saved = await readConfiguration(request)
-  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(next)
+  expect(saved.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(next)
 
   await input.fill(String(original))
   await page.getByTestId('config-save').click()
@@ -484,7 +541,7 @@ test('配置页：未知结果锁定编辑，NotFound 后换新操作键重存',
 test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 并保留草稿', async ({ browser, request }) => {
   test.setTimeout(60_000)
   const before = await readConfiguration(request)
-  const original = Number(before.view.behavior.privateCooldownSeconds?.value)
+  const original = Number(before.view.behavior.groupInterjectionCooldownSeconds?.value)
   const contextA = await browser.newContext()
   const contextB = await browser.newContext()
   const pageA = await contextA.newPage()
@@ -492,10 +549,10 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
   try {
     await openConfiguration(pageA)
     await openConfiguration(pageB)
-    await expect(pageA.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-    await expect(pageB.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-    const inputA = pageA.getByTestId('config-field-privateCooldownSeconds').locator('input')
-    const inputB = pageB.getByTestId('config-field-privateCooldownSeconds').locator('input')
+    await expect(pageA.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+    await expect(pageB.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+    const inputA = pageA.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
+    const inputB = pageB.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
     await inputA.fill(String(original + 1))
     await inputB.fill(String(original + 2))
 
@@ -511,15 +568,15 @@ test('配置页：两个浏览器上下文同时编辑，后保存方收到 409 
     await pageA.getByTestId('config-save').click()
     await expect(pageA.getByTestId('config-save-bar')).toContainText('0 项修改', { timeout: 15_000 })
     const restored = await readConfiguration(request)
-    expect(restored.view.behavior.privateCooldownSeconds?.value).toBe(original)
+    expect(restored.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(original)
   } finally {
     await contextA.close()
     await contextB.close()
     // 即使断言失败也把共享宿主恢复原值，避免污染后续用例。
     const latest = await readConfiguration(request)
-    if (Number(latest.view.behavior.privateCooldownSeconds?.value) !== original) {
+    if (Number(latest.view.behavior.groupInterjectionCooldownSeconds?.value) !== original) {
       await externalSave(request, latest.generation, latest.version, {
-        behavior: { privateCooldownSeconds: { kind: 1, value: original } }
+        behavior: { groupInterjectionCooldownSeconds: { kind: 1, value: original } }
       })
     }
   }
@@ -545,22 +602,20 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
   const renamed = `${original}-renamed`
 
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
-  await page.getByTestId('config-nav-registered').click()
-  await expect(page.getByTestId('config-providers')).toBeVisible()
+  await page.getByTestId('nav-providers').click()
+  await page.getByTestId(`cap-provider-edit-provider:${provider.key}`).click()
+  const editor = page.getByTestId('provider-editor')
+  await expect(editor).toBeVisible()
 
-  const nameInput = page.getByTestId(`config-provider-name-${provider.key}`)
+  const nameInput = editor.getByTestId('provider-name')
   await expect(nameInput).toHaveValue(original)
   // 输入框里必须是真名，不是 "Pri***ry" 这种脱敏串。
   expect(await nameInput.inputValue()).not.toBe(provider.name.display)
 
   try {
     await nameInput.fill(renamed)
-    const dialog = page.getByTestId('ability-configuration-dialog')
-    await expect(dialog.getByTestId('config-save-bar')).toContainText('1 项修改')
-    await dialog.getByTestId('config-save').click()
-    await expect(dialog.getByTestId('config-receipt')).toBeVisible({ timeout: 20_000 })
+    await editor.getByTestId('provider-save').click()
+    await expect(editor.getByTestId('provider-notice')).toBeVisible({ timeout: 20_000 })
 
     const after = await request.post('/zba/v1/configuration/read', {
       data: { kind: 1 },
@@ -601,8 +656,8 @@ test('配置页：供应商改名写入 nameRaw 并被真实宿主读回，且�
 
 test('能力配置：读取 401 会退回认证页并清掉秘密输入', async ({ page }) => {
   await openConfiguration(page)
-  await page.getByTestId('nav-capabilities').click()
-  await page.getByTestId('ability-settings-models').click()
+  await page.getByTestId('nav-plugins').click()
+  await page.getByTestId('cap-settings-plugin:preset.feature.voice').click()
   const secrets = page.getByTestId('ability-configuration-dialog').getByTestId('config-secrets')
   await secrets.getByTestId('secret-replace').first().click()
   await secrets.locator('input[type=password]').first().fill('sk-synthetic-401-7c41')
@@ -622,8 +677,8 @@ test('能力配置：读取 401 会退回认证页并清掉秘密输入', async 
 
 test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作键供核对', async ({ page }) => {
   await openConfiguration(page)
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -669,8 +724,8 @@ test('配置页：服务端回报 UnknownCommit 时冻结编辑并保留操作�
 
 test('配置页：成功码缺少回执时不清草稿也不显示已保存', async ({ page }) => {
   await openConfiguration(page)
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 
@@ -689,8 +744,8 @@ test('配置页：成功码缺少回执时不清草稿也不显示已保存', as
 
 test('配置页：核对矛盾响应保留未知态，权威 NotFound 后才恢复编辑', async ({ page }) => {
   await openConfiguration(page)
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
 

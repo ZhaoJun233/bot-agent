@@ -7,6 +7,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../OfficialPluginsTestLocator.cs" Link="OfficialPluginsTestLocator.cs" />
+    <Compile Include="../ResearchFixture.cs" Link="ResearchFixture.cs" />
+    <Compile Include="../BotAgent.PluginPackageProbe/SharedContractFixture.cs" Link="SharedContractFixture.cs" />
     <ProjectReference Include="../../src/BotAgent.Headless/BotAgent.Headless.csproj" />
     <!-- Storage is aliased so the host facade, not the raw adapter, owns the visible AppDatabase name. -->
     <ProjectReference Include="../../src/BotAgent.Storage/BotAgent.Storage.csproj" Aliases="StorageModule" />

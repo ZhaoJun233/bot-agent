@@ -8,6 +8,7 @@ export default defineConfig({
   // 不能靠构建参数：漏了 --base=/web/ 时资源会请求 /assets/*，被反代到后端 → 白屏（2026-10-27）。
   base: '/web/',
   plugins: [vue()],
+  resolve: { dedupe: ['vue'] },
   server: {
     host: '127.0.0.1',
     port: 4173,

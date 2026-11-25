@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "project": "contracts/plugin/BotAgent.Plugin.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/quota/BotAgent.Quota.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/research/BotAgent.Research.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/poke/BotAgent.Poke.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/vibes/BotAgent.Vibes.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/stickers/BotAgent.Stickers.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/music/BotAgent.Music.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/voice/BotAgent.Voice.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/profiles/BotAgent.Profiles.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/healthreporting/BotAgent.HealthReporting.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/modelservices/BotAgent.ModelServices.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/agent/BotAgent.Agent.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/conversation/BotAgent.Conversation.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/platforms/BotAgent.Platforms.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/documents/BotAgent.Documents.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/digest/BotAgent.Digest.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/knowledge/BotAgent.Knowledge.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/scheduler/BotAgent.Scheduler.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "contracts/personaltodo/BotAgent.PersonalTodo.Contracts.csproj",
+      "kind": "contract"
+    },
+    {
+      "project": "packages/health-reporting/backend/BotAgent.Package.HealthReporting.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/model-services/backend/BotAgent.Package.ModelServices.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/agent/backend/BotAgent.Package.Agent.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/mcp-tools/backend/BotAgent.Package.McpTools.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/conversation/backend/BotAgent.Package.Conversation.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/platform-qq-private/backend/BotAgent.Package.PlatformQqPrivate.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/platform-qq-official/backend/BotAgent.Package.PlatformQqOfficial.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/platform-feishu/backend/BotAgent.Package.PlatformFeishu.csproj",
+      "kind": "package"
+    },
+    {
+      "project": "packages/platform-local/backend/BotAgent.Package.PlatformLocal.csproj",
+      "kind": "package"
+    }
+  ]
+}

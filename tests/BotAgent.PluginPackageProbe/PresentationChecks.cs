@@ -163,7 +163,8 @@ internal static class PresentationChecks
         var legacy = JsonSerializer.Deserialize<ZbaInstalledPlugins>("""{"revision":"test","plugins":[]}""", new JsonSerializerOptions(JsonSerializerDefaults.Web));
         check(legacy?.BuiltinPlugins.Count == 0, "legacy response deserializes with additive defaults");
         var openApiType = typeof(ZbaPluginCatalog).Assembly.GetType("BotAgent.Panel.ZbaOpenApi")!;
-        var openApi = (JsonObject)openApiType.GetMethod("Build", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
+        var openApi = (JsonObject)openApiType.GetMethod("Build", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [Array.Empty<ZbaRouteInfo>(), new JsonObject()])!;
         var schemas = openApi["components"]!["schemas"]!;
         check(schemas["ZbaPluginCatalog"]!["properties"]!["builtinPlugins"] is not null, "OpenAPI catalogs builtins");
         check(schemas["ZbaInstalledPlugins"]!["properties"]!["builtinPlugins"] is not null, "OpenAPI installed builtins");

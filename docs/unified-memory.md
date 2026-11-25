@@ -57,4 +57,4 @@
 
 四个独立合成探针覆盖核心/存储、命令、宿主调用封装及实际模型/发送边界；集成场景 `s153` 使用隔离临时数据目录与 MockOneBot/MockOpenAi 启动真实 Headless 子进程。测试不连接生产服务。
 
-先构建 Headless，再执行需要它的集成场景；仅构建 harness 不会更新宿主二进制。测试结果、候选指纹与未覆盖边界见[本地验收记录](<unified-memory-validation.md>)。
+先构建 Headless，再执行需要它的集成场景；仅构建 harness 不会更新宿主二进制。验证入口为 `BotAgent.UnifiedMemoryProbe`、`BotAgent.MemoryTurnProbe` 与集成场景 `M153`。

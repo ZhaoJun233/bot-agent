@@ -272,6 +272,14 @@ public sealed class OneBotGateway : IQqChatSource, IPlatformHistorySource, IQqAc
     public Task<(string? Text, long SenderId)> GetMessageInfoAsync(long messageId, CancellationToken ct = default)
         => _queries.GetMessageInfoAsync(messageId, ct);
 
+    public Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundVoiceAsync(
+        BotAgent.Domain.Messaging.InboundVoiceAttachment voice, long messageId, CancellationToken ct = default)
+        => _queries.ResolveInboundVoiceAsync(voice, messageId, ct);
+
+    public Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundFileAsync(
+        BotAgent.Domain.Messaging.InboundFileAttachment file, bool isGroup, long targetId, long messageId, CancellationToken ct = default)
+        => _queries.ResolveInboundFileAsync(file, isGroup, targetId, messageId, ct);
+
     // 动作发送与待决响应表在 OneBotActionClient；这里转发给动作面（OneBotActions）与查询面共用。
     private Task<JsonNode?> SendActionAsync(string action, string paramsJson, CancellationToken ct)
         => _actionsClient.SendAsync(action, paramsJson, ct);

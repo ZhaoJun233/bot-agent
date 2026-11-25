@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { computed } from 'vue'
 import type { PluginSettingsSpec } from '../../src/features/capabilities/plugin-settings'
 import {
-  ownerOf, pluginOwnedPaths, pluginOwnedSections, pluginRegistryRevision, pluginSettings,
-  registerPlugin, resolvePluginFields, settingsFor, unregisterPlugin
+  driverSpecByPlatformId, ownerOf, pluginOwnedPaths, pluginOwnedSections, pluginRegistryRevision, pluginSettings,
+  registerPlugin, registeredFieldHint, registeredFieldLabel, registeredSecretLabel, resolvePluginFields, settingsFor, unregisterPlugin
 } from '../../src/features/capabilities/plugin-settings'
 import { readSwitches, setPluginEnabled } from '../../src/features/capabilities/plugin-toggle'
 
@@ -113,7 +113,8 @@ describe('统一配置登记契约', () => {
     expect(settingsFor('ext.declared')).toMatchObject({ kind: 'plugin', editor: { type: 'declared' }, secrets: [] })
     expect(settingsFor('ext.fields')?.editor).toEqual({ type: 'fields' })
     expect(settingsFor('ext.explicit')?.editor).toEqual({ type: 'declared' })
-    expect(settingsFor('models')).toMatchObject({ kind: 'system', editor: { type: 'fields' }, secrets: [0], providers: true })
+    expect(settingsFor('models')).toMatchObject({ kind: 'system', editor: { type: 'fields' }, secrets: [], providers: false })
+    expect(settingsFor('model-providers')).toMatchObject({ kind: 'system', editor: { type: 'declared' }, secrets: [0] })
   })
 
   it('显式字段编辑器必须有可派生的编辑内容', () => {
@@ -167,7 +168,7 @@ describe('统一配置登记契约', () => {
 
   it('密钥所有权不允许跨登记或单登记重复，密钥也可派生字段编辑器', () => {
     expect(() => registerPlugin({ pluginKey: 'ext.secret-conflict', title: 'Secret', summary: '', secrets: [0] })).toThrow(/已归/)
-    withoutPreset('models')
+    withoutPreset('model-providers')
     expect(() => registerPlugin({ pluginKey: 'ext.secret-repeated', title: 'Secret', summary: '', secrets: [0, 0] })).toThrow(/重复/)
     register({ pluginKey: 'ext.secret', title: 'Secret', summary: '', secrets: [0] })
     expect(settingsFor('ext.secret')?.editor).toEqual({ type: 'fields' })
@@ -176,27 +177,70 @@ describe('统一配置登记契约', () => {
   it('复制所有可变描述，外部修改不能改变所有权或编辑器', () => {
     withoutPreset('reporting')
     withoutPreset('platform')
+    withoutPreset('system.platform-feishu')
     const load = async () => ({ default: {} })
+    const sections: Array<'agent' | 'model'> = ['agent']
+    const fields = [{ section: 'reporting' as const, key: 'syntheticField' }]
+    const enableField = { section: 'reporting' as const, key: 'syntheticEnabled' }
+    const fallbackSections: Array<'reporting' | 'platform'> = ['reporting']
+    const secrets: Array<0 | 4> = [4]
+    const fieldLabels: Record<string, string> = { syntheticField: '合成字段' }
+    const policyCopy = { groupPlaceholder: '例如 g1' }
     const spec: PluginSettingsSpec = {
       pluginKey: 'ext.snapshot', title: 'Snapshot', summary: '', kind: 'system',
-      sections: ['agent'], fields: [{ section: 'reporting', key: 'syntheticField' }],
-      enableField: { section: 'reporting', key: 'syntheticEnabled' }, fallbackSections: ['reporting'],
-      secrets: [4], editor: { type: 'component', load }
+      sections, fields, enableField, fallbackSections, secrets,
+      fieldLabels, policyCopy, editor: { type: 'component', load }
     }
     register(spec)
-    spec.sections![0] = 'model'
-    spec.fields![0]!.key = 'changedField'
-    spec.enableField!.key = 'changedEnabled'
-    spec.fallbackSections![0] = 'platform'
-    spec.secrets![0] = 0
+    sections[0] = 'model'
+    fields[0]!.key = 'changedField'
+    enableField.key = 'changedEnabled'
+    fallbackSections[0] = 'platform'
+    secrets[0] = 0
+    fieldLabels.syntheticField = '被篡改'
+    policyCopy.groupPlaceholder = '被篡改'
     if (spec.editor?.type === 'component') spec.editor.load = async () => ({ default: {} })
     const saved = settingsFor('ext.snapshot')!
-    expect(saved).toMatchObject({ sections: ['agent'], fields: [{ key: 'syntheticField' }], enableField: { key: 'syntheticEnabled' }, fallbackSections: ['reporting'], secrets: [4], editor: { type: 'component', load } })
+    expect(saved).toMatchObject({
+      sections: ['agent'], fields: [{ key: 'syntheticField' }], enableField: { key: 'syntheticEnabled' },
+      fallbackSections: ['reporting'], secrets: [4],
+      fieldLabels: { syntheticField: '合成字段' }, policyCopy: { groupPlaceholder: '例如 g1' },
+      editor: { type: 'component', load }
+    })
     expect(ownerOf('reporting', 'syntheticField')?.pluginKey).toBe('ext.snapshot')
     expect(ownerOf('reporting', 'changedField')).toBeUndefined()
     expect(Object.isFrozen(saved.fields![0])).toBe(true)
     expect(Object.isFrozen(saved.editor)).toBe(true)
     expect(Object.isFrozen(saved.secrets)).toBe(true)
+    expect(Object.isFrozen(saved.fieldLabels)).toBe(true)
+    expect(Object.isFrozen(saved.policyCopy)).toBe(true)
+  })
+
+  it('平台驱动独立登记：拒绝重复 platformId，动态注册驱动自动暴露标签与策略切片', () => {
+    expect(() => registerPlugin({
+      pluginKey: 'ext.dup-feishu', title: '重复飞书', summary: '', kind: 'system', platformId: 'feishu', policyPlatformId: 'feishu'
+    })).toThrow(/平台驱动 feishu 已归 system\.platform-feishu/)
+
+    expect(registeredSecretLabel(3)).toBe('飞书 App Secret')
+    expect(registeredFieldLabel('officialAppId')).toBe('官方 AppID')
+    expect(registeredFieldHint('localChannelIds')).toContain('本地调试通道')
+
+    const dispose = register({
+      pluginKey: 'ext.platform-demo',
+      kind: 'system',
+      platformId: 'demo.chat',
+      policyPlatformId: 'demo.chat',
+      title: '演示聊天通道',
+      summary: '第三方平台扩展',
+      fieldLabels: { demoTokenHint: '演示字段' },
+      fieldHints: { demoTokenHint: '演示提示' }
+    })
+    expect(driverSpecByPlatformId('demo.chat')?.pluginKey).toBe('ext.platform-demo')
+    expect(settingsFor('ext.platform-demo')?.editor).toEqual({ type: 'fields' })
+    expect(registeredFieldLabel('demoTokenHint')).toBe('演示字段')
+    expect(registeredFieldHint('demoTokenHint')).toBe('演示提示')
+    dispose()
+    expect(driverSpecByPlatformId('demo.chat')).toBeUndefined()
   })
 
   it('登记与撤销刷新 computed，失败和重复撤销不发布 revision', () => {

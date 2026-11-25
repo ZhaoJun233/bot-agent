@@ -12,4 +12,7 @@
     <Compile Include="../BotAgent.ReplyPipelinePacingProbe/ProbeFakes.cs" Link="Shared/ProbeFakes.cs" />
     <Compile Include="../BotAgent.ReplyPipelinePacingProbe/ControlledResearch.cs" Link="Shared/ControlledResearch.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../ResearchToolFixture.cs" Link="ResearchToolFixture.cs" />
+  </ItemGroup>
 </Project>

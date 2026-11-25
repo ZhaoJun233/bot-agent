@@ -60,44 +60,25 @@ public static class Program
             return await ProbeHealthAsync();
         }
 
+        // Offline preflight must never initialize storage, read credentials or start either graph.
+        if (args.Contains("--check-plugin-state"))
+            return await BotAgent.Adapters.Plugins.PluginStateCompatibilityCli.RunAsync(args);
+        if (args.Contains("--recover-token-usage"))
+            return TokenUsageRecoveryCli.Run(args);
+
         // ---------- 数据层 + 配置（顺序写在 CompositionRoot 里，只写一处）----------
         var settings = CompositionRoot.BootstrapSettings();
 
         PrintBanner(settings, !string.IsNullOrWhiteSpace(settings.NapCatWebUiToken) && !string.IsNullOrWhiteSpace(settings.NapCatWebUiUrl));
 
-        var errors = BotConfig.Validate(settings);
-        if (errors.Count > 0)
-        {
-            foreach (var error in errors)
-            {
-                Console.Error.WriteLine("  ✗ " + error);
-            }
-
-            Console.Error.WriteLine("\n配置有误，已退出。用 --help 查看环境变量说明。");
-            return 2;
-        }
-
-        // ---------- 组装服务（唯一的装配点）----------
-        await using var graph = CompositionRoot.Build(settings, new ZbaCallerAuthorization());
-
-        // 先恢复磁盘会话并订阅事件，再连接协议端，避免启动期消息竞态
-        // 先把官方那条也起上（它就是一条 WS 长连接 + 定时刷 token），再连私域
-        await graph.PluginRuntime.StartAsync();
-        graph.Agent.Start();
-        await graph.Management.StartAsync();
-        // 启动自述放在"会话已恢复、表情包库已载入"之后：那两行讲的就是此刻这张图的状态
-        graph.BootReport.Write();
-        graph.HealthReports.Start();
-        graph.Backups.Start();
-
-        using var web = graph.Web;
-        if (settings.HealthPort > 0)
-        {
-            web.Start();
-        }
+        // Authentication and recovery precede all business construction and validation.
+        await using var control = CompositionRoot.BuildControl(settings, new ZbaCallerAuthorization());
+        if (settings.HealthPort > 0) control.Server.Start();
+        using var shutdown = new CancellationTokenSource();
+        await using var graph = await StartBusinessAsync(settings, control, shutdown.Token);
+        if (graph is null && control.Server.ListeningOn is null) return 2;
 
         // ---------- 常驻运行 + 优雅退出 ----------
-        using var shutdown = new CancellationTokenSource();
 
         // 退出可能由多个来源同时触发（Ctrl+C、SIGTERM、ProcessExit），
         // 且 ProcessExit 会在 using 释放 CTS 之后才回调 —— 必须做幂等 + 容错，
@@ -142,8 +123,62 @@ public static class Program
         }
 
         FileLog.Write("Host", "收到停止信号，正在退出…");
+        control.DetachBusiness();
         FileLog.Write("Host", "已停止。");
         return 0;
+    }
+
+    private static async Task<AppGraph?> StartBusinessAsync(
+        AppSettings settings, CompositionRoot.ControlGraph control, CancellationToken shutdownToken)
+    {
+        AppGraph? graph = null;
+        try
+        {
+            var errors = BotConfig.Validate(settings);
+            if (errors.Count > 0)
+            {
+                foreach (var error in errors) Console.Error.WriteLine("  ✗ " + error);
+                control.CompleteStartup(null);
+                FileLog.Write("Host", "业务配置无效；保留管理入口，修复配置后重启。");
+                return null;
+            }
+            graph = await CompositionRoot.BuildBusinessAsync(control);
+            // Restore subscriptions and sessions before starting transports.
+            await graph.PluginRuntime.StartAsync();
+            graph.Agent.Start();
+            await graph.Management.StartAsync();
+            graph.BootReport.Write();
+            graph.HealthReports.Start();
+            graph.ScheduledJobs?.Start();
+            graph.Backups.Start();
+            if (graph.McpUseCase is { Enabled: true } startupMcp)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                        refreshCts.CancelAfter(TimeSpan.FromSeconds(10));
+                        await startupMcp.RefreshAsync(refreshCts.Token).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                    }
+                });
+            }
+            control.CompleteStartup(graph);
+            return graph;
+        }
+        catch (Exception error)
+        {
+            control.DetachBusiness();
+            var cleanupFailed = error is CompositionRoot.BusinessStartupCleanupException;
+            try { await control.Assembly.PluginRuntime.QuiesceAsync(); } catch { cleanupFailed = true; }
+            try { if (graph is not null) await graph.DisposeAsync(); } catch { cleanupFailed = true; }
+            control.CompleteStartup(null);
+            FileLog.Write("Host", $"业务启动失败（{error.GetType().Name}）；管理入口保留，清理状态：{(cleanupFailed ? "unknown" : "stopped")}。修复后需要重启。");
+            return null;
+        }
     }
 
     /// <summary>
@@ -262,6 +297,7 @@ public static class Program
             Bot Agent（Headless / 容器版）
 
             用法: BotAgent.Headless [--help] [--version] [只读 CLI 选项]
+            离线用量恢复（先停止所有数据库使用进程）: --recover-token-usage <database> --to-schema 14
 
             配置文件: $BOTAGENT_DATA_DIR/data/settings.json（兼容 $QQCHAT_DATA_DIR；也可挂载旧版 runtime/data/settings.json）
             环境变量覆盖（优先级高于 settings.json；BOTAGENT_* 优先，QQCHAT_* 兼容旧部署）:
@@ -283,12 +319,12 @@ public static class Program
               QQCHAT_WHITELIST         白名单：群号/QQ号，逗号或换行分隔；'*' 表示全部接收
               QQCHAT_PERSONA           机器人人设（_FILE 变体读文件）
               QQCHAT_AI_MODE           =0 只收消息不自动回复（默认 1）
-              QQCHAT_AI_DESIRE         对话欲望 0-100（默认 50）
               QQCHAT_SUITABILITY_THRESHOLD  发言适合度阈值 0-100（默认 10）
 
-              QQCHAT_PRIVATE_COOLDOWN  私聊冷却秒数（默认 3）
-              QQCHAT_GROUP_COOLDOWN    群聊冷却秒数（默认 8）
-              QQCHAT_IDLE_FALLBACK     静默兜底秒数，0=关闭（默认 60）
+              QQCHAT_GROUP_INTERJECTION_PROBABILITY  普通群聊插话概率 0-100（默认 20）
+              QQCHAT_GROUP_INTERJECTION_COOLDOWN     完整发送后的插话冷却秒数（默认 30）
+              QQCHAT_GROUP_CONTINUATION_WAIT         同一群友续发等待秒数（默认 3）
+              QQCHAT_PRIVATE_CONTINUATION_WAIT       私聊续发等待秒数（默认 1.5）
               QQCHAT_SPLIT_REPLIES     长回复分句发送（默认 1）
               QQCHAT_SEGMENT_DELAY_MS  分句之间的间隔毫秒（默认 700）
               QQCHAT_MAX_CONTEXT       最大上下文条数（默认 200）

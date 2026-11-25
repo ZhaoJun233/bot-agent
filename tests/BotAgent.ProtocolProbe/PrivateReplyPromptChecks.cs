@@ -14,7 +14,7 @@ internal static class PrivateReplyPromptChecks
         const string marker = "[私聊：一对一对话]";
         var window = new[] { new ChatMessage { Role = MessageRole.Peer, Text = "你好", SenderId = 10001,
             Timestamp = DateTimeOffset.UnixEpoch } };
-        var request = new PromptBuilder.PromptRequest("Synthetic safety policy", null, null, 0, window, [],
+        var request = new PromptBuilder.PromptRequest("Synthetic safety policy", null, null, window, [],
             null, null, false, false, null, null, null, null, null, null, null, 100,
             false, false, 80, 0, false, false, false);
         var group = PromptBuilder.Build(request);

@@ -1,4 +1,5 @@
 using BotAgent.Engine.Runtime;
+using BotAgent.Domain.Platforms;
 namespace BotAgent.Services.Agent;
 
 /// <summary>
@@ -19,6 +20,7 @@ public sealed record QqActionSpec(
     string? ActionPrivate = null)
 {
     public bool Risky => Tier == "risky";
+    public string? OfficialParams { get; init; }
 }
 
 /// <summary>
@@ -44,7 +46,8 @@ public static class QqActionCatalog
         new("emoji_like", "safe", "给某**条消息**贴个表情回应。message_id 必填（可写 this）；emoji_id 默认 128077（👍）",
             new[] { "表情回应", "给消息点赞", "贴表情", "回应一下" }, "set_msg_emoji_like"),
         new("recall", "safe", "撤回一条消息。message_id 必填（可写 this）。只有机器人自己发的、或它有管理员权限的群里别人的，才撤得掉",
-            new[] { "撤回", "撤销", "撤一下", "删除消息" }, "delete_msg"),
+            new[] { "撤回", "撤销", "撤一下", "删除消息" }, "delete_msg")
+        { OfficialParams = "撤回当前官方会话中两分钟内由机器人发送且有持久化证明的消息。message_id 必填，使用发送回执中的数字别名；不接受 this、其他人的消息、AppID、角色或其他目标。" },
 
         new("ban", "risky", "禁言/解除禁言（仅群）。user_id 必填；duration 秒（0 = 解除；可写 10m/1h），不写默认 600",
             new[] { "禁言", "口球", "关小黑屋", "解禁" }, "set_group_ban"),
@@ -58,6 +61,7 @@ public static class QqActionCatalog
             new[] { "退群", "解散群", "退出群" }, "set_group_leave"),
         new("send", "risky", "以机器人身份直接发一条消息。text 必填；target_id 不写 = 发在当前会话（可写本群/某群号/某 QQ 号）",
             new[] { "发消息", "代发", "说话", "发言" }, "send_group_msg", "send_private_msg")
+        { OfficialParams = "在当前 QQ 官方会话发送文本。text 必填；target_id 省略或 current。不能指定其他会话、QQ 号、AppID 或角色。" }
     };
 
     /// <summary>设置里留空时默认开的那几个（都不打扰别人、后果也轻）。</summary>
@@ -148,12 +152,17 @@ public static class QqActionCatalog
     }
 
     /// <summary>系统提示词里那段“这次能做什么”。</summary>
-    public static string DescribeForPrompt(IEnumerable<string> allowed)
+    public static bool Supports(QqActionSpec spec, string platform)
+        => platform == PlatformId.QqPrivate || platform == PlatformId.QqOfficial && spec.OfficialParams is not null;
+
+    public static string DescribeForPrompt(IEnumerable<string> allowed) => DescribeForPrompt(allowed, PlatformId.QqPrivate);
+
+    public static string DescribeForPrompt(IEnumerable<string> allowed, string platform)
     {
         var lines = new List<string>();
-        foreach (var spec in All.Where(s => allowed.Contains(s.Name)))
+        foreach (var spec in All.Where(s => allowed.Contains(s.Name) && Supports(s, platform)))
         {
-            lines.Add($"  • {spec.Name}：{spec.Params}");
+            lines.Add($"  • {spec.Name}：{(platform == PlatformId.QqOfficial ? spec.OfficialParams : spec.Params)}");
         }
 
         return lines.Count == 0 ? "（这次一个动作都没开，qq 工具别用）" : string.Join("\n", lines);

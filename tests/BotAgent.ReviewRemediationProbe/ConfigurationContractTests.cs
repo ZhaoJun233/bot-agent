@@ -149,9 +149,9 @@ internal static class ConfigurationContractTests
                     command.CommandText = "SELECT COUNT(*) FROM meta WHERE key='configuration_schema'";
                     Check(Convert.ToInt64(command.ExecuteScalar()) == 0, "module marker rolled back");
                     command.CommandText = "PRAGMA user_version";
-                    // Physical migrations, including v14's #151 pacing field IDs, commit before
+                    // Physical migrations, including v15's independent metering, commit before
                     // the configuration module is written. Module state must still roll back.
-                    Check(Convert.ToInt64(command.ExecuteScalar()) == 14, "physical revision advanced only by the migration");
+                    Check(Convert.ToInt64(command.ExecuteScalar()) == 15, "physical revision advanced only by the migration");
                     StorageDatabase.Exec(connection, "DROP TRIGGER synthetic_module_fault;");
                 }
                 StorageDatabase.Initialize(path);
@@ -191,7 +191,7 @@ internal static class ConfigurationContractTests
         {
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock);
-            AppDatabase.Initialize(); new SettingsStore().Save(new AppSettings { AiDesire = 10 });
+            AppDatabase.Initialize(); new SettingsStore().Save(new AppSettings { GroupInterjectionProbability = 10 });
             var participant = new SyntheticParticipant();
             var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant);
             ConfigurationCaller Caller(int ordinal) => new("synthetic-authority", "synthetic-governance-" + ordinal, "bot",
@@ -202,7 +202,7 @@ internal static class ConfigurationContractTests
             long Rows() => AppDatabase.Scalar<long>("SELECT COUNT(*) FROM configuration_operations");
             ConfigurationSaveRequest Request(int? desire = null) => new("cfg-0.3.3", new(Version()),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()), new(desire is null ? null : new BehaviorChanges {
-                    AiDesire = FieldEdit<int>.Set(desire.Value) }, null, null, null, null, null, null, null), ImmutableArray<SecretEdit>.Empty);
+                    GroupInterjectionProbability = FieldEdit<int>.Set(desire.Value) }, null, null, null, null, null, null, null), ImmutableArray<SecretEdit>.Empty);
             if (mode == "--configuration-global-capacity")
             {
                 var original = Request();
@@ -443,7 +443,7 @@ internal static class ConfigurationContractTests
             var replay = await store.SaveAsync(Caller(0), original);
             Check(replay.Replayed && replay.Code == ConfigurationResultCode.NoChanges && Rows() == 4096,
                 "old generation replays before the full-capacity gate"); // 4
-            var conflict = original with { Changes = original.Changes with { Behavior = new BehaviorChanges { AiDesire = FieldEdit<int>.Set(40) } } };
+            var conflict = original with { Changes = original.Changes with { Behavior = new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(40) } } };
             Check((await store.SaveAsync(Caller(0), conflict)).Code == ConfigurationResultCode.IdempotencyConflict && Rows() == 4096,
                 "old generation protected intent conflict precedes capacity"); // 5
             var found = await store.FindAsync(Caller(0), original.Key);
@@ -519,7 +519,7 @@ internal static class ConfigurationContractTests
             var clock = new SyntheticClock();
             Clock.Use(clock);
             AppDatabase.Initialize();
-            var initial = new AppSettings { FeishuVerificationToken = "synthetic-legacy-token", AiDesire = 25,
+            var initial = new AppSettings { FeishuVerificationToken = "synthetic-legacy-token", GroupInterjectionProbability = 25,
                 Model = "synthetic-model", ModelBaseUrl = "https://example.com/v1" };
             if (mode != "new")
             {
@@ -851,7 +851,7 @@ internal static class ConfigurationContractTests
             var clock = new SyntheticClock();
             Clock.Use(clock);
             AppDatabase.Initialize();
-            var initial = new AppSettings { AiDesire = 10, BotPersona = "synthetic-private-persona",
+            var initial = new AppSettings { GroupInterjectionProbability = 10, BotPersona = "synthetic-private-persona",
                 Model = "synthetic-user-model", ModelOverride = "synthetic-user-model",
                 ModelBaseUrl = "https://example.com/user", ModelBaseUrlOverride = "https://example.com/user",
                 AgentDevices = string.Empty, PlatformPolicies = new() };
@@ -898,12 +898,12 @@ internal static class ConfigurationContractTests
                 empty.Key, empty.Changes, empty.Secrets);
             Check(noChanges.Code == ConfigurationResultCode.NoChanges && noChanges.CurrentVersion.Value == initialVersion
                 && providers.Find("primary")?.SecretKeyRef == "env:QQCHAT_API_KEY", "all Keep cannot rewrite empty primary binding");
-            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 141
-                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 141
+            Check(read.Code == ConfigurationResultCode.Ok && read.View is not null && read.Fields.Length == 128
+                && read.Fields.Select(rule => (int)rule.Id).Distinct().Count() == 128
                 && !read.Fields.Any(rule => rule.Id is ConfigurationFieldId.AgentDevices or ConfigurationFieldId.AgentMaxQueued
                     or ConfigurationFieldId.AgentModel or ConfigurationFieldId.AgentTarget or ConfigurationFieldId.AgentTimeoutSeconds
                     or ConfigurationFieldId.AgentTools or ConfigurationFieldId.AgentWorkDir or ConfigurationFieldId.EnableHostAgent),
-                "actual 141 typed projection and descriptors");
+                "actual 128 typed projection and descriptors");
             Check(read.View!.Behavior.BotPersona.Visibility == FieldVisibility.Hidden
                 && !read.View.Behavior.BotPersona.TryGetEditableValue(out _)
                 && !JsonSerializer.Serialize(read).Contains(initial.BotPersona, StringComparison.Ordinal), "Overview drops raw editable value");
@@ -911,13 +911,13 @@ internal static class ConfigurationContractTests
             Check(editable.View!.Behavior.BotPersona.TryGetEditableValue(out var persona) && persona == initial.BotPersona
                 && editable.View.Behavior.BotPersona.Rule.LegacyNeedsReview, "legacy user facts are not fake tracked values");
             using var input = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("synthetic-host-credential"));
-            var saveRequest = Request(new(new() { AiDesire = FieldEdit<int>.Set(42) }, null, null, null, null, null, null, null),
+            var saveRequest = Request(new(new() { GroupInterjectionProbability = FieldEdit<int>.Set(42) }, null, null, null, null, null, null, null),
                 ImmutableArray.Create(SecretEdit.Replace(WritableSecretSlot.ModelApiKey, input)));
             var saved = await store.SaveAsync(caller, saveRequest);
-            Check(saved.Code == ConfigurationResultCode.Ok && saved.CurrentVersion.Value == initialVersion + 1 && settings.Load().AiDesire == 42
+            Check(saved.Code == ConfigurationResultCode.Ok && saved.CurrentVersion.Value == initialVersion + 1 && settings.Load().GroupInterjectionProbability == 42
                 && new SecretsStore().LoadApiKey() == "synthetic-host-credential", "real settings and fixed secret commit together");
             Check(providers.Find("primary")?.SecretKeyRef == "secret:apiKey"
-                && AppDatabase.Scalar<long>("SELECT user_mode FROM configuration_field_modes WHERE field_id=26") == 2,
+                && AppDatabase.Scalar<long>("SELECT user_mode FROM configuration_field_modes WHERE field_id=149") == 2,
                 "real primary metadata and field mode share commit");
             var audit = AppDatabase.Scalar<string>("SELECT action_detail FROM security_audit_log ORDER BY id DESC LIMIT 1")!;
             Check(!audit.Contains("synthetic-host-credential", StringComparison.Ordinal)
@@ -925,10 +925,10 @@ internal static class ConfigurationContractTests
             var audits = AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log");
             var replay = await store.SaveAsync(caller, saveRequest);
             Check(replay.Replayed && AppDatabase.Scalar<long>("SELECT COUNT(*) FROM security_audit_log") == audits
-                && runtime.Current.AiDesire == 10, "replay cannot apply or audit again");
+                && runtime.Current.GroupInterjectionProbability == 10, "replay cannot apply or audit again");
             editable = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
-            Check(editable.View!.Behavior.AiDesire.TryGetEditableValue(out var requested) && requested == 42
-                && editable.View.Behavior.AiDesire.Display == "10" && editable.LatestApplyState == ApplyState.NotStarted,
+            Check(editable.View!.Behavior.GroupInterjectionProbability.TryGetEditableValue(out var requested) && requested == 42
+                && editable.View.Behavior.GroupInterjectionProbability.Display == "10" && editable.LatestApplyState == ApplyState.NotStarted,
                 "user facts differ from actual un-applied runtime");
             var existingPrimary = providers.Find("primary")!;
             SeedSyntheticProviderMetadata(new(existingPrimary.Id, existingPrimary.Priority, existingPrimary.Name,
@@ -938,22 +938,22 @@ internal static class ConfigurationContractTests
                 SecretEdit.Replace(WritableSecretSlot.ModelApiKey, rotated))));
             Check(rotation.Code == ConfigurationResultCode.Ok && providers.Find("primary")?.SecretKeyRef == "secret:apiKey"
                 && new SecretsStore().LoadApiKey() == "synthetic-host-rotated", "explicit Replace selects primary DB binding even when source metadata is unchanged");
-            var unauthorizedEndpoint = await store.SaveAsync(caller, Request(new(new() { AiDesire = FieldEdit<int>.Set(44) },
+            var unauthorizedEndpoint = await store.SaveAsync(caller, Request(new(new() { GroupInterjectionProbability = FieldEdit<int>.Set(44) },
                 new() { ModelBaseUrl = FieldEdit<string>.Set("https://example.com/unapproved") }, null, null, null, null, null, null)));
             Check(unauthorizedEndpoint.Code == ConfigurationResultCode.ValidationFailed
                 && unauthorizedEndpoint.Errors.Any(error => error.Address.Field == ConfigurationFieldId.ModelBaseUrl)
-                && settings.Load().AiDesire == 42 && settings.Load().ModelBaseUrlOverride == initial.ModelBaseUrlOverride,
+                && settings.Load().GroupInterjectionProbability == 42 && settings.Load().ModelBaseUrlOverride == initial.ModelBaseUrlOverride,
                 "missing trusted endpoint authorization rejects credential-bearing endpoint change");
-            var deletion = Request(new(new() { AiDesire = FieldEdit<int>.Set(43) }, null, null, null, null, null, null, null),
+            var deletion = Request(new(new() { GroupInterjectionProbability = FieldEdit<int>.Set(43) }, null, null, null, null, null, null, null),
                 ImmutableArray.Create(SecretEdit.Delete(WritableSecretSlot.ModelApiKey)));
             var rejected = await store.SaveAsync(caller, deletion);
             Check(rejected.Code == ConfigurationResultCode.ValidationFailed && rejected.Errors.Any(error => error.Code == "credential_required")
-                && settings.Load().AiDesire == 42 && new SecretsStore().LoadApiKey() is not null && rejected.CurrentVersion.Value == initialVersion + 2,
+                && settings.Load().GroupInterjectionProbability == 42 && new SecretsStore().LoadApiKey() is not null && rejected.CurrentVersion.Value == initialVersion + 2,
                 "Strict rejects enabled provider deletion before any partial write");
             var legacyDelete = await StorageConfiguration.ConfigurationStorageBridge.SaveLegacyAsync(store, caller,
                 deletion.Key, deletion.Changes, deletion.Secrets);
             Check(legacyDelete.Code == ConfigurationResultCode.Ok && legacyDelete.CurrentVersion.Value == initialVersion + 3
-                && new SecretsStore().LoadApiKey() is null && settings.Load().AiDesire == 43, "Legacy preserves allowed historical deletion");
+                && new SecretsStore().LoadApiKey() is null && settings.Load().GroupInterjectionProbability == 43, "Legacy preserves allowed historical deletion");
             Check(AppDatabase.Scalar<string>("SELECT json_extract(json,'$.SyntheticUnknownFact') FROM settings WHERE id=1") == "synthetic-opaque",
                 "unrecognized old DB fact is preserved not client edited");
             var primary = providers.Find("primary")!;
@@ -991,7 +991,7 @@ internal static class ConfigurationContractTests
             var denied = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             Check(denied.Code == ConfigurationResultCode.Forbidden && denied.View is null
                 && (await store.SaveAsync(caller, Request())).Code == ConfigurationResultCode.Forbidden, "trusted authorization denies forged flags");
-            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 14,
+            Check(AppDatabase.FilePath == StorageDatabase.FilePath && StorageDatabase.Scalar<long>("PRAGMA user_version") == 15,
                 "real adapter uses the sole bound Storage database");
             Console.WriteLine($"CFG_CHILD host passed={passed} failed=0");
             return 0;
@@ -1014,11 +1014,11 @@ internal static class ConfigurationContractTests
 
     private static async Task<int?> RestartChildAsync(string[] args)
     {
-        var full = Path.GetFullPath(args[1]);
+        var full = DatabaseContractTests.PhysicalFixturePath(args[1]);
         var parent = Path.GetDirectoryName(full)!;
         if (Path.GetFileName(full) != "configuration-restore"
             || !System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(parent), "^botagent-review-remediation-[0-9a-f]{32}$")
-            || !string.Equals(Path.GetDirectoryName(parent), Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(Path.GetDirectoryName(parent), DatabaseContractTests.PhysicalFixturePath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
             return 1;
         var passed = 0;
         void Check(bool condition, string label)
@@ -1043,7 +1043,7 @@ internal static class ConfigurationContractTests
             var read = await store.ReadAsync(caller, ConfigurationReadKind.Overview);
             Check(read.Code == ConfigurationResultCode.Ok && read.Generation != request.Key.Generation
                 && read.Version == version, "restart advances generation but preserves version");
-            Check(StorageDatabase.Scalar<long>("SELECT user_mode FROM configuration_field_modes WHERE field_id=26") == 2
+            Check(StorageDatabase.Scalar<long>("SELECT user_mode FROM configuration_field_modes WHERE field_id=149") == 2
                 && StorageDatabase.GetMeta("configuration_schema") == "1", "restart restores module and user facts");
             Check(StorageDatabase.GetMeta("verification_token_initialized") == "deleted",
                 "restart restores explicit token deletion marker");
@@ -1060,7 +1060,7 @@ internal static class ConfigurationContractTests
             var missingOld = await store.SaveAsync(caller, request with { Key = request.Key with { Nonce = Guid.NewGuid() } });
             Check(missingOld.Code == ConfigurationResultCode.KeyGenerationMismatch, "old generation cannot accept new operation");
             var modified = await store.SaveAsync(caller, request with
-                { Changes = request.Changes with { Behavior = new() { AiDesire = FieldEdit<int>.Set(22) } } });
+                { Changes = request.Changes with { Behavior = new() { GroupInterjectionProbability = FieldEdit<int>.Set(22) } } });
             Check(modified.Code == ConfigurationResultCode.IdempotencyConflict, "old generation rejects altered protected intent");
             Check(participant.Writes == 0 && AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1") == version.Value,
                 "restart and recovery do not repeat user writes or application");
@@ -1093,7 +1093,7 @@ internal static class ConfigurationContractTests
             ("--configuration-provider-routing", "CFG_CHILD provider-routing passed=25 failed=0"),
             ("--configuration-provider-refs", "CFG_CHILD provider-refs passed=35 failed=0"),
             ("--configuration-primary-facts", "CFG_CHILD primary-facts passed=20 failed=0"),
-            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=68 failed=0"),
+            ("--configuration-registered-providers", "CFG_CHILD registered-providers passed=77 failed=0"),
             ("--configuration-provider-writer-fence", "CFG_CHILD provider-writer-fence passed=11 failed=0"),
             ("--configuration-mood-persistence", "CFG_CHILD mood-persistence passed=22 failed=0"),
             ("--configuration-platform-policies", "CFG_CHILD platform-policies passed=72 failed=0"),
@@ -1210,7 +1210,7 @@ internal static class ConfigurationContractTests
                 .. Directory.EnumerateFiles(Path.Combine(repository, "src/BotAgent.Headless/Host"), "CompositionRoot*.cs")
                     .Select(path => path.Substring(repository.Length + 1).Replace('\\', '/'))
                     .OrderBy(path => path, StringComparer.Ordinal),
-                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs", "docs/plans/agents/00-c3-c4-contract-candidate.md"
+                "tests/BotAgent.ReviewRemediationProbe/ConfigurationContractTests.cs"
             ];
             var sourceFingerprints = sourceFiles.ToDictionary(value => value, value => Hash(BoundAsset(repository, value)), StringComparer.Ordinal);
             var bundle = Path.Combine(capture, "bundle");
@@ -1264,7 +1264,7 @@ internal static class ConfigurationContractTests
             CheckPublication((label, condition) => Check(condition, label));
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
-            var initial = new AppSettings { AiDesire = 10 };
+            var initial = new AppSettings { GroupInterjectionProbability = 10 };
             new SettingsStore().Save(initial);
             var store = StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant());
             var caller = new ConfigurationCaller("synthetic-authority", "synthetic-publisher", "bot",
@@ -1273,7 +1273,7 @@ internal static class ConfigurationContractTests
             ConfigurationSaveRequest Request(int value) => new("cfg-0.3.3",
                 new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
                 new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
-                new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(value) }, null, null, null, null, null, null, null),
+                new(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(value) }, null, null, null, null, null, null, null),
                 ImmutableArray<SecretEdit>.Empty);
             var method = typeof(SettingsBox).GetMethod("ApplyConfiguration", BindingFlags.NonPublic | BindingFlags.Instance,
                 null, new[] { typeof(Func<AppSettings, (AppSettings Snapshot, ConfigurationSaveResult Result, bool PublishAllowed)>),
@@ -1298,7 +1298,7 @@ internal static class ConfigurationContractTests
             var existingClaim = store.TryStartApplyStep(caller, saved.Receipt.Key, ApplyStep.PublishSnapshot);
             var denied = Apply(box, candidate =>
             {
-                candidate.AiDesire = 17;
+                candidate.GroupInterjectionProbability = 17;
                 return (candidate, saved with { Receipt = existingClaim.Result.Receipt }, existingClaim.CanRun);
             }, Published);
             Check(firstClaim.CanRun && !existingClaim.CanRun && existingClaim.Result.Code == ConfigurationResultCode.Ok
@@ -1316,7 +1316,7 @@ internal static class ConfigurationContractTests
                 var failedClaim = store.TryStartApplyStep(caller, second.Receipt!.Key, ApplyStep.PublishSnapshot);
                 var failed = Apply(box, candidate =>
                 {
-                    candidate.AiDesire = 18;
+                    candidate.GroupInterjectionProbability = 18;
                     return (candidate, second with { Code = failedClaim.Result.Code }, failedClaim.CanRun);
                 }, Published);
                 Check(failedClaim.Result.Code == ConfigurationResultCode.StorageUnavailable && !failedClaim.CanRun
@@ -1331,17 +1331,17 @@ internal static class ConfigurationContractTests
             {
                 var result = store.SaveAsync(caller, successRequest).GetAwaiter().GetResult();
                 var claim = store.TryStartApplyStep(caller, result.Receipt!.Key, ApplyStep.PublishSnapshot);
-                candidate.AiDesire = 19;
+                candidate.GroupInterjectionProbability = 19;
                 return (candidate, result with { Receipt = claim.Result.Receipt }, claim.CanRun);
             }, Published);
             var durable = await store.FindAsync(caller, successRequest.Key);
-            Check(success.Code == ConfigurationResultCode.Ok && box.Current.AiDesire == 19 && callbacks == 1
+            Check(success.Code == ConfigurationResultCode.Ok && box.Current.GroupInterjectionProbability == 19 && callbacks == 1
                 && durable.Receipt!.Steps.Any(step => step.Step == ApplyStep.PublishSnapshot && step.State == ApplyState.Applied),
                 "first_owned_claim_publishes_once_and_records_the_real_step");
             var publishedSnapshot = box.Current;
             var replay = Apply(box, candidate =>
             {
-                candidate.AiDesire = 99;
+                candidate.GroupInterjectionProbability = 99;
                 return (candidate, store.SaveAsync(caller, successRequest).GetAwaiter().GetResult(), true);
             }, Published);
             Check(replay.Replayed && ReferenceEquals(box.Current, publishedSnapshot) && callbacks == 1,
@@ -1352,14 +1352,14 @@ internal static class ConfigurationContractTests
                 var result = store.SaveAsync(caller, request).GetAwaiter().GetResult();
                 if (result.Code != ConfigurationResultCode.Ok) return (candidate, result, true);
                 var claim = store.TryStartApplyStep(caller, result.Receipt!.Key, ApplyStep.PublishSnapshot);
-                request.Changes.Behavior!.AiDesire.TryGetValue(out var desired);
-                candidate.AiDesire = desired;
+                request.Changes.Behavior!.GroupInterjectionProbability.TryGetValue(out var desired);
+                candidate.GroupInterjectionProbability = desired;
                 return (candidate, result with { Receipt = claim.Result.Receipt }, claim.CanRun);
             }, Published))));
             var winner = results.Single(result => result.Code == ConfigurationResultCode.Ok);
             var winnerValue = winner.Receipt!.Key == a.Key ? 20 : 21;
             Check(results.Count(result => result.Code == ConfigurationResultCode.VersionConflict) == 1
-                && callbacks == 2 && box.Current.AiDesire == winnerValue,
+                && callbacks == 2 && box.Current.GroupInterjectionProbability == winnerValue,
                 "same_box_lock_keeps_cas_winner_and_actual_publication_order_aligned");
             var superseded = await store.SaveAsync(caller, Request(22));
             await store.SaveAsync(caller, Request(23));
@@ -1387,6 +1387,24 @@ internal static class ConfigurationContractTests
         }
     }
 
+    private static (int ModelPort, int PanelPort, int BridgePort) ReserveConfigurationHttpPorts()
+    {
+        var reserved = new List<System.Net.Sockets.TcpListener>(3);
+        var ports = new List<int>(3);
+        try
+        {
+            for (var candidate = 19100 + Random.Shared.Next(0, 4000); candidate < 28999 && ports.Count < 3; candidate++)
+            {
+                var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, candidate);
+                try { listener.Start(); reserved.Add(listener); ports.Add(candidate); }
+                catch (System.Net.Sockets.SocketException) { listener.Stop(); }
+            }
+            if (ports.Count < 3) throw new InvalidOperationException("synthetic_free_ports_unavailable");
+            return (ports[0], ports[1], ports[2]);
+        }
+        finally { foreach (var listener in reserved) listener.Stop(); }
+    }
+
     private static async Task<int?> ConfigurationHttpChildAsync()
     {
         var root = Path.Combine(Path.GetTempPath(), "botagent-configuration-http-" + Guid.NewGuid().ToString("N"));
@@ -1405,19 +1423,14 @@ internal static class ConfigurationContractTests
             var repository = directory?.FullName ?? throw new InvalidOperationException("synthetic_repository_missing");
             var headless = Path.Combine(repository, "src", "BotAgent.Headless", "bin", "Release", "net10.0", "BotAgent.Headless.dll");
             var harness = Assembly.LoadFrom(Path.Combine(repository, "tests", "BotAgent.IntegrationHarness", "bin", "Release", "net10.0", "BotAgent.IntegrationHarness.dll"));
-            int Port()
-            {
-                using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-                listener.Start(); return ((IPEndPoint)listener.LocalEndpoint).Port;
-            }
-            var modelPort = Port(); var panelPort = Port(); var bridgePort = Port();
+            var (modelPort, panelPort, bridgePort) = ReserveConfigurationHttpPorts();
             var mockType = harness.GetType("BotAgent.IntegrationHarness.MockOpenAi", throwOnError: true)!;
             mock = (IDisposable)Activator.CreateInstance(mockType, new object[] { modelPort, "127.0.0.1" })!;
             mockType.GetMethod("Start")!.Invoke(mock, null);
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage(); AppDatabase.Initialize();
             new SettingsStore().Save(new AppSettings
             {
-                AiDesire = 10, IdleFallbackSeconds = 0, EnableStickers = false, EnableMusic = false,
+                GroupInterjectionProbability = 10, EnableStickers = false, EnableMusic = false,
                 EnableVoice = false, EnablePoke = false, EnableWebSearch = false, HealthReportEnabled = false,
                 OfficialEnabled = false, FeishuEnabled = false, FeishuVerificationToken = "synthetic-token-before"
             });
@@ -1446,11 +1459,18 @@ internal static class ConfigurationContractTests
             {
                 process = Process.Start(start) ?? throw new InvalidOperationException("synthetic_host_start_failed");
                 stdout = process.StandardOutput.ReadToEndAsync(); stderr = process.StandardError.ReadToEndAsync();
-                for (var i = 0; i < 160; i++)
+                for (var i = 0; i < 300; i++)
                 {
                     if (process.HasExited) throw new InvalidOperationException("synthetic_host_early_exit");
-                    try { using var response = await http.GetAsync("/healthz"); if (response.IsSuccessStatusCode) return; }
-                    catch (HttpRequestException) { }
+                    try
+                    {
+                        using var pollCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                        using var response = await http.GetAsync("/zba/v1/health", pollCts.Token);
+                        if (response.IsSuccessStatusCode
+                            && JsonNode.Parse(await response.Content.ReadAsStringAsync(pollCts.Token))?["ready"]?.GetValue<bool>() == true)
+                            return;
+                    }
+                    catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) { }
                     await Task.Delay(100);
                 }
                 throw new TimeoutException("synthetic_host_not_ready");
@@ -1485,16 +1505,16 @@ internal static class ConfigurationContractTests
             string SaveBody(JsonObject read, string key, JsonObject? changes = null, JsonArray? secrets = null)
                 => new JsonObject { ["contractRevision"] = "cfg-0.3.3", ["expectedVersion"] = read["version"]!.DeepClone(),
                     ["key"] = key, ["changes"] = changes ?? new JsonObject(), ["secrets"] = secrets ?? new JsonArray() }.ToJsonString();
-            JsonObject Ai(int value) => new() { ["behavior"] = new JsonObject { ["aiDesire"] = new JsonObject { ["kind"] = 1, ["value"] = value } } };
+            JsonObject Ai(int value) => new() { ["behavior"] = new JsonObject { ["groupInterjectionProbability"] = new JsonObject { ["kind"] = 1, ["value"] = value } } };
             await Launch();
             Check((await Post("/api/settings?configuration=read", "{\"kind\":1}", auth: false)).Status == 401,
                 "real_new_profile_cannot_bypass_existing_authentication");
-            Check((await Post("/api/settings", "{\"aiDesire\":99}", crossOrigin: true)).Status == 403,
+            Check((await Post("/api/settings", "{\"groupInterjectionProbability\":99}", crossOrigin: true)).Status == 403,
                 "real_settings_writes_retain_same_origin_gate");
             var initial = await Read();
             Check(initial.Status == 200 && initial.Body["code"]!.GetValue<int>() == 0
-                && initial.Body["fields"]!.AsArray().Count == 141 && initial.Body["version"] is JsonValue
-                && initial.Body["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 10,
+                && initial.Body["fields"]!.AsArray().Count == 128 && initial.Body["version"] is JsonValue
+                && initial.Body["view"]!["behavior"]!["groupInterjectionProbability"]!["value"]!.GetValue<int>() == 10,
                 "actual_host_adopts_store_and_returns_versioned_editable_projection");
             http.DefaultRequestHeaders.Add("X-Panel-Token", "synthetic-http-panel-token");
             var legacy = JsonNode.Parse(await http.GetStringAsync("/api/settings"))!.AsObject();
@@ -1522,7 +1542,7 @@ internal static class ConfigurationContractTests
                 "actual_env_to_database_binding_commit_is_hot_applied");
             var after = await Read();
             Check(after.Body["version"]!.ToJsonString() == saved.Body["currentVersion"]!.ToJsonString()
-                && after.Body["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 17
+                && after.Body["view"]!["behavior"]!["groupInterjectionProbability"]!["value"]!.GetValue<int>() == 17
                 && new StorageSecrets().LoadApiKey() == "synthetic-committed-model-key"
                 && new StorageSecrets().Load("feishuVerificationToken") == "synthetic-token-after",
                 "persisted_fields_secrets_and_published_snapshot_agree_on_real_host_version");
@@ -1542,22 +1562,22 @@ internal static class ConfigurationContractTests
             Check(unknown.Status == 400 && !unknown.Body.ToJsonString().Contains("syntheticUnknown", StringComparison.Ordinal),
                 "strict_unknown_fields_rejected_with_safe_error_not_input_echo");
             var duplicate = SaveBody(after.Body, Key(after.Body), Ai(20)).Replace(
-                "\"aiDesire\":{\"kind\":1,\"value\":20}",
-                "\"aiDesire\":{\"kind\":1,\"value\":20},\"aiDesire\":{\"kind\":1,\"value\":21}", StringComparison.Ordinal);
+                "\"groupInterjectionProbability\":{\"kind\":1,\"value\":20}",
+                "\"groupInterjectionProbability\":{\"kind\":1,\"value\":20},\"groupInterjectionProbability\":{\"kind\":1,\"value\":21}", StringComparison.Ordinal);
             Check((await Post("/api/settings?configuration=save", duplicate)).Status == 400,
                 "strict_decoded_duplicate_is_rejected_before_any_configuration_write");
             var emptyToken = await Post("/api/settings",
-                "{\"aiDesire\":99,\"apiKey\":\"synthetic-must-not-commit\",\"mood\":\"synthetic-no-side\",\"feishuVerificationToken\":\"   \"}");
+                "{\"groupInterjectionProbability\":99,\"apiKey\":\"synthetic-must-not-commit\",\"mood\":\"synthetic-no-side\",\"feishuVerificationToken\":\"   \"}");
             Check(emptyToken.Status == 409 && emptyToken.Body["error"]!.GetValue<string>() == "refresh_required"
                 && emptyToken.Body["refreshRequired"]!.GetValue<bool>()
                 && new StorageSecrets().LoadApiKey() == "synthetic-committed-model-key"
                 && AppDatabase.Scalar<string>("SELECT text FROM mood WHERE id=1") is null
                 && (await Read()).Body["version"]!.ToJsonString() == after.Body["version"]!.ToJsonString(),
                 "legacy_empty_token_rejects_whole_batch_including_secret_configuration_and_mood");
-            var official = await Post("/api/settings", "{\"aiDesire\":99,\"OFFICIALAPPSECRET\":null}");
+            var official = await Post("/api/settings", "{\"groupInterjectionProbability\":99,\"OFFICIALAPPSECRET\":null}");
             Check(official.Status == 400 && (await Read()).Body["version"]!.ToJsonString() == after.Body["version"]!.ToJsonString(),
                 "official_secret_presence_rejected_before_all_legacy_side_effects");
-            var plugin = after.Body["view"]!["registered"]!["plugins"]!.AsArray().First()!["key"]!.GetValue<string>();
+            var plugin = after.Body["view"]!["registered"]!["plugins"]!.AsArray().Single(row => row!["key"]!.GetValue<string>() == "system.health-reporting")!["key"]!.GetValue<string>();
             var missingEnabled = new JsonObject { ["registered"] = new JsonObject { ["plugins"] = new JsonArray(
                 new JsonObject { ["key"] = plugin }) } };
             Check((await Post("/api/settings?configuration=save", SaveBody(after.Body, Key(after.Body), missingEnabled))).Status == 400
@@ -2180,24 +2200,24 @@ internal static class ConfigurationContractTests
             {
                 var data = JsonNode.Parse(await http.GetStringAsync("/api/settings"))!.AsObject();
                 var observed = data["runtime"]!.AsObject();
-                Check(observed["aiDesire"]!.GetValue<int>() == 17 && observed["agentDevices"] is not null,
+                Check(observed["groupInterjectionProbability"]!.GetValue<int>() == 17 && observed["agentDevices"] is not null,
                     "actual_old_host_reads_legacy_configuration_and_device_table");
                 return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(new JsonObject
-                { ["aiDesire"] = observed["aiDesire"]!.DeepClone(), ["agentDevices"] = observed["agentDevices"]!.DeepClone() }.ToJsonString())));
+                { ["groupInterjectionProbability"] = observed["groupInterjectionProbability"]!.DeepClone(), ["agentDevices"] = observed["agentDevices"]!.DeepClone() }.ToJsonString())));
             }
             CopyBundle(baseline, assets); RestoreDatabase(); await Launch();
             var oldObservation = await OldObservation(); await Stop("old-baseline"); var oldFacts = Facts();
             Check(oldFacts.Version == 0, "old_binary_does_not_activate_new_configuration_writer");
             CopyBundle(source, candidate); await Launch();
             var read = await Post("read", "{\"kind\":1}");
-            Check(read["code"]!.GetValue<int>() == 0 && read["view"]!["behavior"]!["aiDesire"]!["value"]!.GetValue<int>() == 17
+            Check(read["code"]!.GetValue<int>() == 0 && read["view"]!["behavior"]!["groupInterjectionProbability"]!["value"]!.GetValue<int>() == 17
                 && read["view"]!["agent"]!["agentDevices"]!["value"]!.AsArray().Count == 1,
                 "new_whole_host_migrates_same_legacy_database_and_device");
             var key = JsonSerializer.Serialize(new ConfigurationOperationKey(
                 JsonSerializer.Deserialize<ConfigurationGeneration>(read["generation"]!.ToJsonString()),
                 read["serverUnixSeconds"]!.GetValue<long>(), Guid.NewGuid())).Trim('"');
             var saved = await Post("save", new JsonObject { ["contractRevision"] = "cfg-0.3.3", ["expectedVersion"] = read["version"]!.DeepClone(),
-                ["key"] = key, ["changes"] = new JsonObject { ["behavior"] = new JsonObject { ["aiDesire"] = new JsonObject { ["kind"] = 1, ["value"] = 23 } } },
+                ["key"] = key, ["changes"] = new JsonObject { ["behavior"] = new JsonObject { ["groupInterjectionProbability"] = new JsonObject { ["kind"] = 1, ["value"] = 23 } } },
                 ["secrets"] = new JsonArray(new JsonObject { ["slot"] = 0, ["kind"] = 1, ["value"] = "synthetic-rollback-candidate-key" }) }.ToJsonString());
             Check(saved["code"]!.GetValue<int>() == 0 && saved["receipt"]!["commitState"]!.GetValue<int>() == 1,
                 "new_actual_http_commits_configuration_and_secret_before_rollback");
@@ -2313,7 +2333,7 @@ internal static class ConfigurationContractTests
                 && RejectedWithSafeWarning(() => secrets.SaveOfficialSecret("synthetic-rejected"), "official_secret_environment_only")
                 && AppDatabase.Scalar<string>("SELECT value FROM secrets WHERE name='officialAppSecret'") == "synthetic-historical",
                 "historical_official_api_neither_reads_replaces_nor_deletes_legacy_row");
-            new SettingsStore().Save(new AppSettings { AiDesire = 10 });
+            new SettingsStore().Save(new AppSettings { GroupInterjectionProbability = 10 });
             StorageConfiguration.ConfigurationStorageBridge.Activate(clock, new SyntheticParticipant());
             foreach (var name in names) Check(RejectedWithSafeWarning(() => secrets.Save(name, "synthetic-after"), "configuration_writer_required")
                 && secrets.Load(name) == "synthetic-before",
@@ -2331,12 +2351,12 @@ internal static class ConfigurationContractTests
             try
             {
                 Console.SetError(expectedError);
-                try { new SettingsStore().Save(new AppSettings { AiDesire = 99 }); }
+                try { new SettingsStore().Save(new AppSettings { GroupInterjectionProbability = 99 }); }
                 catch (InvalidOperationException error) { threw = error.Message == "configuration_writer_required"; }
             }
             finally { Console.SetError(previousError); }
             Check(threw && expectedError.ToString().Contains("configuration_writer_required", StringComparison.Ordinal)
-                && JsonNode.Parse(AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1")!)!["AiDesire"]!.GetValue<int>() == 10,
+                && JsonNode.Parse(AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1")!)!["GroupInterjectionProbability"]!.GetValue<int>() == 10,
                 "activated_public_settings_writer_reports_fence_without_replacing_user_facts");
             Check(secrets.SaveNeteaseCookie("synthetic-cookie") && secrets.LoadNeteaseCookie() == "synthetic-cookie"
                 && secrets.Save("panelPassword", "synthetic-password-record"), "non_configuration_cookie_and_panel_auth_writers_remain_available");
@@ -2380,14 +2400,14 @@ internal static class ConfigurationContractTests
         {
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
-            new SettingsStore().Save(new AppSettings { AiDesire = 10 });
+            new SettingsStore().Save(new AppSettings { GroupInterjectionProbability = 10 });
             var participant = new SyntheticParticipant();
             var store = StorageConfiguration.ConfigurationStorageBridge.Activate(clock, participant);
             var caller = new ConfigurationCaller("synthetic-authority", "synthetic-legacy-version-owner", "bot",
                 ConfigurationAccess.SaveConfiguration | ConfigurationAccess.ReadEditable);
             var read = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             ConfigurationOperationKey Key() => new(read.Generation, clock.Now.ToUnixTimeSeconds(), Guid.NewGuid());
-            ConfigurationPatch Patch(int value) => new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(value) },
+            ConfigurationPatch Patch(int value) => new(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(value) },
                 null, null, null, null, null, null, null);
             ValueTask<StorageConfiguration.LegacySaveOutcome> Save(ConfigurationOperationKey key, int value,
                 ConfigurationVersion? expected)
@@ -2429,14 +2449,14 @@ internal static class ConfigurationContractTests
         {
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
-            new SettingsStore().Save(new AppSettings { AiDesire = 10 });
+            new SettingsStore().Save(new AppSettings { GroupInterjectionProbability = 10 });
             var participant = new SyntheticParticipant();
             var store = StorageConfiguration.ConfigurationStorageBridge.Activate(clock, participant);
             var caller = new ConfigurationCaller("synthetic-authority", "synthetic-legacy-mood-owner", "bot",
                 ConfigurationAccess.SaveConfiguration | ConfigurationAccess.ReadEditable);
             var read = await store.ReadAsync(caller, ConfigurationReadKind.Editable);
             ConfigurationOperationKey Key() => new(read.Generation, clock.Now.ToUnixTimeSeconds(), Guid.NewGuid());
-            ConfigurationPatch Patch(int value) => new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(value) },
+            ConfigurationPatch Patch(int value) => new(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(value) },
                 null, null, null, null, null, null, null);
             ValueTask<StorageConfiguration.LegacySaveOutcome> Save(ConfigurationOperationKey key, int value, FieldEdit<string> edit)
                 => StorageConfiguration.ConfigurationStorageBridge.SaveLegacyWithMoodAsync(store, caller, key, Patch(value),
@@ -2692,7 +2712,7 @@ internal static class ConfigurationContractTests
             var actions = trusted.DeclaredPlatformActions;
             var body = new JsonObject
             {
-                ["aiDesire"] = 11, ["model"] = "synthetic-model", ["enableVoice"] = false, ["enableMusic"] = false,
+                ["groupInterjectionProbability"] = 11, ["model"] = "synthetic-model", ["enableVoice"] = false, ["enableMusic"] = false,
                 ["healthReportEnabled"] = false, ["apiKey"] = " synthetic-plan-key ", ["mood"] = "synthetic-mood", ["ttsProvider"] = "synthetic-provider",
                 ["platformPolicies"] = new JsonArray(new JsonObject
                 {
@@ -2710,7 +2730,7 @@ internal static class ConfigurationContractTests
                     && changes.Model is not null && changes.Agent is not null && changes.Platform is not null
                     && changes.Voice is not null && changes.Music is not null && changes.Reporting is not null,
                     "aggregate_assembles_all_seven_partitions");
-                Check(changes.Behavior!.AiDesire.TryGetValue(out var desire) && desire == 11
+                Check(changes.Behavior!.GroupInterjectionProbability.TryGetValue(out var desire) && desire == 11
                     && changes.Model!.Model.TryGetValue(out var model) && model == "synthetic-model"
                     && changes.Agent!.AgentAllowedUsers.Kind == EditKind.Keep
                     && changes.Platform!.PlatformPolicies.TryGetValue(out var policies)
@@ -2761,7 +2781,7 @@ internal static class ConfigurationContractTests
             using (var plan = Parse(new JsonObject { ["officialAppSecret"] = null, ["agentDevices"] = "not-json" }))
                 Check(Get<string>(plan, "ErrorCode") == "official_secret_environment_only"
                     && Get<ImmutableArray<SecretEdit>>(plan, "Secrets").IsEmpty, "aggregate_official_presence_rejection_has_priority");
-            using (var plan = Parse(new JsonObject { ["aiDesire"] = 11, ["feishuVerificationToken"] = " " }))
+            using (var plan = Parse(new JsonObject { ["groupInterjectionProbability"] = 11, ["feishuVerificationToken"] = " " }))
                 Check(Get<ConfigurationResultCode>(plan, "Code") == ConfigurationResultCode.LegacyNeedsReview
                     && Get<ConfigurationPatch?>(plan, "Changes") is null, "aggregate_empty_token_rejects_entire_plan");
             Check(!StorageDatabase.IsReady, "aggregate_never_initializes_storage");
@@ -2841,7 +2861,7 @@ internal static class ConfigurationContractTests
                 "preimage_never_activates_new_configuration_writer");
             var settings = new AppSettings
             {
-                AiDesire = 17, AiModeEnabled = false, Model = "synthetic-model", ModelBaseUrl = "https://example.com/model",
+                GroupInterjectionProbability = 17, AiModeEnabled = false, Model = "synthetic-model", ModelBaseUrl = "https://example.com/model",
                 EnableProactive = false, EnableProfileSummary = false, EnableVoice = false, EnableMusic = false,
                 EnableHostAgent = false, EnableServerAgent = false, EnableAgentBridge = false, HealthReportEnabled = false,
                 MessageWhitelist = "10001", LocalChannelIds = "1", PlatformSwitchSchemaVersion = 1,
@@ -2875,7 +2895,7 @@ internal static class ConfigurationContractTests
                 physicalVersion = Convert.ToInt64(command.ExecuteScalar());
                 command.CommandText = "SELECT json FROM settings WHERE id=1";
                 var restored = JsonSerializer.Deserialize<AppSettings>((string)command.ExecuteScalar()!)!;
-                Check(restored.AiDesire == 17 && restored.AgentDevices == settings.AgentDevices
+                Check(restored.GroupInterjectionProbability == 17 && restored.AgentDevices == settings.AgentDevices
                     && restored.RuntimePlatformPolicies is null && restored.DeclaredPlatformDrivers.IsEmpty,
                     "preimage_legacy_settings_and_six_field_device_shape");
                 command.CommandText = "SELECT COUNT(*) FROM secrets WHERE name='officialAppSecret'";
@@ -2936,7 +2956,7 @@ internal static class ConfigurationContractTests
             var declared = ImmutableArray.Create(new DriverKey("qq.private", "legacy", ""), new DriverKey("qq.official", "legacy", ""),
                 new DriverKey("local", "legacy", ""), new DriverKey("feishu", "default", "feishu-main"));
             var actions = BotAgent.Services.Agent.QqActionCatalog.All.Select(spec => new ActionId(spec.Name)).ToImmutableArray();
-            var initial = new AppSettings { AiDesire = 10, Model = "synthetic-model", ModelBaseUrl = "https://example.com/model",
+            var initial = new AppSettings { GroupInterjectionProbability = 10, Model = "synthetic-model", ModelBaseUrl = "https://example.com/model",
                 MessageWhitelist = "10001", PrivateChatEnabled = true, OfficialEnabled = false, LocalChannelIds = "synthetic-local",
                 PlatformPolicies = new() { new() { PlatformId = "qq.private", AccountScope = "legacy", ChatEnabled = true,
                     AllowedActions = new() { "like" }, GroupWhitelist = "10001" } } };
@@ -3086,11 +3106,11 @@ internal static class ConfigurationContractTests
             try
             {
                 var fault = Request(default, new PolicyEdit(instance, Rules(ToggleRule.Disabled))) with
-                    { Changes = Request().Changes with { Behavior = new BehaviorChanges { AiDesire = FieldEdit<int>.Set(55) },
+                    { Changes = Request().Changes with { Behavior = new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(55) },
                         Registered = new(ImmutableArray<PluginEnabledEdit>.Empty, ImmutableArray<ProviderEdit>.Empty,
                             ImmutableArray.Create(new PolicyEdit(instance, Rules(ToggleRule.Disabled)))) } };
                 Check((await store.SaveAsync(caller, fault)).Code == ConfigurationResultCode.CommitFailed && State() == before
-                    && runtime.Current.AiDesire == 10, "policy_meta_fault_rolls_back_scalar_version_audit_and_receipt");
+                    && runtime.Current.GroupInterjectionProbability == 10, "policy_meta_fault_rolls_back_scalar_version_audit_and_receipt");
             }
             finally { AppDatabase.Write(conn => AppDatabase.Exec(conn, "DROP TRIGGER synthetic_policy_fault")); }
             var retained = AppDatabase.GetMeta("configuration_platform_policies")!;
@@ -3403,7 +3423,7 @@ internal static class ConfigurationContractTests
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
             var initial = new AppSettings { ApiKey = "synthetic-live-primary-key", Model = "synthetic-primary-model",
-                ModelBaseUrl = "https://example.com/primary", AiDesire = 10, AgentMaskSensitive = true };
+                ModelBaseUrl = "https://example.com/primary", GroupInterjectionProbability = 10, AgentMaskSensitive = true };
             new SettingsStore().Save(initial);
             var runtime = new SettingsBox(initial);
             var providers = new ModelProviderStore();
@@ -3568,6 +3588,72 @@ internal static class ConfigurationContractTests
                 Check((await store.SaveAsync(caller, Request(Edit(enabled: FieldEdit<bool>.Set(false))))).Code == ConfigurationResultCode.Ok,
                     "disable_after_credential_rejection");
             }
+            // 同批原子保存：新建/更新供应商同时绑定并写入新独立凭据、拦截 URL 误粘、拦截同批绑定+删除、停用解绑+删密钥、Ollama 无密钥启用。
+            {
+                var atomicKey = new ModelCredentialKey("synthetic-atomic-key");
+                var rotatedKey = new ModelCredentialKey("synthetic-rotated-key");
+                var urlKey = new ModelCredentialKey("synthetic-url-key");
+                ProviderEdit CreateEdit(string id, ModelProtocol protocol, CredentialBindingEdit credential)
+                    => new(new(id), new(FieldEdit<string>.Set("Synthetic " + id), FieldEdit<int>.Set(5),
+                        FieldEdit<string>.Set("https://example.com/" + id), FieldEdit<string>.Set("synthetic-model"),
+                        FieldEdit<bool>.Set(false), credential, FieldEdit<ModelProtocol>.Set(protocol), default),
+                        ProviderEditOperation.Create);
+                ProviderEdit DeleteEdit(string id)
+                    => new(new(id), new(default, default, default, default, default, CredentialBindingEdit.KeepExisting(), default, default),
+                        ProviderEditOperation.Delete);
+                using var atomicInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("sk-synthetic-atomic-key"));
+                using var rotatedInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("sk-synthetic-rotated-key"));
+                using var urlInput = SensitiveInput.FromUtf8(Encoding.UTF8.GetBytes("https://example.com/not-a-secret"));
+                var atomicCreate = Request(CreateEdit("synthetic-atomic", ModelProtocol.OpenAiChat,
+                    CredentialBindingEdit.UseRegisteredModelCredential(atomicKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Replace(atomicKey, atomicInput)) };
+                Check((await store.SaveAsync(caller, atomicCreate)).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic")?.SecretKeyRef == "model:synthetic-atomic-key"
+                    && new ModelCredentialStore().Load(atomicKey) == "sk-synthetic-atomic-key",
+                    "atomic_create_provider_with_new_independent_credential");
+                var atomicRotate = Request(Edit("synthetic-atomic", enabled: FieldEdit<bool>.Set(true),
+                    binding: CredentialBindingEdit.UseRegisteredModelCredential(rotatedKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Replace(rotatedKey, rotatedInput)) };
+                Check((await store.SaveAsync(caller, atomicRotate)).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic") is { IsEnabled: true, SecretKeyRef: "model:synthetic-rotated-key" }
+                    && new ModelCredentialStore().Load(rotatedKey) == "sk-synthetic-rotated-key",
+                    "atomic_update_enable_with_new_independent_credential");
+                before = State();
+                var bindAndDelete = Request(Edit("synthetic-atomic",
+                    binding: CredentialBindingEdit.UseRegisteredModelCredential(rotatedKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Delete(rotatedKey)) };
+                var bindAndDeleteResult = await store.SaveAsync(caller, bindAndDelete);
+                Check(bindAndDeleteResult.Code == ConfigurationResultCode.ValidationFailed
+                    && bindAndDeleteResult.Errors.Any(e => e.Code == "credential_required") && State() == before,
+                    "atomic_bind_and_delete_same_credential_rejected");
+                before = State();
+                var urlAsSecret = Request(CreateEdit("synthetic-url-secret", ModelProtocol.OpenAiChat,
+                    CredentialBindingEdit.UseRegisteredModelCredential(urlKey)))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Replace(urlKey, urlInput)) };
+                var urlAsSecretResult = await store.SaveAsync(caller, urlAsSecret);
+                Check(urlAsSecretResult.Code == ConfigurationResultCode.ValidationFailed
+                    && urlAsSecretResult.Errors.Any(e => e.Code == "credential_required") && State() == before,
+                    "atomic_url_as_independent_credential_rejected");
+                var detachAndDelete = Request(Edit("synthetic-atomic", enabled: FieldEdit<bool>.Set(false),
+                    binding: CredentialBindingEdit.Unconfigured()))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Delete(rotatedKey)) };
+                Check((await store.SaveAsync(caller, detachAndDelete)).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic") is { IsEnabled: false, SecretKeyRef: "model:unconfigured" }
+                    && new ModelCredentialStore().Load(rotatedKey) is null,
+                    "atomic_detach_and_delete_independent_credential");
+                Check((await store.SaveAsync(caller, Request(DeleteEdit("synthetic-atomic"))
+                    with { Secrets = ImmutableArray.Create(SecretEdit.Delete(atomicKey)) })).Code == ConfigurationResultCode.Ok
+                    && providers.Find("synthetic-atomic") is null && new ModelCredentialStore().Load(atomicKey) is null,
+                    "atomic_delete_provider_and_unused_credential");
+                Check((await store.SaveAsync(caller, Request(CreateEdit("synthetic-ollama", ModelProtocol.Ollama,
+                    CredentialBindingEdit.Unconfigured())))).Code == ConfigurationResultCode.Ok,
+                    "create_ollama_without_credential");
+                Check((await store.SaveAsync(caller, Request(Edit("synthetic-ollama", enabled: FieldEdit<bool>.Set(true))))).Code
+                    == ConfigurationResultCode.Ok && providers.Find("synthetic-ollama") is { IsEnabled: true, Protocol: ModelProtocol.Ollama },
+                    "enable_ollama_without_credential");
+                Check((await store.SaveAsync(caller, Request(DeleteEdit("synthetic-ollama")))).Code == ConfigurationResultCode.Ok,
+                    "cleanup_ollama_provider");
+            }
             Check((await store.SaveAsync(caller, Request(Edit("synthetic-legacy", name: FieldEdit<string>.Set("synthetic-legacy-retained"))))).Code
                 == ConfigurationResultCode.Ok && providers.Find("synthetic-legacy")!.SecretKeyRef == "synthetic-unknown-reference", "disabled_unclassified_keep_retained");
             before = State();
@@ -3650,9 +3736,9 @@ internal static class ConfigurationContractTests
             before = State();
             var legacyRequest = Request(Edit("synthetic-missing", name: FieldEdit<string>.Set("synthetic-legacy-rejected")));
             var legacy = await StorageConfiguration.ConfigurationStorageBridge.SaveLegacyAsync(store, caller, legacyRequest.Key,
-                legacyRequest.Changes with { Behavior = new BehaviorChanges { AiDesire = FieldEdit<int>.Set(55) } }, legacyRequest.Secrets);
+                legacyRequest.Changes with { Behavior = new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(55) } }, legacyRequest.Secrets);
             Check(legacy.Code == ConfigurationResultCode.ValidationFailed && State() == before
-                && new SettingsStore().Load().AiDesire == 10, "legacy_registered_intent_not_silently_ignored");
+                && new SettingsStore().Load().GroupInterjectionProbability == 10, "legacy_registered_intent_not_silently_ignored");
             AppDatabase.Write(conn => AppDatabase.Exec(conn, "DELETE FROM model_providers WHERE id='primary'"));
             before = State();
             var missingMarker = Request(Edit("primary"));
@@ -3713,7 +3799,7 @@ internal static class ConfigurationContractTests
         {
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
-            var initial = new AppSettings { AiDesire = 10, ApiKey = "synthetic-main-environment-key",
+            var initial = new AppSettings { GroupInterjectionProbability = 10, ApiKey = "synthetic-main-environment-key",
                 Model = "synthetic-model", ModelBaseUrl = "https://example.com/registered" };
             var settings = new SettingsStore(); settings.Save(initial);
             var runtime = new SettingsBox(initial);
@@ -3760,7 +3846,7 @@ internal static class ConfigurationContractTests
             var desire = 10;
             ValueTask<ConfigurationSaveResult> Save(SecretEdit? edit = null) => store.SaveAsync(caller,
                 new("cfg-0.3.3", new(Version()), new(header.Generation, clock.WallSeconds, Guid.NewGuid()),
-                    new(new BehaviorChanges { AiDesire = FieldEdit<int>.Set(++desire) }, null, null, null, null, null, null, null),
+                    new(new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(++desire) }, null, null, null, null, null, null, null),
                     edit is null ? ImmutableArray<SecretEdit>.Empty : ImmutableArray.Create(edit)));
             (long Version, long Audits, string? Key, PersistedModelProvider? Provider, AppSettings Runtime) State()
                 => (Version(), Audits(), DatabaseKey(), providers.Find("primary"), runtime.Current);
@@ -4142,7 +4228,7 @@ internal static class ConfigurationContractTests
         {
             ClockBindings.InitializePlatforms(); ClockBindings.InitializeStorage();
             var clock = new SyntheticClock(); Clock.Use(clock); AppDatabase.Initialize();
-            var initial = new AppSettings { AiDesire = 10, Model = "synthetic-original", ModelOverride = "synthetic-original",
+            var initial = new AppSettings { GroupInterjectionProbability = 10, Model = "synthetic-original", ModelOverride = "synthetic-original",
                 ModelBaseUrl = "https://example.com/primary", ModelBaseUrlOverride = "https://example.com/primary" };
             var settings = new SettingsStore(); settings.Save(initial);
             var runtime = new SettingsBox(initial);
@@ -4347,12 +4433,12 @@ internal static class ConfigurationContractTests
         void check(string name, bool condition) => report(condition, name);
         RegistryIsolation(check);
         var ids = Enum.GetValues<ConfigurationFieldId>();
-        check("configuration FieldIds are exactly 1..152",
-            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 152)));
+        check("configuration FieldIds are exactly 1..153",
+            ids.Select(x => (int)x).SequenceEqual(Enumerable.Range(1, 153)));
         var partitions = new[] { typeof(AgentChanges), typeof(BehaviorChanges), typeof(ModelChanges),
             typeof(MusicChanges), typeof(PlatformChanges), typeof(ReportingChanges), typeof(VoiceChanges) };
-        check("configuration seven partitions cover all 141 direct fields",
-            partitions.Sum(t => t.GetProperties().Length) == 141);
+        check("configuration seven partitions cover all 128 active fields",
+            partitions.Sum(t => t.GetProperties().Length) == 128);
         foreach (var type in partitions)
         {
             var view = type.Assembly.GetType(type.FullName!.Replace("Changes", "View"))!;
@@ -4485,8 +4571,8 @@ internal static class ConfigurationContractTests
         }
         var empty = Parse(new JsonObject());
         var scalar = Edits(empty).Where(x => x.Name is not ("AgentDevices" or "PlatformPolicies")).ToArray();
-        check("configuration legacy mapper exactly 140 scalar fields with missing Keep",
-            scalar.Length == 140 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
+        check("configuration legacy mapper exactly 127 scalar fields with missing Keep",
+            scalar.Length == 127 && scalar.All(x => Kind(x.Edit) == EditKind.Keep)
                 && Edits(empty).All(x => Kind(x.Edit) == EditKind.Keep));
         foreach (var field in scalar)
         {
@@ -4526,12 +4612,11 @@ internal static class ConfigurationContractTests
             var whitespace = Edits(Parse(new JsonObject { [key] = " \t " })).Single(x => Kind(x.Edit) != EditKind.Keep).Edit;
             check("configuration legacy whitespace thinking text explicit empty", Kind(whitespace) == EditKind.Set && Value(whitespace) is "");
         }
-        var clamped = Parse(new JsonObject { ["aiDesire"] = -1, ["defaultTopP"] = 99.0, ["maxTokens"] = 0,
-            ["participationMaxConsecutiveReplies"] = 999, ["agentReasoningEffort"] = " DEFAULT ",
+        var clamped = Parse(new JsonObject { ["groupInterjectionProbability"] = -1, ["defaultTopP"] = 99.0, ["maxTokens"] = 0,
+            ["agentReasoningEffort"] = " DEFAULT ",
             ["agentPrompt"] = new string('a', 8001), ["agentReasoningLevels"] = new string('b', 1001) });
-        check("configuration legacy old Clamp and reasoning normalization preserved",
-            clamped.Behavior!.AiDesire.TryGetValue(out var desire) && desire == 0
-                && clamped.Behavior.ParticipationMaxConsecutiveReplies.TryGetValue(out var replies) && replies == 10
+        check("configuration pacing input remains unmodified for strict validation; unrelated Clamp and reasoning normalization preserved",
+            clamped.Behavior!.GroupInterjectionProbability.TryGetValue(out var probability) && probability == -1
                 && clamped.Model!.DefaultTopP.TryGetValue(out var topP) && topP == 1
                 && clamped.Model.MaxTokens.TryGetValue(out var tokens) && tokens == 64
                 && clamped.Agent!.AgentReasoningEffort.TryGetValue(out var effort) && effort == "auto"
@@ -4546,7 +4631,7 @@ internal static class ConfigurationContractTests
         check("configuration legacy scalar mapper does not claim complex or secret processing",
             Edits(ignored).All(x => Kind(x.Edit) == EditKind.Keep));
         check("configuration legacy scalar bad type rejects before applying any Set", Throws<InvalidOperationException>(() =>
-            Parse(new JsonObject { ["aiDesire"] = "bad-type", ["enableVoice"] = true })));
+            Parse(new JsonObject { ["groupInterjectionProbability"] = "bad-type", ["enableVoice"] = true })));
     }
 
     private static void CheckLegacySecretParser(Action<string, bool> check)
@@ -4677,30 +4762,30 @@ internal static class ConfigurationContractTests
         };
         foreach (var result in cases)
         {
-            var original = new AppSettings { AiDesire = 10 };
+            var original = new AppSettings { GroupInterjectionProbability = 10 };
             var box = new SettingsBox(original);
             var applied = 0;
-            box.ApplyConfiguration(current => { current.AiDesire = 20; return (current, result); },
+            box.ApplyConfiguration(current => { current.GroupInterjectionProbability = 20; return (current, result); },
                 (_, observed) => { applied++; return observed; });
             check("configuration structured noncommit/replay does not publish " + result.Code + "/" + result.Replayed,
-                ReferenceEquals(original, box.Current) && original.AiDesire == 10 && applied == 0);
+                ReferenceEquals(original, box.Current) && original.GroupInterjectionProbability == 10 && applied == 0);
         }
-        var successBox = new SettingsBox(new AppSettings { AiDesire = 10 });
+        var successBox = new SettingsBox(new AppSettings { GroupInterjectionProbability = 10 });
         var callbacks = 0;
-        successBox.ApplyConfiguration(current => { current.AiDesire = 20; return (current, committed); },
+        successBox.ApplyConfiguration(current => { current.GroupInterjectionProbability = 20; return (current, committed); },
             (_, observed) => { callbacks++; return observed; });
         check("configuration first Changed Committed publishes exactly once",
-            successBox.Current.AiDesire == 20 && callbacks == 1);
-        var failed = successBox.ApplyConfiguration(current => { current.AiDesire = 30; return (current, committed); },
+            successBox.Current.GroupInterjectionProbability == 20 && callbacks == 1);
+        var failed = successBox.ApplyConfiguration(current => { current.GroupInterjectionProbability = 30; return (current, committed); },
             (_, _) => throw new IOException("synthetic_application_failure"));
         check("configuration application failure preserves commit and published snapshot",
-            successBox.Current.AiDesire == 30 && failed.Receipt is { ApplyState: ApplyState.Failed,
+            successBox.Current.GroupInterjectionProbability == 30 && failed.Receipt is { ApplyState: ApplyState.Failed,
                 CommitState: CommitState.Committed, CommittedVersion.Value: 1 }
             && failed.Receipt.Steps.Any(s => s.Step == ApplyStep.PublishSnapshot && s.State == ApplyState.Applied));
-        var concurrent = new SettingsBox(new AppSettings { AiDesire = 0 });
+        var concurrent = new SettingsBox(new AppSettings { GroupInterjectionProbability = 0 });
         Parallel.For(0, 20, _ => concurrent.ApplyConfiguration(current =>
-        { current.AiDesire++; return (current, committed); }));
-        check("configuration structured saves share the existing writer gate", concurrent.Current.AiDesire == 20);
+        { current.GroupInterjectionProbability++; return (current, committed); }));
+        check("configuration structured saves share the existing writer gate", concurrent.Current.GroupInterjectionProbability == 20);
     }
 
     private static bool IsInitOnly(PropertyInfo property)
@@ -4726,7 +4811,7 @@ internal static class ConfigurationContractTests
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, participant)));
             check("configuration activation rejects another participant", Throws<InvalidOperationException>(() =>
                 StorageConfiguration.ConfigurationStorageBridge.Activate(ClockBindings.Source, new SyntheticParticipant())));
-            check("configuration module migration preserves physical schema 14", AppDatabase.Scalar<long>("PRAGMA user_version") == 14
+            check("configuration module migration preserves physical schema 15", AppDatabase.Scalar<long>("PRAGMA user_version") == 15
                 && AppDatabase.GetMeta("configuration_schema") == "1");
             // #129 S3：空 instanceId 不是「野目标」，它本身就是内置驱动的身份
             // （qq.private / qq.official / local 三个驱动的 InstanceId 就是空串），所以冻结时原样保留；
@@ -4759,20 +4844,20 @@ internal static class ConfigurationContractTests
             ConfigurationSaveRequest Request(int? desire = null, ImmutableArray<SecretEdit> secrets = default)
                 => new("cfg-0.3.3", new(AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1")),
                     new(generation, clock.Now.ToUnixTimeSeconds(), Guid.NewGuid()),
-                    new(desire is null ? null : new BehaviorChanges { AiDesire = FieldEdit<int>.Set(desire.Value) },
+                    new(desire is null ? null : new BehaviorChanges { GroupInterjectionProbability = FieldEdit<int>.Set(desire.Value) },
                         null, null, null, null, null, null, null),
                     secrets.IsDefault ? ImmutableArray<SecretEdit>.Empty : secrets);
             var firstRequest = Request(20);
             var first = await store.SaveAsync(caller, firstRequest);
             check("configuration synthetic participant commits version and user facts", first.Code == ConfigurationResultCode.Ok
                 && first.Receipt is { CommitState: CommitState.Committed } && first.CurrentVersion.Value == 1
-                && AppDatabase.Scalar<long>("SELECT user_mode FROM configuration_field_modes WHERE field_id=26") == 2);
+                && AppDatabase.Scalar<long>("SELECT user_mode FROM configuration_field_modes WHERE field_id=149") == 2);
             check("configuration retained strict fingerprint encoding remains unchanged", StrictFingerprintMatches(caller, firstRequest));
             var replay = await store.SaveAsync(caller, firstRequest);
             check("configuration same key replays before stale CAS", replay.Replayed && replay.Code == ConfigurationResultCode.Ok
                 && replay.Receipt?.CommittedVersion == first.Receipt?.CommittedVersion && participant.Writes == 1);
             var conflict = await store.SaveAsync(caller, firstRequest with
-                { Changes = firstRequest.Changes with { Behavior = new() { AiDesire = FieldEdit<int>.Set(21) } } });
+                { Changes = firstRequest.Changes with { Behavior = new() { GroupInterjectionProbability = FieldEdit<int>.Set(21) } } });
             check("configuration same key different intent conflicts", conflict.Code == ConfigurationResultCode.IdempotencyConflict
                 && participant.Writes == 1);
             var stale = await store.SaveAsync(caller, Request(21) with { ExpectedVersion = new(0) });
@@ -4838,7 +4923,7 @@ internal static class ConfigurationContractTests
             var raceBase = Request(50);
             var race = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Task.Run(async () =>
                 await store.SaveAsync(caller, raceBase with { Key = raceBase.Key with { Nonce = Guid.NewGuid() },
-                    Changes = raceBase.Changes with { Behavior = new() { AiDesire = FieldEdit<int>.Set(50 + i) } } }))));
+                    Changes = raceBase.Changes with { Behavior = new() { GroupInterjectionProbability = FieldEdit<int>.Set(50 + i) } } }))));
             check("configuration same-version concurrent writers have one winner", race.Count(r => r.Code == ConfigurationResultCode.Ok) == 1
                 && race.Count(r => r.Code == ConfigurationResultCode.VersionConflict) == 7);
             await CheckRestartRecovery(firstRequest, check);
@@ -4938,7 +5023,7 @@ internal static class ConfigurationContractTests
         check("configuration private legacy replay does not persist again", replay.Replayed && replay.Code == ConfigurationResultCode.Ok
             && participant.Writes == writes && replay.Receipt?.CommittedVersion == legacy.Receipt?.CommittedVersion);
         var altered = await Legacy(staleIntent with
-            { Changes = staleIntent.Changes with { Behavior = new() { AiDesire = FieldEdit<int>.Set(66) } } });
+            { Changes = staleIntent.Changes with { Behavior = new() { GroupInterjectionProbability = FieldEdit<int>.Set(66) } } });
         check("configuration private legacy altered intent conflicts", altered.Code == ConfigurationResultCode.IdempotencyConflict);
         check("configuration strict cannot replay legacy profile key", (await store.SaveAsync(caller, staleIntent)).Code
             == ConfigurationResultCode.IdempotencyConflict);
@@ -4970,7 +5055,7 @@ internal static class ConfigurationContractTests
         var baseline = requestFactory(null, ImmutableArray<SecretEdit>.Empty);
         var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Task.Run(async () => await Legacy(baseline with
             { Key = baseline.Key with { Nonce = Guid.NewGuid() },
-                Changes = baseline.Changes with { Behavior = new() { AiDesire = FieldEdit<int>.Set(70 + i) } } }))));
+                Changes = baseline.Changes with { Behavior = new() { GroupInterjectionProbability = FieldEdit<int>.Set(70 + i) } } }))));
         check("configuration concurrent private legacy writers merge latest committed versions", results.All(r => r.Code == ConfigurationResultCode.Ok)
             && results.Select(r => r.Receipt!.ObservedVersion.Value).OrderBy(v => v).SequenceEqual(Enumerable.Range(0, 8).Select(i => version + i))
             && AppDatabase.Scalar<long>("SELECT version FROM configuration_state WHERE id=1") == version + 8);
@@ -5027,7 +5112,7 @@ internal static class ConfigurationContractTests
             var replay = await store.SaveAsync(subject, first with { ExpectedVersion = first.ExpectedVersion });
             check("configuration exact replay precedes subject capacity", replay.Replayed && replay.Code == ConfigurationResultCode.NoChanges);
             var conflict = await store.SaveAsync(subject, first with
-                { Changes = first.Changes with { Behavior = new() { AiDesire = FieldEdit<int>.Set(participant.Value == 62 ? 63 : 62) } } });
+                { Changes = first.Changes with { Behavior = new() { GroupInterjectionProbability = FieldEdit<int>.Set(participant.Value == 62 ? 63 : 62) } } });
             check("configuration altered replay conflicts before subject capacity", conflict.Code == ConfigurationResultCode.IdempotencyConflict);
             var other = await store.SaveAsync(caller with { SubjectId = "synthetic-capacity-other" },
                 first with { Key = first.Key with { Nonce = Guid.NewGuid() } });
@@ -5148,6 +5233,11 @@ internal static class ConfigurationContractTests
 
     private class SyntheticParticipant : StorageConfiguration.ConfigurationStorageParticipant
     {
+        private readonly object _writeGate = new();
+        internal override void CoordinateWrite(Action write)
+        {
+            lock (_writeGate) write();
+        }
         internal bool Allow = true;
         internal int Writes;
         internal ManualResetEventSlim? PrepareStarted;
@@ -5159,7 +5249,7 @@ internal static class ConfigurationContractTests
         internal Action<SqliteConnection, ConfigurationVersion, ConfigurationVersion>? InitializationAudit;
         internal bool ManageDevices;
         internal Action<SqliteConnection, DeviceKey>? DeviceRuntimeAudit;
-        internal int Value => JsonSerializer.Deserialize<AppSettings>(AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1") ?? "{}")!.AiDesire;
+        internal int Value => JsonSerializer.Deserialize<AppSettings>(AppDatabase.Scalar<string>("SELECT json FROM settings WHERE id=1") ?? "{}")!.GroupInterjectionProbability;
         internal override bool Initialize(SqliteConnection connection, long serverUnixSeconds)
         {
             InitializationCalls++;
@@ -5187,9 +5277,9 @@ internal static class ConfigurationContractTests
                 throw new InvalidOperationException("synthetic_prepare_timeout");
             using var command = connection.CreateCommand(); command.CommandText = "SELECT json FROM settings WHERE id=1";
             var baseline = JsonSerializer.Deserialize<AppSettings>(command.ExecuteScalar() as string ?? "{}")!;
-            var old = baseline.AiDesire;
-            if (intent.Behavior!.AiDesire.TryGetValue(out var value)) baseline.AiDesire = value;
-            return new(baseline.AiDesire != old, ImmutableArray<FieldError>.Empty,
+            var old = baseline.GroupInterjectionProbability;
+            if (intent.Behavior!.GroupInterjectionProbability.TryGetValue(out var value)) baseline.GroupInterjectionProbability = value;
+            return new(baseline.GroupInterjectionProbability != old, ImmutableArray<FieldError>.Empty,
                 ImmutableArray<DeviceKeyAssignment>.Empty,
                 conn =>
                 {
@@ -5231,16 +5321,19 @@ internal static class ConfigurationContractTests
         {
             new JargonEntry { Scope = "synthetic:reuse", Phrase = "synthetic-one", Meaning = "synthetic-meaning", Status = JargonStatus.Confirmed },
             new JargonEntry { Scope = "synthetic:reuse", Phrase = "synthetic-two", Meaning = "synthetic-meaning", Status = JargonStatus.Pending },
+            new JargonEntry { Scope = "synthetic:reuse", Phrase = "synthetic-local-manual", Meaning = "synthetic-meaning", Status = JargonStatus.Manual },
             new JargonEntry { Scope = "global", Phrase = "synthetic-global", Meaning = "synthetic-meaning", Status = JargonStatus.Manual }
         }) await jargon.UpsertAsync(entry);
         report((await jargon.GetAsync("synthetic:reuse", "synthetic-one"))?.Status == JargonStatus.Confirmed,
             "configuration query reuse preserves Jargon exact lookup mapping");
-        report((await jargon.ListByScopeAsync("synthetic:reuse")).Count == 2
+        report((await jargon.ListByScopeAsync("synthetic:reuse")).Count == 3
             && (await jargon.ListByScopeAsync("synthetic:reuse", JargonStatus.Confirmed)).Count == 1,
             "configuration query reuse preserves Jargon scoped and status predicates");
-        report((await jargon.ListConfirmedForPromptAsync("synthetic:reuse")).Count == 2
+        var promptJargons = await jargon.ListConfirmedForPromptAsync("synthetic:reuse");
+        report(promptJargons.Count == 2
+            && promptJargons.All(j => j.Scope == "synthetic:reuse")
             && (await jargon.ListConfirmedForPromptAsync("synthetic:reuse", 1)).Count == 1,
-            "configuration query reuse preserves Jargon global union and limits");
+            "configuration query reuse preserves Jargon strict scope isolation and limits");
         var prompts = new PromptTemplateStore();
         var v1 = await prompts.SaveVersionAsync("synthetic-reuse-prompt", "synthetic-initial");
         var v2 = await prompts.SaveVersionAsync("synthetic-reuse-prompt", "synthetic-next");

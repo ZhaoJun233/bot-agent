@@ -23,7 +23,7 @@ describe('AuthGate', () => {
   it('品牌标记为装饰元素，页面只保留一个可读主标题', () => {
     const wrapper = mountGate()
     expect(wrapper.findAll('h1')).toHaveLength(1)
-    expect(wrapper.get('h1').text()).toBe('连接 ZBA')
+    expect(wrapper.get('h1').text()).toBe('连接 BotAgent')
     expect(wrapper.get('.brand-mark').attributes('aria-hidden')).toBe('true')
     expect(wrapper.get('.auth-wordmark').text()).toContain('BotAgent')
   })
@@ -43,7 +43,7 @@ describe('AuthGate', () => {
 
   it('忙碌时显示加载提示并禁用连接', () => {
     const wrapper = mountGate({ busy: true })
-    expect(wrapper.get('[data-testid="auth-loading"]').text()).toContain('正在检查')
+    expect(wrapper.get('[data-testid="auth-loading"]').text()).toContain('正在验证')
     expect(wrapper.get('[data-testid="connect-button"]').attributes('disabled')).toBeDefined()
   })
 

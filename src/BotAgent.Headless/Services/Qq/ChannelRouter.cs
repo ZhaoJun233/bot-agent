@@ -97,6 +97,9 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     /// <summary>至少一路在线（面板/健康检查用）。</summary>
     public bool IsConnected => _sources.Any(s => s.IsConnected);
 
+    public bool SupportsStructuredMarkdown(string channel)
+        => !string.IsNullOrWhiteSpace(channel) && _byChannel.TryGetValue(channel, out var src) && src.SupportsStructuredMarkdown(channel);
+
     // ---------- 通道台账（面板分块、命令过滤都靠它）----------
 
     public IReadOnlyList<IQqChatSource> Sources => _sources;
@@ -222,7 +225,8 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
             {
                 lease = Capture(source, native.Ref);
                 if (lease is null) return;
-                envelope = new(lease.Origin, native);
+                envelope = new(lease.Origin, native, legacy.IsReliableIdentity);
+                if (lease.Origin.Driver.PlatformId == PlatformId.QqOfficial && !envelope.IsReliableIdentity) return;
             }
             catch (ArgumentException) { _log?.Invoke("invalid_platform_envelope"); return; }
             var channel = Channels.Declared(source.Channel);
@@ -365,6 +369,9 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     public Task<bool> SendMusicAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "music")?.SendMusicAsync(isGroup, targetId, platform, songId, title, ct) ?? UnsupportedBoolAsync());
 
+    public Task<SendResult> SendMusicWithReceiptAsync(bool isGroup, long targetId, string platform, string songId, string title = "", CancellationToken ct = default)
+        => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "music")?.SendMusicWithReceiptAsync(isGroup, targetId, platform, songId, title, ct) ?? UnsupportedSendAsync());
+
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId)?.SendTextAsync(isGroup, targetId, text, ct, replyToMessageId, directAddress) ?? UnsupportedSendAsync());
 
@@ -374,8 +381,14 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     public Task<bool> SendVoiceAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "voice")?.SendVoiceAsync(isGroup, targetId, audioUrl, ct) ?? UnsupportedBoolAsync());
 
+    public Task<SendResult> SendVoiceWithReceiptAsync(bool isGroup, long targetId, string audioUrl, CancellationToken ct = default)
+        => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "voice")?.SendVoiceWithReceiptAsync(isGroup, targetId, audioUrl, ct) ?? UnsupportedSendAsync());
+
     public Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "image")?.SendImageAsync(isGroup, targetId, data, ct, replyToMessageId) ?? UnsupportedBoolAsync());
+
+    public Task<SendResult> SendImageWithReceiptAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
+        => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "image")?.SendImageWithReceiptAsync(isGroup, targetId, data, ct, replyToMessageId) ?? UnsupportedSendAsync());
 
     public Task<bool> SendPokeAsync(bool isGroup, long targetId, long userId, CancellationToken ct = default)
         => MemoryUseScope.Use(() => Resolve(isGroup, targetId, "poke")?.SendPokeAsync(isGroup, targetId, userId, ct) ?? UnsupportedBoolAsync());
@@ -421,6 +434,17 @@ public sealed class ChannelRouter : IQqChatSource, IPlatformHistorySource, IChan
     public Task<IReadOnlyList<string>> RefreshImageUrlsAsync(long messageId, CancellationToken ct = default)
         => ResolveRead("image", messageId)?.RefreshImageUrlsAsync(messageId, ct)
             ?? Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+    public Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundVoiceAsync(
+        InboundVoiceAttachment voice, long messageId, CancellationToken ct = default)
+        => ResolveRead("text", messageId)?.ResolveInboundVoiceAsync(voice, messageId, ct)
+            ?? Task.FromResult<(byte[]?, string?, string)>((null, voice.WavUrl, "voice.wav"));
+
+    public Task<(byte[]? Data, string? RemoteUrl, string FileName)> ResolveInboundFileAsync(
+        InboundFileAttachment file, bool isGroup, long targetId, long messageId, CancellationToken ct = default)
+        => (messageId > 0 ? ResolveRead("text", messageId) : Resolve(isGroup, targetId, "text"))
+            ?.ResolveInboundFileAsync(file, isGroup, targetId, messageId, ct)
+            ?? Task.FromResult<(byte[]?, string?, string)>((null, file.DownloadUrl, file.FileName));
 
     /// <summary>上层登记会话用（见 <see cref="RegisterKey"/>）。</summary>
     public void RegisterTarget(string channel, bool isGroup, long id)

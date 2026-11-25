@@ -20,10 +20,16 @@ internal sealed class AgentTaskExecutor(AgentCommandService agent) : IAgentTaskE
 
     public async Task<AgentTaskExecution> ExecuteAsync(AgentTaskRequest request, CancellationToken ct)
     {
+        if (agent.IsChatTask(request.Id))
+        {
+            return await agent.ExecuteChatTaskAsync(request, ct).ConfigureAwait(false);
+        }
+
         var seconds = Math.Clamp((int)Math.Ceiling(request.Timeout.TotalSeconds), MinSeconds, MaxSeconds);
         var task = await agent.RunPanelAgentDirectAsync(
             request.SourceKey, request.SessionId, request.Prompt, seconds, request.Target, ct,
-            request.ToolScope, request.PythonToolLeases).ConfigureAwait(false);
+            request.ToolScope, request.PythonToolLeases,
+            allowQqHost: !request.Id.StartsWith("st-", StringComparison.Ordinal)).ConfigureAwait(false);
         return new AgentTaskExecution
         {
             Ok = task.Ok,

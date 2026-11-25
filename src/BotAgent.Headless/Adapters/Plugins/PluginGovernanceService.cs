@@ -12,6 +12,7 @@ public sealed class PluginGovernanceService
 {
     private static readonly TimeSpan CheckedTtl = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan SnapshotMaxAge = TimeSpan.FromDays(7);
+    private static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(5);
     private readonly Func<DateTimeOffset> _clock;
     private readonly PluginCatalogSource _source;
     private readonly PluginGovernanceCacheStore _cache;
@@ -78,7 +79,15 @@ public sealed class PluginGovernanceService
 
     public async Task RefreshAsync(CancellationToken ct)
     {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        // Control-plane previews must also bound queueing and response-body reads.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(RefreshTimeout);
+        try { await _gate.WaitAsync(deadline.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            // Another refresh or commit owns publication; retain its policy and state.
+            return;
+        }
         try
         {
             var source = SourceUrl();
@@ -86,7 +95,8 @@ public sealed class PluginGovernanceService
             var checkedAt = now.UtcDateTime.ToString("O");
             try
             {
-                var bytes = await _source.FetchAsync(source, ct).ConfigureAwait(false);
+                var bytes = await _source.FetchAsync(source, deadline.Token).ConfigureAwait(false);
+                deadline.Token.ThrowIfCancellationRequested();
                 var incoming = PluginGovernanceDocument.Parse(bytes);
                 var snapshotTime = PluginGovernanceDocument.Timestamp(incoming.GeneratedAt);
                 if (snapshotTime > now.AddMinutes(5)) throw PluginGovernanceDocument.Invalid();
@@ -110,11 +120,12 @@ public sealed class PluginGovernanceService
                 var cached = JsonSerializer.SerializeToUtf8Bytes(merged, PluginGovernanceDocument.Json);
                 if (cached.Length > PluginGovernanceDocument.MaxCacheBytes || merged.Entries.Length > 131072)
                     throw new IOException("plugin_governance_cache_full");
-                await _cache.SaveAsync(cached, ct).ConfigureAwait(false);
+                await _cache.SaveAsync(cached, deadline.Token).ConfigureAwait(false);
+                deadline.Token.ThrowIfCancellationRequested();
                 lock (_stateLock) _status = new(aged ? "cached" : "fresh", source, incoming.GeneratedAt, checkedAt,
                     aged ? "plugin_governance_expired" : null);
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested && ex is InvalidDataException or PluginCatalogException or IOException or UnauthorizedAccessException or HttpRequestException or JsonException or ArgumentException or InvalidOperationException or TaskCanceledException)
+            catch (Exception ex) when (!ct.IsCancellationRequested && ex is InvalidDataException or PluginCatalogException or IOException or UnauthorizedAccessException or HttpRequestException or JsonException or ArgumentException or InvalidOperationException or OperationCanceledException)
             {
                 var code = ex.Message == "plugin_governance_stale" ? "plugin_governance_stale" : "plugin_governance_unavailable";
                 lock (_stateLock) _status = new(_document is null ? "unavailable" : "cached", source, _document?.GeneratedAt, checkedAt, code);
@@ -129,8 +140,21 @@ public sealed class PluginGovernanceService
         try { EnsureAllowed(manifest); return new CommitLease(_gate); }
         catch { _gate.Release(); throw; }
     }
+
+    internal async Task<IDisposable> AcquireCommitBatchAsync(IEnumerable<PluginPackageManifest> manifests, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            foreach (var manifest in manifests) EnsureAllowed(manifest);
+            return new CommitLease(_gate);
+        }
+        catch { _gate.Release(); throw; }
+    }
+
     private sealed class CommitLease(SemaphoreSlim gate) : IDisposable
     {
-        public void Dispose() => gate.Release();
+        private SemaphoreSlim? _gate = gate;
+        public void Dispose() => Interlocked.Exchange(ref _gate, null)?.Release();
     }
 }

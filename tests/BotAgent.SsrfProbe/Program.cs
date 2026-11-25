@@ -25,6 +25,9 @@ async Task Test(string name, Func<Task> action)
 }
 try
 {
+    await Test("public page contract", () => WebPageTransportChecks.Run(Check));
+    await Test("grounded model boundary", () => GroundedModelChecks.Run(Check));
+    await Test("research configuration and circuit ports", () => ResearchPortChecks.Run(Check));
     await Test("URL/address policy", () =>
     {
         foreach (var url in new[] { "", "file:///tmp/image", "ftp://example.com/image", "http://localhost/image", "http://service.local./image", "http://service.internal/image", "http://a.localhost/image" })
@@ -161,14 +164,14 @@ try
             ? SyntheticHttp.Redirect("https://cdn.example.com/final")
             : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(pageBody) });
         var settings = new AppSettings { EnableLinkPreview = true, ModelBaseUrl = "http://localhost:9/v1", Model = "synthetic-model", ApiKey = "synthetic-key", WebSearchUseModelSearch = true };
-        var preview = await new LinkPreviewer(pages, () => settings, _ => { }).PreviewAsync("https://example.com/start", default);
+        var preview = await ResearchFactories.Links(pages, () => settings, _ => { }).PreviewAsync("https://example.com/start", default);
         Check(preview is { Title: "Synthetic" } && preview.Url == "https://cdn.example.com/final" && pages.Urls.Count == 2,
             "link preview follows public hop and reports final URL");
         var models = new SyntheticHttp(request => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"synthetic answer\"}]}}]}")
         });
-        var search = new WebSearchService(models, () => settings, _ => { }, pageHttp: pages);
+        var search = ResearchFactories.Search(models, () => settings, _ => { }, pageHttp: pages);
         var read = await search.ReadPageAsync("https://example.com/start", default);
         Check(read.Text is not null && read.Error is null && pages.Urls.Count == 4 && models.Urls.Count == 0,
             "untrusted page reads use dedicated page transport");
@@ -178,11 +181,11 @@ try
             "trusted configured internal model search remains available");
         Check(pages.Authorization.All(auth => auth is null), "page hops do not forward model authorization");
         var deniedPages = new SyntheticHttp(_ => SyntheticHttp.Redirect("http://127.0.0.1/private"));
-        var deniedSearch = new WebSearchService(models, () => settings, _ => { }, pageHttp: deniedPages);
+        var deniedSearch = ResearchFactories.Search(models, () => settings, _ => { }, pageHttp: deniedPages);
         Check((await deniedSearch.ReadPageAsync("https://example.com/start", default)).Text is null && deniedPages.Urls.Count == 1,
             "page private redirect is blocked");
         var deniedLink = new SyntheticHttp(_ => SyntheticHttp.Redirect("http://127.0.0.1/private"));
-        Check(await new LinkPreviewer(deniedLink, () => settings, _ => { }).PreviewAsync("https://example.com/start", default) is null && deniedLink.Urls.Count == 1,
+        Check(await ResearchFactories.Links(deniedLink, () => settings, _ => { }).PreviewAsync("https://example.com/start", default) is null && deniedLink.Urls.Count == 1,
             "link private redirect is blocked");
     });
 
@@ -211,7 +214,7 @@ try
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(File.ReadAllText));
         var fetcher = File.ReadAllText(Path.Combine(root, "src/BotAgent.Headless/Adapters/Net/HttpFetcher.cs"));
-        foreach (var name in new[] { "imageHttp", "linkHttp", "researchPageHttp" })
+        foreach (var name in new[] { "imageHttp", "researchPageHttp" })
         {
             var block = Regex.Match(composition, @"var " + name + @" = new HttpFetcher\([\s\S]*?;").Value;
             Check(block.Contains("allowAutoRedirect: false") && block.Contains("rejectPrivateDestinations: !allowPrivateOutbound"),
@@ -222,7 +225,9 @@ try
             var block = Regex.Match(composition, @"var " + name + @" = new HttpFetcher\([\s\S]*?;").Value;
             Check(block.Length > 0 && !block.Contains("rejectPrivateDestinations"), "production composition retains trusted configured client: " + name);
         }
-        Check(composition.Contains("new ImageDownloader(imageHttp)") && composition.Contains("new LinkPreviewer(linkHttp") && composition.Contains("searchBreaker, researchPageHttp)"),
+        Check(composition.Contains("new ImageDownloader(imageHttp)") && composition.Contains("new ResearchPluginServices(") &&
+              composition.Contains("new WebPageTransport(researchPageHttp,") &&
+              composition.Contains("new BotAgent.Model.GeminiGroundedTextModel(researchHttp, HostModelOptions.CreateAccessor(settingsBox))"),
             "production secure clients are wired to image/link/page consumers");
         Check(fetcher.Contains("OutboundAddressPolicy.IsBlocked(address)") && fetcher.Contains("socket.ConnectAsync(address, context.DnsEndPoint.Port, ct)") &&
               !fetcher.Contains("socket.ConnectAsync(context.DnsEndPoint"),

@@ -44,7 +44,7 @@ internal sealed class OneBotActionClient
         // An unknown RawCall can disclose through arbitrary parameters. Fail closed;
         // the normal no-memory protocol surface remains unchanged.
         if (action is not ("send_group_msg" or "send_private_msg" or "send_msg"
-            or "send_group_forward_msg" or "send_private_forward_msg")) return null;
+            or "send_group_forward_msg" or "send_private_forward_msg" or "group_poke" or "friend_poke")) return null;
         try
         {
             var json = JsonNode.Parse(parameters);

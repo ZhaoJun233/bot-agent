@@ -26,6 +26,8 @@ internal static class PanelLegacyConfiguration
     {
         ArgumentNullException.ThrowIfNull(body);
         ArgumentNullException.ThrowIfNull(trustedOptions);
+        if (body.Any(property => ReplyConfigurationFields.IsRetired(property.Key)))
+            return PanelLegacySecrets.RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "reply_configuration_removed");
         if (PanelLegacySecrets.HasOfficialSecretInput(body))
             return PanelLegacySecrets.RejectedLegacySecrets(ConfigurationResultCode.ValidationFailed, "official_secret_environment_only");
         try

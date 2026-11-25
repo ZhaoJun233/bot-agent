@@ -16,7 +16,8 @@ using StorageClock = StorageModule::BotAgent.Storage.StorageClock;
 using ModelBreaker = ModelModule::BotAgent.Services.Resilience.ProviderCircuitBreaker;
 using ModelPrompt = ModelModule::BotAgent.Services.Model.PromptBuilder;
 using StorageDatabase = StorageModule::BotAgent.Adapters.Persistence.AppDatabase;
-using StorageQuota = StorageModule::BotAgent.Adapters.Persistence.TenantQuotaStore;
+using StorageQuota = BotAgent.TestFixtures.QuotaFixture;
+using StorageUsage = StorageModule::BotAgent.Adapters.Persistence.TokenUsageStore;
 using StorageSessions = StorageModule::BotAgent.Adapters.Persistence.AgentSessionStore;
 
 namespace BotAgent.ReviewRemediationProbe;
@@ -49,6 +50,10 @@ internal static class ClockContractTests
                     "clock_not_initialized", Check, "model consumer has no system fallback");
                 ExpectCode(() => new StorageQuota().GetQuota("synthetic"),
                     "clock_not_initialized", Check, "storage rejects before database access");
+                ExpectCode(() => new StorageUsage().GetUsage("synthetic"),
+                    "clock_not_initialized", Check, "usage read rejects before database access");
+                ExpectCode(() => new StorageUsage().RecordUsage("synthetic", 1, 1),
+                    "clock_not_initialized", Check, "usage write rejects before database access");
                 Check(!StorageDatabase.IsReady, "uninitialized storage consumer does not initialize database");
             }
             else
@@ -126,8 +131,7 @@ internal static class ClockContractTests
             check(localOnly.RecordHardFailure().CooldownUntil == new DateTimeOffset(2040, 1, 1, 0, 2, 0, TimeSpan.Zero),
                 "explicit local model clock remains local");
             var request = new ModelPrompt.PromptRequest(
-                SystemPrompt: "synthetic", BotIdentity: null, Persona: null, AiDesire: 0,
-                Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
+                SystemPrompt: "synthetic", BotIdentity: null, Persona: null, Window: Array.Empty<ChatMessage>(), QuotableIds: Array.Empty<long>(), ProfilesText: null,
                 Stickers: null, PokeContext: false, Proactive: false, MoodText: null, MusicText: null,
                 LinkText: null, RecallText: null, GroupRolesText: null, VibeHint: null, SearchText: null,
                 SuitabilityThreshold: 10, EnableListen: false, EnableVoice: false, VoiceMaxChars: 30,

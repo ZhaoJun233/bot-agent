@@ -13,6 +13,14 @@ public static class TextSnapshotFile
     private static readonly Encoding OutputEncoding = new UTF8Encoding(false);
     private static readonly object PublicationGate = new();
 
+    /// <summary>Exclusive writer ownership for a snapshot; caller creates the parent directory.</summary>
+    public static IDisposable AcquireExclusiveWriter(string path)
+        => OpenFile(Path.GetFullPath(path) + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
+    /// <summary>Shared process ownership; excludes an offline writer until all holders exit.</summary>
+    public static IDisposable AcquireSharedReader(string path)
+        => OpenFile(Path.GetFullPath(path) + ".lock", FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
     public static string? Read(string path, long maxBytes = long.MaxValue)
     {
         using var input = OpenSnapshot(path, maxBytes);
@@ -97,8 +105,7 @@ public static class TextSnapshotFile
         FileStream input;
         try
         {
-            input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
-                BufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            input = OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         }
         catch (FileNotFoundException) { return null; }
         catch (DirectoryNotFoundException) { return null; }
@@ -111,7 +118,10 @@ public static class TextSnapshotFile
     }
 
     private static FileStream CreateSnapshot(string temporary)
-        => new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, BufferSize,
+        => OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+
+    private static FileStream OpenFile(string path, FileMode mode, FileAccess access, FileShare share)
+        => new FileStream(path, mode, access, share, BufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
     private static void AppendBounded(MemoryStream bytes, byte[] buffer, int count, long maxBytes)
@@ -130,9 +140,19 @@ public static class TextSnapshotFile
 
     private static void Publish(string temporary, string target)
     {
-        // Concurrent overwrite renames can race inside Win32 even with unique temporary files.
-        // Serialize only the short publication step, never the file writes or readers.
-        lock (PublicationGate) File.Move(temporary, target, overwrite: true);
+        // Replace preserves an open reader's snapshot when it grants delete sharing.
+        // A Windows overwrite move can instead deny access even with that sharing.
+        // Serialize the publication point; writes and readers remain independent.
+        lock (PublicationGate)
+        {
+            try { File.Replace(temporary, target, destinationBackupFileName: null); }
+            catch (FileNotFoundException)
+            {
+                // First publication only. If another process created the target,
+                // refuse the non-overwriting move rather than replacing its state.
+                File.Move(temporary, target);
+            }
+        }
     }
 
     private static void RemoveTemporary(string temporary)

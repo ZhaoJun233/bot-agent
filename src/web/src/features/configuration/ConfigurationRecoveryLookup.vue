@@ -19,6 +19,10 @@ const validKey = computed(() => {
   return parts !== null && parts[1] !== '0'.repeat(32) && parts[3] !== '0'.repeat(32)
     && BigInt(parts[2]!) <= 9223372036854775807n - 86400n
 })
+const formatWarning = computed(() => {
+  if (!key.value || validKey.value) return ''
+  return '格式不正确：应为 cfg1:<32位hex代际>:<时间戳秒>:<32位hex随机串>（不要包含首尾空格）。'
+})
 const receipt = computed(() => result.value?.code === 0 ? result.value.receipt : undefined)
 const outcome = computed(() => {
   if (!receipt.value) return null
@@ -91,20 +95,36 @@ async function find(): Promise<void> {
 <template>
   <details class="inline-notice configuration-recovery" data-testid="config-recovery">
     <summary>核对先前的配置保存</summary>
-    <p :id="id + '-help'">重新连接原服务、使用原身份后，粘贴自行保留的配置操作键。这里只查询原回执，不重新保存配置。</p>
+    <p :id="id + '-help'">粘贴自行保留的 <code>cfg1:</code> 原操作键，仅查询历史回执，不会重新保存。</p>
     <form class="recovery-form" @submit.prevent="find">
       <label :for="id + '-key'">原配置操作键</label>
-      <input :id="id + '-key'" v-model="key" data-testid="config-recovery-key" type="text" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="!allowed" :aria-describedby="id + '-help ' + id + '-format'">
-      <p :id="id + '-format'">请完整粘贴以 cfg1: 开头的原操作键；不会自动补齐或替换。</p>
+      <input
+        :id="id + '-key'"
+        v-model="key"
+        data-testid="config-recovery-key"
+        type="text"
+        autocomplete="off"
+        autocapitalize="off"
+        :spellcheck="false"
+        :disabled="!allowed"
+        placeholder="cfg1:..."
+        :aria-invalid="formatWarning ? 'true' : undefined"
+        :aria-describedby="id + '-help ' + id + '-format'"
+      >
+      <p :id="id + '-format'" :class="{ 'format-warn': Boolean(formatWarning) }">
+        {{ formatWarning || '请完整粘贴以 cfg1: 开头的原操作键；不会自动补齐或替换。' }}
+      </p>
       <p v-if="pending">当前保存仍在进行或等待核对，请先使用原来的“核对结果”入口。</p>
       <p v-else-if="!enabled">请先进入管理员模式，再核对原键。</p>
-      <button type="submit" class="tonal" data-testid="config-recovery-find" :disabled="!allowed || !validKey || busy">{{ busy ? '正在核对…' : '核对原保存' }}</button>
+      <button type="submit" class="tonal" data-testid="config-recovery-find" :disabled="!allowed || !validKey || busy">
+        {{ busy ? '正在核对…' : '核对原保存' }}
+      </button>
     </form>
     <div aria-live="polite" aria-atomic="true">
       <p v-if="result" data-testid="config-recovery-code">{{ resultMessage }}</p>
       <section v-if="receipt && outcome" data-testid="config-recovery-receipt" :aria-labelledby="id + '-receipt-title'">
         <h2 :id="id + '-receipt-title'">该次提交的历史结果</h2>
-        <p class="history-boundary">历史回执不代表当前配置值和运行状态。请使用页面上方的“重新读取”查看当前情况；本次查询不会清空草稿或解除其他未决操作。</p>
+        <p class="history-boundary">历史回执不代表当前配置值和运行状态。请重新读取查看当前情况；本次查询不会清空草稿或解除其他未决操作。</p>
         <p :data-tone="outcome.tone"><strong>{{ outcome.title }}</strong> · {{ outcome.detail }}</p>
         <dl>
           <dt>提交状态</dt><dd>{{ configurationCommitLabel(receipt.commitState) }}</dd>
@@ -122,10 +142,11 @@ async function find(): Promise<void> {
 
 <style scoped>
 .configuration-recovery { min-width: 0; }
-.recovery-form { display: grid; gap: 0.5rem; }
-.recovery-form input { width: 100%; min-width: 0; box-sizing: border-box; }
+.recovery-form { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
+.recovery-form input { width: 100%; min-width: 0; box-sizing: border-box; font-family: var(--font-mono); font-size: var(--text-xs); }
 .recovery-form button { justify-self: start; }
 .configuration-recovery p, .configuration-recovery dd, .configuration-recovery li { overflow-wrap: anywhere; }
 .configuration-recovery dd { margin: 0 0 0.6rem; }
+.format-warn { color: var(--warn-text); font-weight: 500; }
 .history-boundary { font-weight: 600; }
 </style>

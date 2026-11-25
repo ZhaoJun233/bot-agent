@@ -83,4 +83,66 @@ public sealed partial class ZbaEndpoint
         var result = await _backend.SavePluginSettingsAsync(caller, pluginId, body, ct).ConfigureAwait(false);
         return Json(result, requestId);
     }
+
+    private async ValueTask<ZbaResponse> HandlePluginUiSessionOpenAsync(
+        ConfigurationCaller caller, string pluginId, string requestId, CancellationToken ct)
+    {
+        ZbaRules.ValidatePluginId(pluginId);
+        var result = await _backend.OpenPluginUiSessionAsync(caller, pluginId, ct).ConfigureAwait(false);
+        return Json(result, requestId);
+    }
+
+    private async ValueTask<ZbaResponse> HandlePluginUiSessionCloseAsync(
+        ConfigurationCaller caller, string pluginId, string sessionId, string requestId, CancellationToken ct)
+    {
+        ZbaRules.ValidatePluginId(pluginId);
+        var result = await _backend.ClosePluginUiSessionAsync(caller, pluginId, sessionId, ct).ConfigureAwait(false);
+        return Json(result, requestId);
+    }
+
+    private async ValueTask<ZbaResponse> HandlePluginUiAssetAsync(
+        ZbaRequest request, string pluginId, string releaseSha, string ticket, string assetPath,
+        string requestId, CancellationToken ct)
+    {
+        var hasAuthHeader = request.Headers.ContainsKey("Authorization");
+        var authenticatedCaller = (hasAuthHeader || string.Equals(ticket, "auth", StringComparison.Ordinal))
+            && _security.Authorize(request, ZbaScope.Read).Ok;
+        var result = await _backend.ReadPluginUiAssetAsync(pluginId, releaseSha, ticket, assetPath, authenticatedCaller, ct).ConfigureAwait(false);
+        if (result.Status != 200)
+            return Error(result.Status, result.ErrorCode ?? "plugin_ui_asset_not_found", "无法加载插件界面资源。",
+                requestId: requestId, authenticate: result.Status == 401);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Cache-Control"] = result.CacheControl,
+            ["X-Content-Type-Options"] = "nosniff",
+            ["Referrer-Policy"] = "no-referrer",
+        };
+        if (result.ContentSecurityPolicy is not null) headers["Content-Security-Policy"] = result.ContentSecurityPolicy;
+        return new ZbaResponse(200, result.ContentType, result.Bytes, headers);
+    }
+
+    private async ValueTask<ZbaResponse> HandlePluginBundlePreviewAsync(
+        ConfigurationCaller caller, ZbaRequest request, string requestId, CancellationToken ct)
+    {
+        var body = Body<ZbaPluginBundlePreviewRequest>(request);
+        if (body.Manifests is null || body.Manifests.Count is 0 or > 16)
+            throw new ZbaBadRequestException("plugin_bundle_invalid");
+        foreach (var manifest in body.Manifests) ZbaRules.ValidatePluginManifest(manifest);
+        var result = await _backend.PreviewPluginBundleAsync(caller, body, ct).ConfigureAwait(false);
+        return Json(result, requestId);
+    }
+
+    private async ValueTask<ZbaResponse> HandlePluginBundleApplyAsync(
+        ConfigurationCaller caller, ZbaRequest request, string requestId, CancellationToken ct)
+    {
+        var body = Body<ZbaPluginBundleApplyRequest>(request);
+        if (body.Manifests is null || body.Manifests.Count is 0 or > 16)
+            throw new ZbaBadRequestException("plugin_bundle_invalid");
+        foreach (var manifest in body.Manifests) ZbaRules.ValidatePluginManifest(manifest);
+        if (!body.TrustAcknowledged) throw new ZbaBadRequestException("trust_not_acknowledged");
+        ZbaRules.ValidatePluginIdempotencyKey(body.IdempotencyKey);
+        ZbaRules.ValidatePluginRevision(body.ExpectedRevision);
+        var result = await _backend.ApplyPluginBundleAsync(caller, body, ct).ConfigureAwait(false);
+        return Json(result, requestId);
+    }
 }

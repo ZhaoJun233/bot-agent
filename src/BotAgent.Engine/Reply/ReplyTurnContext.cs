@@ -8,8 +8,10 @@ using BotAgent.Services.Conversations;
 using BotAgent.Services.Music;
 using BotAgent.Services.Net;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Platforms;
 using BotAgent.Services.Plugins;
 using BotAgent.Services.Poke;
+using BotAgent.Services.Profiles;
 using BotAgent.Services.Qq;
 using BotAgent.Services.Stickers;
 
@@ -42,6 +44,11 @@ internal sealed class ReplyTurnContext
     private readonly ReplyHooks _hooks;
     private readonly Func<string, bool> _allowsFeature;
     private readonly Action<BotConversation, bool> _setThinking;
+    private readonly Func<IProfilesPolicyContribution?>? _profilesPolicy;
+    private readonly Func<IConversationContribution?>? _conversationPolicy;
+    private readonly Func<IReadOnlyList<ITurnContextContributor>>? _turnContextContributors;
+    private readonly PluginToolNotes? _toolNotes;
+    private readonly ReplyToolAvailability? _replyTools;
 
     /// <summary>每个会话最近一次撤回事件的描述，交给下一轮回复用（用掉就清）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _recallNotes = new();
@@ -59,7 +66,12 @@ internal sealed class ReplyTurnContext
         ReplyHooks hooks,
         Func<string, bool> allowsFeature,
         Action<BotConversation, bool> setThinking,
-        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null)
+        Func<PlatformSourceLease, long, BotAgent.Domain.Messaging.ParticipantId?>? memoryParticipant = null,
+        Func<IProfilesPolicyContribution?>? profilesPolicy = null,
+        Func<IConversationContribution?>? conversationPolicy = null,
+        Func<IReadOnlyList<ITurnContextContributor>>? turnContextContributors = null,
+        PluginToolNotes? toolNotes = null,
+        ReplyToolAvailability? replyTools = null)
     {
         _profiles = profiles;
         _memoryParticipant = memoryParticipant;
@@ -74,6 +86,11 @@ internal sealed class ReplyTurnContext
         _hooks = hooks;
         _allowsFeature = allowsFeature;
         _setThinking = setThinking;
+        _profilesPolicy = profilesPolicy;
+        _conversationPolicy = conversationPolicy;
+        _turnContextContributors = turnContextContributors;
+        _toolNotes = toolNotes;
+        _replyTools = replyTools;
     }
 
     /// <summary>记下“刚有人撤回了一条消息”，下一轮交给模型（取走即清）。</summary>
@@ -90,62 +107,39 @@ internal sealed class ReplyTurnContext
         Domain.Permissions.ChatCapabilitySet caps,
         EffectivePlatformPolicy platformPolicy,
         bool proactive,
-        IPacedReplyAttempt? pacing = null)
+        IPacedReplyAttempt? pacing = null,
+        EffectiveConversationSettings? conversationSettings = null)
     {
+        var effective = conversationSettings ?? ConversationProfileResolver.Resolve(snapshot, platformPolicy, conversation.SourceKey);
+        var effectivePolicy = effective.EffectivePolicy;
+        int maxContext = effective.MaxContextMessages;
+        try
+        {
+            if (_conversationPolicy?.Invoke() is { } convPolicy)
+                maxContext = convPolicy.ComputeContextWindow(effective.MaxContextMessages, energySaving: false);
+        }
+        catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+        {
+        }
         var context = pacing is null
-            ? conversation.TakeLast(snapshot.MaxContextMessages)
-            : conversation.Messages.Where(m => m.Seq <= pacing.Sequence).TakeLast(snapshot.MaxContextMessages).ToList();
+            ? conversation.TakeLast(maxContext)
+            : conversation.Messages.Where(m => m.Seq <= pacing.Sequence || m.Role == MessageRole.Self
+                || (pacing.SpeakerId != 0 && m.SenderId != pacing.SpeakerId))
+                .TakeLast(maxContext).ToList();
         if (context.Count == 0)
         {
             return null;   // 上下文空 = 没什么可回的（与改造前一致：直接结束这一轮）
         }
+        var latestPeerMessageId = context.LastOrDefault(m =>
+            m.Role == MessageRole.Peer && !m.Recalled && !MessageMarkers.IsAside(m.Text))?.QqMessageId;
 
         // 当前上下文最早一条：档案只取比它更早的（按单调序号精确判定，避免时间戳秒级精度误判）
         var contextOldestSeq = context[0].Seq;
         var contextOldestUnix = context[0].Timestamp.ToUnixTimeSeconds();
         var (isGroupScope, scopeGroupId) = conversation.Target;
 
-        // 收集最近 40 条上下文里出现过的发送者 QQ → 读取各自在**本会话**的人物档案（角色卡片）
-        var profiles = new List<string>();
-        var profileChars = 0;
-        var recentSenders = _allowsFeature(PluginGate.ProfilesCapability)
-            ? context
-                .TakeLast(40)
-                .Where(m => m.Role == MessageRole.Peer && m.SenderId.HasValue)
-                .Select(m => m.SenderId!.Value)
-                .Distinct()
-                .Take(Math.Max(0, snapshot.ProfileLookupCount))
-                .ToList()
-            : new List<long>();
-
-        foreach (var uid in recentSenders)
-        {
-            var participant = PlatformSourceExecution.Current is { } source ? _memoryParticipant?.Invoke(source, uid) : null;
-            string ReadProfile(string profileKey) => _profiles.GetProfileSummary(profileKey,
-                isGroupScope ? scopeGroupId : 0, snapshot.ProfileSummaryLines, contextOldestSeq, contextOldestUnix);
-            var summary = UnifiedMemoryTurn.Current is { } memory
-                ? memory.ReadLegacyProfile(participant, ReadProfile) : ReadProfile(uid.ToString());
-
-            if (string.IsNullOrWhiteSpace(summary))
-            {
-                continue; // 本会话没有更早的历史 → 不占提示词预算
-            }
-
-            if (profileChars + summary.Length > snapshot.MaxProfileChars)
-            {
-                break; // 超出预算：后面的（发言更早的）丢弃
-            }
-
-            profiles.Add(summary);
-            profileChars += summary.Length;
-        }
-
-        var memoryPrompt = UnifiedMemoryTurn.Current?.ReadPrompt(string.Join(" ", context.TakeLast(3).Select(m => m.Text)));
-        if (!string.IsNullOrEmpty(memoryPrompt))
-        {
-            profiles.Add(memoryPrompt);
-            profileChars += memoryPrompt.Length;
-        }
+        var (profiles, profileChars) = CollectProfilesAndFragments(
+            conversation, snapshot, context, isGroupScope, scopeGroupId, contextOldestSeq, contextOldestUnix);
 
         var started = EngineClock.LocalDateTime;
         _setThinking(conversation, true);
@@ -154,7 +148,7 @@ internal sealed class ReplyTurnContext
         // 先挑后发 —— 库可能有上千张，全塞进提示词既贵又不准。
         // 气氛“沉”（有人低落/在吵架）时不给候选：给了它就容易挑一张发出去，与气氛不搭。
         var stickerChoices = new List<StickerChoice>();
-        if (platformPolicy.Feature("stickers", snapshot.EnableStickers).Enabled && _allowsFeature(PluginGate.StickersCapability) && snapshot.StickerLibraryMax > 0 && snapshot.StickerCandidates > 0 &&
+        if (effective.FeatureEnabled("stickers") && _allowsFeature(PluginGate.StickersCapability) && snapshot.StickerLibraryMax > 0 && snapshot.StickerCandidates > 0 &&
             !_vibes.IsSober(conversation.SourceKey))
         {
             var query = string.Join(" ", context.TakeLast(8).Select(m => m.Text));
@@ -174,7 +168,7 @@ internal sealed class ReplyTurnContext
         }
 
         var roleCount = 0;
-        var groupRoles = isGroupScope ? _roles.DescribeForPrompt(scopeGroupId, 14, out roleCount) : null;
+        var groupRoles = isGroupScope ? _roles.DescribeForPrompt(conversation.SourceKey, scopeGroupId, 14, out roleCount) : null;
 
         // 上一次读到的气氛（有 TTL）：给模型当底色，让它接得上
         var vibeHint = _allowsFeature(PluginGate.VibesCapability) ? _vibes.Hint(conversation.SourceKey) : string.Empty;
@@ -187,7 +181,7 @@ internal sealed class ReplyTurnContext
                 (stickerChoices.Count > 0 ? $"，表情包候选 {stickerChoices.Count} 张" : string.Empty) + "）");
 
         // 最近被戳过（10 分钟内）才给模型“可以戳回去”的指令，平时不浪费 token
-        var pokeContext = platformPolicy.Feature("poke", snapshot.EnablePoke).Enabled && _allowsFeature(PluginGate.PokeCapability) &&
+        var pokeContext = effective.FeatureEnabled("poke") && _allowsFeature(PluginGate.PokeCapability) &&
             _poke.RecentlyPoked(conversation.SourceKey, TimeSpan.FromMinutes(10), EngineClock.Now);
 
         // 心情（被戳次数客观 + 模型主观写的）：影响还戳不戳回去、话多话少。
@@ -205,9 +199,19 @@ internal sealed class ReplyTurnContext
         var recallText = TakeNote(ReplyPacingPromptState.Note.Recall,
             () => _recallNotes.TryRemove(conversation.SourceKey, out var pendingRecall) ? pendingRecall : null);
 
-        // 刚上网查到的资料 / 读到的页面正文：交给模型，用完就清
-        var searchText = TakeNote(ReplyPacingPromptState.Note.Search,
-            () => _allowsFeature(PluginGate.WebSearchCapability) ? _research.TakeNote(conversation.SourceKey) : null);
+        // 刚上网查到的资料 / 读到的页面正文 / 只读插件工具结果：交给模型，用完就清
+        var searchText = TakeNote(ReplyPacingPromptState.Note.Search, () =>
+        {
+            var webNote = _allowsFeature(PluginGate.WebSearchCapability) ? _research.TakeNote(conversation.SourceKey) : null;
+            var pendingPlugin = _toolNotes?.TakeNote(conversation.SourceKey);
+            var pluginNote = pendingPlugin is { } note
+                && (_replyTools is null || _replyTools.Allows(snapshot, effectivePolicy, note.ToolId, caps.Catalog, effective))
+                ? note.Text
+                : null;
+            if (string.IsNullOrWhiteSpace(webNote)) return pluginNote;
+            if (string.IsNullOrWhiteSpace(pluginNote)) return webNote;
+            return webNote + "\n\n" + pluginNote;
+        });
 
         // 链接预览：给快站点 2.5 秒的机会当轮用上；太慢就先不等（完成后留给下一轮）
         if (_media.PendingLinkTask(conversation.SourceKey) is { } linkTask)
@@ -218,10 +222,96 @@ internal sealed class ReplyTurnContext
         var linkText = TakeNote(ReplyPacingPromptState.Note.Link, () => _media.TakeLinkNote(conversation.SourceKey));
 
         return new TurnInputs(
-            Started: started, Snapshot: snapshot, Caps: caps, PlatformPolicy: platformPolicy, Context: context, Profiles: profiles,
+            Started: started, Snapshot: snapshot, Caps: caps, PlatformPolicy: effectivePolicy, Context: context, Profiles: profiles,
             ProfileChars: profileChars, StickerChoices: stickerChoices, RoleCount: roleCount,
             GroupRoles: groupRoles, VibeHint: vibeHint, PreviousVibe: previousVibe, PokeContext: pokeContext,
             MoodText: moodText, MusicText: musicText, RecallText: recallText, SearchText: searchText,
-            LinkText: linkText, IsPrivateConversation: !isGroupScope);
+            LinkText: linkText, IsPrivateConversation: !isGroupScope,
+            LatestPeerMessageIdAtGeneration: latestPeerMessageId,
+            ConversationSettings: effective);
+    }
+
+    private (List<string> Profiles, int ProfileChars) CollectProfilesAndFragments(
+        BotConversation conversation, AppSettings snapshot, List<ChatMessage> context,
+        bool isGroupScope, long scopeGroupId, long contextOldestSeq, long contextOldestUnix)
+    {
+        var profiles = new List<string>();
+        var profileChars = 0;
+        var allowProfiles = _allowsFeature(PluginGate.ProfilesCapability);
+        if (allowProfiles && _profilesPolicy is not null)
+        {
+            try
+            {
+                var profilePolicy = _profilesPolicy();
+                allowProfiles = profilePolicy is not null
+                    && profilePolicy.AllowsProfileInjection(
+                        featureEnabled: _allowsFeature(PluginGate.ProfilesCapability),
+                        hasAuthorizedScope: scopeGroupId > 0 || !string.IsNullOrWhiteSpace(conversation.SourceKey));
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+                allowProfiles = false;
+            }
+        }
+        var recentSenders = allowProfiles
+            ? context
+                .TakeLast(40)
+                .Where(m => m.Role == MessageRole.Peer && m.SenderId.HasValue)
+                .Select(m => m.SenderId!.Value)
+                .Distinct()
+                .Take(Math.Max(0, snapshot.ProfileLookupCount))
+                .ToList()
+            : new List<long>();
+
+        foreach (var uid in recentSenders)
+        {
+            var participant = PlatformSourceExecution.Current is { } source ? _memoryParticipant?.Invoke(source, uid) : null;
+            string ReadProfile(string profileKey) => _profiles.GetProfileSummary(profileKey,
+                isGroupScope ? scopeGroupId : 0, snapshot.ProfileSummaryLines, contextOldestSeq, contextOldestUnix);
+            var summary = UnifiedMemoryTurn.Current is { } memory
+                ? memory.ReadLegacyProfile(participant, ReadProfile) : ReadProfile(uid.ToString());
+            if (string.IsNullOrWhiteSpace(summary)) continue;
+            if (profileChars + summary.Length > snapshot.MaxProfileChars) break;
+            profiles.Add(summary);
+            profileChars += summary.Length;
+        }
+
+        var peerTexts = context.Where(m => m.Role == MessageRole.Peer && !m.Recalled).TakeLast(3).Select(m => m.Text).ToList();
+        var memoryQuery = peerTexts.Count > 0 ? string.Join(" ", peerTexts) : string.Join(" ", context.TakeLast(1).Select(m => m.Text));
+        var memoryPrompt = UnifiedMemoryTurn.Current?.ReadPrompt(memoryQuery);
+        if (!string.IsNullOrEmpty(memoryPrompt))
+        {
+            profiles.Add(memoryPrompt);
+            profileChars += memoryPrompt.Length;
+        }
+
+        if (_conversationPolicy is not null && _turnContextContributors is not null)
+        {
+            try
+            {
+                var contributors = _turnContextContributors();
+                if (contributors.Count > 0 && _conversationPolicy() is { } convPolicy)
+                {
+                    const int MaxContributorChars = 2400;
+                    var contributorChars = 0;
+                    foreach (var fragment in convPolicy.CollectContextFragments(conversation.SourceKey, contributors, EngineClock.Now))
+                    {
+                        var rendered = $"[{fragment.SectionTitle}]\n{fragment.Content}";
+                        var remaining = MaxContributorChars - contributorChars;
+                        if (remaining <= 0) break;
+                        if (rendered.Length > remaining)
+                            rendered = rendered[..remaining] + "…";
+                        profiles.Add(rendered);
+                        profileChars += rendered.Length;
+                        contributorChars += rendered.Length;
+                    }
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+            {
+            }
+        }
+
+        return (profiles, profileChars);
     }
 }

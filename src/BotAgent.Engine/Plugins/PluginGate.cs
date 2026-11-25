@@ -40,6 +40,21 @@ public sealed class PluginGate
     /// <summary>能力键：联网搜索/读网页。</summary>
     public const string WebSearchCapability = "websearch";
 
+    /// <summary>能力键：受控文档解析。</summary>
+    public const string DocumentsCapability = "documents";
+
+    /// <summary>能力键：同会话聊天纪要。</summary>
+    public const string DigestCapability = "digest";
+
+    /// <summary>能力键：轻量会话知识库。</summary>
+    public const string KnowledgeCapability = "knowledge";
+
+    /// <summary>能力键：持久化定时与提醒。</summary>
+    public const string SchedulerCapability = "scheduler";
+
+    /// <summary>能力键：私人专属待办。</summary>
+    public const string PersonalTodoCapability = "personal_todo";
+
     /// <summary>能力键 → 预设插件 ID（稳定契约，不随工具改名漂移）。</summary>
     private static readonly FrozenDictionary<string, string> CapabilityPlugins =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -51,14 +66,33 @@ public sealed class PluginGate
             [VibesCapability] = "preset.feature.vibes",
             [ProfilesCapability] = "preset.feature.profiles",
             [WebSearchCapability] = "preset.feature.websearch",
+            [DocumentsCapability] = "preset.feature.documents",
+            [DigestCapability] = "preset.feature.digest",
+            [KnowledgeCapability] = "preset.feature.knowledge",
+            [SchedulerCapability] = "preset.feature.scheduler",
+            [PersonalTodoCapability] = "preset.feature.personal-todo",
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
-    /// <summary>精确工具 ID → 能力键（网页能力只认这两个只读工具）。</summary>
+    /// <summary>精确工具 ID → 能力键（网页/纪要/知识库等按精确工具映射）。</summary>
     private static readonly FrozenDictionary<string, string> ExactToolCapabilities =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["web.search"] = WebSearchCapability,
             ["web.read"] = WebSearchCapability,
+            ["doc.read"] = DocumentsCapability,
+            ["chat.digest"] = DigestCapability,
+            ["kb.search"] = KnowledgeCapability,
+            ["kb.list"] = KnowledgeCapability,
+            ["kb.save"] = KnowledgeCapability,
+            ["kb.forget"] = KnowledgeCapability,
+            ["reminder.create"] = SchedulerCapability,
+            ["reminder.list"] = SchedulerCapability,
+            ["reminder.pause"] = SchedulerCapability,
+            ["reminder.delete"] = SchedulerCapability,
+            ["todo.add"] = PersonalTodoCapability,
+            ["todo.list"] = PersonalTodoCapability,
+            ["todo.complete"] = PersonalTodoCapability,
+            ["todo.delete"] = PersonalTodoCapability,
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>工具 ID 前缀（第一个点号之前的部分）→ 能力键。</summary>
@@ -69,6 +103,11 @@ public sealed class PluginGate
             ["sticker"] = StickersCapability,
             ["voice"] = VoiceCapability,
             ["poke"] = PokeCapability,
+            ["doc"] = DocumentsCapability,
+            ["digest"] = DigestCapability,
+            ["kb"] = KnowledgeCapability,
+            ["reminder"] = SchedulerCapability,
+            ["todo"] = PersonalTodoCapability,
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     private readonly IPluginRegistry _registry;
@@ -92,7 +131,8 @@ public sealed class PluginGate
             return true;
         }
 
-        return !CapabilityPlugins.TryGetValue(capability, out var pluginId) || _registry.IsEnabled(pluginId);
+        return !CapabilityPlugins.TryGetValue(capability, out var pluginId)
+            || (_registry is PluginManager manager ? manager.IsOperational(pluginId) : _registry.IsEnabled(pluginId));
     }
 
     /// <summary>
@@ -143,4 +183,14 @@ public sealed class PluginGate
 
         return false;
     }
+
+    /// <summary>按插件 ID 解析当前就绪代次的贡献契约；无插件管理器或插件未就绪时返回 null。</summary>
+    public T? GetContribution<T>(string pluginId) where T : class, IPluginContribution
+        => _registry is PluginManager manager && manager.TryGetContribution<T>(pluginId, out var contribution)
+            ? contribution
+            : null;
+
+    /// <summary>发现全部就绪代次中实现了 <typeparamref name="T"/> 的插件贡献。</summary>
+    public IReadOnlyList<T> GetContributions<T>() where T : class, IPluginContribution
+        => _registry is PluginManager manager ? manager.GetContributions<T>() : [];
 }

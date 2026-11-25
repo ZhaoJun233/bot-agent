@@ -323,6 +323,10 @@ public sealed partial class WebUiServer
     {
         try
         {
+            var current = await RunDockerAsync("inspect qqchat-bot --format '{{.Image}}'", 30);
+            var currentImage = current.Output.Trim();
+            if (!current.Ok || !PanelDeploymentPlan.IsImageId(currentImage))
+                return (false, new JsonObject { ["error"] = "无法确认当前宿主镜像，未启动部署。" });
             if (build)
             {
                 if (File.Exists(DeployTar))
@@ -341,19 +345,12 @@ public sealed partial class WebUiServer
                 if (!selected.Ok || !PanelDeploymentPlan.IsImageId(rollbackImage))
                     return (false, new JsonObject { ["error"] = "没有可用的回滚镜像，未修改镜像标签。" });
             }
-            // Normal deploy replaces prev; rollback preserves prev and captures the selected immutable image ID.
-            var tag = await RunDockerAsync(PanelDeploymentPlan.BackupArguments(build), 30);
-            if (!tag.Ok)
-            {
-                // 第一次部署时可能没有 latest（理论上不会）——不致命，只记一笔
-                FileLog.Write("部署", $"[部署] 标记 prev 失败（不致命）：{tag.Output.Trim()}");
-            }
-
-            var script = PanelDeploymentPlan.HelperScript(build, rollbackImage);
+            var script = PanelDeploymentPlan.HelperScript(build, rollbackImage, currentImage,
+                Path.Combine(AppPaths.DataDir, "plugins"));
 
             // helper 容器：它挂宿主 docker，负责把我们这个容器换掉（我们在自己肚子里跑 compose 是跑不成的）
             var run = await RunDockerAsync(
-                "run --rm -d " +
+                "run --rm -d --name qqchat-deploy-helper " +
                 "-v /var/run/docker.sock:/var/run/docker.sock " +
                 "-v /opt/qqchat:/work -w /work " +
                 $"docker:cli sh -c {ShellQuote(script)}", 60);
@@ -374,7 +371,7 @@ public sealed partial class WebUiServer
                 ["started"] = true,
                 ["helper"] = run.Output.Trim(),
                 ["willDropConnection"] = true,
-                ["note"] = "容器会被替换：页面会短暂断开，约 10–30 秒后自动回来（新容器起来后可以看部署日志）"
+                ["note"] = "构建后会暂停宿主并检查插件状态兼容性；检查失败恢复原容器，通过后替换。页面会短暂断开，完成后可查看部署日志。"
             });
         }
         catch (Exception ex)

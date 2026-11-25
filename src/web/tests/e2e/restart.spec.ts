@@ -45,8 +45,10 @@ function hostEnv(): Record<string, string> {
     QQCHAT_ONEBOT_URL: `http://0.0.0.0:${WS_PORT}`,
     QQCHAT_UIN: '10001',
     QQCHAT_WHITELIST: '99999',
-    QQCHAT_GROUP_COOLDOWN: '0',
-    QQCHAT_IDLE_FALLBACK: '0',
+    QQCHAT_GROUP_INTERJECTION_PROBABILITY: '20',
+    QQCHAT_GROUP_INTERJECTION_COOLDOWN: '30',
+    QQCHAT_GROUP_CONTINUATION_WAIT: '3',
+    QQCHAT_PRIVATE_CONTINUATION_WAIT: '1.5',
     QQCHAT_HEALTH_PORT: String(HOST_PORT),
     QQCHAT_HEALTH_BIND: '127.0.0.1',
     QQCHAT_AGENT: '1',
@@ -76,9 +78,30 @@ async function waitFor(url: string, timeoutMs: number): Promise<void> {
   throw new Error(`等待 ${url} 超时：${lastError}`)
 }
 
+async function waitForHealthReady(url: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let lastError = ''
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url)
+      if (response.ok) {
+        const body = await response.json() as { ready?: boolean; status?: string }
+        if (body.ready === true) return
+        lastError = `status=${body.status ?? 'unknown'} ready=${String(body.ready)}`
+      } else {
+        lastError = `HTTP ${response.status}`
+      }
+    } catch (error) {
+      lastError = String(error)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`等待 ${url} 就绪超时：${lastError}`)
+}
+
 async function startHost(): Promise<void> {
   host = spawn('dotnet', [headlessDll], { cwd: repoRoot, env: hostEnv(), stdio: 'ignore' })
-  await waitFor(`http://127.0.0.1:${HOST_PORT}/zba/v1/health`, 60_000)
+  await waitForHealthReady(`http://127.0.0.1:${HOST_PORT}/zba/v1/health`, 60_000)
 }
 
 async function killHost(): Promise<void> {
@@ -108,7 +131,7 @@ async function openConfiguration(page: Page): Promise<void> {
   await expect(page.getByTestId('overview')).toBeVisible({ timeout: 15_000 })
   await page.getByTestId('nav-configuration').click()
   await expect(page.getByTestId('config-fields')).toBeVisible()
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
 }
 
 test.describe.configure({ mode: 'serial' })
@@ -144,7 +167,7 @@ test('配置页：保存后强杀并重启宿主，刷新重新认证读回的�
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const target = Number(await input.inputValue()) + 7
   await input.fill(String(target))
   await page.getByTestId('config-save').click()
@@ -152,7 +175,7 @@ test('配置页：保存后强杀并重启宿主，刷新重新认证读回的�
   await expect(page.getByTestId('config-save-bar')).toContainText('0 项修改')
 
   const saved = await readConfiguration(request)
-  expect(saved.view.behavior.privateCooldownSeconds?.value).toBe(target)
+  expect(saved.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(target)
 
   await killHost()
   await startHost()
@@ -171,10 +194,10 @@ test('配置页：保存后强杀并重启宿主，刷新重新认证读回的�
 
   // 重新认证后处于标准模式：字段以只读文本呈现，这一步本身不可能发出写请求。
   await expect(page.getByTestId('config-mode-badge')).toHaveText('标准模式')
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toContainText(String(target))
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toContainText(String(target))
 
   const reread = await readConfiguration(request)
   expect(reread.version).toBe(saved.version)
-  expect(reread.view.behavior.privateCooldownSeconds?.value).toBe(target)
+  expect(reread.view.behavior.groupInterjectionCooldownSeconds?.value).toBe(target)
   expect(writes).toEqual([])
 })

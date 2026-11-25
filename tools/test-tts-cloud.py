@@ -74,7 +74,15 @@ class MockUpstream(BaseHTTPRequestHandler):
         })
 
         if MockUpstream.mode == "fail":
-            payload = {"data": None, "base_resp": {"status_code": 1008, "status_msg": "insufficient balance"}}
+            payload = {"data": None, "base_resp": {"status_code": 1008, "status_msg": "insufficient balance CANARY_STATUS_SECRET"}}
+        elif MockUpstream.mode == "http500":
+            raw = b'{"error":"CANARY_HTTP500_SECRET"}'
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         else:
             fmt = (body.get("audio_setting") or {}).get("format", "mp3")
             audio = WAV if fmt in ("wav", "pcm") else MP3
@@ -208,12 +216,16 @@ def main() -> int:
         check("空文本 400", get(base + "/speak?text=")[0] == 400)
         check("超过 MAX_CHARS 400（长文本不该发语音）", get(base + "/speak?text=" + "a" * 61)[0] == 400)
 
-        print("▶ 边界：上游报错要透传，不能假装成功")
+        print("▶ 边界：上游报错返回状态码且脱敏原始正文（D0-VOICE-ERROR-10）")
         MockUpstream.mode = "fail"
         status5, body5, _ = get(base + "/speak?text=%E6%B5%8B%E8%AF%95%E6%8A%A5%E9%94%99&voice=male-qn-qingse")
         detail = json.loads(body5.decode("utf-8", "replace")).get("error", "")
         check("HTTP 502（不是 200）", status5 == 502, str(status5))
-        check("错误里带上游原话（1008 余额不足）", "1008" in detail, detail[:120])
+        check("错误带 status_code 且不泄露上游 status_msg", "1008" in detail and "CANARY_STATUS_SECRET" not in detail, detail[:120])
+        MockUpstream.mode = "http500"
+        status5b, body5b, _ = get(base + "/speak?text=%E6%B5%8B%E8%AF%95500&voice=male-qn-qingse")
+        detail5b = json.loads(body5b.decode("utf-8", "replace")).get("error", "")
+        check("上游 HTTP 500 脱敏不回显正文", status5b == 502 and "500" in detail5b and "CANARY_HTTP500_SECRET" not in detail5b, detail5b[:120])
         MockUpstream.mode = "ok"
 
         print("▶ 边界：silk 没装编码器时明确报错")
@@ -225,7 +237,11 @@ def main() -> int:
         check("未知路径 404", get(base + "/nope")[0] == 404)
         time.sleep(0.3)  # 给排空线程一点时间把最后几行收完
         log = "".join(child_log)
-        check("日志里没有 key 原文", "sk-test-key-1234567890" not in log, log[-200:] if "sk-test" in log else "")
+        check("日志里没有 key 原文与上游金丝雀",
+              "sk-test-key-1234567890" not in log
+              and "CANARY_STATUS_SECRET" not in log
+              and "CANARY_HTTP500_SECRET" not in log,
+              log[-200:] if ("sk-test" in log or "CANARY_" in log) else "")
     finally:
         proc.terminate()
         try:

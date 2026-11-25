@@ -138,6 +138,8 @@ internal static class AgentTaskRuntimeTests
         Require(task.State == AgentTaskState.TimedOut, $"超时终态应为 TimedOut，实际 {task.State}。");
         Require(task.ErrorCode == "timeout", "超时的 errorCode 必须是 timeout（与取消区分）。");
         Require(!task.CancellationRequested, "超时不是用户取消，CancellationRequested 必须为假。");
+        // A hard deadline publishes terminal state before signalling the executor; observe both events.
+        await executor.CancellationSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Require(executor.CancellationObserved, "超时后执行器令牌也必须被取消。");
     }
 
@@ -266,6 +268,7 @@ internal static class AgentTaskRuntimeTests
         private int _calls;
 
         internal bool CancellationObserved { get; private set; }
+        internal TaskCompletionSource CancellationSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal int Calls => Volatile.Read(ref _calls);
 
@@ -279,6 +282,7 @@ internal static class AgentTaskRuntimeTests
             catch (OperationCanceledException)
             {
                 CancellationObserved = true;
+                CancellationSeen.TrySetResult();
                 throw;
             }
 

@@ -5,11 +5,13 @@ using BotAgent.Adapters.Persistence;
 using BotAgent.Domain.Agent;
 using BotAgent.Domain.Configuration;
 using BotAgent.Domain.Management;
+using BotAgent.Domain.Platforms;
 using BotAgent.Domain.Plugins;
 using BotAgent.Domain.Ports;
 using BotAgent.Panel;
 using BotAgent.Services;
 using BotAgent.Services.Permissions;
+using BotAgent.Services.Platforms;
 using BotAgent.Services.Settings;
 
 namespace BotAgent.Adapters.Panel.Zba;
@@ -18,11 +20,49 @@ namespace BotAgent.Adapters.Panel.Zba;
 /// ZBA 的宿主侧实现：只读投影来自 SettingsBox / 管理能力目录；写路径复用已有的
 /// 结构化配置事务与管理动作回执；任务/审批/事件在宿主边界内收口。
 /// </summary>
-internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
+internal sealed partial class ZbaHostBackend : IZbaBackend, IZbaHttpContributions, IAsyncDisposable
 {
+    public IReadOnlyList<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>> HttpContributions
+    {
+        get
+        {
+            var list = new List<BotAgent.Domain.Plugins.PluginHttpBinding<ConfigurationCaller>>
+            {
+                QuotaHttpContract.Bind<ConfigurationCaller>(ListQuotasAsync, SaveQuotaAsync, FindQuotaAsync)
+            };
+            if (_mcpManaged is not null && _mcpStore is not null)
+            {
+                list.Add(McpHttpContract.Bind<ConfigurationCaller>(
+                    ListMcpServersAsync, SaveMcpServerAsync, DeleteMcpServerAsync, TestMcpServerAsync, ReloadMcpServersAsync));
+            }
+            if (_roleStore is not null && _roleResolver is not null)
+            {
+                list.Add(AccessRoleHttpContract.Bind<ConfigurationCaller>(ListAccessRolesAsync, SaveAccessRolesAsync));
+            }
+            if (_schedulerStore is not null)
+            {
+                list.Add(SchedulerHttpContract.Bind<ConfigurationCaller>(
+                    ListScheduledJobsAsync, SaveScheduledJobAsync, DeleteScheduledJobAsync, ListScheduledRunsAsync));
+            }
+            if (_todoStore is not null && _todoPorts is not null)
+            {
+                list.Add(PersonalTodoHttpContract.Bind<ConfigurationCaller>(
+                    ListPersonalTodosAsync, SavePersonalTodoAsync, DeletePersonalTodoAsync));
+            }
+            if (_workspace is not null)
+            {
+                list.Add(WorkspaceHttpContract.Bind<ConfigurationCaller>(
+                    ReadWorkspaceMessagesAsync, SendWorkspaceMessageAsync, ClearWorkspaceMessagesAsync,
+                    ReadWorkspaceIdentityAsync, ToggleWorkspaceIdentityAsync));
+            }
+            return list;
+        }
+    }
+
     private readonly SettingsBox _box;
     private readonly SettingsHotReload _hotReload;
     private readonly IManagedCapabilities _capabilities;
+    private readonly IPlatformPolicyResolver? _platformPolicies;
     private readonly IAgentSessionStore _sessions;
     private readonly Func<bool> _serverEnabled;
     private readonly ApprovalUseCase? _approvals;
@@ -36,6 +76,8 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     private readonly Action<string>? _log;
     private readonly BotAgent.Services.Ops.DatabaseBackupService? _backups;
     private readonly BotAgent.Services.Ops.TurnTraceStore? _traces;
+    private readonly Func<(bool MarkdownEnabled, bool MarkdownPermissionDenied)>? _officialRuntimeState;
+    private readonly Func<(BotAgent.Domain.Memory.UnifiedMemoryGovernanceSummary Summary, bool AdminConfigured)>? _memoryGovernance;
     private int _disposed;
 
     internal ZbaHostBackend(
@@ -57,13 +99,19 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         Func<string, BotAgent.Domain.Model.ModelProviderRoute?>? providerRoute = null,
         BotAgent.Model.ProviderModelDiscovery? discovery = null,
         BotAgent.Services.Conversations.ConversationRegistry? quotaRegistry = null,
-        TenantQuotaStore? quotaStore = null,
+        IQuotaOperations? quotaStore = null,
         BotAgent.Services.Ops.DatabaseBackupService? backups = null,
-        BotAgent.Services.Ops.TurnTraceStore? traces = null)
+        BotAgent.Services.Ops.TurnTraceStore? traces = null,
+        IPlatformPolicyResolver? platformPolicies = null,
+        Func<(bool MarkdownEnabled, bool MarkdownPermissionDenied)>? officialRuntimeState = null,
+        Func<(BotAgent.Domain.Memory.UnifiedMemoryGovernanceSummary Summary, bool AdminConfigured)>? memoryGovernance = null)
     {
         _box = box;
         _hotReload = hotReload;
         _capabilities = capabilities;
+        _platformPolicies = platformPolicies;
+        _officialRuntimeState = officialRuntimeState;
+        _memoryGovernance = memoryGovernance;
         _sessions = sessions;
         _serverEnabled = serverEnabled;
         _approvals = approvals;
@@ -74,7 +122,7 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         _version = version;
         _events = events;
         _log = log;
-        _market = market;
+        _pluginManagement = new ZbaPluginManagement(market, Authorize, ReadConfigurationAsync, SaveConfigurationAsync);
         _providerRoute = providerRoute;
         _discovery = discovery;
         _quotaRegistry = quotaRegistry;
@@ -187,6 +235,26 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         // 每日热备状态（#121）：过期/失败时面板顶部会亮红条 —— 这里给出结论，前端不自己算日期。
         if (PanelStatusFacts.BuildBackupComponent(_backups, now) is { } backupComponent) components.Add(backupComponent);
 
+        if (_memoryGovernance is not null)
+        {
+            try
+            {
+                if (_memoryGovernance.Invoke() is { } memoryGov)
+                {
+                    var s = memoryGov.Summary;
+                    var state = s.Faulted ? "faulted" : s.Enabled ? "enabled" : "disabled";
+                    var detail = $"confirmed={s.ConfirmedCount};pending={s.PendingCount};suppressed={s.SuppressionCount};admin={(memoryGov.AdminConfigured ? 1 : 0)};rev={s.Revision}";
+                    components.Add(new ZbaComponent("unified-memory", "governance", "统一记忆治理", state, !s.Faulted, detail, now));
+                }
+            }
+            catch (Exception exception)
+            {
+                _events.AppendError("unified-memory", exception.GetType().Name, now);
+                components.Add(new ZbaComponent("unified-memory", "governance", "统一记忆治理",
+                    "faulted", false, "governance_query_failed", now));
+            }
+        }
+
         var configuration = await ReadConfigurationQuietAsync(caller, ct).ConfigureAwait(false);
         var faulted = components.Any(component => component.State is "faulted" or "error");
         var ready = page.Code == ManagedResultCode.Ok && !faulted;
@@ -254,14 +322,29 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         ConfigurationCaller caller, ManagedPageRequest request, CancellationToken ct = default)
         => _capabilities.ListAsync(caller, request, ct);
 
-    public ValueTask<ManagedInspectResult> InspectCapabilityAsync(
+    public async ValueTask<ManagedInspectResult> InspectCapabilityAsync(
         ConfigurationCaller caller, ManagedObjectKey key, CancellationToken ct = default)
-        => _capabilities.InspectAsync(caller, key, ct);
+    {
+        var result = await _capabilities.InspectAsync(caller, key, ct).ConfigureAwait(false);
+        if (result.Code != ManagedResultCode.Ok || result.Descriptor?.Key != key
+            || key is not ManagedObjectKey.Driver driver
+            || driver.Key.PlatformId != Domain.Platforms.PlatformId.QqOfficial) return result;
+        ct.ThrowIfCancellationRequested();
+        var policy = _platformPolicies?.Resolve(new(driver.Key.PlatformId, driver.Key.AccountScope, driver.Key.InstanceId));
+        var snapshot = _officialRuntimeState is { } readRuntime
+            ? ProjectOfficialWithRuntime(policy, _now(), readRuntime())
+            : OfficialMessagingCapabilities.Project(policy, _now());
+        return result with { Messaging = snapshot };
+    }
+
+    private static MessagingCapabilitySnapshot ProjectOfficialWithRuntime(
+        EffectivePlatformPolicy? policy, DateTimeOffset observedAt, (bool MarkdownEnabled, bool MarkdownPermissionDenied) state)
+        => OfficialMessagingCapabilities.ProjectWithRuntime(policy, observedAt, state.MarkdownEnabled, state.MarkdownPermissionDenied);
 
     public async ValueTask<ManagedValidationResult> ValidateCapabilityAsync(
         ConfigurationCaller caller, ZbaConfigurationValidationRequest request, CancellationToken ct = default)
     {
-        var (converted, owned) = ConvertSecrets(request.Secrets);
+        var (converted, owned) = ZbaSecretEdits.ConvertSecrets(request.Secrets);
         try
         {
             using var scope = Authorize(caller, ConfigurationAccess.ValidateConfiguration);
@@ -310,23 +393,14 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     public async ValueTask<ConfigurationSaveResult> SaveConfigurationAsync(
         ConfigurationCaller caller, ZbaConfigurationSaveRequest request, CancellationToken ct = default)
     {
-        var (converted, owned) = ConvertSecrets(request.Secrets);
+        var (converted, owned) = ZbaSecretEdits.ConvertSecrets(request.Secrets);
         try
         {
             using var scope = Authorize(caller, ConfigurationAccess.SaveConfiguration);
             var save = new ConfigurationSaveRequest(
                 request.ContractRevision, request.ExpectedVersion, request.Key, request.Changes, converted);
             var result = await _hotReload.SaveConfigurationAsync(save, ct).ConfigureAwait(false);
-            if (result.Code is ConfigurationResultCode.Ok or ConfigurationResultCode.NoChanges)
-            {
-                _events.Append("configuration.saved", null, ConfigurationEventState(result),
-                    result.CurrentVersion.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    result.Receipt?.ApplyState.ToString().ToLowerInvariant(), _now());
-            }
-            else
-            {
-                _events.AppendError("configuration", result.Code.ToString(), _now());
-            }
+            ZbaConfigurationEvents.Append(_events, result, _now());
 
             return result;
         }
@@ -342,22 +416,6 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         using var scope = Authorize(caller, ConfigurationAccess.SaveConfiguration);
         var outcome = await _hotReload.FindConfigurationAsync(key, ct).ConfigureAwait(false);
         return outcome.ConfigurationResult;
-    }
-
-    // 保存成功只说明已提交；事件 state 必须投影真实 ApplyState，不能一律写 applied。
-    private static string ConfigurationEventState(ConfigurationSaveResult result)
-    {
-        if (result.Code == ConfigurationResultCode.NoChanges) return "no_changes";
-
-        return result.Receipt?.ApplyState switch
-        {
-            ApplyState.PartiallyApplied => "partially_applied",
-            ApplyState.RestartRequired => "restart_required",
-            ApplyState.Failed => "failed",
-            ApplyState.Unknown => "unknown",
-            ApplyState.Applied => "applied",
-            _ => "not_started"
-        };
     }
 
     public ValueTask<ZbaTaskAccepted> SubmitTaskAsync(
@@ -443,8 +501,12 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     {
         ct.ThrowIfCancellationRequested();
         if (_approvals is null) throw new ZbaBackendException(503, "approvals_unavailable", "审批组件不可用。");
-        if (!_box.Current.EnableApprovals) throw new ZbaBackendException(403, "approvals_disabled", "人工审批总开关是关的。");
-        var (ok, reason) = _approvals.PanelDecide(requestId, approve);
+        var isTaskApproval = _tasks.HasApproval(requestId);
+        if (!_box.Current.EnableApprovals && !isTaskApproval)
+            throw new ZbaBackendException(403, "approvals_disabled", "人工审批总开关是关的。");
+        var (ok, reason) = _box.Current.EnableApprovals
+            ? _approvals.PanelDecide(requestId, approve)
+            : (false, "unknown_request");
         if (!ok && reason == "unknown_request")
         {
             // #137：任务级待批单不在 ApprovalUseCase 的租约表里（任务没有 QQ 平台来源，
@@ -513,9 +575,15 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
     }
 
     private IDisposable Authorize(ConfigurationCaller caller, ConfigurationAccess required)
-        => _hotReload.ConfigurationAuthorization.Enter(caller,
+    {
+        if (caller.AuthorityId != "zba" || caller.ResourceId != "bot" || (caller.Access & required) != required)
+            throw new ZbaBackendException(403, "forbidden", "管理权限不足。");
+        return _hotReload.ConfigurationAuthorization.Enter(caller,
             () => caller.AuthorityId == "zba" && caller.ResourceId == "bot"
                   && (caller.Access & required) == required);
+    }
+
+    private static string CallerScope(ConfigurationCaller caller) => ZbaCallerAuthorization.Scope(caller);
 
     private static ZbaComponent Map(ManagedDescriptor descriptor, DateTimeOffset now)
     {
@@ -532,90 +600,22 @@ internal sealed partial class ZbaHostBackend : IZbaBackend, IAsyncDisposable
         var available = descriptor.RuntimeState == ManagedRuntimeState.Running
             || descriptor.Key is ManagedObjectKey.Provider && descriptor.CredentialConfigured && descriptor.DesiredEnabled != false;
         var reason = descriptor.ErrorCode;
-        if (reason is null && descriptor.CredentialConfigured == false
-            && descriptor.Key is not (ManagedObjectKey.Plugin or ManagedObjectKey.Mcp))
+        var credentialRequired = descriptor.Key switch
+        {
+            ManagedObjectKey.Driver driver => PlatformId.Normalize(driver.Key.PlatformId) is PlatformId.QqOfficial or PlatformId.Feishu,
+            ManagedObjectKey.Plugin or ManagedObjectKey.Mcp => false,
+            _ => true
+        };
+        if (reason is null && descriptor.CredentialConfigured == false && credentialRequired)
             reason = "credential_missing";
         return new ZbaComponent(id, kind, kind, descriptor.RuntimeState.ToString().ToLowerInvariant(),
             available, reason, now);
     }
 
-    private static (ImmutableArray<SecretEdit> Edits, List<SensitiveInput> Owned) ConvertSecrets(
-        IReadOnlyList<ZbaSecretEdit>? secrets)
-    {
-        var owned = new List<SensitiveInput>();
-        var edits = ImmutableArray.CreateBuilder<SecretEdit>();
-        foreach (var edit in secrets ?? Array.Empty<ZbaSecretEdit>())
-        {
-            // Core 的 SecretEdit 工厂对非法目标抛 ArgumentException；那会被 ZbaEndpoint 兜成 500。
-            // 正常路径上 ZbaRules.ValidateSecrets 已经拦过（400 invalid_secret_slot），
-            // 这里只是宿主侧的最后一道防线，保证任何漏网目标仍然是 400 而不是 500。
-            if (!IsResolvableSecretTarget(edit))
-                throw new ZbaBackendException(400, "invalid_secret_slot", "秘密编辑目标无效。");
-            try
-            {
-                switch (edit.Kind)
-                {
-                    case SecretEditKind.Replace:
-                        var bytes = Encoding.UTF8.GetBytes(edit.Value ?? string.Empty);
-                        try
-                        {
-                            var input = SensitiveInput.FromUtf8(bytes);
-                            owned.Add(input);
-                            edits.Add(Replace(edit, input));
-                        }
-                        finally
-                        {
-                            CryptographicOperations.ZeroMemory(bytes);
-                        }
-
-                        break;
-                    case SecretEditKind.Delete:
-                        edits.Add(Delete(edit));
-                        break;
-                    default:
-                        edits.Add(Keep(edit));
-                        break;
-                }
-            }
-            catch (ArgumentException)
-            {
-                throw new ZbaBackendException(400, "invalid_secret_slot", "秘密编辑目标无效。");
-            }
-        }
-
-        return (edits.ToImmutable(), owned);
-    }
-
-    /// <summary>目标必须恰好是固定槽位或已登记凭据键之一，且自身合法。</summary>
-    private static bool IsResolvableSecretTarget(ZbaSecretEdit edit)
-    {
-        var hasSlot = edit.Slot is not null;
-        var hasKey = edit.CredentialKey is not null;
-        if (hasSlot == hasKey) return false;
-        if (edit.Slot is { } slot) return Enum.IsDefined(slot);
-        var key = edit.CredentialKey!;
-        return !string.IsNullOrWhiteSpace(key) && key.Length <= 128 && key.Trim() == key && !key.Contains('\0');
-    }
-
-    /// <summary>有 <c>credentialKey</c> 时走 Core 的已登记凭据重载，否则维持固定槽位语义。</summary>
-    private static SecretEdit Replace(ZbaSecretEdit edit, SensitiveInput input)
-        => edit.CredentialKey is { } key
-            ? SecretEdit.Replace(new ModelCredentialKey(key), input)
-            : SecretEdit.Replace(edit.Slot!.Value, input);
-
-    private static SecretEdit Delete(ZbaSecretEdit edit)
-        => edit.CredentialKey is { } key
-            ? SecretEdit.Delete(new ModelCredentialKey(key))
-            : SecretEdit.Delete(edit.Slot!.Value);
-
-    private static SecretEdit Keep(ZbaSecretEdit edit)
-        => edit.CredentialKey is { } key
-            ? SecretEdit.Keep(new ModelCredentialKey(key))
-            : SecretEdit.Keep(edit.Slot!.Value);
-
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _workspace?.Dispose();
         await _tasks.DisposeAsync().ConfigureAwait(false);
     }
 }

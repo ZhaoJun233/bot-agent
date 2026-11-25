@@ -57,6 +57,7 @@ public sealed partial class ReplyPipeline
 
     private async Task GenerateReplyAsync(BotConversation conversation, long? triggerMessageId, bool proactive = false, CancellationToken ct = default, IPacedReplyAttempt? pacing = null)
     {
+        using var deliveryBinding = BindReplyDelivery(conversation, triggerMessageId, proactive);
         var explicitPolicyRequest = pacing?.IsExplicit ?? (triggerMessageId is long mentionId &&
             conversation.Messages.FirstOrDefault(m => m.QqMessageId == mentionId)?.MentionedBot == true);
         if (_riskBackoff?.IsActive(conversation.SourceKey) == true && !explicitPolicyRequest)
@@ -77,7 +78,6 @@ public sealed partial class ReplyPipeline
         // 频率门（语音/表情/戳的冷却）仍读实时值：那是限速，不是授权。
         var snapshot = pacing?.Snapshot ?? _settings.Snapshot();
         var textOnly = pacing?.IsSoftDraft == true;
-        var caps = _approvals.Capabilities;
         var platformPolicy = PlatformSourceExecution.Current is { } source
             ? _platformPolicies.Resolve(source.Context)
             : _platformPolicies.ResolveForChannel(Channels.ChannelOf(conversation.SourceKey));
@@ -87,31 +87,41 @@ public sealed partial class ReplyPipeline
             return;
         }
 
+        // 始终基于本轮最新平台策略解析会话档案，避免续话等待期间刚停用的平台能力被旧快照放行。
+        var convSettings = Services.Platforms.ConversationProfileResolver.Resolve(snapshot, platformPolicy, conversation.SourceKey);
+        if (IsGuestSpeaker(conversation, triggerMessageId, platformPolicy.Context, snapshot))
+        {
+            convSettings = convSettings with
+            {
+                EffectiveToolTier = Domain.Configuration.ConversationToolTier.ChatOnly
+            };
+        }
+        var caps = _approvals.CapabilitiesFor(snapshot, convSettings);
+
         using var memoryTurn = BeginMemoryTurn();
-        var turn = await _turnContext.BuildAsync(conversation, snapshot, caps, platformPolicy, proactive, pacing);
+        var turn = await _turnContext.BuildAsync(conversation, snapshot, caps, platformPolicy, proactive, pacing, convSettings);
         if (turn is null)
         {
             return;
         }
-        if (MemoryUseScope.HasMemory)
-        {
-            caps = BotAgent.Domain.Permissions.ChatCapabilitySet.FromSwitches(false, false, false, false, false, null);
-            turn = turn with { Caps = caps, StickerChoices = new() };
-        }
+        (caps, turn) = ApplyMemoryTaintCaps(caps, turn, convSettings, Services.Platforms.ConversationProfileResolver.IsGroupConversationKey(conversation.SourceKey));
         _traces.Node(conversation.SourceKey, TurnNodeKind.Context, "ok", count: turn.Context.Count);
 
         CompletionResult result;
 
-        // 自然对话驱动 agent（默认关）：够资格才在提示词里出现 action=agent 这条路（见 ReplyPipeline.NaturalAgent.cs）。
-        var naturalTrigger = NaturalAgentTrigger(conversation, triggerMessageId, proactive, snapshot.EnableNaturalAgent && !textOnly, pacing?.IsExplicit);
+        // 自然对话驱动 agent（默认关）：够资格且会话工具档位允许才在提示词里出现 action=agent 这条路（见 ReplyPipeline.NaturalAgent.cs）。
+        var naturalTrigger = NaturalAgentTrigger(conversation, triggerMessageId, proactive,
+            snapshot.EnableNaturalAgent && !textOnly && convSettings.AllowsNaturalAgent, pacing?.IsExplicit);
         var naturalAgent = !MemoryUseScope.HasMemory && naturalTrigger is not null;
 
         try
         {
             // 批次 E：模型步骤交给有限步进循环（默认 1 步 = 只调一次，与改造前逐字一致）。
+            var maxSteps = MemoryUseScope.HasMemory && !MemoryUseScope.AllowsEgress(Domain.Memory.ToolEgressClass.SameScopeRead)
+                ? 1 : snapshot.MaxAgentSteps;
             var outcome = await _turnLoop.RunAsync(
-                conversation.SourceKey, turn, caps, proactive, MemoryUseScope.HasMemory ? 1 : snapshot.MaxAgentSteps,
-                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2, turn.PlatformPolicy, ct),
+                conversation.SourceKey, turn, caps, proactive, maxSteps,
+                result2 => _inlineTools.RunAsync(conversation, turn.Snapshot, caps, result2, turn.PlatformPolicy, ct, turn.ConversationSettings),
                 naturalAgent ? NaturalAgentPrompt.Hint : null, ct,
                 step => _usage?.RecordUsage(conversation.SourceKey, step.PromptTokens, step.CompletionTokens), pacing);
             result = outcome.Result;
@@ -153,7 +163,7 @@ public sealed partial class ReplyPipeline
         //   • 低落/求助/孤独：更愿意轻声接一句（门槛降 10），但禁掉表情包/语音/戳（人家难过时发图很尬）
         //   • 生气/吐槽：照常，但也不发表情包（容易像在嘲笑）
         var vibe = result.Vibe ?? "中性";
-        var baseThreshold = Math.Clamp(turn.Snapshot.SuitabilityThreshold, 0, 100);
+        var baseThreshold = turn.ConversationSettings?.SuitabilityThreshold ?? Math.Clamp(turn.Snapshot.SuitabilityThreshold, 0, 100);
 
         // 这一轮是不是“人家在跟你说话”：触发那条 @ 了你，或引用了你发的那句话。
         // 两个用途：① 自评再低也接（被点名不应该沉默）；② 引用优先挂给点名的人。
@@ -198,29 +208,14 @@ public sealed partial class ReplyPipeline
             }
         }
 
-        var sticker = textOnly || MemoryUseScope.HasMemory ? null : await _actions.QueueTurnActions(
-            conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, result, directAddress);
+        var allowPresentation = !textOnly && MemoryUseScope.AllowsEgress(Domain.Memory.ToolEgressClass.LocalPresentation);
+        var sticker = !allowPresentation ? null : await _actions.QueueTurnActions(
+            conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, result, directAddress, turn.ConversationSettings);
 
         var reply = (result.Reply ?? string.Empty).Trim();
 
-        // 模型想“用语音说这句”（speak）。真正的发送在下边（要等 isGroup/targetId），
-        // 这里先把文本取出来：它得参与“沉默判定”与消息落库，否则“只发语音不说话”会被当成空回复。
-        var voiceText = textOnly ? string.Empty : (result.Speak ?? string.Empty).Trim();
-
-        // 断句归模型（管理员 2026-09-21）：它可以在 speak 里用 `|` 或换行把话切成几段，每段 = 一条语音条（最多 3 条）。
-        // 为什么不让程序切：中文的停顿是语气的一部分（“你是不是傻，我可没这么说” vs “你是不是傻 | 我可没这么说”
-        // 听着是两句话 ✗），这种事模型比正则懂。代码只留技术性限制（条数/字数）。
-        var voiceParts = voiceText
-            .Split(new[] { '|', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => p.Trim())
-            .Where(p => p.Length > 0)
-            .Distinct(StringComparer.Ordinal)   // 模型有时把同一句写两遍（A | A）→ 只发一条
-            .Take(3)
-            .ToList();
-        if (voiceParts.Count == 0 && voiceText.Length > 0)
-        {
-            voiceParts.Add(voiceText);
-        }
+        var voiceText = allowPresentation ? (result.Speak ?? string.Empty).Trim() : string.Empty;
+        var voiceParts = SplitVoiceParts(voiceText);
 
         // 模型可以顺手写一句“我现在的心情”——存下来，下一轮提示词里带上（空/太长会被忽略）
         if (!MemoryUseScope.HasMemory && _mood.SetText(result.Mood, EngineClock.Now))
@@ -229,10 +224,10 @@ public sealed partial class ReplyPipeline
         }
 
         // 模型可以“只戳不说话”：这样也算有动作，不算沉默
-        var pokeTarget = textOnly ? null : result.PokeTargetId;
+        var pokeTarget = allowPresentation ? result.PokeTargetId : null;
 
         if (await TryHandleTurnShortcutsAsync(
-                conversation, turn.Snapshot, turn.Caps, result, reply, sticker, pokeTarget, voiceText, triggerMessageId, turn.SearchText, elapsed, allowEffects: !textOnly))
+                conversation, turn.Snapshot, turn.Caps, result, reply, sticker, pokeTarget, voiceText, triggerMessageId, turn.SearchText, elapsed, allowEffects: !textOnly, conversationSettings: turn.ConversationSettings))
         {
             return;   // 这一轮已经到此为止（开了待批单 / 问了问题 / 就是不说）
         }
@@ -245,13 +240,61 @@ public sealed partial class ReplyPipeline
 
         var (isGroup, targetId) = conversation.Target;
 
-        var (voiceSent, voiceFailed) = await _delivery.TryVoiceAsync(
-            conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, voiceParts, voiceText, isGroup, targetId, result, directAddress);
+        var voiceReport = await _delivery.TryVoiceAsync(
+            conversation, turn.Snapshot, turn.Caps, turn.PlatformPolicy, voiceParts, voiceText, isGroup, targetId, result, directAddress, turn.ConversationSettings);
 
         var report = await _delivery.SendAsync(
             conversation, turn.Context, triggerMessageId, turn.Caps, turn.PlatformPolicy, isGroup, targetId, replyTo,
-            reply, voiceText, voiceParts, voiceFailed, voiceSent, sticker, pokeTarget, elapsed, result, directAddress);
+            reply, voiceText, voiceParts, voiceReport, sticker, pokeTarget, elapsed, result, directAddress);
         pacing?.RecordDelivery(report);
+    }
+
+    private static (BotAgent.Domain.Permissions.ChatCapabilitySet Caps, TurnInputs Turn) ApplyMemoryTaintCaps(
+        BotAgent.Domain.Permissions.ChatCapabilitySet caps,
+        TurnInputs turn,
+        Services.Platforms.EffectiveConversationSettings convSettings,
+        bool isGroup)
+    {
+        if (!MemoryUseScope.HasMemory) return (caps, turn);
+        if (!MemoryUseScope.AllowsEgress(Domain.Memory.ToolEgressClass.LocalPresentation))
+        {
+            var emptyCaps = BotAgent.Domain.Permissions.ChatCapabilitySet.FromSwitches(false, false, false, false, false, null);
+            return (emptyCaps, turn with { Caps = emptyCaps, StickerChoices = new() });
+        }
+        var allowInlineRead = turn.Snapshot.MaxAgentSteps > 1;
+        var allowSameScope = allowInlineRead && MemoryUseScope.AllowsEgress(Domain.Memory.ToolEgressClass.SameScopeRead);
+        var allowExternalRead = allowInlineRead && MemoryUseScope.AllowsEgress(Domain.Memory.ToolEgressClass.ExternalReadEgress);
+        var narrowed = BotAgent.Domain.Permissions.ChatCapabilitySet.FromSwitches(
+            enableWebSearch: allowExternalRead && convSettings.FeatureEnabled("websearch") && convSettings.AllowsReadOnlyTools,
+            enableMusic: allowExternalRead && convSettings.FeatureEnabled("music"),
+            enableVoice: convSettings.FeatureEnabled("voice"),
+            enableStickers: convSettings.FeatureEnabled("stickers"),
+            enablePoke: convSettings.FeatureEnabled("poke"),
+            scenario: turn.Snapshot.ScenarioPreset,
+            policyVersion: caps.Policy.PolicyVersion,
+            approvalsEnabled: false,
+            questionsEnabled: false,
+            catalog: caps.Catalog,
+            enableDocuments: allowSameScope && convSettings.FeatureEnabled("documents") && convSettings.AllowsReadOnlyTools && caps.Catalog.FindBinding("doc.read") is { IsReady: true },
+            enableDigest: allowSameScope && convSettings.FeatureEnabled("digest") && convSettings.AllowsReadOnlyTools && caps.Catalog.FindBinding("chat.digest") is { IsReady: true },
+            enableKnowledge: allowSameScope && convSettings.FeatureEnabled("knowledge") && convSettings.AllowsReadOnlyTools && caps.Catalog.FindBinding("kb.search") is { IsReady: true },
+            enableExternalMcpRead: allowExternalRead && convSettings.AllowsReadOnlyTools,
+            enableScheduler: allowSameScope && convSettings.FeatureEnabled("scheduler") && convSettings.AllowsReadOnlyTools && caps.Catalog.FindBinding("reminder.list") is { IsReady: true },
+            enablePersonalTodo: !isGroup && allowSameScope && convSettings.FeatureEnabled("personal_todo") && convSettings.AllowsReadOnlyTools && caps.Catalog.FindBinding("todo.list") is { IsReady: true });
+        return (narrowed, turn with { Caps = narrowed });
+    }
+
+    private static List<string> SplitVoiceParts(string voiceText)
+    {
+        var voiceParts = voiceText
+            .Split(new[] { '|', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Trim())
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Take(3)
+            .ToList();
+        if (voiceParts.Count == 0 && voiceText.Length > 0) voiceParts.Add(voiceText);
+        return voiceParts;
     }
 
 
@@ -272,19 +315,51 @@ public sealed partial class ReplyPipeline
         long? triggerMessageId,
         string? searchText,
         double elapsed,
-        bool allowEffects = true)
+        bool allowEffects = true,
+        Services.Platforms.EffectiveConversationSettings? conversationSettings = null)
     {
         // P3 审批触发点（V3 §9.4，**默认关**）：模型说“我想调工具”时，服务端**绝不上手执行**，
         // 只可能开一张待批单并公告到群里（模型输出不构成授权）。开不出单 → 照旧安全静默。
         if (allowEffects && !MemoryUseScope.HasMemory && snapshot.EnableApprovals
-            && result.Action == Domain.Reply.ReplyAction.Tool
-            && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0)
+            && (conversationSettings?.AllowsToolRequest ?? true)
+            && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0
+            && (result.Action == Domain.Reply.ReplyAction.Tool
+                || (result.Call is { } pendingCall
+                    && caps.Catalog.Find(pendingCall.ToolId) is { ReadOnly: false })))
         {
             await ReplyCommitBoundary.BeforeEffectAsync();
-            if (await _approvals.OpenApprovalForTool(conversation, result.ToolId, triggerMessageId, caps))
+            var requestedToolId = !string.IsNullOrWhiteSpace(result.ToolId)
+                ? result.ToolId!.Trim()
+                : result.Call?.ToolId;
+            if (string.Equals(requestedToolId, Domain.Permissions.ApprovalFlow.FixedToolId, StringComparison.Ordinal))
             {
-                _research.KeepNote(conversation.SourceKey, searchText, "等待审批");
-                return true;
+                if (await _approvals.OpenApprovalForTool(conversation, requestedToolId, triggerMessageId, caps))
+                {
+                    _research.KeepNote(conversation.SourceKey, searchText, "等待审批");
+                    return true;
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(requestedToolId)
+                     && _replyTools.Allows(snapshot, conversationSettings?.EffectivePolicy, requestedToolId, caps.Catalog, conversationSettings))
+            {
+                var argMap = new Dictionary<string, System.Text.Json.Nodes.JsonNode?>(StringComparer.Ordinal);
+                if (result.Call is { Arguments.Count: > 0 } call
+                    && string.Equals(call.ToolId, requestedToolId, StringComparison.Ordinal))
+                {
+                    foreach (var pair in call.Arguments)
+                        argMap[pair.Key] = System.Text.Json.Nodes.JsonValue.Create(pair.Value);
+                }
+
+                if (await _approvals.OpenApprovalForRealToolAsync(
+                        conversation, requestedToolId, argMap, triggerMessageId, caps))
+                {
+                    _research.KeepNote(conversation.SourceKey, searchText, "等待审批");
+                    return true;
+                }
+            }
+            else if (result.Action == Domain.Reply.ReplyAction.Tool)
+            {
+                await _approvals.OpenApprovalForTool(conversation, requestedToolId, triggerMessageId, caps);
             }
         }
 
@@ -292,6 +367,7 @@ public sealed partial class ReplyPipeline
         // 服务端只是把问题包一层自己的文案（一次性编号 + 有效期）发到当前会话；
         // 谁答一声都算答完，回答也只是一条普通消息，不触发任何动作。
         if (allowEffects && !MemoryUseScope.HasMemory && snapshot.EnableQuestions
+            && (conversationSettings?.AllowsAsk ?? true)
             && result.Action == Domain.Reply.ReplyAction.Ask
             && reply.Length == 0 && sticker is null && pokeTarget is null && voiceText.Length == 0)
         {
@@ -327,5 +403,38 @@ public sealed partial class ReplyPipeline
             return true;
         }
         return false;
+    }
+
+    private bool IsGuestSpeaker(
+        BotConversation conversation,
+        long? triggerMessageId,
+        PlatformContext platformContext,
+        AppSettings snapshot)
+    {
+        if (_accessRoles is null) return false;
+        var trigger = triggerMessageId is long id
+            ? conversation.Messages.FirstOrDefault(m => m.QqMessageId == id)
+            : conversation.Messages.LastOrDefault(m => m.Role == MessageRole.Peer && !m.Recalled);
+        if (trigger?.SenderId is not long uid) return false;
+
+        BotAgent.Domain.Ports.SubjectIdentity subject;
+        if (_messageEnvelopes.TryGetValue(trigger, out var envelope))
+        {
+            var d = envelope.Origin.Driver;
+            subject = new BotAgent.Domain.Ports.SubjectIdentity(
+                Domain.Platforms.PlatformId.Normalize(d.PlatformId),
+                d.AccountScope,
+                d.InstanceId ?? string.Empty,
+                envelope.Message.Sender.NativeUserId,
+                uid > 0 ? uid : null);
+        }
+        else
+        {
+            subject = BotAgent.Domain.Ports.InboundSubjectIdentity.ResolveFromChannel(
+                conversation.Channel, uid, null, platformContext);
+        }
+
+        var role = _accessRoles.ResolveRole(subject, conversation.SourceKey, snapshot.AgentAllowedUsers, false);
+        return role == Domain.Permissions.WorkspaceRole.Guest;
     }
 }

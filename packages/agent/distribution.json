@@ -1,0 +1,15 @@
+{
+  "id": "system.agent",
+  "entryAssembly": "BotAgent.Package.Agent.dll",
+  "entryType": "BotAgent.Packages.Agent.AgentPackagePlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Agent.Contracts",
+      "owner": "system.agent"
+    }
+  ]
+}

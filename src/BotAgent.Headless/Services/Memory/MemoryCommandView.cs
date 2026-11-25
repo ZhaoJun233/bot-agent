@@ -12,10 +12,13 @@ internal static class MemoryCommandView
     public const string GroupOnly = "记忆命令请在与机器人的本人私聊中检查并确认。群内不显示或确认任何记忆内容。";
     public const string Done = "记忆操作已完成。此操作不删除原始聊天记录，也不能撤回已发送的消息。";
     public const string Help = """
-        统一记忆只接受本人明确设置的固定低敏偏好；不会读取原始聊天历史。
+        统一记忆只接受本人明确设置的固定低敏偏好或仅限本人私聊的个人备忘；不会读取原始聊天历史。
         //memory remember language zh|en|ja [to <scope> ...]
         //memory remember length brief|detailed [to <scope> ...]
         //memory remember explanation examples|step-by-step [to <scope> ...]
+        //memory remember timezone Asia/Shanghai|UTC|... [to <scope> ...]
+        //memory remember address <简短称呼<=24字> [to <scope> ...]
+        //memory remember note <个人备忘<=240字>（强制仅限本人私聊，禁止共享到群）
         //memory list [页码] · //memory show <事实ID> · //memory scope
         //memory edit <事实ID> <版本> <偏好类别> <值> [to <scope> ...]
         //memory revoke <事实ID> <scope>（仅撤销该目标的未来使用）

@@ -60,7 +60,8 @@ public enum PlatformFeatureId
 {
     Text = 0, Image = 1, Voice = 2, Quote = 3, Recall = 4,
     Thread = 5, Stickers = 6, Music = 7, Poke = 8,
-    LinkPreview = 9, WebSearch = 10
+    LinkPreview = 9, WebSearch = 10, Documents = 11, Digest = 12,
+    Knowledge = 13, Episodes = 14, Jargon = 15, Scheduler = 16, PersonalTodo = 17
 }
 public sealed record FeatureOverride(PlatformFeatureId Feature, bool Enabled)
 {
@@ -121,8 +122,11 @@ public sealed record ProviderEdit(ProviderKey Key, ProviderMetadataPatch Changes
 }
 public sealed record RegisteredConfigurationChanges(
     ImmutableArray<PluginEnabledEdit> Plugins,
-    ImmutableArray<ProviderEdit> Providers, ImmutableArray<PolicyEdit> Policies)
+    ImmutableArray<ProviderEdit> Providers, ImmutableArray<PolicyEdit> Policies,
+    ImmutableArray<ConversationProfileEdit> ConversationProfiles = default)
 {
+    public ImmutableArray<ConversationProfileEdit> ConversationProfiles { get; init; } =
+        ConversationProfiles.IsDefault ? ImmutableArray<ConversationProfileEdit>.Empty : ConversationProfiles;
     public override string ToString() => "RegisteredConfigurationChanges";
 }
 public enum CredentialBindingState
@@ -150,8 +154,11 @@ public sealed record ModelCredentialView(ModelCredentialKey Key, bool Configured
 public sealed record RegisteredConfigurationView(
     ImmutableArray<PluginConfigurationView> Plugins,
     ImmutableArray<ProviderConfigurationView> Providers,
-    ImmutableArray<ModelCredentialView> ModelCredentials)
+    ImmutableArray<ModelCredentialView> ModelCredentials,
+    ImmutableArray<ConversationProfileView> ConversationProfiles = default)
 {
+    public ImmutableArray<ConversationProfileView> ConversationProfiles { get; init; } =
+        ConversationProfiles.IsDefault ? ImmutableArray<ConversationProfileView>.Empty : ConversationProfiles;
     public override string ToString() => "RegisteredConfigurationView";
 }
 

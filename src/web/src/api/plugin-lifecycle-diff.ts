@@ -18,9 +18,9 @@ export function sameLifecycleManifest(left: ZbaPluginPackageManifest, right: Zba
 export function lifecycleChanges(current: ZbaPluginPackageManifest, target: ZbaPluginPackageManifest | null): PluginManifestChange[] {
   const before = lifecycleManifest(current)
   const after = target && lifecycleManifest(target)
-  return (Object.keys(before) as Array<keyof typeof before>).sort(compare)
+  return ([...new Set([...Object.keys(before), ...Object.keys(after ?? {})])] as Array<keyof typeof before>).sort(compare)
     .filter(field => !after || JSON.stringify(before[field]) !== JSON.stringify(after[field]))
-    .map(field => ({ field, before: JSON.stringify(before[field]), after: after ? JSON.stringify(after[field]) : null }))
+    .map(field => ({ field, before: JSON.stringify(before[field]) ?? null, after: after ? JSON.stringify(after[field]) ?? null : null }))
 }
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']'

@@ -112,7 +112,7 @@ public sealed partial class WebUiServer
         {
             ["enabled"] = _settings.AiModeEnabled,
             ["model"] = _settings.Model,
-            ["desire"] = _settings.AiDesire,
+            ["groupInterjectionProbability"] = _settings.GroupInterjectionProbability,
             ["personaConfigured"] = !string.IsNullOrWhiteSpace(_settings.BotPersona)
         },
         ["conversations"] = _registry.Snapshot().Count,

@@ -24,14 +24,17 @@ import BreakableId from '../../shared/ui/BreakableId.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { createOperationKey, newNonce, nowSeconds } from '../configuration/draft'
 import CapabilitySettingsHost from './CapabilitySettingsHost.vue'
+import OfficialMessagingDialog from './OfficialMessagingDialog.vue'
 import { configurationCapabilities, configurationFor, type CapabilityConfiguration } from './configuration-ownership'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import PluginMarketplaceDialog from './PluginMarketplaceDialog.vue'
+import PluginUiFrame from './PluginUiFrame.vue'
 import { protocolLabel } from './provider-protocols'
 import { settingsFor, type PluginSettingsSpec } from './plugin-settings'
 import RegisteredPluginSwitch from './RegisteredPluginSwitch.vue'
 import { reasonLabel } from './reason-labels'
 import { capabilityTitle } from '../../shared/friendly'
+import { formatAccountScopeLabel } from '../platforms/driver-registry'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
@@ -127,6 +130,13 @@ const confirmButton = ref<HTMLButtonElement | null>(null)
 const confirmCancelButton = ref<HTMLButtonElement | null>(null)
 /** 页面标题：触发器已经不在了时的安全落点（tabindex="-1"，不进 Tab 顺序）。 */
 const pageHeading = ref<HTMLElement | null>(null)
+const messagingTarget = ref<ZbaManagedObjectKey | null>(null)
+const messagingTrigger = ref<HTMLElement | null>(null)
+function openMessaging(item: ZbaManagedDescriptor, event: Event): void {
+  messagingTrigger.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  messagingTarget.value = item.key
+}
+watch(() => [props.client, props.active], () => { messagingTarget.value = null })
 /**
  * 打开确认框之前焦点落在哪个元素上（S4-M1）。
  *
@@ -204,7 +214,7 @@ const visibleSystemConfigurations = computed(() => {
     [item.id, item.title, item.summary].some(value => value.toLocaleLowerCase().includes(query)))
 })
 function openCapabilityConfiguration(capability: CapabilityConfiguration, event?: MouseEvent): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   settingsTarget.value = { capability, trigger: eventTrigger(event) }
 }
 function pluginSpec(descriptor: ZbaManagedDescriptor): PluginSettingsSpec | undefined {
@@ -215,7 +225,7 @@ function openSettings(descriptor: ZbaManagedDescriptor, event?: MouseEvent): voi
   openSettingsById(descriptor.key.key, eventTrigger(event))
 }
 function openSettingsById(id: string, trigger?: HTMLElement | null): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   const descriptor = items.value.find(item => item.key.kind === 'plugin' && item.key.key === id)
   const capability = configurationFor(id) ?? {
     id, kind: 'plugin' as const, pluginKey: id, title: descriptor ? capabilityTitle(descriptor.displayName, descriptor.key) : id,
@@ -234,6 +244,18 @@ function closeSettings(): void {
 const providerTarget = ref<{ key?: string; trigger: HTMLElement | null } | null>(null)
 const providerDialog = ref<InstanceType<typeof ProviderEditorDialog> | null>(null)
 const marketplaceDialog = ref<InstanceType<typeof PluginMarketplaceDialog> | null>(null)
+const pluginUiDialog = ref<InstanceType<typeof PluginUiFrame> | null>(null)
+const pluginUiTarget = ref<{ pluginId: string; trigger: HTMLElement | null } | null>(null)
+function openPluginUiById(pluginId: string, trigger?: HTMLElement | null): void {
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
+  pluginUiTarget.value = { pluginId, trigger: trigger ?? pageHeading.value }
+}
+function closePluginUi(): void {
+  const trigger = pluginUiTarget.value?.trigger ?? null
+  pluginUiTarget.value = null
+  void nextTick(() => restoreFocus(trigger, pageHeading.value))
+  void load(undefined, 'background')
+}
 const providerViews = ref<ZbaProviderConfigurationView[]>([])
 const configurationRecoveries = computed(() => pendingOperations(props.client, 'configuration').filter(item => item.state !== 'settled'))
 const recoveryChecking = ref<string | null>(null)
@@ -257,7 +279,7 @@ async function checkConfigurationRecovery(record: PendingOperation): Promise<voi
   } finally { if (client === props.client) recoveryChecking.value = null }
 }
 function openProvider(key?: string, event?: MouseEvent): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   providerTarget.value = { key, trigger: eventTrigger(event) }
 }
 function providerView(item: ZbaManagedDescriptor): ZbaProviderConfigurationView | undefined {
@@ -268,7 +290,7 @@ function providerView(item: ZbaManagedDescriptor): ZbaProviderConfigurationView 
  *  弹窗按需挂载，页面初始化不读取插件市场目录。 */
 const marketplaceTarget = ref<{ focusPluginId?: string; trigger: HTMLElement | null } | null>(null)
 function openMarketplace(focusPluginId?: string, event?: MouseEvent): void {
-  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value) return
+  if (settingsTarget.value || providerTarget.value || marketplaceTarget.value || pluginUiTarget.value) return
   marketplaceTarget.value = { focusPluginId, trigger: eventTrigger(event) }
 }
 function openMarketplaceSettings(pluginId: string): void {
@@ -276,6 +298,11 @@ function openMarketplaceSettings(pluginId: string): void {
   const trigger = marketplaceTarget.value?.trigger
   marketplaceTarget.value = null
   void nextTick(() => openSettingsById(pluginId, trigger))
+}
+function openMarketplacePluginUi(pluginId: string): void {
+  const trigger = marketplaceTarget.value?.trigger
+  marketplaceTarget.value = null
+  void nextTick(() => openPluginUiById(pluginId, trigger))
 }
 function closeMarketplace(): void {
   const trigger = marketplaceTarget.value?.trigger ?? null
@@ -386,7 +413,7 @@ const visibleItems = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
   if (!query) return items.value
   return items.value.filter((item) => [
-    capabilityTitle(item.displayName, item.key), item.displayName, keyLabel(item.key),
+    capabilityTitle(item.displayName, item.key), item.displayName, keyLabel(item.key), rawKeyLabel(item.key),
     kindLabel(item.key.kind), runtimeLabel(item.runtimeState), item.errorCode ?? ''
   ].join(' ').toLocaleLowerCase().includes(query))
 })
@@ -419,7 +446,7 @@ function keyIdentity(key: ZbaManagedObjectKey): string {
   }
 }
 
-function keyLabel(key: ZbaManagedObjectKey): string {
+function rawKeyLabel(key: ZbaManagedObjectKey): string {
   switch (key.kind) {
     case 'driver':
       return key.key.instanceId
@@ -432,12 +459,25 @@ function keyLabel(key: ZbaManagedObjectKey): string {
   }
 }
 
+function keyLabel(key: ZbaManagedObjectKey): string {
+  switch (key.kind) {
+    case 'driver':
+      return key.key.instanceId
+        ? key.key.platformId + ' / ' + key.key.instanceId
+        : key.key.platformId + ' / ' + formatAccountScopeLabel(key.key.accountScope)
+    case 'device':
+      return key.key.deviceId
+    default:
+      return key.key
+  }
+}
+
 /**
  * DOM/测试用的稳定标识：带上 kind。标签本身不是主键——同名插件与供应商
  * 可以合法共存，只用标签会让两个卡片的 data-testid 撞在一起。
  */
 function keySlug(key: ZbaManagedObjectKey): string {
-  return key.kind + ':' + keyLabel(key)
+  return key.kind + ':' + rawKeyLabel(key)
 }
 
 function kindLabel(kind: ZbaManagedObjectKey['kind']): string {
@@ -1385,7 +1425,7 @@ function discardEditorSecrets(): void {
 async function requestEditorLeave(reason: 'lock' | 'downgrade' | 'navigate', trigger?: HTMLElement | null): Promise<boolean> {
   // Lock clears secrets immediately; receipt keys remain in the identity-scoped registry.
   if (reason === 'lock') { discardEditorSecrets(); return true }
-  for (const editor of [configurationDialog.value, providerDialog.value, marketplaceDialog.value]) {
+  for (const editor of [configurationDialog.value, providerDialog.value, marketplaceDialog.value, pluginUiDialog.value]) {
     if (editor && !(await editor.requestLeave(reason, trigger))) return false
   }
   discardEditorSecrets()
@@ -1591,6 +1631,8 @@ defineExpose({
         </p>
         <footer class="cap-card-foot">
           <button v-if="item.key.kind === 'provider'" type="button" class="tonal cap-settings" :data-testid="'cap-provider-edit-' + keySlug(item.key)" :aria-label="'设置 ' + capabilityTitle(item.displayName, item.key)" @click="openProvider(item.key.key, $event)">设置</button>
+          <button v-if="item.key.kind === 'driver' && item.key.key.platformId === 'qq.official'" type="button" class="tonal"
+            :data-testid="'cap-messaging-' + keySlug(item.key)" @click="openMessaging(item, $event)">消息能力与限制</button>
           <button
             v-if="item.key.kind === 'plugin'"
             type="button"
@@ -1771,13 +1813,31 @@ defineExpose({
       :fallback="pageHeading"
       @close="closeMarketplace"
       @open-settings="openMarketplaceSettings"
+      @open-ui="openMarketplacePluginUi"
       @changed="load(undefined, 'background')"
       @enable-admin="emit('enable-admin')"
       @auth-expired="(e) => emit('auth-expired', e)"
     />
 
+    <PluginUiFrame
+      v-if="pluginUiTarget" ref="pluginUiDialog"
+      :key="pluginUiTarget.pluginId"
+      :client="props.client"
+      :plugin-id="pluginUiTarget.pluginId"
+      :mode="props.mode"
+      :writes-enabled="props.writesEnabled"
+      :active="props.active"
+      :trigger="pluginUiTarget.trigger"
+      :fallback="pageHeading"
+      @close="closePluginUi"
+      @saved="load(undefined, 'background')"
+      @auth-expired="(e) => emit('auth-expired', e)"
+    />
+
     <ProviderEditorDialog v-if="providerTarget" ref="providerDialog" :key="providerTarget.key ?? 'new-provider'" :client="props.client" :mode="props.mode" :writes-enabled="props.writesEnabled" :active="props.active" :provider-key="providerTarget.key" :trigger="providerTarget.trigger" :fallback="pageHeading" @close="providerTarget = null" @saved="load(undefined, 'background')" @test="testSavedProvider" @enable-admin="emit('enable-admin')" @auth-expired="(e) => emit('auth-expired', e)" />
 
+    <OfficialMessagingDialog v-if="messagingTarget" :client="props.client" :target="messagingTarget" :active="props.active"
+      :trigger="messagingTrigger" :fallback="pageHeading" @close="messagingTarget = null" @auth-expired="value => emit('auth-expired', value)" />
     <CapabilitySettingsHost
       v-if="settingsTarget" ref="configurationDialog"
       :key="settingsTarget.capability.id"

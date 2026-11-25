@@ -17,9 +17,11 @@ public static partial class Program
         var body = string.Empty;
         using (var bot = StartBot(environment(panel, ws, data)))
         {
-            await WaitForPortAsync(panel, token, bot);
+            await WaitForBusinessReadyAsync(panel, token, bot);
             var ensure = await ZbaAsync(http, "POST", root + "/sessions/ensure", admin,
                 """{"sourceKey":"panel:workspace"}""");
+            Check("S55 receipt loss: session available after business readiness", ensure.Status == 200,
+                "status=" + ensure.Status);
             var session = JsonNode.Parse(ensure.Body)?["session"]?["id"]?.GetValue<string>();
             body = new JsonObject
             {
@@ -38,7 +40,7 @@ public static partial class Program
         File.Move(receipt, saved);
         using (var bot = StartBot(environment(panel, ws, data)))
         {
-            await WaitForPortAsync(panel, token, bot);
+            await WaitForBusinessReadyAsync(panel, token, bot);
             var find = await ZbaAsync(http, "POST", root + "/tasks/find", admin,
                 new JsonObject { ["key"] = key }.ToJsonString());
             Check("S55 receipt loss: missing receipt remains unknown",
@@ -62,7 +64,7 @@ public static partial class Program
         File.Copy(saved, receipt, overwrite: true);
         using (var bot = StartBot(environment(panel, ws, data)))
         {
-            await WaitForPortAsync(panel, token, bot);
+            await WaitForBusinessReadyAsync(panel, token, bot);
             var find = await ZbaAsync(http, "POST", root + "/tasks/find", admin,
                 new JsonObject { ["key"] = key }.ToJsonString());
             Check("S55 receipt loss: restored history is verified on restart",

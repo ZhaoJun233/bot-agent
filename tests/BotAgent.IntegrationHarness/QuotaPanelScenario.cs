@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace BotAgent.IntegrationHarness;
@@ -45,9 +46,6 @@ public static partial class Program
             ["QQCHAT_ONEBOT_URL"] = $"http://0.0.0.0:{botWsPort}",
             ["QQCHAT_UIN"] = "10001",
             ["QQCHAT_WHITELIST"] = $"{syntheticGroupId},{budgetGroupId}",
-            ["QQCHAT_GROUP_COOLDOWN"] = "0",
-            ["QQCHAT_PRIVATE_COOLDOWN"] = "0",
-            ["QQCHAT_IDLE_FALLBACK"] = "0",
             ["QQCHAT_STICKERS"] = "0",
             ["QQCHAT_SPLIT_REPLIES"] = "0",
             ["QQCHAT_ENABLE_POKE"] = "0",
@@ -236,6 +234,15 @@ public static partial class Program
         Check("find 返回提交时回执而不是后续用量快照", found.Status == 200
             && JsonNode.Parse(found.Body)?["found"]?.GetValue<bool>() == true
             && JsonNode.DeepEquals(JsonNode.Parse(found.Body)?["quota"], receipt));
+        var safeFound = await ZbaAsync(http, "POST", zbaRoot + "/operations/find", adminToken,
+            JsonSerializer.Serialize(new { owner = "preset.feature.token-quota", idempotencyKey = saveKey }));
+        var safeReceipt = JsonNode.Parse(safeFound.Body)?["receipt"];
+        Check("real quota save exposes safe same-transaction recovery", safeFound.Status == 200
+            && safeReceipt?["state"]?.GetValue<string>() == "committed"
+            && safeReceipt?["provenance"]?.GetValue<string>() == "recorded"
+            && safeReceipt?["generation"]?.GetValue<string>() is { Length: 97 } activation
+            && activation[64] == '.' && Guid.TryParseExact(activation[65..], "N", out _)
+            && !safeFound.Body.Contains(saveKey));
 
         var config = await ZbaAsync(http, "POST", zbaRoot + "/configuration/read", adminToken, """{"kind":1}""");
         var configNode = JsonNode.Parse(config.Body);
@@ -284,7 +291,7 @@ public static partial class Program
             $"actor={auditActor ?? "(null)"}");
 
         using var bot2 = StartBot(env);
-        await WaitForPortAsync(panelPort, cts.Token, bot2);
+        await WaitForBusinessReadyAsync(panelPort, cts.Token, bot2);
         var (restartCode, restartBody) = await HttpGetAsync(quotaUrl, panelToken);
         var restarted = JsonNode.Parse(restartBody) as JsonObject;
         Check("重启后每日配额仍然持久化",
@@ -328,6 +335,24 @@ public static partial class Program
             && disabledUsage?["energySaving"]?.GetValue<bool>() == true);
 
         await bot2.StopAsync();
+
+        var packagePath = Path.GetFullPath(Path.Combine(dataDir, "data", "plugins", quotaPluginId));
+        var preservedPath = Path.GetFullPath(Path.Combine(dataDir, "quota-package-preserved"));
+        if (!packagePath.StartsWith(Path.GetFullPath(dataDir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || !preservedPath.StartsWith(Path.GetFullPath(dataDir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("synthetic_path_escape");
+        Directory.Move(packagePath, preservedPath);
+        using var bot3 = StartBot(env, seedOfficialPlugins: false);
+        await WaitForBusinessReadyAsync(panelPort, cts.Token, bot3);
+        var absent = await ZbaAsync(http, "GET", zbaRoot + "/quotas", readToken);
+        Check("physically absent quota package has no legacy management fallback", absent.Status == 503
+            && JsonNode.Parse(absent.Body)?["error"]?["code"]?.GetValue<string>() == "quota_management_unavailable");
+        var absentReceipt = await ZbaAsync(http, "POST", zbaRoot + "/operations/find", adminToken,
+            JsonSerializer.Serialize(new { owner = quotaPluginId, idempotencyKey = saveKey }));
+        Check("safe committed receipt survives physical package absence", absentReceipt.Status == 200
+            && JsonNode.DeepEquals(JsonNode.Parse(absentReceipt.Body)?["receipt"], safeReceipt)
+            && !Directory.Exists(packagePath));
+        await bot3.StopAsync();
     }
 
     private static int QuotaGroupSendCount(MockProtocol protocol, long groupId)

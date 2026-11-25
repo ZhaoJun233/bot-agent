@@ -1,5 +1,6 @@
 using BotAgent.Engine.Runtime;
 using BotAgent.Domain.Ports;
+using BotAgent.Domain.Qq;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Qq;
 using System.Collections.Concurrent;
@@ -17,7 +18,7 @@ namespace BotAgent.Services.Conversations;
 ///      查询通常十几毫秒，等一下就能让"第一次说话那轮"也带着头衔，而不必等下一句；
 ///      等不到也绝不能把回复挂住。
 /// </summary>
-public sealed class MemberRoleUseCase
+public sealed partial class MemberRoleUseCase
 {
     private readonly IQqChatSource _source;
     private readonly IMemberRoleRepository _store;
@@ -41,7 +42,15 @@ public sealed class MemberRoleUseCase
     /// 需要补头衔时再后台去问协议端。
     /// </summary>
     public void Remember(QqChatMessage msg)
+        => Remember(msg, Channels.Key(msg.Channel, msg.IsGroup, msg.IsGroup ? msg.GroupId : msg.UserId));
+
+    public void Remember(QqChatMessage msg, string sourceKey)
     {
+        if (Channels.IsOfficial(msg.Channel) || Channels.IsAliasId(msg.UserId))
+        {
+            RememberOfficial(msg, sourceKey);
+            return;
+        }
         var uid = msg.UserId.ToString();
         // 事件里带 role（一定有）、可能带 title（看协议端）；titleChecked 只在真拿到 title 时才算 true
         _store.Remember(uid, msg.GroupId, msg.SenderRole, msg.SenderTitle, msg.SenderName,
@@ -106,6 +115,7 @@ public sealed class MemberRoleUseCase
     /// <summary>等本群待补身份查完（最多等 timeout，超时就算了，别拖慢回复）。</summary>
     public async Task WaitForPendingAsync(long groupId, TimeSpan timeout)
     {
+        if (Channels.IsAliasId(groupId)) return;
         var pending = _pending
             .Where(kv => kv.Key.Group == groupId && !kv.Value.IsCompleted)
             .Select(kv => kv.Value)
@@ -120,5 +130,8 @@ public sealed class MemberRoleUseCase
 
     /// <summary>取给提示词用的身份清单（≤ limit 人，只给"值得说的人"）。</summary>
     public string? DescribeForPrompt(long groupId, int limit, out int count)
-        => _store.DescribeForPrompt(groupId, limit, out count);
+    {
+        count = 0;
+        return Channels.IsAliasId(groupId) ? null : _store.DescribeForPrompt(groupId, limit, out count);
+    }
 }

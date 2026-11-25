@@ -443,7 +443,7 @@ public static class Program
     {
         var g = c["gate"] as JsonObject ?? throw new InvalidOperationException("gate 节缺失");
         var sw = g["switches"] as JsonObject ?? new JsonObject();
-        var set = ChatCapabilitySet.FromSwitches(
+        var set = ResearchToolFixture.Capabilities(
             enableWebSearch: sw["webSearch"]?.GetValue<bool>() ?? true,
             enableMusic: sw["music"]?.GetValue<bool>() ?? true,
             enableVoice: sw["voice"]?.GetValue<bool>() ?? true,
@@ -677,7 +677,8 @@ public static class Program
             TriggerUsable: f["triggerUsable"]?.GetValue<bool>() ?? true,
             LastSelfIndex: f["lastSelfIndex"]?.GetValue<int>() ?? -1,
             DirectAddress: f["directAddress"]?.GetValue<bool>() ?? false,
-            TriggerWasEcho: f["triggerWasEcho"]?.GetValue<bool>() ?? false);
+            TriggerWasEcho: f["triggerWasEcho"]?.GetValue<bool>() ?? false,
+            TriggerWasCurrentAtGeneration: f["triggerWasCurrentAtGeneration"]?.GetValue<bool>() ?? false);
 
         var result = ReplyTargetRules.Resolve(facts);
         var detail = $"target={result.Target?.ToString(CultureInfo.InvariantCulture) ?? "(null)"} reason={result.ReasonCode}";

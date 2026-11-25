@@ -75,6 +75,119 @@ string Index(params PluginPackageManifest[] manifests)
 try
 {
     AppDatabase.Initialize();
+    if (args.Contains("--d2-delivery-combo", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS D2 delivery & combo: {await Program.RunD2DeliveryAndComboChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--d3-d5-acceptance", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS D3/D4/D5 acceptance: {await Program.RunD3D4D5AcceptanceChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--installed-presentation", StringComparer.Ordinal))
+    {
+        await Program.RunInstalledPresentationChecks(root);
+        return;
+    }
+    if (args.Contains("--dynamic-configuration-runtime", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS dynamic configuration runtime: {await Program.RunDynamicConfigurationRuntimeChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--dynamic-configuration", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS dynamic configuration: {await Program.RunDynamicConfigurationChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--metadata-runtime", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS metadata runtime: {await Program.RunMetadataRuntimeChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--governance-deadline", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS governance deadline: {await Program.RunGovernanceDeadlineChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--quota-contracts", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS quota contracts: {await Program.RunQuotaContractChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--sdk-contracts", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS SDK contracts: {await Program.RunSdkContractChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--default-bundle", StringComparer.Ordinal))
+    {
+        checks += await Program.RunHostDefaultBundleChecks(root);
+        Console.WriteLine($"默认发行检查通过：{checks}");
+        return;
+    }
+    if (args.Contains("--research-package", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS research package: {await Program.RunResearchPackageChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--number-constraints", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS number constraints: {await Program.RunNumberConstraintChecks()} checks");
+        await Program.RunSettingNumberSdkChecks();
+        await Program.RunSettingNumberRuntimeChecks(root);
+        return;
+    }
+    if (args.Contains("--research-contracts", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS research contracts: {await Program.RunResearchContractChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--quota-package", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS quota package: {await Program.RunQuotaPackageChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--resource-runtime", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS resource runtime: {await Program.RunPluginResourceRuntimeChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--web-resource", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS web resource: {await Program.RunWebResourceChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--research-resources", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS research resources: {await Program.RunResearchResourceChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--research-adoption", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS research adoption: {await Program.RunResearchAdoptionChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--tool-contributions", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS tool contributions: {await Program.RunToolContributionChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--chat-tool-cutover", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS chat tool cutover: {await Program.RunChatToolCutoverChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--tool-version", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS tool version: {await Program.RunToolVersionChecks(root)} checks");
+        return;
+    }
+    if (args.Contains("--dependency-runtime", StringComparer.Ordinal))
+    {
+        Console.WriteLine($"PASS dependency runtime: {await Program.RunRuntimeDependencyGenerationChecks(root)} checks");
+        return;
+    }
     var package = Zip("probe.dll", Encoding.UTF8.GetBytes("synthetic"));
     var settings = new[]
     {
@@ -304,8 +417,36 @@ try
     checks += await Program.RunLifecycleRuntimeChecks(root);
     checks += await Program.RunLifecycleSourceChecks(root);
     checks += await Program.RunLifecycleGateChecks(root);
+    checks += await Program.RunColdLifecycleChecks(root);
+    checks += await Program.RunManifestSemanticChecks(root);
+    checks += await Program.RunNumberConstraintChecks();
+    checks += await Program.RunSettingNumberSdkChecks();
+    checks += await Program.RunSettingNumberRuntimeChecks(root);
+    checks += await Program.RunPresetIntentChecks(root);
+    checks += await Program.RunMetadataRuntimeChecks(root);
+    checks += await Program.RunRuntimeDependencyGenerationChecks(root);
+    checks += await Program.RunSharedContractRuntimeChecks(root);
+    checks += await Program.RunPluginResourceRuntimeChecks(root);
+    checks += await Program.RunWebResourceChecks(root);
+    checks += await Program.RunResearchResourceChecks(root);
+    checks += await Program.RunControlPackageChecks(root);
+    checks += await Program.RunHostDefaultBundleChecks(root);
+    checks += await Program.RunResearchAdoptionChecks(root);
+    checks += await Program.RunToolContributionChecks(root);
+    checks += await Program.RunToolVersionChecks(root);
+    checks += await Program.RunChatToolCutoverChecks(root);
+    checks += await Program.RunSdkContractChecks(root);
+    checks += await Program.RunQuotaContractChecks(root);
+    checks += await Program.RunQuotaPackageChecks(root);
+    checks += await Program.RunResearchPackageChecks(root);
+    checks += await Program.RunResearchContractChecks(root);
     checks += await Program.RunConfigurationInstallChecks(root);
+    checks += Program.RunPresetIntentWriterProtection();
     checks += await Program.RunGovernanceRegressionChecks(root);
+    checks += await Program.RunGovernanceDeadlineChecks(root);
+    checks += await Program.RunMetadataIsolationChecks(root);
+    checks += await Program.RunInstalledPresentationChecks(root);
+    checks += await Program.RunD2DeliveryAndComboChecks(root);
     Console.WriteLine($"PASS plugin market probe: {checks} checks");
 }
 finally

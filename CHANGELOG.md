@@ -12,7 +12,21 @@
 
 ## [Unreleased]
 
-（暂无）
+### Changed
+
+- **Web 管理控制台领域化重构**：按「工作台 / 接入与扩展 / 运行与观测」重塑 3 组 8 项一级导航，独立拆分为 **模型供应商**、**消息平台**、**插件中心** 与五分区 **系统配置**（含 `system.*` 核心系统包只读总览表），不再将所有后端包平铺至单一能力卡片墙；统一模型配置术语为「模型供应商」。
+- **模块化设计系统与沙箱主题同步**：将前端样式拆分为 6 层（`tokens` / `reset` / `layout` / `components` / `responsive` / `base`），新增 `UiSwitch`（44×24px WCAG 2.2 达标）、`UiTabs`、`UiBanner`、`UiConfirmDialog`、`UiEmptyState` 与右侧抽屉详情；运行时插件沙箱 iframe（表情包、Token 配额等）自动同步宿主深浅主题，并支持从插件卡片一键「打开界面」。
+- **平台驱动「接入与策略」包级前端解耦**：将 QQ 私域、QQ 官方开放平台、飞书与本地调试 4 个驱动的标量字段、秘密槽位（飞书专属槽位 3/4/5）、字段标签/提示、凭据说明与策略输入文案全部下沉至各自 `packages/platform-*/frontend/presentation.ts`；「消息平台」页移除页头聚合按钮，每张驱动卡片的「接入与策略」直达该驱动专属配置抽屉，并按 `platformId` 切片展示与保存 `platformPolicies` 条目（系统配置页的 `system.platform-*` 跳转同步直达对应驱动抽屉）。
+- **模型供应商 API 地址与密钥集成**：将模型 `API 根地址`（`modelBaseUrl`）、`默认模型`（`model`）与 `API Key`（`Slot 0` 与独立凭据）全部收归对应模型供应商卡片与 `ProviderEditorDialog` 内联管理；`primary` 直接管理主模型地址、默认模型与 Slot 0 密钥并锁定优先级/启用态/删除，非主供应商默认采用独立 API Key 并自动派生 `credentialKey`（支持在折叠高级区自定义或复用已有键）；页头「路由与采样参数」（`scope="models"`）精简为纯路由与采样设置，移除重复的主模型 URL/密钥及旧注册表。
+- **13 项对话功能插件迁出宿主至官方市场**：将 13 个 `preset.feature.*` 功能插件（`digest`、`documents`、`knowledge`、`music`、`personal-todo`、`poke`、`profiles`、`scheduler`、`stickers`、`token-quota`、`vibes`、`voice`、`websearch`，首版 `1.1.0`）迁出主仓库并移交官方市场仓库 `ZhaoJun233/bot-agent-plugins` 独立发布；宿主内建发行包精简为 **9 个 `system.*` 核心与平台包**，新实例默认 0 预装功能插件且启动零自动下载，需在 `/web/`「插件中心」按需安装；新增 `OfficialPresetPolicy` 保持对既有 `1.0.0` `host-distribution://` 状态封套、历史配置与 `tenant_quotas` 账本的平滑兼容与升级/卸载，并将历史配额迁移 SQL（`preset.token-quota.14-15.{up,down}.sql`）迁入 `src/BotAgent.Storage/Schema/`，静态前端呈现注册与配额共享类型迁入 `contracts/ui/{presentations,quotas}/`。
+- **全站操作与观测打磨**：顶栏常驻全局管理员模式切换；系统配置提供多行文本域与字符计数；系统概览组件表支持按领域直达下钻；轨迹页新增节点级耗时明细抽屉；运行日志终端新增自动换行切换与同步状态提示。
+
+### Fixed
+
+- 修复 `SettingsStore.PrepareRegisteredProviders` 在同一配置事务中校验新登记或更新的模型供应商时未先观测本次 `proposedMutations` 新写入的独立 `ModelCredentialKey` 导致单步新建/换键必报 `credential_required` 的问题，并对齐 `Ollama` 无密钥启用的校验规则；同步修复前端配置提交错误摘要未透传结构化 `result.errors`（如 `endpoint_authorization_required` / `credential_required`）的问题。
+
+- 修复平台访问策略编辑器在禁用规则（`actionKind` 1→0）时的校验死锁问题、嵌入配置页重复元信息渲染、「消息平台」未决提交恢复横幅 target 匹配遗漏及空 `instanceId` 卡片尾部悬空斜杠展示。
+- 修复右侧抽屉入场动画瞬时越过视口右边界、Firefox 品牌标识次像素高度偏差与 `restart.spec.ts` 等待宿主完全就绪竞态。
 
 ## [1.4.0] - 2026-11-10
 
@@ -46,7 +60,7 @@
 - 后端继续使用 .NET 10；Linux x64 + Docker 采用预构建产物及独立 Web 资源。升级前按[发布检查单](docs/operations/release-checklist.md)留存可恢复的应用、数据库与前端版本。
 - 从公开 v1.3.0 升级时，物理数据库结构由 13 迁移至 14。旧宿主不能直接打开新版结构；回退必须恢复匹配的数据库快照，不能只替换二进制。
 - 统一记忆和回复节奏的启用仍由各自设置决定。固定示例包验证不代表完整市场确认；Python 进程生命周期管理不提供文件或网络隔离。
-- 实际使用观察暂缓。客户端统计、任务完成状态与合成回归不代表实际用途、费用或维护时间结论。范围与后续项见[当前进度](docs/plans/product-reliability-progress-2026-11.md)。
+- 实际使用观察暂缓。客户端统计、任务完成状态与合成回归不代表实际用途、费用或维护时间结论。
 
 ## [1.3.0] - 2026-11-03
 

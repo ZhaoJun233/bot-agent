@@ -1,3 +1,5 @@
+using BotAgent.Services.Net;
+
 namespace BotAgent.Domain.Configuration;
 
 public enum ConfigurationFieldId
@@ -27,7 +29,7 @@ public enum ConfigurationFieldId
     AgentTimeoutSeconds = 23,  // reserved: host timeout removed
     AgentTools = 24,           // reserved: host tools removed
     AgentWorkDir = 25,         // reserved: host workdir removed
-    AiDesire = 26,
+    AiDesire = 26,            // reserved: legacy reply policy removed
     AiModeEnabled = 27,
     ApprovalApprovers = 28,
     BotPersona = 29,
@@ -38,11 +40,11 @@ public enum ConfigurationFieldId
     EnableAgentBridge = 34,
     EnableAgentMask = 35,
     EnableApprovals = 36,
-    EnableAtmosphereDamping = 37,
+    EnableAtmosphereDamping = 37, // reserved: legacy desire damping removed
     EnableHostAgent = 38,      // reserved: host switch removed
-    EnableLinkPreview = 39,
+    EnableLinkPreview = ResearchSettings.LegacyIds.EnableLinkPreview,
     EnableMusic = 40,
-    EnableParticipationGating = 41,
+    EnableParticipationGating = 41, // reserved: pacing owns admission
     EnablePoke = 42,
     EnableProactive = 43,
     EnableProfileSummary = 44,
@@ -50,7 +52,7 @@ public enum ConfigurationFieldId
     EnableServerAgent = 46,
     EnableStickers = 47,
     EnableVoice = 48,
-    EnableWebSearch = 49,
+    EnableWebSearch = ResearchSettings.LegacyIds.EnableWebSearch,
     FastModel = 50,
     FastReply = 51,
     FastThinkingBudget = 52,
@@ -60,14 +62,14 @@ public enum ConfigurationFieldId
     FeishuEnabled = 56,
     FeishuWhitelist = 57,
     FilterActionNarration = 58,
-    GroupCooldownSeconds = 59,
+    GroupCooldownSeconds = 59, // reserved: replaced by completion cooldown
     HealthReportEnabled = 60,
     HealthReportTargets = 61,
     HealthReportTime = 62,
-    IdleFallbackSeconds = 63,
+    IdleFallbackSeconds = 63, // reserved: internal scheduler maintenance
     IgnoreBracketMessages = 64,
-    LinkPreviewMax = 65,
-    LinkPreviewTimeoutSeconds = 66,
+    LinkPreviewMax = ResearchSettings.LegacyIds.LinkPreviewMax,
+    LinkPreviewTimeoutSeconds = ResearchSettings.LegacyIds.LinkPreviewTimeoutSeconds,
     LocalChannelIds = 67,
     MaxAgentSteps = 68,
     MaxConcurrentReplies = 69,
@@ -98,16 +100,16 @@ public enum ConfigurationFieldId
     OfficialWhitelistPrivates = 94,
     PanelDeployEnabled = 95,
     PanelDeployUrl = 96,
-    ParticipationCooldownSeconds = 97,
-    ParticipationMaxActiveLifetimeSeconds = 98,
-    ParticipationMaxConsecutiveReplies = 99,
-    ParticipationMaxExitingLifetimeSeconds = 100,
-    ParticipationProbingMaxReplies = 101,
+    ParticipationCooldownSeconds = 97, // reserved: observation-only policy
+    ParticipationMaxActiveLifetimeSeconds = 98, // reserved
+    ParticipationMaxConsecutiveReplies = 99, // reserved
+    ParticipationMaxExitingLifetimeSeconds = 100, // reserved
+    ParticipationProbingMaxReplies = 101, // reserved
     PlatformPolicies = 102,
     PokeCooldownSeconds = 103,
     PrivateChatEnabled = 104,
-    PrivateCooldownSeconds = 105,
-    ProactiveCooldownSeconds = 106,
+    PrivateCooldownSeconds = 105, // reserved: replaced by continuation wait
+    ProactiveCooldownSeconds = 106, // reserved: uses group completion cooldown
     ProactiveQuietSeconds = 107,
     ProfileLookupCount = 108,
     ProfileSummaryIntervalSeconds = 109,
@@ -137,11 +139,11 @@ public enum ConfigurationFieldId
     VoicePitch = 133,
     VoiceSpeed = 134,
     VoiceVol = 135,
-    WebSearchCooldownSeconds = 136,
-    WebSearchMaxResults = 137,
-    WebSearchSources = 138,
-    WebSearchTimeoutSeconds = 139,
-    WebSearchUseModelSearch = 140,
+    WebSearchCooldownSeconds = ResearchSettings.LegacyIds.WebSearchCooldownSeconds,
+    WebSearchMaxResults = ResearchSettings.LegacyIds.WebSearchMaxResults,
+    WebSearchSources = ResearchSettings.LegacyIds.WebSearchSources,
+    WebSearchTimeoutSeconds = ResearchSettings.LegacyIds.WebSearchTimeoutSeconds,
+    WebSearchUseModelSearch = ResearchSettings.LegacyIds.WebSearchUseModelSearch,
     WhitelistGroups = 141,
     WhitelistPrivates = 142,
     RegisteredPlugins = 143,
@@ -150,9 +152,11 @@ public enum ConfigurationFieldId
     EnableNaturalAgent = 146,
     /// <summary>飞书私聊名单（#133）：与群名单拆开。编号只增不改，历史 configuration_* 行仍可解码。</summary>
     FeishuWhitelistPrivates = 147,
-    ReplyPacingEnabled = 148,
+    ReplyPacingEnabled = 148, // reserved: pacing is the only scheduler
     GroupInterjectionProbability = 149,
     GroupInterjectionCooldownSeconds = 150,
     GroupContinuationWaitSeconds = 151,
-    PrivateContinuationWaitSeconds = 152
+    PrivateContinuationWaitSeconds = 152,
+    /// <summary>会话级可组合档案（Phase 1，纯 registered 集合，不写 configuration_field_modes，保持 Schema v15）。</summary>
+    ConversationProfiles = 153
 }

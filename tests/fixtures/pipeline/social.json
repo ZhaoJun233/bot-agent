@@ -175,6 +175,7 @@
       "facts": {
         "chosen": 9999, "chosenUsable": true, "chosenIndex": -1, "messageCount": 8,
         "triggerMessageId": 9605, "triggerIndex": 6, "lastSelfIndex": 2,
+        "triggerWasCurrentAtGeneration": true,
         "directAddress": false, "triggerWasEcho": false
       },
       "expect": { "target": 9605, "reason": "trigger_current" }

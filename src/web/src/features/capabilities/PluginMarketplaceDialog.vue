@@ -28,10 +28,11 @@ const props = withDefaults(defineProps<{
   trigger?: HTMLElement | null
   fallback?: HTMLElement | null
 }>(), { active: true, focusPluginId: undefined, trigger: null, fallback: null })
-const emit = defineEmits<{ close: []; changed: []; 'open-settings': [pluginId: string]; 'enable-admin': []; 'auth-expired': [error: UiError] }>()
+const emit = defineEmits<{ close: []; changed: []; 'open-settings': [pluginId: string]; 'open-ui': [pluginId: string]; 'enable-admin': []; 'auth-expired': [error: UiError] }>()
 const canWrite = computed(() => props.active && props.mode === 'admin' && props.writesEnabled)
 const catalog = ref<ZbaPluginCatalog | null>(null)
 const installed = ref<ZbaInstalledPlugins | null>(null)
+const metadataFailures = computed(() => installed.value?.metadataFailures ?? catalog.value?.metadataFailures ?? [])
 const revision = ref('')
 const loading = ref(false)
 const busy = ref(false)
@@ -83,7 +84,7 @@ function confirmPreview(): void {
 }
 let alive = true
 let catalogEpoch = 0
-const discardAction = ref<null | 'settings' | 'close' | 'leave'>(null)
+const discardAction = ref<null | 'settings' | 'ui' | 'close' | 'leave'>(null)
 let settingsTarget: string | null = null
 let leavePromise: Promise<boolean> | null = null
 let leaveResolve: ((value: boolean) => void) | null = null
@@ -112,6 +113,7 @@ function confirmDiscard(): void {
   const action = discardAction.value; const target = settingsTarget
   discardAction.value = null; settingsTarget = null; importer.value?.reset(); invalidatePreviews()
   if (action === 'settings' && target) emit('open-settings', target)
+  else if (action === 'ui' && target) emit('open-ui', target)
   else if (action === 'close') emit('close')
   else if (action === 'leave') { leaveResolve?.(true); leaveResolve = null; leavePromise = null }
 }
@@ -206,6 +208,11 @@ function openSettings(entry: PluginCatalogEntry): void {
   if (dirty.value) { settingsTarget = entry.id; discardAction.value = 'settings'; return }
   emit('open-settings', entry.id)
 }
+function openPluginUi(entry: PackageCatalogEntry): void {
+  if (!props.active || blockedLeave()) return
+  if (dirty.value) { settingsTarget = entry.id; discardAction.value = 'ui'; return }
+  emit('open-ui', entry.id)
+}
 watch(() => [props.mode, props.writesEnabled], () => {
   // Catalog reads are permission-independent; do not abandon them on admin enable.
   invalidatePreviews()
@@ -237,6 +244,10 @@ onBeforeUnmount(() => { endSession(); alive = false })
 
     <PluginGovernanceNotice :source="catalog?.governanceSource ?? installed?.governanceSource" source-only />
     <p v-if="catalog?.metadataNotice" class="notice warn" role="status" data-testid="metadata-notice">{{ catalog.metadataNotice }}</p>
+    <div v-if="metadataFailures.length" class="notice warn" role="status" data-testid="metadata-failures">
+      <p>{{ metadataFailures.length }} 项插件安装记录无法读取，原记录保持不变。目录查询与原操作键核对仍可使用。请先恢复兼容的安装记录，再更新、回退或卸载；已运行实例的状态请在能力页核对。</p>
+      <ul><li v-for="failure in metadataFailures" :key="failure.id">{{ failure.id }} · {{ failure.code }}</li></ul>
+    </div>
     <div v-for="pending in packagePending" :key="pending.key" class="notice warn" role="status" data-testid="marketplace-recovery">
       <p>{{ pending.target }} · {{ pending.meta.operation }}：{{ pending.state === 'in-flight' ? '正在提交' : '结果未知' }}，原操作键已保留。不要换键重复提交。</p>
       <code>{{ pending.key }}</code>
@@ -262,6 +273,7 @@ onBeforeUnmount(() => { endSession(); alive = false })
       @uninstall="(entry) => requestLifecycle('uninstall', entry)"
       @rollback="(entry) => requestLifecycle('rollback', entry)"
       @settings="(entry) => openSettings(entry)"
+      @open-ui="(entry) => openPluginUi(entry)"
     />
 
     <p v-if="previewLoading" role="status">正在只读预览；尚未下载或安装插件…</p>

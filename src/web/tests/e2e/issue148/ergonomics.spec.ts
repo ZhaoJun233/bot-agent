@@ -11,13 +11,18 @@ async function noPageOverflow(page: Page): Promise<void> {
   expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client + 1)
 }
 const pages = [
-  ['nav-overview', 'overview'], ['nav-configuration', 'configuration'],
-  ['nav-capabilities', 'capabilities'], ['nav-tasks', 'tasks'],
-  ['nav-traces', 'traces'], ['nav-logs', 'runtime-logs-page']
+  ['nav-overview', 'overview'],
+  ['nav-providers', 'providers-page'],
+  ['nav-platforms', 'platforms-page'],
+  ['nav-plugins', 'plugins-page'],
+  ['nav-configuration', 'system-configuration'],
+  ['nav-tasks', 'tasks'],
+  ['nav-traces', 'traces'],
+  ['nav-logs', 'runtime-logs-page']
 ] as const
 
 for (const theme of ['light', 'dark']) {
-  test(`issue148 ${theme}: six pages reflow at 320px with doubled root-font proxy`, async ({ page }) => {
+  test(`issue148 ${theme}: eight pages reflow at 320px with doubled root-font proxy`, async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 800 })
     await connect(page)
     await page.evaluate((value) => { document.documentElement.dataset.theme = value }, theme)

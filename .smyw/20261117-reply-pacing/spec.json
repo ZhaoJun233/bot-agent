@@ -1,0 +1,101 @@
+{
+  "title": "Reply Pacing: One Configuration Path",
+  "stage": "done",
+  "version": 1,
+  "summary": "Implemented in the isolated reply-pacing worktree. The existing basic editor now exposes nine fields, including the four pacing parameters. Legacy reply settings and mode switching are retired; versioned saves, recovery, persona and capability settings remain available. No production deployment or settings change.",
+  "changes": [
+    { "area": "frontend", "change": "removed", "text": "Remove legacy desire, cooldown, participation, damping and mode controls." },
+    { "area": "frontend", "change": "modified", "text": "Basic configuration exposes the four pacing parameters." },
+    { "area": "backend", "change": "modified", "text": "All chat admission uses ReplyPacingCoordinator; legacy stored fields are ignored." },
+    { "area": "api", "change": "removed", "text": "Retired settings are no longer read or writable; historical field IDs remain reserved." }
+  ],
+  "pages": [
+    {
+      "id": "basic-configuration",
+      "name": "Basic Configuration",
+      "route": "/#configuration",
+      "width": 1280,
+      "root": {
+        "id": "configuration-screen", "type": "page", "layout": "row",
+        "children": [
+          { "id": "app-navigation", "type": "sidebar", "label": "Navigation", "component": "App.vue", "w": "1/4" },
+          {
+            "id": "configuration-main", "type": "section", "label": "Basic Configuration", "component": "ConfigurationPage.vue",
+            "children": [
+              { "id": "configuration-header", "type": "header", "label": "Basic Configuration and Administrator Mode", "component": "ConfigurationPage.vue" },
+              { "id": "capability-settings-link", "type": "button", "label": "Capabilities", "component": "ConfigurationPage.vue", "on": [{ "action": "navigate", "target": "conversation-settings" }] },
+              { "id": "configuration-recovery", "type": "section", "label": "Recover a Previous Save", "component": "ConfigurationRecoveryLookup.vue" },
+              { "id": "configuration-summary", "type": "section", "label": "Version, Generation, Field Count and Runtime State", "component": "ConfigurationPage.vue" },
+              { "id": "legacy-basic-cooldowns", "type": "form", "label": "Group and Private Cooldowns", "component": "ConfigurationPage.vue", "change": "removed", "note": "Replaced by completion cooldown and continuation waiting." },
+              {
+                "id": "pacing-parameters", "type": "form", "label": "Reply Pacing", "component": "ConfigurationPage.vue", "change": "added", "note": "One scheduling policy; no opt-in switch.",
+                "children": [
+                  { "id": "group-probability", "type": "input", "label": "Group Interjection Probability (%)", "text": "20", "fn": "behavior.groupInterjectionProbability" },
+                  { "id": "group-cooldown", "type": "input", "label": "Group Interjection Cooldown (seconds)", "text": "30", "fn": "behavior.groupInterjectionCooldownSeconds" },
+                  { "id": "group-wait", "type": "input", "label": "Group Continuation Wait (seconds)", "text": "3", "fn": "behavior.groupContinuationWaitSeconds" },
+                  { "id": "private-wait", "type": "input", "label": "Private Continuation Wait (seconds)", "text": "1.5", "fn": "behavior.privateContinuationWaitSeconds" }
+                ]
+              },
+              { "id": "identity-settings", "type": "form", "label": "AI Mode and Persona", "component": "ConfigurationPage.vue" },
+              { "id": "resource-settings", "type": "form", "label": "Concurrency and Context", "component": "ConfigurationPage.vue" },
+              { "id": "configuration-save", "type": "button", "label": "Save", "component": "ConfigurationPage.vue", "fn": "save()", "on": [{ "action": "state", "state": "saved" }], "states": { "saved": { "label": "Saved" } } },
+              { "id": "configuration-owners", "type": "section", "label": "Module Settings", "component": "ConfigurationPage.vue", "children": [
+                { "id": "basic-conversation-open", "type": "button", "label": "Conversation Features", "on": [{ "action": "navigate", "target": "conversation-settings" }, { "action": "open", "target": "conversation-editor" }] },
+                { "id": "other-module-links", "type": "section", "label": "Models, Platforms, Agent, Reports and Plugins", "component": "configuration-ownership.ts" }
+              ] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "conversation-settings",
+      "name": "Conversation Settings",
+      "route": "/#capabilities",
+      "width": 1280,
+      "root": {
+        "id": "capabilities-screen", "type": "page", "layout": "row",
+        "children": [
+          { "id": "capabilities-navigation", "type": "sidebar", "label": "Navigation", "component": "App.vue", "w": "1/4" },
+          { "id": "capabilities-main", "type": "section", "label": "Capabilities", "component": "CapabilitiesPage.vue", "children": [
+            { "id": "capabilities-header", "type": "header", "label": "Capabilities", "component": "CapabilitiesPage.vue" },
+            { "id": "conversation-open", "type": "button", "label": "Conversation Settings", "component": "CapabilitySettingsHost.vue", "on": [{ "action": "open", "target": "conversation-editor" }] },
+            { "id": "back-to-basic", "type": "button", "label": "Basic Configuration", "component": "App.vue", "on": [{ "action": "navigate", "target": "basic-configuration" }] },
+            { "id": "other-capabilities", "type": "section", "label": "Plugin and System Capabilities", "component": "CapabilitiesPage.vue" }
+          ] }
+        ]
+      },
+      "overlays": [
+        {
+          "id": "conversation-editor", "type": "modal", "label": "Conversation Settings", "component": "CapabilityConfigurationDialog.vue", "trigger": ["conversation-open", "basic-conversation-open"],
+          "children": [
+            { "id": "retired-conversation-settings", "type": "form", "label": "Mode, Desire, Damping, Participation, Proactive Cooldown and Idle Fallback", "component": "ConfigurationPage.vue", "change": "removed", "note": "These controls belong to the retired scheduling policy; the four active pacing parameters are now in basic configuration." },
+            { "id": "conversation-features", "type": "form", "label": "Proactive Speech, Splitting, Filtering and Approvals", "component": "ConfigurationPage.vue" },
+            { "id": "conversation-close", "type": "button", "label": "Close", "on": [{ "action": "close" }] }
+          ]
+        }
+      ]
+    }
+  ],
+  "flows": [
+    { "id": "save-pacing", "name": "Save Pacing Parameters", "steps": [
+      { "id": "edit-values", "actor": "user", "text": "Edit pacing parameters", "node": "pacing-parameters" },
+      { "id": "submit-values", "actor": "frontend", "text": "Validate and save with expected version", "fn": "POST /zba/v1/configuration/save", "node": "configuration-save" },
+      { "id": "persist-values", "actor": "backend", "text": "Persist the four parameters with version, audit and receipt atomically", "fn": "ConfigurationStore.SaveAsync" },
+      { "id": "schedule-values", "actor": "system", "text": "Subsequent turns capture pacing parameters", "fn": "ReplyPipeline.RequestReply" }
+    ] }
+  ],
+  "backend": [
+    { "id": "configuration-contract", "name": "Behavior Configuration", "kind": "config", "items": [
+      { "id": "retired-fields", "kind": "field", "name": "13 Legacy Reply Fields", "change": "removed", "note": "Field IDs remain reserved; stored legacy keys do not influence runtime. Startup does not rewrite or delete old storage." },
+      { "id": "pacing-fields", "kind": "field", "name": "Four Pacing Parameters", "note": "Retain saved values and defaults: 20 percent, 30 seconds, 3 seconds and 1.5 seconds." },
+      { "id": "retired-save-rejection", "kind": "api", "name": "Structured and Legacy Configuration Saves", "change": "modified", "before": { "name": "Legacy Reply Field Saves" }, "note": "Retired input rejects the entire batch without changing configuration version or applying valid companion fields." }
+    ] },
+    { "id": "reply-admission", "name": "ReplyPipeline", "kind": "service", "change": "modified", "before": { "name": "ReplyPipeline (Legacy/Paced)" }, "note": "Every request uses the pacing coordinator.", "items": [
+      { "id": "pacing-coordinator", "kind": "function", "name": "ReplyPacingCoordinator.Observe" },
+      { "id": "reply-commit", "kind": "function", "name": "PacedReplyAttempt", "note": "Validate the original source, stop epoch and permissions before committing a send or effect." },
+      { "id": "notice-admission", "kind": "function", "name": "ReplyPacingCoordinator.ObserveNotice", "note": "Recall notices are distinct from human messages and accepted task results; ordinary group notices still obey probability and completion cooldown." },
+      { "id": "context-boundaries", "kind": "function", "name": "ReplyTurnContext.BuildAsync", "note": "Completed bot replies and other speakers remain visible; later input from the same speaker cannot change an already committed snapshot." }
+    ] }
+  ]
+}

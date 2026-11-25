@@ -39,6 +39,8 @@ public sealed partial class PluginMarketService
             Check("dependencies", PluginDependencyPolicy.AreSatisfied(target, installed, registered),
                 "依赖必须已安装、属于同一运行时且精确匹配声明版本。");
         }
+        Check("readable_dependency_graph", installed.All(p => p.MetadataFailure is null),
+            "存在不可读的安装记录时，无法核对反向依赖；请先恢复记录再更新、回退或卸载。");
         Check("reverse_dependencies", installed.Where(p => p.Id != current.Id)
             .SelectMany(p => new[] { p.Active, p.Pending }).Where(m => m is not null)
             .All(m => (m!.Dependencies ?? []).Where(d => d.Id == current.Id).All(d => target?.Version == d.Version)),
@@ -46,7 +48,8 @@ public sealed partial class PluginMarketService
         string? settingsStamp = null;
         try
         {
-            settingsStamp = _settings.ReadPreservationStamp(current.Id);
+            settingsStamp = kind == "uninstall" ? _settings.ReadPreservationStamp(current.Id)
+                : _settings.ReadPreservationStamp(currentManifest, target);
             if (kind != "uninstall")
             {
                 _ = _settings.ReadManifest(currentManifest);

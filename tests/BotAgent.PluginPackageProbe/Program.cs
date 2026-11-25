@@ -7,6 +7,14 @@ using BotAgent.Adapters.Plugins;
 using BotAgent.Domain.Plugins;
 using BotAgent.Services.Plugins;
 
+if (args.Contains("--deployment-preflight", StringComparer.Ordinal))
+{
+    var count = 0;
+    await DeploymentPreflightChecks.RunAsync((ok, message) => { if (!ok) throw new Exception(message); count++; });
+    Console.WriteLine($"PASS deployment preflight: {count} checks");
+    return;
+}
+
 var root = Path.Combine(Path.GetTempPath(), "plugin-probe-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 var http = new FakeHttp();
@@ -95,6 +103,11 @@ try
     Check(removed.Active == null && removed.Previous != null && File.Exists(configFile), "uninstall preserves version and config");
     await HotReloadChecks.RunAsync(Check);
     await PresentationChecks.RunAsync(Check);
+    await MetadataIsolationChecks.RunAsync(Check);
+    await TrustedDistributionChecks.RunAsync(Check);
+    await RecoveryEnvelopeChecks.RunAsync(Check);
+    await RecoveryCliChecks.RunAsync(Check);
+    await SharedContractChecks.RunAsync(Check);
     Console.WriteLine($"PASS plugin package probe: {checks} checks");
 }
 finally

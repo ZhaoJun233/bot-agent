@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using BotAgent.Domain.Conversation;
+using BotAgent.Domain.Platforms;
+using BotAgent.Domain.Qq;
 using BotAgent.Domain.Ports;
 using BotAgent.Domain.Reply;
 using BotAgent.Platforms.Net;
@@ -52,6 +54,10 @@ class SyntheticSource : IQqChatSource
     public bool IsConnected => true;
     public int TextCalls { get; private set; }
     public Func<int, SendResult> TextResult { get; set; } = _ => new(true);
+    public Func<SendResult> ImageResult { get; set; } = () => new(true);
+    public int ImageCalls { get; private set; }
+    public Task<SendResult> SendImageWithReceiptAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null)
+    { ImageCalls++; return Task.FromResult(ImageResult()); }
     public Task<SendResult> SendTextAsync(bool isGroup, long targetId, string text, CancellationToken ct = default, long? replyToMessageId = null, bool directAddress = false)
         => Task.FromResult(TextResult(++TextCalls));
     public Task<bool> SendImageAsync(bool isGroup, long targetId, byte[] data, CancellationToken ct = default, long? replyToMessageId = null) => Task.FromResult(true);
@@ -75,12 +81,28 @@ sealed class TestGuard : IReplyCommitGuard
     public bool TryBeforeSend() { Tries++; return OnTry?.Invoke(Tries) ?? true; }
 }
 
-sealed class SyntheticIds : IOfficialIdMap
+sealed class SyntheticIds : IOfficialIdentityMap
 {
-    public int Count => 1;
-    public long AliasFor(string openId) => 10001;
-    public string? OriginalOf(long alias) => "synthetic-id";
-    public void Flush() { }
+    public static OfficialIdentityKey Trigger() => new(new("synthetic-app", OfficialIdentityKind.Message,
+        new(PlatformId.QqOfficial, "synthetic-app", ConversationKind.GroupChat, "synthetic-id"), OfficialMessageDirection.Inbound), "synthetic-inbound");
+    public int Count => 2;
+    public long AliasFor(OfficialIdentityKey identity) => identity.Scope.Kind == OfficialIdentityKind.Group ? 10001
+        : identity.Scope.Direction == OfficialMessageDirection.Inbound ? 10002 : Channels.AliasBase + 3;
+    public string? OriginalOf(long alias, OfficialIdentityScope scope)
+        => alias == 10001 && scope.AppId == "synthetic-app" && scope.Kind == OfficialIdentityKind.Group ? "synthetic-id"
+        : alias == 10002 && scope == Trigger().Scope ? "synthetic-inbound" : null;
+}
+
+sealed class PacingOfficialSnapshot : IOfficialDeliverySnapshot
+{
+    private string? _value;
+    public string? Load() => _value;
+    public void Commit(string snapshot) => _value = snapshot;
+    public void Dispose() { }
+}
+sealed class PacingOwner : IPlatformSourceOwner
+{
+    public string? ConversationKey(QqChatMessage message, Func<string, bool> exists) => null;
 }
 
 sealed class SyntheticHttp : IPlatformHttpFetcher

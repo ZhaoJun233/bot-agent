@@ -1,0 +1,38 @@
+{
+  "id": "system.platform-feishu",
+  "entryAssembly": "BotAgent.Package.PlatformFeishu.dll",
+  "entryType": "BotAgent.Packages.PlatformFeishu.PlatformFeishuPlugin",
+  "apiVersion": 1,
+  "targetFramework": "net10.0",
+  "adoption": "cold",
+  "exclusiveResources": [
+    "platform.connection.feishu"
+  ],
+  "permissions": [],
+  "sharedContracts": [
+    {
+      "name": "BotAgent.Platforms.Contracts",
+      "owner": "system.platform-local"
+    }
+  ],
+  "settings": [
+    {
+      "key": "transportMode",
+      "label": "事件接收模式（long_connection 无需公网回调地址）",
+      "type": "select",
+      "choices": [
+        "webhook",
+        "long_connection"
+      ],
+      "defaultValue": "webhook",
+      "required": false
+    },
+    {
+      "key": "enableInteractiveCards",
+      "label": "结构化内容（代码块/表格/标题）自动升级为 Schema 2.0 Markdown 卡片",
+      "type": "boolean",
+      "defaultValue": "true",
+      "required": false
+    }
+  ]
+}

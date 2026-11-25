@@ -26,7 +26,8 @@ public sealed record McpServerOptions(
     string? Token,
     IReadOnlyList<string> AllowedTools,
     TimeSpan CallTimeout,
-    int MaxResultBytes)
+    int MaxResultBytes,
+    IReadOnlyList<string>? ReadOnlyTools = null)
 {
     /// <summary>默认 record 的 ToString 会把 Token 打出来；这里显式遮掉，日志/调试器不再泄密。</summary>
     public override string ToString()
@@ -48,7 +49,10 @@ public sealed record McpToolInfo(
     string Description,
     string InputSchemaJson,
     string ServerId,
-    bool ReadOnlyHint, bool IsLocalProcess = false, string? SourceGeneration = null);
+    bool ReadOnlyHint,
+    bool IsLocalProcess = false,
+    string? SourceGeneration = null,
+    bool ReadOnlyConfirmed = false);
 
 /// <summary>
 /// 一次 MCP 调用的结果。`ReasonCode` 是短码；`Content` 只给模型看，`AuditDetail` 只写形状

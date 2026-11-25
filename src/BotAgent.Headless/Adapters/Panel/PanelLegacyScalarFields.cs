@@ -16,6 +16,7 @@ using BotAgent.Services.Settings;
 using BotAgent.Adapters.Persistence;
 using System.Collections.Immutable;
 using BotAgent.Domain.Configuration;
+using BotAgent.Services.Net;
 
 namespace BotAgent.Adapters.Panel;
 
@@ -37,8 +38,6 @@ internal static class PanelLegacyScalarFields
     internal static BehaviorChanges ParseLegacyBehaviorFields(JsonObject body)
         => new()
         {
-            AiDesire = PanelLegacyFieldEdits.LegacyField(body, "aiDesire", node => Math.Clamp(node.GetValue<int>(), 0, 100)),
-            ReplyPacingEnabled = PanelLegacyFieldEdits.LegacyField(body, "replyPacingEnabled", node => node.GetValue<bool>()),
             GroupInterjectionProbability = PanelLegacyFieldEdits.LegacyField(body, "groupInterjectionProbability", node => node.GetValue<int>()),
             GroupInterjectionCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "groupInterjectionCooldownSeconds", node => node.GetValue<int>()),
             GroupContinuationWaitSeconds = PanelLegacyFieldEdits.LegacyField(body, "groupContinuationWaitSeconds", node => node.GetValue<int>()),
@@ -47,35 +46,24 @@ internal static class PanelLegacyScalarFields
             ApprovalApprovers = PanelLegacyFieldEdits.LegacyField(body, "approvalApprovers", node => PanelLegacyFieldEdits.LegacyTruncate((node.GetValue<string>() ?? string.Empty).Trim(), 300)),
             BotPersona = PanelLegacyFieldEdits.LegacyField(body, "botPersona", node => node.GetValue<string>() ?? string.Empty),
             EnableApprovals = PanelLegacyFieldEdits.LegacyField(body, "enableApprovals", node => node.GetValue<bool>()),
-            EnableAtmosphereDamping = PanelLegacyFieldEdits.LegacyField(body, "enableAtmosphereDamping", node => node.GetValue<bool>()),
-            EnableLinkPreview = PanelLegacyFieldEdits.LegacyField(body, "enableLinkPreview", node => node.GetValue<bool>()),
-            EnableParticipationGating = PanelLegacyFieldEdits.LegacyField(body, "enableParticipationGating", node => node.GetValue<bool>()),
+            EnableLinkPreview = ResearchField<bool>(body, "enableLinkPreview"),
             EnablePoke = PanelLegacyFieldEdits.LegacyField(body, "enablePoke", node => node.GetValue<bool>()),
             EnableProactive = PanelLegacyFieldEdits.LegacyField(body, "enableProactive", node => node.GetValue<bool>()),
             EnableProfileSummary = PanelLegacyFieldEdits.LegacyField(body, "enableProfileSummary", node => node.GetValue<bool>()),
             EnableQuestions = PanelLegacyFieldEdits.LegacyField(body, "enableQuestions", node => node.GetValue<bool>()),
             EnableStickers = PanelLegacyFieldEdits.LegacyField(body, "enableStickers", node => node.GetValue<bool>()),
-            EnableWebSearch = PanelLegacyFieldEdits.LegacyField(body, "enableWebSearch", node => node.GetValue<bool>()),
+            EnableWebSearch = ResearchField<bool>(body, "enableWebSearch"),
             FilterActionNarration = PanelLegacyFieldEdits.LegacyField(body, "filterActionNarration", node => node.GetValue<bool>()),
-            GroupCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "groupCooldownSeconds", node => Math.Max(0, node.GetValue<int>())),
-            IdleFallbackSeconds = PanelLegacyFieldEdits.LegacyField(body, "idleFallbackSeconds", node => Math.Max(0, node.GetValue<int>())),
             IgnoreBracketMessages = PanelLegacyFieldEdits.LegacyField(body, "ignoreBracketMessages", node => node.GetValue<bool>()),
-            LinkPreviewMax = PanelLegacyFieldEdits.LegacyField(body, "linkPreviewMax", node => Math.Clamp(node.GetValue<int>(), 0, 5)),
-            LinkPreviewTimeoutSeconds = PanelLegacyFieldEdits.LegacyField(body, "linkPreviewTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 2, 30)),
+            LinkPreviewMax = ResearchField<int>(body, "linkPreviewMax"),
+            LinkPreviewTimeoutSeconds = ResearchField<int>(body, "linkPreviewTimeoutSeconds"),
             MaxAgentSteps = PanelLegacyFieldEdits.LegacyField(body, "maxAgentSteps", node => Math.Clamp(node.GetValue<int>(), 1, 3)),
             MaxConcurrentReplies = PanelLegacyFieldEdits.LegacyField(body, "maxConcurrentReplies", node => Math.Clamp(node.GetValue<int>(), 1, 16)),
             MaxContextMessages = PanelLegacyFieldEdits.LegacyField(body, "maxContextMessages", node => Math.Clamp(node.GetValue<int>(), 10, 1000)),
             MaxMessagesPerConversation = PanelLegacyFieldEdits.LegacyField(body, "maxMessagesPerConversation", node => Math.Clamp(node.GetValue<int>(), 20, 100000)),
             MaxProfileChars = PanelLegacyFieldEdits.LegacyField(body, "maxProfileChars", node => Math.Clamp(node.GetValue<int>(), 0, 20000)),
             MoodTtlSeconds = PanelLegacyFieldEdits.LegacyField(body, "moodTtlSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400 * 7)),
-            ParticipationCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "participationCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 600)),
-            ParticipationMaxActiveLifetimeSeconds = PanelLegacyFieldEdits.LegacyField(body, "participationMaxActiveLifetimeSeconds", node => Math.Clamp(node.GetValue<int>(), 30, 3600)),
-            ParticipationMaxConsecutiveReplies = PanelLegacyFieldEdits.LegacyField(body, "participationMaxConsecutiveReplies", node => Math.Clamp(node.GetValue<int>(), 1, 10)),
-            ParticipationMaxExitingLifetimeSeconds = PanelLegacyFieldEdits.LegacyField(body, "participationMaxExitingLifetimeSeconds", node => Math.Clamp(node.GetValue<int>(), 10, 3600)),
-            ParticipationProbingMaxReplies = PanelLegacyFieldEdits.LegacyField(body, "participationProbingMaxReplies", node => Math.Clamp(node.GetValue<int>(), 1, 3)),
             PokeCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "pokeCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
-            PrivateCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "privateCooldownSeconds", node => Math.Max(0, node.GetValue<int>())),
-            ProactiveCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "proactiveCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 60, 86400)),
             ProactiveQuietSeconds = PanelLegacyFieldEdits.LegacyField(body, "proactiveQuietSeconds", node => Math.Clamp(node.GetValue<int>(), 1, 3600)),
             ProfileLookupCount = PanelLegacyFieldEdits.LegacyField(body, "profileLookupCount", node => Math.Clamp(node.GetValue<int>(), 0, 50)),
             ProfileSummaryIntervalSeconds = PanelLegacyFieldEdits.LegacyField(body, "profileSummaryIntervalSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
@@ -90,12 +78,15 @@ internal static class PanelLegacyScalarFields
             StickerCurateIntervalSeconds = PanelLegacyFieldEdits.LegacyField(body, "stickerCurateIntervalSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
             StickerLibraryMax = PanelLegacyFieldEdits.LegacyField(body, "stickerLibraryMax", node => Math.Clamp(node.GetValue<int>(), 0, 2000)),
             SuitabilityThreshold = PanelLegacyFieldEdits.LegacyField(body, "suitabilityThreshold", node => Math.Clamp(node.GetValue<int>(), 0, 100)),
-            WebSearchCooldownSeconds = PanelLegacyFieldEdits.LegacyField(body, "webSearchCooldownSeconds", node => Math.Clamp(node.GetValue<int>(), 0, 86400)),
-            WebSearchMaxResults = PanelLegacyFieldEdits.LegacyField(body, "webSearchMaxResults", node => Math.Clamp(node.GetValue<int>(), 1, 10)),
-            WebSearchSources = PanelLegacyFieldEdits.LegacyField(body, "webSearchSources", node => node.GetValue<string>().Trim()),
-            WebSearchTimeoutSeconds = PanelLegacyFieldEdits.LegacyField(body, "webSearchTimeoutSeconds", node => Math.Clamp(node.GetValue<int>(), 5, 60)),
-            WebSearchUseModelSearch = PanelLegacyFieldEdits.LegacyField(body, "webSearchUseModelSearch", node => node.GetValue<bool>()),
+            WebSearchCooldownSeconds = ResearchField<int>(body, "webSearchCooldownSeconds"),
+            WebSearchMaxResults = ResearchField<int>(body, "webSearchMaxResults"),
+            WebSearchSources = ResearchField<string>(body, "webSearchSources"),
+            WebSearchTimeoutSeconds = ResearchField<int>(body, "webSearchTimeoutSeconds"),
+            WebSearchUseModelSearch = ResearchField<bool>(body, "webSearchUseModelSearch"),
         };
+
+    private static FieldEdit<T> ResearchField<T>(JsonObject body, string key)
+        => ResearchSettings.TryReadLegacyField<T>(body, key, out var value) ? FieldEdit<T>.Set(value) : FieldEdit<T>.Keep();
 
     internal static ModelChanges ParseLegacyModelFields(JsonObject body)
         => new()

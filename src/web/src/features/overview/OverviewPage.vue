@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Compatibility } from '../../api/compat'
-import type { ZbaHealth, ZbaMeta, ZbaStatus } from '../../api/zba'
-import AppIcon from '../../shared/ui/AppIcon.vue'
+import type { ZbaClient, ZbaComponent, ZbaHealth, ZbaMeta, ZbaStatus } from '../../api/zba'
+import OperationRecoveryLookup from './OperationRecoveryLookup.vue'
+import AppIcon, { type AppIconName } from '../../shared/ui/AppIcon.vue'
 import PageHeader from '../../shared/ui/PageHeader.vue'
 import StatusBadge from '../../shared/ui/StatusBadge.vue'
 import BreakableId from '../../shared/ui/BreakableId.vue'
@@ -11,7 +12,10 @@ import type { UiError } from '../../shared/ui/ui-error'
 import { reasonLabel } from '../capabilities/reason-labels'
 import { componentTitle, errorName, kindName, relativeTime, stateName, uptime } from '../../shared/friendly'
 
+type OverviewNavTarget = 'providers' | 'platforms' | 'plugins' | 'configuration' | 'tasks' | 'traces' | 'logs' | 'capabilities'
+
 const props = defineProps<{
+  client?: ZbaClient
   health: ZbaHealth
   meta: ZbaMeta
   status: ZbaStatus
@@ -25,51 +29,35 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  'auth-expired': [error: UiError]
   refresh: []
   'enable-admin': []
   'disable-admin': []
-  navigate: [target: 'capabilities' | 'configuration' | 'tasks', event: MouseEvent]
+  navigate: [target: OverviewNavTarget, event: MouseEvent, ownerId?: string]
 }>()
 
-/** 欢迎页的「下一步去哪」：每张卡片说清楚那一页能做什么。 */
-const quickStarts = [
-  {
-    target: 'capabilities' as const,
-    icon: 'capabilities' as const,
-    title: '插件与平台',
-    copy: '连接模型与工具，管理平台和插件。'
-  },
-  {
-    target: 'configuration' as const,
-    icon: 'config' as const,
-    title: '配置管理',
-    copy: '调整运行参数，校验并统一保存。'
-  },
-  {
-    target: 'tasks' as const,
-    icon: 'tasks' as const,
-    title: '任务',
-    copy: '提交任务，跟进执行与人工审批。'
-  }
+const quickStarts: ReadonlyArray<{ target: OverviewNavTarget; icon: AppIconName; title: string; copy: string }> = [
+  { target: 'providers', icon: 'provider', title: '模型供应商', copy: '管理主/快模型路由、供应商凭据与连通测试。' },
+  { target: 'platforms', icon: 'platform', title: '消息平台', copy: '控制 QQ、飞书等平台驱动启停与访问白名单。' },
+  { target: 'plugins', icon: 'plugin', title: '插件中心', copy: '启停功能插件、打开沙箱界面或浏览插件市场。' },
+  { target: 'logs', icon: 'logs', title: '运行日志', copy: '实时查看后端脱敏后的运行摘要与告警记录。' }
 ]
 
 const components = computed(() => Array.isArray(props.status.components) ? props.status.components : [])
 const recentErrors = computed(() => Array.isArray(props.status.recentErrors) ? props.status.recentErrors : [])
 const availableCount = computed(() => components.value.filter((component) => component.available).length)
 
-/** 每日热备（#121）：过期或失败时给一条红条 —— 备份没人看就等于没有备份。 */
 const backupComponent = computed(() => components.value.find((component) => component.id === 'backup'))
 const backupAlert = computed(() => {
   const component = backupComponent.value
   if (!component || component.available) return ''
   const reason = component.reasonCode?.trim() || (component.state === 'stale' ? '备份过期了' : '备份失败了')
-  return `数据库热备异常：${reason}。请先在服务器上确认 data/backups 里还有可用的备份，再看日志排查。`
+  return `数据库热备异常：${reason}。请先在服务器上确认 data/backups 里还有可用的备份，再查看运行日志排查。`
 })
 const attentionCount = computed(() => components.value.length - availableCount.value)
 const lastSuccessLabel = computed(() => props.lastSuccessAt === null ? '尚未成功读取' : formatDate(props.lastSuccessAt))
 const uptimeLabel = computed(() => uptime(props.status.startedAt))
 
-/** 一句话结论：先说“好不好”，再说细节。 */
 const heroTone = computed(() => {
   if (!props.status.ready) return 'bad'
   if (attentionCount.value > 0 || recentErrors.value.length > 0) return 'warn'
@@ -104,24 +92,62 @@ function formatDate(value: string | undefined | null): string {
 
 function reasonText(code: string | undefined | null): string | null {
   if (!code) return null
+  if (code === 'governance_query_failed') return '统一记忆治理状态读取失败'
+  if (code.includes('confirmed=') && code.includes('pending=')) {
+    const parts = new Map<string, string>()
+    for (const item of code.split(';')) {
+      const idx = item.indexOf('=')
+      if (idx > 0) parts.set(item.slice(0, idx), item.slice(idx + 1))
+    }
+    const confirmed = Number(parts.get('confirmed') ?? '0')
+    const pending = Number(parts.get('pending') ?? '0')
+    const suppressed = Number(parts.get('suppressed') ?? '0')
+    if (Number.isFinite(confirmed) && Number.isFinite(pending) && Number.isFinite(suppressed)) {
+      return `已确认 ${confirmed} · 待确认 ${pending} · 抑制 ${suppressed}`
+    }
+  }
   const label = errorName(code) ?? reasonLabel(code)
   return label === code ? null : label
+}
+
+function targetForComponent(component: ZbaComponent): { target: OverviewNavTarget; ownerId?: string } | null {
+  if (component.kind === 'governance' || component.id === 'unified-memory') return { target: 'configuration' }
+  if (component.kind === 'task') return { target: 'tasks' }
+  if (component.kind === 'provider' || component.kind === 'model') return { target: 'providers' }
+  if (component.kind === 'driver' || component.kind === 'platform') return { target: 'platforms' }
+  if (component.kind === 'backup') return { target: 'logs' }
+  if (component.kind === 'plugin') {
+    const rest = component.id.startsWith('plugin:') ? component.id.slice('plugin:'.length) : component.id
+    if (rest.startsWith('system.platform-')) return { target: 'platforms' }
+    if (rest === 'system.model-services') return { target: 'providers' }
+    if (rest.startsWith('system.')) return { target: 'configuration' }
+    return { target: 'plugins', ownerId: rest }
+  }
+  return null
+}
+
+function openComponent(component: ZbaComponent, event: MouseEvent): void {
+  const destination = targetForComponent(component)
+  if (!destination) return
+  emit('navigate', destination.target, event, destination.ownerId)
 }
 </script>
 
 <template>
   <section class="overview" data-testid="overview" aria-labelledby="overview-title">
-    <PageHeader title="系统概览" title-id="overview-title" eyebrow="WORKSPACE OVERVIEW" description="掌握系统运行状态，及时处理需要关注的事项。">
-      <template #metadata><p class="ov-sub">
+    <PageHeader title="系统概览" title-id="overview-title" eyebrow="WORKSPACE OVERVIEW" description="掌握系统运行健康度，点击任意异常组件或错误直达排查。">
+      <template #metadata>
+        <p class="ov-sub">
           <span v-if="uptimeLabel">已连续运行 <strong>{{ uptimeLabel }}</strong></span>
           <span v-if="uptimeLabel" class="ov-sub-sep" aria-hidden="true">·</span>
           最后一次成功读取：<strong data-testid="last-success">{{ lastSuccessLabel }}</strong>
           <span class="ov-sub-sep" aria-hidden="true">·</span>
           契约 {{ props.meta.contractVersion }}
-        </p></template>
+        </p>
+      </template>
       <div class="ov-head-actions">
         <span class="ov-pill" :data-tone="props.mode === 'admin' ? 'accent' : 'neutral'" data-testid="mode-badge">
-          <span class="ov-pill-dot" aria-hidden="true"></span>
+          <span class="ov-pill-dot" aria-hidden="true" />
           {{ props.mode === 'admin' ? '管理员模式' : '标准模式' }}
         </span>
         <button
@@ -133,28 +159,45 @@ function reasonText(code: string | undefined | null): string | null {
           :title="props.compatibility.writesEnabled ? '进入后才能启停能力、保存配置' : '契约不兼容，写入口已禁用'"
           @click="emit('enable-admin')"
         >
-          <AppIcon name="shield" :size="16" />
+          <AppIcon name="shield" :size="15" />
           管理员模式
         </button>
         <button v-else type="button" class="tonal" data-testid="disable-admin" @click="emit('disable-admin')">
           退出管理员模式
         </button>
         <button type="button" class="primary" data-testid="refresh" :disabled="props.busy" @click="emit('refresh')">
-          <AppIcon name="refresh" :size="16" />
+          <AppIcon name="refresh" :size="15" />
           {{ props.busy ? '刷新中…' : '刷新' }}
         </button>
       </div>
     </PageHeader>
 
     <div class="ov-health-line" :data-tone="heroTone" role="status">
-      <span class="health-mark"><AppIcon :name="heroTone === 'ok' ? 'check' : 'alert'" :size="19" /></span>
-      <div><strong>{{ headline }}</strong><p>{{ props.status.ready ? '服务已就绪' : '服务准备中' }} · {{ availableCount }} / {{ components.length }} 个组件可用 · {{ recentErrors.length }} 条最近错误</p></div>
+      <div class="ov-health-main">
+        <span class="health-mark"><AppIcon :name="heroTone === 'ok' ? 'check' : 'alert'" :size="19" /></span>
+        <div>
+          <strong>{{ headline }}</strong>
+          <p>{{ props.status.ready ? '服务已就绪' : '服务准备中' }} · {{ availableCount }} / {{ components.length }} 个组件可用 · {{ recentErrors.length }} 条最近错误</p>
+        </div>
+      </div>
+      <button
+        v-if="recentErrors.length > 0"
+        type="button"
+        class="tonal"
+        @click="emit('navigate', 'logs', $event)"
+      >
+        <AppIcon name="logs" :size="15" />
+        查看运行日志
+      </button>
     </div>
 
-    <p v-if="backupAlert" class="inline-notice bad" data-testid="backup-stale-banner" role="alert">
-      <strong>⚠ 备份</strong>
-      <span>{{ backupAlert }}</span>
-    </p>
+    <div v-if="backupAlert" class="inline-notice bad backup-alert" data-testid="backup-stale-banner" role="alert">
+      <div>
+        <strong>⚠ 备份异常：</strong>
+        <span>{{ backupAlert }}</span>
+      </div>
+      <button type="button" class="tonal" @click="emit('navigate', 'logs', $event)">查看运行日志</button>
+    </div>
 
     <p v-if="props.stale" class="inline-notice warn" data-testid="stale-banner" role="status">
       显示的是上次成功读取的数据；最近一次刷新失败，状态可能已过期。
@@ -187,28 +230,28 @@ function reasonText(code: string | undefined | null): string | null {
 
     <div class="ov-kpis">
       <article class="ov-card" :data-tone="heroTone">
-        <span class="ov-chip" aria-hidden="true"><AppIcon name="bolt" :size="18" /></span>
+        <span class="ov-chip" aria-hidden="true"><AppIcon name="bolt" :size="17" /></span>
         <div class="ov-kpi-body">
           <p class="ov-kpi-label">总体状态</p>
           <p class="ov-kpi-value ov-kpi-value--compact">{{ stateName(props.status.state) }}</p>
           <div class="ov-kpi-foot">
             <span class="mono" data-testid="overview-state" title="后端原始状态">{{ props.status.state }}</span>
-            <span>· {{ props.status.ready ? '可以接收消息' : '暂不接收消息' }}</span>
+            <span>· {{ props.status.ready ? '可接收消息' : '暂不接收' }}</span>
           </div>
         </div>
       </article>
 
       <article class="ov-card" :data-tone="componentsTone === 'neutral' ? 'accent' : componentsTone">
-        <span class="ov-chip" aria-hidden="true"><AppIcon name="capabilities" :size="18" /></span>
+        <span class="ov-chip" aria-hidden="true"><AppIcon name="plugin" :size="17" /></span>
         <div class="ov-kpi-body">
-          <p class="ov-kpi-label">组件</p>
+          <p class="ov-kpi-label">组件在线</p>
           <p class="ov-kpi-value">{{ availableCount }} / {{ components.length }}</p>
           <p class="ov-kpi-foot">{{ attentionCount > 0 ? attentionCount + ' 个暂不可用' : '全部可用' }}</p>
         </div>
       </article>
 
-      <article class="ov-card" data-tone="violet">
-        <span class="ov-chip" aria-hidden="true"><AppIcon name="config" :size="18" /></span>
+      <article class="ov-card">
+        <span class="ov-chip" aria-hidden="true"><AppIcon name="config" :size="17" /></span>
         <div class="ov-kpi-body">
           <p class="ov-kpi-label">配置版本</p>
           <p class="ov-kpi-value ov-kpi-value--compact mono">{{ props.status.configurationVersion ?? '未记录' }}</p>
@@ -219,11 +262,11 @@ function reasonText(code: string | undefined | null): string | null {
       </article>
 
       <article class="ov-card" :data-tone="recentErrors.length > 0 ? 'bad' : 'ok'">
-        <span class="ov-chip" aria-hidden="true"><AppIcon name="alert" :size="18" /></span>
+        <span class="ov-chip" aria-hidden="true"><AppIcon name="alert" :size="17" /></span>
         <div class="ov-kpi-body">
           <p class="ov-kpi-label">最近错误</p>
           <p class="ov-kpi-value">{{ recentErrors.length }}</p>
-          <p class="ov-kpi-foot">{{ recentErrors.length > 0 ? '需要关注' : '没有记录到错误' }}</p>
+          <p class="ov-kpi-foot">{{ recentErrors.length > 0 ? '需要关注' : '运行平稳' }}</p>
         </div>
       </article>
     </div>
@@ -233,7 +276,7 @@ function reasonText(code: string | undefined | null): string | null {
         <div class="panel-heading ov-panel-head">
           <div>
             <h2 id="components-title">组件状态</h2>
-            <p class="ov-panel-sub">共 {{ components.length }} 项 · 最近更新 {{ relativeTime(props.status.updatedAt) }}</p>
+            <p class="ov-panel-sub">共 {{ components.length }} 项 · 最近更新 {{ relativeTime(props.status.updatedAt) }} · 点击条目可直达管理页</p>
           </div>
           <span class="ov-pill" :data-tone="componentsTone === 'neutral' ? 'warn' : componentsTone">
             {{ availableCount }} / {{ components.length }} 可用
@@ -241,7 +284,7 @@ function reasonText(code: string | undefined | null): string | null {
         </div>
 
         <p v-if="components.length === 0" class="empty-state" data-testid="components-empty">
-          后端尚未登记任何组件。启动驱动或插件后，这里会列出它们的状态。
+          后端尚未登记任何组件。启动平台驱动或插件后，这里会列出它们的状态。
         </p>
         <div v-else class="table-scroll">
           <table data-testid="components" class="ov-table">
@@ -256,17 +299,26 @@ function reasonText(code: string | undefined | null): string | null {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="component in components" :key="component.id" :data-available="component.available">
+              <tr
+                v-for="component in components"
+                :key="component.id"
+                :data-available="component.available"
+                :class="{ 'is-clickable': Boolean(targetForComponent(component)) }"
+                @click="openComponent(component, $event)"
+              >
                 <td>
                   <strong>{{ componentTitle(component.displayName, component.kind, component.id) }}</strong>
                   <span class="cell-sub mono"><BreakableId :value="component.id" /></span>
                   <span class="component-mobile-detail">
                     {{ kindName(component.kind) }} · {{ relativeTime(component.updatedAt) }}
-                    <span v-if="component.reasonCode">{{ reasonText(component.reasonCode) ?? component.reasonCode }}<span v-if="reasonText(component.reasonCode)" class="cell-sub mono">{{ component.reasonCode }}</span></span>
+                    <span v-if="component.reasonCode">
+                      · {{ reasonText(component.reasonCode) ?? component.reasonCode }}
+                      <span v-if="reasonText(component.reasonCode)" class="cell-sub mono">{{ component.reasonCode }}</span>
+                    </span>
                   </span>
                 </td>
                 <td><span class="kind-tag" :data-kind="component.kind">{{ kindName(component.kind) }}</span></td>
-                <td><StatusBadge :state="component.state" :available="component.available" friendly /></td>
+                <td><StatusBadge :state="component.state" :available="component.available" friendly dot /></td>
                 <td>
                   <template v-if="component.reasonCode">
                     <span v-if="reasonText(component.reasonCode)">{{ reasonText(component.reasonCode) }}</span>
@@ -288,13 +340,16 @@ function reasonText(code: string | undefined | null): string | null {
               <h2 id="errors-title">最近错误</h2>
               <p class="ov-panel-sub">仅安全错误码，不含日志正文</p>
             </div>
+            <button v-if="recentErrors.length > 0" type="button" class="link-button" @click="emit('navigate', 'logs', $event)">
+              看日志 →
+            </button>
           </div>
           <p v-if="recentErrors.length === 0" class="empty-state ov-calm" data-testid="errors-empty">
-            没有待处理错误。最近一切顺利。
+            没有待处理错误，近期运行平稳。
           </p>
           <ul v-else class="ov-errors" data-testid="recent-errors">
             <li v-for="(item, index) in recentErrors" :key="`${item.at}-${item.scope}-${index}`">
-              <span class="ov-error-dot" aria-hidden="true"></span>
+              <span class="ov-error-dot" aria-hidden="true" />
               <div>
                 <p class="ov-error-title">{{ errorName(item.code) ?? item.code }}</p>
                 <p class="ov-error-meta">
@@ -310,24 +365,24 @@ function reasonText(code: string | undefined | null): string | null {
           <div class="panel-heading ov-panel-head">
             <div>
               <h2 id="service-title">服务信息</h2>
-              <p class="ov-panel-sub">版本、契约与实例</p>
+              <p class="ov-panel-sub">版本、契约与运行实例</p>
             </div>
           </div>
           <dl class="ov-meta">
             <div><dt>服务版本</dt><dd>{{ props.meta.serverVersion }}</dd></div>
             <div><dt>契约版本</dt><dd class="mono">{{ props.meta.contractVersion }}</dd></div>
-            <div><dt>实例</dt><dd class="mono">{{ props.meta.instanceId }}</dd></div>
+            <div><dt>实例</dt><dd class="mono"><BreakableId :value="props.meta.instanceId" copyable /></dd></div>
             <div><dt>启动时间</dt><dd>{{ formatDate(props.status.startedAt) }}</dd></div>
-            <div><dt>最近读取</dt><dd>{{ lastSuccessLabel }}</dd></div>
             <div><dt>当前权限</dt><dd>{{ props.mode === 'admin' ? '管理员' : '标准（只读）' }}</dd></div>
           </dl>
         </section>
       </div>
     </div>
+
     <section class="ov-quick" aria-labelledby="quick-title">
       <div class="ov-quick-head">
-        <h2 id="quick-title">接下来可以做什么</h2>
-        <p class="ov-panel-sub">从这里继续管理你的工作空间</p>
+        <h2 id="quick-title">常用入口</h2>
+        <p class="ov-panel-sub">按专题快速前往管理界面</p>
       </div>
       <div class="ov-quick-grid">
         <button
@@ -348,5 +403,22 @@ function reasonText(code: string | undefined | null): string | null {
         </button>
       </div>
     </section>
+
+    <OperationRecoveryLookup
+      v-if="props.client && props.meta.features.includes('operations.find')"
+      :client="props.client"
+      :enabled="props.mode === 'admin' && props.compatibility.compatible"
+      @auth-expired="emit('auth-expired', $event)"
+    />
   </section>
 </template>
+
+<style scoped>
+.backup-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+</style>

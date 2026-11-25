@@ -5,6 +5,7 @@ import { ZbaClient, ZbaNetworkError, ZbaRequestError, type ZbaPluginCatalog, typ
 import { syntheticManifest, syntheticSettings } from '../fixtures/provider-marketplace'
 import { discovery, previewFor, marketDialogShell } from '../fixtures/plugin-import'
 import type { PluginPreviewRequest } from '../../src/api/plugin-import'
+import { beginOperation, markOperation } from '../../src/shared/sync/pending-operations'
 
 const mounted: Array<{ unmount: () => void }> = []
 afterEach(() => { for (const wrapper of mounted.splice(0)) wrapper.unmount(); document.body.replaceChildren() })
@@ -45,6 +46,23 @@ async function mountDialog(client = clientWith()) {
 }
 
 describe('plugin marketplace idempotency and trust gate', () => {
+  it('shows damaged metadata while preserving catalog browsing and original-key recovery', async () => {
+    const failure = { id: syntheticManifest.id, code: 'plugin_metadata_unreadable', fingerprint: 'sha256:' + 'a'.repeat(64) }
+    const client = clientWith({ installedPlugins: vi.fn(async () => ({ revision: 'rev-1', plugins: [], metadataFailures: [failure] })) })
+    beginOperation(client, { key: 'original-metadata-key', kind: 'plugin', target: syntheticManifest.id, meta: { operation: 'install', version: syntheticManifest.version } })
+    markOperation(client, 'original-metadata-key', 'unknown')
+    const { wrapper } = await mountDialog(client)
+    expect(wrapper.get('[data-testid="metadata-failures"]').text()).toContain('原记录保持不变')
+    expect(wrapper.find('[data-testid="plugin-catalog"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="marketplace-install"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="metadata-disabled"]').text()).toContain('恢复记录')
+    await wrapper.get('[data-testid="marketplace-recovery-check"]').trigger('click')
+    await flushPromises()
+    expect(client.pluginOperation).toHaveBeenCalledWith('original-metadata-key')
+    expect(client.installPlugin).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="metadata-failures"]').exists()).toBe(true)
+  })
+
   it('requires the trust acknowledgement before installing and sends one acknowledged request', async () => {
     const installPlugin = vi.fn<ZbaClient['installPlugin']>(async () => ({ operation: operation(), revision: 'rev-2' }))
     const { wrapper } = await mountDialog(clientWith({ installPlugin }))

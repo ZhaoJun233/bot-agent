@@ -7,10 +7,12 @@ import {
   type ZbaConfigurationReceipt,
   type ZbaConfigurationReadResult,
   type ZbaConfigurationView,
+  type ZbaDriverKey,
   type ZbaFieldDescriptor,
   type ZbaReadField
 } from '../../api/zba'
 import ErrorNotice from '../../shared/ui/ErrorNotice.vue'
+import UiSwitch from '../../shared/ui/UiSwitch.vue'
 import { isRestorable, restoreFocus } from '../../shared/ui/focus-restore'
 import { useModalIsolation } from '../../shared/ui/modal-isolation'
 import { toUiError, type UiError } from '../../shared/ui/ui-error'
@@ -47,17 +49,30 @@ import { fieldHint, fieldLabel } from './field-labels'
 import { replyPacingNumericLimits } from './reply-pacing'
 import { configurationFieldErrors, localFieldErrors, providerErrorPath, type ConfigurationFieldError } from './field-errors'
 import PlatformPolicyEditor from './PlatformPolicyEditor.vue'
-import { applyPolicyEdits, policyEntries, type PolicyDrafts } from './policy-draft'
+import { applyPolicyEdits, filterPoliciesByPlatform, policyEntries, policyKey, type PolicyDrafts } from './policy-draft'
+import ConversationProfileEditor from './ConversationProfileEditor.vue'
+import {
+  applyConversationProfileEdits,
+  conversationProfileId,
+  conversationProfileViews,
+  defaultDriverForPlatform,
+  filterProfilesByPlatform,
+  type ConversationProfileDrafts
+} from './conversation-profile-draft'
 import { beginOperation, getPendingOperation, markOperation, pendingOperations } from '../../shared/sync/pending-operations'
 import { configurationCapabilities, configurationFor, ownsConfiguration } from '../capabilities/configuration-ownership'
+import { registeredSecretLabel } from '../capabilities/plugin-settings'
 
 const props = withDefaults(defineProps<{
   client: ZbaClient
   mode: 'read' | 'admin'
   writesEnabled: boolean
   scope?: string
+  policyPlatformId?: string
+  driverKey?: ZbaDriverKey
   active?: boolean
-}>(), { scope: 'basic', active: true })
+  embedded?: boolean
+}>(), { scope: 'basic', active: true, embedded: false })
 
 const editorId = useId()
 const domId = (key: string): string => editorId + '-' + key
@@ -129,16 +144,42 @@ const providerNames = ref<ProviderNameDrafts>({})
  * 条目是判定的真相，标量只是基线：只存改过的行（键 = policyKey(target)），
  * 保存时逐条 upsert，不整表替换（整表替换在 Legacy 档会被判 legacy_policy_needs_review）。
  */
+const effectivePolicyPlatformId = computed(() => props.policyPlatformId ?? capability.value?.policyPlatformId ?? null)
 const policyDrafts = ref<PolicyDrafts>({})
-const policyDenials = computed(() => findPolicyDenials(policyDrafts.value, policyEntries((draftBase.value ?? snapshot.value)?.view)))
+const policyDenials = computed(() => findPolicyDenials(
+  policyDrafts.value,
+  filterPoliciesByPlatform(policyEntries((draftBase.value ?? snapshot.value)?.view), effectivePolicyPlatformId.value)
+))
 const policyDenialsConfirmed = ref(false)
 watch(policyDrafts, () => { policyDenialsConfirmed.value = false })
-const policyRows = computed(() => policyEntries(snapshot.value?.view))
+const policyRows = computed(() => filterPoliciesByPlatform(policyEntries(snapshot.value?.view), effectivePolicyPlatformId.value))
 const policyDirtyCount = computed(() => Object.keys(policyDrafts.value).length)
+const showPolicySection = computed(() => active.value === 'platform'
+  && snapshot.value?.view?.platform?.platformPolicies !== undefined
+  && (effectivePolicyPlatformId.value !== null || ownsConfiguration(props.scope, 'platform', 'platformPolicies')))
+const conversationProfileDrafts = ref<ConversationProfileDrafts>({})
+const allConversationProfiles = computed(() => conversationProfileViews(snapshot.value?.view))
+const conversationProfileDriver = computed(() => props.driverKey ?? defaultDriverForPlatform(effectivePolicyPlatformId.value, policyRows.value))
+const conversationProfileRows = computed(() => filterProfilesByPlatform(allConversationProfiles.value, effectivePolicyPlatformId.value, props.driverKey))
+const conversationProfileDirtyCount = computed(() => Object.keys(conversationProfileDrafts.value).length)
+const showConversationProfileSection = computed(() => showPolicySection.value && effectivePolicyPlatformId.value !== null)
+const maxMessagesCeiling = computed(() => {
+  const value = snapshot.value?.view?.behavior?.maxMessagesPerConversation?.value
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+})
+const conversationProfileSummaryText = computed(() => {
+  const byPlatform = new Map<string, number>()
+  for (const item of allConversationProfiles.value) {
+    const id = item.key.driver.platformId
+    byPlatform.set(id, (byPlatform.get(id) ?? 0) + 1)
+  }
+  return Array.from(byPlatform.entries()).map(([id, count]) => `${id}（${count}）`).join('、')
+})
 /** 本次操作确认的名称意图，包含已与基线同值、无需序列化的名称。 */
 const pendingNames = ref<ProviderNameDrafts>({})
 let findSequence = 0
 const phase = ref<SavePhase>('idle')
+const validating = ref(false)
 const saveError = ref<UiError | null>(null)
 const receipt = ref<ZbaConfigurationReceipt | null>(null)
 const fieldErrors = ref<ConfigurationFieldError[]>([])
@@ -147,11 +188,34 @@ const invalidPaths = computed(() => new Set(fieldErrors.value.flatMap(item => it
 function fieldInvalid(section: string, key: string): boolean {
   return invalidPaths.value.has(`${section}.${key}`)
 }
+function fieldErrorMessage(section: string, key: string): string | null {
+  const path = `${section}.${key}`
+  return fieldErrors.value.find(item => item.path === path)?.message ?? null
+}
+const MULTILINE_FIELDS = new Set(['botPersona', 'agentPrompt'])
+function isMultilineField(key: string): boolean {
+  return MULTILINE_FIELDS.has(key) || /prompt|persona/i.test(key)
+}
+function isFieldCleared(section: SectionKey, key: string): boolean {
+  return draft.value[fieldPath(section as ZbaPatchSectionLike, key)]?.kind === 'clear'
+}
+function scrollToFirstError(): void {
+  const first = fieldErrors.value.find(item => item.path)
+  if (!first?.path) return
+  const key = first.path.includes('.') ? first.path.split('.').slice(1).join('.') : first.path
+  const el = document.querySelector<HTMLElement>(`[data-testid="config-field-${key}"]`)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  el?.querySelector<HTMLElement>('input, textarea, select')?.focus()
+}
 const conflictCurrentVersion = ref<string | null>(null)
 const conflictKeys = ref<string[]>([])
 const pendingKey = ref<string | null>(null)
 const findBusy = ref(false)
-const operationTarget = computed(() => 'config:' + props.scope)
+const operationTarget = computed(() =>
+  props.scope === 'platform' && props.policyPlatformId
+    ? 'config:platform:' + props.policyPlatformId
+    : 'config:' + props.scope
+)
 const registeredOperation = computed(() => getPendingOperation(props.client, 'configuration', operationTarget.value))
 const restoredOperation = ref(false)
 let sessionRevision = 0
@@ -202,7 +266,9 @@ const counts = computed<Record<SectionKey, number>>(() => {
   const view = snapshot.value?.view
   if (!view) return result
   for (const key of ['behavior', 'model', 'agent', 'platform', 'voice', 'music', 'reporting'] as const) {
-    result[key] = Object.keys(view[key]).filter((field) => !ownedByPlugin(key, field)).length
+    result[key] = Object.keys(view[key]).filter(
+      (field) => !(key === 'platform' && field === 'platformPolicies') && !ownedByPlugin(key, field)
+    ).length
   }
   result.registered = capability.value?.providers ? view.registered.providers.length : 0
   return result
@@ -218,22 +284,29 @@ const activeFields = computed<Array<{ key: string; field: ZbaReadField }>>(() =>
   const view: ZbaConfigurationView | undefined = snapshot.value?.view
   if (!view || active.value === 'registered') return []
   const section = view[active.value] as Record<string, ZbaReadField>
-  return Object.entries(section)
-    .filter(([key]) => !ownedByPlugin(active.value, key))
+  const entries = Object.entries(section)
+    .filter(([key]) => !(active.value === 'platform' && key === 'platformPolicies') && !ownedByPlugin(active.value, key))
     .map(([key, field]) => ({ key, field }))
+  const order = capability.value?.fields
+    ?.filter(item => item.section === active.value)
+    .map(item => item.key)
+  if (!order || order.length === 0) return entries
+  const rank = new Map(order.map((key, index) => [key, index]))
+  return entries.sort((a, b) => (rank.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.key) ?? Number.MAX_SAFE_INTEGER))
 })
 
 const dirtyCount = computed(() =>
   Object.keys(draft.value).length
   + Object.keys(providerNames.value).length
   + policyDirtyCount.value
+  + conversationProfileDirtyCount.value
   + Object.values(secretDrafts.value).filter((action) => action !== undefined && action.kind !== 'keep').length)
 
 const hasWritePermission = computed(() => props.mode === 'admin' && props.writesEnabled)
 const canWrite = computed(() => props.active && hasWritePermission.value)
 // Only an explicit leave confirmation may save a retained draft while its editor is hidden.
 const canSaveOnLeave = computed(() => leavePrompt.value !== null && hasWritePermission.value)
-const busy = computed(() => loading.value || phase.value === 'saving')
+const busy = computed(() => loading.value || phase.value === 'saving' || validating.value)
 /** 提交结果未知时冻结整批内容：既不能改草稿，也不能放弃核对入口。 */
 const unconfirmed = computed(() => phase.value === 'unconfirmed')
 const inputsLocked = computed(() => busy.value || unconfirmed.value || phase.value === 'conflict')
@@ -299,8 +372,7 @@ const secretSourceLabels: Record<number, string> = {
   0: '未配置', 1: '数据库', 2: '环境变量'
 }
 const secretSlotLabels: Record<number, string> = {
-  0: '模型 API Key', 1: 'Agent 服务器密钥', 2: 'TTS API Key',
-  3: '飞书 App Secret', 4: '飞书 Encrypt Key', 5: '飞书验证 Token'
+  0: '模型 API Key', 1: 'Agent 服务器密钥', 2: 'TTS API Key'
 }
 const saveCodeMessages: Record<number, string> = {
   1: '当前令牌没有保存权限。',
@@ -369,7 +441,7 @@ function secretSourceLabel(value: number): string {
 }
 
 function secretSlotLabel(value: number): string {
-  return secretSlotLabels[value] ?? `槽位 ${value}`
+  return registeredSecretLabel(value) ?? secretSlotLabels[value] ?? `槽位 ${value}`
 }
 
 function formatRaw(value: unknown): string {
@@ -414,7 +486,27 @@ function fieldRule(rule: ZbaFieldDescriptor): string {
 }
 
 function inputValue(event: Event): string {
-  return (event.target as HTMLInputElement | HTMLSelectElement).value
+  return (event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value
+}
+
+function onPolicyDraftsUpdate(next: PolicyDrafts): void {
+  if (!canWrite.value || inputsLocked.value) return
+  anchorDraft()
+  policyDrafts.value = next
+  if (phase.value === 'saved' || phase.value === 'error') phase.value = 'idle'
+  validationMessage.value = null
+  saveError.value = null
+  fieldErrors.value = []
+}
+
+function onConversationProfileDraftsUpdate(next: ConversationProfileDrafts): void {
+  if (!canWrite.value || inputsLocked.value) return
+  anchorDraft()
+  conversationProfileDrafts.value = next
+  if (phase.value === 'saved' || phase.value === 'error') phase.value = 'idle'
+  validationMessage.value = null
+  saveError.value = null
+  fieldErrors.value = []
 }
 
 function currentDraftRaw(section: SectionKey, key: string, field: ZbaReadField): string {
@@ -427,24 +519,8 @@ function isFieldDirty(section: SectionKey, key: string, field: ZbaReadField): bo
   return isDirty(draft.value, fieldPath(section as ZbaPatchSectionLike, key), field)
 }
 
-const replyPacingActive = computed(() => {
-  const field = snapshot.value?.view?.behavior?.replyPacingEnabled
-  if (!field) return false
-  return field.visibility === 1
-    ? currentDraftRaw('behavior', 'replyPacingEnabled', field) === 'true'
-    : field.display === 'true'
-})
-
-function legacyDesireInactive(section: SectionKey, key: string): boolean {
-  return section === 'behavior' && key === 'aiDesire' && replyPacingActive.value
-}
-
-function fieldInputLocked(section: SectionKey, key: string): boolean {
-  return inputsLocked.value || legacyDesireInactive(section, key)
-}
-
 function onFieldInput(section: SectionKey, key: string, raw: string): void {
-  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
   const view = snapshot.value?.view
   if (!view) return
   const field = editableField(view, section as ZbaPatchSectionLike, key)
@@ -460,7 +536,7 @@ function onFieldInput(section: SectionKey, key: string, raw: string): void {
 }
 
 function clearField(section: SectionKey, key: string): void {
-  if (!canWrite.value || fieldInputLocked(section, key) || !ownsConfiguration(props.scope, section, key)) return
+  if (!canWrite.value || inputsLocked.value || !ownsConfiguration(props.scope, section, key)) return
   anchorDraft()
   draft.value = { ...draft.value, [fieldPath(section as ZbaPatchSectionLike, key)]: { kind: 'clear' } }
   phase.value = 'idle'
@@ -468,7 +544,7 @@ function clearField(section: SectionKey, key: string): void {
 }
 
 function resetField(section: SectionKey, key: string): void {
-  if (fieldInputLocked(section, key)) return
+  if (inputsLocked.value) return
   const next: DraftMap = { ...draft.value }
   delete next[fieldPath(section as ZbaPatchSectionLike, key)]
   draft.value = next
@@ -476,12 +552,13 @@ function resetField(section: SectionKey, key: string): void {
 
 function resetAll(): void {
   // “提交结果未知”时先核对：丢弃草稿会同时丢掉唯一的回执查询入口。
-  if (unconfirmed.value) return
+  if (phase.value === 'saving' || unconfirmed.value) return
   draft.value = {}
   secretDrafts.value = {}
   secretReconfirm.value = {}
   providerNames.value = {}
   policyDrafts.value = {}
+  conversationProfileDrafts.value = {}
   fieldErrors.value = []
   validationMessage.value = null
   conflictCurrentVersion.value = null
@@ -534,9 +611,10 @@ function buildRequest(): {
   const patch = buildPatch(draft.value, view)
   const nameErrors = applyProviderNames(patch.patch, providerNames.value, view)
   const policyErrors = applyPolicyEdits(patch.patch, policyDrafts.value, view)
+  const profileErrors = applyConversationProfileEdits(patch.patch, conversationProfileDrafts.value, view)
   const secrets = buildSecrets(secretDrafts.value)
   if (secretConfirmationBlocked.value) secrets.errors.push('秘密值无法比较：请明确确认，并重新输入替换值。')
-  const errors = [...patch.errors, ...nameErrors, ...policyErrors, ...secrets.errors]
+  const errors = [...patch.errors, ...nameErrors, ...policyErrors, ...profileErrors, ...secrets.errors]
   // 意图与 patch 分开记账：同值名称不用写入，但本次成功仍应结束该意图。
   const nameIntents = { ...providerNames.value }
   return { changes: patch.patch, secrets: secrets.secrets, errors, nameIntents }
@@ -680,9 +758,31 @@ async function reloadAfterConflict(): Promise<void> {
   secretReconfirm.value = reconfirm
   if (snapshot.value?.view) {
     const next = snapshot.value.view
+    const policyConflicts: string[] = []
+    const profileConflicts: string[] = []
+    if (base) {
+      const oldPolicies = new Map(policyEntries(base).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
+      const newPolicies = new Map(policyEntries(next).map(item => [JSON.stringify(item.target), JSON.stringify(item)]))
+      for (const key of Object.keys(policyDrafts.value)) {
+        const matchEntry = policyEntries(next).find(item => policyKey(item.target) === key)
+        const targetId = matchEntry ? JSON.stringify(matchEntry.target) : null
+        if (targetId && oldPolicies.get(targetId) !== newPolicies.get(targetId)) {
+          policyConflicts.push(`policy:${key}`)
+        }
+      }
+      const oldProfiles = new Map(conversationProfileViews(base).map(item => [conversationProfileId(item.key), JSON.stringify(item)]))
+      const newProfiles = new Map(conversationProfileViews(next).map(item => [conversationProfileId(item.key), JSON.stringify(item)]))
+      for (const id of Object.keys(conversationProfileDrafts.value)) {
+        if (oldProfiles.get(id) !== newProfiles.get(id)) {
+          profileConflicts.push(`profile:${id}`)
+        }
+      }
+    }
     conflictKeys.value = [
       ...conflictingPaths(draft.value, base, next),
-      ...conflictingProviderNames(providerNames.value, base, next).map((key) => `provider:${key}`)
+      ...conflictingProviderNames(providerNames.value, base, next).map((key) => `provider:${key}`),
+      ...policyConflicts,
+      ...profileConflicts
     ]
     // 用户已看到最新快照并逐项确认：从这里起草稿改基到新版本。
     draftBase.value = hasDraft.value ? snapshot.value : null
@@ -697,6 +797,7 @@ async function reloadAfterConflict(): Promise<void> {
 }
 
 async function validate(): Promise<void> {
+  if (validating.value || phase.value === 'saving') return
   const request = buildRequest()
   if (!request || !snapshot.value) return
   fieldErrors.value = localFieldErrors(request.errors)
@@ -704,7 +805,7 @@ async function validate(): Promise<void> {
     validationMessage.value = null
     return
   }
-  phase.value = 'saving'
+  validating.value = true
   saveError.value = null
   validationMessage.value = '校验中…'
   try {
@@ -716,18 +817,18 @@ async function validate(): Promise<void> {
     })
     if (result.code === 0) {
       validationMessage.value = '校验通过；保存时服务端还会再校验一次。'
-      phase.value = 'idle'
       return
     }
     fieldErrors.value = configurationFieldErrors(result.errors, snapshot.value?.view)
     validationMessage.value = result.code === 5
       ? '版本已变化，请先读取最新快照。'
       : `校验未通过（code ${result.code}）。`
-    phase.value = 'idle'
   } catch (cause) {
     if (reportAuthFailure(cause)) return
-    phase.value = 'error'
     saveError.value = toUiError(cause)
+    validationMessage.value = null
+  } finally {
+    validating.value = false
   }
 }
 
@@ -752,6 +853,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
   if (request.changes && Object.keys(request.changes).length === 0 && request.secrets.length === 0) {
     settleProviderNames(request.nameIntents)
     policyDrafts.value = {}
+    conversationProfileDrafts.value = {}
     validationMessage.value = '没有需要保存的修改。'
     return 'unchanged'
   }
@@ -807,6 +909,7 @@ async function commitDraft(fromLeaveConfirmation: boolean): Promise<'unchanged' 
       secretDrafts.value = {}
       secretReconfirm.value = {}
       policyDrafts.value = {}
+      conversationProfileDrafts.value = {}
       // SR-NAME-01：名称意图也必须在这里结束，否则保存条一直是"1 项修改"，
       // 切页会弹未保存确认，下一次无关保存还会把已确认的旧名字重发给新基线。
       settleProviderNames(request.nameIntents)
@@ -881,6 +984,7 @@ async function checkPending(): Promise<void> {
       secretDrafts.value = {}
       secretReconfirm.value = {}
       policyDrafts.value = {}
+      conversationProfileDrafts.value = {}
       // 核对确认本次操作已落盘，包括无需重复写入的同值名称。
       settleProviderNames(nameIntents)
       validationMessage.value = null
@@ -1117,6 +1221,7 @@ function endSession(): void {
   secretReconfirm.value = {}
   providerNames.value = {}
   policyDrafts.value = {}
+  conversationProfileDrafts.value = {}
   pendingKey.value = null
   pendingNames.value = {}
   phase.value = 'idle'
@@ -1166,12 +1271,17 @@ defineExpose({
 </script>
 
 <template>
-  <section class="configuration" :class="{ 'capability-editor': props.scope !== 'basic' }" data-testid="configuration" :aria-labelledby="domId('configuration-title')">
-    <header class="page-heading">
+  <section
+    class="configuration"
+    :class="{ 'capability-editor': props.scope !== 'basic' || props.embedded, 'embedded-editor': props.embedded }"
+    data-testid="configuration"
+    :aria-labelledby="domId('configuration-title')"
+  >
+    <header v-if="!props.embedded" class="page-heading">
       <div>
         <p class="eyebrow">系统管理 / 配置</p>
         <h1 :id="domId('configuration-title')" ref="pageHeading" tabindex="-1">{{ editorTitle }}</h1>
-        <p class="page-description">{{ capability?.summary ?? '只保留对话总开关、人设、冷却、上下文与并发等基础设置。其它设置在对应能力中管理。' }}</p>
+        <p class="page-description">{{ capability?.summary ?? '管理机器人基础行为、人设、冷却、上下文与并发参数。' }}</p>
         <p class="subtitle">
           版本 <strong>{{ snapshot?.version ?? '—' }}</strong>
           · 契约 {{ snapshot?.contractRevision ?? '—' }}
@@ -1228,20 +1338,12 @@ defineExpose({
 
     <ConfigurationOperationKey v-if="canWrite && pendingKey && registeredOperation?.key === pendingKey" :operation-key="pendingKey" />
 
-    <p v-if="props.scope === 'basic'" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
-      <span><strong>按能力管理其它设置</strong><br />模型、平台、Agent、报告与插件设置均在对应能力中管理，密钥也随能力配置。</span>
+    <p v-if="props.scope === 'basic' && !props.embedded" class="inline-notice plugin-notice" data-testid="config-plugin-moved">
+      <span><strong>按专题管理其它设置</strong><br />模型供应商、消息平台与插件参数已分别独立至对应一级导航，密钥也随各自专题管理。</span>
       <button type="button" class="tonal inline-action" data-testid="config-open-capabilities" @click="emit('open-capabilities')">
-        去能力页
+        去插件中心
       </button>
     </p>
-
-    <ConfigurationRecoveryLookup
-      v-if="props.scope === 'basic'"
-      :client="props.client"
-      :enabled="props.active && hasWritePermission"
-      :pending="busy || unconfirmed"
-      @auth-expired="emit('auth-expired', $event)"
-    />
 
     <ErrorNotice :error="error" title="读取配置失败" />
     <ErrorNotice :error="saveError" title="保存配置失败" />
@@ -1254,7 +1356,7 @@ defineExpose({
     <p v-else-if="!snapshot" class="empty-state" data-testid="config-empty">还没有配置快照；请重新读取。</p>
 
     <template v-else>
-      <section class="config-summary" aria-label="配置摘要">
+      <section v-if="!props.embedded" class="config-summary" aria-label="配置摘要">
         <div>
           <span>版本</span>
           <strong>{{ snapshot.version }}</strong>
@@ -1275,10 +1377,20 @@ defineExpose({
         </div>
       </section>
 
+      <div v-if="props.embedded" class="embedded-meta-bar">
+        <span>版本 <strong>{{ snapshot.version }}</strong> · {{ fieldCount }} 项</span>
+        <span class="status-badge" :data-tone="currentRuntimeStatus.tone" data-testid="config-runtime-summary">
+          {{ currentRuntimeStatus.label }}
+        </span>
+        <button type="button" class="ghost embedded-reload" data-testid="config-reload-inline" :disabled="busy" @click="reload()">
+          {{ loading ? '读取中…' : '刷新快照' }}
+        </button>
+      </div>
+
       <p v-if="pendingRestarts.length > 0" class="inline-notice warn" data-testid="config-runtime-restart">{{ runtimeRestartNotice }}</p>
 
       <div class="config-body" :class="{ 'config-body--basic': scope === 'basic' }">
-        <nav v-if="scope !== 'basic'" class="config-nav" aria-label="配置分区">
+        <nav v-if="scope !== 'basic' && (!props.embedded || visibleSections.length > 1)" class="config-nav" aria-label="配置分区">
           <button
             v-for="section in visibleSections"
             :key="section.key"
@@ -1301,11 +1413,41 @@ defineExpose({
         >
           <div class="panel-heading">
             <h2 :id="`${editorId}-config-${active}-title`">{{ editorTitle }}</h2>
-            <p>{{ activeMeta.hint }} · {{ activeFields.length }} 个字段</p>
+            <p>
+              {{ activeMeta.hint }} · {{ activeFields.length }} 个字段
+              <template v-if="showPolicySection"> · {{ policyRows.length }} 条策略</template>
+              <template v-if="showConversationProfileSection"> · {{ conversationProfileRows.length }} 条会话档案</template>
+            </p>
           </div>
-          <p class="config-guide">{{ capability?.summary ?? '基础设置保存后对新消息生效；具体能力的行为与接入参数请在能力页调整。' }}</p>
-          <p v-if="activeFields.length === 0" class="empty-state">该分区没有字段。</p>
-          <div v-else class="settings-container">
+          <p class="config-guide">{{ capability?.summary ?? '基础行为设置保存后对新消息生效；模型供应商、消息平台与插件参数请在对应一级页调整。' }}</p>
+          <p v-if="capability?.credentialHint" class="inline-notice" data-testid="config-credential-hint">
+            {{ capability.credentialHint }}
+          </p>
+          <div
+            v-if="props.scope === 'conversation'"
+            class="inline-notice plugin-notice"
+            data-testid="conversation-profiles-summary"
+          >
+            <span>
+              <strong>按会话定制档案（{{ allConversationProfiles.length }} 条）</strong><br />
+              <template v-if="allConversationProfiles.length > 0">
+                已在 {{ conversationProfileSummaryText }} 配置按群 / 私聊覆写（人设、插话节奏、能力与工具档位，热更新免重启）。
+              </template>
+              <template v-else>
+                尚未配置按会话定制档案；目前所有会话默认继承全局与平台策略。可在对应平台的「接入与策略」抽屉里一键套用预设。
+              </template>
+            </span>
+            <button
+              type="button"
+              class="tonal inline-action"
+              data-testid="conversation-profiles-open-platforms"
+              @click="emit('open-capabilities', 'platforms')"
+            >
+              去消息平台管理
+            </button>
+          </div>
+          <p v-if="activeFields.length === 0 && !showPolicySection" class="empty-state">该分区没有字段。</p>
+          <div v-if="activeFields.length > 0" class="settings-container">
             <table class="settings-table" role="table" data-testid="config-fields">
               <caption class="sr-only">{{ activeMeta.label }}字段</caption>
               <thead class="sr-only">
@@ -1318,33 +1460,9 @@ defineExpose({
                 </tr>
               </thead>
               <tbody role="rowgroup">
-                <template v-for="item in activeFields" :key="item.key">
                 <tr
-                  v-if="active === 'platform' && item.key === 'platformPolicies'"
-                  role="row"
-                  class="policy-shell"
-                  data-testid="config-field-platformPolicies"
-                >
-                  <td colspan="5" role="cell" class="policy-cell">
-                    <div class="policy-heading">
-                      <strong class="config-label">{{ fieldLabel(item.key) }}</strong>
-                      <span class="config-key">{{ item.key }}</span>
-                      <span v-if="policyDirtyCount > 0" class="cell-sub">已修改 {{ policyDirtyCount }} 条</span>
-                    </div>
-                    <p class="cell-sub">
-                      共 {{ policyRows.length }} 条条目：条目里显式写过的字段压过上面的开关与白名单文本。
-                    </p>
-                    <PlatformPolicyEditor
-                      :entries="policyRows"
-                      :runtime-effects="snapshot.runtimeEffects"
-                      :model-value="policyDrafts"
-                      :locked="!canWrite || inputsLocked"
-                      @update:model-value="policyDrafts = $event"
-                    />
-                  </td>
-                </tr>
-                <tr
-                  v-else
+                  v-for="item in activeFields"
+                  :key="item.key"
                   role="row"
                   :class="{ dirty: isFieldDirty(active, item.key, item.field) }"
                   :data-testid="`config-field-${item.key}`"
@@ -1354,62 +1472,81 @@ defineExpose({
                     <strong v-else class="config-label">{{ fieldLabel(item.key) }}</strong>
                     <span class="config-key">{{ item.key }}</span>
                     <span v-if="fieldHint(item.key)" class="cell-sub">{{ fieldHint(item.key) }}</span>
-                    <span v-if="legacyDesireInactive(active, item.key)" class="cell-sub" role="status">回复节奏已开启：旧版欲望值暂不生效，原值保留；关闭后恢复。</span>
-                    <span v-if="isFieldDirty(active, item.key, item.field)" class="cell-sub">已修改</span>
+                    <span v-if="isFieldDirty(active, item.key, item.field)" class="dirty-pill">
+                      {{ isFieldCleared(active, item.key) ? '待清除' : '已修改' }}
+                    </span>
                   </td>
                   <td class="config-value setting-editor" role="cell">
                     <template v-if="canWrite && isEditable(item.field)">
-                      <select
-                        v-if="valueKind(item.field) === 'boolean'"
-                        :id="`${editorId}-config-input-${active}-${item.key}`"
-                        class="config-input"
-                        :value="currentDraftRaw(active, item.key, item.field)"
-                        :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
-                        :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
-                        :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="fieldInputLocked(active, item.key)"
-                        @change="onFieldInput(active, item.key, inputValue($event))"
-                      >
-                        <option value="true">是</option>
-                        <option value="false">否</option>
-                      </select>
-                      <input
-                        v-else
-                        :id="`${editorId}-config-input-${active}-${item.key}`"
-                        class="config-input"
-                        :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
-                        :min="active === 'behavior' ? replyPacingNumericLimits[item.key]?.min : undefined"
-                        :max="active === 'behavior' ? replyPacingNumericLimits[item.key]?.max : undefined"
-                        :step="active === 'behavior' && replyPacingNumericLimits[item.key] ? replyPacingNumericLimits[item.key]?.step ?? 1 : undefined"
-                        :value="currentDraftRaw(active, item.key, item.field)"
-                        :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
-                        :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
-                        :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
-                        :disabled="fieldInputLocked(active, item.key)"
-                        @input="onFieldInput(active, item.key, inputValue($event))"
-                      />
-                      <span class="edit-actions">
-                        <button
-                          v-if="isFieldDirty(active, item.key, item.field)"
-                          type="button"
-                          class="link-button"
-                          :disabled="fieldInputLocked(active, item.key)"
-                          @click="resetField(active, item.key)"
-                        >
-                          还原
-                        </button>
-                        <button
-                          v-if="item.field.rule.canClear"
-                          type="button"
-                          class="link-button"
-                          :disabled="fieldInputLocked(active, item.key)"
-                          @click="clearField(active, item.key)"
-                        >
-                          清除
-                        </button>
-                      </span>
+                      <div v-if="isFieldCleared(active, item.key)" class="cleared-state" :data-testid="`config-cleared-${item.key}`">
+                        <span>已标记清除（保存后将恢复默认值）</span>
+                        <button type="button" class="link-button" :disabled="inputsLocked" @click="resetField(active, item.key)">撤销清除</button>
+                      </div>
+                      <template v-else>
+                        <UiSwitch
+                          v-if="valueKind(item.field) === 'boolean'"
+                          :id="`${editorId}-config-input-${active}-${item.key}`"
+                          :model-value="currentDraftRaw(active, item.key, item.field) === 'true'"
+                          :label="currentDraftRaw(active, item.key, item.field) === 'true' ? '已开启' : '已关闭'"
+                          :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                          :disabled="inputsLocked"
+                          @update:model-value="value => onFieldInput(active, item.key, value ? 'true' : 'false')"
+                        />
+                        <div v-else-if="isMultilineField(item.key) && valueKind(item.field) === 'string'" class="multiline-wrap">
+                          <textarea
+                            :id="`${editorId}-config-input-${active}-${item.key}`"
+                            class="config-input config-textarea"
+                            rows="5"
+                            :value="currentDraftRaw(active, item.key, item.field)"
+                            :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                            :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
+                            :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
+                            :disabled="inputsLocked"
+                            @input="onFieldInput(active, item.key, inputValue($event))"
+                          />
+                          <span class="char-count mono">{{ currentDraftRaw(active, item.key, item.field).length }} 字符</span>
+                        </div>
+                        <input
+                          v-else
+                          :id="`${editorId}-config-input-${active}-${item.key}`"
+                          class="config-input"
+                          :type="valueKind(item.field) === 'number' ? 'number' : 'text'"
+                          :min="active === 'behavior' ? replyPacingNumericLimits[item.key]?.min : undefined"
+                          :max="active === 'behavior' ? replyPacingNumericLimits[item.key]?.max : undefined"
+                          :step="active === 'behavior' && replyPacingNumericLimits[item.key] ? replyPacingNumericLimits[item.key]?.step ?? 1 : undefined"
+                          :value="currentDraftRaw(active, item.key, item.field)"
+                          :aria-label="`${fieldLabel(item.key)}（${item.key}）`"
+                          :aria-invalid="fieldInvalid(active, item.key) ? 'true' : undefined"
+                          :aria-describedby="fieldInvalid(active, item.key) ? domId('config-field-errors') : `${editorId}-config-rule-${active}-${item.key}`"
+                          :disabled="inputsLocked"
+                          @input="onFieldInput(active, item.key, inputValue($event))"
+                        />
+                        <span class="edit-actions">
+                          <button
+                            v-if="isFieldDirty(active, item.key, item.field)"
+                            type="button"
+                            class="link-button"
+                            :disabled="inputsLocked"
+                            @click="resetField(active, item.key)"
+                          >
+                            还原
+                          </button>
+                          <button
+                            v-if="item.field.rule.canClear"
+                            type="button"
+                            class="link-button"
+                            :disabled="inputsLocked"
+                            @click="clearField(active, item.key)"
+                          >
+                            清除
+                          </button>
+                        </span>
+                      </template>
                     </template>
                     <span v-else :title="valueTitle(item.field)">{{ formatValue(item.field) }}</span>
+                    <p v-if="fieldErrorMessage(active, item.key)" class="field-inline-error" role="alert">
+                      {{ fieldErrorMessage(active, item.key) }}
+                    </p>
                     <span v-if="conflictKeys.includes(`${active}.${item.key}`)" class="cell-sub conflict-flag">
                       与对方修改重叠
                     </span>
@@ -1431,9 +1568,47 @@ defineExpose({
                     <span class="cell-sub">{{ item.field.visibility === 0 ? '仅概览' : '可读' }}</span>
                   </td>
                 </tr>
-                </template>
               </tbody>
             </table>
+          </div>
+          <div
+            v-if="showPolicySection"
+            class="policy-section"
+            :class="{ 'policy-section--divided': activeFields.length > 0 }"
+            data-testid="config-field-platformPolicies"
+          >
+            <div class="policy-heading">
+              <strong class="config-label">{{ fieldLabel('platformPolicies') }}</strong>
+              <span class="config-key">platformPolicies</span>
+              <span v-if="policyDirtyCount > 0" class="cell-sub">已修改 {{ policyDirtyCount }} 条</span>
+            </div>
+            <p class="cell-sub">
+              共 {{ policyRows.length }} 条条目：条目里显式写过的字段优先于通用默认规则。
+            </p>
+            <PlatformPolicyEditor
+              :entries="policyRows"
+              :runtime-effects="snapshot.runtimeEffects"
+              :policy-copy="capability?.policyCopy"
+              :model-value="policyDrafts"
+              :locked="!canWrite || inputsLocked"
+              @update:model-value="onPolicyDraftsUpdate"
+            />
+          </div>
+          <div
+            v-if="showConversationProfileSection"
+            class="policy-section policy-section--divided"
+            data-testid="config-field-conversationProfiles"
+          >
+            <ConversationProfileEditor
+              :platform-id="effectivePolicyPlatformId!"
+              :driver="conversationProfileDriver"
+              :entries="conversationProfileRows"
+              :model-value="conversationProfileDrafts"
+              :can-write="canWrite"
+              :locked="!canWrite || inputsLocked"
+              :max-messages-ceiling="maxMessagesCeiling"
+              @update:model-value="onConversationProfileDraftsUpdate"
+            />
           </div>
         </section>
 
@@ -1608,23 +1783,28 @@ defineExpose({
 
       <div
         class="save-bar"
-        :class="{ 'save-bar--floating': hasDraft || busy || unconfirmed }"
+        :class="{ 'save-bar--floating': hasDraft || busy || unconfirmed || fieldErrors.length > 0 }"
         data-testid="config-save-bar"
       >
         <div class="save-bar-info">
           <strong>{{ dirtyCount }} 项修改</strong>
-          <span v-if="phase === 'saving'">保存中…</span>
+          <span v-if="validating">校验中…</span>
+          <span v-else-if="phase === 'saving'">保存中…</span>
           <span v-else-if="phase === 'saved'">已保存</span>
           <span v-else-if="phase === 'unconfirmed'">提交结果未知 · 待核对</span>
           <span v-else-if="phase === 'conflict'">版本冲突 · 待读取</span>
-          <span v-if="hasDraft" class="save-bar-hint">草稿仅在本页内存；刷新或关闭浏览器会先提示</span>
+          <span v-if="fieldErrors.length > 0" class="conflict-flag">
+            {{ fieldErrors.length }} 项校验错误
+            <button type="button" class="link-button" @click="scrollToFirstError">定位首个错误</button>
+          </span>
+          <span v-if="hasDraft" class="save-bar-hint">草稿仅保留于页面内存；离开或关闭前会提示</span>
         </div>
         <div class="save-bar-actions">
           <button
             type="button"
             class="tonal"
             data-testid="config-discard"
-            :disabled="busy || dirtyCount === 0 || unconfirmed"
+            :disabled="phase === 'saving' || validating || dirtyCount === 0 || unconfirmed"
             @click="resetAll"
           >
             放弃修改
@@ -1635,7 +1815,7 @@ defineExpose({
             :disabled="saveBlocked || dirtyCount === 0 || !canWrite"
             @click="validate"
           >
-            校验
+            {{ validating ? '校验中…' : '校验' }}
           </button>
           <button
             type="button"
@@ -1649,7 +1829,15 @@ defineExpose({
         </div>
       </div>
 
-      <section v-if="scope === 'basic'" class="owner-index" aria-label="插件与系统设置入口" data-testid="config-owner-index">
+      <ConfigurationRecoveryLookup
+        v-if="props.scope === 'basic'"
+        :client="props.client"
+        :enabled="props.active && hasWritePermission"
+        :pending="busy || unconfirmed"
+        @auth-expired="emit('auth-expired', $event)"
+      />
+
+      <section v-if="scope === 'basic' && !props.embedded" class="owner-index" aria-label="插件与系统设置入口" data-testid="config-owner-index">
         <div>
           <h2>按模块配置</h2>
           <p class="muted">这里只保留全局行为。插件开关、参数和密钥统一在各自设置中管理。</p>
@@ -1747,13 +1935,16 @@ defineExpose({
 .capability-editor .config-nav { display: flex; flex-wrap: wrap; position: static; gap: 8px; margin-bottom: 16px; }
 .capability-editor .config-nav-item { flex: 1 1 160px; }
 .capability-editor .config-summary { display: none; }
+.embedded-editor .page-heading { display: none; }
+.embedded-meta-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: var(--text-xs); color: var(--text-muted); }
+.embedded-reload { margin-left: auto; min-height: 30px; padding: 4px 10px; font-size: var(--text-xs); }
 .config-panel, .settings-container { min-width: 0; }
-.config-nav-copy { display: grid; gap: 5px; }
-.config-nav-copy small { font-size: 11px; color: var(--text-muted); }
+.config-nav-copy { display: grid; gap: 4px; }
+.config-nav-copy small { font-size: var(--text-xs); color: var(--text-muted); }
 .plugin-notice { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .settings-table, .provider-table { display: block; width: 100%; border: 0; }
 .settings-table tbody, .provider-table tbody { display: block; }
-.settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.settings-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; padding: 14px 0; border-bottom: 1px solid var(--border-subtle); }
 .settings-table tr:first-child { padding-top: 4px; }
 .settings-table tbody tr:hover td, .settings-table tbody tr.dirty td { background: transparent; }
 .config-body--basic { display: block; }
@@ -1762,21 +1953,27 @@ defineExpose({
 .owner-link { display: grid; gap: 6px; min-width: 0; text-align: left; white-space: normal; padding: 14px 16px; }
 .owner-link span { font-weight: 600; }
 .owner-link small { color: var(--text-muted); font-weight: 400; line-height: 1.5; }
-.settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent-deep); }
+.settings-table tr.dirty { background: var(--accent-tint); box-shadow: inset 3px 0 var(--accent-brand); padding-left: 10px; border-radius: var(--radius-sm); }
 .settings-table tr:last-child, .provider-table tr:last-child { border-bottom: 0; }
 .settings-table td, .provider-table td { display: block; border: 0; padding: 0; min-width: 0; }
-.setting-identity { flex: 0 0 200px; }
-.setting-editor { flex: 1 1 calc(100% - 220px); }
-.settings-table .setting-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-muted); font-size: 12px; }
+.setting-identity { flex: 0 0 218px; }
+.setting-editor { flex: 1 1 calc(100% - 240px); }
+.settings-table .setting-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-muted); font-size: var(--text-xs); }
 .setting-meta .meta-label, .setting-meta .cell-sub { display: inline; margin: 0; }
 .setting-editor .config-input { max-width: 640px; }
 .setting-editor select.config-input, .setting-editor input[type="number"] { max-width: 220px; }
-.meta-label { display: block; color: var(--text-soft); font-size: 11px; margin-bottom: 5px; }
-.config-input { font-size: 14px; height: 40px; min-height: 40px; padding-block: 6px; }
-.config-label { font-size: 14px; font-weight: 600; }
-.config-key { font-size: 11px; margin-top: 3px; }
-.policy-shell { display: block; width: 100%; }
-.policy-cell { width: 100%; min-width: 0; }
+.multiline-wrap { display: grid; gap: 4px; max-width: 640px; }
+.config-textarea { min-height: 7.5rem; height: auto; padding: 10px 12px; line-height: 1.6; }
+.char-count { font-size: var(--text-xs); color: var(--text-soft); justify-self: end; }
+.cleared-state { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-text); font-size: var(--text-sm); font-weight: 500; }
+.dirty-pill { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-deep); font-size: var(--text-xs); font-weight: 600; }
+.field-inline-error { margin: 6px 0 0; font-size: var(--text-xs); color: var(--bad-text); font-weight: 500; }
+.meta-label { display: block; color: var(--text-soft); font-size: var(--text-xs); margin-bottom: 4px; }
+.config-input { font-size: var(--text-base); min-height: 40px; padding-block: 6px; }
+.config-label { font-size: var(--text-base); font-weight: 600; }
+.config-key { font-size: var(--text-xs); margin-top: 3px; }
+.policy-section { display: grid; gap: 10px; min-width: 0; }
+.policy-section--divided { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
 .policy-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 4px; }
 .policy-heading .config-key { margin: 0; }
 .edit-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }

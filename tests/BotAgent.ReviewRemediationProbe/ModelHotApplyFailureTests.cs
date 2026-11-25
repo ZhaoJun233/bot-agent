@@ -136,6 +136,11 @@ internal static class ModelHotApplyFailureTests
 
     private sealed class SyntheticParticipant : StorageConfiguration.ConfigurationStorageParticipant
     {
+        private readonly object _writeGate = new();
+        internal override void CoordinateWrite(Action write)
+        {
+            lock (_writeGate) write();
+        }
         internal override bool Reauthorize(ConfigurationCaller caller, ConfigurationAccess required) => caller.Access.HasFlag(required);
         internal override ImmutableArray<SecretMetadata> SecretSources(SqliteConnection connection,
             ImmutableArray<StorageConfiguration.SecretMutation> proposed)

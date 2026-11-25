@@ -211,6 +211,7 @@
         "triggerIndex": 2,
         "triggerUsable": false,
         "lastSelfIndex": -1,
+        "triggerWasCurrentAtGeneration": true,
         "directAddress": false,
         "triggerWasEcho": false
       },

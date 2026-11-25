@@ -57,7 +57,7 @@ public sealed class ConfigurationRuntimeTracker
             // SyncBrainFields and the provider registry are separate from snapshot publication.
             ConfigurationFieldId.Model or ConfigurationFieldId.ModelBaseUrl
                 or ConfigurationFieldId.RegisteredProviders or ConfigurationFieldId.BotPersona
-                or ConfigurationFieldId.AiDesire or ConfigurationFieldId.ReplyPacingEnabled or ConfigurationFieldId.SuitabilityThreshold
+                or ConfigurationFieldId.SuitabilityThreshold
                 or ConfigurationFieldId.MaxContextMessages => [ApplyStep.ModelProjection],
             ConfigurationFieldId.EnableStickers => [ApplyStep.RuntimePolicy, ApplyStep.Schedulers],
             ConfigurationFieldId.WhitelistGroups or ConfigurationFieldId.WhitelistPrivates
@@ -69,14 +69,12 @@ public sealed class ConfigurationRuntimeTracker
                 or ConfigurationFieldId.EnableWebSearch or ConfigurationFieldId.EnableMusic
                 or ConfigurationFieldId.EnableVoice or ConfigurationFieldId.EnablePoke
                 or ConfigurationFieldId.ScenarioPreset or ConfigurationFieldId.EnableApprovals
-                or ConfigurationFieldId.EnableQuestions or ConfigurationFieldId.ParticipationMaxConsecutiveReplies
-                or ConfigurationFieldId.ParticipationCooldownSeconds or ConfigurationFieldId.ParticipationProbingMaxReplies
-                or ConfigurationFieldId.ParticipationMaxActiveLifetimeSeconds
-                or ConfigurationFieldId.ParticipationMaxExitingLifetimeSeconds => [ApplyStep.RuntimePolicy],
+                or ConfigurationFieldId.EnableQuestions => [ApplyStep.RuntimePolicy],
+            ConfigurationFieldId.ConversationProfiles => [ApplyStep.PublishSnapshot, ApplyStep.RuntimePolicy],
             ConfigurationFieldId.MaxConcurrentReplies => [ApplyStep.ConcurrencyGate],
             ConfigurationFieldId.MaxMessagesPerConversation => [ApplyStep.ContextWindow],
             ConfigurationFieldId.HealthReportEnabled or ConfigurationFieldId.HealthReportTargets
-                or ConfigurationFieldId.HealthReportTime or ConfigurationFieldId.IdleFallbackSeconds
+                or ConfigurationFieldId.HealthReportTime
                 or ConfigurationFieldId.EnableProfileSummary or ConfigurationFieldId.ProfileSummaryIntervalSeconds
                 or ConfigurationFieldId.StickerLibraryMax => [ApplyStep.Schedulers],
             _ => [ApplyStep.PublishSnapshot],

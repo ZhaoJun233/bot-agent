@@ -116,7 +116,7 @@ test('键盘：认证页自动聚焦令牌输入，全程打字 + Enter 直接�
   await expect(page.getByTestId('overview')).toBeVisible()
 })
 
-test('键盘：Tab 顺序覆盖四个导航入口，焦点始终可见', async ({ page }) => {
+test('键盘：Tab 顺序覆盖八个导航入口，焦点始终可见', async ({ page }) => {
   await connectWithPointer(page, READ_TOKEN)
 
   // 认证框收起后焦点回到文档起点，所以这里就是自然的"从头 Tab"；
@@ -124,7 +124,7 @@ test('键盘：Tab 顺序覆盖四个导航入口，焦点始终可见', async (
   expect(await focused(page), '认证框收起后焦点应回到文档起点').toBe('body')
   const seen: string[] = []
   const invisible: string[] = []
-  for (let step = 0; step < 40; step += 1) {
+  for (let step = 0; step < 50; step += 1) {
     await page.keyboard.press('Tab')
     const id = await focused(page)
     seen.push(id)
@@ -144,7 +144,7 @@ test('键盘：Tab 顺序覆盖四个导航入口，焦点始终可见', async (
     if (!visible) invisible.push(id)
   }
 
-  for (const nav of ['nav-overview', 'nav-capabilities', 'nav-configuration', 'nav-tasks']) {
+  for (const nav of ['nav-overview', 'nav-providers', 'nav-platforms', 'nav-plugins', 'nav-configuration', 'nav-tasks', 'nav-traces', 'nav-logs']) {
     expect(seen, nav).toContain(nav)
   }
   expect(seen.some((id) => id !== 'body'), '至少有一步焦点落在元素上').toBe(true)
@@ -158,15 +158,15 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
   await expect(page.getByTestId('config-fields')).toBeVisible()
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
 
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = Number(await input.inputValue())
   await input.fill(String(original + 1))
   await expect(page.getByTestId('config-save-bar')).toContainText('1 项修改')
 
   // 脏配置导航先确认；普通草稿另有显式保留动作，原有保存/放弃/继续编辑仍保留。
-  await page.getByTestId('nav-capabilities').click()
+  await page.getByTestId('nav-platforms').click()
   await expect(page.getByTestId('config-leave-dialog')).toBeVisible()
 
   // 焦点进入对话框（安全动作优先），不是留在被遮住的背景按钮上。
@@ -199,7 +199,7 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
 
   // S4-M1：关框后焦点必须回到打开它的导航按钮。只断言"框关了"是不够的——
   // 焦点掉到 body 时键盘用户下一次 Tab 要从页面开头重走一遍。
-  expect(await focused(page), '关闭离开框后应把焦点还给 nav-capabilities').toBe('nav-capabilities')
+  expect(await focused(page), '关闭离开框后应把焦点还给 nav-platforms').toBe('nav-platforms')
 
   // 收尾：放弃草稿，避免污染同一宿主的后续用例。
   // 保存条是常驻元素（只换文案），所以断言"回到 0 项修改"而不是"元素消失"。
@@ -209,10 +209,10 @@ test('键盘：配置页离开确认框焦点进框、Tab 循环、Esc 等于继
 
 test('键盘：能力页确认框焦点落在确认按钮，Tab 不跑出遮罩，Esc 取消不发写请求', async ({ page }) => {
   await connectWithPointer(page, ADMIN_TOKEN)
-  await page.getByTestId('nav-capabilities').click()
-  await expect(page.getByTestId('capabilities')).toBeVisible()
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('nav-platforms').click()
+  await expect(page.getByTestId('platforms-page')).toBeVisible()
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   let writes = 0
   page.on('request', (request) => {
@@ -228,10 +228,10 @@ test('键盘：能力页确认框焦点落在确认按钮，Tab 不跑出遮罩�
   // 焦点落在"确认执行"（危险动作的默认落点不是取消，但必须可预测）。
   expect(await focused(page)).toBe('cap-confirm-ok')
 
-  // Tab 循环：只在两个按钮之间转，不会跑到被遮住的背景。
+  // Tab 循环：只在对话框内部按钮之间转，不会跑到被遮住的背景。
   for (let step = 0; step < 5; step += 1) {
     await page.keyboard.press('Tab')
-    expect(['cap-confirm-ok', 'cap-confirm-cancel']).toContain(await focused(page))
+    expect(['cap-confirm-ok', 'cap-confirm-cancel', 'cap-confirm-close']).toContain(await focused(page))
   }
 
   // Esc = 取消（安全动作），关闭确认框且一个写请求都没发。
@@ -256,10 +256,10 @@ test('键盘：配置代际读取失败时，能力确认框仍能接住焦点�
     body: JSON.stringify({ error: { code: 'service_unavailable', message: 'synthetic unavailable' } })
   }))
 
-  await page.getByTestId('nav-capabilities').click()
-  await expect(page.getByTestId('capabilities')).toBeVisible()
-  await page.getByTestId('cap-enable-admin').click()
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await page.getByTestId('nav-platforms').click()
+  await expect(page.getByTestId('platforms-page')).toBeVisible()
+  await page.getByTestId('platforms-enable-admin').click()
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
   await expect(page.getByTestId('cap-context-error')).toBeVisible()
 
   let writes = 0
@@ -306,9 +306,9 @@ test('键盘：配置保存主线全程只用键盘完成', async ({ page }) => 
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
 
   // 基础配置只有一个分区；直接 Tab 到字段输入框（行 testid 由 closest 提供）。
-  await tabToRow(page, 'config-field-privateCooldownSeconds')
+  await tabToRow(page, 'config-field-groupInterjectionCooldownSeconds')
 
-  const input = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  const input = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   const original = await input.inputValue()
   // 全选后输入：只发键盘事件，不调用 fill。
   await page.keyboard.press('ControlOrMeta+A')
@@ -324,7 +324,7 @@ test('键盘：配置保存主线全程只用键盘完成', async ({ page }) => 
   // 收尾：改回原值，避免同一宿主的后续用例看到被改过的配置。
   // 焦点此时在保存条（文档末尾），所以反向 Shift+Tab 回到字段行——
   // 向后 Tab 会走出文档进入浏览器外壳，那不是我们的 Tab 顺序。
-  await tabBackToRow(page, 'config-field-privateCooldownSeconds')
+  await tabBackToRow(page, 'config-field-groupInterjectionCooldownSeconds')
   await page.keyboard.press('ControlOrMeta+A')
   await page.keyboard.type(original)
   await tabTo(page, 'config-save')
@@ -369,13 +369,13 @@ test('键盘：任务提交主线全程只用键盘完成', async ({ page }) => 
  */
 test('键盘：能力执行主线全程只用键盘完成', async ({ page }) => {
   await connectWithKeyboard(page, ADMIN_TOKEN)
-  await tabTo(page, 'nav-capabilities')
+  await tabTo(page, 'nav-platforms')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('capabilities')).toBeVisible()
+  await expect(page.getByTestId('platforms-page')).toBeVisible()
 
-  await tabTo(page, 'cap-enable-admin')
+  await tabTo(page, 'platforms-enable-admin')
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('cap-mode-badge')).toHaveText('管理员模式')
+  await expect(page.getByTestId('global-admin-toggle')).toHaveAttribute('data-mode', 'admin')
 
   // 走到第一张卡片的动作按钮：卡片顺序与 key 都由宿主目录决定，不写死。
   const triggerId = await tabToPrefix(page, 'cap-action-')
@@ -412,8 +412,8 @@ test('键盘：离开框在保存提交期间仍能接住 Escape', async ({ page
   await expect(page.getByTestId('config-fields')).toBeVisible()
   await page.getByTestId('config-enable-admin').click()
   await expect(page.getByTestId('config-mode-badge')).toHaveText('管理员模式')
-  await expect(page.getByTestId('config-field-privateCooldownSeconds')).toBeVisible()
-  const field = page.getByTestId('config-field-privateCooldownSeconds').locator('input')
+  await expect(page.getByTestId('config-field-groupInterjectionCooldownSeconds')).toBeVisible()
+  const field = page.getByTestId('config-field-groupInterjectionCooldownSeconds').locator('input')
   await field.fill(String(Number(await field.inputValue()) + 1))
 
   let release!: () => void

@@ -37,15 +37,28 @@ describe('configuration UI ownership', () => {
       for (const field of plugin.fields ?? []) expect(fieldOwner(field.section, field.key)).toBe(plugin.pluginKey)
     }
     expect(fieldOwner('voice', 'voiceName')).toBe('preset.feature.voice')
-    expect(fieldOwner('platform', 'officialEnabled')).toBe('platform')
-    expect(fieldOwner('model', 'model')).toBe('models')
+    expect(fieldOwner('platform', 'officialEnabled')).toBe('system.platform-qq-official')
+    expect(fieldOwner('platform', 'feishuEnabled')).toBe('system.platform-feishu')
+    expect(fieldOwner('platform', 'whitelistGroups')).toBe('system.platform-qq-private')
+    expect(fieldOwner('platform', 'messageWhitelist')).toBe('system.platform-qq-private')
+    expect(fieldOwner('platform', 'localChannelIds')).toBe('system.platform-local')
+    expect(fieldOwner('platform', 'platformPolicies')).toBe('platform')
+    expect(fieldOwner('platform', 'syntheticFuturePlatformField')).toBe('platform')
+    expect(fieldOwner('model', 'model')).toBe('model-providers')
+    expect(fieldOwner('model', 'modelBaseUrl')).toBe('model-providers')
+    expect(fieldOwner('model', 'fastModel')).toBe('models')
+    expect(fieldOwner('model', 'defaultTemperature')).toBe('models')
+    expect(ownsConfiguration('models', 'model', 'model')).toBe(false)
+    expect(ownsConfiguration('models', 'model', 'modelBaseUrl')).toBe(false)
+    expect(ownsConfiguration('models', 'model', 'fastReply')).toBe(true)
   })
 })
 
 describe('unified ownership metadata', () => {
-  it('keeps exactly the seven existing basic fields', () => {
+  it('keeps the shared behavior fields and four pacing parameters in basic configuration', () => {
     expect([...basicFields].sort()).toEqual([
-      'aiModeEnabled', 'botPersona', 'groupCooldownSeconds', 'privateCooldownSeconds',
+      'aiModeEnabled', 'botPersona', 'groupInterjectionProbability', 'groupInterjectionCooldownSeconds',
+      'groupContinuationWaitSeconds', 'privateContinuationWaitSeconds',
       'maxConcurrentReplies', 'maxContextMessages', 'maxMessagesPerConversation'
     ].sort())
     for (const key of basicFields) expect(fieldOwner('behavior', key)).toBe('basic')
@@ -55,18 +68,45 @@ describe('unified ownership metadata', () => {
 
   it('preserves system IDs and secrets without presenting them as backend plugin keys', () => {
     const systems = configurationCapabilities().filter(spec => spec.kind === 'system')
-    expect(systems.map(spec => spec.id)).toEqual(['conversation', 'models', 'agent', 'platform', 'reporting'])
+    expect(systems.map(spec => spec.id)).toEqual([
+      'conversation',
+      'models',
+      'model-providers',
+      'agent',
+      'system.mcp-tools',
+      'system.platform-qq-private',
+      'system.platform-qq-official',
+      'system.platform-feishu',
+      'system.platform-local',
+      'platform',
+      'reporting'
+    ])
     for (const spec of systems) {
       expect(spec.pluginKey).toBeUndefined()
-      expect(spec.editor).toEqual({ type: 'fields' })
+      expect(spec.editor).toEqual(
+        spec.id === 'model-providers' || spec.id === 'system.mcp-tools' ? { type: 'declared' } : { type: 'fields' }
+      )
       expect(settingsFor(spec.id)?.kind).toBe('system')
     }
-    expect(configurationFor('models')).toMatchObject({ secrets: [0], providers: true, sections: ['model'] })
+    expect(configurationFor('models')).toMatchObject({ secrets: [], providers: false, sections: ['model'] })
+    expect(configurationFor('model-providers')).toMatchObject({
+      secrets: [0],
+      editor: { type: 'declared' },
+      sections: ['model']
+    })
     expect(configurationFor('agent')?.secrets).toEqual([1])
     expect(configurationFor('preset.feature.voice')?.secrets).toEqual([2])
-    expect(configurationFor('platform')?.secrets).toEqual([3, 4, 5])
+    expect(configurationFor('system.platform-feishu')).toMatchObject({ secrets: [3, 4, 5], policyPlatformId: 'feishu', sections: ['platform'] })
+    expect(configurationFor('system.platform-qq-private')).toMatchObject({ secrets: [], policyPlatformId: 'qq.private', sections: ['platform'] })
+    expect(configurationFor('system.platform-qq-official')).toMatchObject({ secrets: [], policyPlatformId: 'qq.official', supportsMessagingInspection: true, sections: ['platform'] })
+    expect(configurationFor('system.platform-local')).toMatchObject({ secrets: [], policyPlatformId: 'local', sections: ['platform'] })
+    expect(configurationFor('platform')?.secrets).toEqual([])
     expect(configurationFor('reporting')?.secrets).toEqual([])
+    expect(secretOwner(0)).toBe('model-providers')
     expect(secretOwner(2)).toBe('preset.feature.voice')
+    expect(secretOwner(3)).toBe('system.platform-feishu')
+    expect(secretOwner(4)).toBe('system.platform-feishu')
+    expect(secretOwner(5)).toBe('system.platform-feishu')
     expect(configurationFor('preset.feature.token-quota')?.editor.type).toBe('component')
   })
 

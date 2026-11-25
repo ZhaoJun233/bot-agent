@@ -57,10 +57,10 @@ internal sealed class ProbeHarness : IAsyncDisposable
     internal void RecordSend() => Interlocked.Increment(ref _sends);
     internal void RecordEffect() => Interlocked.Increment(ref _effects);
     internal void RecordPreflight() => Interlocked.Increment(ref _preflights);
-    public void Toggle(bool enabled)
+    public void ToggleAi(bool enabled)
     {
         var settings = Settings.Snapshot();
-        settings.ReplyPacingEnabled = enabled;
+        settings.AiModeEnabled = enabled;
         Pipeline.ReplaceSettings(settings);
     }
     public void Healthy() => Assert(Pipeline.Errors.Length == 0, "scheduler errors: " + string.Join(",", Pipeline.Errors));

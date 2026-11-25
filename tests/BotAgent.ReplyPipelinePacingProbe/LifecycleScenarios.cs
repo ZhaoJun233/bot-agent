@@ -23,7 +23,7 @@ internal static partial class Scenarios
         check(f.Source.Sends.Count == 1, "same-turn promotion produces only the explicit answer");
     }
 
-    public static async Task ModeOffGenerating(Action<bool, string> check)
+    public static async Task AiOffGenerating(Action<bool, string> check)
     {
         await using (var f = new Fixture())
         {
@@ -31,12 +31,12 @@ internal static partial class Scenarios
             await f.Until(() => f.Clock.Pending > 0, "ordinary quiet wait");
             await f.Advance(3000);
             var ordinary = await f.NextModel();
-            f.Settings.ReplyPacingEnabled = false;
+            f.Settings.AiModeEnabled = false;
             f.Pipeline.RefreshPacingPolicy();
-            check(ordinary.Cancellation.IsCancellationRequested, "mode off cancels uncommitted ordinary generation");
+            check(ordinary.Cancellation.IsCancellationRequested, "AI off cancels uncommitted ordinary generation");
             ordinary.Reply("off-ordinary-late");
             await f.Idle();
-            check(f.Source.Sends.IsEmpty && f.Model.History.Count == 1, "late ordinary result is not sent or replayed after mode off");
+            check(f.Source.Sends.IsEmpty && f.Model.History.Count == 1, "late ordinary result is not sent or replayed after AI off");
         }
         await using (var f = new Fixture())
         {
@@ -44,19 +44,19 @@ internal static partial class Scenarios
             await f.Until(() => f.Clock.Pending > 0, "explicit quiet wait");
             await f.Advance(3000);
             var old = await f.NextModel();
-            f.Settings.ReplyPacingEnabled = false;
+            f.Settings.AiModeEnabled = false;
             f.Pipeline.RefreshPacingPolicy();
-            check(old.Cancellation.IsCancellationRequested, "mode off cancels uncommitted explicit generation before handoff");
+            check(old.Cancellation.IsCancellationRequested, "AI off cancels uncommitted explicit generation");
             old.Reply("off-explicit-late");
-            var handoff = await f.Model.Next();
-            handoff.Reply("off-explicit-handoff");
-            await f.Source.NextSend();
             await f.Idle();
-            check(f.Model.History.Count == 2 && f.Source.Sends.Count == 1 && f.Source.Sends.Single().Text == "off-explicit-handoff", "explicit generation hands off once without sending provider late result");
+            f.Settings.AiModeEnabled = true;
+            f.Pipeline.RefreshPacingPolicy();
+            await f.Advance(30000);
+            check(f.Model.History.Count == 1 && f.Source.Sends.IsEmpty, "reenabling AI never replays a retired explicit result");
         }
     }
 
-    public static async Task ModeOffEmitting(Action<bool, string> check)
+    public static async Task ParameterUpdateEmitting(Action<bool, string> check)
     {
         await using var f = new Fixture();
         var ack = new TaskCompletionSource<SendResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -67,12 +67,13 @@ internal static partial class Scenarios
         var call = await f.NextModel();
         call.Reply("off-committed");
         await f.Source.NextSend();
-        f.Settings.ReplyPacingEnabled = false;
+        f.Settings.GroupInterjectionProbability = 0;
+        f.Settings.GroupContinuationWaitSeconds = 10;
         f.Pipeline.RefreshPacingPolicy();
-        check(!call.Cancellation.IsCancellationRequested, "mode off preserves a committed emission lease");
+        check(!call.Cancellation.IsCancellationRequested, "parameter updates preserve a committed emission lease");
         ack.TrySetResult(new SendResult(true));
         await f.Idle();
-        check(f.Source.Sends.Count == 1 && f.Model.History.Count == 1, "committed emission finishes once without legacy replay");
+        check(f.Source.Sends.Count == 1 && f.Model.History.Count == 1, "committed emission finishes once without replay");
     }
 
     public static async Task ShutdownLateResult(Action<bool, string> check)

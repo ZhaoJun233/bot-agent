@@ -18,7 +18,7 @@ for (const width of [1440, 1024, 768, 390, 375, 320]) {
       await expect(page.getByTestId('overview')).toBeVisible()
       await page.getByTestId('enable-admin').click()
       await expect(page.getByTestId('mode-badge')).toHaveText('管理员模式')
-      await page.getByTestId('nav-capabilities').click()
+      await page.getByTestId('nav-plugins').click()
       await page.getByTestId('cap-settings-plugin:preset.feature.token-quota').click()
       await expect(page.getByTestId('quota-source-0')).toContainText('节能模式')
       await expect(page.getByTestId('quota-plugin-toggle')).toBeEnabled()

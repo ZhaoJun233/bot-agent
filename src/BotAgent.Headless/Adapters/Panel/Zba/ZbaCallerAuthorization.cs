@@ -9,6 +9,8 @@ namespace BotAgent.Adapters.Panel.Zba;
 /// </summary>
 internal sealed class ZbaCallerAuthorization : IManagedAuthorization
 {
+    internal static string Scope(ConfigurationCaller caller) => caller.AuthorityId + ":" + caller.SubjectId;
+
     public ValueTask<bool> IsAllowedAsync(ManagedAuthorizationRequest request, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { seedOperationRecovery } from './tests/fixtures/operation-recovery-host'
+import { seedOfficialPlugins } from './tests/fixtures/official-plugins-host'
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(webRoot, '../..')
@@ -22,6 +24,9 @@ const noTokenHostPort = 18128
 const noTokenWsPort = 13077
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'botagent-web-s1-'))
 const noTokenDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'botagent-web-s1-no-token-'))
+if (process.env.BOTAGENT_WEB_TEST_RECOVERY === '1') seedOperationRecovery(dataDir)
+seedOfficialPlugins(dataDir)
+seedOfficialPlugins(noTokenDataDir)
 const inheritedEnv = Object.fromEntries(
   Object.entries(process.env).filter(([key, value]) =>
     value !== undefined && !/^(BOTAGENT|QQCHAT|OPENAI|MINIMAX|TTS|HARNESS)_/i.test(key))
@@ -30,15 +35,19 @@ const inheritedEnv = Object.fromEntries(
 const hostEnv: Record<string, string> = {
   ...inheritedEnv,
   QQCHAT_DATA_DIR: dataDir,
-  QQCHAT_API_KEY: 'sk-mock-s1',
+  QQCHAT_API_KEY: process.env.BOTAGENT_WEB_TEST_RECOVERY === '1' ? '' : 'sk-mock-s1',
+  // Reserved synthetic source: real-host tests must not consume public advisory updates.
+  BOTAGENT_PLUGIN_CATALOG_URL: 'https://example.invalid/synthetic/index.json',
   QQCHAT_BASE_URL: 'http://127.0.0.1:1/v1',
   QQCHAT_MODEL: 'mock-model',
   QQCHAT_ONEBOT_PROTOCOL: 'ReverseWebSocket',
   QQCHAT_ONEBOT_URL: `http://0.0.0.0:${wsPort}`,
   QQCHAT_UIN: '10001',
   QQCHAT_WHITELIST: '99999',
-  QQCHAT_GROUP_COOLDOWN: '0',
-  QQCHAT_IDLE_FALLBACK: '0',
+  QQCHAT_GROUP_INTERJECTION_PROBABILITY: '20',
+  QQCHAT_GROUP_INTERJECTION_COOLDOWN: '30',
+  QQCHAT_GROUP_CONTINUATION_WAIT: '3',
+  QQCHAT_PRIVATE_CONTINUATION_WAIT: '1.5',
   QQCHAT_HEALTH_PORT: String(hostPort),
   QQCHAT_HEALTH_BIND: '127.0.0.1',
   QQCHAT_AGENT: '1',

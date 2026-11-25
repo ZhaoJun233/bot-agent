@@ -40,6 +40,35 @@ internal sealed class ConfigurationRuntimeEffectCollector
         Add(new(ConfigurationFieldId.PlatformPolicies, null), state);
     }
 
+    internal void ObserveConversationProfile(ConversationProfileKey key, ConversationProfile? desired, ConversationProfile? active)
+    {
+        var state = ConfigurationRuntimeTracker.Resolve(
+            ConfigurationFieldId.ConversationProfiles, FieldEffect.Hot, Equal(desired, active), _steps);
+        Add(new(ConfigurationFieldId.ConversationProfiles, new ConfigurationObjectAddress.ConversationProfile(key)), state);
+    }
+
+    internal void ObserveConversationProfilesOverview(IEnumerable<(ConversationProfile? Desired, ConversationProfile? Active)> pairs)
+    {
+        var states = pairs.Select(pair => ConfigurationRuntimeTracker.Resolve(
+            ConfigurationFieldId.ConversationProfiles, FieldEffect.Hot, Equal(pair.Desired, pair.Active), _steps)).ToArray();
+        var state = states.Contains(ConfigurationRuntimeState.ApplyFailed) ? ConfigurationRuntimeState.ApplyFailed
+            : states.Contains(ConfigurationRuntimeState.Unknown) ? ConfigurationRuntimeState.Unknown
+            : states.Contains(ConfigurationRuntimeState.RestartRequired) ? ConfigurationRuntimeState.RestartRequired
+            : ConfigurationRuntimeTracker.Resolve(ConfigurationFieldId.ConversationProfiles, FieldEffect.Hot, true, _steps);
+        Add(new(ConfigurationFieldId.ConversationProfiles, null), state);
+    }
+
+    internal void CompleteConversationProfiles()
+    {
+        var states = _effects.Where(pair => pair.Key.Object is ConfigurationObjectAddress.ConversationProfile)
+            .Select(pair => pair.Value.State).ToArray();
+        var state = states.Contains(ConfigurationRuntimeState.ApplyFailed) ? ConfigurationRuntimeState.ApplyFailed
+            : states.Contains(ConfigurationRuntimeState.Unknown) ? ConfigurationRuntimeState.Unknown
+            : states.Contains(ConfigurationRuntimeState.RestartRequired) ? ConfigurationRuntimeState.RestartRequired
+            : ConfigurationRuntimeTracker.Resolve(ConfigurationFieldId.ConversationProfiles, FieldEffect.Hot, true, _steps);
+        Add(new(ConfigurationFieldId.ConversationProfiles, null), state);
+    }
+
     internal ImmutableArray<ConfigurationRuntimeEffect> Build() => _effects.Values.ToImmutableArray();
 
     private void Add(FieldAddress address, ConfigurationRuntimeState state)

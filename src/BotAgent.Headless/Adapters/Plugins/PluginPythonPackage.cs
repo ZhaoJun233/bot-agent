@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using BotAgent.Domain.Mcp;
 using BotAgent.Domain.Plugins;
 using BotAgent.Mcp;
+using BotAgent.Services.Plugins;
 
 namespace BotAgent.Adapters.Plugins;
 
@@ -15,7 +16,8 @@ internal sealed class PluginPythonPackage(PluginPackageManifest manifest, Plugin
     public PluginCategory Category => PluginCategory.Feature;
     public bool IsPreset => false;
     public Task InitializeAsync(PluginContext context, CancellationToken ct) => Task.CompletedTask;
-    internal void Publish() { if (worker is not null) sources.Attach(Id, worker); }
+    internal void Publish(PluginManager.InvocationGate? invocation = null)
+    { if (worker is not null) sources.Attach(Id, worker, invocation); }
     public async Task ShutdownAsync(CancellationToken ct)
     {
         if (worker is not null)

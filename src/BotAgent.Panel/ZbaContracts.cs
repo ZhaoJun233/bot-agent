@@ -382,12 +382,24 @@ public sealed class ZbaBackendException : Exception
 /// </summary>
 public interface IZbaBackend
 {
+    ValueTask<ZbaOperationFindResult> FindOperationAsync(ConfigurationCaller caller, ZbaOperationFindRequest request, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "operation_recovery_unavailable", "Operation recovery is unavailable.");
     ValueTask<ZbaQuotaPage> ListQuotasAsync(ConfigurationCaller caller, CancellationToken ct = default)
         => throw new ZbaBackendException(503, "quota_management_unavailable", "Quota management is unavailable.");
     ValueTask<ZbaQuotaSaveResult> SaveQuotaAsync(ConfigurationCaller caller, ZbaQuotaSaveRequest request, CancellationToken ct = default)
         => throw new ZbaBackendException(503, "quota_management_unavailable", "Quota management is unavailable.");
     ValueTask<ZbaQuotaFindResult> FindQuotaAsync(ConfigurationCaller caller, string idempotencyKey, CancellationToken ct = default)
         => throw new ZbaBackendException(503, "quota_management_unavailable", "Quota management is unavailable.");
+    ValueTask<ZbaPluginUiSession> OpenPluginUiSessionAsync(ConfigurationCaller caller, string pluginId, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "plugin_ui_unavailable", "Plugin UI delivery is unavailable.");
+    ValueTask<ZbaPluginUiSessionClosed> ClosePluginUiSessionAsync(ConfigurationCaller caller, string pluginId, string sessionId, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "plugin_ui_unavailable", "Plugin UI delivery is unavailable.");
+    ValueTask<ZbaPluginUiAssetResult> ReadPluginUiAssetAsync(string pluginId, string releaseSha, string ticket, string assetPath, bool authenticatedCaller, CancellationToken ct = default)
+        => ValueTask.FromResult(new ZbaPluginUiAssetResult(404, "application/json; charset=utf-8", Array.Empty<byte>(), "plugin_ui_asset_not_found", null, "no-store"));
+    ValueTask<ZbaPluginBundlePreview> PreviewPluginBundleAsync(ConfigurationCaller caller, ZbaPluginBundlePreviewRequest request, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "plugin_marketplace_unavailable", "Plugin bundle lifecycle is unavailable.");
+    ValueTask<ZbaPluginOperationResult> ApplyPluginBundleAsync(ConfigurationCaller caller, ZbaPluginBundleApplyRequest request, CancellationToken ct = default)
+        => throw new ZbaBackendException(503, "plugin_marketplace_unavailable", "Plugin bundle lifecycle is unavailable.");
 
     ValueTask<ZbaHealth> GetHealthAsync(CancellationToken ct = default);
 

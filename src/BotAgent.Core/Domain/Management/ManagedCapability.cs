@@ -83,6 +83,7 @@ public sealed record ManagedPage(
 public sealed record ManagedInspectResult(
     ManagedResultCode Code, ManagedDescriptor? Descriptor)
 {
+    public MessagingCapabilitySnapshot? Messaging { get; init; }
     public override string ToString() => "ManagedInspectResult";
 }
 public sealed record ManagedValidationResult(
