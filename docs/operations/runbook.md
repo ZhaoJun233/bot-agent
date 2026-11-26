@@ -2,7 +2,7 @@
 
 简体中文 | [English](runbook.en.md)
 
-本手册面向 Bot Agent 线上运行值守与故障应急处置，原则为：**先保护数据与隐私、恢复核心服务，再定位根因**。另可查阅 [文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
+本手册面向 Bot Agent 线上运行值守与故障应急处置，原则为：**先保护数据与隐私、恢复核心服务，再定位根因**。另可查阅 [文档总目录](../index.md)。
 
 > [!CAUTION]
 > **隐私安全红线（查阅生产日志必守）**：
@@ -98,5 +98,3 @@ flowchart TD
 - [查询先前操作的安全记录](operation-receipt-recovery.md)
 - [Token 用量离线逆迁移](token-usage-recovery.md)
 - [Agent Runtime 部署、验证与回滚](agent-runtime-deployment.md)
-- [Token 配额表后台迁移说明](token-quota-backend-migration.md)
-- [联网搜索插件后台迁移说明](websearch-backend-migration.md)

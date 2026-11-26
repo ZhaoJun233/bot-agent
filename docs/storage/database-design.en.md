@@ -2,7 +2,7 @@
 
 English | [简体中文](database-design.md)
 
-Bot Agent uses embedded **SQLite** (`Microsoft.Data.Sqlite`) as its primary store, paired with lifecycle-bound local files. This reference reflects the actual DDL, migrations, and storage guards in `src/BotAgent.Storage/`. See also [Documentation Hub](../index.en.md) and [Consolidated Open Questions](../open-questions.en.md).
+Bot Agent uses embedded **SQLite** (`Microsoft.Data.Sqlite`) as its primary store, paired with lifecycle-bound local files. This reference reflects the actual DDL, migrations, and storage guards in `src/BotAgent.Storage/`. See also [Documentation Hub](../index.en.md).
 
 ---
 

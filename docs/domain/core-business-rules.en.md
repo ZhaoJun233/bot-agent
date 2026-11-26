@@ -2,7 +2,7 @@
 
 English | [简体中文](core-business-rules.md)
 
-This document summarizes Bot Agent's runtime business rules, state machines, security isolation boundaries, and exception behaviors derived directly from the codebase. See also [API Surface Map](../api-surface.md), [Documentation Hub](../index.en.md), and [Consolidated Open Questions](../open-questions.en.md).
+This document summarizes Bot Agent's runtime business rules, state machines, security isolation boundaries, and exception behaviors derived directly from the codebase. See also [API Surface Map](../api-surface.md) and [Documentation Hub](../index.en.md).
 
 ---
 

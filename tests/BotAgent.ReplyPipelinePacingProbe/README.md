@@ -52,6 +52,4 @@ The evidence command builds once, fingerprints the three relevant DLLs, runs thr
 - Reflection is limited to installing the clock and reading the private pending-work count as a scheduler barrier. It does not inject outcomes or invoke the private accepted-result callback; research results arrive through the real queue.
 - Probability tests here use deterministic endpoints (0%/100%). Statistical/monotonic sampling, queue overload, numeric configuration persistence, browser UI, all platform implementations, voice/image transport, permission revocation and live-host behavior need their own probes. This suite is not whole-feature or deployment sign-off.
 
-Current suite: **18 scenarios / 62 assertions**. The [soft-deadline diagnosis](<SOFT-DEADLINE-DIAGNOSIS.md>) preserves the deterministic fixture counterexample, exact-deadline repair, 100 targeted / 50 full fresh-process repeats, and controlled RED/GREEN comparison. Always force `Rebuild` because source-writing tools may preserve timestamps.
-
-The original acquired-send lease failure remains recorded in [COUNTEREXAMPLE.md](<COUNTEREXAMPLE.md>) and its two regression scenarios must remain intact.
+Current suite: **18 scenarios / 62 assertions**, preserving deterministic soft-deadline boundary regressions and the two acquired-send lease counterexample regressions. Always force `Rebuild` because source-writing tools may preserve timestamps.

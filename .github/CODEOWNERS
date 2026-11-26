@@ -37,8 +37,6 @@
 
 # 文档与治理（含本文件自己）
 /docs/                              @ZhaoJun233
-/AGENTS.md                          @ZhaoJun233
-/AGENTS.en.md                       @ZhaoJun233
 /README.md                          @ZhaoJun233
 /README.en.md                       @ZhaoJun233
 /CONTRIBUTING.md                    @ZhaoJun233

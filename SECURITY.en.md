@@ -29,7 +29,7 @@ This is a personally maintained project. There is **no response-time or fix-time
 
 - Vulnerabilities in upstream dependencies (.NET runtime, NuGet packages, NapCat, Caddy, Cloudflare tunnel, the model gateway): report them to those projects. This repository tracks known items through the NuGet audit gate (`NU1903`/`NU1904` as restore errors) and pinned versions.
 - Hardening of your own deployment (reverse proxy, firewall, host permissions, backup media custody): that is the deployer's responsibility. The repository only defines the backup and rollback procedure.
-- Any conclusion derived from, or exfiltration of, real conversation data: see the privacy red lines in [AGENTS.en.md](AGENTS.en.md).
+- Any conclusion derived from, or exfiltration of, real conversation data: never use real conversations or member data in the repository, test fixtures, or external interfaces; see the synthetic-data rule in [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
 
 ## Minimum requirements for deployers
 

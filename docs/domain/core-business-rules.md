@@ -2,7 +2,7 @@
 
 简体中文 | [English](core-business-rules.en.md)
 
-本文基于当前代码实现提炼 Bot Agent 的核心业务规则、状态流转、安全隔离边界与异常处理逻辑；接口契约清单与低层模块拓扑另见 [接口地图](../api-surface.md)、[文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
+本文基于当前代码实现提炼 Bot Agent 的核心业务规则、状态流转、安全隔离边界与异常处理逻辑；接口契约清单与低层模块拓扑另见 [接口地图](../api-surface.md) 与 [文档总目录](../index.md)。
 
 ---
 

@@ -24,7 +24,6 @@ Bot Agent 是面向 Linux 环境构建的无界面、高性能、可插拔多聊
 | [工程规范与 ADR 索引](docs/decisions/engineering-standards-and-adr.md) | 仓库目录拓扑、编码规范与 `ArchitectureProbe` 护栏、Git 协作/发版流程、技术选型依据与 ADR 0001–0006 索引 |
 | [接口地图](docs/api-surface.md) | 面板旧接口、ZBA v1 与内置/插件路由总表（与 `PanelRoutes.cs` 同步受护栏断言约束） |
 | [核心术语表](docs/glossary.md) | 领域术语、安全不变量与组件专有名词定义 |
-| [待确认项集中清单](docs/open-questions.md) | 跨业务、存储、运维与工程规范的待拍板事项统一追踪清单 |
 | [Linux Docker 首次安装与配置](docs/operations/linux-docker-first-run.md) | 低内存主机产物构建、独立 Caddy 前端与受控首次验收步序 |
 
 ---
@@ -231,7 +230,7 @@ cp .env.example .env
 ## 测试与质量验证
 
 > [!TIP]
-> 跑合成测试前请先清理污染环境（`BOTAGENT_*`、`QQCHAT_*`、`OPENAI_*`、`HARNESS_*`、`HEALTH_PORT` 等）。集成 Harness 与 40 个独立探针的完整说明及矩阵要求见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [CI 质量门禁](docs/operations/ci-quality-gates.md)。
+> 跑合成测试前请先清理污染环境（`BOTAGENT_*`、`QQCHAT_*`、`OPENAI_*`、`HARNESS_*`、`HEALTH_PORT` 等）。集成 Harness 与独立探针的完整说明及矩阵要求见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
 ```bash
 # 1. 重建 Headless 宿主（运行集成测试前必须先执行）

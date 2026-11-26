@@ -669,13 +669,12 @@ public static partial class Program
         var pairs = new (string Chinese, string English)[]
         {
             ("README.md", "README.en.md"),
-            ("AGENTS.md", "AGENTS.en.md"),
             ("CONTRIBUTING.md", "CONTRIBUTING.en.md"),
             ("SECURITY.md", "SECURITY.en.md"),
         };
         var unpaired = pairs.Where(p => !markdownFiles.Contains(p.Chinese, StringComparer.Ordinal)
             || !markdownFiles.Contains(p.English, StringComparer.Ordinal)).ToList();
-        Check($"四对中英文档成对（{string.Join(" / ", pairs.Select(p => p.Chinese + "+" + p.English))}）",
+        Check($"三对中英文档成对（{string.Join(" / ", pairs.Select(p => p.Chinese + "+" + p.English))}）",
             unpaired.Count == 0,
             unpaired.Count == 0 ? null : "不成对：" + string.Join("、", unpaired.Select(p => p.Chinese + "/" + p.English)));
     }
@@ -722,7 +721,7 @@ public static partial class Program
     {
         var roots = new[] { "docs", "src", "tests", "packages", "contracts", "examples", ".github" };
         var found = new List<string>();
-        var direct = new[] { "README.md", "README.en.md", "AGENTS.md", "AGENTS.en.md", "CONTRIBUTING.md", "CONTRIBUTING.en.md", "SECURITY.md", "SECURITY.en.md" };
+        var direct = new[] { "README.md", "README.en.md", "CONTRIBUTING.md", "CONTRIBUTING.en.md", "SECURITY.md", "SECURITY.en.md" };
         foreach (var name in direct)
         {
             if (File.Exists(Path.Combine(root, name))) found.Add(name);

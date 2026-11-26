@@ -136,5 +136,4 @@
 ## 7. 相关文档
 
 - [日志保留、每日热备与恢复演练](data-retention-and-backup.md) —— 备份在哪、保留多久、怎么验证能恢复
-- [分支模型与合并路径](../architecture/branching-and-merge-path.md) —— 回滚后如何重新发版
 - [Agent Runtime 部署、验证与回滚](agent-runtime-deployment.md) —— 当前 schema 边界、兼容回滚点与停写条件

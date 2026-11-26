@@ -210,4 +210,3 @@ curl -sS -X POST "$BASE/zba/v1/approvals/<requestId>/decide" \
 - 实现事实与已知边界：[Agent Runtime](../architecture/agent-task-runtime.md)
 - 备份 / 停写 / 回滚顺序：[回滚预案](rollback-playbook.md)、[日志保留、每日热备与恢复演练](data-retention-and-backup.md)
 - 审批与执行隔离：[审批与执行隔离](../architecture/approval-and-isolation.md)
-- 版本与发版流程：[发布检查单](release-checklist.md)
