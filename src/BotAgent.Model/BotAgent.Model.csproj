@@ -18,4 +18,8 @@
     <Using Include="BotAgent.Services.Model" />
     <Using Include="BotAgent.Services.Resilience" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BotAgent.ProtocolProbe" />
+  </ItemGroup>
 </Project>

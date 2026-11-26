@@ -99,11 +99,12 @@ internal sealed class ManualClock : IClock
     }
 }
 
-internal sealed class ModelCall(IReadOnlyList<ChatMessage> context, bool toolsEnabled, CancellationToken cancellation, string? searchText)
+internal sealed class ModelCall(IReadOnlyList<ChatMessage> context, bool toolsEnabled, CancellationToken cancellation, string? searchText, string? recallText)
 {
     public IReadOnlyList<ChatMessage> Context { get; } = context.ToArray();
     public bool ToolsEnabled { get; } = toolsEnabled;
     public string? SearchText { get; } = searchText;
+    public string? RecallText { get; } = recallText;
     public CancellationToken Cancellation { get; } = cancellation;
     public TaskCompletionSource<CompletionResult> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public void Reply(string? text, string? search = null) => Result.TrySetResult(new CompletionResult(100, text, "synthetic", Search: search));
@@ -124,7 +125,8 @@ internal sealed class ControlledModel
             var parameters = method.GetParameters();
             object? Argument(string name) => args[Array.FindIndex(parameters, p => p.Name == name)];
             var call = new ModelCall((IReadOnlyList<ChatMessage>)args[0]!,
-                (bool)Argument("enableWebSearch")!, (CancellationToken)Argument("ct")!, (string?)Argument("searchText"));
+                (bool)Argument("enableWebSearch")!, (CancellationToken)Argument("ct")!,
+                (string?)Argument("searchText"), (string?)Argument("recallText"));
             History.Enqueue(call);
             _calls.Writer.TryWrite(call);
             // Deliberately ignores provider cancellation: the product must still reject a late stale result.

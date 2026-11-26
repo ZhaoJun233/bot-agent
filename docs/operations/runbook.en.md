@@ -2,7 +2,7 @@
 
 English | [简体中文](runbook.md)
 
-This runbook guides production on-call operations and incident recovery for Bot Agent under one governing principle: **protect user privacy and data integrity first, restore core availability second, then isolate root cause**. See also [Documentation Hub](../index.en.md) and [Consolidated Open Questions](../open-questions.en.md).
+This runbook guides production on-call operations and incident recovery for Bot Agent under one governing principle: **protect user privacy and data integrity first, restore core availability second, then isolate root cause**. See also [Documentation Hub](../index.en.md).
 
 > [!CAUTION]
 > **Privacy & Log Inspection Redline**:
@@ -98,5 +98,3 @@ flowchart TD
 - [Operation Receipt Recovery](operation-receipt-recovery.md)
 - [Token Usage Offline Reverse Migration](token-usage-recovery.md)
 - [Agent Runtime Deployment & Verification](agent-runtime-deployment.md)
-- [Token Quota Backend Migration](token-quota-backend-migration.md)
-- [WebSearch Backend Migration](websearch-backend-migration.md)

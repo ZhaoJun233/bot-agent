@@ -24,7 +24,6 @@ The project supports running natively from source or artifacts on standard Linux
 | [Engineering Standards & ADR Index](docs/decisions/engineering-standards-and-adr.en.md) | Repository layout, coding standards & `ArchitectureProbe` ratchets, Git & release pipeline, key technology trade-offs, and ADR 0001–0006 index |
 | [API Surface Map](docs/api-surface.md) | Complete legacy panel, ZBA v1, and package HTTP routes (enforced by `ArchitectureProbe` against `PanelRoutes.cs`) |
 | [Glossary](docs/glossary.md) | Canonical domain terminology, security invariants, and module naming conventions |
-| [Consolidated Open Questions](docs/open-questions.en.md) | Single centralized checklist of undecided thresholds, SLAs, and governance policies across all docs |
 | [Linux Docker First-Run Guide](docs/operations/linux-docker-first-run.md) | Prebuilt artifact workflow for 1 GB hosts, standalone Caddy frontend, and controlled acceptance |
 
 ---
@@ -229,7 +228,7 @@ A standalone Vue 3 + TypeScript SPA communicating with `BotAgent.Headless` via Z
 ## Testing and Quality Assurance
 
 > [!TIP]
-> Clear residual env vars (`BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `HARNESS_*`, `HEALTH_PORT`) before running synthetic probes/suites. Full integration scenario filtering flags and probe matrices are documented in [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) and [`docs/operations/ci-quality-gates.md`](docs/operations/ci-quality-gates.md).
+> Clear residual env vars (`BOTAGENT_*`, `QQCHAT_*`, `OPENAI_*`, `HARNESS_*`, `HEALTH_PORT`) before running synthetic probes/suites. Full integration scenario filtering flags and probe matrices are documented in [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) and [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ```bash
 # 1. Rebuild Headless host before running IntegrationHarness

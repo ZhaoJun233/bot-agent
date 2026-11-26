@@ -2,7 +2,7 @@
 
 English | [简体中文](index.md)
 
-This directory centralizes Bot Agent's domain business rules, database design, operations runbook, architecture boundaries, Architecture Decision Records (ADRs), API surface, glossary, and consolidated open questions. The repository root keeps top-level GitHub and quality-gate files ([README](../README.en.md) / [CONTRIBUTING](../CONTRIBUTING.en.md) / [SECURITY](../SECURITY.en.md) / [AGENTS](../AGENTS.en.md) / [CHANGELOG](../CHANGELOG.md)) along with module-local quick guides.
+This directory centralizes Bot Agent's domain business rules, database design, operations runbook, architecture boundaries, Architecture Decision Records (ADRs), API surface, and glossary. The repository root keeps top-level GitHub and quality-gate files ([README](../README.en.md) / [CONTRIBUTING](../CONTRIBUTING.en.md) / [SECURITY](../SECURITY.en.md) / [CHANGELOG](../CHANGELOG.md)) along with module-local quick guides.
 
 ---
 
@@ -14,7 +14,6 @@ This directory centralizes Bot Agent's domain business rules, database design, o
 | **Database Design** | [database-design.en.md](storage/database-design.en.md) | [database-design.md](storage/database-design.md) | SQLite WAL runtime config, Schema v1–v15 evolution, ER diagram, 31 physical tables, v15 `meta` JSON ledgers, and on-disk layout |
 | **Operations & Incident Runbook** | [runbook.en.md](operations/runbook.en.md) | [runbook.md](operations/runbook.md) | Core monitoring metrics, privacy-safe `mask-cjk.py` log rules, 12-scenario troubleshooting table, and rollback decision flowchart |
 | **Engineering Standards & ADR Index** | [engineering-standards-and-adr.en.md](decisions/engineering-standards-and-adr.en.md) | [engineering-standards-and-adr.md](decisions/engineering-standards-and-adr.md) | Directory topology, `ArchitectureProbe` ratchets, Git/CI release workflow, technology trade-offs, and ADR 0001–0006 index |
-| **Consolidated Open Questions** | [open-questions.en.md](open-questions.en.md) | [open-questions.md](open-questions.md) | Single checklist tracking undecided operational SLAs, thresholds, and governance items across all docs |
 | **API Surface Map** | — | [api-surface.md](api-surface.md) | Complete legacy panel, ZBA v1, and package HTTP routes (enforced by `ArchitectureProbe`) |
 | **Glossary** | — | [glossary.md](glossary.md) | Domain terminology, security invariants, and module naming conventions |
 
@@ -32,12 +31,11 @@ This directory centralizes Bot Agent's domain business rules, database design, o
 
 ### 2.2 Operations, Migrations & Recovery (`docs/operations/`)
 
-- Deployment & Quality: [Linux Docker First Run](operations/linux-docker-first-run.md) · [Agent Runtime Deployment](operations/agent-runtime-deployment.md) · [CI Quality Gates](operations/ci-quality-gates.md) · [Release Checklist](operations/release-checklist.md)
+- Deployment & Quality: [Linux Docker First Run](operations/linux-docker-first-run.md) · [Agent Runtime Deployment](operations/agent-runtime-deployment.md)
 - Recovery & Backups: [Rollback Playbook](operations/rollback-playbook.md) · [Data Retention & Backup](operations/data-retention-and-backup.md) · [Task Recovery Guide](operations/task-recovery-guide.md) · [Operation Receipt Recovery](operations/operation-receipt-recovery.md) · [Token Usage Recovery](operations/token-usage-recovery.md)
-- Package Backend Migrations: [Token Quota Backend Migration](operations/token-quota-backend-migration.md) · [WebSearch Backend Migration](operations/websearch-backend-migration.md)
 
 ### 2.3 Repository & Submodule Entry Guides
 
 - Main README: [English](../README.en.md) · [简体中文](../README.md)
-- Governance & Security: [CONTRIBUTING.en.md](../CONTRIBUTING.en.md) · [SECURITY.en.md](../SECURITY.en.md) · [AGENTS.en.md](../AGENTS.en.md) · [CHANGELOG.md](../CHANGELOG.md)
+- Governance & Security: [CONTRIBUTING.en.md](../CONTRIBUTING.en.md) · [SECURITY.en.md](../SECURITY.en.md) · [CHANGELOG.md](../CHANGELOG.md)
 - Subprojects: [Web Console Dev Guide](../src/web/README.md) · [Headless Host Guide](../src/BotAgent.Headless/README.en.md) · [Example Scenarios](../examples/scenarios/README.en.md)

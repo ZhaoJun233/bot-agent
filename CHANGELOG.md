@@ -39,7 +39,7 @@
 ### Upgrade notes
 
 - **裸宿主与官方插件市场安装**：本版本宿主仅内置 `9` 个 `system.*` 核心与平台包及 `19` 个 `contracts/*` 工程（`bundle_releases=9`）；全新部署默认预装 `0` 个功能插件且启动阶段不会自动联网下载。需要 13 项功能插件时，请在 `/web/` 管理控制台「插件中心」从 `ZhaoJun233/bot-agent-plugins`（`1.1.0`）按需安装或升级；既有实例携带的 `1.0.0` `host-distribution://` 状态封套可直接升级至 `1.1.0` 或干净卸载。
-- **数据库与双份回滚快照**：物理 SQLite `user_version` 为 `15`（`preset.token-quota` `14–15` 迁移脚本保留于 `BotAgent.Storage/Schema/`）。从 `v1.4.0` 升级前请按 [发布检查单](docs/operations/release-checklist.md) 与 [回滚预案](docs/operations/rollback-playbook.md) 同时保留 `qqchat-agent:prev`、`data/botagent.db`（`VACUUM INTO`）与 `data/plugins/` 备份；`v1.4.0 ↔ v1.5.0` 间回退必须成对恢复两份数据快照。
+- **数据库与双份回滚快照**：物理 SQLite `user_version` 为 `15`（`preset.token-quota` `14–15` 迁移脚本保留于 `BotAgent.Storage/Schema/`）。从 `v1.4.0` 升级前请按 [回滚预案](docs/operations/rollback-playbook.md) 同时保留 `qqchat-agent:prev`、`data/botagent.db`（`VACUUM INTO`）与 `data/plugins/` 备份；`v1.4.0 ↔ v1.5.0` 间回退必须成对恢复两份数据快照。
 - **旧配置迁移提示**：`data/settings.json` 继续仅用于一次性旧配置导入（由 `LegacyJsonImporter` 导入后归档至 `legacy-json/`），计划于 `v2.0` 正式移除旧 JSON 导入通道。
 
 ## [1.4.0] - 2026-11-10
@@ -71,7 +71,7 @@
 
 ### Upgrade notes
 
-- 后端继续使用 .NET 10；Linux x64 + Docker 采用预构建产物及独立 Web 资源。升级前按[发布检查单](docs/operations/release-checklist.md)留存可恢复的应用、数据库与前端版本。
+- 后端继续使用 .NET 10；Linux x64 + Docker 采用预构建产物及独立 Web 资源。升级前请按[回滚预案](docs/operations/rollback-playbook.md)留存可恢复的应用、数据库与前端版本。
 - 从公开 v1.3.0 升级时，物理数据库结构由 13 迁移至 14。旧宿主不能直接打开新版结构；回退必须恢复匹配的数据库快照，不能只替换二进制。
 - 统一记忆和回复节奏的启用仍由各自设置决定。固定示例包验证不代表完整市场确认；Python 进程生命周期管理不提供文件或网络隔离。
 - 实际使用观察暂缓。客户端统计、任务完成状态与合成回归不代表实际用途、费用或维护时间结论。

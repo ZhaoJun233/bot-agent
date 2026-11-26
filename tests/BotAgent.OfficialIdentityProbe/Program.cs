@@ -390,6 +390,7 @@ await DeliveryLedgerChecks.RunIndexedAsync(Test);
 await HostMediaChecks.RunAsync(Test);
 await MessagingCapabilityChecks.RunAsync(Test);
 await Phase2OfficialChecks.RunAsync(Test, (FrozenClock)PlatformClock.Current);
+await ShareParserChecks.RunAsync(Test);
 Console.WriteLine($"SUMMARY passed={passed} failed={failed}");
 return failed == 0 ? 0 : 1;
 

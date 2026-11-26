@@ -58,7 +58,8 @@ public static class PromptBuilder
         bool IsPrivateConversation = false,
         string? PlatformDisplayName = null,
         string? PersonaAppend = null,
-        bool PlatformNeutral = false);
+        bool PlatformNeutral = false,
+        string? FocusHint = null);
 
     /// <summary>把这一轮的系统提示词拼出来（纯字符串拼接，不发任何请求）。</summary>
     public readonly record struct PromptParts(string Stable, string Dynamic)
@@ -88,6 +89,10 @@ public static class PromptBuilder
         AppendConversationSection(request, stable, dynamic);
         AppendExpressionSection(request, stable, dynamic);
         AppendParticipantsSection(request, stable, dynamic);
+        if (!string.IsNullOrWhiteSpace(request.FocusHint))
+        {
+            dynamic.Append("\n\n[本轮最新消息]\n").Append(request.FocusHint.Trim());
+        }
         // 时间放最末尾：它每轮都变，放在前缀里会让整段前缀作废；放在最后反而成了“最新提醒”。
         dynamic.Append(BuildTimeSection(Clock.Now));
         return new PromptParts(stable.ToString(), dynamic.ToString());

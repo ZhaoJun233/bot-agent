@@ -2,7 +2,7 @@
 
 简体中文 | [English](database-design.en.md)
 
-Bot Agent 以嵌入式 **SQLite**（`Microsoft.Data.Sqlite`）为主存储，辅以少量与生命周期或隔离策略强绑定的本地文件。本文依据 `src/BotAgent.Storage/` 实际 DDL、迁移脚本与运行时存储守卫编写；文档总目录与集中待确认项分别见 [文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
+Bot Agent 以嵌入式 **SQLite**（`Microsoft.Data.Sqlite`）为主存储，辅以少量与生命周期或隔离策略强绑定的本地文件。本文依据 `src/BotAgent.Storage/` 实际 DDL、迁移脚本与运行时存储守卫编写；文档总目录见 [文档总目录](../index.md)。
 
 ---
 

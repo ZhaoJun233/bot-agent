@@ -2,7 +2,7 @@
 
 简体中文 | [English](index.en.md)
 
-本目录统一收敛 Bot Agent 的业务规则、数据库设计、运维手册、架构边界、ADR 决策记录、接口地图、术语表与待确认事项。仓库根目录保留 GitHub 与质量门禁要求的主文档（[README](../README.md) / [CONTRIBUTING](../CONTRIBUTING.md) / [SECURITY](../SECURITY.md) / [AGENTS](../AGENTS.md) / [CHANGELOG](../CHANGELOG.md)）及各子模块局部引导说明。
+本目录统一收敛 Bot Agent 的业务规则、数据库设计、运维手册、架构边界、ADR 决策记录、接口地图与术语表。仓库根目录保留 GitHub 与质量门禁要求的主文档（[README](../README.md) / [CONTRIBUTING](../CONTRIBUTING.md) / [SECURITY](../SECURITY.md) / [CHANGELOG](../CHANGELOG.md)）及各子模块局部引导说明。
 
 ---
 
@@ -14,7 +14,6 @@
 | **数据库设计文档** | [database-design.md](storage/database-design.md) | [database-design.en.md](storage/database-design.en.md) | SQLite WAL 运行参数、Schema v1–v15 演进、ER 关系图、31 张物理表、v15 `meta` JSON 账本与文件布局 |
 | **运维排障与应急手册** | [runbook.md](operations/runbook.md) | [runbook.en.md](operations/runbook.en.md) | 监控指标与隐私安全查日志规范、12 类常见故障排查对照表、双份回滚预案决策流 |
 | **工程规范与 ADR 索引** | [engineering-standards-and-adr.md](decisions/engineering-standards-and-adr.md) | [engineering-standards-and-adr.en.md](decisions/engineering-standards-and-adr.en.md) | 代码仓目录结构、`ArchitectureProbe` 护栏、Git 协作/发版流、技术选型依据与 ADR 0001–0006 索引 |
-| **待确认项集中清单** | [open-questions.md](open-questions.md) | [open-questions.en.md](open-questions.en.md) | 统一集中追踪全仓上下文中尚未明确的规则阈值、运维 SLA 与治理规范 |
 | **接口地图** | [api-surface.md](api-surface.md) | — | 面板旧接口、ZBA v1 契约与插件路由全表（受 `ArchitectureProbe` 自动覆盖断言校验） |
 | **核心术语表** | [glossary.md](glossary.md) | — | 核心领域词汇、安全不变量与模块命名约定 |
 
@@ -34,12 +33,11 @@
 ### 2.2 运维部署、迁移与恢复演练（`docs/operations/`）
 
 - [Linux Docker 首次安装与配置](operations/linux-docker-first-run.md) / [Agent Runtime 部署与验证](operations/agent-runtime-deployment.md)
-- [回滚预案与实测演练](operations/rollback-playbook.md) / [日志保留、每日热备与恢复演练](operations/data-retention-and-backup.md) / [CI 质量门禁](operations/ci-quality-gates.md) / [发版检查单](operations/release-checklist.md)
+- [回滚预案与实测演练](operations/rollback-playbook.md) / [日志保留、每日热备与恢复演练](operations/data-retention-and-backup.md)
 - [任务恢复指南](operations/task-recovery-guide.md) / [操作安全记录查询](operations/operation-receipt-recovery.md) / [Token 用量离线逆迁移](operations/token-usage-recovery.md)
-- [Token 配额后台迁移说明](operations/token-quota-backend-migration.md) / [联网搜索后台迁移说明](operations/websearch-backend-migration.md)（均已集中迁入 `docs/operations/`）
 
 ### 2.3 仓库入口与模块局部说明
 
 - 主 README：[简体中文](../README.md) · [English](../README.en.md)
-- 贡献与安全：[CONTRIBUTING.md](../CONTRIBUTING.md) · [SECURITY.md](../SECURITY.md) · [AGENTS.md](../AGENTS.md) · [CHANGELOG.md](../CHANGELOG.md)
+- 贡献与安全：[CONTRIBUTING.md](../CONTRIBUTING.md) · [SECURITY.md](../SECURITY.md) · [CHANGELOG.md](../CHANGELOG.md)
 - 子工程引导：[Web 前端开发与验证说明](../src/web/README.md) · [Headless 宿主说明](../src/BotAgent.Headless/README.md) · [合成场景示例](../examples/scenarios/README.md)

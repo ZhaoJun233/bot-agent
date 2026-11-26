@@ -2,7 +2,7 @@
 
 简体中文 | [English](engineering-standards-and-adr.en.md)
 
-本文整理 Bot Agent 仓库的工程结构、编码规范与自动化门禁、Git 协作/发版流程、核心技术选型依据，以及全部架构决策记录（ADR）总览；文档总目录与集中待确认项分别见 [文档总目录](../index.md) 与 [待确认项集中清单](../open-questions.md)。
+本文整理 Bot Agent 仓库的工程结构、编码规范与自动化门禁、Git 协作/发版流程、核心技术选型依据，以及全部架构决策记录（ADR）总览；文档总目录见 [文档总目录](../index.md)。
 
 ---
 
@@ -66,15 +66,15 @@
 | :--- | :--- | :--- |
 | **工程依赖拓扑** | 严格遵循无环单向依赖（例如 `BotAgent.Panel` 仅引用 `Core`、`BotAgent.Platforms` 仅引用 `Core`），禁止宿主兼容入口重新复制 SQL/文件 IO | [组合根拆分 ADR](0001-composition-root-assembly-split.md) |
 | **方法长度棘轮** | `src/` 下单个方法长度严格受棘轮上限约束（当前基线 ≤ 193 行，全仓最大源文件 `MaxFileLines` ≤ 1591 行），新增复杂分支必须提炼辅助方法 | `BotAgent.ArchitectureProbe` |
-| **大文件管控** | 超过 1000 行的源文件禁止为凑数做机械切分；改动前需做边界审查 | [大文件治理策略](../architecture/large-file-policy.md) |
-| **文档与接口同步** | ① Git 跟踪及新增 `.md` 文件内所有仓库相对链接必须真实存在；② 4 对核心文档（`README`/`AGENTS`/`CONTRIBUTING`/`SECURITY`）必须中英成对；③ `PanelRoutes.cs` 与 ZBA 路由声明必须 100% 收录于 [接口地图](../api-surface.md) | [接口地图](../api-surface.md) |
-| **镜像可复现性** | 除本仓产物标签外，所有 `Dockerfile` / `docker-compose.yml` 基础镜像必须带 `@sha256:` digest | [发布检查单](../operations/release-checklist.md) |
+| **大文件管控** | 超过 1000 行的源文件禁止为凑数做机械切分；改动前需做边界审查 | [`Baseline.cs`](../../tests/BotAgent.ArchitectureProbe/Baseline.cs) |
+| **文档与接口同步** | ① Git 跟踪及新增 `.md` 文件内所有仓库相对链接必须真实存在；② 3 对核心文档（`README`/`CONTRIBUTING`/`SECURITY`）必须中英成对；③ `PanelRoutes.cs` 与 ZBA 路由声明必须 100% 收录于 [接口地图](../api-surface.md) | [接口地图](../api-surface.md) |
+| **镜像可复现性** | 除本仓产物标签外，所有 `Dockerfile` / `docker-compose.yml` 基础镜像必须带 `@sha256:` digest | [`Dockerfile.app`](../../Dockerfile.app) |
 | **前端与沙箱规范** | Vue 3.5 + TypeScript 6 + Vite 8：`npm run typecheck && npm run test:unit` 必过；Bearer 令牌仅存内存；沙箱 iframe 必须兼容 `origin === "null"` 并在卸载时清理监听 | [`src/web/README.md`](../../src/web/README.md) |
 | **隐私与脱敏守卫** | 测试只允许使用合成数据；公开镜像同步前必过黑名单扫描、按类别正则审计及远端克回复检两道闸门 | [贡献指南](../../CONTRIBUTING.md) |
 
 ### 2.3 棘轮演进路线与外部插件签名治理
 
-1. **架构棘轮演进与大文件拆分计划**：`Baseline.cs` 严格遵循“只降不升”原则，现已随实测将 `MaxFileLines` 从 1643 收紧至 **1591**（`ConfigurationStore.cs`）、`LongestMethodAnywhere` 从 198 收紧至 **193**（`ReplyDelivery.cs:SendAsync`）；`v2.x` 演进目标将 `LongestMethodAnywhere` 进一步收紧至 **≤ 180** 行。超大文件（`ConfigurationStore.cs`、`SettingsStore.cs`、`OpenAiClient.cs` 等）只按 [大文件治理策略](../architecture/large-file-policy.md) 做职责隔离重构并附同组 `IntegrationHarness` 等价证据，严禁机械切分 `partial class`。
+1. **架构棘轮演进与大文件拆分计划**：`Baseline.cs` 严格遵循“只降不升”原则，现已随实测将 `MaxFileLines` 从 1643 收紧至 **1591**（`ConfigurationStore.cs`）、`LongestMethodAnywhere` 从 198 收紧至 **193**（`ReplyDelivery.cs:SendAsync`）；`v2.x` 演进目标将 `LongestMethodAnywhere` 进一步收紧至 **≤ 180** 行。超大文件（`ConfigurationStore.cs`、`SettingsStore.cs`、`OpenAiClient.cs` 等）只做职责隔离重构并附同组 `IntegrationHarness` 等价证据，严禁机械切分 `partial class`。
 2. **社区/外部插件签名密钥与准入治理流程**：内置受信任包强制核对宿主嵌入的 SHA-256 摘要（`HostPluginBundle`）；外部/社区包安装前须通过清单 + SHA-256 摘要校验、显式 `TrustAcknowledged` 确认与最小权限/流出面声明审查，进入精选目录前由维护者执行离线签发校验与代码安全审计（签名与发布密钥离线保管并按年轮换）。一旦发现私钥泄漏或恶意包，经受控治理清单 `governance.json` 标记 `status: "revoked"`（支持精确 `(id, version, sha256)` 或全哈希拦截），由 `PluginGovernanceService` 粘性持久保留并执行 Fail-Closed 拦截（`409 plugin_governance_revoked`）。
 
 ---
@@ -96,7 +96,7 @@ flowchart LR
 
 - **提交规范**：遵循 Conventional Commits（`feat(scope): ...`、`fix(scope): ...`、`docs(scope): ...`），单提交聚焦单一问题。
 - **重构 PR 纪律**：必须附带重构前后同一组 `IntegrationHarness` 场景（ID、通过数、差异项）输出对比，且**禁止在重构 PR 内顺带修改断言**。
-- **9 项 CI 必需检查**：`Build and synthetic probes`、`Web build and browser tests`、4 浏览器矩阵 E2E 与 3 组集成场景矩阵必须全绿（细节与偶发登记制度见 [CI 质量门禁](../operations/ci-quality-gates.md) 与 [分支模型](../architecture/branching-and-merge-path.md)）。
+- **9 项 CI 必需检查**：`Build and synthetic probes`、`Web build and browser tests`、4 浏览器矩阵 E2E 与 3 组集成场景矩阵必须全绿（见 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) 与 [`CONTRIBUTING.md`](../../CONTRIBUTING.md)）。
 
 ---
 
@@ -122,7 +122,6 @@ flowchart LR
 | **ADR-0004** | 统一记忆的内置核心与逐事实授权（#153） | 复用事实而非合并聊天历史；记忆由内置核心强制执行“本人、逐事实、逐版本、逐目标会话”授权，停用/撤销/遗忘三态不可混用 | [0004-unified-memory-authorization.md](0004-unified-memory-authorization.md) |
 | **ADR-0005** | 记忆敏感度分级与工具流出面共存矩阵 | 取代粗粒度布尔禁用锁，按 `MemorySensitivityTier`（L0–L3）× `ToolEgressClass`（0–4）执行二维 Fail-Closed 裁决；L2 严禁外网检索，L3 全拒 | [0005-memory-tool-coexistence-taint-tiers.md](0005-memory-tool-coexistence-taint-tiers.md) |
 | **ADR-0006** | 可选的显式跨平台本人身份关联边界 | 默认关闭；禁止昵称/ID 推测合并；仅限两端可信私聊经 120s 内存 HMAC 挑战绑定 `CanonicalPersonId`；绝不共享聊天记录、RBAC、审批或管理员权 | [0006-optional-cross-platform-identity-linking.md](0006-optional-cross-platform-identity-linking.md) |
-| **专题待议** | 大文件边界治理记录 | 记录超过 1000 行大文件的审查准则与禁止机械拆分的治理决议 | [large-file-boundaries-needs-design.md](large-file-boundaries-needs-design.md) |
 
 ### 新增 ADR 约定
 

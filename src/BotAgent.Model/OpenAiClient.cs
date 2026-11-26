@@ -138,6 +138,89 @@ public class OpenAiClient : IModelClient
         _ => 15
     };
 
+    internal static string? BuildFocusHint(
+        IReadOnlyList<ChatMessage> window, IReadOnlyCollection<long> quotableIds, bool proactive, bool isPrivateConversation = false)
+    {
+        if (proactive || isPrivateConversation || window.Count == 0)
+        {
+            return null;
+        }
+
+        var lastSelfIndex = -1;
+        for (var i = window.Count - 1; i >= 0; i--)
+        {
+            if (window[i].Role == MessageRole.Self)
+            {
+                lastSelfIndex = i;
+                break;
+            }
+        }
+
+        var trailing = new List<ChatMessage>();
+        for (var i = lastSelfIndex + 1; i < window.Count; i++)
+        {
+            var msg = window[i];
+            if (msg.Role == MessageRole.Peer && !msg.Recalled && !MessageMarkers.IsAside(msg.Text))
+            {
+                trailing.Add(msg);
+            }
+        }
+
+        if (trailing.Count < 2)
+        {
+            return null;
+        }
+
+        var latest = trailing[^1];
+        if (!latest.DirectToBot && trailing.Take(trailing.Count - 1).Any(m => m.DirectToBot))
+        {
+            return null;
+        }
+
+        var previous = trailing[^2];
+        var sender = SanitizePromptSender(latest.SenderName);
+        var time = ChatHistoryTime.Render(latest.Timestamp);
+        var idPart = !string.IsNullOrWhiteSpace(latest.SenderName) &&
+                     latest.QqMessageId is long qid &&
+                     quotableIds.Contains(qid)
+            ? $" (#{qid})"
+            : string.Empty;
+        var gapPart = string.Empty;
+        if (latest.Timestamp != default && previous.Timestamp != default)
+        {
+            var totalMinutes = (latest.Timestamp - previous.Timestamp).TotalMinutes;
+            if (totalMinutes >= 5 && totalMinutes <= 60d * 24 * 30)
+            {
+                gapPart = $"（距上一条已间隔 {(long)Math.Floor(totalMinutes)} 分钟）";
+            }
+        }
+
+        var lead = lastSelfIndex >= 0
+            ? $"自你上次发言后已有 {trailing.Count} 条新消息"
+            : $"当前上下文已有 {trailing.Count} 条连续消息";
+        var replyGuidance = quotableIds.Count > 0
+            ? "请默认优先围绕最新一条消息回应；只有当你明确要回应更早的那条消息时，才去回答它并在 replyTo 中填写对应的 (#id)。"
+            : "请默认优先围绕最新一条消息回应；只有当你明确要回应更早的那条消息时，才去回答它。";
+        return $"{lead}，最新一条是 {sender} 于 {time}{idPart} 发出的{gapPart}。{replyGuidance}";
+    }
+
+    private static string SanitizePromptSender(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "对方";
+        }
+
+        var singleLine = raw.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        var escaped = MessageMarkers.EscapeExternalControlTags(singleLine).Trim();
+        if (string.IsNullOrWhiteSpace(escaped))
+        {
+            return "对方";
+        }
+
+        return escaped.Length <= 32 ? escaped : escaped[..32] + "…";
+    }
+
     public async Task<CompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> context, string? profilesText = null, CancellationToken ct = default,
         IReadOnlyList<StickerChoice>? stickers = null, bool pokeContext = false, string? moodText = null, string? musicText = null, string? linkText = null, bool enableListen = false, bool enableVoice = false, string? recallText = null, bool enableWebSearch = false, string? searchText = null, string? groupRolesText = null, string? vibeHint = null, bool proactive = false,
         bool enableAsk = false, bool enableToolRequest = false, string? toolList = null, Domain.Reply.SamplingProfile? sampling = null,
@@ -203,7 +286,8 @@ public class OpenAiClient : IModelClient
             IsPrivateConversation: isPrivateConversation,
             PlatformDisplayName: promptOverrides?.PlatformDisplayName,
             PersonaAppend: promptOverrides?.PersonaAppend,
-            PlatformNeutral: promptOverrides?.PlatformNeutral ?? false));
+            PlatformNeutral: promptOverrides?.PlatformNeutral ?? false,
+            FocusHint: BuildFocusHint(window, quotableIds, proactive, isPrivateConversation)));
         // 请求体（含多模态图片）与发送都在 ModelTransport：这里只管"说什么"与"回来的怎么判"
         var built = await _transport.BuildAsync(window, promptParts.Text, quotableIds, ct, sampling: sampling, promptCacheScope: promptCacheScope);
         built = built with { StableSystemPrefixLength = promptParts.Stable.Length };

@@ -1,6 +1,6 @@
 # ADR-0006：可选的显式跨平台本人身份关联边界
 
-- 状态：Phase 5（v2.0）实施基线；遵循 [ADR-0004](0004-unified-memory-authorization.md)、[ADR-0005](0005-memory-tool-coexistence-taint-tiers.md) 与仓库 [AGENTS.md](../../AGENTS.md) 全部隐私红线。
+- 状态：Phase 5（v2.0）实施基线；遵循 [ADR-0004](0004-unified-memory-authorization.md)、[ADR-0005](0005-memory-tool-coexistence-taint-tiers.md) 与仓库 [SECURITY.md](../../SECURITY.md) 全部隐私红线。
 - 关联：`IdentityLinkModels`、`IdentityLinkStore`、`IdentityLinkService`、`IdentityCommandService`、`PersonalTodoHostPortsAdapter`、`KnowledgeHostPortsAdapter`、`WorkspaceHttpContract`。
 
 ---
