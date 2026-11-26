@@ -269,6 +269,10 @@ internal static class OneBotInboundParser
                                 }
                             }
                         }
+                        else
+                        {
+                            sb.Append(type == "music" ? "[音乐分享]" : "[分享卡片]");
+                        }
 
                         break;
 

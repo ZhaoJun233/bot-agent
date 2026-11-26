@@ -121,18 +121,48 @@ public static partial class Program
         var fileReq = await WaitForRequestAsync(openAi, r => r.Contains("周报-测试.pdf"), TimeSpan.FromSeconds(40));
         Check("★ 文件段带上文件名（以前是完全丢掉）", fileReq is not null);
 
+        // ---- 4b) QQ 小程序卡片（含 qqdocurl 与无协议头 url）：优先取 qqdocurl 并触发页面预览 ----
+        var hitsBeforeMiniApp = pages.Hits;
+        var miniAppCard = ("""
+            {"app":"com.tencent.miniapp_01","prompt":"[QQ小程序]示例视频卡片",
+             "meta":{"detail_1":{"desc":"示例小程序描述","qqdocurl":"__MINIAPP_URL__","url":"m.q.qq.com/a/s/synthetic"}}}
+            """).Replace("__MINIAPP_URL__", $"{pages.PageUrl}/miniapp", StringComparison.Ordinal);
+        var miniAppSegments = new JsonArray(
+            new JsonObject { ["type"] = "json", ["data"] = new JsonObject { ["data"] = miniAppCard } });
+
+        openAi.ClearRequests();
+        openAi.EnqueueReply("""{"suitability": 75, "reply": "看到小程序里的视频页面了。"}""");
+        await protocol.SendGroupSegmentsAsync(groupId, 30023, "小明", 9405, miniAppSegments, "[CQ:json,data=...]", cts.Token);
+
+        var miniAppReq = await WaitForRequestAsync(openAi, r => r.Contains("示例视频卡片"), TimeSpan.FromSeconds(40));
+        Check("★ 小程序卡片优先提取 qqdocurl 并触发页面预览",
+            miniAppReq is not null && pages.Hits > hitsBeforeMiniApp &&
+            miniAppReq.Contains($"{pages.PageUrl}/miniapp") && miniAppReq.Contains(pages.Title) && miniAppReq.Contains("刚发的链接"));
+
+        // ---- 4c) 未知空结构 json 卡片：不能因为字段为空被静默丢弃 ----
+        var emptyCardSegments = new JsonArray(
+            new JsonObject { ["type"] = "json", ["data"] = new JsonObject { ["data"] = """{"app":"com.example.unknown"}""" } });
+
+        openAi.ClearRequests();
+        openAi.EnqueueReply("""{"suitability": 60, "reply": "收到未知卡片。"}""");
+        await protocol.SendGroupSegmentsAsync(groupId, 30023, "小明", 9406, emptyCardSegments, "[CQ:json,data=...]", cts.Token);
+
+        var emptyCardReq = await WaitForRequestAsync(openAi, r => r.Contains("[分享卡片]"), TimeSpan.FromSeconds(40));
+        Check("★ 未知空结构 json 卡片保留 [分享卡片] 占位不被静默丢弃", emptyCardReq is not null);
+
         // ---- 5) 链接预览：机器人真去打开链接，把标题/摘要拿来用 ----
+        var hitsBeforePlainLink = pages.Hits;
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 85, "reply": "这标题我懂了。"}""");
         await protocol.SendGroupMessageAsync(groupId, 30025, "小美",
-            $"你们看这个 {pages.PageUrl} 挺有意思", 9405, ct: cts.Token);
+            $"你们看这个 {pages.PageUrl} 挺有意思", 9407, ct: cts.Token);
 
-        var linkReq = await WaitForRequestAsync(openAi, r => r.Contains(pages.Title), TimeSpan.FromSeconds(40));
-        Check("★ 机器人真的打开了群里的链接（假网页被访问）", pages.Hits >= 1, $"hits={pages.Hits}");
+        var linkReq = await WaitForRequestAsync(openAi, r => r.Contains(pages.PageUrl) && r.Contains("这标题") == false && r.Contains("刚发的链接"), TimeSpan.FromSeconds(40));
+        Check("★ 机器人真的打开了群里的链接（假网页被访问）", pages.Hits > hitsBeforePlainLink, $"hits {hitsBeforePlainLink} -> {pages.Hits}");
         Check("★ 链接标题与摘要进了提示词（不用对着 URL 猜）",
             linkReq is not null && linkReq.Contains(pages.Title) && linkReq.Contains(pages.Description));
         Check("★ 提示词里带上了原链接，模型知道说的是哪个网址",
-            linkReq is not null && linkReq.Contains("127.0.0.1") && linkReq.Contains("刚发的链接"));
+            linkReq is not null && linkReq.Contains(pages.PageUrl) && linkReq.Contains("刚发的链接"));
 
         // ---- 6) 关掉链接预览就不再抓（但消息照常处理）----
         using var http = CreatePanelHttpClient(panelPort, 10);
@@ -143,7 +173,7 @@ public static partial class Program
         var hitsBefore = pages.Hits;
         openAi.ClearRequests();
         openAi.EnqueueReply("""{"suitability": 60, "reply": "好。"}""");
-        await protocol.SendGroupMessageAsync(groupId, 30026, "小刚", $"再看看 {pages.PageUrl}/x2", 9406, ct: cts.Token);
+        await protocol.SendGroupMessageAsync(groupId, 30026, "小刚", $"再看看 {pages.PageUrl}/x2", 9408, ct: cts.Token);
         var afterOff = await WaitForRequestAsync(openAi, _ => true, TimeSpan.FromSeconds(30));
         Check("★ 关掉后不再抓链接（假网页没被再访问）",
             afterOff is not null && pages.Hits == hitsBefore, $"hits {hitsBefore} → {pages.Hits}");

@@ -50,8 +50,11 @@ internal sealed class ReplyTurnContext
     private readonly PluginToolNotes? _toolNotes;
     private readonly ReplyToolAvailability? _replyTools;
 
+    /// <summary>未消费撤回提示的有效期：超时后不再污染后续无关对话。</summary>
+    internal static readonly TimeSpan RecallNoteTtl = TimeSpan.FromMinutes(2);
+
     /// <summary>每个会话最近一次撤回事件的描述，交给下一轮回复用（用掉就清）。</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _recallNotes = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Note, long RecordedTickMs)> _recallNotes = new();
 
     public ReplyTurnContext(
         IProfileRepository profiles,
@@ -93,8 +96,21 @@ internal sealed class ReplyTurnContext
         _replyTools = replyTools;
     }
 
-    /// <summary>记下“刚有人撤回了一条消息”，下一轮交给模型（取走即清）。</summary>
-    public void RememberRecall(string sourceKey, string note) => _recallNotes[sourceKey] = note;
+    /// <summary>记下“刚有人撤回了一条消息”，下一轮交给模型（取走即清，过期作废）。</summary>
+    public void RememberRecall(string sourceKey, string note) => _recallNotes[sourceKey] = (note, EngineClock.TickCount);
+
+    private string? TakeValidRecallNote(string sourceKey)
+    {
+        if (!_recallNotes.TryRemove(sourceKey, out var pendingRecall))
+        {
+            return null;
+        }
+
+        var elapsedMs = EngineClock.TickCount - pendingRecall.RecordedTickMs;
+        return elapsedMs >= 0 && elapsedMs <= (long)RecallNoteTtl.TotalMilliseconds
+            ? pendingRecall.Note
+            : null;
+    }
 
     /// <summary>
     /// 第 1 步：**取上下文**（以及提示词要用的素材）—— 会话窗口、参与者档案、表情包候选、群成员身份、
@@ -197,7 +213,7 @@ internal sealed class ReplyTurnContext
 
         // 刚有人撤回了消息：把这件事告诉模型（但不告诉它撤回了什么）——用完就清
         var recallText = TakeNote(ReplyPacingPromptState.Note.Recall,
-            () => _recallNotes.TryRemove(conversation.SourceKey, out var pendingRecall) ? pendingRecall : null);
+            () => TakeValidRecallNote(conversation.SourceKey));
 
         // 刚上网查到的资料 / 读到的页面正文 / 只读插件工具结果：交给模型，用完就清
         var searchText = TakeNote(ReplyPacingPromptState.Note.Search, () =>

@@ -79,4 +79,5 @@ await PrivateReplyPromptChecks.RunAsync(Check);
 await LiveCacheChecks.RunOfflineAsync(Check);
 await DiscoveryChecks.RunAsync(Check);
 await TimeoutChecks.RunAsync(Check, payload);
+await ContextFocusChecks.RunAsync(Check);
 Console.WriteLine($"PASS {count} synthetic protocol checks");

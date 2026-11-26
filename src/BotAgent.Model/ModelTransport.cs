@@ -37,6 +37,12 @@ public class ModelTransport : IModelTransport
     /// <summary>撤回标记：内容是保留的，但必须让模型一眼看出“这条已经收回去了”。</summary>
     private const string RecallMark = "[已撤回] ";
 
+    /// <summary>历史图片附带的最大时间跨度（相对窗口内最新非系统消息）。</summary>
+    internal static readonly TimeSpan ImageAttachMaxAge = TimeSpan.FromMinutes(5);
+
+    /// <summary>历史图片附带的最大尾部消息窗口（仅最后 N 条非系统消息）。</summary>
+    internal const int ImageAttachMaxTrailingMessages = 6;
+
     private readonly Func<ModelOptions> _options;
     private readonly IModelHttpFetcher _chatHttp;
     private readonly IModelHttpFetcher _auxHttp;
@@ -71,6 +77,31 @@ public class ModelTransport : IModelTransport
 
     private string Url() => BuildUrl(_settings.BaseUrl);
 
+    internal static bool ShouldAttachImage(ChatMessage msg, int nonSystemIndex, int nonSystemCount, DateTimeOffset anchorTime)
+    {
+        if (msg.Role != MessageRole.Peer || msg.Recalled || msg.ImageUrls is not { Count: > 0 })
+        {
+            return false;
+        }
+
+        if (nonSystemIndex < nonSystemCount - ImageAttachMaxTrailingMessages)
+        {
+            return false;
+        }
+
+        if (anchorTime != default)
+        {
+            return msg.Timestamp != default && anchorTime - msg.Timestamp <= ImageAttachMaxAge;
+        }
+
+        return true;
+    }
+
+    internal static string ResolveVisionHint(bool latestMessageAttachedImage)
+        => latestMessageAttachedImage
+            ? "\n(最新消息中包含图片，已一并提供，请先看图再结合上下文回复。)"
+            : "\n(最近几条上下文的较早消息中包含图片，仅作背景参考；优先围绕最新一条消息回复，除非最新消息在追问或延续该图。)";
+
     /// <summary>
     /// 把上下文窗口 + 系统提示词组装成请求体。返回的 <c>AttachedImages</c> / <c>AttachedImageIds</c>
     /// 供调用方写诊断日志与拉黑嫌疑图片（上游吞回复时这两个数是关键线索）。
@@ -81,29 +112,19 @@ public class ModelTransport : IModelTransport
     {
         var messages = new JsonArray();
         messages.Add(new JsonObject { ["role"] = "system", ["content"] = systemContent });
-        // 最近上下文里出现图片时，在系统提示中提示模型可以看图
-        if (window.Any(m => m.ImageUrls is { Count: > 0 }))
-        {
-            systemContent += "\n(消息中包含图片，已一并提供，请先看图再结合上下文回复。)";
-            messages[^1] = new JsonObject { ["role"] = "system", ["content"] = systemContent };
-        }
 
         // 这一轮真送出去的图片张数：上游吞回复时把它写进日志（带图那一轮的风控嫌疑最大）
         var attachedImages = 0;
         // 送去过的图片所属消息 id（两个用途：诊断日志里说清是哪条；疑似触发过滤时拉黑不再送）
         var attachedImageIds = new List<long>();
+        var nonSystemMessages = window.Where(m => m.Role != MessageRole.System).ToArray();
+        var nonSystemCount = nonSystemMessages.Length;
+        var anchorTime = nonSystemCount > 0 ? nonSystemMessages[^1].Timestamp : default;
+        var latestMessageAttachedImage = false;
 
-        foreach (var msg in window) // 上下文窗口
+        for (var nonSystemIndex = 0; nonSystemIndex < nonSystemCount; nonSystemIndex++)
         {
-            if (msg.Role == MessageRole.System)
-            {
-                continue; // 本地系统提示（如"已连接"）不发给模型，避免噪音
-            }
-
-            // 对方消息按 {发送者}{内容--时间} 组织，帮助模型分辨谁在何时说了什么；
-            // 最近几条再附上 (#id)，供 replyTo 引用。
-            // 已撤回的：正文前面加 [已撤回] 标记（**内容保留** —— 它确实看过，只是要让模型
-            // 知道“这条已经收回去了”，引用/复述时得自己拿掉分寸）。
+            var msg = nonSystemMessages[nonSystemIndex];
             var shownText = msg.Recalled ? RecallMark + msg.Text : msg.Text;
             var content = msg.Role == MessageRole.Peer && !string.IsNullOrWhiteSpace(msg.SenderName)
                 ? $"{{{msg.SenderName}}}{{{shownText}--{FormatTime(msg.Timestamp)}}}" +
@@ -111,40 +132,33 @@ public class ModelTransport : IModelTransport
                 : shownText;
             var role = msg.Role == MessageRole.Self ? "assistant" : "user";
 
-            // 多模态：消息带图片时，把图片（下载转 base64）一并发给模型识图
-            if (msg.ImageUrls is { Count: > 0 } && msg.Role == MessageRole.Peer &&
+            if (ShouldAttachImage(msg, nonSystemIndex, nonSystemCount, anchorTime) &&
                 !(msg.QqMessageId is long suspectId && IsSuspectImage(suspectId)))
             {
-                var contentParts = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = content } };
-                foreach (var url in msg.ImageUrls.Take(3)) // 每条消息最多带 3 张图
+                var (contentParts, addedCount) = await BuildImageMessagePartsAsync(msg, content, attachedImageIds, ct);
+                if (addedCount > 0)
                 {
-                    // 异步下载（绝不同步阻塞 UI 线程），失败跳过该图；
-                    // 带上消息 id：地址过期（rkey 时效）时能找协议端重新签发。
-                    var dataUrl = await _imageDownloader.DownloadAsDataUrl(url, ct, msg.QqMessageId);
-                    if (dataUrl is not null)
+                    attachedImages += addedCount;
+                    if (nonSystemIndex == nonSystemCount - 1)
                     {
-                        attachedImages++;
-                        if (msg.QqMessageId is long iid && !attachedImageIds.Contains(iid))
-                        {
-                            attachedImageIds.Add(iid);
-                        }
-
-                        contentParts.Add(new JsonObject
-                        {
-                            ["type"] = "image_url",
-                            ["image_url"] = new JsonObject { ["url"] = dataUrl }
-                        });
+                        latestMessageAttachedImage = true;
                     }
-                }
 
-                messages.Add(new JsonObject { ["role"] = role, ["content"] = contentParts });
-                continue;
+                    messages.Add(new JsonObject { ["role"] = role, ["content"] = contentParts });
+                    continue;
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(content))
             {
                 messages.Add(new JsonObject { ["role"] = role, ["content"] = content });
             }
+        }
+
+        if (attachedImages > 0)
+        {
+            systemContent += ResolveVisionHint(latestMessageAttachedImage);
+            messages[0] = new JsonObject { ["role"] = "system", ["content"] = systemContent };
         }
 
         // 上游（Gemini 等）不接受“最后一条是模型自己说的话”的请求：
@@ -218,6 +232,33 @@ public class ModelTransport : IModelTransport
         }
 
         return new BuiltRequest(payload, attachedImages, attachedImageIds);
+    }
+
+    private async Task<(JsonArray Parts, int AddedCount)> BuildImageMessagePartsAsync(
+        ChatMessage msg, string content, List<long> attachedImageIds, CancellationToken ct)
+    {
+        var contentParts = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = content } };
+        var addedCount = 0;
+        foreach (var url in msg.ImageUrls!.Take(3)) // 每条消息最多带 3 张图
+        {
+            var dataUrl = await _imageDownloader.DownloadAsDataUrl(url, ct, msg.QqMessageId);
+            if (dataUrl is not null)
+            {
+                addedCount++;
+                if (msg.QqMessageId is long iid && !attachedImageIds.Contains(iid))
+                {
+                    attachedImageIds.Add(iid);
+                }
+
+                contentParts.Add(new JsonObject
+                {
+                    ["type"] = "image_url",
+                    ["image_url"] = new JsonObject { ["url"] = dataUrl }
+                });
+            }
+        }
+
+        return (contentParts, addedCount);
     }
 
     /// <summary>缓存作用域 → 稳定的 32 位小写十六进制键（带域前缀，避免跨用途撞哈希）。</summary>
@@ -382,7 +423,7 @@ public class ModelTransport : IModelTransport
     /// 把请求体里所有 image_url 部分抽掉（其他一字不改）—— 上游因图片回零候选时的兜底重试。
     /// 用 JSON 层复制，不重下图片（图已经在内存里，只是不再送给模型）。
     /// </summary>
-    private static JsonObject StripImages(JsonObject payload)
+    internal static JsonObject StripImages(JsonObject payload)
     {
         var clone = (JsonObject)JsonNode.Parse(payload.ToJsonString())!;
         if (clone["messages"] is not JsonArray messages)
@@ -390,9 +431,22 @@ public class ModelTransport : IModelTransport
             return clone;
         }
 
-        foreach (var message in messages)
+        if (messages.Count > 0 && messages[0] is JsonObject sys && sys["role"]?.GetValue<string>() == "system" &&
+            sys["content"] is JsonValue sysVal && sysVal.TryGetValue<string>(out var sysText) && sysText is not null)
         {
-            if (message?["content"] is not JsonArray parts)
+            foreach (var suffix in new[] { ResolveVisionHint(true), ResolveVisionHint(false) })
+            {
+                if (sysText.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    sys["content"] = sysText[..^suffix.Length];
+                    break;
+                }
+            }
+        }
+
+        for (var m = messages.Count - 1; m >= 0; m--)
+        {
+            if (messages[m] is not JsonObject msgObj || msgObj["content"] is not JsonArray parts)
             {
                 continue;
             }
@@ -402,6 +456,23 @@ public class ModelTransport : IModelTransport
                 if (parts[i] is JsonObject part && part["type"]?.GetValue<string>() == "image_url")
                 {
                     parts.RemoveAt(i);
+                }
+            }
+
+            if (parts.All(p => p is JsonObject pObj && pObj["type"]?.GetValue<string>() == "text"))
+            {
+                var collapsed = string.Concat(parts.Select(p => p?["text"]?.GetValue<string>() ?? string.Empty));
+                if (!string.IsNullOrWhiteSpace(collapsed))
+                {
+                    msgObj["content"] = collapsed;
+                }
+                else if (m < messages.Count - 1 || (m > 0 && messages[m - 1]?["role"]?.GetValue<string>() == "user"))
+                {
+                    messages.RemoveAt(m);
+                }
+                else
+                {
+                    msgObj["content"] = "[图片]";
                 }
             }
         }

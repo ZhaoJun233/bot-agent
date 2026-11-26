@@ -33,6 +33,7 @@ var scenarios = new (string Name, Func<Action<bool, string>, Task> Run)[]
     ("recall-after-completion", Scenarios.RecallAfterCompletion),
     ("recall-admission", Scenarios.RecallAdmission),
     ("private-recall", Scenarios.PrivateRecall),
+    ("recall-note-expiry", Scenarios.RecallNoteExpiry),
     ("other-speaker-context", Scenarios.OtherSpeakerContext),
     ("prior-reply-context", Scenarios.PriorReplyContext),
     ("accepted-snapshot-context", Scenarios.AcceptedSnapshotContext),

@@ -44,6 +44,12 @@ public static partial class MusicShareParser
                 var artist = ReadString(data["content"]) ?? ReadString(data["singer"]);
                 var audio = ReadString(data["audio"]);
                 var page = ReadString(data["url"]) ?? ReadString(data["jumpUrl"]);
+                if (platform == "unknown" && string.IsNullOrWhiteSpace(id) &&
+                    title is null && artist is null && audio is null && page is null)
+                {
+                    return null;
+                }
+
                 return new MusicShare(platform, string.IsNullOrWhiteSpace(id) ? null : id,
                     title, artist, audio, page, "music段");
             }
@@ -102,7 +108,7 @@ public static partial class MusicShareParser
 
                     title ??= ReadString(v, "title");
                     artist ??= ReadString(v, "desc") ?? ReadString(v, "singer");
-                    jump ??= ReadString(v, "jumpUrl") ?? ReadString(v, "url");
+                    jump ??= ReadPreferredJumpUrl(v);
                     musicUrl ??= ReadString(v, "musicUrl") ?? ReadString(v, "audio");
                     id ??= ReadString(v, "id") ?? ReadString(v, "songid");
                 }
@@ -111,13 +117,17 @@ public static partial class MusicShareParser
             // 结构二：网易云大卡片 {"app":"com.tencent.structmsg","meta":{"news":{…}}} 或直接就是歌曲对象
             title ??= ReadString(root, "title") ?? ReadString(root, "name");
             artist ??= ReadString(root, "desc") ?? ReadString(root, "artist") ?? ReadString(root, "singer");
-            jump ??= ReadString(root, "jumpUrl") ?? ReadString(root, "url");
+            jump ??= ReadPreferredJumpUrl(root);
             musicUrl ??= ReadString(root, "musicUrl") ?? ReadString(root, "audio");
             id ??= ReadString(root, "id") ?? ReadString(root, "songid");
 
             if (root.TryGetProperty("prompt", out var prompt) && prompt.ValueKind == JsonValueKind.String && title is null)
             {
-                title = prompt.GetString()?.Replace("[分享]", string.Empty).Trim();
+                var cleanedPrompt = prompt.GetString()?.Replace("[分享]", string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(cleanedPrompt))
+                {
+                    title = cleanedPrompt;
+                }
             }
 
             // 从链接里抠出平台与歌曲 id
@@ -197,6 +207,25 @@ public static partial class MusicShareParser
         null or "" => "unknown",
         _ => raw.ToLowerInvariant(),
     };
+
+    private static string? ReadPreferredJumpUrl(JsonElement obj)
+        => ReadHttpUrl(obj, "jumpUrl")
+           ?? ReadHttpUrl(obj, "qqdocurl")
+           ?? ReadHttpUrl(obj, "url")
+           ?? ReadString(obj, "jumpUrl")
+           ?? ReadString(obj, "qqdocurl")
+           ?? ReadString(obj, "url");
+
+    private static string? ReadHttpUrl(JsonElement obj, string name)
+    {
+        var raw = ReadString(obj, name);
+        return raw is not null &&
+               Uri.TryCreate(raw, UriKind.Absolute, out var uri) &&
+               (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+               !string.IsNullOrWhiteSpace(uri.Host)
+            ? raw
+            : null;
+    }
 
     private static string? ReadString(JsonElement obj, string name)
     {
