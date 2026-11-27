@@ -221,14 +221,19 @@ internal sealed class ReplyTurnActions(
 
         // 模型想把某首歌分享给群里 → 搜到就发一张网易云卡片，顺手“听”一遍（下一轮它就能聊这首歌）。
         // P3（V3 §9.2）：分享歌曲 = 往当前会话发额外消息，必须过同一条闸门（未配场景时行为不变）。
-        if (!hasMemory && effective.FeatureEnabled("music") && _allowsFeature(PluginGate.MusicCapability) && result.ShareSong is { Length: > 0 } songToShare && _music is not null
+        var allowMusicShare = !hasMemory
+            || BotAgent.Services.Memory.MemoryUseScope.MaxTier == BotAgent.Domain.Memory.MemorySensitivityTier.SameScopeProfile;
+        if (allowMusicShare && effective.FeatureEnabled("music") && _allowsFeature(PluginGate.MusicCapability) && result.ShareSong is { Length: > 0 } songToShare && _music is not null
             && _approvals.AllowCapability(conversation, "music.share", songToShare, out _, pinned: caps))
         {
             var key = conversation.SourceKey;
+            var capturedMemory = hasMemory ? BotAgent.Services.Memory.MemoryUseScope.Capture() : null;
             await ReplyCommitBoundary.BeforeEffectAsync();
             var (shareIsGroup, shareTargetId) = conversation.Target;
             _queueBackground("music-share:" + key + ":" + songToShare, "music-share:" + key + ":" + songToShare, async ct =>
             {
+                using var memoryLease = capturedMemory is not null ? BotAgent.Services.Memory.MemoryUseScope.Enter(capturedMemory) : null;
+                if (capturedMemory is not null && !BotAgent.Services.Memory.MemoryUseScope.CanUse) return;
                 if (!MusicStillAllowed(key, platformPolicy, "分享")) return;
                 SendResult shared;
                 try { shared = await _music.ShareWithReceiptAsync(songToShare, shareIsGroup, shareTargetId, ct); }
@@ -243,8 +248,8 @@ internal sealed class ReplyTurnActions(
                 }
 
                 // 卡片发出去了，接着真去听一遍：下一轮发言时它就“听过这首歌”。
-                // 第二个副作用开始前再复核一次：排队/分享期间插件可能被关、会话可能已停机。
-                if (!MusicStillAllowed(key, platformPolicy, "分享后听歌")) return;
+                // 第二个副作用开始前再复核一次：排队/分享期间插件可能被关、会话可能已停机；SameScopeProfile 禁写跨轮音乐笔记。
+                if (capturedMemory is not null || !MusicStillAllowed(key, platformPolicy, "分享后听歌")) return;
                 try { _ = await _music.ListenAsync(key, songToShare, "（自己分享的）", ct); }
                 catch (InvalidOperationException ex) when (ex.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing") { }
             });

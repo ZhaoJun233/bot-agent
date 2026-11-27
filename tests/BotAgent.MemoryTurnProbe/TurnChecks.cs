@@ -231,18 +231,46 @@ internal static class TurnChecks
                 "L2 personal fact blocks external read egress (websearch) while allowing same-scope knowledge read");
         }
 
-        var legacyEnv = f.Envelope(Fixture.Group);
-        using (var exec = f.Enter(legacyEnv))
+        var sameScopeEnv = f.Envelope(Fixture.Group);
+        using (var exec = f.Enter(sameScopeEnv))
         {
-            using var turn = UnifiedMemoryTurn.Begin(f.Memory, legacyEnv);
-            Probe.Check(!string.IsNullOrEmpty(turn.ReadLegacyProfile(Fixture.Actor, _ => "legacy text")), "L3 legacy profile read");
+            using var turn = UnifiedMemoryTurn.Begin(f.Memory, sameScopeEnv);
+            Probe.Check(!string.IsNullOrEmpty(turn.ReadLegacyProfile(Fixture.Actor, _ => "same-scope profile")),
+                "attested same-scope legacy profile read");
+            Probe.Check(MemoryUseScope.MaxTier == MemorySensitivityTier.SameScopeProfile
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.LocalPresentation)
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.SameScopeRead)
+                && MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalSideEffect)
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.GlobalStateWrite),
+                "SameScopeProfile allows local presentation, same-scope read, and external read egress while denying side effects/global writes");
+            Probe.Check(Probe.Model() && Probe.Send(Fixture.Group) && !Probe.Send(Fixture.OtherGroup),
+                "SameScopeProfile preserves destination binding");
+        }
+
+        using (var exec = f.Enter(dmEnv))
+        {
+            using var turn = UnifiedMemoryTurn.Begin(f.Memory, dmEnv);
+            Probe.Check(!string.IsNullOrEmpty(turn.ReadLegacyProfile(Fixture.Actor, _ => "same-scope dm profile")),
+                "DM same-scope profile read");
+            Probe.Check(turn.ReadPrompt("下周三架构评审").Contains("PersonalNote: 下周三架构评审"),
+                "PersonalNote also injected");
+            Probe.Check(MemoryUseScope.MaxTier == MemorySensitivityTier.PersonalFact
+                && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress),
+                "combining SameScopeProfile with PersonalFact elevates MaxTier to PersonalFact and blocks external read egress");
+        }
+
+        using (var exec = f.Enter(sameScopeEnv))
+        {
+            using var scope = MemoryUseScope.Begin();
+            MemoryUseScope.Register(commit => { commit(); return true; });
             Probe.Check(MemoryUseScope.MaxTier == MemorySensitivityTier.LegacyProfile
                 && !MemoryUseScope.AllowsEgress(ToolEgressClass.LocalPresentation)
                 && !MemoryUseScope.AllowsEgress(ToolEgressClass.SameScopeRead)
                 && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
                 && !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalSideEffect)
                 && !MemoryUseScope.AllowsEgress(ToolEgressClass.GlobalStateWrite),
-                "L3 legacy profile denies all five egress classes per ADR-0005");
+                "unclassified MemoryUseScope.Register retains L3 LegacyProfile full denial per ADR-0005");
         }
     }
 }

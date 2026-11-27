@@ -4,9 +4,10 @@ namespace BotAgent.Domain.Memory;
 public enum MemorySensitivityTier
 {
     None = 0,
-    StylePreference = 1,
-    PersonalFact = 2,
-    LegacyProfile = 3
+    SameScopeProfile = 1,
+    StylePreference = 2,
+    PersonalFact = 3,
+    LegacyProfile = 4
 }
 
 /// <summary>Outward data exposure surface of a tool, media presentation, or state mutation.</summary>
@@ -36,9 +37,10 @@ public static class MemoryTaintPolicy
     public static bool Allows(MemorySensitivityTier maxTier, ToolEgressClass egress) => maxTier switch
     {
         MemorySensitivityTier.None => true,
-        MemorySensitivityTier.StylePreference => egress is ToolEgressClass.LocalPresentation
-            or ToolEgressClass.SameScopeRead
-            or ToolEgressClass.ExternalReadEgress,
+        MemorySensitivityTier.SameScopeProfile
+            or MemorySensitivityTier.StylePreference => egress is ToolEgressClass.LocalPresentation
+                or ToolEgressClass.SameScopeRead
+                or ToolEgressClass.ExternalReadEgress,
         MemorySensitivityTier.PersonalFact => egress is ToolEgressClass.LocalPresentation
             or ToolEgressClass.SameScopeRead,
         MemorySensitivityTier.LegacyProfile => false,

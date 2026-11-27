@@ -31,6 +31,7 @@ using BotAgent.Services.Documents;
 using BotAgent.Services.Jargon;
 using BotAgent.Services.Knowledge;
 using BotAgent.Services.Memory;
+using BotAgent.Services.Music;
 using BotAgent.Services.Net;
 using BotAgent.Services.OneBot;
 using BotAgent.Services.Ops;
@@ -55,6 +56,7 @@ internal static class Phase3MemoryKnowledgeTests
     {
         await RunKnowledgeStoreAndPackageTestsAsync(check);
         await RunTaintExfiltrationDefenseTestsAsync(check);
+        await RunSameScopeProfilePluginCoexistenceTestsAsync(check);
         await RunCommunityMemoryIsolationAndPurgeTestsAsync(check);
         await RunAttestedProfileSummaryGateTestsAsync(check);
         RunPrivateInteractiveCardTests(check);
@@ -167,6 +169,7 @@ internal static class Phase3MemoryKnowledgeTests
         await kbPlugin.InitializeAsync(new PluginContext(new ServiceMap((typeof(IKnowledgeHostPorts), kbPorts))), CancellationToken.None);
         await manager.ReplaceAsync(research, true);
         await manager.ReplaceAsync(kbPlugin, true);
+        await manager.ReplaceAsync(new SyntheticMusicPlugin(), true);
 
         var gate = new PluginGate(manager);
         var researchFacade = new ResearchUseCase(manager);
@@ -752,6 +755,101 @@ internal static class Phase3MemoryKnowledgeTests
         public EffectivePlatformPolicy Resolve(PlatformContext context) => Policy;
         public EffectivePlatformPolicy ResolveForChannel(string? channel) => Policy;
         public bool IsChatEnabled(string? channel) => true;
+    }
+
+    private static async Task RunSameScopeProfilePluginCoexistenceTestsAsync(Action<bool, string> check)
+    {
+        using var fixture = CreateMemory(enabled: false);
+        var store = new KnowledgeStorageImpl();
+        using var kbPorts = new KnowledgeHostPortsAdapter(store, () => null, _ => { }, null, null, fixture.Memory);
+        var groupKey = $"group:{fixture.GroupCtx.Conversation.NativeTargetId}";
+        kbPorts.SaveText(groupKey, "群本地资料", "群内插件共存测试文档。", "note");
+
+        var manager = new PluginManager(_ => { });
+        var research = new SpyResearchPlugin();
+        var kbPlugin = OfficialFeatureFactory.KnowledgePlugin();
+        await kbPlugin.InitializeAsync(new PluginContext(new ServiceMap((typeof(IKnowledgeHostPorts), kbPorts))), CancellationToken.None);
+        await manager.ReplaceAsync(research, true);
+        await manager.ReplaceAsync(kbPlugin, true);
+        await manager.ReplaceAsync(new SyntheticMusicPlugin(), true);
+
+        var gate = new PluginGate(manager);
+        var researchFacade = new ResearchUseCase(manager);
+        var fakeMusic = new FakeMusicUseCase();
+        var settings = new AppSettings { EnableWebSearch = true, EnableMusic = true, MaxAgentSteps = 2, WebSearchCooldownSeconds = 0, MusicListenCooldownSeconds = 0 };
+        var box = new SettingsBox(settings);
+        var approvals = new ApprovalUseCase(box, new ApprovalHooks(_ => { }, (t, _) => t, (_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask),
+            new SessionPolicyLedger(), new TurnTraceStore(), catalog: manager.GetToolCatalog);
+        var visibility = new ToolVisibility(gate, webReady: () => researchFacade.IsReady, catalog: () => approvals.Capabilities.Catalog);
+        var inline = new InlineTurnTools(researchFacade, approvals, new ParticipationUseCase(box, _ => { }), _ => { }, gate, music: fakeMusic);
+
+        var reference = new MessageRef(fixture.GroupCtx.Conversation, "m-p3-samescope");
+        var envelope = new PlatformInboundEnvelope(new(fixture.GroupCtx.Driver, reference),
+            new(reference, fixture.GroupCtx.Actor!, "用户A", "帮我查一下并听首歌", DateTimeOffset.UtcNow));
+        using var exec = PlatformSourceExecution.Enter(new PlatformSourceLease(
+            new DummySourceOwner(), new DummyChatSource(), envelope.Origin, CancellationToken.None, () => true));
+        using var turn = UnifiedMemoryTurn.Begin(fixture.Memory, envelope);
+
+        var profileText = turn.ReadLegacyProfile(fixture.GroupCtx.Actor!, _ => "本群活跃成员画像摘要");
+        check(!string.IsNullOrEmpty(profileText) && MemoryUseScope.MaxTier == MemorySensitivityTier.SameScopeProfile,
+            "P3.1b SameScopeProfile active on attested group profile turn");
+        check(visibility.Allows(settings, null, "web.search") && visibility.Allows(settings, null, "kb.search")
+            && visibility.Allows(settings, null, "music.listen") && visibility.Allows(settings, null, "music.share"),
+            "P3.1b ToolVisibility exposes web.search, kb.search, music.listen, and music.share under SameScopeProfile");
+
+        var conv = new BotConversation { SourceKey = groupKey };
+        var caps = approvals.Capabilities;
+        var kbRes = await inline.RunAsync(conv, settings, caps,
+            new(null, null, null, Call: new InlineToolCall("kb.search", new Dictionary<string, string> { ["query"] = "共存" })));
+        var webRes = await inline.RunAsync(conv, settings, caps, new(null, null, null, Search: "测试查询"));
+        var musicRes = await inline.RunAsync(conv, settings, caps, new(null, null, null, Listen: "起风了"));
+        check(kbRes is not null && kbRes.Contains("插件共存")
+            && webRes is not null && research.SearchCalls == 1 && researchFacade.TakeNote(groupKey) is null
+            && musicRes is not null && fakeMusic.ListenCalls == 1 && fakeMusic.TakeNote(groupKey) is null,
+            "P3.1b InlineTurnTools executes kb.search, web.search, and music.listen under SameScopeProfile without leaving cross-turn notes");
+
+        using (var innerScope = MemoryUseScope.Begin())
+        {
+            MemoryUseScope.Register(commit => { commit(); return true; });
+            var blockedWeb = await inline.RunAsync(conv, settings, caps, new(null, null, null, Search: "应被拦"));
+            var blockedMusic = await inline.RunAsync(conv, settings, caps, new(null, null, null, Listen: "应被拦"));
+            check(!visibility.Allows(settings, null, "music.share")
+                && blockedWeb is null && research.SearchCalls == 1
+                && blockedMusic is null && fakeMusic.ListenCalls == 1,
+                "P3.1b elevating to LegacyProfile immediately blocks music.share, web.search, and music.listen");
+        }
+
+        kbPorts.ClearConversation(groupKey);
+        await manager.StopAllAsync(CancellationToken.None);
+    }
+
+    private sealed class SyntheticMusicPlugin : IBotPlugin
+    {
+        public string Id => "preset.feature.music";
+        public string Name => "Synthetic Music";
+        public string Version => "1.0.0";
+        public string Description => "synthetic";
+        public PluginCategory Category => PluginCategory.Media;
+        public Task InitializeAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task ShutdownAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class FakeMusicUseCase : IMusicUseCase
+    {
+        private readonly Dictionary<string, string> _notes = new(StringComparer.Ordinal);
+        public int ListenCalls { get; private set; }
+        public bool IsReady => true;
+        public Task<string?> DescribeShareAsync(MusicShare share, string sender) => Task.FromResult<string?>(null);
+        public void AddNote(string sourceKey, string note) => _notes[sourceKey] = note;
+        public string? TakeNote(string sourceKey) => _notes.Remove(sourceKey, out var n) ? n : null;
+        public bool TryBeginListen(string sourceKey, int cooldownSeconds, out string reason) { reason = ""; return true; }
+        public Task<string?> ListenAsync(string sourceKey, string song, string requester, CancellationToken ct = default)
+        {
+            ListenCalls++;
+            _notes[sourceKey] = $"歌名：{song}";
+            return Task.FromResult<string?>($"歌词分析：{song}");
+        }
+        public Task<bool> ShareAsync(string song, bool isGroup, long targetId, CancellationToken ct = default) => Task.FromResult(true);
     }
 
     private sealed class DummyHttp : IHttpFetcher

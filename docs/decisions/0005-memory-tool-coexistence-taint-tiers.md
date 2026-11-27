@@ -12,9 +12,10 @@
 | 等级 | 枚举值 | 数据来源与内容边界 |
 | --- | :---: | --- |
 | `None` | `0` | 本轮未消费任何统一记忆或旧画像片段 |
-| `StylePreference` (L1) | `1` | 封闭词表表达偏好：`ReplyLanguage`、`ReplyLength`、`ExplanationStyle`、`Timezone` |
-| `PersonalFact` (L2) | `2` | 主体个人事实：`PreferredAddress`（有限短称呼）、`PersonalNote`（强制仅私聊同源 `PrivateOnly`） |
-| `LegacyProfile` (L3) | `3` | 旧人物画像自由文本摘要或未标记来源的原始回忆凭据 |
+| `SameScopeProfile` | `1` | 经 `LegacyProfileScopeKey` 严格验证同驱动、同主体、同会话来源的本会话画像或更早发言 |
+| `StylePreference` (L1) | `2` | 封闭词表表达偏好：`ReplyLanguage`、`ReplyLength`、`ExplanationStyle`、`Timezone` |
+| `PersonalFact` (L2) | `3` | 主体个人事实：`PreferredAddress`（有限短称呼）、`PersonalNote`（强制仅私聊同源 `PrivateOnly`） |
+| `LegacyProfile` (L3) | `4` | 未知来源、跨范围或未指明敏感度等级的原始回忆凭据 |
 
 ## 3. 工具流出面分级（`ToolEgressClass`）
 
@@ -31,9 +32,10 @@
 | 最高敏感度等级 | `LocalPresentation` | `SameScopeRead` | `ExternalReadEgress` | `ExternalSideEffect` | `GlobalStateWrite` |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | `None` (0) | 允许 | 允许 | 允许 | 按常规权限 | 允许 |
-| `StylePreference` (L1) | 允许（受发送前目的地与撤销锁校验） | 允许 | 允许（不写入研究缓存，不持久跨轮痕迹） | 拒绝 | 拒绝 |
-| `PersonalFact` (L2) | 允许（严格限定当前目标发送） | 允许（同源只读） | **严格拒绝**（阻断提示词注入将个人事实拼入外网检索） | 拒绝 | 拒绝 |
-| `LegacyProfile` (L3) | 拒绝 | 拒绝 | 拒绝 | 拒绝 | 拒绝 |
+| `SameScopeProfile` (1) | 允许（同目标 + 撤销锁校验） | 允许 | 允许（不写跨轮研究/音乐笔记；`music.share` 仅限同目标） | 拒绝 | 拒绝 |
+| `StylePreference` (L1, 2) | 允许（受发送前目的地与撤销锁校验） | 允许 | 允许（不写入研究缓存，不持久跨轮痕迹） | 拒绝 | 拒绝 |
+| `PersonalFact` (L2, 3) | 允许（严格限定当前目标发送） | 允许（同源只读） | **严格拒绝**（阻断提示词注入将个人事实拼入外网检索） | 拒绝 | 拒绝 |
+| `LegacyProfile` (L3, 4) | 拒绝 | 拒绝 | 拒绝 | 拒绝 | 拒绝 |
 
 ## 5. 不变量
 

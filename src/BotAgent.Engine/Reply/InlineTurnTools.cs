@@ -10,6 +10,7 @@ using BotAgent.Services.Qq;
 using BotAgent.Domain.Reply;
 using BotAgent.Domain.Tools;
 using System.Text.Json.Nodes;
+using BotAgent.Services.Music;
 using BotAgent.Services.Net;
 using BotAgent.Services.Participation;
 using BotAgent.Services.Permissions;
@@ -38,6 +39,7 @@ public sealed class InlineTurnTools
     private readonly Action<string> _log;
     private readonly PluginGate? _plugins;
     private readonly ReplyToolAvailability _tools;
+    private readonly IMusicUseCase? _music;
 
     public InlineTurnTools(
         IResearchUseCase research,
@@ -46,13 +48,15 @@ public sealed class InlineTurnTools
         Action<string> log,
         PluginGate? plugins = null,
         IPlatformPolicyResolver? policies = null,
-        Func<bool>? isDisposed = null)
+        Func<bool>? isDisposed = null,
+        IMusicUseCase? music = null)
     {
         _research = research;
         _approvals = approvals;
         _participation = participation;
         _log = log;
         _plugins = plugins;
+        _music = music;
         _tools = new ReplyToolAvailability(plugins, policies, isDisposed, () => research.IsReady, () => approvals.Capabilities.Catalog);
     }
 
@@ -66,6 +70,11 @@ public sealed class InlineTurnTools
             && (conversationSettings is null ? snapshot.EnableWebSearch : conversationSettings.FeatureEnabled("websearch"))
             && _research.IsReady && (_plugins?.AllowsTool("web.search") ?? true);
         if (webAllowed) return true;
+        var musicAllowed = MemoryUseScope.HasMemory
+            && MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress)
+            && (conversationSettings is null ? snapshot.EnableMusic : conversationSettings.FeatureEnabled("music"))
+            && _music?.IsReady == true && (_plugins?.AllowsTool("music.listen") ?? true);
+        if (musicAllowed) return true;
         var catalog = _approvals.Capabilities.Catalog;
         return catalog.Specs.Any(spec => spec.ReadOnly && spec.Origin is ToolOrigin.Plugin or ToolOrigin.Mcp
             && spec.Id is not ("web.search" or "web.read")
@@ -89,8 +98,10 @@ public sealed class InlineTurnTools
         var hasRead = !search && !string.IsNullOrWhiteSpace(result.Read);
         if (!search && !hasRead)
         {
-            return result.Call is { } inlineCall
-                ? await RunPluginCallAsync(conversation, snapshot, caps, inlineCall, platformPolicy, ct, conversationSettings)
+            if (result.Call is { } inlineCall)
+                return await RunPluginCallAsync(conversation, snapshot, caps, inlineCall, platformPolicy, ct, conversationSettings);
+            return MemoryUseScope.HasMemory && !string.IsNullOrWhiteSpace(result.Listen)
+                ? await RunMemoryInlineListenAsync(conversation, snapshot, caps, result.Listen!, platformPolicy, ct, conversationSettings)
                 : null;
         }
         var id = search ? "web.search" : "web.read";
@@ -192,6 +203,54 @@ public sealed class InlineTurnTools
                 // L1 记忆回合禁止将外部搜索成果留存进跨轮研究缓存（GlobalStateWrite）。
                 _ = _research.TakeNote(sourceKey);
             }
+        }
+    }
+
+    private async Task<string?> RunMemoryInlineListenAsync(
+        BotConversation conversation, AppSettings snapshot, ChatCapabilitySet caps, string rawSong,
+        EffectivePlatformPolicy? platformPolicy, CancellationToken ct, EffectiveConversationSettings? conversationSettings)
+    {
+        if (_music is not { IsReady: true }
+            || !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress) || !MemoryUseScope.CanUse)
+            return null;
+        var wantedSong = rawSong.Trim();
+        if (wantedSong.Length is < 2 or > 60) return null;
+        if (!_tools.Allows(snapshot, platformPolicy, "music.listen", caps.Catalog, conversationSettings)) return null;
+        if (!_approvals.AllowCapability(conversation, "music.listen", wantedSong, out _, pinned: caps)) return null;
+        await ReplyCommitBoundary.BeforeEffectAsync();
+        if (ct.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "music.listen", caps.Catalog, conversationSettings)
+            || !MemoryUseScope.AllowsEgress(ToolEgressClass.ExternalReadEgress) || !MemoryUseScope.CanUse)
+            return null;
+        try
+        {
+            if (!_music.TryBeginListen(conversation.SourceKey, snapshot.MusicListenCooldownSeconds, out _)) return null;
+            _log("[循环] 当场听歌");
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, PlatformSourceExecution.Current?.Lifetime ?? default);
+            if (lifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "music.listen", caps.Catalog, conversationSettings))
+                return null;
+            string? note;
+            try
+            {
+                note = await MemoryUseScope.Use(() => _music.ListenAsync(conversation.SourceKey, wantedSong, "群友", lifetime.Token));
+            }
+            finally
+            {
+                _ = _music.TakeNote(conversation.SourceKey);
+            }
+            if (lifetime.IsCancellationRequested || !_tools.Allows(snapshot, platformPolicy, "music.listen", caps.Catalog, conversationSettings)
+                || !MemoryUseScope.CanUse)
+                return null;
+            if (string.IsNullOrWhiteSpace(note))
+            {
+                _participation.Observe(conversation.SourceKey, ParticipationEvent.ToolFailure);
+                return null;
+            }
+            return note;
+        }
+        catch (MemoryUseInvalidatedException) { return null; }
+        catch (InvalidOperationException error) when (error.Message is "plugin_contribution_unavailable" or "plugin_dependency_unavailable" or "plugin_contribution_missing")
+        {
+            return null;
         }
     }
 }
