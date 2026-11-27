@@ -268,14 +268,33 @@ def deploy_web_stage(
         shutil.rmtree(stage_dir, ignore_errors=True)
 
 
-def find_sqlite_db(data_dir: Path) -> Path | None:
+def resolve_runtime_root(app_dir: Path, data_dir: Path) -> Path:
+    if data_dir == app_dir and (app_dir / 'data').is_dir():
+        return app_dir / 'data'
+    return data_dir
+
+
+def resolve_plugins_paths(runtime_root: Path) -> tuple[Path, str]:
+    if (runtime_root / 'data/plugins').is_dir():
+        return runtime_root / 'data/plugins', '/data/data/plugins'
+    if (runtime_root / 'plugins').is_dir():
+        return runtime_root / 'plugins', '/data/plugins'
+    if (runtime_root / 'data').is_dir():
+        return runtime_root / 'data/plugins', '/data/data/plugins'
+    return runtime_root / 'plugins', '/data/plugins'
+
+
+def find_sqlite_db(runtime_root: Path) -> Path | None:
+    candidates: list[Path] = []
     for name in ('botagent.db', 'qqchat.db'):
-        candidate = data_dir / 'data' / name
-        if candidate.is_file():
-            return candidate
-        flat = data_dir / name
-        if flat.is_file():
-            return flat
+        candidates.append(runtime_root / 'data' / name)
+        candidates.append(runtime_root / name)
+    for path in candidates:
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    for path in candidates:
+        if path.is_file():
+            return path
     return None
 
 
@@ -307,7 +326,7 @@ def archive_plugins_dir(plugins_dir: Path, tar_path: Path) -> int:
             for path in sorted(plugins_dir.rglob('*')):
                 rel = path.relative_to(plugins_dir).as_posix()
                 tar.add(path, arcname=rel)
-                if path.name == 'manifest.json':
+                if path.name in ('manifest.json', 'installed.json'):
                     count += 1
     os.chmod(tar_path, 0o600)
     return count
@@ -323,10 +342,12 @@ def restore_backend_from_rollback(
 ) -> dict[str, object]:
     run_proc([docker_bin(), 'stop', '--time', '30', 'qqchat-bot'], timeout=60)
 
+    runtime_root = resolve_runtime_root(app_dir, data_dir)
     snap_db = rollback_dir / 'botagent.db'
-    live_db = find_sqlite_db(data_dir)
+    live_db = find_sqlite_db(runtime_root)
     if snap_db.is_file():
-        target_db = live_db if live_db else (data_dir / 'data/botagent.db')
+        default_db = (runtime_root / 'data/botagent.db') if (runtime_root / 'data').is_dir() else (runtime_root / 'botagent.db')
+        target_db = live_db if live_db else default_db
         target_db.parent.mkdir(parents=True, exist_ok=True)
         for suffix in ('-wal', '-shm'):
             sidecar = Path(str(target_db) + suffix)
@@ -337,9 +358,7 @@ def restore_backend_from_rollback(
 
     plugins_tar = rollback_dir / 'plugins-before.tar'
     if plugins_tar.is_file():
-        plugins_dir = data_dir / 'data/plugins'
-        if not (data_dir / 'data').is_dir() and (data_dir / 'plugins').is_dir():
-            plugins_dir = data_dir / 'plugins'
+        plugins_dir, _ = resolve_plugins_paths(runtime_root)
         if plugins_dir.exists():
             shutil.rmtree(plugins_dir)
         plugins_dir.mkdir(parents=True, exist_ok=True)
@@ -515,9 +534,12 @@ def deploy_backend_stage(
         docker(['tag', current_image, 'qqchat-agent:prev'], timeout=20)
         docker(['tag', current_image, f'qqchat-agent:prev-release-{stamp}'], timeout=20)
 
-        log_path = data_dir / 'data/logs/qqchat.log'
-        if not log_path.is_file() and (data_dir / 'logs/qqchat.log').is_file():
-            log_path = data_dir / 'logs/qqchat.log'
+        runtime_root = resolve_runtime_root(app_dir, data_dir)
+        plugins_dir, container_plugins_dir = resolve_plugins_paths(runtime_root)
+
+        log_path = runtime_root / 'logs/qqchat.log'
+        if not log_path.is_file() and (runtime_root / 'data/logs/qqchat.log').is_file():
+            log_path = runtime_root / 'data/logs/qqchat.log'
         log_offset = log_path.stat().st_size if log_path.is_file() else 0
 
         stopped = True
@@ -545,7 +567,7 @@ def deploy_backend_stage(
                 current_image,
                 '/app/BotAgent.Headless.dll',
                 '--check-plugin-state',
-                '/data/plugins',
+                container_plugins_dir,
                 '--candidate',
                 '/preflight/candidate.dll',
             ],
@@ -558,14 +580,11 @@ def deploy_backend_stage(
                 restore_web_backup(web_backup_dir, web_dir)
             raise RuntimeError(f'Offline plugin-state preflight rejected candidate (rc={preflight_res.returncode})')
 
-        live_db = find_sqlite_db(data_dir)
+        live_db = find_sqlite_db(runtime_root)
         user_version = None
         if live_db is not None:
             user_version = vacuum_sqlite_snapshot(live_db, rollback_dir / 'botagent.db')
 
-        plugins_dir = data_dir / 'data/plugins'
-        if not plugins_dir.is_dir() and (data_dir / 'plugins').is_dir():
-            plugins_dir = data_dir / 'plugins'
         plugin_manifests = archive_plugins_dir(plugins_dir, rollback_dir / 'plugins-before.tar')
 
         for item in ('app.tar.gz', 'Dockerfile.app', 'docker-compose.yml', '.env'):

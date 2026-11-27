@@ -100,6 +100,8 @@ if args[:1] == ['start']:
 
 if args and args[0] == 'run':
     if '--check-plugin-state' in args:
+        state['last_preflight_plugins_arg'] = args[args.index('--check-plugin-state') + 1]
+        save()
         sys.exit(int(state.get('preflight_rc', 0)))
     sys.exit(0)
 
@@ -295,6 +297,7 @@ class CdPipelineTests(unittest.TestCase):
         *,
         state_overrides: dict[str, object] | None = None,
         server_overrides: dict[str, object] | None = None,
+        nested_data_layout: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path, dict[str, object]]:
         tmp = Path(tempfile.mkdtemp(prefix='cd-deploy-test-'))
         src, app_dir, web_dir = _make_synthetic_repo(tmp / 'repo', '1.5.0')
@@ -312,12 +315,16 @@ class CdPipelineTests(unittest.TestCase):
 
         app_dir_host = tmp / 'opt_qqchat'
         data_dir_host = app_dir_host / 'data'
-        (data_dir_host / 'plugins').mkdir(parents=True)
+        inner_data = (data_dir_host / 'data') if nested_data_layout else data_dir_host
+        (inner_data / 'plugins' / 'preset.feature.websearch').mkdir(parents=True)
         (data_dir_host / 'logs').mkdir(parents=True)
         (data_dir_host / 'logs' / 'qqchat.log').write_text('ERROR line before deploy\n', encoding='utf-8')
-        (data_dir_host / 'plugins' / 'sample.txt').write_text('old-plugin', encoding='utf-8')
+        (inner_data / 'plugins' / 'sample.txt').write_text('old-plugin', encoding='utf-8')
+        (inner_data / 'plugins' / 'preset.feature.websearch' / 'installed.json').write_text('{}', encoding='utf-8')
+        if nested_data_layout:
+            (data_dir_host / 'qqchat.db').write_bytes(b'')
 
-        db_path = data_dir_host / 'botagent.db'
+        db_path = inner_data / 'botagent.db'
         conn = sqlite3.connect(str(db_path))
         conn.execute('PRAGMA user_version = 15')
         conn.execute('CREATE TABLE marker (val TEXT)')
@@ -470,6 +477,37 @@ class CdPipelineTests(unittest.TestCase):
             self.assertEqual(row[0], 'before-upgrade')
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_deploy_and_rollback_nested_runtime_data_layout(self) -> None:
+        proc, tmp, app_dir, _, final_state = self._run_deploy_scenario(nested_data_layout=True)
+        try:
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(final_state.get('last_preflight_plugins_arg'), '/data/data/plugins')
+            rb_dirs = list(app_dir.glob('rollback-release-*'))
+            self.assertEqual(len(rb_dirs), 1)
+            conn = sqlite3.connect(str(rb_dirs[0] / 'botagent.db'))
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 15)
+            conn.close()
+            with tarfile.open(rb_dirs[0] / 'plugins-before.tar', 'r') as tar:
+                self.assertIn('preset.feature.websearch/installed.json', tar.getnames())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        proc_rb, tmp_rb, app_dir_rb, web_dir_rb, final_state_rb = self._run_deploy_scenario(
+            state_overrides={'fail_candidate_health': True},
+            server_overrides={'fail_healthz': True},
+            nested_data_layout=True,
+        )
+        try:
+            self.assertNotEqual(proc_rb.returncode, 0)
+            self.assertEqual(final_state_rb['active_mode'], 'rollback')
+            self.assertEqual((web_dir_rb / 'index.html').read_text(encoding='utf-8'), 'OLD-WEB')
+            conn = sqlite3.connect(str(app_dir_rb / 'data/data/botagent.db'))
+            row = conn.execute('SELECT val FROM marker').fetchone()
+            conn.close()
+            self.assertEqual(row[0], 'before-upgrade')
+        finally:
+            shutil.rmtree(tmp_rb, ignore_errors=True)
 
 
 if __name__ == '__main__':
