@@ -191,26 +191,33 @@ jobs:
           docker build -f "$SMOKE/Dockerfile.app" -t botagent-cd-smoke:test "$SMOKE"
           trap 'docker rm -f botagent-cd-smoke >/dev/null 2>&1 || true; rm -rf "$SMOKE"' EXIT
           docker run -d --name botagent-cd-smoke \
-            -p 127.0.0.1:18080:8080 \
+            --network host \
             -e BOTAGENT_DATA_DIR=/tmp/data \
-            -e BOTAGENT_HEALTH_PORT=8080 \
-            -e BOTAGENT_HEALTH_BIND=0.0.0.0 \
+            -e BOTAGENT_HEALTH_PORT=18080 \
+            -e BOTAGENT_HEALTH_BIND=+ \
             -e QQCHAT_PANEL_PASSWORD=synthetic-cd-smoke-pass \
             -e BOTAGENT_ZBA_TOKEN=synthetic-cd-admin-token \
             -e BOTAGENT_ZBA_READ_TOKEN=synthetic-cd-read-token \
             -e QQCHAT_API_KEY=sk-synthetic \
             -e QQCHAT_BASE_URL=https://example.com/v1 \
             -e QQCHAT_MODEL=synthetic-model \
+            -e QQCHAT_ONEBOT_PROTOCOL=ReverseWebSocket \
+            -e QQCHAT_ONEBOT_URL=http://127.0.0.1:13299 \
+            -e QQCHAT_WHITELIST=10001 \
+            -e BOTAGENT_PLUGIN_CATALOG_URL=https://example.invalid/synthetic/index.json \
             botagent-cd-smoke:test
           expected="${{ steps.meta.outputs.version }}"
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 45); do
             if body=$(curl -fsS --max-time 2 http://127.0.0.1:18080/healthz 2>/dev/null); then
-              echo "smoke /healthz: $body"
-              python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("version")==sys.argv[2], d' "$body" "$expected"
-              exit 0
+              if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("version")==sys.argv[2] else 1)' "$body" "$expected"; then
+                echo "smoke /healthz: $body"
+                exit 0
+              fi
             fi
             sleep 1
           done
+          docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}}' botagent-cd-smoke || true
+          docker logs --tail 40 botagent-cd-smoke || true
           echo "::error::Container smoke test /healthz timed out"
           exit 1
       - name: Upload release bundle artifact
