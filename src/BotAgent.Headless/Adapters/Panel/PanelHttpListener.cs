@@ -49,7 +49,8 @@ internal sealed class PanelHttpListener(
             HttpListenerContext context;
             try { context = await listener.GetContextAsync().WaitAsync(ct).ConfigureAwait(false); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-            catch (HttpListenerException) { break; }
+            catch (HttpListenerException) when (ct.IsCancellationRequested || !listener.IsListening) { break; }
+            catch (HttpListenerException) { continue; }
             catch (ObjectDisposedException) { break; }
             _ = Task.Run(() => DispatchAsync(context));
         }

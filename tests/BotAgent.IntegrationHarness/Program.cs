@@ -1942,9 +1942,9 @@ public static partial class Program
     {
         Section("S17 面板内扫码登录（NapCat WebUI 代理 + 二维码渲染）");
 
-        const int openAiPort = 17817;
-        const int panelPort = 18091;
-        const int napcatPort = 18101;
+        var openAiPort = FreePort(17817);
+        var panelPort = FreePort(18091);
+        var napcatPort = FreePort(18101);
         const string panelToken = "it-panel-token";
         const string initialQr = "https://txz.qq.com/p?k=INITIAL-KEY&f=1600001615";
         const string legacyPassword = "synthetic-pass-123";
@@ -1973,6 +1973,7 @@ public static partial class Program
             ["QQCHAT_ONEBOT_PROTOCOL"] = "ForwardWebSocket",
             ["QQCHAT_ONEBOT_URL"] = "ws://127.0.0.1:13027", // 没人监听：本场景不关心消息通道
             ["QQCHAT_HEALTH_PORT"] = panelPort.ToString(),
+            ["QQCHAT_HEALTH_BIND"] = "127.0.0.1",
             ["QQCHAT_PANEL_TOKEN"] = panelToken,
             ["QQCHAT_AGENT_TOKEN"] = "it-bridge-token",
             ["QQCHAT_NAPCAT_WEBUI_URL"] = napcat.BaseUrl,
@@ -2085,7 +2086,7 @@ public static partial class Program
         await bot.StopAsync();
 
         // ---- 5) 没配令牌时：给提示，别 500 ----
-        const int panelPort2 = 18092;
+        var panelPort2 = FreePort(18092);
         using var bot2 = StartBot(new Dictionary<string, string>
         {
             ["QQCHAT_DATA_DIR"] = NewDataDir("s17b"),
@@ -2094,6 +2095,7 @@ public static partial class Program
             ["QQCHAT_MODEL"] = "mock-model",
             ["QQCHAT_ONEBOT_URL"] = "ws://127.0.0.1:13028",
             ["QQCHAT_HEALTH_PORT"] = panelPort2.ToString(),
+            ["QQCHAT_HEALTH_BIND"] = "127.0.0.1",
             ["QQCHAT_PANEL_TOKEN"] = panelToken,
             ["QQCHAT_NAPCAT_WEBUI_TOKEN"] = string.Empty // 部署时最容易忘的一项
         });
