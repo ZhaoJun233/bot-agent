@@ -8,9 +8,13 @@
 - 版本号的**唯一真源**是 `Directory.Build.props` 的 `<Version>`（#122）。csproj 里再写 `<Version>`
   会悄悄压过它，ArchitectureProbe 与 CI 都会判红。
 - 发版顺序固定：改 `<Version>` → 把 Unreleased 段改成新版本段 → 打 `vX.Y.Z` tag → CI 在 tag 上断言
-  tag 与 `<Version>` 一致 → 发布。详见 `docs/operations/release-checklist.md`。
+  tag 与 `<Version>` 一致 → 发布。详见 [docs/operations/release-checklist.md](docs/operations/release-checklist.md)。
 
 ## [Unreleased]
+
+### Added
+
+- **全链路 CD 工程（`.github/workflows/cd.yml`）**：新增可复用确定性发布构建器 `build/package-release.py` 与远端双回滚原子部署引擎 `tools/deploy-remote.py`，支持 `v*` Tag 自动检验 `CI` 门禁后构建 6 件套 GitHub Release 与推送 `ghcr.io/zhaojun233/bot-agent` 镜像，经 `production` Environment 审批后安全部署或按时间戳一键回退；同步补齐 [docs/operations/release-checklist.md](docs/operations/release-checklist.md) 与离线回归测试 `tests/BotAgent.ServerFilesProbe/test_cd_pipeline.py`。
 
 ## [1.5.0] - 2026-11-25
 

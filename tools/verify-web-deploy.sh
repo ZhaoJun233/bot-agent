@@ -10,7 +10,7 @@ WEB_DIR="${1:-/var/www/botagent-web}"
 # 站点域名必须显式传入（仓库里不写真实域名），例：verify-web-deploy.sh /var/www/botagent-web panel.example.com
 HOST="${2:?用法: verify-web-deploy.sh <web目录> <站点域名>}"
 CADDYFILE="${CADDYFILE:-/etc/caddy/Caddyfile}"
-BASE="http://127.0.0.1:8081"
+BASE="${BASE:-http://127.0.0.1:8081}"
 fail=0
 
 refs=$(grep -oE '(src|href)="/[^"]*"' "$WEB_DIR/index.html" | sed -E 's/^(src|href)="([^"]*)"$/\2/')

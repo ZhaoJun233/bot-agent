@@ -31,7 +31,7 @@ This directory centralizes Bot Agent's domain business rules, database design, o
 
 ### 2.2 Operations, Migrations & Recovery (`docs/operations/`)
 
-- Deployment & Quality: [Linux Docker First Run](operations/linux-docker-first-run.md) · [Agent Runtime Deployment](operations/agent-runtime-deployment.md)
+- Deployment & Quality: [Linux Docker First Run](operations/linux-docker-first-run.md) · [Agent Runtime Deployment](operations/agent-runtime-deployment.md) · [Release & CD Checklist](operations/release-checklist.md)
 - Recovery & Backups: [Rollback Playbook](operations/rollback-playbook.md) · [Data Retention & Backup](operations/data-retention-and-backup.md) · [Task Recovery Guide](operations/task-recovery-guide.md) · [Operation Receipt Recovery](operations/operation-receipt-recovery.md) · [Token Usage Recovery](operations/token-usage-recovery.md)
 
 ### 2.3 Repository & Submodule Entry Guides

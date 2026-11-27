@@ -32,7 +32,7 @@
 
 ### 2.2 运维部署、迁移与恢复演练（`docs/operations/`）
 
-- [Linux Docker 首次安装与配置](operations/linux-docker-first-run.md) / [Agent Runtime 部署与验证](operations/agent-runtime-deployment.md)
+- [Linux Docker 首次安装与配置](operations/linux-docker-first-run.md) / [Agent Runtime 部署与验证](operations/agent-runtime-deployment.md) / [发版与 CD 操作检查单](operations/release-checklist.md)
 - [回滚预案与实测演练](operations/rollback-playbook.md) / [日志保留、每日热备与恢复演练](operations/data-retention-and-backup.md)
 - [任务恢复指南](operations/task-recovery-guide.md) / [操作安全记录查询](operations/operation-receipt-recovery.md) / [Token 用量离线逆迁移](operations/token-usage-recovery.md)
 
