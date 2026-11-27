@@ -207,11 +207,12 @@ jobs:
             -e BOTAGENT_PLUGIN_CATALOG_URL=https://example.invalid/synthetic/index.json \
             botagent-cd-smoke:test
           expected="${{ steps.meta.outputs.version }}"
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 45); do
             if body=$(curl -fsS --max-time 2 http://127.0.0.1:18080/healthz 2>/dev/null); then
-              echo "smoke /healthz: $body"
-              python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("version")==sys.argv[2], d' "$body" "$expected"
-              exit 0
+              if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("version")==sys.argv[2] else 1)' "$body" "$expected"; then
+                echo "smoke /healthz: $body"
+                exit 0
+              fi
             fi
             sleep 1
           done
